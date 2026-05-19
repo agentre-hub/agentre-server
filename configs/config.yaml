@@ -1,0 +1,49 @@
+env: PROD
+debug: false
+
+http:
+  address:
+    - "0.0.0.0:8443"
+
+db:
+  driver: postgres
+  dsn: "postgres://hub:hub@127.0.0.1:5432/hub?sslmode=disable"
+  debug: false
+  prepareStmt: true
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+
+logger:
+  level: info
+  disableConsole: false
+  logFile:
+    enable: true
+    filename: ./runtime/logs/hub.log
+    errorFilename: ./runtime/logs/hub.err.log
+
+hub:
+  public_url: "https://hub.agentre.dev"
+  insecure_cookies: false
+  session:
+    cookie_name: "hub_session"
+    ttl: 336h
+  device_flow:
+    user_code_ttl: 10m
+    poll_interval: 5s
+  jwt:
+    private_key_pem_path: "/etc/agentre-hub/jwt.key"
+    public_key_pem_path:  "/etc/agentre-hub/jwt.pub"
+    issuer:   "agentre-hub"
+    audience: "agentre"
+    access_ttl: 1h
+    refresh_ttl: 2160h
+  oauth:
+    github:
+      client_id:     ""
+      client_secret: ""
+      callback_path: "/v1/auth/oauth/github/callback"
+  rate_limit:
+    authorize_per_ip_per_min: 3
