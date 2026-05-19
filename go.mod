@@ -3,18 +3,21 @@ module agentre-hub
 go 1.26
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/cago-frame/cago v0.0.0-20260423074423-9a4902409f48
 	github.com/go-gormigrate/gormigrate/v2 v2.1.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/redis/go-redis/v9 v9.7.0
 	github.com/stretchr/testify v1.11.1
+	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.25.12
 )
 
+replace github.com/ugorji/go v1.1.4 => github.com/ugorji/go v1.2.12
+
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
-	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a // indirect
 	github.com/alicebob/miniredis/v2 v2.32.1 // indirect
@@ -50,6 +53,10 @@ require (
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.19.1 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/pgx/v5 v5.6.0 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
