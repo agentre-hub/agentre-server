@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
+	"agentre-hub/internal/model/entity/device_entity"
+	"agentre-hub/internal/model/entity/device_flow_entity"
 	"agentre-hub/internal/pkg/jwt"
 	"agentre-hub/internal/pkg/jwt/testkeys"
 	"agentre-hub/internal/repository/device_flow_repo"
@@ -67,5 +69,72 @@ func TestAuthorize_ReturnsUserCode(t *testing.T) {
 		assert.Contains(t, out.VerificationURIComplete, "user_code="+out.UserCode)
 		assert.Equal(t, 5, out.Interval)
 		assert.Equal(t, 600, out.ExpiresIn)
+	})
+}
+
+func TestExchangeToken(t *testing.T) {
+	convey.Convey("ExchangeToken", t, func() {
+		convey.Convey("device_code 不存在 → invalid_grant", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(nil, nil)
+			_, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid_grant")
+		})
+		convey.Convey("已过期 → expired_token", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{DeviceCode: "dc-x", ExpiresAt: 1}, nil,
+			)
+			_, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.Contains(t, err.Error(), "expired_token")
+		})
+		convey.Convey("已 denied → access_denied", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{DeviceCode: "dc-x", ExpiresAt: time.Now().Add(time.Hour).UnixMilli(), DeniedAt: 100}, nil,
+			)
+			_, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.Contains(t, err.Error(), "access_denied")
+		})
+		convey.Convey("未授权 → authorization_pending（更新 last_polled）", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{
+					DeviceCode: "dc-x", IntervalSeconds: 5,
+					ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+				}, nil,
+			)
+			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			_, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.Contains(t, err.Error(), "authorization_pending")
+		})
+		convey.Convey("已授权 → 颁发 token + 标 consumed + upsert device", func() {
+			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{
+					DeviceCode: "dc-x", IntervalSeconds: 5,
+					ExpiresAt:          time.Now().Add(time.Hour).UnixMilli(),
+					AuthorizedUserID:   42, ApprovedAt: time.Now().UnixMilli(),
+					DeviceKind:         "agentred", ClientFingerprint: "fp-xxxxxxx",
+					ClientCapabilities: []byte(`{"compute":true}`),
+				}, nil,
+			)
+			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
+			)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+
+			mock.ExpectBegin()
+			mock.ExpectCommit()
+
+			out, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.NoError(t, err)
+			assert.NotEmpty(t, out.AccessToken)
+			assert.NotEmpty(t, out.RefreshToken)
+			assert.Equal(t, int64(7), out.DeviceID)
+		})
 	})
 }
