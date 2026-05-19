@@ -223,6 +223,87 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
+func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error) {
+	if refreshToken == "" {
+		return nil, newOAuthErr(ErrInvalidGrant, "missing refresh_token")
+	}
+	nowMs := time.Now().UnixMilli()
+	hash := sha256Hex(refreshToken)
+
+	row, err := device_token_repo.DeviceToken().FindByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, newOAuthErr(ErrInvalidGrant, "refresh_token not found")
+	}
+
+	if row.IsRevoked() {
+		// 重放：整链 revoke
+		_ = device_token_repo.DeviceToken().RevokeChain(ctx, row.DeviceID, nowMs)
+		return nil, newOAuthErr(ErrInvalidGrant, "refresh token reuse detected")
+	}
+	if row.IsExpired(nowMs) {
+		return nil, newOAuthErr(ErrInvalidGrant, "refresh_token expired")
+	}
+
+	d, err := device_repo.Device().Find(ctx, row.DeviceID)
+	if err != nil {
+		return nil, err
+	}
+	if d == nil || !d.IsActive() {
+		return nil, newOAuthErr(ErrInvalidGrant, "device revoked")
+	}
+
+	out := &TokenOutput{}
+	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := db.WithContextDB(ctx, tx)
+		newPlain, err := randomBase32(32)
+		if err != nil {
+			return err
+		}
+		newToken := &device_token_entity.DeviceToken{
+			DeviceID:         d.ID,
+			RefreshTokenHash: sha256Hex(newPlain),
+			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
+			RotatedFromID:    row.ID,
+			Createtime:       nowMs,
+		}
+		if err := device_token_repo.DeviceToken().Create(txCtx, newToken); err != nil {
+			return err
+		}
+		if err := device_token_repo.DeviceToken().Revoke(txCtx, row.ID, nowMs); err != nil {
+			return err
+		}
+		if err := device_repo.Device().Touch(txCtx, d.ID, nowMs); err != nil {
+			return err
+		}
+
+		access, jti, err := s.signer.Sign(jwt.Claims{
+			UID:  d.UserID,
+			DID:  d.ID,
+			Kind: d.Kind,
+			Caps: d.CapabilityList(),
+		}, s.cfg.AccessTTL)
+		if err != nil {
+			return err
+		}
+		*out = TokenOutput{
+			AccessToken:      access,
+			RefreshToken:     newPlain,
+			ExpiresIn:        int(s.cfg.AccessTTL / time.Second),
+			RefreshExpiresIn: int(s.cfg.RefreshTTL / time.Second),
+			DeviceID:         d.ID,
+			JTI:              jti,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // stubs — implemented in subsequent commits
 func (s *deviceSvc) Pending(_ context.Context, _ string) (*PendingInfo, error) {
 	panic("not implemented")
@@ -230,8 +311,5 @@ func (s *deviceSvc) Pending(_ context.Context, _ string) (*PendingInfo, error) {
 func (s *deviceSvc) Approve(_ context.Context, _ string, _ int64) (string, error) {
 	panic("not implemented")
 }
-func (s *deviceSvc) Deny(_ context.Context, _ string) error { panic("not implemented") }
-func (s *deviceSvc) Refresh(_ context.Context, _ string) (*TokenOutput, error) {
-	panic("not implemented")
-}
+func (s *deviceSvc) Deny(_ context.Context, _ string) error  { panic("not implemented") }
 func (s *deviceSvc) Revoke(_ context.Context, _ int64) error { panic("not implemented") }

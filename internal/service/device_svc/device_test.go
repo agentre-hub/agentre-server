@@ -14,6 +14,7 @@ import (
 
 	"agentre-hub/internal/model/entity/device_entity"
 	"agentre-hub/internal/model/entity/device_flow_entity"
+	"agentre-hub/internal/model/entity/device_token_entity"
 	"agentre-hub/internal/pkg/jwt"
 	"agentre-hub/internal/pkg/jwt/testkeys"
 	"agentre-hub/internal/repository/device_flow_repo"
@@ -135,6 +136,49 @@ func TestExchangeToken(t *testing.T) {
 			assert.NotEmpty(t, out.AccessToken)
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(7), out.DeviceID)
+		})
+	})
+}
+
+func TestRefresh(t *testing.T) {
+	convey.Convey("Refresh", t, func() {
+		convey.Convey("token 不存在 → invalid_grant", func() {
+			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(nil, nil)
+			_, err := svc.Refresh(ctx, "missing")
+			assert.Contains(t, err.Error(), "invalid_grant")
+		})
+		convey.Convey("token 已 revoked → 重放 → RevokeChain", func() {
+			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+				&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+			)
+			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+			_, err := svc.Refresh(ctx, "stolen")
+			assert.Contains(t, err.Error(), "invalid_grant")
+		})
+		convey.Convey("正常轮换 → 新 refresh + 旧 revoke + touch device", func() {
+			ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+				&device_token_entity.DeviceToken{
+					ID: 1, DeviceID: 42, RefreshExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+				}, nil,
+			)
+			mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+				&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: 1}, nil,
+			)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+			mT.EXPECT().Revoke(gomock.Any(), int64(1), gomock.Any()).Return(nil)
+			mD.EXPECT().Touch(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+			mock.ExpectBegin()
+			mock.ExpectCommit()
+
+			out, err := svc.Refresh(ctx, "good")
+			assert.NoError(t, err)
+			assert.NotEmpty(t, out.AccessToken)
+			assert.NotEmpty(t, out.RefreshToken)
+			assert.Equal(t, int64(42), out.DeviceID)
 		})
 	})
 }
