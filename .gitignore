@@ -1,0 +1,20 @@
+# build
+/bin/
+/coverage.out
+/coverage.html
+/runtime/
+
+# frontend
+/frontend/node_modules/
+/frontend/dist/
+/internal/web/dist/
+
+# data
+/data/
+/.env
+
+# editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
