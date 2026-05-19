@@ -4,6 +4,8 @@ go 1.26
 
 require (
 	github.com/cago-frame/cago v0.0.0-20260423074423-9a4902409f48
+	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/oklog/ulid/v2 v2.1.1
 	github.com/stretchr/testify v1.11.1
 )
 
