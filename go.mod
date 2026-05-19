@@ -4,10 +4,12 @@ go 1.26
 
 require (
 	github.com/cago-frame/cago v0.0.0-20260423074423-9a4902409f48
+	github.com/go-gormigrate/gormigrate/v2 v2.1.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/redis/go-redis/v9 v9.7.0
 	github.com/stretchr/testify v1.11.1
+	gorm.io/gorm v1.25.12
 )
 
 require (
@@ -113,6 +115,5 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/driver/mysql v1.5.7 // indirect
-	gorm.io/gorm v1.25.12 // indirect
 	gorm.io/plugin/opentelemetry v0.1.11 // indirect
 )
