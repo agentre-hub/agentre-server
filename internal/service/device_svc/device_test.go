@@ -182,3 +182,28 @@ func TestRefresh(t *testing.T) {
 		})
 	})
 }
+
+func TestApprove(t *testing.T) {
+	convey.Convey("Approve", t, func() {
+		convey.Convey("不存在 → user_code_invalid", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindPendingByUserCode(gomock.Any(), "A4F-7Q2").Return(nil, nil)
+			_, err := svc.Approve(ctx, "A4F-7Q2", 42)
+			assert.Error(t, err)
+		})
+		convey.Convey("成功 → 返回 device_kind", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindPendingByUserCode(gomock.Any(), "A4F-7Q2").Return(
+				&device_flow_entity.DeviceFlowCode{
+					UserCode: "A4F-7Q2", DeviceKind: "agentred",
+					ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+				}, nil,
+			)
+			mF.EXPECT().Approve(gomock.Any(), "A4F-7Q2", int64(42), gomock.Any()).Return(nil)
+
+			kind, err := svc.Approve(ctx, "A4F-7Q2", 42)
+			assert.NoError(t, err)
+			assert.Equal(t, "agentred", kind)
+		})
+	})
+}

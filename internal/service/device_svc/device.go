@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -304,12 +305,69 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 	return out, nil
 }
 
-// stubs — implemented in subsequent commits
-func (s *deviceSvc) Pending(_ context.Context, _ string) (*PendingInfo, error) {
-	panic("not implemented")
+func (s *deviceSvc) Pending(ctx context.Context, userCode string) (*PendingInfo, error) {
+	norm, ok := usercode.Normalize(userCode)
+	if !ok {
+		return nil, newOAuthErr("user_code_invalid", "malformed user_code")
+	}
+	flow, err := device_flow_repo.DeviceFlow().FindPendingByUserCode(ctx, norm)
+	if err != nil {
+		return nil, err
+	}
+	if flow == nil {
+		return nil, newOAuthErr("user_code_invalid", "user_code not found")
+	}
+	nowMs := time.Now().UnixMilli()
+	if flow.IsExpired(nowMs) {
+		return nil, newOAuthErr(ErrExpiredToken, "user_code expired")
+	}
+	caps := map[string]bool{}
+	if len(flow.ClientCapabilities) > 0 {
+		_ = json.Unmarshal(flow.ClientCapabilities, &caps)
+	}
+	return &PendingInfo{
+		DeviceKind:   flow.DeviceKind,
+		Platform:     flow.Platform,
+		Version:      flow.Version,
+		Capabilities: caps,
+		ExpiresIn:    int((flow.ExpiresAt - nowMs) / 1000),
+	}, nil
 }
-func (s *deviceSvc) Approve(_ context.Context, _ string, _ int64) (string, error) {
-	panic("not implemented")
+
+func (s *deviceSvc) Approve(ctx context.Context, userCode string, userID int64) (string, error) {
+	norm, ok := usercode.Normalize(userCode)
+	if !ok {
+		return "", newOAuthErr("user_code_invalid", "malformed user_code")
+	}
+	flow, err := device_flow_repo.DeviceFlow().FindPendingByUserCode(ctx, norm)
+	if err != nil {
+		return "", err
+	}
+	if flow == nil {
+		return "", newOAuthErr("user_code_invalid", "user_code not found")
+	}
+	nowMs := time.Now().UnixMilli()
+	if flow.IsExpired(nowMs) {
+		return "", newOAuthErr(ErrExpiredToken, "user_code expired")
+	}
+	if err := device_flow_repo.DeviceFlow().Approve(ctx, norm, userID, nowMs); err != nil {
+		return "", err
+	}
+	return flow.DeviceKind, nil
 }
-func (s *deviceSvc) Deny(_ context.Context, _ string) error  { panic("not implemented") }
-func (s *deviceSvc) Revoke(_ context.Context, _ int64) error { panic("not implemented") }
+
+func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
+	norm, ok := usercode.Normalize(userCode)
+	if !ok {
+		return newOAuthErr("user_code_invalid", "malformed user_code")
+	}
+	return device_flow_repo.DeviceFlow().Deny(ctx, norm, time.Now().UnixMilli())
+}
+
+func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
+	nowMs := time.Now().UnixMilli()
+	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
+		return err
+	}
+	return device_repo.Device().Revoke(ctx, deviceID, nowMs)
+}
