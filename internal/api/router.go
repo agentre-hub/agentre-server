@@ -56,6 +56,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// device JWT
 	g.Group("/", middleware.DeviceJWT(r.Signer)).Bind(
 		deviceCtr.Revoke,
+		deviceCtr.List,
 	)
 
 	return nil

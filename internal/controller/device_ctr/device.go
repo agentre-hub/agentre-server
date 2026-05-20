@@ -105,6 +105,19 @@ func (d *Device) Revoke(c *gin.Context, req *api.TokenRevokeRequest) (*api.Token
 	return &api.TokenRevokeResponse{}, nil
 }
 
+func (d *Device) List(c *gin.Context, _ *api.ListDevicesRequest) (*api.ListDevicesResponse, error) {
+	uid, _ := c.Get("user_id")
+	did, _ := c.Get("device_id")
+	userID, _ := uid.(int64)
+	deviceID, _ := did.(int64)
+
+	items, err := device_svc.Default().ListUserDevices(c.Request.Context(), userID, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	return &api.ListDevicesResponse{Devices: items}, nil
+}
+
 // oauthErrToHTTP 把 device_svc.OAuthError 映射成 HTTP 状态 + 业务 code，并在 body 里附 RFC 8628 字段。
 func oauthErrToHTTP(c *gin.Context, err error) error {
 	var oe *device_svc.OAuthError
