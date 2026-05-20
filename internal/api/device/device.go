@@ -79,3 +79,26 @@ type TokenRevokeRequest struct {
 	DeviceID int64 `json:"device_id"`
 }
 type TokenRevokeResponse struct{}
+
+// ---------- Devices List ----------
+
+type ListDevicesRequest struct {
+	mux.Meta `path:"/v1/devices" method:"GET"`
+}
+
+type ListDevicesItem struct {
+	ID           int64           `json:"id"`
+	Name         string          `json:"name"`
+	Kind         string          `json:"kind"`
+	Platform     string          `json:"platform"`
+	Version      string          `json:"version"`
+	Fingerprint  string          `json:"fingerprint"`
+	Capabilities map[string]bool `json:"capabilities"`
+	LastSeenAt   int64           `json:"last_seen_at"`
+	Status       int             `json:"status"`
+	IsThisDevice bool            `json:"is_this_device"`
+}
+
+type ListDevicesResponse struct {
+	Devices []ListDevicesItem `json:"devices"`
+}
