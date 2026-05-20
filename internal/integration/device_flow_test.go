@@ -17,11 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"agentre-hub/internal/controller/auth_ctr"
 	"agentre-hub/internal/controller/device_ctr"
 	"agentre-hub/internal/middleware"
 	"agentre-hub/internal/model/entity/device_entity"
 	"agentre-hub/internal/model/entity/device_flow_entity"
 	"agentre-hub/internal/model/entity/device_token_entity"
+	"agentre-hub/internal/model/entity/user_entity"
 	"agentre-hub/internal/pkg/jwt"
 	"agentre-hub/internal/pkg/jwt/testkeys"
 	"agentre-hub/internal/repository/device_flow_repo"
@@ -30,6 +32,8 @@ import (
 	"agentre-hub/internal/repository/device_repo/mock_device_repo"
 	"agentre-hub/internal/repository/device_token_repo"
 	"agentre-hub/internal/repository/device_token_repo/mock_device_token_repo"
+	"agentre-hub/internal/repository/user_repo"
+	"agentre-hub/internal/repository/user_repo/mock_user_repo"
 	"agentre-hub/internal/service/device_svc"
 	hubtest "agentre-hub/internal/testutils"
 )
@@ -42,9 +46,11 @@ func TestDeviceFlow_HappyPath(t *testing.T) {
 	mD := mock_device_repo.NewMockDeviceRepo(ctrl)
 	mT := mock_device_token_repo.NewMockDeviceTokenRepo(ctrl)
 	mF := mock_device_flow_repo.NewMockDeviceFlowRepo(ctrl)
+	mU := mock_user_repo.NewMockUserRepo(ctrl)
 	device_repo.RegisterDevice(mD)
 	device_token_repo.RegisterDeviceToken(mT)
 	device_flow_repo.RegisterDeviceFlow(mF)
+	user_repo.RegisterUser(mU)
 
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-hub", "agentre")
 	require.NoError(t, err)
@@ -149,6 +155,49 @@ func TestDeviceFlow_HappyPath(t *testing.T) {
 	require.NotEmpty(t, tokResp.Data.AccessToken)
 	require.NotEmpty(t, tokResp.Data.RefreshToken)
 	require.Equal(t, int64(7), tokResp.Data.DeviceID)
+
+	// 4) /v1/auth/me via SessionOrDeviceAuth (Bearer device-JWT)
+	claims, verr := signer.Verify(tokResp.Data.AccessToken)
+	require.NoError(t, verr)
+
+	mU.EXPECT().Find(gomock.Any(), claims.UID).Return(&user_entity.User{
+		ID: claims.UID, Email: "u@e.com", DisplayName: "u", AvatarURL: "",
+	}, nil)
+
+	authCtr := auth_ctr.NewAuth()
+	r.GET("/v1/auth/me",
+		middleware.SessionOrDeviceAuth(signer),
+		wrapGet(authCtr.Me),
+	)
+
+	meReq := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
+	meReq.Header.Set("Authorization", "Bearer "+tokResp.Data.AccessToken)
+	meW := httptest.NewRecorder()
+	r.ServeHTTP(meW, meReq)
+	require.Equal(t, http.StatusOK, meW.Code, meW.Body.String())
+	require.Contains(t, meW.Body.String(), `"device_id":`)
+
+	// 5) /v1/devices via DeviceJWT
+	mD.EXPECT().ListByUser(gomock.Any(), claims.UID).Return([]*device_entity.Device{
+		{
+			ID: tokResp.Data.DeviceID, UserID: claims.UID, Name: "this-machine",
+			Kind: "agentred", Platform: "linux/amd64",
+			Capabilities: []byte(`{"compute":true}`),
+			LastSeenAt:   time.Now().UnixMilli(), Status: 1,
+		},
+	}, nil)
+
+	r.GET("/v1/devices",
+		middleware.DeviceJWT(signer),
+		wrapGet(ctr.List),
+	)
+
+	devReq := httptest.NewRequest(http.MethodGet, "/v1/devices", nil)
+	devReq.Header.Set("Authorization", "Bearer "+tokResp.Data.AccessToken)
+	devW := httptest.NewRecorder()
+	r.ServeHTTP(devW, devReq)
+	require.Equal(t, http.StatusOK, devW.Code, devW.Body.String())
+	require.Contains(t, devW.Body.String(), `"is_this_device":true`)
 }
 
 // wrapCtx adapts a handler with (context.Context, *Req) signature to gin.HandlerFunc.
@@ -176,6 +225,20 @@ func wrapGin[Req any, Resp any](h func(*gin.Context, *Req) (*Resp, error)) gin.H
 			c.JSON(http.StatusBadRequest, gin.H{"code": 1, "msg": err.Error(), "data": nil})
 			return
 		}
+		resp, err := h(c, req)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"code": 30000, "msg": err.Error(), "data": nil})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"code": 0, "msg": "ok", "data": resp})
+	}
+}
+
+// wrapGet adapts a handler with (*gin.Context, *Req) signature to gin.HandlerFunc for
+// GET requests that carry no JSON body (Req is an empty struct).
+func wrapGet[Req any, Resp any](h func(*gin.Context, *Req) (*Resp, error)) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		req := new(Req)
 		resp, err := h(c, req)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"code": 30000, "msg": err.Error(), "data": nil})
