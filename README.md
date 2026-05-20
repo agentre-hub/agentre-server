@@ -19,6 +19,7 @@ curl http://localhost:8443/v1/healthz
 
 ```bash
 # pre-req：本机有 postgres:5432 / redis:6379；或起 docker compose up -d pg redis
+cp configs/config.example.yaml configs/config.yaml   # gitignored runtime 配置
 make dev
 ```
 

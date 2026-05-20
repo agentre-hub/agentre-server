@@ -9,7 +9,7 @@ db:
   driver: postgres
   dsn: "postgres://hub:hub@127.0.0.1:5432/hub?sslmode=disable"
   debug: false
-  prepareStmt: true
+  prepareStmt: false
 
 redis:
   addr: "127.0.0.1:6379"

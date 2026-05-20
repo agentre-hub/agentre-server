@@ -8,13 +8,18 @@
 /frontend/node_modules/
 /frontend/dist/
 /internal/web/dist/
+*.tsbuildinfo
 
 # data
 /data/
 /.env
+/config.yaml
+/configs/config.yaml
 
-# editor
+# editor / tooling
 .idea/
 .vscode/
 *.swp
 .DS_Store
+/.omc/
+/.opskat/

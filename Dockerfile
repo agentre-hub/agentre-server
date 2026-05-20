@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /hub ./cmd/hub
 # stage 3: runtime
 FROM gcr.io/distroless/static-debian12
 COPY --from=go /hub /hub
-COPY configs/config.yaml /etc/agentre-hub/config.yaml
+COPY configs/config.example.yaml /etc/agentre-hub/config.yaml
 WORKDIR /
 EXPOSE 8443
 USER nonroot:nonroot
