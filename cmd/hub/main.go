@@ -43,14 +43,16 @@ func main() {
 	device_token_repo.RegisterDeviceToken(device_token_repo.NewDeviceToken())
 	device_flow_repo.RegisterDeviceFlow(device_flow_repo.NewDeviceFlow())
 
-	bootstrap.RegisterDefaults(hubCfg, signer)
-
 	deps := &api.RouterDeps{Cfg: hubCfg, Signer: signer}
 
 	err = cago.New(ctx, cfg).
 		Registry(component.Core()).
 		Registry(component.Database()).
 		Registry(component.Redis()).
+		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
+			bootstrap.RegisterDefaults(hubCfg, signer)
+			return nil
+		})).
 		Registry(cron.Cron()).
 		Registry(cago.FuncComponent(func(ctx context.Context, _ *configs.Config) error {
 			return migrations.RunMigrations(db.Default())
