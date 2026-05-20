@@ -47,10 +47,14 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 浏览器 session
 	g.Group("/", middleware.SessionAuth(), middleware.CSRF()).Bind(
 		authCtr.Logout,
-		authCtr.Me,
 		deviceCtr.Pending,
 		deviceCtr.Approve,
 		deviceCtr.Deny,
+	)
+
+	// session 或 device JWT 都可以
+	g.Group("/", middleware.SessionOrDeviceAuth(r.Signer)).Bind(
+		authCtr.Me,
 	)
 
 	// device JWT

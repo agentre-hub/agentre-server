@@ -112,15 +112,23 @@ func (a *Auth) Me(c *gin.Context, _ *api.MeRequest) (*api.MeResponse, error) {
 	if u == nil {
 		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.UserNotFound)
 	}
-	csrf, _ := c.Get("csrf_token")
-	csrfStr, _ := csrf.(string)
-	return &api.MeResponse{
+	resp := &api.MeResponse{
 		UserID:      u.ID,
 		Email:       u.Email,
 		DisplayName: u.DisplayName,
 		AvatarURL:   u.AvatarURL,
-		CSRFToken:   csrfStr,
-	}, nil
+	}
+	if csrf, ok := c.Get("csrf_token"); ok {
+		if s, ok := csrf.(string); ok {
+			resp.CSRFToken = s
+		}
+	}
+	if did, ok := c.Get("device_id"); ok {
+		if d, ok := did.(int64); ok && d != 0 {
+			resp.DeviceID = d
+		}
+	}
+	return resp, nil
 }
 
 // ---- cookie helpers ----

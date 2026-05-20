@@ -29,5 +29,6 @@ type MeResponse struct {
 	DisplayName string `json:"display_name"`
 	AvatarURL   string `json:"avatar_url"`
 	GithubLogin string `json:"github_login"`
-	CSRFToken   string `json:"csrf_token"`
+	CSRFToken   string `json:"csrf_token,omitempty"`
+	DeviceID    int64  `json:"device_id,omitempty"`
 }
