@@ -13,11 +13,14 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/db"
+	"github.com/cago-frame/cago/pkg/i18n"
 	"gorm.io/gorm"
 
+	api "agentre-hub/internal/api/device"
 	"agentre-hub/internal/model/entity/device_entity"
 	"agentre-hub/internal/model/entity/device_flow_entity"
 	"agentre-hub/internal/model/entity/device_token_entity"
+	"agentre-hub/internal/pkg/code"
 	"agentre-hub/internal/pkg/jwt"
 	"agentre-hub/internal/pkg/usercode"
 	"agentre-hub/internal/repository/device_flow_repo"
@@ -33,6 +36,7 @@ type DeviceSvc interface {
 	ExchangeToken(ctx context.Context, deviceCode string) (*TokenOutput, error)
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
+	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
 }
 
 type deviceSvc struct {
@@ -370,4 +374,33 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 		return err
 	}
 	return device_repo.Device().Revoke(ctx, deviceID, nowMs)
+}
+
+// ListUserDevices returns all devices for a user, marking the caller's row
+// and decoding the Capabilities JSON column into a map.
+func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error) {
+	rows, err := device_repo.Device().ListByUser(ctx, userID)
+	if err != nil {
+		return nil, i18n.NewInternalError(ctx, code.DeviceListFailed)
+	}
+	out := make([]api.ListDevicesItem, 0, len(rows))
+	for _, d := range rows {
+		caps := map[string]bool{}
+		if len(d.Capabilities) > 0 {
+			_ = json.Unmarshal(d.Capabilities, &caps)
+		}
+		out = append(out, api.ListDevicesItem{
+			ID:           d.ID,
+			Name:         d.Name,
+			Kind:         d.Kind,
+			Platform:     d.Platform,
+			Version:      d.Version,
+			Fingerprint:  d.Fingerprint,
+			Capabilities: caps,
+			LastSeenAt:   d.LastSeenAt,
+			Status:       d.Status,
+			IsThisDevice: d.ID == callerDeviceID,
+		})
+	}
+	return out, nil
 }

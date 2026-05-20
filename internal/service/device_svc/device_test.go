@@ -183,6 +183,29 @@ func TestRefresh(t *testing.T) {
 	})
 }
 
+func TestListUserDevices(t *testing.T) {
+	convey.Convey("ListUserDevices marks caller and decodes capabilities", t, func() {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+		callerDev := int64(42)
+		userID := int64(7)
+
+		mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+			{ID: 42, UserID: 7, Name: "mac-pro-m4", Kind: "desktop", Platform: "darwin/arm64", Version: "v0.4.1", Fingerprint: "fp-a", Capabilities: []byte(`{"compute":true,"file_browse":true}`), LastSeenAt: 1000, Status: 1},
+			{ID: 43, UserID: 7, Name: "agentred-1", Kind: "agentred", Platform: "linux/amd64", Version: "v0.4.1", Fingerprint: "fp-b", Capabilities: []byte(`{"compute":true}`), LastSeenAt: 999, Status: 1},
+		}, nil)
+
+		items, err := svc.ListUserDevices(ctx, userID, callerDev)
+
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(items), convey.ShouldEqual, 2)
+		convey.So(items[0].ID, convey.ShouldEqual, int64(42))
+		convey.So(items[0].IsThisDevice, convey.ShouldBeTrue)
+		convey.So(items[0].Capabilities["compute"], convey.ShouldBeTrue)
+		convey.So(items[0].Capabilities["file_browse"], convey.ShouldBeTrue)
+		convey.So(items[1].IsThisDevice, convey.ShouldBeFalse)
+	})
+}
+
 func TestApprove(t *testing.T) {
 	convey.Convey("Approve", t, func() {
 		convey.Convey("不存在 → user_code_invalid", func() {

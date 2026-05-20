@@ -44,4 +44,5 @@ const (
 	RefreshTokenExpired
 	JWTSignatureInvalid
 	JWTBlacklisted
+	DeviceListFailed
 )
