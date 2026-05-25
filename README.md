@@ -23,7 +23,7 @@ cp configs/config.example.yaml configs/config.yaml   # gitignored runtime 配置
 make dev
 ```
 
-`make dev` 同时跑 hub（:8443）+ vite（:5173 proxy /v1）。
+`make dev` 同时跑 hub（:8443）+ vite（:5174 proxy /v1）。
 
 ## GitHub OAuth App
 

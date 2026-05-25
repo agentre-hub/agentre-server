@@ -35,7 +35,7 @@ func (d *Device) Authorize(ctx context.Context, req *api.DeviceAuthorizeRequest)
 }
 
 func (d *Device) Token(c *gin.Context, req *api.DeviceTokenRequest) (*api.DeviceTokenResponse, error) {
-	ctx := c.Request.Context()
+	ctx := device_svc.WithClientInfo(c.Request.Context(), c.ClientIP(), c.GetHeader("User-Agent"))
 	out, err := device_svc.Default().ExchangeToken(ctx, req.DeviceCode)
 	if err != nil {
 		return nil, oauthErrToHTTP(c, err)
@@ -79,7 +79,8 @@ func (d *Device) Deny(c *gin.Context, req *api.DeviceDenyRequest) (*api.DeviceDe
 }
 
 func (d *Device) Refresh(c *gin.Context, req *api.TokenRefreshRequest) (*api.TokenRefreshResponse, error) {
-	out, err := device_svc.Default().Refresh(c.Request.Context(), req.RefreshToken)
+	ctx := device_svc.WithClientInfo(c.Request.Context(), c.ClientIP(), c.GetHeader("User-Agent"))
+	out, err := device_svc.Default().Refresh(ctx, req.RefreshToken)
 	if err != nil {
 		return nil, oauthErrToHTTP(c, err)
 	}

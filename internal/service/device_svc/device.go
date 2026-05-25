@@ -184,10 +184,13 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			return err
 		}
 		hash := sha256Hex(refreshPlain)
+		ip, ua := clientInfoFromCtx(ctx)
 		token := &device_token_entity.DeviceToken{
 			DeviceID:         d.ID,
 			RefreshTokenHash: hash,
 			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
+			UserAgent:        ua,
+			IP:               ip,
 			Createtime:       nowMs,
 		}
 		if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
@@ -267,11 +270,14 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 		if err != nil {
 			return err
 		}
+		ip, ua := clientInfoFromCtx(ctx)
 		newToken := &device_token_entity.DeviceToken{
 			DeviceID:         d.ID,
 			RefreshTokenHash: sha256Hex(newPlain),
 			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
 			RotatedFromID:    row.ID,
+			UserAgent:        ua,
+			IP:               ip,
 			Createtime:       nowMs,
 		}
 		if err := device_token_repo.DeviceToken().Create(txCtx, newToken); err != nil {
