@@ -9,10 +9,10 @@ import (
 	"github.com/cago-frame/cago/pkg/consts"
 	"gorm.io/gorm"
 
-	"agentre-hub/internal/model/entity/user_entity"
-	"agentre-hub/internal/model/entity/user_identity_entity"
-	"agentre-hub/internal/repository/user_identity_repo"
-	"agentre-hub/internal/repository/user_repo"
+	"agentre-server/internal/model/entity/user_entity"
+	"agentre-server/internal/model/entity/user_identity_entity"
+	"agentre-server/internal/repository/user_identity_repo"
+	"agentre-server/internal/repository/user_repo"
 )
 
 type UserSvc interface {

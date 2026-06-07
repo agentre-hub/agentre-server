@@ -8,9 +8,9 @@ import (
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	api "agentre-hub/internal/api/device"
-	"agentre-hub/internal/pkg/code"
-	"agentre-hub/internal/service/device_svc"
+	api "agentre-server/internal/api/device"
+	"agentre-server/internal/pkg/code"
+	"agentre-server/internal/service/device_svc"
 )
 
 type Device struct{}

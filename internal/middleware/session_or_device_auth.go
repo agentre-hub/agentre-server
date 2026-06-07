@@ -5,8 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"agentre-hub/internal/pkg/jwt"
-	"agentre-hub/internal/service/auth_svc"
+	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/service/auth_svc"
 )
 
 // SessionOrDeviceAuth accepts either a device-JWT Bearer token (preferred) or a

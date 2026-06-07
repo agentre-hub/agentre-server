@@ -7,7 +7,7 @@ http:
 
 db:
   driver: postgres
-  dsn: "postgres://hub:hub@127.0.0.1:5432/hub?sslmode=disable"
+  dsn: "postgres://server:server@127.0.0.1:5432/server?sslmode=disable"
   debug: false
   prepareStmt: false
 
@@ -21,22 +21,22 @@ logger:
   disableConsole: false
   logFile:
     enable: true
-    filename: ./runtime/logs/hub.log
-    errorFilename: ./runtime/logs/hub.err.log
+    filename: ./runtime/logs/server.log
+    errorFilename: ./runtime/logs/server.err.log
 
-hub:
-  public_url: "https://hub.agentre.dev"
+server:
+  public_url: "https://server.agentre.dev"
   insecure_cookies: false
   session:
-    cookie_name: "hub_session"
+    cookie_name: "server_session"
     ttl: 336h
   device_flow:
     user_code_ttl: 10m
     poll_interval: 5s
   jwt:
-    private_key_pem_path: "/etc/agentre-hub/jwt.key"
-    public_key_pem_path:  "/etc/agentre-hub/jwt.pub"
-    issuer:   "agentre-hub"
+    private_key_pem_path: "/etc/agentre-server/jwt.key"
+    public_key_pem_path:  "/etc/agentre-server/jwt.pub"
+    issuer:   "agentre-server"
     audience: "agentre"
     access_ttl: 1h
     refresh_ttl: 2160h

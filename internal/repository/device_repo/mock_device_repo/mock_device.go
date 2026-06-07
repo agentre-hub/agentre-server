@@ -10,7 +10,7 @@
 package mock_device_repo
 
 import (
-	device_entity "agentre-hub/internal/model/entity/device_entity"
+	device_entity "agentre-server/internal/model/entity/device_entity"
 	context "context"
 	reflect "reflect"
 

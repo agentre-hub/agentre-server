@@ -7,7 +7,7 @@ import (
 	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/i18n"
 
-	"agentre-hub/internal/pkg/code"
+	"agentre-server/internal/pkg/code"
 )
 
 // User 账号记录。

@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
-	"agentre-hub/internal/model/entity/user_entity"
-	"agentre-hub/internal/model/entity/user_identity_entity"
-	"agentre-hub/internal/repository/user_identity_repo"
-	"agentre-hub/internal/repository/user_identity_repo/mock_user_identity_repo"
-	"agentre-hub/internal/repository/user_repo"
-	"agentre-hub/internal/repository/user_repo/mock_user_repo"
-	hubtest "agentre-hub/internal/testutils"
+	"agentre-server/internal/model/entity/user_entity"
+	"agentre-server/internal/model/entity/user_identity_entity"
+	"agentre-server/internal/repository/user_identity_repo"
+	"agentre-server/internal/repository/user_identity_repo/mock_user_identity_repo"
+	"agentre-server/internal/repository/user_repo"
+	"agentre-server/internal/repository/user_repo/mock_user_repo"
+	hubtest "agentre-server/internal/testutils"
 )
 
 func setupUserTest(t *testing.T) (context.Context, *mock_user_repo.MockUserRepo, *mock_user_identity_repo.MockUserIdentityRepo, sqlmock.Sqlmock) {

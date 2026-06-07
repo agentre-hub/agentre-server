@@ -6,8 +6,8 @@ import (
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	"agentre-hub/internal/pkg/code"
-	"agentre-hub/internal/service/auth_svc"
+	"agentre-server/internal/pkg/code"
+	"agentre-server/internal/service/auth_svc"
 )
 
 func SessionAuth() gin.HandlerFunc {

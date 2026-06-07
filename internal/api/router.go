@@ -5,17 +5,17 @@ import (
 
 	"github.com/cago-frame/cago/server/mux"
 
-	"agentre-hub/internal/bootstrap"
-	"agentre-hub/internal/controller/auth_ctr"
-	"agentre-hub/internal/controller/device_ctr"
-	"agentre-hub/internal/controller/healthz_ctr"
-	"agentre-hub/internal/middleware"
-	"agentre-hub/internal/pkg/jwt"
+	"agentre-server/internal/bootstrap"
+	"agentre-server/internal/controller/auth_ctr"
+	"agentre-server/internal/controller/device_ctr"
+	"agentre-server/internal/controller/healthz_ctr"
+	"agentre-server/internal/middleware"
+	"agentre-server/internal/pkg/jwt"
 )
 
 // RouterDeps 由 main.go 注入。
 type RouterDeps struct {
-	Cfg    *bootstrap.HubConfig
+	Cfg    *bootstrap.ServerConfig
 	Signer *jwt.Signer
 }
 

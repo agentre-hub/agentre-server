@@ -26,7 +26,7 @@ export default function Login() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="w-full max-w-sm space-y-6 p-8 border rounded-xl">
-        <h1 className="text-2xl font-semibold">登录 AgentRe Hub</h1>
+        <h1 className="text-2xl font-semibold">登录 AgentRe Server</h1>
         {err && <Alert variant="destructive">{ERR_MAP[err] ?? err}</Alert>}
         <Button className="w-full" onClick={onLogin}>使用 GitHub 登录</Button>
       </div>

@@ -1,29 +1,29 @@
 # CLAUDE.md
 
-Agent guidance for `agentre-hub`.
+Agent guidance for `agentre-server`.
 
 ## Project Overview
 
-AgentRe Hub — SaaS backend (Go 1.26, cago framework). Accounts + RFC 8628 Device Flow.
+AgentRe Server — SaaS backend (Go 1.26, cago framework). Accounts + RFC 8628 Device Flow.
 PostgreSQL 16 + Redis 7. React + Vite + shadcn frontend embedded via `//go:embed`.
 Sibling repo: `/Users/codfrm/Code/agentre/agentre`（桌面端，本仓库**不依赖**）。
 
 ## Common Commands
 
 ```bash
-make dev        # vite + hub 并行
+make dev        # vite + server 并行
 make build      # 前端 build → embed → go build
 make test       # go test -race ./...
 make test-cover # coverage html
 make lint       # golangci-lint
 make mock       # go generate
-make docker     # 构建 agentre/hub:0.1
+make docker     # 构建 agentre/server:0.1
 ```
 
 ## Layout（参 spec §1）
 
 ```
-cmd/hub/main.go
+cmd/server/main.go
 internal/{bootstrap,api,controller,service,repository,model/entity,middleware,pkg,task,web,buildinfo}/
 migrations/
 frontend/
@@ -51,7 +51,7 @@ Dockerfile
 
 - PostgreSQL：业务数据，源数据
 - Redis：session、oauth_state、jwt blacklist、rate limit；TTL 自然过期
-- 不落磁盘 config（cago 内置 yaml + env override 由 `bootstrap.LoadHubConfig` 手动注入）
+- 不落磁盘 config（cago 内置 yaml + env override 由 `bootstrap.LoadServerConfig` 手动注入）
 
 ## 错误处理
 
@@ -60,7 +60,7 @@ Dockerfile
 
 ## Conventions
 
-- Module path: `agentre-hub`
+- Module path: `agentre-server`
 - Commits: gitmoji
 - Linter: golangci-lint v2
 - 不动 `migrations/*` 既有文件；新增补丁迁移

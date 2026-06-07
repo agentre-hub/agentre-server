@@ -16,16 +16,16 @@ import (
 	"github.com/cago-frame/cago/pkg/i18n"
 	"gorm.io/gorm"
 
-	api "agentre-hub/internal/api/device"
-	"agentre-hub/internal/model/entity/device_entity"
-	"agentre-hub/internal/model/entity/device_flow_entity"
-	"agentre-hub/internal/model/entity/device_token_entity"
-	"agentre-hub/internal/pkg/code"
-	"agentre-hub/internal/pkg/jwt"
-	"agentre-hub/internal/pkg/usercode"
-	"agentre-hub/internal/repository/device_flow_repo"
-	"agentre-hub/internal/repository/device_repo"
-	"agentre-hub/internal/repository/device_token_repo"
+	api "agentre-server/internal/api/device"
+	"agentre-server/internal/model/entity/device_entity"
+	"agentre-server/internal/model/entity/device_flow_entity"
+	"agentre-server/internal/model/entity/device_token_entity"
+	"agentre-server/internal/pkg/code"
+	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/usercode"
+	"agentre-server/internal/repository/device_flow_repo"
+	"agentre-server/internal/repository/device_repo"
+	"agentre-server/internal/repository/device_token_repo"
 )
 
 type DeviceSvc interface {

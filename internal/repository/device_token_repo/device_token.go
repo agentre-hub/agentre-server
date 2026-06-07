@@ -6,7 +6,7 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 
-	"agentre-hub/internal/model/entity/device_token_entity"
+	"agentre-server/internal/model/entity/device_token_entity"
 )
 
 //go:generate mockgen -source device_token.go -destination mock_device_token_repo/mock_device_token.go

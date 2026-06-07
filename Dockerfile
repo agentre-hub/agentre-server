@@ -11,13 +11,13 @@ WORKDIR /src
 COPY . .
 COPY --from=web /src/frontend/dist ./internal/web/dist
 RUN go mod download
-RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /hub ./cmd/hub
+RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /server ./cmd/server
 
 # stage 3: runtime
 FROM gcr.io/distroless/static-debian12
-COPY --from=go /hub /hub
-COPY configs/config.example.yaml /etc/agentre-hub/config.yaml
+COPY --from=go /server /server
+COPY configs/config.example.yaml /etc/agentre-server/config.yaml
 WORKDIR /
 EXPOSE 8443
 USER nonroot:nonroot
-ENTRYPOINT ["/hub"]
+ENTRYPOINT ["/server"]

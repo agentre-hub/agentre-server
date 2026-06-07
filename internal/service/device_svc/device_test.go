@@ -12,18 +12,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
-	"agentre-hub/internal/model/entity/device_entity"
-	"agentre-hub/internal/model/entity/device_flow_entity"
-	"agentre-hub/internal/model/entity/device_token_entity"
-	"agentre-hub/internal/pkg/jwt"
-	"agentre-hub/internal/pkg/jwt/testkeys"
-	"agentre-hub/internal/repository/device_flow_repo"
-	"agentre-hub/internal/repository/device_flow_repo/mock_device_flow_repo"
-	"agentre-hub/internal/repository/device_repo"
-	"agentre-hub/internal/repository/device_repo/mock_device_repo"
-	"agentre-hub/internal/repository/device_token_repo"
-	"agentre-hub/internal/repository/device_token_repo/mock_device_token_repo"
-	hubtest "agentre-hub/internal/testutils"
+	"agentre-server/internal/model/entity/device_entity"
+	"agentre-server/internal/model/entity/device_flow_entity"
+	"agentre-server/internal/model/entity/device_token_entity"
+	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwt/testkeys"
+	"agentre-server/internal/repository/device_flow_repo"
+	"agentre-server/internal/repository/device_flow_repo/mock_device_flow_repo"
+	"agentre-server/internal/repository/device_repo"
+	"agentre-server/internal/repository/device_repo/mock_device_repo"
+	"agentre-server/internal/repository/device_token_repo"
+	"agentre-server/internal/repository/device_token_repo/mock_device_token_repo"
+	hubtest "agentre-server/internal/testutils"
 )
 
 func setupDeviceTest(t *testing.T) (
@@ -42,7 +42,7 @@ func setupDeviceTest(t *testing.T) (
 	device_token_repo.RegisterDeviceToken(mT)
 	device_flow_repo.RegisterDeviceFlow(mF)
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-hub", "agentre")
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func setupDeviceTest(t *testing.T) (
 	cfg := Config{
 		UserCodeTTL: 10 * time.Minute, PollInterval: 5 * time.Second,
 		AccessTTL: time.Hour, RefreshTTL: 90 * 24 * time.Hour,
-		VerificationURI: "https://hub/device",
+		VerificationURI: "https://server/device",
 	}
 	ctx, _, mock := hubtest.DatabasePG(t)
 	return ctx, mD, mT, mF, newDeviceSvc(cfg, signer), mock
@@ -115,9 +115,9 @@ func TestExchangeToken(t *testing.T) {
 			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
 				&device_flow_entity.DeviceFlowCode{
 					DeviceCode: "dc-x", IntervalSeconds: 5,
-					ExpiresAt:          time.Now().Add(time.Hour).UnixMilli(),
-					AuthorizedUserID:   42, ApprovedAt: time.Now().UnixMilli(),
-					DeviceKind:         "agentred", ClientFingerprint: "fp-xxxxxxx",
+					ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+					AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
 					ClientCapabilities: []byte(`{"compute":true}`),
 				}, nil,
 			)

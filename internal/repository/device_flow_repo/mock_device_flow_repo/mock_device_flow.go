@@ -10,7 +10,7 @@
 package mock_device_flow_repo
 
 import (
-	device_flow_entity "agentre-hub/internal/model/entity/device_flow_entity"
+	device_flow_entity "agentre-server/internal/model/entity/device_flow_entity"
 	context "context"
 	reflect "reflect"
 

@@ -2,7 +2,7 @@ package oauth_svc
 
 import "context"
 
-// GithubConfig 来自 hub.oauth.github.*。
+// GithubConfig 来自 server.oauth.github.*。
 type GithubConfig struct {
 	ClientID     string
 	ClientSecret string

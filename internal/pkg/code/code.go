@@ -1,11 +1,11 @@
-// Package code 集中维护 AgentRe Hub 的业务错误码与 i18n 提示。
+// Package code 集中维护 AgentRe Server 的业务错误码与 i18n 提示。
 //
-// 段位：30000+ 给 hub（避开 agentre 桌面端 10000~20000 段）。
+// 段位：30000+ 给 server（避开 agentre 桌面端 10000~20000 段）。
 package code
 
 // 通用 30000~30099
 const (
-	OperationFailed  = iota + 30000
+	OperationFailed = iota + 30000
 	InvalidParameter
 	NotFound
 	ServerError

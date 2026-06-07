@@ -8,8 +8,8 @@ import (
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	"agentre-hub/internal/pkg/code"
-	"agentre-hub/internal/pkg/ratelimit"
+	"agentre-server/internal/pkg/code"
+	"agentre-server/internal/pkg/ratelimit"
 )
 
 // AuthorizePerIPLimit：每 IP 每分钟最多 N 次。

@@ -3,16 +3,16 @@ package device_svc
 import (
 	"time"
 
-	"agentre-hub/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwt"
 )
 
-// Config 装载从 cfg.Scan("hub", ...) 得到的运行时参数。
+// Config 装载从 cfg.Scan("server", ...) 得到的运行时参数。
 type Config struct {
 	UserCodeTTL     time.Duration
 	PollInterval    time.Duration
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration
-	VerificationURI string // e.g. "https://hub.agentre.dev/device"
+	VerificationURI string // e.g. "https://server.agentre.dev/device"
 }
 
 type AuthorizeInput struct {

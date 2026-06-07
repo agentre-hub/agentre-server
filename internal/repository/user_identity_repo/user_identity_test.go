@@ -7,8 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	"agentre-hub/internal/model/entity/user_identity_entity"
-	hubtest "agentre-hub/internal/testutils"
+	"agentre-server/internal/model/entity/user_identity_entity"
+	hubtest "agentre-server/internal/testutils"
 )
 
 func TestFindByProviderUID_Found(t *testing.T) {

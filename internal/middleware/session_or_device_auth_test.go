@@ -13,18 +13,18 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
 
-	"agentre-hub/internal/middleware"
-	hubjwt "agentre-hub/internal/pkg/jwt"
-	"agentre-hub/internal/pkg/jwt/testkeys"
-	"agentre-hub/internal/pkg/session"
-	"agentre-hub/internal/service/auth_svc"
+	"agentre-server/internal/middleware"
+	hubjwt "agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwt/testkeys"
+	"agentre-server/internal/pkg/session"
+	"agentre-server/internal/service/auth_svc"
 )
 
 func TestSessionOrDeviceAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis()
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "hub_session", 14*24*3600)))
-	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-hub", "agentre")
+	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
+	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)
 	}

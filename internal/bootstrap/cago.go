@@ -1,4 +1,4 @@
-// Package bootstrap 集中处理 agentre-hub 的启动期组装：
+// Package bootstrap 集中处理 agentre-server 的启动期组装：
 //   - 从 env 注入敏感字段（cago 配置源不支持 env override）
 //   - 加载 JWT 密钥
 //   - 注册 GitHub OAuth client
@@ -16,14 +16,14 @@ import (
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/database/redis"
 
-	"agentre-hub/internal/pkg/jwt"
-	"agentre-hub/internal/pkg/session"
-	"agentre-hub/internal/service/auth_svc"
-	"agentre-hub/internal/service/device_svc"
-	"agentre-hub/internal/service/oauth_svc"
+	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/session"
+	"agentre-server/internal/service/auth_svc"
+	"agentre-server/internal/service/device_svc"
+	"agentre-server/internal/service/oauth_svc"
 )
 
-type HubConfig struct {
+type ServerConfig struct {
 	PublicURL       string        `yaml:"public_url"`
 	InsecureCookies bool          `yaml:"insecure_cookies"`
 	Session         SessionConfig `yaml:"session"`
@@ -69,23 +69,25 @@ type RLConfig struct {
 	AuthorizePerIPPerMin int64 `yaml:"authorize_per_ip_per_min"`
 }
 
-// LoadHubConfig 从 cfg 取 hub.* + env 覆盖，返回最终配置。
-func LoadHubConfig(ctx context.Context, cfg *configs.Config) *HubConfig {
-	out := &HubConfig{}
-	if err := cfg.Scan(ctx, "hub", out); err != nil {
-		log.Fatalf("scan hub config: %v", err)
+// LoadServerConfig 从 cfg 取 server.* + env 覆盖，返回最终配置。
+func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
+	out := &ServerConfig{}
+	if err := cfg.Scan(ctx, "server", out); err != nil {
+		if legacyErr := cfg.Scan(ctx, "hub", out); legacyErr != nil {
+			log.Fatalf("scan server config: %v", err)
+		}
 	}
-	setIfPresent("AGENTRE_HUB_PUBLIC_URL", &out.PublicURL)
-	setIfPresent("AGENTRE_HUB_OAUTH_GITHUB_CLIENT_ID", &out.OAuth.Github.ClientID)
-	setIfPresent("AGENTRE_HUB_OAUTH_GITHUB_CLIENT_SECRET", &out.OAuth.Github.ClientSecret)
-	setIfPresent("AGENTRE_HUB_SESSION_SECRET", &out.Session.Secret)
-	setIfPresent("AGENTRE_HUB_JWT_PRIVATE_KEY_PEM", &out.JWT.PrivateKeyPEM)
-	setIfPresent("AGENTRE_HUB_JWT_PUBLIC_KEY_PEM", &out.JWT.PublicKeyPEM)
-	if v := os.Getenv("AGENTRE_HUB_INSECURE_COOKIES"); v == "1" || strings.EqualFold(v, "true") {
+	setIfPresent("AGENTRE_SERVER_PUBLIC_URL", &out.PublicURL)
+	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID", &out.OAuth.Github.ClientID)
+	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET", &out.OAuth.Github.ClientSecret)
+	setIfPresent("AGENTRE_SERVER_SESSION_SECRET", &out.Session.Secret)
+	setIfPresent("AGENTRE_SERVER_JWT_PRIVATE_KEY_PEM", &out.JWT.PrivateKeyPEM)
+	setIfPresent("AGENTRE_SERVER_JWT_PUBLIC_KEY_PEM", &out.JWT.PublicKeyPEM)
+	if v := os.Getenv("AGENTRE_SERVER_INSECURE_COOKIES"); v == "1" || strings.EqualFold(v, "true") {
 		out.InsecureCookies = true
 	}
 	if out.Session.CookieName == "" {
-		out.Session.CookieName = "hub_session"
+		out.Session.CookieName = "server_session"
 	}
 	if out.Session.TTL == 0 {
 		out.Session.TTL = 14 * 24 * time.Hour
@@ -103,7 +105,7 @@ func LoadHubConfig(ctx context.Context, cfg *configs.Config) *HubConfig {
 		out.JWT.RefreshTTL = 90 * 24 * time.Hour
 	}
 	if out.JWT.Issuer == "" {
-		out.JWT.Issuer = "agentre-hub"
+		out.JWT.Issuer = "agentre-server"
 	}
 	if out.JWT.Audience == "" {
 		out.JWT.Audience = "agentre"
@@ -123,8 +125,8 @@ func setIfPresent(env string, dst *string) {
 	}
 }
 
-// LoadJWTSigner 解析 hubcfg.JWT 中的 PEM 内容/路径并构造 Signer。
-func LoadJWTSigner(cfg *HubConfig) *jwt.Signer {
+// LoadJWTSigner 解析 cfg.JWT 中的 PEM 内容/路径并构造 Signer。
+func LoadJWTSigner(cfg *ServerConfig) *jwt.Signer {
 	priv := loadPEM(cfg.JWT.PrivateKeyPEM, cfg.JWT.PrivateKeyPEMPath)
 	pub := loadPEM(cfg.JWT.PublicKeyPEM, cfg.JWT.PublicKeyPEMPath)
 	s, err := jwt.NewSigner(priv, pub, cfg.JWT.Issuer, cfg.JWT.Audience)
@@ -150,7 +152,7 @@ func loadPEM(inline, path string) []byte {
 }
 
 // RegisterDefaults 初始化 service 默认单例（OAuth、auth、device）。
-func RegisterDefaults(cfg *HubConfig, signer *jwt.Signer) {
+func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 	oauth_svc.SetDefaultGithub(oauth_svc.NewGithub(oauth_svc.GithubConfig{
 		ClientID: cfg.OAuth.Github.ClientID, ClientSecret: cfg.OAuth.Github.ClientSecret,
 		CallbackPath: cfg.OAuth.Github.CallbackPath, PublicURL: cfg.PublicURL,

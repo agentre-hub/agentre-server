@@ -6,7 +6,7 @@ import (
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	"agentre-hub/internal/pkg/code"
+	"agentre-server/internal/pkg/code"
 )
 
 func CSRF() gin.HandlerFunc {

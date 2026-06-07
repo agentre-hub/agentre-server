@@ -12,7 +12,7 @@ import (
 	"github.com/cago-frame/cago/database/redis"
 	goredis "github.com/redis/go-redis/v9"
 
-	"agentre-hub/internal/pkg/session"
+	"agentre-server/internal/pkg/session"
 )
 
 type OAuthStatePayload struct {

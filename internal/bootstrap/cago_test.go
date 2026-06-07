@@ -13,16 +13,16 @@ import (
 	pgdialect "gorm.io/driver/postgres"
 	"gorm.io/gorm"
 
-	"agentre-hub/migrations"
+	"agentre-server/migrations"
 )
 
 func TestMigrations_RealPG(t *testing.T) {
 	ctx := context.Background()
 	pgC, err := pgcontainer.Run(ctx,
 		"postgres:16-alpine",
-		pgcontainer.WithUsername("hub"),
-		pgcontainer.WithPassword("hub"),
-		pgcontainer.WithDatabase("hub"),
+		pgcontainer.WithUsername("server"),
+		pgcontainer.WithPassword("server"),
+		pgcontainer.WithDatabase("server"),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pgC.Terminate(ctx) })

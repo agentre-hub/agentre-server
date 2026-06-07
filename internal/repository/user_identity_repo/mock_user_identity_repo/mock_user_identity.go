@@ -10,7 +10,7 @@
 package mock_user_identity_repo
 
 import (
-	user_identity_entity "agentre-hub/internal/model/entity/user_identity_entity"
+	user_identity_entity "agentre-server/internal/model/entity/user_identity_entity"
 	context "context"
 	reflect "reflect"
 

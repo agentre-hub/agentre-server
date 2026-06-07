@@ -12,7 +12,7 @@ import (
 func TestCreate_ReturnsSidAndCsrf(t *testing.T) {
 	testutils.Redis()
 	ctx := context.Background()
-	store := New(redis.Default(), "hub_session", 14*24*3600)
+	store := New(redis.Default(), "server_session", 14*24*3600)
 
 	sid, sess, err := store.Create(ctx, 42)
 	assert.NoError(t, err)
@@ -24,7 +24,7 @@ func TestCreate_ReturnsSidAndCsrf(t *testing.T) {
 func TestGet_RoundTrip(t *testing.T) {
 	testutils.Redis()
 	ctx := context.Background()
-	store := New(redis.Default(), "hub_session", 14*24*3600)
+	store := New(redis.Default(), "server_session", 14*24*3600)
 
 	sid, created, err := store.Create(ctx, 7)
 	assert.NoError(t, err)
@@ -38,7 +38,7 @@ func TestGet_RoundTrip(t *testing.T) {
 func TestGet_Missing(t *testing.T) {
 	testutils.Redis()
 	ctx := context.Background()
-	store := New(redis.Default(), "hub_session", 14*24*3600)
+	store := New(redis.Default(), "server_session", 14*24*3600)
 	got, err := store.Get(ctx, "no-such-sid")
 	assert.NoError(t, err)
 	assert.Nil(t, got)
@@ -47,7 +47,7 @@ func TestGet_Missing(t *testing.T) {
 func TestDelete(t *testing.T) {
 	testutils.Redis()
 	ctx := context.Background()
-	store := New(redis.Default(), "hub_session", 14*24*3600)
+	store := New(redis.Default(), "server_session", 14*24*3600)
 
 	sid, _, _ := store.Create(ctx, 1)
 	assert.NoError(t, store.Delete(ctx, sid))

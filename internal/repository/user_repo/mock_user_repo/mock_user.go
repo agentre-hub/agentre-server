@@ -10,7 +10,7 @@
 package mock_user_repo
 
 import (
-	user_entity "agentre-hub/internal/model/entity/user_entity"
+	user_entity "agentre-server/internal/model/entity/user_entity"
 	context "context"
 	reflect "reflect"
 

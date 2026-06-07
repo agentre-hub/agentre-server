@@ -8,12 +8,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	hubjwt "agentre-hub/internal/pkg/jwt"
-	"agentre-hub/internal/pkg/jwt/testkeys"
+	hubjwt "agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwt/testkeys"
 )
 
 func newSigner(t *testing.T) *hubjwt.Signer {
-	s, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-hub", "agentre")
+	s, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)
 	}

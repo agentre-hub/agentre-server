@@ -7,7 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	hubtest "agentre-hub/internal/testutils"
+	hubtest "agentre-server/internal/testutils"
 )
 
 func TestApprove(t *testing.T) {

@@ -1,4 +1,4 @@
-module agentre-hub
+module agentre-server
 
 go 1.26
 

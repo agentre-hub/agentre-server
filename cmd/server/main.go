@@ -12,30 +12,30 @@ import (
 	"github.com/cago-frame/cago/server/cron"
 	"github.com/cago-frame/cago/server/mux"
 
-	"agentre-hub/internal/api"
-	"agentre-hub/internal/bootstrap"
-	"agentre-hub/internal/buildinfo"
-	"agentre-hub/internal/repository/device_flow_repo"
-	"agentre-hub/internal/repository/device_repo"
-	"agentre-hub/internal/repository/device_token_repo"
-	"agentre-hub/internal/repository/user_identity_repo"
-	"agentre-hub/internal/repository/user_repo"
-	"agentre-hub/internal/task"
-	"agentre-hub/internal/web"
-	"agentre-hub/migrations"
+	"agentre-server/internal/api"
+	"agentre-server/internal/bootstrap"
+	"agentre-server/internal/buildinfo"
+	"agentre-server/internal/repository/device_flow_repo"
+	"agentre-server/internal/repository/device_repo"
+	"agentre-server/internal/repository/device_token_repo"
+	"agentre-server/internal/repository/user_identity_repo"
+	"agentre-server/internal/repository/user_repo"
+	"agentre-server/internal/task"
+	"agentre-server/internal/web"
+	"agentre-server/migrations"
 )
 
 func main() {
-	log.Printf("agentre-hub %s (%s) starting", buildinfo.Version, buildinfo.Commit)
+	log.Printf("agentre-server %s (%s) starting", buildinfo.Version, buildinfo.Commit)
 
 	ctx := context.Background()
-	cfg, err := configs.NewConfig("agentre-hub")
+	cfg, err := configs.NewConfig("agentre-server")
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
 
-	hubCfg := bootstrap.LoadHubConfig(ctx, cfg)
-	signer := bootstrap.LoadJWTSigner(hubCfg)
+	serverCfg := bootstrap.LoadServerConfig(ctx, cfg)
+	signer := bootstrap.LoadJWTSigner(serverCfg)
 
 	user_repo.RegisterUser(user_repo.NewUser())
 	user_identity_repo.RegisterUserIdentity(user_identity_repo.NewUserIdentity())
@@ -43,14 +43,14 @@ func main() {
 	device_token_repo.RegisterDeviceToken(device_token_repo.NewDeviceToken())
 	device_flow_repo.RegisterDeviceFlow(device_flow_repo.NewDeviceFlow())
 
-	deps := &api.RouterDeps{Cfg: hubCfg, Signer: signer}
+	deps := &api.RouterDeps{Cfg: serverCfg, Signer: signer}
 
 	err = cago.New(ctx, cfg).
 		Registry(component.Core()).
 		Registry(component.Database()).
 		Registry(component.Redis()).
 		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
-			bootstrap.RegisterDefaults(hubCfg, signer)
+			bootstrap.RegisterDefaults(serverCfg, signer)
 			return nil
 		})).
 		Registry(cron.Cron()).
@@ -62,6 +62,6 @@ func main() {
 		RegistryCancel(mux.HTTP(deps.Router)).
 		Start()
 	if err != nil {
-		log.Fatalf("hub start: %v", err)
+		log.Fatalf("server start: %v", err)
 	}
 }

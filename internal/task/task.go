@@ -7,7 +7,7 @@ import (
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/server/cron"
 
-	"agentre-hub/internal/task/crontab"
+	"agentre-server/internal/task/crontab"
 )
 
 // Task cago FuncComponent 入口。

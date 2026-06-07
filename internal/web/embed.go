@@ -1,4 +1,4 @@
-// Package web 把前端 SPA 嵌入 hub 二进制。
+// Package web 把前端 SPA 嵌入 server 二进制。
 //
 // dist 目录在 build 时由 frontend/dist 拷贝填充；dev 模式由 vite 提供。
 package web

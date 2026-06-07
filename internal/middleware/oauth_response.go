@@ -1,4 +1,4 @@
-// Package middleware 提供 hub 业务相关 gin middleware。
+// Package middleware 提供 server 业务相关 gin middleware。
 package middleware
 
 import (

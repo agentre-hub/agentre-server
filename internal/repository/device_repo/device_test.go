@@ -7,8 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	"agentre-hub/internal/model/entity/device_entity"
-	hubtest "agentre-hub/internal/testutils"
+	"agentre-server/internal/model/entity/device_entity"
+	hubtest "agentre-server/internal/testutils"
 )
 
 func TestUpsert_InsertPath(t *testing.T) {

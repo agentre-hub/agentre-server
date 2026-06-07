@@ -8,11 +8,11 @@ import (
 	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/stretchr/testify/assert"
 
-	"agentre-hub/internal/pkg/session"
+	"agentre-server/internal/pkg/session"
 )
 
 func newSvc() AuthSvc {
-	return New(session.New(redis.Default(), "hub_session", 86400))
+	return New(session.New(redis.Default(), "server_session", 86400))
 }
 
 func TestOAuthState_Roundtrip(t *testing.T) {

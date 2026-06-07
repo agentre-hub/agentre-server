@@ -7,11 +7,11 @@ import (
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	api "agentre-hub/internal/api/auth"
-	"agentre-hub/internal/pkg/code"
-	"agentre-hub/internal/service/auth_svc"
-	"agentre-hub/internal/service/oauth_svc"
-	"agentre-hub/internal/service/user_svc"
+	api "agentre-server/internal/api/auth"
+	"agentre-server/internal/pkg/code"
+	"agentre-server/internal/service/auth_svc"
+	"agentre-server/internal/service/oauth_svc"
+	"agentre-server/internal/service/user_svc"
 )
 
 type Auth struct{}

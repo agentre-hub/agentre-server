@@ -1,4 +1,4 @@
-// Package migrations 汇总并执行 agentre-hub PostgreSQL 全部迁移。
+// Package migrations 汇总并执行 agentre-server PostgreSQL 全部迁移。
 //
 // 规范：
 //   - 文件名前缀 = 时间戳排序键（YYYYMMDDNNNN），调用顺序按时间升序。

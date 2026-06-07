@@ -1,4 +1,4 @@
-// Package testutils 提供 hub 仓库测试用的 PG-dialect sqlmock 工厂。
+// Package testutils 提供 server 仓库测试用的 PG-dialect sqlmock 工厂。
 package testutils
 
 import (

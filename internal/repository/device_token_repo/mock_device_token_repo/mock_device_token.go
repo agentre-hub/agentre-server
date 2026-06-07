@@ -10,7 +10,7 @@
 package mock_device_token_repo
 
 import (
-	device_token_entity "agentre-hub/internal/model/entity/device_token_entity"
+	device_token_entity "agentre-server/internal/model/entity/device_token_entity"
 	context "context"
 	reflect "reflect"
 

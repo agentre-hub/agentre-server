@@ -5,7 +5,7 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 
-	"agentre-hub/internal/model/entity/user_identity_entity"
+	"agentre-server/internal/model/entity/user_identity_entity"
 )
 
 //go:generate mockgen -source user_identity.go -destination mock_user_identity_repo/mock_user_identity.go

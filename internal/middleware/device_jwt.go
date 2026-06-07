@@ -12,8 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
 
-	"agentre-hub/internal/pkg/code"
-	"agentre-hub/internal/pkg/jwt"
+	"agentre-server/internal/pkg/code"
+	"agentre-server/internal/pkg/jwt"
 )
 
 func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {

@@ -17,25 +17,25 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"agentre-hub/internal/controller/auth_ctr"
-	"agentre-hub/internal/controller/device_ctr"
-	"agentre-hub/internal/middleware"
-	"agentre-hub/internal/model/entity/device_entity"
-	"agentre-hub/internal/model/entity/device_flow_entity"
-	"agentre-hub/internal/model/entity/device_token_entity"
-	"agentre-hub/internal/model/entity/user_entity"
-	"agentre-hub/internal/pkg/jwt"
-	"agentre-hub/internal/pkg/jwt/testkeys"
-	"agentre-hub/internal/repository/device_flow_repo"
-	"agentre-hub/internal/repository/device_flow_repo/mock_device_flow_repo"
-	"agentre-hub/internal/repository/device_repo"
-	"agentre-hub/internal/repository/device_repo/mock_device_repo"
-	"agentre-hub/internal/repository/device_token_repo"
-	"agentre-hub/internal/repository/device_token_repo/mock_device_token_repo"
-	"agentre-hub/internal/repository/user_repo"
-	"agentre-hub/internal/repository/user_repo/mock_user_repo"
-	"agentre-hub/internal/service/device_svc"
-	hubtest "agentre-hub/internal/testutils"
+	"agentre-server/internal/controller/auth_ctr"
+	"agentre-server/internal/controller/device_ctr"
+	"agentre-server/internal/middleware"
+	"agentre-server/internal/model/entity/device_entity"
+	"agentre-server/internal/model/entity/device_flow_entity"
+	"agentre-server/internal/model/entity/device_token_entity"
+	"agentre-server/internal/model/entity/user_entity"
+	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwt/testkeys"
+	"agentre-server/internal/repository/device_flow_repo"
+	"agentre-server/internal/repository/device_flow_repo/mock_device_flow_repo"
+	"agentre-server/internal/repository/device_repo"
+	"agentre-server/internal/repository/device_repo/mock_device_repo"
+	"agentre-server/internal/repository/device_token_repo"
+	"agentre-server/internal/repository/device_token_repo/mock_device_token_repo"
+	"agentre-server/internal/repository/user_repo"
+	"agentre-server/internal/repository/user_repo/mock_user_repo"
+	"agentre-server/internal/service/device_svc"
+	hubtest "agentre-server/internal/testutils"
 )
 
 func TestDeviceFlow_HappyPath(t *testing.T) {
@@ -52,7 +52,7 @@ func TestDeviceFlow_HappyPath(t *testing.T) {
 	device_flow_repo.RegisterDeviceFlow(mF)
 	user_repo.RegisterUser(mU)
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-hub", "agentre")
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 
 	svc := device_svc.New(device_svc.Config{

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"agentre-hub/internal/service/user_svc"
+	"agentre-server/internal/service/user_svc"
 )
 
 type githubClient struct {
