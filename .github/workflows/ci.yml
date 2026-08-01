@@ -40,6 +40,9 @@ jobs:
             frontend/pnpm-lock.yaml
             e2e/pnpm-lock.yaml
 
+      - name: prepare embedded frontend
+        run: make prepare-web-dist
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
