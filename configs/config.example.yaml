@@ -24,6 +24,19 @@ logger:
     filename: ./runtime/logs/server.log
     errorFilename: ./runtime/logs/server.err.log
 
+# 链路追踪。type=empty 表示不往 collector 上报，但仍生成有效的
+# trace_id/span_id——日志里照样能关联一次请求，本地开发不需要起 Jaeger。
+# 接了 collector 之后改成 grpc/http 并填 endpoint、把 sample 调上去。
+# 详见 docs/observability.md#traces
+trace:
+  type: empty
+  sample: 1
+  endpoint: ""
+  useSSL: false
+
+# 指标不需要额外配置：注册 metric 组件后自动暴露 GET /metrics 供 Prometheus 抓取。
+# 详见 docs/observability.md#metrics
+
 server:
   public_url: "https://server.agentre.dev"
   insecure_cookies: false

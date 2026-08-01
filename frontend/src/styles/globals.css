@@ -33,6 +33,12 @@
   /* Destructive */
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
+
+  /* Elevation */
+  --shadow-overlay:
+    0 24px 64px -12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  /* Dialog / Sheet 背后的遮罩 */
+  --overlay-scrim: rgba(15, 23, 42, 0.25);
 }
 
 .dark {
@@ -59,11 +65,18 @@
 
   --destructive: #f87171;
   --destructive-foreground: #fafafa;
+
+  /* 深色背景下投影要更重才看得出层级，边缘描边则改用亮色 */
+  --shadow-overlay:
+    0 24px 64px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --overlay-scrim: rgba(0, 0, 0, 0.7);
 }
 
 @layer base {
   * {
-    border-color: hsl(var(--border));
+    /* token 存的是十六进制字面量，不是 HSL 通道值，所以这里直接引用。
+       写成 hsl(var(--border)) 会得到非法 CSS，整条声明被丢弃。 */
+    border-color: var(--border);
     box-sizing: border-box;
   }
 

@@ -34,4 +34,6 @@ make dev
 
 ## Architecture
 
-详见 `../agentre/docs/superpowers/specs/2026-05-19-hub-foundation-design.md`
+改代码前先读 [`AGENTS.md`](AGENTS.md) 和 [`docs/`](docs/README.md)。
+
+基础设计 spec：[`../agentre-hub/docs/superpowers/specs/2026-06-16-hub-foundation-design.md`](../agentre-hub/docs/superpowers/specs/2026-06-16-hub-foundation-design.md)

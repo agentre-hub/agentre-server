@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { api, ApiError, setCsrfToken } from '@/lib/api';
+import { useEffect, useState } from "react";
+import { api, ApiError, setCsrfToken } from "@/lib/api";
 
 export interface Me {
   user_id: number;
@@ -17,7 +17,7 @@ export function useMe() {
 
   useEffect(() => {
     let alive = true;
-    api<Me>('/v1/auth/me')
+    api<Me>("/v1/auth/me")
       .then((m) => {
         if (!alive) return;
         setMe(m);

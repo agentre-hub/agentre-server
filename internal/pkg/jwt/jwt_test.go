@@ -1,5 +1,3 @@
-//go:build test || jwttestkeys
-
 package jwt_test
 
 import (

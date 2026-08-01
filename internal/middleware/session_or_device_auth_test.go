@@ -1,5 +1,3 @@
-//go:build jwttestkeys
-
 package middleware_test
 
 import (

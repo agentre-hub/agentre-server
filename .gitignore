@@ -16,6 +16,15 @@
 /config.yaml
 /configs/config.yaml
 
+# 一次性本地验证脚本与证据（见 docs/verification.md）；不提交，也不进 CI。
+# 保留目录本身：playwright.scratch.config.ts 的 testDir 指向它，
+# 目录不存在时 `pnpm scratch` 直接报错。
+/e2e/scratch/*
+!/e2e/scratch/.gitkeep
+/e2e/node_modules/
+/e2e/test-results/
+/e2e/playwright-report/
+
 # editor / tooling
 .idea/
 .vscode/

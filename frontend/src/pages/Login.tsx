@@ -1,34 +1,47 @@
-import { Button } from '@/components/ui/button';
-import { Alert } from '@/components/ui/alert';
+import { useTranslation } from "react-i18next";
 
-const ERR_MAP: Record<string, string> = {
-  oauth_state_invalid:   'OAuth state 已过期，请重新发起登录。',
-  oauth_exchange_failed: 'GitHub OAuth 兑换失败，请稍后重试或检查 GitHub OAuth App 配置。',
-  oauth_profile_failed:  '无法获取 GitHub 用户信息。',
-  github_email_missing:  '请在 GitHub 设置中将主邮箱设为已验证后重试。',
-  access_denied:         '你取消了 GitHub 授权。',
-  user_banned:           '账户已被封禁，请联系管理员。',
-};
+import { Button } from "@/components/ui/button";
+import { Alert } from "@/components/ui/alert";
+
+/** 后端 err query 参数 → i18n key 后缀。未知值原样透出。 */
+const KNOWN_ERRORS = [
+  "oauth_state_invalid",
+  "oauth_exchange_failed",
+  "oauth_profile_failed",
+  "github_email_missing",
+  "access_denied",
+  "user_banned",
+] as const;
 
 export default function Login() {
+  const { t } = useTranslation();
   const params = new URLSearchParams(window.location.search);
-  const next = params.get('next') ?? '';
-  const userCode = params.get('user_code') ?? '';
-  const err = params.get('err');
+  const next = params.get("next") ?? "";
+  const userCode = params.get("user_code") ?? "";
+  const err = params.get("err");
 
   const onLogin = () => {
     const u = new URLSearchParams();
-    if (next) u.set('next', next);
-    if (userCode) u.set('user_code', userCode);
-    window.location.href = '/v1/auth/oauth/github/authorize?' + u.toString();
+    if (next) u.set("next", next);
+    if (userCode) u.set("user_code", userCode);
+    // 用 assign 而不是 `href =`：语义相同（都保留历史记录），
+    // 但与 RequireAuth 的 window.location.replace 保持同一种写法。
+    window.location.assign("/v1/auth/oauth/github/authorize?" + u.toString());
   };
 
+  const errorText =
+    err && (KNOWN_ERRORS as readonly string[]).includes(err)
+      ? t(`login.errors.${err}`)
+      : err;
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-sm space-y-6 p-8 border rounded-xl">
-        <h1 className="text-2xl font-semibold">登录 AgentRe Server</h1>
-        {err && <Alert variant="destructive">{ERR_MAP[err] ?? err}</Alert>}
-        <Button className="w-full" onClick={onLogin}>使用 GitHub 登录</Button>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+      <div className="w-full max-w-sm space-y-6 rounded-xl border p-6 sm:p-8">
+        <h1 className="text-2xl font-semibold">{t("login.title")}</h1>
+        {errorText && <Alert variant="destructive">{errorText}</Alert>}
+        <Button className="w-full" onClick={onLogin}>
+          {t("login.github")}
+        </Button>
       </div>
     </div>
   );

@@ -1,10 +1,18 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Alert } from '@/components/ui/alert';
-import { api, ApiError } from '@/lib/api';
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Alert } from "@/components/ui/alert";
+import { api, ApiError } from "@/lib/api";
 
 interface PendingInfo {
   device_kind: string;
@@ -14,19 +22,20 @@ interface PendingInfo {
   expires_in: number;
 }
 
-const ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 function normalize(input: string): string | null {
-  const cleaned = input.toUpperCase().replace(/[\s-]/g, '').split('');
+  const cleaned = input.toUpperCase().replace(/[\s-]/g, "").split("");
   if (cleaned.length !== 6) return null;
   for (const c of cleaned) if (!ALPHABET.includes(c)) return null;
-  return cleaned.slice(0, 3).join('') + '-' + cleaned.slice(3).join('');
+  return cleaned.slice(0, 3).join("") + "-" + cleaned.slice(3).join("");
 }
 
 export default function Device() {
+  const { t } = useTranslation();
   const nav = useNavigate();
   const params = new URLSearchParams(window.location.search);
-  const initial = params.get('user_code') ?? '';
+  const initial = params.get("user_code") ?? "";
   const [code, setCode] = useState(initial);
   const [info, setInfo] = useState<PendingInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,13 +44,14 @@ export default function Device() {
   useEffect(() => {
     const norm = normalize(initial);
     if (norm) loadPending(norm);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial]);
 
   async function loadPending(uc: string) {
     setError(null);
     try {
-      const got = await api<PendingInfo>(`/v1/oauth/device/pending?user_code=${encodeURIComponent(uc)}`);
+      const got = await api<PendingInfo>(
+        `/v1/oauth/device/pending?user_code=${encodeURIComponent(uc)}`,
+      );
       setInfo(got);
       setCode(uc);
     } catch (e) {
@@ -54,12 +64,15 @@ export default function Device() {
     setSubmitting(true);
     try {
       await api(`/v1/oauth/device/approve`, {
-        method: 'POST', body: JSON.stringify({ user_code: code }),
+        method: "POST",
+        body: JSON.stringify({ user_code: code }),
       });
-      nav('/device/success');
+      nav("/device/success");
     } catch (e) {
       if (e instanceof ApiError) setError(e.message);
-    } finally { setSubmitting(false); }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function onDeny() {
@@ -67,35 +80,67 @@ export default function Device() {
     setSubmitting(true);
     try {
       await api(`/v1/oauth/device/deny`, {
-        method: 'POST', body: JSON.stringify({ user_code: code }),
+        method: "POST",
+        body: JSON.stringify({ user_code: code }),
       });
-      setError('已拒绝授权，可关闭此页面。');
+      setError(t("device.denied"));
       setInfo(null);
-    } finally { setSubmitting(false); }
+    } finally {
+      setSubmitting(false);
+    }
   }
 
+  const enabledCapabilities = Object.entries(info?.capabilities ?? {})
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+    .join(", ");
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-md space-y-6 p-8 border rounded-xl">
-        <h1 className="text-2xl font-semibold">设备授权</h1>
-        <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="A4F-7Q2" />
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+      <div className="w-full max-w-md space-y-6 rounded-xl border p-6 sm:p-8">
+        <h1 className="text-2xl font-semibold">{t("device.title")}</h1>
+        <Input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder={t("device.codePlaceholder")}
+          autoCapitalize="characters"
+          autoComplete="one-time-code"
+          inputMode="text"
+        />
         {error && <Alert variant="destructive">{error}</Alert>}
-        <Button onClick={() => { const n = normalize(code); if (n) loadPending(n); else setError('user_code 格式不正确'); }}>
-          查询
+        <Button
+          className="w-full sm:w-auto"
+          onClick={() => {
+            const n = normalize(code);
+            if (n) loadPending(n);
+            else setError(t("device.invalidCode"));
+          }}
+        >
+          {t("device.lookup")}
         </Button>
 
-        <Dialog open={!!info} onOpenChange={(o) => { if (!o) setInfo(null); }}>
+        <Dialog
+          open={!!info}
+          onOpenChange={(o) => {
+            if (!o) setInfo(null);
+          }}
+        >
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>授权该设备</DialogTitle>
+              <DialogTitle>{t("device.approveTitle")}</DialogTitle>
               <DialogDescription>
                 {info?.device_kind} ({info?.platform} {info?.version})
-                <br />capabilities: {Object.entries(info?.capabilities ?? {}).filter(([, v]) => v).map(([k]) => k).join(', ')}
+                <br />
+                {t("device.capabilities")}: {enabledCapabilities}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="outline" onClick={onDeny} disabled={submitting}>拒绝</Button>
-              <Button onClick={onApprove} disabled={submitting}>允许</Button>
+              <Button variant="outline" onClick={onDeny} disabled={submitting}>
+                {t("device.deny")}
+              </Button>
+              <Button onClick={onApprove} disabled={submitting}>
+                {t("device.approve")}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

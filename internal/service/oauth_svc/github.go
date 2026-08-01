@@ -46,7 +46,7 @@ func (c *githubClient) ExchangeCode(ctx context.Context, code string) (string, e
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		return "", fmt.Errorf("github exchange status %d", resp.StatusCode)
 	}
@@ -87,7 +87,7 @@ func (c *githubClient) FetchProfile(ctx context.Context, accessToken string) (*P
 		if err != nil {
 			return nil, err
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode/100 != 2 {
 			return nil, fmt.Errorf("github %s status %d", u, resp.StatusCode)
 		}

@@ -1,12 +1,16 @@
-import { Link } from 'react-router-dom';
+import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 export default function NotFound() {
+  const { t } = useTranslation();
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="text-center space-y-2">
-        <h1 className="text-4xl font-bold">404</h1>
-        <p className="text-muted-foreground">页面不存在</p>
-        <Link to="/" className="underline">回到首页</Link>
+    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+      <div className="space-y-2 text-center">
+        <h1 className="text-4xl font-bold">{t("notFound.title")}</h1>
+        <p className="text-muted-foreground">{t("notFound.body")}</p>
+        <Link to="/" className="underline">
+          {t("common.back_home")}
+        </Link>
       </div>
     </div>
   );

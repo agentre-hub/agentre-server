@@ -1,5 +1,3 @@
-//go:build jwttestkeys
-
 package device_svc
 
 import (
