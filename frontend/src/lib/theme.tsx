@@ -34,8 +34,9 @@ function readStored(): Theme {
 /**
  * 把生效的外观写到 <html> 的 class 上。
  *
- * globals.css 里的 `.dark { ... }` 靠这个 class 生效；tailwind.config.ts 也必须是
- * darkMode: 'class'。三者是一套，改任意一个都要同步——见 docs/design.md#theming。
+ * globals.css 里的 `.dark { ... }` 靠这个 class 生效；同一文件顶部的
+ * `@custom-variant dark (&:is(.dark *))` 让 Tailwind 的 dark: 变体也认这个 class。
+ * 三者是一套，改任意一个都要同步——见 docs/design.md#theming。
  */
 function applyTheme(resolved: "light" | "dark") {
   document.documentElement.classList.toggle("dark", resolved === "dark");

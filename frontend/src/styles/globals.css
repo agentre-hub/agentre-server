@@ -1,6 +1,29 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* source(none) 关掉 v4 的自动内容检测，改由下面的 @source 显式列出——
+   等价于 v3 tailwind.config.ts 里那条只含 index.html 和 src 下 ts/tsx 的 content。
+   不关的话 v4 会扫整个项目，把 eslint-rules/ 和守卫测试里的「违规样本」
+   （被禁的调色板色类字符串）当成真实用法生成进产物 CSS：
+   于是 lint 层禁止调色板色类，产物里那些类却照样存在，
+   谁在 eslint 管不到的地方（.html、.js）写一个就真的生效了。
+
+   两个坑：
+   1. 路径相对本文件所在目录（src/styles/），不是项目根。
+   2. @source 不支持多段花括号展开，注释里也不能出现花括号 glob——
+      Tailwind 的解析器会把它当成 CSS 块，报 "Invalid declaration"。
+      所以上面那句只能用文字描述，别贴原文。 */
+@import "tailwindcss" source(none);
+@import "tw-animate-css";
+
+@source "../../index.html";
+@source "../**/*.ts";
+@source "../**/*.tsx";
+@source not "../**/*.test.ts";
+@source not "../**/*.test.tsx";
+@source not "../**/__tests__/**";
+
+/* Tailwind v4 没有 darkMode: 'class' 配置项了，改成显式声明 dark 变体。
+   下面 `.dark { ... }` 那整块 token 靠这一行才生效——删掉它不会报错，
+   只是深色模式静默失效。src/lib/theme.tsx 负责把 .dark 挂到 <html> 上。 */
+@custom-variant dark (&:is(.dark *));
 
 :root {
   --radius: 0.5rem;
@@ -34,8 +57,11 @@
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
 
-  /* Elevation */
-  --shadow-overlay:
+  /* Elevation.
+     命名成 --overlay-shadow 而不是 --shadow-overlay：v4 的阴影命名空间就是
+     --shadow-*，同名会让 @theme 里的映射写成 `--shadow-overlay: var(--shadow-overlay)`
+     而自指。scrim 同理，见下面的 --overlay-scrim。 */
+  --overlay-shadow:
     0 24px 64px -12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
   /* Dialog / Sheet 背后的遮罩 */
   --overlay-scrim: rgba(15, 23, 42, 0.25);
@@ -67,15 +93,52 @@
   --destructive-foreground: #fafafa;
 
   /* 深色背景下投影要更重才看得出层级，边缘描边则改用亮色 */
-  --shadow-overlay:
+  --overlay-shadow:
     0 24px 64px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --overlay-scrim: rgba(0, 0, 0, 0.7);
 }
 
+/* Tailwind v4 的工具类由这里生成，取代了 v3 的 tailwind.config.ts。
+   `inline` 表示别名直接引用上面的 token 变量，而不是把值复制一份——
+   这样 .dark 里的覆写才能透传到工具类。
+   少一条映射不会报错，对应的 bg-/text- 工具类只是不生成任何规则，
+   页面上表现为「那块没颜色」。src/__tests__/design-token-contract.test.ts 守着这件事。 */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-scrim: var(--overlay-scrim);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+
+  --shadow-overlay: var(--overlay-shadow);
+}
+
 @layer base {
   * {
-    /* token 存的是十六进制字面量，不是 HSL 通道值，所以这里直接引用。
-       写成 hsl(var(--border)) 会得到非法 CSS，整条声明被丢弃。 */
+    /* 两条理由都还成立，别删：
+       1. token 存的是十六进制字面量，不是 HSL 通道值，所以这里直接引用。
+          写成 hsl(var(--border)) 会得到非法 CSS，整条声明被丢弃。
+       2. v4 起默认边框色是 currentColor（v3 是 gray-200），
+          少了这一行，`border` 类会画出跟文字同色的边框。 */
     border-color: var(--border);
     box-sizing: border-box;
   }
