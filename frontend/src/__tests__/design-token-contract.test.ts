@@ -78,25 +78,52 @@ const theme = decls(block("@theme"));
  * 不要在这里单方面发明新值。
  */
 const COLOR_TOKENS: Array<[string, string, string | null]> = [
-  ["--background", "#f8fafc", "#141a23"],
-  ["--foreground", "#0f172a", "#e6edf3"],
-  ["--card", "#ffffff", "#1d2533"],
-  ["--card-foreground", "#0f172a", "#e6edf3"],
-  ["--popover", "#ffffff", "#2a3344"],
-  ["--popover-foreground", "#0f172a", "#e6edf3"],
-  ["--primary", "#0891b2", "#22d3ee"],
-  ["--primary-foreground", "#ffffff", "#04141a"],
-  ["--ring", "#0891b2", "#22d3ee"],
-  ["--secondary", "#f1f5f9", "#2a3344"],
-  ["--secondary-foreground", "#0f172a", "#c9d1d9"],
-  ["--muted", "#f1f5f9", "#1d2533"],
-  ["--muted-foreground", "#64748b", "#8b949e"],
-  ["--accent", "#f1f5f9", "#3a4660"],
-  ["--accent-foreground", "#0f172a", "#e6edf3"],
-  ["--border", "#e2e8f0", "#2c3548"],
-  ["--input", "#e2e8f0", "#2c3548"],
+  // Surfaces —— zinc 中性色
+  ["--background", "#fafafa", "#17191c"],
+  ["--foreground", "#18181b", "#e6e8eb"],
+  ["--card", "#ffffff", "#1d2025"],
+  ["--card-foreground", "#18181b", "#e6e8eb"],
+  ["--popover", "#ffffff", "#262931"],
+  ["--popover-foreground", "#18181b", "#e6e8eb"],
+
+  // Brand —— 钢蓝。-soft 是选中态底色，-text 是深色下的可读前景色
+  ["--primary", "#3b6896", "#5b8dbf"],
+  ["--primary-foreground", "#ffffff", "#0a1420"],
+  ["--primary-soft", "#eef4fa", "#1a2738"],
+  ["--primary-text", "#3b6896", "#8eb6dc"],
+  ["--ring", "#3b6896", "#5b8dbf"],
+
+  // 语义面与文字层级
+  ["--secondary", "#f4f4f5", "#262931"],
+  ["--secondary-foreground", "#3f3f46", "#c4c7cd"],
+  ["--muted", "#f4f4f5", "#1d2025"],
+  ["--muted-foreground", "#71717a", "#8a8d94"],
+  ["--subtle-foreground", "#a1a1aa", "#5a5d64"],
+  ["--accent", "#f4f4f5", "#383d47"],
+  ["--accent-foreground", "#18181b", "#e6e8eb"],
+
+  // Border / Input
+  ["--border", "#e4e4e7", "#2a2d34"],
+  ["--border-strong", "#d4d4d8", "#3a3e47"],
+  ["--input", "#e4e4e7", "#2a2d34"],
+
+  // Destructive
   ["--destructive", "#dc2626", "#f87171"],
   ["--destructive-foreground", "#ffffff", "#fafafa"],
+  ["--destructive-soft", "#fef2f2", "#2a1414"],
+
+  // 状态。设计稿里叫 ok / warn / idle / danger，代码沿用桌面端的 status-* 命名
+  ["--status-running", "#10b981", "#34d399"],
+  ["--status-running-bg", "#ecfdf5", "#0f2218"],
+  ["--status-waiting", "#f59e0b", "#fbbf24"],
+  ["--status-waiting-bg", "#fffbeb", "#261d0d"],
+  ["--status-idle", "#a1a1aa", "#6a6d74"],
+  ["--status-error", "#dc2626", "#f87171"],
+
+  // 等宽输出面（命令输出、hook 日志）
+  ["--code-surface", "#f4f4f5", "#121418"],
+  ["--code-foreground", "#3f3f46", "#e6e8eb"],
+  ["--code-muted-foreground", "#71717a", "#9aa0ab"],
 ];
 
 /**

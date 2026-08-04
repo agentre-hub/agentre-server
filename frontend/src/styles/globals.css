@@ -25,37 +25,60 @@
    只是深色模式静默失效。src/lib/theme.tsx 负责把 .dark 挂到 <html> 上。 */
 @custom-variant dark (&:is(.dark *));
 
+/* 值和命名都取自 agentre 桌面端 frontend/src/styles/globals.css。
+   两端同源是有意的：出问题改一次，桌面端和控制台都受益。
+   要加新颜色，先去桌面端看有没有现成的，别在这边单方面发明。 */
 :root {
   --radius: 0.5rem;
 
-  /* Surfaces */
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  /* Surfaces —— zinc 中性色，纯白卡片浮在灰底上 */
+  --background: #fafafa;
+  --foreground: #18181b;
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: #18181b;
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
+  --popover-foreground: #18181b;
 
-  /* Brand */
-  --primary: #0891b2;
+  /* Brand —— 钢蓝，冷而不艳，跟状态色和 agent 色都拉得开。
+     -soft 是选中态底色，-text 是需要可读性时的前景色（深色下比 --primary 更亮）。 */
+  --primary: #3b6896;
   --primary-foreground: #ffffff;
-  --ring: #0891b2;
+  --primary-soft: #eef4fa;
+  --primary-text: #3b6896;
+  --ring: #3b6896;
 
-  /* Semantic surfaces */
-  --secondary: #f1f5f9;
-  --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #f1f5f9;
-  --accent-foreground: #0f172a;
+  /* 语义面与文字层级：foreground > muted > subtle */
+  --secondary: #f4f4f5;
+  --secondary-foreground: #3f3f46;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a;
+  --subtle-foreground: #a1a1aa;
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
 
-  /* Border / Input */
-  --border: #e2e8f0;
-  --input: #e2e8f0;
+  /* Border / Input。--input 同时当描边色和半透明填充用（dark:bg-input/30），
+     是 shadcn 的约定，不要拆成两个 token。 */
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --input: #e4e4e7;
 
   /* Destructive */
   --destructive: #dc2626;
   --destructive-foreground: #ffffff;
+  --destructive-soft: #fef2f2;
+
+  /* 状态。设计稿里叫 ok / warn / idle / danger，代码沿用桌面端的 status-* 命名。 */
+  --status-running: #10b981;
+  --status-running-bg: #ecfdf5;
+  --status-waiting: #f59e0b;
+  --status-waiting-bg: #fffbeb;
+  --status-idle: #a1a1aa;
+  --status-error: #dc2626;
+
+  /* 等宽输出面：命令输出、hook 日志 */
+  --code-surface: #f4f4f5;
+  --code-foreground: #3f3f46;
+  --code-muted-foreground: #71717a;
 
   /* Elevation.
      命名成 --overlay-shadow 而不是 --shadow-overlay：v4 的阴影命名空间就是
@@ -63,34 +86,50 @@
      而自指。scrim 同理，见下面的 --overlay-scrim。 */
   --overlay-shadow:
     0 24px 64px -12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  /* Dialog / Sheet 背后的遮罩 */
-  --overlay-scrim: rgba(15, 23, 42, 0.25);
+  /* Dialog / Sheet 背后的遮罩。25% 压不住底下的列表，画稿时提到 40%。 */
+  --overlay-scrim: rgba(15, 23, 42, 0.4);
 }
 
 .dark {
-  --background: #141a23;
-  --foreground: #e6edf3;
-  --card: #1d2533;
-  --card-foreground: #e6edf3;
-  --popover: #2a3344;
-  --popover-foreground: #e6edf3;
+  --background: #17191c;
+  --foreground: #e6e8eb;
+  --card: #1d2025;
+  --card-foreground: #e6e8eb;
+  --popover: #262931;
+  --popover-foreground: #e6e8eb;
 
-  --primary: #22d3ee;
-  --primary-foreground: #04141a;
-  --ring: #22d3ee;
+  --primary: #5b8dbf;
+  --primary-foreground: #0a1420;
+  --primary-soft: #1a2738;
+  --primary-text: #8eb6dc;
+  --ring: #5b8dbf;
 
-  --secondary: #2a3344;
-  --secondary-foreground: #c9d1d9;
-  --muted: #1d2533;
-  --muted-foreground: #8b949e;
-  --accent: #3a4660;
-  --accent-foreground: #e6edf3;
+  --secondary: #262931;
+  --secondary-foreground: #c4c7cd;
+  --muted: #1d2025;
+  --muted-foreground: #8a8d94;
+  --subtle-foreground: #5a5d64;
+  --accent: #383d47;
+  --accent-foreground: #e6e8eb;
 
-  --border: #2c3548;
-  --input: #2c3548;
+  --border: #2a2d34;
+  --border-strong: #3a3e47;
+  --input: #2a2d34;
 
   --destructive: #f87171;
   --destructive-foreground: #fafafa;
+  --destructive-soft: #2a1414;
+
+  --status-running: #34d399;
+  --status-running-bg: #0f2218;
+  --status-waiting: #fbbf24;
+  --status-waiting-bg: #261d0d;
+  --status-idle: #6a6d74;
+  --status-error: #f87171;
+
+  --code-surface: #121418;
+  --code-foreground: #e6e8eb;
+  --code-muted-foreground: #9aa0ab;
 
   /* 深色背景下投影要更重才看得出层级，边缘描边则改用亮色 */
   --overlay-shadow:
@@ -112,15 +151,29 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-text: var(--primary-text);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-status-running: var(--status-running);
+  --color-status-running-bg: var(--status-running-bg);
+  --color-status-waiting: var(--status-waiting);
+  --color-status-waiting-bg: var(--status-waiting-bg);
+  --color-status-idle: var(--status-idle);
+  --color-status-error: var(--status-error);
+  --color-code-surface: var(--code-surface);
+  --color-code-foreground: var(--code-foreground);
+  --color-code-muted-foreground: var(--code-muted-foreground);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-scrim: var(--overlay-scrim);
