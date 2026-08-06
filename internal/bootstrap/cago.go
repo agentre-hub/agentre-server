@@ -18,9 +18,11 @@ import (
 
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/session"
+	"agentre-server/internal/repository/device_repo"
 	"agentre-server/internal/service/auth_svc"
 	"agentre-server/internal/service/device_svc"
 	"agentre-server/internal/service/oauth_svc"
+	"agentre-server/internal/service/relay_svc"
 )
 
 type ServerConfig struct {
@@ -168,4 +170,13 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		RefreshTTL:      cfg.JWT.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}, signer))
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown-host"
+	}
+	relay_svc.SetDefault(relay_svc.New(relay_svc.Config{
+		InstanceID: fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), time.Now().UnixNano()),
+		OnlineTTL:  30 * time.Second,
+	}, device_repo.Device(), redis.Default(), relay_svc.NewUnavailableForwarder()))
 }

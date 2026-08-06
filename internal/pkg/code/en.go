@@ -38,4 +38,8 @@ var en = map[int]string{
 	JWTSignatureInvalid: "invalid access token signature",
 	JWTBlacklisted:      "access token revoked",
 	DeviceListFailed:    "failed to list devices",
+
+	RelayDaemonNotFound: "daemon is not registered to this account",
+	RelayDaemonOffline:  "daemon is currently offline",
+	RelayForwardFailed:  "daemon is online but relay forwarding failed",
 }

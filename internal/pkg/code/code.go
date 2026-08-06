@@ -46,3 +46,10 @@ const (
 	JWTBlacklisted
 	DeviceListFailed
 )
+
+// Relay 30400~30499
+const (
+	RelayDaemonNotFound = iota + 30400
+	RelayDaemonOffline
+	RelayForwardFailed
+)
