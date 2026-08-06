@@ -32,3 +32,6 @@
 .DS_Store
 /.omc/
 /.opskat/
+
+# local round workspaces (dev-kit worktrees)
+/.worktrees/
