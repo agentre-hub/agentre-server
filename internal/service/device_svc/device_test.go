@@ -276,6 +276,27 @@ func TestListUserDevices(t *testing.T) {
 	})
 }
 
+// 复现集成测试里观测到的崩溃：device_svc.New() 构造出的 deviceSvc 在调用方从未
+// 注册 relay_svc.Default()（比如只装配了 device flow 而没有整套 bootstrap 的测试/调用方）
+// 时，ListUserDevices 不能 panic——在线态只是增强列，必须 fail-open 为离线。
+func TestListUserDevices_RelayNotConfigured(t *testing.T) {
+	convey.Convey("relay_svc 未注册时 ListUserDevices 不 panic，在线态 fail-open 为 false", t, func() {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+		relay_svc.SetDefault(nil)
+		t.Cleanup(func() { relay_svc.SetDefault(nil) })
+
+		mD.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
+			{ID: 42, UserID: 7, Name: "mac-pro-m4", Kind: "desktop", Platform: "darwin/arm64", Fingerprint: "fp-a", Status: 1},
+		}, nil)
+
+		items, err := svc.ListUserDevices(ctx, 7, 42)
+
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(len(items), convey.ShouldEqual, 1)
+		convey.So(items[0].Online, convey.ShouldBeFalse)
+	})
+}
+
 func TestApprove(t *testing.T) {
 	convey.Convey("Approve", t, func() {
 		convey.Convey("不存在 → user_code_invalid", func() {

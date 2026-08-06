@@ -228,6 +228,22 @@ func TestRedisForwarderWaitsForRemoteDeliveryAcknowledgement(t *testing.T) {
 	}
 }
 
+// Default() 是包级单例存取口：调用方（比如只装配了部分服务的测试或 handler）
+// 在忘记 SetDefault() 时不该拿到 nil 接口去 panic，而应得到一个明确报错的
+// 安全实现——这也是 device_svc.ListUserDevices 对在线态 fail-open 的前提。
+func TestDefaultIsNeverNilWithoutRegistration(t *testing.T) {
+	old := defaultSvc
+	defaultSvc = nil
+	t.Cleanup(func() { defaultSvc = old })
+
+	svc := Default()
+	require.NotNil(t, svc)
+
+	online, err := svc.IsDaemonOnline(context.Background(), 7, "fp-daemon")
+	require.ErrorIs(t, err, ErrRelayUnconfigured)
+	require.False(t, online)
+}
+
 func TestRelayClientFailuresAreDistinguishable(t *testing.T) {
 	ctx := context.Background()
 

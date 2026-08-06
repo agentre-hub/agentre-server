@@ -22,12 +22,68 @@ var (
 	ErrDaemonOffline   = errors.New("relay daemon offline")
 	ErrForwardFailed   = errors.New("relay forwarding failed")
 	ErrDaemonForbidden = errors.New("relay daemon forbidden")
+	// ErrRelayUnconfigured 由 Default() 的安全占位实现返回：调用方从未
+	// SetDefault() 过真实的 RelaySvc（例如只装配了 device flow、没有跑完整
+	// bootstrap 的测试或 handler）。区别于 nil 接口——调用方能拿到一个明确
+	// 的错误而不是 panic。
+	ErrRelayUnconfigured = errors.New("relay service is not configured")
 )
 
 var defaultSvc RelaySvc
 
-func Default() RelaySvc     { return defaultSvc }
+// Default 返回当前注册的 RelaySvc。SetDefault() 之前从未被调用时，返回
+// unavailableRelaySvc 而不是 nil：任何依赖 Default() 的调用方（比如
+// device_svc.ListUserDevices 的在线态 fail-open）都能拿到明确的
+// ErrRelayUnconfigured，而不是对 nil 接口调用方法触发 panic。
+func Default() RelaySvc {
+	if defaultSvc == nil {
+		return unavailableRelaySvc{}
+	}
+	return defaultSvc
+}
+
 func SetDefault(s RelaySvc) { defaultSvc = s }
+
+// unavailableRelaySvc 是 Default() 在没有注册真实 RelaySvc 时的安全占位实现，
+// 与 unavailableForwarder 同一模式：每个方法都明确返回 ErrRelayUnconfigured，
+// 而不是把 nil 接口留给调用方去踩。
+type unavailableRelaySvc struct{}
+
+func (unavailableRelaySvc) PrepareDaemon(context.Context, int64, int64, string) (Route, error) {
+	return Route{}, ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) RegisterDaemon(context.Context, Route) error {
+	return ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) RenewDaemon(context.Context, Route) error {
+	return ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) ConnectClient(context.Context, int64, string) (Route, error) {
+	return Route{}, ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) IsDaemonOnline(context.Context, int64, string) (bool, error) {
+	return false, ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) AttachDaemon(context.Context, Route, FrameWriter) (func(), error) {
+	return nil, ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) AttachClient(context.Context, Route, FrameWriter) (string, func(), error) {
+	return "", nil, ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) ForwardDaemon(context.Context, Route, int, []byte) error {
+	return ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) ForwardClient(context.Context, Route, string, int, []byte) error {
+	return ErrRelayUnconfigured
+}
 
 // Config 是中转在线态的运行期参数。
 type Config struct {
