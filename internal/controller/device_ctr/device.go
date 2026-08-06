@@ -13,9 +13,20 @@ import (
 	"agentre-server/internal/service/device_svc"
 )
 
-type Device struct{}
+type Device struct {
+	publicKey string
+}
 
 func NewDevice() *Device { return &Device{} }
+
+func NewDeviceWithPublicKey(publicKey string) *Device {
+	return &Device{publicKey: publicKey}
+}
+
+// PublicKey 返回供 agentred 离线验签的 RS256 公钥。
+func (d *Device) PublicKey(c *gin.Context, _ *api.PublicKeyRequest) {
+	c.JSON(http.StatusOK, &api.PublicKeyResponse{PublicKey: d.publicKey})
+}
 
 // ---- Device Flow ----
 

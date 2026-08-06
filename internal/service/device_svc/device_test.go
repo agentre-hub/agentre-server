@@ -57,10 +57,17 @@ func setupDeviceTest(t *testing.T) (
 func TestAuthorize_ReturnsUserCode(t *testing.T) {
 	convey.Convey("Authorize", t, func() {
 		ctx, _, _, mF, svc, _ := setupDeviceTest(t)
-		mF.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, code *device_flow_entity.DeviceFlowCode) error {
+				assert.Equal(t, "agentred", code.DeviceKind)
+				assert.JSONEq(t, `{"compute":true}`, string(code.ClientCapabilities))
+				return nil
+			},
+		)
 
 		out, err := svc.Authorize(ctx, AuthorizeInput{
 			DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa", Platform: "linux/amd64", Version: "0.5.0",
+			Capabilities: map[string]bool{"compute": true},
 		})
 		assert.NoError(t, err)
 		assert.NotEmpty(t, out.DeviceCode)
@@ -121,7 +128,12 @@ func TestExchangeToken(t *testing.T) {
 			)
 			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
+				func(_ context.Context, d *device_entity.Device) error {
+					assert.Equal(t, "agentred", d.Kind)
+					assert.JSONEq(t, `{"compute":true}`, string(d.Capabilities))
+					d.ID = 7
+					return nil
+				},
 			)
 			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(nil)

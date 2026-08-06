@@ -25,13 +25,14 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 
 	healthzCtr := healthz_ctr.NewHealthz()
 	authCtr := auth_ctr.NewAuth()
-	deviceCtr := device_ctr.NewDevice()
+	deviceCtr := device_ctr.NewDeviceWithPublicKey(r.Cfg.JWT.PublicKeyPEM)
 
 	// 公开
 	g.Group("/").Bind(
 		healthzCtr.Healthz,
 		authCtr.GithubAuthorize,
 		authCtr.GithubCallback,
+		deviceCtr.PublicKey,
 	)
 
 	// device flow 端点（带 RFC 8628 错误注入 + 速率限制）

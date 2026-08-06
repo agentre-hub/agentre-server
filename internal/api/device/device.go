@@ -2,6 +2,16 @@ package device
 
 import "github.com/cago-frame/cago/server/mux"
 
+// ---------- Public Key ----------
+
+type PublicKeyRequest struct {
+	mux.Meta `path:"/v1/keys" method:"GET"`
+}
+
+type PublicKeyResponse struct {
+	PublicKey string `json:"public_key"`
+}
+
 // ---------- Device Flow ----------
 
 type DeviceAuthorizeRequest struct {
