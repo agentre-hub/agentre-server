@@ -101,15 +101,42 @@ func (d *Device) Refresh(c *gin.Context, req *api.TokenRefreshRequest) (*api.Tok
 	}, nil
 }
 
+// Revoke 撤销一台设备的凭据。
+//
+// 设备 JWT 调用方（device_id 非 0）只能撤销自己；浏览器 session 调用方
+// （device_id 为 0）只能撤销属于自己账号的设备——凭据所属关系以
+// ListUserDevices 为准，防止跨账号撤销。
 func (d *Device) Revoke(c *gin.Context, req *api.TokenRevokeRequest) (*api.TokenRevokeResponse, error) {
+	uid, _ := c.Get("user_id")
 	did, _ := c.Get("device_id")
+	userID, _ := uid.(int64)
 	callerID, _ := did.(int64)
 	target := req.DeviceID
 	if target == 0 {
 		target = callerID
 	}
-	if target != callerID {
+	if target == 0 {
 		return nil, i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
+	}
+	if callerID != 0 {
+		if target != callerID {
+			return nil, i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
+		}
+	} else {
+		owned, err := device_svc.Default().ListUserDevices(c.Request.Context(), userID, 0)
+		if err != nil {
+			return nil, err
+		}
+		isOwned := false
+		for _, it := range owned {
+			if it.ID == target {
+				isOwned = true
+				break
+			}
+		}
+		if !isOwned {
+			return nil, i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
+		}
 	}
 	if err := device_svc.Default().Revoke(c.Request.Context(), target); err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)

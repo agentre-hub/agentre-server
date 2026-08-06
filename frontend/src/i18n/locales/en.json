@@ -36,9 +36,35 @@
     "capabilities": "Capabilities",
     "approve": "Allow",
     "deny": "Deny",
+    "computeRisk": "This is a compute node. Approving it authorizes it to act under your account: it runs coding agents and can execute arbitrary code and commands. This is a much larger risk than approving a view-only client.",
+    "kind": {
+      "desktop": "Desktop",
+      "agentred": "Compute node",
+      "web": "Web",
+      "mobile": "Mobile"
+    },
     "success": {
       "title": "Device authorized",
-      "body": "You can close this page and go back to your terminal."
+      "body": "You can close this page and go back to your terminal.",
+      "manageDevices": "Manage devices"
+    },
+    "manage": {
+      "title": "Devices",
+      "empty": "No devices yet. Devices you authorize will appear here.",
+      "colName": "Name",
+      "colKind": "Type",
+      "colPlatform": "Platform",
+      "colLastActive": "Last active",
+      "colStatus": "Status",
+      "statusOnline": "Online",
+      "statusRevoked": "Revoked",
+      "thisDevice": "This device",
+      "revoke": "Revoke",
+      "revokeConfirmTitle": "Revoke this device?",
+      "revokeConfirmBody": "This device can no longer refresh its credentials after you confirm. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation is not instant.",
+      "revokeCancel": "Cancel",
+      "revokeConfirm": "Revoke",
+      "revokeError": "Could not revoke this device. Please try again."
     }
   },
   "notFound": {
