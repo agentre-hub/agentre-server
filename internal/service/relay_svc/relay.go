@@ -3,11 +3,14 @@ package relay_svc
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
+	"github.com/gorilla/websocket"
 	goredis "github.com/redis/go-redis/v9"
 
 	"agentre-server/internal/model/entity/device_entity"
@@ -51,7 +54,7 @@ const (
 // upgrade 前返回可区分的转发失败；Forward 接收已 upgrade 的二进制或文本帧。
 type Forwarder interface {
 	Check(ctx context.Context, target Route) error
-	Forward(ctx context.Context, target Route, source Peer, messageType int, frame []byte) error
+	Forward(ctx context.Context, target Route, source Peer, channelID string, messageType int, frame []byte) error
 }
 
 type unavailableForwarder struct{}
@@ -64,7 +67,7 @@ func (unavailableForwarder) Check(context.Context, Route) error {
 	return errors.New("relay frame bus is unavailable")
 }
 
-func (unavailableForwarder) Forward(context.Context, Route, Peer, int, []byte) error {
+func (unavailableForwarder) Forward(context.Context, Route, Peer, string, int, []byte) error {
 	// 客户端会在 Check 阶段被拒绝，因此此处只会消费 daemon 的心跳帧；
 	// 禁用总线不能让它们中断 TTL 续期。
 	return nil
@@ -77,9 +80,9 @@ type RelaySvc interface {
 	RenewDaemon(ctx context.Context, route Route) error
 	ConnectClient(ctx context.Context, accountID int64, fingerprint string) (Route, error)
 	AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error)
-	AttachClient(ctx context.Context, target Route, writer FrameWriter) (func(), error)
+	AttachClient(ctx context.Context, target Route, writer FrameWriter) (channelID string, detach func(), err error)
 	ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error
-	ForwardClient(ctx context.Context, target Route, messageType int, frame []byte) error
+	ForwardClient(ctx context.Context, target Route, channelID string, messageType int, frame []byte) error
 }
 
 type relaySvc struct {
@@ -157,34 +160,94 @@ func (s *relaySvc) ConnectClient(ctx context.Context, accountID int64, fingerpri
 }
 
 func (s *relaySvc) AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error) {
-	return s.attach(ctx, target, PeerDaemon, writer)
+	return s.attach(ctx, target, PeerDaemon, "", writer)
 }
 
-func (s *relaySvc) AttachClient(ctx context.Context, target Route, writer FrameWriter) (func(), error) {
-	return s.attach(ctx, target, PeerClient, writer)
+func (s *relaySvc) AttachClient(ctx context.Context, target Route, writer FrameWriter) (string, func(), error) {
+	channelID, err := newChannelID()
+	if err != nil {
+		return "", nil, err
+	}
+	detach, err := s.attach(ctx, target, PeerClient, channelID, writer)
+	if err != nil {
+		return "", nil, err
+	}
+	return channelID, detach, nil
 }
 
-func (s *relaySvc) attach(ctx context.Context, target Route, peer Peer, writer FrameWriter) (func(), error) {
+func (s *relaySvc) attach(ctx context.Context, target Route, peer Peer, channelID string, writer FrameWriter) (func(), error) {
 	forwarder, ok := s.forwarder.(AttachmentForwarder)
 	if !ok {
 		return nil, errors.New("relay frame bus does not support websocket attachment")
 	}
-	return forwarder.Attach(ctx, target, peer, writer)
+	return forwarder.Attach(ctx, target, peer, channelID, writer)
 }
 
 func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error {
-	return s.forward(ctx, target, PeerDaemon, messageType, frame)
+	if messageType != websocket.BinaryMessage {
+		return errors.New("relay daemon envelope must be a binary websocket message")
+	}
+	channelID, innerFrame, err := unwrapEnvelope(frame)
+	if err != nil {
+		return fmt.Errorf("decode relay daemon envelope: %w", err)
+	}
+	return s.forward(ctx, target, PeerDaemon, channelID, websocket.BinaryMessage, innerFrame)
 }
 
-func (s *relaySvc) ForwardClient(ctx context.Context, target Route, messageType int, frame []byte) error {
-	return s.forward(ctx, target, PeerClient, messageType, frame)
+func (s *relaySvc) ForwardClient(ctx context.Context, target Route, channelID string, messageType int, frame []byte) error {
+	envelope, err := wrapEnvelope(channelID, frame)
+	if err != nil {
+		return fmt.Errorf("encode relay client envelope: %w", err)
+	}
+	return s.forward(ctx, target, PeerClient, "", websocket.BinaryMessage, envelope)
 }
 
-func (s *relaySvc) forward(ctx context.Context, target Route, source Peer, messageType int, frame []byte) error {
-	if err := s.forwarder.Forward(ctx, target, source, messageType, frame); err != nil {
+func (s *relaySvc) forward(ctx context.Context, target Route, source Peer, channelID string, messageType int, frame []byte) error {
+	if err := s.forwarder.Forward(ctx, target, source, channelID, messageType, frame); err != nil {
 		return fmt.Errorf("%w: %v", ErrForwardFailed, err)
 	}
 	return nil
+}
+
+func newChannelID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate relay channel ID: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func wrapEnvelope(channelID string, frame []byte) ([]byte, error) {
+	if channelID == "" {
+		return nil, errors.New("relay channel ID is required")
+	}
+	if len(channelID) > 1<<16-1 {
+		return nil, errors.New("relay channel ID exceeds envelope limit")
+	}
+	envelope := make([]byte, 2+len(channelID)+len(frame))
+	envelope[0] = byte(len(channelID) >> 8)
+	envelope[1] = byte(len(channelID))
+	copy(envelope[2:], channelID)
+	copy(envelope[2+len(channelID):], frame)
+	return envelope, nil
+}
+
+func unwrapEnvelope(envelope []byte) (string, []byte, error) {
+	if len(envelope) < 2 {
+		return "", nil, errors.New("relay envelope is shorter than channel length")
+	}
+	channelLength := int(envelope[0])<<8 | int(envelope[1])
+	if channelLength == 0 {
+		return "", nil, errors.New("relay envelope has no channel ID")
+	}
+	if len(envelope) < 2+channelLength {
+		return "", nil, errors.New("relay envelope is shorter than channel ID")
+	}
+	channelID := string(envelope[2 : 2+channelLength])
+	if !utf8.ValidString(channelID) {
+		return "", nil, errors.New("relay envelope channel ID is not UTF-8")
+	}
+	return channelID, envelope[2+channelLength:], nil
 }
 
 func routeKey(accountID int64, fingerprint string) string {

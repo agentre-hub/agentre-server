@@ -79,7 +79,7 @@ func (r *Relay) Client(c *gin.Context) {
 		return
 	}
 	defer conn.Close()
-	detach, err := r.svc.AttachClient(c.Request.Context(), route, conn)
+	channelID, detach, err := r.svc.AttachClient(c.Request.Context(), route, conn)
 	if err != nil {
 		return
 	}
@@ -90,7 +90,7 @@ func (r *Relay) Client(c *gin.Context) {
 		if err != nil {
 			return
 		}
-		if err := r.svc.ForwardClient(c.Request.Context(), route, messageType, frame); err != nil {
+		if err := r.svc.ForwardClient(c.Request.Context(), route, channelID, messageType, frame); err != nil {
 			return
 		}
 	}

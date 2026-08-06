@@ -2,7 +2,9 @@ package relay_ctr_test
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -67,8 +69,8 @@ func (s *relayStub) AttachDaemon(context.Context, relay_svc.Route, relay_svc.Fra
 	return func() {}, nil
 }
 
-func (s *relayStub) AttachClient(context.Context, relay_svc.Route, relay_svc.FrameWriter) (func(), error) {
-	return func() {}, nil
+func (s *relayStub) AttachClient(context.Context, relay_svc.Route, relay_svc.FrameWriter) (string, func(), error) {
+	return "channel-id", func() {}, nil
 }
 
 func (s *relayStub) ForwardDaemon(context.Context, relay_svc.Route, int, []byte) error {
@@ -79,7 +81,7 @@ func (s *relayStub) ForwardDaemon(context.Context, relay_svc.Route, int, []byte)
 	return nil
 }
 
-func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, int, []byte) error {
+func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, string, int, []byte) error {
 	select {
 	case s.clientFrames <- struct{}{}:
 	default:
@@ -216,7 +218,7 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	clientDevices := mock_device_repo.NewMockDeviceRepo(controllers)
 	daemon := activeRelayDaemon()
 	daemonDevices.EXPECT().Find(gomock.Any(), int64(9)).Return(daemon, nil)
-	clientDevices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), daemon.Fingerprint).Return(daemon, nil)
+	clientDevices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), daemon.Fingerprint).Return(daemon, nil).Times(2)
 
 	configA := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	redisA := newRelayRedisClient(t, mini)
@@ -250,20 +252,52 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
+	otherClientConn, _, err := websocket.DefaultDialer.Dial(
+		wsURL(serverA.URL, "/v1/relay/client?daemon_fingerprint="+daemon.Fingerprint),
+		http.Header{"Authorization": {"Bearer " + clientToken}},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, otherClientConn.Close()) })
 
 	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, []byte("request")))
 	daemonConn.SetReadDeadline(time.Now().Add(time.Second))
 	messageType, frame, err := daemonConn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, websocket.BinaryMessage, messageType)
-	require.Equal(t, []byte("request"), frame)
+	channelID, innerFrame := decodeRelayEnvelope(t, frame)
+	require.NotEmpty(t, channelID)
+	require.Equal(t, []byte("request"), innerFrame)
 
-	require.NoError(t, daemonConn.WriteMessage(websocket.TextMessage, []byte("response")))
+	require.NoError(t, daemonConn.WriteMessage(websocket.BinaryMessage, relayEnvelope(channelID, []byte("response"))))
 	clientConn.SetReadDeadline(time.Now().Add(time.Second))
 	messageType, frame, err = clientConn.ReadMessage()
 	require.NoError(t, err)
-	require.Equal(t, websocket.TextMessage, messageType)
+	require.Equal(t, websocket.BinaryMessage, messageType)
 	require.Equal(t, []byte("response"), frame)
+
+	otherClientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_, _, err = otherClientConn.ReadMessage()
+	require.Error(t, err)
+	var networkErr net.Error
+	require.ErrorAs(t, err, &networkErr)
+	require.True(t, networkErr.Timeout())
+}
+
+func relayEnvelope(channelID string, frame []byte) []byte {
+	payload := make([]byte, 2+len(channelID)+len(frame))
+	binary.BigEndian.PutUint16(payload, uint16(len(channelID)))
+	copy(payload[2:], channelID)
+	copy(payload[2+len(channelID):], frame)
+	return payload
+}
+
+func decodeRelayEnvelope(t *testing.T, payload []byte) (string, []byte) {
+	t.Helper()
+	require.GreaterOrEqual(t, len(payload), 2)
+	channelLength := int(binary.BigEndian.Uint16(payload[:2]))
+	require.Greater(t, channelLength, 0)
+	require.GreaterOrEqual(t, len(payload), 2+channelLength)
+	return string(payload[2 : 2+channelLength]), payload[2+channelLength:]
 }
 
 func activeRelayDaemon() *device_entity.Device {

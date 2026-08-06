@@ -19,7 +19,7 @@ type fakeForwarder struct{ err error }
 
 func (f fakeForwarder) Check(context.Context, Route) error { return f.err }
 
-func (f fakeForwarder) Forward(context.Context, Route, Peer, int, []byte) error { return f.err }
+func (f fakeForwarder) Forward(context.Context, Route, Peer, string, int, []byte) error { return f.err }
 
 func newRelayForTest(t *testing.T, forwarder Forwarder) (RelaySvc, *miniredis.Miniredis, *mock_device_repo.MockDeviceRepo) {
 	t.Helper()
@@ -70,6 +70,11 @@ func (w *recordingFrameWriter) WriteMessage(messageType int, frame []byte) error
 	return nil
 }
 
+func TestUnwrapEnvelopeRejectsNonUTF8ChannelID(t *testing.T) {
+	_, _, err := unwrapEnvelope([]byte{0, 1, 0xff})
+	require.Error(t, err)
+}
+
 func TestRedisForwarderDeliversLocalFramesWithoutWritingAStream(t *testing.T) {
 	mini := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
@@ -80,10 +85,10 @@ func TestRedisForwarderDeliversLocalFramesWithoutWritingAStream(t *testing.T) {
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
 	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
 
-	detach, err := attachments.Attach(context.Background(), route, PeerDaemon, writer)
+	detach, err := attachments.Attach(context.Background(), route, PeerDaemon, "", writer)
 	require.NoError(t, err)
 	t.Cleanup(detach)
-	require.NoError(t, forwarder.Forward(context.Background(), route, PeerClient, 2, []byte("request")))
+	require.NoError(t, forwarder.Forward(context.Background(), route, PeerClient, "", 2, []byte("request")))
 
 	select {
 	case received := <-writer.frames:
@@ -97,6 +102,38 @@ func TestRedisForwarderDeliversLocalFramesWithoutWritingAStream(t *testing.T) {
 	require.Zero(t, length)
 }
 
+func TestRedisForwarderRoutesDaemonFramesByChannel(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	forwarder := NewRedisForwarder(config, client)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-b"}
+	first := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+	second := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+
+	firstDetach, err := forwarder.(AttachmentForwarder).Attach(context.Background(), route, PeerClient, "channel-first", first)
+	require.NoError(t, err)
+	t.Cleanup(firstDetach)
+	secondDetach, err := forwarder.(AttachmentForwarder).Attach(context.Background(), route, PeerClient, "channel-second", second)
+	require.NoError(t, err)
+	t.Cleanup(secondDetach)
+
+	require.NoError(t, forwarder.Forward(context.Background(), route, PeerDaemon, "channel-first", 2, []byte("response")))
+	select {
+	case received := <-first.frames:
+		require.Equal(t, 2, received.messageType)
+		require.Equal(t, []byte("response"), received.frame)
+	case <-time.After(time.Second):
+		t.Fatal("matching client channel did not receive the relay frame")
+	}
+	select {
+	case received := <-second.frames:
+		t.Fatalf("non-matching client channel received relay frame: %q", received.frame)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestRedisForwarderClientDetachRemovesExpiringPresence(t *testing.T) {
 	mini := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
@@ -106,9 +143,10 @@ func TestRedisForwarderClientDetachRemovesExpiringPresence(t *testing.T) {
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-b"}
 	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
 
-	detach, err := forwarder.(AttachmentForwarder).Attach(context.Background(), route, PeerClient, writer)
+	channelID := "channel-a"
+	detach, err := forwarder.(AttachmentForwarder).Attach(context.Background(), route, PeerClient, channelID, writer)
 	require.NoError(t, err)
-	presence := clientPresenceKey(Route{AccountID: route.AccountID, Fingerprint: route.Fingerprint, InstanceID: config.InstanceID})
+	presence := clientChannelKey(route, channelID)
 	ttl, err := client.TTL(context.Background(), presence).Result()
 	require.NoError(t, err)
 	require.Positive(t, ttl)
@@ -140,13 +178,13 @@ func TestRedisForwarderWaitsForRemoteDeliveryAcknowledgement(t *testing.T) {
 	forwarderB := NewRedisForwarder(configB, clientB)
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configB.InstanceID}
 	writer := &blockingFrameWriter{started: make(chan struct{}, 1), release: make(chan struct{})}
-	detach, err := forwarderB.(AttachmentForwarder).Attach(context.Background(), route, PeerDaemon, writer)
+	detach, err := forwarderB.(AttachmentForwarder).Attach(context.Background(), route, PeerDaemon, "", writer)
 	require.NoError(t, err)
 	t.Cleanup(detach)
 
 	forwarded := make(chan error, 1)
 	go func() {
-		forwarded <- forwarderA.Forward(context.Background(), route, PeerClient, 2, []byte("request"))
+		forwarded <- forwarderA.Forward(context.Background(), route, PeerClient, "", 2, []byte("request"))
 	}()
 	select {
 	case <-writer.started:
