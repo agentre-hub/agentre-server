@@ -93,6 +93,42 @@ func (w *recordingFrameWriter) WriteMessage(messageType int, frame []byte) error
 	return nil
 }
 
+// 中转客户端断开时,daemon 必须收到该通道的「空载荷信封」。共享的 relay websocket
+// 还开着,所以整链路的断开事件不会触发 —— 没有这个逐通道信号,daemon 侧就留下一个
+// 幽灵对端:MCP 隧道(R11)会把工具请求发给一条永远不会回应的通道,调用方只能干等到
+// 自己的 ctx 超时,而不是立刻拿到「发起端不在线」的语义错误。
+func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	forwarder := NewRedisForwarder(config, client)
+	controller := gomock.NewController(t)
+	svc := New(config, mock_device_repo.NewMockDeviceRepo(controller), client, forwarder)
+
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	daemonWriter := &recordingFrameWriter{frames: make(chan recordedFrame, 4)}
+	detachDaemon, err := svc.AttachDaemon(context.Background(), route, daemonWriter)
+	require.NoError(t, err)
+	t.Cleanup(detachDaemon)
+
+	clientWriter := &recordingFrameWriter{frames: make(chan recordedFrame, 4)}
+	channelID, detachClient, err := svc.AttachClient(context.Background(), route, clientWriter)
+	require.NoError(t, err)
+
+	detachClient()
+
+	select {
+	case received := <-daemonWriter.frames:
+		gotChannel, payload, err := unwrapEnvelope(received.frame)
+		require.NoError(t, err)
+		require.Equal(t, channelID, gotChannel)
+		require.Empty(t, payload, "通道关闭以空载荷信封表示")
+	case <-time.After(time.Second):
+		t.Fatal("daemon was never told the relay client channel closed")
+	}
+}
+
 func TestUnwrapEnvelopeRejectsNonUTF8ChannelID(t *testing.T) {
 	_, _, err := unwrapEnvelope([]byte{0, 1, 0xff})
 	require.Error(t, err)

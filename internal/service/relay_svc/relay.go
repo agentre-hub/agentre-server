@@ -226,6 +226,10 @@ func (s *relaySvc) IsDaemonOnline(ctx context.Context, accountID int64, fingerpr
 	return n > 0, nil
 }
 
+// channelCloseTimeout 限制「通知 daemon 通道关闭」这一步的耗时:它跑在客户端
+// 断开的清理路径上,阻塞在这里会拖住 websocket handler 的返回。
+const channelCloseTimeout = 3 * time.Second
+
 func (s *relaySvc) AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error) {
 	return s.attach(ctx, target, PeerDaemon, "", writer)
 }
@@ -239,7 +243,16 @@ func (s *relaySvc) AttachClient(ctx context.Context, target Route, writer FrameW
 	if err != nil {
 		return "", nil, err
 	}
-	return channelID, detach, nil
+	return channelID, func() {
+		// 客户端走了:先把「这条虚拟通道没了」告诉 daemon,再摘掉本地附着。
+		// 共享的 relay websocket 还开着,daemon 侧不会收到任何整链路断开事件,
+		// 只能靠这个逐通道信号避免留下幽灵对端(见 relay_test 的说明)。
+		// 用 WithoutCancel:走到这里时 handler 的 request ctx 通常已经取消了。
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), channelCloseTimeout)
+		defer cancel()
+		_ = s.ForwardClient(closeCtx, target, channelID, websocket.BinaryMessage, nil)
+		detach()
+	}, nil
 }
 
 func (s *relaySvc) attach(ctx context.Context, target Route, peer Peer, channelID string, writer FrameWriter) (func(), error) {
