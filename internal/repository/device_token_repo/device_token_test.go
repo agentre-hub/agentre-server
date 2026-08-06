@@ -43,10 +43,23 @@ func TestCreate(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO "device_tokens"`)).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(99)))
 	mock.ExpectCommit()
-	e := &device_token_entity.DeviceToken{DeviceID: 42, RefreshTokenHash: "h", RefreshExpiresAt: 1000}
+	e := &device_token_entity.DeviceToken{DeviceID: 42, RefreshTokenHash: "h", RefreshExpiresAt: 1000, AccessJTI: "jti-1"}
 	assert.NoError(t, r.Create(ctx, e))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListAccessJTIByDevice(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewDeviceToken()
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT "access_jti" FROM "device_tokens" WHERE device_id=$1 AND access_jti != ''`)).
+		WithArgs(int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{"access_jti"}).AddRow("jti-aaa").AddRow("jti-bbb"))
+	got, err := r.ListAccessJTIByDevice(ctx, 42)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"jti-aaa", "jti-bbb"}, got)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

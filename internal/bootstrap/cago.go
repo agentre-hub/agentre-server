@@ -101,7 +101,8 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 		out.DeviceFlow.PollInterval = 5 * time.Second
 	}
 	if out.JWT.AccessTTL == 0 {
-		out.JWT.AccessTTL = time.Hour
+		// R4：访问凭据必须是分钟级短有效期，靠刷新续期。
+		out.JWT.AccessTTL = 15 * time.Minute
 	}
 	if out.JWT.RefreshTTL == 0 {
 		out.JWT.RefreshTTL = 90 * 24 * time.Hour

@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 
 	api "agentre-server/internal/api/device"
+	"agentre-server/internal/middleware"
 	"agentre-server/internal/model/entity/device_entity"
 	"agentre-server/internal/model/entity/device_flow_entity"
 	"agentre-server/internal/model/entity/device_token_entity"
@@ -179,6 +180,16 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			return err
 		}
 
+		access, jti, err := s.signer.Sign(jwt.Claims{
+			UID:  flow.AuthorizedUserID,
+			DID:  d.ID,
+			Kind: d.Kind,
+			Caps: d.CapabilityList(),
+		}, s.cfg.AccessTTL)
+		if err != nil {
+			return err
+		}
+
 		refreshPlain, err := randomBase32(32)
 		if err != nil {
 			return err
@@ -188,6 +199,7 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		token := &device_token_entity.DeviceToken{
 			DeviceID:         d.ID,
 			RefreshTokenHash: hash,
+			AccessJTI:        jti,
 			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
 			UserAgent:        ua,
 			IP:               ip,
@@ -197,16 +209,6 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			return err
 		}
 		if err := device_flow_repo.DeviceFlow().MarkConsumed(txCtx, dc, nowMs); err != nil {
-			return err
-		}
-
-		access, jti, err := s.signer.Sign(jwt.Claims{
-			UID:  flow.AuthorizedUserID,
-			DID:  d.ID,
-			Kind: d.Kind,
-			Caps: d.CapabilityList(),
-		}, s.cfg.AccessTTL)
-		if err != nil {
 			return err
 		}
 
@@ -271,9 +273,19 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			return err
 		}
 		ip, ua := clientInfoFromCtx(ctx)
+		access, jti, err := s.signer.Sign(jwt.Claims{
+			UID:  d.UserID,
+			DID:  d.ID,
+			Kind: d.Kind,
+			Caps: d.CapabilityList(),
+		}, s.cfg.AccessTTL)
+		if err != nil {
+			return err
+		}
 		newToken := &device_token_entity.DeviceToken{
 			DeviceID:         d.ID,
 			RefreshTokenHash: sha256Hex(newPlain),
+			AccessJTI:        jti,
 			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
 			RotatedFromID:    row.ID,
 			UserAgent:        ua,
@@ -290,15 +302,6 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			return err
 		}
 
-		access, jti, err := s.signer.Sign(jwt.Claims{
-			UID:  d.UserID,
-			DID:  d.ID,
-			Kind: d.Kind,
-			Caps: d.CapabilityList(),
-		}, s.cfg.AccessTTL)
-		if err != nil {
-			return err
-		}
 		*out = TokenOutput{
 			AccessToken:      access,
 			RefreshToken:     newPlain,
@@ -376,6 +379,18 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 
 func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	nowMs := time.Now().UnixMilli()
+	jtis, err := device_token_repo.DeviceToken().ListAccessJTIByDevice(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	// 把该设备已签发（含刷新轮换出的旧 access token）的 jti 全部拉黑，
+	// 让在线设备撤销后立即失效（middleware.DeviceJWT 逐请求校验黑名单）。
+	// TTL 取完整 AccessTTL 覆盖 access token 的整个有效期；
+	// Redis 不可用时不让 DB 侧吊销失败——黑名单本身 fail-open（spec §6.5）。
+	ttlSec := int(s.cfg.AccessTTL / time.Second)
+	for _, jti := range jtis {
+		_ = middleware.Blacklist(ctx, jti, ttlSec)
+	}
 	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
 		return err
 	}

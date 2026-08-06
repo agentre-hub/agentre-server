@@ -14,6 +14,7 @@ import (
 type DeviceTokenRepo interface {
 	Create(ctx context.Context, e *device_token_entity.DeviceToken) error
 	FindByHash(ctx context.Context, hash string) (*device_token_entity.DeviceToken, error)
+	ListAccessJTIByDevice(ctx context.Context, deviceID int64) ([]string, error)
 	Revoke(ctx context.Context, id, nowMs int64) error
 	RevokeChain(ctx context.Context, deviceID, nowMs int64) error
 	TouchLastUsed(ctx context.Context, id, nowMs int64) error
@@ -45,6 +46,19 @@ func (r *repo) FindByHash(ctx context.Context, hash string) (*device_token_entit
 		return nil, err
 	}
 	return ret, nil
+}
+
+// ListAccessJTIByDevice 返回该设备全部已签发 access token 的 jti
+// （含已被刷新轮换、但 access token 仍在其短有效期内可能被接受的旧行）。
+func (r *repo) ListAccessJTIByDevice(ctx context.Context, deviceID int64) ([]string, error) {
+	var jtis []string
+	err := db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).
+		Where("device_id=? AND access_jti != ''", deviceID).
+		Pluck("access_jti", &jtis).Error
+	if err != nil {
+		return nil, err
+	}
+	return jtis, nil
 }
 
 func (r *repo) Revoke(ctx context.Context, id, nowMs int64) error {

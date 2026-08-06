@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/cago-frame/cago/database/redis"
+	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
@@ -117,6 +119,7 @@ func TestExchangeToken(t *testing.T) {
 		})
 		convey.Convey("已授权 → 颁发 token + 标 consumed + upsert device", func() {
 			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+			var capturedJTI string
 			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
 				&device_flow_entity.DeviceFlowCode{
 					DeviceCode: "dc-x", IntervalSeconds: 5,
@@ -135,7 +138,12 @@ func TestExchangeToken(t *testing.T) {
 					return nil
 				},
 			)
-			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, tok *device_token_entity.DeviceToken) error {
+					capturedJTI = tok.AccessJTI
+					return nil
+				},
+			)
 			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
 
 			mock.ExpectBegin()
@@ -146,6 +154,7 @@ func TestExchangeToken(t *testing.T) {
 			assert.NotEmpty(t, out.AccessToken)
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(7), out.DeviceID)
+			assert.Equal(t, out.JTI, capturedJTI)
 		})
 	})
 }
@@ -169,6 +178,7 @@ func TestRefresh(t *testing.T) {
 		})
 		convey.Convey("正常轮换 → 新 refresh + 旧 revoke + touch device", func() {
 			ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+			var capturedJTI string
 			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 				&device_token_entity.DeviceToken{
 					ID: 1, DeviceID: 42, RefreshExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
@@ -177,7 +187,12 @@ func TestRefresh(t *testing.T) {
 			mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
 				&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: 1}, nil,
 			)
-			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, tok *device_token_entity.DeviceToken) error {
+					capturedJTI = tok.AccessJTI
+					return nil
+				},
+			)
 			mT.EXPECT().Revoke(gomock.Any(), int64(1), gomock.Any()).Return(nil)
 			mD.EXPECT().Touch(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 
@@ -189,6 +204,28 @@ func TestRefresh(t *testing.T) {
 			assert.NotEmpty(t, out.AccessToken)
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(42), out.DeviceID)
+			assert.Equal(t, out.JTI, capturedJTI)
+		})
+	})
+}
+
+func TestRevoke(t *testing.T) {
+	convey.Convey("Revoke", t, func() {
+		convey.Convey("把被撤设备已签发的 access jti 全部写入黑名单（在线设备立即失效）", func() {
+			testutils.Redis()
+			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return([]string{"jti-aaa", "jti-bbb"}, nil)
+			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+			err := svc.Revoke(ctx, 42)
+			convey.So(err, convey.ShouldBeNil)
+
+			for _, jti := range []string{"jti-aaa", "jti-bbb"} {
+				v, gerr := redis.Default().Get(ctx, "jwt_blacklist:"+jti).Result()
+				convey.So(gerr, convey.ShouldBeNil)
+				convey.So(v, convey.ShouldEqual, "1")
+			}
 		})
 	})
 }
