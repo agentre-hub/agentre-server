@@ -9,17 +9,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
 	"agentre-server/internal/api"
 	"agentre-server/internal/bootstrap"
 	"agentre-server/internal/model/entity/device_entity"
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/jwt/testkeys"
+	"agentre-server/internal/repository/device_repo/mock_device_repo"
 	"agentre-server/internal/service/relay_svc"
 )
 
@@ -57,6 +61,14 @@ func (s *relayStub) ConnectClient(context.Context, int64, string) (relay_svc.Rou
 		return relay_svc.Route{}, s.clientErr
 	}
 	return s.daemonRoute, nil
+}
+
+func (s *relayStub) AttachDaemon(context.Context, relay_svc.Route, relay_svc.FrameWriter) (func(), error) {
+	return func() {}, nil
+}
+
+func (s *relayStub) AttachClient(context.Context, relay_svc.Route, relay_svc.FrameWriter) (func(), error) {
+	return func() {}, nil
 }
 
 func (s *relayStub) ForwardDaemon(context.Context, relay_svc.Route, int, []byte) error {
@@ -191,6 +203,93 @@ func TestRelayClientFailureStatusesAreDistinct(t *testing.T) {
 			require.Contains(t, string(body), `"code":`+tc.code)
 		})
 	}
+}
+
+func TestRelayFramesCrossServerInstances(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mini := miniredis.RunT(t)
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	controllers := gomock.NewController(t)
+	daemonDevices := mock_device_repo.NewMockDeviceRepo(controllers)
+	clientDevices := mock_device_repo.NewMockDeviceRepo(controllers)
+	daemon := activeRelayDaemon()
+	daemonDevices.EXPECT().Find(gomock.Any(), int64(9)).Return(daemon, nil)
+	clientDevices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), daemon.Fingerprint).Return(daemon, nil)
+
+	configA := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	redisA := newRelayRedisClient(t, mini)
+	serverA := newRelayServer(t, signer, relay_svc.New(
+		configA, clientDevices, redisA, relay_svc.NewRedisForwarder(configA, redisA),
+	))
+	configB := relay_svc.Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	redisB := newRelayRedisClient(t, mini)
+	serverB := newRelayServer(t, signer, relay_svc.New(
+		configB, daemonDevices, redisB, relay_svc.NewRedisForwarder(configB, redisB),
+	))
+
+	daemonToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+	clientToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
+	require.NoError(t, err)
+
+	daemonConn, _, err := websocket.DefaultDialer.Dial(
+		wsURL(serverB.URL, "/v1/relay/daemon"),
+		http.Header{"Authorization": {"Bearer " + daemonToken}},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, daemonConn.Close()) })
+
+	clientConn, response, err := websocket.DefaultDialer.Dial(
+		wsURL(serverA.URL, "/v1/relay/client?daemon_fingerprint="+daemon.Fingerprint),
+		http.Header{"Authorization": {"Bearer " + clientToken}},
+	)
+	if response != nil {
+		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
+
+	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, []byte("request")))
+	daemonConn.SetReadDeadline(time.Now().Add(time.Second))
+	messageType, frame, err := daemonConn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, messageType)
+	require.Equal(t, []byte("request"), frame)
+
+	require.NoError(t, daemonConn.WriteMessage(websocket.TextMessage, []byte("response")))
+	clientConn.SetReadDeadline(time.Now().Add(time.Second))
+	messageType, frame, err = clientConn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.TextMessage, messageType)
+	require.Equal(t, []byte("response"), frame)
+}
+
+func activeRelayDaemon() *device_entity.Device {
+	return &device_entity.Device{
+		ID: 9, UserID: 7, Kind: device_entity.KindAgentred, Fingerprint: "fp-daemon", Status: 1,
+	}
+}
+
+func newRelayServer(t *testing.T, signer *jwt.Signer, svc relay_svc.RelaySvc) *httptest.Server {
+	t.Helper()
+	testMux := muxtest.NewTestMux()
+	require.NoError(t, (&api.RouterDeps{
+		Cfg:    &bootstrap.ServerConfig{},
+		Signer: signer,
+		Relay:  svc,
+	}).Router(context.Background(), testMux.Router))
+	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
+	t.Cleanup(server.Close)
+	return server
+}
+
+func newRelayRedisClient(t *testing.T, mini *miniredis.Miniredis) *goredis.Client {
+	t.Helper()
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	return client
 }
 
 func wsURL(httpURL, path string) string {

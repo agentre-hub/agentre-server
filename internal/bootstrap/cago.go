@@ -175,8 +175,11 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 	if err != nil {
 		hostname = "unknown-host"
 	}
-	relay_svc.SetDefault(relay_svc.New(relay_svc.Config{
+	relayConfig := relay_svc.Config{
 		InstanceID: fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), time.Now().UnixNano()),
 		OnlineTTL:  30 * time.Second,
-	}, device_repo.Device(), redis.Default(), relay_svc.NewUnavailableForwarder()))
+	}
+	relay_svc.SetDefault(relay_svc.New(
+		relayConfig, device_repo.Device(), redis.Default(), relay_svc.NewRedisForwarder(relayConfig, redis.Default()),
+	))
 }

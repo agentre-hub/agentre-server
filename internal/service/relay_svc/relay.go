@@ -56,7 +56,7 @@ type Forwarder interface {
 
 type unavailableForwarder struct{}
 
-// NewUnavailableForwarder 明确表示帧总线尚未完成装配。它让客户端在升级
+// NewUnavailableForwarder 为显式禁用帧总线的测试或降级装配保留。它让客户端在升级
 // websocket 前收到可区分的 upstream 错误，而不是建立一条无效连接。
 func NewUnavailableForwarder() Forwarder { return unavailableForwarder{} }
 
@@ -66,7 +66,7 @@ func (unavailableForwarder) Check(context.Context, Route) error {
 
 func (unavailableForwarder) Forward(context.Context, Route, Peer, int, []byte) error {
 	// 客户端会在 Check 阶段被拒绝，因此此处只会消费 daemon 的心跳帧；
-	// 在任务 11 装配帧总线前不能让它们中断 TTL 续期。
+	// 禁用总线不能让它们中断 TTL 续期。
 	return nil
 }
 
@@ -76,6 +76,8 @@ type RelaySvc interface {
 	RegisterDaemon(ctx context.Context, route Route) error
 	RenewDaemon(ctx context.Context, route Route) error
 	ConnectClient(ctx context.Context, accountID int64, fingerprint string) (Route, error)
+	AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error)
+	AttachClient(ctx context.Context, target Route, writer FrameWriter) (func(), error)
 	ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error
 	ForwardClient(ctx context.Context, target Route, messageType int, frame []byte) error
 }
@@ -152,6 +154,22 @@ func (s *relaySvc) ConnectClient(ctx context.Context, accountID int64, fingerpri
 		return Route{}, fmt.Errorf("%w: %v", ErrForwardFailed, err)
 	}
 	return route, nil
+}
+
+func (s *relaySvc) AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error) {
+	return s.attach(ctx, target, PeerDaemon, writer)
+}
+
+func (s *relaySvc) AttachClient(ctx context.Context, target Route, writer FrameWriter) (func(), error) {
+	return s.attach(ctx, target, PeerClient, writer)
+}
+
+func (s *relaySvc) attach(ctx context.Context, target Route, peer Peer, writer FrameWriter) (func(), error) {
+	forwarder, ok := s.forwarder.(AttachmentForwarder)
+	if !ok {
+		return nil, errors.New("relay frame bus does not support websocket attachment")
+	}
+	return forwarder.Attach(ctx, target, peer, writer)
 }
 
 func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error {

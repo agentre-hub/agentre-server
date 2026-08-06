@@ -36,6 +36,11 @@ func (r *Relay) Daemon(c *gin.Context) {
 		return
 	}
 	defer conn.Close()
+	detach, err := r.svc.AttachDaemon(c.Request.Context(), route, conn)
+	if err != nil {
+		return
+	}
+	defer detach()
 	if err := r.svc.RegisterDaemon(c.Request.Context(), route); err != nil {
 		return
 	}
@@ -74,6 +79,11 @@ func (r *Relay) Client(c *gin.Context) {
 		return
 	}
 	defer conn.Close()
+	detach, err := r.svc.AttachClient(c.Request.Context(), route, conn)
+	if err != nil {
+		return
+	}
+	defer detach()
 
 	for {
 		messageType, frame, err := conn.ReadMessage()

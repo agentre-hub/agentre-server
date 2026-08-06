@@ -58,6 +58,115 @@ func TestRelayDaemonRegistrationExpiresAfterServerStopsRenewing(t *testing.T) {
 	require.ErrorIs(t, err, ErrDaemonOffline)
 }
 
+type recordedFrame struct {
+	messageType int
+	frame       []byte
+}
+
+type recordingFrameWriter struct{ frames chan recordedFrame }
+
+func (w *recordingFrameWriter) WriteMessage(messageType int, frame []byte) error {
+	w.frames <- recordedFrame{messageType: messageType, frame: frame}
+	return nil
+}
+
+func TestRedisForwarderDeliversLocalFramesWithoutWritingAStream(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	forwarder := NewRedisForwarder(config, client)
+	attachments := forwarder.(AttachmentForwarder)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+
+	detach, err := attachments.Attach(context.Background(), route, PeerDaemon, writer)
+	require.NoError(t, err)
+	t.Cleanup(detach)
+	require.NoError(t, forwarder.Forward(context.Background(), route, PeerClient, 2, []byte("request")))
+
+	select {
+	case received := <-writer.frames:
+		require.Equal(t, 2, received.messageType)
+		require.Equal(t, []byte("request"), received.frame)
+	case <-time.After(time.Second):
+		t.Fatal("local relay frame was not delivered")
+	}
+	length, err := client.XLen(context.Background(), streamKey(route)).Result()
+	require.NoError(t, err)
+	require.Zero(t, length)
+}
+
+func TestRedisForwarderClientDetachRemovesExpiringPresence(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	forwarder := NewRedisForwarder(config, client)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-b"}
+	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+
+	detach, err := forwarder.(AttachmentForwarder).Attach(context.Background(), route, PeerClient, writer)
+	require.NoError(t, err)
+	presence := clientPresenceKey(Route{AccountID: route.AccountID, Fingerprint: route.Fingerprint, InstanceID: config.InstanceID})
+	ttl, err := client.TTL(context.Background(), presence).Result()
+	require.NoError(t, err)
+	require.Positive(t, ttl)
+
+	detach()
+	require.ErrorIs(t, client.Get(context.Background(), presence).Err(), goredis.Nil)
+}
+
+type blockingFrameWriter struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (w *blockingFrameWriter) WriteMessage(int, []byte) error {
+	w.started <- struct{}{}
+	<-w.release
+	return nil
+}
+
+func TestRedisForwarderWaitsForRemoteDeliveryAcknowledgement(t *testing.T) {
+	mini := miniredis.RunT(t)
+	clientA := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, clientA.Close()) })
+	t.Cleanup(func() { require.NoError(t, clientB.Close()) })
+	configA := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarderA := NewRedisForwarder(configA, clientA)
+	forwarderB := NewRedisForwarder(configB, clientB)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configB.InstanceID}
+	writer := &blockingFrameWriter{started: make(chan struct{}, 1), release: make(chan struct{})}
+	detach, err := forwarderB.(AttachmentForwarder).Attach(context.Background(), route, PeerDaemon, writer)
+	require.NoError(t, err)
+	t.Cleanup(detach)
+
+	forwarded := make(chan error, 1)
+	go func() {
+		forwarded <- forwarderA.Forward(context.Background(), route, PeerClient, 2, []byte("request"))
+	}()
+	select {
+	case <-writer.started:
+	case <-time.After(time.Second):
+		t.Fatal("remote relay frame was not delivered")
+	}
+	select {
+	case err := <-forwarded:
+		t.Fatalf("forward returned before delivery was acknowledged: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(writer.release)
+	select {
+	case err := <-forwarded:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("forward did not return after delivery acknowledgement")
+	}
+}
+
 func TestRelayClientFailuresAreDistinguishable(t *testing.T) {
 	ctx := context.Background()
 
