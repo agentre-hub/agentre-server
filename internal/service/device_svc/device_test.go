@@ -6,10 +6,13 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"agentre-server/internal/model/entity/device_entity"
@@ -23,6 +26,7 @@ import (
 	"agentre-server/internal/repository/device_repo/mock_device_repo"
 	"agentre-server/internal/repository/device_token_repo"
 	"agentre-server/internal/repository/device_token_repo/mock_device_token_repo"
+	"agentre-server/internal/service/relay_svc"
 	hubtest "agentre-server/internal/testutils"
 )
 
@@ -231,15 +235,31 @@ func TestRevoke(t *testing.T) {
 }
 
 func TestListUserDevices(t *testing.T) {
-	convey.Convey("ListUserDevices marks caller and decodes capabilities", t, func() {
+	convey.Convey("ListUserDevices marks caller, decodes capabilities, and reports real relay presence", t, func() {
 		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
 		callerDev := int64(42)
 		userID := int64(7)
+
+		// 在线态来自 Redis 中继登记（R20），而非 devices.status：用 miniredis 支撑真实 relay_svc。
+		mini := miniredis.RunT(t)
+		redisClient := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+		t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+		relay := relay_svc.New(
+			relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second},
+			nil, redisClient, relay_svc.NewUnavailableForwarder(),
+		)
+		relay_svc.SetDefault(relay)
+		t.Cleanup(func() { relay_svc.SetDefault(nil) })
 
 		mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
 			{ID: 42, UserID: 7, Name: "mac-pro-m4", Kind: "desktop", Platform: "darwin/arm64", Version: "v0.4.1", Fingerprint: "fp-a", Capabilities: []byte(`{"compute":true,"file_browse":true}`), LastSeenAt: 1000, Status: 1},
 			{ID: 43, UserID: 7, Name: "agentred-1", Kind: "agentred", Platform: "linux/amd64", Version: "v0.4.1", Fingerprint: "fp-b", Capabilities: []byte(`{"compute":true}`), LastSeenAt: 999, Status: 1},
 		}, nil)
+
+		// 只为 agentred-1（fp-b）登记在线态；mac-pro-m4 无登记 → 离线。
+		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{
+			AccountID: userID, Fingerprint: "fp-b", InstanceID: "server-a",
+		}))
 
 		items, err := svc.ListUserDevices(ctx, userID, callerDev)
 
@@ -250,6 +270,9 @@ func TestListUserDevices(t *testing.T) {
 		convey.So(items[0].Capabilities["compute"], convey.ShouldBeTrue)
 		convey.So(items[0].Capabilities["file_browse"], convey.ShouldBeTrue)
 		convey.So(items[1].IsThisDevice, convey.ShouldBeFalse)
+		// 在线态 = Redis 中继登记存在，与 devices.status 无关（R20）
+		convey.So(items[1].Online, convey.ShouldBeTrue)
+		convey.So(items[0].Online, convey.ShouldBeFalse)
 	})
 }
 

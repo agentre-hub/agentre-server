@@ -79,6 +79,7 @@ type RelaySvc interface {
 	RegisterDaemon(ctx context.Context, route Route) error
 	RenewDaemon(ctx context.Context, route Route) error
 	ConnectClient(ctx context.Context, accountID int64, fingerprint string) (Route, error)
+	IsDaemonOnline(ctx context.Context, accountID int64, fingerprint string) (bool, error)
 	AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error)
 	AttachClient(ctx context.Context, target Route, writer FrameWriter) (channelID string, detach func(), err error)
 	ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error
@@ -157,6 +158,16 @@ func (s *relaySvc) ConnectClient(ctx context.Context, accountID int64, fingerpri
 		return Route{}, fmt.Errorf("%w: %v", ErrForwardFailed, err)
 	}
 	return route, nil
+}
+
+// IsDaemonOnline 报告 daemon 的在线登记是否存在（R20 在线态）：
+// Redis 路由键存在即在线（带 TTL，断连或进程消失后自动过期），与 devices.status 无关。
+func (s *relaySvc) IsDaemonOnline(ctx context.Context, accountID int64, fingerprint string) (bool, error) {
+	n, err := s.redis.Exists(ctx, routeKey(accountID, fingerprint)).Result()
+	if err != nil {
+		return false, fmt.Errorf("check relay daemon presence: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (s *relaySvc) AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error) {

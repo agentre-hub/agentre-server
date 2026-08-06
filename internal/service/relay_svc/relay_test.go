@@ -38,6 +38,29 @@ func activeDaemon() *device_entity.Device {
 	}
 }
 
+func TestIsDaemonOnline(t *testing.T) {
+	ctx := context.Background()
+	svc, mini, _ := newRelayForTest(t, fakeForwarder{})
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}
+
+	// 未登记 → 离线
+	online, err := svc.IsDaemonOnline(ctx, 7, "fp-daemon")
+	require.NoError(t, err)
+	require.False(t, online)
+
+	// 登记（带 TTL）→ 在线
+	require.NoError(t, svc.RegisterDaemon(ctx, route))
+	online, err = svc.IsDaemonOnline(ctx, 7, "fp-daemon")
+	require.NoError(t, err)
+	require.True(t, online)
+
+	// 过期自动消失（R20，无人续期）→ 离线
+	mini.FastForward(2 * time.Second)
+	online, err = svc.IsDaemonOnline(ctx, 7, "fp-daemon")
+	require.NoError(t, err)
+	require.False(t, online)
+}
+
 func TestRelayDaemonRegistrationExpiresAfterServerStopsRenewing(t *testing.T) {
 	svc, mini, devices := newRelayForTest(t, fakeForwarder{})
 	devices.EXPECT().Find(gomock.Any(), int64(9)).Return(activeDaemon(), nil)

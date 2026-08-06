@@ -106,6 +106,7 @@ type ListDevicesItem struct {
 	Capabilities map[string]bool `json:"capabilities"`
 	LastSeenAt   int64           `json:"last_seen_at"`
 	Status       int             `json:"status"`
+	Online       bool            `json:"online"`
 	IsThisDevice bool            `json:"is_this_device"`
 }
 

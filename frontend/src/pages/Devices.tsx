@@ -30,6 +30,7 @@ interface DeviceItem {
   capabilities: Record<string, boolean>;
   last_seen_at: number;
   status: number;
+  online: boolean;
   is_this_device: boolean;
 }
 
@@ -161,9 +162,11 @@ export default function Devices() {
                   </span>
                   <span>
                     {t("device.manage.colStatus")}:{" "}
-                    {d.status === ACTIVE
-                      ? t("device.manage.statusOnline")
-                      : t("device.manage.statusRevoked")}
+                    {d.status !== ACTIVE
+                      ? t("device.manage.statusRevoked")
+                      : d.online
+                        ? t("device.manage.statusOnline")
+                        : t("device.manage.statusOffline")}
                   </span>
                 </CardContent>
               </Card>

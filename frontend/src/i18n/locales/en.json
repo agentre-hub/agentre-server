@@ -57,6 +57,7 @@
       "colLastActive": "Last active",
       "colStatus": "Status",
       "statusOnline": "Online",
+      "statusOffline": "Offline",
       "statusRevoked": "Revoked",
       "thisDevice": "This device",
       "revoke": "Revoke",

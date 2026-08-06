@@ -27,6 +27,7 @@ import (
 	"agentre-server/internal/repository/device_flow_repo"
 	"agentre-server/internal/repository/device_repo"
 	"agentre-server/internal/repository/device_token_repo"
+	"agentre-server/internal/service/relay_svc"
 )
 
 type DeviceSvc interface {
@@ -397,8 +398,9 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	return device_repo.Device().Revoke(ctx, deviceID, nowMs)
 }
 
-// ListUserDevices returns all devices for a user, marking the caller's row
-// and decoding the Capabilities JSON column into a map.
+// ListUserDevices returns all devices for a user, marking the caller's row,
+// decoding the Capabilities JSON column into a map, and reporting the real
+// relay presence (R20) as the online state.
 func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error) {
 	rows, err := device_repo.Device().ListByUser(ctx, userID)
 	if err != nil {
@@ -410,6 +412,13 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 		if len(d.Capabilities) > 0 {
 			_ = json.Unmarshal(d.Capabilities, &caps)
 		}
+		// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。
+		// Redis 抖动时按离线对待（fail-open）：在线态只是列表的增强列，
+		// 不应拖垮整个设备列表或 Revoke 前的归属校验（该流程也走本方法）。
+		online, err := relay_svc.Default().IsDaemonOnline(ctx, userID, d.Fingerprint)
+		if err != nil {
+			online = false
+		}
 		out = append(out, api.ListDevicesItem{
 			ID:           d.ID,
 			Name:         d.Name,
@@ -420,6 +429,7 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 			Capabilities: caps,
 			LastSeenAt:   d.LastSeenAt,
 			Status:       d.Status,
+			Online:       online,
 			IsThisDevice: d.ID == callerDeviceID,
 		})
 	}

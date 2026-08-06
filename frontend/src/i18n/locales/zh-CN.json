@@ -57,6 +57,7 @@
       "colLastActive": "最近活跃",
       "colStatus": "在线态",
       "statusOnline": "在线",
+      "statusOffline": "离线",
       "statusRevoked": "已撤销",
       "thisDevice": "本设备",
       "revoke": "解除授权",

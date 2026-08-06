@@ -65,6 +65,10 @@ func (s *relayStub) ConnectClient(context.Context, int64, string) (relay_svc.Rou
 	return s.daemonRoute, nil
 }
 
+func (s *relayStub) IsDaemonOnline(context.Context, int64, string) (bool, error) {
+	return false, nil
+}
+
 func (s *relayStub) AttachDaemon(context.Context, relay_svc.Route, relay_svc.FrameWriter) (func(), error) {
 	return func() {}, nil
 }

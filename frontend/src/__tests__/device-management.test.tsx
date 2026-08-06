@@ -31,6 +31,7 @@ const listResponse = {
       capabilities: { code: true, files: true },
       last_seen_at: 1754000000000,
       status: 1,
+      online: true,
       is_this_device: false,
     },
     {
@@ -43,6 +44,7 @@ const listResponse = {
       capabilities: { code: true },
       last_seen_at: 1753990000000,
       status: 1,
+      online: false,
       is_this_device: true,
     },
   ],
@@ -72,7 +74,12 @@ describe("device management page", () => {
     expect(screen.getByText(/Desktop/)).toBeTruthy();
     expect(screen.getByText(/linux/)).toBeTruthy();
     expect(screen.getByText(/darwin/)).toBeTruthy();
-    expect(screen.getAllByText(/Online/).length).toBeGreaterThan(0);
+    // 在线态列来自 API 的 online 字段（真实中继在线态），不是 status 推算（R20）：
+    // 逐行按 API 给的 online 值断言，而不是全页面找一个 "Online" 就算数。
+    const nucCard = screen.getByText("nuc-01").closest('[data-slot="card"]');
+    const laptopCard = screen.getByText("laptop").closest('[data-slot="card"]');
+    expect(within(nucCard as HTMLElement).getByText(/Online/)).toBeTruthy();
+    expect(within(laptopCard as HTMLElement).getByText(/Offline/)).toBeTruthy();
   });
 
   it("revoke confirmation carries the R4 delay note, then revokes and removes the device", async () => {
