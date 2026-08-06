@@ -39,6 +39,7 @@ type DeviceSvc interface {
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
+	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
 }
 
 type deviceSvc struct {
@@ -396,6 +397,15 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 		return err
 	}
 	return device_repo.Device().Revoke(ctx, deviceID, nowMs)
+}
+
+// ListRevokedJTI 返回调用方账号（userID，跨其名下全部设备）已吊销、且签发
+// 时间距今仍在 AccessTTL 窗口内（即仍可能验签通过）的 access token jti 全集，
+// 供 daemon 定期拉取后本地生效（R4）。窗口起点按当前配置的 AccessTTL 现算，
+// 超出窗口的旧吊销记录交给 TTL 兜底、这里直接不取。
+func (s *deviceSvc) ListRevokedJTI(ctx context.Context, userID int64) ([]string, error) {
+	windowStart := time.Now().Add(-s.cfg.AccessTTL).UnixMilli()
+	return device_token_repo.DeviceToken().ListRevokedJTIByUser(ctx, userID, windowStart)
 }
 
 // ListUserDevices returns all devices for a user, marking the caller's row,

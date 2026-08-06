@@ -70,6 +70,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 
 	// device JWT
 	deviceJWT := g.Group("/", middleware.DeviceJWT(r.Signer))
+	deviceJWT.Bind(deviceCtr.Revocations)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由；鉴权仍复用 device JWT。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
 	deviceJWT.GET("/v1/relay/client", relayCtr.Client)

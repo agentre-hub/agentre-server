@@ -20,6 +20,7 @@ import (
 	"agentre-server/internal/api"
 	api_device "agentre-server/internal/api/device"
 	"agentre-server/internal/bootstrap"
+	"agentre-server/internal/middleware"
 	"agentre-server/internal/model/entity/device_entity"
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/jwt/testkeys"
@@ -34,6 +35,7 @@ const testCookieName = "server_session"
 type stubDeviceSvc struct {
 	userDevices []api_device.ListDevicesItem
 	revoked     []int64
+	revokedJTI  []string
 }
 
 func (s *stubDeviceSvc) Authorize(context.Context, device_svc.AuthorizeInput) (*device_svc.AuthorizeOutput, error) {
@@ -58,6 +60,9 @@ func (s *stubDeviceSvc) Revoke(_ context.Context, deviceID int64) error {
 }
 func (s *stubDeviceSvc) ListUserDevices(context.Context, int64, int64) ([]api_device.ListDevicesItem, error) {
 	return s.userDevices, nil
+}
+func (s *stubDeviceSvc) ListRevokedJTI(context.Context, int64) ([]string, error) {
+	return s.revokedJTI, nil
 }
 
 var _ device_svc.DeviceSvc = (*stubDeviceSvc)(nil)
@@ -192,4 +197,56 @@ func TestListDevices_DeviceJWT_StillWorks(t *testing.T) {
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices", "", token, "")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, int64(2), stub.userDevices[1].ID)
+}
+
+// (a) 端点在 device JWT 鉴权下按 R4 任务 interfaces 里定死的信封形状
+// 返回调用方账号下的吊销 jti 列表。
+func TestRevocations_ReturnsRevokedJTIList_UnderDeviceJWT(t *testing.T) {
+	stub := &stubDeviceSvc{revokedJTI: []string{"jti-revoked-1", "jti-revoked-2"}}
+	server, signer := newDeviceTestServer(t, stub)
+	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+
+	before := time.Now().UnixMilli()
+	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", "", token, "")
+	after := time.Now().UnixMilli()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			RevokedJTI []string `json:"revoked_jti"`
+			AsOf       int64    `json:"as_of"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	require.Equal(t, 0, envelope.Code)
+	assert.Equal(t, []string{"jti-revoked-1", "jti-revoked-2"}, envelope.Data.RevokedJTI)
+	assert.GreaterOrEqual(t, envelope.Data.AsOf, before)
+	assert.LessOrEqual(t, envelope.Data.AsOf, after)
+}
+
+// 端点只认 device JWT：浏览器 session 单独持有时应当被拒绝（契约写明 "设备 JWT Bearer 鉴权"，不是
+// SessionOrDeviceAuth）。
+func TestRevocations_RejectsBrowserSessionOnly(t *testing.T) {
+	stub := &stubDeviceSvc{revokedJTI: []string{"jti-revoked-1"}}
+	server, _ := newDeviceTestServer(t, stub)
+	cookie := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", cookie.Value, "", "")
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+// 已吊销设备自身拉取该端点时必须被拒绝——由既有 DeviceJWT 中间件 + jti 黑名单保证
+// （device_svc.Revoke 已把该设备名下的 access jti 全部拉黑），本测试验证这条链路
+// 在新端点上确实生效，而不是只在其它端点上生效。
+func TestRevocations_RejectsRevokedCallerDevice(t *testing.T) {
+	stub := &stubDeviceSvc{revokedJTI: []string{"jti-revoked-1"}}
+	server, signer := newDeviceTestServer(t, stub)
+	token, jti, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+	require.NoError(t, middleware.Blacklist(context.Background(), jti, 3600))
+
+	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", "", token, "")
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }

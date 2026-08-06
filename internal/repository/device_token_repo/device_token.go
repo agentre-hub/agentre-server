@@ -15,6 +15,7 @@ type DeviceTokenRepo interface {
 	Create(ctx context.Context, e *device_token_entity.DeviceToken) error
 	FindByHash(ctx context.Context, hash string) (*device_token_entity.DeviceToken, error)
 	ListAccessJTIByDevice(ctx context.Context, deviceID int64) ([]string, error)
+	ListRevokedJTIByUser(ctx context.Context, userID, windowStartMs int64) ([]string, error)
 	Revoke(ctx context.Context, id, nowMs int64) error
 	RevokeChain(ctx context.Context, deviceID, nowMs int64) error
 	TouchLastUsed(ctx context.Context, id, nowMs int64) error
@@ -55,6 +56,23 @@ func (r *repo) ListAccessJTIByDevice(ctx context.Context, deviceID int64) ([]str
 	err := db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).
 		Where("device_id=? AND access_jti != ''", deviceID).
 		Pluck("access_jti", &jtis).Error
+	if err != nil {
+		return nil, err
+	}
+	return jtis, nil
+}
+
+// ListRevokedJTIByUser 返回该账号（跨其名下全部设备）已吊销、且签发时间
+// 距今仍在 AccessTTL 窗口内（createtime >= windowStartMs，即仍可能验签通过）
+// 的 access token jti。数据源同样是 device_tokens.access_jti（含刷新轮换出的
+// 旧 access token），联表 devices 按 user_id 过滤，不扫 Redis key。
+func (r *repo) ListRevokedJTIByUser(ctx context.Context, userID, windowStartMs int64) ([]string, error) {
+	var jtis []string
+	err := db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).
+		Joins("JOIN devices ON devices.id = device_tokens.device_id").
+		Where("devices.user_id = ? AND device_tokens.revoked_at != 0 AND device_tokens.access_jti != '' AND device_tokens.createtime >= ?",
+			userID, windowStartMs).
+		Pluck("device_tokens.access_jti", &jtis).Error
 	if err != nil {
 		return nil, err
 	}

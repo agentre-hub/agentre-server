@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
@@ -155,6 +156,19 @@ func (d *Device) List(c *gin.Context, _ *api.ListDevicesRequest) (*api.ListDevic
 		return nil, err
 	}
 	return &api.ListDevicesResponse{Devices: items}, nil
+}
+
+// Revocations 供 daemon 定期拉取吊销列表（R4 producer）。设备 JWT 鉴权，
+// 已吊销设备自身拉取时被既有 DeviceJWT 中间件的黑名单校验拒绝在前面，
+// 这里只需从 JWT 里取账号并转发给 service。
+func (d *Device) Revocations(c *gin.Context, _ *api.RevocationsRequest) (*api.RevocationsResponse, error) {
+	uid, _ := c.Get("user_id")
+	userID, _ := uid.(int64)
+	jtis, err := device_svc.Default().ListRevokedJTI(c.Request.Context(), userID)
+	if err != nil {
+		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
+	}
+	return &api.RevocationsResponse{RevokedJTI: jtis, AsOf: time.Now().UnixMilli()}, nil
 }
 
 // oauthErrToHTTP 把 device_svc.OAuthError 映射成 HTTP 状态 + 业务 code，并在 body 里附 RFC 8628 字段。

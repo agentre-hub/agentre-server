@@ -2,6 +2,7 @@ package device_svc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -230,6 +231,39 @@ func TestRevoke(t *testing.T) {
 				convey.So(gerr, convey.ShouldBeNil)
 				convey.So(v, convey.ShouldEqual, "1")
 			}
+		})
+	})
+}
+
+func TestListRevokedJTI(t *testing.T) {
+	convey.Convey("ListRevokedJTI", t, func() {
+		convey.Convey("按账号（非调用设备）取吊销列表，窗口起点=now-AccessTTL", func() {
+			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+			var capturedWindowStart int64
+			mT.EXPECT().ListRevokedJTIByUser(gomock.Any(), int64(7), gomock.Any()).DoAndReturn(
+				func(_ context.Context, userID, windowStartMs int64) ([]string, error) {
+					capturedWindowStart = windowStartMs
+					return []string{"jti-revoked-1", "jti-revoked-2"}, nil
+				},
+			)
+
+			before := time.Now().Add(-svc.cfg.AccessTTL).UnixMilli()
+			got, err := svc.ListRevokedJTI(ctx, 7)
+			after := time.Now().Add(-svc.cfg.AccessTTL).UnixMilli()
+
+			assert.NoError(t, err)
+			assert.Equal(t, []string{"jti-revoked-1", "jti-revoked-2"}, got)
+			assert.GreaterOrEqual(t, capturedWindowStart, before)
+			assert.LessOrEqual(t, capturedWindowStart, after)
+		})
+
+		convey.Convey("repo 报错时原样返回", func() {
+			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+			wantErr := errors.New("boom")
+			mT.EXPECT().ListRevokedJTIByUser(gomock.Any(), int64(7), gomock.Any()).Return(nil, wantErr)
+
+			_, err := svc.ListRevokedJTI(ctx, 7)
+			assert.ErrorIs(t, err, wantErr)
 		})
 	})
 }
