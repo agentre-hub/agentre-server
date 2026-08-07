@@ -69,7 +69,13 @@ export default function Device() {
       });
       nav("/device/success");
     } catch (e) {
-      if (e instanceof ApiError) setError(e.message);
+      // 错误提示渲染在对话框外面，对话框还开着就会被遮罩盖住、还被 radix 打上
+      // aria-hidden——用户既看不见也读不出。所以确实有话要说时才关掉对话框；
+      // 拿不出文案（比如 fetch 本身失败）就维持原状，别把对话框静默关掉。
+      if (e instanceof ApiError) {
+        setError(e.message);
+        setInfo(null);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -85,6 +91,15 @@ export default function Device() {
       });
       setError(t("device.denied"));
       setInfo(null);
+    } catch (e) {
+      // 服务端的 deny 是带条件的 UPDATE：行已被换取或已拒绝时命中 0 行，返回 400。
+      // 不接住的话这里会是一个未处理的 promise rejection——对话框原地不动、
+      // 一个字都不显示，用户完全走不下去。和 onApprove 同样地关掉对话框，
+      // 否则提示被遮罩盖住，等于没显示。
+      if (e instanceof ApiError) {
+        setError(e.message);
+        setInfo(null);
+      }
     } finally {
       setSubmitting(false);
     }

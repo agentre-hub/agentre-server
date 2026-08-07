@@ -20,6 +20,7 @@ Workspace-wide facts live in [`../AGENTS.md`](../AGENTS.md).
 | --- | --- | --- |
 | Running anything, or adding a command | [docs/develop.md](docs/develop.md) | Commands, layout, the enforced rules and their exemptions, commit flow, migrations |
 | Adding an endpoint / service / repository | [docs/architecture.md](docs/architecture.md) | Layering, dependency direction, "how to add an X" |
+| Adding a scheduled task, or assuming only one replica is running | [docs/architecture.md](docs/architecture.md) | What you may assume about process-local state, how to add a cron job |
 | Writing any test | [docs/testing.md](docs/testing.md) | What to write per layer, sqlmock vs mockgen, build tags, the guard tests |
 | Confirming a change actually works | [docs/verification.md](docs/verification.md) | The twin e2e tracks, scratch workflow, report rules |
 | Touching the frontend | [docs/design.md](docs/design.md) | Colour tokens, dark/light, responsive, i18n, the new-page recipe |
