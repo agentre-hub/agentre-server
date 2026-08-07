@@ -28,7 +28,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 
 	healthzCtr := healthz_ctr.NewHealthz()
 	authCtr := auth_ctr.NewAuth()
-	deviceCtr := device_ctr.NewDeviceWithPublicKey(r.Cfg.JWT.PublicKeyPEM)
+	deviceCtr := device_ctr.NewDeviceWithPublicKey(r.Cfg.JWT.PublicKeyPEMContent())
 	relaySvc := r.Relay
 	if relaySvc == nil {
 		relaySvc = relay_svc.Default()

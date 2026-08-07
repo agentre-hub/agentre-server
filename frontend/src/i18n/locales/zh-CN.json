@@ -51,9 +51,6 @@
     "manage": {
       "title": "设备管理",
       "empty": "还没有任何设备。你授权过的设备会显示在这里。",
-      "colName": "名称",
-      "colKind": "类型",
-      "colPlatform": "平台",
       "colLastActive": "最近活跃",
       "colStatus": "在线态",
       "statusOnline": "在线",
