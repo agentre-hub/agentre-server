@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
+import AuthLayout from "@/components/AuthLayout";
 
 /** 后端 err query 参数 → i18n key 后缀。未知值原样透出。 */
 const KNOWN_ERRORS = [
@@ -35,7 +36,7 @@ export default function Login() {
       : err;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+    <AuthLayout>
       <div className="w-full max-w-sm space-y-6 rounded-xl border p-6 sm:p-8">
         <h1 className="text-2xl font-semibold">{t("login.title")}</h1>
         {errorText && <Alert variant="destructive">{errorText}</Alert>}
@@ -43,6 +44,6 @@ export default function Login() {
           {t("login.github")}
         </Button>
       </div>
-    </div>
+    </AuthLayout>
   );
 }

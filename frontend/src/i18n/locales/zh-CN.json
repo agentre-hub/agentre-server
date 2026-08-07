@@ -14,6 +14,18 @@
       "label": "语言"
     }
   },
+  "authLayout": {
+    "brand": "AgentRe",
+    "footer": {
+      "copyright": "© {{year}} AgentRe",
+      "terms": "服务条款",
+      "privacy": "隐私政策",
+      "status": "服务状态"
+    }
+  },
+  "legal": {
+    "comingSoon": "即将上线"
+  },
   "login": {
     "title": "登录 AgentRe Server",
     "github": "使用 GitHub 登录",

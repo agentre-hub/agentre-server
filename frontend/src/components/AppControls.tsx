@@ -16,7 +16,8 @@ const THEME_ICON: Record<Theme, typeof Sun> = {
 };
 
 /**
- * 固定在右上角的主题 / 语言切换。所有页面共用一份，放在 App 的 Layout 里。
+ * 主题 / 语言切换。挂在 AuthLayout 的顶栏里，随文档流走，不再 fixed 悬浮——
+ * 顶栏本身就是一段普通内容，不用跟它抢屏幕角落。
  * 移动端也要够得着，所以用 icon 尺寸而不是带文字的按钮。
  */
 export default function AppControls() {
@@ -39,7 +40,7 @@ export default function AppControls() {
     ];
 
   return (
-    <div className="fixed right-3 top-3 z-50 flex items-center gap-1 sm:right-4 sm:top-4">
+    <div className="flex items-center gap-1">
       <Button
         variant="ghost"
         size="icon-sm"

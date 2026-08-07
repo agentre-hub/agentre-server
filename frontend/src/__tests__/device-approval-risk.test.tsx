@@ -11,6 +11,22 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
+// Device 现在经 AuthLayout 挂了 AppControls，后者要读 useTheme()。真实
+// ThemeProvider 会在 readStored() 里摸 localStorage——这台机器的 Node 版本下
+// jsdom 的 window.localStorage 解析成 undefined（Node 自带的实验性 Storage
+// 抢占了 jsdom 的实现），是与本测试无关的环境缺陷，绕开即可。
+vi.mock("@/lib/theme", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/theme")>();
+  return {
+    ...actual,
+    useTheme: () => ({
+      theme: "system" as const,
+      resolved: "light" as const,
+      setTheme: vi.fn(),
+    }),
+  };
+});
+
 const mockedApi = vi.mocked(api);
 
 const pendingAgentred = {

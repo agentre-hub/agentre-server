@@ -1,16 +1,15 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import AppControls from "./components/AppControls";
 import Login from "./pages/Login";
 import Device from "./pages/Device";
 import DeviceSuccess from "./pages/DeviceSuccess";
 import Devices from "./pages/Devices";
 import NotFound from "./pages/NotFound";
+import ComingSoon from "./pages/ComingSoon";
 import RequireAuth from "./components/RequireAuth";
 
 export default function App() {
   return (
     <BrowserRouter>
-      <AppControls />
       <Routes>
         <Route path="/" element={<Navigate to="/device" replace />} />
         <Route path="/login" element={<Login />} />
@@ -31,6 +30,9 @@ export default function App() {
           }
         />
         <Route path="/device/success" element={<DeviceSuccess />} />
+        <Route path="/terms" element={<ComingSoon page="terms" />} />
+        <Route path="/privacy" element={<ComingSoon page="privacy" />} />
+        <Route path="/status" element={<ComingSoon page="status" />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>

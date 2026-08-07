@@ -12,6 +12,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Alert } from "@/components/ui/alert";
+import AuthLayout from "@/components/AuthLayout";
 import { api, ApiError } from "@/lib/api";
 
 interface PendingInfo {
@@ -96,7 +97,7 @@ export default function Device() {
     .join(", ");
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4 py-12">
+    <AuthLayout>
       <div className="w-full max-w-md space-y-6 rounded-xl border p-6 sm:p-8">
         <h1 className="text-2xl font-semibold">{t("device.title")}</h1>
         <Input
@@ -151,6 +152,6 @@ export default function Device() {
           </DialogContent>
         </Dialog>
       </div>
-    </div>
+    </AuthLayout>
   );
 }

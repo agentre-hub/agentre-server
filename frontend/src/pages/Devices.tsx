@@ -18,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import AuthLayout from "@/components/AuthLayout";
 import { api, ApiError } from "@/lib/api";
 
 interface DeviceItem {
@@ -119,7 +120,7 @@ export default function Devices() {
   }
 
   return (
-    <div className="flex min-h-screen justify-center bg-background px-4 py-12">
+    <AuthLayout>
       <div className="w-full max-w-2xl space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">{t("device.manage.title")}</h1>
@@ -230,6 +231,6 @@ export default function Devices() {
           </DialogContent>
         </Dialog>
       </div>
-    </div>
+    </AuthLayout>
   );
 }
