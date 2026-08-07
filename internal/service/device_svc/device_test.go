@@ -234,6 +234,25 @@ func TestRevoke(t *testing.T) {
 			}
 		})
 
+		// 黑名单条目必须活得比 access token 还久一点。Verify 带 jwt.Leeway 的时钟
+		// 偏移,一个 12:00 签发的 token 到 12:00+AccessTTL+Leeway 都还验得过;而
+		// TTL 只取 AccessTTL 时,它从吊销那一刻起算,12:00:05 撤销的话黑名单
+		// 12:00:05+AccessTTL 就到期 —— 中间那 55s 里被撤销的设备又能用了。
+		convey.Convey("黑名单 TTL 覆盖到 token 真正失效为止（含验签时钟偏移）", func() {
+			testutils.Redis()
+			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return([]string{"jti-aaa"}, nil)
+			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+			convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
+
+			ttl, gerr := redis.Default().TTL(ctx, "jwt_blacklist:jti-aaa").Result()
+			convey.So(gerr, convey.ShouldBeNil)
+			convey.So(ttl, convey.ShouldBeGreaterThan, svc.cfg.AccessTTL)
+			convey.So(ttl, convey.ShouldBeLessThanOrEqualTo, svc.cfg.AccessTTL+jwt.Leeway)
+		})
+
 		// R19「解除授权」的可观察后果：撤销后该设备无法再刷新。黑名单只覆盖已签发
 		// access token 的 AccessTTL 窗口，真正让设备回不来的是 devices 行被置为
 		// 已撤销后 Refresh 的这道判定 —— 少了它，撤销一台设备只是让它等 15 分钟。
@@ -281,9 +300,13 @@ func TestListRevokedJTI(t *testing.T) {
 				},
 			)
 
-			before := time.Now().Add(-svc.cfg.AccessTTL).UnixMilli()
+			// 窗口必须覆盖到 token 真正不再验签为止 —— Verify 带 jwt.Leeway 的时钟
+			// 偏移,exp 之后还会接受 Leeway 那么久。只减 AccessTTL 会让 jti 在最后
+			// Leeway 秒里既不在吊销列表上、又仍然验得过。
+			window := svc.cfg.AccessTTL + jwt.Leeway
+			before := time.Now().Add(-window).UnixMilli()
 			got, err := svc.ListRevokedJTI(ctx, 7)
-			after := time.Now().Add(-svc.cfg.AccessTTL).UnixMilli()
+			after := time.Now().Add(-window).UnixMilli()
 
 			assert.NoError(t, err)
 			assert.Equal(t, []string{"jti-revoked-1", "jti-revoked-2"}, got)

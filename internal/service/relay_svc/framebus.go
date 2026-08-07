@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	goredis "github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 const (
@@ -210,11 +212,17 @@ func (f *redisForwarder) consume(ctx context.Context, stream string) {
 
 // consumerRetryDelay 是消费循环的重连退避阶梯:抖动通常是秒级的,上限压在
 // deliveryWaitTimeout 以内,恢复后最多耽误一个投递窗口。
+//
+// 封顶判据取 max/2 —— 与本轮另外两处退避(HubLink.backoff、daemon 的
+// defaultRefreshBackoff)同一形状。写成 `delay >= max` 会在翻倍**之前**判断,
+// 于是 failures=5 交出 1600ms(越过自己声明的 1s 上限),failures=6 又回落到
+// 1000ms:阶梯既超限又不单调。
 func consumerRetryDelay(failures int) time.Duration {
+	const maxDelay = time.Second
 	delay := 50 * time.Millisecond
 	for range failures {
-		if delay >= time.Second {
-			return time.Second
+		if delay >= maxDelay/2 {
+			return maxDelay
 		}
 		delay *= 2
 	}
@@ -270,9 +278,20 @@ func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 					err = f.deliver(stream, peer, channelID, messageType, frame)
 				}
 				if err != nil {
-					pending = true
-					time.Sleep(10 * time.Millisecond)
-					break
+					// 投不出去(本实例没有那一侧的 websocket)或解不开的帧,重试永远不会
+					// 让它变得可投递,而发布方最多只等 deliveryWaitTimeout。把它留在 PEL
+					// 里重读只会让队头堵死整条 stream:pending 被置回 true,下一轮又只读
+					// "0"、又是同一条队头,">" 永远轮不到 —— 同一条 stream 上其它收件人
+					// (还连着的客户端通道)的帧从此一条也进不来。所以确认掉它、但**不**写
+					// 投递回执:发布方的 waitForAck 照常超时,如实收到转发失败。
+					if ackErr := f.redis.XAck(ctx, stream, frameBusGroup, message.ID).Err(); ackErr != nil {
+						pending = true
+						break
+					}
+					logger.Ctx(ctx).Warn("relay frame dropped: no local delivery target",
+						zap.String("stream", stream), zap.String("peer", string(peer)),
+						zap.String("messageID", message.ID), zap.Error(err))
+					continue
 				}
 				if err := f.redis.XAck(ctx, stream, frameBusGroup, message.ID).Err(); err != nil {
 					pending = true
@@ -318,11 +337,15 @@ func (f *redisForwarder) detach(stream string, peer Peer, attachment *attachedPe
 	f.mu.Lock()
 	attachments := f.attachments[stream][peer]
 	delete(attachments, attachment)
-	lastPeer := len(attachments) == 0
-	if lastPeer {
+	if len(attachments) == 0 {
 		delete(f.attachments[stream], peer)
 	}
-	if len(f.attachments[stream]) == 0 {
+	// 组内消费者的注销必须与消费 goroutine 的停止同条件。曾经用的是「这一**类**
+	// 对端没了」:实例上 daemon 与客户端算出的是同一条 stream,最后一个客户端走时
+	// 它就为真,于是 XGroupDelConsumer 把一个还在跑的消费者连同它的 PEL 一起删掉
+	// —— 已读未确认的帧就此永久丢失,发布方只能等满 deliveryWaitTimeout。
+	lastForStream := len(f.attachments[stream]) == 0
+	if lastForStream {
 		delete(f.attachments, stream)
 		if cancel, ok := f.consumers[stream]; ok {
 			cancel()
@@ -334,7 +357,7 @@ func (f *redisForwarder) detach(stream string, peer Peer, attachment *attachedPe
 	if peer == PeerClient {
 		f.unregisterClient(local, attachment.channelID)
 	}
-	if lastPeer {
+	if lastForStream {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_ = f.redis.XGroupDelConsumer(cleanupCtx, stream, frameBusGroup, f.instanceID).Err()

@@ -234,6 +234,82 @@ func TestRedisForwarderRoutesDaemonFramesByChannel(t *testing.T) {
 	}
 }
 
+// 一条投递不出去的帧不得把整条 stream 的消费卡死。
+//
+// 触发状态（多实例部署里的常态）：实例 B 上同时挂着 daemon D 和一个客户端 C ——
+// 两者算出的 streamKey 是同一条（Attach 对 PeerClient 把 local.InstanceID 改写成
+// 本实例）。D 掉线后 attachments[stream] 里还剩 C，消费 goroutine 因此**不会**被
+// detach 取消；而 Redis 路由键在 OnlineTTL 内仍指向 B，实例 A 照旧把发往 daemon
+// 的帧 XAdd 进这条 stream。消费者读到它、deliver 报 "no local daemon relay
+// websocket"，于是 pending 置回 true —— 下一轮又只读 PEL("0")、又是同一条队头、
+// 又失败，永远轮不到 ">"。发往 C 的帧从此一条也进不来（而发布方那边早在 5s 的
+// deliveryWaitTimeout 就已经放弃，重试对它毫无意义）。
+func TestRedisForwarderUndeliverableFrameDoesNotStallTheStream(t *testing.T) {
+	mini := miniredis.RunT(t)
+	clientA := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, clientA.Close()) })
+	t.Cleanup(func() { require.NoError(t, clientB.Close()) })
+	configA := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarderA := NewRedisForwarder(configA, clientA)
+	forwarderB := NewRedisForwarder(configB, clientB)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configB.InstanceID}
+
+	// B 上先有 daemon,再接一个客户端 —— 两者共用同一条 stream。
+	daemonWriter := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+	daemonDetach, err := forwarderB.(AttachmentForwarder).Attach(
+		context.Background(), route, PeerDaemon, "", daemonWriter)
+	require.NoError(t, err)
+	clientWriter := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+	clientDetach, err := forwarderB.(AttachmentForwarder).Attach(
+		context.Background(), route, PeerClient, "channel-live", clientWriter)
+	require.NoError(t, err)
+	t.Cleanup(clientDetach)
+
+	// daemon 掉线;客户端还在,所以消费 goroutine 继续跑。
+	daemonDetach()
+
+	// 实例 A 推一条发往 daemon 的帧:它在 B 上永远投递不出去。
+	stalled := make(chan error, 1)
+	go func() {
+		stalled <- forwarderA.Forward(context.Background(), route, PeerClient, "", 2, []byte("to-dead-daemon"))
+	}()
+	// 给消费者时间把它读进 PEL。
+	time.Sleep(200 * time.Millisecond)
+
+	// 之后发往**客户端**的帧必须照常到达 —— 队头那条投不出去的帧不该挡住它。
+	require.NoError(t, forwarderA.Forward(
+		context.Background(), route, PeerDaemon, "channel-live", 2, []byte("to-live-client")))
+	select {
+	case received := <-clientWriter.frames:
+		require.Equal(t, []byte("to-live-client"), received.frame)
+	case <-time.After(2 * time.Second):
+		t.Fatal("一条投递不出去的帧把整条 stream 的消费卡死了")
+	}
+	// 发布方仍然如实收到失败:投不出去就是投不出去,不能假装成功。
+	select {
+	case err := <-stalled:
+		require.Error(t, err)
+	case <-time.After(6 * time.Second):
+		t.Fatal("undeliverable forward never returned")
+	}
+}
+
+// 退避阶梯必须单调不减、且永不越过自己声明的上限 —— 它是 Redis 抖动时唯一的
+// 限流手段,越限意味着恢复后可能多等一个投递窗口,不单调则说明判据写错了位置。
+func TestConsumerRetryDelayIsMonotonicAndCapped(t *testing.T) {
+	previous := time.Duration(0)
+	for failures := range 12 {
+		delay := consumerRetryDelay(failures)
+		require.LessOrEqual(t, delay, time.Second,
+			"failures=%d 的退避 %s 越过了 1s 上限", failures, delay)
+		require.GreaterOrEqual(t, delay, previous,
+			"failures=%d 的退避 %s 比上一级 %s 还短", failures, delay, previous)
+		previous = delay
+	}
+}
+
 func TestRedisForwarderClientDetachRemovesExpiringPresence(t *testing.T) {
 	mini := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})

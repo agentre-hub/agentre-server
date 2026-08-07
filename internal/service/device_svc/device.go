@@ -387,9 +387,12 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	}
 	// 把该设备已签发（含刷新轮换出的旧 access token）的 jti 全部拉黑，
 	// 让在线设备撤销后立即失效（middleware.DeviceJWT 逐请求校验黑名单）。
-	// TTL 取完整 AccessTTL 覆盖 access token 的整个有效期；
+	// TTL 取 AccessTTL+jwt.Leeway：黑名单从**撤销那一刻**起算，而 token 是从
+	// **签发那一刻**起算、且 Verify 还多接受 Leeway 的时钟偏移。只取 AccessTTL
+	// 时，一个刚签发就被撤销的 token（12:00 签发、12:00:05 撤销）会在
+	// 12:15:05 掉出黑名单，却一直验签通过到 12:16:00——中间那段它又活了。
 	// Redis 不可用时不让 DB 侧吊销失败——黑名单本身 fail-open（spec §6.5）。
-	ttlSec := int(s.cfg.AccessTTL / time.Second)
+	ttlSec := int((s.cfg.AccessTTL + jwt.Leeway) / time.Second)
 	for _, jti := range jtis {
 		_ = jwtblacklist.Add(ctx, jti, ttlSec)
 	}
@@ -400,11 +403,14 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 }
 
 // ListRevokedJTI 返回调用方账号（userID，跨其名下全部设备）已吊销、且签发
-// 时间距今仍在 AccessTTL 窗口内（即仍可能验签通过）的 access token jti 全集，
-// 供 daemon 定期拉取后本地生效（R4）。窗口起点按当前配置的 AccessTTL 现算，
-// 超出窗口的旧吊销记录交给 TTL 兜底、这里直接不取。
+// 时间距今仍可能验签通过的 access token jti 全集，供 daemon 定期拉取后本地
+// 生效（R4）。超出窗口的旧吊销记录交给过期兜底、这里直接不取。
+//
+// 窗口长度是 AccessTTL+jwt.Leeway 而不是 AccessTTL：Verify 接受 Leeway 的时钟
+// 偏移，token 直到 exp+Leeway 都还验得过。只减 AccessTTL 会让每个 jti 在最后
+// Leeway 秒里既已掉出这份列表、又仍被任何拉取方接受。
 func (s *deviceSvc) ListRevokedJTI(ctx context.Context, userID int64) ([]string, error) {
-	windowStart := time.Now().Add(-s.cfg.AccessTTL).UnixMilli()
+	windowStart := time.Now().Add(-(s.cfg.AccessTTL + jwt.Leeway)).UnixMilli()
 	return device_token_repo.DeviceToken().ListRevokedJTIByUser(ctx, userID, windowStart)
 }
 
