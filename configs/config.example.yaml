@@ -1,5 +1,6 @@
-env: PROD
+env: prod
 debug: false
+source: file
 
 http:
   address:

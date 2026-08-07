@@ -1,0 +1,38 @@
+# 构建上下文是仓库根，所以这个文件留在根上（Dockerfile 在 deploy/）。
+# 少了它宿主机的 node_modules 会被拷进去，pnpm install 随后会失败。
+
+.git
+.gitignore
+.github
+.gitea
+.worktrees
+.dev-kit
+
+**/node_modules
+frontend/dist
+internal/web/dist
+bin
+*.tsbuildinfo
+
+runtime
+data
+coverage.out
+coverage.html
+
+# 真实凭据，绝不进任何一层镜像
+.env
+configs/config.yaml
+
+e2e
+docs
+deploy
+README.md
+AGENTS.md
+CLAUDE.md
+
+.idea
+.vscode
+.omc
+.opskat
+*.swp
+.DS_Store

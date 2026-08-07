@@ -35,3 +35,6 @@
 
 # local round workspaces (dev-kit worktrees)
 /.worktrees/
+# dev-kit 的本轮工作区状态（plans / artifacts）。不写斜杠：worktree 里它是符号链接，
+# 带斜杠的规则匹配不到符号链接。
+/.dev-kit
