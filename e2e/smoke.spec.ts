@@ -30,8 +30,15 @@ test("未登录访问 /device 会跳到 /login", async ({ page }) => {
 
 test("未知路由渲染 404 而不是白屏", async ({ page }) => {
   await page.goto("/no-such-page");
-  await expect(page.getByRole("heading", { name: "404" })).toBeVisible();
-  await expect(page.getByRole("link")).toBeVisible();
+  // "404" 现在是 aria-hidden 的水印，真正的 h1 是可翻译的标题文案
+  await expect(
+    page.getByRole("heading", { name: /页面不存在|Page not found/i }),
+  ).toBeVisible();
+  // AuthLayout 现在还带页脚链接（Terms/Privacy/Status），不能再用不带
+  // name 的 getByRole("link")——那会撞上 strict mode。只认返回首页那个。
+  await expect(
+    page.getByRole("link", { name: /回到首页|Back to home/i }),
+  ).toBeVisible();
 });
 
 test("设备授权页能查到 pending 设备并弹出确认框", async ({ page }) => {
