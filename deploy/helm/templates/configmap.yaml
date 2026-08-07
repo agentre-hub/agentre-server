@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentre-server.fullname" . }}
+  labels:
+    {{- include "agentre-server.labels" . | nindent 4 }}
+data:
+  # 只放引导配置。业务配置（http/db/redis/logger/trace/server）全部在 etcd 里，
+  # 见 docs/deploy.md 的播种清单。
+  #
+  # 这四个键一个都不能少：cago 的文件源读不到某个键时会把默认值**写回配置文件**
+  # （cago configs/file/file.go 的 fileSource.Scan），而这份 ConfigMap 是以 subPath
+  # 只读挂载的、容器又以 nonroot 跑，于是写回失败 → 启动即 permission denied。
+  # 引导阶段按顺序会读到的正好是 env、debug、source，source=etcd 时再加一个 etcd。
+  config.yaml: |
+    env: {{ .Values.appConfig.env }}
+    debug: {{ .Values.appConfig.debug }}
+    source: etcd
+    etcd:
+      prefix: {{ .Values.etcdConfig.prefix }}
+      # 下面这两份内容完全相同，是为了同时适配两个 cago 版本，别删其中一份：
+      #   本仓库当前 pin 的 cago(2026-04-23) 里 configs/etcd.Config 内嵌
+      #   dbetcd.Config 时只写了 mapstructure:",squash"，而这一段是被文件源用
+      #   yaml.v3 解出来的——yaml.v3 不认 mapstructure 的 tag，也不会自动摊平匿名
+      #   字段，于是它按字段类型名去找 `config:` 这个键。写成摊平的会静默解析出
+      #   endpoints=[]（实测）。
+      #   较新的 cago 给该字段补了 yaml:",inline"，那时读的是摊平的顶层键，
+      #   多出来的 `config:` 会被忽略。两份都写，升级 cago 时不会突然连不上 etcd。
+      endpoints:
+        {{- toYaml .Values.etcdConfig.endpoints | nindent 8 }}
+      username: {{ .Values.etcdConfig.username | quote }}
+      password: {{ .Values.etcdConfig.password | quote }}
+      config:
+        endpoints:
+          {{- toYaml .Values.etcdConfig.endpoints | nindent 10 }}
+        username: {{ .Values.etcdConfig.username | quote }}
+        password: {{ .Values.etcdConfig.password | quote }}

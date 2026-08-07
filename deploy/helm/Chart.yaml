@@ -1,0 +1,11 @@
+apiVersion: v2
+name: agentre-server
+description: AgentRe Server —— 账号体系与 RFC 8628 Device Flow，单二进制内嵌 SPA
+type: application
+
+# chart 自身的版本，改模板就要动它
+version: 0.1.0
+
+# 被部署应用的版本。实际镜像 tag 由流水线用 --set image.tag 覆盖成 <env>.<短 commit>，
+# 这里只是 helm 在没传 tag 时的兜底。
+appVersion: "0.1.0"

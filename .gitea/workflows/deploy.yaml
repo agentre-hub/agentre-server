@@ -1,0 +1,150 @@
+# Gitea Actions 发布流水线。
+#
+# 注意：这个目录一旦存在，Gitea 就**不再读 .github/workflows/** 了。
+# Gitea 的 listWorkflowsInDirs() 按 WorkflowDirs（默认 [".gitea/workflows",
+# ".github/workflows"]）逐个找，命中第一个就 break，两者不合并。
+# 所以 .github/workflows/ci.yml 是 GitHub 侧的门禁，Gitea 侧只有这一条。
+#
+# 所有 uses: 都写成 actions/* 命名空间（上游名字注释在上一行）：本 Gitea 实例的
+# DEFAULT_ACTIONS_URL 配的是 self，动作镜像在本地 actions 组织下。
+# 另外 Gitea 的表达式只支持 always() 一个状态函数，所以这里不用 if:；
+# runs-on 也只写单值。
+
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+      - test/*
+
+env:
+  APP_NAME: ${{ github.event.repository.name }}
+  NAMESPACE: app
+  REGISTRY: ${{ secrets.DOCKER_REGISTRY && secrets.DOCKER_REGISTRY || 'docker.io' }}
+  REPOSITORY: ${{ github.repository }}
+  DOMAIN: app.agentrehub.com
+  ENV: ${{ startsWith(github.ref, 'refs/heads/release/') && 'pre' || startsWith(github.ref, 'refs/heads/test/') && 'test' || github.ref=='refs/heads/main' && 'prod' }}
+  GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
+  NPM_REGISTRY: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
+  # 三个基础镜像各自一个完整地址，而不是共用一个前缀——distroless 与 node/golang
+  # 不同源，拼前缀拼不出来。未配置时回落到上游地址。
+  NODE_IMAGE: ${{ secrets.NODE_IMAGE && secrets.NODE_IMAGE || 'node:22-alpine' }}
+  GO_IMAGE: ${{ secrets.GO_IMAGE && secrets.GO_IMAGE || 'golang:1.26-alpine' }}
+  RUNTIME_IMAGE: ${{ secrets.RUNTIME_IMAGE && secrets.RUNTIME_IMAGE || 'gcr.io/distroless/static-debian12' }}
+  TLS_SECRET: ${{ secrets.TLS_SECRET_NAME && secrets.TLS_SECRET_NAME || 'agentrehub-com-tls' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # internal/web/embed.go 用 //go:embed 嵌 dist，而该目录是 gitignore 的。
+      # 干净 checkout 上不先造个占位文件，下面的 lint 和 test 会在**编译期**就失败。
+      # 等价于 Makefile 的 prepare-web-dist——这里展开写是因为不确定 runner 镜像带不带 make。
+      - name: Prepare embedded frontend placeholder
+        run: |
+          mkdir -p internal/web/dist
+          test -f internal/web/dist/index.html || printf '<!doctype html>\n' > internal/web/dist/index.html
+
+      - name: Lint
+        # 上游是 golangci/golangci-lint-action@v8
+        uses: actions/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          # 默认的下载二进制模式要连 GitHub releases，走 goinstall 更稳
+          install-mode: goinstall
+          args: --timeout=10m
+
+      # 前端的 eslint/vitest/e2e 不在这里跑（见 spec 决策 12）：
+      # 前端的类型与构建由镜像构建阶段的 `tsc -b && vite build` 把关，
+      # 完整前端门禁在 GitHub 侧的 ci.yml。
+      - name: Test
+        run: go test ./...
+
+      - name: Set outputs
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        # 上游是 docker/setup-qemu-action@v3
+        uses: actions/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        # 上游是 docker/setup-buildx-action@v3
+        uses: actions/setup-buildx-action@v3
+
+      - name: Login to registry
+        # 上游是 docker/login-action@v3
+        uses: actions/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Docker build and push
+        # 上游是 docker/build-push-action@v6
+        uses: actions/build-push-action@v6
+        with:
+          push: true
+          file: Dockerfile
+          context: .
+          tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:${{ env.ENV }}.${{ steps.vars.outputs.sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # 前端与后端都在镜像内构建，所以内网镜像源必须穿透进构建阶段，
+          # 否则在受限网络下会卡在 corepack / go mod download。
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            GO_IMAGE=${{ env.GO_IMAGE }}
+            RUNTIME_IMAGE=${{ env.RUNTIME_IMAGE }}
+            GOPROXY=${{ env.GOPROXY }}
+            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
+            VERSION=${{ env.ENV }}.${{ steps.vars.outputs.sha_short }}
+            COMMIT=${{ steps.vars.outputs.sha_short }}
+
+      - name: Set up kubeconfig
+        # 上游是 azure/k8s-set-context@v4
+        uses: actions/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+          context: k8s-context
+
+      - name: Set up Helm
+        # 上游是 azure/setup-helm@v4
+        uses: actions/setup-helm@v4
+        with:
+          version: 'v3.13.1'
+
+      - name: Deploy ${{ env.ENV }}
+        env:
+          RELEASE: ${{ env.ENV=='prod' && env.APP_NAME || format('{0}-{1}', env.APP_NAME, env.ENV) }}
+          HOST: ${{ env.ENV=='prod' && env.DOMAIN || format('{0}.{1}', env.ENV, env.DOMAIN) }}
+          RESOURCE_CPU: ${{ env.ENV=='prod' && '500m' || '100m' }}
+          RESOURCE_MEMORY: ${{ env.ENV=='prod' && '512Mi' || '128Mi' }}
+          AUTO_SCALING: ${{ env.ENV=='prod' && 'true' || 'false' }}
+          AUTO_SCALING_MIN_REPLICAS: ${{ env.ENV=='prod' && '2' || '1' }}
+          ETCD_PASSWORD: ${{ secrets.ETCD_CONFIG_PASSWORD }}
+        run: |
+          helm upgrade --install "$RELEASE" ./deploy/helm \
+            --namespace "$NAMESPACE" --create-namespace \
+            --set image.repository="$REGISTRY/$REPOSITORY" \
+            --set image.tag="${ENV}.${{ steps.vars.outputs.sha_short }}" \
+            --set appConfig.env="$ENV" \
+            --set etcdConfig.password="$ETCD_PASSWORD" \
+            --set ingress.host="$HOST" \
+            --set ingress.tlsSecretName="$TLS_SECRET" \
+            --set resources.requests.cpu="$RESOURCE_CPU" \
+            --set resources.requests.memory="$RESOURCE_MEMORY" \
+            --set autoscaling.enabled="$AUTO_SCALING" \
+            --set autoscaling.minReplicas="$AUTO_SCALING_MIN_REPLICAS" \
+            --wait --timeout 5m

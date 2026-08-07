@@ -1,0 +1,93 @@
+# agentre-server 的默认 values。
+# 环境相关的值（镜像 tag、域名、资源、HPA 开关）由 .gitea/workflows/deploy.yaml
+# 在 helm upgrade 时用 --set 覆盖；这里的默认值对应生产。
+
+replicaCount: 1
+
+image:
+  repository: agentre-hub/agentre-server
+  pullPolicy: IfNotPresent
+  # 留空则回落到 Chart.appVersion；流水线一律传 <env>.<短 commit>
+  tag: ""
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# 引导配置。这四个键会原样渲染进 ConfigMap 挂到 /app/configs/config.yaml，
+# 缺任何一个都会让 Pod CrashLoop——cago 读不到键时会试图写回配置文件，
+# 而 subPath 挂载的 ConfigMap 是只读的。业务配置全部在 etcd 里。
+appConfig:
+  # 小写。cago 用它拼 etcd 前缀，且 pkg/component/core.go 用 env != "prod"
+  # 决定是否暴露 /swagger——写成大写 PROD 会把 swagger 暴露到线上。
+  env: prod
+  debug: false
+
+etcdConfig:
+  endpoints:
+    - etcd-config.core.svc.cluster.local:2379
+  prefix: /config
+  username: root
+  # 由流水线从 secrets 传入，不写进仓库
+  password: ""
+
+serviceAccount:
+  create: false
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+# 镜像里已经是 nonroot 用户跑，这里把只读根文件系统也加上。
+# 服务不写盘（日志只走 stdout），所以不需要任何可写卷。
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+
+# 容器实际监听端口，与 etcd 里 http.address 的 0.0.0.0:8443 必须一致
+containerPort: 8443
+
+ingress:
+  enabled: true
+  className: k3s-main-nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+  # host 与 tlsSecretName 都是标量，不是列表。
+  # 用列表的话流水线得写 --set ingress.tls[0].hosts[0]=...，而 helm 的 --set 打到
+  # 列表下标时是**替换整个元素**而不是与 values 里的默认值合并——实测那样会把
+  # secretName 冲成空，Ingress 于是带着一个没有 secret 的 TLS 块，nginx 回落到
+  # 自签证书，且不报任何错。标量没有这个坑。
+  # 反正同一个二进制既发 SPA 又发 /v1，本来就只需要一条根规则。
+  host: app.agentrehub.com
+  # 置空则不生成 TLS 块（例如还没签证书的测试环境）
+  tlsSecretName: agentrehub-com-tls
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1024Mi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
