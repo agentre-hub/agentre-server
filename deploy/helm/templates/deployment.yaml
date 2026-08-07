@@ -41,6 +41,16 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
+          # 启动探针单独一个：mux.HTTP 是 cmd/server/main.go 里最后注册的组件，
+          # 迁移和 etcd 取配置都跑完才开始监听，此前端口是拒连的。没有 startupProbe
+          # 的话存活探针会在迁移还没跑完时就把 Pod 杀掉，变成起不来的循环。
+          # 这里给到 30×5s=150s 的启动预算，之后才交给存活探针。
+          startupProbe:
+            httpGet:
+              path: /v1/healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
           # /v1/healthz 在 DB/Redis 不通时仍然返回 200，只把 db_ping/redis 置 false
           # （internal/controller/healthz_ctr/healthz.go）。就绪探针因此不会被下游抖动
           # 带下线——这是有意沿用的行为，要改得先改控制器。

@@ -66,8 +66,10 @@ jobs:
       # 前端的 eslint/vitest/e2e 不在这里跑（见 spec 决策 12）：
       # 前端的类型与构建由镜像构建阶段的 `tsc -b && vite build` 把关，
       # 完整前端门禁在 GitHub 侧的 ci.yml。
+      # 与 Makefile 的 test-backend 同一条命令（含 -race）。少了 -race 这里就比
+      # 本地和 GitHub 侧的门禁松，竞态问题会漏到镜像里。
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Set outputs
         id: vars
@@ -135,16 +137,20 @@ jobs:
           AUTO_SCALING_MIN_REPLICAS: ${{ env.ENV=='prod' && '2' || '1' }}
           ETCD_PASSWORD: ${{ secrets.ETCD_CONFIG_PASSWORD }}
         run: |
+          # 字符串一律走 --set-string：--set 会做类型推断，纯数字的 etcd 密码会变成
+          # 整数、值恰好是 true/false 的会变成布尔，"1" 这样的 cpu 配额也会变成整数。
+          # 布尔与整数才用 --set。
+          # 注意 helm 的 --set/--set-string 都按逗号切分，所以 etcd 密码里不能有逗号。
           helm upgrade --install "$RELEASE" ./deploy/helm \
             --namespace "$NAMESPACE" --create-namespace \
-            --set image.repository="$REGISTRY/$REPOSITORY" \
-            --set image.tag="${ENV}.${{ steps.vars.outputs.sha_short }}" \
-            --set appConfig.env="$ENV" \
-            --set etcdConfig.password="$ETCD_PASSWORD" \
-            --set ingress.host="$HOST" \
-            --set ingress.tlsSecretName="$TLS_SECRET" \
-            --set resources.requests.cpu="$RESOURCE_CPU" \
-            --set resources.requests.memory="$RESOURCE_MEMORY" \
+            --set-string image.repository="$REGISTRY/$REPOSITORY" \
+            --set-string image.tag="${ENV}.${{ steps.vars.outputs.sha_short }}" \
+            --set-string appConfig.env="$ENV" \
+            --set-string etcdConfig.password="$ETCD_PASSWORD" \
+            --set-string ingress.host="$HOST" \
+            --set-string ingress.tlsSecretName="$TLS_SECRET" \
+            --set-string resources.requests.cpu="$RESOURCE_CPU" \
+            --set-string resources.requests.memory="$RESOURCE_MEMORY" \
             --set autoscaling.enabled="$AUTO_SCALING" \
             --set autoscaling.minReplicas="$AUTO_SCALING_MIN_REPLICAS" \
             --wait --timeout 5m

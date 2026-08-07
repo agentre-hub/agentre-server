@@ -46,6 +46,8 @@ podSecurityContext: {}
 securityContext:
   readOnlyRootFilesystem: true
   allowPrivilegeEscalation: false
+  # 镜像里 USER 已经写成数字 65532，k8s 才校验得了这一条
+  runAsNonRoot: true
   capabilities:
     drop:
       - ALL

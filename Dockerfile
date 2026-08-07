@@ -47,5 +47,9 @@ COPY --from=go /out/server /app/server
 # 占位配置，实际部署时由 ConfigMap 以 subPath 覆盖同一路径
 COPY configs/config.example.yaml /app/configs/config.yaml
 EXPOSE 8443
-USER nonroot:nonroot
+# 写数字 uid 而不是 nonroot 这个名字：k8s 的 runAsNonRoot 校验读的是镜像元数据里的
+# USER，遇到非数字的名字它无法确认是不是 root，会直接拒绝启动容器
+# （"container has runAsNonRoot and image has non-numeric user"）。
+# 65532 就是 distroless 的 nonroot。
+USER 65532:65532
 ENTRYPOINT ["/app/server"]
