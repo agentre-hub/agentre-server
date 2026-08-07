@@ -86,14 +86,17 @@ func newDeviceTestServer(t *testing.T, stub *stubDeviceSvc) (*httptest.Server, *
 	return server, signer
 }
 
-func newSessionCookie(t *testing.T, userID int64) *http.Cookie {
+// newSessionCookie 返回会话 cookie 及其配套的 CSRF token —— 浏览器 session 的
+// 写操作必须同时出示两者（middleware.CSRF 的既有约定）。
+func newSessionCookie(t *testing.T, userID int64) (*http.Cookie, string) {
 	t.Helper()
-	sid, _, err := auth_svc.Default().StartSession(context.Background(), userID)
+	sid, sess, err := auth_svc.Default().StartSession(context.Background(), userID)
 	require.NoError(t, err)
-	return &http.Cookie{Name: testCookieName, Value: sid}
+	return &http.Cookie{Name: testCookieName, Value: sid}, sess.CSRFToken
 }
 
-func doRequest(t *testing.T, method, url, cookie, bearer, body string) *http.Response {
+// doRequest 的可选第 6 个参数是 X-CSRF-Token 头；不传即不带该头。
+func doRequest(t *testing.T, method, url, cookie, bearer, body string, csrf ...string) *http.Response {
 	t.Helper()
 	var reader *strings.Reader
 	if body == "" {
@@ -108,6 +111,9 @@ func doRequest(t *testing.T, method, url, cookie, bearer, body string) *http.Res
 	}
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	if len(csrf) > 0 && csrf[0] != "" {
+		req.Header.Set("X-CSRF-Token", csrf[0])
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -127,7 +133,7 @@ func deviceListBody() []api_device.ListDevicesItem {
 func TestListDevices_WorksForBrowserSession(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
 	server, _ := newDeviceTestServer(t, stub)
-	cookie := newSessionCookie(t, 7)
+	cookie, _ := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices", cookie.Value, "", "")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -148,10 +154,10 @@ func TestListDevices_WorksForBrowserSession(t *testing.T) {
 func TestRevoke_WorksForBrowserSession_OwnedDevice(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
 	server, _ := newDeviceTestServer(t, stub)
-	cookie := newSessionCookie(t, 7)
+	cookie, csrf := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
-		cookie.Value, "", `{"device_id":1}`)
+		cookie.Value, "", `{"device_id":1}`, csrf)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, []int64{1}, stub.revoked)
 }
@@ -160,12 +166,41 @@ func TestRevoke_WorksForBrowserSession_OwnedDevice(t *testing.T) {
 func TestRevoke_ForBrowserSession_RejectsForeignDevice(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
 	server, _ := newDeviceTestServer(t, stub)
-	cookie := newSessionCookie(t, 7)
+	cookie, csrf := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
-		cookie.Value, "", `{"device_id":99}`)
+		cookie.Value, "", `{"device_id":99}`, csrf)
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	require.Empty(t, stub.revoked)
+}
+
+// 设备管理页把 /v1/oauth/token/revoke 变成了第一个「带 cookie 就能调」的写端点。
+// 浏览器 session 的写操作一律要过 CSRF（router.go 的 SessionAuth()+CSRF() 组:
+// logout / approve / deny 都是如此），撤销设备不能是例外 —— 否则任意站点都能
+// 用用户挂着的会话把他的设备踢下线。
+func TestRevoke_ForBrowserSession_RejectsMissingCSRFToken(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server, _ := newDeviceTestServer(t, stub)
+	cookie, _ := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
+		cookie.Value, "", `{"device_id":1}`)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.Empty(t, stub.revoked)
+}
+
+// 反过来：Bearer 设备 JWT 不带 cookie，结构上就不受 CSRF 威胁，
+// 桌面端登出（server_svc/logout.go）不出示 CSRF 头也必须照常工作。
+func TestRevoke_DeviceJWT_NeedsNoCSRFToken(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server, signer := newDeviceTestServer(t, stub)
+	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 1, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
+		"", token, `{"device_id":1}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, []int64{1}, stub.revoked)
 }
 
 // 设备 JWT 调用方仍然只能撤销自己（既有行为不变）。
@@ -231,7 +266,7 @@ func TestRevocations_ReturnsRevokedJTIList_UnderDeviceJWT(t *testing.T) {
 func TestRevocations_RejectsBrowserSessionOnly(t *testing.T) {
 	stub := &stubDeviceSvc{revokedJTI: []string{"jti-revoked-1"}}
 	server, _ := newDeviceTestServer(t, stub)
-	cookie := newSessionCookie(t, 7)
+	cookie, _ := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", cookie.Value, "", "")
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)

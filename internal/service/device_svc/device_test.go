@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
+	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/smartystreets/goconvey/convey"
@@ -231,6 +232,39 @@ func TestRevoke(t *testing.T) {
 				convey.So(gerr, convey.ShouldBeNil)
 				convey.So(v, convey.ShouldEqual, "1")
 			}
+		})
+
+		// R19「解除授权」的可观察后果：撤销后该设备无法再刷新。黑名单只覆盖已签发
+		// access token 的 AccessTTL 窗口，真正让设备回不来的是 devices 行被置为
+		// 已撤销后 Refresh 的这道判定 —— 少了它，撤销一台设备只是让它等 15 分钟。
+		convey.Convey("撤销后该设备手上未过期的 refresh token 也换不到新凭据", func() {
+			testutils.Redis()
+			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+			dev := &device_entity.Device{ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Status: consts.ACTIVE}
+
+			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
+			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).DoAndReturn(
+				func(_ context.Context, _, _ int64) error {
+					dev.Status = consts.DELETE // device_repo.Revoke 的落库效果
+					return nil
+				},
+			)
+			convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
+
+			// refresh token 本身既没被重放也没过期，唯一变的是设备已被解除授权。
+			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+				&device_token_entity.DeviceToken{
+					ID: 1, DeviceID: 42,
+					RefreshExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+				}, nil,
+			)
+			mD.EXPECT().Find(gomock.Any(), int64(42)).Return(dev, nil)
+
+			_, err := svc.Refresh(ctx, "still-unexpired")
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err.Error(), convey.ShouldContainSubstring, "invalid_grant")
+			convey.So(err.Error(), convey.ShouldContainSubstring, "device revoked")
 		})
 	})
 }
