@@ -39,8 +39,7 @@
       "oauth_exchange_failed": "GitHub OAuth exchange failed. Retry later, or check the GitHub OAuth App settings.",
       "oauth_profile_failed": "Could not fetch your GitHub profile.",
       "github_email_missing": "Set a verified primary email in your GitHub settings, then try again.",
-      "access_denied": "You cancelled the GitHub authorization.",
-      "user_banned": "This account is banned. Please contact an administrator."
+      "access_denied": "You cancelled the GitHub authorization."
     }
   },
   "device": {

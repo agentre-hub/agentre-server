@@ -16,14 +16,18 @@ import AuthLayout from "@/components/AuthLayout";
  */
 const ERR_CODE_SHAPE = /^[a-z][a-z0-9_]{0,63}$/;
 
-/** 后端 err query 参数 → i18n key 后缀。未收录但成形状的码原样透出。 */
-const KNOWN_ERRORS = [
+/**
+ * 后端 err query 参数 → i18n key 后缀。未收录但成形状的码原样透出。
+ *
+ * 导出是为了让 __tests__/login-error-contract.test.ts 拿它去和 auth_ctr 的
+ * 重定向逐条比对——这份清单与后端各存一份，没有守卫就会悄悄分叉。
+ */
+export const KNOWN_ERRORS = [
   "oauth_state_invalid",
   "oauth_exchange_failed",
   "oauth_profile_failed",
   "github_email_missing",
   "access_denied",
-  "user_banned",
 ] as const;
 
 export default function Login() {

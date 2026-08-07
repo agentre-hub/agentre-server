@@ -39,8 +39,7 @@
       "oauth_exchange_failed": "GitHub OAuth 兑换失败，请稍后重试或检查 GitHub OAuth App 配置。",
       "oauth_profile_failed": "无法获取 GitHub 用户信息。",
       "github_email_missing": "请在 GitHub 设置中将主邮箱设为已验证后重试。",
-      "access_denied": "你取消了 GitHub 授权。",
-      "user_banned": "账户已被封禁，请联系管理员。"
+      "access_denied": "你取消了 GitHub 授权。"
     }
   },
   "device": {

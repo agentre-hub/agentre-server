@@ -119,6 +119,7 @@ They live next to what they guard, plus `internal/guards/` for repo-wide ones.
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token and i18n rules fire, at error severity, over `src/` |
 | `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
 | `frontend/src/__tests__/user-code-contract.test.ts` | `lib/userCode.ts`'s alphabet and length still match `internal/pkg/usercode` |
+| `frontend/src/__tests__/login-error-contract.test.ts` | `Login.tsx`'s `KNOWN_ERRORS` still matches the `/login?err=` values `auth_ctr` redirects with, and each has copy in both locales |
 | `frontend/src/i18n/__tests__/locale-parity.test.ts` | Every locale has exactly the same keys |
 | `frontend/src/i18n/__tests__/language-switch.test.ts` | Switching language actually changes the copy |
 
