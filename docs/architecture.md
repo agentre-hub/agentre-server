@@ -179,18 +179,26 @@ once two replicas can run it concurrently: both can read the same "not yet done"
 both proceed. Put the condition in the `UPDATE`'s `WHERE` clause instead, and check
 `RowsAffected` to learn whether *this* call was the one that changed the row — don't just
 check the returned error. See `internal/repository/device_flow_repo/device_flow.go`'s
-`MarkConsumed` (`WHERE device_code=? AND consumed_at=0`) and `Approve`/`Deny`, and
-`internal/repository/device_token_repo/device_token.go`'s `Revoke` (`WHERE id=? AND
-revoked_at=0`): all four return `(int64, error)` so the *service*, not the repository,
-decides what a lost race means — `internal/service/device_svc/device.go`'s
+`MarkConsumed` (`WHERE device_code=? AND consumed_at=0 AND denied_at=0`) and
+`Approve`/`Deny`, and `internal/repository/device_token_repo/device_token.go`'s `Revoke`
+(`WHERE id=? AND revoked_at=0`): all four return `(int64, error)` so the *service*, not the
+repository, decides what a lost race means — `internal/service/device_svc/device.go`'s
 `ExchangeToken`, `Refresh`, `Approve` and `Deny` each check `n != 1` and turn a lost race
-into the right error for that call.
+into the right error for that call. The `WHERE` clause has to spell out *every* state that
+makes the write wrong, not just the one the caller was racing: `MarkConsumed` carries
+`denied_at=0` as well, because the entity check it backs up (`flow.IsDenied()`) runs before
+the transaction and a "deny" committed in that gap would otherwise still hand the device a
+token.
 
-Inside a transaction, put that conditional `UPDATE` **first**, before any write that depends
-on winning. `ExchangeToken` marks the flow consumed before it upserts the device: a loser
-that got as far as `device_repo.Upsert` — itself a find-then-create — would insert the same
-`(user_id, fingerprint)` as the winner, hit `uk_devices_user_fingerprint`, and surface a
-duplicate-key 500 instead of the `invalid_grant` a lost race is supposed to produce.
+A write with no conditional `UPDATE` to hang the decision on needs the database to arbitrate
+some other way. `device_repo.Upsert` is a single `INSERT … ON CONFLICT ("user_id",
+"fingerprint") DO UPDATE`, not a find-then-create, so two exchanges for the same device
+converge on one row instead of racing to a `uk_devices_user_fingerprint` duplicate-key 500.
+
+Inside a transaction, put the conditional `UPDATE` **first**, before any write that depends
+on winning: `ExchangeToken` marks the flow consumed before it touches `devices`, and
+`Refresh` revokes the old token before it inserts the new one. A loser then writes nothing
+at all, rather than emitting rows that only the rollback takes back out.
 
 **Adding a scheduled task.** cago's cron (`cron.Cron()`, registered in
 `cmd/server/main.go`) is an in-process `robfig/cron` with no leader election — every

@@ -59,12 +59,15 @@ func TestDeny(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMarkConsumed_RequiresUnconsumedRow(t *testing.T) {
+// 条件里必须同时有 consumed_at=0 和 denied_at=0，与 Approve / Deny 的条件集一致：
+// 只有 consumed_at=0 的话，用户点「拒绝」的事务先提交、设备的换取事务随后跑这条
+// UPDATE，denied_at 已经不为 0 却照样命中 1 行——用户明明拒绝了，设备还是拿到 token。
+func TestMarkConsumed_RequiresUnsettledRow(t *testing.T) {
 	ctx, _, mock := hubtest.DatabasePG(t)
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		`UPDATE "device_flow_codes" SET "consumed_at"=$1 WHERE device_code=$2 AND consumed_at=0`,
+		`UPDATE "device_flow_codes" SET "consumed_at"=$1 WHERE device_code=$2 AND consumed_at=0 AND denied_at=0`,
 	)).WithArgs(int64(1000), "dc-x").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -75,13 +78,13 @@ func TestMarkConsumed_RequiresUnconsumedRow(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 行已被并发请求消费时 UPDATE 命中 0 行，行数原样透传给 service。
-func TestMarkConsumed_ReturnsZeroRowsWhenAlreadyConsumed(t *testing.T) {
+// 行已被并发请求消费（或拒绝）时 UPDATE 命中 0 行，行数原样透传给 service。
+func TestMarkConsumed_ReturnsZeroRowsWhenAlreadySettled(t *testing.T) {
 	ctx, _, mock := hubtest.DatabasePG(t)
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		`UPDATE "device_flow_codes" SET "consumed_at"=$1 WHERE device_code=$2 AND consumed_at=0`,
+		`UPDATE "device_flow_codes" SET "consumed_at"=$1 WHERE device_code=$2 AND consumed_at=0 AND denied_at=0`,
 	)).WithArgs(int64(1000), "dc-x").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()

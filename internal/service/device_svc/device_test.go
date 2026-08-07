@@ -149,10 +149,8 @@ func TestExchangeToken(t *testing.T) {
 			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
 			// 赢家已经把这一行标为 consumed，竞败方的 UPDATE 一行也改不到
 			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(0), nil)
-			// 消费判定必须排在写 devices 之前：Upsert 是先查后写，两个并发请求
-			// 同时走到这里会双双 INSERT 同一 (user_id, fingerprint)，撞上
-			// uk_devices_user_fingerprint 唯一索引——竞败方拿到的就成了一个
-			// 唯一约束错误（映射成 500），而不是约定的 invalid_grant。
+			// 消费判定必须排在写 devices / device_tokens 之前：竞败方在这里出局，
+			// 一行也不写，不必靠回滚去擦掉已经落到 WAL 上的设备行和 token 行。
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).Times(0)
 			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Times(0)
 

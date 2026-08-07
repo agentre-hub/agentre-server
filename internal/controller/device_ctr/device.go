@@ -137,7 +137,7 @@ func oauthErrToHTTP(c *gin.Context, err error) error {
 		status, biz = http.StatusForbidden, code.DeviceFlowAccessDenied
 	case device_svc.ErrInvalidGrant:
 		status, biz = http.StatusBadRequest, code.DeviceFlowInvalidGrant
-	case "user_code_invalid":
+	case device_svc.ErrUserCodeInvalid:
 		status, biz = http.StatusBadRequest, code.DeviceFlowUserCodeInvalid
 	default:
 		status, biz = http.StatusBadRequest, code.OperationFailed

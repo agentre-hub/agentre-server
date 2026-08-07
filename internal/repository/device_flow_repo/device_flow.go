@@ -74,10 +74,13 @@ func (r *repo) Deny(ctx context.Context, uc string, nowMs int64) (int64, error) 
 	return res.RowsAffected, res.Error
 }
 
-// MarkConsumed 的 consumed_at=0 条件让并发换取只有一个请求改到行。
+// MarkConsumed 的 consumed_at=0 条件让并发换取只有一个请求改到行；denied_at=0 与
+// Approve / Deny 的条件集对齐：service 里的 IsDenied() 只是抢跑检查，用户点「拒绝」
+// 的事务若在那之后才提交，少了这个条件的 UPDATE 照样命中 1 行，设备就在用户明确
+// 拒绝之后仍然拿到了 token。
 func (r *repo) MarkConsumed(ctx context.Context, dc string, nowMs int64) (int64, error) {
 	res := db.Ctx(ctx).Model(&device_flow_entity.DeviceFlowCode{}).
-		Where("device_code=? AND consumed_at=0", dc).
+		Where("device_code=? AND consumed_at=0 AND denied_at=0", dc).
 		Update("consumed_at", nowMs)
 	return res.RowsAffected, res.Error
 }
