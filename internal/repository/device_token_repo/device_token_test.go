@@ -41,8 +41,12 @@ func TestCreate(t *testing.T) {
 	ctx, _, mock := hubtest.DatabasePG(t)
 	r := NewDeviceToken()
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO "device_tokens"`)).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
+	// R4 整条链路都挂在 access_jti 真的被写进去上（Revoke 拉黑它、吊销列表分发它）。
+	// 十个 AnyArg 的期望连列名都不看，删掉 AccessJTI 字段照样绿，所以这里把列名和
+	// 那一列的值都钉死。
+	mock.ExpectQuery(regexp.QuoteMeta(
+		`INSERT INTO "device_tokens" ("device_id","refresh_token_hash","access_jti"`)).
+		WithArgs(int64(42), "h", "jti-1", sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(99)))

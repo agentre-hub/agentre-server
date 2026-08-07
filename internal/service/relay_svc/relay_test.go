@@ -129,6 +129,47 @@ func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
 	}
 }
 
+// PrepareDaemon 是 /v1/relay/daemon 唯一的准入判据：只有本账号名下、活跃的
+// agentred 设备才能把自己登记成中转目标。没有这几条，一个 desktop 端的 device JWT
+// 就能冒充计算节点占住这个账号+指纹的中继路由，或者拿别人账号下的 deviceID 登记。
+// 这些守卫此前一条测试都没有，整段删掉全绿。
+func TestPrepareDaemonRejectsAnythingButThisAccountsActiveAgentred(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("非 agentred 设备种类", func(t *testing.T) {
+		svc, _, _ := newRelayForTest(t, fakeForwarder{})
+		// kind 在读库之前就被拒，连 Find 都不该发生（devices mock 没有 EXPECT）。
+		_, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindDesktop)
+		require.ErrorIs(t, err, ErrDaemonForbidden)
+	})
+
+	t.Run("deviceID 属于别的账号", func(t *testing.T) {
+		svc, _, devices := newRelayForTest(t, fakeForwarder{})
+		other := activeDaemon()
+		other.UserID = 8 // 调用方 JWT 里的账号是 7
+		devices.EXPECT().Find(gomock.Any(), int64(9)).Return(other, nil)
+		_, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+		require.ErrorIs(t, err, ErrDaemonForbidden)
+	})
+
+	t.Run("设备已被撤销", func(t *testing.T) {
+		svc, _, devices := newRelayForTest(t, fakeForwarder{})
+		revoked := activeDaemon()
+		revoked.Status = 2
+		devices.EXPECT().Find(gomock.Any(), int64(9)).Return(revoked, nil)
+		_, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+		require.ErrorIs(t, err, ErrDaemonForbidden)
+	})
+
+	t.Run("本账号活跃的 agentred 才放行", func(t *testing.T) {
+		svc, _, devices := newRelayForTest(t, fakeForwarder{})
+		devices.EXPECT().Find(gomock.Any(), int64(9)).Return(activeDaemon(), nil)
+		route, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+		require.NoError(t, err)
+		require.Equal(t, Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}, route)
+	})
+}
+
 func TestUnwrapEnvelopeRejectsNonUTF8ChannelID(t *testing.T) {
 	_, _, err := unwrapEnvelope([]byte{0, 1, 0xff})
 	require.Error(t, err)
@@ -261,6 +302,43 @@ func TestRedisForwarderWaitsForRemoteDeliveryAcknowledgement(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("forward did not return after delivery acknowledgement")
+	}
+}
+
+// 消费循环的生命周期是「本实例还有 websocket 附着在这条 stream 上」，由 detach
+// 结束——不是「Redis 一次都没抖过」。一次瞬时 Redis 故障（主从切换 / LOADING /
+// 读超时）让消费 goroutine 退出，而 f.consumers[stream] 里那条 cancel 还在，
+// startConsumerLocked 因此再也不会重启它：daemon 的 websocket 还连着、Check 仍然
+// 通过、客户端照常接入，但跨实例来的帧从此没有任何人消费，每一帧都只能等到 5s
+// 投递超时。恢复后必须自愈。
+func TestRedisForwarderConsumerRecoversFromTransientRedisFailure(t *testing.T) {
+	mini := miniredis.RunT(t)
+	clientA := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, clientA.Close()) })
+	t.Cleanup(func() { require.NoError(t, clientB.Close()) })
+	configA := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarderA := NewRedisForwarder(configA, clientA)
+	forwarderB := NewRedisForwarder(configB, clientB)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configB.InstanceID}
+	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+
+	detach, err := forwarderB.(AttachmentForwarder).Attach(context.Background(), route, PeerDaemon, "", writer)
+	require.NoError(t, err)
+	t.Cleanup(detach)
+
+	// daemon 的 websocket 全程没动过，只有 Redis 抖了一下。
+	mini.SetError("LOADING Redis is loading the dataset in memory")
+	time.Sleep(300 * time.Millisecond)
+	mini.SetError("")
+
+	require.NoError(t, forwarderA.Forward(context.Background(), route, PeerClient, "", 2, []byte("after-outage")))
+	select {
+	case received := <-writer.frames:
+		require.Equal(t, []byte("after-outage"), received.frame)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the frame-bus consumer never came back after the Redis outage")
 	}
 }
 

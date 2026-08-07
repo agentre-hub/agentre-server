@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,10 +21,10 @@ import (
 	"agentre-server/internal/api"
 	api_device "agentre-server/internal/api/device"
 	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/middleware"
 	"agentre-server/internal/model/entity/device_entity"
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/jwt/testkeys"
+	"agentre-server/internal/pkg/jwtblacklist"
 	"agentre-server/internal/pkg/session"
 	"agentre-server/internal/service/auth_svc"
 	"agentre-server/internal/service/device_svc"
@@ -58,8 +59,16 @@ func (s *stubDeviceSvc) Revoke(_ context.Context, deviceID int64) error {
 	s.revoked = append(s.revoked, deviceID)
 	return nil
 }
-func (s *stubDeviceSvc) ListUserDevices(context.Context, int64, int64) ([]api_device.ListDevicesItem, error) {
-	return s.userDevices, nil
+
+// ListUserDevices 必须真的用上 callerDeviceID：这是「把自己标记出来」的唯一入口，
+// 丢掉它的桩会让 controller 停止转发 device_id 也照样测绿。
+func (s *stubDeviceSvc) ListUserDevices(_ context.Context, _ int64, callerDeviceID int64) ([]api_device.ListDevicesItem, error) {
+	out := make([]api_device.ListDevicesItem, len(s.userDevices))
+	copy(out, s.userDevices)
+	for i := range out {
+		out[i].IsThisDevice = out[i].ID == callerDeviceID
+	}
+	return out, nil
 }
 func (s *stubDeviceSvc) ListRevokedJTI(context.Context, int64) ([]string, error) {
 	return s.revokedJTI, nil
@@ -231,7 +240,19 @@ func TestListDevices_DeviceJWT_StillWorks(t *testing.T) {
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices", "", token, "")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, int64(2), stub.userDevices[1].ID)
+
+	var envelope struct {
+		Data struct {
+			Devices []api_device.ListDevicesItem `json:"devices"`
+		} `json:"data"`
+	}
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(body, &envelope))
+	require.Len(t, envelope.Data.Devices, 2)
+	// 调用方的 DID=2 —— 只有第二行是「本设备」，controller 必须把 device_id 转发下去。
+	assert.False(t, envelope.Data.Devices[0].IsThisDevice)
+	assert.True(t, envelope.Data.Devices[1].IsThisDevice)
 }
 
 // (a) 端点在 device JWT 鉴权下按 R4 任务 interfaces 里定死的信封形状
@@ -280,7 +301,7 @@ func TestRevocations_RejectsRevokedCallerDevice(t *testing.T) {
 	server, signer := newDeviceTestServer(t, stub)
 	token, jti, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
 	require.NoError(t, err)
-	require.NoError(t, middleware.Blacklist(context.Background(), jti, 3600))
+	require.NoError(t, jwtblacklist.Add(context.Background(), jti, 3600))
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", "", token, "")
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"agentre-server/internal/api"
 	"agentre-server/internal/bootstrap"
 	"agentre-server/internal/model/entity/device_entity"
+	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/jwt/testkeys"
 	"agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -31,6 +33,7 @@ import (
 
 type relayStub struct {
 	daemonRoute  relay_svc.Route
+	daemonErr    error
 	clientErr    error
 	registered   chan struct{}
 	renewed      chan struct{}
@@ -39,6 +42,9 @@ type relayStub struct {
 }
 
 func (s *relayStub) PrepareDaemon(context.Context, int64, int64, string) (relay_svc.Route, error) {
+	if s.daemonErr != nil {
+		return relay_svc.Route{}, s.daemonErr
+	}
 	return s.daemonRoute, nil
 }
 
@@ -141,7 +147,10 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte("heartbeat")))
+	// 真实的 ForwardDaemon 只收二进制信封（relay_svc.ForwardDaemon 会拒绝其它一切），
+	// 所以这里必须发一个 production 真会发出的帧，而不是桩恰好也肯收的文本。
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
+		relayEnvelope("channel-id", []byte(`{"jsonrpc":"2.0"}`))))
 
 	select {
 	case <-stub.renewed:
@@ -162,6 +171,45 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	case <-stub.clientFrames:
 	case <-time.After(time.Second):
 		t.Fatal("client frame did not reach the forwarding seam")
+	}
+}
+
+// PrepareDaemon 的准入判据（本账号名下、活跃的 agentred）被拒时必须走 403，而且
+// 必须**在 websocket upgrade 之前**答复：一个 desktop 端的 device JWT 拿不到升级后
+// 的连接，也就没机会占住这个账号+指纹的中继路由。403 这一支此前没有任何测试。
+func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
+	require.NoError(t, err)
+
+	stub := &relayStub{
+		daemonErr: relay_svc.ErrDaemonForbidden, registered: make(chan struct{}, 1),
+		renewed: make(chan struct{}, 1), daemonFrames: make(chan struct{}, 1),
+		clientFrames: make(chan struct{}, 1),
+	}
+	testMux := muxtest.NewTestMux()
+	require.NoError(t, (&api.RouterDeps{
+		Cfg: &bootstrap.ServerConfig{}, Signer: signer, Relay: stub,
+	}).Router(context.Background(), testMux.Router))
+	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
+	t.Cleanup(server.Close)
+
+	_, response, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"),
+		http.Header{"Authorization": {"Bearer " + token}})
+	require.Error(t, err, "a forbidden daemon must never get an upgraded connection")
+	require.NotNil(t, response)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusForbidden, response.StatusCode)
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"code":`+strconv.Itoa(code.Forbidden))
+	select {
+	case <-stub.registered:
+		t.Fatal("a forbidden daemon registered an online route")
+	default:
 	}
 }
 

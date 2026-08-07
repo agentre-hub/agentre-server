@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwtblacklist"
 	"agentre-server/internal/service/auth_svc"
 )
 
@@ -23,7 +24,7 @@ func SessionOrDeviceAuth(signer *jwt.Signer) gin.HandlerFunc {
 				abortUnauthorized(c)
 				return
 			}
-			if isBlacklisted(c.Request.Context(), claims.JTI) {
+			if jwtblacklist.Has(c.Request.Context(), claims.JTI) {
 				abortUnauthorized(c)
 				return
 			}

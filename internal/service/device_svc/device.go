@@ -17,12 +17,12 @@ import (
 	"gorm.io/gorm"
 
 	api "agentre-server/internal/api/device"
-	"agentre-server/internal/middleware"
 	"agentre-server/internal/model/entity/device_entity"
 	"agentre-server/internal/model/entity/device_flow_entity"
 	"agentre-server/internal/model/entity/device_token_entity"
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwtblacklist"
 	"agentre-server/internal/pkg/usercode"
 	"agentre-server/internal/repository/device_flow_repo"
 	"agentre-server/internal/repository/device_repo"
@@ -391,7 +391,7 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	// Redis 不可用时不让 DB 侧吊销失败——黑名单本身 fail-open（spec §6.5）。
 	ttlSec := int(s.cfg.AccessTTL / time.Second)
 	for _, jti := range jtis {
-		_ = middleware.Blacklist(ctx, jti, ttlSec)
+		_ = jwtblacklist.Add(ctx, jti, ttlSec)
 	}
 	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
 		return err

@@ -189,20 +189,65 @@ func (f *redisForwarder) startConsumerLocked(stream string) {
 	go f.consume(ctx, stream)
 }
 
+// consume 的生命周期由 startConsumerLocked / detach 的 cancel 界定,**不是**由
+// Redis 的健康程度界定。一次瞬时故障(主从切换 / LOADING / 读超时)若让它 return,
+// f.consumers[stream] 里那条 cancel 仍然在,startConsumerLocked 因此再也不会重启它:
+// daemon 的 websocket 还连着、Check 仍然通过,但跨实例来的帧从此无人消费,每一帧
+// 都只能等到 deliveryWaitTimeout。所以这里退避重试,只在 ctx 结束时才真正退出。
 func (f *redisForwarder) consume(ctx context.Context, stream string) {
+	failures := 0
+	for ctx.Err() == nil {
+		if f.consumeOnce(ctx, stream) {
+			failures = 0
+			continue
+		}
+		if !sleepContext(ctx, consumerRetryDelay(failures)) {
+			return
+		}
+		failures++
+	}
+}
+
+// consumerRetryDelay 是消费循环的重连退避阶梯:抖动通常是秒级的,上限压在
+// deliveryWaitTimeout 以内,恢复后最多耽误一个投递窗口。
+func consumerRetryDelay(failures int) time.Duration {
+	delay := 50 * time.Millisecond
+	for range failures {
+		if delay >= time.Second {
+			return time.Second
+		}
+		delay *= 2
+	}
+	return delay
+}
+
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// consumeOnce 跑一轮消费,返回 false 表示这一轮被 Redis 错误打断、需要退避重试。
+// 重新进入时 pending 从 true 起步,先把本消费者 PEL 里没确认的帧重读一遍。
+func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 	if err := f.redis.XGroupCreateMkStream(ctx, stream, frameBusGroup, "0").Err(); err != nil && !isBusyGroup(err) {
-		return
+		return false
 	}
 	_ = f.redis.Expire(ctx, stream, f.ttl).Err()
 	pending := true
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return true
 		default:
 		}
 		if err := f.redis.Expire(ctx, stream, f.ttl).Err(); err != nil {
-			return
+			return false
 		}
 		start := ">"
 		if pending {
@@ -216,7 +261,7 @@ func (f *redisForwarder) consume(ctx context.Context, stream string) {
 			continue
 		}
 		if err != nil {
-			return
+			return false
 		}
 		for _, result := range streams {
 			for _, message := range result.Messages {

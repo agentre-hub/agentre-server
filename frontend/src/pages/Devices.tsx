@@ -36,6 +36,13 @@ interface DeviceItem {
 
 const ACTIVE = 1;
 
+// 只有 ApiError 才带可展示的服务端文案；其余(代理返回非 JSON 的 502 → SyntaxError、
+// 离线 → TypeError)同样是失败，必须说出来 —— 静默吞掉会让页面渲染成「还没有任何
+// 设备」，而用户名下的设备一台没少。
+function loadErrorText(e: unknown, t: (key: string) => string): string {
+  return e instanceof ApiError ? e.message : t("device.manage.loadError");
+}
+
 function formatLastActive(ms: number): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleString();
@@ -45,7 +52,9 @@ export default function Devices() {
   const { t } = useTranslation();
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // 存住失败本身，渲染时才翻译成文案：effect 里不碰 t，就不必把它拉进依赖数组
+  // （语言切换不该重新拉一次设备列表）。
+  const [loadError, setLoadError] = useState<unknown>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<DeviceItem | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -58,7 +67,7 @@ export default function Devices() {
 
   function applyList(list: DeviceItem[]) {
     setDevices(list);
-    setError(null);
+    setLoadError(null);
   }
 
   useEffect(() => {
@@ -67,8 +76,8 @@ export default function Devices() {
       .then((list) => {
         if (alive) applyList(list);
       })
-      .catch((e) => {
-        if (alive && e instanceof ApiError) setError(e.message);
+      .catch((e: unknown) => {
+        if (alive) setLoadError(e ?? new Error("device list load failed"));
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -102,8 +111,8 @@ export default function Devices() {
     }
     try {
       applyList(await fetchDevices());
-    } catch (e) {
-      if (e instanceof ApiError) setError(e.message);
+    } catch (e: unknown) {
+      setLoadError(e ?? new Error("device list load failed"));
     } finally {
       setSubmitting(false);
     }
@@ -116,11 +125,16 @@ export default function Devices() {
           <h1 className="text-2xl font-semibold">{t("device.manage.title")}</h1>
         </div>
 
-        {error && <Alert variant="destructive">{error}</Alert>}
+        {loadError !== null && (
+          <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
+        )}
 
+        {/* 加载失败时只留上面那条错误：不得改口说「还没有任何设备」——
+            那是一句我们此刻答不上来的断言。 */}
         {loading ? (
           <p className="text-muted-foreground">{t("common.loading")}</p>
-        ) : devices.length === 0 ? (
+        ) : loadError !== null &&
+          devices.length === 0 ? null : devices.length === 0 ? (
           <Card>
             <CardContent className="text-muted-foreground">
               {t("device.manage.empty")}

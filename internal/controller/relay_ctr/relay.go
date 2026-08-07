@@ -35,7 +35,7 @@ func (r *Relay) Daemon(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	detach, err := r.svc.AttachDaemon(c.Request.Context(), route, conn)
 	if err != nil {
 		return
@@ -78,7 +78,7 @@ func (r *Relay) Client(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	channelID, detach, err := r.svc.AttachClient(c.Request.Context(), route, conn)
 	if err != nil {
 		return

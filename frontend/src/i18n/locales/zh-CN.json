@@ -51,6 +51,7 @@
     "manage": {
       "title": "设备管理",
       "empty": "还没有任何设备。你授权过的设备会显示在这里。",
+      "loadError": "无法加载你的设备列表，请重试。",
       "colLastActive": "最近活跃",
       "colStatus": "在线态",
       "statusOnline": "在线",

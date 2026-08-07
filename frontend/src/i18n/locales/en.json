@@ -51,6 +51,7 @@
     "manage": {
       "title": "Devices",
       "empty": "No devices yet. Devices you authorize will appear here.",
+      "loadError": "Could not load your devices. Please try again.",
       "colLastActive": "Last active",
       "colStatus": "Status",
       "statusOnline": "Online",

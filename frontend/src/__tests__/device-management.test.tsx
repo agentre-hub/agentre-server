@@ -132,6 +132,28 @@ describe("device management page", () => {
     expect(screen.getByText("laptop")).toBeTruthy();
   });
 
+  // 列表加载失败必须说出来。只认 ApiError 会让「代理返回非 JSON 的 502」「浏览器离线」
+  // 这类 SyntaxError / TypeError 被静默吞掉，而 finally 照样把 loading 置 false ——
+  // 用户看到的是「还没有任何设备」，而他名下的设备一台没少。
+  it("reports a load failure instead of rendering the empty state", async () => {
+    mockedApi.mockImplementation(async () => {
+      throw new SyntaxError("Unexpected token '<' ... is not valid JSON");
+    });
+
+    render(
+      <MemoryRouter>
+        <Devices />
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("Could not load your devices. Please try again."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/No devices yet\. Devices you authorize/),
+    ).toBeNull();
+  });
+
   it("keeps the device and shows an error when revoke fails", async () => {
     let calls = 0;
     mockedApi.mockImplementation(async (path) => {
@@ -160,5 +182,7 @@ describe("device management page", () => {
         "Could not revoke this device. Please try again.",
       ),
     ).toBeTruthy();
+    // 「keeps the device」这一半也要断言：撤销失败时那一行不能被乐观地移掉。
+    expect(screen.getByText("nuc-01")).toBeTruthy();
   });
 });

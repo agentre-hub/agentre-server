@@ -15,6 +15,7 @@ import (
 	"agentre-server/internal/pkg/code"
 	hubjwt "agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/jwt/testkeys"
+	"agentre-server/internal/pkg/jwtblacklist"
 )
 
 func TestDeviceJWT_Blacklist(t *testing.T) {
@@ -47,7 +48,7 @@ func TestDeviceJWT_Blacklist(t *testing.T) {
 		Convey("blacklisted jti is rejected with JWTBlacklisted", func() {
 			tok, jti, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "agentred"}, time.Hour)
 			So(err, ShouldBeNil)
-			So(middleware.Blacklist(t.Context(), jti, 3600), ShouldBeNil)
+			So(jwtblacklist.Add(t.Context(), jti, 3600), ShouldBeNil)
 
 			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 			req.Header.Set("Authorization", "Bearer "+tok)
