@@ -109,8 +109,8 @@ const COLOR_TOKENS: Array<[string, string, string | null]> = [
 
   // Destructive
   ["--destructive", "#dc2626", "#f87171"],
-  ["--destructive-foreground", "#ffffff", "#fafafa"],
-  ["--destructive-soft", "#fef2f2", "#2a1414"],
+  ["--destructive-foreground", "#ffffff", "#1a0b0c"],
+  ["--destructive-soft", "#fef2f2", "#2a1315"],
 
   // 状态。设计稿里叫 ok / warn / idle / danger，代码沿用桌面端的 status-* 命名
   ["--status-running", "#10b981", "#34d399"],
@@ -121,7 +121,7 @@ const COLOR_TOKENS: Array<[string, string, string | null]> = [
   ["--status-error", "#dc2626", "#f87171"],
 
   // 等宽输出面（命令输出、hook 日志）
-  ["--code-surface", "#f4f4f5", "#121418"],
+  ["--code-surface", "#f4f4f5", "#111316"],
   ["--code-foreground", "#3f3f46", "#e6e8eb"],
   ["--code-muted-foreground", "#71717a", "#9aa0ab"],
 ];
@@ -132,8 +132,22 @@ const COLOR_TOKENS: Array<[string, string, string | null]> = [
  * 根 token 叫 --overlay-shadow 而不是 --shadow-overlay：v4 的阴影命名空间就是
  * --shadow-*，同名会让 @theme 的映射自指。工具类名仍然是 shadow-overlay，
  * 由下面「@theme 映射」那组守着。
+ *
+ * --radius 不在这张表里：圆角三档改成直接声明（见下面「rounded-%s 解析成」），
+ * 不再有一个可供计算的根 token。
  */
-const OTHER_TOKENS = ["--radius", "--overlay-shadow", "--overlay-scrim"];
+const OTHER_TOKENS = ["--overlay-shadow", "--overlay-scrim"];
+
+/**
+ * 圆角尺度：rounded-sm/md/lg 必须精确解析成这三个像素值，而不是随便什么非空值。
+ * calc(var(--radius) ± n) 凑不出 6/10/14 这个非等差关系（design decision 5），
+ * 所以 --radius-* 现在应该是直接声明的字面量，断言也从 toBeTruthy 升级成逐字比。
+ */
+const RADIUS_PX: Array<[string, string]> = [
+  ["sm", "6px"],
+  ["md", "10px"],
+  ["lg", "14px"],
+];
 
 /**
  * Tailwind 工具类命名空间 → token 前缀。
@@ -178,8 +192,8 @@ describe("@theme 映射", () => {
     );
   });
 
-  it.each(["sm", "md", "lg"])("rounded-%s 有对应的 --radius-* ", (step) => {
-    expect(theme[NAMESPACE.radius + step]).toBeTruthy();
+  it.each(RADIUS_PX)("rounded-%s 解析成 %s", (step, px) => {
+    expect(theme[NAMESPACE.radius + step]).toBe(px);
   });
 
   it("shadow-overlay 有对应的 --shadow-*", () => {
@@ -190,6 +204,22 @@ describe("@theme 映射", () => {
     // scrim 是 server 独有的（桌面端没有 Dialog 遮罩这层），
     // token 名 --overlay-scrim 和工具类名 scrim 对不上，最容易在迁移时漏掉。
     expect(theme["--color-scrim"]).toBe("var(--overlay-scrim)");
+  });
+
+  it("font-mono 挂了 --font-mono，且引用 JetBrains Mono", () => {
+    // 非颜色 token，且不随主题变化，所以直接字面量声明在 @theme 里，
+    // 不走 --color-* 那套「根 token + inline 别名」的间接层。
+    expect(theme["--font-mono"]).toContain("JetBrains Mono");
+  });
+});
+
+describe("自托管字体", () => {
+  it("globals.css 里为 JetBrains Mono 声明了 @font-face", () => {
+    // decls() 只认 `--name: value;` 形态的自定义属性，@font-face 里的
+    // font-family / src 都是普通 CSS 属性，decls() 会返回空对象——
+    // 这里必须直接在 block() 取到的原始块文本上断言。
+    const face = block("@font-face");
+    expect(face).toMatch(/font-family:\s*["']JetBrains Mono["']/);
   });
 });
 

@@ -14,29 +14,81 @@
       "label": "语言"
     }
   },
+  "authLayout": {
+    "brand": "AgentRe",
+    "footer": {
+      "copyright": "© {{year}} AgentRe",
+      "terms": "服务条款",
+      "privacy": "隐私政策",
+      "status": "服务状态"
+    }
+  },
+  "legal": {
+    "comingSoon": "即将上线"
+  },
   "login": {
-    "title": "登录 AgentRe Server",
+    "title": "登录 AgentRe",
+    "description": "使用 GitHub 账号继续。桌面应用与 agentred 守护进程都通过它完成授权。",
     "github": "使用 GitHub 登录",
+    "userCodeLabel": "登录后继续授权设备",
+    "failureTitle": "登录未完成",
+    "retryLogin": "重新登录",
+    "footer": "继续即表示你同意 AgentRe 的服务条款与隐私政策。",
     "errors": {
       "oauth_state_invalid": "OAuth state 已过期，请重新发起登录。",
       "oauth_exchange_failed": "GitHub OAuth 兑换失败，请稍后重试或检查 GitHub OAuth App 配置。",
       "oauth_profile_failed": "无法获取 GitHub 用户信息。",
       "github_email_missing": "请在 GitHub 设置中将主邮箱设为已验证后重试。",
-      "access_denied": "你取消了 GitHub 授权。",
-      "user_banned": "账户已被封禁，请联系管理员。"
+      "access_denied": "你取消了 GitHub 授权。"
     }
   },
   "device": {
-    "title": "设备授权",
-    "codePlaceholder": "A4F-7Q2",
-    "lookup": "查询",
-    "invalidCode": "user_code 格式不正确。",
-    "denied": "已拒绝授权，可关闭此页面。",
-    "approveTitle": "授权该设备",
-    "capabilities": "能力",
-    "approve": "允许",
-    "deny": "拒绝",
-    "computeRisk": "这是一台计算节点。批准后它将以你的身份运行编码 agent，可在你的账号下执行任意代码与命令——风险远高于纯查看端。",
+    "eyebrow": "设备授权",
+    "entry": {
+      "title": "输入设备码",
+      "description": "桌面应用或终端上会显示一串 6 位代码，把它填在这里。",
+      "groupLabel": "设备码",
+      "boxLabel": "第 {{position}} 位，共 6 位",
+      "hint": "不区分大小写，代码中不含 0、O、1、I",
+      "submit": "继续",
+      "footnote": "没有看到代码？回到设备上重新发起授权。",
+      "errors": {
+        "incomplete": "请填满 6 位代码；代码中不含 0、O、1、I。",
+        "invalid": "这个代码不存在或已被使用。请核对设备上显示的 6 位代码。"
+      }
+    },
+    "approve": {
+      "title": "允许这台设备访问你的 AgentRe 账户？",
+      "risk": {
+        "compute": "这是一台计算节点：批准后，它将以你的身份运行编码 agent，并可在你的账号下执行任意代码与命令。只批准你信任的设备。",
+        "neutral": "批准后，这台设备将以你的身份接入你的 AgentRe 账户。只批准你信任的设备。"
+      },
+      "verify": "确认这串代码与设备上显示的完全一致",
+      "capabilitiesLabel": "这台设备将获得以下能力",
+      "capabilities": {
+        "compute": {
+          "title": "执行编码 agent 任务",
+          "description": "在这台设备上运行 Claude Code、Codex 等后端，并把会话结果同步回你的账户"
+        },
+        "client": {
+          "title": "作为客户端接入",
+          "description": "以你的身份连接 AgentRe，收发会话消息并列出你的设备"
+        },
+        "file_browse": {
+          "title": "浏览项目文件",
+          "description": "读取你所授权的项目目录中的文件列表与内容"
+        },
+        "unknown": "设备声明了此能力，但控制台尚未收录它的说明——未知键一律原样展示，不隐藏"
+      },
+      "expiry": "此授权请求将在 {{minutes}} 分 {{seconds}} 秒后过期",
+      "expirySeconds": "此授权请求将在 {{seconds}} 秒后过期",
+      "expiryAnnounce": "此授权请求将在约 {{minutes}} 分钟后过期",
+      "expiryAnnounceSoon": "此授权请求将在 1 分钟内过期",
+      "allow": "允许授权",
+      "deny": "拒绝",
+      "fineprint": "你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。",
+      "actionError": "操作没有完成，请重试。"
+    },
     "kind": {
       "desktop": "桌面端",
       "agentred": "计算节点",
@@ -45,8 +97,18 @@
     },
     "success": {
       "title": "设备已授权",
-      "body": "你可以关闭此页面，返回终端继续。",
-      "manageDevices": "管理设备"
+      "body": "可以关闭这个页面，回到设备上继续。",
+      "manageDevices": "前往控制台管理设备"
+    },
+    "deniedScreen": {
+      "title": "已拒绝授权",
+      "body": "这台设备不会拿到任何访问权限。可以直接关闭页面。",
+      "close": "关闭页面"
+    },
+    "expiredScreen": {
+      "title": "授权请求已过期",
+      "body": "设备码有效期有限。回到设备上重新发起授权，然后输入新的代码。",
+      "retry": "重新输入代码"
     },
     "manage": {
       "title": "设备管理",
@@ -67,7 +129,8 @@
     }
   },
   "notFound": {
-    "title": "404",
-    "body": "页面不存在"
+    "code": "404",
+    "title": "页面不存在",
+    "body": "链接可能已经失效，或者地址打错了。"
   }
 }

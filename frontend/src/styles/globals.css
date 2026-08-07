@@ -29,8 +29,6 @@
    两端同源是有意的：出问题改一次，桌面端和控制台都受益。
    要加新颜色，先去桌面端看有没有现成的，别在这边单方面发明。 */
 :root {
-  --radius: 0.5rem;
-
   /* Surfaces —— zinc 中性色，纯白卡片浮在灰底上 */
   --background: #fafafa;
   --foreground: #18181b;
@@ -117,8 +115,8 @@
   --input: #2a2d34;
 
   --destructive: #f87171;
-  --destructive-foreground: #fafafa;
-  --destructive-soft: #2a1414;
+  --destructive-foreground: #1a0b0c;
+  --destructive-soft: #2a1315;
 
   --status-running: #34d399;
   --status-running-bg: #0f2218;
@@ -127,7 +125,7 @@
   --status-idle: #6a6d74;
   --status-error: #f87171;
 
-  --code-surface: #121418;
+  --code-surface: #111316;
   --code-foreground: #e6e8eb;
   --code-muted-foreground: #9aa0ab;
 
@@ -135,6 +133,31 @@
   --overlay-shadow:
     0 24px 64px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
   --overlay-scrim: rgba(0, 0, 0, 0.7);
+}
+
+/* JetBrains Mono，仅拉丁子集自托管（design decision 6）。正文仍是系统字体栈，
+   不自托管 Inter——两端肉眼差异很小，而这份产物要 //go:embed 进 Go 二进制，
+   每 KB 都进镜像。等宽在这一屏有功能意义：user_code / 设备指纹 / platform·version
+   要等宽对齐，稿子的大号确认码还用到 600 字重，所以两档字重都留。
+   文件取自 @fontsource/jetbrains-mono 5.3.0 的 latin-400 / latin-600 子集
+   （OFL-1.1，见同目录 LICENSE），未带 unicode-range：这两个文件本身已经只含
+   拉丁字形，没有其它子集可供浏览器挑选，加了也不改变行为。 */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono/jetbrains-mono-latin-400-normal.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono/jetbrains-mono-latin-600-normal.woff2")
+    format("woff2");
 }
 
 /* Tailwind v4 的工具类由这里生成，取代了 v3 的 tailwind.config.ts。
@@ -178,11 +201,20 @@
   --color-ring: var(--ring);
   --color-scrim: var(--overlay-scrim);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
+  /* 三档直接声明成字面量，不再从一个根 --radius 用 calc 推——6/10/14 不是
+     等差数列，calc(var(--radius) ± n) 凑不出这个关系（design decision 5）。 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 
   --shadow-overlay: var(--overlay-shadow);
+
+  /* 字体命名空间是 --font-*，直接量声明即生成 font-mono 工具类；不像颜色
+     token 要在 :root/.dark 间切换，字体没有这层间接，直接写在这里就够，
+     也避免了跟 --shadow-overlay 同名自指同一种坑（见上面那条注释）。 */
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
+    "Liberation Mono", monospace;
 }
 
 @layer base {

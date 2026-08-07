@@ -30,21 +30,31 @@ test("未登录访问 /device 会跳到 /login", async ({ page }) => {
 
 test("未知路由渲染 404 而不是白屏", async ({ page }) => {
   await page.goto("/no-such-page");
-  await expect(page.getByRole("heading", { name: "404" })).toBeVisible();
-  await expect(page.getByRole("link")).toBeVisible();
+  // "404" 现在是 aria-hidden 的水印，真正的 h1 是可翻译的标题文案
+  await expect(
+    page.getByRole("heading", { name: /页面不存在|Page not found/i }),
+  ).toBeVisible();
+  // AuthLayout 现在还带页脚链接（Terms/Privacy/Status），不能再用不带
+  // name 的 getByRole("link")——那会撞上 strict mode。只认返回首页那个。
+  await expect(
+    page.getByRole("link", { name: /回到首页|Back to home/i }),
+  ).toBeVisible();
 });
 
-test("设备授权页能查到 pending 设备并弹出确认框", async ({ page }) => {
+test("设备授权页能查到 pending 设备并就地渲染确认区", async ({ page }) => {
   await mockAuthenticated(page);
   await mockDevicePending(page);
 
   await page.goto("/device?user_code=A4F-7Q2");
 
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  // 只断言真实能力被列出来，不断言具体文案——文案是可翻译的
-  await expect(dialog).toContainText("chat");
-  await expect(dialog).toContainText("darwin");
+  // 确认区是 /device 下的整页区域而不是对话框（决策 8）
+  const main = page.getByRole("main");
+  await expect(main).toContainText("A4F-7Q2");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  // 只断言真实设备信息被列出来，不断言具体文案——文案是可翻译的。
+  // chat 不在收录表里，按原样透出（决策 12）。
+  await expect(main).toContainText("chat");
+  await expect(main).toContainText("darwin");
 });
 
 test("主题切换会把 dark class 挂到 <html> 上并持久化", async ({ page }) => {
@@ -83,16 +93,26 @@ test("语言切换会改变界面文案和 <html lang>", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
 });
 
-test("登录页在当前视口下不横向溢出", async ({ page }) => {
+test("认证流在当前视口下不横向溢出", async ({ page }) => {
+  // 移动端 project 下这条才有意义：卡片贴边 / 溢出会在这里被抓到
+  const overflow = () =>
+    page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+
   await mockUnauthenticated(page);
   await page.goto("/login");
   await assertIsAppUnderTest(page);
+  expect(await overflow()).toBeLessThanOrEqual(0);
 
-  // 移动端 project 下这条才有意义：卡片贴边 / 溢出会在这里被抓到
-  const overflow = await page.evaluate(
-    () =>
-      document.documentElement.scrollWidth -
-      document.documentElement.clientWidth,
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
+  // 六个码格是这条流里最宽的一排硬约束：画板画的是 6×54 加间距和分隔线，
+  // 手机宽度扣掉外壳与卡片的内边距后所剩无几。这排要是不肯缩（改了
+  // max-w / gap / flex，或给行加了固定宽度），只有真排版量得出来——
+  // jsdom 不算布局，单测在这件事上一个字都测不到。
+  await mockAuthenticated(page);
+  await page.goto("/device");
+  await expect(page.getByRole("group")).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(0);
 });

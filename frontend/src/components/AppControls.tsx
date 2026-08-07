@@ -16,8 +16,12 @@ const THEME_ICON: Record<Theme, typeof Sun> = {
 };
 
 /**
- * 固定在右上角的主题 / 语言切换。所有页面共用一份，放在 App 的 Layout 里。
+ * 主题 / 语言切换。挂在 AuthLayout 的顶栏里，随文档流走，不再 fixed 悬浮——
+ * 顶栏本身就是一段普通内容，不用跟它抢屏幕角落。
  * 移动端也要够得着，所以用 icon 尺寸而不是带文字的按钮。
+ *
+ * 尺寸写死 34：稿子的 IconButton 是 34×34，而 shadcn 的 icon-sm 是 32。
+ * 仍然带上 size="icon-sm"，是为了拿它那份 padding/图标尺寸，只覆写宽高。
  */
 export default function AppControls() {
   const { t, i18n } = useTranslation();
@@ -39,10 +43,11 @@ export default function AppControls() {
     ];
 
   return (
-    <div className="fixed right-3 top-3 z-50 flex items-center gap-1 sm:right-4 sm:top-4">
+    <div className="flex items-center gap-1">
       <Button
         variant="ghost"
         size="icon-sm"
+        className="size-[34px]"
         onClick={() => void i18n.changeLanguage(nextLang)}
         aria-label={`${t("common.language.label")}: ${LANGUAGE_LABELS[currentLang]}`}
         title={LANGUAGE_LABELS[nextLang]}
@@ -52,6 +57,7 @@ export default function AppControls() {
       <Button
         variant="ghost"
         size="icon-sm"
+        className="size-[34px]"
         onClick={() => setTheme(nextTheme)}
         aria-label={`${t("common.theme.label")}: ${t(`common.theme.${theme}`)}`}
         title={t(`common.theme.${nextTheme}`)}

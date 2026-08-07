@@ -14,29 +14,81 @@
       "label": "Language"
     }
   },
+  "authLayout": {
+    "brand": "AgentRe",
+    "footer": {
+      "copyright": "© {{year}} AgentRe",
+      "terms": "Terms of Service",
+      "privacy": "Privacy Policy",
+      "status": "Status"
+    }
+  },
+  "legal": {
+    "comingSoon": "Coming soon"
+  },
   "login": {
-    "title": "Sign in to AgentRe Server",
+    "title": "Sign in to AgentRe",
+    "description": "Continue with your GitHub account. Both the desktop app and agentred daemon authorize through it.",
     "github": "Sign in with GitHub",
+    "userCodeLabel": "Continue to device authorization after signing in",
+    "failureTitle": "Sign in unsuccessful",
+    "retryLogin": "Sign in again",
+    "footer": "By continuing, you agree to AgentRe's Terms of Service and Privacy Policy.",
     "errors": {
       "oauth_state_invalid": "The OAuth state has expired. Please start the sign-in again.",
       "oauth_exchange_failed": "GitHub OAuth exchange failed. Retry later, or check the GitHub OAuth App settings.",
       "oauth_profile_failed": "Could not fetch your GitHub profile.",
       "github_email_missing": "Set a verified primary email in your GitHub settings, then try again.",
-      "access_denied": "You cancelled the GitHub authorization.",
-      "user_banned": "This account is banned. Please contact an administrator."
+      "access_denied": "You cancelled the GitHub authorization."
     }
   },
   "device": {
-    "title": "Device authorization",
-    "codePlaceholder": "A4F-7Q2",
-    "lookup": "Look up",
-    "invalidCode": "That user_code is not in the right format.",
-    "denied": "Authorization denied. You can close this page.",
-    "approveTitle": "Authorize this device",
-    "capabilities": "Capabilities",
-    "approve": "Allow",
-    "deny": "Deny",
-    "computeRisk": "This is a compute node. Approving it authorizes it to act under your account: it runs coding agents and can execute arbitrary code and commands. This is a much larger risk than approving a view-only client.",
+    "eyebrow": "Device authorization",
+    "entry": {
+      "title": "Enter the device code",
+      "description": "Your desktop app or terminal shows a 6-character code. Enter it here.",
+      "groupLabel": "Device code",
+      "boxLabel": "Character {{position}} of 6",
+      "hint": "Case does not matter. The code never contains 0, O, 1 or I.",
+      "submit": "Continue",
+      "footnote": "No code on screen? Go back to the device and start authorization again.",
+      "errors": {
+        "incomplete": "Enter all six characters. The code never contains 0, O, 1 or I.",
+        "invalid": "That code does not exist or has already been used. Check the 6-character code shown on the device."
+      }
+    },
+    "approve": {
+      "title": "Allow this device to access your AgentRe account?",
+      "risk": {
+        "compute": "This is a compute node. Once you approve it, it runs coding agents as you and can execute arbitrary code and commands under your account. Only approve devices you trust.",
+        "neutral": "Once you approve it, this device connects to your AgentRe account as you. Only approve devices you trust."
+      },
+      "verify": "Check that this code matches exactly what the device shows",
+      "capabilitiesLabel": "What this device will be able to do",
+      "capabilities": {
+        "compute": {
+          "title": "Run coding agent tasks",
+          "description": "Run backends such as Claude Code and Codex on this device, and sync session results back to your account."
+        },
+        "client": {
+          "title": "Connect as a client",
+          "description": "Connect to AgentRe as you, exchange session messages and list your devices."
+        },
+        "file_browse": {
+          "title": "Browse project files",
+          "description": "Read the listing and contents of the project directories you authorize."
+        },
+        "unknown": "The device declared this capability, but the console has no description for it yet. Unknown keys are always shown as-is, never hidden."
+      },
+      "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
+      "expirySeconds": "This authorization request expires in {{seconds}}s",
+      "expiryAnnounce": "This authorization request expires in about {{minutes}} minutes",
+      "expiryAnnounceSoon": "This authorization request expires in less than a minute",
+      "allow": "Allow access",
+      "deny": "Deny",
+      "fineprint": "You can revoke this device's access at any time under Console → Devices.",
+      "actionError": "That did not go through. Please try again."
+    },
     "kind": {
       "desktop": "Desktop",
       "agentred": "Compute node",
@@ -45,8 +97,18 @@
     },
     "success": {
       "title": "Device authorized",
-      "body": "You can close this page and go back to your terminal.",
-      "manageDevices": "Manage devices"
+      "body": "You can close this page now and continue on the device.",
+      "manageDevices": "Go to the console to manage devices"
+    },
+    "deniedScreen": {
+      "title": "Authorization denied",
+      "body": "This device will not receive any access. You can close this page now.",
+      "close": "Close page"
+    },
+    "expiredScreen": {
+      "title": "Authorization request expired",
+      "body": "Device codes only stay valid for a short while. Go back to the device, start authorization again, then enter the new code.",
+      "retry": "Enter a new code"
     },
     "manage": {
       "title": "Devices",
@@ -67,7 +129,8 @@
     }
   },
   "notFound": {
-    "title": "404",
-    "body": "This page does not exist."
+    "code": "404",
+    "title": "Page not found",
+    "body": "This link may be broken, or the address is mistyped."
   }
 }

@@ -9,7 +9,7 @@ non-negotiables, and the routing table that says which of these to open when.
 | [architecture.md](architecture.md) | Layering, dependency direction, "how to add an X" |
 | [testing.md](testing.md) | What to test per layer, sqlmock vs mockgen, build tags, guard tests |
 | [verification.md](verification.md) | Twin e2e tracks, scratch workflow, report rules |
-| [design.md](design.md) | Colour tokens, dark/light, responsive, i18n, new-page recipe |
+| [design.md](design.md) | Tokens and the canvas↔code name mapping, type/spacing/radius scales, the auth shell and page skeleton, dark/light, responsive, i18n, new-page recipe |
 | [observability.md](observability.md) | Logging, sensitive fields, metrics, traces |
 | [documentation.md](documentation.md) | Who owns which fact, how docs stay true |
 
