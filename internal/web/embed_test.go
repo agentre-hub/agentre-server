@@ -28,8 +28,11 @@ func TestNoRouteHandler_AssetsReturn404(t *testing.T) {
 		engine.ServeHTTP(w, req)
 
 		convey.So(w.Code, convey.ShouldEqual, http.StatusNotFound)
-		// body 是 gin 默认的空 404，而不是 index.html 的内容
-		convey.So(w.Body.Len(), convey.ShouldBeLessThan, 100)
+		// body 是 gin 默认的空 404，而不是 index.html 的内容。
+		// 这里断言「完全为空」而不是「短于 N 字节」：make prepare-web-dist 造的
+		// 测试用 index.html 只有 15 字节，任何带阈值的写法都是恒真的。
+		convey.So(w.Body.String(), convey.ShouldBeEmpty)
+		convey.So(w.Header().Get("Content-Type"), convey.ShouldNotContainSubstring, "text/html")
 	})
 }
 

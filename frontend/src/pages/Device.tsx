@@ -85,6 +85,11 @@ export default function Device() {
       });
       setError(t("device.denied"));
       setInfo(null);
+    } catch (e) {
+      // 服务端的 deny 是带条件的 UPDATE：行已被换取或已拒绝时命中 0 行，返回 400。
+      // 不接住的话这里会是一个未处理的 promise rejection——对话框原地不动、
+      // 一个字都不显示，用户完全走不下去。
+      if (e instanceof ApiError) setError(e.message);
     } finally {
       setSubmitting(false);
     }

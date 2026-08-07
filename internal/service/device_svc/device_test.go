@@ -219,9 +219,12 @@ func TestRefresh(t *testing.T) {
 			mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
 				&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: 1}, nil,
 			)
-			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 			// 赢家刚轮换完这条 token，竞败方的 UPDATE 一行也改不到
 			mT.EXPECT().Revoke(gomock.Any(), int64(1), gomock.Any()).Return(int64(0), nil)
+			// 判定必须排在写 device_tokens 之前：竞败方在这里出局，一行也不写。
+			// 这是 architecture.md「事务里先做带条件的 UPDATE，再做依赖胜出的写」
+			// 那条规则在 Refresh 上的落点，和 ExchangeToken 保持一致。
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Times(0)
 			// 竞败不是重放：链是健康的，撤了会误伤只是重试的客户端
 			mT.EXPECT().RevokeChain(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
 

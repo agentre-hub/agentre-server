@@ -278,6 +278,23 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 	out := &TokenOutput{}
 	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
+
+		// 前面的 row.IsRevoked() 只是抢跑检查，这里才是真正的判定：
+		// 带 revoked_at=0 条件的 UPDATE 只会有一个并发请求改到行。
+		// 竞败不等于重放——赢家刚轮换完，链是健康的，此处【不】调 RevokeChain，
+		// 否则客户端网络超时后的一次重试就会把用户整条链登出。
+		// 真正的重放（A 换出 B 后再用 A）仍走上面 IsRevoked 分支，行为不变。
+		//
+		// 和 ExchangeToken 一样，这一步排在写 device_tokens 之前：竞败方在这里
+		// 出局，一行也不写，不必靠回滚去擦掉一条已经落到 WAL 上的新 token。
+		n, err := device_token_repo.DeviceToken().Revoke(txCtx, row.ID, nowMs)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return newOAuthErr(ErrInvalidGrant, "refresh_token already rotated")
+		}
+
 		newPlain, err := randomBase32(32)
 		if err != nil {
 			return err
@@ -294,18 +311,6 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 		}
 		if err := device_token_repo.DeviceToken().Create(txCtx, newToken); err != nil {
 			return err
-		}
-		// 前面的 row.IsRevoked() 只是抢跑检查，这里才是真正的判定：
-		// 带 revoked_at=0 条件的 UPDATE 只会有一个并发请求改到行。
-		// 竞败不等于重放——赢家刚轮换完，链是健康的，此处【不】调 RevokeChain，
-		// 否则客户端网络超时后的一次重试就会把用户整条链登出。
-		// 真正的重放（A 换出 B 后再用 A）仍走上面 IsRevoked 分支，行为不变。
-		n, err := device_token_repo.DeviceToken().Revoke(txCtx, row.ID, nowMs)
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return newOAuthErr(ErrInvalidGrant, "refresh_token already rotated")
 		}
 		if err := device_repo.Device().Touch(txCtx, d.ID, nowMs); err != nil {
 			return err
