@@ -196,8 +196,15 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
 			return err
 		}
-		if err := device_flow_repo.DeviceFlow().MarkConsumed(txCtx, dc, nowMs); err != nil {
+		// 前面的 flow.IsConsumed() 只是抢跑检查，这里才是真正的判定：
+		// 带 consumed_at=0 条件的 UPDATE 只会有一个并发请求改到行，
+		// 竞败方回滚整个事务，设备行与 token 行都不留下。
+		n, err := device_flow_repo.DeviceFlow().MarkConsumed(txCtx, dc, nowMs)
+		if err != nil {
 			return err
+		}
+		if n != 1 {
+			return newOAuthErr(ErrInvalidGrant, "device_code already consumed")
 		}
 
 		access, jti, err := s.signer.Sign(jwt.Claims{
@@ -283,8 +290,17 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 		if err := device_token_repo.DeviceToken().Create(txCtx, newToken); err != nil {
 			return err
 		}
-		if err := device_token_repo.DeviceToken().Revoke(txCtx, row.ID, nowMs); err != nil {
+		// 前面的 row.IsRevoked() 只是抢跑检查，这里才是真正的判定：
+		// 带 revoked_at=0 条件的 UPDATE 只会有一个并发请求改到行。
+		// 竞败不等于重放——赢家刚轮换完，链是健康的，此处【不】调 RevokeChain，
+		// 否则客户端网络超时后的一次重试就会把用户整条链登出。
+		// 真正的重放（A 换出 B 后再用 A）仍走上面 IsRevoked 分支，行为不变。
+		n, err := device_token_repo.DeviceToken().Revoke(txCtx, row.ID, nowMs)
+		if err != nil {
 			return err
+		}
+		if n != 1 {
+			return newOAuthErr(ErrInvalidGrant, "refresh_token already rotated")
 		}
 		if err := device_repo.Device().Touch(txCtx, d.ID, nowMs); err != nil {
 			return err
@@ -360,8 +376,13 @@ func (s *deviceSvc) Approve(ctx context.Context, userCode string, userID int64) 
 	if flow.IsExpired(nowMs) {
 		return "", newOAuthErr(ErrExpiredToken, "user_code expired")
 	}
-	if err := device_flow_repo.DeviceFlow().Approve(ctx, norm, userID, nowMs); err != nil {
+	n, err := device_flow_repo.DeviceFlow().Approve(ctx, norm, userID, nowMs)
+	if err != nil {
 		return "", err
+	}
+	// 0 行：并发请求已抢先批准/拒绝/换取，这一次批准没有生效
+	if n != 1 {
+		return "", newOAuthErr("user_code_invalid", "user_code no longer approvable")
 	}
 	return flow.DeviceKind, nil
 }
@@ -371,7 +392,16 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 	if !ok {
 		return newOAuthErr("user_code_invalid", "malformed user_code")
 	}
-	return device_flow_repo.DeviceFlow().Deny(ctx, norm, time.Now().UnixMilli())
+	n, err := device_flow_repo.DeviceFlow().Deny(ctx, norm, time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	// 0 行：code 不存在、已被换取（设备其实已拿到 token）、或已拒绝。
+	// 此时返回 200 是会误导人的假成功。
+	if n != 1 {
+		return newOAuthErr("user_code_invalid", "user_code not found or already settled")
+	}
+	return nil
 }
 
 func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {

@@ -42,11 +42,12 @@ func (m *MockDeviceFlowRepo) EXPECT() *MockDeviceFlowRepoMockRecorder {
 }
 
 // Approve mocks base method.
-func (m *MockDeviceFlowRepo) Approve(ctx context.Context, userCode string, userID, nowMs int64) error {
+func (m *MockDeviceFlowRepo) Approve(ctx context.Context, userCode string, userID, nowMs int64) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Approve", ctx, userCode, userID, nowMs)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Approve indicates an expected call of Approve.
@@ -84,11 +85,12 @@ func (mr *MockDeviceFlowRepoMockRecorder) DeleteExpiredBefore(ctx, cutoffMs any)
 }
 
 // Deny mocks base method.
-func (m *MockDeviceFlowRepo) Deny(ctx context.Context, userCode string, nowMs int64) error {
+func (m *MockDeviceFlowRepo) Deny(ctx context.Context, userCode string, nowMs int64) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Deny", ctx, userCode, nowMs)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // Deny indicates an expected call of Deny.
@@ -128,11 +130,12 @@ func (mr *MockDeviceFlowRepoMockRecorder) FindPendingByUserCode(ctx, userCode an
 }
 
 // MarkConsumed mocks base method.
-func (m *MockDeviceFlowRepo) MarkConsumed(ctx context.Context, deviceCode string, nowMs int64) error {
+func (m *MockDeviceFlowRepo) MarkConsumed(ctx context.Context, deviceCode string, nowMs int64) (int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "MarkConsumed", ctx, deviceCode, nowMs)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
 // MarkConsumed indicates an expected call of MarkConsumed.

@@ -25,6 +25,39 @@ func TestRevokeChain(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestRevoke_RequiresUnrevokedRow(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewDeviceToken()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "device_tokens" SET "revoked_at"=$1 WHERE id=$2 AND revoked_at=0`)).
+		WithArgs(int64(1700000000000), int64(11)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	n, err := r.Revoke(ctx, 11, 1700000000000)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 行已被并发请求轮换时 UPDATE 命中 0 行，行数原样透传给 service。
+func TestRevoke_ReturnsZeroRowsWhenAlreadyRevoked(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewDeviceToken()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "device_tokens" SET "revoked_at"=$1 WHERE id=$2 AND revoked_at=0`)).
+		WithArgs(int64(1700000000000), int64(11)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	n, err := r.Revoke(ctx, 11, 1700000000000)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFindByHash_Found(t *testing.T) {
 	ctx, _, mock := hubtest.DatabasePG(t)
 	r := NewDeviceToken()

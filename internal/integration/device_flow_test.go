@@ -131,7 +131,7 @@ func TestDeviceFlow_HappyPath(t *testing.T) {
 	mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, e *device_token_entity.DeviceToken) error { e.ID = 11; return nil },
 	)
-	mF.EXPECT().MarkConsumed(gomock.Any(), authzResp.Data.DeviceCode, gomock.Any()).Return(nil)
+	mF.EXPECT().MarkConsumed(gomock.Any(), authzResp.Data.DeviceCode, gomock.Any()).Return(int64(1), nil)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
