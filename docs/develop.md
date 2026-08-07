@@ -38,14 +38,14 @@ The repo has **no build tags at all**, so `make test` runs everything there is. 
 ```bash
 cp configs/config.example.yaml configs/config.yaml   # gitignored runtime config
 cp .env.example .env                                 # secrets
-docker compose up -d pg redis                        # or point at your own
+# point db.dsn / redis.addr in configs/config.yaml at your own PostgreSQL + Redis
 make dev
 ```
 
-`e2e` has its own package and needs one extra step the first time:
+`e2e` has its own package:
 
 ```bash
-cd e2e && pnpm install && pnpm install-browsers
+cd e2e && pnpm install
 ```
 
 ## Layout

@@ -70,10 +70,8 @@ migration for real is the server booting, and if it fails **the server does not 
 So when you touch `migrations/`, verify it by hand before merging:
 
 ```bash
-docker compose up -d pg
-make dev          # migrations run at startup; watch for errors
-# or, against a scratch database:
-psql "$DSN" -c '\dt'
+make dev                       # migrations run at startup against db.dsn; watch for errors
+psql "<that same dsn>" -c '\dt'   # then read the tables back directly
 ```
 
 Write that check up under `e2e/scratch/` per [verification.md](verification.md) — for

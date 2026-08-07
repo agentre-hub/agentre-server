@@ -32,13 +32,17 @@ cd e2e && pnpm scratch
 `<task-name>` is a lowercase hyphenated slug. **Where you are verifying against an approved
 spec, use that spec's slug**, so the evidence and the spec are findable from each other.
 
-Needing a real backend (real device flow, migrations, session cookies):
+Needing a real backend (real device flow, migrations, session cookies) — the server
+takes its PostgreSQL and Redis from `configs/config.yaml`, so point that at your own
+instances:
 
 ```bash
-docker compose up -d pg redis
-make dev
-cd e2e && pnpm scratch
+go run ./cmd/server                              # real backend on :8443
+cd e2e && E2E_SCRATCH_AUTOSTART=1 pnpm scratch
 ```
+
+What that env var does is in
+[`../e2e/README.md`](../e2e/README.md#needing-a-real-backend).
 
 ## Report rules
 
