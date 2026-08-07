@@ -17,11 +17,15 @@ Two tracks. Different purposes, different destinations, **never mixed**.
 ```bash
 cd e2e
 pnpm install
-pnpm install-browsers   # first time only: downloads chromium
 
 pnpm smoke              # committed smoke suite (desktop + mobile)
 pnpm scratch            # your throwaway checks under scratch/
 ```
+
+Both scripts run `playwright install chromium` first. That costs ~2s once the
+browser is there, and it is what stops the failure mode where bumping
+`@playwright/test` leaves a stale build on disk and **every** spec goes red with
+`Executable doesn't exist` — which reads like the app broke, not the browser.
 
 From the repo root, `make test-e2e` runs the smoke track.
 
