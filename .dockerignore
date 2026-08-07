@@ -1,6 +1,5 @@
-# 构建上下文是仓库根目录（Dockerfile 在 deploy/），所以这个文件留在根上。
-# 少了它上下文有 236MB，且宿主机的 frontend/node_modules 会被 COPY 进去，
-# pnpm install 想清掉它，在无 TTY 的构建环境里直接失败。
+# 构建上下文是仓库根，所以这个文件留在根上（Dockerfile 在 deploy/）。
+# 少了它宿主机的 node_modules 会被拷进去，pnpm install 随后会失败。
 
 .git
 .gitignore

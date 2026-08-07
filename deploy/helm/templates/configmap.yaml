@@ -5,17 +5,15 @@ metadata:
   labels:
     {{- include "agentre-server.labels" . | nindent 4 }}
 data:
-  # 只放引导配置，其余全部从 etcd 读。这四个键一个都不能少：cago 读不到键时会把默认值
-  # 写回配置文件，而这份是只读挂载的，写不了就启动失败。
+  # 四个键一个都不能少，缺了会尝试写回这份只读挂载然后启动失败
   config.yaml: |
     env: {{ .Values.appConfig.env }}
     debug: {{ .Values.appConfig.debug }}
     source: etcd
     etcd:
       prefix: {{ .Values.etcdConfig.prefix }}
-      # 下面两份内容相同，别删任何一份：当前 pin 的 cago 用 yaml.v3 解这一段，
-      # 而 yaml.v3 不摊平匿名字段，只认 config:；较新的 cago 补了 yaml:",inline"
-      # 之后读的是摊平的顶层键。只写一种，换版本时会静默解析出 endpoints=[]。
+      # 两份内容相同，别删任何一份：新旧 cago 认的格式不一样，
+      # 只写一种，换版本时会静默解析出 endpoints=[]
       endpoints:
         {{- toYaml .Values.etcdConfig.endpoints | nindent 8 }}
       username: {{ .Values.etcdConfig.username | quote }}

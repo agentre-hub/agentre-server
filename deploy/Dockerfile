@@ -1,5 +1,4 @@
-# 构建上下文是仓库根目录：docker build -f deploy/Dockerfile .
-# 基础镜像与源都是 ARG，默认上游地址，受限网络下由流水线覆盖。
+# 构建上下文是仓库根：docker build -f deploy/Dockerfile .
 
 ARG NODE_IMAGE=node:22-alpine
 ARG GO_IMAGE=golang:1.26-alpine

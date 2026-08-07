@@ -1,5 +1,4 @@
-# docker compose 用的配置，挂到容器的 /app/configs/config.yaml。
-# 镜像里自带的那份指向 127.0.0.1，在容器里连不到同网络的 pg/redis。
+# compose 用的配置，挂到容器的 /app/configs/config.yaml
 env: prod
 debug: false
 source: file
@@ -33,7 +32,7 @@ trace:
 
 server:
   public_url: "http://localhost:8443"
-  # 本机没有 TLS，Cookie 不能带 Secure，否则登录态存不住
+  # 本机没有 TLS，Cookie 不能带 Secure
   insecure_cookies: true
   session:
     cookie_name: "server_session"

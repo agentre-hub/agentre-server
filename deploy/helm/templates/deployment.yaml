@@ -40,16 +40,14 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
-          # HTTP 是最后启动的，迁移跑完前端口拒连。没有 startupProbe 的话
-          # 存活探针会在迁移中途把 Pod 杀掉，变成起不来的循环。
+          # 迁移跑完前端口是拒连的，没有这个探针存活探针会中途把 Pod 杀掉
           startupProbe:
             httpGet:
               path: /v1/healthz
               port: http
             periodSeconds: 5
             failureThreshold: 30
-          # 该端点在 DB/Redis 不通时仍返回 200，只把 db_ping/redis 置 false，
-          # 所以就绪探针不会被下游抖动带下线
+          # 该端点在 DB/Redis 不通时仍返回 200，所以不会被下游抖动带下线
           livenessProbe:
             httpGet:
               path: /v1/healthz

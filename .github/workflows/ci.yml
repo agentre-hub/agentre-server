@@ -15,9 +15,7 @@ env:
   PNPM_VERSION: '10.33.0'
 
 jobs:
-  # 与本地 `make lint` 完全同一条命令：golangci-lint v2 + 前端 eslint。
-  # 命令写在 Makefile 里，CI 只负责调用——不要在这里另写一份，
-  # 否则会出现「本地绿 CI 红」而没人知道为什么。
+  # 只调 Makefile，不在这里另写一份命令，否则会本地绿 CI 红
   lint:
     name: lint
     runs-on: ubuntu-latest
@@ -49,16 +47,13 @@ jobs:
           version: v2.12.2
           args: --timeout 10m
 
-      # eslint（含 prettier/prettier 格式检查）
       - name: frontend eslint
         run: make lint-frontend
 
-      # e2e 只有 prettier
       - name: e2e prettier
         run: make lint-e2e
 
-  # 与本地 `make test` 完全同一条命令。本仓库没有任何 build tag，
-  # 所以这里跑到的就是全部——见 internal/pkg/jwt/testkeys/isolation_test.go。
+  # 仓库没有 build tag，所以这里跑到的就是全部
   test:
     name: test
     runs-on: ubuntu-latest

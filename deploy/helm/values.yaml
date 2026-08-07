@@ -1,5 +1,4 @@
-# 环境相关的值由 .gitea/workflows/deploy.yaml 在 helm upgrade 时 --set 覆盖，
-# 这里的默认值对应生产。
+# 默认值对应生产，环境相关的由流水线 --set 覆盖
 
 replicaCount: 1
 
@@ -14,9 +13,9 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# 引导配置。渲染进 ConfigMap 挂到 /app/configs/config.yaml，业务配置全部在 etcd。
+# 引导配置，业务配置全部在 etcd
 appConfig:
-  # 必须小写：cago 用 env != "prod" 决定要不要挂 /swagger
+  # 必须小写，大写会把 /swagger 暴露出去
   env: prod
   debug: false
 
@@ -58,8 +57,7 @@ ingress:
   className: k3s-main-nginx
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 10m
-  # host 与 tlsSecretName 是标量不是列表：helm 的 --set 打到列表下标是替换整个元素，
-  # 用列表的话 --set ingress.tls[0].hosts[0]=... 会把 secretName 冲成空。
+  # 标量不是列表：--set 打到列表下标会替换整个元素，把 secretName 冲成空
   host: app.agentrehub.com
   # 置空则不生成 TLS 块
   tlsSecretName: agentrehub-com-tls

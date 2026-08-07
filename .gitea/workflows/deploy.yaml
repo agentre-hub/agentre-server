@@ -1,9 +1,5 @@
-# 这个目录一旦存在，Gitea 就不再读 .github/workflows/ 了（找到第一个存在的目录就停，
-# 两者不合并），所以 ci.yml 只在 GitHub 侧生效，Gitea 侧只有这一条。
-#
-# uses 全部写成 actions/* —— 本 Gitea 实例的 DEFAULT_ACTIONS_URL 是 self，
-# 动作镜像在本地 actions 组织下，上游名字注释在各自上一行。
-# Gitea 的表达式只支持 always()，所以不用 if:；runs-on 只能单值。
+# 这个目录存在时 Gitea 不再读 .github/workflows/，两者不合并。
+# uses 走 actions/* 是本 Gitea 实例的动作镜像位置，上游名字见各自上一行。
 
 name: Deploy
 
@@ -23,7 +19,6 @@ env:
   ENV: ${{ startsWith(github.ref, 'refs/heads/release/') && 'pre' || startsWith(github.ref, 'refs/heads/test/') && 'test' || github.ref=='refs/heads/main' && 'prod' }}
   GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
   NPM_REGISTRY: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
-  # 各自一个完整地址而非共用前缀：distroless 与 node/golang 不同源
   NODE_IMAGE: ${{ secrets.NODE_IMAGE && secrets.NODE_IMAGE || 'node:22-alpine' }}
   GO_IMAGE: ${{ secrets.GO_IMAGE && secrets.GO_IMAGE || 'golang:1.26-alpine' }}
   RUNTIME_IMAGE: ${{ secrets.RUNTIME_IMAGE && secrets.RUNTIME_IMAGE || 'gcr.io/distroless/static-debian12' }}
@@ -40,9 +35,7 @@ jobs:
         with:
           go-version: '1.26'
 
-      # internal/web 用 //go:embed 嵌 dist，而该目录是 gitignore 的，
-      # 干净 checkout 上不造占位文件，下面的 lint 和 test 会在编译期失败。
-      # 等价于 make prepare-web-dist，展开写是因为不确定 runner 有没有 make。
+      # 不造这个占位文件，下面的 lint 和 test 会在 //go:embed 上编译期失败
       - name: Prepare embedded frontend placeholder
         run: |
           mkdir -p internal/web/dist
@@ -57,8 +50,7 @@ jobs:
           install-mode: goinstall
           args: --timeout=10m
 
-      # 与 make test-backend 同一条命令。前端不在这里跑：类型与构建由镜像构建阶段的
-      # tsc -b && vite build 把关，完整前端门禁在 GitHub 侧的 ci.yml。
+      # 与 make test-backend 同一条命令。前端门禁在 GitHub 侧的 ci.yml
       - name: Test
         run: go test -race ./...
 
@@ -93,7 +85,6 @@ jobs:
           tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:${{ env.ENV }}.${{ steps.vars.outputs.sha_short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # 前后端都在镜像内构建，内网源必须穿透进去，否则卡在 corepack / go mod download
           build-args: |
             NODE_IMAGE=${{ env.NODE_IMAGE }}
             GO_IMAGE=${{ env.GO_IMAGE }}
@@ -127,8 +118,8 @@ jobs:
           AUTO_SCALING_MIN_REPLICAS: ${{ env.ENV=='prod' && '2' || '1' }}
           ETCD_PASSWORD: ${{ secrets.ETCD_CONFIG_PASSWORD }}
         run: |
-          # 字符串走 --set-string：--set 会做类型推断，纯数字的密码会变成整数。
-          # 两者都按逗号切分，所以 etcd 密码里不能有逗号。
+          # --set 会做类型推断（纯数字密码变整数），字符串一律 --set-string。
+          # 两者都按逗号切分，etcd 密码里不能有逗号。
           helm upgrade --install "$RELEASE" ./deploy/helm \
             --namespace "$NAMESPACE" --create-namespace \
             --set-string image.repository="$REGISTRY/$REPOSITORY" \
