@@ -58,12 +58,38 @@
         "invalid": "That code does not exist or has already been used. Check the 6-character code shown on the device."
       }
     },
-    "denied": "Authorization denied. You can close this page.",
-    "approveTitle": "Authorize this device",
-    "capabilities": "Capabilities",
-    "approve": "Allow",
-    "deny": "Deny",
-    "computeRisk": "This is a compute node. Approving it authorizes it to act under your account: it runs coding agents and can execute arbitrary code and commands. This is a much larger risk than approving a view-only client.",
+    "approve": {
+      "title": "Allow this device to access your AgentRe account?",
+      "risk": {
+        "compute": "This is a compute node. Once you approve it, it runs coding agents as you and can execute arbitrary code and commands under your account. Only approve devices you trust.",
+        "neutral": "Once you approve it, this device connects to your AgentRe account as you. Only approve devices you trust."
+      },
+      "verify": "Check that this code matches exactly what the device shows",
+      "capabilitiesLabel": "What this device will be able to do",
+      "capabilities": {
+        "compute": {
+          "title": "Run coding agent tasks",
+          "description": "Run backends such as Claude Code and Codex on this device, and sync session results back to your account."
+        },
+        "client": {
+          "title": "Connect as a client",
+          "description": "Connect to AgentRe as you, exchange session messages and list your devices."
+        },
+        "file_browse": {
+          "title": "Browse project files",
+          "description": "Read the listing and contents of the project directories you authorize."
+        },
+        "unknown": "The console has no description for this capability yet. It is shown exactly as the device declared it, never hidden."
+      },
+      "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
+      "expirySeconds": "This authorization request expires in {{seconds}}s",
+      "expiryAnnounce": "This authorization request expires in about {{minutes}} minutes",
+      "expiryAnnounceSoon": "This authorization request expires in less than a minute",
+      "allow": "Allow access",
+      "deny": "Deny",
+      "fineprint": "You can revoke this device's access at any time under Console → Devices.",
+      "actionError": "That did not go through. Please try again."
+    },
     "kind": {
       "desktop": "Desktop",
       "agentred": "Compute node",

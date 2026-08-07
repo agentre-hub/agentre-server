@@ -58,12 +58,38 @@
         "invalid": "这个代码不存在或已被使用。请核对设备上显示的 6 位代码。"
       }
     },
-    "denied": "已拒绝授权，可关闭此页面。",
-    "approveTitle": "授权该设备",
-    "capabilities": "能力",
-    "approve": "允许",
-    "deny": "拒绝",
-    "computeRisk": "这是一台计算节点。批准后它将以你的身份运行编码 agent，可在你的账号下执行任意代码与命令——风险远高于纯查看端。",
+    "approve": {
+      "title": "允许这台设备访问你的 AgentRe 账户？",
+      "risk": {
+        "compute": "这是一台计算节点：批准后，它将以你的身份运行编码 agent，并可在你的账号下执行任意代码与命令。只批准你信任的设备。",
+        "neutral": "批准后，这台设备将以你的身份接入你的 AgentRe 账户。只批准你信任的设备。"
+      },
+      "verify": "确认这串代码与设备上显示的完全一致",
+      "capabilitiesLabel": "这台设备将获得以下能力",
+      "capabilities": {
+        "compute": {
+          "title": "执行编码 agent 任务",
+          "description": "在这台设备上运行 Claude Code、Codex 等后端，并把会话结果同步回你的账户"
+        },
+        "client": {
+          "title": "作为客户端接入",
+          "description": "以你的身份连接 AgentRe，收发会话消息并列出你的设备"
+        },
+        "file_browse": {
+          "title": "浏览项目文件",
+          "description": "读取你所授权的项目目录中的文件列表与内容"
+        },
+        "unknown": "控制台尚未收录此能力的说明，原样展示不隐藏"
+      },
+      "expiry": "此授权请求将在 {{minutes}} 分 {{seconds}} 秒后过期",
+      "expirySeconds": "此授权请求将在 {{seconds}} 秒后过期",
+      "expiryAnnounce": "此授权请求将在约 {{minutes}} 分钟后过期",
+      "expiryAnnounceSoon": "此授权请求将在 1 分钟内过期",
+      "allow": "允许授权",
+      "deny": "拒绝",
+      "fineprint": "你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。",
+      "actionError": "操作没有完成，请重试。"
+    },
     "kind": {
       "desktop": "桌面端",
       "agentred": "计算节点",

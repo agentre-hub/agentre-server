@@ -1,30 +1,15 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { CircleAlert, Info, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
 import { Alert } from "@/components/ui/alert";
 import AuthLayout from "@/components/AuthLayout";
 import CodeInput from "@/components/CodeInput";
+import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
 import { api, ApiError } from "@/lib/api";
 import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
 import { normalize, toChars } from "@/lib/userCode";
-
-interface PendingInfo {
-  device_kind: string;
-  platform: string;
-  version: string;
-  capabilities: Record<string, boolean>;
-  expires_in: number;
-}
 
 /**
  * 码格的就地校验错误。两种来源共用同一套「整排标红、停在原地」的呈现：
@@ -33,6 +18,13 @@ interface PendingInfo {
  * 文案分开是因为「这个代码不存在」对一个只填了两位的人是句假话。
  */
 type CodeError = "incomplete" | "invalid";
+
+/** 授权请求已过期：无论出现在哪一步，都落到 /device/expired（决策 9）。 */
+function isExpired(e: unknown): boolean {
+  return (
+    e instanceof ApiError && e.code === DEVICE_FLOW_CODES.DeviceFlowExpiredToken
+  );
+}
 
 export default function Device() {
   const { t } = useTranslation();
@@ -43,18 +35,28 @@ export default function Device() {
   const [chars, setChars] = useState<string[]>(() => toChars(initial));
   const [info, setInfo] = useState<PendingInfo | null>(null);
   const [codeError, setCodeError] = useState<CodeError | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // 存住失败本身，渲染时才翻译成文案：effect 里不碰 t，就不必把它拉进依赖
+  // 数组（切语言不该重新查一次 pending）。与 Devices.tsx 同一手法。
+  const [failure, setFailure] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
   const hintId = useId();
   const errorId = useId();
 
   useEffect(() => {
     const norm = normalize(initial);
-    if (norm) loadPending(norm);
+    if (norm) void loadPending(norm);
   }, [initial]);
 
+  /**
+   * 只有 ApiError 才带得出服务端说法；其余（离线、代理返回非 JSON）同样是
+   * 失败，必须说出来——静默吞掉会让用户对着一个没反应的按钮点第二次。
+   */
+  function failureText(e: unknown): string {
+    return e instanceof ApiError ? e.message : t("device.approve.actionError");
+  }
+
   async function loadPending(uc: string) {
-    setError(null);
+    setFailure(null);
     setCodeError(null);
     setSubmitting(true);
     try {
@@ -64,12 +66,15 @@ export default function Device() {
       setInfo(got);
       setCode(uc);
     } catch (e) {
-      if (e instanceof ApiError) {
-        // 30205 就地标红、不跳页：输错一个字符不该让用户丢掉已输入的内容
-        // （design decision 10）。判据是业务码而不是文案——文案是可翻译的。
-        if (e.code === DEVICE_FLOW_CODES.DeviceFlowUserCodeInvalid)
-          setCodeError("invalid");
-        else setError(e.message);
+      // 30205 就地标红、不跳页：输错一个字符不该让用户丢掉已输入的内容
+      // （design decision 10）。判据是业务码而不是文案——文案是可翻译的。
+      if (
+        e instanceof ApiError &&
+        e.code === DEVICE_FLOW_CODES.DeviceFlowUserCodeInvalid
+      ) {
+        setCodeError("invalid");
+      } else {
+        setFailure(e);
       }
     } finally {
       setSubmitting(false);
@@ -101,9 +106,16 @@ export default function Device() {
         method: "POST",
         body: JSON.stringify({ user_code: code }),
       });
-      nav("/device/success");
+      // 设备信息随 router state 带到成功屏——那一屏自己拿不到 pending 记录。
+      nav("/device/success", {
+        state: {
+          kind: info.device_kind,
+          platform: info.platform,
+          version: info.version,
+        },
+      });
     } catch (e) {
-      if (e instanceof ApiError) setError(e.message);
+      setFailure(e);
     } finally {
       setSubmitting(false);
     }
@@ -117,17 +129,33 @@ export default function Device() {
         method: "POST",
         body: JSON.stringify({ user_code: code }),
       });
-      setError(t("device.denied"));
-      setInfo(null);
+      nav("/device/denied");
+    } catch (e) {
+      setFailure(e);
     } finally {
       setSubmitting(false);
     }
   }
 
-  const enabledCapabilities = Object.entries(info?.capabilities ?? {})
-    .filter(([, v]) => v)
-    .map(([k]) => k)
-    .join(", ");
+  // 过期在哪一步冒出来都一样：查 pending、点允许、点拒绝，全部落到终态页
+  // （决策 9）。放在渲染里判一次，三条 catch 就都不必各自跳一遍。
+  if (isExpired(failure)) return <Navigate to="/device/expired" replace />;
+
+  if (info) {
+    return (
+      <AuthLayout>
+        <DeviceApproval
+          code={code}
+          info={info}
+          submitting={submitting}
+          error={failure === null ? null : failureText(failure)}
+          onApprove={() => void onApprove()}
+          onDeny={() => void onDeny()}
+          onExpire={() => nav("/device/expired")}
+        />
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout>
@@ -176,12 +204,12 @@ export default function Device() {
             </p>
           </div>
 
-          {error && (
+          {failure !== null && (
             <Alert
               variant="destructive"
               className="border-destructive bg-destructive-soft"
             >
-              {error}
+              {failureText(failure)}
             </Alert>
           )}
 
@@ -197,38 +225,6 @@ export default function Device() {
             {t("device.entry.footnote")}
           </p>
         </form>
-
-        <Dialog
-          open={!!info}
-          onOpenChange={(o) => {
-            if (!o) setInfo(null);
-          }}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("device.approveTitle")}</DialogTitle>
-              <DialogDescription>
-                {info?.device_kind} ({info?.platform} {info?.version})
-                <br />
-                {t("device.capabilities")}: {enabledCapabilities}
-                {info?.device_kind === "agentred" && (
-                  <>
-                    <br />
-                    {t("device.computeRisk")}
-                  </>
-                )}
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={onDeny} disabled={submitting}>
-                {t("device.deny")}
-              </Button>
-              <Button onClick={onApprove} disabled={submitting}>
-                {t("device.approve")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     </AuthLayout>
   );

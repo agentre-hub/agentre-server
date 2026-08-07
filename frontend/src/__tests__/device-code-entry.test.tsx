@@ -135,10 +135,19 @@ describe("设备码输入：提交", () => {
     });
     submit();
 
-    // 查到 pending 后仍进确认态（本任务不重做确认屏，只保证它没被拆坏）
-    await screen.findByRole("dialog");
-    expect(mockedApi).toHaveBeenCalledTimes(1);
-    expect(mockedApi.mock.calls[0][0]).toContain("user_code=A4F-7Q2");
+    // 查到 pending 后进确认屏——那是同一路由下的整页区域（决策 8），
+    // 这里只保证入口屏把它交出去了，确认屏本身由 device-approval-risk 覆盖
+    await screen.findByRole("heading", {
+      level: 1,
+      name: /allow this device/i,
+    });
+    // 只数查 pending 那一次：确认屏还会为账户头像拉一次 /v1/auth/me，
+    // 那是另一件事，不该让这条断言随它变。
+    const lookups = mockedApi.mock.calls.filter(([path]) =>
+      path.startsWith("/v1/oauth/device/pending"),
+    );
+    expect(lookups).toHaveLength(1);
+    expect(lookups[0][0]).toContain("user_code=A4F-7Q2");
   });
 
   it("不满六位时提交：不发请求，就地报错", async () => {

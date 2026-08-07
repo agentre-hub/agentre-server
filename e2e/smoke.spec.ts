@@ -41,17 +41,20 @@ test("未知路由渲染 404 而不是白屏", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("设备授权页能查到 pending 设备并弹出确认框", async ({ page }) => {
+test("设备授权页能查到 pending 设备并就地渲染确认区", async ({ page }) => {
   await mockAuthenticated(page);
   await mockDevicePending(page);
 
   await page.goto("/device?user_code=A4F-7Q2");
 
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toBeVisible();
-  // 只断言真实能力被列出来，不断言具体文案——文案是可翻译的
-  await expect(dialog).toContainText("chat");
-  await expect(dialog).toContainText("darwin");
+  // 确认区是 /device 下的整页区域而不是对话框（决策 8）
+  const main = page.getByRole("main");
+  await expect(main).toContainText("A4F-7Q2");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  // 只断言真实设备信息被列出来，不断言具体文案——文案是可翻译的。
+  // chat 不在收录表里，按原样透出（决策 12）。
+  await expect(main).toContainText("chat");
+  await expect(main).toContainText("darwin");
 });
 
 test("主题切换会把 dark class 挂到 <html> 上并持久化", async ({ page }) => {
