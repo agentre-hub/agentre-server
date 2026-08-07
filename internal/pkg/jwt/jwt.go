@@ -55,7 +55,10 @@ func NewSigner(privPEM, pubPEM []byte, issuer, audience string) (*Signer, error)
 	}, nil
 }
 
-const skew = 60 * time.Second
+// Leeway 是 Verify 接受的时钟偏移:一个 access token 直到 exp+Leeway 之前都还会
+// 验签通过。任何「让已签发凭据失效」的机制(黑名单 TTL、吊销列表窗口)都必须覆盖
+// 到 exp+Leeway,否则会留下一段 token 已不在吊销面、却仍被接受的空窗。
+const Leeway = 60 * time.Second
 
 // Sign 返回 token 字符串 + jti（用于黑名单存储）。
 func (s *Signer) Sign(c Claims, ttl time.Duration) (string, string, error) {
@@ -87,7 +90,7 @@ func (s *Signer) Verify(token string) (*Claims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		return s.pub, nil
-	}, jwtv5.WithLeeway(skew), jwtv5.WithIssuer(s.issuer), jwtv5.WithAudience(s.aud))
+	}, jwtv5.WithLeeway(Leeway), jwtv5.WithIssuer(s.issuer), jwtv5.WithAudience(s.aud))
 	if err != nil {
 		return nil, err
 	}

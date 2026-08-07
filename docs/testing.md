@@ -18,13 +18,19 @@ speculatively. And do not add a guard in the consumer to paper over a producer b
 | Repository | **sqlmock** | **Never start a real PostgreSQL.** `internal/testutils.Database(t)` gives you a postgres-dialect sqlmock through ctx |
 | Service | **mockgen** | Inject repo mocks via `xxx_repo.RegisterXxx(mock)`. Never touch a database |
 | Controller | `muxtest.TestMux` | Build the route tree, `testMux.Do(ctx, req, resp)` |
-| Cross-layer | `internal/integration/` | Controller-level, still mocked — no infrastructure needed |
 | Migrations | **nothing** for the DDL; sqlmock for the runner around it | `migrationList()` is deliberately untested — see below |
 | Browser | `e2e/` | See [verification.md](verification.md) |
 
 Repository tests are the rule people break first. sqlmock keeps them fast and hermetic;
 a real database makes them order-dependent and slow, and they start failing for reasons
 that have nothing to do with the code.
+
+There is no cross-layer tier. A test that stands up its own `gin.New()` and hand-writes
+the `code`/`msg`/`data` envelope is not testing the wiring — it is testing a second
+implementation of it, one that stays green while the real `internal/api/router.go` breaks.
+`internal/integration/` was exactly that and has been removed. Test each layer at its own
+seam, use `muxtest.TestMux` when you need the real route tree, and leave genuine
+end-to-end wiring to `e2e/`, which runs the real binary.
 
 ## Build tags
 

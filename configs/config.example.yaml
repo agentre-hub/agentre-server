@@ -52,7 +52,7 @@ server:
     public_key_pem_path:  "/etc/agentre-server/jwt.pub"
     issuer:   "agentre-server"
     audience: "agentre"
-    access_ttl: 1h
+    access_ttl: 15m
     refresh_ttl: 2160h
   oauth:
     github:

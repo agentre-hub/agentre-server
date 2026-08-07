@@ -84,6 +84,36 @@ func (mr *MockDeviceTokenRepoMockRecorder) FindByHash(ctx, hash any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByHash", reflect.TypeOf((*MockDeviceTokenRepo)(nil).FindByHash), ctx, hash)
 }
 
+// ListAccessJTIByDevice mocks base method.
+func (m *MockDeviceTokenRepo) ListAccessJTIByDevice(ctx context.Context, deviceID int64) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListAccessJTIByDevice", ctx, deviceID)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListAccessJTIByDevice indicates an expected call of ListAccessJTIByDevice.
+func (mr *MockDeviceTokenRepoMockRecorder) ListAccessJTIByDevice(ctx, deviceID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAccessJTIByDevice", reflect.TypeOf((*MockDeviceTokenRepo)(nil).ListAccessJTIByDevice), ctx, deviceID)
+}
+
+// ListRevokedJTIByUser mocks base method.
+func (m *MockDeviceTokenRepo) ListRevokedJTIByUser(ctx context.Context, userID, windowStartMs int64) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListRevokedJTIByUser", ctx, userID, windowStartMs)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListRevokedJTIByUser indicates an expected call of ListRevokedJTIByUser.
+func (mr *MockDeviceTokenRepoMockRecorder) ListRevokedJTIByUser(ctx, userID, windowStartMs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListRevokedJTIByUser", reflect.TypeOf((*MockDeviceTokenRepo)(nil).ListRevokedJTIByUser), ctx, userID, windowStartMs)
+}
+
 // Revoke mocks base method.
 func (m *MockDeviceTokenRepo) Revoke(ctx context.Context, id, nowMs int64) (int64, error) {
 	m.ctrl.T.Helper()

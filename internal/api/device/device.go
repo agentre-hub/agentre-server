@@ -2,6 +2,16 @@ package device
 
 import "github.com/cago-frame/cago/server/mux"
 
+// ---------- Public Key ----------
+
+type PublicKeyRequest struct {
+	mux.Meta `path:"/v1/keys" method:"GET"`
+}
+
+type PublicKeyResponse struct {
+	PublicKey string `json:"public_key"`
+}
+
 // ---------- Device Flow ----------
 
 type DeviceAuthorizeRequest struct {
@@ -96,9 +106,26 @@ type ListDevicesItem struct {
 	Capabilities map[string]bool `json:"capabilities"`
 	LastSeenAt   int64           `json:"last_seen_at"`
 	Status       int             `json:"status"`
+	Online       bool            `json:"online"`
 	IsThisDevice bool            `json:"is_this_device"`
 }
 
 type ListDevicesResponse struct {
 	Devices []ListDevicesItem `json:"devices"`
+}
+
+// ---------- Revocations ----------
+
+// RevocationsRequest 是 daemon 定期拉取吊销列表用的端点（R4 producer）。
+// 只接受 device JWT；调用方的账号取自 JWT 里的 uid，不接受任意 URL 参数。
+type RevocationsRequest struct {
+	mux.Meta `path:"/v1/devices/revocations" method:"GET"`
+}
+
+type RevocationsResponse struct {
+	// RevokedJTI 是调用方设备所属账号下，已吊销且仍在 AccessTTL 窗口内
+	// （即仍可能验签通过）的 access token jti 全集。
+	RevokedJTI []string `json:"revoked_jti"`
+	// AsOf 是本次响应生成时刻（unix ms），供调用方判断新鲜度。
+	AsOf int64 `json:"as_of"`
 }

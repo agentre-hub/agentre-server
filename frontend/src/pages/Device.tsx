@@ -147,6 +147,12 @@ export default function Device() {
                 {info?.device_kind} ({info?.platform} {info?.version})
                 <br />
                 {t("device.capabilities")}: {enabledCapabilities}
+                {info?.device_kind === "agentred" && (
+                  <>
+                    <br />
+                    {t("device.computeRisk")}
+                  </>
+                )}
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

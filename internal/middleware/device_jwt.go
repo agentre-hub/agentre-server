@@ -1,19 +1,15 @@
 package middleware
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
-	goredis "github.com/redis/go-redis/v9"
 
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwtblacklist"
 )
 
 func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {
@@ -29,7 +25,7 @@ func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {
 			abortJWT(c, code.JWTSignatureInvalid, http.StatusUnauthorized)
 			return
 		}
-		if isBlacklisted(c.Request.Context(), claims.JTI) {
+		if jwtblacklist.Has(c.Request.Context(), claims.JTI) {
 			abortJWT(c, code.JWTBlacklisted, http.StatusUnauthorized)
 			return
 		}
@@ -40,29 +36,8 @@ func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {
 	}
 }
 
-// Blacklist 把 jti 写入 redis，TTL = 当前 access token 剩余秒数。
-func Blacklist(ctx context.Context, jti string, ttlSec int) error {
-	if jti == "" {
-		return errors.New("empty jti")
-	}
-	return redis.Default().Set(ctx, "jwt_blacklist:"+jti, "1", durationFromSec(ttlSec)).Err()
-}
-
-func isBlacklisted(ctx context.Context, jti string) bool {
-	err := redis.Default().Get(ctx, "jwt_blacklist:"+jti).Err()
-	if errors.Is(err, goredis.Nil) {
-		return false
-	}
-	if err != nil {
-		return false // fail-open（spec §6.5）
-	}
-	return true
-}
-
 func abortJWT(c *gin.Context, biz int, status int) {
 	c.AbortWithStatusJSON(status, gin.H{
 		"code": biz, "msg": i18n.T(c.Request.Context(), biz), "data": nil,
 	})
 }
-
-func durationFromSec(n int) time.Duration { return time.Duration(n) * time.Second }

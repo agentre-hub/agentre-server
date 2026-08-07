@@ -56,6 +56,21 @@ func (mr *MockDeviceRepoMockRecorder) Find(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Find", reflect.TypeOf((*MockDeviceRepo)(nil).Find), ctx, id)
 }
 
+// FindByFingerprint mocks base method.
+func (m *MockDeviceRepo) FindByFingerprint(ctx context.Context, userID int64, fingerprint string) (*device_entity.Device, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByFingerprint", ctx, userID, fingerprint)
+	ret0, _ := ret[0].(*device_entity.Device)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByFingerprint indicates an expected call of FindByFingerprint.
+func (mr *MockDeviceRepoMockRecorder) FindByFingerprint(ctx, userID, fingerprint any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByFingerprint", reflect.TypeOf((*MockDeviceRepo)(nil).FindByFingerprint), ctx, userID, fingerprint)
+}
+
 // ListByUser mocks base method.
 func (m *MockDeviceRepo) ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error) {
 	m.ctrl.T.Helper()

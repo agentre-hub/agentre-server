@@ -14,6 +14,7 @@ import (
 
 type DeviceRepo interface {
 	Find(ctx context.Context, id int64) (*device_entity.Device, error)
+	FindByFingerprint(ctx context.Context, userID int64, fingerprint string) (*device_entity.Device, error)
 	Upsert(ctx context.Context, d *device_entity.Device) error
 	Touch(ctx context.Context, id, nowMs int64) error
 	Revoke(ctx context.Context, id, nowMs int64) error
@@ -31,6 +32,20 @@ type repo struct{}
 func (r *repo) Find(ctx context.Context, id int64) (*device_entity.Device, error) {
 	ret := &device_entity.Device{}
 	err := db.Ctx(ctx).Where("id=?", id).First(ret).Error
+	if err != nil {
+		if db.RecordNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return ret, nil
+}
+
+// FindByFingerprint 按 (user_id, fingerprint) 查一台设备，查不到返回 (nil, nil)。
+// Upsert 已不再用它（改走数据库原子 upsert），relay_svc 解析中继目标时用。
+func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (*device_entity.Device, error) {
+	ret := &device_entity.Device{}
+	err := db.Ctx(ctx).Where("user_id=? AND fingerprint=?", userID, fp).First(ret).Error
 	if err != nil {
 		if db.RecordNotFound(err) {
 			return nil, nil

@@ -6,13 +6,15 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwtblacklist"
 	"agentre-server/internal/service/auth_svc"
 )
 
 // SessionOrDeviceAuth accepts either a device-JWT Bearer token (preferred) or a
 // browser session cookie. On success it sets user_id, and additionally device_id
 // + device_kind when the caller is a device, or csrf_token when the caller is
-// a session.
+// a session. A session caller using an unsafe method must also clear CSRF —
+// the Bearer branch carries no cookie and is exempt.
 func SessionOrDeviceAuth(signer *jwt.Signer) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		h := c.GetHeader("Authorization")
@@ -22,7 +24,7 @@ func SessionOrDeviceAuth(signer *jwt.Signer) gin.HandlerFunc {
 				abortUnauthorized(c)
 				return
 			}
-			if isBlacklisted(c.Request.Context(), claims.JTI) {
+			if jwtblacklist.Has(c.Request.Context(), claims.JTI) {
 				abortUnauthorized(c)
 				return
 			}
@@ -44,6 +46,13 @@ func SessionOrDeviceAuth(signer *jwt.Signer) gin.HandlerFunc {
 		}
 		c.Set("user_id", sess.UserID)
 		c.Set("csrf_token", sess.CSRFToken)
+		// 这一分支是凭 cookie 鉴权的，写操作必须和纯浏览器 session 组
+		// （router.go 的 SessionAuth()+CSRF()）走同一条 CSRF 判据；上面的 Bearer
+		// 分支已 return，结构上不受 CSRF 威胁，也就不需要出示该头。
+		if !csrfOK(c, sess.CSRFToken) {
+			abortForbidden(c)
+			return
+		}
 		c.Next()
 	}
 }

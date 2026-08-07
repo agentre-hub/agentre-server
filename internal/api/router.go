@@ -9,14 +9,17 @@ import (
 	"agentre-server/internal/controller/auth_ctr"
 	"agentre-server/internal/controller/device_ctr"
 	"agentre-server/internal/controller/healthz_ctr"
+	"agentre-server/internal/controller/relay_ctr"
 	"agentre-server/internal/middleware"
 	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/service/relay_svc"
 )
 
 // RouterDeps 由 main.go 注入。
 type RouterDeps struct {
 	Cfg    *bootstrap.ServerConfig
 	Signer *jwt.Signer
+	Relay  relay_svc.RelaySvc
 }
 
 // Router 构造完整路由树。
@@ -25,13 +28,19 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 
 	healthzCtr := healthz_ctr.NewHealthz()
 	authCtr := auth_ctr.NewAuth()
-	deviceCtr := device_ctr.NewDevice()
+	deviceCtr := device_ctr.NewDeviceWithPublicKey(r.Cfg.JWT.PublicKeyPEMContent())
+	relaySvc := r.Relay
+	if relaySvc == nil {
+		relaySvc = relay_svc.Default()
+	}
+	relayCtr := relay_ctr.New(relaySvc)
 
 	// 公开
 	g.Group("/").Bind(
 		healthzCtr.Healthz,
 		authCtr.GithubAuthorize,
 		authCtr.GithubCallback,
+		deviceCtr.PublicKey,
 	)
 
 	// device flow 端点（带 RFC 8628 错误注入 + 速率限制）
@@ -55,13 +64,16 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// session 或 device JWT 都可以
 	g.Group("/", middleware.SessionOrDeviceAuth(r.Signer)).Bind(
 		authCtr.Me,
-	)
-
-	// device JWT
-	g.Group("/", middleware.DeviceJWT(r.Signer)).Bind(
 		deviceCtr.Revoke,
 		deviceCtr.List,
 	)
+
+	// device JWT
+	deviceJWT := g.Group("/", middleware.DeviceJWT(r.Signer))
+	deviceJWT.Bind(deviceCtr.Revocations)
+	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由；鉴权仍复用 device JWT。
+	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
+	deviceJWT.GET("/v1/relay/client", relayCtr.Client)
 
 	return nil
 }

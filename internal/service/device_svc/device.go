@@ -22,10 +22,12 @@ import (
 	"agentre-server/internal/model/entity/device_token_entity"
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/pkg/jwt"
+	"agentre-server/internal/pkg/jwtblacklist"
 	"agentre-server/internal/pkg/usercode"
 	"agentre-server/internal/repository/device_flow_repo"
 	"agentre-server/internal/repository/device_repo"
 	"agentre-server/internal/repository/device_token_repo"
+	"agentre-server/internal/service/relay_svc"
 )
 
 type DeviceSvc interface {
@@ -37,6 +39,7 @@ type DeviceSvc interface {
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
+	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
 }
 
 type deviceSvc struct {
@@ -197,6 +200,16 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			return err
 		}
 
+		access, jti, err := s.signer.Sign(jwt.Claims{
+			UID:  flow.AuthorizedUserID,
+			DID:  d.ID,
+			Kind: d.Kind,
+			Caps: d.CapabilityList(),
+		}, s.cfg.AccessTTL)
+		if err != nil {
+			return err
+		}
+
 		refreshPlain, err := randomBase32(32)
 		if err != nil {
 			return err
@@ -206,22 +219,13 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		token := &device_token_entity.DeviceToken{
 			DeviceID:         d.ID,
 			RefreshTokenHash: hash,
+			AccessJTI:        jti,
 			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
 			UserAgent:        ua,
 			IP:               ip,
 			Createtime:       nowMs,
 		}
 		if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
-			return err
-		}
-
-		access, jti, err := s.signer.Sign(jwt.Claims{
-			UID:  flow.AuthorizedUserID,
-			DID:  d.ID,
-			Kind: d.Kind,
-			Caps: d.CapabilityList(),
-		}, s.cfg.AccessTTL)
-		if err != nil {
 			return err
 		}
 
@@ -303,9 +307,19 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			return err
 		}
 		ip, ua := clientInfoFromCtx(ctx)
+		access, jti, err := s.signer.Sign(jwt.Claims{
+			UID:  d.UserID,
+			DID:  d.ID,
+			Kind: d.Kind,
+			Caps: d.CapabilityList(),
+		}, s.cfg.AccessTTL)
+		if err != nil {
+			return err
+		}
 		newToken := &device_token_entity.DeviceToken{
 			DeviceID:         d.ID,
 			RefreshTokenHash: sha256Hex(newPlain),
+			AccessJTI:        jti,
 			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
 			RotatedFromID:    row.ID,
 			UserAgent:        ua,
@@ -319,15 +333,6 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			return err
 		}
 
-		access, jti, err := s.signer.Sign(jwt.Claims{
-			UID:  d.UserID,
-			DID:  d.ID,
-			Kind: d.Kind,
-			Caps: d.CapabilityList(),
-		}, s.cfg.AccessTTL)
-		if err != nil {
-			return err
-		}
 		*out = TokenOutput{
 			AccessToken:      access,
 			RefreshToken:     newPlain,
@@ -419,14 +424,42 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 
 func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	nowMs := time.Now().UnixMilli()
+	jtis, err := device_token_repo.DeviceToken().ListAccessJTIByDevice(ctx, deviceID)
+	if err != nil {
+		return err
+	}
+	// 把该设备已签发（含刷新轮换出的旧 access token）的 jti 全部拉黑，
+	// 让在线设备撤销后立即失效（middleware.DeviceJWT 逐请求校验黑名单）。
+	// TTL 取 AccessTTL+jwt.Leeway：黑名单从**撤销那一刻**起算，而 token 是从
+	// **签发那一刻**起算、且 Verify 还多接受 Leeway 的时钟偏移。只取 AccessTTL
+	// 时，一个刚签发就被撤销的 token（12:00 签发、12:00:05 撤销）会在
+	// 12:15:05 掉出黑名单，却一直验签通过到 12:16:00——中间那段它又活了。
+	// Redis 不可用时不让 DB 侧吊销失败——黑名单本身 fail-open（spec §6.5）。
+	ttlSec := int((s.cfg.AccessTTL + jwt.Leeway) / time.Second)
+	for _, jti := range jtis {
+		_ = jwtblacklist.Add(ctx, jti, ttlSec)
+	}
 	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
 		return err
 	}
 	return device_repo.Device().Revoke(ctx, deviceID, nowMs)
 }
 
-// ListUserDevices returns all devices for a user, marking the caller's row
-// and decoding the Capabilities JSON column into a map.
+// ListRevokedJTI 返回调用方账号（userID，跨其名下全部设备）已吊销、且签发
+// 时间距今仍可能验签通过的 access token jti 全集，供 daemon 定期拉取后本地
+// 生效（R4）。超出窗口的旧吊销记录交给过期兜底、这里直接不取。
+//
+// 窗口长度是 AccessTTL+jwt.Leeway 而不是 AccessTTL：Verify 接受 Leeway 的时钟
+// 偏移，token 直到 exp+Leeway 都还验得过。只减 AccessTTL 会让每个 jti 在最后
+// Leeway 秒里既已掉出这份列表、又仍被任何拉取方接受。
+func (s *deviceSvc) ListRevokedJTI(ctx context.Context, userID int64) ([]string, error) {
+	windowStart := time.Now().Add(-(s.cfg.AccessTTL + jwt.Leeway)).UnixMilli()
+	return device_token_repo.DeviceToken().ListRevokedJTIByUser(ctx, userID, windowStart)
+}
+
+// ListUserDevices returns all devices for a user, marking the caller's row,
+// decoding the Capabilities JSON column into a map, and reporting the real
+// relay presence (R20) as the online state.
 func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error) {
 	rows, err := device_repo.Device().ListByUser(ctx, userID)
 	if err != nil {
@@ -438,6 +471,13 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 		if len(d.Capabilities) > 0 {
 			_ = json.Unmarshal(d.Capabilities, &caps)
 		}
+		// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。
+		// Redis 抖动时按离线对待（fail-open）：在线态只是列表的增强列，
+		// 不应拖垮整个设备列表或 Revoke 前的归属校验（该流程也走本方法）。
+		online, err := relay_svc.Default().IsDaemonOnline(ctx, userID, d.Fingerprint)
+		if err != nil {
+			online = false
+		}
 		out = append(out, api.ListDevicesItem{
 			ID:           d.ID,
 			Name:         d.Name,
@@ -448,6 +488,7 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 			Capabilities: caps,
 			LastSeenAt:   d.LastSeenAt,
 			Status:       d.Status,
+			Online:       online,
 			IsThisDevice: d.ID == callerDeviceID,
 		})
 	}
