@@ -5,6 +5,7 @@ type DeviceToken struct {
 	ID               int64   `gorm:"column:id;primaryKey;autoIncrement"`
 	DeviceID         int64   `gorm:"column:device_id;type:bigint;not null"`
 	RefreshTokenHash string  `gorm:"column:refresh_token_hash;type:text;not null"`
+	AccessJTI        string  `gorm:"column:access_jti;type:text;not null;default:''"`
 	RefreshExpiresAt int64   `gorm:"column:refresh_expires_at;type:bigint;not null;default:0"`
 	LastUsedAt       int64   `gorm:"column:last_used_at;type:bigint;not null;default:0"`
 	RotatedFromID    int64   `gorm:"column:rotated_from_id;type:bigint;not null;default:0"`

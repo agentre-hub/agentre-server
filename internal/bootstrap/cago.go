@@ -7,6 +7,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -18,9 +19,11 @@ import (
 
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/session"
+	"agentre-server/internal/repository/device_repo"
 	"agentre-server/internal/service/auth_svc"
 	"agentre-server/internal/service/device_svc"
 	"agentre-server/internal/service/oauth_svc"
+	"agentre-server/internal/service/relay_svc"
 )
 
 type ServerConfig struct {
@@ -99,7 +102,8 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 		out.DeviceFlow.PollInterval = 5 * time.Second
 	}
 	if out.JWT.AccessTTL == 0 {
-		out.JWT.AccessTTL = time.Hour
+		// R4：访问凭据必须是分钟级短有效期，靠刷新续期。
+		out.JWT.AccessTTL = 15 * time.Minute
 	}
 	if out.JWT.RefreshTTL == 0 {
 		out.JWT.RefreshTTL = 90 * 24 * time.Hour
@@ -136,19 +140,38 @@ func LoadJWTSigner(cfg *ServerConfig) *jwt.Signer {
 	return s
 }
 
+// PublicKeyPEMContent 返回验签公钥 PEM 的内容，解析规则与 LoadJWTSigner 完全一致
+// （内联优先，否则读路径）。/v1/keys 分发的必须是签名者验签用的那一把：daemon 在
+// login 时取走它、此后离线验签（R3），只读 PublicKeyPEM 字段会让「只配了
+// public_key_pem_path」的部署（configs/config.example.yaml 的样子）分发出空串。
+//
+// 读不到时返回空串而不是退出：真正缺 key 的部署在 LoadJWTSigner 里就已经 Fatal 了
+// （它跑在路由构建之前），这里再 Fatal 一次只会让测试里不配 JWT 的路由构造崩掉。
+func (c JWTConfig) PublicKeyPEMContent() string {
+	pem, _ := readPEM(c.PublicKeyPEM, c.PublicKeyPEMPath)
+	return string(pem)
+}
+
 func loadPEM(inline, path string) []byte {
+	b, err := readPEM(inline, path)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	return b
+}
+
+func readPEM(inline, path string) ([]byte, error) {
 	if inline != "" {
-		return []byte(inline)
+		return []byte(inline), nil
 	}
 	if path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil {
-			log.Fatalf("read pem %s: %v", path, err)
+			return nil, fmt.Errorf("read pem %s: %w", path, err)
 		}
-		return b
+		return b, nil
 	}
-	log.Fatalf("missing JWT key (need either inline PEM or file path)")
-	return nil
+	return nil, errors.New("missing JWT key (need either inline PEM or file path)")
 }
 
 // RegisterDefaults 初始化 service 默认单例（OAuth、auth、device）。
@@ -168,4 +191,16 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		RefreshTTL:      cfg.JWT.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}, signer))
+
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unknown-host"
+	}
+	relayConfig := relay_svc.Config{
+		InstanceID: fmt.Sprintf("%s-%d-%d", hostname, os.Getpid(), time.Now().UnixNano()),
+		OnlineTTL:  30 * time.Second,
+	}
+	relay_svc.SetDefault(relay_svc.New(
+		relayConfig, device_repo.Device(), redis.Default(), relay_svc.NewRedisForwarder(relayConfig, redis.Default()),
+	))
 }
