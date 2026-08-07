@@ -18,8 +18,8 @@ vi.mock("@/lib/theme", async (importOriginal) => {
 });
 
 function renderLogin(search: string = "") {
-  // Since Login.tsx uses window.location.search directly (not useLocation),
-  // we need to mock it for the test
+  // Login.tsx 直接读 window.location.search（而不是 useLocation），
+  // 所以 query 要从 window 上塞进去，MemoryRouter 的 initialEntries 喂不到它。
   Object.defineProperty(window, "location", {
     value: {
       ...window.location,
@@ -77,7 +77,6 @@ describe("Login", () => {
 
     it("shows a footer note about terms and privacy", () => {
       renderLogin();
-      // Get the footer by finding the element that contains the specific text
       expect(
         screen.getByText(/By continuing, you agree to AgentRe/i),
       ).toBeTruthy();
@@ -87,34 +86,25 @@ describe("Login", () => {
   describe("user_code context strip", () => {
     it("does not show context strip when user_code is absent", () => {
       renderLogin();
-      // Check that there's no laptop icon (which is only in the context strip)
+      // 上下文条独有的那块设备图标，没有 user_code 时整块都不该渲染
       expect(screen.queryByRole("img", { hidden: true })).toBeNull();
     });
 
     it("shows context strip when user_code is in URL", () => {
       renderLogin("?user_code=A4F-7Q2");
-      // Look for the device code - might match multiple elements due to parent text content
-      const codeElements = screen.queryAllByText((content, element) => {
-        // Only match leaf elements, not parents
-        if (!element) return false;
-        return (
-          element.textContent === "A4F-7Q2" ||
-          element.textContent?.trim() === "A4F-7Q2"
-        );
-      });
-      expect(codeElements.length).toBeGreaterThan(0);
+      expect(screen.getByText("A4F-7Q2")).toBeTruthy();
     });
 
     it("uses mono font for the device code in context strip", () => {
       renderLogin("?user_code=A4F-7Q2");
-      // Find the element that contains the device code and has font-mono
+      // spec「登录」：「下面是等宽的设备码」——0/O、1/l 要一眼分得开
       const strip = document.querySelector(".font-mono");
       expect(strip?.textContent).toContain("A4F-7Q2");
     });
 
     it("context strip has primary-soft background", () => {
       renderLogin("?user_code=A4F-7Q2");
-      // Check that primary-soft is used
+      // spec「登录」：「插入一块 primary-soft 的上下文条」
       const strip = document.querySelector(".bg-primary-soft");
       expect(strip).toBeTruthy();
     });
@@ -123,44 +113,38 @@ describe("Login", () => {
   describe("error handling", () => {
     it("does not show error when err param is absent", () => {
       renderLogin();
-      // No alert should be present
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    it("shows failure alert when err param is present", () => {
+    // spec「失败路径 · 登录失败」：Alert「含标题「登录未完成」与具体原因」
+    it("shows a titled failure alert when err param is present", () => {
       renderLogin("?err=access_denied");
-      const alert = screen.getByRole("alert");
-      expect(alert).toBeTruthy();
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Sign in unsuccessful",
+      );
     });
 
     it("shows retry button when err is present", () => {
       renderLogin("?err=access_denied");
-      // Look for a button that's not the GitHub button
-      const buttons = screen.getAllByRole("button");
-      expect(buttons.length).toBeGreaterThanOrEqual(1);
-      // The retry button should exist when there's an error
       expect(
-        buttons.some(
-          (btn) =>
-            btn.textContent?.includes("Sign in again") ||
-            btn.textContent?.includes("重新登录"),
-        ),
+        screen.getByRole("button", { name: /Sign in again/i }),
       ).toBeTruthy();
     });
 
     it("hides GitHub login button when error is shown", () => {
       renderLogin("?err=access_denied");
-      // The GitHub button should not be present when there's an error
-      const githubBtn = screen.queryByRole("button", { name: /GitHub/i });
-      expect(githubBtn).toBeNull();
+      // 失败态里只留「重新登录」一个动作，两个登录按钮会让人不知道该点哪个
+      expect(screen.queryByRole("button", { name: /GitHub/i })).toBeNull();
     });
 
+    // 六条已知 err 走 locale 文案，而不是把后端的原始码抛给用户
     it("uses known error message for recognized err codes", () => {
       renderLogin("?err=github_email_missing");
       const alert = screen.getByRole("alert");
-      // The error message should be in the alert
-      const errorMsg = alert.textContent || "";
-      expect(errorMsg.length).toBeGreaterThan(0);
+      expect(alert.textContent).toContain(
+        "Set a verified primary email in your GitHub settings",
+      );
+      expect(alert.textContent).not.toContain("github_email_missing");
     });
 
     it("shows err code verbatim for unknown error codes", () => {
@@ -207,16 +191,10 @@ describe("Login", () => {
   describe("interaction", () => {
     it("retry button is clickable when error is shown", () => {
       renderLogin("?err=access_denied");
-      // Find all buttons and check that there's one that's not the GitHub button
-      const buttons = screen.getAllByRole("button");
-      expect(buttons.length).toBeGreaterThan(0);
-      // The retry button should exist and be enabled
-      const retryBtn = buttons.find(
-        (btn) =>
-          btn.textContent?.includes("Sign in again") ||
-          btn.textContent?.includes("重新登录"),
-      ) as HTMLButtonElement | undefined;
-      expect(retryBtn?.disabled).toBe(false);
+      const retryBtn = screen.getByRole("button", {
+        name: /Sign in again/i,
+      }) as HTMLButtonElement;
+      expect(retryBtn.disabled).toBe(false);
     });
   });
 });

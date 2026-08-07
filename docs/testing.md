@@ -93,6 +93,7 @@ They live next to what they guard, plus `internal/guards/` for repo-wide ones.
 | `internal/guards/observability_test.go` | `forbidigo` is still in `.golangci.yml` with both patterns; no credentials in log fields |
 | `internal/pkg/jwt/testkeys/isolation_test.go` | Test keys are not in `cmd/server`'s dependency graph |
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token and i18n rules fire, at error severity, over `src/` |
+| `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
 | `frontend/src/i18n/__tests__/locale-parity.test.ts` | Every locale has exactly the same keys |
 | `frontend/src/i18n/__tests__/language-switch.test.ts` | Switching language actually changes the copy |
 

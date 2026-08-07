@@ -167,9 +167,7 @@ describe("授权确认：能力清单", () => {
 
     await waitForApproval();
     expect(screen.getByText("session.remote_start")).toBeTruthy();
-    expect(
-      screen.getByText(/no description for this capability/i),
-    ).toBeTruthy();
+    expect(screen.getByText(/no description for it yet/i)).toBeTruthy();
     // 不许替未收录的键编一句说明
     expect(screen.queryByText(/run coding agent tasks/i)).toBeNull();
   });
@@ -330,6 +328,25 @@ describe("授权确认：中文文案照画板 10", () => {
     expect(screen.getByText("这台设备将获得以下能力")).toBeTruthy();
     expect(
       screen.getByText("你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。"),
+    ).toBeTruthy();
+  });
+
+  // spec「i18n」：「中文文案以稿子上的原文为准」。未收录能力那句在画板 10 上
+  // 是 cap-unknown 那行的 Desc，写全了「设备声明了此能力」这半句——
+  // 少掉它，用户读到的就只剩控制台的自述，看不出这个键是设备自己报上来的。
+  it("未收录能力的说明用画板 10 的原话", async () => {
+    mockFlow(pending({ capabilities: { "filesystem.write": true } }));
+    renderDevice();
+
+    await screen.findByRole("heading", {
+      level: 1,
+      name: "允许这台设备访问你的 AgentRe 账户？",
+    });
+    expect(screen.getByText("filesystem.write")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "设备声明了此能力，但控制台尚未收录它的说明——未知键一律原样展示，不隐藏",
+      ),
     ).toBeTruthy();
   });
 });

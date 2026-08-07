@@ -79,7 +79,7 @@
           "title": "Browse project files",
           "description": "Read the listing and contents of the project directories you authorize."
         },
-        "unknown": "The console has no description for this capability yet. It is shown exactly as the device declared it, never hidden."
+        "unknown": "The device declared this capability, but the console has no description for it yet. Unknown keys are always shown as-is, never hidden."
       },
       "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
       "expirySeconds": "This authorization request expires in {{seconds}}s",
