@@ -44,10 +44,20 @@
     }
   },
   "device": {
-    "title": "Device authorization",
-    "codePlaceholder": "A4F-7Q2",
-    "lookup": "Look up",
-    "invalidCode": "That user_code is not in the right format.",
+    "eyebrow": "Device authorization",
+    "entry": {
+      "title": "Enter the device code",
+      "description": "Your desktop app or terminal shows a 6-character code. Enter it here.",
+      "groupLabel": "Device code",
+      "boxLabel": "Character {{position}} of 6",
+      "hint": "Case does not matter. The code never contains 0, O, 1 or I.",
+      "submit": "Continue",
+      "footnote": "No code on screen? Go back to the device and start authorization again.",
+      "errors": {
+        "incomplete": "Enter all six characters. The code never contains 0, O, 1 or I.",
+        "invalid": "That code does not exist or has already been used. Check the 6-character code shown on the device."
+      }
+    },
     "denied": "Authorization denied. You can close this page.",
     "approveTitle": "Authorize this device",
     "capabilities": "Capabilities",

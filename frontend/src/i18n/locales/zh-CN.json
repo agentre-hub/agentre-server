@@ -44,10 +44,20 @@
     }
   },
   "device": {
-    "title": "设备授权",
-    "codePlaceholder": "A4F-7Q2",
-    "lookup": "查询",
-    "invalidCode": "user_code 格式不正确。",
+    "eyebrow": "设备授权",
+    "entry": {
+      "title": "输入设备码",
+      "description": "桌面应用或终端上会显示一串 6 位代码，把它填在这里。",
+      "groupLabel": "设备码",
+      "boxLabel": "第 {{position}} 位，共 6 位",
+      "hint": "不区分大小写，代码中不含 0、O、1、I",
+      "submit": "继续",
+      "footnote": "没有看到代码？回到设备上重新发起授权。",
+      "errors": {
+        "incomplete": "请填满 6 位代码；代码中不含 0、O、1、I。",
+        "invalid": "这个代码不存在或已被使用。请核对设备上显示的 6 位代码。"
+      }
+    },
     "denied": "已拒绝授权，可关闭此页面。",
     "approveTitle": "授权该设备",
     "capabilities": "能力",
