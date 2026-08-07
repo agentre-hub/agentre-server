@@ -186,6 +186,12 @@ decides what a lost race means — `internal/service/device_svc/device.go`'s
 `ExchangeToken`, `Refresh`, `Approve` and `Deny` each check `n != 1` and turn a lost race
 into the right error for that call.
 
+Inside a transaction, put that conditional `UPDATE` **first**, before any write that depends
+on winning. `ExchangeToken` marks the flow consumed before it upserts the device: a loser
+that got as far as `device_repo.Upsert` — itself a find-then-create — would insert the same
+`(user_id, fingerprint)` as the winner, hit `uk_devices_user_fingerprint`, and surface a
+duplicate-key 500 instead of the `invalid_grant` a lost race is supposed to produce.
+
 **Adding a scheduled task.** cago's cron (`cron.Cron()`, registered in
 `cmd/server/main.go`) is an in-process `robfig/cron` with no leader election — every
 replica runs every registered func on its own schedule. Wrap the job so only one replica's

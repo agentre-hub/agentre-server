@@ -162,6 +162,21 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
 
+		// 前面的 flow.IsConsumed() 只是抢跑检查，这里才是真正的判定：
+		// 带 consumed_at=0 条件的 UPDATE 只会有一个并发请求改到行，竞败方回滚整个事务。
+		//
+		// 这一步必须排在写 devices 之前。Upsert 是「先查后写」：两个并发请求若都走到
+		// 那里，会双双 INSERT 同一 (user_id, fingerprint)，撞上 uk_devices_user_fingerprint
+		// 唯一索引——竞败方拿到的就成了一个唯一约束错误（映射成 500），而不是约定的
+		// invalid_grant。先在 flow 行上抢到判定，竞败方就在这里出局，一行也不写。
+		n, err := device_flow_repo.DeviceFlow().MarkConsumed(txCtx, dc, nowMs)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return newOAuthErr(ErrInvalidGrant, "device_code already consumed")
+		}
+
 		d := &device_entity.Device{
 			UserID:       flow.AuthorizedUserID,
 			Name:         flow.ClientFingerprint[:8],
@@ -195,16 +210,6 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		}
 		if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
 			return err
-		}
-		// 前面的 flow.IsConsumed() 只是抢跑检查，这里才是真正的判定：
-		// 带 consumed_at=0 条件的 UPDATE 只会有一个并发请求改到行，
-		// 竞败方回滚整个事务，设备行与 token 行都不留下。
-		n, err := device_flow_repo.DeviceFlow().MarkConsumed(txCtx, dc, nowMs)
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return newOAuthErr(ErrInvalidGrant, "device_code already consumed")
 		}
 
 		access, jti, err := s.signer.Sign(jwt.Claims{

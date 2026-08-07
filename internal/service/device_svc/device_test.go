@@ -135,7 +135,7 @@ func TestExchangeToken(t *testing.T) {
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(7), out.DeviceID)
 		})
-		convey.Convey("并发竞败（MarkConsumed 命中 0 行）→ invalid_grant 且整个事务回滚", func() {
+		convey.Convey("并发竞败（MarkConsumed 命中 0 行）→ invalid_grant，且在写 device 之前就出局", func() {
 			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
 			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
 				&device_flow_entity.DeviceFlowCode{
@@ -147,12 +147,14 @@ func TestExchangeToken(t *testing.T) {
 				}, nil,
 			)
 			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
-			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
-				func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
-			)
-			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 			// 赢家已经把这一行标为 consumed，竞败方的 UPDATE 一行也改不到
 			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(0), nil)
+			// 消费判定必须排在写 devices 之前：Upsert 是先查后写，两个并发请求
+			// 同时走到这里会双双 INSERT 同一 (user_id, fingerprint)，撞上
+			// uk_devices_user_fingerprint 唯一索引——竞败方拿到的就成了一个
+			// 唯一约束错误（映射成 500），而不是约定的 invalid_grant。
+			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).Times(0)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Times(0)
 
 			mock.ExpectBegin()
 			mock.ExpectRollback()
