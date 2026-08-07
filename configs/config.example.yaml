@@ -1,4 +1,6 @@
-env: PROD
+# 小写。cago 用 env != "prod" 决定要不要挂 /swagger（pkg/component/core.go），
+# 写成大写 PROD 那个判断永远成立，swagger 就被暴露出去了。
+env: prod
 debug: false
 
 # 配置源。留 file 表示就读这个文件；k8s 上由 ConfigMap 覆盖成 etcd。

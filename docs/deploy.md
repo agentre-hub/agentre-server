@@ -167,10 +167,9 @@ verify a non-numeric username against `runAsNonRoot` and refuses to start the co
 
 `appConfig.env` is lowercase on purpose. cago's `pkg/component/core.go` compares it against
 `configs.PROD` (`"prod"`) to decide whether to expose `/swagger`, so an uppercase `PROD`
-would publish the Swagger UI in production. Note that
-[`../configs/config.example.yaml`](../configs/config.example.yaml) still says `PROD`, which
-is fine for local development and deliberately left alone — the cluster value comes from
-the chart, not from that file.
+would publish the Swagger UI in production.
+[`../configs/config.example.yaml`](../configs/config.example.yaml) uses the lowercase value
+for the same reason.
 
 The Deployment carries a `checksum/config` annotation over the rendered ConfigMap, so
 changing the etcd address or credentials rolls the pods instead of waiting for the next
@@ -215,7 +214,7 @@ kubectl -n app get pods -l app.kubernetes.io/instance=agentre-server
 | Log line | Cause |
 | --- | --- |
 | `load config: open ./configs/config.yaml: no such file or directory` | ConfigMap not mounted, or mounted somewhere other than `/app/configs/config.yaml` |
-| `load config: ... permission denied` | A bootstrap key is missing, so cago tried to rewrite the read-only mount. Check all four are present |
+| `load config: ... permission denied` or `... read-only file system` | A bootstrap key is missing, so cago tried to rewrite the config file it could not write. Check all four are present. Which of the two errors you get depends on why the file is unwritable: a root-owned file read by the `nonroot` process gives `permission denied`, while a read-only mount — what a ConfigMap volume is — gives `read-only file system`, so in-cluster you will usually see the latter |
 | `load config: context deadline exceeded` | etcd unreachable, or `endpoints` parsed empty — see the YAML shape note above |
 | `file config key not found: <key>` | That key is missing from the ConfigMap |
 | `etcd ... not found: <key>, initialized with default value` | That key is not seeded in etcd yet |

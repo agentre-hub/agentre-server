@@ -10,7 +10,26 @@
 
 ## Problem
 
-1. **当前镜像根本起不来。** `Dockerfile:18` 的 `WORKDIR /` 加 `ENTRYPOINT ["/server"]`，而 `cmd/server/main.go:36` 调用 `configs.NewConfig("agentre-server")` 不带 Option，cago 的默认配置路径是 `./configs/config.yaml`（`configs/config.go:38`），也就是容器里的 `/configs/config.yaml`。`Dockerfile:17` 却把示例配置放到了 `/etc/agentre-server/config.yaml`，没有任何地方读它。文件源 `os.ReadFile` 失败即返回错误（`configs/file/file.go:17-25`），main 里 `log.Fatalf("load config: %v", err)` 直接退出。镜像从未被真正跑起来验证过。
+1. **当前镜像既构建不了也起不来。** 实现阶段的 RED 步骤实测出三个独立缺陷，此前从未被跑到过：
+
+   1. **构建就失败。** 仓库没有 `.dockerignore`，构建上下文 236.93MB，宿主机的
+      `frontend/node_modules` 被 `COPY frontend ./frontend` 带进镜像；`pnpm install` 随后要
+      清掉这个已存在的 modules 目录，在无 TTY 的构建环境里直接中止：
+      `ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY`。
+   2. **配置路径不对。** `Dockerfile:18` 的 `WORKDIR /` 加 `ENTRYPOINT ["/server"]`，而
+      `cmd/server/main.go:36` 调用 `configs.NewConfig("agentre-server")` 不带 Option，cago 的默认
+      配置路径是 `./configs/config.yaml`（`configs/config.go:38`），也就是容器里的
+      `/configs/config.yaml`。`Dockerfile:17` 却把示例配置放到了
+      `/etc/agentre-server/config.yaml`，没有任何地方读它。文件源 `os.ReadFile` 失败即返回错误
+      （`configs/file/file.go:17-25`），main 里 `log.Fatalf("load config: %v", err)` 直接退出。
+      实测：`load config: open ./configs/config.yaml: no such file or directory`，exit 1。
+   3. **示例配置缺 `source` 键。** 修掉路径之后错误变成 permission denied。以 root 跑才看到真因：
+      `file config key not found: source`——cago 的文件源读不到某个键时会把默认值**写回配置文件**
+      （`configs/file/file.go:33-43`），而镜像里这份文件 root 拥有、容器以 nonroot 跑，写不了。
+      佐证：仓库里 `configs/config.yaml` 末尾的 `source: ""` 就是 cago 自己写回去的。
+
+   三者都必须修掉镜像才能启动，因此本轮的交付物包含 `.dockerignore` 与
+   `configs/config.example.yaml` 两处改动。
 2. **没有任何 k8s 部署资源。** 仓库里只有面向单机的 `docker-compose.yml`，没有 chart、没有 Gitea 工作流；`.github/workflows/ci.yml` 只做门禁不做发布。上线只能手工 `kubectl`。
 3. **配置下发方式未定，镜像也无从得知自己是哪个版本。** `Makefile:12-14` 会把 `buildinfo.Version` / `Commit` 注入 `bin/server`，但 `Dockerfile` 的 `go build` 没有 `-ldflags`，所以线上 pod 的启动日志（`main.go:31`）永远打印 `dev (unknown)`，排障时无法把 pod 对上 commit。
 
@@ -30,7 +49,7 @@
 | 3 | 配置走 etcd 配置中心，ConfigMap 只放引导配置 | 用户决定，与 scriptlist 同源。Rejected: ConfigMap + Secret 全量下发——改配置要重新 `helm upgrade` |
 | 4 | 不新增 Go 代码即可启用 etcd 配置源 | `pkg/component/core.go:8` 已经 blank-import 了 `configs/etcd`，而 `cmd/server/main.go` 导入了 `pkg/component`，`init()` 已把 `sources["etcd"]` 注册好。Rejected: 在 main.go 里再加一次 blank import——重复且无效果 |
 | 5 | ConfigMap 必须同时含 `env`、`debug`、`source`、`etcd` 四个键 | 文件源在键缺失时会**回写配置文件**（`configs/file/file.go:33-43`），而 subPath 挂载的 ConfigMap 是只读的，缺一个键就 CrashLoop。这四个键正好是切换到 etcd 之前会被读到的全部键 |
-| 6 | ConfigMap 里的 `env` 用小写（`prod` / `pre` / `test`） | etcd 前缀是 `path.Join(prefix, string(cfg.Env), appName)`（`configs/etcd/etcd.go:22`），且 `pkg/component/core.go:31` 用 `cfg.Env != configs.PROD` 决定是否暴露 `/swagger`——大写 `PROD` 会绕过这个判断把 swagger 暴露到线上。Rejected: 沿用 `configs/config.example.yaml:1` 的大写 `PROD` |
+| 6 | ConfigMap 里的 `env` 用小写（`prod` / `pre` / `test`） | etcd 前缀是 `path.Join(prefix, string(cfg.Env), appName)`（`configs/etcd/etcd.go:22`），且 `pkg/component/core.go:31` 用 `cfg.Env != configs.PROD` 决定是否暴露 `/swagger`——大写 `PROD` 会绕过这个判断把 swagger 暴露到线上。Rejected: 沿用 `configs/config.example.yaml:1` 的大写 `PROD`。补充：交付后经用户确认，该示例文件的 `env` 也一并改成小写，理由相同——否则本地开发时 `/swagger` 是暴露的 |
 | 7 | Dockerfile 改 `WORKDIR /app`，配置读 `/app/configs/config.yaml` | 修 Problem 1，且与 chart 的 subPath 挂载点、scriptlist 的既有约定一致。Rejected: 给 `configs.NewConfig` 传 Option 改路径——那是改 Go 生产代码，而问题出在镜像布局 |
 | 8 | 运行时镜像保持 distroless static + nonroot | 现状即如此，静态二进制不需要 debian；distroless static-debian12 自带 CA 证书（GitHub OAuth 需要）与 zoneinfo。Rejected: 换成 scriptlist 的 `debian:12-slim`——攻击面更大且无收益 |
 | 9 | 日志只走 stdout，不落盘，chart 不带 PVC | nonroot 用户在只读根文件系统上写 `./runtime/logs/` 会失败；k8s 的惯例是 stdout 由采集侧接管。据此 etcd 里的 `logger.logFile.enable` 应为 `false`。Rejected: 照搬 scriptlist 的 `storage.yaml` PVC——本服务不写盘 |
