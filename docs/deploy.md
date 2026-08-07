@@ -149,11 +149,21 @@ One binary serves both the SPA and `/v1`, so the Ingress is a single `/` rule �
 nothing to split by prefix. The Service exposes port 80 and forwards to the container's
 8443. No PersistentVolumeClaim exists: the service writes nothing to disk.
 
-Both probes hit `GET /v1/healthz`. Note what that endpoint does **not** do: it returns 200
-even when PostgreSQL or Redis is unreachable, reporting `db_ping: false` / `redis: false`
-in the body. Readiness therefore does not remove a pod when a dependency wobbles. That is
-the existing behaviour and this deployment keeps it; changing it means changing
+All three probes hit `GET /v1/healthz`. The startup probe is the one that matters on a cold
+start: `mux.HTTP` is the last component `cmd/server/main.go` registers, so nothing listens
+until migrations and the etcd fetch have finished and the port refuses connections until
+then. It allows 150s (30 × 5s) before liveness takes over — without it, liveness would kill
+the pod mid-migration and the restart would repeat that forever.
+
+Note what the endpoint does **not** do: it returns 200 even when PostgreSQL or Redis is
+unreachable, reporting `db_ping: false` / `redis: false` in the body. Readiness therefore
+does not remove a pod when a dependency wobbles. That is the existing behaviour and this
+deployment keeps it; changing it means changing
 `internal/controller/healthz_ctr/healthz.go`.
+
+The pod runs as uid 65532 with `runAsNonRoot` and a read-only root filesystem. The image's
+`USER` is the numeric uid rather than the name `nonroot` on purpose: Kubernetes cannot
+verify a non-numeric username against `runAsNonRoot` and refuses to start the container.
 
 `appConfig.env` is lowercase on purpose. cago's `pkg/component/core.go` compares it against
 `configs.PROD` (`"prod"`) to decide whether to expose `/swagger`, so an uppercase `PROD`
