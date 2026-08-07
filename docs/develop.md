@@ -38,7 +38,7 @@ The repo has **no build tags at all**, so `make test` runs everything there is. 
 ```bash
 cp configs/config.example.yaml configs/config.yaml   # gitignored runtime config
 cp .env.example .env                                 # secrets
-docker compose up -d pg redis                        # or point at your own
+docker compose -f deploy/docker-compose.yml up -d pg redis                        # or point at your own
 make dev
 ```
 

@@ -11,7 +11,6 @@ non-negotiables, and the routing table that says which of these to open when.
 | [verification.md](verification.md) | Twin e2e tracks, scratch workflow, report rules |
 | [design.md](design.md) | Colour tokens, dark/light, responsive, i18n, new-page recipe |
 | [observability.md](observability.md) | Logging, sensitive fields, metrics, traces |
-| [deploy.md](deploy.md) | Gitea release pipeline, Helm chart inputs, etcd seeding, k3s shape |
 | [documentation.md](documentation.md) | Who owns which fact, how docs stay true |
 
 `references/` holds detail too long for a main document:

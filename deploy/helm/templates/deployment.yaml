@@ -14,8 +14,7 @@ spec:
   template:
     metadata:
       annotations:
-        # 引导配置变了就滚一次。没有这行的话改 etcd 地址/凭据后 Pod 不会重建，
-        # 只有下次发版才生效。
+        # 引导配置变了就滚一次，否则改 etcd 地址要等下次发版才生效
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -41,38 +40,31 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
-          # 启动探针单独一个：mux.HTTP 是 cmd/server/main.go 里最后注册的组件，
-          # 迁移和 etcd 取配置都跑完才开始监听，此前端口是拒连的。没有 startupProbe
-          # 的话存活探针会在迁移还没跑完时就把 Pod 杀掉，变成起不来的循环。
-          # 这里给到 30×5s=150s 的启动预算，之后才交给存活探针。
+          # HTTP 是最后启动的，迁移跑完前端口拒连。没有 startupProbe 的话
+          # 存活探针会在迁移中途把 Pod 杀掉，变成起不来的循环。
           startupProbe:
             httpGet:
               path: /v1/healthz
               port: http
             periodSeconds: 5
             failureThreshold: 30
-          # /v1/healthz 在 DB/Redis 不通时仍然返回 200，只把 db_ping/redis 置 false
-          # （internal/controller/healthz_ctr/healthz.go）。就绪探针因此不会被下游抖动
-          # 带下线——这是有意沿用的行为，要改得先改控制器。
+          # 该端点在 DB/Redis 不通时仍返回 200，只把 db_ping/redis 置 false，
+          # 所以就绪探针不会被下游抖动带下线
           livenessProbe:
             httpGet:
               path: /v1/healthz
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 30
             failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /v1/healthz
               port: http
-            initialDelaySeconds: 5
             periodSeconds: 10
             failureThreshold: 3
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            # 挂到 /app/configs/config.yaml：cago 读的是相对 WORKDIR 的
-            # ./configs/config.yaml，而镜像的 WORKDIR 是 /app。
             - name: config
               mountPath: /app/configs/config.yaml
               subPath: config.yaml

@@ -106,7 +106,10 @@ Service 以 80 端口对内暴露，转发到容器的 8443。Ingress 用 `k3s-m
 - 让 `/v1/healthz` 在 DB/Redis 不通时返回非 200：那是改 controller 的可观测行为，需要单独的 spec 与回归测试。
 - 部署 PostgreSQL / Redis / etcd 本身（决策 2、3）。
 - 证书签发（cert-manager 等）：chart 只引用已存在的 TLS Secret。
-- 改动 `.github/workflows/ci.yml`、`docker-compose.yml` 与任何 Go 生产代码。GitHub 侧的门禁保持原样，本轮不因为 Gitea 的存在去动它。
+- 改动 `.github/workflows/ci.yml` 与任何 Go 生产代码。GitHub 侧的门禁保持原样，本轮不因为 Gitea 的存在去动它。
+  （交付后经用户要求追加：`Dockerfile` 与 `docker-compose.yml` 移入 `deploy/`，`docs/deploy.md` 改写为面向人的
+  `deploy/README.md`。compose 一并修好——它原先传的 `AGENTRE_SERVER_DB_DSN` / `_REDIS_ADDR` 根本没有代码读，
+  服务会去连镜像内置配置里的 127.0.0.1，即单机部署此前也是跑不起来的。）
 - 在 Gitea 侧复刻前端 eslint / vitest / playwright（决策 12），以及为非发布分支单独加一条 test 工作流。
 - 前端构建产物 CDN 化、灰度/金丝雀（scriptlist 的 istio gateway chart 不搬）。
 

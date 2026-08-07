@@ -35,7 +35,7 @@ spec, use that spec's slug**, so the evidence and the spec are findable from eac
 Needing a real backend (real device flow, migrations, session cookies):
 
 ```bash
-docker compose up -d pg redis
+docker compose -f deploy/docker-compose.yml up -d pg redis
 make dev
 cd e2e && pnpm scratch
 ```

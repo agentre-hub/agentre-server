@@ -78,7 +78,7 @@ no PostgreSQL or Redis. Full-stack flows (real device flow, migrations, session
 cookies) need both, plus the Go server:
 
 ```bash
-docker compose up -d pg redis
+docker compose -f deploy/docker-compose.yml up -d pg redis
 make dev
 cd e2e && pnpm scratch
 ```

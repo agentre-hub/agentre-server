@@ -15,7 +15,7 @@ and the reader hits the stale one without knowing it is stale.
 | e2e mechanics: configs, ports, hermetic guarantees | [`../e2e/README.md`](../e2e/README.md) |
 | Tokens, theming, responsive, i18n | [design.md](design.md) |
 | Logging, sensitive fields, metrics, traces | [observability.md](observability.md) |
-| Release pipeline, Helm inputs, etcd seeding, k3s runtime shape | [deploy.md](deploy.md) |
+| Deployment: Docker, Kubernetes, chart values, etcd seeding, release pipeline | [`../deploy/README.md`](../deploy/README.md) |
 | Quick start, Docker, GitHub OAuth setup | [`../README.md`](../README.md) |
 
 `README.md` is for a **human setting the project up**. `AGENTS.md` and `docs/` are for
@@ -62,7 +62,7 @@ reads the docs at all.
 | A locale key | Both locale files — `locale-parity.test.ts` will fail otherwise |
 | Log fields, metrics, spans | [observability.md](observability.md) |
 | Anything in `e2e/` | [`../e2e/README.md`](../e2e/README.md), and [verification.md](verification.md) if the workflow changed |
-| `deploy/helm/`, `.gitea/workflows/`, the `Dockerfile`, or a config key the server reads at boot | [deploy.md](deploy.md) — its secrets table and etcd seeding list |
+| Anything in `deploy/`, `.gitea/workflows/`, or a config key the server reads at boot | [`../deploy/README.md`](../deploy/README.md) — its secrets table and etcd seeding list |
 
 ## Fact-checking a document
 

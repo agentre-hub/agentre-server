@@ -2,20 +2,12 @@ agentre-server 已部署为 release {{ .Release.Name }}（namespace {{ .Release.
 
 {{- if .Values.ingress.enabled }}
 
-对外地址：
-{{- range $host := .Values.ingress.hosts }}
-{{- range .paths }}
-  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
-{{- end }}
-{{- end }}
+  http{{ if .Values.ingress.tlsSecretName }}s{{ end }}://{{ .Values.ingress.host }}
 {{- end }}
 
 配置来自 etcd：{{ .Values.etcdConfig.prefix }}/{{ .Values.appConfig.env }}/agentre-server/
-ConfigMap 里只有引导配置（env/debug/source/etcd）。
 
-Pod 起不来时先看这一条：如果日志停在 config 相关的错误上，多半是 etcd 里还没有
-对应环境的键。cago 读不到键会把零值写回 etcd 再报错，所以会表现为反复 CrashLoop
-且每重启一次多播种一个空键——不会自愈。播种清单见 docs/deploy.md。
+Pod 起不来时先确认 etcd 里有没有对应环境的键——缺键不会回落默认值，而是反复
+CrashLoop 且不自愈。清单见 deploy/README.md。
 
   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} --tail=50
-  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}

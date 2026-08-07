@@ -18,10 +18,9 @@ build:
 	  -X agentre-server/internal/buildinfo.Commit=$(COMMIT)" \
 	  -o bin/server ./cmd/server
 
-# 与 build 走同一组版本号，否则本地镜像的启动日志是 "dev (unknown)"，
-# 排障时对不回 commit。基础镜像与 registry 用 Dockerfile 里的默认值。
+# 传版本号，否则镜像启动日志是 "dev (unknown)"，排障时对不回 commit
 docker:
-	docker build -t agentre/server:0.1 \
+	docker build -f deploy/Dockerfile -t agentre/server:0.1 \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT=$(COMMIT) .
 

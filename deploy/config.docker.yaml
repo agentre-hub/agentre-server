@@ -1,0 +1,57 @@
+# docker compose 用的配置，挂到容器的 /app/configs/config.yaml。
+# 镜像里自带的那份指向 127.0.0.1，在容器里连不到同网络的 pg/redis。
+env: prod
+debug: false
+source: file
+
+http:
+  address:
+    - "0.0.0.0:8443"
+
+db:
+  driver: postgres
+  dsn: "postgres://server:server@pg:5432/server?sslmode=disable"
+  debug: false
+  prepareStmt: false
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 0
+
+logger:
+  level: info
+  disableConsole: false
+  logFile:
+    enable: false
+
+trace:
+  type: empty
+  sample: 1
+  endpoint: ""
+  useSSL: false
+
+server:
+  public_url: "http://localhost:8443"
+  # 本机没有 TLS，Cookie 不能带 Secure，否则登录态存不住
+  insecure_cookies: true
+  session:
+    cookie_name: "server_session"
+    ttl: 336h
+  device_flow:
+    user_code_ttl: 10m
+    poll_interval: 5s
+  jwt:
+    private_key_pem_path: "/keys/jwt.key"
+    public_key_pem_path: "/keys/jwt.pub"
+    issuer: "agentre-server"
+    audience: "agentre"
+    access_ttl: 1h
+    refresh_ttl: 2160h
+  oauth:
+    github:
+      client_id: ""
+      client_secret: ""
+      callback_path: "/v1/auth/oauth/github/callback"
+  rate_limit:
+    authorize_per_ip_per_min: 3

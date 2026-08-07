@@ -70,7 +70,7 @@ migration for real is the server booting, and if it fails **the server does not 
 So when you touch `migrations/`, verify it by hand before merging:
 
 ```bash
-docker compose up -d pg
+docker compose -f deploy/docker-compose.yml up -d pg
 make dev          # migrations run at startup; watch for errors
 # or, against a scratch database:
 psql "$DSN" -c '\dt'

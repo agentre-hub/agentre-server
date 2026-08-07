@@ -25,6 +25,7 @@ spec:
     - host: {{ .Values.ingress.host | quote }}
       http:
         paths:
+          # 同一个二进制既发 SPA 又发 /v1，只要一条根规则
           - path: /
             pathType: Prefix
             backend:

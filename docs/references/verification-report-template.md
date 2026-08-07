@@ -21,7 +21,7 @@ One or two sentences. The claim being tested — not a changelog.
 Environment (mocked / real PostgreSQL + Redis / against staging), and the commands run.
 
 ```bash
-docker compose up -d pg redis
+docker compose -f deploy/docker-compose.yml up -d pg redis
 make dev
 cd e2e && pnpm scratch
 ```
