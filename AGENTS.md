@@ -23,6 +23,7 @@ Workspace-wide facts live in [`../AGENTS.md`](../AGENTS.md).
 | Writing any test | [docs/testing.md](docs/testing.md) | What to write per layer, sqlmock vs mockgen, build tags, the guard tests |
 | Confirming a change actually works | [docs/verification.md](docs/verification.md) | The twin e2e tracks, scratch workflow, report rules |
 | Touching the frontend | [docs/design.md](docs/design.md) | Colour tokens, dark/light, responsive, i18n, the new-page recipe |
+| Shipping to the cluster, or changing the image/chart/workflow | [docs/deploy.md](docs/deploy.md) | Gitea pipeline, Helm inputs, etcd seeding, k3s shape, `GOWORK=off` in worktrees |
 | Adding a log line, metric or span | [docs/observability.md](docs/observability.md) | Log levels and fields, sensitive-field rules, metrics, traces |
 | Editing docs | [docs/documentation.md](docs/documentation.md) | Who owns which fact, how docs are fact-checked |
 
