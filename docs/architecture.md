@@ -165,6 +165,63 @@ mux.HTTP(router)      → last; middleware registered by earlier components is c
 Registering `trace` or `metric` after `mux.HTTP` means their middleware never attaches
 and you get no spans and no metrics, with no error.
 
+## Multi-instance safety
+
+The deployment runs multiple replicas by default: `deploy/helm/values.yaml` sets
+`autoscaling.enabled: true` with `minReplicas: 2`. "There is only one of me" is never a
+safe assumption — it is false from the first install, not just under load.
+
+**Shared vs process-local state.** PostgreSQL and Redis are the only state visible to the
+whole fleet. Anything else — a `sync.Mutex`, a package-level cache, cago's in-process
+`cron.Cron()` schedule — lives in one replica's memory and is invisible to its siblings.
+If something must happen exactly once, or must see what every replica has done, it has to
+go through the database or Redis, not process memory.
+
+**Check-then-write across replicas.** A read followed by a conditional write is not safe
+once two replicas can run it concurrently: both can read the same "not yet done" state and
+both proceed. Put the condition in the `UPDATE`'s `WHERE` clause instead, and check
+`RowsAffected` to learn whether *this* call was the one that changed the row — don't just
+check the returned error. See `internal/repository/device_flow_repo/device_flow.go`'s
+`MarkConsumed` (`WHERE device_code=? AND consumed_at=0 AND denied_at=0`) and
+`Approve`/`Deny`, and `internal/repository/device_token_repo/device_token.go`'s `Revoke`
+(`WHERE id=? AND revoked_at=0`): all four return `(int64, error)` so the *service*, not the
+repository, decides what a lost race means — `internal/service/device_svc/device.go`'s
+`ExchangeToken`, `Refresh`, `Approve` and `Deny` each check `n != 1` and turn a lost race
+into the right error for that call. The `WHERE` clause has to spell out *every* state that
+makes the write wrong, not just the one the caller was racing: `MarkConsumed` carries
+`denied_at=0` as well, because the entity check it backs up (`flow.IsDenied()`) runs before
+the transaction and a "deny" committed in that gap would otherwise still hand the device a
+token.
+
+A write with no conditional `UPDATE` to hang the decision on needs the database to arbitrate
+some other way. `device_repo.Upsert` is a single `INSERT … ON CONFLICT ("user_id",
+"fingerprint") DO UPDATE`, not a find-then-create, so two exchanges for the same device
+converge on one row instead of racing to a `uk_devices_user_fingerprint` duplicate-key 500.
+
+Inside a transaction, put the conditional `UPDATE` **first**, before any write that depends
+on winning: `ExchangeToken` marks the flow consumed before it touches `devices`, and
+`Refresh` revokes the old token before it inserts the new one. A loser then writes nothing
+at all, rather than emitting rows that only the rollback takes back out.
+
+**Adding a scheduled task.** cago's cron (`cron.Cron()`, registered in
+`cmd/server/main.go`) is an in-process `robfig/cron` with no leader election — every
+replica runs every registered func on its own schedule. Wrap the job so only one replica's
+run per period actually executes, following `internal/task/task.go`'s `withPeriodLock`:
+`TryLockKey` for the period with a TTL a bit shorter than the cron period, and no matching
+`Unlock`. cago's locker `UnlockKey` is an unconditional `DEL` that doesn't check ownership,
+so unlocking after the TTL has already rolled over to another replica would delete *that*
+replica's lock — TryLock-and-let-expire avoids that. A replica that loses the race returns
+`nil`, not an error, so the N-1 non-winning replicas don't log spurious `cron error` noise.
+
+**Startup one-shot work.** Work that must run exactly once across a concurrently-starting
+fleet — migrations are the current example — needs a distributed lock, not just an
+in-process guard. `migrations/migrations.go`'s `RunMigrations` takes a PostgreSQL advisory
+lock (`withMigrationLock`) on a connection obtained via `sqlDB.Conn(ctx)` before running
+gormigrate, because advisory locks are session-scoped and a `*gorm.DB` call can otherwise
+land on a different pooled connection than the one that acquired the lock. It polls
+`pg_try_advisory_lock` rather than blocking, up to a 120s budget, so a replica that can't
+get the lock fails loudly instead of hanging past its startup probe.
+
 ## How to add an X
 
 **An endpoint**

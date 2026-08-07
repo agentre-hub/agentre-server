@@ -150,7 +150,7 @@ func TestExchangeToken(t *testing.T) {
 					return nil
 				},
 			)
-			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
 
 			mock.ExpectBegin()
 			mock.ExpectCommit()
@@ -161,6 +161,35 @@ func TestExchangeToken(t *testing.T) {
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(7), out.DeviceID)
 			assert.Equal(t, out.JTI, capturedJTI)
+		})
+		convey.Convey("并发竞败（MarkConsumed 命中 0 行）→ invalid_grant，且在写 device 之前就出局", func() {
+			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{
+					DeviceCode: "dc-x", IntervalSeconds: 5,
+					ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+					AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
+					ClientCapabilities: []byte(`{"compute":true}`),
+				}, nil,
+			)
+			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			// 赢家已经把这一行标为 consumed，竞败方的 UPDATE 一行也改不到
+			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(0), nil)
+			// 消费判定必须排在写 devices / device_tokens 之前：竞败方在这里出局，
+			// 一行也不写，不必靠回滚去擦掉已经落到 WAL 上的设备行和 token 行。
+			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).Times(0)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Times(0)
+
+			mock.ExpectBegin()
+			mock.ExpectRollback()
+
+			out, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.Nil(t, out)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), ErrInvalidGrant)
+			// 回滚落到数据库上：设备行与 token 行都不留下
+			assert.NoError(t, mock.ExpectationsWereMet())
 		})
 	})
 }
@@ -199,7 +228,7 @@ func TestRefresh(t *testing.T) {
 					return nil
 				},
 			)
-			mT.EXPECT().Revoke(gomock.Any(), int64(1), gomock.Any()).Return(nil)
+			mT.EXPECT().Revoke(gomock.Any(), int64(1), gomock.Any()).Return(int64(1), nil)
 			mD.EXPECT().Touch(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 
 			mock.ExpectBegin()
@@ -322,6 +351,34 @@ func TestListRevokedJTI(t *testing.T) {
 			_, err := svc.ListRevokedJTI(ctx, 7)
 			assert.ErrorIs(t, err, wantErr)
 		})
+		convey.Convey("并发竞败（Revoke 命中 0 行）→ invalid_grant、回滚、且不整链撤销", func() {
+			ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+				&device_token_entity.DeviceToken{
+					ID: 1, DeviceID: 42, RefreshExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+				}, nil,
+			)
+			mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+				&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: 1}, nil,
+			)
+			// 赢家刚轮换完这条 token，竞败方的 UPDATE 一行也改不到
+			mT.EXPECT().Revoke(gomock.Any(), int64(1), gomock.Any()).Return(int64(0), nil)
+			// 判定必须排在写 device_tokens 之前：竞败方在这里出局，一行也不写。
+			// 这是 architecture.md「事务里先做带条件的 UPDATE，再做依赖胜出的写」
+			// 那条规则在 Refresh 上的落点，和 ExchangeToken 保持一致。
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Times(0)
+			// 竞败不是重放：链是健康的，撤了会误伤只是重试的客户端
+			mT.EXPECT().RevokeChain(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+			mock.ExpectBegin()
+			mock.ExpectRollback()
+
+			out, err := svc.Refresh(ctx, "good")
+			assert.Nil(t, out)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), ErrInvalidGrant)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
 	})
 }
 
@@ -404,11 +461,50 @@ func TestApprove(t *testing.T) {
 					ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
 				}, nil,
 			)
-			mF.EXPECT().Approve(gomock.Any(), "A4F-7Q2", int64(42), gomock.Any()).Return(nil)
+			mF.EXPECT().Approve(gomock.Any(), "A4F-7Q2", int64(42), gomock.Any()).Return(int64(1), nil)
 
 			kind, err := svc.Approve(ctx, "A4F-7Q2", 42)
 			assert.NoError(t, err)
 			assert.Equal(t, "agentred", kind)
+		})
+		convey.Convey("并发竞败（Approve 命中 0 行）→ user_code_invalid", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindPendingByUserCode(gomock.Any(), "A4F-7Q2").Return(
+				&device_flow_entity.DeviceFlowCode{
+					UserCode: "A4F-7Q2", DeviceKind: "agentred",
+					ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+				}, nil,
+			)
+			// 另一个请求已抢先批准/拒绝/换取，UPDATE 一行也改不到
+			mF.EXPECT().Approve(gomock.Any(), "A4F-7Q2", int64(42), gomock.Any()).Return(int64(0), nil)
+
+			kind, err := svc.Approve(ctx, "A4F-7Q2", 42)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "user_code_invalid")
+			assert.Empty(t, kind)
+		})
+	})
+}
+
+func TestDeny(t *testing.T) {
+	convey.Convey("Deny", t, func() {
+		convey.Convey("命中 1 行 → 成功", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().Deny(gomock.Any(), "A4F-7Q2", gomock.Any()).Return(int64(1), nil)
+			assert.NoError(t, svc.Deny(ctx, "A4F-7Q2"))
+		})
+		convey.Convey("命中 0 行（不存在/已换取/已拒绝）→ user_code_invalid，不再假成功", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().Deny(gomock.Any(), "A4F-7Q2", gomock.Any()).Return(int64(0), nil)
+			err := svc.Deny(ctx, "A4F-7Q2")
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "user_code_invalid")
+		})
+		convey.Convey("格式非法 → user_code_invalid", func() {
+			ctx, _, _, _, svc, _ := setupDeviceTest(t)
+			err := svc.Deny(ctx, "!!!")
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "user_code_invalid")
 		})
 	})
 }

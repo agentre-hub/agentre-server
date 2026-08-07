@@ -2,10 +2,10 @@
 package jwt
 
 import (
+	"crypto/rand"
 	"crypto/rsa"
 	"errors"
 	"fmt"
-	"math/rand"
 	"time"
 
 	jwtv5 "github.com/golang-jwt/jwt/v5"
@@ -29,13 +29,12 @@ type registered struct {
 	jwtv5.RegisteredClaims
 }
 
-// Signer 持有 RSA 密钥对 + 元信息。线程安全。
+// Signer 持有 RSA 密钥对 + 元信息。线程安全（crypto/rand.Reader 并发安全）。
 type Signer struct {
-	priv    *rsa.PrivateKey
-	pub     *rsa.PublicKey
-	issuer  string
-	aud     string
-	entropy *ulid.MonotonicEntropy
+	priv   *rsa.PrivateKey
+	pub    *rsa.PublicKey
+	issuer string
+	aud    string
 }
 
 // NewSigner 从 PEM 解析公私钥。
@@ -48,13 +47,11 @@ func NewSigner(privPEM, pubPEM []byte, issuer, audience string) (*Signer, error)
 	if err != nil {
 		return nil, fmt.Errorf("parse public pem: %w", err)
 	}
-	src := rand.NewSource(time.Now().UnixNano())
 	return &Signer{
-		priv:    priv,
-		pub:     pub,
-		issuer:  issuer,
-		aud:     audience,
-		entropy: ulid.Monotonic(rand.New(src), 0),
+		priv:   priv,
+		pub:    pub,
+		issuer: issuer,
+		aud:    audience,
 	}, nil
 }
 
@@ -66,7 +63,7 @@ const Leeway = 60 * time.Second
 // Sign 返回 token 字符串 + jti（用于黑名单存储）。
 func (s *Signer) Sign(c Claims, ttl time.Duration) (string, string, error) {
 	now := time.Now()
-	jti := ulid.MustNew(ulid.Timestamp(now), s.entropy).String()
+	jti := ulid.MustNew(ulid.Timestamp(now), rand.Reader).String()
 	reg := registered{
 		UID: c.UID, DID: c.DID, Kind: c.Kind, Caps: c.Caps,
 		RegisteredClaims: jwtv5.RegisteredClaims{

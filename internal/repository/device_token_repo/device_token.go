@@ -16,7 +16,8 @@ type DeviceTokenRepo interface {
 	FindByHash(ctx context.Context, hash string) (*device_token_entity.DeviceToken, error)
 	ListAccessJTIByDevice(ctx context.Context, deviceID int64) ([]string, error)
 	ListRevokedJTIByUser(ctx context.Context, userID, windowStartMs int64) ([]string, error)
-	Revoke(ctx context.Context, id, nowMs int64) error
+	// Revoke 返回受影响行数，由 service 判读竞态结果。
+	Revoke(ctx context.Context, id, nowMs int64) (int64, error)
 	RevokeChain(ctx context.Context, deviceID, nowMs int64) error
 	TouchLastUsed(ctx context.Context, id, nowMs int64) error
 	DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error
@@ -79,9 +80,12 @@ func (r *repo) ListRevokedJTIByUser(ctx context.Context, userID, windowStartMs i
 	return jtis, nil
 }
 
-func (r *repo) Revoke(ctx context.Context, id, nowMs int64) error {
-	return db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).Where("id=?", id).
-		Update("revoked_at", nowMs).Error
+// Revoke 的 revoked_at=0 条件让并发轮换只有一个请求改到行。
+func (r *repo) Revoke(ctx context.Context, id, nowMs int64) (int64, error) {
+	res := db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).
+		Where("id=? AND revoked_at=0", id).
+		Update("revoked_at", nowMs)
+	return res.RowsAffected, res.Error
 }
 
 func (r *repo) RevokeChain(ctx context.Context, deviceID, nowMs int64) error {
