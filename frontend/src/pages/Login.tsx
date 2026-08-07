@@ -1,4 +1,4 @@
-import { LucideIcon, Laptop, AlertTriangle, Github } from "lucide-react";
+import { Laptop, AlertTriangle, Github } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -73,7 +73,10 @@ export default function Login() {
 
         {showError ? (
           <>
-            <Alert variant="destructive" className="border-destructive bg-destructive-soft">
+            <Alert
+              variant="destructive"
+              className="border-destructive bg-destructive-soft"
+            >
               <AlertTriangle className="h-4 w-4" />
               <div>
                 <div className="font-semibold text-destructive">
@@ -82,10 +85,7 @@ export default function Login() {
                 <div className="text-sm text-destructive">{errorText}</div>
               </div>
             </Alert>
-            <Button
-              className="w-full"
-              onClick={onRetryLogin}
-            >
+            <Button className="w-full" onClick={onRetryLogin}>
               {t("login.retryLogin")}
             </Button>
           </>

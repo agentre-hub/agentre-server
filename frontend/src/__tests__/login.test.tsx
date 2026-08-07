@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -53,16 +53,15 @@ describe("Login", () => {
     it("shows a descriptive body line", () => {
       renderLogin();
       expect(
-        screen.getByText(
-          /Continue with your GitHub account/i,
-        ),
+        screen.getByText(/Continue with your GitHub account/i),
       ).toBeTruthy();
     });
 
     it("shows the GitHub login button", () => {
       renderLogin();
-      expect(screen.getByRole("button", { name: /Sign in with GitHub/i }))
-        .toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: /Sign in with GitHub/i }),
+      ).toBeTruthy();
     });
 
     it("shows a footer note about terms and privacy", () => {
@@ -130,7 +129,11 @@ describe("Login", () => {
       expect(buttons.length).toBeGreaterThanOrEqual(1);
       // The retry button should exist when there's an error
       expect(
-        buttons.some((btn) => btn.textContent?.includes("Sign in again") || btn.textContent?.includes("重新登录")),
+        buttons.some(
+          (btn) =>
+            btn.textContent?.includes("Sign in again") ||
+            btn.textContent?.includes("重新登录"),
+        ),
       ).toBeTruthy();
     });
 
@@ -181,9 +184,7 @@ describe("Login", () => {
 
     it("shows Chinese retry button on error", () => {
       renderLogin("?err=access_denied");
-      expect(
-        screen.getByRole("button", { name: /重新登录/ }),
-      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: /重新登录/ })).toBeTruthy();
     });
 
     it("shows Chinese error message for known err codes", () => {
