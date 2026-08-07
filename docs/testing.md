@@ -19,7 +19,7 @@ speculatively. And do not add a guard in the consumer to paper over a producer b
 | Service | **mockgen** | Inject repo mocks via `xxx_repo.RegisterXxx(mock)`. Never touch a database |
 | Controller | `muxtest.TestMux` | Build the route tree, `testMux.Do(ctx, req, resp)` |
 | Cross-layer | `internal/integration/` | Controller-level, still mocked — no infrastructure needed |
-| Migrations | **nothing** | Deliberately untested — see below |
+| Migrations | **nothing** for the DDL; sqlmock for the runner around it | `migrationList()` is deliberately untested — see below |
 | Browser | `e2e/` | See [verification.md](verification.md) |
 
 Repository tests are the rule people break first. sqlmock keeps them fast and hermetic;
@@ -76,6 +76,13 @@ psql "<that same dsn>" -c '\dt'   # then read the tables back directly
 
 Write that check up under `e2e/scratch/` per [verification.md](verification.md) — for
 migrations the evidence is the table list, not a screenshot.
+
+**What is untested is the DDL, not the runner.** `migrations/migrations_test.go` does use
+sqlmock, on the advisory-lock wrapper `withMigrationLock` that serialises concurrently
+starting replicas — it asserts the `pg_try_advisory_lock` retry, that the migration func
+only runs once the lock is held, and that `pg_advisory_unlock` follows. That is a
+statement-sequence assertion, so it stays hermetic; it says nothing about whether any
+migration in `migrationList()` is valid SQL.
 
 ## Guard tests
 
