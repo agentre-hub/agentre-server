@@ -57,8 +57,18 @@
     },
     "success": {
       "title": "Device authorized",
-      "body": "You can close this page and go back to your terminal.",
-      "manageDevices": "Manage devices"
+      "body": "You can close this page now and continue on the device.",
+      "manageDevices": "Go to the console to manage devices"
+    },
+    "deniedScreen": {
+      "title": "Authorization denied",
+      "body": "This device will not receive any access. You can close this page now.",
+      "close": "Close page"
+    },
+    "expiredScreen": {
+      "title": "Authorization request expired",
+      "body": "Device codes only stay valid for a short while. Go back to the device, start authorization again, then enter the new code.",
+      "retry": "Enter a new code"
     },
     "manage": {
       "title": "Devices",
@@ -79,7 +89,8 @@
     }
   },
   "notFound": {
-    "title": "404",
-    "body": "This page does not exist."
+    "code": "404",
+    "title": "Page not found",
+    "body": "This link may be broken, or the address is mistyped."
   }
 }
