@@ -22,20 +22,14 @@ export default function Login() {
   const userCode = params.get("user_code") ?? "";
   const err = params.get("err");
 
+  // 首次登录与失败后重试走的是同一件事：带着 next / user_code 重新发起
+  // authorize（err 不透传，它是上一次的结果）。所以只有一个处理函数。
   const onLogin = () => {
     const u = new URLSearchParams();
     if (next) u.set("next", next);
     if (userCode) u.set("user_code", userCode);
     // 用 assign 而不是 `href =`：语义相同（都保留历史记录），
     // 但与 RequireAuth 的 window.location.replace 保持同一种写法。
-    window.location.assign("/v1/auth/oauth/github/authorize?" + u.toString());
-  };
-
-  const onRetryLogin = () => {
-    const u = new URLSearchParams();
-    if (next) u.set("next", next);
-    if (userCode) u.set("user_code", userCode);
-    // Clear err and redirect to authorize
     window.location.assign("/v1/auth/oauth/github/authorize?" + u.toString());
   };
 
@@ -48,7 +42,7 @@ export default function Login() {
 
   return (
     <AuthLayout>
-      <div className="w-full max-w-sm space-y-6 rounded-lg border border-border bg-card p-9">
+      <div className="w-full max-w-[424px] space-y-6 rounded-lg border border-border bg-card p-6 sm:p-9">
         <h1 className="text-2xl font-semibold text-foreground">
           {t("login.title")}
         </h1>
@@ -85,7 +79,7 @@ export default function Login() {
                 <div className="text-sm text-destructive">{errorText}</div>
               </div>
             </Alert>
-            <Button className="w-full" onClick={onRetryLogin}>
+            <Button className="w-full" onClick={onLogin}>
               {t("login.retryLogin")}
             </Button>
           </>

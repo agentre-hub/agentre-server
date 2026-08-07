@@ -117,7 +117,7 @@ written as arbitrary values rather than rounded to the nearest one.
 | Role on the board | Class | Size / weight | Where it lands |
 | --- | --- | --- | --- |
 | H1 | `text-2xl font-semibold` | 24 / 600 | every screen's `<h1>` |
-| H2 | `text-[15px] font-semibold` | 15 / 600 | product name in `AuthLayout`, device name in `DeviceApproval` |
+| Name | `text-[15px] font-semibold` | 15 / 600 | product name in `AuthLayout`, device name in `DeviceApproval` |
 | Eyebrow | `text-xs font-semibold` + `text-primary-text` | 12 / 600 | the "device authorization" line above the title |
 | Body | `text-sm` | 14 / 400 | the paragraph under a title |
 | Body strong | `text-sm font-semibold` | 14 / 600 | capability names, device name on the result screens |
@@ -126,6 +126,10 @@ written as arbitrary values rather than rounded to the nearest one.
 | Mono, inline | `font-mono` + `text-xs` / `text-[13px]` / `text-sm` | 12–14 / 400–600 | identifiers, see [Mono](#the-mono-font) |
 | Mono, code box | `font-mono text-[22px] font-semibold sm:text-[26px]` | 22→26 / 600 | `CodeInput` |
 | Mono, confirmation code | `font-mono text-[28px] font-semibold tracking-[7px] sm:text-[34px]` | 28→34 / 600 | `DeviceApproval` |
+
+The canvas's scale also names `Display / 32 · 600` and `H2 / 18 · 600`. Neither has a use in
+this flow, so no class carries one; add `text-[32px]` / `text-lg` at 600 when a screen
+finally needs them, rather than stretching a step that is already spoken for.
 
 Three things the table does not show:
 
@@ -152,8 +156,8 @@ most measurements land on a step:
 | 20 | `py-5` | top bar and footer, vertical |
 | 24 | `p-6`, `gap-6`, `px-6` | card padding on mobile, block gaps inside a card, the shell's horizontal padding |
 | 32 | `px-8` | top bar and footer, horizontal |
-| 36 | `p-9` | the login card |
-| 40 | `sm:p-10` | card padding from `sm:` up |
+| 36 | `sm:p-9` | the login card from `sm:` up |
+| 40 | `sm:p-10` | every other card's padding from `sm:` up |
 
 A handful of values are off the grid and written as arbitrary utilities — `gap-[26px]`,
 `gap-[18px]`, `gap-[9px]`, `gap-[7px]`, `py-[13px]`, `py-[11px]`, `px-[18px]`. Those are
@@ -187,7 +191,8 @@ three-part layout — top bar, main, footer — on `flex min-h-screen flex-col b
 
 **Top bar.** Brand mark (a 28px `rounded-sm bg-primary` square holding a terminal glyph)
 plus the product name at `text-[15px] font-semibold`, a flexible spacer, then `AppControls`
-— the language and theme toggles as `Button size="icon-sm"`. It sits **in the document
+— the language and theme toggles, `Button size="icon-sm"` with the width and height
+overridden to the board's 34px (`icon-sm` alone is 32). It sits **in the document
 flow**. `AppControls` used to be a `fixed right-3 top-3 z-50` overlay mounted outside the
 router, floating over whatever each page happened to draw in that corner;
 `frontend/src/__tests__/auth-layout.test.tsx` asserts the header is not `fixed`, so it
@@ -208,7 +213,7 @@ width is per screen, and comes from the board:
 
 | Screen | File | Width class | Rendered |
 | --- | --- | --- | --- |
-| Login | `pages/Login.tsx` | `w-full max-w-sm` | 384px |
+| Login | `pages/Login.tsx` | `w-full max-w-[424px]` | 424px |
 | Device code entry | `pages/Device.tsx` | `w-full max-w-[496px]` | 496px |
 | Authorization confirm | `components/DeviceApproval.tsx` | `w-full max-w-[576px]` | 576px |
 | Success / denied / expired | `pages/Device{Success,Denied,Expired}.tsx` | `w-full max-w-[28rem]` | 448px |
@@ -227,7 +232,7 @@ use, and it adds to the mobile shape rather than replacing it.
 - Cards are `w-full max-w-*`, so below their maximum they fill whatever main leaves after
   `px-6`. Nothing else needs to change for them to fit.
 - Card padding is `p-6 sm:p-10` — 24 on a phone, 40 on a desktop. (`Login.tsx` is the one
-  exception: `p-9` at every width.)
+  exception, `p-6 sm:p-9`: its board is drawn at 36 rather than 40.)
 - The six code boxes flex: `min-w-0 max-w-[54px] flex-1`, `h-14` → `sm:h-[66px]`,
   `text-[22px]` → `sm:text-[26px]`. `min-w-0` is load-bearing — without it a flex item
   refuses to shrink below its content and the row pushes a horizontal scrollbar.

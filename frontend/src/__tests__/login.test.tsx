@@ -64,6 +64,17 @@ describe("Login", () => {
       ).toBeTruthy();
     });
 
+    // spec「认证外壳」的卡片表：「宽度按屏内容定：登录 424…」，
+    // 以及「间距」：「卡片内间距桌面 36–40，移动 24–28」。
+    // max-w-sm 是 384，而一个常量 p-9 会把 36 的桌面留白照搬到手机上。
+    it("is 424 wide and pads 24 on mobile, 36 from sm: up", () => {
+      renderLogin();
+      const card = screen.getByRole("heading", { level: 1 }).parentElement;
+      expect(card?.className).toContain("max-w-[424px]");
+      expect(card?.className).toContain("p-6");
+      expect(card?.className).toContain("sm:p-9");
+    });
+
     it("shows a footer note about terms and privacy", () => {
       renderLogin();
       // Get the footer by finding the element that contains the specific text

@@ -25,4 +25,17 @@ describe("AppControls", () => {
     const container = button.parentElement;
     expect(container?.className).not.toMatch(/\bfixed\b/);
   });
+
+  // spec「认证外壳」：顶栏「右侧是语言与主题两个 34px 图标按钮」。
+  // Button 的 icon-sm 是 32px，差两像素——不写死就会跟着 shadcn 的尺寸走。
+  it.each([/Language/i, /Theme/i])(
+    "renders %s at the shell's 34px",
+    async (name) => {
+      await i18n.changeLanguage("en");
+      render(<AppControls />);
+      expect(screen.getByRole("button", { name }).className).toContain(
+        "size-[34px]",
+      );
+    },
+  );
 });

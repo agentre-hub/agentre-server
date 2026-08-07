@@ -97,6 +97,21 @@ describe("DeviceDenied", () => {
     expect(button.getAttribute("data-variant")).not.toBe("destructive");
   });
 
+  // spec「失败路径」：「这一屏是中性收尾，不使用 destructive 色。」
+  // 拒绝是用户自己的决定，不是一次报错——整屏一个 destructive 色都不该上身，
+  // 包括图标底板那圈。只断按钮 variant 拦不住写在 className 里的红色。
+  //
+  // 只看无条件生效的类：shadcn Button 的基础样式里带着
+  // `aria-invalid:border-destructive`，那是没设 aria-invalid 就不上色的分支，
+  // 算不上「这一屏用了 destructive」。所以按变体前缀（冒号）过滤。
+  it("uses no destructive colour anywhere on the screen", () => {
+    const { container } = renderAtState(<DeviceDenied />, "/device/denied");
+    const painted = [...container.querySelectorAll<HTMLElement>("[class]")]
+      .flatMap((el) => (el.getAttribute("class") ?? "").split(/\s+/))
+      .filter((c) => /^(bg|text|border|ring|fill)-destructive/.test(c));
+    expect(painted).toEqual([]);
+  });
+
   it("closes the page on click", () => {
     const closeSpy = vi.spyOn(window, "close").mockImplementation(() => {});
     renderAtState(<DeviceDenied />, "/device/denied");
