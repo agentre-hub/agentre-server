@@ -1,6 +1,12 @@
 env: PROD
 debug: false
 
+# 配置源。留 file 表示就读这个文件；k8s 上由 ConfigMap 覆盖成 etcd。
+# 这一行不能省：cago 读不到某个键时会把默认值**写回配置文件**
+# （cago configs/file/file.go 的 fileSource.Scan），配置文件只读时就直接启动失败。
+# 镜像里这份是 root 拥有、容器以 nonroot 跑，缺 source 就是 "permission denied"。
+source: file
+
 http:
   address:
     - "0.0.0.0:8443"

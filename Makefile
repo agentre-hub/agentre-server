@@ -18,8 +18,12 @@ build:
 	  -X agentre-server/internal/buildinfo.Commit=$(COMMIT)" \
 	  -o bin/server ./cmd/server
 
+# 与 build 走同一组版本号，否则本地镜像的启动日志是 "dev (unknown)"，
+# 排障时对不回 commit。基础镜像与 registry 用 Dockerfile 里的默认值。
 docker:
-	docker build -t agentre/server:0.1 .
+	docker build -t agentre/server:0.1 \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(COMMIT) .
 
 # test 是本仓库唯一的测试入口：后端 + 前端。
 # 本仓库**没有任何 build tag**，也不要新增——tag 会让测试被静默跳过而输出仍是绿的

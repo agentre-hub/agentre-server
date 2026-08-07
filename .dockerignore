@@ -1,0 +1,45 @@
+# 构建上下文白名单式裁剪。没有这个文件时上下文有 236MB，且宿主机的
+# frontend/node_modules 会被 COPY 进镜像——pnpm install 随后想清掉它，
+# 在无 TTY 的构建环境里直接 ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY 失败。
+
+# vcs 与本轮工作区
+.git
+.gitignore
+.github
+.gitea
+.worktrees
+.dev-kit
+
+# 依赖与构建产物：镜像内自己装、自己编
+**/node_modules
+frontend/dist
+internal/web/dist
+bin
+*.tsbuildinfo
+
+# 运行期与本地数据
+runtime
+data
+coverage.out
+coverage.html
+
+# 凭据：configs/config.yaml 和 .env 里是真实密钥，绝不进任何一层镜像
+.env
+configs/config.yaml
+
+# 镜像构建用不到
+e2e
+docs
+deploy
+docker-compose.yml
+README.md
+AGENTS.md
+CLAUDE.md
+
+# 编辑器与系统
+.idea
+.vscode
+.omc
+.opskat
+*.swp
+.DS_Store
