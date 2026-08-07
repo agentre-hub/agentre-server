@@ -27,8 +27,13 @@
     "comingSoon": "即将上线"
   },
   "login": {
-    "title": "登录 AgentRe Server",
+    "title": "登录 AgentRe",
+    "description": "使用 GitHub 账号继续。桌面应用与 agentred 守护进程都通过它完成授权。",
     "github": "使用 GitHub 登录",
+    "userCodeLabel": "登录后继续授权设备",
+    "failureTitle": "登录未完成",
+    "retryLogin": "重新登录",
+    "footer": "继续即表示你同意 AgentRe 的服务条款与隐私政策。",
     "errors": {
       "oauth_state_invalid": "OAuth state 已过期，请重新发起登录。",
       "oauth_exchange_failed": "GitHub OAuth 兑换失败，请稍后重试或检查 GitHub OAuth App 配置。",

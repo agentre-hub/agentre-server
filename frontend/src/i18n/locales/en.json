@@ -27,8 +27,13 @@
     "comingSoon": "Coming soon"
   },
   "login": {
-    "title": "Sign in to AgentRe Server",
+    "title": "Sign in to AgentRe",
+    "description": "Continue with your GitHub account. Both the desktop app and agentred daemon authorize through it.",
     "github": "Sign in with GitHub",
+    "userCodeLabel": "Continue to device authorization after signing in",
+    "failureTitle": "Sign in unsuccessful",
+    "retryLogin": "Sign in again",
+    "footer": "By continuing, you agree to AgentRe's Terms of Service and Privacy Policy.",
     "errors": {
       "oauth_state_invalid": "The OAuth state has expired. Please start the sign-in again.",
       "oauth_exchange_failed": "GitHub OAuth exchange failed. Retry later, or check the GitHub OAuth App settings.",
