@@ -5,7 +5,18 @@ import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import AuthLayout from "@/components/AuthLayout";
 
-/** 后端 err query 参数 → i18n key 后缀。未知值原样透出。 */
+/**
+ * 后端 err query 参数认得出的形状：小写字母开头的 snake_case 短标识，
+ * 与下面 KNOWN_ERRORS 里那些同源（auth_ctr 只会重定向出这类值）。
+ *
+ * err 是从 URL 来的，谁都能给受害者递一条链接。未知码原样透出的本意是透出
+ * 一个**码**——不加这道形状检查，`/login?err=<任意一句话>` 就能在我们自己的
+ * 域名、自己的失败卡里印一句话，等于一条免费的钓鱼提示（React 会转义 HTML，
+ * 所以这不是 XSS，是文案伪造）。不成形状的值只当「失败了」，不回显内容。
+ */
+const ERR_CODE_SHAPE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** 后端 err query 参数 → i18n key 后缀。未收录但成形状的码原样透出。 */
 const KNOWN_ERRORS = [
   "oauth_state_invalid",
   "oauth_exchange_failed",
@@ -33,10 +44,13 @@ export default function Login() {
     window.location.assign("/v1/auth/oauth/github/authorize?" + u.toString());
   };
 
-  const errorText =
-    err && (KNOWN_ERRORS as readonly string[]).includes(err)
+  const errorText = !err
+    ? null
+    : (KNOWN_ERRORS as readonly string[]).includes(err)
       ? t(`login.errors.${err}`)
-      : err;
+      : ERR_CODE_SHAPE.test(err)
+        ? err
+        : null;
 
   const showError = !!err;
 
@@ -76,7 +90,9 @@ export default function Login() {
                 <div className="font-semibold text-destructive">
                   {t("login.failureTitle")}
                 </div>
-                <div className="text-sm text-destructive">{errorText}</div>
+                {errorText && (
+                  <div className="text-sm text-destructive">{errorText}</div>
+                )}
               </div>
             </Alert>
             <Button className="w-full" onClick={onLogin}>

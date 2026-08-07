@@ -1,25 +1,14 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import App from "@/App";
+import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
-
-// 见 auth-layout.test.tsx 顶部注释：绕开与本任务无关的 jsdom/Node localStorage 环境缺陷。
-vi.mock("@/lib/theme", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/theme")>();
-  return {
-    ...actual,
-    useTheme: () => ({
-      theme: "system" as const,
-      resolved: "light" as const,
-      setTheme: vi.fn(),
-    }),
-  };
-});
 
 function renderAt(path: string) {
   window.history.pushState({}, "", path);
-  return render(<App />);
+  // main.tsx 里 App 就是套在 ThemeProvider 下的，这里照搬同一层。
+  return render(<App />, { wrapper: ThemeProvider });
 }
 
 describe("App shell wiring", () => {

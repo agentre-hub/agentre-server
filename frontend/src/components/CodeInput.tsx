@@ -25,7 +25,6 @@ export interface CodeInputProps {
   invalid?: boolean;
   /** 关联到码格组的说明/错误文案 id，空格分隔。 */
   describedBy?: string;
-  disabled?: boolean;
 }
 
 export default function CodeInput({
@@ -33,7 +32,6 @@ export default function CodeInput({
   onChange,
   invalid = false,
   describedBy,
-  disabled,
 }: CodeInputProps) {
   const { t } = useTranslation();
   const refs = useRef<Array<HTMLInputElement | null>>([]);
@@ -148,7 +146,6 @@ export default function CodeInput({
             autoCorrect="off"
             spellCheck={false}
             maxLength={1}
-            disabled={disabled}
             aria-label={t("device.entry.boxLabel", { position: i + 1 })}
             aria-invalid={invalid || undefined}
             value={char}
@@ -164,7 +161,6 @@ export default function CodeInput({
               "h-14 min-w-0 max-w-[54px] flex-1 rounded-md border border-border bg-card text-center font-mono text-[22px] font-semibold text-foreground outline-none",
               "sm:h-[66px] sm:text-[26px]",
               "focus:border-primary focus:ring-1 focus:ring-primary",
-              "disabled:cursor-not-allowed disabled:opacity-50",
               invalid &&
                 "border-destructive bg-destructive-soft text-destructive focus:border-destructive focus:ring-destructive",
             )}

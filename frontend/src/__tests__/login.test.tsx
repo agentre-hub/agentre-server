@@ -3,19 +3,8 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Login from "@/pages/Login";
+import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
-
-vi.mock("@/lib/theme", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/theme")>();
-  return {
-    ...actual,
-    useTheme: () => ({
-      theme: "system" as const,
-      resolved: "light" as const,
-      setTheme: vi.fn(),
-    }),
-  };
-});
 
 function renderLogin(search: string = "") {
   // Login.tsx 直接读 window.location.search（而不是 useLocation），
@@ -34,6 +23,7 @@ function renderLogin(search: string = "") {
     <MemoryRouter initialEntries={["/login"]}>
       <Login />
     </MemoryRouter>,
+    { wrapper: ThemeProvider },
   );
 }
 
@@ -151,6 +141,27 @@ describe("Login", () => {
       renderLogin("?err=unknown_error_code");
       const alert = screen.getByRole("alert");
       expect(alert.textContent).toContain("unknown_error_code");
+    });
+
+    // err 是 URL 里来的，谁都能给受害者递一条 /login?err=<任意一句话>。
+    // 「未知码原样透出」的本意是透出一个**码**，不是让攻击者在我们自己的
+    // 域名、自己的失败卡里写一句话——那是一条免费的钓鱼提示。
+    it("refuses to echo an err value that is prose rather than a code", () => {
+      renderLogin(
+        "?err=" +
+          encodeURIComponent(
+            "Your account is locked. Call +1-555-0100 to restore access.",
+          ),
+      );
+      const alert = screen.getByRole("alert");
+      // 失败本身照说：标题和重试按钮都在
+      expect(alert.textContent).toContain("Sign in unsuccessful");
+      expect(
+        screen.getByRole("button", { name: /Sign in again/i }),
+      ).toBeTruthy();
+      // 但那句话一个字都不许上屏
+      expect(alert.textContent).not.toContain("+1-555-0100");
+      expect(alert.textContent).not.toContain("Your account is locked");
     });
 
     it("failure alert has destructive-soft background", () => {

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import { buttonVariants } from "@/components/ui/button";
 import AuthLayout from "@/components/AuthLayout";
+import { deviceKindLabel } from "@/lib/deviceKind";
 
 /**
  * 授权批准那一步（`/device` 拿到的 pending 记录）已经知道的设备信息，
@@ -37,14 +38,6 @@ export default function DeviceSuccess() {
   const { state } = useLocation();
   const info = readDeviceInfo(state);
 
-  function kindLabel(kind: string): string {
-    const key = `device.kind.${kind}`;
-    const translated = t(key);
-    // i18next 返回 key 本身表示没有这个翻译，回退到原始值——与 Devices.tsx 的
-    // kindLabel 同一手法，未收录的 kind 原样透出而不是显示一串死键名。
-    return translated === key ? kind : translated;
-  }
-
   return (
     <AuthLayout>
       <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-lg border bg-card p-6 text-center sm:p-10">
@@ -69,7 +62,7 @@ export default function DeviceSuccess() {
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-foreground">
-                {kindLabel(info.kind)}
+                {deviceKindLabel(info.kind, t)}
               </p>
               <p className="truncate font-mono text-xs text-muted-foreground">
                 {`${info.platform} · ${info.version}`}

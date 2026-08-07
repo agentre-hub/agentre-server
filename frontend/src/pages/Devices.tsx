@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import AuthLayout from "@/components/AuthLayout";
 import { api, ApiError } from "@/lib/api";
+import { deviceKindLabel } from "@/lib/deviceKind";
 
 interface DeviceItem {
   id: number;
@@ -88,13 +89,6 @@ export default function Devices() {
     };
   }, []);
 
-  function kindLabel(kind: string): string {
-    const key = `device.kind.${kind}`;
-    const translated = t(key);
-    // i18next 返回 key 本身表示没有这个翻译，回退到后端给的原文。
-    return translated === key ? kind : translated;
-  }
-
   async function onRevoke() {
     if (!revoking) return;
     setSubmitting(true);
@@ -150,7 +144,7 @@ export default function Devices() {
                     <div className="min-w-0">
                       <CardTitle className="truncate">{d.name}</CardTitle>
                       <CardDescription className="mt-1">
-                        {kindLabel(d.kind)}
+                        {deviceKindLabel(d.kind, t)}
                         {d.platform ? ` · ${d.platform}` : ""}
                         {d.version ? ` ${d.version}` : ""}
                         {d.is_this_device

@@ -1,26 +1,20 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import AppControls from "@/components/AppControls";
+import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
 
-// 见 auth-layout.test.tsx 顶部注释：绕开与本任务无关的 jsdom/Node localStorage 环境缺陷。
-vi.mock("@/lib/theme", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/theme")>();
-  return {
-    ...actual,
-    useTheme: () => ({
-      theme: "system" as const,
-      resolved: "light" as const,
-      setTheme: vi.fn(),
-    }),
-  };
-});
+// 真的 ThemeProvider，不是替身：AppControls 的图标和 aria-label 都由
+// context 里的 theme 决定，替换掉它这几条断言就测不到接线了。
+function renderControls() {
+  return render(<AppControls />, { wrapper: ThemeProvider });
+}
 
 describe("AppControls", () => {
   it("lives in normal document flow; it is not fixed-positioned any more", async () => {
     await i18n.changeLanguage("en");
-    render(<AppControls />);
+    renderControls();
     const button = screen.getByRole("button", { name: /Language/i });
     const container = button.parentElement;
     expect(container?.className).not.toMatch(/\bfixed\b/);
@@ -32,7 +26,7 @@ describe("AppControls", () => {
     "renders %s at the shell's 34px",
     async (name) => {
       await i18n.changeLanguage("en");
-      render(<AppControls />);
+      renderControls();
       expect(screen.getByRole("button", { name }).className).toContain(
         "size-[34px]",
       );

@@ -151,7 +151,13 @@ export default function Device() {
           error={failure === null ? null : failureText(failure)}
           onApprove={() => void onApprove()}
           onDeny={() => void onDeny()}
-          onExpire={() => nav("/device/expired")}
+          // 请求已经发出去时本地这块表说了不算：服务端可能已经把这次授权
+          // 收下了，抢先跳过期页会让用户以为失败而再授权一次，名下于是多出
+          // 一台没打算批两遍的设备。真过期了 approve/deny 自己会回 30202，
+          // 上面那句 isExpired 照样把人送到终态页。
+          onExpire={() => {
+            if (!submitting) nav("/device/expired");
+          }}
         />
       </AuthLayout>
     );

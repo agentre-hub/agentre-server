@@ -3,28 +3,13 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "@/lib/api";
+import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
 import Device from "@/pages/Device";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
-});
-
-// Device 经 AuthLayout 挂了 AppControls，后者要读 useTheme()。真实
-// ThemeProvider 会在 readStored() 里摸 localStorage——这台机器的 Node 版本下
-// jsdom 的 window.localStorage 解析成 undefined（Node 自带的实验性 Storage
-// 抢占了 jsdom 的实现），是与本测试无关的环境缺陷，绕开即可。
-vi.mock("@/lib/theme", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/theme")>();
-  return {
-    ...actual,
-    useTheme: () => ({
-      theme: "system" as const,
-      resolved: "light" as const,
-      setTheme: vi.fn(),
-    }),
-  };
 });
 
 const mockedApi = vi.mocked(api);
@@ -87,6 +72,7 @@ function renderDevice() {
         <Route path="/device/expired" element={<Probe name="expired" />} />
       </Routes>
     </MemoryRouter>,
+    { wrapper: ThemeProvider },
   );
 }
 
@@ -306,6 +292,46 @@ describe("授权确认：允许", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("boom");
     expect(screen.queryByTestId("at-expired")).toBeNull();
     expect(screen.queryByTestId("at-success")).toBeNull();
+  });
+
+  // 用户在最后一秒点了「允许」：请求已经发到服务端，倒计时随后归零。
+  // 本地那块表不是权威——服务端可能已经把这次授权收下了。此时抢先跳过期页
+  // 会告诉用户「失败了」，而设备其实已经拿到访问权；用户再授权一次，
+  // 名下于是多出一台自己没打算批两遍的设备。
+  describe("请求在途时倒计时归零", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("不抢跑到 /device/expired，等 approve 的结果", async () => {
+      let release!: () => void;
+      mockFlow(
+        pending({ expires_in: 3 }),
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ ok: true });
+          }),
+      );
+      renderDevice();
+
+      await waitForApproval();
+      approve();
+
+      // 倒计时走完，approve 还没回来
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+      });
+      expect(screen.queryByTestId("at-expired")).toBeNull();
+
+      // 服务端说成了，就该落成功屏
+      await act(async () => {
+        release();
+      });
+      expect(await screen.findByTestId("at-success")).toBeTruthy();
+    });
   });
 });
 

@@ -285,9 +285,10 @@ Both form factors are supported, so build mobile-first and add `sm:`/`md:` upwar
   than labelled ones so it fits a narrow viewport.
 
 The e2e suite runs **every spec against `desktop-chromium` and `mobile-chromium`**, and
-one spec asserts the login screen has no horizontal overflow — under the mobile project,
-that is the assertion that catches a card sitting edge-to-edge. A desktop-only pass tells
-you nothing about mobile.
+one spec asserts no horizontal overflow on the login screen and on the six code boxes —
+under the mobile project, that is the assertion that catches a card sitting edge-to-edge
+or a flex row that refuses to shrink. A desktop-only pass tells you nothing about mobile,
+and a jsdom unit test tells you nothing at all here: it computes no layout.
 
 ## The mono font
 

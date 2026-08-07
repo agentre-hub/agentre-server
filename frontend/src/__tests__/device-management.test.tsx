@@ -9,6 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
+import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
 
@@ -17,23 +18,17 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-// Devices 现在经 AuthLayout 挂了 AppControls，后者要读 useTheme()。真实
-// ThemeProvider 会在 readStored() 里摸 localStorage——这台机器的 Node 版本下
-// jsdom 的 window.localStorage 解析成 undefined（Node 自带的实验性 Storage
-// 抢占了 jsdom 的实现），是与本测试无关的环境缺陷，绕开即可。
-vi.mock("@/lib/theme", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/theme")>();
-  return {
-    ...actual,
-    useTheme: () => ({
-      theme: "system" as const,
-      resolved: "light" as const,
-      setTheme: vi.fn(),
-    }),
-  };
-});
-
 const mockedApi = vi.mocked(api);
+
+// Devices 现在也套 AuthLayout，顶栏里的 AppControls 要从 context 取主题。
+function renderDevices() {
+  return render(
+    <MemoryRouter>
+      <Devices />
+    </MemoryRouter>,
+    { wrapper: ThemeProvider },
+  );
+}
 
 const listResponse = {
   devices: [
@@ -78,11 +73,7 @@ describe("device management page", () => {
       throw new Error("unexpected call: " + path);
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
 
     expect(await screen.findByText("nuc-01")).toBeTruthy();
     expect(screen.getByText("laptop")).toBeTruthy();
@@ -113,11 +104,7 @@ describe("device management page", () => {
       throw new Error("unexpected call: " + path);
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
     await screen.findByText("nuc-01");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
@@ -156,11 +143,7 @@ describe("device management page", () => {
       throw new SyntaxError("Unexpected token '<' ... is not valid JSON");
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
 
     expect(
       await screen.findByText("Could not load your devices. Please try again."),
@@ -181,11 +164,7 @@ describe("device management page", () => {
       throw new Error("unexpected call: " + path);
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
     await screen.findByText("nuc-01");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);

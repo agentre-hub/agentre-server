@@ -7,21 +7,8 @@ import App from "@/App";
 import DeviceSuccess from "@/pages/DeviceSuccess";
 import DeviceDenied from "@/pages/DeviceDenied";
 import DeviceExpired from "@/pages/DeviceExpired";
+import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
-
-// 见 auth-layout.test.tsx 顶部注释：这几屏都套 AuthLayout，同样要绕开
-// jsdom/Node localStorage 环境缺陷（与本任务无关）。
-vi.mock("@/lib/theme", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/theme")>();
-  return {
-    ...actual,
-    useTheme: () => ({
-      theme: "system" as const,
-      resolved: "light" as const,
-      setTheme: vi.fn(),
-    }),
-  };
-});
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");
@@ -32,12 +19,13 @@ function renderAtState(ui: ReactElement, path: string, state?: unknown) {
     <MemoryRouter initialEntries={[{ pathname: path, state }]}>
       {ui}
     </MemoryRouter>,
+    { wrapper: ThemeProvider },
   );
 }
 
 function renderAppAt(path: string) {
   window.history.pushState({}, "", path);
-  return render(<App />);
+  return render(<App />, { wrapper: ThemeProvider });
 }
 
 describe("DeviceSuccess", () => {

@@ -14,6 +14,7 @@ import {
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { useMe } from "@/hooks/use-me";
+import { deviceKindLabel } from "@/lib/deviceKind";
 
 /** `/v1/oauth/device/pending` 的返回。 */
 export interface PendingInfo {
@@ -184,8 +185,7 @@ export default function DeviceApproval({
   // 会跑编码 agent 的是能力，不是型号名。
   const risky = info.capabilities?.compute === true;
 
-  const kindKey = `device.kind.${info.device_kind}`;
-  const kindLabel = t(kindKey) === kindKey ? info.device_kind : t(kindKey);
+  const kindLabel = deviceKindLabel(info.device_kind, t);
 
   return (
     <div className="flex w-full max-w-[576px] flex-col gap-6 rounded-lg border border-border bg-card p-6 sm:p-10">

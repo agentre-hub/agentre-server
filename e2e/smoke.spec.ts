@@ -93,16 +93,26 @@ test("语言切换会改变界面文案和 <html lang>", async ({ page }) => {
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
 });
 
-test("登录页在当前视口下不横向溢出", async ({ page }) => {
+test("认证流在当前视口下不横向溢出", async ({ page }) => {
+  // 移动端 project 下这条才有意义：卡片贴边 / 溢出会在这里被抓到
+  const overflow = () =>
+    page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+
   await mockUnauthenticated(page);
   await page.goto("/login");
   await assertIsAppUnderTest(page);
+  expect(await overflow()).toBeLessThanOrEqual(0);
 
-  // 移动端 project 下这条才有意义：卡片贴边 / 溢出会在这里被抓到
-  const overflow = await page.evaluate(
-    () =>
-      document.documentElement.scrollWidth -
-      document.documentElement.clientWidth,
-  );
-  expect(overflow).toBeLessThanOrEqual(0);
+  // 六个码格是这条流里最宽的一排硬约束：画板画的是 6×54 加间距和分隔线，
+  // 手机宽度扣掉外壳与卡片的内边距后所剩无几。这排要是不肯缩（改了
+  // max-w / gap / flex，或给行加了固定宽度），只有真排版量得出来——
+  // jsdom 不算布局，单测在这件事上一个字都测不到。
+  await mockAuthenticated(page);
+  await page.goto("/device");
+  await expect(page.getByRole("group")).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(0);
 });
