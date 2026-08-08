@@ -34,7 +34,7 @@ func (d *Device) PublicKey(c *gin.Context, _ *api.PublicKeyRequest) {
 func (d *Device) Authorize(ctx context.Context, req *api.DeviceAuthorizeRequest) (*api.DeviceAuthorizeResponse, error) {
 	out, err := device_svc.Default().Authorize(ctx, device_svc.AuthorizeInput{
 		DeviceKind: req.DeviceKind, Fingerprint: req.Fingerprint,
-		Platform: req.Platform, Version: req.Version, Capabilities: req.Capabilities,
+		Platform: req.Platform, Version: req.Version,
 	})
 	if err != nil {
 		return nil, i18n.NewInternalError(ctx, code.ServerError)
@@ -66,7 +66,7 @@ func (d *Device) Pending(c *gin.Context, req *api.DevicePendingRequest) (*api.De
 	}
 	return &api.DevicePendingResponse{
 		DeviceKind: info.DeviceKind, Platform: info.Platform, Version: info.Version,
-		Capabilities: info.Capabilities, ExpiresIn: info.ExpiresIn,
+		ExpiresIn: info.ExpiresIn,
 	}, nil
 }
 

@@ -68,14 +68,12 @@ func TestAuthorize_ReturnsUserCode(t *testing.T) {
 		mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, code *device_flow_entity.DeviceFlowCode) error {
 				assert.Equal(t, "agentred", code.DeviceKind)
-				assert.JSONEq(t, `{"compute":true}`, string(code.ClientCapabilities))
 				return nil
 			},
 		)
 
 		out, err := svc.Authorize(ctx, AuthorizeInput{
 			DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa", Platform: "linux/amd64", Version: "0.5.0",
-			Capabilities: map[string]bool{"compute": true},
 		})
 		assert.NoError(t, err)
 		assert.NotEmpty(t, out.DeviceCode)
@@ -132,14 +130,12 @@ func TestExchangeToken(t *testing.T) {
 					ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
 					AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
 					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
-					ClientCapabilities: []byte(`{"compute":true}`),
 				}, nil,
 			)
 			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
 					assert.Equal(t, "agentred", d.Kind)
-					assert.JSONEq(t, `{"compute":true}`, string(d.Capabilities))
 					d.ID = 7
 					return nil
 				},
@@ -170,7 +166,6 @@ func TestExchangeToken(t *testing.T) {
 					ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
 					AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
 					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
-					ClientCapabilities: []byte(`{"compute":true}`),
 				}, nil,
 			)
 			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
@@ -383,7 +378,7 @@ func TestListRevokedJTI(t *testing.T) {
 }
 
 func TestListUserDevices(t *testing.T) {
-	convey.Convey("ListUserDevices marks caller, decodes capabilities, and reports real relay presence", t, func() {
+	convey.Convey("ListUserDevices marks caller and reports real relay presence", t, func() {
 		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
 		callerDev := int64(42)
 		userID := int64(7)
@@ -400,8 +395,8 @@ func TestListUserDevices(t *testing.T) {
 		t.Cleanup(func() { relay_svc.SetDefault(nil) })
 
 		mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
-			{ID: 42, UserID: 7, Name: "mac-pro-m4", Kind: "desktop", Platform: "darwin/arm64", Version: "v0.4.1", Fingerprint: "fp-a", Capabilities: []byte(`{"compute":true,"file_browse":true}`), LastSeenAt: 1000, Status: 1},
-			{ID: 43, UserID: 7, Name: "agentred-1", Kind: "agentred", Platform: "linux/amd64", Version: "v0.4.1", Fingerprint: "fp-b", Capabilities: []byte(`{"compute":true}`), LastSeenAt: 999, Status: 1},
+			{ID: 42, UserID: 7, Name: "mac-pro-m4", Kind: "desktop", Platform: "darwin/arm64", Version: "v0.4.1", Fingerprint: "fp-a", LastSeenAt: 1000, Status: 1},
+			{ID: 43, UserID: 7, Name: "agentred-1", Kind: "agentred", Platform: "linux/amd64", Version: "v0.4.1", Fingerprint: "fp-b", LastSeenAt: 999, Status: 1},
 		}, nil)
 
 		// 只为 agentred-1（fp-b）登记在线态；mac-pro-m4 无登记 → 离线。
@@ -415,8 +410,6 @@ func TestListUserDevices(t *testing.T) {
 		convey.So(len(items), convey.ShouldEqual, 2)
 		convey.So(items[0].ID, convey.ShouldEqual, int64(42))
 		convey.So(items[0].IsThisDevice, convey.ShouldBeTrue)
-		convey.So(items[0].Capabilities["compute"], convey.ShouldBeTrue)
-		convey.So(items[0].Capabilities["file_browse"], convey.ShouldBeTrue)
 		convey.So(items[1].IsThisDevice, convey.ShouldBeFalse)
 		// 在线态 = Redis 中继登记存在，与 devices.status 无关（R20）
 		convey.So(items[1].Online, convey.ShouldBeTrue)

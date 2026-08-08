@@ -29,7 +29,6 @@ interface DeviceItem {
   platform: string;
   version: string;
   fingerprint: string;
-  capabilities: Record<string, boolean>;
   last_seen_at: number;
   status: number;
   online: boolean;

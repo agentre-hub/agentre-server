@@ -12,9 +12,3 @@ func TestDevice_IsActive(t *testing.T) {
 	assert.False(t, (&Device{Status: consts.DELETE}).IsActive())
 	assert.False(t, (*Device)(nil).IsActive())
 }
-
-func TestDevice_CapabilitySlice(t *testing.T) {
-	d := &Device{Capabilities: []byte(`{"compute":true,"client":false,"file_browse":true}`)}
-	got := d.CapabilityList()
-	assert.ElementsMatch(t, []string{"compute", "file_browse"}, got)
-}

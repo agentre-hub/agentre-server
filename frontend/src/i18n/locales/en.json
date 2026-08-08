@@ -59,23 +59,8 @@
     },
     "approve": {
       "title": "Allow this device to access your AgentRe account?",
-      "risk": {
-        "compute": "This is a compute node. Once you approve it, it can execute arbitrary code and commands as you.",
-        "neutral": "Once you approve it, this device connects to your AgentRe account as you."
-      },
+      "risk": "Once you approve it, this device gets full access to your AgentRe account as you, including running arbitrary code and commands. Only approve devices you trust.",
       "verify": "Check that this code matches exactly what the device shows",
-      "capabilitiesSummary": "This device will be able to: {{list}}",
-      "capabilities": {
-        "compute": {
-          "title": "Run coding agent tasks"
-        },
-        "client": {
-          "title": "Connect as a client"
-        },
-        "file_browse": {
-          "title": "Browse project files"
-        }
-      },
       "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
       "expirySeconds": "This authorization request expires in {{seconds}}s",
       "expiryAnnounce": "This authorization request expires in about {{minutes}} minutes",

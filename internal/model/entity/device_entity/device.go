@@ -1,12 +1,7 @@
 // Package device_entity 维护设备实体。
 package device_entity
 
-import (
-	"encoding/json"
-	"sort"
-
-	"github.com/cago-frame/cago/pkg/consts"
-)
+import "github.com/cago-frame/cago/pkg/consts"
 
 const (
 	KindDesktop  = "desktop"
@@ -16,49 +11,19 @@ const (
 )
 
 type Device struct {
-	ID           int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID       int64  `gorm:"column:user_id;type:bigint;not null"`
-	Name         string `gorm:"column:name;type:text;not null"`
-	Kind         string `gorm:"column:kind;type:text;not null"`
-	Platform     string `gorm:"column:platform;type:text;not null;default:''"`
-	Version      string `gorm:"column:version;type:text;not null;default:''"`
-	Fingerprint  string `gorm:"column:fingerprint;type:text;not null"`
-	Capabilities []byte `gorm:"column:capabilities;type:jsonb;not null;default:'{}'"`
-	LastSeenAt   int64  `gorm:"column:last_seen_at;type:bigint;not null;default:0"`
-	Status       int    `gorm:"column:status;type:smallint;not null;default:1"`
-	Createtime   int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
-	Updatetime   int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID      int64  `gorm:"column:user_id;type:bigint;not null"`
+	Name        string `gorm:"column:name;type:text;not null"`
+	Kind        string `gorm:"column:kind;type:text;not null"`
+	Platform    string `gorm:"column:platform;type:text;not null;default:''"`
+	Version     string `gorm:"column:version;type:text;not null;default:''"`
+	Fingerprint string `gorm:"column:fingerprint;type:text;not null"`
+	LastSeenAt  int64  `gorm:"column:last_seen_at;type:bigint;not null;default:0"`
+	Status      int    `gorm:"column:status;type:smallint;not null;default:1"`
+	Createtime  int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	Updatetime  int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
 }
 
 func (*Device) TableName() string { return "devices" }
 
 func (d *Device) IsActive() bool { return d != nil && d.Status == consts.ACTIVE }
-
-// CapabilityList 把 capabilities jsonb 解码为 true 的 key 列表（按字典序）。
-func (d *Device) CapabilityList() []string {
-	if d == nil || len(d.Capabilities) == 0 {
-		return nil
-	}
-	m := map[string]bool{}
-	if err := json.Unmarshal(d.Capabilities, &m); err != nil {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k, v := range m {
-		if v {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// CapabilityMap 把 capabilities jsonb 解码为完整 map。
-func (d *Device) CapabilityMap() map[string]bool {
-	if d == nil || len(d.Capabilities) == 0 {
-		return map[string]bool{}
-	}
-	m := map[string]bool{}
-	_ = json.Unmarshal(d.Capabilities, &m)
-	return m
-}

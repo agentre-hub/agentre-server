@@ -15,12 +15,11 @@ type PublicKeyResponse struct {
 // ---------- Device Flow ----------
 
 type DeviceAuthorizeRequest struct {
-	mux.Meta     `path:"/v1/oauth/device/authorize" method:"POST"`
-	DeviceKind   string          `json:"device_kind"  binding:"required,oneof=desktop agentred web mobile"`
-	Fingerprint  string          `json:"fingerprint"  binding:"required,min=8,max=128"`
-	Platform     string          `json:"platform"     binding:"max=64"`
-	Version      string          `json:"version"      binding:"max=32"`
-	Capabilities map[string]bool `json:"capabilities"`
+	mux.Meta    `path:"/v1/oauth/device/authorize" method:"POST"`
+	DeviceKind  string `json:"device_kind"  binding:"required,oneof=desktop agentred web mobile"`
+	Fingerprint string `json:"fingerprint"  binding:"required,min=8,max=128"`
+	Platform    string `json:"platform"     binding:"max=64"`
+	Version     string `json:"version"      binding:"max=32"`
 }
 type DeviceAuthorizeResponse struct {
 	DeviceCode              string `json:"device_code"`
@@ -50,11 +49,10 @@ type DevicePendingRequest struct {
 	UserCode string `form:"user_code" binding:"required"`
 }
 type DevicePendingResponse struct {
-	DeviceKind   string          `json:"device_kind"`
-	Platform     string          `json:"platform"`
-	Version      string          `json:"version"`
-	Capabilities map[string]bool `json:"capabilities"`
-	ExpiresIn    int             `json:"expires_in"`
+	DeviceKind string `json:"device_kind"`
+	Platform   string `json:"platform"`
+	Version    string `json:"version"`
+	ExpiresIn  int    `json:"expires_in"`
 }
 
 type DeviceApproveRequest struct {
@@ -97,17 +95,16 @@ type ListDevicesRequest struct {
 }
 
 type ListDevicesItem struct {
-	ID           int64           `json:"id"`
-	Name         string          `json:"name"`
-	Kind         string          `json:"kind"`
-	Platform     string          `json:"platform"`
-	Version      string          `json:"version"`
-	Fingerprint  string          `json:"fingerprint"`
-	Capabilities map[string]bool `json:"capabilities"`
-	LastSeenAt   int64           `json:"last_seen_at"`
-	Status       int             `json:"status"`
-	Online       bool            `json:"online"`
-	IsThisDevice bool            `json:"is_this_device"`
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Platform     string `json:"platform"`
+	Version      string `json:"version"`
+	Fingerprint  string `json:"fingerprint"`
+	LastSeenAt   int64  `json:"last_seen_at"`
+	Status       int    `json:"status"`
+	Online       bool   `json:"online"`
+	IsThisDevice bool   `json:"is_this_device"`
 }
 
 type ListDevicesResponse struct {

@@ -34,13 +34,18 @@ const testCookieName = "server_session"
 
 // stubDeviceSvc 实现 device_svc.DeviceSvc，只覆盖本测试用到的端点。
 type stubDeviceSvc struct {
-	userDevices []api_device.ListDevicesItem
-	revoked     []int64
-	revokedJTI  []string
+	userDevices     []api_device.ListDevicesItem
+	revoked         []int64
+	revokedJTI      []string
+	authorizeInputs []device_svc.AuthorizeInput
 }
 
-func (s *stubDeviceSvc) Authorize(context.Context, device_svc.AuthorizeInput) (*device_svc.AuthorizeOutput, error) {
-	return nil, errors.New("unimplemented")
+func (s *stubDeviceSvc) Authorize(_ context.Context, in device_svc.AuthorizeInput) (*device_svc.AuthorizeOutput, error) {
+	s.authorizeInputs = append(s.authorizeInputs, in)
+	return &device_svc.AuthorizeOutput{
+		DeviceCode: "dc-1", UserCode: "A4F7Q2",
+		VerificationURI: "https://example.test/device", Interval: 5, ExpiresIn: 600,
+	}, nil
 }
 func (s *stubDeviceSvc) Pending(context.Context, string) (*device_svc.PendingInfo, error) {
 	return nil, errors.New("unimplemented")
@@ -87,7 +92,9 @@ func newDeviceTestServer(t *testing.T, stub *stubDeviceSvc) (*httptest.Server, *
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{},
+		// 限流额度必须显式给：零值等于「每分钟 0 次」，/v1/oauth/device/authorize
+		// 上的 AuthorizePerIPLimit 会把每一个请求都挡成 429。
+		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
 		Signer: signer,
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
@@ -305,4 +312,35 @@ func TestRevocations_RejectsRevokedCallerDevice(t *testing.T) {
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", "", token, "")
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+// TestAuthorize_IgnoresLegacyCapabilitiesField 锁住兼容承诺：能力概念移除之前的
+// 桌面端与 agentred 仍会在请求体里带 capabilities。那个字段现在不在请求结构里，
+// 绑定必须静默忽略它——照常 200、照常拿到设备码，而不是 400。
+func TestAuthorize_IgnoresLegacyCapabilitiesField(t *testing.T) {
+	stub := &stubDeviceSvc{}
+	server, _ := newDeviceTestServer(t, stub)
+
+	body := `{"device_kind":"desktop","fingerprint":"fp-legacy-client","platform":"darwin/arm64",` +
+		`"version":"v0.4.1","capabilities":{"compute":true,"client":true,"file_browse":true}}`
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/device/authorize", "", "", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var envelope struct {
+		Data api_device.DeviceAuthorizeResponse `json:"data"`
+	}
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &envelope))
+	assert.Equal(t, "dc-1", envelope.Data.DeviceCode)
+
+	// 整体比较而不是逐字段挑：AuthorizeInput 将来多出一个字段时，这里会直接
+	// 失败并把多出来的值摆出来，而不是默默放过一个没接上的入参。
+	require.Len(t, stub.authorizeInputs, 1)
+	assert.Equal(t, device_svc.AuthorizeInput{
+		DeviceKind:  "desktop",
+		Fingerprint: "fp-legacy-client",
+		Platform:    "darwin/arm64",
+		Version:     "v0.4.1",
+	}, stub.authorizeInputs[0])
 }

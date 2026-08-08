@@ -113,7 +113,6 @@ describe("设备码输入：提交", () => {
       device_kind: "desktop",
       platform: "darwin",
       version: "0.3.0",
-      capabilities: { chat: true },
       expires_in: 600,
     });
     renderEntry();

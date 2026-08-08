@@ -59,23 +59,8 @@
     },
     "approve": {
       "title": "允许这台设备访问你的 AgentRe 账户？",
-      "risk": {
-        "compute": "这是一台计算节点，批准后将以你的身份执行任意代码与命令。",
-        "neutral": "批准后，这台设备将以你的身份接入你的 AgentRe 账户。"
-      },
+      "risk": "批准后，这台设备将以你的身份完整接入你的 AgentRe 账户，可执行任意代码与命令。只批准你信任的设备。",
       "verify": "确认这串代码与设备上显示的完全一致",
-      "capabilitiesSummary": "这台设备将获得能力：{{list}}",
-      "capabilities": {
-        "compute": {
-          "title": "执行编码 agent 任务"
-        },
-        "client": {
-          "title": "作为客户端接入"
-        },
-        "file_browse": {
-          "title": "浏览项目文件"
-        }
-      },
       "expiry": "此授权请求将在 {{minutes}} 分 {{seconds}} 秒后过期",
       "expirySeconds": "此授权请求将在 {{seconds}} 秒后过期",
       "expiryAnnounce": "此授权请求将在约 {{minutes}} 分钟后过期",
