@@ -135,36 +135,40 @@ describe("授权确认：风险文案由 capabilities.compute 决定", () => {
   });
 });
 
-describe("授权确认：能力清单", () => {
-  it("已收录的三个键各自出标题与说明", async () => {
+describe("授权确认：能力清单（一行摘要）", () => {
+  it("已收录的三个键压成一行摘要，各出标题、不再出说明", async () => {
     mockFlow(pending());
     renderDevice();
 
     await waitForApproval();
-    expect(screen.getByText(/run coding agent tasks/i)).toBeTruthy();
-    expect(screen.getByText(/claude code/i)).toBeTruthy();
-    expect(screen.getByText(/connect as a client/i)).toBeTruthy();
-    expect(screen.getByText(/browse project files/i)).toBeTruthy();
+    const summary = screen.getByText(/will be able to:/i);
+    expect(summary.textContent).toContain("Run coding agent tasks");
+    expect(summary.textContent).toContain("Connect as a client");
+    expect(summary.textContent).toContain("Browse project files");
+    // 说明被压缩掉了：不再出现「Claude Code / Codex」这类描述
+    expect(screen.queryByText(/claude code/i)).toBeNull();
   });
 
-  it("未收录的键原样展示键名，并说明控制台尚未收录它", async () => {
+  it("未收录的键在摘要里原样展示键名，不隐藏、不编说明", async () => {
     mockFlow(pending({ capabilities: { "session.remote_start": true } }));
     renderDevice();
 
     await waitForApproval();
-    expect(screen.getByText("session.remote_start")).toBeTruthy();
-    expect(screen.getByText(/no description for it yet/i)).toBeTruthy();
-    // 不许替未收录的键编一句说明
-    expect(screen.queryByText(/run coding agent tasks/i)).toBeNull();
+    const summary = screen.getByText(/will be able to:/i);
+    expect(summary.textContent).toContain("session.remote_start");
+    // 不替未收录的键编一句说明，也不再解释「尚未收录」
+    expect(screen.queryByText(/no description for it yet/i)).toBeNull();
+    expect(summary.textContent).not.toContain("Run coding agent tasks");
   });
 
-  it("值为 false 的能力不出现在清单里", async () => {
+  it("值为 false 的能力不进入摘要", async () => {
     mockFlow(pending({ capabilities: { compute: true, file_browse: false } }));
     renderDevice();
 
     await waitForApproval();
-    expect(screen.getByText(/run coding agent tasks/i)).toBeTruthy();
-    expect(screen.queryByText(/browse project files/i)).toBeNull();
+    const summary = screen.getByText(/will be able to:/i);
+    expect(summary.textContent).toContain("Run coding agent tasks");
+    expect(summary.textContent).not.toContain("Browse project files");
   });
 });
 
@@ -351,7 +355,10 @@ describe("授权确认：中文文案照画板 10", () => {
       }),
     ).toBeTruthy();
     expect(screen.getByText("确认这串代码与设备上显示的完全一致")).toBeTruthy();
-    expect(screen.getByText("这台设备将获得以下能力")).toBeTruthy();
+    // 能力清单压成一行摘要，标题并列
+    const summary = screen.getByText(/这台设备将获得能力：/);
+    expect(summary.textContent).toContain("执行编码 agent 任务");
+    expect(summary.textContent).toContain("浏览项目文件");
     expect(
       screen.getByText("你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。"),
     ).toBeTruthy();
@@ -360,7 +367,7 @@ describe("授权确认：中文文案照画板 10", () => {
   // spec「i18n」：「中文文案以稿子上的原文为准」。未收录能力那句在画板 10 上
   // 是 cap-unknown 那行的 Desc，写全了「设备声明了此能力」这半句——
   // 少掉它，用户读到的就只剩控制台的自述，看不出这个键是设备自己报上来的。
-  it("未收录能力的说明用画板 10 的原话", async () => {
+  it("未收录能力在摘要里原样展示键名", async () => {
     mockFlow(pending({ capabilities: { "filesystem.write": true } }));
     renderDevice();
 
@@ -368,11 +375,9 @@ describe("授权确认：中文文案照画板 10", () => {
       level: 1,
       name: "允许这台设备访问你的 AgentRe 账户？",
     });
-    expect(screen.getByText("filesystem.write")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "设备声明了此能力，但控制台尚未收录它的说明——未知键一律原样展示，不隐藏",
-      ),
-    ).toBeTruthy();
+    const summary = screen.getByText(/这台设备将获得能力：/);
+    expect(summary.textContent).toContain("filesystem.write");
+    // 「尚未收录」的解释随压缩一并去掉
+    expect(screen.queryByText(/设备声明了此能力/)).toBeNull();
   });
 });

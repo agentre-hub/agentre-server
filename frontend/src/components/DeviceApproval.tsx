@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  CircleHelp,
-  Cpu,
-  FolderSearch,
-  Laptop,
-  MonitorSmartphone,
-  ShieldCheck,
-  Timer,
-  type LucideIcon,
-} from "lucide-react";
+import { Laptop, ShieldCheck, Timer } from "lucide-react";
+import type { TFunction } from "i18next";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -26,56 +18,15 @@ export interface PendingInfo {
 }
 
 /**
- * 控制台收录了说明的能力键，就这三个（决策 12）——它们是当前唯一的能力
- * 生产者（agentre 桌面端）真的会发的集合。表外的键一律原样透出：
- * 既不隐藏（用户有权知道设备声明了什么），也不替它编一句说明。
+ * 能力键在摘要里的显示名：收录表内的键用控制台里的标题，表外的键原样
+ * 透出键名（决策 12）——既不隐藏（用户有权知道设备声明了什么），
+ * 也不替它编一句说明。
  */
-const CAPABILITY_ICONS: Record<string, LucideIcon> = {
-  compute: Cpu,
-  client: MonitorSmartphone,
-  file_browse: FolderSearch,
-};
-
-function CapabilityRow({ name }: { name: string }) {
-  const { t } = useTranslation();
-  const Icon = CAPABILITY_ICONS[name];
-
-  if (!Icon) {
-    return (
-      <div className="flex items-start gap-3">
-        <span className="flex size-[30px] shrink-0 items-center justify-center rounded-sm bg-code-surface">
-          <CircleHelp
-            className="size-4 text-muted-foreground"
-            aria-hidden="true"
-          />
-        </span>
-        <div className="flex min-w-0 flex-col gap-[3px]">
-          <p className="font-mono text-[13px] font-semibold break-all text-foreground">
-            {name}
-          </p>
-          <p className="text-[13px] leading-[1.5] text-muted-foreground">
-            {t("device.approve.capabilities.unknown")}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-start gap-3">
-      <span className="flex size-[30px] shrink-0 items-center justify-center rounded-sm bg-primary-soft">
-        <Icon className="size-4 text-primary-text" aria-hidden="true" />
-      </span>
-      <div className="flex min-w-0 flex-col gap-[3px]">
-        <p className="text-sm font-semibold text-foreground">
-          {t(`device.approve.capabilities.${name}.title`)}
-        </p>
-        <p className="text-[13px] leading-[1.5] text-muted-foreground">
-          {t(`device.approve.capabilities.${name}.description`)}
-        </p>
-      </div>
-    </div>
-  );
+function capabilityLabel(name: string, t: TFunction): string {
+  const title = t(`device.approve.capabilities.${name}.title`, {
+    defaultValue: "",
+  });
+  return title || name;
 }
 
 /** 授权对象是谁：头像取自当前会话，取不到就整个不渲染，不编一个占位身份。 */
@@ -234,14 +185,13 @@ export default function DeviceApproval({
         </p>
       </div>
 
-      <div className="flex flex-col gap-3.5">
-        <p className="text-[13px] font-semibold text-foreground">
-          {t("device.approve.capabilitiesLabel")}
-        </p>
-        {granted.map((name) => (
-          <CapabilityRow key={name} name={name} />
-        ))}
-      </div>
+      {/* 能力清单压成一行摘要（设计稿精简档 B）：标题并列，说明不再逐条
+          展开——设备卡、风险一行句与摘要共同交代「谁 / 能干什么」。 */}
+      <p className="text-[13px] leading-[1.5] text-muted-foreground">
+        {t("device.approve.capabilitiesSummary", {
+          list: granted.map((name) => capabilityLabel(name, t)).join(" · "),
+        })}
+      </p>
 
       <div className="flex items-center gap-[9px] rounded-md bg-status-waiting-bg px-3.5 py-[11px]">
         <Timer

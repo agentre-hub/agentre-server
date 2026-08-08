@@ -60,25 +60,21 @@
     "approve": {
       "title": "Allow this device to access your AgentRe account?",
       "risk": {
-        "compute": "This is a compute node. Once you approve it, it runs coding agents as you and can execute arbitrary code and commands under your account. Only approve devices you trust.",
-        "neutral": "Once you approve it, this device connects to your AgentRe account as you. Only approve devices you trust."
+        "compute": "This is a compute node. Once you approve it, it can execute arbitrary code and commands as you.",
+        "neutral": "Once you approve it, this device connects to your AgentRe account as you."
       },
       "verify": "Check that this code matches exactly what the device shows",
-      "capabilitiesLabel": "What this device will be able to do",
+      "capabilitiesSummary": "This device will be able to: {{list}}",
       "capabilities": {
         "compute": {
-          "title": "Run coding agent tasks",
-          "description": "Run backends such as Claude Code and Codex on this device, and sync session results back to your account."
+          "title": "Run coding agent tasks"
         },
         "client": {
-          "title": "Connect as a client",
-          "description": "Connect to AgentRe as you, exchange session messages and list your devices."
+          "title": "Connect as a client"
         },
         "file_browse": {
-          "title": "Browse project files",
-          "description": "Read the listing and contents of the project directories you authorize."
-        },
-        "unknown": "The device declared this capability, but the console has no description for it yet. Unknown keys are always shown as-is, never hidden."
+          "title": "Browse project files"
+        }
       },
       "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
       "expirySeconds": "This authorization request expires in {{seconds}}s",

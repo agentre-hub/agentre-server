@@ -120,8 +120,8 @@ written as arbitrary values rather than rounded to the nearest one.
 | Name | `text-[15px] font-semibold` | 15 / 600 | product name in `AuthLayout`, device name in `DeviceApproval` |
 | Eyebrow | `text-xs font-semibold` + `text-primary-text` | 12 / 600 | the "device authorization" line above the title |
 | Body | `text-sm` | 14 / 400 | the paragraph under a title |
-| Body strong | `text-sm font-semibold` | 14 / 600 | capability names, device name on the result screens |
-| Small | `text-[13px]` | 13 / 400–500 | capability descriptions, inline code error, countdown |
+| Body strong | `text-sm font-semibold` | 14 / 600 | device name on the result screens |
+| Small | `text-[13px]` | 13 / 400–500 | capability summary, inline code error, countdown |
 | Caption | `text-xs` | 12 / 400 | footer, hints, fine print, `platform · version` |
 | Mono, inline | `font-mono` + `text-xs` / `text-[13px]` / `text-sm` | 12–14 / 400–600 | identifiers, see [Mono](#the-mono-font) |
 | Mono, code box | `font-mono text-[22px] font-semibold sm:text-[26px]` | 22→26 / 600 | `CodeInput` |
@@ -137,7 +137,7 @@ Three things the table does not show:
   canvas's headings are all 600.
 - **Line height needs saying out loud.** Tailwind pairs `text-sm` with a 20px line height
   (≈1.43); the canvas asks for 1.5–1.6 on multi-line body copy. Where it matters the class
-  is explicit — `leading-[1.5]` on the capability descriptions in `DeviceApproval.tsx`.
+  is explicit — `leading-[1.5]` on the capability summary in `DeviceApproval.tsx`.
 - **The 404 numeral is not a type step.** It is `text-7xl font-semibold text-border-strong`
   and `aria-hidden`, i.e. a graphic that happens to be made of digits.
 
@@ -150,7 +150,7 @@ most measurements land on a step:
 | --- | --- | --- |
 | 8 | `gap-2` | icon ↔ its label |
 | 10 | `gap-2.5` | rows inside a title block |
-| 12 | `gap-3` | capability icon ↔ text, stacked buttons |
+| 12 | `gap-3` | stacked buttons |
 | 14 | `gap-3.5`, `p-3.5` | inline panel padding |
 | 16 | `p-4` | the device panel, the code-surface block |
 | 20 | `py-5` | top bar and footer, vertical |
@@ -168,7 +168,7 @@ the nearest step.
 
 | Class | Value | Applies to |
 | --- | --- | --- |
-| `rounded-sm` | 6px | brand mark, capability and device icon plates |
+| `rounded-sm` | 6px | brand mark and device icon plates |
 | `rounded-md` | 10px | buttons, inputs, code boxes, inline panels |
 | `rounded-lg` | 14px | the cards |
 
@@ -307,7 +307,6 @@ emitted. In this flow that is exactly:
 | the large confirmation code | `components/DeviceApproval.tsx` |
 | the `user_code` echoed back on the login screen | `pages/Login.tsx` |
 | `platform · version` | `components/DeviceApproval.tsx`, `pages/DeviceSuccess.tsx` |
-| a capability key with no entry in the copy | `components/DeviceApproval.tsx` |
 
 Everything else — titles, body, buttons, footer — is the UI font. Two reasons for the
 boundary, and both are about the font file rather than taste:

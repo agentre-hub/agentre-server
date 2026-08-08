@@ -60,25 +60,21 @@
     "approve": {
       "title": "允许这台设备访问你的 AgentRe 账户？",
       "risk": {
-        "compute": "这是一台计算节点：批准后，它将以你的身份运行编码 agent，并可在你的账号下执行任意代码与命令。只批准你信任的设备。",
-        "neutral": "批准后，这台设备将以你的身份接入你的 AgentRe 账户。只批准你信任的设备。"
+        "compute": "这是一台计算节点，批准后将以你的身份执行任意代码与命令。",
+        "neutral": "批准后，这台设备将以你的身份接入你的 AgentRe 账户。"
       },
       "verify": "确认这串代码与设备上显示的完全一致",
-      "capabilitiesLabel": "这台设备将获得以下能力",
+      "capabilitiesSummary": "这台设备将获得能力：{{list}}",
       "capabilities": {
         "compute": {
-          "title": "执行编码 agent 任务",
-          "description": "在这台设备上运行 Claude Code、Codex 等后端，并把会话结果同步回你的账户"
+          "title": "执行编码 agent 任务"
         },
         "client": {
-          "title": "作为客户端接入",
-          "description": "以你的身份连接 AgentRe，收发会话消息并列出你的设备"
+          "title": "作为客户端接入"
         },
         "file_browse": {
-          "title": "浏览项目文件",
-          "description": "读取你所授权的项目目录中的文件列表与内容"
-        },
-        "unknown": "设备声明了此能力，但控制台尚未收录它的说明——未知键一律原样展示，不隐藏"
+          "title": "浏览项目文件"
+        }
       },
       "expiry": "此授权请求将在 {{minutes}} 分 {{seconds}} 秒后过期",
       "expirySeconds": "此授权请求将在 {{seconds}} 秒后过期",
