@@ -14,6 +14,3 @@ export const APP_BASE_URL = `http://${APP_HOST}:${APP_PORT}`;
 
 /** 起前端 dev server 的命令，两份 playwright 配置共用。 */
 export const FRONTEND_DEV_COMMAND = `pnpm --dir ../frontend dev --port ${APP_PORT} --strictPort --host ${APP_HOST}`;
-
-/** 后端 mock 的端口，scratch 轨道需要真后端时用。 */
-export const MOCK_API_PORT = Number(process.env.E2E_MOCK_API_PORT ?? 8199);

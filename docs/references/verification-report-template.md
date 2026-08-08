@@ -21,9 +21,8 @@ One or two sentences. The claim being tested — not a changelog.
 Environment (mocked / real PostgreSQL + Redis / against staging), and the commands run.
 
 ```bash
-docker compose up -d pg redis
-make dev
-cd e2e && pnpm scratch
+go run ./cmd/server
+cd e2e && E2E_SCRATCH_AUTOSTART=1 pnpm scratch
 ```
 
 ## Evidence

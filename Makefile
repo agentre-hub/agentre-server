@@ -39,8 +39,9 @@ test-frontend:
 	cd frontend && pnpm install --frozen-lockfile --silent && pnpm test
 
 # 冒烟 e2e（桌面 + 移动两个 project）。scratch 轨道见 e2e/README.md。
+# 浏览器由 pnpm smoke 自己装，这里只补 CI 要的系统库（mac 上是空跑）。
 test-e2e:
-	cd e2e && pnpm install --frozen-lockfile --silent && pnpm exec playwright install --with-deps chromium && pnpm smoke
+	cd e2e && pnpm install --frozen-lockfile --silent && pnpm exec playwright install-deps chromium && pnpm smoke
 
 test-cover:
 	go test -race -coverprofile=coverage.out ./...

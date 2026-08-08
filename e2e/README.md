@@ -17,11 +17,15 @@ Two tracks. Different purposes, different destinations, **never mixed**.
 ```bash
 cd e2e
 pnpm install
-pnpm install-browsers   # first time only: downloads chromium
 
 pnpm smoke              # committed smoke suite (desktop + mobile)
 pnpm scratch            # your throwaway checks under scratch/
 ```
+
+Both scripts run `playwright install chromium` first. That costs ~2s once the
+browser is there, and it is what stops the failure mode where bumping
+`@playwright/test` leaves a stale build on disk and **every** spec goes red with
+`Executable doesn't exist` — which reads like the app broke, not the browser.
 
 From the repo root, `make test-e2e` runs the smoke track.
 
@@ -78,10 +82,23 @@ no PostgreSQL or Redis. Full-stack flows (real device flow, migrations, session
 cookies) need both, plus the Go server:
 
 ```bash
-docker compose up -d pg redis
-make dev
-cd e2e && pnpm scratch
+go run ./cmd/server                              # real backend on :8443
+cd e2e && E2E_SCRATCH_AUTOSTART=1 pnpm scratch
 ```
+
+`E2E_SCRATCH_AUTOSTART=1` brings the frontend up on the dedicated port 5199, and
+vite proxies `/v1` from there to `127.0.0.1:8443` (`frontend/vite.config.ts`) —
+so the browser still talks to a server this run owns, while the API calls land on
+the real backend. A spec reaches that backend by simply **not** calling the
+`mock*` helpers from `fixtures/app.ts`; they are opt-in, there is no global
+mocking to switch off. `make dev` works too, but it also starts a second vite on
+5174 that the run does not use.
+
+**PostgreSQL and Redis come from `configs/config.yaml`** — the server loads it
+through `configs.NewConfig("agentre-server")` in `cmd/server/main.go`, so
+`db.dsn` and `redis.addr` decide what a scratch run actually writes to. Point
+them at your own instances; the file is gitignored and
+`configs/config.example.yaml` is the template.
 
 Those belong in `scratch/`, not in the committed smoke suite — they are slow,
 they need infrastructure, and they will be the first thing to turn flaky in CI.

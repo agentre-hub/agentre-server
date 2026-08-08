@@ -35,7 +35,8 @@ export default defineConfig({
   ],
 
   // scratch 默认不自动起服务：一次性验证往往要连你手动拉起来的那套
-  // （真 PG + 真 Redis + 真 server）。需要自动起时在 scratch 用例里自己拉。
+  // （真 server + 它 configs/config.yaml 里指的那套 PG/Redis）。
+  // 带上 E2E_SCRATCH_AUTOSTART=1 就顺带起前端，/v1 由 vite proxy 转到 :8443。
   webServer: process.env.E2E_SCRATCH_AUTOSTART
     ? {
         command: FRONTEND_DEV_COMMAND,
