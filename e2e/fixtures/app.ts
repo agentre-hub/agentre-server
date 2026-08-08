@@ -69,7 +69,6 @@ export async function mockDevicePending(
         device_kind: "desktop",
         platform: "darwin",
         version: "0.1.0",
-        capabilities: { chat: true, terminal: false },
         expires_in: 600,
         ...overrides,
       }),

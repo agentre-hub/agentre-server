@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Laptop, ShieldCheck, Timer } from "lucide-react";
-import type { TFunction } from "i18next";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -13,20 +12,7 @@ export interface PendingInfo {
   device_kind: string;
   platform: string;
   version: string;
-  capabilities: Record<string, boolean>;
   expires_in: number;
-}
-
-/**
- * 能力键在摘要里的显示名：收录表内的键用控制台里的标题，表外的键原样
- * 透出键名（决策 12）——既不隐藏（用户有权知道设备声明了什么），
- * 也不替它编一句说明。
- */
-function capabilityLabel(name: string, t: TFunction): string {
-  const title = t(`device.approve.capabilities.${name}.title`, {
-    defaultValue: "",
-  });
-  return title || name;
 }
 
 /** 授权对象是谁：头像取自当前会话，取不到就整个不渲染，不编一个占位身份。 */
@@ -128,13 +114,6 @@ export default function DeviceApproval({
 
   const minutes = Math.floor(left / 60);
   const seconds = left % 60;
-  const granted = Object.entries(info.capabilities ?? {})
-    .filter(([, on]) => on)
-    .map(([name]) => name);
-
-  // 风险文案看的是 compute 能力而不是 device_kind（决策 7）：
-  // 会跑编码 agent 的是能力，不是型号名。
-  const risky = info.capabilities?.compute === true;
 
   const kindLabel = deviceKindLabel(info.device_kind, t);
 
@@ -152,12 +131,10 @@ export default function DeviceApproval({
         </h1>
         <div className="flex items-start gap-2">
           <AccountAvatar />
-          <p className="text-sm text-muted-foreground">
-            {t(
-              risky
-                ? "device.approve.risk.compute"
-                : "device.approve.risk.neutral",
-            )}
+          {/* 说明不分档：服务端没有任何一处按设备做过权限判断，四种 kind
+              批准后拿到的都是账号的完整权限，如实说完这一句即可。 */}
+          <p className="text-sm leading-[1.5] text-muted-foreground">
+            {t("device.approve.risk")}
           </p>
         </div>
       </div>
@@ -184,14 +161,6 @@ export default function DeviceApproval({
           {code}
         </p>
       </div>
-
-      {/* 能力清单压成一行摘要（设计稿精简档 B）：标题并列，说明不再逐条
-          展开——设备卡、风险一行句与摘要共同交代「谁 / 能干什么」。 */}
-      <p className="text-[13px] leading-[1.5] text-muted-foreground">
-        {t("device.approve.capabilitiesSummary", {
-          list: granted.map((name) => capabilityLabel(name, t)).join(" · "),
-        })}
-      </p>
 
       <div className="flex items-center gap-[9px] rounded-md bg-status-waiting-bg px-3.5 py-[11px]">
         <Timer

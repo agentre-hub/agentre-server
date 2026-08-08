@@ -121,7 +121,7 @@ written as arbitrary values rather than rounded to the nearest one.
 | Eyebrow | `text-xs font-semibold` + `text-primary-text` | 12 / 600 | the "device authorization" line above the title |
 | Body | `text-sm` | 14 / 400 | the paragraph under a title |
 | Body strong | `text-sm font-semibold` | 14 / 600 | device name on the result screens |
-| Small | `text-[13px]` | 13 / 400–500 | capability summary, inline code error, countdown |
+| Small | `text-[13px]` | 13 / 400–500 | code-confirmation prompt, inline code error, countdown |
 | Caption | `text-xs` | 12 / 400 | footer, hints, fine print, `platform · version` |
 | Mono, inline | `font-mono` + `text-xs` / `text-[13px]` / `text-sm` | 12–14 / 400–600 | identifiers, see [Mono](#the-mono-font) |
 | Mono, code box | `font-mono text-[22px] font-semibold sm:text-[26px]` | 22→26 / 600 | `CodeInput` |
@@ -137,7 +137,7 @@ Three things the table does not show:
   canvas's headings are all 600.
 - **Line height needs saying out loud.** Tailwind pairs `text-sm` with a 20px line height
   (≈1.43); the canvas asks for 1.5–1.6 on multi-line body copy. Where it matters the class
-  is explicit — `leading-[1.5]` on the capability summary in `DeviceApproval.tsx`.
+  is explicit — `leading-[1.5]` on the full-access risk paragraph in `DeviceApproval.tsx`.
 - **The 404 numeral is not a type step.** It is `text-7xl font-semibold text-border-strong`
   and `aria-hidden`, i.e. a graphic that happens to be made of digits.
 
