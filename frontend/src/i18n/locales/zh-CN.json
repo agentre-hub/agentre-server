@@ -36,9 +36,34 @@
     "capabilities": "能力",
     "approve": "允许",
     "deny": "拒绝",
+    "computeRisk": "这是一台计算节点。批准后它将以你的身份运行编码 agent，可在你的账号下执行任意代码与命令——风险远高于纯查看端。",
+    "kind": {
+      "desktop": "桌面端",
+      "agentred": "计算节点",
+      "web": "网页",
+      "mobile": "移动端"
+    },
     "success": {
       "title": "设备已授权",
-      "body": "你可以关闭此页面，返回终端继续。"
+      "body": "你可以关闭此页面，返回终端继续。",
+      "manageDevices": "管理设备"
+    },
+    "manage": {
+      "title": "设备管理",
+      "empty": "还没有任何设备。你授权过的设备会显示在这里。",
+      "loadError": "无法加载你的设备列表，请重试。",
+      "colLastActive": "最近活跃",
+      "colStatus": "在线态",
+      "statusOnline": "在线",
+      "statusOffline": "离线",
+      "statusRevoked": "已撤销",
+      "thisDevice": "本设备",
+      "revoke": "解除授权",
+      "revokeConfirmTitle": "解除这台设备的授权？",
+      "revokeConfirmBody": "确认后该设备将无法再刷新凭据。若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受——撤销并非即时生效。",
+      "revokeCancel": "取消",
+      "revokeConfirm": "解除授权",
+      "revokeError": "解除授权失败，请稍后重试。"
     }
   },
   "notFound": {

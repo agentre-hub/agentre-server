@@ -1,0 +1,13 @@
+agentre-server 已部署为 release {{ .Release.Name }}（namespace {{ .Release.Namespace }}）。
+
+{{- if .Values.ingress.enabled }}
+
+  http{{ if .Values.ingress.tlsSecretName }}s{{ end }}://{{ .Values.ingress.host }}
+{{- end }}
+
+配置来自 etcd：{{ .Values.etcdConfig.prefix }}/{{ .Values.appConfig.env }}/agentre-server/
+
+Pod 起不来时先确认 etcd 里有没有对应环境的键——缺键不会回落默认值，而是反复
+CrashLoop 且不自愈。清单见 deploy/README.md。
+
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} --tail=50

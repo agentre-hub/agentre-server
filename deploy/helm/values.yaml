@@ -1,0 +1,83 @@
+# 默认值对应生产，环境相关的由流水线 --set 覆盖
+
+replicaCount: 1
+
+image:
+  repository: agentre-hub/agentre-server
+  pullPolicy: IfNotPresent
+  # 留空回落到 Chart.appVersion；流水线一律传 <env>.<短 commit>
+  tag: ""
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# 引导配置，业务配置全部在 etcd
+appConfig:
+  # 必须小写，大写会把 /swagger 暴露出去
+  env: prod
+  debug: false
+
+etcdConfig:
+  endpoints:
+    - etcd-config.core.svc.cluster.local:2379
+  prefix: /config
+  username: root
+  # 由流水线从 secrets 传入
+  password: ""
+
+serviceAccount:
+  create: false
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+
+# 服务不写盘（日志只走 stdout），所以根文件系统可以只读
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+
+# 与 etcd 里 http.address 的端口保持一致
+containerPort: 8443
+
+ingress:
+  enabled: true
+  className: k3s-main-nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 10m
+  # 标量不是列表：--set 打到列表下标会替换整个元素，把 secretName 冲成空
+  host: app.agentrehub.com
+  # 置空则不生成 TLS 块
+  tlsSecretName: agentrehub-com-tls
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1024Mi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

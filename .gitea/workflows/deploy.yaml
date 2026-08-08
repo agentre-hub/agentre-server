@@ -1,0 +1,135 @@
+# 这个目录存在时 Gitea 不再读 .github/workflows/，两者不合并。
+# uses 走 actions/* 是本 Gitea 实例的动作镜像位置，上游名字见各自上一行。
+
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+      - release/*
+      - test/*
+
+env:
+  APP_NAME: ${{ github.event.repository.name }}
+  NAMESPACE: app
+  REGISTRY: ${{ secrets.DOCKER_REGISTRY && secrets.DOCKER_REGISTRY || 'docker.io' }}
+  REPOSITORY: ${{ github.repository }}
+  DOMAIN: app.agentrehub.com
+  ENV: ${{ startsWith(github.ref, 'refs/heads/release/') && 'pre' || startsWith(github.ref, 'refs/heads/test/') && 'test' || github.ref=='refs/heads/main' && 'prod' }}
+  GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
+  NPM_REGISTRY: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
+  NODE_IMAGE: ${{ secrets.NODE_IMAGE && secrets.NODE_IMAGE || 'node:22-alpine' }}
+  GO_IMAGE: ${{ secrets.GO_IMAGE && secrets.GO_IMAGE || 'golang:1.26-alpine' }}
+  RUNTIME_IMAGE: ${{ secrets.RUNTIME_IMAGE && secrets.RUNTIME_IMAGE || 'gcr.io/distroless/static-debian12' }}
+  TLS_SECRET: ${{ secrets.TLS_SECRET_NAME && secrets.TLS_SECRET_NAME || 'agentrehub-com-tls' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # 不造这个占位文件，下面的 lint 和 test 会在 //go:embed 上编译期失败
+      - name: Prepare embedded frontend placeholder
+        run: |
+          mkdir -p internal/web/dist
+          test -f internal/web/dist/index.html || printf '<!doctype html>\n' > internal/web/dist/index.html
+
+      - name: Lint
+        # 上游是 golangci/golangci-lint-action@v8
+        uses: actions/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          # 默认的下载二进制模式要连 GitHub releases，走 goinstall 更稳
+          install-mode: goinstall
+          args: --timeout=10m
+
+      # 与 make test-backend 同一条命令。前端门禁在 GitHub 侧的 ci.yml
+      - name: Test
+        run: go test -race ./...
+
+      - name: Set outputs
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        # 上游是 docker/setup-qemu-action@v3
+        uses: actions/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        # 上游是 docker/setup-buildx-action@v3
+        uses: actions/setup-buildx-action@v3
+
+      - name: Login to registry
+        # 上游是 docker/login-action@v3
+        uses: actions/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Docker build and push
+        # 上游是 docker/build-push-action@v6
+        uses: actions/build-push-action@v6
+        with:
+          push: true
+          file: deploy/Dockerfile
+          context: .
+          tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:${{ env.ENV }}.${{ steps.vars.outputs.sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            GO_IMAGE=${{ env.GO_IMAGE }}
+            RUNTIME_IMAGE=${{ env.RUNTIME_IMAGE }}
+            GOPROXY=${{ env.GOPROXY }}
+            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
+            VERSION=${{ env.ENV }}.${{ steps.vars.outputs.sha_short }}
+            COMMIT=${{ steps.vars.outputs.sha_short }}
+
+      - name: Set up kubeconfig
+        # 上游是 azure/k8s-set-context@v4
+        uses: actions/k8s-set-context@v4
+        with:
+          method: kubeconfig
+          kubeconfig: ${{ secrets.KUBE_CONFIG }}
+          context: k8s-context
+
+      - name: Set up Helm
+        # 上游是 azure/setup-helm@v4
+        uses: actions/setup-helm@v4
+        with:
+          version: 'v3.13.1'
+
+      - name: Deploy ${{ env.ENV }}
+        env:
+          RELEASE: ${{ env.ENV=='prod' && env.APP_NAME || format('{0}-{1}', env.APP_NAME, env.ENV) }}
+          HOST: ${{ env.ENV=='prod' && env.DOMAIN || format('{0}.{1}', env.ENV, env.DOMAIN) }}
+          RESOURCE_CPU: ${{ env.ENV=='prod' && '500m' || '100m' }}
+          RESOURCE_MEMORY: ${{ env.ENV=='prod' && '512Mi' || '128Mi' }}
+          AUTO_SCALING: ${{ env.ENV=='prod' && 'true' || 'false' }}
+          AUTO_SCALING_MIN_REPLICAS: ${{ env.ENV=='prod' && '2' || '1' }}
+          ETCD_PASSWORD: ${{ secrets.ETCD_CONFIG_PASSWORD }}
+        run: |
+          # --set 会做类型推断（纯数字密码变整数），字符串一律 --set-string。
+          # 两者都按逗号切分，etcd 密码里不能有逗号。
+          helm upgrade --install "$RELEASE" ./deploy/helm \
+            --namespace "$NAMESPACE" --create-namespace \
+            --set-string image.repository="$REGISTRY/$REPOSITORY" \
+            --set-string image.tag="${ENV}.${{ steps.vars.outputs.sha_short }}" \
+            --set-string appConfig.env="$ENV" \
+            --set-string etcdConfig.password="$ETCD_PASSWORD" \
+            --set-string ingress.host="$HOST" \
+            --set-string ingress.tlsSecretName="$TLS_SECRET" \
+            --set-string resources.requests.cpu="$RESOURCE_CPU" \
+            --set-string resources.requests.memory="$RESOURCE_MEMORY" \
+            --set autoscaling.enabled="$AUTO_SCALING" \
+            --set autoscaling.minReplicas="$AUTO_SCALING_MIN_REPLICAS" \
+            --wait --timeout 5m

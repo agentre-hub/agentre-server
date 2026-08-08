@@ -3,6 +3,7 @@ import AppControls from "./components/AppControls";
 import Login from "./pages/Login";
 import Device from "./pages/Device";
 import DeviceSuccess from "./pages/DeviceSuccess";
+import Devices from "./pages/Devices";
 import NotFound from "./pages/NotFound";
 import RequireAuth from "./components/RequireAuth";
 
@@ -18,6 +19,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Device />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/devices"
+          element={
+            <RequireAuth>
+              <Devices />
             </RequireAuth>
           }
         />

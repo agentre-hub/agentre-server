@@ -110,11 +110,14 @@ middleware groups are the authorization model:
 
 | Group | Middleware | Used by |
 | --- | --- | --- |
-| Public | — | healthz, GitHub OAuth authorize/callback |
+| Public | — | healthz, GitHub OAuth authorize/callback, `/v1/keys` |
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
 | Browser session | `SessionAuth()` + `CSRF()` | logout, device pending/approve/deny |
-| Either credential | `SessionOrDeviceAuth(signer)` | `/v1/auth/me` |
-| Device JWT | `DeviceJWT(signer)` | `/v1/devices` |
+| Either credential | `SessionOrDeviceAuth(signer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke` |
+| Device JWT | `DeviceJWT(signer)` | `/v1/devices/revocations`, `/v1/relay/daemon`, `/v1/relay/client` |
+
+Cookie-authenticated writes always clear CSRF, whichever group they sit in: a
+Bearer caller carries no cookie and is exempt, a session caller is not.
 
 Endpoints are declared as structs with `mux.Meta`, which carries path and method:
 

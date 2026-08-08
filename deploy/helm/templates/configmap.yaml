@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentre-server.fullname" . }}
+  labels:
+    {{- include "agentre-server.labels" . | nindent 4 }}
+data:
+  # 四个键一个都不能少，缺了会尝试写回这份只读挂载然后启动失败
+  config.yaml: |
+    env: {{ .Values.appConfig.env }}
+    debug: {{ .Values.appConfig.debug }}
+    source: etcd
+    etcd:
+      prefix: {{ .Values.etcdConfig.prefix }}
+      # 两份内容相同，别删任何一份：新旧 cago 认的格式不一样，
+      # 只写一种，换版本时会静默解析出 endpoints=[]
+      endpoints:
+        {{- toYaml .Values.etcdConfig.endpoints | nindent 8 }}
+      username: {{ .Values.etcdConfig.username | quote }}
+      password: {{ .Values.etcdConfig.password | quote }}
+      config:
+        endpoints:
+          {{- toYaml .Values.etcdConfig.endpoints | nindent 10 }}
+        username: {{ .Values.etcdConfig.username | quote }}
+        password: {{ .Values.etcdConfig.password | quote }}
