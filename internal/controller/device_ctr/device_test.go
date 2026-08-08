@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -335,10 +334,13 @@ func TestAuthorize_IgnoresLegacyCapabilitiesField(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &envelope))
 	assert.Equal(t, "dc-1", envelope.Data.DeviceCode)
 
+	// 整体比较而不是逐字段挑：AuthorizeInput 将来多出一个字段时，这里会直接
+	// 失败并把多出来的值摆出来，而不是默默放过一个没接上的入参。
 	require.Len(t, stub.authorizeInputs, 1)
-	got := stub.authorizeInputs[0]
-	assert.Equal(t, "desktop", got.DeviceKind)
-	assert.Equal(t, "fp-legacy-client", got.Fingerprint)
-	// 载荷里那三个键没有任何落点：AuthorizeInput 上已经没有承接它们的字段。
-	assert.NotContains(t, fmt.Sprintf("%+v", got), "compute")
+	assert.Equal(t, device_svc.AuthorizeInput{
+		DeviceKind:  "desktop",
+		Fingerprint: "fp-legacy-client",
+		Platform:    "darwin/arm64",
+		Version:     "v0.4.1",
+	}, stub.authorizeInputs[0])
 }
