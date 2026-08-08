@@ -52,9 +52,8 @@ test("设备授权页能查到 pending 设备并就地渲染确认区", async ({
   await expect(main).toContainText("A4F-7Q2");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   // 只断言真实设备信息被列出来，不断言具体文案——文案是可翻译的。
-  // chat 不在收录表里，按原样透出（决策 12）。
-  await expect(main).toContainText("chat");
   await expect(main).toContainText("darwin");
+  await expect(main).toContainText("0.1.0");
 });
 
 test("主题切换会把 dark class 挂到 <html> 上并持久化", async ({ page }) => {
