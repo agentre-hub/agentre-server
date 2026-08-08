@@ -92,9 +92,9 @@ with its reason next to it:
 - **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go` and
   `internal/bootstrap/cago.go` may use stdlib `log`, because cago's logger does
   not exist until `component.Core()` has run. That is the only window.
-- **`frontend/eslint.config.js`** — `tailwind.config.ts` and `eslint-rules/` may
-  contain literal colours (they define the tokens). Test files may contain
-  literals of both kinds, because they construct the violating samples.
+- **`frontend/eslint.config.js`** — `eslint-rules/` may contain literal colours
+  (it lists the banned colour names). Test files may contain literals of both
+  kinds, because they construct the violating samples.
 
 Adding an exemption means editing one of those two files and writing why.
 If you cannot write a reason, the code is what needs changing.

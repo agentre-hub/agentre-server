@@ -92,12 +92,15 @@ describe("design token guardrail", () => {
     expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
   });
 
-  it("exempts tailwind.config.ts, where tokens are necessarily defined", async () => {
+  // Tailwind v4 之后没有 tailwind.config.ts 了，token 定义在 globals.css 的 @theme 块里，
+  // 而 eslint 不 lint CSS——原先那条「豁免 tailwind.config.ts」的断言失去了对象。
+  // 换成反方向断言：配置文件也不再有写死颜色的特权，守卫只增不减。
+  it("does not exempt config files any more; tokens live in CSS", async () => {
     const messages = await lintAs(
-      "tailwind.config.ts",
-      `export default { theme: { colors: { brand: "#0891b2" } } };`,
+      "vite.config.ts",
+      `export default { define: { c: "#0891b2" } };`,
     );
-    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
   });
 });
 

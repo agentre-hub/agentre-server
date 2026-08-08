@@ -76,7 +76,7 @@ const RAW_COLOR_VALUE = "(?:#[0-9a-fA-F]{3,8}\\b|\\b(?:rgba?|hsla?)\\s*\\()";
 
 const TOKEN_HINT =
   "颜色必须走 design token：改用 bg-background / text-foreground / border-border / bg-scrim 这类语义类名。" +
-  " token 定义在 src/styles/globals.css，映射在 tailwind.config.ts。" +
+  " token 定义在 src/styles/globals.css，工具类映射在同一文件的 @theme 块。" +
   " 需要新颜色时先加 token，不要就地写字面量——否则深色模式下它不会跟着变。" +
   " 见 docs/design.md#colour-tokens";
 

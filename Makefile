@@ -1,5 +1,5 @@
 .PHONY: dev build test test-backend test-frontend test-e2e test-cover \
-        lint lint-backend lint-frontend lint-e2e fmt mock migrate docker
+        lint lint-backend lint-frontend lint-e2e fmt prepare-web-dist mock migrate docker
 
 VERSION := $(shell git describe --tags --always 2>/dev/null || echo dev)
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -28,7 +28,11 @@ docker:
 # 由 internal/pkg/jwt/testkeys/isolation_test.go 断言它进不了生产二进制。
 test: test-backend test-frontend
 
-test-backend:
+prepare-web-dist:
+	mkdir -p internal/web/dist
+	@test -f internal/web/dist/index.html || printf '<!doctype html>\n' > internal/web/dist/index.html
+
+test-backend: prepare-web-dist
 	go test -race ./...
 
 test-frontend:
@@ -44,7 +48,7 @@ test-cover:
 
 lint: lint-backend lint-frontend lint-e2e
 
-lint-backend:
+lint-backend: prepare-web-dist
 	golangci-lint run --timeout 10m
 
 # eslint 里已挂了 eslint-plugin-prettier，所以格式问题会直接报成 prettier/prettier，

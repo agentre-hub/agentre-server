@@ -68,9 +68,13 @@ export default defineConfig([
     },
   },
   {
-    // token 定义处本身要写字面色值，否则无处可写。
-    // 这是唯一豁免——新增豁免必须在这里写清理由。
-    files: ["tailwind.config.ts", "eslint-rules/**"],
+    // 规则数据文件本身要列出被禁的色名，否则规则无处可写。
+    //
+    // Tailwind v4 之后 token 定义在 src/styles/globals.css 里，eslint 不 lint CSS，
+    // 所以原来给 tailwind.config.ts 开的豁免已经没有对象，一并去掉了——
+    // 现在没有任何 .ts/.tsx 能写死颜色值。
+    // 新增豁免必须在这里写清理由。
+    files: ["eslint-rules/**"],
     rules: { "no-restricted-syntax": "off" },
   },
   {

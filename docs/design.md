@@ -1,6 +1,6 @@
 # Design system
 
-The frontend is React 19 + Vite + Tailwind 3 + shadcn components, embedded into the
+The frontend is React 19 + Vite + Tailwind 4 + shadcn components, embedded into the
 Go binary at build time. It ships **light and dark**, **desktop and mobile**, and
 **English and Simplified Chinese** — all four are supported, so all four have to work
 in anything you add.
@@ -8,8 +8,8 @@ in anything you add.
 ## Colour tokens
 
 There is exactly one place colours are defined: `frontend/src/styles/globals.css`.
-`:root` holds the light values, `.dark` overrides them, and `tailwind.config.ts` maps
-each to a semantic utility name.
+`:root` holds the light values, `.dark` overrides them, and the `@theme inline` block in
+the same file maps each to a semantic utility name.
 
 ```
 --background / --foreground     page surface + text
@@ -19,9 +19,14 @@ each to a semantic utility name.
 --secondary / --muted / --accent    + their -foreground pairs
 --border / --input
 --destructive / --destructive-foreground
---shadow-overlay                elevation for dialogs
---overlay-scrim                 the dim behind a dialog  → bg-scrim
+--overlay-shadow                elevation for dialogs   → shadow-overlay
+--overlay-scrim                 the dim behind a dialog → bg-scrim
 ```
+
+The two `--overlay-*` names are deliberate. Tailwind v4 derives utilities from the
+`--shadow-*` and `--color-*` namespaces, so a root token literally named
+`--shadow-overlay` would make the mapping `--shadow-overlay: var(--shadow-overlay)`,
+which references itself.
 
 **Write `bg-background`, `text-muted-foreground`, `border-border`, `bg-scrim`.
 Never write `bg-slate-900`, `text-white`, `#0f172a` or `rgba(...)` in a `.ts`/`.tsx` file.**
@@ -35,20 +40,25 @@ The reason is not tidiness. A literal colour does not change between themes, so 
 correct in whichever mode you built it in and wrong in the other — and nobody notices until
 a user in the other mode complains.
 
-Need a colour that has no token? **Add the token** — to both `:root` and `.dark` — map it in
-`tailwind.config.ts`, then use it. Only `tailwind.config.ts` and `eslint-rules/` are exempt,
-because they are where tokens are defined.
+Need a colour that has no token? **Add the token** — to both `:root` and `.dark` — add its
+`--color-*` alias to `@theme inline`, then use it. Miss the alias and nothing errors: the
+utility simply generates no rule, so the element renders with no colour at all.
+`frontend/src/__tests__/design-token-contract.test.ts` guards both halves.
+
+Only `eslint-rules/` is exempt from the literal-colour rule, because it is where the banned
+colour names are listed. No `.ts`/`.tsx` file may hard-code a colour.
 
 ## Theming
 
 Three pieces, and they only work as a set:
 
 1. `globals.css` defines `.dark { ... }`.
-2. `tailwind.config.ts` sets **`darkMode: 'class'`**.
+2. `globals.css` declares **`@custom-variant dark (&:is(.dark *))`**.
 3. `frontend/src/lib/theme.tsx` toggles the `dark` class on `<html>`.
 
-Miss the second and Tailwind defaults to `'media'`, so nothing ever adds the class and the
-whole `.dark` block becomes dead code — silently, since light mode still looks fine.
+Miss the second and Tailwind's `dark:` variant falls back to the `prefers-color-scheme`
+media query and stops following the class, so the whole `.dark` block becomes dead code —
+silently, since light mode still looks fine.
 
 `ThemeProvider` wraps the app in `main.tsx`. `useTheme()` gives `{ theme, resolved, setTheme }`,
 where `theme` is the user's choice (`'light' | 'dark' | 'system'`) and `resolved` is what is
