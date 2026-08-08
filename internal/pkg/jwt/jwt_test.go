@@ -50,3 +50,38 @@ func TestVerify_TamperedSignature(t *testing.T) {
 	_, err = s.Verify(tok + "AAA")
 	assert.Error(t, err)
 }
+
+func TestSign_ConcurrentCallsProducesUniqueJTI(t *testing.T) {
+	s := newSigner(t)
+	numGoroutines := 100
+	results := make(chan string, numGoroutines)
+	errs := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		go func() {
+			_, jti, err := s.Sign(hubjwt.Claims{
+				UID: 5678, DID: 1234, Kind: "agentred", Caps: []string{"compute"},
+			}, time.Hour)
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- jti
+		}()
+	}
+
+	jtis := make(map[string]bool)
+	for i := 0; i < numGoroutines; i++ {
+		select {
+		case err := <-errs:
+			t.Fatalf("Sign failed: %v", err)
+		case jti := <-results:
+			if jtis[jti] {
+				t.Errorf("duplicate jti: %s", jti)
+			}
+			jtis[jti] = true
+		}
+	}
+
+	assert.Equal(t, numGoroutines, len(jtis), "expected all jti values to be unique")
+}

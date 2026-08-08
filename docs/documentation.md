@@ -13,7 +13,7 @@ and the reader hits the stale one without knowing it is stale.
 | Test strategy per layer, build tags, guard tests | [testing.md](testing.md) |
 | Verification workflow, report rules, honesty clause | [verification.md](verification.md) |
 | e2e mechanics: configs, ports, hermetic guarantees | [`../e2e/README.md`](../e2e/README.md) |
-| Tokens, theming, responsive, i18n | [design.md](design.md) |
+| Tokens and the canvas↔code name mapping, type/spacing/radius scales, the auth shell and page skeleton, theming, responsive, i18n | [design.md](design.md) |
 | Logging, sensitive fields, metrics, traces | [observability.md](observability.md) |
 | Deployment: Docker, Kubernetes, chart values, etcd seeding, release pipeline | [`../deploy/README.md`](../deploy/README.md) |
 | Quick start, Docker, GitHub OAuth setup | [`../README.md`](../README.md) |
@@ -58,7 +58,7 @@ reads the docs at all.
 | A Makefile target | [develop.md](develop.md) commands table, and `.github/workflows/ci.yml` if CI calls it |
 | A lint rule or exemption | [develop.md](develop.md) enforced-rules table + the rule's guard test |
 | Layering or a new layer | [architecture.md](architecture.md) |
-| Colour tokens or theming | [design.md](design.md) |
+| Colour tokens, theming, a scale step, or the shared shell (`AuthLayout`) | [design.md](design.md) |
 | A locale key | Both locale files — `locale-parity.test.ts` will fail otherwise |
 | Log fields, metrics, spans | [observability.md](observability.md) |
 | Anything in `e2e/` | [`../e2e/README.md`](../e2e/README.md), and [verification.md](verification.md) if the workflow changed |

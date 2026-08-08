@@ -5,6 +5,7 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/pkg/consts"
+	"gorm.io/gorm/clause"
 
 	"agentre-server/internal/model/entity/device_entity"
 )
@@ -40,6 +41,8 @@ func (r *repo) Find(ctx context.Context, id int64) (*device_entity.Device, error
 	return ret, nil
 }
 
+// FindByFingerprint 按 (user_id, fingerprint) 查一台设备，查不到返回 (nil, nil)。
+// Upsert 已不再用它（改走数据库原子 upsert），relay_svc 解析中继目标时用。
 func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (*device_entity.Device, error) {
 	ret := &device_entity.Device{}
 	err := db.Ctx(ctx).Where("user_id=? AND fingerprint=?", userID, fp).First(ret).Error
@@ -52,18 +55,26 @@ func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (
 	return ret, nil
 }
 
-// Upsert 按 (user_id, fingerprint) 查找：命中 → UPDATE；未命中 → INSERT。d.ID 会被设置。
+// Upsert 按 (user_id, fingerprint) 落库：走 uk_devices_user_fingerprint 的
+// ON CONFLICT ... DO UPDATE，一条语句由数据库原子裁决。d.ID 与 d.Createtime 由
+// RETURNING 回填。
+//
+// 不写成「先按 (user_id, fingerprint) 查、再 Save/Create」：那是先查后写，两个已授权的
+// device_code 共用同一 (user_id, fingerprint) 并发换取时会双双查空、双双 INSERT，
+// 竞败方撞唯一索引，拿到的是一个唯一约束错误（映射成 500）而不是任何约定的 OAuth 错误。
+//
+// createtime 不在赋值列里：命中已有设备时保留它首次注册的时间。
 func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
-	existing, err := r.FindByFingerprint(ctx, d.UserID, d.Fingerprint)
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		d.ID = existing.ID
-		d.Createtime = existing.Createtime
-		return db.Ctx(ctx).Save(d).Error
-	}
-	return db.Ctx(ctx).Create(d).Error
+	return db.Ctx(ctx).Clauses(
+		clause.OnConflict{
+			Columns: []clause.Column{{Name: "user_id"}, {Name: "fingerprint"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"name", "kind", "platform", "version",
+				"capabilities", "last_seen_at", "status", "updatetime",
+			}),
+		},
+		clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "createtime"}}},
+	).Create(d).Error
 }
 
 func (r *repo) Touch(ctx context.Context, id, nowMs int64) error {

@@ -40,13 +40,14 @@ spec:
             - name: http
               containerPort: {{ .Values.containerPort }}
               protocol: TCP
-          # 迁移跑完前端口是拒连的，没有这个探针存活探针会中途把 Pod 杀掉
+          # 迁移跑完前端口是拒连的，没有这个探针存活探针会中途把 Pod 杀掉；
+          # 并发启动时还要先等迁移锁（预算 120s），60 * 5s = 300s 给「等锁 + 迁移」留够余量
           startupProbe:
             httpGet:
               path: /v1/healthz
               port: http
             periodSeconds: 5
-            failureThreshold: 30
+            failureThreshold: 60
           # 该端点在 DB/Redis 不通时仍返回 200，所以不会被下游抖动带下线
           livenessProbe:
             httpGet:

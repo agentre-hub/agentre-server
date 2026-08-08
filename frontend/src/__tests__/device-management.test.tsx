@@ -9,6 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
+import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
 
@@ -18,6 +19,16 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 const mockedApi = vi.mocked(api);
+
+// Devices 现在也套 AuthLayout，顶栏里的 AppControls 要从 context 取主题。
+function renderDevices() {
+  return render(
+    <MemoryRouter>
+      <Devices />
+    </MemoryRouter>,
+    { wrapper: ThemeProvider },
+  );
+}
 
 const listResponse = {
   devices: [
@@ -62,11 +73,7 @@ describe("device management page", () => {
       throw new Error("unexpected call: " + path);
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
 
     expect(await screen.findByText("nuc-01")).toBeTruthy();
     expect(screen.getByText("laptop")).toBeTruthy();
@@ -97,11 +104,7 @@ describe("device management page", () => {
       throw new Error("unexpected call: " + path);
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
     await screen.findByText("nuc-01");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
@@ -140,11 +143,7 @@ describe("device management page", () => {
       throw new SyntaxError("Unexpected token '<' ... is not valid JSON");
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
 
     expect(
       await screen.findByText("Could not load your devices. Please try again."),
@@ -165,11 +164,7 @@ describe("device management page", () => {
       throw new Error("unexpected call: " + path);
     });
 
-    render(
-      <MemoryRouter>
-        <Devices />
-      </MemoryRouter>,
-    );
+    renderDevices();
     await screen.findByText("nuc-01");
 
     fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);

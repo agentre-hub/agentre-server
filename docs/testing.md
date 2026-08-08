@@ -18,7 +18,7 @@ speculatively. And do not add a guard in the consumer to paper over a producer b
 | Repository | **sqlmock** | **Never start a real PostgreSQL.** `internal/testutils.Database(t)` gives you a postgres-dialect sqlmock through ctx |
 | Service | **mockgen** | Inject repo mocks via `xxx_repo.RegisterXxx(mock)`. Never touch a database |
 | Controller | `muxtest.TestMux` | Build the route tree, `testMux.Do(ctx, req, resp)` |
-| Migrations | **nothing** | Deliberately untested — see below |
+| Migrations | **nothing** for the DDL; sqlmock for the runner around it | `migrationList()` is deliberately untested — see below |
 | Browser | `e2e/` | See [verification.md](verification.md) |
 
 Repository tests are the rule people break first. sqlmock keeps them fast and hermetic;
@@ -83,6 +83,37 @@ psql "<that same dsn>" -c '\dt'   # then read the tables back directly
 Write that check up under `e2e/scratch/` per [verification.md](verification.md) — for
 migrations the evidence is the table list, not a screenshot.
 
+**What is untested is the DDL, not the runner.** `migrations/migrations_test.go` does use
+sqlmock, on the advisory-lock wrapper `withMigrationLock` that serialises concurrently
+starting replicas — it asserts the `pg_try_advisory_lock` retry, that the migration func
+only runs once the lock is held, and that `pg_advisory_unlock` follows. That is a
+statement-sequence assertion, so it stays hermetic; it says nothing about whether any
+migration in `migrationList()` is valid SQL.
+
+## The jsdom environment
+
+Frontend unit tests run under jsdom, which is missing things a browser has. Fill the gap
+in **`frontend/src/test/setup.ts`** (wired as vitest's `setupFiles`) — never by mocking
+the module that happens to touch it.
+
+The distinction matters. `vi.mock('@/lib/theme')` in each test file that renders the shell
+would make those files pass, but they would then be exercising a hand-written stand-in
+instead of `ThemeProvider` + `useTheme` — the wiring the test is nominally about stops
+being covered, in every file, silently. A shim in the setup file leaves the component
+under test untouched.
+
+Two shims live there today, both installed only when the runtime lacks them:
+
+- **`localStorage` / `sessionStorage`.** Node ≥ 22 puts a built-in `localStorage` getter
+  on `globalThis` that resolves to `undefined` without `--localstorage-file`, *and* it
+  shadows jsdom's own implementation, so `lib/theme.tsx`'s `readStored()` throws.
+- **`matchMedia`.** jsdom has never implemented it; `ThemeProvider` reads it for the
+  system colour scheme.
+
+Anything that needs real layout — a card overflowing a phone viewport, a flex row that
+will not shrink — cannot be tested here at all. jsdom computes no layout. That belongs
+in `e2e/`, under the `mobile-chromium` project.
+
 ## Guard tests
 
 Some tests assert that a **convention is still enforced** rather than that code works.
@@ -93,6 +124,9 @@ They live next to what they guard, plus `internal/guards/` for repo-wide ones.
 | `internal/guards/observability_test.go` | `forbidigo` is still in `.golangci.yml` with both patterns; no credentials in log fields |
 | `internal/pkg/jwt/testkeys/isolation_test.go` | Test keys are not in `cmd/server`'s dependency graph |
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token and i18n rules fire, at error severity, over `src/` |
+| `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
+| `frontend/src/__tests__/user-code-contract.test.ts` | `lib/userCode.ts`'s alphabet and length still match `internal/pkg/usercode` |
+| `frontend/src/__tests__/login-error-contract.test.ts` | `Login.tsx`'s `KNOWN_ERRORS` still matches the `/login?err=` values `auth_ctr` redirects with, and each has copy in both locales |
 | `frontend/src/i18n/__tests__/locale-parity.test.ts` | Every locale has exactly the same keys |
 | `frontend/src/i18n/__tests__/language-switch.test.ts` | Switching language actually changes the copy |
 
