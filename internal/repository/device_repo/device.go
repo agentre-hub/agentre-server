@@ -70,7 +70,7 @@ func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
 			Columns: []clause.Column{{Name: "user_id"}, {Name: "fingerprint"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "kind", "platform", "version",
-				"capabilities", "last_seen_at", "status", "updatetime",
+				"last_seen_at", "status", "updatetime",
 			}),
 		},
 		clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "createtime"}}},

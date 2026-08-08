@@ -16,11 +16,10 @@ type Config struct {
 }
 
 type AuthorizeInput struct {
-	DeviceKind   string
-	Fingerprint  string
-	Platform     string
-	Version      string
-	Capabilities map[string]bool
+	DeviceKind  string
+	Fingerprint string
+	Platform    string
+	Version     string
 }
 
 type AuthorizeOutput struct {
@@ -42,11 +41,10 @@ type TokenOutput struct {
 }
 
 type PendingInfo struct {
-	DeviceKind   string
-	Platform     string
-	Version      string
-	Capabilities map[string]bool
-	ExpiresIn    int
+	DeviceKind string
+	Platform   string
+	Version    string
+	ExpiresIn  int
 }
 
 // Signer 抽出 jwt.Signer 的最小接口，方便 mock。

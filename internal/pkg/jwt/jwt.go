@@ -14,18 +14,16 @@ import (
 
 // Claims 是 access token 内嵌的业务字段。
 type Claims struct {
-	UID  int64    `json:"uid"`
-	DID  int64    `json:"did"`
-	Kind string   `json:"kind"`
-	Caps []string `json:"caps"`
-	JTI  string   `json:"-"`
+	UID  int64  `json:"uid"`
+	DID  int64  `json:"did"`
+	Kind string `json:"kind"`
+	JTI  string `json:"-"`
 }
 
 type registered struct {
-	UID  int64    `json:"uid"`
-	DID  int64    `json:"did"`
-	Kind string   `json:"kind"`
-	Caps []string `json:"caps"`
+	UID  int64  `json:"uid"`
+	DID  int64  `json:"did"`
+	Kind string `json:"kind"`
 	jwtv5.RegisteredClaims
 }
 
@@ -65,7 +63,7 @@ func (s *Signer) Sign(c Claims, ttl time.Duration) (string, string, error) {
 	now := time.Now()
 	jti := ulid.MustNew(ulid.Timestamp(now), rand.Reader).String()
 	reg := registered{
-		UID: c.UID, DID: c.DID, Kind: c.Kind, Caps: c.Caps,
+		UID: c.UID, DID: c.DID, Kind: c.Kind,
 		RegisteredClaims: jwtv5.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   fmt.Sprintf("device:%d", c.DID),
@@ -99,6 +97,6 @@ func (s *Signer) Verify(token string) (*Claims, error) {
 		return nil, errors.New("invalid token")
 	}
 	return &Claims{
-		UID: reg.UID, DID: reg.DID, Kind: reg.Kind, Caps: reg.Caps, JTI: reg.ID,
+		UID: reg.UID, DID: reg.DID, Kind: reg.Kind, JTI: reg.ID,
 	}, nil
 }

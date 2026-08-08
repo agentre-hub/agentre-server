@@ -28,7 +28,6 @@ func TestUpsert_SingleStatementOnConflict(t *testing.T) {
 			`"kind"="excluded"."kind",`+
 			`"platform"="excluded"."platform",`+
 			`"version"="excluded"."version",`+
-			`"capabilities"="excluded"."capabilities",`+
 			`"last_seen_at"="excluded"."last_seen_at",`+
 			`"status"="excluded"."status",`+
 			`"updatetime"="excluded"."updatetime" `+

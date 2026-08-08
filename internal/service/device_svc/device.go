@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -62,19 +61,17 @@ func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*Authoriz
 		return nil, err
 	}
 	uc := usercode.Generate()
-	capsJSON := mustMarshalJSON(in.Capabilities)
 
 	code := &device_flow_entity.DeviceFlowCode{
-		DeviceCode:         dc,
-		UserCode:           uc,
-		DeviceKind:         in.DeviceKind,
-		ClientFingerprint:  in.Fingerprint,
-		ClientCapabilities: capsJSON,
-		Platform:           in.Platform,
-		Version:            in.Version,
-		IntervalSeconds:    int(s.cfg.PollInterval / time.Second),
-		ExpiresAt:          now + s.cfg.UserCodeTTL.Milliseconds(),
-		Createtime:         now,
+		DeviceCode:        dc,
+		UserCode:          uc,
+		DeviceKind:        in.DeviceKind,
+		ClientFingerprint: in.Fingerprint,
+		Platform:          in.Platform,
+		Version:           in.Version,
+		IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
+		ExpiresAt:         now + s.cfg.UserCodeTTL.Milliseconds(),
+		Createtime:        now,
 	}
 	if err := device_flow_repo.DeviceFlow().Create(ctx, code); err != nil {
 		return nil, err
@@ -96,17 +93,6 @@ func randomBase32(n int) (string, error) {
 		return "", err
 	}
 	return strings.ToLower(strings.TrimRight(base32.StdEncoding.EncodeToString(buf), "=")), nil
-}
-
-func mustMarshalJSON(m map[string]bool) []byte {
-	if m == nil {
-		return []byte("{}")
-	}
-	pairs := make([]string, 0, len(m))
-	for k, v := range m {
-		pairs = append(pairs, fmt.Sprintf("%q:%t", k, v))
-	}
-	return []byte("{" + strings.Join(pairs, ",") + "}")
 }
 
 // OAuth 标准错误字面量
@@ -184,17 +170,16 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		}
 
 		d := &device_entity.Device{
-			UserID:       flow.AuthorizedUserID,
-			Name:         flow.ClientFingerprint[:8],
-			Kind:         flow.DeviceKind,
-			Platform:     flow.Platform,
-			Version:      flow.Version,
-			Fingerprint:  flow.ClientFingerprint,
-			Capabilities: flow.ClientCapabilities,
-			LastSeenAt:   nowMs,
-			Status:       1, // consts.ACTIVE
-			Createtime:   nowMs,
-			Updatetime:   nowMs,
+			UserID:      flow.AuthorizedUserID,
+			Name:        flow.ClientFingerprint[:8],
+			Kind:        flow.DeviceKind,
+			Platform:    flow.Platform,
+			Version:     flow.Version,
+			Fingerprint: flow.ClientFingerprint,
+			LastSeenAt:  nowMs,
+			Status:      1, // consts.ACTIVE
+			Createtime:  nowMs,
+			Updatetime:  nowMs,
 		}
 		if err := device_repo.Device().Upsert(txCtx, d); err != nil {
 			return err
@@ -204,7 +189,6 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			UID:  flow.AuthorizedUserID,
 			DID:  d.ID,
 			Kind: d.Kind,
-			Caps: d.CapabilityList(),
 		}, s.cfg.AccessTTL)
 		if err != nil {
 			return err
@@ -311,7 +295,6 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			UID:  d.UserID,
 			DID:  d.ID,
 			Kind: d.Kind,
-			Caps: d.CapabilityList(),
 		}, s.cfg.AccessTTL)
 		if err != nil {
 			return err
@@ -365,16 +348,11 @@ func (s *deviceSvc) Pending(ctx context.Context, userCode string) (*PendingInfo,
 	if flow.IsExpired(nowMs) {
 		return nil, newOAuthErr(ErrExpiredToken, "user_code expired")
 	}
-	caps := map[string]bool{}
-	if len(flow.ClientCapabilities) > 0 {
-		_ = json.Unmarshal(flow.ClientCapabilities, &caps)
-	}
 	return &PendingInfo{
-		DeviceKind:   flow.DeviceKind,
-		Platform:     flow.Platform,
-		Version:      flow.Version,
-		Capabilities: caps,
-		ExpiresIn:    int((flow.ExpiresAt - nowMs) / 1000),
+		DeviceKind: flow.DeviceKind,
+		Platform:   flow.Platform,
+		Version:    flow.Version,
+		ExpiresIn:  int((flow.ExpiresAt - nowMs) / 1000),
 	}, nil
 }
 
@@ -457,9 +435,8 @@ func (s *deviceSvc) ListRevokedJTI(ctx context.Context, userID int64) ([]string,
 	return device_token_repo.DeviceToken().ListRevokedJTIByUser(ctx, userID, windowStart)
 }
 
-// ListUserDevices returns all devices for a user, marking the caller's row,
-// decoding the Capabilities JSON column into a map, and reporting the real
-// relay presence (R20) as the online state.
+// ListUserDevices returns all devices for a user, marking the caller's row and
+// reporting the real relay presence (R20) as the online state.
 func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error) {
 	rows, err := device_repo.Device().ListByUser(ctx, userID)
 	if err != nil {
@@ -467,10 +444,6 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 	}
 	out := make([]api.ListDevicesItem, 0, len(rows))
 	for _, d := range rows {
-		caps := map[string]bool{}
-		if len(d.Capabilities) > 0 {
-			_ = json.Unmarshal(d.Capabilities, &caps)
-		}
 		// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。
 		// Redis 抖动时按离线对待（fail-open）：在线态只是列表的增强列，
 		// 不应拖垮整个设备列表或 Revoke 前的归属校验（该流程也走本方法）。
@@ -485,7 +458,6 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 			Platform:     d.Platform,
 			Version:      d.Version,
 			Fingerprint:  d.Fingerprint,
-			Capabilities: caps,
 			LastSeenAt:   d.LastSeenAt,
 			Status:       d.Status,
 			Online:       online,
