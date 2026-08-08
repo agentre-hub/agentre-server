@@ -1,0 +1,20 @@
+{
+  "name": "agentre-server-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "description": "双轨 e2e：committed 冒烟 + gitignored scratch 本地验证。见 README.md",
+  "scripts": {
+    "smoke": "playwright test",
+    "scratch": "playwright test --config playwright.scratch.config.ts",
+    "install-browsers": "playwright install chromium",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "prettier --check ."
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "prettier": "^3.9.6"
+  }
+}

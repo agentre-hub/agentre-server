@@ -1,0 +1,33 @@
+services:
+  server:
+    image: agentre/server:0.1
+    build: .
+    restart: unless-stopped
+    ports: ["8443:8443"]
+    environment:
+      AGENTRE_SERVER_DB_DSN: "postgres://server:server@pg:5432/server?sslmode=disable"
+      AGENTRE_SERVER_REDIS_ADDR: "redis:6379"
+      AGENTRE_SERVER_PUBLIC_URL: "${SERVER_PUBLIC_URL}"
+      AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID: "${GH_CLIENT_ID}"
+      AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET: "${GH_CLIENT_SECRET}"
+      AGENTRE_SERVER_SESSION_SECRET: "${SESSION_SECRET}"
+      AGENTRE_SERVER_JWT_PRIVATE_KEY_PEM: "${JWT_PRIVATE_KEY_PEM}"
+    depends_on:
+      pg:    { condition: service_healthy }
+      redis: { condition: service_started }
+
+  pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: server
+      POSTGRES_PASSWORD: server
+      POSTGRES_DB: server
+    volumes: ["./data/pg:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "server"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    volumes: ["./data/redis:/data"]

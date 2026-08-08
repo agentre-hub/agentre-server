@@ -1,0 +1,48 @@
+{
+  "common": {
+    "appName": "AgentRe Server",
+    "back_home": "回到首页",
+    "close": "关闭",
+    "loading": "加载中…",
+    "theme": {
+      "label": "主题",
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统"
+    },
+    "language": {
+      "label": "语言"
+    }
+  },
+  "login": {
+    "title": "登录 AgentRe Server",
+    "github": "使用 GitHub 登录",
+    "errors": {
+      "oauth_state_invalid": "OAuth state 已过期，请重新发起登录。",
+      "oauth_exchange_failed": "GitHub OAuth 兑换失败，请稍后重试或检查 GitHub OAuth App 配置。",
+      "oauth_profile_failed": "无法获取 GitHub 用户信息。",
+      "github_email_missing": "请在 GitHub 设置中将主邮箱设为已验证后重试。",
+      "access_denied": "你取消了 GitHub 授权。",
+      "user_banned": "账户已被封禁，请联系管理员。"
+    }
+  },
+  "device": {
+    "title": "设备授权",
+    "codePlaceholder": "A4F-7Q2",
+    "lookup": "查询",
+    "invalidCode": "user_code 格式不正确。",
+    "denied": "已拒绝授权，可关闭此页面。",
+    "approveTitle": "授权该设备",
+    "capabilities": "能力",
+    "approve": "允许",
+    "deny": "拒绝",
+    "success": {
+      "title": "设备已授权",
+      "body": "你可以关闭此页面，返回终端继续。"
+    }
+  },
+  "notFound": {
+    "title": "404",
+    "body": "页面不存在"
+  }
+}

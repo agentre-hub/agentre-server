@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --radius: 0.5rem;
+
+  /* Surfaces */
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+
+  /* Brand */
+  --primary: #0891b2;
+  --primary-foreground: #ffffff;
+  --ring: #0891b2;
+
+  /* Semantic surfaces */
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+
+  /* Border / Input */
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+
+  /* Destructive */
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+
+  /* Elevation */
+  --shadow-overlay:
+    0 24px 64px -12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
+  /* Dialog / Sheet 背后的遮罩 */
+  --overlay-scrim: rgba(15, 23, 42, 0.25);
+}
+
+.dark {
+  --background: #141a23;
+  --foreground: #e6edf3;
+  --card: #1d2533;
+  --card-foreground: #e6edf3;
+  --popover: #2a3344;
+  --popover-foreground: #e6edf3;
+
+  --primary: #22d3ee;
+  --primary-foreground: #04141a;
+  --ring: #22d3ee;
+
+  --secondary: #2a3344;
+  --secondary-foreground: #c9d1d9;
+  --muted: #1d2533;
+  --muted-foreground: #8b949e;
+  --accent: #3a4660;
+  --accent-foreground: #e6edf3;
+
+  --border: #2c3548;
+  --input: #2c3548;
+
+  --destructive: #f87171;
+  --destructive-foreground: #fafafa;
+
+  /* 深色背景下投影要更重才看得出层级，边缘描边则改用亮色 */
+  --shadow-overlay:
+    0 24px 64px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --overlay-scrim: rgba(0, 0, 0, 0.7);
+}
+
+@layer base {
+  * {
+    /* token 存的是十六进制字面量，不是 HSL 通道值，所以这里直接引用。
+       写成 hsl(var(--border)) 会得到非法 CSS，整条声明被丢弃。 */
+    border-color: var(--border);
+    box-sizing: border-box;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

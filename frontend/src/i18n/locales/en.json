@@ -1,0 +1,48 @@
+{
+  "common": {
+    "appName": "AgentRe Server",
+    "back_home": "Back to home",
+    "close": "Close",
+    "loading": "Loading…",
+    "theme": {
+      "label": "Theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    },
+    "language": {
+      "label": "Language"
+    }
+  },
+  "login": {
+    "title": "Sign in to AgentRe Server",
+    "github": "Sign in with GitHub",
+    "errors": {
+      "oauth_state_invalid": "The OAuth state has expired. Please start the sign-in again.",
+      "oauth_exchange_failed": "GitHub OAuth exchange failed. Retry later, or check the GitHub OAuth App settings.",
+      "oauth_profile_failed": "Could not fetch your GitHub profile.",
+      "github_email_missing": "Set a verified primary email in your GitHub settings, then try again.",
+      "access_denied": "You cancelled the GitHub authorization.",
+      "user_banned": "This account is banned. Please contact an administrator."
+    }
+  },
+  "device": {
+    "title": "Device authorization",
+    "codePlaceholder": "A4F-7Q2",
+    "lookup": "Look up",
+    "invalidCode": "That user_code is not in the right format.",
+    "denied": "Authorization denied. You can close this page.",
+    "approveTitle": "Authorize this device",
+    "capabilities": "Capabilities",
+    "approve": "Allow",
+    "deny": "Deny",
+    "success": {
+      "title": "Device authorized",
+      "body": "You can close this page and go back to your terminal."
+    }
+  },
+  "notFound": {
+    "title": "404",
+    "body": "This page does not exist."
+  }
+}
