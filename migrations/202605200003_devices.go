@@ -18,7 +18,6 @@ func migration202605200003() *gormigrate.Migration {
 				  platform        text NOT NULL DEFAULT '',
 				  version         text NOT NULL DEFAULT '',
 				  fingerprint     text NOT NULL,
-				  capabilities    jsonb NOT NULL DEFAULT '{}',
 				  last_seen_at    bigint NOT NULL DEFAULT 0,
 				  status          smallint NOT NULL DEFAULT 1,
 				  createtime      bigint NOT NULL DEFAULT 0,

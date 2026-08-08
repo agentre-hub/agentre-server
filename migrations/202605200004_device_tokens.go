@@ -13,6 +13,7 @@ func migration202605200004() *gormigrate.Migration {
 				CREATE TABLE device_tokens (
 				  id                  bigserial PRIMARY KEY,
 				  device_id           bigint NOT NULL,
+				  access_jti          text NOT NULL DEFAULT '',
 				  refresh_token_hash  text NOT NULL,
 				  refresh_expires_at  bigint NOT NULL DEFAULT 0,
 				  last_used_at        bigint NOT NULL DEFAULT 0,

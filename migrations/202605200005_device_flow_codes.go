@@ -15,7 +15,6 @@ func migration202605200005() *gormigrate.Migration {
 				  user_code           text NOT NULL,
 				  device_kind         text NOT NULL,
 				  client_fingerprint  text NOT NULL,
-				  client_capabilities jsonb NOT NULL DEFAULT '{}',
 				  platform            text NOT NULL DEFAULT '',
 				  version             text NOT NULL DEFAULT '',
 				  authorized_user_id  bigint NOT NULL DEFAULT 0,
