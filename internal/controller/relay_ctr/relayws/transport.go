@@ -16,11 +16,10 @@ const (
 	writeTimeout      = 10 * time.Second
 )
 
-// Timing 定义 WebSocket 心跳与读写期限。
-type Timing struct {
-	HeartbeatInterval time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
+type timing struct {
+	heartbeatInterval time.Duration
+	readTimeout       time.Duration
+	writeTimeout      time.Duration
 }
 
 // Connection 是控制器进行帧编排所需的传输连接。
@@ -36,7 +35,7 @@ type Transport interface {
 }
 
 type transport struct {
-	timing   Timing
+	timing   timing
 	upgrader websocket.Upgrader
 }
 
@@ -49,18 +48,21 @@ type connection struct {
 	writeMu      sync.Mutex
 }
 
-// DefaultTiming 返回生产 relay WebSocket 使用的固定生命周期策略。
-func DefaultTiming() Timing {
-	return Timing{
-		HeartbeatInterval: heartbeatInterval,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      writeTimeout,
-	}
+// New 创建采用固定生产生命周期策略的 WebSocket 传输组件。
+func New() Transport {
+	return newWithTiming(defaultTiming())
 }
 
-// New 创建采用指定生命周期策略的 WebSocket 传输组件。
-func New(timing Timing) Transport {
-	return &transport{timing: timing}
+func newWithTiming(cfg timing) Transport {
+	return &transport{timing: cfg}
+}
+
+func defaultTiming() timing {
+	return timing{
+		heartbeatInterval: heartbeatInterval,
+		readTimeout:       readTimeout,
+		writeTimeout:      writeTimeout,
+	}
 }
 
 func (t *transport) Upgrade(w http.ResponseWriter, r *http.Request, renew func() error) (Connection, error) {
@@ -70,8 +72,8 @@ func (t *transport) Upgrade(w http.ResponseWriter, r *http.Request, renew func()
 	}
 	peer := &connection{
 		conn:         conn,
-		readTimeout:  t.timing.ReadTimeout,
-		writeTimeout: t.timing.WriteTimeout,
+		readTimeout:  t.timing.readTimeout,
+		writeTimeout: t.timing.writeTimeout,
 		done:         make(chan struct{}),
 	}
 	conn.SetReadLimit(maxMessageSize)
@@ -99,7 +101,7 @@ func (t *transport) Upgrade(w http.ResponseWriter, r *http.Request, renew func()
 		}
 		return nil
 	})
-	go peer.heartbeat(t.timing.HeartbeatInterval)
+	go peer.heartbeat(t.timing.heartbeatInterval)
 	return peer, nil
 }
 

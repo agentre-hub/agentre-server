@@ -18,8 +18,8 @@ type Relay struct {
 	transport relayws.Transport
 }
 
-func New(svc relay_svc.RelaySvc, transport relayws.Transport) *Relay {
-	return &Relay{svc: svc, transport: transport}
+func New(svc relay_svc.RelaySvc) *Relay {
+	return &Relay{svc: svc, transport: relayws.New()}
 }
 
 // Daemon 接收 agentred 的出站连接。在线态只由 Redis TTL 表示；连接断开时

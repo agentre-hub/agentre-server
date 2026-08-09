@@ -122,6 +122,7 @@ They live next to what they guard, plus `internal/guards/` for repo-wide ones.
 | Guard | Asserts |
 | --- | --- |
 | `internal/guards/observability_test.go` | `forbidigo` is still in `.golangci.yml` with both patterns; no credentials in log fields |
+| `internal/guards/ingress_test.go` | Helm Ingress timeout annotations remain explicit; the deployment contract is owned by [`deploy/README.md`](../deploy/README.md) |
 | `internal/pkg/jwt/testkeys/isolation_test.go` | Test keys are not in `cmd/server`'s dependency graph |
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token and i18n rules fire, at error severity, over `src/` |
 | `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
