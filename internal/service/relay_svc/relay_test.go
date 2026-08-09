@@ -2,7 +2,6 @@ package relay_svc
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"sync"
 	"testing"
@@ -344,32 +343,36 @@ func TestRedisForwarderMalformedFrameIsDeletedAndAcknowledgedWithoutDeliveryAck(
 	require.ErrorIs(t, client.Get(context.Background(), ack).Err(), goredis.Nil)
 }
 
-func TestRedisForwarderMissingClientTargetIsDeletedAndAcknowledgedWithoutDeliveryAck(t *testing.T) {
+func TestRedisForwarderRemoteMissingClientTargetPreservesDropBehavior(t *testing.T) {
 	mini := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-	config := Config{InstanceID: "server-b", OnlineTTL: time.Second}
-	forwarder := NewRedisForwarder(config, client)
-	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	clientA := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, clientA.Close()) })
+	t.Cleanup(func() { require.NoError(t, clientB.Close()) })
+	configA := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarderA := NewRedisForwarder(configA, clientA)
+	forwarderB := NewRedisForwarder(configB, clientB)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configA.InstanceID}
+
 	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
-	detach, err := forwarder.(AttachmentForwarder).Attach(
-		context.Background(), route, PeerDaemon, "", writer)
+	detach, err := forwarderB.(AttachmentForwarder).Attach(
+		context.Background(), route, PeerClient, "live-channel", writer)
 	require.NoError(t, err)
 	t.Cleanup(detach)
 
-	stream := streamKey(route)
-	ack := stream + ":ack:missing-client"
-	_, err = client.XAdd(context.Background(), &goredis.XAddArgs{
-		Stream: stream,
-		Values: map[string]any{
-			"peer": string(PeerClient), "channel": "missing-channel", "type": "2",
-			"frame": base64.RawStdEncoding.EncodeToString([]byte("response")), "ack": ack,
-		},
-	}).Result()
-	require.NoError(t, err)
-
-	requireRelayStreamDrained(t, client, stream)
-	require.ErrorIs(t, client.Get(context.Background(), ack).Err(), goredis.Nil)
+	staleChannel := "stale-remote-channel"
+	require.NoError(t, clientB.Set(
+		context.Background(), clientChannelKey(route, staleChannel), configB.InstanceID, time.Second,
+	).Err())
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	require.NoError(t, forwarderA.Forward(
+		ctx, route, PeerDaemon, staleChannel, 2, []byte("late-response"),
+	))
+	requireRelayStreamDrained(t, clientB, streamKey(Route{
+		AccountID: route.AccountID, Fingerprint: route.Fingerprint, InstanceID: configB.InstanceID,
+	}))
 }
 
 func TestRedisForwarderLocalMissingClientTargetPreservesExistingDropBehavior(t *testing.T) {

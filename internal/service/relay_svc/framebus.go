@@ -144,8 +144,7 @@ func (f *redisForwarder) Forward(ctx context.Context, target Route, source Peer,
 
 	if destination.InstanceID == f.instanceID {
 		err := f.deliver(streamKey(destination), peer, channelID, messageType, frame)
-		var noTarget *noLocalDeliveryTargetError
-		if peer == PeerClient && errors.As(err, &noTarget) {
+		if isMissingLocalClientTarget(peer, err) {
 			return nil
 		}
 		return err
@@ -290,6 +289,11 @@ func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 				if err == nil {
 					err = f.deliver(stream, peer, channelID, messageType, frame)
 				}
+				if isMissingLocalClientTarget(peer, err) {
+					// 客户端可能在 daemon 响应到达前断开。与同实例投递一致，晚到的响应
+					// 视为已处理并丢弃，不能让一个已关闭通道拖断共享的 daemon websocket。
+					err = nil
+				}
 				if err != nil {
 					// 投不出去(本实例没有那一侧的 websocket)或解不开的帧,重试永远不会
 					// 让它变得可投递,而发布方最多只等 deliveryWaitTimeout。把它留在 PEL
@@ -325,6 +329,11 @@ func (f *redisForwarder) acknowledgeFrame(ctx context.Context, stream, messageID
 		return nil
 	})
 	return err
+}
+
+func isMissingLocalClientTarget(peer Peer, err error) bool {
+	var noTarget *noLocalDeliveryTargetError
+	return peer == PeerClient && errors.As(err, &noTarget)
 }
 
 func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, messageType int, frame []byte) error {
