@@ -372,6 +372,23 @@ func TestRedisForwarderMissingClientTargetIsDeletedAndAcknowledgedWithoutDeliver
 	require.ErrorIs(t, client.Get(context.Background(), ack).Err(), goredis.Nil)
 }
 
+func TestRedisForwarderLocalMissingClientTargetPreservesExistingDropBehavior(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	forwarder := NewRedisForwarder(config, client)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	channelID := "stale-local-channel"
+
+	require.NoError(t, client.Set(
+		context.Background(), clientChannelKey(route, channelID), config.InstanceID, time.Second,
+	).Err())
+	require.NoError(t, forwarder.Forward(
+		context.Background(), route, PeerDaemon, channelID, 2, []byte("late-response"),
+	))
+}
+
 // 退避阶梯必须单调不减、且永不越过自己声明的上限 —— 它是 Redis 抖动时唯一的
 // 限流手段,越限意味着恢复后可能多等一个投递窗口,不单调则说明判据写错了位置。
 func TestConsumerRetryDelayIsMonotonicAndCapped(t *testing.T) {

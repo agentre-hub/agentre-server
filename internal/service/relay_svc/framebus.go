@@ -48,6 +48,14 @@ type attachedPeer struct {
 	mu        sync.Mutex
 }
 
+type noLocalDeliveryTargetError struct {
+	peer Peer
+}
+
+func (e *noLocalDeliveryTargetError) Error() string {
+	return fmt.Sprintf("no local %s relay websocket", e.peer)
+}
+
 // NewRedisForwarder 创建以 Redis Stream 为后端的帧总线。每个目标实例拥有
 // 一个 stream；消费者只会在本实例有 websocket 附着时运行。
 func NewRedisForwarder(config Config, redisClient *goredis.Client) Forwarder {
@@ -135,7 +143,12 @@ func (f *redisForwarder) Forward(ctx context.Context, target Route, source Peer,
 	}
 
 	if destination.InstanceID == f.instanceID {
-		return f.deliver(streamKey(destination), peer, channelID, messageType, frame)
+		err := f.deliver(streamKey(destination), peer, channelID, messageType, frame)
+		var noTarget *noLocalDeliveryTargetError
+		if peer == PeerClient && errors.As(err, &noTarget) {
+			return nil
+		}
+		return err
 	}
 	return f.publishAndWait(ctx, destination, peer, channelID, messageType, frame)
 }
@@ -325,7 +338,7 @@ func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, mes
 	}
 	f.mu.Unlock()
 	if len(peers) == 0 {
-		return fmt.Errorf("no local %s relay websocket", peer)
+		return &noLocalDeliveryTargetError{peer: peer}
 	}
 	for _, attachment := range peers {
 		attachment.mu.Lock()
