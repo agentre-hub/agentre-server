@@ -23,7 +23,7 @@ import (
 
 	"agentre-server/internal/api"
 	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/controller/relay_ctr"
+	"agentre-server/internal/controller/relay_ctr/relayws"
 	"agentre-server/internal/model/entity/device_entity"
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/pkg/jwt"
@@ -267,7 +267,7 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 }
 
 func TestRelayLifecycleUsesApprovedDeadlinesAndPreservesOutboundFrames(t *testing.T) {
-	timing := relay_ctr.DefaultLifecycleTiming()
+	timing := relayws.DefaultTiming()
 	require.Equal(t, 15*time.Second, timing.HeartbeatInterval)
 	require.Equal(t, 45*time.Second, timing.ReadTimeout)
 	require.Equal(t, 10*time.Second, timing.WriteTimeout)
@@ -288,8 +288,8 @@ func TestRelayLifecycleUsesApprovedDeadlinesAndPreservesOutboundFrames(t *testin
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := newLifecycleRelayStub()
-			server, deadlines := newLifecycleRelayServer(t, stub, tc.path, timing, true)
-			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			server, headers, deadlines := newLifecycleRelayServer(t, stub, tc.path, timing, true)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), headers)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close() })
 
@@ -307,7 +307,7 @@ func TestRelayLifecycleUsesApprovedDeadlinesAndPreservesOutboundFrames(t *testin
 }
 
 func TestRelayLifecycleServerHeartbeatsKeepBothPeerTypesAlive(t *testing.T) {
-	timing := relay_ctr.LifecycleTiming{
+	timing := relayws.Timing{
 		HeartbeatInterval: 10 * time.Millisecond,
 		ReadTimeout:       70 * time.Millisecond,
 		WriteTimeout:      30 * time.Millisecond,
@@ -329,8 +329,8 @@ func TestRelayLifecycleServerHeartbeatsKeepBothPeerTypesAlive(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := newLifecycleRelayStub()
-			server, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
-			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			server, headers, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), headers)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close() })
 
@@ -364,7 +364,7 @@ func TestRelayLifecycleServerHeartbeatsKeepBothPeerTypesAlive(t *testing.T) {
 }
 
 func TestRelayLifecycleInboundDataExtendsReadLiveness(t *testing.T) {
-	timing := relay_ctr.LifecycleTiming{
+	timing := relayws.Timing{
 		HeartbeatInterval: time.Hour,
 		ReadTimeout:       50 * time.Millisecond,
 		WriteTimeout:      30 * time.Millisecond,
@@ -386,8 +386,8 @@ func TestRelayLifecycleInboundDataExtendsReadLiveness(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := newLifecycleRelayStub()
-			server, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
-			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			server, headers, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), headers)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close() })
 
@@ -401,14 +401,14 @@ func TestRelayLifecycleInboundDataExtendsReadLiveness(t *testing.T) {
 }
 
 func TestRelayLifecycleDaemonPingRenewsRouteAndExtendsReadLiveness(t *testing.T) {
-	timing := relay_ctr.LifecycleTiming{
+	timing := relayws.Timing{
 		HeartbeatInterval: time.Hour,
 		ReadTimeout:       60 * time.Millisecond,
 		WriteTimeout:      30 * time.Millisecond,
 	}
 	stub := newLifecycleRelayStub()
-	server, _ := newLifecycleRelayServer(t, stub, "/v1/relay/daemon", timing, false)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), nil)
+	server, headers, _ := newLifecycleRelayServer(t, stub, "/v1/relay/daemon", timing, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -432,7 +432,7 @@ func TestRelayLifecycleDaemonPingRenewsRouteAndExtendsReadLiveness(t *testing.T)
 }
 
 func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
-	timing := relay_ctr.LifecycleTiming{
+	timing := relayws.Timing{
 		HeartbeatInterval: time.Hour,
 		ReadTimeout:       time.Second,
 		WriteTimeout:      time.Second,
@@ -441,8 +441,8 @@ func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
 	stub.daemonForwardErrs = make(chan error, 2)
 	stub.daemonForwardErrs <- relay_svc.ErrForwardFailed
 	stub.daemonForwardErrs <- nil
-	server, _ := newLifecycleRelayServer(t, stub, "/v1/relay/daemon", timing, false)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), nil)
+	server, headers, _ := newLifecycleRelayServer(t, stub, "/v1/relay/daemon", timing, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -458,7 +458,7 @@ func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
 }
 
 func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
-	timing := relay_ctr.LifecycleTiming{
+	timing := relayws.Timing{
 		HeartbeatInterval: time.Hour,
 		ReadTimeout:       time.Second,
 		WriteTimeout:      time.Second,
@@ -466,8 +466,8 @@ func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
 	stub := newLifecycleRelayStub()
 	stub.clientForwardErrs = make(chan error, 1)
 	stub.clientForwardErrs <- relay_svc.ErrForwardFailed
-	server, _ := newLifecycleRelayServer(t, stub, "/v1/relay/client", timing, false)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/client"), nil)
+	server, headers, _ := newLifecycleRelayServer(t, stub, "/v1/relay/client", timing, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/client"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -479,7 +479,7 @@ func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
 }
 
 func TestRelayLifecycleUnresponsivePeersCloseAndDetach(t *testing.T) {
-	timing := relay_ctr.LifecycleTiming{
+	timing := relayws.Timing{
 		HeartbeatInterval: time.Hour,
 		ReadTimeout:       40 * time.Millisecond,
 		WriteTimeout:      20 * time.Millisecond,
@@ -500,8 +500,8 @@ func TestRelayLifecycleUnresponsivePeersCloseAndDetach(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := newLifecycleRelayStub()
-			server, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
-			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			server, headers, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), headers)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close() })
 
@@ -742,25 +742,31 @@ func newLifecycleRelayServer(
 	t *testing.T,
 	stub *relayStub,
 	path string,
-	timing relay_ctr.LifecycleTiming,
+	timing relayws.Timing,
 	recordDeadlines bool,
-) (*httptest.Server, <-chan deadlineEvent) {
+) (*httptest.Server, http.Header, <-chan deadlineEvent) {
 	t.Helper()
-	controller := relay_ctr.NewWithLifecycleTiming(stub, timing)
-	engine := gin.New()
-	engine.GET(path, func(c *gin.Context) {
-		c.Set("user_id", int64(7))
-		c.Set("device_id", int64(9))
-		if path == "/v1/relay/daemon" {
-			c.Set("device_kind", device_entity.KindAgentred)
-			controller.Daemon(c)
-			return
-		}
-		c.Set("device_kind", device_entity.KindDesktop)
-		controller.Client(c)
-	})
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+	testMux := muxtest.NewTestMux()
+	require.NoError(t, (&api.RouterDeps{
+		Cfg:            &bootstrap.ServerConfig{},
+		Signer:         signer,
+		Relay:          stub,
+		RelayTransport: relayws.New(timing),
+	}).Router(context.Background(), testMux.Router))
 
-	server := httptest.NewUnstartedServer(engine)
+	kind := device_entity.KindDesktop
+	if path == "/v1/relay/daemon" {
+		kind = device_entity.KindAgentred
+	}
+	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: kind}, time.Hour)
+	require.NoError(t, err)
+	headers := http.Header{"Authorization": {"Bearer " + token}}
+
+	server := httptest.NewUnstartedServer(testMux.IRouter.(*gin.Engine))
 	var deadlines chan deadlineEvent
 	if recordDeadlines {
 		deadlines = make(chan deadlineEvent, 64)
@@ -768,7 +774,7 @@ func newLifecycleRelayServer(
 	}
 	server.Start()
 	t.Cleanup(server.Close)
-	return server, deadlines
+	return server, headers, deadlines
 }
 
 type deadlineEvent struct {

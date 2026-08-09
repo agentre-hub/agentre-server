@@ -4,137 +4,22 @@ package relay_ctr
 import (
 	"errors"
 	"net/http"
-	"sync"
-	"time"
 
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 
+	"agentre-server/internal/controller/relay_ctr/relayws"
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/service/relay_svc"
 )
 
-const (
-	maxMessageSize    = 10 << 20
-	heartbeatInterval = 15 * time.Second
-	readTimeout       = 45 * time.Second
-	writeTimeout      = 10 * time.Second
-)
-
-var upgrader = websocket.Upgrader{}
-
-// LifecycleTiming 是 relay websocket 生命周期的计时策略。生产入口使用固定默认值，
-// 测试通过缩短这些时长验证超时行为，而不等待生产时长。
-type LifecycleTiming struct {
-	HeartbeatInterval time.Duration
-	ReadTimeout       time.Duration
-	WriteTimeout      time.Duration
-}
-
 type Relay struct {
-	svc    relay_svc.RelaySvc
-	timing LifecycleTiming
+	svc       relay_svc.RelaySvc
+	transport relayws.Transport
 }
 
-type websocketPeer struct {
-	conn         *websocket.Conn
-	writeTimeout time.Duration
-	writeMu      sync.Mutex
-}
-
-// DefaultLifecycleTiming 返回生产 relay websocket 使用的固定生命周期策略。
-func DefaultLifecycleTiming() LifecycleTiming {
-	return LifecycleTiming{
-		HeartbeatInterval: heartbeatInterval,
-		ReadTimeout:       readTimeout,
-		WriteTimeout:      writeTimeout,
-	}
-}
-
-func New(svc relay_svc.RelaySvc) *Relay {
-	return NewWithLifecycleTiming(svc, DefaultLifecycleTiming())
-}
-
-// NewWithLifecycleTiming 建立可注入计时策略的 relay 控制器，供真实 websocket 测试使用。
-func NewWithLifecycleTiming(svc relay_svc.RelaySvc, timing LifecycleTiming) *Relay {
-	return &Relay{svc: svc, timing: timing}
-}
-
-func (p *websocketPeer) WriteMessage(messageType int, data []byte) error {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-	if err := p.conn.SetWriteDeadline(time.Now().Add(p.writeTimeout)); err != nil {
-		_ = p.conn.Close()
-		return err
-	}
-	if err := p.conn.WriteMessage(messageType, data); err != nil {
-		_ = p.conn.Close()
-		return err
-	}
-	return nil
-}
-
-func (p *websocketPeer) writeControl(messageType int, data []byte) error {
-	p.writeMu.Lock()
-	defer p.writeMu.Unlock()
-	if err := p.conn.WriteControl(messageType, data, time.Now().Add(p.writeTimeout)); err != nil {
-		_ = p.conn.Close()
-		return err
-	}
-	return nil
-}
-
-func (r *Relay) preparePeer(conn *websocket.Conn, renew func() error) (*websocketPeer, func(), error) {
-	peer := &websocketPeer{conn: conn, writeTimeout: r.timing.WriteTimeout}
-	conn.SetReadLimit(maxMessageSize)
-	extendReadDeadline := func() error {
-		return conn.SetReadDeadline(time.Now().Add(r.timing.ReadTimeout))
-	}
-	if err := extendReadDeadline(); err != nil {
-		return nil, nil, err
-	}
-	conn.SetPingHandler(func(appData string) error {
-		if err := extendReadDeadline(); err != nil {
-			return err
-		}
-		if renew != nil {
-			if err := renew(); err != nil {
-				return err
-			}
-		}
-		return peer.writeControl(websocket.PongMessage, []byte(appData))
-	})
-	conn.SetPongHandler(func(string) error {
-		if err := extendReadDeadline(); err != nil {
-			return err
-		}
-		if renew != nil {
-			return renew()
-		}
-		return nil
-	})
-
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(r.timing.HeartbeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := peer.writeControl(websocket.PingMessage, nil); err != nil {
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-	return peer, func() { close(done) }, nil
-}
-
-func (r *Relay) extendReadDeadline(conn *websocket.Conn) error {
-	return conn.SetReadDeadline(time.Now().Add(r.timing.ReadTimeout))
+func New(svc relay_svc.RelaySvc, transport relayws.Transport) *Relay {
+	return &Relay{svc: svc, transport: transport}
 }
 
 // Daemon 接收 agentred 的出站连接。在线态只由 Redis TTL 表示；连接断开时
@@ -146,19 +31,14 @@ func (r *Relay) Daemon(c *gin.Context) {
 		relayError(c, err)
 		return
 	}
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
-	if err != nil {
-		return
-	}
-	defer func() { _ = conn.Close() }()
-	peer, stopHeartbeat, err := r.preparePeer(conn, func() error {
+	conn, err := r.transport.Upgrade(c.Writer, c.Request, func() error {
 		return r.svc.RenewDaemon(c.Request.Context(), route)
 	})
 	if err != nil {
 		return
 	}
-	defer stopHeartbeat()
-	detach, err := r.svc.AttachDaemon(c.Request.Context(), route, peer)
+	defer func() { _ = conn.Close() }()
+	detach, err := r.svc.AttachDaemon(c.Request.Context(), route, conn)
 	if err != nil {
 		return
 	}
@@ -170,9 +50,6 @@ func (r *Relay) Daemon(c *gin.Context) {
 	for {
 		messageType, frame, err := conn.ReadMessage()
 		if err != nil {
-			return
-		}
-		if err := r.extendReadDeadline(conn); err != nil {
 			return
 		}
 		if err := r.svc.RenewDaemon(c.Request.Context(), route); err != nil {
@@ -198,17 +75,12 @@ func (r *Relay) Client(c *gin.Context) {
 		relayError(c, err)
 		return
 	}
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, err := r.transport.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}
 	defer func() { _ = conn.Close() }()
-	peer, stopHeartbeat, err := r.preparePeer(conn, nil)
-	if err != nil {
-		return
-	}
-	defer stopHeartbeat()
-	channelID, detach, err := r.svc.AttachClient(c.Request.Context(), route, peer)
+	channelID, detach, err := r.svc.AttachClient(c.Request.Context(), route, conn)
 	if err != nil {
 		return
 	}
@@ -217,9 +89,6 @@ func (r *Relay) Client(c *gin.Context) {
 	for {
 		messageType, frame, err := conn.ReadMessage()
 		if err != nil {
-			return
-		}
-		if err := r.extendReadDeadline(conn); err != nil {
 			return
 		}
 		if err := r.svc.ForwardClient(c.Request.Context(), route, channelID, messageType, frame); err != nil {

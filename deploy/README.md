@@ -104,6 +104,7 @@ helm upgrade --install agentre-server ./deploy/helm \
 | `ingress.host` | 对外域名 |
 | `ingress.tlsSecretName` | 证书 Secret 的名字，置空则不开 TLS |
 | `ingress.className` | ingress controller，默认 `k3s-main-nginx` |
+| `ingress.annotations` | NGINX 入口注解；WebSocket 的 `proxy-read-timeout` 和 `proxy-send-timeout` 默认均为 3600 秒 |
 | `appConfig.env` | `prod` / `pre` / `test`，同时决定读 etcd 的哪一份配置 |
 | `etcdConfig.endpoints` / `password` | 配置中心 |
 | `autoscaling.enabled` | 自动扩缩 |

@@ -10,6 +10,7 @@ import (
 	"agentre-server/internal/controller/device_ctr"
 	"agentre-server/internal/controller/healthz_ctr"
 	"agentre-server/internal/controller/relay_ctr"
+	"agentre-server/internal/controller/relay_ctr/relayws"
 	"agentre-server/internal/middleware"
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/service/relay_svc"
@@ -17,9 +18,10 @@ import (
 
 // RouterDeps 由 main.go 注入。
 type RouterDeps struct {
-	Cfg    *bootstrap.ServerConfig
-	Signer *jwt.Signer
-	Relay  relay_svc.RelaySvc
+	Cfg            *bootstrap.ServerConfig
+	Signer         *jwt.Signer
+	Relay          relay_svc.RelaySvc
+	RelayTransport relayws.Transport
 }
 
 // Router 构造完整路由树。
@@ -33,7 +35,11 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if relaySvc == nil {
 		relaySvc = relay_svc.Default()
 	}
-	relayCtr := relay_ctr.New(relaySvc)
+	relayTransport := r.RelayTransport
+	if relayTransport == nil {
+		relayTransport = relayws.New(relayws.DefaultTiming())
+	}
+	relayCtr := relay_ctr.New(relaySvc, relayTransport)
 
 	// 公开
 	g.Group("/").Bind(
