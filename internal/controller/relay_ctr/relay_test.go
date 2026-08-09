@@ -33,17 +33,19 @@ import (
 )
 
 type relayStub struct {
-	daemonRoute    relay_svc.Route
-	daemonErr      error
-	clientErr      error
-	registered     chan struct{}
-	renewed        chan struct{}
-	daemonFrames   chan struct{}
-	clientFrames   chan struct{}
-	daemonDetached chan struct{}
-	clientDetached chan struct{}
-	daemonWriters  chan relay_svc.FrameWriter
-	clientWriters  chan relay_svc.FrameWriter
+	daemonRoute       relay_svc.Route
+	daemonErr         error
+	clientErr         error
+	registered        chan struct{}
+	renewed           chan struct{}
+	daemonFrames      chan struct{}
+	clientFrames      chan struct{}
+	daemonForwardErrs chan error
+	clientForwardErrs chan error
+	daemonDetached    chan struct{}
+	clientDetached    chan struct{}
+	daemonWriters     chan relay_svc.FrameWriter
+	clientWriters     chan relay_svc.FrameWriter
 }
 
 func (s *relayStub) PrepareDaemon(context.Context, int64, int64, string) (relay_svc.Route, error) {
@@ -111,7 +113,12 @@ func (s *relayStub) ForwardDaemon(context.Context, relay_svc.Route, int, []byte)
 	case s.daemonFrames <- struct{}{}:
 	default:
 	}
-	return nil
+	select {
+	case err := <-s.daemonForwardErrs:
+		return err
+	default:
+		return nil
+	}
 }
 
 func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, string, int, []byte) error {
@@ -119,7 +126,12 @@ func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, string, int,
 	case s.clientFrames <- struct{}{}:
 	default:
 	}
-	return nil
+	select {
+	case err := <-s.clientForwardErrs:
+		return err
+	default:
+		return nil
+	}
 }
 
 func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
@@ -417,6 +429,53 @@ func TestRelayLifecycleDaemonPingRenewsRouteAndExtendsReadLiveness(t *testing.T)
 	time.Sleep(40 * time.Millisecond)
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayEnvelope("channel-id", []byte("response"))))
 	receiveWithin(t, stub.daemonFrames, time.Second, "daemon ping did not extend read liveness")
+}
+
+func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
+	timing := relay_ctr.LifecycleTiming{
+		HeartbeatInterval: time.Hour,
+		ReadTimeout:       time.Second,
+		WriteTimeout:      time.Second,
+	}
+	stub := newLifecycleRelayStub()
+	stub.daemonForwardErrs = make(chan error, 2)
+	stub.daemonForwardErrs <- relay_svc.ErrForwardFailed
+	stub.daemonForwardErrs <- nil
+	server, _ := newLifecycleRelayServer(t, stub, "/v1/relay/daemon", timing, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	require.NoError(t, conn.WriteMessage(
+		websocket.BinaryMessage, relayEnvelope("stale-channel", []byte("late-response")),
+	))
+	receiveWithin(t, stub.daemonFrames, time.Second, "failed daemon response did not reach forwarding")
+	require.NoError(t, conn.WriteMessage(
+		websocket.BinaryMessage, relayEnvelope("live-channel", []byte("later-response")),
+	))
+	receiveWithin(t, stub.daemonFrames, time.Second,
+		"client delivery failure closed the shared daemon websocket before a later response")
+}
+
+func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
+	timing := relay_ctr.LifecycleTiming{
+		HeartbeatInterval: time.Hour,
+		ReadTimeout:       time.Second,
+		WriteTimeout:      time.Second,
+	}
+	stub := newLifecycleRelayStub()
+	stub.clientForwardErrs = make(chan error, 1)
+	stub.clientForwardErrs <- relay_svc.ErrForwardFailed
+	server, _ := newLifecycleRelayServer(t, stub, "/v1/relay/client", timing, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/client"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, []byte("request")))
+	receiveWithin(t, stub.clientFrames, time.Second, "failed client request did not reach forwarding")
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.Error(t, err)
 }
 
 func TestRelayLifecycleUnresponsivePeersCloseAndDetach(t *testing.T) {

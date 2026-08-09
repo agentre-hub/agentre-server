@@ -179,6 +179,11 @@ func (r *Relay) Daemon(c *gin.Context) {
 			return
 		}
 		if err := r.svc.ForwardDaemon(c.Request.Context(), route, messageType, frame); err != nil {
+			// daemon websocket 由所有客户端通道共享。单个客户端已经断开或写入失败时，
+			// service 仍须如实返回转发失败，但不能因此关闭其它通道共用的物理连接。
+			if errors.Is(err, relay_svc.ErrForwardFailed) {
+				continue
+			}
 			return
 		}
 	}

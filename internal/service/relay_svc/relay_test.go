@@ -112,6 +112,13 @@ func requireRelayStreamDrained(t *testing.T, client *goredis.Client, stream stri
 	require.Zero(t, pending.Count, "relay frame remained pending")
 }
 
+func requireNoDeliveryAck(t *testing.T, client *goredis.Client, stream string) {
+	t.Helper()
+	keys, err := client.Keys(context.Background(), stream+":ack:*").Result()
+	require.NoError(t, err)
+	require.Empty(t, keys, "undelivered relay frame received a delivery acknowledgement")
+}
+
 // 中转客户端断开时,daemon 必须收到该通道的「空载荷信封」。共享的 relay websocket
 // 还开着,所以整链路的断开事件不会触发 —— 没有这个逐通道信号,daemon 侧就留下一个
 // 幽灵对端:MCP 隧道(R11)会把工具请求发给一条永远不会回应的通道,调用方只能干等到
@@ -350,7 +357,7 @@ func TestRedisForwarderMalformedFrameIsDeletedAndAcknowledgedWithoutDeliveryAck(
 	require.ErrorIs(t, client.Get(context.Background(), ack).Err(), goredis.Nil)
 }
 
-func TestRedisForwarderRemoteMissingClientTargetPreservesDropBehavior(t *testing.T) {
+func TestRedisForwarderRemoteMissingClientTargetReturnsForwardingErrorWithoutDeliveryAck(t *testing.T) {
 	mini := miniredis.RunT(t)
 	clientA := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
 	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
@@ -360,6 +367,7 @@ func TestRedisForwarderRemoteMissingClientTargetPreservesDropBehavior(t *testing
 	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
 	forwarderA := NewRedisForwarder(configA, clientA)
 	forwarderB := NewRedisForwarder(configB, clientB)
+	svc := New(configA, nil, clientA, forwarderA)
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configA.InstanceID}
 
 	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
@@ -372,37 +380,40 @@ func TestRedisForwarderRemoteMissingClientTargetPreservesDropBehavior(t *testing
 	require.NoError(t, clientB.Set(
 		context.Background(), clientChannelKey(route, staleChannel), configB.InstanceID, time.Second,
 	).Err())
+	envelope, err := wrapEnvelope(staleChannel, []byte("late-response"))
+	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	require.NoError(t, forwarderA.Forward(
-		ctx, route, PeerDaemon, staleChannel, 2, []byte("late-response"),
-	))
-	requireRelayStreamDrained(t, clientB, streamKey(Route{
+	forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
+	stream := streamKey(Route{
 		AccountID: route.AccountID, Fingerprint: route.Fingerprint, InstanceID: configB.InstanceID,
-	}))
+	})
+	requireRelayStreamDrained(t, clientB, stream)
+	requireNoDeliveryAck(t, clientB, stream)
+	require.ErrorIs(t, forwardErr, ErrForwardFailed)
 }
 
-func TestRedisForwarderLocalMissingClientTargetPreservesExistingDropBehavior(t *testing.T) {
+func TestRedisForwarderLocalMissingClientTargetReturnsForwardingError(t *testing.T) {
 	mini := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	forwarder := NewRedisForwarder(config, client)
+	svc := New(config, nil, client, forwarder)
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
 	channelID := "stale-local-channel"
 
 	require.NoError(t, client.Set(
 		context.Background(), clientChannelKey(route, channelID), config.InstanceID, time.Second,
 	).Err())
-	require.NoError(t, forwarder.Forward(
-		context.Background(), route, PeerDaemon, channelID, 2, []byte("late-response"),
-	))
+	envelope, err := wrapEnvelope(channelID, []byte("late-response"))
+	require.NoError(t, err)
+	require.ErrorIs(t, svc.ForwardDaemon(context.Background(), route, 2, envelope), ErrForwardFailed)
 }
 
-// daemon websocket 是所有客户端通道共享的。某个客户端在响应写入时已经断开，
-// 只能丢弃该通道的晚到响应；不能把客户端写失败返回给 ForwardDaemon，继而由
-// controller 关闭共享 daemon websocket。这个语义不得因客户端是否跨实例而漂移。
-func TestRedisForwarderClientWriteFailurePreservesSharedDaemonConnection(t *testing.T) {
+// 客户端写入失败必须如实返回转发错误；若跨实例，未完成的 socket 写入不得生成
+// delivery ACK。共享 daemon websocket 是否继续由 controller 的连接编排负责。
+func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliveryAck(t *testing.T) {
 	for _, remote := range []bool{false, true} {
 		name := "local"
 		if remote {
@@ -426,6 +437,7 @@ func TestRedisForwarderClientWriteFailurePreservesSharedDaemonConnection(t *test
 			if remote {
 				clientForwarder = NewRedisForwarder(clientConfig, clientRedis)
 			}
+			svc := New(daemonConfig, nil, daemonRedis, daemonForwarder)
 			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: daemonConfig.InstanceID}
 			channelID := "closing-client"
 			writer := &failingFrameWriter{writes: make(chan recordedFrame, 1)}
@@ -434,19 +446,22 @@ func TestRedisForwarderClientWriteFailurePreservesSharedDaemonConnection(t *test
 			require.NoError(t, err)
 			t.Cleanup(detach)
 
+			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
+			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 			defer cancel()
-			require.NoError(t, daemonForwarder.Forward(
-				ctx, route, PeerDaemon, channelID, 2, []byte("late-response"),
-			))
+			forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
 			received := receiveRecordedFrame(t, writer.writes)
 			require.Equal(t, []byte("late-response"), received.frame)
 			if remote {
-				requireRelayStreamDrained(t, clientRedis, streamKey(Route{
+				stream := streamKey(Route{
 					AccountID: route.AccountID, Fingerprint: route.Fingerprint,
 					InstanceID: clientConfig.InstanceID,
-				}))
+				})
+				requireRelayStreamDrained(t, clientRedis, stream)
+				requireNoDeliveryAck(t, clientRedis, stream)
 			}
+			require.ErrorIs(t, forwardErr, ErrForwardFailed)
 		})
 	}
 }
