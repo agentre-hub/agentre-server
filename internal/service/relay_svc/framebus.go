@@ -282,9 +282,9 @@ func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 					// 让它变得可投递,而发布方最多只等 deliveryWaitTimeout。把它留在 PEL
 					// 里重读只会让队头堵死整条 stream:pending 被置回 true,下一轮又只读
 					// "0"、又是同一条队头,">" 永远轮不到 —— 同一条 stream 上其它收件人
-					// (还连着的客户端通道)的帧从此一条也进不来。所以确认掉它、但**不**写
+					// (还连着的客户端通道)的帧从此一条也进不来。所以删掉并确认它、但**不**写
 					// 投递回执:发布方的 waitForAck 照常超时,如实收到转发失败。
-					if ackErr := f.redis.XAck(ctx, stream, frameBusGroup, message.ID).Err(); ackErr != nil {
+					if ackErr := f.acknowledgeFrame(ctx, stream, message.ID, ""); ackErr != nil {
 						pending = true
 						break
 					}
@@ -293,17 +293,25 @@ func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 						zap.String("messageID", message.ID), zap.Error(err))
 					continue
 				}
-				if err := f.redis.XAck(ctx, stream, frameBusGroup, message.ID).Err(); err != nil {
-					pending = true
-					break
-				}
-				if err := f.redis.Set(ctx, ack, "1", f.ttl).Err(); err != nil {
+				if err := f.acknowledgeFrame(ctx, stream, message.ID, ack); err != nil {
 					pending = true
 					break
 				}
 			}
 		}
 	}
+}
+
+func (f *redisForwarder) acknowledgeFrame(ctx context.Context, stream, messageID, ack string) error {
+	_, err := f.redis.TxPipelined(ctx, func(pipe goredis.Pipeliner) error {
+		pipe.XDel(ctx, stream, messageID)
+		pipe.XAck(ctx, stream, frameBusGroup, messageID)
+		if ack != "" {
+			pipe.Set(ctx, ack, "1", f.ttl)
+		}
+		return nil
+	})
+	return err
 }
 
 func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, messageType int, frame []byte) error {
