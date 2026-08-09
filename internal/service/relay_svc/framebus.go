@@ -20,6 +20,8 @@ const (
 	deliveryWaitTimeout = 5 * time.Second
 )
 
+var errLocalTargetMissing = errors.New("local relay target is missing")
+
 // FrameWriter 抽象 websocket 的单帧写入，使帧总线不依赖 HTTP 控制器。
 type FrameWriter interface {
 	WriteMessage(messageType int, data []byte) error
@@ -127,7 +129,7 @@ func (f *redisForwarder) Forward(ctx context.Context, target Route, source Peer,
 			return err
 		}
 		if !found {
-			return errors.New("relay client channel is not attached")
+			return nil
 		}
 		peer = PeerClient
 	default:
@@ -135,7 +137,11 @@ func (f *redisForwarder) Forward(ctx context.Context, target Route, source Peer,
 	}
 
 	if destination.InstanceID == f.instanceID {
-		return f.deliver(streamKey(destination), peer, channelID, messageType, frame)
+		err := f.deliver(streamKey(destination), peer, channelID, messageType, frame)
+		if source == PeerDaemon && errors.Is(err, errLocalTargetMissing) {
+			return nil
+		}
+		return err
 	}
 	return f.publishAndWait(ctx, destination, peer, channelID, messageType, frame)
 }
@@ -325,7 +331,7 @@ func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, mes
 	}
 	f.mu.Unlock()
 	if len(peers) == 0 {
-		return fmt.Errorf("no local %s relay websocket", peer)
+		return fmt.Errorf("%w: no local %s relay websocket", errLocalTargetMissing, peer)
 	}
 	for _, attachment := range peers {
 		attachment.mu.Lock()

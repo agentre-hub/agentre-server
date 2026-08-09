@@ -393,22 +393,35 @@ func TestRedisForwarderRemoteMissingClientTargetReturnsForwardingErrorWithoutDel
 	require.ErrorIs(t, forwardErr, ErrForwardFailed)
 }
 
-func TestRedisForwarderLocalMissingClientTargetReturnsForwardingError(t *testing.T) {
-	mini := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
-	forwarder := NewRedisForwarder(config, client)
-	svc := New(config, nil, client, forwarder)
-	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
-	channelID := "stale-local-channel"
+func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStream(t *testing.T) {
+	for _, stalePresence := range []bool{false, true} {
+		name := "presence-absent"
+		if stalePresence {
+			name = "stale-local-presence"
+		}
+		t.Run(name, func(t *testing.T) {
+			mini := miniredis.RunT(t)
+			client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+			t.Cleanup(func() { require.NoError(t, client.Close()) })
+			config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+			forwarder := NewRedisForwarder(config, client)
+			svc := New(config, nil, client, forwarder)
+			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+			channelID := "stale-local-channel"
 
-	require.NoError(t, client.Set(
-		context.Background(), clientChannelKey(route, channelID), config.InstanceID, time.Second,
-	).Err())
-	envelope, err := wrapEnvelope(channelID, []byte("late-response"))
-	require.NoError(t, err)
-	require.ErrorIs(t, svc.ForwardDaemon(context.Background(), route, 2, envelope), ErrForwardFailed)
+			if stalePresence {
+				require.NoError(t, client.Set(
+					context.Background(), clientChannelKey(route, channelID), config.InstanceID, time.Second,
+				).Err())
+			}
+			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
+			require.NoError(t, err)
+			require.NoError(t, svc.ForwardDaemon(context.Background(), route, 2, envelope))
+			length, err := client.XLen(context.Background(), streamKey(route)).Result()
+			require.NoError(t, err)
+			require.Zero(t, length)
+		})
+	}
 }
 
 // 客户端写入失败必须如实返回转发错误；若跨实例，未完成的 socket 写入不得生成
