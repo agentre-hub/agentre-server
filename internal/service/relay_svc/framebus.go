@@ -48,13 +48,13 @@ type attachedPeer struct {
 	mu        sync.Mutex
 }
 
-type noLocalDeliveryTargetError struct {
-	peer Peer
+type localDeliveryError struct {
+	peer  Peer
+	cause error
 }
 
-func (e *noLocalDeliveryTargetError) Error() string {
-	return fmt.Sprintf("no local %s relay websocket", e.peer)
-}
+func (e *localDeliveryError) Error() string { return e.cause.Error() }
+func (e *localDeliveryError) Unwrap() error { return e.cause }
 
 // NewRedisForwarder 创建以 Redis Stream 为后端的帧总线。每个目标实例拥有
 // 一个 stream；消费者只会在本实例有 websocket 附着时运行。
@@ -144,7 +144,7 @@ func (f *redisForwarder) Forward(ctx context.Context, target Route, source Peer,
 
 	if destination.InstanceID == f.instanceID {
 		err := f.deliver(streamKey(destination), peer, channelID, messageType, frame)
-		if isMissingLocalClientTarget(peer, err) {
+		if isDiscardableClientDeliveryError(err) {
 			return nil
 		}
 		return err
@@ -289,9 +289,10 @@ func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 				if err == nil {
 					err = f.deliver(stream, peer, channelID, messageType, frame)
 				}
-				if isMissingLocalClientTarget(peer, err) {
-					// 客户端可能在 daemon 响应到达前断开。与同实例投递一致，晚到的响应
-					// 视为已处理并丢弃，不能让一个已关闭通道拖断共享的 daemon websocket。
+				if isDiscardableClientDeliveryError(err) {
+					// 客户端可能在 daemon 响应到达前断开，或在写入响应时暴露出已断开。
+					// 与同实例投递一致，晚到的响应视为已处理并丢弃，不能让一个已关闭
+					// 通道拖断共享的 daemon websocket。
 					err = nil
 				}
 				if err != nil {
@@ -331,9 +332,9 @@ func (f *redisForwarder) acknowledgeFrame(ctx context.Context, stream, messageID
 	return err
 }
 
-func isMissingLocalClientTarget(peer Peer, err error) bool {
-	var noTarget *noLocalDeliveryTargetError
-	return peer == PeerClient && errors.As(err, &noTarget)
+func isDiscardableClientDeliveryError(err error) bool {
+	var deliveryErr *localDeliveryError
+	return errors.As(err, &deliveryErr) && deliveryErr.peer == PeerClient
 }
 
 func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, messageType int, frame []byte) error {
@@ -347,14 +348,18 @@ func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, mes
 	}
 	f.mu.Unlock()
 	if len(peers) == 0 {
-		return &noLocalDeliveryTargetError{peer: peer}
+		return &localDeliveryError{
+			peer: peer, cause: fmt.Errorf("no local %s relay websocket", peer),
+		}
 	}
 	for _, attachment := range peers {
 		attachment.mu.Lock()
 		err := attachment.writer.WriteMessage(messageType, frame)
 		attachment.mu.Unlock()
 		if err != nil {
-			return fmt.Errorf("write relay %s frame: %w", peer, err)
+			return &localDeliveryError{
+				peer: peer, cause: fmt.Errorf("write relay %s frame: %w", peer, err),
+			}
 		}
 	}
 	return nil

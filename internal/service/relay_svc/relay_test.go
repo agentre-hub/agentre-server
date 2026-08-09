@@ -94,6 +94,13 @@ func (w *recordingFrameWriter) WriteMessage(messageType int, frame []byte) error
 	return nil
 }
 
+type failingFrameWriter struct{ writes chan recordedFrame }
+
+func (w *failingFrameWriter) WriteMessage(messageType int, frame []byte) error {
+	w.writes <- recordedFrame{messageType: messageType, frame: frame}
+	return errors.New("relay client websocket is closed")
+}
+
 func requireRelayStreamDrained(t *testing.T, client *goredis.Client, stream string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -390,6 +397,69 @@ func TestRedisForwarderLocalMissingClientTargetPreservesExistingDropBehavior(t *
 	require.NoError(t, forwarder.Forward(
 		context.Background(), route, PeerDaemon, channelID, 2, []byte("late-response"),
 	))
+}
+
+// daemon websocket 是所有客户端通道共享的。某个客户端在响应写入时已经断开，
+// 只能丢弃该通道的晚到响应；不能把客户端写失败返回给 ForwardDaemon，继而由
+// controller 关闭共享 daemon websocket。这个语义不得因客户端是否跨实例而漂移。
+func TestRedisForwarderClientWriteFailurePreservesSharedDaemonConnection(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		name := "local"
+		if remote {
+			name = "remote"
+		}
+		t.Run(name, func(t *testing.T) {
+			mini := miniredis.RunT(t)
+			daemonRedis := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+			clientRedis := daemonRedis
+			t.Cleanup(func() { require.NoError(t, daemonRedis.Close()) })
+
+			daemonConfig := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+			clientConfig := daemonConfig
+			if remote {
+				clientConfig.InstanceID = "server-b"
+				clientRedis = goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+				t.Cleanup(func() { require.NoError(t, clientRedis.Close()) })
+			}
+			daemonForwarder := NewRedisForwarder(daemonConfig, daemonRedis)
+			clientForwarder := daemonForwarder
+			if remote {
+				clientForwarder = NewRedisForwarder(clientConfig, clientRedis)
+			}
+			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: daemonConfig.InstanceID}
+			channelID := "closing-client"
+			writer := &failingFrameWriter{writes: make(chan recordedFrame, 1)}
+			detach, err := clientForwarder.(AttachmentForwarder).Attach(
+				context.Background(), route, PeerClient, channelID, writer)
+			require.NoError(t, err)
+			t.Cleanup(detach)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			require.NoError(t, daemonForwarder.Forward(
+				ctx, route, PeerDaemon, channelID, 2, []byte("late-response"),
+			))
+			received := receiveRecordedFrame(t, writer.writes)
+			require.Equal(t, []byte("late-response"), received.frame)
+			if remote {
+				requireRelayStreamDrained(t, clientRedis, streamKey(Route{
+					AccountID: route.AccountID, Fingerprint: route.Fingerprint,
+					InstanceID: clientConfig.InstanceID,
+				}))
+			}
+		})
+	}
+}
+
+func receiveRecordedFrame(t *testing.T, frames <-chan recordedFrame) recordedFrame {
+	t.Helper()
+	select {
+	case frame := <-frames:
+		return frame
+	case <-time.After(time.Second):
+		t.Fatal("relay client write was not attempted")
+		return recordedFrame{}
+	}
 }
 
 // 退避阶梯必须单调不减、且永不越过自己声明的上限 —— 它是 Redis 抖动时唯一的
