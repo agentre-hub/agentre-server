@@ -23,6 +23,7 @@ import (
 
 	"agentre-server/internal/api"
 	"agentre-server/internal/bootstrap"
+	"agentre-server/internal/controller/relay_ctr"
 	"agentre-server/internal/model/entity/device_entity"
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/pkg/jwt"
@@ -32,13 +33,17 @@ import (
 )
 
 type relayStub struct {
-	daemonRoute  relay_svc.Route
-	daemonErr    error
-	clientErr    error
-	registered   chan struct{}
-	renewed      chan struct{}
-	daemonFrames chan struct{}
-	clientFrames chan struct{}
+	daemonRoute    relay_svc.Route
+	daemonErr      error
+	clientErr      error
+	registered     chan struct{}
+	renewed        chan struct{}
+	daemonFrames   chan struct{}
+	clientFrames   chan struct{}
+	daemonDetached chan struct{}
+	clientDetached chan struct{}
+	daemonWriters  chan relay_svc.FrameWriter
+	clientWriters  chan relay_svc.FrameWriter
 }
 
 func (s *relayStub) PrepareDaemon(context.Context, int64, int64, string) (relay_svc.Route, error) {
@@ -75,12 +80,30 @@ func (s *relayStub) IsDaemonOnline(context.Context, int64, string) (bool, error)
 	return false, nil
 }
 
-func (s *relayStub) AttachDaemon(context.Context, relay_svc.Route, relay_svc.FrameWriter) (func(), error) {
-	return func() {}, nil
+func (s *relayStub) AttachDaemon(_ context.Context, _ relay_svc.Route, writer relay_svc.FrameWriter) (func(), error) {
+	select {
+	case s.daemonWriters <- writer:
+	default:
+	}
+	return func() {
+		select {
+		case s.daemonDetached <- struct{}{}:
+		default:
+		}
+	}, nil
 }
 
-func (s *relayStub) AttachClient(context.Context, relay_svc.Route, relay_svc.FrameWriter) (string, func(), error) {
-	return "channel-id", func() {}, nil
+func (s *relayStub) AttachClient(_ context.Context, _ relay_svc.Route, writer relay_svc.FrameWriter) (string, func(), error) {
+	select {
+	case s.clientWriters <- writer:
+	default:
+	}
+	return "channel-id", func() {
+		select {
+		case s.clientDetached <- struct{}{}:
+		default:
+		}
+	}, nil
 }
 
 func (s *relayStub) ForwardDaemon(context.Context, relay_svc.Route, int, []byte) error {
@@ -171,6 +194,263 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	case <-stub.clientFrames:
 	case <-time.After(time.Second):
 		t.Fatal("client frame did not reach the forwarding seam")
+	}
+}
+
+func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name       string
+		path       string
+		kind       string
+		daemonWire bool
+		framesOf   func(*relayStub) <-chan struct{}
+		detachedOf func(*relayStub) <-chan struct{}
+	}{
+		{
+			name: "daemon", path: "/v1/relay/daemon", kind: device_entity.KindAgentred, daemonWire: true,
+			framesOf:   func(stub *relayStub) <-chan struct{} { return stub.daemonFrames },
+			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.daemonDetached },
+		},
+		{
+			name: "client", path: "/v1/relay/client?daemon_fingerprint=fp-daemon", kind: device_entity.KindDesktop,
+			framesOf:   func(stub *relayStub) <-chan struct{} { return stub.clientFrames },
+			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.clientDetached },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &relayStub{
+				daemonRoute: relay_svc.Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"},
+				registered:  make(chan struct{}, 1), renewed: make(chan struct{}, 1),
+				daemonFrames: make(chan struct{}, 1), clientFrames: make(chan struct{}, 1),
+				daemonDetached: make(chan struct{}, 1), clientDetached: make(chan struct{}, 1),
+			}
+			server := newRelayServer(t, signer, stub)
+			token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: tc.kind}, time.Hour)
+			require.NoError(t, err)
+			conn, _, err := websocket.DefaultDialer.Dial(
+				wsURL(server.URL, tc.path), http.Header{"Authorization": {"Bearer " + token}},
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = conn.Close() })
+
+			require.NoError(t, conn.SetWriteDeadline(time.Now().Add(2*time.Second)))
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize(10<<20, tc.daemonWire)))
+			receiveWithin(t, tc.framesOf(stub), time.Second, "10 MiB relay message was not accepted")
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize((10<<20)+1, tc.daemonWire)))
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			_, _, err = conn.ReadMessage()
+			require.True(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig), err)
+			select {
+			case <-tc.detachedOf(stub):
+			case <-time.After(time.Second):
+				t.Fatal("oversized relay peer did not run detach cleanup")
+			}
+		})
+	}
+}
+
+func TestRelayLifecycleUsesApprovedDeadlinesAndPreservesOutboundFrames(t *testing.T) {
+	timing := relay_ctr.DefaultLifecycleTiming()
+	require.Equal(t, 15*time.Second, timing.HeartbeatInterval)
+	require.Equal(t, 45*time.Second, timing.ReadTimeout)
+	require.Equal(t, 10*time.Second, timing.WriteTimeout)
+
+	for _, tc := range []struct {
+		name     string
+		path     string
+		writerOf func(*relayStub) <-chan relay_svc.FrameWriter
+	}{
+		{
+			name: "daemon", path: "/v1/relay/daemon",
+			writerOf: func(stub *relayStub) <-chan relay_svc.FrameWriter { return stub.daemonWriters },
+		},
+		{
+			name: "client", path: "/v1/relay/client",
+			writerOf: func(stub *relayStub) <-chan relay_svc.FrameWriter { return stub.clientWriters },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newLifecycleRelayStub()
+			server, deadlines := newLifecycleRelayServer(t, stub, tc.path, timing, true)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = conn.Close() })
+
+			writer := receiveWithin(t, tc.writerOf(stub), time.Second, "relay writer was not attached")
+			requireDeadlineWithin(t, deadlines, "read", timing.ReadTimeout)
+			require.NoError(t, writer.WriteMessage(websocket.BinaryMessage, []byte("response")))
+			requireDeadlineWithin(t, deadlines, "write", timing.WriteTimeout)
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			messageType, frame, err := conn.ReadMessage()
+			require.NoError(t, err)
+			require.Equal(t, websocket.BinaryMessage, messageType)
+			require.Equal(t, []byte("response"), frame)
+		})
+	}
+}
+
+func TestRelayLifecycleServerHeartbeatsKeepBothPeerTypesAlive(t *testing.T) {
+	timing := relay_ctr.LifecycleTiming{
+		HeartbeatInterval: 10 * time.Millisecond,
+		ReadTimeout:       70 * time.Millisecond,
+		WriteTimeout:      30 * time.Millisecond,
+	}
+	for _, tc := range []struct {
+		name     string
+		path     string
+		frame    []byte
+		framesOf func(*relayStub) <-chan struct{}
+	}{
+		{
+			name: "daemon", path: "/v1/relay/daemon", frame: relayEnvelope("channel-id", []byte("response")),
+			framesOf: func(stub *relayStub) <-chan struct{} { return stub.daemonFrames },
+		},
+		{
+			name: "client", path: "/v1/relay/client", frame: []byte("request"),
+			framesOf: func(stub *relayStub) <-chan struct{} { return stub.clientFrames },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newLifecycleRelayStub()
+			server, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = conn.Close() })
+
+			pings := make(chan struct{}, 16)
+			conn.SetPingHandler(func(appData string) error {
+				select {
+				case pings <- struct{}{}:
+				default:
+				}
+				return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(time.Second))
+			})
+			go drainRelayConnection(conn)
+
+			for range 8 {
+				receiveWithin(t, pings, time.Second, "server heartbeat ping was not received")
+			}
+			if tc.name == "daemon" {
+				receiveWithin(t, stub.renewed, time.Second, "daemon pong did not renew its route")
+			} else {
+				select {
+				case <-stub.renewed:
+					t.Fatal("client heartbeat created daemon route renewal")
+				default:
+				}
+			}
+
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, tc.frame))
+			receiveWithin(t, tc.framesOf(stub), time.Second, "heartbeat-compliant peer stopped carrying frames")
+		})
+	}
+}
+
+func TestRelayLifecycleInboundDataExtendsReadLiveness(t *testing.T) {
+	timing := relay_ctr.LifecycleTiming{
+		HeartbeatInterval: time.Hour,
+		ReadTimeout:       50 * time.Millisecond,
+		WriteTimeout:      30 * time.Millisecond,
+	}
+	for _, tc := range []struct {
+		name     string
+		path     string
+		frame    []byte
+		framesOf func(*relayStub) <-chan struct{}
+	}{
+		{
+			name: "daemon", path: "/v1/relay/daemon", frame: relayEnvelope("channel-id", []byte("response")),
+			framesOf: func(stub *relayStub) <-chan struct{} { return stub.daemonFrames },
+		},
+		{
+			name: "client", path: "/v1/relay/client", frame: []byte("request"),
+			framesOf: func(stub *relayStub) <-chan struct{} { return stub.clientFrames },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newLifecycleRelayStub()
+			server, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = conn.Close() })
+
+			for range 4 {
+				time.Sleep(timing.ReadTimeout / 2)
+				require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, tc.frame))
+				receiveWithin(t, tc.framesOf(stub), time.Second, "inbound data did not reach forwarding")
+			}
+		})
+	}
+}
+
+func TestRelayLifecycleDaemonPingRenewsRouteAndExtendsReadLiveness(t *testing.T) {
+	timing := relay_ctr.LifecycleTiming{
+		HeartbeatInterval: time.Hour,
+		ReadTimeout:       60 * time.Millisecond,
+		WriteTimeout:      30 * time.Millisecond,
+	}
+	stub := newLifecycleRelayStub()
+	server, _ := newLifecycleRelayServer(t, stub, "/v1/relay/daemon", timing, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	pongs := make(chan struct{}, 1)
+	conn.SetPongHandler(func(string) error {
+		select {
+		case pongs <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	go drainRelayConnection(conn)
+
+	time.Sleep(40 * time.Millisecond)
+	require.NoError(t, conn.WriteControl(websocket.PingMessage, []byte("route"), time.Now().Add(time.Second)))
+	receiveWithin(t, stub.renewed, time.Second, "daemon ping did not renew its route")
+	receiveWithin(t, pongs, time.Second, "daemon ping did not receive a pong")
+	time.Sleep(40 * time.Millisecond)
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayEnvelope("channel-id", []byte("response"))))
+	receiveWithin(t, stub.daemonFrames, time.Second, "daemon ping did not extend read liveness")
+}
+
+func TestRelayLifecycleUnresponsivePeersCloseAndDetach(t *testing.T) {
+	timing := relay_ctr.LifecycleTiming{
+		HeartbeatInterval: time.Hour,
+		ReadTimeout:       40 * time.Millisecond,
+		WriteTimeout:      20 * time.Millisecond,
+	}
+	for _, tc := range []struct {
+		name       string
+		path       string
+		detachedOf func(*relayStub) <-chan struct{}
+	}{
+		{
+			name: "daemon", path: "/v1/relay/daemon",
+			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.daemonDetached },
+		},
+		{
+			name: "client", path: "/v1/relay/client",
+			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.clientDetached },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := newLifecycleRelayStub()
+			server, _ := newLifecycleRelayServer(t, stub, tc.path, timing, false)
+			conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, tc.path), nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = conn.Close() })
+
+			receiveWithin(t, tc.detachedOf(stub), time.Second, "unresponsive relay peer did not detach")
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			_, _, err = conn.ReadMessage()
+			require.Error(t, err)
+		})
 	}
 }
 
@@ -335,6 +615,17 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	require.True(t, networkErr.Timeout())
 }
 
+func relayPayloadOfSize(size int, daemonWire bool) []byte {
+	payload := make([]byte, size)
+	if !daemonWire {
+		return payload
+	}
+	channelID := "channel-id"
+	binary.BigEndian.PutUint16(payload[:2], uint16(len(channelID)))
+	copy(payload[2:], channelID)
+	return payload
+}
+
 func relayEnvelope(channelID string, frame []byte) []byte {
 	payload := make([]byte, 2+len(channelID)+len(frame))
 	binary.BigEndian.PutUint16(payload, uint16(len(channelID)))
@@ -376,6 +667,125 @@ func newRelayRedisClient(t *testing.T, mini *miniredis.Miniredis) *goredis.Clien
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	return client
+}
+
+func newLifecycleRelayStub() *relayStub {
+	return &relayStub{
+		daemonRoute: relay_svc.Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"},
+		registered:  make(chan struct{}, 1), renewed: make(chan struct{}, 16),
+		daemonFrames: make(chan struct{}, 16), clientFrames: make(chan struct{}, 16),
+		daemonDetached: make(chan struct{}, 1), clientDetached: make(chan struct{}, 1),
+		daemonWriters: make(chan relay_svc.FrameWriter, 1), clientWriters: make(chan relay_svc.FrameWriter, 1),
+	}
+}
+
+func newLifecycleRelayServer(
+	t *testing.T,
+	stub *relayStub,
+	path string,
+	timing relay_ctr.LifecycleTiming,
+	recordDeadlines bool,
+) (*httptest.Server, <-chan deadlineEvent) {
+	t.Helper()
+	controller := relay_ctr.NewWithLifecycleTiming(stub, timing)
+	engine := gin.New()
+	engine.GET(path, func(c *gin.Context) {
+		c.Set("user_id", int64(7))
+		c.Set("device_id", int64(9))
+		if path == "/v1/relay/daemon" {
+			c.Set("device_kind", device_entity.KindAgentred)
+			controller.Daemon(c)
+			return
+		}
+		c.Set("device_kind", device_entity.KindDesktop)
+		controller.Client(c)
+	})
+
+	server := httptest.NewUnstartedServer(engine)
+	var deadlines chan deadlineEvent
+	if recordDeadlines {
+		deadlines = make(chan deadlineEvent, 64)
+		server.Listener = &deadlineRecordingListener{Listener: server.Listener, events: deadlines}
+	}
+	server.Start()
+	t.Cleanup(server.Close)
+	return server, deadlines
+}
+
+type deadlineEvent struct {
+	kind string
+	at   time.Time
+}
+
+type deadlineRecordingListener struct {
+	net.Listener
+	events chan<- deadlineEvent
+}
+
+func (l *deadlineRecordingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &deadlineRecordingConn{Conn: conn, events: l.events}, nil
+}
+
+type deadlineRecordingConn struct {
+	net.Conn
+	events chan<- deadlineEvent
+}
+
+func (c *deadlineRecordingConn) SetReadDeadline(at time.Time) error {
+	select {
+	case c.events <- deadlineEvent{kind: "read", at: at}:
+	default:
+	}
+	return c.Conn.SetReadDeadline(at)
+}
+
+func (c *deadlineRecordingConn) SetWriteDeadline(at time.Time) error {
+	select {
+	case c.events <- deadlineEvent{kind: "write", at: at}:
+	default:
+	}
+	return c.Conn.SetWriteDeadline(at)
+}
+
+func requireDeadlineWithin(t *testing.T, events <-chan deadlineEvent, kind string, duration time.Duration) {
+	t.Helper()
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case event := <-events:
+			remaining := time.Until(event.at)
+			if event.kind == kind && remaining > duration-time.Second && remaining <= duration {
+				return
+			}
+		case <-timer.C:
+			t.Fatalf("relay did not apply %s deadline within %s", kind, duration)
+		}
+	}
+}
+
+func receiveWithin[T any](t *testing.T, values <-chan T, timeout time.Duration, failure string) T {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(timeout):
+		t.Fatal(failure)
+		var zero T
+		return zero
+	}
+}
+
+func drainRelayConnection(conn *websocket.Conn) {
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+	}
 }
 
 func wsURL(httpURL, path string) string {
