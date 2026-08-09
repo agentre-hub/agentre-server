@@ -408,6 +408,7 @@ func TestRelayClientFailureStatusesAreDistinct(t *testing.T) {
 
 func TestRelayFramesCrossServerInstances(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	testutils.Redis()
 	mini := miniredis.RunT(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
