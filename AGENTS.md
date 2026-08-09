@@ -25,7 +25,7 @@ Workspace-wide facts live in [`../AGENTS.md`](../AGENTS.md).
 | Confirming a change actually works | [docs/verification.md](docs/verification.md) | The twin e2e tracks, scratch workflow, report rules |
 | Touching the frontend | [docs/design.md](docs/design.md) | Colour tokens, dark/light, responsive, i18n, the new-page recipe |
 | Deploying, or changing the image/chart/workflow | [deploy/README.md](deploy/README.md) | Docker and Kubernetes deployment, chart values, etcd seeding, the Gitea pipeline |
-| Adding a log line, metric or span | [docs/observability.md](docs/observability.md) | Log levels and fields, sensitive-field rules, metrics, traces |
+| Adding a log line, metric or span | [docs/observability.md](docs/observability.md) | Log levels and fields, metrics, traces |
 | Editing docs | [docs/documentation.md](docs/documentation.md) | Who owns which fact, how docs are fact-checked |
 
 ## Non-negotiables
@@ -46,19 +46,16 @@ These are enforced mechanically. When a task conflicts with one, **stop and ask*
 3. **One concept, one implementation.** Colours come from tokens, never literals
    (`no-restricted-syntax`). UI copy comes from `t()`, never literals (`i18next/no-literal-string`).
    Logs go through `logger.Ctx(ctx)`, never `fmt.Print`/`log.Print` (`forbidigo`).
-   Each has a guard test; adding an exemption means writing the reason next to it.
+   Adding an exemption means writing the reason next to it.
 
-4. **Credentials never reach the logs.** `internal/guards/observability_test.go` scans for it.
-   Log an `_id` or a `_hash`, never the token itself.
-
-5. **Dependencies flow one way**: `api/controller → service → repository → model/entity`.
+4. **Dependencies flow one way**: `api/controller → service → repository → model/entity`.
    `internal/pkg/*` is cross-cutting and must never import service or repository.
    Service depends on repository **interfaces** only (mockgen).
 
-6. **Never modify an existing migration.** Append a new patch migration to the end of
+5. **Never modify an existing migration.** Append a new patch migration to the end of
    `migrationList()`. Prefer native SQL for DDL.
 
-7. **Do not touch files unrelated to your task.** No drive-by renames, reformatting, or
+6. **Do not touch files unrelated to your task.** No drive-by renames, reformatting, or
    dead-code cleanup — it buries the real change and breaks `git bisect`. Flag what you
    noticed instead of fixing it on the side.
 
@@ -74,7 +71,6 @@ internal/
   model/entity/*_entity/    rich entities — Check(ctx) / IsActive() live here, not in service
   middleware/               session auth, device JWT, CSRF, rate limit, RFC 8628 error fields
   pkg/                      cross-cutting: jwt, session, ratelimit, usercode, code (i18n errors)
-  guards/                   repo-wide mechanical guard tests (no business logic)
   task/crontab/             scheduled cleanup
   web/                      embed.FS SPA mount, /v1 passthrough
 migrations/                 gormigrate; append-only

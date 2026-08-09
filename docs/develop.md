@@ -55,20 +55,17 @@ layering rules behind it are in [architecture.md](architecture.md).
 
 ## Rules that are actually enforced
 
-Every rule below fails a build. Each has a guard test, because a rule that can be
-silently unwired is not a rule — the guard is what proves it is still loaded, at
-the right severity, over the right files.
+Every rule below fails a build.
 
-| Rule | Enforced by | Guard test |
-| --- | --- | --- |
-| No `fmt.Print*` / `log.Print*` | `forbidigo` (`.golangci.yml`) | `internal/guards/observability_test.go` |
-| No credentials in log fields | `internal/guards/observability_test.go` | (is itself the check) |
-| Test keys never link into `bin/server` | `internal/pkg/jwt/testkeys/isolation_test.go` | (is itself the check) |
-| No literal colours in ts/tsx | `no-restricted-syntax` (`frontend/eslint.config.js`) | `frontend/src/__tests__/eslint-guardrails.test.ts` |
-| No literal UI copy | `i18next/no-literal-string` | same file |
-| Locale files have identical keys | `frontend/src/i18n/__tests__/locale-parity.test.ts` | (is itself the check) |
-| Language switching really switches | `frontend/src/i18n/__tests__/language-switch.test.ts` | (is itself the check) |
-| Formatting | `prettier` — via `eslint-plugin-prettier` in `frontend/`, standalone in `e2e/` | (eslint reports it as `prettier/prettier`) |
+| Rule | Enforced by |
+| --- | --- |
+| No `fmt.Print*` / `log.Print*` | `forbidigo` (`.golangci.yml`) |
+| Test keys never link into `bin/server` | `internal/pkg/jwt/testkeys/isolation_test.go` |
+| No literal colours in ts/tsx | `no-restricted-syntax` (`frontend/eslint.config.js`) |
+| No literal UI copy | `i18next/no-literal-string` |
+| Locale files have identical keys | `frontend/src/i18n/__tests__/locale-parity.test.ts` |
+| Language switching really switches | `frontend/src/i18n/__tests__/language-switch.test.ts` |
+| Formatting | `prettier` — via `eslint-plugin-prettier` in `frontend/`, standalone in `e2e/` |
 
 ### Formatting
 

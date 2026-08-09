@@ -4,23 +4,23 @@ package relay_ctr
 import (
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 
+	"agentre-server/internal/controller/relay_ctr/relayws"
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/service/relay_svc"
 )
 
-var upgrader = websocket.Upgrader{}
-
 type Relay struct {
-	svc relay_svc.RelaySvc
+	svc       relay_svc.RelaySvc
+	transport relayws.Transport
 }
 
-func New(svc relay_svc.RelaySvc) *Relay { return &Relay{svc: svc} }
+func New(svc relay_svc.RelaySvc) *Relay {
+	return &Relay{svc: svc, transport: relayws.New()}
+}
 
 // Daemon 接收 agentred 的出站连接。在线态只由 Redis TTL 表示；连接断开时
 // 不主动删除，进程失联后也会在最后一次续期后自动消失。
@@ -31,7 +31,9 @@ func (r *Relay) Daemon(c *gin.Context) {
 		relayError(c, err)
 		return
 	}
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, err := r.transport.Upgrade(c.Writer, c.Request, func() error {
+		return r.svc.RenewDaemon(c.Request.Context(), route)
+	})
 	if err != nil {
 		return
 	}
@@ -45,12 +47,6 @@ func (r *Relay) Daemon(c *gin.Context) {
 		return
 	}
 
-	conn.SetPingHandler(func(appData string) error {
-		if err := r.svc.RenewDaemon(c.Request.Context(), route); err != nil {
-			return err
-		}
-		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(time.Second))
-	})
 	for {
 		messageType, frame, err := conn.ReadMessage()
 		if err != nil {
@@ -60,6 +56,11 @@ func (r *Relay) Daemon(c *gin.Context) {
 			return
 		}
 		if err := r.svc.ForwardDaemon(c.Request.Context(), route, messageType, frame); err != nil {
+			// daemon websocket 由所有客户端通道共享。单个客户端已经断开或写入失败时，
+			// service 仍须如实返回转发失败，但不能因此关闭其它通道共用的物理连接。
+			if errors.Is(err, relay_svc.ErrForwardFailed) {
+				continue
+			}
 			return
 		}
 	}
@@ -74,7 +75,7 @@ func (r *Relay) Client(c *gin.Context) {
 		relayError(c, err)
 		return
 	}
-	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	conn, err := r.transport.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
 		return
 	}

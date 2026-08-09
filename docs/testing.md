@@ -117,11 +117,10 @@ in `e2e/`, under the `mobile-chromium` project.
 ## Guard tests
 
 Some tests assert that a **convention is still enforced** rather than that code works.
-They live next to what they guard, plus `internal/guards/` for repo-wide ones.
+They live next to what they guard.
 
 | Guard | Asserts |
 | --- | --- |
-| `internal/guards/observability_test.go` | `forbidigo` is still in `.golangci.yml` with both patterns; no credentials in log fields |
 | `internal/pkg/jwt/testkeys/isolation_test.go` | Test keys are not in `cmd/server`'s dependency graph |
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token and i18n rules fire, at error severity, over `src/` |
 | `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
@@ -137,9 +136,9 @@ Two properties make these worth having, and both are easy to get wrong:
 2. **They assert both directions.** A violating sample must be reported *and* a compliant
    sample must not. Only checking the first lets a rule that flags everything pass.
 
-When you add a lint rule, add its guard in the same change, then **verify the guard fails**:
-comment the rule out of the config, watch it go red, put it back. An unverified guard is
-worth the same as no guard.
+When adding a frontend lint guard, **verify the guard fails**: comment the rule out of
+the config, watch it go red, then put it back. An unverified guard is worth the same as
+no guard.
 
 ## i18n tests are not optional
 

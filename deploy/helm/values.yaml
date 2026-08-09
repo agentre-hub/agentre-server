@@ -57,6 +57,8 @@ ingress:
   className: k3s-main-nginx
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: 10m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
   # 标量不是列表：--set 打到列表下标会替换整个元素，把 secretName 冲成空
   host: app.agentrehub.com
   # 置空则不生成 TLS 块

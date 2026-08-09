@@ -32,13 +32,17 @@ import (
 )
 
 type relayStub struct {
-	daemonRoute  relay_svc.Route
-	daemonErr    error
-	clientErr    error
-	registered   chan struct{}
-	renewed      chan struct{}
-	daemonFrames chan struct{}
-	clientFrames chan struct{}
+	daemonRoute       relay_svc.Route
+	daemonErr         error
+	clientErr         error
+	registered        chan struct{}
+	renewed           chan struct{}
+	daemonFrames      chan struct{}
+	clientFrames      chan struct{}
+	daemonForwardErrs chan error
+	clientForwardErrs chan error
+	daemonDetached    chan struct{}
+	clientDetached    chan struct{}
 }
 
 func (s *relayStub) PrepareDaemon(context.Context, int64, int64, string) (relay_svc.Route, error) {
@@ -75,12 +79,22 @@ func (s *relayStub) IsDaemonOnline(context.Context, int64, string) (bool, error)
 	return false, nil
 }
 
-func (s *relayStub) AttachDaemon(context.Context, relay_svc.Route, relay_svc.FrameWriter) (func(), error) {
-	return func() {}, nil
+func (s *relayStub) AttachDaemon(_ context.Context, _ relay_svc.Route, _ relay_svc.FrameWriter) (func(), error) {
+	return func() {
+		select {
+		case s.daemonDetached <- struct{}{}:
+		default:
+		}
+	}, nil
 }
 
-func (s *relayStub) AttachClient(context.Context, relay_svc.Route, relay_svc.FrameWriter) (string, func(), error) {
-	return "channel-id", func() {}, nil
+func (s *relayStub) AttachClient(_ context.Context, _ relay_svc.Route, _ relay_svc.FrameWriter) (string, func(), error) {
+	return "channel-id", func() {
+		select {
+		case s.clientDetached <- struct{}{}:
+		default:
+		}
+	}, nil
 }
 
 func (s *relayStub) ForwardDaemon(context.Context, relay_svc.Route, int, []byte) error {
@@ -88,7 +102,12 @@ func (s *relayStub) ForwardDaemon(context.Context, relay_svc.Route, int, []byte)
 	case s.daemonFrames <- struct{}{}:
 	default:
 	}
-	return nil
+	select {
+	case err := <-s.daemonForwardErrs:
+		return err
+	default:
+		return nil
+	}
 }
 
 func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, string, int, []byte) error {
@@ -96,7 +115,12 @@ func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, string, int,
 	case s.clientFrames <- struct{}{}:
 	default:
 	}
-	return nil
+	select {
+	case err := <-s.clientForwardErrs:
+		return err
+	default:
+		return nil
+	}
 }
 
 func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
@@ -147,6 +171,19 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	daemonPongs := make(chan struct{}, 1)
+	conn.SetPongHandler(func(string) error {
+		select {
+		case daemonPongs <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	go drainRelayConnection(conn)
+	require.NoError(t, conn.WriteControl(websocket.PingMessage, []byte("route"), time.Now().Add(time.Second)))
+	receiveWithin(t, stub.renewed, time.Second, "daemon ping did not renew its route")
+	receiveWithin(t, daemonPongs, time.Second, "daemon ping did not receive a pong")
+
 	// 真实的 ForwardDaemon 只收二进制信封（relay_svc.ForwardDaemon 会拒绝其它一切），
 	// 所以这里必须发一个 production 真会发出的帧，而不是桩恰好也肯收的文本。
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
@@ -166,12 +203,122 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
+	clientPongs := make(chan struct{}, 1)
+	clientConn.SetPongHandler(func(string) error {
+		select {
+		case clientPongs <- struct{}{}:
+		default:
+		}
+		return nil
+	})
+	go drainRelayConnection(clientConn)
+	require.NoError(t, clientConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)))
+	receiveWithin(t, clientPongs, time.Second, "client ping did not receive a pong")
+	select {
+	case <-stub.renewed:
+		t.Fatal("client ping renewed a daemon route")
+	default:
+	}
 	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, []byte("request")))
 	select {
 	case <-stub.clientFrames:
 	case <-time.After(time.Second):
 		t.Fatal("client frame did not reach the forwarding seam")
 	}
+}
+
+func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name       string
+		path       string
+		kind       string
+		daemonWire bool
+		framesOf   func(*relayStub) <-chan struct{}
+		detachedOf func(*relayStub) <-chan struct{}
+	}{
+		{
+			name: "daemon", path: "/v1/relay/daemon", kind: device_entity.KindAgentred, daemonWire: true,
+			framesOf:   func(stub *relayStub) <-chan struct{} { return stub.daemonFrames },
+			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.daemonDetached },
+		},
+		{
+			name: "client", path: "/v1/relay/client?daemon_fingerprint=fp-daemon", kind: device_entity.KindDesktop,
+			framesOf:   func(stub *relayStub) <-chan struct{} { return stub.clientFrames },
+			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.clientDetached },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stub := &relayStub{
+				daemonRoute: relay_svc.Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"},
+				registered:  make(chan struct{}, 1), renewed: make(chan struct{}, 1),
+				daemonFrames: make(chan struct{}, 1), clientFrames: make(chan struct{}, 1),
+				daemonDetached: make(chan struct{}, 1), clientDetached: make(chan struct{}, 1),
+			}
+			server := newRelayServer(t, signer, stub)
+			token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: tc.kind}, time.Hour)
+			require.NoError(t, err)
+			conn, _, err := websocket.DefaultDialer.Dial(
+				wsURL(server.URL, tc.path), http.Header{"Authorization": {"Bearer " + token}},
+			)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = conn.Close() })
+
+			require.NoError(t, conn.SetWriteDeadline(time.Now().Add(2*time.Second)))
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize(10<<20, tc.daemonWire)))
+			receiveWithin(t, tc.framesOf(stub), time.Second, "10 MiB relay message was not accepted")
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize((10<<20)+1, tc.daemonWire)))
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			_, _, err = conn.ReadMessage()
+			require.True(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig), err)
+			select {
+			case <-tc.detachedOf(stub):
+			case <-time.After(time.Second):
+				t.Fatal("oversized relay peer did not run detach cleanup")
+			}
+		})
+	}
+}
+
+func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
+	stub := newForwardingRelayStub()
+	stub.daemonForwardErrs = make(chan error, 2)
+	stub.daemonForwardErrs <- relay_svc.ErrForwardFailed
+	stub.daemonForwardErrs <- nil
+	server, headers := newAuthenticatedRelayServer(t, stub, "/v1/relay/daemon")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	require.NoError(t, conn.WriteMessage(
+		websocket.BinaryMessage, relayEnvelope("stale-channel", []byte("late-response")),
+	))
+	receiveWithin(t, stub.daemonFrames, time.Second, "failed daemon response did not reach forwarding")
+	require.NoError(t, conn.WriteMessage(
+		websocket.BinaryMessage, relayEnvelope("live-channel", []byte("later-response")),
+	))
+	receiveWithin(t, stub.daemonFrames, time.Second,
+		"client delivery failure closed the shared daemon websocket before a later response")
+}
+
+func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
+	stub := newForwardingRelayStub()
+	stub.clientForwardErrs = make(chan error, 1)
+	stub.clientForwardErrs <- relay_svc.ErrForwardFailed
+	server, headers := newAuthenticatedRelayServer(t, stub, "/v1/relay/client")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/client"), headers)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, []byte("request")))
+	receiveWithin(t, stub.clientFrames, time.Second, "failed client request did not reach forwarding")
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.Error(t, err)
 }
 
 // PrepareDaemon 的准入判据（本账号名下、活跃的 agentred）被拒时必须走 403，而且
@@ -261,6 +408,7 @@ func TestRelayClientFailureStatusesAreDistinct(t *testing.T) {
 
 func TestRelayFramesCrossServerInstances(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	testutils.Redis()
 	mini := miniredis.RunT(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -335,6 +483,17 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	require.True(t, networkErr.Timeout())
 }
 
+func relayPayloadOfSize(size int, daemonWire bool) []byte {
+	payload := make([]byte, size)
+	if !daemonWire {
+		return payload
+	}
+	channelID := "channel-id"
+	binary.BigEndian.PutUint16(payload[:2], uint16(len(channelID)))
+	copy(payload[2:], channelID)
+	return payload
+}
+
 func relayEnvelope(channelID string, frame []byte) []byte {
 	payload := make([]byte, 2+len(channelID)+len(frame))
 	binary.BigEndian.PutUint16(payload, uint16(len(channelID)))
@@ -376,6 +535,56 @@ func newRelayRedisClient(t *testing.T, mini *miniredis.Miniredis) *goredis.Clien
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	return client
+}
+
+func newForwardingRelayStub() *relayStub {
+	return &relayStub{
+		daemonRoute: relay_svc.Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"},
+		registered:  make(chan struct{}, 1), renewed: make(chan struct{}, 16),
+		daemonFrames: make(chan struct{}, 16), clientFrames: make(chan struct{}, 16),
+		daemonDetached: make(chan struct{}, 1), clientDetached: make(chan struct{}, 1),
+	}
+}
+
+func newAuthenticatedRelayServer(
+	t *testing.T,
+	stub *relayStub,
+	path string,
+) (*httptest.Server, http.Header) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+	server := newRelayServer(t, signer, stub)
+
+	kind := device_entity.KindDesktop
+	if path == "/v1/relay/daemon" {
+		kind = device_entity.KindAgentred
+	}
+	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: kind}, time.Hour)
+	require.NoError(t, err)
+	return server, http.Header{"Authorization": {"Bearer " + token}}
+}
+
+func receiveWithin[T any](t *testing.T, values <-chan T, timeout time.Duration, failure string) T {
+	t.Helper()
+	select {
+	case value := <-values:
+		return value
+	case <-time.After(timeout):
+		t.Fatal(failure)
+		var zero T
+		return zero
+	}
+}
+
+func drainRelayConnection(conn *websocket.Conn) {
+	for {
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+	}
 }
 
 func wsURL(httpURL, path string) string {

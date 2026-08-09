@@ -20,6 +20,8 @@ const (
 	deliveryWaitTimeout = 5 * time.Second
 )
 
+var errLocalTargetMissing = errors.New("local relay target is missing")
+
 // FrameWriter 抽象 websocket 的单帧写入，使帧总线不依赖 HTTP 控制器。
 type FrameWriter interface {
 	WriteMessage(messageType int, data []byte) error
@@ -135,7 +137,11 @@ func (f *redisForwarder) Forward(ctx context.Context, target Route, source Peer,
 	}
 
 	if destination.InstanceID == f.instanceID {
-		return f.deliver(streamKey(destination), peer, channelID, messageType, frame)
+		err := f.deliver(streamKey(destination), peer, channelID, messageType, frame)
+		if source == PeerDaemon && errors.Is(err, errLocalTargetMissing) {
+			return nil
+		}
+		return err
 	}
 	return f.publishAndWait(ctx, destination, peer, channelID, messageType, frame)
 }
@@ -278,32 +284,40 @@ func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 					err = f.deliver(stream, peer, channelID, messageType, frame)
 				}
 				if err != nil {
-					// 投不出去(本实例没有那一侧的 websocket)或解不开的帧,重试永远不会
-					// 让它变得可投递,而发布方最多只等 deliveryWaitTimeout。把它留在 PEL
+					// 本实例没有目标 websocket、目标写入失败或帧无法解码时，重试不会让当前
+					// 投递变成成功，而发布方最多只等 deliveryWaitTimeout。把它留在 PEL
 					// 里重读只会让队头堵死整条 stream:pending 被置回 true,下一轮又只读
 					// "0"、又是同一条队头,">" 永远轮不到 —— 同一条 stream 上其它收件人
-					// (还连着的客户端通道)的帧从此一条也进不来。所以确认掉它、但**不**写
+					// (还连着的客户端通道)的帧从此一条也进不来。所以删掉并确认它、但**不**写
 					// 投递回执:发布方的 waitForAck 照常超时,如实收到转发失败。
-					if ackErr := f.redis.XAck(ctx, stream, frameBusGroup, message.ID).Err(); ackErr != nil {
+					if ackErr := f.acknowledgeFrame(ctx, stream, message.ID, ""); ackErr != nil {
 						pending = true
 						break
 					}
-					logger.Ctx(ctx).Warn("relay frame dropped: no local delivery target",
+					logger.Ctx(ctx).Warn("relay frame dropped: local delivery failed",
 						zap.String("stream", stream), zap.String("peer", string(peer)),
 						zap.String("messageID", message.ID), zap.Error(err))
 					continue
 				}
-				if err := f.redis.XAck(ctx, stream, frameBusGroup, message.ID).Err(); err != nil {
-					pending = true
-					break
-				}
-				if err := f.redis.Set(ctx, ack, "1", f.ttl).Err(); err != nil {
+				if err := f.acknowledgeFrame(ctx, stream, message.ID, ack); err != nil {
 					pending = true
 					break
 				}
 			}
 		}
 	}
+}
+
+func (f *redisForwarder) acknowledgeFrame(ctx context.Context, stream, messageID, ack string) error {
+	_, err := f.redis.TxPipelined(ctx, func(pipe goredis.Pipeliner) error {
+		pipe.XDel(ctx, stream, messageID)
+		pipe.XAck(ctx, stream, frameBusGroup, messageID)
+		if ack != "" {
+			pipe.Set(ctx, ack, "1", f.ttl)
+		}
+		return nil
+	})
+	return err
 }
 
 func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, messageType int, frame []byte) error {
@@ -317,10 +331,7 @@ func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, mes
 	}
 	f.mu.Unlock()
 	if len(peers) == 0 {
-		if peer == PeerClient {
-			return nil
-		}
-		return fmt.Errorf("no local %s relay websocket", peer)
+		return fmt.Errorf("%w: no local %s relay websocket", errLocalTargetMissing, peer)
 	}
 	for _, attachment := range peers {
 		attachment.mu.Lock()
@@ -392,7 +403,7 @@ func (f *redisForwarder) renewClientPresence(ctx context.Context, target Route, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = f.redis.Set(ctx, clientChannelKey(target, channelID), target.InstanceID, f.ttl).Err()
+			_ = f.redis.Expire(ctx, clientChannelKey(target, channelID), f.ttl).Err()
 		}
 	}
 }

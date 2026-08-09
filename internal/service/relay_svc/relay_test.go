@@ -3,6 +3,7 @@ package relay_svc
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,6 +92,31 @@ type recordingFrameWriter struct{ frames chan recordedFrame }
 func (w *recordingFrameWriter) WriteMessage(messageType int, frame []byte) error {
 	w.frames <- recordedFrame{messageType: messageType, frame: frame}
 	return nil
+}
+
+type failingFrameWriter struct{ writes chan recordedFrame }
+
+func (w *failingFrameWriter) WriteMessage(messageType int, frame []byte) error {
+	w.writes <- recordedFrame{messageType: messageType, frame: frame}
+	return errors.New("relay client websocket is closed")
+}
+
+func requireRelayStreamDrained(t *testing.T, client *goredis.Client, stream string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		length, err := client.XLen(context.Background(), stream).Result()
+		return err == nil && length == 0
+	}, time.Second, 10*time.Millisecond, "relay frame remained in stream history")
+	pending, err := client.XPending(context.Background(), stream, frameBusGroup).Result()
+	require.NoError(t, err)
+	require.Zero(t, pending.Count, "relay frame remained pending")
+}
+
+func requireNoDeliveryAck(t *testing.T, client *goredis.Client, stream string) {
+	t.Helper()
+	keys, err := client.Keys(context.Background(), stream+":ack:*").Result()
+	require.NoError(t, err)
+	require.Empty(t, keys, "undelivered relay frame received a delivery acknowledgement")
 }
 
 // 中转客户端断开时,daemon 必须收到该通道的「空载荷信封」。共享的 relay websocket
@@ -250,6 +276,8 @@ func TestRedisForwarderUndeliverableFrameDoesNotStallTheStream(t *testing.T) {
 	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
 	t.Cleanup(func() { require.NoError(t, clientA.Close()) })
 	t.Cleanup(func() { require.NoError(t, clientB.Close()) })
+	hook := &failFirstFrameAckTxHook{failed: make(chan struct{})}
+	clientB.AddHook(hook)
 	configA := Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
 	forwarderA := NewRedisForwarder(configA, clientA)
@@ -294,6 +322,172 @@ func TestRedisForwarderUndeliverableFrameDoesNotStallTheStream(t *testing.T) {
 	case <-time.After(6 * time.Second):
 		t.Fatal("undeliverable forward never returned")
 	}
+	select {
+	case <-hook.failed:
+	case <-time.After(time.Second):
+		t.Fatal("undeliverable frame deletion and acknowledgement were not transacted")
+	}
+	requireRelayStreamDrained(t, clientB, streamKey(route))
+}
+
+func TestRedisForwarderMalformedFrameIsDeletedAndAcknowledgedWithoutDeliveryAck(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarder := NewRedisForwarder(config, client)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+	detach, err := forwarder.(AttachmentForwarder).Attach(
+		context.Background(), route, PeerDaemon, "", writer)
+	require.NoError(t, err)
+	t.Cleanup(detach)
+
+	stream := streamKey(route)
+	ack := stream + ":ack:malformed"
+	_, err = client.XAdd(context.Background(), &goredis.XAddArgs{
+		Stream: stream,
+		Values: map[string]any{
+			"peer": "invalid", "channel": "", "type": "2", "frame": "frame", "ack": ack,
+		},
+	}).Result()
+	require.NoError(t, err)
+
+	requireRelayStreamDrained(t, client, stream)
+	require.ErrorIs(t, client.Get(context.Background(), ack).Err(), goredis.Nil)
+}
+
+func TestRedisForwarderRemoteMissingClientTargetReturnsForwardingErrorWithoutDeliveryAck(t *testing.T) {
+	mini := miniredis.RunT(t)
+	clientA := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, clientA.Close()) })
+	t.Cleanup(func() { require.NoError(t, clientB.Close()) })
+	configA := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarderA := NewRedisForwarder(configA, clientA)
+	forwarderB := NewRedisForwarder(configB, clientB)
+	svc := New(configA, nil, clientA, forwarderA)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configA.InstanceID}
+
+	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+	detach, err := forwarderB.(AttachmentForwarder).Attach(
+		context.Background(), route, PeerClient, "live-channel", writer)
+	require.NoError(t, err)
+	t.Cleanup(detach)
+
+	staleChannel := "stale-remote-channel"
+	require.NoError(t, clientB.Set(
+		context.Background(), clientChannelKey(route, staleChannel), configB.InstanceID, time.Second,
+	).Err())
+	envelope, err := wrapEnvelope(staleChannel, []byte("late-response"))
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
+	stream := streamKey(Route{
+		AccountID: route.AccountID, Fingerprint: route.Fingerprint, InstanceID: configB.InstanceID,
+	})
+	requireRelayStreamDrained(t, clientB, stream)
+	requireNoDeliveryAck(t, clientB, stream)
+	require.ErrorIs(t, forwardErr, ErrForwardFailed)
+}
+
+func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStream(t *testing.T) {
+	for _, stalePresence := range []bool{false, true} {
+		name := "presence-absent"
+		if stalePresence {
+			name = "stale-local-presence"
+		}
+		t.Run(name, func(t *testing.T) {
+			mini := miniredis.RunT(t)
+			client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+			t.Cleanup(func() { require.NoError(t, client.Close()) })
+			config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+			forwarder := NewRedisForwarder(config, client)
+			svc := New(config, nil, client, forwarder)
+			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+			channelID := "stale-local-channel"
+
+			if stalePresence {
+				require.NoError(t, client.Set(
+					context.Background(), clientChannelKey(route, channelID), config.InstanceID, time.Second,
+				).Err())
+			}
+			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
+			require.NoError(t, err)
+			require.NoError(t, svc.ForwardDaemon(context.Background(), route, 2, envelope))
+			length, err := client.XLen(context.Background(), streamKey(route)).Result()
+			require.NoError(t, err)
+			require.Zero(t, length)
+		})
+	}
+}
+
+// 客户端写入失败必须如实返回转发错误；若跨实例，未完成的 socket 写入不得生成
+// delivery ACK。共享 daemon websocket 是否继续由 controller 的连接编排负责。
+func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliveryAck(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		name := "local"
+		if remote {
+			name = "remote"
+		}
+		t.Run(name, func(t *testing.T) {
+			mini := miniredis.RunT(t)
+			daemonRedis := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+			clientRedis := daemonRedis
+			t.Cleanup(func() { require.NoError(t, daemonRedis.Close()) })
+
+			daemonConfig := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+			clientConfig := daemonConfig
+			if remote {
+				clientConfig.InstanceID = "server-b"
+				clientRedis = goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+				t.Cleanup(func() { require.NoError(t, clientRedis.Close()) })
+			}
+			daemonForwarder := NewRedisForwarder(daemonConfig, daemonRedis)
+			clientForwarder := daemonForwarder
+			if remote {
+				clientForwarder = NewRedisForwarder(clientConfig, clientRedis)
+			}
+			svc := New(daemonConfig, nil, daemonRedis, daemonForwarder)
+			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: daemonConfig.InstanceID}
+			channelID := "closing-client"
+			writer := &failingFrameWriter{writes: make(chan recordedFrame, 1)}
+			detach, err := clientForwarder.(AttachmentForwarder).Attach(
+				context.Background(), route, PeerClient, channelID, writer)
+			require.NoError(t, err)
+			t.Cleanup(detach)
+
+			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
+			received := receiveRecordedFrame(t, writer.writes)
+			require.Equal(t, []byte("late-response"), received.frame)
+			if remote {
+				stream := streamKey(Route{
+					AccountID: route.AccountID, Fingerprint: route.Fingerprint,
+					InstanceID: clientConfig.InstanceID,
+				})
+				requireRelayStreamDrained(t, clientRedis, stream)
+				requireNoDeliveryAck(t, clientRedis, stream)
+			}
+			require.ErrorIs(t, forwardErr, ErrForwardFailed)
+		})
+	}
+}
+
+func receiveRecordedFrame(t *testing.T, frames <-chan recordedFrame) recordedFrame {
+	t.Helper()
+	select {
+	case frame := <-frames:
+		return frame
+	case <-time.After(time.Second):
+		t.Fatal("relay client write was not attempted")
+		return recordedFrame{}
+	}
 }
 
 // 退避阶梯必须单调不减、且永不越过自己声明的上限 —— 它是 Redis 抖动时唯一的
@@ -308,6 +502,108 @@ func TestConsumerRetryDelayIsMonotonicAndCapped(t *testing.T) {
 			"failures=%d 的退避 %s 比上一级 %s 还短", failures, delay, previous)
 		previous = delay
 	}
+}
+
+// 续期命令可能已脱离被取消的 goroutine context，在另一条 Redis 连接上晚于
+// detach 的 DEL 到达。清理一旦删掉 presence，任何晚到续期都只能续已有键，不能
+// 把已断开的客户端重新登记一个完整 TTL。
+func TestRedisForwarderLateClientPresenceRenewalCannotRecreateDetachedPresence(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-a", OnlineTTL: 2 * time.Second}
+	forwarder := NewRedisForwarder(config, client).(*redisForwarder)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	channelID := "channel-racing-detach"
+	presence := clientChannelKey(route, channelID)
+	hook := newBlockingPresenceRenewalHook(presence)
+	client.AddHook(hook)
+
+	require.NoError(t, forwarder.registerClient(context.Background(), route, channelID))
+	hook.arm()
+	t.Cleanup(func() {
+		forwarder.unregisterClient(route, channelID)
+		hook.releaseRenewal()
+	})
+
+	select {
+	case <-hook.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client presence renewal was not attempted")
+	}
+	forwarder.unregisterClient(route, channelID)
+	require.ErrorIs(t, client.Get(context.Background(), presence).Err(), goredis.Nil)
+
+	hook.releaseRenewal()
+	select {
+	case <-hook.finished:
+	case <-time.After(time.Second):
+		t.Fatal("late client presence renewal did not finish")
+	}
+	require.ErrorIs(t, client.Get(context.Background(), presence).Err(), goredis.Nil)
+}
+
+type blockingPresenceRenewalHook struct {
+	key      string
+	started  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+
+	mu          sync.Mutex
+	armed       bool
+	blocked     bool
+	releaseOnce sync.Once
+}
+
+func newBlockingPresenceRenewalHook(key string) *blockingPresenceRenewalHook {
+	return &blockingPresenceRenewalHook{
+		key: key, started: make(chan struct{}), release: make(chan struct{}), finished: make(chan struct{}),
+	}
+}
+
+func (h *blockingPresenceRenewalHook) arm() {
+	h.mu.Lock()
+	h.armed = true
+	h.mu.Unlock()
+}
+
+func (h *blockingPresenceRenewalHook) releaseRenewal() {
+	h.releaseOnce.Do(func() { close(h.release) })
+}
+
+func (h *blockingPresenceRenewalHook) DialHook(next goredis.DialHook) goredis.DialHook {
+	return next
+}
+
+func (h *blockingPresenceRenewalHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		if !h.shouldBlock(cmd) {
+			return next(ctx, cmd)
+		}
+		close(h.started)
+		<-h.release
+		err := next(context.WithoutCancel(ctx), cmd)
+		close(h.finished)
+		return err
+	}
+}
+
+func (h *blockingPresenceRenewalHook) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return next
+}
+
+func (h *blockingPresenceRenewalHook) shouldBlock(cmd goredis.Cmder) bool {
+	args := cmd.Args()
+	if len(args) < 2 || (cmd.Name() != "set" && cmd.Name() != "expire") || args[1] != h.key {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.armed || h.blocked {
+		return false
+	}
+	h.blocked = true
+	return true
 }
 
 func TestRedisForwarderClientDetachRemovesExpiringPresence(t *testing.T) {
@@ -340,6 +636,47 @@ func (w *blockingFrameWriter) WriteMessage(int, []byte) error {
 	w.started <- struct{}{}
 	<-w.release
 	return nil
+}
+
+type failFirstFrameAckTxHook struct {
+	once               sync.Once
+	failed             chan struct{}
+	requireDeliveryAck bool
+}
+
+func (h *failFirstFrameAckTxHook) DialHook(next goredis.DialHook) goredis.DialHook {
+	return next
+}
+
+func (h *failFirstFrameAckTxHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return next
+}
+
+func (h *failFirstFrameAckTxHook) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []goredis.Cmder) error {
+		var hasDelete, hasGroupAck, hasDeliveryAck bool
+		for _, cmd := range cmds {
+			switch cmd.Name() {
+			case "xdel":
+				hasDelete = true
+			case "xack":
+				hasGroupAck = true
+			case "set":
+				hasDeliveryAck = true
+			}
+		}
+		if hasDelete && hasGroupAck && (!h.requireDeliveryAck || hasDeliveryAck) {
+			failed := false
+			h.once.Do(func() {
+				failed = true
+				close(h.failed)
+			})
+			if failed {
+				return errors.New("transient frame acknowledgement failure")
+			}
+		}
+		return next(ctx, cmds)
+	}
 }
 
 func TestRedisForwarderWaitsForRemoteDeliveryAcknowledgement(t *testing.T) {
@@ -379,6 +716,56 @@ func TestRedisForwarderWaitsForRemoteDeliveryAcknowledgement(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("forward did not return after delivery acknowledgement")
 	}
+	requireRelayStreamDrained(t, clientB, streamKey(route))
+}
+
+func TestRedisForwarderRecoversPendingFrameWhenAcknowledgementTransactionFails(t *testing.T) {
+	mini := miniredis.RunT(t)
+	clientA := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	clientB := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, clientA.Close()) })
+	t.Cleanup(func() { require.NoError(t, clientB.Close()) })
+	hook := &failFirstFrameAckTxHook{
+		failed: make(chan struct{}), requireDeliveryAck: true,
+	}
+	clientB.AddHook(hook)
+	configA := Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarderA := NewRedisForwarder(configA, clientA)
+	forwarderB := NewRedisForwarder(configB, clientB)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configB.InstanceID}
+	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 2)}
+	detach, err := forwarderB.(AttachmentForwarder).Attach(
+		context.Background(), route, PeerDaemon, "", writer)
+	require.NoError(t, err)
+	t.Cleanup(detach)
+
+	forwarded := make(chan error, 1)
+	go func() {
+		forwarded <- forwarderA.Forward(
+			context.Background(), route, PeerClient, "", 2, []byte("request"))
+	}()
+
+	for delivery := 1; delivery <= 2; delivery++ {
+		select {
+		case received := <-writer.frames:
+			require.Equal(t, []byte("request"), received.frame)
+		case <-time.After(time.Second):
+			t.Fatalf("pending relay frame was not delivered for attempt %d", delivery)
+		}
+	}
+	select {
+	case <-hook.failed:
+	case <-time.After(time.Second):
+		t.Fatal("frame acknowledgement transaction was not attempted")
+	}
+	select {
+	case err := <-forwarded:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("forward did not recover after the transient acknowledgement failure")
+	}
+	requireRelayStreamDrained(t, clientB, streamKey(route))
 }
 
 // 消费循环的生命周期是「本实例还有 websocket 附着在这条 stream 上」，由 detach

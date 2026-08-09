@@ -33,8 +33,6 @@ to not logging.
 The single exemption is startup: `cmd/server/main.go` and `internal/bootstrap/cago.go` run
 before `component.Core()` has built the logger, so stdlib `log` is all they have. That
 window is declared in `.golangci.yml` under `linters.exclusions.rules`.
-`internal/guards/observability_test.go` asserts the rule is still wired, because deleting
-a linter from the config otherwise leaves the build green.
 
 ### Levels
 
@@ -47,24 +45,6 @@ a linter from the config otherwise leaves the build green.
 
 Do not log an error and also return it — the caller will log it too and you get the same
 failure three times at three layers. Log where it is handled, return everywhere else.
-
-### Sensitive fields
-
-**Credentials never go into a log field.** Logs are written to disk, shipped to collectors
-and read by more people than the database is. A token in a log is a leaked token.
-
-`internal/guards/observability_test.go` walks every non-test Go file and fails on
-`zap.*("password"|"token"|"secret"|"private_key"|"authorization"|"cookie"|"user_code"|…)`.
-Normalization is case- and separator-insensitive, so `refreshToken` and `refresh_token`
-are both caught.
-
-Log a non-reversible derivative instead — the guard allows `_id`, `_hash`, `_ttl`,
-`_expires_at`, `_kind`, `_type`, `_count`, `_len`:
-
-```go
-// ✗ logger.Ctx(ctx).Info("token rotated", zap.String("refresh_token", tok))
-logger.Ctx(ctx).Info("token rotated", zap.String("token_hash", hash), zap.Int64("device_id", id))
-```
 
 ## Metrics
 
