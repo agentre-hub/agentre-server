@@ -424,7 +424,7 @@ func (f *redisForwarder) renewClientPresence(ctx context.Context, target Route, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = f.redis.Set(ctx, clientChannelKey(target, channelID), target.InstanceID, f.ttl).Err()
+			_ = f.redis.Expire(ctx, clientChannelKey(target, channelID), f.ttl).Err()
 		}
 	}
 }

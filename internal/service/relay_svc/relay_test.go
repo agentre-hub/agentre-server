@@ -476,6 +476,108 @@ func TestConsumerRetryDelayIsMonotonicAndCapped(t *testing.T) {
 	}
 }
 
+// 续期命令可能已脱离被取消的 goroutine context，在另一条 Redis 连接上晚于
+// detach 的 DEL 到达。清理一旦删掉 presence，任何晚到续期都只能续已有键，不能
+// 把已断开的客户端重新登记一个完整 TTL。
+func TestRedisForwarderLateClientPresenceRenewalCannotRecreateDetachedPresence(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-a", OnlineTTL: 2 * time.Second}
+	forwarder := NewRedisForwarder(config, client).(*redisForwarder)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	channelID := "channel-racing-detach"
+	presence := clientChannelKey(route, channelID)
+	hook := newBlockingPresenceRenewalHook(presence)
+	client.AddHook(hook)
+
+	require.NoError(t, forwarder.registerClient(context.Background(), route, channelID))
+	hook.arm()
+	t.Cleanup(func() {
+		forwarder.unregisterClient(route, channelID)
+		hook.releaseRenewal()
+	})
+
+	select {
+	case <-hook.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client presence renewal was not attempted")
+	}
+	forwarder.unregisterClient(route, channelID)
+	require.ErrorIs(t, client.Get(context.Background(), presence).Err(), goredis.Nil)
+
+	hook.releaseRenewal()
+	select {
+	case <-hook.finished:
+	case <-time.After(time.Second):
+		t.Fatal("late client presence renewal did not finish")
+	}
+	require.ErrorIs(t, client.Get(context.Background(), presence).Err(), goredis.Nil)
+}
+
+type blockingPresenceRenewalHook struct {
+	key      string
+	started  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+
+	mu          sync.Mutex
+	armed       bool
+	blocked     bool
+	releaseOnce sync.Once
+}
+
+func newBlockingPresenceRenewalHook(key string) *blockingPresenceRenewalHook {
+	return &blockingPresenceRenewalHook{
+		key: key, started: make(chan struct{}), release: make(chan struct{}), finished: make(chan struct{}),
+	}
+}
+
+func (h *blockingPresenceRenewalHook) arm() {
+	h.mu.Lock()
+	h.armed = true
+	h.mu.Unlock()
+}
+
+func (h *blockingPresenceRenewalHook) releaseRenewal() {
+	h.releaseOnce.Do(func() { close(h.release) })
+}
+
+func (h *blockingPresenceRenewalHook) DialHook(next goredis.DialHook) goredis.DialHook {
+	return next
+}
+
+func (h *blockingPresenceRenewalHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		if !h.shouldBlock(cmd) {
+			return next(ctx, cmd)
+		}
+		close(h.started)
+		<-h.release
+		err := next(context.WithoutCancel(ctx), cmd)
+		close(h.finished)
+		return err
+	}
+}
+
+func (h *blockingPresenceRenewalHook) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return next
+}
+
+func (h *blockingPresenceRenewalHook) shouldBlock(cmd goredis.Cmder) bool {
+	args := cmd.Args()
+	if len(args) < 2 || (cmd.Name() != "set" && cmd.Name() != "expire") || args[1] != h.key {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.armed || h.blocked {
+		return false
+	}
+	h.blocked = true
+	return true
+}
+
 func TestRedisForwarderClientDetachRemovesExpiringPresence(t *testing.T) {
 	mini := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
