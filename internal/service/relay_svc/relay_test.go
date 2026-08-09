@@ -2,6 +2,7 @@ package relay_svc
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"sync"
 	"testing"
@@ -335,6 +336,34 @@ func TestRedisForwarderMalformedFrameIsDeletedAndAcknowledgedWithoutDeliveryAck(
 		Stream: stream,
 		Values: map[string]any{
 			"peer": "invalid", "channel": "", "type": "2", "frame": "frame", "ack": ack,
+		},
+	}).Result()
+	require.NoError(t, err)
+
+	requireRelayStreamDrained(t, client, stream)
+	require.ErrorIs(t, client.Get(context.Background(), ack).Err(), goredis.Nil)
+}
+
+func TestRedisForwarderMissingClientTargetIsDeletedAndAcknowledgedWithoutDeliveryAck(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	config := Config{InstanceID: "server-b", OnlineTTL: time.Second}
+	forwarder := NewRedisForwarder(config, client)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
+	detach, err := forwarder.(AttachmentForwarder).Attach(
+		context.Background(), route, PeerDaemon, "", writer)
+	require.NoError(t, err)
+	t.Cleanup(detach)
+
+	stream := streamKey(route)
+	ack := stream + ":ack:missing-client"
+	_, err = client.XAdd(context.Background(), &goredis.XAddArgs{
+		Stream: stream,
+		Values: map[string]any{
+			"peer": string(PeerClient), "channel": "missing-channel", "type": "2",
+			"frame": base64.RawStdEncoding.EncodeToString([]byte("response")), "ack": ack,
 		},
 	}).Result()
 	require.NoError(t, err)

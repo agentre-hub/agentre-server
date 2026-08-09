@@ -325,9 +325,6 @@ func (f *redisForwarder) deliver(stream string, peer Peer, channelID string, mes
 	}
 	f.mu.Unlock()
 	if len(peers) == 0 {
-		if peer == PeerClient {
-			return nil
-		}
 		return fmt.Errorf("no local %s relay websocket", peer)
 	}
 	for _, attachment := range peers {
