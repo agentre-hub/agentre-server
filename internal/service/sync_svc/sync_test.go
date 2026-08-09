@@ -735,6 +735,17 @@ func TestGetAvatar_GivenUnknownHash_ThenNotFound(t *testing.T) {
 	})
 }
 
+// R18：用户在 web 端删除（撤销）一台设备时，该设备上报的本机路径清单一并消失；
+// 这条只碰上报组的一张表，不碰同步组（sync_objects）的任何一行。
+func TestPurgeDeviceLocalPaths_GivenDeviceID_ThenDeletesItsReportedSnapshot(t *testing.T) {
+	convey.Convey("撤销设备时清掉它上报的本机路径清单", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		m.localPath.EXPECT().DeleteByDevice(gomock.Any(), testDeviceID).Return(nil)
+
+		assert.NoError(t, svc.PurgeDeviceLocalPaths(ctx, testDeviceID))
+	})
+}
+
 func TestGetAvatar_GivenStoredHash_ThenReturnsContent(t *testing.T) {
 	convey.Convey("取回头像正文", t, func() {
 		ctx, m, svc := setupSyncTest(t)

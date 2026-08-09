@@ -15,6 +15,10 @@ type SyncLocalPathRepo interface {
 	// ReplaceSnapshot 用整份快照替换某台设备的本机路径清单：上报组没有删除时间，
 	// 删除靠「这次快照里没有它」生效。
 	ReplaceSnapshot(ctx context.Context, userID, deviceID int64, items []*sync_entity.DeviceLocalPath) error
+	// DeleteByDevice 删除某台设备名下全部本机路径记录（R18：设备记录被删除时，
+	// 它的上报清单一并消失）。device_id 是全局自增主键，天然只属于一个账号，
+	// 不需要再传 user_id 校验归属。
+	DeleteByDevice(ctx context.Context, deviceID int64) error
 }
 
 var defaultLocalPath SyncLocalPathRepo
@@ -40,4 +44,8 @@ func (r *localPathRepo) ReplaceSnapshot(
 		}
 		return tx.Create(items).Error
 	})
+}
+
+func (r *localPathRepo) DeleteByDevice(ctx context.Context, deviceID int64) error {
+	return db.Ctx(ctx).Where("device_id=?", deviceID).Delete(&sync_entity.DeviceLocalPath{}).Error
 }

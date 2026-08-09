@@ -41,6 +41,20 @@ func (m *MockSyncLocalPathRepo) EXPECT() *MockSyncLocalPathRepoMockRecorder {
 	return m.recorder
 }
 
+// DeleteByDevice mocks base method.
+func (m *MockSyncLocalPathRepo) DeleteByDevice(ctx context.Context, deviceID int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteByDevice", ctx, deviceID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteByDevice indicates an expected call of DeleteByDevice.
+func (mr *MockSyncLocalPathRepoMockRecorder) DeleteByDevice(ctx, deviceID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteByDevice", reflect.TypeOf((*MockSyncLocalPathRepo)(nil).DeleteByDevice), ctx, deviceID)
+}
+
 // ReplaceSnapshot mocks base method.
 func (m *MockSyncLocalPathRepo) ReplaceSnapshot(ctx context.Context, userID, deviceID int64, items []*sync_entity.DeviceLocalPath) error {
 	m.ctrl.T.Helper()

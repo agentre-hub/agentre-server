@@ -24,6 +24,7 @@ import (
 	"agentre-server/internal/service/device_svc"
 	"agentre-server/internal/service/oauth_svc"
 	"agentre-server/internal/service/relay_svc"
+	"agentre-server/internal/service/sync_svc"
 )
 
 type ServerConfig struct {
@@ -191,6 +192,9 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		RefreshTTL:      cfg.JWT.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}, signer))
+	// 工作区多端同步 R18：撤销一台设备时，device_svc 用这个窄接口清掉它上报的
+	// 本机路径清单；sync_svc.Default() 结构性满足 device_svc.LocalPathPurger。
+	device_svc.SetLocalPathPurger(sync_svc.Default())
 
 	hostname, err := os.Hostname()
 	if err != nil {

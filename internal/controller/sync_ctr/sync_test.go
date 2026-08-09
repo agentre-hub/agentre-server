@@ -40,6 +40,7 @@ func (s *stubSyncSvc) PutAvatar(context.Context, sync_svc.AvatarInput) error    
 func (s *stubSyncSvc) GetAvatar(context.Context, int64, string) (*sync_svc.AvatarOutput, error) {
 	return &sync_svc.AvatarOutput{}, nil
 }
+func (s *stubSyncSvc) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
 
 var _ sync_svc.SyncSvc = (*stubSyncSvc)(nil)
 

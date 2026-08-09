@@ -13,6 +13,8 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/pkg/i18n"
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	api "agentre-server/internal/api/device"
@@ -40,6 +42,30 @@ type DeviceSvc interface {
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
 	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
 }
+
+// LocalPathPurger 是 Revoke 撤销一台设备时需要用到的窄接口（ISP）：只清掉该设备
+// 上报的本机路径清单（工作区多端同步 R18），不需要认得 sync_svc 的其余方法。
+// device_svc 不 import sync_svc——由 bootstrap 用 sync_svc.Default() 满足这个接口。
+type LocalPathPurger interface {
+	PurgeDeviceLocalPaths(ctx context.Context, deviceID int64) error
+}
+
+// localPathPurger 默认是空操作：未装配时（例如只跑 device flow、没有整套 bootstrap
+// 的测试或调用方）Revoke 照常成功，只是不去清上报组——与 relay_svc.Default() 的
+// 安全占位同一模式，不让调用方在 nil 接口上 panic。
+var localPathPurger LocalPathPurger = noopLocalPathPurger{}
+
+// SetLocalPathPurger 由 bootstrap 注入真实实现；传 nil 时恢复成空操作。
+func SetLocalPathPurger(p LocalPathPurger) {
+	if p == nil {
+		p = noopLocalPathPurger{}
+	}
+	localPathPurger = p
+}
+
+type noopLocalPathPurger struct{}
+
+func (noopLocalPathPurger) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
 
 type deviceSvc struct {
 	cfg    Config
@@ -420,7 +446,17 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
 		return err
 	}
-	return device_repo.Device().Revoke(ctx, deviceID, nowMs)
+	if err := device_repo.Device().Revoke(ctx, deviceID, nowMs); err != nil {
+		return err
+	}
+	// 工作区多端同步 R18：该设备上报的本机路径清单跟着一并消失。这是撤销的
+	// 一个从属后果，不是撤销本身——取不到 purger 或它落库失败都不该让「设备已
+	// 撤销、token 已拉黑」这个已经生效的结果回滚,只记日志。
+	if err := localPathPurger.PurgeDeviceLocalPaths(ctx, deviceID); err != nil {
+		logger.Ctx(ctx).Warn("device_svc.Revoke: purge reported local paths failed",
+			zap.Int64("deviceId", deviceID), zap.Error(err))
+	}
+	return nil
 }
 
 // ListRevokedJTI 返回调用方账号（userID，跨其名下全部设备）已吊销、且签发

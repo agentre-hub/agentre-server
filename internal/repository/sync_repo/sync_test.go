@@ -185,6 +185,22 @@ func TestReplaceSnapshot_GivenEmptySnapshot_ThenOnlyDeletes(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// R18：设备记录被删除时，它上报的本机路径清单一并消失。device_id 全局唯一，
+// 不需要再传 user_id 校验归属，也不是一个事务（单条 DELETE，没有后续要写的东西）。
+func TestDeleteByDevice_GivenDeviceID_ThenDeletesAllRowsForThatDevice(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewSyncLocalPath()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM "device_local_paths" WHERE device_id=`)).
+		WithArgs(int64(2)).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.DeleteByDevice(ctx, 2))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // 同一份头像重复上传不该产生第二行，也不该覆盖已有正文。
 func TestSaveAvatar_GivenSameContentTwice_ThenOnConflictDoNothing(t *testing.T) {
 	ctx, _, mock := hubtest.DatabasePG(t)

@@ -38,6 +38,8 @@ type SyncSvc interface {
 	ReportLocalPaths(ctx context.Context, in LocalPathsInput) error
 	PutAvatar(ctx context.Context, in AvatarInput) error
 	GetAvatar(ctx context.Context, userID int64, contentHash string) (*AvatarOutput, error)
+	// PurgeDeviceLocalPaths 删掉某台设备名下全部上报的本机路径记录（R18）。
+	PurgeDeviceLocalPaths(ctx context.Context, deviceID int64) error
 }
 
 type syncSvc struct {
@@ -344,6 +346,13 @@ func (s *syncSvc) GetAvatar(ctx context.Context, userID int64, contentHash strin
 		return nil, i18n.NewNotFoundError(ctx, code.SyncAvatarNotFound)
 	}
 	return &AvatarOutput{ContentHash: a.ContentHash, ContentType: a.ContentType, Content: a.Content}, nil
+}
+
+// PurgeDeviceLocalPaths 删掉某台设备名下全部上报的本机路径记录（R18）：用户在
+// web 端删除（撤销）一台设备的记录时，该设备的这份清单跟着消失，账号级对象
+// （sync_objects）不受影响——它们不属于那台桌面端。
+func (s *syncSvc) PurgeDeviceLocalPaths(ctx context.Context, deviceID int64) error {
+	return sync_repo.SyncLocalPath().DeleteByDevice(ctx, deviceID)
 }
 
 // payloadOrEmptyObject 让墓碑也有一份合法的 jsonb 正文。
