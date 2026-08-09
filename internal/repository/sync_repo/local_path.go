@@ -19,6 +19,9 @@ type SyncLocalPathRepo interface {
 	// 它的上报清单一并消失）。device_id 是全局自增主键，天然只属于一个账号，
 	// 不需要再传 user_id 校验归属。
 	DeleteByDevice(ctx context.Context, deviceID int64) error
+	// ListByDevice 取某台设备上报的整份本机路径清单，供设备展开页判断
+	// 「这台机器上哪些项目已配置」——只看归属，不对外暴露路径正文（R19）。
+	ListByDevice(ctx context.Context, userID, deviceID int64) ([]*sync_entity.DeviceLocalPath, error)
 }
 
 var defaultLocalPath SyncLocalPathRepo
@@ -48,4 +51,12 @@ func (r *localPathRepo) ReplaceSnapshot(
 
 func (r *localPathRepo) DeleteByDevice(ctx context.Context, deviceID int64) error {
 	return db.Ctx(ctx).Where("device_id=?", deviceID).Delete(&sync_entity.DeviceLocalPath{}).Error
+}
+
+func (r *localPathRepo) ListByDevice(ctx context.Context, userID, deviceID int64) ([]*sync_entity.DeviceLocalPath, error) {
+	var out []*sync_entity.DeviceLocalPath
+	if err := db.Ctx(ctx).Where("user_id=? AND device_id=?", userID, deviceID).Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
 }

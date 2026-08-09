@@ -26,6 +26,10 @@ type SyncObjectRepo interface {
 	Tombstone(ctx context.Context, id, version, nowMs int64) (int64, error)
 	// ListSince 按版本游标增量取，版本升序。
 	ListSince(ctx context.Context, userID, cursor int64, limit int) ([]*sync_entity.SyncObject, error)
+	// ListByKinds 取账号下这些类型里全部存活的行（墓碑不返回），不分页——
+	// web 控制台读账号级快照（总览页的 Agent 清单、设备展开的项目清单）要的是
+	// 当前状态的完整集合，不是同步用的增量游标。
+	ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error)
 }
 
 var defaultObject SyncObjectRepo
@@ -95,6 +99,15 @@ func (r *objectRepo) ListSince(ctx context.Context, userID, cursor int64, limit 
 	var out []*sync_entity.SyncObject
 	if err := db.Ctx(ctx).Where("user_id=? AND version>?", userID, cursor).
 		Order("version ASC").Limit(limit).Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *objectRepo) ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error) {
+	var out []*sync_entity.SyncObject
+	if err := db.Ctx(ctx).Where("user_id=? AND kind IN ? AND deleted_at=0", userID, kinds).
+		Find(&out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil

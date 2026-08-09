@@ -71,6 +71,21 @@ func (mr *MockSyncObjectRepoMockRecorder) FindLocationByNaturalKey(ctx, userID, 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindLocationByNaturalKey", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindLocationByNaturalKey), ctx, userID, projectSyncID, fingerprint)
 }
 
+// ListByKinds mocks base method.
+func (m *MockSyncObjectRepo) ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListByKinds", ctx, userID, kinds)
+	ret0, _ := ret[0].([]*sync_entity.SyncObject)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListByKinds indicates an expected call of ListByKinds.
+func (mr *MockSyncObjectRepoMockRecorder) ListByKinds(ctx, userID, kinds any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListByKinds", reflect.TypeOf((*MockSyncObjectRepo)(nil).ListByKinds), ctx, userID, kinds)
+}
+
 // ListSince mocks base method.
 func (m *MockSyncObjectRepo) ListSince(ctx context.Context, userID, cursor int64, limit int) ([]*sync_entity.SyncObject, error) {
 	m.ctrl.T.Helper()

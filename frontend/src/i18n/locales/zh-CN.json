@@ -14,6 +14,29 @@
       "label": "语言"
     }
   },
+  "nav": {
+    "overview": "总览",
+    "chat": "对话",
+    "devices": "设备",
+    "audit": "审计"
+  },
+  "workspaceComingSoon": {
+    "chatBody": "从浏览器发起对话暂未开放。",
+    "auditBody": "审计记录暂未开放。"
+  },
+  "overview": {
+    "title": "Agent",
+    "subtitle": "账号下共 {{count}} 个 · 不按设备重复",
+    "orderHint": "执行目标按顺序取第一个可用的",
+    "currentTarget": "当前落到 {{device}}",
+    "noAvailableTarget": "没有可用的执行机器",
+    "thisDevice": "本机",
+    "skippedForWeb": "网页派活跳过",
+    "offline": "未连接",
+    "unpaired": "未配对",
+    "empty": "还没有任何 Agent。",
+    "loadError": "无法加载你的 Agent 列表，请重试。"
+  },
   "authLayout": {
     "brand": "AgentRe",
     "footer": {
@@ -106,7 +129,19 @@
       "revokeConfirmBody": "确认后该设备将无法再刷新凭据。若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受——撤销并非即时生效。",
       "revokeCancel": "取消",
       "revokeConfirm": "解除授权",
-      "revokeError": "解除授权失败，请稍后重试。"
+      "revokeError": "解除授权失败，请稍后重试。",
+      "expand": "展开详情",
+      "collapse": "收起详情",
+      "runnableAgents": "能跑的 Agent",
+      "rankLabel": "第 {{rank}} 档",
+      "projects": "项目",
+      "projectsNote": "只显示是否配置 · 不显示路径",
+      "agentsAccountNote": "Agent 属于账号、不属于设备 —— 在总览查看",
+      "configured": "已配置",
+      "notConfigured": "未配置",
+      "noProjectsReported": "这台设备还没有上报任何项目。",
+      "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
+      "detailLoadError": "无法加载这台设备的详情，请重试。"
     }
   },
   "notFound": {

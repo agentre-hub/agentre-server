@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,8 +19,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import AuthLayout from "@/components/AuthLayout";
+import AppShell from "@/components/AppShell";
 import { api, ApiError } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { deviceKindLabel } from "@/lib/deviceKind";
 
 interface DeviceItem {
@@ -35,7 +37,27 @@ interface DeviceItem {
   is_this_device: boolean;
 }
 
+interface RunnableAgentItem {
+  sync_id: string;
+  name: string;
+  rank: number;
+}
+
+interface ProjectItem {
+  sync_id: string;
+  name: string;
+  configured: boolean;
+}
+
+interface DeviceDetail {
+  device_id: number;
+  kind: string;
+  runnable_agents?: RunnableAgentItem[];
+  projects: ProjectItem[];
+}
+
 const ACTIVE = 1;
+const KIND_AGENTRED = "agentred";
 
 // 只有 ApiError 才带可展示的服务端文案；其余(代理返回非 JSON 的 502 → SyntaxError、
 // 离线 → TypeError)同样是失败，必须说出来 —— 静默吞掉会让页面渲染成「还没有任何
@@ -44,9 +66,110 @@ function loadErrorText(e: unknown, t: (key: string) => string): string {
   return e instanceof ApiError ? e.message : t("device.manage.loadError");
 }
 
+function detailErrorText(e: unknown, t: (key: string) => string): string {
+  return e instanceof ApiError ? e.message : t("device.manage.detailLoadError");
+}
+
 function formatLastActive(ms: number): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleString();
+}
+
+/**
+ * 设备行展开的详情：agentred 列「能跑的 Agent」（带档位）与「已配置的项目」；
+ * 桌面端只列「项目」（已配置 / 未配置都列，因为 Agent 不按桌面端归属）。
+ * 两者都只显示项目是否配置这个布尔事实，不显示路径（R19）。
+ */
+function DeviceExpandDetail({
+  state,
+  t,
+}: {
+  state: { loading: boolean; error: unknown; data: DeviceDetail | null };
+  t: (key: string, opts?: Record<string, unknown>) => string;
+}) {
+  if (state.loading) {
+    return (
+      <p className="pl-6 text-sm text-muted-foreground">
+        {t("common.loading")}
+      </p>
+    );
+  }
+  if (state.error) {
+    return (
+      <Alert variant="destructive" className="ml-6">
+        {detailErrorText(state.error, t)}
+      </Alert>
+    );
+  }
+  const detail = state.data;
+  if (!detail) return null;
+  const isAgentred = detail.kind === KIND_AGENTRED;
+
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pl-6 pt-2.5">
+      {isAgentred && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+            {t("device.manage.runnableAgents")}
+          </span>
+          {(detail.runnable_agents ?? []).length === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              {t("device.manage.noRunnableAgents")}
+            </span>
+          ) : (
+            (detail.runnable_agents ?? []).map((a) => (
+              <span
+                key={a.sync_id}
+                className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+              >
+                {a.name}
+                <span className="font-mono text-[9px] text-subtle-foreground">
+                  {t("device.manage.rankLabel", { rank: a.rank })}
+                </span>
+              </span>
+            ))
+          )}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+          {t("device.manage.projects")}
+        </span>
+        {detail.projects.length === 0 ? (
+          <span className="text-xs text-muted-foreground">
+            {t("device.manage.noProjectsReported")}
+          </span>
+        ) : (
+          detail.projects.map((p) => (
+            <span
+              key={p.sync_id}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs",
+                p.configured
+                  ? "bg-muted text-muted-foreground"
+                  : "bg-status-waiting-bg text-status-waiting",
+              )}
+            >
+              {p.name}
+              <span className="font-mono text-[9px]">
+                {p.configured
+                  ? t("device.manage.configured")
+                  : t("device.manage.notConfigured")}
+              </span>
+            </span>
+          ))
+        )}
+      </div>
+      <p className="font-mono text-[9.5px] text-subtle-foreground">
+        {t("device.manage.projectsNote")}
+      </p>
+      {!isAgentred && (
+        <p className="font-mono text-[9.5px] text-subtle-foreground">
+          {t("device.manage.agentsAccountNote")}
+        </p>
+      )}
+    </div>
+  );
 }
 
 export default function Devices() {
@@ -59,6 +182,13 @@ export default function Devices() {
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<DeviceItem | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [details, setDetails] = useState<
+    Record<
+      number,
+      { loading: boolean; error: unknown; data: DeviceDetail | null }
+    >
+  >({});
 
   // 只负责取数据，不碰状态；由调用方决定怎么落状态。
   async function fetchDevices(): Promise<DeviceItem[]> {
@@ -88,6 +218,41 @@ export default function Devices() {
     };
   }, []);
 
+  function toggleExpand(d: DeviceItem) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(d.id)) {
+        next.delete(d.id);
+        return next;
+      }
+      next.add(d.id);
+      return next;
+    });
+    // 已经取过就不重复取——展开/收起只是显示态切换。
+    if (details[d.id]) return;
+    setDetails((prev) => ({
+      ...prev,
+      [d.id]: { loading: true, error: null, data: null },
+    }));
+    api<DeviceDetail>(`/v1/workspace/device-detail?device_id=${d.id}`)
+      .then((data) => {
+        setDetails((prev) => ({
+          ...prev,
+          [d.id]: { loading: false, error: null, data },
+        }));
+      })
+      .catch((e: unknown) => {
+        setDetails((prev) => ({
+          ...prev,
+          [d.id]: {
+            loading: false,
+            error: e ?? new Error("device detail load failed"),
+            data: null,
+          },
+        }));
+      });
+  }
+
   async function onRevoke() {
     if (!revoking) return;
     setSubmitting(true);
@@ -113,7 +278,7 @@ export default function Devices() {
   }
 
   return (
-    <AuthLayout>
+    <AppShell>
       <div className="w-full max-w-2xl space-y-6">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">{t("device.manage.title")}</h1>
@@ -136,49 +301,81 @@ export default function Devices() {
           </Card>
         ) : (
           <div className="space-y-3">
-            {devices.map((d) => (
-              <Card key={d.id} className="py-4">
-                <CardHeader className="px-5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <CardTitle className="truncate">{d.name}</CardTitle>
-                      <CardDescription className="mt-1">
-                        {deviceKindLabel(d.kind, t)}
-                        {d.platform ? ` · ${d.platform}` : ""}
-                        {d.version ? ` ${d.version}` : ""}
-                        {d.is_this_device
-                          ? ` · ${t("device.manage.thisDevice")}`
-                          : ""}
-                      </CardDescription>
+            {devices.map((d) => {
+              const isExpanded = expanded.has(d.id);
+              return (
+                <Card key={d.id} className="py-4">
+                  <CardHeader className="px-5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <CardTitle className="truncate">{d.name}</CardTitle>
+                        <CardDescription className="mt-1">
+                          {deviceKindLabel(d.kind, t)}
+                          {d.platform ? ` · ${d.platform}` : ""}
+                          {d.version ? ` ${d.version}` : ""}
+                          {d.is_this_device
+                            ? ` · ${t("device.manage.thisDevice")}`
+                            : ""}
+                        </CardDescription>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-expanded={isExpanded}
+                          aria-label={
+                            isExpanded
+                              ? t("device.manage.collapse")
+                              : t("device.manage.expand")
+                          }
+                          onClick={() => toggleExpand(d)}
+                        >
+                          {isExpanded ? <ChevronUp /> : <ChevronDown />}
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => {
+                            setRevokeError(null);
+                            setRevoking(d);
+                          }}
+                        >
+                          {t("device.manage.revoke")}
+                        </Button>
+                      </div>
                     </div>
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => {
-                        setRevokeError(null);
-                        setRevoking(d);
-                      }}
-                    >
-                      {t("device.manage.revoke")}
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 text-sm text-muted-foreground">
-                  <span>
-                    {t("device.manage.colLastActive")}:{" "}
-                    {formatLastActive(d.last_seen_at)}
-                  </span>
-                  <span>
-                    {t("device.manage.colStatus")}:{" "}
-                    {d.status !== ACTIVE
-                      ? t("device.manage.statusRevoked")
-                      : d.online
-                        ? t("device.manage.statusOnline")
-                        : t("device.manage.statusOffline")}
-                  </span>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardHeader>
+                  <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 text-sm text-muted-foreground">
+                    <span>
+                      {t("device.manage.colLastActive")}:{" "}
+                      {formatLastActive(d.last_seen_at)}
+                    </span>
+                    <span>
+                      {t("device.manage.colStatus")}:{" "}
+                      {d.status !== ACTIVE
+                        ? t("device.manage.statusRevoked")
+                        : d.online
+                          ? t("device.manage.statusOnline")
+                          : t("device.manage.statusOffline")}
+                    </span>
+                  </CardContent>
+                  {isExpanded && (
+                    <CardContent className="px-5">
+                      <DeviceExpandDetail
+                        state={
+                          details[d.id] ?? {
+                            loading: true,
+                            error: null,
+                            data: null,
+                          }
+                        }
+                        t={t}
+                      />
+                    </CardContent>
+                  )}
+                </Card>
+              );
+            })}
           </div>
         )}
 
@@ -224,6 +421,6 @@ export default function Devices() {
           </DialogContent>
         </Dialog>
       </div>
-    </AuthLayout>
+    </AppShell>
   );
 }

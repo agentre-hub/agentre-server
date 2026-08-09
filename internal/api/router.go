@@ -11,6 +11,7 @@ import (
 	"agentre-server/internal/controller/healthz_ctr"
 	"agentre-server/internal/controller/relay_ctr"
 	"agentre-server/internal/controller/sync_ctr"
+	"agentre-server/internal/controller/workspace_ctr"
 	"agentre-server/internal/middleware"
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/service/relay_svc"
@@ -36,6 +37,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	}
 	relayCtr := relay_ctr.New(relaySvc)
 	syncCtr := sync_ctr.New()
+	workspaceCtr := workspace_ctr.New()
 
 	// 公开
 	g.Group("/").Bind(
@@ -68,6 +70,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		authCtr.Me,
 		deviceCtr.Revoke,
 		deviceCtr.List,
+		// web 控制台两屏的只读端点（决策 13）：账号级 Agent 清单、设备展开详情。
+		workspaceCtr.ListAgents,
+		workspaceCtr.DeviceDetail,
 	)
 
 	// device JWT

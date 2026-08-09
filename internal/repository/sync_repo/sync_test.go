@@ -152,6 +152,25 @@ func TestListSince_GivenCursor_ThenOrderedByVersionAscending(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// web 控制台读账号级快照：按 kind 取全部存活行，不分页、不看游标——
+// 这条路径服务的是「总览页列 Agent」「设备展开列项目」，需要的是当前状态的
+// 完整集合，不是增量。墓碑必须被过滤掉，否则已删除的 Agent 会在总览重新出现。
+func TestListByKinds_GivenKinds_ThenOnlyLiveRowsOfThoseKinds(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`AND kind IN (`)+`.*`+regexp.QuoteMeta(`) AND deleted_at=0`)).
+		WithArgs(int64(7), sync_entity.KindAgent, sync_entity.KindAgentBackend).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "sync_id"}).
+			AddRow(int64(1), sync_entity.KindAgent, "a1").
+			AddRow(int64(2), sync_entity.KindAgentBackend, "b1"))
+
+	got, err := r.ListByKinds(ctx, 7, []string{sync_entity.KindAgent, sync_entity.KindAgentBackend})
+	assert.NoError(t, err)
+	assert.Len(t, got, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // 上报组整份替换：先清掉这台设备的旧清单，再写新的，且两步在同一个事务里，
 // 否则中途失败会让服务端的清单空掉。
 func TestReplaceSnapshot_GivenItems_ThenDeletesThenInsertsInOneTransaction(t *testing.T) {
@@ -198,6 +217,24 @@ func TestDeleteByDevice_GivenDeviceID_ThenDeletesAllRowsForThatDevice(t *testing
 	mock.ExpectCommit()
 
 	assert.NoError(t, r.DeleteByDevice(ctx, 2))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 设备展开页要知道「这台设备上配了路径的项目有哪些」——只看这台设备名下的
+// 上报行，不看它的正文（web 端不展示路径，R19），这里只验证按设备取全部行。
+func TestListByDevice_GivenDeviceID_ThenReturnsItsReportedRows(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewSyncLocalPath()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "device_local_paths" WHERE user_id=`)).
+		WithArgs(int64(7), int64(2)).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id", "device_id", "project_sync_id", "path"}).
+			AddRow(int64(7), int64(2), "p1", "/srv/p1"))
+
+	got, err := r.ListByDevice(ctx, 7, 2)
+	assert.NoError(t, err)
+	assert.Len(t, got, 1)
+	assert.Equal(t, "p1", got[0].ProjectSyncID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

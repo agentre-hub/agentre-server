@@ -25,6 +25,7 @@ import (
 	"agentre-server/internal/service/oauth_svc"
 	"agentre-server/internal/service/relay_svc"
 	"agentre-server/internal/service/sync_svc"
+	"agentre-server/internal/service/workspace_svc"
 )
 
 type ServerConfig struct {
@@ -207,4 +208,7 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 	relay_svc.SetDefault(relay_svc.New(
 		relayConfig, device_repo.Device(), redis.Default(), relay_svc.NewRedisForwarder(relayConfig, redis.Default()),
 	))
+	// 总览页「当前生效」那一档要问 daemon 是否在线；workspace_svc 只依赖窄接口
+	// DaemonOnlineChecker（ISP），relay_svc.Default() 结构性满足它。
+	workspace_svc.SetOnlineChecker(relay_svc.Default())
 }
