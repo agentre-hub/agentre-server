@@ -41,6 +41,21 @@ func (m *MockSyncObjectRepo) EXPECT() *MockSyncObjectRepoMockRecorder {
 	return m.recorder
 }
 
+// DeleteTombstonesBefore mocks base method.
+func (m *MockSyncObjectRepo) DeleteTombstonesBefore(ctx context.Context, cutoff int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteTombstonesBefore", ctx, cutoff)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteTombstonesBefore indicates an expected call of DeleteTombstonesBefore.
+func (mr *MockSyncObjectRepoMockRecorder) DeleteTombstonesBefore(ctx, cutoff any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteTombstonesBefore", reflect.TypeOf((*MockSyncObjectRepo)(nil).DeleteTombstonesBefore), ctx, cutoff)
+}
+
 // Find mocks base method.
 func (m *MockSyncObjectRepo) Find(ctx context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error) {
 	m.ctrl.T.Helper()

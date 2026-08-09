@@ -41,6 +41,9 @@ func (s *stubSyncSvc) GetAvatar(context.Context, int64, string) (*sync_svc.Avata
 	return &sync_svc.AvatarOutput{}, nil
 }
 func (s *stubSyncSvc) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
+func (s *stubSyncSvc) ReclaimExpired(context.Context) (*sync_svc.ReclaimOutput, error) {
+	return &sync_svc.ReclaimOutput{}, nil
+}
 
 var _ sync_svc.SyncSvc = (*stubSyncSvc)(nil)
 

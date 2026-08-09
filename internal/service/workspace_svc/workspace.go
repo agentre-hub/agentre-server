@@ -341,6 +341,41 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 	return out, nil
 }
 
+// configuredProjects 回答「这台机器上哪些项目配了路径」。两类设备的路径存在不同的
+// 地方，因为它们的流动性不同：
+//
+//   - agentred 的路径在**同步组**里（决策 7：它跟着账号在桌面端之间流动），是
+//     kind=project_location、agentred_fingerprint 等于这台机器指纹的那些行。
+//   - 桌面端的本机路径**不流动**（决策 6），只存在于上报组 device_local_paths，
+//     按上报设备分命名空间。
+//
+// 两者不能混用：上报组只有桌面端会写（sync_svc.ReportLocalPaths 以上报设备为键），
+// agentred 从不上报，照它取到的清单不是「少几行」而是恒为空——决策 13 要求的
+// agentred 展开会永远空着。
+//
+// 返回值只有「这个项目同步标识配过路径」这个布尔，路径正文一步都不往外带（R19）。
+func configuredProjects(
+	ctx context.Context, userID int64, dev *device_entity.Device, rows []*sync_entity.SyncObject,
+) (map[string]bool, error) {
+	configured := map[string]bool{}
+	if dev.Kind == device_entity.KindAgentred {
+		for _, row := range rows {
+			if row.Kind == sync_entity.KindProjectLocation && row.AgentredFingerprint == dev.Fingerprint {
+				configured[row.ProjectSyncID] = true
+			}
+		}
+		return configured, nil
+	}
+	localPaths, err := sync_repo.SyncLocalPath().ListByDevice(ctx, userID, dev.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, lp := range localPaths {
+		configured[lp.ProjectSyncID] = true
+	}
+	return configured, nil
+}
+
 func (s *workspaceSvc) DeviceDetail(ctx context.Context, userID, deviceID int64) (*DeviceDetailView, error) {
 	dev, err := device_repo.Device().Find(ctx, deviceID)
 	if err != nil {
@@ -350,21 +385,18 @@ func (s *workspaceSvc) DeviceDetail(ctx context.Context, userID, deviceID int64)
 		return nil, i18n.NewNotFoundError(ctx, code.DeviceNotFound)
 	}
 
-	localPaths, err := sync_repo.SyncLocalPath().ListByDevice(ctx, userID, deviceID)
-	if err != nil {
-		return nil, err
-	}
-	configured := make(map[string]bool, len(localPaths))
-	for _, lp := range localPaths {
-		configured[lp.ProjectSyncID] = true
-	}
-
 	isAgentred := dev.Kind == device_entity.KindAgentred
 	kinds := []string{sync_entity.KindProject}
 	if isAgentred {
-		kinds = append(kinds, sync_entity.KindAgent, sync_entity.KindAgentBackend, sync_entity.KindAgentExecTarget)
+		kinds = append(kinds, sync_entity.KindProjectLocation,
+			sync_entity.KindAgent, sync_entity.KindAgentBackend, sync_entity.KindAgentExecTarget)
 	}
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, kinds)
+	if err != nil {
+		return nil, err
+	}
+
+	configured, err := configuredProjects(ctx, userID, dev, rows)
 	if err != nil {
 		return nil, err
 	}

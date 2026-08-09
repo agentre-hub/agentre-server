@@ -30,7 +30,14 @@ const (
 )
 
 // MaxAvatarBytes 限制单份头像正文的大小。
-const MaxAvatarBytes = 512 * 1024
+//
+// 这里量的是 base64 data URL **整串**的长度，而桌面端的上限（agent_svc 的
+// avatarMaxBytes = 2 MiB）量的是解码后的字节数——过机的是整串，两个数字不可
+// 直接相比：base64 按 4/3 膨胀，再加上 "data:image/png;base64," 这段前缀，
+// 桌面端放行的最大一张头像到这里约 2.67 MiB。上限取 4 MiB，覆盖桌面端接受的
+// 任何一张图（R16a 的「换头像照常触发同步」因此在大图上也成立），同时仍然是
+// 一个上限——它挡的是明显不是头像的正文。
+const MaxAvatarBytes = 4 * 1024 * 1024
 
 type SyncSvc interface {
 	Push(ctx context.Context, in PushInput) (*PushOutput, error)
@@ -40,6 +47,9 @@ type SyncSvc interface {
 	GetAvatar(ctx context.Context, userID int64, contentHash string) (*AvatarOutput, error)
 	// PurgeDeviceLocalPaths 删掉某台设备名下全部上报的本机路径记录（R18）。
 	PurgeDeviceLocalPaths(ctx context.Context, deviceID int64) error
+	// ReclaimExpired 回收超期墓碑与无人引用的头像正文（决策 9、R16a），
+	// 由定时任务周期性调用。
+	ReclaimExpired(ctx context.Context) (*ReclaimOutput, error)
 }
 
 type syncSvc struct {
@@ -353,6 +363,35 @@ func (s *syncSvc) GetAvatar(ctx context.Context, userID int64, contentHash strin
 // （sync_objects）不受影响——它们不属于那台桌面端。
 func (s *syncSvc) PurgeDeviceLocalPaths(ctx context.Context, deviceID int64) error {
 	return sync_repo.SyncLocalPath().DeleteByDevice(ctx, deviceID)
+}
+
+// ReclaimExpired 是决策 9「超期由服务端与本地各自回收」在服务端的那一半，同时
+// 兑现 R16a 的「无人引用即可回收」。两件事共用同一个 30 天窗口，也共用同一个
+// 时钟：server 是唯一时钟源，桌面端各自的墙钟不参与。
+//
+// 顺序不能反。墓碑先删，被删掉的 Agent 才不会再被算成头像的引用方；反过来先扫
+// 头像，那些正等着超期的 Agent 墓碑还压着，回收的量会少一轮。
+//
+// 两条语句都不带 user_id：它们各自按行归属（墓碑）或按账号相关联（头像）决定去留，
+// 一个账号的回收碰不到另一个账号的行——见两个仓储方法的注释。
+func (s *syncSvc) ReclaimExpired(ctx context.Context) (*ReclaimOutput, error) {
+	cutoff := s.now() - TombstoneWindow.Milliseconds()
+
+	tombstones, err := sync_repo.SyncObject().DeleteTombstonesBefore(ctx, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	avatars, err := sync_repo.SyncAvatar().DeleteUnreferencedBefore(ctx, cutoff)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &ReclaimOutput{Tombstones: tombstones, Avatars: avatars}
+	if out.Tombstones > 0 || out.Avatars > 0 {
+		logger.Ctx(ctx).Info("sync reclaim swept expired rows",
+			zap.Int64("tombstone_count", out.Tombstones), zap.Int64("avatar_count", out.Avatars))
+	}
+	return out, nil
 }
 
 // payloadOrEmptyObject 让墓碑也有一份合法的 jsonb 正文。

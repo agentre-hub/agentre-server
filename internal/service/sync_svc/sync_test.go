@@ -1,8 +1,11 @@
 package sync_svc
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -718,6 +721,41 @@ func TestPutAvatar_GivenContent_ThenStoredUnderItsContentHash(t *testing.T) {
 	})
 }
 
+// desktopMaxDecodedAvatarBytes 是桌面端 agent_svc 的 avatarMaxBytes（2 MiB），
+// 管的是 base64 **解码后**的字节数。这里照抄它，测的正是「桌面端放行的头像
+// server 必须存得下」。
+const desktopMaxDecodedAvatarBytes = 2 * 1024 * 1024
+
+// R16a 承诺「换头像照常触发同步」。桌面端按解码后 2 MiB 判上限，而过机的是
+// base64 data URL 整串（按 4/3 膨胀，再加 data:image/png;base64, 前缀）——server
+// 的上限若比它小，一张桌面端明明接受了的头像就永远同步不上去，那个 Agent 在别的
+// 端上会一直退回占位字母头像。
+func TestPutAvatar_GivenAvatarAtTheDesktopLimit_ThenAccepted(t *testing.T) {
+	convey.Convey("桌面端放行的最大一张头像，server 必须存得下", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		content := "data:image/png;base64," +
+			base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x7f}, desktopMaxDecodedAvatarBytes))
+		m.avatar.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
+
+		err := svc.PutAvatar(ctx, AvatarInput{UserID: testUserID, ContentHash: sha256Hex(content),
+			ContentType: "image/png", Content: content})
+
+		assert.NoError(t, err)
+	})
+}
+
+// 上限本身还在：抬高不等于取消，超过它的正文照拒。
+func TestPutAvatar_GivenContentOverTheCap_ThenRejected(t *testing.T) {
+	convey.Convey("超过上限的正文照拒", t, func() {
+		ctx, _, svc := setupSyncTest(t)
+		content := strings.Repeat("a", MaxAvatarBytes+1)
+
+		err := svc.PutAvatar(ctx, AvatarInput{UserID: testUserID, ContentHash: sha256Hex(content), Content: content})
+
+		assert.Equal(t, code.InvalidParameter, errCode(t, err))
+	})
+}
+
 func TestPutAvatar_GivenHashMismatch_ThenRejected(t *testing.T) {
 	convey.Convey("哈希与正文对不上", t, func() {
 		ctx, _, svc := setupSyncTest(t)
@@ -732,6 +770,38 @@ func TestGetAvatar_GivenUnknownHash_ThenNotFound(t *testing.T) {
 		m.avatar.EXPECT().Find(gomock.Any(), testUserID, "nope").Return(nil, nil)
 		_, err := svc.GetAvatar(ctx, testUserID, "nope")
 		assert.Equal(t, code.SyncAvatarNotFound, errCode(t, err))
+	})
+}
+
+// 决策 9「超期由服务端与本地各自回收」+ R16a「无人引用即可回收」：服务端这一半
+// 是一次周期性清扫，两处回收共用同一个 30 天窗口。窗口以 server 时钟为准（它是
+// 唯一时钟源），墓碑早于窗口才删——提前删等于让还没拉取过的设备把已删除的对象
+// 重新推回来，R6 的「删除不会被复活」当场失效。
+func TestReclaimExpired_GivenTombstoneWindow_ThenSweepsBothWithTheSameCutoff(t *testing.T) {
+	convey.Convey("周期性回收超期墓碑与无人引用的头像", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		wantCutoff := testNow - TombstoneWindow.Milliseconds()
+		m.object.EXPECT().DeleteTombstonesBefore(gomock.Any(), wantCutoff).Return(int64(3), nil)
+		m.avatar.EXPECT().DeleteUnreferencedBefore(gomock.Any(), wantCutoff).Return(int64(2), nil)
+
+		out, err := svc.ReclaimExpired(ctx)
+
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), out.Tombstones)
+		assert.Equal(t, int64(2), out.Avatars)
+	})
+}
+
+// 墓碑那一半失败时整轮就地停下：头像回收要在墓碑删干净之后才判「无人引用」
+// 才准确，而且下一个周期会原样重来一次，没有必要在半个已知失败的状态上继续。
+func TestReclaimExpired_GivenTombstoneSweepFails_ThenAvatarSweepIsNotAttempted(t *testing.T) {
+	convey.Convey("墓碑回收失败就不再动头像", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		m.object.EXPECT().DeleteTombstonesBefore(gomock.Any(), gomock.Any()).Return(int64(0), assert.AnError)
+
+		_, err := svc.ReclaimExpired(ctx)
+
+		assert.ErrorIs(t, err, assert.AnError)
 	})
 }
 

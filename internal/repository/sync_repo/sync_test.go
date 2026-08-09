@@ -254,6 +254,44 @@ func TestSaveAvatar_GivenSameContentTwice_ThenOnConflictDoNothing(t *testing.T) 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// 决策 9：墓碑保留 30 天，超期由服务端回收。回收语句必须同时带上下界——
+// 没有 deleted_at>0 就把存活的行一起删了；没有 deleted_at<cutoff 就把窗口内的
+// 墓碑也删了，而那正是还没拉取过的设备赖以知道「这行被删了」的唯一凭据（R6）。
+func TestDeleteTombstonesBefore_GivenCutoff_ThenOnlyExpiredTombstonesAreDeleted(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewSyncObject()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM "sync_objects" WHERE deleted_at>0 AND deleted_at<`)).
+		WithArgs(int64(1700)).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
+
+	n, err := r.DeleteTombstonesBefore(ctx, 1700)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// R16a：头像按哈希存一份，被任何 Agent 引用即保留，无人引用即可回收。
+//
+// 三个条件缺一不可：引用检查必须按账号相关联（sync_avatars 的主键是「账号 + 哈希」，
+// 同一张图完全可能同时存在于两个账号下，拿别人账号的引用决定这一行的生死既会误留
+// 也会误删）；只有 kind=agent 的行才算引用；且只有存活的行算数（墓碑不是引用）。
+func TestDeleteUnreferencedAvatarsBefore_GivenAccounts_ThenReferenceCheckIsPerAccountAndLiveOnly(t *testing.T) {
+	ctx, _, mock := hubtest.DatabasePG(t)
+	r := NewSyncAvatar()
+
+	mock.ExpectExec(`(?s)DELETE FROM sync_avatars.*NOT EXISTS.*o\.user_id = a\.user_id.*o\.kind = 'agent'.*o\.deleted_at = 0`).
+		WithArgs(int64(1700)).
+		WillReturnResult(sqlmock.NewResult(0, 2))
+
+	n, err := r.DeleteUnreferencedBefore(ctx, 1700)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(2), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestFindAvatar_GivenNoRow_ThenNilNil(t *testing.T) {
 	ctx, _, mock := hubtest.DatabasePG(t)
 	r := NewSyncAvatar()

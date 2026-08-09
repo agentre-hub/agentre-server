@@ -30,6 +30,10 @@ type SyncObjectRepo interface {
 	// web 控制台读账号级快照（总览页的 Agent 清单、设备展开的项目清单）要的是
 	// 当前状态的完整集合，不是同步用的增量游标。
 	ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error)
+	// DeleteTombstonesBefore 真正删掉删除时间早于 cutoff 的墓碑行（决策 9），
+	// 返回删掉的行数。cutoff 由 service 按墓碑窗口算出：窗口内的墓碑必须留着，
+	// 它是尚未拉取的设备赖以知道「这行被删了」的唯一凭据。
+	DeleteTombstonesBefore(ctx context.Context, cutoff int64) (int64, error)
 }
 
 var defaultObject SyncObjectRepo
@@ -102,6 +106,18 @@ func (r *objectRepo) ListSince(ctx context.Context, userID, cursor int64, limit 
 		return nil, err
 	}
 	return out, nil
+}
+
+// DeleteTombstonesBefore 的两个条件都是必须的：deleted_at>0 把存活的行排除在外，
+// deleted_at<cutoff 把还在窗口内的墓碑排除在外。少任何一个都不是「回收」而是数据
+// 丢失——存活行被删，或者删除本身在到达所有端之前就消失了（R6）。
+//
+// 一条语句扫全表、不分账号：每一行都只按它自己的 user_id 归属被删，一个账号的
+// 回收不可能碰到另一个账号的行。
+func (r *objectRepo) DeleteTombstonesBefore(ctx context.Context, cutoff int64) (int64, error) {
+	res := db.Ctx(ctx).Where("deleted_at>0 AND deleted_at<?", cutoff).
+		Delete(&sync_entity.SyncObject{})
+	return res.RowsAffected, res.Error
 }
 
 func (r *objectRepo) ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error) {

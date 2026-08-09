@@ -148,32 +148,45 @@ func TestListAccountAgents_NeverCarriesCLIPathOrEnvJSON(t *testing.T) {
 
 // agentred 展开：只列它自己在目标链里出现的 Agent（带档位），且项目清单只包含
 // 已配置的那些——未配置的项目不出现，符合「只显示是否配置」的呈现约定。
+//
+// 「已配置」的来源是同步组里 kind=project_location、指纹等于这台机器的那些行
+// （决策 13、决策 7）。上报组 device_local_paths 只有桌面端会写（R16），agentred
+// 从不上报，照那张表取出来的清单永远是空的——因此这里连问都不问它。
 func TestDeviceDetail_GivenAgentred_ThenListsRunnableAgentsWithRankAndConfiguredProjectsOnly(t *testing.T) {
-	ctx, mObj, mPath, mDev, svc := setupWorkspaceTest(t)
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
 
 	mDev.EXPECT().Find(ctx, int64(20)).Return(
 		&device_entity.Device{ID: 20, UserID: 7, Kind: device_entity.KindAgentred, Fingerprint: "fp-a", Status: 1}, nil)
-	mPath.EXPECT().ListByDevice(ctx, int64(7), int64(20)).Return([]*sync_entity.DeviceLocalPath{
-		{UserID: 7, DeviceID: 20, ProjectSyncID: "proj-1", Path: "/srv/proj-1"},
-	}, nil)
-	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
-		{Kind: sync_entity.KindProject, SyncID: "proj-1", Payload: mustJSON(t, map[string]any{"name": "agentre-server"})},
-		{Kind: sync_entity.KindProject, SyncID: "proj-2", Payload: mustJSON(t, map[string]any{"name": "agentre-hub"})},
-		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "前端 Agent"})},
-		{Kind: sync_entity.KindAgent, SyncID: "agent-2", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
-		{Kind: sync_entity.KindAgentBackend, SyncID: "b-other", AgentredFingerprint: "fp-b",
-			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
-		{Kind: sync_entity.KindAgentBackend, SyncID: "b-mine", AgentredFingerprint: "fp-a",
-			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
-		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
-			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-other", "sort_order": 0})},
-		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
-			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-mine", "sort_order": 1})},
-	}, nil)
+	var askedKinds []string
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ int64, kinds []string) ([]*sync_entity.SyncObject, error) {
+			askedKinds = kinds
+			return []*sync_entity.SyncObject{
+				{Kind: sync_entity.KindProject, SyncID: "proj-1", Payload: mustJSON(t, map[string]any{"name": "agentre-server"})},
+				{Kind: sync_entity.KindProject, SyncID: "proj-2", Payload: mustJSON(t, map[string]any{"name": "agentre-hub"})},
+				// 这台机器上配了路径的项目。
+				{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+					AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/srv/data/agentre-server"})},
+				// 另一台 agentred 上的路径记录：不属于这台机器，不算「已配置」。
+				{Kind: sync_entity.KindProjectLocation, SyncID: "loc-2", ProjectSyncID: "proj-2",
+					AgentredFingerprint: "fp-b", Payload: mustJSON(t, map[string]any{"path": "/srv/other/agentre-hub"})},
+				{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "前端 Agent"})},
+				{Kind: sync_entity.KindAgent, SyncID: "agent-2", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
+				{Kind: sync_entity.KindAgentBackend, SyncID: "b-other", AgentredFingerprint: "fp-b",
+					Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+				{Kind: sync_entity.KindAgentBackend, SyncID: "b-mine", AgentredFingerprint: "fp-a",
+					Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+				{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+					Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-other", "sort_order": 0})},
+				{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
+					Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-mine", "sort_order": 1})},
+			}, nil
+		})
 
 	got, err := svc.DeviceDetail(ctx, 7, 20)
 	require.NoError(t, err)
 	assert.Equal(t, device_entity.KindAgentred, got.Kind)
+	assert.Contains(t, askedKinds, sync_entity.KindProjectLocation)
 
 	require.Len(t, got.RunnableAgents, 1)
 	assert.Equal(t, "前端 Agent", got.RunnableAgents[0].Name)
@@ -182,6 +195,11 @@ func TestDeviceDetail_GivenAgentred_ThenListsRunnableAgentsWithRankAndConfigured
 	require.Len(t, got.Projects, 1)
 	assert.Equal(t, "agentre-server", got.Projects[0].Name)
 	assert.True(t, got.Projects[0].Configured)
+
+	// R19 守卫：路径记录的正文过了这一层，但视图里只剩项目名与「已配置」这个布尔。
+	out := mustJSON(t, got)
+	assert.NotContains(t, out, "/srv/data")
+	assert.NotContains(t, out, "path")
 }
 
 // 桌面端展开：不列 Agent（Agent 不按桌面端归属），项目清单列全部账号级项目，

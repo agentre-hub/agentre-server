@@ -41,6 +41,21 @@ func (m *MockSyncAvatarRepo) EXPECT() *MockSyncAvatarRepoMockRecorder {
 	return m.recorder
 }
 
+// DeleteUnreferencedBefore mocks base method.
+func (m *MockSyncAvatarRepo) DeleteUnreferencedBefore(ctx context.Context, cutoff int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteUnreferencedBefore", ctx, cutoff)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteUnreferencedBefore indicates an expected call of DeleteUnreferencedBefore.
+func (mr *MockSyncAvatarRepoMockRecorder) DeleteUnreferencedBefore(ctx, cutoff any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteUnreferencedBefore", reflect.TypeOf((*MockSyncAvatarRepo)(nil).DeleteUnreferencedBefore), ctx, cutoff)
+}
+
 // Find mocks base method.
 func (m *MockSyncAvatarRepo) Find(ctx context.Context, userID int64, contentHash string) (*sync_entity.SyncAvatar, error) {
 	m.ctrl.T.Helper()

@@ -117,3 +117,10 @@ type AvatarOutput struct {
 	ContentType string
 	Content     string
 }
+
+// ReclaimOutput 是一次周期性回收的战果：真正删掉的超期墓碑行数与无人引用的
+// 头像行数。给定时任务用来判断「这一轮值不值得记一条日志」。
+type ReclaimOutput struct {
+	Tombstones int64
+	Avatars    int64
+}

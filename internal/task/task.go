@@ -22,6 +22,9 @@ const lockKeyPrefix = "task:cron"
 func Task(ctx context.Context, _ *configs.Config) error {
 	_, _ = cron.Default().AddFunc("*/5 * * * *", withPeriodLock("cleanup_device_flow_codes", 4*time.Minute, crontab.CleanupDeviceFlowCodes))
 	_, _ = cron.Default().AddFunc("0 * * * *", withPeriodLock("cleanup_device_tokens", 50*time.Minute, crontab.CleanupDeviceTokens))
+	// 同步组的回收窗口是 30 天，一天扫一次足够，也避开业务高峰；锁的 TTL 照例
+	// 略短于周期，让下一天的这一轮能重新被认领。
+	_, _ = cron.Default().AddFunc("17 4 * * *", withPeriodLock("reclaim_sync_garbage", 23*time.Hour, crontab.ReclaimSyncGarbage))
 	return nil
 }
 
