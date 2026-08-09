@@ -6,7 +6,7 @@
 
 **Objective:** 往 Gitea 推分支即可把 agentre-server 构建成镜像并用 Helm 发布到 k3s 集群，对外以 `app.agentrehub.com` 提供 SPA 与 `/v1` API。
 
-**Hard invariant:** 现有的 `make lint` / `make test` 门禁、`.github/workflows/ci.yml`、`docker-compose.yml` 的行为都不变；仓库仍然零 build tag；凭据不进仓库、不进日志。
+**Hard invariant:** 现有的 `make lint` / `make test` 门禁、`.github/workflows/ci.yml`、`docker-compose.yml` 的行为都不变；仓库仍然零 build tag；凭据不进仓库。
 
 ## Problem
 

@@ -58,7 +58,7 @@ No sticky-session annotation is added. Cross-instance routing continues to use R
 
 The relay endpoint paths, Device JWT authentication, binary envelope and daemon/client protocol remain unchanged. Existing clients that implement standard WebSocket ping/pong handling require no upgrade.
 
-The message limit applies after WebSocket upgrade and is independent of HTTP request-body handling. Credentials and frame payloads remain absent from logs.
+The message limit applies after WebSocket upgrade and is independent of HTTP request-body handling.
 
 ## Out of scope
 
@@ -73,7 +73,6 @@ The message limit applies after WebSocket upgrade and is independent of HTTP req
 |---|---|---|
 | Redis forwarder service | Successfully delivered and undeliverable entries are removed from the stream; delivery ACK behaviour and pending recovery remain intact. | `internal/service/relay_svc/relay_test.go` delivery acknowledgement and undeliverable-frame tests |
 | Relay controller over real WebSockets | Oversized frames are disconnected; heartbeat activity keeps a compliant connection alive; an unresponsive peer is closed within the configured policy using test-time timing seams rather than production-duration sleeps. | `internal/controller/relay_ctr/relay_test.go` real WebSocket route tests |
-| Deployment guard | Default ingress values retain both 3600-second WebSocket proxy timeout annotations. | `internal/guards/observability_test.go` configuration guard pattern |
 | Cross-instance regression | Client and daemon on different server instances still exchange request and response frames. | `TestRelayFramesCrossServerInstances` |
 
 A real ingress controller's timeout behaviour is not hermetically reproducible in the unit suite. Wrap-up verification will render the Helm chart and inspect the generated Ingress annotations; real cross-network/NAT behaviour remains covered by the account-relay manual verification track.

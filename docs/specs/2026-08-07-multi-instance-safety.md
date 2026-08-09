@@ -6,7 +6,7 @@
 
 **Objective:** 让 agentre-server 在多副本同时运行时行为正确——启动期不会因并发迁移而起不来，定时任务不会每副本各跑一遍，请求路径上不再有依赖「进程内只有我一个」的假设；并把这条约束写进文档，让后续改动有据可依。
 
-**Hard invariant:** 仓库仍然零 build tag；`make lint` / `make test` 仍是唯一门禁且不新增外部依赖（不引入 Docker、不连真 PG/Redis 跑单元测试）；依赖方向 `controller → service → repository → entity` 不变，`internal/pkg/*` 仍不导入 service/repository；凭据不进日志；不改动任何既有迁移。
+**Hard invariant:** 仓库仍然零 build tag；`make lint` / `make test` 仍是唯一门禁且不新增外部依赖（不引入 Docker、不连真 PG/Redis 跑单元测试）；依赖方向 `controller → service → repository → entity` 不变，`internal/pkg/*` 仍不导入 service/repository；不改动任何既有迁移。
 
 ## Problem
 
@@ -44,7 +44,7 @@
 | # | Decision | Basis and rejected option |
 |---|---|---|
 | 1 | 8 项修复放同一轮交付 | 用户决定。Rejected: 拆成「基础设施加锁」与「Device Flow 状态机原子化」两轮——后者会改变并发竞败方的可观察错误、按 `docs/testing.md` 需走真 PG 的 scratch 验证，风险类别与前者不同，分开评审和回滚的粒度更细。用户已知该取舍并选择一轮完成 |
-| 2 | 多实例约束只写文档，不加机械守卫 | 用户决定。Rejected: 在 `internal/guards/` 加 AST 守卫，断言没有任何地方直接调用 `cron.Default().AddFunc`——与仓库既有的 forbidigo / 色板 / i18n 守卫同一套做法，能让「忘记加锁」变成一次失败的构建。用户已知该取舍并选择只写文档 |
+| 2 | 多实例约束只写文档，不加机械守卫 | 用户决定。 |
 | 3 | 迁移用 PostgreSQL advisory lock 串行化，锁持有在一条专用连接上 | advisory lock 是**会话级**的，而 gorm 从连接池取连接，直接 `gdb.Exec("pg_advisory_lock")` 可能在 A 连接上加锁、在 B 连接上跑迁移，锁会随 A 归还池中而失去意义。因此从 `sqlDB.Conn(ctx)` 取一条固定连接持锁，迁移本身照常走连接池——advisory lock 不绑定数据，这样是正确的。进程崩溃时连接断开，PG 自动释放。Rejected: helm `pre-upgrade` Job 单独跑迁移——能解决问题，但 `helm upgrade` 之外的启动路径（本地 `make dev`、`docker-compose`、手工 `kubectl run`）就不再有保护，问题从代码里搬到了部署方式里 |
 | 4 | 用 `pg_try_advisory_lock` 轮询而非阻塞的 `pg_advisory_lock` | 阻塞版没有上界，前面的副本卡住会让后面的副本静默挂起到被探针杀掉，日志里什么都看不到。轮询版有明确的等待预算，超时就返回错误、由 `main.go` 打日志退出，CrashLoop 是可见且自愈的。副作用是可以用 sqlmock 断言「拿不到锁时会重试、拿到后才跑迁移、结束后解锁」这个序列 |
 | 5 | 迁移等待预算 120s，同时把 chart 的 `startupProbe.failureThreshold` 从 30 提到 60 | 现值 `periodSeconds: 5 × failureThreshold: 30` = 150s 总预算，而等待锁 120s 之后还要真正跑迁移，很容易在迁移中途被探针杀掉；`UseTransaction: false` 下被杀在中途会留下半应用的迁移。提到 60（300s）让「等锁 + 迁移」有富余。Rejected: 缩短等待预算——迁移本身可能就要几十秒，等待预算小于它没有意义 |

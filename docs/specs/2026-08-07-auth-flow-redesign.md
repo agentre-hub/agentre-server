@@ -6,7 +6,7 @@
 
 **Objective:** 让登录、输入设备码、设备授权确认、授权结果、404 这几屏与 `~/Code/设计稿/agentre-server.pen` 的画板 01–19、38–39 一致：共用的认证外壳、成体系的排版与圆角、四种各自成形的失败态，并把 `docs/design.md` 重写成能照着落地的设计系统文档。
 
-**Hard invariant:** 后端一行不改——本轮只消费 `internal/api/router.go` 现有的端点与 `internal/api/device/device.go` 现有的字段。零 build tag、`no-restricted-syntax` 字面色禁令、`i18next/no-literal-string`、locale 键对等、e2e 双 project（desktop + mobile）无横向溢出，这些门禁全部维持。凭据仍然不进日志。
+**Hard invariant:** 后端一行不改——本轮只消费 `internal/api/router.go` 现有的端点与 `internal/api/device/device.go` 现有的字段。零 build tag、`no-restricted-syntax` 字面色禁令、`i18next/no-literal-string`、locale 键对等、e2e 双 project（desktop + mobile）无横向溢出，这些门禁全部维持。
 
 ## Problem
 
@@ -160,7 +160,7 @@
 
 **自动化覆盖不到的**：颜色是否好看、字重层级是否分明、深浅两套的观感是否都成立。这三件事由收尾时人眼比对画板与实际渲染完成，覆盖 02/06/10/14/18/38 六块画板的浅深两版与桌面移动两版。自托管字体是否真的被加载（而非静默回退到系统字体）同样只能观察，收尾时在浏览器里确认 `document.fonts` 中存在该字族。
 
-`docs/design.md` 本身没有自动化守卫（`internal/guards/` 下只有 `observability_test.go`）。它由收尾时的源码审读覆盖：逐条核对文中出现的令牌名、工具类名与文件路径在代码里确实存在，且「Adding a page」的示例能照着跑通。
+`docs/design.md` 本身没有自动化守卫。它由收尾时的源码审读覆盖：逐条核对文中出现的令牌名、工具类名与文件路径在代码里确实存在，且「Adding a page」的示例能照着跑通。
 
 ## Links
 
