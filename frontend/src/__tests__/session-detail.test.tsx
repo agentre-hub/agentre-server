@@ -5,7 +5,7 @@
  *   - 批准工具调用 → runtime.submitToolPermission（R10）。
  *   - 待决策已被别的端回答 → 就地说明「已被处理」并刷新状态（R10）。
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -151,9 +151,60 @@ describe("会话详情页", () => {
         agentSyncId: "ag-1",
         userText: "把按钮改成蓝色",
         sourceDevice: "fp-web",
-        backend: { backendType: "claudecode" },
+        // daemon 端按 {"type": ...} 解 backend(integration_test 的既有契约);
+        // 这里发的必须与 wire 契约一致,否则 daemon 解出空 backend 报未注册。
+        backend: { type: "claudecode" },
       });
     });
+  });
+
+  it("实时收到 tool_permission_request 事件后刷新待决策并出现审批卡", async () => {
+    // 审批卡的数据源是 pendingWaiters,不是事件流:daemon 实时推来审批事件后页面必须
+    // 主动重拉一次,否则卡永远不出现(fake runtime 阻塞在审批上,run 不会结束,
+    // onRunResultDone 那一条刷新路径到不了)。
+    let waitersCall = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list") return { sessions: [summary] };
+      if (method === "runtime.session.pendingWaiters") {
+        waitersCall += 1;
+        if (waitersCall === 1) {
+          return { toolPermissions: [], askUserQuestions: [] };
+        }
+        return {
+          toolPermissions: [
+            { RequestID: "tp-1", ToolName: "Bash", Input: { cmd: "ls" } },
+          ],
+          askUserQuestions: [],
+        };
+      }
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    expect(await screen.findByText(/重构登录页/)).toBeTruthy();
+
+    // daemon 实时推来 tool_permission_request 事件。
+    await act(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: {
+          kind: "tool_permission_request",
+          requestId: "tp-1",
+          toolName: "Bash",
+          input: { cmd: "ls" },
+        },
+        seq: 6,
+      });
+    });
+
+    // 审批卡(可交互)的判据是 DecisionPanel 里的 approve-tool-allow 按钮 ——
+    // 转录里的 decision 信息卡是只读的,不能当证据。
+    expect(await screen.findByTestId("approve-tool-allow")).toBeTruthy();
+    expect(waitersCall).toBeGreaterThanOrEqual(2);
   });
 
   it("批准工具调用走 runtime.submitToolPermission", async () => {

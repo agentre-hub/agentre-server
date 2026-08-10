@@ -17,7 +17,7 @@ export default function Transcript({ items }: { items: TranscriptItem[] }) {
     );
   }
   return (
-    <div className="space-y-3">
+    <div className="space-y-3" data-testid="session-detail-transcript">
       {items.map((item) => (
         <Block key={item.id} item={item} t={t} />
       ))}

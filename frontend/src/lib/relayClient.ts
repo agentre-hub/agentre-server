@@ -57,6 +57,12 @@ export interface RelayClientOptions {
   url: string;
   /** 设备 JWT → Authorization: Bearer <jwt>。 */
   jwt: string;
+  /**
+   * 本浏览器自己的设备指纹,随 auth.account 出示(与 Go 侧 daemon/client 的中继
+   * 路径同一握手:连接建立后先 auth.account 再用 runtime.* 与 session.* 方法)。
+   * 没有它 daemon 无法把这条连接认成一个对端,后续请求都被 requireAuth 拒掉。
+   */
+  deviceFingerprint: string;
   /** 断线自动重连(默认 true)。 */
   reconnect?: boolean;
   /** 重连退避间隔毫秒(默认 1000)。 */
@@ -81,8 +87,15 @@ interface PendingRequest {
 
 const OPEN = 1;
 
+/** auth.account 握手应答(只取 ok;daemon 报错时整个请求 reject)。 */
+interface AccountAuthResult {
+  ok?: boolean;
+}
+
 export class RelayClient {
-  private readonly opts: Required<Pick<RelayClientOptions, "url" | "jwt">> &
+  private readonly opts: Required<
+    Pick<RelayClientOptions, "url" | "jwt" | "deviceFingerprint">
+  > &
     RelayClientOptions;
   private ws: WebSocket | null = null;
   private nextId = 1;
@@ -108,6 +121,18 @@ export class RelayClient {
     };
   }
 
+  /**
+   * 向 daemon 出示账号凭据,把它认成本浏览器的对端(auth.account,与 Go 侧
+   * daemon/client 的中继路径同一握手)。必须在任何 runtime.* 与 session.* 之前完成 ——
+   * daemon 对非 auth.* 方法一律 requireAuth。
+   */
+  private authenticate(): Promise<unknown> {
+    return this.request("auth.account", {
+      credential: this.opts.jwt,
+      deviceFingerprint: this.opts.deviceFingerprint,
+    });
+  }
+
   get state(): RelayState {
     return this.currentState;
   }
@@ -131,8 +156,24 @@ export class RelayClient {
       ws.binaryType = "arraybuffer";
       this.ws = ws;
       ws.onopen = () => {
-        this.setState("connected");
-        resolve();
+        // 连接建立 ≠ 可用。daemon 对非 auth.* 方法一律 requireAuth,而 auth.account
+        // 与随后的 session.* / runtime.* 是并发处理的 —— 在握手返回前就把 relayState
+        // 置 connected,页面会立刻发 session.list,抢在 auth.account 之前到达 daemon
+        // 被 Unauthorized 拒掉(实测竞态)。所以「connected」只在 auth.account 成功后才
+        // 对外暴露,connect() 也只在此时 resolve;消费者的 session.* 请求因此必然晚于
+        // 握手完成,不再抢跑。
+        void this.authenticate()
+          .then(() => {
+            this.setState("connected");
+            resolve();
+          })
+          .catch((err) => {
+            this.connectPromise = null;
+            reject(err instanceof RelayError ? err : new RelayError(-1, "relay: auth.account 失败", err));
+            // 握手失败:关掉这条未认证的连接,走 handleClose → reconnecting → 自动
+            // 重连,页面据此触发 R11 探测(被吊销 / 账号不匹配 / 凭据过期)。
+            ws.close();
+          });
       };
       ws.onerror = () => {
         // 尚未 open 就出错:让 connect() 失败,并清掉 connectPromise,使下一次

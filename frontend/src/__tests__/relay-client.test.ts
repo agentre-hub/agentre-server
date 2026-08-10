@@ -11,7 +11,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { RelayClient, type RelayClientOptions } from "@/lib/relayClient";
+import {
+  RelayClient,
+  type RelayClientOptions,
+  type RelayState,
+} from "@/lib/relayClient";
 import { type WireFrame, encodeFrame } from "@/lib/wire";
 
 // ── 假 WebSocket ────────────────────────────────────────────────────────────
@@ -81,8 +85,28 @@ async function connectClient(client: RelayClient): Promise<FakeWebSocket> {
   const p = client.connect();
   const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
   ws.open();
+  await authenticate(ws);
   await p;
+  // 把握手帧从 sent 里弹掉,后续测试按「首个请求」索引不受影响。
+  ws.sent.shift();
   return ws;
+}
+
+/**
+ * 驱动 auth.account 握手:open 后客户端先发 auth.account,daemon 回 {ok:true}
+ * connect() 才 resolve。供初连与重连两处复用。
+ */
+async function authenticate(ws: FakeWebSocket): Promise<void> {
+  await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+  const auth = lastSent(ws);
+  expect(auth.method).toBe("auth.account");
+  expect(auth.params).toMatchObject({
+    credential: JWT,
+    deviceFingerprint: "fp-web",
+  });
+  ws.receive(
+    encode(encodeFrame({ jsonrpc: "2.0", id: auth.id, result: { ok: true } })),
+  );
 }
 
 const URL = "ws://relay.test/v1/relay/client?daemon_fingerprint=fp-web";
@@ -92,6 +116,7 @@ function makeClient(overrides: Partial<RelayClientOptions> = {}): RelayClient {
   return new RelayClient({
     url: URL,
     jwt: JWT,
+    deviceFingerprint: "fp-web",
     reconnect: false,
     createWebSocket: (u, h) => new FakeWebSocket(u, h) as unknown as WebSocket,
     ...overrides,
@@ -252,10 +277,12 @@ describe("中继客户端:断线后按 seq 游标补齐,重复投递只应用一
     // 断线(seq 3、4 在离线期间产生)。
     ws.serverClose();
 
-    // 自动重连:第二条连接,attach → pull(cursor 必须是 2,独占,不是 0)。
+    // 自动重连:第二条连接,同样先 auth.account,再 attach → pull(cursor 必须是 2,独占,不是 0)。
     await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
     ws = FakeWebSocket.instances[1];
     ws.open();
+    await authenticate(ws);
+    ws.sent.shift(); // 握手帧弹掉,后续按「首个请求」计数
     await waitSent(ws, 1);
     const reattach = lastSent(ws);
     expect(reattach.method).toBe("runtime.session.attach");
@@ -435,6 +462,64 @@ describe("中继客户端:断线后按 seq 游标补齐,重复投递只应用一
   });
 });
 
+describe("中继客户端:握手完成前不对外暴露 connected", () => {
+  it("auth.account 返回前 state 不得是 connected(防 session.list 抢跑被 daemon 拒)", async () => {
+    const states: RelayState[] = [];
+    const client = makeClient({
+      reconnect: false,
+      onStateChange: (s) => states.push(s),
+    });
+    const p = client.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.open(); // WS 已建立,但 auth.account 握手还没回
+
+    // 关键断言:握手返回前不能对外暴露 connected —— 页面靠它触发 session.list,
+    // 抢跑会在 daemon 处理 auth.account 之前到达,被 Unauthorized 拒掉(实测竞态)。
+    expect(client.state).not.toBe("connected");
+    expect(states).not.toContain("connected");
+
+    await authenticate(ws); // 握手返回 {ok:true}
+    await p;
+    expect(client.state).toBe("connected");
+    expect(states).toContain("connected");
+    client.close();
+  });
+
+  it("auth.account 失败时关掉未认证连接并进入 reconnecting(供 R11 探测)", async () => {
+    const states: RelayState[] = [];
+    const client = makeClient({
+      reconnect: true,
+      reconnectDelayMs: 5,
+      onStateChange: (s) => states.push(s),
+    });
+    const p = client.connect();
+    const ws = FakeWebSocket.instances[0];
+    ws.open();
+
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    const auth = lastSent(ws);
+    expect(auth.method).toBe("auth.account");
+    // daemon 拒绝握手(被吊销 / 账号不匹配 / 凭据过期)。
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          id: auth.id,
+          error: { code: -32001, message: "account credential revoked" },
+        }),
+      ),
+    );
+    // daemon 的错误帧原样透传为 RelayError(消息即 daemon 的文案)。
+    await expect(p).rejects.toThrow("account credential revoked");
+    // 未认证的连接被关掉 → handleClose → reconnecting → 自动重连(R11 探测的入口)。
+    await vi.waitFor(() =>
+      expect(states).toContain("reconnecting"),
+    );
+    await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
+    client.close();
+  });
+});
+
 describe("中继客户端:连接失败可重试", () => {
   it("首次连接失败后重试能连上(不残留已拒绝的 connectPromise)", async () => {
     const client = makeClient();
@@ -447,6 +532,7 @@ describe("中继客户端:连接失败可重试", () => {
     const p2 = client.connect();
     expect(FakeWebSocket.instances.length).toBe(2);
     FakeWebSocket.instances[1].open();
+    await authenticate(FakeWebSocket.instances[1]);
     await p2;
     client.close();
   });

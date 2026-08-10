@@ -180,6 +180,7 @@ function DeviceExpandDetail({
           {device.online ? (
             <Link
               to={`/devices/${device.id}/sessions`}
+              data-testid={`device-sessions-link-${device.id}`}
               className="inline-flex w-fit items-center text-xs font-medium text-primary-text hover:underline"
             >
               {t("device.manage.viewSessions")}
@@ -336,7 +337,7 @@ export default function Devices() {
             {devices.map((d) => {
               const isExpanded = expanded.has(d.id);
               return (
-                <Card key={d.id} className="py-4">
+                <Card key={d.id} className="py-4" data-testid={`device-row-${d.id}`}>
                   <CardHeader className="px-5">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -354,6 +355,7 @@ export default function Devices() {
                         <Button
                           variant="ghost"
                           size="icon-sm"
+                          data-testid={`device-expand-${d.id}`}
                           aria-expanded={isExpanded}
                           aria-label={
                             isExpanded

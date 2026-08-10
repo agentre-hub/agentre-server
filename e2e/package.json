@@ -8,6 +8,7 @@
   "scripts": {
     "smoke": "playwright install chromium && playwright test",
     "scratch": "playwright install chromium && playwright test --config playwright.scratch.config.ts",
+    "web": "node run-e2e-web.mjs",
     "format": "prettier --write .",
     "lint": "prettier --check ."
   },

@@ -118,6 +118,7 @@ export async function dispatchNewConversation(
       input.sourceDevice.accessToken,
     ),
     jwt: input.sourceDevice.accessToken,
+    deviceFingerprint: input.sourceDevice.fingerprint,
     reconnect: false,
   });
   try {

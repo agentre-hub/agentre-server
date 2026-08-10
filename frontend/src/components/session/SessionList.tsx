@@ -175,6 +175,7 @@ function SessionRow({
   return (
     <Link
       to={sessionPath(session.sessionId)}
+      data-testid={`session-row-${session.sessionId}`}
       className={cn(
         "flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent",
         // 触控目标：移动行高不小于 44px。

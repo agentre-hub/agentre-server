@@ -42,6 +42,11 @@ test-frontend:
 test-e2e:
 	cd e2e && pnpm install --frozen-lockfile --silent && pnpm exec playwright install-deps chromium && pnpm smoke
 
+# web 全链路 e2e（真浏览器 + 真 server + 真 agentred，开发环境 PG/Redis）。
+# 不进 CI、不进 make test——按需运行，见 e2e/README.md「web 全链路」一节。
+test-e2e-web:
+	cd e2e && pnpm exec playwright install chromium && pnpm web
+
 test-cover:
 	go test -race -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html

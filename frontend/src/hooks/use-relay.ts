@@ -55,6 +55,7 @@ export function useRelayMachine(
         c = new RelayClient({
           url: relayClientUrl(fingerprint, dev.accessToken),
           jwt: dev.accessToken,
+          deviceFingerprint: dev.fingerprint,
           onStateChange: setRelayState,
           onEvent: (frame) => optsRef.current.onEvent?.(frame),
           onRunResultDone: (frame) => optsRef.current.onRunResultDone?.(frame),

@@ -121,6 +121,13 @@ export default function SessionDetail() {
     {
       onEvent: (f) => {
         if (f.sessionId === sid) setEvents((prev) => [...prev, f]);
+        // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,
+        // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
+        // run 不会结束,onRunResultDone 那一条刷新路径到不了;R10)。
+        const kind = (f.event as { kind?: string } | undefined)?.kind;
+        if (kind === "tool_permission_request" || kind === "ask_user_question") {
+          void refreshWaitersRef.current();
+        }
       },
       onRunResultDone: () => {
         setEvents((prev) => [
@@ -284,7 +291,7 @@ export default function SessionDetail() {
         userText: text.trim(),
         sourceDevice: webDevice.fingerprint,
         sourceDeviceName: deviceDisplayName(),
-        backend: { backendType: summary.backendType },
+        backend: { type: summary.backendType },
       });
       setDraft("");
     } catch {
@@ -472,6 +479,7 @@ export default function SessionDetail() {
               }}
             >
               <textarea
+                data-testid="session-detail-composer"
                 aria-label={t("session.transcript.inputPlaceholder")}
                 placeholder={t("session.transcript.inputPlaceholder")}
                 className="min-h-10 flex-1 resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
@@ -488,6 +496,7 @@ export default function SessionDetail() {
               <Button
                 type="submit"
                 size="icon"
+                data-testid="session-detail-send"
                 disabled={sending || status !== "connected" || !draft.trim()}
                 aria-label={t("session.transcript.send")}
               >
