@@ -141,6 +141,13 @@ const (
 // code.DeviceRevoked，浏览器据此按 R11 表达为「这台设备已被解除授权」。
 var ErrWebDeviceRevoked = errors.New("web device has been revoked")
 
+// ErrFingerprintNotWeb 挡住「拿别的设备的指纹注册浏览器」：这个端点换的是一台属于
+// **这个浏览器**的 kind=web 设备（R1 / 决策 6），而 Upsert 的赋值列里含 kind 与 name，
+// 拿同账号里一台 agentred 的指纹（/v1/devices 原样回给浏览器）调它，会把那一行改写成
+// kind=web 并把它的 device id 交给浏览器 —— 那台 agentred 随即被中继的 kind 判定挡在
+// 门外（R2「其余设备不受影响」）。device_ctr 按它映射 409 + code.DeviceKindMismatch。
+var ErrFingerprintNotWeb = errors.New("fingerprint belongs to a non-web device")
+
 // OAuthError 包装 OAuth 标准错误字面量。controller 转换为对应 HTTP 状态。
 type OAuthError struct{ Code, Description string }
 
@@ -445,6 +452,11 @@ func (s *deviceSvc) RegisterWebDevice(ctx context.Context, in RegisterWebDeviceI
 	}
 	if existing != nil && !existing.IsActive() {
 		return nil, ErrWebDeviceRevoked
+	}
+	// 按指纹幂等指的是「同一个**浏览器**的那一台」：既有行不是 kind=web 时它不是
+	// 这个浏览器的设备，改写它既不是 R1 要的幂等，也会把那台设备踢出中继。
+	if existing != nil && existing.Kind != device_entity.KindWeb {
+		return nil, ErrFingerprintNotWeb
 	}
 
 	nowMs := time.Now().UnixMilli()

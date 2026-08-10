@@ -512,9 +512,7 @@ describe("中继客户端:握手完成前不对外暴露 connected", () => {
     // daemon 的错误帧原样透传为 RelayError(消息即 daemon 的文案)。
     await expect(p).rejects.toThrow("account credential revoked");
     // 未认证的连接被关掉 → handleClose → reconnecting → 自动重连(R11 探测的入口)。
-    await vi.waitFor(() =>
-      expect(states).toContain("reconnecting"),
-    );
+    await vi.waitFor(() => expect(states).toContain("reconnecting"));
     await vi.waitFor(() => expect(FakeWebSocket.instances.length).toBe(2));
     client.close();
   });
@@ -564,6 +562,68 @@ describe("中继客户端:attach 幂等", () => {
     // 成功后重复调用:走缓存,不再发请求。
     await expect(client.attach(42)).resolves.toMatchObject({ latestSeq: 5 });
     await vi.waitFor(() => expect(ws.sent.length).toBe(1));
+    client.close();
+  });
+
+  // R4/R6/R9:别的对端发起的会话在 daemon 上的键是 (发起端指纹, 会话 id)。清单在
+  // SessionSummary.peerFingerprint 交出这个 origin,客户端学到之后必须原样带回此后
+  // 每一次 attach / pull —— 省略即「调用方自己的对端」,接的会是本浏览器名下那条同号
+  // 空会话。origin 记在客户端里,断线重连的自动补齐不必再由页面喂一次。
+  it("学到的 origin 指纹带进 attach 与 pull,并在重连补齐时沿用", async () => {
+    const client = makeClient({ reconnect: true, reconnectDelayMs: 0 });
+    const ws = await connectClient(client);
+
+    const p = client.catchUp(42, "fp-desktop");
+    await waitSent(ws, 1);
+    const attach = lastSent(ws);
+    expect(attach.method).toBe("runtime.session.attach");
+    expect(attach.params).toMatchObject({
+      sessionId: 42,
+      peerFingerprint: "fp-desktop",
+    });
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          id: attach.id,
+          result: { sessionId: 42, lifecycleState: "idle", latestSeq: 0 },
+        }),
+      ),
+    );
+    await waitSent(ws, 2);
+    const pull = lastSent(ws);
+    expect(pull.method).toBe("runtime.session.pull");
+    expect(pull.params).toMatchObject({
+      sessionId: 42,
+      peerFingerprint: "fp-desktop",
+    });
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          id: pull.id,
+          result: { cursor: 0, notifications: [], hasMore: false },
+        }),
+      ),
+    );
+    await p;
+
+    // 断线重连:自动补齐必须仍然点名同一个 origin(页面不会再喂一次)。
+    ws.serverClose();
+    await vi.waitFor(() =>
+      expect(FakeWebSocket.instances.length).toBeGreaterThan(1),
+    );
+    const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    ws2.open();
+    await authenticate(ws2);
+    await vi.waitFor(() => expect(ws2.sent.length).toBeGreaterThan(1));
+    const reattach = ws2.sent
+      .map((raw) => JSON.parse(text.decode(raw)) as WireFrame)
+      .find((f) => f.method === "runtime.session.attach");
+    expect(reattach?.params).toMatchObject({
+      sessionId: 42,
+      peerFingerprint: "fp-desktop",
+    });
     client.close();
   });
 });

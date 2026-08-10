@@ -122,6 +122,12 @@ func (d *Device) RegisterWeb(c *gin.Context, req *api.DeviceRegisterRequest) (*a
 			return nil, i18n.NewErrorWithStatus(
 				c.Request.Context(), http.StatusForbidden, code.DeviceRevoked)
 		}
+		// R1：这个指纹已经属于同账号里另一台非浏览器设备 —— 拒绝而不是把那一行
+		// 改写成 kind=web（那等于顺手把那台设备踢出中继）。
+		if errors.Is(err, device_svc.ErrFingerprintNotWeb) {
+			return nil, i18n.NewErrorWithStatus(
+				c.Request.Context(), http.StatusConflict, code.DeviceKindMismatch)
+		}
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}
 	return &api.DeviceRegisterResponse{

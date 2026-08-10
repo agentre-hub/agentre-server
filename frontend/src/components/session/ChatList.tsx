@@ -37,6 +37,9 @@ export interface ChatSessionRow {
   deviceName: string;
   followedAt: number;
   summary: SessionSummary;
+  /** 移动形态下钉在行上的 Agent 名称与头像色（R13，见 regroupByStatus）。 */
+  agentName?: string;
+  agentColor?: string;
 }
 
 export interface ChatGroup {
@@ -85,7 +88,13 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
 }
 
-/** 把（桌面的）Agent 分组拍平后按状态重组（决策 12 的移动形态）。 */
+/**
+ * 把（桌面的）Agent 分组拍平后按状态重组（决策 12 的移动形态）。
+ *
+ * R13：「移动的列表行本身就以 Agent 命名」——分组标题这时是状态，Agent 的名称与
+ * 头像因此要跟着行走（屏 20 的 ChatItem 第一行就是 Agent 名）。拍平时把它所属分组
+ * 的名称与头像色钉在行上，行渲染时直接用。
+ */
 function regroupByStatus(
   groups: ChatGroup[],
   t: (k: string, opts?: Record<string, unknown>) => string,
@@ -99,7 +108,12 @@ function regroupByStatus(
         label: t(`session.list.group.${key}`),
         sessions: [],
       };
-      group.sessions.push(row);
+      group.sessions.push(
+        // 「未命名」分组（R7 未到达的老会话）不冒充 Agent 名：不猜、不填占位名。
+        g.key === "__unnamed__"
+          ? row
+          : { ...row, agentName: g.label, agentColor: g.avatarColor },
+      );
       byKey.set(key, group);
     }
   }
@@ -151,6 +165,21 @@ function SessionRow({
         className="flex min-w-0 flex-1 items-center gap-3"
       >
         <div className="min-w-0 flex-1">
+          {/* R13：移动的列表行本身就以 Agent 命名（屏 20）；桌面的分组维度已经是
+              Agent，行上不再重复。 */}
+          {isMobile && row.agentName && (
+            <p className="flex items-center gap-1.5 truncate text-xs font-medium text-muted-foreground">
+              {row.agentColor && (
+                <span
+                  data-testid={`chat-row-avatar-${row.sessionId}`}
+                  aria-hidden="true"
+                  className="size-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: row.agentColor }}
+                />
+              )}
+              {row.agentName}
+            </p>
+          )}
           <p className="truncate text-sm font-medium text-foreground">
             {sessionTitle(row.summary, t)}
           </p>

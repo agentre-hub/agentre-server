@@ -79,7 +79,7 @@ function assertRoundTrip<T extends WireObject>(
 }
 
 describe("wire 编解码:与 Go 侧黄金样本逐字段同构", () => {
-  it("RunParams 解出新字段(title/agentSyncId/providerSessionId/source*)", () => {
+  it("RunParams 解出新字段(peerFingerprint/title/agentSyncId/providerSessionId/source*)", () => {
     const p = assertRoundTrip(
       decodeRunParams,
       encodeRunParams,
@@ -88,6 +88,8 @@ describe("wire 编解码:与 Go 侧黄金样本逐字段同构", () => {
     );
     expect(p.sessionId).toBe(42);
     expect(p.agentId).toBe(7);
+    // R9:别的对端发起的那条会话上开新一轮时点名的 origin。
+    expect(p.peerFingerprint).toBe("fp-desktop");
     expect(p.cwd).toBe("/home/agent/proj");
     expect(p.title).toBe("重构登录页");
     expect(p.agentSyncId).toBe("01JZ7W2A8KZ4R5T6Y7U8I9O0P1Q");

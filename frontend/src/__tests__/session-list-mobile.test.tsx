@@ -39,7 +39,9 @@ afterAll(() => {
   window.matchMedia = originalMatchMedia;
 });
 
-const agents = [{ sync_id: "ag-1", name: "后端 Agent" }];
+const agents = [
+  { sync_id: "ag-1", name: "后端 Agent", avatar_color: "#4f46e5" },
+];
 
 const waiting = {
   sessionId: 1,
@@ -136,6 +138,28 @@ describe("移动端会话列表:按状态分组(决策 12)", () => {
     // 运行 / 已中断 的分组标题就是文字。
     expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Interrupted").length).toBeGreaterThan(0);
+  });
+
+  // R5「每条会话显示：… Agent 的名称与头像经块 1 的同步标识解析」。桌面把 Agent
+  // 放在分组标题上（分组维度就是 Agent），移动按状态分组、标题里没有 Agent —— 名称
+  // 与头像因此必须落在**行**上（设计稿 48b / 屏 20 的 ChatItem 就是这个形态），否则
+  // 移动端整屏看不出哪条对话属于哪个 Agent。
+  it("移动行上带 Agent 名称与头像(桌面把它放在分组标题上)", () => {
+    renderList([running]);
+    const row = document.querySelector('[data-testid="session-row-2"]');
+    expect(row?.textContent).toMatch(/后端 Agent/);
+    expect(
+      row?.querySelector('[data-testid="session-row-avatar-2"]'),
+    ).toBeTruthy();
+  });
+
+  it("R7 未到达的老会话不猜 Agent 名:行上不出现任何 Agent 标识", () => {
+    renderList([legacy]);
+    const row = document.querySelector('[data-testid="session-row-5"]');
+    expect(row?.textContent).not.toMatch(/后端 Agent/);
+    expect(
+      row?.querySelector('[data-testid="session-row-avatar-5"]'),
+    ).toBeNull();
   });
 
   it("移动行高满足触控目标(行不小于 44px),桌面行不强制", () => {

@@ -4,7 +4,7 @@
  *   - 离线 agentred：进入后表达「机器离线」状态（R11 第 1 类）。
  *   - 本浏览器被解除授权：表达「已解除授权」状态（R11 第 3 类），不再进连接流程。
  */
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -114,6 +114,54 @@ describe("设备会话列表页", () => {
     expect(screen.getByText("/var/proj · codex · Idle")).toBeTruthy();
     // 会话列表通过中继取。
     expect(fakeClient.request).toHaveBeenCalledWith("runtime.session.list");
+  });
+
+  // 界面（决策 11 / 帧 45a）：「行尾一个「换机器」入口**就地切换**」——不是把人送回
+  // 设备页再从头下钻一次。就地列出账号下的其余 agentred，选中即换到那台机器的会话列表。
+  it("面包屑行尾「换机器」就地列出其余 agentred 并切过去", async () => {
+    const other = {
+      id: 2,
+      name: "公司 Mac mini",
+      kind: "agentred",
+      fingerprint: "fp-2",
+      last_seen_at: 1753000000000,
+      status: 1,
+      online: false,
+    };
+    const browser = {
+      id: 3,
+      name: "Chrome · macOS",
+      kind: "web",
+      fingerprint: "fp-web",
+      last_seen_at: 1754000000000,
+      status: 1,
+      online: false,
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices")
+        return { devices: [deviceRow, other, browser] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      client: fakeClient as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    });
+
+    renderPage();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Switch machine" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    // 只列 agentred：浏览器不是可下钻的目标（R3 / 帧 47）。
+    expect(within(dialog).queryByText("Chrome · macOS")).toBeNull();
+    // 离线的那台就地标明离线（R4：离线不可进入）。
+    const offlineItem = within(dialog).getByText("公司 Mac mini");
+    expect(offlineItem.closest("button")).toBeNull();
+    expect(within(dialog).getByText("Offline")).toBeTruthy();
   });
 
   it("离线机器:表达「机器离线」而非进入列表", async () => {

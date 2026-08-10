@@ -5,6 +5,12 @@ import { ArrowLeft } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import AppShell from "@/components/AppShell";
 import SessionList, {
   type SessionAgent,
@@ -50,6 +56,9 @@ export default function DeviceSessions() {
   const nav = useNavigate();
 
   const [device, setDevice] = useState<DeviceItem | null>(null);
+  // 账号下的全部 agentred：面包屑行尾的「换机器」就地切换（决策 11 / 帧 45a）要用。
+  const [machines, setMachines] = useState<DeviceItem[]>([]);
+  const [switchOpen, setSwitchOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<unknown>(null);
   const [agents, setAgents] = useState<SessionAgent[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -76,6 +85,8 @@ export default function DeviceSessions() {
     ])
       .then(([devRes, agentRes]) => {
         if (!alive) return;
+        // 浏览器不是可下钻的目标（R3 / 帧 47），只留 agentred。
+        setMachines(devRes.devices.filter((d) => d.kind === "agentred"));
         const found = devRes.devices.find((d) => d.id === id);
         if (found) {
           setDevice(found);
@@ -283,16 +294,58 @@ export default function DeviceSessions() {
                 </span>
               )}
               <span className="flex-1" />
+              {/* 决策 11 / 帧 45a：行尾一个「换机器」入口**就地切换** —— 不把人
+                  送回设备页从头下钻一次。离线的机器就地标明离线、不可进入（R4）。 */}
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => nav("/devices")}
+                onClick={() => setSwitchOpen(true)}
               >
                 {t("session.breadcrumb.switchMachine")}
               </Button>
             </>
           )}
         </nav>
+
+        <Dialog open={switchOpen} onOpenChange={setSwitchOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("session.breadcrumb.switchMachine")}</DialogTitle>
+            </DialogHeader>
+            <ul className="flex flex-col gap-1">
+              {machines.map((m) => (
+                <li key={m.id}>
+                  {m.online ? (
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent"
+                      onClick={() => {
+                        setSwitchOpen(false);
+                        nav(`/devices/${m.id}/sessions`);
+                      }}
+                    >
+                      <span className="min-w-0 flex-1 truncate font-medium text-foreground">
+                        {m.name}
+                      </span>
+                      <span className="shrink-0 text-xs text-status-waiting">
+                        {t("session.breadcrumb.online")}
+                      </span>
+                    </button>
+                  ) : (
+                    <div className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm opacity-60">
+                      <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                        {m.name}
+                      </span>
+                      <span className="shrink-0 text-xs text-destructive">
+                        {t("session.breadcrumb.offline")}
+                      </span>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </DialogContent>
+        </Dialog>
 
         <SessionStatusBanner
           status={status}

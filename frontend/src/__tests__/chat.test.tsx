@@ -113,8 +113,17 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
     // 页标题与 Agent 骨架。
     expect(await screen.findByRole("heading", { name: "Chat" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /后端 Agent/ })).toBeTruthy();
-    // 每个 Agent 一行「还没有对话」。
-    expect(screen.getByText("No conversations yet.")).toBeTruthy();
+    // 每个 Agent 一行「还没有对话」，空态卡片自己也顶着同一句（屏 32 / 帧 49b）。
+    expect(screen.getAllByText("No conversations yet.").length).toBe(2);
+    expect(
+      screen.getByRole("heading", { name: "No conversations yet." }),
+    ).toBeTruthy();
+    // 空态正文沿用设计稿屏 32 原文（文案原样不动）。
+    expect(
+      screen.getByText(
+        "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
+      ),
+    ).toBeTruthy();
     // 主动作「开始第一个对话」。
     expect(
       screen.getByRole("button", { name: "Start your first conversation" }),

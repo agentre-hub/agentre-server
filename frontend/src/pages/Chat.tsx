@@ -325,6 +325,11 @@ export default function Chat() {
           <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
         ) : empty ? (
           <div className="rounded-lg border border-border bg-card p-6">
+            {/* 空态沿用设计稿屏 32 / 帧 49b：标题「还没有对话」+ 原文正文 +
+                主按钮「开始第一个对话」，文案里不出现「关注」这个机制词。 */}
+            <h2 className="mb-1 text-base font-semibold text-foreground">
+              {t("chat.noSessions")}
+            </h2>
             <p className="mb-4 text-sm leading-[1.5] text-muted-foreground">
               {t("chat.startFirstBody")}
             </p>

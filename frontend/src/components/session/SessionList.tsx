@@ -199,6 +199,7 @@ function SessionRow({
   t,
   locale,
   isMobile,
+  agent,
   followed,
   onToggleFollow,
 }: {
@@ -207,6 +208,7 @@ function SessionRow({
   t: (k: string, opts?: Record<string, unknown>) => string;
   locale: string;
   isMobile: boolean;
+  agent?: SessionAgent;
   followed: boolean;
   onToggleFollow?: (sessionId: number) => void;
 }) {
@@ -231,6 +233,22 @@ function SessionRow({
         )}
       >
         <div className="min-w-0 flex-1">
+          {/* R5：Agent 的名称与头像。桌面的分组维度就是 Agent（名称与头像在分组
+              标题上），移动按状态分组，因此落在行上（设计稿 48b / 屏 20）。解析不
+              出同步标识时什么都不渲染——不猜、不填占位名。 */}
+          {isMobile && agent && (
+            <p className="flex items-center gap-1.5 truncate text-xs font-medium text-muted-foreground">
+              {agent.avatar_color && (
+                <span
+                  data-testid={`session-row-avatar-${session.sessionId}`}
+                  aria-hidden="true"
+                  className="size-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: agent.avatar_color }}
+                />
+              )}
+              {agent.name}
+            </p>
+          )}
           <p className="truncate text-sm font-medium text-foreground">
             {title}
           </p>
@@ -300,6 +318,10 @@ export default function SessionList({
         : buildGroups(sessions, agents, t),
     [sessions, agents, t, isMobile],
   );
+  const agentBySyncID = useMemo(
+    () => new Map(agents.map((a) => [a.sync_id, a])),
+    [agents],
+  );
 
   if (sessions.length === 0) {
     return (
@@ -338,6 +360,7 @@ export default function SessionList({
                   t={t}
                   locale={i18n.language}
                   isMobile={isMobile}
+                  agent={agentBySyncID.get(s.agentSyncId?.trim() ?? "")}
                   followed={!!followedSessionIds?.has(s.sessionId)}
                   onToggleFollow={onToggleFollow}
                 />

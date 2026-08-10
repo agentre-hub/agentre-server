@@ -115,8 +115,62 @@ describe("会话详情页", () => {
     renderPage();
 
     expect(await screen.findByText("你好")).toBeTruthy();
-    expect(fakeClient.attach).toHaveBeenCalledWith(42);
-    expect(fakeClient.catchUp).toHaveBeenCalledWith(42);
+    // 自己发起的会话没有 origin：省略即「调用方自己的对端」。
+    expect(fakeClient.attach).toHaveBeenCalledWith(42, undefined);
+    expect(fakeClient.catchUp).toHaveBeenCalledWith(42, undefined);
+  });
+
+  // R4「列出这台机器上的**全部**会话，无论由哪个对端发起」→ R6「接入一条会话后收到
+  // 实时流」→ R9「浏览器可以给一条会话发新消息」。别的对端发起的会话，daemon 上的
+  // 会话键是 (发起端指纹, 会话 id)：清单在 summary.peerFingerprint 上交出 origin，
+  // 而 ResolveSessionPeer 的入口约定是「省略 = 调用方自己的对端」。不把它原样带回
+  // 每一次 attach / pull / 控制请求 / runtime.run，浏览器接的就是它自己名下那条
+  // 同号空会话——转录空白、发消息另起一轮，桌面端也收不到（R18 的前提落空）。
+  it("别的对端发起的会话:attach / 补齐 / 发消息都带回 origin 指纹", async () => {
+    const remote = { ...summary, peerFingerprint: "fp-desktop" };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [remote], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === "runtime.run") return {};
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    // 读路径：attach 与游标补齐都指向发起端那条会话。
+    await vi.waitFor(() => {
+      expect(fakeClient.attach).toHaveBeenCalledWith(42, "fp-desktop");
+      expect(fakeClient.catchUp).toHaveBeenCalledWith(42, "fp-desktop");
+    });
+    // 待决策快照同样按 origin 问（否则问到的是空会话，审批卡永远不出现）。
+    await vi.waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        (c) => c[0] === "runtime.session.pendingWaiters",
+      );
+      expect(call?.[1]).toMatchObject({ peerFingerprint: "fp-desktop" });
+    });
+
+    // 写路径：这一轮必须落在发起端那条会话上。
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "把按钮改成蓝色" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await vi.waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        (c) => c[0] === "runtime.run",
+      );
+      expect(call?.[1]).toMatchObject({
+        sessionId: 42,
+        peerFingerprint: "fp-desktop",
+      });
+    });
   });
 
   it("发新消息走 runtime.run 并带来源设备", async () => {

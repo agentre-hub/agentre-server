@@ -227,7 +227,7 @@
     "noSessions": "No conversations yet.",
     "follow": "Follow",
     "startFirst": "Start your first conversation",
-    "startFirstBody": "Start a new conversation, or open one you already have.",
+    "startFirstBody": "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
     "followedOn": "{{machine}} · {{time}}",
     "pendingFrom": "Loading conversations from {{machine}}…",
     "offlineTitle": "Offline",

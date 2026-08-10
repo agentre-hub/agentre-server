@@ -108,6 +108,15 @@ export class RelayClient {
   private attaching = new Map<number, Promise<SessionAttachResult>>();
   /** 关注名单:断线重连后逐个补齐。 */
   private watched = new Set<number>();
+  /**
+   * sessionId → 该会话的 origin 对端指纹(别的对端发起的会话才有)。
+   *
+   * daemon 上的会话键是 (发起端指纹, 会话 id),而 ResolveSessionPeer 的入口约定是
+   * 「省略 origin = 调用方自己的对端」。清单(SessionSummary.peerFingerprint)是客户端
+   * 学 origin 的唯一来源,学到之后必须原样带回此后每一次 attach / pull / 控制请求 ——
+   * 否则接的是本浏览器名下那条同号空会话。断线重连要重发 attach,因此这里记着它。
+   */
+  private origins = new Map<number, string>();
   private closedByUser = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connectPromise: Promise<void> | null = null;
@@ -169,7 +178,11 @@ export class RelayClient {
           })
           .catch((err) => {
             this.connectPromise = null;
-            reject(err instanceof RelayError ? err : new RelayError(-1, "relay: auth.account 失败", err));
+            reject(
+              err instanceof RelayError
+                ? err
+                : new RelayError(-1, "relay: auth.account 失败", err),
+            );
             // 握手失败:关掉这条未认证的连接,走 handleClose → reconnecting → 自动
             // 重连,页面据此触发 R11 探测(被吊销 / 账号不匹配 / 凭据过期)。
             ws.close();
@@ -229,13 +242,20 @@ export class RelayClient {
    * 显式接管一条会话(幂等):成功后该会话进入关注名单,断线重连自动补齐。
    * 重复调用(含并发)不重复发请求。
    */
-  attach(sessionId: number): Promise<SessionAttachResult> {
+  attach(
+    sessionId: number,
+    peerFingerprint?: string,
+  ): Promise<SessionAttachResult> {
+    const origin = this.rememberOrigin(sessionId, peerFingerprint);
     const cached = this.attached.get(sessionId);
     if (cached) return Promise.resolve(cached);
     const inflight = this.attaching.get(sessionId);
     if (inflight) return inflight;
     const p = (async (): Promise<SessionAttachResult> => {
-      const result = await this.request(MethodSessionAttach, { sessionId });
+      const result = await this.request(MethodSessionAttach, {
+        sessionId,
+        ...(origin ? { peerFingerprint: origin } : {}),
+      });
       const decoded = decodeSessionAttachResult(result);
       this.attached.set(sessionId, decoded);
       this.watched.add(sessionId);
@@ -253,13 +273,15 @@ export class RelayClient {
    * 按 seq 游标补齐一条会话:attach → pull 翻页直到 HasMore=false。
    * 补齐的通知与实时同一套去重(seq ≤ 游标即丢弃)。
    */
-  async catchUp(sessionId: number): Promise<void> {
-    await this.attach(sessionId);
+  async catchUp(sessionId: number, peerFingerprint?: string): Promise<void> {
+    const origin = this.rememberOrigin(sessionId, peerFingerprint);
+    await this.attach(sessionId, origin);
     let pullCursor = this.cursors.get(sessionId) ?? 0;
     for (;;) {
       const sentCursor = pullCursor;
       const raw = await this.request(MethodSessionPull, {
         sessionId,
+        ...(origin ? { peerFingerprint: origin } : {}),
         cursor: pullCursor,
         limit: DefaultSessionPullLimit,
       });
@@ -287,6 +309,24 @@ export class RelayClient {
       // 防自旋:没有更多页,或游标没有推进(空页且未复位),不能无限重拉同一页。
       if (!res.hasMore || pullCursor <= sentCursor) break;
     }
+  }
+
+  /**
+   * 记住(并回读)一条会话的 origin 指纹。传入空值时沿用已记住的那一个 —— 重连后的
+   * 自动补齐、以及页面上后续的 pull 都不必再把它带一遍。
+   */
+  private rememberOrigin(
+    sessionId: number,
+    peerFingerprint?: string,
+  ): string | undefined {
+    const fp = peerFingerprint?.trim();
+    if (fp) this.origins.set(sessionId, fp);
+    return this.origins.get(sessionId);
+  }
+
+  /** 一条会话的 origin 对端指纹(自己发起的会话为 undefined)。 */
+  originOf(sessionId: number): string | undefined {
+    return this.origins.get(sessionId);
   }
 
   getCursor(sessionId: number): number {

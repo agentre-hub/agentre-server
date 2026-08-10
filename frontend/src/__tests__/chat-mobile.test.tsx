@@ -220,6 +220,40 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
     expect(screen.getByText(/书房小主机 · /)).toBeTruthy();
   });
 
+  // R13：「桌面按 Agent 分组，**移动的列表行本身就以 Agent 命名**」。移动按状态
+  // 分组，分组标题里没有 Agent，因此名称与头像必须落在行上（设计稿屏 20 的 ChatItem
+  // 第一行就是 Agent 名）；否则移动端整屏看不出哪条对话属于哪个 Agent。
+  it("移动行以 Agent 命名(名称 + 头像落在行上)", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+          ],
+        };
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    // 分组仍按状态（决策 12），Agent 不是分组维度。
+    expect(screen.queryByRole("heading", { name: /后端 Agent/ })).toBeNull();
+    // 但行上带着它。
+    const row = screen.getByText("等你批").closest("a");
+    expect(row?.textContent).toMatch(/后端 Agent/);
+    expect(
+      row?.querySelector('[data-testid="chat-row-avatar-42"]'),
+    ).toBeTruthy();
+  });
+
   it("空态沿用屏 32:文案与「开始第一个对话」主按钮原样不动", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/follows") return { items: [] };
@@ -234,10 +268,13 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
         name: "Start your first conversation",
       }),
     ).toBeTruthy();
-    // 文案原样。
+    // 文案原样：屏 32 的标题 +正文一字不改。
+    expect(
+      screen.getByRole("heading", { name: "No conversations yet." }),
+    ).toBeTruthy();
     expect(
       screen.getByText(
-        "Start a new conversation, or open one you already have.",
+        "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
       ),
     ).toBeTruthy();
     // 主按钮打开新对话弹层（屏 23/24/25）。

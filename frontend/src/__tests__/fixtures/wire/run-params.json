@@ -4,6 +4,7 @@
   },
   "agentId": 7,
   "sessionId": 42,
+  "peerFingerprint": "fp-desktop",
   "cwd": "/home/agent/proj",
   "title": "重构登录页",
   "agentSyncId": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1Q",

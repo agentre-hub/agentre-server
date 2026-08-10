@@ -89,6 +89,13 @@ export default function SessionDetail() {
   const clientRef = useRef<import("@/lib/relayClient").RelayClient | null>(
     null,
   );
+  /**
+   * 别的对端发起的会话（R4：清单列的是这台机器上的**全部**会话）在 daemon 上的键是
+   * (发起端指纹, 会话 id)。清单在 summary.peerFingerprint 上交出这个 origin，此后
+   * 每一次 attach / pull / 控制请求与 runtime.run 都要原样带回 —— 省略即
+   * 「调用方自己的对端」，操作的会是本浏览器名下那条同号空会话。
+   */
+  const originRef = useRef<string | undefined>(undefined);
 
   const refreshWaiters = useCallback(async (): Promise<Waiters | null> => {
     const c = clientRef.current;
@@ -96,6 +103,7 @@ export default function SessionDetail() {
     try {
       const raw = await c.request(MethodSessionPendingWaiters, {
         sessionId: sid,
+        ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       });
       const res = decodeSessionPendingWaitersResult(raw);
       const next: Waiters = {
@@ -181,14 +189,17 @@ export default function SessionDetail() {
         const listRaw = await client.request(MethodSessionList);
         const list = decodeSessionListResult(listRaw);
         const s = list.sessions.find((x) => x.sessionId === sid);
+        // origin 在 attach 之前就得学到（下一行就要用它）。
+        const origin = s?.peerFingerprint?.trim() || undefined;
+        originRef.current = origin;
         if (alive) {
           setSummary(s ?? null);
           // 老 agentred 落库不了 provider_session_id：从这里发消息续不上上下文。
           // 如实说明它需要升级，并停用发送——不静默发出去（兼容性）。
           setNeedsUpgrade(!list.supportsSessionMetadata);
         }
-        await client.attach(sid);
-        await client.catchUp(sid);
+        await client.attach(sid, origin);
+        await client.catchUp(sid, origin);
         if (alive) {
           setReady(true);
           // 待决策刷新交给下面的「connected && ready」effect，避免重复拉取。
@@ -299,6 +310,9 @@ export default function SessionDetail() {
     try {
       await c.request(MethodRun, {
         sessionId: sid,
+        // R9：这一轮要落在**发起端**那条会话上，才续得上它的上下文、也才扇出给
+        // 同一条会话的其余订阅者（R6 / R18）。
+        ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         cwd: summary.cwd,
         title: summary.title,
         agentSyncId: summary.agentSyncId,
@@ -346,6 +360,7 @@ export default function SessionDetail() {
     void submitDecision(requestId, () =>
       clientRef.current!.request(MethodSubmitToolPermission, {
         sessionId: sid,
+        ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId,
         allow: opts.allow,
         alwaysAllowSession: opts.alwaysAllow,
@@ -362,6 +377,7 @@ export default function SessionDetail() {
     void submitDecision(requestId, () =>
       clientRef.current!.request(MethodSubmitAnswer, {
         sessionId: sid,
+        ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId,
         answers,
         skipped,

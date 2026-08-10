@@ -227,7 +227,7 @@
     "noSessions": "还没有对话",
     "follow": "关注",
     "startFirst": "开始第一个对话",
-    "startFirstBody": "开始一条新对话，或打开你已有的对话。",
+    "startFirstBody": "挑一个 Agent 开始。它在你选的项目目录里干活，每一步需要权限时都会先问你。",
     "followedOn": "{{machine}} · {{time}}",
     "pendingFrom": "正在加载 {{machine}} 上的对话…",
     "offlineTitle": "离线",

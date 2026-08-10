@@ -100,6 +100,27 @@ func TestRegisterWebDevice(t *testing.T) {
 		require.ErrorIs(t, err, ErrWebDeviceRevoked)
 	})
 
+	// R1 / 决策 6：这个端点换的是「一台属于**这个浏览器**的 kind=web 设备」，按指纹
+	// 幂等指的是同一个浏览器的那一台。Upsert 的赋值列里含 kind 与 name，因此拿同账号
+	// 里一台 agentred / 桌面端的指纹（/v1/devices 原样回给浏览器）来注册，会把那一行
+	// 改写成 kind=web 并把它的 device id 交给浏览器 —— 那台 agentred 随即被中继的
+	// kind 判定挡在门外，等于「注册自己」顺手把别人踢下线（R2「其余设备不受影响」）。
+	// 规格没有任何一句要求这个端点能改写别的设备，因此非 web 的既有行一律拒绝。
+	t.Run("指纹属于同账号的非 web 设备 → 拒绝,不改写那一行", func(t *testing.T) {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-agentred").Return(
+			&device_entity.Device{
+				ID: 9, UserID: 7, Fingerprint: "fp-agentred",
+				Kind: device_entity.KindAgentred, Status: consts.ACTIVE,
+			}, nil)
+		// 拒绝发生在写之前：没有 Upsert、没有 token、连事务都不开。
+
+		_, err := svc.RegisterWebDevice(ctx, RegisterWebDeviceInput{
+			UserID: 7, Fingerprint: "fp-agentred",
+		})
+		require.ErrorIs(t, err, ErrFingerprintNotWeb)
+	})
+
 	t.Run("name 缺省 → 回退到指纹前 8 位", func(t *testing.T) {
 		ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
 		mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-web-abc").Return(nil, nil)

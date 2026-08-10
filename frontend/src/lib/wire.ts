@@ -168,6 +168,12 @@ export interface RunParams extends WireObject {
   backend?: unknown;
   agentId?: number;
   sessionId: number;
+  /**
+   * R9:这一轮要落在**哪个对端**名下的那条会话上。别的对端发起的会话在 daemon 上的
+   * 键是 (发起端指纹, 会话 id),清单在 SessionSummary.peerFingerprint 交出它;省略
+   * 即「调用方自己的对端」(ResolveSessionPeer 的入口约定)。
+   */
+  peerFingerprint?: string;
   cwd?: string;
   /** R7:会话标题,桌面端每轮携带,daemon 幂等覆盖。 */
   title?: string;
@@ -196,6 +202,7 @@ export function decodeRunParams(v: unknown): RunParams {
   return decodeWire<RunParams>(v, "RunParams", (o) => {
     o.agentId = optNum(o.agentId, "RunParams.agentId");
     o.sessionId = reqNum(o.sessionId, "RunParams.sessionId");
+    o.peerFingerprint = optStr(o.peerFingerprint, "RunParams.peerFingerprint");
     o.cwd = optStr(o.cwd, "RunParams.cwd");
     o.title = optStr(o.title, "RunParams.title");
     o.agentSyncId = optStr(o.agentSyncId, "RunParams.agentSyncId");
