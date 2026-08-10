@@ -4,7 +4,7 @@
  *   - 离线 agentred：进入后表达「机器离线」状态（R11 第 1 类）。
  *   - 本浏览器被解除授权：表达「已解除授权」状态（R11 第 3 类），不再进连接流程。
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -156,5 +156,106 @@ describe("设备会话列表页", () => {
 
     expect(await screen.findByRole("alert")).toBeTruthy();
     expect(screen.getByText(/revoked/i)).toBeTruthy();
+  });
+
+  // R12：桌面的关注开关在会话列表行尾（帧 45a）。名单是账号级的（R14），因此
+  // 页面进入时读一次 /v1/follows，点开关写 /v1/follows(/unfollow)。
+  it("行尾关注开关把这一条写进账号级名单", async () => {
+    const posted: unknown[] = [];
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/follows" && !init?.method) return { items: [] };
+      if (path === "/v1/follows") {
+        posted.push(JSON.parse(String(init?.body)));
+        return {};
+      }
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      client: fakeClient as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    });
+
+    renderPage();
+
+    const row = await screen.findByTestId("session-row-42");
+    within(row).getByRole("button", { name: "Follow" }).click();
+    await within(row).findByRole("button", { name: "Unfollow" });
+    expect(posted).toEqual([{ device_fingerprint: "fp-1", session_id: "42" }]);
+  });
+
+  // 兼容性：未升级的 agentred 不认识 R7 / 决策 8 的那几列，session.list 的应答里
+  // 没有 supportsSessionMetadata。此时如实说明该机器需要升级，不静默失败。
+  it("未升级的 agentred:如实说明该机器需要升级", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      client: {
+        ...fakeClient,
+        // 老 daemon 的应答：没有 supportsSessionMetadata 这个键。
+        request: vi.fn(async () => ({ sessions })),
+      } as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/Upgrade agentred/i)).toBeTruthy();
+  });
+
+  it("升级过的 agentred:不出现升级提示", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      client: {
+        ...fakeClient,
+        request: vi.fn(async () => ({
+          sessions,
+          supportsSessionMetadata: true,
+        })),
+      } as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("重构登录页")).toBeTruthy();
+    expect(screen.queryByText(/Upgrade agentred/i)).toBeNull();
+  });
+
+  // R2 / R11：解除授权后该设备行从 /v1/devices 里消失（那个接口只回 ACTIVE 的行）。
+  // 因此「查不到自己」就是被解除授权的信号——按 status 判会永远判不出来。
+  it("探测时自己的设备行已不在清单里:判为已被解除授权", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] }; // 没有 fp-web
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      client: null,
+      relayState: "reconnecting",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/revoked/i)).toBeTruthy();
   });
 });

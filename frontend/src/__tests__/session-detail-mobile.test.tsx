@@ -119,7 +119,8 @@ function stubApi(follows: Array<Record<string, unknown>>) {
     throw new Error("unexpected: " + path);
   });
   fakeClient.request.mockImplementation(async (method: string) => {
-    if (method === "runtime.session.list") return { sessions: [summary] };
+    if (method === "runtime.session.list")
+      return { sessions: [summary], supportsSessionMetadata: true };
     if (method === "runtime.session.pendingWaiters")
       return { toolPermissions: [], askUserQuestions: [] };
     throw new Error("unexpected: " + method);

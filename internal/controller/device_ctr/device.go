@@ -116,6 +116,12 @@ func (d *Device) RegisterWeb(c *gin.Context, req *api.DeviceRegisterRequest) (*a
 		Platform: req.Platform, Version: req.Version, Name: req.Name,
 	})
 	if err != nil {
+		// R2：这个浏览器已被解除授权 —— 拒绝而不是复活它，浏览器据此按 R11 表达为
+		// 「这台设备已被解除授权，须重新登录」，而不是当成一次服务端故障重试。
+		if errors.Is(err, device_svc.ErrWebDeviceRevoked) {
+			return nil, i18n.NewErrorWithStatus(
+				c.Request.Context(), http.StatusForbidden, code.DeviceRevoked)
+		}
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}
 	return &api.DeviceRegisterResponse{

@@ -131,4 +131,65 @@ describe("会话列表:R5 列表与 R7 退化形态", () => {
       screen.getByText("No conversations on this machine yet."),
     ).toBeTruthy();
   });
+
+  // R5 的第四项：每条会话显示「最后活动时间」。它的唯一真相源是执行端那台机器上的
+  // daemon_sessions.updated_at，随 session.list 过线（wire SessionSummary.updatedAt）。
+  it("会话行显示最后活动时间;缺这个字段的老会话不猜一个时刻", () => {
+    const at = 1754800000000;
+    renderList([{ ...newSession, updatedAt: at }, legacySession]);
+
+    const stamp = document.querySelector(
+      `time[datetime="${new Date(at).toISOString()}"]`,
+    );
+    expect(stamp).toBeTruthy();
+    // 老会话没有 updatedAt：不渲染时间元素，不填占位时刻。
+    expect(document.querySelectorAll("time").length).toBe(1);
+  });
+});
+
+// R12 的桌面入口：关注开关在会话列表的**行尾**（mockup 帧 45a）。移动端不在行里，
+// 入口在对话详情页顶栏（决策 16），由 session-list-mobile 那一组守住。
+describe("会话列表:R12 桌面关注开关", () => {
+  it("行尾有关注开关,点它把这一条加入名单", async () => {
+    const toggled: number[] = [];
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionList
+            sessions={[newSession] as never}
+            agents={agents}
+            sessionPath={(id) => `/sessions/${id}`}
+            followedSessionIds={new Set<number>()}
+            onToggleFollow={(id) => toggled.push(id)}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    const btn = screen.getByRole("button", { name: "Follow" });
+    btn.click();
+    expect(toggled).toEqual([42]);
+  });
+
+  it("已关注的会话行尾是「取消关注」", () => {
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionList
+            sessions={[newSession] as never}
+            agents={agents}
+            sessionPath={(id) => `/sessions/${id}`}
+            followedSessionIds={new Set<number>([42])}
+            onToggleFollow={() => {}}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: "Unfollow" })).toBeTruthy();
+  });
+
+  it("不给 onToggleFollow 时不渲染开关(下钻之外的复用场景)", () => {
+    renderList([newSession]);
+    expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
+  });
 });

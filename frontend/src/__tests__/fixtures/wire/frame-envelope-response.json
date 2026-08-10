@@ -13,8 +13,10 @@
         "backendType": "claudecode",
         "lifecycleState": "running",
         "waitingForInput": true,
-        "latestSeq": 12
+        "latestSeq": 12,
+        "updatedAt": 1754800000000
       }
-    ]
+    ],
+    "supportsSessionMetadata": true
   }
 }

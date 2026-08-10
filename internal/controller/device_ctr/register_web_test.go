@@ -11,6 +11,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/database/redis"
+	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
@@ -87,6 +88,8 @@ func newRegisterWebServer(t *testing.T) *registerWebServer {
 // 该次签发的 access token jti 从响应里取（响应带 jti 字段）。
 func (s *registerWebServer) expectRegister(t *testing.T, deviceID int64) {
 	t.Helper()
+	// R2 的前置检查：同指纹的行还在不在、是不是活的（被解除授权的不得复活）。
+	s.mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), gomock.Any()).Return(nil, nil)
 	s.mock.ExpectBegin()
 	s.mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error {
@@ -227,4 +230,14 @@ func TestRegisterWebDevice_RevokeRejectsRelayAndSparesOthers(t *testing.T) {
 	resp = doRequest(t, http.MethodGet,
 		s.server.URL+"/v1/relay/client?daemon_fingerprint=fp-daemon", "", desktopToken, "")
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+
+	// 被解除授权的浏览器**不能**靠重新注册把自己救回来：同一指纹再来一次注册被拒，
+	// 既不复活那一行，也不签发新的（不在黑名单里的）设备 JWT。否则刷新一次页面就
+	// 绕过了解除授权，用户故事 5 白做。
+	s.mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-web-abc").Return(
+		&device_entity.Device{ID: 101, UserID: 7, Fingerprint: "fp-web-abc",
+			Kind: device_entity.KindWeb, Status: consts.DELETE}, nil)
+	resp = doRequest(t, http.MethodPost, s.server.URL+"/v1/oauth/device/register",
+		cookie.Value, "", `{"fingerprint":"fp-web-abc"}`, csrf)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 }

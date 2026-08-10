@@ -146,6 +146,8 @@
       "noRunnableAgents": "No agents can run on this device yet.",
       "detailLoadError": "Could not load this device's details. Please try again.",
       "sessions": "Conversations",
+      "sessionCount": "{{count}} conversations",
+      "sessionWaiting": "{{count}} waiting for you",
       "viewSessions": "View this machine's conversations",
       "offlineNotEnterable": "Offline — conversations are unavailable."
     }
@@ -166,6 +168,8 @@
       "loggedOut": "You have been signed out. Please sign in again."
     },
     "relogin": "Sign in again",
+    "sendFailed": "That message could not be sent. Your draft is kept — try again.",
+    "needsUpgrade": "This machine is running an older agentred: conversations show reduced detail, and you cannot send new messages from here. Upgrade agentred on that machine to use it from the browser.",
     "breadcrumb": {
       "devices": "Devices",
       "switchMachine": "Switch machine",

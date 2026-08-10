@@ -146,6 +146,8 @@
       "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
       "detailLoadError": "无法加载这台设备的详情，请重试。",
       "sessions": "对话",
+      "sessionCount": "{{count}} 条对话",
+      "sessionWaiting": "{{count}} 条等你处理",
       "viewSessions": "查看这台机器的对话",
       "offlineNotEnterable": "已离线——对话不可用。"
     }
@@ -166,6 +168,8 @@
       "loggedOut": "账号已登出，请重新登录。"
     },
     "relogin": "重新登录",
+    "sendFailed": "这条消息没能发出去，草稿已保留，请重试。",
+    "needsUpgrade": "这台机器上的 agentred 版本较旧：对话只能简略显示，也不能从这里发新消息。请升级那台机器上的 agentred。",
     "breadcrumb": {
       "devices": "设备",
       "switchMachine": "换机器",

@@ -17,6 +17,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
+import { formatRelativeTime } from "@/lib/sessionView";
 import { ThemeProvider } from "@/lib/theme";
 import Chat from "@/pages/Chat";
 
@@ -306,5 +307,63 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
     });
     await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
     expect(screen.getByText("修 bug")).toBeTruthy();
+  });
+});
+
+// R13：「对话」页每条会话行的第二行是「机器 · 时间」，而这个时间与 R5 是同一套
+// 信息——**最后活动时间**，不是关注时间。关注时间说不出这条对话什么时候动过，
+// 而 web 自己发起的那条更会永远停在创建那一刻。
+describe("对话页:行上的时间是最后活动时间", () => {
+  it("第二行渲染会话的 updatedAt,而不是 followed_at", async () => {
+    const lastActive = 1754800000000;
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1000,
+              invalid: false,
+            },
+          ],
+        };
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 1,
+              name: "书房小主机",
+              kind: "agentred",
+              fingerprint: "fp-1",
+              last_seen_at: lastActive,
+              status: 1,
+              online: true,
+            },
+          ],
+        };
+      if (path === "/v1/workspace/agents")
+        return { agents: [{ sync_id: "ag-1", name: "后端 Agent" }] };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(async (method: string) => {
+      if (method === "runtime.session.list")
+        return {
+          sessions: [{ ...summary, updatedAt: lastActive }],
+          supportsSessionMetadata: true,
+        };
+      throw new Error("unexpected method: " + method);
+    });
+
+    renderChat();
+
+    await screen.findByText("重构登录页");
+    // 第二行的时间是会话的最后活动时间（updatedAt），不是 followed_at=1000。
+    const expected = formatRelativeTime(lastActive, "en");
+    expect(screen.getByText(`书房小主机 · ${expected}`)).toBeTruthy();
+    expect(
+      screen.queryByText(`书房小主机 · ${formatRelativeTime(1000, "en")}`),
+    ).toBeNull();
   });
 });

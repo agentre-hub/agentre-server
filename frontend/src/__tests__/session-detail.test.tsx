@@ -98,7 +98,8 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list") return { sessions: [summary] };
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
       if (method === "runtime.session.pendingWaiters")
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + method);
@@ -124,7 +125,8 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list") return { sessions: [summary] };
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
       if (method === "runtime.session.pendingWaiters")
         return { toolPermissions: [], askUserQuestions: [] };
       if (method === "runtime.run") return {};
@@ -168,7 +170,8 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list") return { sessions: [summary] };
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
       if (method === "runtime.session.pendingWaiters") {
         waitersCall += 1;
         if (waitersCall === 1) {
@@ -213,7 +216,8 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list") return { sessions: [summary] };
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
       if (method === "runtime.session.pendingWaiters")
         return {
           toolPermissions: [
@@ -251,7 +255,8 @@ describe("会话详情页", () => {
     // 第一次 pendingWaiters(渲染卡片)有 tp-1;提交前的预检返回空 → 已被处理。
     let waiterCalls = 0;
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list") return { sessions: [summary] };
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
       if (method === "runtime.session.pendingWaiters") {
         waiterCalls += 1;
         if (waiterCalls === 1)
@@ -278,5 +283,54 @@ describe("会话详情页", () => {
         (c) => c[0] === "runtime.submitToolPermission",
       ),
     ).toBe(false);
+  });
+});
+
+// 兼容性 + R9：未升级的 agentred 不认识 R7 / 决策 8 的那几列，续话续不上上下文。
+// 如实说明该机器需要升级并停用输入框，而不是让消息静默发出去。
+describe("会话详情页:老 agentred 与发送失败", () => {
+  it("未升级的 agentred:说明需要升级并停用发送", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      // 老 daemon 的应答：没有 supportsSessionMetadata。
+      if (method === "runtime.session.list") return { sessions: [summary] };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    expect(await screen.findByText(/Upgrade agentred/i)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("发送失败:就地报错,不静默吞掉", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === "runtime.run") throw new Error("boom");
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "把按钮改成蓝色" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText(/could not be sent/i)).toBeTruthy();
   });
 });

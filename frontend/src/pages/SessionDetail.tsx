@@ -56,8 +56,6 @@ interface Waiters {
   askUserQuestions: PendingAskQuestionShape[];
 }
 
-const ACTIVE = 1;
-
 export default function SessionDetail() {
   const { deviceId, sessionId } = useParams();
   const did = Number(deviceId);
@@ -75,6 +73,9 @@ export default function SessionDetail() {
   });
   const [handledRequestId, setHandledRequestId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState(false);
+  // 未升级的 agentred 的 session.list 应答里没有 supportsSessionMetadata（兼容性）。
+  const [needsUpgrade, setNeedsUpgrade] = useState(false);
   const [draft, setDraft] = useState("");
   const [ready, setReady] = useState(false);
   const [machineOnline, setMachineOnline] = useState<boolean | null>(null);
@@ -125,7 +126,10 @@ export default function SessionDetail() {
         // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
         // run 不会结束,onRunResultDone 那一条刷新路径到不了;R10)。
         const kind = (f.event as { kind?: string } | undefined)?.kind;
-        if (kind === "tool_permission_request" || kind === "ask_user_question") {
+        if (
+          kind === "tool_permission_request" ||
+          kind === "ask_user_question"
+        ) {
           void refreshWaitersRef.current();
         }
       },
@@ -177,7 +181,12 @@ export default function SessionDetail() {
         const listRaw = await client.request(MethodSessionList);
         const list = decodeSessionListResult(listRaw);
         const s = list.sessions.find((x) => x.sessionId === sid);
-        if (alive) setSummary(s ?? null);
+        if (alive) {
+          setSummary(s ?? null);
+          // 老 agentred 落库不了 provider_session_id：从这里发消息续不上上下文。
+          // 如实说明它需要升级，并停用发送——不静默发出去（兼容性）。
+          setNeedsUpgrade(!list.supportsSessionMetadata);
+        }
         await client.attach(sid);
         await client.catchUp(sid);
         if (alive) {
@@ -201,21 +210,25 @@ export default function SessionDetail() {
     probedRef.current = true;
     api<{ devices: DeviceItem[] }>("/v1/devices")
       .then((res) => {
-        const my = res.devices.find(
-          (d) => d.fingerprint === device?.fingerprint,
-        );
-        const machine = res.devices.find((d) => d.id === did);
-        if (my && my.status !== ACTIVE) {
+        // R2 / R11：/v1/devices 只回**活跃**设备，被解除授权的行直接不在里面。
+        // 因此判据是「自己这台还在不在清单里」，不是它的 status——按 status 判
+        // 永远判不出来，那个分支不可达。指纹还没取到时不判（避免误报）。
+        const myFingerprint = webDevice?.fingerprint;
+        if (
+          myFingerprint &&
+          !res.devices.some((d) => d.fingerprint === myFingerprint)
+        ) {
           markWebDeviceRevoked();
           setRevoked(true);
           return;
         }
+        const machine = res.devices.find((d) => d.id === did);
         setMachineOnline(machine?.online ?? null);
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 401) setMeValid(false);
       });
-  }, [relayState, device?.fingerprint, did]);
+  }, [relayState, webDevice?.fingerprint, did]);
 
   // 断线重连后刷新待决策：补齐只负责转录事件，pendingWaiters 需要重新拉一次（R10）。
   useEffect(() => {
@@ -282,6 +295,7 @@ export default function SessionDetail() {
     const c = clientRef.current;
     if (!c || !summary || !webDevice || !text.trim()) return;
     setSending(true);
+    setSendError(false);
     try {
       await c.request(MethodRun, {
         sessionId: sid,
@@ -295,7 +309,8 @@ export default function SessionDetail() {
       });
       setDraft("");
     } catch {
-      // 发送失败保留草稿；连接状态由横幅表达。
+      // 保留草稿，并就地说明这一条没发出去——静默吞掉会让用户以为已经发了。
+      setSendError(true);
     } finally {
       setSending(false);
     }
@@ -457,6 +472,11 @@ export default function SessionDetail() {
           machineLastSeenMs={device?.last_seen_at}
         />
 
+        {/* 兼容性：这台机器没升级 —— 会话只能退化显示、也发不了新消息，如实说明。 */}
+        {showTranscript && needsUpgrade && (
+          <Alert role="status">{t("session.needsUpgrade")}</Alert>
+        )}
+
         {showTranscript && (
           <>
             <Transcript items={items} />
@@ -472,7 +492,7 @@ export default function SessionDetail() {
               />
             ) : null}
             <form
-              className="flex items-end gap-2"
+              className="flex flex-wrap items-end gap-2"
               onSubmit={(e) => {
                 e.preventDefault();
                 void sendMessage(draft);
@@ -484,7 +504,7 @@ export default function SessionDetail() {
                 placeholder={t("session.transcript.inputPlaceholder")}
                 className="min-h-10 flex-1 resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
                 value={draft}
-                disabled={sending || status !== "connected"}
+                disabled={sending || status !== "connected" || needsUpgrade}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
@@ -497,11 +517,21 @@ export default function SessionDetail() {
                 type="submit"
                 size="icon"
                 data-testid="session-detail-send"
-                disabled={sending || status !== "connected" || !draft.trim()}
+                disabled={
+                  sending ||
+                  status !== "connected" ||
+                  needsUpgrade ||
+                  !draft.trim()
+                }
                 aria-label={t("session.transcript.send")}
               >
                 <SendHorizonal aria-hidden="true" className="size-4" />
               </Button>
+              {sendError && (
+                <p role="alert" className="w-full text-xs text-destructive">
+                  {t("session.sendFailed")}
+                </p>
+              )}
             </form>
           </>
         )}

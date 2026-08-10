@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -134,6 +135,11 @@ const (
 	// device_ctr 按它映射 code.DeviceFlowUserCodeInvalid。
 	ErrUserCodeInvalid = "user_code_invalid"
 )
+
+// ErrWebDeviceRevoked 是 R2 的执行点：同一指纹的浏览器设备行已被解除授权时，
+// RegisterWebDevice 拒绝而不是把它复活。device_ctr 按它映射 403 +
+// code.DeviceRevoked，浏览器据此按 R11 表达为「这台设备已被解除授权」。
+var ErrWebDeviceRevoked = errors.New("web device has been revoked")
 
 // OAuthError 包装 OAuth 标准错误字面量。controller 转换为对应 HTTP 状态。
 type OAuthError struct{ Code, Description string }
@@ -428,6 +434,19 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 }
 
 func (s *deviceSvc) RegisterWebDevice(ctx context.Context, in RegisterWebDeviceInput) (*TokenOutput, error) {
+	// R2：被解除授权的浏览器不得靠重新注册把自己救回来。Upsert 的赋值列里含
+	// status，直接落库会把 revoked 行翻回 ACTIVE 并发一枚全新、不在黑名单里的
+	// 设备 JWT——「单独把那个浏览器踢下线」就白做了。因此同指纹的行只要不是
+	// ACTIVE 就拒绝，由浏览器按 R11 表达为「这台设备已被解除授权，须重新登录」。
+	// 恢复路径是重新登录后换一个新指纹（= 一台新设备），不是复活这一台。
+	existing, err := device_repo.Device().FindByFingerprint(ctx, in.UserID, in.Fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil && !existing.IsActive() {
+		return nil, ErrWebDeviceRevoked
+	}
+
 	nowMs := time.Now().UnixMilli()
 	name := in.Name
 	if name == "" {
@@ -447,7 +466,7 @@ func (s *deviceSvc) RegisterWebDevice(ctx context.Context, in RegisterWebDeviceI
 	}
 
 	out := &TokenOutput{}
-	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
 
 		// 按 (user_id, fingerprint) 幂等：同一个浏览器重复请求时 Upsert 命中既有行

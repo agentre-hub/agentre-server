@@ -11,6 +11,7 @@ import {
 import { useIsMobile } from "@/components/use-is-mobile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { formatRelativeTime } from "@/lib/sessionView";
 import { cn } from "@/lib/utils";
 import type { SessionSummary } from "@/lib/wire";
 
@@ -126,12 +127,14 @@ function SessionRow({
   onUnfollow,
   sessionPath,
   t,
+  locale,
   isMobile,
 }: {
   row: ChatSessionRow;
   onUnfollow: (fp: string, sid: number) => void;
   sessionPath: (deviceId: number, sessionId: number) => string;
   t: (k: string, opts?: Record<string, unknown>) => string;
+  locale: string;
   isMobile: boolean;
 }) {
   const waiting = !!row.summary.waitingForInput;
@@ -151,11 +154,15 @@ function SessionRow({
           <p className="truncate text-sm font-medium text-foreground">
             {sessionTitle(row.summary, t)}
           </p>
-          {/* 机器 · 时间：机器落在行上，不作分组维度（决策 16）。 */}
+          {/* 机器 · 时间：机器落在行上，不作分组维度（决策 16）。时间与 R5 是同
+              一套信息——**最后活动时间**，不是关注时间（关注时间说不出这条对话
+              什么时候动过，web 自己发起的那条更会永远停在创建那一刻）。 */}
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {t("chat.followedOn", {
               machine: row.deviceName,
-              time: formatTime(row.followedAt),
+              time: row.summary.updatedAt
+                ? formatRelativeTime(row.summary.updatedAt, locale)
+                : "—",
             })}
           </p>
         </div>
@@ -292,7 +299,8 @@ export default function ChatList({
   onRemoveInvalid,
   sessionPath,
 }: ChatListProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language;
   const isMobile = useIsMobile();
   // 决策 12：桌面按 Agent 分组、移动按状态分组。
   const rendered = isMobile ? regroupByStatus(groups, t) : groups;
@@ -330,6 +338,7 @@ export default function ChatList({
                     onUnfollow={onUnfollow}
                     sessionPath={sessionPath}
                     t={t}
+                    locale={locale}
                     isMobile={isMobile}
                   />
                 ))}

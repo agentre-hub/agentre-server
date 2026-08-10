@@ -34,7 +34,10 @@ interface DeviceItem {
   online: boolean;
 }
 
-const ACTIVE = 1;
+interface FollowItem {
+  device_fingerprint: string;
+  session_id: string;
+}
 
 function loadErrorText(e: unknown, t: (k: string) => string): string {
   return e instanceof ApiError ? e.message : t("device.manage.loadError");
@@ -51,12 +54,15 @@ export default function DeviceSessions() {
   const [agents, setAgents] = useState<SessionAgent[]>([]);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  // 未升级的 agentred 的 session.list 应答里没有 supportsSessionMetadata（兼容性）。
+  const [needsUpgrade, setNeedsUpgrade] = useState(false);
+  const [followed, setFollowed] = useState<Set<number>>(new Set());
   const [machineOnline, setMachineOnline] = useState<boolean | null>(null);
   const [revoked, setRevoked] = useState(false);
   const [meValid, setMeValid] = useState(true);
   const probedRef = useRef(false);
 
-  const { client, relayState, webDeviceError } = useRelayMachine(
+  const { client, relayState, webDevice, webDeviceError } = useRelayMachine(
     device?.fingerprint ?? null,
   );
   const isMobile = useIsMobile();
@@ -87,6 +93,29 @@ export default function DeviceSessions() {
     };
   }, [id]);
 
+  // 账号级关注名单（R14：在哪一端打开这一页读到的都是同一份）。它与列表本身
+  // 相互独立——名单取不到只是开关暂时显示为「未关注」，不该让整页读不出来。
+  useEffect(() => {
+    const fp = device?.fingerprint;
+    if (!fp) return;
+    let alive = true;
+    api<{ items: FollowItem[] }>("/v1/follows")
+      .then((res) => {
+        if (!alive) return;
+        setFollowed(
+          new Set(
+            (res.items ?? [])
+              .filter((f) => f.device_fingerprint === fp)
+              .map((f) => Number(f.session_id)),
+          ),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [device?.fingerprint]);
+
   // 已连接 → 列会话。
   useEffect(() => {
     if (!client || relayState !== "connected") return;
@@ -97,6 +126,9 @@ export default function DeviceSessions() {
         if (!alive) return;
         const res = decodeSessionListResult(raw);
         setSessions(res.sessions);
+        // 老 agentred 不认识这个字段 → 它落库不了 R7 / 决策 8 的那几列,会话只能
+        // 退化显示、发新消息也续不上上下文。如实说明,不静默失败。
+        setNeedsUpgrade(!res.supportsSessionMetadata);
         setSessionsLoaded(true);
       })
       .catch(() => {
@@ -114,25 +146,60 @@ export default function DeviceSessions() {
     probedRef.current = true;
     api<{ devices: DeviceItem[] }>("/v1/devices")
       .then((res) => {
-        const my = res.devices.find(
-          (d) => d.fingerprint === device?.fingerprint,
-        );
-        const machine = res.devices.find((d) => d.id === id);
-        if (my && my.status !== ACTIVE) {
+        // R2 / R11：/v1/devices 只回**活跃**设备，被解除授权的行直接不在里面。
+        // 因此判据是「自己这台还在不在清单里」，不是它的 status——按 status 判
+        // 永远判不出来，那个分支不可达。指纹还没取到时不判（避免误报）。
+        const myFingerprint = webDevice?.fingerprint;
+        if (
+          myFingerprint &&
+          !res.devices.some((d) => d.fingerprint === myFingerprint)
+        ) {
           markWebDeviceRevoked();
           setRevoked(true);
           return;
         }
+        const machine = res.devices.find((d) => d.id === id);
         setMachineOnline(machine?.online ?? null);
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 401) setMeValid(false);
       });
-  }, [device?.fingerprint, id]);
+  }, [webDevice?.fingerprint, id]);
 
   useEffect(() => {
     if (relayState === "reconnecting") probe();
   }, [relayState, probe]);
+
+  // R12：关注 / 取消关注一条会话。名单是账号级的（R14），因此写的是 server 上的
+  // 那一份；本地集合乐观更新，失败则回滚（开关不能说谎）。
+  const toggleFollow = useCallback(
+    (sessionId: number) => {
+      const fp = device?.fingerprint;
+      if (!fp) return;
+      const wasFollowed = followed.has(sessionId);
+      setFollowed((prev) => {
+        const next = new Set(prev);
+        if (wasFollowed) next.delete(sessionId);
+        else next.add(sessionId);
+        return next;
+      });
+      api(wasFollowed ? "/v1/follows/unfollow" : "/v1/follows", {
+        method: "POST",
+        body: JSON.stringify({
+          device_fingerprint: fp,
+          session_id: String(sessionId),
+        }),
+      }).catch(() => {
+        setFollowed((prev) => {
+          const next = new Set(prev);
+          if (wasFollowed) next.add(sessionId);
+          else next.delete(sessionId);
+          return next;
+        });
+      });
+    },
+    [device?.fingerprint, followed],
+  );
 
   // ensureWebDevice 直接抛「已被解除授权」时同样进入 revoked 态。
   const revokedNow = revoked || webDeviceError instanceof WebDeviceRevokedError;
@@ -232,12 +299,20 @@ export default function DeviceSessions() {
           machineLastSeenMs={device?.last_seen_at}
         />
 
+        {/* 兼容性：未升级的 agentred 照常工作，但会话只能按 R5 退化显示、R9 的
+            发消息不可用——如实说明它需要升级，不静默失败。 */}
+        {status === "connected" && sessionsLoaded && needsUpgrade && (
+          <Alert role="status">{t("session.needsUpgrade")}</Alert>
+        )}
+
         {status === "connected" &&
           (sessionsLoaded ? (
             <SessionList
               sessions={sessions}
               agents={agents}
               sessionPath={(sid) => `/devices/${id}/sessions/${sid}`}
+              followedSessionIds={followed}
+              onToggleFollow={toggleFollow}
             />
           ) : (
             <p className="text-sm text-muted-foreground">

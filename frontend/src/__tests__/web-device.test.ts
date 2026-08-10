@@ -6,7 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import {
   WebDeviceRevokedError,
   clearWebDeviceRevoked,
@@ -116,6 +116,22 @@ describe("浏览器设备身份", () => {
     });
     const web = await ensureWebDevice();
     expect(web.deviceId).toBe(8);
+  });
+
+  // R2 的服务端执行点：同一指纹的设备行已被解除授权时注册端点回 403。浏览器据此
+  // 落 revoked 标记并按 R11 表达，而不是把它当成一次服务端故障不停重试。
+  it("注册被拒(403 已解除授权) → 落 revoked 标记并抛 WebDeviceRevokedError", async () => {
+    mockedApi.mockRejectedValueOnce(new ApiError(30301, "device revoked", 403));
+
+    await expect(ensureWebDevice()).rejects.toBeInstanceOf(
+      WebDeviceRevokedError,
+    );
+    expect(isWebDeviceRevoked()).toBe(true);
+    // 标记落下后不再发第二次注册请求。
+    await expect(ensureWebDevice()).rejects.toBeInstanceOf(
+      WebDeviceRevokedError,
+    );
+    expect(mockedApi).toHaveBeenCalledTimes(1);
   });
 
   it("tokenExpiryMs 解出 JWT 的 exp", () => {

@@ -273,6 +273,11 @@ export interface SessionSummary extends WireObject {
   lifecycleState: string;
   waitingForInput?: boolean;
   latestSeq: number;
+  /**
+   * 最后活动时刻（Unix 毫秒），R5 的「最后活动时间」。唯一真相源是执行端那台机器上
+   * 的 daemon_sessions.updated_at。没记过活动时间的老会话不带这个键。
+   */
+  updatedAt?: number;
 }
 
 export function decodeSessionSummary(v: unknown): SessionSummary {
@@ -300,12 +305,19 @@ export function decodeSessionSummary(v: unknown): SessionSummary {
       "SessionSummary.waitingForInput",
     );
     o.latestSeq = reqNum(o.latestSeq, "SessionSummary.latestSeq");
+    o.updatedAt = optNum(o.updatedAt, "SessionSummary.updatedAt");
   });
 }
 
 /** mirror SessionListResult。 */
 export interface SessionListResult extends WireObject {
   sessions: SessionSummary[];
+  /**
+   * 这台 daemon 声明自己落库并回传 R7 的标题 / Agent 同步标识与决策 8 的
+   * provider_session_id。**未升级的 agentred 不认识这个键**，应答里根本没有它 ——
+   * 这是把「这台机器上的老会话」与「这台机器本身没升级」区分开的唯一信号。
+   */
+  supportsSessionMetadata?: boolean;
 }
 
 export function decodeSessionListResult(v: unknown): SessionListResult {
@@ -314,6 +326,10 @@ export function decodeSessionListResult(v: unknown): SessionListResult {
       throw new TypeError("wire: SessionListResult.sessions 应是数组");
     }
     o.sessions = (o.sessions as unknown[]).map(decodeSessionSummary);
+    o.supportsSessionMetadata = optBool(
+      o.supportsSessionMetadata,
+      "SessionListResult.supportsSessionMetadata",
+    );
   });
 }
 

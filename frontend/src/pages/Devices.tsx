@@ -21,8 +21,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import AppShell from "@/components/AppShell";
+import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { decodeSessionListResult, MethodSessionList } from "@/lib/wire";
 import { deviceKindLabel } from "@/lib/deviceKind";
 
 interface DeviceItem {
@@ -74,6 +76,53 @@ function detailErrorText(e: unknown, t: (key: string) => string): string {
 function formatLastActive(ms: number): string {
   if (!ms) return "—";
   return new Date(ms).toLocaleString();
+}
+
+/**
+ * 「对话」一节的条数与等待处理数（mockup 帧 47）。
+ *
+ * server 一条会话都不存（硬不变量），这两个数字的唯一真相源是那台 agentred，
+ * 因此只能现连现问 —— 与 R4 下钻页问的是同一个 session.list。展开时才挂载，
+ * 收起即断开；问不到就什么都不显示，不编造数字。
+ */
+function DeviceSessionCounts({ fingerprint }: { fingerprint: string }) {
+  const { t } = useTranslation();
+  const { client, relayState } = useRelayMachine(fingerprint);
+  const [counts, setCounts] = useState<{
+    total: number;
+    waiting: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!client || relayState !== "connected") return;
+    let alive = true;
+    client
+      .request(MethodSessionList)
+      .then((raw) => {
+        if (!alive) return;
+        const res = decodeSessionListResult(raw);
+        setCounts({
+          total: res.sessions.length,
+          waiting: res.sessions.filter((s) => s.waitingForInput).length,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [client, relayState]);
+
+  if (!counts) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+      <span>{t("device.manage.sessionCount", { count: counts.total })}</span>
+      {counts.waiting > 0 && (
+        <span className="text-status-waiting">
+          {t("device.manage.sessionWaiting", { count: counts.waiting })}
+        </span>
+      )}
+    </p>
+  );
 }
 
 /**
@@ -178,13 +227,16 @@ function DeviceExpandDetail({
             {t("device.manage.sessions")}
           </span>
           {device.online ? (
-            <Link
-              to={`/devices/${device.id}/sessions`}
-              data-testid={`device-sessions-link-${device.id}`}
-              className="inline-flex w-fit items-center text-xs font-medium text-primary-text hover:underline"
-            >
-              {t("device.manage.viewSessions")}
-            </Link>
+            <>
+              <DeviceSessionCounts fingerprint={device.fingerprint} />
+              <Link
+                to={`/devices/${device.id}/sessions`}
+                data-testid={`device-sessions-link-${device.id}`}
+                className="inline-flex w-fit items-center text-xs font-medium text-primary-text hover:underline"
+              >
+                {t("device.manage.viewSessions")}
+              </Link>
+            </>
           ) : (
             <p className="text-xs text-destructive">
               {t("device.manage.offlineNotEnterable")}
@@ -337,7 +389,11 @@ export default function Devices() {
             {devices.map((d) => {
               const isExpanded = expanded.has(d.id);
               return (
-                <Card key={d.id} className="py-4" data-testid={`device-row-${d.id}`}>
+                <Card
+                  key={d.id}
+                  className="py-4"
+                  data-testid={`device-row-${d.id}`}
+                >
                   <CardHeader className="px-5">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -352,20 +408,24 @@ export default function Devices() {
                         </CardDescription>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          data-testid={`device-expand-${d.id}`}
-                          aria-expanded={isExpanded}
-                          aria-label={
-                            isExpanded
-                              ? t("device.manage.collapse")
-                              : t("device.manage.expand")
-                          }
-                          onClick={() => toggleExpand(d)}
-                        >
-                          {isExpanded ? <ChevronUp /> : <ChevronDown />}
-                        </Button>
+                        {/* 帧 47：浏览器行不接单、也不可展开——展开区列的是
+                            项目与能跑的 Agent，浏览器两样都没有。 */}
+                        {d.kind !== "web" && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            data-testid={`device-expand-${d.id}`}
+                            aria-expanded={isExpanded}
+                            aria-label={
+                              isExpanded
+                                ? t("device.manage.collapse")
+                                : t("device.manage.expand")
+                            }
+                            onClick={() => toggleExpand(d)}
+                          >
+                            {isExpanded ? <ChevronUp /> : <ChevronDown />}
+                          </Button>
+                        )}
                         <Button
                           variant="destructive"
                           size="sm"

@@ -1,9 +1,12 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { Bookmark } from "lucide-react";
 
 import { useIsMobile } from "@/components/use-is-mobile";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { formatRelativeTime } from "@/lib/sessionView";
 import { cn } from "@/lib/utils";
 import type { SessionSummary } from "@/lib/wire";
 
@@ -28,6 +31,14 @@ interface SessionListProps {
   agents: SessionAgent[];
   /** 点击某条会话时的目标路径模板；{{sessionId}} 会被替换。 */
   sessionPath: (sessionId: number) => string;
+  /** 已在账号级关注名单里的会话（R12）。 */
+  followedSessionIds?: Set<number>;
+  /**
+   * 关注 / 取消关注一条会话（R12）。桌面把开关放在列表行尾（帧 45a）；不传即不渲染
+   * 开关，供不需要关注入口的复用场景使用。移动端的入口在详情页顶栏（决策 16），
+   * 因此这里在移动形态下同样不渲染。
+   */
+  onToggleFollow?: (sessionId: number) => void;
 }
 
 interface Group {
@@ -158,23 +169,52 @@ function buildGroups(
   return out;
 }
 
+/**
+ * R5 的「最后活动时间」。只在 daemon 报了 updated_at 时渲染 —— 老会话缺这一列时
+ * 什么都不显示，不猜一个时刻（与退化标题同一条原则）。
+ */
+export function LastActive({
+  ms,
+  locale,
+}: {
+  ms: number | undefined;
+  locale: string;
+}) {
+  if (!ms) return null;
+  const at = new Date(ms);
+  return (
+    <time
+      dateTime={at.toISOString()}
+      title={at.toLocaleString()}
+      className="shrink-0 text-xs text-subtle-foreground"
+    >
+      {formatRelativeTime(ms, locale)}
+    </time>
+  );
+}
+
 function SessionRow({
   session,
   sessionPath,
   t,
+  locale,
   isMobile,
+  followed,
+  onToggleFollow,
 }: {
   session: SessionSummary;
   sessionPath: (id: number) => string;
   t: (k: string, opts?: Record<string, unknown>) => string;
+  locale: string;
   isMobile: boolean;
+  followed: boolean;
+  onToggleFollow?: (sessionId: number) => void;
 }) {
   const title = sessionTitle(session, t);
   const hasRealTitle = !!session.title?.trim();
   const waiting = !!session.waitingForInput;
   return (
-    <Link
-      to={sessionPath(session.sessionId)}
+    <div
       data-testid={`session-row-${session.sessionId}`}
       className={cn(
         "flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent",
@@ -182,33 +222,65 @@ function SessionRow({
         isMobile && "min-h-11 py-3",
       )}
     >
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{title}</p>
-        {/* 只有真标题才加副行:老会话退化时标题本身就是「工作目录 · 后端 · 状态」,
-            副行再印一遍就是重复。 */}
-        {hasRealTitle && (
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {t("session.list.legacy", {
-              cwd: session.cwd?.trim() ? session.cwd : "—",
-              backend: session.backendType?.trim() ? session.backendType : "—",
-              status: lifecycleLabel(session.lifecycleState, t),
-            })}
-          </p>
-        )}
-      </div>
-      <span
+      <Link
+        to={sessionPath(session.sessionId)}
         className={cn(
-          "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
-          waiting
-            ? "bg-status-waiting-bg text-status-waiting"
-            : "bg-muted text-muted-foreground",
+          "flex min-w-0 flex-1 items-center gap-3",
+          // 触控目标是可点的那个元素本身，不只是包着它的行。
+          isMobile && "min-h-11",
         )}
       >
-        {waiting
-          ? t("session.list.waiting")
-          : lifecycleLabel(session.lifecycleState, t)}
-      </span>
-    </Link>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-foreground">
+            {title}
+          </p>
+          {/* 只有真标题才加副行:老会话退化时标题本身就是「工作目录 · 后端 · 状态」,
+              副行再印一遍就是重复。 */}
+          {hasRealTitle && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {t("session.list.legacy", {
+                cwd: session.cwd?.trim() ? session.cwd : "—",
+                backend: session.backendType?.trim()
+                  ? session.backendType
+                  : "—",
+                status: lifecycleLabel(session.lifecycleState, t),
+              })}
+            </p>
+          )}
+        </div>
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
+            waiting
+              ? "bg-status-waiting-bg text-status-waiting"
+              : "bg-muted text-muted-foreground",
+          )}
+        >
+          {waiting
+            ? t("session.list.waiting")
+            : lifecycleLabel(session.lifecycleState, t)}
+        </span>
+        <LastActive ms={session.updatedAt} locale={locale} />
+      </Link>
+      {/* R12：桌面的关注开关在行尾（帧 45a）；移动端在详情页顶栏（决策 16）。 */}
+      {!isMobile && onToggleFollow && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t(followed ? "chat.unfollow" : "chat.follow")}
+          title={t(followed ? "chat.unfollow" : "chat.follow")}
+          aria-pressed={followed}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={() => onToggleFollow(session.sessionId)}
+        >
+          <Bookmark
+            className="size-3.5"
+            fill={followed ? "currentColor" : "none"}
+            aria-hidden="true"
+          />
+        </Button>
+      )}
+    </div>
   );
 }
 
@@ -216,8 +288,10 @@ export default function SessionList({
   sessions,
   agents,
   sessionPath,
+  followedSessionIds,
+  onToggleFollow,
 }: SessionListProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const isMobile = useIsMobile();
   const groups = useMemo(
     () =>
@@ -262,7 +336,10 @@ export default function SessionList({
                   session={s}
                   sessionPath={sessionPath}
                   t={t}
+                  locale={i18n.language}
                   isMobile={isMobile}
+                  followed={!!followedSessionIds?.has(s.sessionId)}
+                  onToggleFollow={onToggleFollow}
                 />
               ))}
             </CardContent>

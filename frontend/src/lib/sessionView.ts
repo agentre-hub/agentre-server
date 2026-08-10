@@ -53,3 +53,31 @@ export function deriveSessionViewStatus(
       return "lost";
   }
 }
+
+const RELATIVE_UNITS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["year", 365 * 24 * 3600_000],
+  ["month", 30 * 24 * 3600_000],
+  ["day", 24 * 3600_000],
+  ["hour", 3600_000],
+  ["minute", 60_000],
+];
+
+/**
+ * 「最后活动时间」的相对形态（R5，mockup 帧 45a 的「2分前」）。
+ *
+ * 走 Intl.RelativeTimeFormat 而不是 t(...)：它渲染的是**动态时刻**，与列表里既有的
+ * `toLocaleString()` 同类，不是静态 UI 文案。locale 由调用方从 i18n.language 传入。
+ */
+export function formatRelativeTime(
+  ms: number,
+  locale: string,
+  now: number = Date.now(),
+): string {
+  const diff = ms - now;
+  const abs = Math.abs(diff);
+  const fmt = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  for (const [unit, span] of RELATIVE_UNITS) {
+    if (abs >= span) return fmt.format(Math.round(diff / span), unit);
+  }
+  return fmt.format(0, "minute");
+}

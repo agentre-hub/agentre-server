@@ -44,6 +44,7 @@ import runAckFixture from "./fixtures/wire/run-ack.json";
 import sessionSummaryFixture from "./fixtures/wire/session-summary.json";
 import sessionSummaryLegacyFixture from "./fixtures/wire/session-summary-legacy.json";
 import sessionListResultFixture from "./fixtures/wire/session-list-result.json";
+import sessionListResultLegacyFixture from "./fixtures/wire/session-list-result-legacy.json";
 import sessionPullParamsFixture from "./fixtures/wire/session-pull-params.json";
 import sessionPullResultFixture from "./fixtures/wire/session-pull-result.json";
 import journaledNotificationFixture from "./fixtures/wire/journaled-notification.json";
@@ -141,6 +142,12 @@ describe("wire 编解码:与 Go 侧黄金样本逐字段同构", () => {
     expect(s.lifecycleState).toBe("running");
     expect(s.waitingForInput).toBe(true);
     expect(s.latestSeq).toBe(12);
+    // R5 的「最后活动时间」：唯一真相源在执行端那台机器上，随清单过线。
+    expect(s.updatedAt).toBe(1754800000000);
+    // 逐字段同构：它是被 codec 认识并校验的字段，不是漏进来的未知键。
+    expect(() =>
+      decodeSessionSummary({ ...sessionSummaryFixture, updatedAt: "昨天" }),
+    ).toThrow(TypeError);
 
     const legacy = assertRoundTrip(
       decodeSessionSummary,
@@ -153,6 +160,7 @@ describe("wire 编解码:与 Go 侧黄金样本逐字段同构", () => {
     expect(legacy.providerSessionId).toBeUndefined();
     expect(legacy.lifecycleState).toBe("idle");
     expect(legacy.peerFingerprint).toBe("fp-desktop");
+    expect(legacy.updatedAt).toBeUndefined();
   });
 
   it("SessionListResult 逐条解出会话", () => {
@@ -165,6 +173,26 @@ describe("wire 编解码:与 Go 侧黄金样本逐字段同构", () => {
     expect(r.sessions).toHaveLength(2);
     expect(r.sessions[0].title).toBe("重构登录页");
     expect(r.sessions[1].title).toBeUndefined();
+    // 升级过的 agentred 如实声明自己支持 R7 / 决策 8 的那几列。
+    expect(r.supportsSessionMetadata).toBe(true);
+  });
+
+  it("未升级的 agentred 的清单里没有 supportsSessionMetadata（兼容性信号）", () => {
+    // 老 agentred 不认识这个键，应答里根本没有它 —— 客户端据此把「这台机器没升级」
+    // 与「这台机器上的老会话」区分开，并如实说明需要升级而不是静默失败。
+    const r = assertRoundTrip(
+      decodeSessionListResult,
+      (v) => JSON.stringify(v),
+      sessionListResultLegacyFixture,
+      "SessionListResult(legacy)",
+    );
+    expect(r.supportsSessionMetadata).toBeUndefined();
+    expect(() =>
+      decodeSessionListResult({
+        ...sessionListResultLegacyFixture,
+        supportsSessionMetadata: "yes",
+      }),
+    ).toThrow(TypeError);
   });
 
   it("SessionPullParams 独占游标(首次 0)+ 限制", () => {

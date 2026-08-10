@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,6 +21,7 @@ func TestRegisterWebDevice(t *testing.T) {
 	t.Run("正常注册：upsert 一台 kind=web 设备 + 签发 JWT + 落 token", func(t *testing.T) {
 		ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
 		var capturedJTI string
+		mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-web-abc").Return(nil, nil)
 		mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, d *device_entity.Device) error {
 				assert.Equal(t, device_entity.KindWeb, d.Kind)
@@ -60,6 +62,8 @@ func TestRegisterWebDevice(t *testing.T) {
 
 	t.Run("同一指纹重复注册 → 同一台设备（按指纹幂等，不新增行）", func(t *testing.T) {
 		ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+		mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-web-abc").
+			Return(nil, nil).Times(2)
 		mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, d *device_entity.Device) error {
 				d.ID = 7
@@ -80,8 +84,25 @@ func TestRegisterWebDevice(t *testing.T) {
 		assert.Equal(t, out1.DeviceID, out2.DeviceID)
 	})
 
+	// R2：解除授权后「其余设备不受影响」的对偶面——被解除授权的那一个必须**留在**
+	// 解除状态。Upsert 的赋值列里含 status，直接落库等于把 revoked 行翻回 ACTIVE
+	// 并发一枚全新、不在黑名单里的设备 JWT：浏览器只要刷新一次页面就自己回来了，
+	// 用户故事 5 的「单独把那个浏览器踢下线」形同虚设。
+	t.Run("已被解除授权的指纹重新注册 → 拒绝,不复活设备行、不发新 JWT", func(t *testing.T) {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+		mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-web-abc").Return(
+			&device_entity.Device{ID: 42, UserID: 7, Fingerprint: "fp-web-abc", Status: consts.DELETE}, nil)
+		// 拒绝发生在写之前：没有 Upsert、没有 token、连事务都不开。
+
+		_, err := svc.RegisterWebDevice(ctx, RegisterWebDeviceInput{
+			UserID: 7, Fingerprint: "fp-web-abc",
+		})
+		require.ErrorIs(t, err, ErrWebDeviceRevoked)
+	})
+
 	t.Run("name 缺省 → 回退到指纹前 8 位", func(t *testing.T) {
 		ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+		mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-web-abc").Return(nil, nil)
 		mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, d *device_entity.Device) error {
 				assert.Equal(t, "fp-web-a", d.Name)
@@ -105,6 +126,7 @@ func TestRegisterWebDevice_RevokeBlacklistsItsJWT_OthersUnaffected(t *testing.T)
 	ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
 
 	var webJTI string
+	mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-web-abc").Return(nil, nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error {
 			d.ID = 42

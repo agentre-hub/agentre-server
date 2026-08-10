@@ -11,7 +11,7 @@
  *     重新注册 —— 否则每次刷新都按指纹幂等重注册，等于把解除授权绕过去（R2 的
  *     「刷新页面仍表达为已解除授权」）。
  */
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 
 export interface WebDevice {
   fingerprint: string;
@@ -145,15 +145,27 @@ export async function ensureWebDevice(): Promise<WebDevice> {
   }
   const fingerprint = getFingerprint() ?? createFingerprint();
   window.localStorage.setItem(FP_KEY, fingerprint);
-  const res = await api<RegisterResponse>("/v1/oauth/device/register", {
-    method: "POST",
-    body: JSON.stringify({
-      fingerprint,
-      platform: platformName(),
-      version: "1",
-      name: deviceDisplayName(),
-    }),
-  });
+  let res: RegisterResponse;
+  try {
+    res = await api<RegisterResponse>("/v1/oauth/device/register", {
+      method: "POST",
+      body: JSON.stringify({
+        fingerprint,
+        platform: platformName(),
+        version: "1",
+        name: deviceDisplayName(),
+      }),
+    });
+  } catch (e) {
+    // 服务端在同指纹的设备行已被解除授权时回 403（R2 的执行点，不复活那一行）。
+    // 落标记并转成 WebDeviceRevokedError，让界面按 R11 说「这台设备已被解除授权，
+    // 须重新登录」，而不是当成故障不停重试。
+    if (e instanceof ApiError && e.status === 403) {
+      markWebDeviceRevoked();
+      throw new WebDeviceRevokedError();
+    }
+    throw e;
+  }
   const web: WebDevice = {
     fingerprint,
     accessToken: res.access_token,
