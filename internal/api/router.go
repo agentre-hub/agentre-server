@@ -8,6 +8,7 @@ import (
 	"agentre-server/internal/bootstrap"
 	"agentre-server/internal/controller/auth_ctr"
 	"agentre-server/internal/controller/device_ctr"
+	"agentre-server/internal/controller/follow_ctr"
 	"agentre-server/internal/controller/healthz_ctr"
 	"agentre-server/internal/controller/relay_ctr"
 	"agentre-server/internal/controller/sync_ctr"
@@ -38,6 +39,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	relayCtr := relay_ctr.New(relaySvc)
 	syncCtr := sync_ctr.New()
 	workspaceCtr := workspace_ctr.New()
+	followCtr := follow_ctr.New()
 
 	// 公开
 	g.Group("/").Bind(
@@ -75,6 +77,10 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// web 控制台两屏的只读端点（决策 13）：账号级 Agent 清单、设备展开详情。
 		workspaceCtr.ListAgents,
 		workspaceCtr.DeviceDetail,
+		// 关注名单（R12 后端 + R14）：账号级，任一端（会话或设备 JWT）都可操作。
+		followCtr.Follow,
+		followCtr.Unfollow,
+		followCtr.List,
 	)
 
 	// device JWT
