@@ -74,8 +74,11 @@ export default function DecisionPanel({
   )
     return null;
 
+  // 这个容器只在**有**待决策(或有一条「已被处理」说明)时才渲染 —— 早先挂在这里
+  // 的 aria-label 是「没有待处理的请求」,辅助技术会把一屏等着人批的审批卡念成
+  // 「没有待处理的请求」。每张卡自己带标题,容器不再冒充标签。
   return (
-    <div className="space-y-3" aria-label={t("session.decision.none")}>
+    <div className="space-y-3">
       {handledRequestId && (
         <p
           role="status"

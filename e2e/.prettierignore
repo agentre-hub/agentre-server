@@ -3,3 +3,4 @@ test-results
 playwright-report
 scratch
 pnpm-lock.yaml
+playwright-web-report

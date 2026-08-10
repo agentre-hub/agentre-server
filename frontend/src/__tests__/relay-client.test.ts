@@ -462,6 +462,172 @@ describe("中继客户端:断线后按 seq 游标补齐,重复投递只应用一
   });
 });
 
+describe("中继客户端:跳号的实时帧不吞掉它前面的历史", () => {
+  // 打开一条**正在跑**的会话时,attach 成功之后 daemon 立刻开始推实时帧,而补齐的
+  // pull 还在路上。此时实时帧的 seq 远高于本地游标(浏览器刚打开,游标是 0)。
+  // 游标若跟着实时帧直接跳上去,随后拉回来的历史整段都会被判成「重复」丢掉 ——
+  // 用户看到的转录从半截开始,前面的对话凭空消失。
+  // 正确纪律与 Go 侧 remote/reconnect.go 的 dispatchNotification 一致:
+  // seq > 游标+1 是**跳号**,不消费、改从游标补齐,补平之后再顺序交付。
+  it("补齐途中到达的跳号实时帧不推进游标,历史一条不少且顺序不乱", async () => {
+    const events: string[] = [];
+    const client = makeClient({
+      reconnect: false,
+      onEvent: (frame) => {
+        events.push((frame.event as { text: string }).text);
+      },
+    });
+    const ws = await connectClient(client);
+
+    const catchUpP = client.catchUp(42);
+    await waitSent(ws, 1);
+    const attach = lastSent(ws);
+    expect(attach.method).toBe("runtime.session.attach");
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          id: attach.id,
+          result: { sessionId: 42, lifecycleState: "running", latestSeq: 3 },
+        }),
+      ),
+    );
+    await waitSent(ws, 2);
+    const pull = lastSent(ws);
+    expect(pull.params).toEqual({ sessionId: 42, cursor: 0, limit: 200 });
+
+    // pull 应答还没回来,daemon 已经把新一轮的实时帧推过来了(seq 4)。
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          method: "runtime.event",
+          params: {
+            sessionId: 42,
+            event: { kind: "text_delta", text: "d" },
+            seq: 4,
+          },
+        }),
+      ),
+    );
+
+    // 补齐页随后到达:seq 1、2、3 —— 它们必须照常交付,不能被那条跳号帧吞掉。
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          id: pull.id,
+          result: {
+            notifications: [1, 2, 3].map((seq) => ({
+              seq,
+              method: "runtime.event",
+              params: {
+                sessionId: 42,
+                event: {
+                  kind: "text_delta",
+                  text: String.fromCharCode(96 + seq),
+                },
+              },
+            })),
+            cursor: 3,
+            hasMore: false,
+            oldestSeq: 1,
+          },
+        }),
+      ),
+    );
+    await catchUpP;
+    await vi.waitFor(() => expect(events).toEqual(["a", "b", "c"]));
+
+    // 跳号那条没丢:补齐结束后客户端自己再拉一次把它补上。
+    await vi.waitFor(() => expect(ws.sent.length).toBe(3));
+    const refill = lastSent(ws);
+    expect(refill.method).toBe("runtime.session.pull");
+    expect(refill.params).toMatchObject({ sessionId: 42, cursor: 3 });
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          id: refill.id,
+          result: {
+            notifications: [
+              {
+                seq: 4,
+                method: "runtime.event",
+                params: {
+                  sessionId: 42,
+                  event: { kind: "text_delta", text: "d" },
+                },
+              },
+            ],
+            cursor: 4,
+            hasMore: false,
+            oldestSeq: 1,
+          },
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(events).toEqual(["a", "b", "c", "d"]));
+    client.close();
+  });
+
+  // 本客户端不认识的通知(新版 daemon 加的第六类)照样占掉它那一格 seq。不占的话,
+  // 它后面的每一条已知通知都会被判成跳号 → 触发补洞 → 拉回同一页 → 又卡在这条上,
+  // 补齐原地打转,后面的转录永远交付不出去(Go 侧 skipSeq 同一条纪律)。
+  it("不认识的通知照样占掉它那一格 seq,后面的已知通知照常交付", async () => {
+    const events: string[] = [];
+    const client = makeClient({
+      reconnect: false,
+      onEvent: (frame) => {
+        events.push((frame.event as { text: string }).text);
+      },
+    });
+    const ws = await connectClient(client);
+
+    const attachP = client.attach(42);
+    await waitSent(ws, 1);
+    const attach = lastSent(ws);
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          id: attach.id,
+          result: { sessionId: 42, lifecycleState: "running", latestSeq: 2 },
+        }),
+      ),
+    );
+    await attachP;
+
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          method: "runtime.somethingNew",
+          params: { sessionId: 42, seq: 1 },
+        }),
+      ),
+    );
+    ws.receive(
+      encode(
+        encodeFrame({
+          jsonrpc: "2.0",
+          method: "runtime.event",
+          params: {
+            sessionId: 42,
+            event: { kind: "text_delta", text: "after" },
+            seq: 2,
+          },
+        }),
+      ),
+    );
+    await vi.waitFor(() => expect(events).toEqual(["after"]));
+    expect(client.getCursor(42)).toBe(2);
+    // 不认识的那条不该触发补洞拉取(它并不是一个洞)。
+    expect(ws.sent.length).toBe(1);
+    client.close();
+  });
+});
+
 describe("中继客户端:握手完成前不对外暴露 connected", () => {
   it("auth.account 返回前 state 不得是 connected(防 session.list 抢跑被 daemon 拒)", async () => {
     const states: RelayState[] = [];
@@ -532,6 +698,66 @@ describe("中继客户端:连接失败可重试", () => {
     FakeWebSocket.instances[1].open();
     await authenticate(FakeWebSocket.instances[1]);
     await p2;
+    client.close();
+  });
+});
+
+describe("中继客户端:旧连接的收尾不波及新连接", () => {
+  // 一条已经被换掉的旧 socket 迟到的 onclose 不能拆掉当前这条:失败重试时旧
+  // socket 的 close 事件总在新连接建立之后才到,照单全收会把一条刚连上的连接
+  // 判成断线 —— 未决请求被拒、状态翻成 disconnected,页面当场变成「连不上」。
+  it("被换掉的旧 socket 迟到的 close 不影响当前连接与未决请求", async () => {
+    const client = makeClient();
+    const p1 = client.connect();
+    const ws1 = FakeWebSocket.instances[0];
+    ws1.fail();
+    await expect(p1).rejects.toThrow("连接失败");
+
+    const p2 = client.connect();
+    const ws2 = FakeWebSocket.instances[1];
+    ws2.open();
+    await authenticate(ws2);
+    await p2;
+    expect(client.state).toBe("connected");
+
+    const pending = client.request("runtime.session.list");
+    await vi.waitFor(() => expect(ws2.sent.length).toBeGreaterThan(1));
+    const req = lastSent(ws2);
+
+    // 旧 socket 的 close 现在才到。
+    ws1.serverClose();
+    expect(client.state).toBe("connected");
+
+    ws2.receive(
+      encode(
+        encodeFrame({ jsonrpc: "2.0", id: req.id, result: { sessions: [] } }),
+      ),
+    );
+    await expect(pending).resolves.toEqual({ sessions: [] });
+    client.close();
+  });
+
+  // close() 之后再 connect() 必须真的新建一条连接。浏览器的 ws.close() 不会同步
+  // 回调 onclose,残留的那个已 resolve 的 connectPromise 会被下一次 connect() 直接
+  // 返回 —— 客户端从此没有 socket 却自称连着,一条帧也发不出去。
+  it("close() 之后 connect() 新建连接(不返回已结束的旧 promise)", async () => {
+    const client = makeClient();
+    const ws = await connectClient(client);
+    // 真实浏览器:close() 只是发起关闭,onclose 稍后才到。
+    const late = ws.onclose;
+    ws.onclose = null;
+
+    client.close();
+    const p = client.connect();
+    expect(FakeWebSocket.instances.length).toBe(2);
+    FakeWebSocket.instances[1].open();
+    await authenticate(FakeWebSocket.instances[1]);
+    await p;
+    expect(client.state).toBe("connected");
+
+    // 迟到的旧 onclose 到达,同样不得拆掉这条新连接。
+    late?.();
+    expect(client.state).toBe("connected");
     client.close();
   });
 });

@@ -87,11 +87,6 @@ interface PendingRequest {
 
 const OPEN = 1;
 
-/** auth.account 握手应答(只取 ok;daemon 报错时整个请求 reject)。 */
-interface AccountAuthResult {
-  ok?: boolean;
-}
-
 export class RelayClient {
   private readonly opts: Required<
     Pick<RelayClientOptions, "url" | "jwt" | "deviceFingerprint">
@@ -108,6 +103,13 @@ export class RelayClient {
   private attaching = new Map<number, Promise<SessionAttachResult>>();
   /** 关注名单:断线重连后逐个补齐。 */
   private watched = new Set<number>();
+  /**
+   * sessionId → 正在进行的补齐。页面发起的补齐与跳号触发的补洞共用同一条队列:
+   * 同一会话任一时刻至多一串 pull 在飞,不让两串翻页互相踩游标。
+   */
+  private catchingUp = new Map<number, Promise<void>>();
+  /** 补齐进行中又收到跳号帧的会话:这一串补完之后再补一轮,而不是并发发第二串。 */
+  private refill = new Set<number>();
   /**
    * sessionId → 该会话的 origin 对端指纹(别的对端发起的会话才有)。
    *
@@ -198,7 +200,11 @@ export class RelayClient {
       };
       ws.onmessage = (ev: MessageEvent) => this.handleMessage(ev.data);
       ws.onclose = () => {
-        if (this.ws === ws) this.ws = null;
+        // 只有**当前**这条 socket 的收尾才作数:连接失败重试时,被换掉的旧
+        // socket 的 close 事件总在新连接建立之后才到。照单全收会把一条刚连上的
+        // 连接判成断线 —— 未决请求被拒、状态翻成 disconnected,页面当场「连不上」。
+        if (this.ws !== ws) return;
+        this.ws = null;
         this.connectPromise = null;
         this.handleClose();
       };
@@ -215,6 +221,10 @@ export class RelayClient {
     }
     this.ws?.close();
     this.ws = null;
+    // 浏览器的 ws.close() 不同步回调 onclose,而那条迟到的 onclose 已经不属于
+    // 当前 socket、不会再跑收尾。connectPromise 就地清掉,否则下一次 connect()
+    // 直接拿到这个已结束的 promise —— 客户端没有 socket 却自称连着。
+    this.connectPromise = null;
     this.failPending(new RelayError(-1, "relay: 客户端已关闭", null));
     this.setState("disconnected");
   }
@@ -271,43 +281,63 @@ export class RelayClient {
 
   /**
    * 按 seq 游标补齐一条会话:attach → pull 翻页直到 HasMore=false。
-   * 补齐的通知与实时同一套去重(seq ≤ 游标即丢弃)。
+   * 补齐的通知与实时同一套去重(seq ≤ 游标即丢弃、seq > 游标+1 即跳号)。
+   *
+   * 同一会话的补齐串行:已有一串在飞时复用它,并记下「补完再补一轮」——
+   * 跳号触发的补洞与页面发起的补齐因此不会并发翻页、互相踩游标。
    */
-  async catchUp(sessionId: number, peerFingerprint?: string): Promise<void> {
+  catchUp(sessionId: number, peerFingerprint?: string): Promise<void> {
     const origin = this.rememberOrigin(sessionId, peerFingerprint);
+    const running = this.catchingUp.get(sessionId);
+    if (running) {
+      this.refill.add(sessionId);
+      return running;
+    }
+    const p = this.pullUntilCaughtUp(sessionId, origin).finally(() => {
+      this.catchingUp.delete(sessionId);
+      // 这一串期间又出现过跳号:那一段还没补上,再补一轮(游标已推进,不会原地打转)。
+      if (this.refill.delete(sessionId)) {
+        void this.catchUp(sessionId).catch(() => {
+          // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
+        });
+      }
+    });
+    this.catchingUp.set(sessionId, p);
+    return p;
+  }
+
+  private async pullUntilCaughtUp(
+    sessionId: number,
+    origin: string | undefined,
+  ): Promise<void> {
     await this.attach(sessionId, origin);
-    let pullCursor = this.cursors.get(sessionId) ?? 0;
     for (;;) {
-      const sentCursor = pullCursor;
+      const sentCursor = this.cursors.get(sessionId) ?? 0;
       const raw = await this.request(MethodSessionPull, {
         sessionId,
         ...(origin ? { peerFingerprint: origin } : {}),
-        cursor: pullCursor,
+        cursor: sentCursor,
         limit: DefaultSessionPullLimit,
       });
       const res = decodeSessionPullResult(raw);
-      // OldestSeq 复位:本次拉取用的游标落后于留存窗口(老前缀已被回收)时,
-      // 把下一拉游标推到现存最老那一行的前一位(那截尾巴是真的没有了),
-      // 再从那里接着补。复位优先于 res.cursor —— 空页上 res.cursor 保持本次
-      // 拉取的游标不变,照它推进会原地打转。
+      // OldestSeq 复位:本次拉取用的游标落后于留存窗口(老前缀已被回收)时,把游标
+      // 推到现存最老那一行的前一位(那截尾巴是真的没有了)。复位必须在应用这一页
+      // **之前** —— 否则这一页的第一条当场被判成跳号丢掉,一条也交付不出去。
       if (
         res.oldestSeq !== undefined &&
         res.oldestSeq > 0 &&
         sentCursor < res.oldestSeq - 1
       ) {
-        pullCursor = res.oldestSeq - 1;
-      } else {
-        pullCursor = res.cursor;
+        this.cursors.set(sessionId, res.oldestSeq - 1);
       }
       for (const n of res.notifications ?? []) {
         this.applyJournaled(n);
       }
-      // 去重水线可能比 res.cursor 更高(本页带出的行里最后一条),取高者。
+      // 游标只由「应用了哪些行」推进(复位除外):照 res.cursor 盖上去会把这一页里
+      // 交付不出去的行也算成已消费。
       const applied = this.cursors.get(sessionId) ?? 0;
-      pullCursor = Math.max(pullCursor, applied);
-      this.cursors.set(sessionId, pullCursor);
       // 防自旋:没有更多页,或游标没有推进(空页且未复位),不能无限重拉同一页。
-      if (!res.hasMore || pullCursor <= sentCursor) break;
+      if (!res.hasMore || applied <= sentCursor) break;
     }
   }
 
@@ -378,53 +408,83 @@ export class RelayClient {
   }
 
   private dispatchNotification(frame: WireFrame): void {
-    switch (frame.method) {
-      case NotifyEvent:
-      case NotifyAutonomousTurnEvent: {
-        const ev = decodeEventFrame(frame.params);
-        this.applyDedup(ev.sessionId, ev.seq, () => this.opts.onEvent?.(ev));
-        break;
+    try {
+      switch (frame.method) {
+        case NotifyEvent:
+        case NotifyAutonomousTurnEvent: {
+          const ev = decodeEventFrame(frame.params);
+          this.applyDedup(ev.sessionId, ev.seq, () => this.opts.onEvent?.(ev));
+          return;
+        }
+        case NotifyRunResultDone:
+        case NotifyAutonomousTurnDone: {
+          const done = decodeRunResultDoneFrame(frame.params);
+          this.applyDedup(done.sessionId, done.seq, () =>
+            this.opts.onRunResultDone?.(done),
+          );
+          return;
+        }
+        case NotifyAutonomousTurnStarted: {
+          const started = decodeAutonomousTurnStartedFrame(frame.params);
+          this.applyDedup(started.sessionId, started.seq, () =>
+            this.opts.onAutonomousTurnStarted?.(started),
+          );
+          return;
+        }
       }
-      case NotifyRunResultDone:
-      case NotifyAutonomousTurnDone: {
-        const done = decodeRunResultDoneFrame(frame.params);
-        this.applyDedup(done.sessionId, done.seq, () =>
-          this.opts.onRunResultDone?.(done),
-        );
-        break;
-      }
-      case NotifyAutonomousTurnStarted: {
-        const started = decodeAutonomousTurnStartedFrame(frame.params);
-        this.applyDedup(started.sessionId, started.seq, () =>
-          this.opts.onAutonomousTurnStarted?.(started),
-        );
-        break;
-      }
-      default:
-        // 不认识的 method:丢弃,不让未知通知搞崩连接。
-        break;
+    } catch {
+      // 载荷解不动:不投递,但照样占掉这一格 seq(见 skipSeq),不让一条坏帧
+      // 把它后面的整段转录卡在补洞里。
     }
+    this.skipSeq(frame.params);
   }
 
   /**
-   * seq 去重:同一会话内 seq 单调递增。seq > 游标 → 推进游标并投递;
-   * seq ≤ 游标 → 重复投递,只应用一次(丢弃)。老 daemon 不带 seq 时无法去重,
-   * 一律投递(与 Go 侧「seq 是可选追加字段」的兼容语义一致)。
+   * 一条交付不出去的通知(本客户端不认识的 method / 载荷解不动)照样占掉它那一格
+   * 游标。不占的话,它后面的每一条已知通知都会被判成跳号 → 触发补洞 → 拉回同一页 →
+   * 又卡在这一条上,补齐原地打转、后面的转录永远交付不出去(与 Go 侧
+   * remote/reconnect.go 的 skipSeq 同一条纪律)。
+   */
+  private skipSeq(params: unknown): void {
+    if (!params || typeof params !== "object") return;
+    const head = params as { sessionId?: unknown; seq?: unknown };
+    if (typeof head.sessionId !== "number" || typeof head.seq !== "number") {
+      return;
+    }
+    this.applyDedup(head.sessionId, head.seq, () => {
+      // 占位:这一格已被消费,但没有可投递的内容。
+    });
+  }
+
+  /**
+   * seq 闸门(与 Go 侧 remote/reconnect.go 的 dispatchNotification 同一套规则):
+   *   - seq == 游标 + 1 → 消费并推进游标;
+   *   - seq >  游标 + 1 → **跳号**:不消费,改从游标发起一次补齐,补平后再顺序交付。
+   *     直接推进游标会把中间那一段判成「重复」永久丢掉 —— 打开一条正在跑的会话时,
+   *     attach 之后的第一条实时帧 seq 远高于本地游标(浏览器刚打开,游标是 0),
+   *     用户看到的转录会从半截开始;
+   *   - seq <= 游标      → 重复投递,丢弃。
+   * 老 daemon 不带 seq(可选追加字段)时无游标可言,一律投递。
    */
   private applyDedup(
     sessionId: number,
     seq: number | undefined,
     deliver: () => void,
   ): void {
-    if (seq === undefined) {
+    if (seq === undefined || seq === 0) {
       deliver();
       return;
     }
     const cursor = this.cursors.get(sessionId) ?? 0;
-    if (seq > cursor) {
-      this.cursors.set(sessionId, seq);
-      deliver();
+    if (seq <= cursor) return;
+    if (seq > cursor + 1) {
+      void this.catchUp(sessionId).catch(() => {
+        // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
+      });
+      return;
     }
+    this.cursors.set(sessionId, seq);
+    deliver();
   }
 
   /** 补齐页里的一条通知:按 method 解成帧、把日志行上的 seq 盖上去,再走同一套去重投递。 */

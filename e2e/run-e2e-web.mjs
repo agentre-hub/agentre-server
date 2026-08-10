@@ -84,7 +84,9 @@ async function main() {
   if (process.env.WEBE2E_SKIP_FRONTEND_BUILD !== "1") {
     buildFrontend(serverDir);
   } else {
-    console.log("[web-e2e] WEBE2E_SKIP_FRONTEND_BUILD=1 → reusing frontend/dist");
+    console.log(
+      "[web-e2e] WEBE2E_SKIP_FRONTEND_BUILD=1 → reusing frontend/dist",
+    );
   }
   copyDist(serverDir);
   const serverBin = join(workDir, "agentre-server");
@@ -103,7 +105,8 @@ async function main() {
     stdio: ["ignore", openLog(serverLog), openLog(serverLog)],
   });
   serverProc.on("exit", (code) => {
-    if (code !== null && code !== 0) console.error(`[web-e2e] server exited with ${code}`);
+    if (code !== null && code !== 0)
+      console.error(`[web-e2e] server exited with ${code}`);
   });
   await waitForServer(serverURL);
 
@@ -112,12 +115,18 @@ async function main() {
   const agentredFP = daemonFingerprint(daemonUUID);
   seeded = runTool([
     "seed",
-    "--dsn", dsn,
-    "--redis-addr", redis.addr,
-    "--redis-password", redis.password,
-    "--redis-db", String(redis.db),
-    "--run-id", runID,
-    "--agentred-fingerprint", agentredFP,
+    "--dsn",
+    dsn,
+    "--redis-addr",
+    redis.addr,
+    "--redis-password",
+    redis.password,
+    "--redis-db",
+    String(redis.db),
+    "--run-id",
+    runID,
+    "--agentred-fingerprint",
+    agentredFP,
   ]);
 
   // Trade the seeded refresh token for a real access JWT over real HTTP, then
@@ -136,17 +145,14 @@ async function main() {
   });
 
   console.log(`[web-e2e] starting agentred (${agentredFP}) …`);
-  agentredProc = spawn(
-    agentredBin,
-    ["run", "--server", serverURL],
-    {
-      cwd: workDir,
-      env: { ...process.env, AGENTRED_DATA_DIR: agentredDataDir },
-      stdio: ["ignore", openLog(agentredLog), openLog(agentredLog)],
-    },
-  );
+  agentredProc = spawn(agentredBin, ["run", "--server", serverURL], {
+    cwd: workDir,
+    env: { ...process.env, AGENTRED_DATA_DIR: agentredDataDir },
+    stdio: ["ignore", openLog(agentredLog), openLog(agentredLog)],
+  });
   agentredProc.on("exit", (code) => {
-    if (code !== null && code !== 0) console.error(`[web-e2e] agentred exited with ${code}`);
+    if (code !== null && code !== 0)
+      console.error(`[web-e2e] agentred exited with ${code}`);
   });
   await waitForAgentredOnline(serverURL, agentredFP, seeded.user_id);
 
@@ -170,7 +176,13 @@ async function main() {
   const playwrightCli = require.resolve("@playwright/test/cli");
   const child = spawn(
     process.execPath,
-    [playwrightCli, "test", "--config", "playwright.web.config.ts", ...process.argv.slice(2)],
+    [
+      playwrightCli,
+      "test",
+      "--config",
+      "playwright.web.config.ts",
+      ...process.argv.slice(2),
+    ],
     { cwd: here, stdio: "inherit" },
   );
   child.on("exit", (code) => void finish(code ?? 1));
@@ -189,31 +201,43 @@ async function finish(code) {
     try {
       const res = runTool([
         "cleanup",
-        "--dsn", dsn,
-        "--redis-addr", redis.addr,
-        "--redis-password", redis.password,
-        "--redis-db", String(redis.db),
-        "--run-id", runID,
+        "--dsn",
+        dsn,
+        "--redis-addr",
+        redis.addr,
+        "--redis-password",
+        redis.password,
+        "--redis-db",
+        String(redis.db),
+        "--run-id",
+        runID,
       ]);
-      const residue = Object.entries(res.residue ?? {}).filter(([, n]) => n > 0);
+      const residue = Object.entries(res.residue ?? {}).filter(
+        ([, n]) => n > 0,
+      );
       console.log(
         `[web-e2e] cleaned up account ${res.user_id}: ` +
           `${JSON.stringify(res.deleted)}${residue.length ? ` RESIDUE ${JSON.stringify(residue)}` : " (no residue)"}`,
       );
       if (residue.length) code = code || 1;
     } catch (err) {
-      console.error(`[web-e2e] CLEANUP FAILED — rows may remain for run ${runID}: ${err.message}`);
+      console.error(
+        `[web-e2e] CLEANUP FAILED — rows may remain for run ${runID}: ${err.message}`,
+      );
       code = code || 1;
     }
   }
 
-  if (agentredProc && agentredProc.exitCode === null) agentredProc.kill("SIGTERM");
+  if (agentredProc && agentredProc.exitCode === null)
+    agentredProc.kill("SIGTERM");
   if (serverProc && serverProc.exitCode === null) serverProc.kill("SIGTERM");
 
   if (code === 0) {
     rmSync(workDir, { recursive: true, force: true });
   } else {
-    console.log(`[web-e2e] kept ${workDir} for inspection (server.log, agentred.log, agentred.db, screenshots)`);
+    console.log(
+      `[web-e2e] kept ${workDir} for inspection (server.log, agentred.log, agentred.db, screenshots)`,
+    );
   }
   process.exit(code);
 }
@@ -243,7 +267,10 @@ function locateAgentreCheckout(serverDir) {
     agentreMain,
   ];
   for (const candidate of worktreeCandidates) {
-    if (existsSync(join(candidate, "go.mod")) && existsSync(join(candidate, "cmd", "agentred"))) {
+    if (
+      existsSync(join(candidate, "go.mod")) &&
+      existsSync(join(candidate, "cmd", "agentred"))
+    ) {
       return resolve(candidate);
     }
   }
@@ -274,7 +301,9 @@ function mainCheckout(dir) {
 function readDSN(serverDir) {
   const configPath = join(serverDir, "configs", "config.yaml");
   if (!existsSync(configPath)) {
-    throw new Error(`${configPath} is missing — the suite needs the server's real DSN.`);
+    throw new Error(
+      `${configPath} is missing — the suite needs the server's real DSN.`,
+    );
   }
   const match = /^\s*dsn:\s*(\S+)\s*$/m.exec(readFileSync(configPath, "utf8"));
   if (!match) throw new Error(`no db.dsn found in ${configPath}`);
@@ -292,7 +321,10 @@ function readRedis(serverDir) {
 
 function buildFrontend(serverDir) {
   try {
-    execFileSync("pnpm", ["build"], { cwd: join(serverDir, "frontend"), stdio: "inherit" });
+    execFileSync("pnpm", ["build"], {
+      cwd: join(serverDir, "frontend"),
+      stdio: "inherit",
+    });
   } catch {
     throw new Error("frontend pnpm build failed — see output above");
   }
@@ -302,7 +334,9 @@ function copyDist(serverDir) {
   const src = join(serverDir, "frontend", "dist");
   const dst = join(serverDir, "internal", "web", "dist");
   if (!existsSync(join(src, "index.html"))) {
-    throw new Error(`${join(src, "index.html")} missing — frontend build did not produce a bundle`);
+    throw new Error(
+      `${join(src, "index.html")} missing — frontend build did not produce a bundle`,
+    );
   }
   rmSync(dst, { recursive: true, force: true });
   mkdirSync(dst, { recursive: true });
@@ -313,7 +347,10 @@ function writeServerConfig(serverDir, port, workDir) {
   const cwd = join(workDir, "server");
   mkdirSync(join(cwd, "configs"), { recursive: true });
   let text = readFileSync(join(serverDir, "configs", "config.yaml"), "utf8");
-  text = text.replace(/(http:\s*\n\s*address:\s*\n\s*-\s*)(\S+)/, `$1127.0.0.1:${port}`);
+  text = text.replace(
+    /(http:\s*\n\s*address:\s*\n\s*-\s*)(\S+)/,
+    `$1127.0.0.1:${port}`,
+  );
   // The browser reaches the SPA through the server itself, so the device-flow
   // verification URI (public_url + /device) must point at the server's own URL.
   text = text.replace(/(public_url:\s*)(\S+)/, `$1http://127.0.0.1:${port}`);
@@ -384,7 +421,9 @@ async function waitForAgentredOnline(baseURL, fp, userID) {
     try {
       const res = await fetchJSON(`${baseURL}/v1/devices`, { cookie });
       if (res.devices?.some((d) => d.fingerprint === fp && d.online === true)) {
-        console.log(`[web-e2e] agentred online on the relay (device ${userID}/${fp})`);
+        console.log(
+          `[web-e2e] agentred online on the relay (device ${userID}/${fp})`,
+        );
         return;
       }
     } catch {
@@ -412,7 +451,10 @@ async function refreshToken(baseURL, refreshToken) {
     method: "POST",
     body: JSON.stringify({ refresh_token: refreshToken }),
   });
-  if (!res.access_token) throw new Error(`refresh endpoint returned no access_token: ${JSON.stringify(res)}`);
+  if (!res.access_token)
+    throw new Error(
+      `refresh endpoint returned no access_token: ${JSON.stringify(res)}`,
+    );
   return res;
 }
 
@@ -420,7 +462,8 @@ async function refreshToken(baseURL, refreshToken) {
 // daemon's cached verification key for auth.account.
 async function fetchServerPublicKey(baseURL) {
   const res = await fetchJSON(`${baseURL}/v1/keys`);
-  if (!res.public_key) throw new Error(`/v1/keys returned no public_key: ${JSON.stringify(res)}`);
+  if (!res.public_key)
+    throw new Error(`/v1/keys returned no public_key: ${JSON.stringify(res)}`);
   return res.public_key;
 }
 
@@ -431,7 +474,11 @@ function writeAgentredState(dir, s) {
     listen: { lanHost: "0.0.0.0", lanPort: 0, tlsCertFile: "", tlsKeyFile: "" },
     pairedPeers: {},
     llmProviders: {},
-    preferences: { logLevel: "info", logRotateMB: 50, pairingCodeTTLSeconds: 300 },
+    preferences: {
+      logLevel: "info",
+      logRotateMB: 50,
+      pairingCodeTTLSeconds: 300,
+    },
     accountId: s.accountId,
     verificationPublicKeyPEM: s.publicKeyPEM,
     credential: {
@@ -462,9 +509,17 @@ function seedAgentredSession(dbPath, agentredFP) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     stmt.run(
-      WEB_FINGERPRINT, String(sessionId), 1, "/tmp/e2e-web-project",
-      "claudecode", "idle", "e2e 全链路会话", "e2e-agent-sync-1", "e2e-fake-1001",
-      now, now,
+      WEB_FINGERPRINT,
+      String(sessionId),
+      1,
+      "/tmp/e2e-web-project",
+      "claudecode",
+      "idle",
+      "e2e 全链路会话",
+      "e2e-agent-sync-1",
+      "e2e-fake-1001",
+      now,
+      now,
     );
     // Journal rows: prior transcript the browser must catch up by cursor.
     // payload is the EventFrame WITHOUT seq (mirror of handlers/runtime.go emit).
@@ -474,13 +529,28 @@ function seedAgentredSession(dbPath, agentredFP) {
        VALUES (?, ?, ?, ?, ?, ?)`,
     );
     const events = [
-      { seq: 1, event: { kind: "text_delta", text: "e2e-fake-reply: 上次的旧转录(第 1 行)" } },
-      { seq: 2, event: { kind: "text_delta", text: " e2e-fake-reply: 上次的旧转录(第 2 行)" } },
+      {
+        seq: 1,
+        event: {
+          kind: "text_delta",
+          text: "e2e-fake-reply: 上次的旧转录(第 1 行)",
+        },
+      },
+      {
+        seq: 2,
+        event: {
+          kind: "text_delta",
+          text: " e2e-fake-reply: 上次的旧转录(第 2 行)",
+        },
+      },
       { seq: 3, event: { kind: "done" } },
     ];
     for (const ev of events) {
       jstmt.run(
-        WEB_FINGERPRINT, String(sessionId), ev.seq, "runtime.event",
+        WEB_FINGERPRINT,
+        String(sessionId),
+        ev.seq,
+        "runtime.event",
         JSON.stringify({ sessionId, event: ev.event }),
         now,
       );
@@ -496,21 +566,30 @@ function requireModule(name) {
 
 function fetchJSON(url, opts = {}) {
   return new Promise((resolvePromise, reject) => {
-    const headers = { Accept: "application/json", ...(opts.body ? { "Content-Type": "application/json" } : {}) };
+    const headers = {
+      Accept: "application/json",
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+    };
     if (opts.cookie) headers.Cookie = opts.cookie;
-    const req = request(url, { method: opts.method ?? "GET", headers, timeout: 10_000 }, (res) => {
-      const chunks = [];
-      res.on("data", (c) => chunks.push(c));
-      res.on("end", () => {
-        const text = Buffer.concat(chunks).toString();
-        try {
-          const json = JSON.parse(text);
-          resolvePromise(json.data ?? json);
-        } catch {
-          reject(new Error(`non-JSON response from ${url}: ${text.slice(0, 200)}`));
-        }
-      });
-    });
+    const req = request(
+      url,
+      { method: opts.method ?? "GET", headers, timeout: 10_000 },
+      (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const text = Buffer.concat(chunks).toString();
+          try {
+            const json = JSON.parse(text);
+            resolvePromise(json.data ?? json);
+          } catch {
+            reject(
+              new Error(`non-JSON response from ${url}: ${text.slice(0, 200)}`),
+            );
+          }
+        });
+      },
+    );
     req.on("timeout", () => req.destroy(new Error(`timeout fetching ${url}`)));
     req.on("error", reject);
     if (opts.body) req.write(opts.body);
@@ -531,7 +610,10 @@ function probe(url) {
 }
 
 function runTool(args) {
-  const out = execFileSync(toolBin, args, { encoding: "utf8", timeout: 120_000 });
+  const out = execFileSync(toolBin, args, {
+    encoding: "utf8",
+    timeout: 120_000,
+  });
   return JSON.parse(out);
 }
 

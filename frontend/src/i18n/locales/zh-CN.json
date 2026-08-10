@@ -218,7 +218,7 @@
       "submit": "提交",
       "skip": "跳过",
       "alreadyHandled": "该请求已被处理。",
-      "none": "没有待处理的请求。"
+      "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。"
     }
   },
   "chat": {

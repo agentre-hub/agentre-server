@@ -58,16 +58,23 @@ async function assertWebDeviceRegistered(page: Page) {
           return (await res.json()).data.devices;
         });
       },
-      { timeout: 30_000, message: "浏览器应按固定指纹注册成一台 kind=web 设备" },
+      {
+        timeout: 30_000,
+        message: "浏览器应按固定指纹注册成一台 kind=web 设备",
+      },
     )
-    .toContainEqual(expect.objectContaining({ fingerprint: webFP, kind: "web" }));
+    .toContainEqual(
+      expect.objectContaining({ fingerprint: webFP, kind: "web" }),
+    );
 }
 
 test("全链路:登录→设备身份→列会话→游标补齐→发消息→收回复→批准工具调用", async ({
   page,
 }) => {
   // ── 诊断:网络失败 / 非 2xx / 浏览器 console 都进测试输出 ────────────────
-  page.on("console", (msg) => console.log(`[browser:${msg.type()}] ${msg.text()}`));
+  page.on("console", (msg) =>
+    console.log(`[browser:${msg.type()}] ${msg.text()}`),
+  );
   page.on("requestfailed", (r) =>
     console.log(`[reqfail] ${r.url()} → ${r.failure()?.errorText}`),
   );
@@ -147,7 +154,9 @@ test("全链路:登录→设备身份→列会话→游标补齐→发消息→�
       )
       .get(webFP, String(SEEDED_SID));
     expect(sessionRow).toBeTruthy();
-    expect((sessionRow as { backend_type: string }).backend_type).toBe("claudecode");
+    expect((sessionRow as { backend_type: string }).backend_type).toBe(
+      "claudecode",
+    );
     const journalCount = (
       db
         .prepare(

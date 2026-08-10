@@ -11,7 +11,10 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   retries: 0,
-  reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-web-report" }]],
+  reporter: [
+    ["list"],
+    ["html", { open: "never", outputFolder: "playwright-web-report" }],
+  ],
   use: {
     baseURL: process.env.WEBE2E_SERVER_URL,
     headless: true,

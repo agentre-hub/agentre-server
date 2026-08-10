@@ -125,13 +125,21 @@ export async function dispatchNewConversation(
     await client.connect();
     const raw = await client.request(MethodRun, params);
     const ack = decodeRunAck(raw);
-    await api("/v1/follows", {
-      method: "POST",
-      body: JSON.stringify({
-        device_fingerprint: choice.device_fingerprint,
-        session_id: String(ack.sessionId),
-      }),
-    });
+    // R16 的自关注是派发**成功之后**的收尾:ack 一到手,那台机器上就已经真真切切
+    // 多了一条会话。关注写失败只是这条不会自动出现在「对话」页(用户仍能在会话详情
+    // 里手动关注),把它报成派发失败会让界面说「联系不上这台机器,请重试」——用户一
+    // 重试就凭空再开一条真会话,第一条还留在机器上跑。因此这一步不参与成败判定。
+    try {
+      await api("/v1/follows", {
+        method: "POST",
+        body: JSON.stringify({
+          device_fingerprint: choice.device_fingerprint,
+          session_id: String(ack.sessionId),
+        }),
+      });
+    } catch {
+      // 关注没写上:会话已经建起来了,交给调用方照常跳转。
+    }
     return {
       sessionId: ack.sessionId,
       deviceId: choice.device_id,

@@ -72,6 +72,7 @@ export default function SessionDetail() {
     askUserQuestions: [],
   });
   const [handledRequestId, setHandledRequestId] = useState<string | null>(null);
+  const [decisionError, setDecisionError] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(false);
   // 未升级的 agentred 的 session.list 应答里没有 supportsSessionMetadata（兼容性）。
@@ -113,8 +114,15 @@ export default function SessionDetail() {
           []) as PendingAskQuestionShape[],
       };
       setWaiters(next);
+      // 「已被处理」是对**那一条**待决策的说明,不是页面的永久状态:新的待决策上来
+      // 之后还挂着,就成了「已被处理」与一张真等着人批的卡并排自相矛盾。
+      if (next.toolPermissions.length > 0 || next.askUserQuestions.length > 0) {
+        setHandledRequestId(null);
+      }
       return next;
     } catch {
+      // 拉不到是「没问出来」,不是「没有待决策」:回 null 让调用方自己分辨,
+      // 别把一次 RPC 失败当成待决策已经被处理。
       return null;
     }
   }, [sid]);
@@ -336,18 +344,26 @@ export default function SessionDetail() {
     requestId: string,
     doSubmit: () => Promise<unknown>,
   ) {
+    setHandledRequestId(null);
+    setDecisionError(false);
     const before = await refreshWaiters();
-    const present = !!(
-      before &&
-      (before.toolPermissions.some((w) => w.RequestID === requestId) ||
-        before.askUserQuestions.some((w) => w.RequestID === requestId))
-    );
-    if (!present) {
+    // before 为 null = 预检这一次没问出来（RPC 失败），不是「已经被处理」。当成
+    // 已处理收场会把这次决策静默丢掉，而那边的工具还阻塞着。问不出来就照常提交，
+    // 重复提交由 daemon 的幂等收敛（R8）。
+    const answered =
+      before !== null &&
+      !before.toolPermissions.some((w) => w.RequestID === requestId) &&
+      !before.askUserQuestions.some((w) => w.RequestID === requestId);
+    if (answered) {
       setHandledRequestId(requestId);
       return;
     }
     try {
       await doSubmit();
+    } catch {
+      // 提交没发出去（socket 刚断等）：就地说明，不静默——按钮点下去什么都不发生
+      // 会让用户以为批准生效了，而工具还阻塞在那台机器上。
+      setDecisionError(true);
     } finally {
       await refreshWaiters();
     }
@@ -499,13 +515,20 @@ export default function SessionDetail() {
             {waiters.toolPermissions.length > 0 ||
             waiters.askUserQuestions.length > 0 ||
             handledRequestId ? (
-              <DecisionPanel
-                toolPermissions={waiters.toolPermissions}
-                askUserQuestions={waiters.askUserQuestions}
-                handledRequestId={handledRequestId}
-                onApproveTool={approveTool}
-                onAnswerQuestion={answerQuestion}
-              />
+              <>
+                <DecisionPanel
+                  toolPermissions={waiters.toolPermissions}
+                  askUserQuestions={waiters.askUserQuestions}
+                  handledRequestId={handledRequestId}
+                  onApproveTool={approveTool}
+                  onAnswerQuestion={answerQuestion}
+                />
+                {decisionError && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {t("session.decision.submitFailed")}
+                  </p>
+                )}
+              </>
             ) : null}
             <form
               className="flex flex-wrap items-end gap-2"

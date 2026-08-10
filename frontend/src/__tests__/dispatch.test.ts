@@ -219,6 +219,31 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
     expect(mockedApi).not.toHaveBeenCalled();
   });
 
+  // R16 的自关注是**派发成功之后**的收尾动作:runtime.run 一旦返回 ack,那台机器上
+  // 就已经真真切切多了一条会话。此时把关注写失败(网络抖动 / server 500)报成派发
+  // 失败,界面会说「联系不上这台机器,请重试」——用户一重试就凭空又开一条真会话,
+  // 而第一条还留在机器上跑。关注写不进去只是这条不会自动出现在「对话」页,不该
+  // 把已经成功的派发说成失败。
+  it("自关注写失败不把已经成功的派发报成失败(否则重试会开出第二条真会话)", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation((() => client) as never);
+    mockedApi.mockRejectedValue(new Error("follows unavailable"));
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "讲讲这个项目",
+      sourceDevice,
+    });
+
+    expect(client.request).toHaveBeenCalled();
+    expect(out).toEqual({
+      sessionId: 9001,
+      deviceId: 21,
+      deviceFingerprint: "fp-online",
+    });
+    expect(client.close).toHaveBeenCalled();
+  });
+
   it("连接失败时抛错并释放连接，不静默", async () => {
     const client = fakeClient();
     client.connect.mockRejectedValue(new Error("connect refused"));

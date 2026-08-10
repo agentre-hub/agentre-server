@@ -21,9 +21,12 @@ func TestFollow_SingleStatementOnConflictDoNothing(t *testing.T) {
 	r := NewFollow()
 
 	mock.ExpectBegin()
+	// 绑定值也一并钉住：少绑一列（比如把 user_id 漏在 WHERE 之外）时唯一索引的
+	// 裁决对象就变了，只验 SQL 文本看不出来。
 	mock.ExpectQuery(regexp.QuoteMeta(
 		`ON CONFLICT ("user_id","device_fingerprint","session_id") DO NOTHING`,
-	)).WillReturnRows(sqlmock.NewRows([]string{"id"})) // 空结果 = 已关注，冲突 no-op
+	)).WithArgs(int64(7), "fp-daemon-1", "sess-9", int64(1000), int64(1000), int64(1000)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"})) // 空结果 = 已关注，冲突 no-op
 	mock.ExpectCommit()
 
 	f := &follow_entity.FollowedSession{
@@ -60,8 +63,11 @@ func TestListByUser_AccountScoped(t *testing.T) {
 	}).
 		AddRow(1, 7, "fp-daemon-1", "sess-9", 2000, 2000, 2000).
 		AddRow(2, 7, "fp-daemon-1", "sess-8", 1000, 1000, 1000)
-	mock.ExpectQuery(regexp.QuoteMeta(`FROM "followed_sessions" WHERE user_id=$1`)).
-		WithArgs(int64(7)).WillReturnRows(rows)
+	// 排序也钉在 SQL 上：sqlmock 按给定顺序回行，光比第一行的内容，把 ORDER BY
+	// 整句删掉这个用例照样绿。「最近关注的排在前面」是 R13 列表的顺序承诺。
+	mock.ExpectQuery(regexp.QuoteMeta(
+		`FROM "followed_sessions" WHERE user_id=$1 ORDER BY followed_at DESC, id DESC`,
+	)).WithArgs(int64(7)).WillReturnRows(rows)
 
 	out, err := r.ListByUser(ctx, 7)
 	require.NoError(t, err)

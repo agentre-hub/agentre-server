@@ -340,6 +340,131 @@ describe("会话详情页", () => {
   });
 });
 
+describe("会话详情页:提交决策的失败路径", () => {
+  // 提交前的预检拉不到待决策(网络抖动 / 一次 RPC 失败)是「没问出来」,不是
+  // 「已经被处理」。当成已处理收场会把这次批准静默丢掉——那边的工具还阻塞着,
+  // 用户却被告知处理完了。拉不到就照常提交:重复提交由 daemon 幂等收敛(R8)。
+  it("预检 RPC 失败时照常提交,不谎报「已被处理」", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    let waiterCalls = 0;
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters") {
+        waiterCalls += 1;
+        if (waiterCalls === 1)
+          return {
+            toolPermissions: [{ RequestID: "tp-1", ToolName: "Bash" }],
+            askUserQuestions: [],
+          };
+        // 预检这一次挂了。
+        throw new Error("pendingWaiters unavailable");
+      }
+      if (method === "runtime.submitToolPermission") return {};
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    expect(await screen.findByText("Approve Bash")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+    await vi.waitFor(() => {
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === "runtime.submitToolPermission",
+        ),
+      ).toBe(true);
+    });
+    expect(screen.queryByText("This request has already been handled.")).toBe(
+      null,
+    );
+  });
+
+  // 提交本身失败(socket 刚断)必须就地说明。不说明的话按钮点下去什么都不发生,
+  // 用户以为批准生效了,而工具还阻塞在那台机器上。
+  it("提交失败:就地说明,不静默吞掉", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return {
+          toolPermissions: [{ RequestID: "tp-1", ToolName: "Bash" }],
+          askUserQuestions: [],
+        };
+      if (method === "runtime.submitToolPermission")
+        throw new Error("relay: 连接未就绪");
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    expect(await screen.findByText("Approve Bash")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+
+    expect(await screen.findByText(/could not be submitted/i)).toBeTruthy();
+  });
+
+  // 「已被处理」是对**那一条**待决策的说明,不是页面的永久状态。新的待决策上来
+  // 之后它还挂着,就变成了「已被处理」与一张真的等着人批的审批卡并排自相矛盾。
+  it("新的待决策上来时清掉上一条的「已被处理」说明", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    let waiterCalls = 0;
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters") {
+        waiterCalls += 1;
+        if (waiterCalls === 1)
+          return {
+            toolPermissions: [{ RequestID: "tp-1", ToolName: "Bash" }],
+            askUserQuestions: [],
+          };
+        // 预检:tp-1 已被别的端答过 → 就地说明已被处理。
+        if (waiterCalls === 2)
+          return { toolPermissions: [], askUserQuestions: [] };
+        // 此后 daemon 又推来一条新的待决策。
+        return {
+          toolPermissions: [{ RequestID: "tp-2", ToolName: "Write" }],
+          askUserQuestions: [],
+        };
+      }
+      if (method === "runtime.submitToolPermission") return {};
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    expect(await screen.findByText("Approve Bash")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(
+      await screen.findByText("This request has already been handled."),
+    ).toBeTruthy();
+
+    await act(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "tool_permission_request", requestId: "tp-2" },
+        seq: 9,
+      });
+    });
+
+    expect(await screen.findByText("Approve Write")).toBeTruthy();
+    await vi.waitFor(() => {
+      expect(screen.queryByText("This request has already been handled.")).toBe(
+        null,
+      );
+    });
+  });
+});
+
 // 兼容性 + R9：未升级的 agentred 不认识 R7 / 决策 8 的那几列，续话续不上上下文。
 // 如实说明该机器需要升级并停用输入框，而不是让消息静默发出去。
 describe("会话详情页:老 agentred 与发送失败", () => {

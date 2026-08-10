@@ -218,7 +218,7 @@
       "submit": "Submit",
       "skip": "Skip",
       "alreadyHandled": "This request has already been handled.",
-      "none": "No pending requests."
+      "submitFailed": "That decision could not be submitted. Nothing was sent — try again."
     }
   },
   "chat": {
