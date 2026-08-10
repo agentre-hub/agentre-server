@@ -121,7 +121,7 @@ jobs:
           # --set 会做类型推断（纯数字密码变整数），字符串一律 --set-string。
           # 两者都按逗号切分，etcd 密码里不能有逗号。
           helm upgrade --install "$RELEASE" ./deploy/helm \
-            --namespace "$NAMESPACE" --create-namespace \
+            --namespace "$NAMESPACE" \
             --set-string image.repository="$REGISTRY/$REPOSITORY" \
             --set-string image.tag="${ENV}.${{ steps.vars.outputs.sha_short }}" \
             --set-string appConfig.env="$ENV" \
