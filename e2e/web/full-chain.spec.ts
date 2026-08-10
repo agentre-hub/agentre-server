@@ -17,34 +17,13 @@
  *   - 每个 hop 都用真实证据断言(UI + agentred.db / 服务器 /v1/devices oracle),
  *     不止 UI。
  */
-import { test as base, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 
-const serverURL = process.env.WEBE2E_SERVER_URL!;
-const sessionSID = process.env.WEBE2E_SESSION_SID!;
-const cookieName = process.env.WEBE2E_COOKIE_NAME!;
-const webFP = process.env.WEBE2E_WEB_FINGERPRINT!;
-const agentredDB = process.env.WEBE2E_AGENTRED_DB!;
+import { agentredDB, test, webFP } from "./harness";
 
 const SEEDED_SID = 1001;
 const FAKE_PREFIX = "e2e-fake-reply: ";
-
-export const test = base.extend<{ seededContext: void }>({
-  seededContext: [
-    async ({ context }, use) => {
-      // 登录:把播种的浏览器 session cookie 放进本上下文(身份 = 一次性账号)。
-      await context.addCookies([
-        { name: cookieName, value: sessionSID, url: serverURL },
-      ]);
-      // 固定浏览器设备指纹:ensureWebDevice 会按它幂等注册 kind=web 设备。
-      await context.addInitScript((fp: string) => {
-        window.localStorage.setItem("agentre.deviceFingerprint", fp);
-      }, webFP);
-      await use();
-    },
-    { auto: true },
-  ],
-});
 
 /** 服务器端 oracle:以 seed cookie 调 /v1/devices,断言存在 kind=web + 固定指纹。
  * 轮询等待(注册是页面 effect 里异步触发的,不是导航完成即就绪)。 */

@@ -10,7 +10,10 @@
 //   - one kind=agentred device + a refresh token for the real `agentred run`
 //     daemon to claim (it trades the token over real HTTP at startup);
 //   - one Redis browser session (sid → {user_id, csrf_token}) that becomes the
-//     logged-in browser via the session cookie.
+//     logged-in browser via the session cookie;
+//   - the account-level workspace (agents with their exec-target chains, a
+//     project and its path on that agentred) that "start a new conversation from
+//     the web" reads — see seedWorkspace.
 //
 // Every run gets its own account (email embeds the run id); `cleanup` removes
 // exactly the rows that run created — scoped by user id, never a TRUNCATE, and
@@ -40,6 +43,9 @@ import (
 // id so `cleanup` can find exactly this run's account and nothing else.
 func accountEmail(runID string) string { return "webe2e-" + runID + "@e2e.invalid" }
 
+// agentredDeviceName 是那台真跑起来的 agentred 在设备列表里的名字（spec 按它取行）。
+const agentredDeviceName = "webe2e-agentred"
+
 func sessionSID(runID string) string { return "webe2e-" + runID }
 
 type agentredDevice struct {
@@ -53,12 +59,32 @@ type browserSession struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
+// seededWorkspace 是账号级工作区里被播种的那几样东西（块 1 的同步组），
+// 「从 web 发起新对话」这条流程全靠它才走得起来：浏览器挑的是 Agent 与项目，
+// 服务端的派发计划（workspace_svc.WebDispatchPlan）读的就是这些行。
+//
+// 名字与同步标识只有这一份来源，runner 原样透传给 spec（WEBE2E_WORKSPACE）。
+type seededWorkspace struct {
+	// AgentReady 的执行目标链是「本机档（浏览器语境下应跳过）→ 在线 agentred」。
+	AgentReadySyncID string `json:"agent_ready_sync_id"`
+	AgentReadyName   string `json:"agent_ready_name"`
+	// AgentBlocked 一档可用的都没有：本机 / 未配对 / 离线，各一档。
+	AgentBlockedName string `json:"agent_blocked_name"`
+	ProjectName      string `json:"project_name"`
+	// ProjectPath 是该项目在那台在线 agentred 上的绝对路径（= 新对话的 cwd）。
+	ProjectPath        string `json:"project_path"`
+	AgentredDeviceName string `json:"agentred_device_name"`
+	// OfflineDeviceName 是离线那一档指向的机器，逐档说明原因时要认得出是它。
+	OfflineDeviceName string `json:"offline_device_name"`
+}
+
 type seedResult struct {
-	RunID    string          `json:"run_id"`
-	UserID   int64           `json:"user_id"`
-	Email    string          `json:"email"`
-	Agentred *agentredDevice `json:"agentred"`
-	Session  browserSession  `json:"session"`
+	RunID     string           `json:"run_id"`
+	UserID    int64            `json:"user_id"`
+	Email     string           `json:"email"`
+	Agentred  *agentredDevice  `json:"agentred"`
+	Session   browserSession   `json:"session"`
+	Workspace *seededWorkspace `json:"workspace"`
 }
 
 func main() {
@@ -86,7 +112,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `webe2e — local end-to-end harness for the web full chain (test tool)
 
   webe2e seed     --dsn DSN --redis-addr HOST:PORT [--redis-password PW --redis-db N]
-                  --run-id ID --agentred-fingerprint FP
+                  --run-id ID --agentred-fingerprint FP --project-path DIR
   webe2e cleanup  --dsn DSN --redis-addr HOST:PORT [--redis-password PW --redis-db N]
                   --run-id ID
 `)
@@ -124,6 +150,7 @@ func runSeed(args []string) error {
 	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "PostgreSQL DSN")
 	runID := fs.String("run-id", "", "unique id for this run")
 	agentredFP := fs.String("agentred-fingerprint", "", "the agentred device fingerprint (sha256:<hex> of the daemon instance uuid)")
+	projectPath := fs.String("project-path", "", "absolute path of the seeded project on the agentred host (the new conversation's cwd)")
 	redisAddr, redisPassword, redisDB := registerRedisFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -133,6 +160,9 @@ func runSeed(args []string) error {
 	}
 	if strings.TrimSpace(*agentredFP) == "" {
 		return fmt.Errorf("--agentred-fingerprint is required")
+	}
+	if strings.TrimSpace(*projectPath) == "" {
+		return fmt.Errorf("--project-path is required")
 	}
 	gdb, err := openDB(*dsn)
 	if err != nil {
@@ -159,7 +189,7 @@ func runSeed(args []string) error {
 		if err := tx.Raw(
 			`INSERT INTO devices (user_id, name, kind, platform, version, fingerprint, last_seen_at, status, createtime, updatetime)
 			 VALUES (?, ?, 'agentred', 'darwin', 'e2e', ?, ?, 1, ?, ?) RETURNING id`,
-			out.UserID, "webe2e-agentred", out.Agentred.Fingerprint, now, now, now,
+			out.UserID, agentredDeviceName, out.Agentred.Fingerprint, now, now, now,
 		).Scan(&out.Agentred.DeviceID).Error; err != nil {
 			return fmt.Errorf("insert agentred device: %w", err)
 		}
@@ -179,6 +209,11 @@ func runSeed(args []string) error {
 		).Error; err != nil {
 			return fmt.Errorf("insert agentred device token: %w", err)
 		}
+		ws, err := seedWorkspace(tx, out.UserID, *runID, *agentredFP, *projectPath, now)
+		if err != nil {
+			return err
+		}
+		out.Workspace = ws
 		return nil
 	})
 	if err != nil {
@@ -203,6 +238,121 @@ func runSeed(args []string) error {
 		return fmt.Errorf("seed browser session: %w", err)
 	}
 	return emit(out)
+}
+
+// seedWorkspace 播种「从 web 发起新对话」要用到的那一份账号级工作区，并返回
+// spec 需要知道的名字与同步标识。
+//
+// 两条执行目标链是刻意造出来的，各自锁住 R15 的一面：
+//
+//   - AgentReady：第 1 档是 device_id 为空的「本机」引用（backend 行的
+//     agentred_fingerprint 为空），第 2 档是那台真的在线的 agentred。R15d 要求
+//     浏览器语境下跳过第 1 档，因此派发必须落在第 2 档上。
+//   - AgentBlocked：本机 / 未配对（指纹不属于任何设备行）/ 离线（设备在账号里但
+//     从不连中继）各一档，一档可用的都没有 —— 逐档说明原因那一屏的素材。
+//
+// 项目路径只配在那台在线 agentred 上（sync_objects 的 project_location 行），
+// 派发计划因此选得出 cwd；这也是 picker 里项目清单的唯一来源。
+func seedWorkspace(tx *gorm.DB, userID int64, runID, agentredFP, projectPath string, now int64) (*seededWorkspace, error) {
+	ws := &seededWorkspace{
+		AgentReadySyncID:   "webe2e-agent-ready",
+		AgentReadyName:     "webe2e Agent Ready",
+		AgentBlockedName:   "webe2e Agent Blocked",
+		ProjectName:        "webe2e-project-alpha",
+		ProjectPath:        projectPath,
+		AgentredDeviceName: agentredDeviceName,
+		OfflineDeviceName:  "webe2e-offline-box",
+	}
+	const (
+		agentBlockedSyncID = "webe2e-agent-blocked"
+		projectSyncID      = "webe2e-project"
+	)
+	// 未配对那一档的指纹不属于任何设备行；离线那一档的机器在账号里但从不连中继。
+	unpairedFP := fingerprintFor(runID + ":unpaired")
+	offlineFP := fingerprintFor(runID + ":offline")
+
+	// 离线那一档的指代对象：一台真的在账号里、但永远不会连上中继的 agentred。
+	// 名字不含 "webe2e-agentred"，否则设备列表里按名字取行的用例会一次匹配到两行。
+	if err := tx.Exec(
+		`INSERT INTO devices (user_id, name, kind, platform, version, fingerprint, last_seen_at, status, createtime, updatetime)
+		 VALUES (?, ?, 'agentred', 'linux', 'e2e', ?, ?, 1, ?, ?)`,
+		userID, ws.OfflineDeviceName, offlineFP, now, now, now,
+	).Error; err != nil {
+		return nil, fmt.Errorf("insert offline agentred device: %w", err)
+	}
+
+	version := int64(0)
+	insert := func(kind, syncID, projectSyncID, fingerprint string, payload map[string]any) error {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		version++
+		if err := tx.Exec(
+			`INSERT INTO sync_objects
+			   (user_id, kind, sync_id, project_sync_id, agentred_fingerprint, payload,
+			    version, sync_updated_at, source_device_id, deleted_at, createtime, updatetime)
+			 VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, 0, 0, ?, ?)`,
+			userID, kind, syncID, projectSyncID, fingerprint, string(body), version, now, now, now,
+		).Error; err != nil {
+			return fmt.Errorf("insert sync_object %s/%s: %w", kind, syncID, err)
+		}
+		return nil
+	}
+
+	const (
+		backendLocal    = "webe2e-backend-local"
+		backendAgentred = "webe2e-backend-agentred"
+		backendUnpaired = "webe2e-backend-unpaired"
+		backendOffline  = "webe2e-backend-offline"
+	)
+	steps := []struct {
+		kind          string
+		syncID        string
+		projectSyncID string
+		fingerprint   string
+		payload       map[string]any
+	}{
+		{"project", projectSyncID, "", "", map[string]any{"name": ws.ProjectName}},
+		{"project_location", "webe2e-project-loc", projectSyncID, agentredFP, map[string]any{"path": projectPath}},
+
+		// backend 行：指纹这一列决定那一档解析成什么（空 = 本机引用）。
+		{"agent_backend", backendLocal, "", "", map[string]any{"type": "claudecode"}},
+		{"agent_backend", backendAgentred, "", agentredFP, map[string]any{"type": "claudecode"}},
+		{"agent_backend", backendUnpaired, "", unpairedFP, map[string]any{"type": "claudecode"}},
+		{"agent_backend", backendOffline, "", offlineFP, map[string]any{"type": "claudecode"}},
+
+		{"agent", ws.AgentReadySyncID, "", "", map[string]any{"name": ws.AgentReadyName, "avatar_color": "#22c55e"}},
+		{"agent_exec_target", "webe2e-target-ready-1", "", "", map[string]any{
+			"agent_sync_id": ws.AgentReadySyncID, "backend_sync_id": backendLocal, "sort_order": 1,
+		}},
+		{"agent_exec_target", "webe2e-target-ready-2", "", "", map[string]any{
+			"agent_sync_id": ws.AgentReadySyncID, "backend_sync_id": backendAgentred, "sort_order": 2,
+		}},
+
+		{"agent", agentBlockedSyncID, "", "", map[string]any{"name": ws.AgentBlockedName, "avatar_color": "#ef4444"}},
+		{"agent_exec_target", "webe2e-target-blocked-1", "", "", map[string]any{
+			"agent_sync_id": agentBlockedSyncID, "backend_sync_id": backendLocal, "sort_order": 1,
+		}},
+		{"agent_exec_target", "webe2e-target-blocked-2", "", "", map[string]any{
+			"agent_sync_id": agentBlockedSyncID, "backend_sync_id": backendUnpaired, "sort_order": 2,
+		}},
+		{"agent_exec_target", "webe2e-target-blocked-3", "", "", map[string]any{
+			"agent_sync_id": agentBlockedSyncID, "backend_sync_id": backendOffline, "sort_order": 3,
+		}},
+	}
+	for _, s := range steps {
+		if err := insert(s.kind, s.syncID, s.projectSyncID, s.fingerprint, s.payload); err != nil {
+			return nil, err
+		}
+	}
+	return ws, nil
+}
+
+// fingerprintFor 造一个与设备指纹同形（sha256:<hex>）的稳定指纹。
+func fingerprintFor(seed string) string {
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func randomToken() (string, error) {
@@ -261,6 +411,10 @@ func runCleanup(args []string) error {
 	}{
 		{"device_tokens", `DELETE FROM device_tokens WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)`},
 		{"device_flow_codes", `DELETE FROM device_flow_codes WHERE authorized_user_id = ?`},
+		// 播种的账号级工作区（Agent / backend / 执行目标 / 项目 / 项目路径）。
+		{"sync_objects", `DELETE FROM sync_objects WHERE user_id = ?`},
+		// 从 web 发起新对话时浏览器会自关注自己那条（R16），跑挂了也照删。
+		{"followed_sessions", `DELETE FROM followed_sessions WHERE user_id = ?`},
 		{"devices", `DELETE FROM devices WHERE user_id = ?`},
 		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`},
 		{"users", `DELETE FROM users WHERE id = ?`},
@@ -283,6 +437,8 @@ func runCleanup(args []string) error {
 		sql   string
 	}{
 		{"device_tokens", `SELECT count(*) FROM device_tokens WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)`},
+		{"sync_objects", `SELECT count(*) FROM sync_objects WHERE user_id = ?`},
+		{"followed_sessions", `SELECT count(*) FROM followed_sessions WHERE user_id = ?`},
 		{"devices", `SELECT count(*) FROM devices WHERE user_id = ?`},
 		{"users", `SELECT count(*) FROM users WHERE id = ?`},
 	}

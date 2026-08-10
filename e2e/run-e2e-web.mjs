@@ -10,6 +10,8 @@
 //   2. build the server + the `webe2e` harness tool (GOWORK=off) + agentred (-tags e2e)
 //   3. start the server on a free port against the developer's PostgreSQL + Redis
 //   4. seed ONE throwaway account + one agentred device + one Redis browser session
+//      + the account-level workspace (agents, a project and its path on that
+//      agentred) that the "start a new conversation from the web" flow reads
 //   5. trade the agentred refresh token for a real access JWT, write a claimed
 //      agentred state.json, and run the real agentred daemon against the server
 //   6. wait until the agentred is online on the relay
@@ -24,7 +26,10 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { request } from "node:http";
-import { createServer as createTcpServer } from "node:net";
+import {
+  createServer as createTcpServer,
+  connect as connectTcp,
+} from "node:net";
 import {
   existsSync,
   mkdirSync,
@@ -46,6 +51,7 @@ const serverLog = join(workDir, "server.log");
 const agentredLog = join(workDir, "agentred.log");
 const agentredDataDir = join(workDir, "ad");
 const agentredDB = join(agentredDataDir, "agentred.db");
+const projectDir = join(workDir, "project");
 const webserverLog = join(workDir, "webserver.log");
 
 // The browser's fixed device fingerprint. It must match the peer fingerprint the
@@ -60,10 +66,18 @@ let redis = { addr: "", password: "", db: 0 };
 let seeded = null;
 let serverURL = "";
 
-main().catch((err) => {
-  console.error(`\n[web-e2e] ${err.message}\n`);
-  void finish(1);
-});
+// 只有「被当成脚本直接跑」时才编排；被 import 时(web/runner-config.spec.ts 驱动
+// 下面几个纯函数)什么都不做,否则一 import 就会去建服务器、连开发者的库。
+const isEntrypoint =
+  !!process.argv[1] &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isEntrypoint) {
+  main().catch((err) => {
+    console.error(`\n[web-e2e] ${err.message}\n`);
+    void finish(1);
+  });
+}
 
 async function main() {
   const serverDir = resolve(serverRoot);
@@ -113,6 +127,9 @@ async function main() {
   console.log(`[web-e2e] seeding account webe2e-${runID} …`);
   const daemonUUID = randomUUID().replace(/-/g, "");
   const agentredFP = daemonFingerprint(daemonUUID);
+  // 播种的项目在这台 agentred 上的真实目录(= 新对话的 cwd)。它是 workDir 下的
+  // 一个子目录,run 结束随 workDir 一起消失。
+  mkdirSync(projectDir, { recursive: true });
   seeded = runTool([
     "seed",
     "--dsn",
@@ -127,6 +144,8 @@ async function main() {
     runID,
     "--agentred-fingerprint",
     agentredFP,
+    "--project-path",
+    projectDir,
   ]);
 
   // Trade the seeded refresh token for a real access JWT over real HTTP, then
@@ -170,6 +189,9 @@ async function main() {
     WEBE2E_AGENTRED_FINGERPRINT: agentredFP,
     WEBE2E_AGENTRED_LOG: agentredLog,
     WEBE2E_SERVER_LOG: serverLog,
+    // 播种的账号级工作区(Agent 与项目路径)。名字与同步标识只有 webe2e/main.go
+    // 一份来源,原样透传给 spec。
+    WEBE2E_WORKSPACE: JSON.stringify(seeded.workspace),
   });
 
   const require = createRequire(import.meta.url);
@@ -305,18 +327,55 @@ function readDSN(serverDir) {
       `${configPath} is missing — the suite needs the server's real DSN.`,
     );
   }
-  const match = /^\s*dsn:\s*(\S+)\s*$/m.exec(readFileSync(configPath, "utf8"));
-  if (!match) throw new Error(`no db.dsn found in ${configPath}`);
-  return match[1];
+  const dsn = parseDSN(readFileSync(configPath, "utf8"));
+  if (!dsn) throw new Error(`no db.dsn found in ${configPath}`);
+  return dsn;
 }
 
 function readRedis(serverDir) {
   const configPath = join(serverDir, "configs", "config.yaml");
-  const text = readFileSync(configPath, "utf8");
-  const addr = /^\s*addr:\s*(\S+)\s*$/m.exec(text)?.[1] ?? "127.0.0.1:6379";
-  const password = /^\s*password:\s*(\S+)\s*$/m.exec(text)?.[1] ?? "";
-  const db = Number(/^\s*db:\s*(\S+)\s*$/m.exec(text)?.[1] ?? "0");
-  return { addr, password, db };
+  return parseRedis(readFileSync(configPath, "utf8"));
+}
+
+// yamlBlock 取一个顶层块的正文行(下一个顶层键为止)。按块取值而不是全文正则,
+// 是因为 dsn / addr / password / db 这些键名在配置里不止一处:`db:` 既是顶层
+// 数据库块的名字,也是 redis 块里的库号。
+function yamlBlock(text, name) {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) =>
+    new RegExp(`^${name}:[ \\t]*$`).test(l.replace(/\r$/, "")),
+  );
+  if (start < 0) return null;
+  const body = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, "");
+    if (line.trim() !== "" && !/^[ \t]/.test(line)) break;
+    body.push(line);
+  }
+  return body.join("\n");
+}
+
+// blockScalar 取块里某个键的值(已去引号)。找不到键、或值为空时返回 fallback。
+function blockScalar(text, block, key, fallback) {
+  const body = yamlBlock(text, block);
+  if (body === null) return fallback;
+  const m = new RegExp(`^[ \\t]*${key}:[ \\t]*(.*)$`, "m").exec(body);
+  if (!m) return fallback;
+  return unquoteScalar(m[1]);
+}
+
+/** parseDSN 读 db.dsn(带引号的写法照样读得出);读不到返回 null。 */
+export function parseDSN(text) {
+  return blockScalar(text, "db", "dsn", "") || null;
+}
+
+/** parseRedis 读 redis 段。缺省值与 configs/config.example.yaml 一致。 */
+export function parseRedis(text) {
+  return {
+    addr: blockScalar(text, "redis", "addr", "") || "127.0.0.1:6379",
+    password: blockScalar(text, "redis", "password", ""),
+    db: Number(blockScalar(text, "redis", "db", "") || "0"),
+  };
 }
 
 function buildFrontend(serverDir) {
@@ -346,24 +405,136 @@ function copyDist(serverDir) {
 function writeServerConfig(serverDir, port, workDir) {
   const cwd = join(workDir, "server");
   mkdirSync(join(cwd, "configs"), { recursive: true });
-  let text = readFileSync(join(serverDir, "configs", "config.yaml"), "utf8");
+  const text = readFileSync(join(serverDir, "configs", "config.yaml"), "utf8");
+  writeFileSync(
+    join(cwd, "configs", "config.yaml"),
+    rewriteServerConfig(text, { serverDir, port }),
+  );
+  return cwd;
+}
+
+// rewriteServerConfig 把开发者的 configs/config.yaml 改写成这次 run 用的配置:
+// 监听本次分配的端口、公开 URL 指回自己、JWT 密钥路径解析成绝对路径(server 跑在
+// 临时 cwd 里,相对路径会失效)。纯函数,由 web/runner-config.spec.ts 直接驱动。
+export function rewriteServerConfig(text, { serverDir, port }) {
   text = text.replace(
-    /(http:\s*\n\s*address:\s*\n\s*-\s*)(\S+)/,
+    /(http:\s*\n\s*address:\s*\n\s*-\s*)(.*)/,
     `$1127.0.0.1:${port}`,
   );
   // The browser reaches the SPA through the server itself, so the device-flow
   // verification URI (public_url + /device) must point at the server's own URL.
-  text = text.replace(/(public_url:\s*)(\S+)/, `$1http://127.0.0.1:${port}`);
-  text = text.replace(
-    /(private_key_pem_path:\s*)(\S+)/,
-    (_m, key, value) => key + resolve(serverDir, value),
+  text = text.replace(/(public_url:[ \t]*)(.*)/, `$1http://127.0.0.1:${port}`);
+  text = flattenRotatedJWTKeys(text);
+  text = absolutizeKeyPath(text, "private_key_pem_path", serverDir);
+  text = absolutizeKeyPath(text, "public_key_pem_path", serverDir);
+  return text;
+}
+
+// unquoteScalar 去掉 YAML 标量两端的引号。本仓 configs/config.example.yaml 的
+// 路径、DSN、Redis 口令都是带引号写法,照它写出来的 config.yaml 一律带引号;
+// 用 (\S+) 捕获会把引号当成值的一部分,路径于是变成 <checkout>/"./runtime/keys/jwt.key",
+// server 报 missing JWT key —— 所有读值都必须先过这一道。
+function unquoteScalar(raw) {
+  const v = (raw ?? "").trim();
+  const quoted =
+    v.length >= 2 &&
+    ((v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith("'") && v.endsWith("'")));
+  return quoted ? v.slice(1, -1) : v;
+}
+
+// absolutizeKeyPath 把第一处 key 的值解析成绝对路径,并当场确认文件真的在。
+// 缺文件时立刻报出缺哪个文件,而不是让 server 起来之后自己死在 missing JWT key。
+function absolutizeKeyPath(text, key, serverDir) {
+  const re = new RegExp(`^([ \\t]*${key}:[ \\t]*)(.*)$`, "m");
+  const m = re.exec(text);
+  if (!m) {
+    throw new Error(
+      `configs/config.yaml has no ${key} (and no active_kid + keys list to derive it from) — ` +
+        `the server cannot sign device JWTs without it`,
+    );
+  }
+  const abs = resolve(serverDir, unquoteScalar(m[2]));
+  if (!existsSync(abs)) {
+    throw new Error(
+      `JWT key file missing: ${abs} (from ${key} in configs/config.yaml)`,
+    );
+  }
+  return text.replace(re, (_all, head) => head + abs);
+}
+
+// flattenRotatedJWTKeys 把密钥**轮换**形态摊平成本分支认得的扁平形态。
+//
+// agentre-server main 在 8651f57 引入了轮换:server.jwt 从两个路径字段变成
+// `active_kid:` + `keys:` 列表,开发者的 gitignored config.yaml 已改成那个形状。
+// 本分支早于它,internal/bootstrap 的 JWTConfig 只有 private_key_pem_path /
+// public_key_pem_path,轮换形态在这里会绑定成空串 → server 起不来。
+//
+// 两种形态都要认,所以这里只做**字段名适配**:取 active_kid 指名的那一项(取不到
+// 就取第一项)的密钥文件——用的是开发者自己的真密钥,不生成、不替换、不削弱任何
+// 东西——摊平后写进 harness 自己的临时 cwd,仓库里的配置一个字节都不动。
+// 已经是扁平形态的配置原样返回。
+function flattenRotatedJWTKeys(text) {
+  const lines = text.split("\n");
+  const jwtIdx = lines.findIndex((l) => /^[ \t]*jwt:[ \t]*$/.test(l));
+  if (jwtIdx < 0) return text;
+  const jwtIndent = /^([ \t]*)/.exec(lines[jwtIdx])[1];
+  const body = [];
+  for (let i = jwtIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") continue;
+    const indent = /^([ \t]*)/.exec(line)[1];
+    if (indent.length <= jwtIndent.length) break;
+    body.push(line);
+  }
+  const childIndent = body.length
+    ? /^([ \t]*)/.exec(body[0])[1]
+    : `${jwtIndent}  `;
+  // 扁平形态:private_key_pem_path 直接挂在 jwt: 下面(不在 keys: 列表里)。
+  const alreadyFlat = body.some((l) =>
+    new RegExp(`^${childIndent}private_key_pem_path:`).test(l),
   );
-  text = text.replace(
-    /(public_key_pem_path:\s*)(\S+)/,
-    (_m, key, value) => key + resolve(serverDir, value),
+  if (alreadyFlat) return text;
+  const activeKID = unquoteScalar(
+    /^[ \t]*active_kid:[ \t]*(.*)$/m.exec(body.join("\n"))?.[1] ?? "",
   );
-  writeFileSync(join(cwd, "configs", "config.yaml"), text);
-  return cwd;
+  const entries = parseKeyEntries(body);
+  const active = entries.find((e) => e.kid === activeKID) ?? entries[0];
+  if (!active) {
+    throw new Error(
+      "configs/config.yaml uses the JWT key-rotation shape (active_kid + keys) " +
+        "but no keys entry with private_key_pem_path / public_key_pem_path could be parsed",
+    );
+  }
+  lines.splice(
+    jwtIdx + 1,
+    0,
+    `${childIndent}private_key_pem_path: ${active.private_key_pem_path}`,
+    `${childIndent}public_key_pem_path: ${active.public_key_pem_path}`,
+  );
+  return lines.join("\n");
+}
+
+// parseKeyEntries 读 `keys:` 列表里的每一项(`- kid: …` 起头,字段顺序不限)。
+function parseKeyEntries(bodyLines) {
+  const entries = [];
+  let current = null;
+  const field = (obj, s) => {
+    const m = /^([A-Za-z0-9_]+):[ \t]*(.*)$/.exec(s.trim());
+    if (m && obj) obj[m[1]] = unquoteScalar(m[2]);
+  };
+  for (const line of bodyLines) {
+    const item = /^[ \t]*-[ \t]*(.*)$/.exec(line);
+    if (item) {
+      if (current) entries.push(current);
+      current = {};
+      field(current, item[1]);
+      continue;
+    }
+    field(current, line);
+  }
+  if (current) entries.push(current);
+  return entries.filter((e) => e.private_key_pem_path && e.public_key_pem_path);
 }
 
 function goBuild(dir, out, pkg, extraArgs = []) {
@@ -388,7 +559,7 @@ async function waitForServer(baseURL) {
     if (serverProc.exitCode !== null) {
       throw new Error(
         `agentre-server exited during startup (code ${serverProc.exitCode}). ` +
-          `Most likely PostgreSQL or Redis from configs/config.yaml is unreachable. See ${serverLog}`,
+          (await startupDiagnosis()),
       );
     }
     try {
@@ -400,11 +571,105 @@ async function waitForServer(baseURL) {
     if (Date.now() > deadline) {
       throw new Error(
         `agentre-server never became healthy on ${baseURL}. ` +
-          `Check that PostgreSQL and Redis from agentre-server/configs/config.yaml are reachable. See ${serverLog}`,
+          (await startupDiagnosis()),
       );
     }
     await sleep(500);
   }
+}
+
+/**
+ * summarizeStartupFailure 从 server.log 里挑出最后一条**它自己报的**错误行。
+ * 没有这样的行时返回 null(由调用方去探测依赖)。
+ *
+ * 这一步是「说出缺什么」的第一手证据:服务器起不来的原因五花八门(密钥文件读不到、
+ * 端口被占、迁移失败……),未经探测就断言「PostgreSQL 或 Redis 不可达」会把读者
+ * 引向完全无关的子系统 —— 本轮的运行时验证正是被这句话挡了一次。
+ */
+export function summarizeStartupFailure(logText) {
+  const lines = (logText ?? "").split(/\r?\n/).filter((l) => l.trim() !== "");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (
+      /error|fatal|panic|missing|refused|denied|timeout|no such file/i.test(
+        lines[i],
+      )
+    ) {
+      return lines[i].trim();
+    }
+  }
+  return null;
+}
+
+// startupDiagnosis 组织服务器起不来时给人看的那句话:先服务器日志自己的最后一条
+// 错误(决定性),日志里没有错误行时才去 TCP 探测 PostgreSQL 与 Redis,并如实说
+// 哪个连得上、哪个连不上。
+async function startupDiagnosis() {
+  let logText = "";
+  try {
+    logText = readFileSync(serverLog, "utf8");
+  } catch {
+    // 日志还没来得及产生
+  }
+  const decisive = summarizeStartupFailure(logText);
+  if (decisive) {
+    return `The server's own last error was: ${decisive}\nSee ${serverLog}`;
+  }
+  const probes = await probeDependencies();
+  return (
+    `server.log has no error line; probed its dependencies instead:\n  ${probes.join("\n  ")}\n` +
+    `See ${serverLog}`
+  );
+}
+
+// probeDependencies TCP 探测配置里那两个依赖,逐个如实报结果。
+async function probeDependencies() {
+  const targets = [];
+  try {
+    const u = new URL(dsn);
+    targets.push({
+      label: `PostgreSQL ${u.hostname}:${u.port || 5432} (db.dsn)`,
+      host: u.hostname,
+      port: Number(u.port || 5432),
+    });
+  } catch {
+    // 不回显 dsn 本身:它带着口令,而这条消息会被贴进日志与报告里。
+    targets.push({
+      label: "PostgreSQL (db.dsn is not a URL this harness can parse)",
+    });
+  }
+  const [rhost, rport] = redis.addr.split(":");
+  targets.push({
+    label: `Redis ${redis.addr}`,
+    host: rhost,
+    port: Number(rport || 6379),
+  });
+
+  const out = [];
+  for (const t of targets) {
+    if (!t.host) {
+      out.push(`${t.label}: not probed`);
+      continue;
+    }
+    const err = await probeTCP(t.host, t.port);
+    out.push(
+      err ? `${t.label}: UNREACHABLE — ${err}` : `${t.label}: reachable`,
+    );
+  }
+  return out;
+}
+
+// probeTCP 连一下就断,连得上返回 null,连不上返回原因。
+function probeTCP(host, port, timeout = 3_000) {
+  return new Promise((resolvePromise) => {
+    const sock = connectTcp({ host, port });
+    const done = (err) => {
+      sock.destroy();
+      resolvePromise(err);
+    };
+    sock.setTimeout(timeout, () => done(`no answer within ${timeout}ms`));
+    sock.on("connect", () => done(null));
+    sock.on("error", (e) => done(e.message));
+  });
 }
 
 async function waitForAgentredOnline(baseURL, fp, userID) {
