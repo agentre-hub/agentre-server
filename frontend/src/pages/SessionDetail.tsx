@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { SendHorizonal } from "lucide-react";
+import { ArrowLeft, Bookmark, SendHorizonal } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import DecisionPanel, {
 } from "@/components/session/DecisionPanel";
 import SessionStatusBanner from "@/components/session/SessionStatusBanner";
 import Transcript from "@/components/session/Transcript";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import { reduceEvents } from "@/lib/transcript";
@@ -44,6 +45,12 @@ interface DeviceItem {
   online: boolean;
 }
 
+/** 关注名单（R14）里的「指向」：只含目标设备指纹 + 会话标识，不含标题/消息/转录。 */
+interface FollowItem {
+  device_fingerprint: string;
+  session_id: string;
+}
+
 interface Waiters {
   toolPermissions: PendingToolPermissionShape[];
   askUserQuestions: PendingAskQuestionShape[];
@@ -73,7 +80,10 @@ export default function SessionDetail() {
   const [machineOnline, setMachineOnline] = useState<boolean | null>(null);
   const [revoked, setRevoked] = useState(false);
   const [meValid, setMeValid] = useState(true);
+  const [followed, setFollowed] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
   const probedRef = useRef(false);
+  const isMobile = useIsMobile();
 
   const clientRef = useRef<import("@/lib/relayClient").RelayClient | null>(
     null,
@@ -205,6 +215,50 @@ export default function SessionDetail() {
     if (relayState === "connected" && ready) void refreshWaiters();
   }, [relayState, ready, refreshWaiters]);
 
+  // 关注入口：桌面在列表行（R12），移动在详情页顶栏（决策 16）。本页只在移动上
+  // 渲染关注开关，因此需要知道这条会话当前是否在账号级名单里（R14）。
+  useEffect(() => {
+    if (!device) return;
+    let alive = true;
+    api<{ items: FollowItem[] }>("/v1/follows")
+      .then((res) => {
+        if (!alive) return;
+        setFollowed(
+          res.items.some(
+            (f) =>
+              f.device_fingerprint === device.fingerprint &&
+              f.session_id === String(sid),
+          ),
+        );
+      })
+      .catch(() => {
+        // 拉不到名单时保持未关注；用户可手动操作，失败不打断页面。
+      });
+    return () => {
+      alive = false;
+    };
+  }, [device, sid]);
+
+  // 关注 / 取消关注（R12）：成功后翻本地状态；失败保持原样，用户可重试。
+  async function toggleFollow() {
+    if (!device) return;
+    setFollowBusy(true);
+    try {
+      await api(`/v1/follows${followed ? "/unfollow" : ""}`, {
+        method: "POST",
+        body: JSON.stringify({
+          device_fingerprint: device.fingerprint,
+          session_id: String(sid),
+        }),
+      });
+      setFollowed((prev) => !prev);
+    } catch {
+      // 失败保持原样。
+    } finally {
+      setFollowBusy(false);
+    }
+  }
+
   const revokedNow = revoked || webDeviceError instanceof WebDeviceRevokedError;
   const status = deriveSessionViewStatus({
     relayState,
@@ -315,31 +369,80 @@ export default function SessionDetail() {
           aria-label={t("session.breadcrumb.devices")}
           className="flex flex-wrap items-center gap-2 text-sm"
         >
-          <Link
-            to="/devices"
-            className="font-medium text-muted-foreground hover:text-foreground"
-          >
-            {t("session.breadcrumb.devices")}
-          </Link>
-          <span aria-hidden="true" className="text-subtle-foreground">
-            /
-          </span>
-          <Link
-            to={`/devices/${did}/sessions`}
-            className="font-medium text-muted-foreground hover:text-foreground"
-          >
-            {device?.name ?? ""}
-          </Link>
-          <span aria-hidden="true" className="text-subtle-foreground">
-            /
-          </span>
-          <span className="max-w-[40vw] truncate font-semibold text-foreground">
-            {summary?.title ?? `#${sid}`}
-          </span>
-          <span className="flex-1" />
-          <Button variant="outline" size="sm" onClick={() => nav("/devices")}>
-            {t("session.breadcrumb.switchMachine")}
-          </Button>
+          {isMobile ? (
+            <>
+              {/* 下钻三联的返回：设备 → 这台机器的对话 → 对话详情（决策 16，屏 22）。 */}
+              <Link
+                to={`/devices/${did}/sessions`}
+                aria-label={t("session.breadcrumb.back")}
+                className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ArrowLeft className="size-5" aria-hidden="true" />
+              </Link>
+              <span className="truncate font-semibold text-foreground">
+                {device?.name ?? ""}
+              </span>
+              <span
+                className={
+                  machineOnline === false
+                    ? "text-destructive"
+                    : "text-status-waiting"
+                }
+              >
+                {machineOnline === false
+                  ? t("session.breadcrumb.offline")
+                  : t("session.breadcrumb.online")}
+              </span>
+              <span className="flex-1" />
+              {/* 决策 16：移动的关注入口在详情页顶栏。 */}
+              {device && (
+                <Button
+                  variant="outline"
+                  onClick={() => void toggleFollow()}
+                  disabled={followBusy}
+                >
+                  <Bookmark
+                    className="size-4"
+                    fill={followed ? "currentColor" : "none"}
+                    aria-hidden="true"
+                  />
+                  {t(followed ? "chat.unfollow" : "chat.follow")}
+                </Button>
+              )}
+            </>
+          ) : (
+            <>
+              <Link
+                to="/devices"
+                className="font-medium text-muted-foreground hover:text-foreground"
+              >
+                {t("session.breadcrumb.devices")}
+              </Link>
+              <span aria-hidden="true" className="text-subtle-foreground">
+                /
+              </span>
+              <Link
+                to={`/devices/${did}/sessions`}
+                className="font-medium text-muted-foreground hover:text-foreground"
+              >
+                {device?.name ?? ""}
+              </Link>
+              <span aria-hidden="true" className="text-subtle-foreground">
+                /
+              </span>
+              <span className="max-w-[40vw] truncate font-semibold text-foreground">
+                {summary?.title ?? `#${sid}`}
+              </span>
+              <span className="flex-1" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => nav("/devices")}
+              >
+                {t("session.breadcrumb.switchMachine")}
+              </Button>
+            </>
+          )}
         </nav>
 
         <SessionStatusBanner

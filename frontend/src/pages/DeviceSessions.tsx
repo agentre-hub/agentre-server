@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { ArrowLeft } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -9,6 +10,7 @@ import SessionList, {
   type SessionAgent,
 } from "@/components/session/SessionList";
 import SessionStatusBanner from "@/components/session/SessionStatusBanner";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import {
@@ -57,6 +59,7 @@ export default function DeviceSessions() {
   const { client, relayState, webDeviceError } = useRelayMachine(
     device?.fingerprint ?? null,
   );
+  const isMobile = useIsMobile();
 
   // 取设备与账号级 Agent 清单（块 1 的 /v1/workspace/agents）。
   useEffect(() => {
@@ -152,43 +155,76 @@ export default function DeviceSessions() {
   return (
     <AppShell>
       <div className="mx-auto w-full max-w-3xl space-y-5">
-        {/* 机器语境放顶栏面包屑（决策 11，mockup 45a）。 */}
+        {/* 机器语境放顶栏（决策 11，mockup 45a）。移动是下钻三联的中间一页
+            （屏 48b）：返回箭头 + 机器名 + 在线态；桌面保留完整面包屑 + 换机器。 */}
         <nav
           aria-label={t("session.breadcrumb.devices")}
           className="flex flex-wrap items-center gap-2 text-sm"
         >
-          <Link
-            to="/devices"
-            className="font-medium text-muted-foreground hover:text-foreground"
-          >
-            {t("session.breadcrumb.devices")}
-          </Link>
-          <span aria-hidden="true" className="text-subtle-foreground">
-            /
-          </span>
-          <span className="font-semibold text-foreground">
-            {device?.name ?? ""}
-          </span>
-          <span
-            className={
-              machineOnline === false
-                ? "text-destructive"
-                : "text-status-waiting"
-            }
-          >
-            {machineOnline === false
-              ? t("session.breadcrumb.offline")
-              : t("session.breadcrumb.online")}
-          </span>
-          {count > 0 && (
-            <span className="text-xs text-subtle-foreground">
-              {t("session.breadcrumb.count", { count })}
-            </span>
+          {isMobile ? (
+            <>
+              <Link
+                to="/devices"
+                aria-label={t("session.breadcrumb.back")}
+                className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ArrowLeft className="size-5" aria-hidden="true" />
+              </Link>
+              <span className="truncate font-semibold text-foreground">
+                {device?.name ?? ""}
+              </span>
+              <span
+                className={
+                  machineOnline === false
+                    ? "text-destructive"
+                    : "text-status-waiting"
+                }
+              >
+                {machineOnline === false
+                  ? t("session.breadcrumb.offline")
+                  : t("session.breadcrumb.online")}
+              </span>
+            </>
+          ) : (
+            <>
+              <Link
+                to="/devices"
+                className="font-medium text-muted-foreground hover:text-foreground"
+              >
+                {t("session.breadcrumb.devices")}
+              </Link>
+              <span aria-hidden="true" className="text-subtle-foreground">
+                /
+              </span>
+              <span className="font-semibold text-foreground">
+                {device?.name ?? ""}
+              </span>
+              <span
+                className={
+                  machineOnline === false
+                    ? "text-destructive"
+                    : "text-status-waiting"
+                }
+              >
+                {machineOnline === false
+                  ? t("session.breadcrumb.offline")
+                  : t("session.breadcrumb.online")}
+              </span>
+              {count > 0 && (
+                <span className="text-xs text-subtle-foreground">
+                  {t("session.breadcrumb.count", { count })}
+                </span>
+              )}
+              <span className="flex-1" />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => nav("/devices")}
+              >
+                {t("session.breadcrumb.switchMachine")}
+              </Button>
+            </>
           )}
-          <span className="flex-1" />
-          <Button variant="outline" size="sm" onClick={() => nav("/devices")}>
-            {t("session.breadcrumb.switchMachine")}
-          </Button>
         </nav>
 
         <SessionStatusBanner

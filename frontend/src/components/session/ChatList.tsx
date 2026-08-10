@@ -2,7 +2,13 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Bookmark } from "lucide-react";
 
-import { sessionTitle } from "@/components/session/SessionList";
+import {
+  sessionTitle,
+  statusGroupKey,
+  STATUS_GROUP_ORDER,
+  type StatusGroupKey,
+} from "@/components/session/SessionList";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -10,8 +16,14 @@ import type { SessionSummary } from "@/lib/wire";
 
 /**
  * 「对话」页的列表（R13，mockup 帧 49 / 49b）：骨架是账号下的 Agent 列表，因此
- * 任何时候都有内容。桌面按 Agent 分组；机器落在每一条会话行的第二行小字
- * （「机器 · 时间」），不作分组维度。关注开关在行尾（R12 的桌面入口）。
+ * 任何时候都有内容。
+ *
+ * 桌面按 Agent 分组；机器落在每一条会话行的第二行小字（「机器 · 时间」），不作
+ * 分组维度。关注开关在行尾（R12 的桌面入口）。
+ *
+ * 移动按状态分组（决策 12，屏 20）：等你处理置顶 → 运行中 → 已中断 → 其余；
+ * 关注入口不在列表行、移到详情页顶栏（决策 16），因此移动行不渲染关注开关；
+ * 行第二行仍是「机器 · 时间」。空态由页面在屏 32 形态呈现，本组件不重复。
  *
  * 失效（目标设备被撤销 / 目标会话在机器上已不存在）的条目单列一节，可一键移除。
  * 机器离线时该条仍在名单里并标明离线（R13），不消失。
@@ -72,6 +84,29 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
 }
 
+/** 把（桌面的）Agent 分组拍平后按状态重组（决策 12 的移动形态）。 */
+function regroupByStatus(
+  groups: ChatGroup[],
+  t: (k: string, opts?: Record<string, unknown>) => string,
+): ChatGroup[] {
+  const byKey = new Map<StatusGroupKey, ChatGroup>();
+  for (const g of groups) {
+    for (const row of g.sessions) {
+      const key = statusGroupKey(row.summary);
+      const group = byKey.get(key) ?? {
+        key,
+        label: t(`session.list.group.${key}`),
+        sessions: [],
+      };
+      group.sessions.push(row);
+      byKey.set(key, group);
+    }
+  }
+  return STATUS_GROUP_ORDER.filter((k) => byKey.has(k)).map((k) =>
+    byKey.get(k)!,
+  );
+}
+
 function lifecycleLabel(state: string, t: (k: string) => string): string {
   switch (state) {
     case "running":
@@ -91,15 +126,23 @@ function SessionRow({
   onUnfollow,
   sessionPath,
   t,
+  isMobile,
 }: {
   row: ChatSessionRow;
   onUnfollow: (fp: string, sid: number) => void;
   sessionPath: (deviceId: number, sessionId: number) => string;
   t: (k: string, opts?: Record<string, unknown>) => string;
+  isMobile: boolean;
 }) {
   const waiting = !!row.summary.waitingForInput;
   return (
-    <div className="flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent">
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent",
+        // 触控目标：移动行高不小于 44px。
+        isMobile && "min-h-11 py-3",
+      )}
+    >
       <Link
         to={sessionPath(row.deviceId, row.sessionId)}
         className="flex min-w-0 flex-1 items-center gap-3"
@@ -129,20 +172,27 @@ function SessionRow({
             : lifecycleLabel(row.summary.lifecycleState, t)}
         </span>
       </Link>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label={t("chat.unfollow")}
-        title={t("chat.unfollow")}
-        className="shrink-0 text-muted-foreground hover:text-foreground"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onUnfollow(row.fingerprint, row.sessionId);
-        }}
-      >
-        <Bookmark className="size-3.5" fill="currentColor" aria-hidden="true" />
-      </Button>
+      {/* 决策 16：关注入口桌面在列表行、移动在详情页顶栏——移动不渲染行内开关。 */}
+      {!isMobile && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t("chat.unfollow")}
+          title={t("chat.unfollow")}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onUnfollow(row.fingerprint, row.sessionId);
+          }}
+        >
+          <Bookmark
+            className="size-3.5"
+            fill="currentColor"
+            aria-hidden="true"
+          />
+        </Button>
+      )}
     </div>
   );
 }
@@ -152,14 +202,21 @@ function OfflineRow({
   onUnfollow,
   sessionPath,
   t,
+  isMobile,
 }: {
   row: ChatOfflineRow;
   onUnfollow: (fp: string, sid: number) => void;
   sessionPath: (deviceId: number, sessionId: number) => string;
   t: (k: string, opts?: Record<string, unknown>) => string;
+  isMobile: boolean;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent">
+    <div
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent",
+        isMobile && "min-h-11 py-3",
+      )}
+    >
       <Link
         to={sessionPath(row.deviceId, row.sessionId)}
         className="min-w-0 flex-1"
@@ -171,20 +228,27 @@ function OfflineRow({
           })}
         </p>
       </Link>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        aria-label={t("chat.unfollow")}
-        title={t("chat.unfollow")}
-        className="shrink-0 text-muted-foreground hover:text-foreground"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onUnfollow(row.fingerprint, row.sessionId);
-        }}
-      >
-        <Bookmark className="size-3.5" fill="currentColor" aria-hidden="true" />
-      </Button>
+      {/* 决策 16：移动的关注入口在详情页顶栏，不在列表行。 */}
+      {!isMobile && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label={t("chat.unfollow")}
+          title={t("chat.unfollow")}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onUnfollow(row.fingerprint, row.sessionId);
+          }}
+        >
+          <Bookmark
+            className="size-3.5"
+            fill="currentColor"
+            aria-hidden="true"
+          />
+        </Button>
+      )}
     </div>
   );
 }
@@ -229,21 +293,22 @@ export default function ChatList({
   sessionPath,
 }: ChatListProps) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  // 决策 12：桌面按 Agent 分组、移动按状态分组。
+  const rendered = isMobile ? regroupByStatus(groups, t) : groups;
 
   return (
     <div className="space-y-6">
-      {groups.map((group) => (
+      {rendered.map((group) => (
         <section key={group.key} aria-label={group.label}>
           <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-            <span
-              aria-hidden="true"
-              className="size-2 shrink-0 rounded-full bg-primary"
-              style={
-                group.avatarColor
-                  ? { backgroundColor: group.avatarColor }
-                  : undefined
-              }
-            />
+            {group.avatarColor && (
+              <span
+                aria-hidden="true"
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: group.avatarColor }}
+              />
+            )}
             {group.label}
             {group.sessions.length > 0 && (
               <span className="text-xs font-normal text-subtle-foreground">
@@ -265,6 +330,7 @@ export default function ChatList({
                     onUnfollow={onUnfollow}
                     sessionPath={sessionPath}
                     t={t}
+                    isMobile={isMobile}
                   />
                 ))}
               </CardContent>
@@ -297,6 +363,7 @@ export default function ChatList({
                   onUnfollow={onUnfollow}
                   sessionPath={sessionPath}
                   t={t}
+                  isMobile={isMobile}
                 />
               ))}
             </CardContent>

@@ -18,7 +18,10 @@
     "overview": "Overview",
     "chat": "Chat",
     "devices": "Devices",
-    "audit": "Audit"
+    "audit": "Audit",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu",
+    "drawer": "Menu"
   },
   "workspaceComingSoon": {
     "chatBody": "Starting a conversation from the browser is not available yet.",
@@ -168,7 +171,8 @@
       "switchMachine": "Switch machine",
       "online": "Online",
       "offline": "Offline",
-      "count": "{{count}} conversations"
+      "count": "{{count}} conversations",
+      "back": "Back"
     },
     "list": {
       "empty": "No conversations on this machine yet.",
@@ -177,7 +181,13 @@
       "idle": "Idle",
       "interrupted": "Interrupted",
       "waiting": "Waiting for your input",
-      "legacy": "{{cwd}} · {{backend}} · {{status}}"
+      "legacy": "{{cwd}} · {{backend}} · {{status}}",
+      "group": {
+        "waiting": "Waiting for you",
+        "running": "Running",
+        "interrupted": "Interrupted",
+        "others": "Others"
+      }
     },
     "transcript": {
       "loading": "Loading transcript…",
@@ -211,6 +221,7 @@
     "title": "Chat",
     "findMore": "Go to the devices page to find more conversations",
     "noSessions": "No conversations yet.",
+    "follow": "Follow",
     "startFirst": "Start your first conversation",
     "startFirstBody": "Start a new conversation, or open one you already have.",
     "followedOn": "{{machine}} · {{time}}",

@@ -2,17 +2,20 @@ import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
+import { useIsMobile } from "@/components/use-is-mobile";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { SessionSummary } from "@/lib/wire";
 
 /**
- * R5 会话列表（桌面）：按 Agent 分组。每条显示对话标题、运行状态、是否正在等待
- * 输入；Agent 名称与头像经块 1 的同步标识（agentSyncId）解析。R7 未到达的老会话
- * 既没有标题也没有 Agent 标识 → 归入「未命名」分组，如实退化为
- * 「工作目录 · 后端 · 状态」，不猜、不填占位名（mockup 帧 46）。
+ * R5 会话列表：桌面按 Agent 分组，移动按状态分组（决策 12）。
  *
- * 可访问性：运行状态 / 等待输入都以文字呈现，不只靠颜色。
+ * 桌面：按 Agent 分组，每条显示对话标题、运行状态、是否正在等待输入；Agent 名称
+ * 与头像经块 1 的同步标识（agentSyncId）解析。R7 未到达的老会话既没有标题也没有
+ * Agent 标识 → 归入「未命名」分组，如实退化为「工作目录 · 后端 · 状态」。
+ *
+ * 移动：按状态分组（等你处理置顶 → 运行中 → 已中断 → 其余），不按 Agent。
+ * 可访问性：运行状态 / 等待输入都以文字呈现，不只靠颜色；触控目标行高 ≥ 44px。
  */
 export interface SessionAgent {
   sync_id: string;
@@ -32,6 +35,55 @@ interface Group {
   label: string;
   avatarColor?: string;
   sessions: SessionSummary[];
+}
+
+/** 移动按状态分组的组键；顺序即展示顺序（决策 12：等你处理置顶）。 */
+export type StatusGroupKey = "waiting" | "running" | "interrupted" | "others";
+
+/**
+ * 一条会话归入哪个状态组。
+ * 「正在等待输入」是运行之上的实时叠加，永远优先归入「等你处理」；
+ * 其余按生命周期：running → 运行中、interrupted → 已中断；
+ * idle 与未知旧状态如实归入「其余」，不猜。
+ */
+export function statusGroupKey(s: SessionSummary): StatusGroupKey {
+  if (s.waitingForInput) return "waiting";
+  switch (s.lifecycleState) {
+    case "running":
+      return "running";
+    case "interrupted":
+      return "interrupted";
+    default:
+      return "others";
+  }
+}
+
+/** 移动按状态分组的展示顺序（决策 12：等你处理置顶）。 */
+export const STATUS_GROUP_ORDER: StatusGroupKey[] = [
+  "waiting",
+  "running",
+  "interrupted",
+  "others",
+];
+
+export function buildStatusGroups(
+  sessions: SessionSummary[],
+  t: (k: string) => string,
+): Group[] {
+  const byKey = new Map<StatusGroupKey, Group>();
+  for (const s of sessions) {
+    const key = statusGroupKey(s);
+    const group = byKey.get(key) ?? {
+      key,
+      label: t(`session.list.group.${key}`),
+      sessions: [],
+    };
+    group.sessions.push(s);
+    byKey.set(key, group);
+  }
+  return STATUS_GROUP_ORDER.filter((k) => byKey.has(k)).map((k) =>
+    byKey.get(k)!,
+  );
 }
 
 function lifecycleLabel(state: string, t: (k: string) => string): string {
@@ -110,10 +162,12 @@ function SessionRow({
   session,
   sessionPath,
   t,
+  isMobile,
 }: {
   session: SessionSummary;
   sessionPath: (id: number) => string;
   t: (k: string, opts?: Record<string, unknown>) => string;
+  isMobile: boolean;
 }) {
   const title = sessionTitle(session, t);
   const hasRealTitle = !!session.title?.trim();
@@ -121,7 +175,11 @@ function SessionRow({
   return (
     <Link
       to={sessionPath(session.sessionId)}
-      className="flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent"
+      className={cn(
+        "flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent",
+        // 触控目标：移动行高不小于 44px。
+        isMobile && "min-h-11 py-3",
+      )}
     >
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-foreground">{title}</p>
@@ -159,9 +217,13 @@ export default function SessionList({
   sessionPath,
 }: SessionListProps) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const groups = useMemo(
-    () => buildGroups(sessions, agents, t),
-    [sessions, agents, t],
+    () =>
+      isMobile
+        ? buildStatusGroups(sessions, t)
+        : buildGroups(sessions, agents, t),
+    [sessions, agents, t, isMobile],
   );
 
   if (sessions.length === 0) {
@@ -179,15 +241,13 @@ export default function SessionList({
       {groups.map((group) => (
         <section key={group.key} aria-label={group.label}>
           <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
-            <span
-              aria-hidden="true"
-              className="size-2 shrink-0 rounded-full bg-primary"
-              style={
-                group.avatarColor
-                  ? { backgroundColor: group.avatarColor }
-                  : undefined
-              }
-            />
+            {group.avatarColor && (
+              <span
+                aria-hidden="true"
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: group.avatarColor }}
+              />
+            )}
             {group.label}
             <span className="text-xs font-normal text-subtle-foreground">
               {group.sessions.length}
@@ -201,6 +261,7 @@ export default function SessionList({
                   session={s}
                   sessionPath={sessionPath}
                   t={t}
+                  isMobile={isMobile}
                 />
               ))}
             </CardContent>

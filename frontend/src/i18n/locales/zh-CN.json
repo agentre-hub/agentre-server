@@ -18,7 +18,10 @@
     "overview": "总览",
     "chat": "对话",
     "devices": "设备",
-    "audit": "审计"
+    "audit": "审计",
+    "openMenu": "打开菜单",
+    "closeMenu": "关闭菜单",
+    "drawer": "菜单"
   },
   "workspaceComingSoon": {
     "chatBody": "从浏览器发起对话暂未开放。",
@@ -168,7 +171,8 @@
       "switchMachine": "换机器",
       "online": "在线",
       "offline": "离线",
-      "count": "{{count}} 条对话"
+      "count": "{{count}} 条对话",
+      "back": "返回"
     },
     "list": {
       "empty": "这台机器上还没有对话。",
@@ -177,7 +181,13 @@
       "idle": "空闲",
       "interrupted": "已中断",
       "waiting": "正在等待你的输入",
-      "legacy": "{{cwd}} · {{backend}} · {{status}}"
+      "legacy": "{{cwd}} · {{backend}} · {{status}}",
+      "group": {
+        "waiting": "等你处理",
+        "running": "运行中",
+        "interrupted": "已中断",
+        "others": "其他"
+      }
     },
     "transcript": {
       "loading": "正在加载转录…",
@@ -211,6 +221,7 @@
     "title": "对话",
     "findMore": "去设备页找更多对话",
     "noSessions": "还没有对话",
+    "follow": "关注",
     "startFirst": "开始第一个对话",
     "startFirstBody": "开始一条新对话，或打开你已有的对话。",
     "followedOn": "{{machine}} · {{time}}",
