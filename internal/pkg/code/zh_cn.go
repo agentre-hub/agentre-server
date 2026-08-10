@@ -42,4 +42,10 @@ var zhCN = map[int]string{
 	RelayDaemonNotFound: "该账号未登记此 daemon",
 	RelayDaemonOffline:  "daemon 当前离线",
 	RelayForwardFailed:  "daemon 在线但中转转发失败",
+
+	SyncResyncRequired:     "设备离线过久，请先拉取全量快照再同步",
+	SyncPayloadRejected:    "同步载荷包含不允许跨机传输的字段",
+	SyncKindInvalid:        "同步对象类型无效",
+	SyncAvatarHashMismatch: "头像内容与声明的哈希不符",
+	SyncAvatarNotFound:     "头像不存在",
 }

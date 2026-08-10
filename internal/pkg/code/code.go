@@ -53,3 +53,19 @@ const (
 	RelayDaemonOffline
 	RelayForwardFailed
 )
+
+// 工作区多端同步 30500~30599
+const (
+	// SyncResyncRequired 设备距上次成功同步已超过墓碑保留窗口，上行一律被拒，
+	// 必须先拉一份全量快照（R6a）。
+	SyncResyncRequired = iota + 30500
+	// SyncPayloadRejected 载荷带了不该过机的东西：桌面端的本地自增 ID，
+	// 或凭据 / provider 行正文。
+	SyncPayloadRejected
+	// SyncKindInvalid 上行声明的对象类型不属于同步组，或与已有行的类型不符。
+	SyncKindInvalid
+	// SyncAvatarHashMismatch 头像正文的哈希与声明的不符。
+	SyncAvatarHashMismatch
+	// SyncAvatarNotFound 账号下没有这个哈希的头像。
+	SyncAvatarNotFound
+)

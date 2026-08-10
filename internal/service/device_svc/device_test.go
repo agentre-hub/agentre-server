@@ -312,6 +312,67 @@ func TestRevoke(t *testing.T) {
 	})
 }
 
+// stubLocalPathPurger 记下每一次被清的 deviceID；err 非 nil 时模拟落库失败。
+type stubLocalPathPurger struct {
+	purgedDeviceIDs []int64
+	err             error
+}
+
+func (s *stubLocalPathPurger) PurgeDeviceLocalPaths(_ context.Context, deviceID int64) error {
+	s.purgedDeviceIDs = append(s.purgedDeviceIDs, deviceID)
+	return s.err
+}
+
+// TestRevoke_PurgesReportedLocalPaths 工作区多端同步 R18：用户在 web 端删除
+// （撤销）一台设备时，该设备上报的本机路径清单一并消失；账号级对象不受影响——
+// Revoke 只经过这一个窄接口触碰上报组，从不碰 sync_objects。
+func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
+	convey.Convey("撤销设备时清掉它上报的本机路径清单（R18）", t, func() {
+		testutils.Redis()
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
+		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+		purger := &stubLocalPathPurger{}
+		SetLocalPathPurger(purger)
+		t.Cleanup(func() { SetLocalPathPurger(nil) })
+
+		convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
+		convey.So(purger.purgedDeviceIDs, convey.ShouldResemble, []int64{42})
+	})
+
+	convey.Convey("purger 落库失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
+		testutils.Redis()
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
+		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+		purger := &stubLocalPathPurger{err: errors.New("boom")}
+		SetLocalPathPurger(purger)
+		t.Cleanup(func() { SetLocalPathPurger(nil) })
+
+		convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
+		convey.So(purger.purgedDeviceIDs, convey.ShouldResemble, []int64{42})
+	})
+}
+
+// TestRevoke_GivenNoPurgerConfigured_DoesNotPanic 复现「只装配了 device flow、
+// 没有整套 bootstrap」的调用方：从未 SetLocalPathPurger 过，Revoke 仍要正常成功，
+// 而不是对 nil 接口调用方法 panic（与 relay_svc.Default() 的既有安全占位同一模式）。
+func TestRevoke_GivenNoPurgerConfigured_DoesNotPanic(t *testing.T) {
+	convey.Convey("未装配 purger 时 Revoke 不 panic（默认空操作）", t, func() {
+		testutils.Redis()
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
+		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+		convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
+	})
+}
+
 func TestListRevokedJTI(t *testing.T) {
 	convey.Convey("ListRevokedJTI", t, func() {
 		convey.Convey("按账号（非调用设备）取吊销列表，窗口起点=now-AccessTTL", func() {

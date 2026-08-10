@@ -20,6 +20,7 @@ import (
 	"agentre-server/internal/repository/device_flow_repo"
 	"agentre-server/internal/repository/device_repo"
 	"agentre-server/internal/repository/device_token_repo"
+	"agentre-server/internal/repository/sync_repo"
 	"agentre-server/internal/repository/user_identity_repo"
 	"agentre-server/internal/repository/user_repo"
 	"agentre-server/internal/task"
@@ -44,6 +45,10 @@ func main() {
 	device_repo.RegisterDevice(device_repo.NewDevice())
 	device_token_repo.RegisterDeviceToken(device_token_repo.NewDeviceToken())
 	device_flow_repo.RegisterDeviceFlow(device_flow_repo.NewDeviceFlow())
+	sync_repo.RegisterSyncObject(sync_repo.NewSyncObject())
+	sync_repo.RegisterSyncState(sync_repo.NewSyncState())
+	sync_repo.RegisterSyncAvatar(sync_repo.NewSyncAvatar())
+	sync_repo.RegisterSyncLocalPath(sync_repo.NewSyncLocalPath())
 
 	deps := &api.RouterDeps{Cfg: serverCfg, Signer: signer}
 

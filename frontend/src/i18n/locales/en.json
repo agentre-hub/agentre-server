@@ -14,6 +14,29 @@
       "label": "Language"
     }
   },
+  "nav": {
+    "overview": "Overview",
+    "chat": "Chat",
+    "devices": "Devices",
+    "audit": "Audit"
+  },
+  "workspaceComingSoon": {
+    "chatBody": "Starting a conversation from the browser is not available yet.",
+    "auditBody": "The audit log is not available yet."
+  },
+  "overview": {
+    "title": "Agents",
+    "subtitle": "{{count}} across your account — not duplicated per device",
+    "orderHint": "Runs on the first available target, in order",
+    "currentTarget": "Currently running on {{device}}",
+    "noAvailableTarget": "No available execution target",
+    "thisDevice": "This device",
+    "skippedForWeb": "Skipped for web dispatch",
+    "offline": "Offline",
+    "unpaired": "Not paired",
+    "empty": "No agents yet.",
+    "loadError": "Could not load your agents. Please try again."
+  },
   "authLayout": {
     "brand": "AgentRe",
     "footer": {
@@ -106,7 +129,19 @@
       "revokeConfirmBody": "This device can no longer refresh its credentials after you confirm. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation is not instant.",
       "revokeCancel": "Cancel",
       "revokeConfirm": "Revoke",
-      "revokeError": "Could not revoke this device. Please try again."
+      "revokeError": "Could not revoke this device. Please try again.",
+      "expand": "Show details",
+      "collapse": "Hide details",
+      "runnableAgents": "Agents that can run here",
+      "rankLabel": "Rank {{rank}}",
+      "projects": "Projects",
+      "projectsNote": "Shows configured status only — never the path",
+      "agentsAccountNote": "Agents belong to the account, not this device — see Overview",
+      "configured": "Configured",
+      "notConfigured": "Not configured",
+      "noProjectsReported": "No projects reported from this device yet.",
+      "noRunnableAgents": "No agents can run on this device yet.",
+      "detailLoadError": "Could not load this device's details. Please try again."
     }
   },
   "notFound": {

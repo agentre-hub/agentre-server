@@ -42,4 +42,10 @@ var en = map[int]string{
 	RelayDaemonNotFound: "daemon is not registered to this account",
 	RelayDaemonOffline:  "daemon is currently offline",
 	RelayForwardFailed:  "daemon is online but relay forwarding failed",
+
+	SyncResyncRequired:     "device offline too long, pull a full snapshot before syncing",
+	SyncPayloadRejected:    "sync payload carries fields that must not cross machines",
+	SyncKindInvalid:        "invalid sync object kind",
+	SyncAvatarHashMismatch: "avatar content does not match the declared hash",
+	SyncAvatarNotFound:     "avatar not found",
 }

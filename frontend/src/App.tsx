@@ -5,6 +5,8 @@ import DeviceSuccess from "./pages/DeviceSuccess";
 import DeviceDenied from "./pages/DeviceDenied";
 import DeviceExpired from "./pages/DeviceExpired";
 import Devices from "./pages/Devices";
+import Overview from "./pages/Overview";
+import WorkspaceComingSoon from "./pages/WorkspaceComingSoon";
 import NotFound from "./pages/NotFound";
 import ComingSoon from "./pages/ComingSoon";
 import RequireAuth from "./components/RequireAuth";
@@ -28,6 +30,30 @@ export default function App() {
           element={
             <RequireAuth>
               <Devices />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/overview"
+          element={
+            <RequireAuth>
+              <Overview />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/chat"
+          element={
+            <RequireAuth>
+              <WorkspaceComingSoon bodyKey="workspaceComingSoon.chatBody" />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/audit"
+          element={
+            <RequireAuth>
+              <WorkspaceComingSoon bodyKey="workspaceComingSoon.auditBody" />
             </RequireAuth>
           }
         />

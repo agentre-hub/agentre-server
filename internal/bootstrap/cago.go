@@ -24,6 +24,8 @@ import (
 	"agentre-server/internal/service/device_svc"
 	"agentre-server/internal/service/oauth_svc"
 	"agentre-server/internal/service/relay_svc"
+	"agentre-server/internal/service/sync_svc"
+	"agentre-server/internal/service/workspace_svc"
 )
 
 type ServerConfig struct {
@@ -191,6 +193,9 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		RefreshTTL:      cfg.JWT.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}, signer))
+	// 工作区多端同步 R18：撤销一台设备时，device_svc 用这个窄接口清掉它上报的
+	// 本机路径清单；sync_svc.Default() 结构性满足 device_svc.LocalPathPurger。
+	device_svc.SetLocalPathPurger(sync_svc.Default())
 
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -203,4 +208,7 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 	relay_svc.SetDefault(relay_svc.New(
 		relayConfig, device_repo.Device(), redis.Default(), relay_svc.NewRedisForwarder(relayConfig, redis.Default()),
 	))
+	// 总览页「当前生效」那一档要问 daemon 是否在线；workspace_svc 只依赖窄接口
+	// DaemonOnlineChecker（ISP），relay_svc.Default() 结构性满足它。
+	workspace_svc.SetOnlineChecker(relay_svc.Default())
 }
