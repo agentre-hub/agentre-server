@@ -206,5 +206,21 @@
       "alreadyHandled": "该请求已被处理。",
       "none": "没有待处理的请求。"
     }
+  },
+  "chat": {
+    "title": "对话",
+    "findMore": "去设备页找更多对话",
+    "noSessions": "还没有对话",
+    "startFirst": "开始第一个对话",
+    "startFirstBody": "开始一条新对话，或打开你已有的对话。",
+    "followedOn": "{{machine}} · {{time}}",
+    "pendingFrom": "正在加载 {{machine}} 上的对话…",
+    "offlineTitle": "离线",
+    "offlineMachineWithTime": "{{machine}} · 离线 · 最后在线 {{time}}",
+    "invalidTitle": "已不可用",
+    "invalidBody": "这条对话已经找不到目标了。",
+    "noMachine": "未知机器",
+    "remove": "移除",
+    "unfollow": "取消关注"
   }
 }

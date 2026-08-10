@@ -206,5 +206,21 @@
       "alreadyHandled": "This request has already been handled.",
       "none": "No pending requests."
     }
+  },
+  "chat": {
+    "title": "Chat",
+    "findMore": "Go to the devices page to find more conversations",
+    "noSessions": "No conversations yet.",
+    "startFirst": "Start your first conversation",
+    "startFirstBody": "Start a new conversation, or open one you already have.",
+    "followedOn": "{{machine}} · {{time}}",
+    "pendingFrom": "Loading conversations from {{machine}}…",
+    "offlineTitle": "Offline",
+    "offlineMachineWithTime": "{{machine}} · offline · last seen {{time}}",
+    "invalidTitle": "Unavailable",
+    "invalidBody": "This conversation is no longer reachable.",
+    "noMachine": "Unknown machine",
+    "remove": "Remove",
+    "unfollow": "Unfollow"
   }
 }
