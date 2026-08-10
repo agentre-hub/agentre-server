@@ -30,16 +30,23 @@ const testCookieName = "server_session"
 
 // stubWorkspaceSvc 记下实际收到的入参，实现 workspace_svc.WorkspaceSvc。
 type stubWorkspaceSvc struct {
-	agents       []workspace_svc.AgentView
-	detail       *workspace_svc.DeviceDetailView
-	detailInputs []int64
-	detailErr    error
-	listCalled   bool
+	agents         []workspace_svc.AgentView
+	detail         *workspace_svc.DeviceDetailView
+	detailInputs   []int64
+	detailErr      error
+	listCalled     bool
+	dispatchPlan   *workspace_svc.WebDispatchPlan
+	dispatchInputs []string
 }
 
 func (s *stubWorkspaceSvc) ListAccountAgents(context.Context, int64) ([]workspace_svc.AgentView, error) {
 	s.listCalled = true
 	return s.agents, nil
+}
+
+func (s *stubWorkspaceSvc) WebDispatchPlan(_ context.Context, _ int64, agentSyncID, projectSyncID string) (*workspace_svc.WebDispatchPlan, error) {
+	s.dispatchInputs = append(s.dispatchInputs, agentSyncID, projectSyncID)
+	return s.dispatchPlan, nil
 }
 
 func (s *stubWorkspaceSvc) DeviceDetail(_ context.Context, _ int64, deviceID int64) (*workspace_svc.DeviceDetailView, error) {
@@ -191,6 +198,66 @@ func TestDeviceDetail_WorksForBrowserSession_WithDeviceIDQuery(t *testing.T) {
 	assert.Equal(t, 2, got.RunnableAgents[0].Rank)
 	require.Len(t, got.Projects, 1)
 	assert.True(t, got.Projects[0].Configured)
+}
+
+// R15 派发计划端点：query 里的 agent_sync_id / project_sync_id 原样转给 service，
+// 逐档原因、选中档与项目清单透传回浏览器。
+func TestDispatchTarget_WorksForBrowserSession_WithAgentAndProject(t *testing.T) {
+	stub := &stubWorkspaceSvc{dispatchPlan: &workspace_svc.WebDispatchPlan{
+		AgentSyncID: "agent-1",
+		Tiers: []workspace_svc.WebDispatchTier{
+			{Rank: 1, Availability: workspace_svc.AvailabilitySkippedForWeb},
+			{Rank: 2, DeviceID: 21, DeviceName: "公司 Mac mini", BackendType: "codex",
+				Availability: workspace_svc.AvailabilityAvailable, Current: true},
+		},
+		Chosen: &workspace_svc.WebDispatchChoice{
+			DeviceFingerprint: "fp-online", DeviceID: 21, DeviceName: "公司 Mac mini",
+			BackendType: "codex", Cwd: "/srv/agentre-server",
+		},
+		Projects: []workspace_svc.ProjectView{{SyncID: "proj-1", Name: "agentre-server", Configured: true}},
+	}}
+	server, _ := newWorkspaceTestServer(t, stub)
+	cookie := newSessionCookie(t, 7)
+
+	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1&project_sync_id=proj-1", cookie.Value)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, []string{"agent-1", "proj-1"}, stub.dispatchInputs)
+
+	var got struct {
+		AgentSyncID string `json:"agent_sync_id"`
+		Tiers       []struct {
+			Rank         int    `json:"rank"`
+			DeviceName   string `json:"device_name"`
+			Availability string `json:"availability"`
+			Current      bool   `json:"current"`
+		} `json:"tiers"`
+		Chosen *struct {
+			DeviceFingerprint string `json:"device_fingerprint"`
+			DeviceName        string `json:"device_name"`
+			Cwd               string `json:"cwd"`
+		} `json:"chosen"`
+		Projects []struct {
+			SyncID string `json:"sync_id"`
+			Name   string `json:"name"`
+		} `json:"projects"`
+	}
+	decodeEnvelope(t, resp, &got)
+	assert.Equal(t, "agent-1", got.AgentSyncID)
+	require.Len(t, got.Tiers, 2)
+	assert.Equal(t, "skipped_for_web", got.Tiers[0].Availability)
+	assert.True(t, got.Tiers[1].Current)
+	require.NotNil(t, got.Chosen)
+	assert.Equal(t, "fp-online", got.Chosen.DeviceFingerprint)
+	assert.Equal(t, "/srv/agentre-server", got.Chosen.Cwd)
+	require.Len(t, got.Projects, 1)
+	assert.Equal(t, "proj-1", got.Projects[0].SyncID)
+}
+
+// 未登录（无 cookie、无 device JWT）必须被拒绝——派发计划不是公开端点。
+func TestDispatchTarget_RejectsUnauthenticated(t *testing.T) {
+	server, _ := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
+	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1", "")
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 // 不属于自己账号 / 不存在的设备：service 报 NotFound，controller 原样透传，

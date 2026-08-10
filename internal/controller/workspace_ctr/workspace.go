@@ -43,6 +43,39 @@ func (w *Workspace) ListAgents(c *gin.Context, _ *api.ListAgentsRequest) (*api.L
 	return resp, nil
 }
 
+func (w *Workspace) DispatchTarget(c *gin.Context, req *api.DispatchTargetRequest) (*api.DispatchTargetResponse, error) {
+	plan, err := workspace_svc.Default().WebDispatchPlan(
+		c.Request.Context(), callerUserID(c), req.AgentSyncID, req.ProjectSyncID)
+	if err != nil {
+		return nil, err
+	}
+	resp := &api.DispatchTargetResponse{
+		AgentSyncID: plan.AgentSyncID,
+		Tiers:       make([]api.DispatchTierItem, 0, len(plan.Tiers)),
+		Projects:    make([]api.ProjectItem, 0, len(plan.Projects)),
+	}
+	for _, t := range plan.Tiers {
+		resp.Tiers = append(resp.Tiers, api.DispatchTierItem{
+			Rank: t.Rank, DeviceID: t.DeviceID, DeviceName: t.DeviceName,
+			BackendType: t.BackendType, Availability: t.Availability, Current: t.Current,
+		})
+	}
+	if plan.Chosen != nil {
+		resp.Chosen = &api.DispatchChoiceItem{
+			DeviceFingerprint: plan.Chosen.DeviceFingerprint,
+			DeviceID:          plan.Chosen.DeviceID,
+			DeviceName:        plan.Chosen.DeviceName,
+			BackendType:       plan.Chosen.BackendType,
+			Cwd:               plan.Chosen.Cwd,
+		}
+	}
+	for _, p := range plan.Projects {
+		resp.Projects = append(resp.Projects,
+			api.ProjectItem{SyncID: p.SyncID, Name: p.Name, Configured: p.Configured})
+	}
+	return resp, nil
+}
+
 func (w *Workspace) DeviceDetail(c *gin.Context, req *api.DeviceDetailRequest) (*api.DeviceDetailResponse, error) {
 	detail, err := workspace_svc.Default().DeviceDetail(c.Request.Context(), callerUserID(c), req.DeviceID)
 	if err != nil {

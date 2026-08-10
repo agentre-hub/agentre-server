@@ -36,6 +36,48 @@ type ListAgentsResponse struct {
 	Agents []AgentItem `json:"agents"`
 }
 
+// ---------- R15 派发计划：从 web 给「某 Agent + 某项目」派活 ----------
+
+// DispatchTargetRequest 取 R15 的派发计划。project_sync_id 可空：picker 阶段先只看
+// 「这台机器能不能接活」，不传项目即不做项目路径判定；确认派发阶段带上项目，逐档
+// 判定（含那台机器上没配这个项目的路径）。
+type DispatchTargetRequest struct {
+	mux.Meta      `path:"/v1/workspace/dispatch-target" method:"GET"`
+	AgentSyncID   string `form:"agent_sync_id" binding:"required"`
+	ProjectSyncID string `form:"project_sync_id"`
+}
+
+type DispatchTierItem struct {
+	Rank        int    `json:"rank"`
+	DeviceID    int64  `json:"device_id,omitempty"`
+	DeviceName  string `json:"device_name,omitempty"`
+	BackendType string `json:"backend_type,omitempty"`
+	// Availability 是 available / offline / unpaired / skipped_for_web /
+	// project_path_missing 之一。
+	Availability string `json:"availability"`
+	Current      bool   `json:"current"`
+}
+
+// DispatchChoiceItem 是派发最终落到的那一档（第一档可用的 agentred）。Cwd 只在
+// project_sync_id 非空（确认派发阶段）时带出，供屏幕 25 呈现与派发 runtime.run；
+// 这是 R19 红线在主动派活场景下的唯一例外（见 workspace_svc.WebDispatchChoice 注释）。
+type DispatchChoiceItem struct {
+	DeviceFingerprint string `json:"device_fingerprint"`
+	DeviceID          int64  `json:"device_id"`
+	DeviceName        string `json:"device_name"`
+	BackendType       string `json:"backend_type"`
+	Cwd               string `json:"cwd,omitempty"`
+}
+
+type DispatchTargetResponse struct {
+	AgentSyncID string             `json:"agent_sync_id"`
+	Tiers       []DispatchTierItem `json:"tiers"`
+	// Chosen 为 null = 全部档都不可用（前端逐档渲染原因，不静默失败）。
+	Chosen *DispatchChoiceItem `json:"chosen"`
+	// Projects 是选中的那一档机器上已配置的项目（picker 阶段挑项目用）。
+	Projects []ProjectItem `json:"projects"`
+}
+
 // ---------- 设备展开 ----------
 
 type DeviceDetailRequest struct {

@@ -77,6 +77,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// web 控制台两屏的只读端点（决策 13）：账号级 Agent 清单、设备展开详情。
 		workspaceCtr.ListAgents,
 		workspaceCtr.DeviceDetail,
+		// R15：从 web 给「某 Agent + 某项目」取派发计划（哪台 agentred、逐档原因）。
+		workspaceCtr.DispatchTarget,
 		// 关注名单（R12 后端 + R14）：账号级，任一端（会话或设备 JWT）都可操作。
 		followCtr.Follow,
 		followCtr.Unfollow,

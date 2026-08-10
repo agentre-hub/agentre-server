@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import { Alert } from "@/components/ui/alert";
@@ -12,6 +12,7 @@ import ChatList, {
   type ChatPendingRow,
   type ChatSessionRow,
 } from "@/components/session/ChatList";
+import NewConversationDialog from "@/components/session/NewConversationDialog";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import { decodeSessionListResult, type SessionSummary } from "@/lib/wire";
@@ -111,6 +112,7 @@ function FollowedMachineResolver({
 
 export default function Chat() {
   const { t } = useTranslation();
+  const nav = useNavigate();
 
   const [follows, setFollows] = useState<FollowItem[]>([]);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
@@ -123,6 +125,7 @@ export default function Chat() {
   const [machineState, setMachineState] = useState<
     Record<string, "connecting" | "connected" | "unreachable">
   >({});
+  const [newOpen, setNewOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -325,8 +328,10 @@ export default function Chat() {
             <p className="mb-4 text-sm leading-[1.5] text-muted-foreground">
               {t("chat.startFirstBody")}
             </p>
-            {/* R15 的主动作：task 8 接新对话流程，本轮按设计稿摆按钮。 */}
-            <Button size="lg">{t("chat.startFirst")}</Button>
+            {/* R15 的主动作：打开新对话弹层（屏 23/24/25），派发成功后直接跳详情页。 */}
+            <Button size="lg" onClick={() => setNewOpen(true)}>
+              {t("chat.startFirst")}
+            </Button>
             <div className="mt-4">
               <Link
                 to="/devices"
@@ -349,6 +354,16 @@ export default function Chat() {
             sessionPath={(did, sid) => `/devices/${did}/sessions/${sid}`}
           />
         )}
+
+        {/* R15/R16：从 web 发起新对话。派发成功后该条已进账号级关注名单，
+            无需再关注；直接跳到详情页读实时流。 */}
+        <NewConversationDialog
+          open={newOpen}
+          onOpenChange={setNewOpen}
+          onStarted={({ deviceId, sessionId }) =>
+            nav(`/devices/${deviceId}/sessions/${sessionId}`)
+          }
+        />
 
         {/* 每个在线且有非失效关注的机器挂一个解析器（见文件头注释）。 */}
         {loaded &&
