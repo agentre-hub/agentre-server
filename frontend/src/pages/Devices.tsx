@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
@@ -76,15 +77,18 @@ function formatLastActive(ms: number): string {
 }
 
 /**
- * 设备行展开的详情：agentred 列「能跑的 Agent」（带档位）与「已配置的项目」；
- * 桌面端只列「项目」（已配置 / 未配置都列，因为 Agent 不按桌面端归属）。
- * 两者都只显示项目是否配置这个布尔事实，不显示路径（R19）。
+ * 设备行展开的详情：agentred 列「能跑的 Agent」（带档位）、「已配置的项目」与
+ * 「对话」一节（R4 下钻入口，mockup 帧 47）；桌面端只列「项目」。
+ * 对话一节：在线的 agentred 给「查看这台机器的对话」入口；离线的不可进入，
+ * 就地标明离线与最后在线时间（R4）。
  */
 function DeviceExpandDetail({
   state,
+  device,
   t,
 }: {
   state: { loading: boolean; error: unknown; data: DeviceDetail | null };
+  device: DeviceItem;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
   if (state.loading) {
@@ -167,6 +171,28 @@ function DeviceExpandDetail({
         <p className="font-mono text-[9.5px] text-subtle-foreground">
           {t("device.manage.agentsAccountNote")}
         </p>
+      )}
+      {isAgentred && (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
+          <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+            {t("device.manage.sessions")}
+          </span>
+          {device.online ? (
+            <Link
+              to={`/devices/${device.id}/sessions`}
+              className="inline-flex w-fit items-center text-xs font-medium text-primary-text hover:underline"
+            >
+              {t("device.manage.viewSessions")}
+            </Link>
+          ) : (
+            <p className="text-xs text-destructive">
+              {t("device.manage.offlineNotEnterable")}
+              {device.last_seen_at > 0
+                ? ` ${new Date(device.last_seen_at).toLocaleString()}`
+                : ""}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
@@ -375,6 +401,7 @@ export default function Devices() {
                             data: null,
                           }
                         }
+                        device={d}
                         t={t}
                       />
                     </CardContent>

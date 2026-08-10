@@ -23,6 +23,8 @@ export const MethodSessionPull = "runtime.session.pull";
 export const MethodSessionPendingWaiters = "runtime.session.pendingWaiters";
 export const MethodSessionAttach = "runtime.session.attach";
 export const MethodRun = "runtime.run";
+export const MethodSubmitAnswer = "runtime.submitAnswer";
+export const MethodSubmitToolPermission = "runtime.submitToolPermission";
 
 /** daemon → 浏览器 通知。 */
 export const NotifyEvent = "runtime.event";

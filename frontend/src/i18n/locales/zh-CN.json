@@ -141,12 +141,70 @@
       "notConfigured": "未配置",
       "noProjectsReported": "这台设备还没有上报任何项目。",
       "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
-      "detailLoadError": "无法加载这台设备的详情，请重试。"
+      "detailLoadError": "无法加载这台设备的详情，请重试。",
+      "sessions": "对话",
+      "viewSessions": "查看这台机器的对话",
+      "offlineNotEnterable": "已离线——对话不可用。"
     }
   },
   "notFound": {
     "code": "404",
     "title": "页面不存在",
     "body": "链接可能已经失效，或者地址打错了。"
+  },
+  "session": {
+    "status": {
+      "connecting": "连接中…",
+      "reconnecting": "连接已断开，正在重连…",
+      "lost": "连接已丢失，正在自动重连。",
+      "machineOffline": "这台机器已离线。",
+      "machineOfflineWithTime": "这台机器已离线——最后在线 {{time}}。",
+      "revoked": "该浏览器已被解除授权，请重新登录。",
+      "loggedOut": "账号已登出，请重新登录。"
+    },
+    "relogin": "重新登录",
+    "breadcrumb": {
+      "devices": "设备",
+      "switchMachine": "换机器",
+      "online": "在线",
+      "offline": "离线",
+      "count": "{{count}} 条对话"
+    },
+    "list": {
+      "empty": "这台机器上还没有对话。",
+      "unnamedGroup": "未命名",
+      "running": "运行中",
+      "idle": "空闲",
+      "interrupted": "已中断",
+      "waiting": "正在等待你的输入",
+      "legacy": "{{cwd}} · {{backend}} · {{status}}"
+    },
+    "transcript": {
+      "loading": "正在加载转录…",
+      "empty": "还没有消息。",
+      "inputPlaceholder": "发一条消息…",
+      "send": "发送",
+      "you": "你",
+      "assistant": "助手",
+      "tool": "工具",
+      "toolResult": "结果",
+      "thinking": "思考中…",
+      "error": "错误",
+      "unknownEvent": "未知事件",
+      "waiting": "正在等待你的输入…",
+      "fromDevice": "来自 {{device}}"
+    },
+    "decision": {
+      "approveTool": "批准 {{tool}}",
+      "allow": "允许",
+      "alwaysAllow": "本对话始终允许",
+      "deny": "拒绝",
+      "denyReason": "理由（可选）",
+      "askQuestion": "提问",
+      "submit": "提交",
+      "skip": "跳过",
+      "alreadyHandled": "该请求已被处理。",
+      "none": "没有待处理的请求。"
+    }
   }
 }

@@ -5,6 +5,8 @@ import DeviceSuccess from "./pages/DeviceSuccess";
 import DeviceDenied from "./pages/DeviceDenied";
 import DeviceExpired from "./pages/DeviceExpired";
 import Devices from "./pages/Devices";
+import DeviceSessions from "./pages/DeviceSessions";
+import SessionDetail from "./pages/SessionDetail";
 import Overview from "./pages/Overview";
 import WorkspaceComingSoon from "./pages/WorkspaceComingSoon";
 import NotFound from "./pages/NotFound";
@@ -30,6 +32,22 @@ export default function App() {
           element={
             <RequireAuth>
               <Devices />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/devices/:deviceId/sessions"
+          element={
+            <RequireAuth>
+              <DeviceSessions />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/devices/:deviceId/sessions/:sessionId"
+          element={
+            <RequireAuth>
+              <SessionDetail />
             </RequireAuth>
           }
         />

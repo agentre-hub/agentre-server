@@ -141,12 +141,70 @@
       "notConfigured": "Not configured",
       "noProjectsReported": "No projects reported from this device yet.",
       "noRunnableAgents": "No agents can run on this device yet.",
-      "detailLoadError": "Could not load this device's details. Please try again."
+      "detailLoadError": "Could not load this device's details. Please try again.",
+      "sessions": "Conversations",
+      "viewSessions": "View this machine's conversations",
+      "offlineNotEnterable": "Offline — conversations are unavailable."
     }
   },
   "notFound": {
     "code": "404",
     "title": "Page not found",
     "body": "This link may be broken, or the address is mistyped."
+  },
+  "session": {
+    "status": {
+      "connecting": "Connecting…",
+      "reconnecting": "Connection interrupted — reconnecting…",
+      "lost": "Connection lost. Reconnecting automatically.",
+      "machineOffline": "This machine is offline.",
+      "machineOfflineWithTime": "This machine is offline — last seen {{time}}.",
+      "revoked": "This browser has been revoked. Please sign in again.",
+      "loggedOut": "You have been signed out. Please sign in again."
+    },
+    "relogin": "Sign in again",
+    "breadcrumb": {
+      "devices": "Devices",
+      "switchMachine": "Switch machine",
+      "online": "Online",
+      "offline": "Offline",
+      "count": "{{count}} conversations"
+    },
+    "list": {
+      "empty": "No conversations on this machine yet.",
+      "unnamedGroup": "Unnamed",
+      "running": "Running",
+      "idle": "Idle",
+      "interrupted": "Interrupted",
+      "waiting": "Waiting for your input",
+      "legacy": "{{cwd}} · {{backend}} · {{status}}"
+    },
+    "transcript": {
+      "loading": "Loading transcript…",
+      "empty": "No messages yet.",
+      "inputPlaceholder": "Send a message…",
+      "send": "Send",
+      "you": "You",
+      "assistant": "Assistant",
+      "tool": "Tool",
+      "toolResult": "Result",
+      "thinking": "Thinking…",
+      "error": "Error",
+      "unknownEvent": "Unknown event",
+      "waiting": "Waiting for your input…",
+      "fromDevice": "From {{device}}"
+    },
+    "decision": {
+      "approveTool": "Approve {{tool}}",
+      "allow": "Allow",
+      "alwaysAllow": "Always allow in this conversation",
+      "deny": "Deny",
+      "denyReason": "Reason (optional)",
+      "askQuestion": "Question",
+      "submit": "Submit",
+      "skip": "Skip",
+      "alreadyHandled": "This request has already been handled.",
+      "none": "No pending requests."
+    }
   }
 }

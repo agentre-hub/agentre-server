@@ -95,8 +95,11 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.GetAvatar,
 	)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由；鉴权仍复用 device JWT。
+	// client 额外接受 query 里的 access_token（浏览器原生 WebSocket 无法设头，见
+	// queryTokenBridge）；daemon 是 Go 客户端、能设头，不需要这条桥。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
-	deviceJWT.GET("/v1/relay/client", relayCtr.Client)
+	g.Group("/", queryTokenBridge(), middleware.DeviceJWT(r.Signer)).
+		GET("/v1/relay/client", relayCtr.Client)
 
 	return nil
 }
