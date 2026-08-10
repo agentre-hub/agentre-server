@@ -3,6 +3,8 @@
 package sync_ctr
 
 import (
+	"encoding/json"
+
 	"github.com/gin-gonic/gin"
 
 	api "agentre-server/internal/api/sync"
@@ -53,6 +55,7 @@ func (s *Sync) Push(c *gin.Context, req *api.PushRequest) (*api.PushResponse, er
 			Reason:              r.Reason,
 			OverwrittenVersion:  r.OverwrittenVersion,
 			OverwrittenDeviceID: r.OverwrittenDeviceID,
+			OverwrittenPayload:  json.RawMessage(r.OverwrittenPayload),
 			MergedSyncID:        r.MergedSyncID,
 			MergedVersion:       r.MergedVersion,
 			MergedDeviceID:      r.MergedDeviceID,

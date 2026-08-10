@@ -66,3 +66,51 @@ func TestValidatePayload_GivenEmpty_ThenAccepted(t *testing.T) {
 	assert.NoError(t, ValidatePayload(nil))
 	assert.NoError(t, ValidatePayload([]byte("")))
 }
+
+// 头像正文按内容哈希单独传，不进同步载荷。
+func TestValidatePayload_GivenAvatarContent_ThenRejected(t *testing.T) {
+	for _, payload := range []string{
+		`{"name":"x","avatar_data_url":"data:image/png;base64,AAAA"}`,
+		`{"avatarDataUrl":"data:image/png;base64,AAAA"}`,
+	} {
+		assert.ErrorIs(t, ValidatePayload([]byte(payload)), ErrPayloadAvatarContent, payload)
+	}
+	// avatar_hash 是内容哈希这个字符串引用，不是正文，照常放行。
+	assert.NoError(t, ValidatePayload([]byte(`{"avatar_hash":"deadbeef"}`)))
+}
+
+// 这一组向量与桌面端 syncwire.GuardPayload 的同名测试**逐条一致**：两个仓库不能
+// 互相 import，规则只能靠两份相同的向量对齐。任何一边加规则，这张表要同步改。
+//
+// 最后一条是刻意的**反向**断言：`env_json` 是用户自填的透传环境变量表，按设计随
+// backend 明文过机，守卫不看 JSON 字符串内部。守卫的注释不承诺它会被过滤，这条
+// 测试把「不过滤」钉死，免得日后有人照着注释误以为凭据一定进不了同步载荷。
+func TestValidatePayload_GivenTheSharedVectors_ThenMatchesTheDesktopGuard(t *testing.T) {
+	rejected := []string{
+		`{"parent_id":7}`,
+		`{"agentBackendId":7}`,
+		`{"targets":[{"agent-backend-id":7}]}`,
+		`{"nested":{"department_id":1}}`,
+		`{"api_key":"sk-x"}`,
+		`{"apiKey":"sk-x"}`,
+		`{"provider":{"api_key":"sk-x"}}`,
+		`{"providers":[{"name":"p"}]}`,
+		`{"avatar_data_url":"data:image/png;base64,AAAA"}`,
+		`{"avatarDataUrl":"data:image/png;base64,AAAA"}`,
+	}
+	accepted := []string{
+		`{"name":"x","parent_sync_id":"01ARZ3ND"}`,
+		`{"provider_key":"anthropic-main"}`,
+		`{"agent_sync_id":"a","backend_sync_id":"b","sort_order":2}`,
+		`{"avatar_hash":"deadbeef"}`,
+		`{}`,
+		``,
+		`{"env_json":"{\"MY_TOKEN\":\"secret\"}"}`,
+	}
+	for _, payload := range rejected {
+		assert.Error(t, ValidatePayload([]byte(payload)), payload)
+	}
+	for _, payload := range accepted {
+		assert.NoError(t, ValidatePayload([]byte(payload)), payload)
+	}
+}

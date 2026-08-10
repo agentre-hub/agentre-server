@@ -41,9 +41,13 @@ type PushItemResult struct {
 	Reason              string `json:"reason,omitempty"`
 	OverwrittenVersion  int64  `json:"overwritten_version,omitempty"`
 	OverwrittenDeviceID int64  `json:"overwritten_device_id,omitempty"`
-	MergedSyncID        string `json:"merged_sync_id,omitempty"`
-	MergedVersion       int64  `json:"merged_version,omitempty"`
-	MergedDeviceID      int64  `json:"merged_device_id,omitempty"`
+	// OverwrittenPayload 是被这次上行覆盖掉的那一版正文。上行端手上那份是覆盖
+	// 别人的那一份，被覆盖的内容只有 server 有——R5 的「追回被覆盖的那一版」
+	// 靠它。
+	OverwrittenPayload json.RawMessage `json:"overwritten_payload,omitempty"`
+	MergedSyncID       string          `json:"merged_sync_id,omitempty"`
+	MergedVersion      int64           `json:"merged_version,omitempty"`
+	MergedDeviceID     int64           `json:"merged_device_id,omitempty"`
 }
 
 type PushResponse struct {

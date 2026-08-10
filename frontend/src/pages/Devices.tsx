@@ -219,6 +219,7 @@ export default function Devices() {
   }, []);
 
   function toggleExpand(d: DeviceItem) {
+    const collapsing = expanded.has(d.id);
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(d.id)) {
@@ -228,8 +229,13 @@ export default function Devices() {
       next.add(d.id);
       return next;
     });
-    // 已经取过就不重复取——展开/收起只是显示态切换。
-    if (details[d.id]) return;
+    if (collapsing) return;
+    // 已经取到过就不重复取——展开/收起只是显示态切换。
+    //
+    // 「取到过」不包含取失败：页面上没有重试按钮，把失败也缓存住等于这一行的详情
+    // 在整个页面生命周期里永久坏掉，只能整页刷新。失败后再展开就重试一次。
+    const cached = details[d.id];
+    if (cached && (cached.loading || !cached.error)) return;
     setDetails((prev) => ({
       ...prev,
       [d.id]: { loading: true, error: null, data: null },

@@ -3,13 +3,13 @@ package workspace_ctr_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/cago-frame/cago/database/redis"
+	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
@@ -18,6 +18,7 @@ import (
 
 	"agentre-server/internal/api"
 	"agentre-server/internal/bootstrap"
+	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/jwt/testkeys"
 	"agentre-server/internal/pkg/session"
@@ -194,11 +195,26 @@ func TestDeviceDetail_WorksForBrowserSession_WithDeviceIDQuery(t *testing.T) {
 
 // 不属于自己账号 / 不存在的设备：service 报 NotFound，controller 原样透传，
 // 不吞成 500、也不悄悄返回空详情。
+//
+// 断言必须落到**业务码**上。只断言「状态码不是 200」时，controller 把 NotFound
+// 吞成 500 一样能过——那正是这段注释禁止的那一种。
 func TestDeviceDetail_PropagatesNotFoundFromService(t *testing.T) {
-	stub := &stubWorkspaceSvc{detailErr: errors.New("device not found")}
+	stub := &stubWorkspaceSvc{
+		detailErr: i18n.NewNotFoundError(context.Background(), code.DeviceNotFound),
+	}
 	server, _ := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/device-detail?device_id=99", cookie.Value)
-	assert.NotEqual(t, http.StatusOK, resp.StatusCode)
+
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var envelope struct {
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(body, &envelope))
+	assert.Equal(t, code.DeviceNotFound, envelope.Code)
+	assert.Empty(t, envelope.Data)
 }

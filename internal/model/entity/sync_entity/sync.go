@@ -59,17 +59,14 @@ func (*SyncObject) TableName() string { return "sync_objects" }
 // IsDeleted 判断这一行是不是墓碑。
 func (o *SyncObject) IsDeleted() bool { return o != nil && o.DeletedAt > 0 }
 
-// AccountSyncSeq 是账号级单调递增的同步版本序列。
-type AccountSyncSeq struct {
-	UserID     int64 `gorm:"column:user_id;primaryKey"`
-	VersionSeq int64 `gorm:"column:version_seq;type:bigint;not null;default:0"`
-	Updatetime int64 `gorm:"column:updatetime;type:bigint;not null;default:0"`
-}
+// 账号级单调递增的版本序列住在 sync_account_seqs 表里，这里**刻意没有**对应的
+// entity：分配版本必须是一条 `INSERT … ON CONFLICT DO UPDATE … RETURNING`
+// （见 sync_repo.NextVersion），一个 gorm 结构体只会引来先读后写那种用法，而先读
+// 后写在多副本并发上行时会把同一个版本号发给两次上行，R4 的「较大者胜」立刻失去
+// 可比性。表结构以迁移里的 DDL 为准。
 
-func (*AccountSyncSeq) TableName() string { return "sync_account_seqs" }
-
-// DeviceSyncState 记录每台设备最近一次成功同步的时间，供 R6a 判超窗口。
-// 没有这一行 = 首次登录，不算超窗口。
+// DeviceSyncState 记录每台设备最近一次**把增量消费干净**的时刻，供 R6a 判超窗口
+// （见 sync_svc.Pull：只有拉回空页才刷新它）。没有这一行 = 首次登录，不算超窗口。
 type DeviceSyncState struct {
 	UserID     int64 `gorm:"column:user_id;primaryKey"`
 	DeviceID   int64 `gorm:"column:device_id;primaryKey"`

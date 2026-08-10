@@ -173,6 +173,47 @@ describe("device row expand", () => {
     expect(calls).toBe(1);
   });
 
+  // 取失败不该被当成「已经取过了」缓存下来：页面上没有重试按钮，缓存住失败等于
+  // 这一行的详情在整个页面生命周期里永久坏掉，只能整页刷新。
+  it("retries the detail fetch after a failed one instead of caching the error", async () => {
+    let calls = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      if (path === "/v1/workspace/device-detail?device_id=1") {
+        calls += 1;
+        if (calls === 1) throw new TypeError("network down");
+        return {
+          device_id: 1,
+          kind: "agentred",
+          runnable_agents: [],
+          projects: [],
+        };
+      }
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    await screen.findByText("study-nuc");
+    const card = screen
+      .getByText("study-nuc")
+      .closest('[data-slot="card"]') as HTMLElement;
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: /show details/i }),
+    );
+    await within(card).findByText(/could not load this device's details/i);
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: /hide details/i }),
+    );
+    fireEvent.click(
+      within(card).getByRole("button", { name: /show details/i }),
+    );
+
+    await within(card).findByText("No agents can run on this device yet.");
+    expect(calls).toBe(2);
+  });
+
   // R19 守卫：项目行只展示名字与「已配置」这个布尔事实。即便 API 响应里意外
   // 带了路径字段，页面渲染出的文本也绝不能出现它。
   it("never renders a path value even if the detail response carries one", async () => {

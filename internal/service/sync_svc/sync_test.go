@@ -114,7 +114,6 @@ func TestPush_GivenBaseVersionMatchesCurrent_ThenAccepted(t *testing.T) {
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-p1", 7)}})
@@ -146,7 +145,6 @@ func TestPush_GivenStaleBaseVersion_ThenAcceptedAndReportsOverwritten(t *testing
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-p1", 5)}})
@@ -175,7 +173,6 @@ func TestPush_GivenEmptyBaseVersionOnExistingSyncID_ThenTreatedAsConflict(t *tes
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-p1", 0)}})
@@ -196,7 +193,6 @@ func TestPush_GivenBrandNewSyncID_ThenAcceptedWithoutConflict(t *testing.T) {
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-new", 0)}})
@@ -219,7 +215,6 @@ func TestPush_GivenTombstonedRow_ThenNonDeletePushIsRejected(t *testing.T) {
 			Version: 9, SourceDeviceID: 9, DeletedAt: testNow - 1000,
 		}, nil)
 		// 不该取版本号、更不该落库：没有 EXPECT，调用即失败。
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-p1", 9)}})
@@ -246,7 +241,6 @@ func TestPush_GivenTombstonedRow_ThenRepeatedDeleteIsAccepted(t *testing.T) {
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(10), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		item := projectItem("sync-p1", 9)
 		item.Deleted = true
@@ -279,7 +273,6 @@ func TestPush_GivenSameProjectFingerprintFromBothEnds_ThenMergedIntoOneRow(t *te
 		m.object.EXPECT().Tombstone(gomock.Any(), int64(55), int64(8), testNow).Return(int64(1), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 0, UpdatedAt: testNow,
@@ -314,7 +307,6 @@ func TestPush_GivenIncomingLosesNaturalKeyMerge_ThenItIsTheOneTombstoned(t *test
 			}, nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", UpdatedAt: testNow,
@@ -339,7 +331,6 @@ func TestPush_GivenLocationWithFreeNaturalKey_ThenNoMerge(t *testing.T) {
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", UpdatedAt: testNow,
@@ -364,7 +355,6 @@ func TestPush_GivenDeletedLocation_ThenNoNaturalKeyLookup(t *testing.T) {
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 4, Deleted: true,
@@ -391,7 +381,6 @@ func TestPush_GivenDeletedLocationWithoutProjectSyncID_ThenAccepted(t *testing.T
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		// 桌面端 sync_svc.buildPushItem 的删除分支产出的正是这个形状。
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
@@ -434,7 +423,6 @@ func TestPush_GivenFirstLoginDeviceWithoutLastSyncAt_ThenNotOverWindow(t *testin
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-new", 0)}})
@@ -459,7 +447,6 @@ func TestPush_GivenClientTimestamps_ThenVersionComesOnlyFromAccountSequence(t *t
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		item := projectItem("sync-p1", 7)
 		item.UpdatedAt = 1
@@ -494,7 +481,6 @@ func TestPush_GivenBothArrivalOrders_ThenLastArrivalWins(t *testing.T) {
 				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(2), nil),
 			)
 			captureSave(m, &saved).Times(2)
-			m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, gomock.Any(), testNow).Return(nil).Times(2)
 
 			first := projectItem("sync-p1", 0)
 			first.Payload = []byte(firstPayload)
@@ -528,14 +514,16 @@ func TestPush_GivenPayloadWithLocalAutoIncrementID_ThenRejected(t *testing.T) {
 	convey.Convey("载荷带本地自增 ID", t, func() {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
-		// 一行都不该落库：object / state 的写方法没有 EXPECT。
+		expectTx(m)
+		// 这一条不该落库：object / state 的写方法没有 EXPECT。
 
 		item := projectItem("sync-p1", 0)
 		item.Payload = []byte(`{"name":"alpha","agent_backend_id":12}`)
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
 
-		assert.Nil(t, out)
-		assert.Equal(t, code.SyncPayloadRejected, errCode(t, err))
+		assert.NoError(t, err)
+		assert.Equal(t, PushStatusRejected, out.Results[0].Status)
+		assert.Equal(t, PushRejectReasonPayload, out.Results[0].Reason)
 		assert.NoError(t, m.sql.ExpectationsWereMet())
 	})
 }
@@ -546,18 +534,22 @@ func TestPush_GivenPayloadWithCredential_ThenRejected(t *testing.T) {
 		convey.Convey("api_key 被拒", func() {
 			ctx, m, svc := setupSyncTest(t)
 			onlineDevice(m)
+			expectTx(m)
 			item := projectItem("sync-b1", 0)
 			item.Payload = []byte(`{"name":"b","api_key":"sk-xxx"}`)
-			_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
-			assert.Equal(t, code.SyncPayloadRejected, errCode(t, err))
+			out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
+			assert.NoError(t, err)
+			assert.Equal(t, PushRejectReasonPayload, out.Results[0].Reason)
 		})
 		convey.Convey("provider 行正文被拒", func() {
 			ctx, m, svc := setupSyncTest(t)
 			onlineDevice(m)
+			expectTx(m)
 			item := projectItem("sync-b1", 0)
 			item.Payload = []byte(`{"provider":{"provider_key":"openai","api_key":"sk-xxx"}}`)
-			_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
-			assert.Equal(t, code.SyncPayloadRejected, errCode(t, err))
+			out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
+			assert.NoError(t, err)
+			assert.Equal(t, PushRejectReasonPayload, out.Results[0].Reason)
 		})
 		convey.Convey("provider_key 字符串引用放行", func() {
 			ctx, m, svc := setupSyncTest(t)
@@ -567,7 +559,6 @@ func TestPush_GivenPayloadWithCredential_ThenRejected(t *testing.T) {
 			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil)
 			var saved []*sync_entity.SyncObject
 			captureSave(m, &saved)
-			m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 			item := projectItem("sync-b1", 0)
 			item.Kind = sync_entity.KindAgentBackend
@@ -583,10 +574,12 @@ func TestPush_GivenUnknownKind_ThenRejected(t *testing.T) {
 	convey.Convey("对象类型不属于同步组", t, func() {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
+		expectTx(m)
 		item := projectItem("sync-x", 0)
 		item.Kind = "llm_provider"
-		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
-		assert.Equal(t, code.SyncKindInvalid, errCode(t, err))
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
+		assert.NoError(t, err)
+		assert.Equal(t, PushRejectReasonKind, out.Results[0].Reason)
 	})
 }
 
@@ -594,11 +587,13 @@ func TestPush_GivenLocationWithoutProjectSyncID_ThenRejected(t *testing.T) {
 	convey.Convey("路径记录缺项目同步标识", t, func() {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
-		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
+		expectTx(m)
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", AgentredFingerprint: "fp-a",
 			Payload: []byte(`{"path":"/srv/a"}`),
 		}}})
-		assert.Equal(t, code.SyncKindInvalid, errCode(t, err))
+		assert.NoError(t, err)
+		assert.Equal(t, PushRejectReasonKind, out.Results[0].Reason)
 	})
 }
 
@@ -615,7 +610,6 @@ func TestPush_GivenMultipleItems_ThenVersionsStrictlyIncrease(t *testing.T) {
 		)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved).Times(2)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-a", 0), projectItem("sync-b", 0)}})
@@ -635,7 +629,6 @@ func TestPull_GivenCursor_ThenReturnsIncrementInVersionOrder(t *testing.T) {
 				{Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{"name":"a"}`, Version: 13, SourceDeviceID: 9},
 				{Kind: sync_entity.KindAgent, SyncID: "a1", Version: 14, SourceDeviceID: 9, DeletedAt: testNow},
 			}, nil)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Pull(ctx, PullInput{UserID: testUserID, DeviceID: testDeviceID, Cursor: 12})
 
@@ -656,7 +649,6 @@ func TestPull_GivenFullPage_ThenHasMoreAndCursorAdvances(t *testing.T) {
 				{Kind: sync_entity.KindProject, SyncID: "p1", Version: 1},
 				{Kind: sync_entity.KindProject, SyncID: "p2", Version: 2},
 			}, nil)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Pull(ctx, PullInput{UserID: testUserID, DeviceID: testDeviceID, Cursor: 0, Limit: 2})
 
@@ -686,7 +678,6 @@ func TestPull_GivenDeviceBeyondWindow_ThenStillAllowed(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		m.object.EXPECT().ListSince(gomock.Any(), testUserID, int64(0), DefaultPullLimit).Return(
 			[]*sync_entity.SyncObject{{Kind: sync_entity.KindProject, SyncID: "p1", Version: 1}}, nil)
-		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Pull(ctx, PullInput{UserID: testUserID, DeviceID: testDeviceID, Cursor: 0})
 

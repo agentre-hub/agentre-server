@@ -12,10 +12,23 @@ const (
 	PushStatusRejected = "rejected"
 )
 
-// PushRejectReasonDeleted 是唯一的单条拒绝原因：该对象在 server 上已是墓碑。
-// 删除不会被复活（R6），恢复动作因此明确失败（R5a），界面据此提供「按这份内容
-// 新建」——那是一个新的同步标识，走正常上行。
-const PushRejectReasonDeleted = "deleted"
+// 单条拒绝的原因。
+//
+// **凡是能拒掉一条的理由，都只拒那一条。** 整批拒是一个永久性的堵：桌面端整批
+// 失败时一行都不出队，下一轮再发同一批、再被同一条拒掉，那台机器的上行队列从此
+// 不动——连 R6 的删除也传不出去。校验不通过的行以 rejected 回报，上行端据此把它
+// 移出队列并记进「没能同步的改动」（R5）。
+const (
+	// PushRejectReasonDeleted 该对象在 server 上已是墓碑。删除不会被复活（R6），
+	// 恢复动作因此明确失败（R5a），界面据此提供「按这份内容新建」——那是一个新的
+	// 同步标识，走正常上行。
+	PushRejectReasonDeleted = "deleted"
+	// PushRejectReasonKind 对象类型不属于同步组、与该同步标识已有行的类型不符，
+	// 或缺少该类型必需的自然键。
+	PushRejectReasonKind = "kind_invalid"
+	// PushRejectReasonPayload 载荷过不了 sync_entity.ValidatePayload 的守卫。
+	PushRejectReasonPayload = "payload_rejected"
+)
 
 // PushItem 是一次上行里的一条改动。
 //
@@ -52,10 +65,14 @@ type PushItemResult struct {
 	Status  string
 	// Reason 只在 Status 为 rejected 时有值。
 	Reason string
-	// OverwrittenVersion / OverwrittenDeviceID 只在 Status 为 conflict 时有值：
-	// 被这次上行覆盖掉的是哪一版、来自哪台设备。
+	// OverwrittenVersion / OverwrittenDeviceID / OverwrittenPayload 只在 Status 为
+	// conflict 时有值：被这次上行覆盖掉的是哪一版、来自哪台设备、正文是什么。
+	//
+	// 正文必须由 server 带回去：上行端手上那一份是**覆盖别人的**那一份，它不持有
+	// 被覆盖掉的内容。R5 承诺的「追回被覆盖的那一版」只有这一条路。
 	OverwrittenVersion  int64
 	OverwrittenDeviceID int64
+	OverwrittenPayload  string
 	// MergedSyncID / MergedVersion / MergedDeviceID 只在 R4b 的自然键合并发生时
 	// 有值：落败的那一份的同步标识、版本与来源设备，它已在 server 落墓碑。
 	MergedSyncID   string

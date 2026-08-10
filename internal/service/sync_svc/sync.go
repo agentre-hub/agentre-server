@@ -85,26 +85,27 @@ func (s *syncSvc) Push(ctx context.Context, in PushInput) (*PushOutput, error) {
 		return nil, i18n.NewError(ctx, code.SyncResyncRequired)
 	}
 
-	// 先把整批校验完再开事务：载荷带了不该过机的东西时一行都不该落库，
-	// 也不该白白开一个注定回滚的事务。
-	for _, item := range in.Items {
-		if err := validateItem(ctx, item); err != nil {
-			return nil, err
-		}
-	}
-
 	out := &PushOutput{Results: make([]PushItemResult, 0, len(in.Items))}
 	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
 		out.Results = out.Results[:0]
 		for _, item := range in.Items {
+			// 校验不通过只拒这一条：整批拒会把上行端的队列永久堵死，见
+			// PushRejectReasonKind 一族常量的注释。
+			if reason := rejectReason(txCtx, item); reason != "" {
+				out.Results = append(out.Results, PushItemResult{
+					SyncID: item.SyncID, Kind: item.Kind,
+					Status: PushStatusRejected, Reason: reason,
+				})
+				continue
+			}
 			res, err := s.applyItem(txCtx, in.UserID, in.DeviceID, now, item)
 			if err != nil {
 				return err
 			}
 			out.Results = append(out.Results, *res)
 		}
-		return sync_repo.SyncState().TouchDeviceState(txCtx, in.UserID, in.DeviceID, now)
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -114,6 +115,10 @@ func (s *syncSvc) Push(ctx context.Context, in PushInput) (*PushOutput, error) {
 
 // beyondTombstoneWindow 判 R6a：没有 last_sync_at 记录 = 首次登录的设备，不算
 // 超窗口——把它拦下来只会让新设备第一次同步就卡住。
+//
+// last_sync_at 记的是「这台设备最近一次把增量**消费干净**的时刻」（见 Pull），
+// 不是「最近一次联系过」。两者的差别正是这条守卫的全部意义：卡在某一行落不了地
+// 的设备照样每 30 秒来一次，用「最近联系过」量，30 天窗口永远不会触发。
 func (s *syncSvc) beyondTombstoneWindow(ctx context.Context, userID, deviceID, now int64) (bool, error) {
 	st, err := sync_repo.SyncState().FindDeviceState(ctx, userID, deviceID)
 	if err != nil {
@@ -125,31 +130,27 @@ func (s *syncSvc) beyondTombstoneWindow(ctx context.Context, userID, deviceID, n
 	return now-st.LastSyncAt > TombstoneWindow.Milliseconds(), nil
 }
 
-func validateItem(ctx context.Context, item PushItem) error {
-	if !sync_entity.KindValid(item.Kind) {
-		return i18n.NewError(ctx, code.SyncKindInvalid)
-	}
-	if item.SyncID == "" {
-		return i18n.NewError(ctx, code.InvalidParameter)
+// rejectReason 报告这一条该不该被单独拒掉，空串 = 放行。
+func rejectReason(ctx context.Context, item PushItem) string {
+	if !sync_entity.KindValid(item.Kind) || item.SyncID == "" {
+		return PushRejectReasonKind
 	}
 	// 路径记录的账号内自然键是（项目同步标识, 指纹）；没有项目同步标识就没有自然键，
 	// R4b 的合并也就无从谈起。
 	//
 	// 墓碑不在此列：mergeLocationNaturalKey 对已删除的对象直接返回，删除本来就不参与
 	// 自然键合并；而桌面端的 buildPushItem 删除分支刻意不读本地行（行可能已经软删），
-	// 因此路径记录的墓碑上行本来就不带 project_sync_id。把这条守卫套到墓碑头上会整批
-	// 拒，而整批失败时桌面端一行都不出队——删一个带路径记录的项目就能把那台机器的
-	// 出站队列永久堵死（R6 传不出删除，连带堵掉 R3/R7 的一切上行）。
+	// 因此路径记录的墓碑上行本来就不带 project_sync_id。
 	if item.Kind == sync_entity.KindProjectLocation && item.ProjectSyncID == "" && !item.Deleted {
-		return i18n.NewError(ctx, code.SyncKindInvalid)
+		return PushRejectReasonKind
 	}
 	if err := sync_entity.ValidatePayload(item.Payload); err != nil {
 		// 载荷内容一律不进日志：里面有项目路径、prompt 与 EnvJSON。
 		logger.Ctx(ctx).Warn("sync payload rejected",
 			zap.String("kind", item.Kind), zap.String("sync_id", item.SyncID), zap.Error(err))
-		return i18n.NewError(ctx, code.SyncPayloadRejected)
+		return PushRejectReasonPayload
 	}
-	return nil
+	return ""
 }
 
 func (s *syncSvc) applyItem(
@@ -162,7 +163,9 @@ func (s *syncSvc) applyItem(
 	res := &PushItemResult{SyncID: item.SyncID, Kind: item.Kind, Status: PushStatusAccepted}
 	if existing != nil {
 		if existing.Kind != item.Kind {
-			return nil, i18n.NewError(ctx, code.SyncKindInvalid)
+			// 同一个同步标识换了类型：只拒这一条，同批其余的照常落库。
+			res.Status, res.Reason, res.Version = PushStatusRejected, PushRejectReasonKind, existing.Version
+			return res, nil
 		}
 		// R6：删除不会被复活。server 上已是墓碑时，任何非删除的上行都被拒——
 		// 一台持有旧副本的桌面端把它推上来就把删除撤销了。R5a 的「恢复一个已被
@@ -181,6 +184,8 @@ func (s *syncSvc) applyItem(
 			res.Status = PushStatusConflict
 			res.OverwrittenVersion = existing.Version
 			res.OverwrittenDeviceID = existing.SourceDeviceID
+			// 被覆盖掉的正文只在 server 手上，随应答带回去，R5 才追得回来。
+			res.OverwrittenPayload = existing.Payload
 		}
 	}
 
@@ -307,8 +312,18 @@ func (s *syncSvc) Pull(ctx context.Context, in PullInput) (*PullOutput, error) {
 		}
 	}
 	out.HasMore = len(rows) == limit
-	if err := sync_repo.SyncState().TouchDeviceState(ctx, in.UserID, in.DeviceID, s.now()); err != nil {
-		return nil, err
+
+	// R6a 的 30 天窗口只在设备**把增量消费干净**时刷新：这一页一行都没有，说明它
+	// 送上来的游标已经站在账号序列的头上，此刻它不可能漏掉任何墓碑。
+	//
+	// 反过来，只要还有没消费的行就不刷新——这正是要拦的那一类：某一行在它那边落不
+	// 了地，它每 30 秒来一次、每次拿回同一页，游标原地不动。用「最近联系过」量窗口
+	// 时它永远是新的，那台机器可以拿着任意陈旧的基版本把一个已被回收的删除推回来。
+	// 上行同理不刷新（见 Push）：只推不收的设备一样没有消费过任何东西。
+	if len(rows) == 0 {
+		if err := sync_repo.SyncState().TouchDeviceState(ctx, in.UserID, in.DeviceID, s.now()); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }
