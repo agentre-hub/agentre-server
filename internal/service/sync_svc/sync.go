@@ -134,7 +134,13 @@ func validateItem(ctx context.Context, item PushItem) error {
 	}
 	// 路径记录的账号内自然键是（项目同步标识, 指纹）；没有项目同步标识就没有自然键，
 	// R4b 的合并也就无从谈起。
-	if item.Kind == sync_entity.KindProjectLocation && item.ProjectSyncID == "" {
+	//
+	// 墓碑不在此列：mergeLocationNaturalKey 对已删除的对象直接返回，删除本来就不参与
+	// 自然键合并；而桌面端的 buildPushItem 删除分支刻意不读本地行（行可能已经软删），
+	// 因此路径记录的墓碑上行本来就不带 project_sync_id。把这条守卫套到墓碑头上会整批
+	// 拒，而整批失败时桌面端一行都不出队——删一个带路径记录的项目就能把那台机器的
+	// 出站队列永久堵死（R6 传不出删除，连带堵掉 R3/R7 的一切上行）。
+	if item.Kind == sync_entity.KindProjectLocation && item.ProjectSyncID == "" && !item.Deleted {
 		return i18n.NewError(ctx, code.SyncKindInvalid)
 	}
 	if err := sync_entity.ValidatePayload(item.Payload); err != nil {

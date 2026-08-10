@@ -376,6 +376,34 @@ func TestPush_GivenDeletedLocation_ThenNoNaturalKeyLookup(t *testing.T) {
 	})
 }
 
+// 墓碑没有自然键可言：桌面端的 buildPushItem 删除分支不读本地行（行可能已经软删），
+// 因此路径记录的墓碑上行**不带** project_sync_id。把「缺自然键」的守卫套到它头上会整批
+// 拒（30501/SyncKindInvalid），而整批失败时桌面端一行都不出队——删一个带路径记录的项目
+// 就把那台机器的出站队列永久堵死（R6 的删除传不出去，连带 R3/R7 的一切上行）。
+func TestPush_GivenDeletedLocationWithoutProjectSyncID_ThenAccepted(t *testing.T) {
+	convey.Convey("路径记录的墓碑不带项目同步标识", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		onlineDevice(m)
+		expectTx(m)
+		m.object.EXPECT().Find(gomock.Any(), testUserID, "loc-B").Return(&sync_entity.SyncObject{
+			ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", Version: 4,
+		}, nil)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
+		var saved []*sync_entity.SyncObject
+		captureSave(m, &saved)
+		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
+
+		// 桌面端 sync_svc.buildPushItem 的删除分支产出的正是这个形状。
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
+			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 4, Deleted: true,
+		}}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, PushStatusAccepted, out.Results[0].Status)
+		assert.Equal(t, testNow, saved[0].DeletedAt)
+	})
+}
+
 // R6a：距上次成功同步超过墓碑保留窗口的设备，上行一律被拒，必须先拉全量快照。
 func TestPush_GivenDeviceBeyondTombstoneWindow_ThenRejectedWithResyncRequired(t *testing.T) {
 	convey.Convey("设备离线超窗口", t, func() {
