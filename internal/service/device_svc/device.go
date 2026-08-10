@@ -440,6 +440,20 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 	return nil
 }
 
+// shortFingerprint 是设备显示名缺省时的回退：指纹的前 8 个**符文**。
+//
+// 按符文而不是按字节截：指纹由浏览器自己生成，端点只按 binding `min=8` 收，而
+// validator 的 min 数的正是符文 —— 八个多字节符文的指纹过得了校验，按字节切却会
+// 切在符文中间，落库的是一段非法 UTF-8，Postgres 直接以
+// `invalid byte sequence for encoding "UTF8"` 拒掉整条 INSERT。
+func shortFingerprint(fingerprint string) string {
+	runes := []rune(fingerprint)
+	if len(runes) <= 8 {
+		return fingerprint
+	}
+	return string(runes[:8])
+}
+
 func (s *deviceSvc) RegisterWebDevice(ctx context.Context, in RegisterWebDeviceInput) (*TokenOutput, error) {
 	// R2：被解除授权的浏览器不得靠重新注册把自己救回来。Upsert 的赋值列里含
 	// status，直接落库会把 revoked 行翻回 ACTIVE 并发一枚全新、不在黑名单里的
@@ -462,7 +476,7 @@ func (s *deviceSvc) RegisterWebDevice(ctx context.Context, in RegisterWebDeviceI
 	nowMs := time.Now().UnixMilli()
 	name := in.Name
 	if name == "" {
-		name = in.Fingerprint[:8]
+		name = shortFingerprint(in.Fingerprint)
 	}
 	d := &device_entity.Device{
 		UserID:      in.UserID,

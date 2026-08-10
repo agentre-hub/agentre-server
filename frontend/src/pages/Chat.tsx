@@ -77,7 +77,7 @@ function FollowedMachineResolver({
   ) => void;
 }) {
   const { client, relayState } = useRelayMachine(fingerprint);
-  const firedRef = useRef<string | null>(null);
+  const resolvedRef = useRef(false);
 
   useEffect(() => {
     const state =
@@ -90,10 +90,16 @@ function FollowedMachineResolver({
   }, [relayState, fingerprint, onState]);
 
   useEffect(() => {
-    if (relayState !== "connected" || !client) return;
-    // 一次连接解析一次；重连后（relayState 变了）再解析一次。
-    if (firedRef.current === relayState) return;
-    firedRef.current = relayState;
+    if (relayState !== "connected" || !client) {
+      // 掉线/重连中：清掉「本次连接已解析」的标记。断连期间那条对话可能跑完了、
+      // 也可能停下来等审批，连回来必须重新解析一次，否则页面一直挂着断线前那一刻
+      // 的状态。标记记的是「解析过没有」而不是状态字符串本身 —— 拿状态跟它自己比
+      // 恒成立（这个 effect 只在 connected 时走到这里），重连后一次也不会再解析。
+      resolvedRef.current = false;
+      return;
+    }
+    if (resolvedRef.current) return;
+    resolvedRef.current = true;
     const wanted = new Set(ids);
     client
       .request("runtime.session.list")

@@ -376,3 +376,63 @@ describe("对话页:行上的时间是最后活动时间", () => {
     ).toBeNull();
   });
 });
+
+// R13：这一页的每一行都靠 runtime.session.list 解析（标题 / 状态 / 等待输入 /
+// 最后活动时间）。机器掉线再回来时必须**重新**解析一次：断连期间那条对话可能跑完
+// 了、可能停下来等审批，而页面上还挂着断线前那一刻的状态——用户对着一个早就过时
+// 的「运行中」等下去。守卫必须按「这条连接解析过没有」判定，不能拿状态字符串跟
+// 它自己比（那个比较恒成立，重连后一次也不会再解析）。
+describe("对话页:重连后重新解析会话状态", () => {
+  it("connected → reconnecting → connected 会再发一次 runtime.session.list", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+          ],
+        };
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    const view = renderChat();
+
+    await screen.findByText("重构登录页");
+    await waitFor(() => expect(fakeClient.request).toHaveBeenCalledTimes(1));
+
+    // 掉线。
+    mockUseRelay.mockReturnValue({
+      ...connectedRelay(),
+      relayState: "reconnecting",
+    });
+    view.rerender(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route path="/chat" element={<Chat />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 连回来：必须重新解析一次，页面上的状态才不是断线前那一刻的。
+    mockUseRelay.mockReturnValue(connectedRelay());
+    view.rerender(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route path="/chat" element={<Chat />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(fakeClient.request).toHaveBeenCalledTimes(2));
+  });
+});

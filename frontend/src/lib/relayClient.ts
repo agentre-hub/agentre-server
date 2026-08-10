@@ -293,10 +293,18 @@ export class RelayClient {
       this.refill.add(sessionId);
       return running;
     }
+    const before = this.cursors.get(sessionId) ?? 0;
     const p = this.pullUntilCaughtUp(sessionId, origin).finally(() => {
       this.catchingUp.delete(sessionId);
-      // 这一串期间又出现过跳号:那一段还没补上,再补一轮(游标已推进,不会原地打转)。
-      if (this.refill.delete(sessionId)) {
+      const queued = this.refill.delete(sessionId);
+      // 这一串期间又出现过跳号:那一段还没补上,再补一轮。
+      //
+      // 但只在这一串**真的推动了游标**时才补:一条也没消费掉(daemon 读不出留存下界
+      // → OldestSeq 报 0,而日志老前缀已被回收,拉回来的这一页第一条就比 游标+1 大)
+      // 时,下一轮拉回来的还是同一页、还是一条也消费不掉 —— 不看进展就会一轮接一轮
+      // 重发同一条 pull,补齐原地打转、把 daemon 与中继一起打满。补不动就停在这里,
+      // 等下一条实时帧 / 下次重连再试(Go 侧 scheduleGapFill 的 filling 闸门同一纪律)。
+      if (queued && (this.cursors.get(sessionId) ?? 0) > before) {
         void this.catchUp(sessionId).catch(() => {
           // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
         });

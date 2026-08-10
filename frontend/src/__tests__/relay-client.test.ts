@@ -571,6 +571,85 @@ describe("中继客户端:跳号的实时帧不吞掉它前面的历史", () => 
     client.close();
   });
 
+  // 一串补齐一条也没消费掉时(daemon 读不出留存下界 → OldestSeq 报 0,而日志的老前缀
+  // 已经被回收:拉回来的这一页第一条就比 游标+1 大),再补一轮拉回来的还是同一页,还是
+  // 一条也消费不掉。「补完再补一轮」若不看这一串到底推没推动游标,就会一轮接一轮地
+  // 重发同一条 pull —— 补齐原地打转、把 daemon 与中继一起打满。补不动就停下,
+  // 等下一条实时帧 / 下次重连再试(Go 侧 scheduleGapFill 的 filling 闸门同一纪律)。
+  it("一串补齐没推动游标时不再自动补下一轮,不原地打转", async () => {
+    const client = makeClient({ reconnect: false });
+    const ws = await connectClient(client);
+
+    // 每条 pull 都答同一页:第一条 seq 5,而游标是 0、下界报 0(读不出来)。
+    // 上限 8 条之后不再作答,免得真的循环时测试挂死。
+    let pulls = 0;
+    const answered = new Set<string>();
+    const pump = (): void => {
+      for (const buf of ws.sent) {
+        const frame = JSON.parse(text.decode(buf)) as WireFrame;
+        const key = String(frame.id);
+        if (answered.has(key)) continue;
+        answered.add(key);
+        if (frame.method === "runtime.session.attach") {
+          ws.receive(
+            encode(
+              encodeFrame({
+                jsonrpc: "2.0",
+                id: frame.id,
+                result: {
+                  sessionId: 42,
+                  lifecycleState: "running",
+                  latestSeq: 9,
+                },
+              }),
+            ),
+          );
+        } else if (frame.method === "runtime.session.pull") {
+          pulls++;
+          if (pulls > 8) return;
+          ws.receive(
+            encode(
+              encodeFrame({
+                jsonrpc: "2.0",
+                id: frame.id,
+                result: {
+                  notifications: [
+                    {
+                      seq: 5,
+                      method: "runtime.event",
+                      params: {
+                        sessionId: 42,
+                        event: { kind: "text_delta", text: "tail" },
+                      },
+                    },
+                  ],
+                  cursor: 5,
+                  hasMore: false,
+                },
+              }),
+            ),
+          );
+        }
+      }
+    };
+
+    const catchUpP = client.catchUp(42);
+    for (let i = 0; i < 12; i++) {
+      pump();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    await catchUpP;
+    for (let i = 0; i < 12; i++) {
+      pump();
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+
+    expect(pulls).toBe(1);
+    client.close();
+  });
+
   // 本客户端不认识的通知(新版 daemon 加的第六类)照样占掉它那一格 seq。不占的话,
   // 它后面的每一条已知通知都会被判成跳号 → 触发补洞 → 拉回同一页 → 又卡在这条上,
   // 补齐原地打转,后面的转录永远交付不出去(Go 侧 skipSeq 同一条纪律)。

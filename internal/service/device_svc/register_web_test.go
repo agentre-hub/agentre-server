@@ -3,6 +3,7 @@ package device_svc
 import (
 	"context"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
@@ -136,6 +137,32 @@ func TestRegisterWebDevice(t *testing.T) {
 		mock.ExpectCommit()
 
 		_, err := svc.RegisterWebDevice(ctx, RegisterWebDeviceInput{UserID: 7, Fingerprint: "fp-web-abc"})
+		require.NoError(t, err)
+	})
+
+	// 指纹由浏览器自己生成，服务端只按 binding `min=8,max=128` 收 —— 而 validator 的
+	// min 数的是**符文**，回退名却按字节切。八个三字节符文的指纹（24 字节）因此过得了
+	// 校验，`[:8]` 却切在第三个符文中间，落库的是一段非法 UTF-8：Postgres 直接以
+	// `invalid byte sequence for encoding "UTF8"` 拒掉这条 INSERT，用户拿到 500，
+	// 浏览器一台设备也换不到。回退名必须按符文截。
+	t.Run("name 缺省且指纹是多字节符文 → 按符文截,不切出非法 UTF-8", func(t *testing.T) {
+		ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
+		const fingerprint = "指纹指纹指纹指纹" // 8 个符文 / 24 字节：过得了 min=8
+		mD.EXPECT().FindByFingerprint(gomock.Any(), int64(7), fingerprint).Return(nil, nil)
+		mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, d *device_entity.Device) error {
+				assert.True(t, utf8.ValidString(d.Name),
+					"回退名必须是合法 UTF-8，否则这条 INSERT 会被 Postgres 拒掉")
+				assert.Equal(t, "指纹指纹指纹指纹", d.Name)
+				d.ID = 7
+				return nil
+			},
+		)
+		mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		mock.ExpectBegin()
+		mock.ExpectCommit()
+
+		_, err := svc.RegisterWebDevice(ctx, RegisterWebDeviceInput{UserID: 7, Fingerprint: fingerprint})
 		require.NoError(t, err)
 	})
 }
