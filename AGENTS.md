@@ -6,7 +6,7 @@ Agent guidance for `agentre-server`.
 
 AgentRe Server — SaaS backend. Accounts + RFC 8628 Device Flow.
 
-Go 1.26 on the [cago](https://github.com/cago-frame/cago) framework, PostgreSQL 16 + Redis 7,
+Go 1.26 on the [cago](https://github.com/cago-frame/cago) framework, PostgreSQL 18 + Redis 7,
 with a React 19 + Vite + Tailwind + shadcn frontend embedded into the binary via `//go:embed`.
 Module path is the bare `agentre-server` (not a GitHub path — deliberate, it is not imported by anything).
 

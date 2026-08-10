@@ -26,8 +26,7 @@
   },
   "overview": {
     "title": "Agent",
-    "subtitle": "账号下共 {{count}} 个 · 不按设备重复",
-    "orderHint": "执行目标按顺序取第一个可用的",
+    "subtitle": "账号中的 Agent：{{count}} 个",
     "currentTarget": "当前落到 {{device}}",
     "noAvailableTarget": "没有可用的执行机器",
     "thisDevice": "本机",
@@ -51,7 +50,6 @@
   },
   "login": {
     "title": "登录 AgentRe",
-    "description": "使用 GitHub 账号继续。桌面应用与 agentred 守护进程都通过它完成授权。",
     "github": "使用 GitHub 登录",
     "userCodeLabel": "登录后继续授权设备",
     "failureTitle": "登录未完成",
@@ -72,11 +70,10 @@
       "description": "桌面应用或终端上会显示一串 6 位代码，把它填在这里。",
       "groupLabel": "设备码",
       "boxLabel": "第 {{position}} 位，共 6 位",
-      "hint": "不区分大小写，代码中不含 0、O、1、I",
       "submit": "继续",
       "footnote": "没有看到代码？回到设备上重新发起授权。",
       "errors": {
-        "incomplete": "请填满 6 位代码；代码中不含 0、O、1、I。",
+        "incomplete": "请填满 6 位代码。",
         "invalid": "这个代码不存在或已被使用。请核对设备上显示的 6 位代码。"
       }
     },
@@ -106,17 +103,16 @@
     },
     "deniedScreen": {
       "title": "已拒绝授权",
-      "body": "这台设备不会拿到任何访问权限。可以直接关闭页面。",
       "close": "关闭页面"
     },
     "expiredScreen": {
       "title": "授权请求已过期",
-      "body": "设备码有效期有限。回到设备上重新发起授权，然后输入新的代码。",
+      "body": "回到设备上重新发起授权，然后输入新的代码。",
       "retry": "重新输入代码"
     },
     "manage": {
       "title": "设备管理",
-      "empty": "还没有任何设备。你授权过的设备会显示在这里。",
+      "empty": "还没有任何设备。",
       "loadError": "无法加载你的设备列表，请重试。",
       "colLastActive": "最近活跃",
       "colStatus": "在线态",
@@ -135,8 +131,6 @@
       "runnableAgents": "能跑的 Agent",
       "rankLabel": "第 {{rank}} 档",
       "projects": "项目",
-      "projectsNote": "只显示是否配置 · 不显示路径",
-      "agentsAccountNote": "Agent 属于账号、不属于设备 —— 在总览查看",
       "configured": "已配置",
       "notConfigured": "未配置",
       "noProjectsReported": "这台设备还没有上报任何项目。",

@@ -15,18 +15,25 @@ import (
 )
 
 type Device struct {
-	publicKey string
+	publicKeys *api.PublicKeyResponse
 }
 
 func NewDevice() *Device { return &Device{} }
 
 func NewDeviceWithPublicKey(publicKey string) *Device {
-	return &Device{publicKey: publicKey}
+	return NewDeviceWithPublicKeys("legacy", map[string]string{"legacy": publicKey}, 0)
+}
+
+func NewDeviceWithPublicKeys(currentKID string, keys map[string]string, maxTokenLifetimeSeconds int64) *Device {
+	return &Device{publicKeys: &api.PublicKeyResponse{
+		Version: 1, CurrentKID: currentKID, Keys: keys, PublicKey: keys[currentKID],
+		MaxTokenLifetimeSeconds: maxTokenLifetimeSeconds,
+	}}
 }
 
 // PublicKey 返回供 agentred 离线验签的 RS256 公钥。
 func (d *Device) PublicKey(c *gin.Context, _ *api.PublicKeyRequest) {
-	c.JSON(http.StatusOK, &api.PublicKeyResponse{PublicKey: d.publicKey})
+	c.JSON(http.StatusOK, d.publicKeys)
 }
 
 // ---- Device Flow ----

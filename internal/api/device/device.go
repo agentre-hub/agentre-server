@@ -9,7 +9,11 @@ type PublicKeyRequest struct {
 }
 
 type PublicKeyResponse struct {
-	PublicKey string `json:"public_key"`
+	Version                 int               `json:"version"`
+	CurrentKID              string            `json:"current_kid"`
+	Keys                    map[string]string `json:"keys"`
+	PublicKey               string            `json:"public_key"`
+	MaxTokenLifetimeSeconds int64             `json:"max_token_lifetime_seconds"`
 }
 
 // ---------- Device Flow ----------

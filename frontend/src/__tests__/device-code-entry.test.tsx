@@ -199,13 +199,10 @@ describe("设备码输入：中文文案照画板", () => {
     await i18n.changeLanguage("zh-CN");
   });
 
-  it("标题、提示行与脚注用画板上的中文", () => {
+  it("标题与脚注用画板上的中文", () => {
     renderEntry();
     expect(
       screen.getByRole("heading", { level: 1, name: "输入设备码" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("不区分大小写，代码中不含 0、O、1、I"),
     ).toBeTruthy();
     expect(
       screen.getByText("没有看到代码？回到设备上重新发起授权。"),

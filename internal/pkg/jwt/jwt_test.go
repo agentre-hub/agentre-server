@@ -1,8 +1,12 @@
 package jwt_test
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"testing"
@@ -15,6 +19,85 @@ import (
 	hubjwt "agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/pkg/jwt/testkeys"
 )
+
+func TestKeyRing_GivenActiveAndRetiredKeys_WhenSigningAndVerifying_ThenUsesTokenKID(t *testing.T) {
+	oldPrivate, oldPublic := rsaKeyPair(t)
+	currentPrivate, currentPublic := rsaKeyPair(t)
+	signer, err := hubjwt.NewKeyRing("current", []hubjwt.Key{
+		{ID: "old", PublicPEM: oldPublic},
+		{ID: "current", PrivatePEM: currentPrivate, PublicPEM: currentPublic},
+	}, "agentre-server", "agentre", 15*time.Minute)
+	require.NoError(t, err)
+
+	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "agentred"}, 15*time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, "current", tokenKID(t, token))
+	_, err = signer.Verify(token)
+	require.NoError(t, err)
+
+	oldSigner, err := hubjwt.NewKeyRing("old", []hubjwt.Key{
+		{ID: "old", PrivatePEM: oldPrivate, PublicPEM: oldPublic},
+	}, "agentre-server", "agentre", 15*time.Minute)
+	require.NoError(t, err)
+	oldToken, _, err := oldSigner.Sign(hubjwt.Claims{UID: 7, DID: 42}, 15*time.Minute)
+	require.NoError(t, err)
+	_, err = signer.Verify(oldToken)
+	require.NoError(t, err, "只验不签的旧 key 在正常轮换窗口内仍应接受")
+}
+
+func TestKeyRing_GivenOverlongOrEmergencyRetiredToken_WhenVerifying_ThenRejects(t *testing.T) {
+	oldPrivate, oldPublic := rsaKeyPair(t)
+	currentPrivate, currentPublic := rsaKeyPair(t)
+	issuer := func(active string, keys []hubjwt.Key, maxLifetime time.Duration) *hubjwt.Signer {
+		t.Helper()
+		signer, err := hubjwt.NewKeyRing(active, keys, "agentre-server", "agentre", maxLifetime)
+		require.NoError(t, err)
+		return signer
+	}
+
+	oldSigner := issuer("old", []hubjwt.Key{{
+		ID: "old", PrivatePEM: oldPrivate, PublicPEM: oldPublic,
+	}}, time.Hour)
+	overlong, _, err := oldSigner.Sign(hubjwt.Claims{UID: 7, DID: 42}, time.Hour)
+	require.NoError(t, err)
+
+	rotating := issuer("current", []hubjwt.Key{
+		{ID: "old", PublicPEM: oldPublic},
+		{ID: "current", PrivatePEM: currentPrivate, PublicPEM: currentPublic},
+	}, 15*time.Minute)
+	_, err = rotating.Verify(overlong)
+	require.ErrorContains(t, err, "maximum lifetime")
+
+	emergencyRetired := issuer("current", []hubjwt.Key{
+		{ID: "current", PrivatePEM: currentPrivate, PublicPEM: currentPublic},
+	}, 15*time.Minute)
+	_, err = emergencyRetired.Verify(overlong)
+	require.ErrorContains(t, err, "unknown or retired kid")
+}
+
+func rsaKeyPair(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	privateDER := x509.MarshalPKCS1PrivateKey(privateKey)
+	publicDER, err := x509.MarshalPKIXPublicKey(&privateKey.PublicKey)
+	require.NoError(t, err)
+	return pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: privateDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: publicDER})
+}
+
+func tokenKID(t *testing.T, token string) string {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	require.Len(t, parts, 3)
+	headerJSON, err := base64.RawURLEncoding.DecodeString(parts[0])
+	require.NoError(t, err)
+	var header struct {
+		KID string `json:"kid"`
+	}
+	require.NoError(t, json.Unmarshal(headerJSON, &header))
+	return header.KID
+}
 
 func newSigner(t *testing.T) *hubjwt.Signer {
 	s, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")

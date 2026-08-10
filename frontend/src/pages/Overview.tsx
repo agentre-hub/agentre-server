@@ -197,10 +197,6 @@ export default function Overview() {
               <span className="text-xs text-subtle-foreground">
                 {t("overview.subtitle", { count: agents?.length ?? 0 })}
               </span>
-              <span className="flex-1" />
-              <span className="text-xs text-subtle-foreground">
-                {t("overview.orderHint")}
-              </span>
             </CardHeader>
             <CardContent className="p-0">
               {agents?.map((agent) => (

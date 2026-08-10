@@ -1,7 +1,6 @@
 package usercode
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -56,5 +55,4 @@ func TestNormalize(t *testing.T) {
 			assert.Equal(t, c.expected, got, "in=%q", c.in)
 		}
 	}
-	_ = strings.Builder{}
 }

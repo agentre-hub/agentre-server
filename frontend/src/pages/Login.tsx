@@ -65,12 +65,6 @@ export default function Login() {
           {t("login.title")}
         </h1>
 
-        {!showError && (
-          <p className="text-sm text-muted-foreground">
-            {t("login.description")}
-          </p>
-        )}
-
         {userCode && !showError && (
           <div className="flex items-start gap-3 rounded-md bg-primary-soft p-3.5 text-primary-text">
             <Laptop className="mt-0.5 h-4 w-4 flex-shrink-0" />
