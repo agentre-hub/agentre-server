@@ -102,6 +102,29 @@ func (d *Device) Refresh(c *gin.Context, req *api.TokenRefreshRequest) (*api.Tok
 	}, nil
 }
 
+// RegisterWeb 让已登录的浏览器以持久化指纹换取一台 kind=web 设备与设备 JWT（R1）。
+// 走 SessionAuth+CSRF 组：未登录请求在中间件就被拒绝，不会到这里、也不产生设备行。
+func (d *Device) RegisterWeb(c *gin.Context, req *api.DeviceRegisterRequest) (*api.DeviceRegisterResponse, error) {
+	uid, _ := c.Get("user_id")
+	userID, _ := uid.(int64)
+	if userID == 0 {
+		return nil, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
+	}
+	ctx := device_svc.WithClientInfo(c.Request.Context(), c.ClientIP(), c.GetHeader("User-Agent"))
+	out, err := device_svc.Default().RegisterWebDevice(ctx, device_svc.RegisterWebDeviceInput{
+		UserID: userID, Fingerprint: req.Fingerprint,
+		Platform: req.Platform, Version: req.Version, Name: req.Name,
+	})
+	if err != nil {
+		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
+	}
+	return &api.DeviceRegisterResponse{
+		AccessToken: out.AccessToken, TokenType: "Bearer",
+		ExpiresIn: out.ExpiresIn, RefreshToken: out.RefreshToken,
+		RefreshExpiresIn: out.RefreshExpiresIn, DeviceID: out.DeviceID, JTI: out.JTI,
+	}, nil
+}
+
 // Revoke 撤销一台设备的凭据。
 //
 // 设备 JWT 调用方（device_id 非 0）只能撤销自己；浏览器 session 调用方

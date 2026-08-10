@@ -38,6 +38,7 @@ type DeviceSvc interface {
 	Deny(ctx context.Context, userCode string) error
 	ExchangeToken(ctx context.Context, deviceCode string) (*TokenOutput, error)
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
+	RegisterWebDevice(ctx context.Context, in RegisterWebDeviceInput) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
 	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
@@ -424,6 +425,80 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 		return newOAuthErr(ErrUserCodeInvalid, "user_code not found or already settled")
 	}
 	return nil
+}
+
+func (s *deviceSvc) RegisterWebDevice(ctx context.Context, in RegisterWebDeviceInput) (*TokenOutput, error) {
+	nowMs := time.Now().UnixMilli()
+	name := in.Name
+	if name == "" {
+		name = in.Fingerprint[:8]
+	}
+	d := &device_entity.Device{
+		UserID:      in.UserID,
+		Name:        name,
+		Kind:        device_entity.KindWeb,
+		Platform:    in.Platform,
+		Version:     in.Version,
+		Fingerprint: in.Fingerprint,
+		LastSeenAt:  nowMs,
+		Status:      1, // consts.ACTIVE
+		Createtime:  nowMs,
+		Updatetime:  nowMs,
+	}
+
+	out := &TokenOutput{}
+	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := db.WithContextDB(ctx, tx)
+
+		// 按 (user_id, fingerprint) 幂等：同一个浏览器重复请求时 Upsert 命中既有行
+		// 并 RETURNING 回填原 id，不新增设备行（R1 / 决策 6）。
+		if err := device_repo.Device().Upsert(txCtx, d); err != nil {
+			return err
+		}
+
+		access, jti, err := s.signer.Sign(jwt.Claims{
+			UID: in.UserID, DID: d.ID, Kind: d.Kind,
+		}, s.cfg.AccessTTL)
+		if err != nil {
+			return err
+		}
+
+		// 与 ExchangeToken 共用同一套落库形状（设备行 + 短效 access + 长效 refresh），
+		// 因此解除授权也走同一套既有机制：Revoke 会把该设备已签发 access token 的
+		// jti 全部拉黑，让在线设备的设备 JWT 立即失效、中继连接被拒（R2）。
+		refreshPlain, err := randomBase32(32)
+		if err != nil {
+			return err
+		}
+		hash := sha256Hex(refreshPlain)
+		ip, ua := clientInfoFromCtx(ctx)
+		token := &device_token_entity.DeviceToken{
+			DeviceID:         d.ID,
+			RefreshTokenHash: hash,
+			AccessJTI:        jti,
+			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
+			UserAgent:        ua,
+			IP:               ip,
+			Createtime:       nowMs,
+		}
+		if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
+			return err
+		}
+
+		*out = TokenOutput{
+			AccessToken:      access,
+			RefreshToken:     refreshPlain,
+			ExpiresIn:        int(s.cfg.AccessTTL / time.Second),
+			RefreshExpiresIn: int(s.cfg.RefreshTTL / time.Second),
+			DeviceID:         d.ID,
+			JTI:              jti,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {

@@ -63,6 +63,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		deviceCtr.Pending,
 		deviceCtr.Approve,
 		deviceCtr.Deny,
+		// R1：已登录浏览器按持久化指纹换取 kind=web 设备身份。
+		deviceCtr.RegisterWeb,
 	)
 
 	// session 或 device JWT 都可以
