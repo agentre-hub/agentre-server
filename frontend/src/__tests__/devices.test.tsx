@@ -95,7 +95,10 @@ describe("device page design alignment", () => {
     await screen.findByText("nuc-01");
 
     // Cnt = 设备总数（font-mono，text-subtle-foreground）
-    expect(screen.getByTestId("devices-count").textContent).toBe("2");
+    const cnt = screen.getByTestId("devices-count");
+    expect(cnt.textContent).toBe("2");
+    // 裸数字必须带 aria-label（设计文档：Cnt 一律 aria-label'd，SR 不能只听到「2」）。
+    expect(cnt.getAttribute("aria-label")).toBe("2 devices");
     // Fresh：agentred 在线 → 桌面端已连接
     expect(screen.getByText("Desktop connected")).toBeTruthy();
   });

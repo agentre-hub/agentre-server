@@ -506,6 +506,9 @@ export default function Devices() {
           {deviceCount !== null && (
             <span
               data-testid="devices-count"
+              aria-label={t("device.manage.countLabel", {
+                count: deviceCount,
+              })}
               className="font-mono text-xs text-subtle-foreground"
             >
               {deviceCount}

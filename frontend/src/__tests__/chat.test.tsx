@@ -649,6 +649,9 @@ describe("对话页:T6 会话列表 UX(最近 / 筛选 / 键盘导航 / 右键�
 
     await screen.findAllByText("重构登录页");
     const nav = screen.getByTestId("chat-list-nav");
+    // 每次移动选中都要把目标行滚进视口（jsdom 不实现 scrollIntoView，先垫掉）。
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
     nav.focus();
     // 第一次 ↓:选中「最近」区第一条(最活跃的那条)。
     fireEvent.keyDown(nav, { key: "ArrowDown" });
@@ -658,6 +661,46 @@ describe("对话页:T6 会话列表 UX(最近 / 筛选 / 键盘导航 / 右键�
     // Enter:打开第二条(= /devices/1/sessions/43)。
     fireEvent.keyDown(nav, { key: "Enter" });
     expect(await screen.findByTestId("nav-target")).toBeTruthy();
+  });
+
+  it("↑↓ 键盘导航把选中行滚进视口(长列表不把高亮移出可视区)", async () => {
+    const s1 = {
+      ...summary,
+      sessionId: 42,
+      title: "重构登录页",
+      updatedAt: 1754800000000,
+    };
+    const s2 = {
+      ...summary,
+      sessionId: 43,
+      title: "修 bug",
+      updatedAt: 1754700000000,
+    };
+    stubChat(
+      [
+        { fp: "fp-1", sid: 42, followedAt: 1 },
+        { fp: "fp-1", sid: 43, followedAt: 1 },
+      ],
+      [s1, s2],
+    );
+    renderChat();
+
+    await screen.findAllByText("重构登录页");
+    const nav = screen.getByTestId("chat-list-nav");
+    const scrollSpy = vi.fn();
+    Element.prototype.scrollIntoView = scrollSpy;
+    nav.focus();
+
+    // 两次 ↓ 分别把「最近」区两条选中行滚进视口（block: nearest 不跳动）。
+    fireEvent.keyDown(nav, { key: "ArrowDown" });
+    expect(scrollSpy).toHaveBeenLastCalledWith({ block: "nearest" });
+    const firstTarget = document.querySelector('[aria-current="true"]');
+    fireEvent.keyDown(nav, { key: "ArrowDown" });
+    expect(scrollSpy).toHaveBeenLastCalledWith({ block: "nearest" });
+    const secondTarget = document.querySelector('[aria-current="true"]');
+    // 两次滚进的是同一行容器里的不同行(第二次的目标行确实现身)。
+    expect(secondTarget).not.toBe(firstTarget);
+    expect(secondTarget?.getAttribute("data-nav-target")).toBeTruthy();
   });
 
   it("会话行右键菜单只放真实后端动作(新标签打开/取消关注),不伪造改名删除", async () => {
@@ -710,5 +753,27 @@ describe("对话页:T6 会话列表 UX(最近 / 筛选 / 键盘导航 / 右键�
     expect(within(menu).getByText("Remove")).toBeTruthy();
     expect(within(menu).queryByText("Open in new tab")).toBeNull();
     expect(within(menu).queryByText("Unfollow")).toBeNull();
+  });
+
+  it("右键菜单是可访问菜单:打开即焦点入首项,↑↓ 在项间移动,Escape 关闭", async () => {
+    stubChat([{ fp: "fp-1", sid: 42, followedAt: 1 }], [summary]);
+    renderChat();
+
+    const title = (await screen.findAllByText("重构登录页"))[0];
+    fireEvent.contextMenu(title);
+    const menu = screen.getByRole("menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.length).toBe(2);
+
+    // 打开即把焦点送进菜单首项(键盘/读屏用户不必再 Tab 一圈)。
+    expect(document.activeElement).toBe(items[0]);
+    // ↑↓ 在菜单项之间移动(不把事件漏给列表的选中逻辑)。
+    fireEvent.keyDown(items[0], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(items[1], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(items[0]);
+    // Escape 关闭菜单。
+    fireEvent.keyDown(items[0], { key: "Escape" });
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

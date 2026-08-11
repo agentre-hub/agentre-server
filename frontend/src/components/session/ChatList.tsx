@@ -208,6 +208,7 @@ function SessionRow({
         // T6：↑↓ 键盘导航的「选中」高亮。
         selected && "bg-primary-soft/40",
       )}
+      data-nav-target={row.key}
       aria-current={selected ? "true" : undefined}
       onContextMenu={(e) => onMenu(e, sessionPath(row.deviceId, row.sessionId))}
     >
@@ -322,6 +323,7 @@ function OfflineRow({
         isMobile && "min-h-11 py-3",
         selected && "bg-primary-soft/40",
       )}
+      data-nav-target={row.key}
       aria-current={selected ? "true" : undefined}
       onContextMenu={(e) => onMenu(e, sessionPath(row.deviceId, row.sessionId))}
     >
@@ -443,6 +445,42 @@ function RowContextMenu({
     return () => document.removeEventListener("mousedown", onDown);
   }, [onClose]);
 
+  // 打开 / 换目标时把焦点送进菜单：aria 菜单模式要求键盘/读屏用户不用再 Tab 一圈。
+  useEffect(() => {
+    ref.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+  }, [menu]);
+
+  // 菜单内的 ↑↓/Home/End 在项间移动焦点，Escape 关闭；stopPropagation 防止
+  // 事件漏给列表容器的 ↑↓ 选中逻辑（菜单和列表是同一个键盘祖先）。
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    const items = Array.from(
+      ref.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ??
+        [],
+    );
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onClose();
+      return;
+    }
+    if (items.length === 0) return;
+    let idx = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (idx === -1) idx = e.key === "ArrowDown" ? -1 : items.length;
+      const dir = e.key === "ArrowDown" ? 1 : -1;
+      items[(idx + dir + items.length) % items.length]?.focus();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      e.stopPropagation();
+      items[0]?.focus();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      e.stopPropagation();
+      items[items.length - 1]?.focus();
+    }
+  };
+
   const items =
     menu.kind === "invalid"
       ? [{ key: "remove", label: t("session.ux.menu.removeInvalid") }]
@@ -459,13 +497,14 @@ function RowContextMenu({
       data-testid="row-context-menu"
       className="fixed z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 shadow-overlay"
       style={{ top: Math.max(0, y), left: Math.max(0, x) }}
+      onKeyDown={handleKeyDown}
     >
       {items.map((it) => (
         <button
           key={it.key}
           type="button"
           role="menuitem"
-          className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[13px] text-popover-foreground transition-colors hover:bg-accent"
+          className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[13px] text-popover-foreground transition-colors outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50"
           onClick={() =>
             onAction(
               menu.kind,
@@ -501,6 +540,8 @@ export default function ChatList({
   const [filter, setFilter] = useState<SessionFilter>("all");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuTarget | null>(null);
+  // ↑↓ 键盘导航的目标行都在这个容器里；移动选中后把该行滚进视口。
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // 决策 12：桌面按 Agent 分组、移动按状态分组。
   const rendered = isMobile ? regroupByStatus(groups, t) : groups;
@@ -576,6 +617,11 @@ export default function ChatList({
             : navIndex;
         const next = Math.min(navTargets.length - 1, Math.max(0, base + dir));
         setSelectedKey(navTargets[next].key);
+        // 选中行可能落在可视区外（长列表）：把高亮滚进视口，
+        // block: nearest 保证不做无谓的整页跳动。
+        containerRef.current
+          ?.querySelector(`[data-nav-target="${navTargets[next].key}"]`)
+          ?.scrollIntoView({ block: "nearest" });
       } else if (e.key === "Enter") {
         const target = navTargets.find((x) => x.key === selectedKey);
         if (target) navigate(target.path);
@@ -630,6 +676,7 @@ export default function ChatList({
 
   return (
     <div
+      ref={containerRef}
       data-testid="chat-list-nav"
       tabIndex={isMobile ? undefined : 0}
       onKeyDown={handleKeyDown}

@@ -181,6 +181,7 @@
       "noRunnableAgents": "No agents can run on this device yet.",
       "detailLoadError": "Could not load this device's details. Please try again.",
       "sessions": "Conversations",
+      "countLabel": "{{count}} devices",
       "sessionCount": "{{count}} conversations",
       "sessionWaiting": "{{count}} waiting for you",
       "viewSessions": "View this machine's conversations",
