@@ -5,7 +5,10 @@ import DeviceSuccess from "./pages/DeviceSuccess";
 import DeviceDenied from "./pages/DeviceDenied";
 import DeviceExpired from "./pages/DeviceExpired";
 import Devices from "./pages/Devices";
+import DeviceSessions from "./pages/DeviceSessions";
+import SessionDetail from "./pages/SessionDetail";
 import Overview from "./pages/Overview";
+import Chat from "./pages/Chat";
 import WorkspaceComingSoon from "./pages/WorkspaceComingSoon";
 import NotFound from "./pages/NotFound";
 import ComingSoon from "./pages/ComingSoon";
@@ -34,6 +37,22 @@ export default function App() {
           }
         />
         <Route
+          path="/devices/:deviceId/sessions"
+          element={
+            <RequireAuth>
+              <DeviceSessions />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/devices/:deviceId/sessions/:sessionId"
+          element={
+            <RequireAuth>
+              <SessionDetail />
+            </RequireAuth>
+          }
+        />
+        <Route
           path="/overview"
           element={
             <RequireAuth>
@@ -45,7 +64,7 @@ export default function App() {
           path="/chat"
           element={
             <RequireAuth>
-              <WorkspaceComingSoon bodyKey="workspaceComingSoon.chatBody" />
+              <Chat />
             </RequireAuth>
           }
         />

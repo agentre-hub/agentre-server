@@ -169,6 +169,16 @@ func TestPrepareDaemonRejectsAnythingButThisAccountsActiveAgentred(t *testing.T)
 		require.ErrorIs(t, err, ErrDaemonForbidden)
 	})
 
+	t.Run("kind=web 无法登记为可寻址目标（R3 守卫断言）", func(t *testing.T) {
+		svc, _, _ := newRelayForTest(t, fakeForwarder{})
+		// 浏览器与桌面端一样是中继上的纯出站调用方：持有有效设备 JWT 只能连
+		// /v1/relay/client，绝不能把自己登记成可被寻址的目标（也不能被派活）。
+		// 这条由 PrepareDaemon 的既有 kind 判定执行——同样在读库之前就被拒，
+		// 连 Find 都不该发生（devices mock 没有 EXPECT）。
+		_, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindWeb)
+		require.ErrorIs(t, err, ErrDaemonForbidden)
+	})
+
 	t.Run("deviceID 属于别的账号", func(t *testing.T) {
 		svc, _, devices := newRelayForTest(t, fakeForwarder{})
 		other := activeDaemon()

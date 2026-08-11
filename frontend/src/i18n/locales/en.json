@@ -18,7 +18,10 @@
     "overview": "Overview",
     "chat": "Chat",
     "devices": "Devices",
-    "audit": "Audit"
+    "audit": "Audit",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu",
+    "drawer": "Menu"
   },
   "workspaceComingSoon": {
     "chatBody": "Starting a conversation from the browser is not available yet.",
@@ -135,12 +138,123 @@
       "notConfigured": "Not configured",
       "noProjectsReported": "No projects reported from this device yet.",
       "noRunnableAgents": "No agents can run on this device yet.",
-      "detailLoadError": "Could not load this device's details. Please try again."
+      "detailLoadError": "Could not load this device's details. Please try again.",
+      "sessions": "Conversations",
+      "sessionCount": "{{count}} conversations",
+      "sessionWaiting": "{{count}} waiting for you",
+      "viewSessions": "View this machine's conversations",
+      "offlineNotEnterable": "Offline — conversations are unavailable."
     }
   },
   "notFound": {
     "code": "404",
     "title": "Page not found",
     "body": "This link may be broken, or the address is mistyped."
+  },
+  "session": {
+    "status": {
+      "connecting": "Connecting…",
+      "reconnecting": "Connection interrupted — reconnecting…",
+      "lost": "Connection lost. Reconnecting automatically.",
+      "machineOffline": "This machine is offline.",
+      "machineOfflineWithTime": "This machine is offline — last seen {{time}}.",
+      "revoked": "This browser has been revoked. Please sign in again.",
+      "loggedOut": "You have been signed out. Please sign in again."
+    },
+    "relogin": "Sign in again",
+    "sendFailed": "That message could not be sent. Your draft is kept — try again.",
+    "needsUpgrade": "This machine is running an older agentred: conversations show reduced detail, and you cannot send new messages from here. Upgrade agentred on that machine to use it from the browser.",
+    "breadcrumb": {
+      "devices": "Devices",
+      "switchMachine": "Switch machine",
+      "online": "Online",
+      "offline": "Offline",
+      "count": "{{count}} conversations",
+      "back": "Back"
+    },
+    "list": {
+      "empty": "No conversations on this machine yet.",
+      "unnamedGroup": "Unnamed",
+      "running": "Running",
+      "idle": "Idle",
+      "interrupted": "Interrupted",
+      "waiting": "Waiting for your input",
+      "legacy": "{{cwd}} · {{backend}} · {{status}}",
+      "group": {
+        "waiting": "Waiting for you",
+        "running": "Running",
+        "interrupted": "Interrupted",
+        "others": "Others"
+      }
+    },
+    "transcript": {
+      "loading": "Loading transcript…",
+      "empty": "No messages yet.",
+      "inputPlaceholder": "Send a message…",
+      "send": "Send",
+      "you": "You",
+      "assistant": "Assistant",
+      "tool": "Tool",
+      "toolResult": "Result",
+      "thinking": "Thinking…",
+      "error": "Error",
+      "unknownEvent": "Unknown event",
+      "waiting": "Waiting for your input…",
+      "fromDevice": "From {{device}}"
+    },
+    "decision": {
+      "approveTool": "Approve {{tool}}",
+      "allow": "Allow",
+      "alwaysAllow": "Always allow in this conversation",
+      "deny": "Deny",
+      "denyReason": "Reason (optional)",
+      "askQuestion": "Question",
+      "submit": "Submit",
+      "skip": "Skip",
+      "alreadyHandled": "This request has already been handled.",
+      "submitFailed": "That decision could not be submitted. Nothing was sent — try again."
+    }
+  },
+  "chat": {
+    "title": "Chat",
+    "findMore": "Go to the devices page to find more conversations",
+    "noSessions": "No conversations yet.",
+    "follow": "Follow",
+    "startFirst": "Start your first conversation",
+    "startFirstBody": "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
+    "followedOn": "{{machine}} · {{time}}",
+    "pendingFrom": "Loading conversations from {{machine}}…",
+    "offlineTitle": "Offline",
+    "offlineMachineWithTime": "{{machine}} · offline · last seen {{time}}",
+    "invalidTitle": "Unavailable",
+    "invalidBody": "This conversation is no longer reachable.",
+    "noMachine": "Unknown machine",
+    "remove": "Remove",
+    "unfollow": "Unfollow",
+    "pickAgent": "Pick an agent",
+    "pickAgentHint": "Pick an agent to start. Nothing runs until you send the first message.",
+    "pickProject": "Pick a project",
+    "willRunOn": "Will run on {{machine}}",
+    "projectConfiguredHint": "Where an agent lives is its own setting; the machine must also have this project's path configured before it can run.",
+    "noProjectsOnMachine": "No projects are configured on this machine.",
+    "unavailableTitle": "Can't start right now",
+    "selectProject": "Select a project",
+    "projectPathMissing": "Path not configured on this machine",
+    "confirmTitle": "Ready to start",
+    "confirmRunOn": "Will run on {{machine}} · {{path}}",
+    "firstMessage": "Say the first thing to {{agent}}",
+    "firstMessageHint": "Nothing runs until you send the first message.",
+    "prompt1": "Explain this project",
+    "prompt2": "Look at the failing test",
+    "prompt3": "Continue the last migration",
+    "start": "Start conversation",
+    "starting": "Starting…",
+    "connectFailed": "Could not reach {{machine}}. Please try again.",
+    "r17Title": "org / subagent / hook are not available here",
+    "r17Body": "These three built-in tools live on your desktop app. Web-launched conversations can't use them — start from the desktop app if you need them.",
+    "cancel": "Cancel",
+    "back": "Back",
+    "messagePlaceholder": "Say something…",
+    "pickProjectFor": "Pick a project · {{agent}}"
   }
 }

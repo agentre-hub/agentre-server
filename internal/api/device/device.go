@@ -73,6 +73,35 @@ type DeviceDenyRequest struct {
 }
 type DeviceDenyResponse struct{}
 
+// ---------- Web 设备注册 ----------
+
+// DeviceRegisterRequest 是已登录浏览器按自己持久化的指纹换取 kind=web 设备身份的
+// 端点（R1 / 决策 6）。走 SessionAuth+CSRF 组：未登录请求被中间件拒绝，到不了这里、
+// 也不产生任何设备行。
+type DeviceRegisterRequest struct {
+	mux.Meta `path:"/v1/oauth/device/register" method:"POST"`
+	// Fingerprint 是浏览器本地生成并持久化的设备指纹；同一个指纹重复注册按
+	// (user_id, fingerprint) 幂等，不新增设备行。
+	Fingerprint string `json:"fingerprint" binding:"required,min=8,max=128"`
+	// Platform 是浏览器所在操作系统，进设备列表的展示列。
+	Platform string `json:"platform" binding:"max=64"`
+	// Version 是浏览器版本（展示用）。
+	Version string `json:"version" binding:"max=32"`
+	// Name 是浏览器声明的设备显示名（如「Chrome · macOS」）；缺省时服务端回退到
+	// 指纹前 8 位。
+	Name string `json:"name" binding:"max=128"`
+}
+
+type DeviceRegisterResponse struct {
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshToken     string `json:"refresh_token"`
+	RefreshExpiresIn int    `json:"refresh_expires_in"`
+	DeviceID         int64  `json:"device_id"`
+	JTI              string `json:"jti"`
+}
+
 // ---------- Token Refresh / Revoke ----------
 
 type TokenRefreshRequest struct {

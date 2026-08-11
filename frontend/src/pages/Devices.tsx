@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
@@ -20,8 +21,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import AppShell from "@/components/AppShell";
+import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { decodeSessionListResult, MethodSessionList } from "@/lib/wire";
 import { deviceKindLabel } from "@/lib/deviceKind";
 
 interface DeviceItem {
@@ -76,15 +79,65 @@ function formatLastActive(ms: number): string {
 }
 
 /**
- * 设备行展开的详情：agentred 列「能跑的 Agent」（带档位）与「已配置的项目」；
- * 桌面端只列「项目」（已配置 / 未配置都列，因为 Agent 不按桌面端归属）。
- * 两者都只显示项目是否配置这个布尔事实，不显示路径（R19）。
+ * 「对话」一节的条数与等待处理数（mockup 帧 47）。
+ *
+ * server 一条会话都不存（硬不变量），这两个数字的唯一真相源是那台 agentred，
+ * 因此只能现连现问 —— 与 R4 下钻页问的是同一个 session.list。展开时才挂载，
+ * 收起即断开；问不到就什么都不显示，不编造数字。
+ */
+function DeviceSessionCounts({ fingerprint }: { fingerprint: string }) {
+  const { t } = useTranslation();
+  const { client, relayState } = useRelayMachine(fingerprint);
+  const [counts, setCounts] = useState<{
+    total: number;
+    waiting: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!client || relayState !== "connected") return;
+    let alive = true;
+    client
+      .request(MethodSessionList)
+      .then((raw) => {
+        if (!alive) return;
+        const res = decodeSessionListResult(raw);
+        setCounts({
+          total: res.sessions.length,
+          waiting: res.sessions.filter((s) => s.waitingForInput).length,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [client, relayState]);
+
+  if (!counts) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+      <span>{t("device.manage.sessionCount", { count: counts.total })}</span>
+      {counts.waiting > 0 && (
+        <span className="text-status-waiting">
+          {t("device.manage.sessionWaiting", { count: counts.waiting })}
+        </span>
+      )}
+    </p>
+  );
+}
+
+/**
+ * 设备行展开的详情：agentred 列「能跑的 Agent」（带档位）、「已配置的项目」与
+ * 「对话」一节（R4 下钻入口，mockup 帧 47）；桌面端只列「项目」。
+ * 对话一节：在线的 agentred 给「查看这台机器的对话」入口；离线的不可进入，
+ * 就地标明离线与最后在线时间（R4）。
  */
 function DeviceExpandDetail({
   state,
+  device,
   t,
 }: {
   state: { loading: boolean; error: unknown; data: DeviceDetail | null };
+  device: DeviceItem;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
   if (state.loading) {
@@ -160,6 +213,32 @@ function DeviceExpandDetail({
           ))
         )}
       </div>
+      {isAgentred && (
+        <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
+          <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+            {t("device.manage.sessions")}
+          </span>
+          {device.online ? (
+            <>
+              <DeviceSessionCounts fingerprint={device.fingerprint} />
+              <Link
+                to={`/devices/${device.id}/sessions`}
+                data-testid={`device-sessions-link-${device.id}`}
+                className="inline-flex w-fit items-center text-xs font-medium text-primary-text hover:underline"
+              >
+                {t("device.manage.viewSessions")}
+              </Link>
+            </>
+          ) : (
+            <p className="text-xs text-destructive">
+              {t("device.manage.offlineNotEnterable")}
+              {device.last_seen_at > 0
+                ? ` ${new Date(device.last_seen_at).toLocaleString()}`
+                : ""}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -302,7 +381,11 @@ export default function Devices() {
             {devices.map((d) => {
               const isExpanded = expanded.has(d.id);
               return (
-                <Card key={d.id} className="py-4">
+                <Card
+                  key={d.id}
+                  className="py-4"
+                  data-testid={`device-row-${d.id}`}
+                >
                   <CardHeader className="px-5">
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
@@ -317,19 +400,24 @@ export default function Devices() {
                         </CardDescription>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-expanded={isExpanded}
-                          aria-label={
-                            isExpanded
-                              ? t("device.manage.collapse")
-                              : t("device.manage.expand")
-                          }
-                          onClick={() => toggleExpand(d)}
-                        >
-                          {isExpanded ? <ChevronUp /> : <ChevronDown />}
-                        </Button>
+                        {/* 帧 47：浏览器行不接单、也不可展开——展开区列的是
+                            项目与能跑的 Agent，浏览器两样都没有。 */}
+                        {d.kind !== "web" && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            data-testid={`device-expand-${d.id}`}
+                            aria-expanded={isExpanded}
+                            aria-label={
+                              isExpanded
+                                ? t("device.manage.collapse")
+                                : t("device.manage.expand")
+                            }
+                            onClick={() => toggleExpand(d)}
+                          >
+                            {isExpanded ? <ChevronUp /> : <ChevronDown />}
+                          </Button>
+                        )}
                         <Button
                           variant="destructive"
                           size="sm"
@@ -367,6 +455,7 @@ export default function Devices() {
                             data: null,
                           }
                         }
+                        device={d}
                         t={t}
                       />
                     </CardContent>

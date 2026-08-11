@@ -38,6 +38,7 @@ var zhCN = map[int]string{
 	JWTSignatureInvalid: "访问令牌签名无效",
 	JWTBlacklisted:      "访问令牌已被撤销",
 	DeviceListFailed:    "拉取设备列表失败",
+	DeviceKindMismatch:  "该指纹已属于另一台非浏览器设备",
 
 	RelayDaemonNotFound: "该账号未登记此 daemon",
 	RelayDaemonOffline:  "daemon 当前离线",

@@ -9,6 +9,7 @@ import (
 	"agentre-server/internal/bootstrap"
 	"agentre-server/internal/controller/auth_ctr"
 	"agentre-server/internal/controller/device_ctr"
+	"agentre-server/internal/controller/follow_ctr"
 	"agentre-server/internal/controller/healthz_ctr"
 	"agentre-server/internal/controller/relay_ctr"
 	"agentre-server/internal/controller/sync_ctr"
@@ -41,6 +42,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	relayCtr := relay_ctr.New(relaySvc)
 	syncCtr := sync_ctr.New()
 	workspaceCtr := workspace_ctr.New()
+	followCtr := follow_ctr.New()
 
 	// 公开
 	g.Group("/").Bind(
@@ -66,6 +68,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		deviceCtr.Pending,
 		deviceCtr.Approve,
 		deviceCtr.Deny,
+		// R1：已登录浏览器按持久化指纹换取 kind=web 设备身份。
+		deviceCtr.RegisterWeb,
 	)
 
 	// session 或 device JWT 都可以
@@ -76,6 +80,12 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// web 控制台两屏的只读端点（决策 13）：账号级 Agent 清单、设备展开详情。
 		workspaceCtr.ListAgents,
 		workspaceCtr.DeviceDetail,
+		// R15：从 web 给「某 Agent + 某项目」取派发计划（哪台 agentred、逐档原因）。
+		workspaceCtr.DispatchTarget,
+		// 关注名单（R12 后端 + R14）：账号级，任一端（会话或设备 JWT）都可操作。
+		followCtr.Follow,
+		followCtr.Unfollow,
+		followCtr.List,
 	)
 
 	// device JWT
@@ -90,8 +100,11 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.GetAvatar,
 	)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由；鉴权仍复用 device JWT。
+	// client 额外接受 query 里的 access_token（浏览器原生 WebSocket 无法设头，见
+	// queryTokenBridge）；daemon 是 Go 客户端、能设头，不需要这条桥。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
-	deviceJWT.GET("/v1/relay/client", relayCtr.Client)
+	g.Group("/", queryTokenBridge(), middleware.DeviceJWT(r.Signer)).
+		GET("/v1/relay/client", relayCtr.Client)
 
 	return nil
 }

@@ -242,3 +242,187 @@ func TestDeviceDetail_GivenForeignOrMissingDevice_ThenNotFound(t *testing.T) {
 	_, err := svc.DeviceDetail(ctx, 7, 99)
 	assert.Error(t, err)
 }
+
+// ── R15 派发计划：从 web 给「某 Agent + 某项目」派活，落到哪台 agentred ────────
+
+// 本机相对引用（device_id 为空）按 R15d 在 web 语境下跳过；离线档给原因；第一档
+// 可用的 agentred 被选中并带上该项目在那台机器上的绝对路径（屏幕 25 呈现 + 派发
+// runtime.run 用）。
+func TestWebDispatchPlan_GivenLocalOfflineAvailable_ThenSkipsLocalAndPicksFirstAvailable(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-online": true, "fp-offline": false}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
+		{Kind: sync_entity.KindProject, SyncID: "proj-1", Payload: mustJSON(t, map[string]any{"name": "agentre-server"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-local", AgentredFingerprint: "",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-offline", AgentredFingerprint: "fp-offline",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-online", AgentredFingerprint: "fp-online",
+			Payload: mustJSON(t, map[string]any{"type": "codex"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-local", "sort_order": 0})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-offline", "sort_order": 1})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t3",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-online", "sort_order": 2})},
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+			AgentredFingerprint: "fp-online", Payload: mustJSON(t, map[string]any{"path": "/srv/agentre-server"})},
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 20, UserID: 7, Name: "书房小主机", Kind: device_entity.KindAgentred, Fingerprint: "fp-offline", Status: 1},
+		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-online", Status: 1},
+	}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	require.NoError(t, err)
+	require.Len(t, plan.Tiers, 3)
+
+	// R15d 守卫：device_id 为空的「本机」档被跳过，不作为可选目标。
+	assert.Equal(t, AvailabilitySkippedForWeb, plan.Tiers[0].Availability)
+	assert.False(t, plan.Tiers[0].Current)
+
+	assert.Equal(t, AvailabilityOffline, plan.Tiers[1].Availability)
+	assert.Equal(t, "书房小主机", plan.Tiers[1].DeviceName)
+
+	assert.Equal(t, AvailabilityAvailable, plan.Tiers[2].Availability)
+	assert.True(t, plan.Tiers[2].Current)
+	assert.Equal(t, "公司 Mac mini", plan.Tiers[2].DeviceName)
+	assert.Equal(t, "codex", plan.Tiers[2].BackendType)
+
+	// 选中档带执行所需信息：指纹、设备 ID、后端类型与项目路径（屏幕 25）。
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "fp-online", plan.Chosen.DeviceFingerprint)
+	assert.Equal(t, int64(21), plan.Chosen.DeviceID)
+	assert.Equal(t, "公司 Mac mini", plan.Chosen.DeviceName)
+	assert.Equal(t, "/srv/agentre-server", plan.Chosen.Cwd)
+
+	// picker 用：选中的机器上已配置的项目清单。
+	require.Len(t, plan.Projects, 1)
+	assert.Equal(t, "agentre-server", plan.Projects[0].Name)
+	assert.Equal(t, "proj-1", plan.Projects[0].SyncID)
+}
+
+// 全部档不可用时不静默失败：逐档给出原因（本机跳过 / 未配对 / 离线 /
+// 项目路径缺失），chosen 为空，任何一档都不是 Current。
+func TestWebDispatchPlan_GivenAllUnavailable_ThenPerTierReasons(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-online": true, "fp-offline": false}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "运维 Agent"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-local", AgentredFingerprint: "",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-ghost", AgentredFingerprint: "fp-ghost",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-offline", AgentredFingerprint: "fp-offline",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-nopath", AgentredFingerprint: "fp-online",
+			Payload: mustJSON(t, map[string]any{"type": "codex"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-local", "sort_order": 0})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-ghost", "sort_order": 1})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t3",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-offline", "sort_order": 2})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t4",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-nopath", "sort_order": 3})},
+		// fp-online 这台机器没有 proj-1 的路径记录。
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 20, UserID: 7, Name: "书房小主机", Kind: device_entity.KindAgentred, Fingerprint: "fp-offline", Status: 1},
+		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-online", Status: 1},
+	}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	require.NoError(t, err)
+	require.Len(t, plan.Tiers, 4)
+
+	assert.Equal(t, AvailabilitySkippedForWeb, plan.Tiers[0].Availability)
+	assert.Equal(t, AvailabilityUnpaired, plan.Tiers[1].Availability)
+	assert.Equal(t, AvailabilityOffline, plan.Tiers[2].Availability)
+	assert.Equal(t, AvailabilityProjectPathMissing, plan.Tiers[3].Availability)
+
+	for _, tier := range plan.Tiers {
+		assert.False(t, tier.Current, "全部不可用时任何一档都不该是当前档")
+	}
+	assert.Nil(t, plan.Chosen)
+	assert.Empty(t, plan.Projects)
+}
+
+// 第一档在线的 agentred 没配这个项目的路径 → 该档标「项目路径缺失」，继续按顺序
+// 取第二档（配了路径的）为派发目标（块 1 R15 的按序语义）。
+func TestWebDispatchPlan_GivenProjectMissingOnFirstAvailable_ThenPicksNextWithPath(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-a": true, "fp-b": true}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-a", AgentredFingerprint: "fp-a",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-b", AgentredFingerprint: "fp-b",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-a", "sort_order": 0})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-b", "sort_order": 1})},
+		// 只有 fp-b 配了 proj-1 的路径。
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+			AgentredFingerprint: "fp-b", Payload: mustJSON(t, map[string]any{"path": "/srv/hub"})},
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 10, UserID: 7, Name: "书房 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-a", Status: 1},
+		{ID: 11, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-b", Status: 1},
+	}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	require.NoError(t, err)
+	require.Len(t, plan.Tiers, 2)
+
+	assert.Equal(t, AvailabilityProjectPathMissing, plan.Tiers[0].Availability)
+	assert.False(t, plan.Tiers[0].Current)
+	assert.Equal(t, AvailabilityAvailable, plan.Tiers[1].Availability)
+	assert.True(t, plan.Tiers[1].Current)
+
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "fp-b", plan.Chosen.DeviceFingerprint)
+	assert.Equal(t, "/srv/hub", plan.Chosen.Cwd)
+}
+
+// 未传项目（picker 阶段只看「这台机器能不能接活」）时不做项目路径判定，路径字段留空。
+func TestWebDispatchPlan_GivenNoProject_ThenPicksFirstAvailableWithoutPath(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-online": true}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-online", AgentredFingerprint: "fp-online",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-online", "sort_order": 0})},
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-online", Status: 1},
+	}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "")
+	require.NoError(t, err)
+	require.Len(t, plan.Tiers, 1)
+	assert.Equal(t, AvailabilityAvailable, plan.Tiers[0].Availability)
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "fp-online", plan.Chosen.DeviceFingerprint)
+	assert.Empty(t, plan.Chosen.Cwd)
+}
+
+// 账号下不存在的 Agent（或从没同步过）→ NotFound，不返回空计划假装可用。
+func TestWebDispatchPlan_GivenUnknownAgent_ThenNotFound(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-other", Payload: mustJSON(t, map[string]any{"name": "别的 Agent"})},
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(nil, nil)
+
+	_, err := svc.WebDispatchPlan(ctx, 7, "agent-missing", "")
+	assert.Error(t, err)
+}

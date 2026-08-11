@@ -20,6 +20,7 @@ import (
 	"agentre-server/internal/repository/device_flow_repo"
 	"agentre-server/internal/repository/device_repo"
 	"agentre-server/internal/repository/device_token_repo"
+	"agentre-server/internal/repository/follow_repo"
 	"agentre-server/internal/repository/sync_repo"
 	"agentre-server/internal/repository/user_identity_repo"
 	"agentre-server/internal/repository/user_repo"
@@ -49,6 +50,7 @@ func main() {
 	sync_repo.RegisterSyncState(sync_repo.NewSyncState())
 	sync_repo.RegisterSyncAvatar(sync_repo.NewSyncAvatar())
 	sync_repo.RegisterSyncLocalPath(sync_repo.NewSyncLocalPath())
+	follow_repo.RegisterFollow(follow_repo.NewFollow())
 
 	deps := &api.RouterDeps{Cfg: serverCfg, Signer: signer}
 

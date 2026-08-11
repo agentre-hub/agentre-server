@@ -45,6 +45,7 @@ const (
 	JWTSignatureInvalid
 	JWTBlacklisted
 	DeviceListFailed
+	DeviceKindMismatch
 )
 
 // Relay 30400~30499

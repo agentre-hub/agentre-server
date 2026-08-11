@@ -103,6 +103,53 @@ them at your own instances; the file is gitignored and
 Those belong in `scratch/`, not in the committed smoke suite — they are slow,
 they need infrastructure, and they will be the first thing to turn flaky in CI.
 
+## The dual-end run (`pnpm dual`) — the desktop app and a browser on one agentred
+
+`pnpm web` (`run-e2e-web.mjs`) drives a real browser against a real server + a
+real `agentred`. `pnpm dual` is the same runner with `--dual`, and it adds the
+**second end**: the real Wails desktop app.
+
+```
+pnpm dual  →  node run-e2e-web.mjs --dual
+  ├─ everything `pnpm web` does (server, seeded account, agentred, cleanup)
+  ├─ plus a seeded kind=desktop device + refresh token
+  └─ playwright.dual.config.ts
+       ├─ webServer: wails dev -tags e2e -devserver 34217   (the agentre checkout)
+       └─ one test (dual/desktop-and-web.spec.ts) driving BOTH ends
+```
+
+It exists because a handful of requirements are only decidable with two ends on
+one machine at the same time: the desktop puts a session's title + its agent's
+account-level sync id on the agentred (R7), the browser's message must land in
+the desktop's transcript as a real user row with a "from &lt;device&gt;" mark
+(R18/R19), both ends see one live stream (R6b), and a decision answered by one
+end tells the other it has already been handled (R10b).
+
+Two things it needs that the browser-only run does not:
+
+| Piece                                                             | Why                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wails` on PATH + `frontend/node_modules` in the agentre checkout | the desktop app is built and run for real; the runner checks both up front and names what is missing                                                                                                                                               |
+| `agentre` `e2e/fakes/remote.go` (`//go:build e2e`)                | the desktop joins **that** agentred the same way the browser does — over the account relay. The fake seeds the paired-machine row + an agent bound to it, which is what "claim this machine" would have left behind; without the env it is a no-op |
+
+Gotchas learned building it (see the spec comments for the full reasoning):
+
+- **The desktop stays receptive on a session for as long as its pooled connection
+  lives — not only while one of its own turns is in flight.** Building this suite
+  first found the opposite, and it was a product defect: at refcount zero the
+  whole remote-runtime cache entry was dropped while the connection was still up,
+  so the next borrow built a _second_ `remote.Runtime` on it, re-registered the
+  daemon-notification handlers and silently lost a browser-initiated turn. Fixed
+  at the producer (`agentre` `589a7452`); the spec now asserts the fixed shape —
+  the desktop runs a **second** turn on the session before the browser writes to
+  it, and answers the R10b decision with no turn of its own in flight.
+- **The pool still idle-reaps that connection ~30 s after the last turn**, after
+  which the runtime tears down. A desktop idle for longer than that stops
+  receiving until its next turn; widening it would change the connection-lifetime
+  contract for unrelated pool callers, so it is deliberately out of scope.
+- **The desktop bridge port is 34217**, not the 34216 the agentre repo's own e2e
+  suites use, so the two never reuse each other's app.
+
 ## Reports
 
 Report rules — one directory per scenario, create `report.md` **before** the run,

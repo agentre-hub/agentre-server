@@ -34,6 +34,10 @@ const (
 	// AvailabilitySkippedForWeb 是 device_id 为空的「本机」相对引用：R15d 规定
 	// 从 web 派发时跳过「当前桌面端」这一档，因为浏览器语境下它没有指代对象。
 	AvailabilitySkippedForWeb = "skipped_for_web"
+	// AvailabilityProjectPathMissing 这一档的机器已配对且在线，但没配所选项目
+	// 的路径——那台机器跑不起这个项目（块 1 R15 的 BlockReasonExecTargetProjectPathMissing
+	// 在浏览器语境下的对应物）。
+	AvailabilityProjectPathMissing = "project_path_missing"
 )
 
 // ExecTargetView 是总览页 Agent 卡片里一条执行目标链上的一档。
@@ -83,10 +87,52 @@ type DeviceDetailView struct {
 	Projects       []ProjectView
 }
 
+// WebDispatchTier 是 R15 派发计划里执行目标链上的一档：从 web 给「某 Agent +
+// 某项目」派活时，这一档为什么能用 / 不能用。Availability 取值见常量。
+type WebDispatchTier struct {
+	Rank         int
+	DeviceID     int64
+	DeviceName   string
+	BackendType  string
+	Availability string
+	// Current 标记按顺序取第一个可用的会落到这一档。至多一档为 true。
+	Current bool
+}
+
+// WebDispatchChoice 是 R15 派发最终落到的那一档（第一档可用的 agentred）。
+// Cwd 是所选项目在那台机器上的绝对路径：屏幕 25 要呈现「将运行在 <机器> · <路径>」，
+// 派发 runtime.run 也要拿它当 RunParams.cwd。
+//
+// R19（块 1 红线）说路径不出现在发往浏览器的任何响应里，那是针对总览 / 设备两屏
+// 的**被动读视图**；这里是一次**用户主动发起的派活**，路径是该动作本身的执行参数，
+// 没有它浏览器无法在远端把这条项目会话跑起来——按设计稿屏 25 的呈现，这条是 R19
+// 的唯一例外，且只在 project_sync_id 非空（确认派发阶段）时才带出。
+type WebDispatchChoice struct {
+	DeviceFingerprint string
+	DeviceID          int64
+	DeviceName        string
+	BackendType       string
+	Cwd               string
+}
+
+// WebDispatchPlan 是「从 web 给某 Agent + 某项目派活」的完整计划：有序逐档说明 +
+// 落到哪一档。Chosen 为 nil 表示全部档都不可用——调用方据此逐档渲染原因，不静默失败。
+type WebDispatchPlan struct {
+	AgentSyncID string
+	Tiers       []WebDispatchTier
+	Chosen      *WebDispatchChoice
+	// Projects 是选中的那一档机器上已配置的项目（picker 阶段挑项目用）。
+	Projects []ProjectView
+}
+
 type WorkspaceSvc interface {
 	// ListAccountAgents 是总览页「我有哪些 Agent」的唯一数据源：账号下每个 Agent
 	// 一行，逐档给出有序执行目标链与当前生效的那一档。
 	ListAccountAgents(ctx context.Context, userID int64) ([]AgentView, error)
+	// WebDispatchPlan 是 R15 的派发计划：给定 Agent 与项目（可空），按序解析执行
+	// 目标链，跳过 device_id 为空的档（R15d），返回每档原因与选中的第一档可用
+	// agentred。全部不可用时 Chosen 为空，逐档原因由调用方渲染。
+	WebDispatchPlan(ctx context.Context, userID int64, agentSyncID, projectSyncID string) (*WebDispatchPlan, error)
 	// DeviceDetail 是设备行展开时取的详情，deviceID 必须属于 userID 且未被撤销，
 	// 否则返回 NotFound——不区分「不存在」与「不属于你」，避免枚举探测。
 	DeviceDetail(ctx context.Context, userID, deviceID int64) (*DeviceDetailView, error)
@@ -154,6 +200,13 @@ type agentExecTargetPayload struct {
 
 type projectPayload struct {
 	Name string `json:"name"`
+}
+
+// projectLocationPayload 只带路径正文（agentre 侧 adapter_project.go 的镜像）：
+// 路径在同步组里以 kind=project_location、agentred_fingerprint 等于目标机器指纹
+// 的行存放。
+type projectLocationPayload struct {
+	Path string `json:"path"`
 }
 
 // resolvedTarget 是「Agent → 执行目标 → backend」这条链解析到指纹这一层的中间
@@ -339,6 +392,136 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 		out = append(out, view)
 	}
 	return out, nil
+}
+
+func (s *workspaceSvc) WebDispatchPlan(
+	ctx context.Context, userID int64, agentSyncID, projectSyncID string,
+) (*WebDispatchPlan, error) {
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{
+		sync_entity.KindAgent, sync_entity.KindAgentBackend, sync_entity.KindAgentExecTarget,
+		sync_entity.KindProject, sync_entity.KindProjectLocation,
+	})
+	if err != nil {
+		return nil, err
+	}
+	devices, err := device_repo.Device().ListByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	deviceByFP := deviceFingerprintMap(devices)
+
+	// 项目名与「(指纹, 项目) → 路径」两查表，供 picker 与确认派发阶段用。
+	projectName := map[string]string{}
+	locationsByFP := map[string]map[string]string{}
+	for _, row := range rows {
+		switch row.Kind {
+		case sync_entity.KindProject:
+			var pp projectPayload
+			if json.Unmarshal([]byte(row.Payload), &pp) == nil {
+				projectName[row.SyncID] = pp.Name
+			}
+		case sync_entity.KindProjectLocation:
+			if row.IsDeleted() || row.AgentredFingerprint == "" {
+				continue
+			}
+			var lp projectLocationPayload
+			if json.Unmarshal([]byte(row.Payload), &lp) != nil {
+				continue
+			}
+			if locationsByFP[row.AgentredFingerprint] == nil {
+				locationsByFP[row.AgentredFingerprint] = map[string]string{}
+			}
+			locationsByFP[row.AgentredFingerprint][row.ProjectSyncID] = lp.Path
+		}
+	}
+
+	onlineCache := map[string]bool{}
+	isOnline := func(fingerprint string) bool {
+		if v, ok := onlineCache[fingerprint]; ok {
+			return v
+		}
+		v, err := onlineChecker.IsDaemonOnline(ctx, userID, fingerprint)
+		if err != nil {
+			v = false
+		}
+		onlineCache[fingerprint] = v
+		return v
+	}
+
+	chains := buildAgentChains(rows)
+	var chain *agentChain
+	for i := range chains {
+		if chains[i].SyncID == agentSyncID {
+			chain = &chains[i]
+			break
+		}
+	}
+	if chain == nil {
+		return nil, i18n.NewNotFoundError(ctx, code.NotFound)
+	}
+
+	plan := &WebDispatchPlan{AgentSyncID: agentSyncID}
+	currentAssigned := false
+	for _, t := range chain.Targets {
+		tier := WebDispatchTier{Rank: t.Rank, BackendType: t.BackendType}
+		switch {
+		case t.IsLocalReference:
+			// R15d：device_id 为空的「本机」档在浏览器语境下没有指代对象，跳过。
+			tier.Availability = AvailabilitySkippedForWeb
+		case t.Fingerprint == "":
+			tier.Availability = AvailabilityUnpaired
+		default:
+			dev, ok := deviceByFP[t.Fingerprint]
+			if !ok {
+				tier.Availability = AvailabilityUnpaired
+				break
+			}
+			tier.DeviceID = dev.ID
+			tier.DeviceName = dev.Name
+			if !dev.IsActive() || !isOnline(t.Fingerprint) {
+				tier.Availability = AvailabilityOffline
+				break
+			}
+			if projectSyncID != "" {
+				if _, configured := locationsByFP[t.Fingerprint][projectSyncID]; !configured {
+					tier.Availability = AvailabilityProjectPathMissing
+					break
+				}
+			}
+			tier.Availability = AvailabilityAvailable
+		}
+		if !currentAssigned && tier.Availability == AvailabilityAvailable {
+			tier.Current = true
+			currentAssigned = true
+			plan.Chosen = &WebDispatchChoice{
+				DeviceFingerprint: t.Fingerprint,
+				DeviceID:          tier.DeviceID,
+				DeviceName:        tier.DeviceName,
+				BackendType:       tier.BackendType,
+			}
+			// 选中档的 cwd：所选项目在这台机器上的绝对路径（见 WebDispatchChoice.Cwd
+			// 注释，这是 R19 在主动派活场景下的唯一例外）。未选项目时留空。
+			plan.Chosen.Cwd = locationsByFP[t.Fingerprint][projectSyncID]
+		}
+		plan.Tiers = append(plan.Tiers, tier)
+	}
+
+	// picker 用：选中的那一档机器上已配置的项目清单（按 sync_id 排序稳定）。
+	if plan.Chosen != nil {
+		configured := locationsByFP[plan.Chosen.DeviceFingerprint]
+		ids := make([]string, 0, len(configured))
+		for id := range configured {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			if name := projectName[id]; name != "" {
+				plan.Projects = append(plan.Projects,
+					ProjectView{SyncID: id, Name: name, Configured: true})
+			}
+		}
+	}
+	return plan, nil
 }
 
 // configuredProjects 回答「这台机器上哪些项目配了路径」。两类设备的路径存在不同的
