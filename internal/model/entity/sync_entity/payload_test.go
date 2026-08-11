@@ -23,15 +23,20 @@ func TestValidatePayload_GivenNumericIDFields_ThenRejected(t *testing.T) {
 	}
 }
 
-// 同步标识、指纹、provider_key 都是字符串引用，照常放行；device_id 为空串是
-// 「当前这台桌面端」这个相对引用，也必须放行。
+// 同步标识、指纹、provider_key、model_key 都是字符串引用，照常放行；device_id
+// 为空串是「当前这台桌面端」这个相对引用，也必须放行。model_key 是 2026-08-11
+// LLM Provider 多模型契约新增的稳定模型引用（Provider 与 Model 配置均不进入账号
+// 同步，业务对象只携带 provider_key / model_key 字符串），归一化后是 modelkey，
+// 不落进 apikey / provider / *id 任何一条守卫，必须显式放行。
 func TestValidatePayload_GivenStringReferences_ThenAccepted(t *testing.T) {
 	cases := map[string]string{
-		"同步标识":     `{"parent_id":"01J0-uuid","name":"a"}`,
-		"指纹":       `{"agentred_fingerprint":"fp-a"}`,
-		"相对引用的空设备": `{"device_id":"","provider_key":"openai"}`,
-		"非 id 的数字": `{"sort_order":2,"enabled":true}`,
-		"空载荷":      `{}`,
+		"同步标识":            `{"parent_id":"01J0-uuid","name":"a"}`,
+		"指纹":              `{"agentred_fingerprint":"fp-a"}`,
+		"相对引用的空设备":        `{"device_id":"","provider_key":"openai"}`,
+		"model_key 字符串引用": `{"provider_key":"anthropic-main","model_key":"anthropic-opus-01"}`,
+		"驼峰 modelKey":     `{"modelKey":"anthropic-opus-01"}`,
+		"非 id 的数字":        `{"sort_order":2,"enabled":true}`,
+		"空载荷":             `{}`,
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
