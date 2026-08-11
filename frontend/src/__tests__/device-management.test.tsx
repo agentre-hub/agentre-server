@@ -95,11 +95,13 @@ describe("device management page", () => {
     expect(screen.getByText(/linux/)).toBeTruthy();
     expect(screen.getByText(/darwin/)).toBeTruthy();
     // 在线态列来自 API 的 online 字段（真实中继在线态），不是 status 推算（R20）：
-    // 逐行按 API 给的 online 值断言，而不是全页面找一个 "Online" 就算数。
+    // 逐行断言；desktop 离线要表达 App 未运行，而不是笼统的机器离线。
     const nucCard = screen.getByText("nuc-01").closest('[data-slot="card"]');
     const laptopCard = screen.getByText("laptop").closest('[data-slot="card"]');
     expect(within(nucCard as HTMLElement).getByText(/Online/)).toBeTruthy();
-    expect(within(laptopCard as HTMLElement).getByText(/Offline/)).toBeTruthy();
+    expect(
+      within(laptopCard as HTMLElement).getByText(/Agentre is not running/),
+    ).toBeTruthy();
   });
 
   it("revoke confirmation carries the R4 delay note, then revokes and removes the device", async () => {
