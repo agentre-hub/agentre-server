@@ -57,6 +57,7 @@ import runResultDoneFrameFixture from "./fixtures/wire/run-result-done-frame.jso
 import usageWireFixture from "./fixtures/wire/usage-wire.json";
 import autonomousTurnStartedFixture from "./fixtures/wire/autonomous-turn-started.json";
 import runParamsExtraFixture from "./fixtures/wire/run-params-extra.json";
+import runParamsFreshFixture from "./fixtures/wire/run-params-fresh.json";
 import sessionPullResultExtraFixture from "./fixtures/wire/session-pull-result-extra.json";
 import frameEnvelopeRequestFixture from "./fixtures/wire/frame-envelope-request.json";
 import frameEnvelopeResponseFixture from "./fixtures/wire/frame-envelope-response.json";
@@ -116,6 +117,18 @@ describe("wire 编解码:与 Go 侧黄金样本逐字段同构", () => {
     );
     expect(p.futureField).toEqual({ nested: true });
     expect(p.clientNote).toBe("来自浏览器的自定义字段");
+  });
+
+  it("RunParams 解出 freshSession(挂账修复:regenerate 无锚点 / 会话失效恢复的显式全新信号)", () => {
+    const p = assertRoundTrip(
+      decodeRunParams,
+      encodeRunParams,
+      runParamsFreshFixture,
+      "RunParams(fresh)",
+    );
+    expect(p.freshSession).toBe(true);
+    expect(p.providerSessionId).toBeUndefined();
+    expect(p.sessionId).toBe(42);
   });
 
   it("RunAck 解出 providerSessionId 与回退信号", () => {

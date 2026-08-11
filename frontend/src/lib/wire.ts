@@ -182,6 +182,12 @@ export interface RunParams extends WireObject {
   systemPrompt?: string;
   /** 决策 8:续话要用的 provider 原生会话身份。 */
   providerSessionId?: string;
+  /**
+   * 挂账修复(2026-08-11):true = 这一轮**必须起全新会话**,即使 daemon 落库里存了
+   * 这条会话的 provider_session_id 也不许续(regenerate 无锚点 / provider 会话失效
+   * 恢复)。缺省 false = 决策 8 续话(空 providerSessionId 时 daemon 续落库那份)。
+   */
+  freshSession?: boolean;
   userText?: string;
   userBlocks?: unknown[];
   history?: HistoryMessageWire[];
@@ -211,6 +217,7 @@ export function decodeRunParams(v: unknown): RunParams {
       o.providerSessionId,
       "RunParams.providerSessionId",
     );
+    o.freshSession = optBool(o.freshSession, "RunParams.freshSession");
     o.userText = optStr(o.userText, "RunParams.userText");
     if (o.history !== undefined) {
       if (!Array.isArray(o.history)) {
