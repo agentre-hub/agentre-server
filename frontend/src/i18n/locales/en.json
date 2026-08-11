@@ -1,4 +1,11 @@
 {
+  "appShell": {
+    "searchPlaceholder": "Search agents, devices, and records",
+    "productSub": "Console",
+    "topBar": {
+      "fresh": "Desktop connected"
+    }
+  },
   "common": {
     "appName": "AgentRe Server",
     "back_home": "Back to home",
@@ -37,7 +44,43 @@
     "offline": "Offline",
     "unpaired": "Not paired",
     "empty": "No agents yet.",
-    "loadError": "Could not load your agents. Please try again."
+    "loadError": "Could not load your agents. Please try again.",
+    "tiles": {
+      "online": "Devices online",
+      "waiting": "Waiting on you",
+      "usage": "Used today",
+      "errors": "Issues",
+      "onlineSub": "{{device}} is offline",
+      "waitingSub": "Longest waited {{minutes}} min",
+      "usageSub": "{{percent}} of this month's quota",
+      "errorsSub": "{{agent}} failed {{count}} times"
+    },
+    "actionStrip": {
+      "title": "{{count}} waiting on you",
+      "sub": "Longest waited {{minutes}} min — auto-suspends on timeout",
+      "all": "All conversations →"
+    },
+    "actionCard": {
+      "deny": "Deny",
+      "allow": "Allow",
+      "reply": "Reply",
+      "viewDetails": "View details",
+      "retry": "Retry"
+    },
+    "recentAuth": {
+      "title": "Recent authorizations & changes",
+      "all": "All audit →"
+    },
+    "usage": {
+      "title": "Usage this month",
+      "all": "View usage →"
+    },
+    "security": {
+      "title": "Security & audit",
+      "all": "Go to audit →",
+      "actTokens": "{{n}} active tokens",
+      "lastLogin": "Last sign-in"
+    }
   },
   "authLayout": {
     "brand": "AgentRe",
@@ -143,7 +186,13 @@
       "sessionCount": "{{count}} conversations",
       "sessionWaiting": "{{count}} waiting for you",
       "viewSessions": "View this machine's conversations",
-      "offlineNotEnterable": "Offline — conversations are unavailable."
+      "offlineNotEnterable": "Offline — conversations are unavailable.",
+      "authorized": "Authorized devices",
+      "summary": "{{n}} devices · {{m}} online",
+      "revokeCardTitle": "Revoke this device",
+      "revokeCardBody": "After you revoke it, this device can no longer refresh its credentials. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation fully takes effect the next time it comes online, and any running conversations will be interrupted.",
+      "revokeCardConfirm": "Revoke",
+      "agentredAccept": "Accept jobs"
     }
   },
   "notFound": {
@@ -213,6 +262,19 @@
       "skip": "Skip",
       "alreadyHandled": "This request has already been handled.",
       "submitFailed": "That decision could not be submitted. Nothing was sent — try again."
+    },
+    "ux": {
+      "recent": "Recent · Across agents",
+      "filter": {
+        "all": "All",
+        "running": "Running",
+        "unread": "Unread"
+      },
+      "menu": {
+        "openNewTab": "Open in new tab",
+        "unfollow": "Unfollow",
+        "removeInvalid": "Remove"
+      }
     }
   },
   "chat": {
@@ -255,6 +317,7 @@
     "cancel": "Cancel",
     "back": "Back",
     "messagePlaceholder": "Say something…",
-    "pickProjectFor": "Pick a project · {{agent}}"
+    "pickProjectFor": "Pick a project · {{agent}}",
+    "followFromDevice": "Follow conversations from your device"
   }
 }

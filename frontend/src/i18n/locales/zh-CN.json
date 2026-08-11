@@ -1,4 +1,11 @@
 {
+  "appShell": {
+    "searchPlaceholder": "搜索 Agent、设备、记录",
+    "productSub": "控制台",
+    "topBar": {
+      "fresh": "桌面端已连接"
+    }
+  },
   "common": {
     "appName": "AgentRe Server",
     "back_home": "回到首页",
@@ -37,7 +44,43 @@
     "offline": "未连接",
     "unpaired": "未配对",
     "empty": "还没有任何 Agent。",
-    "loadError": "无法加载你的 Agent 列表，请重试。"
+    "loadError": "无法加载你的 Agent 列表，请重试。",
+    "tiles": {
+      "online": "设备在线",
+      "waiting": "等你处理",
+      "usage": "今日用量",
+      "errors": "异常",
+      "onlineSub": "{{device}} 未连接",
+      "waitingSub": "最久的已等 {{minutes}} 分钟",
+      "usageSub": "占本月配额 {{percent}}",
+      "errorsSub": "{{agent}} 连续 {{count}} 次失败"
+    },
+    "actionStrip": {
+      "title": "{{count}} 件等你处理",
+      "sub": "最久的已等 {{minutes}} 分钟，超时会自动挂起",
+      "all": "全部会话 →"
+    },
+    "actionCard": {
+      "deny": "拒绝",
+      "allow": "允许",
+      "reply": "去回复",
+      "viewDetails": "看详情",
+      "retry": "重试"
+    },
+    "recentAuth": {
+      "title": "最近授权与变更",
+      "all": "全部审计 →"
+    },
+    "usage": {
+      "title": "本月用量",
+      "all": "去用量 →"
+    },
+    "security": {
+      "title": "安全与审计",
+      "all": "去审计 →",
+      "actTokens": "{{n}} 个活跃令牌",
+      "lastLogin": "最近登录"
+    }
   },
   "authLayout": {
     "brand": "AgentRe",
@@ -143,7 +186,13 @@
       "sessionCount": "{{count}} 条对话",
       "sessionWaiting": "{{count}} 条等你处理",
       "viewSessions": "查看这台机器的对话",
-      "offlineNotEnterable": "已离线——对话不可用。"
+      "offlineNotEnterable": "已离线——对话不可用。",
+      "authorized": "已授权设备",
+      "summary": "{{n}} 台 · {{m}} 台在线",
+      "revokeCardTitle": "撤销这台设备",
+      "revokeCardBody": "撤销后该设备无法再刷新令牌；若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受。吊销会随它下次上线后完全生效，正在跑的对话会被中断。",
+      "revokeCardConfirm": "撤销",
+      "agentredAccept": "接单"
     }
   },
   "notFound": {
@@ -213,6 +262,19 @@
       "skip": "跳过",
       "alreadyHandled": "该请求已被处理。",
       "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。"
+    },
+    "ux": {
+      "recent": "最近 · 跨 Agent",
+      "filter": {
+        "all": "全部",
+        "running": "运行中",
+        "unread": "未读"
+      },
+      "menu": {
+        "openNewTab": "新标签打开",
+        "unfollow": "取消关注",
+        "removeInvalid": "移除"
+      }
     }
   },
   "chat": {
@@ -255,6 +317,7 @@
     "cancel": "取消",
     "back": "返回",
     "messagePlaceholder": "说点什么…",
-    "pickProjectFor": "选一个项目 · {{agent}}"
+    "pickProjectFor": "选一个项目 · {{agent}}",
+    "followFromDevice": "从设备上关注对话"
   }
 }
