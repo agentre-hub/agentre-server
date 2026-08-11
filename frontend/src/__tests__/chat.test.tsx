@@ -227,6 +227,27 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
     ).toBeTruthy();
   });
 
+  it("Fresh 只在有在线 agentred 时渲染:仅浏览器(web)在线不显示「桌面端已连接」(不编状态)", async () => {
+    // /v1/devices 里只有本浏览器(web)在线、没有任何 agentred → 不算「桌面已连接」。
+    const webOnly = {
+      id: 9,
+      name: "This Browser",
+      kind: "web",
+      fingerprint: "fp-web",
+      last_seen_at: 1754000000000,
+      status: 1,
+      online: true,
+    };
+    stubChat([], [], webOnly);
+    renderChat();
+    // 等页面稳定(空态 + Cnt=0 渲染出来)。
+    await screen.findByTestId("chat-count");
+    expect(screen.getAllByText("No conversations yet.").length).toBeGreaterThan(
+      0,
+    );
+    expect(screen.queryByText("Desktop connected")).toBeNull();
+  });
+
   it("R14:关注来的会话在这里出现(不需要下钻)——从 /v1/follows 读名单、连到目标机器解析,按 Agent 分组,行尾有关注开关", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/follows")

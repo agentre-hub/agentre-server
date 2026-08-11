@@ -52,9 +52,7 @@
       "usage": "今日用量",
       "errors": "异常",
       "onlineSub": "{{device}} 未连接",
-      "waitingSub": "最久的已等 {{minutes}} 分钟",
-      "usageSub": "占本月配额 {{percent}}",
-      "errorsSub": "{{agent}} 连续 {{count}} 次失败"
+      "waitingSub": "最久的已等 {{minutes}} 分钟"
     },
     "actionStrip": {
       "title": "{{count}} 件等你处理",
@@ -65,8 +63,7 @@
       "deny": "拒绝",
       "allow": "允许",
       "reply": "去回复",
-      "viewDetails": "看详情",
-      "retry": "重试"
+      "viewDetails": "看详情"
     },
     "recentAuth": {
       "title": "最近授权与变更",
@@ -188,12 +185,9 @@
       "sessionWaiting": "{{count}} 条等你处理",
       "viewSessions": "查看这台机器的对话",
       "offlineNotEnterable": "已离线——对话不可用。",
-      "authorized": "已授权设备",
-      "summary": "{{n}} 台 · {{m}} 台在线",
       "revokeCardTitle": "撤销这台设备",
       "revokeCardBody": "撤销后该设备无法再刷新令牌；若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受。吊销会随它下次上线后完全生效，正在跑的对话会被中断。",
       "revokeCardConfirm": "撤销",
-      "agentredAccept": "接单",
       "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑"
     }
   },

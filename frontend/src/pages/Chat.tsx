@@ -309,7 +309,11 @@ export default function Chat() {
   }
 
   const empty = view.total === 0;
-  const hasOnlineDesktop = devices.some((d) => d.online);
+  // Fresh「桌面端已连接」只在有在线 agentred 时渲染：浏览器(web)自身在线不算「桌面
+  // 已连接」，未知/离线都不显示——与总览/设备两页同一条规则，不编状态。
+  const hasOnlineDesktop = devices.some(
+    (d) => d.kind === "agentred" && d.online,
+  );
 
   const list = (
     <ChatList

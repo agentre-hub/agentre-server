@@ -72,7 +72,10 @@ export default function App() {
           path="/audit"
           element={
             <RequireAuth>
-              <WorkspaceComingSoon bodyKey="workspaceComingSoon.auditBody" />
+              <WorkspaceComingSoon
+                titleKey="nav.audit"
+                bodyKey="workspaceComingSoon.auditBody"
+              />
             </RequireAuth>
           }
         />

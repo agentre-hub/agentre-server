@@ -52,9 +52,7 @@
       "usage": "Used today",
       "errors": "Issues",
       "onlineSub": "{{device}} is offline",
-      "waitingSub": "Longest waited {{minutes}} min",
-      "usageSub": "{{percent}} of this month's quota",
-      "errorsSub": "{{agent}} failed {{count}} times"
+      "waitingSub": "Longest waited {{minutes}} min"
     },
     "actionStrip": {
       "title": "{{count}} waiting on you",
@@ -65,8 +63,7 @@
       "deny": "Deny",
       "allow": "Allow",
       "reply": "Reply",
-      "viewDetails": "View details",
-      "retry": "Retry"
+      "viewDetails": "View details"
     },
     "recentAuth": {
       "title": "Recent authorizations & changes",
@@ -188,12 +185,9 @@
       "sessionWaiting": "{{count}} waiting for you",
       "viewSessions": "View this machine's conversations",
       "offlineNotEnterable": "Offline — conversations are unavailable.",
-      "authorized": "Authorized devices",
-      "summary": "{{n}} devices · {{m}} online",
       "revokeCardTitle": "Revoke this device",
       "revokeCardBody": "After you revoke it, this device can no longer refresh its credentials. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation fully takes effect the next time it comes online, and any running conversations will be interrupted.",
       "revokeCardConfirm": "Revoke",
-      "agentredAccept": "Accept jobs",
       "cardSummary": "{{projects}} projects · {{m}} conversations running"
     }
   },
