@@ -227,6 +227,53 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	}
 }
 
+func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	mini := miniredis.RunT(t)
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	controller := gomock.NewController(t)
+	devices := mock_device_repo.NewMockDeviceRepo(controller)
+	desktop := &device_entity.Device{
+		ID: 10, UserID: 7, Kind: device_entity.KindDesktop, Fingerprint: "fp-desktop", Status: 1,
+	}
+	devices.EXPECT().Find(gomock.Any(), desktop.ID).Return(desktop, nil)
+	devices.EXPECT().FindByFingerprint(gomock.Any(), desktop.UserID, desktop.Fingerprint).Return(desktop, nil)
+
+	config := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second}
+	redisClient := newRelayRedisClient(t, mini)
+	server := newRelayServer(t, signer, relay_svc.New(
+		config, devices, redisClient, relay_svc.NewRedisForwarder(config, redisClient),
+	))
+	targetToken, _, err := signer.Sign(jwt.Claims{
+		UID: desktop.UserID, DID: desktop.ID, Kind: device_entity.KindDesktop,
+	}, time.Hour)
+	require.NoError(t, err)
+	clientToken, _, err := signer.Sign(jwt.Claims{
+		UID: desktop.UserID, DID: 4, Kind: device_entity.KindAgentred,
+	}, time.Hour)
+	require.NoError(t, err)
+
+	targetConn, _, err := websocket.DefaultDialer.Dial(
+		wsURL(server.URL, "/v1/relay/daemon"),
+		http.Header{"Authorization": {"Bearer " + targetToken}},
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, targetConn.Close()) })
+
+	clientConn, response, err := websocket.DefaultDialer.Dial(
+		wsURL(server.URL, "/v1/relay/client?daemon_fingerprint="+desktop.Fingerprint),
+		http.Header{"Authorization": {"Bearer " + clientToken}},
+	)
+	if response != nil {
+		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
+}
+
 func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis()
@@ -321,15 +368,15 @@ func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
 	require.Error(t, err)
 }
 
-// PrepareDaemon 的准入判据（本账号名下、活跃的 agentred）被拒时必须走 403，而且
-// 必须**在 websocket upgrade 之前**答复：一个 desktop 端的 device JWT 拿不到升级后
-// 的连接，也就没机会占住这个账号+指纹的中继路由。403 这一支此前没有任何测试。
+// PrepareDaemon 的准入判据（本账号名下、活跃且可寻址的设备）被拒时必须走 403，
+// 而且必须**在 websocket upgrade 之前**答复：不支持的设备种类拿不到升级后的连接，
+// 也就没机会占住这个账号+指纹的中继路由。
 func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis()
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
+	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindWeb}, time.Hour)
 	require.NoError(t, err)
 
 	stub := &relayStub{

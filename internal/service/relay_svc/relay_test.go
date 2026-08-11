@@ -39,6 +39,13 @@ func activeDaemon() *device_entity.Device {
 	}
 }
 
+func activeDesktop() *device_entity.Device {
+	return &device_entity.Device{
+		ID: 10, UserID: 7, Kind: device_entity.KindDesktop,
+		Fingerprint: "fp-desktop", Status: 1,
+	}
+}
+
 func TestIsDaemonOnline(t *testing.T) {
 	ctx := context.Background()
 	svc, mini, _ := newRelayForTest(t, fakeForwarder{})
@@ -155,26 +162,34 @@ func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
 	}
 }
 
-// PrepareDaemon 是 /v1/relay/daemon 唯一的准入判据：只有本账号名下、活跃的
-// agentred 设备才能把自己登记成中转目标。没有这几条，一个 desktop 端的 device JWT
-// 就能冒充计算节点占住这个账号+指纹的中继路由，或者拿别人账号下的 deviceID 登记。
-// 这些守卫此前一条测试都没有，整段删掉全绿。
-func TestPrepareDaemonRejectsAnythingButThisAccountsActiveAgentred(t *testing.T) {
+func TestDesktopCanRegisterAndBeResolvedWithinAccount(t *testing.T) {
+	ctx := context.Background()
+	svc, _, devices := newRelayForTest(t, fakeForwarder{})
+	desktop := activeDesktop()
+	devices.EXPECT().Find(gomock.Any(), desktop.ID).Return(desktop, nil)
+	devices.EXPECT().FindByFingerprint(gomock.Any(), desktop.UserID, desktop.Fingerprint).Return(desktop, nil)
+
+	route, err := svc.PrepareDaemon(ctx, desktop.UserID, desktop.ID, device_entity.KindDesktop)
+	require.NoError(t, err)
+	require.Equal(t, Route{
+		AccountID: desktop.UserID, Fingerprint: desktop.Fingerprint, InstanceID: "server-a",
+	}, route)
+	require.NoError(t, svc.RegisterDaemon(ctx, route))
+
+	resolved, err := svc.ConnectClient(ctx, desktop.UserID, desktop.Fingerprint)
+	require.NoError(t, err)
+	require.Equal(t, route, resolved)
+}
+
+// PrepareDaemon 是 /v1/relay/daemon 唯一的准入判据：只有本账号名下、活跃且可寻址的
+// agentred 或 desktop 设备才能把自己登记成中转目标。kind、账号归属和撤销状态必须在
+// websocket upgrade 前复核，避免无权设备占住账号+指纹的中继路由。
+func TestPrepareDaemonAcceptsOnlyThisAccountsActiveAddressableDevices(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("非 agentred 设备种类", func(t *testing.T) {
+	t.Run("kind=web 无法登记为可寻址目标", func(t *testing.T) {
 		svc, _, _ := newRelayForTest(t, fakeForwarder{})
 		// kind 在读库之前就被拒，连 Find 都不该发生（devices mock 没有 EXPECT）。
-		_, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindDesktop)
-		require.ErrorIs(t, err, ErrDaemonForbidden)
-	})
-
-	t.Run("kind=web 无法登记为可寻址目标（R3 守卫断言）", func(t *testing.T) {
-		svc, _, _ := newRelayForTest(t, fakeForwarder{})
-		// 浏览器与桌面端一样是中继上的纯出站调用方：持有有效设备 JWT 只能连
-		// /v1/relay/client，绝不能把自己登记成可被寻址的目标（也不能被派活）。
-		// 这条由 PrepareDaemon 的既有 kind 判定执行——同样在读库之前就被拒，
-		// 连 Find 都不该发生（devices mock 没有 EXPECT）。
 		_, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindWeb)
 		require.ErrorIs(t, err, ErrDaemonForbidden)
 	})
@@ -188,17 +203,14 @@ func TestPrepareDaemonRejectsAnythingButThisAccountsActiveAgentred(t *testing.T)
 		require.ErrorIs(t, err, ErrDaemonForbidden)
 	})
 
-	t.Run("设备已被撤销", func(t *testing.T) {
+	t.Run("撤销一台 desktop 不影响其它设备", func(t *testing.T) {
 		svc, _, devices := newRelayForTest(t, fakeForwarder{})
-		revoked := activeDaemon()
+		revoked := activeDesktop()
 		revoked.Status = 2
-		devices.EXPECT().Find(gomock.Any(), int64(9)).Return(revoked, nil)
-		_, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+		devices.EXPECT().Find(gomock.Any(), revoked.ID).Return(revoked, nil)
+		_, err := svc.PrepareDaemon(ctx, revoked.UserID, revoked.ID, device_entity.KindDesktop)
 		require.ErrorIs(t, err, ErrDaemonForbidden)
-	})
 
-	t.Run("本账号活跃的 agentred 才放行", func(t *testing.T) {
-		svc, _, devices := newRelayForTest(t, fakeForwarder{})
 		devices.EXPECT().Find(gomock.Any(), int64(9)).Return(activeDaemon(), nil)
 		route, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
 		require.NoError(t, err)
@@ -834,11 +846,22 @@ func TestDefaultIsNeverNilWithoutRegistration(t *testing.T) {
 func TestRelayClientFailuresAreDistinguishable(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("daemon is not registered to this account", func(t *testing.T) {
+	t.Run("target belongs to another account", func(t *testing.T) {
 		svc, _, devices := newRelayForTest(t, fakeForwarder{})
-		devices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-unknown").Return(nil, nil)
+		// FindByFingerprint 按账号限定查询；另一个账号里的同指纹对账号 7 不可见。
+		devices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "fp-other-account").Return(nil, nil)
 
-		_, err := svc.ConnectClient(ctx, 7, "fp-unknown")
+		_, err := svc.ConnectClient(ctx, 7, "fp-other-account")
+		require.ErrorIs(t, err, ErrDaemonNotFound)
+	})
+
+	t.Run("revoked desktop is not addressable", func(t *testing.T) {
+		svc, _, devices := newRelayForTest(t, fakeForwarder{})
+		revoked := activeDesktop()
+		revoked.Status = 2
+		devices.EXPECT().FindByFingerprint(gomock.Any(), revoked.UserID, revoked.Fingerprint).Return(revoked, nil)
+
+		_, err := svc.ConnectClient(ctx, revoked.UserID, revoked.Fingerprint)
 		require.ErrorIs(t, err, ErrDaemonNotFound)
 	})
 
