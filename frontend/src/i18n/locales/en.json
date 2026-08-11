@@ -193,7 +193,8 @@
       "revokeCardTitle": "Revoke this device",
       "revokeCardBody": "After you revoke it, this device can no longer refresh its credentials. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation fully takes effect the next time it comes online, and any running conversations will be interrupted.",
       "revokeCardConfirm": "Revoke",
-      "agentredAccept": "Accept jobs"
+      "agentredAccept": "Accept jobs",
+      "cardSummary": "{{projects}} projects · {{m}} conversations running"
     }
   },
   "notFound": {

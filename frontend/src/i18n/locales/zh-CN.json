@@ -193,7 +193,8 @@
       "revokeCardTitle": "撤销这台设备",
       "revokeCardBody": "撤销后该设备无法再刷新令牌；若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受。吊销会随它下次上线后完全生效，正在跑的对话会被中断。",
       "revokeCardConfirm": "撤销",
-      "agentredAccept": "接单"
+      "agentredAccept": "接单",
+      "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑"
     }
   },
   "notFound": {
