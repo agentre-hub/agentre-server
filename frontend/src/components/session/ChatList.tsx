@@ -583,18 +583,38 @@ export default function ChatList({
   }, [filteredGroups, isMobile]);
 
   // ↑↓ 键盘导航的有序目标：最近区 + 各分组行 + 离线（失效没有目的地，不进导航）。
+  // 「最近」区的行与所属分组里的行是同一批会话（同 key）——必须去重，否则选中
+  // 一个键时「最近」区与分组里那一行会同亮，Enter 也落在重复目标上。保留最近区
+  // 的首次出现（导航从它开始），分组里的同名行不再重复进列表。
   const navTargets = useMemo(() => {
     if (isMobile) return [];
+    const seen = new Set<string>();
     const out: { key: string; path: string }[] = [];
-    for (const r of recentRows)
+    for (const r of recentRows) {
+      if (seen.has(r.key)) continue;
+      seen.add(r.key);
       out.push({ key: r.key, path: sessionPath(r.deviceId, r.sessionId) });
+    }
     for (const g of filteredGroups)
-      for (const s of g.sessions)
+      for (const s of g.sessions) {
+        if (seen.has(s.key)) continue;
+        seen.add(s.key);
         out.push({ key: s.key, path: sessionPath(s.deviceId, s.sessionId) });
-    for (const o of offline)
+      }
+    for (const o of offline) {
+      if (seen.has(o.key)) continue;
+      seen.add(o.key);
       out.push({ key: o.key, path: sessionPath(o.deviceId, o.sessionId) });
+    }
     return out;
   }, [recentRows, filteredGroups, offline, sessionPath, isMobile]);
+
+  // 进了「最近」区的会话键：分组里那行同键，不得再高亮——否则同一会话在
+  // 「最近」与分组两处同亮（去重只改导航目标列表，不改 DOM 上两个同键行）。
+  const recentKeys = useMemo(
+    () => new Set(recentRows.map((r) => r.key)),
+    [recentRows],
+  );
 
   const navIndex = navTargets.findIndex((x) => x.key === selectedKey);
 
@@ -783,7 +803,11 @@ export default function ChatList({
                     locale={locale}
                     isMobile={isMobile}
                     showFollow={!isMobile}
-                    selected={!isMobile && selectedKey === s.key}
+                    selected={
+                      !isMobile &&
+                      selectedKey === s.key &&
+                      !recentKeys.has(s.key)
+                    }
                     onMenu={(e, path) =>
                       handleMenu(e, "session", s.fingerprint, s.sessionId, path)
                     }

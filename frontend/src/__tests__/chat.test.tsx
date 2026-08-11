@@ -703,6 +703,55 @@ describe("对话页:T6 会话列表 UX(最近 / 筛选 / 键盘导航 / 右键�
     expect(secondTarget?.getAttribute("data-nav-target")).toBeTruthy();
   });
 
+  it("↑↓ 键盘导航任一时刻只有一行被选中(「最近」区与分组是同一批会话,不得两处同亮)", async () => {
+    // 42 / 43 都在「最近 · 跨 Agent」区、又在各自 Agent 分组里出现一次——
+    // 导航目标必须去重,否则选中 42 时「最近」区与分组里那一行会同亮,Enter 也
+    // 打开的是同一个会话(重复目标)。
+    const s1 = {
+      ...summary,
+      sessionId: 42,
+      title: "重构登录页",
+      updatedAt: 1754800000000,
+    };
+    const s2 = {
+      ...summary,
+      sessionId: 43,
+      title: "修 bug",
+      updatedAt: 1754700000000,
+    };
+    const s3 = {
+      ...summary,
+      sessionId: 44,
+      title: "不在最近区的第三条",
+      updatedAt: 1754600000000,
+    };
+    stubChat(
+      [
+        { fp: "fp-1", sid: 42, followedAt: 1 },
+        { fp: "fp-1", sid: 43, followedAt: 1 },
+        { fp: "fp-1", sid: 44, followedAt: 1 },
+      ],
+      [s1, s2, s3],
+    );
+    renderChat();
+
+    await screen.findAllByText("重构登录页");
+    const nav = screen.getByTestId("chat-list-nav");
+    // jsdom 不实现 scrollIntoView,先垫掉(既有键盘导航测试同一手法)。
+    Element.prototype.scrollIntoView = vi.fn();
+    nav.focus();
+
+    // 连按 4 次 ↓:最近区 42/43 → 分组 44(去重后)…… 任一时刻都只能有一行高亮。
+    for (let i = 0; i < 4; i++) {
+      fireEvent.keyDown(nav, { key: "ArrowDown" });
+      const highlighted = document.querySelectorAll('[aria-current="true"]');
+      expect(highlighted.length, `第 ${i + 1} 次 ↓ 后高亮行数`).toBe(1);
+    }
+    // 三次 ↓ 后落在「不在最近区的第三条」(分组独有),其键与最近区不重复。
+    const last = document.querySelector('[aria-current="true"]');
+    expect(last?.textContent).toContain("不在最近区的第三条");
+  });
+
   it("会话行右键菜单只放真实后端动作(新标签打开/取消关注),不伪造改名删除", async () => {
     stubChat([{ fp: "fp-1", sid: 42, followedAt: 1 }], [summary]);
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
