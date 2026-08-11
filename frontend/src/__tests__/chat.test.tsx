@@ -10,7 +10,13 @@
  *   - R13：机器离线时该条仍在名单里并标明离线、不消失；目标已不存在时标失效并可
  *     一键移除（设备被撤销 / 会话在机器上已不存在两种情况）。
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -49,7 +55,21 @@ const offlineMachine = {
   online: false,
 };
 const agents = [
-  { sync_id: "ag-1", name: "后端 Agent", avatar_color: "#4f46e5" },
+  {
+    sync_id: "ag-1",
+    name: "后端 Agent",
+    avatar_color: "#4f46e5",
+    has_available_target: true,
+    exec_targets: [
+      {
+        rank: 1,
+        device_name: "书房小主机",
+        availability: "available",
+        current: true,
+        is_local_reference: false,
+      },
+    ],
+  },
 ];
 const summary = {
   sessionId: 42,
@@ -101,7 +121,7 @@ function renderChat() {
 }
 
 describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
-  it("空态:Agent 骨架照常列出、每 Agent 一行「还没有对话」,主动作 + 去设备页出口,文案不含「关注」", async () => {
+  it("空态:桌面 320px 左列 + 居中详情空态,TopBar 注入 Cnt/FindBtn,主动作开新对话,文案不含「关注」", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/follows") return { items: [] };
       if (path === "/v1/devices") return { devices: [] };
@@ -110,10 +130,17 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
     });
     renderChat();
 
-    // 页标题与 Agent 骨架。
-    expect(await screen.findByRole("heading", { name: "Chat" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: /后端 Agent/ })).toBeTruthy();
-    // 每个 Agent 一行「还没有对话」，空态卡片自己也顶着同一句（屏 32 / 帧 49b）。
+    // 页标题移进外壳 TopBar（设计稿屏 49b），不再有正文 h1。
+    const banner = screen.getByRole("banner");
+    expect(within(banner).getByText("Chat")).toBeTruthy();
+    // 桌面形态:320px 左会话列表列 + 右侧详情区。
+    const listCol = screen.getByTestId("chat-list-col");
+    expect(listCol.className).toContain("w-[320px]");
+    expect(screen.getByTestId("chat-detail")).toBeTruthy();
+    // Agent 骨架照常列出、每个 Agent 一行「还没有对话」，空态详情自己也顶着同一句。
+    expect(
+      await screen.findByRole("heading", { name: /后端 Agent/ }),
+    ).toBeTruthy();
     expect(screen.getAllByText("No conversations yet.").length).toBe(2);
     expect(
       screen.getByRole("heading", { name: "No conversations yet." }),
@@ -124,18 +151,31 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
         "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
       ),
     ).toBeTruthy();
-    // 主动作「开始第一个对话」。
-    expect(
-      screen.getByRole("button", { name: "Start your first conversation" }),
-    ).toBeTruthy();
-    // 次要出口去设备页。
+    // 主动作「开始第一个对话」打开新对话弹层（屏 23/24/25）。
+    const startBtn = screen.getByRole("button", {
+      name: "Start your first conversation",
+    });
+    // 次要出口去设备页 + 备选链接去设备页。
     const devLink = screen.getByRole("link", { name: /devices page/ });
     expect(devLink.getAttribute("href")).toBe("/devices");
+    // TopBar:会话总数 Cnt + FindBtn（去设备页关注更多对话）。
+    expect(screen.getByTestId("chat-count").textContent).toBe("0");
+    const findBtn = screen.getByRole("link", {
+      name: "Follow conversations from your device",
+    });
+    expect(findBtn.getAttribute("href")).toBe("/devices");
+    // 没有在线桌面设备时 Fresh 不出现（不谎报「已连接」）。
+    expect(screen.queryByText("Desktop connected")).toBeNull();
     // 空态文案里不出现「关注」机制词。
     expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unfollow" })).toBeNull();
     // 页面只消费账号级名单。
     expect(mockedApi).toHaveBeenCalledWith("/v1/follows");
+
+    fireEvent.click(startBtn);
+    expect(
+      await screen.findByRole("heading", { name: "Pick an agent" }),
+    ).toBeTruthy();
   });
 
   it("R14:关注来的会话在这里出现(不需要下钻)——从 /v1/follows 读名单、连到目标机器解析,按 Agent 分组,行尾有关注开关", async () => {
@@ -175,6 +215,13 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
     expect(row?.getAttribute("href")).toBe("/devices/1/sessions/42");
     // 数据从中继解析,而非在别的页下钻。
     expect(fakeClient.request).toHaveBeenCalledWith("runtime.session.list");
+    // 有会话时:TopBar Cnt = 会话数;详情区不再显示「还没有对话」居中空态。
+    expect(screen.getByTestId("chat-count").textContent).toBe("1");
+    expect(
+      screen.queryByRole("heading", { name: "No conversations yet." }),
+    ).toBeNull();
+    // 有在线 agentred 设备时,TopBar 出现 Fresh「桌面端已连接」。
+    expect(screen.getByText("Desktop connected")).toBeTruthy();
   });
 
   it("R13:机器离线时该条仍在名单里并标明离线,不消失", async () => {

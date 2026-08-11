@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { Filter, MessagesSquare, Plus, Search } from "lucide-react";
 
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import ChatList, {
   type ChatSessionRow,
 } from "@/components/session/ChatList";
 import NewConversationDialog from "@/components/session/NewConversationDialog";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import { decodeSessionListResult, type SessionSummary } from "@/lib/wire";
@@ -119,6 +121,7 @@ function FollowedMachineResolver({
 export default function Chat() {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const isMobile = useIsMobile();
 
   const [follows, setFollows] = useState<FollowItem[]>([]);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
@@ -306,100 +309,216 @@ export default function Chat() {
   }
 
   const empty = view.total === 0;
+  const hasOnlineDesktop = devices.some((d) => d.online);
+
+  const list = (
+    <ChatList
+      groups={view.groups}
+      pending={view.pending}
+      offline={view.offline}
+      invalid={view.invalid}
+      onUnfollow={unfollow}
+      onRemoveInvalid={unfollow}
+      sessionPath={(did, sid) => `/devices/${did}/sessions/${sid}`}
+    />
+  );
+
+  // TopBar 注入（屏 49b）：Cnt = 会话总数；Fresh = 有 agentred 设备在线才显示
+  // 「桌面端已连接」（取不到就隐藏，不谎报）；FindBtn = 去设备页关注更多对话。
+  const topBarRight = (
+    <>
+      <span
+        data-testid="chat-count"
+        aria-label={t("session.breadcrumb.count", { count: view.total })}
+        className="font-mono text-[12px] text-subtle-foreground"
+      >
+        {view.total}
+      </span>
+      {hasOnlineDesktop && (
+        <span className="flex items-center gap-1.5 text-[12px] text-subtle-foreground">
+          <span
+            aria-hidden="true"
+            className="size-1.5 rounded-full bg-status-running"
+          />
+          {t("appShell.topBar.fresh")}
+        </span>
+      )}
+      <Link
+        to="/devices"
+        className="flex h-7 items-center rounded-md border border-border px-2.5 text-[12px] font-semibold text-foreground transition-colors hover:bg-accent"
+      >
+        {t("chat.followFromDevice")}
+      </Link>
+    </>
+  );
 
   return (
-    <AppShell>
-      <div className="mx-auto w-full max-w-3xl space-y-5">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-semibold text-foreground">
-            {t("chat.title")}
-          </h1>
-          {!empty && (
-            <>
-              <span className="flex-1" />
-              <Link
-                to="/devices"
-                className="text-sm font-medium text-primary hover:underline"
-              >
-                {t("chat.findMore")}
-              </Link>
-            </>
-          )}
-        </div>
-
-        {!loaded ? (
-          <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
-        ) : empty ? (
-          <div className="rounded-lg border border-border bg-card p-6">
-            {/* 空态沿用设计稿屏 32 / 帧 49b：标题「还没有对话」+ 原文正文 +
-                主按钮「开始第一个对话」，文案里不出现「关注」这个机制词。 */}
-            <h2 className="mb-1 text-base font-semibold text-foreground">
-              {t("chat.noSessions")}
-            </h2>
-            <p className="mb-4 text-sm leading-[1.5] text-muted-foreground">
-              {t("chat.startFirstBody")}
+    <AppShell title={t("nav.chat")} right={topBarRight}>
+      {isMobile ? (
+        /* 移动形态（屏 20/29）：保持状态分组列表 + 居中空态卡片，不强制左列 + 详情。 */
+        <div className="mx-auto w-full max-w-3xl space-y-5">
+          {!loaded ? (
+            <p className="text-sm text-muted-foreground">
+              {t("common.loading")}
             </p>
-            {/* R15 的主动作：打开新对话弹层（屏 23/24/25），派发成功后直接跳详情页。 */}
-            <Button size="lg" onClick={() => setNewOpen(true)}>
-              {t("chat.startFirst")}
-            </Button>
-            <div className="mt-4">
-              <Link
-                to="/devices"
-                className="text-sm font-medium text-primary hover:underline"
+          ) : empty ? (
+            <div className="rounded-lg border border-border bg-card p-6">
+              {/* 空态沿用设计稿屏 32：标题/正文/主按钮文案与桌面一致。 */}
+              <h2 className="mb-1 text-base font-semibold text-foreground">
+                {t("chat.noSessions")}
+              </h2>
+              <p className="mb-4 text-sm leading-[1.5] text-muted-foreground">
+                {t("chat.startFirstBody")}
+              </p>
+              <Button size="lg" onClick={() => setNewOpen(true)}>
+                {t("chat.startFirst")}
+              </Button>
+              <div className="mt-4">
+                <Link
+                  to="/devices"
+                  className="text-sm font-medium text-primary hover:underline"
+                >
+                  {t("chat.findMore")}
+                </Link>
+              </div>
+            </div>
+          ) : null}
+          {loaded && list}
+        </div>
+      ) : (
+        /* 桌面（屏 49b）：320px 左会话列表列 + 右侧详情区。负 margin 铺满
+           AppShell main 的 padding，让列与 TopBar 左右边齐平。 */
+        <div
+          data-testid="chat-layout"
+          className="-mx-4 -my-5 flex h-full flex-row md:-mx-8 md:-my-6"
+        >
+          <div
+            data-testid="chat-list-col"
+            className="flex w-[320px] shrink-0 flex-col border-r border-border bg-card"
+          >
+            <div className="flex items-center gap-1.5 p-2.5">
+              {/* 筛选按钮：任务 6 才接真实筛选，这里只摆 30px icon 槽。 */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-[30px]"
+                aria-label={t("session.ux.filter.all")}
               >
-                {t("chat.findMore")}
-              </Link>
+                <Filter className="size-4" aria-hidden="true" />
+              </Button>
+              <label className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-md bg-muted px-2.5">
+                <Search
+                  className="size-3.5 shrink-0 text-subtle-foreground"
+                  aria-hidden="true"
+                />
+                <input
+                  type="search"
+                  aria-label={t("appShell.searchPlaceholder")}
+                  placeholder={t("appShell.searchPlaceholder")}
+                  className="h-full w-full bg-transparent text-[12.5px] text-foreground outline-none placeholder:text-subtle-foreground"
+                />
+              </label>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="size-[30px]"
+                aria-label={t("chat.pickAgent")}
+                title={t("chat.pickAgent")}
+                onClick={() => setNewOpen(true)}
+              >
+                <Plus className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-2.5">
+              {!loaded ? (
+                <p className="text-sm text-muted-foreground">
+                  {t("common.loading")}
+                </p>
+              ) : (
+                list
+              )}
             </div>
           </div>
-        ) : null}
+          <div
+            data-testid="chat-detail"
+            className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 p-4"
+          >
+            {!loaded ? (
+              <p className="text-sm text-muted-foreground">
+                {t("common.loading")}
+              </p>
+            ) : empty ? (
+              /* 空态：居中详情（62px 图标盒 + 标题 + 正文 + 主按钮 + 备选链接）。 */
+              <>
+                <div className="flex size-[62px] items-center justify-center rounded-lg bg-primary-soft">
+                  <MessagesSquare
+                    className="size-8 text-primary-text"
+                    aria-hidden="true"
+                  />
+                </div>
+                <h2 className="text-lg font-bold text-foreground">
+                  {t("chat.noSessions")}
+                </h2>
+                <p className="max-w-sm text-center text-[12.5px] leading-[22px] text-muted-foreground">
+                  {t("chat.startFirstBody")}
+                </p>
+                {/* R15 的主动作：打开新对话弹层（屏 23/24/25），派发成功后直接跳详情页。 */}
+                <Button size="lg" onClick={() => setNewOpen(true)}>
+                  {t("chat.startFirst")}
+                </Button>
+                <Link
+                  to="/devices"
+                  className="text-[11.5px] text-subtle-foreground hover:underline"
+                >
+                  {t("chat.findMore")}
+                </Link>
+              </>
+            ) : (
+              /* 有会话：详情区留安静占位；选中/右键/键盘导航是任务 6 的交互。 */
+              <div className="flex size-[62px] items-center justify-center rounded-lg bg-primary-soft">
+                <MessagesSquare
+                  className="size-8 text-primary-text"
+                  aria-hidden="true"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
-        {loaded && (
-          <ChatList
-            groups={view.groups}
-            pending={view.pending}
-            offline={view.offline}
-            invalid={view.invalid}
-            onUnfollow={unfollow}
-            onRemoveInvalid={unfollow}
-            sessionPath={(did, sid) => `/devices/${did}/sessions/${sid}`}
-          />
-        )}
+      {/* R15/R16：从 web 发起新对话。派发成功后该条已进账号级关注名单，
+          无需再关注；直接跳到详情页读实时流。 */}
+      <NewConversationDialog
+        open={newOpen}
+        onOpenChange={setNewOpen}
+        onStarted={({ deviceId, sessionId }) =>
+          nav(`/devices/${deviceId}/sessions/${sessionId}`)
+        }
+      />
 
-        {/* R15/R16：从 web 发起新对话。派发成功后该条已进账号级关注名单，
-            无需再关注；直接跳到详情页读实时流。 */}
-        <NewConversationDialog
-          open={newOpen}
-          onOpenChange={setNewOpen}
-          onStarted={({ deviceId, sessionId }) =>
-            nav(`/devices/${deviceId}/sessions/${sessionId}`)
-          }
-        />
-
-        {/* 每个在线且有非失效关注的机器挂一个解析器（见文件头注释）。 */}
-        {loaded &&
-          [...devicesByFp.values()]
-            .filter(
-              (d) =>
-                d.online &&
-                follows.some(
+      {/* 每个在线且有非失效关注的机器挂一个解析器（见文件头注释）。 */}
+      {loaded &&
+        [...devicesByFp.values()]
+          .filter(
+            (d) =>
+              d.online &&
+              follows.some(
+                (f) => f.device_fingerprint === d.fingerprint && !f.invalid,
+              ),
+          )
+          .map((d) => (
+            <FollowedMachineResolver
+              key={d.fingerprint}
+              fingerprint={d.fingerprint}
+              ids={follows
+                .filter(
                   (f) => f.device_fingerprint === d.fingerprint && !f.invalid,
-                ),
-            )
-            .map((d) => (
-              <FollowedMachineResolver
-                key={d.fingerprint}
-                fingerprint={d.fingerprint}
-                ids={follows
-                  .filter(
-                    (f) => f.device_fingerprint === d.fingerprint && !f.invalid,
-                  )
-                  .map((f) => f.session_id)}
-                onResolved={onResolved}
-                onState={onState}
-              />
-            ))}
-      </div>
+                )
+                .map((f) => f.session_id)}
+              onResolved={onResolved}
+              onState={onState}
+            />
+          ))}
     </AppShell>
   );
 }
