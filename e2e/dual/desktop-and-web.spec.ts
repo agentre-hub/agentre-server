@@ -39,11 +39,10 @@ const FAKE_PREFIX = "e2e-fake-reply: ";
 const REMOTE_AGENT = "E2E Remote Agent";
 /** fake runtime 的工具审批接缝:emit 一条 ToolPermissionRequest 后阻塞等决策。 */
 const TOOL_DIRECTIVE = "e2e-tool-permission:bash";
-/** 同一个接缝的另一用途:见 KEEPALIVE 那一步的说明(全程不批准,把这一轮挂住)。 */
-const KEEPALIVE_DIRECTIVE = "e2e-tool-permission:keepalive";
 
 const RUN = Date.now().toString(36);
 const DESKTOP_OPENING = `e2e-desktop-opening-${RUN}`;
+const DESKTOP_SECOND = `e2e-desktop-second-${RUN}`;
 const WEB_MESSAGE = `e2e-web-message-${RUN}`;
 
 /** 把两个端的 console / 失败请求都收进测试输出 —— 出问题时不必再猜。 */
@@ -70,9 +69,8 @@ async function desktopNewChat(desktop: Page) {
 }
 
 /**
- * 桌面端同时开着几条会话时,非活动 tab 的面板仍留在 DOM 里(composer、转录都在),
- * 所以本 spec 里所有桌面端定位一律只认**可见的那一份** —— 否则同一个选择器会同时
- * 命中另一条会话的同名元素。
+ * 非活动 tab 的会话面板仍留在 DOM 里(composer、转录都在),所以本 spec 里所有桌面端
+ * 定位一律只认**可见的那一份** —— 否则同一个选择器会同时命中别的会话的同名元素。
  */
 function visible(locator: Locator): Locator {
   return locator.filter({ visible: true });
@@ -131,26 +129,6 @@ test("桌面端与浏览器同接一台 agentred:R7 落库回传、R18/R19 用�
     timeout: 60_000,
   });
 
-  // ── 0. 先在这台 agentred 上挂住一轮:整场景要求桌面端**始终在场** ───────────
-  //
-  // 桌面端与一台 agentred 的连接和 remote.Runtime 都是「每轮借、轮末还」的:
-  //   - 一轮结束后 chat_svc 释放 remoteCache 里那台设备的条目,池里的连接再空闲
-  //     30 秒就被回收;
-  //   - 下一次借用会 remote.New 出一个**新的** Runtime,它既不认识别的端在这台机器上
-  //     跑的会话(hasSession 为假 → 提交决策当场 ErrNoActiveTurn),又会把 daemon 通知的
-  //     handler 重新注册到同一条连接上,把上一实例上挂着的自主续轮消费方架空。
-  // 于是「桌面端在场」这件事必须由一轮**还没结束**的轮次来维持 —— 真实世界里那就是
-  // 一台机器上还有别的活儿在跑,这里用工具审批接缝造一轮:fake 回显之后阻塞等决策,
-  // 我们全程不批准。两条都是产品既有行为,本任务只做验证、不改产品代码。
-  await desktopNewChat(desktop);
-  await desktopSend(desktop, KEEPALIVE_DIRECTIVE);
-  await expect(
-    visible(
-      desktop.getByRole("main").getByTestId("tool-permission-card"),
-    ).first(),
-    "挂住那一轮必须真的停在待决策上(否则桌面端会在半路离场)",
-  ).toBeVisible({ timeout: 90_000 });
-
   // ── 1. 桌面端在那台 agentred 上开本场景的会话(R7 的生产者)────────────────
   await desktopNewChat(desktop);
   await desktopSend(desktop, DESKTOP_OPENING);
@@ -207,10 +185,11 @@ test("桌面端与浏览器同接一台 agentred:R7 落库回传、R18/R19 用�
 
   // ── 3. R18 / R19:浏览器在这条会话上发一句,桌面端落成一行正常的用户消息 ────
   //
-  // 这条会话在桌面端只跑开场那一轮,此后由浏览器驱动:自主续轮的消费方
-  // (startAutonomousWatcher)每会话只订阅一次(autoWatchers 去重),而它订阅的是
-  // **当时那个** remote.Runtime 实例 —— 桌面端若在这条会话上再跑一轮,新实例会接管
-  // daemon 通知,消费方却还挂在旧实例上,浏览器发起的这一轮就没人落库了。
+  // 先让桌面端在**同一条会话**上再跑一轮:R18 的规格文句是无条件的(「桌面端接入同一
+  // 条会话时,浏览器发出的那条用户消息在桌面端的转录里落成正常的一行用户消息」),
+  // 桌面端此前在这条会话上跑过几轮不该改变结论。这一步把那个前提摆进场景里。
+  await desktopSend(desktop, DESKTOP_SECOND);
+
   const composer = page.getByTestId("session-detail-composer");
   await expect(composer).toBeEnabled({ timeout: 30_000 });
   await composer.fill(WEB_MESSAGE);
@@ -267,6 +246,9 @@ test("桌面端与浏览器同接一台 agentred:R7 落库回传、R18/R19 用�
   expect(rows[userIdx + 1]?.role).toBe("assistant");
 
   // ── 4. R10b:同一个待决策已被别的端答过时,浏览器就地说明它已被处理 ─────────
+  //
+  // 答这一张的是桌面端,而此刻它自己**没有任何一轮在跑**(上一轮早已收尾)——「在场」
+  // 因此不能靠一轮挂着的轮次来维持。这一步同时钉住那件事。
   await composer.fill(TOOL_DIRECTIVE);
   await page.getByTestId("session-detail-send").click();
   const webAllow = page.getByTestId("approve-tool-allow");
