@@ -1,17 +1,26 @@
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Bookmark } from "lucide-react";
 
 import {
   sessionTitle,
   statusGroupKey,
+  StatusDot,
   STATUS_GROUP_ORDER,
   type StatusGroupKey,
 } from "@/components/session/SessionList";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatRelativeTime } from "@/lib/sessionView";
+import {
+  formatRelativeTime,
+  matchesSessionFilter,
+  recentTimestamp,
+  takeRecent,
+  unreadCount,
+  type SessionFilter,
+} from "@/lib/sessionView";
 import { cn } from "@/lib/utils";
 import type { SessionSummary } from "@/lib/wire";
 
@@ -19,12 +28,23 @@ import type { SessionSummary } from "@/lib/wire";
  * 「对话」页的列表（R13，mockup 帧 49 / 49b）：骨架是账号下的 Agent 列表，因此
  * 任何时候都有内容。
  *
- * 桌面按 Agent 分组；机器落在每一条会话行的第二行小字（「机器 · 时间」），不作
- * 分组维度。关注开关在行尾（R12 的桌面入口）。
+ * 桌面（T6，p5Orc「优化」）：
+ *   - 顶部「最近 · 跨 Agent」扁平区：跨全部 Agent 取最近 5 条（按 updatedAt /
+ *     followedAt 之新），与分组内的行共用同一套两行行。
+ *   - 筛选 chips：全部 / 运行中 / 未读 N。运行中 = 正在运行且不等待输入；未读 =
+ *     正在等输入；「最近」区随筛选一起过滤。
+ *   - ↑↓ 键盘导航：焦点落在列表容器时移动「选中」高亮，Enter 打开选中行。
+ *   - 行上右键：只放有真实后端的动作——新标签打开 / 取消关注 / 移除失效；
+ *     改名 / 删除没有后端支持，一律省略，不伪造。
+ *
+ * 两行行（Row1 状态点 + 标题 + 相对时间；Row2 设备 · 后端）：设备名来自关注名单
+ * 解析出的设备（/v1/devices），后端来自 session.list；老会话退化时标题本身就是
+ * 「工作目录 · 后端 · 状态」，副行不重复印。
  *
  * 移动按状态分组（决策 12，屏 20）：等你处理置顶 → 运行中 → 已中断 → 其余；
  * 关注入口不在列表行、移到详情页顶栏（决策 16），因此移动行不渲染关注开关；
- * 行第二行仍是「机器 · 时间」。空态由页面在屏 32 形态呈现，本组件不重复。
+ * 移动行保文字徽标（不只靠颜色），触控目标 ≥ 44px。空态由页面在屏 32 形态呈现，
+ * 本组件不重复。
  *
  * 失效（目标设备被撤销 / 目标会话在机器上已不存在）的条目单列一节，可一键移除。
  * 机器离线时该条仍在名单里并标明离线（R13），不消失。
@@ -88,6 +108,9 @@ function formatTime(ms: number): string {
   return new Date(ms).toLocaleString();
 }
 
+/** T6 筛选 chips 的取值顺序（全部 → 运行中 → 未读）。 */
+const FILTER_CHIPS: SessionFilter[] = ["all", "running", "unread"];
+
 /**
  * 把（桌面的）Agent 分组拍平后按状态重组（决策 12 的移动形态）。
  *
@@ -136,6 +159,11 @@ function lifecycleLabel(state: string, t: (k: string) => string): string {
   }
 }
 
+/**
+ * 会话行（T6 两行行）。Row1 = 状态点 + 标题 + 相对时间；Row2 = 设备 · 后端。
+ * 桌面由状态点 + aria 承担状态（不只靠颜色）；移动保文字徽标 + Agent 名行。
+ * `showFollow` 只在桌面分组行开——「最近」区不重复放关注开关。
+ */
 function SessionRow({
   row,
   onUnfollow,
@@ -143,6 +171,10 @@ function SessionRow({
   t,
   locale,
   isMobile,
+  showFollow,
+  selected,
+  onMenu,
+  testidPrefix,
 }: {
   row: ChatSessionRow;
   onUnfollow: (fp: string, sid: number) => void;
@@ -150,15 +182,34 @@ function SessionRow({
   t: (k: string, opts?: Record<string, unknown>) => string;
   locale: string;
   isMobile: boolean;
+  showFollow: boolean;
+  selected: boolean;
+  onMenu: (e: React.MouseEvent, path: string) => void;
+  testidPrefix: string;
 }) {
   const waiting = !!row.summary.waitingForInput;
+  const title = sessionTitle(row.summary, t);
+  const hasRealTitle = !!row.summary.title?.trim();
+  const dotLabel = waiting
+    ? t("session.list.waiting")
+    : lifecycleLabel(row.summary.lifecycleState, t);
+  const hasRow2 =
+    hasRealTitle && (row.deviceName?.trim() || row.summary.backendType?.trim());
+  // Row2 的正文：「设备 · 后端」。拼成一个文本节点——第二行是一条整体的小字。
+  const row2 = [row.deviceName?.trim(), row.summary.backendType?.trim()]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div
       className={cn(
         "flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent",
         // 触控目标：移动行高不小于 44px。
         isMobile && "min-h-11 py-3",
+        // T6：↑↓ 键盘导航的「选中」高亮。
+        selected && "bg-primary-soft/40",
       )}
+      aria-current={selected ? "true" : undefined}
+      onContextMenu={(e) => onMenu(e, sessionPath(row.deviceId, row.sessionId))}
     >
       <Link
         to={sessionPath(row.deviceId, row.sessionId)}
@@ -171,7 +222,7 @@ function SessionRow({
             <p className="flex items-center gap-1.5 truncate text-xs font-medium text-muted-foreground">
               {row.agentColor && (
                 <span
-                  data-testid={`chat-row-avatar-${row.sessionId}`}
+                  data-testid={`${testidPrefix}-avatar-${row.sessionId}`}
                   aria-hidden="true"
                   className="size-2 shrink-0 rounded-full"
                   style={{ backgroundColor: row.agentColor }}
@@ -180,36 +231,50 @@ function SessionRow({
               {row.agentName}
             </p>
           )}
-          <p className="truncate text-sm font-medium text-foreground">
-            {sessionTitle(row.summary, t)}
+          {/* Row1：状态点 + 标题 + 相对时间（最后活动时间，R5 与行上是同一套信息）。 */}
+          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <StatusDot
+              state={row.summary}
+              testid={`${testidPrefix}-dot-${row.sessionId}`}
+              label={dotLabel}
+            />
+            <span className="truncate">{title}</span>
+            {row.summary.updatedAt ? (
+              <time
+                dateTime={new Date(row.summary.updatedAt).toISOString()}
+                title={new Date(row.summary.updatedAt).toLocaleString()}
+                className="shrink-0 text-xs font-normal text-subtle-foreground"
+              >
+                {formatRelativeTime(row.summary.updatedAt, locale)}
+              </time>
+            ) : null}
           </p>
-          {/* 机器 · 时间：机器落在行上，不作分组维度（决策 16）。时间与 R5 是同
-              一套信息——**最后活动时间**，不是关注时间（关注时间说不出这条对话
-              什么时候动过，web 自己发起的那条更会永远停在创建那一刻）。 */}
-          <p className="mt-0.5 truncate text-xs text-muted-foreground">
-            {t("chat.followedOn", {
-              machine: row.deviceName,
-              time: row.summary.updatedAt
-                ? formatRelativeTime(row.summary.updatedAt, locale)
-                : "—",
-            })}
-          </p>
-        </div>
-        <span
-          className={cn(
-            "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
-            waiting
-              ? "bg-status-waiting-bg text-status-waiting"
-              : "bg-muted text-muted-foreground",
+          {/* Row2：设备 · 后端。老会话退化时标题本身就是上下文，副行不重复印。 */}
+          {hasRow2 && (
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+              {row2}
+            </p>
           )}
-        >
-          {waiting
-            ? t("session.list.waiting")
-            : lifecycleLabel(row.summary.lifecycleState, t)}
-        </span>
+        </div>
+        {/* 移动端保文字徽标（不只靠颜色）；桌面由状态点 + aria 承担。 */}
+        {isMobile && (
+          <span
+            className={cn(
+              "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
+              waiting
+                ? "bg-status-waiting-bg text-status-waiting"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {waiting
+              ? t("session.list.waiting")
+              : lifecycleLabel(row.summary.lifecycleState, t)}
+          </span>
+        )}
       </Link>
-      {/* 决策 16：关注入口桌面在列表行、移动在详情页顶栏——移动不渲染行内开关。 */}
-      {!isMobile && (
+      {/* 决策 16：关注入口桌面在列表行、移动在详情页顶栏——移动不渲染行内开关。
+          「最近」区不重复放开关（showFollow=false）。 */}
+      {!isMobile && showFollow && (
         <Button
           variant="ghost"
           size="icon-xs"
@@ -239,19 +304,26 @@ function OfflineRow({
   sessionPath,
   t,
   isMobile,
+  selected,
+  onMenu,
 }: {
   row: ChatOfflineRow;
   onUnfollow: (fp: string, sid: number) => void;
   sessionPath: (deviceId: number, sessionId: number) => string;
   t: (k: string, opts?: Record<string, unknown>) => string;
   isMobile: boolean;
+  selected: boolean;
+  onMenu: (e: React.MouseEvent, path: string) => void;
 }) {
   return (
     <div
       className={cn(
         "flex items-center gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-accent",
         isMobile && "min-h-11 py-3",
+        selected && "bg-primary-soft/40",
       )}
+      aria-current={selected ? "true" : undefined}
+      onContextMenu={(e) => onMenu(e, sessionPath(row.deviceId, row.sessionId))}
     >
       <Link
         to={sessionPath(row.deviceId, row.sessionId)}
@@ -293,13 +365,18 @@ function InvalidRow({
   row,
   onRemove,
   t,
+  onMenu,
 }: {
   row: ChatInvalidRow;
   onRemove: (fp: string, sid: number) => void;
   t: (k: string) => string;
+  onMenu: (e: React.MouseEvent) => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-md px-3 py-2.5">
+    <div
+      className="flex items-center gap-3 rounded-md px-3 py-2.5"
+      onContextMenu={onMenu}
+    >
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-muted-foreground">
           {row.deviceName ?? t("chat.noMachine")}
@@ -319,6 +396,93 @@ function InvalidRow({
   );
 }
 
+/** T6 右键菜单的目标。kind 决定放哪些动作。 */
+interface MenuTarget {
+  x: number;
+  y: number;
+  kind: "session" | "offline" | "invalid";
+  fingerprint: string;
+  sessionId: number;
+  path?: string;
+}
+
+/**
+ * T6 行上右键菜单：只放有真实后端的动作——新标签打开 / 取消关注 / 移除失效；
+ * 改名 / 删除没有后端支持，一律省略，不伪造。
+ */
+function RowContextMenu({
+  menu,
+  onAction,
+  onClose,
+  t,
+}: {
+  menu: MenuTarget;
+  onAction: (
+    kind: MenuTarget["kind"],
+    fp: string,
+    sid: number,
+    path: string | undefined,
+    item: string,
+  ) => void;
+  onClose: () => void;
+  t: (k: string) => string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      // 点在菜单内部不关（否则 mousedown 会先于 click 把它关掉）。
+      if (
+        ref.current &&
+        e.target instanceof Node &&
+        ref.current.contains(e.target)
+      )
+        return;
+      onClose();
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [onClose]);
+
+  const items =
+    menu.kind === "invalid"
+      ? [{ key: "remove", label: t("session.ux.menu.removeInvalid") }]
+      : [
+          { key: "open", label: t("session.ux.menu.openNewTab") },
+          { key: "unfollow", label: t("session.ux.menu.unfollow") },
+        ];
+  const x = Math.min(menu.x, window.innerWidth - 176);
+  const y = Math.min(menu.y, window.innerHeight - items.length * 32 - 16);
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      data-testid="row-context-menu"
+      className="fixed z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 shadow-overlay"
+      style={{ top: Math.max(0, y), left: Math.max(0, x) }}
+    >
+      {items.map((it) => (
+        <button
+          key={it.key}
+          type="button"
+          role="menuitem"
+          className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[13px] text-popover-foreground transition-colors hover:bg-accent"
+          onClick={() =>
+            onAction(
+              menu.kind,
+              menu.fingerprint,
+              menu.sessionId,
+              menu.path,
+              it.key,
+            )
+          }
+        >
+          {it.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function ChatList({
   groups,
   pending,
@@ -331,12 +495,214 @@ export default function ChatList({
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const isMobile = useIsMobile();
+  const navigate = useNavigate();
+
+  // T6 桌面形态：筛选 chips + 最近区 + 键盘选中 + 右键菜单。全部只属于桌面。
+  const [filter, setFilter] = useState<SessionFilter>("all");
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [menu, setMenu] = useState<MenuTarget | null>(null);
+
   // 决策 12：桌面按 Agent 分组、移动按状态分组。
   const rendered = isMobile ? regroupByStatus(groups, t) : groups;
 
+  // 未读（等待输入）总数，喂「未读 N」chip 的计数。与当前筛选无关。
+  const unread = useMemo(
+    () =>
+      groups.reduce(
+        (n, g) => n + unreadCount(g.sessions.map((s) => s.summary)),
+        0,
+      ),
+    [groups],
+  );
+
+  // 桌面：筛选后的分组行。「最近」区随筛选一起过滤，保持一致性。
+  const filteredGroups = useMemo(() => {
+    if (isMobile || filter === "all") return rendered;
+    return rendered
+      .map((g) => ({
+        ...g,
+        sessions: g.sessions.filter((s) =>
+          matchesSessionFilter(s.summary, filter),
+        ),
+      }))
+      .filter((g) => g.sessions.length > 0);
+  }, [rendered, filter, isMobile]);
+
+  // 桌面：最近 · 跨 Agent（跨全部 Agent 取最近 5 条）。排序键 = updatedAt /
+  // followedAt 之新（recentTimestamp）。
+  const recentRows = useMemo(() => {
+    if (isMobile) return [];
+    const rows = filteredGroups
+      .flatMap((g) => g.sessions)
+      .map((row) => ({
+        ...row,
+        recent: recentTimestamp(row.summary.updatedAt, row.followedAt),
+      }));
+    return takeRecent(rows, 5);
+  }, [filteredGroups, isMobile]);
+
+  // ↑↓ 键盘导航的有序目标：最近区 + 各分组行 + 离线（失效没有目的地，不进导航）。
+  const navTargets = useMemo(() => {
+    if (isMobile) return [];
+    const out: { key: string; path: string }[] = [];
+    for (const r of recentRows)
+      out.push({ key: r.key, path: sessionPath(r.deviceId, r.sessionId) });
+    for (const g of filteredGroups)
+      for (const s of g.sessions)
+        out.push({ key: s.key, path: sessionPath(s.deviceId, s.sessionId) });
+    for (const o of offline)
+      out.push({ key: o.key, path: sessionPath(o.deviceId, o.sessionId) });
+    return out;
+  }, [recentRows, filteredGroups, offline, sessionPath, isMobile]);
+
+  const navIndex = navTargets.findIndex((x) => x.key === selectedKey);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (isMobile) return;
+      if (e.key === "Escape") {
+        setMenu(null);
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (navTargets.length === 0) return;
+        const dir = e.key === "ArrowDown" ? 1 : -1;
+        const base =
+          navIndex === -1
+            ? e.key === "ArrowDown"
+              ? -1
+              : navTargets.length
+            : navIndex;
+        const next = Math.min(navTargets.length - 1, Math.max(0, base + dir));
+        setSelectedKey(navTargets[next].key);
+      } else if (e.key === "Enter") {
+        const target = navTargets.find((x) => x.key === selectedKey);
+        if (target) navigate(target.path);
+      }
+    },
+    [isMobile, navTargets, navIndex, selectedKey, navigate],
+  );
+
+  const handleMenu = useCallback(
+    (
+      e: React.MouseEvent,
+      kind: MenuTarget["kind"],
+      fp: string,
+      sid: number,
+      path?: string,
+    ) => {
+      if (isMobile) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        kind,
+        fingerprint: fp,
+        sessionId: sid,
+        path,
+      });
+    },
+    [isMobile],
+  );
+
+  const handleMenuAction = useCallback(
+    (
+      kind: MenuTarget["kind"],
+      fp: string,
+      sid: number,
+      path: string | undefined,
+      item: string,
+    ) => {
+      setMenu(null);
+      if (item === "open" && path) {
+        // 新标签打开：不改当前列表状态，也不伪造“成功”。
+        window.open(path, "_blank", "noopener,noreferrer");
+      } else if (item === "unfollow") {
+        onUnfollow(fp, sid);
+      } else if (item === "remove") {
+        onRemoveInvalid(fp, sid);
+      }
+    },
+    [onUnfollow, onRemoveInvalid],
+  );
+
   return (
-    <div className="space-y-6">
-      {rendered.map((group) => (
+    <div
+      data-testid="chat-list-nav"
+      tabIndex={isMobile ? undefined : 0}
+      onKeyDown={handleKeyDown}
+      aria-label={isMobile ? undefined : t("nav.chat")}
+      className={cn(
+        "space-y-6",
+        !isMobile &&
+          "rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+    >
+      {/* T6 桌面：筛选 chips（全部 / 运行中 / 未读 N）。 */}
+      {!isMobile && (
+        <div
+          role="group"
+          aria-label={t("session.ux.filter.all")}
+          className="flex items-center gap-1.5"
+        >
+          {FILTER_CHIPS.map((f) => (
+            <button
+              key={f}
+              type="button"
+              data-testid={`filter-chip-${f}`}
+              aria-pressed={filter === f}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium transition-colors",
+                filter === f
+                  ? "bg-primary-soft text-primary-text"
+                  : "text-subtle-foreground hover:bg-accent",
+              )}
+              onClick={() => setFilter(f)}
+            >
+              {t(`session.ux.filter.${f}`)}
+              {f === "unread" && unread > 0 && (
+                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-status-waiting px-1 text-[10px] font-semibold text-status-waiting-foreground">
+                  {unread}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* T6 桌面：最近 · 跨 Agent（扁平区，跨全部 Agent）。 */}
+      {!isMobile && recentRows.length > 0 && (
+        <section aria-label={t("session.ux.recent")}>
+          <h2 className="mb-2 text-sm font-semibold text-foreground">
+            {t("session.ux.recent")}
+          </h2>
+          <Card className="py-1">
+            <CardContent className="p-1">
+              {recentRows.map((r) => (
+                <SessionRow
+                  key={r.key}
+                  row={r}
+                  onUnfollow={onUnfollow}
+                  sessionPath={sessionPath}
+                  t={t}
+                  locale={locale}
+                  isMobile={false}
+                  showFollow={false}
+                  selected={selectedKey === r.key}
+                  onMenu={(e, path) =>
+                    handleMenu(e, "session", r.fingerprint, r.sessionId, path)
+                  }
+                  testidPrefix="chat-recent-row"
+                />
+              ))}
+            </CardContent>
+          </Card>
+        </section>
+      )}
+
+      {filteredGroups.map((group) => (
         <section key={group.key} aria-label={group.label}>
           <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold text-foreground">
             {group.avatarColor && (
@@ -369,6 +735,12 @@ export default function ChatList({
                     t={t}
                     locale={locale}
                     isMobile={isMobile}
+                    showFollow={!isMobile}
+                    selected={!isMobile && selectedKey === s.key}
+                    onMenu={(e, path) =>
+                      handleMenu(e, "session", s.fingerprint, s.sessionId, path)
+                    }
+                    testidPrefix="chat-row"
                   />
                 ))}
               </CardContent>
@@ -402,6 +774,10 @@ export default function ChatList({
                   sessionPath={sessionPath}
                   t={t}
                   isMobile={isMobile}
+                  selected={!isMobile && selectedKey === o.key}
+                  onMenu={(e, path) =>
+                    handleMenu(e, "offline", o.fingerprint, o.sessionId, path)
+                  }
                 />
               ))}
             </CardContent>
@@ -422,11 +798,30 @@ export default function ChatList({
                   row={inv}
                   onRemove={onRemoveInvalid}
                   t={t}
+                  onMenu={(e) =>
+                    handleMenu(
+                      e,
+                      "invalid",
+                      inv.fingerprint,
+                      inv.sessionId,
+                      undefined,
+                    )
+                  }
                 />
               ))}
             </CardContent>
           </Card>
         </section>
+      )}
+
+      {/* T6 桌面：行上右键菜单（只放真实后端动作）。 */}
+      {menu && (
+        <RowContextMenu
+          menu={menu}
+          onAction={handleMenuAction}
+          onClose={() => setMenu(null)}
+          t={t}
+        />
       )}
     </div>
   );

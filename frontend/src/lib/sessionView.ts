@@ -81,3 +81,75 @@ export function formatRelativeTime(
   }
   return fmt.format(0, "minute");
 }
+
+/**
+ * T6（p5Orc「优化」）会话列表 UX 的纯函数：筛选 chips、未读数、「最近」排序、状态点。
+ * 全部无副作用，便于 vitest 直接断言行为（见 session-list.test.tsx 的
+ * 「sessionView 纯函数」一组）。
+ */
+
+/** 筛选 chips 的取值。all = 不过滤；running = 运行中且不等待输入；unread = 等待输入。 */
+export type SessionFilter = "all" | "running" | "unread";
+
+/**
+ * 一条会话是否落在某个筛选下。
+ * 「正在等输入」是运行之上的实时叠加：它不进「运行中」（未读置顶优先），
+ * 只进「未读」；其余按生命周期是否 running 判定。
+ */
+export function matchesSessionFilter(
+  s: { lifecycleState: string; waitingForInput?: boolean },
+  filter: SessionFilter,
+): boolean {
+  if (filter === "all") return true;
+  if (filter === "unread") return !!s.waitingForInput;
+  return s.lifecycleState === "running" && !s.waitingForInput;
+}
+
+/** 未读（等待输入）的会话数，喂给「未读 N」chip 的计数。 */
+export function unreadCount(rows: { waitingForInput?: boolean }[]): number {
+  return rows.filter((r) => !!r.waitingForInput).length;
+}
+
+/**
+ * 「最近」的排序键：updatedAt 与 followedAt 取新（关注时间也是这条会话最近的动静
+ * 之一）。两者皆缺时返回 0 —— 排最后，不猜一个时刻。
+ */
+export function recentTimestamp(
+  updatedAt: number | undefined,
+  followedAt: number | undefined,
+): number {
+  return Math.max(updatedAt ?? 0, followedAt ?? 0);
+}
+
+/** 「最近」区的可排序项：key 用于去重定位，recent 是排序键。 */
+export interface RecentOrderable {
+  key: string;
+  recent: number;
+}
+
+/** 取最近 N 条（按 recent 降序）。不足 N 时全取；排序稳定，同刻保持原顺序。 */
+export function takeRecent<T extends RecentOrderable>(
+  rows: T[],
+  n: number,
+): T[] {
+  return [...rows].sort((a, b) => b.recent - a.recent).slice(0, n);
+}
+
+/**
+ * 行首状态点的颜色（对应设计稿的 ok / warn / idle / danger）：等待输入=琥珀、
+ * 运行中=绿、已中断=红、其余（idle 与不认识的旧状态）=灰。走 token，不写字面量。
+ */
+export function statusDotClass(s: {
+  lifecycleState: string;
+  waitingForInput?: boolean;
+}): string {
+  if (s.waitingForInput) return "bg-status-waiting";
+  switch (s.lifecycleState) {
+    case "running":
+      return "bg-status-running";
+    case "interrupted":
+      return "bg-status-error";
+    default:
+      return "bg-status-idle";
+  }
+}

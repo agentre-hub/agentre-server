@@ -6,7 +6,7 @@ import { Bookmark } from "lucide-react";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatRelativeTime } from "@/lib/sessionView";
+import { formatRelativeTime, statusDotClass } from "@/lib/sessionView";
 import { cn } from "@/lib/utils";
 import type { SessionSummary } from "@/lib/wire";
 
@@ -39,6 +39,11 @@ interface SessionListProps {
    * 因此这里在移动形态下同样不渲染。
    */
   onToggleFollow?: (sessionId: number) => void;
+  /**
+   * 本页所属的设备名（T6 两行行的 Row2 = 设备 · 后端）。调用方（设备页）知道自己在
+   * 哪台机器上；不传就不编造，Row2 只剩后端。
+   */
+  deviceName?: string;
 }
 
 interface Group {
@@ -193,6 +198,29 @@ export function LastActive({
   );
 }
 
+/**
+ * 行首状态点（T6 两行行 Row1）。颜色走 statusDotClass，深/浅都从 token 来；
+ * 状态以 aria-label 呈现（不只靠颜色），移动端另有文字徽标兜底。
+ */
+export function StatusDot({
+  state,
+  testid,
+  label,
+}: {
+  state: { lifecycleState: string; waitingForInput?: boolean };
+  testid: string;
+  label: string;
+}) {
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      data-testid={testid}
+      className={cn("size-2 shrink-0 rounded-full", statusDotClass(state))}
+    />
+  );
+}
+
 function SessionRow({
   session,
   sessionPath,
@@ -202,6 +230,7 @@ function SessionRow({
   agent,
   followed,
   onToggleFollow,
+  deviceName,
 }: {
   session: SessionSummary;
   sessionPath: (id: number) => string;
@@ -211,10 +240,21 @@ function SessionRow({
   agent?: SessionAgent;
   followed: boolean;
   onToggleFollow?: (sessionId: number) => void;
+  deviceName?: string;
 }) {
   const title = sessionTitle(session, t);
   const hasRealTitle = !!session.title?.trim();
   const waiting = !!session.waitingForInput;
+  const dotLabel = waiting
+    ? t("session.list.waiting")
+    : lifecycleLabel(session.lifecycleState, t);
+  const hasRow2 =
+    hasRealTitle && (deviceName?.trim() || session.backendType?.trim());
+  // Row2 的正文：「设备 · 后端」（设备名可选，不传就只剩后端）。拼成一个文本节点——
+  // 第二行是一条整体的小字，不是三段高亮。
+  const row2 = [deviceName?.trim(), session.backendType?.trim()]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div
       data-testid={`session-row-${session.sessionId}`}
@@ -249,36 +289,40 @@ function SessionRow({
               {agent.name}
             </p>
           )}
-          <p className="truncate text-sm font-medium text-foreground">
-            {title}
+          {/* Row1（T6）：状态点 + 标题 + 相对时间。 */}
+          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <StatusDot
+              state={session}
+              testid={`session-dot-${session.sessionId}`}
+              label={dotLabel}
+            />
+            <span className="truncate">{title}</span>
+            <LastActive ms={session.updatedAt} locale={locale} />
           </p>
-          {/* 只有真标题才加副行:老会话退化时标题本身就是「工作目录 · 后端 · 状态」,
-              副行再印一遍就是重复。 */}
-          {hasRealTitle && (
+          {/* Row2（T6）：设备 · 后端。只有真标题才加副行：老会话退化时标题本身就是
+              「工作目录 · 后端 · 状态」，副行再印一遍就是重复。设备名可选——不传
+              就不编造，Row2 只剩后端。 */}
+          {hasRow2 && (
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {t("session.list.legacy", {
-                cwd: session.cwd?.trim() ? session.cwd : "—",
-                backend: session.backendType?.trim()
-                  ? session.backendType
-                  : "—",
-                status: lifecycleLabel(session.lifecycleState, t),
-              })}
+              {row2}
             </p>
           )}
         </div>
-        <span
-          className={cn(
-            "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
-            waiting
-              ? "bg-status-waiting-bg text-status-waiting"
-              : "bg-muted text-muted-foreground",
-          )}
-        >
-          {waiting
-            ? t("session.list.waiting")
-            : lifecycleLabel(session.lifecycleState, t)}
-        </span>
-        <LastActive ms={session.updatedAt} locale={locale} />
+        {/* 移动端保文字徽标（可访问性：不只靠颜色）；桌面由状态点 + aria 承担。 */}
+        {isMobile && (
+          <span
+            className={cn(
+              "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
+              waiting
+                ? "bg-status-waiting-bg text-status-waiting"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {waiting
+              ? t("session.list.waiting")
+              : lifecycleLabel(session.lifecycleState, t)}
+          </span>
+        )}
       </Link>
       {/* R12：桌面的关注开关在行尾（帧 45a）；移动端在详情页顶栏（决策 16）。 */}
       {!isMobile && onToggleFollow && (
@@ -308,6 +352,7 @@ export default function SessionList({
   sessionPath,
   followedSessionIds,
   onToggleFollow,
+  deviceName,
 }: SessionListProps) {
   const { t, i18n } = useTranslation();
   const isMobile = useIsMobile();
@@ -363,6 +408,7 @@ export default function SessionList({
                   agent={agentBySyncID.get(s.agentSyncId?.trim() ?? "")}
                   followed={!!followedSessionIds?.has(s.sessionId)}
                   onToggleFollow={onToggleFollow}
+                  deviceName={deviceName}
                 />
               ))}
             </CardContent>
