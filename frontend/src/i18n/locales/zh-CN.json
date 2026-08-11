@@ -4,7 +4,8 @@
     "productSub": "控制台",
     "topBar": {
       "fresh": "桌面端已连接"
-    }
+    },
+    "accountMeta": "个人 · 免费"
   },
   "common": {
     "appName": "AgentRe Server",

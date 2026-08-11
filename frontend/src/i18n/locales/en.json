@@ -4,7 +4,8 @@
     "productSub": "Console",
     "topBar": {
       "fresh": "Desktop connected"
-    }
+    },
+    "accountMeta": "Personal · Free"
   },
   "common": {
     "appName": "AgentRe Server",
