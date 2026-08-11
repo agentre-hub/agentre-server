@@ -7,7 +7,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
-import { requiredEnv } from "../web/harness";
+import { agentredDB, requiredEnv } from "../web/harness";
 
 export { test, agentredDB, agentredFP, serverURL } from "../web/harness";
 
@@ -94,7 +94,7 @@ export function agentredJournalHas(
   peerSessionID: number,
   needle: string,
 ): boolean {
-  return read(requiredEnv("WEBE2E_AGENTRED_DB"), (db) => {
+  return read(agentredDB, (db) => {
     const row = db
       .prepare(
         `SELECT count(*) AS n FROM daemon_notification_logs
@@ -110,7 +110,7 @@ export function agentredSession(
   peerFingerprint: string,
   peerSessionID: number,
 ): AgentredSessionRow | null {
-  return read(requiredEnv("WEBE2E_AGENTRED_DB"), (db) => {
+  return read(agentredDB, (db) => {
     const row = db
       .prepare(
         `SELECT title, agent_sync_id, provider_session_id, backend_type
