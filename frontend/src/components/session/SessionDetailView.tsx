@@ -108,6 +108,9 @@ export default function SessionDetailView({
   const [decisionError, setDecisionError] = useState(false);
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState(false);
+  // 桌面端仍在场时写失败：表示该会话钉住的 agentred 当前不可用（历史可读、新写入停用）。
+  const [pinnedAgentredUnavailable, setPinnedAgentredUnavailable] =
+    useState(false);
   // 未升级的 agentred 的 session.list 应答里没有 supportsSessionMetadata（兼容性）。
   const [needsUpgrade, setNeedsUpgrade] = useState(false);
   const [draft, setDraft] = useState("");
@@ -132,6 +135,7 @@ export default function SessionDetailView({
     setHandledRequestId(null);
     setDecisionError(false);
     setSendError(false);
+    setPinnedAgentredUnavailable(false);
     setNeedsUpgrade(false);
     setDraft("");
     setFollowed(false);
@@ -187,7 +191,7 @@ export default function SessionDetailView({
   });
 
   const { client, relayState, webDevice, webDeviceError } = useRelayMachine(
-    device?.fingerprint ?? null,
+    device?.online ? device.fingerprint : null,
     {
       onEvent: (f) => {
         if (f.sessionId === sid) setEvents((prev) => [...prev, f]);
@@ -262,8 +266,10 @@ export default function SessionDetailView({
         if (alive) {
           setSummary(s ?? null);
           // 老 agentred 落库不了 provider_session_id：从这里发消息续不上上下文。
-          // 如实说明它需要升级，并停用发送——不静默发出去（兼容性）。
-          setNeedsUpgrade(!list.supportsSessionMetadata);
+          // 如实说明它需要升级，并停用发送——不静默发出去（兼容性）。桌面端无此问题。
+          setNeedsUpgrade(
+            device?.kind !== "desktop" && !list.supportsSessionMetadata,
+          );
         }
         await client.attach(sid, origin);
         await client.catchUp(sid, origin);
@@ -281,7 +287,8 @@ export default function SessionDetailView({
     // ready 之后不再重复跑（重连时的补齐由 RelayClient.reconnect 对 watched 会话负责）；
     // ready / did / sid 也必须是依赖：切换会话时上面的渲染期重置把 ready 置 false，
     // 这里要重新 attach 到新会话；只按 [client, relayState] 的话重置后不会重跑。
-  }, [client, relayState, ready, did, sid]);
+    // device?.kind 也要进来：桌面端不存在老 agentred 的升级判定，取数完成后须重算。
+  }, [client, relayState, ready, did, sid, device?.kind]);
 
   // 首次进入 reconnecting（= 连接失败）时探测原因（R11），只探一次。
   // 与文件里其它异步 effect 一样带 alive 守卫：reconnecting 期间切换目标设备或
@@ -374,6 +381,8 @@ export default function SessionDetailView({
     meValid,
     webDeviceRevoked: revokedNow,
     machineOnline,
+    targetKind: device?.kind,
+    pinnedAgentredUnavailable,
   });
 
   const items = useMemo(() => reduceEvents(events), [events]);
@@ -400,9 +409,16 @@ export default function SessionDetailView({
         backend: { type: summary.backendType },
       });
       setDraft("");
+      setPinnedAgentredUnavailable(false);
     } catch {
-      // 保留草稿，并就地说明这一条没发出去——静默吞掉会让用户以为已经发了。
-      setSendError(true);
+      // 桌面端仍在场时，写失败表示这条会话钉住的 agentred 当前不可用：历史继续
+      // 保持可读，但停用新写入并给出专门说明。agentred 目标保留既有发送失败措辞。
+      if (device?.kind === "desktop") {
+        setPinnedAgentredUnavailable(true);
+      } else {
+        // 保留草稿，并就地说明这一条没发出去——静默吞掉会让用户以为已经发了。
+        setSendError(true);
+      }
     } finally {
       setSending(false);
     }
@@ -484,7 +500,10 @@ export default function SessionDetailView({
   }
 
   const showTranscript =
-    ready && (status === "connected" || relayState === "reconnecting");
+    ready &&
+    (status === "connected" ||
+      status === "pinnedAgentredUnavailable" ||
+      relayState === "reconnecting");
 
   // 详情头部的机器 meta：「设备 · 在线/离线」拼成同一文本节点(jsx-only 守卫要求
   // 文案不出现裸字符串;分隔符在 JS 里拼,不进 JSX)。

@@ -66,6 +66,7 @@ interface SessionCounts {
 
 const ACTIVE = 1;
 const KIND_AGENTRED = "agentred";
+const KIND_DESKTOP = "desktop";
 
 // 只有 ApiError 才带可展示的服务端文案；其余(代理返回非 JSON 的 502 → SyntaxError、
 // 离线 → TypeError)同样是失败，必须说出来 —— 静默吞掉会让页面渲染成「还没有任何
@@ -98,7 +99,9 @@ function statusLabel(d: DeviceItem, t: (key: string) => string): string {
   if (d.status !== ACTIVE) return t("device.manage.statusRevoked");
   return d.online
     ? t("device.manage.statusOnline")
-    : t("device.manage.statusOffline");
+    : d.kind === KIND_DESKTOP
+      ? t("device.manage.desktopAppNotRunningShort")
+      : t("device.manage.statusOffline");
 }
 
 /** 设备是否可撤销：撤销端点只认属于本账号的 ACTIVE 设备；已撤销的没有凭据可撤。 */
@@ -107,9 +110,9 @@ function isRevocable(d: DeviceItem): boolean {
 }
 
 /**
- * 一台 agentred 的会话计数（总条数 / 等待处理 / 在跑）。server 一条会话都不存
- * （硬不变量），唯一真相源是那台 agentred 的 relay session.list —— 现连现问，
- * 展开时才挂载，收起即断开；问不到就返回 null，调用方不得编数字。
+ * 一台目标设备（桌面端或 agentred）的会话计数（总条数 / 等待处理 / 在跑）。
+ * server 一条会话都不存（硬不变量），唯一真相源是那台设备的 relay session.list ——
+ * 现连现问，展开时才挂载，收起即断开；问不到就返回 null，调用方不得编数字。
  *
  * 「在跑」数是设备卡副行 cardSummary 的 {{m}}；「对话」一节用 total/waiting。
  */
@@ -146,10 +149,10 @@ function useSessionCounts(
 
 /**
  * 设备行展开的详情：agentred 列「能跑的 Agent」（带档位）、「已配置的项目」与
- * 「对话」一节（R4 下钻入口，mockup 帧 47）；桌面端只列「项目」。
- * 对话一节：在线的 agentred 给「查看这台机器的对话」入口；离线的不可进入，
- * 就地标明离线与最后在线时间（R4）。会话计数由外层 useSessionCounts 提供，
- * 这里不再各自连一次中继。
+ * 「对话」一节（R4 下钻入口，mockup 帧 47）；桌面端列项目。
+ * 对话一节：两类目标复用同形入口 —— 在线给「查看这台机器 / 这个桌面端的对话」；
+ * 不可达时 agentred 保留既有离线措辞，桌面端明确说明 Agentre App 没有运行并提示打开它。
+ * 会话计数由外层 useSessionCounts 提供，这里不再各自连一次中继。
  *
  * 只渲染真实数据；N1/N2 旁白（「只显示是否配置」「Agent 属于账号」）不进入产品。
  */
@@ -177,6 +180,7 @@ function DeviceExpandDetail({
   const detail = state.data;
   if (!detail) return null;
   const isAgentred = detail.kind === KIND_AGENTRED;
+  const isDesktop = detail.kind === KIND_DESKTOP;
 
   return (
     <div className="flex flex-col gap-3 border-t border-border pt-3">
@@ -237,7 +241,7 @@ function DeviceExpandDetail({
           </div>
         )}
       </div>
-      {isAgentred && (
+      {(isAgentred || isDesktop) && (
         <div className="flex flex-col gap-1.5 border-t border-border pt-3">
           <span className="font-mono text-[10px] font-medium text-subtle-foreground">
             {t("device.manage.sessions")}
@@ -263,12 +267,20 @@ function DeviceExpandDetail({
                 data-testid={`device-sessions-link-${device.id}`}
                 className="inline-flex w-fit items-center text-xs font-medium text-primary-text hover:underline"
               >
-                {t("device.manage.viewSessions")}
+                {t(
+                  isDesktop
+                    ? "device.manage.viewDesktopSessions"
+                    : "device.manage.viewSessions",
+                )}
               </Link>
             </>
           ) : (
             <p className="text-xs text-destructive">
-              {t("device.manage.offlineNotEnterable")}
+              {t(
+                isDesktop
+                  ? "device.manage.desktopAppNotRunningDetail"
+                  : "device.manage.offlineNotEnterable",
+              )}
               {device.last_seen_at > 0
                 ? ` ${new Date(device.last_seen_at).toLocaleString()}`
                 : ""}
@@ -316,8 +328,11 @@ function DeviceRow({
   detailState: { loading: boolean; error: unknown; data: DeviceDetail | null };
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
-  // 只有展开的在线 agentred 才去问中继；其余设备 fingerprint 传 null，不连。
-  const sessionActive = isExpanded && d.kind === KIND_AGENTRED && d.online;
+  // 只有展开的在线 agentred / 桌面端才去问中继；其余设备 fingerprint 传 null，不连。
+  const sessionActive =
+    isExpanded &&
+    (d.kind === KIND_AGENTRED || d.kind === KIND_DESKTOP) &&
+    d.online;
   const counts = useSessionCounts(
     sessionActive ? d.fingerprint : null,
     sessionActive,

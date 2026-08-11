@@ -56,7 +56,7 @@ export default function DeviceSessions() {
   const nav = useNavigate();
 
   const [device, setDevice] = useState<DeviceItem | null>(null);
-  // 账号下的全部 agentred：面包屑行尾的「换机器」就地切换（决策 11 / 帧 45a）要用。
+  // 账号下全部可下钻目标：面包屑行尾的「换机器」就地切换要用。
   const [machines, setMachines] = useState<DeviceItem[]>([]);
   const [switchOpen, setSwitchOpen] = useState(false);
   const [deviceError, setDeviceError] = useState<unknown>(null);
@@ -72,7 +72,7 @@ export default function DeviceSessions() {
   const probedRef = useRef(false);
 
   const { client, relayState, webDevice, webDeviceError } = useRelayMachine(
-    device?.fingerprint ?? null,
+    device?.online ? device.fingerprint : null,
   );
   const isMobile = useIsMobile();
 
@@ -85,8 +85,12 @@ export default function DeviceSessions() {
     ])
       .then(([devRes, agentRes]) => {
         if (!alive) return;
-        // 浏览器不是可下钻的目标（R3 / 帧 47），只留 agentred。
-        setMachines(devRes.devices.filter((d) => d.kind === "agentred"));
+        // 浏览器不是可下钻目标；agentred 与桌面端复用同一套列表/详情页面。
+        setMachines(
+          devRes.devices.filter(
+            (d) => d.kind === "agentred" || d.kind === "desktop",
+          ),
+        );
         const found = devRes.devices.find((d) => d.id === id);
         if (found) {
           setDevice(found);
@@ -137,9 +141,10 @@ export default function DeviceSessions() {
         if (!alive) return;
         const res = decodeSessionListResult(raw);
         setSessions(res.sessions);
-        // 老 agentred 不认识这个字段 → 它落库不了 R7 / 决策 8 的那几列,会话只能
-        // 退化显示、发新消息也续不上上下文。如实说明,不静默失败。
-        setNeedsUpgrade(!res.supportsSessionMetadata);
+        // 老 agentred 不认识这个字段；桌面端清单由本轮实现，始终是完整形态。
+        setNeedsUpgrade(
+          device?.kind === "agentred" && !res.supportsSessionMetadata,
+        );
         setSessionsLoaded(true);
       })
       .catch(() => {
@@ -148,7 +153,7 @@ export default function DeviceSessions() {
     return () => {
       alive = false;
     };
-  }, [client, relayState]);
+  }, [client, relayState, device?.kind]);
 
   // 首次进入 reconnecting（= 连接失败）时探测原因：机器离线 / 设备被解除授权 /
   // 账号登出。只探一次（ref 守门，不触发重渲染）。
@@ -219,6 +224,7 @@ export default function DeviceSessions() {
     meValid,
     webDeviceRevoked: revokedNow,
     machineOnline,
+    targetKind: device?.kind,
   });
 
   if (deviceError) {
@@ -256,7 +262,11 @@ export default function DeviceSessions() {
                 }
               >
                 {machineOnline === false
-                  ? t("session.breadcrumb.offline")
+                  ? t(
+                      device?.kind === "desktop"
+                        ? "device.manage.desktopAppNotRunningShort"
+                        : "session.breadcrumb.offline",
+                    )
                   : t("session.breadcrumb.online")}
               </span>
             </>
@@ -276,7 +286,11 @@ export default function DeviceSessions() {
                 }
               >
                 {machineOnline === false
-                  ? t("session.breadcrumb.offline")
+                  ? t(
+                      device?.kind === "desktop"
+                        ? "device.manage.desktopAppNotRunningShort"
+                        : "session.breadcrumb.offline",
+                    )
                   : t("session.breadcrumb.online")}
               </span>
               {count > 0 && (
@@ -328,7 +342,11 @@ export default function DeviceSessions() {
                         {m.name}
                       </span>
                       <span className="shrink-0 text-xs text-destructive">
-                        {t("session.breadcrumb.offline")}
+                        {t(
+                          m.kind === "desktop"
+                            ? "device.manage.desktopAppNotRunningShort"
+                            : "session.breadcrumb.offline",
+                        )}
                       </span>
                     </div>
                   )}
