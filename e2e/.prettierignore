@@ -4,3 +4,4 @@ playwright-report
 scratch
 pnpm-lock.yaml
 playwright-web-report
+playwright-dual-report

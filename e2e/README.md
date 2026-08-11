@@ -127,17 +127,17 @@ end tells the other it has already been handled (R10b).
 
 Two things it needs that the browser-only run does not:
 
-| Piece | Why |
-| --- | --- |
-| `wails` on PATH + `frontend/node_modules` in the agentre checkout | the desktop app is built and run for real; the runner checks both up front and names what is missing |
-| `agentre` `e2e/fakes/remote.go` (`//go:build e2e`) | the desktop joins **that** agentred the same way the browser does — over the account relay. The fake seeds the paired-machine row + an agent bound to it, which is what "claim this machine" would have left behind; without the env it is a no-op |
+| Piece                                                             | Why                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wails` on PATH + `frontend/node_modules` in the agentre checkout | the desktop app is built and run for real; the runner checks both up front and names what is missing                                                                                                                                               |
+| `agentre` `e2e/fakes/remote.go` (`//go:build e2e`)                | the desktop joins **that** agentred the same way the browser does — over the account relay. The fake seeds the paired-machine row + an agent bound to it, which is what "claim this machine" would have left behind; without the env it is a no-op |
 
 Gotchas learned building it, all of them product behaviour this suite only
 observes (see the spec comments for the full reasoning):
 
 - **The desktop is only "present" on a machine while one of its turns is
   in flight.** Per-turn borrow/release means the pooled connection is reaped 30 s
-  after its last turn and the next borrow builds a *fresh* `remote.Runtime` that
+  after its last turn and the next borrow builds a _fresh_ `remote.Runtime` that
   knows nothing about sessions other ends are running. The spec therefore parks a
   never-approved turn on a second session for the whole run.
 - **A session's autonomous-turn consumer is bound to the runtime instance that

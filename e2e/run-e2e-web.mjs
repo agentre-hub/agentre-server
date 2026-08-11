@@ -69,6 +69,25 @@ const desktopDB = join(desktopDataDir, "agentre.db");
 // harness seeds the agentred.db session with, so the browser OWNS that session.
 const WEB_FINGERPRINT = "e2e-web-fingerprint-0001";
 
+// agentred.db 里被播种的那几条会话(见 seedAgentredSession)。会话 id 与退化行的
+// 那两个字段只有这一份来源,经 WEBE2E_SESSIONS 原样透传给 spec(web/harness.ts)。
+//
+//   - full_chain: 全链路那条,有标题、有 Agent 同步标识、带三段旧转录;
+//   - legacy:     R7 到达之前的老会话,既没有标题也没有 Agent 标识 —— 列表必须如实
+//                 退化成「工作目录 · 后端 · 状态」并归入「未命名」分组;
+//   - running / interrupted: 两个生命周期各一条,移动端按状态分组时各占一组。
+//     「等你处理」那一组播种不出来(它是运行时状态),由 spec 现场制造。
+const SEEDED_SESSIONS = {
+  full_chain_id: 1001,
+  legacy_id: 1002,
+  legacy_cwd: "/tmp/e2e-legacy-project",
+  legacy_backend: "claudecode",
+  running_id: 1003,
+  interrupted_id: 1004,
+  // agent_sync_id 由播种的工作区决定(webe2e/main.go),运行时填。
+  agent_sync_id: "",
+};
+
 // --dual 才编排桌面端那一侧(e2e/dual/,playwright.dual.config.ts)。默认档保持
 // 今天的样子:只有浏览器,不需要 wails 工具链,也不多跑一个 Wails 进程。
 // 该标志由本 runner 自己消费,不能混进转发给 playwright 的参数里。
@@ -84,6 +103,8 @@ let toolBin = "";
 let dsn = "";
 let redis = { addr: "", password: "", db: 0 };
 let seeded = null;
+// 本次播进 agentred.db 的那几条会话(--dual 档不播,保持 null:那一档的会话由桌面端建)。
+let seededSessions = null;
 let serverURL = "";
 let agentreDir = "";
 
@@ -208,8 +229,11 @@ async function main() {
       "[web-e2e] dual mode → agentred.db left empty (the desktop creates the session)",
     );
   } else {
-    console.log("[web-e2e] seeding agentred.db session + journal …");
-    seedAgentredSession(agentredDB, agentredFP);
+    console.log("[web-e2e] seeding agentred.db sessions + journal …");
+    seededSessions = seedAgentredSession(
+      agentredDB,
+      seeded.workspace.agent_ready_sync_id,
+    );
   }
 
   Object.assign(process.env, {
@@ -226,6 +250,11 @@ async function main() {
     // 播种的账号级工作区(Agent 与项目路径)。名字与同步标识只有 webe2e/main.go
     // 一份来源,原样透传给 spec。
     WEBE2E_WORKSPACE: JSON.stringify(seeded.workspace),
+    // 播进 agentred.db 的那几条会话。--dual 档一条都不播,那时**不导出**这个变量:
+    // 读它的用例会当场说清「要经 pnpm web 跑」,而不是对着不存在的会话红一片。
+    ...(seededSessions
+      ? { WEBE2E_SESSIONS: JSON.stringify(seededSessions) }
+      : {}),
   });
   if (dualMode) prepareDesktop(agentreDir, agentredFP);
 
@@ -886,35 +915,77 @@ function writeAgentredState(dir, s) {
   writeFileSync(join(dir, "state.json"), JSON.stringify(state, null, 2));
 }
 
-// seedAgentredSession inserts one daemon_sessions row + a few journal rows into
-// the running agentred's SQLite (WAL, busy_timeout) via node:sqlite. The session
-// belongs to the browser's own web-device peer, so session.list (account-wide)
-// shows it and the browser can attach + catch up by cursor.
-function seedAgentredSession(dbPath, agentredFP) {
+// seedAgentredSession inserts the daemon_sessions rows + a few journal rows into
+// the running agentred's SQLite (WAL, busy_timeout) via node:sqlite. Every seeded
+// session belongs to the browser's own web-device peer, so session.list
+// (account-wide) shows them and the browser can attach + catch up by cursor.
+//
+// 四条会话见 SEEDED_SESSIONS 的说明:全链路那条带旧转录,另外三条是 R5b 的列表
+// 素材(老会话的退化行 + 两个生命周期)。返回值原样交给 spec。
+function seedAgentredSession(dbPath, agentSyncID) {
   const { DatabaseSync } = requireModule("node:sqlite");
   const db = new DatabaseSync(dbPath, { readOnly: false });
+  const fixtures = { ...SEEDED_SESSIONS, agent_sync_id: agentSyncID };
   try {
     db.exec("PRAGMA busy_timeout = 5000;");
     const now = Date.now();
-    const sessionId = 1001;
+    const sessionId = fixtures.full_chain_id;
     const stmt = db.prepare(
       `INSERT OR REPLACE INTO daemon_sessions
         (peer_fingerprint, peer_session_id, agent_id, cwd, backend_type, lifecycle_state, title, agent_sync_id, provider_session_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
-    stmt.run(
-      WEB_FINGERPRINT,
-      String(sessionId),
-      1,
-      "/tmp/e2e-web-project",
-      "claudecode",
-      "idle",
-      "e2e 全链路会话",
-      "e2e-agent-sync-1",
-      "e2e-fake-1001",
-      now,
-      now,
-    );
+    const insertSession = (id, s) =>
+      stmt.run(
+        WEB_FINGERPRINT,
+        String(id),
+        1,
+        s.cwd,
+        s.backend,
+        s.lifecycle,
+        s.title,
+        s.agentSyncID,
+        s.providerSessionID,
+        now,
+        now,
+      );
+    insertSession(sessionId, {
+      cwd: "/tmp/e2e-web-project",
+      backend: "claudecode",
+      lifecycle: "idle",
+      title: "e2e 全链路会话",
+      agentSyncID: "e2e-agent-sync-1",
+      providerSessionID: "e2e-fake-1001",
+    });
+    // R7 到达之前的老会话:标题、Agent 同步标识与 provider_session_id 三样都没有,
+    // 就是升级前那条 daemon 写下的行的样子。列表必须如实退化,不许猜一个标题。
+    insertSession(fixtures.legacy_id, {
+      cwd: fixtures.legacy_cwd,
+      backend: fixtures.legacy_backend,
+      lifecycle: "idle",
+      title: "",
+      agentSyncID: "",
+      providerSessionID: "",
+    });
+    // 两个生命周期各一条,都挂在播种工作区的那个 Agent 上:桌面按 Agent 分组时它们
+    // 落在同一组(组名要经同步标识解析成 Agent 名),移动按状态分组时各占一组。
+    // daemon 启动清扫(InterruptAll)早于这一步,不会把它们改回去。
+    insertSession(fixtures.running_id, {
+      cwd: "/tmp/e2e-web-project",
+      backend: "claudecode",
+      lifecycle: "running",
+      title: "e2e 运行中的会话",
+      agentSyncID: agentSyncID,
+      providerSessionID: "e2e-fake-1003",
+    });
+    insertSession(fixtures.interrupted_id, {
+      cwd: "/tmp/e2e-web-project",
+      backend: "claudecode",
+      lifecycle: "interrupted",
+      title: "e2e 已中断的会话",
+      agentSyncID: agentSyncID,
+      providerSessionID: "e2e-fake-1004",
+    });
     // Journal rows: prior transcript the browser must catch up by cursor.
     // payload is the EventFrame WITHOUT seq (mirror of handlers/runtime.go emit).
     const jstmt = db.prepare(
@@ -952,6 +1023,7 @@ function seedAgentredSession(dbPath, agentredFP) {
   } finally {
     db.close();
   }
+  return fixtures;
 }
 
 function requireModule(name) {
