@@ -18,7 +18,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/device" replace />} />
+        <Route path="/" element={<Navigate to="/overview" replace />} />
         <Route path="/login" element={<Login />} />
         <Route
           path="/device"
