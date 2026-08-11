@@ -76,7 +76,9 @@ describe("device management page", () => {
     expect(await screen.findByText("nuc-01")).toBeTruthy();
     expect(screen.getByText("laptop")).toBeTruthy();
     expect(screen.getByText(/Compute node/)).toBeTruthy();
-    expect(screen.getByText(/Desktop/)).toBeTruthy();
+    // 精确匹配「Desktop」类型 chip：TopBar 的 Fresh（Desktop connected）也含
+    // Desktop 子串，宽正则会把两个都捞回来（设计对齐后页面多了一个 Desktop 文本）。
+    expect(screen.getByText("Desktop")).toBeTruthy();
     expect(screen.getByText(/linux/)).toBeTruthy();
     expect(screen.getByText(/darwin/)).toBeTruthy();
     // 在线态列来自 API 的 online 字段（真实中继在线态），不是 status 推算（R20）：

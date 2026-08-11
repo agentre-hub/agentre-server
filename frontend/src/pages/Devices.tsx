@@ -4,13 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogBody,
@@ -59,6 +53,13 @@ interface DeviceDetail {
   projects: ProjectItem[];
 }
 
+/** relay session.list 解析出的会话计数（含副行要的 running 数）。 */
+interface SessionCounts {
+  total: number;
+  waiting: number;
+  running: number;
+}
+
 const ACTIVE = 1;
 const KIND_AGENTRED = "agentred";
 
@@ -79,22 +80,21 @@ function formatLastActive(ms: number): string {
 }
 
 /**
- * 「对话」一节的条数与等待处理数（mockup 帧 47）。
+ * 一台 agentred 的会话计数（总条数 / 等待处理 / 在跑）。server 一条会话都不存
+ * （硬不变量），唯一真相源是那台 agentred 的 relay session.list —— 现连现问，
+ * 展开时才挂载，收起即断开；问不到就返回 null，调用方不得编数字。
  *
- * server 一条会话都不存（硬不变量），这两个数字的唯一真相源是那台 agentred，
- * 因此只能现连现问 —— 与 R4 下钻页问的是同一个 session.list。展开时才挂载，
- * 收起即断开；问不到就什么都不显示，不编造数字。
+ * 「在跑」数是设备卡副行 cardSummary 的 {{m}}；「对话」一节用 total/waiting。
  */
-function DeviceSessionCounts({ fingerprint }: { fingerprint: string }) {
-  const { t } = useTranslation();
+function useSessionCounts(
+  fingerprint: string | null,
+  active: boolean,
+): SessionCounts | null {
   const { client, relayState } = useRelayMachine(fingerprint);
-  const [counts, setCounts] = useState<{
-    total: number;
-    waiting: number;
-  } | null>(null);
+  const [counts, setCounts] = useState<SessionCounts | null>(null);
 
   useEffect(() => {
-    if (!client || relayState !== "connected") return;
+    if (!active || !client || relayState !== "connected") return;
     let alive = true;
     client
       .request(MethodSessionList)
@@ -104,54 +104,45 @@ function DeviceSessionCounts({ fingerprint }: { fingerprint: string }) {
         setCounts({
           total: res.sessions.length,
           waiting: res.sessions.filter((s) => s.waitingForInput).length,
+          running: res.sessions.filter((s) => s.lifecycleState === "running")
+            .length,
         });
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
-  }, [client, relayState]);
+  }, [active, client, relayState]);
 
-  if (!counts) return null;
-  return (
-    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-      <span>{t("device.manage.sessionCount", { count: counts.total })}</span>
-      {counts.waiting > 0 && (
-        <span className="text-status-waiting">
-          {t("device.manage.sessionWaiting", { count: counts.waiting })}
-        </span>
-      )}
-    </p>
-  );
+  return counts;
 }
 
 /**
  * 设备行展开的详情：agentred 列「能跑的 Agent」（带档位）、「已配置的项目」与
  * 「对话」一节（R4 下钻入口，mockup 帧 47）；桌面端只列「项目」。
  * 对话一节：在线的 agentred 给「查看这台机器的对话」入口；离线的不可进入，
- * 就地标明离线与最后在线时间（R4）。
+ * 就地标明离线与最后在线时间（R4）。会话计数由外层 useSessionCounts 提供，
+ * 这里不再各自连一次中继。
  */
 function DeviceExpandDetail({
   state,
   device,
+  counts,
   t,
 }: {
   state: { loading: boolean; error: unknown; data: DeviceDetail | null };
   device: DeviceItem;
+  counts: SessionCounts | null;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
   if (state.loading) {
     return (
-      <p className="pl-6 text-sm text-muted-foreground">
-        {t("common.loading")}
-      </p>
+      <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
     );
   }
   if (state.error) {
     return (
-      <Alert variant="destructive" className="ml-6">
-        {detailErrorText(state.error, t)}
-      </Alert>
+      <Alert variant="destructive">{detailErrorText(state.error, t)}</Alert>
     );
   }
   const detail = state.data;
@@ -159,9 +150,9 @@ function DeviceExpandDetail({
   const isAgentred = detail.kind === KIND_AGENTRED;
 
   return (
-    <div className="flex flex-col gap-2 border-t border-border pl-6 pt-2.5">
+    <div className="flex flex-col gap-3 border-t border-border pt-3">
       {isAgentred && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-1.5">
           <span className="font-mono text-[10px] font-medium text-subtle-foreground">
             {t("device.manage.runnableAgents")}
           </span>
@@ -170,21 +161,23 @@ function DeviceExpandDetail({
               {t("device.manage.noRunnableAgents")}
             </span>
           ) : (
-            (detail.runnable_agents ?? []).map((a) => (
-              <span
-                key={a.sync_id}
-                className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
-              >
-                {a.name}
-                <span className="font-mono text-[9px] text-subtle-foreground">
-                  {t("device.manage.rankLabel", { rank: a.rank })}
+            <div className="flex flex-wrap gap-1.5">
+              {(detail.runnable_agents ?? []).map((a) => (
+                <span
+                  key={a.sync_id}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                >
+                  {a.name}
+                  <span className="font-mono text-[9px] text-subtle-foreground">
+                    {t("device.manage.rankLabel", { rank: a.rank })}
+                  </span>
                 </span>
-              </span>
-            ))
+              ))}
+            </div>
           )}
         </div>
       )}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-col gap-1.5">
         <span className="font-mono text-[10px] font-medium text-subtle-foreground">
           {t("device.manage.projects")}
         </span>
@@ -193,34 +186,49 @@ function DeviceExpandDetail({
             {t("device.manage.noProjectsReported")}
           </span>
         ) : (
-          detail.projects.map((p) => (
-            <span
-              key={p.sync_id}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs",
-                p.configured
-                  ? "bg-muted text-muted-foreground"
-                  : "bg-status-waiting-bg text-status-waiting",
-              )}
-            >
-              {p.name}
-              <span className="font-mono text-[9px]">
-                {p.configured
-                  ? t("device.manage.configured")
-                  : t("device.manage.notConfigured")}
+          <div className="flex flex-wrap gap-1.5">
+            {detail.projects.map((p) => (
+              <span
+                key={p.sync_id}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs",
+                  p.configured
+                    ? "bg-muted text-muted-foreground"
+                    : "bg-status-waiting-bg text-status-waiting",
+                )}
+              >
+                {p.name}
+                <span className="font-mono text-[9px]">
+                  {p.configured
+                    ? t("device.manage.configured")
+                    : t("device.manage.notConfigured")}
+                </span>
               </span>
-            </span>
-          ))
+            ))}
+          </div>
         )}
       </div>
       {isAgentred && (
-        <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
+        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
           <span className="font-mono text-[10px] font-medium text-subtle-foreground">
             {t("device.manage.sessions")}
           </span>
           {device.online ? (
             <>
-              <DeviceSessionCounts fingerprint={device.fingerprint} />
+              {counts && (
+                <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                  <span>
+                    {t("device.manage.sessionCount", { count: counts.total })}
+                  </span>
+                  {counts.waiting > 0 && (
+                    <span className="text-status-waiting">
+                      {t("device.manage.sessionWaiting", {
+                        count: counts.waiting,
+                      })}
+                    </span>
+                  )}
+                </p>
+              )}
               <Link
                 to={`/devices/${device.id}/sessions`}
                 data-testid={`device-sessions-link-${device.id}`}
@@ -239,6 +247,134 @@ function DeviceExpandDetail({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 一张设备卡（mockup 帧 41/44）：标题行 = 设备名 + 类型 chip + 状态 + 右上
+ * Meta（platform · version · last-active）+ 可展开的详情区；副行 cardSummary
+ * （项目数 · 对话在跑数）只在两个数都真正拿到时渲染，拿不到就诚实省略。
+ */
+function DeviceCard({
+  d,
+  isExpanded,
+  onToggle,
+  detailState,
+  t,
+}: {
+  d: DeviceItem;
+  isExpanded: boolean;
+  onToggle: () => void;
+  detailState: { loading: boolean; error: unknown; data: DeviceDetail | null };
+  t: (key: string, opts?: Record<string, unknown>) => string;
+}) {
+  // 只有展开的在线 agentred 才去问中继；其余设备 fingerprint 传 null，不连。
+  const sessionActive = isExpanded && d.kind === KIND_AGENTRED && d.online;
+  const counts = useSessionCounts(
+    sessionActive ? d.fingerprint : null,
+    sessionActive,
+  );
+  const detail = detailState.data;
+  const projectCount = detail ? detail.projects.length : null;
+  // 项目数与对话在跑数缺一就不渲染副行 —— 不编数字。
+  const subRow =
+    projectCount !== null && counts !== null
+      ? t("device.manage.cardSummary", {
+          projects: projectCount,
+          m: counts.running,
+        })
+      : null;
+
+  const meta = [d.platform, d.version, formatLastActive(d.last_seen_at)]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <Card
+      className="gap-0 rounded-lg border-border bg-card py-4 shadow-none"
+      data-testid={`device-row-${d.id}`}
+    >
+      {/* 标题行 */}
+      <div className="flex items-start justify-between gap-3 px-5">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <CardTitle className="truncate text-[15px] font-semibold">
+            {d.name}
+          </CardTitle>
+          <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
+            {deviceKindLabel(d.kind, t)}
+          </span>
+          <span
+            className={cn(
+              "text-xs",
+              d.status !== ACTIVE || !d.online
+                ? "text-muted-foreground"
+                : "text-status-running",
+            )}
+          >
+            {d.status !== ACTIVE
+              ? t("device.manage.statusRevoked")
+              : d.online
+                ? t("device.manage.statusOnline")
+                : t("device.manage.statusOffline")}
+          </span>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="font-mono text-xs text-subtle-foreground">
+            {meta}
+          </span>
+          {/* 帧 47：浏览器行不接单、也不可展开——展开区列的是项目与能跑的
+              Agent，浏览器两样都没有。 */}
+          {d.kind !== "web" && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              data-testid={`device-expand-${d.id}`}
+              aria-expanded={isExpanded}
+              aria-label={
+                isExpanded
+                  ? t("device.manage.collapse")
+                  : t("device.manage.expand")
+              }
+              onClick={onToggle}
+            >
+              {isExpanded ? <ChevronUp /> : <ChevronDown />}
+            </Button>
+          )}
+        </div>
+      </div>
+      {/* 副行：项目 · 对话在跑（有数据才显示） */}
+      {subRow && (
+        <p className="px-5 pt-2 text-xs text-muted-foreground">{subRow}</p>
+      )}
+      {isExpanded && (
+        <div className="px-5 pt-3">
+          <DeviceExpandDetail
+            state={detailState}
+            device={d}
+            counts={counts}
+            t={t}
+          />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** 右列 340px 危险卡：撤销这台设备（mockup 帧 41/44 右栏）。 */
+function DangerCard({ onRevoke }: { onRevoke: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex w-full flex-col gap-2 rounded-lg border border-destructive/30 bg-card p-3.5">
+      <h2 className="text-sm font-semibold text-destructive">
+        {t("device.manage.revokeCardTitle")}
+      </h2>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {t("device.manage.revokeCardBody")}
+      </p>
+      <Button variant="destructive" className="w-full" onClick={onRevoke}>
+        {t("device.manage.revokeCardConfirm")}
+      </Button>
     </div>
   );
 }
@@ -354,160 +490,133 @@ export default function Devices() {
     }
   }
 
+  const deviceCount = !loading && loadError === null ? devices.length : null;
+  const hasOnlineAgentred = devices.some(
+    (d) => d.kind === KIND_AGENTRED && d.online,
+  );
+  // 撤销这台设备：危险卡作用于列表中的第一台设备（列表页无“选中”概念，
+  // 与既有 device-management 语义一致）。
+  const revokeTarget = devices.length > 0 ? devices[0] : null;
+
   return (
-    <AppShell>
-      <div className="w-full max-w-2xl space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-semibold">{t("device.manage.title")}</h1>
+    <AppShell
+      title={t("nav.devices")}
+      right={
+        <>
+          {deviceCount !== null && (
+            <span
+              data-testid="devices-count"
+              className="font-mono text-xs text-subtle-foreground"
+            >
+              {deviceCount}
+            </span>
+          )}
+          {hasOnlineAgentred && (
+            <span className="flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                className="size-[6px] rounded-full bg-status-running"
+              />
+              <span className="text-xs text-muted-foreground">
+                {t("appShell.topBar.fresh")}
+              </span>
+            </span>
+          )}
+        </>
+      }
+    >
+      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5 lg:flex-row">
+        {/* 左列：设备卡列表 */}
+        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+          {loadError !== null && (
+            <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
+          )}
+
+          {/* 加载失败时只留上面那条错误：不得改口说「还没有任何设备」——
+              那是一句我们此刻答不上来的断言。 */}
+          {loading ? (
+            <p className="text-muted-foreground">{t("common.loading")}</p>
+          ) : loadError !== null &&
+            devices.length === 0 ? null : devices.length === 0 ? (
+            <Card className="gap-0 rounded-lg border-border bg-card py-4 shadow-none">
+              <p className="px-5 text-sm text-muted-foreground">
+                {t("device.manage.empty")}
+              </p>
+            </Card>
+          ) : (
+            devices.map((d) => (
+              <DeviceCard
+                key={d.id}
+                d={d}
+                isExpanded={expanded.has(d.id)}
+                onToggle={() => toggleExpand(d)}
+                detailState={
+                  details[d.id] ?? {
+                    loading: true,
+                    error: null,
+                    data: null,
+                  }
+                }
+                t={t}
+              />
+            ))
+          )}
         </div>
 
-        {loadError !== null && (
-          <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
+        {/* 右列：撤销这台设备危险卡（无设备时不留空壳；移动端随行堆叠） */}
+        {revokeTarget && (
+          <aside className="flex w-full shrink-0 flex-col lg:w-[340px]">
+            <DangerCard
+              onRevoke={() => {
+                setRevokeError(null);
+                setRevoking(revokeTarget);
+              }}
+            />
+          </aside>
         )}
-
-        {/* 加载失败时只留上面那条错误：不得改口说「还没有任何设备」——
-            那是一句我们此刻答不上来的断言。 */}
-        {loading ? (
-          <p className="text-muted-foreground">{t("common.loading")}</p>
-        ) : loadError !== null &&
-          devices.length === 0 ? null : devices.length === 0 ? (
-          <Card>
-            <CardContent className="text-muted-foreground">
-              {t("device.manage.empty")}
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-3">
-            {devices.map((d) => {
-              const isExpanded = expanded.has(d.id);
-              return (
-                <Card
-                  key={d.id}
-                  className="py-4"
-                  data-testid={`device-row-${d.id}`}
-                >
-                  <CardHeader className="px-5">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <CardTitle className="truncate">{d.name}</CardTitle>
-                        <CardDescription className="mt-1">
-                          {deviceKindLabel(d.kind, t)}
-                          {d.platform ? ` · ${d.platform}` : ""}
-                          {d.version ? ` ${d.version}` : ""}
-                          {d.is_this_device
-                            ? ` · ${t("device.manage.thisDevice")}`
-                            : ""}
-                        </CardDescription>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        {/* 帧 47：浏览器行不接单、也不可展开——展开区列的是
-                            项目与能跑的 Agent，浏览器两样都没有。 */}
-                        {d.kind !== "web" && (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            data-testid={`device-expand-${d.id}`}
-                            aria-expanded={isExpanded}
-                            aria-label={
-                              isExpanded
-                                ? t("device.manage.collapse")
-                                : t("device.manage.expand")
-                            }
-                            onClick={() => toggleExpand(d)}
-                          >
-                            {isExpanded ? <ChevronUp /> : <ChevronDown />}
-                          </Button>
-                        )}
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={() => {
-                            setRevokeError(null);
-                            setRevoking(d);
-                          }}
-                        >
-                          {t("device.manage.revoke")}
-                        </Button>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-1 px-5 text-sm text-muted-foreground">
-                    <span>
-                      {t("device.manage.colLastActive")}:{" "}
-                      {formatLastActive(d.last_seen_at)}
-                    </span>
-                    <span>
-                      {t("device.manage.colStatus")}:{" "}
-                      {d.status !== ACTIVE
-                        ? t("device.manage.statusRevoked")
-                        : d.online
-                          ? t("device.manage.statusOnline")
-                          : t("device.manage.statusOffline")}
-                    </span>
-                  </CardContent>
-                  {isExpanded && (
-                    <CardContent className="px-5">
-                      <DeviceExpandDetail
-                        state={
-                          details[d.id] ?? {
-                            loading: true,
-                            error: null,
-                            data: null,
-                          }
-                        }
-                        device={d}
-                        t={t}
-                      />
-                    </CardContent>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
-        )}
-
-        <Dialog
-          open={!!revoking}
-          onOpenChange={(o) => {
-            if (!o && !submitting) {
-              setRevokeError(null);
-              setRevoking(null);
-            }
-          }}
-        >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{t("device.manage.revokeConfirmTitle")}</DialogTitle>
-            </DialogHeader>
-            <DialogBody>
-              <DialogDescription className="text-[13px] leading-relaxed">
-                {t("device.manage.revokeConfirmBody")}
-              </DialogDescription>
-              {revokeError && (
-                <Alert variant="destructive" className="mt-3">
-                  {revokeError}
-                </Alert>
-              )}
-            </DialogBody>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                disabled={submitting}
-                onClick={() => setRevoking(null)}
-              >
-                {t("device.manage.revokeCancel")}
-              </Button>
-              <Button
-                variant="destructive"
-                disabled={submitting}
-                onClick={onRevoke}
-              >
-                {t("device.manage.revokeConfirm")}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
+
+      <Dialog
+        open={!!revoking}
+        onOpenChange={(o) => {
+          if (!o && !submitting) {
+            setRevokeError(null);
+            setRevoking(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("device.manage.revokeConfirmTitle")}</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription className="text-[13px] leading-relaxed">
+              {t("device.manage.revokeConfirmBody")}
+            </DialogDescription>
+            {revokeError && (
+              <Alert variant="destructive" className="mt-3">
+                {revokeError}
+              </Alert>
+            )}
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={submitting}
+              onClick={() => setRevoking(null)}
+            >
+              {t("device.manage.revokeCancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={submitting}
+              onClick={onRevoke}
+            >
+              {t("device.manage.revokeConfirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }
