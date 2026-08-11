@@ -19,6 +19,12 @@
 //   8. run playwright with the harness env exported
 //   9. ALWAYS delete exactly the rows this run seeded, then kill agentred + server
 //
+// With `--dual` it additionally seeds a kind=desktop device and hands the real
+// Wails desktop app (e2e/dual/, playwright.dual.config.ts) everything it needs to
+// join that SAME agentred over the account relay — see prepareDesktop. Steps 7
+// and the web suite are replaced: the session under test is created by the
+// desktop, not seeded.
+//
 // It is NOT in CI and not part of make test. It depends on the developer's
 // database; when that is unreachable the runner fails with a message naming what
 // is missing — it never skips and never reports a pass it did not get.
@@ -53,10 +59,24 @@ const agentredDataDir = join(workDir, "ad");
 const agentredDB = join(agentredDataDir, "agentred.db");
 const projectDir = join(workDir, "project");
 const webserverLog = join(workDir, "webserver.log");
+// 「桌面端 + 浏览器」那一档才用到的东西:真 Wails 应用的数据目录、钥匙串与它自己的
+// SQLite(spec 的独立 oracle)。
+const desktopDataDir = join(workDir, "desktop");
+const desktopKeychainDir = join(workDir, "desktop-keychain");
+const desktopDB = join(desktopDataDir, "agentre.db");
 
 // The browser's fixed device fingerprint. It must match the peer fingerprint the
 // harness seeds the agentred.db session with, so the browser OWNS that session.
 const WEB_FINGERPRINT = "e2e-web-fingerprint-0001";
+
+// --dual 才编排桌面端那一侧(e2e/dual/,playwright.dual.config.ts)。默认档保持
+// 今天的样子:只有浏览器,不需要 wails 工具链,也不多跑一个 Wails 进程。
+// 该标志由本 runner 自己消费,不能混进转发给 playwright 的参数里。
+const dualMode = process.argv.slice(2).includes("--dual");
+const playwrightArgs = process.argv.slice(2).filter((a) => a !== "--dual");
+// 桌面端 Wails IPC 桥的专用端口。**不是** 34216:那个属于 agentre 仓自己的 e2e,
+// 两边同时跑时才不会互相复用(或对着对方假绿)。
+const DESKTOP_DEVSERVER = "localhost:34217";
 
 let serverProc = null;
 let agentredProc = null;
@@ -65,6 +85,7 @@ let dsn = "";
 let redis = { addr: "", password: "", db: 0 };
 let seeded = null;
 let serverURL = "";
+let agentreDir = "";
 
 // 只有「被当成脚本直接跑」时才编排；被 import 时(web/runner-config.spec.ts 驱动
 // 下面几个纯函数)什么都不做,否则一 import 就会去建服务器、连开发者的库。
@@ -81,7 +102,8 @@ if (isEntrypoint) {
 
 async function main() {
   const serverDir = resolve(serverRoot);
-  const agentreDir = locateAgentreCheckout(serverDir);
+  agentreDir = locateAgentreCheckout(serverDir);
+  if (dualMode) requireWailsToolchain(agentreDir);
   // The worktree's configs/ only has config.example.yaml (the real DSN is
   // gitignored); the developer's real config.yaml lives in the main checkout.
   const configCheckout = existsSync(join(serverDir, "configs", "config.yaml"))
@@ -130,6 +152,9 @@ async function main() {
   // 播种的项目在这台 agentred 上的真实目录(= 新对话的 cwd)。它是 workDir 下的
   // 一个子目录,run 结束随 workDir 一起消失。
   mkdirSync(projectDir, { recursive: true });
+  // 桌面端的设备指纹与 bootstrap.newBootFingerprint 同形(16 字节 hex),它同时是
+  // 桌面端在 agentred 上的对端身份 —— 会话归属的前半段。
+  const desktopFP = randomUUID().replace(/-/g, "");
   seeded = runTool([
     "seed",
     "--dsn",
@@ -146,6 +171,7 @@ async function main() {
     agentredFP,
     "--project-path",
     projectDir,
+    ...(dualMode ? ["--desktop-fingerprint", desktopFP] : []),
   ]);
 
   // Trade the seeded refresh token for a real access JWT over real HTTP, then
@@ -175,8 +201,16 @@ async function main() {
   });
   await waitForAgentredOnline(serverURL, agentredFP, seeded.user_id);
 
-  console.log("[web-e2e] seeding agentred.db session + journal …");
-  seedAgentredSession(agentredDB, agentredFP);
+  if (dualMode) {
+    // 双端场景里那条会话由**桌面端**建(它才是 R7/R18 的生产者),播种一条归浏览器
+    // 所有的空会话只会在同一份账号级清单里多出一行与本场景无关的会话。
+    console.log(
+      "[web-e2e] dual mode → agentred.db left empty (the desktop creates the session)",
+    );
+  } else {
+    console.log("[web-e2e] seeding agentred.db session + journal …");
+    seedAgentredSession(agentredDB, agentredFP);
+  }
 
   Object.assign(process.env, {
     WEBE2E_SERVER_URL: serverURL,
@@ -193,6 +227,7 @@ async function main() {
     // 一份来源,原样透传给 spec。
     WEBE2E_WORKSPACE: JSON.stringify(seeded.workspace),
   });
+  if (dualMode) prepareDesktop(agentreDir, agentredFP);
 
   const require = createRequire(import.meta.url);
   const playwrightCli = require.resolve("@playwright/test/cli");
@@ -202,12 +237,80 @@ async function main() {
       playwrightCli,
       "test",
       "--config",
-      "playwright.web.config.ts",
-      ...process.argv.slice(2),
+      dualMode ? "playwright.dual.config.ts" : "playwright.web.config.ts",
+      ...playwrightArgs,
     ],
     { cwd: here, stdio: "inherit" },
   );
   child.on("exit", (code) => void finish(code ?? 1));
+}
+
+// prepareDesktop 备好真 Wails 桌面端那一侧要用的一切,并把它交给
+// playwright.dual.config.ts(webServer 由 Playwright 起停,和 e2e/sync 一样)。
+//
+// 桌面端怎么接上**同一台** agentred:走账号中继,和浏览器同一条路。
+//   - 它以本次播种的 kind=desktop 设备身份登录(AGENTRE_E2E_* 那一组 → e2e/fakes/login.go);
+//   - e2e/fakes 再按 AGENTRE_E2E_AGENTRED_* 播一条 paired_agentreds 行 + 一个绑定该行的
+//     claudecode backend + 一个用它的 Agent。于是桌面端跟这个 Agent 的每一轮都经
+//     remote runtime → ConnPool.Borrow → GET /v1/relay/client?daemon_fingerprint=<fp>
+//     落到这台 agentred 上 —— 浏览器用的是同一个端点、同一台机器。
+//   - paired_agentreds.url 指向一个**故意没人监听**的回环端口:Borrow 会并发跑「局域网
+//     直连」与「中继」两条路,本场景要验的是中继那条(浏览器也只有那条),直连当场失败即可。
+function prepareDesktop(agentreDir, agentredFP) {
+  if (!seeded.desktop) {
+    throw new Error(
+      "webe2e seed returned no desktop device — --desktop-fingerprint did not reach it",
+    );
+  }
+  rmSync(desktopDataDir, { recursive: true, force: true });
+  mkdirSync(desktopDataDir, { recursive: true });
+  mkdirSync(desktopKeychainDir, { recursive: true, mode: 0o700 });
+  // `wails dev` 的 //go:embed all:frontend/dist 要求这个目录存在(镜像 make dev
+  // 与 agentre 自己的 e2e/playwright.config.ts)。
+  const distDir = join(agentreDir, "frontend", "dist");
+  mkdirSync(distDir, { recursive: true });
+  writeFileSync(join(distDir, ".keep"), "");
+
+  Object.assign(process.env, {
+    WEBE2E_AGENTRE_DIR: agentreDir,
+    WEBE2E_DESKTOP_DEVSERVER: DESKTOP_DEVSERVER,
+    WEBE2E_DESKTOP_URL: `http://${DESKTOP_DEVSERVER}`,
+    WEBE2E_DESKTOP_DB: desktopDB,
+    WEBE2E_DESKTOP_DATA_DIR: desktopDataDir,
+    WEBE2E_DESKTOP_KEYCHAIN_DIR: desktopKeychainDir,
+    WEBE2E_DESKTOP_FINGERPRINT: seeded.desktop.fingerprint,
+    WEBE2E_DESKTOP_LOG: webserverLog,
+    // 已登录的桌面端(与 e2e/sync 同一组约定,由 agentre e2e/fakes/login.go 消费)。
+    AGENTRE_E2E_SERVER_URL: serverURL,
+    AGENTRE_E2E_SERVER_USER_ID: String(seeded.user_id),
+    AGENTRE_E2E_DEVICE_ID: String(seeded.desktop.device_id),
+    AGENTRE_E2E_DEVICE_FINGERPRINT: seeded.desktop.fingerprint,
+    AGENTRE_E2E_REFRESH_TOKEN: seeded.desktop.refresh_token,
+    AGENTRE_E2E_KEYCHAIN_DIR: desktopKeychainDir,
+    // 这台 agentred 在桌面端上的配对行 + 指向它的远端 Agent(agentre e2e/fakes/remote.go)。
+    AGENTRE_E2E_AGENTRED_FINGERPRINT: agentredFP,
+    // 端口 1 要 root 才能监听,用户态进程不会占着它 —— 直连当场 ECONNREFUSED,
+    // 中继那条路胜出(client.Race:任一路径不可用不构成失败)。
+    AGENTRE_E2E_AGENTRED_URL: "ws://127.0.0.1:1",
+  });
+}
+
+// requireWailsToolchain 在真正开工前确认双端档跑得起来:缺 wails CLI 或缺
+// frontend/node_modules 时当场说清缺什么,而不是让 Playwright 的 webServer 等满超时。
+function requireWailsToolchain(agentreDir) {
+  try {
+    execFileSync("wails", ["version"], { stdio: "ignore" });
+  } catch {
+    throw new Error(
+      "--dual needs the `wails` CLI on PATH (it runs the real desktop app). " +
+        "Install it with `go install github.com/wailsapp/wails/v2/cmd/wails@latest`.",
+    );
+  }
+  if (!existsSync(join(agentreDir, "frontend", "node_modules"))) {
+    throw new Error(
+      `--dual needs the desktop frontend deps: run \`pnpm install\` in ${join(agentreDir, "frontend")}`,
+    );
+  }
 }
 
 // ── teardown ────────────────────────────────────────────────────────────────
@@ -253,6 +356,7 @@ async function finish(code) {
   if (agentredProc && agentredProc.exitCode === null)
     agentredProc.kill("SIGTERM");
   if (serverProc && serverProc.exitCode === null) serverProc.kill("SIGTERM");
+  if (dualMode) reapOrphanVite(agentreDir);
 
   if (code === 0) {
     rmSync(workDir, { recursive: true, force: true });
@@ -265,6 +369,31 @@ async function finish(code) {
 }
 
 for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => void finish(1));
+
+// reapOrphanVite 收掉 `wails dev` 关停时遗留的 vite 子进程(它在另一个进程组里,
+// Playwright 的 group-kill 够不着;agentre 自己的 e2e/run-e2e.mjs 有同样一段)。
+// 按命令行匹配,并限定在这个 agentre checkout 的 frontend 下,绝不误伤别的检出。
+function reapOrphanVite(dir) {
+  if (!dir) return;
+  const frontend = join(dir, "frontend");
+  try {
+    if (process.platform === "win32") {
+      const ps =
+        "Get-CimInstance Win32_Process | Where-Object { " +
+        `$_.ProcessId -ne $PID -and $_.CommandLine -like '*${frontend}*vite*' } | ` +
+        "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }";
+      execFileSync(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", ps],
+        { stdio: "ignore" },
+      );
+    } else {
+      execFileSync("pkill", ["-f", `${frontend}.*vite`], { stdio: "ignore" });
+    }
+  } catch {
+    // 尽力而为的卫生工作:没有可收的进程就什么都不做。
+  }
+}
 
 // ── pieces ──────────────────────────────────────────────────────────────────
 

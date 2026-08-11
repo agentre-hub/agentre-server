@@ -103,6 +103,49 @@ them at your own instances; the file is gitignored and
 Those belong in `scratch/`, not in the committed smoke suite — they are slow,
 they need infrastructure, and they will be the first thing to turn flaky in CI.
 
+## The dual-end run (`pnpm dual`) — the desktop app and a browser on one agentred
+
+`pnpm web` (`run-e2e-web.mjs`) drives a real browser against a real server + a
+real `agentred`. `pnpm dual` is the same runner with `--dual`, and it adds the
+**second end**: the real Wails desktop app.
+
+```
+pnpm dual  →  node run-e2e-web.mjs --dual
+  ├─ everything `pnpm web` does (server, seeded account, agentred, cleanup)
+  ├─ plus a seeded kind=desktop device + refresh token
+  └─ playwright.dual.config.ts
+       ├─ webServer: wails dev -tags e2e -devserver 34217   (the agentre checkout)
+       └─ one test (dual/desktop-and-web.spec.ts) driving BOTH ends
+```
+
+It exists because a handful of requirements are only decidable with two ends on
+one machine at the same time: the desktop puts a session's title + its agent's
+account-level sync id on the agentred (R7), the browser's message must land in
+the desktop's transcript as a real user row with a "from &lt;device&gt;" mark
+(R18/R19), both ends see one live stream (R6b), and a decision answered by one
+end tells the other it has already been handled (R10b).
+
+Two things it needs that the browser-only run does not:
+
+| Piece | Why |
+| --- | --- |
+| `wails` on PATH + `frontend/node_modules` in the agentre checkout | the desktop app is built and run for real; the runner checks both up front and names what is missing |
+| `agentre` `e2e/fakes/remote.go` (`//go:build e2e`) | the desktop joins **that** agentred the same way the browser does — over the account relay. The fake seeds the paired-machine row + an agent bound to it, which is what "claim this machine" would have left behind; without the env it is a no-op |
+
+Gotchas learned building it, all of them product behaviour this suite only
+observes (see the spec comments for the full reasoning):
+
+- **The desktop is only "present" on a machine while one of its turns is
+  in flight.** Per-turn borrow/release means the pooled connection is reaped 30 s
+  after its last turn and the next borrow builds a *fresh* `remote.Runtime` that
+  knows nothing about sessions other ends are running. The spec therefore parks a
+  never-approved turn on a second session for the whole run.
+- **A session's autonomous-turn consumer is bound to the runtime instance that
+  was current when its first turn ran.** So the scenario's session gets exactly
+  one desktop turn, and the browser drives it from there.
+- **The desktop bridge port is 34217**, not the 34216 the agentre repo's own e2e
+  suites use, so the two never reuse each other's app.
+
 ## Reports
 
 Report rules — one directory per scenario, create `report.md` **before** the run,

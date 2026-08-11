@@ -9,6 +9,9 @@
 //   - a throwaway user (the account);
 //   - one kind=agentred device + a refresh token for the real `agentred run`
 //     daemon to claim (it trades the token over real HTTP at startup);
+//   - optionally (--desktop-fingerprint) one kind=desktop device + its refresh
+//     token, for the scenario that drives the real Wails desktop app and a
+//     browser against that same agentred;
 //   - one Redis browser session (sid → {user_id, csrf_token}) that becomes the
 //     logged-in browser via the session cookie;
 //   - the account-level workspace (agents with their exec-target chains, a
@@ -46,9 +49,15 @@ func accountEmail(runID string) string { return "webe2e-" + runID + "@e2e.invali
 // agentredDeviceName 是那台真跑起来的 agentred 在设备列表里的名字（spec 按它取行）。
 const agentredDeviceName = "webe2e-agentred"
 
+// desktopDeviceName 是「桌面端 + 浏览器同时对着一台 agentred」那一场景里，真跑起来的
+// Wails 桌面端在设备列表里的名字。只有 seed 收到 --desktop-fingerprint 时才存在。
+const desktopDeviceName = "webe2e-desktop"
+
 func sessionSID(runID string) string { return "webe2e-" + runID }
 
-type agentredDevice struct {
+// seededDevice 是一台被播种的设备 + 一枚它能换取访问令牌的刷新令牌。
+// agentred 与桌面端用的是同一份形状：都靠 POST /v1/oauth/token/refresh 换真令牌。
+type seededDevice struct {
 	DeviceID     int64  `json:"device_id"`
 	Fingerprint  string `json:"fingerprint"`
 	RefreshToken string `json:"refresh_token"`
@@ -79,10 +88,13 @@ type seededWorkspace struct {
 }
 
 type seedResult struct {
-	RunID     string           `json:"run_id"`
-	UserID    int64            `json:"user_id"`
-	Email     string           `json:"email"`
-	Agentred  *agentredDevice  `json:"agentred"`
+	RunID    string        `json:"run_id"`
+	UserID   int64         `json:"user_id"`
+	Email    string        `json:"email"`
+	Agentred *seededDevice `json:"agentred"`
+	// Desktop 只在 seed 收到 --desktop-fingerprint 时非空：真桌面端（Wails，-tags e2e）
+	// 用它换到访问令牌，以同一个账号的身份接上同一台 agentred。
+	Desktop   *seededDevice    `json:"desktop,omitempty"`
 	Session   browserSession   `json:"session"`
 	Workspace *seededWorkspace `json:"workspace"`
 }
@@ -113,6 +125,7 @@ func usage() {
 
   webe2e seed     --dsn DSN --redis-addr HOST:PORT [--redis-password PW --redis-db N]
                   --run-id ID --agentred-fingerprint FP --project-path DIR
+                  [--desktop-fingerprint FP]
   webe2e cleanup  --dsn DSN --redis-addr HOST:PORT [--redis-password PW --redis-db N]
                   --run-id ID
 `)
@@ -150,6 +163,7 @@ func runSeed(args []string) error {
 	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "PostgreSQL DSN")
 	runID := fs.String("run-id", "", "unique id for this run")
 	agentredFP := fs.String("agentred-fingerprint", "", "the agentred device fingerprint (sha256:<hex> of the daemon instance uuid)")
+	desktopFP := fs.String("desktop-fingerprint", "", "optional: also seed a kind=desktop device with this fingerprint (the desktop+web dual scenario)")
 	projectPath := fs.String("project-path", "", "absolute path of the seeded project on the agentred host (the new conversation's cwd)")
 	redisAddr, redisPassword, redisDB := registerRedisFlags(fs)
 	if err := fs.Parse(args); err != nil {
@@ -185,29 +199,17 @@ func runSeed(args []string) error {
 		).Scan(&out.UserID).Error; err != nil {
 			return fmt.Errorf("insert user: %w", err)
 		}
-		out.Agentred = &agentredDevice{Fingerprint: *agentredFP}
-		if err := tx.Raw(
-			`INSERT INTO devices (user_id, name, kind, platform, version, fingerprint, last_seen_at, status, createtime, updatetime)
-			 VALUES (?, ?, 'agentred', 'darwin', 'e2e', ?, ?, 1, ?, ?) RETURNING id`,
-			out.UserID, agentredDeviceName, out.Agentred.Fingerprint, now, now, now,
-		).Scan(&out.Agentred.DeviceID).Error; err != nil {
-			return fmt.Errorf("insert agentred device: %w", err)
-		}
-		plain, err := randomToken()
+		agentred, err := seedDevice(tx, out.UserID, agentredDeviceName, "agentred", *agentredFP, now)
 		if err != nil {
 			return err
 		}
-		out.Agentred.RefreshToken = plain
-		// The server stores only sha256(refresh_token) (device_svc.sha256Hex);
-		// seeding the hash lets the real agentred trade it for an access JWT
-		// through the real POST /v1/oauth/token/refresh at startup.
-		sum := sha256.Sum256([]byte(plain))
-		if err := tx.Exec(
-			`INSERT INTO device_tokens (device_id, access_jti, refresh_token_hash, refresh_expires_at, createtime)
-			 VALUES (?, '', ?, ?, ?)`,
-			out.Agentred.DeviceID, hex.EncodeToString(sum[:]), now+30*24*3600*1000, now,
-		).Error; err != nil {
-			return fmt.Errorf("insert agentred device token: %w", err)
+		out.Agentred = agentred
+		if fp := strings.TrimSpace(*desktopFP); fp != "" {
+			desktop, derr := seedDevice(tx, out.UserID, desktopDeviceName, "desktop", fp, now)
+			if derr != nil {
+				return derr
+			}
+			out.Desktop = desktop
 		}
 		ws, err := seedWorkspace(tx, out.UserID, *runID, *agentredFP, *projectPath, now)
 		if err != nil {
@@ -238,6 +240,36 @@ func runSeed(args []string) error {
 		return fmt.Errorf("seed browser session: %w", err)
 	}
 	return emit(out)
+}
+
+// seedDevice 插一台设备行 + 一枚刷新令牌，返回调用方要透传出去的三元组。
+//
+// 服务器只存 sha256(refresh_token)（device_svc.sha256Hex），所以这里存哈希、把明文
+// 交出去：真 agentred / 真桌面端都靠真实的 POST /v1/oauth/token/refresh 换访问令牌，
+// 一枚坏令牌会在那一步大声失败，而不是变成半登录的进程。
+func seedDevice(tx *gorm.DB, userID int64, name, kind, fingerprint string, now int64) (*seededDevice, error) {
+	out := &seededDevice{Fingerprint: fingerprint}
+	if err := tx.Raw(
+		`INSERT INTO devices (user_id, name, kind, platform, version, fingerprint, last_seen_at, status, createtime, updatetime)
+		 VALUES (?, ?, ?, 'darwin', 'e2e', ?, ?, 1, ?, ?) RETURNING id`,
+		userID, name, kind, fingerprint, now, now, now,
+	).Scan(&out.DeviceID).Error; err != nil {
+		return nil, fmt.Errorf("insert %s device: %w", kind, err)
+	}
+	plain, err := randomToken()
+	if err != nil {
+		return nil, err
+	}
+	out.RefreshToken = plain
+	sum := sha256.Sum256([]byte(plain))
+	if err := tx.Exec(
+		`INSERT INTO device_tokens (device_id, access_jti, refresh_token_hash, refresh_expires_at, createtime)
+		 VALUES (?, '', ?, ?, ?)`,
+		out.DeviceID, hex.EncodeToString(sum[:]), now+30*24*3600*1000, now,
+	).Error; err != nil {
+		return nil, fmt.Errorf("insert %s device token: %w", kind, err)
+	}
+	return out, nil
 }
 
 // seedWorkspace 播种「从 web 发起新对话」要用到的那一份账号级工作区，并返回
