@@ -8,10 +8,15 @@ import { APP_BASE_URL, FRONTEND_DEV_COMMAND } from "./fixtures/ports";
  * 关键点是 testIgnore：**只靠 .gitignore 挡不住 scratch**。
  * gitignore 管的是「不提交」，而本地跑 `pnpm smoke` 时 scratch 目录就在磁盘上，
  * 不排除的话一次性验证脚本会混进冒烟结果里，让冒烟轨道慢慢烂掉。
+ *
+ * web/ 和 dual/ 是另外两条**按需**全链路轨道（`pnpm web` / `pnpm dual`，各自的
+ * playwright.web.config.ts / playwright.dual.config.ts），环境变量由 run-e2e-web.mjs
+ * 编排时注入。冒烟轨道必须一并排除它们——否则 CI 的 `make test-e2e` 会把它们扫进来，
+ * 在第一个 requiredEnv（WEBE2E_SERVER_URL）上模块加载即失败（web/harness.ts）。
  */
 export default defineConfig({
   testDir: ".",
-  testIgnore: ["scratch/**", "node_modules/**"],
+  testIgnore: ["scratch/**", "web/**", "dual/**", "node_modules/**"],
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

@@ -47,6 +47,14 @@ So the smoke config `testIgnore`s `scratch/**`, and the scratch config points
 runnable locally. Change one and you get scratch in CI, or scratch that no
 longer runs.
 
+The smoke config also `testIgnore`s `web/**` and `dual/**`: those are the two
+**on-demand** full-chain tracks, each with its own config
+(`playwright.web.config.ts` / `playwright.dual.config.ts`), and their specs read
+harness env vars that only `run-e2e-web.mjs` sets. A smoke run that picks them up
+dies at module load on `WEBE2E_SERVER_URL` before a single assertion runs —
+that is exactly how CI bit once (web/ added without the smoke config learning
+about it).
+
 ## Hermetic guarantees
 
 - **Dedicated port** (`5199`, see `fixtures/ports.ts`), deliberately not the dev
