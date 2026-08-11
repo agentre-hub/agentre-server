@@ -40,13 +40,6 @@ describe("Login", () => {
       ).toBeTruthy();
     });
 
-    it("shows a descriptive body line", () => {
-      renderLogin();
-      expect(
-        screen.getByText(/Continue with your GitHub account/i),
-      ).toBeTruthy();
-    });
-
     it("shows the GitHub login button", () => {
       renderLogin();
       expect(

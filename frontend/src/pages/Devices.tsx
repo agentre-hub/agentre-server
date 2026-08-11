@@ -213,14 +213,6 @@ function DeviceExpandDetail({
           ))
         )}
       </div>
-      <p className="font-mono text-[9.5px] text-subtle-foreground">
-        {t("device.manage.projectsNote")}
-      </p>
-      {!isAgentred && (
-        <p className="font-mono text-[9.5px] text-subtle-foreground">
-          {t("device.manage.agentsAccountNote")}
-        </p>
-      )}
       {isAgentred && (
         <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
           <span className="font-mono text-[10px] font-medium text-subtle-foreground">

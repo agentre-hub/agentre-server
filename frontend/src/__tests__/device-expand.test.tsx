@@ -118,8 +118,6 @@ describe("device row expand", () => {
     expect(within(card).getByText("Frontend Agent")).toBeTruthy();
     expect(within(card).getByText("Rank 2")).toBeTruthy();
     expect(within(card).getByText("agentre-server")).toBeTruthy();
-    // agentred 展开不解释「为什么没有 Agent 一节」——它本来就有。
-    expect(within(card).queryByText(/belong to the account/i)).toBeNull();
   });
 
   // 界面（mockup 帧 47）：设备页展开一台 agentred 时多一节「对话」，给出条数、
@@ -217,8 +215,6 @@ describe("device row expand", () => {
     expect(within(card).getByText("Configured")).toBeTruthy();
     expect(within(card).getByText("Not configured")).toBeTruthy();
     expect(within(card).queryByText("Agents that can run here")).toBeNull();
-    // 桌面端展开要说明「为什么这里没有 Agent」。
-    expect(within(card).getByText(/belong to the account/i)).toBeTruthy();
   });
 
   it("collapsing hides the detail again without refetching on re-expand", async () => {

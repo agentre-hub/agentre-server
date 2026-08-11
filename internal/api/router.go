@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	"github.com/cago-frame/cago/server/mux"
 
@@ -31,7 +32,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 
 	healthzCtr := healthz_ctr.NewHealthz()
 	authCtr := auth_ctr.NewAuth()
-	deviceCtr := device_ctr.NewDeviceWithPublicKey(r.Cfg.JWT.PublicKeyPEMContent())
+	publicKeys := r.Cfg.JWT.PublicKeySet()
+	deviceCtr := device_ctr.NewDeviceWithPublicKeys(publicKeys.CurrentKID, publicKeys.Keys,
+		int64(r.Cfg.JWT.AccessTTL/time.Second))
 	relaySvc := r.Relay
 	if relaySvc == nil {
 		relaySvc = relay_svc.Default()

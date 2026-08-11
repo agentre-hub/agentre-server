@@ -23,6 +23,32 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out runtime/keys/j
 openssl rsa -in runtime/keys/jwt.key -pubout -out runtime/keys/jwt.pub
 ```
 
+`deploy/config.docker.yaml` 把这把密钥登记为 `local-1`。生产环境用 `server.jwt.keys`
+维护验签 key ring，`active_kid` 指向唯一用于签发的项；旧项只保留
+`public_key_pem_path`，用于不打断仍在 15 分钟有效期内的访问令牌：
+
+```yaml
+server:
+  jwt:
+    active_kid: "2026-09-b"
+    keys:
+      - kid: "2026-08-a"
+        public_key_pem_path: "/keys/2026-08-a.pub"
+      - kid: "2026-09-b"
+        private_key_pem_path: "/keys/2026-09-b.key"
+        public_key_pem_path: "/keys/2026-09-b.pub"
+```
+
+正常轮换先部署含新旧公钥、以新 key 签发的配置；等待至少
+`access_ttl + 60s` 后再删除旧项。若旧私钥泄漏，不等待：立刻从 `keys` 删除旧项、
+切换 `active_kid` 并滚动部署。服务端随即拒绝旧 `kid`，已登录 agentred 每分钟刷新
+一次 `/v1/keys`，在刷新成功后也会删除本地旧公钥；刷新失败时保留最后一份有效集合。
+完全离线的 agentred 无法获知服务端状态变化，仍会保留旧公钥；私钥泄漏时必须把这些
+节点视为尚未完成处置，待其重新连上并成功刷新 key set 后才算废弃生效。
+
+仍支持原来的单 key `private_key_pem_path` / `public_key_pem_path` 配置，升级时会给它
+分配 `legacy` kid，并让部署前没有 `kid` 的短期令牌自然过期。新部署直接使用 key ring。
+
 然后起起来：
 
 ```bash
@@ -33,6 +59,11 @@ curl http://localhost:8443/v1/healthz
 `{"db_ping":true,"redis":true}` 就是好了，浏览器打开 <http://localhost:8443> 能看到界面。
 
 数据落在仓库根的 `data/pg` 和 `data/redis`，删掉就等于重置。
+
+Compose 固定使用 PostgreSQL 18.4。PostgreSQL 不能跨大版本直接读取旧数据目录；如果
+`data/pg` 来自 PostgreSQL 16 或 17，先用旧版本导出，再导入全新的 PostgreSQL 18
+数据目录（或者按 PostgreSQL 官方流程运行 `pg_upgrade`），不要直接执行 `up -d`
+让 18 读取旧目录。
 
 ### 要改配置
 

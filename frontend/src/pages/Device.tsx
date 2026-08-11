@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
-import { CircleAlert, Info, ShieldCheck } from "lucide-react";
+import { CircleAlert, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert } from "@/components/ui/alert";
 import AuthLayout from "@/components/AuthLayout";
@@ -39,7 +39,6 @@ export default function Device() {
   // 数组（切语言不该重新查一次 pending）。与 Devices.tsx 同一手法。
   const [failure, setFailure] = useState<unknown>(null);
   const [submitting, setSubmitting] = useState(false);
-  const hintId = useId();
   const errorId = useId();
 
   useEffect(() => {
@@ -187,7 +186,7 @@ export default function Device() {
               value={chars}
               onChange={onCodeChange}
               invalid={!!codeError}
-              describedBy={codeError ? `${errorId} ${hintId}` : hintId}
+              describedBy={codeError ? errorId : undefined}
             />
             {codeError && (
               <p
@@ -201,13 +200,6 @@ export default function Device() {
                 {t(`device.entry.errors.${codeError}`)}
               </p>
             )}
-            <p
-              id={hintId}
-              className="flex items-start gap-2 text-xs text-subtle-foreground"
-            >
-              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
-              {t("device.entry.hint")}
-            </p>
           </div>
 
           {failure !== null && (

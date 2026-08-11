@@ -17,20 +17,18 @@ services:
       AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID: "${GH_CLIENT_ID:-}"
       AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET: "${GH_CLIENT_SECRET:-}"
       AGENTRE_SERVER_SESSION_SECRET: "${SESSION_SECRET:-}"
-      # 设了就用它，没设就用上面配置文件里的 /keys 路径
-      AGENTRE_SERVER_JWT_PRIVATE_KEY_PEM: "${JWT_PRIVATE_KEY_PEM:-}"
-      AGENTRE_SERVER_JWT_PUBLIC_KEY_PEM: "${JWT_PUBLIC_KEY_PEM:-}"
     depends_on:
       pg:    { condition: service_healthy }
       redis: { condition: service_started }
 
   pg:
-    image: postgres:16-alpine
+    image: postgres:18.4-alpine
     environment:
       POSTGRES_USER: server
       POSTGRES_PASSWORD: server
       POSTGRES_DB: server
-    volumes: ["../data/pg:/var/lib/postgresql/data"]
+    # PostgreSQL 18 按大版本保存数据，挂父目录才能支持后续 pg_upgrade。
+    volumes: ["../data/pg:/var/lib/postgresql"]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "server"]
       interval: 5s

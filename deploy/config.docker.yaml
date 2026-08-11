@@ -41,8 +41,11 @@ server:
     user_code_ttl: 10m
     poll_interval: 5s
   jwt:
-    private_key_pem_path: "/keys/jwt.key"
-    public_key_pem_path: "/keys/jwt.pub"
+    active_kid: "local-1"
+    keys:
+      - kid: "local-1"
+        private_key_pem_path: "/keys/jwt.key"
+        public_key_pem_path: "/keys/jwt.pub"
     issuer: "agentre-server"
     audience: "agentre"
     access_ttl: 1h

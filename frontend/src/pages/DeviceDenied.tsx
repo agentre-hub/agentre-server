@@ -24,14 +24,9 @@ export default function DeviceDenied() {
             aria-hidden="true"
           />
         </div>
-        <div className="space-y-2">
-          <h1 className="text-2xl font-semibold text-foreground">
-            {t("device.deniedScreen.title")}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {t("device.deniedScreen.body")}
-          </p>
-        </div>
+        <h1 className="text-2xl font-semibold text-foreground">
+          {t("device.deniedScreen.title")}
+        </h1>
         <Button
           type="button"
           variant="outline"

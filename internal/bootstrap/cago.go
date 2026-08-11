@@ -50,14 +50,25 @@ type DFConfig struct {
 }
 
 type JWTConfig struct {
-	PrivateKeyPEMPath string        `yaml:"private_key_pem_path"`
-	PublicKeyPEMPath  string        `yaml:"public_key_pem_path"`
-	PrivateKeyPEM     string        `yaml:"private_key_pem"`
-	PublicKeyPEM      string        `yaml:"public_key_pem"`
-	Issuer            string        `yaml:"issuer"`
-	Audience          string        `yaml:"audience"`
-	AccessTTL         time.Duration `yaml:"access_ttl"`
-	RefreshTTL        time.Duration `yaml:"refresh_ttl"`
+	PrivateKeyPEMPath string         `yaml:"private_key_pem_path"`
+	PublicKeyPEMPath  string         `yaml:"public_key_pem_path"`
+	ActiveKID         string         `yaml:"active_kid"`
+	Keys              []JWTKeyConfig `yaml:"keys"`
+	Issuer            string         `yaml:"issuer"`
+	Audience          string         `yaml:"audience"`
+	AccessTTL         time.Duration  `yaml:"access_ttl"`
+	RefreshTTL        time.Duration  `yaml:"refresh_ttl"`
+}
+
+type JWTKeyConfig struct {
+	KID               string `yaml:"kid"`
+	PrivateKeyPEMPath string `yaml:"private_key_pem_path"`
+	PublicKeyPEMPath  string `yaml:"public_key_pem_path"`
+}
+
+type JWTPublicKeySet struct {
+	CurrentKID string
+	Keys       map[string]string
 }
 
 type OAuthConfig struct {
@@ -86,8 +97,6 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID", &out.OAuth.Github.ClientID)
 	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET", &out.OAuth.Github.ClientSecret)
 	setIfPresent("AGENTRE_SERVER_SESSION_SECRET", &out.Session.Secret)
-	setIfPresent("AGENTRE_SERVER_JWT_PRIVATE_KEY_PEM", &out.JWT.PrivateKeyPEM)
-	setIfPresent("AGENTRE_SERVER_JWT_PUBLIC_KEY_PEM", &out.JWT.PublicKeyPEM)
 	if v := os.Getenv("AGENTRE_SERVER_INSECURE_COOKIES"); v == "1" || strings.EqualFold(v, "true") {
 		out.InsecureCookies = true
 	}
@@ -131,41 +140,74 @@ func setIfPresent(env string, dst *string) {
 	}
 }
 
-// LoadJWTSigner 解析 cfg.JWT 中的 PEM 内容/路径并构造 Signer。
+// LoadJWTSigner 从 cfg.JWT 配置的路径读取 PEM 并构造 Signer。
 func LoadJWTSigner(cfg *ServerConfig) *jwt.Signer {
-	priv := loadPEM(cfg.JWT.PrivateKeyPEM, cfg.JWT.PrivateKeyPEMPath)
-	pub := loadPEM(cfg.JWT.PublicKeyPEM, cfg.JWT.PublicKeyPEMPath)
-	s, err := jwt.NewSigner(priv, pub, cfg.JWT.Issuer, cfg.JWT.Audience)
+	if len(cfg.JWT.Keys) == 0 {
+		s, err := jwt.NewSignerWithMaxLifetime(loadPEM(cfg.JWT.PrivateKeyPEMPath),
+			loadPEM(cfg.JWT.PublicKeyPEMPath), cfg.JWT.Issuer, cfg.JWT.Audience, cfg.JWT.AccessTTL)
+		if err != nil {
+			log.Fatalf("init jwt signer: %v", err)
+		}
+		return s
+	}
+	keys, activeKID := cfg.JWT.keyRing()
+	jwtKeys := make([]jwt.Key, 0, len(keys))
+	for _, key := range keys {
+		var privatePEM []byte
+		if key.PrivateKeyPEMPath != "" {
+			privatePEM = loadPEM(key.PrivateKeyPEMPath)
+		}
+		jwtKeys = append(jwtKeys, jwt.Key{ID: key.KID, PrivatePEM: privatePEM,
+			PublicPEM: loadPEM(key.PublicKeyPEMPath)})
+	}
+	s, err := jwt.NewKeyRing(activeKID, jwtKeys, cfg.JWT.Issuer, cfg.JWT.Audience, cfg.JWT.AccessTTL)
 	if err != nil {
 		log.Fatalf("init jwt signer: %v", err)
 	}
 	return s
 }
 
-// PublicKeyPEMContent 返回验签公钥 PEM 的内容，解析规则与 LoadJWTSigner 完全一致
-// （内联优先，否则读路径）。/v1/keys 分发的必须是签名者验签用的那一把：daemon 在
-// login 时取走它、此后离线验签（R3），只读 PublicKeyPEM 字段会让「只配了
-// public_key_pem_path」的部署（configs/config.example.yaml 的样子）分发出空串。
+// PublicKeyPEMContent 返回验签公钥 PEM 的内容，解析规则与 LoadJWTSigner 完全一致。
+// /v1/keys 分发的必须是签名者验签用的那一把：daemon 在 login 时取走它、此后离线
+// 验签（R3）。
 //
 // 读不到时返回空串而不是退出：真正缺 key 的部署在 LoadJWTSigner 里就已经 Fatal 了
 // （它跑在路由构建之前），这里再 Fatal 一次只会让测试里不配 JWT 的路由构造崩掉。
 func (c JWTConfig) PublicKeyPEMContent() string {
-	pem, _ := readPEM(c.PublicKeyPEM, c.PublicKeyPEMPath)
-	return string(pem)
+	set := c.PublicKeySet()
+	return set.Keys[set.CurrentKID]
 }
 
-func loadPEM(inline, path string) []byte {
-	b, err := readPEM(inline, path)
+func (c JWTConfig) PublicKeySet() JWTPublicKeySet {
+	keys, activeKID := c.keyRing()
+	out := JWTPublicKeySet{CurrentKID: activeKID, Keys: make(map[string]string, len(keys))}
+	for _, key := range keys {
+		publicPEM, err := readPEM(key.PublicKeyPEMPath)
+		if err == nil {
+			out.Keys[key.KID] = string(publicPEM)
+		}
+	}
+	return out
+}
+
+func (c JWTConfig) keyRing() ([]JWTKeyConfig, string) {
+	if len(c.Keys) != 0 {
+		return c.Keys, c.ActiveKID
+	}
+	return []JWTKeyConfig{{
+		KID: "legacy", PrivateKeyPEMPath: c.PrivateKeyPEMPath, PublicKeyPEMPath: c.PublicKeyPEMPath,
+	}}, "legacy"
+}
+
+func loadPEM(path string) []byte {
+	b, err := readPEM(path)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
 	return b
 }
 
-func readPEM(inline, path string) ([]byte, error) {
-	if inline != "" {
-		return []byte(inline), nil
-	}
+func readPEM(path string) ([]byte, error) {
 	if path != "" {
 		b, err := os.ReadFile(path)
 		if err != nil {
@@ -173,7 +215,7 @@ func readPEM(inline, path string) ([]byte, error) {
 		}
 		return b, nil
 	}
-	return nil, errors.New("missing JWT key (need either inline PEM or file path)")
+	return nil, errors.New("missing JWT key file path")
 }
 
 // RegisterDefaults 初始化 service 默认单例（OAuth、auth、device）。

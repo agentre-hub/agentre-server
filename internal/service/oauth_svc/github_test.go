@@ -1,7 +1,6 @@
 package oauth_svc
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,19 +21,15 @@ func TestBuildAuthorizeURL(t *testing.T) {
 }
 
 func TestPickPrimaryVerifiedEmail(t *testing.T) {
-	body := []byte(`[
-	  {"email":"a@b.com","primary":false,"verified":true},
-	  {"email":"c@d.com","primary":true,"verified":true}
-	]`)
-	var emails []githubEmail
-	_ = json.Unmarshal(body, &emails)
+	emails := []githubEmail{
+		{Email: "a@b.com", Verified: true},
+		{Email: "c@d.com", Primary: true, Verified: true},
+	}
 	got := pickPrimaryVerifiedEmail(emails)
 	assert.Equal(t, "c@d.com", got)
 }
 
 func TestPickPrimaryVerifiedEmail_NoneVerified(t *testing.T) {
-	body := []byte(`[{"email":"a@b.com","primary":true,"verified":false}]`)
-	var emails []githubEmail
-	_ = json.Unmarshal(body, &emails)
+	emails := []githubEmail{{Email: "a@b.com", Primary: true}}
 	assert.Equal(t, "", pickPrimaryVerifiedEmail(emails))
 }

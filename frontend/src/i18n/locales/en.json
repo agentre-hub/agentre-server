@@ -29,8 +29,7 @@
   },
   "overview": {
     "title": "Agents",
-    "subtitle": "{{count}} across your account — not duplicated per device",
-    "orderHint": "Runs on the first available target, in order",
+    "subtitle": "Agents in your account: {{count}}",
     "currentTarget": "Currently running on {{device}}",
     "noAvailableTarget": "No available execution target",
     "thisDevice": "This device",
@@ -54,7 +53,6 @@
   },
   "login": {
     "title": "Sign in to AgentRe",
-    "description": "Continue with your GitHub account. Both the desktop app and agentred daemon authorize through it.",
     "github": "Sign in with GitHub",
     "userCodeLabel": "Continue to device authorization after signing in",
     "failureTitle": "Sign in unsuccessful",
@@ -75,11 +73,10 @@
       "description": "Your desktop app or terminal shows a 6-character code. Enter it here.",
       "groupLabel": "Device code",
       "boxLabel": "Character {{position}} of 6",
-      "hint": "Case does not matter. The code never contains 0, O, 1 or I.",
       "submit": "Continue",
       "footnote": "No code on screen? Go back to the device and start authorization again.",
       "errors": {
-        "incomplete": "Enter all six characters. The code never contains 0, O, 1 or I.",
+        "incomplete": "Enter all six characters.",
         "invalid": "That code does not exist or has already been used. Check the 6-character code shown on the device."
       }
     },
@@ -109,17 +106,16 @@
     },
     "deniedScreen": {
       "title": "Authorization denied",
-      "body": "This device will not receive any access. You can close this page now.",
       "close": "Close page"
     },
     "expiredScreen": {
       "title": "Authorization request expired",
-      "body": "Device codes only stay valid for a short while. Go back to the device, start authorization again, then enter the new code.",
+      "body": "Go back to the device, start authorization again, then enter the new code.",
       "retry": "Enter a new code"
     },
     "manage": {
       "title": "Devices",
-      "empty": "No devices yet. Devices you authorize will appear here.",
+      "empty": "No devices yet.",
       "loadError": "Could not load your devices. Please try again.",
       "colLastActive": "Last active",
       "colStatus": "Status",
@@ -138,8 +134,6 @@
       "runnableAgents": "Agents that can run here",
       "rankLabel": "Rank {{rank}}",
       "projects": "Projects",
-      "projectsNote": "Shows configured status only — never the path",
-      "agentsAccountNote": "Agents belong to the account, not this device — see Overview",
       "configured": "Configured",
       "notConfigured": "Not configured",
       "noProjectsReported": "No projects reported from this device yet.",

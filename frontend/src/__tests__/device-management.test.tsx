@@ -146,9 +146,7 @@ describe("device management page", () => {
     expect(
       await screen.findByText("Could not load your devices. Please try again."),
     ).toBeTruthy();
-    expect(
-      screen.queryByText(/No devices yet\. Devices you authorize/),
-    ).toBeNull();
+    expect(screen.queryByText("No devices yet.")).toBeNull();
   });
 
   it("keeps the device and shows an error when revoke fails", async () => {
