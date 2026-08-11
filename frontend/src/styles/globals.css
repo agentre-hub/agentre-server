@@ -48,6 +48,10 @@
   /* 语义面与文字层级：foreground > muted > subtle */
   --secondary: #f4f4f5;
   --secondary-foreground: #3f3f46;
+
+  /* Sidebar —— 控制台外壳左侧栏底色（任务 2）。值取自 agentre 桌面端：
+     浅 #f4f4f5 / 深 #111316，两端同源。 */
+  --sidebar: #f4f4f5;
   --muted: #f4f4f5;
   --muted-foreground: #71717a;
   --subtle-foreground: #a1a1aa;
@@ -69,6 +73,8 @@
   --status-running: #10b981;
   --status-running-bg: #ecfdf5;
   --status-waiting: #f59e0b;
+  /* 琥珀 Badge 上的深棕文字（设计稿给的值）；深浅两色都是亮琥珀，同一值都可读。 */
+  --status-waiting-foreground: #402b06;
   --status-waiting-bg: #fffbeb;
   --status-idle: #a1a1aa;
   --status-error: #dc2626;
@@ -104,6 +110,7 @@
 
   --secondary: #262931;
   --secondary-foreground: #c4c7cd;
+  --sidebar: #111316;
   --muted: #1d2025;
   --muted-foreground: #8a8d94;
   --subtle-foreground: #5a5d64;
@@ -121,6 +128,7 @@
   --status-running: #34d399;
   --status-running-bg: #0f2218;
   --status-waiting: #fbbf24;
+  --status-waiting-foreground: #402b06;
   --status-waiting-bg: #261d0d;
   --status-idle: #6a6d74;
   --status-error: #f87171;
@@ -178,6 +186,7 @@
   --color-primary-text: var(--primary-text);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-sidebar: var(--sidebar);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-subtle-foreground: var(--subtle-foreground);
@@ -189,6 +198,7 @@
   --color-status-running: var(--status-running);
   --color-status-running-bg: var(--status-running-bg);
   --color-status-waiting: var(--status-waiting);
+  --color-status-waiting-foreground: var(--status-waiting-foreground);
   --color-status-waiting-bg: var(--status-waiting-bg);
   --color-status-idle: var(--status-idle);
   --color-status-error: var(--status-error);

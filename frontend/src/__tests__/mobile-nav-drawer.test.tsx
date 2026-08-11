@@ -66,6 +66,14 @@ describe("移动端导航抽屉(屏 29)", () => {
     for (const item of ["Overview", "Chat", "Devices", "Audit"]) {
       expect(screen.getByRole("link", { name: item })).toBeTruthy();
     }
+    // 抽屉内容随新 SideNav：Brand 副标 + ⌘K 搜索框；账号数据取不到时整行隐藏。
+    expect(screen.getByText("Console")).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Search agents, devices, and records",
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Personal · Free")).toBeNull();
   });
 
   it("移动:点关闭按钮后抽屉关闭", async () => {

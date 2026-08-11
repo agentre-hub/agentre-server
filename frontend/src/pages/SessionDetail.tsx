@@ -417,7 +417,7 @@ export default function SessionDetail() {
     ready && (status === "connected" || relayState === "reconnecting");
 
   return (
-    <AppShell>
+    <AppShell title={summary?.title ?? `#${sid}`}>
       <div className="mx-auto w-full max-w-3xl space-y-5">
         <nav
           aria-label={t("session.breadcrumb.devices")}
@@ -481,12 +481,6 @@ export default function SessionDetail() {
               >
                 {device?.name ?? ""}
               </Link>
-              <span aria-hidden="true" className="text-subtle-foreground">
-                /
-              </span>
-              <span className="max-w-[40vw] truncate font-semibold text-foreground">
-                {summary?.title ?? `#${sid}`}
-              </span>
               <span className="flex-1" />
               <Button
                 variant="outline"
