@@ -397,7 +397,13 @@ async function finish(code) {
   process.exit(code);
 }
 
-for (const sig of ["SIGINT", "SIGTERM"]) process.on(sig, () => void finish(1));
+// 只有编排进程才装信号处理:被 import 时装上去,Playwright 的 worker 会跟着在
+// Ctrl-C 时跑 finish() —— 那里会 process.exit 并打印「kept <workDir>」,把真正的
+// 收尾盖掉。import 时什么都不做,这条也算在内。
+if (isEntrypoint) {
+  for (const sig of ["SIGINT", "SIGTERM"])
+    process.on(sig, () => void finish(1));
+}
 
 // reapOrphanVite 收掉 `wails dev` 关停时遗留的 vite 子进程(它在另一个进程组里,
 // Playwright 的 group-kill 够不着;agentre 自己的 e2e/run-e2e.mjs 有同样一段)。
@@ -860,11 +866,6 @@ async function waitForAgentredOnline(baseURL, fp, userID) {
     }
     await sleep(1000);
   }
-}
-
-function serverDirConfigsCookiePath() {
-  // placeholder replaced by cookie name from config
-  return "";
 }
 
 // refreshToken exchanges a refresh token for a fresh access JWT through the real

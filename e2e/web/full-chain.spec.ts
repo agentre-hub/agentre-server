@@ -20,9 +20,8 @@
 import { expect, type Page } from "@playwright/test";
 import { DatabaseSync } from "node:sqlite";
 
-import { agentredDB, test, webFP } from "./harness";
+import { agentredDB, seededSessions, test, webFP } from "./harness";
 
-const SEEDED_SID = 1001;
 const FAKE_PREFIX = "e2e-fake-reply: ";
 
 /** 服务器端 oracle:以 seed cookie 调 /v1/devices,断言存在 kind=web + 固定指纹。
@@ -50,6 +49,9 @@ async function assertWebDeviceRegistered(page: Page) {
 test("全链路:登录→设备身份→列会话→游标补齐→发消息→收回复→批准工具调用", async ({
   page,
 }) => {
+  // 会话 id 只有 run-e2e-web.mjs 的播种那一份来源(经 WEBE2E_SESSIONS 透传):
+  // 写死一个 1001 的话,播种改了 id 这条用例就对着一条不存在的会话跑。
+  const SEEDED_SID = seededSessions().full_chain_id;
   // ── 诊断:网络失败 / 非 2xx / 浏览器 console 都进测试输出 ────────────────
   page.on("console", (msg) =>
     console.log(`[browser:${msg.type()}] ${msg.text()}`),
