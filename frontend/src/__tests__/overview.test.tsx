@@ -453,3 +453,180 @@ describe("overview: 屏 40 统计卡 / 操作条 / 双栏", () => {
     expect(screen.queryByText("All conversations →")).toBeNull();
   });
 });
+
+// ── task 3：共享组件契约 / 移动·桌面重排 / 真实 waiter 动作 ──────────────────
+// 目标：总览忠实对齐 IhldU 层级；无数据源区块用共享 Metric(—) / EmptyState；
+// 待处理动作只来自真实 pendingWaiters；移动端重排且无横向溢出。
+describe("overview: task 3 共享组件契约 / 重排 / 真实 waiter", () => {
+  const machineDevices = [
+    {
+      id: 1,
+      name: "Home NUC",
+      kind: "agentred",
+      fingerprint: "fp-1",
+      online: true,
+    },
+    {
+      id: 2,
+      name: "Office Mac mini",
+      kind: "agentred",
+      fingerprint: "fp-2",
+      online: false,
+    },
+    {
+      id: 3,
+      name: "This Browser",
+      kind: "web",
+      fingerprint: "fp-web",
+      online: true,
+    },
+  ];
+
+  // 本地副本：与「屏 40」describe 同名但各自作用域，避免跨块引用。
+  const agentSummary = {
+    sync_id: "ag-1",
+    name: "Backend Agent",
+    avatar_color: "#4f46e5",
+    has_available_target: true,
+    exec_targets: [],
+  };
+  const waitingSummary = {
+    sessionId: 42,
+    title: "Refactor login",
+    agentSyncId: "ag-1",
+    cwd: "/home/agent/proj",
+    backendType: "claudecode",
+    lifecycleState: "waiting",
+    waitingForInput: true,
+    latestSeq: 2,
+    updatedAt: Date.now() - 5 * 60000,
+  };
+
+  it("4 统计卡由共享 Metric 渲染；设备在线展示真实在线/总数", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/devices") return { devices: machineDevices };
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    renderOverview();
+
+    await screen.findByText("Devices online");
+    // 四张卡都长在共享 Metric 上（metric-value 是共享组件的内部标记）。
+    for (const id of [
+      "tile-online",
+      "tile-waiting",
+      "tile-usage",
+      "tile-errors",
+    ]) {
+      const tile = screen.getByTestId(id);
+      expect(tile.querySelector('[data-testid="metric-value"]')).toBeTruthy();
+    }
+    // 设备在线 = 1 台在线机器 / 共 2 台机器（浏览器 web 不算机器）。
+    expect(
+      within(screen.getByTestId("tile-online")).getByText("1"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("tile-online")).getByText("/ 2"),
+    ).toBeTruthy();
+  });
+
+  it("无数据源区块使用共享 EmptyState，不编样本时间/IP/数字", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/devices") return { devices: [] };
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    renderOverview();
+
+    await screen.findByText("Recent authorizations & changes");
+    // 最近授权 / 本月用量 / 安全与审计都长在共享 EmptyState（empty-icon 是内部标记）。
+    for (const id of ["empty-recent-auth", "empty-usage", "empty-security"]) {
+      const es = screen.getByTestId(id);
+      expect(es.querySelector('[data-testid="empty-icon"]')).toBeTruthy();
+    }
+    // 空态里绝无设计示例的时钟/IP/令牌数字。
+    const recentText =
+      screen.getByTestId("empty-recent-auth").textContent ?? "";
+    expect(recentText).not.toMatch(/\d{1,2}:\d{2}/); // 无示例时间 13:47 / 18:24
+    const securityText = screen.getByTestId("empty-security").textContent ?? "";
+    expect(securityText).not.toMatch(/\d{1,3}(\.\d{1,3}){3}/); // 无示例 IP 192.168.1.12
+  });
+
+  it("Agent 主区无 Agent 时也用共享 EmptyState", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/devices") return { devices: [] };
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    renderOverview();
+
+    await screen.findByText("No agents yet.");
+    const es = screen.getByTestId("empty-agents");
+    expect(es.querySelector('[data-testid="empty-icon"]')).toBeTruthy();
+  });
+
+  it("待处理动作只来自真实 waiter：pendingWaiters 为空时卡上只有看详情，无假动作", async () => {
+    // 中继连上、有一条关注会话在等输入，但 pendingWaiters 返回空——
+    // 没有任何可执行的允许/拒绝/回复，卡上只能留下真实的「看详情」。
+    fakeClient.request.mockImplementation(async (method: string) => {
+      if (method === "runtime.session.list")
+        return { sessions: [waitingSummary] };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected method: " + method);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay(fakeClient));
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents: [agentSummary] };
+      if (path === "/v1/devices") return { devices: [machineDevices[0]] };
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1,
+              invalid: false,
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    renderOverview();
+
+    expect(await screen.findByText("1 waiting on you")).toBeTruthy();
+    expect(screen.getByText("Refactor login")).toBeTruthy();
+    expect(screen.getByText("View details")).toBeTruthy();
+    // 没有任何 waiter → 不允许/拒绝/去回复这些假动作出现。
+    expect(screen.queryByText("Allow")).toBeNull();
+    expect(screen.queryByText("Deny")).toBeNull();
+    expect(screen.queryByText("Reply")).toBeNull();
+  });
+
+  it("移动/桌面重排无横向溢出：统计 2 列→4 列，双栏纵向→横向，辅助区满宽→340px", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/devices") return { devices: machineDevices };
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    renderOverview();
+    await screen.findByText("Devices online");
+
+    // 统计卡：移动 2 列，桌面 4 列（不是等比缩小）。
+    const tiles = screen.getByTestId("overview-tiles");
+    expect(tiles.className).toContain("grid-cols-2");
+    expect(tiles.className).toContain("md:grid-cols-4");
+    // 双栏：移动纵向堆叠，lg 才并排。
+    const cols = screen.getByTestId("overview-cols");
+    expect(cols.className).toContain("flex-col");
+    expect(cols.className).toContain("lg:flex-row");
+    // 辅助区：移动占满宽度，lg 才收成 340px。
+    const aside = screen.getByTestId("overview-aside");
+    expect(aside.className).toContain("w-full");
+    expect(aside.className).toContain("lg:w-[340px]");
+  });
+});

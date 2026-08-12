@@ -1,22 +1,18 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
   AlertTriangle,
   ArrowRight,
+  Bot,
   Clock3,
   Gauge,
   Monitor,
-  type LucideIcon,
+  ScrollText,
+  ShieldCheck,
 } from "lucide-react";
 
+import { EmptyState, Metric } from "@/components/console";
 import { Alert } from "@/components/ui/alert";
 import AppShell from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -132,48 +128,6 @@ function Fresh({ connected }: { connected: boolean }) {
   );
 }
 
-// ── 4 统计卡 ────────────────────────────────────────────────────────────
-function Tile({
-  label,
-  value,
-  sub,
-  subClassName,
-  Icon,
-  testId,
-}: {
-  label: string;
-  value: string;
-  sub?: string | null;
-  subClassName?: string;
-  Icon: LucideIcon;
-  testId: string;
-}) {
-  return (
-    <div
-      data-testid={testId}
-      className="flex min-w-0 flex-col gap-1.5 rounded-md border border-border bg-card p-3.5"
-    >
-      <div className="flex items-center gap-1.5 text-xs text-subtle-foreground">
-        <Icon className="size-3.5 shrink-0" aria-hidden="true" />
-        <span className="truncate">{label}</span>
-      </div>
-      <span className="text-2xl leading-none font-bold text-foreground">
-        {value}
-      </span>
-      {sub ? (
-        <span
-          className={cn(
-            "truncate text-[11px] text-subtle-foreground",
-            subClassName,
-          )}
-        >
-          {sub}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
 // ── 琥珀色「等你处理」操作条 ────────────────────────────────────────────
 function ActionStrip({
   cards,
@@ -279,28 +233,6 @@ function ActionCardView({
           </Link>
         </Button>
       </div>
-    </div>
-  );
-}
-
-// ── 双栏里的区块卡（最近授权 / 本月用量 / 安全与审计） ──────────────────
-function SectionCard({
-  title,
-  action,
-  children,
-}: {
-  title: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
-      <div className="flex items-center gap-2">
-        <span className="text-sm font-bold text-foreground">{title}</span>
-        <span className="flex-1" />
-        {action}
-      </div>
-      {children}
     </div>
   );
 }
@@ -725,20 +657,28 @@ export default function Overview() {
           <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
         )}
 
-        {/* 4 统计卡 */}
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Tile
+        {/* 4 统计卡（共享 Metric；今日用量 / 异常无数据源 → 诚实空态 —，不编数字） */}
+        <div
+          data-testid="overview-tiles"
+          className="grid grid-cols-2 gap-3 md:grid-cols-4"
+        >
+          <Metric
             testId="tile-online"
             label={t("overview.tiles.online")}
             value={devices === null ? NO_DATA : String(onlineCount)}
+            unit={
+              devices === null
+                ? undefined
+                : `/ ${devices.filter((d) => d.kind !== "web").length}`
+            }
             sub={
               firstOffline
                 ? t("overview.tiles.onlineSub", { device: firstOffline.name })
                 : null
             }
-            Icon={Monitor}
+            icon={Monitor}
           />
-          <Tile
+          <Metric
             testId="tile-waiting"
             label={t("overview.tiles.waiting")}
             value={waitingCount === null ? NO_DATA : String(waitingCount)}
@@ -747,21 +687,20 @@ export default function Overview() {
                 ? t("overview.tiles.waitingSub", { minutes: longestWait })
                 : null
             }
-            Icon={Clock3}
+            icon={Clock3}
           />
-          {/* 今日用量 / 异常：没有后端数据源 → 布局照出 + 诚实空态，不编数字。 */}
-          <Tile
+          <Metric
             testId="tile-usage"
             label={t("overview.tiles.usage")}
             value={NO_DATA}
-            Icon={Gauge}
+            icon={Gauge}
           />
-          <Tile
+          <Metric
             testId="tile-errors"
+            tone="danger"
             label={t("overview.tiles.errors")}
             value={NO_DATA}
-            subClassName="text-status-error"
-            Icon={AlertTriangle}
+            icon={AlertTriangle}
           />
         </div>
 
@@ -773,7 +712,10 @@ export default function Overview() {
         />
 
         {/* 双栏：左 Agent 卡 + 最近授权与变更 | 右 340px 本月用量 + 安全与审计 */}
-        <div className="flex flex-col gap-4 lg:flex-row">
+        <div
+          data-testid="overview-cols"
+          className="flex flex-col gap-4 lg:flex-row"
+        >
           <div className="flex min-w-0 flex-1 flex-col gap-4">
             <div className="overflow-hidden rounded-lg border border-border bg-card py-0">
               <div className="flex flex-row items-center gap-2 border-b border-border px-4 py-3">
@@ -794,9 +736,11 @@ export default function Overview() {
               ) : loadError !== null &&
                 (agents?.length ?? 0) === 0 ? null : (agents?.length ?? 0) ===
                 0 ? (
-                <p className="px-4 py-3 text-sm text-muted-foreground">
-                  {t("overview.empty")}
-                </p>
+                <EmptyState
+                  testId="empty-agents"
+                  icon={Bot}
+                  title={t("overview.empty")}
+                />
               ) : (
                 <div className="divide-y divide-border">
                   {agents?.map((agent) => (
@@ -806,63 +750,53 @@ export default function Overview() {
               )}
             </div>
 
-            {/* 最近授权与变更：无审计数据源 → 诚实空态。 */}
-            <SectionCard
-              title={t("overview.recentAuth.title")}
-              action={
-                <Link
-                  to="/audit"
-                  className="text-xs font-medium text-primary hover:underline"
-                >
-                  {t("overview.recentAuth.all")}
-                </Link>
-              }
-            >
-              <p className="text-[11px] text-subtle-foreground">{NO_DATA}</p>
-            </SectionCard>
+            {/* 最近授权与变更：无审计数据源 → 共享诚实空态（不编事件/IP/时间）。 */}
+            <div className="rounded-lg border border-border bg-card">
+              <EmptyState
+                testId="empty-recent-auth"
+                icon={ScrollText}
+                title={t("overview.recentAuth.title")}
+                action={
+                  <Link
+                    to="/audit"
+                    className="text-xs font-medium text-primary hover:underline"
+                  >
+                    {t("overview.recentAuth.all")}
+                  </Link>
+                }
+              />
+            </div>
           </div>
 
-          <aside className="flex w-full shrink-0 flex-col gap-4 lg:w-[340px]">
-            {/* 本月用量：无数据源 → 诚实空态（去用量页尚未存在，不造死链）。 */}
-            <SectionCard
-              title={t("overview.usage.title")}
-              action={
-                <span className="text-xs text-subtle-foreground">
-                  {t("overview.usage.all")}
-                </span>
-              }
-            >
-              <p className="text-[11px] text-subtle-foreground">{NO_DATA}</p>
-            </SectionCard>
+          <aside
+            data-testid="overview-aside"
+            className="flex w-full shrink-0 flex-col gap-4 lg:w-[340px]"
+          >
+            {/* 本月用量：无数据源 → 共享诚实空态；用量页尚不存在，不造死链。 */}
+            <div className="rounded-lg border border-border bg-card">
+              <EmptyState
+                testId="empty-usage"
+                icon={Gauge}
+                title={t("overview.usage.title")}
+              />
+            </div>
 
-            {/* 安全与审计：无数据源 → 布局照出 + 诚实空态。 */}
-            <SectionCard
-              title={t("overview.security.title")}
-              action={
-                <Link
-                  to="/audit"
-                  className="text-xs font-medium text-primary hover:underline"
-                >
-                  {t("overview.security.all")}
-                </Link>
-              }
-            >
-              <div className="flex flex-col gap-1.5 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">
-                    {t("overview.security.lastLogin")}
-                  </span>
-                  <span className="font-mono text-[11px] text-subtle-foreground">
-                    {NO_DATA}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">
-                    {t("overview.security.actTokens", { n: NO_DATA })}
-                  </span>
-                </div>
-              </div>
-            </SectionCard>
+            {/* 安全与审计：无数据源 → 共享诚实空态（不编令牌数/登录 IP）。 */}
+            <div className="rounded-lg border border-border bg-card">
+              <EmptyState
+                testId="empty-security"
+                icon={ShieldCheck}
+                title={t("overview.security.title")}
+                action={
+                  <Link
+                    to="/audit"
+                    className="text-xs font-medium text-primary hover:underline"
+                  >
+                    {t("overview.security.all")}
+                  </Link>
+                }
+              />
+            </div>
           </aside>
         </div>
 
