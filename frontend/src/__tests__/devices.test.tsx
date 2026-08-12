@@ -6,6 +6,8 @@ import { api } from "@/lib/api";
 import { ThemeProvider } from "@/lib/theme";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
+import { deviceKindIcon } from "@/lib/deviceKind";
+import { Laptop, Monitor, Server } from "lucide-react";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -132,7 +134,9 @@ describe("device page design alignment", () => {
     expect(screen.queryByText("Desktop connected")).toBeNull();
   });
 
-  it("右列 340px 危险卡：标题/正文/撤销按钮，点击走现有撤销 Dialog", async () => {
+  // 规格「设备」节：不渲染右侧常驻撤销说明卡；真实撤销进入每台可撤销设备的
+  // 行级更多菜单，随后出现确认对话框。
+  it("常驻『撤销这台设备』旁白卡不存在，撤销只出现在行级更多菜单", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return listResponse;
       throw new Error("unexpected call: " + path);
@@ -141,19 +145,24 @@ describe("device page design alignment", () => {
     renderDevices();
     await screen.findByText("nuc-01");
 
-    // 危险卡标题/正文（revokeCardTitle / revokeCardBody）
-    expect(screen.getByText("Revoke this device")).toBeTruthy();
-    expect(
-      screen.getByText(/can no longer refresh its credentials/i),
-    ).toBeTruthy();
+    // 危险卡标题/正文都不该出现（revokeCardTitle='Revoke this device' 无问号，
+    // 与对话框标题 'Revoke this device?' 区分开；对话框此刻未打开）。
+    expect(screen.queryByText("Revoke this device")).toBeNull();
+    expect(screen.queryByText(/can no longer refresh/i)).toBeNull();
 
-    // 页面唯一「Revoke」= 危险卡按钮 → 打开既有撤销 Dialog
-    fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
+    // 撤销入口在每台可撤销设备的行级菜单里
+    const nuc = screen
+      .getByText("nuc-01")
+      .closest('[data-slot="card"]') as HTMLElement;
+    fireEvent.click(within(nuc).getByRole("button", { name: "Row actions" }));
+    const menu = await within(nuc).findByRole("menu");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Revoke" }));
+
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Revoke this device?")).toBeTruthy();
   });
 
-  it("设备卡结构：标题行（名 + 类型 chip + 状态）+ 右上 Meta（platform·version·last-active）", async () => {
+  it("设备卡结构：状态标记 + 设备图标 + 名 + 类型 chip；Meta 在副行", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return listResponse;
       throw new Error("unexpected call: " + path);
@@ -166,9 +175,43 @@ describe("device page design alignment", () => {
       .getByText("nuc-01")
       .closest('[data-slot="card"]') as HTMLElement;
     expect(within(nuc).getByText(/Compute node/)).toBeTruthy(); // 类型 chip
-    expect(within(nuc).getByText(/Online/)).toBeTruthy(); // 状态
+    expect(within(nuc).getByText(/Online/)).toBeTruthy(); // 状态标记（StatusMark）
+    expect(within(nuc).getByTestId("device-icon-1")).toBeTruthy(); // 设备图标
     expect(within(nuc).getByText(/linux/)).toBeTruthy(); // Meta platform
     expect(within(nuc).getByText(/0\.4\.0/)).toBeTruthy(); // Meta version
+  });
+
+  it("已撤销设备（status≠ACTIVE）不渲染任何撤销动作", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 9,
+              name: "old-box",
+              kind: "desktop",
+              platform: "darwin",
+              version: "0.2.0",
+              fingerprint: "fp-old",
+              last_seen_at: 1753000000000,
+              status: 2, // 已撤销
+              online: false,
+              is_this_device: false,
+            },
+          ],
+        };
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    const row = (await screen.findByText("old-box")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+
+    // 已撤销行没有行级更多菜单：没有「撤销」这种动作可做
+    expect(
+      within(row).queryByRole("button", { name: "Row actions" }),
+    ).toBeNull();
   });
 
   it("副行 cardSummary 有数据才显示：展开在线 agentred 后出现『项目 · 对话在跑』", async () => {
@@ -266,5 +309,51 @@ describe("device page design alignment", () => {
     expect(within(nuc).getByText("Agents that can run here")).toBeTruthy();
     expect(within(nuc).getByText("Frontend Agent")).toBeTruthy();
     expect(within(nuc).getByText("Rank 2")).toBeTruthy();
+  });
+
+  it("移动端行式信息顺序：图标方框 + 名 + 类型 + 状态 + Meta，且无接单开关/负载条", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+
+    try {
+      renderDevices();
+      await screen.findByText("nuc-01");
+
+      const row = screen
+        .getByText("nuc-01")
+        .closest('[data-slot="card"]') as HTMLElement;
+      // 信息顺序：设备图标方框 + 名 + 类型 chip + 状态 + Meta
+      expect(within(row).getByTestId("device-icon-1")).toBeTruthy();
+      expect(within(row).getByText(/Compute node/)).toBeTruthy();
+      expect(within(row).getByText(/Online/)).toBeTruthy();
+      expect(within(row).getByText(/linux/)).toBeTruthy();
+      expect(within(row).getByText(/0\.4\.0/)).toBeTruthy();
+
+      // 无真实能力的控件不渲染：接单开关、并发负载条
+      expect(screen.queryByRole("switch")).toBeNull();
+      expect(screen.queryByText(/concurrent/i)).toBeNull();
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  });
+
+  it("deviceKindIcon 把每种 kind 映射到稳定 lucide 图标", () => {
+    expect(deviceKindIcon("agentred")).toBe(Server);
+    expect(deviceKindIcon("desktop")).toBe(Laptop);
+    expect(deviceKindIcon("web")).toBe(Monitor);
   });
 });

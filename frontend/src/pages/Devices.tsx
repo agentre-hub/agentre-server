@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Cpu, MonitorX } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   Dialog,
   DialogBody,
@@ -14,12 +15,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { EmptyState, RowMenu, StatusMark } from "@/components/console";
+import type { StatusTone } from "@/components/console";
 import AppShell from "@/components/AppShell";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { decodeSessionListResult, MethodSessionList } from "@/lib/wire";
-import { deviceKindLabel } from "@/lib/deviceKind";
+import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
 
 interface DeviceItem {
   id: number;
@@ -79,6 +83,29 @@ function formatLastActive(ms: number): string {
   return new Date(ms).toLocaleString();
 }
 
+/** 行首状态点（装饰）：online=运行绿，其余=中性灰。颜色不是状态的唯一表达—— */
+function statusDotClass(d: DeviceItem): string {
+  if (d.status !== ACTIVE) return "bg-muted-foreground/70";
+  return d.online ? "bg-status-running" : "bg-muted-foreground/70";
+}
+
+function statusTone(d: DeviceItem): StatusTone {
+  if (d.status !== ACTIVE) return "idle";
+  return d.online ? "running" : "idle";
+}
+
+function statusLabel(d: DeviceItem, t: (key: string) => string): string {
+  if (d.status !== ACTIVE) return t("device.manage.statusRevoked");
+  return d.online
+    ? t("device.manage.statusOnline")
+    : t("device.manage.statusOffline");
+}
+
+/** 设备是否可撤销：撤销端点只认属于本账号的 ACTIVE 设备；已撤销的没有凭据可撤。 */
+function isRevocable(d: DeviceItem): boolean {
+  return d.status === ACTIVE;
+}
+
 /**
  * 一台 agentred 的会话计数（总条数 / 等待处理 / 在跑）。server 一条会话都不存
  * （硬不变量），唯一真相源是那台 agentred 的 relay session.list —— 现连现问，
@@ -123,6 +150,8 @@ function useSessionCounts(
  * 对话一节：在线的 agentred 给「查看这台机器的对话」入口；离线的不可进入，
  * 就地标明离线与最后在线时间（R4）。会话计数由外层 useSessionCounts 提供，
  * 这里不再各自连一次中继。
+ *
+ * 只渲染真实数据；N1/N2 旁白（「只显示是否配置」「Agent 属于账号」）不进入产品。
  */
 function DeviceExpandDetail({
   state,
@@ -251,21 +280,39 @@ function DeviceExpandDetail({
   );
 }
 
+/** 设备行图标：从模块级常量取 kind → lucide 图标，装饰且 aria-hidden。 */
+function DeviceIcon({
+  Icon,
+  testId,
+  className,
+}: {
+  Icon: LucideIcon;
+  testId?: string;
+  className?: string;
+}) {
+  return <Icon aria-hidden="true" data-testid={testId} className={className} />;
+}
+
 /**
- * 一张设备卡（mockup 帧 41/44）：标题行 = 设备名 + 类型 chip + 状态 + 右上
- * Meta（platform · version · last-active）+ 可展开的详情区；副行 cardSummary
- * （项目数 · 对话在跑数）只在两个数都真正拿到时渲染，拿不到就诚实省略。
+ * 一台设备的行。桌面（Q6qgs4/Ukz7i）：状态点 + 设备图标 + 名 + 类型 chip +
+ * 状态标记 + 副行（Meta · 项目/对话总结）+ 可展开详情 + 行级菜单；移动（HUELX）：
+ * 图标方框 + 名/类型 + Meta 的行式信息顺序。接单开关、并发负载条等无真实能力的
+ * 控件不渲染（也不以禁用开关冒充）。撤销进入行级更多菜单，常驻危险说明卡已删除。
  */
-function DeviceCard({
+function DeviceRow({
   d,
+  isMobile,
   isExpanded,
   onToggle,
+  onRevoke,
   detailState,
   t,
 }: {
   d: DeviceItem;
+  isMobile: boolean;
   isExpanded: boolean;
   onToggle: () => void;
+  onRevoke: () => void;
   detailState: { loading: boolean; error: unknown; data: DeviceDetail | null };
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
@@ -290,63 +337,163 @@ function DeviceCard({
     .filter(Boolean)
     .join(" · ");
 
+  const revocable = isRevocable(d);
+  // 帧 47：浏览器行不接单、也不可展开——展开区列的是项目与能跑的 Agent，
+  // 浏览器两样都没有。
+  const expandable = d.kind !== "web";
+
+  if (isMobile) {
+    return (
+      <Card
+        className="gap-0 rounded-lg border-border bg-card py-3 shadow-none"
+        data-testid={`device-row-${d.id}`}
+      >
+        <div className="flex items-center gap-3 px-4">
+          {/* 图标方框：移动端的信息顺序以图标开头（HUELX） */}
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
+            <DeviceIcon
+              Icon={DEVICE_KIND_ICONS[d.kind] ?? Cpu}
+              testId={`device-icon-${d.id}`}
+              className="size-[18px] text-muted-foreground"
+            />
+          </span>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  statusDotClass(d),
+                )}
+              />
+              <span className="truncate text-sm font-medium text-foreground">
+                {d.name}
+              </span>
+              <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
+                {deviceKindLabel(d.kind, t)}
+              </span>
+            </div>
+            <span className="truncate font-mono text-xs text-subtle-foreground">
+              {meta}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <StatusMark
+              tone={statusTone(d)}
+              label={statusLabel(d, t)}
+              testId={`device-status-${d.id}`}
+            />
+            {expandable && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                data-testid={`device-expand-${d.id}`}
+                aria-expanded={isExpanded}
+                aria-label={
+                  isExpanded
+                    ? t("device.manage.collapse")
+                    : t("device.manage.expand")
+                }
+                onClick={onToggle}
+              >
+                {isExpanded ? <ChevronUp /> : <ChevronDown />}
+              </Button>
+            )}
+            {revocable && (
+              <RowMenu
+                label={t("console.aria.rowActions")}
+                testId={`device-menu-${d.id}`}
+                items={[
+                  {
+                    key: "revoke",
+                    label: t("device.manage.revokeConfirm"),
+                    danger: true,
+                    onSelect: onRevoke,
+                  },
+                ]}
+              />
+            )}
+          </div>
+        </div>
+        {isExpanded && (
+          <div className="px-4 pt-3">
+            <DeviceExpandDetail
+              state={detailState}
+              device={d}
+              counts={counts}
+              t={t}
+            />
+          </div>
+        )}
+      </Card>
+    );
+  }
+
   return (
     <Card
       className="gap-0 rounded-lg border-border bg-card py-4 shadow-none"
       data-testid={`device-row-${d.id}`}
     >
-      {/* 标题行 */}
-      <div className="flex items-start justify-between gap-3 px-5">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <CardTitle className="truncate text-[15px] font-semibold">
-            {d.name}
-          </CardTitle>
-          <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
-            {deviceKindLabel(d.kind, t)}
-          </span>
-          <span
-            className={cn(
-              "text-xs",
-              d.status !== ACTIVE || !d.online
-                ? "text-muted-foreground"
-                : "text-status-running",
-            )}
+      {/* 标题行（Q6qgs4 R1）：状态点 + 设备图标 + 名 + 类型 chip + 状态标记 */}
+      <div className="flex items-center gap-3 px-5">
+        <span
+          aria-hidden="true"
+          className={cn("size-2 shrink-0 rounded-full", statusDotClass(d))}
+        />
+        <DeviceIcon
+          Icon={DEVICE_KIND_ICONS[d.kind] ?? Cpu}
+          testId={`device-icon-${d.id}`}
+          className="size-[18px] shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
+          {d.name}
+        </span>
+        <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
+          {deviceKindLabel(d.kind, t)}
+        </span>
+        <StatusMark
+          tone={statusTone(d)}
+          label={statusLabel(d, t)}
+          testId={`device-status-${d.id}`}
+        />
+        {expandable && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            data-testid={`device-expand-${d.id}`}
+            aria-expanded={isExpanded}
+            aria-label={
+              isExpanded
+                ? t("device.manage.collapse")
+                : t("device.manage.expand")
+            }
+            onClick={onToggle}
           >
-            {d.status !== ACTIVE
-              ? t("device.manage.statusRevoked")
-              : d.online
-                ? t("device.manage.statusOnline")
-                : t("device.manage.statusOffline")}
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <span className="font-mono text-xs text-subtle-foreground">
-            {meta}
-          </span>
-          {/* 帧 47：浏览器行不接单、也不可展开——展开区列的是项目与能跑的
-              Agent，浏览器两样都没有。 */}
-          {d.kind !== "web" && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              data-testid={`device-expand-${d.id}`}
-              aria-expanded={isExpanded}
-              aria-label={
-                isExpanded
-                  ? t("device.manage.collapse")
-                  : t("device.manage.expand")
-              }
-              onClick={onToggle}
-            >
-              {isExpanded ? <ChevronUp /> : <ChevronDown />}
-            </Button>
-          )}
-        </div>
+            {isExpanded ? <ChevronUp /> : <ChevronDown />}
+          </Button>
+        )}
+        {revocable && (
+          <RowMenu
+            label={t("console.aria.rowActions")}
+            testId={`device-menu-${d.id}`}
+            items={[
+              {
+                key: "revoke",
+                label: t("device.manage.revokeConfirm"),
+                danger: true,
+                onSelect: onRevoke,
+              },
+            ]}
+          />
+        )}
       </div>
-      {/* 副行：项目 · 对话在跑（有数据才显示） */}
-      {subRow && (
-        <p className="px-5 pt-2 text-xs text-muted-foreground">{subRow}</p>
-      )}
+      {/* 副行（Q6qgs4 R2）：Meta · 项目/对话在跑（有数据才显示） */}
+      <div className="flex flex-wrap items-center gap-x-2 px-5 pt-1.5">
+        <span className="font-mono text-xs text-subtle-foreground">{meta}</span>
+        {subRow && (
+          <span className="text-xs text-muted-foreground">{subRow}</span>
+        )}
+      </div>
       {isExpanded && (
         <div className="px-5 pt-3">
           <DeviceExpandDetail
@@ -361,26 +508,9 @@ function DeviceCard({
   );
 }
 
-/** 右列 340px 危险卡：撤销这台设备（mockup 帧 41/44 右栏）。 */
-function DangerCard({ onRevoke }: { onRevoke: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex w-full flex-col gap-2 rounded-lg border border-destructive/30 bg-card p-3.5">
-      <h2 className="text-sm font-semibold text-destructive">
-        {t("device.manage.revokeCardTitle")}
-      </h2>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        {t("device.manage.revokeCardBody")}
-      </p>
-      <Button variant="destructive" className="w-full" onClick={onRevoke}>
-        {t("device.manage.revokeCardConfirm")}
-      </Button>
-    </div>
-  );
-}
-
 export default function Devices() {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [loading, setLoading] = useState(true);
   // 存住失败本身，渲染时才翻译成文案：effect 里不碰 t，就不必把它拉进依赖数组
@@ -477,6 +607,7 @@ export default function Devices() {
       });
       setRevoking(null);
     } catch {
+      // 失败时保留对话上下文并显示真实错误，设备行不动
       setRevokeError(t("device.manage.revokeError"));
       setSubmitting(false);
       return;
@@ -494,9 +625,6 @@ export default function Devices() {
   const hasOnlineAgentred = devices.some(
     (d) => d.kind === KIND_AGENTRED && d.online,
   );
-  // 撤销这台设备：危险卡作用于列表中的第一台设备（列表页无“选中”概念，
-  // 与既有 device-management 语义一致）。
-  const revokeTarget = devices.length > 0 ? devices[0] : null;
 
   return (
     <AppShell
@@ -528,8 +656,8 @@ export default function Devices() {
         </>
       }
     >
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5 lg:flex-row">
-        {/* 左列：设备卡列表 */}
+      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5">
+        {/* 设备行列表（桌面与移动共用；不再有右列常驻撤销说明卡） */}
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
           {loadError !== null && (
             <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
@@ -542,17 +670,20 @@ export default function Devices() {
           ) : loadError !== null &&
             devices.length === 0 ? null : devices.length === 0 ? (
             <Card className="gap-0 rounded-lg border-border bg-card py-4 shadow-none">
-              <p className="px-5 text-sm text-muted-foreground">
-                {t("device.manage.empty")}
-              </p>
+              <EmptyState icon={MonitorX} title={t("device.manage.empty")} />
             </Card>
           ) : (
             devices.map((d) => (
-              <DeviceCard
+              <DeviceRow
                 key={d.id}
                 d={d}
+                isMobile={isMobile}
                 isExpanded={expanded.has(d.id)}
                 onToggle={() => toggleExpand(d)}
+                onRevoke={() => {
+                  setRevokeError(null);
+                  setRevoking(d);
+                }}
                 detailState={
                   details[d.id] ?? {
                     loading: true,
@@ -565,20 +696,9 @@ export default function Devices() {
             ))
           )}
         </div>
-
-        {/* 右列：撤销这台设备危险卡（无设备时不留空壳；移动端随行堆叠） */}
-        {revokeTarget && (
-          <aside className="flex w-full shrink-0 flex-col lg:w-[340px]">
-            <DangerCard
-              onRevoke={() => {
-                setRevokeError(null);
-                setRevoking(revokeTarget);
-              }}
-            />
-          </aside>
-        )}
       </div>
 
+      {/* 撤销确认：由行级菜单进入；失败保留上下文显示真实错误，成功刷新真实状态 */}
       <Dialog
         open={!!revoking}
         onOpenChange={(o) => {
