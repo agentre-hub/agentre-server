@@ -27,6 +27,30 @@
       "rowActions": "行操作"
     }
   },
+  "audit": {
+    "filters": {
+      "all": "全部",
+      "deviceAuth": "授权接入",
+      "token": "令牌",
+      "revoke": "撤销"
+    },
+    "table": {
+      "time": "时间",
+      "event": "事件",
+      "object": "对象",
+      "source": "来源",
+      "result": "结果"
+    },
+    "events": {
+      "emptyTitle": "暂无审计事件",
+      "emptyBody": "审计记录暂未开放。"
+    },
+    "credentials": {
+      "title": "活跃凭证",
+      "emptyTitle": "暂无活跃凭证",
+      "emptyBody": "暂无可显示内容——设备登录后凭证会出现在这里。"
+    }
+  },
   "nav": {
     "overview": "总览",
     "chat": "对话",

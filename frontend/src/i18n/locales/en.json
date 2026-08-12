@@ -27,6 +27,30 @@
       "rowActions": "Row actions"
     }
   },
+  "audit": {
+    "filters": {
+      "all": "All",
+      "deviceAuth": "Device authorization",
+      "token": "Tokens",
+      "revoke": "Revocation"
+    },
+    "table": {
+      "time": "Time",
+      "event": "Event",
+      "object": "Object",
+      "source": "Source",
+      "result": "Result"
+    },
+    "events": {
+      "emptyTitle": "No audit events yet",
+      "emptyBody": "Audit records are not available yet."
+    },
+    "credentials": {
+      "title": "Active credentials",
+      "emptyTitle": "No active credentials",
+      "emptyBody": "Nothing here yet — credentials appear once devices sign in."
+    }
+  },
   "nav": {
     "overview": "Overview",
     "chat": "Chat",

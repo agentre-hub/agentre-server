@@ -53,6 +53,18 @@ describe("language switching", () => {
     expect(zh).not.toBe(en);
   });
 
+  it("audit 区段文案随语言切换", async () => {
+    // task 7 审计页筛选器的共用文案，必须真的随语言切换。
+    await i18n.changeLanguage("en");
+    const en = i18n.t("audit.filters.all");
+    await i18n.changeLanguage("zh-CN");
+    const zh = i18n.t("audit.filters.all");
+
+    expect(en).toBe("All");
+    expect(zh).toBe("全部");
+    expect(zh).not.toBe(en);
+  });
+
   it("maps Chinese variants onto zh-CN instead of falling back to English", async () => {
     for (const variant of ["zh", "zh-TW", "zh-Hans"]) {
       await i18n.changeLanguage(variant);
