@@ -762,4 +762,90 @@ describe("overview: 跨机器同号会话的 waiters 隔离", () => {
       expect(call?.[1]).toMatchObject({ sessionId: 42, requestId: "req-B" });
     });
   });
+
+  // Allow 提交后的收敛：submitToolDecision 重查 pendingWaiters 后，刷新结果必须
+  // 落回「机器:会话」同号槽位。写错键（只按 sessionId）的话，卡上那格 stale 的
+  // 待决策永远不消失——用户点了 Allow，卡片却仍挂着 Allow/Deny（已处理的动作）。
+  it("Allow 提交后刷新结果落回同机同号槽位：已处理的待决策从卡上收敛掉", async () => {
+    const devA = {
+      id: 1,
+      name: "机器A",
+      kind: "agentred",
+      fingerprint: "fp-1",
+      online: true,
+    };
+    const agents = [
+      {
+        sync_id: "ag-1",
+        name: "后端 Agent",
+        avatar_color: "#4f46e5",
+        has_available_target: true,
+        exec_targets: [],
+      },
+    ];
+    const summary42 = {
+      sessionId: 42,
+      title: "单机等待会话",
+      agentSyncId: "ag-1",
+      cwd: "/home/agent/proj",
+      backendType: "claudecode",
+      lifecycleState: "running",
+      waitingForInput: true,
+      latestSeq: 2,
+      updatedAt: Date.now() - 60000,
+    };
+    let pendingCalls = 0;
+    const clientA = {
+      request: vi.fn(async (method: string) => {
+        if (method === "runtime.session.list") return { sessions: [summary42] };
+        if (method === "runtime.session.pendingWaiters") {
+          pendingCalls += 1;
+          // 第一次：有一条待批准；Allow 提交后的重查：已被处理，返回空。
+          return pendingCalls === 1
+            ? {
+                toolPermissions: [{ RequestID: "req-A", ToolName: "Bash" }],
+                askUserQuestions: [],
+              }
+            : { toolPermissions: [], askUserQuestions: [] };
+        }
+        if (method === "runtime.submitToolPermission") return {};
+        throw new Error("unexpected: " + method);
+      }),
+      attach: vi.fn(),
+      catchUp: vi.fn(),
+      close: vi.fn(),
+    };
+    mockUseRelay.mockReturnValue(connectedRelay(clientA));
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents };
+      if (path === "/v1/devices") return { devices: [devA] };
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1,
+              invalid: false,
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    renderOverview();
+
+    // 等待卡渲染，Allow 在卡上。
+    expect(await screen.findByText("单机等待会话")).toBeTruthy();
+    expect(screen.getByText("Allow")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Allow"));
+
+    // Allow 提交后重查 pendingWaiters（空）：已处理的待决策不应再渲染 Allow/Deny。
+    // 卡仍保留（有真实会话），只剩「看详情」。
+    await waitFor(() => {
+      expect(screen.queryByText("Allow")).toBeNull();
+    });
+    expect(screen.queryByText("Deny")).toBeNull();
+    expect(screen.getByText("View details")).toBeTruthy();
+  });
 });

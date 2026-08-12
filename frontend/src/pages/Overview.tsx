@@ -618,9 +618,12 @@ export default function Overview() {
         ...(card.origin ? { peerFingerprint: card.origin } : {}),
       });
       const res = decodeSessionPendingWaitersResult(raw);
+      // 与上面的 fetch effect 同一条键约定：waiters 必须按「机器:会话」记。
+      // 只按 sessionId 写的话，刷新结果落进一个永远没人读的槽位——卡上那格
+      // 已被处理的待决策不消失，Allow/Deny 一直挂着。
       setWaiters((prev) => ({
         ...prev,
-        [card.sessionId]: {
+        [waiterKey(card.fingerprint, card.sessionId)]: {
           toolPermissions: (res.toolPermissions ??
             []) as PendingToolPermissionShape[],
           askUserQuestions: (res.askUserQuestions ??
