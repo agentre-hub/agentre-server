@@ -33,6 +33,8 @@ export interface DispatchTier {
   device_id?: number;
   device_name?: string;
   backend_type?: string;
+  /** 目标设备种类（desktop / agentred）；无设备的档（本机相对 / 未配对）没有它。 */
+  kind?: string;
   availability: DispatchAvailability;
   current: boolean;
 }
@@ -42,6 +44,8 @@ export interface DispatchChoice {
   device_id: number;
   device_name: string;
   backend_type: string;
+  /** 目标设备种类：desktop → org/subagent/hook 可用（R17），agentred → 不可用。 */
+  kind?: string;
   cwd?: string;
 }
 

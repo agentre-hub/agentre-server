@@ -89,11 +89,14 @@ type DeviceDetailView struct {
 
 // WebDispatchTier 是 R15 派发计划里执行目标链上的一档：从 web 给「某 Agent +
 // 某项目」派活时，这一档为什么能用 / 不能用。Availability 取值见常量。
+// Kind 是这一档指向的设备种类（device_entity.KindDesktop / KindAgentred）——R17
+// 发起前要按它如实说明 org/subagent/hook 在目标上是否可用。
 type WebDispatchTier struct {
 	Rank         int
 	DeviceID     int64
 	DeviceName   string
 	BackendType  string
+	Kind         string
 	Availability string
 	// Current 标记按顺序取第一个可用的会落到这一档。至多一档为 true。
 	Current bool
@@ -112,7 +115,10 @@ type WebDispatchChoice struct {
 	DeviceID          int64
 	DeviceName        string
 	BackendType       string
-	Cwd               string
+	// Kind 是选中目标设备种类（device_entity.KindDesktop / KindAgentred），R17
+	// 发起前据此说明三个内置工具是否可用。
+	Kind string
+	Cwd  string
 }
 
 // WebDispatchPlan 是「从 web 给某 Agent + 某项目派活」的完整计划：有序逐档说明 +
@@ -448,6 +454,31 @@ func (s *workspaceSvc) WebDispatchPlan(
 		return v
 	}
 
+	// 每个设备「配了哪些项目的路径」：agentred 的路径在同步组 project_location（跟着
+	// 账号在桌面端之间流动，决策 7）；桌面端的本机路径不流动（决策 6），只存在于上报组
+	// device_local_paths（按上报设备分命名空间）。两者不能混用，按设备种类各取各的。
+	desktopLocations := map[int64]map[string]string{}
+	locationsFor := func(dev *device_entity.Device) (map[string]string, error) {
+		if dev.Kind != device_entity.KindDesktop {
+			return locationsByFP[dev.Fingerprint], nil
+		}
+		if m, ok := desktopLocations[dev.ID]; ok {
+			return m, nil
+		}
+		rows, err := sync_repo.SyncLocalPath().ListByDevice(ctx, userID, dev.ID)
+		if err != nil {
+			return nil, err
+		}
+		m := make(map[string]string, len(rows))
+		for _, row := range rows {
+			if row != nil && row.ProjectSyncID != "" {
+				m[row.ProjectSyncID] = row.Path
+			}
+		}
+		desktopLocations[dev.ID] = m
+		return m, nil
+	}
+
 	chains := buildAgentChains(rows)
 	var chain *agentChain
 	for i := range chains {
@@ -462,6 +493,9 @@ func (s *workspaceSvc) WebDispatchPlan(
 
 	plan := &WebDispatchPlan{AgentSyncID: agentSyncID}
 	currentAssigned := false
+	// chosenCwd 是选中档（第一个可用）所选项目在那台机器上的绝对路径；case 块内
+	// 变量出不了 switch，先摆在这里由选中档写入。
+	var chosenCwd string
 	for _, t := range chain.Targets {
 		tier := WebDispatchTier{Rank: t.Rank, BackendType: t.BackendType}
 		switch {
@@ -478,17 +512,23 @@ func (s *workspaceSvc) WebDispatchPlan(
 			}
 			tier.DeviceID = dev.ID
 			tier.DeviceName = dev.Name
+			tier.Kind = dev.Kind
 			if !dev.IsActive() || !isOnline(t.Fingerprint) {
 				tier.Availability = AvailabilityOffline
 				break
 			}
+			locations, lerr := locationsFor(dev)
+			if lerr != nil {
+				return nil, lerr
+			}
 			if projectSyncID != "" {
-				if _, configured := locationsByFP[t.Fingerprint][projectSyncID]; !configured {
+				if _, configured := locations[projectSyncID]; !configured {
 					tier.Availability = AvailabilityProjectPathMissing
 					break
 				}
 			}
 			tier.Availability = AvailabilityAvailable
+			chosenCwd = locations[projectSyncID]
 		}
 		if !currentAssigned && tier.Availability == AvailabilityAvailable {
 			tier.Current = true
@@ -498,17 +538,21 @@ func (s *workspaceSvc) WebDispatchPlan(
 				DeviceID:          tier.DeviceID,
 				DeviceName:        tier.DeviceName,
 				BackendType:       tier.BackendType,
+				Kind:              tier.Kind,
 			}
 			// 选中档的 cwd：所选项目在这台机器上的绝对路径（见 WebDispatchChoice.Cwd
 			// 注释，这是 R19 在主动派活场景下的唯一例外）。未选项目时留空。
-			plan.Chosen.Cwd = locationsByFP[t.Fingerprint][projectSyncID]
+			plan.Chosen.Cwd = chosenCwd
 		}
 		plan.Tiers = append(plan.Tiers, tier)
 	}
 
 	// picker 用：选中的那一档机器上已配置的项目清单（按 sync_id 排序稳定）。
 	if plan.Chosen != nil {
-		configured := locationsByFP[plan.Chosen.DeviceFingerprint]
+		configured, cerr := locationsFor(deviceByFP[plan.Chosen.DeviceFingerprint])
+		if cerr != nil {
+			return nil, cerr
+		}
 		ids := make([]string, 0, len(configured))
 		for id := range configured {
 			ids = append(ids, id)

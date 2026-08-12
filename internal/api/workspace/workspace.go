@@ -52,6 +52,9 @@ type DispatchTierItem struct {
 	DeviceID    int64  `json:"device_id,omitempty"`
 	DeviceName  string `json:"device_name,omitempty"`
 	BackendType string `json:"backend_type,omitempty"`
+	// Kind 是这一档指向的设备种类（desktop / agentred）。R17 发起前据此如实说明
+	// org/subagent/hook 在目标上是否可用；无设备的档（本机相对 / 未配对）不带它。
+	Kind string `json:"kind,omitempty"`
 	// Availability 是 available / offline / unpaired / skipped_for_web /
 	// project_path_missing 之一。
 	Availability string `json:"availability"`
@@ -66,7 +69,9 @@ type DispatchChoiceItem struct {
 	DeviceID          int64  `json:"device_id"`
 	DeviceName        string `json:"device_name"`
 	BackendType       string `json:"backend_type"`
-	Cwd               string `json:"cwd,omitempty"`
+	// Kind 是选中目标设备种类（desktop / agentred），R17 发起前据此说明工具可用性。
+	Kind string `json:"kind"`
+	Cwd  string `json:"cwd,omitempty"`
 }
 
 type DispatchTargetResponse struct {

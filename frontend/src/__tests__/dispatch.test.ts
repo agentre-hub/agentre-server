@@ -53,6 +53,7 @@ const availablePlan: DispatchPlan = {
       device_id: 21,
       device_name: "公司 Mac mini",
       backend_type: "codex",
+      kind: "agentred",
       availability: "available",
       current: true,
     },
@@ -62,9 +63,36 @@ const availablePlan: DispatchPlan = {
     device_id: 21,
     device_name: "公司 Mac mini",
     backend_type: "codex",
+    kind: "agentred",
     cwd: "/srv/agentre-server",
   },
   projects: [],
+};
+
+// R17：第一档可用的是桌面端时，派发计划选中它（kind=desktop），发起前界面据此
+// 说明 org/subagent/hook 可用（见 NewConversationDialog）。逻辑层照常用 runtime.run
+// 把对话建到那台桌面端上，不注入 mcpServers。
+const desktopPlan: DispatchPlan = {
+  ...availablePlan,
+  tiers: [
+    {
+      rank: 1,
+      device_id: 30,
+      device_name: "家里 Mac mini",
+      backend_type: "claudecode",
+      kind: "desktop",
+      availability: "available",
+      current: true,
+    },
+  ],
+  chosen: {
+    device_fingerprint: "fp-desk",
+    device_id: 30,
+    device_name: "家里 Mac mini",
+    backend_type: "claudecode",
+    kind: "desktop",
+    cwd: "/Users/wyz/agentre-server",
+  },
 };
 
 const allUnavailablePlan: DispatchPlan = {
@@ -217,6 +245,58 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
     ).rejects.toThrow("no available exec target");
     expect(MockRelayClient).not.toHaveBeenCalled();
     expect(mockedApi).not.toHaveBeenCalled();
+  });
+
+  // R17：目标是桌面端时，同一套 runtime.run 把对话建到那台桌面端上——带着第一句、
+  // 发起方身份与那台机器上的项目路径；不注入 mcpServers（org/subagent/hook 是桌面端
+  // 本机内置工具，可用性由发起前的界面按 kind=desktop 如实说明，不由浏览器注入）。
+  it("目标是桌面端时向桌面端发 runtime.run 建会话（不注入 mcpServers）", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation((() => client) as never);
+
+    const out = await dispatchNewConversation({
+      plan: desktopPlan,
+      message: "帮我看看这个项目",
+      sourceDevice,
+    });
+
+    const constructorOpts = MockRelayClient.mock.calls[0][0] as {
+      url: string;
+      jwt: string;
+      reconnect: boolean;
+    };
+    expect(constructorOpts.url).toContain("fp-desk");
+    expect(constructorOpts.jwt).toBe("web-jwt");
+    expect(constructorOpts.reconnect).toBe(false);
+
+    const [method, params] = client.request.mock.calls[0];
+    const p = params as Record<string, unknown>;
+    expect(method).toBe(MethodRun);
+    expect(p.sessionId).toBeGreaterThan(0);
+    expect(p.agentSyncId).toBe("agent-1");
+    expect(p.cwd).toBe("/Users/wyz/agentre-server");
+    expect(p.userText).toBe("帮我看看这个项目");
+    expect(p.title).toBe("帮我看看这个项目");
+    expect(p.backend).toEqual({ type: "claudecode" });
+    expect(p.sourceDevice).toBe("fp-web");
+    expect(p.sourceDeviceName).toBe("Chrome · macOS");
+    expect(p.mcpServers).toBeUndefined();
+
+    // R16：桌面端建会话成功后同样立刻关注自己这条。
+    expect(mockedApi).toHaveBeenCalledWith("/v1/follows", {
+      method: "POST",
+      body: JSON.stringify({
+        device_fingerprint: "fp-desk",
+        session_id: "9001",
+      }),
+    });
+
+    expect(out).toEqual({
+      sessionId: 9001,
+      deviceId: 30,
+      deviceFingerprint: "fp-desk",
+    });
+    expect(client.close).toHaveBeenCalled();
   });
 
   // R16 的自关注是**派发成功之后**的收尾动作:runtime.run 一旦返回 ack,那台机器上

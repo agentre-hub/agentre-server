@@ -332,6 +332,8 @@
     "connectFailed": "连不上 {{machine}}，请重试。",
     "r17Title": "org / subagent / hook 此刻用不了",
     "r17Body": "这三个内置工具的真身在桌面端。网页发起的对话用不了它们——需要它们时请从桌面端发起。",
+    "r17DesktopTitle": "org / subagent / hook 可用",
+    "r17DesktopBody": "对话运行在桌面端上，这三个内置工具的真身就在那台机器上——与在那台机器上手动发起完全一致。",
     "cancel": "取消",
     "back": "返回",
     "messagePlaceholder": "说点什么…",

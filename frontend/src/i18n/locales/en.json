@@ -332,6 +332,8 @@
     "connectFailed": "Could not reach {{machine}}. Please try again.",
     "r17Title": "org / subagent / hook are not available here",
     "r17Body": "These three built-in tools live on your desktop app. Web-launched conversations can't use them — start from the desktop app if you need them.",
+    "r17DesktopTitle": "org / subagent / hook are available here",
+    "r17DesktopBody": "This conversation runs on a desktop app, where these three built-in tools live. You can use them exactly as if you had started this conversation on that machine.",
     "cancel": "Cancel",
     "back": "Back",
     "messagePlaceholder": "Say something…",
