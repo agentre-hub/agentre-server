@@ -74,12 +74,9 @@ describe("App shell wiring", () => {
       await i18n.changeLanguage("en");
       mockSignedIn();
       renderAt("/audit");
+      // 真实 Audit 页(诚实空态),不是 WorkspaceComingSoon 占位页。
       expect(await screen.findByTestId("audit-events-empty")).toBeTruthy();
       expect(screen.getByTestId("audit-credentials-empty")).toBeTruthy();
-      // 不再是 WorkspaceComingSoon 占位页。
-      expect(
-        screen.queryByText(i18n.t("workspaceComingSoon.auditBody")),
-      ).toBeNull();
     });
 
     it("still serves /device directly as the device-code entry", async () => {

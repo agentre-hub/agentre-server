@@ -280,11 +280,16 @@ export default function SessionDetailView({
   }, [client, relayState, ready, did, sid]);
 
   // 首次进入 reconnecting（= 连接失败）时探测原因（R11），只探一次。
+  // 与文件里其它异步 effect 一样带 alive 守卫：reconnecting 期间切换目标设备或
+  // 卸载时，旧设备那次还在路上的探测不得把 machineOnline / revoked / meValid 覆盖
+  // 成旧目标（或卸载后）的结论——否则右栏挂着旧机器的离线横幅，甚至误判解除授权。
   useEffect(() => {
     if (relayState !== "reconnecting" || probedRef.current) return;
     probedRef.current = true;
+    let alive = true;
     api<{ devices: DeviceItem[] }>("/v1/devices")
       .then((res) => {
+        if (!alive) return;
         // R2 / R11：/v1/devices 只回**活跃**设备，被解除授权的行直接不在里面。
         // 因此判据是「自己这台还在不在清单里」，不是它的 status——按 status 判
         // 永远判不出来，那个分支不可达。指纹还没取到时不判（避免误报）。
@@ -301,8 +306,12 @@ export default function SessionDetailView({
         setMachineOnline(machine?.online ?? null);
       })
       .catch((e: unknown) => {
+        if (!alive) return;
         if (e instanceof ApiError && e.status === 401) setMeValid(false);
       });
+    return () => {
+      alive = false;
+    };
   }, [relayState, webDevice?.fingerprint, did]);
 
   // 断线重连后刷新待决策：补齐只负责转录事件，pendingWaiters 需要重新拉一次（R10）。

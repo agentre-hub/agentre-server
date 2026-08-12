@@ -632,6 +632,87 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     });
   });
 
+  // R11：reconnecting 时探测一次连接失败原因。旧设备那一次探测还在路上就切到新
+  // 目标时,它的结论不得在切换之后落地——否则右栏会挂起旧机器的「离线」横幅（甚至
+  // 把浏览器误判成已解除授权）直到整页刷新。与文件里其它异步 effect 一样,探测也
+  // 必须带 alive 守卫,切换目标 / 卸载后丢弃在途应答。
+  it("reconnecting 期间切换目标设备:不残留旧设备的探测结论", async () => {
+    const webDev = {
+      id: 9,
+      name: "浏览器",
+      kind: "web",
+      fingerprint: "fp-web",
+      last_seen_at: 0,
+      status: 1,
+      online: true,
+    };
+    const dev1 = { ...deviceRow, id: 1, name: "机器A", online: false };
+    const dev2 = { ...deviceRow, id: 2, name: "机器B", online: true };
+
+    // 旧设备(1)的探测先发出、后落定:挂起,稍后手动 resolve。
+    let resolveProbe1!: (v: unknown) => void;
+    const probe1 = new Promise((r) => {
+      resolveProbe1 = r;
+    });
+
+    let call = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path !== "/v1/devices") throw new Error("unexpected: " + path);
+      call += 1;
+      // call1=设备1取设备, call2=设备1的探测(挂起),
+      // call3=设备2取设备, call4=设备2的探测。
+      if (call === 2) return probe1;
+      return { devices: call <= 2 ? [webDev, dev1] : [webDev, dev2] };
+    });
+
+    mockUseRelay.mockImplementation(() => ({
+      client: fakeClient as never,
+      relayState: "reconnecting",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    }));
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    // 让取设备/探测的在途应答先落定(不在 waitFor 轮询里裸 setState)。
+    await act(async () => {});
+
+    // 切到另一台机器(2):重新取设备 + 重新允许探测。
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={2} sessionId={43} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+
+    // 设备2在线 + 中继 reconnecting → 状态横幅是 reconnecting,不是 machineOffline。
+    await vi.waitFor(() => {
+      const view = screen.getByTestId("session-detail-view");
+      expect(
+        view.querySelector('[data-session-status="reconnecting"]'),
+      ).toBeTruthy();
+    });
+
+    // 旧设备(1)的探测现在才回来(离线):不得覆盖新目标的在线判定。
+    await act(async () => {
+      resolveProbe1({ devices: [webDev, dev1] });
+    });
+
+    await vi.waitFor(() => {
+      const view = screen.getByTestId("session-detail-view");
+      expect(
+        view.querySelector('[data-session-status="machineOffline"]'),
+      ).toBeNull();
+    });
+  });
+
   it("页面形态:详情头部渲染状态标记与机器 meta(标题仍由 AppShell TopBar 呈现)", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };

@@ -96,14 +96,11 @@
       "all": "All audit →"
     },
     "usage": {
-      "title": "Usage this month",
-      "all": "View usage →"
+      "title": "Usage this month"
     },
     "security": {
       "title": "Security & audit",
-      "all": "Go to audit →",
-      "actTokens": "{{n}} active tokens",
-      "lastLogin": "Last sign-in"
+      "all": "Go to audit →"
     }
   },
   "authLayout": {
@@ -293,7 +290,6 @@
     }
   },
   "chat": {
-    "title": "Chat",
     "findMore": "Go to the devices page to find more conversations",
     "noSessions": "No conversations yet.",
     "follow": "Follow",

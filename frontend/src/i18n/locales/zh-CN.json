@@ -96,14 +96,11 @@
       "all": "全部审计 →"
     },
     "usage": {
-      "title": "本月用量",
-      "all": "去用量 →"
+      "title": "本月用量"
     },
     "security": {
       "title": "安全与审计",
-      "all": "去审计 →",
-      "actTokens": "{{n}} 个活跃令牌",
-      "lastLogin": "最近登录"
+      "all": "去审计 →"
     }
   },
   "authLayout": {
@@ -293,7 +290,6 @@
     }
   },
   "chat": {
-    "title": "对话",
     "findMore": "去设备页找更多对话",
     "noSessions": "还没有对话",
     "follow": "关注",
