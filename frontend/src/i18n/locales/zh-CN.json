@@ -22,6 +22,11 @@
       "label": "语言"
     }
   },
+  "console": {
+    "aria": {
+      "rowActions": "行操作"
+    }
+  },
   "nav": {
     "overview": "总览",
     "chat": "对话",

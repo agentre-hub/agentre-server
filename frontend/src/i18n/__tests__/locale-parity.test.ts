@@ -14,6 +14,28 @@ function flatten(obj: Json, prefix = ""): string[] {
   });
 }
 
+/** 收集所有叶子字符串值（用于检查文案内容）。 */
+function leafValues(obj: Json): string[] {
+  return Object.entries(obj).flatMap(([, v]) =>
+    typeof v === "string" ? [v] : leafValues(v as Json),
+  );
+}
+
+/**
+ * 设计旁白（spec「视觉真源与旁白判定」明确排除的文案）。locale 值里出现任何
+ * 一条都说明有人把评审说明/能力解释当成了产品文案。注意「撤销这台设备」不在
+ * 清单里——它作为 revokeCard* 键已经存在于上轮实现，由 task 4 随危险卡一起删除。
+ */
+const NARRATION_PHRASES = [
+  "这里记什么",
+  "现状 vs 优化",
+  "只读改动说明",
+  "执行目标按顺序",
+  "改动在设备上",
+  "N1",
+  "N2",
+];
+
 const REFERENCE = "en";
 
 describe("locale parity", () => {
@@ -59,6 +81,16 @@ describe("locale parity", () => {
         return typeof value === "string" && value.trim() === "";
       });
       expect(empties, `${lang} 有空翻译：${empties.join(", ")}`).toEqual([]);
+    }
+  });
+
+  it("locale 值不含设计旁白文案", () => {
+    // 旁白不是产品文案：不许为它建键，也不许混进任何翻译值。
+    for (const [lang, bundle] of Object.entries({ en, "zh-CN": zhCN })) {
+      const hits = leafValues(bundle as Json).filter((v) =>
+        NARRATION_PHRASES.some((p) => v.includes(p)),
+      );
+      expect(hits, `${lang} 混入旁白：${hits.join(", ")}`).toEqual([]);
     }
   });
 });
