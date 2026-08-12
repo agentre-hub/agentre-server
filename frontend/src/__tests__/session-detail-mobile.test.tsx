@@ -20,6 +20,7 @@ import { api } from "@/lib/api";
 import { useRelayMachine } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/lib/theme";
+import SessionDetailView from "@/components/session/SessionDetailView";
 import SessionDetail from "@/pages/SessionDetail";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -181,6 +182,32 @@ describe("移动端会话详情:关注入口在顶栏(决策 16)", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Follow" })).toBeTruthy(),
     );
+  });
+});
+
+describe("SessionDetailView embedded 形态(任务 5 重构边界)", () => {
+  it("embedded 形态:移动视口下也不渲染关注按钮(关注入口不属于右栏嵌入详情)", async () => {
+    mockMobileViewport();
+    stubApi([]);
+    mockUseRelay.mockImplementation(() => ({
+      client: fakeClient as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    }));
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 标题在嵌入式详情头部,不包 AppShell。
+    expect(await screen.findByText("重构登录页")).toBeTruthy();
+    // embedded 形态永不渲染关注按钮(页面顶栏的 Follow/Unfollow 只属于 form="page")。
+    expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unfollow" })).toBeNull();
   });
 });
 

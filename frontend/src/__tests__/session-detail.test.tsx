@@ -16,6 +16,7 @@ import {
 } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/lib/theme";
+import SessionDetailView from "@/components/session/SessionDetailView";
 import SessionDetail from "@/pages/SessionDetail";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -511,5 +512,88 @@ describe("会话详情页:老 agentred 与发送失败", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText(/could not be sent/i)).toBeTruthy();
+  });
+});
+
+// 任务 5 重构边界：SessionDetailView 是路由页（form="page"）与桌面 Chat 右栏
+// （form="embedded"）共同消费的同一份真实会话详情视图。embedded 形态不包 AppShell、
+// 无面包屑、无关注入口，但 relay attach/catchup/origin、转录、审批、Composer 全部保留。
+describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
+  function renderEmbedded() {
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+        webDeviceError: null,
+      };
+    });
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("embedded 形态:渲染真实详情,不包 AppShell,无面包屑/关注", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "嵌入式转录" },
+        seq: 1,
+      });
+    });
+
+    renderEmbedded();
+
+    // 真实转录渲染(attach + 补齐照常)。
+    expect(await screen.findByText("嵌入式转录")).toBeTruthy();
+    // 无 AppShell(无 SideNav / 无面包屑导航)。
+    expect(screen.queryByRole("navigation")).toBeNull();
+    // 桌面嵌入:无关注按钮(关注入口在列表行 R12 / 页面顶栏决策 16)。
+    expect(screen.queryByRole("button", { name: /Follow/i })).toBeNull();
+    // relay attach/catchup 照常走。
+    expect(fakeClient.attach).toHaveBeenCalledWith(42, undefined);
+    expect(fakeClient.catchUp).toHaveBeenCalledWith(42, undefined);
+    // 发送能力仍在(桌面右栏同样要能回复)。
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+
+  it("页面形态:详情头部渲染状态标记与机器 meta(标题仍由 AppShell TopBar 呈现)", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    // 状态标记:summary.lifecycleState=idle → 显示 Idle,不止靠颜色。
+    const pill = await screen.findByTestId("session-detail-status");
+    expect(pill.textContent).toContain("Idle");
+    // 机器 meta:设备名出现在详情头部。
+    expect(
+      (await screen.findByTestId("session-detail-meta")).textContent,
+    ).toContain("书房小主机");
   });
 });
