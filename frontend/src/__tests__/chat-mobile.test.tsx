@@ -318,4 +318,41 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
       ).toBeTruthy(),
     );
   });
+
+  it("移动端也有可触达的真实搜索（屏 20 头部搜索）：输入词过滤会话行", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+            {
+              device_fingerprint: "fp-1",
+              session_id: "43",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+          ],
+        };
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    expect(screen.getByText("跑着呢")).toBeTruthy();
+    // 搜索是真实行为（matchesRowSearch 过滤本页会话行），不是假控件。
+    const search = screen.getByRole("searchbox", {
+      name: i18n.t("appShell.searchPlaceholder"),
+    });
+    fireEvent.change(search, { target: { value: "跑着呢" } });
+    expect(screen.queryByText("等你批")).toBeNull();
+    expect(screen.getByText("跑着呢")).toBeTruthy();
+  });
 });

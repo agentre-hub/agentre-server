@@ -45,6 +45,10 @@
       "emptyTitle": "暂无审计事件",
       "emptyBody": "审计记录暂未开放。"
     },
+    "alerts": {
+      "emptyTitle": "暂无告警",
+      "emptyBody": "安全告警暂未开放。"
+    },
     "credentials": {
       "title": "活跃凭证",
       "emptyTitle": "暂无活跃凭证",
@@ -210,9 +214,6 @@
       "sessionWaiting": "{{count}} 条等你处理",
       "viewSessions": "查看这台机器的对话",
       "offlineNotEnterable": "已离线——对话不可用。",
-      "revokeCardTitle": "撤销这台设备",
-      "revokeCardBody": "撤销后该设备无法再刷新令牌；若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受。吊销会随它下次上线后完全生效，正在跑的对话会被中断。",
-      "revokeCardConfirm": "撤销",
       "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑"
     }
   },

@@ -72,7 +72,7 @@ describe("Audit（bKvB4）正式页面层级", () => {
     expect(within(banner).getByText(i18n.t("nav.audit"))).toBeTruthy();
   });
 
-  it("事件表与凭证区都是诚实空态（共享 EmptyState）", async () => {
+  it("事件表、凭证区与告警区都是诚实空态（共享 EmptyState）", async () => {
     renderAudit();
     const events = await screen.findByTestId("audit-events-empty");
     const credentials = screen.getByTestId("audit-credentials-empty");
@@ -84,6 +84,12 @@ describe("Audit（bKvB4）正式页面层级", () => {
     expect(within(credentials).getByTestId("empty-icon")).toBeTruthy();
     expect(
       within(credentials).getByText(i18n.t("audit.credentials.emptyTitle")),
+    ).toBeTruthy();
+    // bKvB4 信息层级中的告警区：无后端数据 → 同样只给诚实空态，不编虚构告警。
+    const alerts = screen.getByTestId("audit-alerts-empty");
+    expect(within(alerts).getByTestId("empty-icon")).toBeTruthy();
+    expect(
+      within(alerts).getByText(i18n.t("audit.alerts.emptyTitle")),
     ).toBeTruthy();
   });
 

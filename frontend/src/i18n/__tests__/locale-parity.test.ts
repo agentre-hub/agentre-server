@@ -23,8 +23,9 @@ function leafValues(obj: Json): string[] {
 
 /**
  * 设计旁白（spec「视觉真源与旁白判定」明确排除的文案）。locale 值里出现任何
- * 一条都说明有人把评审说明/能力解释当成了产品文案。注意「撤销这台设备」不在
- * 清单里——它作为 revokeCard* 键已经存在于上轮实现，由 task 4 随危险卡一起删除。
+ * 一条都说明有人把评审说明/能力解释当成了产品文案。常驻「撤销这台设备」说明卡
+ * 是旁白，它的 revokeCard* 键由专项断言检查（不能放进 NARRATION_PHRASES：
+ * 授权确认页的 fineprint 里也含该词组，但那句是真实产品文案）。
  */
 const NARRATION_PHRASES = [
   "这里记什么",
@@ -130,6 +131,17 @@ describe("locale parity", () => {
         NARRATION_PHRASES.some((p) => v.includes(p)),
       );
       expect(hits, `${lang} 混入旁白：${hits.join(", ")}`).toEqual([]);
+    }
+  });
+
+  it("设备页常驻「撤销这台设备」旁白卡已删：不为其创建 locale 键", () => {
+    // spec 明确排除设备页常驻撤销说明卡，且旁白不为其创建 locale 键。
+    // 专项断言键本身（而不查词组），避免误伤授权确认页 fineprint 里合法的同一词组。
+    for (const [lang, bundle] of Object.entries({ en, "zh-CN": zhCN })) {
+      const dead = flatten(bundle as Json).filter((k) =>
+        k.startsWith("device.manage.revokeCard"),
+      );
+      expect(dead, `${lang} 仍有旁白卡键：${dead.join(", ")}`).toEqual([]);
     }
   });
 });

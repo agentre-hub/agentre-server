@@ -637,12 +637,11 @@ export default function ChatList({
 
   // 桌面：筛选 + 搜索后的分组行。「最近」区随之一过滤，保持一致性。
   // 搜索是真实行为：按标题 / cwd / 后端 / 设备名 / Agent 名匹配本页会话行，
-  // 空查询不过滤。移动没有搜索框，不做任何过滤。
+  // 空查询不过滤。移动（屏 20 头部搜索）同样过滤，不区分形态。
   const filteredGroups = useMemo(() => {
-    if (isMobile) return rendered;
     const q = searchQuery.trim();
     let groups = rendered;
-    if (filter !== "all") {
+    if (!isMobile && filter !== "all") {
       groups = groups
         .map((g) => ({
           ...g,
@@ -674,13 +673,12 @@ export default function ChatList({
     return groups;
   }, [rendered, filter, isMobile, searchQuery]);
 
-  // 桌面搜索同样作用于离线机器行（按设备名匹配）。
+  // 搜索同样作用于离线机器行（按设备名匹配），桌面与移动一致。
   const visibleOffline = useMemo(() => {
-    if (isMobile) return offline;
     const q = searchQuery.trim();
     if (!q) return offline;
     return offline.filter((o) => matchesRowSearch([o.deviceName], q));
-  }, [offline, isMobile, searchQuery]);
+  }, [offline, searchQuery]);
 
   // 桌面：最近 · 跨 Agent（跨全部 Agent 取最近 5 条）。排序键 = updatedAt /
   // followedAt 之新（recentTimestamp）。

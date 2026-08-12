@@ -45,6 +45,10 @@
       "emptyTitle": "No audit events yet",
       "emptyBody": "Audit records are not available yet."
     },
+    "alerts": {
+      "emptyTitle": "No alerts yet",
+      "emptyBody": "Security alerts are not available yet."
+    },
     "credentials": {
       "title": "Active credentials",
       "emptyTitle": "No active credentials",
@@ -210,9 +214,6 @@
       "sessionWaiting": "{{count}} waiting for you",
       "viewSessions": "View this machine's conversations",
       "offlineNotEnterable": "Offline — conversations are unavailable.",
-      "revokeCardTitle": "Revoke this device",
-      "revokeCardBody": "After you revoke it, this device can no longer refresh its credentials. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation fully takes effect the next time it comes online, and any running conversations will be interrupted.",
-      "revokeCardConfirm": "Revoke",
       "cardSummary": "{{projects}} projects · {{m}} conversations running"
     }
   },

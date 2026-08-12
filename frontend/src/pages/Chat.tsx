@@ -375,13 +375,30 @@ export default function Chat() {
   return (
     <AppShell title={t("nav.chat")} right={topBarRight}>
       {isMobile ? (
-        /* 移动形态（屏 20/32）：状态分组列表 + 屏 32 空态；不强制左列 + 详情。 */
+        /* 移动形态（屏 20/32）：状态分组列表 + 屏 32 空态；不强制左列 + 详情。
+           可触达的真实搜索：有会话时显示搜索框，过滤本页会话行（matchesRowSearch）。 */
         <div className="mx-auto w-full max-w-3xl space-y-5">
           {!loaded ? (
             <p className="text-sm text-muted-foreground">
               {t("common.loading")}
             </p>
           ) : null}
+          {loaded && !empty && (
+            <label className="flex h-[38px] items-center gap-2 rounded-md border border-border bg-card px-3">
+              <Search
+                className="size-4 shrink-0 text-subtle-foreground"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                aria-label={t("appShell.searchPlaceholder")}
+                placeholder={t("appShell.searchPlaceholder")}
+                className="h-full w-full bg-transparent text-sm text-foreground outline-none placeholder:text-subtle-foreground"
+              />
+            </label>
+          )}
           {loaded && empty ? (
             /* 空态沿用屏 32（共享 EmptyState）：标题/正文/主按钮文案与桌面一致。 */
             <EmptyState

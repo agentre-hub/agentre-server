@@ -485,7 +485,9 @@ TopBar.
 - TopBar: **Cnt** = total count, **Fresh** = online-`agentred` dot (web alone never
   counts), **FindBtn** = follow-from-device.
 - **Mobile** keeps the list → detail flow, never the two-pane layout: a status-grouped
-  list (below), a `屏 32` shared `EmptyState` with the same primary action, and a `PenLine`
+  list (below), a reachable **real search** box above it (filters the same rows as the
+  desktop search via `matchesRowSearch`, hidden when there are no sessions), a `屏 32`
+  shared `EmptyState` with the same primary action, and a `PenLine`
   FAB (`fixed bottom-24 right-4 size-14 rounded-full bg-primary`) that opens the new
   conversation dialog when sessions exist. Mobile rows navigate to the detail route; the
   detail page's mobile top bar carries the follow toggle (decision 16).
@@ -527,7 +529,8 @@ row's status colour (`statusDotClass`).
   success is worse than no button.
 - **Search.** The desktop search box above the list filters the same rows the chips do
   (`matchesRowSearch`, including offline rows by device name); it is real behaviour, not a
-  fake control.
+  fake control. Mobile (`屏 20`) shows the same real search above its status-grouped list —
+  the same filter, not a separate implementation.
 - **Mobile (`IC5sH` / `C87ty`).** The same rows regroup by status — waiting → running →
   interrupted → others (`STATUS_GROUP_ORDER`) — with the agent name pinned to the row, a
   text badge so status never relies on colour alone, and a touch target ≥ 44px
@@ -541,7 +544,9 @@ audit backend in this round, so the page keeps the board's information hierarchy
 every data region with an honest empty state — no sample events, IPs, token counts,
 timestamps or fabricated alerts (`audit.test.tsx`).
 
-- **Layout.** `flex flex-col gap-4 lg:flex-row` — single column on mobile, two columns on
+- **Layout.** The page wraps in `mx-auto w-full max-w-[1200px] space-y-4`, with an
+  **alerts region** first (the `bKvB4` AlertStrip position) then `flex flex-col gap-4
+  lg:flex-row` — single column on mobile, two columns on
 desktop with no horizontal overflow. Left section: the filter row, then the event-table
 card; right: the active-credentials card (`lg:w-[320px]`).
 - **Filter row.** The four `bKvB4` categories (all / device authorization / tokens /
@@ -550,6 +555,8 @@ revocation) render as shared `FilterChip`s in the **disabled** form — non-butt
 - **Event table.** The five column headers (time / event / object / source / result, mono
 `text-[10px] font-bold`) keep the table hierarchy; the header row is hidden on mobile to
 avoid overflow. Below it, the shared `EmptyState` ("No audit events yet").
+- **Alerts.** The alerts region (the board's AlertStrip position) renders the shared
+`EmptyState` ("No alerts yet") — no fabricated alert, no ignore/revoke actions.
 - **Credentials.** A card with a `text-[13px] font-bold` title ("Active credentials") and
 the shared `EmptyState`.
 - **No fake actions.** No CSV export, no revoke-a-credential, no ignore-alert action — each
