@@ -8,8 +8,8 @@ http:
     - "0.0.0.0:8443"
 
 db:
-  driver: postgres
-  dsn: "postgres://server:server@pg:5432/server?sslmode=disable"
+  driver: mysql
+  dsn: "server:server@tcp(mysql:3306)/server?charset=utf8mb4&parseTime=True&loc=Local"
   debug: false
   prepareStmt: false
 

@@ -26,7 +26,7 @@ func setupUserTest(t *testing.T) (context.Context, *mock_user_repo.MockUserRepo,
 	mI := mock_user_identity_repo.NewMockUserIdentityRepo(ctrl)
 	user_repo.RegisterUser(mU)
 	user_identity_repo.RegisterUserIdentity(mI)
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	return ctx, mU, mI, mock
 }
 

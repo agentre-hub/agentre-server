@@ -415,7 +415,7 @@ func (s *syncSvc) ReclaimExpired(ctx context.Context) (*ReclaimOutput, error) {
 	return out, nil
 }
 
-// payloadOrEmptyObject 让墓碑也有一份合法的 jsonb 正文。
+// payloadOrEmptyObject 让墓碑也有一份合法的 JSON 正文。
 func payloadOrEmptyObject(payload []byte) string {
 	if len(strings.TrimSpace(string(payload))) == 0 {
 		return "{}"

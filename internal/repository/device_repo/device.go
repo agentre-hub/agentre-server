@@ -5,6 +5,7 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/pkg/consts"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"agentre-server/internal/model/entity/device_entity"
@@ -56,8 +57,8 @@ func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (
 }
 
 // Upsert 按 (user_id, fingerprint) 落库：走 uk_devices_user_fingerprint 的
-// ON CONFLICT ... DO UPDATE，一条语句由数据库原子裁决。d.ID 与 d.Createtime 由
-// RETURNING 回填。
+// ON DUPLICATE KEY UPDATE 由数据库原子裁决。MySQL 没有通用的
+// INSERT ... transaction read-back，所以写入后在同一事务内读回最终行填充 d。
 //
 // 不写成「先按 (user_id, fingerprint) 查、再 Save/Create」：那是先查后写，两个已授权的
 // device_code 共用同一 (user_id, fingerprint) 并发换取时会双双查空、双双 INSERT，
@@ -65,16 +66,23 @@ func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (
 //
 // createtime 不在赋值列里：命中已有设备时保留它首次注册的时间。
 func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
-	return db.Ctx(ctx).Clauses(
-		clause.OnConflict{
+	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "user_id"}, {Name: "fingerprint"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name", "kind", "platform", "version",
 				"last_seen_at", "status", "updatetime",
 			}),
-		},
-		clause.Returning{Columns: []clause.Column{{Name: "id"}, {Name: "createtime"}}},
-	).Create(d).Error
+		}).Create(d).Error; err != nil {
+			return err
+		}
+		final := &device_entity.Device{}
+		if err := tx.Where("user_id=? AND fingerprint=?", d.UserID, d.Fingerprint).First(final).Error; err != nil {
+			return err
+		}
+		*d = *final
+		return nil
+	})
 }
 
 func (r *repo) Touch(ctx context.Context, id, nowMs int64) error {

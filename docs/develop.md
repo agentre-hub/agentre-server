@@ -38,7 +38,7 @@ The repo has **no build tags at all**, so `make test` runs everything there is. 
 ```bash
 cp configs/config.example.yaml configs/config.yaml   # gitignored runtime config
 cp .env.example .env                                 # secrets
-# point db.dsn / redis.addr in configs/config.yaml at your own PostgreSQL + Redis
+# point db.dsn / redis.addr in configs/config.yaml at your own MySQL + Redis
 make dev
 ```
 

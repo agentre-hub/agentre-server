@@ -11,7 +11,7 @@ type DeviceToken struct {
 	RotatedFromID    int64   `gorm:"column:rotated_from_id;type:bigint;not null;default:0"`
 	RevokedAt        int64   `gorm:"column:revoked_at;type:bigint;not null;default:0"`
 	UserAgent        string  `gorm:"column:user_agent;type:text;not null;default:''"`
-	IP               *string `gorm:"column:ip;type:inet"`
+	IP               *string `gorm:"column:ip;type:varchar(45)"`
 	Createtime       int64   `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
 

@@ -69,7 +69,7 @@ WHERE a.createtime < ?
     WHERE o.user_id = a.user_id
       AND o.kind = 'agent'
       AND o.deleted_at = 0
-      AND o.payload->>'avatar_hash' = a.content_hash
+	      AND JSON_UNQUOTE(JSON_EXTRACT(o.payload, '$.avatar_hash')) = a.content_hash
   )`
 
 func (r *avatarRepo) DeleteUnreferencedBefore(ctx context.Context, cutoff int64) (int64, error) {

@@ -22,7 +22,7 @@ curl http://localhost:8443/v1/healthz
 
 ```bash
 cp configs/config.example.yaml configs/config.yaml   # gitignored runtime 配置
-# 把 db.dsn / redis.addr 指向你自己的 PostgreSQL + Redis
+# 把 db.dsn / redis.addr 指向你自己的 MySQL + Redis
 make dev
 ```
 

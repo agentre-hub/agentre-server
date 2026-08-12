@@ -10,6 +10,7 @@
     "scratch": "playwright install chromium && playwright test --config playwright.scratch.config.ts",
     "web": "node run-e2e-web.mjs",
     "dual": "node run-e2e-web.mjs --dual",
+    "runner-test": "playwright test --config playwright.runner.config.ts",
     "format": "prettier --write .",
     "lint": "prettier --check ."
   },

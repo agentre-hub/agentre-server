@@ -12,16 +12,17 @@ func migration202605200001() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE users (
-				  id              bigserial PRIMARY KEY,
-				  email           text NOT NULL,
+				  id              bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
+				  email           varchar(320) NOT NULL,
 				  email_verified  boolean NOT NULL DEFAULT false,
-				  display_name    text NOT NULL DEFAULT '',
-				  avatar_url      text NOT NULL DEFAULT '',
+				  display_name    varchar(255) NOT NULL DEFAULT '',
+				  avatar_url      varchar(2048) NOT NULL DEFAULT '',
 				  status          smallint NOT NULL DEFAULT 1,
 				  createtime      bigint NOT NULL DEFAULT 0,
-				  updatetime      bigint NOT NULL DEFAULT 0
+				  updatetime      bigint NOT NULL DEFAULT 0,
+				  active_email varchar(320) GENERATED ALWAYS AS (IF(status = 1, email, NULL)) STORED,
+				  UNIQUE KEY uk_users_email_active (active_email)
 				);
-				CREATE UNIQUE INDEX uk_users_email_active ON users(email) WHERE status = 1;
 			`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {

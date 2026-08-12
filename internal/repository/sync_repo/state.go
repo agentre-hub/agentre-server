@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/db"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"agentre-server/internal/model/entity/sync_entity"
@@ -33,17 +34,22 @@ type stateRepo struct{}
 
 // NextVersion 必须是一条语句。先读后写在多副本并发上行时会双双读到同一个值、
 // 两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性；INSERT … ON
-// CONFLICT DO UPDATE … RETURNING 把递增与取值合成一次，由数据库的行锁串行化。
+// CONFLICT DO UPDATE … transaction read-back 把递增与取值合成一次，由数据库的行锁串行化。
 func (r *stateRepo) NextVersion(ctx context.Context, userID int64, n int64) (int64, error) {
 	if n <= 0 {
 		n = 1
 	}
 	now := time.Now().UnixMilli()
 	var version int64
-	err := db.Ctx(ctx).Raw(`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime)
-VALUES (?, ?, ?)
-ON CONFLICT (user_id) DO UPDATE SET version_seq = sync_account_seqs.version_seq + ?, updatetime = ?
-RETURNING version_seq`, userID, n, now, n, now).Scan(&version).Error
+	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime)
+VALUES (?, LAST_INSERT_ID(?), ?)
+ON DUPLICATE KEY UPDATE version_seq = LAST_INSERT_ID(version_seq + ?), updatetime = ?`,
+			userID, n, now, n, now).Error; err != nil {
+			return err
+		}
+		return tx.Raw("SELECT LAST_INSERT_ID()").Scan(&version).Error
+	})
 	if err != nil {
 		return 0, err
 	}

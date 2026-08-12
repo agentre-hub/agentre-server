@@ -42,7 +42,7 @@ type SyncObject struct {
 	SyncID              string `gorm:"column:sync_id;type:text;not null"`
 	ProjectSyncID       string `gorm:"column:project_sync_id;type:text;not null;default:''"`
 	AgentredFingerprint string `gorm:"column:agentred_fingerprint;type:text;not null;default:''"`
-	Payload             string `gorm:"column:payload;type:jsonb;not null"`
+	Payload             string `gorm:"column:payload;type:json;not null"`
 	// Version 由账号级单调序列分配，是 R4 唯一的胜负依据。
 	Version int64 `gorm:"column:version;type:bigint;not null"`
 	// SyncUpdatedAt 是客户端提交的最后修改时间，只用于展示与 30 天窗口计算，
@@ -60,7 +60,7 @@ func (*SyncObject) TableName() string { return "sync_objects" }
 func (o *SyncObject) IsDeleted() bool { return o != nil && o.DeletedAt > 0 }
 
 // 账号级单调递增的版本序列住在 sync_account_seqs 表里，这里**刻意没有**对应的
-// entity：分配版本必须是一条 `INSERT … ON CONFLICT DO UPDATE … RETURNING`
+// entity：分配版本必须用 `INSERT … ON DUPLICATE KEY UPDATE`
 // （见 sync_repo.NextVersion），一个 gorm 结构体只会引来先读后写那种用法，而先读
 // 后写在多副本并发上行时会把同一个版本号发给两次上行，R4 的「较大者胜」立刻失去
 // 可比性。表结构以迁移里的 DDL 为准。

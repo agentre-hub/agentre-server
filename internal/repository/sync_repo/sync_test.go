@@ -14,11 +14,14 @@ import (
 // 版本序列必须是一条语句：多副本并发上行时，先读后写会双双读到同一个值，
 // 两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
 func TestNextVersion_GivenConcurrentReplicas_ThenSingleAtomicStatement(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO sync_account_seqs`)).
-		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(42)))
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs`)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT LAST_INSERT_ID()`)).
+		WillReturnRows(sqlmock.NewRows([]string{"LAST_INSERT_ID()"}).AddRow(int64(42)))
+	mock.ExpectCommit()
 
 	v, err := r.NextVersion(ctx, 7, 1)
 	assert.NoError(t, err)
@@ -27,12 +30,16 @@ func TestNextVersion_GivenConcurrentReplicas_ThenSingleAtomicStatement(t *testin
 }
 
 func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT`)).
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).
 		WithArgs(int64(7), int64(3), sqlmock.AnyArg(), int64(3), sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(45)))
+		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT LAST_INSERT_ID()`)).
+		WillReturnRows(sqlmock.NewRows([]string{"LAST_INSERT_ID()"}).AddRow(int64(45)))
+	mock.ExpectCommit()
 
 	v, err := r.NextVersion(ctx, 7, 3)
 	assert.NoError(t, err)
@@ -43,7 +50,7 @@ func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
 // 没有 last_sync_at 记录 = 首次登录，仓储层返回 (nil, nil) 而不是错误，
 // R6a 的「不算超窗口」才判得出来。
 func TestFindDeviceState_GivenNoRow_ThenNilNil(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "sync_device_states"`)).
@@ -58,11 +65,11 @@ func TestFindDeviceState_GivenNoRow_ThenNilNil(t *testing.T) {
 // last_sync_at 也是一条语句的 upsert：同一台设备的上行与下行会并发落到不同副本，
 // 先查后写会漏掉其中一次。
 func TestTouchDeviceState_GivenNoRow_ThenUpsertsInOneStatement(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`ON CONFLICT ("user_id","device_id") DO UPDATE SET`)).
+	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -73,12 +80,11 @@ func TestTouchDeviceState_GivenNoRow_ThenUpsertsInOneStatement(t *testing.T) {
 // 落库要在版本号更大时才覆盖：两个副本并发写同一行时由数据库裁决，
 // 落后的那次不能把更新的那一版盖掉。
 func TestSaveObject_GivenExistingRow_ThenUpsertOnlyWhenVersionIsGreater(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`ON CONFLICT ("user_id","sync_id") DO UPDATE SET`)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).WillReturnResult(sqlmock.NewResult(1, 2))
 	mock.ExpectCommit()
 
 	err := r.Save(ctx, &sync_entity.SyncObject{
@@ -89,12 +95,12 @@ func TestSaveObject_GivenExistingRow_ThenUpsertOnlyWhenVersionIsGreater(t *testi
 }
 
 func TestSaveObject_GivenExistingRow_ThenConditionalWhereIsPresent(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`WHERE "sync_objects"."version" < "excluded"."version"`)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(1)))
+	mock.ExpectExec("`version`=IF\\(VALUES\\(`version`\\) > `version`, VALUES\\(`version`\\), `version`\\)").
+		WillReturnResult(sqlmock.NewResult(1, 2))
 	mock.ExpectCommit()
 
 	assert.NoError(t, r.Save(ctx, &sync_entity.SyncObject{
@@ -105,7 +111,7 @@ func TestSaveObject_GivenExistingRow_ThenConditionalWhereIsPresent(t *testing.T)
 
 // 自然键查重只看存活的那一行：墓碑不占（账号, 项目, 指纹），否则删掉再建就建不回来。
 func TestFindLocationByNaturalKey_GivenTombstones_ThenOnlyLiveRowMatches(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`deleted_at=0`)).
@@ -120,7 +126,7 @@ func TestFindLocationByNaturalKey_GivenTombstones_ThenOnlyLiveRowMatches(t *test
 
 // 打墓碑是条件更新，返回受影响行数：已经是墓碑时为 0，由 service 决定这意味着什么。
 func TestTombstone_GivenAlreadyTombstoned_ThenZeroRowsAffected(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
@@ -136,7 +142,7 @@ func TestTombstone_GivenAlreadyTombstoned_ThenZeroRowsAffected(t *testing.T) {
 
 // 下行游标：版本升序、严格大于游标、按 limit 截断。
 func TestListSince_GivenCursor_ThenOrderedByVersionAscending(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`ORDER BY version ASC`)).
@@ -156,7 +162,7 @@ func TestListSince_GivenCursor_ThenOrderedByVersionAscending(t *testing.T) {
 // 这条路径服务的是「总览页列 Agent」「设备展开列项目」，需要的是当前状态的
 // 完整集合，不是增量。墓碑必须被过滤掉，否则已删除的 Agent 会在总览重新出现。
 func TestListByKinds_GivenKinds_ThenOnlyLiveRowsOfThoseKinds(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`AND kind IN (`)+`.*`+regexp.QuoteMeta(`) AND deleted_at=0`)).
@@ -174,7 +180,7 @@ func TestListByKinds_GivenKinds_ThenOnlyLiveRowsOfThoseKinds(t *testing.T) {
 // 上报组整份替换：先清掉这台设备的旧清单，再写新的，且两步在同一个事务里，
 // 否则中途失败会让服务端的清单空掉。
 func TestReplaceSnapshot_GivenItems_ThenDeletesThenInsertsInOneTransaction(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncLocalPath()
 
 	mock.ExpectBegin()
@@ -192,7 +198,7 @@ func TestReplaceSnapshot_GivenItems_ThenDeletesThenInsertsInOneTransaction(t *te
 }
 
 func TestReplaceSnapshot_GivenEmptySnapshot_ThenOnlyDeletes(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncLocalPath()
 
 	mock.ExpectBegin()
@@ -207,7 +213,7 @@ func TestReplaceSnapshot_GivenEmptySnapshot_ThenOnlyDeletes(t *testing.T) {
 // R18：设备记录被删除时，它上报的本机路径清单一并消失。device_id 全局唯一，
 // 不需要再传 user_id 校验归属，也不是一个事务（单条 DELETE，没有后续要写的东西）。
 func TestDeleteByDevice_GivenDeviceID_ThenDeletesAllRowsForThatDevice(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncLocalPath()
 
 	mock.ExpectBegin()
@@ -223,7 +229,7 @@ func TestDeleteByDevice_GivenDeviceID_ThenDeletesAllRowsForThatDevice(t *testing
 // 设备展开页要知道「这台设备上配了路径的项目有哪些」——只看这台设备名下的
 // 上报行，不看它的正文（web 端不展示路径，R19），这里只验证按设备取全部行。
 func TestListByDevice_GivenDeviceID_ThenReturnsItsReportedRows(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncLocalPath()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "device_local_paths" WHERE user_id=`)).
@@ -240,11 +246,11 @@ func TestListByDevice_GivenDeviceID_ThenReturnsItsReportedRows(t *testing.T) {
 
 // 同一份头像重复上传不该产生第二行，也不该覆盖已有正文。
 func TestSaveAvatar_GivenSameContentTwice_ThenOnConflictDoNothing(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncAvatar()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`ON CONFLICT DO NOTHING`)).
+	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
@@ -258,7 +264,7 @@ func TestSaveAvatar_GivenSameContentTwice_ThenOnConflictDoNothing(t *testing.T) 
 // 没有 deleted_at>0 就把存活的行一起删了；没有 deleted_at<cutoff 就把窗口内的
 // 墓碑也删了，而那正是还没拉取过的设备赖以知道「这行被删了」的唯一凭据（R6）。
 func TestDeleteTombstonesBefore_GivenCutoff_ThenOnlyExpiredTombstonesAreDeleted(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
@@ -279,7 +285,7 @@ func TestDeleteTombstonesBefore_GivenCutoff_ThenOnlyExpiredTombstonesAreDeleted(
 // 同一张图完全可能同时存在于两个账号下，拿别人账号的引用决定这一行的生死既会误留
 // 也会误删）；只有 kind=agent 的行才算引用；且只有存活的行算数（墓碑不是引用）。
 func TestDeleteUnreferencedAvatarsBefore_GivenAccounts_ThenReferenceCheckIsPerAccountAndLiveOnly(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncAvatar()
 
 	mock.ExpectExec(`(?s)DELETE FROM sync_avatars.*NOT EXISTS.*o\.user_id = a\.user_id.*o\.kind = 'agent'.*o\.deleted_at = 0`).
@@ -293,7 +299,7 @@ func TestDeleteUnreferencedAvatarsBefore_GivenAccounts_ThenReferenceCheckIsPerAc
 }
 
 func TestFindAvatar_GivenNoRow_ThenNilNil(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncAvatar()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "sync_avatars"`)).

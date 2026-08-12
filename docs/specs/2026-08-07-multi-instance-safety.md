@@ -6,7 +6,7 @@
 
 **Objective:** 让 agentre-server 在多副本同时运行时行为正确——启动期不会因并发迁移而起不来，定时任务不会每副本各跑一遍，请求路径上不再有依赖「进程内只有我一个」的假设；并把这条约束写进文档，让后续改动有据可依。
 
-**Hard invariant:** 仓库仍然零 build tag；`make lint` / `make test` 仍是唯一门禁且不新增外部依赖（不引入 Docker、不连真 PG/Redis 跑单元测试）；依赖方向 `controller → service → repository → entity` 不变，`internal/pkg/*` 仍不导入 service/repository；不改动任何既有迁移。
+**Hard invariant:** 仓库仍然零 build tag；`make lint` / `make test` 仍是唯一门禁且不新增外部依赖（不引入 Docker、不连真 MySQL/Redis 跑单元测试）；依赖方向 `controller → service → repository → entity` 不变，`internal/pkg/*` 仍不导入 service/repository；不改动任何既有迁移。
 
 ## Problem
 
@@ -43,10 +43,10 @@
 
 | # | Decision | Basis and rejected option |
 |---|---|---|
-| 1 | 8 项修复放同一轮交付 | 用户决定。Rejected: 拆成「基础设施加锁」与「Device Flow 状态机原子化」两轮——后者会改变并发竞败方的可观察错误、按 `docs/testing.md` 需走真 PG 的 scratch 验证，风险类别与前者不同，分开评审和回滚的粒度更细。用户已知该取舍并选择一轮完成 |
+| 1 | 8 项修复放同一轮交付 | 用户决定。Rejected: 拆成「基础设施加锁」与「Device Flow 状态机原子化」两轮——后者会改变并发竞败方的可观察错误、按 `docs/testing.md` 需走真 MySQL 的 scratch 验证，风险类别与前者不同，分开评审和回滚的粒度更细。用户已知该取舍并选择一轮完成 |
 | 2 | 多实例约束只写文档，不加机械守卫 | 用户决定。 |
-| 3 | 迁移用 PostgreSQL advisory lock 串行化，锁持有在一条专用连接上 | advisory lock 是**会话级**的，而 gorm 从连接池取连接，直接 `gdb.Exec("pg_advisory_lock")` 可能在 A 连接上加锁、在 B 连接上跑迁移，锁会随 A 归还池中而失去意义。因此从 `sqlDB.Conn(ctx)` 取一条固定连接持锁，迁移本身照常走连接池——advisory lock 不绑定数据，这样是正确的。进程崩溃时连接断开，PG 自动释放。Rejected: helm `pre-upgrade` Job 单独跑迁移——能解决问题，但 `helm upgrade` 之外的启动路径（本地 `make dev`、`docker-compose`、手工 `kubectl run`）就不再有保护，问题从代码里搬到了部署方式里 |
-| 4 | 用 `pg_try_advisory_lock` 轮询而非阻塞的 `pg_advisory_lock` | 阻塞版没有上界，前面的副本卡住会让后面的副本静默挂起到被探针杀掉，日志里什么都看不到。轮询版有明确的等待预算，超时就返回错误、由 `main.go` 打日志退出，CrashLoop 是可见且自愈的。副作用是可以用 sqlmock 断言「拿不到锁时会重试、拿到后才跑迁移、结束后解锁」这个序列 |
+| 3 | 迁移用 MySQL named lock 串行化，锁持有在一条专用连接上 | advisory lock 是**会话级**的，而 gorm 从连接池取连接，直接 `gdb.Exec("GET_LOCK")` 可能在 A 连接上加锁、在 B 连接上跑迁移，锁会随 A 归还池中而失去意义。因此从 `sqlDB.Conn(ctx)` 取一条固定连接持锁，迁移本身照常走连接池——advisory lock 不绑定数据，这样是正确的。进程崩溃时连接断开，MySQL 自动释放。Rejected: helm `pre-upgrade` Job 单独跑迁移——能解决问题，但 `helm upgrade` 之外的启动路径（本地 `make dev`、`docker-compose`、手工 `kubectl run`）就不再有保护，问题从代码里搬到了部署方式里 |
+| 4 | 用 `GET_LOCK` 轮询而非阻塞的 `GET_LOCK` | 阻塞版没有上界，前面的副本卡住会让后面的副本静默挂起到被探针杀掉，日志里什么都看不到。轮询版有明确的等待预算，超时就返回错误、由 `main.go` 打日志退出，CrashLoop 是可见且自愈的。副作用是可以用 sqlmock 断言「拿不到锁时会重试、拿到后才跑迁移、结束后解锁」这个序列 |
 | 5 | 迁移等待预算 120s，同时把 chart 的 `startupProbe.failureThreshold` 从 30 提到 60 | 现值 `periodSeconds: 5 × failureThreshold: 30` = 150s 总预算，而等待锁 120s 之后还要真正跑迁移，很容易在迁移中途被探针杀掉；`UseTransaction: false` 下被杀在中途会留下半应用的迁移。提到 60（300s）让「等锁 + 迁移」有富余。Rejected: 缩短等待预算——迁移本身可能就要几十秒，等待预算小于它没有意义 |
 | 6 | 定时任务用 Redis 锁「占用当期」，**不主动解锁**，靠 TTL 自然过期，TTL 取略小于 cron 周期 | cago 的 `pkg/sync` locker 的 `UnlockKey` 是无条件 `DEL`、不校验持有者（`sync/redis.go`），任务一旦跑超 TTL，别的副本已经拿到锁，而先前那个副本的 Unlock 会把**别人的**锁删掉。改成「只 TryLock、不 Unlock」就完全绕开了这个问题：锁的语义正好是「本周期已被某个副本认领」，也正是 cron 需要的语义。TTL 取 `*/5` → 4m、`0 * * * *` → 50m。Rejected: 自己写带 owner token + Lua CAS 删除的锁——正确但等于在仓库里放第二套锁实现，而 cron 场景不需要提前释放；Rejected: 直接用 cago 的 Lock/Unlock 配对——即上述删错锁的缺陷 |
 | 7 | 拿不到锁时任务返回 `nil` 而非错误 | 「另一个副本正在跑」是预期内的正常路径，不是故障。返回错误会让 cago 的 crontab 包装器（`crontab.go:37`）在每个没抢到锁的副本上打一条 `cron error`，N-1 份噪音会把真正的失败淹掉 |
@@ -60,7 +60,7 @@
 
 ## 交付后的可观察行为
 
-**启动。** 副本并发启动时，只有一个在跑迁移，其余的在 `pg_try_advisory_lock` 上轮询等待，拿到锁后发现无事可做，正常继续启动。等待超过 120s 的副本以非零码退出并在日志里说明是等迁移锁超时；k8s 重启它，下一次通常就能拿到锁。任何一个副本在持锁期间崩溃，连接断开，PG 立即释放锁，不需要人工介入。
+**启动。** 副本并发启动时，只有一个在跑迁移，其余的在 `GET_LOCK` 上轮询等待，拿到锁后发现无事可做，正常继续启动。等待超过 120s 的副本以非零码退出并在日志里说明是等迁移锁超时；k8s 重启它，下一次通常就能拿到锁。任何一个副本在持锁期间崩溃，连接断开，MySQL 立即释放锁，不需要人工介入。
 
 **定时任务。** 每个周期内，两个清理任务在整个副本集里各执行一次。没抢到的副本安静跳过，日志里不产生错误。某个副本在任务中途死掉，锁在 TTL 到期后释放，下一个周期正常继续。
 
@@ -90,14 +90,14 @@
 
 | 修复项 | 测试位置与手段 | RED 时应看到 |
 |---|---|---|
-| 迁移锁 | `migrations/` 包内，用 `testutils.DatabasePG` 的 sqlmock 断言语句序列 | 现状根本不发出 `pg_try_advisory_lock`，期望落空 |
+| 迁移锁 | `migrations/` 包内，用 `testutils.Database` 的 sqlmock 断言语句序列 | 现状根本不发出 `GET_LOCK`，期望落空 |
 | cron 锁 | `internal/task/` 包内，miniredis（`cago/pkg/utils/testutils.Redis()`）+ 注入的假任务，断言两次「同周期」调用只有一次真正执行 | 现状两次都执行 |
 | jti | `internal/pkg/jwt/`，N 个 goroutine 并发 `Sign`，断言 jti 全不相同 | `make test-backend` 已经是 `go test -race ./...`，现状直接报 data race |
 | 限流原子性 | `internal/pkg/ratelimit/`，用 go-redis hook 记录实际下发的命令，断言 `PTTL > 0` 且从未出现独立的 `expire`/`pexpire` 顶层命令 | 现状会记录到独立的 `expire` |
 | assets 404 | `internal/web/`，httptest 请求 `/assets/does-not-exist.js` | 现状返回 200 + `text/html` |
 | 三处 RowsAffected | repository 层 sqlmock 断言 WHERE 条件与返回的行数；service 层 mockgen 让 mock 返回 0 行，断言得到对应的 OAuth 错误且事务未提交 | 现状 repository 方法签名里根本没有行数 |
 
-**真并发只能靠人工验证。** sqlmock 与 mockgen 都无法证明两个真实事务竞争时数据库层面的行为，`docs/testing.md` 也明确禁止在单元测试里起真 PostgreSQL。因此迁移锁与三处 TOCTOU 需要按 `docs/verification.md` 的 scratch 流程，连自有 PG 手工验证：并发启动两个进程看迁移是否串行、用同一个 device_code / refresh token 并发打两个请求看是否只有一个成功。证据是数据库里的行数与两个响应体，不是截图。
+**真并发只能靠人工验证。** sqlmock 与 mockgen 都无法证明两个真实事务竞争时数据库层面的行为，`docs/testing.md` 也明确禁止在单元测试里起真 MySQL。因此迁移锁与三处 TOCTOU 需要按 `docs/verification.md` 的 scratch 流程，连自有 MySQL 手工验证：并发启动两个进程看迁移是否串行、用同一个 device_code / refresh token 并发打两个请求看是否只有一个成功。证据是数据库里的行数与两个响应体，不是截图。
 
 ## Links
 

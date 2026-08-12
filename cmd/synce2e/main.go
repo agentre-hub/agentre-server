@@ -7,7 +7,7 @@
 //   - **seed / cleanup** — the desktop logs in through RFC 8628 Device Flow whose
 //     terminus is GitHub OAuth, which nobody can click in an e2e. `seed` writes an
 //     account + its devices + one refresh token per device straight into
-//     PostgreSQL; every run gets its own account and its own fingerprints, and
+//     MySQL; every run gets its own account and its own fingerprints, and
 //     `cleanup` removes exactly the rows that run created (scoped by user id — it
 //     never truncates and never touches a row it did not write).
 //   - **peer** — a simulated second desktop that speaks the same `/v1/sync/*`

@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/cago-frame/cago/database/db"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"agentre-server/internal/model/entity/sync_entity"
@@ -79,16 +80,18 @@ func (r *objectRepo) FindLocationByNaturalKey(
 // 写入才覆盖。多副本并发上行同一行时由数据库裁决，先查后写会让落后的那次把更新
 // 的那一版盖掉。createtime 不在赋值列里：命中已有行时保留它首次落地的时间。
 func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) error {
+	assignments := map[string]interface{}{}
+	for _, column := range []string{
+		"kind", "project_sync_id", "agentred_fingerprint", "payload",
+		"version", "sync_updated_at", "source_device_id", "deleted_at", "updatetime",
+	} {
+		assignments[column] = gorm.Expr(
+			"IF(VALUES(`version`) > `version`, VALUES(`" + column + "`), `" + column + "`)",
+		)
+	}
 	return db.Ctx(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}, {Name: "sync_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"kind", "project_sync_id", "agentred_fingerprint", "payload",
-			"version", "sync_updated_at", "source_device_id", "deleted_at", "updatetime",
-		}),
-		Where: clause.Where{Exprs: []clause.Expression{clause.Lt{
-			Column: clause.Column{Table: "sync_objects", Name: "version"},
-			Value:  clause.Column{Table: "excluded", Name: "version"},
-		}}},
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "sync_id"}},
+		DoUpdates: clause.Assignments(assignments),
 	}).Create(obj).Error
 }
 

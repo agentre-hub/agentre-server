@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/driver/postgres"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
@@ -43,24 +43,24 @@ func openDB(dsn string) (*gorm.DB, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, fmt.Errorf("--dsn is required (the harness reads it from agentre-server/configs/config.yaml)")
 	}
-	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+	gdb, err := gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
 	if err != nil {
 		// A dead database must be loud: the suite may not silently skip or pretend to pass.
-		return nil, fmt.Errorf("connect postgres: %w", err)
+		return nil, fmt.Errorf("connect mysql: %w", err)
 	}
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		return nil, err
 	}
 	if err := sqlDB.Ping(); err != nil {
-		return nil, fmt.Errorf("ping postgres: %w", err)
+		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
 	return gdb, nil
 }
 
 func runSeed(args []string) error {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("SYNCE2E_DSN"), "PostgreSQL DSN")
+	dsn := fs.String("dsn", os.Getenv("SYNCE2E_DSN"), "MySQL DSN")
 	runID := fs.String("run-id", "", "unique id for this run")
 	devices := fs.String("devices", "", "comma separated name:kind:platform triples")
 	if err := fs.Parse(args); err != nil {
@@ -81,13 +81,20 @@ func runSeed(args []string) error {
 	now := time.Now().UnixMilli()
 	out := &seedResult{RunID: *runID, Email: accountEmail(*runID)}
 	err = gdb.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Raw(
-			`INSERT INTO users (email, email_verified, display_name, avatar_url, status, createtime, updatetime)
-			 VALUES (?, true, ?, '', 1, ?, ?) RETURNING id`,
-			out.Email, "synce2e "+*runID, now, now,
-		).Scan(&out.UserID).Error; err != nil {
+		user := struct {
+			ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
+			Email         string `gorm:"column:email"`
+			EmailVerified bool   `gorm:"column:email_verified"`
+			DisplayName   string `gorm:"column:display_name"`
+			AvatarURL     string `gorm:"column:avatar_url"`
+			Status        int    `gorm:"column:status"`
+			Createtime    int64  `gorm:"column:createtime"`
+			Updatetime    int64  `gorm:"column:updatetime"`
+		}{Email: out.Email, EmailVerified: true, DisplayName: "synce2e " + *runID, Status: 1, Createtime: now, Updatetime: now}
+		if err := tx.Table("users").Create(&user).Error; err != nil {
 			return fmt.Errorf("insert user: %w", err)
 		}
+		out.UserID = user.ID
 		for _, spec := range specs {
 			dev := &seededDevice{
 				Name:        spec.name,
@@ -95,13 +102,27 @@ func runSeed(args []string) error {
 				Platform:    spec.platform,
 				Fingerprint: fmt.Sprintf("synce2e-%s-%s", *runID, spec.name),
 			}
-			if err := tx.Raw(
-				`INSERT INTO devices (user_id, name, kind, platform, version, fingerprint, last_seen_at, status, createtime, updatetime)
-				 VALUES (?, ?, ?, ?, 'e2e', ?, ?, 1, ?, ?) RETURNING id`,
-				out.UserID, dev.Name, dev.Kind, dev.Platform, dev.Fingerprint, now, now, now,
-			).Scan(&dev.DeviceID).Error; err != nil {
+			row := struct {
+				ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+				UserID      int64  `gorm:"column:user_id"`
+				Name        string `gorm:"column:name"`
+				Kind        string `gorm:"column:kind"`
+				Platform    string `gorm:"column:platform"`
+				Version     string `gorm:"column:version"`
+				Fingerprint string `gorm:"column:fingerprint"`
+				LastSeenAt  int64  `gorm:"column:last_seen_at"`
+				Status      int    `gorm:"column:status"`
+				Createtime  int64  `gorm:"column:createtime"`
+				Updatetime  int64  `gorm:"column:updatetime"`
+			}{
+				UserID: out.UserID, Name: dev.Name, Kind: dev.Kind, Platform: dev.Platform,
+				Version: "e2e", Fingerprint: dev.Fingerprint, LastSeenAt: now,
+				Status: 1, Createtime: now, Updatetime: now,
+			}
+			if err := tx.Table("devices").Create(&row).Error; err != nil {
 				return fmt.Errorf("insert device %s: %w", spec.name, err)
 			}
+			dev.DeviceID = row.ID
 			plain, err := randomToken()
 			if err != nil {
 				return err
@@ -169,7 +190,7 @@ type cleanupResult struct {
 
 func runCleanup(args []string) error {
 	fs := flag.NewFlagSet("cleanup", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("SYNCE2E_DSN"), "PostgreSQL DSN")
+	dsn := fs.String("dsn", os.Getenv("SYNCE2E_DSN"), "MySQL DSN")
 	runID := fs.String("run-id", "", "run id used at seed time")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -253,7 +274,7 @@ type localPathRow struct {
 // device_local_paths namespace actually holds, per device.
 func runLocalPaths(args []string) error {
 	fs := flag.NewFlagSet("local-paths", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("SYNCE2E_DSN"), "PostgreSQL DSN")
+	dsn := fs.String("dsn", os.Getenv("SYNCE2E_DSN"), "MySQL DSN")
 	runID := fs.String("run-id", "", "run id used at seed time")
 	if err := fs.Parse(args); err != nil {
 		return err

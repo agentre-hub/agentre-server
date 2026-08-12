@@ -171,7 +171,7 @@ The deployment runs multiple replicas by default: `deploy/helm/values.yaml` sets
 `autoscaling.enabled: true` with `minReplicas: 2`. "There is only one of me" is never a
 safe assumption — it is false from the first install, not just under load.
 
-**Shared vs process-local state.** PostgreSQL and Redis are the only state visible to the
+**Shared vs process-local state.** MySQL and Redis are the only state visible to the
 whole fleet. Anything else — a `sync.Mutex`, a package-level cache, cago's in-process
 `cron.Cron()` schedule — lives in one replica's memory and is invisible to its siblings.
 If something must happen exactly once, or must see what every replica has done, it has to
@@ -194,7 +194,7 @@ the transaction and a "deny" committed in that gap would otherwise still hand th
 token.
 
 A write with no conditional `UPDATE` to hang the decision on needs the database to arbitrate
-some other way. `device_repo.Upsert` is a single `INSERT … ON CONFLICT ("user_id",
+some other way. `device_repo.Upsert` is a single `INSERT … ON DUPLICATE KEY ("user_id",
 "fingerprint") DO UPDATE`, not a find-then-create, so two exchanges for the same device
 converge on one row instead of racing to a `uk_devices_user_fingerprint` duplicate-key 500.
 
@@ -215,11 +215,11 @@ replica's lock — TryLock-and-let-expire avoids that. A replica that loses the 
 
 **Startup one-shot work.** Work that must run exactly once across a concurrently-starting
 fleet — migrations are the current example — needs a distributed lock, not just an
-in-process guard. `migrations/migrations.go`'s `RunMigrations` takes a PostgreSQL advisory
+in-process guard. `migrations/migrations.go`'s `RunMigrations` takes a MySQL named
 lock (`withMigrationLock`) on a connection obtained via `sqlDB.Conn(ctx)` before running
-gormigrate, because advisory locks are session-scoped and a `*gorm.DB` call can otherwise
+gormigrate, because named locks are session-scoped and a `*gorm.DB` call can otherwise
 land on a different pooled connection than the one that acquired the lock. It polls
-`pg_try_advisory_lock` rather than blocking, up to a 120s budget, so a replica that can't
+`GET_LOCK` rather than blocking, up to a 120s budget, so a replica that can't
 get the lock fails loudly instead of hanging past its startup probe.
 
 ## How to add an X

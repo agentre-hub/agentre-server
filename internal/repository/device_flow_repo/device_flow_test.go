@@ -11,7 +11,7 @@ import (
 )
 
 func TestApprove(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
@@ -28,7 +28,7 @@ func TestApprove(t *testing.T) {
 
 // 竞败方（行已被别人改过）必须能从返回的行数上看出来。
 func TestApprove_ReturnsZeroRowsWhenNothingMatched(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
@@ -44,7 +44,7 @@ func TestApprove_ReturnsZeroRowsWhenNothingMatched(t *testing.T) {
 }
 
 func TestDeny(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
@@ -63,7 +63,7 @@ func TestDeny(t *testing.T) {
 // 只有 consumed_at=0 的话，用户点「拒绝」的事务先提交、设备的换取事务随后跑这条
 // UPDATE，denied_at 已经不为 0 却照样命中 1 行——用户明明拒绝了，设备还是拿到 token。
 func TestMarkConsumed_RequiresUnsettledRow(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
@@ -80,7 +80,7 @@ func TestMarkConsumed_RequiresUnsettledRow(t *testing.T) {
 
 // 行已被并发请求消费（或拒绝）时 UPDATE 命中 0 行，行数原样透传给 service。
 func TestMarkConsumed_ReturnsZeroRowsWhenAlreadySettled(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
@@ -96,7 +96,7 @@ func TestMarkConsumed_ReturnsZeroRowsWhenAlreadySettled(t *testing.T) {
 }
 
 func TestFindByDeviceCode_Found(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "device_flow_codes" WHERE device_code=$1 ORDER BY "device_flow_codes"."device_code" LIMIT $2`)).
 		WithArgs("dc-x", 1).

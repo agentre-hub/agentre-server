@@ -11,19 +11,18 @@ func migration202605200002() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE user_identities (
-				  id              bigserial PRIMARY KEY,
+				  id              bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id         bigint NOT NULL,
-				  provider        text NOT NULL,
-				  provider_uid    text NOT NULL,
-				  provider_login  text NOT NULL DEFAULT '',
-				  email           text NOT NULL,
-				  raw_profile     jsonb NOT NULL DEFAULT '{}',
+				  provider        varchar(32) NOT NULL,
+				  provider_uid    varchar(255) NOT NULL,
+				  provider_login  varchar(255) NOT NULL DEFAULT '',
+				  email           varchar(320) NOT NULL,
+				  raw_profile     json NOT NULL,
 				  createtime      bigint NOT NULL DEFAULT 0,
-				  updatetime      bigint NOT NULL DEFAULT 0
+				  updatetime      bigint NOT NULL DEFAULT 0,
+				  UNIQUE KEY uk_user_identities_provider_uid (provider, provider_uid),
+				  KEY idx_user_identities_user (user_id)
 				);
-				CREATE UNIQUE INDEX uk_user_identities_provider_uid
-				  ON user_identities(provider, provider_uid);
-				CREATE INDEX idx_user_identities_user ON user_identities(user_id);
 			`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {

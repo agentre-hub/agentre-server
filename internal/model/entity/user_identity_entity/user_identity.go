@@ -10,7 +10,7 @@ type UserIdentity struct {
 	ProviderUID   string `gorm:"column:provider_uid;type:text;not null"`
 	ProviderLogin string `gorm:"column:provider_login;type:text;not null;default:''"`
 	Email         string `gorm:"column:email;type:text;not null"`
-	RawProfile    []byte `gorm:"column:raw_profile;type:jsonb;not null;default:'{}'"`
+	RawProfile    []byte `gorm:"column:raw_profile;type:json;not null"`
 	Createtime    int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 	Updatetime    int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
 }

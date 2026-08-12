@@ -58,7 +58,7 @@ func setupDeviceTest(t *testing.T) (
 		AccessTTL: time.Hour, RefreshTTL: 90 * 24 * time.Hour,
 		VerificationURI: "https://server/device",
 	}
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	return ctx, mD, mT, mF, newDeviceSvc(cfg, signer), mock
 }
 

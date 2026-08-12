@@ -15,77 +15,76 @@ func migration202608090001() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "202608090001",
 		Migrate: func(tx *gorm.DB) error {
-			return tx.Exec(`
+			statements := []string{`
 				CREATE TABLE sync_objects (
-				  id                   bigserial PRIMARY KEY,
+				  id                   bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id              bigint NOT NULL,
-				  kind                 text NOT NULL,
-				  sync_id              text NOT NULL,
-				  project_sync_id      text NOT NULL DEFAULT '',
-				  agentred_fingerprint text NOT NULL DEFAULT '',
-				  payload              jsonb NOT NULL DEFAULT '{}'::jsonb,
+				  kind                 varchar(32) NOT NULL,
+				  sync_id              varchar(255) NOT NULL,
+				  project_sync_id      varchar(255) NOT NULL DEFAULT '',
+				  agentred_fingerprint varchar(255) NOT NULL DEFAULT '',
+				  payload              json NOT NULL,
 				  version              bigint NOT NULL,
 				  sync_updated_at      bigint NOT NULL DEFAULT 0,
 				  source_device_id     bigint NOT NULL DEFAULT 0,
 				  deleted_at           bigint NOT NULL DEFAULT 0,
 				  createtime           bigint NOT NULL DEFAULT 0,
-				  updatetime           bigint NOT NULL DEFAULT 0
-				);
-				CREATE UNIQUE INDEX uk_sync_objects_identity ON sync_objects(user_id, sync_id);
-				CREATE INDEX idx_sync_objects_cursor ON sync_objects(user_id, version);
-				-- agentred 路径的账号内自然键。只约束存活的行：墓碑不占自然键，
-				-- 否则删掉再建就建不回来。R4b 的重复由它一次性挡住。
-				CREATE UNIQUE INDEX uk_sync_objects_location
-				  ON sync_objects(user_id, project_sync_id, agentred_fingerprint)
-				  WHERE kind = 'project_location' AND deleted_at = 0;
-				-- 指纹单独成列，可直接 join 到 devices.fingerprint：web 控制台不需要
-				-- 额外的映射表就能说出「这条配置属于哪台机器」。
-				CREATE INDEX idx_sync_objects_fingerprint
-				  ON sync_objects(user_id, agentred_fingerprint)
-				  WHERE agentred_fingerprint <> '';
-
+				  updatetime           bigint NOT NULL DEFAULT 0,
+				  live_location_key varchar(511) GENERATED ALWAYS AS
+				    (IF(kind = 'project_location' AND deleted_at = 0,
+				      CONCAT(project_sync_id, CHAR(0), agentred_fingerprint), NULL)) STORED,
+				  UNIQUE KEY uk_sync_objects_identity (user_id, sync_id),
+				  UNIQUE KEY uk_sync_objects_location (user_id, live_location_key),
+				  KEY idx_sync_objects_cursor (user_id, version),
+				  KEY idx_sync_objects_fingerprint (user_id, agentred_fingerprint)
+				)`, `
 				CREATE TABLE sync_account_seqs (
 				  user_id     bigint PRIMARY KEY,
 				  version_seq bigint NOT NULL DEFAULT 0,
 				  updatetime  bigint NOT NULL DEFAULT 0
-				);
-
+				)`, `
 				CREATE TABLE sync_device_states (
 				  user_id      bigint NOT NULL,
 				  device_id    bigint NOT NULL,
 				  last_sync_at bigint NOT NULL DEFAULT 0,
 				  updatetime   bigint NOT NULL DEFAULT 0,
 				  PRIMARY KEY (user_id, device_id)
-				);
-
+				)`, `
 				CREATE TABLE sync_avatars (
 				  user_id      bigint NOT NULL,
-				  content_hash text NOT NULL,
-				  content_type text NOT NULL DEFAULT '',
+				  content_hash varchar(64) NOT NULL,
+				  content_type varchar(255) NOT NULL DEFAULT '',
 				  content      text NOT NULL,
 				  byte_size    bigint NOT NULL DEFAULT 0,
 				  createtime   bigint NOT NULL DEFAULT 0,
 				  PRIMARY KEY (user_id, content_hash)
-				);
-
+				)`, `
 				CREATE TABLE device_local_paths (
 				  user_id         bigint NOT NULL,
 				  device_id       bigint NOT NULL,
-				  project_sync_id text NOT NULL,
+				  project_sync_id varchar(255) NOT NULL,
 				  path            text NOT NULL,
 				  updatetime      bigint NOT NULL DEFAULT 0,
 				  PRIMARY KEY (user_id, device_id, project_sync_id)
-				);
-			`).Error
+				)`,
+			}
+			for _, statement := range statements {
+				if err := tx.Exec(statement).Error; err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 		Rollback: func(tx *gorm.DB) error {
-			return tx.Exec(`
-				DROP TABLE IF EXISTS device_local_paths;
-				DROP TABLE IF EXISTS sync_avatars;
-				DROP TABLE IF EXISTS sync_device_states;
-				DROP TABLE IF EXISTS sync_account_seqs;
-				DROP TABLE IF EXISTS sync_objects;
-			`).Error
+			for _, table := range []string{
+				"device_local_paths", "sync_avatars", "sync_device_states",
+				"sync_account_seqs", "sync_objects",
+			} {
+				if err := tx.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 }

@@ -11,20 +11,20 @@ func migration202605200004() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE device_tokens (
-				  id                  bigserial PRIMARY KEY,
+				  id                  bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  device_id           bigint NOT NULL,
-				  access_jti          text NOT NULL DEFAULT '',
-				  refresh_token_hash  text NOT NULL,
+				  access_jti          varchar(255) NOT NULL DEFAULT '',
+				  refresh_token_hash  varchar(64) NOT NULL,
 				  refresh_expires_at  bigint NOT NULL DEFAULT 0,
 				  last_used_at        bigint NOT NULL DEFAULT 0,
 				  rotated_from_id     bigint NOT NULL DEFAULT 0,
 				  revoked_at          bigint NOT NULL DEFAULT 0,
-				  user_agent          text NOT NULL DEFAULT '',
-				  ip                  inet,
-				  createtime          bigint NOT NULL DEFAULT 0
+				  user_agent          varchar(512) NOT NULL DEFAULT '',
+				  ip                  varchar(45),
+				  createtime          bigint NOT NULL DEFAULT 0,
+				  UNIQUE KEY uk_dtokens_refresh_hash (refresh_token_hash),
+				  KEY idx_dtokens_device_active (device_id, revoked_at)
 				);
-				CREATE UNIQUE INDEX uk_dtokens_refresh_hash ON device_tokens(refresh_token_hash);
-				CREATE INDEX idx_dtokens_device_active ON device_tokens(device_id) WHERE revoked_at = 0;
 			`).Error
 		},
 		Rollback: func(tx *gorm.DB) error {

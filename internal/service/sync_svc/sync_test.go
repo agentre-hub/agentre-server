@@ -52,7 +52,7 @@ func setupSyncTest(t *testing.T) (context.Context, *syncMocks, *syncSvc) {
 	sync_repo.RegisterSyncAvatar(m.avatar)
 	sync_repo.RegisterSyncLocalPath(m.localPath)
 
-	ctx, _, sqlMock := hubtest.DatabasePG(t)
+	ctx, _, sqlMock := hubtest.Database(t)
 	m.sql = sqlMock
 
 	svc := newSyncSvc()

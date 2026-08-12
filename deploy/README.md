@@ -3,7 +3,7 @@
 ```
 deploy/
   Dockerfile            镜像：前端和后端都在里面构建，产物是单个静态二进制
-  docker-compose.yml    单机部署：server + PostgreSQL + Redis
+  docker-compose.yml    单机部署：server + MySQL + Redis
   config.docker.yaml    compose 用的配置
   helm/                 Kubernetes 部署
 ```
@@ -58,12 +58,11 @@ curl http://localhost:8443/v1/healthz
 
 `{"db_ping":true,"redis":true}` 就是好了，浏览器打开 <http://localhost:8443> 能看到界面。
 
-数据落在仓库根的 `data/pg` 和 `data/redis`，删掉就等于重置。
+数据落在仓库根的 `data/mysql` 和 `data/redis`，删掉就等于重置。
 
-Compose 固定使用 PostgreSQL 18.4。PostgreSQL 不能跨大版本直接读取旧数据目录；如果
-`data/pg` 来自 PostgreSQL 16 或 17，先用旧版本导出，再导入全新的 PostgreSQL 18
-数据目录（或者按 PostgreSQL 官方流程运行 `pg_upgrade`），不要直接执行 `up -d`
-让 18 读取旧目录。
+Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 MySQL 官方
+升级路径检查目标版本是否支持直接读取当前数据目录；不要让不兼容的大版本
+直接复用 `data/mysql`。
 
 ### 要改配置
 
@@ -116,7 +115,7 @@ docker run --rm -p 8443:8443 \
 
 ## Kubernetes 部署
 
-`helm/` 下是 chart，只部署服务本身——PostgreSQL、Redis、etcd 都用集群里现成的。
+`helm/` 下是 chart，只部署服务本身——MySQL、Redis、etcd 都用集群里现成的。
 
 ```bash
 helm upgrade --install agentre-server ./deploy/helm \
@@ -151,7 +150,7 @@ k8s 上只有四个引导键从 ConfigMap 进容器（`env`、`debug`、`source`
 | key | 内容 |
 | --- | --- |
 | `logger` | 日志级别。**`logFile.enable` 必须是 `false`**，容器是只读根文件系统，写不了文件 |
-| `db` | PostgreSQL 连接串 |
+| `db` | MySQL 连接串 |
 | `redis` | Redis 地址 |
 | `http` | 监听地址，端口要和 chart 的 `containerPort` 一致 |
 | `server` | 域名、会话、JWT 密钥、GitHub OAuth。密钥类的都在这里面 |

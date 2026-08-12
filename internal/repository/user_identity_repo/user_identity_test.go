@@ -12,7 +12,7 @@ import (
 )
 
 func TestFindByProviderUID_Found(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewUserIdentity()
 
 	mock.ExpectQuery(regexp.QuoteMeta(
@@ -28,14 +28,14 @@ func TestFindByProviderUID_Found(t *testing.T) {
 }
 
 func TestCreate(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	r := NewUserIdentity()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO "user_identities"`)).
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO "user_identities"`)).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "raw_profile"}).AddRow(int64(1), []byte("{}")))
+			sqlmock.AnyArg(), []byte("{}"), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	e := &user_identity_entity.UserIdentity{UserID: 99, Provider: "github", ProviderUID: "1", Email: "a@b.com"}

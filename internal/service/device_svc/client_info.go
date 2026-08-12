@@ -17,7 +17,7 @@ func WithClientInfo(ctx context.Context, ip, ua string) context.Context {
 	return context.WithValue(ctx, clientInfoKey{}, clientInfo{IP: ip, UserAgent: ua})
 }
 
-// clientInfoFromCtx 返回 ctx 里的来源信息；IP 非法或缺失时返回 nil（写库为 NULL，匹配 inet 列）。
+// clientInfoFromCtx 返回 ctx 里的来源信息；IP 非法或缺失时返回 nil（写库为 NULL，匹配 varchar(45) 列）。
 func clientInfoFromCtx(ctx context.Context) (*string, string) {
 	v, _ := ctx.Value(clientInfoKey{}).(clientInfo)
 	var ipPtr *string

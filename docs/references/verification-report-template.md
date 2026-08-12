@@ -18,7 +18,7 @@ One or two sentences. The claim being tested — not a changelog.
 
 ## How I verified it
 
-Environment (mocked / real PostgreSQL + Redis / against staging), and the commands run.
+Environment (mocked / real MySQL + Redis / against staging), and the commands run.
 
 ```bash
 go run ./cmd/server
