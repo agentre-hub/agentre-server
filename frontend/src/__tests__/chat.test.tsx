@@ -37,6 +37,26 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+// 桌面右栏嵌的是 task 5 的真实 SessionDetailView（其真实 relay/审批行为由
+// session-detail.test.tsx 守）；本文件把真实详情 mock 成探针，只断言 Chat 以正确的
+// deviceId/sessionId/form 消费它。
+vi.mock("@/components/session/SessionDetailView", () => ({
+  __esModule: true,
+  default: (props: {
+    deviceId: number;
+    sessionId: number;
+    form?: "page" | "embedded";
+  }) => (
+    <div
+      data-testid="embedded-session-detail"
+      data-device-id={props.deviceId}
+      data-session-id={props.sessionId}
+      data-form={props.form ?? "page"}
+    >
+      embedded-detail
+    </div>
+  ),
+}));
 
 const mockedApi = vi.mocked(api);
 const mockUseRelay = vi.mocked(useRelayMachine);
@@ -190,9 +210,12 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
     expect(
       await screen.findByRole("heading", { name: /后端 Agent/ }),
     ).toBeTruthy();
+    // 详情区空态与 Agent 骨架各一句「还没有对话」(共享 EmptyState 的空态层级)。
     expect(screen.getAllByText("No conversations yet.").length).toBe(2);
     expect(
-      screen.getByRole("heading", { name: "No conversations yet." }),
+      within(screen.getByTestId("chat-detail")).getByText(
+        "No conversations yet.",
+      ),
     ).toBeTruthy();
     // 空态正文沿用设计稿屏 32 原文（文案原样不动）。
     expect(
@@ -284,19 +307,27 @@ describe("对话页:R12 桌面入口 + R13 + R14 关注名单", () => {
     // Agent 分组名;没会话的 Agent 仍然列出、给「还没有对话」。
     expect(screen.getByRole("heading", { name: /后端 Agent/ })).toBeTruthy();
     expect(screen.getByRole("heading", { name: /前端 Agent/ })).toBeTruthy();
-    expect(screen.getByText("No conversations yet.")).toBeTruthy();
+    // 「还没有对话」= 无会话的 Agent 骨架 + 未选中时右栏的 kpP7A 空态。
+    expect(screen.getAllByText("No conversations yet.").length).toBe(2);
     // 行尾关注开关(这里是取消关注)。
     expect(screen.getByRole("button", { name: "Unfollow" })).toBeTruthy();
-    // 行链到详情页(复用 T6 的读转录/发消息,不必先去设备页)。
-    const row = screen.getAllByText("重构登录页")[0].closest("a");
-    expect(row?.getAttribute("href")).toBe("/devices/1/sessions/42");
+    // 未选中时右栏按 kpP7A 空态层级呈现(「还没有对话」在 Agent 骨架与详情区各一句)。
+    expect(
+      within(screen.getByTestId("chat-detail")).getByText(
+        "No conversations yet.",
+      ),
+    ).toBeTruthy();
+    // 点行:桌面右栏嵌入 task 5 的真实详情视图(deviceId/sessionId, form=embedded),
+    // 不必先去设备页。
+    fireEvent.click(screen.getAllByText("重构登录页")[0]);
+    const embedded = await screen.findByTestId("embedded-session-detail");
+    expect(embedded.getAttribute("data-device-id")).toBe("1");
+    expect(embedded.getAttribute("data-session-id")).toBe("42");
+    expect(embedded.getAttribute("data-form")).toBe("embedded");
     // 数据从中继解析,而非在别的页下钻。
     expect(fakeClient.request).toHaveBeenCalledWith("runtime.session.list");
-    // 有会话时:TopBar Cnt = 会话数;详情区不再显示「还没有对话」居中空态。
+    // 有会话时:TopBar Cnt = 会话数。
     expect(screen.getByTestId("chat-count").textContent).toBe("1");
-    expect(
-      screen.queryByRole("heading", { name: "No conversations yet." }),
-    ).toBeNull();
     // 有在线 agentred 设备时,TopBar 出现 Fresh「桌面端已连接」。
     expect(screen.getByText("Desktop connected")).toBeTruthy();
   });
@@ -613,7 +644,7 @@ describe("对话页:T6 会话列表 UX(最近 / 筛选 / 键盘导航 / 右键�
     );
   });
 
-  it("↑↓ 键盘导航移动选中高亮,Enter 打开选中行", async () => {
+  it("↑↓ 键盘导航移动选中高亮,Enter 在右栏嵌入选中行的真实详情", async () => {
     const s1 = {
       ...summary,
       sessionId: 42,
@@ -658,9 +689,13 @@ describe("对话页:T6 会话列表 UX(最近 / 筛选 / 键盘导航 / 右键�
     expect(document.querySelector('[aria-current="true"]')).toBeTruthy();
     // 第二次 ↓:选中第二条。
     fireEvent.keyDown(nav, { key: "ArrowDown" });
-    // Enter:打开第二条(= /devices/1/sessions/43)。
+    // Enter:右栏嵌入第二条的真实详情(= deviceId 1 / sessionId 43),不导航离开。
     fireEvent.keyDown(nav, { key: "Enter" });
-    expect(await screen.findByTestId("nav-target")).toBeTruthy();
+    const embedded = await screen.findByTestId("embedded-session-detail");
+    expect(embedded.getAttribute("data-device-id")).toBe("1");
+    expect(embedded.getAttribute("data-session-id")).toBe("43");
+    expect(embedded.getAttribute("data-form")).toBe("embedded");
+    expect(screen.queryByTestId("nav-target")).toBeNull();
   });
 
   it("↑↓ 键盘导航把选中行滚进视口(长列表不把高亮移出可视区)", async () => {
@@ -824,5 +859,42 @@ describe("对话页:T6 会话列表 UX(最近 / 筛选 / 键盘导航 / 右键�
     // Escape 关闭菜单。
     fireEvent.keyDown(items[0], { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("搜索框真实过滤会话行(标题/设备/Agent),不是假交互", async () => {
+    const s1 = {
+      ...summary,
+      sessionId: 42,
+      title: "重构登录页",
+      updatedAt: 1754800000000,
+    };
+    const s2 = {
+      ...summary,
+      sessionId: 43,
+      title: "修 bug",
+      updatedAt: 1754700000000,
+    };
+    stubChat(
+      [
+        { fp: "fp-1", sid: 42, followedAt: 1 },
+        { fp: "fp-1", sid: 43, followedAt: 1 },
+      ],
+      [s1, s2],
+    );
+    renderChat();
+
+    await screen.findAllByText("重构登录页");
+    const search = screen.getByRole("searchbox", {
+      name: "Search agents, devices, and records",
+    });
+    // 输入命中「修 bug」:另一条会话从「最近」与分组两处一起收起。
+    fireEvent.change(search, { target: { value: "修 bug" } });
+    await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
+    expect(screen.getAllByText("修 bug").length).toBeGreaterThan(0);
+    // 清空恢复全部。
+    fireEvent.change(search, { target: { value: "" } });
+    await waitFor(() =>
+      expect(screen.getAllByText("重构登录页").length).toBeGreaterThan(0),
+    );
   });
 });

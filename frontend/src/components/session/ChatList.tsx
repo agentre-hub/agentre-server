@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   formatRelativeTime,
+  matchesRowSearch,
   matchesSessionFilter,
   recentTimestamp,
   takeRecent,
@@ -101,6 +102,10 @@ interface ChatListProps {
   onUnfollow: (fingerprint: string, sessionId: number) => void;
   onRemoveInvalid: (fingerprint: string, sessionId: number) => void;
   sessionPath: (deviceId: number, sessionId: number) => string;
+  /** 桌面搜索词（非空时真实过滤会话行；移动无搜索框，恒空）。 */
+  searchQuery?: string;
+  /** 桌面点击 / Enter 选中一条真实会话 → 右栏嵌入详情；移动不传（行仍走路由跳转）。 */
+  onSelect?: (deviceId: number, sessionId: number) => void;
 }
 
 function formatTime(ms: number): string {
@@ -160,9 +165,100 @@ function lifecycleLabel(state: string, t: (k: string) => string): string {
 }
 
 /**
+ * 会话行的正文（两行行）：Row1 = 状态点 + 标题 + 相对时间；Row2 = 设备 · 后端。
+ * 桌面由状态点 + aria 承担状态（不只靠颜色）；移动保文字徽标 + Agent 名行。
+ * 包在 Link（移动）或 select 按钮（桌面）里，两者共用同一份正文。
+ */
+function SessionRowBody({
+  row,
+  title,
+  hasRow2,
+  row2,
+  dotLabel,
+  waiting,
+  isMobile,
+  t,
+  locale,
+  testidPrefix,
+}: {
+  row: ChatSessionRow;
+  title: string;
+  hasRow2: boolean;
+  row2: string;
+  dotLabel: string;
+  waiting: boolean;
+  isMobile: boolean;
+  t: (k: string, opts?: Record<string, unknown>) => string;
+  locale: string;
+  testidPrefix: string;
+}) {
+  return (
+    <>
+      <div className="min-w-0 flex-1">
+        {/* R13：移动的列表行本身就以 Agent 命名（屏 20）；桌面的分组维度已经是
+            Agent，行上不再重复。 */}
+        {isMobile && row.agentName && (
+          <p className="flex items-center gap-1.5 truncate text-xs font-medium text-muted-foreground">
+            {row.agentColor && (
+              <span
+                data-testid={`${testidPrefix}-avatar-${row.sessionId}`}
+                aria-hidden="true"
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: row.agentColor }}
+              />
+            )}
+            {row.agentName}
+          </p>
+        )}
+        {/* Row1：状态点 + 标题 + 相对时间（最后活动时间，R5 与行上是同一套信息）。 */}
+        <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <StatusDot
+            state={row.summary}
+            testid={`${testidPrefix}-dot-${row.sessionId}`}
+            label={dotLabel}
+          />
+          <span className="truncate">{title}</span>
+          {row.summary.updatedAt ? (
+            <time
+              dateTime={new Date(row.summary.updatedAt).toISOString()}
+              title={new Date(row.summary.updatedAt).toLocaleString()}
+              className="shrink-0 text-xs font-normal text-subtle-foreground"
+            >
+              {formatRelativeTime(row.summary.updatedAt, locale)}
+            </time>
+          ) : null}
+        </p>
+        {/* Row2：设备 · 后端。老会话退化时标题本身就是上下文，副行不重复印。 */}
+        {hasRow2 && (
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+            {row2}
+          </p>
+        )}
+      </div>
+      {/* 移动端保文字徽标（不只靠颜色）；桌面由状态点 + aria 承担。 */}
+      {isMobile && (
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
+            waiting
+              ? "bg-status-waiting-bg text-status-waiting"
+              : "bg-muted text-muted-foreground",
+          )}
+        >
+          {waiting
+            ? t("session.list.waiting")
+            : lifecycleLabel(row.summary.lifecycleState, t)}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * 会话行（T6 两行行）。Row1 = 状态点 + 标题 + 相对时间；Row2 = 设备 · 后端。
  * 桌面由状态点 + aria 承担状态（不只靠颜色）；移动保文字徽标 + Agent 名行。
  * `showFollow` 只在桌面分组行开——「最近」区不重复放关注开关。
+ * 桌面（任务 6）：点行 = 选中 → 右栏嵌入详情；移动仍走路由跳转。
  */
 function SessionRow({
   row,
@@ -174,6 +270,7 @@ function SessionRow({
   showFollow,
   selected,
   onMenu,
+  onSelect,
   testidPrefix,
 }: {
   row: ChatSessionRow;
@@ -185,6 +282,7 @@ function SessionRow({
   showFollow: boolean;
   selected: boolean;
   onMenu: (e: React.MouseEvent, path: string) => void;
+  onSelect: () => void;
   testidPrefix: string;
 }) {
   const waiting = !!row.summary.waitingForInput;
@@ -193,8 +291,10 @@ function SessionRow({
   const dotLabel = waiting
     ? t("session.list.waiting")
     : lifecycleLabel(row.summary.lifecycleState, t);
-  const hasRow2 =
-    hasRealTitle && (row.deviceName?.trim() || row.summary.backendType?.trim());
+  const hasRow2 = !!(
+    hasRealTitle &&
+    (row.deviceName?.trim() || row.summary.backendType?.trim())
+  );
   // Row2 的正文：「设备 · 后端」。拼成一个文本节点——第二行是一条整体的小字。
   const row2 = [row.deviceName?.trim(), row.summary.backendType?.trim()]
     .filter(Boolean)
@@ -212,66 +312,32 @@ function SessionRow({
       aria-current={selected ? "true" : undefined}
       onContextMenu={(e) => onMenu(e, sessionPath(row.deviceId, row.sessionId))}
     >
+      {/* 桌面（任务 6）：点行 = 选中 → 右栏嵌入详情，不导航离开（preventDefault）；
+          移动仍走路由详情页。href 保持真实详情路由，右键/新标签打开仍是详情页。 */}
       <Link
         to={sessionPath(row.deviceId, row.sessionId)}
         className="flex min-w-0 flex-1 items-center gap-3"
+        onClick={
+          isMobile
+            ? undefined
+            : (e) => {
+                e.preventDefault();
+                onSelect();
+              }
+        }
       >
-        <div className="min-w-0 flex-1">
-          {/* R13：移动的列表行本身就以 Agent 命名（屏 20）；桌面的分组维度已经是
-              Agent，行上不再重复。 */}
-          {isMobile && row.agentName && (
-            <p className="flex items-center gap-1.5 truncate text-xs font-medium text-muted-foreground">
-              {row.agentColor && (
-                <span
-                  data-testid={`${testidPrefix}-avatar-${row.sessionId}`}
-                  aria-hidden="true"
-                  className="size-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: row.agentColor }}
-                />
-              )}
-              {row.agentName}
-            </p>
-          )}
-          {/* Row1：状态点 + 标题 + 相对时间（最后活动时间，R5 与行上是同一套信息）。 */}
-          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <StatusDot
-              state={row.summary}
-              testid={`${testidPrefix}-dot-${row.sessionId}`}
-              label={dotLabel}
-            />
-            <span className="truncate">{title}</span>
-            {row.summary.updatedAt ? (
-              <time
-                dateTime={new Date(row.summary.updatedAt).toISOString()}
-                title={new Date(row.summary.updatedAt).toLocaleString()}
-                className="shrink-0 text-xs font-normal text-subtle-foreground"
-              >
-                {formatRelativeTime(row.summary.updatedAt, locale)}
-              </time>
-            ) : null}
-          </p>
-          {/* Row2：设备 · 后端。老会话退化时标题本身就是上下文，副行不重复印。 */}
-          {hasRow2 && (
-            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {row2}
-            </p>
-          )}
-        </div>
-        {/* 移动端保文字徽标（不只靠颜色）；桌面由状态点 + aria 承担。 */}
-        {isMobile && (
-          <span
-            className={cn(
-              "inline-flex shrink-0 items-center rounded-md px-2 py-0.5 text-xs font-medium",
-              waiting
-                ? "bg-status-waiting-bg text-status-waiting"
-                : "bg-muted text-muted-foreground",
-            )}
-          >
-            {waiting
-              ? t("session.list.waiting")
-              : lifecycleLabel(row.summary.lifecycleState, t)}
-          </span>
-        )}
+        <SessionRowBody
+          row={row}
+          title={title}
+          hasRow2={hasRow2}
+          row2={row2}
+          dotLabel={dotLabel}
+          waiting={waiting}
+          isMobile={isMobile}
+          t={t}
+          locale={locale}
+          testidPrefix={testidPrefix}
+        />
       </Link>
       {/* 决策 16：关注入口桌面在列表行、移动在详情页顶栏——移动不渲染行内开关。
           「最近」区不重复放开关（showFollow=false）。 */}
@@ -307,6 +373,7 @@ function OfflineRow({
   isMobile,
   selected,
   onMenu,
+  onSelect,
 }: {
   row: ChatOfflineRow;
   onUnfollow: (fp: string, sid: number) => void;
@@ -315,6 +382,7 @@ function OfflineRow({
   isMobile: boolean;
   selected: boolean;
   onMenu: (e: React.MouseEvent, path: string) => void;
+  onSelect: () => void;
 }) {
   return (
     <div
@@ -327,9 +395,18 @@ function OfflineRow({
       aria-current={selected ? "true" : undefined}
       onContextMenu={(e) => onMenu(e, sessionPath(row.deviceId, row.sessionId))}
     >
+      {/* 桌面：离线行也可选中 → 右栏嵌入（详情会如实显示机器离线状态）；移动走路由。 */}
       <Link
         to={sessionPath(row.deviceId, row.sessionId)}
         className="min-w-0 flex-1"
+        onClick={
+          isMobile
+            ? undefined
+            : (e) => {
+                e.preventDefault();
+                onSelect();
+              }
+        }
       >
         <p className="truncate text-sm font-medium text-foreground">
           {t("chat.offlineMachineWithTime", {
@@ -530,6 +607,8 @@ export default function ChatList({
   onUnfollow,
   onRemoveInvalid,
   sessionPath,
+  searchQuery = "",
+  onSelect,
 }: ChatListProps) {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
@@ -556,18 +635,52 @@ export default function ChatList({
     [groups],
   );
 
-  // 桌面：筛选后的分组行。「最近」区随筛选一起过滤，保持一致性。
+  // 桌面：筛选 + 搜索后的分组行。「最近」区随之一过滤，保持一致性。
+  // 搜索是真实行为：按标题 / cwd / 后端 / 设备名 / Agent 名匹配本页会话行，
+  // 空查询不过滤。移动没有搜索框，不做任何过滤。
   const filteredGroups = useMemo(() => {
-    if (isMobile || filter === "all") return rendered;
-    return rendered
-      .map((g) => ({
-        ...g,
-        sessions: g.sessions.filter((s) =>
-          matchesSessionFilter(s.summary, filter),
-        ),
-      }))
-      .filter((g) => g.sessions.length > 0);
-  }, [rendered, filter, isMobile]);
+    if (isMobile) return rendered;
+    const q = searchQuery.trim();
+    let groups = rendered;
+    if (filter !== "all") {
+      groups = groups
+        .map((g) => ({
+          ...g,
+          sessions: g.sessions.filter((s) =>
+            matchesSessionFilter(s.summary, filter),
+          ),
+        }))
+        .filter((g) => g.sessions.length > 0);
+    }
+    if (q) {
+      groups = groups
+        .map((g) => ({
+          ...g,
+          sessions: g.sessions.filter((s) =>
+            matchesRowSearch(
+              [
+                s.summary.title,
+                s.summary.cwd,
+                s.summary.backendType,
+                s.deviceName,
+                g.label,
+              ],
+              q,
+            ),
+          ),
+        }))
+        .filter((g) => g.sessions.length > 0);
+    }
+    return groups;
+  }, [rendered, filter, isMobile, searchQuery]);
+
+  // 桌面搜索同样作用于离线机器行（按设备名匹配）。
+  const visibleOffline = useMemo(() => {
+    if (isMobile) return offline;
+    const q = searchQuery.trim();
+    if (!q) return offline;
+    return offline.filter((o) => matchesRowSearch([o.deviceName], q));
+  }, [offline, isMobile, searchQuery]);
 
   // 桌面：最近 · 跨 Agent（跨全部 Agent 取最近 5 条）。排序键 = updatedAt /
   // followedAt 之新（recentTimestamp）。
@@ -589,25 +702,45 @@ export default function ChatList({
   const navTargets = useMemo(() => {
     if (isMobile) return [];
     const seen = new Set<string>();
-    const out: { key: string; path: string }[] = [];
+    const out: {
+      key: string;
+      path: string;
+      deviceId: number;
+      sessionId: number;
+    }[] = [];
     for (const r of recentRows) {
       if (seen.has(r.key)) continue;
       seen.add(r.key);
-      out.push({ key: r.key, path: sessionPath(r.deviceId, r.sessionId) });
+      out.push({
+        key: r.key,
+        path: sessionPath(r.deviceId, r.sessionId),
+        deviceId: r.deviceId,
+        sessionId: r.sessionId,
+      });
     }
     for (const g of filteredGroups)
       for (const s of g.sessions) {
         if (seen.has(s.key)) continue;
         seen.add(s.key);
-        out.push({ key: s.key, path: sessionPath(s.deviceId, s.sessionId) });
+        out.push({
+          key: s.key,
+          path: sessionPath(s.deviceId, s.sessionId),
+          deviceId: s.deviceId,
+          sessionId: s.sessionId,
+        });
       }
-    for (const o of offline) {
+    for (const o of visibleOffline) {
       if (seen.has(o.key)) continue;
       seen.add(o.key);
-      out.push({ key: o.key, path: sessionPath(o.deviceId, o.sessionId) });
+      out.push({
+        key: o.key,
+        path: sessionPath(o.deviceId, o.sessionId),
+        deviceId: o.deviceId,
+        sessionId: o.sessionId,
+      });
     }
     return out;
-  }, [recentRows, filteredGroups, offline, sessionPath, isMobile]);
+  }, [recentRows, filteredGroups, visibleOffline, sessionPath, isMobile]);
 
   // 进了「最近」区的会话键：分组里那行同键，不得再高亮——否则同一会话在
   // 「最近」与分组两处同亮（去重只改导航目标列表，不改 DOM 上两个同键行）。
@@ -644,10 +777,13 @@ export default function ChatList({
           ?.scrollIntoView({ block: "nearest" });
       } else if (e.key === "Enter") {
         const target = navTargets.find((x) => x.key === selectedKey);
-        if (target) navigate(target.path);
+        if (!target) return;
+        // 桌面：Enter = 选中 → 右栏嵌入真实详情；移动：仍走路由详情页。
+        if (isMobile) navigate(target.path);
+        else onSelect?.(target.deviceId, target.sessionId);
       }
     },
-    [isMobile, navTargets, navIndex, selectedKey, navigate],
+    [isMobile, navTargets, navIndex, selectedKey, navigate, onSelect],
   );
 
   const handleMenu = useCallback(
@@ -692,6 +828,15 @@ export default function ChatList({
       }
     },
     [onUnfollow, onRemoveInvalid],
+  );
+
+  // 桌面点行：把键盘高亮移到该行并让右栏嵌入详情（与 ↑↓/Enter 同一选中语义）。
+  const handleRowSelect = useCallback(
+    (row: { key: string; deviceId: number; sessionId: number }) => {
+      setSelectedKey(row.key);
+      onSelect?.(row.deviceId, row.sessionId);
+    },
+    [onSelect],
   );
 
   return (
@@ -761,6 +906,7 @@ export default function ChatList({
                   onMenu={(e, path) =>
                     handleMenu(e, "session", r.fingerprint, r.sessionId, path)
                   }
+                  onSelect={() => handleRowSelect(r)}
                   testidPrefix="chat-recent-row"
                 />
               ))}
@@ -811,6 +957,7 @@ export default function ChatList({
                     onMenu={(e, path) =>
                       handleMenu(e, "session", s.fingerprint, s.sessionId, path)
                     }
+                    onSelect={() => handleRowSelect(s)}
                     testidPrefix="chat-row"
                   />
                 ))}
@@ -830,14 +977,14 @@ export default function ChatList({
         </div>
       )}
 
-      {offline.length > 0 && (
+      {visibleOffline.length > 0 && (
         <section aria-label={t("chat.offlineTitle")}>
           <h2 className="mb-2 text-sm font-semibold text-foreground">
             {t("chat.offlineTitle")}
           </h2>
           <Card className="py-1">
             <CardContent className="p-1">
-              {offline.map((o) => (
+              {visibleOffline.map((o) => (
                 <OfflineRow
                   key={o.key}
                   row={o}
@@ -849,6 +996,7 @@ export default function ChatList({
                   onMenu={(e, path) =>
                     handleMenu(e, "offline", o.fingerprint, o.sessionId, path)
                   }
+                  onSelect={() => handleRowSelect(o)}
                 />
               ))}
             </CardContent>

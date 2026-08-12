@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Filter, MessagesSquare, Plus, Search } from "lucide-react";
+import { MessageCirclePlus, PenLine, Plus, Search } from "lucide-react";
 
+import { EmptyState } from "@/components/console";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import AppShell from "@/components/AppShell";
@@ -14,6 +15,7 @@ import ChatList, {
   type ChatSessionRow,
 } from "@/components/session/ChatList";
 import NewConversationDialog from "@/components/session/NewConversationDialog";
+import SessionDetailView from "@/components/session/SessionDetailView";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
@@ -135,6 +137,13 @@ export default function Chat() {
     Record<string, "connecting" | "connected" | "unreachable">
   >({});
   const [newOpen, setNewOpen] = useState(false);
+  // 桌面右栏：当前选中的真实会话（未选中 = kpP7A 空态）。
+  const [selected, setSelected] = useState<{
+    deviceId: number;
+    sessionId: number;
+  } | null>(null);
+  // 桌面搜索词：真实过滤本页会话行（见 ChatList），不是假交互。
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -198,6 +207,11 @@ export default function Chat() {
     } catch {
       // 失败时保持原样（仍是已关注），用户可重试；不假装成功。
     }
+  }, []);
+
+  // 桌面点行 / ↑↓+Enter 选中一条真实会话 → 右栏嵌入 task 5 的真实详情视图。
+  const onSelect = useCallback((deviceId: number, sessionId: number) => {
+    setSelected({ deviceId, sessionId });
   }, []);
 
   const view = useMemo(() => {
@@ -324,6 +338,8 @@ export default function Chat() {
       onUnfollow={unfollow}
       onRemoveInvalid={unfollow}
       sessionPath={(did, sid) => `/devices/${did}/sessions/${sid}`}
+      searchQuery={searchQuery}
+      onSelect={onSelect}
     />
   );
 
@@ -359,35 +375,47 @@ export default function Chat() {
   return (
     <AppShell title={t("nav.chat")} right={topBarRight}>
       {isMobile ? (
-        /* 移动形态（屏 20/29）：保持状态分组列表 + 居中空态卡片，不强制左列 + 详情。 */
+        /* 移动形态（屏 20/32）：状态分组列表 + 屏 32 空态；不强制左列 + 详情。 */
         <div className="mx-auto w-full max-w-3xl space-y-5">
           {!loaded ? (
             <p className="text-sm text-muted-foreground">
               {t("common.loading")}
             </p>
-          ) : empty ? (
-            <div className="rounded-lg border border-border bg-card p-6">
-              {/* 空态沿用设计稿屏 32：标题/正文/主按钮文案与桌面一致。 */}
-              <h2 className="mb-1 text-base font-semibold text-foreground">
-                {t("chat.noSessions")}
-              </h2>
-              <p className="mb-4 text-sm leading-[1.5] text-muted-foreground">
-                {t("chat.startFirstBody")}
-              </p>
-              <Button size="lg" onClick={() => setNewOpen(true)}>
-                {t("chat.startFirst")}
-              </Button>
-              <div className="mt-4">
-                <Link
-                  to="/devices"
-                  className="text-sm font-medium text-primary hover:underline"
-                >
-                  {t("chat.findMore")}
-                </Link>
-              </div>
-            </div>
+          ) : null}
+          {loaded && empty ? (
+            /* 空态沿用屏 32（共享 EmptyState）：标题/正文/主按钮文案与桌面一致。 */
+            <EmptyState
+              icon={MessageCirclePlus}
+              title={t("chat.noSessions")}
+              body={t("chat.startFirstBody")}
+              testId="chat-empty-state"
+              action={
+                <>
+                  <Button size="lg" onClick={() => setNewOpen(true)}>
+                    {t("chat.startFirst")}
+                  </Button>
+                  <Link
+                    to="/devices"
+                    className="text-sm font-medium text-primary hover:underline"
+                  >
+                    {t("chat.findMore")}
+                  </Link>
+                </>
+              }
+            />
           ) : null}
           {loaded && list}
+          {/* 移动有会话时：新建入口（IC5sH 的 pen-line FAB），在底栏之上。 */}
+          {loaded && !empty && (
+            <button
+              type="button"
+              aria-label={t("chat.startFirst")}
+              className="fixed bottom-24 right-4 z-30 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-overlay"
+              onClick={() => setNewOpen(true)}
+            >
+              <PenLine className="size-5" aria-hidden="true" />
+            </button>
+          )}
         </div>
       ) : (
         /* 桌面（屏 49b）：320px 左会话列表列 + 右侧详情区。负 margin 铺满
@@ -401,15 +429,9 @@ export default function Chat() {
             className="flex w-[320px] shrink-0 flex-col border-r border-border bg-card"
           >
             <div className="flex items-center gap-1.5 p-2.5">
-              {/* 筛选按钮：任务 6 才接真实筛选，这里只摆 30px icon 槽。 */}
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="size-[30px]"
-                aria-label={t("session.ux.filter.all")}
-              >
-                <Filter className="size-4" aria-hidden="true" />
-              </Button>
+              {/* 搜索框：真实过滤本页会话行（标题/设备/Agent），不是假交互。
+                  真实筛选 chips 在列表内（全部/运行中/未读 N），不再摆一个
+                  什么都不做的筛选 icon 按钮。 */}
               <label className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 rounded-md bg-muted px-2.5">
                 <Search
                   className="size-3.5 shrink-0 text-subtle-foreground"
@@ -417,6 +439,8 @@ export default function Chat() {
                 />
                 <input
                   type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                   aria-label={t("appShell.searchPlaceholder")}
                   placeholder={t("appShell.searchPlaceholder")}
                   className="h-full w-full bg-transparent text-[12.5px] text-foreground outline-none placeholder:text-subtle-foreground"
@@ -445,44 +469,44 @@ export default function Chat() {
           </div>
           <div
             data-testid="chat-detail"
-            className="flex min-w-0 flex-1 flex-col items-center justify-center gap-3.5 p-4"
+            className="flex min-w-0 flex-1 flex-col"
           >
             {!loaded ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="p-4 text-sm text-muted-foreground">
                 {t("common.loading")}
               </p>
-            ) : empty ? (
-              /* 空态：居中详情（62px 图标盒 + 标题 + 正文 + 主按钮 + 备选链接）。 */
-              <>
-                <div className="flex size-[62px] items-center justify-center rounded-lg bg-primary-soft">
-                  <MessagesSquare
-                    className="size-8 text-primary-text"
-                    aria-hidden="true"
-                  />
-                </div>
-                <h2 className="text-lg font-bold text-foreground">
-                  {t("chat.noSessions")}
-                </h2>
-                <p className="max-w-sm text-center text-[12.5px] leading-[22px] text-muted-foreground">
-                  {t("chat.startFirstBody")}
-                </p>
-                {/* R15 的主动作：打开新对话弹层（屏 23/24/25），派发成功后直接跳详情页。 */}
-                <Button size="lg" onClick={() => setNewOpen(true)}>
-                  {t("chat.startFirst")}
-                </Button>
-                <Link
-                  to="/devices"
-                  className="text-[11.5px] text-subtle-foreground hover:underline"
-                >
-                  {t("chat.findMore")}
-                </Link>
-              </>
+            ) : selected ? (
+              /* 选中真实会话：右栏直接嵌入 task 5 的 SessionDetailView（embedded
+                 形态：无外壳/面包屑/关注入口，只渲染真实详情，由外层给尺寸）。 */
+              <div className="min-h-0 flex-1">
+                <SessionDetailView
+                  deviceId={selected.deviceId}
+                  sessionId={selected.sessionId}
+                  form="embedded"
+                />
+              </div>
             ) : (
-              /* 有会话：详情区留安静占位；选中/右键/键盘导航是任务 6 的交互。 */
-              <div className="flex size-[62px] items-center justify-center rounded-lg bg-primary-soft">
-                <MessagesSquare
-                  className="size-8 text-primary-text"
-                  aria-hidden="true"
+              /* 未选中 / 没有真实会话：按 kpP7A 的空态层级呈现（共享 EmptyState）。 */
+              <div className="flex flex-1 items-center justify-center p-4">
+                <EmptyState
+                  icon={MessageCirclePlus}
+                  title={t("chat.noSessions")}
+                  body={t("chat.startFirstBody")}
+                  testId="chat-empty-state"
+                  action={
+                    <>
+                      {/* R15 的主动作：打开新对话弹层（屏 23/24/25）。 */}
+                      <Button size="lg" onClick={() => setNewOpen(true)}>
+                        {t("chat.startFirst")}
+                      </Button>
+                      <Link
+                        to="/devices"
+                        className="text-[11.5px] text-subtle-foreground hover:underline"
+                      >
+                        {t("chat.findMore")}
+                      </Link>
+                    </>
+                  }
                 />
               </div>
             )}

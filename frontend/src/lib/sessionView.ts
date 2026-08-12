@@ -136,6 +136,20 @@ export function takeRecent<T extends RecentOrderable>(
 }
 
 /**
+ * 会话行搜索（任务 6）：把一行会话的可搜字段（标题 / cwd / 后端 / 设备名 / 所在
+ * Agent 名）交给 matchesRowSearch，判断是否命中。空查询恒为 true（不过滤）。
+ * 大小写不敏感。桌面列表的搜索框只做这件真实的事——匹配本页会话行，不伪造搜索。
+ */
+export function matchesRowSearch(
+  fields: Array<string | undefined>,
+  query: string,
+): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return fields.some((f) => !!f && f.toLowerCase().includes(q));
+}
+
+/**
  * 行首状态点的颜色（对应设计稿的 ok / warn / idle / danger）：等待输入=琥珀、
  * 运行中=绿、已中断=红、其余（idle 与不认识的旧状态）=灰。走 token，不写字面量。
  */

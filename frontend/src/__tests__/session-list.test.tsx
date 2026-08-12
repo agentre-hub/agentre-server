@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import SessionList from "@/components/session/SessionList";
 import i18n from "@/i18n";
 import {
+  matchesRowSearch,
   matchesSessionFilter,
   recentTimestamp,
   statusDotClass,
@@ -297,6 +298,17 @@ describe("sessionView 纯函数(T6 筛选 / 最近 / 状态点)", () => {
     ];
     expect(takeRecent(rows, 2).map((r) => r.key)).toEqual(["b", "c"]);
     expect(takeRecent(rows, 10).map((r) => r.key)).toEqual(["b", "c", "a"]);
+  });
+
+  it("matchesRowSearch:空查询恒真;命中任一字段(标题/设备/后端/Agent),大小写不敏感", () => {
+    const fields = ["重构登录页", "书房小主机", "claudecode", "后端 Agent"];
+    expect(matchesRowSearch(fields, "")).toBe(true);
+    expect(matchesRowSearch(fields, "   ")).toBe(true);
+    expect(matchesRowSearch(fields, "登录")).toBe(true);
+    expect(matchesRowSearch(fields, "claude")).toBe(true);
+    expect(matchesRowSearch(fields, "后端")).toBe(true);
+    expect(matchesRowSearch(fields, "不存在")).toBe(false);
+    expect(matchesRowSearch(fields, "CLAUDE")).toBe(true);
   });
 
   it("statusDotClass:等待=琥珀,运行=绿,中断=红,其余=灰", () => {

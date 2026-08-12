@@ -269,9 +269,7 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
       }),
     ).toBeTruthy();
     // 文案原样：屏 32 的标题 +正文一字不改。
-    expect(
-      screen.getByRole("heading", { name: "No conversations yet." }),
-    ).toBeTruthy();
+    expect(screen.getByText("No conversations yet.")).toBeTruthy();
     expect(
       screen.getByText(
         "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
@@ -281,6 +279,39 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Start your first conversation" }),
     );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Pick an agent" }),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("移动端有会话时也有新建入口(FAB)打开新对话弹层(IC5sH)", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+          ],
+        };
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    // 列表在（有会话），FAB 是新建入口（设计稿屏 20 的 pen-line FAB）。
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    const fab = screen.getByRole("button", {
+      name: "Start your first conversation",
+    });
+    fireEvent.click(fab);
     await waitFor(() =>
       expect(
         screen.getByRole("heading", { name: "Pick an agent" }),
