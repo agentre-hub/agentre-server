@@ -117,6 +117,27 @@ export default function SessionDetailView({
   const [meValid, setMeValid] = useState(true);
   const [followed, setFollowed] = useState(false);
   const [followBusy, setFollowBusy] = useState(false);
+  // 已装载的目标会话标识：桌面 Chat 右栏点行 A 再点行 B 时是同实例换 props（无
+  // key 强制重挂），会话级状态必须随 (did, sid) 变化重置，否则右栏残留上一条会话的
+  // 标题/转录/决策，发消息也落在上一条的 origin 上。用 React 官方的「prop 变化时
+  // 重置 state」渲染期调整模式（不能在 effect 里裸调 setState —— lint 禁止）。
+  // 设备/账号级状态（machineOnline / revoked / meValid）不在此列，由各自 effect 随
+  // did 刷新。originRef 由 attach effect 每次重新推导，不需要在这里清。
+  const [lastTarget, setLastTarget] = useState({ did, sid });
+  if (lastTarget.did !== did || lastTarget.sid !== sid) {
+    setLastTarget({ did, sid });
+    setSummary(null);
+    setEvents([]);
+    setWaiters({ toolPermissions: [], askUserQuestions: [] });
+    setHandledRequestId(null);
+    setDecisionError(false);
+    setSendError(false);
+    setNeedsUpgrade(false);
+    setDraft("");
+    setFollowed(false);
+    setFollowBusy(false);
+    setReady(false);
+  }
   const probedRef = useRef(false);
 
   const clientRef = useRef<import("@/lib/relayClient").RelayClient | null>(
@@ -198,8 +219,10 @@ export default function SessionDetailView({
     clientRef.current = client;
   }, [client]);
 
-  // 取设备。
+  // 取设备。换设备时同时重新允许一次 reconnecting 原因探测（R11）——旧设备的探测
+  // 结论不属于新设备。
   useEffect(() => {
+    probedRef.current = false;
     let alive = true;
     api<{ devices: DeviceItem[] }>("/v1/devices")
       .then((res) => {
@@ -251,9 +274,10 @@ export default function SessionDetailView({
     return () => {
       alive = false;
     };
-    // ready 之后不再重复跑（重连时的补齐由 RelayClient.reconnect 对 watched 会话负责）。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, relayState]);
+    // ready 之后不再重复跑（重连时的补齐由 RelayClient.reconnect 对 watched 会话负责）；
+    // ready / did / sid 也必须是依赖：切换会话时上面的渲染期重置把 ready 置 false，
+    // 这里要重新 attach 到新会话；只按 [client, relayState] 的话重置后不会重跑。
+  }, [client, relayState, ready, did, sid]);
 
   // 首次进入 reconnecting（= 连接失败）时探测原因（R11），只探一次。
   useEffect(() => {

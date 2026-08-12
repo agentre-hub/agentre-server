@@ -59,14 +59,7 @@
     "overview": "Overview",
     "chat": "Chat",
     "devices": "Devices",
-    "audit": "Audit",
-    "openMenu": "Open menu",
-    "closeMenu": "Close menu",
-    "drawer": "Menu"
-  },
-  "workspaceComingSoon": {
-    "chatBody": "Starting a conversation from the browser is not available yet.",
-    "auditBody": "The audit log is not available yet."
+    "audit": "Audit"
   },
   "overview": {
     "title": "Agents",

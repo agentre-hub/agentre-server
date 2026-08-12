@@ -573,6 +573,65 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
   });
 
+  // 桌面 Chat 右栏点行 A 再点行 B:同实例换 props,无 key 强制重挂。会话级状态
+  // (summary / events / originRef / ready)必须按 deviceId/sessionId 重置并重新
+  // attach + 补齐,否则右栏残留上一条会话的标题/转录,发消息也落在 A 的 origin 上。
+  it("切换选中会话(同实例新 props):重置转录并重新 attach,不残留上一条会话", async () => {
+    const summaryB = { ...summary, sessionId: 43, title: "重构列表页" };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "A 的转录" },
+        seq: 1,
+      });
+    });
+
+    const { rerender } = renderEmbedded();
+    expect(await screen.findByText("A 的转录")).toBeTruthy();
+
+    // 切到同机器上的另一条会话(43):request 返回 43 的摘要,catchUp 推 43 的转录。
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summaryB], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 43,
+        event: { kind: "text_delta", text: "B 的转录" },
+        seq: 1,
+      });
+    });
+    // 保持与首次渲染相同的包装结构(Router/ThemeProvider 不换),只换 props。
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={43} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 必须重新 attach 43 并补齐,展示 B 的转录;A 的转录不再残留。
+    expect(await screen.findByText("B 的转录")).toBeTruthy();
+    expect(screen.queryByText("A 的转录")).toBeNull();
+    await vi.waitFor(() => {
+      expect(fakeClient.attach).toHaveBeenCalledWith(43, undefined);
+    });
+  });
+
   it("页面形态:详情头部渲染状态标记与机器 meta(标题仍由 AppShell TopBar 呈现)", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };

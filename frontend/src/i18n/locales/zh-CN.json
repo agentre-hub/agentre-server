@@ -59,14 +59,7 @@
     "overview": "总览",
     "chat": "对话",
     "devices": "设备",
-    "audit": "审计",
-    "openMenu": "打开菜单",
-    "closeMenu": "关闭菜单",
-    "drawer": "菜单"
-  },
-  "workspaceComingSoon": {
-    "chatBody": "从浏览器发起对话暂未开放。",
-    "auditBody": "审计记录暂未开放。"
+    "audit": "审计"
   },
   "overview": {
     "title": "Agent",
