@@ -9,7 +9,7 @@ import DeviceSessions from "./pages/DeviceSessions";
 import SessionDetail from "./pages/SessionDetail";
 import Overview from "./pages/Overview";
 import Chat from "./pages/Chat";
-import WorkspaceComingSoon from "./pages/WorkspaceComingSoon";
+import Audit from "./pages/Audit";
 import NotFound from "./pages/NotFound";
 import ComingSoon from "./pages/ComingSoon";
 import RequireAuth from "./components/RequireAuth";
@@ -72,7 +72,7 @@ export default function App() {
           path="/audit"
           element={
             <RequireAuth>
-              <WorkspaceComingSoon bodyKey="workspaceComingSoon.auditBody" />
+              <Audit />
             </RequireAuth>
           }
         />

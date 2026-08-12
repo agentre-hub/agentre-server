@@ -70,6 +70,15 @@ describe("App shell wiring", () => {
       expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
     });
 
+    it("serves /audit with the real Audit page (honest empty states), not the coming-soon placeholder", async () => {
+      await i18n.changeLanguage("en");
+      mockSignedIn();
+      renderAt("/audit");
+      // 真实 Audit 页(诚实空态),不是 WorkspaceComingSoon 占位页。
+      expect(await screen.findByTestId("audit-events-empty")).toBeTruthy();
+      expect(screen.getByTestId("audit-credentials-empty")).toBeTruthy();
+    });
+
     it("still serves /device directly as the device-code entry", async () => {
       await i18n.changeLanguage("en");
       mockSignedIn();

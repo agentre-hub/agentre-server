@@ -269,9 +269,7 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
       }),
     ).toBeTruthy();
     // 文案原样：屏 32 的标题 +正文一字不改。
-    expect(
-      screen.getByRole("heading", { name: "No conversations yet." }),
-    ).toBeTruthy();
+    expect(screen.getByText("No conversations yet.")).toBeTruthy();
     expect(
       screen.getByText(
         "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
@@ -286,5 +284,110 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
         screen.getByRole("heading", { name: "Pick an agent" }),
       ).toBeTruthy(),
     );
+  });
+
+  it("移动端有会话时也有新建入口(FAB)打开新对话弹层(IC5sH)", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+          ],
+        };
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    // 列表在（有会话），FAB 是新建入口（设计稿屏 20 的 pen-line FAB）。
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    const fab = screen.getByRole("button", {
+      name: "Start your first conversation",
+    });
+    fireEvent.click(fab);
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Pick an agent" }),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("空态时也显示同一个真实搜索框（加载完成后不再因空隐藏），且不制造结果、不隐藏主空态", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows") return { items: [] };
+      if (path === "/v1/devices") return { devices: [] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    renderChat();
+
+    // 主空态在（屏 32 文案与主按钮）。
+    expect(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    ).toBeTruthy();
+
+    // 回归：数据加载完成后，即使没有任何会话，移动端也显示同一个真实搜索框
+    // （之前被 loaded && !empty 隐藏，运行时 light/dark 都找不到 searchbox）。
+    const search = screen.getByRole("searchbox", {
+      name: i18n.t("appShell.searchPlaceholder"),
+    });
+
+    // 输入不制造结果：没有任何会话行出现。
+    fireEvent.change(search, { target: { value: "跑着呢" } });
+    expect(screen.queryByText("跑着呢")).toBeNull();
+
+    // 主空态不被隐藏，主按钮仍可用。
+    expect(screen.getByTestId("chat-empty-state")).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Start your first conversation",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("移动端也有可触达的真实搜索（屏 20 头部搜索）：输入词过滤会话行", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+            {
+              device_fingerprint: "fp-1",
+              session_id: "43",
+              followed_at: 1754000000000,
+              invalid: false,
+            },
+          ],
+        };
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    expect(screen.getByText("跑着呢")).toBeTruthy();
+    // 搜索是真实行为（matchesRowSearch 过滤本页会话行），不是假控件。
+    const search = screen.getByRole("searchbox", {
+      name: i18n.t("appShell.searchPlaceholder"),
+    });
+    fireEvent.change(search, { target: { value: "跑着呢" } });
+    expect(screen.queryByText("等你批")).toBeNull();
+    expect(screen.getByText("跑着呢")).toBeTruthy();
   });
 });

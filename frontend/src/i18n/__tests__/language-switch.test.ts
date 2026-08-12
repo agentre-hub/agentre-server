@@ -41,6 +41,30 @@ describe("language switching", () => {
     expect(zh).not.toBe(en);
   });
 
+  it("shared console copy differs per language", async () => {
+    // task 1 共享控制台组件唯一的自有文案：行级菜单触发按钮的 aria-label。
+    await i18n.changeLanguage("en");
+    const en = i18n.t("console.aria.rowActions");
+    await i18n.changeLanguage("zh-CN");
+    const zh = i18n.t("console.aria.rowActions");
+
+    expect(en).toBe("Row actions");
+    expect(zh).toBe("行操作");
+    expect(zh).not.toBe(en);
+  });
+
+  it("audit 区段文案随语言切换", async () => {
+    // task 7 审计页筛选器的共用文案，必须真的随语言切换。
+    await i18n.changeLanguage("en");
+    const en = i18n.t("audit.filters.all");
+    await i18n.changeLanguage("zh-CN");
+    const zh = i18n.t("audit.filters.all");
+
+    expect(en).toBe("All");
+    expect(zh).toBe("全部");
+    expect(zh).not.toBe(en);
+  });
+
   it("maps Chinese variants onto zh-CN instead of falling back to English", async () => {
     for (const variant of ["zh", "zh-TW", "zh-Hans"]) {
       await i18n.changeLanguage(variant);

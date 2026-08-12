@@ -96,6 +96,10 @@ const COLOR_TOKENS: Array<[string, string, string | null]> = [
   // 语义面与文字层级
   ["--secondary", "#f4f4f5", "#262931"],
   ["--secondary-foreground", "#3f3f46", "#c4c7cd"],
+
+  // Sidebar —— 控制台外壳左侧栏底色（任务 2）。
+  // 值取自 agentre 桌面端：浅 #f4f4f5 / 深 #111316，两端同源。
+  ["--sidebar", "#f4f4f5", "#111316"],
   ["--muted", "#f4f4f5", "#1d2025"],
   ["--muted-foreground", "#71717a", "#8a8d94"],
   ["--subtle-foreground", "#a1a1aa", "#5a5d64"],
@@ -116,6 +120,8 @@ const COLOR_TOKENS: Array<[string, string, string | null]> = [
   ["--status-running", "#10b981", "#34d399"],
   ["--status-running-bg", "#ecfdf5", "#0f2218"],
   ["--status-waiting", "#f59e0b", "#fbbf24"],
+  // 琥珀 Badge 上的深棕文字（设计稿给的值）；深浅两色都是亮琥珀，同一值都可读。
+  ["--status-waiting-foreground", "#402b06", "#402b06"],
   ["--status-waiting-bg", "#fffbeb", "#261d0d"],
   ["--status-idle", "#a1a1aa", "#6a6d74"],
   ["--status-error", "#dc2626", "#f87171"],

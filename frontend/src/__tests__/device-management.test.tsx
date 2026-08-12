@@ -59,6 +59,19 @@ const listResponse = {
   ],
 };
 
+/**
+ * 撤销入口在行级更多菜单（规格「设备」节）：打开某行菜单 → 点「撤销」→ 确认框。
+ */
+async function openRevokeDialog(deviceName: string) {
+  const row = screen
+    .getByText(deviceName)
+    .closest('[data-slot="card"]') as HTMLElement;
+  fireEvent.click(within(row).getByRole("button", { name: "Row actions" }));
+  const menu = await within(row).findByRole("menu");
+  fireEvent.click(within(menu).getByRole("menuitem", { name: "Revoke" }));
+  return screen.findByRole("dialog");
+}
+
 beforeEach(async () => {
   await i18n.changeLanguage("en");
   mockedApi.mockReset();
@@ -76,7 +89,9 @@ describe("device management page", () => {
     expect(await screen.findByText("nuc-01")).toBeTruthy();
     expect(screen.getByText("laptop")).toBeTruthy();
     expect(screen.getByText(/Compute node/)).toBeTruthy();
-    expect(screen.getByText(/Desktop/)).toBeTruthy();
+    // 精确匹配「Desktop」类型 chip：TopBar 的 Fresh（Desktop connected）也含
+    // Desktop 子串，宽正则会把两个都捞回来（设计对齐后页面多了一个 Desktop 文本）。
+    expect(screen.getByText("Desktop")).toBeTruthy();
     expect(screen.getByText(/linux/)).toBeTruthy();
     expect(screen.getByText(/darwin/)).toBeTruthy();
     // 在线态列来自 API 的 online 字段（真实中继在线态），不是 status 推算（R20）：
@@ -105,9 +120,7 @@ describe("device management page", () => {
     renderDevices();
     await screen.findByText("nuc-01");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
-
-    const dialog = await screen.findByRole("dialog");
+    const dialog = await openRevokeDialog("nuc-01");
     expect(within(dialog).getByText("Revoke this device?")).toBeTruthy();
     const body =
       within(dialog).getByText(/can no longer refresh/i).textContent ?? "";
@@ -163,8 +176,7 @@ describe("device management page", () => {
     renderDevices();
     await screen.findByText("nuc-01");
 
-    fireEvent.click(screen.getAllByRole("button", { name: "Revoke" })[0]);
-    const dialog = await screen.findByRole("dialog");
+    const dialog = await openRevokeDialog("nuc-01");
     fireEvent.click(within(dialog).getByRole("button", { name: "Revoke" }));
 
     await waitFor(() => expect(calls).toBe(1));
@@ -175,5 +187,40 @@ describe("device management page", () => {
     ).toBeTruthy();
     // 「keeps the device」这一半也要断言：撤销失败时那一行不能被乐观地移掉。
     expect(screen.getByText("nuc-01")).toBeTruthy();
+  });
+
+  // 规格「设备」节：不可撤销的设备不显示撤销动作。已撤销（status≠ACTIVE）的
+  // 设备没有可撤销的凭据，行级菜单里不能出现「撤销」。
+  it("a revoked device shows no revoke action in its row menu", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 7,
+              name: "retired",
+              kind: "agentred",
+              platform: "linux",
+              version: "0.2.0",
+              fingerprint: "fp-7",
+              last_seen_at: 1753000000000,
+              status: 2,
+              online: false,
+              is_this_device: false,
+            },
+          ],
+        };
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    const row = (await screen.findByText("retired")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+
+    // 已撤销行连行级菜单都不渲染（没有可做的动作）
+    expect(
+      within(row).queryByRole("button", { name: "Row actions" }),
+    ).toBeNull();
   });
 });

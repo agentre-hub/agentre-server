@@ -231,10 +231,10 @@ export default function DeviceSessions() {
 
   const count = sessions.length;
   return (
-    <AppShell>
+    <AppShell title={device?.name}>
       <div className="mx-auto w-full max-w-3xl space-y-5">
-        {/* 机器语境放顶栏（决策 11，mockup 45a）。移动是下钻三联的中间一页
-            （屏 48b）：返回箭头 + 机器名 + 在线态；桌面保留完整面包屑 + 换机器。 */}
+        {/* 机器语境放顶栏（决策 11，mockup 45a）：机器名已在 TopBar title 槽。
+            移动是下钻三联的中间一页（屏 48b）：返回箭头 + 在线态；桌面保留完整面包屑 + 换机器。 */}
         <nav
           aria-label={t("session.breadcrumb.devices")}
           className="flex flex-wrap items-center gap-2 text-sm"
@@ -248,9 +248,6 @@ export default function DeviceSessions() {
               >
                 <ArrowLeft className="size-5" aria-hidden="true" />
               </Link>
-              <span className="truncate font-semibold text-foreground">
-                {device?.name ?? ""}
-              </span>
               <span
                 className={
                   machineOnline === false
@@ -271,12 +268,6 @@ export default function DeviceSessions() {
               >
                 {t("session.breadcrumb.devices")}
               </Link>
-              <span aria-hidden="true" className="text-subtle-foreground">
-                /
-              </span>
-              <span className="font-semibold text-foreground">
-                {device?.name ?? ""}
-              </span>
               <span
                 className={
                   machineOnline === false

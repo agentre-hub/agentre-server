@@ -1,4 +1,12 @@
 {
+  "appShell": {
+    "searchPlaceholder": "Search agents, devices, and records",
+    "productSub": "Console",
+    "topBar": {
+      "fresh": "Desktop connected"
+    },
+    "accountMeta": "Personal · Free"
+  },
   "common": {
     "appName": "AgentRe Server",
     "back_home": "Back to home",
@@ -14,18 +22,44 @@
       "label": "Language"
     }
   },
+  "console": {
+    "aria": {
+      "rowActions": "Row actions"
+    }
+  },
+  "audit": {
+    "filters": {
+      "all": "All",
+      "deviceAuth": "Device authorization",
+      "token": "Tokens",
+      "revoke": "Revocation"
+    },
+    "table": {
+      "time": "Time",
+      "event": "Event",
+      "object": "Object",
+      "source": "Source",
+      "result": "Result"
+    },
+    "events": {
+      "emptyTitle": "No audit events yet",
+      "emptyBody": "Audit records are not available yet."
+    },
+    "alerts": {
+      "emptyTitle": "No alerts yet",
+      "emptyBody": "Security alerts are not available yet."
+    },
+    "credentials": {
+      "title": "Active credentials",
+      "emptyTitle": "No active credentials",
+      "emptyBody": "Nothing here yet — credentials appear once devices sign in."
+    }
+  },
   "nav": {
     "overview": "Overview",
     "chat": "Chat",
     "devices": "Devices",
-    "audit": "Audit",
-    "openMenu": "Open menu",
-    "closeMenu": "Close menu",
-    "drawer": "Menu"
-  },
-  "workspaceComingSoon": {
-    "chatBody": "Starting a conversation from the browser is not available yet.",
-    "auditBody": "The audit log is not available yet."
+    "audit": "Audit"
   },
   "overview": {
     "title": "Agents",
@@ -37,7 +71,37 @@
     "offline": "Offline",
     "unpaired": "Not paired",
     "empty": "No agents yet.",
-    "loadError": "Could not load your agents. Please try again."
+    "loadError": "Could not load your agents. Please try again.",
+    "tiles": {
+      "online": "Devices online",
+      "waiting": "Waiting on you",
+      "usage": "Used today",
+      "errors": "Issues",
+      "onlineSub": "{{device}} is offline",
+      "waitingSub": "Longest waited {{minutes}} min"
+    },
+    "actionStrip": {
+      "title": "{{count}} waiting on you",
+      "sub": "Longest waited {{minutes}} min — auto-suspends on timeout",
+      "all": "All conversations →"
+    },
+    "actionCard": {
+      "deny": "Deny",
+      "allow": "Allow",
+      "reply": "Reply",
+      "viewDetails": "View details"
+    },
+    "recentAuth": {
+      "title": "Recent authorizations & changes",
+      "all": "All audit →"
+    },
+    "usage": {
+      "title": "Usage this month"
+    },
+    "security": {
+      "title": "Security & audit",
+      "all": "Go to audit →"
+    }
   },
   "authLayout": {
     "brand": "AgentRe",
@@ -114,16 +178,11 @@
       "retry": "Enter a new code"
     },
     "manage": {
-      "title": "Devices",
       "empty": "No devices yet.",
       "loadError": "Could not load your devices. Please try again.",
-      "colLastActive": "Last active",
-      "colStatus": "Status",
       "statusOnline": "Online",
       "statusOffline": "Offline",
       "statusRevoked": "Revoked",
-      "thisDevice": "This device",
-      "revoke": "Revoke",
       "revokeConfirmTitle": "Revoke this device?",
       "revokeConfirmBody": "This device can no longer refresh its credentials after you confirm. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation is not instant.",
       "revokeCancel": "Cancel",
@@ -140,10 +199,12 @@
       "noRunnableAgents": "No agents can run on this device yet.",
       "detailLoadError": "Could not load this device's details. Please try again.",
       "sessions": "Conversations",
+      "countLabel": "{{count}} devices",
       "sessionCount": "{{count}} conversations",
       "sessionWaiting": "{{count}} waiting for you",
       "viewSessions": "View this machine's conversations",
-      "offlineNotEnterable": "Offline — conversations are unavailable."
+      "offlineNotEnterable": "Offline — conversations are unavailable.",
+      "cardSummary": "{{projects}} projects · {{m}} conversations running"
     }
   },
   "notFound": {
@@ -213,16 +274,27 @@
       "skip": "Skip",
       "alreadyHandled": "This request has already been handled.",
       "submitFailed": "That decision could not be submitted. Nothing was sent — try again."
+    },
+    "ux": {
+      "recent": "Recent · Across agents",
+      "filter": {
+        "all": "All",
+        "running": "Running",
+        "unread": "Unread"
+      },
+      "menu": {
+        "openNewTab": "Open in new tab",
+        "unfollow": "Unfollow",
+        "removeInvalid": "Remove"
+      }
     }
   },
   "chat": {
-    "title": "Chat",
     "findMore": "Go to the devices page to find more conversations",
     "noSessions": "No conversations yet.",
     "follow": "Follow",
     "startFirst": "Start your first conversation",
     "startFirstBody": "Pick an agent to get started. It works in the project directory you choose, and asks you before every step that needs permission.",
-    "followedOn": "{{machine}} · {{time}}",
     "pendingFrom": "Loading conversations from {{machine}}…",
     "offlineTitle": "Offline",
     "offlineMachineWithTime": "{{machine}} · offline · last seen {{time}}",
@@ -255,6 +327,7 @@
     "cancel": "Cancel",
     "back": "Back",
     "messagePlaceholder": "Say something…",
-    "pickProjectFor": "Pick a project · {{agent}}"
+    "pickProjectFor": "Pick a project · {{agent}}",
+    "followFromDevice": "Follow conversations from your device"
   }
 }

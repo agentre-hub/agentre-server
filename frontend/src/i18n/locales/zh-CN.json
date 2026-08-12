@@ -1,4 +1,12 @@
 {
+  "appShell": {
+    "searchPlaceholder": "搜索 Agent、设备、记录",
+    "productSub": "控制台",
+    "topBar": {
+      "fresh": "桌面端已连接"
+    },
+    "accountMeta": "个人 · 免费"
+  },
   "common": {
     "appName": "AgentRe Server",
     "back_home": "回到首页",
@@ -14,18 +22,44 @@
       "label": "语言"
     }
   },
+  "console": {
+    "aria": {
+      "rowActions": "行操作"
+    }
+  },
+  "audit": {
+    "filters": {
+      "all": "全部",
+      "deviceAuth": "授权接入",
+      "token": "令牌",
+      "revoke": "撤销"
+    },
+    "table": {
+      "time": "时间",
+      "event": "事件",
+      "object": "对象",
+      "source": "来源",
+      "result": "结果"
+    },
+    "events": {
+      "emptyTitle": "暂无审计事件",
+      "emptyBody": "审计记录暂未开放。"
+    },
+    "alerts": {
+      "emptyTitle": "暂无告警",
+      "emptyBody": "安全告警暂未开放。"
+    },
+    "credentials": {
+      "title": "活跃凭证",
+      "emptyTitle": "暂无活跃凭证",
+      "emptyBody": "暂无可显示内容——设备登录后凭证会出现在这里。"
+    }
+  },
   "nav": {
     "overview": "总览",
     "chat": "对话",
     "devices": "设备",
-    "audit": "审计",
-    "openMenu": "打开菜单",
-    "closeMenu": "关闭菜单",
-    "drawer": "菜单"
-  },
-  "workspaceComingSoon": {
-    "chatBody": "从浏览器发起对话暂未开放。",
-    "auditBody": "审计记录暂未开放。"
+    "audit": "审计"
   },
   "overview": {
     "title": "Agent",
@@ -37,7 +71,37 @@
     "offline": "未连接",
     "unpaired": "未配对",
     "empty": "还没有任何 Agent。",
-    "loadError": "无法加载你的 Agent 列表，请重试。"
+    "loadError": "无法加载你的 Agent 列表，请重试。",
+    "tiles": {
+      "online": "设备在线",
+      "waiting": "等你处理",
+      "usage": "今日用量",
+      "errors": "异常",
+      "onlineSub": "{{device}} 未连接",
+      "waitingSub": "最久的已等 {{minutes}} 分钟"
+    },
+    "actionStrip": {
+      "title": "{{count}} 件等你处理",
+      "sub": "最久的已等 {{minutes}} 分钟，超时会自动挂起",
+      "all": "全部会话 →"
+    },
+    "actionCard": {
+      "deny": "拒绝",
+      "allow": "允许",
+      "reply": "去回复",
+      "viewDetails": "看详情"
+    },
+    "recentAuth": {
+      "title": "最近授权与变更",
+      "all": "全部审计 →"
+    },
+    "usage": {
+      "title": "本月用量"
+    },
+    "security": {
+      "title": "安全与审计",
+      "all": "去审计 →"
+    }
   },
   "authLayout": {
     "brand": "AgentRe",
@@ -114,16 +178,11 @@
       "retry": "重新输入代码"
     },
     "manage": {
-      "title": "设备管理",
       "empty": "还没有任何设备。",
       "loadError": "无法加载你的设备列表，请重试。",
-      "colLastActive": "最近活跃",
-      "colStatus": "在线态",
       "statusOnline": "在线",
       "statusOffline": "离线",
       "statusRevoked": "已撤销",
-      "thisDevice": "本设备",
-      "revoke": "解除授权",
       "revokeConfirmTitle": "解除这台设备的授权？",
       "revokeConfirmBody": "确认后该设备将无法再刷新凭据。若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受——撤销并非即时生效。",
       "revokeCancel": "取消",
@@ -140,10 +199,12 @@
       "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
       "detailLoadError": "无法加载这台设备的详情，请重试。",
       "sessions": "对话",
+      "countLabel": "{{count}} 台设备",
       "sessionCount": "{{count}} 条对话",
       "sessionWaiting": "{{count}} 条等你处理",
       "viewSessions": "查看这台机器的对话",
-      "offlineNotEnterable": "已离线——对话不可用。"
+      "offlineNotEnterable": "已离线——对话不可用。",
+      "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑"
     }
   },
   "notFound": {
@@ -213,16 +274,27 @@
       "skip": "跳过",
       "alreadyHandled": "该请求已被处理。",
       "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。"
+    },
+    "ux": {
+      "recent": "最近 · 跨 Agent",
+      "filter": {
+        "all": "全部",
+        "running": "运行中",
+        "unread": "未读"
+      },
+      "menu": {
+        "openNewTab": "新标签打开",
+        "unfollow": "取消关注",
+        "removeInvalid": "移除"
+      }
     }
   },
   "chat": {
-    "title": "对话",
     "findMore": "去设备页找更多对话",
     "noSessions": "还没有对话",
     "follow": "关注",
     "startFirst": "开始第一个对话",
     "startFirstBody": "挑一个 Agent 开始。它在你选的项目目录里干活，每一步需要权限时都会先问你。",
-    "followedOn": "{{machine}} · {{time}}",
     "pendingFrom": "正在加载 {{machine}} 上的对话…",
     "offlineTitle": "离线",
     "offlineMachineWithTime": "{{machine}} · 离线 · 最后在线 {{time}}",
@@ -255,6 +327,7 @@
     "cancel": "取消",
     "back": "返回",
     "messagePlaceholder": "说点什么…",
-    "pickProjectFor": "选一个项目 · {{agent}}"
+    "pickProjectFor": "选一个项目 · {{agent}}",
+    "followFromDevice": "从设备上关注对话"
   }
 }

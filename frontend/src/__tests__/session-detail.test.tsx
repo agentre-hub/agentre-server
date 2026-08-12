@@ -16,6 +16,7 @@ import {
 } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/lib/theme";
+import SessionDetailView from "@/components/session/SessionDetailView";
 import SessionDetail from "@/pages/SessionDetail";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -511,5 +512,280 @@ describe("会话详情页:老 agentred 与发送失败", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText(/could not be sent/i)).toBeTruthy();
+  });
+});
+
+// 任务 5 重构边界：SessionDetailView 是路由页（form="page"）与桌面 Chat 右栏
+// （form="embedded"）共同消费的同一份真实会话详情视图。embedded 形态不包 AppShell、
+// 无面包屑、无关注入口，但 relay attach/catchup/origin、转录、审批、Composer 全部保留。
+describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
+  function renderEmbedded() {
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+        webDeviceError: null,
+      };
+    });
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("embedded 形态:渲染真实详情,不包 AppShell,无面包屑/关注", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "嵌入式转录" },
+        seq: 1,
+      });
+    });
+
+    renderEmbedded();
+
+    // 真实转录渲染(attach + 补齐照常)。
+    expect(await screen.findByText("嵌入式转录")).toBeTruthy();
+    // 无 AppShell(无 SideNav / 无面包屑导航)。
+    expect(screen.queryByRole("navigation")).toBeNull();
+    // 桌面嵌入:无关注按钮(关注入口在列表行 R12 / 页面顶栏决策 16)。
+    expect(screen.queryByRole("button", { name: /Follow/i })).toBeNull();
+    // relay attach/catchup 照常走。
+    expect(fakeClient.attach).toHaveBeenCalledWith(42, undefined);
+    expect(fakeClient.catchUp).toHaveBeenCalledWith(42, undefined);
+    // 发送能力仍在(桌面右栏同样要能回复)。
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+  });
+
+  // 桌面 Chat 右栏点行 A 再点行 B:同实例换 props,无 key 强制重挂。会话级状态
+  // (summary / events / originRef / ready)必须按 deviceId/sessionId 重置并重新
+  // attach + 补齐,否则右栏残留上一条会话的标题/转录,发消息也落在 A 的 origin 上。
+  it("切换选中会话(同实例新 props):重置转录并重新 attach,不残留上一条会话", async () => {
+    const summaryB = { ...summary, sessionId: 43, title: "重构列表页" };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "A 的转录" },
+        seq: 1,
+      });
+    });
+
+    const { rerender } = renderEmbedded();
+    expect(await screen.findByText("A 的转录")).toBeTruthy();
+
+    // 切到同机器上的另一条会话(43):request 返回 43 的摘要,catchUp 推 43 的转录。
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summaryB], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 43,
+        event: { kind: "text_delta", text: "B 的转录" },
+        seq: 1,
+      });
+    });
+    // 保持与首次渲染相同的包装结构(Router/ThemeProvider 不换),只换 props。
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={43} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 必须重新 attach 43 并补齐,展示 B 的转录;A 的转录不再残留。
+    expect(await screen.findByText("B 的转录")).toBeTruthy();
+    expect(screen.queryByText("A 的转录")).toBeNull();
+    await vi.waitFor(() => {
+      expect(fakeClient.attach).toHaveBeenCalledWith(43, undefined);
+    });
+  });
+
+  // R11：reconnecting 时探测一次连接失败原因。旧设备那一次探测还在路上就切到新
+  // 目标时,它的结论不得在切换之后落地——否则右栏会挂起旧机器的「离线」横幅（甚至
+  // 把浏览器误判成已解除授权）直到整页刷新。与文件里其它异步 effect 一样,探测也
+  // 必须带 alive 守卫,切换目标 / 卸载后丢弃在途应答。
+  it("reconnecting 期间切换目标设备:不残留旧设备的探测结论", async () => {
+    const webDev = {
+      id: 9,
+      name: "浏览器",
+      kind: "web",
+      fingerprint: "fp-web",
+      last_seen_at: 0,
+      status: 1,
+      online: true,
+    };
+    const dev1 = { ...deviceRow, id: 1, name: "机器A", online: false };
+    const dev2 = { ...deviceRow, id: 2, name: "机器B", online: true };
+
+    // 旧设备(1)的探测先发出、后落定:挂起,稍后手动 resolve。
+    let resolveProbe1!: (v: unknown) => void;
+    const probe1 = new Promise((r) => {
+      resolveProbe1 = r;
+    });
+
+    let call = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path !== "/v1/devices") throw new Error("unexpected: " + path);
+      call += 1;
+      // call1=设备1取设备, call2=设备1的探测(挂起),
+      // call3=设备2取设备, call4=设备2的探测。
+      if (call === 2) return probe1;
+      return { devices: call <= 2 ? [webDev, dev1] : [webDev, dev2] };
+    });
+
+    mockUseRelay.mockImplementation(() => ({
+      client: fakeClient as never,
+      relayState: "reconnecting",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    }));
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    // 让取设备/探测的在途应答先落定(不在 waitFor 轮询里裸 setState)。
+    await act(async () => {});
+
+    // 切到另一台机器(2):重新取设备 + 重新允许探测。
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={2} sessionId={43} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+
+    // 设备2在线 + 中继 reconnecting → 状态横幅是 reconnecting,不是 machineOffline。
+    await vi.waitFor(() => {
+      const view = screen.getByTestId("session-detail-view");
+      expect(
+        view.querySelector('[data-session-status="reconnecting"]'),
+      ).toBeTruthy();
+    });
+
+    // 旧设备(1)的探测现在才回来(离线):不得覆盖新目标的在线判定。
+    await act(async () => {
+      resolveProbe1({ devices: [webDev, dev1] });
+    });
+
+    await vi.waitFor(() => {
+      const view = screen.getByTestId("session-detail-view");
+      expect(
+        view.querySelector('[data-session-status="machineOffline"]'),
+      ).toBeNull();
+    });
+  });
+
+  it("页面形态:详情头部渲染状态标记与机器 meta(标题仍由 AppShell TopBar 呈现)", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    // 状态标记:summary.lifecycleState=idle → 显示 Idle,不止靠颜色。
+    const pill = await screen.findByTestId("session-detail-status");
+    expect(pill.textContent).toContain("Idle");
+    // 机器 meta:设备名出现在详情头部。
+    expect(
+      (await screen.findByTestId("session-detail-meta")).textContent,
+    ).toContain("书房小主机");
+  });
+});
+
+// 设备取数失败后的恢复路径：/v1/devices 一次网络抖动失败就把 deviceError 置上，
+// 之后即使切换目标设备、重新取数成功，错误也必须被清掉 —— 否则桌面 Chat 右栏的
+// 嵌入详情从这次失败起永久卡在错误态，点任何一行都只显示旧错误（只有整页刷新能救）。
+describe("SessionDetailView:设备取数失败后的恢复", () => {
+  it("切换目标设备重新取到设备时清掉旧错误，不永久卡在错误态", async () => {
+    const dev2 = { ...deviceRow, id: 2, name: "机器B" };
+    mockUseRelay.mockImplementation(() => ({
+      client: fakeClient as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    }));
+    fakeClient.request.mockImplementation(async (method: string) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    // 第一次取设备失败 → 就地报错（必须在 render 前设好：RTL 的 render 已在 act 里
+    // 跑完首轮 effect）。
+    mockedApi.mockRejectedValue(new Error("network down"));
+    const { rerender } = render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    expect(
+      screen.getByText("Could not load your devices. Please try again."),
+    ).toBeTruthy();
+
+    // 切到另一台机器：重新取设备成功 → 旧错误必须清掉，渲染真实详情。
+    mockedApi.mockResolvedValue({ devices: [dev2] } as never);
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={2} sessionId={43} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    await vi.waitFor(() => {
+      expect(
+        screen.queryByText("Could not load your devices. Please try again."),
+      ).toBeNull();
+    });
   });
 });

@@ -17,3 +17,26 @@ export function deviceKindLabel(
   // i18next 查不到时把键原样返回，此时回退到后端给的原文。
   return translated === key ? kind : translated;
 }
+
+/**
+ * device_kind → 设备行图标（Pencil 设备页 R1 的 lucide 图标语义）。
+ *
+ * 桌面/移动设备行都要画同一个 kind 的同一枚图标，集中在这里避免两处漂移。
+ * 装饰图标一律 aria-hidden（accessibility：不制造重复朗读）。
+ *
+ * DEVICE_KIND_ICONS 是模块级常量：页面用 `<DEVICE_KIND_ICONS[kind] ?? Cpu>`
+ * 的成员表达式取图标，避免在渲染期“创建”组件（react-hooks/static-components）。
+ */
+import { Cpu, Laptop, Monitor, Server, Smartphone } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+
+export const DEVICE_KIND_ICONS: Record<string, LucideIcon> = {
+  agentred: Server,
+  desktop: Laptop,
+  web: Monitor,
+  mobile: Smartphone,
+};
+
+export function deviceKindIcon(kind: string): LucideIcon {
+  return DEVICE_KIND_ICONS[kind] ?? Cpu;
+}
