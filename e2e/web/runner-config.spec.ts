@@ -24,6 +24,7 @@ import {
   parseMySQLAddress,
   parseRedis,
   summarizeStartupFailure,
+  desktopFingerprint,
 } from "../run-e2e-web.mjs";
 
 /** 造一个和真 checkout 同形的目录:configs/ + runtime/keys/ 下的真密钥文件。 */
@@ -95,6 +96,17 @@ const ROTATION = `server:
         public_key_pem_path: "./runtime/keys/jwt2.pub"
     issuer: "agentre-server"
 `;
+
+test("dual runner 给桌面端生成与 R12/R13 一致的 canonical fingerprint", () => {
+  const instanceUUID = "0123456789abcdef0123456789abcdef";
+
+  const fingerprint = desktopFingerprint(instanceUUID);
+
+  expect(fingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+  expect(fingerprint).toBe(
+    "sha256:3eb1bd439947eb762998e566ccc2e099c791118b2f40579cc4f7da2b5061b7f9",
+  );
+});
 
 test("带引号的 JWT 路径改写成真实存在的绝对路径,而不是把引号拼进路径", () => {
   const dir = fakeCheckout(["jwt.key", "jwt.pub"]);
