@@ -383,7 +383,9 @@ export default function Chat() {
               {t("common.loading")}
             </p>
           ) : null}
-          {loaded && !empty && (
+          {/* 同一真实搜索框在加载完成后始终可触达（含空态）：空态时不隐藏主空态、
+             不制造结果；有会话时继续真实过滤本页会话行（matchesRowSearch）。 */}
+          {loaded && (
             <label className="flex h-[38px] items-center gap-2 rounded-md border border-border bg-card px-3">
               <Search
                 className="size-4 shrink-0 text-subtle-foreground"

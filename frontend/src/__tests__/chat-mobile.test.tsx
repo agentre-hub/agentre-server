@@ -319,6 +319,41 @@ describe("移动端对话页:决策 12/16 + 空态屏 32", () => {
     );
   });
 
+  it("空态时也显示同一个真实搜索框（加载完成后不再因空隐藏），且不制造结果、不隐藏主空态", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows") return { items: [] };
+      if (path === "/v1/devices") return { devices: [] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    renderChat();
+
+    // 主空态在（屏 32 文案与主按钮）。
+    expect(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    ).toBeTruthy();
+
+    // 回归：数据加载完成后，即使没有任何会话，移动端也显示同一个真实搜索框
+    // （之前被 loaded && !empty 隐藏，运行时 light/dark 都找不到 searchbox）。
+    const search = screen.getByRole("searchbox", {
+      name: i18n.t("appShell.searchPlaceholder"),
+    });
+
+    // 输入不制造结果：没有任何会话行出现。
+    fireEvent.change(search, { target: { value: "跑着呢" } });
+    expect(screen.queryByText("跑着呢")).toBeNull();
+
+    // 主空态不被隐藏，主按钮仍可用。
+    expect(screen.getByTestId("chat-empty-state")).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Start your first conversation",
+      }),
+    ).toBeTruthy();
+  });
+
   it("移动端也有可触达的真实搜索（屏 20 头部搜索）：输入词过滤会话行", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/follows")
