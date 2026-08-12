@@ -588,9 +588,7 @@ export function rewriteServerConfig(text, { serverDir, port }) {
   // The browser reaches the SPA through the server itself, so the device-flow
   // verification URI (public_url + /device) must point at the server's own URL.
   text = text.replace(/(public_url:[ \t]*)(.*)/, `$1http://127.0.0.1:${port}`);
-  text = flattenRotatedJWTKeys(text);
-  text = absolutizeKeyPath(text, "private_key_pem_path", serverDir);
-  text = absolutizeKeyPath(text, "public_key_pem_path", serverDir);
+  text = absolutizeJWTPaths(text, serverDir);
   return text;
 }
 
@@ -607,98 +605,62 @@ function unquoteScalar(raw) {
   return quoted ? v.slice(1, -1) : v;
 }
 
-// absolutizeKeyPath 把第一处 key 的值解析成绝对路径,并当场确认文件真的在。
+// absolutizeJWTPaths 把配置里**所有** JWT 密钥路径都解析成 server checkout 下真实
+// 存在的绝对路径,并逐个当场确认文件真的在。两种形态都认:
+//   - 扁平旧形态:private_key_pem_path / public_key_pem_path 直接挂 jwt: 下;
+//   - 轮换形态:active_kid + keys 列表 —— bootstrap 在 Keys 非空时**只读列表**,
+//     所以列表每一项的私钥/公钥路径都必须单独改写成绝对路径(按各自的值解析,
+//     不能拿第一处同名字段的值套所有项),active_kid 保持不动。
 // 缺文件时立刻报出缺哪个文件,而不是让 server 起来之后自己死在 missing JWT key。
-function absolutizeKeyPath(text, key, serverDir) {
-  const re = new RegExp(`^([ \\t]*${key}:[ \\t]*)(.*)$`, "m");
-  const m = re.exec(text);
-  if (!m) {
-    throw new Error(
-      `configs/config.yaml has no ${key} (and no active_kid + keys list to derive it from) — ` +
-        `the server cannot sign device JWTs without it`,
-    );
-  }
-  const abs = resolve(serverDir, unquoteScalar(m[2]));
-  if (!existsSync(abs)) {
-    throw new Error(
-      `JWT key file missing: ${abs} (from ${key} in configs/config.yaml)`,
-    );
-  }
-  return text.replace(re, (_all, head) => head + abs);
-}
-
-// flattenRotatedJWTKeys 把密钥**轮换**形态摊平成本分支认得的扁平形态。
-//
-// agentre-server main 在 8651f57 引入了轮换:server.jwt 从两个路径字段变成
-// `active_kid:` + `keys:` 列表,开发者的 gitignored config.yaml 已改成那个形状。
-// 本分支早于它,internal/bootstrap 的 JWTConfig 只有 private_key_pem_path /
-// public_key_pem_path,轮换形态在这里会绑定成空串 → server 起不来。
-//
-// 两种形态都要认,所以这里只做**字段名适配**:取 active_kid 指名的那一项(取不到
-// 就取第一项)的密钥文件——用的是开发者自己的真密钥,不生成、不替换、不削弱任何
-// 东西——摊平后写进 harness 自己的临时 cwd,仓库里的配置一个字节都不动。
-// 已经是扁平形态的配置原样返回。
-function flattenRotatedJWTKeys(text) {
+// 这两种形态的 key 名完全相同,区别只在缩进,所以一次遍历就能同时覆盖。
+function absolutizeJWTPaths(text, serverDir) {
   const lines = text.split("\n");
   const jwtIdx = lines.findIndex((l) => /^[ \t]*jwt:[ \t]*$/.test(l));
-  if (jwtIdx < 0) return text;
-  const jwtIndent = /^([ \t]*)/.exec(lines[jwtIdx])[1];
-  const body = [];
-  for (let i = jwtIdx + 1; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.trim() === "") continue;
-    const indent = /^([ \t]*)/.exec(line)[1];
-    if (indent.length <= jwtIndent.length) break;
-    body.push(line);
-  }
-  const childIndent = body.length
-    ? /^([ \t]*)/.exec(body[0])[1]
-    : `${jwtIndent}  `;
-  // 扁平形态:private_key_pem_path 直接挂在 jwt: 下面(不在 keys: 列表里)。
-  const alreadyFlat = body.some((l) =>
-    new RegExp(`^${childIndent}private_key_pem_path:`).test(l),
-  );
-  if (alreadyFlat) return text;
-  const activeKID = unquoteScalar(
-    /^[ \t]*active_kid:[ \t]*(.*)$/m.exec(body.join("\n"))?.[1] ?? "",
-  );
-  const entries = parseKeyEntries(body);
-  const active = entries.find((e) => e.kid === activeKID) ?? entries[0];
-  if (!active) {
+  if (jwtIdx < 0) {
     throw new Error(
-      "configs/config.yaml uses the JWT key-rotation shape (active_kid + keys) " +
-        "but no keys entry with private_key_pem_path / public_key_pem_path could be parsed",
+      "configs/config.yaml has no server.jwt block — the server cannot sign device JWTs without it",
     );
   }
-  lines.splice(
-    jwtIdx + 1,
-    0,
-    `${childIndent}private_key_pem_path: ${active.private_key_pem_path}`,
-    `${childIndent}public_key_pem_path: ${active.public_key_pem_path}`,
-  );
-  return lines.join("\n");
-}
-
-// parseKeyEntries 读 `keys:` 列表里的每一项(`- kid: …` 起头,字段顺序不限)。
-function parseKeyEntries(bodyLines) {
-  const entries = [];
-  let current = null;
-  const field = (obj, s) => {
-    const m = /^([A-Za-z0-9_]+):[ \t]*(.*)$/.exec(s.trim());
-    if (m && obj) obj[m[1]] = unquoteScalar(m[2]);
-  };
-  for (const line of bodyLines) {
-    const item = /^[ \t]*-[ \t]*(.*)$/.exec(line);
-    if (item) {
-      if (current) entries.push(current);
-      current = {};
-      field(current, item[1]);
+  const jwtIndent = /^([ \t]*)/.exec(lines[jwtIdx])[1];
+  const keyPathRe =
+    /^([ \t]*(?:private_key_pem_path|public_key_pem_path):[ \t]*)(.*)$/;
+  const out = [];
+  let found = 0;
+  for (let i = jwtIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "") {
+      out.push(line);
       continue;
     }
-    field(current, line);
+    const indent = /^([ \t]*)/.exec(line)[1];
+    if (indent.length <= jwtIndent.length) break; // jwt 块到此为止
+    const m = keyPathRe.exec(line);
+    if (m) {
+      found++;
+      const raw = m[2].trim();
+      const abs = resolve(serverDir, unquoteScalar(raw));
+      if (!existsSync(abs)) {
+        throw new Error(
+          `JWT key file missing: ${abs} (from ${raw} in configs/config.yaml)`,
+        );
+      }
+      out.push(m[1] + abs);
+      continue;
+    }
+    out.push(line);
   }
-  if (current) entries.push(current);
-  return entries.filter((e) => e.private_key_pem_path && e.public_key_pem_path);
+  if (found === 0) {
+    throw new Error(
+      "configs/config.yaml has no private_key_pem_path / public_key_pem_path " +
+        "(and no active_kid + keys list to derive them from) — " +
+        "the server cannot sign device JWTs without it",
+    );
+  }
+  return [
+    ...lines.slice(0, jwtIdx + 1),
+    ...out,
+    ...lines.slice(jwtIdx + 1 + out.length),
+  ].join("\n");
 }
 
 function goBuild(dir, out, pkg, extraArgs = []) {
