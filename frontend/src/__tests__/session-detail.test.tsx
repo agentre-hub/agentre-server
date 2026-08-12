@@ -737,3 +737,55 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     ).toContain("书房小主机");
   });
 });
+
+// 设备取数失败后的恢复路径：/v1/devices 一次网络抖动失败就把 deviceError 置上，
+// 之后即使切换目标设备、重新取数成功，错误也必须被清掉 —— 否则桌面 Chat 右栏的
+// 嵌入详情从这次失败起永久卡在错误态，点任何一行都只显示旧错误（只有整页刷新能救）。
+describe("SessionDetailView:设备取数失败后的恢复", () => {
+  it("切换目标设备重新取到设备时清掉旧错误，不永久卡在错误态", async () => {
+    const dev2 = { ...deviceRow, id: 2, name: "机器B" };
+    mockUseRelay.mockImplementation(() => ({
+      client: fakeClient as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    }));
+    fakeClient.request.mockImplementation(async (method: string) => {
+      if (method === "runtime.session.list")
+        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === "runtime.session.pendingWaiters")
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    // 第一次取设备失败 → 就地报错（必须在 render 前设好：RTL 的 render 已在 act 里
+    // 跑完首轮 effect）。
+    mockedApi.mockRejectedValue(new Error("network down"));
+    const { rerender } = render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    expect(
+      screen.getByText("Could not load your devices. Please try again."),
+    ).toBeTruthy();
+
+    // 切到另一台机器：重新取设备成功 → 旧错误必须清掉，渲染真实详情。
+    mockedApi.mockResolvedValue({ devices: [dev2] } as never);
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={2} sessionId={43} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+    await vi.waitFor(() => {
+      expect(
+        screen.queryByText("Could not load your devices. Please try again."),
+      ).toBeNull();
+    });
+  });
+});

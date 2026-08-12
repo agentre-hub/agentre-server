@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -628,5 +634,132 @@ describe("overview: task 3 共享组件契约 / 重排 / 真实 waiter", () => {
     const aside = screen.getByTestId("overview-aside");
     expect(aside.className).toContain("w-full");
     expect(aside.className).toContain("lg:w-[340px]");
+  });
+});
+
+// ── 跨机器同号会话的 waiters 隔离 ────────────────────────────────────────
+// 会话 id 是 daemon 局部计数：两台 agentred 完全可以各自有一条 42 号会话。
+// 操作条卡的等待数据按「机器 + 会话」区分，不能只按 sessionId 记 —— 否则两台
+// 机器同号等待会话时，后到的那台会把自己的 waiters 覆盖掉先到那台的同号槽位，
+// 卡上的 Allow/Deny 提交到**另一台**机器上（RequestID 也是 daemon 局部的，
+// 拿 A 机的 requestId 提交到 B 机 = 批准/拒绝错对象）。
+describe("overview: 跨机器同号会话的 waiters 隔离", () => {
+  it("两台机器各有同号(42)的等待会话：每张卡的 Allow 各提交各机器的 RequestID", async () => {
+    const devA = {
+      id: 1,
+      name: "机器A",
+      kind: "agentred",
+      fingerprint: "fp-1",
+      online: true,
+    };
+    const devB = {
+      id: 2,
+      name: "机器B",
+      kind: "agentred",
+      fingerprint: "fp-2",
+      online: true,
+    };
+    const agents = [
+      {
+        sync_id: "ag-1",
+        name: "后端 Agent",
+        avatar_color: "#4f46e5",
+        has_available_target: true,
+        exec_targets: [],
+      },
+    ];
+    const summary42 = {
+      sessionId: 42,
+      title: "两机同号会话",
+      agentSyncId: "ag-1",
+      cwd: "/home/agent/proj",
+      backendType: "claudecode",
+      lifecycleState: "running",
+      waitingForInput: true,
+      latestSeq: 2,
+      updatedAt: Date.now() - 60000,
+    };
+    // 两台机器各带不同的 RequestID：B 的请求必须提交到 B 的中继、用 B 的 id。
+    const clientA = {
+      request: vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "runtime.session.list") return { sessions: [summary42] };
+        if (method === "runtime.session.pendingWaiters")
+          return {
+            toolPermissions: [{ RequestID: "req-A", ToolName: "Bash" }],
+            askUserQuestions: [],
+          };
+        if (method === "runtime.submitToolPermission") return {};
+        throw new Error("unexpected: " + method);
+      }),
+      attach: vi.fn(),
+      catchUp: vi.fn(),
+      close: vi.fn(),
+    };
+    const clientB = {
+      request: vi.fn(async (method: string, _params?: unknown) => {
+        if (method === "runtime.session.list") return { sessions: [summary42] };
+        if (method === "runtime.session.pendingWaiters")
+          return {
+            toolPermissions: [{ RequestID: "req-B", ToolName: "Write" }],
+            askUserQuestions: [],
+          };
+        if (method === "runtime.submitToolPermission") return {};
+        throw new Error("unexpected: " + method);
+      }),
+      attach: vi.fn(),
+      catchUp: vi.fn(),
+      close: vi.fn(),
+    };
+    mockUseRelay.mockImplementation((fp: string | null) =>
+      connectedRelay(fp === "fp-1" ? clientA : clientB),
+    );
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents };
+      if (path === "/v1/devices") return { devices: [devA, devB] };
+      if (path === "/v1/follows")
+        return {
+          items: [
+            {
+              device_fingerprint: "fp-1",
+              session_id: "42",
+              followed_at: 1,
+              invalid: false,
+            },
+            {
+              device_fingerprint: "fp-2",
+              session_id: "42",
+              followed_at: 1,
+              invalid: false,
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    renderOverview();
+
+    // 两张等待卡都渲染（两台机器各一条同号等待会话）。
+    expect(await screen.findByText("2 waiting on you")).toBeTruthy();
+    const allowButtons = screen.getAllByRole("button", { name: "Allow" });
+    expect(allowButtons.length).toBe(2);
+
+    // 第一张卡（fp-1）的 Allow：提交到 fp-1 的中继，带 fp-1 的 RequestID。
+    fireEvent.click(allowButtons[0]);
+    await waitFor(() => {
+      const call = clientA.request.mock.calls.find(
+        (c) => c[0] === "runtime.submitToolPermission",
+      );
+      expect(call).toBeTruthy();
+      expect(call?.[1]).toMatchObject({ sessionId: 42, requestId: "req-A" });
+    });
+
+    // 第二张卡（fp-2）的 Allow：提交到 fp-2 的中继，带 fp-2 的 RequestID。
+    fireEvent.click(allowButtons[1]);
+    await waitFor(() => {
+      const call = clientB.request.mock.calls.find(
+        (c) => c[0] === "runtime.submitToolPermission",
+      );
+      expect(call).toBeTruthy();
+      expect(call?.[1]).toMatchObject({ sessionId: 42, requestId: "req-B" });
+    });
   });
 });

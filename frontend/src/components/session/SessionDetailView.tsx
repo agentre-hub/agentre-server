@@ -231,6 +231,10 @@ export default function SessionDetailView({
         if (found) {
           setDevice(found);
           setMachineOnline(found.online);
+          // 上一次取数失败（网络抖动）留下的错误必须清掉：不清的话，嵌入右栏
+          // 从那次失败起永久卡在错误态——之后切到哪台机器、取数多成功都只显示
+          // 旧错误，只能整页刷新救回。
+          setDeviceError(null);
         } else {
           setDeviceError(new Error("device not found"));
         }

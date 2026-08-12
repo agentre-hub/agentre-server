@@ -110,6 +110,13 @@ function waitedMinutes(updatedAt: number | undefined): number {
   return Math.max(1, Math.round((Date.now() - updatedAt) / 60000));
 }
 
+/** waiters 的键：会话 id 是 daemon 局部计数，两台 agentred 可以各自有一条同号
+ *  会话 —— 只按 sessionId 记会把一台机器的待决策盖到另一台机器同号会话的卡上，
+ *  Allow/Deny 提交到错机器。键必须带设备指纹。 */
+function waiterKey(fingerprint: string, sessionId: number): string {
+  return `${fingerprint}:${sessionId}`;
+}
+
 // ── TopBar 的 Fresh 指示 ────────────────────────────────────────────────
 // 桌面端（agentred）有在线机器才算「已连接」；未连 / 未知则不渲染，不编状态。
 function Fresh({ connected }: { connected: boolean }) {
@@ -407,7 +414,7 @@ export default function Overview() {
     {},
   );
   const [clients, setClients] = useState<Record<string, RelayClient>>({});
-  const [waiters, setWaiters] = useState<Record<number, WaiterData>>({});
+  const [waiters, setWaiters] = useState<Record<string, WaiterData>>({});
 
   useEffect(() => {
     let alive = true;
@@ -532,7 +539,8 @@ export default function Overview() {
   useEffect(() => {
     let alive = true;
     for (const { fingerprint, session } of waitingSessions) {
-      if (waiters[session.sessionId]) continue;
+      const key = waiterKey(fingerprint, session.sessionId);
+      if (waiters[key]) continue;
       const client = clients[fingerprint];
       if (!client) continue;
       client
@@ -547,7 +555,7 @@ export default function Overview() {
           const res = decodeSessionPendingWaitersResult(raw);
           setWaiters((prev) => ({
             ...prev,
-            [session.sessionId]: {
+            [key]: {
               toolPermissions: (res.toolPermissions ??
                 []) as PendingToolPermissionShape[],
               askUserQuestions: (res.askUserQuestions ??
@@ -566,7 +574,10 @@ export default function Overview() {
 
   const actionCards = useMemo<ActionCard[]>(() => {
     return waitingSessions
-      .filter(({ session }) => waiters[session.sessionId])
+      .filter(
+        ({ fingerprint, session }) =>
+          waiters[waiterKey(fingerprint, session.sessionId)],
+      )
       .map(({ fingerprint, session }): ActionCard | null => {
         const device = devicesByFp.get(fingerprint);
         if (!device) return null;
@@ -581,7 +592,7 @@ export default function Overview() {
           cwd: session.cwd,
           agentName: agent?.name ?? (syncId || device.name),
           waitedAt: session.updatedAt,
-          waiters: waiters[session.sessionId],
+          waiters: waiters[waiterKey(fingerprint, session.sessionId)],
           detailPath: `/devices/${device.id}/sessions/${session.sessionId}`,
         };
       })
