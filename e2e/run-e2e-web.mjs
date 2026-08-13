@@ -430,7 +430,9 @@ function prepareDesktop(agentreDir, agentredFP) {
     AGENTRE_E2E_DEVICE_ID: String(seeded.desktop.device_id),
     AGENTRE_E2E_DEVICE_FINGERPRINT: seeded.desktop.fingerprint,
     AGENTRE_E2E_REFRESH_TOKEN: seeded.desktop.refresh_token,
-    AGENTRE_E2E_KEYCHAIN_DIR: desktopKeychainDir,
+    // 桌面端只读 AGENTRE_KEYCHAIN_DIR（agentre internal/bootstrap/keychain.go）；
+    // playwright.dual.config.ts 把 WEBE2E_DESKTOP_KEYCHAIN_DIR 传到那个变量名下。
+    AGENTRE_KEYCHAIN_DIR: desktopKeychainDir,
     // 这台 agentred 在桌面端上的配对行 + 指向它的远端 Agent(agentre e2e/fakes/remote.go)。
     AGENTRE_E2E_AGENTRED_FINGERPRINT: agentredFP,
     // 端口 1 要 root 才能监听,用户态进程不会占着它 —— 直连当场 ECONNREFUSED,

@@ -76,8 +76,12 @@ export default defineConfig({
       // Bind the local gateway to a free port: the fixed default 52401 is not
       // data-dir scoped, so a real Agentre running on this machine holds it.
       AGENTRE_PROXY_PORT: "0",
-      AGENTRE_E2E_KEYCHAIN_DIR: process.env
-        .WEBE2E_DESKTOP_KEYCHAIN_DIR as string,
+      // 隔离 keychain：桌面端读的是 AGENTRE_KEYCHAIN_DIR（见 agentre
+      // internal/bootstrap/keychain.go），不是 AGENTRE_E2E_* 前缀。
+      // 写错名字会让桌面端落到生产 system keychain —— 刷新令牌在两次运行间
+      // 残留，下一次 run 的 seeded token 被 stale 值顶替，登录以
+      // “refresh_token not found” 失败，桌面端于是永远不在中继上登记。
+      AGENTRE_KEYCHAIN_DIR: process.env.WEBE2E_DESKTOP_KEYCHAIN_DIR as string,
       // The seeded login (e2e/fakes/login.go).
       AGENTRE_E2E_SERVER_URL: process.env.AGENTRE_E2E_SERVER_URL as string,
       AGENTRE_E2E_SERVER_USER_ID: process.env
