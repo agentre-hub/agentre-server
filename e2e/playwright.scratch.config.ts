@@ -1,6 +1,26 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { defineConfig, devices } from "@playwright/test";
 
-import { APP_BASE_URL, FRONTEND_DEV_COMMAND } from "./fixtures/ports";
+const handoffPath = join(import.meta.dirname, ".drive", "serve-env.json");
+const handoff = existsSync(handoffPath)
+  ? JSON.parse(readFileSync(handoffPath, "utf8"))
+  : null;
+const baseURL = process.env.E2E_BASE_URL ?? handoff?.serverURL;
+
+if (!baseURL) {
+  throw new Error(
+    "scratch needs a real E2E target: run `pnpm serve` first or set E2E_BASE_URL",
+  );
+}
+const target = new URL(baseURL);
+if (
+  target.protocol !== "http:" ||
+  !["localhost", "127.0.0.1"].includes(target.hostname)
+) {
+  throw new Error(`scratch refuses non-loopback target ${target.origin}`);
+}
 
 /**
  * scratch 轨道配置（本地一次性验证，整个 scratch/ 目录 gitignored）。
@@ -22,7 +42,7 @@ export default defineConfig({
   expect: { timeout: 20_000 },
 
   use: {
-    baseURL: APP_BASE_URL,
+    baseURL,
     trace: "on",
     // 证据默认全留：scratch 的产物就是给人看的报告
     screenshot: "on",
@@ -34,15 +54,6 @@ export default defineConfig({
     { name: "mobile-chromium", use: { ...devices["Pixel 7"] } },
   ],
 
-  // scratch 默认不自动起服务：一次性验证往往要连你手动拉起来的那套
-  // （真 server + 它 configs/config.yaml 里指的那套 MySQL/Redis）。
-  // 带上 E2E_SCRATCH_AUTOSTART=1 就顺带起前端，/v1 由 vite proxy 转到 :8443。
-  webServer: process.env.E2E_SCRATCH_AUTOSTART
-    ? {
-        command: FRONTEND_DEV_COMMAND,
-        url: APP_BASE_URL,
-        reuseExistingServer: true,
-        timeout: 60_000,
-      }
-    : undefined,
+  // 不自动起 Vite 或复用开发 server；默认读取 `pnpm serve` 的本轮 handoff。
+  webServer: undefined,
 });
