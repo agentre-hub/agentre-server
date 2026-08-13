@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { createServer as createTcpServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -250,6 +251,11 @@ export function playwrightInvocation(args) {
   };
 }
 
+export function rateLimitClientIP(id) {
+  const bytes = createHash("sha256").update(id).digest();
+  return `198.18.${bytes[0]}.${bytes[1]}`;
+}
+
 export function seedInvocation(tool, runnerConfig, id) {
   return {
     command: tool,
@@ -301,6 +307,15 @@ export async function handoffIsLive(path, probe = probeHealth) {
   } catch {
     return false;
   }
+}
+
+export function prepareHandoff(path, live) {
+  if (live) throw new Error("another E2E serve environment is still live");
+  rmSync(path, { force: true });
+}
+
+export function removeOwnedHandoff(path, owned) {
+  if (owned) rmSync(path, { force: true });
 }
 
 export function cleanupRunID(activeRunID, seedResult) {
@@ -378,11 +393,9 @@ async function cleanStaleHandoff() {
   } catch {
     // malformed handoff is never trusted
   }
-  rmSync(serveEnvPath, { force: true });
+  const live = Boolean(old?.serverURL && (await probeHealth(old.serverURL)));
+  prepareHandoff(serveEnvPath, live);
   if (!old?.runID || !/^[a-zA-Z0-9_-]+$/.test(old.runID)) return;
-  if (await probeHealth(old.serverURL)) {
-    throw new Error("another E2E serve environment is still live");
-  }
   const cleanup = runTool("cleanup", old.runID);
   if (cleanupHasResidue(cleanup.residue)) {
     throw new Error(`stale run ${old.runID} still has isolated residue`);
@@ -455,7 +468,7 @@ async function stopServer() {
 async function finish(code) {
   if (finishing) return;
   finishing = true;
-  rmSync(serveEnvPath, { force: true });
+  removeOwnedHandoff(serveEnvPath, seeded !== null);
   const id = cleanupRunID(activeRunID, seeded);
   if (toolReady && id) {
     try {
@@ -542,6 +555,7 @@ async function main() {
     E2E_RUNTIME_DIR: paths.root,
     E2E_HANDOFF_PATH: paths.handoff,
     E2E_RUN_ID: seeded.run_id,
+    E2E_RATE_LIMIT_IP: rateLimitClientIP(seeded.run_id),
   });
   installSignalHandlers(process, mode, finish);
 

@@ -93,7 +93,8 @@ calls go directly to the formal server; there are no route mocks.
 
 Cleanup is run-scoped and follows foreign-key order. It deletes only the current
 run's device tokens, device flows, synchronization data, follows, devices,
-identity, user, Redis session, and rate-limit keys. It never issues `DROP
+identity, user, Redis session, and the authorize rate-limit key created with the
+run's reserved fixture IP. It never issues `DROP
 DATABASE`, `TRUNCATE`, `FLUSHDB`, or `FLUSHALL`, and concurrent runs do not delete
 each other's data.
 
@@ -174,8 +175,10 @@ them, generates a temporary RSA key pair and `configs/config.e2e.yaml`, then
 calls only `make e2e`. It uses no developer config, remote E2E environment, or
 internal-network secret.
 
-Failure artifacts are limited to the Playwright results and per-run server logs.
-The job always runs `docker compose down -v --remove-orphans`, so containers and
+Failure artifacts are copied to a separate redacted directory before upload.
+Only screenshots/videos and sanitized per-run server logs are retained; traces,
+raw handoffs, and raw logs are never uploaded. The job always runs
+`docker compose down -v --remove-orphans`, so containers and
 volumes are destroyed after success or failure; concurrent jobs do not share a
 persistent database.
 

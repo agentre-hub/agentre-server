@@ -98,6 +98,7 @@ export async function authorizeDevice(
 ): Promise<DeviceAuthorization> {
   const handoff = readHandoff();
   const response = await page.request.post("/v1/oauth/device/authorize", {
+    headers: { "X-Forwarded-For": requiredEnv("E2E_RATE_LIMIT_IP") },
     data: {
       device_kind: "desktop",
       fingerprint: `webe2e-flow-${handoff.runID}`,

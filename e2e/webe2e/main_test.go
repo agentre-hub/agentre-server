@@ -43,16 +43,21 @@ func TestCleanupPlanIsRunScopedAndHasNoDangerousOperations(t *testing.T) {
 	}
 }
 
-func TestResiduePlanCoversPersistedStateAndSession(t *testing.T) {
+func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 	counts := residueSQL()
 	for _, name := range []string{"users", "device_flow_codes", "devices", "device_tokens"} {
 		_ = findSQLStep(t, counts, name)
 	}
-	if got := sessionKey("run-7"); got != "session:webe2e-run-7" {
-		t.Fatalf("session key = %q", got)
+	got := redisKeys("run-7")
+	other := redisKeys("run-8")
+	if len(got) != 2 || got[0] != "session:webe2e-run-7" || !strings.HasPrefix(got[1], "rl:authz:198.18.") {
+		t.Fatalf("redis keys = %q, want isolated session and reserved authorize limiter keys", got)
+	}
+	if got[1] == other[1] {
+		t.Fatalf("different runs share authorize limiter key %q", got[1])
 	}
 
-	residue := map[string]int64{"users": 0, "device_flow_codes": 1, "session": 0}
+	residue := map[string]int64{"users": 0, "device_flow_codes": 1, "session": 0, "rate_limit": 0}
 	if err := validateNoResidue(residue); err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("validateNoResidue error = %v, want count-only residue failure", err)
 	}

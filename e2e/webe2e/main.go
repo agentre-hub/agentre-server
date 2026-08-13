@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
 	"encoding/json"
 	"flag"
@@ -22,7 +23,15 @@ import (
 
 func accountEmail(runID string) string { return "webe2e-" + runID + "@e2e.invalid" }
 func sessionSID(runID string) string   { return "webe2e-" + runID }
-func sessionKey(runID string) string   { return "session:" + sessionSID(runID) }
+
+func rateLimitClientIP(runID string) string {
+	sum := sha256.Sum256([]byte(runID))
+	return fmt.Sprintf("198.18.%d.%d", sum[0], sum[1])
+}
+
+func redisKeys(runID string) []string {
+	return []string{"session:" + sessionSID(runID), "rl:authz:" + rateLimitClientIP(runID)}
+}
 
 // flowFingerprint is the non-secret run handle that the browser must send to
 // the device authorize endpoint. It lets cleanup find even an unapproved flow.
@@ -206,7 +215,7 @@ func runSeed(args []string) error {
 		return err
 	}
 	const sessionTTL = 14 * 24 * time.Hour
-	if err := rc.Set(context.Background(), sessionKey(*runID), body, sessionTTL).Err(); err != nil {
+	if err := rc.Set(context.Background(), redisKeys(*runID)[0], body, sessionTTL).Err(); err != nil {
 		_ = gdb.Exec(`DELETE FROM users WHERE id = ?`, out.UserID).Error
 		return fmt.Errorf("seed browser session: %w", err)
 	}
@@ -287,8 +296,8 @@ func runCleanup(args []string) error {
 		}
 		out.Deleted[step.Name] = res.RowsAffected
 	}
-	if err := rc.Del(context.Background(), sessionKey(*runID)).Err(); err != nil {
-		return fmt.Errorf("delete browser session: %w", err)
+	if err := rc.Del(context.Background(), redisKeys(*runID)...).Err(); err != nil {
+		return fmt.Errorf("delete run redis keys: %w", err)
 	}
 
 	for _, step := range residueSQL() {
@@ -320,11 +329,14 @@ func runCleanup(args []string) error {
 		}
 		out.Residue[step.Name] = n
 	}
-	exists, err := rc.Exists(context.Background(), sessionKey(*runID)).Result()
-	if err != nil {
-		return fmt.Errorf("recount session: %w", err)
+	keys := redisKeys(*runID)
+	for i, name := range []string{"session", "rate_limit"} {
+		exists, err := rc.Exists(context.Background(), keys[i]).Result()
+		if err != nil {
+			return fmt.Errorf("recount %s: %w", name, err)
+		}
+		out.Residue[name] = exists
 	}
-	out.Residue["session"] = exists
 	if err := emit(out); err != nil {
 		return err
 	}

@@ -167,13 +167,35 @@ jobs:
       - name: make e2e
         run: make e2e
 
+      - name: redact E2E failure evidence
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf e2e/redacted-failure-evidence
+          mkdir -p e2e/redacted-failure-evidence
+          if [ -d e2e/test-results ]; then
+            mkdir -p e2e/redacted-failure-evidence/test-results
+            (
+              cd e2e/test-results
+              find . -type f \( -name '*.png' -o -name '*.webm' \) \
+                -exec cp --parents '{}' ../redacted-failure-evidence/test-results/ \;
+            )
+          fi
+          find e2e/runtime -name server.log -type f -print0 2>/dev/null | while IFS= read -r -d '' log; do
+            run_id=$(basename "$(dirname "$log")")
+            mkdir -p "e2e/redacted-failure-evidence/runtime/$run_id"
+            sed -E \
+              -e 's#([^[:space:]"'"']+)@tcp\(([^)]+)\)/([^?[:space:]"'"']+)(\?[^[:space:]"'"']*)?#<redacted>@tcp(\2)/\3#g' \
+              -e 's#((redis-)?password[=:][[:space:]]*)[^,;[:space:]]+#\1<redacted>#Ig' \
+              "$log" > "e2e/redacted-failure-evidence/runtime/$run_id/server.log"
+          done
+
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: e2e-failure-evidence
-          path: |
-            e2e/test-results/
-            e2e/runtime/*/server.log
+          path: e2e/redacted-failure-evidence/
           retention-days: 7
 
       - if: always()
