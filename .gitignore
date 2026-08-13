@@ -21,6 +21,8 @@
 # 目录不存在时 `pnpm scratch` 直接报错。
 /e2e/scratch/*
 !/e2e/scratch/.gitkeep
+# drive 的浏览器状态与 serve 的交接件（含一次性会话 Cookie）。都是本次运行私有的。
+/e2e/.drive/
 /e2e/node_modules/
 /e2e/test-results/
 /e2e/playwright-report/

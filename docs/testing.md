@@ -66,7 +66,7 @@ the package, which is the path by which a key would actually leak.
 `git grep '//go:build'` returns nothing, and it should stay that way. Anything that seems
 to need a tag is either (a) a test-only asset, which the package-isolation trick above
 handles, or (b) a test needing external infrastructure — which gets its **own entry point**
-(`make test-e2e`, or a scratch script per [verification.md](verification.md)), never a tag.
+(`make test-e2e`, or a hand-driven run per [verification.md](verification.md)), never a tag.
 A target you did not run is obvious; a tagged-out test is invisible.
 
 ## Migrations are deliberately untested
@@ -87,8 +87,8 @@ make dev                       # migrations run at startup against db.dsn; watch
 mysql --host <host> --user <user> --password <database> -e 'SHOW TABLES' # read tables back directly
 ```
 
-Write that check up under `e2e/scratch/` per [verification.md](verification.md) — for
-migrations the evidence is the table list, not a screenshot.
+Write that check up under `e2e/scratch/<scenario>/` per [verification.md](verification.md) —
+for migrations the evidence is the table list, not a screenshot, and nothing needs authoring.
 
 **What is untested is the DDL, not the runner.** `migrations/migrations_test.go` does use
 sqlmock, on the named-lock wrapper `withMigrationLock` that serialises concurrently

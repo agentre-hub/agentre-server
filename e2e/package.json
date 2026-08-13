@@ -4,12 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
-  "description": "双轨 e2e：committed 冒烟 + gitignored scratch 本地验证。见 README.md",
+  "description": "e2e 与本地验证的入口：committed 冒烟 + 按需全链路 + 手工驱动（drive）。见 README.md",
   "scripts": {
     "smoke": "playwright install chromium && playwright test",
     "scratch": "playwright install chromium && playwright test --config playwright.scratch.config.ts",
     "web": "node run-e2e-web.mjs",
     "dual": "node run-e2e-web.mjs --dual",
+    "serve": "node run-e2e-web.mjs --serve",
+    "drive": "node drive.mjs",
     "runner-test": "playwright test --config playwright.runner.config.ts",
     "format": "prettier --write .",
     "lint": "prettier --check ."

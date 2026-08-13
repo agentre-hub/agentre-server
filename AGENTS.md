@@ -22,7 +22,7 @@ Workspace-wide facts live in [`../AGENTS.md`](../AGENTS.md).
 | Adding an endpoint / service / repository | [docs/architecture.md](docs/architecture.md) | Layering, dependency direction, "how to add an X" |
 | Adding a scheduled task, or assuming only one replica is running | [docs/architecture.md](docs/architecture.md) | What you may assume about process-local state, how to add a cron job |
 | Writing any test | [docs/testing.md](docs/testing.md) | What to write per layer, sqlmock vs mockgen, build tags, the guard tests |
-| Confirming a change actually works | [docs/verification.md](docs/verification.md) | The twin e2e tracks, scratch workflow, report rules |
+| Confirming a change actually works | [docs/verification.md](docs/verification.md) | Which form a one-off check takes — drive it by hand before writing a spec — scratch workflow, verdicts and report rules |
 | Touching the frontend | [docs/design.md](docs/design.md) | Colour tokens, dark/light, responsive, i18n, the new-page recipe |
 | Deploying, or changing the image/chart/workflow | [deploy/README.md](deploy/README.md) | Docker and Kubernetes deployment, chart values, etcd seeding, the Gitea pipeline |
 | Adding a log line, metric or span | [docs/observability.md](docs/observability.md) | Log levels and fields, metrics, traces |
@@ -75,7 +75,7 @@ internal/
   web/                      embed.FS SPA mount, /v1 passthrough
 migrations/                 gormigrate; append-only
 frontend/                   React 19 + Vite + Tailwind + shadcn
-e2e/                        twin tracks: committed smoke + gitignored scratch
+e2e/                        committed smoke + on-demand full chain + `drive` (hand-driven) + gitignored scratch
 ```
 
 Auth has three shapes, and which one a route uses is visible in `internal/api/router.go`:
