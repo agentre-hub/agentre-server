@@ -1,4 +1,7 @@
 node_modules
+# drive 的浏览器 profile 与 serve 交接件：本机运行时产物，跑过一次就有上百个
+# Chrome 自带的扩展文件，不进格式检查（否则 `make lint` 会因为你验过一次而变红）
+.drive
 test-results
 playwright-report
 scratch

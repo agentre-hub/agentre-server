@@ -16,7 +16,9 @@
 //      agentred state.json, and run the real agentred daemon against the server
 //   6. wait until the agentred is online on the relay
 //   7. seed the agentred.db session + journal rows (node:sqlite oracle)
-//   8. run playwright with the harness env exported
+//   8. run playwright with the harness env exported — or, with `--serve`, run
+//      nothing and hold the whole environment open for `pnpm drive` to drive by
+//      hand (see serve())
 //   9. ALWAYS delete exactly the rows this run seeded, then kill agentred + server
 //
 // With `--dual` it additionally seeds a kind=desktop device and hands the real
@@ -59,6 +61,9 @@ const agentredDataDir = join(workDir, "ad");
 const agentredDB = join(agentredDataDir, "agentred.db");
 const projectDir = join(workDir, "project");
 const webserverLog = join(workDir, "webserver.log");
+// serve 档交给 `pnpm drive` 的交接件。放在 e2e/.drive/ 下(gitignored),
+// 和浏览器自己的状态挨着,收尾时一起删。
+const serveEnvPath = join(here, ".drive", "serve-env.json");
 // 「桌面端 + 浏览器」那一档才用到的东西:真 Wails 应用的数据目录、钥匙串与它自己的
 // SQLite(spec 的独立 oracle)。
 const desktopDataDir = join(workDir, "desktop");
@@ -88,14 +93,84 @@ const SEEDED_SESSIONS = {
   agent_sync_id: "",
 };
 
-// --dual 才编排桌面端那一侧(e2e/dual/,playwright.dual.config.ts)。默认档保持
-// 今天的样子:只有浏览器,不需要 wails 工具链,也不多跑一个 Wails 进程。
-// 该标志由本 runner 自己消费,不能混进转发给 playwright 的参数里。
-const dualMode = process.argv.slice(2).includes("--dual");
-const playwrightArgs = process.argv.slice(2).filter((a) => a !== "--dual");
+const {
+  mode: runMode,
+  dual: dualMode,
+  playwrightArgs,
+} = parseRunnerArgs(process.argv.slice(2));
 // 桌面端 Wails IPC 桥的专用端口。**不是** 34216:那个属于 agentre 仓自己的 e2e,
 // 两边同时跑时才不会互相复用(或对着对方假绿)。
 const DESKTOP_DEVSERVER = "localhost:34217";
+
+/**
+ * 本 runner 自己消费的开关,一个都不能混进转发给 playwright 的参数里 ——
+ * 漏过去的话 playwright 死在 "unknown option",看起来像 runner 坏了。
+ *
+ *   --dual   连桌面端那一侧一起编排(e2e/dual/,playwright.dual.config.ts);
+ *            默认档只有浏览器,不需要 wails 工具链。
+ *   --serve  起完环境就**撑住不退**,不跑任何 spec:留给 `pnpm drive` 手工驱动。
+ */
+export function parseRunnerArgs(argv) {
+  const consumed = new Set(["--dual", "--serve"]);
+  return {
+    mode: argv.includes("--serve") ? "serve" : "spec",
+    dual: argv.includes("--dual"),
+    playwrightArgs: argv.filter((a) => !consumed.has(a)),
+  };
+}
+
+/**
+ * serve 档交给 drive 的那份交接件。少一样都开不出「已登录的浏览器对着这次播种的
+ * 账号」,而缺失不会报错 —— 只会一路验的都是登录页,所以这里当场校验。
+ */
+/**
+ * 这次 run 的 configs/config.yaml 从哪个检出取。
+ *
+ * 默认:本检出有就用本检出的(worktree 的 configs/ 只有 example,真 DSN 在主检出)。
+ * `WEBE2E_CONFIG_DIR` 显式指一份 —— 本仓的配置可以是 `source: etcd`,那时整份配置
+ * 由 etcd 给:runner 读不到 db.dsn 去播种,它起的 server 也会照 etcd 绑
+ * 0.0.0.0:8443,把「跑在空闲端口上」这条隔离作废。那种环境下开发者得指一份本机
+ * 可用的文件配置,而不是让 runner 去猜、或者反过来改写共享的 etcd。
+ */
+export function configCheckoutFor(serverDir, env = process.env) {
+  const override = env.WEBE2E_CONFIG_DIR;
+  if (override) {
+    const dir = resolve(override);
+    if (!existsSync(join(dir, "configs", "config.yaml"))) {
+      throw new Error(
+        `WEBE2E_CONFIG_DIR=${dir} has no configs/config.yaml — point it at a ` +
+          "directory shaped like a checkout (…/configs/config.yaml)",
+      );
+    }
+    return dir;
+  }
+  return existsSync(join(serverDir, "configs", "config.yaml"))
+    ? serverDir
+    : mainCheckout(serverDir);
+}
+
+export function serveEnvPayload(env, extra = {}) {
+  for (const key of [
+    "WEBE2E_SERVER_URL",
+    "WEBE2E_COOKIE_NAME",
+    "WEBE2E_SESSION_SID",
+  ]) {
+    if (!env[key]) throw new Error(`serve handoff is missing ${key}`);
+  }
+  return {
+    serverURL: env.WEBE2E_SERVER_URL,
+    cookieName: env.WEBE2E_COOKIE_NAME,
+    sid: env.WEBE2E_SESSION_SID,
+    // `drive sql` 的 oracle 连的就是它。交接件因此带凭据 —— gitignored,收尾即删。
+    dsn: extra.dsn ?? null,
+    runID: env.WEBE2E_RUN_ID,
+    serverLog: env.WEBE2E_SERVER_LOG,
+    agentredLog: env.WEBE2E_AGENTRED_LOG,
+    agentredDB: env.WEBE2E_AGENTRED_DB,
+    workspace: env.WEBE2E_WORKSPACE ? JSON.parse(env.WEBE2E_WORKSPACE) : null,
+    sessions: env.WEBE2E_SESSIONS ? JSON.parse(env.WEBE2E_SESSIONS) : null,
+  };
+}
 
 let serverProc = null;
 let agentredProc = null;
@@ -125,11 +200,7 @@ async function main() {
   const serverDir = resolve(serverRoot);
   agentreDir = locateAgentreCheckout(serverDir);
   if (dualMode) requireWailsToolchain(agentreDir);
-  // The worktree's configs/ only has config.example.yaml (the real DSN is
-  // gitignored); the developer's real config.yaml lives in the main checkout.
-  const configCheckout = existsSync(join(serverDir, "configs", "config.yaml"))
-    ? serverDir
-    : mainCheckout(serverDir);
+  const configCheckout = configCheckoutFor(serverDir);
   dsn = readDSN(configCheckout);
   redis = readRedis(configCheckout);
 
@@ -256,6 +327,7 @@ async function main() {
       ? { WEBE2E_SESSIONS: JSON.stringify(seededSessions) }
       : {}),
   });
+  if (runMode === "serve") return serve();
   if (dualMode) prepareDesktop(agentreDir, agentredFP);
 
   const require = createRequire(import.meta.url);
@@ -272,6 +344,49 @@ async function main() {
     { cwd: here, stdio: "inherit" },
   );
   child.on("exit", (code) => void finish(code ?? 1));
+}
+
+/**
+ * serve 档:环境已经起好了,不跑 spec,把它**留在那里**给人手工驱动。
+ *
+ * 为什么要有这一档:这套环境(真 server + 播种账号 + 真 agentred)原来只在
+ * 一次 spec 运行的生命周期里存在,`finish()` 一到就连进程带 workDir 一起收掉。
+ * 于是「看一眼这个页面现在什么样」的代价是整轮冷启 —— 前端构建 + 三个 go build +
+ * 播种 + agentred 上线,而且看完就没了。撑住不退之后,一次冷启可以驱动很多步。
+ *
+ * 交接件写到 e2e/.drive/serve-env.json:`pnpm drive open` 读它,直接开出一个
+ * 已登录这次播种账号的浏览器。收尾时删掉 —— 留着会让下一次 drive 拿着一个
+ * 早就没人监听的地址和一条死会话,表现成「登录态莫名其妙失效」。
+ */
+async function serve() {
+  const payload = serveEnvPayload(process.env, { dsn });
+  mkdirSync(dirname(serveEnvPath), { recursive: true });
+  writeFileSync(serveEnvPath, `${JSON.stringify(payload, null, 2)}\n`);
+
+  const w = payload.workspace;
+  console.log(
+    [
+      "",
+      "[web-e2e] serve — 环境已就绪,不会自己退出。Ctrl-C 收尾(会清账号)。",
+      `  server      ${payload.serverURL}`,
+      `  account     webe2e-${payload.runID}(会话 Cookie 已写进交接件)`,
+      ...(w
+        ? [
+            `  agent       ${w.agent_ready_name}(在线) / ${w.agent_blocked_name}(不可用)`,
+            `  project     ${w.project_name} → ${w.project_path}`,
+          ]
+        : []),
+      `  server log  ${payload.serverLog}`,
+      `  agentred log ${payload.agentredLog}`,
+      `  handoff     ${serveEnvPath}`,
+      "",
+      "  下一步:cd e2e && pnpm drive up          # 已登录,target 自动取上面这个地址",
+      "         pnpm drive snapshot --scenario <slug>",
+      "",
+    ].join("\n"),
+  );
+  // 不做任何事,只是不退出:进程活着,上面那些子进程就活着。
+  await new Promise(() => {});
 }
 
 // prepareDesktop 备好真 Wails 桌面端那一侧要用的一切,并把它交给
@@ -382,6 +497,10 @@ async function finish(code) {
     }
   }
 
+  // 交接件必须和环境同生共死:留着的话下一次 `pnpm drive open` 会拿着一个早就
+  // 没人监听的地址和一条已被清掉的会话,表现成「登录态莫名其妙失效」。
+  rmSync(serveEnvPath, { force: true });
+
   if (agentredProc && agentredProc.exitCode === null)
     agentredProc.kill("SIGTERM");
   if (serverProc && serverProc.exitCode === null) serverProc.kill("SIGTERM");
@@ -400,9 +519,11 @@ async function finish(code) {
 // 只有编排进程才装信号处理:被 import 时装上去,Playwright 的 worker 会跟着在
 // Ctrl-C 时跑 finish() —— 那里会 process.exit 并打印「kept <workDir>」,把真正的
 // 收尾盖掉。import 时什么都不做,这条也算在内。
+// serve 档的 Ctrl-C 是**正常收尾**,不是中断一次运行:按 1 退会留下 workDir 并
+// 报一个假失败。
 if (isEntrypoint) {
   for (const sig of ["SIGINT", "SIGTERM"])
-    process.on(sig, () => void finish(1));
+    process.on(sig, () => void finish(runMode === "serve" ? 0 : 1));
 }
 
 // reapOrphanVite 收掉 `wails dev` 关停时遗留的 vite 子进程(它在另一个进程组里,
