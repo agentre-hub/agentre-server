@@ -37,7 +37,9 @@ the `code`/`msg`/`data` envelope is not testing the wiring — it is testing a s
 implementation of it, one that stays green while the real `internal/api/router.go` breaks.
 `internal/integration/` was exactly that and has been removed. Test each layer at its own
 seam, use `muxtest.TestMux` when you need the real route tree, and leave genuine
-end-to-end wiring to `e2e/`, which runs the real binary.
+end-to-end wiring to `make e2e`, which runs the formal server against real MySQL
+and Redis without API route mocks. Repository unit tests still use sqlmock and
+service unit tests still use mockgen; see [`../e2e/README.md`](../e2e/README.md).
 
 ## Build tags
 
@@ -66,19 +68,18 @@ the package, which is the path by which a key would actually leak.
 `git grep '//go:build'` returns nothing, and it should stay that way. Anything that seems
 to need a tag is either (a) a test-only asset, which the package-isolation trick above
 handles, or (b) a test needing external infrastructure — which gets its **own entry point**
-(`make test-e2e`, or a hand-driven run per [verification.md](verification.md)), never a tag.
+(`make e2e`, or a hand-driven run per [verification.md](verification.md)), never a tag.
 A target you did not run is obvious; a tagged-out test is invisible.
 
 ## Migrations are deliberately untested
 
-There is no automated check that `migrations/migrationList()` runs cleanly against a real
-MySQL — that would mean a Docker dependency, which this suite deliberately avoids.
+There is no focused migration test against representative existing rows. `make e2e`
+executes startup migrations on a real dedicated E2E database, but that baseline is not
+upgrade-compatibility coverage.
 
-**Know what that costs you.** `cmd/server/main.go` runs `migrations.RunMigrations` at
-startup, so a migration that is valid Go but invalid SQL — wrong type, bad constraint,
-an ordering dependency on a table that does not exist yet — is not caught by anything
-here. sqlmock repository tests never execute DDL. The first thing that executes your
-migration for real is the server booting, and if it fails **the server does not start**.
+**Know what that costs you.** Invalid DDL prevents both the server and `make e2e` from
+starting. sqlmock repository tests never execute DDL, and a green baseline database does
+not prove safety for real existing rows.
 
 So when you touch `migrations/`, verify it by hand before merging:
 
@@ -163,7 +164,7 @@ make test                                        # backend + frontend, the defau
 go test -race -run TestExchangeToken ./internal/service/device_svc/...
 cd frontend && pnpm test -- src/i18n             # narrow vitest
 cd frontend && pnpm exec vitest                  # watch mode
-make test-e2e                                    # see verification.md
+make e2e                                         # see e2e/README.md
 ```
 
 `-race` is on by default in `make test` and should stay on — the device-flow state machine

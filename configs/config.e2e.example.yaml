@@ -1,0 +1,67 @@
+# Copy to configs/config.e2e.yaml. The copied file is gitignored.
+# Keep source=file: the E2E runner must be able to inspect the exact configuration
+# passed to `bin/server --config` before it touches a dedicated test database.
+env: test
+debug: false
+source: file
+
+http:
+  # Use a loopback-only, E2E-exclusive port. The runner refuses to reuse a process
+  # already listening here.
+  address:
+    - "127.0.0.1:18443"
+
+db:
+  driver: mysql
+  # Placeholder credentials only. The database name must contain an e2e marker;
+  # the runner never creates, drops, renames, or truncates this database.
+  dsn: "e2e_user:e2e_password@tcp(127.0.0.1:3306)/agentre_e2e?charset=utf8mb4&parseTime=True&loc=Local"
+  debug: false
+  prepareStmt: false
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  # Prefer a Redis DB reserved for E2E. Cleanup only deletes this run's keys.
+  db: 9
+
+logger:
+  level: info
+  disableConsole: false
+  logFile:
+    enable: false
+
+trace:
+  type: empty
+  sample: 1
+  endpoint: ""
+  useSSL: false
+
+server:
+  public_url: "http://127.0.0.1:18443"
+  insecure_cookies: true
+  session:
+    cookie_name: "server_session"
+    ttl: 336h
+  device_flow:
+    user_code_ttl: 10m
+    poll_interval: 1s
+  jwt:
+    active_kid: "e2e-local"
+    keys:
+      - kid: "e2e-local"
+        # Generate local test keys outside tracked files, for example under
+        # runtime/keys/, then put absolute paths in configs/config.e2e.yaml.
+        private_key_pem_path: "/absolute/path/to/local/e2e-jwt.key"
+        public_key_pem_path: "/absolute/path/to/local/e2e-jwt.pub"
+    issuer: "agentre-server"
+    audience: "agentre"
+    access_ttl: 15m
+    refresh_ttl: 2160h
+  oauth:
+    github:
+      client_id: ""
+      client_secret: ""
+      callback_path: "/v1/auth/oauth/github/callback"
+  rate_limit:
+    authorize_per_ip_per_min: 30

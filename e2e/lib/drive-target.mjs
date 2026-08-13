@@ -20,7 +20,6 @@ export class IsolationError extends Error {
 /** 带值的开关。其余以 -- 开头的都是布尔;两张表都没有的当场失败。 */
 const VALUE_FLAGS = new Set([
   "base",
-  "db",
   "limit",
   "nth",
   "port",
@@ -79,6 +78,12 @@ export function parseRoleSpec(value) {
   return { role: m[1], name: m[2] ?? m[3] };
 }
 
+/** 显式 --base 是一条登录外目标，不能继承旧 serve handoff 的 Cookie/DSN。 */
+export function targetForDrive(flags, handoff) {
+  if (flags.base) return { baseURL: flags.base, serveEnv: null };
+  return { baseURL: handoff?.serverURL, serveEnv: handoff ?? null };
+}
+
 /** 命令行上的目标变成绝对地址。裸词当路径,不当协议。 */
 export function resolveTargetURL(target, baseURL) {
   if (/^https?:\/\//i.test(target)) return target;
@@ -102,7 +107,15 @@ export function assertSanctionedURL(session, url) {
   const base = new URL(session.baseURL);
   const loopback =
     parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1";
-  if (parsed.protocol !== "http:" || !loopback || parsed.port !== base.port) {
+  const baseLoopback =
+    base.hostname === "localhost" || base.hostname === "127.0.0.1";
+  if (
+    parsed.protocol !== "http:" ||
+    base.protocol !== "http:" ||
+    !loopback ||
+    !baseLoopback ||
+    parsed.origin !== base.origin
+  ) {
     throw new IsolationError(
       `refusing to drive ${url}: this run's target is only ${session.baseURL}`,
     );

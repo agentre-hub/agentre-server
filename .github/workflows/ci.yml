@@ -77,12 +77,17 @@ jobs:
       - name: make test
         run: make test
 
-  # 冒烟 e2e：桌面 + 移动两个 project，API 全 mock，不需要 MySQL/Redis。
+  # 冒烟 e2e：正式 server + 临时 MySQL 9.7.2/Redis 7 + 桌面/移动 Chromium。
   e2e:
     name: e2e
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - uses: pnpm/action-setup@v4
         with:
@@ -95,18 +100,106 @@ jobs:
             frontend/pnpm-lock.yaml
             e2e/pnpm-lock.yaml
 
-      - name: install frontend deps
-        run: pnpm --dir frontend install --frozen-lockfile
+      - name: start temporary MySQL and Redis
+        run: docker compose -f e2e/docker-compose.ci.yml up -d --wait
 
-      - name: make test-e2e
-        run: make test-e2e
+      - name: generate isolated E2E config
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p runtime/e2e-ci configs
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out runtime/e2e-ci/jwt.key
+          openssl pkey -in runtime/e2e-ci/jwt.key -pubout -out runtime/e2e-ci/jwt.pub
+          cat > configs/config.e2e.yaml <<'YAML'
+          env: test
+          debug: false
+          source: file
+          http:
+            address:
+              - "127.0.0.1:5199"
+          db:
+            driver: mysql
+            dsn: "agentre_e2e:agentre_e2e@tcp(127.0.0.1:3306)/agentre_e2e_ci?charset=utf8mb4&parseTime=True&loc=Local"
+            debug: false
+            prepareStmt: false
+          redis:
+            addr: "127.0.0.1:6379"
+            password: ""
+            db: 9
+          logger:
+            level: info
+            disableConsole: false
+            logFile:
+              enable: false
+          trace:
+            type: empty
+            sample: 1
+            endpoint: ""
+            useSSL: false
+          server:
+            public_url: "http://127.0.0.1:5199"
+            insecure_cookies: true
+            session:
+              cookie_name: "server_session"
+              ttl: 336h
+            device_flow:
+              user_code_ttl: 10m
+              poll_interval: 1s
+            jwt:
+              active_kid: "e2e-ci"
+              keys:
+                - kid: "e2e-ci"
+                  private_key_pem_path: "runtime/e2e-ci/jwt.key"
+                  public_key_pem_path: "runtime/e2e-ci/jwt.pub"
+              issuer: "agentre-server"
+              audience: "agentre"
+              access_ttl: 15m
+              refresh_ttl: 2160h
+            oauth:
+              github:
+                client_id: ""
+                client_secret: ""
+                callback_path: "/v1/auth/oauth/github/callback"
+            rate_limit:
+              authorize_per_ip_per_min: 100
+          YAML
+
+      - name: make e2e
+        run: make e2e
+
+      - name: redact E2E failure evidence
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf e2e/redacted-failure-evidence
+          mkdir -p e2e/redacted-failure-evidence
+          if [ -d e2e/test-results ]; then
+            mkdir -p e2e/redacted-failure-evidence/test-results
+            (
+              cd e2e/test-results
+              find . -type f \( -name '*.png' -o -name '*.webm' \) \
+                -exec cp --parents '{}' ../redacted-failure-evidence/test-results/ \;
+            )
+          fi
+          find e2e/runtime -name server.log -type f -print0 2>/dev/null | while IFS= read -r -d '' log; do
+            run_id=$(basename "$(dirname "$log")")
+            mkdir -p "e2e/redacted-failure-evidence/runtime/$run_id"
+            sed -E \
+              -e 's#([^[:space:]"'"']+)@tcp\(([^)]+)\)/([^?[:space:]"'"']+)(\?[^[:space:]"'"']*)?#<redacted>@tcp(\2)/\3#g' \
+              -e 's#((redis-)?password[=:][[:space:]]*)[^,;[:space:]]+#\1<redacted>#Ig' \
+              "$log" > "e2e/redacted-failure-evidence/runtime/$run_id/server.log"
+          done
 
       - if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report
-          path: e2e/test-results/
+          name: e2e-failure-evidence
+          path: e2e/redacted-failure-evidence/
           retention-days: 7
+
+      - if: always()
+        run: docker compose -f e2e/docker-compose.ci.yml down -v --remove-orphans
 
   # 确认 embed 链路没坏：前端 build → 拷进 internal/web/dist → go build。
   build:

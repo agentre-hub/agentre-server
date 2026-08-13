@@ -104,7 +104,7 @@ docker build -f deploy/Dockerfile -t agentre-server:local \
 可以换的有 `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE`、`GOPROXY`、`NPM_REGISTRY`、
 `VERSION`、`COMMIT`，不传就用上游默认值。
 
-容器里配置文件的位置是 `/app/configs/config.yaml`，想用自己的就盖掉它：
+容器默认读取 `/app/configs/config.yaml`，想用自己的就盖掉它：
 
 ```bash
 docker run --rm -p 8443:8443 \
@@ -112,6 +112,10 @@ docker run --rm -p 8443:8443 \
   -v "$PWD/runtime/keys:/keys:ro" \
   agentre-server:local
 ```
+
+服务也接受 `--config <path>`。显式路径无效时直接失败且不回退；不传时保持上述
+默认路径。E2E 专库配置和 CI 临时服务不属于部署配置，见
+[`../e2e/README.md`](../e2e/README.md)。
 
 ## Kubernetes 部署
 

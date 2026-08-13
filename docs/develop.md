@@ -13,7 +13,7 @@ make build             # frontend build → copy into internal/web/dist → go b
 make test              # THE default gate: test-backend + test-frontend
 make test-backend      # go test -race ./...   (there are no build tags — see below)
 make test-frontend     # cd frontend && pnpm test  (vitest)
-make test-e2e          # cd e2e && pnpm smoke — desktop + mobile chromium
+make e2e               # formal server + real MySQL/Redis + desktop/mobile Chromium
 make test-cover        # coverage.html
 
 make lint              # lint-backend + lint-frontend + lint-e2e
@@ -28,7 +28,9 @@ make docker            # docker build -t agentre/server:0.1
 
 The split exists because there are two package managers: Go via the Makefile,
 frontend via pnpm. `make test` and `make lint` are the aggregates — **use those**,
-and only reach for a sub-target when iterating.
+and only reach for a sub-target when iterating. `make e2e` is the sole automated
+browser route; CI calls that same target. Harness details live in
+[`../e2e/README.md`](../e2e/README.md).
 
 The repo has **no build tags at all**, so `make test` runs everything there is. See
 [testing.md](testing.md#build-tags) for why that is load-bearing, and keep it that way.
@@ -42,11 +44,15 @@ cp .env.example .env                                 # secrets
 make dev
 ```
 
-`e2e` has its own package:
+`e2e` has its own package and a gitignored explicit config:
 
 ```bash
 cd e2e && pnpm install
+cd .. && cp configs/config.e2e.example.yaml configs/config.e2e.yaml
 ```
+
+Point that copy at dedicated E2E MySQL/Redis and local JWT keys; see
+[`../e2e/README.md`](../e2e/README.md).
 
 ## Layout
 
@@ -111,7 +117,10 @@ hand before merging anything under `migrations/`; see
 ## Configuration
 
 - `configs/config.example.yaml` is the committed template.
-- `configs/config.yaml` is **gitignored** — it is the runtime file you copy and edit.
+- `configs/config.yaml` is **gitignored** — it is the default runtime file you copy and edit.
+- `--config <path>` selects an explicit file and fails without fallback when invalid.
+- `configs/config.e2e.example.yaml` is the placeholder E2E template;
+  `configs/config.e2e.yaml` is gitignored.
 - Secrets come from environment variables, injected by `bootstrap.LoadServerConfig`
   (cago's config source has no env override, so this is done by hand there).
   `.env.example` lists them.

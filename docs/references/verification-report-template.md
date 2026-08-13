@@ -14,8 +14,8 @@
 
 <!-- What the run drove, so a reader can tell a mocked run from a real-backend one. -->
 
-- Form and entry point: `<curl / migrate command / pnpm serve + pnpm drive / full spec / pnpm dual>`
-- Backend and data: `<mocked API, or the real server on :8443 with the db.dsn and redis.addr it used>`
+- Form and entry point: `<make e2e / curl with explicit config / pnpm serve + pnpm drive / pnpm scratch>`
+- Backend and data: `<formal server plus real MySQL/Redis from the explicit E2E config, or an authorized substitute>`
 - Build under test: `<branch, commit or spec slug>`
 - Form factors driven: `<desktop-chromium / mobile-chromium / both — UI rows only>`
 
@@ -39,7 +39,7 @@ An unreached check is never `holds`; a run that verified two of three claims is 
 
 ## Authorization
 
-<!-- Keep only when a real dependency was substituted or an external effect was authorized. Calling a `mock*` helper from fixtures/app.ts is a deliberate substitution — mocking is opt-in here. -->
+<!-- Keep only when a real dependency was substituted or an external effect was authorized. The current E2E fixture has no API route mocks; any substitute must be explicit and authorized. -->
 
 | # | Substitute or effect | The user's authorization, verbatim |
 |---|---|---|

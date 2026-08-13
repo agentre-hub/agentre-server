@@ -25,6 +25,7 @@ import {
   sessionCookie,
   shotPath,
   splitLocator,
+  targetForDrive,
 } from "../lib/drive-target.mjs";
 
 const SESSION = { baseURL: "http://127.0.0.1:41234" };
@@ -103,12 +104,34 @@ test("拒绝驱动外网地址", () => {
   expect(() =>
     assertSanctionedURL(SESSION, "https://console.example.com/devices"),
   ).toThrow(/refusing to drive/);
+  expect(() =>
+    assertSanctionedURL(
+      { baseURL: "https://console.example.com" },
+      "https://console.example.com/devices",
+    ),
+  ).toThrow(/refusing to drive/);
 });
 
 test("拒绝驱动同机上别的端口——那可能是你正在手调的另一套", () => {
   expect(() => assertSanctionedURL(SESSION, "http://127.0.0.1:5174/")).toThrow(
     /refusing to drive/,
   );
+});
+
+test("显式 --base 不继承旧 serve handoff 的登录秘密", () => {
+  expect(
+    targetForDrive(
+      { base: "http://127.0.0.1:5174" },
+      {
+        serverURL: "http://127.0.0.1:41234",
+        sid: "stale-secret",
+        csrfToken: "stale-csrf",
+      },
+    ),
+  ).toEqual({
+    baseURL: "http://127.0.0.1:5174",
+    serveEnv: null,
+  });
 });
 
 test("以 / 开头的目标按 baseURL 解析", () => {

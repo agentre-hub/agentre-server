@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"io"
 	"log"
+	"os"
 
 	"github.com/cago-frame/cago"
 	"github.com/cago-frame/cago/configs"
@@ -28,11 +32,28 @@ import (
 	"agentre-server/migrations"
 )
 
+func loadConfig(args []string) (*configs.Config, error) {
+	flags := flag.NewFlagSet("agentre-server", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configPath := flags.String("config", "", "configuration file path")
+	if err := flags.Parse(args); err != nil {
+		return nil, err
+	}
+	if *configPath == "" {
+		return configs.NewConfig("agentre-server")
+	}
+	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(*configPath))
+	if err != nil {
+		return nil, fmt.Errorf("load config %q: %w", *configPath, err)
+	}
+	return cfg, nil
+}
+
 func main() {
 	log.Printf("agentre-server %s (%s) starting", buildinfo.Version, buildinfo.Commit)
 
 	ctx := context.Background()
-	cfg, err := configs.NewConfig("agentre-server")
+	cfg, err := loadConfig(os.Args[1:])
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}

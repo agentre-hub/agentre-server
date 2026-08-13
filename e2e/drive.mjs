@@ -13,7 +13,7 @@
 //
 // 与桌面端 `agentre/e2e/drive.mjs` 同形 —— 两个仓独立,不共享代码,但同一套命令、
 // 同一套选择器 DSL、同一份 drive.log。区别只在这边的 target 是 server + 浏览器,
-// oracle 是 MySQL/agentred.db 而不是桌面端那个 SQLite。
+// oracle 是本轮 E2E 专库，而不是页面自身的渲染结果。
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   appendFileSync,
@@ -39,6 +39,7 @@ import {
   sessionCookie,
   shotPath,
   splitLocator,
+  targetForDrive,
 } from "./lib/drive-target.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)); // e2e/
@@ -161,14 +162,15 @@ async function urlReady(url, timeoutMs) {
  * 无头是默认:一次验证不该抢走屏幕和焦点。--headed 是给你想看着它走的时候用的。
  */
 async function up(flags) {
-  const serveEnv = readJSON(serveEnvPath);
-  const baseURL = flags.base ?? serveEnv?.serverURL;
+  const target = targetForDrive(flags, readJSON(serveEnvPath));
+  const { baseURL, serveEnv } = target;
   if (!baseURL) {
     throw new IsolationError(
       "no target: run `pnpm serve` first (seeded, signed in), or name one with " +
         "--base http://127.0.0.1:5174 for a logged-out UI check",
     );
   }
+  assertSanctionedURL({ baseURL }, baseURL);
   const cdpPort = Number(flags.port ?? DEFAULT_CDP_PORT);
   const cdpURL = `http://127.0.0.1:${cdpPort}`;
   const existing = readJSON(sessionPath);
@@ -221,8 +223,6 @@ async function up(flags) {
     headless: !flags.headed,
     seeded: !!serveEnv,
     serverLog: serveEnv?.serverLog ?? null,
-    agentredLog: serveEnv?.agentredLog ?? null,
-    agentredDB: serveEnv?.agentredDB ?? null,
     dsn: serveEnv?.dsn ?? null,
     startedAt: new Date().toISOString(),
   };
@@ -464,26 +464,10 @@ const COMMANDS = {
    * 独立 oracle:读应用写进去的数据,而不是它渲染出来的界面。只读 ——
    * 一次验证观察状态,不制造状态。
    *
-   *   --db mysql(默认,serve 播种的那套库)/ --db agentred(那台 agentred 的 SQLite)
+   * 只连接 `pnpm serve` 的本轮 E2E 专库。
    */
-  async sql({ session, rest, flags }) {
+  async sql({ session, rest }) {
     const query = assertReadOnlySQL(rest.join(" "));
-    if ((flags.db ?? "mysql") === "agentred") {
-      if (!session.agentredDB || !existsSync(session.agentredDB)) {
-        throw new Error(
-          `no agentred database at ${session.agentredDB ?? "(unset)"}`,
-        );
-      }
-      const { DatabaseSync } = await import("node:sqlite");
-      const db = new DatabaseSync(session.agentredDB, { readOnly: true });
-      try {
-        const rows = db.prepare(query).all();
-        console.log(JSON.stringify(rows, null, 2));
-        return `${rows.length} rows`;
-      } finally {
-        db.close();
-      }
-    }
     if (!session.dsn) {
       throw new Error(
         "this session has no database DSN — it was started with --base, not by " +
@@ -511,10 +495,10 @@ const COMMANDS = {
     }
   },
 
-  /** 服务器与 agentred 自己的日志。浏览器没了也照样能看 —— 写报告时要用。 */
+  /** 正式 server 日志。浏览器没了也照样能看 —— 写报告时要用。 */
   async logs({ session, rest, flags }) {
     const lines = Number(rest[0]) || Number(flags.limit) || 40;
-    const files = [session.serverLog, session.agentredLog].filter(Boolean);
+    const files = [session.serverLog].filter(Boolean);
     if (!files.length) {
       throw new Error(
         "this session has no logs — it was started with --base, not by `pnpm serve`",
@@ -549,7 +533,7 @@ async function main() {
     console.error(
       `usage: pnpm drive <up|down|status|${Object.keys(COMMANDS).join("|")}> [args] ` +
         "[--scenario <slug>] [--base URL] [--headed] [--nth N] [--state visible|hidden] " +
-        "[--timeout ms] [--limit N] [--db pg|agentred] [--full]",
+        "[--timeout ms] [--limit N] [--full]",
     );
     return 2;
   }

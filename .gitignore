@@ -15,14 +15,17 @@
 /.env
 /config.yaml
 /configs/config.yaml
+/configs/config.e2e.yaml
 
 # 一次性本地验证脚本与证据（见 docs/verification.md）；不提交，也不进 CI。
 # 保留目录本身：playwright.scratch.config.ts 的 testDir 指向它，
 # 目录不存在时 `pnpm scratch` 直接报错。
 /e2e/scratch/*
 !/e2e/scratch/.gitkeep
-# drive 的浏览器状态与 serve 的交接件（含一次性会话 Cookie）。都是本次运行私有的。
+# drive 的浏览器状态、serve 交接件，以及本轮 key/log/seed/cleanup/trace。
+# 这些文件含一次性 Cookie、CSRF、DSN 或失败证据，只能留在本机运行目录。
 /e2e/.drive/
+/e2e/runtime/
 /e2e/node_modules/
 /e2e/test-results/
 /e2e/playwright-report/
