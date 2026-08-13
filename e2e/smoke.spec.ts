@@ -42,6 +42,10 @@ test("真实 session 打开控制台并呈现隔离用户与真实空态", async
   await expect(page.getByText(`webe2e ${handoff.runID}`).first()).toBeVisible();
   await expect(page.getByTestId("overview-tiles")).toBeVisible();
   await expect(page.getByTestId("empty-agents")).toBeVisible();
+  await page.goto("/devices");
+  await expect(page.getByText(/还没有任何设备|No devices yet/i)).toBeVisible();
+  await page.goto("/chat");
+  await expect(page.getByTestId("chat-empty-state")).toBeVisible();
 
   const [agents, devices, follows] = await Promise.all([
     page.request.get("/v1/workspace/agents"),

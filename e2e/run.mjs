@@ -318,6 +318,35 @@ export function removeOwnedHandoff(path, owned) {
   if (owned) rmSync(path, { force: true });
 }
 
+export async function prepareStaleHandoff(
+  path,
+  probe = probeHealth,
+  cleanup = (id) => runTool("cleanup", id),
+) {
+  if (!existsSync(path)) return;
+  let old;
+  try {
+    old = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    throw new Error(
+      `malformed E2E handoff ${path}; manual inspection is required`,
+    );
+  }
+  if (old?.serverURL && (await probe(old.serverURL))) {
+    throw new Error("another E2E serve environment is still live");
+  }
+  if (!old?.runID || !/^[a-zA-Z0-9_-]+$/.test(old.runID)) {
+    throw new Error(
+      `E2E handoff ${path} has no owned run ID; manual inspection is required`,
+    );
+  }
+  const result = cleanup(old.runID);
+  if (cleanupHasResidue(result.residue)) {
+    throw new Error(`stale run ${old.runID} still has isolated residue`);
+  }
+  rmSync(path, { force: true });
+}
+
 export function cleanupRunID(activeRunID, seedResult) {
   return seedResult?.run_id ?? activeRunID ?? null;
 }
@@ -386,20 +415,7 @@ function runTool(command, id) {
 }
 
 async function cleanStaleHandoff() {
-  if (!existsSync(serveEnvPath)) return;
-  let old = null;
-  try {
-    old = JSON.parse(readFileSync(serveEnvPath, "utf8"));
-  } catch {
-    // malformed handoff is never trusted
-  }
-  const live = Boolean(old?.serverURL && (await probeHealth(old.serverURL)));
-  prepareHandoff(serveEnvPath, live);
-  if (!old?.runID || !/^[a-zA-Z0-9_-]+$/.test(old.runID)) return;
-  const cleanup = runTool("cleanup", old.runID);
-  if (cleanupHasResidue(cleanup.residue)) {
-    throw new Error(`stale run ${old.runID} still has isolated residue`);
-  }
+  await prepareStaleHandoff(serveEnvPath);
 }
 
 async function probeHealth(baseURL) {

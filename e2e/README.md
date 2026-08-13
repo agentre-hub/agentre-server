@@ -139,9 +139,10 @@ The driver mechanically enforces these boundaries:
 - the browser is headless unless `--headed` is requested.
 
 On SIGINT or SIGTERM, `pnpm serve` removes the handoff, cleans the current run,
-and stops the server. A later start removes an invalid/dead handoff and attempts
-run-scoped stale cleanup; it refuses to take over an environment whose health
-endpoint is still live.
+and stops the server. A later start first verifies a dead handoff's owned run ID
+and completes run-scoped stale cleanup, then removes the handoff; malformed or
+unowned handoffs are preserved for manual inspection. It refuses to take over an
+environment whose health endpoint is still live.
 
 ## Scratch specs
 

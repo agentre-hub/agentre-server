@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +17,7 @@ import {
   installSignalHandlers,
   parseRunnerArgs,
   prepareHandoff,
+  prepareStaleHandoff,
   rateLimitClientIP,
   removeOwnedHandoff,
   runtimePaths,
@@ -152,6 +159,58 @@ test("健康 handoff 仍属于正在运行的 serve，后续启动不得覆盖",
   expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
     runID: "run-live",
   });
+});
+
+test("失效 handoff 只有在孤儿 cleanup 成功后才删除", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "e2e-handoff-stale-"));
+  const path = join(dir, "serve-env.json");
+  writeFileSync(
+    path,
+    JSON.stringify({ serverURL: "http://127.0.0.1:1", runID: "run-stale" }),
+  );
+
+  await expect(
+    prepareStaleHandoff(
+      path,
+      async () => false,
+      () => {
+        throw new Error("cleanup unavailable");
+      },
+    ),
+  ).rejects.toThrow(/cleanup unavailable/);
+  expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
+    runID: "run-stale",
+  });
+
+  await expect(
+    prepareStaleHandoff(
+      path,
+      async () => false,
+      (runID) => {
+        expect(runID).toBe("run-stale");
+        return { residue: { users: 0, session: 0 } };
+      },
+    ),
+  ).resolves.toBeUndefined();
+  expect(() => readFileSync(path, "utf8")).toThrow();
+});
+
+test("malformed handoff 不可归属，保留文件并要求人工处理", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "e2e-handoff-malformed-"));
+  const path = join(dir, "serve-env.json");
+  writeFileSync(path, "not-json");
+
+  await expect(
+    prepareStaleHandoff(
+      path,
+      async () => false,
+      () => {
+        throw new Error("cleanup must not run without an owned run ID");
+      },
+    ),
+  ).rejects.toThrow(/malformed|manual/i);
+  expect(readFileSync(path, "utf8")).toBe("not-json");
+  rmSync(path, { force: true });
 });
 
 test("seed 输出尚未交回时仍用本轮 run ID cleanup", () => {
