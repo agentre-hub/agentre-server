@@ -13,9 +13,13 @@ import (
 // 没有删除时间也没有冲突元数据。
 //
 // sync_id / project_sync_id / agentred_fingerprint / kind 都是客户端自带的不透明
-// 标识，一律 utf8mb4_bin 逐字节判等。表默认的 utf8mb4_0900_ai_ci 大小写不敏感，
-// 会让 "abc" 与 "ABC" 两个不同的 sync_id 撞上 uk_sync_objects_identity，
-// 而且 `WHERE sync_id=?` 会取回另一行——同步的一切都建立在这个标识精确可比上。
+// 标识，一律 utf8mb4_0900_bin 逐字节判等，同步的一切都建立在这个标识精确可比上。
+// 两个坑都要躲开：表默认的 utf8mb4_0900_ai_ci 大小写不敏感，会让 "abc" 与 "ABC"
+// 两个不同的 sync_id 撞上 uk_sync_objects_identity、`WHERE sync_id=?` 还会取回另一行；
+// 而老的 utf8mb4_bin 虽然逐字节比较，却是 PAD SPACE，会忽略尾随空格，"x" 与 "x "
+// 同样会互相顶掉。_0900_bin 才是既逐字节、又 NO PAD 的那一个。
+//
+// agentred_fingerprint 要能和 devices.fingerprint 比较，两列排序规则必须一致。
 //
 // uk_sync_objects_location 是 agentred 路径的账号内自然键，只约束存活的行：墓碑不占
 // 自然键，否则删掉再建就建不回来。用 live_location_flag（存活时为 1、否则为 NULL）
@@ -44,10 +48,10 @@ func migration202608090001() *gormigrate.Migration {
 				CREATE TABLE sync_objects (
 				  id                   bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id              bigint NOT NULL,
-				  kind                 varchar(32) COLLATE utf8mb4_bin NOT NULL,
-				  sync_id              varchar(255) COLLATE utf8mb4_bin NOT NULL,
-				  project_sync_id      varchar(255) COLLATE utf8mb4_bin NOT NULL DEFAULT '',
-				  agentred_fingerprint varchar(255) COLLATE utf8mb4_bin NOT NULL DEFAULT '',
+				  kind                 varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
+				  sync_id              varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
+				  project_sync_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
+				  agentred_fingerprint varchar(255) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  payload              json NOT NULL DEFAULT ('{}'),
 				  version              bigint NOT NULL,
 				  sync_updated_at      bigint NOT NULL DEFAULT 0,
@@ -78,7 +82,7 @@ func migration202608090001() *gormigrate.Migration {
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE sync_avatars (
 				  user_id      bigint NOT NULL,
-				  content_hash varchar(64) COLLATE utf8mb4_bin NOT NULL,
+				  content_hash varchar(64) COLLATE utf8mb4_0900_bin NOT NULL,
 				  content_type varchar(255) NOT NULL DEFAULT '',
 				  content      mediumtext NOT NULL,
 				  byte_size    bigint NOT NULL DEFAULT 0,
@@ -88,7 +92,7 @@ func migration202608090001() *gormigrate.Migration {
 				CREATE TABLE device_local_paths (
 				  user_id         bigint NOT NULL,
 				  device_id       bigint NOT NULL,
-				  project_sync_id varchar(255) COLLATE utf8mb4_bin NOT NULL,
+				  project_sync_id varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  path            text NOT NULL,
 				  updatetime      bigint NOT NULL DEFAULT 0,
 				  PRIMARY KEY (user_id, device_id, project_sync_id)

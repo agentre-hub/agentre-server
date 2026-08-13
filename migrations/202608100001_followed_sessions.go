@@ -14,8 +14,9 @@ import (
 // 在 MySQL 下发出 ON DUPLICATE KEY UPDATE 的自赋值形式），不新增行、
 // 不重置首次关注时间；取消就是一条 DELETE，删不到也是成功。
 //
-// device_fingerprint 与 session_id 是目标设备与会话的不透明标识，用 utf8mb4_bin
-// 逐字节判等：大小写不敏感会把两个不同的会话认成同一个，名单就指错了对象。
+// device_fingerprint 与 session_id 是目标设备与会话的不透明标识，用
+// utf8mb4_0900_bin 逐字节判等：大小写不敏感会把两个不同的会话认成同一个，名单就指错了
+// 对象。device_fingerprint 要能和 devices.fingerprint 比较，两列排序规则必须一致。
 func migration202608100001() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "202608100001",
@@ -24,8 +25,8 @@ func migration202608100001() *gormigrate.Migration {
 				CREATE TABLE followed_sessions (
 				  id                 bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id            bigint NOT NULL,
-				  device_fingerprint varchar(255) COLLATE utf8mb4_bin NOT NULL,
-				  session_id         varchar(255) COLLATE utf8mb4_bin NOT NULL,
+				  device_fingerprint varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
+				  session_id         varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  followed_at        bigint NOT NULL DEFAULT 0,
 				  createtime         bigint NOT NULL DEFAULT 0,
 				  updatetime         bigint NOT NULL DEFAULT 0,

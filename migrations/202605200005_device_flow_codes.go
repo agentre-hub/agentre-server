@@ -8,9 +8,15 @@ import (
 // migration202605200005 创建 device_flow_codes 表（RFC 8628 的 device_code /
 // user_code 状态机）。
 //
-// device_code 与 user_code 都是凭据，用 utf8mb4_bin 逐字节判等：默认的
-// utf8mb4_0900_ai_ci 会让 device_code 的比较大小写不敏感，等于凭空放宽一个 bearer
-// 凭据的匹配条件。两者的长度按生成器实际产出来定，不留无意义的余量——
+// device_code 是机器之间传递的 bearer 凭据，用 utf8mb4_0900_bin 逐字节判等：大小写
+// 不敏感等于凭空放宽一个凭据的匹配条件。
+//
+// user_code 相反，它是印给人看、由人敲进浏览器的，所以用 utf8mb4_0900_as_ci
+// 大小写不敏感——用户小写敲验证码必须也能对上。usercode.Normalize 已经会先转大写，
+// 排序规则是第二层保障：将来多一条忘了 Normalize 的查询路径时，症状是「查不到这个
+// 验证码」这种很难联想到大小写的报错。
+//
+// 两者的长度按生成器实际产出来定，不留无意义的余量——
 // device_code 是 randomBase32(32)（32 字节 base32、无填充，恒为 52 位小写），
 // user_code 是 usercode.Generate() 的 "XXX-XXX"（7 位大写）。device_code 还是主键，
 // InnoDB 会把主键塞进每一条二级索引，所以它的宽度是真实成本，不能随手写 varchar(255)。
@@ -28,10 +34,10 @@ func migration202605200005() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE device_flow_codes (
-				  device_code         varchar(64) COLLATE utf8mb4_bin PRIMARY KEY,
-				  user_code           varchar(16) COLLATE utf8mb4_bin NOT NULL,
-				  device_kind         varchar(32) COLLATE utf8mb4_bin NOT NULL,
-				  client_fingerprint  varchar(255) COLLATE utf8mb4_bin NOT NULL,
+				  device_code         varchar(64) COLLATE utf8mb4_0900_bin PRIMARY KEY,
+				  user_code           varchar(16) COLLATE utf8mb4_0900_as_ci NOT NULL,
+				  device_kind         varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
+				  client_fingerprint  varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  platform            varchar(64) NOT NULL DEFAULT '',
 				  version             varchar(64) NOT NULL DEFAULT '',
 				  authorized_user_id  bigint NOT NULL DEFAULT 0,

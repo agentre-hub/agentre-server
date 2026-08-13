@@ -103,6 +103,32 @@ err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 
 A repository that reaches for `db.Default()` silently escapes the transaction.
 
+### Column collations are part of the contract
+
+A collation decides what "equal" means, so on any column that a `WHERE`, a `JOIN` or a
+unique key compares, it is a behavioural choice, not formatting. Pick it explicitly:
+
+| Kind of value | Collation | Why |
+| --- | --- | --- |
+| Opaque identifiers, hashes, bearer credentials — `sync_id`, `*_fingerprint`, `session_id`, `device_code`, `refresh_token_hash`, `content_hash`, `provider_uid`, enum-ish `kind` | `utf8mb4_0900_bin` | Two values differing in any byte are two different things. Folding them merges distinct records and widens credential matching. |
+| Identifiers a human types — `email`, `user_code` | `utf8mb4_0900_as_ci` | Case must not matter: one mailbox is one account, and a code typed lowercase must still match. |
+| Text that is only stored and displayed — `display_name`, `name`, `platform`, `version`, `user_agent`, `ip`, `path`, `content_type` | *(table default `utf8mb4_0900_ai_ci`)* | Never compared, so the choice is inert. Leaving it unset marks it as "not load-bearing". |
+
+Two traps, both of which produced real bugs in the PostgreSQL→MySQL move:
+
+- **Only use the `utf8mb4_0900_*` family.** `utf8mb4_bin` and `utf8mb4_general_ci` are
+  `PAD SPACE`, so they ignore trailing spaces — `'x'` equals `'x '`, and two `sync_id`s
+  differing only by a trailing space collide on the unique key. Every `_0900_` collation is
+  `NO PAD`, which is what PostgreSQL `text` does.
+  `migrations/collation_test.go` fails the build if a `PAD SPACE` collation appears in DDL.
+- **`ai_ci` is not "case-insensitive", it is also accent-insensitive.** As an email
+  collation it makes `e@x.c` and `é@x.c` the same address. `as_ci` is the case-only tier.
+
+Columns compared against each other must share a collation, or MySQL raises *illegal mix of
+collations* at query time: `devices.fingerprint`, `sync_objects.agentred_fingerprint`,
+`followed_sessions.device_fingerprint` and `device_flow_codes.client_fingerprint` are one
+such group; `users.email` and `user_identities.email` are another.
+
 ## Routing and auth shapes
 
 `internal/api/router.go` is the one place the whole route tree is visible, and the
