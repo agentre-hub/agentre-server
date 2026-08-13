@@ -7,7 +7,6 @@ import (
 	"github.com/cago-frame/cago"
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/database/db"
-	_ "github.com/cago-frame/cago/database/db/postgres"
 	"github.com/cago-frame/cago/pkg/component"
 	"github.com/cago-frame/cago/pkg/opentelemetry/metric"
 	"github.com/cago-frame/cago/pkg/opentelemetry/trace"

@@ -10,7 +10,7 @@
  *      在 Keys 非空时**只读列表** —— runner 必须把列表每一项的私钥/公钥路径都改写成
  *      绝对路径,只断言第一个同名字段(或只摊平出一个扁平字段)会形成假绿,
  *      server 仍会死在 missing JWT key;
- *   3. 服务器起不来时 runner 未经探测就断言「PostgreSQL 或 Redis 不可达」,
+ *   3. 服务器起不来时 runner 未经探测就断言「MySQL 或 Redis 不可达」,
  *      把读者引向错误的子系统。
  */
 import { test, expect } from "@playwright/test";
@@ -21,6 +21,7 @@ import { join } from "node:path";
 import {
   rewriteServerConfig,
   parseDSN,
+  parseMySQLAddress,
   parseRedis,
   summarizeStartupFailure,
 } from "../run-e2e-web.mjs";
@@ -156,8 +157,8 @@ test("轮换形态缺了 keys 列表指名的密钥文件时当场失败并说�
 
 test("带引号的 DSN 与 Redis 口令读成裸值", () => {
   const text = `db:
-  driver: postgres
-  dsn: "postgres://server:server@127.0.0.1:5432/server?sslmode=disable"
+  driver: mysql
+  dsn: "server:server@tcp(127.0.0.1:3306)/server?charset=utf8mb4&parseTime=True&loc=Local"
 
 redis:
   addr: "127.0.0.1:6379"
@@ -166,7 +167,7 @@ redis:
 `;
 
   expect(parseDSN(text)).toBe(
-    "postgres://server:server@127.0.0.1:5432/server?sslmode=disable",
+    "server:server@tcp(127.0.0.1:3306)/server?charset=utf8mb4&parseTime=True&loc=Local",
   );
   expect(parseRedis(text)).toEqual({
     addr: "127.0.0.1:6379",
@@ -175,7 +176,15 @@ redis:
   });
 });
 
-test("启动失败的诊断取服务器日志自己的最后一条错误,不去猜 PG/Redis", () => {
+test("MySQL DSN 不暴露口令地取出依赖地址", () => {
+  expect(
+    parseMySQLAddress(
+      "server:secret@tcp(192.168.8.141:3306)/agentre_server_dev?charset=utf8mb4",
+    ),
+  ).toEqual({ host: "192.168.8.141", port: 3306 });
+});
+
+test("启动失败的诊断取服务器日志自己的最后一条错误,不去猜 MySQL/Redis", () => {
   const log = `{"level":"info","msg":"config loaded"}
 {"level":"info","msg":"database connected"}
 {"level":"fatal","msg":"missing JWT key: open \\"./runtime/keys/jwt.key\\": no such file or directory"}

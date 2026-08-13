@@ -103,6 +103,32 @@ err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 
 A repository that reaches for `db.Default()` silently escapes the transaction.
 
+### Column collations are part of the contract
+
+A collation decides what "equal" means, so on any column that a `WHERE`, a `JOIN` or a
+unique key compares, it is a behavioural choice, not formatting. Pick it explicitly:
+
+| Kind of value | Collation | Why |
+| --- | --- | --- |
+| Opaque identifiers, hashes, bearer credentials — `sync_id`, `*_fingerprint`, `session_id`, `device_code`, `refresh_token_hash`, `content_hash`, `provider_uid`, enum-ish `kind` | `utf8mb4_0900_bin` | Two values differing in any byte are two different things. Folding them merges distinct records and widens credential matching. |
+| Identifiers a human types — `email`, `user_code` | `utf8mb4_0900_as_ci` | Case must not matter: one mailbox is one account, and a code typed lowercase must still match. |
+| Text that is only stored and displayed — `display_name`, `name`, `platform`, `version`, `user_agent`, `ip`, `path`, `content_type` | *(table default `utf8mb4_0900_ai_ci`)* | Never compared, so the choice is inert. Leaving it unset marks it as "not load-bearing". |
+
+Two traps, both of which produced real bugs in the PostgreSQL→MySQL move:
+
+- **Only use the `utf8mb4_0900_*` family.** `utf8mb4_bin` and `utf8mb4_general_ci` are
+  `PAD SPACE`, so they ignore trailing spaces — `'x'` equals `'x '`, and two `sync_id`s
+  differing only by a trailing space collide on the unique key. Every `_0900_` collation is
+  `NO PAD`, which is what PostgreSQL `text` does.
+  `migrations/collation_test.go` fails the build if a `PAD SPACE` collation appears in DDL.
+- **`ai_ci` is not "case-insensitive", it is also accent-insensitive.** As an email
+  collation it makes `e@x.c` and `é@x.c` the same address. `as_ci` is the case-only tier.
+
+Columns compared against each other must share a collation, or MySQL raises *illegal mix of
+collations* at query time: `devices.fingerprint`, `sync_objects.agentred_fingerprint`,
+`followed_sessions.device_fingerprint` and `device_flow_codes.client_fingerprint` are one
+such group; `users.email` and `user_identities.email` are another.
+
 ## Routing and auth shapes
 
 `internal/api/router.go` is the one place the whole route tree is visible, and the
@@ -171,7 +197,7 @@ The deployment runs multiple replicas by default: `deploy/helm/values.yaml` sets
 `autoscaling.enabled: true` with `minReplicas: 2`. "There is only one of me" is never a
 safe assumption — it is false from the first install, not just under load.
 
-**Shared vs process-local state.** PostgreSQL and Redis are the only state visible to the
+**Shared vs process-local state.** MySQL and Redis are the only state visible to the
 whole fleet. Anything else — a `sync.Mutex`, a package-level cache, cago's in-process
 `cron.Cron()` schedule — lives in one replica's memory and is invisible to its siblings.
 If something must happen exactly once, or must see what every replica has done, it has to
@@ -194,9 +220,22 @@ the transaction and a "deny" committed in that gap would otherwise still hand th
 token.
 
 A write with no conditional `UPDATE` to hang the decision on needs the database to arbitrate
-some other way. `device_repo.Upsert` is a single `INSERT … ON CONFLICT ("user_id",
-"fingerprint") DO UPDATE`, not a find-then-create, so two exchanges for the same device
-converge on one row instead of racing to a `uk_devices_user_fingerprint` duplicate-key 500.
+some other way. `device_repo.Upsert` writes with `INSERT … ON DUPLICATE KEY UPDATE` and then
+reads the settled row back inside the same transaction (MySQL has no `RETURNING`), rather
+than a find-then-create, so two exchanges for the same device converge on one row instead of
+racing to a `uk_devices_user_fingerprint` duplicate-key 500.
+
+**`ON DUPLICATE KEY UPDATE` only arbitrates when the table has exactly one unique key.**
+MySQL fires it on whichever unique key the row collided with, and does not tell you which —
+`clause.OnConflict{Columns: …}` is decorative in the MySQL dialect. `devices`,
+`sync_account_seqs`, `sync_device_states`, `sync_avatars` and `followed_sessions` each have a
+single unique key, so the clause means what it reads like. `sync_objects` has two
+(`uk_sync_objects_identity` and `uk_sync_objects_location`), and there the clause would
+quietly rewrite *another account row's* content under its own `sync_id`. `sync_repo.Save`
+therefore splits into a version-guarded `UPDATE` plus a plain `INSERT`, and discriminates the
+resulting `1062` by index name via `internal/pkg/dberr.IsDuplicateKey` — an identity
+collision is a lost version race and is swallowed, a location collision is the R4b backstop
+and must surface. Before adding an upsert, count the table's unique keys.
 
 Inside a transaction, put the conditional `UPDATE` **first**, before any write that depends
 on winning: `ExchangeToken` marks the flow consumed before it touches `devices`, and
@@ -215,12 +254,15 @@ replica's lock — TryLock-and-let-expire avoids that. A replica that loses the 
 
 **Startup one-shot work.** Work that must run exactly once across a concurrently-starting
 fleet — migrations are the current example — needs a distributed lock, not just an
-in-process guard. `migrations/migrations.go`'s `RunMigrations` takes a PostgreSQL advisory
+in-process guard. `migrations/migrations.go`'s `RunMigrations` takes a MySQL named
 lock (`withMigrationLock`) on a connection obtained via `sqlDB.Conn(ctx)` before running
-gormigrate, because advisory locks are session-scoped and a `*gorm.DB` call can otherwise
+gormigrate, because named locks are session-scoped and a `*gorm.DB` call can otherwise
 land on a different pooled connection than the one that acquired the lock. It polls
-`pg_try_advisory_lock` rather than blocking, up to a 120s budget, so a replica that can't
-get the lock fails loudly instead of hanging past its startup probe.
+`GET_LOCK(name, 0)` — the zero-timeout form, which returns immediately — rather than letting
+`GET_LOCK(name, <timeout>)` block, up to a 120s budget, so a replica that can't get the lock
+fails loudly instead of hanging past its startup probe. `GET_LOCK` has three outcomes, not
+two: `1` acquired, `0` held by someone else, and `NULL` when an error occurred; only `1`
+counts as acquired, and the other two keep polling until the budget runs out.
 
 ## How to add an X
 

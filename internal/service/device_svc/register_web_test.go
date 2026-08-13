@@ -81,7 +81,7 @@ func TestRegisterWebDevice(t *testing.T) {
 		require.NoError(t, err)
 		out2, err := svc.RegisterWebDevice(ctx, RegisterWebDeviceInput{UserID: 7, Fingerprint: "fp-web-abc"})
 		require.NoError(t, err)
-		// Upsert 按 (user_id, fingerprint) 命中既有行并 RETURNING 回填原 id（不新增行）。
+		// Upsert 按 (user_id, fingerprint) 命中既有行并 transaction read-back 回填原 id（不新增行）。
 		assert.Equal(t, out1.DeviceID, out2.DeviceID)
 	})
 
@@ -142,7 +142,7 @@ func TestRegisterWebDevice(t *testing.T) {
 
 	// 指纹由浏览器自己生成，服务端只按 binding `min=8,max=128` 收 —— 而 validator 的
 	// min 数的是**符文**，回退名却按字节切。八个三字节符文的指纹（24 字节）因此过得了
-	// 校验，`[:8]` 却切在第三个符文中间，落库的是一段非法 UTF-8：Postgres 直接以
+	// 校验，`[:8]` 却切在第三个符文中间，落库的是一段非法 UTF-8：MySQL 直接以
 	// `invalid byte sequence for encoding "UTF8"` 拒掉这条 INSERT，用户拿到 500，
 	// 浏览器一台设备也换不到。回退名必须按符文截。
 	t.Run("name 缺省且指纹是多字节符文 → 按符文截,不切出非法 UTF-8", func(t *testing.T) {
@@ -152,7 +152,7 @@ func TestRegisterWebDevice(t *testing.T) {
 		mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, d *device_entity.Device) error {
 				assert.True(t, utf8.ValidString(d.Name),
-					"回退名必须是合法 UTF-8，否则这条 INSERT 会被 Postgres 拒掉")
+					"回退名必须是合法 UTF-8，否则这条 INSERT 会被 MySQL 拒掉")
 				assert.Equal(t, "指纹指纹指纹指纹", d.Name)
 				d.ID = 7
 				return nil

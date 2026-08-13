@@ -15,7 +15,7 @@ speculatively. And do not add a guard in the consumer to paper over a producer b
 | Layer | Tool | Rule |
 | --- | --- | --- |
 | Entity | plain table tests | Business rules (`Check`, `IsActive`, state transitions) live here, so test them here |
-| Repository | **sqlmock** | **Never start a real PostgreSQL.** `internal/testutils.Database(t)` gives you a postgres-dialect sqlmock through ctx |
+| Repository | **sqlmock** | **Never start a real MySQL.** `internal/testutils.Database(t)` gives you a mysql-dialect sqlmock through ctx |
 | Service | **mockgen** | Inject repo mocks via `xxx_repo.RegisterXxx(mock)`. Never touch a database |
 | Controller | `muxtest.TestMux` | Build the route tree, `testMux.Do(ctx, req, resp)` |
 | Migrations | **nothing** for the DDL; sqlmock for the runner around it | `migrationList()` is deliberately untested — see below |
@@ -24,6 +24,13 @@ speculatively. And do not add a guard in the consumer to paper over a producer b
 Repository tests are the rule people break first. sqlmock keeps them fast and hermetic;
 a real database makes them order-dependent and slow, and they start failing for reasons
 that have nothing to do with the code.
+
+**Write expectations in the dialect the driver actually speaks** — backtick-quoted
+identifiers and `?` placeholders. `testutils.Database` deliberately has no dialect
+translation layer: rewriting the emitted SQL into some other dialect before matching means
+the test pins a string the database will never receive, and the next reader concludes the
+service talks to a different engine than it does. If an expectation looks wrong against
+MySQL, the expectation is wrong.
 
 There is no cross-layer tier. A test that stands up its own `gin.New()` and hand-writes
 the `code`/`msg`/`data` envelope is not testing the wiring — it is testing a second
@@ -65,7 +72,7 @@ A target you did not run is obvious; a tagged-out test is invisible.
 ## Migrations are deliberately untested
 
 There is no automated check that `migrations/migrationList()` runs cleanly against a real
-PostgreSQL — that would mean a Docker dependency, which this suite deliberately avoids.
+MySQL — that would mean a Docker dependency, which this suite deliberately avoids.
 
 **Know what that costs you.** `cmd/server/main.go` runs `migrations.RunMigrations` at
 startup, so a migration that is valid Go but invalid SQL — wrong type, bad constraint,
@@ -77,16 +84,17 @@ So when you touch `migrations/`, verify it by hand before merging:
 
 ```bash
 make dev                       # migrations run at startup against db.dsn; watch for errors
-psql "<that same dsn>" -c '\dt'   # then read the tables back directly
+mysql --host <host> --user <user> --password <database> -e 'SHOW TABLES' # read tables back directly
 ```
 
 Write that check up under `e2e/scratch/` per [verification.md](verification.md) — for
 migrations the evidence is the table list, not a screenshot.
 
 **What is untested is the DDL, not the runner.** `migrations/migrations_test.go` does use
-sqlmock, on the advisory-lock wrapper `withMigrationLock` that serialises concurrently
-starting replicas — it asserts the `pg_try_advisory_lock` retry, that the migration func
-only runs once the lock is held, and that `pg_advisory_unlock` follows. That is a
+sqlmock, on the named-lock wrapper `withMigrationLock` that serialises concurrently
+starting replicas — it asserts the `GET_LOCK` retry, that the migration func
+only runs once the lock is held, that `RELEASE_LOCK` follows, and that a `NULL` from
+`GET_LOCK` counts as *not* acquired. That is a
 statement-sequence assertion, so it stays hermetic; it says nothing about whether any
 migration in `migrationList()` is valid SQL.
 

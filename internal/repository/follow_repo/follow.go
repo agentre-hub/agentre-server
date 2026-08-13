@@ -31,7 +31,7 @@ func NewFollow() FollowRepo       { return &repo{} }
 
 type repo struct{}
 
-// Follow 是一条语句的条件插入：ON CONFLICT ... DO NOTHING 由数据库原子裁决，
+// Follow 是一条语句的条件插入：命中唯一索引时那条 INSERT 什么都不改，由数据库原子裁决，
 // 并发重复关注两边都成功、只落一行。先查再插会在两个副本同时首次关注时双双
 // 走到 INSERT，竞败方撞唯一索引拿到一个约束错误。
 func (r *repo) Follow(ctx context.Context, f *follow_entity.FollowedSession) error {

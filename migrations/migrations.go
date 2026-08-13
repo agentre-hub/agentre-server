@@ -1,4 +1,4 @@
-// Package migrations 汇总并执行 agentre-server PostgreSQL 全部迁移。
+// Package migrations 汇总并执行 agentre-server MySQL 全部迁移。
 //
 // 规范：
 //   - 文件名前缀 = 时间戳排序键（YYYYMMDDNNNN），调用顺序按时间升序。
@@ -20,14 +20,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// migrationLockID 是迁移串行化用的 PostgreSQL advisory lock id。
-//
-// 取值 = crc32.ChecksumIEEE([]byte("agentre-server/migrations"))，算好后写死在这里，
-// 避免每次启动都重算。advisory lock 只按「当前数据库」隔离、不绑定任何表或行，因此只有
-// 另一个连到同一个数据库的应用凑巧选中同一个 id 才会撞车。
-const migrationLockID int64 = 4097874731
+// migrationLockName 是迁移串行化用的 MySQL named lock。锁名携应用名，
+// 避免同一 MySQL 实例上的其他应用迁移相互阻塞。
+const migrationLockName = "agentre-server/migrations"
 
-// migrationLockPollInterval / migrationLockWaitBudget 是轮询 pg_try_advisory_lock 的
+// migrationLockPollInterval / migrationLockWaitBudget 是轮询 GET_LOCK 的
 // 间隔与总预算，声明成变量是为了让测试能换成极小值而不必真的等待。
 var (
 	migrationLockPollInterval = 500 * time.Millisecond
@@ -36,7 +33,7 @@ var (
 
 // RunMigrations 执行所有迁移。
 //
-// 副本可能并发启动：先在一条专用连接上取 advisory lock 把迁移串行化，拿到锁的副本才跑
+// 副本可能并发启动：先在一条专用连接上取 named lock 把迁移串行化，拿到锁的副本才跑
 // gormigrate，其余副本轮询等待；等待超过 migrationLockWaitBudget 就放弃并报错，交给
 // main.go 的 log.Fatalf 退出，由 k8s 重启后重试。
 func RunMigrations(db *gorm.DB) error {
@@ -46,13 +43,13 @@ func RunMigrations(db *gorm.DB) error {
 	})
 }
 
-// withMigrationLock 在持有迁移 advisory lock 期间执行 fn。
+// withMigrationLock 在持有迁移 named lock 期间执行 fn。
 //
-// advisory lock 是会话级的，而 gorm 的 *gorm.DB 从连接池里取连接：如果直接用
-// db.Exec("pg_try_advisory_lock") 加锁，锁可能落在连接 A 上，随后 fn 里的迁移语句却从
+// named lock 是会话级的，而 gorm 的 *gorm.DB 从连接池里取连接：如果直接用
+// db.Exec("GET_LOCK") 加锁，锁可能落在连接 A 上，随后 fn 里的迁移语句却从
 // 连接 B 跑，锁在归还连接池的那一刻就形同虚设。因此这里用 sqlDB.Conn(ctx) 单独要一条
-// 连接、全程只用它做加锁/解锁；fn 内部的迁移仍然照常走连接池，advisory lock 不绑定数据，
-// 这样是安全的。副本崩溃时这条专用连接断开，PostgreSQL 会自动释放锁，无需人工介入。
+// 连接、全程只用它做加锁/解锁；fn 内部的迁移仍然照常走连接池，named lock 不绑定数据，
+// 这样是安全的。副本崩溃时这条专用连接断开，MySQL 会自动释放锁，无需人工介入。
 func withMigrationLock(db *gorm.DB, fn func() error) error {
 	sqlDB, err := db.DB()
 	if err != nil {
@@ -74,33 +71,42 @@ func withMigrationLock(db *gorm.DB, fn func() error) error {
 	return fn()
 }
 
-// acquireMigrationLock 轮询 pg_try_advisory_lock 直到拿到锁或等待预算耗尽。
+// acquireMigrationLock 轮询 GET_LOCK 直到拿到锁或等待预算耗尽。
 //
-// 用轮询而非阻塞的 pg_advisory_lock，是为了让等待有明确上界、可观测：拿不到锁时立刻
-// 返回，不会让副本静默挂起到被存活探针杀掉。
+// 超时参数写 0 而不是让 GET_LOCK 自己阻塞，是为了让等待有明确上界、可观测：拿不到锁
+// 时立刻返回，不会让副本静默挂起到被存活探针杀掉。
+//
+// 返回值扫进 sql.NullInt64 而不是 int：GET_LOCK 有三种结果——1 拿到、0 没拿到、
+// NULL 发生了错误（连接被杀、锁名超长）。只有 1 算拿到，另外两种都继续轮询、最终以
+// 那条「等迁移锁超时」的错误收场。直接扫进 int 的话，NULL 会变成一个
+// 「converting NULL to int is unsupported」的驱动错误——那条消息既不说明是等锁失败，
+// 也会把排查引向「扫描类型」这个完全无关的方向。
 func acquireMigrationLock(ctx context.Context, conn *sql.Conn) error {
 	deadline := time.Now().Add(migrationLockWaitBudget)
 	for {
-		var locked bool
-		if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationLockID).Scan(&locked); err != nil {
-			return fmt.Errorf("migrations: try advisory lock: %w", err)
+		var locked sql.NullInt64
+		if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", migrationLockName).Scan(&locked); err != nil {
+			return fmt.Errorf("migrations: try named lock: %w", err)
 		}
-		if locked {
+		if locked.Valid && locked.Int64 == 1 {
 			return nil
 		}
 		if !time.Now().Before(deadline) {
-			return fmt.Errorf("migrations: timed out after %s waiting for the migration lock (id %d); another replica is likely still migrating",
-				migrationLockWaitBudget, migrationLockID)
+			return fmt.Errorf("migrations: timed out after %s waiting for the migration lock %q; another replica is likely still migrating",
+				migrationLockWaitBudget, migrationLockName)
 		}
 		time.Sleep(migrationLockPollInterval)
 	}
 }
 
-// releaseMigrationLock 解锁；专用连接紧接着就会被关闭，即便这里失败，PostgreSQL 也会在
+// releaseMigrationLock 解锁；专用连接紧接着就会被关闭，即便这里失败，MySQL 也会在
 // 连接断开时释放这条会话级的锁，因此这里只记日志、不把错误抛给调用方。
+//
+// 同样扫进 sql.NullInt64：RELEASE_LOCK 在锁不存在时返回 NULL，扫进 int 会得到一条
+// 与「解锁」毫无关系的类型转换告警。
 func releaseMigrationLock(ctx context.Context, conn *sql.Conn) {
-	var unlocked bool
-	if err := conn.QueryRowContext(ctx, "SELECT pg_advisory_unlock($1)", migrationLockID).Scan(&unlocked); err != nil {
+	var unlocked sql.NullInt64
+	if err := conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", migrationLockName).Scan(&unlocked); err != nil {
 		logger.Ctx(ctx).Warn("release migration lock", zap.Error(err))
 	}
 }

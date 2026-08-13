@@ -45,7 +45,7 @@
 | # | Decision | Basis and rejected option |
 |---|---|---|
 | 1 | 域名 `app.agentrehub.com`，非生产环境加前缀（`test.` / `pre.`） | 用户决定。Rejected: `server.agentre.dev`（`configs/config.example.yaml:47` 的旧值）——用户已改用新域名 |
-| 2 | chart 只部署 server 自身，PostgreSQL / Redis 复用集群已有实例 | 用户决定。Rejected: 用 bitnami subchart 一起部署——`helm uninstall` 会连数据一起带走，生产库不该受应用 chart 的生命周期管辖 |
+| 2 | chart 只部署 server 自身，MySQL / Redis 复用集群已有实例 | 用户决定。Rejected: 用 bitnami subchart 一起部署——`helm uninstall` 会连数据一起带走，生产库不该受应用 chart 的生命周期管辖 |
 | 3 | 配置走 etcd 配置中心，ConfigMap 只放引导配置 | 用户决定，与 scriptlist 同源。Rejected: ConfigMap + Secret 全量下发——改配置要重新 `helm upgrade` |
 | 4 | 不新增 Go 代码即可启用 etcd 配置源 | `pkg/component/core.go:8` 已经 blank-import 了 `configs/etcd`，而 `cmd/server/main.go` 导入了 `pkg/component`，`init()` 已把 `sources["etcd"]` 注册好。Rejected: 在 main.go 里再加一次 blank import——重复且无效果 |
 | 5 | ConfigMap 必须同时含 `env`、`debug`、`source`、`etcd` 四个键 | 文件源在键缺失时会**回写配置文件**（`configs/file/file.go:33-43`），而 subPath 挂载的 ConfigMap 是只读的，缺一个键就 CrashLoop。这四个键正好是切换到 etcd 之前会被读到的全部键 |
@@ -104,7 +104,7 @@ Service 以 80 端口对内暴露，转发到容器的 8443。Ingress 用 `k3s-m
 ## Out of scope
 
 - 让 `/v1/healthz` 在 DB/Redis 不通时返回非 200：那是改 controller 的可观测行为，需要单独的 spec 与回归测试。
-- 部署 PostgreSQL / Redis / etcd 本身（决策 2、3）。
+- 部署 MySQL / Redis / etcd 本身（决策 2、3）。
 - 证书签发（cert-manager 等）：chart 只引用已存在的 TLS Secret。
 - 改动 `.github/workflows/ci.yml` 与任何 Go 生产代码。GitHub 侧的门禁保持原样，本轮不因为 Gitea 的存在去动它。
   （交付后经用户要求追加：`Dockerfile` 与 `docker-compose.yml` 移入 `deploy/`，`docs/deploy.md` 改写为面向人的

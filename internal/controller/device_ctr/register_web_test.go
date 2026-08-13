@@ -50,7 +50,7 @@ func newRegisterWebServer(t *testing.T) *registerWebServer {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis() // miniredis → cago redis.Default()
 
-	_, gormDB, mock := hubtest.DatabasePG(t)
+	_, gormDB, mock := hubtest.Database(t)
 	db.SetDefault(gormDB)
 
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")

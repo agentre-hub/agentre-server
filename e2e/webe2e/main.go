@@ -4,7 +4,7 @@
 //
 // The web frontend's login ends at GitHub OAuth, which nobody can click in an
 // e2e, so the runner seeds the identity straight into the developer's
-// PostgreSQL + Redis:
+// MySQL + Redis:
 //
 //   - a throwaway user (the account);
 //   - one kind=agentred device + a refresh token for the real `agentred run`
@@ -37,7 +37,7 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-	"gorm.io/driver/postgres"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
@@ -144,23 +144,23 @@ func openDB(dsn string) (*gorm.DB, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, fmt.Errorf("--dsn is required (the harness reads it from agentre-server/configs/config.yaml)")
 	}
-	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
+	gdb, err := gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
 	if err != nil {
-		return nil, fmt.Errorf("connect postgres: %w", err)
+		return nil, fmt.Errorf("connect mysql: %w", err)
 	}
 	sqlDB, err := gdb.DB()
 	if err != nil {
 		return nil, err
 	}
 	if err := sqlDB.Ping(); err != nil {
-		return nil, fmt.Errorf("ping postgres: %w", err)
+		return nil, fmt.Errorf("ping mysql: %w", err)
 	}
 	return gdb, nil
 }
 
 func runSeed(args []string) error {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "PostgreSQL DSN")
+	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "MySQL DSN")
 	runID := fs.String("run-id", "", "unique id for this run")
 	agentredFP := fs.String("agentred-fingerprint", "", "the agentred device fingerprint (sha256:<hex> of the daemon instance uuid)")
 	desktopFP := fs.String("desktop-fingerprint", "", "optional: also seed a kind=desktop device with this fingerprint (the desktop+web dual scenario)")
@@ -192,13 +192,20 @@ func runSeed(args []string) error {
 	now := time.Now().UnixMilli()
 	out := &seedResult{RunID: *runID, Email: accountEmail(*runID)}
 	err = gdb.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Raw(
-			`INSERT INTO users (email, email_verified, display_name, avatar_url, status, createtime, updatetime)
-			 VALUES (?, true, ?, '', 1, ?, ?) RETURNING id`,
-			out.Email, "webe2e "+*runID, now, now,
-		).Scan(&out.UserID).Error; err != nil {
+		user := struct {
+			ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
+			Email         string `gorm:"column:email"`
+			EmailVerified bool   `gorm:"column:email_verified"`
+			DisplayName   string `gorm:"column:display_name"`
+			AvatarURL     string `gorm:"column:avatar_url"`
+			Status        int    `gorm:"column:status"`
+			Createtime    int64  `gorm:"column:createtime"`
+			Updatetime    int64  `gorm:"column:updatetime"`
+		}{Email: out.Email, EmailVerified: true, DisplayName: "webe2e " + *runID, Status: 1, Createtime: now, Updatetime: now}
+		if err := tx.Table("users").Create(&user).Error; err != nil {
 			return fmt.Errorf("insert user: %w", err)
 		}
+		out.UserID = user.ID
 		agentred, err := seedDevice(tx, out.UserID, agentredDeviceName, "agentred", *agentredFP, now)
 		if err != nil {
 			return err
@@ -249,13 +256,26 @@ func runSeed(args []string) error {
 // 一枚坏令牌会在那一步大声失败，而不是变成半登录的进程。
 func seedDevice(tx *gorm.DB, userID int64, name, kind, fingerprint string, now int64) (*seededDevice, error) {
 	out := &seededDevice{Fingerprint: fingerprint}
-	if err := tx.Raw(
-		`INSERT INTO devices (user_id, name, kind, platform, version, fingerprint, last_seen_at, status, createtime, updatetime)
-		 VALUES (?, ?, ?, 'darwin', 'e2e', ?, ?, 1, ?, ?) RETURNING id`,
-		userID, name, kind, fingerprint, now, now, now,
-	).Scan(&out.DeviceID).Error; err != nil {
+	row := struct {
+		ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+		UserID      int64  `gorm:"column:user_id"`
+		Name        string `gorm:"column:name"`
+		Kind        string `gorm:"column:kind"`
+		Platform    string `gorm:"column:platform"`
+		Version     string `gorm:"column:version"`
+		Fingerprint string `gorm:"column:fingerprint"`
+		LastSeenAt  int64  `gorm:"column:last_seen_at"`
+		Status      int    `gorm:"column:status"`
+		Createtime  int64  `gorm:"column:createtime"`
+		Updatetime  int64  `gorm:"column:updatetime"`
+	}{
+		UserID: userID, Name: name, Kind: kind, Platform: "darwin", Version: "e2e",
+		Fingerprint: fingerprint, LastSeenAt: now, Status: 1, Createtime: now, Updatetime: now,
+	}
+	if err := tx.Table("devices").Create(&row).Error; err != nil {
 		return nil, fmt.Errorf("insert %s device: %w", kind, err)
 	}
+	out.DeviceID = row.ID
 	plain, err := randomToken()
 	if err != nil {
 		return nil, err
@@ -324,7 +344,7 @@ func seedWorkspace(tx *gorm.DB, userID int64, runID, agentredFP, projectPath str
 			`INSERT INTO sync_objects
 			   (user_id, kind, sync_id, project_sync_id, agentred_fingerprint, payload,
 			    version, sync_updated_at, source_device_id, deleted_at, createtime, updatetime)
-			 VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, 0, 0, ?, ?)`,
+			 VALUES (?, ?, ?, ?, ?, CAST(? AS JSON), ?, ?, 0, 0, ?, ?)`,
 			userID, kind, syncID, projectSyncID, fingerprint, string(body), version, now, now, now,
 		).Error; err != nil {
 			return fmt.Errorf("insert sync_object %s/%s: %w", kind, syncID, err)
@@ -405,7 +425,7 @@ type cleanupResult struct {
 
 func runCleanup(args []string) error {
 	fs := flag.NewFlagSet("cleanup", flag.ExitOnError)
-	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "PostgreSQL DSN")
+	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "MySQL DSN")
 	runID := fs.String("run-id", "", "run id used at seed time")
 	redisAddr, redisPassword, redisDB := registerRedisFlags(fs)
 	if err := fs.Parse(args); err != nil {

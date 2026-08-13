@@ -1,7 +1,7 @@
 /**
  * WEB FULL-CHAIN e2e —— 测试接缝 10:一次真实运行走通全链路。
  *
- * 真浏览器 + 本机真 agentre-server(开发环境 PG/Redis)+ 真 agentred(fake
+ * 真浏览器 + 本机真 agentre-server(开发环境 MySQL/Redis)+ 真 agentred(fake
  * runtime,字节稳定回复)。run-e2e-web.mjs 已经:
  *   - 播种一个一次性账号(PG)+ agentred 设备 + Redis 浏览器 session;
  *   - 写好已认领的 agentred state.json 并跑起 daemon(连上中继);

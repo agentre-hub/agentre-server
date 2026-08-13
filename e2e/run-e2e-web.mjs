@@ -8,7 +8,7 @@
 //
 //   1. locate the agentre-server and agentre checkouts, read the developer's DSN + Redis
 //   2. build the server + the `webe2e` harness tool (GOWORK=off) + agentred (-tags e2e)
-//   3. start the server on a free port against the developer's PostgreSQL + Redis
+//   3. start the server on a free port against the developer's MySQL + Redis
 //   4. seed ONE throwaway account + one agentred device + one Redis browser session
 //      + the account-level workspace (agents, a project and its path on that
 //      agentred) that the "start a new conversation from the web" flow reads
@@ -533,6 +533,15 @@ export function parseDSN(text) {
   return blockScalar(text, "db", "dsn", "") || null;
 }
 
+// parseMySQLAddress 只取 Go MySQL DSN 的 tcp 地址，不返回用户名、口令或库名。
+export function parseMySQLAddress(value) {
+  const match = value?.match(/@tcp\(([^():]+|\[[^\]]+\]):(\d+)\)\//);
+  if (!match) return null;
+  const port = Number(match[2]);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return { host: match[1].replace(/^\[|\]$/g, ""), port };
+}
+
 /** parseRedis 读 redis 段。缺省值与 configs/config.example.yaml 一致。 */
 export function parseRedis(text) {
   return {
@@ -709,7 +718,7 @@ async function waitForServer(baseURL) {
  * 没有这样的行时返回 null(由调用方去探测依赖)。
  *
  * 这一步是「说出缺什么」的第一手证据:服务器起不来的原因五花八门(密钥文件读不到、
- * 端口被占、迁移失败……),未经探测就断言「PostgreSQL 或 Redis 不可达」会把读者
+ * 端口被占、迁移失败……),未经探测就断言「MySQL 或 Redis 不可达」会把读者
  * 引向完全无关的子系统 —— 本轮的运行时验证正是被这句话挡了一次。
  */
 export function summarizeStartupFailure(logText) {
@@ -727,7 +736,7 @@ export function summarizeStartupFailure(logText) {
 }
 
 // startupDiagnosis 组织服务器起不来时给人看的那句话:先服务器日志自己的最后一条
-// 错误(决定性),日志里没有错误行时才去 TCP 探测 PostgreSQL 与 Redis,并如实说
+// 错误(决定性),日志里没有错误行时才去 TCP 探测 MySQL 与 Redis,并如实说
 // 哪个连得上、哪个连不上。
 async function startupDiagnosis() {
   let logText = "";
@@ -750,17 +759,17 @@ async function startupDiagnosis() {
 // probeDependencies TCP 探测配置里那两个依赖,逐个如实报结果。
 async function probeDependencies() {
   const targets = [];
-  try {
-    const u = new URL(dsn);
+  const mysqlAddress = parseMySQLAddress(dsn);
+  if (mysqlAddress) {
     targets.push({
-      label: `PostgreSQL ${u.hostname}:${u.port || 5432} (db.dsn)`,
-      host: u.hostname,
-      port: Number(u.port || 5432),
+      label: `MySQL ${mysqlAddress.host}:${mysqlAddress.port} (db.dsn)`,
+      host: mysqlAddress.host,
+      port: mysqlAddress.port,
     });
-  } catch {
+  } else {
     // 不回显 dsn 本身:它带着口令,而这条消息会被贴进日志与报告里。
     targets.push({
-      label: "PostgreSQL (db.dsn is not a URL this harness can parse)",
+      label: "MySQL (db.dsn is not a URL this harness can parse)",
     });
   }
   const [rhost, rport] = redis.addr.split(":");

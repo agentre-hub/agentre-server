@@ -12,14 +12,14 @@ import (
 )
 
 func TestCreate(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	repo := NewUser()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta(`INSERT INTO "users"`)).
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `users`")).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(42)))
+		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectCommit()
 
 	u := &user_entity.User{Email: "a@b.com", Status: 1}
@@ -30,10 +30,10 @@ func TestCreate(t *testing.T) {
 }
 
 func TestFindByEmail_Found(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	repo := NewUser()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "users" WHERE email=$1 AND status=$2 ORDER BY "users"."id" LIMIT $3`)).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `users` WHERE email=? AND status=? ORDER BY `users`.`id` LIMIT ?")).
 		WithArgs("a@b.com", 1, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "email", "status"}).AddRow(int64(1), "a@b.com", 1))
 
@@ -43,9 +43,9 @@ func TestFindByEmail_Found(t *testing.T) {
 }
 
 func TestFindByEmail_NotFound(t *testing.T) {
-	ctx, _, mock := hubtest.DatabasePG(t)
+	ctx, _, mock := hubtest.Database(t)
 	repo := NewUser()
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "users" WHERE email=$1 AND status=$2 ORDER BY "users"."id" LIMIT $3`)).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `users` WHERE email=? AND status=? ORDER BY `users`.`id` LIMIT ?")).
 		WithArgs("missing@x.com", 1, 1).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	got, err := repo.FindByEmail(ctx, "missing@x.com")

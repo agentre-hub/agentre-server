@@ -18,19 +18,19 @@ services:
       AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET: "${GH_CLIENT_SECRET:-}"
       AGENTRE_SERVER_SESSION_SECRET: "${SESSION_SECRET:-}"
     depends_on:
-      pg:    { condition: service_healthy }
+      mysql: { condition: service_healthy }
       redis: { condition: service_started }
 
-  pg:
-    image: postgres:18.4-alpine
+  mysql:
+    image: mysql:9.7.2
     environment:
-      POSTGRES_USER: server
-      POSTGRES_PASSWORD: server
-      POSTGRES_DB: server
-    # PostgreSQL 18 按大版本保存数据，挂父目录才能支持后续 pg_upgrade。
-    volumes: ["../data/pg:/var/lib/postgresql"]
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: server
+      MYSQL_USER: server
+      MYSQL_PASSWORD: server
+    volumes: ["../data/mysql:/var/lib/mysql"]
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "server"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"]
       interval: 5s
       retries: 10
 

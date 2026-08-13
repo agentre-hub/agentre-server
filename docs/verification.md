@@ -33,7 +33,7 @@ cd e2e && pnpm scratch
 spec, use that spec's slug**, so the evidence and the spec are findable from each other.
 
 Needing a real backend (real device flow, migrations, session cookies) — the server
-takes its PostgreSQL and Redis from `configs/config.yaml`, so point that at your own
+takes its MySQL and Redis from `configs/config.yaml`, so point that at your own
 instances:
 
 ```bash

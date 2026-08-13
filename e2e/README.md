@@ -86,7 +86,7 @@ separate, deliberate decision, not something that happens because it was handy.
 ## Needing a real backend
 
 The smoke track runs against the vite dev server with the API mocked, so it needs
-no PostgreSQL or Redis. Full-stack flows (real device flow, migrations, session
+no MySQL or Redis. Full-stack flows (real device flow, migrations, session
 cookies) need both, plus the Go server:
 
 ```bash
@@ -102,7 +102,7 @@ the real backend. A spec reaches that backend by simply **not** calling the
 mocking to switch off. `make dev` works too, but it also starts a second vite on
 5174 that the run does not use.
 
-**PostgreSQL and Redis come from `configs/config.yaml`** — the server loads it
+**MySQL and Redis come from `configs/config.yaml`** — the server loads it
 through `configs.NewConfig("agentre-server")` in `cmd/server/main.go`, so
 `db.dsn` and `redis.addr` decide what a scratch run actually writes to. Point
 them at your own instances; the file is gitignored and

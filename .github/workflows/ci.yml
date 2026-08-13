@@ -77,7 +77,7 @@ jobs:
       - name: make test
         run: make test
 
-  # 冒烟 e2e：桌面 + 移动两个 project，API 全 mock，不需要 PG/Redis。
+  # 冒烟 e2e：桌面 + 移动两个 project，API 全 mock，不需要 MySQL/Redis。
   e2e:
     name: e2e
     runs-on: ubuntu-latest
