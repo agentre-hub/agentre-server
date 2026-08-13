@@ -6,7 +6,7 @@
   "packageManager": "pnpm@10.33.0",
   "description": "真实 server E2E 与本地 serve + drive + scratch 验证入口。",
   "scripts": {
-    "smoke": "playwright install chromium && node run.mjs",
+    "smoke": "node run.mjs",
     "scratch": "playwright install chromium && playwright test --config playwright.scratch.config.ts",
     "serve": "node run.mjs --serve",
     "drive": "node drive.mjs",
