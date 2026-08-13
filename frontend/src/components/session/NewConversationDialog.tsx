@@ -6,8 +6,9 @@
  *   - R15：派发计划（/v1/workspace/dispatch-target）按序列出执行目标链每一档的
  *     原因（本机跳过 / 未配对 / 离线 / 项目路径缺失），只有第一档可用的 agentred
  *     才能继续；全部不可用时不静默失败，逐档把原因摆给用户（屏 24 的「现在选不了」）。
- *   - R17：发起前就在确认步说明 org / subagent / hook 用不了以及原因——不是等
- *     工具调用失败了才报错。
+ *   - R17：发起前就在确认步说明 org / subagent / hook 在当前目标下是否可用——目标是
+ *     桌面端时这三个内置工具的真身就在那台机器上、可用；是 agentred 时轮 A 的 R17
+ *     原样成立、不可用。不是等工具调用失败了才报错。
  *   - R16：确认后经 lib/dispatch.dispatchNewConversation 派发并立刻关注自己这条，
  *     于是它不经「关注」就出现在「对话」页。
  */
@@ -360,18 +361,27 @@ export default function NewConversationDialog({
                   })}
                 </p>
               )}
-              {/* R17：发起前就说明 org / subagent / hook 用不了以及原因。 */}
-              <div
-                role="note"
-                className="rounded-md border border-border bg-muted px-3 py-2.5"
-              >
-                <p className="text-[13px] font-semibold text-foreground">
-                  {t("chat.r17Title")}
-                </p>
-                <p className="mt-1 text-[12px] leading-[1.5] text-muted-foreground">
-                  {t("chat.r17Body")}
-                </p>
-              </div>
+              {/* R17：发起前如实说明当前目标下 org / subagent / hook 是否可用——目标是
+                  桌面端时这三个内置工具的真身就在那台机器上、可用；是 agentred 时
+                  轮 A 的 R17 原样成立、不可用。不是等工具调用失败了才报错。 */}
+              {confirmChoice && (
+                <div
+                  role="note"
+                  data-target-kind={confirmChoice.kind ?? ""}
+                  className="rounded-md border border-border bg-muted px-3 py-2.5"
+                >
+                  <p className="text-[13px] font-semibold text-foreground">
+                    {confirmChoice.kind === "desktop"
+                      ? t("chat.r17DesktopTitle")
+                      : t("chat.r17Title")}
+                  </p>
+                  <p className="mt-1 text-[12px] leading-[1.5] text-muted-foreground">
+                    {confirmChoice.kind === "desktop"
+                      ? t("chat.r17DesktopBody")
+                      : t("chat.r17Body")}
+                  </p>
+                </div>
+              )}
               <div className="space-y-2">
                 <label
                   htmlFor="new-conversation-first-message"

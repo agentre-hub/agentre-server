@@ -19,6 +19,7 @@ import SessionDetailView from "@/components/session/SessionDetailView";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
+import { mergeSessionCopies } from "@/lib/sessionMerge";
 import { decodeSessionListResult, type SessionSummary } from "@/lib/wire";
 
 /**
@@ -31,7 +32,7 @@ import { decodeSessionListResult, type SessionSummary } from "@/lib/wire";
  *
  * 关注名单（/v1/follows）只含「指向」（设备指纹 + 会话标识 + 关注时间），不含
  * 标题 / 消息 / 转录。要显示与 R5 同一套信息（标题 / 状态 / 等待输入），本页对
- * 每个在线的目标机器挂一个 FollowedMachineResolver：连上中继后 session.list，
+ * 每个在线的目标设备挂一个 FollowedMachineResolver：连上中继后 session.list，
  * 把关注到的会话解析出来。机器离线时该条仍在名单里并标明离线（R13）；目标已
  * 不存在（设备被撤销 / 机器上已没有这条会话）时标失效、可一键移除。
  */
@@ -63,8 +64,8 @@ function loadErrorText(e: unknown, t: (k: string) => string): string {
 }
 
 /**
- * 一台在线目标机器的会话解析器：用 useRelayMachine 连到那台 agentred，连上后
- * session.list，把属于本页关注集合的会话解析出来回传。每台在线机器一个实例。
+ * 一台在线目标设备的会话解析器：用 useRelayMachine 连到桌面端或 agentred，连上后
+ * session.list，把属于本页关注集合的会话解析出来回传。每台在线目标一个实例。
  */
 function FollowedMachineResolver({
   fingerprint,
@@ -233,60 +234,67 @@ export default function Chat() {
     const pending: ChatPendingRow[] = [];
     const offline: ChatOfflineRow[] = [];
     const invalid: ChatInvalidRow[] = [];
+    const desktopFingerprints = new Set(
+      devices
+        .filter((device) => device.kind === "desktop")
+        .map((device) => device.fingerprint),
+    );
 
-    for (const f of follows) {
-      const key = `${f.device_fingerprint}:${f.session_id}`;
-      const device = devicesByFp.get(f.device_fingerprint);
-      if (f.invalid || !device) {
-        invalid.push({
-          key,
-          fingerprint: f.device_fingerprint,
-          sessionId: Number(f.session_id),
-          deviceName: device?.name ?? null,
-          reason: "device",
-        });
-        continue;
-      }
+    const copies = follows.flatMap((follow) => {
+      const device = devicesByFp.get(follow.device_fingerprint);
       if (
-        !device.online ||
-        machineState[f.device_fingerprint] === "unreachable"
+        follow.invalid ||
+        !device?.online ||
+        machineState[follow.device_fingerprint] === "unreachable"
       ) {
-        offline.push({
-          key,
-          fingerprint: f.device_fingerprint,
-          sessionId: Number(f.session_id),
-          deviceId: device.id,
-          deviceName: device.name,
-          lastSeenAt: device.last_seen_at,
-        });
-        continue;
+        return [];
       }
-      const sessList = resolved[f.device_fingerprint] ?? [];
-      const match = sessList.find((s) => String(s.sessionId) === f.session_id);
-      if (!match) {
-        if (machineState[f.device_fingerprint] === "connected") {
-          // 已连上但机器上已没有这条会话（如 daemon 清理了记录）→ 失效可移除。
-          invalid.push({
-            key,
-            fingerprint: f.device_fingerprint,
-            sessionId: Number(f.session_id),
-            deviceName: device.name,
-            reason: "session",
-          });
-        } else {
-          pending.push({ key, deviceName: device.name });
-        }
-        continue;
-      }
-      const syncId = match.agentSyncId?.trim() ?? "";
+      const match = (resolved[follow.device_fingerprint] ?? []).find(
+        (session) => String(session.sessionId) === follow.session_id,
+      );
+      return match
+        ? [
+            {
+              sourceFingerprint: follow.device_fingerprint,
+              sourceKind: device.kind,
+              summary: match,
+              value: { follow, device },
+            },
+          ]
+        : [];
+    });
+    const merged = mergeSessionCopies(copies, desktopFingerprints);
+    const resolvedFollowKeys = new Set(
+      copies.map(
+        (copy) =>
+          `${copy.value.follow.device_fingerprint}:${copy.value.follow.session_id}`,
+      ),
+    );
+    const selectedFollowKeys = new Set(
+      merged.map(
+        (copy) =>
+          `${copy.value!.follow.device_fingerprint}:${copy.value!.follow.session_id}`,
+      ),
+    );
+    const representedKeys = new Set(
+      merged.flatMap((copy) => {
+        const peer = copy.summary.peerFingerprint?.trim();
+        return peer ? [`${peer}\u0000${copy.summary.sessionId}`] : [];
+      }),
+    );
+
+    for (const copy of merged) {
+      const { follow, device } = copy.value!;
+      const syncId = copy.summary.agentSyncId?.trim() ?? "";
       const row: ChatSessionRow = {
-        key,
-        fingerprint: f.device_fingerprint,
-        sessionId: match.sessionId,
+        key: `${follow.device_fingerprint}:${follow.session_id}`,
+        fingerprint: follow.device_fingerprint,
+        sessionId: copy.summary.sessionId,
         deviceId: device.id,
         deviceName: device.name,
-        followedAt: f.followed_at,
-        summary: match,
+        followedAt: follow.followed_at,
+        summary: copy.summary,
+        historyIncomplete: copy.historyIncomplete,
       };
       let group: ChatGroup | undefined;
       if (syncId) {
@@ -301,6 +309,56 @@ export default function Chat() {
       group.sessions.push(row);
     }
 
+    for (const f of follows) {
+      const key = `${f.device_fingerprint}:${f.session_id}`;
+      if (selectedFollowKeys.has(key) || resolvedFollowKeys.has(key)) continue;
+      const device = devicesByFp.get(f.device_fingerprint);
+      if (f.invalid || !device) {
+        invalid.push({
+          key,
+          fingerprint: f.device_fingerprint,
+          sessionId: Number(f.session_id),
+          deviceName: device?.name ?? null,
+          reason: "device",
+        });
+        continue;
+      }
+      // agentred 退化副本已经代表了同一条桌面会话时，不再额外画一条桌面离线/等待行。
+      if (
+        device.kind === "desktop" &&
+        representedKeys.has(`${device.fingerprint}\u0000${f.session_id}`)
+      ) {
+        continue;
+      }
+      if (
+        !device.online ||
+        machineState[f.device_fingerprint] === "unreachable"
+      ) {
+        offline.push({
+          key,
+          fingerprint: f.device_fingerprint,
+          sessionId: Number(f.session_id),
+          deviceId: device.id,
+          deviceName: device.name,
+          deviceKind: device.kind,
+          lastSeenAt: device.last_seen_at,
+        });
+        continue;
+      }
+      if (machineState[f.device_fingerprint] === "connected") {
+        // 已连上但机器上已没有这条会话（如 daemon 清理了记录）→ 失效可移除。
+        invalid.push({
+          key,
+          fingerprint: f.device_fingerprint,
+          sessionId: Number(f.session_id),
+          deviceName: device.name,
+          reason: "session",
+        });
+      } else {
+        pending.push({ key, deviceName: device.name });
+      }
+    }
+
     const groups = [...groupsByKey.values()];
     groups.sort((a, b) => {
       if (a.key === "__unnamed__") return 1;
@@ -312,7 +370,7 @@ export default function Chat() {
     const total =
       groups.reduce((n, g) => n + g.sessions.length, 0) + offline.length;
     return { groups, pending, offline, invalid, total };
-  }, [follows, devicesByFp, agents, resolved, machineState, t]);
+  }, [follows, devices, devicesByFp, agents, resolved, machineState, t]);
 
   if (loadError) {
     return (
@@ -543,7 +601,7 @@ export default function Chat() {
         }
       />
 
-      {/* 每个在线且有非失效关注的机器挂一个解析器（见文件头注释）。 */}
+      {/* 每个在线且有非失效关注的目标设备挂一个解析器（见文件头注释）。 */}
       {loaded &&
         [...devicesByFp.values()]
           .filter(

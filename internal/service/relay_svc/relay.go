@@ -155,17 +155,21 @@ func New(config Config, devices device_repo.DeviceRepo, redisClient *goredis.Cli
 }
 
 func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64, kind string) (Route, error) {
-	if kind != device_entity.KindAgentred {
+	if !isAddressableKind(kind) {
 		return Route{}, ErrDaemonForbidden
 	}
 	device, err := s.devices.Find(ctx, deviceID)
 	if err != nil {
 		return Route{}, err
 	}
-	if device == nil || device.UserID != accountID || device.Kind != device_entity.KindAgentred || !device.IsActive() {
+	if device == nil || device.UserID != accountID || !isAddressableKind(device.Kind) || !device.IsActive() {
 		return Route{}, ErrDaemonForbidden
 	}
 	return Route{AccountID: accountID, Fingerprint: device.Fingerprint, InstanceID: s.config.InstanceID}, nil
+}
+
+func isAddressableKind(kind string) bool {
+	return kind == device_entity.KindAgentred || kind == device_entity.KindDesktop
 }
 
 func (s *relaySvc) RegisterDaemon(ctx context.Context, route Route) error {
@@ -198,7 +202,7 @@ func (s *relaySvc) ConnectClient(ctx context.Context, accountID int64, fingerpri
 	if err != nil {
 		return Route{}, err
 	}
-	if device == nil || device.Kind != device_entity.KindAgentred || !device.IsActive() {
+	if device == nil || !isAddressableKind(device.Kind) || !device.IsActive() {
 		return Route{}, ErrDaemonNotFound
 	}
 

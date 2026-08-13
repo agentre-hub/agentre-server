@@ -57,7 +57,8 @@ func (w *Workspace) DispatchTarget(c *gin.Context, req *api.DispatchTargetReques
 	for _, t := range plan.Tiers {
 		resp.Tiers = append(resp.Tiers, api.DispatchTierItem{
 			Rank: t.Rank, DeviceID: t.DeviceID, DeviceName: t.DeviceName,
-			BackendType: t.BackendType, Availability: t.Availability, Current: t.Current,
+			BackendType: t.BackendType, Kind: t.Kind,
+			Availability: t.Availability, Current: t.Current,
 		})
 	}
 	if plan.Chosen != nil {
@@ -66,6 +67,7 @@ func (w *Workspace) DispatchTarget(c *gin.Context, req *api.DispatchTargetReques
 			DeviceID:          plan.Chosen.DeviceID,
 			DeviceName:        plan.Chosen.DeviceName,
 			BackendType:       plan.Chosen.BackendType,
+			Kind:              plan.Chosen.Kind,
 			Cwd:               plan.Chosen.Cwd,
 		}
 	}

@@ -151,6 +151,79 @@ describe("device row expand", () => {
     expect(within(card).getByText(/View this machine/i)).toBeTruthy();
   });
 
+  it("expanding an active desktop row shows conversation counts and an enter action", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") {
+        return {
+          devices: [
+            {
+              ...listResponse.devices[1],
+              online: true,
+              is_this_device: false,
+            },
+          ],
+        };
+      }
+      if (path === "/v1/workspace/device-detail?device_id=2") {
+        return {
+          device_id: 2,
+          kind: "desktop",
+          projects: [],
+        };
+      }
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    const card = (await screen.findByText("laptop")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+    fireEvent.click(
+      within(card).getByRole("button", { name: /show details/i }),
+    );
+
+    expect(await within(card).findByText("Conversations")).toBeTruthy();
+    expect(await within(card).findByText("3 conversations")).toBeTruthy();
+    expect(within(card).getByText("1 waiting for you")).toBeTruthy();
+    const link = within(card).getByRole("link", {
+      name: "View this desktop's conversations",
+    });
+    expect(link.getAttribute("href")).toBe("/devices/2/sessions");
+  });
+
+  it("an inactive desktop says Agentre is not running and cannot be entered", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      if (path === "/v1/workspace/device-detail?device_id=2") {
+        return {
+          device_id: 2,
+          kind: "desktop",
+          projects: [],
+        };
+      }
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    const card = (await screen.findByText("laptop")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+    expect(within(card).getByText(/Agentre is not running/)).toBeTruthy();
+    expect(within(card).queryByText(/^Offline$/)).toBeNull();
+
+    fireEvent.click(
+      within(card).getByRole("button", { name: /show details/i }),
+    );
+    expect(
+      await within(card).findByText(
+        /Agentre is not running on this computer\. Open Agentre to view its conversations\./,
+      ),
+    ).toBeTruthy();
+    expect(within(card).queryByRole("link", { name: /conversations/i })).toBe(
+      null,
+    );
+  });
+
   // 帧 47：浏览器行不接单，也**不可展开** —— 展开它只会去问一台没有项目、没有
   // Agent 的「设备」，把 agentred 的那套详情套在浏览器上是错的。
   it("a kind=web row has no expand control", async () => {

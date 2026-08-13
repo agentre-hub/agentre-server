@@ -173,9 +173,9 @@ async function main() {
   // 播种的项目在这台 agentred 上的真实目录(= 新对话的 cwd)。它是 workDir 下的
   // 一个子目录,run 结束随 workDir 一起消失。
   mkdirSync(projectDir, { recursive: true });
-  // 桌面端的设备指纹与 bootstrap.newBootFingerprint 同形(16 字节 hex),它同时是
-  // 桌面端在 agentred 上的对端身份 —— 会话归属的前半段。
-  const desktopFP = randomUUID().replace(/-/g, "");
+  // 桌面端 identity 与 R12/R13 的 backend DeviceID 使用同一个 canonical
+  // fingerprint。server 设备行、Wails keychain 与会话 peer identity 全部透传此值。
+  const desktopFP = desktopFingerprint(randomUUID().replace(/-/g, ""));
   seeded = runTool([
     "seed",
     "--dsn",
@@ -432,8 +432,16 @@ function reapOrphanVite(dir) {
 
 // ── pieces ──────────────────────────────────────────────────────────────────
 
-function daemonFingerprint(instanceUUID) {
+function canonicalFingerprint(instanceUUID) {
   return `sha256:${createHash("sha256").update(instanceUUID).digest("hex")}`;
+}
+
+function daemonFingerprint(instanceUUID) {
+  return canonicalFingerprint(instanceUUID);
+}
+
+export function desktopFingerprint(instanceUUID) {
+  return canonicalFingerprint(instanceUUID);
 }
 
 function locateAgentreCheckout(serverDir) {

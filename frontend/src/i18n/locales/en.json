@@ -203,7 +203,10 @@
       "sessionCount": "{{count}} conversations",
       "sessionWaiting": "{{count}} waiting for you",
       "viewSessions": "View this machine's conversations",
+      "viewDesktopSessions": "View this desktop's conversations",
       "offlineNotEnterable": "Offline — conversations are unavailable.",
+      "desktopAppNotRunningShort": "Agentre is not running",
+      "desktopAppNotRunningDetail": "Agentre is not running on this computer. Open Agentre to view its conversations.",
       "cardSummary": "{{projects}} projects · {{m}} conversations running"
     }
   },
@@ -219,6 +222,9 @@
       "lost": "Connection lost. Reconnecting automatically.",
       "machineOffline": "This machine is offline.",
       "machineOfflineWithTime": "This machine is offline — last seen {{time}}.",
+      "desktopAppNotRunning": "Agentre is not running on this computer. Open Agentre to continue.",
+      "desktopAppNotRunningWithTime": "Agentre is not running on this computer. Open Agentre to continue — last seen {{time}}.",
+      "pinnedAgentredUnavailable": "Conversation history is still available, but its pinned agentred is unavailable. New messages cannot be sent until agentred is available again.",
       "revoked": "This browser has been revoked. Please sign in again.",
       "loggedOut": "You have been signed out. Please sign in again."
     },
@@ -240,6 +246,7 @@
       "idle": "Idle",
       "interrupted": "Interrupted",
       "waiting": "Waiting for your input",
+      "historyIncomplete": "History is incomplete — showing only the part retained by agentred.",
       "legacy": "{{cwd}} · {{backend}} · {{status}}",
       "group": {
         "waiting": "Waiting for you",
@@ -298,6 +305,7 @@
     "pendingFrom": "Loading conversations from {{machine}}…",
     "offlineTitle": "Offline",
     "offlineMachineWithTime": "{{machine}} · offline · last seen {{time}}",
+    "desktopAppNotRunningWithTime": "{{machine}} · Agentre is not running · last seen {{time}}. Open Agentre to continue.",
     "invalidTitle": "Unavailable",
     "invalidBody": "This conversation is no longer reachable.",
     "noMachine": "Unknown machine",
@@ -324,6 +332,8 @@
     "connectFailed": "Could not reach {{machine}}. Please try again.",
     "r17Title": "org / subagent / hook are not available here",
     "r17Body": "These three built-in tools live on your desktop app. Web-launched conversations can't use them — start from the desktop app if you need them.",
+    "r17DesktopTitle": "org / subagent / hook are available here",
+    "r17DesktopBody": "This conversation runs on a desktop app, where these three built-in tools live. You can use them exactly as if you had started this conversation on that machine.",
     "cancel": "Cancel",
     "back": "Back",
     "messagePlaceholder": "Say something…",

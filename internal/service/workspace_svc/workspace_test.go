@@ -426,3 +426,111 @@ func TestWebDispatchPlan_GivenUnknownAgent_ThenNotFound(t *testing.T) {
 	_, err := svc.WebDispatchPlan(ctx, 7, "agent-missing", "")
 	assert.Error(t, err)
 }
+
+// R17：浏览器把新对话派到一台桌面端上。桌面端在派发计划里是与 agentred 同地位的
+// 具名目标（决策 10）——第一档可用的是桌面端时，计划必须选中它并把「该桌面端自己
+// 上报的本机路径」作为 cwd 带出（决策 6：桌面端路径只存在于上报组 device_local_paths，
+// 不在同步组 project_location 里），而不是误判成 project_path_missing。选中的档还要
+// 携带 kind=desktop，供发起前如实说明 org/subagent/hook 在桌面端上可用（R17）。
+func TestWebDispatchPlan_GivenDesktopFirstAvailable_ThenChoosesDesktopWithLocalPathAndKind(t *testing.T) {
+	ctx, mObj, mPath, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-desk": true, "fp-agentred": false}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
+		{Kind: sync_entity.KindProject, SyncID: "proj-1", Payload: mustJSON(t, map[string]any{"name": "agentre-server"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-local", AgentredFingerprint: "",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-desk", AgentredFingerprint: "fp-desk",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-agentred", AgentredFingerprint: "fp-agentred",
+			Payload: mustJSON(t, map[string]any{"type": "codex"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-local", "sort_order": 0})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-desk", "sort_order": 1})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t3",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-agentred", "sort_order": 2})},
+		// 桌面端不写同步组 project_location；它的路径只在上报组 device_local_paths。
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 20, UserID: 7, Name: "书房小主机", Kind: device_entity.KindAgentred, Fingerprint: "fp-agentred", Status: 1},
+		{ID: 30, UserID: 7, Name: "家里 Mac mini", Kind: device_entity.KindDesktop, Fingerprint: "fp-desk", Status: 1},
+	}, nil)
+	mPath.EXPECT().ListByDevice(ctx, int64(7), int64(30)).Return([]*sync_entity.DeviceLocalPath{
+		{UserID: 7, DeviceID: 30, ProjectSyncID: "proj-1", Path: "/Users/wyz/agentre-server"},
+	}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	require.NoError(t, err)
+	require.Len(t, plan.Tiers, 3)
+
+	// 本机相对引用照旧跳过（R15d 删除后无相对槽位，这里是最老档位的遗留形态）。
+	assert.Equal(t, AvailabilitySkippedForWeb, plan.Tiers[0].Availability)
+
+	// 第一档可用的是桌面端：被选中，且不是 project_path_missing（路径来自它自己的上报）。
+	assert.Equal(t, AvailabilityAvailable, plan.Tiers[1].Availability)
+	assert.Equal(t, "家里 Mac mini", plan.Tiers[1].DeviceName)
+	assert.Equal(t, device_entity.KindDesktop, plan.Tiers[1].Kind)
+	assert.True(t, plan.Tiers[1].Current)
+
+	assert.Equal(t, AvailabilityOffline, plan.Tiers[2].Availability)
+	assert.Equal(t, "书房小主机", plan.Tiers[2].DeviceName)
+
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "fp-desk", plan.Chosen.DeviceFingerprint)
+	assert.Equal(t, device_entity.KindDesktop, plan.Chosen.Kind)
+	assert.Equal(t, "家里 Mac mini", plan.Chosen.DeviceName)
+	assert.Equal(t, "/Users/wyz/agentre-server", plan.Chosen.Cwd)
+
+	// picker 用：桌面端已配置的项目清单同样从它的上报组路径来。
+	require.Len(t, plan.Projects, 1)
+	assert.Equal(t, "agentre-server", plan.Projects[0].Name)
+	assert.Equal(t, "proj-1", plan.Projects[0].SyncID)
+}
+
+// R17 的不可用边界：桌面端在线但没配所选项目的路径 → 该档如实标 project_path_missing
+// （逐档原因，不静默），继续按顺序取下一档配了路径的 agentred。
+func TestWebDispatchPlan_GivenDesktopMissingProjectPath_ThenSkipsToNextTargetWithPath(t *testing.T) {
+	ctx, mObj, mPath, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-desk": true, "fp-agentred": true}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
+		{Kind: sync_entity.KindProject, SyncID: "proj-1", Payload: mustJSON(t, map[string]any{"name": "agentre-server"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-desk", AgentredFingerprint: "fp-desk",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-agentred", AgentredFingerprint: "fp-agentred",
+			Payload: mustJSON(t, map[string]any{"type": "codex"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-desk", "sort_order": 0})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-agentred", "sort_order": 1})},
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+			AgentredFingerprint: "fp-agentred", Payload: mustJSON(t, map[string]any{"path": "/srv/agentre-server"})},
+		// 桌面端上报组里没有 proj-1 的路径（它的 ListByDevice 返回空）。
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 30, UserID: 7, Name: "家里 Mac mini", Kind: device_entity.KindDesktop, Fingerprint: "fp-desk", Status: 1},
+		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-agentred", Status: 1},
+	}, nil)
+	mPath.EXPECT().ListByDevice(ctx, int64(7), int64(30)).Return(nil, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	require.NoError(t, err)
+	require.Len(t, plan.Tiers, 2)
+
+	assert.Equal(t, AvailabilityProjectPathMissing, plan.Tiers[0].Availability)
+	assert.Equal(t, "家里 Mac mini", plan.Tiers[0].DeviceName)
+	assert.False(t, plan.Tiers[0].Current)
+
+	assert.Equal(t, AvailabilityAvailable, plan.Tiers[1].Availability)
+	assert.True(t, plan.Tiers[1].Current)
+	assert.Equal(t, "公司 Mac mini", plan.Tiers[1].DeviceName)
+	assert.Equal(t, device_entity.KindAgentred, plan.Tiers[1].Kind)
+
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "fp-agentred", plan.Chosen.DeviceFingerprint)
+	assert.Equal(t, device_entity.KindAgentred, plan.Chosen.Kind)
+	assert.Equal(t, "/srv/agentre-server", plan.Chosen.Cwd)
+}

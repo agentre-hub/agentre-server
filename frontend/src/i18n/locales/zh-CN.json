@@ -203,7 +203,10 @@
       "sessionCount": "{{count}} 条对话",
       "sessionWaiting": "{{count}} 条等你处理",
       "viewSessions": "查看这台机器的对话",
+      "viewDesktopSessions": "查看这个桌面端的对话",
       "offlineNotEnterable": "已离线——对话不可用。",
+      "desktopAppNotRunningShort": "Agentre 未运行",
+      "desktopAppNotRunningDetail": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可查看它的对话。",
       "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑"
     }
   },
@@ -219,6 +222,9 @@
       "lost": "连接已丢失，正在自动重连。",
       "machineOffline": "这台机器已离线。",
       "machineOfflineWithTime": "这台机器已离线——最后在线 {{time}}。",
+      "desktopAppNotRunning": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可继续。",
+      "desktopAppNotRunningWithTime": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可继续——最后在线 {{time}}。",
+      "pinnedAgentredUnavailable": "对话历史仍可阅读，但该会话钉住的 agentred 当前不可用。agentred 恢复前无法发送新消息。",
       "revoked": "该浏览器已被解除授权，请重新登录。",
       "loggedOut": "账号已登出，请重新登录。"
     },
@@ -240,6 +246,7 @@
       "idle": "空闲",
       "interrupted": "已中断",
       "waiting": "正在等待你的输入",
+      "historyIncomplete": "历史不完整——当前只显示 agentred 保留的部分。",
       "legacy": "{{cwd}} · {{backend}} · {{status}}",
       "group": {
         "waiting": "等你处理",
@@ -298,6 +305,7 @@
     "pendingFrom": "正在加载 {{machine}} 上的对话…",
     "offlineTitle": "离线",
     "offlineMachineWithTime": "{{machine}} · 离线 · 最后在线 {{time}}",
+    "desktopAppNotRunningWithTime": "{{machine}} · Agentre 未运行 · 最后在线 {{time}}。打开 Agentre 后即可继续。",
     "invalidTitle": "已不可用",
     "invalidBody": "这条对话已经找不到目标了。",
     "noMachine": "未知机器",
@@ -324,6 +332,8 @@
     "connectFailed": "连不上 {{machine}}，请重试。",
     "r17Title": "org / subagent / hook 此刻用不了",
     "r17Body": "这三个内置工具的真身在桌面端。网页发起的对话用不了它们——需要它们时请从桌面端发起。",
+    "r17DesktopTitle": "org / subagent / hook 可用",
+    "r17DesktopBody": "对话运行在桌面端上，这三个内置工具的真身就在那台机器上——与在那台机器上手动发起完全一致。",
     "cancel": "取消",
     "back": "返回",
     "messagePlaceholder": "说点什么…",

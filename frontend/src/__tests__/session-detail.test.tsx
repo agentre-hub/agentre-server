@@ -489,6 +489,39 @@ describe("会话详情页:老 agentred 与发送失败", () => {
     ).toBe(true);
   });
 
+  it("桌面端在场但钉住的 agentred 不可用:历史仍可读、新写入停用并给专门说明", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") {
+        return { devices: [{ ...deviceRow, kind: "desktop" }] };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === "runtime.session.list") {
+        return { sessions: [summary], supportsSessionMetadata: true };
+      }
+      if (method === "runtime.session.pendingWaiters") {
+        return { toolPermissions: [], askUserQuestions: [] };
+      }
+      if (method === "runtime.run") throw new Error("pinned agentred offline");
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "继续" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(
+      await screen.findByText(/Conversation history is still available/),
+    ).toBeTruthy();
+    expect(screen.getByRole("textbox").hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText(/draft is kept/)).toBeNull();
+  });
+
   it("发送失败:就地报错,不静默吞掉", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };

@@ -116,8 +116,85 @@ describe("设备会话列表页", () => {
     expect(fakeClient.request).toHaveBeenCalledWith("runtime.session.list");
   });
 
+  it("在线桌面端复用同一套会话列表并消费完整 SessionSummary", async () => {
+    const desktop = {
+      ...deviceRow,
+      id: 1,
+      name: "工作 MacBook",
+      kind: "desktop",
+      fingerprint: "fp-desktop",
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [desktop] };
+      if (path === "/v1/workspace/agents") {
+        return { agents: [{ sync_id: "ag-1", name: "后端 Agent" }] };
+      }
+      if (path === "/v1/follows") return { items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      client: {
+        ...fakeClient,
+        request: vi.fn(async () => ({
+          sessions: [
+            {
+              ...sessions[0],
+              peerFingerprint: "fp-desktop",
+              title: "桌面完整标题",
+            },
+          ],
+          supportsSessionMetadata: true,
+        })),
+      } as never,
+      relayState: "connected",
+      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
+      webDeviceError: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("桌面完整标题")).toBeTruthy();
+    // 桌面端列表等待输入时用状态点 + aria-label 表达（#10 起文字徽标只在移动端）。
+    expect(
+      screen.getByTestId("session-dot-42").getAttribute("aria-label"),
+    ).toBe("Waiting for your input");
+    expect(mockUseRelay).toHaveBeenCalledWith("fp-desktop");
+    expect(screen.queryByText("Unnamed")).toBeNull();
+  });
+
+  it("未运行的桌面端直达列表页时说明打开 Agentre，不借用机器离线措辞", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") {
+        return {
+          devices: [
+            {
+              ...deviceRow,
+              kind: "desktop",
+              fingerprint: "fp-desktop",
+              online: false,
+            },
+          ],
+        };
+      }
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      client: null,
+      relayState: "disconnected",
+      webDevice: null,
+      webDeviceError: null,
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/Open Agentre to continue/)).toBeTruthy();
+    expect(screen.queryByText(/This machine is offline/)).toBeNull();
+    expect(mockUseRelay).not.toHaveBeenCalledWith("fp-desktop");
+  });
+
   // 界面（决策 11 / 帧 45a）：「行尾一个「换机器」入口**就地切换**」——不是把人送回
-  // 设备页再从头下钻一次。就地列出账号下的其余 agentred，选中即换到那台机器的会话列表。
+  // 设备页再从头下钻一次。就地列出账号下的其余目标，选中即换到那台机器的会话列表。
   it("面包屑行尾「换机器」就地列出其余 agentred 并切过去", async () => {
     const other = {
       id: 2,

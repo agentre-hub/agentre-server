@@ -497,6 +497,123 @@ describe("对话页:行上的时间是最后活动时间", () => {
   });
 });
 
+describe("对话页:R20 重复会话合并", () => {
+  const desktop = {
+    id: 3,
+    name: "工作 MacBook",
+    kind: "desktop",
+    fingerprint: "fp-desktop",
+    last_seen_at: 1754000000000,
+    status: 1,
+    online: true,
+  };
+
+  function duplicateFollows() {
+    return [
+      {
+        device_fingerprint: "fp-agentred",
+        session_id: "42",
+        followed_at: 1754000000000,
+        invalid: false,
+      },
+      {
+        device_fingerprint: "fp-desktop",
+        session_id: "42",
+        followed_at: 1754000000000,
+        invalid: false,
+      },
+    ];
+  }
+
+  it("同键的桌面端与 agentred 摘要只呈现桌面端完整副本", async () => {
+    const compute = {
+      ...agentred,
+      fingerprint: "fp-agentred",
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows") return { items: duplicateFollows() };
+      if (path === "/v1/devices") return { devices: [compute, desktop] };
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((fingerprint) => ({
+      ...connectedRelay(),
+      client: {
+        ...fakeClient,
+        request: vi.fn(async () => ({
+          sessions: [
+            {
+              ...summary,
+              peerFingerprint: "fp-desktop",
+              title:
+                fingerprint === "fp-desktop"
+                  ? "Complete desktop title"
+                  : "Partial agentred title",
+            },
+          ],
+          supportsSessionMetadata: true,
+        })),
+      } as never,
+    }));
+
+    renderChat();
+
+    // 会话在「最近」区与所属 Agent 分组各渲染一次（T6），用 *AllBy 断言合并结果：
+    // 只剩桌面端完整副本，没有 agentred 退化副本，也不带历史不完整说明。
+    expect(
+      (await screen.findAllByText("Complete desktop title")).length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText("Partial agentred title")).toBeNull();
+    expect(screen.queryByText(/History is incomplete/)).toBeNull();
+  });
+
+  it("桌面端副本不在场时退到 agentred，并显示历史不完整说明", async () => {
+    const compute = {
+      ...agentred,
+      fingerprint: "fp-agentred",
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/follows") {
+        return { items: [duplicateFollows()[0]] };
+      }
+      if (path === "/v1/devices") {
+        return { devices: [compute, { ...desktop, online: false }] };
+      }
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue({
+      ...connectedRelay(),
+      client: {
+        ...fakeClient,
+        request: vi.fn(async () => ({
+          sessions: [
+            {
+              ...summary,
+              peerFingerprint: "fp-desktop",
+              title: "Partial agentred title",
+            },
+          ],
+          supportsSessionMetadata: true,
+        })),
+      } as never,
+    });
+
+    renderChat();
+
+    // 会话在「最近」区与所属 Agent 分组各渲染一次（T6），用 *AllBy 断言合并结果：
+    // 桌面端副本不在场时退到 agentred 副本并带历史不完整说明。
+    expect(
+      (await screen.findAllByText("Partial agentred title")).length,
+    ).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(
+        "History is incomplete — showing only the part retained by agentred.",
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
 // R13：这一页的每一行都靠 runtime.session.list 解析（标题 / 状态 / 等待输入 /
 // 最后活动时间）。机器掉线再回来时必须**重新**解析一次：断连期间那条对话可能跑完
 // 了、可能停下来等审批，而页面上还挂着断线前那一刻的状态——用户对着一个早就过时

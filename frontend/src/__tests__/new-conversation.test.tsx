@@ -99,8 +99,34 @@ const finalPlan: DispatchPlan = {
     device_id: 21,
     device_name: "公司 Mac mini",
     backend_type: "codex",
+    kind: "agentred",
     cwd: "/srv/agentre-server",
   },
+};
+
+// R17：目标是桌面端时，发起前如实说明 org / subagent / hook **可用**（真身在桌面端）。
+const desktopFinalPlan: DispatchPlan = {
+  agent_sync_id: "agent-1",
+  tiers: [
+    {
+      rank: 1,
+      device_id: 30,
+      device_name: "家里 Mac mini",
+      backend_type: "claudecode",
+      kind: "desktop",
+      availability: "available",
+      current: true,
+    },
+  ],
+  chosen: {
+    device_fingerprint: "fp-desk",
+    device_id: 30,
+    device_name: "家里 Mac mini",
+    backend_type: "claudecode",
+    kind: "desktop",
+    cwd: "/Users/wyz/agentre-server",
+  },
+  projects: [{ sync_id: "proj-1", name: "agentre-server", configured: true }],
 };
 
 const allUnavailablePlan: DispatchPlan = {
@@ -246,6 +272,40 @@ describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
         deviceFingerprint: "fp-online",
       }),
     );
+  });
+
+  it("目标是桌面端时，确认步如实说明 org / subagent / hook 可用（不是沿用 agentred 的不可用文案）", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    mockFetchPlan.mockImplementation(async (_agent, project) =>
+      project ? desktopFinalPlan : pickPlan,
+    );
+    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    mockDispatch.mockResolvedValue({
+      sessionId: 9002,
+      deviceId: 30,
+      deviceFingerprint: "fp-desk",
+    });
+    const onStarted = vi.fn();
+    renderDialog(onStarted);
+
+    fireEvent.click(await screen.findByText("后端 Agent"));
+    fireEvent.click(await screen.findByText("agentre-server"));
+
+    // R17：目标是桌面端 → org / subagent / hook 可用（真身就在那台机器上）。
+    expect(
+      await screen.findByText("org / subagent / hook are available here"),
+    ).toBeTruthy();
+    // 不可用的文案不得出现。
+    expect(
+      screen.queryByText("org / subagent / hook are not available here"),
+    ).toBeNull();
+    // 屏 25：将运行在桌面端机器 · 路径。
+    expect(
+      screen.getByText("Will run on 家里 Mac mini · /Users/wyz/agentre-server"),
+    ).toBeTruthy();
   });
 
   it("不输入第一句时「开始」按钮是禁用的（发出第一条消息之前什么都不会跑）", async () => {

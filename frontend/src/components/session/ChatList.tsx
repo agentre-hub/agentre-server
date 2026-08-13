@@ -58,6 +58,8 @@ export interface ChatSessionRow {
   deviceName: string;
   followedAt: number;
   summary: SessionSummary;
+  /** 桌面副本不在场而退到 agentred 副本时，只读得到执行端保留的部分历史。 */
+  historyIncomplete?: boolean;
   /** 移动形态下钉在行上的 Agent 名称与头像色（R13，见 regroupByStatus）。 */
   agentName?: string;
   agentColor?: string;
@@ -76,6 +78,7 @@ export interface ChatOfflineRow {
   sessionId: number;
   deviceId: number;
   deviceName: string;
+  deviceKind: string;
   lastSeenAt: number;
 }
 
@@ -232,6 +235,11 @@ function SessionRowBody({
         {hasRow2 && (
           <p className="mt-0.5 truncate text-xs text-muted-foreground">
             {row2}
+          </p>
+        )}
+        {row.historyIncomplete && (
+          <p className="mt-0.5 text-xs text-status-waiting">
+            {t("session.list.historyIncomplete")}
           </p>
         )}
       </div>
@@ -409,10 +417,15 @@ function OfflineRow({
         }
       >
         <p className="truncate text-sm font-medium text-foreground">
-          {t("chat.offlineMachineWithTime", {
-            machine: row.deviceName,
-            time: formatTime(row.lastSeenAt),
-          })}
+          {t(
+            row.deviceKind === "desktop"
+              ? "chat.desktopAppNotRunningWithTime"
+              : "chat.offlineMachineWithTime",
+            {
+              machine: row.deviceName,
+              time: formatTime(row.lastSeenAt),
+            },
+          )}
         </p>
       </Link>
       {/* 决策 16：移动的关注入口在详情页顶栏，不在列表行。 */}
