@@ -174,7 +174,7 @@ func runSeed(args []string) error {
 		return err
 	}
 	rc := goredis.NewClient(&goredis.Options{Addr: *redisAddr, Password: *redisPassword, DB: *redisDB})
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	if err := rc.Ping(context.Background()).Err(); err != nil {
 		return fmt.Errorf("ping redis: %w", err)
 	}
@@ -245,7 +245,7 @@ func runCleanup(args []string) error {
 		return err
 	}
 	rc := goredis.NewClient(&goredis.Options{Addr: *redisAddr, Password: *redisPassword, DB: *redisDB})
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	if err := rc.Ping(context.Background()).Err(); err != nil {
 		return fmt.Errorf("ping redis: %w", err)
 	}
