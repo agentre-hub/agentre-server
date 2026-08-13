@@ -45,7 +45,10 @@ func TestCleanupPlanIsRunScopedAndHasNoDangerousOperations(t *testing.T) {
 
 func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 	counts := residueSQL()
-	for _, name := range []string{"users", "device_flow_codes", "devices", "device_tokens"} {
+	for _, name := range []string{
+		"users", "device_flow_codes", "devices", "device_tokens",
+		"sync_objects", "sync_account_seqs", "sync_device_states", "sync_avatars", "device_local_paths",
+	} {
 		_ = findSQLStep(t, counts, name)
 	}
 	got := redisKeys("run-7")

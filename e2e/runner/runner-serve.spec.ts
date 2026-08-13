@@ -13,6 +13,10 @@ import { join } from "node:path";
 import {
   cleanupHasResidue,
   cleanupRunID,
+  installChildCompletion,
+  installServerErrorCapture,
+  decodeToolResult,
+  execCleanupInvocation,
   handoffIsLive,
   installSignalHandlers,
   parseRunnerArgs,
@@ -67,6 +71,37 @@ test("fixture CLI 从环境接收 DSN 与 Redis 口令，秘密不进入进程 a
   expect(invocation.args.join(" ")).not.toContain("secret");
 });
 
+test("孤儿 cleanup 使用旧 handoff 的依赖且非零退出仍解码 residue", () => {
+  let captured: unknown;
+  const result = execCleanupInvocation(
+    "/tmp/webe2e",
+    {
+      runID: "run-stale",
+      dsn: "old:secret@tcp(127.0.0.1:3306)/old_e2e",
+      redis: { addr: "127.0.0.1:6380", password: "old-secret", db: 8 },
+    },
+    (command, args, options) => {
+      captured = { command, args, options };
+      const error = Object.assign(new Error("command exited 1"), {
+        stdout: '{"run_id":"run-stale","residue":{"users":1}}',
+      });
+      throw error;
+    },
+  );
+  expect(result.residue.users).toBe(1);
+  expect(captured).toMatchObject({
+    command: "/tmp/webe2e",
+    args: ["cleanup", "--redis-db", "8", "--run-id", "run-stale"],
+    options: {
+      env: expect.objectContaining({
+        WEBE2E_DSN: "old:secret@tcp(127.0.0.1:3306)/old_e2e",
+        WEBE2E_REDIS_ADDR: "127.0.0.1:6380",
+        WEBE2E_REDIS_PASSWORD: "old-secret",
+      }),
+    },
+  });
+});
+
 test("spec 模式使用 task 4 的真实浏览器配置，而不是旧 mock smoke 配置", () => {
   expect(playwrightInvocation(["-g", "device flow"])).toEqual({
     command: "pnpm",
@@ -107,6 +142,7 @@ test("serve handoff 带齐同源登录和只读 oracle 所需字段", () => {
     sid: "seeded-sid",
     csrfToken: "csrf-secret",
     dsn: "u:p@tcp(127.0.0.1:3306)/agentre_e2e",
+    redis: { addr: "127.0.0.1:6379", password: "", db: 9 },
     runID: "run-123",
     userID: 42,
     serverLog: "/tmp/run/server.log",
@@ -127,6 +163,7 @@ test("缺 sid 或 csrf 的 handoff 当场失败", () => {
     serverURL: "http://127.0.0.1:41234",
     cookieName: "server_session",
     dsn: "u:p@tcp(127.0.0.1:3306)/agentre_e2e",
+    redis: { addr: "127.0.0.1:6379", password: "", db: 9 },
     runID: "run-123",
     userID: 42,
     serverLog: "/tmp/run/server.log",
@@ -166,7 +203,12 @@ test("失效 handoff 只有在孤儿 cleanup 成功后才删除", async () => {
   const path = join(dir, "serve-env.json");
   writeFileSync(
     path,
-    JSON.stringify({ serverURL: "http://127.0.0.1:1", runID: "run-stale" }),
+    JSON.stringify({
+      serverURL: "http://127.0.0.1:1",
+      runID: "run-stale",
+      dsn: "old:secret@tcp(127.0.0.1:3306)/old_e2e",
+      redis: { addr: "127.0.0.1:6380", password: "old-secret", db: 8 },
+    }),
   );
 
   await expect(
@@ -186,8 +228,12 @@ test("失效 handoff 只有在孤儿 cleanup 成功后才删除", async () => {
     prepareStaleHandoff(
       path,
       async () => false,
-      (runID) => {
-        expect(runID).toBe("run-stale");
+      (handoff) => {
+        expect(handoff).toMatchObject({
+          runID: "run-stale",
+          dsn: "old:secret@tcp(127.0.0.1:3306)/old_e2e",
+          redis: { addr: "127.0.0.1:6380", password: "old-secret", db: 8 },
+        });
         return { residue: { users: 0, session: 0 } };
       },
     ),
@@ -220,9 +266,37 @@ test("seed 输出尚未交回时仍用本轮 run ID cleanup", () => {
   );
 });
 
-test("cleanup residue 任一非零就令运行失败", () => {
-  expect(cleanupHasResidue({ users: 0, session: 0 })).toBe(false);
-  expect(cleanupHasResidue({ users: 0, session: 1 })).toBe(true);
+test("cleanup 即使命令因 residue 返回非零，也保留结构化结果供收尾判定", () => {
+  const result = decodeToolResult(
+    '{"run_id":"run-123","residue":{"users":1}}',
+    new Error("command exited 1"),
+  );
+  expect(result).toEqual({ run_id: "run-123", residue: { users: 1 } });
+  expect(cleanupHasResidue(result.residue)).toBe(true);
+});
+
+test("正式 server 进程启动错误可被健康等待路径观察", () => {
+  const target = new EventEmitter();
+  let captured: Error | null = null;
+  installServerErrorCapture(target, (error) => {
+    captured = error;
+  });
+
+  target.emit("error", new Error("spawn bin/server EACCES"));
+
+  expect(captured?.message).toContain("EACCES");
+});
+
+test("Playwright 子进程启动失败或退出都只触发一次收尾", async () => {
+  const target = new EventEmitter();
+  const codes: number[] = [];
+  installChildCompletion(target, async (code) => codes.push(code));
+
+  target.emit("error", new Error("spawn pnpm ENOENT"));
+  target.emit("exit", 0);
+  await Promise.resolve();
+
+  expect(codes).toEqual([1]);
 });
 
 test("serve 收到正常终止信号只执行一次成功 cleanup", async () => {

@@ -275,6 +275,7 @@ export function serveEnvPayload(values) {
     "sid",
     "csrfToken",
     "dsn",
+    "redis",
     "runID",
     "userID",
     "serverLog",
@@ -293,6 +294,7 @@ export function serveEnvPayload(values) {
     sid: values.sid,
     csrfToken: values.csrfToken,
     dsn: values.dsn,
+    redis: values.redis,
     runID: values.runID,
     userID: values.userID,
     serverLog: values.serverLog,
@@ -340,7 +342,7 @@ export async function prepareStaleHandoff(
       `E2E handoff ${path} has no owned run ID; manual inspection is required`,
     );
   }
-  const result = cleanup(old.runID);
+  const result = cleanup(old);
   if (cleanupHasResidue(result.residue)) {
     throw new Error(`stale run ${old.runID} still has isolated residue`);
   }
@@ -366,6 +368,21 @@ export function installSignalHandlers(target, mode, finish) {
   return handler;
 }
 
+export function installChildCompletion(child, finish) {
+  let handled = false;
+  const complete = (code) => {
+    if (handled) return;
+    handled = true;
+    void finish(code);
+  };
+  child.once("error", () => complete(1));
+  child.once("exit", (code) => complete(code ?? 1));
+}
+
+export function installServerErrorCapture(child, capture) {
+  child.once("error", capture);
+}
+
 let serverProc = null;
 let config = null;
 let paths = null;
@@ -373,6 +390,7 @@ let seeded = null;
 let activeRunID = null;
 let finishing = false;
 let toolReady = false;
+let serverStartError = null;
 
 function runID() {
   return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -404,18 +422,49 @@ function toolInvocation(command, id) {
   };
 }
 
+export function decodeToolResult(output, error = null) {
+  if (String(output ?? "").trim()) return JSON.parse(output);
+  if (error) throw error;
+  throw new Error("fixture tool produced no JSON output");
+}
+
+export function execCleanupInvocation(tool, handoff, execute = execFileSync) {
+  const invocation = seedInvocation(
+    tool,
+    { dsn: handoff.dsn, redis: handoff.redis },
+    handoff.runID,
+  );
+  invocation.args[0] = "cleanup";
+  try {
+    const output = execute(invocation.command, invocation.args, {
+      encoding: "utf8",
+      env: { ...process.env, ...invocation.env },
+      timeout: 120_000,
+    });
+    return decodeToolResult(output);
+  } catch (error) {
+    return decodeToolResult(error.stdout, error);
+  }
+}
+
 function runTool(command, id) {
   const invocation = toolInvocation(command, id);
-  const output = execFileSync(invocation.command, invocation.args, {
-    encoding: "utf8",
-    env: { ...process.env, ...invocation.env },
-    timeout: 120_000,
-  });
-  return JSON.parse(output);
+  try {
+    const output = execFileSync(invocation.command, invocation.args, {
+      encoding: "utf8",
+      env: { ...process.env, ...invocation.env },
+      timeout: 120_000,
+    });
+    return decodeToolResult(output);
+  } catch (error) {
+    return decodeToolResult(error.stdout, error);
+  }
 }
 
 async function cleanStaleHandoff() {
-  await prepareStaleHandoff(serveEnvPath);
+  await prepareStaleHandoff(serveEnvPath, probeHealth, (old) =>
+    execCleanupInvocation(paths.tool, old),
+  );
 }
 
 async function probeHealth(baseURL) {
@@ -438,6 +487,11 @@ async function probeHealth(baseURL) {
 async function waitForHealth(baseURL) {
   const deadline = Date.now() + 90_000;
   for (;;) {
+    if (serverStartError) {
+      throw new Error(
+        `server process failed to start: ${serverStartError.message}`,
+      );
+    }
     if (serverProc?.exitCode !== null) {
       throw new Error(
         `server exited during startup with code ${serverProc.exitCode}`,
@@ -542,6 +596,9 @@ async function main() {
     cwd: root,
     stdio: ["ignore", logFD, logFD],
   });
+  installServerErrorCapture(serverProc, (error) => {
+    serverStartError = error;
+  });
 
   try {
     await waitForHealth(baseURL);
@@ -560,6 +617,7 @@ async function main() {
     sid: seeded.session.sid,
     csrfToken: seeded.session.csrf_token,
     dsn: config.dsn,
+    redis: config.redis,
     runID: seeded.run_id,
     userID: seeded.user_id,
     serverLog: paths.serverLog,
@@ -593,7 +651,7 @@ async function main() {
     env: process.env,
     stdio: "inherit",
   });
-  child.once("exit", (code) => void finish(code ?? 1));
+  installChildCompletion(child, finish);
 }
 
 function portIsBusy(port) {

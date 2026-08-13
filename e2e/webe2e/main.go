@@ -78,7 +78,11 @@ func cleanupSQL() []sqlStep {
 	return []sqlStep{
 		{"device_tokens", `DELETE FROM device_tokens WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)`},
 		{"device_flow_codes", `DELETE FROM ` + flowSelection(true).SQL},
+		{"device_local_paths", `DELETE FROM device_local_paths WHERE user_id = ?`},
+		{"sync_device_states", `DELETE FROM sync_device_states WHERE user_id = ?`},
+		{"sync_avatars", `DELETE FROM sync_avatars WHERE user_id = ?`},
 		{"sync_objects", `DELETE FROM sync_objects WHERE user_id = ?`},
+		{"sync_account_seqs", `DELETE FROM sync_account_seqs WHERE user_id = ?`},
 		{"followed_sessions", `DELETE FROM followed_sessions WHERE user_id = ?`},
 		{"devices", `DELETE FROM devices WHERE user_id = ?`},
 		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`},
@@ -90,7 +94,11 @@ func residueSQL() []sqlStep {
 	return []sqlStep{
 		{"device_tokens", `SELECT count(*) FROM device_tokens WHERE device_id IN (?)`},
 		{"device_flow_codes", `SELECT count(*) FROM ` + flowSelection(true).SQL},
+		{"device_local_paths", `SELECT count(*) FROM device_local_paths WHERE user_id = ?`},
+		{"sync_device_states", `SELECT count(*) FROM sync_device_states WHERE user_id = ?`},
+		{"sync_avatars", `SELECT count(*) FROM sync_avatars WHERE user_id = ?`},
 		{"sync_objects", `SELECT count(*) FROM sync_objects WHERE user_id = ?`},
+		{"sync_account_seqs", `SELECT count(*) FROM sync_account_seqs WHERE user_id = ?`},
 		{"followed_sessions", `SELECT count(*) FROM followed_sessions WHERE user_id = ?`},
 		{"devices", `SELECT count(*) FROM devices WHERE user_id = ?`},
 		{"user_identities", `SELECT count(*) FROM user_identities WHERE user_id = ?`},
