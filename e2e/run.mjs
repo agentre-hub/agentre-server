@@ -320,6 +320,14 @@ export function removeOwnedHandoff(path, owned) {
   if (owned) rmSync(path, { force: true });
 }
 
+export async function cleanupThenRemoveHandoff(path, owned, cleanup) {
+  const result = await cleanup();
+  if (owned && !cleanupHasResidue(result?.residue)) {
+    rmSync(path, { force: true });
+  }
+  return result;
+}
+
 export async function prepareStaleHandoff(
   path,
   probe = probeHealth,
@@ -383,7 +391,18 @@ export function installServerErrorCapture(child, capture) {
   child.once("error", capture);
 }
 
+export async function stopManagedChild(child, timeout = 5000) {
+  if (!child || !child.pid || child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolvePromise) => child.once("exit", resolvePromise)),
+    new Promise((resolvePromise) => setTimeout(resolvePromise, timeout)),
+  ]);
+  if (child.exitCode === null) child.kill("SIGKILL");
+}
+
 let serverProc = null;
+let playwrightProc = null;
 let config = null;
 let paths = null;
 let seeded = null;
@@ -525,24 +544,18 @@ function startupDetail(error) {
     .join("\n");
 }
 
-async function stopServer() {
-  if (!serverProc || serverProc.exitCode !== null) return;
-  serverProc.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolvePromise) => serverProc.once("exit", resolvePromise)),
-    new Promise((resolvePromise) => setTimeout(resolvePromise, 5000)),
-  ]);
-  if (serverProc.exitCode === null) serverProc.kill("SIGKILL");
-}
-
 async function finish(code) {
   if (finishing) return;
   finishing = true;
-  removeOwnedHandoff(serveEnvPath, seeded !== null);
+  await stopManagedChild(playwrightProc);
   const id = cleanupRunID(activeRunID, seeded);
   if (toolReady && id) {
     try {
-      const cleanup = runTool("cleanup", id);
+      const cleanup = await cleanupThenRemoveHandoff(
+        serveEnvPath,
+        seeded !== null,
+        async () => runTool("cleanup", id),
+      );
       writePrivateJSON(paths.cleanup, cleanup);
       const residue = Object.entries(cleanup.residue ?? {}).filter(
         ([, count]) => count > 0,
@@ -562,7 +575,7 @@ async function finish(code) {
       code = code || 1;
     }
   }
-  await stopServer();
+  await stopManagedChild(serverProc);
   process.exit(code);
 }
 
@@ -646,12 +659,12 @@ async function main() {
   }
 
   const playwright = playwrightInvocation(playwrightArgs);
-  const child = spawn(playwright.command, playwright.args, {
+  playwrightProc = spawn(playwright.command, playwright.args, {
     cwd: here,
     env: process.env,
     stdio: "inherit",
   });
-  installChildCompletion(child, finish);
+  installChildCompletion(playwrightProc, finish);
 }
 
 function portIsBusy(port) {

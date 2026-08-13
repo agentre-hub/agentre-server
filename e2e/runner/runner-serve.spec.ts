@@ -13,6 +13,7 @@ import { join } from "node:path";
 import {
   cleanupHasResidue,
   cleanupRunID,
+  cleanupThenRemoveHandoff,
   installChildCompletion,
   installServerErrorCapture,
   decodeToolResult,
@@ -29,6 +30,7 @@ import {
   seedInvocation,
   serverInvocation,
   serveEnvPayload,
+  stopManagedChild,
 } from "../run.mjs";
 
 test("默认跑 spec，--serve 只切换模式且不漏给 Playwright", () => {
@@ -297,6 +299,62 @@ test("Playwright 子进程启动失败或退出都只触发一次收尾", async 
   await Promise.resolve();
 
   expect(codes).toEqual([1]);
+});
+
+test("无法 spawn 的子进程不会让收尾空等超时", async () => {
+  const target = Object.assign(new EventEmitter(), {
+    pid: undefined,
+    exitCode: null as number | null,
+    kill() {
+      throw new Error("kill must not run without a child pid");
+    },
+  });
+
+  await stopManagedChild(target, 10);
+});
+
+test("信号收尾先终止仍在运行的 Playwright 子进程", async () => {
+  const target = Object.assign(new EventEmitter(), {
+    pid: 123,
+    exitCode: null as number | null,
+    kill(signal: NodeJS.Signals) {
+      expect(signal).toBe("SIGTERM");
+      this.exitCode = 143;
+      this.emit("exit", 143);
+      return true;
+    },
+  });
+
+  await stopManagedChild(target, 10);
+
+  expect(target.exitCode).toBe(143);
+});
+
+test("cleanup 失败或仍有 residue 时保留 handoff 供下一轮重试", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "e2e-handoff-cleanup-"));
+  const path = join(dir, "serve-env.json");
+  writeFileSync(path, JSON.stringify({ runID: "run-owned" }));
+
+  await expect(
+    cleanupThenRemoveHandoff(path, true, async () => {
+      throw new Error("redis unavailable");
+    }),
+  ).rejects.toThrow(/redis unavailable/);
+  expect(readFileSync(path, "utf8")).toContain("run-owned");
+
+  await expect(
+    cleanupThenRemoveHandoff(path, true, async () => ({
+      residue: { session: 1 },
+    })),
+  ).resolves.toMatchObject({ residue: { session: 1 } });
+  expect(readFileSync(path, "utf8")).toContain("run-owned");
+
+  await expect(
+    cleanupThenRemoveHandoff(path, true, async () => ({
+      residue: { session: 0 },
+    })),
+  ).resolves.toMatchObject({ residue: { session: 0 } });
+  expect(() => readFileSync(path, "utf8")).toThrow();
 });
 
 test("serve 收到正常终止信号只执行一次成功 cleanup", async () => {
