@@ -11,7 +11,7 @@ Verification is not how the smoke suite grows. Promotion is a separate, delibera
 ## Workflow
 
 1. Run `make lint` and the targeted tests; run `make test` only when the blast radius is not confirmed local or a gate requires it.
-2. Build/start the drivable target. Only the target starts here: MySQL and Redis come from the gitignored `configs/config.yaml` (`configs/config.example.yaml` is the template), so `db.dsn` and `redis.addr` decide what a run actually writes to — a service it does not configure is asked for, not arranged around.
+2. Build/start the drivable target. The E2E harness reads gitignored `configs/config.e2e.yaml` (`configs/config.e2e.example.yaml` is the template), so that explicit file decides what a run writes to. It validates the dedicated-E2E boundary but does not create services; CI alone arranges temporary containers. Development still defaults to `configs/config.yaml` without `--config`.
 3. Choose the cheapest form that observes the contract, and put everything it produces under gitignored `e2e/scratch/<scenario>/`:
 
    | To reach and observe the target | You author |
@@ -24,14 +24,13 @@ Verification is not how the smoke suite grows. Promotion is a separate, delibera
 
    | Change lands in | Reach it with | You author | Oracle |
    |---|---|---|---|
-   | HTTP API, auth, device flow, session cookies | `go run ./cmd/server`, then `curl` against `:8443` | nothing | a read-only SQL query against `db.dsn`, or the server log |
+   | HTTP API, auth, device flow, session cookies | `go run ./cmd/server --config configs/config.e2e.yaml`, then `curl` against its port | nothing | a read-only SQL query against that config's `db.dsn`, or the server log |
    | a migration | the forward command against a database holding real existing rows | nothing | the same query before and after, side by side |
    | web UI rendering only — layout, copy, theme, anything reachable logged out | `make dev`, then `pnpm drive up --base http://127.0.0.1:5174` | nothing | the screenshot, in **both** form factors (`drive viewport`) |
    | web UI behind auth, or touching real data | `cd e2e && pnpm serve` — a seeded account, already signed in — then `pnpm drive up` ([`../e2e/README.md`](../e2e/README.md#driving-by-hand-pnpm-serve--pnpm-drive)) | nothing | `drive sql`, plus the screenshots and `logs/drive.log` the run wrote |
    | replay, timing, or both form factors at once | the scratch track | a full spec | the spec's assertions |
-   | the desktop app and a browser on one agentred | `pnpm dual` ([`../e2e/README.md`](../e2e/README.md#the-dual-end-run-pnpm-dual--the-desktop-app-and-a-browser-on-one-agentred)) | per that suite | that suite's assertions |
 
-   Two facts decide the rows. The smoke track mocks the API; a scratch run reaches the real backend by simply **not** calling the `mock*` helpers from `fixtures/app.ts` — mocking is opt-in, there is no global switch to turn off, so calling one is a deliberate substitution the verdict row names. And every spec runs against **both** `desktop-chromium` and `mobile-chromium`: a desktop-only pass gives no signal about mobile layout.
+   The committed smoke and default scratch route reach the formal backend; the E2E fixture has no API route mocks. `make e2e` covers desktop and mobile Chromium. Agentred, Wails, relay/WebSocket and multi-end synchronization are outside this harness ([`../e2e/README.md`](../e2e/README.md#what-the-committed-smoke-covers)).
 
    Reuse the harness for isolation and the oracle, not its mocks. In every form one observation comes from a path the driven surface does not share — read the database or the logs directly. Asserting the UI says "approved" does not prove the row was written; a failed write behind a cheerful UI is the exact failure this catches.
 
@@ -46,9 +45,9 @@ pnpm drive snapshot                              # what is on screen, and how to
 pnpm drive click "testid=nav-devices" && pnpm drive shot 01-devices
 pnpm drive sql "select status from device_flow_codes where user_code = '<code>'"
 
-go run ./cmd/server                              # real backend on :8443, for curl and the SQL oracle
-cd e2e && E2E_SCRATCH_AUTOSTART=1 pnpm scratch   # the spec form: frontend on :5199, /v1 proxied to :8443
-cd e2e && pnpm scratch --project=desktop-chromium -g "<title>"
+go run ./cmd/server --config configs/config.e2e.yaml  # explicit real backend
+cd e2e && pnpm scratch                                # uses pnpm serve's handoff
+pnpm scratch --project=desktop-chromium -g "<title>"
 ```
 
 **Drive it before you write a spec.** A spec only asserts what you thought of in advance, and a one-line change costs a whole cold run; driving shows you what the page actually looks like now. That distinction is not theoretical here — the previous console round asserted elements existed and shipped a UI that did not match the design (`docs/specs/2026-08-12-console-design-fidelity.md`). Write a spec when the sequence must be **replayed**, not to look at something once.
@@ -57,7 +56,7 @@ For acceptance against a spec, `<scenario>` is that spec's slug, so the evidence
 
 For bug reproduction, state whether the reproduction asserts the expected behaviour (stays red until the fix lands) or the current buggy behaviour (green now, must be flipped when you fix it). An assertion whose polarity is undocumented becomes meaningless within a week. Choosing a form that authors nothing does not remove the committed failing test.
 
-Never weaken an assertion, skip a failed step or describe red as green. If you could not verify part of it, say which part and why — an unverified claim presented as verified stops anyone else from checking. If you worked around something rather than fixing it, that goes in the report too. Obtain authorization before destructive or external side effects, and before substituting a mock for a real dependency; the verdict row then names what stood in and what it does not cover.
+Never weaken an assertion, skip a failed step or describe red as green. If you could not verify part of it, say which part and why — an unverified claim presented as verified stops anyone else from checking. If you worked around something rather than fixing it, that goes in the report too. Obtain authorization before destructive or external side effects, and before substituting a mock for a real dependency; the verdict row then names what stood in and what it does not cover. Keep keys, complete DSNs, passwords, cookies, CSRF values, tokens and personal data out of reports and filenames; redact before sharing.
 
 ## What the harness enforces for you
 

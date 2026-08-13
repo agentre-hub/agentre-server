@@ -75,7 +75,7 @@ internal/
   web/                      embed.FS SPA mount, /v1 passthrough
 migrations/                 gormigrate; append-only
 frontend/                   React 19 + Vite + Tailwind + shadcn
-e2e/                        committed smoke + on-demand full chain + `drive` (hand-driven) + gitignored scratch
+e2e/                        real server/MySQL/Redis smoke + `serve`/`drive` + gitignored scratch
 ```
 
 Auth has three shapes, and which one a route uses is visible in `internal/api/router.go`:
@@ -86,8 +86,10 @@ public, browser session (+ CSRF), device JWT, or `SessionOrDeviceAuth` for eithe
 - Commits: **gitmoji** (`✨ scope: summary`). Comments and commit messages in Chinese; docs in English.
 - Linters: golangci-lint v2 (Go), ESLint flat config (frontend). Both run in `make lint` and in CI.
 - Mocks: `//go:generate mockgen`, regenerate with `make mock`.
-- Config never lands on disk from code: `configs/config.example.yaml` is the template,
-  `configs/config.yaml` is gitignored, secrets come from env via `bootstrap.LoadServerConfig`.
+- Config never lands on disk from code: tracked files are templates, runtime copies
+  are gitignored, and secrets come from env via `bootstrap.LoadServerConfig`.
+- `make e2e` is the sole automated E2E route; [`e2e/README.md`](e2e/README.md)
+  owns real dependencies, CI, isolation, cleanup, and `serve + drive + scratch`.
 
 ## Related specs
 

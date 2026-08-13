@@ -26,7 +26,11 @@ cp configs/config.example.yaml configs/config.yaml   # gitignored runtime 配置
 make dev
 ```
 
-`make dev` 同时跑 server（:8443）+ vite（:5174 proxy /v1）。
+`make dev` 同时跑 server（:8443）+ vite（:5174 proxy /v1）。服务也支持
+`--config <path>`；显式路径失败时不回退，未传参数仍使用 `configs/config.yaml`。
+
+真实 MySQL/Redis 浏览器冒烟的唯一自动入口是 `make e2e`；本地人工验证使用
+`pnpm serve + pnpm drive` 或 gitignored scratch。详见 [`e2e/README.md`](e2e/README.md)。
 
 ## GitHub OAuth App
 
