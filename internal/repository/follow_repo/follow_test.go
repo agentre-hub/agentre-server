@@ -12,8 +12,8 @@ import (
 	hubtest "agentre-server/internal/testutils"
 )
 
-// Follow 必须是一条语句：INSERT ... ON DUPLICATE KEY (user_id, device_fingerprint,
-// session_id) DO NOTHING。重复关注（同账号、同一目标会话）命中唯一索引时是
+// Follow 必须是一条语句：一条 INSERT，命中 uk_followed_sessions_identity
+// (user_id, device_fingerprint, session_id) 时什么都不改。重复关注（同账号、同一目标会话）是
 // no-op，由数据库原子裁决：不新增行、也不重置首次关注时间——R12「关注幂等」在
 // 数据层的落点。这里用 0 行受影响的结果模拟「已关注」的那次重复请求。
 func TestFollow_SingleStatementOnConflictDoNothing(t *testing.T) {
@@ -43,7 +43,7 @@ func TestUnfollow_DeleteIsIdempotent(t *testing.T) {
 	r := NewFollow()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM "followed_sessions"`)).
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `followed_sessions`")).
 		WithArgs(int64(7), "fp-daemon-1", "sess-9").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
@@ -66,7 +66,7 @@ func TestListByUser_AccountScoped(t *testing.T) {
 	// 排序也钉在 SQL 上：sqlmock 按给定顺序回行，光比第一行的内容，把 ORDER BY
 	// 整句删掉这个用例照样绿。「最近关注的排在前面」是 R13 列表的顺序承诺。
 	mock.ExpectQuery(regexp.QuoteMeta(
-		`FROM "followed_sessions" WHERE user_id=$1 ORDER BY followed_at DESC, id DESC`,
+		"FROM `followed_sessions` WHERE user_id=? ORDER BY followed_at DESC, id DESC",
 	)).WithArgs(int64(7)).WillReturnRows(rows)
 
 	out, err := r.ListByUser(ctx, 7)

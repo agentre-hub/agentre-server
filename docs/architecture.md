@@ -194,9 +194,22 @@ the transaction and a "deny" committed in that gap would otherwise still hand th
 token.
 
 A write with no conditional `UPDATE` to hang the decision on needs the database to arbitrate
-some other way. `device_repo.Upsert` is a single `INSERT … ON DUPLICATE KEY ("user_id",
-"fingerprint") DO UPDATE`, not a find-then-create, so two exchanges for the same device
-converge on one row instead of racing to a `uk_devices_user_fingerprint` duplicate-key 500.
+some other way. `device_repo.Upsert` writes with `INSERT … ON DUPLICATE KEY UPDATE` and then
+reads the settled row back inside the same transaction (MySQL has no `RETURNING`), rather
+than a find-then-create, so two exchanges for the same device converge on one row instead of
+racing to a `uk_devices_user_fingerprint` duplicate-key 500.
+
+**`ON DUPLICATE KEY UPDATE` only arbitrates when the table has exactly one unique key.**
+MySQL fires it on whichever unique key the row collided with, and does not tell you which —
+`clause.OnConflict{Columns: …}` is decorative in the MySQL dialect. `devices`,
+`sync_account_seqs`, `sync_device_states`, `sync_avatars` and `followed_sessions` each have a
+single unique key, so the clause means what it reads like. `sync_objects` has two
+(`uk_sync_objects_identity` and `uk_sync_objects_location`), and there the clause would
+quietly rewrite *another account row's* content under its own `sync_id`. `sync_repo.Save`
+therefore splits into a version-guarded `UPDATE` plus a plain `INSERT`, and discriminates the
+resulting `1062` by index name via `internal/pkg/dberr.IsDuplicateKey` — an identity
+collision is a lost version race and is swallowed, a location collision is the R4b backstop
+and must surface. Before adding an upsert, count the table's unique keys.
 
 Inside a transaction, put the conditional `UPDATE` **first**, before any write that depends
 on winning: `ExchangeToken` marks the flow consumed before it touches `devices`, and
@@ -219,8 +232,11 @@ in-process guard. `migrations/migrations.go`'s `RunMigrations` takes a MySQL nam
 lock (`withMigrationLock`) on a connection obtained via `sqlDB.Conn(ctx)` before running
 gormigrate, because named locks are session-scoped and a `*gorm.DB` call can otherwise
 land on a different pooled connection than the one that acquired the lock. It polls
-`GET_LOCK` rather than blocking, up to a 120s budget, so a replica that can't
-get the lock fails loudly instead of hanging past its startup probe.
+`GET_LOCK(name, 0)` — the zero-timeout form, which returns immediately — rather than letting
+`GET_LOCK(name, <timeout>)` block, up to a 120s budget, so a replica that can't get the lock
+fails loudly instead of hanging past its startup probe. `GET_LOCK` has three outcomes, not
+two: `1` acquired, `0` held by someone else, and `NULL` when an error occurred; only `1`
+counts as acquired, and the other two keep polling until the budget runs out.
 
 ## How to add an X
 

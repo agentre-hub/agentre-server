@@ -37,12 +37,16 @@ test-backend: prepare-web-dist
 test-frontend:
 	cd frontend && pnpm install --frozen-lockfile --silent && pnpm test
 
-# 冒烟 e2e（桌面 + 移动两个 project）。scratch 轨道见 e2e/README.md。
+# 冒烟 e2e（桌面 + 移动两个 project）+ runner 自身的单测。scratch 轨道见 e2e/README.md。
 # 浏览器由 pnpm smoke 自己装，这里只补 CI 要的系统库（mac 上是空跑）。
+#
+# runner-test 不开浏览器，只测 run-e2e-web.mjs 里那些纯函数（改写 server 配置、解析
+# DSN 与 Redis、诊断启动失败）。它住在 e2e/web/ 下，而 web/ 被冒烟轨道整个排除了，
+# 所以必须在这里显式点名——否则它一次都不会跑，等于没有。
 test-e2e:
-	cd e2e && pnpm install --frozen-lockfile --silent && pnpm exec playwright install-deps chromium && pnpm smoke
+	cd e2e && pnpm install --frozen-lockfile --silent && pnpm exec playwright install-deps chromium && pnpm runner-test && pnpm smoke
 
-# web 全链路 e2e（真浏览器 + 真 server + 真 agentred，开发环境 PG/Redis）。
+# web 全链路 e2e（真浏览器 + 真 server + 真 agentred，开发环境 MySQL/Redis）。
 # 不进 CI、不进 make test——按需运行，见 e2e/README.md「web 全链路」一节。
 test-e2e-web:
 	cd e2e && pnpm exec playwright install chromium && pnpm web

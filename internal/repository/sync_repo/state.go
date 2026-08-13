@@ -32,9 +32,13 @@ func NewSyncState() SyncStateRepo       { return &stateRepo{} }
 
 type stateRepo struct{}
 
-// NextVersion 必须是一条语句。先读后写在多副本并发上行时会双双读到同一个值、
-// 两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性；INSERT … ON
-// CONFLICT DO UPDATE … transaction read-back 把递增与取值合成一次，由数据库的行锁串行化。
+// NextVersion 的递增与取值必须由数据库一次做完。先读后写在多副本并发上行时会双双读到
+// 同一个值、两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
+//
+// MySQL 没有 RETURNING，这里用它自己的写法：INSERT … ON DUPLICATE KEY UPDATE 里把新值
+// 套进 LAST_INSERT_ID(expr)，该函数在设置的同时把值记在**连接**上，紧接着一条
+// SELECT LAST_INSERT_ID() 就能取回。递增由行锁串行化。外面那层事务不是为了原子性，
+// 而是为了把两条语句钉在同一条连接上——LAST_INSERT_ID 是连接级的，走连接池会取到别人的值。
 func (r *stateRepo) NextVersion(ctx context.Context, userID int64, n int64) (int64, error) {
 	if n <= 0 {
 		n = 1

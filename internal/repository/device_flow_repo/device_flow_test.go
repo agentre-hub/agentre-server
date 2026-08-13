@@ -15,7 +15,7 @@ func TestApprove(t *testing.T) {
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		`UPDATE "device_flow_codes" SET "approved_at"=$1,"authorized_user_id"=$2 WHERE user_code=$3 AND consumed_at=0 AND denied_at=0 AND expires_at > $4`,
+		"UPDATE `device_flow_codes` SET `approved_at`=?,`authorized_user_id`=? WHERE user_code=? AND consumed_at=0 AND denied_at=0 AND expires_at > ?",
 	)).WithArgs(int64(1000), int64(99), "A4F-7Q2", int64(1000)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -32,7 +32,7 @@ func TestApprove_ReturnsZeroRowsWhenNothingMatched(t *testing.T) {
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		`UPDATE "device_flow_codes" SET "approved_at"=$1,"authorized_user_id"=$2 WHERE user_code=$3 AND consumed_at=0 AND denied_at=0 AND expires_at > $4`,
+		"UPDATE `device_flow_codes` SET `approved_at`=?,`authorized_user_id`=? WHERE user_code=? AND consumed_at=0 AND denied_at=0 AND expires_at > ?",
 	)).WithArgs(int64(1000), int64(99), "A4F-7Q2", int64(1000)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
@@ -48,7 +48,7 @@ func TestDeny(t *testing.T) {
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		`UPDATE "device_flow_codes" SET "denied_at"=$1 WHERE user_code=$2 AND consumed_at=0 AND denied_at=0`,
+		"UPDATE `device_flow_codes` SET `denied_at`=? WHERE user_code=? AND consumed_at=0 AND denied_at=0",
 	)).WithArgs(int64(1000), "A4F-7Q2").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
@@ -67,7 +67,7 @@ func TestMarkConsumed_RequiresUnsettledRow(t *testing.T) {
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		`UPDATE "device_flow_codes" SET "consumed_at"=$1 WHERE device_code=$2 AND consumed_at=0 AND denied_at=0`,
+		"UPDATE `device_flow_codes` SET `consumed_at`=? WHERE device_code=? AND consumed_at=0 AND denied_at=0",
 	)).WithArgs(int64(1000), "dc-x").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
@@ -84,7 +84,7 @@ func TestMarkConsumed_ReturnsZeroRowsWhenAlreadySettled(t *testing.T) {
 	r := NewDeviceFlow()
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		`UPDATE "device_flow_codes" SET "consumed_at"=$1 WHERE device_code=$2 AND consumed_at=0 AND denied_at=0`,
+		"UPDATE `device_flow_codes` SET `consumed_at`=? WHERE device_code=? AND consumed_at=0 AND denied_at=0",
 	)).WithArgs(int64(1000), "dc-x").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
@@ -98,7 +98,7 @@ func TestMarkConsumed_ReturnsZeroRowsWhenAlreadySettled(t *testing.T) {
 func TestFindByDeviceCode_Found(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "device_flow_codes" WHERE device_code=$1 ORDER BY "device_flow_codes"."device_code" LIMIT $2`)).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `device_flow_codes` WHERE device_code=? ORDER BY `device_flow_codes`.`device_code` LIMIT ?")).
 		WithArgs("dc-x", 1).
 		WillReturnRows(sqlmock.NewRows([]string{"device_code", "user_code"}).AddRow("dc-x", "A4F-7Q2"))
 	got, err := r.FindByDeviceCode(ctx, "dc-x")

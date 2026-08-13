@@ -57,8 +57,11 @@ func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (
 }
 
 // Upsert 按 (user_id, fingerprint) 落库：走 uk_devices_user_fingerprint 的
-// ON DUPLICATE KEY UPDATE 由数据库原子裁决。MySQL 没有通用的
-// INSERT ... transaction read-back，所以写入后在同一事务内读回最终行填充 d。
+// ON DUPLICATE KEY UPDATE 由数据库原子裁决。devices 上只有这一个唯一键，所以这条
+// 语句命中的必然是它——多唯一键的表不能这么写（见 sync_repo.Save）。
+//
+// MySQL 没有 RETURNING，所以写入后在同一事务内读回最终行来填充 d：命中已有设备时
+// 拿到的是它原来的 id 与 createtime。
 //
 // 不写成「先按 (user_id, fingerprint) 查、再 Save/Create」：那是先查后写，两个已授权的
 // device_code 共用同一 (user_id, fingerprint) 并发换取时会双双查空、双双 INSERT，

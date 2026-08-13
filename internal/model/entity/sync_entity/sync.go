@@ -60,7 +60,8 @@ func (*SyncObject) TableName() string { return "sync_objects" }
 func (o *SyncObject) IsDeleted() bool { return o != nil && o.DeletedAt > 0 }
 
 // 账号级单调递增的版本序列住在 sync_account_seqs 表里，这里**刻意没有**对应的
-// entity：分配版本必须用 `INSERT … ON DUPLICATE KEY UPDATE`
+// entity：分配版本必须由数据库一次做完（`INSERT … ON DUPLICATE KEY UPDATE` 配
+// `LAST_INSERT_ID`）
 // （见 sync_repo.NextVersion），一个 gorm 结构体只会引来先读后写那种用法，而先读
 // 后写在多副本并发上行时会把同一个版本号发给两次上行，R4 的「较大者胜」立刻失去
 // 可比性。表结构以迁移里的 DDL 为准。

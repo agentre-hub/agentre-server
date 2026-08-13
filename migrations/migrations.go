@@ -43,12 +43,12 @@ func RunMigrations(db *gorm.DB) error {
 	})
 }
 
-// withMigrationLock 在持有迁移 advisory lock 期间执行 fn。
+// withMigrationLock 在持有迁移 named lock 期间执行 fn。
 //
 // named lock 是会话级的，而 gorm 的 *gorm.DB 从连接池里取连接：如果直接用
 // db.Exec("GET_LOCK") 加锁，锁可能落在连接 A 上，随后 fn 里的迁移语句却从
 // 连接 B 跑，锁在归还连接池的那一刻就形同虚设。因此这里用 sqlDB.Conn(ctx) 单独要一条
-// 连接、全程只用它做加锁/解锁；fn 内部的迁移仍然照常走连接池，advisory lock 不绑定数据，
+// 连接、全程只用它做加锁/解锁；fn 内部的迁移仍然照常走连接池，named lock 不绑定数据，
 // 这样是安全的。副本崩溃时这条专用连接断开，MySQL 会自动释放锁，无需人工介入。
 func withMigrationLock(db *gorm.DB, fn func() error) error {
 	sqlDB, err := db.DB()
@@ -73,16 +73,22 @@ func withMigrationLock(db *gorm.DB, fn func() error) error {
 
 // acquireMigrationLock 轮询 GET_LOCK 直到拿到锁或等待预算耗尽。
 //
-// 用零超时 GET_LOCK 轮询，是为了让等待有明确上界、可观测：拿不到锁时立刻
-// 返回，不会让副本静默挂起到被存活探针杀掉。
+// 超时参数写 0 而不是让 GET_LOCK 自己阻塞，是为了让等待有明确上界、可观测：拿不到锁
+// 时立刻返回，不会让副本静默挂起到被存活探针杀掉。
+//
+// 返回值扫进 sql.NullInt64 而不是 int：GET_LOCK 有三种结果——1 拿到、0 没拿到、
+// NULL 发生了错误（连接被杀、锁名超长）。只有 1 算拿到，另外两种都继续轮询、最终以
+// 那条「等迁移锁超时」的错误收场。直接扫进 int 的话，NULL 会变成一个
+// 「converting NULL to int is unsupported」的驱动错误——那条消息既不说明是等锁失败，
+// 也会把排查引向「扫描类型」这个完全无关的方向。
 func acquireMigrationLock(ctx context.Context, conn *sql.Conn) error {
 	deadline := time.Now().Add(migrationLockWaitBudget)
 	for {
-		var locked int
+		var locked sql.NullInt64
 		if err := conn.QueryRowContext(ctx, "SELECT GET_LOCK(?, 0)", migrationLockName).Scan(&locked); err != nil {
 			return fmt.Errorf("migrations: try named lock: %w", err)
 		}
-		if locked == 1 {
+		if locked.Valid && locked.Int64 == 1 {
 			return nil
 		}
 		if !time.Now().Before(deadline) {
@@ -95,8 +101,11 @@ func acquireMigrationLock(ctx context.Context, conn *sql.Conn) error {
 
 // releaseMigrationLock 解锁；专用连接紧接着就会被关闭，即便这里失败，MySQL 也会在
 // 连接断开时释放这条会话级的锁，因此这里只记日志、不把错误抛给调用方。
+//
+// 同样扫进 sql.NullInt64：RELEASE_LOCK 在锁不存在时返回 NULL，扫进 int 会得到一条
+// 与「解锁」毫无关系的类型转换告警。
 func releaseMigrationLock(ctx context.Context, conn *sql.Conn) {
-	var unlocked int
+	var unlocked sql.NullInt64
 	if err := conn.QueryRowContext(ctx, "SELECT RELEASE_LOCK(?)", migrationLockName).Scan(&unlocked); err != nil {
 		logger.Ctx(ctx).Warn("release migration lock", zap.Error(err))
 	}

@@ -40,7 +40,7 @@ export default defineConfig({
   ],
 
   // 前端 dev server 就够跑通 SPA 外壳（路由 / 主题 / i18n / 响应式）。
-  // 需要真实后端的流程（设备流全链路）要 PG + Redis，属于 scratch 轨道，
+  // 需要真实后端的流程（设备流全链路）要 MySQL + Redis，属于 scratch 轨道，
   // 见 README.md 的「需要真后端时」。
   webServer: {
     command: FRONTEND_DEV_COMMAND,

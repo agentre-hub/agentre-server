@@ -25,6 +25,13 @@ Repository tests are the rule people break first. sqlmock keeps them fast and he
 a real database makes them order-dependent and slow, and they start failing for reasons
 that have nothing to do with the code.
 
+**Write expectations in the dialect the driver actually speaks** — backtick-quoted
+identifiers and `?` placeholders. `testutils.Database` deliberately has no dialect
+translation layer: rewriting the emitted SQL into some other dialect before matching means
+the test pins a string the database will never receive, and the next reader concludes the
+service talks to a different engine than it does. If an expectation looks wrong against
+MySQL, the expectation is wrong.
+
 There is no cross-layer tier. A test that stands up its own `gin.New()` and hand-writes
 the `code`/`msg`/`data` envelope is not testing the wiring — it is testing a second
 implementation of it, one that stays green while the real `internal/api/router.go` breaks.
@@ -84,9 +91,10 @@ Write that check up under `e2e/scratch/` per [verification.md](verification.md) 
 migrations the evidence is the table list, not a screenshot.
 
 **What is untested is the DDL, not the runner.** `migrations/migrations_test.go` does use
-sqlmock, on the advisory-lock wrapper `withMigrationLock` that serialises concurrently
+sqlmock, on the named-lock wrapper `withMigrationLock` that serialises concurrently
 starting replicas — it asserts the `GET_LOCK` retry, that the migration func
-only runs once the lock is held, and that `RELEASE_LOCK` follows. That is a
+only runs once the lock is held, that `RELEASE_LOCK` follows, and that a `NULL` from
+`GET_LOCK` counts as *not* acquired. That is a
 statement-sequence assertion, so it stays hermetic; it says nothing about whether any
 migration in `migrationList()` is valid SQL.
 

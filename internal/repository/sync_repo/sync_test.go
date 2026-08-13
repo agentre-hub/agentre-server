@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 
 	"agentre-server/internal/model/entity/sync_entity"
@@ -53,7 +54,7 @@ func TestFindDeviceState_GivenNoRow_ThenNilNil(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "sync_device_states"`)).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_device_states`")).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "device_id", "last_sync_at"}))
 
 	st, err := r.FindDeviceState(ctx, 7, 2)
@@ -77,14 +78,23 @@ func TestTouchDeviceState_GivenNoRow_ThenUpsertsInOneStatement(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 落库要在版本号更大时才覆盖：两个副本并发写同一行时由数据库裁决，
-// 落后的那次不能把更新的那一版盖掉。
-func TestSaveObject_GivenExistingRow_ThenUpsertOnlyWhenVersionIsGreater(t *testing.T) {
+// 落库的第一步是一条带版本条件的 UPDATE：版本更大才覆盖，两个副本并发写同一行时
+// 由行锁裁决，落后的那次条件不成立、改不动任何东西。
+//
+// 绑定值一并钉死：SET 里恰好 9 列、没有 createtime（命中已有行要保留它首次落地的
+// 时间），WHERE 里 version 作为条件再绑一次——少了它就退化成「后到的一定赢」。
+func TestSaveObject_GivenGreaterVersion_ThenConditionalUpdateWins(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).WillReturnResult(sqlmock.NewResult(1, 2))
+	mock.ExpectExec(regexp.QuoteMeta(
+		"UPDATE `sync_objects` SET `agentred_fingerprint`=?,`deleted_at`=?,`kind`=?,`payload`=?,"+
+			"`project_sync_id`=?,`source_device_id`=?,`sync_updated_at`=?,`updatetime`=?,`version`=? "+
+			"WHERE user_id=? AND sync_id=? AND version<?")).
+		WithArgs("", int64(0), sync_entity.KindProject, `{"name":"a"}`, "", int64(0), int64(0), int64(0), int64(9),
+			int64(7), "p1", int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	err := r.Save(ctx, &sync_entity.SyncObject{
@@ -94,18 +104,93 @@ func TestSaveObject_GivenExistingRow_ThenUpsertOnlyWhenVersionIsGreater(t *testi
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestSaveObject_GivenExistingRow_ThenConditionalWhereIsPresent(t *testing.T) {
+// UPDATE 没命中（行还不存在）才走 INSERT。这条 INSERT **不能**带
+// ON DUPLICATE KEY UPDATE：MySQL 的 ON DUPLICATE KEY 命中的是任意唯一键，而
+// sync_objects 上还有 uk_sync_objects_location，带上它就等于把自然键冲突也一起吞掉。
+func TestSaveObject_GivenNoRow_ThenPlainInsertWithoutOnDuplicateKey(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
-	mock.ExpectExec("`version`=IF\\(VALUES\\(`version`\\) > `version`, VALUES\\(`version`\\), `version`\\)").
-		WillReturnResult(sqlmock.NewResult(1, 2))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `sync_objects` SET")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `sync_objects`")).
+		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectCommit()
 
 	assert.NoError(t, r.Save(ctx, &sync_entity.SyncObject{
 		UserID: 7, Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{}`, Version: 9,
 	}))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// UPDATE 没命中、INSERT 又撞上身份键 = 库里那一行的版本不比本次小，本次上行是 R4 的
+// 竞败方。这是预期内的正常路径（并发的另一次上行抢先落了更新的一版），吞掉。
+func TestSaveObject_GivenIdentityConflict_ThenSwallowedAsLostVersionRace(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `sync_objects` SET")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `sync_objects`")).
+		WillReturnError(&mysqldriver.MySQLError{
+			Number:  1062,
+			Message: "Duplicate entry '7-p1' for key 'sync_objects.uk_sync_objects_identity'",
+		})
+	mock.ExpectRollback()
+
+	assert.NoError(t, r.Save(ctx, &sync_entity.SyncObject{
+		UserID: 7, Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{}`, Version: 9,
+	}))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 撞上自然键是另一回事，必须响：自然键上另一个 sync_id 还活着，这是 R4b 的兜底。
+// 吞掉它意味着本次上行的对象从来没落库、调用方却拿到成功——客户端会永远重推同一个
+// sync_id，而库里那一行始终是别人的身份。这条断言就是为了挡住那种「静默成功」。
+func TestSaveObject_GivenLocationConflict_ThenErrorIsLoud(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	locationConflict := &mysqldriver.MySQLError{
+		Number:  1062,
+		Message: "Duplicate entry '7-proj-1-fp-a-1' for key 'sync_objects.uk_sync_objects_location'",
+	}
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `sync_objects` SET")).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `sync_objects`")).WillReturnError(locationConflict)
+	mock.ExpectRollback()
+
+	err := r.Save(ctx, &sync_entity.SyncObject{
+		UserID: 7, Kind: sync_entity.KindProjectLocation, SyncID: "loc-B",
+		ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: `{}`, Version: 9,
+	})
+	assert.ErrorIs(t, err, locationConflict)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 条件 UPDATE 自身的失败要如实上抛，不能被当成「没命中」而掉进 INSERT 分支——
+// 那会把一个数据库错误变成一次多余的写入尝试。
+func TestSaveObject_GivenUpdateFails_ThenErrorPropagatesWithoutInsert(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `sync_objects` SET")).WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	err := r.Save(ctx, &sync_entity.SyncObject{
+		UserID: 7, Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{}`, Version: 9,
+	})
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -130,7 +215,7 @@ func TestTombstone_GivenAlreadyTombstoned_ThenZeroRowsAffected(t *testing.T) {
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "sync_objects" SET`)).
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `sync_objects` SET")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
@@ -184,9 +269,9 @@ func TestReplaceSnapshot_GivenItems_ThenDeletesThenInsertsInOneTransaction(t *te
 	r := NewSyncLocalPath()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM "device_local_paths"`)).
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `device_local_paths`")).
 		WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO "device_local_paths"`)).
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `device_local_paths`")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -202,7 +287,7 @@ func TestReplaceSnapshot_GivenEmptySnapshot_ThenOnlyDeletes(t *testing.T) {
 	r := NewSyncLocalPath()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM "device_local_paths"`)).
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `device_local_paths`")).
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectCommit()
 
@@ -217,7 +302,7 @@ func TestDeleteByDevice_GivenDeviceID_ThenDeletesAllRowsForThatDevice(t *testing
 	r := NewSyncLocalPath()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM "device_local_paths" WHERE device_id=`)).
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `device_local_paths` WHERE device_id=")).
 		WithArgs(int64(2)).
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectCommit()
@@ -232,7 +317,7 @@ func TestListByDevice_GivenDeviceID_ThenReturnsItsReportedRows(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncLocalPath()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "device_local_paths" WHERE user_id=`)).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `device_local_paths` WHERE user_id=")).
 		WithArgs(int64(7), int64(2)).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "device_id", "project_sync_id", "path"}).
 			AddRow(int64(7), int64(2), "p1", "/srv/p1"))
@@ -268,7 +353,7 @@ func TestDeleteTombstonesBefore_GivenCutoff_ThenOnlyExpiredTombstonesAreDeleted(
 	r := NewSyncObject()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`DELETE FROM "sync_objects" WHERE deleted_at>0 AND deleted_at<`)).
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `sync_objects` WHERE deleted_at>0 AND deleted_at<")).
 		WithArgs(int64(1700)).
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectCommit()
@@ -302,7 +387,7 @@ func TestFindAvatar_GivenNoRow_ThenNilNil(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncAvatar()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT * FROM "sync_avatars"`)).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_avatars`")).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id", "content_hash"}))
 
 	got, err := r.Find(ctx, 7, "h1")

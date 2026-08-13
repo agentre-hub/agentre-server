@@ -104,7 +104,7 @@
 | `device_svc` 单测 | 授权入参不再携带能力；pending 应答与设备列表项不含能力；签发的 claims 不含 caps | `internal/service/device_svc/device_test.go` 现有 sqlmock + mockgen 结构 |
 | `device_repo` 单测 | upsert 的赋值列不含 `capabilities`，冲突键与其余赋值列不变（R9） | `internal/repository/device_repo/device_test.go:31` 现有 SQL 断言 |
 | `jwt` 单测 | 签发 / 验签往返不含 caps；**一枚带 caps 的旧令牌仍验签通过**（R7 的兼容承诺） | `internal/pkg/jwt/jwt_test.go:24` |
-| 迁移单测 | 新迁移排在 `migrationList()` 末尾，Migrate 与 Rollback 各自执行预期 SQL | `migrations/migrations_test.go` 现有 sqlmock 结构 |
+| 迁移单测 | 新迁移排在 `migrationList()` 末尾，Migrate 与 Rollback 各自执行预期 SQL | `migrations/migrations_test.go` 现有 sqlmock 结构（只覆盖锁包装器，DDL 按 docs/testing.md 走实库人工验证） |
 | 控制层（muxtest） | authorize 请求体里带着 `capabilities` 时照常成功且被忽略（R4） | `internal/controller/device_ctr/device_test.go` |
 | 前端 vitest | 确认屏出现无条件的完整权限说明且与 kind 无关（R1）；页面上不再有任何能力摘要（R2）；倒计时 / 拒绝 / 允许 / 无 dialog 的既有用例原样通过（R3） | `frontend/src/__tests__/device-approval-risk.test.tsx` |
 | locale 对等 | 新增与删除的键在两个 locale 一致 | `frontend/src/i18n/__tests__/locale-parity.test.ts` |

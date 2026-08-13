@@ -25,9 +25,6 @@ func NewUserIdentity() UserIdentityRepo       { return &repo{} }
 type repo struct{}
 
 func (r *repo) Create(ctx context.Context, e *user_identity_entity.UserIdentity) error {
-	if len(e.RawProfile) == 0 {
-		e.RawProfile = []byte("{}")
-	}
 	return db.Ctx(ctx).Create(e).Error
 }
 

@@ -5,10 +5,9 @@ import (
 	"context"
 
 	"github.com/cago-frame/cago/database/db"
-	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"agentre-server/internal/model/entity/sync_entity"
+	"agentre-server/internal/pkg/dberr"
 )
 
 //go:generate mockgen -source object.go -destination mock_sync_repo/mock_object.go
@@ -76,23 +75,54 @@ func (r *objectRepo) FindLocationByNaturalKey(
 	return ret, nil
 }
 
-// Save 是一条语句的条件 upsert：命中（user_id, sync_id）时只有版本号更大的那次
-// 写入才覆盖。多副本并发上行同一行时由数据库裁决，先查后写会让落后的那次把更新
-// 的那一版盖掉。createtime 不在赋值列里：命中已有行时保留它首次落地的时间。
+// Save 按（账号, 同步标识）落库，且只在版本号更大时才覆盖已有行。
+//
+// **为什么不是一条 INSERT … ON DUPLICATE KEY UPDATE。** MySQL 的 ON DUPLICATE KEY
+// 命中的是**任意**唯一键，而 sync_objects 上有两个：uk_sync_objects_identity 和
+// uk_sync_objects_location。自然键被另一个 sync_id 占着时（R4b 竞态的兜底），那条
+// 语句不会报错，而是去 UPDATE 别人那一行——身份键留旧的、内容换成新的，本次上行的
+// sync_id 从来没落库，调用方却拿到成功。客户端于是永远重推同一个 sync_id，每次都
+// 把别人那行再覆盖一遍。gorm 的 clause.OnConflict{Columns: …} 在 MySQL 方言下只是
+// 装饰，收不住这件事；MySQL 官方文档同样建议多唯一键的表别用 ON DUPLICATE KEY。
+//
+// 所以按 MySQL 的写法拆成两步，两步都由数据库裁决、都不是先读后写：
+//
+//  1. 一条带版本条件的 UPDATE。命中 = 覆盖成功；并发的两次上行由行锁串行，落后的
+//     那次条件不成立、改不动任何东西。命中时 version 必然与原值不同（条件就是
+//     version<?），所以 RowsAffected 一定是 1，不会因为「匹配到但没变化」而落到第 2 步。
+//     createtime 不在赋值列里：命中已有行时保留它首次落地的时间。
+//  2. UPDATE 没命中说明行还不存在（或已被并发插入抢先），走一条**不带**
+//     ON DUPLICATE 的 INSERT，让唯一键自己说话：
+//     撞 uk_sync_objects_identity = 行已存在且版本不比本次小，本次是 R4 的竞败方，
+//     这是预期内的正常路径，吞掉；
+//     撞 uk_sync_objects_location = 自然键上另一行还活着，这是 R4b 的兜底，必须响，
+//     原样上抛。
 func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) error {
-	assignments := map[string]interface{}{}
-	for _, column := range []string{
-		"kind", "project_sync_id", "agentred_fingerprint", "payload",
-		"version", "sync_updated_at", "source_device_id", "deleted_at", "updatetime",
-	} {
-		assignments[column] = gorm.Expr(
-			"IF(VALUES(`version`) > `version`, VALUES(`" + column + "`), `" + column + "`)",
-		)
+	updated := db.Ctx(ctx).Model(&sync_entity.SyncObject{}).
+		Where("user_id=? AND sync_id=? AND version<?", obj.UserID, obj.SyncID, obj.Version).
+		Updates(map[string]interface{}{
+			"kind":                 obj.Kind,
+			"project_sync_id":      obj.ProjectSyncID,
+			"agentred_fingerprint": obj.AgentredFingerprint,
+			"payload":              obj.Payload,
+			"version":              obj.Version,
+			"sync_updated_at":      obj.SyncUpdatedAt,
+			"source_device_id":     obj.SourceDeviceID,
+			"deleted_at":           obj.DeletedAt,
+			"updatetime":           obj.Updatetime,
+		})
+	if updated.Error != nil {
+		return updated.Error
 	}
-	return db.Ctx(ctx).Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "user_id"}, {Name: "sync_id"}},
-		DoUpdates: clause.Assignments(assignments),
-	}).Create(obj).Error
+	if updated.RowsAffected > 0 {
+		return nil
+	}
+
+	err := db.Ctx(ctx).Create(obj).Error
+	if dberr.IsDuplicateKey(err, "uk_sync_objects_identity") {
+		return nil
+	}
+	return err
 }
 
 func (r *objectRepo) Tombstone(ctx context.Context, id, version, nowMs int64) (int64, error) {
