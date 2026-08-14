@@ -5,6 +5,8 @@ import {
   AlertTriangle,
   ArrowRight,
   Bot,
+  ChevronDown,
+  ChevronUp,
   Clock3,
   Gauge,
   Monitor,
@@ -23,6 +25,12 @@ import type {
 } from "@/components/session/DecisionPanel";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
+import {
+  callerDeviceFingerprint,
+  isMovableTier,
+  reorderTargets,
+  saveExecTargetOrder,
+} from "@/lib/execOrder";
 import type { RelayClient } from "@/lib/relayClient";
 import { formatRelativeTime } from "@/lib/sessionView";
 import { cn } from "@/lib/utils";
@@ -40,6 +48,8 @@ type Availability = "available" | "offline" | "unpaired" | "skipped_for_web";
 
 interface ExecTargetItem {
   rank: number;
+  /** 这一档跨机稳定且逐档唯一的标识，排序用它表达（rank 是位置性的、device_id 不唯一）。 */
+  backend_sync_id?: string;
   is_local_reference: boolean;
   device_id?: number;
   device_name?: string;
@@ -308,11 +318,21 @@ function reasonKey(target: ExecTargetItem): string | null {
   }
 }
 
+/** 一档上的排序控件；null = 这一档不可移动（或这台浏览器排不了序）。 */
+interface TargetMove {
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  busy: boolean;
+  onMove: (direction: -1 | 1) => void;
+}
+
 function TargetChip({
   target,
+  move,
   t,
 }: {
   target: ExecTargetItem;
+  move: TargetMove | null;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
   const reason = reasonKey(target);
@@ -322,6 +342,7 @@ function TargetChip({
   const suffix = target.backend_type ? ` · ${target.backend_type}` : "";
   return (
     <span
+      data-testid="exec-target"
       data-current={target.current ? "true" : undefined}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs",
@@ -340,18 +361,56 @@ function TargetChip({
           {t(reason)}
         </span>
       )}
+      {move && (
+        <span className="flex items-center">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="size-5"
+            aria-label={t("overview.moveUp")}
+            disabled={!move.canMoveUp || move.busy}
+            onClick={() => move.onMove(-1)}
+          >
+            <ChevronUp aria-hidden="true" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            className="size-5"
+            aria-label={t("overview.moveDown")}
+            disabled={!move.canMoveDown || move.busy}
+            onClick={() => move.onMove(1)}
+          >
+            <ChevronDown aria-hidden="true" />
+          </Button>
+        </span>
+      )}
     </span>
   );
 }
 
+/** 这台浏览器对某个 Agent 的排序能力；null = 没有设备身份，顺序无处可存。 */
+interface AgentReorder {
+  busy: boolean;
+  failed: boolean;
+  onMove: (index: number, direction: -1 | 1) => void;
+}
+
 function AgentRow({
   agent,
+  reorder,
   t,
 }: {
   agent: AgentItem;
+  reorder: AgentReorder | null;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
   const current = agent.exec_targets.find((tt) => tt.current);
+  // 只有一档可排时排序没有意义（换不到别处去），不给控件添噪音。
+  const orderable =
+    reorder !== null && agent.exec_targets.filter(isMovableTier).length > 1;
   return (
     <div className="flex flex-col gap-2 border-t border-border px-4 py-3 first:border-t-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -394,10 +453,30 @@ function AgentRow({
                 className="size-3 shrink-0 text-muted-foreground"
               />
             )}
-            <TargetChip target={target} t={t} />
+            <TargetChip
+              target={target}
+              move={
+                orderable && reorder && isMovableTier(target)
+                  ? {
+                      canMoveUp:
+                        reorderTargets(agent.exec_targets, i, -1) !== null,
+                      canMoveDown:
+                        reorderTargets(agent.exec_targets, i, 1) !== null,
+                      busy: reorder.busy,
+                      onMove: (direction) => reorder.onMove(i, direction),
+                    }
+                  : null
+              }
+              t={t}
+            />
           </span>
         ))}
       </div>
+      {reorder?.failed && (
+        <p role="alert" className="pl-4 text-xs text-destructive">
+          {t("overview.reorderError")}
+        </p>
+      )}
     </div>
   );
 }
@@ -415,26 +494,47 @@ export default function Overview() {
   );
   const [clients, setClients] = useState<Record<string, RelayClient>>({});
   const [waiters, setWaiters] = useState<Record<string, WaiterData>>({});
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
+  // 同一时刻至多一个移动在飞（在飞期间所有排序按钮都禁用），因此这两个都是单槽位：
+  // 失败说明跟踪的是「最近一次移动」，下一次移动成功即收敛掉。
+  const [reorderingAgent, setReorderingAgent] = useState<string | null>(null);
+  const [reorderFailedAgent, setReorderFailedAgent] = useState<string | null>(
+    null,
+  );
+
+  /** 取账号级 Agent 清单。带上本机指纹 = 链按**这台浏览器自己的**排列返回。 */
+  const fetchAgents = useCallback(async (deviceFingerprint: string | null) => {
+    const qs = deviceFingerprint
+      ? `?device_fingerprint=${encodeURIComponent(deviceFingerprint)}`
+      : "";
+    const got = await api<{ agents: AgentItem[] }>(`/v1/workspace/agents${qs}`);
+    return got.agents;
+  }, []);
 
   useEffect(() => {
     let alive = true;
-    api<{ agents: AgentItem[] }>("/v1/workspace/agents")
-      .then((got) => {
+    void (async () => {
+      // 先拿这台浏览器的设备身份再读链：否则卡片上排第一、标着「当前」的那一档，
+      // 会和真派发时选中的不是同一档。取不到就按账号顺序读，不报错。
+      const fp = await callerDeviceFingerprint();
+      if (!alive) return;
+      setFingerprint(fp);
+      try {
+        const list = await fetchAgents(fp);
         if (alive) {
-          setAgents(got.agents);
+          setAgents(list);
           setLoadError(null);
         }
-      })
-      .catch((e: unknown) => {
+      } catch (e: unknown) {
         if (alive) setLoadError(e ?? new Error("agent list load failed"));
-      })
-      .finally(() => {
+      } finally {
         if (alive) setLoading(false);
-      });
+      }
+    })();
     return () => {
       alive = false;
     };
-  }, []);
+  }, [fetchAgents]);
 
   // 设备 / 关注是锦上添花：各自取不到就保持空，统计卡走诚实空态，不阻塞整页。
   useEffect(() => {
@@ -600,6 +700,45 @@ export default function Overview() {
       .slice(0, 3);
   }, [waitingSessions, waiters, devicesByFp, agentsBySync, t]);
 
+  /**
+   * 把某个 Agent 的一档执行目标上移 / 下移：一次移动即提交，随后重新拉取这条链。
+   *
+   * 顺序由服务端解析（排列是收敛的偏好，不是权威），所以本地不先乐观改一版 ——
+   * 「当前」标记与真实派发目标因此始终是同一档，用户当场看到自己这一下改到了哪。
+   * 提交或重读失败时顺序原封不动，并在这张卡上就地说明（写入是按主键覆盖的，
+   * 重试无副作用）。
+   */
+  async function moveExecTarget(
+    agent: AgentItem,
+    index: number,
+    direction: -1 | 1,
+  ) {
+    if (!fingerprint || reorderingAgent !== null) return;
+    const backendSyncIds = reorderTargets(agent.exec_targets, index, direction);
+    if (!backendSyncIds) return;
+    setReorderingAgent(agent.sync_id);
+    try {
+      await saveExecTargetOrder({
+        deviceFingerprint: fingerprint,
+        agentSyncId: agent.sync_id,
+        backendSyncIds,
+      });
+      const list = await fetchAgents(fingerprint);
+      const fresh = list.find((a) => a.sync_id === agent.sync_id);
+      if (fresh) {
+        setAgents(
+          (prev) =>
+            prev?.map((a) => (a.sync_id === fresh.sync_id ? fresh : a)) ?? prev,
+        );
+      }
+      setReorderFailedAgent(null);
+    } catch {
+      setReorderFailedAgent(agent.sync_id);
+    } finally {
+      setReorderingAgent(null);
+    }
+  }
+
   // Allow / Deny 走真实后端：提交后重查 pendingWaiters，已消失的 waiter 不再渲染。
   async function submitToolDecision(card: ActionCard, allow: boolean) {
     const client = clients[card.fingerprint];
@@ -758,7 +897,23 @@ export default function Overview() {
               ) : (
                 <div className="divide-y divide-border">
                   {agents?.map((agent) => (
-                    <AgentRow key={agent.sync_id} agent={agent} t={t} />
+                    <AgentRow
+                      key={agent.sync_id}
+                      agent={agent}
+                      reorder={
+                        fingerprint
+                          ? {
+                              // 在飞期间禁用**所有**卡片的排序按钮：与下面
+                              // moveExecTarget 的单飞守卫一致，点了没反应即不存在。
+                              busy: reorderingAgent !== null,
+                              failed: reorderFailedAgent === agent.sync_id,
+                              onMove: (index, direction) =>
+                                void moveExecTarget(agent, index, direction),
+                            }
+                          : null
+                      }
+                      t={t}
+                    />
                   ))}
                 </div>
               )}

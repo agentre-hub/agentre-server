@@ -72,6 +72,9 @@
     "unpaired": "Not paired",
     "empty": "No agents yet.",
     "loadError": "Could not load your agents. Please try again.",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "reorderError": "Could not apply the new order. Please try again.",
     "tiles": {
       "online": "Devices online",
       "waiting": "Waiting on you",

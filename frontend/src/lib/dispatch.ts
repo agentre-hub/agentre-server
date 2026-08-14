@@ -16,6 +16,7 @@
  * 这是 R19 红线在主动派活场景下的唯一例外（见 workspace_svc.WebDispatchChoice）。
  */
 import { api } from "@/lib/api";
+import { callerDeviceFingerprint } from "@/lib/execOrder";
 import { RelayClient } from "@/lib/relayClient";
 import { relayClientUrl } from "@/lib/relayUrl";
 import { deviceDisplayName, type WebDevice } from "@/lib/webDevice";
@@ -56,13 +57,19 @@ export interface DispatchPlan {
   projects: { sync_id: string; name: string; configured: boolean }[];
 }
 
-/** 取某 Agent（+ 可选项目）的派发计划。project_sync_id 为空 = picker 阶段只看机器。 */
+/** 取某 Agent（+ 可选项目）的派发计划。project_sync_id 为空 = picker 阶段只看机器。
+ *
+ * 计划按**调用方设备自己的**排列解析：带上这台浏览器的指纹，服务端据此重排执行
+ * 目标链后再走「取第一个可用」，Chosen 与逐档原因因此跟着用户在总览页排的顺序
+ * 走。取不到设备身份就不带，服务端回落账号顺序、不报错。 */
 export async function fetchDispatchPlan(
   agentSyncId: string,
   projectSyncId?: string,
 ): Promise<DispatchPlan> {
   const qs = new URLSearchParams({ agent_sync_id: agentSyncId });
   if (projectSyncId) qs.set("project_sync_id", projectSyncId);
+  const fingerprint = await callerDeviceFingerprint();
+  if (fingerprint) qs.set("device_fingerprint", fingerprint);
   return api<DispatchPlan>(`/v1/workspace/dispatch-target?${qs.toString()}`);
 }
 

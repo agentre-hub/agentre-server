@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
 import { ThemeProvider } from "@/lib/theme";
+import { ensureWebDevice } from "@/lib/webDevice";
 import i18n from "@/i18n";
 import Overview from "@/pages/Overview";
 
@@ -19,9 +20,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/lib/webDevice", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/webDevice")>();
+  return { ...actual, ensureWebDevice: vi.fn() };
+});
 
 const mockedApi = vi.mocked(api);
 const mockUseRelay = vi.mocked(useRelayMachine);
+const mockEnsureWebDevice = vi.mocked(ensureWebDevice);
 
 const fakeClient = {
   request: vi.fn(),
@@ -64,6 +70,10 @@ beforeEach(async () => {
   // 默认中继未连：只有显式设置 connectedRelay 的用例才挂得到等待会话。
   mockUseRelay.mockReturnValue(disconnectedRelay());
   fakeClient.request.mockReset();
+  // 默认这台浏览器还没有设备身份（未注册 / 已被解除授权）：链按账号顺序读，
+  // 没有可承载顺序的设备，因此不出现排序控件。要排序的用例自己给一台。
+  mockEnsureWebDevice.mockReset();
+  mockEnsureWebDevice.mockRejectedValue(new Error("no web device"));
 });
 
 describe("overview page", () => {
@@ -847,5 +857,202 @@ describe("overview: 跨机器同号会话的 waiters 隔离", () => {
     });
     expect(screen.queryByText("Deny")).toBeNull();
     expect(screen.getByText("View details")).toBeTruthy();
+  });
+});
+
+// ── 这个浏览器自己的派发顺序（决策 10 / 11） ─────────────────────────────
+// Agent 卡上的执行目标链每一档给出上移 / 下移：一次移动即提交
+// POST /v1/workspace/exec-target-order（backend sync_id 排列 + 本机指纹），
+// 随后重新拉取该 Agent 的链，「当前」标记当场跟着改变。
+// skipped_for_web 的档（浏览器语境下永不可派发）只读、不可移动，仍留在链里。
+describe("overview: 这个浏览器自己的派发顺序", () => {
+  const webDevice = { fingerprint: "fp-web", accessToken: "t", deviceId: 9 };
+  const AGENTS_PATH = "/v1/workspace/agents?device_fingerprint=fp-web";
+  const ORDER_PATH = "/v1/workspace/exec-target-order";
+
+  const tierById: Record<string, Record<string, unknown>> = {
+    "b-local": {
+      backend_sync_id: "b-local",
+      is_local_reference: true,
+      availability: "skipped_for_web",
+    },
+    "b-nuc": {
+      backend_sync_id: "b-nuc",
+      is_local_reference: false,
+      device_id: 20,
+      device_name: "Study NUC",
+      backend_type: "claude_code",
+      availability: "available",
+    },
+    "b-mac": {
+      backend_sync_id: "b-mac",
+      is_local_reference: false,
+      device_id: 21,
+      device_name: "Office Mac mini",
+      backend_type: "codex",
+      availability: "available",
+    },
+  };
+
+  /** 一个 Agent 的链：order 是这台浏览器看到的次序，current 落在第一个可用档。 */
+  function agentChain(order: string[]) {
+    const firstAvailable = order.find((id) => id !== "b-local");
+    return {
+      sync_id: "ag-1",
+      name: "Backend Agent",
+      has_available_target: true,
+      exec_targets: order.map((id, i) => ({
+        ...tierById[id],
+        rank: i + 1,
+        current: id === firstAvailable,
+      })),
+    };
+  }
+
+  function chipTexts(): string[] {
+    return screen
+      .getAllByTestId("exec-target")
+      .map((el) => el.textContent ?? "");
+  }
+
+  function chipOf(name: RegExp): HTMLElement {
+    const chip = screen
+      .getAllByText(name)
+      .map((el) => el.closest('[data-testid="exec-target"]'))
+      .find(Boolean);
+    if (!chip) throw new Error("no exec target chip for " + name);
+    return chip as HTMLElement;
+  }
+
+  it("每一档给出上移/下移；skipped_for_web 档只读、不可移动", async () => {
+    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    mockedApi.mockImplementation(async (path) => {
+      if (path === AGENTS_PATH)
+        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOverview();
+    await screen.findByText("Backend Agent");
+
+    // 链按**这台浏览器**的顺序读：读端点带上本机指纹。
+    expect(mockedApi).toHaveBeenCalledWith(AGENTS_PATH);
+
+    // 两个可移动档各有一对上移/下移；本机档一个都没有（决策 11）。
+    const ups = screen.getAllByRole("button", { name: "Move up" });
+    const downs = screen.getAllByRole("button", { name: "Move down" });
+    expect(ups.length).toBe(2);
+    expect(downs.length).toBe(2);
+    expect(
+      chipOf(/Skipped for web dispatch/).querySelectorAll("button").length,
+    ).toBe(0);
+
+    // 端点方向禁用：第一个可移动档不能再上移，最后一个不能再下移。
+    expect((ups[0] as HTMLButtonElement).disabled).toBe(true);
+    expect((downs[downs.length - 1] as HTMLButtonElement).disabled).toBe(true);
+    expect((ups[1] as HTMLButtonElement).disabled).toBe(false);
+    expect((downs[0] as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("一次移动即提交并重新拉取该 Agent 的链，「当前」标记随之更新", async () => {
+    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    let agentsCalls = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path === AGENTS_PATH) {
+        agentsCalls += 1;
+        return {
+          agents: [
+            agentChain(
+              agentsCalls === 1
+                ? ["b-local", "b-nuc", "b-mac"]
+                : ["b-local", "b-mac", "b-nuc"],
+            ),
+          ],
+        };
+      }
+      if (path === ORDER_PATH) return {};
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOverview();
+    await screen.findByText(/Currently running on Study NUC/);
+
+    fireEvent.click(
+      within(chipOf(/Office Mac mini/)).getByRole("button", {
+        name: "Move up",
+      }),
+    );
+
+    // 用户当场看到自己这一下改变了派发目标。
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Currently running on Office Mac mini/),
+      ).toBeTruthy(),
+    );
+    expect(chipTexts()[1]).toContain("Office Mac mini");
+    // 「当前」标记落到链上被移上来的那一档，不只是那句摘要变了。
+    expect(chipOf(/Office Mac mini/).getAttribute("data-current")).toBe("true");
+
+    // 提交的是 backend sync_id 排列 + 这台浏览器的指纹；本机档钉在原位。
+    const post = mockedApi.mock.calls.find((c) => c[0] === ORDER_PATH);
+    expect(post?.[1]).toMatchObject({ method: "POST" });
+    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+      device_fingerprint: "fp-web",
+      agent_sync_id: "ag-1",
+      backend_sync_ids: ["b-local", "b-mac", "b-nuc"],
+    });
+    // 提交之后重新拉了一次该 Agent 的链（不是只改本地状态）。
+    expect(agentsCalls).toBe(2);
+  });
+
+  it("提交失败保持原顺序并就地说明，不静默", async () => {
+    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    let agentsCalls = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path === AGENTS_PATH) {
+        agentsCalls += 1;
+        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
+      }
+      if (path === ORDER_PATH) throw new Error("order save failed");
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOverview();
+    await screen.findByText(/Currently running on Study NUC/);
+
+    fireEvent.click(
+      within(chipOf(/Office Mac mini/)).getByRole("button", {
+        name: "Move up",
+      }),
+    );
+
+    // 就地说明（不是只往控制台打日志）。
+    expect(
+      await screen.findByText(
+        "Could not apply the new order. Please try again.",
+      ),
+    ).toBeTruthy();
+    // 顺序原封不动：「当前」仍在原来那一档，链的次序不变，也没有重新拉取。
+    expect(screen.getByText(/Currently running on Study NUC/)).toBeTruthy();
+    const texts = chipTexts();
+    expect(texts[1]).toContain("Study NUC");
+    expect(texts[2]).toContain("Office Mac mini");
+    expect(agentsCalls).toBe(1);
+  });
+
+  it("这台浏览器没有设备身份时不给排序控件（没有可承载顺序的设备）", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents")
+        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOverview();
+    await screen.findByText("Backend Agent");
+
+    expect(screen.queryAllByRole("button", { name: "Move up" }).length).toBe(0);
+    expect(screen.queryAllByRole("button", { name: "Move down" }).length).toBe(
+      0,
+    );
   });
 });

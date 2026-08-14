@@ -72,6 +72,9 @@
     "unpaired": "未配对",
     "empty": "还没有任何 Agent。",
     "loadError": "无法加载你的 Agent 列表，请重试。",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "reorderError": "新顺序没能生效，请重试。",
     "tiles": {
       "online": "设备在线",
       "waiting": "等你处理",
