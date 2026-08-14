@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api, ApiError } from "@/lib/api";
+import { callerDeviceFingerprint } from "@/lib/execOrder";
 import {
   dispatchNewConversation,
   fetchDispatchPlan,
@@ -136,18 +137,28 @@ export default function NewConversationDialog({
   const [dispatchError, setDispatchError] = useState<unknown>(null);
 
   // 每次打开重新拉 Agent 清单（异步回调里 setState，不触发 cascading render）。
+  //
+  // 必须带上这台浏览器的设备指纹：服务端没有指纹时按账号 sort_order 解析，标出的
+  // 「当前」是账号顺序的赢家，而不是这台浏览器真正会派到的那一档——下面每个 Agent
+  // 都在渲染 current，不带指纹就是在断言一件与真实派发不符的事。取不到指纹时不附加
+  // 空参数，读路径照常回落账号顺序、不报错（决策 9 读侧）。
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    api<{ agents: AgentItem[] }>("/v1/workspace/agents")
-      .then((d) => {
+    const fp = callerDeviceFingerprint();
+    const qs = fp ? `?device_fingerprint=${encodeURIComponent(fp)}` : "";
+    void (async () => {
+      try {
+        const d = await api<{ agents: AgentItem[] }>(
+          `/v1/workspace/agents${qs}`,
+        );
         if (!alive) return;
         setAgents(d.agents);
         setLoaded(true);
-      })
-      .catch((e: unknown) => {
+      } catch (e: unknown) {
         if (alive) setLoadError(e);
-      });
+      }
+    })();
     return () => {
       alive = false;
     };

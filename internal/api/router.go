@@ -82,6 +82,10 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		workspaceCtr.DeviceDetail,
 		// R15：从 web 给「某 Agent + 某项目」取派发计划（哪台 agentred、逐档原因）。
 		workspaceCtr.DispatchTarget,
+		// 每端自己的派发顺序：保存调用方这台设备对某个 Agent 的执行目标排列。
+		// 本组鉴权的是用户不是设备，设备指纹只能由参数传入，因此 service 必须先按
+		// (user_id, fingerprint) 解析出设备行，解析不到即拒绝（决策 9）。
+		workspaceCtr.SetExecTargetOrder,
 		// 关注名单（R12 后端 + R14）：账号级，任一端（会话或设备 JWT）都可操作。
 		followCtr.Follow,
 		followCtr.Unfollow,

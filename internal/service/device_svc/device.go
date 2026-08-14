@@ -69,6 +69,32 @@ type noopLocalPathPurger struct{}
 
 func (noopLocalPathPurger) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
 
+// ExecTargetOrderPurger 是 Revoke 撤销一台设备时用到的第二个窄接口（ISP）：只清掉该
+// 设备自己排的执行目标顺序——「每端自己排」的顺序属于那台设备，设备被解除授权后它就
+// 没有持有者了，不该残留在账号里。与 LocalPathPurger 分开而不并成一个胖接口：两者是
+// 不同的域、实现方也不同。device_svc 不 import workspace_svc——由 bootstrap 用
+// workspace_svc.Default() 满足这个接口。
+type ExecTargetOrderPurger interface {
+	PurgeDeviceExecTargetOrders(ctx context.Context, deviceID int64) error
+}
+
+// execTargetOrderPurger 默认是空操作，理由同 localPathPurger。
+var execTargetOrderPurger ExecTargetOrderPurger = noopExecTargetOrderPurger{}
+
+// SetExecTargetOrderPurger 由 bootstrap 注入真实实现；传 nil 时恢复成空操作。
+func SetExecTargetOrderPurger(p ExecTargetOrderPurger) {
+	if p == nil {
+		p = noopExecTargetOrderPurger{}
+	}
+	execTargetOrderPurger = p
+}
+
+type noopExecTargetOrderPurger struct{}
+
+func (noopExecTargetOrderPurger) PurgeDeviceExecTargetOrders(context.Context, int64) error {
+	return nil
+}
+
 type deviceSvc struct {
 	cfg    Config
 	signer Signer
@@ -574,6 +600,13 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	// 撤销、token 已拉黑」这个已经生效的结果回滚,只记日志。
 	if err := localPathPurger.PurgeDeviceLocalPaths(ctx, deviceID); err != nil {
 		logger.Ctx(ctx).Warn("device_svc.Revoke: purge reported local paths failed",
+			zap.Int64("deviceId", deviceID), zap.Error(err))
+	}
+	// 「每端自己排」的执行目标顺序同理：它属于这台设备，设备被解除授权后没有持有者，
+	// 一并清掉，不残留在账号里。账号级的执行目标**集合**在同步组里，不受影响。
+	// 与上面一样是撤销的从属后果，失败只记日志、不回滚已经生效的撤销。
+	if err := execTargetOrderPurger.PurgeDeviceExecTargetOrders(ctx, deviceID); err != nil {
+		logger.Ctx(ctx).Warn("device_svc.Revoke: purge device exec target orders failed",
 			zap.Int64("deviceId", deviceID), zap.Error(err))
 	}
 	return nil

@@ -358,8 +358,55 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 	})
 }
 
+// stubExecTargetOrderPurger 记下每一次被清的 deviceID；err 非 nil 时模拟落库失败。
+type stubExecTargetOrderPurger struct {
+	purgedDeviceIDs []int64
+	err             error
+}
+
+func (s *stubExecTargetOrderPurger) PurgeDeviceExecTargetOrders(_ context.Context, deviceID int64) error {
+	s.purgedDeviceIDs = append(s.purgedDeviceIDs, deviceID)
+	return s.err
+}
+
+// TestRevoke_PurgesDeviceExecTargetOrders 每端自己排的执行目标顺序属于那台设备：用户
+// 解除一个浏览器的授权时它排的顺序一并消失，不残留在账号里。账号级的执行目标**集合**
+// 不受影响——它在同步组里，不属于任何一台设备。
+func TestRevoke_PurgesDeviceExecTargetOrders(t *testing.T) {
+	convey.Convey("撤销设备时清掉它自己排的执行目标顺序", t, func() {
+		testutils.Redis()
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
+		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+		purger := &stubExecTargetOrderPurger{}
+		SetExecTargetOrderPurger(purger)
+		t.Cleanup(func() { SetExecTargetOrderPurger(nil) })
+
+		convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
+		convey.So(purger.purgedDeviceIDs, convey.ShouldResemble, []int64{42})
+	})
+
+	convey.Convey("清顺序失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
+		testutils.Redis()
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
+		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+
+		purger := &stubExecTargetOrderPurger{err: errors.New("boom")}
+		SetExecTargetOrderPurger(purger)
+		t.Cleanup(func() { SetExecTargetOrderPurger(nil) })
+
+		convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
+		convey.So(purger.purgedDeviceIDs, convey.ShouldResemble, []int64{42})
+	})
+}
+
 // TestRevoke_GivenNoPurgerConfigured_DoesNotPanic 复现「只装配了 device flow、
-// 没有整套 bootstrap」的调用方：从未 SetLocalPathPurger 过，Revoke 仍要正常成功，
+// 没有整套 bootstrap」的调用方：从未 SetLocalPathPurger / SetExecTargetOrderPurger
+// 过，Revoke 仍要正常成功，
 // 而不是对 nil 接口调用方法 panic（与 relay_svc.Default() 的既有安全占位同一模式）。
 func TestRevoke_GivenNoPurgerConfigured_DoesNotPanic(t *testing.T) {
 	convey.Convey("未装配 purger 时 Revoke 不 panic（默认空操作）", t, func() {
