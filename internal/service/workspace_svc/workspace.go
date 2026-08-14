@@ -470,7 +470,7 @@ func (s *workspaceSvc) ListAccountAgents(
 	if dev := callerDevice(deviceByFP, deviceFingerprint); dev != nil {
 		orders, oerr := exec_order_repo.ExecOrder().ListByDevice(ctx, userID, dev.ID)
 		if oerr != nil {
-			logger.Ctx(ctx).Warn("workspace_svc.ListAccountAgents: 读取本端排列失败，回落账号顺序",
+			logger.Ctx(ctx).Warn("workspace_svc.ListAccountAgents: read device exec target orders failed, falling back to account order",
 				zap.Int64("userID", userID), zap.Int64("deviceID", dev.ID), zap.Error(oerr))
 		}
 		for _, o := range orders {
@@ -710,7 +710,7 @@ func deviceOrder(
 	}
 	order, err := exec_order_repo.ExecOrder().Find(ctx, userID, dev.ID, agentSyncID)
 	if err != nil {
-		logger.Ctx(ctx).Warn("workspace_svc.deviceOrder: 读取本端排列失败，回落账号顺序",
+		logger.Ctx(ctx).Warn("workspace_svc.deviceOrder: read device exec target order failed, falling back to account order",
 			zap.Int64("userID", userID), zap.Int64("deviceID", dev.ID),
 			zap.String("agentSyncID", agentSyncID), zap.Error(err))
 		return nil
@@ -732,7 +732,7 @@ func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetO
 	if !dev.IsActive() {
 		// 常见成因是浏览器攥着一枚已失效的指纹（换了账号、设备被解除授权）：顺序
 		// 因此存不下，界面会当场说明——落一条 Warn，让「用户说排序不生效」有据可查。
-		logger.Ctx(ctx).Warn("workspace_svc.SetExecTargetOrder: 设备指纹解析不到活跃设备，拒绝写入排列",
+		logger.Ctx(ctx).Warn("workspace_svc.SetExecTargetOrder: device fingerprint resolves to no active device, refusing to store order",
 			zap.Int64("userID", in.UserID), zap.String("agentSyncID", in.AgentSyncID))
 		return i18n.NewNotFoundError(ctx, code.DeviceNotFound)
 	}
