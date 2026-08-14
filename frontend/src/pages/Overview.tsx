@@ -404,13 +404,14 @@ function AgentRow({
   t,
 }: {
   agent: AgentItem;
-  reorder: AgentReorder | null;
+  // 排序控件恒在：顺序的持有者是设备，而这台浏览器的设备身份是到第一次排序时
+  // 才注册的——按「有没有身份」把控件藏起来，它就永远等不到那一次排序。
+  reorder: AgentReorder;
   t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
   const current = agent.exec_targets.find((tt) => tt.current);
   // 只有一档可排时排序没有意义（换不到别处去），不给控件添噪音。
-  const orderable =
-    reorder !== null && agent.exec_targets.filter(isMovableTier).length > 1;
+  const orderable = agent.exec_targets.filter(isMovableTier).length > 1;
   return (
     <div className="flex flex-col gap-2 border-t border-border px-4 py-3 first:border-t-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -456,7 +457,7 @@ function AgentRow({
             <TargetChip
               target={target}
               move={
-                orderable && reorder && isMovableTier(target)
+                orderable && isMovableTier(target)
                   ? {
                       canMoveUp:
                         reorderTargets(agent.exec_targets, i, -1) !== null,
@@ -472,7 +473,7 @@ function AgentRow({
           </span>
         ))}
       </div>
-      {reorder?.failed && (
+      {reorder.failed && (
         <p role="alert" className="pl-4 text-xs text-destructive">
           {t("overview.reorderError")}
         </p>
@@ -494,7 +495,6 @@ export default function Overview() {
   );
   const [clients, setClients] = useState<Record<string, RelayClient>>({});
   const [waiters, setWaiters] = useState<Record<string, WaiterData>>({});
-  const [fingerprint, setFingerprint] = useState<string | null>(null);
   // 同一时刻至多一个移动在飞（在飞期间所有排序按钮都禁用），因此这两个都是单槽位：
   // 失败说明跟踪的是「最近一次移动」，下一次移动成功即收敛掉。
   const [reorderingAgent, setReorderingAgent] = useState<string | null>(null);
@@ -513,14 +513,12 @@ export default function Overview() {
 
   useEffect(() => {
     let alive = true;
+    // 先拿这台浏览器**已有的**设备身份再读链：否则卡片上排第一、标着「当前」的
+    // 那一档，会和真派发时选中的不是同一档。这是一次纯本地读，没排过序的浏览器
+    // 拿到 null，按账号顺序读、不报错，也不会因为打开这一页就多出一台设备。
     void (async () => {
-      // 先拿这台浏览器的设备身份再读链：否则卡片上排第一、标着「当前」的那一档，
-      // 会和真派发时选中的不是同一档。取不到就按账号顺序读，不报错。
-      const fp = await callerDeviceFingerprint();
-      if (!alive) return;
-      setFingerprint(fp);
       try {
-        const list = await fetchAgents(fp);
+        const list = await fetchAgents(callerDeviceFingerprint());
         if (alive) {
           setAgents(list);
           setLoadError(null);
@@ -713,17 +711,18 @@ export default function Overview() {
     index: number,
     direction: -1 | 1,
   ) {
-    if (!fingerprint || reorderingAgent !== null) return;
+    if (reorderingAgent !== null) return;
     const backendSyncIds = reorderTargets(agent.exec_targets, index, direction);
     if (!backendSyncIds) return;
     setReorderingAgent(agent.sync_id);
     try {
-      await saveExecTargetOrder({
-        deviceFingerprint: fingerprint,
+      // 顺序的持有者是设备，第一次排序时这台浏览器才注册成一台设备；拿回落库用
+      // 的指纹接着按**自己的**顺序重读这条链，不再猜一次身份。
+      const deviceFingerprint = await saveExecTargetOrder({
         agentSyncId: agent.sync_id,
         backendSyncIds,
       });
-      const list = await fetchAgents(fingerprint);
+      const list = await fetchAgents(deviceFingerprint);
       const fresh = list.find((a) => a.sync_id === agent.sync_id);
       if (fresh) {
         setAgents(
@@ -900,18 +899,14 @@ export default function Overview() {
                     <AgentRow
                       key={agent.sync_id}
                       agent={agent}
-                      reorder={
-                        fingerprint
-                          ? {
-                              // 在飞期间禁用**所有**卡片的排序按钮：与下面
-                              // moveExecTarget 的单飞守卫一致，点了没反应即不存在。
-                              busy: reorderingAgent !== null,
-                              failed: reorderFailedAgent === agent.sync_id,
-                              onMove: (index, direction) =>
-                                void moveExecTarget(agent, index, direction),
-                            }
-                          : null
-                      }
+                      reorder={{
+                        // 在飞期间禁用**所有**卡片的排序按钮：与下面
+                        // moveExecTarget 的单飞守卫一致，点了没反应即不存在。
+                        busy: reorderingAgent !== null,
+                        failed: reorderFailedAgent === agent.sync_id,
+                        onMove: (index, direction) =>
+                          void moveExecTarget(agent, index, direction),
+                      }}
                       t={t}
                     />
                   ))}

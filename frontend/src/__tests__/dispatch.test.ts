@@ -19,7 +19,7 @@ import {
   pickFirstAvailable,
   type DispatchPlan,
 } from "@/lib/dispatch";
-import { ensureWebDevice } from "@/lib/webDevice";
+import { ensureWebDevice, getFingerprint } from "@/lib/webDevice";
 import { MethodRun } from "@/lib/wire";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -36,12 +36,14 @@ vi.mock("@/lib/webDevice", async (importOriginal) => {
     ...actual,
     deviceDisplayName: () => "Chrome · macOS",
     ensureWebDevice: vi.fn(),
+    getFingerprint: vi.fn(),
   };
 });
 
 const mockedApi = vi.mocked(api);
 const MockRelayClient = vi.mocked(RelayClient);
 const mockEnsureWebDevice = vi.mocked(ensureWebDevice);
+const mockGetFingerprint = vi.mocked(getFingerprint);
 
 const availablePlan: DispatchPlan = {
   agent_sync_id: "agent-1",
@@ -351,10 +353,10 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
 // 派发计划按**调用方设备自己的**排列解析：浏览器取计划时带上自己的指纹，
 // 服务端据此重排执行目标链再走「取第一个可用」，Chosen 与逐档原因随之改变。
 // 取不到设备身份时照常取计划（回落账号顺序，不报错）——派发不该因为一个偏好
-// 读不到就失败。
+// 读不到就失败，也不该为了凑一个指纹先把这台浏览器注册成一台设备。
 describe("fetchDispatchPlan（按调用方设备的顺序解析）", () => {
   it("带上这台浏览器的设备指纹", async () => {
-    mockEnsureWebDevice.mockResolvedValue(sourceDevice);
+    mockGetFingerprint.mockReturnValue(sourceDevice.fingerprint);
     mockedApi.mockResolvedValue(availablePlan);
 
     const plan = await fetchDispatchPlan("agent-1", "proj-1");
@@ -365,8 +367,8 @@ describe("fetchDispatchPlan（按调用方设备的顺序解析）", () => {
     expect(plan).toBe(availablePlan);
   });
 
-  it("这台浏览器还没有设备身份时照常取计划，不带指纹也不报错", async () => {
-    mockEnsureWebDevice.mockRejectedValue(new Error("no web device"));
+  it("这台浏览器还没有设备身份时照常取计划，不带指纹、也不注册一台", async () => {
+    mockGetFingerprint.mockReturnValue(null);
     mockedApi.mockResolvedValue(availablePlan);
 
     await fetchDispatchPlan("agent-1");
@@ -374,5 +376,6 @@ describe("fetchDispatchPlan（按调用方设备的顺序解析）", () => {
     expect(mockedApi).toHaveBeenCalledWith(
       "/v1/workspace/dispatch-target?agent_sync_id=agent-1",
     );
+    expect(mockEnsureWebDevice).not.toHaveBeenCalled();
   });
 });

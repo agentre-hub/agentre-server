@@ -61,14 +61,15 @@ export interface DispatchPlan {
  *
  * 计划按**调用方设备自己的**排列解析：带上这台浏览器的指纹，服务端据此重排执行
  * 目标链后再走「取第一个可用」，Chosen 与逐档原因因此跟着用户在总览页排的顺序
- * 走。取不到设备身份就不带，服务端回落账号顺序、不报错。 */
+ * 走。这台浏览器还没有设备身份（没排过序）时不带，服务端回落账号顺序、不报错 ——
+ * 取计划不该为了一个偏好先把自己注册成一台设备。 */
 export async function fetchDispatchPlan(
   agentSyncId: string,
   projectSyncId?: string,
 ): Promise<DispatchPlan> {
   const qs = new URLSearchParams({ agent_sync_id: agentSyncId });
   if (projectSyncId) qs.set("project_sync_id", projectSyncId);
-  const fingerprint = await callerDeviceFingerprint();
+  const fingerprint = callerDeviceFingerprint();
   if (fingerprint) qs.set("device_fingerprint", fingerprint);
   return api<DispatchPlan>(`/v1/workspace/dispatch-target?${qs.toString()}`);
 }

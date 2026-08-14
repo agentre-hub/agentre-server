@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
 import { ThemeProvider } from "@/lib/theme";
-import { ensureWebDevice } from "@/lib/webDevice";
+import { ensureWebDevice, getFingerprint } from "@/lib/webDevice";
 import i18n from "@/i18n";
 import Overview from "@/pages/Overview";
 
@@ -22,12 +22,13 @@ vi.mock("@/lib/api", async (importOriginal) => {
 vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
 vi.mock("@/lib/webDevice", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/webDevice")>();
-  return { ...actual, ensureWebDevice: vi.fn() };
+  return { ...actual, ensureWebDevice: vi.fn(), getFingerprint: vi.fn() };
 });
 
 const mockedApi = vi.mocked(api);
 const mockUseRelay = vi.mocked(useRelayMachine);
 const mockEnsureWebDevice = vi.mocked(ensureWebDevice);
+const mockGetFingerprint = vi.mocked(getFingerprint);
 
 const fakeClient = {
   request: vi.fn(),
@@ -70,8 +71,11 @@ beforeEach(async () => {
   // 默认中继未连：只有显式设置 connectedRelay 的用例才挂得到等待会话。
   mockUseRelay.mockReturnValue(disconnectedRelay());
   fakeClient.request.mockReset();
-  // 默认这台浏览器还没有设备身份（未注册 / 已被解除授权）：链按账号顺序读，
-  // 没有可承载顺序的设备，因此不出现排序控件。要排序的用例自己给一台。
+  // 默认这台浏览器还没有设备身份（没排过序 / 已被解除授权）：链按账号顺序读。
+  // 打开这一页不得注册出一台设备，所以默认让 ensureWebDevice 一被调用就失败 ——
+  // 谁在读路径上碰了它，用例当场就红。要排序的用例自己给一台。
+  mockGetFingerprint.mockReset();
+  mockGetFingerprint.mockReturnValue(null);
   mockEnsureWebDevice.mockReset();
   mockEnsureWebDevice.mockRejectedValue(new Error("no web device"));
 });
@@ -925,7 +929,7 @@ describe("overview: 这个浏览器自己的派发顺序", () => {
   }
 
   it("每一档给出上移/下移；skipped_for_web 档只读、不可移动", async () => {
-    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    mockGetFingerprint.mockReturnValue(webDevice.fingerprint);
     mockedApi.mockImplementation(async (path) => {
       if (path === AGENTS_PATH)
         return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
@@ -955,6 +959,7 @@ describe("overview: 这个浏览器自己的派发顺序", () => {
   });
 
   it("一次移动即提交并重新拉取该 Agent 的链，「当前」标记随之更新", async () => {
+    mockGetFingerprint.mockReturnValue(webDevice.fingerprint);
     mockEnsureWebDevice.mockResolvedValue(webDevice);
     let agentsCalls = 0;
     mockedApi.mockImplementation(async (path) => {
@@ -1006,6 +1011,7 @@ describe("overview: 这个浏览器自己的派发顺序", () => {
   });
 
   it("提交失败保持原顺序并就地说明，不静默", async () => {
+    mockGetFingerprint.mockReturnValue(webDevice.fingerprint);
     mockEnsureWebDevice.mockResolvedValue(webDevice);
     let agentsCalls = 0;
     mockedApi.mockImplementation(async (path) => {
@@ -1040,7 +1046,10 @@ describe("overview: 这个浏览器自己的派发顺序", () => {
     expect(agentsCalls).toBe(1);
   });
 
-  it("这台浏览器没有设备身份时不给排序控件（没有可承载顺序的设备）", async () => {
+  // 打开总览页是纯读：它不得把这台浏览器注册成一台设备。否则用户只是看了一眼
+  // 控制台，账号的设备列表里就凭空多一台机器 —— e2e 的「真实空态」正是踩在这上面
+  // 挂的（新用户打开 /overview 后 /devices 不再是空的）。
+  it("打开这一页不注册设备：按账号顺序读，排序控件照常给", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/workspace/agents")
         return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
@@ -1050,9 +1059,57 @@ describe("overview: 这个浏览器自己的派发顺序", () => {
     renderOverview();
     await screen.findByText("Backend Agent");
 
-    expect(screen.queryAllByRole("button", { name: "Move up" }).length).toBe(0);
-    expect(screen.queryAllByRole("button", { name: "Move down" }).length).toBe(
-      0,
+    // 没有设备身份 → 读端点不带指纹，服务端回落账号顺序。
+    expect(mockedApi).toHaveBeenCalledWith("/v1/workspace/agents");
+    // 而且一次注册都没发生：读一份偏好不该有建出一台设备行的副作用。
+    expect(mockEnsureWebDevice).not.toHaveBeenCalled();
+    // 控件照常给：注册在写路径，把控件按身份藏起来会让这台浏览器永远排不了序。
+    expect(screen.getAllByRole("button", { name: "Move up" }).length).toBe(2);
+  });
+
+  it("第一次排序时才注册这台浏览器，并按注册到的指纹提交与重读", async () => {
+    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    let accountOrderCalls = 0;
+    let deviceOrderCalls = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/workspace/agents") {
+        accountOrderCalls += 1;
+        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
+      }
+      if (path === AGENTS_PATH) {
+        deviceOrderCalls += 1;
+        return { agents: [agentChain(["b-local", "b-mac", "b-nuc"])] };
+      }
+      if (path === ORDER_PATH) return {};
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOverview();
+    await screen.findByText(/Currently running on Study NUC/);
+    expect(mockEnsureWebDevice).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(chipOf(/Office Mac mini/)).getByRole("button", {
+        name: "Move up",
+      }),
     );
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Currently running on Office Mac mini/),
+      ).toBeTruthy(),
+    );
+    // 排序这一下才把这台浏览器注册成一台设备（顺序的持有者是设备）。
+    expect(mockEnsureWebDevice).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(
+        String(
+          mockedApi.mock.calls.find((c) => c[0] === ORDER_PATH)?.[1]?.body,
+        ),
+      ),
+    ).toMatchObject({ device_fingerprint: webDevice.fingerprint });
+    // 重读走的是刚注册到的那台设备的顺序，不是再按账号顺序读一遍。
+    expect(accountOrderCalls).toBe(1);
+    expect(deviceOrderCalls).toBe(1);
   });
 });

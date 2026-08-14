@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
 import { dispatchNewConversation, fetchDispatchPlan } from "@/lib/dispatch";
-import { ensureWebDevice } from "@/lib/webDevice";
+import { ensureWebDevice, getFingerprint } from "@/lib/webDevice";
 import { useRelayMachine } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/lib/theme";
@@ -36,7 +36,7 @@ vi.mock("@/lib/dispatch", async (importOriginal) => {
 });
 vi.mock("@/lib/webDevice", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/webDevice")>();
-  return { ...actual, ensureWebDevice: vi.fn() };
+  return { ...actual, ensureWebDevice: vi.fn(), getFingerprint: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
 
@@ -44,6 +44,7 @@ const mockedApi = vi.mocked(api);
 const mockFetchPlan = vi.mocked(fetchDispatchPlan);
 const mockDispatch = vi.mocked(dispatchNewConversation);
 const mockEnsureWebDevice = vi.mocked(ensureWebDevice);
+const mockGetFingerprint = vi.mocked(getFingerprint);
 const mockUseRelay = vi.mocked(useRelayMachine);
 
 const agents = [
@@ -165,6 +166,9 @@ beforeEach(async () => {
   mockFetchPlan.mockReset();
   mockDispatch.mockReset();
   mockEnsureWebDevice.mockReset();
+  // 默认这台浏览器还没有设备身份：读路径回落账号顺序，且不得为此注册一台。
+  mockGetFingerprint.mockReset();
+  mockGetFingerprint.mockReturnValue(null);
   mockUseRelay.mockReset();
   mockUseRelay.mockReturnValue({
     client: null,
@@ -362,11 +366,7 @@ describe("新对话弹层:「当前」标记必须和真派发目标是同一档
   // 「当前」是**账号顺序的赢家**，而总览页（带指纹）说的是这台浏览器自己的赢家。
   // 同一账号同一时刻两处给出不同答案，其中一处必然与真实派发目标不符。
   it("取 Agent 清单时带上这台浏览器的设备指纹", async () => {
-    mockEnsureWebDevice.mockResolvedValue({
-      fingerprint: "fp-this-browser",
-      accessToken: "t",
-      deviceId: 1,
-    });
+    mockGetFingerprint.mockReturnValue("fp-this-browser");
     mockedApi.mockImplementation(async (path) => {
       if (path.startsWith("/v1/workspace/agents")) return { agents };
       throw new Error("unexpected: " + path);
@@ -382,8 +382,9 @@ describe("新对话弹层:「当前」标记必须和真派发目标是同一档
     ).toBe(true);
   });
 
-  // 拿不到指纹（没注册过 / 已被解除授权）时不附加空参数，读路径照常回落账号顺序。
-  it("拿不到指纹时不附加查询参数", async () => {
+  // 拿不到指纹（没排过序 / 已被解除授权）时不附加空参数，读路径照常回落账号顺序，
+  // 更不为了凑一个指纹把这台浏览器注册成设备 —— 打开一个弹层不该多出一台机器。
+  it("拿不到指纹时不附加查询参数，也不注册设备", async () => {
     mockEnsureWebDevice.mockRejectedValue(new Error("no device"));
     mockedApi.mockImplementation(async (path) => {
       if (path.startsWith("/v1/workspace/agents")) return { agents };
@@ -395,5 +396,6 @@ describe("新对话弹层:「当前」标记必须和真派发目标是同一档
     expect(
       mockedApi.mock.calls.some(([path]) => path === "/v1/workspace/agents"),
     ).toBe(true);
+    expect(mockEnsureWebDevice).not.toHaveBeenCalled();
   });
 });

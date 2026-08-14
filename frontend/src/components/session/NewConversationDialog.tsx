@@ -145,10 +145,9 @@ export default function NewConversationDialog({
   useEffect(() => {
     if (!open) return;
     let alive = true;
+    const fp = callerDeviceFingerprint();
+    const qs = fp ? `?device_fingerprint=${encodeURIComponent(fp)}` : "";
     void (async () => {
-      const fp = await callerDeviceFingerprint();
-      if (!alive) return;
-      const qs = fp ? `?device_fingerprint=${encodeURIComponent(fp)}` : "";
       try {
         const d = await api<{ agents: AgentItem[] }>(
           `/v1/workspace/agents${qs}`,
