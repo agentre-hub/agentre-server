@@ -357,3 +357,79 @@ describe("device page design alignment", () => {
     expect(deviceKindIcon("web")).toBe(Monitor);
   });
 });
+
+// 规格「web 控制台：设备页 · 入口与展开条件」：整页只有一个「添加设备」入口，
+// 点它就地在列表上方展开三步引导；空态默认展开并取代那句孤立的空句；
+// 列表加载失败时只留既有错误 —— 不展开引导，也不改口说没有设备。
+describe("add-device entry and guide expansion", () => {
+  it("有设备时：列表上方只有一个『添加设备』入口，引导不渲染", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    await screen.findByText("nuc-01");
+
+    expect(screen.getAllByRole("button", { name: "Add device" })).toHaveLength(
+      1,
+    );
+    expect(screen.queryByTestId("add-device-guide")).toBeNull();
+  });
+
+  it("点入口：引导展开在列表上方、入口消失；收起后回到原样", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+    await screen.findByText("nuc-01");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add device" }));
+
+    const guide = screen.getByTestId("add-device-guide");
+    const firstRow = screen.getByTestId("device-row-1");
+    // 「在列表上方」：引导在文档顺序里排在第一台设备之前
+    expect(
+      guide.compareDocumentPosition(firstRow) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // 展开时入口不再渲染（全页仍然只有一个添加入口）
+    expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse guide" }));
+    expect(screen.queryByTestId("add-device-guide")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add device" })).toBeTruthy();
+  });
+
+  it("空态：引导默认展开取代孤立空句，且不提供收起", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [] };
+      throw new Error("unexpected call: " + path);
+    });
+
+    renderDevices();
+
+    expect(await screen.findByTestId("add-device-guide")).toBeTruthy();
+    expect(screen.queryByText("No devices yet.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Collapse guide" })).toBeNull();
+    // 引导已经展开，重复的入口不再渲染
+    expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();
+  });
+
+  it("加载失败：只显示既有错误，不展开引导、也不说没有设备", async () => {
+    mockedApi.mockImplementation(async () => {
+      throw new SyntaxError("Unexpected token '<' ... is not valid JSON");
+    });
+
+    renderDevices();
+
+    expect(
+      await screen.findByText("Could not load your devices. Please try again."),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("add-device-guide")).toBeNull();
+    expect(screen.queryByText("No devices yet.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();
+  });
+});
