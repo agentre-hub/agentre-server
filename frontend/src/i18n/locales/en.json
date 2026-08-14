@@ -236,6 +236,9 @@
         "desktopTip3": "The device code expires; start over from the desktop app if it does. The approval screen counts down the time left.",
         "serverLabel": "Server address",
         "next": "I have the device code"
+      },
+      "code": {
+        "handoff": "Submitting opens the approval screen, where you check the code against the device and approve it."
       }
     },
     "manage": {

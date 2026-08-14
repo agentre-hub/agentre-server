@@ -1,10 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, Check, Copy, Download, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import {
+  ArrowRight,
+  Check,
+  CircleAlert,
+  Copy,
+  Download,
+  X,
+} from "lucide-react";
 
+import CodeInput from "@/components/CodeInput";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { normalize, toChars } from "@/lib/userCode";
 import { cn } from "@/lib/utils";
 
 /** 能被「加进来」的设备类型。浏览器不用加（用户正开着的这个已经在列表里），移动端没有可装的客户端。 */
@@ -174,14 +184,37 @@ function TipList({ tips }: { tips: string[] }) {
  */
 export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
   const { t } = useTranslation();
+  const nav = useNavigate();
   const [step, setStep] = useState(1);
   const [kind, setKind] = useState<AddKind>("agentred");
   const [os, setOS] = useState<TargetOS>("linux");
   const [done, setDone] = useState<Set<number>>(new Set());
+  const [chars, setChars] = useState<string[]>(() => toChars(""));
+  const [incomplete, setIncomplete] = useState(false);
+  const codeErrorId = useId();
 
   function finishStep(n: number) {
     setDone((prev) => new Set(prev).add(n));
     setStep(n + 1);
+  }
+
+  /**
+   * 第 3 步只做本地归一化，然后把设备码交给既有的授权确认屏。
+   *
+   * 「这个代码存不存在 / 是不是已经用过」不在这里问：那一屏拿到 user_code
+   * 就会自己查 pending，查不到时用同一套 device.entry.errors 就地标红且
+   * 保留已填字符。在这里再查一遍等于把那一屏的错误呈现复制第二份，
+   * 而两份安全界面必然漂移（规格「不新增第二份批准界面」）。
+   */
+  function submitCode(e: FormEvent) {
+    e.preventDefault();
+    const norm = normalize(chars.join(""));
+    // 不足六位（码格本身已挡下字母表外的字符）：一个请求都不发，停在原地。
+    if (!norm) {
+      setIncomplete(true);
+      return;
+    }
+    nav(`/device?user_code=${encodeURIComponent(norm)}`);
   }
 
   const server = consoleOrigin();
@@ -446,8 +479,49 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
           </>
         )}
 
-        {/* 第 3 步（收下 6 位设备码 → 跳既有授权确认屏）由下一个任务填入。
-            在它落地之前这里不放任何占位内容，更不复制一份批准界面。 */}
+        {step === 3 && (
+          <form onSubmit={submitCode} className="flex flex-col gap-4">
+            <StepHead
+              step={3}
+              // 文案沿用既有输码屏：同一件事换个说法只会让人以为是两件事。
+              title={t("device.entry.title")}
+              description={t("device.entry.description")}
+            />
+            <div className="flex flex-col gap-3">
+              <CodeInput
+                value={chars}
+                onChange={(next) => {
+                  setChars(next);
+                  // 用户一动手就撤掉红态，别让他继续瞪着上一次的错误。
+                  setIncomplete(false);
+                }}
+                invalid={incomplete}
+                describedBy={incomplete ? codeErrorId : undefined}
+              />
+              {incomplete && (
+                <p
+                  id={codeErrorId}
+                  className="flex items-start gap-2 text-[13px] text-destructive"
+                >
+                  <CircleAlert
+                    className="mt-0.5 size-3.5 shrink-0"
+                    aria-hidden="true"
+                  />
+                  {t("device.entry.errors.incomplete")}
+                </p>
+              )}
+            </div>
+            <p className="text-[13px] leading-relaxed text-muted-foreground">
+              {t("device.add.code.handoff")}
+            </p>
+            <div className="flex justify-end border-t border-border pt-4">
+              <Button type="submit">
+                {t("device.entry.submit")}
+                <ArrowRight />
+              </Button>
+            </div>
+          </form>
+        )}
       </div>
     </Card>
   );
