@@ -182,12 +182,18 @@ jobs:
                 -exec cp --parents '{}' ../redacted-failure-evidence/test-results/ \;
             )
           fi
+          # 脱敏规则落到独立的 sed 脚本再 -f 引用：规则里同时含有 " 和 '，内联进
+          # shell 单引号串就得逐个 '"'"' 转义，错一处整行都不再是合法 shell。这一步
+          # 只在 failure() 下跑，于是这类错误要等到第一次真的失败才暴露——那时正好
+          # 拿不到本该用来定位的证据。heredoc 定界符加引号，内容原样落盘，不再转义。
+          cat > "$RUNNER_TEMP/redact.sed" <<'REDACT'
+          s#([^[:space:]"']+)@tcp\(([^)]+)\)/([^?[:space:]"']+)(\?[^[:space:]"']*)?#<redacted>@tcp(\2)/\3#g
+          s#((redis-)?password[=:][[:space:]]*)[^,;[:space:]]+#\1<redacted>#Ig
+          REDACT
           find e2e/runtime -name server.log -type f -print0 2>/dev/null | while IFS= read -r -d '' log; do
             run_id=$(basename "$(dirname "$log")")
             mkdir -p "e2e/redacted-failure-evidence/runtime/$run_id"
-            sed -E \
-              -e 's#([^[:space:]"'"']+)@tcp\(([^)]+)\)/([^?[:space:]"'"']+)(\?[^[:space:]"'"']*)?#<redacted>@tcp(\2)/\3#g' \
-              -e 's#((redis-)?password[=:][[:space:]]*)[^,;[:space:]]+#\1<redacted>#Ig' \
+            sed -E -f "$RUNNER_TEMP/redact.sed" \
               "$log" > "e2e/redacted-failure-evidence/runtime/$run_id/server.log"
           done
 
