@@ -8,12 +8,19 @@ import "github.com/cago-frame/cago/server/mux"
 
 // ---------- 总览页：账号级 Agent 清单 ----------
 
+// ListAgentsRequest 取总览页的账号级 Agent 清单。DeviceFingerprint 是**调用方自己**
+// 的设备指纹（可空）：这组端点鉴权的是用户不是设备，所以调用方要按哪台设备的顺序
+// 看这条链只能由参数说明；缺失或解析不到设备时按账号顺序返回，不报错（决策 9 读侧）。
 type ListAgentsRequest struct {
-	mux.Meta `path:"/v1/workspace/agents" method:"GET"`
+	mux.Meta          `path:"/v1/workspace/agents" method:"GET"`
+	DeviceFingerprint string `form:"device_fingerprint"`
 }
 
 type ExecTargetItem struct {
-	Rank             int    `json:"rank"`
+	Rank int `json:"rank"`
+	// BackendSyncID 是这一档跨机稳定且逐档唯一的标识，浏览器靠它表达排列：rank 是
+	// 位置性的（重排后就变了），device_id 也不唯一（一台机器可挂多个 backend）。
+	BackendSyncID    string `json:"backend_sync_id,omitempty"`
 	IsLocalReference bool   `json:"is_local_reference"`
 	DeviceID         int64  `json:"device_id,omitempty"`
 	DeviceName       string `json:"device_name,omitempty"`
@@ -45,13 +52,18 @@ type DispatchTargetRequest struct {
 	mux.Meta      `path:"/v1/workspace/dispatch-target" method:"GET"`
 	AgentSyncID   string `form:"agent_sync_id" binding:"required"`
 	ProjectSyncID string `form:"project_sync_id"`
+	// DeviceFingerprint 是调用方自己的设备指纹（可空）：带上时执行目标链先按这台
+	// 设备自己的排列重排，再走「取第一个可用」的挑选，Chosen 与逐档原因随之改变。
+	DeviceFingerprint string `form:"device_fingerprint"`
 }
 
 type DispatchTierItem struct {
-	Rank        int    `json:"rank"`
-	DeviceID    int64  `json:"device_id,omitempty"`
-	DeviceName  string `json:"device_name,omitempty"`
-	BackendType string `json:"backend_type,omitempty"`
+	Rank int `json:"rank"`
+	// BackendSyncID 见 ExecTargetItem.BackendSyncID：浏览器表达排列的唯一锚点。
+	BackendSyncID string `json:"backend_sync_id,omitempty"`
+	DeviceID      int64  `json:"device_id,omitempty"`
+	DeviceName    string `json:"device_name,omitempty"`
+	BackendType   string `json:"backend_type,omitempty"`
 	// Kind 是这一档指向的设备种类（desktop / agentred）。R17 发起前据此如实说明
 	// org/subagent/hook 在目标上是否可用；无设备的档（本机相对 / 未配对）不带它。
 	Kind string `json:"kind,omitempty"`
@@ -109,3 +121,22 @@ type DeviceDetailResponse struct {
 	RunnableAgents []RunnableAgentItem `json:"runnable_agents,omitempty"`
 	Projects       []ProjectItem       `json:"projects"`
 }
+
+// ---------- 每端自己的派发顺序 ----------
+
+// SetExecTargetOrderRequest 保存「调用方这台设备把某个 Agent 的执行目标排成这个
+// 次序」。账号取自鉴权上下文；设备指纹只能由参数传入（这组端点鉴权的是用户不是
+// 设备），服务端按 (user_id, fingerprint) 解析出设备行，解析不到即拒绝（决策 9）。
+//
+// 排列用 backend sync_id 数组表达，不用 rank：rank 是位置性的，device_id 也不唯一。
+// 它是收敛的偏好而非权威——指向已删 backend 的项在解析时忽略，因此这里不校验它与
+// 当前执行目标集合是否一致。
+type SetExecTargetOrderRequest struct {
+	mux.Meta          `path:"/v1/workspace/exec-target-order" method:"POST"`
+	DeviceFingerprint string `json:"device_fingerprint" binding:"required,min=8,max=128"`
+	AgentSyncID       string `json:"agent_sync_id" binding:"required,max=255"`
+	// BackendSyncIDs 允许为空数组（等价于「这台设备不再有自己的顺序偏好」）。
+	BackendSyncIDs []string `json:"backend_sync_ids" binding:"max=64,dive,required,max=255"`
+}
+
+type SetExecTargetOrderResponse struct{}

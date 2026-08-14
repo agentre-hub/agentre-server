@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"agentre-server/internal/model/entity/device_entity"
+	"agentre-server/internal/model/entity/exec_order_entity"
 	"agentre-server/internal/model/entity/sync_entity"
 	"agentre-server/internal/repository/device_repo"
 	"agentre-server/internal/repository/device_repo/mock_device_repo"
+	"agentre-server/internal/repository/exec_order_repo"
+	"agentre-server/internal/repository/exec_order_repo/mock_exec_order_repo"
 	"agentre-server/internal/repository/sync_repo"
 	"agentre-server/internal/repository/sync_repo/mock_sync_repo"
 )
@@ -77,7 +81,7 @@ func TestListAccountAgents_GivenOrderedTargets_ThenFirstAvailableNonLocalIsCurre
 		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-online", Status: 1},
 	}, nil)
 
-	got, err := svc.ListAccountAgents(ctx, 7)
+	got, err := svc.ListAccountAgents(ctx, 7, "")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	agent := got[0]
@@ -113,7 +117,7 @@ func TestListAccountAgents_GivenAllTargetsUnavailable_ThenHasAvailableTargetFals
 	}, nil)
 	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(nil, nil)
 
-	got, err := svc.ListAccountAgents(ctx, 7)
+	got, err := svc.ListAccountAgents(ctx, 7, "")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.False(t, got[0].HasAvailableTarget)
@@ -137,7 +141,7 @@ func TestListAccountAgents_NeverCarriesCLIPathOrEnvJSON(t *testing.T) {
 	}, nil)
 	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(nil, nil)
 
-	got, err := svc.ListAccountAgents(ctx, 7)
+	got, err := svc.ListAccountAgents(ctx, 7, "")
 	require.NoError(t, err)
 	out := mustJSON(t, got)
 	assert.NotContains(t, out, "/Users/alice")
@@ -275,7 +279,7 @@ func TestWebDispatchPlan_GivenLocalOfflineAvailable_ThenSkipsLocalAndPicksFirstA
 		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-online", Status: 1},
 	}, nil)
 
-	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1", "")
 	require.NoError(t, err)
 	require.Len(t, plan.Tiers, 3)
 
@@ -335,7 +339,7 @@ func TestWebDispatchPlan_GivenAllUnavailable_ThenPerTierReasons(t *testing.T) {
 		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-online", Status: 1},
 	}, nil)
 
-	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1", "")
 	require.NoError(t, err)
 	require.Len(t, plan.Tiers, 4)
 
@@ -376,7 +380,7 @@ func TestWebDispatchPlan_GivenProjectMissingOnFirstAvailable_ThenPicksNextWithPa
 		{ID: 11, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-b", Status: 1},
 	}, nil)
 
-	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1", "")
 	require.NoError(t, err)
 	require.Len(t, plan.Tiers, 2)
 
@@ -406,7 +410,7 @@ func TestWebDispatchPlan_GivenNoProject_ThenPicksFirstAvailableWithoutPath(t *te
 		{ID: 21, UserID: 7, Name: "公司 Mac mini", Kind: device_entity.KindAgentred, Fingerprint: "fp-online", Status: 1},
 	}, nil)
 
-	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "")
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "", "")
 	require.NoError(t, err)
 	require.Len(t, plan.Tiers, 1)
 	assert.Equal(t, AvailabilityAvailable, plan.Tiers[0].Availability)
@@ -423,7 +427,7 @@ func TestWebDispatchPlan_GivenUnknownAgent_ThenNotFound(t *testing.T) {
 	}, nil)
 	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(nil, nil)
 
-	_, err := svc.WebDispatchPlan(ctx, 7, "agent-missing", "")
+	_, err := svc.WebDispatchPlan(ctx, 7, "agent-missing", "", "")
 	assert.Error(t, err)
 }
 
@@ -461,7 +465,7 @@ func TestWebDispatchPlan_GivenDesktopFirstAvailable_ThenChoosesDesktopWithLocalP
 		{UserID: 7, DeviceID: 30, ProjectSyncID: "proj-1", Path: "/Users/wyz/agentre-server"},
 	}, nil)
 
-	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1", "")
 	require.NoError(t, err)
 	require.Len(t, plan.Tiers, 3)
 
@@ -516,7 +520,7 @@ func TestWebDispatchPlan_GivenDesktopMissingProjectPath_ThenSkipsToNextTargetWit
 	}, nil)
 	mPath.EXPECT().ListByDevice(ctx, int64(7), int64(30)).Return(nil, nil)
 
-	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1")
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "proj-1", "")
 	require.NoError(t, err)
 	require.Len(t, plan.Tiers, 2)
 
@@ -533,4 +537,276 @@ func TestWebDispatchPlan_GivenDesktopMissingProjectPath_ThenSkipsToNextTargetWit
 	assert.Equal(t, "fp-agentred", plan.Chosen.DeviceFingerprint)
 	assert.Equal(t, device_entity.KindAgentred, plan.Chosen.Kind)
 	assert.Equal(t, "/srv/agentre-server", plan.Chosen.Cwd)
+}
+
+// ── 每端自己的派发顺序：按调用方设备的排列重排执行目标链 ──────────────────
+
+// registerExecOrderMock 只给「带设备指纹」的用例装排列仓储。不带指纹的用例根本不该
+// 走到它：那时仓储没被注册，一旦有人偷偷去读会当场炸开，而不是悄悄拿到一个空排列
+// 让「没解析设备就去读排列」这种错误蒙混过关。
+func registerExecOrderMock(t *testing.T) *mock_exec_order_repo.MockExecOrderRepo {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	m := mock_exec_order_repo.NewMockExecOrderRepo(ctrl)
+	exec_order_repo.RegisterExecOrder(m)
+	t.Cleanup(func() { exec_order_repo.RegisterExecOrder(nil) })
+	return m
+}
+
+// orderedChainRows 是「一个 Agent + 三档执行目标」的固定装置：账号 sort_order 是
+// b-a → b-b → b-c，分别落在三台 agentred 上。
+func orderedChainRows(t *testing.T) []*sync_entity.SyncObject {
+	t.Helper()
+	return []*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-a", AgentredFingerprint: "fp-a",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-b", AgentredFingerprint: "fp-b",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-c", AgentredFingerprint: "fp-c",
+			Payload: mustJSON(t, map[string]any{"type": "codex"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-a", "sort_order": 0})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-b", "sort_order": 1})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t3",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-c", "sort_order": 2})},
+	}
+}
+
+// orderedChainDevices 是 orderedChainRows 对应的设备，外加发起请求的那台浏览器
+// （kind=web，ID 90）——排列的**持有者**，它本身从不作为派发目标出现在链上。
+func orderedChainDevices() []*device_entity.Device {
+	return []*device_entity.Device{
+		{ID: 20, UserID: 7, Name: "机器 A", Kind: device_entity.KindAgentred, Fingerprint: "fp-a", Status: 1},
+		{ID: 21, UserID: 7, Name: "机器 B", Kind: device_entity.KindAgentred, Fingerprint: "fp-b", Status: 1},
+		{ID: 22, UserID: 7, Name: "机器 C", Kind: device_entity.KindAgentred, Fingerprint: "fp-c", Status: 1},
+		{ID: 90, UserID: 7, Name: "Chrome", Kind: device_entity.KindWeb, Fingerprint: "fp-web", Status: 1},
+	}
+}
+
+func allOnline() fakeOnlineChecker {
+	return fakeOnlineChecker{online: map[string]bool{"fp-a": true, "fp-b": true, "fp-c": true}}
+}
+
+func tierBackendSyncIDs(tiers []WebDispatchTier) []string {
+	out := make([]string, 0, len(tiers))
+	for _, t := range tiers {
+		out = append(out, t.BackendSyncID)
+	}
+	return out
+}
+
+func tierRanks(tiers []WebDispatchTier) []int {
+	out := make([]int, 0, len(tiers))
+	for _, t := range tiers {
+		out = append(out, t.Rank)
+	}
+	return out
+}
+
+// 带上自己指纹的浏览器拿到的是**它自己那份顺序**下的派发计划：链按它的排列重排，
+// 「第一个可用」因此落到另一档。挑选逻辑一行不改，只是它看到的顺序变了。
+//
+// 每一档还要带上 backend sync_id：rank 是位置性的、device_id 也不唯一（一台机器可挂
+// 多个 backend），浏览器只能靠它表达排列。
+func TestWebDispatchPlan_GivenDeviceOrder_ThenTiersFollowItAndChosenMoves(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	SetOnlineChecker(allOnline())
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return(orderedChainRows(t), nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(orderedChainDevices(), nil)
+	mOrder.EXPECT().Find(ctx, int64(7), int64(90), "agent-1").Return(
+		&exec_order_entity.DeviceExecTargetOrder{
+			UserID: 7, DeviceID: 90, AgentSyncID: "agent-1", OrderJSON: `["b-c","b-a"]`,
+		}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "", "fp-web")
+	require.NoError(t, err)
+
+	// 排列覆盖 b-c、b-a；没被覆盖的 b-b 按账号 sort_order 补到尾部。
+	assert.Equal(t, []string{"b-c", "b-a", "b-b"}, tierBackendSyncIDs(plan.Tiers))
+	// rank 是位置性的：重排后必须重编号，否则前端看到的序号与实际派发顺序对不上。
+	assert.Equal(t, []int{1, 2, 3}, tierRanks(plan.Tiers))
+	assert.True(t, plan.Tiers[0].Current)
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "fp-c", plan.Chosen.DeviceFingerprint)
+	assert.Equal(t, "机器 C", plan.Chosen.DeviceName)
+}
+
+// 这台设备没有自己的顺序：回落到同步下来的账号 sort_order，与不带指纹时一致。
+func TestWebDispatchPlan_GivenNoOrderRow_ThenFallsBackToAccountSortOrder(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	SetOnlineChecker(allOnline())
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return(orderedChainRows(t), nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(orderedChainDevices(), nil)
+	mOrder.EXPECT().Find(ctx, int64(7), int64(90), "agent-1").Return(nil, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "", "fp-web")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b-a", "b-b", "b-c"}, tierBackendSyncIDs(plan.Tiers))
+	assert.Equal(t, "fp-a", plan.Chosen.DeviceFingerprint)
+}
+
+// 排列是**收敛的**，不是权威的：排完序之后账号侧删掉了一档、又加了一档，旧排列
+// 不失效也不让谁凭空消失——指向已不存在 backend 的项忽略，没被覆盖到的档按账号
+// sort_order 补到尾部（与桌面端 ResolveExecTargetOrder 同一规则）。
+func TestWebDispatchPlan_GivenOrderReferencingRemovedBackend_ThenIgnoredAndUncoveredAppended(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	SetOnlineChecker(allOnline())
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return(orderedChainRows(t), nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(orderedChainDevices(), nil)
+	mOrder.EXPECT().Find(ctx, int64(7), int64(90), "agent-1").Return(
+		&exec_order_entity.DeviceExecTargetOrder{
+			UserID: 7, DeviceID: 90, AgentSyncID: "agent-1",
+			// b-gone 已被删除；b-b 是排完序之后新加的一档。
+			OrderJSON: `["b-gone","b-c"]`,
+		}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "", "fp-web")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b-c", "b-a", "b-b"}, tierBackendSyncIDs(plan.Tiers))
+	assert.Len(t, plan.Tiers, 3, "排列里的幽灵档不得凭空多出一档")
+}
+
+// 指纹解析不到设备（换了浏览器、清了 localStorage、指纹是别人账号的）：读路径按
+// 「没有排列」处理，回落账号顺序，不报错也不静默改派到别处（决策 9 的读侧）。
+// 设备解析不到就拿不到 device_id，也就根本没有可读的排列——排列仓储一次都不该被碰。
+func TestWebDispatchPlan_GivenUnresolvableFingerprint_ThenSilentlyFallsBack(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	registerExecOrderMock(t) // 不设任何 EXPECT：被调用即失败
+	SetOnlineChecker(allOnline())
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return(orderedChainRows(t), nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(orderedChainDevices(), nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "", "fp-someone-else")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b-a", "b-b", "b-c"}, tierBackendSyncIDs(plan.Tiers))
+	assert.Equal(t, "fp-a", plan.Chosen.DeviceFingerprint)
+}
+
+// 排列把「本机」相对引用排到第一位也改变不了 R15d：浏览器语境下它没有指代对象，
+// 仍然 skipped_for_web、仍然不参与「第一个可用」的挑选。重排只换顺序，不换语义。
+func TestWebDispatchPlan_GivenOrderPromotingLocalReference_ThenStillSkippedForWeb(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	SetOnlineChecker(allOnline())
+
+	rows := append(orderedChainRows(t),
+		&sync_entity.SyncObject{Kind: sync_entity.KindAgentBackend, SyncID: "b-local", AgentredFingerprint: "",
+			Payload: mustJSON(t, map[string]any{"type": "claude_code"})},
+		&sync_entity.SyncObject{Kind: sync_entity.KindAgentExecTarget, SyncID: "t4",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-local", "sort_order": 3})},
+	)
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return(rows, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(orderedChainDevices(), nil)
+	mOrder.EXPECT().Find(ctx, int64(7), int64(90), "agent-1").Return(
+		&exec_order_entity.DeviceExecTargetOrder{
+			UserID: 7, DeviceID: 90, AgentSyncID: "agent-1", OrderJSON: `["b-local","b-b"]`,
+		}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, 7, "agent-1", "", "fp-web")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b-local", "b-b", "b-a", "b-c"}, tierBackendSyncIDs(plan.Tiers))
+	assert.Equal(t, AvailabilitySkippedForWeb, plan.Tiers[0].Availability)
+	assert.False(t, plan.Tiers[0].Current)
+	assert.True(t, plan.Tiers[1].Current)
+	assert.Equal(t, "fp-b", plan.Chosen.DeviceFingerprint)
+}
+
+// 总览页的 Agent 卡片渲染的是同一条链，也必须按这个浏览器的顺序：否则卡片上排第一、
+// 标着「当前」的那一档，和真派发时选中的不是同一档。
+func TestListAccountAgents_GivenDeviceOrder_ThenCardChainFollowsItAndCurrentMoves(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	SetOnlineChecker(allOnline())
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return(orderedChainRows(t), nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return(orderedChainDevices(), nil)
+	// 一次取这台设备对全部 Agent 的排列：一屏多张卡片不该按 Agent 逐条查库。
+	mOrder.EXPECT().ListByDevice(ctx, int64(7), int64(90)).Return(
+		[]*exec_order_entity.DeviceExecTargetOrder{
+			{UserID: 7, DeviceID: 90, AgentSyncID: "agent-1", OrderJSON: `["b-c"]`},
+			{UserID: 7, DeviceID: 90, AgentSyncID: "agent-other", OrderJSON: `["x"]`},
+		}, nil)
+
+	got, err := svc.ListAccountAgents(ctx, 7, "fp-web")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].ExecTargets, 3)
+	assert.Equal(t, []string{"b-c", "b-a", "b-b"}, []string{
+		got[0].ExecTargets[0].BackendSyncID,
+		got[0].ExecTargets[1].BackendSyncID,
+		got[0].ExecTargets[2].BackendSyncID,
+	})
+	assert.Equal(t, []int{1, 2, 3}, []int{
+		got[0].ExecTargets[0].Rank, got[0].ExecTargets[1].Rank, got[0].ExecTargets[2].Rank,
+	})
+	assert.True(t, got[0].ExecTargets[0].Current)
+	assert.Equal(t, "机器 C", got[0].ExecTargets[0].DeviceName)
+}
+
+// 写路径与读路径**刻意不同**：保存顺序时解析不到设备就拒绝，绝不猜一个 device_id
+// 去写（决策 9）。指纹是参数传进来的，账号归属只能靠 (user_id, fingerprint) 这次
+// 解析来保证——别人账号的指纹在这里查不到，因此写不进去。
+func TestSetExecTargetOrder_GivenForeignFingerprint_ThenRejectedWithoutWriting(t *testing.T) {
+	ctx, _, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	mDev.EXPECT().FindByFingerprint(ctx, int64(7), "fp-someone-else").Return(nil, nil)
+	mOrder.EXPECT().Save(gomock.Any(), gomock.Any()).Times(0)
+
+	err := svc.SetExecTargetOrder(ctx, SetExecTargetOrderInput{
+		UserID: 7, DeviceFingerprint: "fp-someone-else",
+		AgentSyncID: "agent-1", BackendSyncIDs: []string{"b-c", "b-a"},
+	})
+	assert.Error(t, err)
+}
+
+// 已被解除授权的设备同样写不进去：它的顺序马上就要被清掉，再收一份新的没有意义。
+func TestSetExecTargetOrder_GivenRevokedDevice_ThenRejectedWithoutWriting(t *testing.T) {
+	ctx, _, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	mDev.EXPECT().FindByFingerprint(ctx, int64(7), "fp-web").Return(
+		&device_entity.Device{ID: 90, UserID: 7, Fingerprint: "fp-web", Kind: device_entity.KindWeb, Status: consts.DELETE}, nil)
+	mOrder.EXPECT().Save(gomock.Any(), gomock.Any()).Times(0)
+
+	err := svc.SetExecTargetOrder(ctx, SetExecTargetOrderInput{
+		UserID: 7, DeviceFingerprint: "fp-web",
+		AgentSyncID: "agent-1", BackendSyncIDs: []string{"b-c"},
+	})
+	assert.Error(t, err)
+}
+
+// 自己账号下的设备：排列按 (user_id, device_id, agent_sync_id) 整体落库。写路径
+// 不校验排列与当前执行目标集合是否一致——排列是收敛的偏好，解析时以集合为准。
+func TestSetExecTargetOrder_GivenOwnDevice_ThenSavesPermutationUnderResolvedDeviceID(t *testing.T) {
+	ctx, _, _, mDev, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+	mDev.EXPECT().FindByFingerprint(ctx, int64(7), "fp-web").Return(
+		&device_entity.Device{ID: 90, UserID: 7, Fingerprint: "fp-web", Kind: device_entity.KindWeb, Status: 1}, nil)
+
+	var saved *exec_order_entity.DeviceExecTargetOrder
+	mOrder.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+		func(_ context.Context, o *exec_order_entity.DeviceExecTargetOrder) error {
+			saved = o
+			return nil
+		})
+
+	require.NoError(t, svc.SetExecTargetOrder(ctx, SetExecTargetOrderInput{
+		UserID: 7, DeviceFingerprint: "fp-web",
+		AgentSyncID: "agent-1", BackendSyncIDs: []string{"b-c", "b-a", "b-b"},
+	}))
+	require.NotNil(t, saved)
+	assert.Equal(t, int64(7), saved.UserID)
+	assert.Equal(t, int64(90), saved.DeviceID, "device_id 只能由指纹解析 devices 行得到")
+	assert.Equal(t, "agent-1", saved.AgentSyncID)
+	assert.Equal(t, []string{"b-c", "b-a", "b-b"}, saved.BackendSyncIDs())
+	assert.NotZero(t, saved.Updatetime)
 }

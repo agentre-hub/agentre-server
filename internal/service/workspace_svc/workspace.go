@@ -12,13 +12,18 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"time"
 
 	"github.com/cago-frame/cago/pkg/i18n"
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 
 	"agentre-server/internal/model/entity/device_entity"
+	"agentre-server/internal/model/entity/exec_order_entity"
 	"agentre-server/internal/model/entity/sync_entity"
 	"agentre-server/internal/pkg/code"
 	"agentre-server/internal/repository/device_repo"
+	"agentre-server/internal/repository/exec_order_repo"
 	"agentre-server/internal/repository/sync_repo"
 )
 
@@ -42,7 +47,10 @@ const (
 
 // ExecTargetView 是总览页 Agent 卡片里一条执行目标链上的一档。
 type ExecTargetView struct {
-	Rank             int
+	Rank int
+	// BackendSyncID 是这一档跨机稳定且逐档唯一的标识，浏览器靠它表达排列：
+	// Rank 是位置性的（重排后就变了），DeviceID 也不唯一（一台机器可挂多个 backend）。
+	BackendSyncID    string
 	IsLocalReference bool
 	DeviceID         int64
 	DeviceName       string
@@ -92,12 +100,15 @@ type DeviceDetailView struct {
 // Kind 是这一档指向的设备种类（device_entity.KindDesktop / KindAgentred）——R17
 // 发起前要按它如实说明 org/subagent/hook 在目标上是否可用。
 type WebDispatchTier struct {
-	Rank         int
-	DeviceID     int64
-	DeviceName   string
-	BackendType  string
-	Kind         string
-	Availability string
+	Rank int
+	// BackendSyncID 是这一档跨机稳定且逐档唯一的标识，浏览器靠它表达排列
+	// （见 ExecTargetView.BackendSyncID）。
+	BackendSyncID string
+	DeviceID      int64
+	DeviceName    string
+	BackendType   string
+	Kind          string
+	Availability  string
 	// Current 标记按顺序取第一个可用的会落到这一档。至多一档为 true。
 	Current bool
 }
@@ -133,15 +144,33 @@ type WebDispatchPlan struct {
 
 type WorkspaceSvc interface {
 	// ListAccountAgents 是总览页「我有哪些 Agent」的唯一数据源：账号下每个 Agent
-	// 一行，逐档给出有序执行目标链与当前生效的那一档。
-	ListAccountAgents(ctx context.Context, userID int64) ([]AgentView, error)
+	// 一行，逐档给出有序执行目标链与当前生效的那一档。deviceFingerprint 是调用方
+	// 自己的设备指纹（可空），带上时链按**这台设备自己的排列**渲染。
+	ListAccountAgents(ctx context.Context, userID int64, deviceFingerprint string) ([]AgentView, error)
 	// WebDispatchPlan 是 R15 的派发计划：给定 Agent 与项目（可空），按序解析执行
 	// 目标链，跳过 device_id 为空的档（R15d），返回每档原因与选中的第一档可用
 	// agentred。全部不可用时 Chosen 为空，逐档原因由调用方渲染。
-	WebDispatchPlan(ctx context.Context, userID int64, agentSyncID, projectSyncID string) (*WebDispatchPlan, error)
+	// deviceFingerprint 是调用方自己的设备指纹（可空），带上时先按它的排列重排
+	// 执行目标链，再走既有的「取第一个可用」挑选。
+	WebDispatchPlan(ctx context.Context, userID int64, agentSyncID, projectSyncID, deviceFingerprint string) (*WebDispatchPlan, error)
+	// SetExecTargetOrder 保存调用方设备对某个 Agent 的执行目标排列。指纹解析不到
+	// 账号下的活跃设备时**拒绝**，不猜一个 device_id 去写（决策 9）。
+	SetExecTargetOrder(ctx context.Context, in SetExecTargetOrderInput) error
 	// DeviceDetail 是设备行展开时取的详情，deviceID 必须属于 userID 且未被撤销，
 	// 否则返回 NotFound——不区分「不存在」与「不属于你」，避免枚举探测。
 	DeviceDetail(ctx context.Context, userID, deviceID int64) (*DeviceDetailView, error)
+}
+
+// SetExecTargetOrderInput 是一次「这台设备把某个 Agent 的执行目标排成这个次序」。
+// UserID 来自调用方鉴权上下文，不由调用方填；DeviceFingerprint 只能由参数传入
+// （这组端点鉴权的是用户不是设备），因此它必须先被解析成 devices 行才作数。
+type SetExecTargetOrderInput struct {
+	UserID            int64
+	DeviceFingerprint string
+	AgentSyncID       string
+	// BackendSyncIDs 是排列本身。不校验它与当前执行目标集合是否一致：排列是收敛的
+	// 偏好，解析时以集合为准（指向已删 backend 的项忽略、未覆盖的档补到尾部）。
+	BackendSyncIDs []string
 }
 
 // DaemonOnlineChecker 是这个包需要的窄接口（ISP）：只问「这个指纹的 daemon 现在
@@ -219,8 +248,11 @@ type projectLocationPayload struct {
 // 结果，ListAccountAgents 与 DeviceDetail 共用同一份解析，避免各写一遍
 // JSON 解析与分组逻辑（DRY）。
 type resolvedTarget struct {
-	Rank        int
-	BackendType string
+	Rank int
+	// BackendSyncID 是这一档指向的 backend 同步标识：跨机稳定、逐档唯一，是排列
+	// 唯一能用的锚点，一路带到对外的档结构上。
+	BackendSyncID string
+	BackendType   string
 	// Fingerprint 为空表示这一档是 device_id 为空的「本机」相对引用。
 	Fingerprint      string
 	IsLocalReference bool
@@ -293,7 +325,9 @@ func buildAgentChains(rows []*sync_entity.SyncObject) []agentChain {
 		}
 		for i, te := range targetsByAgent[a.SyncID] {
 			fp, known := backendFingerprint[te.backendID]
-			rt := resolvedTarget{Rank: i + 1, BackendType: backendType[te.backendID]}
+			rt := resolvedTarget{
+				Rank: i + 1, BackendSyncID: te.backendID, BackendType: backendType[te.backendID],
+			}
 			if !known {
 				// backend 行不存在（已删除/尚未同步到）：既非本机引用也非任何已知
 				// 指纹，调用方把它当「未配对」处理。
@@ -321,7 +355,74 @@ func deviceFingerprintMap(devices []*device_entity.Device) map[string]*device_en
 	return out
 }
 
-func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]AgentView, error) {
+// ---------- 每端自己的派发顺序 ----------
+
+// callerDevice 解析「发来这次请求的那台设备」。指纹只能由参数传入（这组端点鉴权的
+// 是用户不是设备），所以归属校验必须在这里发生：devices 取自 deviceByFP，而那张表
+// 由 device_repo.ListByUser(userID) 建出——只含调用方账号名下的活跃设备，别人账号的
+// 指纹在这里天然查不到，也就拿不到 device_id 去读它的排列。
+//
+// 返回 nil 表示「没有可用的排列持有者」：指纹缺失、这个账号下没有这台设备、或它已
+// 被解除授权。读路径据此回落账号 sort_order，不报错（决策 9 的读侧）。
+func callerDevice(deviceByFP map[string]*device_entity.Device, fingerprint string) *device_entity.Device {
+	if fingerprint == "" {
+		return nil
+	}
+	dev := deviceByFP[fingerprint]
+	if !dev.IsActive() {
+		return nil
+	}
+	return dev
+}
+
+// applyDeviceOrder 按一份排列重排执行目标链。
+//
+// 排列是**收敛的**，不是权威的：以当前账号执行目标集合为准——排列里指向已不存在
+// backend 的项忽略，集合里没被排列覆盖到的档按账号 sort_order 补到尾部。因此增删
+// 执行目标之后旧排列不会失效，也不会让某一档凭空消失（与桌面端 ResolveExecTargetOrder
+// 同一规则）。
+//
+// 重排之后 Rank 必须重编号：它是位置性的，沿用账号次序的旧号会让调用方看到的序号
+// 与真实派发顺序对不上。这里只换顺序，不换任何一档的语义——本机相对引用被排到第一位
+// 也仍然是本机相对引用（R15d 照旧跳过）。
+func applyDeviceOrder(targets []resolvedTarget, permutation []string) []resolvedTarget {
+	if len(permutation) == 0 || len(targets) == 0 {
+		return targets
+	}
+	indexByBackend := make(map[string]int, len(targets))
+	for i, t := range targets {
+		if t.BackendSyncID == "" {
+			continue
+		}
+		if _, dup := indexByBackend[t.BackendSyncID]; !dup {
+			indexByBackend[t.BackendSyncID] = i
+		}
+	}
+
+	taken := make([]bool, len(targets))
+	out := make([]resolvedTarget, 0, len(targets))
+	for _, backendSyncID := range permutation {
+		i, ok := indexByBackend[backendSyncID]
+		if !ok || taken[i] {
+			continue
+		}
+		taken[i] = true
+		out = append(out, targets[i])
+	}
+	for i, t := range targets {
+		if !taken[i] {
+			out = append(out, t)
+		}
+	}
+	for i := range out {
+		out[i].Rank = i + 1
+	}
+	return out
+}
+
+func (s *workspaceSvc) ListAccountAgents(
+	ctx context.Context, userID int64, deviceFingerprint string,
+) ([]AgentView, error) {
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{
 		sync_entity.KindAgent, sync_entity.KindAgentBackend,
 		sync_entity.KindAgentExecTarget, sync_entity.KindDepartment,
@@ -359,6 +460,21 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 		return v
 	}
 
+	// 卡片渲染的是同一条链，也按调用方设备自己的排列：否则卡片上排第一、标着
+	// 「当前」的那一档，会和真派发时选中的不是同一档。一次取这台设备对全部 Agent
+	// 的排列，一屏多张卡片不按 Agent 逐条查库。
+	orderByAgent := map[string][]string{}
+	if dev := callerDevice(deviceByFP, deviceFingerprint); dev != nil {
+		orders, oerr := exec_order_repo.ExecOrder().ListByDevice(ctx, userID, dev.ID)
+		if oerr != nil {
+			logger.Ctx(ctx).Warn("workspace_svc.ListAccountAgents: 读取本端排列失败，回落账号顺序",
+				zap.Int64("userID", userID), zap.Int64("deviceID", dev.ID), zap.Error(oerr))
+		}
+		for _, o := range orders {
+			orderByAgent[o.AgentSyncID] = o.BackendSyncIDs()
+		}
+	}
+
 	chains := buildAgentChains(rows)
 	out := make([]AgentView, 0, len(chains))
 	for _, chain := range chains {
@@ -367,8 +483,11 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 			AvatarColor: chain.AvatarColor, DepartmentName: deptName[chain.DepartmentSyncID],
 		}
 		currentAssigned := false
-		for _, t := range chain.Targets {
-			et := ExecTargetView{Rank: t.Rank, BackendType: t.BackendType, IsLocalReference: t.IsLocalReference}
+		for _, t := range applyDeviceOrder(chain.Targets, orderByAgent[chain.SyncID]) {
+			et := ExecTargetView{
+				Rank: t.Rank, BackendSyncID: t.BackendSyncID,
+				BackendType: t.BackendType, IsLocalReference: t.IsLocalReference,
+			}
 			switch {
 			case t.IsLocalReference:
 				et.Availability = AvailabilitySkippedForWeb
@@ -401,7 +520,7 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 }
 
 func (s *workspaceSvc) WebDispatchPlan(
-	ctx context.Context, userID int64, agentSyncID, projectSyncID string,
+	ctx context.Context, userID int64, agentSyncID, projectSyncID, deviceFingerprint string,
 ) (*WebDispatchPlan, error) {
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{
 		sync_entity.KindAgent, sync_entity.KindAgentBackend, sync_entity.KindAgentExecTarget,
@@ -491,13 +610,18 @@ func (s *workspaceSvc) WebDispatchPlan(
 		return nil, i18n.NewNotFoundError(ctx, code.NotFound)
 	}
 
+	// 先按调用方设备自己的排列重排，再走下面那个「取第一个可用」的循环——挑选逻辑
+	// 一行不改，Chosen / Current 与逐档原因自动跟着新顺序走。
+	targets := applyDeviceOrder(chain.Targets,
+		deviceOrder(ctx, userID, deviceByFP, deviceFingerprint, agentSyncID))
+
 	plan := &WebDispatchPlan{AgentSyncID: agentSyncID}
 	currentAssigned := false
 	// chosenCwd 是选中档（第一个可用）所选项目在那台机器上的绝对路径；case 块内
 	// 变量出不了 switch，先摆在这里由选中档写入。
 	var chosenCwd string
-	for _, t := range chain.Targets {
-		tier := WebDispatchTier{Rank: t.Rank, BackendType: t.BackendType}
+	for _, t := range targets {
+		tier := WebDispatchTier{Rank: t.Rank, BackendSyncID: t.BackendSyncID, BackendType: t.BackendType}
 		switch {
 		case t.IsLocalReference:
 			// R15d：device_id 为空的「本机」档在浏览器语境下没有指代对象，跳过。
@@ -566,6 +690,60 @@ func (s *workspaceSvc) WebDispatchPlan(
 		}
 	}
 	return plan, nil
+}
+
+// deviceOrder 取调用方设备对某个 Agent 的排列，取不到就返回空（回落账号 sort_order）。
+//
+// 读路径**刻意**不因它失败：指纹缺失、设备解析不到、这台设备还没排过序、甚至读库
+// 出错，都按「没有排列」处理——派发不该因为一个偏好读不到就失败，也不该静默改派到
+// 别处（决策 9 的读侧）。读库出错是「降级但已处理」，落一条 Warn 让它可查。
+func deviceOrder(
+	ctx context.Context, userID int64,
+	deviceByFP map[string]*device_entity.Device, deviceFingerprint, agentSyncID string,
+) []string {
+	dev := callerDevice(deviceByFP, deviceFingerprint)
+	if dev == nil {
+		return nil
+	}
+	order, err := exec_order_repo.ExecOrder().Find(ctx, userID, dev.ID, agentSyncID)
+	if err != nil {
+		logger.Ctx(ctx).Warn("workspace_svc.deviceOrder: 读取本端排列失败，回落账号顺序",
+			zap.Int64("userID", userID), zap.Int64("deviceID", dev.ID),
+			zap.String("agentSyncID", agentSyncID), zap.Error(err))
+		return nil
+	}
+	return order.BackendSyncIDs()
+}
+
+// SetExecTargetOrder 保存「这台设备把某个 Agent 的执行目标排成这个次序」。
+//
+// 与读路径相反：这里解析不到设备就**拒绝**，绝不猜一个 device_id 去写（决策 9）。
+// 指纹是参数传进来的（这组端点鉴权的是用户不是设备），账号归属只能靠这次
+// (user_id, fingerprint) 解析来保证；device_id 又是主键的一部分，拿不到它就写不进去，
+// 校验因此不可绕过。已被解除授权的设备同样写不进去——它的排列马上就要被清掉。
+func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetOrderInput) error {
+	dev, err := device_repo.Device().FindByFingerprint(ctx, in.UserID, in.DeviceFingerprint)
+	if err != nil {
+		return err
+	}
+	if !dev.IsActive() {
+		// 常见成因是浏览器攥着一枚已失效的指纹（换了账号、设备被解除授权）：顺序
+		// 因此存不下，界面会当场说明——落一条 Warn，让「用户说排序不生效」有据可查。
+		logger.Ctx(ctx).Warn("workspace_svc.SetExecTargetOrder: 设备指纹解析不到活跃设备，拒绝写入排列",
+			zap.Int64("userID", in.UserID), zap.String("agentSyncID", in.AgentSyncID))
+		return i18n.NewNotFoundError(ctx, code.DeviceNotFound)
+	}
+
+	order := &exec_order_entity.DeviceExecTargetOrder{
+		UserID:      in.UserID,
+		DeviceID:    dev.ID,
+		AgentSyncID: in.AgentSyncID,
+		Updatetime:  time.Now().UnixMilli(),
+	}
+	if err := order.SetBackendSyncIDs(in.BackendSyncIDs); err != nil {
+		return err
+	}
+	return exec_order_repo.ExecOrder().Save(ctx, order)
 }
 
 // configuredProjects 回答「这台机器上哪些项目配了路径」。两类设备的路径存在不同的

@@ -96,7 +96,7 @@ func TestMigrationDDL_OpaqueIdentifiersAreByteExact(t *testing.T) {
 	ddl := captureMigrationDDL(t)
 
 	for _, col := range []string{
-		"sync_id", "project_sync_id", "agentred_fingerprint",
+		"sync_id", "project_sync_id", "agentred_fingerprint", "agent_sync_id",
 		"fingerprint", "client_fingerprint", "device_fingerprint", "session_id",
 		"device_code", "refresh_token_hash", "access_jti", "content_hash",
 		"provider_uid",

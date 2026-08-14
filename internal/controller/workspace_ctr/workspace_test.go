@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/cago-frame/cago/database/redis"
@@ -35,18 +36,27 @@ type stubWorkspaceSvc struct {
 	detailInputs   []int64
 	detailErr      error
 	listCalled     bool
+	listFingerprnt string
 	dispatchPlan   *workspace_svc.WebDispatchPlan
 	dispatchInputs []string
+	orderInputs    []workspace_svc.SetExecTargetOrderInput
+	orderErr       error
 }
 
-func (s *stubWorkspaceSvc) ListAccountAgents(context.Context, int64) ([]workspace_svc.AgentView, error) {
+func (s *stubWorkspaceSvc) ListAccountAgents(_ context.Context, _ int64, deviceFingerprint string) ([]workspace_svc.AgentView, error) {
 	s.listCalled = true
+	s.listFingerprnt = deviceFingerprint
 	return s.agents, nil
 }
 
-func (s *stubWorkspaceSvc) WebDispatchPlan(_ context.Context, _ int64, agentSyncID, projectSyncID string) (*workspace_svc.WebDispatchPlan, error) {
-	s.dispatchInputs = append(s.dispatchInputs, agentSyncID, projectSyncID)
+func (s *stubWorkspaceSvc) WebDispatchPlan(_ context.Context, _ int64, agentSyncID, projectSyncID, deviceFingerprint string) (*workspace_svc.WebDispatchPlan, error) {
+	s.dispatchInputs = append(s.dispatchInputs, agentSyncID, projectSyncID, deviceFingerprint)
 	return s.dispatchPlan, nil
+}
+
+func (s *stubWorkspaceSvc) SetExecTargetOrder(_ context.Context, in workspace_svc.SetExecTargetOrderInput) error {
+	s.orderInputs = append(s.orderInputs, in)
+	return s.orderErr
 }
 
 func (s *stubWorkspaceSvc) DeviceDetail(_ context.Context, _ int64, deviceID int64) (*workspace_svc.DeviceDetailView, error) {
@@ -81,9 +91,35 @@ func newWorkspaceTestServer(t *testing.T, stub *stubWorkspaceSvc) (*httptest.Ser
 
 func newSessionCookie(t *testing.T, userID int64) *http.Cookie {
 	t.Helper()
-	sid, _, err := auth_svc.Default().StartSession(context.Background(), userID)
+	cookie, _ := newSessionCookieWithCSRF(t, userID)
+	return cookie
+}
+
+// newSessionCookieWithCSRF 另外交出这次会话的 CSRF 令牌：凭 cookie 鉴权的写操作
+// 必须出示它（见 middleware.SessionOrDeviceAuth）。
+func newSessionCookieWithCSRF(t *testing.T, userID int64) (*http.Cookie, string) {
+	t.Helper()
+	sid, sess, err := auth_svc.Default().StartSession(context.Background(), userID)
 	require.NoError(t, err)
-	return &http.Cookie{Name: testCookieName, Value: sid}
+	return &http.Cookie{Name: testCookieName, Value: sid}, sess.CSRFToken
+}
+
+// postJSON 发一次带 JSON 正文的写请求；cookie 为空即模拟未登录。
+func postJSON(t *testing.T, url, cookie, csrf, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	require.NoError(t, err)
+	if cookie != "" {
+		req.AddCookie(&http.Cookie{Name: testCookieName, Value: cookie})
+	}
+	if csrf != "" {
+		req.Header.Set("X-CSRF-Token", csrf)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
 }
 
 func get(t *testing.T, url, cookie string) *http.Response {
@@ -221,7 +257,7 @@ func TestDispatchTarget_WorksForBrowserSession_WithAgentAndProject(t *testing.T)
 
 	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1&project_sync_id=proj-1", cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, []string{"agent-1", "proj-1"}, stub.dispatchInputs)
+	assert.Equal(t, []string{"agent-1", "proj-1", ""}, stub.dispatchInputs)
 
 	var got struct {
 		AgentSyncID string `json:"agent_sync_id"`
@@ -284,4 +320,144 @@ func TestDeviceDetail_PropagatesNotFoundFromService(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &envelope))
 	assert.Equal(t, code.DeviceNotFound, envelope.Code)
 	assert.Empty(t, envelope.Data)
+}
+
+// ── 每端自己的派发顺序 ────────────────────────────────────────────────
+
+// 这组端点鉴权的是**用户**不是设备，所以调用方自己的设备指纹只能由参数传入：
+// query 里的 device_fingerprint 要原样转给 service，否则浏览器永远拿到账号顺序。
+// 逐档的 backend_sync_id 也要透传——浏览器只能靠它表达排列。
+func TestDispatchTarget_PassesCallerDeviceFingerprintAndCarriesBackendSyncID(t *testing.T) {
+	stub := &stubWorkspaceSvc{dispatchPlan: &workspace_svc.WebDispatchPlan{
+		AgentSyncID: "agent-1",
+		Tiers: []workspace_svc.WebDispatchTier{
+			{Rank: 1, BackendSyncID: "b-c", DeviceID: 22, DeviceName: "机器 C",
+				Availability: workspace_svc.AvailabilityAvailable, Current: true},
+			{Rank: 2, BackendSyncID: "b-a", DeviceID: 20, DeviceName: "机器 A",
+				Availability: workspace_svc.AvailabilityOffline},
+		},
+	}}
+	server, _ := newWorkspaceTestServer(t, stub)
+	cookie := newSessionCookie(t, 7)
+
+	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1&device_fingerprint=fp-web", cookie.Value)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, []string{"agent-1", "", "fp-web"}, stub.dispatchInputs)
+
+	var got struct {
+		Tiers []struct {
+			BackendSyncID string `json:"backend_sync_id"`
+			Current       bool   `json:"current"`
+		} `json:"tiers"`
+	}
+	decodeEnvelope(t, resp, &got)
+	require.Len(t, got.Tiers, 2)
+	assert.Equal(t, "b-c", got.Tiers[0].BackendSyncID)
+	assert.True(t, got.Tiers[0].Current)
+	assert.Equal(t, "b-a", got.Tiers[1].BackendSyncID)
+}
+
+// 总览页的卡片链同理：指纹转给 service，逐档带 backend_sync_id。
+func TestListAgents_PassesCallerDeviceFingerprintAndCarriesBackendSyncID(t *testing.T) {
+	stub := &stubWorkspaceSvc{agents: []workspace_svc.AgentView{{
+		SyncID: "agent-1", Name: "后端 Agent", HasAvailableTarget: true,
+		ExecTargets: []workspace_svc.ExecTargetView{
+			{Rank: 1, BackendSyncID: "b-c", DeviceName: "机器 C",
+				Availability: workspace_svc.AvailabilityAvailable, Current: true},
+		},
+	}}}
+	server, _ := newWorkspaceTestServer(t, stub)
+	cookie := newSessionCookie(t, 7)
+
+	resp := get(t, server.URL+"/v1/workspace/agents?device_fingerprint=fp-web", cookie.Value)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "fp-web", stub.listFingerprnt)
+
+	var got struct {
+		Agents []struct {
+			ExecTargets []struct {
+				BackendSyncID string `json:"backend_sync_id"`
+			} `json:"exec_targets"`
+		} `json:"agents"`
+	}
+	decodeEnvelope(t, resp, &got)
+	require.Len(t, got.Agents, 1)
+	require.Len(t, got.Agents[0].ExecTargets, 1)
+	assert.Equal(t, "b-c", got.Agents[0].ExecTargets[0].BackendSyncID)
+}
+
+// 写端点：账号取自鉴权上下文，设备指纹 / Agent / 排列取自请求体，原样转给 service。
+func TestSetExecTargetOrder_PassesFingerprintAgentAndPermutation(t *testing.T) {
+	stub := &stubWorkspaceSvc{}
+	server, _ := newWorkspaceTestServer(t, stub)
+	cookie, csrf := newSessionCookieWithCSRF(t, 7)
+
+	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", cookie.Value, csrf,
+		`{"device_fingerprint":"fp-web-0001","agent_sync_id":"agent-1","backend_sync_ids":["b-c","b-a"]}`)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Len(t, stub.orderInputs, 1)
+	assert.Equal(t, int64(7), stub.orderInputs[0].UserID)
+	assert.Equal(t, "fp-web-0001", stub.orderInputs[0].DeviceFingerprint)
+	assert.Equal(t, "agent-1", stub.orderInputs[0].AgentSyncID)
+	assert.Equal(t, []string{"b-c", "b-a"}, stub.orderInputs[0].BackendSyncIDs)
+}
+
+// 决策 9：传入的设备指纹解析不到调用方账号下的设备时，service 拒绝，controller 原样
+// 透传——不吞成 500、更不当作成功。断言必须落到**业务码**上：只断言「不是 200」时，
+// 把 NotFound 吞成 500 一样能过。
+func TestSetExecTargetOrder_PropagatesRejectionForForeignDevice(t *testing.T) {
+	stub := &stubWorkspaceSvc{
+		orderErr: i18n.NewNotFoundError(context.Background(), code.DeviceNotFound),
+	}
+	server, _ := newWorkspaceTestServer(t, stub)
+	cookie, csrf := newSessionCookieWithCSRF(t, 7)
+
+	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", cookie.Value, csrf,
+		`{"device_fingerprint":"fp-someone-else","agent_sync_id":"agent-1","backend_sync_ids":["b-c"]}`)
+
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var envelope struct {
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(body, &envelope))
+	assert.Equal(t, code.DeviceNotFound, envelope.Code)
+}
+
+// 未登录（无 cookie、无 device JWT）不得写任何人的顺序。
+func TestSetExecTargetOrder_RejectsUnauthenticated(t *testing.T) {
+	stub := &stubWorkspaceSvc{}
+	server, _ := newWorkspaceTestServer(t, stub)
+
+	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", "", "",
+		`{"device_fingerprint":"fp-web-0001","agent_sync_id":"agent-1","backend_sync_ids":["b-c"]}`)
+
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Empty(t, stub.orderInputs)
+}
+
+// 排列的长度上限挡在绑定层：order_json 是 text（64 KB），65 档 × 255 字符的排列
+// 已经越界。超限的请求必须被拒，且一步都不许走到 service——只验 happy path 的话，
+// 把 max=64 写在 dive 之后（于是它变成「每个元素最长 64」）也照样绿。
+func TestSetExecTargetOrder_RejectsOversizedPermutation(t *testing.T) {
+	stub := &stubWorkspaceSvc{}
+	server, _ := newWorkspaceTestServer(t, stub)
+	cookie, csrf := newSessionCookieWithCSRF(t, 7)
+
+	ids := make([]string, 65)
+	for i := range ids {
+		ids[i] = strings.Repeat("b", 200)
+	}
+	body, err := json.Marshal(map[string]any{
+		"device_fingerprint": "fp-web-0001", "agent_sync_id": "agent-1", "backend_sync_ids": ids,
+	})
+	require.NoError(t, err)
+
+	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", cookie.Value, csrf, string(body))
+
+	assert.NotEqual(t, http.StatusOK, resp.StatusCode)
+	assert.Empty(t, stub.orderInputs, "越界的排列不得走到 service")
 }
