@@ -347,3 +347,19 @@ func TestAuthorize_IgnoresLegacyCapabilitiesField(t *testing.T) {
 		Version:     "v0.4.1",
 	}, stub.authorizeInputs[0])
 }
+
+// nightly 构建会在语义版本后附带提交与构建元数据，长度可能超过 32 个字符。
+// version 只是展示信息，且存储列可容纳 64 个字符，授权入口不能提前拒绝它。
+func TestAuthorize_AcceptsLongNightlyVersion(t *testing.T) {
+	stub := &stubDeviceSvc{}
+	server, _ := newDeviceTestServer(t, stub)
+	version := "v0.4.1-nightly.20260814+abcdef1234567890"
+
+	body := `{"device_kind":"agentred","fingerprint":"fp-nightly-client","platform":"linux/amd64",` +
+		`"version":"` + version + `"}`
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/device/authorize", "", "", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Len(t, stub.authorizeInputs, 1)
+	assert.Equal(t, version, stub.authorizeInputs[0].Version)
+}

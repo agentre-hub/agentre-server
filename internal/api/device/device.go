@@ -23,7 +23,7 @@ type DeviceAuthorizeRequest struct {
 	DeviceKind  string `json:"device_kind"  binding:"required,oneof=desktop agentred web mobile"`
 	Fingerprint string `json:"fingerprint"  binding:"required,min=8,max=128"`
 	Platform    string `json:"platform"     binding:"max=64"`
-	Version     string `json:"version"      binding:"max=32"`
+	Version     string `json:"version"`
 }
 type DeviceAuthorizeResponse struct {
 	DeviceCode              string `json:"device_code"`
