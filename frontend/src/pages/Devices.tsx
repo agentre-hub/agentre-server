@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp, Cpu, MonitorX } from "lucide-react";
+import { ChevronDown, ChevronUp, Cpu, Plus } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { EmptyState, RowMenu, StatusMark } from "@/components/console";
+import { RowMenu, StatusMark } from "@/components/console";
 import type { StatusTone } from "@/components/console";
+import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import AppShell from "@/components/AppShell";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayMachine } from "@/hooks/use-relay";
@@ -535,6 +536,8 @@ export default function Devices() {
   const [revoking, setRevoking] = useState<DeviceItem | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  // 用户点过「添加设备」；空态另有默认展开的规则，见下面的 guideOpen。
+  const [guideRequested, setGuideRequested] = useState(false);
   const [details, setDetails] = useState<
     Record<
       number,
@@ -641,6 +644,15 @@ export default function Devices() {
     (d) => d.kind === KIND_AGENTRED && d.online,
   );
 
+  // 列表到底有几台，只有「加载完 + 不是那种一台都没取到的失败」时才答得上来。
+  // 答不上来就既不展开引导、也不渲染入口，更不能改口说「还没有任何设备」——
+  // 上面那条错误提示是此刻唯一诚实的内容。
+  const listKnown = !loading && !(loadError !== null && devices.length === 0);
+  const noDevices = listKnown && devices.length === 0;
+  // 一台都没有时，引导不是「展开态」而是这一页此刻的全部内容：默认展开且不给收起，
+  // 它取代的正是原来那句孤立的「还没有任何设备。」。
+  const guideOpen = listKnown && (noDevices || guideRequested);
+
   return (
     <AppShell
       title={t("nav.devices")}
@@ -678,15 +690,29 @@ export default function Devices() {
             <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
           )}
 
-          {/* 加载失败时只留上面那条错误：不得改口说「还没有任何设备」——
-              那是一句我们此刻答不上来的断言。 */}
+          {/* 动作行：整页唯一的添加入口。引导展开时它不渲染——同一件事不给两个按钮。 */}
+          {listKnown && !guideOpen && (
+            <div className="flex justify-end">
+              <Button
+                className="w-full md:w-auto"
+                data-testid="add-device-open"
+                onClick={() => setGuideRequested(true)}
+              >
+                <Plus />
+                {t("device.add.open")}
+              </Button>
+            </div>
+          )}
+
+          {/* 引导展开在列表上方；空态时它就是这一页的全部内容，所以不给收起。 */}
+          {guideOpen && (
+            <AddDeviceGuide
+              onClose={noDevices ? undefined : () => setGuideRequested(false)}
+            />
+          )}
+
           {loading ? (
             <p className="text-muted-foreground">{t("common.loading")}</p>
-          ) : loadError !== null &&
-            devices.length === 0 ? null : devices.length === 0 ? (
-            <Card className="gap-0 rounded-lg border-border bg-card py-4 shadow-none">
-              <EmptyState icon={MonitorX} title={t("device.manage.empty")} />
-            </Card>
           ) : (
             devices.map((d) => (
               <DeviceRow

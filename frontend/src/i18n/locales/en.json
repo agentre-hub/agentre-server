@@ -177,8 +177,71 @@
       "body": "Go back to the device, start authorization again, then enter the new code.",
       "retry": "Enter a new code"
     },
+    "add": {
+      "open": "Add device",
+      "collapse": "Collapse guide",
+      "stepOf": "Step {{n}} of 3",
+      "copy": "Copy",
+      "copied": "Copied",
+      "terminalLabel": "Terminal on that machine",
+      "kindLabel": "Which kind of device are you adding?",
+      "kindHint": "No need to add a browser — the one you are using is already in the list",
+      "kindAgentred": "Compute node (agentred)",
+      "kindDesktop": "Desktop (Agentre App)",
+      "steps": {
+        "install": {
+          "title": "Install agentred",
+          "hint": "About a minute",
+          "done": "Installed"
+        },
+        "login": {
+          "title": "Sign it in",
+          "hint": "Prints a device code",
+          "done": "Signed in"
+        },
+        "code": {
+          "title": "Enter the device code",
+          "hint": "Six-character one-time code",
+          "done": "Authorized"
+        }
+      },
+      "install": {
+        "agentredTitle": "Install agentred on that machine",
+        "agentredDesc": "agentred is the long-running process that executes tasks; once it is installed it can sign in to your account.",
+        "osLabel": "That machine's operating system",
+        "osHint": "The architecture is detected automatically",
+        "osLinux": "Linux",
+        "osMacos": "macOS",
+        "osWindows": "Windows",
+        "powershellLabel": "PowerShell",
+        "serviceLabel": "Register it as a background service so it stays up after you close the terminal",
+        "manual": "Download the installer manually",
+        "desktopTitle": "Install the Agentre desktop app on that computer",
+        "desktopDesc": "The desktop app has agentred built in; once installed, sign in to the same account from the app.",
+        "downloadLabel": "Download",
+        "downloadBody": "Download the installer for that platform from GitHub Releases (macOS .dmg / Windows .exe / Linux .deb).",
+        "download": "Open the download page",
+        "next": "Installed — next"
+      },
+      "login": {
+        "agentredTitle": "Sign it in to this account",
+        "agentredDesc": "Run this command on that machine. The server address is already this console's own address, so you can copy it as is.",
+        "agentredTip1": "The command prints a line reading User code: XXXXXX — that is the six-character device code.",
+        "agentredTip2": "It also tries to open a browser; servers usually have none, so bring that code back here instead.",
+        "agentredTip3": "The device code expires; run the command again if it does. The approval screen counts down the time left.",
+        "desktopTitle": "Sign in to the same account from the desktop app",
+        "desktopDesc": "Open Agentre and go to Settings → Remote → Sign in, using this console as the server address.",
+        "desktopTip1": "The desktop app shows a six-character device code and tries to open a browser to authorize it.",
+        "desktopTip2": "If no browser opens, or you would rather approve it on this computer, bring that code to the next step.",
+        "desktopTip3": "The device code expires; start over from the desktop app if it does. The approval screen counts down the time left.",
+        "serverLabel": "Server address",
+        "next": "I have the device code"
+      },
+      "code": {
+        "handoff": "Submitting opens the approval screen, where you check the code against the device and approve it."
+      }
+    },
     "manage": {
-      "empty": "No devices yet.",
       "loadError": "Could not load your devices. Please try again.",
       "statusOnline": "Online",
       "statusOffline": "Offline",

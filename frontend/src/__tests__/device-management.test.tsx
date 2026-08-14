@@ -150,7 +150,7 @@ describe("device management page", () => {
 
   // 列表加载失败必须说出来。只认 ApiError 会让「代理返回非 JSON 的 502」「浏览器离线」
   // 这类 SyntaxError / TypeError 被静默吞掉，而 finally 照样把 loading 置 false ——
-  // 用户看到的是「还没有任何设备」，而他名下的设备一台没少。
+  // 空态如今就是自动展开的添加引导，于是名下设备一台没少的用户会被请去加第一台。
   it("reports a load failure instead of rendering the empty state", async () => {
     mockedApi.mockImplementation(async () => {
       throw new SyntaxError("Unexpected token '<' ... is not valid JSON");
@@ -161,7 +161,7 @@ describe("device management page", () => {
     expect(
       await screen.findByText("Could not load your devices. Please try again."),
     ).toBeTruthy();
-    expect(screen.queryByText("No devices yet.")).toBeNull();
+    expect(screen.queryByTestId("add-device-guide")).toBeNull();
   });
 
   it("keeps the device and shows an error when revoke fails", async () => {

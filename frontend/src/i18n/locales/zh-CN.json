@@ -177,8 +177,71 @@
       "body": "回到设备上重新发起授权，然后输入新的代码。",
       "retry": "重新输入代码"
     },
+    "add": {
+      "open": "添加设备",
+      "collapse": "收起引导",
+      "stepOf": "步骤 {{n}} / 3",
+      "copy": "复制",
+      "copied": "已复制",
+      "terminalLabel": "那台机器的终端",
+      "kindLabel": "要接入哪种设备",
+      "kindHint": "浏览器不用加 —— 你现在用的这个已经在列表里了",
+      "kindAgentred": "计算节点（agentred）",
+      "kindDesktop": "桌面端（Agentre App）",
+      "steps": {
+        "install": {
+          "title": "装上 agentred",
+          "hint": "约 1 分钟",
+          "done": "已完成"
+        },
+        "login": {
+          "title": "让它登录账号",
+          "hint": "会打印设备码",
+          "done": "已登录"
+        },
+        "code": {
+          "title": "输入设备码",
+          "hint": "6 位一次性码",
+          "done": "已授权"
+        }
+      },
+      "install": {
+        "agentredTitle": "在那台机器上装 agentred",
+        "agentredDesc": "agentred 是跑任务的常驻进程；装好后它才能登录到你的账号。",
+        "osLabel": "那台机器的系统",
+        "osHint": "架构将自动识别",
+        "osLinux": "Linux",
+        "osMacos": "macOS",
+        "osWindows": "Windows",
+        "powershellLabel": "PowerShell",
+        "serviceLabel": "注册成后台服务，关掉终端也不掉线",
+        "manual": "手动下载安装包",
+        "desktopTitle": "在那台电脑上装 Agentre 桌面端",
+        "desktopDesc": "桌面端自带 agentred 的能力，装好后在应用里登录同一个账号。",
+        "downloadLabel": "下载",
+        "downloadBody": "从 GitHub Releases 下载对应平台的安装包（macOS .dmg / Windows .exe / Linux .deb）。",
+        "download": "打开下载页",
+        "next": "我已装好，下一步"
+      },
+      "login": {
+        "agentredTitle": "让它登录到这个账号",
+        "agentredDesc": "在那台机器上运行下面这条命令。服务器地址已经填成当前控制台，直接复制即可。",
+        "agentredTip1": "命令会打印一行 User code: XXXXXX —— 那就是 6 位设备码。",
+        "agentredTip2": "它会尝试自动打开浏览器；服务器上通常没有浏览器，这时把那 6 位码带回这里。",
+        "agentredTip3": "设备码会过期；过期就重新运行一次命令。剩余时间由授权确认屏的倒计时给出。",
+        "desktopTitle": "在桌面端里登录同一个账号",
+        "desktopDesc": "打开 Agentre，进入设置 → 远端 → 登录，服务器地址填当前控制台。",
+        "desktopTip1": "桌面端会显示 6 位设备码，并尝试自动打开浏览器完成授权。",
+        "desktopTip2": "浏览器没打开、或你想在这台电脑上批准，就把那 6 位码填到下一步。",
+        "desktopTip3": "设备码会过期；过期就在桌面端重新发起一次。剩余时间由授权确认屏的倒计时给出。",
+        "serverLabel": "服务器地址",
+        "next": "已拿到设备码"
+      },
+      "code": {
+        "handoff": "提交后会打开授权确认屏，在那里核对设备上的代码并批准它。"
+      }
+    },
     "manage": {
-      "empty": "还没有任何设备。",
       "loadError": "无法加载你的设备列表，请重试。",
       "statusOnline": "在线",
       "statusOffline": "离线",
