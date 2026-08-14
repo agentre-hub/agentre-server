@@ -156,6 +156,9 @@ type WorkspaceSvc interface {
 	// SetExecTargetOrder 保存调用方设备对某个 Agent 的执行目标排列。指纹解析不到
 	// 账号下的活跃设备时**拒绝**，不猜一个 device_id 去写（决策 9）。
 	SetExecTargetOrder(ctx context.Context, in SetExecTargetOrderInput) error
+	// PurgeDeviceExecTargetOrders 删掉某台设备名下全部排列：设备被解除授权 / 删除时，
+	// 它排的顺序一并消失，不残留在账号里。
+	PurgeDeviceExecTargetOrders(ctx context.Context, deviceID int64) error
 	// DeviceDetail 是设备行展开时取的详情，deviceID 必须属于 userID 且未被撤销，
 	// 否则返回 NotFound——不区分「不存在」与「不属于你」，避免枚举探测。
 	DeviceDetail(ctx context.Context, userID, deviceID int64) (*DeviceDetailView, error)
@@ -744,6 +747,16 @@ func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetO
 		return err
 	}
 	return exec_order_repo.ExecOrder().Save(ctx, order)
+}
+
+// PurgeDeviceExecTargetOrders 删掉某台设备名下全部排列：用户解除一个浏览器的授权
+// （或删掉一台设备的记录）时，它排的顺序一并消失，不残留在账号里。
+//
+// 只按 device_id 删，不带 user_id：device_id 是全局自增主键、天然只属于一个账号，
+// 一个账号的清理碰不到另一个账号的行（与 sync_svc.PurgeDeviceLocalPaths 同一约定）。
+// 账号级的执行目标**集合**不受影响——它在同步组里，不属于任何一台设备。
+func (s *workspaceSvc) PurgeDeviceExecTargetOrders(ctx context.Context, deviceID int64) error {
+	return exec_order_repo.ExecOrder().DeleteByDevice(ctx, deviceID)
 }
 
 // configuredProjects 回答「这台机器上哪些项目配了路径」。两类设备的路径存在不同的

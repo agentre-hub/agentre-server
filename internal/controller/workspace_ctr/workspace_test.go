@@ -59,6 +59,10 @@ func (s *stubWorkspaceSvc) SetExecTargetOrder(_ context.Context, in workspace_sv
 	return s.orderErr
 }
 
+// PurgeDeviceExecTargetOrders 没有对应的端点（撤销设备走 device_svc.Revoke），这里
+// 只为满足接口——控制器不该有路可以调到它。
+func (s *stubWorkspaceSvc) PurgeDeviceExecTargetOrders(context.Context, int64) error { return nil }
+
 func (s *stubWorkspaceSvc) DeviceDetail(_ context.Context, _ int64, deviceID int64) (*workspace_svc.DeviceDetailView, error) {
 	s.detailInputs = append(s.detailInputs, deviceID)
 	if s.detailErr != nil {

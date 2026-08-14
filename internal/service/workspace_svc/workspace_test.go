@@ -810,3 +810,15 @@ func TestSetExecTargetOrder_GivenOwnDevice_ThenSavesPermutationUnderResolvedDevi
 	assert.Equal(t, []string{"b-c", "b-a", "b-b"}, saved.BackendSyncIDs())
 	assert.NotZero(t, saved.Updatetime)
 }
+
+// 解除授权 / 删除设备时它排的顺序一并消失：排列的持有者是那台设备，设备没了它就
+// 没有持有者，不该残留在账号里。只按 device_id 删——device_id 是全局自增主键、天然
+// 只属于一个账号，账号级的执行目标**集合**（在同步组里）不受影响。
+func TestPurgeDeviceExecTargetOrders_GivenDeviceID_ThenDeletesAllItsOrders(t *testing.T) {
+	ctx, _, _, _, svc := setupWorkspaceTest(t)
+	mOrder := registerExecOrderMock(t)
+
+	mOrder.EXPECT().DeleteByDevice(ctx, int64(90)).Return(nil)
+
+	require.NoError(t, svc.PurgeDeviceExecTargetOrders(ctx, 90))
+}
