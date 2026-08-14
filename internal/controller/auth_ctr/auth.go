@@ -14,9 +14,11 @@ import (
 	"agentre-server/internal/service/user_svc"
 )
 
-type Auth struct{}
+type Auth struct {
+	insecureCookies bool
+}
 
-func NewAuth() *Auth { return &Auth{} }
+func NewAuth(insecureCookies bool) *Auth { return &Auth{insecureCookies: insecureCookies} }
 
 // safeNext 仅允许相对路径或同源；其它视作不合法返回 "/".
 func safeNext(in string) string {
@@ -75,7 +77,7 @@ func (a *Auth) GithubCallback(c *gin.Context, req *api.GithubCallbackRequest) er
 	if err != nil {
 		return i18n.NewInternalError(ctx, code.ServerError)
 	}
-	setSessionCookie(c, auth_svc.Default().CookieName(), sid)
+	setSessionCookie(c, auth_svc.Default().CookieName(), sid, a.insecureCookies)
 
 	target := safeNext(payload.Next)
 	if payload.UserCode != "" {
@@ -133,8 +135,7 @@ func (a *Auth) Me(c *gin.Context, _ *api.MeRequest) (*api.MeResponse, error) {
 
 // ---- cookie helpers ----
 
-func setSessionCookie(c *gin.Context, name, value string) {
-	insecure := c.GetBool("hub_insecure_cookies")
+func setSessionCookie(c *gin.Context, name, value string, insecure bool) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(name, value, 14*24*3600, "/", "", !insecure, true)
 }

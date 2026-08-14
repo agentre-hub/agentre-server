@@ -31,7 +31,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	g := root.Group("/")
 
 	healthzCtr := healthz_ctr.NewHealthz()
-	authCtr := auth_ctr.NewAuth()
+	authCtr := auth_ctr.NewAuth(r.Cfg.InsecureCookies)
 	publicKeys := r.Cfg.JWT.PublicKeySet()
 	deviceCtr := device_ctr.NewDeviceWithPublicKeys(publicKeys.CurrentKID, publicKeys.Keys,
 		int64(r.Cfg.JWT.AccessTTL/time.Second))
