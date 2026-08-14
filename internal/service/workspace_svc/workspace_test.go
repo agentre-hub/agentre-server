@@ -822,3 +822,56 @@ func TestPurgeDeviceExecTargetOrders_GivenDeviceID_ThenDeletesAllItsOrders(t *te
 
 	require.NoError(t, svc.PurgeDeviceExecTargetOrders(ctx, 90))
 }
+
+// 没有 backend sync_id 的档钉在原位，不被冲到队尾。
+//
+// 排列以 backend sync_id 表达，所以一档没有 sync_id 就无从在排列里指代自己
+// （frontend/src/lib/execOrder.ts 的 reorderTargets 会把它从提交的排列里滤掉，
+// 同时在本地把它钉在原位）。服务端若把「不在排列里」一律当成「未覆盖、补到队尾」，
+// 这一档就会在提交后的重新拉取里凭空跳到最后——两端对同一次操作给出不同结果。
+//
+// 「未覆盖补到队尾」只适用于**能被指代却没被排到**的档（新加的一档）；无从指代的
+// 档不属于那一类，它压根没有参与排序的资格，位置也就不该被排序动到。
+func TestApplyDeviceOrder_GivenTierWithoutSyncID_ThenItStaysAtItsOriginalIndex(t *testing.T) {
+	targets := []resolvedTarget{
+		{Rank: 1, BackendSyncID: "b-a"},
+		{Rank: 2, BackendSyncID: ""}, // 无从指代：畸形同步载荷里 backend_sync_id 为空
+		{Rank: 3, BackendSyncID: "b-c"},
+	}
+
+	got := applyDeviceOrder(targets, []string{"b-c", "b-a"})
+
+	assert.Equal(t, []string{"b-c", "", "b-a"}, backendSyncIDsOf(got),
+		"无 sync_id 的档应留在第 2 位，可排的两档在它前后换位")
+	assert.Equal(t, []int{1, 2, 3}, ranksOf(got), "Rank 必须按最终位置重编号")
+}
+
+// 能被指代却没被排列覆盖到的档（排完序之后新增的一档）仍然补到队尾——这是规格
+// 「集合里没被排列覆盖到的档按账号 sort_order 补到尾部」，与上面那条互不冲突。
+func TestApplyDeviceOrder_GivenUncoveredTierWithSyncID_ThenAppendedAtTail(t *testing.T) {
+	targets := []resolvedTarget{
+		{Rank: 1, BackendSyncID: "b-a"},
+		{Rank: 2, BackendSyncID: "b-new"},
+		{Rank: 3, BackendSyncID: "b-c"},
+	}
+
+	got := applyDeviceOrder(targets, []string{"b-c", "b-a"})
+
+	assert.Equal(t, []string{"b-c", "b-a", "b-new"}, backendSyncIDsOf(got))
+}
+
+func backendSyncIDsOf(ts []resolvedTarget) []string {
+	out := make([]string, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, t.BackendSyncID)
+	}
+	return out
+}
+
+func ranksOf(ts []resolvedTarget) []int {
+	out := make([]int, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, t.Rank)
+	}
+	return out
+}

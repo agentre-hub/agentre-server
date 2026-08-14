@@ -191,7 +191,7 @@ function renderDialog(onStarted: () => void = () => {}) {
 describe("新对话弹层:R15 派发计划逐档原因", () => {
   it("全部档不可用时逐档给出原因而不是静默失败（屏 24 的「现在选不了」）", async () => {
     mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents };
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
       throw new Error("unexpected: " + path);
     });
     mockFetchPlan.mockResolvedValue(allUnavailablePlan);
@@ -216,7 +216,7 @@ describe("新对话弹层:R15 派发计划逐档原因", () => {
 describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
   it("确认步先呈现三个工具不可用的说明（不是等调用失败），派发成功后立刻关注自己这条", async () => {
     mockedApi.mockImplementation(async (path, init) => {
-      if (path === "/v1/workspace/agents") return { agents };
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
       if (path === "/v1/follows" && init?.method === "POST") return {};
       throw new Error("unexpected: " + path);
     });
@@ -276,7 +276,7 @@ describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
 
   it("目标是桌面端时，确认步如实说明 org / subagent / hook 可用（不是沿用 agentred 的不可用文案）", async () => {
     mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents };
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
       throw new Error("unexpected: " + path);
     });
     mockFetchPlan.mockImplementation(async (_agent, project) =>
@@ -310,7 +310,7 @@ describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
 
   it("不输入第一句时「开始」按钮是禁用的（发出第一条消息之前什么都不会跑）", async () => {
     mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents };
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
       throw new Error("unexpected: " + path);
     });
     mockFetchPlan.mockImplementation(async (_agent, project) =>
@@ -333,7 +333,7 @@ describe("对话页空态主动作", () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/follows") return { items: [] };
       if (path === "/v1/devices") return { devices: [] };
-      if (path === "/v1/workspace/agents") return { agents };
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
       throw new Error("unexpected: " + path);
     });
     render(
@@ -353,5 +353,47 @@ describe("对话页空态主动作", () => {
     );
     // 弹层打开：选 Agent 的标题出现。
     expect(await screen.findByText("Pick an agent")).toBeTruthy();
+  });
+});
+
+describe("新对话弹层:「当前」标记必须和真派发目标是同一档", () => {
+  // 弹层原先取 /v1/workspace/agents 时不带 device_fingerprint，却照样渲染每个
+  // Agent 的 current 档：服务端在没有指纹时按账号 sort_order 解析，于是弹层说的
+  // 「当前」是**账号顺序的赢家**，而总览页（带指纹）说的是这台浏览器自己的赢家。
+  // 同一账号同一时刻两处给出不同答案，其中一处必然与真实派发目标不符。
+  it("取 Agent 清单时带上这台浏览器的设备指纹", async () => {
+    mockEnsureWebDevice.mockResolvedValue({
+      fingerprint: "fp-this-browser",
+      accessToken: "t",
+      deviceId: 1,
+    });
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    renderDialog();
+
+    await screen.findByText("后端 Agent");
+    expect(
+      mockedApi.mock.calls.some(
+        ([path]) =>
+          path === "/v1/workspace/agents?device_fingerprint=fp-this-browser",
+      ),
+    ).toBe(true);
+  });
+
+  // 拿不到指纹（没注册过 / 已被解除授权）时不附加空参数，读路径照常回落账号顺序。
+  it("拿不到指纹时不附加查询参数", async () => {
+    mockEnsureWebDevice.mockRejectedValue(new Error("no device"));
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
+      throw new Error("unexpected: " + path);
+    });
+    renderDialog();
+
+    await screen.findByText("后端 Agent");
+    expect(
+      mockedApi.mock.calls.some(([path]) => path === "/v1/workspace/agents"),
+    ).toBe(true);
   });
 });

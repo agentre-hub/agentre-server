@@ -2,8 +2,15 @@ package code
 
 import "github.com/cago-frame/cago/pkg/i18n"
 
+// 中文包同时注册在 "zh-CN" 与 i18n.DefaultLang 两个标签下。
+//
+// 后者不是冗余：cago 的 i18n.T 在 ctx 没有语言时回落到 i18n.DefaultLang，而那个
+// 常量是全小写的 "zh-cn"；本服务没有设置语言的中间件，于是**每一次**错误构造都走
+// 那条回落分支。只注册 "zh-CN" 时 langs["zh-cn"] 是 nil map，取回的是零值空串，
+// 客户端拿到 {"code":…,"msg":""}——有码无文案。两个标签指向同一份 map，没有副本。
 func init() {
 	i18n.Register("zh-CN", zhCN)
+	i18n.Register(i18n.DefaultLang, zhCN)
 }
 
 var zhCN = map[int]string{

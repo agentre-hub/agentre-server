@@ -402,20 +402,45 @@ func applyDeviceOrder(targets []resolvedTarget, permutation []string) []resolved
 		}
 	}
 
+	// 没有 sync_id 的档钉在原位：排列以 sync_id 表达，它无从指代自己，也就不该被
+	// 排序动到。浏览器侧同样把它钉住（execOrder.ts 的 reorderTargets 只在可移动的
+	// 档之间换位、并把空 sync_id 滤出提交载荷），两端因此对同一次操作给出同一结果。
+	// 注意这和「未覆盖补到队尾」不冲突：那条针对的是**能被指代却没被排到**的档。
+	pinned := make([]bool, len(targets))
+	slots := make([]int, 0, len(targets))
+	for i, t := range targets {
+		if t.BackendSyncID == "" {
+			pinned[i] = true
+			continue
+		}
+		slots = append(slots, i)
+	}
+
 	taken := make([]bool, len(targets))
-	out := make([]resolvedTarget, 0, len(targets))
+	ordered := make([]resolvedTarget, 0, len(slots))
 	for _, backendSyncID := range permutation {
 		i, ok := indexByBackend[backendSyncID]
-		if !ok || taken[i] {
+		if !ok || taken[i] || pinned[i] {
 			continue
 		}
 		taken[i] = true
-		out = append(out, targets[i])
+		ordered = append(ordered, targets[i])
 	}
 	for i, t := range targets {
-		if !taken[i] {
-			out = append(out, t)
+		if !taken[i] && !pinned[i] {
+			ordered = append(ordered, t)
 		}
+	}
+
+	// 把重排后的档按原有的非钉住位置回填，钉住的档留在自己的下标上。
+	out := make([]resolvedTarget, len(targets))
+	for i, t := range targets {
+		if pinned[i] {
+			out[i] = t
+		}
+	}
+	for n, i := range slots {
+		out[i] = ordered[n]
 	}
 	for i := range out {
 		out[i].Rank = i + 1
