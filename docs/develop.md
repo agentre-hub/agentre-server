@@ -135,5 +135,7 @@ Never commit a real key, and never read config from disk anywhere but bootstrap.
 3. One concern per commit. Do not mix a refactor into a feature commit, and do not
    mix changes across sibling repos — they are independent git repositories.
 
-CI (`.github/workflows/ci.yml`) runs `lint`, `test`, `e2e` and `build` on every push to
-`main` and every pull request. All four must pass.
+CI (`.github/workflows/ci.yml`) runs backend and frontend lint as separate jobs,
+backend and frontend tests as separate jobs, plus `e2e` (including its formatting
+check) and `build`, on every push to `main` and every pull request. All six jobs must
+pass.

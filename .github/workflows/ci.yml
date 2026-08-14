@@ -15,9 +15,8 @@ env:
   PNPM_VERSION: '10.33.0'
 
 jobs:
-  # 只调 Makefile，不在这里另写一份命令，否则会本地绿 CI 红
-  lint:
-    name: lint
+  lint-backend:
+    name: lint-backend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -26,17 +25,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: ${{ env.PNPM_VERSION }}
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: |
-            frontend/pnpm-lock.yaml
-            e2e/pnpm-lock.yaml
 
       - name: prepare embedded frontend
         run: make prepare-web-dist
@@ -47,23 +35,11 @@ jobs:
           version: v2.12.2
           args: --timeout 10m
 
-      - name: frontend eslint
-        run: make lint-frontend
-
-      - name: e2e prettier
-        run: make lint-e2e
-
-  # 仓库没有 build tag，所以这里跑到的就是全部
-  test:
-    name: test
+  lint-frontend:
+    name: lint-frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
 
       - uses: pnpm/action-setup@v4
         with:
@@ -74,8 +50,41 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - name: make test
-        run: make test
+      - name: make lint-frontend
+        run: make lint-frontend
+
+  # 仓库没有 build tag，所以这里跑到的就是全部
+  test-backend:
+    name: test-backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: make test-backend
+        run: make test-backend
+
+  test-frontend:
+    name: test-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: make test-frontend
+        run: make test-frontend
 
   # 冒烟 e2e：正式 server + 临时 MySQL 9.7.2/Redis 7 + 桌面/移动 Chromium。
   e2e:
@@ -99,6 +108,9 @@ jobs:
           cache-dependency-path: |
             frontend/pnpm-lock.yaml
             e2e/pnpm-lock.yaml
+
+      - name: make lint-e2e
+        run: make lint-e2e
 
       - name: start temporary MySQL and Redis
         run: docker compose -f e2e/docker-compose.ci.yml up -d --wait
