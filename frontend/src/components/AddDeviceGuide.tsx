@@ -53,13 +53,18 @@ function CommandCard({
   copyTestId: string;
 }) {
   const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
+  // 记的是「复制走的是哪一条命令」而不是「复制过没有」：切换系统会把同一张卡
+  // 换成另一条命令，只记一个布尔值的话，按钮就会对着一条从没进过剪贴板的命令
+  // 说「已复制」。
+  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const copied = copiedCommand === command;
 
+  // 计时从点击那一刻起算，与卡片此刻显示哪条命令无关。
   useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 2000);
+    if (copiedCommand === null) return;
+    const timer = window.setTimeout(() => setCopiedCommand(null), 2000);
     return () => window.clearTimeout(timer);
-  }, [copied]);
+  }, [copiedCommand]);
 
   const clipboard =
     typeof navigator === "undefined" ? undefined : navigator.clipboard;
@@ -78,7 +83,7 @@ function CommandCard({
             onClick={() => {
               clipboard
                 .writeText(command)
-                .then(() => setCopied(true))
+                .then(() => setCopiedCommand(command))
                 .catch(() => {
                   // 复制被浏览器拒了就保持原样：命令本身仍然可以选中手抄，
                   // 不谎报「已复制」。

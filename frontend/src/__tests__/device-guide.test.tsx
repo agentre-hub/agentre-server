@@ -281,6 +281,27 @@ describe("add-device guide · steps and commands", () => {
     expect(writeText).toHaveBeenCalledWith(INSTALL_UNIX);
     expect(await screen.findByText("Copied")).toBeTruthy();
   });
+
+  it("复制完再换系统：命令换了「已复制」就得撤掉，剪贴板里躺着的还是上一条", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    renderGuide();
+    fireEvent.click(screen.getByTestId("add-device-copy-install"));
+    expect(await screen.findByText("Copied")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Windows" }));
+
+    expect(screen.getByTestId("add-device-command-install").textContent).toBe(
+      INSTALL_WIN,
+    );
+    // 这条 PowerShell 命令一次都没进过剪贴板
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Copied")).toBeNull();
+  });
 });
 
 /**

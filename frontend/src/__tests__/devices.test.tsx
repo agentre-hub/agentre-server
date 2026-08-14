@@ -412,7 +412,6 @@ describe("add-device entry and guide expansion", () => {
     renderDevices();
 
     expect(await screen.findByTestId("add-device-guide")).toBeTruthy();
-    expect(screen.queryByText("No devices yet.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Collapse guide" })).toBeNull();
     // 引导已经展开，重复的入口不再渲染
     expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();
@@ -429,7 +428,9 @@ describe("add-device entry and guide expansion", () => {
       await screen.findByText("Could not load your devices. Please try again."),
     ).toBeTruthy();
     expect(screen.queryByTestId("add-device-guide")).toBeNull();
-    expect(screen.queryByText("No devices yet.")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();
+    // 「没有设备」如今有两个说法：展开的引导，和顶栏那个数字。取不到列表时
+    // 两个都不许出现——写着 0 的计数和那句被删掉的空句是同一句谎话。
+    expect(screen.queryByTestId("devices-count")).toBeNull();
   });
 });
