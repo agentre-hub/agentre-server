@@ -345,6 +345,34 @@ func TestAuthorize_IgnoresLegacyCapabilitiesField(t *testing.T) {
 	}, stub.authorizeInputs[0])
 }
 
+// 设备自报的显示名（通常是主机名）必须一路传到 service：设备流没有别的途径拿到
+// 它，缺了这一段，设备列表里每台机器都只能叫指纹缩写。
+func TestAuthorize_PassesReportedName(t *testing.T) {
+	stub := &stubDeviceSvc{}
+	server, _ := newDeviceTestServer(t, stub)
+
+	body := `{"device_kind":"agentred","fingerprint":"fp-named-client","platform":"linux/amd64",` +
+		`"version":"v0.5.0","name":"coding"}`
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/device/authorize", "", "", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Len(t, stub.authorizeInputs, 1)
+	assert.Equal(t, "coding", stub.authorizeInputs[0].Name)
+}
+
+// 老客户端不带 name，授权照常成立（名字回退到指纹缩写，由 service 决定）。
+func TestAuthorize_NameIsOptional(t *testing.T) {
+	stub := &stubDeviceSvc{}
+	server, _ := newDeviceTestServer(t, stub)
+
+	body := `{"device_kind":"agentred","fingerprint":"fp-unnamed-client","platform":"linux/amd64","version":"v0.5.0"}`
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/device/authorize", "", "", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.Len(t, stub.authorizeInputs, 1)
+	assert.Empty(t, stub.authorizeInputs[0].Name)
+}
+
 // nightly 构建会在语义版本后附带提交与构建元数据，长度可能超过 32 个字符。
 // version 只是展示信息，且存储列可容纳 64 个字符，授权入口不能提前拒绝它。
 func TestAuthorize_AcceptsLongNightlyVersion(t *testing.T) {

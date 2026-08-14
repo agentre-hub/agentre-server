@@ -6,16 +6,19 @@ type DeviceFlowCode struct {
 	UserCode          string `gorm:"column:user_code;type:text;not null"`
 	DeviceKind        string `gorm:"column:device_kind;type:text;not null"`
 	ClientFingerprint string `gorm:"column:client_fingerprint;type:text;not null"`
-	Platform          string `gorm:"column:platform;type:text;not null;default:''"`
-	Version           string `gorm:"column:version;type:text;not null;default:''"`
-	AuthorizedUserID  int64  `gorm:"column:authorized_user_id;type:bigint;not null;default:0"`
-	ApprovedAt        int64  `gorm:"column:approved_at;type:bigint;not null;default:0"`
-	ConsumedAt        int64  `gorm:"column:consumed_at;type:bigint;not null;default:0"`
-	DeniedAt          int64  `gorm:"column:denied_at;type:bigint;not null;default:0"`
-	IntervalSeconds   int    `gorm:"column:interval_seconds;type:smallint;not null;default:5"`
-	LastPolledAt      int64  `gorm:"column:last_polled_at;type:bigint;not null;default:0"`
-	ExpiresAt         int64  `gorm:"column:expires_at;type:bigint;not null;default:0"`
-	Createtime        int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	// ClientName 是客户端自报的显示名（通常是主机名），可空；换取 token 时决定
+	// devices.name，缺省则回退到指纹缩写。
+	ClientName       string `gorm:"column:client_name;type:text;not null;default:''"`
+	Platform         string `gorm:"column:platform;type:text;not null;default:''"`
+	Version          string `gorm:"column:version;type:text;not null;default:''"`
+	AuthorizedUserID int64  `gorm:"column:authorized_user_id;type:bigint;not null;default:0"`
+	ApprovedAt       int64  `gorm:"column:approved_at;type:bigint;not null;default:0"`
+	ConsumedAt       int64  `gorm:"column:consumed_at;type:bigint;not null;default:0"`
+	DeniedAt         int64  `gorm:"column:denied_at;type:bigint;not null;default:0"`
+	IntervalSeconds  int    `gorm:"column:interval_seconds;type:smallint;not null;default:5"`
+	LastPolledAt     int64  `gorm:"column:last_polled_at;type:bigint;not null;default:0"`
+	ExpiresAt        int64  `gorm:"column:expires_at;type:bigint;not null;default:0"`
+	Createtime       int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
 
 func (*DeviceFlowCode) TableName() string { return "device_flow_codes" }

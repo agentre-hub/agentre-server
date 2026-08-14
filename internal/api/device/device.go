@@ -24,6 +24,10 @@ type DeviceAuthorizeRequest struct {
 	Fingerprint string `json:"fingerprint"  binding:"required,min=8,max=128"`
 	Platform    string `json:"platform"     binding:"max=64"`
 	Version     string `json:"version"`
+	// Name 是设备自报的显示名（通常是主机名）。可空 —— 不带它的老客户端照常授权，
+	// 设备名回退到指纹缩写。设备流没有第二条途径拿到这个名字：不在这里带上，
+	// 设备列表里每台机器就都只能叫指纹缩写。
+	Name string `json:"name" binding:"max=128"`
 }
 type DeviceAuthorizeResponse struct {
 	DeviceCode              string `json:"device_code"`

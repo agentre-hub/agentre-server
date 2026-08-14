@@ -93,6 +93,7 @@ func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*Authoriz
 		UserCode:          uc,
 		DeviceKind:        in.DeviceKind,
 		ClientFingerprint: in.Fingerprint,
+		ClientName:        in.Name,
 		Platform:          in.Platform,
 		Version:           in.Version,
 		IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
@@ -197,7 +198,7 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 
 		d := &device_entity.Device{
 			UserID:      flow.AuthorizedUserID,
-			Name:        flow.ClientFingerprint[:8],
+			Name:        device_entity.DisplayName(flow.ClientName, flow.ClientFingerprint),
 			Kind:        flow.DeviceKind,
 			Platform:    flow.Platform,
 			Version:     flow.Version,
