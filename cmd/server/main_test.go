@@ -46,15 +46,15 @@ func TestLoadConfigReadsValidExplicitFile(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsUnreadableExplicitFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "unreadable.yaml")
-	if err := os.WriteFile(path, []byte(validConfig), 0o000); err != nil {
+func TestLoadConfigRejectsExplicitPathThatIsNotAFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err := loadConfig([]string{"--config", path})
 	if err == nil {
-		t.Fatal("loadConfig() succeeded with unreadable file")
+		t.Fatal("loadConfig() succeeded with a directory as the explicit file")
 	}
 	if !strings.Contains(err.Error(), path) {
 		t.Fatalf("loadConfig() error = %q, want explicit path %q", err, path)
