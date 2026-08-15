@@ -156,9 +156,6 @@ type WorkspaceSvc interface {
 	// SetExecTargetOrder 保存调用方设备对某个 Agent 的执行目标排列。指纹解析不到
 	// 账号下的活跃设备时**拒绝**，不猜一个 device_id 去写（决策 9）。
 	SetExecTargetOrder(ctx context.Context, in SetExecTargetOrderInput) error
-	// PurgeDeviceExecTargetOrders 删掉某台设备名下全部排列：设备被解除授权 / 删除时，
-	// 它排的顺序一并消失，不残留在账号里。
-	PurgeDeviceExecTargetOrders(ctx context.Context, deviceID int64) error
 	// DeviceDetail 是设备行展开时取的详情，deviceID 必须属于 userID 且未被撤销，
 	// 否则返回 NotFound——不区分「不存在」与「不属于你」，避免枚举探测。
 	DeviceDetail(ctx context.Context, userID, deviceID int64) (*DeviceDetailView, error)
@@ -168,9 +165,9 @@ type WorkspaceSvc interface {
 // UserID 来自调用方鉴权上下文，不由调用方填；DeviceFingerprint 只能由参数传入
 // （这组端点鉴权的是用户不是设备），因此它必须先被解析成 devices 行才作数。
 type SetExecTargetOrderInput struct {
-	UserID            int64
-	DeviceFingerprint string
-	AgentSyncID       string
+	UserID      int64
+	ClientID    string
+	AgentSyncID string
 	// BackendSyncIDs 是排列本身。不校验它与当前执行目标集合是否一致：排列是收敛的
 	// 偏好，解析时以集合为准（指向已删 backend 的项忽略、未覆盖的档补到尾部）。
 	BackendSyncIDs []string
@@ -360,24 +357,6 @@ func deviceFingerprintMap(devices []*device_entity.Device) map[string]*device_en
 
 // ---------- 每端自己的派发顺序 ----------
 
-// callerDevice 解析「发来这次请求的那台设备」。指纹只能由参数传入（这组端点鉴权的
-// 是用户不是设备），所以归属校验必须在这里发生：devices 取自 deviceByFP，而那张表
-// 由 device_repo.ListByUser(userID) 建出——只含调用方账号名下的活跃设备，别人账号的
-// 指纹在这里天然查不到，也就拿不到 device_id 去读它的排列。
-//
-// 返回 nil 表示「没有可用的排列持有者」：指纹缺失、这个账号下没有这台设备、或它已
-// 被解除授权。读路径据此回落账号 sort_order，不报错（决策 9 的读侧）。
-func callerDevice(deviceByFP map[string]*device_entity.Device, fingerprint string) *device_entity.Device {
-	if fingerprint == "" {
-		return nil
-	}
-	dev := deviceByFP[fingerprint]
-	if !dev.IsActive() {
-		return nil
-	}
-	return dev
-}
-
 // applyDeviceOrder 按一份排列重排执行目标链。
 //
 // 排列是**收敛的**，不是权威的：以当前账号执行目标集合为准——排列里指向已不存在
@@ -492,11 +471,11 @@ func (s *workspaceSvc) ListAccountAgents(
 	// 「当前」的那一档，会和真派发时选中的不是同一档。一次取这台设备对全部 Agent
 	// 的排列，一屏多张卡片不按 Agent 逐条查库。
 	orderByAgent := map[string][]string{}
-	if dev := callerDevice(deviceByFP, deviceFingerprint); dev != nil {
-		orders, oerr := exec_order_repo.ExecOrder().ListByDevice(ctx, userID, dev.ID)
+	if deviceFingerprint != "" {
+		orders, oerr := exec_order_repo.ExecOrder().ListByClient(ctx, userID, deviceFingerprint)
 		if oerr != nil {
 			logger.Ctx(ctx).Warn("workspace_svc.ListAccountAgents: read device exec target orders failed, falling back to account order",
-				zap.Int64("userID", userID), zap.Int64("deviceID", dev.ID), zap.Error(oerr))
+				zap.Int64("userID", userID), zap.Error(oerr))
 		}
 		for _, o := range orders {
 			orderByAgent[o.AgentSyncID] = o.BackendSyncIDs()
@@ -727,16 +706,15 @@ func (s *workspaceSvc) WebDispatchPlan(
 // 别处（决策 9 的读侧）。读库出错是「降级但已处理」，落一条 Warn 让它可查。
 func deviceOrder(
 	ctx context.Context, userID int64,
-	deviceByFP map[string]*device_entity.Device, deviceFingerprint, agentSyncID string,
+	_ map[string]*device_entity.Device, deviceFingerprint, agentSyncID string,
 ) []string {
-	dev := callerDevice(deviceByFP, deviceFingerprint)
-	if dev == nil {
+	if deviceFingerprint == "" {
 		return nil
 	}
-	order, err := exec_order_repo.ExecOrder().Find(ctx, userID, dev.ID, agentSyncID)
+	order, err := exec_order_repo.ExecOrder().Find(ctx, userID, deviceFingerprint, agentSyncID)
 	if err != nil {
 		logger.Ctx(ctx).Warn("workspace_svc.deviceOrder: read device exec target order failed, falling back to account order",
-			zap.Int64("userID", userID), zap.Int64("deviceID", dev.ID),
+			zap.Int64("userID", userID),
 			zap.String("agentSyncID", agentSyncID), zap.Error(err))
 		return nil
 	}
@@ -750,21 +728,9 @@ func deviceOrder(
 // (user_id, fingerprint) 解析来保证；device_id 又是主键的一部分，拿不到它就写不进去，
 // 校验因此不可绕过。已被解除授权的设备同样写不进去——它的排列马上就要被清掉。
 func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetOrderInput) error {
-	dev, err := device_repo.Device().FindByFingerprint(ctx, in.UserID, in.DeviceFingerprint)
-	if err != nil {
-		return err
-	}
-	if !dev.IsActive() {
-		// 常见成因是浏览器攥着一枚已失效的指纹（换了账号、设备被解除授权）：顺序
-		// 因此存不下，界面会当场说明——落一条 Warn，让「用户说排序不生效」有据可查。
-		logger.Ctx(ctx).Warn("workspace_svc.SetExecTargetOrder: device fingerprint resolves to no active device, refusing to store order",
-			zap.Int64("userID", in.UserID), zap.String("agentSyncID", in.AgentSyncID))
-		return i18n.NewNotFoundError(ctx, code.DeviceNotFound)
-	}
-
 	order := &exec_order_entity.DeviceExecTargetOrder{
 		UserID:      in.UserID,
-		DeviceID:    dev.ID,
+		ClientID:    in.ClientID,
 		AgentSyncID: in.AgentSyncID,
 		Updatetime:  time.Now().UnixMilli(),
 	}
@@ -772,16 +738,6 @@ func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetO
 		return err
 	}
 	return exec_order_repo.ExecOrder().Save(ctx, order)
-}
-
-// PurgeDeviceExecTargetOrders 删掉某台设备名下全部排列：用户解除一个浏览器的授权
-// （或删掉一台设备的记录）时，它排的顺序一并消失，不残留在账号里。
-//
-// 只按 device_id 删，不带 user_id：device_id 是全局自增主键、天然只属于一个账号，
-// 一个账号的清理碰不到另一个账号的行（与 sync_svc.PurgeDeviceLocalPaths 同一约定）。
-// 账号级的执行目标**集合**不受影响——它在同步组里，不属于任何一台设备。
-func (s *workspaceSvc) PurgeDeviceExecTargetOrders(ctx context.Context, deviceID int64) error {
-	return exec_order_repo.ExecOrder().DeleteByDevice(ctx, deviceID)
 }
 
 // configuredProjects 回答「这台机器上哪些项目配了路径」。两类设备的路径存在不同的

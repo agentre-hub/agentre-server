@@ -238,9 +238,6 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 	// 工作区多端同步 R18：撤销一台设备时，device_svc 用这个窄接口清掉它上报的
 	// 本机路径清单；sync_svc.Default() 结构性满足 device_svc.LocalPathPurger。
 	device_svc.SetLocalPathPurger(sync_svc.Default())
-	// 每端自己排的执行目标顺序同理：撤销一台设备时它排的顺序一并消失；
-	// workspace_svc.Default() 结构性满足 device_svc.ExecTargetOrderPurger。
-	device_svc.SetExecTargetOrderPurger(workspace_svc.Default())
 
 	hostname, err := os.Hostname()
 	if err != nil {

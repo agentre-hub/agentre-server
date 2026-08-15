@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -39,7 +38,6 @@ type DeviceSvc interface {
 	Deny(ctx context.Context, userCode string) error
 	ExchangeToken(ctx context.Context, deviceCode string) (*TokenOutput, error)
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
-	RegisterWebDevice(ctx context.Context, in RegisterWebDeviceInput) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
 	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
@@ -68,32 +66,6 @@ func SetLocalPathPurger(p LocalPathPurger) {
 type noopLocalPathPurger struct{}
 
 func (noopLocalPathPurger) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
-
-// ExecTargetOrderPurger 是 Revoke 撤销一台设备时用到的第二个窄接口（ISP）：只清掉该
-// 设备自己排的执行目标顺序——「每端自己排」的顺序属于那台设备，设备被解除授权后它就
-// 没有持有者了，不该残留在账号里。与 LocalPathPurger 分开而不并成一个胖接口：两者是
-// 不同的域、实现方也不同。device_svc 不 import workspace_svc——由 bootstrap 用
-// workspace_svc.Default() 满足这个接口。
-type ExecTargetOrderPurger interface {
-	PurgeDeviceExecTargetOrders(ctx context.Context, deviceID int64) error
-}
-
-// execTargetOrderPurger 默认是空操作，理由同 localPathPurger。
-var execTargetOrderPurger ExecTargetOrderPurger = noopExecTargetOrderPurger{}
-
-// SetExecTargetOrderPurger 由 bootstrap 注入真实实现；传 nil 时恢复成空操作。
-func SetExecTargetOrderPurger(p ExecTargetOrderPurger) {
-	if p == nil {
-		p = noopExecTargetOrderPurger{}
-	}
-	execTargetOrderPurger = p
-}
-
-type noopExecTargetOrderPurger struct{}
-
-func (noopExecTargetOrderPurger) PurgeDeviceExecTargetOrders(context.Context, int64) error {
-	return nil
-}
 
 type deviceSvc struct {
 	cfg    Config
@@ -161,18 +133,6 @@ const (
 	// device_ctr 按它映射 code.DeviceFlowUserCodeInvalid。
 	ErrUserCodeInvalid = "user_code_invalid"
 )
-
-// ErrWebDeviceRevoked 是 R2 的执行点：同一指纹的浏览器设备行已被解除授权时，
-// RegisterWebDevice 拒绝而不是把它复活。device_ctr 按它映射 403 +
-// code.DeviceRevoked，浏览器据此按 R11 表达为「这台设备已被解除授权」。
-var ErrWebDeviceRevoked = errors.New("web device has been revoked")
-
-// ErrFingerprintNotWeb 挡住「拿别的设备的指纹注册浏览器」：这个端点换的是一台属于
-// **这个浏览器**的 kind=web 设备（R1 / 决策 6），而 Upsert 的赋值列里含 kind 与 name，
-// 拿同账号里一台 agentred 的指纹（/v1/devices 原样回给浏览器）调它，会把那一行改写成
-// kind=web 并把它的 device id 交给浏览器 —— 那台 agentred 随即被中继的 kind 判定挡在
-// 门外（R2「其余设备不受影响」）。device_ctr 按它映射 409 + code.DeviceKindMismatch。
-var ErrFingerprintNotWeb = errors.New("fingerprint belongs to a non-web device")
 
 // OAuthError 包装 OAuth 标准错误字面量。controller 转换为对应 HTTP 状态。
 type OAuthError struct{ Code, Description string }
@@ -466,112 +426,6 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 	return nil
 }
 
-// shortFingerprint 是设备显示名缺省时的回退：指纹的前 8 个**符文**。
-//
-// 按符文而不是按字节截：指纹由浏览器自己生成，端点只按 binding `min=8` 收，而
-// validator 的 min 数的正是符文 —— 八个多字节符文的指纹过得了校验，按字节切却会
-// 切在符文中间，落库的是一段非法 UTF-8，MySQL 直接以
-// `invalid byte sequence for encoding "UTF8"` 拒掉整条 INSERT。
-func shortFingerprint(fingerprint string) string {
-	runes := []rune(fingerprint)
-	if len(runes) <= 8 {
-		return fingerprint
-	}
-	return string(runes[:8])
-}
-
-func (s *deviceSvc) RegisterWebDevice(ctx context.Context, in RegisterWebDeviceInput) (*TokenOutput, error) {
-	// R2：被解除授权的浏览器不得靠重新注册把自己救回来。Upsert 的赋值列里含
-	// status，直接落库会把 revoked 行翻回 ACTIVE 并发一枚全新、不在黑名单里的
-	// 设备 JWT——「单独把那个浏览器踢下线」就白做了。因此同指纹的行只要不是
-	// ACTIVE 就拒绝，由浏览器按 R11 表达为「这台设备已被解除授权，须重新登录」。
-	// 恢复路径是重新登录后换一个新指纹（= 一台新设备），不是复活这一台。
-	existing, err := device_repo.Device().FindByFingerprint(ctx, in.UserID, in.Fingerprint)
-	if err != nil {
-		return nil, err
-	}
-	if existing != nil && !existing.IsActive() {
-		return nil, ErrWebDeviceRevoked
-	}
-	// 按指纹幂等指的是「同一个**浏览器**的那一台」：既有行不是 kind=web 时它不是
-	// 这个浏览器的设备，改写它既不是 R1 要的幂等，也会把那台设备踢出中继。
-	if existing != nil && existing.Kind != device_entity.KindWeb {
-		return nil, ErrFingerprintNotWeb
-	}
-
-	nowMs := time.Now().UnixMilli()
-	name := in.Name
-	if name == "" {
-		name = shortFingerprint(in.Fingerprint)
-	}
-	d := &device_entity.Device{
-		UserID:      in.UserID,
-		Name:        name,
-		Kind:        device_entity.KindWeb,
-		Platform:    in.Platform,
-		Version:     in.Version,
-		Fingerprint: in.Fingerprint,
-		LastSeenAt:  nowMs,
-		Status:      1, // consts.ACTIVE
-		Createtime:  nowMs,
-		Updatetime:  nowMs,
-	}
-
-	out := &TokenOutput{}
-	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := db.WithContextDB(ctx, tx)
-
-		// 按 (user_id, fingerprint) 幂等：同一个浏览器重复请求时 Upsert 命中既有行
-		// 并 transaction read-back 回填原 id，不新增设备行（R1 / 决策 6）。
-		if err := device_repo.Device().Upsert(txCtx, d); err != nil {
-			return err
-		}
-
-		access, jti, err := s.signer.Sign(jwt.Claims{
-			UID: in.UserID, DID: d.ID, Kind: d.Kind,
-		}, s.cfg.AccessTTL)
-		if err != nil {
-			return err
-		}
-
-		// 与 ExchangeToken 共用同一套落库形状（设备行 + 短效 access + 长效 refresh），
-		// 因此解除授权也走同一套既有机制：Revoke 会把该设备已签发 access token 的
-		// jti 全部拉黑，让在线设备的设备 JWT 立即失效、中继连接被拒（R2）。
-		refreshPlain, err := randomBase32(32)
-		if err != nil {
-			return err
-		}
-		hash := sha256Hex(refreshPlain)
-		ip, ua := clientInfoFromCtx(ctx)
-		token := &device_token_entity.DeviceToken{
-			DeviceID:         d.ID,
-			RefreshTokenHash: hash,
-			AccessJTI:        jti,
-			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
-			UserAgent:        ua,
-			IP:               ip,
-			Createtime:       nowMs,
-		}
-		if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
-			return err
-		}
-
-		*out = TokenOutput{
-			AccessToken:      access,
-			RefreshToken:     refreshPlain,
-			ExpiresIn:        int(s.cfg.AccessTTL / time.Second),
-			RefreshExpiresIn: int(s.cfg.RefreshTTL / time.Second),
-			DeviceID:         d.ID,
-			JTI:              jti,
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	nowMs := time.Now().UnixMilli()
 	jtis, err := device_token_repo.DeviceToken().ListAccessJTIByDevice(ctx, deviceID)
@@ -602,13 +456,6 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 		logger.Ctx(ctx).Warn("device_svc.Revoke: purge reported local paths failed",
 			zap.Int64("deviceId", deviceID), zap.Error(err))
 	}
-	// 「每端自己排」的执行目标顺序同理：它属于这台设备，设备被解除授权后没有持有者，
-	// 一并清掉，不残留在账号里。账号级的执行目标**集合**在同步组里，不受影响。
-	// 与上面一样是撤销的从属后果，失败只记日志、不回滚已经生效的撤销。
-	if err := execTargetOrderPurger.PurgeDeviceExecTargetOrders(ctx, deviceID); err != nil {
-		logger.Ctx(ctx).Warn("device_svc.Revoke: purge device exec target orders failed",
-			zap.Int64("deviceId", deviceID), zap.Error(err))
-	}
 	return nil
 }
 
@@ -633,6 +480,11 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 	}
 	out := make([]api.ListDevicesItem, 0, len(rows))
 	for _, d := range rows {
+		// 浏览器是 relay 的短效调用方，不是可管理设备。旧版本遗留的 web 行也不再
+		// 泄漏到设备列表。
+		if d.Kind == device_entity.KindWeb {
+			continue
+		}
 		// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。
 		// Redis 抖动时按离线对待（fail-open）：在线态只是列表的增强列，
 		// 不应拖垮整个设备列表或 Revoke 前的归属校验（该流程也走本方法）。

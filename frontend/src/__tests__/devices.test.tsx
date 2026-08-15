@@ -36,8 +36,8 @@ vi.mock("@/hooks/use-relay", () => ({
         }
       : null,
     relayState: fingerprint ? "connected" : "disconnected",
-    webDevice: null,
-    webDeviceError: null,
+    relayTicket: null,
+    relayTicketError: null,
   }),
 }));
 

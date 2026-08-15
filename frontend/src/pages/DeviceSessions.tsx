@@ -23,7 +23,6 @@ import {
   deriveSessionViewStatus,
   type SessionViewStatus,
 } from "@/lib/sessionView";
-import { WebDeviceRevokedError, markWebDeviceRevoked } from "@/lib/webDevice";
 import {
   decodeSessionListResult,
   MethodSessionList,
@@ -67,11 +66,10 @@ export default function DeviceSessions() {
   const [needsUpgrade, setNeedsUpgrade] = useState(false);
   const [followed, setFollowed] = useState<Set<number>>(new Set());
   const [machineOnline, setMachineOnline] = useState<boolean | null>(null);
-  const [revoked, setRevoked] = useState(false);
   const [meValid, setMeValid] = useState(true);
   const probedRef = useRef(false);
 
-  const { client, relayState, webDevice, webDeviceError } = useRelayMachine(
+  const { client, relayState, relayTicketError } = useRelayMachine(
     device?.online ? device.fingerprint : null,
   );
   const isMobile = useIsMobile();
@@ -162,25 +160,13 @@ export default function DeviceSessions() {
     probedRef.current = true;
     api<{ devices: DeviceItem[] }>("/v1/devices")
       .then((res) => {
-        // R2 / R11：/v1/devices 只回**活跃**设备，被解除授权的行直接不在里面。
-        // 因此判据是「自己这台还在不在清单里」，不是它的 status——按 status 判
-        // 永远判不出来，那个分支不可达。指纹还没取到时不判（避免误报）。
-        const myFingerprint = webDevice?.fingerprint;
-        if (
-          myFingerprint &&
-          !res.devices.some((d) => d.fingerprint === myFingerprint)
-        ) {
-          markWebDeviceRevoked();
-          setRevoked(true);
-          return;
-        }
         const machine = res.devices.find((d) => d.id === id);
         setMachineOnline(machine?.online ?? null);
       })
       .catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 401) setMeValid(false);
       });
-  }, [webDevice?.fingerprint, id]);
+  }, [id]);
 
   useEffect(() => {
     if (relayState === "reconnecting") probe();
@@ -217,12 +203,13 @@ export default function DeviceSessions() {
     [device?.fingerprint, followed],
   );
 
-  // ensureWebDevice 直接抛「已被解除授权」时同样进入 revoked 态。
-  const revokedNow = revoked || webDeviceError instanceof WebDeviceRevokedError;
   const status: SessionViewStatus = deriveSessionViewStatus({
     relayState,
-    meValid,
-    webDeviceRevoked: revokedNow,
+    meValid:
+      meValid &&
+      !(
+        relayTicketError instanceof ApiError && relayTicketError.status === 401
+      ),
     machineOnline,
     targetKind: device?.kind,
   });

@@ -18,11 +18,7 @@ import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import { reduceEvents } from "@/lib/transcript";
 import { deriveSessionViewStatus, statusDotClass } from "@/lib/sessionView";
-import {
-  deviceDisplayName,
-  WebDeviceRevokedError,
-  markWebDeviceRevoked,
-} from "@/lib/webDevice";
+import { browserDisplayName } from "@/lib/relayTicket";
 import {
   decodeSessionListResult,
   decodeSessionPendingWaitersResult,
@@ -116,7 +112,6 @@ export default function SessionDetailView({
   const [draft, setDraft] = useState("");
   const [ready, setReady] = useState(false);
   const [machineOnline, setMachineOnline] = useState<boolean | null>(null);
-  const [revoked, setRevoked] = useState(false);
   const [meValid, setMeValid] = useState(true);
   const [followed, setFollowed] = useState(false);
   const [followBusy, setFollowBusy] = useState(false);
@@ -124,7 +119,7 @@ export default function SessionDetailView({
   // key 强制重挂），会话级状态必须随 (did, sid) 变化重置，否则右栏残留上一条会话的
   // 标题/转录/决策，发消息也落在上一条的 origin 上。用 React 官方的「prop 变化时
   // 重置 state」渲染期调整模式（不能在 effect 里裸调 setState —— lint 禁止）。
-  // 设备/账号级状态（machineOnline / revoked / meValid）不在此列，由各自 effect 随
+  // 设备/账号级状态（machineOnline / meValid）不在此列，由各自 effect 随
   // did 刷新。originRef 由 attach effect 每次重新推导，不需要在这里清。
   const [lastTarget, setLastTarget] = useState({ did, sid });
   if (lastTarget.did !== did || lastTarget.sid !== sid) {
@@ -190,7 +185,7 @@ export default function SessionDetailView({
     refreshWaitersRef.current = refreshWaiters;
   });
 
-  const { client, relayState, webDevice, webDeviceError } = useRelayMachine(
+  const { client, relayState, relayTicket, relayTicketError } = useRelayMachine(
     device?.online ? device.fingerprint : null,
     {
       onEvent: (f) => {
@@ -292,8 +287,8 @@ export default function SessionDetailView({
 
   // 首次进入 reconnecting（= 连接失败）时探测原因（R11），只探一次。
   // 与文件里其它异步 effect 一样带 alive 守卫：reconnecting 期间切换目标设备或
-  // 卸载时，旧设备那次还在路上的探测不得把 machineOnline / revoked / meValid 覆盖
-  // 成旧目标（或卸载后）的结论——否则右栏挂着旧机器的离线横幅，甚至误判解除授权。
+  // 卸载时，旧设备那次还在路上的探测不得把 machineOnline / meValid 覆盖成旧目标
+  // （或卸载后）的结论。
   useEffect(() => {
     if (relayState !== "reconnecting" || probedRef.current) return;
     probedRef.current = true;
@@ -301,18 +296,6 @@ export default function SessionDetailView({
     api<{ devices: DeviceItem[] }>("/v1/devices")
       .then((res) => {
         if (!alive) return;
-        // R2 / R11：/v1/devices 只回**活跃**设备，被解除授权的行直接不在里面。
-        // 因此判据是「自己这台还在不在清单里」，不是它的 status——按 status 判
-        // 永远判不出来，那个分支不可达。指纹还没取到时不判（避免误报）。
-        const myFingerprint = webDevice?.fingerprint;
-        if (
-          myFingerprint &&
-          !res.devices.some((d) => d.fingerprint === myFingerprint)
-        ) {
-          markWebDeviceRevoked();
-          setRevoked(true);
-          return;
-        }
         const machine = res.devices.find((d) => d.id === did);
         setMachineOnline(machine?.online ?? null);
       })
@@ -323,7 +306,7 @@ export default function SessionDetailView({
     return () => {
       alive = false;
     };
-  }, [relayState, webDevice?.fingerprint, did]);
+  }, [relayState, did]);
 
   // 断线重连后刷新待决策：补齐只负责转录事件，pendingWaiters 需要重新拉一次（R10）。
   useEffect(() => {
@@ -375,11 +358,13 @@ export default function SessionDetailView({
     }
   }
 
-  const revokedNow = revoked || webDeviceError instanceof WebDeviceRevokedError;
   const status = deriveSessionViewStatus({
     relayState,
-    meValid,
-    webDeviceRevoked: revokedNow,
+    meValid:
+      meValid &&
+      !(
+        relayTicketError instanceof ApiError && relayTicketError.status === 401
+      ),
     machineOnline,
     targetKind: device?.kind,
     pinnedAgentredUnavailable,
@@ -391,7 +376,7 @@ export default function SessionDetailView({
   // providerSessionID 续上，决策 8）。
   async function sendMessage(text: string) {
     const c = clientRef.current;
-    if (!c || !summary || !webDevice || !text.trim()) return;
+    if (!c || !summary || !relayTicket || !text.trim()) return;
     setSending(true);
     setSendError(false);
     try {
@@ -404,8 +389,8 @@ export default function SessionDetailView({
         title: summary.title,
         agentSyncId: summary.agentSyncId,
         userText: text.trim(),
-        sourceDevice: webDevice.fingerprint,
-        sourceDeviceName: deviceDisplayName(),
+        sourceDevice: relayTicket.clientId,
+        sourceDeviceName: browserDisplayName(),
         backend: { type: summary.backendType },
       });
       setDraft("");

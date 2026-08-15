@@ -39,7 +39,6 @@ const ALL_STATUSES: SessionViewStatus[] = [
   "machineOffline",
   "desktopAppNotRunning",
   "pinnedAgentredUnavailable",
-  "revoked",
   "loggedOut",
 ];
 
@@ -66,22 +65,20 @@ describe("会话状态:六类失败与失效各自可区分", () => {
     const failures: SessionViewStatus[] = [
       "machineOffline",
       "lost",
-      "revoked",
       "loggedOut",
       "desktopAppNotRunning",
       "pinnedAgentredUnavailable",
     ];
-    expect(new Set(failures.map((status) => texts.get(status))).size).toBe(6);
+    expect(new Set(failures.map((status) => texts.get(status))).size).toBe(5);
   });
 
   it("状态不只靠颜色:关键状态都有可见文字(而非仅图标/色块)", () => {
     renderStatus("machineOffline");
     renderStatus("desktopAppNotRunning");
     renderStatus("pinnedAgentredUnavailable");
-    renderStatus("revoked");
     renderStatus("loggedOut");
     renderStatus("lost");
-    expect(screen.getAllByRole("alert").length).toBe(6);
+    expect(screen.getAllByRole("alert").length).toBe(5);
     // 文字存在且非空。
     const alerts = screen.getAllByRole("alert");
     for (const a of alerts) {
@@ -101,23 +98,18 @@ describe("会话状态:六类失败与失效各自可区分", () => {
     const base: {
       relayState: RelayState;
       meValid: boolean;
-      webDeviceRevoked: boolean;
       machineOnline: boolean | null;
       targetKind: "agentred" | "desktop";
       pinnedAgentredUnavailable: boolean;
     } = {
       relayState: "disconnected",
       meValid: true,
-      webDeviceRevoked: false,
       machineOnline: true,
       targetKind: "agentred",
       pinnedAgentredUnavailable: false,
     };
     expect(deriveSessionViewStatus({ ...base, meValid: false })).toBe(
       "loggedOut",
-    );
-    expect(deriveSessionViewStatus({ ...base, webDeviceRevoked: true })).toBe(
-      "revoked",
     );
     expect(deriveSessionViewStatus({ ...base, machineOnline: false })).toBe(
       "machineOffline",

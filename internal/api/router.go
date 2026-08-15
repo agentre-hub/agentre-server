@@ -35,6 +35,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	publicKeys := r.Cfg.JWT.PublicKeySet()
 	deviceCtr := device_ctr.NewDeviceWithPublicKeys(publicKeys.CurrentKID, publicKeys.Keys,
 		int64(r.Cfg.JWT.AccessTTL/time.Second))
+	deviceCtr.SetSigner(r.Signer)
 	relaySvc := r.Relay
 	if relaySvc == nil {
 		relaySvc = relay_svc.Default()
@@ -68,8 +69,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		deviceCtr.Pending,
 		deviceCtr.Approve,
 		deviceCtr.Deny,
-		// R1：已登录浏览器按持久化指纹换取 kind=web 设备身份。
-		deviceCtr.RegisterWeb,
+		deviceCtr.RelayTicket,
 	)
 
 	// session 或 device JWT 都可以
@@ -103,11 +103,11 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.PutAvatar,
 		syncCtr.GetAvatar,
 	)
-	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由；鉴权仍复用 device JWT。
-	// client 额外接受 query 里的 access_token（浏览器原生 WebSocket 无法设头，见
-	// queryTokenBridge）；daemon 是 Go 客户端、能设头，不需要这条桥。
+	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受真实
+	// Device JWT；client 同时接受原生端 Device JWT 与浏览器短效 relay ticket。
+	// 浏览器原生 WebSocket 无法设头，ticket 经 queryTokenBridge 从 query 搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
-	g.Group("/", queryTokenBridge(), middleware.DeviceJWT(r.Signer)).
+	g.Group("/", queryTokenBridge(), middleware.RelayClientJWT(r.Signer)).
 		GET("/v1/relay/client", relayCtr.Client)
 
 	return nil

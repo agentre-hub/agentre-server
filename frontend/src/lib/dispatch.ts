@@ -16,10 +16,10 @@
  * 这是 R19 红线在主动派活场景下的唯一例外（见 workspace_svc.WebDispatchChoice）。
  */
 import { api } from "@/lib/api";
-import { callerDeviceFingerprint } from "@/lib/execOrder";
+import { callerClientId } from "@/lib/execOrder";
 import { RelayClient } from "@/lib/relayClient";
 import { relayClientUrl } from "@/lib/relayUrl";
-import { deviceDisplayName, type WebDevice } from "@/lib/webDevice";
+import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 import { decodeRunAck, MethodRun, type RunParams } from "@/lib/wire";
 
 export type DispatchAvailability =
@@ -69,8 +69,8 @@ export async function fetchDispatchPlan(
 ): Promise<DispatchPlan> {
   const qs = new URLSearchParams({ agent_sync_id: agentSyncId });
   if (projectSyncId) qs.set("project_sync_id", projectSyncId);
-  const fingerprint = callerDeviceFingerprint();
-  if (fingerprint) qs.set("device_fingerprint", fingerprint);
+  const fingerprint = callerClientId();
+  if (fingerprint) qs.set("client_id", fingerprint);
   return api<DispatchPlan>(`/v1/workspace/dispatch-target?${qs.toString()}`);
 }
 
@@ -99,7 +99,7 @@ export interface DispatchedSession {
 export interface DispatchInput {
   plan: DispatchPlan;
   message: string;
-  sourceDevice: WebDevice;
+  sourceClient: RelayTicket;
 }
 
 /**
@@ -119,18 +119,18 @@ export async function dispatchNewConversation(
     userText: input.message.trim(),
     // daemon 端按 {"type": ...} 解 backend（integration_test 的既有契约）。
     backend: { type: choice.backend_type },
-    sourceDevice: input.sourceDevice.fingerprint,
-    sourceDeviceName: deviceDisplayName(),
+    sourceDevice: input.sourceClient.clientId,
+    sourceDeviceName: browserDisplayName(),
     // R17：不注入 mcpServers —— org / subagent / hook 是真身在桌面端的内置工具，
     // web 发起的对话用不了它们（发起前已由界面说明）。
   };
   const client = new RelayClient({
     url: relayClientUrl(
       choice.device_fingerprint,
-      input.sourceDevice.accessToken,
+      input.sourceClient.accessToken,
     ),
-    jwt: input.sourceDevice.accessToken,
-    deviceFingerprint: input.sourceDevice.fingerprint,
+    jwt: input.sourceClient.accessToken,
+    deviceFingerprint: input.sourceClient.clientId,
     reconnect: false,
   });
   try {

@@ -74,8 +74,12 @@ function renderPage() {
     return {
       client: fakeClient as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     };
   });
   return render(
@@ -558,8 +562,12 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       return {
         client: fakeClient as never,
         relayState: "connected",
-        webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-        webDeviceError: null,
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
       };
     });
     return render(
@@ -701,8 +709,12 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     mockUseRelay.mockImplementation(() => ({
       client: fakeClient as never,
       relayState: "reconnecting",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     }));
 
     const { rerender } = render(
@@ -780,8 +792,12 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
     mockUseRelay.mockImplementation(() => ({
       client: fakeClient as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     }));
     fakeClient.request.mockImplementation(async (method: string) => {
       if (method === "runtime.session.list")

@@ -20,7 +20,7 @@ func SessionOrDeviceAuth(signer *jwt.Signer) gin.HandlerFunc {
 		h := c.GetHeader("Authorization")
 		if strings.HasPrefix(h, "Bearer ") {
 			claims, err := signer.Verify(strings.TrimPrefix(h, "Bearer "))
-			if err != nil {
+			if err != nil || claims.Kind == "relay_client" || claims.DID == 0 {
 				abortUnauthorized(c)
 				return
 			}

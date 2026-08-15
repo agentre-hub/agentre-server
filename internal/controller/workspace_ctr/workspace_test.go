@@ -59,10 +59,6 @@ func (s *stubWorkspaceSvc) SetExecTargetOrder(_ context.Context, in workspace_sv
 	return s.orderErr
 }
 
-// PurgeDeviceExecTargetOrders 没有对应的端点（撤销设备走 device_svc.Revoke），这里
-// 只为满足接口——控制器不该有路可以调到它。
-func (s *stubWorkspaceSvc) PurgeDeviceExecTargetOrders(context.Context, int64) error { return nil }
-
 func (s *stubWorkspaceSvc) DeviceDetail(_ context.Context, _ int64, deviceID int64) (*workspace_svc.DeviceDetailView, error) {
 	s.detailInputs = append(s.detailInputs, deviceID)
 	if s.detailErr != nil {
@@ -344,7 +340,7 @@ func TestDispatchTarget_PassesCallerDeviceFingerprintAndCarriesBackendSyncID(t *
 	server, _ := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1&device_fingerprint=fp-web", cookie.Value)
+	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1&client_id=fp-web", cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, []string{"agent-1", "", "fp-web"}, stub.dispatchInputs)
 
@@ -373,7 +369,7 @@ func TestListAgents_PassesCallerDeviceFingerprintAndCarriesBackendSyncID(t *test
 	server, _ := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	resp := get(t, server.URL+"/v1/workspace/agents?device_fingerprint=fp-web", cookie.Value)
+	resp := get(t, server.URL+"/v1/workspace/agents?client_id=fp-web", cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "fp-web", stub.listFingerprnt)
 
@@ -397,12 +393,12 @@ func TestSetExecTargetOrder_PassesFingerprintAgentAndPermutation(t *testing.T) {
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", cookie.Value, csrf,
-		`{"device_fingerprint":"fp-web-0001","agent_sync_id":"agent-1","backend_sync_ids":["b-c","b-a"]}`)
+		`{"client_id":"fp-web-0001","agent_sync_id":"agent-1","backend_sync_ids":["b-c","b-a"]}`)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	require.Len(t, stub.orderInputs, 1)
 	assert.Equal(t, int64(7), stub.orderInputs[0].UserID)
-	assert.Equal(t, "fp-web-0001", stub.orderInputs[0].DeviceFingerprint)
+	assert.Equal(t, "fp-web-0001", stub.orderInputs[0].ClientID)
 	assert.Equal(t, "agent-1", stub.orderInputs[0].AgentSyncID)
 	assert.Equal(t, []string{"b-c", "b-a"}, stub.orderInputs[0].BackendSyncIDs)
 }
@@ -418,7 +414,7 @@ func TestSetExecTargetOrder_PropagatesRejectionForForeignDevice(t *testing.T) {
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", cookie.Value, csrf,
-		`{"device_fingerprint":"fp-someone-else","agent_sync_id":"agent-1","backend_sync_ids":["b-c"]}`)
+		`{"client_id":"fp-someone-else","agent_sync_id":"agent-1","backend_sync_ids":["b-c"]}`)
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 	body, err := io.ReadAll(resp.Body)
@@ -437,7 +433,7 @@ func TestSetExecTargetOrder_RejectsUnauthenticated(t *testing.T) {
 	server, _ := newWorkspaceTestServer(t, stub)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", "", "",
-		`{"device_fingerprint":"fp-web-0001","agent_sync_id":"agent-1","backend_sync_ids":["b-c"]}`)
+		`{"client_id":"fp-web-0001","agent_sync_id":"agent-1","backend_sync_ids":["b-c"]}`)
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	assert.Empty(t, stub.orderInputs)

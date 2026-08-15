@@ -12,7 +12,6 @@ import { api } from "@/lib/api";
 import { useRelayMachine } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/lib/theme";
-import { WebDeviceRevokedError } from "@/lib/webDevice";
 import DeviceSessions from "@/pages/DeviceSessions";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -98,8 +97,12 @@ describe("设备会话列表页", () => {
     mockUseRelay.mockReturnValue({
       client: fakeClient as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     });
 
     renderPage();
@@ -147,8 +150,12 @@ describe("设备会话列表页", () => {
         })),
       } as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     });
 
     renderPage();
@@ -182,8 +189,8 @@ describe("设备会话列表页", () => {
     mockUseRelay.mockReturnValue({
       client: null,
       relayState: "disconnected",
-      webDevice: null,
-      webDeviceError: null,
+      relayTicket: null,
+      relayTicketError: null,
     });
 
     renderPage();
@@ -223,8 +230,12 @@ describe("设备会话列表页", () => {
     mockUseRelay.mockReturnValue({
       client: fakeClient as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     });
 
     renderPage();
@@ -251,8 +262,8 @@ describe("设备会话列表页", () => {
     mockUseRelay.mockReturnValue({
       client: null,
       relayState: "disconnected",
-      webDevice: null,
-      webDeviceError: null,
+      relayTicket: null,
+      relayTicketError: null,
     });
 
     renderPage();
@@ -262,25 +273,6 @@ describe("设备会话列表页", () => {
     expect(screen.getByText(/This machine is offline/)).toBeTruthy();
     // 不进入连接流程(不取会话)。
     expect(fakeClient.request).not.toHaveBeenCalled();
-  });
-
-  it("本浏览器被解除授权:表达「已解除授权」", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/devices") return { devices: [deviceRow] };
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      throw new Error("unexpected: " + path);
-    });
-    mockUseRelay.mockReturnValue({
-      client: null,
-      relayState: "disconnected",
-      webDevice: null,
-      webDeviceError: new WebDeviceRevokedError(),
-    });
-
-    renderPage();
-
-    expect(await screen.findByRole("alert")).toBeTruthy();
-    expect(screen.getByText(/revoked/i)).toBeTruthy();
   });
 
   // R12：桌面的关注开关在会话列表行尾（帧 45a）。名单是账号级的（R14），因此
@@ -300,8 +292,12 @@ describe("设备会话列表页", () => {
     mockUseRelay.mockReturnValue({
       client: fakeClient as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     });
 
     renderPage();
@@ -328,8 +324,12 @@ describe("设备会话列表页", () => {
         request: vi.fn(async () => ({ sessions })),
       } as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     });
 
     renderPage();
@@ -353,8 +353,12 @@ describe("设备会话列表页", () => {
         })),
       } as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     });
 
     renderPage();
@@ -363,9 +367,7 @@ describe("设备会话列表页", () => {
     expect(screen.queryByText(/Upgrade agentred/i)).toBeNull();
   });
 
-  // R2 / R11：解除授权后该设备行从 /v1/devices 里消失（那个接口只回 ACTIVE 的行）。
-  // 因此「查不到自己」就是被解除授权的信号——按 status 判会永远判不出来。
-  it("探测时自己的设备行已不在清单里:判为已被解除授权", async () => {
+  it("重连探测只检查目标机器，不把 browser client 当成设备查找", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] }; // 没有 fp-web
       if (path === "/v1/workspace/agents") return { agents: [] };
@@ -375,12 +377,17 @@ describe("设备会话列表页", () => {
     mockUseRelay.mockReturnValue({
       client: null,
       relayState: "reconnecting",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     });
 
     renderPage();
 
-    expect(await screen.findByText(/revoked/i)).toBeTruthy();
+    expect(await screen.findByText(/reconnecting/i)).toBeTruthy();
+    expect(screen.queryByText(/revoked/i)).toBeNull();
   });
 });

@@ -8,12 +8,11 @@ import "github.com/cago-frame/cago/server/mux"
 
 // ---------- 总览页：账号级 Agent 清单 ----------
 
-// ListAgentsRequest 取总览页的账号级 Agent 清单。DeviceFingerprint 是**调用方自己**
-// 的设备指纹（可空）：这组端点鉴权的是用户不是设备，所以调用方要按哪台设备的顺序
-// 看这条链只能由参数说明；缺失或解析不到设备时按账号顺序返回，不报错（决策 9 读侧）。
+// ListAgentsRequest 取总览页的账号级 Agent 清单。ClientID 是浏览器本地的
+// 稳定偏好命名空间（可空），不是设备身份或鉴权凭据。
 type ListAgentsRequest struct {
-	mux.Meta          `path:"/v1/workspace/agents" method:"GET"`
-	DeviceFingerprint string `form:"device_fingerprint"`
+	mux.Meta `path:"/v1/workspace/agents" method:"GET"`
+	ClientID string `form:"client_id"`
 }
 
 type ExecTargetItem struct {
@@ -52,9 +51,8 @@ type DispatchTargetRequest struct {
 	mux.Meta      `path:"/v1/workspace/dispatch-target" method:"GET"`
 	AgentSyncID   string `form:"agent_sync_id" binding:"required"`
 	ProjectSyncID string `form:"project_sync_id"`
-	// DeviceFingerprint 是调用方自己的设备指纹（可空）：带上时执行目标链先按这台
-	// 设备自己的排列重排，再走「取第一个可用」的挑选，Chosen 与逐档原因随之改变。
-	DeviceFingerprint string `form:"device_fingerprint"`
+	// ClientID 只用于选取这个浏览器的排序偏好。
+	ClientID string `form:"client_id"`
 }
 
 type DispatchTierItem struct {
@@ -132,9 +130,9 @@ type DeviceDetailResponse struct {
 // 它是收敛的偏好而非权威——指向已删 backend 的项在解析时忽略，因此这里不校验它与
 // 当前执行目标集合是否一致。
 type SetExecTargetOrderRequest struct {
-	mux.Meta          `path:"/v1/workspace/exec-target-order" method:"POST"`
-	DeviceFingerprint string `json:"device_fingerprint" binding:"required,min=8,max=128"`
-	AgentSyncID       string `json:"agent_sync_id" binding:"required,max=255"`
+	mux.Meta    `path:"/v1/workspace/exec-target-order" method:"POST"`
+	ClientID    string `json:"client_id" binding:"required,min=8,max=128"`
+	AgentSyncID string `json:"agent_sync_id" binding:"required,max=255"`
 	// BackendSyncIDs 允许为空数组（等价于「这台设备不再有自己的顺序偏好」）。
 	BackendSyncIDs []string `json:"backend_sync_ids" binding:"max=64,dive,required,max=255"`
 }

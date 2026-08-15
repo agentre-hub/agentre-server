@@ -291,7 +291,6 @@
       "desktopAppNotRunning": "Agentre is not running on this computer. Open Agentre to continue.",
       "desktopAppNotRunningWithTime": "Agentre is not running on this computer. Open Agentre to continue — last seen {{time}}.",
       "pinnedAgentredUnavailable": "Conversation history is still available, but its pinned agentred is unavailable. New messages cannot be sent until agentred is available again.",
-      "revoked": "This browser has been revoked. Please sign in again.",
       "loggedOut": "You have been signed out. Please sign in again."
     },
     "relogin": "Sign in again",

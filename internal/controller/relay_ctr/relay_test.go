@@ -43,6 +43,8 @@ type relayStub struct {
 	clientForwardErrs chan error
 	daemonDetached    chan struct{}
 	clientDetached    chan struct{}
+	clientAccounts    chan int64
+	clientTargets     chan string
 }
 
 func (s *relayStub) PrepareDaemon(context.Context, int64, int64, string) (relay_svc.Route, error) {
@@ -68,11 +70,42 @@ func (s *relayStub) RenewDaemon(context.Context, relay_svc.Route) error {
 	return nil
 }
 
-func (s *relayStub) ConnectClient(context.Context, int64, string) (relay_svc.Route, error) {
+func (s *relayStub) ConnectClient(_ context.Context, accountID int64, target string) (relay_svc.Route, error) {
+	if s.clientAccounts != nil {
+		s.clientAccounts <- accountID
+	}
+	if s.clientTargets != nil {
+		s.clientTargets <- target
+	}
 	if s.clientErr != nil {
 		return relay_svc.Route{}, s.clientErr
 	}
 	return s.daemonRoute, nil
+}
+
+func TestRelayClientAcceptsSessionTicketFromQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+	ticket, _, err := signer.Sign(jwt.Claims{UID: 7, Kind: "relay_client"}, time.Minute)
+	require.NoError(t, err)
+
+	stub := newForwardingRelayStub()
+	stub.clientAccounts = make(chan int64, 1)
+	stub.clientTargets = make(chan string, 1)
+	server := newRelayServer(t, signer, stub)
+	endpoint := wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon&access_token="+ticket)
+	conn, response, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	if response != nil {
+		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	require.Equal(t, int64(7), receiveWithin(t, stub.clientAccounts, time.Second,
+		"relay ticket user id did not reach ConnectClient"))
+	require.Equal(t, "fp-daemon", receiveWithin(t, stub.clientTargets, time.Second,
+		"relay target did not reach ConnectClient"))
 }
 
 func (s *relayStub) IsDaemonOnline(context.Context, int64, string) (bool, error) {

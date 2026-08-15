@@ -15,16 +15,15 @@ import (
 type ExecOrderRepo interface {
 	// Find 取某台设备对某个 Agent 的排列；没有这一行时返回 (nil, nil)——「这台设备
 	// 还没排过序」是常态，不是错误。
-	Find(ctx context.Context, userID, deviceID int64, agentSyncID string) (*exec_order_entity.DeviceExecTargetOrder, error)
+	Find(ctx context.Context, userID int64, clientID, agentSyncID string) (*exec_order_entity.DeviceExecTargetOrder, error)
 	// ListByDevice 一次取某台设备对全部 Agent 的排列，供总览页一屏渲染多个 Agent
 	// 卡片时不必按 Agent 逐条查库。
-	ListByDevice(ctx context.Context, userID, deviceID int64) ([]*exec_order_entity.DeviceExecTargetOrder, error)
+	ListByClient(ctx context.Context, userID int64, clientID string) ([]*exec_order_entity.DeviceExecTargetOrder, error)
 	// Save 整体替换一条排列（决策 13：排列永远被整体读写）。
 	Save(ctx context.Context, o *exec_order_entity.DeviceExecTargetOrder) error
 	// DeleteByDevice 删除某台设备名下全部排列：设备被解除授权 / 删除时，它的顺序
 	// 一并消失。device_id 是全局自增主键、天然只属于一个账号，不需要再传 user_id
 	// 校验归属（与 sync_repo.SyncLocalPath().DeleteByDevice 同一约定）。
-	DeleteByDevice(ctx context.Context, deviceID int64) error
 }
 
 var defaultRepo ExecOrderRepo
@@ -36,11 +35,11 @@ func NewExecOrder() ExecOrderRepo       { return &repo{} }
 type repo struct{}
 
 func (r *repo) Find(
-	ctx context.Context, userID, deviceID int64, agentSyncID string,
+	ctx context.Context, userID int64, clientID, agentSyncID string,
 ) (*exec_order_entity.DeviceExecTargetOrder, error) {
 	ret := &exec_order_entity.DeviceExecTargetOrder{}
-	err := db.Ctx(ctx).Where("user_id=? AND device_id=? AND agent_sync_id=?",
-		userID, deviceID, agentSyncID).First(ret).Error
+	err := db.Ctx(ctx).Where("user_id=? AND client_id=? AND agent_sync_id=?",
+		userID, clientID, agentSyncID).First(ret).Error
 	if err != nil {
 		if db.RecordNotFound(err) {
 			return nil, nil
@@ -50,11 +49,11 @@ func (r *repo) Find(
 	return ret, nil
 }
 
-func (r *repo) ListByDevice(
-	ctx context.Context, userID, deviceID int64,
+func (r *repo) ListByClient(
+	ctx context.Context, userID int64, clientID string,
 ) ([]*exec_order_entity.DeviceExecTargetOrder, error) {
 	var out []*exec_order_entity.DeviceExecTargetOrder
-	if err := db.Ctx(ctx).Where("user_id=? AND device_id=?", userID, deviceID).
+	if err := db.Ctx(ctx).Where("user_id=? AND client_id=?", userID, clientID).
 		Find(&out).Error; err != nil {
 		return nil, err
 	}
@@ -68,13 +67,8 @@ func (r *repo) ListByDevice(
 func (r *repo) Save(ctx context.Context, o *exec_order_entity.DeviceExecTargetOrder) error {
 	return db.Ctx(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{
-			{Name: "user_id"}, {Name: "device_id"}, {Name: "agent_sync_id"},
+			{Name: "user_id"}, {Name: "client_id"}, {Name: "agent_sync_id"},
 		},
 		DoUpdates: clause.AssignmentColumns([]string{"order_json", "updatetime"}),
 	}).Create(o).Error
-}
-
-func (r *repo) DeleteByDevice(ctx context.Context, deviceID int64) error {
-	return db.Ctx(ctx).Where("device_id=?", deviceID).
-		Delete(&exec_order_entity.DeviceExecTargetOrder{}).Error
 }

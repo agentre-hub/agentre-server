@@ -95,8 +95,12 @@ function renderPage() {
   mockUseRelay.mockImplementation(() => ({
     client: fakeClient as never,
     relayState: "connected",
-    webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-    webDeviceError: null,
+    relayTicket: {
+      clientId: "fp-web",
+      clientName: "Browser",
+      accessToken: "t",
+    },
+    relayTicketError: null,
   }));
   return render(
     <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
@@ -192,8 +196,12 @@ describe("SessionDetailView embedded 形态(任务 5 重构边界)", () => {
     mockUseRelay.mockImplementation(() => ({
       client: fakeClient as never,
       relayState: "connected",
-      webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-      webDeviceError: null,
+      relayTicket: {
+        clientId: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+      },
+      relayTicketError: null,
     }));
     render(
       <MemoryRouter>

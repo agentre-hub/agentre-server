@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// 浏览器原生 WebSocket 无法设置自定义请求头,连 /v1/relay/client 的设备 JWT 只能
+// 浏览器原生 WebSocket 无法设置自定义请求头,连 /v1/relay/client 的 relay ticket 只能
 // 走 query(access_token)。queryTokenBridge 把 query 里的 token 搬到 Authorization
-// 头,让既有的 DeviceJWT 中间件原样复用(校验 + 黑名单),不引入第二套鉴权。
+// 头,交给 RelayClientJWT 校验。
 func TestQueryTokenBridge_CopiesQueryTokenIntoAuthorization(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -47,7 +47,7 @@ func TestQueryTokenBridge_PrefersAuthorizationHeaderOverQuery(t *testing.T) {
 	require.Equal(t, "Bearer header-token", seen)
 }
 
-// query 里没有 token 时头保持为空 —— DeviceJWT 中间件会照常拒绝,不在这里放行。
+// query 里没有 token 时头保持为空 —— RelayClientJWT 中间件会照常拒绝,不在这里放行。
 func TestQueryTokenBridge_LeavesAuthorizationEmptyWhenNoToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

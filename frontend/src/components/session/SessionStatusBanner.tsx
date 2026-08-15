@@ -6,7 +6,7 @@ import type { SessionViewStatus } from "@/lib/sessionView";
 /**
  * R11 状态横幅：六类失败与失效各有独立文案，不折叠成同一个错误。
  * 可访问性：状态不只靠颜色 —— 每种状态都有可见文字；实时通知类（connecting /
- * reconnecting）走 role="status"，失败类（lost / machineOffline / revoked /
+ * reconnecting）走 role="status"，失败类（lost / machineOffline /
  * loggedOut）走 role="alert"。connected 是正常态，不渲染横幅。
  */
 export default function SessionStatusBanner({
@@ -51,9 +51,6 @@ export default function SessionStatusBanner({
       break;
     case "pinnedAgentredUnavailable":
       copy = t("session.status.pinnedAgentredUnavailable");
-      break;
-    case "revoked":
-      copy = t("session.status.revoked");
       break;
     case "loggedOut":
       copy = t("session.status.loggedOut");

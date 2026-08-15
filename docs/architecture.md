@@ -140,7 +140,8 @@ middleware groups are the authorization model:
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
 | Browser session | `SessionAuth()` + `CSRF()` | logout, device pending/approve/deny |
 | Either credential | `SessionOrDeviceAuth(signer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke` |
-| Device JWT | `DeviceJWT(signer)` | `/v1/devices/revocations`, `/v1/relay/daemon`, `/v1/relay/client`, `/v1/sync/*` |
+| Device JWT | `DeviceJWT(signer)` | `/v1/devices/revocations`, `/v1/relay/daemon`, `/v1/sync/*` |
+| Relay client | `RelayClientJWT(signer)` | `/v1/relay/client`; accepts native Device JWTs and browser session-derived short-lived relay tickets |
 
 Cookie-authenticated writes always clear CSRF, whichever group they sit in: a
 Bearer caller carries no cookie and is exempt, a session caller is not.

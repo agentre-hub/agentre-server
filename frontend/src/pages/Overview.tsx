@@ -26,7 +26,7 @@ import type {
 import { useRelayMachine } from "@/hooks/use-relay";
 import { api, ApiError } from "@/lib/api";
 import {
-  callerDeviceFingerprint,
+  callerClientId,
   isMovableTier,
   reorderTargets,
   saveExecTargetOrder,
@@ -505,7 +505,7 @@ export default function Overview() {
   /** 取账号级 Agent 清单。带上本机指纹 = 链按**这台浏览器自己的**排列返回。 */
   const fetchAgents = useCallback(async (deviceFingerprint: string | null) => {
     const qs = deviceFingerprint
-      ? `?device_fingerprint=${encodeURIComponent(deviceFingerprint)}`
+      ? `?client_id=${encodeURIComponent(deviceFingerprint)}`
       : "";
     const got = await api<{ agents: AgentItem[] }>(`/v1/workspace/agents${qs}`);
     return got.agents;
@@ -518,7 +518,7 @@ export default function Overview() {
     // 拿到 null，按账号顺序读、不报错，也不会因为打开这一页就多出一台设备。
     void (async () => {
       try {
-        const list = await fetchAgents(callerDeviceFingerprint());
+        const list = await fetchAgents(callerClientId());
         if (alive) {
           setAgents(list);
           setLoadError(null);

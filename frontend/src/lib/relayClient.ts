@@ -57,6 +57,8 @@ export interface RelayClientOptions {
   url: string;
   /** 设备 JWT → Authorization: Bearer <jwt>。 */
   jwt: string;
+  /** 断线重连前换取新的短效凭据，同时更新 query token 与握手 JWT。 */
+  refreshCredentials?: () => Promise<{ url: string; jwt: string }>;
   /**
    * 本浏览器自己的设备指纹,随 auth.account 出示(与 Go 侧 daemon/client 的中继
    * 路径同一握手:连接建立后先 auth.account 再用 runtime.* 与 session.* 方法)。
@@ -542,6 +544,11 @@ export class RelayClient {
 
   private async reconnect(): Promise<void> {
     try {
+      if (this.opts.refreshCredentials) {
+        const credentials = await this.opts.refreshCredentials();
+        this.opts.url = credentials.url;
+        this.opts.jwt = credentials.jwt;
+      }
       await this.connect();
       // 重连后:对关注的会话逐个 attach(新连接需重发)→ 按游标补齐。
       // 单条会话补齐失败不阻断其它会话。

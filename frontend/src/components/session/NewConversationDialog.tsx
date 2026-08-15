@@ -27,7 +27,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { api, ApiError } from "@/lib/api";
-import { callerDeviceFingerprint } from "@/lib/execOrder";
+import { callerClientId } from "@/lib/execOrder";
 import {
   dispatchNewConversation,
   fetchDispatchPlan,
@@ -36,7 +36,7 @@ import {
   type DispatchPlan,
   type DispatchTier,
 } from "@/lib/dispatch";
-import { ensureWebDevice } from "@/lib/webDevice";
+import { ensureRelayTicket } from "@/lib/relayTicket";
 
 interface AgentItem {
   sync_id: string;
@@ -145,8 +145,8 @@ export default function NewConversationDialog({
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    const fp = callerDeviceFingerprint();
-    const qs = fp ? `?device_fingerprint=${encodeURIComponent(fp)}` : "";
+    const fp = callerClientId();
+    const qs = fp ? `?client_id=${encodeURIComponent(fp)}` : "";
     void (async () => {
       try {
         const d = await api<{ agents: AgentItem[] }>(
@@ -217,11 +217,11 @@ export default function NewConversationDialog({
     setStarting(true);
     setDispatchError(null);
     try {
-      const dev = await ensureWebDevice();
+      const ticket = await ensureRelayTicket();
       const out = await dispatchNewConversation({
         plan: finalPlan,
         message,
-        sourceDevice: dev,
+        sourceClient: ticket,
       });
       onStarted?.(out);
     } catch (e: unknown) {

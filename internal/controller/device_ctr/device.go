@@ -11,11 +11,13 @@ import (
 
 	api "agentre-server/internal/api/device"
 	"agentre-server/internal/pkg/code"
+	"agentre-server/internal/pkg/jwt"
 	"agentre-server/internal/service/device_svc"
 )
 
 type Device struct {
 	publicKeys *api.PublicKeyResponse
+	signer     *jwt.Signer
 }
 
 func NewDevice() *Device { return &Device{} }
@@ -30,6 +32,8 @@ func NewDeviceWithPublicKeys(currentKID string, keys map[string]string, maxToken
 		MaxTokenLifetimeSeconds: maxTokenLifetimeSeconds,
 	}}
 }
+
+func (d *Device) SetSigner(signer *jwt.Signer) { d.signer = signer }
 
 // PublicKey 返回供 agentred 离线验签的 RS256 公钥。
 func (d *Device) PublicKey(c *gin.Context, _ *api.PublicKeyRequest) {
@@ -109,39 +113,20 @@ func (d *Device) Refresh(c *gin.Context, req *api.TokenRefreshRequest) (*api.Tok
 	}, nil
 }
 
-// RegisterWeb 让已登录的浏览器以持久化指纹换取一台 kind=web 设备与设备 JWT（R1）。
-// 走 SessionAuth+CSRF 组：未登录请求在中间件就被拒绝，不会到这里、也不产生设备行。
-func (d *Device) RegisterWeb(c *gin.Context, req *api.DeviceRegisterRequest) (*api.DeviceRegisterResponse, error) {
+const relayTicketTTL = 2 * time.Minute
+
+// RelayTicket 用浏览器登录 session 换取只可连接 relay client 的短效凭据。
+func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.RelayTicketResponse, error) {
 	uid, _ := c.Get("user_id")
 	userID, _ := uid.(int64)
-	if userID == 0 {
+	if userID == 0 || d.signer == nil {
 		return nil, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
 	}
-	ctx := device_svc.WithClientInfo(c.Request.Context(), c.ClientIP(), c.GetHeader("User-Agent"))
-	out, err := device_svc.Default().RegisterWebDevice(ctx, device_svc.RegisterWebDeviceInput{
-		UserID: userID, Fingerprint: req.Fingerprint,
-		Platform: req.Platform, Version: req.Version, Name: req.Name,
-	})
+	token, _, err := d.signer.Sign(jwt.Claims{UID: userID, Kind: "relay_client"}, relayTicketTTL)
 	if err != nil {
-		// R2：这个浏览器已被解除授权 —— 拒绝而不是复活它，浏览器据此按 R11 表达为
-		// 「这台设备已被解除授权，须重新登录」，而不是当成一次服务端故障重试。
-		if errors.Is(err, device_svc.ErrWebDeviceRevoked) {
-			return nil, i18n.NewErrorWithStatus(
-				c.Request.Context(), http.StatusForbidden, code.DeviceRevoked)
-		}
-		// R1：这个指纹已经属于同账号里另一台非浏览器设备 —— 拒绝而不是把那一行
-		// 改写成 kind=web（那等于顺手把那台设备踢出中继）。
-		if errors.Is(err, device_svc.ErrFingerprintNotWeb) {
-			return nil, i18n.NewErrorWithStatus(
-				c.Request.Context(), http.StatusConflict, code.DeviceKindMismatch)
-		}
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}
-	return &api.DeviceRegisterResponse{
-		AccessToken: out.AccessToken, TokenType: "Bearer",
-		ExpiresIn: out.ExpiresIn, RefreshToken: out.RefreshToken,
-		RefreshExpiresIn: out.RefreshExpiresIn, DeviceID: out.DeviceID, JTI: out.JTI,
-	}, nil
+	return &api.RelayTicketResponse{AccessToken: token, ExpiresIn: int(relayTicketTTL / time.Second)}, nil
 }
 
 // Revoke 撤销一台设备的凭据。

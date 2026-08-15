@@ -19,7 +19,7 @@ import {
   pickFirstAvailable,
   type DispatchPlan,
 } from "@/lib/dispatch";
-import { ensureWebDevice, getFingerprint } from "@/lib/webDevice";
+import { callerClientId } from "@/lib/execOrder";
 import { MethodRun } from "@/lib/wire";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -30,20 +30,15 @@ vi.mock("@/lib/relayClient", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/relayClient")>();
   return { ...actual, RelayClient: vi.fn() };
 });
-vi.mock("@/lib/webDevice", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/webDevice")>();
-  return {
-    ...actual,
-    deviceDisplayName: () => "Chrome · macOS",
-    ensureWebDevice: vi.fn(),
-    getFingerprint: vi.fn(),
-  };
+vi.mock("@/lib/relayTicket", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/relayTicket")>();
+  return { ...actual, browserDisplayName: () => "Chrome · macOS" };
 });
+vi.mock("@/lib/execOrder", () => ({ callerClientId: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
 const MockRelayClient = vi.mocked(RelayClient);
-const mockEnsureWebDevice = vi.mocked(ensureWebDevice);
-const mockGetFingerprint = vi.mocked(getFingerprint);
+const mockCallerDeviceFingerprint = vi.mocked(callerClientId);
 
 const availablePlan: DispatchPlan = {
   agent_sync_id: "agent-1",
@@ -138,10 +133,10 @@ function fakeClient() {
   };
 }
 
-const sourceDevice = {
-  fingerprint: "fp-web",
+const sourceClient = {
+  clientId: "fp-web",
+  clientName: "Chrome · macOS",
   accessToken: "web-jwt",
-  deviceId: 9,
 };
 
 beforeEach(() => {
@@ -198,7 +193,7 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
     const out = await dispatchNewConversation({
       plan: availablePlan,
       message: "讲讲这个项目",
-      sourceDevice,
+      sourceClient,
     });
 
     // 连的是选中那一档（设备指纹在 URL 里，JWT 走 Authorization 头）。
@@ -249,7 +244,7 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
       dispatchNewConversation({
         plan: allUnavailablePlan,
         message: "hi",
-        sourceDevice,
+        sourceClient,
       }),
     ).rejects.toThrow("no available exec target");
     expect(MockRelayClient).not.toHaveBeenCalled();
@@ -266,7 +261,7 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
     const out = await dispatchNewConversation({
       plan: desktopPlan,
       message: "帮我看看这个项目",
-      sourceDevice,
+      sourceClient,
     });
 
     const constructorOpts = MockRelayClient.mock.calls[0][0] as {
@@ -321,7 +316,7 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
     const out = await dispatchNewConversation({
       plan: availablePlan,
       message: "讲讲这个项目",
-      sourceDevice,
+      sourceClient,
     });
 
     expect(client.request).toHaveBeenCalled();
@@ -342,7 +337,7 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
       dispatchNewConversation({
         plan: availablePlan,
         message: "hi",
-        sourceDevice,
+        sourceClient,
       }),
     ).rejects.toThrow("connect refused");
     expect(client.request).not.toHaveBeenCalled();
@@ -356,19 +351,19 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
 // 读不到就失败，也不该为了凑一个指纹先把这台浏览器注册成一台设备。
 describe("fetchDispatchPlan（按调用方设备的顺序解析）", () => {
   it("带上这台浏览器的设备指纹", async () => {
-    mockGetFingerprint.mockReturnValue(sourceDevice.fingerprint);
+    mockCallerDeviceFingerprint.mockReturnValue(sourceClient.clientId);
     mockedApi.mockResolvedValue(availablePlan);
 
     const plan = await fetchDispatchPlan("agent-1", "proj-1");
 
     expect(mockedApi).toHaveBeenCalledWith(
-      "/v1/workspace/dispatch-target?agent_sync_id=agent-1&project_sync_id=proj-1&device_fingerprint=fp-web",
+      "/v1/workspace/dispatch-target?agent_sync_id=agent-1&project_sync_id=proj-1&client_id=fp-web",
     );
     expect(plan).toBe(availablePlan);
   });
 
   it("这台浏览器还没有设备身份时照常取计划，不带指纹、也不注册一台", async () => {
-    mockGetFingerprint.mockReturnValue(null);
+    mockCallerDeviceFingerprint.mockReturnValue(null);
     mockedApi.mockResolvedValue(availablePlan);
 
     await fetchDispatchPlan("agent-1");
@@ -376,6 +371,5 @@ describe("fetchDispatchPlan（按调用方设备的顺序解析）", () => {
     expect(mockedApi).toHaveBeenCalledWith(
       "/v1/workspace/dispatch-target?agent_sync_id=agent-1",
     );
-    expect(mockEnsureWebDevice).not.toHaveBeenCalled();
   });
 });

@@ -14,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
 import { dispatchNewConversation, fetchDispatchPlan } from "@/lib/dispatch";
-import { ensureWebDevice, getFingerprint } from "@/lib/webDevice";
+import { ensureRelayTicket } from "@/lib/relayTicket";
 import { useRelayMachine } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@/lib/theme";
@@ -34,17 +34,16 @@ vi.mock("@/lib/dispatch", async (importOriginal) => {
     dispatchNewConversation: vi.fn(),
   };
 });
-vi.mock("@/lib/webDevice", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/webDevice")>();
-  return { ...actual, ensureWebDevice: vi.fn(), getFingerprint: vi.fn() };
+vi.mock("@/lib/relayTicket", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/relayTicket")>();
+  return { ...actual, ensureRelayTicket: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
 const mockFetchPlan = vi.mocked(fetchDispatchPlan);
 const mockDispatch = vi.mocked(dispatchNewConversation);
-const mockEnsureWebDevice = vi.mocked(ensureWebDevice);
-const mockGetFingerprint = vi.mocked(getFingerprint);
+const mockEnsureRelayTicket = vi.mocked(ensureRelayTicket);
 const mockUseRelay = vi.mocked(useRelayMachine);
 
 const agents = [
@@ -154,27 +153,26 @@ const allUnavailablePlan: DispatchPlan = {
   projects: [],
 };
 
-const webDevice = {
-  fingerprint: "fp-web",
+const relayTicket = {
+  clientId: "fp-web",
+  clientName: "Chrome · macOS",
   accessToken: "web-jwt",
-  deviceId: 9,
 };
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");
+  localStorage.clear();
   mockedApi.mockReset();
   mockFetchPlan.mockReset();
   mockDispatch.mockReset();
-  mockEnsureWebDevice.mockReset();
+  mockEnsureRelayTicket.mockReset();
   // 默认这台浏览器还没有设备身份：读路径回落账号顺序，且不得为此注册一台。
-  mockGetFingerprint.mockReset();
-  mockGetFingerprint.mockReturnValue(null);
   mockUseRelay.mockReset();
   mockUseRelay.mockReturnValue({
     client: null,
     relayState: "disconnected",
-    webDevice: null,
-    webDeviceError: null,
+    relayTicket: null,
+    relayTicketError: null,
   });
 });
 
@@ -227,7 +225,7 @@ describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
     mockFetchPlan.mockImplementation(async (_agent, project) =>
       project ? finalPlan : pickPlan,
     );
-    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
     mockDispatch.mockResolvedValue({
       sessionId: 9001,
       deviceId: 21,
@@ -263,7 +261,7 @@ describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
     expect(mockDispatch.mock.calls[0][0]).toMatchObject({
       plan: finalPlan,
       message: "讲讲这个项目",
-      sourceDevice: webDevice,
+      sourceClient: relayTicket,
     });
 
     // R16：派发成功即自关注（不经用户按「关注」）发生在 dispatchNewConversation
@@ -286,7 +284,7 @@ describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
     mockFetchPlan.mockImplementation(async (_agent, project) =>
       project ? desktopFinalPlan : pickPlan,
     );
-    mockEnsureWebDevice.mockResolvedValue(webDevice);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
     mockDispatch.mockResolvedValue({
       sessionId: 9002,
       deviceId: 30,
@@ -361,12 +359,12 @@ describe("对话页空态主动作", () => {
 });
 
 describe("新对话弹层:「当前」标记必须和真派发目标是同一档", () => {
-  // 弹层原先取 /v1/workspace/agents 时不带 device_fingerprint，却照样渲染每个
-  // Agent 的 current 档：服务端在没有指纹时按账号 sort_order 解析，于是弹层说的
+  // 弹层取 /v1/workspace/agents 时带上浏览器 client_id，以便渲染这个浏览器的排序偏好。
+  // Agent 的 current 档：服务端在没有 client ID 时按账号 sort_order 解析，于是弹层说的
   // 「当前」是**账号顺序的赢家**，而总览页（带指纹）说的是这台浏览器自己的赢家。
   // 同一账号同一时刻两处给出不同答案，其中一处必然与真实派发目标不符。
-  it("取 Agent 清单时带上这台浏览器的设备指纹", async () => {
-    mockGetFingerprint.mockReturnValue("fp-this-browser");
+  it("取 Agent 清单时带上这个浏览器的 client ID", async () => {
+    localStorage.setItem("agentre.browserClientId", "fp-this-browser");
     mockedApi.mockImplementation(async (path) => {
       if (path.startsWith("/v1/workspace/agents")) return { agents };
       throw new Error("unexpected: " + path);
@@ -376,8 +374,7 @@ describe("新对话弹层:「当前」标记必须和真派发目标是同一档
     await screen.findByText("后端 Agent");
     expect(
       mockedApi.mock.calls.some(
-        ([path]) =>
-          path === "/v1/workspace/agents?device_fingerprint=fp-this-browser",
+        ([path]) => path === "/v1/workspace/agents?client_id=fp-this-browser",
       ),
     ).toBe(true);
   });
@@ -385,7 +382,7 @@ describe("新对话弹层:「当前」标记必须和真派发目标是同一档
   // 拿不到指纹（没排过序 / 已被解除授权）时不附加空参数，读路径照常回落账号顺序，
   // 更不为了凑一个指纹把这台浏览器注册成设备 —— 打开一个弹层不该多出一台机器。
   it("拿不到指纹时不附加查询参数，也不注册设备", async () => {
-    mockEnsureWebDevice.mockRejectedValue(new Error("no device"));
+    mockEnsureRelayTicket.mockRejectedValue(new Error("no ticket"));
     mockedApi.mockImplementation(async (path) => {
       if (path.startsWith("/v1/workspace/agents")) return { agents };
       throw new Error("unexpected: " + path);
@@ -396,6 +393,6 @@ describe("新对话弹层:「当前」标记必须和真派发目标是同一档
     expect(
       mockedApi.mock.calls.some(([path]) => path === "/v1/workspace/agents"),
     ).toBe(true);
-    expect(mockEnsureWebDevice).not.toHaveBeenCalled();
+    expect(mockEnsureRelayTicket).not.toHaveBeenCalled();
   });
 });

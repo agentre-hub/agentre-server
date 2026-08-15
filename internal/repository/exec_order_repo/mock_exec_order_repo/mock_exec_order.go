@@ -41,48 +41,34 @@ func (m *MockExecOrderRepo) EXPECT() *MockExecOrderRepoMockRecorder {
 	return m.recorder
 }
 
-// DeleteByDevice mocks base method.
-func (m *MockExecOrderRepo) DeleteByDevice(ctx context.Context, deviceID int64) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteByDevice", ctx, deviceID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// DeleteByDevice indicates an expected call of DeleteByDevice.
-func (mr *MockExecOrderRepoMockRecorder) DeleteByDevice(ctx, deviceID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteByDevice", reflect.TypeOf((*MockExecOrderRepo)(nil).DeleteByDevice), ctx, deviceID)
-}
-
 // Find mocks base method.
-func (m *MockExecOrderRepo) Find(ctx context.Context, userID, deviceID int64, agentSyncID string) (*exec_order_entity.DeviceExecTargetOrder, error) {
+func (m *MockExecOrderRepo) Find(ctx context.Context, userID int64, clientID, agentSyncID string) (*exec_order_entity.DeviceExecTargetOrder, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Find", ctx, userID, deviceID, agentSyncID)
+	ret := m.ctrl.Call(m, "Find", ctx, userID, clientID, agentSyncID)
 	ret0, _ := ret[0].(*exec_order_entity.DeviceExecTargetOrder)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Find indicates an expected call of Find.
-func (mr *MockExecOrderRepoMockRecorder) Find(ctx, userID, deviceID, agentSyncID any) *gomock.Call {
+func (mr *MockExecOrderRepoMockRecorder) Find(ctx, userID, clientID, agentSyncID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Find", reflect.TypeOf((*MockExecOrderRepo)(nil).Find), ctx, userID, deviceID, agentSyncID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Find", reflect.TypeOf((*MockExecOrderRepo)(nil).Find), ctx, userID, clientID, agentSyncID)
 }
 
-// ListByDevice mocks base method.
-func (m *MockExecOrderRepo) ListByDevice(ctx context.Context, userID, deviceID int64) ([]*exec_order_entity.DeviceExecTargetOrder, error) {
+// ListByClient mocks base method.
+func (m *MockExecOrderRepo) ListByClient(ctx context.Context, userID int64, clientID string) ([]*exec_order_entity.DeviceExecTargetOrder, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListByDevice", ctx, userID, deviceID)
+	ret := m.ctrl.Call(m, "ListByClient", ctx, userID, clientID)
 	ret0, _ := ret[0].([]*exec_order_entity.DeviceExecTargetOrder)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// ListByDevice indicates an expected call of ListByDevice.
-func (mr *MockExecOrderRepoMockRecorder) ListByDevice(ctx, userID, deviceID any) *gomock.Call {
+// ListByClient indicates an expected call of ListByClient.
+func (mr *MockExecOrderRepoMockRecorder) ListByClient(ctx, userID, clientID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListByDevice", reflect.TypeOf((*MockExecOrderRepo)(nil).ListByDevice), ctx, userID, deviceID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListByClient", reflect.TypeOf((*MockExecOrderRepo)(nil).ListByClient), ctx, userID, clientID)
 }
 
 // Save mocks base method.

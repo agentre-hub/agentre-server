@@ -14,12 +14,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
 import {
-  callerDeviceFingerprint,
+  callerClientId,
   isMovableTier,
   reorderTargets,
   saveExecTargetOrder,
 } from "@/lib/execOrder";
-import { ensureWebDevice, markWebDeviceRevoked } from "@/lib/webDevice";
+import { browserClientId } from "@/lib/relayTicket";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -27,24 +27,6 @@ vi.mock("@/lib/api", async (importOriginal) => {
 });
 
 const mockedApi = vi.mocked(api);
-
-function makeJwt(expSeconds: number): string {
-  const header = window.btoa(JSON.stringify({ alg: "HS256" }));
-  const payload = window
-    .btoa(JSON.stringify({ sub: "1", exp: expSeconds }))
-    .replace(/=/g, "");
-  return `${header}.${payload}.sig`;
-}
-
-/** 走真实的 webDevice 注册一次，拿到这台浏览器的持久指纹。 */
-async function registerThisBrowser(): Promise<string> {
-  mockedApi.mockResolvedValueOnce({
-    access_token: makeJwt(Math.floor(Date.now() / 1000) + 900),
-    device_id: 7,
-  });
-  const { fingerprint } = await ensureWebDevice();
-  return fingerprint;
-}
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -108,64 +90,46 @@ describe("reorderTargets", () => {
   });
 });
 
-describe("callerDeviceFingerprint（读路径只认已有身份，不注册）", () => {
+describe("callerClientId（读路径只认已有身份，不注册）", () => {
   it("这台浏览器还没注册过时返回 null，且一个请求都不发", () => {
-    expect(callerDeviceFingerprint()).toBeNull();
+    expect(callerClientId()).toBeNull();
     // 读一份偏好不得建出一台设备行：总览页是纯读页，打开它不该让用户的设备
     // 列表凭空多一台机器（也正是 e2e「真实空态」守着的那条断言）。
     expect(mockedApi).not.toHaveBeenCalled();
   });
 
-  it("注册过就返回持久化的指纹：关标签页丢的是 token，不是设备身份", async () => {
-    const fingerprint = await registerThisBrowser();
-    // 标签页会话结束 = sessionStorage 里的设备 JWT 没了，但这台设备还在账号里，
-    // 它排的顺序也还在——重开一个标签页必须还按自己的顺序读。
+  it("创建过 client ID 后纯本地读取，关标签页不丢失", () => {
+    const fingerprint = browserClientId();
     window.sessionStorage.clear();
     mockedApi.mockClear();
 
-    expect(callerDeviceFingerprint()).toBe(fingerprint);
-    expect(mockedApi).not.toHaveBeenCalled();
-  });
-
-  it("已被解除授权时返回 null：不拿一个服务端必拒的身份去读", async () => {
-    await registerThisBrowser();
-    markWebDeviceRevoked();
-    mockedApi.mockClear();
-
-    expect(callerDeviceFingerprint()).toBeNull();
+    expect(callerClientId()).toBe(fingerprint);
     expect(mockedApi).not.toHaveBeenCalled();
   });
 });
 
-describe("saveExecTargetOrder（写路径才注册）", () => {
-  it("第一次排序时才注册这台浏览器，并按注册到的指纹提交", async () => {
-    mockedApi
-      .mockResolvedValueOnce({
-        access_token: makeJwt(Math.floor(Date.now() / 1000) + 900),
-        device_id: 7,
-      })
-      .mockResolvedValueOnce({});
+describe("saveExecTargetOrder（写路径才创建 client ID）", () => {
+  it("第一次排序创建 client ID，但不注册设备", async () => {
+    mockedApi.mockResolvedValueOnce({});
 
     const fingerprint = await saveExecTargetOrder({
       agentSyncId: "agent-1",
       backendSyncIds: ["b-nuc", "b-mac"],
     });
 
-    // 注册发生在这里而不是打开页面时：顺序的持有者是设备，用户真排了一次序，
-    // 这台浏览器才需要成为一台有身份的设备。
-    expect(mockedApi.mock.calls[0][0]).toBe("/v1/oauth/device/register");
-    expect(mockedApi.mock.calls[1][0]).toBe("/v1/workspace/exec-target-order");
-    expect(JSON.parse(String(mockedApi.mock.calls[1][1]?.body))).toEqual({
-      device_fingerprint: fingerprint,
+    expect(mockedApi).toHaveBeenCalledTimes(1);
+    expect(mockedApi.mock.calls[0][0]).toBe("/v1/workspace/exec-target-order");
+    expect(JSON.parse(String(mockedApi.mock.calls[0][1]?.body))).toEqual({
+      client_id: fingerprint,
       agent_sync_id: "agent-1",
       backend_sync_ids: ["b-nuc", "b-mac"],
     });
     // 返回指纹，调用方据此按自己的顺序重读这条链，不必再猜一次身份。
-    expect(callerDeviceFingerprint()).toBe(fingerprint);
+    expect(callerClientId()).toBe(fingerprint);
   });
 
-  it("已注册过就直接复用，不再注册一台", async () => {
-    const fingerprint = await registerThisBrowser();
+  it("已有 client ID 时直接复用", async () => {
+    const fingerprint = browserClientId();
     mockedApi.mockClear();
     mockedApi.mockResolvedValueOnce({});
 

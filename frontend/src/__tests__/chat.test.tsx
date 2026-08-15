@@ -117,8 +117,12 @@ function connectedRelay(): UseRelayMachineResult {
   return {
     client: fakeClient as never,
     relayState: "connected",
-    webDevice: { fingerprint: "fp-web", accessToken: "t", deviceId: 9 },
-    webDeviceError: null,
+    relayTicket: {
+      clientId: "fp-web",
+      clientName: "Browser",
+      accessToken: "t",
+    },
+    relayTicketError: null,
   };
 }
 

@@ -291,7 +291,6 @@
       "desktopAppNotRunning": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可继续。",
       "desktopAppNotRunningWithTime": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可继续——最后在线 {{time}}。",
       "pinnedAgentredUnavailable": "对话历史仍可阅读，但该会话钉住的 agentred 当前不可用。agentred 恢复前无法发送新消息。",
-      "revoked": "该浏览器已被解除授权，请重新登录。",
       "loggedOut": "账号已登出，请重新登录。"
     },
     "relogin": "重新登录",

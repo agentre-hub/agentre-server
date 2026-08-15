@@ -21,7 +21,7 @@ func callerUserID(c *gin.Context) int64 {
 
 func (w *Workspace) ListAgents(c *gin.Context, req *api.ListAgentsRequest) (*api.ListAgentsResponse, error) {
 	agents, err := workspace_svc.Default().ListAccountAgents(
-		c.Request.Context(), callerUserID(c), req.DeviceFingerprint)
+		c.Request.Context(), callerUserID(c), req.ClientID)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (w *Workspace) ListAgents(c *gin.Context, req *api.ListAgentsRequest) (*api
 
 func (w *Workspace) DispatchTarget(c *gin.Context, req *api.DispatchTargetRequest) (*api.DispatchTargetResponse, error) {
 	plan, err := workspace_svc.Default().WebDispatchPlan(
-		c.Request.Context(), callerUserID(c), req.AgentSyncID, req.ProjectSyncID, req.DeviceFingerprint)
+		c.Request.Context(), callerUserID(c), req.AgentSyncID, req.ProjectSyncID, req.ClientID)
 	if err != nil {
 		return nil, err
 	}
@@ -107,10 +107,10 @@ func (w *Workspace) SetExecTargetOrder(
 ) (*api.SetExecTargetOrderResponse, error) {
 	if err := workspace_svc.Default().SetExecTargetOrder(c.Request.Context(),
 		workspace_svc.SetExecTargetOrderInput{
-			UserID:            callerUserID(c),
-			DeviceFingerprint: req.DeviceFingerprint,
-			AgentSyncID:       req.AgentSyncID,
-			BackendSyncIDs:    req.BackendSyncIDs,
+			UserID:         callerUserID(c),
+			ClientID:       req.ClientID,
+			AgentSyncID:    req.AgentSyncID,
+			BackendSyncIDs: req.BackendSyncIDs,
 		}); err != nil {
 		return nil, err
 	}

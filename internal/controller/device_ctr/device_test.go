@@ -60,9 +60,6 @@ func (s *stubDeviceSvc) ExchangeToken(context.Context, string) (*device_svc.Toke
 func (s *stubDeviceSvc) Refresh(context.Context, string) (*device_svc.TokenOutput, error) {
 	return nil, errors.New("unimplemented")
 }
-func (s *stubDeviceSvc) RegisterWebDevice(context.Context, device_svc.RegisterWebDeviceInput) (*device_svc.TokenOutput, error) {
-	return nil, errors.New("unimplemented")
-}
 func (s *stubDeviceSvc) Revoke(_ context.Context, deviceID int64) error {
 	s.revoked = append(s.revoked, deviceID)
 	return nil

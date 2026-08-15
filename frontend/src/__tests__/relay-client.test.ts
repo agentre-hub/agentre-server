@@ -211,6 +211,37 @@ describe("中继客户端:多路复用不串道", () => {
 });
 
 describe("中继客户端:断线后按 seq 游标补齐,重复投递只应用一次", () => {
+  it("重连前换取新的短效 relay ticket", async () => {
+    const refreshCredentials = vi.fn().mockResolvedValue({
+      url: `${URL}&access_token=fresh-ticket`,
+      jwt: "fresh-ticket",
+    });
+    const client = makeClient({
+      reconnect: true,
+      reconnectDelayMs: 0,
+      refreshCredentials,
+    });
+    const first = await connectClient(client);
+
+    first.serverClose();
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    expect(refreshCredentials).toHaveBeenCalledTimes(1);
+    const second = FakeWebSocket.instances[1];
+    expect(second.url).toContain("access_token=fresh-ticket");
+    expect(second.headers.Authorization).toBe("Bearer fresh-ticket");
+    second.open();
+    await waitSent(second, 1);
+    const auth = lastSent(second);
+    expect(auth.params).toMatchObject({ credential: "fresh-ticket" });
+    second.receive(
+      encode(
+        encodeFrame({ jsonrpc: "2.0", id: auth.id, result: { ok: true } }),
+      ),
+    );
+    await vi.waitFor(() => expect(client.state).toBe("connected"));
+    client.close();
+  });
+
   it("重连后 attach → 按已有游标 pull,补齐与实时同一条去重纪律", async () => {
     const events: Array<{ seq?: number; text: string }> = [];
     const client = makeClient({

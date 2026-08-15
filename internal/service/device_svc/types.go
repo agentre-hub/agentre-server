@@ -31,16 +31,6 @@ type AuthorizeOutput struct {
 	ExpiresIn               int
 }
 
-// RegisterWebDeviceInput 是已登录浏览器换取 kind=web 设备身份的入参（R1）。
-// UserID 来自 SessionAuth 中间件，不由请求体提供。
-type RegisterWebDeviceInput struct {
-	UserID      int64
-	Fingerprint string
-	Platform    string
-	Version     string
-	Name        string
-}
-
 type TokenOutput struct {
 	AccessToken      string
 	RefreshToken     string
