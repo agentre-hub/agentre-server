@@ -68,12 +68,15 @@ func TestAuthorize_ReturnsUserCode(t *testing.T) {
 		mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, code *device_flow_entity.DeviceFlowCode) error {
 				assert.Equal(t, "agentred", code.DeviceKind)
+				// 自报名字必须落进 flow 行：换取 token 时 devices.name 只认它。
+				assert.Equal(t, "coding", code.ClientName)
 				return nil
 			},
 		)
 
 		out, err := svc.Authorize(ctx, AuthorizeInput{
 			DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa", Platform: "linux/amd64", Version: "0.5.0",
+			Name: "coding",
 		})
 		assert.NoError(t, err)
 		assert.NotEmpty(t, out.DeviceCode)
@@ -157,6 +160,45 @@ func TestExchangeToken(t *testing.T) {
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(7), out.DeviceID)
 			assert.Equal(t, out.JTI, capturedJTI)
+		})
+		// 设备流的显示名：客户端自报优先，缺省回退到指纹缩写。回退**必须**剥掉
+		// sha256: 前缀 —— 直接截前 8 个字符得到的是 "sha256:" 加一个十六进制字符，
+		// 整个账号下的机器最多只有 16 种名字。
+		exchangeNamed := func(t *testing.T, reported string) string {
+			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{
+					DeviceCode: "dc-x", IntervalSeconds: 5,
+					ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+					AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+					DeviceKind:        "agentred",
+					ClientFingerprint: "sha256:475776c61078781c9fda7b3345d232e32d5f176a7220ce2d129c5e39ac2db3de",
+					ClientName:        reported,
+				}, nil,
+			)
+			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			var name string
+			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, d *device_entity.Device) error {
+					name = d.Name
+					d.ID = 7
+					return nil
+				},
+			)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+			mock.ExpectBegin()
+			mock.ExpectCommit()
+
+			_, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.NoError(t, err)
+			return name
+		}
+		convey.Convey("设备名取客户端自报的主机名", func() {
+			assert.Equal(t, "coding", exchangeNamed(t, "coding"))
+		})
+		convey.Convey("客户端没自报名字时回退到指纹缩写", func() {
+			assert.Equal(t, "475776c6", exchangeNamed(t, ""))
 		})
 		convey.Convey("并发竞败（MarkConsumed 命中 0 行）→ invalid_grant，且在写 device 之前就出局", func() {
 			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)

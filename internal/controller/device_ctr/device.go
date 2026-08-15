@@ -45,7 +45,7 @@ func (d *Device) PublicKey(c *gin.Context, _ *api.PublicKeyRequest) {
 func (d *Device) Authorize(ctx context.Context, req *api.DeviceAuthorizeRequest) (*api.DeviceAuthorizeResponse, error) {
 	out, err := device_svc.Default().Authorize(ctx, device_svc.AuthorizeInput{
 		DeviceKind: req.DeviceKind, Fingerprint: req.Fingerprint,
-		Platform: req.Platform, Version: req.Version,
+		Platform: req.Platform, Version: req.Version, Name: req.Name,
 	})
 	if err != nil {
 		return nil, i18n.NewInternalError(ctx, code.ServerError)

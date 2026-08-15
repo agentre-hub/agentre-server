@@ -20,6 +20,8 @@ type AuthorizeInput struct {
 	Fingerprint string
 	Platform    string
 	Version     string
+	// Name 是客户端自报的显示名（通常是主机名），可空 —— 缺省时设备名回退到指纹缩写。
+	Name string
 }
 
 type AuthorizeOutput struct {
