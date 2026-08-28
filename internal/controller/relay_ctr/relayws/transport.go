@@ -17,8 +17,8 @@ var ErrCredentialRevoked = errors.New("relay credential revoked")
 
 const credentialRevokedReason = "credential revoked"
 
-// ProtobufSubprotocol 是 agentre 与 agentred 经 relay 传递 opaque Protobuf RPC 帧时
-// 唯一接受的 WebSocket 子协议。relay 只路由字节，不解析其中的 RpcFrame。
+// ProtobufSubprotocol 是客户端主动声明时协商的 WebSocket 子协议。未声明子协议也能
+// 建立 relay；relay 只路由 opaque Protobuf RPC 字节，不解析其中的 RpcFrame。
 const ProtobufSubprotocol = "agentre-protobuf"
 
 // Hooks 是中继连接生命周期的两个回调。任一回调返回错误都会断开连接。
@@ -95,14 +95,6 @@ func defaultTiming() timing {
 }
 
 func (t *transport) Upgrade(w http.ResponseWriter, r *http.Request, hooks Hooks) (Connection, error) {
-	if websocket.IsWebSocketUpgrade(r) && !supportsSubprotocol(r, ProtobufSubprotocol) {
-		// 正文是谈不拢子协议的调用方唯一能看到的东西，所以它指名协议与补救办法；
-		// 桌面仓 protorpc.LANServer 的 426 用同一句话。
-		http.Error(w, "this endpoint speaks only the \""+ProtobufSubprotocol+
-			"\" WebSocket subprotocol; upgrade agentred and agentre to the same release so both ends speak it",
-			http.StatusUpgradeRequired)
-		return nil, errors.New("relay websocket requires agentre-protobuf subprotocol")
-	}
 	conn, err := t.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return nil, err
@@ -136,15 +128,6 @@ func (t *transport) Upgrade(w http.ResponseWriter, r *http.Request, hooks Hooks)
 	})
 	go peer.heartbeat(t.timing.heartbeatInterval)
 	return peer, nil
-}
-
-func supportsSubprotocol(r *http.Request, expected string) bool {
-	for _, offered := range websocket.Subprotocols(r) {
-		if offered == expected {
-			return true
-		}
-	}
-	return false
 }
 
 func (p *connection) ReadMessage() (int, []byte, error) {
