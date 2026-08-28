@@ -5,11 +5,19 @@ import {
   browserClientId,
   browserDisplayName,
   ensureRelayTicket,
+  storedBrowserClientId,
 } from "@/lib/relayTicket";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
+});
+
+it("does not reuse the removed device fingerprint storage key", () => {
+  localStorage.setItem("agentre.deviceFingerprint", "old-fingerprint");
+
+  expect(storedBrowserClientId()).toBeNull();
+  expect(localStorage.getItem("agentre.browserClientId")).toBeNull();
 });
 
 const mockedApi = vi.mocked(api);

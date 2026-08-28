@@ -11,11 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
 
-	"agentre-server/internal/middleware"
-	hubjwt "agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
-	"agentre-server/internal/pkg/session"
-	"agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/middleware"
+	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 )
 
 func TestSessionOrDeviceAuth(t *testing.T) {

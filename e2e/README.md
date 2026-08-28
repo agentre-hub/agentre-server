@@ -8,7 +8,7 @@ verdict rules live in [`docs/verification.md`](../docs/verification.md).
 
 | Entry point                  | Committed                                          | Purpose                                                                | Dependencies                                                                       |
 | ---------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `make e2e` (repository root) | Yes; the sole automated E2E route and the CI route | Run the six-category baseline smoke in desktop and mobile Chromium     | Formal embedded Go server, real MySQL and Redis                                    |
+| `make e2e` (repository root) | Yes; the sole automated E2E route and the CI route | Run the baseline smoke in desktop and mobile Chromium                  | Formal embedded Go server, real MySQL and Redis                                    |
 | `pnpm serve` + `pnpm drive`  | Harness only; evidence is local                    | Inspect the same real target one action at a time                      | Same build, migration, health, seed, and cleanup components as the automated route |
 | `pnpm scratch`               | No; `scratch/` is gitignored                       | Replay a one-off sequence, concurrency case, or timing-sensitive check | A real E2E target already started by the developer                                 |
 
@@ -69,15 +69,17 @@ or Redis password.
 
 ## What the committed smoke covers
 
-The suite deliberately stays at six baseline categories:
+The suite deliberately stays at these baseline categories:
 
 1. formal server health against real MySQL and Redis;
 2. logged-out authentication and redirect behaviour;
 3. a real signed-in session and the empty console state;
-4. complete RFC 8628 device authorization, CSRF, persistence, token exchange,
+4. passkey registration and sign-in against the formal server;
+5. complete RFC 8628 device authorization, CSRF, persistence, token exchange,
    and single-consumption behaviour;
-5. core-page layout without horizontal overflow on desktop and mobile;
-6. embedded SPA fallback plus missing-asset HTTP 404 behaviour.
+6. account-session listing and logout lifecycle;
+7. core-page layout without horizontal overflow on desktop and mobile;
+8. embedded SPA fallback plus missing-asset HTTP 404 behaviour.
 
 It does **not** cover agentred, the Wails desktop app, relay/WebSocket delivery,
 multi-end synchronization, GitHub OAuth against GitHub, load/performance,
@@ -103,7 +105,7 @@ run. Any remaining user, flow, device, token, or session makes the command fail;
 diagnostics report only residue types and counts, not cookies, tokens, or
 personal data.
 
-## Driving by hand (`pnpm serve` + `pnpm drive`)
+## Driving by hand
 
 `pnpm serve` uses the same formal build, explicit config, migrations, health
 check, seed, and cleanup code as `make e2e`, but stops before running the committed

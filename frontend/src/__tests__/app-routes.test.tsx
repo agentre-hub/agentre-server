@@ -1,9 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
 import { api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -27,6 +27,36 @@ function mockSignedIn() {
   mockedApi.mockImplementation(async (path: string) => {
     if (path === "/v1/auth/me") return signedInMe;
     if (path === "/v1/workspace/agents") return { agents: [] };
+    if (path === "/v1/workspace/projects") return { projects: [] };
+    // 总览的统计取数；本文件只关心路由，给一份空账号的响应即可。
+    if (path.startsWith("/v1/stats/overview"))
+      return {
+        activity_stats_enabled: false,
+        scope: "saved",
+        time_zone: "UTC",
+        summary: {
+          conversations: 0,
+          conversations_total: 0,
+          streak_days: 0,
+          longest_streak_days: 0,
+          active_days: 0,
+          window_days: 30,
+          devices_online: 0,
+          devices_total: 0,
+        },
+        heatmap: { from: "2025-09-01", to: "2026-08-28", days: [] },
+        agents: [],
+        backends: [],
+        models: [],
+        projects: [],
+      };
+    if (path.startsWith("/v1/agent-sessions")) return { total: 0, items: [] };
+    // /account 的两张清单卡；本文件只关心路由与导航是否正确，不关心卡内数据。
+    if (path === "/v1/passkeys") return { passkeys: [] };
+    if (path === "/v1/auth/sessions") return { sessions: [] };
+    if (path === "/v1/engine/providers") return { providers: [] };
+    if (path === "/v1/engine/backends") return { backends: [] };
+    if (path === "/v1/devices") return { devices: [] };
     throw new Error(`unexpected api call: ${path}`);
   });
 }
@@ -64,19 +94,25 @@ describe("App shell wiring", () => {
       mockSignedIn();
       renderAt("/");
       // RequireAuth 通过后应落在 /overview 控制台，而不是设备授权码输入页。
+      // 认的是总览独有的范围分段控件：这一页此前靠 Agent 卡那个 h1 指认，而那张卡
+      // 已经换成以统计为主的版式，页面标题只剩顶栏那一处（与设备/对话/组织一致）。
       expect(
-        await screen.findByRole("heading", { level: 1, name: /Agents/i }),
+        await screen.findByRole("group", { name: "Stats range" }),
       ).toBeTruthy();
       expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
     });
 
-    it("serves /audit with the real Audit page (honest empty states), not the coming-soon placeholder", async () => {
+    it("does not serve /audit: the unused empty page is gone, so the catch-all 404 renders", async () => {
       await i18n.changeLanguage("en");
       mockSignedIn();
       renderAt("/audit");
-      // 真实 Audit 页(诚实空态),不是 WorkspaceComingSoon 占位页。
-      expect(await screen.findByTestId("audit-events-empty")).toBeTruthy();
-      expect(screen.getByTestId("audit-credentials-empty")).toBeTruthy();
+      expect(
+        await screen.findByRole("heading", {
+          level: 1,
+          name: /page not found/i,
+        }),
+      ).toBeTruthy();
+      expect(screen.queryByTestId("audit-events-empty")).toBeNull();
     });
 
     it("still serves /device directly as the device-code entry", async () => {
@@ -89,6 +125,52 @@ describe("App shell wiring", () => {
           name: /Enter the device code/i,
         }),
       ).toBeTruthy();
+    });
+
+    it("protects /account with RequireAuth and serves the real Account page for a signed-in user", async () => {
+      await i18n.changeLanguage("en");
+      mockSignedIn();
+      renderAt("/account");
+      // 三张卡里最先能取到数据的是账号卡（display_name 来自 /v1/auth/me）；
+      // 通行密钥卡的空态标题确认渲染的是真实 Account 页，不是 NotFound/占位页。
+      expect(
+        await screen.findByText(signedInMe.email, { selector: "dd" }),
+      ).toBeTruthy();
+      expect(screen.getByText("No passkeys yet")).toBeTruthy();
+    });
+
+    it("protects /settings and serves the shared engine settings page", async () => {
+      await i18n.changeLanguage("en");
+      mockSignedIn();
+      renderAt("/settings");
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Settings" }),
+      ).toBeTruthy();
+      expect(screen.getByRole("tab", { name: "LLM providers" })).toBeTruthy();
+      expect(screen.getByRole("tab", { name: "Agent backends" })).toBeTruthy();
+    });
+
+    it("adds the account-hosted key sync notice to the public privacy placeholder", async () => {
+      await i18n.changeLanguage("en");
+      renderAt("/privacy");
+      expect(
+        await screen.findByText(
+          "API keys are hosted for your account and synced only to your own devices.",
+        ),
+      ).toBeTruthy();
+    });
+
+    it("does not add /account to the main navigation (only reachable from the account menu)", async () => {
+      await i18n.changeLanguage("en");
+      mockSignedIn();
+      renderAt("/account");
+      await screen.findByText("No passkeys yet");
+      const nav = screen.getByRole("navigation");
+      const hrefs = within(nav)
+        .getAllByRole("link")
+        .map((el: HTMLElement) => el.getAttribute("href"));
+      expect(hrefs).not.toContain("/account");
     });
   });
 });

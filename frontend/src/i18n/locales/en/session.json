@@ -1,0 +1,115 @@
+{
+  "composerControls": {
+    "permissionMode": "Permission mode",
+    "modelTarget": "Provider and model",
+    "permissionUnavailable": "This machine cannot list permission modes right now",
+    "permissionUnsupported": "This backend has no permission modes",
+    "permissionSetFailed": "Permission mode was not changed: {{reason}}",
+    "modelSetFailed": "Model was not changed: {{reason}}",
+    "modelPartiallySynced": "The other machine has not caught up; opening it there may show the old value",
+    "modelNotPinnedOnStart": "This conversation could not pin your model choice; the first turn used it, later turns follow the agent binding"
+  },
+  "status": {
+    "connecting": "Connecting…",
+    "reconnecting": "Reconnecting…"
+  },
+  "banner": {
+    "lost": {
+      "title": "Connection lost — no longer retrying",
+      "body": "The transcript stops at the last message received; anything after it is not shown here."
+    },
+    "desktopAppNotRunning": {
+      "title": "Agentre is not running on {{machine}}",
+      "titleUnknown": "Agentre is not running on this computer",
+      "body": "Open Agentre on that computer to continue. History still reads."
+    },
+    "pinnedAgentredUnavailable": {
+      "title": "New messages cannot be sent; history still reads",
+      "body": "This conversation is pinned to a compute node that is currently unavailable. It resumes once that node is back."
+    },
+    "deviceRevoked": {
+      "title": "This device was removed from the account",
+      "body": "Permanently. History still reads; this conversation is read-only from now on."
+    },
+    "loggedOut": {
+      "title": "You are signed out",
+      "body": "Sign in again to come back to this conversation."
+    },
+    "lastSeen": "Last seen {{time}}",
+    "reconnect": "Reconnect",
+    "viewDevice": "View device"
+  },
+  "relogin": "Sign in again",
+  "sendQueued": "This conversation is mid-turn, so your message was queued into the current turn. The agent will pick it up before the turn ends.",
+  "sendFailure": {
+    "transport": {
+      "title": "Did not reach {{machine}}",
+      "titleUnknown": "Did not reach that machine",
+      "body": "The connection dropped on the way. It may already have arrived — sending again could produce two copies."
+    },
+    "rejected": {
+      "title": "{{machine}} rejected this message",
+      "titleUnknown": "That machine rejected this message",
+      "said": "It said: ",
+      "body": "It gave no reason."
+    },
+    "recheck": "Recheck and resend",
+    "resend": "Resend",
+    "copy": "Copy text",
+    "discard": "Discard",
+    "notSent": {
+      "titleUnknown": "Not sent yet",
+      "body": "The connection dropped; this never reached that machine — resending is clean."
+    }
+  },
+  "sendPending": {
+    "title": "Will send once connected",
+    "cancel": "Cancel"
+  },
+  "compose": {
+    "readonly": "Read-only",
+    "waitingFor": "You can send again once {{machine}} is back",
+    "waitingForUnknown": "You can send again once the machine running this conversation is back"
+  },
+  "historyUnavailableOffline": "This conversation's history is not in your account, so it cannot be read while its machine is offline.",
+  "breadcrumb": {
+    "devices": "Devices",
+    "switchMachine": "Switch machine",
+    "online": "Online",
+    "offline": "Offline",
+    "count": "{{count}} conversations",
+    "back": "Back"
+  },
+  "list": {
+    "running": "Running",
+    "idle": "Idle",
+    "interrupted": "Interrupted",
+    "waiting": "Waiting for your input",
+    "untitled": "{{cwd}} · {{backend}} · {{status}}"
+  },
+  "transcript": {
+    "empty": "No messages yet.",
+    "send": "Send",
+    "assistant": "Assistant",
+    "tool": "Tool",
+    "toolResult": "Result",
+    "error": "Error",
+    "waiting": "Waiting for your input…",
+    "loadEarlier": "Load earlier messages",
+    "loadingEarlier": "Loading earlier messages…",
+    "readingFromMachine": "Reading this conversation from its machine…",
+    "catchUpFailed": "Couldn't read this conversation from its machine. It may still be catching up."
+  },
+  "decision": {
+    "allow": "Allow",
+    "alwaysAllow": "Always allow in this conversation",
+    "deny": "Deny",
+    "denyReason": "Reason (optional)",
+    "submit": "Submit",
+    "skip": "Skip",
+    "alreadyHandled": "This request has already been handled.",
+    "submitFailed": "That decision could not be submitted. Nothing was sent — try again.",
+    "retry": "Retry"
+  },
+  "abort": "Stop"
+}

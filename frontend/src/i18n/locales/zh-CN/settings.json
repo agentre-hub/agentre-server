@@ -1,0 +1,74 @@
+{
+  "title": "设置",
+  "tabs": {
+    "providers": "LLM 供应商",
+    "backends": "Agent 后端",
+    "privacy": "隐私"
+  },
+  "sections": {
+    "providers": "LLM 供应商",
+    "backends": "Agent 后端",
+    "privacy": "隐私"
+  },
+  "syncStatus": "账号配置 · 已同步 {{count}} 台设备",
+  "offlineNotice": "配置会先保存在账号中，登记设备后自动同步。",
+  "backendsNoDevice": {
+    "title": "先登记一台设备",
+    "body": "Agent 后端要跑在你的某台机器上。先在这个账号里登记桌面端或 agentred，再回来把后端指到它。",
+    "action": "去设备页"
+  },
+  "errors": {
+    "noOnlineAgentred": "当前没有在线的计算节点。请启动或重新连接自己的设备后再试。",
+    "builtinUnsupported": "浏览器控制台不能新建内置后端。",
+    "deviceRequired": "保存前先选定这个后端在哪台设备上运行。",
+    "deviceOffline": "那台设备当前离线，什么都没探到。",
+    "deviceUnknown": "那台设备已不在账号内，请改选一台。"
+  },
+  "privacy": {
+    "activity": {
+      "title": "活跃统计",
+      "body": "每天从各台机器上报一次对话计数。总览的热力图与三张分布卡用的就是它。",
+      "statusOn": "已开启",
+      "statusOnAt": "已开启 · 最近一次上报{{time}}",
+      "statusOff": "未开启 · 统计只覆盖已保存到账号的对话",
+      "loadError": "无法加载统计设置，请重试。",
+      "saveError": "没能保存，请重试。",
+      "deviceReportedToday": "已上报到今天",
+      "deviceReportedThrough": "已上报到 {{day}}",
+      "deviceOffline": "离线",
+      "deviceBackfillLeft": "还差 {{count}} 天的回填",
+      "danger": {
+        "title": "关闭活跃统计",
+        "body": "停止上报，并删除服务端已有的日计数。",
+        "action": "关闭并删除"
+      },
+      "enable": {
+        "title": "开启活跃统计",
+        "body": "桌面端与 agentred 会开始每天上报一次对话计数。",
+        "willReport": "会上报",
+        "wontReport": "不会上报",
+        "reportDate": "日期，以及当天新建了几条对话",
+        "reportDimensions": "所属 Agent、后端、模型",
+        "reportProject": "所属项目的同步标识",
+        "neverTitles": "对话标题与正文",
+        "neverPaths": "文件路径与 cwd",
+        "neverPrompts": "提示词与工具入参",
+        "backfill": "一并回填本机已有的历史",
+        "backfillHint": "离线的机器等它上线后自动补，不用再点一次。",
+        "foot": "随时可以在设置里关掉，关掉会一并删除已上报的计数。",
+        "submit": "开启"
+      },
+      "disable": {
+        "title": "关闭活跃统计？",
+        "body": "各台机器停止上报，服务端已有的日计数一并删除。热力图会退回只覆盖已保存的对话。",
+        "note": "已保存的对话本身不受影响。",
+        "submit": "关闭并删除"
+      }
+    },
+    "saved": {
+      "title": "已保存的对话",
+      "count": "{{count}} 条",
+      "body": "只有你显式保存过的对话会存到账号里。这一项不是开关，取消保存在「对话」页逐条操作。"
+    }
+  }
+}

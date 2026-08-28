@@ -18,13 +18,23 @@ const (
 	KindAgentExecTarget = "agent_exec_target"
 	KindProjectAgent    = "project_agent"
 	KindProjectLocation = "project_location"
+	KindLLMProvider     = "llm_provider"
+	KindAgentBackendCLI = "agent_backend_cli"
+	// 看板三件（规格 2026-08-27-issues-board-project-scope「同步（跨仓）」）：
+	// 标签目录、任务本身，以及两者的关联。引用方向是 label ← issue_label → issue，
+	// 因此常量与 syncKinds 里的次序都按「被引用者在前」排。
+	KindLabel      = "label"
+	KindIssue      = "issue"
+	KindIssueLabel = "issue_label"
 )
 
 // KindValid 判断上行声明的对象类型是否属于同步组。
 func KindValid(kind string) bool {
 	switch kind {
 	case KindProject, KindDepartment, KindAgent, KindAgentBackend,
-		KindAgentExecTarget, KindProjectAgent, KindProjectLocation:
+		KindAgentExecTarget, KindProjectAgent, KindProjectLocation,
+		KindLLMProvider, KindAgentBackendCLI,
+		KindLabel, KindIssue, KindIssueLabel:
 		return true
 	}
 	return false
@@ -47,11 +57,18 @@ type SyncObject struct {
 	Version int64 `gorm:"column:version;type:bigint;not null"`
 	// SyncUpdatedAt 是客户端提交的最后修改时间，只用于展示与 30 天窗口计算，
 	// 不参与任何胜负比较。
-	SyncUpdatedAt  int64 `gorm:"column:sync_updated_at;type:bigint;not null;default:0"`
-	SourceDeviceID int64 `gorm:"column:source_device_id;type:bigint;not null;default:0"`
-	DeletedAt      int64 `gorm:"column:deleted_at;type:bigint;not null;default:0"`
-	Createtime     int64 `gorm:"column:createtime;type:bigint;not null;default:0"`
-	Updatetime     int64 `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	//
+	// 列叫 updated_at（sync_objects 是同步元数据的专表，前缀冗余，
+	// 2026-08-27-schema-overhaul.md 决策 13），字段却**刻意**不叫 UpdatedAt：
+	// GORM 按字段名认自己的自动时间戳列，取名 UpdatedAt 会让任何一条普通 Updates
+	// 都把客户端报的时刻改写成服务端的当下——正是决策 10 在会话表上刚拆掉的那个陷阱。
+	SyncUpdatedAt int64 `gorm:"column:updated_at;type:bigint;not null;default:0"`
+	// OriginFingerprint 是最后一次修改来自哪台机器（决策 14：跨机引用一律用指纹）。
+	// 空串 = 不是任何一台设备推上来的（server 自己落的墓碑）。
+	OriginFingerprint string `gorm:"column:origin_fingerprint;type:varchar(128);not null;default:''"`
+	DeletedAt         int64  `gorm:"column:deleted_at;type:bigint;not null;default:0"`
+	Createtime        int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	Updatetime        int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
 }
 
 func (*SyncObject) TableName() string { return "sync_objects" }

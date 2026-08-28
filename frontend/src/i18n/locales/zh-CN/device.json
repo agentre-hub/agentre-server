@@ -1,0 +1,149 @@
+{
+  "eyebrow": "设备授权",
+  "entry": {
+    "title": "输入设备码",
+    "description": "桌面应用或终端上会显示一串 6 位代码，把它填在这里。",
+    "groupLabel": "设备码",
+    "boxLabel": "第 {{position}} 位，共 6 位",
+    "submit": "继续",
+    "footnote": "没有看到代码？回到设备上重新发起授权。",
+    "errors": {
+      "incomplete": "请填满 6 位代码。",
+      "invalid": "这个代码不存在或已被使用。请核对设备上显示的 6 位代码。"
+    }
+  },
+  "approve": {
+    "title": "允许这台设备访问你的 AgentRe 账户？",
+    "risk": "批准后，这台设备将以你的身份完整接入你的 AgentRe 账户，可执行任意代码与命令。只批准你信任的设备。",
+    "verify": "确认这串代码与设备上显示的完全一致",
+    "expiry": "此授权请求将在 {{minutes}} 分 {{seconds}} 秒后过期",
+    "expirySeconds": "此授权请求将在 {{seconds}} 秒后过期",
+    "expiryAnnounce": "此授权请求将在约 {{minutes}} 分钟后过期",
+    "expiryAnnounceSoon": "此授权请求将在 1 分钟内过期",
+    "allow": "允许授权",
+    "deny": "拒绝",
+    "fineprint": "你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。",
+    "actionError": "操作没有完成，请重试。"
+  },
+  "kind": {
+    "desktop": "桌面端",
+    "agentred": "计算节点",
+    "mobile": "移动端"
+  },
+  "success": {
+    "title": "设备已授权",
+    "body": "可以关闭这个页面，回到设备上继续。",
+    "manageDevices": "前往控制台管理设备"
+  },
+  "deniedScreen": {
+    "title": "已拒绝授权",
+    "close": "关闭页面"
+  },
+  "expiredScreen": {
+    "title": "授权请求已过期",
+    "body": "回到设备上重新发起授权，然后输入新的代码。",
+    "retry": "重新输入代码"
+  },
+  "add": {
+    "open": "添加设备",
+    "collapse": "收起引导",
+    "stepOf": "步骤 {{n}} / 3",
+    "copy": "复制",
+    "copied": "已复制",
+    "terminalLabel": "那台机器的终端",
+    "kindLabel": "要接入哪种设备",
+    "kindHint": "浏览器不是可管理设备，不用加",
+    "kindAgentred": "计算节点（agentred）",
+    "kindDesktop": "桌面端（Agentre App）",
+    "steps": {
+      "login": {
+        "title": "装上并登录",
+        "hint": "会打印设备码",
+        "done": "已登录"
+      },
+      "code": {
+        "title": "输入设备码",
+        "hint": "6 位一次性码",
+        "done": "已授权"
+      },
+      "service": {
+        "title": "让它常驻后台",
+        "hint": "批准之后再做",
+        "done": "已常驻"
+      }
+    },
+    "install": {
+      "osLabel": "那台机器的系统",
+      "osHint": "架构将自动识别",
+      "osLinux": "Linux",
+      "osMacos": "macOS",
+      "osWindows": "Windows",
+      "powershellLabel": "PowerShell",
+      "manual": "手动下载安装包",
+      "downloadLabel": "下载",
+      "downloadBody": "从 GitHub Releases 下载对应平台的安装包（macOS .dmg / Windows .exe / Linux .deb）。",
+      "download": "打开下载页"
+    },
+    "login": {
+      "agentredTitle": "在那台机器上装好 agentred 并让它登录",
+      "agentredDesc": "先把二进制装上，紧接着就登录；后台服务留到下一步 —— daemon 一旦跑起来，agentred login 会被直接拒绝。服务器地址已经填成当前控制台，直接复制即可。",
+      "commandLabel": "装好之后，同一个终端",
+      "agentredTip1": "命令会打印一行 User code: XXXXXX —— 那就是 6 位设备码。",
+      "agentredTip2": "它会尝试自动打开浏览器；服务器上通常没有浏览器，这时把那 6 位码带回这里。",
+      "agentredTip3": "命令会一直等到你在第 2 步批准；批准之后它才退出，并把凭证写到那台机器上。",
+      "agentredTip4": "设备码会过期；过期就重新运行一次命令。剩余时间由授权确认屏的倒计时给出。",
+      "desktopTitle": "在那台电脑上装好 Agentre 桌面端并登录同一个账号",
+      "desktopDesc": "从 GitHub Releases 装上桌面端，然后在应用里进入设置 → 远端 → 登录，服务器地址填当前控制台。",
+      "desktopTip1": "桌面端会显示 6 位设备码，并尝试自动打开浏览器完成授权。",
+      "desktopTip2": "浏览器没打开、或你想在这台电脑上批准，就把那 6 位码填到第 2 步。",
+      "desktopTip3": "设备码会过期；过期就在桌面端重新发起一次。剩余时间由授权确认屏的倒计时给出。",
+      "serverLabel": "服务器地址",
+      "next": "已拿到设备码"
+    },
+    "service": {
+      "agentredTitle": "把 agentred 注册成后台服务",
+      "agentredDesc": "这一步留到最后、等设备批准之后再做：注册完它会开机自启，关掉终端也不掉线。",
+      "commandLabel": "设备批准之后，那台机器的终端",
+      "tip1": "必须排在最后：agentred login 要等你批准了才把 state.json 写下去。daemon 只要起得更早，手里拿的就是旧的、未认领的 state.json，它下一次写盘会不声不响地把认领覆盖掉 —— 症状是设备看着授权成功，却永远连不上。",
+      "tip2": "重复运行没有副作用：这条命令是幂等的，会更新配置并确保服务在跑。",
+      "desktopTitle": "桌面端没有第二个服务要注册",
+      "desktopDesc": "桌面端自带 agentred：应用开着它就在线，不必再注册一个后台服务。",
+      "finish": "这就是最后一步"
+    },
+    "code": {
+      "handoff": "提交后会打开授权确认屏，在那里核对设备上的代码并批准它。批准完回到这里做最后一步。"
+    }
+  },
+  "manage": {
+    "loadError": "无法加载你的设备列表，请重试。",
+    "statusOnline": "在线",
+    "statusOffline": "离线",
+    "statusRevoked": "已撤销",
+    "revokeConfirmTitle": "解除这台设备的授权？",
+    "revokeConfirmBody": "确认后该设备将无法再刷新凭据。若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受——撤销并非即时生效。",
+    "revokeCancel": "取消",
+    "revokeConfirm": "解除授权",
+    "revokeError": "解除授权失败，请稍后重试。",
+    "expand": "展开详情",
+    "collapse": "收起详情",
+    "runnableAgents": "能跑的 Agent",
+    "rankLabel": "第 {{rank}} 档",
+    "projects": "项目",
+    "configured": "已配置",
+    "notConfigured": "未配置",
+    "noProjectsReported": "这台设备还没有上报任何项目。",
+    "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
+    "detailLoadError": "无法加载这台设备的详情，请重试。",
+    "sessions": "对话",
+    "countLabel": "{{count}} 台设备",
+    "sessionCount": "{{count}} 条对话",
+    "sessionWaiting": "{{count}} 条等你处理",
+    "viewSessions": "查看这台机器的对话",
+    "viewDesktopSessions": "查看这个桌面端的对话",
+    "offlineNotEnterable": "已离线——对话不可用。",
+    "desktopAppNotRunningShort": "Agentre 未运行",
+    "desktopAppNotRunningDetail": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可查看它的对话。",
+    "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑",
+    "revokeConfirmTitleNamed": "解除「{{name}}」的授权？"
+  }
+}

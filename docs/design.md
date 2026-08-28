@@ -5,25 +5,13 @@ Go binary at build time. It ships **light and dark**, **desktop and mobile**, an
 **English and Simplified Chinese** — all four are supported, so all four have to work
 in anything you add.
 
-## Where the pixels come from
+## Source of truth
 
-The pixels come from a design canvas (`agentre-server.pen`, kept in the designer's
-`设计稿` folder — it is **not** in this repository and is not version-controlled). The
-approved console spec (`docs/specs/2026-08-12-console-design-fidelity.md`) names the
-boards that constrain this flow by node id: shell `R969Y` (SideNav) / `ZC7pI` (nav item)
-/ `A6Z3k` (mobile bottom tab); overview `IhldU`; devices `Q6qgs4` / `Ukz7i` / `HUELX`;
-desktop chat `X9Mjl` / `uqEha` / `kpP7A`; mobile chat `IC5sH` / `C87ty` / `j571mC` /
-`eh9zO`; audit `bKvB4`; and the `p5Orc` "现状 vs 优化" comparison, which fixes the
-session-list UX rather than adding a page. The auth flow and 404 are boards 01–19 and
-38–39, each screen drawn desktop and mobile, light and dark. The frame numbers the code
-still cites (屏 20 / 32 chat list and empty, 22 detail breadcrumb, 23–25 new conversation,
-帧 47 device expand) belong to those same nodes.
-
-This document is the layer between that canvas and the code. It says which utility class
-carries which name on the board, and which numbers the shell has already decided so you
-never measure them a second time. It does not restate the boards — for a pixel that is not
-here, open the board. For a pixel that is here but disagrees with the code, the code is
-what ships: fix this file.
+This document records the design contract that is present in the tracked frontend:
+tokens, reusable components, layout rules and their guard tests. The current code is what
+ships; when it and this document disagree, verify the rendered result and update the owning
+implementation and this contract together. Do not cite an untracked canvas or a deleted
+spec as branch-verifiable evidence.
 
 ## Colour tokens
 
@@ -44,6 +32,7 @@ the same file maps each to a semantic utility name.
 --status-running / -bg, --status-waiting / -bg / -foreground, --status-idle, --status-error
 --code-surface / --code-foreground / --code-muted-foreground
 --sidebar                       the console SideNav surface (chrome on the board)
+--heat-0 … --heat-4             the overview heatmap's five-level scale
 --overlay-shadow                elevation for dialogs   → shadow-overlay
 --overlay-scrim                 the dim behind a dialog → bg-scrim
 ```
@@ -103,6 +92,7 @@ palette fix lands once and both products get it. Holding a board, read across:
 | `danger-soft` | `--destructive-soft` | `bg-destructive-soft` |
 | `danger-fg` | `--destructive-foreground` | `text-destructive-foreground` |
 | `scrim` | `--overlay-scrim` | `bg-scrim` |
+| `heat-0`…`heat-4` | `--heat-0`…`--heat-4` | `bg-heat-0` … `bg-heat-4` |
 
 Two groups do not line up, and both are intentional:
 
@@ -112,6 +102,12 @@ Two groups do not line up, and both are intentional:
   dark #111316 (the dark of `--code-surface`). A dedicated token lets the two diverge
   without touching either. `warn-fg` gained one too: `--status-waiting-foreground`, the
   dark-brown text on the amber badge, shared by the SideNav chat badge and the unread chip.
+- `--heat-0`…`--heat-4` are the one colour family this site declares itself, in its own
+  `:root` / `.dark` plus five `--color-heat-*` aliases in `@theme inline`. They belong here
+  rather than in the shared package because only the server console draws an activity
+  heatmap; adding a pair of light/dark values the desktop never renders just creates two
+  numbers that drift apart. `heat-0` is a visible grey, not transparent — it means
+  "nothing started that day", which is a fact, not a gap.
 - The canvas also carries `proj-1`…`proj-5`. Nothing in this repo uses them — they belong
   to console surfaces outside this flow — so they are absent from `globals.css`. Adding a
   token nobody uses just creates a pair of values that silently drift apart between `:root`
@@ -144,13 +140,12 @@ written as arbitrary values rather than rounded to the nearest one.
 | Mono, confirmation code | `font-mono text-[28px] font-semibold tracking-[7px] sm:text-[34px]` | 28→34 / 600 | `DeviceApproval` |
 | Console wordmark | `text-[15px] font-semibold` | 15 / 600 | product name in `AppShell`'s Brand |
 | Console title | `text-[15px] font-bold` | 15 / 700 | `AppShell` TopBar title slot |
-| Console h1 / section title | `text-sm font-bold` | 14 / 700 | Overview Agent-card h1 |
-| Console card title | `text-[13px] font-bold` | 13 / 700 | Audit credentials card title |
+| Console h1 / section title | `text-sm font-bold` | 14 / 700 | Overview stats-card titles |
+| Console card title | `text-[13px] font-bold` | 13 / 700 | Account section card title |
 | Console group heading | `text-sm font-semibold` | 14 / 600 | `ChatList` / `SessionList` group headers |
 | Metric value | `text-[23px] leading-none font-bold` | 23 / 700 | the shared `Metric` tiles (Overview) |
 | Metric label / sub | `text-[11.5px]` / `text-[10.5px]` | 11.5 / 10.5 | the shared `Metric` label and optional sub |
 | Empty-state title | `text-lg font-bold` | 18 / 700 | the shared `EmptyState` title |
-| Action strip title | `text-[13px] font-bold` | 13 / 700 | Overview `ActionStrip` |
 | Console small | `text-xs` | 12 / 400–500 | rows, chips, TopBar counts, `Fresh` |
 | Console caption / mono meta | `text-[10px]` / `text-[11px]` | 10–11 / 400–600 | brand sub, account meta, badges, `online/total` Meta |
 
@@ -196,25 +191,89 @@ than rounding it to the nearest step.
 
 | Class | Value | Applies to |
 | --- | --- | --- |
-| `rounded-sm` | 6px | brand mark and device icon plates |
-| `rounded-md` | 10px | buttons, inputs, code boxes, inline panels |
-| `rounded-lg` | 14px | the cards |
+| `rounded-sm` | 4px | brand mark and device icon plates |
+| `rounded-md` | 6px | buttons, inputs, code boxes, inline panels |
+| `rounded-lg` | 8px | the cards |
+| `rounded-xl` | 12px | `@/components/ui/card.tsx` and the `Dialog` panel |
 
-The three are declared as literal pixel values in `@theme inline`, not derived from one
-`--radius` base. 6/10/14 is not an arithmetic progression, so no `calc(var(--radius) ± n)`
-chain produces it; the base token was removed rather than left around unused.
-`design-token-contract.test.ts` asserts the three resolved values, not merely that they
-are non-empty.
+**The scale comes from the shared package, and this site declares none of it.** The
+package derives all four from one `--radius: 0.5rem` base
+(`calc(var(--radius) ± n)` in its `@theme inline`), so the desktop app and this console
+round every shared component identically.
 
-Only these three steps are redeclared. `rounded-full` and `rounded-xl` still resolve to
-Tailwind's built-ins — which is why `@/components/ui/card.tsx` (`rounded-xl` plus
-`shadow-sm`) is *not* the auth card. See [Components](#components).
+This used to be a fork: the site declared 6/10/14 as literals, measured off the boards. It
+was reverted on 2026-08-19 because it silently made **every shared-package component**
+about 1.7× rounder here than on the desktop. The transcript avatar was the tell — the
+package ships `MESSAGE_AVATAR_CLASS` as `size-7 rounded-lg`, and 28px against a 14px radius
+is a perfect circle, where the desktop draws a rounded square. Note the trap if anyone
+proposes forking again: `@theme inline` bakes the literal **into the utility class** and
+emits no `--radius-*` custom property, so a fork cannot afterwards be scoped back for the
+package's subtree. Shared components and site components round together or not at all.
+
+`design-token-contract.test.ts` asserts both halves: that the site's `@theme` declares no
+`--radius-*` step, and that the package's chain still resolves to 4/6/8/12. The expected
+values are computed from the package's own declaration rather than copied into a table, so
+a deliberate change to `--radius` upstream flows through instead of going red.
+
+`rounded-full` resolves to Tailwind's built-in. `rounded-xl` is unaffected by the revert —
+it always came from the package's `--radius-xl`, which happens to equal Tailwind's built-in
+12px, so the old note here that it "resolves to Tailwind's built-ins" was true only by
+coincidence. `@/components/ui/card.tsx` (`rounded-xl` plus `shadow-sm`) is still *not* the
+auth card. See [Components](#components).
+
+## Cursors
+
+**Do not write `cursor-pointer` on a component.** One rule in `@layer base` in
+`globals.css` gives every clickable shape its hand cursor:
+
+```css
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+select:not(:disabled),
+summary,
+input:is([type="checkbox"], [type="radio"]):not(:disabled),
+label:has(input:is([type="checkbox"], [type="radio"]):not(:disabled))
+```
+
+That rule exists because **Tailwind v4 dropped v3's preflight line**
+`button, [role="button"] { cursor: pointer }` in favour of the browser's own
+`cursor: default`. Nothing about the upgrade announces this: the DOM is unchanged, no
+style errors, the suite stays green, and every button on the site quietly reverts to an
+arrow. It is only visible to a mouse. The agent picker — "choose an Agent and start
+chatting" — is what surfaced it: a full-width card that looked like a dead panel.
+
+Per-component `cursor-pointer` was the other option and it is the wrong one. The shared
+package `@agentre-hub/agentre-ui` does it that way (every button class string carries its
+own copy), so its components were unaffected while this site's were not — which is the
+tell. Spelling the affordance out per call site means "this is clickable" depends on each
+author remembering to repeat it, and one omission is a regression only a mouse can find.
+One concept, one implementation.
+
+Two exclusions in that selector list are deliberate:
+
+- **Disabled things get no hand.** `:not(:disabled)` for `button` and `select`; a
+  hand-rolled `role="button"` (the project group-header menu) has only `aria-disabled`
+  to go on. Where a disabled control should read as refused rather than merely inert,
+  add `cursor-not-allowed` at the call site, as the agent rows do.
+- **A `label` only counts when it wraps a checkbox or radio.** The search and filter
+  fields here are also written `<label><input …></label>` (the chat top bar, the org
+  index); those want an I-beam. A bare `label` in the list would take them with it.
+
+Forking is still done with a utility class — `base` sits before `utilities`, so layer
+order settles it and you never have to reason about specificity. That is how the org drag
+handles keep `cursor-grab`.
+
+`cursor-affordance.test.tsx` guards it: it reads the selector list out of `globals.css`
+and runs it against each shape with `Element.matches`, so it fails on a rule that was
+deleted *and* on one written too wide, rather than just asserting the string is present.
 
 ## The auth shell
 
 `@/components/AuthLayout` is the frame for the auth screens — the login flow, the `/terms`
-`/privacy` `/status` placeholders (`@/pages/ComingSoon`) and 404. The signed-in console
-uses its own frame, `AppShell` (see [The console](#the-console)). It is a vertical
+`/privacy` `/status` placeholders (`@/pages/ComingSoon`) and 404. The privacy placeholder
+also states the served credential policy: API keys are account-hosted and synced only to
+the user's own devices. The signed-in console uses its own frame, `AppShell` (see
+[The console](#the-console)). It is a vertical
 three-part layout — top bar, main, footer — on `flex min-h-screen flex-col bg-background`.
 
 **Top bar.** Brand mark (a 28px `rounded-sm bg-primary` square holding a terminal glyph)
@@ -269,17 +328,14 @@ use, and it adds to the mobile shape rather than replacing it.
 
 ## The console
 
-`@/components/AppShell` is the frame for every signed-in page — Overview, Chat, Devices,
-`DeviceSessions`, `SessionDetail` and Audit (`/audit` now serves the real Audit page, not
-a placeholder). It is a two-part frame on desktop (a 224px SideNav plus a TopBar/main
-column) and a single column with a bottom TabBar on mobile — there is no hamburger or
-drawer. The auth screens keep `AuthLayout` (above); the two shells never nest.
+`@/components/AppShell` is the frame for signed-in console pages. It is a two-part frame
+on desktop (a 224px SideNav plus a TopBar/main column) and a single column with a bottom
+TabBar on mobile — there is no hamburger or drawer. The auth screens keep `AuthLayout`
+(above); the two shells never nest.
 
 ### Formal UI vs design commentary
 
-The console spec (`docs/specs/2026-08-12-console-design-fidelity.md`) draws a hard line
-between the product and the board's commentary, and the code follows it. An element on a
-board may enter the product only when **all four** hold:
+An element from a design board may enter the product only when **all four** hold:
 
 1. it serves the user's real task on that page — it is not explaining the design, the
    review, or the capability to someone;
@@ -298,24 +354,24 @@ it supports an irreversible decision, so it appears only after the user has alre
 the dangerous action.
 
 There is no mechanical shortcut — a frame-drawn card can still be commentary. The tests
-pin the *consequences* instead: no persistent revoke card, no fake audit dot, no fake
+pin the *consequences* instead: no persistent revoke card, no audit nav item, no fake
 search affordance, no sample numbers.
 
-### Shared console components
+### Server console primitives
 
-The repeated shapes live in `frontend/src/components/console/` (exported from `index.ts`)
-and pages compose them — pages must **not** copy their dimensions, status colours, type
-steps or interaction semantics, and must not edit the directory. Each maps to a board node:
+Server-owned repeated shapes live in `frontend/src/components/console/` (exported from
+`index.ts`) and pages compose them without copying their dimensions, status colours or
+type steps. Cross-host components continue to belong to `@agentre-hub/agentre-ui` as
+described in [architecture.md](architecture.md#shared-frontend-packages).
 
 | Component | Board node | Shape (what it fixes, so no one re-measures) | Used by |
 | --- | --- | --- | --- |
-| `ConsoleNavItem` | `ZC7pI` nav item | `h-[34px] rounded-md px-2.5`, 17px icon, 13px label; active = `bg-primary-soft text-primary-text`, idle = `text-muted-foreground hover:bg-accent`; trailing `badge` (> 0 only) / `meta` / `dot` are honest — the caller passes them only with real data | `AppShell` SideNav (all four items) |
+| `ConsoleNavItem` | `ZC7pI` nav item | `h-[34px] rounded-md px-2.5`, 17px icon, 13px label; active = `bg-primary-soft text-primary-text`, idle = `text-muted-foreground hover:bg-accent`; trailing `badge` (> 0 only) / `meta` / `dot` are honest — the caller passes them only with real data | `AppShell` desktop SideNav (all six items) |
 | `MobileTabBar` | `A6Z3k` bottom tab | `h-[74px] bg-card` + top border, 21px icon, 10px label, active = `text-primary-text font-semibold`, idle = `text-subtle-foreground font-medium`; items carry only real destinations | `AppShell` mobile bottom nav |
 | `StatusMark` | `zF5jv` status pill | `rounded-full px-2.5 py-[5px]`, 6px dot + `text-xs font-semibold` text in the same token; `tone` maps to `running`/`waiting`/`idle`/`error` semantic tokens only; the label is always visible text — colour is never the only signal | `Devices` row status |
 | `Metric` | `IhldU` stat card | `rounded-md border px-3.5 py-3`, label `text-[11.5px]` + 13px icon, value `text-[23px] leading-none font-bold` + `text-xs` unit, sub `text-[10.5px]`; `tone="danger"` swaps the whole card to destructive tokens; a data-less block renders `value="—"`, never a made-up number | `Overview` four stat tiles |
-| `FilterChip` | `rNQXR` filter chip | `h-[22px] rounded-full px-[9px] text-[11px] font-medium`, active = `bg-primary-soft text-primary-text`, idle = `bg-secondary`; `disabled` renders a non-button `aria-disabled` span out of the focus order — the honest form when there is no real filtering | `Audit` filter row (all disabled) |
-| `EmptyState` | the formal empty boards | 62px icon circle (`bg-primary-soft text-primary-text`, or warn), `text-lg font-bold` title, `text-[12.5px] leading-[22px]` body, optional action; only the shared hierarchy — page-specific content is assembled by the page from real data | `Overview` (agents / recent-auth / usage / security), `Devices` (no devices), `Chat` (desktop unselected + mobile empty), `Audit` (events + credentials) |
-| `RowMenu` | row-menu semantics | trigger `icon-sm` ghost with `aria-haspopup`/`aria-expanded`; `role="menu"` panel `fixed z-50 min-w-[160px] rounded-md border border-border bg-popover p-1 shadow-overlay`, items `text-[13px]`; opens with focus in the menu, `↑↓`/`Home`/`End` move, `Escape` closes and returns focus; only real-backend actions go in, `danger` items take destructive colour | `Devices` row revoke |
+| `FilterChip` | `rNQXR` filter chip | `h-[22px] rounded-full px-[9px] text-[11px] font-medium`, active = `bg-primary-soft text-primary-text`, idle = `bg-secondary`; `disabled` renders a non-button `aria-disabled` span out of the focus order — the honest form when there is no real filtering | no current page (shared primitive) |
+| `EmptyState` | the formal empty boards | 62px icon circle (`bg-primary-soft text-primary-text`, or warn), `text-lg font-bold` title, `text-[12.5px] leading-[22px]` body, optional action; only the shared hierarchy — page-specific content is assembled by the page from real data | `Overview` (the three distributions + the stats-unavailable state), `Devices` (no devices), `Chat` (desktop unselected + mobile empty) |
 
 `frontend/src/__tests__/console-primitives.test.tsx` pins the sizes, states and the
 "commentary must not become a component/locale key" boundary; `design-token-contract.test.ts`
@@ -324,8 +380,11 @@ symmetric so commentary never enters the product copy either.
 
 ### The shell
 
-`AppShell`'s root is `flex min-h-screen flex-col bg-background md:flex-row` — column on
-mobile, two parts on desktop.
+`AppShell`'s root is `flex h-screen flex-col overflow-hidden bg-background md:flex-row` —
+column on mobile, two parts on desktop. **The page itself never scrolls**: scrolling lives
+inside `main`. That is what makes a pinned composer possible at all — with a root that grows
+past the viewport, the SideNav, the TopBar and the session list scroll away with the
+transcript.
 
 **SideNav (desktop only).** `flex w-[224px] shrink-0 flex-col gap-3 border-r border-border
 bg-sidebar p-3`, drawn on `--sidebar` — the board's `chrome` surface, made its own token
@@ -341,83 +400,133 @@ Top to bottom:
   ("Search agents, devices, and records") at `text-xs`. There is no command palette, so it
   is a `div` with `aria-hidden` — not a `button`/`input`, no `tabindex`, no `⌘K` hint, and
   out of the focus order. It must never accept focus or imply a shortcut (`app-shell.test.tsx`).
-- **Nav.** Four items rendered through the shared `ConsoleNavItem` (board `ZC7pI`):
-  Overview, Chat, Devices, Audit. Trailing data is best-effort and honest — none of it
-  blocks the shell and none is invented:
-  - **Chat** carries an amber badge — the follow count from `/v1/follows` —
+- **Nav.** Five items rendered through the shared `ConsoleNavItem` (board `ZC7pI`), in
+  this order: Overview, Chat, Devices, Org, Settings. Audit is not among them — it has no
+  backend and its placeholder page was retired. Trailing data is best-effort
+  and honest — none of it blocks the shell and none is invented:
+  - **Chat** carries an amber badge — how many conversations this account has —
     `bg-status-waiting text-status-waiting-foreground`, `h-[17px] min-w-[17px]
-    rounded-full text-[10px] font-semibold`, rendered only when it is > 0.
+    rounded-full text-[10px] font-semibold`, rendered only when it is > 0. The number comes
+    from the server's `total` (`?axis=time&per_group=1`), never from `items.length`, which
+    would silently become "how many are on this page". A page that already tracks that
+    number can take the badge over with `chatBadge` — Chat does, so the badge follows its
+    optimistic save/delete overlay instead of going stale until the next mount.
   - **Devices** carries a mono `online/total` Meta (`font-mono text-[10px]
-    text-subtle-foreground`) — the agentred subset of `/v1/devices` — rendered only when
-    that list resolves.
-  - **Audit** carries **no dot**. `ConsoleNavItem` supports a `dot` prop, but the shell
-    never passes one: there is no audit backend yet, so a dot would be a fake alarm.
+    text-subtle-foreground`) — rows of `/v1/devices` (the same set as the Overview
+    **Devices online** tile; the list no longer includes web) — rendered only when that
+    list resolves.
 - A `border-t border-border` divider, then **Account**: `h-[42px] rounded-md px-1.5` with a
   28px `rounded-full bg-primary-soft` avatar holding the first character of `display_name`
   at `text-sm font-semibold text-primary-text`, the name at `text-xs font-semibold`, and
   `appShell.accountMeta` at `text-[10px] text-subtle-foreground`. The row renders only once
   `/v1/auth/me` resolves — no account fetched, no fake avatar.
 
-**TopBar.** `h-[52px] items-center gap-3 border-b border-border bg-card px-4`, in the
-document flow exactly like `AuthLayout`'s header. Left to right: a title slot at
-`text-[15px] font-bold` (the page's `nav.*` label), a flexible spacer, the page's `right`
-slot, then — on mobile only — the account chip, then `AppControls`. Both `title` and
-`right` are optional, so the pages that only set a title (`DeviceSessions`,
-`SessionDetail`) stay unchanged. Three `right` conventions recur (Devices uses Cnt + Fresh,
-Chat uses all three, Overview uses Fresh):
+**TopBar.** `h-[52px] shrink-0 items-center gap-3 border-b border-border bg-card px-4`.
+Left to right: a title slot at `text-[15px] font-bold` (the page's `nav.*` label), a
+flexible spacer, the page's `right` slot, then — on mobile only — the account chip, then
+`AppControls`. Both `title` and `right` are optional, so the pages that only set a title
+stay unchanged. Two `right` conventions recur:
 
-- **Cnt** — a `font-mono text-xs` (`text-[12px]` on Chat) `text-subtle-foreground` count,
-  `aria-label`led.
+- **Cnt** — a `font-mono text-xs` `text-subtle-foreground` count, `aria-label`led. **Chat
+  does not use it**: a bare number with no label next to it cannot be read as "how many
+  conversations this account has", and the SideNav badge says the same thing with its label
+  attached. Use Cnt only where the count sits next to something that names it.
 - **Fresh** — "Desktop connected" (`appShell.topBar.fresh`): a `size-[6px] rounded-full
   bg-status-running` dot plus `text-xs`. It renders only when an `agentred` device is
   online; a browser (`web`) alone, unknown or offline → nothing, never a fabricated status.
-- **FindBtn** — Chat's "Follow conversations from your device" (`chat.followFromDevice`),
-  an `h-7 rounded-md border border-border px-2.5 text-[12px] font-semibold` link to
-  `/devices`.
+
+A page can also take the whole band over with **`ownHeader`** — the shell then draws no
+header at all. Chat's mobile form does this: 52px cannot hold title + page actions + account
++ language/theme, and stacking them blew the bar out to ~100px with the title clipped to
+「对.」. Chat instead keeps identity and global controls on the first row and gives search
+its own.
 
 **Mobile bottom tab (board `A6Z3k`).** Below `md` the SideNav is removed entirely — no
-hamburger, no drawer. The four real destinations render in a `MobileTabBar` pinned
-`sticky bottom-0 z-40`; the `MobileTab` list is the same four real routes as the SideNav,
-so no fake "Me"/placeholder entry exists. The account chip moves into the TopBar, and
-`AppControls` (language/theme) stays in the TopBar — account, language and theme remain
-reachable without competing with the bottom bar. `app-shell.test.tsx` and
-`mobile-nav-drawer.test.tsx` pin the desktop/mobile split and the "no drawer, no fake
-blue dot" boundary.
+hamburger, no drawer. The four high-frequency destinations (Overview, Chat, Devices, Org)
+render in a `MobileTabBar` held at the bottom with `shrink-0` (the root no longer scrolls,
+so `sticky` would buy nothing). The list derives from the SideNav's real routes minus
+Settings, which deliberately stays out of the bar and is reachable from the account menu,
+like `/account` — so no fake "Me"/placeholder entry exists and no low-frequency destination
+crowds the bar. The account chip moves into the TopBar, and `AppControls` (language/theme)
+stays in the TopBar — account, language and theme remain reachable without competing with
+the bottom bar. `app-shell.test.tsx` and `mobile-nav-drawer.test.tsx` pin the
+desktop/mobile split, the four-item boundary and the "no drawer, no fake blue dot" rule.
 
-**Main.** `min-w-0 flex-1 px-4 py-5 md:px-8 md:py-6`; each page owns its own
-`mx-auto w-full max-w-[1200px]` column inside it. Chat's desktop form is the exception — it
-bleeds edge-to-edge (see below).
+**Main.** `min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-6`; each page owns
+its own `mx-auto w-full max-w-[1200px]` column inside it. Pages that fill the viewport
+themselves pass **`flush`**: `main` then drops its padding and its scrollbar
+(`overflow-hidden`) and the page bands the space itself. Chat and `SessionDetail` do this —
+that, not a negative margin, is how they sit flush under the TopBar.
 
-### Overview (board `IhldU`)
+### Overview (board `r5xRl` / `XwJfx` dark)
 
-`mx-auto w-full max-w-[1200px] space-y-4`.
+`mx-auto w-full max-w-[1200px] space-y-4`, driven by `GET /v1/stats/overview?range=7d|30d|all`.
 
-- **Four stat tiles** through the shared `Metric`, `grid grid-cols-2 gap-3 md:grid-cols-4`.
-  Two tiles have real sources — **Devices online** (non-web rows of `/v1/devices`, count
-  and `online/total` unit, first offline device as the sub) and **Waiting on you** (follows
-  + relay `session.list`, counted only when every follow is decidable, longest wait as the
-  sub). **Used today** and **Issues** (`tone="danger"`) have no backend source: the tile
-  renders with `—` — the honest empty value, never a made-up number.
-- **Amber action strip.** `rounded-lg border border-status-waiting/40 bg-status-waiting-bg
-  p-3.5` (`gap-[11px]`), with a `text-[13px] font-bold text-status-waiting` title
-  (`overview.actionStrip.title`), the longest-wait sub and an "All conversations →" link to
-  `/chat`. Below, at most three waiting conversations as cards; each card gets only the
-  actions its relay waiter data supports — Allow/Deny for a tool permission, Reply/View
-  details for a question. The strip renders **only when at least one waiting conversation's
-  waiters resolved**; no waiting sessions, no strip, and never a fake button.
-- **Two columns**, `flex flex-col gap-4 lg:flex-row`. Left (`flex min-w-0 flex-1 flex-col
-  gap-4`): the **Agents** card — h1 `text-sm font-bold`, count subtitle, rows in
-  `divide-y divide-border` with avatar dot, name, department chip and the execution-target
-  chip chain (current target highlighted, per-target reasons like offline / unpaired /
-  skipped-for-web, and never the target's path) — then **Recent authorizations & changes**,
-  a shared `EmptyState` whose only action is a real "All audit →" link to `/audit`. Right,
-  `w-full shrink-0 lg:w-[340px]`: **Usage this month** (`EmptyState`, no action — no usage
-  page exists, so no link is fabricated) and **Security & audit** (`EmptyState` + a real
-  "Go to audit →" link). All three data-less cards keep the real layout with the honest
-  empty state, never sample numbers, IPs or timestamps.
-- TopBar: **Fresh** only when an `agentred` device is online (the `web` row never counts).
-- The stat grid goes 2-up on mobile and 4-up on desktop; the two-column row stacks on
+The page used to be an Agent list with an amber "waiting on you" action strip and three
+data-less cards. Two of its four tiles rendered `—` and half the page said "no data". The
+stats endpoint replaced the missing sources, and the strip moved to the SideNav badge, so
+the page is now stats-first.
+
+- **TopBar**: **Fresh** (only when an `agentred` device is online) plus a three-way range
+  segment — Last 7 days / Last 30 days / All time, `role="group"` labelled
+  `overview.stats.range.label`. **The range only governs the summary and the three
+  distribution cards; the heatmap is always one year.**
+- **Four stat tiles** through the shared `Metric`, `grid grid-cols-2 gap-3 md:grid-cols-4`:
+  Conversations (range count, account total as the sub), Current streak, Active days
+  (`active_days / window_days`), Devices online. All four have a real source, so none of
+  them renders `—` — except streak and active days on an account with no history at all,
+  where a `0` streak would be a claim rather than a fact.
+- **Full-width activity heatmap**, `components/stats/Heatmap.tsx`: 13px cells on a 3px
+  gap, weeks as columns with row 0 = Sunday, five levels `bg-heat-0`…`bg-heat-4`, month
+  labels absolutely positioned on the 16px column pitch, and a Less→More legend. The
+  card header carries the covered months and, when `scope` is `full`, a **"Stats
+  settings →"** link to `/settings?tab=privacy`. Under `saved` that link is dropped: the
+  page-level notice above already links to the same place, and two links to one
+  destination on one screen is a choice the reader has to make for no reason. Two side
+  highlights (busiest day, average per active day) render only when the response carries
+  them, **with their unit** — a bare `11` next to "Busiest day" reads like an index.
+  A footnote names the timezone the day boundaries were cut in: they are the server
+  machine's, and a reader in another timezone otherwise just sees their "today" off by
+  one cell with nothing to explain it.
+  - **A cell counts the conversations *started* that day**, not the ones active that day
+    (`docs/architecture.md`'s activity-statistics section owns why). A week-long
+    conversation lights only its first cell.
+  - **Days after `heatmap.to` are not drawn.** The cell keeps its slot so the last column
+    does not collapse, but gets no colour: painting a future day `heat-0` says "you did
+    nothing that day" about a day that has not happened.
+  - **`heat-0` means "nothing started that day", not "no data".** Which is why the skeleton is
+    the same grid: before the fetch resolves the grid is already there in `heat-0`, so an
+    845px block does not appear out of nowhere and shove the page down.
+  - **Mobile draws 19 weeks, not 53, and never scrolls horizontally** — 53 weeks need
+    845px, and a horizontally scrolling heatmap on a phone is unusable. The card says so
+    and points at the desktop app.
+- **`scope`** has two values and both carry real data. `full` = activity reporting is on.
+  `saved` = it is off, and the numbers cover only conversations saved to the account; a
+  single `bg-primary-soft` notice at the top of the page says so once (not per card) and
+  links to the privacy tab. **The heatmap still draws** — the saved slice is real, just
+  sparser — it is never downgraded to an empty state.
+- **Bottom row**, `flex flex-col gap-4 lg:flex-row`. Left, the **Agent usage** ranking
+  (name, department chip, the machine it currently lands on, count, bar). The per-tier
+  reordering is *not* here — it lives on the Org page (`OrgExecTargetSection`); the
+  overview keeps only "where does it currently land", and only when that tier is really
+  available. Right, `w-full shrink-0 lg:w-[300px]`: **Backends & models** (stacked share
+  bar + legend + top models) and **Projects**.
+  - Two empties are two different facts and must not merge: an empty `backend_type` is
+    **Not reported**; an empty `provider_key` *and* `model_key` is **Follows the agent
+    binding**, a real configuration. An empty `project_sync_id` is **No project**.
+  - A distribution with no rows renders the shared `EmptyState`, never sample numbers.
+- **Three unstable states** (board `l2U9p`): loading paints the tile skeletons and the
+  empty grid; a failed fetch replaces the whole stats area with an alert (carrying a real
+  Retry) plus a warn `EmptyState` that states what is *not* affected and links to `/chat`
+  — it never falls back to a summary of zeros; a brand-new account (0 devices, 0
+  conversations) gets a "register a device first" guide bar and the all-grey grid with the
+  line that says the grey is absence of activity, not breakage.
+- The stat grid goes 2-up on mobile and 4-up on desktop; the bottom row stacks on
   mobile — no horizontal overflow (`overview.test.tsx`).
+- Agent names, departments and landing targets come from `/v1/workspace/agents`; project
+  names from `/v1/workspace/projects`. Neither blocks the page. Account-channel signals are
+  subscribed one class each: device presence → devices, sync version → agents + projects,
+  mirror changed → the stats fetch.
 
 ### Devices (boards `Q6qgs4` / `Ukz7i` desktop, `HUELX` mobile)
 
@@ -430,7 +539,7 @@ column and no persistent "撤销这台设备" explainer card**.
   `aria-hidden`) + name at `text-[15px] font-semibold` + mono kind chip (`rounded-md bg-muted
   px-1.5 py-0.5 font-mono text-[10px]`) + shared `StatusMark` (online / offline / revoked) +
   an expand chevron (absent on `web` rows — a browser holds no projects or agents) + a
-  shared `RowMenu`. The sub-row (`px-5 pt-1.5`) holds the `font-mono text-xs` meta
+  shared-package `DropdownMenu`. The sub-row (`px-5 pt-1.5`) holds the `font-mono text-xs` meta
   (`platform · version · last active`) and the `cardSummary` line
   ("{{projects}} projects · {{m}} conversations running") **only when both numbers are
   actually known** — the project count from the detail endpoint and the running count from
@@ -445,7 +554,7 @@ column and no persistent "撤销这台设备" explainer card**.
   conversations are unavailable" line instead). A desktop row lists every account project
   (configured or not) and has no agents section. Expanding a failed row retries on the next
   open rather than caching the error.
-- **Revoke.** Each **active** device (`status === ACTIVE`) gets one `RowMenu` item,
+- **Revoke.** Each **active** device (`status === ACTIVE`) gets one `DropdownMenu` item,
   "Revoke", which opens a confirm `Dialog` before calling `POST /v1/oauth/token/revoke`.
   Failure keeps the dialog context open and shows the real error; success closes it and
   refreshes the device list. Revoked devices render no revoke action. The row menu is the
@@ -464,33 +573,106 @@ column and no persistent "撤销这台设备" explainer card**.
 
 ### Chat (desktop `X9Mjl` / `uqEha` / `kpP7A`, mobile `IC5sH` / `C87ty` / `j571mC` / `eh9zO`)
 
-The desktop form bleeds to the shell's edges with a negative margin
-(`-mx-4 -my-5 flex h-full flex-row md:-mx-8 md:-my-6`) so the columns sit flush under the
-TopBar.
+The desktop form fills the shell's main area (`AppShell` gets `flush`, so there is no
+padding to cancel and no negative margin).
 
 - **Left — the 320px session-list column**, `w-[320px] shrink-0 flex-col border-r
-  border-border bg-card`. Its `p-2.5` header row holds a **real search input** (a
-  `h-[30px] rounded-md bg-muted` label + `type="search"` input, `aria-label`led with
-  `appShell.searchPlaceholder`) that actually filters this page's session rows by title /
-  cwd / backend / device / agent (`matchesRowSearch` in `sessionView.ts`) — not a
-  placeholder — plus a 30px "new conversation" button (`chat.pickAgent`) that opens
-  `NewConversationDialog`. The list scrolls in `min-h-0 flex-1 overflow-auto p-2.5`.
-- **Right — the detail pane**, `flex min-w-0 flex-1 flex-col`. With a session selected it
-  embeds the real `SessionDetailView` (`form="embedded"`) in `min-h-0 flex-1` — the same
-  implementation as the `/devices/:id/sessions/:id` route, so status, transcript, approval
-  and composer behaviour are shared, never a static placeholder. With nothing selected (or
-  no sessions) it shows the `kpP7A` empty state: the shared `EmptyState`
-  (`MessageCirclePlus`, "No conversations yet.", `chat.startFirstBody`, a "Start your
-  first conversation" button opening the dialog, and a find-more link to `/devices`).
-- TopBar: **Cnt** = total count, **Fresh** = online-`agentred` dot (web alone never
-  counts), **FindBtn** = follow-from-device.
-- **Mobile** keeps the list → detail flow, never the two-pane layout: a status-grouped
-  list (below), a reachable **real search** box above it (filters the same rows as the
-  desktop search via `matchesRowSearch`, hidden when there are no sessions), a `屏 32`
-  shared `EmptyState` with the same primary action, and a `PenLine`
-  FAB (`fixed bottom-24 right-4 size-14 rounded-full bg-primary`) that opens the new
-  conversation dialog when sessions exist. Mobile rows navigate to the detail route; the
-  detail page's mobile top bar carries the follow toggle (decision 16).
+  border-border bg-card`. Its header is a 52px band (`h-[52px] shrink-0 border-b`) so it
+  lines up with the detail header across the divider: a **real search input** plus a 30px
+  "new conversation" button (`chat.startNew`) that hands the **right pane** over to the agent
+  picker. The list scrolls below it, and it never grows a row for a conversation that has not
+  been started — a draft is not a session.
+- **The search box** is a `border border-border bg-background` label + `type="search"`
+  input, labelled `chat.searchSessions` ("Search conversations"). Two things about it are
+  deliberate:
+  - **`bg-background`, not `bg-muted`.** In dark, `--muted` and `--card` are the same value
+    (#1d2025) and this column *is* `bg-card` — a `bg-muted` field is invisible against its
+    own container. Measured: field and column both `rgb(29,32,37)`. With `bg-background` it
+    reads `rgb(23,25,28)` on `rgb(29,32,37)`, plus a border.
+  - **The copy says "conversations", not "agents, devices, and records".** Search is
+    title-only and server-side; two of the three things the old string promised are not
+    searchable any more.
+- **Right — the detail pane**, `flex min-w-0 flex-1 flex-col`, embedding the real
+  `SessionDetailView` (`form="embedded"`) — the same implementation as the
+  `/devices/:id/sessions/:id` route, so status, transcript, approval and composer behaviour
+  are shared, never a static placeholder. With nothing selected (or no sessions) it shows
+  the `kpP7A` empty state. Starting a new conversation takes over this same pane — first
+  `NewConversationPane` (pick an agent), then `DraftSession` (a conversation with nothing
+  said yet). **Desktop needs no dialog**: this pane was already idle, and covering the screen
+  to ask one question costs more than filling the space that was already there.
+- TopBar: **Fresh** only (online-`agentred` dot; web alone never counts). The bare count
+  moved to the SideNav badge, and "find conversations on your devices" is gone — the
+  machine axis answers that question **on this page**, and its online group headers carry a
+  「在这台机器上找」 affordance.
+- **Mobile** keeps the list → detail flow, never the two-pane layout. It owns its top band
+  (`ownHeader`): row 1 is title + a connection chip (dot **and** text) + account +
+  `AppControls`; row 2 is the same real search at `h-9`. Below that the index scrolls, with
+  a `PenLine` FAB (`fixed bottom-24 right-4 size-14 rounded-full bg-primary`) that raises the
+  agent-picker bottom sheet when sessions exist. Picking an agent replaces the whole screen
+  with `DraftSession`; there is no second column to put it in.
+
+### The detail's three bands
+
+`SessionDetailView` renders **header / transcript / composer**, and only the middle one
+scrolls. Both forms use it, so the route page gets the same treatment.
+
+It used to be one scroll region containing all three. Measured on a 1440×900 viewport: the
+page was 2145px tall and the composer sat 1245px below the fold — to reply you scrolled to
+the bottom, while the transcript kept growing underneath you. After the change the document
+is exactly viewport height, the middle band scrolls internally, and the composer stays put
+(re-measured with a 3230px transcript: composer fixed at top 830 / bottom 888).
+
+- **Header** (`shrink-0 border-b bg-card`): the agent avatar (palette background + initial +
+  `role="img"`, the shape `primitives.tsx`'s `AgentAvatar` uses on the desktop app), the
+  title, and a mono meta line — `●Agent · relative time · machine online/offline`.
+  Separators sit **between** parts that actually exist; a legacy session with neither status
+  nor activity time must not leave a stray leading `·`. A **Stop** button appears only while
+  the turn is actually running, and sends the real `runtime.abort`.
+  **Project is deliberately absent**: `SessionSummary` has no project field (only the
+  account mirror row does), and a guessed project name is worse than none.
+- **Transcript** (`min-h-0 flex-1 overflow-y-auto`), `max-w-measure` centred.
+- **Composer** (`shrink-0 border-t bg-card`) — see below. Approvals are **not** repeated
+  here: the transcript already renders the card, and `interactiveRequestIds` dedupes the two
+  sources.
+
+### The composer
+
+The shared package's `AIChatInput` (TipTap) — the same component the desktop app uses — in a
+`rounded-lg border` shell with a single-line footer: shortcut hint, spring, context meter,
+send.
+
+`SessionComposer` has **two** hosts: `SessionDetailView` and `DraftSession`. The first
+message of a conversation and every message after it are the same act, so they get the same
+box — mentions, slash menu, shortcut hint and the send button's enable rule are one
+implementation, not two that drift. The draft host differs in three props only: `backendType`
+comes from the chosen dispatch tier rather than a live session, there is no context meter to
+draw (no window has been reported yet), and it passes `handleRef` so the quick-start chips can
+`insertText` into the editor — rich-text content lives in the editor, not in React state, so
+appending to a string outside it would not reach.
+
+**The placeholder is not written here.** `AIChatInput` derives it from what this render
+actually wired up — omit the `placeholder` prop and you get a string that is true by
+construction. That derivation used to be duplicated on both sides, keyed on `backendType`,
+which is unrelated to whether the host wired any of those triggers; it now lives in the
+package (`chat-input/placeholder.ts`) with its copy in the `agentreUi` namespace. Here the
+inputs resolve to: `@` yes (agent mentions), `/` yes (`lib/slashCommands.ts`), `$` no
+(listing skills is a Wails binding), `!` no (the wire has no PTY method).
+
+`!` needs care twice over. With no `onCommandSubmit`, the package **clears** any line
+starting with `!` without sending or saying anything — so "!!! this matters" vanishes; the
+handler is wired purely to say so and put the text back. But wiring it would otherwise read
+as "`!` works", so the composer also passes `localCommandsEnabled={false}` — the one bit of
+this the package cannot infer.
+
+The footer's **context meter** reads `context_window_updated` / `usage` off the relay stream
+(`reduceSessionState`) — data that was already arriving and had nowhere to land. Window `<= 0`
+means "not detected yet", so the meter is hidden rather than drawn against an invented
+denominator; `>= 90%` turns `bg-status-error`.
+
+The composer is loaded with a plain dynamic `import()`, **not** `React.lazy` + `Suspense`:
+TipTap costs 252 kB gzip that four other pages never touch, but Suspense's reveal path
+(`reappearLayoutEffects`) re-runs the subtree's effects against a destroyed editor and takes
+the whole React tree down — which StrictMode guarantees you hit in `make dev`.
 
 ### Session list UX (`p5Orc`)
 
@@ -511,10 +693,18 @@ row's status colour (`statusDotClass`).
   two-line row with no follow toggle — it is a digest, not a management list.
 - **Filter chips.** `all / running / unread`, each `h-7 rounded-md px-2.5 text-[12px]
   font-medium`, active = `bg-primary-soft text-primary-text`. `running` = lifecycle
-  `running` **and not** waiting for input; `unread` = waiting for input — waiting is a live
-  overlay on top of running and never also lands in `running`. The unread chip shows an
-  amber count (`bg-status-waiting text-status-waiting-foreground`) when unread > 0.
-  Filtering applies to the recent section too, so the two never disagree.
+  `running` **and not** waiting for input. `unread` is a **real read state**, not a rename
+  of "waiting": `last_message_at > last_read_at`, the same predicate the desktop app's
+  attention-store uses, backed by `agent_sessions.last_read_at` and written by
+  `POST /v1/agent-sessions/read` when you open a conversation. The two are
+  different questions — a conversation you have read but which is parked waiting for input
+  is not unread — so the SideNav badge keeps counting "waiting for you" while the
+  index says "unread". The chip shows an amber count
+  (`bg-status-waiting text-status-waiting-foreground`) when unread > 0, taken from the
+  server's `total` for `filter=unread`, not counted locally. The only place the predicate
+  runs client-side is the machine axis (that list comes live off the device and never passed
+  through the server), and there it carries one extra clause: a conversation not yet saved
+  into the account cannot be unread — it is not in your account at all.
 - **Keyboard navigation.** The list container is `tabIndex={0}`; `ArrowUp`/`ArrowDown` move
   the `bg-primary-soft/40` selection highlight through recent, group and offline rows,
   `Enter` opens the selection (desktop embeds the row's real detail in the right pane;
@@ -537,31 +727,50 @@ row's status colour (`statusDotClass`).
   (`min-h-11`). The follow toggle is not on the mobile row; it lives on the detail page's
   top bar. On desktop it sits on group rows only — never in the recent section.
 
-### Audit (board `bKvB4`)
+### Settings
 
-`/audit` serves the real `Audit` page (`App.tsx`), not `WorkspaceComingSoon`. There is no
-audit backend in this round, so the page keeps the board's information hierarchy and fills
-every data region with an honest empty state — no sample events, IPs, token counts,
-timestamps or fabricated alerts (`audit.test.tsx`).
+`/settings` is the fifth desktop SideNav destination and is also linked from `UserMenu`;
+it is intentionally absent from the four-item mobile TabBar. The page has three
+sections: **LLM providers**, **Agent backends** and **Privacy**. The first two render the
+shared `@agentre-hub/agentre-ui` engine panels; this host supplies only the account shell,
+section navigation, sync notice and `EngineSettingsPorts` adapter. The section is also
+addressable — `?tab=privacy` opens Privacy directly, which is what the two overview links
+point at; a deep link that lands on the default tab leaves the user two steps from the
+thing they just clicked towards.
 
-- **Layout.** The page wraps in `mx-auto w-full max-w-[1200px] space-y-4`, with an
-  **alerts region** first (the `bKvB4` AlertStrip position) then `flex flex-col gap-4
-  lg:flex-row` — single column on mobile, two columns on
-desktop with no horizontal overflow. Left section: the filter row, then the event-table
-card; right: the active-credentials card (`lg:w-[320px]`).
-- **Filter row.** The four `bKvB4` categories (all / device authorization / tokens /
-revocation) render as shared `FilterChip`s in the **disabled** form — non-buttons,
-`aria-disabled`, out of the focus order, so an unavailable filter never looks usable.
-- **Event table.** The five column headers (time / event / object / source / result, mono
-`text-[10px] font-bold`) keep the table hierarchy; the header row is hidden on mobile to
-avoid overflow. Below it, the shared `EmptyState` ("No audit events yet").
-- **Alerts.** The alerts region (the board's AlertStrip position) renders the shared
-`EmptyState` ("No alerts yet") — no fabricated alert, no ignore/revoke actions.
-- **Credentials.** A card with a `text-[13px] font-bold` title ("Active credentials") and
-the shared `EmptyState`.
-- **No fake actions.** No CSV export, no revoke-a-credential, no ignore-alert action — each
-would need a backend that does not exist. The board's "这里记什么" card and its scope
-explanation are commentary and are not rendered.
+- Provider/backend CRUD uses `/v1/engine/providers`, `/v1/engine/backends`, and
+  `/v1/engine/cli-overlays`. Browser view models contain only `masked_tail` and CLI status;
+  the adapter whitelists those fields and never carries an `api_key` or `cli_path` value
+  into the panel.
+- Test, model discovery and CLI scan select an online `agentred` from `/v1/devices`, then
+  call `engine.test`, `engine.discover` or `engine.scan` through the existing browser relay
+  client. No server outbound probe exists. With no online `agentred`, the action fails with
+  a visible translated reason; saving account objects remains available.
+- `cliPath` and other desktop-only ports are omitted. Optional actions therefore follow the
+  shared-panel rule: no port means no affordance. With no registered execution device, an
+  honest alert says configuration remains in the account and will sync after registration.
+
+#### Privacy (board `I5Gb5y`)
+
+`components/settings/ActivityStatsPanel.tsx`, read and written through
+`GET`/`PUT /v1/stats/settings`. It is fetched **only when the tab is opened** — the other
+two sections must not pay a request for a page they do not show.
+
+- **Activity stats**: a `Switch`, the one-line explanation of what is reported daily, the
+  current state, and the per-machine reporting progress. Everything the response omits is
+  simply not drawn — no per-machine list means no section, not a row of "unknown".
+- **The switch state always comes from the server's reply**, never an optimistic flip. The
+  other half of turning it off is deleting the daily counts already stored; flipping the
+  control and then failing the write tells the user their data is gone when it is not.
+- **Both directions confirm**, for different reasons. Turning it *on* opens a `DialogShell`
+  carrying the reported / never-reported comparison and the backfill checkbox, because the
+  `PUT`'s `backfill` flag is a decision the user has to have seen. Turning it *off* — from
+  the switch or from the danger zone, the same dialog either way — is a `danger` shell with
+  a destructive submit, because it is irreversible. The danger zone is absent when the
+  feature is already off: there is nothing left to turn off.
+- **Saved conversations** is an explanation block, not a switch: only conversations the
+  user explicitly saved live in the account, and unsaving happens per conversation on the
+  Chat page. The count renders only when the response carries it.
 
 ### Decisions
 
@@ -570,12 +779,18 @@ explanation are commentary and are not rendered.
 | Formal UI vs design commentary | Only elements that serve a real task with real data and real actions enter the product; notes/callouts/rule lines/explainer cards are deleted from the contract | The boards mix product and review commentary; only the four-part test above separates them |
 | Shared console primitives | The repeated shapes (nav item, bottom tab, status pill, metric, filter chip, empty state, row menu) are one implementation in `components/console/`; pages compose, never re-measure | A single contract stops per-page drift and lets pages be built in parallel |
 | Desktop two-line rows vs mobile status grouping | Same sessions, two layouts: desktop shows flat recents + two-line rows grouped by agent; mobile regroups by status (waiting pinned to the top) and pins the agent name to the row | The board's "优化" (`p5Orc`) fixes the two-line row for desktop; a phone keeps one dimension per row, so status becomes the grouping axis |
-| Mobile navigation is a bottom tab of real destinations, not a drawer | Below `md` the SideNav is replaced by the `A6Z3k` TabBar with the same four real routes; the account chip moves to the TopBar | The board gives mobile its own navigation; a drawer's fake entries would imply destinations that do not exist |
+| Mobile navigation is a bottom tab of real destinations, not a mirror of desktop | Below `md` the SideNav is replaced by the `A6Z3k` TabBar with Overview / Chat / Devices / Org; Settings stays in the account menu | The board gives mobile its own navigation; a drawer's fake entries would imply destinations that do not exist, and the desktop IA can grow without crowding the bar |
 | Honest empty states | `—` in tiles and data-less cards, and the shared `EmptyState` in data-less sections; a missing source renders the real layout, never a fabricated number | A made-up number reads as a product promise that has to be un-made later |
-| Never fake a backend | Only actions with a real endpoint exist: allow/deny/reply on the overview, revoke on devices, unfollow/remove on the list, no CSV/revoke-credential on audit — **no rename, no delete, no fake success, no disabled-looking future controls** | A button that claims success it cannot deliver is worse than no button |
-| Revoke lives in the row menu | Revoke is a `RowMenu` item → confirm `Dialog` → real `POST /v1/oauth/token/revoke`, with failure keeping the dialog and success refreshing the list; no persistent explainer card | A dangerous action must be discoverable without dominating the page |
+| The overview is stats-first | `GET /v1/stats/overview` backs all four tiles, the heatmap and the three distributions; the action strip moved to the SideNav badge and the three data-less cards are gone | Two of four tiles rendered `—` and half the page said "no data"; the endpoint made the honest layout possible, and a page whose job is to say "here is what happened" should not be mostly absence |
+| A failed stats fetch is not a summary of zeros | The whole stats area is replaced by an alert with a real Retry plus a warn `EmptyState` naming what is unaffected | Zeros are a claim the user cannot falsify; "could not load" is one they can act on |
+| The heatmap skeleton is the heatmap | Before data arrives the same grid is already painted in `heat-0` | An 845px block that appears at fetch time shoves the whole page down once per visit |
+| Never fake a backend | Only actions with a real endpoint exist: revoke on devices, allow/deny/reply in the session detail, unfollow/remove on the list — **no rename, no delete, no fake success, no disabled-looking future controls**. No audit route, nav item, or dead "go to audit" link | A button that claims success it cannot deliver is worse than no button |
+| Revoke lives in the row menu | Revoke is a shared-package `DropdownMenu` item → confirm `Dialog` → real `POST /v1/oauth/token/revoke`, with failure keeping the dialog and success refreshing the list; no persistent explainer card | A dangerous action must be discoverable without dominating the page |
 | Desktop chat embeds the real detail | The right pane renders `SessionDetailView` (`form="embedded"`), the same implementation the `/devices/:id/sessions/:id` route uses; unselected shows the `kpP7A` empty state | A static placeholder would drift from the real page; one implementation keeps relay/approval/composer behaviour shared |
-| Search is honest | The shell search is a non-focusable display element with no shortcut hint; Chat's list search really filters rows; audit filters are disabled chips | A search affordance with no behaviour is a fake control either way |
+| Search is honest | Chat's list search really filters rows, server-side and by title only, and its copy says exactly that | A search affordance that promises more than it matches is a fake control either way |
+| Unread is a real column, not a relabel | `last_read_at` on the mirror row; opening a conversation writes it; the chip filters on `updated_at > last_read_at` | This chip was once called 「未读」 over a `waiting_for_input` predicate, and the 2026-08-17 rename to 「等你处理」 was the honest fix at the time. Giving it a real read state is the other way to make the name true — and it matches what the desktop app already means by "unread" |
+| The composer is pinned, not appended | `SessionDetailView` bands header / transcript / composer; only the middle scrolls, and `AppShell` stops the page scrolling at all | Measured: 2145px page against a 900px viewport put the input 1245px below the fold, and the transcript kept growing under it |
+| The placeholder states capabilities, not a backend | `AIChatInput` derives it from what this render wired up; the host passes no `placeholder` | A `backendType` table promises `@ / !` to hosts that wired neither — the desktop app had a call site hand-writing a replacement string for exactly that reason |
 | Sidebar is its own token | `--sidebar` (light #f4f4f5 = `--secondary`'s light, dark #111316 = `--code-surface`'s dark) | The board draws the nav in `chrome`; splitting it lets the nav and the code surfaces diverge independently |
 | Shell data is best-effort | Badge, Meta, Account and the TopBar Fresh/Cnt render only when their source resolves | The shell must not block the page on a number it cannot get |
 
@@ -618,10 +833,10 @@ Both form factors are supported, so build mobile-first and add `sm:`/`md:` upwar
 - **The console's mobile form is a different tree, not a squeezed desktop.** Below `md` the
   SideNav is replaced by the bottom `MobileTabBar` of real destinations; device and chat
   rows regroup (devices by their own mobile row shape, chat by status); Overview's stat
-  grid goes 2-up and its two-column row stacks; Audit hides its table-header row on mobile.
-  Each page reorders without horizontal overflow (`overview.test.tsx`, `audit.test.tsx`).
+  grid goes 2-up and its two-column row stacks.
+  Each page reorders without horizontal overflow (`overview.test.tsx`).
 - Dialogs need `w-[calc(100%-2rem)]` alongside `max-w-*`, or they touch both edges — see
-  `components/ui/dialog.tsx`.
+  the package's `dialog.tsx`.
 - A row of actions stacks on mobile: `flex flex-col gap-3 sm:flex-row-reverse`
   (`DeviceApproval.tsx`). The DOM order puts the primary action first, so keyboard and
   screen-reader users reach it first; `row-reverse` puts it back on the right on desktop.
@@ -665,8 +880,21 @@ boundary, and both are about the font file rather than taste:
 
 ## i18n
 
-All UI copy goes through `t()`. Locale files are `frontend/src/i18n/locales/{en,zh-CN}.json`,
-**`en` is the reference** for the key set.
+All UI copy goes through `t()`. Locale files are split by module, one file per top-level
+key, under `frontend/src/i18n/locales/{en,zh-CN}/`; each directory's `index.ts` merges them
+into the one bundle i18next receives. **`en` is the reference** for the key set.
+
+```
+locales/en/device.json        ->  t('device.entry.title')
+locales/en/sessionIndex.json  ->  t('sessionIndex.…')
+locales/en/index.ts           ->  merges all of them into one bundle
+```
+
+**The filename is the top-level key** — `device.json` holds the subtree *under* `device`,
+without repeating that level inside the file. Adding a module means adding the json to both
+language directories and one import line to each `index.ts`; forgetting the import, or
+mounting a file under the wrong key, is caught by `locale-modules.test.ts`
+(`locale-parity` cannot see it — a module missing from *both* languages is still in parity).
 
 ```tsx
 import { useTranslation } from 'react-i18next';
@@ -679,7 +907,7 @@ Enforced by `i18next/no-literal-string` (`mode: 'jsx-only'`), which also covers
 `aria-label`, `title`, `placeholder` and `alt` — those are user-visible too, and they are
 the ones that get forgotten.
 
-Adding copy: add the key to **both** locale files.
+Adding copy: add the key to **both** languages' module file.
 `locale-parity.test.ts` fails on a key present in one and missing from the other,
 because i18next's response to a missing key is to silently serve the English one.
 
@@ -702,11 +930,13 @@ fallback value.
 
 ## Components
 
-Use `@/components/ui/*` (shadcn). Compose class names with `cn()` from `@/lib/utils` —
-it merges Tailwind classes correctly, which naive string concatenation does not.
+Use the shadcn primitives exported by `@agentre-hub/agentre-ui`; `@/components/ui/` holds
+only what is genuinely server-only (today: `card.tsx`). Compose class names with `cn()`
+from the same package — it merges Tailwind classes correctly, which naive string
+concatenation does not.
 
 ```tsx
-import { cn } from '@/lib/utils';
+import { cn } from '@agentre-hub/agentre-ui';
 
 <div className={cn('rounded-md border border-border p-4', className)} />
 ```
@@ -725,6 +955,70 @@ Two shapes that look interchangeable and are not:
   because `role="dialog"` tells a screen reader the rest of the page is inert when it is
   the whole page. Reach for `Dialog` for a confirm-and-dismiss interaction, as the device
   list does.
+
+## Dialogs
+
+Two kits come out of `@agentre-hub/agentre-ui`, and which one you reach for is not a
+matter of taste:
+
+- **`DialogShell` — use this for anything new.** It is the spec below.
+- The bare `Dialog` / `DialogContent` primitives — the older single-size shell. One place
+  still reaches for them, and deliberately: `NewConversationSheet` wants a bottom sheet at
+  **every** width, while `DialogShell`'s sheet form only holds below `sm:`. That is a
+  reason, not debt. Anywhere else, use `DialogShell`.
+
+### The spec
+
+**Three sizes, chosen by purpose.** `sm` 420 for a single decision, `md` 560 for the
+form of one thing, `lg` 760 for anything with a browsing panel. Pass `size`; do not
+push a width in through `className` at the call site — that is how a confirm box ends
+up as wide as a directory picker.
+
+**Below 640px it is a bottom sheet, and that is the base style.** Full width, pinned
+to the bottom, top corners rounded, at most `90dvh`, footer above the safe area, grip
+visible. The centred card is the `sm:` override, not the other way round — writing the
+card as the base and overriding with `max-sm:` paints one frame of the card first.
+Same component, same props: the form is not written twice.
+
+**Only the body scrolls.** Header and footer are `shrink-0`; the body is
+`min-h-0 flex-1 overflow-y-auto`. Leave out `min-h-0` and the flex child refuses to
+shrink, so long content pushes the header and footer out of view instead of scrolling.
+
+**Errors land inside the dialog.** A whole-dialog error goes in the footer, on the
+left, on the same line as the buttons — that is where the eyes of whoever pressed the
+button already are. Field-level errors go under their field, which is the caller's job.
+Do not hang the failure on the page behind the dialog.
+
+**The primary button carries its own busy state** — spinner plus disabled, via
+`DialogShellSubmit busy`. While busy, neither `Esc` nor a click on the overlay closes
+the dialog: the write is in flight, and closing only makes the user think it never
+went out.
+
+**A dangerous confirm is a shape, not a sentence.** `danger` on the shell and the
+header, `variant="destructive"` on the submit. The consequences go in the body; the
+title stays one line.
+
+**A dialog that saves as you go has no Save button.** Its footer holds only Done, and
+the save state (`saving` / `saved` / `error`) sits at the top right of the header via
+`saveState` — the same shape the org detail header already uses.
+
+```tsx
+<DialogShell open={open} onOpenChange={setOpen} size="md" busy={saving}>
+  <DialogShellHeader title={t('project.create.title')} onClose={close} busy={saving} />
+  <DialogShellBody>{/* fields */}</DialogShellBody>
+  <DialogShellFooter error={error}>
+    <Button variant="ghost" onClick={close}>{t('common.cancel')}</Button>
+    <DialogShellSubmit busy={saving} onClick={submit}>
+      {t('project.create.submit')}
+    </DialogShellSubmit>
+  </DialogShellFooter>
+</DialogShell>
+```
+
+**Check the narrow variant in a real narrow viewport.** `sm:` reads the *viewport*
+width, not the container's, so shrinking a box inside a wide window shows you a
+centred card that no phone will ever render. Use the browser's device toolbar, or a
+real device.
 
 ## Adding a page
 
@@ -759,6 +1053,5 @@ Two shapes that look interchangeable and are not:
 
 5. Sizes, spacing and radii from the three scale tables above; the width from the board.
 6. Check light **and** dark, desktop **and** mobile.
-7. `cd frontend && pnpm lint && pnpm test`, then `cd e2e && pnpm smoke`. Neither `pnpm lint`
-   nor `pnpm test` type-checks — only `pnpm build` (`tsc -b && vite build`) does, so run
-   `pnpm exec tsc -b` before you call it done.
+7. Run the frontend lint, test and build gates. Use `make e2e` when real browser coverage
+   is required; [verification.md](verification.md) owns how to choose and report that run.

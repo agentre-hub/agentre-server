@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
 
@@ -28,7 +28,6 @@ vi.mock("@/hooks/use-relay", () => ({
               { sessionId: 2, lifecycleState: "idle", latestSeq: 1 },
               { sessionId: 3, lifecycleState: "running", latestSeq: 1 },
             ],
-            supportsSessionMetadata: true,
           }),
         }
       : null,
@@ -222,39 +221,6 @@ describe("device row expand", () => {
     expect(within(card).queryByRole("link", { name: /conversations/i })).toBe(
       null,
     );
-  });
-
-  // 帧 47：浏览器行不接单，也**不可展开** —— 展开它只会去问一台没有项目、没有
-  // Agent 的「设备」，把 agentred 的那套详情套在浏览器上是错的。
-  it("a kind=web row has no expand control", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/devices")
-        return {
-          devices: [
-            {
-              id: 3,
-              name: "Chrome · macOS",
-              kind: "web",
-              platform: "macOS",
-              version: "1",
-              fingerprint: "fp-web",
-              last_seen_at: 1754000000000,
-              status: 1,
-              online: true,
-              is_this_device: false,
-            },
-          ],
-        };
-      throw new Error("unexpected call: " + path);
-    });
-
-    renderDevices();
-    const card = (await screen.findByText("Chrome · macOS")).closest(
-      '[data-slot="card"]',
-    ) as HTMLElement;
-    expect(
-      within(card).queryByRole("button", { name: /show details/i }),
-    ).toBeNull();
   });
 
   it("expanding a desktop row lists every account project, configured or not, with no agents section", async () => {

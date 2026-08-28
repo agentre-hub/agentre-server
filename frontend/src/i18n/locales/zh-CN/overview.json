@@ -1,0 +1,85 @@
+{
+  "currentTarget": "当前落到 {{device}}",
+  "noAvailableTarget": "没有可用的执行机器",
+  "thisDevice": "本机",
+  "noDevice": "未指定设备",
+  "offline": "离线",
+  "unpaired": "未配对",
+  "empty": "还没有任何 Agent。",
+  "stats": {
+    "range": {
+      "label": "统计范围",
+      "7d": "近 7 天",
+      "30d": "近 30 天",
+      "all": "全部"
+    },
+    "unit": {
+      "conversations": "{{count}} 条"
+    },
+    "tiles": {
+      "conversations": "对话",
+      "conversationsTotal": "累计 {{count}} 条",
+      "conversationsNone": "还没有保存过对话",
+      "streak": "连续活跃",
+      "streakUnit": "天",
+      "streakLongest": "最长 {{count}} 天",
+      "activeDays": "活跃天",
+      "activeDaysUnit": "/ {{count}} 天",
+      "activeDaysShare": "占 {{percent}}%",
+      "online": "设备在线",
+      "onlineOffline": "{{device}} 已离线",
+      "onlineNone": "还没有登记设备",
+      "enableToSee": "开启活跃统计后可见"
+    },
+    "scopeNotice": {
+      "text": "这些统计只覆盖你已保存到账号的对话，不是全部活动。",
+      "action": "开启完整活跃统计 →"
+    },
+    "newAccount": {
+      "text": "先登记一台设备。统计要等你的机器把对话跑起来才有东西可看。",
+      "action": "去设备页"
+    },
+    "error": {
+      "alert": "无法加载统计数据，请重试。",
+      "retry": "重试",
+      "title": "统计暂时取不到",
+      "body": "设备状态与你的对话都不受影响。",
+      "action": "去对话 →"
+    },
+    "heatmap": {
+      "title": "活跃热力",
+      "settings": "统计设置 →",
+      "less": "更少",
+      "more": "更多",
+      "mobileWeeks": "近 19 周",
+      "mobileHint": "更长的历史在桌面端看。",
+      "greyNote": "这一片灰是「那天没有活动」，不是坏了。",
+      "busiest": "最活跃的一天",
+      "avg": "平均每活跃日",
+      "avgSub": "按有活动的天算",
+      "weekday": {
+        "mon": "一",
+        "wed": "三",
+        "fri": "五"
+      },
+      "timeZone": "日界按服务端时区 {{zone}} 切"
+    },
+    "agents": {
+      "title": "Agent 使用排行",
+      "all": "全部 Agent →",
+      "empty": "还没有 Agent。它们在桌面端建，登记设备后同步过来。"
+    },
+    "backends": {
+      "title": "后端与模型",
+      "unreported": "未上报",
+      "models": "常用模型",
+      "followsAgent": "跟随 Agent 绑定",
+      "empty": "还没有跑过对话。"
+    },
+    "projects": {
+      "title": "项目分布",
+      "unassigned": "未归属项目",
+      "empty": "还没有项目。"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/sync/pull?cursor=999&limit=200"
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "code": 30505,
+      "msg": "服务端不认识该同步游标，请先拉取全量快照"
+    }
+  }
+}

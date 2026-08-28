@@ -13,12 +13,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"agentre-server/internal/api"
-	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
-	"agentre-server/internal/pkg/session"
-	"agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/api"
+	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 )
 
 func TestRelayTicket_FromSessionWithoutCreatingDevice(t *testing.T) {

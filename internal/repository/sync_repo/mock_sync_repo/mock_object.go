@@ -10,8 +10,8 @@
 package mock_sync_repo
 
 import (
-	sync_entity "agentre-server/internal/model/entity/sync_entity"
 	context "context"
+	sync_entity "github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -71,6 +71,21 @@ func (mr *MockSyncObjectRepoMockRecorder) Find(ctx, userID, syncID any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Find", reflect.TypeOf((*MockSyncObjectRepo)(nil).Find), ctx, userID, syncID)
 }
 
+// FindCLIOverlayByNaturalKey mocks base method.
+func (m *MockSyncObjectRepo) FindCLIOverlayByNaturalKey(ctx context.Context, userID int64, backendSyncID, fingerprint string) (*sync_entity.SyncObject, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindCLIOverlayByNaturalKey", ctx, userID, backendSyncID, fingerprint)
+	ret0, _ := ret[0].(*sync_entity.SyncObject)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindCLIOverlayByNaturalKey indicates an expected call of FindCLIOverlayByNaturalKey.
+func (mr *MockSyncObjectRepoMockRecorder) FindCLIOverlayByNaturalKey(ctx, userID, backendSyncID, fingerprint any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCLIOverlayByNaturalKey", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindCLIOverlayByNaturalKey), ctx, userID, backendSyncID, fingerprint)
+}
+
 // FindLocationByNaturalKey mocks base method.
 func (m *MockSyncObjectRepo) FindLocationByNaturalKey(ctx context.Context, userID int64, projectSyncID, fingerprint string) (*sync_entity.SyncObject, error) {
 	m.ctrl.T.Helper()
@@ -99,6 +114,21 @@ func (m *MockSyncObjectRepo) ListByKinds(ctx context.Context, userID int64, kind
 func (mr *MockSyncObjectRepoMockRecorder) ListByKinds(ctx, userID, kinds any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListByKinds", reflect.TypeOf((*MockSyncObjectRepo)(nil).ListByKinds), ctx, userID, kinds)
+}
+
+// ListLiveByFingerprint mocks base method.
+func (m *MockSyncObjectRepo) ListLiveByFingerprint(ctx context.Context, userID int64, fingerprint string, kinds []string) ([]*sync_entity.SyncObject, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListLiveByFingerprint", ctx, userID, fingerprint, kinds)
+	ret0, _ := ret[0].([]*sync_entity.SyncObject)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListLiveByFingerprint indicates an expected call of ListLiveByFingerprint.
+func (mr *MockSyncObjectRepoMockRecorder) ListLiveByFingerprint(ctx, userID, fingerprint, kinds any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListLiveByFingerprint", reflect.TypeOf((*MockSyncObjectRepo)(nil).ListLiveByFingerprint), ctx, userID, fingerprint, kinds)
 }
 
 // ListSince mocks base method.

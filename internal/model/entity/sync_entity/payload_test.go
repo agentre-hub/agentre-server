@@ -6,6 +6,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// 公共守卫契约必须是 (kind, payload)：调用方不能靠可变参数绕过 kind 语义，
+// 否则 llm_provider 的唯一放行规则会在下一次重构时重新退化成全局放行。
+var _ func(string, []byte) error = ValidatePayload
+
 // R2 守卫：跨机引用一律不带本地自增 ID 过机。判据是「键名以 id 结尾且取值是数字」
 // ——同步标识与指纹都是字符串，只有桌面端的本地主键才会以数字出现在这个位置。
 func TestValidatePayload_GivenNumericIDFields_ThenRejected(t *testing.T) {
@@ -18,7 +22,7 @@ func TestValidatePayload_GivenNumericIDFields_ThenRejected(t *testing.T) {
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.ErrorIs(t, ValidatePayload([]byte(payload)), ErrPayloadLocalID)
+			assert.ErrorIs(t, ValidatePayload("", []byte(payload)), ErrPayloadLocalID)
 		})
 	}
 }
@@ -40,12 +44,12 @@ func TestValidatePayload_GivenStringReferences_ThenAccepted(t *testing.T) {
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.NoError(t, ValidatePayload([]byte(payload)))
+			assert.NoError(t, ValidatePayload("", []byte(payload)))
 		})
 	}
 }
 
-// 凭据不上报：llm_providers 整行（含 APIKey）不出本机，跨机只传 provider_key。
+// 除 llm_provider 外凭据不上报：普通业务对象只携带 provider_key 字符串引用。
 func TestValidatePayload_GivenCredentialOrProviderRow_ThenRejected(t *testing.T) {
 	cases := map[string]string{
 		"api_key":      `{"api_key":"sk-x"}`,
@@ -55,21 +59,30 @@ func TestValidatePayload_GivenCredentialOrProviderRow_ThenRejected(t *testing.T)
 	}
 	for name, payload := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.ErrorIs(t, ValidatePayload([]byte(payload)), ErrPayloadCredential)
+			assert.ErrorIs(t, ValidatePayload("", []byte(payload)), ErrPayloadCredential)
 		})
 	}
 }
 
+// LLM provider 是账号级同步对象，唯一可以携带 API Key 的 kind；后端身份本身
+// 绝不能把某台机器的 CLI 绝对路径带进账号级载荷。
+func TestValidatePayload_GivenEngineKinds_ThenOnlyProviderMayCarryAPIKey(t *testing.T) {
+	assert.NoError(t, ValidatePayload(KindLLMProvider, []byte(`{"api_key":"sk-provider"}`)),
+		"llm_provider 的凭据必须能随账号级对象同步")
+	assert.ErrorIs(t, ValidatePayload(KindAgentBackend, []byte(`{"cli_path":"/usr/local/bin/claude"}`)),
+		ErrPayloadCredential, "backend 身份载荷不得携带机器路径")
+}
+
 func TestValidatePayload_GivenNonObject_ThenRejected(t *testing.T) {
-	assert.ErrorIs(t, ValidatePayload([]byte(`[{"name":"a"}]`)), ErrPayloadNotObject)
-	assert.ErrorIs(t, ValidatePayload([]byte(`"a"`)), ErrPayloadNotObject)
-	assert.Error(t, ValidatePayload([]byte(`{oops`)))
+	assert.ErrorIs(t, ValidatePayload("", []byte(`[{"name":"a"}]`)), ErrPayloadNotObject)
+	assert.ErrorIs(t, ValidatePayload("", []byte(`"a"`)), ErrPayloadNotObject)
+	assert.Error(t, ValidatePayload("", []byte(`{oops`)))
 }
 
 // 墓碑不带正文：空载荷是合法的。
 func TestValidatePayload_GivenEmpty_ThenAccepted(t *testing.T) {
-	assert.NoError(t, ValidatePayload(nil))
-	assert.NoError(t, ValidatePayload([]byte("")))
+	assert.NoError(t, ValidatePayload("", nil))
+	assert.NoError(t, ValidatePayload("", []byte("")))
 }
 
 // 头像正文按内容哈希单独传，不进同步载荷。
@@ -78,10 +91,10 @@ func TestValidatePayload_GivenAvatarContent_ThenRejected(t *testing.T) {
 		`{"name":"x","avatar_data_url":"data:image/png;base64,AAAA"}`,
 		`{"avatarDataUrl":"data:image/png;base64,AAAA"}`,
 	} {
-		assert.ErrorIs(t, ValidatePayload([]byte(payload)), ErrPayloadAvatarContent, payload)
+		assert.ErrorIs(t, ValidatePayload("", []byte(payload)), ErrPayloadAvatarContent, payload)
 	}
 	// avatar_hash 是内容哈希这个字符串引用，不是正文，照常放行。
-	assert.NoError(t, ValidatePayload([]byte(`{"avatar_hash":"deadbeef"}`)))
+	assert.NoError(t, ValidatePayload("", []byte(`{"avatar_hash":"deadbeef"}`)))
 }
 
 // 这一组向量与桌面端 syncwire.GuardPayload 的同名测试**逐条一致**：两个仓库不能
@@ -113,9 +126,37 @@ func TestValidatePayload_GivenTheSharedVectors_ThenMatchesTheDesktopGuard(t *tes
 		`{"env_json":"{\"MY_TOKEN\":\"secret\"}"}`,
 	}
 	for _, payload := range rejected {
-		assert.Error(t, ValidatePayload([]byte(payload)), payload)
+		assert.Error(t, ValidatePayload("", []byte(payload)), payload)
 	}
 	for _, payload := range accepted {
-		assert.NoError(t, ValidatePayload([]byte(payload)), payload)
+		assert.NoError(t, ValidatePayload("", []byte(payload)), payload)
+	}
+}
+
+// R6 的级联判据：「删除一个 backend 时，引用它的执行目标列表项一并落墓碑」，靠
+// 执行目标载荷里的 backend_sync_id 认出引用者。这个键名是跨仓库的约定——桌面端
+// sync_svc/adapter_org.go 写出它，服务端 workspace_svc 的展示路径也读它。
+//
+// 解析不出来一律返回空串（= 不引用任何 backend）：级联是删除，宁可漏一条也不能
+// 多删一条。漏的那条最坏是 R2a 的一次暂缓，多删的是用户还在用的配置。
+func TestExecTargetBackendSyncID(t *testing.T) {
+	cases := map[string]struct {
+		payload string
+		want    string
+	}{
+		"正常载荷":     {`{"agent_sync_id":"a","backend_sync_id":"be-1","sort_order":2}`, "be-1"},
+		"只有引用":     {`{"backend_sync_id":"be-2"}`, "be-2"},
+		"没有这个键":    {`{"agent_sync_id":"a","sort_order":0}`, ""},
+		"取值不是字符串":  {`{"backend_sync_id":12}`, ""},
+		"空串":       {`{"backend_sync_id":""}`, ""},
+		"坏 JSON":   {`{"agent_sync_id":"a"`, ""},
+		"墓碑的空对象":   {`{}`, ""},
+		"整个载荷是空的":  {``, ""},
+		"载荷根本不是对象": {`[1,2,3]`, ""},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, c.want, ExecTargetBackendSyncID(c.payload))
+		})
 	}
 }

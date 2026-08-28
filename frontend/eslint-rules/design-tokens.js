@@ -81,6 +81,35 @@ const TOKEN_HINT =
   " 见 docs/design.md#colour-tokens";
 
 /**
+ * 阶梯上**已经有 token** 的那几档像素值。
+ *
+ * 判据刻意是「这个尺寸有没有对应的 token」，不是「所有字面像素都禁」：
+ *   10 → text-3xs   11 → text-2xs   12 → text-xs
+ *   13 → text-aux   14 → text-sm    15 → text-prose
+ * 9px（设备指纹）与 16px 以上的展示字号（RFC 8628 确认码、总览的指标数字）
+ * 目前没有对应档，为一两处特例各造一个 token 是把阶梯撑成词汇表，所以放行。
+ * 哪天它们也成了档，往这个列表里加一个数字即可。
+ *
+ * 与 agentre 仓的同名模块保持逐字一致 —— 两端共用同一套阶梯，
+ * 规则分叉了就等于阶梯分叉了。
+ */
+const TOKENED_FONT_SIZES = "10|11|12|13|14|15";
+
+/**
+ * 例：text-[13px]、sm:text-[15px]、group-hover:text-[11px]
+ *
+ * 不匹配收尾的 `]`：`[` 已经足够定位，少一个方括号就少一处 esquery 选择器
+ * 解析上的不确定（那层语法里只有 `/` 一定要转义，但方括号能不写就不写）。
+ */
+const ARBITRARY_FONT_SIZE = `(?:^|[\\s"'\`])${VARIANT}text-\\[(?:${TOKENED_FONT_SIZES})px`;
+
+const LADDER_HINT =
+  "字号必须走阶梯：10→text-3xs、11→text-2xs、12→text-xs、13→text-aux、14→text-sm、15→text-prose。" +
+  " 档位定义在共享包 @agentre-hub/agentre-ui 的 styles/tokens.css，两端与包共用同一份。" +
+  " 写字面像素会绕开阶梯，且行高只能靠继承——同一档在不同父容器下高矮不一。" +
+  " 确实需要一档新尺寸时先去包里加 token，不要就地写死。";
+
+/**
  * no-restricted-syntax 的 selector 形式。
  * 走内建规则而不是自写插件：ESLint selector 已经能表达「字符串字面量匹配正则」。
  */
@@ -101,6 +130,21 @@ const restrictedSyntax = [
     selector: `TemplateElement[value.raw=/${RAW_COLOR_VALUE}/]`,
     message: `禁止在模板字符串里写死颜色值（#hex / rgb() / hsl()）。${TOKEN_HINT}`,
   },
+  {
+    selector: `Literal[value=/${ARBITRARY_FONT_SIZE}/]`,
+    message: `禁止绕开字号阶梯的字面像素类（如 text-[13px]）。${LADDER_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${ARBITRARY_FONT_SIZE}/]`,
+    message: `禁止绕开字号阶梯的字面像素类（模板字符串里也不行）。${LADDER_HINT}`,
+  },
 ];
 
-export { LITERAL_COLOR_CLASS, PALETTE, RAW_COLOR_VALUE, restrictedSyntax };
+export {
+  ARBITRARY_FONT_SIZE,
+  LITERAL_COLOR_CLASS,
+  PALETTE,
+  RAW_COLOR_VALUE,
+  TOKENED_FONT_SIZES,
+  restrictedSyntax,
+};

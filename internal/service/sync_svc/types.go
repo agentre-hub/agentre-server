@@ -42,8 +42,11 @@ type PushItem struct {
 	BaseVersion int64
 	// UpdatedAt 是客户端的最后修改时间。只落库供展示与 30 天窗口计算，
 	// 一律不参与胜负比较。
-	UpdatedAt           int64
-	Deleted             bool
+	UpdatedAt int64
+	// DeletedAt 非零表示这是一条墓碑，值是**发起端记下的删除时刻**（Unix 毫秒）。
+	// 它不是布尔：时刻在桌面端库、线格式与 server 库三处本来就是时刻，压成布尔
+	// 之后落地只能另行编造一个删除时间（2026-08-27-schema-overhaul.md 决策 20）。
+	DeletedAt           int64
 	AgentredFingerprint string
 	ProjectSyncID       string
 	Payload             []byte
@@ -65,19 +68,19 @@ type PushItemResult struct {
 	Status  string
 	// Reason 只在 Status 为 rejected 时有值。
 	Reason string
-	// OverwrittenVersion / OverwrittenDeviceID / OverwrittenPayload 只在 Status 为
-	// conflict 时有值：被这次上行覆盖掉的是哪一版、来自哪台设备、正文是什么。
+	// OverwrittenVersion / OverwrittenOriginFingerprint / OverwrittenPayload 只在
+	// Status 为 conflict 时有值：被这次上行覆盖掉的是哪一版、来自哪台机器、正文是什么。
 	//
 	// 正文必须由 server 带回去：上行端手上那一份是**覆盖别人的**那一份，它不持有
 	// 被覆盖掉的内容。R5 承诺的「追回被覆盖的那一版」只有这一条路。
-	OverwrittenVersion  int64
-	OverwrittenDeviceID int64
-	OverwrittenPayload  string
-	// MergedSyncID / MergedVersion / MergedDeviceID 只在 R4b 的自然键合并发生时
-	// 有值：落败的那一份的同步标识、版本与来源设备，它已在 server 落墓碑。
-	MergedSyncID   string
-	MergedVersion  int64
-	MergedDeviceID int64
+	OverwrittenVersion           int64
+	OverwrittenOriginFingerprint string
+	OverwrittenPayload           string
+	// MergedSyncID / MergedVersion / MergedOriginFingerprint 只在 R4b 的自然键合并
+	// 发生时有值：落败的那一份的同步标识、版本与来源机器，它已在 server 落墓碑。
+	MergedSyncID            string
+	MergedVersion           int64
+	MergedOriginFingerprint string
 }
 
 type PushOutput struct {
@@ -91,7 +94,7 @@ type PullInput struct {
 	Limit    int
 }
 
-// PullItem 是下行的一行，墓碑也在其中（Deleted = true），删除靠它到达各端。
+// PullItem 是下行的一行，墓碑也在其中（DeletedAt > 0），删除靠它到达各端。
 type PullItem struct {
 	Kind                string
 	SyncID              string
@@ -100,8 +103,10 @@ type PullItem struct {
 	Payload             []byte
 	Version             int64
 	UpdatedAt           int64
-	SourceDeviceID      int64
-	Deleted             bool
+	// OriginFingerprint 是最后一次修改来自哪台机器（决策 14）；空串 = 服务端直写。
+	OriginFingerprint string
+	// DeletedAt 非零 = 墓碑，值是删除时刻（Unix 毫秒，决策 20）。
+	DeletedAt int64
 }
 
 type PullOutput struct {

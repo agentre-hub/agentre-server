@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Laptop, ShieldCheck, Timer } from "lucide-react";
 
-import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
+import { Alert, Button } from "@agentre-hub/agentre-ui";
+import PageTitle from "@/components/PageTitle";
 import { useMe } from "@/hooks/use-me";
 import { deviceKindLabel } from "@/lib/deviceKind";
 
@@ -39,7 +39,7 @@ function AccountAvatar() {
   return (
     <span
       aria-hidden="true"
-      className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[11px] font-semibold text-primary-text"
+      className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary-soft text-2xs font-semibold text-primary-text"
     >
       {initial}
     </span>
@@ -126,9 +126,7 @@ export default function DeviceApproval({
             {t("device.eyebrow")}
           </span>
         </div>
-        <h1 className="text-2xl font-semibold text-foreground">
-          {t("device.approve.title")}
-        </h1>
+        <PageTitle>{t("device.approve.title")}</PageTitle>
         <div className="flex items-start gap-2">
           <AccountAvatar />
           {/* 说明不分档：服务端没有任何一处按设备做过权限判断，四种 kind
@@ -144,7 +142,7 @@ export default function DeviceApproval({
           <Laptop className="size-5 text-primary-text" aria-hidden="true" />
         </span>
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-[15px] font-semibold text-foreground">
+          <p className="text-prose font-semibold text-foreground">
             {kindLabel}
           </p>
           <p className="truncate font-mono text-xs text-muted-foreground">
@@ -154,7 +152,7 @@ export default function DeviceApproval({
       </div>
 
       <div className="flex flex-col items-center gap-2.5 rounded-md bg-primary-soft px-4 py-5 text-center">
-        <p className="text-[13px] font-medium text-primary-text">
+        <p className="text-aux font-medium text-primary-text">
           {t("device.approve.verify")}
         </p>
         <p className="font-mono text-[28px] font-semibold tracking-[7px] text-primary-text sm:text-[34px]">
@@ -171,7 +169,7 @@ export default function DeviceApproval({
             变化的 live region，否则每秒都会被念一遍（无障碍与响应式）。 */}
         <p
           aria-hidden="true"
-          className="text-[13px] font-medium text-status-waiting"
+          className="text-aux font-medium text-status-waiting"
         >
           {minutes > 0
             ? t("device.approve.expiry", { minutes, seconds })
@@ -215,7 +213,7 @@ export default function DeviceApproval({
         </Button>
       </div>
 
-      <p className="text-xs text-subtle-foreground">
+      <p className="text-xs text-muted-foreground">
         {t("device.approve.fineprint")}
       </p>
     </div>

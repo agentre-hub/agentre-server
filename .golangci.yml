@@ -44,3 +44,19 @@ linters:
         linters: [forbidigo]
       - path: internal/bootstrap/cago\.go
         linters: [forbidigo]
+
+# golangci-lint v2 把格式化器从 linters 里拆了出来，需要单独这一段；缺了它 gofmt
+# 从来不会被执行。这正是 202608150002 那个多余空注释行能从 92dd273 一路躺到
+# 2026-08-17 才被人肉发现的原因——lint 全绿，因为压根没人检查格式。
+formatters:
+  enable:
+    # gofmt：缩进、对齐、多余空行。
+    - gofmt
+    # goimports：在 gofmt 之上再管 import 分组。本仓既有写法就是
+    # 「标准库 / 第三方 / agentre-server 自己」三段，local-prefixes 把这条从
+    # 「大家自觉遵守」变成机械检查。
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/agentre-hub/agentre-server

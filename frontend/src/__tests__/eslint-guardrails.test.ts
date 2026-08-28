@@ -21,13 +21,24 @@ const FRONTEND_ROOT = path.resolve(
  */
 let eslint: ESLint;
 
-beforeAll(() => {
+/**
+ * 预热要给足时间：**第一次** lintText 才会去解析整份 eslint.config.js（连同
+ * typescript-eslint、插件、tsconfig），冷跑要好几秒；之后每次都在 1 秒以内。
+ *
+ * 这一步单独摆在 beforeAll 里，就是为了别把这笔一次性开销记到第一条用例的
+ * 5 秒默认预算上 —— 记上去的话，这条守卫会随着整个套件的并发压力时红时绿，
+ * 而它红起来跟它守的那条规则毫无关系。
+ */
+beforeAll(async () => {
   eslint = new ESLint({
     cwd: FRONTEND_ROOT,
     // 不传 overrideConfigFile → 走项目自身的 eslint.config.js
     errorOnUnmatchedPattern: false,
   });
-});
+  await eslint.lintText("export const warmup = 1;\n", {
+    filePath: path.join(FRONTEND_ROOT, "src/warmup.ts"),
+  });
+}, 60_000);
 
 /** 按 src/ 下的真实路径去 lint，这样文件才会命中 src 的配置段。 */
 async function lintAs(filePath: string, code: string) {
@@ -101,6 +112,39 @@ describe("design token guardrail", () => {
       `export default { define: { c: "#0891b2" } };`,
     );
     expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+});
+
+describe("native control guardrail", () => {
+  // 本仓的基础组件全部来自共享包，但包里一度没有 Select / Checkbox / 搜索框，
+  // 于是组织面就地退回了系统控件（系统控件走浏览器自己的配色，与 tokens.css 无关，
+  // 深色下最先露馅）。这条守卫拦的是「再退让一次」。
+  it.each([
+    ["native select", `export const a = () => <select><option /></select>;`],
+    ["native textarea", `export const a = () => <textarea value="" />;`],
+    ["native checkbox", `export const a = () => <input type="checkbox" />;`],
+    ["native radio", `export const a = () => <input type="radio" />;`],
+    ["native search field", `export const a = () => <input type="search" />;`],
+  ])("rejects %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    [
+      "shared package control",
+      `export const a = ({ S }) => <S.Select value="" />;`,
+    ],
+    // 文件选择器没有可替代的原语形态，它总是藏起来由一颗按钮触发。
+    [
+      "hidden file input",
+      `export const a = () => <input type="file" className="hidden" />;`,
+    ],
+    // 验证码那六个格子是自绘控件，不是能被 Input 顶替的普通字段。
+    ["plain text input", `export const a = () => <input type="text" />;`],
+  ])("accepts %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
   });
 });
 

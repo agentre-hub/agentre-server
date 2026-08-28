@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"agentre-server/internal/service/user_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
 type githubClient struct {
@@ -92,9 +92,7 @@ func (c *githubClient) FetchProfile(ctx context.Context, accessToken string) (*P
 			return nil, fmt.Errorf("github %s status %d", u, resp.StatusCode)
 		}
 		raw, _ := io.ReadAll(resp.Body)
-		if out != nil {
-			_ = json.Unmarshal(raw, out)
-		}
+		_ = json.Unmarshal(raw, out)
 		return raw, nil
 	}
 	var user struct {

@@ -5,6 +5,10 @@
 /runtime/
 
 # frontend
+# 仓库根不该有 node_modules —— 但只要有人在根目录跑一次 JS 工具（vitest 会在
+# cwd 下建 .vite 缓存），它就会冒出来，而下面那两条按目录锚定的规则盖不到它。
+# 2026-08-21 有一次就差点把 node_modules/.vite/vitest/**/results.json 提交进去。
+/node_modules/
 /frontend/node_modules/
 /frontend/dist/
 /internal/web/dist/

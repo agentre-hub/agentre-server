@@ -32,6 +32,20 @@ func (*Device) TableName() string { return "devices" }
 
 func (d *Device) IsActive() bool { return d != nil && d.Status == consts.ACTIVE }
 
+// UsableBy 判定这台设备能不能被 userID 这个账号当作自己的设备使用：查得到、归他、
+// 而且还没被撤销。
+//
+// 三个条件必须一起判。「查得到 + 归他」少了可用性，一台已撤销的设备照样能被寻址；
+// 「归他」少了，就是跨账号访问。判定放在实体上而不是各调用点，是因为它曾在
+// engine_ctr / relay_svc / workspace_svc 三处各写一遍，条件已经开始各自演化。
+//
+// 只回 bool、不回 error：三个调用点的失败出口本来就不同（中继回
+// ErrDaemonForbidden，两处读端点回 DeviceNotFound），该收敛的是判据不是出口。
+// 额外的条件（比如中继还要求 kind 可寻址）由调用点自己叠在后面。
+func (d *Device) UsableBy(userID int64) bool {
+	return d != nil && userID != 0 && d.UserID == userID && d.IsActive()
+}
+
 // fingerprintPrefix 是 daemon 侧规范指纹的算法前缀（sha256:<64 位 hex>）。
 const fingerprintPrefix = "sha256:"
 

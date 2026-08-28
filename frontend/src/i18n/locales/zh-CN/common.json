@@ -1,0 +1,13 @@
+{
+  "appName": "AgentRe Server",
+  "back_home": "回到首页",
+  "close": "关闭",
+  "cancel": "取消",
+  "loading": "加载中…",
+  "saving": "保存中…",
+  "saved": "已保存",
+  "saveFailed": "保存失败",
+  "language": {
+    "label": "语言"
+  }
+}

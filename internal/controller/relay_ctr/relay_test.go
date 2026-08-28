@@ -9,10 +9,13 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/cago-frame/cago/database/redis"
+	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
@@ -21,15 +24,25 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"agentre-server/internal/api"
-	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/pkg/code"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
-	"agentre-server/internal/repository/device_repo/mock_device_repo"
-	"agentre-server/internal/service/relay_svc"
+	"github.com/agentre-hub/agentre-server/internal/api"
+	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/user_repo/mock_user_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
+
+var protobufRelayDialer = websocket.Dialer{Subprotocols: []string{relayws.ProtobufSubprotocol}}
 
 type relayStub struct {
 	daemonRoute       relay_svc.Route
@@ -96,7 +109,7 @@ func TestRelayClientAcceptsSessionTicketFromQuery(t *testing.T) {
 	stub.clientTargets = make(chan string, 1)
 	server := newRelayServer(t, signer, stub)
 	endpoint := wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon&access_token="+ticket)
-	conn, response, err := websocket.DefaultDialer.Dial(endpoint, nil)
+	conn, response, err := protobufRelayDialer.Dial(endpoint, nil)
 	if response != nil {
 		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
 	}
@@ -156,7 +169,7 @@ func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, string, int,
 	}
 }
 
-func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
+func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis()
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
@@ -201,7 +214,7 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	}
 
 	headers := http.Header{"Authorization": {"Bearer " + token}}
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
+	conn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	daemonPongs := make(chan struct{}, 1)
@@ -217,23 +230,26 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnFrames(t *testing.T) {
 	receiveWithin(t, stub.renewed, time.Second, "daemon ping did not renew its route")
 	receiveWithin(t, daemonPongs, time.Second, "daemon ping did not receive a pong")
 
-	// 真实的 ForwardDaemon 只收二进制信封（relay_svc.ForwardDaemon 会拒绝其它一切），
-	// 所以这里必须发一个 production 真会发出的帧，而不是桩恰好也肯收的文本。
+	// ForwardDaemon 只拆 relay 的 channel 路由信封；内层 Protobuf RpcFrame 是 opaque
+	// bytes，服务端不解析，也不要求它是 UTF-8/JSON。
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
-		relayEnvelope("channel-id", []byte(`{"jsonrpc":"2.0"}`))))
+		relayEnvelope("channel-id", []byte{0x08, 0x01, 0x12, 0x02, 0xff, 0x00})))
 
-	select {
-	case <-stub.renewed:
-	case <-time.After(time.Second):
-		t.Fatal("daemon frame did not renew the online registration")
-	}
 	select {
 	case <-stub.daemonFrames:
 	case <-time.After(time.Second):
 		t.Fatal("daemon frame did not reach the forwarding seam")
 	}
+	// 上面那个 ping 刚续过一次,紧跟着的这一帧因此被节流掉:在线态续期挂在心跳上,
+	// 不再逐帧重复(逐帧那次给每帧多加两次串行 Redis 往返,而转发就跑在读循环上)。
+	// 节流本身由 TestRelayDaemonThrottlesOnlineRenewalAcrossFrames 单独钉住。
+	select {
+	case <-stub.renewed:
+		t.Fatal("紧跟在一次续期之后的帧不应该再续一次在线态")
+	default:
+	}
 
-	clientConn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon"), headers)
+	clientConn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
 	clientPongs := make(chan struct{}, 1)
@@ -289,14 +305,14 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 	}, time.Hour)
 	require.NoError(t, err)
 
-	targetConn, _, err := websocket.DefaultDialer.Dial(
+	targetConn, _, err := protobufRelayDialer.Dial(
 		wsURL(server.URL, "/v1/relay/daemon"),
 		http.Header{"Authorization": {"Bearer " + targetToken}},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, targetConn.Close()) })
 
-	clientConn, response, err := websocket.DefaultDialer.Dial(
+	clientConn, response, err := protobufRelayDialer.Dial(
 		wsURL(server.URL, "/v1/relay/client?daemon_fingerprint="+desktop.Fingerprint),
 		http.Header{"Authorization": {"Bearer " + clientToken}},
 	)
@@ -342,7 +358,7 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 			server := newRelayServer(t, signer, stub)
 			token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: tc.kind}, time.Hour)
 			require.NoError(t, err)
-			conn, _, err := websocket.DefaultDialer.Dial(
+			conn, _, err := protobufRelayDialer.Dial(
 				wsURL(server.URL, tc.path), http.Header{"Authorization": {"Bearer " + token}},
 			)
 			require.NoError(t, err)
@@ -370,7 +386,7 @@ func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
 	stub.daemonForwardErrs <- relay_svc.ErrForwardFailed
 	stub.daemonForwardErrs <- nil
 	server, headers := newAuthenticatedRelayServer(t, stub, "/v1/relay/daemon")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
+	conn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -390,7 +406,7 @@ func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
 	stub.clientForwardErrs = make(chan error, 1)
 	stub.clientForwardErrs <- relay_svc.ErrForwardFailed
 	server, headers := newAuthenticatedRelayServer(t, stub, "/v1/relay/client")
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/client"), headers)
+	conn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/client"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
@@ -424,7 +440,7 @@ func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
 
-	_, response, err := websocket.DefaultDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"),
+	_, response, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"),
 		http.Header{"Authorization": {"Bearer " + token}})
 	require.Error(t, err, "a forbidden daemon must never get an upgraded connection")
 	require.NotNil(t, response)
@@ -516,14 +532,14 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	clientToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
 	require.NoError(t, err)
 
-	daemonConn, _, err := websocket.DefaultDialer.Dial(
+	daemonConn, _, err := protobufRelayDialer.Dial(
 		wsURL(serverB.URL, "/v1/relay/daemon"),
 		http.Header{"Authorization": {"Bearer " + daemonToken}},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, daemonConn.Close()) })
 
-	clientConn, response, err := websocket.DefaultDialer.Dial(
+	clientConn, response, err := protobufRelayDialer.Dial(
 		wsURL(serverA.URL, "/v1/relay/client?daemon_fingerprint="+daemon.Fingerprint),
 		http.Header{"Authorization": {"Bearer " + clientToken}},
 	)
@@ -532,28 +548,30 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
-	otherClientConn, _, err := websocket.DefaultDialer.Dial(
+	otherClientConn, _, err := protobufRelayDialer.Dial(
 		wsURL(serverA.URL, "/v1/relay/client?daemon_fingerprint="+daemon.Fingerprint),
 		http.Header{"Authorization": {"Bearer " + clientToken}},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, otherClientConn.Close()) })
 
-	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, []byte("request")))
+	requestFrame := []byte{0x08, 0x01, 0x12, 0x03, 0x00, 0xff, 0x80}
+	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, requestFrame))
 	daemonConn.SetReadDeadline(time.Now().Add(time.Second))
 	messageType, frame, err := daemonConn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, websocket.BinaryMessage, messageType)
 	channelID, innerFrame := decodeRelayEnvelope(t, frame)
 	require.NotEmpty(t, channelID)
-	require.Equal(t, []byte("request"), innerFrame)
+	require.Equal(t, requestFrame, innerFrame, "relay must not parse or rewrite the Protobuf RpcFrame")
 
-	require.NoError(t, daemonConn.WriteMessage(websocket.BinaryMessage, relayEnvelope(channelID, []byte("response"))))
+	responseFrame := []byte{0x08, 0x01, 0x1a, 0x04, 0xde, 0xad, 0x00, 0xbe}
+	require.NoError(t, daemonConn.WriteMessage(websocket.BinaryMessage, relayEnvelope(channelID, responseFrame)))
 	clientConn.SetReadDeadline(time.Now().Add(time.Second))
 	messageType, frame, err = clientConn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, websocket.BinaryMessage, messageType)
-	require.Equal(t, []byte("response"), frame)
+	require.Equal(t, responseFrame, frame, "relay must preserve opaque Protobuf response bytes")
 
 	otherClientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	_, _, err = otherClientConn.ReadMessage()
@@ -561,6 +579,120 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	var networkErr net.Error
 	require.ErrorAs(t, err, &networkErr)
 	require.True(t, networkErr.Timeout())
+}
+
+// 中继的两个 websocket 端点只在 upgrade 那一刻过一次鉴权中间件，之后不再经过任何
+// 中间件。凭据在连接建好**之后**被撤销时，服务端必须自己把这条连接掐掉，否则登出与
+// 设备撤销都只挡得住新连接，一条撤销前建好的连接会继续读写该账号的全部会话。
+//
+// 下面两个用例用「对端主动发一个 ping」逼服务端立刻复查（生产里这件事由 15s 心跳
+// 承担，不依赖对端配合）。断开必须是一个真正的 websocket 关闭帧，好让对端能把它与
+// 网络中断区分开：daemon 会退避重连，重连在 upgrade 处被拒才是正确结局。
+func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	auth := auth_svc.New(session.New(redis.Default(), "server_session", 86400))
+	auth_svc.SetDefault(auth)
+	ctx := context.Background()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	// 同一个账号的两个浏览器：各自一次登录会话，各自一张 relay ticket。
+	sidA, _, err := auth.StartSession(ctx, 7)
+	require.NoError(t, err)
+	sidB, _, err := auth.StartSession(ctx, 7)
+	require.NoError(t, err)
+	ticketA, jtiA, err := signer.Sign(jwt.Claims{UID: 7, Kind: "relay_client"}, 2*time.Minute)
+	require.NoError(t, err)
+	ticketB, jtiB, err := signer.Sign(jwt.Claims{UID: 7, Kind: "relay_client"}, 2*time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, auth.TrackRelayTicket(ctx, sidA, jtiA, 2*time.Minute))
+	require.NoError(t, auth.TrackRelayTicket(ctx, sidB, jtiB, 2*time.Minute))
+
+	server := newRelayServer(t, signer, newForwardingRelayStub())
+	connA := dialRelayClient(t, server, ticketA)
+	connB := dialRelayClient(t, server, ticketB)
+
+	require.NoError(t, auth.EndSession(ctx, sidA))
+
+	requireRelayPeerClosed(t, connA, "登出后这次会话建好的 client 连接必须被断开")
+	requireRelayPeerAlive(t, connB, "登出一个浏览器不能踢掉同账号另一个浏览器的连接")
+}
+
+// 撤销必须能掐到「连接挂在另一个 server 副本上」的情形：撤销请求落在哪个实例上无关
+// 紧要，判据是共享 Redis 里的 jti 黑名单（device_svc.Revoke 已经在写它），持有那条
+// 连接的实例自己读得到，不需要任何实例间寻址。
+func TestRelayDaemonClosesWhenDeviceCredentialRevokedOnAnotherInstance(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	ctx := context.Background()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	serverA := newRelayServer(t, signer, newForwardingRelayStub())
+	serverB := newRelayServer(t, signer, newForwardingRelayStub())
+
+	keptToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+	revokedToken, revokedJTI, err := signer.Sign(
+		jwt.Claims{UID: 7, DID: 10, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+
+	kept := dialRelayDaemon(t, serverA, keptToken)       // 账号下另一台 daemon，挂在实例 A
+	revoked := dialRelayDaemon(t, serverB, revokedToken) // 被撤销的那台，挂在实例 B
+
+	// device_svc.Revoke 的既有动作：把该设备已签发的 access token jti 全部拉黑。
+	require.NoError(t, jwtblacklist.Add(ctx, revokedJTI, int(15*time.Minute/time.Second)))
+
+	requireRelayPeerClosed(t, revoked, "设备撤销后它已经建好的 daemon 连接必须被断开")
+	requireRelayPeerAlive(t, kept, "撤销一台设备不能踢掉同账号另一台设备的 daemon 连接")
+}
+
+func dialRelayClient(t *testing.T, server *httptest.Server, ticket string) *websocket.Conn {
+	t.Helper()
+	conn, response, err := protobufRelayDialer.Dial(
+		wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon&access_token="+ticket), nil)
+	if response != nil {
+		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func dialRelayDaemon(t *testing.T, server *httptest.Server, token string) *websocket.Conn {
+	t.Helper()
+	conn, response, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"),
+		http.Header{"Authorization": {"Bearer " + token}})
+	if response != nil {
+		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
+	}
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+// requireRelayPeerClosed 先发一个 ping 逼服务端复查凭据，再要求读到一个真正的关闭帧
+// （而不是对端只能看见 EOF 的 1006 异常断开）。
+func requireRelayPeerClosed(t *testing.T, conn *websocket.Conn, failure string) {
+	t.Helper()
+	// 服务端可能已经先一步关掉了连接，写 ping 失败本身不是断言对象。
+	_ = conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, _, err := conn.ReadMessage()
+	require.Error(t, err, failure)
+	require.True(t, websocket.IsCloseError(err, websocket.ClosePolicyViolation), "%s: %v", failure, err)
+}
+
+func requireRelayPeerAlive(t *testing.T, conn *websocket.Conn, failure string) {
+	t.Helper()
+	require.NoError(t, conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(300*time.Millisecond)))
+	_, _, err := conn.ReadMessage()
+	require.Error(t, err, failure)
+	var networkErr net.Error
+	require.ErrorAs(t, err, &networkErr, "%s: %v", failure, err)
+	require.True(t, networkErr.Timeout(), "%s: %v", failure, err)
 }
 
 func relayPayloadOfSize(size int, daemonWire bool) []byte {
@@ -672,3 +804,135 @@ func wsURL(httpURL, path string) string {
 }
 
 var _ relay_svc.RelaySvc = (*relayStub)(nil)
+
+// 封禁只能改库（产品里没有封禁动作），因此它对一条**已经建好**的中继连接的生效路径
+// 只有一条：逐次复查时闸门的缓存到期、重新查库、判出 UserBanned。这里用独享 miniredis
+// 的 FastForward 让缓存到期，再用一个 ping 逼服务端立刻复查（生产里由 15s 心跳承担，
+// 不依赖对端配合）。
+func TestRelayDaemonClosesWhenAccountBannedAfterConnect(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	const gateTTL = time.Minute
+	banned := installRelayAccountGate(t, gateTTL)
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	server := newRelayServer(t, signer, newForwardingRelayStub())
+	bannedToken, _, err := signer.Sign(
+		jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+	keptToken, _, err := signer.Sign(
+		jwt.Claims{UID: 8, DID: 10, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+	// client 那条连接的票要挂在一次**真实存在**的登录会话上：否则归属会话查无此 key，
+	// 既有的凭据复查自己就会断开它，用例便测不出账号闸门有没有生效。
+	ctx := context.Background()
+	auth := auth_svc.New(session.New(redis.Default(), "server_session", 86400))
+	auth_svc.SetDefault(auth)
+	sid, _, err := auth.StartSession(ctx, 7)
+	require.NoError(t, err)
+	ticket, jti, err := signer.Sign(jwt.Claims{UID: 7, Kind: "relay_client"}, 2*time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, auth.TrackRelayTicket(ctx, sid, jti, 2*time.Minute))
+
+	bannedDaemon := dialRelayDaemon(t, server, bannedToken)
+	bannedClient := dialRelayClient(t, server, ticket)
+	keptDaemon := dialRelayDaemon(t, server, keptToken)
+
+	banned.ban()
+
+	requireRelayPeerClosed(t, bannedDaemon, "账号被封后它已经建好的 daemon 连接必须被断开")
+	requireRelayPeerClosed(t, bannedClient, "账号被封后它已经建好的 client 连接必须被断开")
+	requireRelayPeerAlive(t, keptDaemon, "封一个账号不能踢掉另一个账号的连接")
+}
+
+// relayAccountGate 是上面那个用例的封禁开关：ban() 之后既翻转库里的状态，也把闸门
+// 已缓存的「可用」结论快进到过期——否则封禁最多要等一个 TTL 才可观察，用例就得真的睡。
+type relayAccountGate struct {
+	banned *atomic.Bool
+	expire func()
+}
+
+func (g *relayAccountGate) ban() {
+	g.banned.Store(true)
+	g.expire()
+}
+
+func installRelayAccountGate(t *testing.T, ttl time.Duration) *relayAccountGate {
+	t.Helper()
+	banned := &atomic.Bool{}
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	repo := mock_user_repo.NewMockUserRepo(ctrl)
+	repo.EXPECT().FindIgnoreStatus(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id int64) (*user_entity.User, error) {
+			status := consts.ACTIVE
+			if id == 7 && banned.Load() {
+				status = consts.BAN
+			}
+			return &user_entity.User{ID: id, Status: status}, nil
+		}).AnyTimes()
+	user_repo.RegisterUser(repo)
+
+	mini := miniredis.RunT(t)
+	client := newRelayRedisClient(t, mini)
+	user_svc.SetGate(user_svc.NewGate(client, ttl))
+	t.Cleanup(func() {
+		user_svc.SetGate(nil)
+		user_repo.RegisterUser(nil)
+	})
+	return &relayAccountGate{banned: banned, expire: func() { mini.FastForward(ttl + time.Second) }}
+}
+
+// daemon 读循环里的在线态续期必须节流。在线态 TTL 是 30 秒,而心跳的 pong 每 15 秒
+// 就会走一次 OnPeerActivity 续期(见上面那个用例),于是「每收一帧再续一次」是纯冗余
+// ——代价却不小:RenewDaemon 是 GET + EXPIRE 两次**串行** Redis 往返,而转发就跑在
+// 这条读循环上,这两次往返原样计入每一帧的转发延迟。一次 LLM 流式回答每秒几十上百
+// 个 text_delta,逐帧续期能把单条 daemon 连接的吞吐直接压掉三分之二。
+//
+// 保留读循环这一路(而不是删掉、只靠 pong)是因为:一条只顾发数据、pong 迟迟不来的
+// 连接,读超时是 45 秒而 TTL 只有 30 秒,中间那 15 秒它会被当成离线。
+func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+	const frames = 5
+	stub := &relayStub{
+		daemonRoute:  relay_svc.Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"},
+		registered:   make(chan struct{}, 1),
+		renewed:      make(chan struct{}, frames),
+		daemonFrames: make(chan struct{}, frames),
+	}
+
+	testMux := muxtest.NewTestMux()
+	require.NoError(t, (&api.RouterDeps{
+		Cfg:    &bootstrap.ServerConfig{},
+		Signer: signer,
+		Relay:  stub,
+	}).Router(context.Background(), testMux.Router))
+	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
+	t.Cleanup(server.Close)
+
+	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+	conn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"),
+		http.Header{"Authorization": {"Bearer " + token}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	go drainRelayConnection(conn)
+	receiveWithin(t, stub.registered, time.Second, "daemon was never registered")
+
+	// 连续发帧,不发 ping —— 唯一可能触发续期的就是读循环自己。
+	for range frames {
+		require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
+			relayEnvelope("channel-id", []byte{0x08, 0x01})))
+	}
+	for i := range frames {
+		receiveWithin(t, stub.daemonFrames, time.Second,
+			"daemon frame "+strconv.Itoa(i)+" did not reach the forwarding seam")
+	}
+
+	// 登记这一步刚刚把 TTL 写满,这一串帧一次续期都不该再发。
+	require.Empty(t, stub.renewed, "读循环对每一帧都续了一次在线态")
+}

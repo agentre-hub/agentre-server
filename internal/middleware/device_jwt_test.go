@@ -11,11 +11,11 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
 
-	"agentre-server/internal/middleware"
-	"agentre-server/internal/pkg/code"
-	hubjwt "agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
-	"agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/middleware"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 )
 
 func TestDeviceJWT_Blacklist(t *testing.T) {

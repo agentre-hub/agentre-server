@@ -10,8 +10,8 @@
 package mock_user_identity_repo
 
 import (
-	user_identity_entity "agentre-server/internal/model/entity/user_identity_entity"
 	context "context"
+	user_identity_entity "github.com/agentre-hub/agentre-server/internal/model/entity/user_identity_entity"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -68,6 +68,21 @@ func (m *MockUserIdentityRepo) FindByProviderUID(ctx context.Context, provider, 
 func (mr *MockUserIdentityRepoMockRecorder) FindByProviderUID(ctx, provider, providerUID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByProviderUID", reflect.TypeOf((*MockUserIdentityRepo)(nil).FindByProviderUID), ctx, provider, providerUID)
+}
+
+// FindByUserAndProvider mocks base method.
+func (m *MockUserIdentityRepo) FindByUserAndProvider(ctx context.Context, userID int64, provider string) (*user_identity_entity.UserIdentity, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindByUserAndProvider", ctx, userID, provider)
+	ret0, _ := ret[0].(*user_identity_entity.UserIdentity)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindByUserAndProvider indicates an expected call of FindByUserAndProvider.
+func (mr *MockUserIdentityRepoMockRecorder) FindByUserAndProvider(ctx, userID, provider any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByUserAndProvider", reflect.TypeOf((*MockUserIdentityRepo)(nil).FindByUserAndProvider), ctx, userID, provider)
 }
 
 // ListByUser mocks base method.

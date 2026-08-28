@@ -12,7 +12,7 @@ import (
 	"github.com/cago-frame/cago/server/cron"
 	"go.uber.org/zap"
 
-	"agentre-server/internal/task/crontab"
+	"github.com/agentre-hub/agentre-server/internal/task/crontab"
 )
 
 // lockKeyPrefix 定时任务抢锁用的 Redis key 前缀，与其他业务锁隔离命名空间。
@@ -25,6 +25,19 @@ func Task(ctx context.Context, _ *configs.Config) error {
 	// 同步组的回收窗口是 30 天，一天扫一次足够，也避开业务高峰；锁的 TTL 照例
 	// 略短于周期，让下一天的这一轮能重新被认领。
 	_, _ = cron.Default().AddFunc("17 4 * * *", withPeriodLock("reclaim_sync_garbage", 23*time.Hour, crontab.ReclaimSyncGarbage))
+	// 镜像的对账每分钟一轮：机器的常驻租约是 30 秒级的，跟着某台机器的那位一旦
+	// 放手（下线、租约丢了、副本退出），下一轮就得有人把它重新接上，再慢就等于
+	// 那台机器上的新内容一直没人镜像。锁的 TTL 照例略短于周期。
+	_, _ = cron.Default().AddFunc("* * * * *", withPeriodLock("reconcile_session_mirrors", 50*time.Second, crontab.ReconcileSessionMirrors))
+	// 攒下的删除待办同样每分钟补做一轮：删除在机器离线时当场只清掉 server 那份，
+	// 执行端那份欠着等它回来（决策 6），而「回来」就是这一轮看出来的。与上面那轮
+	// 分开一把锁：它扫的是待办表而不是保存名单——删掉一台离线机器上最后一条对话
+	// 之后，那台机器再也不在名单里，它欠的那条删除却还在。
+	_, _ = cron.Default().AddFunc("* * * * *", withPeriodLock("replay_session_deletes", 50*time.Second, crontab.ReplayPendingSessionDeletes))
+	// 活跃统计是日粒度的：每十分钟拉一轮足够，晚十分钟在一张按天的图上看不出来，
+	// 而每分钟去问每台在线机器一遍，换来的只是同一天的计数被反复覆盖。锁的 TTL
+	// 照例略短于周期。
+	_, _ = cron.Default().AddFunc("*/10 * * * *", withPeriodLock("pull_activity_rollups", 9*time.Minute, crontab.PullActivityRollups))
 	return nil
 }
 

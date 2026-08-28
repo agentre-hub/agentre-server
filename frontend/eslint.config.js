@@ -7,6 +7,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 import { restrictedSyntax } from "./eslint-rules/design-tokens.js";
+import { nativeControlSyntax } from "./eslint-rules/native-controls.js";
 
 export default defineConfig([
   globalIgnores(["dist", "node_modules", "coverage"]),
@@ -30,9 +31,14 @@ export default defineConfig([
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
 
-      // ── 设计 token 守卫 ────────────────────────────────────────────
-      // 详见 eslint-rules/design-tokens.js 和 docs/design.md#colour-tokens
-      "no-restricted-syntax": ["error", ...restrictedSyntax],
+      // ── 设计 token 守卫 + 原生表单控件守卫 ─────────────────────────
+      // 详见 eslint-rules/design-tokens.js（与 docs/design.md#colour-tokens）
+      // 与 eslint-rules/native-controls.js。
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedSyntax,
+        ...nativeControlSyntax,
+      ],
 
       // ── i18n 守卫 ─────────────────────────────────────────────────
       // 界面文案一律走 t()，否则新语言只能翻到一半而且没人发现。

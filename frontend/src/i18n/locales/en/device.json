@@ -1,0 +1,149 @@
+{
+  "eyebrow": "Device authorization",
+  "entry": {
+    "title": "Enter the device code",
+    "description": "Your desktop app or terminal shows a 6-character code. Enter it here.",
+    "groupLabel": "Device code",
+    "boxLabel": "Character {{position}} of 6",
+    "submit": "Continue",
+    "footnote": "No code on screen? Go back to the device and start authorization again.",
+    "errors": {
+      "incomplete": "Enter all six characters.",
+      "invalid": "That code does not exist or has already been used. Check the 6-character code shown on the device."
+    }
+  },
+  "approve": {
+    "title": "Allow this device to access your AgentRe account?",
+    "risk": "Once you approve it, this device gets full access to your AgentRe account as you, including running arbitrary code and commands. Only approve devices you trust.",
+    "verify": "Check that this code matches exactly what the device shows",
+    "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
+    "expirySeconds": "This authorization request expires in {{seconds}}s",
+    "expiryAnnounce": "This authorization request expires in about {{minutes}} minutes",
+    "expiryAnnounceSoon": "This authorization request expires in less than a minute",
+    "allow": "Allow access",
+    "deny": "Deny",
+    "fineprint": "You can revoke this device's access at any time under Console → Devices.",
+    "actionError": "That did not go through. Please try again."
+  },
+  "kind": {
+    "desktop": "Desktop",
+    "agentred": "Compute node",
+    "mobile": "Mobile"
+  },
+  "success": {
+    "title": "Device authorized",
+    "body": "You can close this page now and continue on the device.",
+    "manageDevices": "Go to the console to manage devices"
+  },
+  "deniedScreen": {
+    "title": "Authorization denied",
+    "close": "Close page"
+  },
+  "expiredScreen": {
+    "title": "Authorization request expired",
+    "body": "Go back to the device, start authorization again, then enter the new code.",
+    "retry": "Enter a new code"
+  },
+  "add": {
+    "open": "Add device",
+    "collapse": "Collapse guide",
+    "stepOf": "Step {{n}} of 3",
+    "copy": "Copy",
+    "copied": "Copied",
+    "terminalLabel": "Terminal on that machine",
+    "kindLabel": "Which kind of device are you adding?",
+    "kindHint": "Browsers are not managed devices — no need to add one",
+    "kindAgentred": "Compute node (agentred)",
+    "kindDesktop": "Desktop (Agentre App)",
+    "steps": {
+      "login": {
+        "title": "Install and sign in",
+        "hint": "Prints a device code",
+        "done": "Signed in"
+      },
+      "code": {
+        "title": "Enter the device code",
+        "hint": "Six-character one-time code",
+        "done": "Authorized"
+      },
+      "service": {
+        "title": "Keep it running",
+        "hint": "Only after it is approved",
+        "done": "Kept running"
+      }
+    },
+    "install": {
+      "osLabel": "That machine's operating system",
+      "osHint": "The architecture is detected automatically",
+      "osLinux": "Linux",
+      "osMacos": "macOS",
+      "osWindows": "Windows",
+      "powershellLabel": "PowerShell",
+      "manual": "Download the installer manually",
+      "downloadLabel": "Download",
+      "downloadBody": "Download the installer for that platform from GitHub Releases (macOS .dmg / Windows .exe / Linux .deb).",
+      "download": "Open the download page"
+    },
+    "login": {
+      "agentredTitle": "Install agentred on that machine and sign it in",
+      "agentredDesc": "Install the binary, then sign in straight away; registering the background service comes next — once the daemon is running, agentred login is refused outright. The server address is already this console's own address, so you can copy the command as is.",
+      "commandLabel": "Same terminal, once it is installed",
+      "agentredTip1": "The command prints a line reading User code: XXXXXX — that is the six-character device code.",
+      "agentredTip2": "It also tries to open a browser; servers usually have none, so bring that code back here instead.",
+      "agentredTip3": "The command keeps waiting until you approve it in step 2; only then does it exit and write the credentials on that machine.",
+      "agentredTip4": "The device code expires; run the command again if it does. The approval screen counts down the time left.",
+      "desktopTitle": "Install the Agentre desktop app on that computer and sign in to the same account",
+      "desktopDesc": "Install the desktop app from GitHub Releases, then go to Settings → Remote → Sign in, using this console as the server address.",
+      "desktopTip1": "The desktop app shows a six-character device code and tries to open a browser to authorize it.",
+      "desktopTip2": "If no browser opens, or you would rather approve it on this computer, bring that code to step 2.",
+      "desktopTip3": "The device code expires; start over from the desktop app if it does. The approval screen counts down the time left.",
+      "serverLabel": "Server address",
+      "next": "I have the device code"
+    },
+    "service": {
+      "agentredTitle": "Register agentred as a background service",
+      "agentredDesc": "Do this last, once the device is approved: the service starts on boot, so the machine stays connected after you close the terminal.",
+      "commandLabel": "That machine's terminal, once the device is approved",
+      "tip1": "This has to come last: agentred login writes state.json only when you approve it. A daemon started any earlier holds the old, unclaimed state.json in memory, and its next write silently overwrites that — the device looks authorized but never connects.",
+      "tip2": "Running it again is harmless: the command is idempotent, it updates the configuration and makes sure the service is up.",
+      "desktopTitle": "Nothing else to register for the desktop app",
+      "desktopDesc": "The desktop app has agentred built in: it is online while the app is open, so there is no separate background service to register.",
+      "finish": "That is the last step"
+    },
+    "code": {
+      "handoff": "Submitting opens the approval screen, where you check the code against the device and approve it. Come back here for the last step once it is approved."
+    }
+  },
+  "manage": {
+    "loadError": "Could not load your devices. Please try again.",
+    "statusOnline": "Online",
+    "statusOffline": "Offline",
+    "statusRevoked": "Revoked",
+    "revokeConfirmTitle": "Revoke this device?",
+    "revokeConfirmBody": "This device can no longer refresh its credentials after you confirm. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation is not instant.",
+    "revokeCancel": "Cancel",
+    "revokeConfirm": "Revoke",
+    "revokeError": "Could not revoke this device. Please try again.",
+    "expand": "Show details",
+    "collapse": "Hide details",
+    "runnableAgents": "Agents that can run here",
+    "rankLabel": "Rank {{rank}}",
+    "projects": "Projects",
+    "configured": "Configured",
+    "notConfigured": "Not configured",
+    "noProjectsReported": "No projects reported from this device yet.",
+    "noRunnableAgents": "No agents can run on this device yet.",
+    "detailLoadError": "Could not load this device's details. Please try again.",
+    "sessions": "Conversations",
+    "countLabel": "{{count}} devices",
+    "sessionCount": "{{count}} conversations",
+    "sessionWaiting": "{{count}} waiting for you",
+    "viewSessions": "View this machine's conversations",
+    "viewDesktopSessions": "View this desktop's conversations",
+    "offlineNotEnterable": "Offline — conversations are unavailable.",
+    "desktopAppNotRunningShort": "Agentre is not running",
+    "desktopAppNotRunningDetail": "Agentre is not running on this computer. Open Agentre to view its conversations.",
+    "cardSummary": "{{projects}} projects · {{m}} conversations running",
+    "revokeConfirmTitleNamed": "Revoke {{name}}?"
+  }
+}

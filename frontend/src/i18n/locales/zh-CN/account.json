@@ -1,0 +1,54 @@
+{
+  "title": "账号与安全",
+  "profile": {
+    "title": "账号",
+    "email": "邮箱",
+    "github": "GitHub"
+  },
+  "passkeys": {
+    "title": "通行密钥",
+    "subtitle": "用指纹、面容或安全钥匙登录，不经过 GitHub。",
+    "add": "添加通行密钥",
+    "adding": "请在浏览器弹窗里完成验证…",
+    "unsupported": "这个浏览器不支持通行密钥",
+    "unsupportedHint": "换用较新的 Chrome、Safari 或 Edge 即可添加。",
+    "loadError": "无法加载通行密钥，请重试。",
+    "created": "添加于 {{date}}",
+    "lastUsed": "最后使用 {{date}}",
+    "neverUsed": "还没用过",
+    "remove": "删除",
+    "emptyTitle": "还没有通行密钥",
+    "emptyBody": "添加一把之后，GitHub 不可用时你仍然进得来。",
+    "emptyBodyUnsupported": "换一个支持通行密钥的浏览器就可以添加。",
+    "nameLabel": "给这把密钥起个名字",
+    "namePlaceholder": "例如：公司 MacBook",
+    "nameHint": "只有你看得到，用来分辨是哪一把。",
+    "cancel": "取消",
+    "confirm": "添加",
+    "removeTitle": "删除「{{name}}」？",
+    "removeBody": "这把密钥将立刻失效。你仍然可以用 GitHub 登录，之后再添加新的。",
+    "removeConfirm": "删除",
+    "errors": {
+      "limitReached": "通行密钥数量已达上限，请先删除一把再添加。",
+      "challengeInvalid": "本次操作已过期，请重新开始。",
+      "verificationFailed": "这把通行密钥没有通过校验。",
+      "alreadyRegistered": "这把通行密钥已经注册过了。",
+      "notFound": "这把通行密钥已经不存在了。",
+      "generic": "添加失败，请重试。"
+    }
+  },
+  "sessions": {
+    "title": "登录会话",
+    "subtitle": "这个账号当前登录着的浏览器。",
+    "current": "当前会话",
+    "signedInAt": "登录于 {{date}}",
+    "lastActiveAt": "最后活动 {{date}}",
+    "loadError": "无法加载登录会话，请重试。",
+    "signOutOthers": "登出其它全部",
+    "signOutOthersTitle": "登出其它 {{count}} 个会话？",
+    "signOutOthersBody": "其它浏览器会立刻退出，需要重新登录。当前这个会话不受影响。",
+    "signOutOthersConfirm": "登出其它全部",
+    "signOutError": "登出其它会话失败，请重试。",
+    "onlyCurrent": "只有当前这一个会话。"
+  }
+}

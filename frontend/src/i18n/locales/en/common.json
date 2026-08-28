@@ -1,0 +1,13 @@
+{
+  "appName": "AgentRe Server",
+  "back_home": "Back to home",
+  "close": "Close",
+  "cancel": "Cancel",
+  "loading": "Loading…",
+  "saving": "Saving…",
+  "saved": "Saved",
+  "saveFailed": "Save failed",
+  "language": {
+    "label": "Language"
+  }
+}

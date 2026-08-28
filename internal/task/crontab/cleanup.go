@@ -8,8 +8,8 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
-	"agentre-server/internal/repository/device_flow_repo"
-	"agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
 )
 
 // CleanupDeviceFlowCodes 删除 1 天前已过期的 flow 记录。

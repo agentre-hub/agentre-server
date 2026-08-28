@@ -2,12 +2,13 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
 import { deviceKindIcon } from "@/lib/deviceKind";
-import { Laptop, Monitor, Server } from "lucide-react";
+import { Laptop, Server } from "lucide-react";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -31,7 +32,6 @@ vi.mock("@/hooks/use-relay", () => ({
               { sessionId: 2, lifecycleState: "idle", latestSeq: 1 },
               { sessionId: 3, lifecycleState: "running", latestSeq: 1 },
             ],
-            supportsSessionMetadata: true,
           }),
         }
       : null,
@@ -41,7 +41,13 @@ vi.mock("@/hooks/use-relay", () => ({
   }),
 }));
 
+vi.mock("@/lib/accountChannel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
+  return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
+});
+
 const mockedApi = vi.mocked(api);
+const mockedStartChannel = vi.mocked(accountChannel.startAccountChannel);
 
 function renderDevices() {
   return render(
@@ -84,6 +90,7 @@ const listResponse = {
 beforeEach(async () => {
   await i18n.changeLanguage("en");
   mockedApi.mockReset();
+  mockedStartChannel.mockClear();
 });
 
 describe("device page design alignment", () => {
@@ -96,7 +103,7 @@ describe("device page design alignment", () => {
     renderDevices();
     await screen.findByText("nuc-01");
 
-    // Cnt = 设备总数（font-mono，text-subtle-foreground）
+    // Cnt = 设备总数（font-mono，text-muted-foreground）
     const cnt = screen.getByTestId("devices-count");
     expect(cnt.textContent).toBe("2");
     // 裸数字必须带 aria-label（设计文档：Cnt 一律 aria-label'd，SR 不能只听到「2」）。
@@ -145,8 +152,8 @@ describe("device page design alignment", () => {
     renderDevices();
     await screen.findByText("nuc-01");
 
-    // 危险卡标题/正文都不该出现（revokeCardTitle='Revoke this device' 无问号，
-    // 与对话框标题 'Revoke this device?' 区分开；对话框此刻未打开）。
+    // 危险卡标题/正文都不该出现（revokeCardTitle='Revoke this device' 无问号；
+    // 对话框标题现在是点名的 'Revoke nuc-01?'，此刻未打开）。
     expect(screen.queryByText("Revoke this device")).toBeNull();
     expect(screen.queryByText(/can no longer refresh/i)).toBeNull();
 
@@ -154,12 +161,16 @@ describe("device page design alignment", () => {
     const nuc = screen
       .getByText("nuc-01")
       .closest('[data-slot="card"]') as HTMLElement;
-    fireEvent.click(within(nuc).getByRole("button", { name: "Row actions" }));
-    const menu = await within(nuc).findByRole("menu");
+    fireEvent.pointerDown(
+      within(nuc).getByRole("button", { name: /^Actions for / }),
+      { button: 0, ctrlKey: false },
+    );
+    // 菜单走 Portal 挂在 body 上（共享包的 DropdownMenu），不在这张卡里面找。
+    const menu = await screen.findByRole("menu");
     fireEvent.click(within(menu).getByRole("menuitem", { name: "Revoke" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Revoke this device?")).toBeTruthy();
+    expect(within(dialog).getByText("Revoke nuc-01?")).toBeTruthy();
   });
 
   it("设备卡结构：状态标记 + 设备图标 + 名 + 类型 chip；Meta 在副行", async () => {
@@ -354,7 +365,6 @@ describe("device page design alignment", () => {
   it("deviceKindIcon 把每种 kind 映射到稳定 lucide 图标", () => {
     expect(deviceKindIcon("agentred")).toBe(Server);
     expect(deviceKindIcon("desktop")).toBe(Laptop);
-    expect(deviceKindIcon("web")).toBe(Monitor);
   });
 });
 
@@ -432,5 +442,44 @@ describe("add-device entry and guide expansion", () => {
     // 「没有设备」如今有两个说法：展开的引导，和顶栏那个数字。取不到列表时
     // 两个都不许出现——写着 0 的计数和那句被删掉的空句是同一句谎话。
     expect(screen.queryByTestId("devices-count")).toBeNull();
+  });
+});
+
+describe("设备页跟着通道走", () => {
+  // 设备列表此前只在挂载时取一次：一台机器上线要整页刷新或者切走再切回来才看得到。
+  // 只订在线态那一类信号 —— 组织架构改了、别人发了条消息，都不该让这一页重取。
+  it("设备上线的信号一到就重取整张列表", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+    await screen.findByText("nuc-01");
+
+    // 外壳（侧栏的在线/全部）与本页同时在场，但共用同一条通道：server 那边一条
+    // 连接就是一份 Redis 订阅，各开各的等于把订阅数乘上页面数。
+    expect(mockedStartChannel).toHaveBeenCalledTimes(1);
+
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") {
+        return {
+          devices: [
+            ...listResponse.devices,
+            {
+              ...listResponse.devices[0],
+              id: 3,
+              name: "nuc-02",
+              fingerprint: "fp-3",
+            },
+          ],
+        };
+      }
+      throw new Error("unexpected call: " + path);
+    });
+    mockedStartChannel.mock.calls[0][0].onRefresh(
+      accountChannel.AccountChannelDevicePresence,
+    );
+
+    expect(await screen.findByText("nuc-02")).toBeTruthy();
   });
 });

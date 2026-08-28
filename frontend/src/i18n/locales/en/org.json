@@ -1,0 +1,127 @@
+{
+  "pageTitle": "Organization",
+  "index": {
+    "searchPlaceholder": "Search agents",
+    "searchAria": "Search agents",
+    "filters": {
+      "entry": "Filter",
+      "entryAria": "Filter agents",
+      "all": "All",
+      "backendLabel": "Backend: {{name}}",
+      "backendAria": "Filter by backend",
+      "reportsToLabel": "Reports to: {{name}}",
+      "reportsToAria": "Filter by reports-to",
+      "clear": "Clear {{label}}",
+      "clearAll": "Clear filters"
+    },
+    "noMatch": {
+      "title": "No agents found",
+      "conditions": "Matching: {{conditions}}"
+    },
+    "emptyDepartments": {
+      "title": "No departments yet",
+      "description": "Create a department, or add an agent directly, to get started.",
+      "newDepartment": "New department",
+      "addAgent": "New agent"
+    },
+    "newDepartment": "New department",
+    "newAgent": "New agent"
+  },
+  "detail": {
+    "columns": {
+      "identity": "Identity",
+      "behavior": "Behavior"
+    },
+    "fields": {
+      "name": "Name",
+      "description": "Description",
+      "avatarColor": "Avatar color",
+      "accentColor": "Accent color",
+      "parentDepartment": "Parent department",
+      "leadAgent": "Lead",
+      "none": "None (top level)",
+      "avatarIconPick": "Icon",
+      "avatarIconNone": "No icon",
+      "avatarIconCustom": "Custom icon: {{key}}"
+    },
+    "systemPrompt": "System prompt",
+    "systemPromptPlaceholder": "One instruction per line",
+    "execTargets": {
+      "title": "Execution targets",
+      "empty": "No execution targets yet — add one so this agent can be dispatched to.",
+      "addTarget": "Add execution target",
+      "noBackendsLeft": "Every available backend is already assigned to this agent.",
+      "skills": {
+        "empty": "No skill packs granted on this target.",
+        "remove": "Revoke {{id}}",
+        "offlineNote": "This machine is offline — the installable packs can't be listed right now; granted ones can still be revoked.",
+        "loading": "Asking this machine what it has installed…",
+        "unavailable": "This machine couldn't list the skill packs right now — its CLI wasn't found, or the scan failed. Granted packs can still be revoked.",
+        "unsupported": "This backend doesn't support skill packs — nothing to list, and asking again won't change that.",
+        "unreachable": "This machine couldn't be reached — the installable packs can't be listed. Granted packs can still be revoked.",
+        "catalogEmpty": "No skill packs are installed on this machine yet.",
+        "retry": "Ask again",
+        "needInstall": "Install it on that machine first.",
+        "group": {
+          "inherited": "On globally — inherited unless overridden here",
+          "enableable": "Installed, off globally",
+          "installable": "Not installed on this machine"
+        },
+        "state": {
+          "inherit": "Inherit",
+          "on": "On",
+          "off": "Off"
+        },
+        "stateFor": "Skill authorization for {{name}}",
+        "setInherit": "Inherit the global setting for {{name}}",
+        "setOn": "Force on {{name}}",
+        "setOff": "Force off {{name}}"
+      },
+      "moved": "Moved to position {{position}} of {{total}}."
+    },
+    "delete": {
+      "agentTitle": "Delete {{name}}?",
+      "departmentTitle": "Delete {{name}}?",
+      "description": "This cannot be undone.",
+      "confirm": "Delete",
+      "cancel": "Cancel"
+    },
+    "actions": {
+      "delete": "Delete",
+      "back": "Back",
+      "close": "Close"
+    },
+    "header": {
+      "more": "More actions",
+      "leadBadge": "Department lead",
+      "systemBadge": "System agent",
+      "reportsToParent": "Reports to {{name}}",
+      "memberCount": "{{n}} members",
+      "saving": "Saving…",
+      "savedJustNow": "Saved · just now",
+      "savedAt": "Saved · {{time}}",
+      "saveFailed": "Save failed",
+      "retry": "Retry"
+    },
+    "prompt": {
+      "charCount": "· {{n}} characters",
+      "expand": "Expand editor",
+      "dialogTitle": "System prompt — {{name}}",
+      "save": "Save",
+      "cancel": "Cancel"
+    },
+    "empty": {
+      "title": "Nothing selected"
+    }
+  },
+  "create": {
+    "departmentTitle": "New department",
+    "agentTitle": "New agent",
+    "department": "Department",
+    "submit": "Create",
+    "cancel": "Cancel"
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again."
+  }
+}

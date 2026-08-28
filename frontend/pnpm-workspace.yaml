@@ -1,0 +1,13 @@
+# pnpm 10 默认禁止依赖执行构建脚本，git 依赖也不例外 —— 这是供应链防线，
+# 不是噪音：允许一个包跑脚本，等于允许它在 install 阶段在你机器上执行代码。
+#
+# @agentre-hub/agentre-ui 与 @agentre-hub/agentre-wire 需要它：两个包都按 TS 源码
+# 发布（git 依赖没有 npm 的预构建产物），靠 `prepare` 跑 tsc 生成 dist/。它们都来自
+# 我们自己的仓库（github:agentre-hub/agentre，按 commit SHA 钉死），所以这两条
+# 豁免是有据的。
+#
+# 钉 SHA 而不是分支：桌面端还在往包里搬组件，跟着分支走会让本站在毫无征兆的
+# 情况下随对面的改动而变。升级是一次显式的、可审阅的改动。
+onlyBuiltDependencies:
+  - "@agentre-hub/agentre-ui"
+  - "@agentre-hub/agentre-wire"

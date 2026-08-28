@@ -29,8 +29,8 @@ COPY . .
 # 必须在 go build 之前：internal/web 用 //go:embed 嵌 dist，缺了是编译期失败
 COPY --from=web /src/frontend/dist ./internal/web/dist
 RUN CGO_ENABLED=0 go build -ldflags "-s -w \
-      -X agentre-server/internal/buildinfo.Version=${VERSION} \
-      -X agentre-server/internal/buildinfo.Commit=${COMMIT}" \
+      -X github.com/agentre-hub/agentre-server/internal/buildinfo.Version=${VERSION} \
+      -X github.com/agentre-hub/agentre-server/internal/buildinfo.Commit=${COMMIT}" \
       -o /out/server ./cmd/server
 
 # stage 3: runtime

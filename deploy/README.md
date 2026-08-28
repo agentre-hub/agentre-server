@@ -46,9 +46,6 @@ server:
 完全离线的 agentred 无法获知服务端状态变化，仍会保留旧公钥；私钥泄漏时必须把这些
 节点视为尚未完成处置，待其重新连上并成功刷新 key set 后才算废弃生效。
 
-仍支持原来的单 key `private_key_pem_path` / `public_key_pem_path` 配置，升级时会给它
-分配 `legacy` kid，并让部署前没有 `kid` 的短期令牌自然过期。新部署直接使用 key ring。
-
 然后起起来：
 
 ```bash
@@ -56,7 +53,9 @@ docker compose -f deploy/docker-compose.yml up -d
 curl http://localhost:8443/v1/healthz
 ```
 
-`{"db_ping":true,"redis":true}` 就是好了，浏览器打开 <http://localhost:8443> 能看到界面。
+响应里的 `data` 同时满足
+`{"status":"ok","db_ping":true,"redis":true}` 就是好了，浏览器打开
+<http://localhost:8443> 能看到界面。
 
 数据落在仓库根的 `data/mysql` 和 `data/redis`，删掉就等于重置。
 
@@ -66,13 +65,21 @@ Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 M
 
 ### 要改配置
 
-改 `deploy/config.docker.yaml` 然后 `docker compose -f deploy/docker-compose.yml up -d`。
+改 `deploy/config.docker.yaml` 后重启已在运行的服务，让进程重新读取 bind mount
+里的配置：
+
+```bash
+docker compose -f deploy/docker-compose.yml restart server
+```
+
+第一次启动整套服务仍使用上面的 `up -d`。
 常改的几处：
 
 | 想做什么 | 改哪里 |
 | --- | --- |
 | 换数据库/Redis 地址 | `db.dsn`、`redis.addr` |
-| 对外域名（拼 OAuth 回调和设备验证链接用） | `server.public_url` |
+| 对外域名（拼 OAuth 回调和设备验证链接用） | 根目录 `.env` 的 `SERVER_PUBLIC_URL`（Compose 环境变量覆盖 yaml） |
+| 域名变更后的通行密钥绑定 | `server.webauthn.rp_id` 和 `server.webauthn.origins` |
 | 上了 HTTPS 之后 | `server.insecure_cookies` 改成 `false` |
 | 日志详细一点 | `logger.level` 改成 `debug` |
 
@@ -157,10 +164,13 @@ k8s 上只有四个引导键从 ConfigMap 进容器（`env`、`debug`、`source`
 | `db` | MySQL 连接串 |
 | `redis` | Redis 地址 |
 | `http` | 监听地址，端口要和 chart 的 `containerPort` 一致 |
-| `server` | 域名、会话、JWT 密钥、GitHub OAuth。密钥类的都在这里面 |
+| `server` | 域名、会话、JWT 密钥、GitHub OAuth、限流、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
 
 `trace` 可选，不写就是不开链路追踪。每个键的内容照着仓库根的
-`configs/config.example.yaml` 填。
+`configs/config.example.yaml` 填——**那份模板是 `server` 这个键的唯一权威清单**。
+chart 的 values 里没有、也不会有 `server.*`：ConfigMap 只渲染上面那四个引导键，
+往 values 里加业务配置只会渲染不出来，改了却不生效比没得改更糟。新增一项业务配置
+（比如通行密钥的 `webauthn`）时要做的是重新 `put` 一遍 `server` 这个键。
 
 写一个键长这样：
 

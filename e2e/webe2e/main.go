@@ -83,7 +83,11 @@ func cleanupSQL() []sqlStep {
 		{"sync_avatars", `DELETE FROM sync_avatars WHERE user_id = ?`},
 		{"sync_objects", `DELETE FROM sync_objects WHERE user_id = ?`},
 		{"sync_account_seqs", `DELETE FROM sync_account_seqs WHERE user_id = ?`},
-		{"followed_sessions", `DELETE FROM followed_sessions WHERE user_id = ?`},
+		{"agent_session_saves", `DELETE FROM agent_session_saves WHERE user_id = ?`},
+		// 通行密钥：webauthn_credentials 没有指向 users 的外键（迁移
+		// 202608180002 刻意不建），删账号不会带走它。不在这里删一次，凭证行就永久
+		// 留在专库里，账号却已经不存在了。
+		{"webauthn_credentials", `DELETE FROM webauthn_credentials WHERE user_id = ?`},
 		{"devices", `DELETE FROM devices WHERE user_id = ?`},
 		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`},
 		{"users", `DELETE FROM users WHERE id = ?`},
@@ -99,7 +103,8 @@ func residueSQL() []sqlStep {
 		{"sync_avatars", `SELECT count(*) FROM sync_avatars WHERE user_id = ?`},
 		{"sync_objects", `SELECT count(*) FROM sync_objects WHERE user_id = ?`},
 		{"sync_account_seqs", `SELECT count(*) FROM sync_account_seqs WHERE user_id = ?`},
-		{"followed_sessions", `SELECT count(*) FROM followed_sessions WHERE user_id = ?`},
+		{"agent_session_saves", `SELECT count(*) FROM agent_session_saves WHERE user_id = ?`},
+		{"webauthn_credentials", `SELECT count(*) FROM webauthn_credentials WHERE user_id = ?`},
 		{"devices", `SELECT count(*) FROM devices WHERE user_id = ?`},
 		{"user_identities", `SELECT count(*) FROM user_identities WHERE user_id = ?`},
 		{"users", `SELECT count(*) FROM users WHERE id = ?`},

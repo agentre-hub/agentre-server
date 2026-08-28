@@ -1,12 +1,18 @@
 import {
+  addVirtualAuthenticator,
   assertIsAppUnderTest,
   authenticate,
+  authenticateForPasskeys,
   authorizeDevice,
   exchangeDeviceCode,
   expect,
   horizontalOverflow,
+  openAccountFromUserMenu,
+  passkeyOrigin,
   readHandoff,
   readOracle,
+  revokeOtherSessions,
+  signOutViaUserMenu,
   test,
 } from "./fixtures/app";
 
@@ -108,6 +114,63 @@ test("完整设备授权经真实 API、CSRF 和 SQL 持久化且 device code �
   expect(second.body).toMatchObject({ code: 30204, error: "invalid_grant" });
 });
 
+test("Chromium 虚拟认证器注册通行密钥，再用它重新登录", async ({
+  context,
+  page,
+}) => {
+  // 只覆盖 Chromium：真实认证器（Touch ID、安全钥匙、跨设备扫码）没有 CDP 这条
+  // 注入路径，无法自动化，留给收尾时的一次真机手动核对。
+  const handoff = readHandoff();
+  const origin = passkeyOrigin();
+  await addVirtualAuthenticator(context, page);
+  await authenticateForPasskeys(context);
+
+  await page.goto(`${origin}/account`);
+  await expect(page.getByTestId("account-page")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: /添加通行密钥|Add a passkey/i })
+    .click();
+  await page
+    .getByPlaceholder(/公司 MacBook|Work MacBook/i)
+    .fill("webe2e passkey");
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /^添加$|^Add$/ })
+    .click();
+  // 注册要走真实的 begin/finish 往返 + 虚拟认证器，断言可见性而不是等固定时长。
+  await expect(page.getByText("webe2e passkey")).toBeVisible();
+
+  // 清掉浏览器 cookie 是纯客户端动作、不触达服务端：种子会话在服务端仍然活着，
+  // 后面「登录 → /account → 登出」那条用例还要用它。
+  await context.clearCookies();
+  await page.goto(`${origin}/login`);
+  await page
+    .getByRole("button", { name: /用通行密钥登录|Sign in with a passkey/i })
+    .click();
+  await page.waitForURL(/\/overview$/);
+
+  // 换一条不经浏览器 UI 的路径核实登录的真是这个账号，而不是相信页面自己的说法。
+  // 必须显式写上 origin：相对路径会拼到全局 baseURL（127.0.0.1）上，而通行密钥
+  // 登录种下的 session cookie 没有 Domain 属性、只属于 localhost 这一个主机名，
+  // 发到 127.0.0.1 上根本不带 cookie——那样拿到的 401 说的是「另一个 origin 没
+  // 登录」，与本用例要核实的事情无关。
+  const me = await page.request.get(`${origin}/v1/auth/me`);
+  expect(me.status()).toBe(200);
+  expect((await me.json()).data).toMatchObject({ user_id: handoff.userID });
+
+  // 自行清理：删掉刚注册的那把密钥、登出这条通行密钥登录建立的新会话——全程
+  // 不碰种子会话，不给这一轮的 Redis/MySQL 留残留。
+  await page.goto(`${origin}/account`);
+  await page.getByRole("button", { name: /删除|Remove/i }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /^删除$|^Remove$/ })
+    .click();
+  await expect(page.getByText("webe2e passkey")).toHaveCount(0);
+  await signOutViaUserMenu(page);
+});
+
 async function assertCorePagesDoNotOverflow(
   context: Parameters<typeof authenticate>[0],
   page: Parameters<typeof horizontalOverflow>[0],
@@ -124,6 +187,12 @@ async function assertCorePagesDoNotOverflow(
   await page.goto("/device");
   await expect(page.getByRole("group")).toBeVisible();
   expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
+
+  // /account 是 T8 唯一没能核实横向溢出的页面：jsdom 不算布局，390 宽下真正的
+  // 像素级检查只有这里（真实浏览器 + 移动 project）能做。
+  await page.goto("/account");
+  await expect(page.getByTestId("account-page")).toBeVisible();
+  expect(await horizontalOverflow(page)).toBeLessThanOrEqual(0);
 }
 
 test("桌面浏览器布局无水平溢出", async ({ context, page }) => {
@@ -132,6 +201,36 @@ test("桌面浏览器布局无水平溢出", async ({ context, page }) => {
 
 test("移动浏览器布局无水平溢出", async ({ context, page }) => {
   await assertCorePagesDoNotOverflow(context, page);
+});
+
+test("登录后经用户菜单打开 /account，看见当前登录会话并能登出", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  // 前置条件由本用例自己建立：种子账号是整个 project 共用的，通行密钥那条用例
+  // 会在它名下真的再建一个会话。撤掉其它会话之后「名下只剩当前这一个」才是本
+  // 用例自己说了算的事实，而不是上一条用例收尾收干净了的副产物。
+  await revokeOtherSessions(page);
+  await page.goto("/overview");
+  await expect(page.getByTestId("overview-tiles")).toBeVisible();
+
+  await openAccountFromUserMenu(page);
+  await expect(page.getByTestId("account-page")).toBeVisible();
+  await expect(page.getByText(/当前会话|This session/)).toBeVisible();
+  // 这一刻名下只有当前这一个会话：确认「当前会话」标在了对的那一行，且清单里
+  // 没有第二行。
+  await expect(
+    page.getByText(/只有当前这一个会话|This is your only session/),
+  ).toBeVisible();
+
+  await signOutViaUserMenu(page);
+  await expect(page).toHaveURL(/\/login/);
+
+  // 换一条不经浏览器 UI 的路径核实登出是真的：会话已从服务端消失，不是页面自己
+  // 假装跳转。
+  const me = await page.request.get("/v1/auth/me");
+  expect(me.status()).toBe(401);
 });
 
 test("正式嵌入式 SPA fallback 渲染 404，缺失 asset 保持 HTTP 404", async ({

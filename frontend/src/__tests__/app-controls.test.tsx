@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import AppControls from "@/components/AppControls";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 
 // 真的 ThemeProvider，不是替身：AppControls 的图标和 aria-label 都由

@@ -1,0 +1,12 @@
+{
+  "productSub": "Console",
+  "topBar": {
+    "fresh": "Desktop connected"
+  },
+  "userMenu": {
+    "trigger": "Account menu",
+    "account": "Account & security",
+    "settings": "Settings",
+    "signOut": "Sign out"
+  }
+}

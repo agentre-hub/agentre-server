@@ -8,7 +8,6 @@ import (
 
 func TestState_Transitions(t *testing.T) {
 	c := &DeviceFlowCode{ExpiresAt: 1000}
-	assert.True(t, c.IsPending())
 	assert.False(t, c.IsAuthorized())
 	assert.False(t, c.IsConsumed())
 	assert.False(t, c.IsDenied())

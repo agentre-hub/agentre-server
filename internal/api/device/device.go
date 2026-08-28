@@ -2,8 +2,6 @@ package device
 
 import "github.com/cago-frame/cago/server/mux"
 
-// ---------- Public Key ----------
-
 type PublicKeyRequest struct {
 	mux.Meta `path:"/v1/keys" method:"GET"`
 }
@@ -12,11 +10,8 @@ type PublicKeyResponse struct {
 	Version                 int               `json:"version"`
 	CurrentKID              string            `json:"current_kid"`
 	Keys                    map[string]string `json:"keys"`
-	PublicKey               string            `json:"public_key"`
 	MaxTokenLifetimeSeconds int64             `json:"max_token_lifetime_seconds"`
 }
-
-// ---------- Device Flow ----------
 
 type DeviceAuthorizeRequest struct {
 	mux.Meta    `path:"/v1/oauth/device/authorize" method:"POST"`
@@ -88,8 +83,6 @@ type RelayTicketResponse struct {
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-// ---------- Token Refresh / Revoke ----------
-
 type TokenRefreshRequest struct {
 	mux.Meta     `path:"/v1/oauth/token/refresh" method:"POST"`
 	RefreshToken string `json:"refresh_token" binding:"required"`
@@ -106,8 +99,6 @@ type TokenRevokeRequest struct {
 	DeviceID int64 `json:"device_id"`
 }
 type TokenRevokeResponse struct{}
-
-// ---------- Devices List ----------
 
 type ListDevicesRequest struct {
 	mux.Meta `path:"/v1/devices" method:"GET"`
@@ -129,8 +120,6 @@ type ListDevicesItem struct {
 type ListDevicesResponse struct {
 	Devices []ListDevicesItem `json:"devices"`
 }
-
-// ---------- Revocations ----------
 
 // RevocationsRequest 是 daemon 定期拉取吊销列表用的端点（R4 producer）。
 // 只接受 device JWT；调用方的账号取自 JWT 里的 uid，不接受任意 URL 参数。

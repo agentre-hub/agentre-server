@@ -5,18 +5,24 @@
  *   - 批准工具调用 → runtime.submitToolPermission（R10）。
  *   - 待决策已被别的端回答 → 就地说明「已被处理」并刷新状态（R10）。
  */
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { rpcMethods, type AnyRpcMethod } from "@agentre-hub/agentre-wire";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
+import { RelayError, type RelayState } from "@/lib/relayClient";
 import {
   useRelayMachine,
   type UseRelayMachineOptions,
 } from "@/hooks/use-relay";
+import { toast } from "sonner";
+
 import i18n from "@/i18n";
-import { ThemeProvider } from "@/lib/theme";
-import SessionDetailView from "@/components/session/SessionDetailView";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import SessionDetailView, {
+  RELAY_TAIL_FRAMES,
+} from "@/components/session/SessionDetailView";
 import SessionDetail from "@/pages/SessionDetail";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -55,8 +61,66 @@ const fakeClient = {
   request: vi.fn(),
   attach: vi.fn(async () => ({})),
   catchUp: vi.fn(async () => {}),
+  // 镜像历史应用完之后由页面预置游标，实时流据此接上（不重拉 server 已有的那段）。
+  setCursor: vi.fn(),
+  getCursor: vi.fn(() => 0),
   close: vi.fn(),
 };
+
+/**
+ * 输入框现在是共享包的 `AIChatInput`（TipTap），不再是 `<textarea>`：`fireEvent.change`
+ * 与 `.value` 都对它不成立 —— ProseMirror 的输入处理要真浏览器，jsdom 下 DOM 事件
+ * 驱动不动它（实测：input / paste 都不改变文档）。
+ *
+ * 但 TipTap 把 Editor 实例挂在它自己的 contenteditable 元素上
+ * （`editor.view.dom.editor`），测试从那里拿就够了 —— 不必为了测试在生产代码上
+ * 开一个 `editorRef` 之类的口子。
+ */
+function composerEditable(): HTMLElement & {
+  editor?: { commands: { setContent: (v: string) => void } };
+} {
+  const el = document.querySelector<HTMLElement>(
+    '[data-testid="session-detail-composer"] .ProseMirror',
+  );
+  if (!el) throw new Error("输入框没渲染出来");
+  return el;
+}
+
+/** 等输入框那一 chunk 加载完（它是 React.lazy 切出去的）。 */
+async function awaitComposer() {
+  await vi.waitFor(() => composerEditable());
+}
+
+async function typeInComposer(text: string) {
+  await awaitComposer();
+  composerEditable().editor?.commands.setContent(`<p>${text}</p>`);
+}
+
+/** 打字并回车发出去。 */
+async function sendInComposer(text: string) {
+  await typeInComposer(text);
+  fireEvent.keyDown(composerEditable(), { key: "Enter" });
+}
+
+/** 输入框当前的文本。 */
+function composerText(): string {
+  return composerEditable().textContent ?? "";
+}
+
+/** 输入框是否停用。TipTap 走 `setEditable(false)`，落成 contenteditable="false"。 */
+function composerDisabled(): boolean {
+  return composerEditable().getAttribute("contenteditable") !== "true";
+}
+
+/** `/chat` 的桩：只把「到了这一页、地址上带了什么」说出来。 */
+function ChatStub() {
+  const location = useLocation();
+  return (
+    <p data-testid="chat-page" data-testid-search={location.search}>
+      <span data-testid="chat-search">{location.search}</span>
+    </p>
+  );
+}
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");
@@ -66,6 +130,11 @@ beforeEach(async () => {
   fakeClient.request.mockReset();
   fakeClient.attach.mockClear();
   fakeClient.catchUp.mockClear();
+  fakeClient.setCursor.mockReset();
+  fakeClient.getCursor.mockReset();
+  fakeClient.getCursor.mockReturnValue(0);
+  fakeClient.attach.mockImplementation(async () => ({}));
+  fakeClient.catchUp.mockImplementation(async () => {});
 });
 
 function renderPage() {
@@ -80,6 +149,7 @@ function renderPage() {
         accessToken: "t",
       },
       relayTicketError: null,
+      reconnect: vi.fn(),
     };
   });
   return render(
@@ -103,9 +173,8 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + method);
     });
@@ -119,7 +188,9 @@ describe("会话详情页", () => {
 
     renderPage();
 
-    expect(await screen.findByText("你好")).toBeTruthy();
+    expect(
+      await screen.findByText("你好", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
     // 自己发起的会话没有 origin：省略即「调用方自己的对端」。
     expect(fakeClient.attach).toHaveBeenCalledWith(42, undefined);
     expect(fakeClient.catchUp).toHaveBeenCalledWith(42, undefined);
@@ -138,11 +209,10 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [remote], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [remote] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
-      if (method === "runtime.run") return {};
+      if (method === rpcMethods.runtimeRun) return {};
       throw new Error("unexpected: " + method);
     });
 
@@ -157,22 +227,19 @@ describe("会话详情页", () => {
     // 待决策快照同样按 origin 问（否则问到的是空会话，审批卡永远不出现）。
     await vi.waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
-        (c) => c[0] === "runtime.session.pendingWaiters",
+        (c) => c[0] === rpcMethods.sessionPendingWaiters,
       );
       expect(call?.[1]).toMatchObject({ peerFingerprint: "fp-desktop" });
     });
 
     // 写路径：这一轮必须落在发起端那条会话上。
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "把按钮改成蓝色" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await sendInComposer("把按钮改成蓝色");
     await vi.waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
-        (c) => c[0] === "runtime.run",
+        (c) => c[0] === rpcMethods.runtimeRun,
       );
       expect(call?.[1]).toMatchObject({
-        sessionId: 42,
+        sessionId: 42n,
         peerFingerprint: "fp-desktop",
       });
     });
@@ -184,29 +251,25 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
-      if (method === "runtime.run") return {};
+      if (method === rpcMethods.runtimeRun) return {};
       throw new Error("unexpected: " + method);
     });
 
     renderPage();
     await screen.findByText(/重构登录页/);
 
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "把按钮改成蓝色" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await sendInComposer("把按钮改成蓝色");
 
     await vi.waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
-        (c) => c[0] === "runtime.run",
+        (c) => c[0] === rpcMethods.runtimeRun,
       );
       expect(call).toBeTruthy();
       expect(call?.[1]).toMatchObject({
-        sessionId: 42,
+        sessionId: 42n,
         cwd: "/home/agent/proj",
         title: "重构登录页",
         agentSyncId: "ag-1",
@@ -219,6 +282,385 @@ describe("会话详情页", () => {
     });
   });
 
+  it("选择图片后发送会把图片编码为 runtime.run userBlocks", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await awaitComposer();
+    fireEvent.change(
+      screen.getByLabelText("Add image", { selector: "input" }),
+      {
+        target: {
+          files: [
+            new File([new Uint8Array([1, 2, 3])], "shot.png", {
+              type: "image/png",
+            }),
+          ],
+        },
+      },
+    );
+    await screen.findByAltText("shot.png");
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+
+    await vi.waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        (entry) => entry[0] === rpcMethods.runtimeRun,
+      );
+      expect(call?.[1]).toMatchObject({
+        userText: "",
+        userBlocks: [
+          {
+            type: "image",
+            data: new TextEncoder().encode(
+              JSON.stringify({
+                media_type: "image/png",
+                source: { inline: "AQID" },
+              }),
+            ),
+          },
+        ],
+      });
+    });
+  });
+
+  it("选择权限与供应商模型后 runtime.run 使用所选执行参数", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            {
+              sync_id: "ag-1",
+              name: "Claude",
+              exec_targets: [{ backend_sync_id: "backend-1", current: true }],
+            },
+          ],
+        };
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            {
+              sync_id: "backend-1",
+              provider_key: "anthropic",
+              model_key: "sonnet",
+              default_permission_mode: "default",
+            },
+          ],
+        };
+      if (path === "/v1/engine/providers")
+        return {
+          providers: [
+            {
+              provider_key: "anthropic",
+              name: "Anthropic",
+              type: "anthropic",
+              default_model_key: "sonnet",
+              enabled: true,
+              models: [
+                {
+                  model_key: "sonnet",
+                  model_id: "claude-sonnet-4-6",
+                  name: "Sonnet",
+                  enabled: true,
+                },
+                {
+                  model_key: "opus",
+                  model_id: "claude-opus-4-6",
+                  name: "Opus",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [summary],
+          // 这台机器认识会话级模型目标。**显式声明**，不从那两格是否为空推断。
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      // 档位集合来自执行端自己报的能力矩阵，不再由本站按 backendType 猜。
+      // 形状是 Go 的 capability.Capabilities 原样透传（没有 json tag）。
+      if (method === rpcMethods.runtimeCapabilities)
+        return {
+          capabilities: {
+            PermissionModeMeta: {
+              AllowedModes: [
+                "default",
+                "acceptEdits",
+                "plan",
+                "bypassPermissions",
+              ],
+              DefaultMode: "default",
+              SwitchableDuringTurn: true,
+              Order: ["default", "acceptEdits", "plan", "bypassPermissions"],
+            },
+          },
+        };
+      if (method === rpcMethods.runtimeSetPermissionMode) return {};
+      if (method === rpcMethods.setModelTarget) return {};
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    const permissionPill = await screen.findByRole("button", {
+      name: /Permission mode/,
+    });
+    fireEvent.click(permissionPill);
+    fireEvent.click(screen.getByRole("option", { name: /Accept Edits/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Provider and model/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
+    await sendInComposer("继续");
+
+    await vi.waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        (entry) => entry[0] === rpcMethods.runtimeRun,
+      );
+      expect(call?.[1]).toMatchObject({
+        permissionMode: "acceptEdits",
+        llmProviderKey: "anthropic",
+        llmModelKey: "opus",
+      });
+    });
+  });
+
+  // ── 权限档位来自执行端，不由本站按后端类型猜 ─────────────────────────────
+  //
+  // 此前四档连同文案写死在详情页的调用点上，且只对 claudecode 给：codex 实际有
+  // 两档，本站既列不出它支持的，也会对别的后端列出它不支持的。
+
+  function mockCapabilities(answer: unknown) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeCapabilities) {
+        if (answer instanceof Error) throw answer;
+        return answer;
+      }
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  it("只报两档的后端就只列两档", async () => {
+    mockCapabilities({
+      capabilities: {
+        PermissionModeMeta: {
+          AllowedModes: ["default", "plan"],
+          DefaultMode: "default",
+          Order: ["default", "plan"],
+        },
+      },
+    });
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Permission mode/ }),
+    );
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+  });
+
+  it("这台机器答不出档位时，pill 常显但禁用，并说出这一句", async () => {
+    mockCapabilities(new Error("machine says no"));
+
+    renderPage();
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    expect(pill).toBeInstanceOf(HTMLButtonElement);
+    expect((pill as HTMLButtonElement).disabled).toBe(true);
+    expect(pill.getAttribute("title")).toBe(
+      "This machine cannot list permission modes right now",
+    );
+  });
+
+  // 与上一条是**两句不同的话**：这一条是稳定答案（builtin 没有权限门），上一条是
+  // 「此刻问不到」。整颗不摆会把两者混成同一件事，用户无从分辨。
+  it("这个后端本来就没有权限档位时，说的是另一句", async () => {
+    mockCapabilities({
+      capabilities: { PermissionModeMeta: { AllowedModes: [] } },
+    });
+
+    renderPage();
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    expect((pill as HTMLButtonElement).disabled).toBe(true);
+    expect(pill.getAttribute("title")).toBe(
+      "This backend has no permission modes",
+    );
+  });
+
+  // ── 模型目标：三态、持久化、两台机器 ─────────────────────────────────────
+
+  function mockModelTarget(opts: {
+    sessionProviderKey?: string;
+    sessionModelKey?: string;
+    setModelTarget?: () => unknown;
+  }) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            {
+              sync_id: "ag-1",
+              name: "Claude",
+              exec_targets: [{ backend_sync_id: "backend-1", current: true }],
+            },
+          ],
+        };
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            {
+              sync_id: "backend-1",
+              provider_key: "anthropic",
+              model_key: "sonnet",
+              default_permission_mode: "default",
+            },
+          ],
+        };
+      if (path === "/v1/engine/providers")
+        return {
+          providers: [
+            {
+              provider_key: "anthropic",
+              name: "Anthropic",
+              type: "anthropic",
+              default_model_key: "sonnet",
+              enabled: true,
+              models: [
+                {
+                  model_key: "sonnet",
+                  model_id: "claude-sonnet-4-6",
+                  name: "Sonnet",
+                  enabled: true,
+                },
+                {
+                  model_key: "opus",
+                  model_id: "claude-opus-4-6",
+                  name: "Opus",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [
+            {
+              ...summary,
+              providerKey: opts.sessionProviderKey ?? "",
+              modelKey: opts.sessionModelKey ?? "",
+            },
+          ],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeCapabilities)
+        return { capabilities: { PermissionModeMeta: { AllowedModes: [] } } };
+      if (method === rpcMethods.setModelTarget)
+        return opts.setModelTarget ? opts.setModelTarget() : {};
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  // 会话没钉目标 = 跟随 Agent 绑定，而且这句话要**写在脸上**。此前这里静默回落到
+  // 后端绑定值，界面上与「用户显式选了那个模型」一模一样。
+  //
+  // 脸上跟的是模型**标识符**而不是人读名：推导归共享包之后两端同一份，而包里
+  // 触发器的注释写明「解析出模型就写模型 ID（标识符走等宽）」——人读名与标识符
+  // 混排正是那句话在避免的事。
+  it("没钉目标时脸上写「跟随 Agent 绑定」，并跟上解析到的模型", async () => {
+    mockModelTarget({});
+
+    renderPage();
+    // 解析到什么要等引擎目录落地：绑定那一档的模型是从目录里查出来的。
+    await vi.waitFor(() => {
+      const pill = screen.getByRole("button", { name: /Provider and model/ });
+      expect(pill.textContent).toContain("Follow agent binding");
+      expect(pill.textContent).toContain("claude-sonnet-4-6");
+    });
+  });
+
+  it("钉了固定模型时脸上就写那个模型", async () => {
+    mockModelTarget({
+      sessionProviderKey: "anthropic",
+      sessionModelKey: "opus",
+    });
+
+    renderPage();
+    await vi.waitFor(() => {
+      const pill = screen.getByRole("button", { name: /Provider and model/ });
+      expect(pill.textContent).toContain("claude-opus-4-6");
+      expect(pill.textContent).not.toContain("Follow agent binding");
+    });
+  });
+
+  it("选中之后写到执行端", async () => {
+    mockModelTarget({});
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Provider and model/ }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
+
+    await vi.waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        (entry) => entry[0] === rpcMethods.setModelTarget,
+      );
+      expect(call?.[1]).toMatchObject({
+        sessionId: 42n,
+        providerKey: "anthropic",
+        modelKey: "opus",
+      });
+    });
+  });
+
+  // 写不进去就回滚，不做「看起来成功了」的乐观留存——用户会以为下一轮用的是新模型。
+  it("写不进去时回滚控件并如实说明", async () => {
+    mockModelTarget({
+      setModelTarget: () => {
+        throw new Error("machine says no");
+      },
+    });
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Provider and model/ }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
+
+    await screen.findByTestId("composer-model-note");
+    expect(screen.getByTestId("composer-model-note").textContent).toContain(
+      "Model was not changed",
+    );
+    expect(
+      screen.getByRole("button", { name: /Provider and model/ }).textContent,
+    ).toContain("Follow agent binding");
+  });
+
   it("实时收到 tool_permission_request 事件后刷新待决策并出现审批卡", async () => {
     // 审批卡的数据源是 pendingWaiters,不是事件流:daemon 实时推来审批事件后页面必须
     // 主动重拉一次,否则卡永远不出现(fake runtime 阻塞在审批上,run 不会结束,
@@ -229,9 +671,8 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters") {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters) {
         waitersCall += 1;
         if (waitersCall === 1) {
           return { toolPermissions: [], askUserQuestions: [] };
@@ -263,9 +704,18 @@ describe("会话详情页", () => {
       });
     });
 
-    // 审批卡(可交互)的判据是 DecisionPanel 里的 approve-tool-allow 按钮 ——
-    // 转录里的 decision 信息卡是只读的,不能当证据。
-    expect(await screen.findByTestId("approve-tool-allow")).toBeTruthy();
+    // 判据换过一次,值得说明为什么。
+    //
+    // 此前这里钉的是 DecisionPanel 的 approve-tool-allow 按钮,注释写着「转录里的
+    // decision 信息卡是只读的,不能当证据」。归约器改成产出包的 DTO（带 canonical）
+    // 之后那个前提反了:转录里那张审批卡现在是**可交互**的,而且就在这条审批发生
+    // 的位置上,比页面底部另开一个面板更近。同一条待决因此不再重复显示 ——
+    // panelWaiters 把转录已经画出来的那些从面板里滤掉了。
+    //
+    // 仍然钉住的是这条用例真正要证的事:实时事件到达后页面**主动重拉了一次**
+    // pendingWaiters（fake runtime 阻塞在审批上,run 不会结束,onRunResultDone
+    // 那条刷新路径到不了）。
+    expect(await screen.findByText("Allow Once")).toBeTruthy();
     expect(waitersCall).toBeGreaterThanOrEqual(2);
   });
 
@@ -275,30 +725,31 @@ describe("会话详情页", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return {
           toolPermissions: [
             { RequestID: "tp-1", ToolName: "Bash", Input: { cmd: "ls" } },
           ],
           askUserQuestions: [],
         };
-      if (method === "runtime.submitToolPermission") return {};
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
       throw new Error("unexpected: " + method);
     });
 
     renderPage();
-    expect(await screen.findByText("Approve Bash")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
+    // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
 
     await vi.waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
-        (c) => c[0] === "runtime.submitToolPermission",
+        (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
       );
       expect(call).toBeTruthy();
       expect(call?.[1]).toMatchObject({
-        sessionId: 42,
+        sessionId: 42n,
         requestId: "tp-1",
         allow: true,
         alwaysAllowSession: false,
@@ -314,9 +765,8 @@ describe("会话详情页", () => {
     // 第一次 pendingWaiters(渲染卡片)有 tp-1;提交前的预检返回空 → 已被处理。
     let waiterCalls = 0;
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters") {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters) {
         waiterCalls += 1;
         if (waiterCalls === 1)
           return {
@@ -329,8 +779,10 @@ describe("会话详情页", () => {
     });
 
     renderPage();
-    expect(await screen.findByText("Approve Bash")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
+    // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
 
     // 不报错、不静默:就地说明已被处理。
     expect(
@@ -339,7 +791,7 @@ describe("会话详情页", () => {
     // 没有把提交发出去(预检发现已不在)。
     expect(
       fakeClient.request.mock.calls.some(
-        (c) => c[0] === "runtime.submitToolPermission",
+        (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
       ),
     ).toBe(false);
   });
@@ -356,9 +808,8 @@ describe("会话详情页:提交决策的失败路径", () => {
     });
     let waiterCalls = 0;
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters") {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters) {
         waiterCalls += 1;
         if (waiterCalls === 1)
           return {
@@ -368,18 +819,20 @@ describe("会话详情页:提交决策的失败路径", () => {
         // 预检这一次挂了。
         throw new Error("pendingWaiters unavailable");
       }
-      if (method === "runtime.submitToolPermission") return {};
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
       throw new Error("unexpected: " + method);
     });
 
     renderPage();
-    expect(await screen.findByText("Approve Bash")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
+    // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
 
     await vi.waitFor(() => {
       expect(
         fakeClient.request.mock.calls.some(
-          (c) => c[0] === "runtime.submitToolPermission",
+          (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
         ),
       ).toBe(true);
     });
@@ -396,23 +849,38 @@ describe("会话详情页:提交决策的失败路径", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return {
           toolPermissions: [{ RequestID: "tp-1", ToolName: "Bash" }],
           askUserQuestions: [],
         };
-      if (method === "runtime.submitToolPermission")
+      if (method === rpcMethods.runtimeSubmitToolPermission)
         throw new Error("relay: 连接未就绪");
       throw new Error("unexpected: " + method);
     });
 
+    // 决策提交失败是**对刚才那一次点击的回执**，属于时间不属于版面（决策 8）：
+    // 走 toast，而不是在面板下面长出一行 11px 红字。
+    const errored = vi.spyOn(toast, "error");
     renderPage();
-    expect(await screen.findByText("Approve Bash")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
+    // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
 
-    expect(await screen.findByText(/could not be submitted/i)).toBeTruthy();
+    await vi.waitFor(() => expect(errored).toHaveBeenCalled());
+    expect(errored.mock.calls[0][0]).toBe(
+      i18n.t("session.decision.submitFailed"),
+    );
+    // 带一个「重试」：回执上没有出路的话，用户只能再点一次那个刚刚失败的按钮。
+    const opts = errored.mock.calls[0][1] as {
+      action?: { label?: string };
+    };
+    expect(opts?.action?.label).toBe(i18n.t("session.decision.retry"));
+    // 版面上不再留那行红字。
+    expect(screen.queryByText(/could not be submitted/i)).toBeNull();
+    errored.mockRestore();
   });
 
   // 「已被处理」是对**那一条**待决策的说明,不是页面的永久状态。新的待决策上来
@@ -424,9 +892,8 @@ describe("会话详情页:提交决策的失败路径", () => {
     });
     let waiterCalls = 0;
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters") {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters) {
         waiterCalls += 1;
         if (waiterCalls === 1)
           return {
@@ -442,13 +909,15 @@ describe("会话详情页:提交决策的失败路径", () => {
           askUserQuestions: [],
         };
       }
-      if (method === "runtime.submitToolPermission") return {};
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
       throw new Error("unexpected: " + method);
     });
 
     renderPage();
-    expect(await screen.findByText("Approve Bash")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
+    // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
     expect(
       await screen.findByText("This request has already been handled."),
     ).toBeTruthy();
@@ -461,7 +930,10 @@ describe("会话详情页:提交决策的失败路径", () => {
       });
     });
 
-    expect(await screen.findByText("Approve Write")).toBeTruthy();
+    // tp-2 是**经事件流**来的，所以转录里就有它的可交互审批卡，panelWaiters 把它
+    // 从面板里滤掉了（同一条待决不重复显示两处）。tp-1 只在 waiters 里出现过、
+    // 事件流里没有，所以上面那一步仍然走的是面板 —— 这正是面板不能删的理由。
+    expect(await screen.findByText("Allow Once")).toBeTruthy();
     await vi.waitFor(() => {
       expect(screen.queryByText("This request has already been handled.")).toBe(
         null,
@@ -470,29 +942,7 @@ describe("会话详情页:提交决策的失败路径", () => {
   });
 });
 
-// 兼容性 + R9：未升级的 agentred 不认识 R7 / 决策 8 的那几列，续话续不上上下文。
-// 如实说明该机器需要升级并停用输入框，而不是让消息静默发出去。
-describe("会话详情页:老 agentred 与发送失败", () => {
-  it("未升级的 agentred:说明需要升级并停用发送", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/devices") return { devices: [deviceRow] };
-      throw new Error("unexpected: " + path);
-    });
-    fakeClient.request.mockImplementation(async (method) => {
-      // 老 daemon 的应答：没有 supportsSessionMetadata。
-      if (method === "runtime.session.list") return { sessions: [summary] };
-      if (method === "runtime.session.pendingWaiters")
-        return { toolPermissions: [], askUserQuestions: [] };
-      throw new Error("unexpected: " + method);
-    });
-
-    renderPage();
-    expect(await screen.findByText(/Upgrade agentred/i)).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Send" }).hasAttribute("disabled"),
-    ).toBe(true);
-  });
-
+describe("会话详情页:发送失败", () => {
   it("桌面端在场但钉住的 agentred 不可用:历史仍可读、新写入停用并给专门说明", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") {
@@ -501,29 +951,26 @@ describe("会话详情页:老 agentred 与发送失败", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list") {
-        return { sessions: [summary], supportsSessionMetadata: true };
+      if (method === rpcMethods.sessionList) {
+        return { sessions: [summary] };
       }
-      if (method === "runtime.session.pendingWaiters") {
+      if (method === rpcMethods.sessionPendingWaiters) {
         return { toolPermissions: [], askUserQuestions: [] };
       }
-      if (method === "runtime.run") throw new Error("pinned agentred offline");
+      // daemon 对这一类的真实应答：inbound.go:205 的 -32015 + PeerSessionRunResult。
+      // 「任何失败都算 agentred 不可用」是缺口二，判据换成了这个真码。
+      if (method === rpcMethods.runtimeRun) throw executionUnavailableError();
       throw new Error("unexpected: " + method);
     });
 
     renderPage();
     await screen.findByText(/重构登录页/);
 
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "继续" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await sendInComposer("继续");
 
-    expect(
-      await screen.findByText(/Conversation history is still available/),
-    ).toBeTruthy();
-    expect(screen.getByRole("textbox").hasAttribute("disabled")).toBe(true);
-    expect(screen.queryByText(/draft is kept/)).toBeNull();
+    expect(await screen.findByText(/New messages cannot be sent/)).toBeTruthy();
+    expect(composerDisabled()).toBe(true);
+    expect(screen.queryByTestId("send-failure")).toBeNull();
   });
 
   it("发送失败:就地报错,不静默吞掉", async () => {
@@ -532,23 +979,19 @@ describe("会话详情页:老 agentred 与发送失败", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
-      if (method === "runtime.run") throw new Error("boom");
+      if (method === rpcMethods.runtimeRun) throw new Error("boom");
       throw new Error("unexpected: " + method);
     });
 
     renderPage();
     await screen.findByText(/重构登录页/);
 
-    fireEvent.change(screen.getByRole("textbox"), {
-      target: { value: "把按钮改成蓝色" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await sendInComposer("把按钮改成蓝色");
 
-    expect(await screen.findByText(/could not be sent/i)).toBeTruthy();
+    expect(await screen.findByTestId("send-failure")).toBeTruthy();
   });
 });
 
@@ -568,6 +1011,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
           accessToken: "t",
         },
         relayTicketError: null,
+        reconnect: vi.fn(),
       };
     });
     return render(
@@ -585,9 +1029,8 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + method);
     });
@@ -624,9 +1067,8 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + method);
     });
@@ -643,9 +1085,8 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
 
     // 切到同机器上的另一条会话(43):request 返回 43 的摘要,catchUp 推 43 的转录。
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summaryB], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summaryB] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + method);
     });
@@ -678,15 +1119,6 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
   // 把浏览器误判成已解除授权）直到整页刷新。与文件里其它异步 effect 一样,探测也
   // 必须带 alive 守卫,切换目标 / 卸载后丢弃在途应答。
   it("reconnecting 期间切换目标设备:不残留旧设备的探测结论", async () => {
-    const webDev = {
-      id: 9,
-      name: "浏览器",
-      kind: "web",
-      fingerprint: "fp-web",
-      last_seen_at: 0,
-      status: 1,
-      online: true,
-    };
     const dev1 = { ...deviceRow, id: 1, name: "机器A", online: false };
     const dev2 = { ...deviceRow, id: 2, name: "机器B", online: true };
 
@@ -703,7 +1135,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       // call1=设备1取设备, call2=设备1的探测(挂起),
       // call3=设备2取设备, call4=设备2的探测。
       if (call === 2) return probe1;
-      return { devices: call <= 2 ? [webDev, dev1] : [webDev, dev2] };
+      return { devices: call <= 2 ? [dev1] : [dev2] };
     });
 
     mockUseRelay.mockImplementation(() => ({
@@ -715,6 +1147,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
         accessToken: "t",
       },
       relayTicketError: null,
+      reconnect: vi.fn(),
     }));
 
     const { rerender } = render(
@@ -747,7 +1180,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
 
     // 旧设备(1)的探测现在才回来(离线):不得覆盖新目标的在线判定。
     await act(async () => {
-      resolveProbe1({ devices: [webDev, dev1] });
+      resolveProbe1({ devices: [dev1] });
     });
 
     await vi.waitFor(() => {
@@ -764,9 +1197,8 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + method);
     });
@@ -780,6 +1212,324 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     expect(
       (await screen.findByTestId("session-detail-meta")).textContent,
     ).toContain("书房小主机");
+  });
+});
+
+// ── 插话（runtime.steer）与发送失败的三类诊断 ────────────────────────────────
+//
+// 桌面端的对端侧早就注册了 runtime.steer（agentre 仓 internal/peer/inbound.go:96,
+// agentred 侧 daemon.go:1511 同样注册）。会话正在跑一轮时再发消息，桌面端走的是
+// steer（把消息排进当前这一轮）；浏览器此前只会 runtime.run，一头撞上 chat_svc 的
+// acquireTurnGate（chat.go:3419 → code.ChatSendInFlight）。
+//
+// 「会话正忙」在协议上**没有专属错误码**：它经 internal/daemon/rpc/conn.go:173
+// 落成 -32603 + 本地化 message。所以正忙不靠解析错误判定，而是靠选路 + 一次回落
+// 由 daemon 自己裁决；只有「执行目标不可用」有真码（inbound.go:205 的 -32015）。
+const busyError = () =>
+  new RelayError(-32603, "当前会话已有进行中的对话，请稍后再试", {
+    code: -32603,
+    message: "当前会话已有进行中的对话，请稍后再试",
+  });
+const noActiveTurnError = () =>
+  new RelayError(-32603, "当前没有进行中的对话", {
+    code: -32603,
+    message: "当前没有进行中的对话",
+  });
+/** inbound.go:205 peerExecutionUnavailableCode + PeerSessionRunResult 载荷。 */
+const executionUnavailableError = () =>
+  new RelayError(
+    -32015,
+    "desktop history remains available, but the session execution target is unavailable",
+    {
+      code: -32015,
+      message: "execution target unavailable",
+      data: {
+        accepted: false,
+        historyAvailable: true,
+        executionUnavailable: true,
+      },
+    },
+  );
+
+describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
+  const runningSummary = { ...summary, lifecycleState: "running" };
+
+  function mountWith(
+    sess: typeof summary & { peerFingerprint?: string },
+    onSend: (method: AnyRpcMethod) => unknown,
+  ) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
+      if (method === rpcMethods.sessionList) return { sessions: [sess] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return onSend(method);
+    });
+  }
+
+  async function send(text: string) {
+    // 发送期间输入框是停用的（TipTap 的 setEditable(false)），这一档下
+    // triggerSubmit 会直接 return —— 连发两条时必须等它恢复可编辑再打第二条。
+    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await sendInComposer(text);
+  }
+
+  function callsOf(method: AnyRpcMethod) {
+    return fakeClient.request.mock.calls.filter((c) => c[0] === method);
+  }
+
+  // Given 会话正在跑一轮 / When 浏览器发消息 / Then 走 runtime.steer 插进当前这一轮，
+  // 而不是 runtime.run（run 会被 acquireTurnGate 直接拒掉）。
+  it("Given 会话在跑 When 发消息 Then 走 runtime.steer 并带回 origin", async () => {
+    mountWith({ ...runningSummary, peerFingerprint: "fp-desktop" }, (m) => {
+      if (m === rpcMethods.runtimeSteer) return {};
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("顺便把标题也改了");
+
+    await vi.waitFor(() => {
+      expect(callsOf(rpcMethods.runtimeSteer)[0]?.[1]).toMatchObject({
+        sessionId: 42n,
+        peerFingerprint: "fp-desktop",
+        text: "顺便把标题也改了",
+      });
+    });
+    expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(0);
+  });
+
+  // Given 直连 agentred 的会话 / When 插话 / Then 带上 queuedId，否则这条消息拿不到
+  // 「来自 <设备>」的归属标注。
+  //
+  // agentred 的 steer 处理器按 queuedId 记提交方（handlers/runtime.go:1100，门槛
+  // 就是 `p.QueuedID != ""`），等 backend 消费掉这条 steer 时把 SourcePeer 盖回去。
+  // 不传 = 那张表里没有条目 = 归属丢失。
+  //
+  // 注意这条**只对直连 agentred 的目标**成立：桌面端 peer 的 EnqueuePeerSession
+  // 压根不看 params.QueuedID，它自己 newQueuedID() 再按 peerSource 记归属，所以
+  // 桌面端目标不传也没事。这里仍然无条件带上——同一条发送路径不该按目标类型分叉。
+  it("Given 会话在跑 When 插话 Then 带上 queuedId 供 agentred 归属来源", async () => {
+    mountWith({ ...runningSummary, peerFingerprint: "fp-desktop" }, (m) => {
+      if (m === rpcMethods.runtimeSteer) return {};
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("插一句");
+
+    await vi.waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(1),
+    );
+    const params = callsOf(rpcMethods.runtimeSteer)[0]?.[1] as {
+      queuedId?: string;
+    };
+    expect(params.queuedId).toBeTruthy();
+
+    // 每条 steer 各自一个 id：agentred 那张表按 id 存提交方，撞 id 会让先来的
+    // 那条被后来的覆盖掉。
+    await send("再插一句");
+    await vi.waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(2),
+    );
+    const second = callsOf(rpcMethods.runtimeSteer)[1]?.[1] as {
+      queuedId?: string;
+    };
+    expect(second.queuedId).toBeTruthy();
+    expect(second.queuedId).not.toBe(params.queuedId);
+  });
+
+  // Given 会话空闲 / When 发消息 / Then 仍走 runtime.run（开新一轮），不误发 steer。
+  it("Given 会话空闲 When 发消息 Then 仍走 runtime.run", async () => {
+    mountWith(summary, (m) => {
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("开始重构");
+
+    await vi.waitFor(() => {
+      expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1);
+    });
+    expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(0);
+  });
+
+  // summary.lifecycleState 是**装载那一刻**的快照，此后永不刷新。所以选路不能只看它：
+  // 自己刚发出去的一轮还在飞，第二条消息必须走 steer。
+  it("Given 自己刚开了一轮 When 再发一条 Then 走 steer(不看陈旧的 lifecycle 快照)", async () => {
+    mountWith(summary, (m) => {
+      if (m === rpcMethods.runtimeRun) return {};
+      if (m === rpcMethods.runtimeSteer) return {};
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("开始重构");
+    await vi.waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1),
+    );
+
+    await send("顺便把标题也改了");
+    await vi.waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(1),
+    );
+    expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1);
+  });
+
+  // 竞态 A：判定的瞬间轮次刚起。选路认为空闲 → run 被 daemon 拒（ChatSendInFlight），
+  // 回落一次 steer 由 daemon 自己裁决，消息照样排进这一轮，不报错。
+  it("Given 判定为空闲但轮次刚起 When run 被拒 Then 回落 steer 并排队成功", async () => {
+    mountWith(summary, (m) => {
+      if (m === rpcMethods.runtimeRun) throw busyError();
+      if (m === rpcMethods.runtimeSteer) return {};
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("顺便把标题也改了");
+
+    await vi.waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(1),
+    );
+    // 排进了当前这一轮：给出最小诚实反馈，草稿清空，不报失败。
+    expect(
+      await screen.findByText(/queued into the current turn/i),
+    ).toBeTruthy();
+    expect(composerText()).toBe("");
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+  });
+
+  // 竞态 B：判定的瞬间轮次刚结束。选路认为在跑 → steer 被拒（没有进行中的一轮），
+  // 回落一次 run 开新一轮。
+  it("Given 判定为在跑但轮次刚结束 When steer 被拒 Then 回落 run 开新一轮", async () => {
+    mountWith(runningSummary, (m) => {
+      if (m === rpcMethods.runtimeSteer) throw noActiveTurnError();
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("继续");
+
+    // 草稿清空是「这一条被接受了」的判据；等它落定，而不是只等请求发出去。
+    await vi.waitFor(
+      () => {
+        expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1);
+        expect(composerText()).toBe("");
+      },
+      { timeout: 3_000 },
+    );
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+    // 回落的是 run（开了新一轮），不是排队：不该出现「已排进这一轮」。
+    expect(screen.queryByText(/queued into the current turn/i)).toBeNull();
+  });
+});
+
+// 缺口二：sendMessage 的 catch 把**任何**失败都当成「这条会话钉住的 agentred
+// 不可用」（只按 device.kind==="desktop" 分流），于是「会话正忙」被报成「守护进程
+// 掉线」——一个假的故障。三类失败必须各自可区分。
+describe("会话详情页:发送失败的三类诊断(缺口二)", () => {
+  const desktopRow = { ...deviceRow, kind: "desktop" };
+
+  function mount(onSend: (method: unknown) => unknown) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [desktopRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return onSend(method);
+    });
+  }
+
+  async function renderAndSend(text: string) {
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer(text);
+  }
+
+  // Given 会话正忙且这个后端插不了话（run 与 steer 都被 daemon 拒）
+  // When  用户发消息
+  // Then  不得谎称「agentred 不可用」；如实说没发出去，并原样转述 daemon 自己的说明。
+  it("Given 会话正忙 When run 与 steer 都被拒 Then 不谎报 agentred 不可用", async () => {
+    mount((m) => {
+      if (m === rpcMethods.runtimeRun) throw busyError();
+      if (m === rpcMethods.runtimeSteer)
+        throw new RelayError(-32603, "该后端不支持插话", {
+          code: -32603,
+          message: "该后端不支持插话",
+        });
+      throw new Error("unexpected: " + m);
+    });
+
+    await renderAndSend("顺便把标题也改了");
+
+    // 对端收到了并明确拒绝 → rejected 那一类：重发是干净的，主按钮就是「重发」。
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("rejected");
+    // daemon 自己的本地化说明原样透出，不被替换成一个编造的故事。
+    expect(
+      within(bubble).getByText(/当前会话已有进行中的对话，请稍后再试/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/New messages cannot be sent/)).toBe(null);
+    // 历史可读、也没有被停用新写入。
+    expect(composerDisabled()).toBe(false);
+  });
+
+  // Given daemon 回的是「执行目标不可用」的真码（-32015）
+  // When  用户发消息
+  // Then  这才是「钉住的 agentred 不可用」：历史可读、新写入停用、专门说明。
+  it("Given daemon 回 -32015 When 发消息 Then 进入 agentred 不可用态", async () => {
+    mount((m) => {
+      if (m === rpcMethods.runtimeRun) throw executionUnavailableError();
+      throw new Error("unexpected: " + m);
+    });
+
+    await renderAndSend("继续");
+
+    expect(await screen.findByText(/New messages cannot be sent/)).toBeTruthy();
+    expect(composerDisabled()).toBe(true);
+    // 执行目标不可用不是竞态，不该再回落一次 steer。
+    expect(
+      fakeClient.request.mock.calls.some(
+        (c) => c[0] === rpcMethods.runtimeSteer,
+      ),
+    ).toBe(false);
+  });
+
+  // Given 请求根本没走到 daemon（socket 刚断，RelayError code=-1）
+  // When  用户发消息
+  // Then  通用发送失败；不回落（可能已经送达，回落会重发），也不谎报 agentred 不可用。
+  it("Given 传输层失败 When 发消息 Then 通用失败且不回落 steer", async () => {
+    mount((m) => {
+      if (m === rpcMethods.runtimeRun)
+        throw new RelayError(-1, "relay: 连接已断开");
+      throw new Error("unexpected: " + m);
+    });
+
+    await renderAndSend("继续");
+
+    // 请求没走到对端 → transport 那一类，与 rejected 分开：它可能已经送达。
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.getAttribute("data-failure-kind")).toBe("transport");
+    expect(screen.queryByText(/New messages cannot be sent/)).toBe(null);
+    expect(
+      fakeClient.request.mock.calls.some(
+        (c) => c[0] === rpcMethods.runtimeSteer,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -798,11 +1548,11 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
         accessToken: "t",
       },
       relayTicketError: null,
+      reconnect: vi.fn(),
     }));
-    fakeClient.request.mockImplementation(async (method: string) => {
-      if (method === "runtime.session.list")
-        return { sessions: [summary], supportsSessionMetadata: true };
-      if (method === "runtime.session.pendingWaiters")
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + method);
     });
@@ -836,5 +1586,2569 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
         screen.queryByText("Could not load your devices. Please try again."),
       ).toBeNull();
     });
+  });
+});
+
+/**
+ * 本轮（server 持有会话）：详情页的历史改从 server 镜像取，机器离线照样读得到整条
+ * 转录——这正是这一轮的目的（规格「机器离线时只读」）。实时流按 seq 接在镜像历史
+ * 后面：应用完历史先预置游标，中继才 attach + 补齐，浏览器因此不会把 server 已经
+ * 有的那一段再从 daemon 拉一遍；跳号仍由中继客户端回执行端补洞。
+ */
+describe("会话详情：历史来自 server 镜像", () => {
+  /** 一页镜像转录：frames 是 wire.JournaledNotification 原样。 */
+  function framePage(frames: { seq: number; text: string }[], hasMore = false) {
+    return {
+      frames: frames.map((f) => ({
+        seq: f.seq,
+        method: "runtime.event",
+        params: {
+          sessionId: 42,
+          event: { kind: "text_delta", text: f.text },
+        },
+      })),
+      cursor: frames.length > 0 ? frames[frames.length - 1].seq : 0,
+      has_more: hasMore,
+    };
+  }
+
+  /** 机器离线：没有中继客户端，连接态是 disconnected。 */
+  function renderOfflinePage() {
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    return render(
+      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/devices/:deviceId/sessions/:sessionId"
+              element={<SessionDetail />}
+            />
+            {/* 「新建一个会话」的落点。真页面在这一组里跑不起来（它自己要取
+                agents / projects），桩到这里就够了：本组要断的是**去了哪、带了
+                什么**，那一屏怎么长在 new-conversation.test.tsx 里守。 */}
+            <Route path="/chat" element={<ChatStub />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  const offlineDevice = { ...deviceRow, online: false };
+
+  /**
+   * 往上滚续读那一半在「转录只取尾巴」那一组里（它装了几何桩）：jsdom 不做布局，
+   * scrollHeight / clientHeight 恒为 0，这里驱动不动滚动。本条守的是离线时**读得到**
+   * 这件事本身，以及首屏的取数形状。
+   */
+  it("机器离线：转录照读，首屏是最后那一段，且按 (发起端指纹, 会话 id) 取数", async () => {
+    const asked: string[] = [];
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [offlineDevice] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        asked.push(path);
+        return {
+          ...framePage([{ seq: 9, text: "离线也读得到的最后一句" }]),
+          oldest_seq: 9,
+          has_before: true,
+        };
+      }
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOfflinePage();
+
+    // 机器不在线，但账号里那一段照样读得到 —— 首屏是**最后**那一段，不是从头翻。
+    expect(await screen.findByText(/离线也读得到的最后一句/)).toBeTruthy();
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain("peer_fingerprint=fp-1");
+    expect(asked[0]).toContain("session_id=42");
+    expect(asked[0]).toContain("direction=backward");
+    expect(asked[0]).toContain("cursor=0");
+
+    // 离线态如实说明（横幅按 R11 分类，不在这里重新推导）。
+    expect(screen.getByRole("alert").getAttribute("data-session-status")).toBe(
+      "machineOffline",
+    );
+  });
+
+  it("机器离线：发送入口不可用，说明在等哪台机器且不排队（决策 13）", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [offlineDevice] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([{ seq: 1, text: "离线转录" }]);
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOfflinePage();
+    await screen.findByText(/离线转录/);
+
+    // 发不出去这件事现在由**只读条**表达，而不是一个永远灰着的输入框：
+    // 后者是在暗示「也许待会儿能用」（决策 5）。
+    expect(screen.queryByTestId("session-detail-send")).toBeNull();
+    const readonly = screen.getByTestId("session-compose-readonly");
+    expect(readonly.textContent).toContain("书房小主机");
+
+    // 「消息不排队」（决策 13）没有丢，它搬进了横幅——一件事只说一遍。
+    const banner = screen.getByRole("alert");
+    expect(banner.getAttribute("data-session-status")).toBe("machineOffline");
+    expect(banner.textContent).toMatch(/not queued/i);
+    // 只读条不复述横幅那一整段：它只说「等谁」。
+    expect(readonly.textContent).not.toMatch(/not queued/i);
+  });
+
+  /**
+   * 「机器离线」这一档唯一的出口（两端统一）：那条对话钉在一台够不着的机器上、
+   * 续轮不会改派，所以横幅给的是「另起一条」，而不是「查看设备」——后者不把人
+   * 往前推，横幅刚说完「离线 · 最后在线 3 小时前」，点进去看到的还是那句话。
+   *
+   * 路由页形态不在 `/chat` 里，所以它靠 URL 把这件事说给那一页听。
+   */
+  it("机器离线：出口是「新建一个会话」，落到 /chat 的挑 Agent 那一屏", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [offlineDevice] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([{ seq: 1, text: "离线转录" }]);
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOfflinePage();
+    await screen.findByText(/离线转录/);
+
+    const banner = screen.getByRole("alert");
+    fireEvent.click(
+      within(banner).getByRole("button", {
+        name: i18n.t("sessionStatus.machineOffline.startNew", {
+          ns: "agentreUi",
+        }),
+      }),
+    );
+
+    expect(await screen.findByTestId("chat-page")).toBeTruthy();
+    expect(screen.getByTestId("chat-search").textContent).toContain(
+      "compose=1",
+    );
+  });
+
+  it("设备已撤销：转录照读，只读的理由与「机器离线」各说各的（决策 7）", async () => {
+    const revoked = { ...deviceRow, online: false, status: 0 };
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [revoked] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([{ seq: 1, text: "撤销之后仍读得到" }]);
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOfflinePage();
+
+    expect(await screen.findByText(/撤销之后仍读得到/)).toBeTruthy();
+    // 撤销是另一种只读态：横幅由 deriveSessionViewStatus 分类（本页只消费）。
+    expect(screen.getByRole("alert").getAttribute("data-session-status")).toBe(
+      "deviceRevoked",
+    );
+    // 「永久」这句由横幅说（决策 5）。输入框那一带换成只读条：一个永远灰着的
+    // 输入框是在暗示「也许待会儿能用」，而撤销是不可逆的。
+    expect(screen.getByRole("alert").textContent).toMatch(/permanent/i);
+    const readonly = screen.getByTestId("session-compose-readonly");
+    expect(screen.queryByTestId("session-detail-send")).toBeNull();
+    expect(readonly.textContent).not.toContain("书房小主机");
+  });
+
+  it("机器在线：历史先从镜像取、预置游标，中继才补齐（不重拉 server 已有的那段）", async () => {
+    const order: string[] = [];
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        order.push("mirror");
+        return framePage([
+          { seq: 1, text: "镜像里的历史" },
+          { seq: 2, text: "镜像里的第二句" },
+        ]);
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.setCursor.mockImplementation(() => order.push("setCursor"));
+    fakeClient.attach.mockImplementation(async () => {
+      order.push("attach");
+      return {};
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      order.push("catchUp");
+      // 中继只补 server 还没有的那一段（seq 3）。
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "中继补上的新一句" },
+        seq: 3,
+      });
+    });
+
+    renderPage();
+
+    expect(await screen.findByText(/镜像里的历史/)).toBeTruthy();
+    expect(await screen.findByText(/中继补上的新一句/)).toBeTruthy();
+    // 游标预置到镜像交出的最后一个 seq，且必须落在 attach/补齐之前。
+    // 第三个参数是这条对话的发起端指纹（中继客户端按 (指纹, 会话 id) 记游标）；
+    // 这个 summary 没报 peerFingerprint，因此是 undefined =「调用方自己的对端」。
+    expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 2, undefined);
+    expect(order.indexOf("mirror")).toBeLessThan(order.indexOf("setCursor"));
+    expect(order.indexOf("setCursor")).toBeLessThan(order.indexOf("attach"));
+    expect(order.indexOf("attach")).toBeLessThan(order.indexOf("catchUp"));
+  });
+
+  /**
+   * 中继客户端按 **(发起端指纹, 会话 id)** 记游标与 attach 结果（会话标识各端本地
+   * 自增，一台机器上同号的两条对话是常态；机器轴列的正是这一份）。所以清单上学到的
+   * origin 必须**每一次**都带回去：少带的那一次访问的是「调用方自己的对端」那一格,
+   * 于是预置写在一格、补齐读的是另一格 —— 等于没预置，或者更糟，读到上一条同号
+   * 对话留下的游标，整页空白。
+   */
+  it("清单报了发起端：游标读写与 attach/补齐都带着它，不落到同号的另一条上", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-desktop", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([{ seq: 1, text: "镜像里的历史" }]);
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, peerFingerprint: "fp-desktop" }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/镜像里的历史/);
+
+    await vi.waitFor(() => {
+      expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 1, "fp-desktop");
+    });
+    expect(fakeClient.getCursor).toHaveBeenCalledWith(42, "fp-desktop");
+    expect(fakeClient.attach).toHaveBeenCalledWith(42, "fp-desktop");
+    expect(fakeClient.catchUp).toHaveBeenCalledWith(42, "fp-desktop");
+  });
+
+  // 会话标识是各端本地自增、会被复用的：执行端那边被删掉重排之后，日志的高水位比
+  // 镜像里这一段低。游标停在它上面的话，此后每一条实时帧都「不大于游标」被当成重复
+  // 丢光——会话没有报错、没有跳号地冻住。attach 交回来的 latestSeq 就是执行端的高
+  // 水位，按它复位。
+  it("执行端的高水位低于镜像那一段：按 attach 交回的 latestSeq 复位游标，不让会话冻住", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([
+          { seq: 1, text: "镜像里的老历史" },
+          { seq: 5, text: "镜像里的最后一句" },
+        ]);
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    // 页面预置游标之后，客户端的游标就是镜像那一段的末尾。
+    fakeClient.setCursor.mockImplementation((_sid: number, seq: number) =>
+      fakeClient.getCursor.mockReturnValue(seq),
+    );
+    // 执行端手里只剩到 seq 2（那条会话被重排过）。
+    fakeClient.attach.mockResolvedValue({
+      sessionId: 42,
+      lifecycleState: "idle",
+      latestSeq: 2,
+    } as never);
+
+    renderPage();
+    await screen.findByText(/镜像里的最后一句/);
+
+    await vi.waitFor(() => {
+      expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 5, undefined);
+      expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 2, undefined);
+    });
+  });
+
+  it("机器没有名字：说明退回不点名的那句，不留一个空槽", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...offlineDevice, name: "" }] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([{ seq: 1, text: "没名字的机器上的转录" }]);
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOfflinePage();
+    await screen.findByText(/没名字的机器上的转录/);
+
+    // 横幅的标题退回不点名的那句，只读条同理——两处都不留一个空槽。
+    const banner = screen.getByRole("alert");
+    expect(banner.textContent).not.toContain("undefined");
+    expect(banner.textContent).toMatch(/This machine is offline/i);
+    const readonly = screen.getByTestId("session-compose-readonly");
+    expect(readonly.textContent).not.toContain("undefined");
+    expect(readonly.textContent).toContain(
+      "the machine running this conversation",
+    );
+  });
+
+  // 决策 17：镜像身份键是**发起端**，而路由里的 deviceId 是承载这条连接的机器 ——
+  // 同一条对话常常桌面端与 agentred 各有一份，两者不是一回事。
+  it("发起端不是这台机器：账号里只有这一条同号对话时认下来，不落空", async () => {
+    const asked: string[] = [];
+    const askedSessions: string[] = [];
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [offlineDevice] };
+      if (path.startsWith("/v1/agent-sessions?")) {
+        // 认领改成按会话号精确查（规格 2026-08-19 决策 13）：拉全份再本地筛的那条
+        // 路在分页之后会漏掉本来存在的对话。替身照着端点来——只回该号的那些。
+        askedSessions.push(path);
+        const id = new URL(path, "http://x").searchParams.get("session_id");
+        const rows = [
+          { peer_fingerprint: "fp-desktop-9", session_id: "42" },
+          { peer_fingerprint: "fp-desktop-9", session_id: "7" },
+        ].filter((r) => !id || r.session_id === id);
+        return { total: rows.length, items: rows };
+      }
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        asked.push(path);
+        return framePage([{ seq: 1, text: "桌面端发起的那条" }]);
+      }
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOfflinePage();
+
+    expect(await screen.findByText(/桌面端发起的那条/)).toBeTruthy();
+    expect(asked[0]).toContain("peer_fingerprint=fp-desktop-9");
+    // 精确查而不是拉全份：分页之后后者会漏掉本来存在的对话。
+    expect(askedSessions.some((p) => p.includes("session_id=42"))).toBe(true);
+  });
+
+  it("同号对话有多条且都不属于这台机器：不猜指纹，如实说明离线读不到", async () => {
+    const asked: string[] = [];
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [offlineDevice] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 2,
+          items: [
+            { peer_fingerprint: "fp-desktop-9", session_id: "42" },
+            { peer_fingerprint: "fp-laptop-3", session_id: "42" },
+          ],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        asked.push(path);
+        return framePage([{ seq: 1, text: "不该被看到的转录" }]);
+      }
+      throw new Error("unexpected: " + path);
+    });
+
+    renderOfflinePage();
+
+    // 猜错发起端就会把**别的对话**摆在这个 URL 下：宁可什么都不取。
+    await screen.findByTestId("session-history-unavailable");
+    expect(asked).toEqual([]);
+    expect(screen.queryByText(/不该被看到的转录/)).toBeNull();
+    expect(screen.queryByTestId("session-detail-composer")).toBeNull();
+  });
+});
+
+/**
+ * 三带布局（2026-08-20 对话页 UI/UX 改版）。
+ *
+ * 此前详情是**一整块滚动区**：头部、转录、审批、Composer 依次排下来，整块
+ * `overflow-y-auto`。后果是转录一长，Composer 就跟着被卷出屏幕——量下来页面
+ * 高 2145px、视口 900px，输入框在折线以下 1245px。要回复得先滚到底，而转录还在
+ * 往下长，等于永远追不上。
+ *
+ * 改成三带：头部与 Composer 各自 `shrink-0` 钉住，只有中间那一带滚。这里守的是
+ * **DOM 归属**（jsdom 不算布局）：Composer 与头部都不在滚动容器里。
+ */
+describe("会话详情：头部 / 转录 / Composer 三带", () => {
+  function stubReady() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "很长的一段转录" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  it("嵌入形态：只有转录那一带滚，头部与 Composer 都在滚动容器之外", async () => {
+    stubReady();
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("很长的一段转录");
+    const scroll = screen.getByTestId("session-detail-scroll");
+    expect(scroll.contains(screen.getByText("很长的一段转录"))).toBe(true);
+    expect(scroll.contains(screen.getByTestId("session-detail-composer"))).toBe(
+      false,
+    );
+    expect(scroll.contains(screen.getByTestId("session-detail-header"))).toBe(
+      false,
+    );
+  });
+
+  it("页面形态同样是三带：移动端打开一条长对话，输入框不会被转录卷走", async () => {
+    stubReady();
+    renderPage();
+
+    await screen.findByText("很长的一段转录");
+    const scroll = screen.getByTestId("session-detail-scroll");
+    expect(scroll.contains(screen.getByText("很长的一段转录"))).toBe(true);
+    expect(scroll.contains(screen.getByTestId("session-detail-composer"))).toBe(
+      false,
+    );
+  });
+});
+
+/**
+ * 详情头部（2026-08-20 对话页 UI/UX 改版）。
+ *
+ * 此前头部只有三样：标题、一枚状态胶囊、「机器 · 在线」。打开一条对话看不出它
+ * 是哪个 Agent 在跑、上一次动是什么时候，也没有任何办法把跑飞的一轮停下来 ——
+ * 而 wire 上 `runtime.abort` 一直都在。
+ *
+ * 与桌面端 chat-panel 的 toolbar 同形：头像 + 两行（标题 / mono meta 行）+ 停止。
+ * **项目**那一维不摆：SessionSummary 上没有它（只有账号镜像那一行有），
+ * 摆一个猜出来的项目名比不摆更糟。
+ */
+describe("会话详情：头部", () => {
+  const workspaceAgents = [
+    { sync_id: "ag-1", name: "后端 Agent", avatar_color: "agent-3" },
+  ];
+
+  function stubHeader() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: workspaceAgents };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, lifecycleState: "running" }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeAbort) return {};
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "跑着呢" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  function renderEmbeddedDetail() {
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("头部说得出是哪个 Agent 在跑，头像上的是那个 Agent 的调色板色", async () => {
+    stubHeader();
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const head = screen.getByTestId("session-detail-header");
+    expect(head.textContent).toContain("后端 Agent");
+    // 头像是可读的 role=img，不是一个只有颜色的方块（头部与转录各一枚，取头部这枚）。
+    const avatar = within(head).getByRole("img", { name: "后端 Agent" });
+    // token 要落成 CSS 变量再进 backgroundColor —— 直接塞 token 等于没上色。
+    expect(avatar.style.backgroundColor).toBe("var(--agent-3)");
+  });
+
+  it("meta 行只在真的有前一段时才摆分隔符（老会话没有状态/时间，不该留一个孤零零的「·」）", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        // 还没跑过第一轮的会话：没有标题、没有 agentSyncId、没有活动时间。
+        return {
+          sessions: [
+            {
+              sessionId: 42,
+              lifecycleState: "",
+              latestSeq: 2,
+              cwd: "/home/agent/proj",
+            },
+          ],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "老会话" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    renderEmbeddedDetail();
+
+    await screen.findByText("老会话");
+    const meta = screen.getByTestId("session-detail-meta").textContent ?? "";
+    expect(meta.startsWith("·")).toBe(false);
+    expect(meta).toContain("书房小主机");
+  });
+
+  /**
+   * 机器离线时头部同样要认得出这条对话。摘要此前只有中继 session.list 一条来路，
+   * 机器不在线就永远是 null —— 标题于是退成 `#42`，Agent 名与头像一并消失，而
+   * 账号镜像那一行（/v1/agent-sessions）本来就带着 title / agent_sync_id。
+   * 转录读得到、标题却读不到，是同一份数据被丢在了半路上。
+   */
+  it("机器离线：标题与 Agent 身份改从账号镜像那一行认，不退成 #<会话号>", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      if (path === "/v1/workspace/agents") return { agents: workspaceAgents };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [
+            {
+              peer_fingerprint: "fp-1",
+              session_id: "42",
+              title: "重构登录页",
+              agent_sync_id: "ag-1",
+              lifecycle_state: "idle",
+              last_message_at: 1754000000000,
+            },
+          ],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          frames: [
+            {
+              seq: 1,
+              method: "runtime.event",
+              params: {
+                sessionId: 42,
+                event: { kind: "text_delta", text: "离线转录" },
+              },
+            },
+          ],
+          cursor: 1,
+          has_more: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    renderEmbeddedDetail();
+
+    await screen.findByText(/离线转录/);
+    const head = screen.getByTestId("session-detail-header");
+    // 标题是真标题，不是 #<会话号> 那个占位。
+    expect(head.textContent).toContain("重构登录页");
+    expect(head.textContent).not.toContain("#42");
+    // Agent 身份同样认得出：名字 + 那枚带调色板色的头像。
+    expect(head.textContent).toContain("后端 Agent");
+    const avatar = within(head).getByRole("img", { name: "后端 Agent" });
+    expect(avatar.style.backgroundColor).toBe("var(--agent-3)");
+  });
+
+  /**
+   * 转录抬头的「助手」闪一下：Agent 名要两条异步各自到齐才解得开（账号的 Agent 清单
+   * + 这条对话的 agentSyncId），而转录只要有消息就先铺出来了。中间那一段空窗里
+   * 共享包按约定退回中性抬头「Assistant」，等清单落地再换成真名 —— 用户看到的就是
+   * 名字和头像跳了一下。
+   *
+   * 转录不该为了等一个名字而扣着不显示（内容比抬头重要），所以要的不是「更快解开」，
+   * 而是**在解得开之前不摆一个会被换掉的名字**。
+   */
+  it("Agent 清单还在路上：转录抬头不先摆「Assistant」再换成真名", async () => {
+    let releaseAgents: (v: unknown) => void = () => {};
+    const agentsPending = new Promise((r) => {
+      releaseAgents = r;
+    });
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      // 账号的 Agent 清单故意晚于转录落地（真实网络里这完全可能）。
+      if (path === "/v1/workspace/agents") {
+        await agentsPending;
+        return { agents: workspaceAgents };
+      }
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [
+            {
+              peer_fingerprint: "fp-1",
+              session_id: "42",
+              title: "重构登录页",
+              agent_sync_id: "ag-1",
+              lifecycle_state: "idle",
+            },
+          ],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          frames: [
+            {
+              seq: 1,
+              method: "runtime.event",
+              params: {
+                sessionId: 42,
+                event: { kind: "text_delta", text: "离线转录" },
+              },
+            },
+          ],
+          cursor: 1,
+          has_more: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    renderEmbeddedDetail();
+
+    // 转录已经铺出来了 —— 而 Agent 清单还没回来。
+    await screen.findByText(/离线转录/);
+    const transcript = screen.getByTestId("session-detail-transcript");
+    // 这一刻**已知**这条对话有 Agent（agentSyncId 在手），只是名字还没解开：
+    // 此时摆「Assistant」就是摆一个注定要被换掉的名字。
+    expect(transcript.textContent).not.toContain("Assistant");
+
+    // 清单落地后，真名补上。
+    releaseAgents(undefined);
+    await vi.waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-transcript").textContent,
+      ).toContain("后端 Agent"),
+    );
+  });
+
+  /**
+   * 没有标题的会话（发起端还没报过 title）在索引上退化为
+   * 「工作目录 · 后端 · 状态」——那是本站关于「这条对话叫什么」的唯一一处派生
+   * （lib/sessionView 的 sessionTitle，索引与总览都走它）。详情页却另写了一份
+   * `#<会话号>`：同一条对话在列表里叫一个名字、点进去叫另一个。
+   *
+   * 标题该由那一处说了算，详情页不另立一套。
+   */
+  it("没有标题的会话：头部与索引同一套派生，不另写一个 #<会话号>", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [
+            {
+              peer_fingerprint: "fp-1",
+              session_id: "42",
+              // 老会话：没有 title，也没有 agent_sync_id。
+              backend_type: "claude",
+              lifecycle_state: "idle",
+            },
+          ],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          frames: [
+            {
+              seq: 1,
+              method: "runtime.event",
+              params: {
+                sessionId: 42,
+                event: { kind: "text_delta", text: "老会话转录" },
+              },
+            },
+          ],
+          cursor: 1,
+          has_more: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    renderEmbeddedDetail();
+
+    await screen.findByText(/老会话转录/);
+    const head = screen.getByTestId("session-detail-header");
+    // 与索引同一套退化：后端与状态说得出来，cwd 永不下行（R19）所以是「—」。
+    expect(head.textContent).toContain("claude");
+    expect(head.textContent).not.toContain("#42");
+  });
+
+  it("跑着的那一轮停得下来：头部的「停止」真的发 runtime.abort", async () => {
+    stubHeader();
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    fireEvent.click(screen.getByTestId("session-detail-stop"));
+
+    await vi.waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeAbort,
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("转录里的头像也换成这个 Agent 的调色板色（此前是中性的 bg-muted）", async () => {
+    stubHeader();
+    const { container } = renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const inTranscript = container.querySelector(
+      '[data-testid="session-detail-transcript"] [role="img"]',
+    );
+    expect((inTranscript as HTMLElement | null)?.style.backgroundColor).toBe(
+      "var(--agent-3)",
+    );
+  });
+});
+
+/**
+ * 输入框（2026-08-20 对话页 UI/UX 改版）。
+ *
+ * 此前是一个裸 `<textarea>`：没有 @ 提及、没有 / 命令，也没有任何关于「按什么键
+ * 发出去」的提示。桌面端用的是共享包的 `AIChatInput`，两端因此不是同一种输入框。
+ *
+ * 占位文案由 `AIChatInput` 自己按**本次真正接上的能力**拼（省略 `placeholder` 时
+ * 生效）。这一端接不上 `!` 执行终端命令（wire 上没有任何 PTY / 本地执行方法），
+ * 所以显式传 `localCommandsEnabled={false}` —— 光看「接没接 onCommandSubmit」会
+ * 判成能用，而这里接它只为挡住静默吞字。
+ */
+describe("会话详情：输入框", () => {
+  function stubComposer() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            { sync_id: "ag-1", name: "后端 Agent", avatar_color: "agent-3" },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  function renderComposer() {
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("用的是共享包的 AIChatInput：打字 + Enter 照常发得出去", async () => {
+    stubComposer();
+    renderComposer();
+
+    await screen.findByText("开场白");
+    await sendInComposer("把按钮改成蓝色");
+
+    await vi.waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        (c) => c[0] === rpcMethods.runtimeRun,
+      );
+      expect(call?.[1]).toMatchObject({ userText: "把按钮改成蓝色" });
+    });
+  });
+
+  it("占位文案按真正接上的能力拼：@ 与 / 在，! 不许诺（这一端没有本地执行）", async () => {
+    stubComposer();
+    const { container } = renderComposer();
+
+    await screen.findByText("开场白");
+    const placeholder = container
+      .querySelector("[data-placeholder]")
+      ?.getAttribute("data-placeholder");
+    expect(placeholder).toBe("Type a message · @ to mention · / for commands");
+  });
+
+  it("底栏摆出上下文用量：窗口与用量都从中转事件流里来（此前是记而不显）", async () => {
+    stubComposer();
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "context_window_updated", tokens: 200000 },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "usage", totalInputTokens: 41200 },
+        seq: 3,
+      });
+    });
+    renderComposer();
+
+    await screen.findByText("开场白");
+    const meter = await screen.findByTestId("composer-context-meter");
+    // 41200 / 200000 = 20.6% → 21%
+    expect(meter.textContent).toContain("21%");
+    // 环画的是比例，读数挂在 aria 上：底栏里不再摆 token 绝对值（与桌面端同形）。
+    expect(meter.getAttribute("aria-label")).toBe(
+      "Context usage 41.2k / 200k, 21% used",
+    );
+  });
+
+  /**
+   * 与桌面端 `chat.tsx` 的 ContextMeter 同形（2026-08-21 改环）：底栏只留一枚环 +
+   * 百分比，token 绝对值搬进 hover 浮窗。此前本站是 40px 线性条 + 原生 title：
+   * title 只有鼠标拿得到，键盘用户读不到那两个数字。
+   */
+  it("上下文计量器是一枚环 + 百分比，不是线性条，也不靠原生 title 藏数字", async () => {
+    stubComposer();
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "context_window_updated", tokens: 200000 },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "usage", totalInputTokens: 41200 },
+        seq: 3,
+      });
+    });
+    renderComposer();
+
+    await screen.findByText("开场白");
+    const meter = await screen.findByTestId("composer-context-meter");
+    expect(meter.tagName).toBe("BUTTON");
+    expect(meter.hasAttribute("title")).toBe(false);
+    expect(meter.textContent).not.toContain("41");
+    const ring = within(meter).getByRole("progressbar");
+    expect(ring.getAttribute("aria-valuenow")).toBe("41200");
+    expect(ring.getAttribute("aria-valuemax")).toBe("200000");
+    expect(
+      ring
+        .querySelector("[data-slot='context-ring-arc']")
+        ?.classList.contains("stroke-primary"),
+    ).toBe(true);
+  });
+
+  it("聚焦计量器就展开浮窗：已用 / 上限 / 剩余都在里面，键盘也拿得到", async () => {
+    stubComposer();
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "context_window_updated", tokens: 200000 },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "usage", totalInputTokens: 41200 },
+        seq: 3,
+      });
+    });
+    renderComposer();
+
+    await screen.findByText("开场白");
+    fireEvent.focusIn(await screen.findByTestId("composer-context-meter"));
+
+    expect(await screen.findByText("41.2k")).toBeTruthy();
+    expect(screen.getByText("/ 200k")).toBeTruthy();
+    expect(screen.getByText("Remaining")).toBeTruthy();
+    expect(screen.getByText("159k")).toBeTruthy();
+  });
+
+  it("过了 75% 就换告警色：与桌面端同一套 90 / 75 分级，此前本站只有 90 一档", async () => {
+    stubComposer();
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "context_window_updated", tokens: 200000 },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "usage", totalInputTokens: 164000 },
+        seq: 3,
+      });
+    });
+    renderComposer();
+
+    await screen.findByText("开场白");
+    const meter = await screen.findByTestId("composer-context-meter");
+    expect(
+      within(meter)
+        .getByRole("progressbar")
+        .querySelector("[data-slot='context-ring-arc']")
+        ?.classList.contains("stroke-status-waiting"),
+    ).toBe(true);
+    expect(meter.textContent).toContain("82%");
+  });
+
+  it("窗口还没探到时整块不摆：不拿一个编出来的分母画进度条", async () => {
+    stubComposer();
+    renderComposer();
+
+    await screen.findByText("开场白");
+    await awaitComposer();
+    expect(screen.queryByTestId("composer-context-meter")).toBeNull();
+  });
+
+  it("底栏说得出按什么键发出去（与桌面端逐字一致）", async () => {
+    stubComposer();
+    renderComposer();
+
+    await screen.findByText("开场白");
+    // 这句现在由共享包出（两端同一份文案），所以按可见文字断言而不是找宿主
+    // 自己的 testid —— 包不该知道某个宿主的测试怎么写。
+    expect(screen.getByText("↵ Send · ⇧↵ New line")).toBeTruthy();
+  });
+
+  it("以 ! 开头的一行不会被静默吞掉：如实说这一端执行不了，文本还留在框里", async () => {
+    stubComposer();
+    renderComposer();
+
+    await screen.findByText("开场白");
+    await sendInComposer("!!! 这条很重要");
+
+    // 共享包在缺 onCommandSubmit 时会把 `!` 开头的内容 clearContent 掉、既不发也不
+    // 说 —— 用户打的字凭空消失。这一端接不上本地执行（wire 上没有 PTY 方法），
+    // 所以必须如实说出来，并且把文本还回去。
+    expect(
+      await screen.findByTestId("composer-local-command-unsupported"),
+    ).toBeTruthy();
+    await vi.waitFor(() => expect(composerText()).toBe("!!! 这条很重要"));
+    expect(
+      fakeClient.request.mock.calls.some((c) => c[0] === rpcMethods.runtimeRun),
+    ).toBe(false);
+  });
+});
+
+/**
+ * 打开即已读（2026-08-20 对话页 UI/UX 改版）。
+ *
+ * 「未读」这一档要成立，得有人在你真的看到这条对话时把这件事记下来。身份键是
+ * **发起端**指纹 + 那一端的会话标识（决策 17），与账号镜像其余端点同一组 —— 用
+ * 承载连接的那台机器的指纹会记到另一条对话上。
+ */
+describe("会话详情：打开即标记已读", () => {
+  it("打开一条对话时按发起端身份记一次已读", async () => {
+    const posted: unknown[] = [];
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        return { last_read_at: 1_700_000_000_000 };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, peerFingerprint: "fp-desktop" }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() =>
+      expect(posted).toEqual([
+        // 发起端是桌面端那台，不是承载这条连接的 deviceRow。
+        { peer_fingerprint: "fp-desktop", session_id: "42" },
+      ]),
+    );
+  });
+
+  it("同一条对话不重复记：换一条才再记一次", async () => {
+    const posted: unknown[] = [];
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        return { last_read_at: 1 };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [summary, { ...summary, sessionId: 43 }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+
+    // 同一条重渲染不再记一次。
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(posted).toHaveLength(1);
+
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={43} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+  });
+});
+
+/**
+ * `/compact`（2026-08-20 对话页 UI/UX 改版）。
+ *
+ * 桌面端 registry 对这条命令是分两路的：claudecode 的 CLI 自己认 `/compact`，走
+ * literal_text；codex / piagent 的 CLI **不认**，桌面端在 chat-panel 的 onSubmit 里
+ * 拦下这段文本转成压缩 RPC。本站的对应物是 `runtime.run` 的 `compact` 参数
+ * （daemon 的 handlers/runtime.go 把它直接透传给 runner，而 CapCompact 正是
+ * codex 与 piagent 声明的）。不拦的话，菜单在这两个后端上摆出一条按下去只会当普通
+ * 消息发出去、什么也不做的命令。
+ */
+describe("会话详情：/compact", () => {
+  function mountBackend(backendType: string) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, backendType }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function runParams() {
+    return fakeClient.request.mock.calls
+      .filter((c) => c[0] === rpcMethods.runtimeRun)
+      .at(-1)?.[1] as { compact?: boolean; userText?: string } | undefined;
+  }
+
+  it("codex：/compact 转成 runtime.run 的 compact 参数，不当普通消息发出去", async () => {
+    mountBackend("codex");
+    await screen.findByText("开场白");
+
+    await sendInComposer("/compact");
+
+    await vi.waitFor(() => expect(runParams()?.compact).toBe(true));
+    // 压缩这一轮没有用户消息：把 `/compact` 也当正文送过去等于既压缩又多说一句。
+    expect(runParams()?.userText).toBeFalsy();
+  });
+
+  it("claudecode：原样当正文送过去（CLI 自己认这条命令）", async () => {
+    mountBackend("claudecode");
+    await screen.findByText("开场白");
+
+    await sendInComposer("/compact");
+
+    await vi.waitFor(() => expect(runParams()?.userText).toBe("/compact"));
+    expect(runParams()?.compact).toBeFalsy();
+  });
+
+  it("只拦**正好**是这条命令的那一行：带上下文的一句话照常当消息发", async () => {
+    mountBackend("codex");
+    await screen.findByText("开场白");
+
+    await sendInComposer("/compact 之前先把结论记下来");
+
+    await vi.waitFor(() =>
+      expect(runParams()?.userText).toBe("/compact 之前先把结论记下来"),
+    );
+    expect(runParams()?.compact).toBeFalsy();
+  });
+});
+
+/**
+ * 尾部加载（规格 2026-08-21-transcript-tail-loading）。
+ *
+ * 打开一条对话取的是它**最后那一段**，钉在底部；往上滚才续读更早的。服务端的预算
+ * （轮次 / 字节 / 行）与客户端的「够不够一屏」是两条**不同**的收尾条件：内容不满
+ * 一屏时没有滚动条，滚动触发的续读永远不成立，更早的内容会变成够不着。
+ */
+describe("会话详情：转录只取尾巴，往上滚才续读", () => {
+  /** jsdom 不做布局，这三个量恒为 0 —— 而「够不够一屏」正是拿它们判的。 */
+  const geo = { scrollHeight: 0, clientHeight: 0 };
+  const tops = new WeakMap<HTMLElement, number>();
+
+  beforeEach(() => {
+    geo.scrollHeight = 2000;
+    geo.clientHeight = 500;
+    const isScroller = (el: HTMLElement) =>
+      el.dataset.testid === "session-detail-scroll";
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return isScroller(this) ? geo.scrollHeight : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return isScroller(this) ? geo.clientHeight : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return tops.get(this) ?? 0;
+      },
+      set(this: HTMLElement, v: number) {
+        tops.set(this, v);
+      },
+    });
+  });
+
+  function scroller(): HTMLElement {
+    return screen.getByTestId("session-detail-scroll");
+  }
+
+  /** 反向读的一页。 */
+  function tailPage(
+    frames: { seq: number; text: string }[],
+    hasBefore = false,
+  ) {
+    return {
+      frames: frames.map((f) => ({
+        seq: f.seq,
+        method: "runtime.event",
+        params: { sessionId: 42, event: { kind: "text_delta", text: f.text } },
+      })),
+      cursor: frames.length ? frames[frames.length - 1].seq : 0,
+      oldest_seq: frames.length ? frames[0].seq : 0,
+      has_before: hasBefore,
+    };
+  }
+
+  const mirrorRow = {
+    total: 1,
+    items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+  };
+
+  /** 装一个只答镜像的 api：pages 按请求顺序发。 */
+  function serveMirror(pages: unknown[], asked: string[] = []) {
+    let n = 0;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?")) return mirrorRow;
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        asked.push(path);
+        return pages[Math.min(n++, pages.length - 1)];
+      }
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    return asked;
+  }
+
+  it("首屏走反向读，只发一次请求——不再从头翻到尾", async () => {
+    const asked = serveMirror([
+      tailPage(
+        [
+          { seq: 98, text: "倒数第二句" },
+          { seq: 99, text: "最后一句" },
+        ],
+        true,
+      ),
+    ]);
+    renderPage();
+
+    expect(await screen.findByText(/最后一句/)).toBeTruthy();
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toContain("direction=backward");
+    expect(asked[0]).toContain("cursor=0");
+    expect(asked[0]).toContain("peer_fingerprint=fp-1");
+  });
+
+  it("进去就停在底部", async () => {
+    serveMirror([tailPage([{ seq: 99, text: "最后一句" }], true)]);
+    renderPage();
+    await screen.findByText(/最后一句/);
+
+    await vi.waitFor(() => expect(scroller().scrollTop).toBe(geo.scrollHeight));
+  });
+
+  it("往上滚到距顶两屏：用 oldest_seq 再取一页，接在前面", async () => {
+    const asked = serveMirror([
+      tailPage([{ seq: 99, text: "最后一句" }], true),
+      tailPage([{ seq: 50, text: "更早的那句" }], false),
+    ]);
+    renderPage();
+    await screen.findByText(/最后一句/);
+    await vi.waitFor(() => expect(scroller().scrollTop).toBe(2000));
+
+    // 滚到距顶两屏以内（clientHeight=500 → 阈值 1000）。
+    const el = scroller();
+    el.scrollTop = 900;
+    fireEvent.scroll(el);
+
+    expect(await screen.findByText(/更早的那句/)).toBeTruthy();
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toContain("cursor=99");
+    expect(asked[1]).toContain("direction=backward");
+    // 顺序：更早的在前。
+    const body = screen.getByTestId("session-detail-transcript").textContent!;
+    expect(body.indexOf("更早的那句")).toBeLessThan(body.indexOf("最后一句"));
+  });
+
+  it("前插之后视口不跳：加了多少高度就往下挪多少", async () => {
+    serveMirror([
+      tailPage([{ seq: 99, text: "最后一句" }], true),
+      tailPage([{ seq: 50, text: "更早的那句" }], false),
+    ]);
+    renderPage();
+    await screen.findByText(/最后一句/);
+    const el = scroller();
+    await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+
+    el.scrollTop = 900;
+    fireEvent.scroll(el);
+    // 前插使内容长高 1200；补偿之后用户看的那一行应该还在原处。
+    geo.scrollHeight = 3200;
+    await screen.findByText(/更早的那句/);
+    await vi.waitFor(() => expect(el.scrollTop).toBe(900 + 1200));
+  });
+
+  it("不满一屏而还有更早的：自动顶补，直到溢出视口", async () => {
+    // 每来一页，内容长高 200；视口 500。所以第 3 页落地才溢出。
+    geo.scrollHeight = 0;
+    const asked: string[] = [];
+    let n = 0;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?")) return mirrorRow;
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        asked.push(path);
+        geo.scrollHeight += 200;
+        return tailPage([{ seq: 99 - n * 10, text: `第 ${++n} 批` }], true);
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    renderPage();
+
+    await screen.findByText(/第 3 批/);
+    // 溢出即停：不会一路把整条对话拉回来。
+    await new Promise((r) => setTimeout(r, 20));
+    expect(asked).toHaveLength(3);
+    // 顶补期间一直钉在底部。
+    expect(scroller().scrollTop).toBe(geo.scrollHeight);
+  });
+
+  it("补到封顶还是不满一屏：改出「加载更早的」，按一次续一页", async () => {
+    geo.scrollHeight = 100; // 怎么补都填不满
+    const asked = serveMirror([
+      tailPage([{ seq: 99, text: "只有这些" }], true),
+    ]);
+    renderPage();
+    await screen.findByText(/只有这些/);
+
+    // 顶补是 5 轮**串行**的取数 → 渲染 → effect 接力，默认那 1000ms 的耐心在
+    // 并行跑整套时不够用。放宽的是等待时间，不是断言。
+    const btn = await screen.findByRole(
+      "button",
+      { name: /load earlier/i },
+      { timeout: 5000 },
+    );
+    const before = asked.length;
+    // 封顶了就不再自动补 —— 数不再涨。
+    await new Promise((r) => setTimeout(r, 20));
+    expect(asked.length).toBe(before);
+
+    fireEvent.click(btn);
+    await vi.waitFor(() => expect(asked.length).toBe(before + 1), {
+      timeout: 5000,
+    });
+  });
+
+  it("没有更早的了：既不续读也不出按钮", async () => {
+    geo.scrollHeight = 100;
+    const asked = serveMirror([
+      tailPage([{ seq: 1, text: "全部就这些" }], false),
+    ]);
+    renderPage();
+    await screen.findByText(/全部就这些/);
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(asked).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /load earlier/i })).toBeNull();
+    const el = scroller();
+    el.scrollTop = 0;
+    fireEvent.scroll(el);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(asked).toHaveLength(1);
+  });
+
+  /**
+   * 账号里没有这一份（未保存的对话，机器轴上的大多数）：镜像如实回 0 帧，页面
+   * **不能**因此显示成「还没有消息」——那是在说这条对话是空的，而事实是还没读到。
+   */
+  it("镜像空而机器在线：说正在从这台机器读，不摆一条空转录", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, items: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript")) return tailPage([]);
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    // 中继迟迟没接上：停在「正在读取」而不是「还没有消息」。
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return new Promise(() => ({}));
+      throw new Error("unexpected: " + method);
+    });
+    renderPage();
+
+    expect(
+      await screen.findByTestId("session-reading-from-machine"),
+    ).toBeTruthy();
+    expect(screen.queryByText("No messages yet.")).toBeNull();
+  });
+
+  /** 补齐失败此前是 catch {} 静默吞掉的：页面停在空转录上，不出声。 */
+  it("从机器补齐失败：如实说出来", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, items: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript")) return tailPage([]);
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockRejectedValue(new Error("boom"));
+    renderPage();
+
+    expect(await screen.findByTestId("session-catchup-failed")).toBeTruthy();
+  });
+
+  /**
+   * 未保存的对话内容只有中继给得出。按 attach 交回的高水位反推游标，只补最后
+   * 那一段——不再从游标 0 把整份 journal 拉回来。
+   */
+  it("镜像里没有：按 attach 的高水位反推游标，只拉尾巴", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, items: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript")) return tailPage([]);
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.attach.mockResolvedValue({
+      sessionId: 42,
+      lifecycleState: "idle",
+      latestSeq: 5000,
+    } as never);
+    renderPage();
+
+    await vi.waitFor(() =>
+      expect(fakeClient.setCursor).toHaveBeenCalledWith(
+        42,
+        5000 - RELAY_TAIL_FRAMES,
+        undefined,
+      ),
+    );
+  });
+});
+
+/**
+ * 输入框那一带始终就位，档位只决定它是什么形态（规格 2026-08-21 决策 2 / 5）。
+ *
+ * 此前 `composerBand` 在 `showTranscript` 为假时整个是 `null`：连接中根本没有
+ * 输入框，连上的那一刻它凭空长出一块 ~86px 把版面顶开。而机器离线时它是一个
+ * 灰着的输入框 + 一段与横幅说同一件事的长文案。
+ */
+describe("会话详情：输入框那一带的三种形态", () => {
+  /** 中继还在连：没有 client，relayState = connecting。 */
+  function renderConnecting(devices = [deviceRow]) {
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "connecting",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, items: [] };
+      throw new Error("unexpected: " + path);
+    });
+    return render(
+      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/devices/:deviceId/sessions/:sessionId"
+              element={<SessionDetail />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("连接中：输入框就在,只是停用——连上那一刻版面不会被顶开", async () => {
+    renderConnecting();
+    await vi.waitFor(() => {
+      expect(screen.getByTestId("session-detail-send")).toBeTruthy();
+    });
+    expect(composerDisabled()).toBe(true);
+    // 只读条是另一档的形态，这一档不该出现：连接中是会自愈的，不是只读。
+    expect(screen.queryByTestId("session-compose-readonly")).toBeNull();
+  });
+
+  it("连接中：转录位置摆骨架,不再是一行「正在加载转录…」", async () => {
+    renderConnecting();
+    const skeleton = await screen.findByTestId("transcript-skeleton");
+    // 骨架是纯装饰：芯片上的文字已经说了在连，它再念一遍只是噪音。
+    expect(skeleton.getAttribute("aria-hidden")).toBe("true");
+    expect(screen.queryByText(/Loading transcript/i)).toBeNull();
+    // 正在取内容这件事挂在滚动带上，读屏据此知道下面还会变。
+    expect(
+      screen.getByTestId("session-detail-scroll").getAttribute("aria-busy"),
+    ).toBe("true");
+  });
+
+  it("内容到齐之后骨架就撤走,也不再报 busy", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    expect(screen.queryByTestId("transcript-skeleton")).toBeNull();
+    expect(
+      screen.getByTestId("session-detail-scroll").getAttribute("aria-busy"),
+    ).not.toBe("true");
+  });
+});
+
+/**
+ * 发送失败改成转录流里的失败气泡（规格 2026-08-21 决策 7）。
+ *
+ * 此前三类失败折叠成同一句 `session.sendFailed`「…请重试」，挂在输入框下沿的
+ * 11px 小红字里。而 `sessionView.ts` 自己的注释写明：transport 那一类**不能**
+ * 重试，请求可能已经送达，重发会多出一条消息——文案在教用户做一件代码明说不
+ * 安全的事。
+ */
+describe("会话详情：发送失败的气泡", () => {
+  function mountFail(onRun: () => never) {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return onRun();
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  it("用户写的那段字留在气泡里,输入框腾空——可以接着说别的", async () => {
+    mountFail(() => {
+      throw new RelayError(-1, "relay: 连接已断开");
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("改完帮我跑一下 relay 那组测试");
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(bubble.textContent).toContain("改完帮我跑一下 relay 那组测试");
+    expect(composerText()).toBe("");
+  });
+
+  it("transport:主动作是「检查后重发」,并说清楚它可能已经送到了", async () => {
+    mountFail(() => {
+      throw new RelayError(-1, "relay: 连接已断开");
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("继续");
+
+    const bubble = await screen.findByTestId("send-failure");
+    const primary = within(bubble).getByTestId("send-failure-retry");
+    expect(primary.textContent).toBe(i18n.t("session.sendFailure.recheck"));
+    // 「可能已经送达」这句必须在：它是不直接重发的理由。
+    expect(bubble.textContent).toMatch(/may already have arrived/i);
+  });
+
+  it("rejected:主动作是「重发」——对端收到了并拒绝,重发是干净的空操作", async () => {
+    mountFail(() => {
+      throw new RelayError(-32603, "该后端不支持插话");
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("继续");
+
+    const bubble = await screen.findByTestId("send-failure");
+    expect(within(bubble).getByTestId("send-failure-retry").textContent).toBe(
+      i18n.t("session.sendFailure.resend"),
+    );
+    expect(bubble.textContent).not.toMatch(/may already have arrived/i);
+  });
+
+  it("丢弃:气泡走人,不留痕", async () => {
+    mountFail(() => {
+      throw new RelayError(-1, "relay: 连接已断开");
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("不要了");
+
+    const bubble = await screen.findByTestId("send-failure");
+    await act(async () => {
+      within(bubble).getByTestId("send-failure-discard").click();
+    });
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+  });
+
+  it("重发成功:气泡撤走,而且真的又发了一次", async () => {
+    let failNext = true;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) {
+        if (failNext) {
+          failNext = false;
+          throw new RelayError(-32603, "该后端不支持插话");
+        }
+        return {};
+      }
+      throw new Error("unexpected: " + method);
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("再来一次");
+
+    const bubble = await screen.findByTestId("send-failure");
+    await act(async () => {
+      within(bubble).getByTestId("send-failure-retry").click();
+    });
+    await vi.waitFor(() => {
+      expect(screen.queryByTestId("send-failure")).toBeNull();
+    });
+    const runs = fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeRun,
+    );
+    expect(runs.length).toBe(2);
+    expect((runs[1][1] as { userText?: string }).userText).toBe("再来一次");
+  });
+
+  it("executionUnavailable 不进气泡:它已经有横幅了,不该同一件事说两遍", async () => {
+    mountFail(() => {
+      throw new RelayError(-32015, "execution unavailable");
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("继续");
+
+    expect(await screen.findByText(/New messages cannot be sent/)).toBeTruthy();
+    expect(screen.queryByTestId("send-failure")).toBeNull();
+  });
+});
+
+/**
+ * 「这一轮还在跑」必须看得见。
+ *
+ * 数据早就到了浏览器手上（`runtime.autonomousTurn.started` / `runtime.run.done`
+ * 两条通知），但它被存在一个 `useRef` 里 —— ref 刻意不参与渲染，所以哪怕把三点的
+ * 开关接上也没有任何东西触发重渲染。用户这一侧的症状是：发完一条消息，对着一段
+ * 不动的转录，分不清是在跑还是发丢了。
+ *
+ * 头部那颗状态点帮不上忙：它读的是 attach 那一刻取的 `session.list` 快照，此后
+ * 永不刷新（组件自己的注释点名说了这件事）。
+ */
+describe("会话详情页:一轮在跑时的三点", () => {
+  function wireRelay(extra?: (method: unknown) => unknown) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      const v = extra?.(method);
+      if (v !== undefined) return v;
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "上一轮说完了" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "done" },
+        seq: 2,
+      });
+    });
+  }
+
+  const typing = () => screen.queryByRole("status", { name: "Generating" });
+
+  it("刚打开一条空闲的会话:没有三点", async () => {
+    wireRelay();
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+
+    expect(typing()).toBeNull();
+  });
+
+  // 别的端（或后台任务）在这条会话上开了一轮:浏览器收到 autonomousTurn.started,
+  // 三点就该出来 —— 这条会话此刻确实在跑。
+  it("收到自主续轮开始:三点出现,收到轮次结束:三点消失", async () => {
+    wireRelay();
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+
+    act(() => capturedOpts.onAutonomousTurnStarted?.({} as never));
+    await vi.waitFor(() => expect(typing()).toBeTruthy());
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+    await vi.waitFor(() => expect(typing()).toBeNull());
+  });
+
+  it("自己发出一条消息:这一轮跑起来,三点出现", async () => {
+    wireRelay((m) => (m === rpcMethods.runtimeRun ? {} : undefined));
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+
+    await sendInComposer("再改一处");
+    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    expect(screen.getByText("上一轮说完了").closest("article")).not.toContain(
+      typing(),
+    );
+  });
+
+  // 发出去之后**第一帧**是 daemon 把自己那条消息回声回来（agentred 的 run 日志里
+  // 这一轮的 kinds 就是 map[UserMessage:1]）。它不是「对端开始回话了」，三点不能
+  // 因为它落下去 —— 落下去之后这一轮再没有别的东西能把它点亮，用户对着自己刚发的
+  // 那句话干等。
+  it("自己那条消息回声回来:三点还在", async () => {
+    wireRelay((m) => (m === rpcMethods.runtimeRun ? {} : undefined));
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+
+    await sendInComposer("再改一处");
+    await vi.waitFor(() => expect(typing()).toBeTruthy());
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: {
+          kind: "user_message",
+          text: "再改一处",
+          sourceDevice: "fp-web",
+        },
+        seq: 3,
+      }),
+    );
+
+    await vi.waitFor(() => expect(screen.getByText("再改一处")).toBeTruthy());
+    expect(typing()).toBeTruthy();
+    // 也不许退回去挂在上一轮那条助手消息上：那等于说「上面那段还在写」。
+    expect(screen.getByText("上一轮说完了").closest("article")).not.toContain(
+      typing(),
+    );
+  });
+
+  // 从「新对话」进来的那一条：整条转录里一条助手消息都还没有。回声一到，此前
+  // 连挂三点的地方都没有了 —— 用户看到的就是自己发的那句话孤零零躺着。
+  it("会话里第一句:回声回来之后三点还在", async () => {
+    wireRelay((m) => (m === rpcMethods.runtimeRun ? {} : undefined));
+    fakeClient.catchUp.mockImplementation(async () => {});
+    renderPage();
+    // 等摘要落地再发：`sendMessage` 拿不到 summary 会直接早退（那是它的合约），
+    // 而空转录里没有别的东西能说明这一步过了。
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+
+    await sendInComposer("你好");
+    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
+        seq: 1,
+      }),
+    );
+
+    await vi.waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
+    expect(typing()).toBeTruthy();
+  });
+
+  // 助手真开口之后三点才该跟着正文走 —— 这一条守住上面两条不是靠「永不熄灭」
+  // 蒙对的。
+  it("助手开口:三点跟到助手那条上,轮次结束后熄灭", async () => {
+    wireRelay((m) => (m === rpcMethods.runtimeRun ? {} : undefined));
+    fakeClient.catchUp.mockImplementation(async () => {});
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+
+    await sendInComposer("你好");
+    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
+    act(() =>
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
+        seq: 1,
+      }),
+    );
+    act(() =>
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "在的" },
+        seq: 2,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(screen.getByText("在的").closest("article")).toContain(typing());
+    });
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+    await vi.waitFor(() => expect(typing()).toBeNull());
+  });
+});
+
+/**
+ * 「lost」这一档的唯一出路。
+ *
+ * 横幅自己说的是「连接已断开，已经不再自动重试」——一句终局的话。而 `onReconnect`
+ * 此前全仓只有测试传过：横幅那颗「重新连接」按钮在真实页面上从来没渲染出来过。
+ * 于是用户读到「不再重试」，却一个重试的手段都没有，唯一出路是刷新整页，而界面
+ * 没告诉他这一点。
+ */
+describe("会话详情页:连接彻底断掉之后的出路", () => {
+  function renderLost() {
+    const reconnect = vi.fn();
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null as never,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect,
+      };
+    });
+    mockedApi.mockImplementation(async (path) => {
+      // 机器在线 —— 「连过又放弃了」才成立；机器离线是另一档横幅。
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    render(
+      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/devices/:deviceId/sessions/:sessionId"
+              element={<SessionDetail />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    return reconnect;
+  }
+
+  it("连接彻底断掉:横幅上有「重新连接」,点它真的重连", async () => {
+    const reconnect = renderLost();
+
+    const button = await screen.findByRole("button", { name: "Reconnect" });
+    fireEvent.click(button);
+
+    expect(reconnect).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * 重连期间照常打字，发送即排队，连上自动发出（规格 2026-08-21 决策 6）。
+ *
+ * 此前 `reconnecting` 下输入框是禁用的。可重连通常几秒就回来——禁用换来的只是
+ * 让人干等着，而这段时间里想说的那句话得自己记住。
+ *
+ * 排队的那一条**看得见**：一条静默的队列，连上时突然发出、或者永远没发出去，
+ * 两种都比说清楚更坏。
+ */
+describe("会话详情：重连期间的发送", () => {
+  let relayState: RelayState = "reconnecting";
+  let rerenderTree: (() => void) | null = null;
+
+  function mountReconnecting() {
+    relayState = "reconnecting";
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState,
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    // 每次都新造一个元素：把**同一个**元素引用交回给 rerender，React 会走
+    // 「引用没变」的快路直接跳过，这棵树根本不会重渲染。
+    const tree = () => (
+      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/devices/:deviceId/sessions/:sessionId"
+              element={<SessionDetail />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    const view = render(tree());
+    rerenderTree = () => view.rerender(tree());
+    return view;
+  }
+
+  /**
+   * 把中继切到另一档。`useRelay` 是个 mock，它不会自己通知谁——所以要手动把这棵树
+   * 重渲染一次，让组件重新读到新的 relayState（真实 hook 里这一步由 setState 完成）。
+   */
+  async function moveRelayTo(next: RelayState) {
+    relayState = next;
+    await act(async () => {
+      rerenderTree?.();
+    });
+  }
+
+  function runCalls() {
+    return fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeRun,
+    );
+  }
+
+  it("重连中输入框不禁用——它几秒就回来,禁用换来的只是让人干等", async () => {
+    mountReconnecting();
+    await screen.findByTestId("session-detail-send");
+    expect(composerDisabled()).toBe(false);
+  });
+
+  it("重连中发送:不往断了的连接上扔,排一条看得见的队,输入框腾空", async () => {
+    mountReconnecting();
+    await screen.findByTestId("session-detail-send");
+
+    await sendInComposer("改完帮我跑一下 relay 那组测试");
+
+    const queued = await screen.findByTestId("send-pending");
+    expect(queued.textContent).toContain("改完帮我跑一下 relay 那组测试");
+    expect(composerText()).toBe("");
+    // 连接断着，一次 RPC 都不该发出去。
+    expect(runCalls().length).toBe(0);
+  });
+
+  it("连上之后自动发出,队列里那条随之撤走", async () => {
+    mountReconnecting();
+    await screen.findByTestId("session-detail-send");
+    await sendInComposer("继续那件事");
+    await screen.findByTestId("send-pending");
+
+    await moveRelayTo("connected");
+
+    await vi.waitFor(() => {
+      expect(runCalls().length).toBe(1);
+    });
+    expect((runCalls()[0][1] as { userText?: string }).userText).toBe(
+      "继续那件事",
+    );
+    await vi.waitFor(() => {
+      expect(screen.queryByTestId("send-pending")).toBeNull();
+    });
+  });
+
+  it("连接彻底断了:排着的那条变成失败气泡,而且说的是「从没送到」", async () => {
+    mountReconnecting();
+    await screen.findByTestId("session-detail-send");
+    await sendInComposer("这条要保住");
+    await screen.findByTestId("send-pending");
+
+    await moveRelayTo("disconnected");
+
+    const bubble = await screen.findByTestId("send-failure");
+    // 它从来没走到对端，所以重发是安全的——不是 transport 那种「可能已经送达」。
+    expect(bubble.getAttribute("data-failure-kind")).toBe("notSent");
+    expect(bubble.textContent).toContain("这条要保住");
+    expect(within(bubble).getByTestId("send-failure-retry").textContent).toBe(
+      i18n.t("session.sendFailure.resend"),
+    );
+    expect(bubble.textContent).not.toMatch(/may already have arrived/i);
+  });
+
+  it("排着的那条可以撤销:撤了就什么都不发", async () => {
+    mountReconnecting();
+    await screen.findByTestId("session-detail-send");
+    await sendInComposer("算了");
+    const queued = await screen.findByTestId("send-pending");
+
+    await act(async () => {
+      within(queued).getByTestId("send-pending-cancel").click();
+    });
+    expect(screen.queryByTestId("send-pending")).toBeNull();
+
+    await moveRelayTo("connected");
+    await act(async () => {});
+    expect(runCalls().length).toBe(0);
+  });
+});
+
+/**
+ * 2026-08-23 对话页外壳收口的跨端对齐（规格
+ * `agentre/docs/specs/2026-08-23-chat-surface-alignment.md`）。
+ *
+ * 桌面端先落，共同的呈现件沉进 `@agentre-hub/agentre-ui`，这一端钉住那一版再切。
+ * 这一端本来就已经满足的（停止按需渲染、`<h2>` 标题、骨架、`Alert` 失败态）不回退，
+ * 这里补的是另外三样：身份行恒高、meta 行窄档分档降级、输入带边界跟随贴底。
+ */
+describe("会话详情：与桌面端对齐的外壳", () => {
+  function stubAligned() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "很长的一段转录" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  function renderAligned() {
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("Given 标题长短不定, When 渲染, Then 身份行的高度是写死的两行高，不再随标题伸缩", async () => {
+    stubAligned();
+    renderAligned();
+
+    await screen.findByText("很长的一段转录");
+    const identity = screen.getByTestId("session-detail-identity");
+    expect(identity.className).toMatch(/(^|\s)h-\[68px\](\s|$)/);
+    expect(identity.className).not.toMatch(/min-h-/);
+  });
+
+  it("Given 面板变窄, When 渲染, Then meta 行不折行，机器那一段先被收起", async () => {
+    stubAligned();
+    renderAligned();
+
+    await screen.findByText("很长的一段转录");
+    const meta = screen.getByTestId("session-detail-meta");
+    expect(meta.className).not.toMatch(/flex-wrap/);
+    expect(screen.getByTestId("session-detail-meta-machine").className).toMatch(
+      /@max-\[\d+px\]\/header:hidden/,
+    );
+  });
+
+  it("Given 转录贴底, When 渲染, Then 输入带没有分隔线", async () => {
+    stubAligned();
+    renderAligned();
+
+    await screen.findByText("很长的一段转录");
+    const band = screen.getByTestId("session-composer-band");
+    expect(band.getAttribute("data-scrolled")).toBe("false");
+    expect(band.className).not.toMatch(/border-t/);
+  });
+
+  it("Given 转录贴底, When 渲染, Then 末条消息与输入框之间的留白不再由三段各付一遍", async () => {
+    stubAligned();
+    renderAligned();
+
+    await screen.findByText("很长的一段转录");
+    // 末行自带 pb-7 的消息间距；滚动带再叠 pb-4、输入带再叠 pt-3，贴底时攒出
+    // 一大块空档。底部留白交还给内容自己的间距，两侧各只留落脚的一点。
+    const scroll = screen.getByTestId("session-detail-scroll");
+    expect(scroll.className).toMatch(/(^|\s)pt-4(\s|$)/);
+    expect(scroll.className).toMatch(/(^|\s)pb-2(\s|$)/);
+
+    const band = screen.getByTestId("session-composer-band");
+    expect(band.className).toMatch(/(^|\s)pt-2(\s|$)/);
+  });
+
+  it("Given 用户上滚离开底部, When 渲染, Then 输入带出现分隔线与一段不接收指针事件的向上渐隐", async () => {
+    stubAligned();
+    renderAligned();
+
+    await screen.findByText("很长的一段转录");
+    const scroll = screen.getByTestId("session-detail-scroll");
+    Object.defineProperty(scroll, "clientHeight", {
+      configurable: true,
+      get: () => 480,
+    });
+    Object.defineProperty(scroll, "scrollHeight", {
+      configurable: true,
+      get: () => 4_000,
+    });
+    act(() => {
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+
+    const band = screen.getByTestId("session-composer-band");
+    expect(band.getAttribute("data-scrolled")).toBe("true");
+    expect(band.className).toMatch(/(^|\s)border-t(\s|$)/);
+    const fade = screen.getByTestId("session-composer-band-fade");
+    expect(fade.className).toMatch(/(^|\s)pointer-events-none(\s|$)/);
+    expect(fade.getAttribute("aria-hidden")).toBe("true");
+  });
+});
+
+/**
+ * 「回到底部」（2026-08-24）。
+ *
+ * 这一端此前**根本没有**这枚控件：长对话往回翻之后只能自己拖回去。桌面端那枚
+ * 已经收进共享包并统一成药丸一种形状，这里接的是同一个实现。
+ */
+describe("会话详情：回到底部", () => {
+  function stubJump() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "很长的一段转录" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  function scrollerWithHeights(): HTMLElement {
+    const el = screen.getByTestId("session-detail-scroll");
+    Object.defineProperty(el, "clientHeight", {
+      configurable: true,
+      get: () => 480,
+    });
+    Object.defineProperty(el, "scrollHeight", {
+      configurable: true,
+      get: () => 4_000,
+    });
+    return el;
+  }
+
+  it("Given 转录贴底, When 渲染, Then 不摆这枚控件", async () => {
+    stubJump();
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("很长的一段转录");
+    expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
+  });
+
+  it("Given 用户往回翻, When 渲染, Then 药丸浮出来并写着「回到底部」；点它滚回底部、控件收走", async () => {
+    stubJump();
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("很长的一段转录");
+    const scroll = scrollerWithHeights();
+    act(() => {
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+
+    const control = screen.getByTestId("transcript-jump-control");
+    expect(control.textContent).toContain("Back to bottom");
+
+    act(() => {
+      fireEvent.click(control);
+    });
+
+    expect(scroll.scrollTop).toBe(4_000);
+    expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
+  });
+
+  /**
+   * 「下面还有 N 轮」（2026-08-26）。药丸此前只写「回到底部」，说不出用户落后了
+   * 多少。判轮与视口下沿定位都在共享包里（桌面端同一份），这一端要做的只有两件：
+   * 给消息行挂 data-message-id、把算出来的轮数交给药丸。
+   */
+  function stubTurns() {
+    stubJump();
+    fakeClient.catchUp.mockImplementation(async () => {
+      // 三轮：每轮一条用户消息 + 一条助手回复。
+      const frames = [
+        { kind: "user_message", text: "第一问" },
+        { kind: "text_delta", text: "第一答" },
+        { kind: "user_message", text: "第二问" },
+        { kind: "text_delta", text: "第二答" },
+        { kind: "user_message", text: "第三问" },
+        { kind: "text_delta", text: "第三答" },
+      ];
+      frames.forEach((event, i) => {
+        capturedOpts.onEvent?.({ sessionId: 42, event, seq: i + 1 });
+      });
+    });
+  }
+
+  /** jsdom 没有布局：给滚动容器与消息行钉上几何，让下沿落在第 visibleRows 行之后。 */
+  function layoutRows(scroll: HTMLElement, visibleRows: number) {
+    scroll.getBoundingClientRect = () =>
+      ({ bottom: visibleRows * 100 }) as DOMRect;
+    const rows = Array.from(
+      scroll.querySelectorAll<HTMLElement>("[data-message-id]"),
+    );
+    rows.forEach((row, i) => {
+      row.getBoundingClientRect = () => ({ top: i * 100 }) as DOMRect;
+    });
+    return rows.length;
+  }
+
+  it("Given 用户往回翻、视口下沿之后还压着两轮, When 药丸浮出, Then 它写出轮数", async () => {
+    stubTurns();
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("第三答");
+    const scroll = scrollerWithHeights();
+    // 下沿落在第 2 行之后 —— 那是第一轮的助手回复，它之后还开了第二、第三两轮。
+    expect(layoutRows(scroll, 2)).toBe(6);
+    act(() => {
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+
+    expect(screen.getByTestId("transcript-jump-control").textContent).toContain(
+      "2 turns below",
+    );
+  });
+
+  it("Given 用户只上滚了一点、还在最后一轮里, When 药丸浮出, Then 退回「回到底部」", async () => {
+    stubTurns();
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("第三答");
+    const scroll = scrollerWithHeights();
+    // 下沿落在第 5 行之后 —— 第三轮的用户消息，其后只有本轮的助手回复。
+    layoutRows(scroll, 5);
+    act(() => {
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+
+    expect(screen.getByTestId("transcript-jump-control").textContent).toContain(
+      "Back to bottom",
+    );
   });
 });

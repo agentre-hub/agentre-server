@@ -1,0 +1,24 @@
+{
+  "title": "Sign in to AgentRe",
+  "github": "Sign in with GitHub",
+  "or": "or",
+  "passkey": "Sign in with a passkey",
+  "userCodeLabel": "Continue to device authorization after signing in",
+  "failureTitle": "Sign in unsuccessful",
+  "retryLogin": "Sign in again",
+  "footer": "By continuing, you agree to AgentRe's Terms of Service and Privacy Policy.",
+  "errors": {
+    "oauth_state_invalid": "The OAuth state has expired. Please start the sign-in again.",
+    "oauth_exchange_failed": "GitHub OAuth exchange failed. Retry later, or check the GitHub OAuth App settings.",
+    "oauth_profile_failed": "Could not fetch your GitHub profile.",
+    "github_email_missing": "Set a verified primary email in your GitHub settings, then try again.",
+    "access_denied": "You cancelled the GitHub authorization.",
+    "user_banned": "This account has been banned. Contact support if you believe this is a mistake.",
+    "passkey_cancelled": "Check cancelled. Try again, or sign in with GitHub instead.",
+    "passkey_failed": "Passkey sign-in did not go through. Try again, or sign in with GitHub instead.",
+    "passkey_challenge_invalid": "This check expired. Tap “Sign in with a passkey” again.",
+    "passkey_origin_not_allowed": "This site is not on the passkey allow list. Ask an administrator to check the server configuration.",
+    "passkey_credential_unknown": "This passkey does not belong to any usable account — it may have been removed. Sign in with GitHub instead.",
+    "passkey_counter_rollback": "This passkey’s security counter looks wrong, so the sign-in was refused. Sign in with GitHub and remove it."
+  }
+}

@@ -2,12 +2,12 @@
  * 浏览器中继客户端:连到 server 的 /v1/relay/client,对一台 agentred 说 wire 协议。
  *
  * 职责(测试接缝 2,Go 侧对照 internal/daemon/client/client_test.go):
- *  1. 多路复用:一个 socket 上并发多个 JSON-RPC 请求,按 id 路由响应,不串道。
+ *  1. 多路复用:一个 socket 上并发多个 typed Protobuf RPC 请求,按 id 路由响应,不串道。
  *  2. 断线补齐:自动重连后,对关注的会话 attach(显式接管)→ 按 seq 游标 pull,
  *     补齐的通知与实时通知走**同一套去重**(seq ≤ 游标即重复,只应用一次)。
  *  3. attach 幂等:同一会话重复 attach 不重复发请求,成功后走缓存。
  *
- * 传输:浏览器这条连接只发/收**裸二进制 JSON-RPC 帧**(UTF-8 字节)。channelID
+ * 传输:浏览器通过 `agentre-protobuf` 子协议只发/收 Protobuf RpcFrame。channelID
  * 信封是 server 内部(relay_svc wrapEnvelope/unwrapEnvelope)的职责,浏览器不感知。
  *
  * 鉴权:设备 JWT 经 Authorization: Bearer 传给 createWebSocket。浏览器原生
@@ -16,27 +16,51 @@
  */
 import {
   DefaultSessionPullLimit,
-  MethodSessionAttach,
-  MethodSessionPull,
-  NotifyAutonomousTurnDone,
-  NotifyAutonomousTurnEvent,
-  NotifyAutonomousTurnStarted,
-  NotifyEvent,
-  NotifyRunResultDone,
+  PROTOCOL_VERSION,
+  type AnyRpcMethod,
   type EventFrame,
   type JournaledNotification,
   type RunResultDoneFrame,
   type SessionAttachResult,
-  type WireFrame,
   type AutonomousTurnStartedFrame,
-  decodeAutonomousTurnStartedFrame,
-  decodeEventFrame,
-  decodeFrame,
-  decodeRunResultDoneFrame,
-  decodeSessionAttachResult,
-  decodeSessionPullResult,
-  encodeFrame,
-} from "@/lib/wire";
+  type ProtobufRpcFrame,
+  type RuntimeEventNotificationFrame,
+  type EventKind,
+  EventAskUserQuestion,
+  EventAskUserQuestionAnswered,
+  EventCompactBoundary,
+  EventContextWindowUpdated,
+  EventDone,
+  EventError,
+  EventExecApprovalRequested,
+  EventExecApprovalResolved,
+  EventOutputActivity,
+  EventPermissionModeChanged,
+  EventPlanUpdated,
+  EventRetry,
+  EventRuntimeStatus,
+  EventSteerConsumed,
+  EventSubagentDone,
+  EventSubagentModel,
+  EventSubagentProgress,
+  EventSubagentStarted,
+  EventTextDelta,
+  EventThinkingDelta,
+  EventToolPermissionRequest,
+  EventToolPermissionResolved,
+  EventToolResult,
+  EventToolUseStart,
+  EventUsage,
+  EventUnrecognizedBlock,
+  EventUserMessage,
+  ProtobufRpcCodec,
+  encodeRpcCancel,
+  encodeRpcMethodRequest,
+  rpcMethods,
+} from "@agentre-hub/agentre-wire";
+import type { MessageInitShape, MessageShape } from "@bufbuild/protobuf";
+
+import { RedialTimer } from "@/lib/redialTimer";
 
 export type RelayState =
   "connecting" | "connected" | "disconnected" | "reconnecting";
@@ -52,7 +76,18 @@ export class RelayError extends Error {
   }
 }
 
-export interface RelayClientOptions {
+/**
+ * 通知的三个投递口。RelayClientOptions 自己就是它的一个实现 —— 因此 server 镜像交出
+ * 的历史帧走的是**与实时同一条**解帧与投递路径(applyJournalFrames),而不是另写一份。
+ */
+export interface NotificationHandlers {
+  /** 实时与补齐的事件帧,去重后投递。 */
+  onEvent?: (frame: EventFrame) => void;
+  onRunResultDone?: (frame: RunResultDoneFrame) => void;
+  onAutonomousTurnStarted?: (frame: AutonomousTurnStartedFrame) => void;
+}
+
+export interface RelayClientOptions extends NotificationHandlers {
   /** ws(s)://host/v1/relay/client?daemon_fingerprint=<fp> —— 由调用方拼好。 */
   url: string;
   /** 设备 JWT → Authorization: Bearer <jwt>。 */
@@ -73,21 +108,56 @@ export interface RelayClientOptions {
    * 创建 WebSocket 的工厂。默认用浏览器原生 WebSocket(忽略 headers,见文件头);
    * 测试注入假实现断言 URL / 鉴权头 / 二进制帧。
    */
-  createWebSocket?: (url: string, headers: Record<string, string>) => WebSocket;
-  /** 实时与补齐的事件帧,去重后投递。 */
-  onEvent?: (frame: EventFrame) => void;
-  onRunResultDone?: (frame: RunResultDoneFrame) => void;
-  onAutonomousTurnStarted?: (frame: AutonomousTurnStartedFrame) => void;
+  createWebSocket?: (
+    url: string,
+    headers: Record<string, string>,
+    protocols: string[],
+  ) => WebSocket;
   onStateChange?: (state: RelayState) => void;
 }
 
 interface PendingRequest {
-  method: string;
+  method: AnyRpcMethod;
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
+  cleanup?: () => void;
 }
 
 const OPEN = 1;
+const PROTOBUF_SUBPROTOCOL = "agentre-protobuf";
+
+/**
+ * 一条会话在本客户端这边的全部状态。身份是 (origin, sessionId) 这一对,见
+ * RelayClient.sessions 的注释。
+ */
+interface SessionState {
+  readonly sessionId: number;
+  /**
+   * 发起端指纹。空串 = 「调用方自己的对端」—— 那是 wire 上**省略 origin** 的含义
+   * (ResolveSessionPeer),是一个确定的身份,不是「任意」或「还不知道」。
+   */
+  readonly origin: string;
+  /** 已收到的最后 seq(独占游标,首次 0)。 */
+  cursor: number;
+  /** 本次连接已成功 attach 的结果(断线清空,重连重发)。 */
+  attached: SessionAttachResult | null;
+  /** 正在飞的 attach 请求(in-flight 幂等)。 */
+  attaching: Promise<SessionAttachResult> | null;
+  /**
+   * 正在进行的补齐。页面发起的补齐与跳号触发的补洞共用同一条队列:同一条会话任一
+   * 时刻至多一串 pull 在飞,不让两串翻页互相踩游标。
+   */
+  catchingUp: Promise<void> | null;
+  /** 补齐进行中又收到跳号帧:这一串补完之后再补一轮,而不是并发发第二串。 */
+  refill: boolean;
+  /** 在关注名单上:断线重连后自动补齐。 */
+  watched: boolean;
+}
+
+/** 会话表的键。origin 在前,空串是「调用方自己的对端」那个确定身份。 */
+function sessionKey(sessionId: number, origin: string): string {
+  return `${origin}\u0000${sessionId}`;
+}
 
 export class RelayClient {
   private readonly opts: Required<
@@ -95,34 +165,31 @@ export class RelayClient {
   > &
     RelayClientOptions;
   private ws: WebSocket | null = null;
-  private nextId = 1;
+  private nextId = 1n;
   private pending = new Map<string, PendingRequest>();
-  /** sessionId → 已收到的最后 seq(独占游标,首次 0)。 */
-  private cursors = new Map<number, number>();
-  /** sessionId → 本次连接已成功 attach 的结果(断线清空,重连重发)。 */
-  private attached = new Map<number, SessionAttachResult>();
-  /** 正在 attach 的请求(in-flight 幂等)。 */
-  private attaching = new Map<number, Promise<SessionAttachResult>>();
-  /** 关注名单:断线重连后逐个补齐。 */
-  private watched = new Set<number>();
   /**
-   * sessionId → 正在进行的补齐。页面发起的补齐与跳号触发的补洞共用同一条队列:
-   * 同一会话任一时刻至多一串 pull 在飞,不让两串翻页互相踩游标。
-   */
-  private catchingUp = new Map<number, Promise<void>>();
-  /** 补齐进行中又收到跳号帧的会话:这一串补完之后再补一轮,而不是并发发第二串。 */
-  private refill = new Set<number>();
-  /**
-   * sessionId → 该会话的 origin 对端指纹(别的对端发起的会话才有)。
+   * 每条会话在本客户端这边的全部状态,按 **(发起端指纹, 会话 id)** 索引。
    *
-   * daemon 上的会话键是 (发起端指纹, 会话 id),而 ResolveSessionPeer 的入口约定是
-   * 「省略 origin = 调用方自己的对端」。清单(SessionSummary.peerFingerprint)是客户端
-   * 学 origin 的唯一来源,学到之后必须原样带回此后每一次 attach / pull / 控制请求 ——
-   * 否则接的是本浏览器名下那条同号空会话。断线重连要重发 attach,因此这里记着它。
+   * 键必须是这一对,不能只是会话 id:daemon 上会话的键就是这一对
+   * (ResolveSessionPeer),而会话 id 是**各端本地从 1 自增**的 —— 一台机器上同时挂着
+   * 别的对端发起的同号会话是常态(会话清单列的是这台机器上的**全部**会话)。
+   * 少了 origin 那一半,同一条连接上换看同号的另一条对话就会读到上一条的游标与
+   * attach 结果:attach 命中缓存(新那条从来没被接管过、交回来的 latestSeq 是上一条
+   * 的高水位),pull 又带着上一条的游标出发 —— 新那条比旧那条短时一行都拉不回来,
+   * 页面整个空白,而且没有任何报错。
    */
-  private origins = new Map<number, string>();
+  private sessions = new Map<string, SessionState>();
+  /**
+   * 会话 id → 此刻该由哪条会话消费这个 id 的**实时帧**。
+   *
+   * 实时通知(EventFrame)线上只带 `{sessionId, event, seq}`,**不带发起端指纹**,
+   * 所以同号的两条会话在实时流上本身就分不开 —— 这是 wire 的缺口,不是这里能补的。
+   * 本客户端的取舍:最后一次 attach 的那条赢。详情页一次只看一条对话,因此这与
+   * 「用户正在看的那条」一致。真要根治得让 EventFrame 带上 origin(在 agentre 仓)。
+   */
+  private liveBySessionId = new Map<number, SessionState>();
   private closedByUser = false;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly redial = new RedialTimer();
   private connectPromise: Promise<void> | null = null;
   private currentState: RelayState = "disconnected";
 
@@ -138,11 +205,17 @@ export class RelayClient {
    * 向 daemon 出示账号凭据,把它认成本浏览器的对端(auth.account,与 Go 侧
    * daemon/client 的中继路径同一握手)。必须在任何 runtime.* 与 session.* 之前完成 ——
    * daemon 对非 auth.* 方法一律 requireAuth。
+   *
+   * protocolVersion 是握手的一部分而不是可选装饰:对端按**精确匹配**校验,并且把
+   * 空版本判成「对端太旧」(proto3 下缺字段与显式空串同为零值)。不带它 = 每一次
+   * 建连都在 auth.account 上被拒 = 浏览器端整个不可用。版本取自 wire 包导出的
+   * 常量,与本次编译进来的 schema 同源。
    */
   private authenticate(): Promise<unknown> {
-    return this.request("auth.account", {
+    return this.request(rpcMethods.authAccount, {
       credential: this.opts.jwt,
       deviceFingerprint: this.opts.deviceFingerprint,
+      protocolVersion: PROTOCOL_VERSION,
     });
   }
 
@@ -164,8 +237,10 @@ export class RelayClient {
     this.connectPromise = new Promise<void>((resolve, reject) => {
       const headers = { Authorization: `Bearer ${this.opts.jwt}` };
       const factory =
-        this.opts.createWebSocket ?? ((url: string) => new WebSocket(url));
-      const ws = factory(this.opts.url, headers);
+        this.opts.createWebSocket ??
+        ((url: string, _headers: Record<string, string>, protocols: string[]) =>
+          new WebSocket(url, protocols));
+      const ws = factory(this.opts.url, headers, [PROTOBUF_SUBPROTOCOL]);
       ws.binaryType = "arraybuffer";
       this.ws = ws;
       ws.onopen = () => {
@@ -217,10 +292,7 @@ export class RelayClient {
   /** 主动关闭,不再自动重连。 */
   close(): void {
     this.closedByUser = true;
-    if (this.reconnectTimer !== null) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    this.redial.cancel();
     this.ws?.close();
     this.ws = null;
     // 浏览器的 ws.close() 不同步回调 onclose,而那条迟到的 onclose 已经不属于
@@ -231,23 +303,39 @@ export class RelayClient {
     this.setState("disconnected");
   }
 
-  /** 发一个 JSON-RPC 请求(带 id),响应/错误按 id 路由回来。 */
-  request(method: string, params?: unknown): Promise<unknown> {
+  request<M extends AnyRpcMethod>(
+    method: M,
+    params: MessageInitShape<M["request"]>,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<MessageShape<M["response"]>> {
     const id = this.nextId++;
-    return new Promise<unknown>((resolve, reject) => {
-      this.pending.set(String(id), { method, resolve, reject });
+    return new Promise<MessageShape<M["response"]>>((resolve, reject) => {
+      const abort = () => {
+        const entry = this.pending.get(String(id));
+        if (!entry) return;
+        this.pending.delete(String(id));
+        this.sendBytes(encodeRpcCancel(this.nextId++, id));
+        reject(new DOMException("relay request aborted", "AbortError"));
+      };
+      if (options.signal?.aborted) {
+        reject(new DOMException("relay request aborted", "AbortError"));
+        return;
+      }
+      options.signal?.addEventListener("abort", abort, { once: true });
+      this.pending.set(String(id), {
+        method,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        cleanup: () => options.signal?.removeEventListener("abort", abort),
+      });
       try {
-        this.sendFrame({ jsonrpc: "2.0", id, method, params });
+        this.sendBytes(encodeRpcMethodRequest(id, method, params));
       } catch (err) {
         this.pending.delete(String(id));
+        options.signal?.removeEventListener("abort", abort);
         reject(err);
       }
     });
-  }
-
-  /** 发一个无 id 的 JSON-RPC 通知(不带响应)。 */
-  notify(method: string, params?: unknown): void {
-    this.sendFrame({ jsonrpc: "2.0", method, params });
   }
 
   /**
@@ -258,25 +346,34 @@ export class RelayClient {
     sessionId: number,
     peerFingerprint?: string,
   ): Promise<SessionAttachResult> {
-    const origin = this.rememberOrigin(sessionId, peerFingerprint);
-    const cached = this.attached.get(sessionId);
-    if (cached) return Promise.resolve(cached);
-    const inflight = this.attaching.get(sessionId);
-    if (inflight) return inflight;
+    const st = this.stateOf(sessionId, peerFingerprint);
+    // 实时帧只带会话 id,认不出发起端:最后接管的那条赢(见 liveBySessionId)。
+    this.liveBySessionId.set(sessionId, st);
+    if (st.attached) return Promise.resolve(st.attached);
+    if (st.attaching) return st.attaching;
     const p = (async (): Promise<SessionAttachResult> => {
-      const result = await this.request(MethodSessionAttach, {
-        sessionId,
-        ...(origin ? { peerFingerprint: origin } : {}),
+      const result = await this.request(rpcMethods.sessionAttach, {
+        sessionId: BigInt(sessionId),
+        peerFingerprint: st.origin,
       });
-      const decoded = decodeSessionAttachResult(result);
-      this.attached.set(sessionId, decoded);
-      this.watched.add(sessionId);
+      const decoded: SessionAttachResult = {
+        sessionId: Number(result.sessionId),
+        backendType: result.backendType,
+        lifecycleState: result.lifecycleState,
+        latestSeq: Number(result.latestSeq),
+      };
+      st.attached = decoded;
+      st.watched = true;
       return decoded;
     })();
-    this.attaching.set(sessionId, p);
+    st.attaching = p;
     void p.then(
-      () => this.attaching.delete(sessionId),
-      () => this.attaching.delete(sessionId),
+      () => {
+        if (st.attaching === p) st.attaching = null;
+      },
+      () => {
+        if (st.attaching === p) st.attaching = null;
+      },
     );
     return p;
   }
@@ -289,16 +386,17 @@ export class RelayClient {
    * 跳号触发的补洞与页面发起的补齐因此不会并发翻页、互相踩游标。
    */
   catchUp(sessionId: number, peerFingerprint?: string): Promise<void> {
-    const origin = this.rememberOrigin(sessionId, peerFingerprint);
-    const running = this.catchingUp.get(sessionId);
+    const st = this.stateOf(sessionId, peerFingerprint);
+    const running = st.catchingUp;
     if (running) {
-      this.refill.add(sessionId);
+      st.refill = true;
       return running;
     }
-    const before = this.cursors.get(sessionId) ?? 0;
-    const p = this.pullUntilCaughtUp(sessionId, origin).finally(() => {
-      this.catchingUp.delete(sessionId);
-      const queued = this.refill.delete(sessionId);
+    const before = st.cursor;
+    const p = this.pullUntilCaughtUp(st).finally(() => {
+      st.catchingUp = null;
+      const queued = st.refill;
+      st.refill = false;
       // 这一串期间又出现过跳号:那一段还没补上,再补一轮。
       //
       // 但只在这一串**真的推动了游标**时才补:一条也没消费掉(daemon 读不出留存下界
@@ -306,147 +404,188 @@ export class RelayClient {
       // 时,下一轮拉回来的还是同一页、还是一条也消费不掉 —— 不看进展就会一轮接一轮
       // 重发同一条 pull,补齐原地打转、把 daemon 与中继一起打满。补不动就停在这里,
       // 等下一条实时帧 / 下次重连再试(Go 侧 scheduleGapFill 的 filling 闸门同一纪律)。
-      if (queued && (this.cursors.get(sessionId) ?? 0) > before) {
-        void this.catchUp(sessionId).catch(() => {
+      if (queued && st.cursor > before) {
+        void this.catchUp(st.sessionId, st.origin).catch(() => {
           // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
         });
       }
     });
-    this.catchingUp.set(sessionId, p);
+    st.catchingUp = p;
     return p;
   }
 
-  private async pullUntilCaughtUp(
+  /**
+   * 往回取一段:交回 seq **严格小于** beforeSeq 的那些帧(升序),以及还有没有更早的。
+   *
+   * 与 catchUp 是两件事,因此这里**不动游标、不投递、不补洞**:
+   *   - 动游标 = 宣称这一段之后的都读过了,此后每条实时帧都被判成重复丢光;
+   *   - 走投递 = 那套 seq 闸门会把整段判成跳号,反手从游标往后再拉一遍整条日志,
+   *     正好是「只拉尾巴」要避免的事。
+   * 帧原样交回,由调用方自己前插(详情页往上滚续读)。
+   *
+   * 对端的 pull 只能从一个游标**往后**翻,所以「往回取 limit 条」= 从
+   * beforeSeq-1-limit 起翻一页,再把越过上界的那些切掉。越界那条不切的话,调用方
+   * 会把它前插到手上那一段的前面,转录就乱序了。
+   */
+  async pullBefore(
     sessionId: number,
-    origin: string | undefined,
-  ): Promise<void> {
-    await this.attach(sessionId, origin);
+    beforeSeq: number,
+    limit: number,
+    peerFingerprint?: string,
+  ): Promise<{ frames: JournaledNotification[]; hasBefore: boolean }> {
+    const origin = peerFingerprint?.trim() ?? "";
+    const res = await this.request(rpcMethods.sessionPull, {
+      sessionId: BigInt(sessionId),
+      peerFingerprint: origin,
+      cursor: BigInt(Math.max(0, beforeSeq - 1 - limit)),
+      limit,
+    });
+    const frames = res.notifications
+      .map(journaledFromProtobuf)
+      .filter((n) => n.seq < beforeSeq);
+    if (frames.length === 0) return { frames, hasBefore: false };
+    // 对端报的留存下界(报不出时按 1 算):最老那条就是它了,说明再往前真的没有了。
+    const oldestSeq = Number(res.oldestSeq);
+    const floor = oldestSeq > 0 ? oldestSeq : 1;
+    return { frames, hasBefore: frames[0].seq > floor };
+  }
+
+  private async pullUntilCaughtUp(st: SessionState): Promise<void> {
+    await this.attach(st.sessionId, st.origin);
     for (;;) {
-      const sentCursor = this.cursors.get(sessionId) ?? 0;
-      const raw = await this.request(MethodSessionPull, {
-        sessionId,
-        ...(origin ? { peerFingerprint: origin } : {}),
-        cursor: sentCursor,
+      const sentCursor = st.cursor;
+      const response = await this.request(rpcMethods.sessionPull, {
+        sessionId: BigInt(st.sessionId),
+        peerFingerprint: st.origin,
+        cursor: BigInt(sentCursor),
         limit: DefaultSessionPullLimit,
       });
-      const res = decodeSessionPullResult(raw);
+      const res = {
+        notifications: response.notifications.map(journaledFromProtobuf),
+        cursor: Number(response.cursor),
+        hasMore: response.hasMore,
+        oldestSeq: Number(response.oldestSeq),
+      };
       // OldestSeq 复位:本次拉取用的游标落后于留存窗口(老前缀已被回收)时,把游标
       // 推到现存最老那一行的前一位(那截尾巴是真的没有了)。复位必须在应用这一页
       // **之前** —— 否则这一页的第一条当场被判成跳号丢掉,一条也交付不出去。
-      if (
-        res.oldestSeq !== undefined &&
-        res.oldestSeq > 0 &&
-        sentCursor < res.oldestSeq - 1
-      ) {
-        this.cursors.set(sessionId, res.oldestSeq - 1);
+      if (res.oldestSeq > 0 && sentCursor < res.oldestSeq - 1) {
+        st.cursor = res.oldestSeq - 1;
       }
-      for (const n of res.notifications ?? []) {
-        this.applyJournaled(n);
+      for (const n of res.notifications) {
+        this.applyJournaled(st, n);
       }
       // 游标只由「应用了哪些行」推进(复位除外):照 res.cursor 盖上去会把这一页里
       // 交付不出去的行也算成已消费。
-      const applied = this.cursors.get(sessionId) ?? 0;
+      const applied = st.cursor;
       // 防自旋:没有更多页,或游标没有推进(空页且未复位),不能无限重拉同一页。
       if (!res.hasMore || applied <= sentCursor) break;
     }
   }
 
   /**
-   * 记住(并回读)一条会话的 origin 指纹。传入空值时沿用已记住的那一个 —— 重连后的
-   * 自动补齐、以及页面上后续的 pull 都不必再把它带一遍。
+   * 取(必要时新建)一条会话的状态。身份是 (origin, sessionId) 这一对 —— 省略
+   * origin 不是「随便哪条同号的」,而是「调用方自己的对端」那一条(wire 的约定),
+   * 因此它有自己的一格,不会与点名了发起端的那条合并。
    */
-  private rememberOrigin(
-    sessionId: number,
-    peerFingerprint?: string,
-  ): string | undefined {
-    const fp = peerFingerprint?.trim();
-    if (fp) this.origins.set(sessionId, fp);
-    return this.origins.get(sessionId);
+  private stateOf(sessionId: number, peerFingerprint?: string): SessionState {
+    const origin = peerFingerprint?.trim() ?? "";
+    const key = sessionKey(sessionId, origin);
+    const existing = this.sessions.get(key);
+    if (existing) return existing;
+    const created: SessionState = {
+      sessionId,
+      origin,
+      cursor: 0,
+      attached: null,
+      attaching: null,
+      catchingUp: null,
+      refill: false,
+      watched: false,
+    };
+    this.sessions.set(key, created);
+    return created;
   }
 
-  /** 一条会话的 origin 对端指纹(自己发起的会话为 undefined)。 */
-  originOf(sessionId: number): string | undefined {
-    return this.origins.get(sessionId);
+  /** 一条会话此刻的游标。origin 是身份的一半,省略即「调用方自己的对端」那一条。 */
+  getCursor(sessionId: number, peerFingerprint?: string): number {
+    return this.stateOf(sessionId, peerFingerprint).cursor;
   }
 
-  getCursor(sessionId: number): number {
-    return this.cursors.get(sessionId) ?? 0;
-  }
-
-  /** 由外部(如持久化恢复)设置会话游标。 */
-  setCursor(sessionId: number, seq: number): void {
-    this.cursors.set(sessionId, seq);
+  /** 由外部(如从 server 镜像预置)设置会话游标。 */
+  setCursor(sessionId: number, seq: number, peerFingerprint?: string): void {
+    this.stateOf(sessionId, peerFingerprint).cursor = seq;
   }
 
   // ── 内部:发送 / 接收 ────────────────────────────────────────────────────
 
-  private sendFrame(frame: WireFrame): void {
+  private sendBytes(bytes: Uint8Array): void {
     if (!this.ws || this.ws.readyState !== OPEN) {
       throw new RelayError(-1, "relay: 连接未就绪", null);
     }
-    const bytes = new TextEncoder().encode(encodeFrame(frame));
-    this.ws.send(bytes.buffer);
+    this.ws.send(bytes);
   }
 
   private handleMessage(data: unknown): void {
-    let frame: WireFrame;
+    let frame: ProtobufRpcFrame;
     try {
-      frame = decodeFrame(JSON.parse(decodeBinary(data)));
+      frame = ProtobufRpcCodec.decode(binaryPayload(data));
     } catch {
       // 单帧坏掉不影响连接:丢掉继续等下一帧。
       return;
     }
-    if (frame.method) {
+    if (isNotification(frame)) {
       this.dispatchNotification(frame);
       return;
     }
-    const id =
-      frame.id === null || frame.id === undefined ? "" : String(frame.id);
+    const id = String(frame.id);
     const entry = this.pending.get(id);
     if (!entry) {
       // 迟到 / 未知 id 的响应(已被 close 拒绝):丢弃。
       return;
     }
     this.pending.delete(id);
-    if (frame.error) {
+    entry.cleanup?.();
+    if (frame.body.case === "error") {
       entry.reject(
-        new RelayError(frame.error.code, frame.error.message, frame.error),
+        new RelayError(frame.body.code, frame.body.message, frame.body.details),
       );
-    } else {
-      entry.resolve(frame.result);
+      return;
     }
+    if (
+      frame.body.case !== "typedMethodResponse" ||
+      frame.body.methodId !== entry.method.id
+    ) {
+      entry.reject(new RelayError(-1, "relay: 响应方法不匹配", frame));
+      return;
+    }
+    entry.resolve(frame.body.value);
   }
 
-  private dispatchNotification(frame: WireFrame): void {
-    try {
-      switch (frame.method) {
-        case NotifyEvent:
-        case NotifyAutonomousTurnEvent: {
-          const ev = decodeEventFrame(frame.params);
-          this.applyDedup(ev.sessionId, ev.seq, () => this.opts.onEvent?.(ev));
-          return;
-        }
-        case NotifyRunResultDone:
-        case NotifyAutonomousTurnDone: {
-          const done = decodeRunResultDoneFrame(frame.params);
-          this.applyDedup(done.sessionId, done.seq, () =>
-            this.opts.onRunResultDone?.(done),
-          );
-          return;
-        }
-        case NotifyAutonomousTurnStarted: {
-          const started = decodeAutonomousTurnStartedFrame(frame.params);
-          this.applyDedup(started.sessionId, started.seq, () =>
-            this.opts.onAutonomousTurnStarted?.(started),
-          );
-          return;
-        }
-      }
-    } catch {
-      // 载荷解不动:不投递,但照样占掉这一格 seq(见 skipSeq),不让一条坏帧
-      // 把它后面的整段转录卡在补洞里。
+  /**
+   * 投递一帧通知。`target` 是补齐路径交来的那条会话 —— 它自己知道自己是谁,不必
+   * 也**不能**去猜:补齐拉回来的帧与实时帧在线上长得一模一样,靠 liveBySessionId
+   * 去认的话,同号的另一条会话正被看着时,这一页会算到它头上。
+   */
+  private dispatchNotification(
+    frame: ProtobufRpcFrame,
+    target?: SessionState,
+  ): void {
+    const decoded = decodeNotification(frame);
+    if (!decoded) {
+      return;
     }
-    this.skipSeq(frame.params);
+    const st = target ?? this.liveStateOf(decoded.sessionId);
+    this.applyDedup(st, decoded.seq, () => decoded.deliver(this.opts));
+  }
+
+  /**
+   * 一帧**实时**通知该记到哪条会话上。线上只有会话 id 认得出来,所以取最后一次
+   * attach 的那条;一次都没 attach 过时落到「调用方自己的对端」那一格 —— 与
+   * 省略 origin 的那条请求同一个身份,不新造第三种含义。
+   */
+  private liveStateOf(sessionId: number): SessionState {
+    return this.liveBySessionId.get(sessionId) ?? this.stateOf(sessionId);
   }
 
   /**
@@ -455,17 +594,6 @@ export class RelayClient {
    * 又卡在这一条上,补齐原地打转、后面的转录永远交付不出去(与 Go 侧
    * remote/reconnect.go 的 skipSeq 同一条纪律)。
    */
-  private skipSeq(params: unknown): void {
-    if (!params || typeof params !== "object") return;
-    const head = params as { sessionId?: unknown; seq?: unknown };
-    if (typeof head.sessionId !== "number" || typeof head.seq !== "number") {
-      return;
-    }
-    this.applyDedup(head.sessionId, head.seq, () => {
-      // 占位:这一格已被消费,但没有可投递的内容。
-    });
-  }
-
   /**
    * seq 闸门(与 Go 侧 remote/reconnect.go 的 dispatchNotification 同一套规则):
    *   - seq == 游标 + 1 → 消费并推进游标;
@@ -477,7 +605,7 @@ export class RelayClient {
    * 老 daemon 不带 seq(可选追加字段)时无游标可言,一律投递。
    */
   private applyDedup(
-    sessionId: number,
+    st: SessionState,
     seq: number | undefined,
     deliver: () => void,
   ): void {
@@ -485,39 +613,30 @@ export class RelayClient {
       deliver();
       return;
     }
-    const cursor = this.cursors.get(sessionId) ?? 0;
-    if (seq <= cursor) return;
-    if (seq > cursor + 1) {
-      void this.catchUp(sessionId).catch(() => {
+    if (seq <= st.cursor) return;
+    if (seq > st.cursor + 1) {
+      void this.catchUp(st.sessionId, st.origin).catch(() => {
         // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
       });
       return;
     }
-    this.cursors.set(sessionId, seq);
+    st.cursor = seq;
     deliver();
   }
 
   /** 补齐页里的一条通知:按 method 解成帧、把日志行上的 seq 盖上去,再走同一套去重投递。 */
-  private applyJournaled(n: JournaledNotification): void {
-    let frame: WireFrame;
-    try {
-      frame = decodeFrame({
-        jsonrpc: "2.0",
-        method: n.method,
-        params: n.params,
-      });
-    } catch {
-      return;
-    }
-    if (frame.params && typeof frame.params === "object") {
-      (frame.params as Record<string, unknown>).seq = n.seq;
-    }
-    this.dispatchNotification(frame);
+  private applyJournaled(st: SessionState, n: JournaledNotification): void {
+    const frame = journaledToFrame(n);
+    if (frame) this.dispatchNotification(frame, st);
   }
 
   private handleClose(): void {
-    this.attached.clear();
-    this.attaching.clear();
+    // 游标与关注名单留着(重连要接着补),本次连接的 attach 结果作废:新连接上
+    // 每条会话都要重新接管。
+    for (const st of this.sessions.values()) {
+      st.attached = null;
+      st.attaching = null;
+    }
     this.failPending(new RelayError(-1, "relay: 连接已断开", null));
     if (this.closedByUser || this.opts.reconnect === false) {
       this.setState("disconnected");
@@ -529,17 +648,16 @@ export class RelayClient {
 
   private failPending(err: RelayError): void {
     for (const [, entry] of this.pending) {
+      entry.cleanup?.();
       entry.reject(err);
     }
     this.pending.clear();
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer !== null) return;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
+    this.redial.schedule(this.opts.reconnectDelayMs ?? 1000, () => {
       void this.reconnect();
-    }, this.opts.reconnectDelayMs ?? 1000);
+    });
   }
 
   private async reconnect(): Promise<void> {
@@ -552,9 +670,9 @@ export class RelayClient {
       await this.connect();
       // 重连后:对关注的会话逐个 attach(新连接需重发)→ 按游标补齐。
       // 单条会话补齐失败不阻断其它会话。
-      for (const sid of this.watched) {
+      for (const st of [...this.sessions.values()].filter((s) => s.watched)) {
         try {
-          await this.catchUp(sid);
+          await this.catchUp(st.sessionId, st.origin);
         } catch {
           // 该会话补齐失败,保持关注,下一条 / 下次重连再试。
         }
@@ -565,24 +683,254 @@ export class RelayClient {
   }
 }
 
-function decodeBinary(data: unknown): string {
-  if (typeof data === "string") return data;
-  // 用 Object.prototype.toString 判定而不是 instanceof ArrayBuffer:跨 realm(如
-  // jsdom 测试环境)的 ArrayBuffer 对 instanceof 是 false,但字节内容完全合法。
+interface DecodedNotification {
+  sessionId: number;
+  seq: number | undefined;
+  deliver: (handlers: NotificationHandlers) => void;
+}
+
+/**
+ * 按 method 把一帧通知解成「投给谁」的一次投递动作。不认识的 method / 载荷解不动时
+ * 返回 null —— 那一帧交付不出去,但它那一格 seq 照样是用掉的(见 skipSeq)。
+ */
+function decodeNotification(
+  frame: ProtobufRpcFrame,
+): DecodedNotification | null {
+  const body = frame.body;
   if (
-    data instanceof ArrayBuffer ||
-    Object.prototype.toString.call(data) === "[object ArrayBuffer]"
+    body.case === "runtimeEventNotification" ||
+    body.case === "autonomousTurnEventNotification"
   ) {
-    return new TextDecoder().decode(data as ArrayBuffer);
+    const value: EventFrame = {
+      sessionId: body.sessionId,
+      seq: body.seq,
+      event: runtimeEventToViewEvent(body.event),
+    };
+    return {
+      sessionId: value.sessionId,
+      seq: value.seq,
+      deliver: (h) => h.onEvent?.(value),
+    };
   }
-  if (ArrayBuffer.isView(data)) {
-    return new TextDecoder().decode(
-      new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
-    );
+  if (
+    body.case === "runResultDoneNotification" ||
+    body.case === "autonomousTurnDoneNotification"
+  ) {
+    const value: RunResultDoneFrame = {
+      sessionId: body.sessionId,
+      providerSessionId: body.providerSessionId,
+      usage: body.usage === undefined ? undefined : { ...body.usage },
+      userAnchor: body.userAnchor,
+      model: body.model,
+      contextWindow: body.contextWindow,
+      turnToken: Number(body.turnToken),
+      stopErrMsg: body.stopErrorMessage,
+      stopErrCode: body.stopErrorCode,
+      seq: body.seq,
+    };
+    return {
+      sessionId: value.sessionId,
+      seq: value.seq,
+      deliver: (h) => h.onRunResultDone?.(value),
+    };
   }
-  // jsdom / 某些环境把二进制包成 {data: ArrayBuffer}。
-  if (data && typeof data === "object" && "data" in data) {
-    return decodeBinary((data as { data: unknown }).data);
+  if (body.case === "autonomousTurnStartedNotification") {
+    const value: AutonomousTurnStartedFrame = {
+      sessionId: body.sessionId,
+      trigger: body.trigger,
+      turnToken: Number(body.turnToken),
+      seq: body.seq,
+    };
+    return {
+      sessionId: value.sessionId,
+      seq: value.seq,
+      deliver: (h) => h.onAutonomousTurnStarted?.(value),
+    };
   }
-  throw new TypeError("relay: 无法解码收到的二进制帧");
+  return null;
+}
+
+/** Protobuf `RuntimeEventNotification.event` oneof 的全部 case 名。 */
+type RuntimeEventCase = RuntimeEventNotificationFrame["event"]["case"];
+
+/**
+ * oneof case 名 → `agentruntime.EventKind` 判别值。
+ *
+ * 两边**不是**同一套拼法，也没有可推导的规则：`toolCall` 对应的 kind 是
+ * `tool_use_start`，`usageUpdate` 是 `usage`。所以这张表必须一条条对着
+ * `event_wire.go` 里各 `MarshalJSON` 落的常量钉，不能靠 snake_case 转换糊过去。
+ *
+ * 类型标注是这张表唯一的机械保证，两头都吃紧：
+ *
+ *   - 键是 `RuntimeEventCase` —— Go 那边新增一个 oneof case，这里漏填就编译不过；
+ *   - 值是 `EventKind` —— 写出一个词表外的字符串（曾经的 `"tool_call"`）同样
+ *     编译不过。
+ *
+ * 少了后半截，错的判别值一路绿到线上：消费方的 `kindOf` 是断言不是校验，
+ * `never` 穷尽检查够不着，最后在转录归约的 `default` 分支被当成未知事件铺成
+ * 一坨 JSON —— 工具卡与提问卡就此从不渲染。
+ */
+const EVENT_KINDS: Record<RuntimeEventCase, EventKind> = {
+  textDelta: EventTextDelta,
+  thinkingDelta: EventThinkingDelta,
+  outputActivity: EventOutputActivity,
+  permissionModeChanged: EventPermissionModeChanged,
+  retry: EventRetry,
+  contextWindowUpdated: EventContextWindowUpdated,
+  compactBoundary: EventCompactBoundary,
+  runtimeStatus: EventRuntimeStatus,
+  done: EventDone,
+  error: EventError,
+  userMessage: EventUserMessage,
+  toolCall: EventToolUseStart,
+  toolResult: EventToolResult,
+  steerConsumed: EventSteerConsumed,
+  userAskRequest: EventAskUserQuestion,
+  userAskResolved: EventAskUserQuestionAnswered,
+  toolPermissionRequest: EventToolPermissionRequest,
+  toolPermissionResolved: EventToolPermissionResolved,
+  execApprovalRequested: EventExecApprovalRequested,
+  execApprovalResolved: EventExecApprovalResolved,
+  subagentStarted: EventSubagentStarted,
+  subagentProgress: EventSubagentProgress,
+  subagentDone: EventSubagentDone,
+  subagentModel: EventSubagentModel,
+  usageUpdate: EventUsage,
+  planUpdated: EventPlanUpdated,
+  unrecognizedBlock: EventUnrecognizedBlock,
+};
+
+/**
+ * wire 上的 `bytes` 字段还原成载荷本身。
+ *
+ * 事件里每一个 `bytes` 都是 Go 侧的 `json.RawMessage`（工具入参、canonical、
+ * 工具结果 meta），wire 包刻意让它们原样是 `Uint8Array` —— 那一层的契约是
+ * 「wire 字节就是字节」，怎么读是宿主的事。本站读法只有这一种，所以在这里
+ * 一次性还原：漏了这一步，工具卡的入参会变成一个按字节下标编号的对象。
+ *
+ * 空字节等于「没这个字段」（proto3 零值），坏字节按缺失处理 —— 一条读不出的
+ * 入参不该把整段转录带崩。
+ */
+function decodeRawJSON(value: Uint8Array): unknown {
+  if (value.length === 0) return undefined;
+  try {
+    return JSON.parse(new TextDecoder().decode(value));
+  } catch {
+    return undefined;
+  }
+}
+
+function runtimeEventToViewEvent(
+  event: { case: string } & Record<string, unknown>,
+): Record<string, unknown> {
+  const { case: eventCase, ...fields } = event;
+  for (const [key, value] of Object.entries(fields)) {
+    if (value instanceof Uint8Array) fields[key] = decodeRawJSON(value);
+  }
+  // 兜底成 case 名本身：运行期照样可能来一个比本仓新的 daemon，那时如实透出
+  // 一个词表外的判别值，比谎报成某个已知 kind 好 —— 消费方的 default 分支会
+  // 把它原样呈现。
+  return {
+    kind: EVENT_KINDS[eventCase as RuntimeEventCase] ?? eventCase,
+    ...fields,
+  };
+}
+
+function journaledFromProtobuf(input: unknown): JournaledNotification {
+  const entry = input as {
+    seq: bigint;
+    payload?: {
+      payload: {
+        value?: {
+          sessionId: bigint;
+          event: { case: string; value?: object };
+        };
+      };
+    };
+  };
+  const runtime = entry.payload?.payload.value;
+  return {
+    seq: Number(entry.seq),
+    method: "runtime.event",
+    params:
+      runtime === undefined
+        ? {}
+        : {
+            sessionId: Number(runtime.sessionId),
+            seq: Number(entry.seq),
+            event: runtimeEventToViewEvent({
+              case: runtime.event.case,
+              ...(runtime.event.value ?? {}),
+            }),
+          },
+  };
+}
+
+function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
+  if (!n.params || typeof n.params !== "object") return null;
+  const value = n.params as { sessionId?: unknown; event?: unknown };
+  if (
+    typeof value.sessionId !== "number" ||
+    !value.event ||
+    typeof value.event !== "object"
+  )
+    return null;
+  return {
+    id: 0n,
+    body: {
+      case: "runtimeEventNotification",
+      sessionId: value.sessionId,
+      seq: n.seq,
+      event: viewEventToRuntimeEvent(
+        value.event as Record<string, unknown>,
+      ) as never,
+    },
+  } as ProtobufRpcFrame;
+}
+
+function viewEventToRuntimeEvent(
+  event: Record<string, unknown>,
+): { case: string } & Record<string, unknown> {
+  const { kind, ...fields } = event;
+  const eventCase =
+    typeof kind === "string"
+      ? kind.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+      : "";
+  return { case: eventCase, ...fields };
+}
+
+function binaryPayload(data: unknown): Uint8Array {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data))
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  throw new TypeError("relay: WebSocket payload must be binary");
+}
+
+function isNotification(frame: ProtobufRpcFrame): boolean {
+  return frame.body.case.endsWith("Notification");
+}
+
+/**
+ * 应用 server 镜像交出的一页历史帧(wire.JournaledNotification 原样),投给与实时流
+ * 同一批 handler;返回这一页里最大的 seq。
+ *
+ * 调用方拿这个 seq 预置中继客户端的游标(setCursor),实时流便从它之后接上 —— server
+ * 手里已经有的那一段不会再从执行端拉一遍,而真跳了号的那一段仍由客户端回执行端补洞。
+ *
+ * 与客户端内部补齐的唯一不同是这里**不做游标去重**:这一页来自 server,与本客户端的
+ * 游标不是同一条线,去重只会把整段历史当成重复丢光。交付不出去的帧(不认识的 method /
+ * 载荷解不动)照样计入返回值 —— 它那一格是真用掉了,漏算的话预置的游标停在它前面,
+ * 随后每一条实时帧都被判成跳号。
+ */
+export function applyJournalFrames(
+  frames: readonly JournaledNotification[],
+  handlers: NotificationHandlers,
+): number {
+  let last = 0;
+  for (const n of frames) {
+    if (typeof n.seq === "number" && n.seq > last) last = n.seq;
+    const frame = journaledToFrame(n);
+    if (frame) decodeNotification(frame)?.deliver(handlers);
+  }
+  return last;
 }

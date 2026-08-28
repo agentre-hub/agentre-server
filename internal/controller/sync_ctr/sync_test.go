@@ -14,12 +14,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 
-	"agentre-server/internal/api"
-	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
-	"agentre-server/internal/service/sync_svc"
+	"github.com/agentre-hub/agentre-server/internal/api"
+	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
 )
 
 // stubSyncSvc 记下 service 实际收到的入参。
@@ -41,6 +41,9 @@ func (s *stubSyncSvc) GetAvatar(context.Context, int64, string) (*sync_svc.Avata
 	return &sync_svc.AvatarOutput{}, nil
 }
 func (s *stubSyncSvc) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
+func (s *stubSyncSvc) PurgeDeviceSyncObjects(context.Context, int64, string) error {
+	return nil
+}
 func (s *stubSyncSvc) ReclaimExpired(context.Context) (*sync_svc.ReclaimOutput, error) {
 	return &sync_svc.ReclaimOutput{}, nil
 }
@@ -94,7 +97,7 @@ func TestSyncEndpoints_RequireDeviceJWT(t *testing.T) {
 func TestPush_TakesIdentityFromJWTClaims(t *testing.T) {
 	stub := &stubSyncSvc{pushOut: &sync_svc.PushOutput{Results: []sync_svc.PushItemResult{{
 		SyncID: "p1", Kind: "project", Version: 8, Status: sync_svc.PushStatusConflict,
-		OverwrittenVersion: 7, OverwrittenDeviceID: 9,
+		OverwrittenVersion: 7, OverwrittenOriginFingerprint: "fp-desktop-02",
 	}}}}
 	server, signer := newSyncTestServer(t, stub)
 	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindDesktop}, time.Hour)
@@ -115,10 +118,10 @@ func TestPush_TakesIdentityFromJWTClaims(t *testing.T) {
 		Code int `json:"code"`
 		Data struct {
 			Results []struct {
-				Status              string `json:"status"`
-				Version             int64  `json:"version"`
-				OverwrittenVersion  int64  `json:"overwritten_version"`
-				OverwrittenDeviceID int64  `json:"overwritten_device_id"`
+				Status                       string `json:"status"`
+				Version                      int64  `json:"version"`
+				OverwrittenVersion           int64  `json:"overwritten_version"`
+				OverwrittenOriginFingerprint string `json:"overwritten_origin_fingerprint"`
 			} `json:"results"`
 		} `json:"data"`
 	}
@@ -127,5 +130,5 @@ func TestPush_TakesIdentityFromJWTClaims(t *testing.T) {
 	require.Equal(t, "conflict", envelope.Data.Results[0].Status)
 	require.Equal(t, int64(8), envelope.Data.Results[0].Version)
 	require.Equal(t, int64(7), envelope.Data.Results[0].OverwrittenVersion)
-	require.Equal(t, int64(9), envelope.Data.Results[0].OverwrittenDeviceID)
+	require.Equal(t, "fp-desktop-02", envelope.Data.Results[0].OverwrittenOriginFingerprint)
 }

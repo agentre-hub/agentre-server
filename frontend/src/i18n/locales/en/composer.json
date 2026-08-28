@@ -1,0 +1,3 @@
+{
+  "localCommandUnsupported": "This end can't run terminal commands. The line starting with ! was not sent — drop the leading ! to send it as a normal message."
+}

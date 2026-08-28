@@ -10,8 +10,8 @@
 package mock_sync_repo
 
 import (
-	sync_entity "agentre-server/internal/model/entity/sync_entity"
 	context "context"
+	sync_entity "github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -39,6 +39,21 @@ func NewMockSyncStateRepo(ctrl *gomock.Controller) *MockSyncStateRepo {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockSyncStateRepo) EXPECT() *MockSyncStateRepoMockRecorder {
 	return m.recorder
+}
+
+// CurrentVersion mocks base method.
+func (m *MockSyncStateRepo) CurrentVersion(ctx context.Context, userID int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CurrentVersion", ctx, userID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CurrentVersion indicates an expected call of CurrentVersion.
+func (mr *MockSyncStateRepoMockRecorder) CurrentVersion(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentVersion", reflect.TypeOf((*MockSyncStateRepo)(nil).CurrentVersion), ctx, userID)
 }
 
 // FindDeviceState mocks base method.

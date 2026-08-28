@@ -68,20 +68,90 @@ export async function assertIsAppUnderTest(page: Page) {
   await expect(page.getByRole("button", { name: /Theme|主题/i })).toBeVisible();
 }
 
-export async function authenticate(context: BrowserContext) {
+async function addSessionCookie(
+  context: BrowserContext,
+  sid: string,
+  hostname: string,
+) {
   const handoff = readHandoff();
-  const url = new URL(handoff.serverURL);
   await context.addCookies([
     {
       name: handoff.cookieName,
-      value: handoff.sid,
-      domain: url.hostname,
+      value: sid,
+      domain: hostname,
       path: "/",
       httpOnly: true,
       sameSite: "Lax",
       secure: false,
     },
   ]);
+}
+
+export async function authenticate(context: BrowserContext) {
+  const handoff = readHandoff();
+  const url = new URL(handoff.serverURL);
+  await addSessionCookie(context, handoff.sid, url.hostname);
+}
+
+/**
+ * 通行密钥用例专用：种子会话搬到 `localhost` 的 host-only cookie 上。浏览器在
+ * IP 字面量 origin 上拒绝 WebAuthn（rp_id 必须是有效域名），configs/config.e2e
+ * 的 webauthn.rp_id 因此是 "localhost"、origins 两种拼法都列了——其余用例走共享
+ * 的 127.0.0.1 baseURL 没事，是因为它们从不触发 navigator.credentials.*。
+ * 与 passkeyOrigin() 配对使用。
+ */
+export async function authenticateForPasskeys(context: BrowserContext) {
+  const handoff = readHandoff();
+  await addSessionCookie(context, handoff.sid, "localhost");
+}
+
+/** 与 authenticateForPasskeys 配对：WebAuthn 场景要用的同源 origin。 */
+export function passkeyOrigin(): string {
+  const handoff = readHandoff();
+  const url = new URL(handoff.serverURL);
+  return `http://localhost:${url.port}`;
+}
+
+/**
+ * 打开 Chromium 的虚拟认证器（经 CDP `WebAuthn.enable` +
+ * `WebAuthn.addVirtualAuthenticator` 注入），只有 Chromium 支持这条 CDP 域。
+ * 可发现凭证 + 用户验证都置真，让 navigator.credentials.create()/get() 不经过
+ * 任何系统弹窗自动完成——真实认证器（Touch ID、安全钥匙、跨设备扫码）没有这条路，
+ * 无法自动化，留给收尾时的一次真机手动核对（docs/specs/2026-08-18-account-security.md
+ * 「Testing decisions」）。
+ */
+export async function addVirtualAuthenticator(
+  context: BrowserContext,
+  page: Page,
+) {
+  const client = await context.newCDPSession(page);
+  await client.send("WebAuthn.enable");
+  await client.send("WebAuthn.addVirtualAuthenticator", {
+    options: {
+      protocol: "ctap2",
+      transport: "internal",
+      hasResidentKey: true,
+      hasUserVerification: true,
+      isUserVerified: true,
+      automaticPresenceSimulation: true,
+    },
+  });
+}
+
+/** 用户菜单里的「账号与安全」：与桌面/移动共用同一个触发器（UserMenu.tsx）。 */
+export async function openAccountFromUserMenu(page: Page) {
+  await page.getByRole("button", { name: /账号菜单|Account menu/i }).click();
+  await page
+    .getByRole("menuitem", { name: /账号与安全|Account & security/i })
+    .click();
+  await page.waitForURL(/\/account$/);
+}
+
+/** 用户菜单里的「登出」：无论端点成败都会落地登录页（UserMenu.tsx 注释）。 */
+export async function signOutViaUserMenu(page: Page) {
+  await page.getByRole("button", { name: /账号菜单|Account menu/i }).click();
+  await page.getByRole("menuitem", { name: /^登出$|^Sign out$/i }).click();
+  await page.waitForURL(/\/login/);
 }
 
 function expectSuccessfulEnvelope<T>(response: APIResponse, body: unknown): T {
@@ -91,6 +161,23 @@ function expectSuccessfulEnvelope<T>(response: APIResponse, body: unknown): T {
   ).toBe(true);
   expect(body).toMatchObject({ code: 0 });
   return (body as { data: T }).data;
+}
+
+/**
+ * 用种子会话把这个账号名下的**其它**会话全部撤掉（`POST
+ * /v1/auth/sessions/revoke-others`，写方法要出示种子会话的 CSRF token）。
+ *
+ * 一个 project 里所有用例共用同一个种子账号，通行密钥那条用例登录时会在同一账号
+ * 下真的再建一个会话。哪条用例要断言「名下只剩当前这一个」，前置条件就得由它
+ * 自己建立——靠别的用例收尾腾干净是隐式的用例间依赖：那条用例一旦在收尾前失败，
+ * 断言会以「找不到文案」的面目失败，指向的却是另一个用例的错。
+ */
+export async function revokeOtherSessions(page: Page) {
+  const handoff = readHandoff();
+  const response = await page.request.post("/v1/auth/sessions/revoke-others", {
+    headers: { "X-CSRF-Token": handoff.csrfToken },
+  });
+  expectSuccessfulEnvelope(response, await response.json());
 }
 
 export async function authorizeDevice(

@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	hubjwt "agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
+	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 )
 
 func TestKeyRing_GivenActiveAndRetiredKeys_WhenSigningAndVerifying_ThenUsesTokenKID(t *testing.T) {
@@ -175,10 +175,7 @@ func TestSign_ConcurrentCallsProducesUniqueJTI(t *testing.T) {
 	assert.Equal(t, numGoroutines, len(jtis), "expected all jti values to be unique")
 }
 
-// TestVerify_LegacyTokenCarryingCapsClaim 锁住兼容承诺：能力概念移除之前签发的
-// access token 里多带一个 caps 字段，在它自己的有效期内必须照常验签通过。这里的
-// token 不能用 Sign 造——Claims 已经没有那个字段了——所以直接按旧形状手搓一枚。
-func TestVerify_LegacyTokenCarryingCapsClaim(t *testing.T) {
+func TestVerify_RejectsTokenWithoutKID(t *testing.T) {
 	s := newSigner(t)
 	priv, err := jwtv5.ParseRSAPrivateKeyFromPEM(testkeys.PrivatePEM)
 	require.NoError(t, err)
@@ -199,12 +196,8 @@ func TestVerify_LegacyTokenCarryingCapsClaim(t *testing.T) {
 	tok, err := jwtv5.NewWithClaims(jwtv5.SigningMethodRS256, legacy).SignedString(priv)
 	require.NoError(t, err)
 
-	got, err := s.Verify(tok)
-	require.NoError(t, err)
-	assert.Equal(t, int64(5678), got.UID)
-	assert.Equal(t, int64(1234), got.DID)
-	assert.Equal(t, "agentred", got.Kind)
-	assert.Equal(t, "01LEGACYTOKENJTI0000000000", got.JTI)
+	_, err = s.Verify(tok)
+	require.ErrorContains(t, err, "unknown or retired kid")
 }
 
 // TestSign_EmitsNoCapsClaim 断言：新签发的 token 载荷里不再有 caps 字段。能力概念

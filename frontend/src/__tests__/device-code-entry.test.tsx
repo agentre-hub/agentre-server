@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Device from "@/pages/Device";
 

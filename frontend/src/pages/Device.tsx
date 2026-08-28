@@ -2,11 +2,11 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
 import { CircleAlert, ShieldCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Alert } from "@/components/ui/alert";
+import { Button, Alert } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import CodeInput from "@/components/CodeInput";
 import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
+import PageTitle from "@/components/PageTitle";
 import { api, ApiError } from "@/lib/api";
 import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
 import { normalize, toChars } from "@/lib/userCode";
@@ -173,9 +173,7 @@ export default function Device() {
                 {t("device.eyebrow")}
               </span>
             </div>
-            <h1 className="text-2xl font-semibold text-foreground">
-              {t("device.entry.title")}
-            </h1>
+            <PageTitle>{t("device.entry.title")}</PageTitle>
             <p className="text-sm text-muted-foreground">
               {t("device.entry.description")}
             </p>
@@ -191,7 +189,7 @@ export default function Device() {
             {codeError && (
               <p
                 id={errorId}
-                className="flex items-start gap-2 text-[13px] text-destructive"
+                className="flex items-start gap-2 text-aux text-destructive"
               >
                 <CircleAlert
                   className="mt-0.5 size-3.5 shrink-0"
@@ -219,7 +217,7 @@ export default function Device() {
             {t("device.entry.submit")}
           </Button>
 
-          <p className="text-center text-xs text-subtle-foreground">
+          <p className="text-center text-xs text-muted-foreground">
             {t("device.entry.footnote")}
           </p>
         </form>

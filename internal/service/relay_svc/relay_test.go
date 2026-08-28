@@ -12,8 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 )
 
 type fakeForwarder struct{ err error }
@@ -683,7 +684,9 @@ func (h *failFirstFrameAckTxHook) ProcessPipelineHook(next goredis.ProcessPipeli
 				hasDelete = true
 			case "xack":
 				hasGroupAck = true
-			case "set":
+			// 投递回执有两种形状:推进发布方那条回执队列(同版本),或者写回执键
+			// (对面是升级前的副本)。两种都算,这个钩子关心的是「回执事务」本身。
+			case "rpush", "set":
 				hasDeliveryAck = true
 			}
 		}
@@ -884,4 +887,65 @@ func TestRelayClientFailuresAreDistinguishable(t *testing.T) {
 		_, err = svc.ConnectClient(ctx, 7, "fp-daemon")
 		require.ErrorIs(t, err, ErrForwardFailed)
 	})
+}
+
+// ── 上线要出声 ─────────────────────────────────────────────────────────────
+
+// presenceSignals 记下广播出去的每一帧。SetDefault 换掉包级入口，所以这里看得见
+// relay 到底往账号级通道上发了什么。
+type presenceSignals struct {
+	mu     sync.Mutex
+	frames []accountchan_svc.Frame
+}
+
+func (s *presenceSignals) Broadcast(_ context.Context, _ int64, frame accountchan_svc.Frame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.frames = append(s.frames, frame)
+	return nil
+}
+
+func (s *presenceSignals) Subscribe(context.Context, int64) (accountchan_svc.Subscription, error) {
+	return nil, accountchan_svc.ErrChannelUnconfigured
+}
+
+func (s *presenceSignals) recorded() []accountchan_svc.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]accountchan_svc.Frame(nil), s.frames...)
+}
+
+func recordPresenceSignals(t *testing.T) *presenceSignals {
+	t.Helper()
+	signals := &presenceSignals{}
+	accountchan_svc.SetDefault(signals)
+	t.Cleanup(func() { accountchan_svc.SetDefault(nil) })
+	return signals
+}
+
+// Given 一台 daemon 连上来;When 它登记在线;Then 这个账号收到一条 device_presence
+// —— 否则控制台的设备列表与侧栏在线数要等兜底轮询才看得到它上线。
+func TestRegisterDaemon_SignalsThatPresenceChanged(t *testing.T) {
+	svc, _, _ := newRelayForTest(t, fakeForwarder{})
+	signals := recordPresenceSignals(t)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}
+
+	require.NoError(t, svc.RegisterDaemon(context.Background(), route))
+
+	require.Equal(t, []accountchan_svc.Frame{
+		{Type: accountchan_svc.FrameTypeDevicePresence},
+	}, signals.recorded())
+}
+
+// Given 一台已经在线的 daemon;When 心跳续期;Then 一声不出。续期不是状态变化,
+// 每 15 秒喊一次会让这个账号所有在线连接跟着白拉一页设备列表。
+func TestRenewDaemon_SaysNothing(t *testing.T) {
+	svc, _, _ := newRelayForTest(t, fakeForwarder{})
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}
+	require.NoError(t, svc.RegisterDaemon(context.Background(), route))
+	signals := recordPresenceSignals(t)
+
+	require.NoError(t, svc.RenewDaemon(context.Background(), route))
+
+	require.Empty(t, signals.recorded())
 }

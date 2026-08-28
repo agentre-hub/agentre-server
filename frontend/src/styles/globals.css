@@ -12,6 +12,22 @@
       所以上面那句只能用文字描述，别贴原文。 */
 @import "tailwindcss" source(none);
 @import "tw-animate-css";
+/* 共享 UI 包的 design tokens。本站**不再声明任何同名 token**，包是唯一真源
+   （提交 c585856 起，守卫在 src/__tests__/design-token-contract.test.ts）。
+   下面几份都引 token，所以必须排在这条之后。 */
+@import "@agentre-hub/agentre-ui/tokens.css";
+/* 宿主外壳的基线：body 字体与底色、`border` 的默认色、可点元素的手型、滚动条
+   与 .scrollbar-none。两端一模一样，所以住在包里，本文件只负责接上。
+   滚动条还有另一半：App.tsx 调 useAutoHideScrollbars()，两样都要有才看得见。 */
+@import "@agentre-hub/agentre-ui/base.css";
+/* sonner 的语义配色。本站开着 richColors，不接这份就退回 sonner 自带的饱和
+   告警条 —— 同一条「保存成功」桌面端是淡色面、本站是一条绿条。 */
+@import "@agentre-hub/agentre-ui/toast.css";
+/* highlight.js 的 token 配色。包的 markdown 渲染器挂了 rehype-highlight，产出的是
+   一批 hljs-* 类名 —— 那些类的颜色**只**在这份样式表里，Tailwind 扫不出来也生不成。
+   漏掉这一行不会报错、构建也是绿的：代码块照常渲染，只是从头到尾一个颜色。
+   桌面端 globals.css 同样 import 了它，两端共用同一份配色。 */
+@import "@agentre-hub/agentre-ui/code-highlight.css";
 
 @source "../../index.html";
 @source "../**/*.ts";
@@ -20,128 +36,24 @@
 @source not "../**/*.test.tsx";
 @source not "../**/__tests__/**";
 
+/* 共享 UI 包的组件类名住在 node_modules 里，source(none) 之下**不会**被扫到。
+   不加这一行，包里的卡片会照常渲染 DOM，但一条样式都不生成——界面是散架的，
+   而且构建不报错，只能靠眼睛发现。
+
+   只扫 dist（产物），不扫包的 src：src 里有守卫用例的「违规样本」，
+   与上面 @source not 排除本仓库测试是同一个理由。 */
+@source "../../node_modules/@agentre-hub/agentre-ui/dist/**/*.js";
+
 /* Tailwind v4 没有 darkMode: 'class' 配置项了，改成显式声明 dark 变体。
    下面 `.dark { ... }` 那整块 token 靠这一行才生效——删掉它不会报错，
-   只是深色模式静默失效。src/lib/theme.tsx 负责把 .dark 挂到 <html> 上。 */
+   只是深色模式静默失效。共享包的 ThemeProvider 负责把 .dark 挂到 <html> 上。 */
 @custom-variant dark (&:is(.dark *));
 
-/* 值和命名都取自 agentre 桌面端 frontend/src/styles/globals.css。
-   两端同源是有意的：出问题改一次，桌面端和控制台都受益。
-   要加新颜色，先去桌面端看有没有现成的，别在这边单方面发明。 */
-:root {
-  /* Surfaces —— zinc 中性色，纯白卡片浮在灰底上 */
-  --background: #fafafa;
-  --foreground: #18181b;
-  --card: #ffffff;
-  --card-foreground: #18181b;
-  --popover: #ffffff;
-  --popover-foreground: #18181b;
-
-  /* Brand —— 钢蓝，冷而不艳，跟状态色和 agent 色都拉得开。
-     -soft 是选中态底色，-text 是需要可读性时的前景色（深色下比 --primary 更亮）。 */
-  --primary: #3b6896;
-  --primary-foreground: #ffffff;
-  --primary-soft: #eef4fa;
-  --primary-text: #3b6896;
-  --ring: #3b6896;
-
-  /* 语义面与文字层级：foreground > muted > subtle */
-  --secondary: #f4f4f5;
-  --secondary-foreground: #3f3f46;
-
-  /* Sidebar —— 控制台外壳左侧栏底色（任务 2）。值取自 agentre 桌面端：
-     浅 #f4f4f5 / 深 #111316，两端同源。 */
-  --sidebar: #f4f4f5;
-  --muted: #f4f4f5;
-  --muted-foreground: #71717a;
-  --subtle-foreground: #a1a1aa;
-  --accent: #f4f4f5;
-  --accent-foreground: #18181b;
-
-  /* Border / Input。--input 同时当描边色和半透明填充用（dark:bg-input/30），
-     是 shadcn 的约定，不要拆成两个 token。 */
-  --border: #e4e4e7;
-  --border-strong: #d4d4d8;
-  --input: #e4e4e7;
-
-  /* Destructive */
-  --destructive: #dc2626;
-  --destructive-foreground: #ffffff;
-  --destructive-soft: #fef2f2;
-
-  /* 状态。设计稿里叫 ok / warn / idle / danger，代码沿用桌面端的 status-* 命名。 */
-  --status-running: #10b981;
-  --status-running-bg: #ecfdf5;
-  --status-waiting: #f59e0b;
-  /* 琥珀 Badge 上的深棕文字（设计稿给的值）；深浅两色都是亮琥珀，同一值都可读。 */
-  --status-waiting-foreground: #402b06;
-  --status-waiting-bg: #fffbeb;
-  --status-idle: #a1a1aa;
-  --status-error: #dc2626;
-
-  /* 等宽输出面：命令输出、hook 日志 */
-  --code-surface: #f4f4f5;
-  --code-foreground: #3f3f46;
-  --code-muted-foreground: #71717a;
-
-  /* Elevation.
-     命名成 --overlay-shadow 而不是 --shadow-overlay：v4 的阴影命名空间就是
-     --shadow-*，同名会让 @theme 里的映射写成 `--shadow-overlay: var(--shadow-overlay)`
-     而自指。scrim 同理，见下面的 --overlay-scrim。 */
-  --overlay-shadow:
-    0 24px 64px -12px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.04);
-  /* Dialog / Sheet 背后的遮罩。25% 压不住底下的列表，画稿时提到 40%。 */
-  --overlay-scrim: rgba(15, 23, 42, 0.4);
-}
-
-.dark {
-  --background: #17191c;
-  --foreground: #e6e8eb;
-  --card: #1d2025;
-  --card-foreground: #e6e8eb;
-  --popover: #262931;
-  --popover-foreground: #e6e8eb;
-
-  --primary: #5b8dbf;
-  --primary-foreground: #0a1420;
-  --primary-soft: #1a2738;
-  --primary-text: #8eb6dc;
-  --ring: #5b8dbf;
-
-  --secondary: #262931;
-  --secondary-foreground: #c4c7cd;
-  --sidebar: #111316;
-  --muted: #1d2025;
-  --muted-foreground: #8a8d94;
-  --subtle-foreground: #5a5d64;
-  --accent: #383d47;
-  --accent-foreground: #e6e8eb;
-
-  --border: #2a2d34;
-  --border-strong: #3a3e47;
-  --input: #2a2d34;
-
-  --destructive: #f87171;
-  --destructive-foreground: #1a0b0c;
-  --destructive-soft: #2a1315;
-
-  --status-running: #34d399;
-  --status-running-bg: #0f2218;
-  --status-waiting: #fbbf24;
-  --status-waiting-foreground: #402b06;
-  --status-waiting-bg: #261d0d;
-  --status-idle: #6a6d74;
-  --status-error: #f87171;
-
-  --code-surface: #111316;
-  --code-foreground: #e6e8eb;
-  --code-muted-foreground: #9aa0ab;
-
-  /* 深色背景下投影要更重才看得出层级，边缘描边则改用亮色 */
-  --overlay-shadow:
-    0 24px 64px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.06);
-  --overlay-scrim: rgba(0, 0, 0, 0.7);
-}
+/* 色值 token 全部来自共享包 `@agentre-hub/agentre-ui/tokens.css`（上面那条 import）。
+   本站**刻意不再声明任何同名 token**：此前这里复制了一份 34 个同名色值，值逐字节
+   相同，于是「两端同源」只存在于注释里——桌面端改了流不过来，而本仓守卫照样全绿。
+   现在包是唯一真源，`src/__tests__/design-token-contract.test.ts` 机械地拦住复制。
+   真要分叉，去那份守卫的 DIVERGENCES 里显式登记理由（目前是空的）。 */
 
 /* JetBrains Mono，仅拉丁子集自托管（design decision 6）。正文仍是系统字体栈，
    不自托管 Inter——两端肉眼差异很小，而这份产物要 //go:embed 进 Go 二进制，
@@ -169,81 +81,73 @@
 }
 
 /* Tailwind v4 的工具类由这里生成，取代了 v3 的 tailwind.config.ts。
-   `inline` 表示别名直接引用上面的 token 变量，而不是把值复制一份——
-   这样 .dark 里的覆写才能透传到工具类。
-   少一条映射不会报错，对应的 bg-/text- 工具类只是不生成任何规则，
-   页面上表现为「那块没颜色」。src/__tests__/design-token-contract.test.ts 守着这件事。 */
+   **颜色的 --color-* 别名全部由共享包的 @theme inline 提供**，本站不再复制一份；
+   圆角四档同理——2026-08-19 撤销了本站那套 6/10/14 的分叉，改跟包的
+   calc(var(--radius) ± n) = 4/6/8/12，与桌面端同值。撤销的理由是它让**每一个共享
+   包组件**在本站都比桌面端圆约 1.7 倍：包的 MESSAGE_AVATAR_CLASS 是
+   `size-7 rounded-lg`，28px 配 14px 半径恰好是正圆，桌面端那里是个圆角方块。
+   而 @theme inline 会把字面量编进工具类、不产出 --radius-* 自定义属性，
+   所以一旦分叉就没法再按子树覆盖回来——包组件与本站组件只能一起圆或一起不圆。
+   这里因此只剩自托管等宽字体，以及本站独有的热力色阶 --color-heat-*（包里没有，
+   见下面那段注释）。
+   多写一条同名别名不会报错，只会让包里那条失效——所以别加回来。 */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary-soft: var(--primary-soft);
-  --color-primary-text: var(--primary-text);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-subtle-foreground: var(--subtle-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-destructive-soft: var(--destructive-soft);
-  --color-status-running: var(--status-running);
-  --color-status-running-bg: var(--status-running-bg);
-  --color-status-waiting: var(--status-waiting);
-  --color-status-waiting-foreground: var(--status-waiting-foreground);
-  --color-status-waiting-bg: var(--status-waiting-bg);
-  --color-status-idle: var(--status-idle);
-  --color-status-error: var(--status-error);
-  --color-code-surface: var(--code-surface);
-  --color-code-foreground: var(--code-foreground);
-  --color-code-muted-foreground: var(--code-muted-foreground);
-  --color-border: var(--border);
-  --color-border-strong: var(--border-strong);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-scrim: var(--overlay-scrim);
-
-  /* 三档直接声明成字面量，不再从一个根 --radius 用 calc 推——6/10/14 不是
-     等差数列，calc(var(--radius) ± n) 凑不出这个关系（design decision 5）。 */
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-
-  --shadow-overlay: var(--overlay-shadow);
-
   /* 字体命名空间是 --font-*，直接量声明即生成 font-mono 工具类；不像颜色
      token 要在 :root/.dark 间切换，字体没有这层间接，直接写在这里就够，
      也避免了跟 --shadow-overlay 同名自指同一种坑（见上面那条注释）。 */
   --font-mono:
     "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
     "Liberation Mono", monospace;
+
+  /* 活跃热力格子图的五级色阶。写成 var(...) 而不是字面量：`inline` 只是把
+     **这一层**别名内联掉，指向的仍是下面 :root/.dark 里那对 token，所以深浅两套
+     照常跟着 .dark 切。漏掉这五条别名不会报错——`bg-heat-3` 只是生成不出任何规则，
+     整张网格变成没有底色的空格子，而 DOM 里的 class 照样在。 */
+  --color-heat-0: var(--heat-0);
+  --color-heat-1: var(--heat-1);
+  --color-heat-2: var(--heat-2);
+  --color-heat-3: var(--heat-3);
+  --color-heat-4: var(--heat-4);
 }
 
-@layer base {
-  * {
-    /* 两条理由都还成立，别删：
-       1. token 存的是十六进制字面量，不是 HSL 通道值，所以这里直接引用。
-          写成 hsl(var(--border)) 会得到非法 CSS，整条声明被丢弃。
-       2. v4 起默认边框色是 currentColor（v3 是 gray-200），
-          少了这一行，`border` 类会画出跟文字同色的边框。 */
-    border-color: var(--border);
-    box-sizing: border-box;
-  }
+/* 本站独有的色值 token：热力格子的五级色阶。
+   放在这里而不是共享包，是因为活跃热力图只有服务端控制台画——桌面端没有这一屏，
+   往包里加一对深浅值只会多出一对没人用、还会慢慢漂开的变量（docs/design.md 里
+   proj-1…5 缺席就是同一条理由）。值取自设计稿 agentre-server.pen 的
+   heat-0…heat-4 变量，深浅两套齐全。
+   heat-0 的含义是「那天没有活动」，不是「没有数据」——所以它是一个可见的浅灰格，
+   而不是透明。 */
+:root {
+  --heat-0: #eaeaee;
+  --heat-1: #cfe0f0;
+  --heat-2: #9cc0e0;
+  --heat-3: #6294c4;
+  --heat-4: #3b6896;
+}
 
-  body {
-    background-color: var(--background);
-    color: var(--foreground);
-    margin: 0;
-    font-family: ui-sans-serif, system-ui, sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+.dark {
+  --heat-0: #23262c;
+  --heat-1: #21384f;
+  --heat-2: #315b83;
+  --heat-3: #4a80b3;
+  --heat-4: #6fa4d4;
+}
+
+/* 连接中那条不定量进度条（规格 2026-08-21 决策 2）。
+   写在这里而不是 `@theme` 的 --animate-*：那条命名空间生成的是
+   `animate-<名字>` 工具类，而这个动画只有一处用，用 `animate-[...]` 的
+   任意值语法直接引它就够——Tailwind 只负责发出 animation 属性，关键帧由这里给。
+   删掉这一段不会报错：进度条会静止在最左边，看着像卡住了。 */
+@keyframes session-connect {
+  from {
+    left: -40%;
+  }
+  to {
+    left: 102%;
   }
 }
+
+/* 可点元素的手型规则已经搬进包的 base.css，两端共用同一份。
+   本站那份逐字保留在了那里（含两处刻意的排除：禁用态不给手型、label 只在
+   里面是勾选框/单选框时才算可点）—— 桌面端此前没有这条，只靠包里每个按钮
+   自带 cursor-pointer，它自己写的 [role="button"] 覆盖不到。 */

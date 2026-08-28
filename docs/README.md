@@ -1,17 +1,7 @@
 # docs
 
-Start at [`../AGENTS.md`](../AGENTS.md) — it holds the project facts, the
-non-negotiables, and the routing table that says which of these to open when.
-
-| Document | What it owns |
-| --- | --- |
-| [develop.md](develop.md) | Commands, repo layout, enforced rules + exemptions, migrations, commit flow |
-| [architecture.md](architecture.md) | Layering, dependency direction, "how to add an X" |
-| [testing.md](testing.md) | What to test per layer, sqlmock vs mockgen, build tags, guard tests |
-| [verification.md](verification.md) | Choosing the form a one-off verification takes, per surface; scratch workflow, verdicts and report rules |
-| [design.md](design.md) | Tokens and the canvas↔code name mapping, type/spacing/radius scales, the auth shell and page skeleton, dark/light, responsive, i18n, new-page recipe |
-| [observability.md](observability.md) | Logging, metrics, traces |
-| [documentation.md](documentation.md) | Who owns which fact, how docs stay true |
+Start at [`../AGENTS.md`](../AGENTS.md). Its routing table identifies the owner document
+for each kind of change; do not maintain a second copy of that table here.
 
 `references/` holds detail too long for a main document:
 

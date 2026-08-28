@@ -40,3 +40,21 @@ func TestDisplayName(t *testing.T) {
 		assert.Equal(t, "一二三四五六七八", DisplayName("", "一二三四五六七八九十"))
 	})
 }
+
+// UsableBy 是「这台设备存在、属于这个账号、而且还能用」这一条判定。它曾在
+// engine_ctr、relay_svc、workspace_svc 三处各写一遍，且已经漂了：engine_ctr 那份
+// 只判归属、不判可用，一台已撤销的设备照样能拉引擎快照。判定收敛到实体上，条件
+// 才不会再各自演化。
+func TestUsableBy(t *testing.T) {
+	active := &Device{UserID: 7, Status: consts.ACTIVE}
+
+	assert.True(t, active.UsableBy(7))
+	assert.False(t, active.UsableBy(8), "别人的设备不算")
+	assert.False(t, active.UsableBy(0), "没有账号身份时一律不算")
+
+	var missing *Device
+	assert.False(t, missing.UsableBy(7), "查不到的设备不算，且不能 panic")
+
+	revoked := &Device{UserID: 7, Status: consts.DELETE}
+	assert.False(t, revoked.UsableBy(7), "已撤销的设备不算")
+}

@@ -1,0 +1,115 @@
+{
+  "composerControls": {
+    "permissionMode": "权限模式",
+    "modelTarget": "供应商与模型",
+    "permissionUnavailable": "这台机器此刻列不出权限档位",
+    "permissionUnsupported": "这个后端没有权限档位",
+    "permissionSetFailed": "权限档位没改成：{{reason}}",
+    "modelSetFailed": "模型没改成：{{reason}}",
+    "modelPartiallySynced": "另一台机器此刻没跟上，在那边打开可能看到旧值",
+    "modelNotPinnedOnStart": "这条对话没能钉住你选的模型：第一轮按它跑了，后续轮次会回到跟随 Agent 绑定"
+  },
+  "status": {
+    "connecting": "连接中…",
+    "reconnecting": "重连中…"
+  },
+  "banner": {
+    "lost": {
+      "title": "连接断了，已经不再自动重试",
+      "body": "转录停在最后收到的那一条，之后的消息这里看不到。"
+    },
+    "desktopAppNotRunning": {
+      "title": "{{machine}} 上的 Agentre 没有运行",
+      "titleUnknown": "这台电脑上的 Agentre 没有运行",
+      "body": "在那台电脑上打开 Agentre 即可继续。历史照常读。"
+    },
+    "pinnedAgentredUnavailable": {
+      "title": "现在发不出新消息，历史照常读",
+      "body": "这条对话钉在一台当前不可用的计算节点上，它恢复后即可继续。"
+    },
+    "deviceRevoked": {
+      "title": "这台设备已从账号移除",
+      "body": "是永久的。历史照常读，这条对话此后只读。"
+    },
+    "loggedOut": {
+      "title": "账号已登出",
+      "body": "重新登录后回到这条对话。"
+    },
+    "lastSeen": "最后在线 {{time}}",
+    "reconnect": "重新连接",
+    "viewDevice": "查看设备"
+  },
+  "relogin": "重新登录",
+  "sendQueued": "这条对话正在进行中，你的消息已排进当前这一轮，这一轮结束前它会读到。",
+  "sendFailure": {
+    "transport": {
+      "title": "没送到 {{machine}}",
+      "titleUnknown": "没送到那台机器",
+      "body": "网络中断在半路。它可能已经送到了——再发一次可能变成两条。"
+    },
+    "rejected": {
+      "title": "{{machine}} 拒绝了这条消息",
+      "titleUnknown": "那台机器拒绝了这条消息",
+      "said": "它说：",
+      "body": "它没有说明理由。"
+    },
+    "recheck": "检查后重发",
+    "resend": "重发",
+    "copy": "复制文本",
+    "discard": "丢弃",
+    "notSent": {
+      "titleUnknown": "还没发出去",
+      "body": "连接断了，这条从来没送到那台机器——重发是干净的。"
+    }
+  },
+  "sendPending": {
+    "title": "连上后自动发出",
+    "cancel": "撤销"
+  },
+  "compose": {
+    "readonly": "只读",
+    "waitingFor": "{{machine}} 回来后可以继续发消息",
+    "waitingForUnknown": "跑这条对话的那台机器回来后可以继续发消息"
+  },
+  "historyUnavailableOffline": "账号里没有这条对话的历史，所以它所在的机器不在线时读不到它。",
+  "breadcrumb": {
+    "devices": "设备",
+    "switchMachine": "换机器",
+    "online": "在线",
+    "offline": "离线",
+    "count": "{{count}} 条对话",
+    "back": "返回"
+  },
+  "list": {
+    "running": "运行中",
+    "idle": "空闲",
+    "interrupted": "已中断",
+    "waiting": "正在等待你的输入",
+    "untitled": "{{cwd}} · {{backend}} · {{status}}"
+  },
+  "transcript": {
+    "empty": "还没有消息。",
+    "send": "发送",
+    "assistant": "助手",
+    "tool": "工具",
+    "toolResult": "结果",
+    "error": "错误",
+    "waiting": "正在等待你的输入…",
+    "loadEarlier": "加载更早的",
+    "loadingEarlier": "正在读取更早的…",
+    "readingFromMachine": "正在从这台机器读取这条对话…",
+    "catchUpFailed": "没能从这台机器读到这条对话的内容，它可能还在补齐。"
+  },
+  "decision": {
+    "allow": "允许",
+    "alwaysAllow": "本对话始终允许",
+    "deny": "拒绝",
+    "denyReason": "理由（可选）",
+    "submit": "提交",
+    "skip": "跳过",
+    "alreadyHandled": "该请求已被处理。",
+    "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。",
+    "retry": "重试"
+  },
+  "abort": "停止"
+}

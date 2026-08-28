@@ -9,10 +9,12 @@ import (
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	api "agentre-server/internal/api/device"
-	"agentre-server/internal/pkg/code"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/service/device_svc"
+	api "github.com/agentre-hub/agentre-server/internal/api/device"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 )
 
 type Device struct {
@@ -22,13 +24,9 @@ type Device struct {
 
 func NewDevice() *Device { return &Device{} }
 
-func NewDeviceWithPublicKey(publicKey string) *Device {
-	return NewDeviceWithPublicKeys("legacy", map[string]string{"legacy": publicKey}, 0)
-}
-
 func NewDeviceWithPublicKeys(currentKID string, keys map[string]string, maxTokenLifetimeSeconds int64) *Device {
 	return &Device{publicKeys: &api.PublicKeyResponse{
-		Version: 1, CurrentKID: currentKID, Keys: keys, PublicKey: keys[currentKID],
+		Version: 1, CurrentKID: currentKID, Keys: keys,
 		MaxTokenLifetimeSeconds: maxTokenLifetimeSeconds,
 	}}
 }
@@ -82,8 +80,7 @@ func (d *Device) Pending(c *gin.Context, req *api.DevicePendingRequest) (*api.De
 }
 
 func (d *Device) Approve(c *gin.Context, req *api.DeviceApproveRequest) (*api.DeviceApproveResponse, error) {
-	uid, _ := c.Get("user_id")
-	userID, _ := uid.(int64)
+	userID := ginctx.UserID(c)
 	if userID == 0 {
 		return nil, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
 	}
@@ -117,14 +114,24 @@ const relayTicketTTL = 2 * time.Minute
 
 // RelayTicket 用浏览器登录 session 换取只可连接 relay client 的短效凭据。
 func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.RelayTicketResponse, error) {
-	uid, _ := c.Get("user_id")
-	userID, _ := uid.(int64)
+	ctx := c.Request.Context()
+	userID := ginctx.UserID(c)
 	if userID == 0 || d.signer == nil {
-		return nil, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
+		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
 	}
-	token, _, err := d.signer.Sign(jwt.Claims{UID: userID, Kind: "relay_client"}, relayTicketTTL)
+	token, jti, err := d.signer.Sign(jwt.Claims{UID: userID, Kind: "relay_client"}, relayTicketTTL)
 	if err != nil {
-		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
+		return nil, i18n.NewInternalError(ctx, code.ServerError)
+	}
+	// 把 jti 记到签发它的这次会话名下，登出才能立刻把它拉黑；否则票在手就还能连
+	// /v1/relay/client 读写该账号全部 agentred 的会话，最长 relayTicketTTL。
+	//
+	// 这里 fail-closed：登记不上就等于发一张撤不掉的票，宁可不发。本路由挂在
+	// SessionAuth 之后，Redis 不可用时请求根本走不到这儿，代价只是同一次抖动里
+	// 换票失败——比留下一张不可撤销的票便宜。
+	sid, _ := c.Cookie(auth_svc.Default().CookieName())
+	if err := auth_svc.Default().TrackRelayTicket(ctx, sid, jti, relayTicketTTL); err != nil {
+		return nil, i18n.NewInternalError(ctx, code.ServerError)
 	}
 	return &api.RelayTicketResponse{AccessToken: token, ExpiresIn: int(relayTicketTTL / time.Second)}, nil
 }
@@ -135,10 +142,8 @@ func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.Re
 // （device_id 为 0）只能撤销属于自己账号的设备——凭据所属关系以
 // ListUserDevices 为准，防止跨账号撤销。
 func (d *Device) Revoke(c *gin.Context, req *api.TokenRevokeRequest) (*api.TokenRevokeResponse, error) {
-	uid, _ := c.Get("user_id")
-	did, _ := c.Get("device_id")
-	userID, _ := uid.(int64)
-	callerID, _ := did.(int64)
+	userID := ginctx.UserID(c)
+	callerID := ginctx.DeviceID(c)
 	target := req.DeviceID
 	if target == 0 {
 		target = callerID
@@ -173,10 +178,8 @@ func (d *Device) Revoke(c *gin.Context, req *api.TokenRevokeRequest) (*api.Token
 }
 
 func (d *Device) List(c *gin.Context, _ *api.ListDevicesRequest) (*api.ListDevicesResponse, error) {
-	uid, _ := c.Get("user_id")
-	did, _ := c.Get("device_id")
-	userID, _ := uid.(int64)
-	deviceID, _ := did.(int64)
+	userID := ginctx.UserID(c)
+	deviceID := ginctx.DeviceID(c)
 
 	items, err := device_svc.Default().ListUserDevices(c.Request.Context(), userID, deviceID)
 	if err != nil {
@@ -189,9 +192,7 @@ func (d *Device) List(c *gin.Context, _ *api.ListDevicesRequest) (*api.ListDevic
 // 已吊销设备自身拉取时被既有 DeviceJWT 中间件的黑名单校验拒绝在前面，
 // 这里只需从 JWT 里取账号并转发给 service。
 func (d *Device) Revocations(c *gin.Context, _ *api.RevocationsRequest) (*api.RevocationsResponse, error) {
-	uid, _ := c.Get("user_id")
-	userID, _ := uid.(int64)
-	jtis, err := device_svc.Default().ListRevokedJTI(c.Request.Context(), userID)
+	jtis, err := device_svc.Default().ListRevokedJTI(c.Request.Context(), ginctx.UserID(c))
 	if err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}

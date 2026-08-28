@@ -1,0 +1,37 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/sync/push",
+    "body": {
+      "items": [
+        {
+          "kind": "chat_session",
+          "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+          "base_version": 0,
+          "updated_at": 1700000000000,
+          "payload": {
+            "title": "某次会话"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "msg": "success",
+      "data": {
+        "results": [
+          {
+            "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+            "kind": "chat_session",
+            "version": 0,
+            "status": "rejected",
+            "reason": "kind_invalid"
+          }
+        ]
+      }
+    }
+  }
+}

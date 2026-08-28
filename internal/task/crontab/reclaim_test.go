@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"agentre-server/internal/service/sync_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
 )
 
 // stubSyncSvc 只关心 ReclaimExpired 被调了几次、失败时怎么传出去；其余方法凑齐
@@ -28,6 +28,9 @@ func (s *stubSyncSvc) GetAvatar(context.Context, int64, string) (*sync_svc.Avata
 	return &sync_svc.AvatarOutput{}, nil
 }
 func (s *stubSyncSvc) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
+func (s *stubSyncSvc) PurgeDeviceSyncObjects(context.Context, int64, string) error {
+	return nil
+}
 func (s *stubSyncSvc) ReclaimExpired(context.Context) (*sync_svc.ReclaimOutput, error) {
 	s.reclaims++
 	if s.err != nil {

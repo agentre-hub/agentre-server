@@ -2,8 +2,9 @@ import { Link, useLocation } from "react-router-dom";
 import { Check, Laptop } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
+import PageTitle from "@/components/PageTitle";
 import { deviceKindLabel } from "@/lib/deviceKind";
 
 /**
@@ -45,9 +46,7 @@ export default function DeviceSuccess() {
           <Check className="size-6 text-status-running" aria-hidden="true" />
         </div>
         <div className="space-y-2">
-          <h1 className="text-2xl font-semibold text-foreground">
-            {t("device.success.title")}
-          </h1>
+          <PageTitle>{t("device.success.title")}</PageTitle>
           <p className="text-sm text-muted-foreground">
             {t("device.success.body")}
           </p>

@@ -32,3 +32,34 @@ type MeResponse struct {
 	CSRFToken   string `json:"csrf_token,omitempty"`
 	DeviceID    int64  `json:"device_id,omitempty"`
 }
+
+// ListSessionsRequest 读出当前账号的全部登录会话。
+type ListSessionsRequest struct {
+	mux.Meta `path:"/v1/auth/sessions" method:"GET"`
+}
+type ListSessionsResponse struct {
+	Sessions []SessionItem `json:"sessions"`
+}
+
+// SessionItem 是清单里的一条登录会话。
+//
+// 刻意不带 sid：sid 就是 cookie 里那枚凭据本身，发给页面等于让一条 XSS 顺走该账号
+// 全部登录。清单上唯一需要区分的是「哪一条是当前」，Current 已经说清楚了。
+// UserAgent 是原文，前端也原样展示——任何解析都是猜测，猜错会让用户撤销掉自己
+// 正在用的那一条。
+type SessionItem struct {
+	UserAgent    string `json:"user_agent"`
+	IP           string `json:"ip"`
+	CreatedAt    int64  `json:"created_at"`
+	LastActiveAt int64  `json:"last_active_at"`
+	Current      bool   `json:"current"`
+}
+
+// RevokeOtherSessionsRequest 一次结束除当前会话外的全部登录。
+type RevokeOtherSessionsRequest struct {
+	mux.Meta `path:"/v1/auth/sessions/revoke-others" method:"POST"`
+}
+type RevokeOtherSessionsResponse struct {
+	// Revoked 是实际撤销的条数：尽力删除，单条失败不影响其余，用户据此知道做成了几条。
+	Revoked int `json:"revoked"`
+}

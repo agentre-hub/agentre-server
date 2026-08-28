@@ -1,7 +1,6 @@
 import { api } from "@/lib/api";
 
 const CLIENT_ID_KEY = "agentre.browserClientId";
-const LEGACY_FINGERPRINT_KEY = "agentre.deviceFingerprint";
 
 function createClientId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -20,12 +19,7 @@ export function browserClientId(): string {
 
 export function storedBrowserClientId(): string | null {
   const current = localStorage.getItem(CLIENT_ID_KEY);
-  if (current) return current;
-  const legacy = localStorage.getItem(LEGACY_FINGERPRINT_KEY);
-  if (!legacy) return null;
-  localStorage.setItem(CLIENT_ID_KEY, legacy);
-  localStorage.removeItem(LEGACY_FINGERPRINT_KEY);
-  return legacy;
+  return current;
 }
 
 function browserName(): string {
@@ -41,7 +35,7 @@ function platformName(): string {
   const ua = navigator.userAgent;
   if (/Android/.test(ua)) return "Android";
   if (/iPhone|iPad|iPod/.test(ua)) return "iOS";
-  const platform = navigator.platform ?? "";
+  const platform = navigator.platform;
   if (/Mac/.test(platform)) return "macOS";
   if (/Win/.test(platform)) return "Windows";
   if (/Linux/.test(platform)) return "Linux";

@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { cn } from "@agentre-hub/agentre-ui";
 
 /**
  * 控制台导航项（Pencil 正式组件 ZC7pI NavItem）。
@@ -23,27 +23,27 @@ export function ConsoleNavItem({
   to: string;
   label: string;
   Icon: LucideIcon;
-  /** 对话关注数：>0 才渲染琥珀徽标。 */
+  /** 账号里已保存的对话数：>0 才渲染琥珀徽标。 */
   badge?: number | null;
   /** 设备在线/全部等 mono 元信息。 */
   meta?: string | null;
-  /** 审计蓝点。 */
+  /** 未读/告警圆点，仅在有真实数据时传入。 */
   dot?: boolean;
   onClick?: () => void;
 }) {
   return (
     <NavLink to={to} onClick={onClick} className={navItemClass}>
       <Icon className="size-[17px] shrink-0" aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
+      <span className="min-w-0 flex-1 truncate text-aux font-medium">
         {label}
       </span>
       {typeof badge === "number" && badge > 0 ? (
-        <span className="flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-status-waiting px-1.5 text-[10px] font-semibold text-status-waiting-foreground">
+        <span className="flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-status-waiting px-1.5 text-3xs font-semibold text-status-waiting-foreground">
           {badge}
         </span>
       ) : null}
       {meta ? (
-        <span className="shrink-0 font-mono text-[10px] font-semibold text-subtle-foreground">
+        <span className="shrink-0 font-mono text-3xs font-semibold text-muted-foreground">
           {meta}
         </span>
       ) : null}

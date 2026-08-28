@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { KNOWN_ERRORS } from "@/pages/Login";
-import en from "@/i18n/locales/en.json";
-import zhCN from "@/i18n/locales/zh-CN.json";
+import { KNOWN_ERRORS, PASSKEY_ERRORS } from "@/pages/Login";
+import en from "@/i18n/locales/en";
+import zhCN from "@/i18n/locales/zh-CN";
 
 /**
  * 登录失败码契约守卫。
@@ -26,6 +26,7 @@ const REPO_ROOT = path.resolve(
   "../../..",
 );
 const AUTH_GO = path.join(REPO_ROOT, "internal/controller/auth_ctr/auth.go");
+const LOGIN_TSX = path.join(REPO_ROOT, "frontend/src/pages/Login.tsx");
 
 const go = fs.readFileSync(AUTH_GO, "utf8");
 
@@ -68,5 +69,33 @@ describe("登录失败码契约（前端 ↔ auth_ctr）", () => {
     const key = `login.errors.${name}`;
     expect(lookup(en, key), `en.json 缺 ${key}`).toBeTruthy();
     expect(lookup(zhCN, key), `zh-CN.json 缺 ${key}`).toBeTruthy();
+  });
+});
+
+/**
+ * 通行密钥失败码是**前端自己**造的：这条路上没有后端重定向，err 由 Login.tsx
+ * 在 catch 里按信封业务码换出来。所以 KNOWN_ERRORS 那道守卫（对回 auth_ctr）
+ * 覆盖不到它们，而漏一条文案的后果一模一样——ERR_CODE_SHAPE 认得出形状，
+ * 兜底分支就把 `passkey_failed` 这串标识符原样印进失败卡给用户看。
+ */
+describe("通行密钥失败码契约（Login.tsx ↔ locale）", () => {
+  it.each(PASSKEY_ERRORS)("%s 在两个 locale 里都有文案", (name) => {
+    const key = `login.errors.${name}`;
+    expect(lookup(en, key), `en.json 缺 ${key}`).toBeTruthy();
+    expect(lookup(zhCN, key), `zh-CN.json 缺 ${key}`).toBeTruthy();
+  });
+
+  it("Login.tsx 里出现的每个 passkey_ 码都收录在 PASSKEY_ERRORS 里", () => {
+    const login = fs.readFileSync(LOGIN_TSX, "utf8");
+    // 只认裸字面量：`t("login.errors.passkey_cancelled")` 那种带前缀的字符串
+    // 不会被这条正则命中，它取的是文案键而不是码本身。
+    const used = [...login.matchAll(/"(passkey_[a-z0-9_]+)"/g)].map(
+      (m) => m[1],
+    );
+    expect(
+      [...new Set(used)].sort(),
+      "Login.tsx 里新加了一个 passkey_ 失败码却没登记进 PASSKEY_ERRORS：" +
+        "它成形状、过得了 ERR_CODE_SHAPE，于是被原样印给用户当文案",
+    ).toEqual([...PASSKEY_ERRORS].sort());
   });
 });

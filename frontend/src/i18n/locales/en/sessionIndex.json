@@ -1,0 +1,55 @@
+{
+  "filter": {
+    "title": "Filter",
+    "all": "All",
+    "running": "Running",
+    "waiting": "Waiting for you",
+    "empty": "No conversations match this filter.",
+    "unread": "Unread",
+    "emptyWithTotal": "Nothing in this filter. {{count}} conversations in your account.",
+    "seeAll": "See all {{count}}"
+  },
+  "loadMore": {
+    "label": "Load more",
+    "loading": "Loading…",
+    "retry": "Retry",
+    "failed": "Couldn't load that page."
+  },
+  "search": {
+    "empty": "No conversations match your search.",
+    "clear": "Clear search"
+  },
+  "group": {
+    "unassignedProject": "Quick chats",
+    "unnamedAgent": "Unnamed"
+  },
+  "machine": {
+    "offline": "Offline",
+    "empty": "No conversations on this machine yet.",
+    "connecting": "Connecting",
+    "unreachable": "Unreachable",
+    "offlineSince": "Offline · {{time}}"
+  },
+  "row": {
+    "save": "Save",
+    "delete": "Delete",
+    "menu": "Conversation actions"
+  },
+  "save": {
+    "title": "Save this conversation to your account?",
+    "body": "Once saved it shows up in your conversation list, and you can still read it after this machine is shut down — or even removed.",
+    "point1": "Its title and full record are stored on AgentRe's server",
+    "point2": "Conversations you never save are not uploaded at all",
+    "point3": "You can delete it at any time — the server's copy and the executing machine's copy go together",
+    "confirm": "Save"
+  },
+  "delete": {
+    "title": "Delete this conversation?",
+    "online": "It is removed from your account and also deleted from “{{machine}}”. This cannot be undone.",
+    "onlineDesktop": "It is removed from your account and also deleted from “{{machine}}”. That machine runs the Agentre app: what gets deleted there is the conversation itself on that computer, not a record of a run. This cannot be undone.",
+    "offline": "It is removed from your account right away. “{{machine}}” is offline, so its copy is cleared the next time it comes online. This cannot be undone.",
+    "offlineDesktop": "It is removed from your account right away. “{{machine}}” is offline, so the next time it comes online it deletes the conversation itself on that computer, not a record of a run. This cannot be undone.",
+    "unknownPeer": "It is removed from your account right away. The machine that runs it clears its own copy the next time it connects. This cannot be undone.",
+    "confirm": "Delete"
+  }
+}

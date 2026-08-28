@@ -1,0 +1,127 @@
+{
+  "pageTitle": "组织",
+  "index": {
+    "searchPlaceholder": "搜索 Agent",
+    "searchAria": "搜索 Agent",
+    "filters": {
+      "entry": "筛选",
+      "entryAria": "筛选 Agent",
+      "all": "全部",
+      "backendLabel": "后端：{{name}}",
+      "backendAria": "按后端筛选",
+      "reportsToLabel": "汇报给：{{name}}",
+      "reportsToAria": "按汇报对象筛选",
+      "clear": "清除{{label}}",
+      "clearAll": "清除筛选"
+    },
+    "noMatch": {
+      "title": "未找到 Agent",
+      "conditions": "命中条件：{{conditions}}"
+    },
+    "emptyDepartments": {
+      "title": "还没有任何部门",
+      "description": "新建一个部门，或者直接添加 Agent 开始。",
+      "newDepartment": "新建部门",
+      "addAgent": "新建 Agent"
+    },
+    "newDepartment": "新建部门",
+    "newAgent": "新建 Agent"
+  },
+  "detail": {
+    "columns": {
+      "identity": "身份",
+      "behavior": "行为"
+    },
+    "fields": {
+      "name": "名称",
+      "description": "简介",
+      "avatarColor": "头像配色",
+      "accentColor": "强调色",
+      "parentDepartment": "上级部门",
+      "leadAgent": "负责人",
+      "none": "无（顶层）",
+      "avatarIconPick": "图标",
+      "avatarIconNone": "不用图标",
+      "avatarIconCustom": "自定义图标：{{key}}"
+    },
+    "systemPrompt": "系统提示词",
+    "systemPromptPlaceholder": "每行一条指令",
+    "execTargets": {
+      "title": "执行目标",
+      "empty": "还没有执行目标——添加一档才能派发给这个 Agent。",
+      "addTarget": "添加执行目标",
+      "noBackendsLeft": "可用的后端都已经配给这个 Agent 了。",
+      "skills": {
+        "empty": "这一档还没有授权任何技能包。",
+        "remove": "撤销 {{id}}",
+        "offlineNote": "这一档的机器不在线，暂时列不出可添加的包；已授权的仍可移除。",
+        "loading": "正在问这台机器装了些什么……",
+        "unavailable": "这台机器此刻列不出技能包——CLI 找不到，或者枚举失败了。已授权的仍可移除。",
+        "unsupported": "这种后端没有技能包这一说——没有可列的东西，再问一次也一样。",
+        "unreachable": "联系不上这台机器——列不出可添加的包。已授权的仍可移除。",
+        "catalogEmpty": "这台机器上还没有装任何技能包。",
+        "retry": "再问一次",
+        "needInstall": "得先装到那台机器上。",
+        "group": {
+          "inherited": "全局已开启——除非在这里覆盖，否则继承",
+          "enableable": "已安装，全局未开启",
+          "installable": "这台机器上没装"
+        },
+        "state": {
+          "inherit": "继承",
+          "on": "开",
+          "off": "关"
+        },
+        "stateFor": "{{name}} 的技能授权",
+        "setInherit": "{{name}} 继承全局设置",
+        "setOn": "强制开启 {{name}}",
+        "setOff": "强制关闭 {{name}}"
+      },
+      "moved": "已移到第 {{position}} 位，共 {{total}} 位。"
+    },
+    "delete": {
+      "agentTitle": "删除 {{name}}？",
+      "departmentTitle": "删除 {{name}}？",
+      "description": "此操作不可撤销。",
+      "confirm": "删除",
+      "cancel": "取消"
+    },
+    "actions": {
+      "delete": "删除",
+      "back": "返回",
+      "close": "关闭"
+    },
+    "header": {
+      "more": "更多操作",
+      "leadBadge": "部门长",
+      "systemBadge": "系统 Agent",
+      "reportsToParent": "汇报给 {{name}}",
+      "memberCount": "{{n}} 名成员",
+      "saving": "保存中…",
+      "savedJustNow": "已保存 · 刚刚",
+      "savedAt": "已保存 · {{time}}",
+      "saveFailed": "保存失败",
+      "retry": "重试"
+    },
+    "prompt": {
+      "charCount": "· {{n}} 字",
+      "expand": "展开编辑",
+      "dialogTitle": "系统提示词 — {{name}}",
+      "save": "保存",
+      "cancel": "取消"
+    },
+    "empty": {
+      "title": "还没有选中任何一行"
+    }
+  },
+  "create": {
+    "departmentTitle": "新建部门",
+    "agentTitle": "新建 Agent",
+    "department": "部门",
+    "submit": "创建",
+    "cancel": "取消"
+  },
+  "errors": {
+    "generic": "出了点问题，请重试。"
+  }
+}

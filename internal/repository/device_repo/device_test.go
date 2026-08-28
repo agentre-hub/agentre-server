@@ -7,8 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	"agentre-server/internal/model/entity/device_entity"
-	hubtest "agentre-server/internal/testutils"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // Upsert 必须是一条语句。先 SELECT 再 INSERT/UPDATE 的写法在并发下会双双走到

@@ -1,0 +1,12 @@
+{
+  "productSub": "控制台",
+  "topBar": {
+    "fresh": "桌面端已连接"
+  },
+  "userMenu": {
+    "trigger": "账号菜单",
+    "account": "账号与安全",
+    "settings": "设置",
+    "signOut": "登出"
+  }
+}

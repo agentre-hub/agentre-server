@@ -6,7 +6,8 @@ import (
 	"github.com/cago-frame/cago/database/db"
 	"gorm.io/gorm/clause"
 
-	"agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
 //go:generate mockgen -source avatar.go -destination mock_sync_repo/mock_avatar.go
@@ -30,15 +31,8 @@ func NewSyncAvatar() SyncAvatarRepo       { return &avatarRepo{} }
 type avatarRepo struct{}
 
 func (r *avatarRepo) Find(ctx context.Context, userID int64, contentHash string) (*sync_entity.SyncAvatar, error) {
-	ret := &sync_entity.SyncAvatar{}
-	err := db.Ctx(ctx).Where("user_id=? AND content_hash=?", userID, contentHash).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[sync_entity.SyncAvatar](
+		db.Ctx(ctx).Where("user_id=? AND content_hash=?", userID, contentHash))
 }
 
 // Save 走 DO NOTHING：主键就是内容哈希，同一份内容重复上传没有任何要更新的东西，
@@ -58,6 +52,11 @@ func (r *avatarRepo) Save(ctx context.Context, a *sync_entity.SyncAvatar) error 
 // 只有 kind='agent' 且 deleted_at=0 的行算引用：墓碑不是引用（它的正文本来就是空
 // 对象），别的类型压根不带头像。
 //
+// 比的是 o.avatar_hash 这一列而不是在语句里现算 JSON：函数谓词定位不了索引，那样
+// 每个候选头像行都要把该账号的 sync_objects 整份读上来逐行解一次。avatar_hash 是
+// payload 上的生成列（migrations/baseline_workspace_sync.go），四个条件因此一起落在
+// idx_sync_objects_avatar (user_id, kind, deleted_at, avatar_hash) 上。
+//
 // createtime < cutoff 是安全垫：cutoff 取的是墓碑窗口，一台离线设备最多可以在窗口
 // 内才上行（R6a），正文先到、引用它的 Agent 后到这个次序因此是允许的，窗口内的
 // 头像一律留着。
@@ -69,10 +68,23 @@ WHERE a.createtime < ?
     WHERE o.user_id = a.user_id
       AND o.kind = 'agent'
       AND o.deleted_at = 0
-	      AND JSON_UNQUOTE(JSON_EXTRACT(o.payload, '$.avatar_hash')) = a.content_hash
-  )`
+      AND o.avatar_hash = a.content_hash
+  )
+LIMIT ?`
 
+// DeleteUnreferencedBefore 分批回收。这张表每行带一份 mediumtext 头像,一条不分批
+// 的 DELETE 既把 next-key 锁铺满扫过的范围,又要把删掉的正文全部写进 undo/binlog。
+// 收敛条件与 DeleteTombstonesBefore 相同:这一批没删满就说明够到底了。
 func (r *avatarRepo) DeleteUnreferencedBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res := db.Ctx(ctx).Exec(deleteUnreferencedAvatarsSQL, cutoff)
-	return res.RowsAffected, res.Error
+	var total int64
+	for {
+		res := db.Ctx(ctx).Exec(deleteUnreferencedAvatarsSQL, cutoff, cleanupBatchSize)
+		if res.Error != nil {
+			return total, res.Error
+		}
+		total += res.RowsAffected
+		if res.RowsAffected < cleanupBatchSize {
+			return total, nil
+		}
+	}
 }

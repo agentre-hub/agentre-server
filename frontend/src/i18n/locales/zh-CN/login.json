@@ -1,0 +1,24 @@
+{
+  "title": "登录 AgentRe",
+  "github": "使用 GitHub 登录",
+  "or": "或",
+  "passkey": "用通行密钥登录",
+  "userCodeLabel": "登录后继续授权设备",
+  "failureTitle": "登录未完成",
+  "retryLogin": "重新登录",
+  "footer": "继续即表示你同意 AgentRe 的服务条款与隐私政策。",
+  "errors": {
+    "oauth_state_invalid": "OAuth state 已过期，请重新发起登录。",
+    "oauth_exchange_failed": "GitHub OAuth 兑换失败，请稍后重试或检查 GitHub OAuth App 配置。",
+    "oauth_profile_failed": "无法获取 GitHub 用户信息。",
+    "github_email_missing": "请在 GitHub 设置中将主邮箱设为已验证后重试。",
+    "access_denied": "你取消了 GitHub 授权。",
+    "user_banned": "该账号已被封禁，如有疑问请联系管理员。",
+    "passkey_cancelled": "验证已取消。可以再试一次，或改用 GitHub 登录。",
+    "passkey_failed": "通行密钥登录没有成功，请再试一次，或改用 GitHub 登录。",
+    "passkey_challenge_invalid": "这次验证已经过期，请重新点一次「用通行密钥登录」。",
+    "passkey_origin_not_allowed": "当前站点不在通行密钥的允许列表里，请联系管理员检查服务端配置。",
+    "passkey_credential_unknown": "这把通行密钥不属于任何可用账号，可能已经被删掉了。请改用 GitHub 登录。",
+    "passkey_counter_rollback": "这把通行密钥的安全计数异常，已拒绝本次登录。请改用 GitHub 登录并删掉它。"
+  }
+}

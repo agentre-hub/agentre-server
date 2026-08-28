@@ -1,0 +1,85 @@
+{
+  "currentTarget": "Currently running on {{device}}",
+  "noAvailableTarget": "No available execution target",
+  "thisDevice": "This device",
+  "noDevice": "No device set",
+  "offline": "Offline",
+  "unpaired": "Not paired",
+  "empty": "No agents yet.",
+  "stats": {
+    "range": {
+      "label": "Stats range",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "all": "All time"
+    },
+    "unit": {
+      "conversations": "{{count}} conversations"
+    },
+    "tiles": {
+      "conversations": "Conversations",
+      "conversationsTotal": "{{count}} total",
+      "conversationsNone": "No saved conversations yet",
+      "streak": "Current streak",
+      "streakUnit": "days",
+      "streakLongest": "Longest {{count}} days",
+      "activeDays": "Active days",
+      "activeDaysUnit": "/ {{count}} days",
+      "activeDaysShare": "{{percent}}% of days",
+      "online": "Devices online",
+      "onlineOffline": "{{device}} is offline",
+      "onlineNone": "No devices registered yet",
+      "enableToSee": "Visible once activity stats are on"
+    },
+    "scopeNotice": {
+      "text": "These stats only cover conversations you saved to your account, not all activity.",
+      "action": "Turn on full activity stats →"
+    },
+    "newAccount": {
+      "text": "Register a device first. Stats need your machines to start running conversations.",
+      "action": "Go to devices"
+    },
+    "error": {
+      "alert": "Could not load your stats. Please try again.",
+      "retry": "Retry",
+      "title": "Stats are unavailable right now",
+      "body": "Device status and your conversations are not affected.",
+      "action": "Go to conversations →"
+    },
+    "heatmap": {
+      "title": "Activity heatmap",
+      "settings": "Stats settings →",
+      "less": "Less",
+      "more": "More",
+      "mobileWeeks": "Last 19 weeks",
+      "mobileHint": "A longer history is on the desktop app.",
+      "greyNote": "This grey means there was no activity on that day — nothing is broken.",
+      "busiest": "Busiest day",
+      "avg": "Average per active day",
+      "avgSub": "Counted over days with activity",
+      "weekday": {
+        "mon": "Mon",
+        "wed": "Wed",
+        "fri": "Fri"
+      },
+      "timeZone": "Days are cut in the server's timezone, {{zone}}"
+    },
+    "agents": {
+      "title": "Agent usage",
+      "all": "All agents →",
+      "empty": "No Agents yet. They are created on the desktop app and sync here once a device is registered."
+    },
+    "backends": {
+      "title": "Backends & models",
+      "unreported": "Not reported",
+      "models": "Top models",
+      "followsAgent": "Follows the agent binding",
+      "empty": "No conversations have run yet."
+    },
+    "projects": {
+      "title": "Projects",
+      "unassigned": "No project",
+      "empty": "No projects yet."
+    }
+  }
+}

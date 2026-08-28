@@ -17,20 +17,22 @@ import (
 	"github.com/cago-frame/cago/server/cron"
 	"github.com/cago-frame/cago/server/mux"
 
-	"agentre-server/internal/api"
-	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/buildinfo"
-	"agentre-server/internal/repository/device_flow_repo"
-	"agentre-server/internal/repository/device_repo"
-	"agentre-server/internal/repository/device_token_repo"
-	"agentre-server/internal/repository/exec_order_repo"
-	"agentre-server/internal/repository/follow_repo"
-	"agentre-server/internal/repository/sync_repo"
-	"agentre-server/internal/repository/user_identity_repo"
-	"agentre-server/internal/repository/user_repo"
-	"agentre-server/internal/task"
-	"agentre-server/internal/web"
-	"agentre-server/migrations"
+	"github.com/agentre-hub/agentre-server/internal/api"
+	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/buildinfo"
+	"github.com/agentre-hub/agentre-server/internal/repository/activity_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/webauthn_credential_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/engine_svc"
+	"github.com/agentre-hub/agentre-server/internal/task"
+	"github.com/agentre-hub/agentre-server/internal/web"
+	"github.com/agentre-hub/agentre-server/migrations"
 )
 
 func loadConfig(args []string) (*configs.Config, error) {
@@ -71,8 +73,14 @@ func main() {
 	sync_repo.RegisterSyncState(sync_repo.NewSyncState())
 	sync_repo.RegisterSyncAvatar(sync_repo.NewSyncAvatar())
 	sync_repo.RegisterSyncLocalPath(sync_repo.NewSyncLocalPath())
-	follow_repo.RegisterFollow(follow_repo.NewFollow())
-	exec_order_repo.RegisterExecOrder(exec_order_repo.NewExecOrder())
+	agent_session_repo.RegisterSave(agent_session_repo.NewSave())
+	agent_session_repo.RegisterSummary(agent_session_repo.NewSummary())
+	agent_session_repo.RegisterJournalFrame(agent_session_repo.NewJournalFrame())
+	agent_session_repo.RegisterDeleteTodo(agent_session_repo.NewDeleteTodo())
+	webauthn_credential_repo.RegisterWebAuthnCredential(webauthn_credential_repo.NewWebAuthnCredential())
+	activity_repo.RegisterDaily(activity_repo.NewDaily())
+	user_repo.RegisterSettings(user_repo.NewSettings())
+	engine_svc.SetDefault(engine_svc.New())
 
 	deps := &api.RouterDeps{Cfg: serverCfg, Signer: signer}
 
@@ -107,6 +115,17 @@ func main() {
 		// metric 会自行挂上 gin 中间件并暴露 GET /metrics（Prometheus 抓取端点）。
 		Registry(cago.FuncComponent(metric.Metrics)).
 		Registry(component.Database()).
+		// 连接池必须紧跟在 Database 之后:cago 的 db 组件只认 driver/dsn/prefix/
+		// debug/prepareStmt,连接数与连接寿命它一概不设,不补这一步就一直是
+		// database/sql 的默认值(空闲上限 2、连接数无上限、连接永不过期)。
+		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
+			sqlDB, err := db.Default().DB()
+			if err != nil {
+				return fmt.Errorf("resolve sql db for pool settings: %w", err)
+			}
+			bootstrap.ApplyDBPool(sqlDB, serverCfg.DBPool)
+			return nil
+		})).
 		Registry(component.Redis()).
 		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
 			bootstrap.RegisterDefaults(serverCfg, signer)
@@ -117,6 +136,11 @@ func main() {
 			return migrations.RunMigrations(db.Default())
 		})).
 		Registry(cago.FuncComponent(task.Task)).
+		// 常驻镜像自己不在 Start 里做事（那份常驻在 bootstrap.RegisterDefaults 里
+		// 就建好了），它在这里只为拿到 CloseHandle：进程退出时收工，手里每一份
+		// 机器租约当场让出，接手的副本不必等一整个 TTL。注册在 mux 之前，于是
+		// 关闭时排在它之后——先不再收请求，再停镜像。
+		Registry(task.MirrorResident()).
 		Registry(cago.FuncComponent(web.MountSPA)).
 		RegistryCancel(mux.HTTP(deps.Router)).
 		Start()

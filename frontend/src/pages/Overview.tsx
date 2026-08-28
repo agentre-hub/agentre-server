@@ -1,55 +1,64 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
-  AlertTriangle,
-  ArrowRight,
+  BarChart3,
   Bot,
-  ChevronDown,
-  ChevronUp,
-  Clock3,
-  Gauge,
+  CalendarDays,
+  Flame,
+  FolderTree,
+  MessagesSquare,
   Monitor,
-  ScrollText,
-  ShieldCheck,
 } from "lucide-react";
 
 import { EmptyState, Metric } from "@/components/console";
-import { Alert } from "@/components/ui/alert";
+import {
+  Alert,
+  Button,
+  cn,
+  orgBackendTypeLabel,
+} from "@agentre-hub/agentre-ui";
 import AppShell from "@/components/AppShell";
-import { Button } from "@/components/ui/button";
-import { sessionTitle } from "@/components/session/SessionList";
-import type {
-  PendingAskQuestionShape,
-  PendingToolPermissionShape,
-} from "@/components/session/DecisionPanel";
-import { useRelayMachine } from "@/hooks/use-relay";
-import { api, ApiError } from "@/lib/api";
 import {
-  callerClientId,
-  isMovableTier,
-  reorderTargets,
-  saveExecTargetOrder,
-} from "@/lib/execOrder";
-import type { RelayClient } from "@/lib/relayClient";
-import { formatRelativeTime } from "@/lib/sessionView";
-import { cn } from "@/lib/utils";
+  Heatmap,
+  HeatmapLegend,
+  HEATMAP_DESKTOP_WEEKS,
+  HEATMAP_MOBILE_WEEKS,
+} from "@/components/stats/Heatmap";
+import { useIsMobile } from "@/components/use-is-mobile";
+import { useAccountChannel } from "@/hooks/use-account-channel";
+import { useAliveEffect } from "@/hooks/use-api-query";
 import {
-  MethodSessionList,
-  MethodSessionPendingWaiters,
-  MethodSubmitToolPermission,
-  decodeSessionListResult,
-  decodeSessionPendingWaitersResult,
-  type SessionSummary,
-} from "@/lib/wire";
+  AccountChannelDevicePresence,
+  AccountChannelMirrorChanged,
+  AccountChannelSyncVersion,
+} from "@/lib/accountChannel";
+import { api } from "@/lib/api";
+import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { loadErrorText } from "@/lib/loadError";
+import { fetchProjects, type ProjectNode } from "@/lib/projects";
+import {
+  fetchStatsOverview,
+  STATS_RANGES,
+  type StatsOverview,
+  type StatsRange,
+} from "@/lib/stats";
 
-// 与 workspace_svc.AvailabilityXxx 的字符串常量一一对应（internal/service/workspace_svc/workspace.go）。
-type Availability = "available" | "offline" | "unpaired" | "skipped_for_web";
+/** 设置页的隐私页签：热力卡头与 scope 说明条都指到这里。 */
+const PRIVACY_SETTINGS_PATH = "/settings?tab=privacy";
 
+// 与 workspace_svc.AvailabilityXxx 的字符串常量一一对应。
+type Availability = "available" | "offline" | "unpaired" | "no_device";
+
+/**
+ * `/v1/workspace/agents` 的一档执行目标。
+ *
+ * 总览只读**当前落到哪台**这一件事：逐档排序留在组织页（`OrgExecTargetSection`），
+ * 一份能力两个入口只会各自漂。R19：path / cli_path / env_json 在这一层就没有对应
+ * 字段，所以即使响应里混进来也无处渲染。
+ */
 interface ExecTargetItem {
   rank: number;
-  /** 这一档跨机稳定且逐档唯一的标识，排序用它表达（rank 是位置性的、device_id 不唯一）。 */
-  backend_sync_id?: string;
   is_local_reference: boolean;
   device_id?: number;
   device_name?: string;
@@ -65,66 +74,6 @@ interface AgentItem {
   department_name?: string;
   exec_targets: ExecTargetItem[];
   has_available_target: boolean;
-}
-
-interface DeviceItem {
-  id: number;
-  name: string;
-  kind: string;
-  fingerprint: string;
-  online: boolean;
-}
-
-interface FollowItem {
-  device_fingerprint: string;
-  session_id: string;
-  invalid: boolean;
-}
-
-/** 一条在等待用户输入的关注会话（等待数统计与操作条卡的共同来源）。 */
-interface WaitingSessionInfo {
-  fingerprint: string;
-  session: SessionSummary;
-}
-
-/** 中继 pendingWaiters 解析出的待决策（动作按钮据此渲染，不伪造）。 */
-interface WaiterData {
-  toolPermissions: PendingToolPermissionShape[];
-  askUserQuestions: PendingAskQuestionShape[];
-}
-
-/** 操作条里的一张卡：能链接到详情页、且 waiters 已取到的等待会话。 */
-interface ActionCard {
-  key: string;
-  fingerprint: string;
-  sessionId: number;
-  origin?: string;
-  title: string;
-  cwd?: string;
-  agentName: string;
-  waitedAt?: number;
-  waiters: WaiterData;
-  detailPath: string;
-}
-
-function loadErrorText(e: unknown, t: (key: string) => string): string {
-  return e instanceof ApiError ? e.message : t("overview.loadError");
-}
-
-/** 无数据源区块的诚实空态：不编数字，只给一个占位符。 */
-const NO_DATA = "—";
-
-/** 等待时长（分钟）。没有 updatedAt 时返回 0，调用方据此隐藏。 */
-function waitedMinutes(updatedAt: number | undefined): number {
-  if (!updatedAt) return 0;
-  return Math.max(1, Math.round((Date.now() - updatedAt) / 60000));
-}
-
-/** waiters 的键：会话 id 是 daemon 局部计数，两台 agentred 可以各自有一条同号
- *  会话 —— 只按 sessionId 记会把一台机器的待决策盖到另一台机器同号会话的卡上，
- *  Allow/Deny 提交到错机器。键必须带设备指纹。 */
-function waiterKey(fingerprint: string, sessionId: number): string {
-  return `${fingerprint}:${sessionId}`;
 }
 
 // ── TopBar 的 Fresh 指示 ────────────────────────────────────────────────
@@ -145,828 +94,868 @@ function Fresh({ connected }: { connected: boolean }) {
   );
 }
 
-// ── 琥珀色「等你处理」操作条 ────────────────────────────────────────────
-function ActionStrip({
-  cards,
-  onAllow,
-  onDeny,
+// ── 顶栏右侧的范围分段控件 ───────────────────────────────────────────────
+// 只管统计区：热力图始终是一年，不跟着变（口径说明板「范围控件」）。
+function RangeSwitch({
+  value,
+  onChange,
 }: {
-  cards: ActionCard[];
-  onAllow: (card: ActionCard) => void;
-  onDeny: (card: ActionCard) => void;
+  value: StatsRange;
+  onChange: (next: StatsRange) => void;
 }) {
-  const { t, i18n } = useTranslation();
-  if (cards.length === 0) return null;
-
-  const longest = Math.max(...cards.map((c) => waitedMinutes(c.waitedAt)), 0);
-
+  const { t } = useTranslation();
   return (
-    <div className="flex flex-col gap-[11px] rounded-lg border border-status-waiting/40 bg-status-waiting-bg p-3.5">
-      <div className="flex items-center gap-2">
-        <span className="text-[13px] font-bold text-status-waiting">
-          {t("overview.actionStrip.title", { count: cards.length })}
-        </span>
-        <span className="flex-1" />
-        <span className="text-xs text-status-waiting">
-          {t("overview.actionStrip.sub", { minutes: longest })}
-        </span>
-        <Link
-          to="/chat"
-          className="text-xs font-medium text-status-waiting hover:underline"
+    <div
+      role="group"
+      aria-label={t("overview.stats.range.label")}
+      className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5"
+    >
+      {STATS_RANGES.map((range) => (
+        <button
+          key={range}
+          type="button"
+          aria-pressed={value === range}
+          onClick={() => onChange(range)}
+          className={cn(
+            "rounded-sm px-2.5 py-1 text-xs font-medium transition-colors",
+            value === range
+              ? "bg-primary-soft text-primary-text"
+              : "text-muted-foreground hover:bg-accent",
+          )}
         >
-          {t("overview.actionStrip.all")}
-        </Link>
-      </div>
-      <div className="flex flex-col gap-[11px] md:flex-row">
-        {cards.map((card) => (
-          <ActionCardView
-            key={card.key}
-            card={card}
-            onAllow={() => onAllow(card)}
-            onDeny={() => onDeny(card)}
-            t={t}
-            i18nLanguage={i18n.language}
-          />
-        ))}
-      </div>
+          {t(`overview.stats.range.${range}`)}
+        </button>
+      ))}
     </div>
   );
 }
 
-function ActionCardView({
-  card,
-  onAllow,
-  onDeny,
-  t,
-  i18nLanguage,
+// ── 卡壳 ────────────────────────────────────────────────────────────────
+function StatsCard({
+  title,
+  meta,
+  action,
+  testId,
+  children,
+  className,
 }: {
-  card: ActionCard;
-  onAllow: () => void;
-  onDeny: () => void;
-  t: (key: string, opts?: Record<string, unknown>) => string;
-  i18nLanguage: string;
+  title: string;
+  meta?: string | null;
+  action?: React.ReactNode;
+  testId?: string;
+  children: React.ReactNode;
+  className?: string;
 }) {
-  const hasTool = card.waiters.toolPermissions.length > 0;
-  const hasQuestion = card.waiters.askUserQuestions.length > 0;
-
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-2 rounded-md border border-border bg-card p-3">
-      <span className="truncate text-[13px] font-semibold text-foreground">
-        {card.title}
-      </span>
-      {card.cwd?.trim() ? (
-        <span className="truncate font-mono text-[11px] text-subtle-foreground">
-          {card.cwd}
-        </span>
-      ) : null}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="min-w-0 truncate text-xs font-medium text-foreground">
-          {card.agentName}
-        </span>
-        {card.waitedAt ? (
-          <span className="shrink-0 text-[11px] text-subtle-foreground">
-            {formatRelativeTime(card.waitedAt, i18nLanguage)}
-          </span>
-        ) : null}
-        <span className="flex-1" />
-        {hasTool && (
-          <>
-            <Button size="xs" onClick={onAllow}>
-              {t("overview.actionCard.allow")}
-            </Button>
-            <Button size="xs" variant="outline" onClick={onDeny}>
-              {t("overview.actionCard.deny")}
-            </Button>
-          </>
-        )}
-        {hasQuestion && (
-          <Button size="xs" asChild>
-            <Link to={card.detailPath}>{t("overview.actionCard.reply")}</Link>
-          </Button>
-        )}
-        <Button size="xs" variant="ghost" asChild>
-          <Link to={card.detailPath}>
-            {t("overview.actionCard.viewDetails")}
-          </Link>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-// ── 每台在线且有关注的机器一个中继解析器（镜像 Chat 页的 FollowedMachineResolver） ──
-function MachineResolver({
-  fingerprint,
-  ids,
-  onResolved,
-  onClient,
-  onClearClient,
-}: {
-  fingerprint: string;
-  ids: string[];
-  onResolved: (fp: string, sessions: SessionSummary[]) => void;
-  onClient: (fp: string, client: RelayClient) => void;
-  onClearClient: (fp: string) => void;
-}) {
-  const { client, relayState } = useRelayMachine(fingerprint);
-  const resolvedRef = useRef(false);
-
-  // 把 client 上交父组件（父组件的操作条要拿它提交 Allow/Deny、重查 pendingWaiters）。
-  useEffect(() => {
-    if (client) onClient(fingerprint, client);
-    return () => onClearClient(fingerprint);
-  }, [client, fingerprint, onClient, onClearClient]);
-
-  useEffect(() => {
-    if (relayState !== "connected" || !client) {
-      // 掉线 / 重连中：清掉「本次连接已解析」标记，连回来必须重新解析一次。
-      resolvedRef.current = false;
-      return;
-    }
-    if (resolvedRef.current) return;
-    resolvedRef.current = true;
-    const wanted = new Set(ids);
-    client
-      .request(MethodSessionList)
-      .then((raw) => {
-        const res = decodeSessionListResult(raw);
-        const matched = res.sessions.filter((s) =>
-          wanted.has(String(s.sessionId)),
-        );
-        onResolved(fingerprint, matched);
-      })
-      .catch(() => {
-        // 解析失败：保持已解析标记，不无谓重试；重连后再试。
-      });
-  }, [relayState, client, ids, fingerprint, onResolved]);
-
-  return null;
-}
-
-// ── 既有 Agent 卡的行 / 目标链（设计稿左栏的 Agent 卡，R19） ─────────────
-/** 每一档的说明文案：只在「不是当前生效」时才需要额外说一句为什么。 */
-function reasonKey(target: ExecTargetItem): string | null {
-  switch (target.availability) {
-    case "skipped_for_web":
-      return "overview.skippedForWeb";
-    case "offline":
-      return "overview.offline";
-    case "unpaired":
-      return "overview.unpaired";
-    default:
-      return null;
-  }
-}
-
-/** 一档上的排序控件；null = 这一档不可移动（或这台浏览器排不了序）。 */
-interface TargetMove {
-  canMoveUp: boolean;
-  canMoveDown: boolean;
-  busy: boolean;
-  onMove: (direction: -1 | 1) => void;
-}
-
-function TargetChip({
-  target,
-  move,
-  t,
-}: {
-  target: ExecTargetItem;
-  move: TargetMove | null;
-  t: (key: string, opts?: Record<string, unknown>) => string;
-}) {
-  const reason = reasonKey(target);
-  const label = target.is_local_reference
-    ? t("overview.thisDevice")
-    : (target.device_name ?? "");
-  const suffix = target.backend_type ? ` · ${target.backend_type}` : "";
-  return (
-    <span
-      data-testid="exec-target"
-      data-current={target.current ? "true" : undefined}
+    <section
+      data-testid={testId}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs",
-        target.current
-          ? "bg-primary-soft text-primary-text font-semibold"
-          : "bg-muted text-muted-foreground",
+        "flex min-w-0 flex-col rounded-lg border border-border bg-card",
+        className,
       )}
     >
-      <span className="font-mono text-[10px] font-bold">{target.rank}</span>
-      <span>
-        {label}
-        {suffix}
-      </span>
-      {reason && (
-        <span className="font-mono text-[10px] text-subtle-foreground">
-          {t(reason)}
-        </span>
-      )}
-      {move && (
-        <span className="flex items-center">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="size-5"
-            aria-label={t("overview.moveUp")}
-            disabled={!move.canMoveUp || move.busy}
-            onClick={() => move.onMove(-1)}
-          >
-            <ChevronUp aria-hidden="true" />
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="size-5"
-            aria-label={t("overview.moveDown")}
-            disabled={!move.canMoveDown || move.busy}
-            onClick={() => move.onMove(1)}
-          >
-            <ChevronDown aria-hidden="true" />
-          </Button>
-        </span>
-      )}
+      <div className="flex min-w-0 flex-wrap items-center gap-2 px-4 pt-4">
+        <h2 className="text-sm font-bold text-foreground">{title}</h2>
+        {meta ? (
+          <span className="text-xs text-muted-foreground">{meta}</span>
+        ) : null}
+        <span className="flex-1" />
+        {action}
+      </div>
+      <div className="min-w-0 px-4 pt-3 pb-4">{children}</div>
+    </section>
+  );
+}
+
+/** 一根占比条。宽度是这一行相对最大值的比例，永远至少留一点可见宽度。 */
+function Bar({
+  ratio,
+  className,
+  style,
+}: {
+  ratio: number;
+  className?: string;
+  style?: React.CSSProperties;
+}) {
+  const width = Math.max(2, Math.min(100, Math.round(ratio * 100)));
+  return (
+    <span className="block h-1.5 w-full overflow-hidden rounded-full bg-muted">
+      <span
+        className={cn("block h-full rounded-full", className)}
+        style={{ width: `${width}%`, ...style }}
+      />
     </span>
   );
 }
 
-/** 这台浏览器对某个 Agent 的排序能力；null = 没有设备身份，顺序无处可存。 */
-interface AgentReorder {
-  busy: boolean;
-  failed: boolean;
-  onMove: (index: number, direction: -1 | 1) => void;
+/** 项目 / 模型的条按名次取色，最活跃的那档最深。 */
+const RANK_HEAT = ["bg-heat-4", "bg-heat-3", "bg-heat-2", "bg-heat-1"];
+function rankHeat(index: number): string {
+  return RANK_HEAT[Math.min(index, RANK_HEAT.length - 1)];
 }
 
-function AgentRow({
-  agent,
-  reorder,
-  t,
-}: {
-  agent: AgentItem;
-  // 排序控件恒在：顺序的持有者是设备，而这台浏览器的设备身份是到第一次排序时
-  // 才注册的——按「有没有身份」把控件藏起来，它就永远等不到那一次排序。
-  reorder: AgentReorder;
-  t: (key: string, opts?: Record<string, unknown>) => string;
-}) {
-  const current = agent.exec_targets.find((tt) => tt.current);
-  // 只有一档可排时排序没有意义（换不到别处去），不给控件添噪音。
-  const orderable = agent.exec_targets.filter(isMovableTier).length > 1;
+/** 后端占比条的分段色。「未上报」那一段固定用 status-idle，不占调色板。 */
+const BACKEND_TONES = [
+  "bg-agent-5",
+  "bg-agent-3",
+  "bg-agent-9",
+  "bg-agent-11",
+  "bg-agent-16",
+];
+
+// ── 骨架 ────────────────────────────────────────────────────────────────
+function TileSkeletons() {
   return (
-    <div className="flex flex-col gap-2 border-t border-border px-4 py-3 first:border-t-0">
-      <div className="flex flex-wrap items-center gap-2">
-        <span
+    <>
+      {[0, 1, 2, 3].map((i) => (
+        <div
+          key={i}
+          data-testid="tile-skeleton"
           aria-hidden="true"
-          className="size-2 shrink-0 rounded-full bg-primary"
-          style={
-            agent.avatar_color
-              ? { backgroundColor: agent.avatar_color }
-              : undefined
-          }
-        />
-        <span className="text-sm font-bold text-foreground">{agent.name}</span>
-        {agent.department_name && (
-          <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground">
-            {agent.department_name}
-          </span>
-        )}
-        <span className="flex-1" />
-        {agent.has_available_target && current ? (
-          <span className="text-xs font-medium text-muted-foreground">
-            {t("overview.currentTarget", {
-              device: current.is_local_reference
-                ? t("overview.thisDevice")
-                : current.device_name,
-            })}
-          </span>
-        ) : (
-          <span className="text-xs font-medium text-destructive">
-            {t("overview.noAvailableTarget")}
-          </span>
-        )}
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5 pl-4">
-        {agent.exec_targets.map((target, i) => (
-          <span key={i} className="flex items-center gap-1.5">
-            {i > 0 && (
-              <ArrowRight
-                aria-hidden="true"
-                className="size-3 shrink-0 text-muted-foreground"
-              />
-            )}
-            <TargetChip
-              target={target}
-              move={
-                orderable && isMovableTier(target)
-                  ? {
-                      canMoveUp:
-                        reorderTargets(agent.exec_targets, i, -1) !== null,
-                      canMoveDown:
-                        reorderTargets(agent.exec_targets, i, 1) !== null,
-                      busy: reorder.busy,
-                      onMove: (direction) => reorder.onMove(i, direction),
-                    }
-                  : null
-              }
-              t={t}
-            />
-          </span>
-        ))}
-      </div>
-      {reorder.failed && (
-        <p role="alert" className="pl-4 text-xs text-destructive">
-          {t("overview.reorderError")}
-        </p>
-      )}
+          className="flex min-w-0 flex-col gap-2.5 rounded-md border border-border bg-card px-3.5 py-3"
+        >
+          <span className="h-[11px] w-16 rounded-sm bg-muted" />
+          <span className="h-6 w-12 rounded-sm bg-muted" />
+          <span className="h-2 w-24 rounded-sm bg-muted" />
+        </div>
+      ))}
+    </>
+  );
+}
+
+function CardSkeleton({ rows }: { rows: number }) {
+  return (
+    <div aria-hidden="true" className="flex flex-col gap-3.5">
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex flex-col gap-1.5">
+          <span className="h-[11px] w-24 rounded-sm bg-muted" />
+          <span className="h-1.5 w-full rounded-full bg-muted" />
+        </div>
+      ))}
     </div>
   );
 }
 
 export default function Overview() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const isMobile = useIsMobile();
 
-  const [agents, setAgents] = useState<AgentItem[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<unknown>(null);
+  const [range, setRange] = useState<StatsRange>("30d");
+  /** 手动重试用的一次性游标：改它即让取数 effect 重跑一轮。 */
+  const [reloadKey, setReloadKey] = useState(0);
+
+  const [stats, setStats] = useState<StatsOverview | null>(null);
+  const [statsError, setStatsError] = useState<unknown>(null);
+
+  // 三份辅助数据都是锦上添花：取不到就保持空，对应的那一段不画，不阻塞整页。
   const [devices, setDevices] = useState<DeviceItem[] | null>(null);
-  const [follows, setFollows] = useState<FollowItem[]>([]);
-  const [resolved, setResolved] = useState<Record<string, SessionSummary[]>>(
-    {},
-  );
-  const [clients, setClients] = useState<Record<string, RelayClient>>({});
-  const [waiters, setWaiters] = useState<Record<string, WaiterData>>({});
-  // 同一时刻至多一个移动在飞（在飞期间所有排序按钮都禁用），因此这两个都是单槽位：
-  // 失败说明跟踪的是「最近一次移动」，下一次移动成功即收敛掉。
-  const [reorderingAgent, setReorderingAgent] = useState<string | null>(null);
-  const [reorderFailedAgent, setReorderFailedAgent] = useState<string | null>(
-    null,
+  const [agents, setAgents] = useState<AgentItem[] | null>(null);
+  const [projects, setProjects] = useState<ProjectNode[] | null>(null);
+
+  useAliveEffect(
+    (alive) => {
+      fetchStatsOverview(range)
+        .then((got) => {
+          if (!alive()) return;
+          setStats(got);
+          setStatsError(null);
+        })
+        .catch((e: unknown) => {
+          // 一律存真值：reject(undefined) 是存在的，原样存进去会让页面永远停在骨架上。
+          if (alive()) setStatsError(e ?? new Error("stats load failed"));
+        });
+    },
+    [range, reloadKey],
   );
 
-  /** 取账号级 Agent 清单。带上本机指纹 = 链按**这台浏览器自己的**排列返回。 */
-  const fetchAgents = useCallback(async (deviceFingerprint: string | null) => {
-    const qs = deviceFingerprint
-      ? `?client_id=${encodeURIComponent(deviceFingerprint)}`
-      : "";
-    const got = await api<{ agents: AgentItem[] }>(`/v1/workspace/agents${qs}`);
-    return got.agents;
+  const loadWorkspace = useCallback(() => {
+    api<{ agents?: AgentItem[] }>("/v1/workspace/agents")
+      .then((got) => setAgents(got.agents ?? []))
+      .catch(() => {});
+    fetchProjects()
+      .then(setProjects)
+      .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    let alive = true;
-    // 先拿这台浏览器**已有的**设备身份再读链：否则卡片上排第一、标着「当前」的
-    // 那一档，会和真派发时选中的不是同一档。这是一次纯本地读，没排过序的浏览器
-    // 拿到 null，按账号顺序读、不报错，也不会因为打开这一页就多出一台设备。
-    void (async () => {
-      try {
-        const list = await fetchAgents(callerClientId());
-        if (alive) {
-          setAgents(list);
-          setLoadError(null);
-        }
-      } catch (e: unknown) {
-        if (alive) setLoadError(e ?? new Error("agent list load failed"));
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [fetchAgents]);
-
-  // 设备 / 关注是锦上添花：各自取不到就保持空，统计卡走诚实空态，不阻塞整页。
-  useEffect(() => {
-    let alive = true;
-    api<{ devices: DeviceItem[] }>("/v1/devices")
-      .then((d) => {
-        if (alive) setDevices(d.devices);
-      })
+  const loadDevices = useCallback(() => {
+    fetchDevices()
+      .then(setDevices)
       .catch(() => {});
-    api<{ items: FollowItem[] }>("/v1/follows")
-      .then((f) => {
-        if (alive) setFollows(f.items);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
   }, []);
 
-  const devicesByFp = useMemo(
-    () => new Map((devices ?? []).map((d) => [d.fingerprint, d])),
+  useAliveEffect(() => {
+    loadDevices();
+    loadWorkspace();
+  }, [loadDevices, loadWorkspace]);
+
+  // 各订各的那一类：一条对话存进账号不该让 Agent 名单也重取一遍。
+  useAccountChannel([AccountChannelDevicePresence], loadDevices);
+  useAccountChannel([AccountChannelSyncVersion], loadWorkspace);
+  useAccountChannel([AccountChannelMirrorChanged], () =>
+    setReloadKey((k) => k + 1),
+  );
+
+  const desktopConnected = useMemo(
+    () => (devices ?? []).some((d) => d.kind === "agentred" && d.online),
+    [devices],
+  );
+  const firstOffline = useMemo(
+    () => (devices ?? []).find((d) => !d.online),
     [devices],
   );
   const agentsBySync = useMemo(
     () => new Map((agents ?? []).map((a) => [a.sync_id, a])),
     [agents],
   );
-
-  // 设备在线数 = /v1/devices 里在线的机器（agentred）；浏览器（web）自身不算机器。
-  const onlineCount = useMemo(
-    () => (devices ?? []).filter((d) => d.kind !== "web" && d.online).length,
-    [devices],
-  );
-  const firstOffline = useMemo(
-    () => (devices ?? []).find((d) => d.kind !== "web" && !d.online),
-    [devices],
-  );
-  const desktopConnected = useMemo(
-    () => (devices ?? []).some((d) => d.kind === "agentred" && d.online),
-    [devices],
+  const projectsBySync = useMemo(
+    () => new Map((projects ?? []).map((p) => [p.syncId, p])),
+    [projects],
   );
 
-  // 等待统计与操作条卡：来自关注会话（/v1/follows）+ 中继 session.list 的 waitingForInput。
-  const waitingSessions = useMemo<WaitingSessionInfo[]>(() => {
-    const out: WaitingSessionInfo[] = [];
-    for (const [fp, sessions] of Object.entries(resolved)) {
-      for (const s of sessions) {
-        if (s.waitingForInput) out.push({ fingerprint: fp, session: s });
-      }
-    }
-    return out;
-  }, [resolved]);
+  const rangeLabel = t(`overview.stats.range.${range}`);
+  const heatmapWeeks = isMobile ? HEATMAP_MOBILE_WEEKS : HEATMAP_DESKTOP_WEEKS;
 
-  const followedFps = useMemo(
-    () => [
-      ...new Set(
-        follows.filter((f) => !f.invalid).map((f) => f.device_fingerprint),
-      ),
-    ],
-    [follows],
-  );
-
-  // 等待数「是否可知」：每条关注都能判定时才显示数字，否则空态（—）。
-  //   - 离线机器不可能在等你处理 → 可判定（0）；
-  //   - 在线 agentred 机器必须连上中继并解析出会话才可判定；
-  //   - 机器查不到 / 非 agentred → 不可判定。
-  const waitingKnown = useMemo(() => {
-    return followedFps.every((fp) => {
-      const dev = devicesByFp.get(fp);
-      if (!dev) return false;
-      if (dev.kind !== "agentred") return false;
-      if (!dev.online) return true;
-      return Object.prototype.hasOwnProperty.call(resolved, fp);
+  const monthRange = useMemo(() => {
+    if (!stats) return "";
+    const fmt = new Intl.DateTimeFormat(i18n.resolvedLanguage ?? "en", {
+      year: "numeric",
+      month: "long",
+      timeZone: "UTC",
     });
-  }, [followedFps, devicesByFp, resolved]);
+    const at = (day: string) => fmt.format(new Date(`${day}T00:00:00Z`));
+    return `${at(stats.heatmap.from)} — ${at(stats.heatmap.to)}`;
+  }, [stats, i18n.resolvedLanguage]);
 
-  const waitingCount = waitingKnown ? waitingSessions.length : null;
-  const longestWait = useMemo(() => {
-    let max = 0;
-    for (const { session } of waitingSessions) {
-      max = Math.max(max, waitedMinutes(session.updatedAt));
-    }
-    return max;
-  }, [waitingSessions]);
+  const statsErrorMessage =
+    statsError !== null
+      ? loadErrorText(statsError, t, "overview.stats.error.alert")
+      : null;
 
-  const onResolved = useCallback((fp: string, sessions: SessionSummary[]) => {
-    setResolved((prev) => ({ ...prev, [fp]: sessions }));
-  }, []);
-  const onClient = useCallback((fp: string, client: RelayClient) => {
-    setClients((prev) => ({ ...prev, [fp]: client }));
-  }, []);
-  const onClearClient = useCallback((fp: string) => {
-    setClients((prev) => {
-      if (!(fp in prev)) return prev;
-      const next = { ...prev };
-      delete next[fp];
-      return next;
-    });
-  }, []);
-
-  // 对每条等待会话取中继 pendingWaiters，动作按钮据此渲染（取不到就不渲染该卡）。
-  useEffect(() => {
-    let alive = true;
-    for (const { fingerprint, session } of waitingSessions) {
-      const key = waiterKey(fingerprint, session.sessionId);
-      if (waiters[key]) continue;
-      const client = clients[fingerprint];
-      if (!client) continue;
-      client
-        .request(MethodSessionPendingWaiters, {
-          sessionId: session.sessionId,
-          ...(session.peerFingerprint
-            ? { peerFingerprint: session.peerFingerprint }
-            : {}),
-        })
-        .then((raw) => {
-          if (!alive) return;
-          const res = decodeSessionPendingWaitersResult(raw);
-          setWaiters((prev) => ({
-            ...prev,
-            [key]: {
-              toolPermissions: (res.toolPermissions ??
-                []) as PendingToolPermissionShape[],
-              askUserQuestions: (res.askUserQuestions ??
-                []) as PendingAskQuestionShape[],
-            },
-          }));
-        })
-        .catch(() => {
-          // 取不到 waiters：该卡不渲染（诚实），下次状态变化再试。
-        });
-    }
-    return () => {
-      alive = false;
-    };
-  }, [waitingSessions, clients, waiters]);
-
-  const actionCards = useMemo<ActionCard[]>(() => {
-    return waitingSessions
-      .filter(
-        ({ fingerprint, session }) =>
-          waiters[waiterKey(fingerprint, session.sessionId)],
-      )
-      .map(({ fingerprint, session }): ActionCard | null => {
-        const device = devicesByFp.get(fingerprint);
-        if (!device) return null;
-        const syncId = session.agentSyncId?.trim() ?? "";
-        const agent = agentsBySync.get(syncId);
-        return {
-          key: `${fingerprint}:${session.sessionId}`,
-          fingerprint,
-          sessionId: session.sessionId,
-          origin: session.peerFingerprint,
-          title: sessionTitle(session, t),
-          cwd: session.cwd,
-          agentName: agent?.name ?? (syncId || device.name),
-          waitedAt: session.updatedAt,
-          waiters: waiters[waiterKey(fingerprint, session.sessionId)],
-          detailPath: `/devices/${device.id}/sessions/${session.sessionId}`,
-        };
-      })
-      .filter((c): c is ActionCard => c !== null)
-      .slice(0, 3);
-  }, [waitingSessions, waiters, devicesByFp, agentsBySync, t]);
-
-  /**
-   * 把某个 Agent 的一档执行目标上移 / 下移：一次移动即提交，随后重新拉取这条链。
-   *
-   * 顺序由服务端解析（排列是收敛的偏好，不是权威），所以本地不先乐观改一版 ——
-   * 「当前」标记与真实派发目标因此始终是同一档，用户当场看到自己这一下改到了哪。
-   * 提交或重读失败时顺序原封不动，并在这张卡上就地说明（写入是按主键覆盖的，
-   * 重试无副作用）。
-   */
-  async function moveExecTarget(
-    agent: AgentItem,
-    index: number,
-    direction: -1 | 1,
-  ) {
-    if (reorderingAgent !== null) return;
-    const backendSyncIds = reorderTargets(agent.exec_targets, index, direction);
-    if (!backendSyncIds) return;
-    setReorderingAgent(agent.sync_id);
-    try {
-      // 顺序的持有者是设备，第一次排序时这台浏览器才注册成一台设备；拿回落库用
-      // 的指纹接着按**自己的**顺序重读这条链，不再猜一次身份。
-      const deviceFingerprint = await saveExecTargetOrder({
-        agentSyncId: agent.sync_id,
-        backendSyncIds,
-      });
-      const list = await fetchAgents(deviceFingerprint);
-      const fresh = list.find((a) => a.sync_id === agent.sync_id);
-      if (fresh) {
-        setAgents(
-          (prev) =>
-            prev?.map((a) => (a.sync_id === fresh.sync_id ? fresh : a)) ?? prev,
-        );
-      }
-      setReorderFailedAgent(null);
-    } catch {
-      setReorderFailedAgent(agent.sync_id);
-    } finally {
-      setReorderingAgent(null);
-    }
-  }
-
-  // Allow / Deny 走真实后端：提交后重查 pendingWaiters，已消失的 waiter 不再渲染。
-  async function submitToolDecision(card: ActionCard, allow: boolean) {
-    const client = clients[card.fingerprint];
-    const waiter = card.waiters.toolPermissions[0];
-    if (!client || !waiter?.RequestID) return;
-    try {
-      await client.request(MethodSubmitToolPermission, {
-        sessionId: card.sessionId,
-        ...(card.origin ? { peerFingerprint: card.origin } : {}),
-        requestId: waiter.RequestID,
-        allow,
-        alwaysAllowSession: false,
-      });
-      const raw = await client.request(MethodSessionPendingWaiters, {
-        sessionId: card.sessionId,
-        ...(card.origin ? { peerFingerprint: card.origin } : {}),
-      });
-      const res = decodeSessionPendingWaitersResult(raw);
-      // 与上面的 fetch effect 同一条键约定：waiters 必须按「机器:会话」记。
-      // 只按 sessionId 写的话，刷新结果落进一个永远没人读的槽位——卡上那格
-      // 已被处理的待决策不消失，Allow/Deny 一直挂着。
-      setWaiters((prev) => ({
-        ...prev,
-        [waiterKey(card.fingerprint, card.sessionId)]: {
-          toolPermissions: (res.toolPermissions ??
-            []) as PendingToolPermissionShape[],
-          askUserQuestions: (res.askUserQuestions ??
-            []) as PendingAskQuestionShape[],
-        },
-      }));
-    } catch {
-      // 提交失败保持原样，不假装成功。
-    }
-  }
-
-  const resolvers = devices
-    ? [...devicesByFp.values()]
-        .filter(
-          (d) =>
-            d.kind === "agentred" &&
-            d.online &&
-            follows.some(
-              (f) => f.device_fingerprint === d.fingerprint && !f.invalid,
-            ),
-        )
-        .map((d) => (
-          <MachineResolver
-            key={d.fingerprint}
-            fingerprint={d.fingerprint}
-            ids={follows
-              .filter(
-                (f) => f.device_fingerprint === d.fingerprint && !f.invalid,
-              )
-              .map((f) => f.session_id)}
-            onResolved={onResolved}
-            onClient={onClient}
-            onClearClient={onClearClient}
-          />
-        ))
-    : [];
+  const summary = stats?.summary;
+  /** 这个账号还什么都没发生过：0 设备 0 对话。 */
+  const freshAccount =
+    summary !== undefined &&
+    summary.conversations_total === 0 &&
+    summary.devices_total === 0;
+  /** 一条历史都没有：连续活跃 / 活跃天此时给不出有意义的 0。 */
+  const noHistory = summary !== undefined && summary.conversations_total === 0;
 
   return (
     <AppShell
       title={t("nav.overview")}
-      right={<Fresh connected={desktopConnected} />}
+      right={
+        <div className="flex min-w-0 items-center gap-3">
+          <Fresh connected={desktopConnected} />
+          <RangeSwitch value={range} onChange={setRange} />
+        </div>
+      }
     >
       <div className="mx-auto w-full max-w-[1200px] space-y-4">
-        {loadError !== null && (
-          <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
-        )}
+        {/* 范围收窄时页顶一条说明覆盖全页，不逐卡重复。 */}
+        {stats?.scope === "saved" ? (
+          <div
+            data-testid="stats-scope-notice"
+            className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-primary-soft px-3.5 py-2.5"
+          >
+            <BarChart3
+              aria-hidden="true"
+              className="size-[15px] shrink-0 text-primary-text"
+            />
+            <span className="min-w-0 text-xs text-primary-text">
+              {t("overview.stats.scopeNotice.text")}
+            </span>
+            <span className="flex-1" />
+            <Link
+              to={PRIVACY_SETTINGS_PATH}
+              className="text-xs font-medium text-primary-text hover:underline"
+            >
+              {t("overview.stats.scopeNotice.action")}
+            </Link>
+          </div>
+        ) : null}
 
-        {/* 4 统计卡（共享 Metric；今日用量 / 异常无数据源 → 诚实空态 —，不编数字） */}
-        <div
-          data-testid="overview-tiles"
-          className="grid grid-cols-2 gap-3 md:grid-cols-4"
-        >
-          <Metric
-            testId="tile-online"
-            label={t("overview.tiles.online")}
-            value={devices === null ? NO_DATA : String(onlineCount)}
-            unit={
-              devices === null
-                ? undefined
-                : `/ ${devices.filter((d) => d.kind !== "web").length}`
-            }
-            sub={
-              firstOffline
-                ? t("overview.tiles.onlineSub", { device: firstOffline.name })
-                : null
-            }
-            icon={Monitor}
-          />
-          <Metric
-            testId="tile-waiting"
-            label={t("overview.tiles.waiting")}
-            value={waitingCount === null ? NO_DATA : String(waitingCount)}
-            sub={
-              longestWait > 0
-                ? t("overview.tiles.waitingSub", { minutes: longestWait })
-                : null
-            }
-            icon={Clock3}
-          />
-          <Metric
-            testId="tile-usage"
-            label={t("overview.tiles.usage")}
-            value={NO_DATA}
-            icon={Gauge}
-          />
-          <Metric
-            testId="tile-errors"
-            tone="danger"
-            label={t("overview.tiles.errors")}
-            value={NO_DATA}
-            icon={AlertTriangle}
-          />
-        </div>
+        {freshAccount ? (
+          <div
+            data-testid="stats-new-account"
+            className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-status-waiting/40 bg-status-waiting-bg px-3.5 py-2.5"
+          >
+            <Monitor
+              aria-hidden="true"
+              className="size-[15px] shrink-0 text-status-waiting"
+            />
+            <span className="min-w-0 text-xs text-status-waiting">
+              {t("overview.stats.newAccount.text")}
+            </span>
+            <span className="flex-1" />
+            <Button asChild size="xs">
+              <Link to="/devices">{t("overview.stats.newAccount.action")}</Link>
+            </Button>
+          </div>
+        ) : null}
 
-        {/* 琥珀「等你处理」操作条：无等待会话（或连不到）时整条不渲染。 */}
-        <ActionStrip
-          cards={actionCards}
-          onAllow={(c) => submitToolDecision(c, true)}
-          onDeny={(c) => submitToolDecision(c, false)}
-        />
-
-        {/* 双栏：左 Agent 卡 + 最近授权与变更 | 右 340px 本月用量 + 安全与审计 */}
-        <div
-          data-testid="overview-cols"
-          className="flex flex-col gap-4 lg:flex-row"
-        >
-          <div className="flex min-w-0 flex-1 flex-col gap-4">
-            <div className="overflow-hidden rounded-lg border border-border bg-card py-0">
-              <div className="flex flex-row items-center gap-2 border-b border-border px-4 py-3">
-                {/* 页级 h1（保留既有语义）：Agent 卡是左栏主内容，标题用 overview.title。 */}
-                <h1 className="text-sm font-bold text-foreground">
-                  {t("overview.title")}
-                </h1>
-                {agents !== null && (
-                  <span className="text-xs text-subtle-foreground">
-                    {t("overview.subtitle", { count: agents.length })}
-                  </span>
-                )}
-              </div>
-              {loading ? (
-                <p className="px-4 py-3 text-sm text-muted-foreground">
-                  {t("common.loading")}
-                </p>
-              ) : loadError !== null &&
-                (agents?.length ?? 0) === 0 ? null : (agents?.length ?? 0) ===
-                0 ? (
-                <EmptyState
-                  testId="empty-agents"
-                  icon={Bot}
-                  title={t("overview.empty")}
-                />
+        {statsError !== null ? (
+          <>
+            <Alert variant="destructive">
+              <span className="flex min-w-0 flex-wrap items-center gap-3">
+                <span className="min-w-0">{statsErrorMessage}</span>
+                <span className="flex-1" />
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setReloadKey((k) => k + 1)}
+                >
+                  {t("overview.stats.error.retry")}
+                </Button>
+              </span>
+            </Alert>
+            {/* 统计取不到就说取不到，绝不退回一张全是 0 的摘要——那是一句用户
+                无法证伪的假话。同时说清什么**不**受影响，并给一条走得通的路。 */}
+            <div className="rounded-lg border border-border bg-card">
+              <EmptyState
+                testId="stats-error"
+                icon={BarChart3}
+                tone="warn"
+                title={t("overview.stats.error.title")}
+                body={t("overview.stats.error.body")}
+                action={
+                  <Link
+                    to="/chat"
+                    className="text-xs font-medium text-primary-text hover:underline"
+                  >
+                    {t("overview.stats.error.action")}
+                  </Link>
+                }
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            {/* 摘要四格 */}
+            <div
+              data-testid="overview-tiles"
+              className="grid grid-cols-2 gap-3 md:grid-cols-4"
+            >
+              {summary === undefined ? (
+                <TileSkeletons />
               ) : (
-                <div className="divide-y divide-border">
-                  {agents?.map((agent) => (
-                    <AgentRow
-                      key={agent.sync_id}
-                      agent={agent}
-                      reorder={{
-                        // 在飞期间禁用**所有**卡片的排序按钮：与下面
-                        // moveExecTarget 的单飞守卫一致，点了没反应即不存在。
-                        busy: reorderingAgent !== null,
-                        failed: reorderFailedAgent === agent.sync_id,
-                        onMove: (index, direction) =>
-                          void moveExecTarget(agent, index, direction),
-                      }}
-                      t={t}
-                    />
-                  ))}
-                </div>
+                <>
+                  <Metric
+                    testId="tile-conversations"
+                    label={t("overview.stats.tiles.conversations")}
+                    value={String(summary.conversations)}
+                    unit={rangeLabel}
+                    sub={
+                      freshAccount
+                        ? t("overview.stats.tiles.conversationsNone")
+                        : t("overview.stats.tiles.conversationsTotal", {
+                            count: summary.conversations_total,
+                          })
+                    }
+                    icon={MessagesSquare}
+                  />
+                  <Metric
+                    testId="tile-streak"
+                    label={t("overview.stats.tiles.streak")}
+                    value={noHistory ? "—" : String(summary.streak_days)}
+                    unit={
+                      noHistory
+                        ? undefined
+                        : t("overview.stats.tiles.streakUnit")
+                    }
+                    sub={
+                      noHistory
+                        ? stats?.activity_stats_enabled
+                          ? null
+                          : t("overview.stats.tiles.enableToSee")
+                        : t("overview.stats.tiles.streakLongest", {
+                            count: summary.longest_streak_days,
+                          })
+                    }
+                    icon={Flame}
+                  />
+                  <Metric
+                    testId="tile-active-days"
+                    label={t("overview.stats.tiles.activeDays")}
+                    value={noHistory ? "—" : String(summary.active_days)}
+                    unit={
+                      noHistory || summary.window_days <= 0
+                        ? undefined
+                        : t("overview.stats.tiles.activeDaysUnit", {
+                            count: summary.window_days,
+                          })
+                    }
+                    sub={
+                      noHistory
+                        ? stats?.activity_stats_enabled
+                          ? null
+                          : t("overview.stats.tiles.enableToSee")
+                        : summary.window_days > 0
+                          ? t("overview.stats.tiles.activeDaysShare", {
+                              percent: Math.round(
+                                (summary.active_days / summary.window_days) *
+                                  100,
+                              ),
+                            })
+                          : null
+                    }
+                    icon={CalendarDays}
+                  />
+                  <Metric
+                    testId="tile-online"
+                    label={t("overview.stats.tiles.online")}
+                    value={String(summary.devices_online)}
+                    unit={`/ ${summary.devices_total}`}
+                    sub={
+                      firstOffline
+                        ? t("overview.stats.tiles.onlineOffline", {
+                            device: firstOffline.name,
+                          })
+                        : summary.devices_total === 0
+                          ? t("overview.stats.tiles.onlineNone")
+                          : null
+                    }
+                    icon={Monitor}
+                  />
+                </>
               )}
             </div>
 
-            {/* 最近授权与变更：无审计数据源 → 共享诚实空态（不编事件/IP/时间）。 */}
-            <div className="rounded-lg border border-border bg-card">
-              <EmptyState
-                testId="empty-recent-auth"
-                icon={ScrollText}
-                title={t("overview.recentAuth.title")}
+            {/* 全宽活跃热力 */}
+            <StatsCard
+              testId="heatmap-card"
+              title={t("overview.stats.heatmap.title")}
+              action={
+                <span className="flex min-w-0 items-center gap-3">
+                  <span className="text-xs text-muted-foreground">
+                    {isMobile
+                      ? t("overview.stats.heatmap.mobileWeeks")
+                      : monthRange}
+                  </span>
+                  {/* scope 为 saved 时不再给这条链接：页顶那条说明条上已经有一条
+                      「开启完整活跃统计 →」指向同一处，一屏两条同去处的链接只是
+                      让人多读一遍。 */}
+                  {stats?.scope === "saved" ? null : (
+                    <Link
+                      to={PRIVACY_SETTINGS_PATH}
+                      className="text-xs font-medium text-primary-text hover:underline"
+                    >
+                      {t("overview.stats.heatmap.settings")}
+                    </Link>
+                  )}
+                </span>
+              }
+            >
+              <div className="flex min-w-0 flex-col gap-4 lg:flex-row">
+                <div className="flex min-w-0 flex-col gap-2.5">
+                  {/* 取数前后是同一张网格，只是没有颜色——845px 的网格不该在取到数
+                      那一刻凭空出现，把整页往下顶一大截。 */}
+                  <Heatmap
+                    to={stats?.heatmap.to ?? todayUTC()}
+                    weeks={heatmapWeeks}
+                    days={stats?.heatmap.days}
+                  />
+                  <HeatmapLegend />
+                  {isMobile ? (
+                    <p className="text-2xs text-muted-foreground">
+                      {t("overview.stats.heatmap.mobileHint")}
+                    </p>
+                  ) : null}
+                  {stats !== null && stats.heatmap.days.length === 0 ? (
+                    <p className="text-2xs text-muted-foreground">
+                      {t("overview.stats.heatmap.greyNote")}
+                    </p>
+                  ) : null}
+                  {/* 日界按服务端机器的时区切，不是按浏览器的。不写出来的话，一个在
+                      另一个时区的用户只会觉得自己的「今天」错了一格。 */}
+                  {stats?.time_zone ? (
+                    <p
+                      data-testid="heatmap-timezone"
+                      className="text-2xs text-muted-foreground"
+                    >
+                      {t("overview.stats.heatmap.timeZone", {
+                        zone: stats.time_zone,
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 flex-col gap-4 lg:w-[240px] lg:border-l lg:border-border lg:pl-5">
+                  {stats?.heatmap.busiest_day &&
+                  stats.heatmap.busiest_day.count > 0 ? (
+                    <Highlight
+                      testId="heat-highlight-busiest"
+                      label={t("overview.stats.heatmap.busiest")}
+                      value={t("overview.stats.unit.conversations", {
+                        count: stats.heatmap.busiest_day.count,
+                      })}
+                      sub={stats.heatmap.busiest_day.day}
+                    />
+                  ) : null}
+                  {stats?.heatmap.avg_per_active_day ? (
+                    <Highlight
+                      testId="heat-highlight-avg"
+                      label={t("overview.stats.heatmap.avg")}
+                      value={t("overview.stats.unit.conversations", {
+                        count: stats.heatmap.avg_per_active_day,
+                      })}
+                      sub={t("overview.stats.heatmap.avgSub")}
+                    />
+                  ) : null}
+                </div>
+              </div>
+            </StatsCard>
+
+            {/* 底部：Agent 排行（左，占满）+ 右列 300 宽 */}
+            <div
+              data-testid="overview-cols"
+              className="flex flex-col gap-4 lg:flex-row"
+            >
+              <StatsCard
+                testId="card-agents"
+                className="min-w-0 flex-1"
+                title={t("overview.stats.agents.title")}
+                meta={rangeLabel}
                 action={
                   <Link
-                    to="/audit"
-                    className="text-xs font-medium text-primary hover:underline"
+                    to="/org"
+                    className="text-xs font-medium text-primary-text hover:underline"
                   >
-                    {t("overview.recentAuth.all")}
+                    {t("overview.stats.agents.all")}
                   </Link>
                 }
-              />
-            </div>
-          </div>
+              >
+                {stats === null ? (
+                  <CardSkeleton rows={5} />
+                ) : stats.agents.length === 0 ? (
+                  <EmptyState
+                    testId="empty-agents"
+                    icon={Bot}
+                    title={t("overview.stats.agents.empty")}
+                  />
+                ) : (
+                  <ol className="flex flex-col gap-3">
+                    {stats.agents.map((row, index) => (
+                      <AgentRankRow
+                        key={row.sync_id || index}
+                        row={row}
+                        agent={agentsBySync.get(row.sync_id)}
+                        max={stats.agents[0]?.count ?? row.count}
+                      />
+                    ))}
+                  </ol>
+                )}
+              </StatsCard>
 
-          <aside
-            data-testid="overview-aside"
-            className="flex w-full shrink-0 flex-col gap-4 lg:w-[340px]"
-          >
-            {/* 本月用量：无数据源 → 共享诚实空态；用量页尚不存在，不造死链。 */}
-            <div className="rounded-lg border border-border bg-card">
-              <EmptyState
-                testId="empty-usage"
-                icon={Gauge}
-                title={t("overview.usage.title")}
-              />
-            </div>
+              <aside
+                data-testid="overview-aside"
+                className="flex w-full shrink-0 flex-col gap-4 lg:w-[300px]"
+              >
+                <StatsCard
+                  testId="card-backends"
+                  title={t("overview.stats.backends.title")}
+                  meta={rangeLabel}
+                >
+                  {stats === null ? (
+                    <CardSkeleton rows={4} />
+                  ) : stats.backends.length === 0 &&
+                    stats.models.length === 0 ? (
+                    <EmptyState
+                      testId="empty-backends"
+                      icon={BarChart3}
+                      title={t("overview.stats.backends.empty")}
+                    />
+                  ) : (
+                    <BackendsBody
+                      backends={stats.backends}
+                      models={stats.models}
+                    />
+                  )}
+                </StatsCard>
 
-            {/* 安全与审计：无数据源 → 共享诚实空态（不编令牌数/登录 IP）。 */}
-            <div className="rounded-lg border border-border bg-card">
-              <EmptyState
-                testId="empty-security"
-                icon={ShieldCheck}
-                title={t("overview.security.title")}
-                action={
-                  <Link
-                    to="/audit"
-                    className="text-xs font-medium text-primary hover:underline"
-                  >
-                    {t("overview.security.all")}
-                  </Link>
-                }
-              />
+                <StatsCard
+                  testId="card-projects"
+                  title={t("overview.stats.projects.title")}
+                  meta={rangeLabel}
+                >
+                  {stats === null ? (
+                    <CardSkeleton rows={4} />
+                  ) : stats.projects.length === 0 ? (
+                    <EmptyState
+                      testId="empty-projects"
+                      icon={FolderTree}
+                      title={t("overview.stats.projects.empty")}
+                    />
+                  ) : (
+                    <ProjectsBody
+                      rows={stats.projects}
+                      nameOf={(syncId) => projectsBySync.get(syncId)?.name}
+                    />
+                  )}
+                </StatsCard>
+              </aside>
             </div>
-          </aside>
-        </div>
-
-        {/* 每个在线且有非失效关注的 agentred 机器挂一个中继解析器。 */}
-        {resolvers}
+          </>
+        )}
       </div>
     </AppShell>
+  );
+}
+
+/** 今天（UTC）的 `YYYY-MM-DD`：还没取到数时用它把骨架网格的右端钉住。 */
+function todayUTC(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function Highlight({
+  label,
+  value,
+  sub,
+  testId,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  testId: string;
+}) {
+  return (
+    <div data-testid={testId} className="flex min-w-0 flex-col gap-0.5">
+      <span className="text-2xs text-muted-foreground">{label}</span>
+      <span className="text-prose leading-none font-bold text-foreground">
+        {value}
+      </span>
+      <span className="truncate text-2xs text-muted-foreground">{sub}</span>
+    </div>
+  );
+}
+
+/**
+ * Agent 使用排行的一行。
+ *
+ * 「当前落到哪台」只在这一档**真的可用**时才画：一个说不出落到哪的落点标记，
+ * 比不画更糟——它看上去像在保证下一条对话跑得起来。
+ */
+function AgentRankRow({
+  row,
+  agent,
+  max,
+}: {
+  row: { sync_id: string; count: number };
+  agent?: AgentItem;
+  max: number;
+}) {
+  const current = agent?.exec_targets?.find((tt) => tt.current);
+  const landing =
+    agent?.has_available_target && current
+      ? [
+          current.is_local_reference ? null : current.device_name,
+          current.backend_type
+            ? orgBackendTypeLabel(current.backend_type)
+            : null,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
+  const color = agent?.avatar_color;
+
+  return (
+    <li
+      data-testid="agent-rank-row"
+      data-sync-id={row.sync_id}
+      className="flex min-w-0 flex-col gap-1.5"
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span
+          aria-hidden="true"
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            color ? undefined : "bg-primary",
+          )}
+          style={color ? { backgroundColor: color } : undefined}
+        />
+        <span className="min-w-0 truncate text-sm font-medium text-foreground">
+          {agent?.name ?? row.sync_id}
+        </span>
+        {agent?.department_name ? (
+          <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-2xs text-muted-foreground">
+            {agent.department_name}
+          </span>
+        ) : null}
+        <span className="flex-1" />
+        {landing ? (
+          <span
+            data-testid="agent-rank-target"
+            className="flex shrink-0 items-center gap-1.5 rounded-md bg-secondary px-2 py-0.5"
+          >
+            <span
+              aria-hidden="true"
+              className="size-[5px] rounded-full bg-status-running"
+            />
+            <span className="text-2xs text-muted-foreground">{landing}</span>
+          </span>
+        ) : null}
+        <span className="shrink-0 text-xs font-semibold text-foreground">
+          {row.count}
+        </span>
+      </div>
+      <Bar
+        ratio={max > 0 ? row.count / max : 0}
+        className={color ? undefined : "bg-primary"}
+        style={color ? { backgroundColor: color } : undefined}
+      />
+    </li>
+  );
+}
+
+/**
+ * 后端与模型。
+ *
+ * 两个「空」是两件不同的事，绝不能并成一行：
+ *   - `backend_type` 为空 = 那条对话没上报后端（未上报）；
+ *   - `provider_key` 与 `model_key` 皆空 = 跟随 Agent 绑定，是一档真实配置。
+ */
+function BackendsBody({
+  backends,
+  models,
+}: {
+  backends: { backend_type: string; count: number }[];
+  models: { provider_key: string; model_key: string; count: number }[];
+}) {
+  const { t } = useTranslation();
+  const total = backends.reduce((sum, b) => sum + b.count, 0);
+  const toneOf = (backend: string, index: number) =>
+    backend === ""
+      ? "bg-status-idle"
+      : BACKEND_TONES[index % BACKEND_TONES.length];
+  const modelMax = models.reduce((m, r) => Math.max(m, r.count), 0);
+
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      {total > 0 ? (
+        <span className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted">
+          {backends.map((b, i) => (
+            <span
+              key={b.backend_type || "unreported"}
+              aria-hidden="true"
+              className={cn("block h-full", toneOf(b.backend_type, i))}
+              style={{ width: `${(b.count / total) * 100}%` }}
+            />
+          ))}
+        </span>
+      ) : null}
+      <ul className="flex min-w-0 flex-col gap-1.5">
+        {backends.map((b, i) => (
+          <li
+            key={b.backend_type || "unreported"}
+            className="flex min-w-0 items-center gap-2"
+          >
+            <span
+              aria-hidden="true"
+              className={cn(
+                "size-2 shrink-0 rounded-sm",
+                toneOf(b.backend_type, i),
+              )}
+            />
+            <span className="min-w-0 truncate text-xs text-foreground">
+              {b.backend_type
+                ? orgBackendTypeLabel(b.backend_type)
+                : t("overview.stats.backends.unreported")}
+            </span>
+            <span className="flex-1" />
+            <span className="shrink-0 text-2xs text-muted-foreground">
+              {t("overview.stats.unit.conversations", { count: b.count })}
+            </span>
+            {total > 0 ? (
+              <span className="w-9 shrink-0 text-right text-xs text-foreground">
+                {`${Math.round((b.count / total) * 100)}%`}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {models.length > 0 ? (
+        <>
+          <span className="h-px w-full bg-border" />
+          <span className="text-2xs text-muted-foreground">
+            {t("overview.stats.backends.models")}
+          </span>
+          <ul className="flex min-w-0 flex-col gap-2">
+            {models.map((m, i) => (
+              <li
+                key={
+                  m.model_key
+                    ? `${m.provider_key}/${m.model_key}`
+                    : `follow-${i}`
+                }
+                className="flex min-w-0 items-center gap-2"
+              >
+                {m.model_key ? (
+                  <span className="min-w-0 truncate font-mono text-2xs text-code-foreground">
+                    {m.model_key}
+                  </span>
+                ) : (
+                  // 「跟随 Agent 绑定」是翻译过的正文，不能上等宽——包里只自托管了
+                  // 拉丁子集，中文会掉到下一档字体，一行两种字形。
+                  <span className="min-w-0 truncate text-2xs text-muted-foreground">
+                    {t("overview.stats.backends.followsAgent")}
+                  </span>
+                )}
+                <span className="flex-1" />
+                <span className="w-[90px] shrink-0">
+                  <Bar
+                    ratio={modelMax > 0 ? m.count / modelMax : 0}
+                    className="bg-heat-3"
+                  />
+                </span>
+                <span className="w-6 shrink-0 text-right text-xs text-foreground">
+                  {m.count}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** 项目分布。空 `sync_id` = 未归属项目（cwd 两个方向都不出服务端，R19）。 */
+function ProjectsBody({
+  rows,
+  nameOf,
+}: {
+  rows: { sync_id: string; count: number }[];
+  nameOf: (syncId: string) => string | undefined;
+}) {
+  const { t } = useTranslation();
+  const max = rows.reduce((m, r) => Math.max(m, r.count), 0);
+  return (
+    <ul className="flex min-w-0 flex-col gap-2.5">
+      {rows.map((row, index) => (
+        <li
+          key={row.sync_id || "unassigned"}
+          className="flex min-w-0 flex-col gap-1.5"
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={cn(
+                "min-w-0 truncate text-xs",
+                row.sync_id ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {row.sync_id
+                ? (nameOf(row.sync_id) ?? row.sync_id)
+                : t("overview.stats.projects.unassigned")}
+            </span>
+            <span className="flex-1" />
+            <span className="shrink-0 text-2xs text-muted-foreground">
+              {t("overview.stats.unit.conversations", { count: row.count })}
+            </span>
+          </div>
+          <Bar
+            ratio={max > 0 ? row.count / max : 0}
+            className={rankHeat(index)}
+          />
+        </li>
+      ))}
+    </ul>
   );
 }

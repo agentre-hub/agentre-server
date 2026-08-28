@@ -13,8 +13,9 @@ import (
 	"github.com/gorilla/websocket"
 	goredis "github.com/redis/go-redis/v9"
 
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 )
 
 var (
@@ -106,8 +107,9 @@ const (
 	PeerClient Peer = "client"
 )
 
-// Forwarder 是任务 11 实现的 Redis 帧总线边界。Check 必须在 websocket
-// upgrade 前返回可区分的转发失败；Forward 接收已 upgrade 的二进制或文本帧。
+// Forwarder 是 server-internal Redis 帧总线边界。Check 必须在 websocket upgrade
+// 前返回可区分的转发失败；Forward 的 peer/channel/messageType 是跨副本路由 metadata，
+// frame 是 opaque Protobuf RPC bytes，帧总线不解析其 method 或 payload。
 type Forwarder interface {
 	Check(ctx context.Context, target Route) error
 	Forward(ctx context.Context, target Route, source Peer, channelID string, messageType int, frame []byte) error
@@ -162,7 +164,7 @@ func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64,
 	if err != nil {
 		return Route{}, err
 	}
-	if device == nil || device.UserID != accountID || !isAddressableKind(device.Kind) || !device.IsActive() {
+	if !device.UsableBy(accountID) || !isAddressableKind(device.Kind) {
 		return Route{}, ErrDaemonForbidden
 	}
 	return Route{AccountID: accountID, Fingerprint: device.Fingerprint, InstanceID: s.config.InstanceID}, nil
@@ -176,6 +178,11 @@ func (s *relaySvc) RegisterDaemon(ctx context.Context, route Route) error {
 	if err := s.redis.Set(ctx, routeKey(route.AccountID, route.Fingerprint), route.InstanceID, s.config.OnlineTTL).Err(); err != nil {
 		return fmt.Errorf("register relay daemon: %w", err)
 	}
+	// 登记完才出声，而且只有登记这一处出声：RenewDaemon 是心跳续期，不是状态变化，
+	// 跟着喊会让这个账号所有在线连接每 15 秒白拉一页设备列表。下线没有对应的一条
+	// ——在线态的模型就是「键到期即离线，不主动删除」（见 accountchan_svc
+	// .FrameTypeDevicePresence）。
+	accountchan_svc.BroadcastSignalBestEffort(ctx, route.AccountID, accountchan_svc.FrameTypeDevicePresence)
 	return nil
 }
 

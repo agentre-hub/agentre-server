@@ -2,24 +2,26 @@ package middleware
 
 import (
 	"net/http"
-	"strings"
 
-	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	"agentre-server/internal/pkg/code"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/apierr"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 )
 
 func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, ok := verifiedJWT(c, signer)
+		claims, biz, ok := verifiedJWT(c, signer)
 		if !ok {
+			apierr.Abort(c, http.StatusUnauthorized, biz)
 			return
 		}
-		if claims.Kind == "relay_client" || claims.DID == 0 {
-			abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
+		if !isDeviceCredential(claims) {
+			apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+			return
+		}
+		if accountBlocked(c, claims.UID) {
 			return
 		}
 		setJWTClaims(c, claims)
@@ -31,50 +33,19 @@ func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {
 // short-lived relay_client ticket. The latter is deliberately rejected by DeviceJWT.
 func RelayClientJWT(signer *jwt.Signer) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, ok := verifiedJWT(c, signer)
+		claims, biz, ok := verifiedJWT(c, signer)
 		if !ok {
+			apierr.Abort(c, http.StatusUnauthorized, biz)
 			return
 		}
-		if claims.Kind == "relay_client" {
-			if claims.DID != 0 {
-				abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
-				return
-			}
-		} else if claims.DID == 0 {
-			abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
+		if !isRelayClientCredential(claims) {
+			apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+			return
+		}
+		if accountBlocked(c, claims.UID) {
 			return
 		}
 		setJWTClaims(c, claims)
 		c.Next()
 	}
-}
-
-func verifiedJWT(c *gin.Context, signer *jwt.Signer) (*jwt.Claims, bool) {
-	h := c.GetHeader("Authorization")
-	if !strings.HasPrefix(h, "Bearer ") {
-		abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
-		return nil, false
-	}
-	claims, err := signer.Verify(strings.TrimPrefix(h, "Bearer "))
-	if err != nil {
-		abortJWT(c, code.JWTSignatureInvalid, http.StatusUnauthorized)
-		return nil, false
-	}
-	if jwtblacklist.Has(c.Request.Context(), claims.JTI) {
-		abortJWT(c, code.JWTBlacklisted, http.StatusUnauthorized)
-		return nil, false
-	}
-	return claims, true
-}
-
-func setJWTClaims(c *gin.Context, claims *jwt.Claims) {
-	c.Set("user_id", claims.UID)
-	c.Set("device_id", claims.DID)
-	c.Set("device_kind", claims.Kind)
-}
-
-func abortJWT(c *gin.Context, biz int, status int) {
-	c.AbortWithStatusJSON(status, gin.H{
-		"code": biz, "msg": i18n.T(c.Request.Context(), biz), "data": nil,
-	})
 }

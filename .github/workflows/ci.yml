@@ -131,7 +131,7 @@ jobs:
               - "127.0.0.1:5199"
           db:
             driver: mysql
-            dsn: "agentre_e2e:agentre_e2e@tcp(127.0.0.1:3306)/agentre_e2e_ci?charset=utf8mb4&parseTime=True&loc=Local"
+            dsn: "agentre_e2e:agentre_e2e@tcp(127.0.0.1:3306)/agentre_e2e_ci?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
             debug: false
             prepareStmt: false
           redis:

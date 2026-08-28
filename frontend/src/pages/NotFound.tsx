@@ -2,8 +2,9 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
+import PageTitle from "@/components/PageTitle";
 
 export default function NotFound() {
   const { t } = useTranslation();
@@ -16,9 +17,7 @@ export default function NotFound() {
         >
           {t("notFound.code")}
         </p>
-        <h1 className="text-2xl font-semibold text-foreground">
-          {t("notFound.title")}
-        </h1>
+        <PageTitle>{t("notFound.title")}</PageTitle>
         <p className="text-sm text-muted-foreground">{t("notFound.body")}</p>
         <Link
           to="/"

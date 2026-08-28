@@ -1,7 +1,7 @@
 import { NavLink } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { cn } from "@agentre-hub/agentre-ui";
 
 /**
  * 移动端底部导航（Pencil 正式组件 A6Z3k TabBar）。
@@ -36,7 +36,7 @@ export function MobileTabBar({
           className={({ isActive }) =>
             cn(
               "flex min-w-0 flex-1 flex-col items-center justify-center gap-[3px]",
-              isActive ? "text-primary-text" : "text-subtle-foreground",
+              isActive ? "text-primary-text" : "text-muted-foreground",
             )
           }
         >
@@ -45,7 +45,7 @@ export function MobileTabBar({
               <item.Icon className="size-[21px]" aria-hidden="true" />
               <span
                 className={cn(
-                  "text-[10px]",
+                  "text-3xs",
                   isActive ? "font-semibold" : "font-medium",
                 )}
               >

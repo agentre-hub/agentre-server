@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
+import {
+  ACCOUNT_CODES,
+  DEVICE_FLOW_CODES,
+  PASSKEY_CODES,
+  PASSKEY_LOGIN_CODES,
+} from "@/lib/errorCodes";
 
 /**
  * 业务错误码契约守卫。
@@ -63,6 +68,75 @@ describe("Device Flow 错误码契约", () => {
       expect(
         goCodes[name],
         `${name} 在 code.go 的 Device Flow 段位里算出来不是 ${value}；` +
+          `段位里插入或删除常量会让它后面的码整体平移，前端常量表要跟着改`,
+      ).toBe(value);
+    },
+  );
+});
+
+/** 通行密钥段位的起算值，见 code.go 「通行密钥 30600~30699」的段位注释。 */
+const PASSKEY_BASE = 30600;
+
+const passkeyNames = segment(PASSKEY_BASE);
+const passkeyGoCodes: Record<string, number> = {};
+passkeyNames.forEach((name, i) => (passkeyGoCodes[name] = PASSKEY_BASE + i));
+
+describe("通行密钥错误码契约", () => {
+  it("code.go 里有以 30600 起算的通行密钥段位", () => {
+    expect(passkeyNames[0]).toBe("PasskeyLimitReached");
+  });
+
+  // 只逐条比对 PASSKEY_CODES 自己声明的名字，不断言整段相等、不断言段位长度：
+  // T6 与本任务同批，会往这一段末尾继续追加登录失败的码（PasskeyNotFound 之后），
+  // 那些新名字不在 PASSKEY_CODES 里，段位变长不会让下面任何一条变红。
+  it.each(Object.entries(PASSKEY_CODES))(
+    "%s 与 code.go 算出来的值一致",
+    (name, value) => {
+      expect(
+        passkeyGoCodes[name],
+        `${name} 在 code.go 的通行密钥段位里算出来不是 ${value}；` +
+          `段位里插入或删除常量会让它后面的码整体平移，前端常量表要跟着改`,
+      ).toBe(value);
+    },
+  );
+});
+
+describe("通行密钥登录失败码契约", () => {
+  // 登录页分支用的那几个码在同一段位的**末尾**，与 PASSKEY_CODES 分成两张表：
+  // 账号页的注册 / 管理端点回不出它们。两张表都在这里逐条对回 code.go，
+  // 因此谁都漂移不了。
+  it.each(Object.entries(PASSKEY_LOGIN_CODES))(
+    "%s 与 code.go 算出来的值一致",
+    (name, value) => {
+      expect(
+        passkeyGoCodes[name],
+        `${name} 在 code.go 的通行密钥段位里算出来不是 ${value}；` +
+          `段位里插入或删除常量会让它后面的码整体平移，前端常量表要跟着改`,
+      ).toBe(value);
+    },
+  );
+});
+
+/** 账号 / OAuth 段位的起算值，见 code.go 「账号 / OAuth 30100~30199」的段位注释。 */
+const ACCOUNT_BASE = 30100;
+
+const accountNames = segment(ACCOUNT_BASE);
+const accountGoCodes: Record<string, number> = {};
+accountNames.forEach((name, i) => (accountGoCodes[name] = ACCOUNT_BASE + i));
+
+describe("账号错误码契约", () => {
+  it("code.go 里有以 30100 起算的账号段位", () => {
+    expect(accountNames[0]).toBe("UserNotFound");
+  });
+
+  // 账号闸门排在通行密钥登录建立会话之前，被封账号在那条路上拿到的就是
+  // UserBanned；登录页要按它显示「已被封禁」而不是一句通用失败。
+  it.each(Object.entries(ACCOUNT_CODES))(
+    "%s 与 code.go 算出来的值一致",
+    (name, value) => {
+      expect(
+        accountGoCodes[name],
+        `${name} 在 code.go 的账号段位里算出来不是 ${value}；` +
           `段位里插入或删除常量会让它后面的码整体平移，前端常量表要跟着改`,
       ).toBe(value);
     },

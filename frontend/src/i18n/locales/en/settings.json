@@ -1,0 +1,74 @@
+{
+  "title": "Settings",
+  "tabs": {
+    "providers": "LLM providers",
+    "backends": "Agent backends",
+    "privacy": "Privacy"
+  },
+  "sections": {
+    "providers": "LLM providers",
+    "backends": "Agent backends",
+    "privacy": "Privacy"
+  },
+  "syncStatus": "Account configuration · synced to {{count}} devices",
+  "offlineNotice": "Configuration stays in your account and will sync after you register a device.",
+  "backendsNoDevice": {
+    "title": "Register a device first",
+    "body": "An Agent backend runs on one of your machines. Register a desktop app or an agentred in this account, then come back and point a backend at it.",
+    "action": "Go to devices"
+  },
+  "errors": {
+    "noOnlineAgentred": "No online compute node is available. Start or reconnect one of your devices and try again.",
+    "builtinUnsupported": "Built-in backends cannot be created in the browser console.",
+    "deviceRequired": "Pick the device this backend runs on before saving.",
+    "deviceOffline": "That device is offline right now, so nothing could be probed on it.",
+    "deviceUnknown": "That device is no longer in this account. Pick another one."
+  },
+  "privacy": {
+    "activity": {
+      "title": "Activity stats",
+      "body": "Each of your machines reports one conversation count per day. The overview heatmap and the three distribution cards run on it.",
+      "statusOn": "On",
+      "statusOnAt": "On · last reported {{time}}",
+      "statusOff": "Off · stats cover only conversations saved to your account",
+      "loadError": "Could not load your stats settings. Please try again.",
+      "saveError": "Could not save that. Please try again.",
+      "deviceReportedToday": "Reported through today",
+      "deviceReportedThrough": "Reported through {{day}}",
+      "deviceOffline": "Offline",
+      "deviceBackfillLeft": "{{count}} days of backfill left",
+      "danger": {
+        "title": "Turn off activity stats",
+        "body": "Stop reporting, and delete the daily counts already on the server.",
+        "action": "Turn off and delete"
+      },
+      "enable": {
+        "title": "Turn on activity stats",
+        "body": "Your desktop app and agentred start reporting one conversation count per day.",
+        "willReport": "What is reported",
+        "wontReport": "What is never reported",
+        "reportDate": "The date, and how many conversations you started that day",
+        "reportDimensions": "The Agent, backend and model it ran on",
+        "reportProject": "The project's sync id",
+        "neverTitles": "Conversation titles and bodies",
+        "neverPaths": "File paths and cwd",
+        "neverPrompts": "Prompts and tool arguments",
+        "backfill": "Also backfill the history already on each machine",
+        "backfillHint": "Offline machines catch up on their own once they come back online.",
+        "foot": "You can turn it off in settings at any time; turning it off also deletes the counts already reported.",
+        "submit": "Turn on"
+      },
+      "disable": {
+        "title": "Turn off activity stats?",
+        "body": "Every machine stops reporting, and the daily counts already on the server are deleted. The heatmap falls back to covering only saved conversations.",
+        "note": "Your saved conversations themselves are not affected.",
+        "submit": "Turn off and delete"
+      }
+    },
+    "saved": {
+      "title": "Saved conversations",
+      "count": "{{count}} conversations",
+      "body": "Only conversations you explicitly saved are stored in your account. This is not a switch — unsave them one at a time on the Conversations page."
+    }
+  }
+}

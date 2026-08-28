@@ -41,7 +41,7 @@ type seedResult struct {
 
 func openDB(dsn string) (*gorm.DB, error) {
 	if strings.TrimSpace(dsn) == "" {
-		return nil, fmt.Errorf("--dsn is required (the harness reads it from agentre-server/configs/config.yaml)")
+		return nil, fmt.Errorf("--dsn is required (the harness reads it from github.com/agentre-hub/agentre-server/configs/config.yaml)")
 	}
 	gdb, err := gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: gormlogger.Discard})
 	if err != nil {

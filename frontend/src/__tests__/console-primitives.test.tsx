@@ -7,10 +7,11 @@
  *   - 尺寸：NavItem h-[34px]、TabBar h-[74px]、FilterChip h-[22px]、
  *     StatusMark 圆角胶囊、Metric value text-[23px]、EmptyState 62px 图标圈；
  *   - 状态：active/inactive、tone（StatusMark）、active/disabled（FilterChip）；
- *   - 真实动作边界：FilterChip disabled 不可交互、RowMenu 仅触发后出现且
- *     Escape/外部点击可关、危险项有独立样式；
+ *   - 真实动作边界：FilterChip disabled 不可交互；行级菜单已归共享包，
+ *     它的语义钉在 `row-actions-menu.test.tsx`（规格 2026-08-22 E 段）；
  *   - 旁白不得成为组件：渲染任意共享组件都不应带出设计旁白文案。
  */
+import { statusConfig } from "@agentre-hub/agentre-ui";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +23,6 @@ import {
   FilterChip,
   Metric,
   MobileTabBar,
-  RowMenu,
   StatusMark,
 } from "@/components/console";
 
@@ -70,19 +70,39 @@ describe("StatusMark（zF5jv）", () => {
     expect(pill.className).toContain("gap-1.5");
   });
 
-  it.each([
-    ["running", "bg-status-running-bg", "text-status-running"],
-    ["waiting", "bg-status-waiting-bg", "text-status-waiting"],
-    ["idle", "bg-secondary", "text-status-idle"],
-    ["error", "bg-destructive-soft", "text-destructive"],
-  ] as const)("tone=%s → 语义 token %s / %s", (tone, bg, text) => {
-    const { container } = render(
-      <StatusMark testId="pill" tone={tone} label="x" />,
-    );
-    const pill = container.querySelector('[data-testid="pill"]') as HTMLElement;
-    expect(pill.className).toContain(bg);
-    expect(pill.className).toContain(text);
-  });
+  /**
+   * 类名必须**取自**共享包的 `statusConfig`，不是照着它抄一份。
+   *
+   * 这条用例此前钉的是本站手抄的那份映射，四档全部与包不一致 —— 而且错在
+   * 同一处：把**点**的颜色当**文字**颜色用了。浅色下 running 是 #10b981 压
+   * #ecfdf5，对比度 2.41:1；waiting 是 #f59e0b 压 #fffbeb，2.07:1，都远低于
+   * WCAG AA 正文要求的 4.5:1。`--status-*-text` 这一档 token 存在的全部理由
+   * 就是「在 `-bg` 上当文字用」（包里是 5.21 / 4.84），本站没用它。
+   *
+   * 深色下 `-text` 与基色同值，所以这个缺陷只在浅色里显形 —— 这也是它能一直
+   * 躺着的原因。断言直接读包的值而不是写字面量：包再改一次，本站跟着走。
+   */
+  it.each(["running", "waiting", "idle", "error"] as const)(
+    "tone=%s → 胶囊与点的类名都来自包的 statusConfig",
+    (tone) => {
+      const { container } = render(
+        <StatusMark testId="pill" tone={tone} label="x" />,
+      );
+      const pill = container.querySelector(
+        '[data-testid="pill"]',
+      ) as HTMLElement;
+      for (const cls of statusConfig[tone].pillClassName.split(" ")) {
+        expect(pill.className, `胶囊缺了 ${cls}`).toContain(cls);
+      }
+
+      // 点用 dotClassName（亮色信号），文字用 pillClassName 里的深色 —— 两者
+      // 刻意不同色。此前点是 bg-current，于是跟着文字一起错。
+      const dot = container.querySelector(
+        'span[aria-hidden="true"]',
+      ) as HTMLElement;
+      expect(dot.className).toContain(statusConfig[tone].dotClassName);
+    },
+  );
 });
 
 describe("Metric（IhldU 统计卡）", () => {
@@ -320,80 +340,11 @@ describe("MobileTabBar（A6Z3k）", () => {
     const active = screen.getByRole("link", { name: "Overview" });
     const idle = screen.getByRole("link", { name: "Chat" });
     expect(active.className).toContain("text-primary-text");
-    expect(idle.className).toContain("text-subtle-foreground");
+    expect(idle.className).toContain("text-muted-foreground");
     // 高亮 tab 的文案字重 600。
     expect(within(active).getByText("Overview").className).toContain(
       "font-semibold",
     );
     assertNoNarration(document.body, "MobileTabBar");
-  });
-});
-
-describe("RowMenu（行级菜单语义）", () => {
-  function renderMenu(
-    items = [
-      { key: "open", label: "Open", onSelect: vi.fn() },
-      {
-        key: "revoke",
-        label: "Revoke",
-        danger: true,
-        onSelect: vi.fn(),
-      },
-    ],
-  ) {
-    return render(<RowMenu label="Row actions" items={items} />);
-  }
-
-  it("触发按钮带 aria-haspopup/aria-expanded，未开时无菜单", () => {
-    renderMenu();
-    const trigger = screen.getByRole("button", { name: "Row actions" });
-    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("menu")).toBeNull();
-    assertNoNarration(document.body, "RowMenu");
-  });
-
-  it("点击触发后出现菜单并聚焦首个 menuitem；危险项用 destructive 色", () => {
-    renderMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    const menu = screen.getByRole("menu");
-    expect(menu).toBeTruthy();
-    const items = within(menu).getAllByRole("menuitem");
-    expect(items.map((i) => i.textContent)).toEqual(["Open", "Revoke"]);
-    expect(document.activeElement).toBe(items[0]);
-    expect(items[1].className).toContain("text-destructive");
-  });
-
-  it("选择菜单项后触发 onSelect 并关闭菜单", () => {
-    const onOpen = vi.fn();
-    const onRevoke = vi.fn();
-    renderMenu([
-      { key: "open", label: "Open", onSelect: onOpen },
-      { key: "revoke", label: "Revoke", danger: true, onSelect: onRevoke },
-    ]);
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Revoke" }));
-    expect(onRevoke).toHaveBeenCalledTimes(1);
-    expect(onOpen).not.toHaveBeenCalled();
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("Escape 关闭菜单并把焦点还给触发按钮", () => {
-    renderMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    const menu = screen.getByRole("menu");
-    fireEvent.keyDown(menu, { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Row actions" }),
-    );
-  });
-
-  it("点击菜单外部关闭菜单", () => {
-    renderMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    expect(screen.getByRole("menu")).toBeTruthy();
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole("menu")).toBeNull();
   });
 });

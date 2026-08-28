@@ -48,6 +48,9 @@ func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 	for _, name := range []string{
 		"users", "device_flow_codes", "devices", "device_tokens",
 		"sync_objects", "sync_account_seqs", "sync_device_states", "sync_avatars", "device_local_paths",
+		// 通行密钥的行没有指向 users 的外键：账号删掉它也留着，清理里不列一条就
+		// 永久留在专库里（本轮已实证留下两行属于已删账号的凭证）。
+		"webauthn_credentials",
 	} {
 		_ = findSQLStep(t, counts, name)
 	}

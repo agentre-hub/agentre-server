@@ -8,7 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
 //go:generate mockgen -source device.go -destination mock_device_repo/mock_device.go
@@ -31,29 +32,13 @@ func NewDevice() DeviceRepo       { return &repo{} }
 type repo struct{}
 
 func (r *repo) Find(ctx context.Context, id int64) (*device_entity.Device, error) {
-	ret := &device_entity.Device{}
-	err := db.Ctx(ctx).Where("id=?", id).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[device_entity.Device](db.Ctx(ctx).Where("id=?", id))
 }
 
 // FindByFingerprint 按 (user_id, fingerprint) 查一台设备，查不到返回 (nil, nil)。
 // Upsert 已不再用它（改走数据库原子 upsert），relay_svc 解析中继目标时用。
 func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (*device_entity.Device, error) {
-	ret := &device_entity.Device{}
-	err := db.Ctx(ctx).Where("user_id=? AND fingerprint=?", userID, fp).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[device_entity.Device](db.Ctx(ctx).Where("user_id=? AND fingerprint=?", userID, fp))
 }
 
 // Upsert 按 (user_id, fingerprint) 落库：走 uk_devices_user_fingerprint 的

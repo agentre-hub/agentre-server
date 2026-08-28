@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,17 +17,66 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
-	"agentre-server/internal/model/entity/sync_entity"
-	"agentre-server/internal/pkg/code"
-	"agentre-server/internal/repository/sync_repo"
-	"agentre-server/internal/repository/sync_repo/mock_sync_repo"
-	hubtest "agentre-server/internal/testutils"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo/mock_sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
+
+// accountChanCall 是 stubAccountChan 记下的一次广播。
+type accountChanCall struct {
+	accountID int64
+	version   int64
+}
+
+// stubAccountChan 是账号级实时通道在服务层测试里的替身（SetDefault 换掉真实的
+// Redis 实现），只记调用、可选地模拟广播失败——写路径测试据此断言「广播失败只记录、
+// 不回滚已经落库的写入」。
+type stubAccountChan struct {
+	mu    sync.Mutex
+	err   error
+	calls []accountChanCall
+}
+
+func (s *stubAccountChan) Broadcast(_ context.Context, accountID int64, frame accountchan_svc.Frame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, accountChanCall{accountID: accountID, version: frame.Version})
+	return s.err
+}
+
+func (s *stubAccountChan) Subscribe(context.Context, int64) (accountchan_svc.Subscription, error) {
+	return nil, errors.New("stubAccountChan: Subscribe not used by write-path tests")
+}
+
+func (s *stubAccountChan) recordedCalls() []accountChanCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]accountChanCall(nil), s.calls...)
+}
+
+// registerAccountChanStub 换上替身并保证测试结束后恢复成未装配状态（Default() 的
+// 安全占位），不让一个测试的广播替身漏到下一个测试里。
+func registerAccountChanStub(t *testing.T) *stubAccountChan {
+	t.Helper()
+	stub := &stubAccountChan{}
+	accountchan_svc.SetDefault(stub)
+	t.Cleanup(func() { accountchan_svc.SetDefault(nil) })
+	return stub
+}
 
 const (
 	testUserID   = int64(7)
 	testDeviceID = int64(2)
-	testNow      = int64(1_700_000_000_000)
+	// pushingFingerprint 是这台上行设备自己的指纹：origin_fingerprint 记的就是它
+	// （决策 14）。
+	pushingFingerprint = "fp-2"
+	testNow            = int64(1_700_000_000_000)
 )
 
 type syncMocks struct {
@@ -33,6 +84,7 @@ type syncMocks struct {
 	state     *mock_sync_repo.MockSyncStateRepo
 	avatar    *mock_sync_repo.MockSyncAvatarRepo
 	localPath *mock_sync_repo.MockSyncLocalPathRepo
+	device    *mock_device_repo.MockDeviceRepo
 	sql       sqlmock.Sqlmock
 }
 
@@ -46,11 +98,23 @@ func setupSyncTest(t *testing.T) (context.Context, *syncMocks, *syncSvc) {
 		state:     mock_sync_repo.NewMockSyncStateRepo(ctrl),
 		avatar:    mock_sync_repo.NewMockSyncAvatarRepo(ctrl),
 		localPath: mock_sync_repo.NewMockSyncLocalPathRepo(ctrl),
+		device:    mock_device_repo.NewMockDeviceRepo(ctrl),
 	}
+	device_repo.RegisterDevice(m.device)
+	// 每一次 Push 都要把上行这台机器的**指纹**记进 origin_fingerprint（决策 14），
+	// 凭据里只有设备号，所以它一律解得出一行来。装在这里而不是逐个用例里：它是这条
+	// 路径上的常量，不是任何一条用例的判据。
+	m.device.EXPECT().Find(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id int64) (*device_entity.Device, error) {
+			return &device_entity.Device{
+				ID: id, UserID: testUserID, Fingerprint: fmt.Sprintf("fp-%d", id),
+			}, nil
+		}).AnyTimes()
 	sync_repo.RegisterSyncObject(m.object)
 	sync_repo.RegisterSyncState(m.state)
 	sync_repo.RegisterSyncAvatar(m.avatar)
 	sync_repo.RegisterSyncLocalPath(m.localPath)
+	// 没有 EXPECT 的调用会被 gomock 判失败——「不该删排列」的那几条边界靠这一点成立。
 
 	ctx, _, sqlMock := hubtest.Database(t)
 	m.sql = sqlMock
@@ -109,7 +173,7 @@ func TestPush_GivenBaseVersionMatchesCurrent_ThenAccepted(t *testing.T) {
 		expectTx(m)
 		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
-			Version: 7, SourceDeviceID: 9,
+			Version: 7, OriginFingerprint: "fp-9",
 		}, nil)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
@@ -123,10 +187,10 @@ func TestPush_GivenBaseVersionMatchesCurrent_ThenAccepted(t *testing.T) {
 		assert.Equal(t, PushStatusAccepted, out.Results[0].Status)
 		assert.Equal(t, int64(8), out.Results[0].Version)
 		assert.Zero(t, out.Results[0].OverwrittenVersion)
-		assert.Zero(t, out.Results[0].OverwrittenDeviceID)
+		assert.Zero(t, out.Results[0].OverwrittenOriginFingerprint)
 		assert.Len(t, saved, 1)
 		assert.Equal(t, int64(8), saved[0].Version)
-		assert.Equal(t, testDeviceID, saved[0].SourceDeviceID)
+		assert.Equal(t, pushingFingerprint, saved[0].OriginFingerprint)
 		assert.NoError(t, m.sql.ExpectationsWereMet())
 	})
 }
@@ -140,7 +204,7 @@ func TestPush_GivenStaleBaseVersion_ThenAcceptedAndReportsOverwritten(t *testing
 		expectTx(m)
 		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
-			Version: 7, SourceDeviceID: 9,
+			Version: 7, OriginFingerprint: "fp-9",
 		}, nil)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
@@ -152,7 +216,7 @@ func TestPush_GivenStaleBaseVersion_ThenAcceptedAndReportsOverwritten(t *testing
 		assert.NoError(t, err)
 		assert.Equal(t, PushStatusConflict, out.Results[0].Status)
 		assert.Equal(t, int64(7), out.Results[0].OverwrittenVersion)
-		assert.Equal(t, int64(9), out.Results[0].OverwrittenDeviceID)
+		assert.Equal(t, "fp-9", out.Results[0].OverwrittenOriginFingerprint)
 		// 后到者仍然胜出：这一版照常落库。
 		assert.Equal(t, int64(8), out.Results[0].Version)
 		assert.Len(t, saved, 1)
@@ -168,7 +232,7 @@ func TestPush_GivenEmptyBaseVersionOnExistingSyncID_ThenTreatedAsConflict(t *tes
 		expectTx(m)
 		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
-			Version: 7, SourceDeviceID: 9,
+			Version: 7, OriginFingerprint: "fp-9",
 		}, nil)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
@@ -180,7 +244,7 @@ func TestPush_GivenEmptyBaseVersionOnExistingSyncID_ThenTreatedAsConflict(t *tes
 		assert.NoError(t, err)
 		assert.Equal(t, PushStatusConflict, out.Results[0].Status)
 		assert.Equal(t, int64(7), out.Results[0].OverwrittenVersion)
-		assert.Equal(t, int64(9), out.Results[0].OverwrittenDeviceID)
+		assert.Equal(t, "fp-9", out.Results[0].OverwrittenOriginFingerprint)
 	})
 }
 
@@ -212,9 +276,15 @@ func TestPush_GivenTombstonedRow_ThenNonDeletePushIsRejected(t *testing.T) {
 		expectTx(m)
 		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
-			Version: 9, SourceDeviceID: 9, DeletedAt: testNow - 1000,
+			Version: 9, OriginFingerprint: "fp-9", DeletedAt: testNow - 1000,
 		}, nil)
-		// 不该取版本号、更不该落库：没有 EXPECT，调用即失败。
+		// 不该落库：Save 没有 EXPECT，调用即失败。
+		//
+		// 版本号则会被取走一个。这一批的号在**事务之前**一次取完（那是为了不让
+		// sync_account_seqs 的行锁横跨整批），而「撞墓碑」要读过库才判得出来，
+		// 那时号已经在手上了。于是序列上留下一个空号——版本号是单调游标，下行按
+		// 「version > cursor」取，空号对任何一端都不可观察。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(10), nil)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-p1", 9)}})
@@ -236,19 +306,57 @@ func TestPush_GivenTombstonedRow_ThenRepeatedDeleteIsAccepted(t *testing.T) {
 		expectTx(m)
 		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
-			Version: 9, SourceDeviceID: 9, DeletedAt: testNow - 1000,
+			Version: 9, OriginFingerprint: "fp-9", DeletedAt: testNow - 1000,
 		}, nil)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(10), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
 
 		item := projectItem("sync-p1", 9)
-		item.Deleted = true
+		item.DeletedAt = testNow
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
 
 		assert.NoError(t, err)
 		assert.Equal(t, PushStatusAccepted, out.Results[0].Status)
 		assert.Equal(t, testNow, saved[0].DeletedAt)
+	})
+}
+
+// 决策 20 让墓碑携带**发起端记下的**删除时刻，但同一列同时是 ReclaimExpired 的唯一
+// 回收判据（deleted_at < now - 30d）。桌面端的墙钟因此不能直接决定 server 的保留期：
+// 一台落后 30 天的机器（或任何写 deleted_at:1 的客户端）推来的墓碑会在下一轮回收里
+// 立刻被删掉，而还没拉到它的离线端把活行推回来时，R6 的复活守卫已经无行可查——整个
+// 账号的删除被撤销。反向偏差（时刻在未来）则让墓碑永不过期。
+// 落库的时刻必须被夹回 [now-30d, now]。
+func TestPush_GivenTombstoneInstantOutsideRetentionWindow_ThenClampedToServerClock(t *testing.T) {
+	convey.Convey("上行带来的删除时刻越界", t, func() {
+		for _, tc := range []struct {
+			name      string
+			deletedAt int64
+			want      int64
+		}{
+			{"墙钟落后到窗口之外", 1, testNow - TombstoneWindow.Milliseconds()},
+			{"墙钟快到未来", testNow + 90*24*3600*1000, testNow},
+			{"窗口之内的时刻原样保留", testNow - 1000, testNow - 1000},
+		} {
+			convey.Convey(tc.name, func() {
+				ctx, m, svc := setupSyncTest(t)
+				onlineDevice(m)
+				expectTx(m)
+				m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(nil, nil)
+				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(10), nil)
+				var saved []*sync_entity.SyncObject
+				captureSave(m, &saved)
+
+				item := projectItem("sync-p1", 0)
+				item.DeletedAt = tc.deletedAt
+				out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
+
+				assert.NoError(t, err)
+				assert.Equal(t, PushStatusAccepted, out.Results[0].Status)
+				assert.Equal(t, tc.want, saved[0].DeletedAt)
+			})
+		}
 	})
 }
 
@@ -263,7 +371,7 @@ func TestPush_GivenSameProjectFingerprintFromBothEnds_ThenMergedIntoOneRow(t *te
 		m.object.EXPECT().FindLocationByNaturalKey(gomock.Any(), testUserID, "proj-1", "fp-a").
 			Return(&sync_entity.SyncObject{
 				ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
-				ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 4, SourceDeviceID: 9,
+				ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 4, OriginFingerprint: "fp-9",
 			}, nil)
 		gomock.InOrder(
 			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil),
@@ -286,7 +394,7 @@ func TestPush_GivenSameProjectFingerprintFromBothEnds_ThenMergedIntoOneRow(t *te
 		assert.Equal(t, int64(9), saved[0].Version)
 		assert.Equal(t, "loc-A", out.Results[0].MergedSyncID)
 		assert.Equal(t, int64(4), out.Results[0].MergedVersion)
-		assert.Equal(t, int64(9), out.Results[0].MergedDeviceID)
+		assert.Equal(t, "fp-9", out.Results[0].MergedOriginFingerprint)
 	})
 }
 
@@ -303,7 +411,7 @@ func TestPush_GivenIncomingLosesNaturalKeyMerge_ThenItIsTheOneTombstoned(t *test
 		m.object.EXPECT().FindLocationByNaturalKey(gomock.Any(), testUserID, "proj-1", "fp-a").
 			Return(&sync_entity.SyncObject{
 				ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
-				ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 10, SourceDeviceID: 9,
+				ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 10, OriginFingerprint: "fp-9",
 			}, nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -357,7 +465,7 @@ func TestPush_GivenDeletedLocation_ThenNoNaturalKeyLookup(t *testing.T) {
 		captureSave(m, &saved)
 
 		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
-			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 4, Deleted: true,
+			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 4, DeletedAt: testNow,
 			ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a",
 		}}})
 
@@ -384,7 +492,7 @@ func TestPush_GivenDeletedLocationWithoutProjectSyncID_ThenAccepted(t *testing.T
 
 		// 桌面端 sync_svc.buildPushItem 的删除分支产出的正是这个形状。
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
-			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 4, Deleted: true,
+			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 4, DeletedAt: testNow,
 		}}})
 
 		assert.NoError(t, err)
@@ -442,7 +550,7 @@ func TestPush_GivenClientTimestamps_ThenVersionComesOnlyFromAccountSequence(t *t
 		// 库里那一行的客户端时间戳远在未来，本次上行的时间戳古老得多。
 		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
-			Version: 7, SourceDeviceID: 9, SyncUpdatedAt: testNow + (10 * 365 * 24 * time.Hour).Milliseconds(),
+			Version: 7, OriginFingerprint: "fp-9", SyncUpdatedAt: testNow + (10 * 365 * 24 * time.Hour).Milliseconds(),
 		}, nil)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
@@ -576,7 +684,7 @@ func TestPush_GivenUnknownKind_ThenRejected(t *testing.T) {
 		onlineDevice(m)
 		expectTx(m)
 		item := projectItem("sync-x", 0)
-		item.Kind = "llm_provider"
+		item.Kind = "unknown_kind"
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
 		assert.NoError(t, err)
 		assert.Equal(t, PushRejectReasonKind, out.Results[0].Reason)
@@ -604,10 +712,8 @@ func TestPush_GivenMultipleItems_ThenVersionsStrictlyIncrease(t *testing.T) {
 		onlineDevice(m)
 		expectTx(m)
 		m.object.EXPECT().Find(gomock.Any(), testUserID, gomock.Any()).Return(nil, nil).Times(2)
-		gomock.InOrder(
-			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(4), nil),
-			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(5), nil),
-		)
+		// 整批一次取走 2 个,返回其中最大的那个 → 依次发放 4、5(与逐条取号时同值)。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved).Times(2)
 
@@ -620,14 +726,100 @@ func TestPush_GivenMultipleItems_ThenVersionsStrictlyIncrease(t *testing.T) {
 	})
 }
 
+// 设备上行是「谁发信号」三处之一：落库之后要把账号级实时通道推进到这一版，另一台
+// 桌面端才不必等 30 秒轮询（规格「账号级实时通道」）。
+func TestPush_GivenAcceptedItem_ThenBroadcastsAccountVersion(t *testing.T) {
+	convey.Convey("上行成功后广播账号版本", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		onlineDevice(m)
+		expectTx(m)
+		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(nil, nil)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
+		var saved []*sync_entity.SyncObject
+		captureSave(m, &saved)
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{projectItem("sync-p1", 0)}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, int64(8), out.Results[0].Version)
+		assert.Equal(t, []accountChanCall{{accountID: testUserID, version: 8}}, stub.recordedCalls())
+	})
+}
+
+// 一批里多条各自烧了版本号时，只广播这一批里最新的那个版本——信号只携带版本号，
+// 待发的信号可以合并成最新的一条（规格「合并」），没必要一条一条发。
+func TestPush_GivenMultipleAcceptedItems_ThenBroadcastsOnlyTheHighestVersion(t *testing.T) {
+	convey.Convey("一次上行多条只广播最高版本", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		onlineDevice(m)
+		expectTx(m)
+		m.object.EXPECT().Find(gomock.Any(), testUserID, gomock.Any()).Return(nil, nil).Times(2)
+		// 整批一次取走 2 个,返回其中最大的那个 → 依次发放 4、5(与逐条取号时同值)。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
+		var saved []*sync_entity.SyncObject
+		captureSave(m, &saved).Times(2)
+
+		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{projectItem("sync-a", 0), projectItem("sync-b", 0)}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, []accountChanCall{{accountID: testUserID, version: 5}}, stub.recordedCalls())
+	})
+}
+
+// 整批都在校验阶段被拒（rejectReason）时没有任何一条烧版本号——不该发一条空信号，
+// 让在线的桌面端为了什么都没变的一次上行多拉一页。
+func TestPush_GivenAllItemsRejectedByValidation_ThenNoBroadcast(t *testing.T) {
+	convey.Convey("整批校验不通过时不广播", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		onlineDevice(m)
+		expectTx(m)
+		item := projectItem("sync-x", 0)
+		item.Kind = "unknown_kind"
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{item}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, PushRejectReasonKind, out.Results[0].Reason)
+		assert.Empty(t, stub.recordedCalls())
+	})
+}
+
+// 广播失败只记录、不回滚已经落库的写入——写入的权威性在数据库，不在通道
+// （规格「失败处理」）。Push 本身必须照常成功返回。
+func TestPush_GivenAccountChannelBroadcastFails_ThenPushStillSucceeds(t *testing.T) {
+	convey.Convey("广播失败不影响已经落库的写入", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		stub.err = errors.New("redis unreachable")
+		onlineDevice(m)
+		expectTx(m)
+		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(nil, nil)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
+		var saved []*sync_entity.SyncObject
+		captureSave(m, &saved)
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{projectItem("sync-p1", 0)}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, PushStatusAccepted, out.Results[0].Status)
+		assert.Len(t, saved, 1, "写入照常落库，不因广播失败回滚")
+	})
+}
+
 // R3 下行：按版本游标增量，墓碑也在其中（R6 的删除靠它到达各端）。
 func TestPull_GivenCursor_ThenReturnsIncrementInVersionOrder(t *testing.T) {
 	convey.Convey("按游标下行", t, func() {
 		ctx, m, svc := setupSyncTest(t)
 		m.object.EXPECT().ListSince(gomock.Any(), testUserID, int64(12), DefaultPullLimit).Return(
 			[]*sync_entity.SyncObject{
-				{Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{"name":"a"}`, Version: 13, SourceDeviceID: 9},
-				{Kind: sync_entity.KindAgent, SyncID: "a1", Version: 14, SourceDeviceID: 9, DeletedAt: testNow},
+				{Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{"name":"a"}`, Version: 13, OriginFingerprint: "fp-9"},
+				{Kind: sync_entity.KindAgent, SyncID: "a1", Version: 14, OriginFingerprint: "fp-9", DeletedAt: testNow},
 			}, nil)
 
 		out, err := svc.Pull(ctx, PullInput{UserID: testUserID, DeviceID: testDeviceID, Cursor: 12})
@@ -636,8 +828,8 @@ func TestPull_GivenCursor_ThenReturnsIncrementInVersionOrder(t *testing.T) {
 		assert.Len(t, out.Items, 2)
 		assert.Equal(t, int64(14), out.NextCursor)
 		assert.False(t, out.HasMore)
-		assert.False(t, out.Items[0].Deleted)
-		assert.True(t, out.Items[1].Deleted)
+		assert.Zero(t, out.Items[0].DeletedAt)
+		assert.Equal(t, testNow, out.Items[1].DeletedAt)
 	})
 }
 
@@ -662,6 +854,8 @@ func TestPull_GivenEmptyPage_ThenCursorStaysPut(t *testing.T) {
 	convey.Convey("没有增量", t, func() {
 		ctx, m, svc := setupSyncTest(t)
 		m.object.EXPECT().ListSince(gomock.Any(), testUserID, int64(12), DefaultPullLimit).Return(nil, nil)
+		// 空页要先分清成因：游标没有超出序列的头，这才是「消费干净」。
+		m.state.EXPECT().CurrentVersion(gomock.Any(), testUserID).Return(int64(12), nil)
 		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
 
 		out, err := svc.Pull(ctx, PullInput{UserID: testUserID, DeviceID: testDeviceID, Cursor: 12})
@@ -683,6 +877,44 @@ func TestPull_GivenDeviceBeyondWindow_ThenStillAllowed(t *testing.T) {
 
 		assert.NoError(t, err)
 		assert.Len(t, out.Items, 1)
+	})
+}
+
+// 服务端库被重建（或用户换了一套自建服务端）之后，账号的版本序列从头开始，而设备
+// 手上的游标还停在上一套历史的某个大数上。ListSince 是 `version > cursor`，于是每
+// 一轮下行都返回空页——空页在这里被当成「这台设备已经把增量消费干净」并刷新
+// last_sync_at，R6a 的超窗口判定读的正是它，30500 因此永不发出：设备没有任何理由
+// 重同步，界面上也没有任何错误可循，两台机器从此互相看不见。
+//
+// 「游标超出本账号序列的头」在语义上就是「我不认识你说的那段历史」，必须明确说
+// 出来，而不是回空页 + 刷新窗口。
+func TestPull_GivenCursorBeyondAccountSequence_ThenCursorUnknown(t *testing.T) {
+	convey.Convey("游标超出账号序列的头", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		m.object.EXPECT().ListSince(gomock.Any(), testUserID, int64(500), DefaultPullLimit).Return(nil, nil)
+		m.state.EXPECT().CurrentVersion(gomock.Any(), testUserID).Return(int64(3), nil)
+		// TouchDeviceState 刻意没有 EXPECT：窗口一旦被刷新，R6a 就永远不会触发。
+
+		out, err := svc.Pull(ctx, PullInput{UserID: testUserID, DeviceID: testDeviceID, Cursor: 500})
+
+		assert.Nil(t, out)
+		assert.Equal(t, code.SyncCursorUnknown, errCode(t, err))
+	})
+}
+
+// 反向守卫：游标正好站在序列头上就是「已消费干净」，窗口照常刷新——sync.go 里那段
+// 注释说的原本意图（防止卡住的设备拿陈旧基版本把已回收的删除推回来）必须保住。
+func TestPull_GivenCursorAtSequenceHead_ThenWindowStillRefreshes(t *testing.T) {
+	convey.Convey("游标正好站在序列头上", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		m.object.EXPECT().ListSince(gomock.Any(), testUserID, int64(12), DefaultPullLimit).Return(nil, nil)
+		m.state.EXPECT().CurrentVersion(gomock.Any(), testUserID).Return(int64(12), nil)
+		m.state.EXPECT().TouchDeviceState(gomock.Any(), testUserID, testDeviceID, testNow).Return(nil)
+
+		out, err := svc.Pull(ctx, PullInput{UserID: testUserID, DeviceID: testDeviceID, Cursor: 12})
+
+		assert.NoError(t, err)
+		assert.Empty(t, out.Items)
 	})
 }
 
@@ -824,16 +1056,315 @@ func TestReclaimExpired_GivenTombstoneSweepFails_ThenAvatarSweepIsNotAttempted(t
 	})
 }
 
-// R18：用户在 web 端删除（撤销）一台设备时，该设备上报的本机路径清单一并消失；
-// 这条只碰上报组的一张表，不碰同步组（sync_objects）的任何一行。
-func TestPurgeDeviceLocalPaths_GivenDeviceID_ThenDeletesItsReportedSnapshot(t *testing.T) {
-	convey.Convey("撤销设备时清掉它上报的本机路径清单", t, func() {
-		ctx, m, svc := setupSyncTest(t)
-		m.localPath.EXPECT().DeleteByDevice(gomock.Any(), testDeviceID).Return(nil)
+const testFingerprint = "sha256:aaaa"
 
-		assert.NoError(t, svc.PurgeDeviceLocalPaths(ctx, testDeviceID))
+// deviceScopedFixture 是一张混着各种 kind 的账号级快照，其中 CLI 覆盖与项目路径
+// 属于要离开账号的那台机器。project / agent / backend 这几行**故意**也带上同一个
+// 指纹：真实账号级 backend 不以指纹为身份，写成这样是为了让「只碰覆盖与路径记录」
+// 这条边界由 kind 本身而不是由数据的巧合来保证。
+func deviceScopedFixture() []*sync_entity.SyncObject {
+	return []*sync_entity.SyncObject{
+		{ID: 1, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "p1", AgentredFingerprint: testFingerprint},
+		{ID: 2, UserID: testUserID, Kind: sync_entity.KindAgent, SyncID: "a1", AgentredFingerprint: testFingerprint},
+		{ID: 3, UserID: testUserID, Kind: sync_entity.KindAgentBackend, SyncID: "b1", AgentredFingerprint: testFingerprint, Version: 10},
+		{ID: 4, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "l1", AgentredFingerprint: testFingerprint, Version: 11},
+		{ID: 5, UserID: testUserID, Kind: sync_entity.KindAgentBackend, SyncID: "b2", AgentredFingerprint: "sha256:bbbb", Version: 12},
+		{ID: 6, UserID: testUserID, Kind: sync_entity.KindAgentBackend, SyncID: "b3", Version: 13},
+		{ID: 7, UserID: testUserID, Kind: sync_entity.KindAgentBackendCLI, SyncID: "cli-1", ProjectSyncID: "b1", AgentredFingerprint: testFingerprint, Version: 14},
+	}
+}
+
+// expectListLiveByFingerprint 让 mock 按仓储的真实语义过滤 fixture，这样服务传下去的
+// kinds / fingerprint 说错了，测试就会在断言里现形。
+func expectListLiveByFingerprint(m *syncMocks, rows []*sync_entity.SyncObject) {
+	m.object.EXPECT().ListLiveByFingerprint(gomock.Any(), testUserID, gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, userID int64, fingerprint string, kinds []string) ([]*sync_entity.SyncObject, error) {
+			wanted := map[string]bool{}
+			for _, k := range kinds {
+				wanted[k] = true
+			}
+			var out []*sync_entity.SyncObject
+			for _, row := range rows {
+				if row.UserID == userID && row.AgentredFingerprint == fingerprint &&
+					wanted[row.Kind] && !row.IsDeleted() {
+					out = append(out, row)
+				}
+			}
+			return out, nil
+		},
+	)
+}
+
+// execTargetRow 造一条存活的执行目标行。载荷里的 `backend_sync_id` 是它引用的那一档
+// backend——键名与桌面端 sync_svc/adapter_org.go 的 `json:"backend_sync_id"` 同源，
+// 服务端 workspace_svc 的展示路径也按这个键解析。
+func execTargetRow(id int64, syncID, agentSyncID, backendSyncID string) *sync_entity.SyncObject {
+	return &sync_entity.SyncObject{
+		ID: id, UserID: testUserID, Kind: sync_entity.KindAgentExecTarget, SyncID: syncID,
+		Payload: fmt.Sprintf(`{"agent_sync_id":%q,"backend_sync_id":%q,"sort_order":1}`,
+			agentSyncID, backendSyncID),
+	}
+}
+
+// expectListByKinds 让 mock 按仓储的真实语义过滤 fixture：墓碑不返回、kind 不在
+// 清单里的不返回。服务传下去的 kinds 说错了，断言里就会现形。
+func expectListByKinds(m *syncMocks, rows []*sync_entity.SyncObject) {
+	m.object.EXPECT().ListByKinds(gomock.Any(), testUserID, gomock.Any()).DoAndReturn(
+		func(_ context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error) {
+			wanted := map[string]bool{}
+			for _, k := range kinds {
+				wanted[k] = true
+			}
+			var out []*sync_entity.SyncObject
+			for _, row := range rows {
+				if row.UserID == userID && wanted[row.Kind] && !row.IsDeleted() {
+					out = append(out, row)
+				}
+			}
+			return out, nil
+		},
+	).AnyTimes()
+}
+
+// 一台设备离开账号（控制台解除授权，或机器上 agentred unclaim）时，账号级同步数据里
+// **只属于这台设备**的两类行跟着消失：该指纹的 CLI 覆盖、它上面的项目路径。账号级
+// backend 身份与 llm_provider 必须继续存活。
+//
+// 必须是墓碑，不能是硬删：这些对象每台桌面端都有一份副本，硬删的话它们永远学不到，
+// 那个 backend 会作为「永久不可用的一档」一直挂在执行目标列表里；更糟的是任一台桌面端
+// 一旦编辑它，就会被当成新对象重新推上来复活，直接违反 R6。
+func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenTombstonesOnlyThatDevicesCLIOverlaysAndLocations(t *testing.T) {
+	convey.Convey("设备离开账号时，该指纹的 CLI 覆盖与项目路径落墓碑", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		expectListLiveByFingerprint(m, deviceScopedFixture())
+		expectListByKinds(m, deviceScopedFixture())
+
+		next := int64(100)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
+			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
+		).Times(2)
+
+		type stone struct{ id, version int64 }
+		var stones []stone
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).DoAndReturn(
+			func(_ context.Context, id, version, _ int64) (int64, error) {
+				stones = append(stones, stone{id, version})
+				return 1, nil
+			},
+		).Times(2)
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+
+		// 只有路径记录(4) 与 CLI 覆盖(7) 被落墓碑：project(1) / agent(2) / 账号级
+		// backend(3) 一行不许动，另一台机器的 backend(5) 与本机档 backend(6) 同样不许动。
+		assert.Equal(t, []stone{{4, 101}, {7, 102}}, stones)
 	})
 }
+
+// 落墓碑同样要广播——设备被撤销后，另一台桌面端不该还要等 30 秒轮询
+// 才知道该设备的 CLI 覆盖与项目路径已删除。
+func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenBroadcastsHighestVersion(t *testing.T) {
+	convey.Convey("落墓碑后广播这一次操作烧到的最高版本", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		expectListLiveByFingerprint(m, deviceScopedFixture())
+		expectListByKinds(m, deviceScopedFixture())
+
+		next := int64(100)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
+			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
+		).Times(2)
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+
+		assert.Equal(t, []accountChanCall{{accountID: testUserID, version: 102}}, stub.recordedCalls())
+	})
+}
+
+// 空指纹是「当前这台桌面端」这个**相对**引用（决策 14），不指代任何一台具体机器。
+// 拿它当过滤条件会把账号下每一个本机 CLI 覆盖一次全部落墓碑 —— 这是这条清理里唯一
+// 一种能把好数据成片删掉的失效方式，因此在服务层直接短路，一次查询都不发。
+func TestPurgeDeviceSyncObjects_GivenEmptyFingerprint_ThenTouchesNothing(t *testing.T) {
+	convey.Convey("指纹为空时一行都不碰", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		_ = m // 没有任何 EXPECT：任何一次仓储调用都会让 gomock 判失败
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, ""))
+	})
+}
+
+// 这台机器上没有任何东西时不取版本号：空转一次也不该在账号序列上留下缺口
+// （序列同时是下行游标，白白跳号会让每一台桌面端多拉一个空页）。
+func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoVersionIsBurned(t *testing.T) {
+	convey.Convey("没有属于这台设备的行时不分配版本号", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		expectListLiveByFingerprint(m, deviceScopedFixture())
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, "sha256:never-seen"))
+	})
+}
+
+// accountIdentityFixture 在设备局部行之外放入部门与执行目标。它们都与被撤销设备
+// 同账号，因此撤销时不论载荷引用谁都绝不能被连带墓碑。
+func accountIdentityFixture() []*sync_entity.SyncObject {
+	return append(deviceScopedFixture(),
+		&sync_entity.SyncObject{ID: 7, UserID: testUserID, Kind: sync_entity.KindDepartment,
+			SyncID: "d1", AgentredFingerprint: testFingerprint},
+		execTargetRow(8, "t1", "a1", "b1"),
+		execTargetRow(9, "t2", "a1", "b2"),
+		execTargetRow(10, "t3", "a1", "b3"),
+	)
+}
+
+// backend 身份和执行目标都是账号级对象。即使它们的载荷提到撤销设备上的旧 backend，
+// 设备撤销仍只能删除该设备的 CLI 覆盖与项目路径，不能级联到账号身份。
+func TestPurgeDeviceSyncObjects_GivenAccountBackendAndExecTarget_ThenLeavesThemAlive(t *testing.T) {
+	convey.Convey("账号级 backend 身份与执行目标不随设备撤销而落墓碑", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		expectListLiveByFingerprint(m, accountIdentityFixture())
+		// ListByKinds 没有 EXPECT：设备撤销不扫描账号级 backend 或执行目标。
+
+		next := int64(100)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
+			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
+		).Times(2)
+
+		type stone struct{ id, version int64 }
+		var stones []stone
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).DoAndReturn(
+			func(_ context.Context, id, version, _ int64) (int64, error) {
+				stones = append(stones, stone{id, version})
+				return 1, nil
+			},
+		).Times(2)
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+
+		// 后端身份 b1 与其执行目标 t1 都属于账号，撤销设备不得动它们；只有路径和
+		// 该设备的 CLI 覆盖落墓碑。
+		assert.Equal(t, []stone{{4, 101}, {7, 102}}, stones)
+	})
+}
+
+// 落墓碑是「谁发信号」三处之一：广播必须取这批设备局部对象烧到的最高版本。
+func TestPurgeDeviceSyncObjects_GivenAccountBackendsAndExecTargets_ThenBroadcastsDeviceScopedHighestVersion(t *testing.T) {
+	convey.Convey("只为设备局部对象的墓碑广播最高版本", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		expectListLiveByFingerprint(m, accountIdentityFixture())
+		// ListByKinds 没有 EXPECT：广播只覆盖本次设备局部对象的版本。
+
+		next := int64(100)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
+			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
+		).Times(2)
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+
+		assert.Equal(t, []accountChanCall{{accountID: testUserID, version: 102}}, stub.recordedCalls())
+	})
+}
+
+// 空指纹短路时不该广播——没碰任何数据，没有版本号可言。
+func TestPurgeDeviceSyncObjects_GivenEmptyFingerprint_ThenNoBroadcast(t *testing.T) {
+	convey.Convey("指纹为空时不广播", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		_ = m
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, ""))
+		assert.Empty(t, stub.recordedCalls())
+	})
+}
+
+// 这台设备名下没有账号级对象时不烧版本号，也就没有信号可发。
+func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoBroadcast(t *testing.T) {
+	convey.Convey("没有属于这台设备的行时不广播", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		expectListLiveByFingerprint(m, deviceScopedFixture())
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, "sha256:never-seen"))
+		assert.Empty(t, stub.recordedCalls())
+	})
+}
+
+// 广播失败只记录、不回滚已经落库的墓碑——写入的权威性在数据库，不在通道。
+func TestPurgeDeviceSyncObjects_GivenBroadcastFails_ThenPurgeStillSucceeds(t *testing.T) {
+	convey.Convey("广播失败不影响已经落库的墓碑", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		stub := registerAccountChanStub(t)
+		stub.err = errors.New("redis unreachable")
+		expectListLiveByFingerprint(m, deviceScopedFixture())
+		expectListByKinds(m, deviceScopedFixture())
+
+		next := int64(100)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
+			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
+		).Times(2)
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+	})
+}
+
+// 设备撤销绝不能按执行目标中的 backend_sync_id 扫描或删除账号级对象。否则一个本机
+// CLI 覆盖的墓碑会把整个账号的执行目标列表误删。
+func TestPurgeDeviceSyncObjects_GivenExecTargetsReferencingLiveBackends_ThenNoneAreSweptAlong(t *testing.T) {
+	convey.Convey("执行目标引用的是别的、仍然活着的 backend 时不许被带走", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		rows := append(deviceScopedFixture(),
+			execTargetRow(9, "t2", "a1", "b2"),
+			execTargetRow(10, "t3", "a1", "b3"),
+			&sync_entity.SyncObject{ID: 11, UserID: testUserID, Kind: sync_entity.KindAgentExecTarget,
+				SyncID: "t4", Payload: `{"agent_sync_id":"a1"`},
+		)
+		expectListLiveByFingerprint(m, rows)
+		expectListByKinds(m, rows)
+
+		next := int64(100)
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
+			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
+		).Times(2)
+
+		type stone struct{ id, version int64 }
+		var stones []stone
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).DoAndReturn(
+			func(_ context.Context, id, version, _ int64) (int64, error) {
+				stones = append(stones, stone{id, version})
+				return 1, nil
+			},
+		).Times(2)
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+
+		assert.Equal(t, []stone{{4, 101}, {7, 102}}, stones)
+	})
+}
+
+// 设备撤销只处理路径与 CLI 覆盖：它不扫描账号级执行目标，避免把本机退出变成
+// 全账号对象的读取与连带删除。
+func TestPurgeDeviceSyncObjects_GivenOnlyLocationsScoped_ThenNoExecTargetLookupHappens(t *testing.T) {
+	convey.Convey("只有项目路径落墓碑时不查执行目标", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		rows := []*sync_entity.SyncObject{
+			{ID: 4, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "l1",
+				AgentredFingerprint: testFingerprint, Version: 11},
+			execTargetRow(8, "t1", "a1", "b1"),
+		}
+		expectListLiveByFingerprint(m, rows)
+		// ListByKinds 没有 EXPECT：一次都不该调。
+
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(101), nil)
+		m.object.EXPECT().Tombstone(gomock.Any(), int64(4), int64(101), testNow).Return(int64(1), nil)
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+	})
+}
+
+// ── Agent 落墓碑时，浏览器为它排的那份顺序跟着消失 ──────────────────────────
 
 func TestGetAvatar_GivenStoredHash_ThenReturnsContent(t *testing.T) {
 	convey.Convey("取回头像正文", t, func() {
@@ -845,5 +1376,48 @@ func TestGetAvatar_GivenStoredHash_ThenReturnsContent(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "data:image/png;base64,AAAA", out.Content)
 		assert.Equal(t, "image/png", out.ContentType)
+	})
+}
+
+// 一次 Push 只能从账号序列取一次版本号。
+//
+// 从前是每条 item 各取一次，而 NextVersion 自己是一个嵌套事务(SAVEPOINT)加两条
+// 语句(INSERT … ON DUPLICATE KEY UPDATE … LAST_INSERT_ID 再 SELECT LAST_INSERT_ID)。
+// api/sync 允许一批 500 条，于是一次 Push 在**同一个外层事务里**要发上千次往返。
+//
+// 更要命的是锁:那条 INSERT … ON DUPLICATE KEY UPDATE 跑在外层事务内,
+// sync_account_seqs 里该账号那一行的排他锁**从第一条 item 一直持有到整批提交**。
+// 同账号两台设备并发上行因此完全串行。
+//
+// NextVersion(ctx, userID, n) 的批量参数本来就是为这件事准备的(它返回这一批里最大
+// 的那个版本号),只是从没被用过。整批只取一次,并且取在外层事务**之前**——行锁于是
+// 只被持有一次往返的时间。
+func TestPush_GivenManyItems_ThenTakesTheWholeVersionBlockAtOnce(t *testing.T) {
+	convey.Convey("一批多条只取一次版本号", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		onlineDevice(m)
+		expectTx(m)
+		for _, syncID := range []string{"sync-p1", "sync-p2", "sync-p3"} {
+			m.object.EXPECT().Find(gomock.Any(), testUserID, syncID).Return(nil, nil)
+		}
+		// 一次取走 3 个,返回的是这一批里最大的那个 → 本批依次拿到 8、9、10。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(3)).Return(int64(10), nil)
+		var saved []*sync_entity.SyncObject
+		captureSave(m, &saved).Times(3)
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{
+				projectItem("sync-p1", 0),
+				projectItem("sync-p2", 0),
+				projectItem("sync-p3", 0),
+			}})
+
+		assert.NoError(t, err)
+		assert.Len(t, out.Results, 3)
+		assert.Equal(t, []int64{8, 9, 10},
+			[]int64{out.Results[0].Version, out.Results[1].Version, out.Results[2].Version},
+			"块里的版本号必须按 item 顺序递增发放")
+		assert.Len(t, saved, 3)
+		assert.NoError(t, m.sql.ExpectationsWereMet())
 	})
 }

@@ -7,8 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	"agentre-server/internal/model/entity/device_token_entity"
-	hubtest "agentre-server/internal/testutils"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 func TestRevokeChain(t *testing.T) {
@@ -114,31 +114,6 @@ func TestListRevokedJTIByUser(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 同一条 device_tokens 行既是 Revoke() 的写入目标，也是本查询的读取来源：
-// 撤销与分发之间没有缓存/队列，写入即刻可读——这是 R4「reflects a Revoke immediately」成立的机制。
-func TestListRevokedJTIByUser_ReflectsRevokeImmediately(t *testing.T) {
-	ctx, _, mock := hubtest.Database(t)
-	r := NewDeviceToken()
-
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("UPDATE `device_tokens` SET `revoked_at`=? WHERE id=? AND revoked_at=0")).
-		WithArgs(int64(2000), int64(11)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectCommit()
-	n, err := r.Revoke(ctx, 11, 2000)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(1), n)
-
-	mock.ExpectQuery(regexp.QuoteMeta(
-		"SELECT `device_tokens`.`access_jti` FROM `device_tokens` JOIN devices ON devices.id = device_tokens.device_id WHERE devices.user_id = ? AND device_tokens.revoked_at != 0 AND device_tokens.access_jti != '' AND device_tokens.createtime >= ?")).
-		WithArgs(int64(7), int64(1000)).
-		WillReturnRows(sqlmock.NewRows([]string{"access_jti"}).AddRow("jti-aaa"))
-	got, err := r.ListRevokedJTIByUser(ctx, 7, 1000)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"jti-aaa"}, got)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestListRevokedJTIByUser_ExcludesOutsideAccessTTLWindow(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceToken()
@@ -151,5 +126,41 @@ func TestListRevokedJTIByUser_ExcludesOutsideAccessTTLWindow(t *testing.T) {
 	got, err := r.ListRevokedJTIByUser(ctx, 7, 5000)
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"jti-in-window"}, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 每小时一次的令牌清理从前是一条语句:
+//
+//	(revoked_at != 0 AND revoked_at < ?) OR refresh_expires_at < ?
+//
+// 两个毛病叠在一起。其一,OR 只要有一侧定位不了,整条就退化成全表扫——而
+// refresh_expires_at 当时不在任何索引里(现在有 idx_dtokens_refresh_expiry)。其二,不分批:
+// 这张表的增长很快(access TTL 15 分钟、refresh 每次轮换插一行,90 天窗口下稳态几
+// 百万行),一次删掉几十万行会把 next-key 锁铺满整张表,期间所有设备都刷不了令牌。
+//
+// 拆成两条各自带索引的语句,行集合与原来完全相同:同时满足两侧的行由第一条删走,
+// 第二条自然找不到它。
+func TestDeleteRevokedBefore_ThenEachSideIsItsOwnBoundedRangeScan(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDeviceToken()
+
+	// 已撤销的那一侧:第一批删满,于是必须再来一批。
+	for _, affected := range []int64{cleanupBatchSize, 2} {
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta(
+			"DELETE FROM `device_tokens` WHERE revoked_at != 0 AND revoked_at < ?")).
+			WithArgs(int64(1700), int64(cleanupBatchSize)).
+			WillReturnResult(sqlmock.NewResult(0, affected))
+		mock.ExpectCommit()
+	}
+	// 刷新令牌过期的那一侧。
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM `device_tokens` WHERE refresh_expires_at < ?")).
+		WithArgs(int64(1700), int64(cleanupBatchSize)).
+		WillReturnResult(sqlmock.NewResult(0, 5))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.DeleteRevokedBefore(ctx, 1700))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

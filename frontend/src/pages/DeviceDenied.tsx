@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { CircleSlash } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
+import PageTitle from "@/components/PageTitle";
 
 /**
  * 终态页：用户主动拒绝了这次设备授权（决策 9）。
@@ -24,9 +25,7 @@ export default function DeviceDenied() {
             aria-hidden="true"
           />
         </div>
-        <h1 className="text-2xl font-semibold text-foreground">
-          {t("device.deniedScreen.title")}
-        </h1>
+        <PageTitle>{t("device.deniedScreen.title")}</PageTitle>
         <Button
           type="button"
           variant="outline"

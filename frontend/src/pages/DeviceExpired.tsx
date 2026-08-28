@@ -2,8 +2,9 @@ import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { TimerOff } from "lucide-react";
 
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
+import PageTitle from "@/components/PageTitle";
 
 /**
  * 终态页：设备码在授权完成前过期（决策 9）——`ApiError.code === 30202`，
@@ -19,9 +20,7 @@ export default function DeviceExpired() {
           <TimerOff className="size-6 text-status-waiting" aria-hidden="true" />
         </div>
         <div className="space-y-2">
-          <h1 className="text-2xl font-semibold text-foreground">
-            {t("device.expiredScreen.title")}
-          </h1>
+          <PageTitle>{t("device.expiredScreen.title")}</PageTitle>
           <p className="text-sm text-muted-foreground">
             {t("device.expiredScreen.body")}
           </p>

@@ -6,7 +6,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { cn } from "@/lib/utils";
+import { cn } from "@agentre-hub/agentre-ui";
 import { CODE_LENGTH, normalize, sanitize } from "@/lib/userCode";
 
 /**

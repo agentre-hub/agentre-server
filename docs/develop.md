@@ -2,9 +2,9 @@
 
 ## Commands
 
-Everything routes through the `Makefile` at the repo root. **The same command
-runs locally and in CI** — CI calls these targets rather than spelling the tools
-out again, so "green locally, red in CI" has one less way to happen.
+The root `Makefile` owns local commands and aggregate gates. GitHub CI uses the
+corresponding targets where practical; its backend lint action and the Gitea deploy
+workflow keep their tool versions and arguments aligned with those targets.
 
 ```bash
 make dev               # vite (:5174, proxies /v1 → :8443) + go run ./cmd/server, in parallel
@@ -109,10 +109,10 @@ the **end**, and existing entries are never edited — someone's database has al
 run them. To correct an earlier migration, add a patch migration. Prefer native SQL
 for DDL.
 
-**Nothing tests migrations automatically.** They execute at server startup, so a bad one
-means the service will not boot — and no test in this repo will tell you first. Verify by
-hand before merging anything under `migrations/`; see
-[testing.md](testing.md#migrations-are-deliberately-untested).
+Sqlmock guard tests execute the migration functions and check DDL policy, but they do not
+prove that MySQL accepts the DDL or that upgrades preserve representative historical data.
+Verify migrations by hand before merging; see
+[testing.md](testing.md#migration-compatibility-is-not-automated).
 
 ## Configuration
 

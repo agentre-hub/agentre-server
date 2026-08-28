@@ -6,7 +6,8 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 
-	"agentre-server/internal/model/entity/device_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
 //go:generate mockgen -source device_token.go -destination mock_device_token_repo/mock_device_token.go
@@ -39,15 +40,7 @@ func (r *repo) Create(ctx context.Context, e *device_token_entity.DeviceToken) e
 }
 
 func (r *repo) FindByHash(ctx context.Context, hash string) (*device_token_entity.DeviceToken, error) {
-	ret := &device_token_entity.DeviceToken{}
-	err := db.Ctx(ctx).Where("refresh_token_hash=?", hash).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[device_token_entity.DeviceToken](db.Ctx(ctx).Where("refresh_token_hash=?", hash))
 }
 
 // ListAccessJTIByDevice 返回该设备全部已签发 access token 的 jti
@@ -99,8 +92,37 @@ func (r *repo) TouchLastUsed(ctx context.Context, id, nowMs int64) error {
 		Update("last_used_at", nowMs).Error
 }
 
+// cleanupBatchSize 是清理 DELETE 每一批的行数上限。这张表增长很快——access TTL
+// 15 分钟、refresh 每次轮换插一行,90 天窗口下稳态几百万行——一条不分批的 DELETE
+// 会把 next-key 锁铺满它扫过的范围,期间落在同一范围上的令牌刷新全被挡住。
+const cleanupBatchSize = 1000
+
+// DeleteRevokedBefore 把从前那条
+//
+//	(revoked_at != 0 AND revoked_at < ?) OR refresh_expires_at < ?
+//
+// 拆成两条各自带索引的语句。OR 只要有一侧定位不了,整条就退化成全表扫;拆开之后
+// 每一侧都是自己那条索引上的范围扫描(idx_dtokens_revoked 与 idx_dtokens_refresh_expiry)。
+//
+// 行集合与拆之前完全相同:同时满足两侧的行由第一条删走,第二条自然就找不到它了。
 func (r *repo) DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error {
-	return db.Ctx(ctx).
-		Where("(revoked_at != 0 AND revoked_at < ?) OR refresh_expires_at < ?", cutoffMs, cutoffMs).
-		Delete(&device_token_entity.DeviceToken{}).Error
+	if err := r.deleteBatched(ctx, "revoked_at != 0 AND revoked_at < ?", cutoffMs); err != nil {
+		return err
+	}
+	return r.deleteBatched(ctx, "refresh_expires_at < ?", cutoffMs)
+}
+
+// deleteBatched 按批删,直到某一批没删满——没删满就说明够到底了。
+func (r *repo) deleteBatched(ctx context.Context, where string, cutoffMs int64) error {
+	for {
+		res := db.Ctx(ctx).Where(where, cutoffMs).
+			Limit(cleanupBatchSize).
+			Delete(&device_token_entity.DeviceToken{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected < cleanupBatchSize {
+			return nil
+		}
+	}
 }

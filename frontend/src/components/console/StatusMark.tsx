@@ -1,20 +1,22 @@
-import { cn } from "@/lib/utils";
+import { statusConfig, type AgentStatus, cn } from "@agentre-hub/agentre-ui";
 
 /**
  * 状态标记（Pencil 正式组件 zF5jv StatusPill）。
  *
- * 形状：圆角胶囊 = 装饰点 + 文案，两者同色。文案永远是可见文本节点——
- * 颜色不是状态的唯一表达。tone 只映射到已声明的语义 token，深浅色都从
- * token 来，不写字面色值。
+ * 形状：圆角胶囊 = 装饰点 + 文案。文案永远是可见文本节点——颜色不是状态的
+ * 唯一表达。
+ *
+ * 类名**取自共享包的 `statusConfig`**，本站不再留一份映射。此前这里手抄了
+ * 一份，四档全部与包不一致，而且错在同一处：把点的颜色当文字颜色用了。
+ * 浅色下 running 是 #10b981 压 #ecfdf5（2.41:1）、waiting 是 #f59e0b 压
+ * #fffbeb（2.07:1），都低于 WCAG AA 正文的 4.5:1；`--status-*-text` 这一档
+ * token 存在的全部理由就是「在 `-bg` 上当文字用」（包里是 5.21 / 4.84）。
+ * 深色下 `-text` 与基色同值，所以这个缺陷只在浅色里显形——它就是这么躺住的。
+ *
+ * 点与文字**刻意不同色**：点用 `dotClassName`（亮色信号），文字用
+ * `pillClassName` 里的深色。此前点是 `bg-current`，跟着文字一起错。
  */
-export type StatusTone = "running" | "waiting" | "idle" | "error";
-
-const TONE_CLASS: Record<StatusTone, string> = {
-  running: "bg-status-running-bg text-status-running",
-  waiting: "bg-status-waiting-bg text-status-waiting",
-  idle: "bg-secondary text-status-idle",
-  error: "bg-destructive-soft text-destructive",
-};
+export type StatusTone = AgentStatus;
 
 export function StatusMark({
   tone,
@@ -31,10 +33,13 @@ export function StatusMark({
       data-testid={testId}
       className={cn(
         "inline-flex items-center gap-1.5 rounded-full px-2.5 py-[5px]",
-        TONE_CLASS[tone],
+        statusConfig[tone].pillClassName,
       )}
     >
-      <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+      <span
+        aria-hidden="true"
+        className={cn("size-1.5 rounded-full", statusConfig[tone].dotClassName)}
+      />
       <span className="text-xs font-semibold">{label}</span>
     </span>
   );

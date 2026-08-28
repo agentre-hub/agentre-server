@@ -1,0 +1,16 @@
+{
+  "title": "看板",
+  "labelsTitle": "标签",
+  "summary": {
+    "counts": "共 {{total}} 条 · 进行中 {{doing}}"
+  },
+  "actions": {
+    "newTask": "新建任务"
+  },
+  "exec": {
+    "machineAria": "选择执行的机器",
+    "modelAria": "选择模型",
+    "pickerTitle": "在哪台机器上跑",
+    "followAgent": "跟随 Agent 绑定"
+  }
+}

@@ -28,7 +28,7 @@ type peerState struct {
 	Paired []string `json:"paired"`
 	Cursor int64    `json:"cursor"`
 	// Objects is the peer's replica, keyed by sync id. Tombstones stay in it
-	// (Deleted = true) so "does the peer resurrect a deleted row" is answerable.
+	// (DeletedAt > 0) so "does the peer resurrect a deleted row" is answerable.
 	Objects map[string]*peerObject `json:"objects"`
 
 	accessToken string
@@ -42,8 +42,8 @@ type peerObject struct {
 	Payload             json.RawMessage `json:"payload"`
 	Version             int64           `json:"version"`
 	UpdatedAt           int64           `json:"updated_at"`
-	SourceDeviceID      int64           `json:"source_device_id"`
-	Deleted             bool            `json:"deleted"`
+	OriginFingerprint   string          `json:"origin_fingerprint"`
+	DeletedAt           int64           `json:"deleted_at"`
 }
 
 func runPeer(args []string) error {
@@ -292,9 +292,15 @@ func peerPush(args []string) error {
 	if err := st.authorize(*statePath); err != nil {
 		return err
 	}
+	// 墓碑在契约上是**时刻**而不是布尔（决策 20）：删除时刻在这一端、线格式与 server
+	// 库三处本来就都是时刻。
+	var deletedAt int64
+	if *deleted {
+		deletedAt = time.Now().UnixMilli()
+	}
 	item := map[string]any{
 		"kind": *kind, "sync_id": id, "base_version": base,
-		"updated_at": time.Now().UnixMilli(), "deleted": *deleted,
+		"updated_at": time.Now().UnixMilli(), "deleted_at": deletedAt,
 		"agentred_fingerprint": *fingerprint, "project_sync_id": *projectSyncID,
 		"payload": json.RawMessage(*payload),
 	}
@@ -313,7 +319,9 @@ func peerPush(args []string) error {
 			st.Objects[id] = &peerObject{
 				Kind: *kind, SyncID: id, ProjectSyncID: *projectSyncID,
 				AgentredFingerprint: *fingerprint, Payload: json.RawMessage(*payload),
-				Version: int64(version), Deleted: *deleted, SourceDeviceID: st.DeviceID,
+				Version: int64(version), DeletedAt: deletedAt,
+				// origin_fingerprint 不在这里编：这一端只知道自己的设备号，指纹是
+				// server 记的那个值，下一次 pull 会把真的那份覆盖上来。
 			}
 		}
 	}

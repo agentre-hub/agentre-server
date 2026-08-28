@@ -4,7 +4,6 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 )
@@ -44,6 +43,3 @@ type bodyWriter struct {
 
 func (w *bodyWriter) Write(b []byte) (int, error)       { return w.buf.Write(b) }
 func (w *bodyWriter) WriteString(s string) (int, error) { return w.buf.WriteString(s) }
-func (w *bodyWriter) WriteHeader(status int)            { w.ResponseWriter.WriteHeader(status) }
-
-var _ http.ResponseWriter = (*bodyWriter)(nil)

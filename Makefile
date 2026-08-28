@@ -11,11 +11,16 @@ dev:
 
 build:
 	cd frontend && pnpm install --frozen-lockfile && pnpm build
+	# 先清空再拷：vite 的产物带内容哈希，文件名每次都不一样，只 cp 不删会让历史
+	# chunk 全部留下、一起被 //go:embed 进二进制（本地实测 19M vs 3.1M）。镜像不受
+	# 影响（.dockerignore 排除了这两个目录，Docker 从 web stage 干净拷贝），所以症状
+	# 是「本地 build 的二进制比镜像里的大一截」，排障时容易误判。
+	rm -rf internal/web/dist
 	mkdir -p internal/web/dist
 	cp -r frontend/dist/* internal/web/dist/
 	CGO_ENABLED=0 go build -ldflags "-s -w \
-	  -X agentre-server/internal/buildinfo.Version=$(VERSION) \
-	  -X agentre-server/internal/buildinfo.Commit=$(COMMIT)" \
+	  -X github.com/agentre-hub/agentre-server/internal/buildinfo.Version=$(VERSION) \
+	  -X github.com/agentre-hub/agentre-server/internal/buildinfo.Commit=$(COMMIT)" \
 	  -o bin/server ./cmd/server
 
 # 传版本号，否则镜像启动日志是 "dev (unknown)"，排障时对不回 commit

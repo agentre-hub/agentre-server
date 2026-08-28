@@ -1,25 +1,34 @@
 /**
- * 新对话发起弹层（R15 / R16 / R17，测试接缝 8 的 web 侧；屏 23 / 24 / 25）：
- *   - R15：派发计划按序逐档给出原因；全部档不可用时不静默失败，逐档摆出来
- *     （「现在选不了」+ 本机跳过 / 未配对 / 离线 / 项目路径缺失）。
- *   - R17：发起前（确认步）就呈现 org / subagent / hook 用不了的说明与原因——不是
- *     等工具调用失败了才报错。
- *   - R16：确认派发成功后立刻关注自己这条（POST /v1/follows），于是它不经用户按
- *     「关注」就出现在「对话」页（名单由既有 Chat 页渲染）。
- *   - Chat 页空态的主动作打开这个弹层。
+ * 从 web 发起新对话（R15 / R16 / R17，测试接缝 8 的 web 侧）。
+ *
+ * 形态是「挑一个 Agent → 一条还没发第一句的对话」，不再是三步弹层：
+ *   - R15：派发计划按序逐档给出原因；一档都不可用时不静默失败，逐档摆出来。
+ *   - R17：发起前就说明 org / subagent / hook 在这个目标下能不能用——不是等
+ *     工具调用失败了才报错。
+ *   - R16：派发成功后这条已进账号，直接去读它的实时流——桌面就地换右栏，
+ *     移动端没有第二栏可落，才跳到会话页。
+ *   - 「在哪台机器上跑」挑定一档后，计划必须**按那一档**重取（指纹与 cwd 只在
+ *     chosen 上），挑中的档跑不了时不回落。
+ *   - 还没发出去时左栏不多出任何一行：它还不是一条会话。
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { rpcMethods } from "@agentre-hub/agentre-wire";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
-import { dispatchNewConversation, fetchDispatchPlan } from "@/lib/dispatch";
+import {
+  DispatchRunError,
+  dispatchNewConversation,
+  fetchDispatchPlan,
+  type DispatchPlan,
+} from "@/lib/dispatch";
+import { readRecentAgents } from "@/lib/recentAgents";
 import { ensureRelayTicket } from "@/lib/relayTicket";
+import { RelayError } from "@/lib/relayClient";
 import { useRelayMachine } from "@/hooks/use-relay";
 import i18n from "@/i18n";
-import { ThemeProvider } from "@/lib/theme";
-import { type DispatchPlan } from "@/lib/dispatch";
-import NewConversationDialog from "@/components/session/NewConversationDialog";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -39,6 +48,12 @@ vi.mock("@/lib/relayTicket", async (importOriginal) => {
   return { ...actual, ensureRelayTicket: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+// 账号级实时通道自己要取一张票据（它就是靠票据接入的）。这个文件断言的是**挑
+// Agent 那条路**不取票据，所以把通道挡在外面，别让它替被测的那条路背锅。
+vi.mock("@/lib/accountChannel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
+  return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
+});
 
 const mockedApi = vi.mocked(api);
 const mockFetchPlan = vi.mocked(fetchDispatchPlan);
@@ -49,103 +64,96 @@ const mockUseRelay = vi.mocked(useRelayMachine);
 const agents = [
   {
     sync_id: "agent-1",
-    name: "后端 Agent",
-    avatar_color: "#3B6896",
+    name: "Backend Agent",
+    avatar_color: "agent-1",
+    project_sync_ids: ["proj-1"],
     has_available_target: true,
     exec_targets: [
-      {
-        rank: 1,
-        availability: "skipped_for_web",
-        current: false,
-        is_local_reference: true,
-      },
+      { rank: 1, availability: "no_device", is_local_reference: true },
       {
         rank: 2,
-        device_name: "公司 Mac mini",
+        device_name: "Study Mini",
         availability: "available",
         current: true,
-        is_local_reference: false,
       },
+    ],
+  },
+  {
+    sync_id: "agent-2",
+    name: "Docs Agent",
+    avatar_color: "agent-11",
+    project_sync_ids: ["proj-root"],
+    has_available_target: false,
+    exec_targets: [
+      { rank: 1, availability: "no_device", is_local_reference: true },
+      { rank: 2, device_name: "Office Mac mini", availability: "offline" },
     ],
   },
 ];
 
-const pickPlan: DispatchPlan = {
+const projects = [
+  {
+    sync_id: "proj-root",
+    name: "agentre-server",
+    color: "agent-1",
+    configured: true,
+    members: [],
+  },
+  {
+    sync_id: "proj-1",
+    name: "frontend",
+    color: "agent-1",
+    parent_sync_id: "proj-root",
+    configured: true,
+    members: [{ sync_id: "pa-1", agent_sync_id: "agent-1" }],
+  },
+];
+
+const availablePlan: DispatchPlan = {
   agent_sync_id: "agent-1",
   tiers: [
-    { rank: 1, availability: "skipped_for_web", current: false },
+    { rank: 1, availability: "no_device", current: false },
     {
       rank: 2,
-      device_id: 21,
-      device_name: "公司 Mac mini",
-      backend_type: "codex",
-      availability: "available",
-      current: true,
-    },
-  ],
-  chosen: {
-    device_fingerprint: "fp-online",
-    device_id: 21,
-    device_name: "公司 Mac mini",
-    backend_type: "codex",
-  },
-  projects: [{ sync_id: "proj-1", name: "agentre-server", configured: true }],
-};
-
-const finalPlan: DispatchPlan = {
-  ...pickPlan,
-  chosen: {
-    device_fingerprint: "fp-online",
-    device_id: 21,
-    device_name: "公司 Mac mini",
-    backend_type: "codex",
-    kind: "agentred",
-    cwd: "/srv/agentre-server",
-  },
-};
-
-// R17：目标是桌面端时，发起前如实说明 org / subagent / hook **可用**（真身在桌面端）。
-const desktopFinalPlan: DispatchPlan = {
-  agent_sync_id: "agent-1",
-  tiers: [
-    {
-      rank: 1,
-      device_id: 30,
-      device_name: "家里 Mac mini",
+      backend_sync_id: "b-a",
+      device_id: 20,
+      device_name: "Study Mini",
       backend_type: "claudecode",
-      kind: "desktop",
+      kind: "agentred",
       availability: "available",
       current: true,
     },
+    {
+      rank: 3,
+      backend_sync_id: "b-b",
+      device_id: 21,
+      device_name: "MacBook Pro",
+      backend_type: "codex",
+      kind: "agentred",
+      availability: "available",
+      current: false,
+    },
   ],
   chosen: {
-    device_fingerprint: "fp-desk",
-    device_id: 30,
-    device_name: "家里 Mac mini",
+    device_fingerprint: "fp-a",
+    device_id: 20,
+    device_name: "Study Mini",
     backend_type: "claudecode",
-    kind: "desktop",
-    cwd: "/Users/wyz/agentre-server",
+    kind: "agentred",
   },
-  projects: [{ sync_id: "proj-1", name: "agentre-server", configured: true }],
+  projects: [{ sync_id: "proj-1", name: "frontend", configured: true }],
 };
 
 const allUnavailablePlan: DispatchPlan = {
-  agent_sync_id: "agent-1",
+  agent_sync_id: "agent-2",
   tiers: [
-    { rank: 1, availability: "skipped_for_web", current: false },
+    { rank: 1, availability: "no_device", current: false },
     { rank: 2, availability: "unpaired", current: false },
     {
       rank: 3,
-      device_id: 20,
-      device_name: "书房小主机",
-      availability: "offline",
-      current: false,
-    },
-    {
-      rank: 4,
       device_id: 21,
-      device_name: "公司 Mac mini",
-      availability: "project_path_missing",
+      device_name: "Office Mac mini",
+      availability: "offline",
       current: false,
     },
   ],
@@ -159,6 +167,112 @@ const relayTicket = {
   accessToken: "web-jwt",
 };
 
+/** 账号里镜像着的一条真实会话（左栏据此列出一行）。 */
+const mirroredSession = {
+  peer_fingerprint: "fp-a",
+  session_id: "42",
+  title: "重构登录页",
+  agent_sync_id: "agent-1",
+  backend_type: "claudecode",
+  lifecycle_state: "idle",
+  last_message_at: 1754800000000,
+};
+
+function stubReads(
+  over: Record<string, unknown> = {},
+  sessions: unknown[] = [],
+) {
+  mockedApi.mockImplementation(async (path: string) => {
+    if (path.startsWith("/v1/agent-sessions?"))
+      return {
+        total: sessions.length,
+        groups: sessions.length
+          ? [{ scope: "time", total: sessions.length, items: sessions }]
+          : [],
+      };
+    if (path === "/v1/devices")
+      return {
+        devices: sessions.length
+          ? [
+              {
+                id: 20,
+                name: "Study Mini",
+                kind: "agentred",
+                fingerprint: "fp-a",
+                online: true,
+                status: 1,
+              },
+            ]
+          : [],
+      };
+    if (path.startsWith("/v1/workspace/agents")) return { agents };
+    if (path.startsWith("/v1/workspace/projects")) return { projects };
+    for (const [prefix, value] of Object.entries(over)) {
+      if (path.startsWith(prefix)) return value;
+    }
+    throw new Error("unexpected: " + path);
+  });
+}
+
+/** MemoryRouter 不碰 `window.location`，要读地址就得在 router 里问。 */
+function LocationProbe() {
+  const location = useLocation();
+  return <p data-testid="location-search">{location.search}</p>;
+}
+
+function renderChat(entry = "/chat") {
+  return render(
+    <MemoryRouter initialEntries={[entry]}>
+      <ThemeProvider>
+        <LocationProbe />
+        <Routes>
+          <Route path="/chat" element={<Chat />} />
+          <Route
+            path="/devices/:deviceId/sessions/:sessionId"
+            element={<p>session page</p>}
+          />
+        </Routes>
+      </ThemeProvider>
+    </MemoryRouter>,
+  );
+}
+
+/** 走到「一条还没发第一句的对话」：点空态主动作 → 挑第一个 Agent。 */
+async function openDraft() {
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Start your first conversation",
+    }),
+  );
+  fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+  return screen.findByTestId("draft-session");
+}
+
+/**
+ * 草稿里的输入框就是共享包的 `AIChatInput`（TipTap），驱动方式与会话详情那边
+ * 一模一样：`fireEvent.change` / `.value` 都对它不成立，从 `editor.view.dom.editor`
+ * 上驱动（理由见 session-detail.test.tsx 的同名注释）。
+ */
+function draftEditable(): HTMLElement & {
+  editor?: { commands: { setContent: (v: string) => void } };
+} {
+  const el = document.querySelector<HTMLElement>(
+    '[data-testid="session-detail-composer"] .ProseMirror',
+  );
+  if (!el) throw new Error("输入框没渲染出来");
+  return el;
+}
+
+/** 等输入框那一 chunk 加载完（它是动态 import 切出去的）。 */
+async function awaitDraftComposer() {
+  await vi.waitFor(() => draftEditable());
+}
+
+async function typeInDraft(text: string) {
+  await awaitDraftComposer();
+  draftEditable().editor?.commands.setContent(`<p>${text}</p>`);
+}
+
 beforeEach(async () => {
   await i18n.changeLanguage("en");
   localStorage.clear();
@@ -166,233 +280,809 @@ beforeEach(async () => {
   mockFetchPlan.mockReset();
   mockDispatch.mockReset();
   mockEnsureRelayTicket.mockReset();
-  // 默认这台浏览器还没有设备身份：读路径回落账号顺序，且不得为此注册一台。
   mockUseRelay.mockReset();
   mockUseRelay.mockReturnValue({
     client: null,
     relayState: "disconnected",
     relayTicket: null,
     relayTicketError: null,
+    reconnect: vi.fn(),
   });
 });
 
-function renderDialog(onStarted: () => void = () => {}) {
-  return render(
-    <MemoryRouter>
-      <ThemeProvider>
-        <NewConversationDialog
-          open
-          onOpenChange={() => {}}
-          onStarted={onStarted}
-        />
-      </ThemeProvider>
-    </MemoryRouter>,
-  );
-}
+/**
+ * 「新建一个会话」这个出口从别处进来时的落点。
+ *
+ * 会话详情的「机器离线」横幅给的就是这一个出口（两端统一）：那条对话钉在一台
+ * 够不着的机器上，续轮不会改派，唯一走得通的路是另起一条。详情在路由页形态下
+ * 不在 `/chat` 里，所以它靠 URL 说这件事，而不是靠一个跨页面的回调。
+ */
+describe("从别处进来的「新建一个会话」", () => {
+  it("Given /chat?compose=1, When 进页面, Then 直接停在挑 Agent 那一屏", async () => {
+    stubReads();
+    renderChat("/chat?compose=1");
 
-describe("新对话弹层:R15 派发计划逐档原因", () => {
-  it("全部档不可用时逐档给出原因而不是静默失败（屏 24 的「现在选不了」）", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path.startsWith("/v1/workspace/agents")) return { agents };
-      throw new Error("unexpected: " + path);
+    expect(await screen.findByTestId("agent-pick-agent-1")).toBeTruthy();
+  });
+
+  it("Given 已经开了, When 看地址, Then compose 参数已经消掉", async () => {
+    // 留着的话，之后每一次刷新 / 前进后退都会把人重新丢回挑 Agent 那一屏——
+    // 它说的是「刚才要新建」这件一次性的事，不是页面此刻的范围。
+    stubReads();
+    renderChat("/chat?compose=1&axis=project");
+
+    await screen.findByTestId("agent-pick-agent-1");
+    await vi.waitFor(() => {
+      const search = screen.getByTestId("location-search").textContent ?? "";
+      expect(search).not.toContain("compose");
+      // 别把同一屏别的范围一起冲掉：轴是页面此刻的范围，不是一次性的意图。
+      expect(search).toContain("axis=project");
     });
-    mockFetchPlan.mockResolvedValue(allUnavailablePlan);
-    renderDialog();
-
-    fireEvent.click(await screen.findByText("后端 Agent"));
-
-    expect(await screen.findByText("Can't start right now")).toBeTruthy();
-    // 逐档原因：本机跳过 / 未配对 / 离线 / 项目路径缺失。
-    expect(screen.getByText("Skipped for web dispatch")).toBeTruthy();
-    expect(screen.getByText("Not paired")).toBeTruthy();
-    expect(screen.getByText("书房小主机")).toBeTruthy();
-    expect(screen.getByText("Offline")).toBeTruthy();
-    expect(
-      screen.getByText("Path not configured on this machine"),
-    ).toBeTruthy();
-    // 没有项目可挑，也就走不到确认步。
-    expect(screen.queryByText("agentre-server")).toBeNull();
   });
 });
 
-describe("新对话弹层:R17 发起前说明 + R16 派发后自关注", () => {
-  it("确认步先呈现三个工具不可用的说明（不是等调用失败），派发成功后立刻关注自己这条", async () => {
-    mockedApi.mockImplementation(async (path, init) => {
-      if (path.startsWith("/v1/workspace/agents")) return { agents };
-      if (path === "/v1/follows" && init?.method === "POST") return {};
-      throw new Error("unexpected: " + path);
-    });
-    mockFetchPlan.mockImplementation(async (_agent, project) =>
-      project ? finalPlan : pickPlan,
-    );
-    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
-    mockDispatch.mockResolvedValue({
-      sessionId: 9001,
-      deviceId: 21,
-      deviceFingerprint: "fp-online",
-    });
-    const onStarted = vi.fn();
-    renderDialog(onStarted);
-
-    // 选 Agent → 选项目。
-    fireEvent.click(await screen.findByText("后端 Agent"));
-    fireEvent.click(await screen.findByText("agentre-server"));
-
-    // R17：发起前就说明 org / subagent / hook 用不了 + 原因（要桌面端在场）。
-    expect(
-      await screen.findByText("org / subagent / hook are not available here"),
-    ).toBeTruthy();
-    expect(
-      screen.getByText(
-        "These three built-in tools live on your desktop app. Web-launched conversations can't use them — start from the desktop app if you need them.",
-      ),
-    ).toBeTruthy();
-    // 屏 25：将运行在机器 · 路径。
-    expect(
-      screen.getByText("Will run on 公司 Mac mini · /srv/agentre-server"),
-    ).toBeTruthy();
-
-    // 说第一句 → 开始。
-    const input = screen.getByLabelText("Say the first thing to 后端 Agent");
-    fireEvent.change(input, { target: { value: "讲讲这个项目" } });
-    fireEvent.click(screen.getByRole("button", { name: "Start conversation" }));
-
-    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
-    expect(mockDispatch.mock.calls[0][0]).toMatchObject({
-      plan: finalPlan,
-      message: "讲讲这个项目",
-      sourceClient: relayTicket,
-    });
-
-    // R16：派发成功即自关注（不经用户按「关注」）发生在 dispatchNewConversation
-    // 内部（POST /v1/follows，见 dispatch.test.ts 的断言）；这里验证弹层确实走到了
-    // 派发这一步，并回调让页面跳详情页。
-    await waitFor(() =>
-      expect(onStarted).toHaveBeenCalledWith({
-        sessionId: 9001,
-        deviceId: 21,
-        deviceFingerprint: "fp-online",
-      }),
-    );
-  });
-
-  it("目标是桌面端时，确认步如实说明 org / subagent / hook 可用（不是沿用 agentred 的不可用文案）", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path.startsWith("/v1/workspace/agents")) return { agents };
-      throw new Error("unexpected: " + path);
-    });
-    mockFetchPlan.mockImplementation(async (_agent, project) =>
-      project ? desktopFinalPlan : pickPlan,
-    );
-    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
-    mockDispatch.mockResolvedValue({
-      sessionId: 9002,
-      deviceId: 30,
-      deviceFingerprint: "fp-desk",
-    });
-    const onStarted = vi.fn();
-    renderDialog(onStarted);
-
-    fireEvent.click(await screen.findByText("后端 Agent"));
-    fireEvent.click(await screen.findByText("agentre-server"));
-
-    // R17：目标是桌面端 → org / subagent / hook 可用（真身就在那台机器上）。
-    expect(
-      await screen.findByText("org / subagent / hook are available here"),
-    ).toBeTruthy();
-    // 不可用的文案不得出现。
-    expect(
-      screen.queryByText("org / subagent / hook are not available here"),
-    ).toBeNull();
-    // 屏 25：将运行在桌面端机器 · 路径。
-    expect(
-      screen.getByText("Will run on 家里 Mac mini · /Users/wyz/agentre-server"),
-    ).toBeTruthy();
-  });
-
-  it("不输入第一句时「开始」按钮是禁用的（发出第一条消息之前什么都不会跑）", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path.startsWith("/v1/workspace/agents")) return { agents };
-      throw new Error("unexpected: " + path);
-    });
-    mockFetchPlan.mockImplementation(async (_agent, project) =>
-      project ? finalPlan : pickPlan,
-    );
-    renderDialog();
-
-    fireEvent.click(await screen.findByText("后端 Agent"));
-    fireEvent.click(await screen.findByText("agentre-server"));
-
-    const start = await screen.findByRole("button", {
-      name: "Start conversation",
-    });
-    expect((start as HTMLButtonElement).disabled).toBe(true);
-  });
-});
-
-describe("对话页空态主动作", () => {
-  it("「开始第一个对话」打开新对话弹层", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/follows") return { items: [] };
-      if (path === "/v1/devices") return { devices: [] };
-      if (path.startsWith("/v1/workspace/agents")) return { agents };
-      throw new Error("unexpected: " + path);
-    });
-    render(
-      <MemoryRouter initialEntries={["/chat"]}>
-        <ThemeProvider>
-          <Routes>
-            <Route path="/chat" element={<Chat />} />
-          </Routes>
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
+describe("挑一个 Agent", () => {
+  it("跑不了的 Agent 摆出来但点不动，且行尾说清楚为什么", async () => {
+    stubReads();
+    renderChat();
 
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Start your first conversation",
       }),
     );
-    // 弹层打开：选 Agent 的标题出现。
-    expect(await screen.findByText("Pick an agent")).toBeTruthy();
-  });
-});
 
-describe("新对话弹层:「当前」标记必须和真派发目标是同一档", () => {
-  // 弹层取 /v1/workspace/agents 时带上浏览器 client_id，以便渲染这个浏览器的排序偏好。
-  // Agent 的 current 档：服务端在没有 client ID 时按账号 sort_order 解析，于是弹层说的
-  // 「当前」是**账号顺序的赢家**，而总览页（带指纹）说的是这台浏览器自己的赢家。
-  // 同一账号同一时刻两处给出不同答案，其中一处必然与真实派发目标不符。
-  it("取 Agent 清单时带上这个浏览器的 client ID", async () => {
-    localStorage.setItem("agentre.browserClientId", "fp-this-browser");
-    mockedApi.mockImplementation(async (path) => {
-      if (path.startsWith("/v1/workspace/agents")) return { agents };
-      throw new Error("unexpected: " + path);
-    });
-    renderDialog();
-
-    await screen.findByText("后端 Agent");
+    const blocked = await screen.findByTestId("agent-pick-agent-2");
+    expect(blocked.hasAttribute("disabled")).toBe(true);
+    // 「本机」那一档在网页语境下永远跳过，拿它当理由等于什么都没说——
+    // 要给的是第一档**说得出原因**的。
     expect(
-      mockedApi.mock.calls.some(
-        ([path]) => path === "/v1/workspace/agents?client_id=fp-this-browser",
-      ),
-    ).toBe(true);
+      screen.getByTestId("agent-pick-agent-2-target").textContent,
+    ).toContain("Office Mac mini");
+    expect(
+      screen.getByTestId("agent-pick-agent-2-target").textContent,
+    ).toContain("Offline");
+
+    fireEvent.click(blocked);
+    expect(screen.queryByTestId("draft-session")).toBeNull();
   });
 
-  // 拿不到指纹（没排过序 / 已被解除授权）时不附加空参数，读路径照常回落账号顺序，
-  // 更不为了凑一个指纹把这台浏览器注册成设备 —— 打开一个弹层不该多出一台机器。
-  it("拿不到指纹时不附加查询参数，也不注册设备", async () => {
-    mockEnsureRelayTicket.mockRejectedValue(new Error("no ticket"));
-    mockedApi.mockImplementation(async (path) => {
-      if (path.startsWith("/v1/workspace/agents")) return { agents };
-      throw new Error("unexpected: " + path);
-    });
-    renderDialog();
+  it("只取一次光杆 Agent 清单，不为此把这台浏览器注册成设备", async () => {
+    stubReads();
+    renderChat();
 
-    await screen.findByText("后端 Agent");
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+    await screen.findByTestId("agent-pick-agent-1");
     expect(
       mockedApi.mock.calls.some(([path]) => path === "/v1/workspace/agents"),
     ).toBe(true);
     expect(mockEnsureRelayTicket).not.toHaveBeenCalled();
+  });
+});
+
+describe("一条还没发第一句的对话", () => {
+  it("摆出「将在 X 上运行」，而且左栏不多出任何一行", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+    await openDraft();
+
+    expect(
+      (await screen.findByTestId("draft-exec-target")).textContent,
+    ).toContain("Study Mini");
+    // 还没发出去 = 还不是一条会话：列表里不该凭空多一行。
+    //
+    // 盯的是**会话行**（行是链接，带 data-nav-target），不是组头：项目轴的组头
+    // 来自账号的项目名单，与有没有会话无关，一条对话都没有时它照样在
+    // （规格 2026-08-21-root-project-entry 决策 4）。拿 `group-` 当「列表是空的」
+    // 的替身，量的就不再是这条用例要说的那件事。
+    expect(screen.queryByText("Nothing sent yet")).toBeTruthy();
+    expect(document.querySelectorAll("[data-nav-target]")).toHaveLength(0);
+    expect(screen.getByTestId("session-index-empty")).toBeTruthy();
+  });
+
+  it("没打字时发不出去；打了字发出去 → 派发、记住这个 Agent、就地进入这条新会话", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockResolvedValue({
+      sessionId: 99,
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      modelPinned: true,
+    });
+    renderChat();
+    await openDraft();
+
+    await awaitDraftComposer();
+    const send = screen.getByTestId("session-detail-send");
+    expect(send.hasAttribute("disabled")).toBe(true);
+
+    await typeInDraft("跑一下失败的测试");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(mockDispatch.mock.calls[0][0].message).toBe("跑一下失败的测试");
+    // 桌面端**不换页**：挑 Agent / 选项目 / 草稿这三步都在右栏里走完，最后一步
+    // 却把整个两栏掀掉的话，左栏那份上下文凭空没了。落地形态与「点左栏一条已有
+    // 对话」同一套：右栏就地换成这条新会话的真实详情。
+    expect(await screen.findByTestId("session-detail-view")).toBeTruthy();
+    expect(screen.queryByText("session page")).toBeNull();
+    expect(screen.getByTestId("chat-detail")).toBeTruthy();
+    // 「最近用过」记在派发成功之后。
+    expect(readRecentAgents()).toEqual(["agent-1"]);
+  });
+
+  /**
+   * 派发在飞的那一小段，屏幕上该是**这条对话已经开始了**的样子：自己刚说的那句话
+   * 落进转录、下面转着三个点 —— 与桌面端 `doSend` 同时插入 user + assistant 占位
+   * 之后的形态一致，也与紧接着落地的会话详情连得上（同一批组件、同一个位置）。
+   *
+   * 此前这里是空态原样留着、底下补一行小字「Starting…」：用户刚敲下回车，输入框
+   * 已经被清空，而屏幕上一个字都没有他刚说的那句话 —— 唯一的反馈是一行会消失的
+   * 状态文案，跟桌面端不是一回事。
+   */
+  it("派发在飞：自己那句话落进转录，三点转起来，不再是一行「Starting…」", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    // 派发一直在飞：这条用例量的就是「在飞的那一段」长什么样。
+    mockDispatch.mockImplementation(() => new Promise(() => {}));
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("跑一下失败的测试");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-send").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+
+    expect(await screen.findByText("跑一下失败的测试")).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Generating" })).toBeTruthy();
+    expect(screen.queryByText("Starting…")).toBeNull();
+  });
+
+  /**
+   * 右栏进了新会话、左栏却列不出它，等于告诉用户「这条不在你账号里」——而
+   * `dispatchNewConversation` 派发成功后就已经把它写进 /v1/saved-sessions 了。
+   * 因此这一刻要重取一次索引，让它作为一行落到左栏里。
+   */
+  it("派发成功后重取索引：新会话作为一行落进左栏", async () => {
+    const listed: unknown[] = [];
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: listed.length,
+          groups: listed.length
+            ? [{ scope: "time", total: listed.length, items: listed }]
+            : [],
+        };
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 20,
+              name: "Study Mini",
+              kind: "agentred",
+              fingerprint: "fp-a",
+              online: true,
+              status: 1,
+            },
+          ],
+        };
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
+      if (path.startsWith("/v1/workspace/projects")) return { projects };
+      throw new Error("unexpected: " + path);
+    });
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockImplementation(async () => {
+      // 派发成功 = 那台机器上真多了一条会话，并已保存进账号：下一次取索引
+      // 才有这一行。
+      listed.push({
+        ...mirroredSession,
+        session_id: "99",
+        title: "跑一下失败的测试",
+      });
+      return {
+        sessionId: 99,
+        deviceId: 20,
+        deviceFingerprint: "fp-a",
+        modelPinned: true,
+      };
+    });
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByRole("link", { name: /跑一下失败的测试/ }),
+    ).toBeTruthy();
+  });
+
+  // 用户的原话是「直接进入空白的对话框，让用户自己输入，和桌面端交互一样」。
+  // 第一句和第二句用两个不同的输入框，就不是同一个交互：一个有 @ 提及 / 斜杠
+  // 命令 / 快捷键提示，另一个是裸 textarea。
+  it("第一句用的就是后续消息那个输入框，不是另做一个", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    expect(screen.getByText("↵ Send · ⇧↵ New line")).toBeTruthy();
+    expect(screen.queryByTestId("draft-composer")).toBeNull();
+  });
+
+  it("空白对话框不展示预设的快捷开头", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    expect(screen.queryByText("Explain this project")).toBeNull();
+    expect(screen.queryByText("Look at the failing test")).toBeNull();
+    expect(screen.queryByText("Continue the last migration")).toBeNull();
+  });
+
+  it("派发失败时不记「最近用过」——开不起来的那次不算用过", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(new Error("relay down"));
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("hi");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalled());
+    expect(readRecentAgents()).toEqual([]);
+  });
+
+  it("Given coding 已连接但远端 CLI 启动失败, When 发第一句, Then 展示远端错误而不是误报连不上", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(
+      new DispatchRunError(
+        new RelayError(
+          -32603,
+          'exec: "claude": executable file not found in $PATH',
+        ),
+      ),
+    );
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("检查一下");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Study Mini is connected");
+    expect(alert.textContent).toContain(
+      'exec: "claude": executable file not found in $PATH',
+    );
+    expect(alert.textContent).not.toContain("Could not reach Study Mini");
+  });
+});
+
+describe("在哪台机器上跑", () => {
+  it("挑定一档后按那一档重取计划（指纹与 cwd 只在 chosen 上）", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+    await openDraft();
+
+    fireEvent.click(await screen.findByTestId("draft-exec-target-chip"));
+    fireEvent.click(await screen.findByTestId("draft-tier-3"));
+
+    await waitFor(() =>
+      expect(mockFetchPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentSyncId: "agent-1",
+          targetBackendSyncId: "b-b",
+        }),
+      ),
+    );
+  });
+
+  it("挑定的那一档跑不了时不回落到自动挑，给的是「交回自动挑」", async () => {
+    stubReads();
+    mockFetchPlan.mockImplementation(async (input) =>
+      input.targetBackendSyncId === "b-b"
+        ? { ...availablePlan, chosen: null }
+        : availablePlan,
+    );
+    renderChat();
+    await openDraft();
+
+    fireEvent.click(await screen.findByTestId("draft-exec-target-chip"));
+    fireEvent.click(await screen.findByTestId("draft-tier-3"));
+
+    expect(
+      await screen.findByTestId("draft-picked-target-unavailable"),
+    ).toBeTruthy();
+    // 没有悄悄换一台去跑：那一行不该又冒出来说「将在 Study Mini 上运行」。
+    expect(screen.queryByTestId("draft-exec-target")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("draft-use-auto-target"));
+    expect(await screen.findByTestId("draft-exec-target")).toBeTruthy();
+  });
+
+  it("一档都不可用时逐档给原因，而不是静默失败", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(allUnavailablePlan);
+    renderChat();
+    await openDraft();
+
+    const block = await screen.findByTestId("draft-all-unavailable");
+    expect(block.textContent).toContain("Not paired");
+    expect(block.textContent).toContain("Offline");
+    expect(block.textContent).toContain("No device set");
+  });
+});
+
+describe("在哪个项目里跑", () => {
+  it("默认不指定项目；挑了项目就带着它重取计划，标题也跟着说", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+    await openDraft();
+
+    expect(
+      (await screen.findByTestId("draft-project-chip")).textContent,
+    ).toContain("No project");
+
+    fireEvent.click(screen.getByTestId("draft-project-chip"));
+    fireEvent.click(await screen.findByTestId("draft-project-proj-1"));
+
+    await waitFor(() =>
+      expect(mockFetchPlan).toHaveBeenCalledWith(
+        expect.objectContaining({ projectSyncId: "proj-1" }),
+      ),
+    );
+    expect(
+      await screen.findByText(/Start a project conversation with/),
+    ).toBeTruthy();
+  });
+});
+
+describe("从项目里挑一个 Agent", () => {
+  it("直接成员与继承自父项目分成两组", async () => {
+    stubReads();
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+    fireEvent.click(await screen.findByTestId("new-conversation-from-project"));
+
+    // 树按父在前：默认停在根项目 agentre-server，它的直接成员是 Docs Agent。
+    expect(await screen.findByTestId("project-members-direct")).toBeTruthy();
+    expect(screen.getByTestId("project-agent-agent-2")).toBeTruthy();
+
+    // 换到子项目 frontend：Backend Agent 是直接成员，Docs Agent 从父项目继承。
+    fireEvent.click(screen.getByTestId("project-node-proj-1"));
+    expect(await screen.findByTestId("project-agent-agent-1")).toBeTruthy();
+    expect(screen.getByTestId("project-members-inherited")).toBeTruthy();
+  });
+
+  it("从项目里挑中一个照样进那条还没发第一句的对话", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+    fireEvent.click(await screen.findByTestId("new-conversation-from-project"));
+    fireEvent.click(screen.getByTestId("project-node-proj-1"));
+    fireEvent.click(await screen.findByTestId("project-agent-agent-1"));
+
+    expect(await screen.findByTestId("draft-session")).toBeTruthy();
+  });
+});
+
+describe("开着新对话时还回得去", () => {
+  // 桌面右栏被「新对话」接管之后，左栏那一列会话仍然点得动——点了就该回到那条
+  // 会话。不清掉 compose 的话，点哪一行右栏都纹丝不动，人被困在挑 Agent 那一屏，
+  // 除了真开一条对话没有别的出路。
+  it("点左栏的一条会话，右栏从新对话回到那条会话", async () => {
+    stubReads({}, [mirroredSession]);
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    expect(await screen.findByTestId("new-conversation-pane")).toBeTruthy();
+
+    fireEvent.click(await screen.findByText("重构登录页"));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("new-conversation-pane")).toBeNull(),
+    );
+  });
+
+  it("从 draft 那一步点回一条会话同样回得去", async () => {
+    stubReads({}, [mirroredSession]);
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    expect(await screen.findByTestId("draft-session")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("重构登录页"));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+  });
+});
+
+/**
+ * 项目组头上那颗 ＋ 问的是「**在这个项目里**开对话」（规格 2026-08-20 决策 10），
+ * 不是「挑一个 Agent」。它落进草稿时项目必须已经填好——否则那颗 ＋ 与顶栏那颗
+ * 「新对话」做的是同一件事，组头这个入口等于在说谎，用户还得再挑一次项目。
+ */
+describe("从项目组头的 ＋ 开对话", () => {
+  it("项目跟着一起带进草稿：计划按这个项目算，chip 上也是它", async () => {
+    stubReads({}, [{ ...mirroredSession, project_sync_id: "proj-1" }]);
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    renderChat();
+
+    // Radix 的浮层开在 pointerdown 上，不是 click。
+    const add = await screen.findByTestId("project-add-proj-1");
+    fireEvent.pointerDown(add, { button: 0, ctrlKey: false });
+    fireEvent.click(add);
+    fireEvent.click(await screen.findByTestId("project-member-option-agent-1"));
+
+    expect(await screen.findByTestId("draft-session")).toBeTruthy();
+    await waitFor(() =>
+      expect(mockFetchPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentSyncId: "agent-1",
+          projectSyncId: "proj-1",
+        }),
+      ),
+    );
+    expect(
+      (await screen.findByTestId("draft-project-chip")).textContent,
+    ).toContain("frontend");
+  });
+});
+
+/**
+ * 窄屏没有第二栏可以落这条新会话：挑 Agent 是底部弹层、草稿占满整屏，派发成功
+ * 之后只能下钻到会话页——那也正是移动端读一条已有对话的形态（索引行就是链接）。
+ */
+describe("移动端派发成功后的落地", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function mockMobileViewport() {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  afterAll(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  it("跳到会话页，而不是留在索引上", async () => {
+    mockMobileViewport();
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockResolvedValue({
+      sessionId: 99,
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      modelPinned: true,
+    });
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("session page")).toBeTruthy();
+  });
+});
+
+/**
+ * 草稿页底栏的两颗控件（规格 2026-08-24-draft-session-composer-pills）。
+ *
+ * 此前这一屏一颗都没有：用户在发出第一句之前既看不见这一轮会用哪个档位、哪个
+ * 模型，也改不了——要等派发成功进了详情页才第一次见到它们。而桌面端在同一处
+ * （chat-panel 的 sessionId<=0 那一路）两颗都在。
+ *
+ * 档位只能问执行端本人：服务端不掌握任何后端的档位集合。所以这一屏在计划落定时
+ * 就连上选中那台机器，问 `runtime.capabilities` 与 `runtime.session.list`。
+ */
+describe("草稿页的权限档位与模型控件", () => {
+  const engineReads = {
+    "/v1/engine/backends": {
+      backends: [
+        {
+          sync_id: "b-a",
+          provider_key: "pk-1",
+          model_key: "mk-1",
+          default_permission_mode: "default",
+        },
+      ],
+    },
+    "/v1/engine/providers": {
+      providers: [
+        {
+          provider_key: "pk-1",
+          name: "Anthropic",
+          type: "anthropic",
+          default_model_key: "mk-1",
+          enabled: true,
+          models: [
+            {
+              model_key: "mk-1",
+              model_id: "claude-sonnet-4-6",
+              name: "Sonnet",
+              enabled: true,
+            },
+            {
+              model_key: "mk-2",
+              model_id: "claude-opus-4-6",
+              name: "Opus",
+              enabled: true,
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  /**
+   * 让这一屏连上选中那台机器，并规定它怎么回答能力与清单两问。
+   *
+   * 清单里顺带放一条 99 号会话：派发成功后右栏就地换成它的真实详情，那一屏
+   * 同样要靠这条连接把摘要问出来。
+   */
+  function stubMachine(
+    caps: unknown,
+    list: unknown = {
+      sessions: [
+        {
+          sessionId: 99,
+          title: "跑一下失败的测试",
+          agentSyncId: "agent-1",
+          backendType: "claudecode",
+          lifecycleState: "idle",
+          latestSeq: 0,
+          peerFingerprint: "fp-a",
+        },
+      ],
+    },
+  ) {
+    const request = vi.fn(async (method: unknown) => {
+      if (method === rpcMethods.runtimeCapabilities) {
+        if (caps instanceof Error) throw caps;
+        return caps;
+      }
+      if (method === rpcMethods.sessionList) return list;
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    mockUseRelay.mockReturnValue({
+      client: {
+        request,
+        attach: vi.fn(async () => ({})),
+        catchUp: vi.fn(async () => {}),
+        setCursor: vi.fn(),
+        getCursor: vi.fn(() => 0),
+        close: vi.fn(),
+      } as never,
+      relayState: "connected",
+      relayTicket,
+      relayTicketError: null,
+      reconnect: vi.fn(),
+    });
+    return request;
+  }
+
+  const fourModes = {
+    capabilities: {
+      PermissionModeMeta: {
+        AllowedModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
+        DefaultMode: "acceptEdits",
+        Order: ["default", "acceptEdits", "plan", "bypassPermissions"],
+        SwitchableDuringTurn: true,
+      },
+    },
+  };
+
+  beforeEach(() => {
+    stubReads(engineReads);
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockResolvedValue({
+      sessionId: 99,
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      modelPinned: true,
+    });
+  });
+
+  it("Given 计划落定, When 打开草稿, Then 两颗控件都在，档位起手值是执行端报的默认档", async () => {
+    stubMachine(fourModes);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    // 起手值取执行端自己报的 DefaultMode，不是本站写死的第一档。
+    expect(pill.textContent).toContain("Accept Edits");
+    expect(screen.getByTestId("composer-model-target")).toBeTruthy();
+  });
+
+  it("Given 机器答不出档位, When 打开草稿, Then pill 常显但禁用并说出这一句", async () => {
+    stubMachine(new Error("machine says no"));
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    expect((pill as HTMLButtonElement).disabled).toBe(true);
+    expect(pill.getAttribute("title")).toBe(
+      "This machine cannot list permission modes right now",
+    );
+  });
+
+  // 与上一条是两句不同的话：这一条是稳定答案（这个后端没有权限门），上一条是
+  // 「此刻问不到」。整颗不摆会把两者混成同一件事。
+  it("Given 后端本来就没有权限门, When 打开草稿, Then 说的是另一句，且档位不随第一句过线", async () => {
+    stubMachine({ capabilities: { PermissionModeMeta: { AllowedModes: [] } } });
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    expect((pill as HTMLButtonElement).disabled).toBe(true);
+    expect(pill.getAttribute("title")).toBe(
+      "This backend has no permission modes",
+    );
+
+    await typeInDraft("hi");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    // piagent 那一路把 RunParams.PermissionMode 当远端 generation token 比对，
+    // 塞一个真档位进去会让那一轮被判成 stale —— 闸门是「执行端报了非空集合」，
+    // 不是在本站按后端类型写死一条黑名单。
+    expect(mockDispatch.mock.calls[0][0].permissionMode).toBeUndefined();
+  });
+
+  it("Given Agent 后端绑了模型, When 打开草稿, Then 模型 pill 是跟随绑定态并写出解析到的模型", async () => {
+    stubMachine(fourModes);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const pill = await screen.findByRole("button", {
+      name: /Provider and model/,
+    });
+    expect(pill.textContent).toContain("Follow agent binding");
+    // 脸上写的是标识符而不是人读名 —— 与桌面端、与包里触发器的注释同一条口径。
+    expect(pill.textContent).toContain("claude-sonnet-4-6");
+  });
+
+  it("Given 用户改了档位又挑了模型, When 发出第一句, Then 两样都随它过线", async () => {
+    stubMachine(fourModes);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Permission mode/ }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: /Plan/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Provider and model/ }));
+    fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    const input = mockDispatch.mock.calls[0][0];
+    expect(input.permissionMode).toBe("plan");
+    expect(input.modelTarget).toEqual({
+      providerKey: "pk-1",
+      modelKey: "mk-2",
+    });
+  });
+
+  // 钉不住不影响这条对话开起来（第一轮就是按所选模型跑的），但后续轮次会回到跟随
+  // 绑定。不说的话，详情页会对着一条其实没钉住的对话显示「跟随 Agent 绑定」，
+  // 而用户明明选过 —— 一句他无法证伪的假话。
+  it("Given 模型没能钉住, When 进了这条新对话, Then 详情页如实说出来", async () => {
+    // 详情那一屏要认得出承载它的那台机器（/v1/devices 非空）才铺得开输入框。
+    stubReads(engineReads, [mirroredSession]);
+    stubMachine(fourModes);
+    mockDispatch.mockResolvedValue({
+      sessionId: 99,
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      modelPinned: false,
+    });
+    // 左栏已经有一行了，空态那颗主动作不在：走 compose 那个入口进草稿。
+    renderChat("/chat?compose=1");
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    await awaitDraftComposer();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    expect(await screen.findByTestId("session-detail-view")).toBeTruthy();
+    await waitFor(
+      () =>
+        expect(screen.getByTestId("composer-model-note").textContent).toBe(
+          "This conversation could not pin your model choice; the first turn used it, later turns follow the agent binding",
+        ),
+      { timeout: 3000 },
+    );
+  });
+
+  // 没有选中的机器就没有「哪个后端」这一问：此刻摆一颗禁用的 pill 是在暗示
+  // 「有台机器只是暂时答不上来」。
+  it("Given 一档都不可用, When 打开草稿, Then 两颗控件整块不摆", async () => {
+    stubMachine(fourModes);
+    mockFetchPlan.mockResolvedValue(allUnavailablePlan);
+    renderChat();
+    await openDraft();
+    await screen.findByTestId("draft-all-unavailable");
+
+    expect(screen.queryByTestId("composer-model-target")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Permission mode/ }),
+    ).toBeNull();
   });
 });

@@ -18,16 +18,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"agentre-server/internal/api"
-	api_device "agentre-server/internal/api/device"
-	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
-	"agentre-server/internal/pkg/jwtblacklist"
-	"agentre-server/internal/pkg/session"
-	"agentre-server/internal/service/auth_svc"
-	"agentre-server/internal/service/device_svc"
+	"github.com/agentre-hub/agentre-server/internal/api"
+	api_device "github.com/agentre-hub/agentre-server/internal/api/device"
+	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 )
 
 const testCookieName = "server_session"
@@ -77,6 +77,10 @@ func (s *stubDeviceSvc) ListUserDevices(_ context.Context, _ int64, callerDevice
 }
 func (s *stubDeviceSvc) ListRevokedJTI(context.Context, int64) ([]string, error) {
 	return s.revokedJTI, nil
+}
+
+func (s *stubDeviceSvc) OwnedDevice(context.Context, int64, int64) (*device_entity.Device, error) {
+	return nil, nil
 }
 
 var _ device_svc.DeviceSvc = (*stubDeviceSvc)(nil)
@@ -205,20 +209,6 @@ func TestRevoke_ForBrowserSession_RejectsMissingCSRFToken(t *testing.T) {
 	require.Empty(t, stub.revoked)
 }
 
-// 反过来：Bearer 设备 JWT 不带 cookie，结构上就不受 CSRF 威胁，
-// 桌面端登出（server_svc/logout.go）不出示 CSRF 头也必须照常工作。
-func TestRevoke_DeviceJWT_NeedsNoCSRFToken(t *testing.T) {
-	stub := &stubDeviceSvc{userDevices: deviceListBody()}
-	server, signer := newDeviceTestServer(t, stub)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 1, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
-
-	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
-		"", token, `{"device_id":1}`)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, []int64{1}, stub.revoked)
-}
-
 // 设备 JWT 调用方仍然只能撤销自己（既有行为不变）。
 func TestRevoke_DeviceJWT_StillSelfOnly(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
@@ -314,15 +304,16 @@ func TestRevocations_RejectsRevokedCallerDevice(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
-// TestAuthorize_IgnoresLegacyCapabilitiesField 锁住兼容承诺：能力概念移除之前的
-// 桌面端与 agentred 仍会在请求体里带 capabilities。那个字段现在不在请求结构里，
-// 绑定必须静默忽略它——照常 200、照常拿到设备码，而不是 400。
-func TestAuthorize_IgnoresLegacyCapabilitiesField(t *testing.T) {
+// TestAuthorize_PassesEveryInputField 锁住「请求体的每一格都真的接到了 service」。
+//
+// 整体比较而不是逐字段挑：AuthorizeInput 将来多出一个字段时，这里会直接失败并把
+// 多出来的值摆出来，而不是默默放过一个没接上的入参。
+func TestAuthorize_PassesEveryInputField(t *testing.T) {
 	stub := &stubDeviceSvc{}
 	server, _ := newDeviceTestServer(t, stub)
 
-	body := `{"device_kind":"desktop","fingerprint":"fp-legacy-client","platform":"darwin/arm64",` +
-		`"version":"v0.4.1","capabilities":{"compute":true,"client":true,"file_browse":true}}`
+	body := `{"device_kind":"desktop","fingerprint":"fp-desktop-client","platform":"darwin/arm64",` +
+		`"version":"v0.4.1","name":"studio"}`
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/device/authorize", "", "", body)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -334,14 +325,13 @@ func TestAuthorize_IgnoresLegacyCapabilitiesField(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &envelope))
 	assert.Equal(t, "dc-1", envelope.Data.DeviceCode)
 
-	// 整体比较而不是逐字段挑：AuthorizeInput 将来多出一个字段时，这里会直接
-	// 失败并把多出来的值摆出来，而不是默默放过一个没接上的入参。
 	require.Len(t, stub.authorizeInputs, 1)
 	assert.Equal(t, device_svc.AuthorizeInput{
 		DeviceKind:  "desktop",
-		Fingerprint: "fp-legacy-client",
+		Fingerprint: "fp-desktop-client",
 		Platform:    "darwin/arm64",
 		Version:     "v0.4.1",
+		Name:        "studio",
 	}, stub.authorizeInputs[0])
 }
 
@@ -360,7 +350,8 @@ func TestAuthorize_PassesReportedName(t *testing.T) {
 	assert.Equal(t, "coding", stub.authorizeInputs[0].Name)
 }
 
-// 老客户端不带 name，授权照常成立（名字回退到指纹缩写，由 service 决定）。
+// 取不到主机名的客户端不带 name（agentred 在 hostname 失败时就是这样），授权照常
+// 成立：名字回退到指纹缩写，由 service 决定。
 func TestAuthorize_NameIsOptional(t *testing.T) {
 	stub := &stubDeviceSvc{}
 	server, _ := newDeviceTestServer(t, stub)

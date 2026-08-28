@@ -9,7 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
 
-	"agentre-server/internal/middleware"
+	"github.com/agentre-hub/agentre-server/internal/middleware"
 )
 
 // serve 挂一条最小路由：AttachOAuthErrorFields + 一个由用例决定怎么写响应的 handler。

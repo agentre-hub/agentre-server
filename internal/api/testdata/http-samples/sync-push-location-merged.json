@@ -1,0 +1,41 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/sync/push",
+    "body": {
+      "items": [
+        {
+          "kind": "project_location",
+          "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P2",
+          "base_version": 0,
+          "updated_at": 1700000000000,
+          "project_sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+          "agentred_fingerprint": "fp-agentred-01",
+          "payload": {
+            "configured": true
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "msg": "success",
+      "data": {
+        "results": [
+          {
+            "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P2",
+            "kind": "project_location",
+            "version": 21,
+            "status": "accepted",
+            "merged_sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P3",
+            "merged_version": 9,
+            "merged_origin_fingerprint": "fp-desktop-02"
+          }
+        ]
+      }
+    }
+  }
+}

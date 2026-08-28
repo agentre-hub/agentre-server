@@ -59,7 +59,7 @@ reads the docs at all.
 | A lint rule or exemption | [develop.md](develop.md) enforced-rules table |
 | Layering or a new layer | [architecture.md](architecture.md) |
 | Colour tokens, theming, a scale step, or the shared shell (`AuthLayout`) | [design.md](design.md) |
-| A locale key | Both locale files — `locale-parity.test.ts` will fail otherwise |
+| A locale key | The corresponding en and zh-CN module files; wire a new module into both bundles |
 | Log fields, metrics, spans | [observability.md](observability.md) |
 | Anything in `e2e/` | [`../e2e/README.md`](../e2e/README.md), and [verification.md](verification.md) if the workflow changed |
 | Anything in `deploy/`, `.gitea/workflows/`, or a config key the server reads at boot | [`../deploy/README.md`](../deploy/README.md) — its secrets table and etcd seeding list |
@@ -71,11 +71,11 @@ document feels off:
 
 ```bash
 # Do the commands still exist?
-grep -E '^\s*make [a-z-]+' -o docs/*.md | sort -u
-grep -E '^[a-z][a-z0-9_-]*:' Makefile
+git grep -h -E '^\s*make [a-z-]+' -- 'docs/*.md' | sort -u
+git grep -n -E '^[a-z][a-z0-9_-]*:' -- Makefile
 
 # Do the relative links resolve?
-grep -oE '\]\([^)h][^)]*\)' docs/*.md AGENTS.md
+git grep -n -E '\]\([^)h][^)]*\)' -- 'docs/*.md' AGENTS.md
 ```
 
 Broken links and vanished symbols are the two failure modes worth checking for, along with

@@ -22,7 +22,7 @@ import (
 
 // migrationLockName 是迁移串行化用的 MySQL named lock。锁名携应用名，
 // 避免同一 MySQL 实例上的其他应用迁移相互阻塞。
-const migrationLockName = "agentre-server/migrations"
+const migrationLockName = "github.com/agentre-hub/agentre-server/migrations"
 
 // migrationLockPollInterval / migrationLockWaitBudget 是轮询 GET_LOCK 的
 // 间隔与总预算，声明成变量是为了让测试能换成极小值而不必真的等待。
@@ -113,15 +113,46 @@ func releaseMigrationLock(ctx context.Context, conn *sql.Conn) {
 
 func migrationList() []*gormigrate.Migration {
 	return []*gormigrate.Migration{
-		migration202605200001(),
-		migration202605200002(),
-		migration202605200003(),
-		migration202605200004(),
-		migration202605200005(),
-		migration202608090001(),
-		migration202608100001(),
-		migration202608140001(),
-		migration202608150001(),
-		migration202608150002(),
+		migration202608280001(),
+		migration202608280002(), // 活跃统计：日滚存 + 账号设置
+	}
+}
+
+// migration202608280001 是正式发布前压缩后的初始基线。
+//
+// 各领域的最终建表定义仍拆在独立文件中，便于按表审阅；这里只把开发期间的九条
+// gormigrate 账本记录收成一条。产品发布后不得再改这条基线，后续 schema 变化应在
+// migrationList 末尾追加新的迁移。
+func migration202608280001() *gormigrate.Migration {
+	steps := []*gormigrate.Migration{
+		baselineUsers(),
+		baselineUserIdentities(),
+		baselineDevices(),
+		baselineDeviceTokens(),
+		baselineDeviceFlowCodes(),
+		baselineWorkspaceSync(),
+		baselineAgentSessionSaves(),
+		baselineAgentSessions(),
+		baselineWebAuthnCredentials(),
+	}
+
+	return &gormigrate.Migration{
+		ID: "202608280001",
+		Migrate: func(tx *gorm.DB) error {
+			for _, step := range steps {
+				if err := step.Migrate(tx); err != nil {
+					return fmt.Errorf("migrations: apply baseline step %s: %w", step.ID, err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			for i := len(steps) - 1; i >= 0; i-- {
+				if err := steps[i].Rollback(tx); err != nil {
+					return fmt.Errorf("migrations: rollback baseline step %s: %w", steps[i].ID, err)
+				}
+			}
+			return nil
+		},
 	}
 }

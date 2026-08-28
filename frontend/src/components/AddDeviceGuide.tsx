@@ -11,24 +11,42 @@ import {
   X,
 } from "lucide-react";
 
+import { copyTextToClipboard, Button, cn } from "@agentre-hub/agentre-ui";
+
 import CodeInput from "@/components/CodeInput";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { normalize, toChars } from "@/lib/userCode";
-import { cn } from "@/lib/utils";
 
-/** 能被「加进来」的设备类型。浏览器不用加（用户正开着的这个已经在列表里），移动端没有可装的客户端。 */
+/** 能被「加进来」的设备类型。浏览器不是可管理设备；移动端没有可装的客户端。 */
 type AddKind = "agentred" | "desktop";
 type TargetOS = "linux" | "macos" | "windows";
 
-const RELEASES_URL = "https://github.com/agentre-ai/agentre/releases/latest";
+const RELEASES_URL = "https://github.com/agentre-hub/agentre/releases/latest";
 
 /** 与桌面端引导给的是同一条命令；改这里之前先确认那边也改了。 */
 const INSTALL_UNIX = `curl -fsSL ${RELEASES_URL}/download/install.sh | sh`;
 const INSTALL_WINDOWS = `irm ${RELEASES_URL}/download/install.ps1 | iex`;
 const SERVICE_INSTALL = "agentred service install --start";
 
-const STEP_KEYS = ["install", "login", "code"] as const;
+/**
+ * 顺序是被 agentred 的落盘时序钉死的，不是排版偏好。
+ *
+ * `agentred login` 会一直阻塞轮询，直到用户批准才退出、并把这次认领写进
+ * `state.json`；而 daemon 一旦跑起来就会把 `state.json` 读进内存并持有它
+ * （`cmd/agentred/login.go` 的 `requireNoRunningDaemon` 因此在 daemon 运行时
+ * 直接拒绝登录）。于是：
+ *
+ *   1. 登录必须排在 `agentred service install --start` 之前 —— 否则闸门当场
+ *      拒绝，而 macOS 的 LaunchAgent 是 KeepAlive=true，pkill 也停不下来；
+ *   2. **批准也必须排在它之前** —— 闸门拦不住「先 login 再起服务」这条：login
+ *      过闸时 daemon 还没起来。daemon 抢在 login 退出前起来，就会拿着旧的
+ *      （未认领的）state，它之后任何一次写盘都把刚落定的认领覆盖掉，症状是
+ *      设备看着授权成功却永远连不上。
+ *
+ * 所以三步是：装 + 登录 → 输码批准 → 注册后台服务。二进制安装命令留在第 1 步：
+ * 没有二进制就没有 `agentred login` 可运行，它是这一步的前置。
+ */
+const STEP_KEYS = ["login", "code", "service"] as const;
 
 /**
  * 登录命令里的服务器地址 = **这个控制台自己的地址**。
@@ -40,7 +58,14 @@ function consoleOrigin(): string {
   return window.location.origin;
 }
 
-/** 一条可复制的命令。剪贴板不可用（非安全上下文）时不渲染复制按钮——没有能力就不给控件。 */
+/**
+ * 一条可复制的命令。
+ *
+ * 复制走共享包的 `copyTextToClipboard`：它在 `navigator.clipboard` 不存在时
+ * （http:// 的非安全上下文，控制台部署在局域网 IP 上就是这种）退回
+ * `execCommand("copy")`，所以按钮不再需要按能力藏起来——装设备这页恰恰是最
+ * 需要复制命令的地方。用不带 toast 的那一层：反馈由按钮自己翻成「已复制」。
+ */
 function CommandCard({
   label,
   command,
@@ -66,34 +91,30 @@ function CommandCard({
     return () => window.clearTimeout(timer);
   }, [copiedCommand]);
 
-  const clipboard =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard;
-
   return (
     <div className="overflow-hidden rounded-md border border-border">
       <div className="flex items-center gap-2 border-b border-border bg-muted px-3 py-1.5">
         <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
           {label}
         </span>
-        {clipboard && (
-          <Button
-            variant="ghost"
-            size="xs"
-            data-testid={copyTestId}
-            onClick={() => {
-              clipboard
-                .writeText(command)
-                .then(() => setCopiedCommand(command))
-                .catch(() => {
-                  // 复制被浏览器拒了就保持原样：命令本身仍然可以选中手抄，
-                  // 不谎报「已复制」。
-                });
-            }}
-          >
-            {copied ? <Check /> : <Copy />}
-            {copied ? t("device.add.copied") : t("device.add.copy")}
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="xs"
+          data-testid={copyTestId}
+          onClick={() => {
+            copyTextToClipboard(command)
+              .then((ok) => {
+                // 没复制成就保持原样：命令本身仍然可以选中手抄，不谎报「已复制」。
+                if (ok) setCopiedCommand(command);
+              })
+              .catch(() => {
+                // 同上——Clipboard API 存在却拒绝（文档失焦、权限被拒）时也一样。
+              });
+          }}
+        >
+          {copied ? <Check /> : <Copy />}
+          {copied ? t("device.add.copied") : t("device.add.copy")}
+        </Button>
       </div>
       <pre
         data-testid={testId}
@@ -130,7 +151,7 @@ function ChoiceButton({
 function FieldLabel({ label, hint }: { label: string; hint?: string }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-2">
-      <span className="text-[13px] font-medium text-foreground">{label}</span>
+      <span className="text-aux font-medium text-foreground">{label}</span>
       {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
     </div>
   );
@@ -148,11 +169,11 @@ function StepHead({
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+      <span className="font-mono text-3xs font-medium text-muted-foreground">
         {t("device.add.stepOf", { n: step })}
       </span>
       <h2 className="text-base font-semibold text-foreground">{title}</h2>
-      <p className="text-[13px] leading-relaxed text-muted-foreground">
+      <p className="text-aux leading-relaxed text-muted-foreground">
         {description}
       </p>
     </div>
@@ -164,11 +185,8 @@ function TipList({ tips }: { tips: string[] }) {
   return (
     <ol className="flex flex-col gap-2">
       {tips.map((tip, i) => (
-        <li
-          key={tip}
-          className="flex gap-2.5 text-[13px] text-muted-foreground"
-        >
-          <span className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px] text-subtle-foreground">
+        <li key={tip} className="flex gap-2.5 text-aux text-muted-foreground">
+          <span className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-3xs text-muted-foreground">
             {i + 1}
           </span>
           <span className="min-w-0 flex-1 leading-relaxed">{tip}</span>
@@ -179,7 +197,7 @@ function TipList({ tips }: { tips: string[] }) {
 }
 
 /**
- * 「怎么加一台设备」的页内引导：装上 agentred → 让它登录账号 → 输入设备码。
+ * 「怎么加一台设备」的页内引导：装好并登录 → 输入设备码批准 → 让它常驻后台。
  *
  * 只在设备页由唯一的「添加设备」入口召唤（空态默认展开），不是常驻区块。
  * 传了 onClose 才渲染收起控件——空态没有别的东西可看，收起等于把页面清空。
@@ -200,11 +218,13 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
 
   function finishStep(n: number) {
     setDone((prev) => new Set(prev).add(n));
-    setStep(n + 1);
+    // 最后一步没有「下一步」可去：只落一个勾，不要把 step 推到一个不存在的
+    // 编号上（那会把整块正文渲染成空白）。
+    if (n < STEP_KEYS.length) setStep(n + 1);
   }
 
   /**
-   * 第 3 步只做本地归一化，然后把设备码交给既有的授权确认屏。
+   * 第 2 步只做本地归一化，然后把设备码交给既有的授权确认屏。
    *
    * 「这个代码存不存在 / 是不是已经用过」不在这里问：那一屏拿到 user_code
    * 就会自己查 pending，查不到时用同一套 device.entry.errors 就地标红且
@@ -274,7 +294,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                 >
                   <span
                     className={cn(
-                      "flex size-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px]",
+                      "flex size-5 shrink-0 items-center justify-center rounded-full font-mono text-3xs",
                       isDone
                         ? "bg-status-running-bg text-status-running"
                         : active
@@ -285,7 +305,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                     {isDone ? <Check className="size-3" /> : n}
                   </span>
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate text-[13px] font-medium text-foreground">
+                    <span className="truncate text-aux font-medium text-foreground">
                       {t(`device.add.steps.${key}.title`)}
                     </span>
                     <span className="truncate text-xs text-muted-foreground">
@@ -324,13 +344,13 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               step={1}
               title={t(
                 isAgentred
-                  ? "device.add.install.agentredTitle"
-                  : "device.add.install.desktopTitle",
+                  ? "device.add.login.agentredTitle"
+                  : "device.add.login.desktopTitle",
               )}
               description={t(
                 isAgentred
-                  ? "device.add.install.agentredDesc"
-                  : "device.add.install.desktopDesc",
+                  ? "device.add.login.agentredDesc"
+                  : "device.add.login.desktopDesc",
               )}
             />
             {kindChoice}
@@ -373,10 +393,18 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                   copyTestId="add-device-copy-install"
                 />
                 <CommandCard
-                  label={t("device.add.install.serviceLabel")}
-                  command={SERVICE_INSTALL}
-                  testId="add-device-command-service"
-                  copyTestId="add-device-copy-service"
+                  label={t("device.add.login.commandLabel")}
+                  command={`agentred login --server ${server}`}
+                  testId="add-device-command-login"
+                  copyTestId="add-device-copy-login"
+                />
+                <TipList
+                  tips={[
+                    t("device.add.login.agentredTip1"),
+                    t("device.add.login.agentredTip2"),
+                    t("device.add.login.agentredTip3"),
+                    t("device.add.login.agentredTip4"),
+                  ]}
                 />
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
                   <a
@@ -389,7 +417,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                     {t("device.add.install.manual")}
                   </a>
                   <Button onClick={() => finishStep(1)}>
-                    {t("device.add.install.next")}
+                    {t("device.add.login.next")}
                     <ArrowRight />
                   </Button>
                 </div>
@@ -403,7 +431,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                       aria-hidden="true"
                       className="size-4 shrink-0 text-muted-foreground"
                     />
-                    <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-muted-foreground">
+                    <span className="min-w-0 flex-1 text-aux leading-relaxed text-muted-foreground">
                       {t("device.add.install.downloadBody")}
                     </span>
                     <Button variant="outline" size="sm" asChild>
@@ -419,9 +447,22 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                     </Button>
                   </div>
                 </div>
+                <CommandCard
+                  label={t("device.add.login.serverLabel")}
+                  command={server}
+                  testId="add-device-server-address"
+                  copyTestId="add-device-copy-server"
+                />
+                <TipList
+                  tips={[
+                    t("device.add.login.desktopTip1"),
+                    t("device.add.login.desktopTip2"),
+                    t("device.add.login.desktopTip3"),
+                  ]}
+                />
                 <div className="flex justify-end border-t border-border pt-4">
                   <Button onClick={() => finishStep(1)}>
-                    {t("device.add.install.next")}
+                    {t("device.add.login.next")}
                     <ArrowRight />
                   </Button>
                 </div>
@@ -431,63 +472,9 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
         )}
 
         {step === 2 && (
-          <>
-            <StepHead
-              step={2}
-              title={t(
-                isAgentred
-                  ? "device.add.login.agentredTitle"
-                  : "device.add.login.desktopTitle",
-              )}
-              description={t(
-                isAgentred
-                  ? "device.add.login.agentredDesc"
-                  : "device.add.login.desktopDesc",
-              )}
-            />
-            {isAgentred ? (
-              <CommandCard
-                label={t("device.add.terminalLabel")}
-                command={`agentred login --server ${server}`}
-                testId="add-device-command-login"
-                copyTestId="add-device-copy-login"
-              />
-            ) : (
-              <CommandCard
-                label={t("device.add.login.serverLabel")}
-                command={server}
-                testId="add-device-server-address"
-                copyTestId="add-device-copy-server"
-              />
-            )}
-            <TipList
-              tips={
-                isAgentred
-                  ? [
-                      t("device.add.login.agentredTip1"),
-                      t("device.add.login.agentredTip2"),
-                      t("device.add.login.agentredTip3"),
-                    ]
-                  : [
-                      t("device.add.login.desktopTip1"),
-                      t("device.add.login.desktopTip2"),
-                      t("device.add.login.desktopTip3"),
-                    ]
-              }
-            />
-            <div className="flex justify-end border-t border-border pt-4">
-              <Button onClick={() => finishStep(2)}>
-                {t("device.add.login.next")}
-                <ArrowRight />
-              </Button>
-            </div>
-          </>
-        )}
-
-        {step === 3 && (
           <form onSubmit={submitCode} className="flex flex-col gap-4">
             <StepHead
-              step={3}
+              step={2}
               // 文案沿用既有输码屏：同一件事换个说法只会让人以为是两件事。
               title={t("device.entry.title")}
               description={t("device.entry.description")}
@@ -506,7 +493,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               {incomplete && (
                 <p
                   id={codeErrorId}
-                  className="flex items-start gap-2 text-[13px] text-destructive"
+                  className="flex items-start gap-2 text-aux text-destructive"
                 >
                   <CircleAlert
                     className="mt-0.5 size-3.5 shrink-0"
@@ -516,7 +503,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                 </p>
               )}
             </div>
-            <p className="text-[13px] leading-relaxed text-muted-foreground">
+            <p className="text-aux leading-relaxed text-muted-foreground">
               {t("device.add.code.handoff")}
             </p>
             <div className="flex justify-end border-t border-border pt-4">
@@ -526,6 +513,47 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               </Button>
             </div>
           </form>
+        )}
+
+        {step === 3 && (
+          <>
+            <StepHead
+              step={3}
+              title={t(
+                isAgentred
+                  ? "device.add.service.agentredTitle"
+                  : "device.add.service.desktopTitle",
+              )}
+              description={t(
+                isAgentred
+                  ? "device.add.service.agentredDesc"
+                  : "device.add.service.desktopDesc",
+              )}
+            />
+            {/* 桌面端自带 agentred，没有第二个服务要注册——这一步就只剩那句说明。 */}
+            {isAgentred && (
+              <>
+                <CommandCard
+                  label={t("device.add.service.commandLabel")}
+                  command={SERVICE_INSTALL}
+                  testId="add-device-command-service"
+                  copyTestId="add-device-copy-service"
+                />
+                <TipList
+                  tips={[
+                    t("device.add.service.tip1"),
+                    t("device.add.service.tip2"),
+                  ]}
+                />
+              </>
+            )}
+            <div className="flex justify-end border-t border-border pt-4">
+              <Button onClick={() => finishStep(3)}>
+                {t("device.add.service.finish")}
+                <Check />
+              </Button>
+            </div>
+          </>
         )}
       </div>
     </Card>

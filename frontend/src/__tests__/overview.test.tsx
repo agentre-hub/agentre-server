@@ -6,11 +6,11 @@ import {
   within,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
-import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Overview from "@/pages/Overview";
 
@@ -18,38 +18,174 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/lib/accountChannel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
+  return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
+});
 
 const mockedApi = vi.mocked(api);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockedStartChannel = vi.mocked(accountChannel.startAccountChannel);
 
-const fakeClient = {
-  request: vi.fn(),
-  attach: vi.fn(async () => ({})),
-  catchUp: vi.fn(async () => {}),
-  close: vi.fn(),
-};
+/** 把一条信号送进这个标签页共用的那条通道。 */
+function deliver(signalType: string): void {
+  const call = mockedStartChannel.mock.calls.at(-1);
+  expect(call).toBeDefined();
+  call![0].onRefresh(signalType);
+}
 
-function connectedRelay(client: unknown): UseRelayMachineResult {
+/** 这一轮里 api() 被打了哪些路径。 */
+function pathsCalled(): string[] {
+  return mockedApi.mock.calls.map(([path]) => String(path));
+}
+
+const devices = [
+  {
+    id: 1,
+    name: "Home NUC",
+    kind: "agentred",
+    fingerprint: "fp-1",
+    online: true,
+  },
+  {
+    id: 2,
+    name: "Office Mac mini",
+    kind: "agentred",
+    fingerprint: "fp-2",
+    online: false,
+  },
+];
+
+const agents = [
+  {
+    sync_id: "ag-1",
+    name: "Backend Agent",
+    avatar_color: "#4f46e5",
+    department_name: "Engineering",
+    has_available_target: true,
+    exec_targets: [
+      {
+        rank: 1,
+        is_local_reference: false,
+        device_id: 1,
+        device_name: "Home NUC",
+        backend_type: "claudecode",
+        availability: "available",
+        current: true,
+      },
+    ],
+  },
+  {
+    sync_id: "ag-2",
+    name: "QA Agent",
+    avatar_color: "#0284c7",
+    has_available_target: false,
+    exec_targets: [
+      {
+        rank: 1,
+        is_local_reference: false,
+        backend_type: "codex",
+        availability: "unpaired",
+        current: false,
+      },
+    ],
+  },
+];
+
+const projects = [
+  { sync_id: "p1", name: "agentre-server" },
+  { sync_id: "p2", name: "agentre" },
+];
+
+/** 一份可用的 GET /v1/stats/overview 响应，用例只覆盖自己关心的那几个键。 */
+function statsResponse(over: Record<string, unknown> = {}) {
   return {
-    client: client as never,
-    relayState: "connected",
-    relayTicket: {
-      clientId: "fp-web",
-      clientName: "Browser",
-      accessToken: "t",
+    activity_stats_enabled: true,
+    scope: "full",
+    time_zone: "Asia/Shanghai",
+    summary: {
+      conversations: 143,
+      conversations_total: 486,
+      streak_days: 9,
+      longest_streak_days: 23,
+      active_days: 18,
+      window_days: 30,
+      devices_online: 1,
+      devices_total: 2,
     },
-    relayTicketError: null,
+    heatmap: {
+      from: "2025-09-01",
+      to: "2026-08-28",
+      days: [
+        { day: "2026-08-28", count: 11 },
+        { day: "2026-08-27", count: 4 },
+      ],
+      busiest_day: { day: "2026-05-14", count: 11 },
+      avg_per_active_day: 5.4,
+    },
+    agents: [
+      { sync_id: "ag-1", count: 42 },
+      { sync_id: "ag-2", count: 31 },
+    ],
+    backends: [
+      { backend_type: "claudecode", count: 90 },
+      { backend_type: "codex", count: 44 },
+      { backend_type: "", count: 9 },
+    ],
+    models: [
+      { provider_key: "anthropic", model_key: "claude-sonnet-5", count: 60 },
+      { provider_key: "", model_key: "", count: 18 },
+    ],
+    projects: [
+      { sync_id: "p1", count: 46 },
+      { sync_id: "", count: 23 },
+    ],
+    ...over,
   };
 }
 
-function disconnectedRelay(): UseRelayMachineResult {
-  return {
-    client: null,
-    relayState: "disconnected",
-    relayTicket: null,
-    relayTicketError: null,
-  };
+/** 一份「什么都还没发生」的响应：0 设备 0 对话。 */
+function freshAccountResponse() {
+  return statsResponse({
+    activity_stats_enabled: false,
+    scope: "saved",
+    summary: {
+      conversations: 0,
+      conversations_total: 0,
+      streak_days: 0,
+      longest_streak_days: 0,
+      active_days: 0,
+      window_days: 30,
+      devices_online: 0,
+      devices_total: 0,
+    },
+    heatmap: { from: "2025-09-01", to: "2026-08-28", days: [] },
+    agents: [],
+    backends: [],
+    models: [],
+    projects: [],
+  });
+}
+
+/** 默认接线：四条读取都成功，用例只覆写自己要变的那条。 */
+function serve(overrides: Record<string, unknown> = {}) {
+  mockedApi.mockImplementation(async (path) => {
+    const p = String(path);
+    for (const [prefix, value] of Object.entries(overrides)) {
+      if (p === prefix || p.startsWith(prefix)) {
+        if (typeof value === "function")
+          return (value as (path: string) => unknown)(p);
+        return value;
+      }
+    }
+    if (p.startsWith("/v1/stats/overview")) return statsResponse();
+    if (p === "/v1/devices") return { devices };
+    // 外壳自己的两条读取（账号行、对话角标）；本页不管它们，但接住免得默认分支抛。
+    if (p === "/v1/auth/me") return { user_id: 1, display_name: "Dev" };
+    if (p.startsWith("/v1/agent-sessions")) return { total: 0, items: [] };
+    if (p === "/v1/workspace/agents") return { agents };
+    if (p === "/v1/workspace/projects") return { projects };
+    throw new Error("unexpected call: " + p);
+  });
 }
 
 function renderOverview() {
@@ -61,176 +197,319 @@ function renderOverview() {
   );
 }
 
+/** 把视口切到窄屏。AppShell / 热力卡都靠 useIsMobile 走另一套形态。 */
+function setViewport(mobile: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: mobile && query.includes("max-width"),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+}
+
+const realMatchMedia = window.matchMedia;
+
 beforeEach(async () => {
   await i18n.changeLanguage("en");
   mockedApi.mockReset();
-  mockUseRelay.mockReset();
-  // 默认中继未连：只有显式设置 connectedRelay 的用例才挂得到等待会话。
-  mockUseRelay.mockReturnValue(disconnectedRelay());
-  fakeClient.request.mockReset();
+  mockedStartChannel.mockClear();
   localStorage.clear();
 });
 
-describe("overview page", () => {
-  it("lists agents with ordered exec targets, the current one, and per-target reasons", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") {
-        return {
-          agents: [
-            {
-              sync_id: "agent-1",
-              name: "Frontend Agent",
-              department_name: "Engineering",
-              has_available_target: true,
-              exec_targets: [
-                {
-                  rank: 1,
-                  is_local_reference: true,
-                  availability: "skipped_for_web",
-                  current: false,
-                },
-                {
-                  rank: 2,
-                  is_local_reference: false,
-                  device_id: 20,
-                  device_name: "Study NUC",
-                  backend_type: "claude_code",
-                  availability: "offline",
-                  current: false,
-                },
-                {
-                  rank: 3,
-                  is_local_reference: false,
-                  device_id: 21,
-                  device_name: "Office Mac mini",
-                  backend_type: "codex",
-                  availability: "available",
-                  current: true,
-                },
-              ],
-            },
-          ],
-        };
-      }
-      throw new Error("unexpected call: " + path);
-    });
+afterEach(() => {
+  window.matchMedia = realMatchMedia;
+});
 
+// ── 摘要四格（设计稿 r5xRl 摘要行） ──────────────────────────────────────
+describe("overview: 摘要四格", () => {
+  it("四格全部长在共享 Metric 上，数字来自 /v1/stats/overview", async () => {
+    serve();
     renderOverview();
 
-    expect(await screen.findByText("Frontend Agent")).toBeTruthy();
-    expect(screen.getByText("Engineering")).toBeTruthy();
-    expect(
-      screen.getByText(/Currently running on Office Mac mini/),
-    ).toBeTruthy();
-
-    expect(screen.getByText("Skipped for web dispatch")).toBeTruthy();
-    expect(screen.getByText("Offline")).toBeTruthy();
-    expect(screen.getByText(/Study NUC/)).toBeTruthy();
-
-    // 「Office Mac mini」出现两处：「当前落到」那句摘要，以及执行目标链里的
-    // 那个 chip。「当前生效」那一档要能从视觉上区分出来（不只是靠颜色）——
-    // 断言链里那个 chip 携带一个可查询的 current 标记，而不是只看 CSS 类名。
-    const matches = screen.getAllByText(/Office Mac mini/);
-    expect(matches.length).toBeGreaterThanOrEqual(2);
-    const currentChip = matches
-      .map((el) => el.closest('[data-current="true"]'))
-      .find(Boolean);
-    expect(currentChip).toBeTruthy();
-  });
-
-  it("shows the no-available-target banner when an agent has none", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") {
-        return {
-          agents: [
-            {
-              sync_id: "agent-2",
-              name: "QA Agent",
-              has_available_target: false,
-              exec_targets: [
-                {
-                  rank: 1,
-                  is_local_reference: false,
-                  backend_type: "claude_code",
-                  availability: "unpaired",
-                  current: false,
-                },
-              ],
-            },
-          ],
-        };
-      }
-      throw new Error("unexpected call: " + path);
-    });
-
-    renderOverview();
-
-    expect(await screen.findByText("QA Agent")).toBeTruthy();
-    expect(screen.getByText("No available execution target")).toBeTruthy();
-    expect(screen.getByText("Not paired")).toBeTruthy();
-  });
-
-  it("shows the empty state when the account has no agents", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      throw new Error("unexpected call: " + path);
-    });
-
-    renderOverview();
-
-    expect(await screen.findByText("No agents yet.")).toBeTruthy();
-  });
-
-  it("reports a load failure instead of rendering the empty state", async () => {
-    mockedApi.mockImplementation(async () => {
-      throw new SyntaxError("Unexpected token '<' ... is not valid JSON");
-    });
-
-    renderOverview();
+    expect(await screen.findByText("Conversations")).toBeTruthy();
+    for (const id of [
+      "tile-conversations",
+      "tile-streak",
+      "tile-active-days",
+      "tile-online",
+    ]) {
+      const tile = screen.getByTestId(id);
+      expect(tile.querySelector('[data-testid="metric-value"]')).toBeTruthy();
+    }
 
     expect(
-      await screen.findByText("Could not load your agents. Please try again."),
+      within(screen.getByTestId("tile-conversations")).getByText("143"),
     ).toBeTruthy();
-    expect(screen.queryByText("No agents yet.")).toBeNull();
+    expect(
+      within(screen.getByTestId("tile-conversations")).getByText("486 total"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("tile-streak")).getByText("9"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("tile-streak")).getByText("Longest 23 days"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("tile-active-days")).getByText("18"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("tile-active-days")).getByText("/ 30 days"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("tile-active-days")).getByText("60% of days"),
+    ).toBeTruthy();
   });
 
-  // R19 守卫：即便 API 响应里意外混进了路径/CLIPath/EnvJSON 形状的字段
-  // （生产环境本不该发生——这里模拟的是「万一后端回归」），页面渲染出的文本里
-  // 也绝不能出现它们。这道断言钉的是渲染输出，而不是信任后端已经把关。
-  it("never renders a path, cli_path or env_json value even if the response carries one", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") {
-        return {
-          agents: [
-            {
-              sync_id: "agent-3",
-              name: "Ops Agent",
-              has_available_target: true,
-              exec_targets: [
-                {
-                  rank: 1,
-                  is_local_reference: false,
-                  device_id: 20,
-                  device_name: "Study NUC",
-                  backend_type: "claude_code",
-                  availability: "available",
-                  current: true,
-                  // 下面三个字段真实的 API 从不会发；这里故意塞进去，
-                  // 断言组件即便拿到了也绝不会把它们画出来。
-                  path: "/Users/wyz/secret-project",
-                  cli_path: "/usr/local/bin/claude",
-                  env_json: '{"OPENAI_API_KEY":"sk-super-secret"}',
-                },
-              ],
-            },
-          ],
-        };
-      }
-      throw new Error("unexpected call: " + path);
-    });
+  it("设备在线是「现在」：值来自摘要，副行点名第一台离线的机器", async () => {
+    serve();
+    renderOverview();
 
+    await screen.findByText("Devices online");
+    const tile = screen.getByTestId("tile-online");
+    expect(within(tile).getByText("1")).toBeTruthy();
+    expect(within(tile).getByText("/ 2")).toBeTruthy();
+    expect(within(tile).getByText("Office Mac mini is offline")).toBeTruthy();
+  });
+
+  it("四张卡里一个「—」都没有：这一版每一格都有真实数据源", async () => {
+    serve();
+    renderOverview();
+
+    await screen.findByText("Conversations");
+    for (const id of [
+      "tile-conversations",
+      "tile-streak",
+      "tile-active-days",
+      "tile-online",
+    ]) {
+      expect(screen.getByTestId(id).textContent).not.toContain("—");
+    }
+  });
+});
+
+// ── 顶栏：Fresh 指示与范围分段控件 ───────────────────────────────────────
+describe("overview: 顶栏", () => {
+  it("Fresh 仅在有在线 agentred 时渲染", async () => {
+    serve();
+    renderOverview();
+    expect(
+      (await screen.findAllByText("Overview")).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Desktop connected")).toBeTruthy();
+  });
+
+  it("没有在线 agentred 时不渲染「桌面端已连接」", async () => {
+    serve({ "/v1/devices": { devices: [devices[1]] } });
+    renderOverview();
+    await screen.findByText("Conversations");
+    expect(screen.queryByText("Desktop connected")).toBeNull();
+  });
+
+  it("范围分段控件：默认近 30 天，切换后按新范围重取", async () => {
+    const asked: string[] = [];
+    serve({
+      "/v1/stats/overview": (p: string) => {
+        asked.push(
+          new URLSearchParams(p.split("?")[1] ?? "").get("range") ?? "",
+        );
+        return statsResponse();
+      },
+    });
+    renderOverview();
+
+    await screen.findByText("Conversations");
+    expect(asked).toEqual(["30d"]);
+    const d30 = screen.getByRole("button", { name: "Last 30 days" });
+    expect(d30.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
+    await waitFor(() => expect(asked).toContain("7d"));
+    expect(
+      screen
+        .getByRole("button", { name: "Last 7 days" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "All time" }));
+    await waitFor(() => expect(asked).toContain("all"));
+  });
+});
+
+// ── 活跃热力格子图 ───────────────────────────────────────────────────────
+describe("overview: 活跃热力", () => {
+  it("桌面端画满一年（53 周），当天那格上到最高档", async () => {
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    const columns = screen.getAllByTestId("heat-week");
+    expect(columns.length).toBe(53);
+    // 每列 7 格，一格不少——少一格就是把某个星期几整行错开。
+    for (const col of columns)
+      expect(within(col).getAllByTestId("heat-cell").length).toBe(7);
+
+    const busiest = document.querySelector('[data-day="2026-08-28"]');
+    expect(busiest?.getAttribute("data-level")).toBe("4");
+    // 那一周里 to 之后的日子不画：格位留着，但不给日期、也不上色。
+    expect(document.querySelector('[data-day="2026-08-29"]')).toBeNull();
+  });
+
+  it("卡头右侧一条「统计设置 →」直达设置的隐私页签", async () => {
+    serve();
+    renderOverview();
+
+    const link = await screen.findByRole("link", { name: "Stats settings →" });
+    expect(link.getAttribute("href")).toBe("/settings?tab=privacy");
+  });
+
+  it("侧栏两条要点来自真实数据，没有就不画", async () => {
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.getByText("Busiest day")).toBeTruthy();
+    expect(screen.getByText("Average per active day")).toBeTruthy();
+    // 带单位：稿子上是「11 条」「5.4 条」。一个光秃秃的 11 挨着「最活跃的一天」，
+    // 读起来像是某个编号。
+    const busiest = screen.getByTestId("heat-highlight-busiest");
+    expect(within(busiest).getByText("11 conversations")).toBeTruthy();
+    const avg = screen.getByTestId("heat-highlight-avg");
+    expect(within(avg).getByText("5.4 conversations")).toBeTruthy();
+  });
+
+  it("没有最活跃的一天 / 平均值时那两条要点整条不画，不写 0", async () => {
+    serve({
+      "/v1/stats/overview": statsResponse({
+        heatmap: { from: "2025-09-01", to: "2026-08-28", days: [] },
+      }),
+    });
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.queryByTestId("heat-highlight-busiest")).toBeNull();
+    expect(screen.queryByTestId("heat-highlight-avg")).toBeNull();
+  });
+
+  it("图例给出五档色阶", async () => {
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    const legend = screen.getByTestId("heat-legend");
+    expect(within(legend).getAllByTestId("heat-legend-swatch").length).toBe(5);
+    expect(within(legend).getByText("Less")).toBeTruthy();
+    expect(within(legend).getByText("More")).toBeTruthy();
+  });
+});
+
+// ── 三张分布 ─────────────────────────────────────────────────────────────
+describe("overview: 分布卡", () => {
+  it("Agent 使用排行按条数排，行上写出当前落到哪台机器", async () => {
+    serve();
+    renderOverview();
+
+    await screen.findByText("Agent usage");
+    const rows = screen.getAllByTestId("agent-rank-row");
+    expect(rows.map((r) => r.getAttribute("data-sync-id"))).toEqual([
+      "ag-1",
+      "ag-2",
+    ]);
+    const first = rows[0];
+    expect(within(first).getByText("Backend Agent")).toBeTruthy();
+    expect(within(first).getByText("Engineering")).toBeTruthy();
+    expect(within(first).getByText("42")).toBeTruthy();
+    // 「当前落到哪台」是总览留下的那一条；逐档排序留在组织页。
+    expect(within(first).getByText("Home NUC · Claude Code")).toBeTruthy();
+  });
+
+  it("没有可用执行目标的 Agent 不编一个落点出来", async () => {
+    serve();
+    renderOverview();
+
+    await screen.findByText("Agent usage");
+    const qa = screen
+      .getAllByTestId("agent-rank-row")
+      .find((r) => r.getAttribute("data-sync-id") === "ag-2")!;
+    expect(within(qa).getByText("QA Agent")).toBeTruthy();
+    expect(within(qa).queryByTestId("agent-rank-target")).toBeNull();
+  });
+
+  it("总览不再摆逐档排序控件（那一页在组织）", async () => {
+    serve();
+    renderOverview();
+
+    await screen.findByText("Agent usage");
+    expect(screen.queryByRole("button", { name: "Move up" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Move down" })).toBeNull();
+  });
+
+  it("后端与模型：空 backend_type 是「未上报」，provider+model 皆空是「跟随 Agent 绑定」", async () => {
+    serve();
+    renderOverview();
+
+    const card = await screen.findByTestId("card-backends");
+    expect(within(card).getByText("Claude Code")).toBeTruthy();
+    expect(within(card).getByText("Codex")).toBeTruthy();
+    expect(within(card).getByText("Not reported")).toBeTruthy();
+    // 两个空是两件不同的事，不能并成一行。
+    expect(within(card).getByText("claude-sonnet-5")).toBeTruthy();
+    expect(within(card).getByText("Follows the agent binding")).toBeTruthy();
+  });
+
+  it("项目分布：空 sync_id 是「未归属项目」，名字来自项目树", async () => {
+    serve();
+    renderOverview();
+
+    const card = await screen.findByTestId("card-projects");
+    expect(within(card).getByText("agentre-server")).toBeTruthy();
+    expect(within(card).getByText("No project")).toBeTruthy();
+  });
+
+  it("三张分布都没有数据时用共享 EmptyState，不编样本数字", async () => {
+    serve({
+      "/v1/stats/overview": statsResponse({
+        agents: [],
+        backends: [],
+        models: [],
+        projects: [],
+      }),
+    });
+    renderOverview();
+
+    await screen.findByTestId("empty-agents");
+    for (const id of ["empty-agents", "empty-backends", "empty-projects"]) {
+      const es = screen.getByTestId(id);
+      expect(es.querySelector('[data-testid="empty-icon"]')).toBeTruthy();
+      expect(es.textContent ?? "").not.toMatch(/\d{1,2}:\d{2}/);
+      expect(es.textContent ?? "").not.toMatch(/\d{1,3}(\.\d{1,3}){3}/);
+    }
+  });
+
+  // R19：路径/CLIPath/EnvJSON 一个字都不能渲染出来，哪怕后端回归、把它们发了过来。
+  it("即便响应里混进路径 / cli_path / env_json，页面上也一个字都不出现", async () => {
+    serve({
+      "/v1/workspace/agents": {
+        agents: [
+          {
+            ...agents[0],
+            exec_targets: [
+              {
+                ...agents[0].exec_targets[0],
+                path: "/Users/wyz/secret-project",
+                cli_path: "/usr/local/bin/claude",
+                env_json: '{"OPENAI_API_KEY":"sk-super-secret"}',
+              },
+            ],
+          },
+        ],
+      },
+    });
     const { container } = renderOverview();
-    await waitFor(() => expect(screen.getByText("Ops Agent")).toBeTruthy());
+    await screen.findByText("Backend Agent");
 
     const text = container.textContent ?? "";
     expect(text).not.toContain("/Users/wyz");
@@ -241,864 +520,291 @@ describe("overview page", () => {
   });
 });
 
-// ── 屏 40 对齐（设计稿：4 统计卡 + 琥珀「等你处理」操作条 + 双栏）。 ──────
-// 诚实空态：今日用量 / 异常 / 最近授权 / 本月用量 / 安全与审计都没有数据源，
-// 只能渲染真实布局 + 空态（—），绝不编造数字；等你处理来自关注会话/中继。
-// Agent 卡（执行目标链）是设计稿左栏的 Agent 卡，与 workspace-sync 规格 R19 一致，
-// 结构由上面的既有用例守卫，这里不再重复。
-describe("overview: 屏 40 统计卡 / 操作条 / 双栏", () => {
-  const desktopDevices = [
-    {
-      id: 1,
-      name: "Home NUC",
-      kind: "agentred",
-      fingerprint: "fp-1",
-      online: true,
-    },
-    {
-      id: 2,
-      name: "Office Mac mini",
-      kind: "agentred",
-      fingerprint: "fp-2",
-      online: false,
-    },
-    {
-      id: 3,
-      name: "This Browser",
-      kind: "web",
-      fingerprint: "fp-web",
-      online: true,
-    },
-  ];
-
-  const agents = [
-    {
-      sync_id: "ag-1",
-      name: "Backend Agent",
-      avatar_color: "#4f46e5",
-      has_available_target: true,
-      exec_targets: [],
-    },
-  ];
-  const waitingSummary = {
-    sessionId: 42,
-    title: "Refactor login",
-    agentSyncId: "ag-1",
-    cwd: "/home/agent/proj",
-    backendType: "claudecode",
-    lifecycleState: "waiting",
-    waitingForInput: true,
-    latestSeq: 2,
-    updatedAt: Date.now() - 5 * 60000,
-  };
-
-  it("TopBar：title 用 nav.overview；Fresh 仅桌面已连（有在线 agentred）时渲染", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      if (path === "/v1/devices") return { devices: desktopDevices };
-      if (path === "/v1/follows") return { items: [] };
-      throw new Error("unexpected: " + path);
+// ── scope = saved：范围收窄，但热力图照常画 ───────────────────────────────
+describe("overview: 只覆盖已保存的对话", () => {
+  it("页顶一条说明覆盖全页，并给出开启完整活跃统计的去处", async () => {
+    serve({
+      "/v1/stats/overview": statsResponse({
+        activity_stats_enabled: false,
+        scope: "saved",
+      }),
     });
     renderOverview();
+
+    const notice = await screen.findByTestId("stats-scope-notice");
     expect(
-      (await screen.findAllByText("Overview")).length,
-    ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Desktop connected")).toBeTruthy();
+      within(notice).getByText(
+        "These stats only cover conversations you saved to your account, not all activity.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(notice)
+        .getByRole("link", { name: "Turn on full activity stats →" })
+        .getAttribute("href"),
+    ).toBe("/settings?tab=privacy");
   });
 
-  it("Fresh：没有在线 agentred 时不渲染「桌面端已连接」", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      if (path === "/v1/devices")
-        return {
-          devices: [
-            {
-              id: 2,
-              name: "Office Mac mini",
-              kind: "agentred",
-              fingerprint: "fp-2",
-              online: false,
-            },
-            {
-              id: 3,
-              name: "This Browser",
-              kind: "web",
-              fingerprint: "fp-web",
-              online: true,
-            },
-          ],
-        };
-      if (path === "/v1/follows") return { items: [] };
-      throw new Error("unexpected: " + path);
+  it("热力图照常画：已保存的那部分是真数据，只是更稀，不做成空态", async () => {
+    serve({
+      "/v1/stats/overview": statsResponse({
+        activity_stats_enabled: false,
+        scope: "saved",
+      }),
     });
     renderOverview();
-    await screen.findByText("Issues");
-    expect(screen.queryByText("Desktop connected")).toBeNull();
+
+    await screen.findByTestId("stats-scope-notice");
+    expect(screen.getByTestId("heatmap-grid")).toBeTruthy();
+    expect(
+      document
+        .querySelector('[data-day="2026-08-28"]')
+        ?.getAttribute("data-level"),
+    ).toBe("4");
   });
 
-  it("4 统计卡：真实在线数 + 无数据区块走诚实空态（—），不编数字", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      if (path === "/v1/devices") return { devices: desktopDevices };
-      if (path === "/v1/follows") return { items: [] };
-      throw new Error("unexpected: " + path);
+  it("saved 态下热力卡头不再重复给一条「统计设置 →」", async () => {
+    // 页顶那条说明条上已经有一条「开启完整活跃统计 →」指向同一处。一屏两条同去处的
+    // 链接不是多一个入口，只是让人多读一遍、多犹豫一次点哪个。
+    serve({
+      "/v1/stats/overview": statsResponse({
+        activity_stats_enabled: false,
+        scope: "saved",
+      }),
     });
     renderOverview();
 
-    // 四张统计卡都在。
-    expect(await screen.findByText("Devices online")).toBeTruthy();
-    expect(screen.getByText("Waiting on you")).toBeTruthy();
-    expect(screen.getByText("Used today")).toBeTruthy();
-    expect(screen.getByText("Issues")).toBeTruthy();
-
-    // 设备在线 = 真实 /v1/devices 在线数（浏览器自身不算机器）。
+    await screen.findByTestId("stats-scope-notice");
     expect(
-      within(screen.getByTestId("tile-online")).getByText("1"),
-    ).toBeTruthy();
-    // 副行：第一个离线机器名。
-    expect(screen.getByText(/Office Mac mini is offline/)).toBeTruthy();
-
-    // 无关注会话 → 等你处理 = 0（真实可判定）。
-    expect(
-      within(screen.getByTestId("tile-waiting")).getByText("0"),
-    ).toBeTruthy();
-
-    // 今日用量 / 异常没有后端数据源 → 空态（—），不编数字。
-    expect(
-      within(screen.getByTestId("tile-usage")).getByText("—"),
-    ).toBeTruthy();
-    expect(
-      within(screen.getByTestId("tile-errors")).getByText("—"),
-    ).toBeTruthy();
-
-    // 双栏里无数据源的卡片：真实布局 + 空态。
-    expect(screen.getByText("Recent authorizations & changes")).toBeTruthy();
-    expect(screen.getByText("All audit →")).toBeTruthy();
-    expect(screen.getByText("Usage this month")).toBeTruthy();
-    expect(screen.getByText("Security & audit")).toBeTruthy();
-    expect(screen.getByText("Go to audit →")).toBeTruthy();
-
-    // 无等待会话 → 操作条整条不渲染。
-    expect(screen.queryByText("All conversations →")).toBeNull();
+      document.querySelectorAll('a[href="/settings?tab=privacy"]').length,
+    ).toBe(1);
+    expect(screen.queryByRole("link", { name: "Stats settings →" })).toBeNull();
   });
 
-  it("ActionStrip：连上中继且有关注会话等待输入时渲染操作条与卡，动作来自 pendingWaiters", async () => {
-    fakeClient.request.mockImplementation(async (method: string) => {
-      if (method === "runtime.session.list")
-        return { sessions: [waitingSummary] };
-      if (method === "runtime.session.pendingWaiters")
-        return {
-          toolPermissions: [{ RequestID: "req-1", ToolName: "Bash" }],
-          askUserQuestions: [],
-        };
-      throw new Error("unexpected method: " + method);
-    });
-    mockUseRelay.mockReturnValue(connectedRelay(fakeClient));
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents };
-      if (path === "/v1/devices") return { devices: [desktopDevices[0]] };
-      if (path === "/v1/follows")
-        return {
-          items: [
-            {
-              device_fingerprint: "fp-1",
-              session_id: "42",
-              followed_at: 1,
-              invalid: false,
-            },
-          ],
-        };
-      throw new Error("unexpected: " + path);
-    });
+  it("scope=full 时热力卡头有那条「统计设置 →」", async () => {
+    serve();
     renderOverview();
 
-    // 操作条头：标题（count=1）+ 副文 + 全部会话链接。
-    expect(await screen.findByText("1 waiting on you")).toBeTruthy();
-    expect(screen.getByText("All conversations →")).toBeTruthy();
+    await screen.findByTestId("heatmap-grid");
     expect(
-      screen.getByText(/Longest waited 5 min — auto-suspends on timeout/),
-    ).toBeTruthy();
-
-    // 卡：标题 + 路径副行 + Agent 名 + 来自 tool permission 的 Allow/Deny。
-    expect(screen.getByText("Refactor login")).toBeTruthy();
-    expect(screen.getByText("/home/agent/proj")).toBeTruthy();
-    // Agent 名同时出现在 Agent 卡与操作条卡，用 getAllByText。
-    expect(screen.getAllByText("Backend Agent").length).toBeGreaterThanOrEqual(
-      1,
-    );
-    expect(screen.getByText("Allow")).toBeTruthy();
-    expect(screen.getByText("Deny")).toBeTruthy();
-    expect(screen.getByText("View details")).toBeTruthy();
-
-    // 等你处理统计卡 = 真实等待数 1。
-    expect(
-      within(screen.getByTestId("tile-waiting")).getByText("1"),
-    ).toBeTruthy();
-    expect(screen.getByText("Longest waited 5 min")).toBeTruthy();
+      screen
+        .getByRole("link", { name: "Stats settings →" })
+        .getAttribute("href"),
+    ).toBe("/settings?tab=privacy");
   });
 
-  it("连不到中继：等你处理不显示数字（空态），ActionStrip 不渲染", async () => {
-    // 机器在线但中继连不上（relayState=disconnected）：等待数不可知 → 空态，不编 0。
-    mockUseRelay.mockReturnValue(disconnectedRelay());
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents };
-      if (path === "/v1/devices") return { devices: [desktopDevices[0]] };
-      if (path === "/v1/follows")
-        return {
-          items: [
-            {
-              device_fingerprint: "fp-1",
-              session_id: "42",
-              followed_at: 1,
-              invalid: false,
-            },
-          ],
-        };
-      throw new Error("unexpected: " + path);
+  it("写出日界按哪个时区切", async () => {
+    // 日界是服务端机器的时区，不是浏览器的。不写出来的话，一个在另一个时区的用户
+    // 只会觉得自己的「今天」错了一格，而没有任何地方解释得了那一格。
+    serve({
+      "/v1/stats/overview": statsResponse({ time_zone: "Asia/Shanghai" }),
     });
     renderOverview();
-    await screen.findByText("Waiting on you");
-    expect(
-      within(screen.getByTestId("tile-waiting")).getByText("—"),
-    ).toBeTruthy();
-    expect(screen.queryByText("All conversations →")).toBeNull();
+
+    const note = await screen.findByTestId("heatmap-timezone");
+    expect(note.textContent).toContain("Asia/Shanghai");
+  });
+
+  it("scope=full 时没有那条说明", async () => {
+    serve();
+    renderOverview();
+    await screen.findByText("Conversations");
+    expect(screen.queryByTestId("stats-scope-notice")).toBeNull();
   });
 });
 
-// ── task 3：共享组件契约 / 移动·桌面重排 / 真实 waiter 动作 ──────────────────
-// 目标：总览忠实对齐 IhldU 层级；无数据源区块用共享 Metric(—) / EmptyState；
-// 待处理动作只来自真实 pendingWaiters；移动端重排且无横向溢出。
-describe("overview: task 3 共享组件契约 / 重排 / 真实 waiter", () => {
-  const machineDevices = [
-    {
-      id: 1,
-      name: "Home NUC",
-      kind: "agentred",
-      fingerprint: "fp-1",
-      online: true,
-    },
-    {
-      id: 2,
-      name: "Office Mac mini",
-      kind: "agentred",
-      fingerprint: "fp-2",
-      online: false,
-    },
-    {
-      id: 3,
-      name: "This Browser",
-      kind: "web",
-      fingerprint: "fp-web",
-      online: true,
-    },
-  ];
-
-  // 本地副本：与「屏 40」describe 同名但各自作用域，避免跨块引用。
-  const agentSummary = {
-    sync_id: "ag-1",
-    name: "Backend Agent",
-    avatar_color: "#4f46e5",
-    has_available_target: true,
-    exec_targets: [],
-  };
-  const waitingSummary = {
-    sessionId: 42,
-    title: "Refactor login",
-    agentSyncId: "ag-1",
-    cwd: "/home/agent/proj",
-    backendType: "claudecode",
-    lifecycleState: "waiting",
-    waitingForInput: true,
-    latestSeq: 2,
-    updatedAt: Date.now() - 5 * 60000,
-  };
-
-  it("4 统计卡由共享 Metric 渲染；设备在线展示真实在线/总数", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      if (path === "/v1/devices") return { devices: machineDevices };
-      if (path === "/v1/follows") return { items: [] };
-      throw new Error("unexpected: " + path);
+// ── 三种非稳态（设计稿 l2U9p） ───────────────────────────────────────────
+describe("overview: 非稳态", () => {
+  it("加载中：热力网格先按空格子铺满整张网，摘要走骨架", async () => {
+    let release: (v: unknown) => void = () => {};
+    serve({
+      "/v1/stats/overview": () => new Promise((r) => (release = r)),
     });
     renderOverview();
 
-    await screen.findByText("Devices online");
-    // 四张卡都长在共享 Metric 上（metric-value 是共享组件的内部标记）。
-    for (const id of [
-      "tile-online",
-      "tile-waiting",
-      "tile-usage",
-      "tile-errors",
-    ]) {
-      const tile = screen.getByTestId(id);
-      expect(tile.querySelector('[data-testid="metric-value"]')).toBeTruthy();
-    }
-    // 设备在线 = 1 台在线机器 / 共 2 台机器（浏览器 web 不算机器）。
+    // 845px 的网格不该在取到数那一刻凭空出现——取数前它就在那儿，只是没有颜色。
+    const grid = await screen.findByTestId("heatmap-grid");
+    expect(within(grid).getAllByTestId("heat-week").length).toBe(53);
     expect(
-      within(screen.getByTestId("tile-online")).getByText("1"),
+      within(grid)
+        .getAllByTestId("heat-cell")
+        .every((c) => c.getAttribute("data-level") === "0"),
+    ).toBe(true);
+    expect(screen.getAllByTestId("tile-skeleton").length).toBe(4);
+    // 骨架期间不摆一个编出来的数字。
+    expect(screen.queryByTestId("tile-conversations")).toBeNull();
+
+    release({ ...statsResponse(), code: 0 });
+  });
+
+  it("取数失败：整块统计区退成一句说明，并说清什么不受影响", async () => {
+    serve({
+      "/v1/stats/overview": () => {
+        throw new Error("stats unavailable");
+      },
+    });
+    renderOverview();
+
+    expect(
+      await screen.findByText("Could not load your stats. Please try again."),
+    ).toBeTruthy();
+    const state = screen.getByTestId("stats-error");
+    expect(
+      within(state).getByText("Stats are unavailable right now"),
     ).toBeTruthy();
     expect(
-      within(screen.getByTestId("tile-online")).getByText("/ 2"),
+      within(state)
+        .getByRole("link", { name: "Go to conversations →" })
+        .getAttribute("href"),
+    ).toBe("/chat");
+    // 失败就是失败：不退回一张全是 0 的摘要。
+    expect(screen.queryByTestId("tile-conversations")).toBeNull();
+    expect(screen.queryByTestId("heatmap-grid")).toBeNull();
+  });
+
+  it("取数失败给一条重试的路，按下去真的重取", async () => {
+    let calls = 0;
+    serve({
+      "/v1/stats/overview": () => {
+        calls += 1;
+        if (calls === 1) throw new Error("stats unavailable");
+        return statsResponse();
+      },
+    });
+    renderOverview();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Conversations")).toBeTruthy();
+    expect(calls).toBe(2);
+  });
+
+  it("全新账号：引导先登记一台设备，热力图全灰并说明这片灰是什么", async () => {
+    serve({
+      "/v1/stats/overview": freshAccountResponse(),
+      "/v1/devices": { devices: [] },
+      "/v1/workspace/agents": { agents: [] },
+      "/v1/workspace/projects": { projects: [] },
+    });
+    renderOverview();
+
+    const guide = await screen.findByTestId("stats-new-account");
+    expect(
+      within(guide).getByText(
+        "Register a device first. Stats need your machines to start running conversations.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(guide)
+        .getByRole("link", { name: "Go to devices" })
+        .getAttribute("href"),
+    ).toBe("/devices");
+
+    // 网格照常铺满，但全是 heat-0，并且明写这不是坏了。
+    const grid = screen.getByTestId("heatmap-grid");
+    expect(
+      within(grid)
+        .getAllByTestId("heat-cell")
+        .every((c) => c.getAttribute("data-level") === "0"),
+    ).toBe(true);
+    expect(
+      screen.getByText(
+        "This grey means there was no activity on that day — nothing is broken.",
+      ),
     ).toBeTruthy();
   });
 
-  it("无数据源区块使用共享 EmptyState，不编样本时间/IP/数字", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      if (path === "/v1/devices") return { devices: [] };
-      if (path === "/v1/follows") return { items: [] };
-      throw new Error("unexpected: " + path);
-    });
+  it("账号有数据时不出现全新账号引导", async () => {
+    serve();
+    renderOverview();
+    await screen.findByText("Conversations");
+    expect(screen.queryByTestId("stats-new-account")).toBeNull();
+  });
+});
+
+// ── 移动端（设计稿 SoTuq） ───────────────────────────────────────────────
+describe("overview: 移动端", () => {
+  it("热力图只出近 19 周，并把更长的历史指向桌面端", async () => {
+    setViewport(true);
+    serve();
     renderOverview();
 
-    await screen.findByText("Recent authorizations & changes");
-    // 最近授权 / 本月用量 / 安全与审计都长在共享 EmptyState（empty-icon 是内部标记）。
-    for (const id of ["empty-recent-auth", "empty-usage", "empty-security"]) {
-      const es = screen.getByTestId(id);
-      expect(es.querySelector('[data-testid="empty-icon"]')).toBeTruthy();
-    }
-    // 空态里绝无设计示例的时钟/IP/令牌数字。
-    const recentText =
-      screen.getByTestId("empty-recent-auth").textContent ?? "";
-    expect(recentText).not.toMatch(/\d{1,2}:\d{2}/); // 无示例时间 13:47 / 18:24
-    const securityText = screen.getByTestId("empty-security").textContent ?? "";
-    expect(securityText).not.toMatch(/\d{1,3}(\.\d{1,3}){3}/); // 无示例 IP 192.168.1.12
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.getAllByTestId("heat-week").length).toBe(19);
+    expect(screen.getByText("Last 19 weeks")).toBeTruthy();
+    expect(
+      screen.getByText("A longer history is on the desktop app."),
+    ).toBeTruthy();
   });
 
-  it("Agent 主区无 Agent 时也用共享 EmptyState", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      if (path === "/v1/devices") return { devices: [] };
-      if (path === "/v1/follows") return { items: [] };
-      throw new Error("unexpected: " + path);
-    });
+  it("窄屏不做横向滚动：热力卡身上没有 overflow-x-auto", async () => {
+    setViewport(true);
+    serve();
     renderOverview();
 
-    await screen.findByText("No agents yet.");
-    const es = screen.getByTestId("empty-agents");
-    expect(es.querySelector('[data-testid="empty-icon"]')).toBeTruthy();
+    const grid = await screen.findByTestId("heatmap-grid");
+    expect(grid.className).not.toContain("overflow-x-auto");
+    expect(grid.className).not.toContain("overflow-x-scroll");
   });
 
-  it("待处理动作只来自真实 waiter：pendingWaiters 为空时卡上只有看详情，无假动作", async () => {
-    // 中继连上、有一条关注会话在等输入，但 pendingWaiters 返回空——
-    // 没有任何可执行的允许/拒绝/回复，卡上只能留下真实的「看详情」。
-    fakeClient.request.mockImplementation(async (method: string) => {
-      if (method === "runtime.session.list")
-        return { sessions: [waitingSummary] };
-      if (method === "runtime.session.pendingWaiters")
-        return { toolPermissions: [], askUserQuestions: [] };
-      throw new Error("unexpected method: " + method);
-    });
-    mockUseRelay.mockReturnValue(connectedRelay(fakeClient));
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [agentSummary] };
-      if (path === "/v1/devices") return { devices: [machineDevices[0]] };
-      if (path === "/v1/follows")
-        return {
-          items: [
-            {
-              device_fingerprint: "fp-1",
-              session_id: "42",
-              followed_at: 1,
-              invalid: false,
-            },
-          ],
-        };
-      throw new Error("unexpected: " + path);
-    });
+  it("桌面/移动重排：统计 2 列→4 列，分布行纵向→横向，右列满宽→300px", async () => {
+    serve();
     renderOverview();
+    await screen.findByText("Conversations");
 
-    expect(await screen.findByText("1 waiting on you")).toBeTruthy();
-    expect(screen.getByText("Refactor login")).toBeTruthy();
-    expect(screen.getByText("View details")).toBeTruthy();
-    // 没有任何 waiter → 不允许/拒绝/去回复这些假动作出现。
-    expect(screen.queryByText("Allow")).toBeNull();
-    expect(screen.queryByText("Deny")).toBeNull();
-    expect(screen.queryByText("Reply")).toBeNull();
-  });
-
-  it("移动/桌面重排无横向溢出：统计 2 列→4 列，双栏纵向→横向，辅助区满宽→340px", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents: [] };
-      if (path === "/v1/devices") return { devices: machineDevices };
-      if (path === "/v1/follows") return { items: [] };
-      throw new Error("unexpected: " + path);
-    });
-    renderOverview();
-    await screen.findByText("Devices online");
-
-    // 统计卡：移动 2 列，桌面 4 列（不是等比缩小）。
     const tiles = screen.getByTestId("overview-tiles");
     expect(tiles.className).toContain("grid-cols-2");
     expect(tiles.className).toContain("md:grid-cols-4");
-    // 双栏：移动纵向堆叠，lg 才并排。
     const cols = screen.getByTestId("overview-cols");
     expect(cols.className).toContain("flex-col");
     expect(cols.className).toContain("lg:flex-row");
-    // 辅助区：移动占满宽度，lg 才收成 340px。
     const aside = screen.getByTestId("overview-aside");
     expect(aside.className).toContain("w-full");
-    expect(aside.className).toContain("lg:w-[340px]");
+    expect(aside.className).toContain("lg:w-[300px]");
   });
 });
 
-// ── 跨机器同号会话的 waiters 隔离 ────────────────────────────────────────
-// 会话 id 是 daemon 局部计数：两台 agentred 完全可以各自有一条 42 号会话。
-// 操作条卡的等待数据按「机器 + 会话」区分，不能只按 sessionId 记 —— 否则两台
-// 机器同号等待会话时，后到的那台会把自己的 waiters 覆盖掉先到那台的同号槽位，
-// 卡上的 Allow/Deny 提交到**另一台**机器上（RequestID 也是 daemon 局部的，
-// 拿 A 机的 requestId 提交到 B 机 = 批准/拒绝错对象）。
-describe("overview: 跨机器同号会话的 waiters 隔离", () => {
-  it("两台机器各有同号(42)的等待会话：每张卡的 Allow 各提交各机器的 RequestID", async () => {
-    const devA = {
-      id: 1,
-      name: "机器A",
-      kind: "agentred",
-      fingerprint: "fp-1",
-      online: true,
-    };
-    const devB = {
-      id: 2,
-      name: "机器B",
-      kind: "agentred",
-      fingerprint: "fp-2",
-      online: true,
-    };
-    const agents = [
-      {
-        sync_id: "ag-1",
-        name: "后端 Agent",
-        avatar_color: "#4f46e5",
-        has_available_target: true,
-        exec_targets: [],
-      },
-    ];
-    const summary42 = {
-      sessionId: 42,
-      title: "两机同号会话",
-      agentSyncId: "ag-1",
-      cwd: "/home/agent/proj",
-      backendType: "claudecode",
-      lifecycleState: "running",
-      waitingForInput: true,
-      latestSeq: 2,
-      updatedAt: Date.now() - 60000,
-    };
-    // 两台机器各带不同的 RequestID：B 的请求必须提交到 B 的中继、用 B 的 id。
-    const clientA = {
-      request: vi.fn(async (method: string, _params?: unknown) => {
-        if (method === "runtime.session.list") return { sessions: [summary42] };
-        if (method === "runtime.session.pendingWaiters")
-          return {
-            toolPermissions: [{ RequestID: "req-A", ToolName: "Bash" }],
-            askUserQuestions: [],
-          };
-        if (method === "runtime.submitToolPermission") return {};
-        throw new Error("unexpected: " + method);
-      }),
-      attach: vi.fn(),
-      catchUp: vi.fn(),
-      close: vi.fn(),
-    };
-    const clientB = {
-      request: vi.fn(async (method: string, _params?: unknown) => {
-        if (method === "runtime.session.list") return { sessions: [summary42] };
-        if (method === "runtime.session.pendingWaiters")
-          return {
-            toolPermissions: [{ RequestID: "req-B", ToolName: "Write" }],
-            askUserQuestions: [],
-          };
-        if (method === "runtime.submitToolPermission") return {};
-        throw new Error("unexpected: " + method);
-      }),
-      attach: vi.fn(),
-      catchUp: vi.fn(),
-      close: vi.fn(),
-    };
-    mockUseRelay.mockImplementation((fp: string | null) =>
-      connectedRelay(fp === "fp-1" ? clientA : clientB),
-    );
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents };
-      if (path === "/v1/devices") return { devices: [devA, devB] };
-      if (path === "/v1/follows")
-        return {
-          items: [
-            {
-              device_fingerprint: "fp-1",
-              session_id: "42",
-              followed_at: 1,
-              invalid: false,
-            },
-            {
-              device_fingerprint: "fp-2",
-              session_id: "42",
-              followed_at: 1,
-              invalid: false,
-            },
-          ],
-        };
-      throw new Error("unexpected: " + path);
-    });
+// ── 跟着账号通道走 ───────────────────────────────────────────────────────
+describe("overview: 跟着通道走", () => {
+  it("三类信号各自只重取对应的那一份", async () => {
+    serve();
     renderOverview();
+    await waitFor(() => expect(pathsCalled()).toContain("/v1/devices"));
+    mockedApi.mockClear();
 
-    // 两张等待卡都渲染（两台机器各一条同号等待会话）。
-    expect(await screen.findByText("2 waiting on you")).toBeTruthy();
-    const allowButtons = screen.getAllByRole("button", { name: "Allow" });
-    expect(allowButtons.length).toBe(2);
+    // 外壳的侧栏 Meta 与本页的设备统计各取各的，这份重复在挂载时本来就有。
+    deliver(accountChannel.AccountChannelDevicePresence);
+    await waitFor(() => expect(pathsCalled().length).toBeGreaterThan(0));
+    expect(new Set(pathsCalled())).toEqual(new Set(["/v1/devices"]));
+    mockedApi.mockClear();
 
-    // 第一张卡（fp-1）的 Allow：提交到 fp-1 的中继，带 fp-1 的 RequestID。
-    fireEvent.click(allowButtons[0]);
-    await waitFor(() => {
-      const call = clientA.request.mock.calls.find(
-        (c) => c[0] === "runtime.submitToolPermission",
-      );
-      expect(call).toBeTruthy();
-      expect(call?.[1]).toMatchObject({ sessionId: 42, requestId: "req-A" });
-    });
-
-    // 第二张卡（fp-2）的 Allow：提交到 fp-2 的中继，带 fp-2 的 RequestID。
-    fireEvent.click(allowButtons[1]);
-    await waitFor(() => {
-      const call = clientB.request.mock.calls.find(
-        (c) => c[0] === "runtime.submitToolPermission",
-      );
-      expect(call).toBeTruthy();
-      expect(call?.[1]).toMatchObject({ sessionId: 42, requestId: "req-B" });
-    });
-  });
-
-  // Allow 提交后的收敛：submitToolDecision 重查 pendingWaiters 后，刷新结果必须
-  // 落回「机器:会话」同号槽位。写错键（只按 sessionId）的话，卡上那格 stale 的
-  // 待决策永远不消失——用户点了 Allow，卡片却仍挂着 Allow/Deny（已处理的动作）。
-  it("Allow 提交后刷新结果落回同机同号槽位：已处理的待决策从卡上收敛掉", async () => {
-    const devA = {
-      id: 1,
-      name: "机器A",
-      kind: "agentred",
-      fingerprint: "fp-1",
-      online: true,
-    };
-    const agents = [
-      {
-        sync_id: "ag-1",
-        name: "后端 Agent",
-        avatar_color: "#4f46e5",
-        has_available_target: true,
-        exec_targets: [],
-      },
-    ];
-    const summary42 = {
-      sessionId: 42,
-      title: "单机等待会话",
-      agentSyncId: "ag-1",
-      cwd: "/home/agent/proj",
-      backendType: "claudecode",
-      lifecycleState: "running",
-      waitingForInput: true,
-      latestSeq: 2,
-      updatedAt: Date.now() - 60000,
-    };
-    let pendingCalls = 0;
-    const clientA = {
-      request: vi.fn(async (method: string) => {
-        if (method === "runtime.session.list") return { sessions: [summary42] };
-        if (method === "runtime.session.pendingWaiters") {
-          pendingCalls += 1;
-          // 第一次：有一条待批准；Allow 提交后的重查：已被处理，返回空。
-          return pendingCalls === 1
-            ? {
-                toolPermissions: [{ RequestID: "req-A", ToolName: "Bash" }],
-                askUserQuestions: [],
-              }
-            : { toolPermissions: [], askUserQuestions: [] };
-        }
-        if (method === "runtime.submitToolPermission") return {};
-        throw new Error("unexpected: " + method);
-      }),
-      attach: vi.fn(),
-      catchUp: vi.fn(),
-      close: vi.fn(),
-    };
-    mockUseRelay.mockReturnValue(connectedRelay(clientA));
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") return { agents };
-      if (path === "/v1/devices") return { devices: [devA] };
-      if (path === "/v1/follows")
-        return {
-          items: [
-            {
-              device_fingerprint: "fp-1",
-              session_id: "42",
-              followed_at: 1,
-              invalid: false,
-            },
-          ],
-        };
-      throw new Error("unexpected: " + path);
-    });
-    renderOverview();
-
-    // 等待卡渲染，Allow 在卡上。
-    expect(await screen.findByText("单机等待会话")).toBeTruthy();
-    expect(screen.getByText("Allow")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("Allow"));
-
-    // Allow 提交后重查 pendingWaiters（空）：已处理的待决策不应再渲染 Allow/Deny。
-    // 卡仍保留（有真实会话），只剩「看详情」。
-    await waitFor(() => {
-      expect(screen.queryByText("Allow")).toBeNull();
-    });
-    expect(screen.queryByText("Deny")).toBeNull();
-    expect(screen.getByText("View details")).toBeTruthy();
-  });
-});
-
-// ── 这个浏览器自己的派发顺序（决策 10 / 11） ─────────────────────────────
-// Agent 卡上的执行目标链每一档给出上移 / 下移：一次移动即提交
-// POST /v1/workspace/exec-target-order（backend sync_id 排列 + 本机指纹），
-// 随后重新拉取该 Agent 的链，「当前」标记当场跟着改变。
-// skipped_for_web 的档（浏览器语境下永不可派发）只读、不可移动，仍留在链里。
-describe("overview: 这个浏览器自己的派发顺序", () => {
-  const relayTicket = {
-    clientId: "fp-web",
-    clientName: "Browser",
-    accessToken: "t",
-  };
-  const AGENTS_PATH = "/v1/workspace/agents?client_id=fp-web";
-  const ORDER_PATH = "/v1/workspace/exec-target-order";
-
-  const tierById: Record<string, Record<string, unknown>> = {
-    "b-local": {
-      backend_sync_id: "b-local",
-      is_local_reference: true,
-      availability: "skipped_for_web",
-    },
-    "b-nuc": {
-      backend_sync_id: "b-nuc",
-      is_local_reference: false,
-      device_id: 20,
-      device_name: "Study NUC",
-      backend_type: "claude_code",
-      availability: "available",
-    },
-    "b-mac": {
-      backend_sync_id: "b-mac",
-      is_local_reference: false,
-      device_id: 21,
-      device_name: "Office Mac mini",
-      backend_type: "codex",
-      availability: "available",
-    },
-  };
-
-  /** 一个 Agent 的链：order 是这台浏览器看到的次序，current 落在第一个可用档。 */
-  function agentChain(order: string[]) {
-    const firstAvailable = order.find((id) => id !== "b-local");
-    return {
-      sync_id: "ag-1",
-      name: "Backend Agent",
-      has_available_target: true,
-      exec_targets: order.map((id, i) => ({
-        ...tierById[id],
-        rank: i + 1,
-        current: id === firstAvailable,
-      })),
-    };
-  }
-
-  function chipTexts(): string[] {
-    return screen
-      .getAllByTestId("exec-target")
-      .map((el) => el.textContent ?? "");
-  }
-
-  function chipOf(name: RegExp): HTMLElement {
-    const chip = screen
-      .getAllByText(name)
-      .map((el) => el.closest('[data-testid="exec-target"]'))
-      .find(Boolean);
-    if (!chip) throw new Error("no exec target chip for " + name);
-    return chip as HTMLElement;
-  }
-
-  it("每一档给出上移/下移；skipped_for_web 档只读、不可移动", async () => {
-    localStorage.setItem("agentre.browserClientId", relayTicket.clientId);
-    mockedApi.mockImplementation(async (path) => {
-      if (path === AGENTS_PATH)
-        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
-      throw new Error("unexpected: " + path);
-    });
-
-    renderOverview();
-    await screen.findByText("Backend Agent");
-
-    // 链按**这台浏览器**的顺序读：读端点带上本机指纹。
-    expect(mockedApi).toHaveBeenCalledWith(AGENTS_PATH);
-
-    // 两个可移动档各有一对上移/下移；本机档一个都没有（决策 11）。
-    const ups = screen.getAllByRole("button", { name: "Move up" });
-    const downs = screen.getAllByRole("button", { name: "Move down" });
-    expect(ups.length).toBe(2);
-    expect(downs.length).toBe(2);
-    expect(
-      chipOf(/Skipped for web dispatch/).querySelectorAll("button").length,
-    ).toBe(0);
-
-    // 端点方向禁用：第一个可移动档不能再上移，最后一个不能再下移。
-    expect((ups[0] as HTMLButtonElement).disabled).toBe(true);
-    expect((downs[downs.length - 1] as HTMLButtonElement).disabled).toBe(true);
-    expect((ups[1] as HTMLButtonElement).disabled).toBe(false);
-    expect((downs[0] as HTMLButtonElement).disabled).toBe(false);
-  });
-
-  it("一次移动即提交并重新拉取该 Agent 的链，「当前」标记随之更新", async () => {
-    localStorage.setItem("agentre.browserClientId", relayTicket.clientId);
-    let agentsCalls = 0;
-    mockedApi.mockImplementation(async (path) => {
-      if (path === AGENTS_PATH) {
-        agentsCalls += 1;
-        return {
-          agents: [
-            agentChain(
-              agentsCalls === 1
-                ? ["b-local", "b-nuc", "b-mac"]
-                : ["b-local", "b-mac", "b-nuc"],
-            ),
-          ],
-        };
-      }
-      if (path === ORDER_PATH) return {};
-      throw new Error("unexpected: " + path);
-    });
-
-    renderOverview();
-    await screen.findByText(/Currently running on Study NUC/);
-
-    fireEvent.click(
-      within(chipOf(/Office Mac mini/)).getByRole("button", {
-        name: "Move up",
-      }),
-    );
-
-    // 用户当场看到自己这一下改变了派发目标。
+    deliver(accountChannel.AccountChannelSyncVersion);
     await waitFor(() =>
-      expect(
-        screen.getByText(/Currently running on Office Mac mini/),
-      ).toBeTruthy(),
-    );
-    expect(chipTexts()[1]).toContain("Office Mac mini");
-    // 「当前」标记落到链上被移上来的那一档，不只是那句摘要变了。
-    expect(chipOf(/Office Mac mini/).getAttribute("data-current")).toBe("true");
-
-    // 提交的是 backend sync_id 排列 + 这台浏览器的指纹；本机档钉在原位。
-    const post = mockedApi.mock.calls.find((c) => c[0] === ORDER_PATH);
-    expect(post?.[1]).toMatchObject({ method: "POST" });
-    expect(JSON.parse(String(post?.[1]?.body))).toEqual({
-      client_id: "fp-web",
-      agent_sync_id: "ag-1",
-      backend_sync_ids: ["b-local", "b-mac", "b-nuc"],
-    });
-    // 提交之后重新拉了一次该 Agent 的链（不是只改本地状态）。
-    expect(agentsCalls).toBe(2);
-  });
-
-  it("提交失败保持原顺序并就地说明，不静默", async () => {
-    localStorage.setItem("agentre.browserClientId", relayTicket.clientId);
-    let agentsCalls = 0;
-    mockedApi.mockImplementation(async (path) => {
-      if (path === AGENTS_PATH) {
-        agentsCalls += 1;
-        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
-      }
-      if (path === ORDER_PATH) throw new Error("order save failed");
-      throw new Error("unexpected: " + path);
-    });
-
-    renderOverview();
-    await screen.findByText(/Currently running on Study NUC/);
-
-    fireEvent.click(
-      within(chipOf(/Office Mac mini/)).getByRole("button", {
-        name: "Move up",
-      }),
-    );
-
-    // 就地说明（不是只往控制台打日志）。
-    expect(
-      await screen.findByText(
-        "Could not apply the new order. Please try again.",
+      expect(new Set(pathsCalled())).toEqual(
+        new Set(["/v1/workspace/agents", "/v1/workspace/projects"]),
       ),
-    ).toBeTruthy();
-    // 顺序原封不动：「当前」仍在原来那一档，链的次序不变，也没有重新拉取。
-    expect(screen.getByText(/Currently running on Study NUC/)).toBeTruthy();
-    const texts = chipTexts();
-    expect(texts[1]).toContain("Study NUC");
-    expect(texts[2]).toContain("Office Mac mini");
-    expect(agentsCalls).toBe(1);
-  });
-
-  // 打开总览页是纯读：它不得把这台浏览器注册成一台设备。否则用户只是看了一眼
-  // 控制台，账号的设备列表里就凭空多一台机器 —— e2e 的「真实空态」正是踩在这上面
-  // 挂的（新用户打开 /overview 后 /devices 不再是空的）。
-  it("打开这一页不注册设备：按账号顺序读，排序控件照常给", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents")
-        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
-      throw new Error("unexpected: " + path);
-    });
-
-    renderOverview();
-    await screen.findByText("Backend Agent");
-
-    // 没有设备身份 → 读端点不带指纹，服务端回落账号顺序。
-    expect(mockedApi).toHaveBeenCalledWith("/v1/workspace/agents");
-    // 而且一次注册都没发生：读一份偏好不该有建出一台设备行的副作用。
-    // 控件照常给：注册在写路径，把控件按身份藏起来会让这台浏览器永远排不了序。
-    expect(screen.getAllByRole("button", { name: "Move up" }).length).toBe(2);
-  });
-
-  it("第一次排序时只创建浏览器 client ID，并按它提交与重读", async () => {
-    let accountOrderCalls = 0;
-    let deviceOrderCalls = 0;
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/workspace/agents") {
-        accountOrderCalls += 1;
-        return { agents: [agentChain(["b-local", "b-nuc", "b-mac"])] };
-      }
-      if (path.startsWith("/v1/workspace/agents?client_id=")) {
-        deviceOrderCalls += 1;
-        return { agents: [agentChain(["b-local", "b-mac", "b-nuc"])] };
-      }
-      if (path === ORDER_PATH) return {};
-      throw new Error("unexpected: " + path);
-    });
-
-    renderOverview();
-    await screen.findByText(/Currently running on Study NUC/);
-
-    fireEvent.click(
-      within(chipOf(/Office Mac mini/)).getByRole("button", {
-        name: "Move up",
-      }),
     );
+    mockedApi.mockClear();
 
+    // 一条对话存进账号 = 统计变了，重取的是统计，不是 Agent 名单。外壳侧栏那颗
+    // 「等你处理」角标订的是同一类信号，所以这一发有两个订阅者应答——与上面设备
+    // 那一段同理，各取各的那一份。
+    deliver(accountChannel.AccountChannelMirrorChanged);
+    await waitFor(() => expect(pathsCalled().length).toBeGreaterThan(0));
     await waitFor(() =>
-      expect(
-        screen.getByText(/Currently running on Office Mac mini/),
-      ).toBeTruthy(),
-    );
-    // 排序不会注册设备，只创建本地 client ID。
-    expect(
-      JSON.parse(
-        String(
-          mockedApi.mock.calls.find((c) => c[0] === ORDER_PATH)?.[1]?.body,
-        ),
+      expect(new Set(pathsCalled().map((p) => p.split("?")[0]))).toEqual(
+        new Set(["/v1/stats/overview", "/v1/agent-sessions/waiting-count"]),
       ),
-    ).toMatchObject({ client_id: expect.any(String) });
-    // 重读走的是刚注册到的那台设备的顺序，不是再按账号顺序读一遍。
-    expect(accountOrderCalls).toBe(1);
-    expect(deviceOrderCalls).toBe(1);
+    );
+  });
+
+  it("设备上线之后顶栏当场跟着变，不用刷新整页", async () => {
+    serve({ "/v1/devices": { devices: [{ ...devices[0], online: false }] } });
+    renderOverview();
+    await waitFor(() => expect(pathsCalled()).toContain("/v1/devices"));
+    expect(screen.queryByText("Desktop connected")).toBeNull();
+
+    serve({ "/v1/devices": { devices: [devices[0]] } });
+    deliver(accountChannel.AccountChannelDevicePresence);
+
+    expect(await screen.findByText("Desktop connected")).toBeTruthy();
   });
 });

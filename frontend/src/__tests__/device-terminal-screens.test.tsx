@@ -7,7 +7,7 @@ import App from "@/App";
 import DeviceSuccess from "@/pages/DeviceSuccess";
 import DeviceDenied from "@/pages/DeviceDenied";
 import DeviceExpired from "@/pages/DeviceExpired";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 
 beforeEach(async () => {

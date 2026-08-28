@@ -24,10 +24,48 @@ Dependencies flow **downward only**. Two consequences that get violated first:
   It may be imported by anything above it and must **never import service or repository**.
   If a `pkg` package needs business data, the dependency is backwards — pass the data in.
 - Service depends on the repository **interface**, never the struct. That is what makes
-  mockgen injection possible, and it is why every repo exposes `Register*`.
+  mockgen injection possible. CRUD stays behind those interfaces; services that own an
+  atomic workflow may orchestrate repository calls with `db.Ctx(...).Transaction` and
+  `db.WithContextDB`.
 
-One domain gets one set of packages: `<domain>_entity` / `<domain>_repo` / `<domain>_svc`.
-A new domain means new packages, not new methods on an existing one.
+Prefer domain-owned `<domain>_entity`, `<domain>_repo` and `<domain>_svc` packages. Do not
+grow an unrelated domain merely to avoid adding the package that owns a new concept.
+
+## Shared frontend packages
+
+The Go dependency boundary above does not prohibit the frontend's two narrow,
+cross-repository package dependencies:
+
+- `@agentre-hub/agentre-ui` owns host-neutral components, view contracts, pure
+  presentation helpers, shared copy and design tokens rendered by both the desktop and
+  this web frontend.
+- `@agentre-hub/agentre-wire` owns the generated TypeScript codec and contracts for the
+  agentre ↔ agentred protocol. It remains separate from the React package.
+
+Their source lives under `../agentre/frontend/packages/`; this frontend consumes built
+packages pinned to immutable Git commits in `frontend/package.json`. Never point a
+dependency at a branch or an unpushed local checkout: a standalone server build and CI
+must resolve exactly the same source.
+
+Before adding or substantially changing a component, view contract or pure presentation
+helper, search this frontend and `../agentre/frontend/packages/agentre-ui`. A concept
+rendered by both hosts has one implementation in the shared package. If a duplicate
+already exists here, do not keep synchronizing it: first add and push the tested shared
+implementation from the owning `agentre` repository, then update this repository's pin,
+switch imports and delete the local component, types, styles, copy and tests that only
+covered the duplicate.
+
+This repository continues to own its account shell, React Router integration, HTTP and
+CSRF/session clients, relay transport, data fetching and adapters. Those dependencies
+enter shared components through props, ports or live-state hooks; they never enter the
+shared package as `@/` imports or web/desktop conditionals. An optional capability with no
+port renders no affordance. Code with merely a similar name but a different product
+contract stays host-owned.
+
+Shared behavior is tested in the owning package. This host separately tests its adapter,
+data mapping and rendered integration, then runs the normal frontend lint, test and build
+gates. The exact extraction and independent cross-repository commit order is summarized
+in this repository's [`AGENTS.md`](../AGENTS.md#non-negotiables).
 
 ## The singleton + Register pattern
 
@@ -68,8 +106,10 @@ var defaultUser = &userSvc{}
 func User() UserSvc { return defaultUser }
 ```
 
-Services that need startup configuration (`auth_svc`, `device_svc`, `oauth_svc`) expose
-`SetDefault(...)` instead and are wired in `bootstrap.RegisterDefaults`.
+Services that need startup configuration expose `SetDefault(...)` (or another narrow
+setter such as `user_svc.SetGate`) and are wired in `bootstrap.RegisterDefaults`.
+`cmd/server/main.go` separately installs the configuration-free `engine_svc` default
+before cago starts.
 
 ## Rich entities
 
@@ -120,13 +160,12 @@ Two traps, both of which produced real bugs in the PostgreSQL→MySQL move:
   `PAD SPACE`, so they ignore trailing spaces — `'x'` equals `'x '`, and two `sync_id`s
   differing only by a trailing space collide on the unique key. Every `_0900_` collation is
   `NO PAD`, which is what PostgreSQL `text` does.
-  `migrations/collation_test.go` fails the build if a `PAD SPACE` collation appears in DDL.
 - **`ai_ci` is not "case-insensitive", it is also accent-insensitive.** As an email
   collation it makes `e@x.c` and `é@x.c` the same address. `as_ci` is the case-only tier.
 
 Columns compared against each other must share a collation, or MySQL raises *illegal mix of
 collations* at query time: `devices.fingerprint`, `sync_objects.agentred_fingerprint`,
-`followed_sessions.device_fingerprint` and `device_flow_codes.client_fingerprint` are one
+`agent_session_saves.device_fingerprint` and `device_flow_codes.client_fingerprint` are one
 such group; `users.email` and `user_identities.email` are another.
 
 ## Routing and auth shapes
@@ -136,11 +175,11 @@ middleware groups are the authorization model:
 
 | Group | Middleware | Used by |
 | --- | --- | --- |
-| Public | — | healthz, GitHub OAuth authorize/callback, `/v1/keys` |
+| Public | — (some endpoints add per-IP rate limits) | healthz, GitHub OAuth authorize/callback, passkey login, `/v1/keys` |
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
-| Browser session | `SessionAuth()` + `CSRF()` | logout, device pending/approve/deny |
-| Either credential | `SessionOrDeviceAuth(signer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke` |
-| Device JWT | `DeviceJWT(signer)` | `/v1/devices/revocations`, `/v1/relay/daemon`, `/v1/sync/*` |
+| Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*` |
+| Either credential | `SessionOrDeviceAuth(signer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
+| Device JWT | `DeviceJWT(signer)` | `/v1/devices/revocations`, `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot` |
 | Relay client | `RelayClientJWT(signer)` | `/v1/relay/client`; accepts native Device JWTs and browser session-derived short-lived relay tickets |
 
 Cookie-authenticated writes always clear CSRF, whichever group they sit in: a
@@ -185,6 +224,7 @@ RegisterDefaults      → needs Redis (session store)
 cron.Cron()
 RunMigrations
 task.Task
+task.MirrorResident
 web.MountSPA
 mux.HTTP(router)      → last; middleware registered by earlier components is collected here
 ```
@@ -229,10 +269,10 @@ racing to a `uk_devices_user_fingerprint` duplicate-key 500.
 **`ON DUPLICATE KEY UPDATE` only arbitrates when the table has exactly one unique key.**
 MySQL fires it on whichever unique key the row collided with, and does not tell you which —
 `clause.OnConflict{Columns: …}` is decorative in the MySQL dialect. `devices`,
-`sync_account_seqs`, `sync_device_states`, `sync_avatars` and `followed_sessions` each have a
+`sync_account_seqs`, `sync_device_states`, `sync_avatars` and `agent_session_saves` each have a
 single unique key, so the clause means what it reads like. `sync_objects` has two
-(`uk_sync_objects_identity` and `uk_sync_objects_location`), and there the clause would
-quietly rewrite *another account row's* content under its own `sync_id`. `sync_repo.Save`
+(`uk_sync_objects_identity` and `uk_sync_objects_natural`), and there the clause would quietly rewrite *another account
+row's* content under its own `sync_id`. `sync_repo.Save`
 therefore splits into a version-guarded `UPDATE` plus a plain `INSERT`, and discriminates the
 resulting `1062` by index name via `internal/pkg/dberr.IsDuplicateKey` — an identity
 collision is a lost version race and is swallowed, a location collision is the R4b backstop
@@ -265,6 +305,84 @@ fails loudly instead of hanging past its startup probe. `GET_LOCK` has three out
 two: `1` acquired, `0` held by someone else, and `NULL` when an error occurred; only `1`
 counts as acquired, and the other two keep polling until the budget runs out.
 
+## Activity statistics
+
+The console's Overview is statistics-first, and its numbers come from a channel that is
+**separate from the session mirror and off by default**.
+
+**Why a second channel exists.** The mirror's scope is the account's *saved* conversations
+(`agent_session_saves`), so anything a user never saved has no server-side trace at all.
+Counting only what the mirror holds would understate every account without saying so. The
+activity channel closes that gap by carrying counts only.
+
+**What travels.** `agentre/internal/pkg/activityrollup` buckets a machine's sessions into
+`(day × agent × backend × provider × model × project) → count`. Its `Activity` struct has
+no field for a title, a path or a cwd, so conversation content cannot flow through this
+channel — the boundary is structural, not procedural. `agent_activity_daily` mirrors that
+shape: the columns that would hold content simply do not exist.
+
+**A day is the day a conversation was *created*.** That choice is what makes the channel
+converge. Bucketing by last activity moves a session from day to day as it is continued,
+while the incremental lower bound advances past the days it left behind — one conversation
+worked on for thirty days would be stored as thirty separate counts of one, and a one-shot
+backfill would see only its last day, so backfill and incremental polling would produce two
+histories that disagree. A creation day never moves, so a day's count is final once
+written. The cost, stated plainly: the heatmap reads "conversations started that day", not
+"conversations active that day", and a week-long conversation lights only its first cell.
+
+A pull therefore **replaces** rather than merges: `DailyRepo.ReplaceBucketsFrom` deletes
+`[since_day, ∞)` for that machine and writes the answer in one transaction. Merging is
+only correct while the dimension combo is unchanged — a session that switches model
+between rounds writes a new bucket and leaves the old one behind, and counts have nothing
+to be checked against, so the day just silently gets bigger.
+
+The `scope: "saved"` fallback still buckets by last activity: the mirrored row's
+`createtime` is when *this server* first learned of the conversation, so one catch-up would
+stamp a batch of old conversations with today and collapse the whole heatmap into one cell.
+That path recomputes from the full list on every read rather than accumulating, so a moving
+day costs it nothing.
+
+**Direction.** The server pulls. `mirror_svc` dials out through the relay and calls
+`RPC_METHOD_ACTIVITY_ROLLUP`; both peer kinds — the desktop app and `agentred` — register
+the same method, so one implementation serves both. The rollup client is a one-method
+interface (`mirror_svc.ActivityRollupClient`, consumed as `activity_svc.ActivityPeer`) and
+is deliberately **not** part of `RelaySession`: the mirror's replies carry transcripts,
+these carry counts, and the two must not become reachable from the same handle.
+
+**The switch and the floor.** `user_settings.activity_stats_enabled` defaults to 0. While
+it is off, `activity_svc.Pull` returns before sending a byte — asking a machine what it did
+today *is* the reporting, whether or not the answer gets stored. Turning it on also writes
+`activity_settings.activity_backfill_from`, the pull's lower-bound day: empty means "no
+floor" (the opt-in dialog's *backfill history* checkbox), otherwise the day it was enabled.
+Backfill is a stored floor rather than a one-off catch-up run precisely because a machine
+that is offline at that moment would otherwise be skipped forever; the periodic pull
+converges instead. Turning the switch off deletes the account's counts in the same
+transaction that flips it, which is what the confirmation dialog promises.
+
+**Day boundaries** are `char(10)` `"2006-01-02"` strings cut in the **server machine's**
+timezone, end to end: the rollup request, the stored column, the heatmap cell key and the
+next `since_day` are the same literal. One account's machines can sit in different
+timezones, and a single day boundary is the only way its activity does not get split across
+two cells.
+
+**Two scopes, one shape.** `activity_svc.Overview` returns `OverviewView` either way:
+`scope: "full"` reads the rollups, `scope: "saved"` aggregates the saved conversations in
+Go when the switch is off. The frontend branches only on `scope` to decide whether to show
+the narrower-coverage notice — it does not render two different pages.
+
+**Multi-instance.** `crontab.PullActivityRollups` runs every 10 minutes under
+`withPeriodLock`, so one replica per period walks the opted-in accounts, skips machines
+that are offline or revoked, and dials the rest through a short-lived connection
+(`mirror_svc.Supervisor.WithMachine` — no lease, nothing resident). One machine's failure
+does not end the round; see [Multi-instance safety](#multi-instance-safety).
+
+**What the console gets that the service does not compute.** `activity_svc.Overview`
+deliberately omits `devices_online` / `devices_total` — device presence is the device
+domain's fact, and `stats_ctr` joins it in. Per-machine backfill *progress* is not
+reported at all: `ReportedThrough` answers "reported through which day", which cannot be
+turned into "how many days remain" when the floor is "no floor". The frontend treats that
+field as optional and simply omits the line.
+
 ## How to add an X
 
 **An endpoint**
@@ -280,7 +398,7 @@ counts as acquired, and the other two keep polling until the budget runs out.
 **A repository** — interface + `Register`/accessor/`New` + `//go:generate mockgen`,
 then `make mock`, then register it in `cmd/server/main.go`.
 
-**A table** — append a migration to the end of `migrationList()`; never edit an existing one.
+**A table** — follow [develop.md](develop.md#migrations).
 
 **An error code** — add to `internal/pkg/code/` (segment 30000+) with zh and en strings,
 raise with `i18n.NewError(ctx, code.Xxx)`.

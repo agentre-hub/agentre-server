@@ -35,7 +35,6 @@ type Signer struct {
 	issuer      string
 	aud         string
 	maxLifetime time.Duration
-	allowNoKID  bool
 }
 
 // Key 是一把 JWT RSA 密钥。当前签发 key 同时提供私钥和公钥；轮换窗口内只用于
@@ -46,25 +45,9 @@ type Key struct {
 	PublicPEM  []byte
 }
 
-const legacyKID = "legacy"
-
 // NewSigner 从 PEM 解析公私钥。
 func NewSigner(privPEM, pubPEM []byte, issuer, audience string) (*Signer, error) {
-	return NewSignerWithMaxLifetime(privPEM, pubPEM, issuer, audience, 0)
-}
-
-// NewSignerWithMaxLifetime 保留单 key 配置的迁移兼容：新 token 带 legacy kid，
-// 部署升级前签发、没有 kid 的旧 token 在其剩余短有效期内仍可验签。
-func NewSignerWithMaxLifetime(privPEM, pubPEM []byte, issuer, audience string,
-	maxLifetime time.Duration) (*Signer, error) {
-	signer, err := NewKeyRing(legacyKID, []Key{{
-		ID: legacyKID, PrivatePEM: privPEM, PublicPEM: pubPEM,
-	}}, issuer, audience, maxLifetime)
-	if err != nil {
-		return nil, err
-	}
-	signer.allowNoKID = true
-	return signer, nil
+	return NewKeyRing("current", []Key{{ID: "current", PrivatePEM: privPEM, PublicPEM: pubPEM}}, issuer, audience, 0)
 }
 
 // NewKeyRing 构造支持轮换的签发/验签器。activeKID 对应的 key 必须包含私钥；
@@ -141,9 +124,6 @@ func (s *Signer) Verify(token string) (*Claims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		kid, _ := t.Header["kid"].(string)
-		if kid == "" && s.allowNoKID {
-			kid = s.activeKID
-		}
 		pub, ok := s.publicKeys[kid]
 		if !ok {
 			return nil, errors.New("unknown or retired kid")
