@@ -26,7 +26,7 @@ const (
 	// ── 反向读的预算（规格 2026-08-21-transcript-tail-loading 决策 7）──────
 	//
 	// 一页的量**不按帧数**定。params 是 json 列而不是 text，理由写在
-	// migrations/baseline_agent_sessions.go：「text 的 64KB 上限会悄悄截断
+	// migrations/202608280008_agent_sessions.go：「text 的 64KB 上限会悄悄截断
 	// 一个大帧」。所以一帧可以 >64KB（带文件内容的 tool_result），也可以只有几十
 	// 字节（一个 text_delta 的 token 片）——固定帧数既框不住流量，也框不住「几段
 	// 对话」，200 个 delta 常常还不够一条助手回复。

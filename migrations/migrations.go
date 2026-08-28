@@ -1,9 +1,8 @@
 // Package migrations 汇总并执行 agentre-server MySQL 全部迁移。
 //
 // 规范：
-//   - 文件名前缀 = 时间戳排序键（YYYYMMDDNNNN），调用顺序按时间升序。
-//   - 每个迁移返回一个 *gormigrate.Migration。
-//   - 一次迁移只做一件事。
+//   - 迁移使用时间戳文件名（YYYYMMDDNNNN），按时间升序追加执行。
+//   - 每个迁移返回一个 *gormigrate.Migration，一次迁移只做一件事。
 //   - DDL 用原生 SQL，不依赖 GORM AutoMigrate。
 //   - 禁止改动既有迁移；修复请新增补丁迁移。
 package migrations
@@ -114,45 +113,14 @@ func releaseMigrationLock(ctx context.Context, conn *sql.Conn) {
 func migrationList() []*gormigrate.Migration {
 	return []*gormigrate.Migration{
 		migration202608280001(),
-		migration202608280002(), // 活跃统计：日滚存 + 账号设置
-	}
-}
-
-// migration202608280001 是正式发布前压缩后的初始基线。
-//
-// 各领域的最终建表定义仍拆在独立文件中，便于按表审阅；这里只把开发期间的九条
-// gormigrate 账本记录收成一条。产品发布后不得再改这条基线，后续 schema 变化应在
-// migrationList 末尾追加新的迁移。
-func migration202608280001() *gormigrate.Migration {
-	steps := []*gormigrate.Migration{
-		baselineUsers(),
-		baselineUserIdentities(),
-		baselineDevices(),
-		baselineDeviceTokens(),
-		baselineDeviceFlowCodes(),
-		baselineWorkspaceSync(),
-		baselineAgentSessionSaves(),
-		baselineAgentSessions(),
-		baselineWebAuthnCredentials(),
-	}
-
-	return &gormigrate.Migration{
-		ID: "202608280001",
-		Migrate: func(tx *gorm.DB) error {
-			for _, step := range steps {
-				if err := step.Migrate(tx); err != nil {
-					return fmt.Errorf("migrations: apply baseline step %s: %w", step.ID, err)
-				}
-			}
-			return nil
-		},
-		Rollback: func(tx *gorm.DB) error {
-			for i := len(steps) - 1; i >= 0; i-- {
-				if err := steps[i].Rollback(tx); err != nil {
-					return fmt.Errorf("migrations: rollback baseline step %s: %w", steps[i].ID, err)
-				}
-			}
-			return nil
-		},
+		migration202608280002(),
+		migration202608280003(),
+		migration202608280004(),
+		migration202608280005(),
+		migration202608280006(),
+		migration202608280007(),
+		migration202608280008(),
+		migration202608280009(),
+		migration202608280010(),
 	}
 }

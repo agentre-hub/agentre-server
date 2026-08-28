@@ -2,7 +2,7 @@
 //
 // 它只碰 agent_activity_daily 一张表，而那张表里只有**计数**：一行是「某账号、某天、
 // 某台机器、某个维度组合下有几条对话」。标题、路径、对话内容在这里连列都没有——那正是
-// 活跃上报开关向用户承诺的边界（migrations/202608280002_agent_activity_daily.go）。
+// 活跃上报开关向用户承诺的边界（migrations/202608280010_agent_activity.go）。
 // 往这个包里加方法之前先问：它是不是又把内容带回来了。
 package activity_repo
 

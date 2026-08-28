@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// baselineDeviceTokens 创建 device_tokens 表。
+// migration202608280004 创建 device_tokens 表。
 //
 // refresh_token_hash 是 sha256 的十六进制（device_svc 里 hex.EncodeToString，恒为
 // 64 位小写），access_jti 是 ULID：两者都是机器生成的凭据/标识，用
@@ -18,9 +18,9 @@ import (
 //
 // idx_dtokens_device_active 把 revoked_at 放进键里代替 PG 的 `WHERE revoked_at = 0`，
 // 理由同 devices：一条复合索引就能服务查询，不必为此加生成列。
-func baselineDeviceTokens() *gormigrate.Migration {
+func migration202608280004() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "device_tokens",
+		ID: "202608280004",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE device_tokens (

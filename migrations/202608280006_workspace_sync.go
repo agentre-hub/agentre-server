@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// baselineWorkspaceSync 建工作区多端同步的两组表、账号级版本序列、每台设备的
+// migration202608280006 建工作区多端同步的两组表、账号级版本序列、每台设备的
 // 最近一次成功同步时间，以及按内容哈希存放的头像表。
 //
 // 同步组（sync_objects）与上报组（device_local_paths）语义不同，所以不是一张表：
@@ -59,9 +59,9 @@ import (
 // sync_avatars.content 用 mediumtext 而不是 text：MySQL 的 text 上限是 65535 字节，
 // 而 sync_svc.MaxAvatarBytes 允许 4 MiB，用 text 会让超过 64 KB 的头像直接写不进去
 // （ER_DATA_TOO_LONG）。mediumtext 是 16 MiB，覆盖得住那个上限。
-func baselineWorkspaceSync() *gormigrate.Migration {
+func migration202608280006() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "workspace_sync",
+		ID: "202608280006",
 		Migrate: func(tx *gorm.DB) error {
 			statements := []string{`
 				CREATE TABLE sync_objects (

@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280002 建活跃统计的两张表：日滚存与账号设置。
+// migration202608280010 建活跃统计的两张表：日滚存与账号设置。
 //
 // agent_activity_daily 是活跃统计的唯一数据源。它存的是**计数**，一行是「某账号、某天、
 // 某台机器、某个维度组合下有几条对话」——没有标题、没有路径、没有对话内容。这条边界
@@ -47,9 +47,9 @@ import (
 // 「这台机器已经收到的最后一天」，一台从没上报过的机器那个值是空串，而空串的意思正是
 // 「把你有的全给我」。少了这一列，取消回填与勾上回填跑出来的结果一模一样，用户的选择
 // 静默失效；而写在库里，一台当时离线的机器几个月后回来，那个下界依然在。
-func migration202608280002() *gormigrate.Migration {
+func migration202608280010() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280002",
+		ID: "202608280010",
 		Migrate: func(tx *gorm.DB) error {
 			if err := tx.Exec(`
 				CREATE TABLE agent_activity_daily (

@@ -54,7 +54,7 @@ func (r *avatarRepo) Save(ctx context.Context, a *sync_entity.SyncAvatar) error 
 //
 // 比的是 o.avatar_hash 这一列而不是在语句里现算 JSON：函数谓词定位不了索引，那样
 // 每个候选头像行都要把该账号的 sync_objects 整份读上来逐行解一次。avatar_hash 是
-// payload 上的生成列（migrations/baseline_workspace_sync.go），四个条件因此一起落在
+// payload 上的生成列（migrations/202608280006_workspace_sync.go），四个条件因此一起落在
 // idx_sync_objects_avatar (user_id, kind, deleted_at, avatar_hash) 上。
 //
 // createtime < cutoff 是安全垫：cutoff 取的是墓碑窗口，一台离线设备最多可以在窗口

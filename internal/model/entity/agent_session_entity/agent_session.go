@@ -101,7 +101,7 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 // own notification log. Payload is an opaque Protobuf binary frame; readers
 // decode it with the local generated contract.
 //
-// 这四列既是身份也是主键（migrations/baseline_agent_sessions.go）：帧按 (账号, 发起端, 会话, seq)
+// 这四列既是身份也是主键（migrations/202608280008_agent_sessions.go）：帧按 (账号, 发起端, 会话, seq)
 // 聚簇存放，没有代理自增列。转录尾部因此是聚簇索引上的一段连续范围，而不是二级索引
 // 扫一段再逐行随机回表取 longblob。
 type JournalFrame struct {

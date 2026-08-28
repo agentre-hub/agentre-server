@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// baselineAgentSessionSaves 建账号级「保存的对话」名单表（R12 后端 / R14）。
+// migration202608280007 建账号级「保存的对话」名单表（R12 后端 / R14）。
 //
 // 这是 agentre-server 本轮唯一的服务端新增表，也是硬不变量（server 不持有任何
 // 会话内容）的唯一例外，且它存的是「指向」——目标设备指纹 + 会话标识 + 关注时间，
@@ -19,9 +19,9 @@ import (
 // device_fingerprint 与 peer_session_id 是目标设备与会话的不透明标识，用
 // utf8mb4_0900_bin 逐字节判等：大小写不敏感会把两个不同的会话认成同一个，名单就指错了
 // 对象。device_fingerprint 要能和 devices.fingerprint 比较，两列排序规则必须一致。
-func baselineAgentSessionSaves() *gormigrate.Migration {
+func migration202608280007() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "agent_session_saves",
+		ID: "202608280007",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE agent_session_saves (

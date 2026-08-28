@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// baselineAgentSessions creates the three account-scoped agent-session tables
+// migration202608280008 creates the three account-scoped agent-session tables
 // (2026-08-18-server-session-mirror.md "存什么" / decision 17): a summary per
 // conversation, its raw journal frames, and pending cross-peer deletes.
 //
@@ -48,7 +48,7 @@ import (
 //
 // agent_session_notification_journal.params is a json column, not text: text's 64KB
 // ceiling would truncate a large frame (same reasoning as
-// sync_objects.payload in baselineWorkspaceSync).
+// sync_objects.payload in migration202608280006).
 //
 // title is text, not varchar: it is whatever display string the peer reports,
 // and nothing on either side bounds its length — the desktop's rename path
@@ -57,9 +57,9 @@ import (
 // it fails the whole upsert with ER_DATA_TOO_LONG, so that conversation never
 // mirrors at all and the error names neither the column nor the title. cwd is
 // text for the same reason.
-func baselineAgentSessions() *gormigrate.Migration {
+func migration202608280008() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "agent_sessions",
+		ID: "202608280008",
 		Migrate: func(tx *gorm.DB) error {
 			statements := []string{`
 				CREATE TABLE agent_sessions (

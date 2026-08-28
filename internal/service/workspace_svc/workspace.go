@@ -1320,7 +1320,7 @@ func sortByOrderThenName[T any](items []T, key func(T) (int, string)) {
 // 因为这些行不来自任何一台机器。
 //
 // 空串空得出来，是因为它此前没有含义：这一列建表时是 DEFAULT 0 / DEFAULT ” 且没有
-// 回填（migrations/baseline_workspace_sync.go），而唯一读它的分支——
+// 回填（migrations/202608280006_workspace_sync.go），而唯一读它的分支——
 // SyncObject.Wins 的平局判定——只在两行版本号相等时才看它，账号级单调序列保证了那
 // 永远不会发生。
 //

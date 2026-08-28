@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// baselineUsers 创建 users 表。
+// migration202608280001 创建 users 表。
 //
 // email 用 utf8mb4_0900_as_ci：**大小写不敏感、但不折叠重音**。
 //
@@ -29,9 +29,9 @@ import (
 // 键写成 (email, active_flag) 而不是 (active_flag, email)，是为了让同一个索引
 // 既做约束、又能被 user_repo.FindByEmail 的 `WHERE email=?` 当最左前缀用上——
 // 否则 email 上就一个索引都没有，登录路径每次都是全表扫。
-func baselineUsers() *gormigrate.Migration {
+func migration202608280001() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "users",
+		ID: "202608280001",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE users (
