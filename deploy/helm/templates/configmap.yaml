@@ -12,14 +12,7 @@ data:
     source: etcd
     etcd:
       prefix: {{ .Values.etcdConfig.prefix }}
-      # 两份内容相同，别删任何一份：新旧 cago 认的格式不一样，
-      # 只写一种，换版本时会静默解析出 endpoints=[]
       endpoints:
         {{- toYaml .Values.etcdConfig.endpoints | nindent 8 }}
       username: {{ .Values.etcdConfig.username | quote }}
       password: {{ .Values.etcdConfig.password | quote }}
-      config:
-        endpoints:
-          {{- toYaml .Values.etcdConfig.endpoints | nindent 10 }}
-        username: {{ .Values.etcdConfig.username | quote }}
-        password: {{ .Values.etcdConfig.password | quote }}

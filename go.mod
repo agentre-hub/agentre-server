@@ -6,7 +6,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260828074017-460859ddaada
 	github.com/alicebob/miniredis/v2 v2.32.1
-	github.com/cago-frame/cago v0.0.0-20260423074423-9a4902409f48
+	github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729
 	github.com/gin-gonic/gin v1.10.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.2
 	github.com/go-sql-driver/mysql v1.8.1

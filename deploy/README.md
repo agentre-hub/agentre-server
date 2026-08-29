@@ -189,12 +189,6 @@ etcdctl --endpoints=<etcd> --user root:<password> \
   get --prefix --keys-only /config/prod/agentre-server/
 ```
 
-### etcd 那段配置的格式
-
-ConfigMap 里 etcd 的地址写了两遍——一遍摊平的，一遍套在 `config:` 底下。看着像冗余，
-但两遍都得留：不同版本的 cago 认的格式不一样，只写一种，换版本的时候会**悄悄**解析成
-空地址，然后连不上 etcd 却不报错。等 cago 升级到新版本之后可以只留摊平的那份。
-
 ## 自动发布
 
 推分支到 Gitea 会自动构建镜像并发布，规则：
