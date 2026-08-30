@@ -216,6 +216,26 @@ describe("标题与本地会话标识", () => {
 });
 
 describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => {
+  it("接受真实 Protobuf RPC 返回的 bigint 会话标识", async () => {
+    const client = fakeClient();
+    client.request.mockResolvedValueOnce({ sessionId: 9001n });
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "真实协议 ACK",
+      sourceClient,
+    });
+
+    expect(out.sessionId).toBe(9001);
+    expect(mockedApi).toHaveBeenCalledWith("/v1/saved-sessions", {
+      method: "POST",
+      body: expect.stringContaining('"session_id":"9001"'),
+    });
+  });
+
   it("向选中的 agentred 发 runtime.run，随后立刻把这条对话保存进账号（R16）", async () => {
     const client = fakeClient();
     MockRelayClient.mockImplementation(function () {
