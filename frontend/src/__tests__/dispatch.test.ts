@@ -12,7 +12,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
-import { RelayClient } from "@/lib/relayClient";
+import { RelayClient, RelayError } from "@/lib/relayClient";
 import {
   DispatchConnectionError,
   DispatchRunError,
@@ -99,6 +99,29 @@ const desktopPlan: DispatchPlan = {
   },
 };
 
+const agentredPiPlan: DispatchPlan = {
+  ...availablePlan,
+  tiers: [
+    {
+      rank: 1,
+      device_id: 40,
+      device_name: "Pi 主机",
+      backend_type: "piagent",
+      kind: "agentred",
+      availability: "available",
+      current: true,
+    },
+  ],
+  chosen: {
+    device_fingerprint: "fp-pi",
+    device_id: 40,
+    device_name: "Pi 主机",
+    backend_type: "piagent",
+    kind: "agentred",
+    cwd: "/srv/pi-project",
+  },
+};
+
 const allUnavailablePlan: DispatchPlan = {
   agent_sync_id: "agent-1",
   tiers: [
@@ -126,9 +149,11 @@ const allUnavailablePlan: DispatchPlan = {
 function fakeClient() {
   return {
     connect: vi.fn(async () => {}),
-    request: vi.fn(async (_method: unknown, _params?: unknown) => ({
-      sessionId: 9001,
-    })),
+    request: vi.fn(
+      async (_method: unknown, _params?: unknown): Promise<unknown> => ({
+        sessionId: 9001,
+      }),
+    ),
     close: vi.fn(),
   };
 }
@@ -390,6 +415,100 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     } satisfies Partial<DispatchRunError>);
     expect(client.connect).toHaveBeenCalled();
     expect(client.close).toHaveBeenCalled();
+  });
+
+  it("连接复用期间 socket 未就绪时标记为连接失败，不谎称 Agent 启动失败", async () => {
+    const client = fakeClient();
+    client.request.mockRejectedValue(
+      new RelayError(-1, "relay: 连接未就绪", null),
+    );
+
+    await expect(
+      dispatchNewConversation({
+        plan: availablePlan,
+        message: "hi",
+        sourceClient,
+        client: client as never,
+      }),
+    ).rejects.toEqual(expect.any(DispatchConnectionError));
+    expect(client.close).not.toHaveBeenCalled();
+  });
+
+  it("agentred 上的 Pi 用同一代身份完成注册、准备、启动后才算派发成功", async () => {
+    const client = fakeClient();
+    client.request
+      .mockResolvedValueOnce({ sessionId: 7001 })
+      .mockResolvedValueOnce({
+        sessionId: 7001,
+        providerSessionId: "pi-provider-1",
+      })
+      .mockResolvedValueOnce({
+        sessionId: 7001,
+        providerSessionId: "pi-provider-1",
+      });
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+    vi.spyOn(Math, "random").mockReturnValueOnce(
+      (7001 - 1) / Number.MAX_SAFE_INTEGER,
+    );
+
+    const out = await dispatchNewConversation({
+      plan: agentredPiPlan,
+      message: "用 Pi 看看",
+      sourceClient,
+    });
+
+    const runs = client.request.mock.calls.filter(
+      ([method]) => method === rpcMethods.runtimeRun,
+    );
+    expect(runs).toHaveLength(3);
+    const params = runs.map(([, value]) => value as Record<string, unknown>);
+    expect(params.map((p) => p.sessionId)).toEqual([7001n, 7001n, 7001n]);
+    expect(params[0].permissionMode).toEqual(expect.any(String));
+    expect(params[0].permissionMode).not.toBe("");
+    expect(params[1].permissionMode).toBe(params[0].permissionMode);
+    expect(params[2].permissionMode).toBe(params[0].permissionMode);
+    expect(params[0].providerSessionId).toBeUndefined();
+    expect(params[1].providerSessionId).toBeUndefined();
+    expect(params[2].providerSessionId).toBe("pi-provider-1");
+    expect(out.sessionId).toBe(7001);
+    expect(mockedApi).toHaveBeenCalledTimes(1);
+  });
+
+  it("Pi 注册后准备失败会清理这一代，且不保存未启动的会话", async () => {
+    const client = fakeClient();
+    client.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.runtimeAbort) return {};
+      const runCount = client.request.mock.calls.filter(
+        ([called]) => called === rpcMethods.runtimeRun,
+      ).length;
+      if (runCount === 1) return { sessionId: 7002 };
+      throw new Error("Pi prepare failed");
+    });
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+    vi.spyOn(Math, "random").mockReturnValueOnce(
+      (7002 - 1) / Number.MAX_SAFE_INTEGER,
+    );
+
+    await expect(
+      dispatchNewConversation({
+        plan: agentredPiPlan,
+        message: "用 Pi 看看",
+        sourceClient,
+        client: client as never,
+      }),
+    ).rejects.toMatchObject({
+      name: "DispatchRunError",
+      message: "Pi prepare failed",
+    });
+    expect(client.request).toHaveBeenCalledWith(rpcMethods.runtimeAbort, {
+      sessionId: 7002n,
+    });
+    expect(mockedApi).not.toHaveBeenCalled();
+    expect(client.close).not.toHaveBeenCalled();
   });
 });
 

@@ -11,10 +11,15 @@ import {
   passkeyOrigin,
   readHandoff,
   readOracle,
+  refreshDeviceToken,
+  requestWithDeviceToken,
+  revokeDeviceFromBrowserSession,
   revokeOtherSessions,
   signOutViaUserMenu,
+  pushAndPullSyncObject,
   test,
 } from "./fixtures/app";
+import { driveWorkspaceJourney } from "./fixtures/workspace";
 
 test("正式 server 健康且同时连接真实 MySQL 与 Redis", async ({ request }) => {
   const response = await request.get("/v1/healthz");
@@ -63,7 +68,15 @@ test("真实 session 打开控制台并呈现隔离用户与真实空态", async
   expect((await follows.json()).data.items).toEqual([]);
 });
 
-test("完整设备授权经真实 API、CSRF 和 SQL 持久化且 device code 只能消费一次", async ({
+test("Web 核心业务经真实 Session、CSRF 与 MySQL 创建并在刷新后呈现", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  await driveWorkspaceJourney(page);
+});
+
+test("设备经授权、同步、刷新和撤销走完真实 HTTP 与 MySQL 生命周期", async ({
   context,
   page,
 }) => {
@@ -112,6 +125,71 @@ test("完整设备授权经真实 API、CSRF 和 SQL 持久化且 device code �
   const second = await exchangeDeviceCode(page, authorization.device_code);
   expect(second.response.status()).toBe(400);
   expect(second.body).toMatchObject({ code: 30204, error: "invalid_grant" });
+
+  const firstMe = await requestWithDeviceToken(
+    page,
+    "/v1/auth/me",
+    first.token!.access_token,
+  );
+  expect(firstMe.status()).toBe(200);
+  expect(await firstMe.json()).toMatchObject({
+    code: 0,
+    data: { user_id: oracle.user_id },
+  });
+
+  const synced = await pushAndPullSyncObject(page, first.token!.access_token);
+  expect(readOracle().sync_objects).toContainEqual({
+    sync_id: synced.syncID,
+    kind: "project",
+    version: synced.version,
+    deleted_at: 0,
+  });
+
+  const refreshed = await refreshDeviceToken(page, first.token!.refresh_token);
+  expect(refreshed.token).toMatchObject({
+    access_token: expect.any(String),
+    refresh_token: expect.any(String),
+  });
+  const refreshedMe = await requestWithDeviceToken(
+    page,
+    "/v1/auth/me",
+    refreshed.token!.access_token,
+  );
+  expect(refreshedMe.status()).toBe(200);
+  expect(await refreshedMe.json()).toMatchObject({
+    code: 0,
+    data: { user_id: oracle.user_id },
+  });
+
+  await revokeDeviceFromBrowserSession(page, first.token!.device_id);
+
+  for (const accessToken of [
+    first.token!.access_token,
+    refreshed.token!.access_token,
+  ]) {
+    const rejected = await requestWithDeviceToken(
+      page,
+      "/v1/auth/me",
+      accessToken,
+    );
+    expect(rejected.status()).toBe(401);
+    expect(await rejected.json()).toMatchObject({ data: null });
+  }
+
+  const rejectedRefresh = await refreshDeviceToken(
+    page,
+    refreshed.token!.refresh_token,
+  );
+  expect(rejectedRefresh.response.status()).toBe(400);
+  expect(rejectedRefresh.body).toMatchObject({
+    code: 30204,
+    error: "invalid_grant",
+  });
+  const revokedOracle = readOracle();
+  expect(revokedOracle.tokens).toHaveLength(2);
+  expect(revokedOracle.tokens.every((token) => token.revoked_at > 0)).toBe(
+    true,
+  );
 });
 
 test("Chromium 虚拟认证器注册通行密钥，再用它重新登录", async ({

@@ -19,7 +19,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { decodeRunAck, type RunParams } from "@agentre-hub/agentre-wire";
 
 import { api } from "@/lib/api";
-import { RelayClient } from "@/lib/relayClient";
+import { RelayClient, RelayError } from "@/lib/relayClient";
 import { relayClientUrl } from "@/lib/relayUrl";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 
@@ -218,17 +218,71 @@ export async function dispatchNewConversation(
         throw new DispatchConnectionError(error);
       }
     }
-    let raw: unknown;
-    try {
-      raw = await client.request(rpcMethods.runtimeRun, {
+    const requestRun = async (runParams: RunParams) => {
+      try {
+        return await client.request(rpcMethods.runtimeRun, {
+          ...runParams,
+          agentId: BigInt(runParams.agentId),
+          sessionId: BigInt(runParams.sessionId),
+        } as never);
+      } catch (error: unknown) {
+        if (error instanceof RelayError && error.code === -1) {
+          throw new DispatchConnectionError(error);
+        }
+        throw new DispatchRunError(error);
+      }
+    };
+    let ack;
+    if (choice.kind === "agentred" && choice.backend_type === "piagent") {
+      const generationOwner = `web-pi-generation-${crypto.randomUUID()}`;
+      const piParams = { ...params, permissionMode: generationOwner };
+      try {
+        const registration = decodeRunAck(await requestRun(piParams));
+        if (registration.sessionId !== params.sessionId) {
+          throw new DispatchRunError(
+            new Error("Pi registration acknowledged a different session"),
+          );
+        }
+        const prepared = decodeRunAck(await requestRun(piParams));
+        const providerSessionId = prepared.providerSessionId?.trim() ?? "";
+        if (
+          prepared.sessionId !== params.sessionId ||
+          providerSessionId === ""
+        ) {
+          throw new DispatchRunError(
+            new Error("Pi preparation returned an invalid session identity"),
+          );
+        }
+        ack = decodeRunAck(
+          await requestRun({
+            ...piParams,
+            providerSessionId,
+          }),
+        );
+        if (
+          ack.sessionId !== params.sessionId ||
+          ack.providerSessionId?.trim() !== providerSessionId
+        ) {
+          throw new DispatchRunError(
+            new Error("Pi start acknowledged a different prepared generation"),
+          );
+        }
+      } catch (error: unknown) {
+        try {
+          await client.request(rpcMethods.runtimeAbort, {
+            sessionId: BigInt(params.sessionId),
+          });
+        } catch {
+          // 原始派发错误才是用户需要处理的事实；清理失败不能把它盖掉。
+        }
+        throw error;
+      }
+    } else {
+      const raw = await requestRun({
         ...params,
-        agentId: BigInt(params.agentId),
-        sessionId: BigInt(params.sessionId),
-      } as never);
-    } catch (error: unknown) {
-      throw new DispatchRunError(error);
+      });
+      ack = decodeRunAck(raw);
     }
-    const ack = decodeRunAck(raw);
     // R16 的发起即保存是派发**成功之后**的收尾:ack 一到手,那台机器上就已经真真切切
     // 多了一条会话。保存写失败只是这条不会自动出现在「对话」页(用户仍能在会话详情
     // 里手动保存),把它报成派发失败会让界面说「联系不上这台机器,请重试」——用户一

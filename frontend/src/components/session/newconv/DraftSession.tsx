@@ -219,7 +219,8 @@ export function DraftSession({
           sourceClient: ticket,
           // 开局连上的那条就是派发要用的那条。连接还没到位（刚落定计划的一瞬）
           // 就照旧现开一条：这一句不该为了复用而等。
-          client: client ?? undefined,
+          client:
+            relayState === "connected" ? (client ?? undefined) : undefined,
           // 档位只在这个后端**报出了**非空集合时才带：daemon 在 piagent 那一路把
           // 这个字段当远端 generation token 比对，塞一个真档位会让那一轮被判成
           // stale。闸门放在执行端自报的能力上，加新后端时这里一行都不用改。
@@ -248,6 +249,7 @@ export function DraftSession({
       onStarted,
       permissionModeMeta,
       plan,
+      relayState,
     ],
   );
 

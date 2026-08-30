@@ -800,7 +800,7 @@ Three pieces, and they only work as a set:
 
 1. `globals.css` defines `.dark { ... }`.
 2. `globals.css` declares **`@custom-variant dark (&:is(.dark *))`**.
-3. `frontend/src/lib/theme.tsx` toggles the `dark` class on `<html>`.
+3. `@agentre-hub/agentre-ui`'s `ThemeProvider` toggles the `dark` class on `<html>`.
 
 Miss the second and Tailwind's `dark:` variant falls back to the `prefers-color-scheme`
 media query and stops following the class, so the whole `.dark` block becomes dead code —
@@ -812,7 +812,7 @@ actually showing. The choice persists to `localStorage` under `agentre.theme`, a
 follows `prefers-color-scheme` live.
 
 ```tsx
-import { useTheme } from '@/lib/theme';
+import { useTheme } from '@agentre-hub/agentre-ui';
 
 const { theme, resolved, setTheme } = useTheme();
 ```

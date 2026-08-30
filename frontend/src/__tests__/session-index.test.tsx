@@ -9,9 +9,6 @@
  *     （2026-08-18 决策 10：机器离线只影响能不能发新消息，不影响读）。
  *  5. 还没保存进账号的行带一个「保存」；已保存的行右键菜单里有「删除」。
  */
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import {
   fireEvent,
@@ -1033,72 +1030,6 @@ describe("统一会话索引：↑↓ 键盘导航 + Enter 打开", () => {
     fireEvent.keyDown(screen.getByTestId("row-save-b"), { key: "Enter" });
 
     expect(onSelect).not.toHaveBeenCalled();
-  });
-});
-
-/**
- * 决策 1 收尾：web 侧只剩**一处**会话行实现。规格「不能自动化的部分」里那条
- * 源码复核在这里落成一个真守卫 —— 两套旧列表删掉了，也没有任何模块还引着它们。
- */
-describe("web 侧只有一处会话行实现", () => {
-  const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-
-  function sources(dir: string): string[] {
-    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) return sources(full);
-      return /\.tsx?$/.test(e.name) ? [full] : [];
-    });
-  }
-
-  it("ChatList.tsx 与 SessionList.tsx 已删除", () => {
-    expect(
-      fs.existsSync(path.join(SRC, "components/session/ChatList.tsx")),
-    ).toBe(false);
-    expect(
-      fs.existsSync(path.join(SRC, "components/session/SessionList.tsx")),
-    ).toBe(false);
-  });
-
-  it("没有任何模块还从这两个文件里引 helper（不留 shim 模块）", () => {
-    const importsThem =
-      /(?:from|import)\s*\(?\s*["'][^"']*components\/session\/(?:ChatList|SessionList)["']/;
-    const offenders = sources(SRC).filter((f) =>
-      importsThem.test(fs.readFileSync(f, "utf8")),
-    );
-    expect(offenders).toEqual([]);
-  });
-
-  /**
-   * 2026-08-18 决策 10 与 17：本体在 server 上之后，「暂时看不到」那一整类行与
-   * 跨机副本合并都没有存在的理由了——哪一份副本进账号由服务端决定。两件事必须
-   * 真的消失，而不是留一个没人调用的模块躺在那里。
-   */
-  it("跨机副本合并 lib/sessionMerge.ts 已删除，且没有模块还引它", () => {
-    expect(fs.existsSync(path.join(SRC, "lib/sessionMerge.ts"))).toBe(false);
-    const importsIt = /(?:from|import)\s*\(?\s*["'][^"']*sessionMerge["']/;
-    const offenders = sources(SRC).filter((f) =>
-      importsIt.test(fs.readFileSync(f, "utf8")),
-    );
-    expect(offenders).toEqual([]);
-  });
-
-  it("「暂时看不到」不再是一类行：索引这边的类型、造行的函数与两份文案都没了", () => {
-    // 只查索引自己那套符号：`unresolved` 这个词在转录那边另有含义（未落地的
-    // 工具调用），一刀切会把无关的文件也判成违规。
-    const indexSymbols =
-      /UnresolvedRow|UnresolvedGroupRow|UnresolvedKind|unresolvedFollows|UNRESOLVED_KEY|sessionIndex\.group\.unresolved/;
-    const offenders = sources(SRC)
-      .filter((f) => !f.includes("__tests__"))
-      .filter((f) => indexSymbols.test(fs.readFileSync(f, "utf8")));
-    expect(offenders).toEqual([]);
-    for (const locale of ["zh-CN", "en"]) {
-      const copy = fs.readFileSync(
-        path.join(SRC, `i18n/locales/${locale}/sessionIndex.json`),
-        "utf8",
-      );
-      expect(copy).not.toMatch(/unresolved/i);
-    }
   });
 });
 

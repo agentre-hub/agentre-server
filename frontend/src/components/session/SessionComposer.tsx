@@ -190,27 +190,23 @@ export default function SessionComposer({
           leadingControls={
             <div className="flex shrink-0 items-center gap-1">
               {permissionModeMeta !== undefined && onPermissionModeChange ? (
-                <PermissionModePill
-                  mode={permissionMode || permissionModeMeta?.defaultMode || ""}
-                  modes={permissionModeMeta?.order ?? []}
-                  onSelect={onPermissionModeChange}
-                  errorMessage={permissionError}
-                  // 问不出、或这个后端本来就没有档位：控件都常显但不可用 ——
-                  // 两者在措辞上分得开，而「整颗不摆」会把它们混成同一件事。
-                  disabled={
-                    permissionModeMeta === null ||
-                    permissionModeMeta.allowedModes.length === 0
-                  }
-                  disabledReason={
-                    permissionModeMeta === null
+                permissionModeMeta === null ||
+                permissionModeMeta.allowedModes.length === 0 ? (
+                  <span className="text-2xs text-muted-foreground">
+                    {permissionModeMeta === null
                       ? t("session.composerControls.permissionUnavailable")
-                      : permissionModeMeta.allowedModes.length === 0
-                        ? t("session.composerControls.permissionUnsupported")
-                        : undefined
-                  }
-                  runtimeKey={permissionRuntimeKey}
-                  hasActiveSession={permissionHasActiveSession}
-                />
+                      : t("session.composerControls.permissionUnsupported")}
+                  </span>
+                ) : (
+                  <PermissionModePill
+                    mode={permissionMode || permissionModeMeta.defaultMode}
+                    modes={permissionModeMeta.order}
+                    onSelect={onPermissionModeChange}
+                    errorMessage={permissionError}
+                    runtimeKey={permissionRuntimeKey}
+                    hasActiveSession={permissionHasActiveSession}
+                  />
+                )
               ) : null}
               {modelControl}
             </div>

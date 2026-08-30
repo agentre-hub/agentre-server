@@ -26,6 +26,10 @@ redis:
 server:
   public_url: "http://127.0.0.1:8443"
   insecure_cookies: true
+  webauthn:
+    rp_id: "localhost"
+    origins:
+      - "http://localhost:8443"
 `;
 
 test("runner 只接受 source:file 的显式 E2E 配置", () => {
@@ -74,6 +78,19 @@ test("runner 只接受 source:file 的显式 E2E 配置", () => {
       ),
     ),
   ).toThrow(/insecure_cookies/);
+
+  expect(() =>
+    readRunnerConfig(
+      configFile(
+        SAFE_CONFIG.replace('    rp_id: "localhost"', '    rp_id: "127.0.0.1"'),
+      ),
+    ),
+  ).toThrow(/webauthn.*rp_id/i);
+  expect(() =>
+    readRunnerConfig(
+      configFile(SAFE_CONFIG.replace('      - "http://localhost:8443"', "")),
+    ),
+  ).toThrow(/webauthn.*origin/i);
 
   expect(() =>
     readRunnerConfig(

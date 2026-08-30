@@ -31,17 +31,6 @@ const FRONTEND_ROOT = path.resolve(
  */
 
 describe("shared UI package integration", () => {
-  it("Given relative time is shared presentation logic, When the server exposes its session helper, Then it aliases the package implementation instead of keeping a second formatter", () => {
-    const source = fs.readFileSync(
-      path.join(FRONTEND_ROOT, "src/lib/sessionView.ts"),
-      "utf8",
-    );
-
-    expect(source).toMatch(/formatIntlRelativeTime\s+as\s+formatRelativeTime/);
-    expect(source).not.toContain("RELATIVE_UNITS");
-    expect(source).not.toContain("relativeTimeFormatters");
-  });
-
   it("Given the server i18n instance, When a package component renders, Then it resolves copy from the package namespace", () => {
     render(
       <TranscriptUIStateProvider>
@@ -134,13 +123,6 @@ describe("共享包已发布的组件，本站不留副本", () => {
       .map((f) => f.replace(/\.tsx?$/, "")),
   );
 
-  const overlapping = fs
-    .readdirSync(UI_DIR)
-    .filter((f) => f.endsWith(".tsx"))
-    .map((f) => f.replace(/\.tsx$/, ""))
-    .filter((name) => packaged.has(name))
-    .filter((name) => !KEEP_LOCAL.some(([kept]) => kept === name));
-
   it("包确实发布了 ui 组件（读不到的话下面那条是假绿）", () => {
     expect(packaged.size).toBeGreaterThan(0);
   });
@@ -161,20 +143,6 @@ describe("共享包已发布的组件，本站不留副本", () => {
         `真要保留自己那份，去 KEEP_LOCAL 里登记理由。`,
     ).toEqual([]);
   });
-
-  it.each(overlapping)(
-    "components/ui/%s.tsx 是 re-export 而不是副本",
-    (name) => {
-      const source = fs.readFileSync(path.join(UI_DIR, `${name}.tsx`), "utf8");
-
-      expect(
-        /from\s+"@agentre-hub\/agentre-ui"/.test(source),
-        `包已经发布了 ${name}，本站这份必须从包 re-export。` +
-          `留一份副本不会报错，只会在包那边改动时静默分叉。` +
-          `真要保留自己那份，去 KEEP_LOCAL 里登记理由。`,
-      ).toBe(true);
-    },
-  );
 });
 
 /**

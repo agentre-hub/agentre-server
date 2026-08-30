@@ -32,6 +32,16 @@ interface DeviceToken {
   device_id: number;
 }
 
+interface SyncItem {
+  kind: string;
+  sync_id: string;
+  payload: Record<string, unknown>;
+  version: number;
+  updated_at: number;
+  origin_fingerprint: string;
+  deleted_at: number;
+}
+
 interface OracleResult {
   run_id: string;
   user_id: number;
@@ -49,6 +59,12 @@ interface OracleResult {
     refresh_expires_at: number;
     last_used_at: number;
     revoked_at: number;
+  }>;
+  sync_objects: Array<{
+    sync_id: string;
+    kind: string;
+    version: number;
+    deleted_at: number;
   }>;
 }
 
@@ -209,6 +225,104 @@ export async function exchangeDeviceCode(
   const body = await response.json();
   if (!response.ok()) return { response, body };
   return { response, body, token: expectSuccessfulEnvelope(response, body) };
+}
+
+export async function refreshDeviceToken(
+  page: Page,
+  refreshToken: string,
+): Promise<{ response: APIResponse; body: unknown; token?: DeviceToken }> {
+  const response = await page.request.post("/v1/oauth/token/refresh", {
+    data: { refresh_token: refreshToken },
+  });
+  const body = await response.json();
+  if (!response.ok()) return { response, body };
+  return { response, body, token: expectSuccessfulEnvelope(response, body) };
+}
+
+export async function requestWithDeviceToken(
+  page: Page,
+  path: string,
+  accessToken: string,
+) {
+  return page.request.get(path, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+}
+
+export async function pushAndPullSyncObject(
+  page: Page,
+  accessToken: string,
+): Promise<{ syncID: string; version: number }> {
+  const handoff = readHandoff();
+  const syncID = `webe2e-project-${handoff.runID}`;
+  const payload = { name: `webe2e project ${handoff.runID}` };
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const pushResponse = await page.request.post("/v1/sync/push", {
+    headers,
+    data: {
+      items: [
+        {
+          kind: "project",
+          sync_id: syncID,
+          base_version: 0,
+          updated_at: Date.now(),
+          payload,
+        },
+      ],
+    },
+  });
+  const push = expectSuccessfulEnvelope<{
+    results: Array<{
+      sync_id: string;
+      kind: string;
+      version: number;
+      status: string;
+    }>;
+  }>(pushResponse, await pushResponse.json());
+  expect(push.results).toEqual([
+    expect.objectContaining({
+      sync_id: syncID,
+      kind: "project",
+      version: expect.any(Number),
+      status: "accepted",
+    }),
+  ]);
+
+  const version = push.results[0].version;
+  const pullResponse = await page.request.get(
+    "/v1/sync/pull?cursor=0&limit=100",
+    {
+      headers,
+    },
+  );
+  const pull = expectSuccessfulEnvelope<{
+    items: SyncItem[];
+    next_cursor: number;
+    has_more: boolean;
+  }>(pullResponse, await pullResponse.json());
+  expect(pull.items).toContainEqual(
+    expect.objectContaining({
+      kind: "project",
+      sync_id: syncID,
+      payload,
+      version,
+      deleted_at: 0,
+    }),
+  );
+  expect(pull.next_cursor).toBeGreaterThanOrEqual(version);
+  return { syncID, version };
+}
+
+export async function revokeDeviceFromBrowserSession(
+  page: Page,
+  deviceID: number,
+) {
+  const handoff = readHandoff();
+  const response = await page.request.post("/v1/oauth/token/revoke", {
+    headers: { "X-CSRF-Token": handoff.csrfToken },
+    data: { device_id: deviceID },
+  });
+  expectSuccessfulEnvelope(response, await response.json());
 }
 
 export function readOracle(): OracleResult {

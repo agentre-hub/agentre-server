@@ -19,6 +19,8 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+
+	serversession "github.com/agentre-hub/agentre-server/internal/pkg/session"
 )
 
 func accountEmail(runID string) string { return "webe2e-" + runID + "@e2e.invalid" }
@@ -42,14 +44,8 @@ type browserSession struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
-type sessionPayload struct {
-	UserID    int64  `json:"user_id"`
-	CSRFToken string `json:"csrf_token"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-func newSessionPayload(userID int64, csrf string, createdAt int64) sessionPayload {
-	return sessionPayload{UserID: userID, CSRFToken: csrf, CreatedAt: createdAt}
+func newSessionPayload(userID int64, csrf string, createdAt int64) serversession.Session {
+	return serversession.Session{UserID: userID, CSRFToken: csrf, CreatedAt: createdAt}
 }
 
 type seedResult struct {
@@ -120,6 +116,7 @@ func oracleSQL() []sqlStep {
 		{"device_flow_codes", `SELECT device_kind, authorized_user_id, approved_at, consumed_at, denied_at, expires_at FROM device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`},
 		{"devices", `SELECT id, kind, status FROM devices WHERE user_id = ?`},
 		{"device_tokens", `SELECT dt.device_id, dt.refresh_expires_at, dt.last_used_at, dt.revoked_at FROM device_tokens dt JOIN devices d ON d.id = dt.device_id WHERE d.user_id = ?`},
+		{"sync_objects", `SELECT sync_id, kind, version, deleted_at FROM sync_objects WHERE user_id = ? ORDER BY kind, sync_id`},
 	}
 }
 
@@ -392,12 +389,20 @@ type tokenState struct {
 	RevokedAt        int64 `json:"revoked_at"`
 }
 
+type syncObjectState struct {
+	SyncID    string `json:"sync_id"`
+	Kind      string `json:"kind"`
+	Version   int64  `json:"version"`
+	DeletedAt int64  `json:"deleted_at"`
+}
+
 type oracleResult struct {
-	RunID   string        `json:"run_id"`
-	UserID  int64         `json:"user_id"`
-	Flows   []flowState   `json:"flows"`
-	Devices []deviceState `json:"devices"`
-	Tokens  []tokenState  `json:"tokens"`
+	RunID       string            `json:"run_id"`
+	UserID      int64             `json:"user_id"`
+	Flows       []flowState       `json:"flows"`
+	Devices     []deviceState     `json:"devices"`
+	Tokens      []tokenState      `json:"tokens"`
+	SyncObjects []syncObjectState `json:"sync_objects"`
 }
 
 func runOracle(args []string) error {
@@ -422,7 +427,7 @@ func runOracle(args []string) error {
 	if users != 1 {
 		return fmt.Errorf("run user not found")
 	}
-	out := oracleResult{RunID: *runID, UserID: *userID, Flows: []flowState{}, Devices: []deviceState{}, Tokens: []tokenState{}}
+	out := oracleResult{RunID: *runID, UserID: *userID, Flows: []flowState{}, Devices: []deviceState{}, Tokens: []tokenState{}, SyncObjects: []syncObjectState{}}
 	steps := oracleSQL()
 	if err := gdb.Raw(steps[0].SQL, *userID, flowFingerprint(*runID)).Scan(&out.Flows).Error; err != nil {
 		return fmt.Errorf("query device flow state: %w", err)
@@ -432,6 +437,9 @@ func runOracle(args []string) error {
 	}
 	if err := gdb.Raw(steps[2].SQL, *userID).Scan(&out.Tokens).Error; err != nil {
 		return fmt.Errorf("query token state: %w", err)
+	}
+	if err := gdb.Raw(steps[3].SQL, *userID).Scan(&out.SyncObjects).Error; err != nil {
+		return fmt.Errorf("query sync object state: %w", err)
 	}
 	return emit(out)
 }

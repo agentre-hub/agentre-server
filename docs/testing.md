@@ -128,19 +128,23 @@ Frontend unit tests run under jsdom, which is missing things a browser has. Fill
 in **`frontend/src/test/setup.ts`** (wired as vitest's `setupFiles`) — never by mocking
 the module that happens to touch it.
 
-The distinction matters. `vi.mock('@/lib/theme')` in each test file that renders the shell
+The distinction matters. Mocking the theme exports from `@agentre-hub/agentre-ui` in each test file that renders the shell
 would make those files pass, but they would then be exercising a hand-written stand-in
 instead of `ThemeProvider` + `useTheme` — the wiring the test is nominally about stops
 being covered, in every file, silently. A shim in the setup file leaves the component
 under test untouched.
 
-Two shims live there today, both installed only when the runtime lacks them:
+Four shims live there today, all installed only when the runtime lacks them:
 
 - **`localStorage` / `sessionStorage`.** Node ≥ 22 puts a built-in `localStorage` getter
   on `globalThis` that resolves to `undefined` without `--localstorage-file`, *and* it
-  shadows jsdom's own implementation, so `lib/theme.tsx`'s `readStored()` throws.
+  shadows jsdom's own implementation, so the shared `ThemeProvider` fails when it reads the stored choice.
 - **`matchMedia`.** jsdom has never implemented it; `ThemeProvider` reads it for the
   system colour scheme.
+- **`scrollIntoView`.** jsdom does not implement it; Radix Select uses it to bring the
+  selected item into view when the menu opens.
+- **`ResizeObserver`.** jsdom does not implement it; the transcript virtualizer uses it
+  to measure the viewport and row heights.
 
 Anything that needs real layout — a card overflowing a phone viewport, a flex row that
 will not shrink — cannot be tested here at all. jsdom computes no layout. That belongs

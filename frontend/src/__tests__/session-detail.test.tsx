@@ -479,16 +479,18 @@ describe("会话详情页", () => {
     expect(screen.getAllByRole("option")).toHaveLength(2);
   });
 
-  it("这台机器答不出档位时，pill 常显但禁用，并说出这一句", async () => {
+  it("这台机器答不出档位时直接说明问不到，不显示 unknown 档位", async () => {
     mockCapabilities(new Error("machine says no"));
 
     renderPage();
-    const pill = await screen.findByRole("button", { name: /Permission mode/ });
-    expect(pill).toBeInstanceOf(HTMLButtonElement);
-    expect((pill as HTMLButtonElement).disabled).toBe(true);
-    expect(pill.getAttribute("title")).toBe(
-      "This machine cannot list permission modes right now",
-    );
+    expect(
+      screen.queryByRole("button", { name: /Permission mode/ }),
+    ).toBeNull();
+    expect(
+      await screen.findByText(
+        "This machine cannot list permission modes right now",
+      ),
+    ).toBeTruthy();
   });
 
   // 与上一条是**两句不同的话**：这一条是稳定答案（builtin 没有权限门），上一条是
@@ -499,11 +501,12 @@ describe("会话详情页", () => {
     });
 
     renderPage();
-    const pill = await screen.findByRole("button", { name: /Permission mode/ });
-    expect((pill as HTMLButtonElement).disabled).toBe(true);
-    expect(pill.getAttribute("title")).toBe(
-      "This backend has no permission modes",
-    );
+    expect(
+      screen.queryByRole("button", { name: /Permission mode/ }),
+    ).toBeNull();
+    expect(
+      await screen.findByText("This backend has no permission modes"),
+    ).toBeTruthy();
   });
 
   // ── 模型目标：三态、持久化、两台机器 ─────────────────────────────────────

@@ -74,6 +74,14 @@ describe("design token guardrail", () => {
       "inside template literal",
       'export const c = `border ${"x"} bg-zinc-800`;',
     ],
+    [
+      "arbitrary font size with token",
+      `export const a = <div className="text-[13px]" />;`,
+    ],
+    [
+      "responsive arbitrary font size",
+      `export const a = <div className="sm:text-[15px]" />;`,
+    ],
   ])("rejects %s", async (_name, code) => {
     const messages = await lintAs("src/fixture.tsx", code);
     expect(ruleIds(messages)).toContain("no-restricted-syntax");
@@ -97,6 +105,10 @@ describe("design token guardrail", () => {
     [
       "word that merely contains a colour name",
       `export const a = <div className="bg-background" />;`,
+    ],
+    [
+      "arbitrary font size without token",
+      `export const a = <div className="text-[9px]" />;`,
     ],
   ])("accepts %s", async (_name, code) => {
     const messages = await lintAs("src/fixture.tsx", code);

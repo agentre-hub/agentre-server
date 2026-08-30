@@ -174,6 +174,13 @@ jobs:
                 callback_path: "/v1/auth/oauth/github/callback"
             rate_limit:
               authorize_per_ip_per_min: 100
+            webauthn:
+              rp_id: "localhost"
+              rp_name: "AgentRe E2E"
+              origins:
+                - "http://localhost:5199"
+                - "http://127.0.0.1:5199"
+              max_per_account: 10
           YAML
 
       - name: make e2e

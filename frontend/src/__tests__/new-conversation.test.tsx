@@ -894,6 +894,7 @@ describe("草稿页的权限档位与模型控件", () => {
         },
       ],
     },
+    relayState: "connected" | "reconnecting" = "connected",
   ) {
     const request = vi.fn(async (method: unknown) => {
       if (method === rpcMethods.runtimeCapabilities) {
@@ -914,7 +915,7 @@ describe("草稿页的权限档位与模型控件", () => {
         getCursor: vi.fn(() => 0),
         close: vi.fn(),
       } as never,
-      relayState: "connected",
+      relayState,
       relayTicket,
       relayTicketError: null,
       reconnect: vi.fn(),
@@ -957,17 +958,20 @@ describe("草稿页的权限档位与模型控件", () => {
     expect(screen.getByTestId("composer-model-target")).toBeTruthy();
   });
 
-  it("Given 机器答不出档位, When 打开草稿, Then pill 常显但禁用并说出这一句", async () => {
+  it("Given 机器答不出档位, When 打开草稿, Then 直接说明问不到，不显示 unknown 档位", async () => {
     stubMachine(new Error("machine says no"));
     renderChat();
     await openDraft();
     await awaitDraftComposer();
 
-    const pill = await screen.findByRole("button", { name: /Permission mode/ });
-    expect((pill as HTMLButtonElement).disabled).toBe(true);
-    expect(pill.getAttribute("title")).toBe(
-      "This machine cannot list permission modes right now",
-    );
+    expect(
+      screen.queryByRole("button", { name: /Permission mode/ }),
+    ).toBeNull();
+    expect(
+      await screen.findByText(
+        "This machine cannot list permission modes right now",
+      ),
+    ).toBeTruthy();
   });
 
   // 与上一条是两句不同的话：这一条是稳定答案（这个后端没有权限门），上一条是
@@ -978,11 +982,12 @@ describe("草稿页的权限档位与模型控件", () => {
     await openDraft();
     await awaitDraftComposer();
 
-    const pill = await screen.findByRole("button", { name: /Permission mode/ });
-    expect((pill as HTMLButtonElement).disabled).toBe(true);
-    expect(pill.getAttribute("title")).toBe(
-      "This backend has no permission modes",
-    );
+    expect(
+      screen.queryByRole("button", { name: /Permission mode/ }),
+    ).toBeNull();
+    expect(
+      await screen.findByText("This backend has no permission modes"),
+    ).toBeTruthy();
 
     await typeInDraft("hi");
     const send = screen.getByTestId("session-detail-send");
@@ -994,6 +999,21 @@ describe("草稿页的权限档位与模型控件", () => {
     // 塞一个真档位进去会让那一轮被判成 stale —— 闸门是「执行端报了非空集合」，
     // 不是在本站按后端类型写死一条黑名单。
     expect(mockDispatch.mock.calls[0][0].permissionMode).toBeUndefined();
+  });
+
+  it("Given 旧连接正在重连, When 发第一句, Then 不把未就绪 client 交给派发", async () => {
+    stubMachine(fourModes, undefined, "reconnecting");
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    await typeInDraft("hi");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(mockDispatch.mock.calls[0][0].client).toBeUndefined();
   });
 
   it("Given Agent 后端绑了模型, When 打开草稿, Then 模型 pill 是跟随绑定态并写出解析到的模型", async () => {
