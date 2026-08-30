@@ -134,10 +134,19 @@ func (f *redisForwarder) Attach(ctx context.Context, target Route, peer Peer, ch
 	if f.attachments[stream] == nil {
 		f.attachments[stream] = make(map[Peer]map[*attachedPeer]struct{})
 	}
-	if f.attachments[stream][peer] == nil {
+	if peer == PeerDaemon {
+		// 同一(account, fingerprint, instance)只能有一条当前 daemon websocket。
+		// 重连期间旧 handler 可能尚未观察到 close；若把新旧连接同时留下，浏览器帧
+		// 会被广播到两边，旧连接的一次写失败便会把已经送达新连接的请求判成失败，
+		// controller 随即关闭浏览器 websocket。直接换成只含新 attachment 的集合；
+		// 旧 handler 迟到的 detach 按指针删除自己，不会误删新连接。
+		f.attachments[stream][peer] = map[*attachedPeer]struct{}{attachment: {}}
+	} else if f.attachments[stream][peer] == nil {
 		f.attachments[stream][peer] = make(map[*attachedPeer]struct{})
+		f.attachments[stream][peer][attachment] = struct{}{}
+	} else {
+		f.attachments[stream][peer][attachment] = struct{}{}
 	}
-	f.attachments[stream][peer][attachment] = struct{}{}
 	f.startConsumerLocked(stream)
 	f.mu.Unlock()
 
