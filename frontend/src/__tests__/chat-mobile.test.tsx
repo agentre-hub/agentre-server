@@ -85,6 +85,7 @@ const agents = [
 ];
 const waitingMirrored = {
   peer_fingerprint: "fp-1",
+  machine_fingerprint: "fp-1",
   session_id: "42",
   title: "等你批",
   agent_sync_id: "ag-1",
@@ -95,6 +96,7 @@ const waitingMirrored = {
 };
 const runningMirrored = {
   peer_fingerprint: "fp-1",
+  machine_fingerprint: "fp-1",
   session_id: "43",
   title: "跑着呢",
   agent_sync_id: "ag-1",

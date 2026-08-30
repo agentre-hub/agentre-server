@@ -9,7 +9,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
  *   - R17：派发的 RunParams 不注入 mcpServers —— org / subagent / hook 用不了这件事
  *     在发起前由界面说明，逻辑层不注入这三个内置工具。
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
 import { RelayClient, RelayError } from "@/lib/relayClient";
@@ -174,6 +174,10 @@ beforeEach(() => {
   } as never);
 });
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("pickFirstAvailable（R15d 守卫）", () => {
   it("跳过 device_id 为空的档，只在 agentred 里按顺序取第一档可用的", () => {
     const got = pickFirstAvailable(availablePlan.tiers);
@@ -291,6 +295,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       sessionId: 9001,
       deviceId: 21,
       deviceFingerprint: "fp-online",
+      // 交出去的必须是这条对话的**发起端**——就是这个浏览器。落地那一屏拿它去问
+      // 镜像的历史与「已读」；给成机器指纹的话两处都在问一个账号里不存在的身份。
+      peerFingerprint: "fp-web",
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
@@ -361,6 +368,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       sessionId: 9001,
       deviceId: 30,
       deviceFingerprint: "fp-desk",
+      peerFingerprint: "fp-web",
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
@@ -390,6 +398,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       sessionId: 9001,
       deviceId: 21,
       deviceFingerprint: "fp-online",
+      peerFingerprint: "fp-web",
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
@@ -494,6 +503,58 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     expect(params[2].providerSessionId).toBe("pi-provider-1");
     expect(out.sessionId).toBe(7001);
     expect(mockedApi).toHaveBeenCalledTimes(1);
+  });
+
+  // Given 本站用 http 部署（`http://coding.local:8443` = 非安全上下文，那里
+  // `crypto.randomUUID` 带 [SecureContext] 门槛、根本不存在）/ When 往 agentred 上的
+  // Pi 派发 / Then 三步照常走完。
+  //
+  // 回归：这一代身份此前直接调 `crypto.randomUUID()`，在 http 部署上抛 TypeError。
+  // 它既不是 DispatchRunError 也不是 DispatchConnectionError，草稿页于是落到兜底那
+  // 一支，对着一台连得上的机器说「连不上 coding，请重试」——而一帧中继都没发出去。
+  it("非安全上下文里（http 部署，没有 crypto.randomUUID）Pi 派发照常完成", async () => {
+    const realCrypto = globalThis.crypto;
+    vi.stubGlobal("crypto", {
+      getRandomValues: (buffer: Uint8Array) =>
+        realCrypto.getRandomValues(buffer),
+    });
+    expect(typeof crypto.randomUUID).toBe("undefined");
+
+    const client = fakeClient();
+    client.request
+      .mockResolvedValueOnce({ sessionId: 7003 })
+      .mockResolvedValueOnce({
+        sessionId: 7003,
+        providerSessionId: "pi-provider-2",
+      })
+      .mockResolvedValueOnce({
+        sessionId: 7003,
+        providerSessionId: "pi-provider-2",
+      });
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+    vi.spyOn(Math, "random").mockReturnValueOnce(
+      (7003 - 1) / Number.MAX_SAFE_INTEGER,
+    );
+
+    const out = await dispatchNewConversation({
+      plan: agentredPiPlan,
+      message: "用 Pi 看看",
+      sourceClient,
+    });
+
+    const runs = client.request.mock.calls.filter(
+      ([method]) => method === rpcMethods.runtimeRun,
+    );
+    expect(runs).toHaveLength(3);
+    const owners = runs.map(
+      ([, value]) => (value as Record<string, unknown>).permissionMode,
+    );
+    expect(owners[0]).toEqual(expect.any(String));
+    expect(owners[0]).not.toBe("");
+    expect(new Set(owners).size).toBe(1);
+    expect(out.sessionId).toBe(7003);
   });
 
   it("Pi 注册后准备失败会清理这一代，且不保存未启动的会话", async () => {

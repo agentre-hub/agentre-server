@@ -38,6 +38,9 @@ type SessionSummary struct {
 	UserID          int64  `gorm:"column:user_id;type:bigint;not null"`
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
 	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
+	// MachineFingerprint 是索引读取时从 agent_session_saves 投影出的承载机器指纹。
+	// 它不是摘要表的一列，也不是会话身份的一半；只读标签防止摘要 upsert 写它。
+	MachineFingerprint string `gorm:"column:machine_fingerprint;->"`
 	// Title / AgentSyncID / ProviderSessionID mirror wire.SessionSummary's R7 +
 	// decision-8 fields. The peer carries them on every turn and overwrites them
 	// idempotently, so they stay blank until it has reported one — a session that

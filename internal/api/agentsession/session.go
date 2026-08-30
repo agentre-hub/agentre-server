@@ -53,6 +53,9 @@ type SavedSessionItem struct {
 	// 此刻承载它的那台机器）：详情页发消息要用它定位承载连接的目标，没有它这条对话
 	// 就发不出新消息。
 	PeerFingerprint string `json:"peer_fingerprint"`
+	// MachineFingerprint 是当前承载这条对话的账号设备指纹，供 web 选择实际连接目标；
+	// 与上面的发起端指纹分开，二者不能互相代替。
+	MachineFingerprint string `json:"machine_fingerprint"`
 	// SessionID 是发起端本地自增的会话标识，服务端只当不透明指针；配
 	// PeerFingerprint 才是完整身份（决策 17）。
 	SessionID string `json:"session_id"`

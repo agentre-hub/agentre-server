@@ -157,7 +157,8 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 		Groups: []workspace_svc.SessionIndexGroup{{
 			Scope: "agent:agent-1", Total: 9, HasMore: true, Cursor: "1700.42",
 			Items: []workspace_svc.SavedSessionSummaryView{{
-				PeerFingerprint: "fp-daemon-1", SessionID: "sess-9", Title: "调试登录页",
+				PeerFingerprint: "fp-browser-1", MachineFingerprint: "fp-daemon-1",
+				SessionID: "sess-9", Title: "调试登录页",
 				AgentSyncID: "agent-1", ProjectSyncID: "proj-1", BackendType: "claude_code",
 				LifecycleState: "waiting_for_input", WaitingForInput: true, LastMessageAt: 12345,
 			}},
@@ -177,15 +178,16 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 			Cursor  string `json:"cursor"`
 			HasMore bool   `json:"has_more"`
 			Items   []struct {
-				PeerFingerprint string `json:"peer_fingerprint"`
-				SessionID       string `json:"session_id"`
-				Title           string `json:"title"`
-				AgentSyncID     string `json:"agent_sync_id"`
-				ProjectSyncID   string `json:"project_sync_id"`
-				BackendType     string `json:"backend_type"`
-				LifecycleState  string `json:"lifecycle_state"`
-				WaitingForInput bool   `json:"waiting_for_input"`
-				LastMessageAt   int64  `json:"last_message_at"`
+				PeerFingerprint    string `json:"peer_fingerprint"`
+				MachineFingerprint string `json:"machine_fingerprint"`
+				SessionID          string `json:"session_id"`
+				Title              string `json:"title"`
+				AgentSyncID        string `json:"agent_sync_id"`
+				ProjectSyncID      string `json:"project_sync_id"`
+				BackendType        string `json:"backend_type"`
+				LifecycleState     string `json:"lifecycle_state"`
+				WaitingForInput    bool   `json:"waiting_for_input"`
+				LastMessageAt      int64  `json:"last_message_at"`
 			} `json:"items"`
 		} `json:"groups"`
 	}
@@ -199,7 +201,8 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 	assert.True(t, group.HasMore)
 	require.Len(t, group.Items, 1)
 	item := group.Items[0]
-	assert.Equal(t, "fp-daemon-1", item.PeerFingerprint)
+	assert.Equal(t, "fp-browser-1", item.PeerFingerprint)
+	assert.Equal(t, "fp-daemon-1", item.MachineFingerprint)
 	assert.Equal(t, "sess-9", item.SessionID)
 	assert.Equal(t, "调试登录页", item.Title)
 	assert.Equal(t, "agent-1", item.AgentSyncID)

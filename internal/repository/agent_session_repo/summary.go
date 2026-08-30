@@ -206,11 +206,21 @@ func (r *summaryRepo) UpsertSummary(ctx context.Context, s *agent_session_entity
 
 func (r *summaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {
 	var out []*agent_session_entity.SessionSummary
-	if err := db.Ctx(ctx).Where("user_id=?", userID).
+	if err := withMachineFingerprint(db.Ctx(ctx)).Where("user_id=?", userID).
 		Order("last_message_at DESC, id DESC").Find(&out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+// withMachineFingerprint 把保存名单里记录的承载机器投影到摘要读模型。会话身份仍是
+// (账号, 发起端, 会话标识)；浏览器发起的会话不能拿发起端指纹冒充承载机器。
+func withMachineFingerprint(tx *gorm.DB) *gorm.DB {
+	return tx.Select("agent_sessions.*, (SELECT device_fingerprint FROM agent_session_saves " +
+		"WHERE agent_session_saves.user_id=agent_sessions.user_id " +
+		"AND agent_session_saves.peer_fingerprint=agent_sessions.peer_fingerprint " +
+		"AND agent_session_saves.peer_session_id=agent_sessions.peer_session_id LIMIT 1) " +
+		"AS machine_fingerprint")
 }
 
 // DeleteSummary 的 WHERE 与 UpsertSummary 的冲突判定同一组列：删的必须正好是那条
@@ -323,7 +333,7 @@ func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 func (r *summaryRepo) ListSummariesPage(
 	ctx context.Context, q SummaryPageQuery,
 ) ([]*agent_session_entity.SessionSummary, error) {
-	tx := r.scoped(ctx, q.SummaryQuery)
+	tx := withMachineFingerprint(r.scoped(ctx, q.SummaryQuery))
 	if !q.Cursor.IsZero() {
 		// 严格排在游标之后：先比活动时刻，同一刻内再比 id。两者缺一，同毫秒的那几条
 		// 要么重复发一遍、要么整批被跳过。

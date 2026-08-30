@@ -81,6 +81,8 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 			"Online", "Configured", "Path", "LocationSyncID"},
 		// 账号镜像的摘要：项目归属只回同步标识，cwd 到 service 边界就为止了；发起端
 		// 指纹与会话标识是身份键（决策 17），必须带出去，否则详情页发不出消息。
+		// MachineFingerprint 是承载它的账号设备指纹：与 GET /v1/devices 已下行的
+		// fingerprint 同类，不是路径或凭据；浏览器发起时详情靠它选择实际连接目标。
 		// 索引分页（2026-08-19-session-index-pagination.md）：组骨架、游标与两个
 		// 计数都不带路径。Scope 是组的身份，项目那一档里是**项目同步标识**而不是
 		// 它的位置——路径不因为换了个字段名就可以出网。
@@ -97,7 +99,7 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 		// 因为机器离线时详情页仍要显示得出这条对话用的是哪个模型，而那正是「已保存」
 		// 承诺的一部分。
 		"SavedSessionItem": {
-			"PeerFingerprint", "SessionID", "Title", "AgentSyncID", "ProjectSyncID",
+			"PeerFingerprint", "MachineFingerprint", "SessionID", "Title", "AgentSyncID", "ProjectSyncID",
 			"BackendType", "LifecycleState", "WaitingForInput", "LastMessageAt",
 			"LastReadAt", "ProviderKey", "ModelKey",
 		},

@@ -69,6 +69,7 @@ Every rule below fails a build.
 | Test keys never link into `bin/server` | `internal/pkg/jwt/testkeys/isolation_test.go` |
 | No literal colours in ts/tsx | `no-restricted-syntax` (`frontend/eslint.config.js`) |
 | No literal UI copy | `i18next/no-literal-string` |
+| No direct `crypto.randomUUID` | `no-restricted-syntax` (`frontend/eslint-rules/secure-context.js`) |
 | Locale files have identical keys | `frontend/src/i18n/__tests__/locale-parity.test.ts` |
 | Language switching really switches | `frontend/src/i18n/__tests__/language-switch.test.ts` |
 | Formatting | `prettier` — via `eslint-plugin-prettier` in `frontend/`, standalone in `e2e/` |
@@ -98,6 +99,9 @@ with its reason next to it:
 - **`frontend/eslint.config.js`** — `eslint-rules/` may contain literal colours
   (it lists the banned colour names). Test files may contain literals of both
   kinds, because they construct the violating samples.
+  `src/lib/randomId.ts` may call `crypto.randomUUID`, because it owns the
+  fallback for it: the deployment is served over plain http, which is not a
+  secure context, and `crypto.randomUUID` does not exist there.
 
 Adding an exemption means editing one of those two files and writing why.
 If you cannot write a reason, the code is what needs changing.

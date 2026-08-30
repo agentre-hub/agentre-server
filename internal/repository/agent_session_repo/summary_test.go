@@ -87,9 +87,10 @@ func TestListSummariesByUser_AccountScoped(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"id", "user_id", "peer_fingerprint", "peer_session_id", "title", "last_message_at",
+		"machine_fingerprint",
 	}).
-		AddRow(1, 7, "fp-daemon-1", "sess-9", "Fix the bug", 2000).
-		AddRow(2, 7, "fp-daemon-1", "sess-8", "Refactor", 1000)
+		AddRow(1, 7, "fp-browser-1", "sess-9", "Fix the bug", 2000, "fp-daemon-1").
+		AddRow(2, 7, "fp-daemon-1", "sess-8", "Refactor", 1000, "fp-daemon-1")
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_sessions` WHERE user_id=? ORDER BY last_message_at DESC, id DESC",
 	)).WithArgs(int64(7)).WillReturnRows(rows)
@@ -99,6 +100,8 @@ func TestListSummariesByUser_AccountScoped(t *testing.T) {
 	require.Len(t, out, 2)
 	assert.Equal(t, "sess-9", out[0].PeerSessionID)
 	assert.Equal(t, int64(7), out[0].UserID)
+	assert.Equal(t, "fp-browser-1", out[0].PeerFingerprint)
+	assert.Equal(t, "fp-daemon-1", out[0].MachineFingerprint)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

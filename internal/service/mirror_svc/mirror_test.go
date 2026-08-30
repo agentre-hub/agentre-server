@@ -275,6 +275,12 @@ func (r *rig) seqs() []int64 {
 	return out
 }
 
+func (r *rig) lastLifecycle(t *testing.T) string {
+	t.Helper()
+	require.NotEmpty(t, r.upserts, "摘要从来没落过库")
+	return r.upserts[len(r.upserts)-1].LifecycleState
+}
+
 func (r *rig) lastCursor(t *testing.T) int64 {
 	t.Helper()
 	require.NotEmpty(t, r.upserts, "游标从来没落过库")
@@ -290,6 +296,24 @@ func notification(sid, seq int64, text string) *agentrewire.RpcNotification {
 }
 
 // journalRow 造一行通知日志:日志里的 params 不带 seq(seq 是日志行自己的列)。
+func runResultDone(sid, seq int64) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
+		RunResultDone: &agentrewire.RunResultDoneNotification{SessionId: sid, Seq: seq},
+	}}
+}
+
+func autonomousTurnStarted(sid, seq int64) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_AutonomousTurnStarted{
+		AutonomousTurnStarted: &agentrewire.AutonomousTurnStartedNotification{SessionId: sid, Seq: seq},
+	}}
+}
+
+func autonomousTurnDone(sid, seq int64) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_AutonomousTurnDone{
+		AutonomousTurnDone: &agentrewire.RunResultDoneNotification{SessionId: sid, Seq: seq},
+	}}
+}
+
 func journalRow(sid, seq int64) *agentrewire.JournaledNotification {
 	return &agentrewire.JournaledNotification{Seq: seq, Payload: notification(sid, seq, fmt.Sprintf("j%d", seq))}
 }
@@ -340,6 +364,51 @@ func TestApply_LiveNotifications_LandKeyedBySeq(t *testing.T) {
 	// 摘要写入按窗口攒批(见 touchSummary),这一轮最终的游标由尾补带出去。
 	r.flush()
 	assert.Equal(t, int64(3), r.lastCursor(t), "游标要落库,否则重连时无从知道自己镜像到哪儿了")
+}
+
+// ── 轮次终态：镜像的 lifecycle 跟着实时帧走 ────────────────────────────────
+
+// Given 一条镜像中的对话此刻在跑;When 它这一轮的终态帧(runtime.runResultDone)到达;
+// Then 落库的摘要必须已经是 idle。
+//
+// 元数据此前只由 Sync 改（清单快照）:一轮跑完之后没有任何东西让镜像重新问一次清单,
+// 那一行就一直停在 running —— 左栏于是把一条早就结束的对话长期显示成「运行中」,
+// 「运行中」这个 chip 也一直把它筛出来,直到别的事情碰巧触发了一次 Sync。
+//
+// 拿终态帧当判据不是猜:daemon 是**先**把行落回 idle、**再**发这一帧的
+// （handlers.RuntimeHandlers.fanout 的注释写着这条次序,理由正是「客户端收到终态帧后
+// 立刻查清单必须已经看到 idle」）。所以收到这一帧时,对端那边就是 idle。
+func TestApply_TurnDone_MirrorsIdleWithoutWaitingForTheNextSync(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{PeerFingerprint: testMachine, SessionID: "42"}}))
+	require.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(42, 1)))
+
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t),
+		"一轮跑完了,镜像里那一行不能还停在 running")
+}
+
+// 自主续轮把会话推回 running,结束时再落回 idle —— 与 daemon 的两端推进同一条规则
+// （forwardAutonomousTurn:started 之前 runningSession,done 之前 finishSession）。
+func TestApply_AutonomousTurn_MovesLifecycleBothWays(t *testing.T) {
+	r := newRig(t)
+	idle := runningSession(42, "写个爬虫")
+	idle.LifecycleState = relaywire.SessionLifecycleIdle
+	r.relay.sessions = []*agentrewire.SessionSummary{idle}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{PeerFingerprint: testMachine, SessionID: "42"}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, autonomousTurnStarted(42, 1)))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, autonomousTurnDone(42, 2)))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t))
 }
 
 // Given 一条实时通知的 seq 不比游标大(重复投递);When 它到达;Then 不落库。

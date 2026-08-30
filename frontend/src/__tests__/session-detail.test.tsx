@@ -196,6 +196,58 @@ describe("会话详情页", () => {
     expect(fakeClient.catchUp).toHaveBeenCalledWith(42, undefined);
   });
 
+  // 真实的 session.list 每一次都解出**新的**摘要对象（Protobuf → domain 的转换按调用
+  // 生成，见 agentre-wire 的 sessionListFromProtobuf）。装载 effect 的依赖里因此不能
+  // 出现「每次渲染都换身份」的东西：那样 setSummary 引起的重渲染会把 effect 整只重挂，
+  // 上一轮的 alive() 随之为假，`setReady(true)` 一次都执行不到 —— attach / 补齐在中继上
+  // 无限重跑，转录永远停在「正在从这台机器读取这条对话…」。
+  //
+  // 这一条用「每次给新对象」的清单桩把那个条件复现出来：断言装载只跑一次、并且转录
+  // 真的渲染出来。
+  it("清单每次返回新对象:装载只跑一次,转录照常渲染", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    // attach / 补齐是真的往返一次中继，不是立刻兑现的 promise。这一点必须照实模拟：
+    // React 的重渲染排在宏任务上，而立刻兑现的 promise 在微任务上恢复——桩若不落一格
+    // 宏任务，整只 effect 会在页面重渲染之前跑完，空转就复现不出来。
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+    fakeClient.request.mockImplementation(async (method) => {
+      await tick();
+      // 关键：每次调用都是一份新对象，与真实转换同构。
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.attach.mockImplementation(async () => {
+      await tick();
+      return {};
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      await tick();
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "你好" },
+        seq: 1,
+      });
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByText("你好", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
+    // 静置一段再数：空转是持续的，只看一眼数不出来。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(fakeClient.attach).toHaveBeenCalledTimes(1);
+    expect(fakeClient.catchUp).toHaveBeenCalledTimes(1);
+  });
+
   // R4「列出这台机器上的**全部**会话，无论由哪个对端发起」→ R6「接入一条会话后收到
   // 实时流」→ R9「浏览器可以给一条会话发新消息」。别的对端发起的会话，daemon 上的
   // 会话键是 (发起端指纹, 会话 id)：清单在 summary.peerFingerprint 上交出 origin，
@@ -394,21 +446,20 @@ describe("会话详情页", () => {
       if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       // 档位集合来自执行端自己报的能力矩阵，不再由本站按 backendType 猜。
-      // 形状是 Go 的 capability.Capabilities 原样透传（没有 json tag）。
+      // 形状是 Protobuf 的 RuntimeCapabilitiesResponse：档位在 permission_mode 那一格。
       if (method === rpcMethods.runtimeCapabilities)
         return {
-          capabilities: {
-            PermissionModeMeta: {
-              AllowedModes: [
-                "default",
-                "acceptEdits",
-                "plan",
-                "bypassPermissions",
-              ],
-              DefaultMode: "default",
-              SwitchableDuringTurn: true,
-              Order: ["default", "acceptEdits", "plan", "bypassPermissions"],
-            },
+          capabilities: [],
+          permissionMode: {
+            allowedModes: [
+              "default",
+              "acceptEdits",
+              "plan",
+              "bypassPermissions",
+            ],
+            defaultMode: "default",
+            switchableDuringTurn: true,
+            order: ["default", "acceptEdits", "plan", "bypassPermissions"],
           },
         };
       if (method === rpcMethods.runtimeSetPermissionMode) return {};
@@ -463,12 +514,11 @@ describe("会话详情页", () => {
 
   it("只报两档的后端就只列两档", async () => {
     mockCapabilities({
-      capabilities: {
-        PermissionModeMeta: {
-          AllowedModes: ["default", "plan"],
-          DefaultMode: "default",
-          Order: ["default", "plan"],
-        },
+      capabilities: [],
+      permissionMode: {
+        allowedModes: ["default", "plan"],
+        defaultMode: "default",
+        order: ["default", "plan"],
       },
     });
 
@@ -497,7 +547,8 @@ describe("会话详情页", () => {
   // 「此刻问不到」。整颗不摆会把两者混成同一件事，用户无从分辨。
   it("这个后端本来就没有权限档位时，说的是另一句", async () => {
     mockCapabilities({
-      capabilities: { PermissionModeMeta: { AllowedModes: [] } },
+      capabilities: [],
+      permissionMode: { allowedModes: [] },
     });
 
     renderPage();
@@ -581,7 +632,7 @@ describe("会话详情页", () => {
       if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       if (method === rpcMethods.runtimeCapabilities)
-        return { capabilities: { PermissionModeMeta: { AllowedModes: [] } } };
+        return { capabilities: [], permissionMode: { allowedModes: [] } };
       if (method === rpcMethods.setModelTarget)
         return opts.setModelTarget ? opts.setModelTarget() : {};
       throw new Error("unexpected: " + method);
@@ -2729,6 +2780,65 @@ describe("会话详情：输入框", () => {
  * 承载连接的那台机器的指纹会记到另一条对话上。
  */
 describe("会话详情：打开即标记已读", () => {
+  it("索引已经给出发起端身份时不被实时会话里的对端指纹覆盖", async () => {
+    const posted: unknown[] = [];
+    const onMarkedRead = vi.fn();
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        return { last_read_at: 1_700_000_000_000 };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          // 这是承载实时连接的另一端；账号镜像的身份已经由索引行给出。
+          sessions: [{ ...summary, peerFingerprint: "fp-relay-peer" }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            sessionId={42}
+            peerFingerprint="fp-index-origin"
+            form="embedded"
+            onMarkedRead={onMarkedRead}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() =>
+      expect(posted).toEqual([
+        { peer_fingerprint: "fp-index-origin", session_id: "42" },
+      ]),
+    );
+    expect(onMarkedRead).toHaveBeenCalledTimes(1);
+  });
+
   it("打开一条对话时按发起端身份记一次已读", async () => {
     const posted: unknown[] = [];
     mockedApi.mockImplementation(async (path, init) => {

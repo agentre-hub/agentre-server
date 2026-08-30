@@ -5,12 +5,17 @@
  * 数组（于是控件整颗消失）。而 codex 实际有两档：本站既列不出它支持的，也会对别的
  * 后端列出它不支持的。桌面端从来不是这么干的——它读的是 runtime 自己报的能力矩阵。
  *
- * 过线的形状：`runtime.capabilities` 的 `capabilities` 字段是 Go 的
- * `capability.Capabilities` **原样透传**（wire.CapabilitiesResult 的注释写明这一点），
- * 而那个结构体**没有 json tag**，所以字段名就是 Go 的导出名：`Set` 与
- * `PermissionModeMeta.{AllowedModes,DefaultMode,SwitchableDuringTurn,Order}`。
- * 这里照它解，不额外兼容一套小驼峰——多写一套「以防哪天加了 tag」的容错，等于把
- * 一个还没发生的协议变更提前当成事实，真变的那天也不会有人发现这里其实一直在赌。
+ * 过线的形状：中继上的应答是 Protobuf 的 `agentre.wire.RuntimeCapabilitiesResponse`
+ * （`RelayClient.request` 的返回类型就是 `MessageShape<M["response"]>`）。权限档位在
+ * 它自己那一格 `permission_mode` 上，字段名按 protobuf-es 的小驼峰：
+ * `permissionMode.{allowedModes,defaultMode,switchableDuringTurn,order}`；
+ * `capabilities` 则是一串 `CapabilityEntry`，与档位无关。
+ *
+ * 只解这一种形状，不额外兼容上一代那份 Go 导出名的 JSON 透传
+ * （`capabilities.PermissionModeMeta.AllowedModes`）：它在中继改走 Protobuf 之后
+ * 一次都不会再出现，留着只会让「解不动」这件事更难被发现——上一版正是照那份形状解的，
+ * 于是每一台机器上的每一条对话都恒定解成 null，界面常驻一句「这台机器此刻列不出
+ * 权限档位」，而权限档位控件整颗消失。
  */
 
 /** 一个 runtime 报出来的权限档位元数据。 */
@@ -46,23 +51,23 @@ export function decodePermissionModeMeta(
   raw: unknown,
 ): PermissionModeMeta | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const caps = (raw as { capabilities?: unknown }).capabilities;
-  if (typeof caps !== "object" || caps === null) return null;
-  const meta = (caps as { PermissionModeMeta?: unknown }).PermissionModeMeta;
+  const meta = (raw as { permissionMode?: unknown }).permissionMode;
+  // 这一格是 optional message：对端没报（太老 / 这条路答不出来）时它压根不在，
+  // 那就是「没答」。
   if (typeof meta !== "object" || meta === null) return null;
 
   const m = meta as Record<string, unknown>;
-  // AllowedModes 缺席（不是空数组，是根本没这个字段）同样算「没答」：这个字段是
-  // 每个 runtime 都会报的，缺了说明解错了对象。
-  if (!Array.isArray(m.AllowedModes)) return null;
+  // allowedModes 缺席（不是空数组，是根本没这个字段）同样算「没答」：repeated 字段
+  // 在 protobuf-es 上恒是数组，缺了说明解错了对象。
+  if (!Array.isArray(m.allowedModes)) return null;
 
-  const allowedModes = stringArray(m.AllowedModes);
-  const order = stringArray(m.Order);
+  const allowedModes = stringArray(m.allowedModes);
+  const order = stringArray(m.order);
   return {
     allowedModes,
-    defaultMode: stringValue(m.DefaultMode),
+    defaultMode: stringValue(m.defaultMode),
     // order 为空时退回 allowedModes 的顺序，与桌面端 nextPermissionMode 的约定一致。
     order: order.length > 0 ? order : allowedModes,
-    switchableDuringTurn: m.SwitchableDuringTurn === true,
+    switchableDuringTurn: m.switchableDuringTurn === true,
   };
 }

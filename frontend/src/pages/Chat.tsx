@@ -242,15 +242,17 @@ export default function Chat() {
    *
    * 移动端仍旧下钻：单列没有第二栏可落，而下钻正是它读一条已有对话的形态。
    *
-   * 身份的另一半用 `deviceFingerprint`——dispatch 交出的就是这条对话的**发起端**
-   * 指纹（经 runtime.run 建出它的那台机器自己），与索引行上的 `peer_fingerprint`
-   * 是同一个值。
+   * 身份的另一半用 `peerFingerprint`——从控制台派发出去的对话，**发起端是这个浏览器**，
+   * 承载它的才是那台 agentred，两者不是同一个值（dispatch 那一步的保存也正是这么
+   * 分开报的）。这里若用 `deviceFingerprint`，右栏一落地就拿机器指纹去问镜像的历史
+   * 与「已读」，而账号里这条对话的身份键是 (浏览器标识, 会话号)：转录一帧都读不回来，
+   * 屏上只剩「正在从这台机器读取这条对话…」。
    */
   const onDraftStarted = useCallback(
     ({
       deviceId,
       sessionId,
-      deviceFingerprint,
+      peerFingerprint,
       modelPinned,
     }: DispatchedSession) => {
       setCompose(null);
@@ -269,7 +271,7 @@ export default function Chat() {
       setSelected({
         deviceId,
         sessionId,
-        peerFingerprint: deviceFingerprint,
+        peerFingerprint,
         modelNote,
       });
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
@@ -419,7 +421,8 @@ export default function Chat() {
     [reach.devicesByFp, t],
   );
   const fromMachineRow = useCallback(
-    (device: DeviceItem, s: SessionSummary) => toMachineRow(device, s, t),
+    (device: DeviceItem, s: SessionSummary, localFingerprint?: string) =>
+      toMachineRow(device, s, t, localFingerprint),
     [t],
   );
 
@@ -759,6 +762,7 @@ export default function Chat() {
                   peerFingerprint={selected.peerFingerprint}
                   form="embedded"
                   initialModelNote={selected.modelNote}
+                  onMarkedRead={refetch}
                 />
               </div>
             ) : (

@@ -21,6 +21,13 @@ export type MachineState = "connecting" | "connected" | "unreachable";
 
 export interface ResolvedMachine {
   sessions: SessionSummary[];
+  /**
+   * **这条连接**在 daemon 眼里的对端指纹（中继 ticket 的 clientId）。
+   *
+   * 清单里省略 `peerFingerprint` 的那些会话，说的就是「发起端是这一端」——不记下它，
+   * 调用方只能拿机器指纹去顶，而那是另一个身份（见 chatRows.machineRowOrigin）。
+   */
+  localFingerprint: string;
 }
 
 /**
@@ -37,7 +44,7 @@ function MachineSessionResolver({
   onResolved: (fp: string, resolved: ResolvedMachine) => void;
   onState: (fp: string, state: MachineState) => void;
 }) {
-  const { client, relayState } = useRelayMachine(fingerprint);
+  const { client, relayState, relayTicket } = useRelayMachine(fingerprint);
   const resolvedRef = useRef(false);
 
   useEffect(() => {
@@ -67,11 +74,12 @@ function MachineSessionResolver({
         const res = sessionListFromProtobuf(raw);
         onResolved(fingerprint, {
           sessions: res.sessions,
+          localFingerprint: relayTicket?.clientId ?? "",
         });
         onState(fingerprint, "connected");
       })
       .catch(() => onState(fingerprint, "unreachable"));
-  }, [relayState, client, fingerprint, onResolved, onState]);
+  }, [relayState, client, fingerprint, relayTicket, onResolved, onState]);
 
   return null;
 }

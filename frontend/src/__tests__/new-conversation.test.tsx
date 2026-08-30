@@ -170,6 +170,9 @@ const relayTicket = {
 /** 账号里镜像着的一条真实会话（左栏据此列出一行）。 */
 const mirroredSession = {
   peer_fingerprint: "fp-a",
+  // 承载它的那台机器：索引行按这一维认设备（详情要连的就是它）。服务端从保存名单
+  // 投影出来，每一条镜像行上都有。
+  machine_fingerprint: "fp-a",
   session_id: "42",
   title: "重构登录页",
   agent_sync_id: "agent-1",
@@ -393,6 +396,7 @@ describe("一条还没发第一句的对话", () => {
       sessionId: 99,
       deviceId: 20,
       deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
       modelPinned: true,
     });
     renderChat();
@@ -447,6 +451,12 @@ describe("一条还没发第一句的对话", () => {
     expect(await screen.findByText("跑一下失败的测试")).toBeTruthy();
     expect(screen.getByRole("status", { name: "Generating" })).toBeTruthy();
     expect(screen.queryByText("Starting…")).toBeNull();
+
+    const pending = screen.getByTestId("draft-pending");
+    const avatars = pending.querySelectorAll('[role="img"]');
+    expect(avatars).toHaveLength(2);
+    expect(avatars[0].className).toContain("size-7");
+    expect(avatars[1].className).toContain("size-7");
   });
 
   /**
@@ -495,6 +505,7 @@ describe("一条还没发第一句的对话", () => {
         sessionId: 99,
         deviceId: 20,
         deviceFingerprint: "fp-a",
+        peerFingerprint: "fp-web",
         modelPinned: true,
       };
     });
@@ -687,6 +698,37 @@ describe("从项目里挑一个 Agent", () => {
     expect(screen.getByTestId("project-members-inherited")).toBeTruthy();
   });
 
+  /**
+   * 一个项目都还没有时，右边那一半此前照样摆着「这个项目里还没有 Agent」——而根本
+   * 没有「这个项目」：左边写着「还没有项目」，右边同时在谈论一个不存在的项目。
+   * 两句话一起出现，用户读到的是「有个项目，只是空的」，于是去找那个项目。
+   *
+   * 空态要说的是真话：一个项目都没有，并且说清楚该去哪儿建。
+   */
+  it("一个项目都没有时:不谈论不存在的项目,并指出去哪儿建", async () => {
+    stubReads();
+    // stubReads 的 over 只兜住它自己没答的路径，项目那一条它先答了：这一条要的正是
+    // 「一个项目都没有」，所以把那一路单独盖掉。
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) =>
+      path.startsWith("/v1/workspace/projects")
+        ? { projects: [] }
+        : base(path, init),
+    );
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+    fireEvent.click(await screen.findByTestId("new-conversation-from-project"));
+
+    await screen.findByTestId("project-agent-pane");
+    expect(screen.queryByTestId("project-agents-empty")).toBeNull();
+    expect(screen.getByTestId("project-none-yet")).toBeTruthy();
+  });
+
   it("从项目里挑中一个照样进那条还没发第一句的对话", async () => {
     stubReads();
     mockFetchPlan.mockResolvedValue(availablePlan);
@@ -809,6 +851,7 @@ describe("移动端派发成功后的落地", () => {
       sessionId: 99,
       deviceId: 20,
       deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
       modelPinned: true,
     });
     renderChat();
@@ -923,14 +966,14 @@ describe("草稿页的权限档位与模型控件", () => {
     return request;
   }
 
+  // Protobuf 的 RuntimeCapabilitiesResponse：档位在自己那一格 permission_mode 上。
   const fourModes = {
-    capabilities: {
-      PermissionModeMeta: {
-        AllowedModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
-        DefaultMode: "acceptEdits",
-        Order: ["default", "acceptEdits", "plan", "bypassPermissions"],
-        SwitchableDuringTurn: true,
-      },
+    capabilities: [],
+    permissionMode: {
+      allowedModes: ["default", "acceptEdits", "plan", "bypassPermissions"],
+      defaultMode: "acceptEdits",
+      order: ["default", "acceptEdits", "plan", "bypassPermissions"],
+      switchableDuringTurn: true,
     },
   };
 
@@ -942,6 +985,7 @@ describe("草稿页的权限档位与模型控件", () => {
       sessionId: 99,
       deviceId: 20,
       deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
       modelPinned: true,
     });
   });
@@ -977,7 +1021,7 @@ describe("草稿页的权限档位与模型控件", () => {
   // 与上一条是两句不同的话：这一条是稳定答案（这个后端没有权限门），上一条是
   // 「此刻问不到」。整颗不摆会把两者混成同一件事。
   it("Given 后端本来就没有权限门, When 打开草稿, Then 说的是另一句，且档位不随第一句过线", async () => {
-    stubMachine({ capabilities: { PermissionModeMeta: { AllowedModes: [] } } });
+    stubMachine({ capabilities: [], permissionMode: { allowedModes: [] } });
     renderChat();
     await openDraft();
     await awaitDraftComposer();
@@ -1068,6 +1112,7 @@ describe("草稿页的权限档位与模型控件", () => {
       sessionId: 99,
       deviceId: 20,
       deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
       modelPinned: false,
     });
     // 左栏已经有一行了，空态那颗主动作不在：走 compose 那个入口进草稿。

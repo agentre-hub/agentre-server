@@ -14,6 +14,7 @@ import type { ChatComposerSubmit } from "@agentre-hub/agentre-ui";
 import type { ModelTarget } from "@agentre-hub/agentre-ui";
 
 import type { FailedSend } from "@/components/session/SendFailureBubble";
+import { randomId } from "@/lib/randomId";
 import type { RelayClient } from "@/lib/relayClient";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 import { isNativeCompactBackend, SLASH_COMPACT } from "@/lib/slashCommands";
@@ -260,7 +261,7 @@ export function useSessionSend({
       // 桌面端 peer 那条路径不看它（EnqueuePeerSession 自己 newQueuedID() 再按
       // peerSource 记归属），传了也无害。这里不按目标类型分叉：一条发送路径就该
       // 只有一种形状。
-      queuedId: crypto.randomUUID(),
+      queuedId: randomId(),
       text: body,
     });
   }
@@ -448,7 +449,7 @@ export function useSessionSend({
     replacing?: string,
   ) {
     const next: FailedSend = {
-      id: replacing ?? crypto.randomUUID(),
+      id: replacing ?? randomId(),
       text,
       kind,
       detail,

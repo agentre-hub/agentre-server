@@ -27,7 +27,7 @@
     "offline": "离线",
     "empty": "这台机器上还没有对话。",
     "connecting": "连接中",
-    "unreachable": "连不上",
+    "unreachable": "连接失败",
     "offlineSince": "离线 · {{time}}"
   },
   "row": {

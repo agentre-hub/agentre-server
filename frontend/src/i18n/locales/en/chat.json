@@ -23,6 +23,7 @@
   "fromProject": "Pick an agent from a project",
   "projects": "Projects",
   "noProjects": "No projects yet.",
+  "noProjectsYetHint": "Create a project from the “Projects” header in the left column and add an agent to it — then you can start a project conversation here.",
   "noAgentsInProject": "No agents in this project yet.",
   "directMembers": "Direct members",
   "inheritedMembers": "Inherited from parent project",

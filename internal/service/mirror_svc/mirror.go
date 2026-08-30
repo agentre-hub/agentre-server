@@ -332,8 +332,44 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 			return err
 		}
 		ts.advanceTo(seq)
+		ts.followTurn(method)
 		return m.touchSummary(ctx, ts)
 	}
+}
+
+// followTurn 让镜像里的生命周期跟着轮次的两个边界走。
+//
+// 元数据的另一条来路是 Sync 的清单快照，而一轮跑完之后没有任何东西让镜像重新问一次
+// 清单：那一行会一直停在 running，左栏于是把一条早就结束的对话长期显示成「运行中」，
+// 直到别的事情碰巧触发了一次 Sync（实测能挂十几分钟以上）。
+//
+// 拿这三个方法当判据不是猜，而是对端自己的次序保证：daemon **先**把行落回 idle /
+// 推回 running，**再**发这一帧（handlers.RuntimeHandlers.fanout 与
+// forwardAutonomousTurn，理由正是「客户端收到终态帧后立刻查清单必须已经看到 idle」）。
+// 所以收到帧的这一刻，对端那边就是这个值。
+//
+// 只动这一列：等待输入与标题之类仍然只由清单说了算，帧里没有它们的答案。
+func (ts *trackedSession) followTurn(method string) {
+	var state string
+	switch method {
+	case notifyRunResultDone, notifyAutonomousTurnDone:
+		state = relaywire.SessionLifecycleIdle
+	case notifyAutonomousTurnStarted:
+		state = relaywire.SessionLifecycleRunning
+	default:
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.summary == nil {
+		return
+	}
+	// 换指针而不是就地改：peerSummary 把这个指针交出去之后，读方在锁外逐字段读它
+	// （saveSummary 就是这么用的）。就地改会和那些读撞上；setSummary 一直是换指针，
+	// 这里跟着同一条纪律。
+	next := proto.Clone(ts.summary).(*agentrewire.SessionSummary)
+	next.LifecycleState = state
+	ts.summary = next
 }
 
 // touchSummary 记下「这条对话的游标又往前了」。可以随便调，限速在这里面。

@@ -23,6 +23,8 @@ import type { ResolvedMachine } from "@/pages/chat/useMachineReachability";
 export interface MirroredSession {
   /** 发起端指纹：与 session_id 一起构成这条对话在账号里的身份（决策 17）。 */
   peer_fingerprint: string;
+  /** 承载这条对话、详情实际要连接的账号设备；与发起端可以不同。 */
+  machine_fingerprint: string;
   session_id: string;
   title?: string;
   agent_sync_id?: string;
@@ -92,7 +94,7 @@ export function toMirrorRow(
   devicesByFp: Map<string, DeviceItem>,
   t: Translate,
 ): MirrorIndexRow {
-  const device = devicesByFp.get(s.peer_fingerprint);
+  const device = devicesByFp.get(s.machine_fingerprint);
   return {
     key: rowKey(s.peer_fingerprint, s.session_id),
     sessionId: Number(s.session_id),
@@ -116,13 +118,38 @@ export function toMirrorRow(
   };
 }
 
+/**
+ * 这条会话在账号里的**发起端**指纹。
+ *
+ * `session.list` 只在「发起端不是调用方自己」时才交出 `peerFingerprint`
+ * （daemon 的 session_catchup.List：`row.PeerFingerprint != peer` 才写）。因此空值
+ * 的语义是「就是本次调用的这一端」——在控制台这里，那是**这个浏览器**的中继标识，
+ * 不是承载它的那台机器。
+ *
+ * 兜底成机器指纹的话，从控制台派发出去的每一条对话都会算出一个账号里不存在的身份：
+ * 机器轴上它们永远挂着「保存」（镜像明明有），按下去写进去的是一条以机器指纹冒充
+ * 发起端的假记录，而转录与「已读」也会拿这个假身份去问 server，回来的是 0 帧。
+ *
+ * 连接还没交出 ticket 时才退到机器指纹：那一档本来就列不出任何行。
+ */
+export function machineRowOrigin(
+  s: SessionSummary,
+  device: DeviceItem,
+  localFingerprint: string | undefined,
+): string {
+  return (
+    s.peerFingerprint?.trim() || localFingerprint?.trim() || device.fingerprint
+  );
+}
+
 /** 选中的那台机器上报的一条（还没进账号的那些）→ 索引的一行。 */
 export function toMachineRow(
   device: DeviceItem,
   s: SessionSummary,
   t: Translate,
+  localFingerprint?: string,
 ): IndexRow {
-  const origin = s.peerFingerprint?.trim() || device.fingerprint;
+  const origin = machineRowOrigin(s, device, localFingerprint);
   return {
     key: rowKey(origin, s.sessionId),
     sessionId: s.sessionId,
@@ -181,7 +208,11 @@ export function buildMachineRows(input: {
   resolved: Record<string, ResolvedMachine>;
   mirrorRows: MirroredSession[];
   fromMirrorRow: (s: MirroredSession) => MirrorIndexRow;
-  fromMachineRow: (device: DeviceItem, s: SessionSummary) => IndexRow;
+  fromMachineRow: (
+    device: DeviceItem,
+    s: SessionSummary,
+    localFingerprint: string | undefined,
+  ) => IndexRow;
   search: string;
   filter: SessionFilter;
 }): Map<number, MirrorIndexRow[]> {
@@ -193,12 +224,15 @@ export function buildMachineRows(input: {
     let rows: MirrorIndexRow[] = (
       input.resolved[device.fingerprint]?.sessions ?? []
     ).map((s) => {
-      const origin = s.peerFingerprint?.trim() || device.fingerprint;
+      // 空 origin = 「这条连接的这一端」，也就是本浏览器（见 machineRowOrigin）。
+      const localFingerprint =
+        input.resolved[device.fingerprint]?.localFingerprint;
+      const origin = machineRowOrigin(s, device, localFingerprint);
       const mirroredRow = savedByKey.get(rowKey(origin, s.sessionId));
       // 账号里已经有的那条：标出来，并把只有服务端判得出的项目归属带上（决策 12）。
       const row = mirroredRow
         ? { ...input.fromMirrorRow(mirroredRow), deviceId: device.id }
-        : input.fromMachineRow(device, s);
+        : input.fromMachineRow(device, s, localFingerprint);
       // 账号身份仍是 origin + session；但机器轴会让多台机器各自报告同一条
       // 会话。渲染/键盘导航的行身份还必须包含报告机器，否则两行会共用一个
       // React key 和 data-nav-target，ArrowDown 永远把焦点送回第一行。

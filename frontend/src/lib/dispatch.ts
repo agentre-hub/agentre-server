@@ -19,6 +19,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { runAckFromProtobuf, type RunParams } from "@agentre-hub/agentre-wire";
 
 import { api } from "@/lib/api";
+import { randomId } from "@/lib/randomId";
 import { RelayClient, RelayError } from "@/lib/relayClient";
 import { relayClientUrl } from "@/lib/relayUrl";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
@@ -110,6 +111,16 @@ export interface DispatchedSession {
   sessionId: number;
   deviceId: number;
   deviceFingerprint: string;
+  /**
+   * 这条对话的**发起端**指纹 —— 就是这个浏览器的中继标识（`sourceClient.clientId`），
+   * 与承载它的 `deviceFingerprint` 不是一回事。
+   *
+   * 落地那一屏（右栏 / 移动端下钻）拿它去问镜像的历史、去记「已读」，而账号里这条
+   * 对话的身份键正是 (发起端指纹, 会话号)（决策 17，与上面那次保存报的完全一致）。
+   * 交出机器指纹的话两处问的都是一个账号里不存在的身份：转录一帧都读不回来，
+   * 「已读」也记在一条不存在的对话上。
+   */
+  peerFingerprint: string;
   /**
    * 这条对话钉住模型目标了没有。
    *
@@ -234,7 +245,7 @@ export async function dispatchNewConversation(
     };
     let ack;
     if (choice.kind === "agentred" && choice.backend_type === "piagent") {
-      const generationOwner = `web-pi-generation-${crypto.randomUUID()}`;
+      const generationOwner = `web-pi-generation-${randomId()}`;
       const piParams = { ...params, permissionMode: generationOwner };
       try {
         const registration = runAckFromProtobuf(await requestRun(piParams));
@@ -313,6 +324,7 @@ export async function dispatchNewConversation(
       sessionId: ack.sessionId,
       deviceId: choice.device_id,
       deviceFingerprint: choice.device_fingerprint,
+      peerFingerprint: input.sourceClient.clientId,
       modelPinned: pinTarget
         ? await pinModelTarget(client, ack.sessionId, pinTarget)
         : true,

@@ -102,6 +102,8 @@ export interface SessionDetailViewProps {
    * 明明选过。用户改一次模型就被顶掉，它说的本来就是发起那一刻的事。
    */
   initialModelNote?: string | null;
+  /** 标记已读成功后通知拥有索引的宿主，让未读数立即用服务端真值重取。 */
+  onMarkedRead?: () => void;
 }
 
 /**
@@ -119,6 +121,7 @@ export default function SessionDetailView({
   peerFingerprint,
   form = "page",
   initialModelNote,
+  onMarkedRead,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
   const sid = Number(sessionId);
@@ -403,6 +406,18 @@ export default function SessionDetailView({
     [history.settled, originProp, device, sid],
   );
 
+  /**
+   * 装载那一遍只用得上 `markTurnActive`，而它是 `useCallback([])` 出来的定值。
+   *
+   * 取这一只、而不是整只 `turn`，与下面 `refreshWaiters` 同一个理由，只是代价更大：
+   * `useTurnActivity()` 每次渲染都返回**新对象**，把它列进依赖，装载 effect 就每渲染
+   * 重挂一次。而这只 effect 自己会 `setSummary` —— 真实的 session.list 每次都解出新
+   * 摘要对象（`sessionListFromProtobuf` 按调用生成），于是必然重渲染、必然重挂，
+   * 上一轮的 `alive()` 随之为假，末尾的 `setReady(true)` 一次都执行不到：attach 与
+   * 补齐在中继上无限重跑，转录永远停在「正在从这台机器读取这条对话…」。
+   */
+  const { markTurnActive } = turn;
+
   // 已连接 → 取会话摘要 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
   useAliveEffect(
     (alive) => {
@@ -424,7 +439,16 @@ export default function SessionDetailView({
           //
           // 记不上不影响读这条对话：它只让「未读」那一档多留一条，比拿一次失败去打断
           // 阅读要好。所以这里既不重试也不报错面。
-          const readOrigin = origin ?? device?.fingerprint ?? "";
+          // 认发起端的次序：索引行给的 → 机器报的 → 镜像那一行认出来的 → 这台机器。
+          // 倒数第二格不能少：从控制台派发的对话两边都给不出 origin（索引行没传下来，
+          // 机器报的是空 = 「调用方自己」），而镜像那一行记的正是浏览器自己的标识；
+          // 少了它就退到机器指纹，「已读」记在一条账号里不存在的对话上。
+          const readOrigin =
+            originProp ??
+            origin ??
+            mirrorOriginRef.current ??
+            device?.fingerprint ??
+            "";
           const readKey = `${readOrigin}:${sid}`;
           if (readOrigin && markedReadRef.current !== readKey) {
             markedReadRef.current = readKey;
@@ -434,7 +458,9 @@ export default function SessionDetailView({
                 peer_fingerprint: readOrigin,
                 session_id: String(sid),
               }),
-            }).catch(() => {});
+            })
+              .then(() => onMarkedRead?.())
+              .catch(() => {});
           }
           if (alive()) {
             setSummary(s ?? null);
@@ -492,7 +518,7 @@ export default function SessionDetailView({
             // runResultDone 也经 onRunResultDone 回放一遍，落在前面会被上一轮的终态
             // 清成 false。（镜像那一段不参与这件事：回放教不了「此刻在不在跑」，
             // 它只往转录里补一条轮次结束的标记。）
-            turn.markTurnActive(s?.lifecycleState === SessionLifecycleRunning);
+            markTurnActive(s?.lifecycleState === SessionLifecycleRunning);
             setReady(true);
             // 待决策刷新交给下面的「connected && ready」effect，避免重复拉取。
           }
@@ -516,7 +542,9 @@ export default function SessionDetailView({
       did,
       sid,
       device?.fingerprint,
-      turn,
+      originProp,
+      onMarkedRead,
+      markTurnActive,
     ],
   );
 

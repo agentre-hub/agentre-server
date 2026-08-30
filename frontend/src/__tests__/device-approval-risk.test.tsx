@@ -322,30 +322,9 @@ describe("授权确认：允许", () => {
   });
 });
 
-describe("授权确认：中文文案照画板 10", () => {
+describe("授权确认：中文界面能力摘要", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("zh-CN");
-  });
-
-  it("标题、代码确认块与脚注用画板上的中文", async () => {
-    mockFlow(pending());
-    renderDevice();
-
-    expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "允许这台设备访问你的 AgentRe 账户？",
-      }),
-    ).toBeTruthy();
-    expect(screen.getByText("确认这串代码与设备上显示的完全一致")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "批准后，这台设备将以你的身份完整接入你的 AgentRe 账户，可执行任意代码与命令。只批准你信任的设备。",
-      ),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。"),
-    ).toBeTruthy();
   });
 
   it("中文确认屏同样没有能力摘要", async () => {

@@ -49,6 +49,7 @@ vi.mock("@/components/session/SessionDetailView", () => ({
     sessionId: number;
     peerFingerprint?: string;
     form?: "page" | "embedded";
+    onMarkedRead?: () => void;
   }) => (
     <div
       data-testid="embedded-session-detail"
@@ -58,6 +59,9 @@ vi.mock("@/components/session/SessionDetailView", () => ({
       data-form={props.form ?? "page"}
     >
       embedded-detail
+      <button type="button" onClick={props.onMarkedRead}>
+        marked-read
+      </button>
     </div>
   ),
 }));
@@ -122,6 +126,8 @@ const agents = [
 function mirrored(over: Record<string, unknown> = {}) {
   return {
     peer_fingerprint: "fp-1",
+    machine_fingerprint:
+      over.machine_fingerprint ?? over.peer_fingerprint ?? "fp-1",
     session_id: "42",
     title: "重构登录页",
     agent_sync_id: "ag-1",
@@ -132,9 +138,18 @@ function mirrored(over: Record<string, unknown> = {}) {
   };
 }
 
-/** 机器上报的一条（只有机器轴选中一台在线机器时才用得到）。 */
+/**
+ * 机器上报的一条（只有机器轴选中一台在线机器时才用得到）。
+ *
+ * 带着 `peerFingerprint: "fp-1"` 是照实模拟：这是一条**在这台机器上**开的对话
+ * （桌面端 / 本机 daemon），daemon 的 `session.list` 对浏览器这个调用方会如实交出
+ * 它的发起端。省略 origin 说的是另一件事——「发起端就是本次调用的这一端」，也就是
+ * 浏览器自己（见 chatRows.machineRowOrigin）；拿它当「这台机器」用会把两个身份
+ * 混作一谈。
+ */
 const summary = {
   sessionId: 42,
+  peerFingerprint: "fp-1",
   title: "重构登录页",
   agentSyncId: "ag-1",
   cwd: "/home/agent/proj",
@@ -367,6 +382,38 @@ describe("对话页 = 统一会话索引", () => {
     expect(screen.getByText("Desktop connected")).toBeTruthy();
   });
 
+  it("浏览器发起、agentred 承载的项目会话：按承载机器打开详情", async () => {
+    stubApi({
+      mirror: [
+        mirrored({
+          peer_fingerprint: "fp-web",
+          machine_fingerprint: "fp-1",
+          project_sync_id: "p-1",
+          title: "从浏览器派发的会话",
+        }),
+      ],
+      devices: [agentred],
+      projects: [
+        {
+          sync_id: "p-1",
+          name: "agentre-server",
+          color: "agent-11",
+          sort_order: 0,
+        },
+      ],
+    });
+    renderChat("/chat?axis=project");
+
+    fireEvent.click(
+      await screen.findByRole("link", { name: /从浏览器派发的会话/ }),
+    );
+
+    const embedded = await screen.findByTestId("embedded-session-detail");
+    expect(embedded.getAttribute("data-device-id")).toBe("1");
+    expect(embedded.getAttribute("data-session-id")).toBe("42");
+    expect(embedded.getAttribute("data-peer-fingerprint")).toBe("fp-web");
+  });
+
   /**
    * 本轮的主场景（决策 10）：执行机关掉之后，那条对话回到它该在的项目组里，
    * 标题 / 状态 / 归属一应俱全，「离线」退化成第二行末尾的一段字——不再是
@@ -573,7 +620,14 @@ describe("对话页:机器轴", () => {
     stubApi({ mirror: [], devices: [agentred, desktop] });
     relayByMachine({
       "fp-1": [{ ...summary, sessionId: 61, title: "小主机上跑着的" }],
-      "fp-desktop": [{ ...summary, sessionId: 62, title: "MacBook 上跑着的" }],
+      "fp-desktop": [
+        {
+          ...summary,
+          sessionId: 62,
+          peerFingerprint: "fp-desktop",
+          title: "MacBook 上跑着的",
+        },
+      ],
     });
     renderChat("/chat?axis=machine");
 
@@ -667,6 +721,49 @@ describe("对话页:机器轴", () => {
         },
       ]),
     );
+  });
+
+  /**
+   * 这一条盯的是**省略 origin 的语义**。`session.list` 只在「发起端不是调用方自己」
+   * 时才交出 `peerFingerprint`（daemon 的 session_catchup.List：`row.PeerFingerprint
+   * != peer` 才写）。所以从这个浏览器派发出去的对话，机器报回来的那份是**空的**，
+   * 而它的账号身份是浏览器自己的中继标识（`relayTicket.clientId`）。
+   *
+   * 空 origin 兜底成「这台机器自己」的话，行键就变成 `<机器指纹>:<会话号>`，跟镜像里
+   * 那条 `<浏览器标识>:<会话号>` 永远对不上：账号里明明保存了，机器轴上每一条都还
+   * 挂着「保存」；按下去写进去的又是一条以机器指纹冒充发起端的假记录。
+   */
+  it("这台机器上、由本浏览器发起的那条:空 origin 认作本浏览器,已保存的不再摆「保存」", async () => {
+    // 关键：机器报回来的这一条**不带** origin —— 它是从这个浏览器派出去的。
+    const fromThisBrowser = {
+      ...summary,
+      sessionId: 99,
+      peerFingerprint: undefined,
+      title: "控制台开的",
+    };
+    stubApi({
+      mirror: [
+        mirrored({
+          peer_fingerprint: "fp-web",
+          machine_fingerprint: "fp-1",
+          session_id: "99",
+          title: "控制台开的",
+        }),
+      ],
+      devices: [agentred],
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [fromThisBrowser] };
+      throw new Error("unexpected method: " + method);
+    });
+    renderChat("/chat?axis=machine");
+
+    await screen.findByText("控制台开的");
+    // 账号里已经有它了：行尾不该再有「保存」。
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByTestId("row-save-fp-1:99")).toBeNull();
   });
 
   it("离线的机器:组头在、标离线、一行都不列(规格 2026-08-19 决策 11)", async () => {
@@ -850,7 +947,14 @@ describe("对话页:机器轴", () => {
     stubApi({ mirror: [], devices: [agentred, desktop] });
     relayByMachine({
       "fp-1": [{ ...summary, sessionId: 61, title: "小主机上跑着的" }],
-      "fp-desktop": [{ ...summary, sessionId: 62, title: "MacBook 上跑着的" }],
+      "fp-desktop": [
+        {
+          ...summary,
+          sessionId: 62,
+          peerFingerprint: "fp-desktop",
+          title: "MacBook 上跑着的",
+        },
+      ],
     });
     renderChat("/chat?axis=machine&machine=1");
 
@@ -871,7 +975,14 @@ describe("对话页:机器轴", () => {
     stubApi({ mirror: [], devices: [agentred, desktop] });
     relayByMachine({
       // 发起端是 MacBook，它自己报的那条不带 origin（「省略 = 调用方自己的对端」）。
-      "fp-desktop": [{ ...summary, sessionId: 88, title: "两台都在报的" }],
+      "fp-desktop": [
+        {
+          ...summary,
+          sessionId: 88,
+          peerFingerprint: "fp-desktop",
+          title: "两台都在报的",
+        },
+      ],
       // 跑在小主机上，因此小主机也报它，并如实标出发起端。
       "fp-1": [
         {
@@ -1452,6 +1563,39 @@ describe("对话页：未读", () => {
             p.get("axis") === "time",
         ),
       ).toBe(true),
+    );
+  });
+
+  it("详情确认标记已读后立即重取索引并清掉旧的未读数", async () => {
+    let unread = 1;
+    stubApi({
+      mirror: [mirrored()],
+      devices: [agentred],
+      index: (params) => {
+        const items = [mirrored()];
+        if (isWaitingProbe(params))
+          return {
+            total: unread,
+            groups: [{ scope: "time", total: unread, items }],
+          };
+        return { total: 1, groups: [{ scope: "time", total: 1, items }] };
+      },
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    await screen.findByText("重构登录页");
+    expect(screen.getByTestId("filter-chip-unread").textContent).toContain("1");
+    fireEvent.click(screen.getByText("重构登录页"));
+    await screen.findByTestId("embedded-session-detail");
+
+    unread = 0;
+    fireEvent.click(screen.getByRole("button", { name: "marked-read" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("filter-chip-unread").textContent,
+      ).not.toContain("1"),
     );
   });
 });

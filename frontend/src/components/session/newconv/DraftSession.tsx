@@ -1,6 +1,7 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
   AgentAvatar,
+  MESSAGE_AVATAR_CLASS,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -458,7 +459,11 @@ function DraftPending({ agent, text }: { agent: NewConvAgent; text: string }) {
           sessionId={0}
           agentName={agent.name}
           agentAvatar={
-            <AgentAvatar name={agent.name} color={agent.avatar_color} />
+            <AgentAvatar
+              name={agent.name}
+              color={agent.avatar_color}
+              className={MESSAGE_AVATAR_CLASS}
+            />
           }
           streaming
           pendingAssistant

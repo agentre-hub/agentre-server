@@ -23,6 +23,7 @@
   "fromProject": "从项目里挑一个 Agent",
   "projects": "项目",
   "noProjects": "还没有项目。",
+  "noProjectsYetHint": "先在左栏的「项目」旁边新建一个项目，把 Agent 加进去，就能从这里开项目对话了。",
   "noAgentsInProject": "这个项目里还没有 Agent。",
   "directMembers": "直接成员",
   "inheritedMembers": "继承自父项目",

@@ -160,6 +160,49 @@ describe("native control guardrail", () => {
   });
 });
 
+describe("secure context guardrail", () => {
+  // 本站用 http 部署（`http://coding.local:8443`），那是非安全上下文：
+  // `crypto.randomUUID` 在规范里带 [SecureContext]，在那里根本不存在，调用直接抛
+  // TypeError。2026-08-30 它就抛在派发逻辑里，被草稿页译成了「连不上 coding」。
+  // 随机标识只有 `@/lib/randomId` 一处实现，它退到没有这层门槛的 getRandomValues。
+  it.each([
+    ["direct call", `export const a = crypto.randomUUID();`],
+    ["window-qualified call", `export const a = window.crypto.randomUUID();`],
+    [
+      "inside a template literal",
+      "export const a = `web-pi-generation-${crypto.randomUUID()}`;",
+    ],
+  ])("rejects %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.ts", code);
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    [
+      "the shared helper",
+      `import { randomId } from "@/lib/randomId";
+export const a = randomId();`,
+    ],
+    // getRandomValues 没有安全上下文门槛，http 上照常可用。
+    [
+      "getRandomValues",
+      `export const a = crypto.getRandomValues(new Uint8Array(16));`,
+    ],
+  ])("accepts %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.ts", code);
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+  });
+
+  // 实现本身必须调得动它 —— 豁免只此一处，靠文件名表达。
+  it("exempts the helper that owns the fallback", async () => {
+    const messages = await lintAs(
+      "src/lib/randomId.ts",
+      `export const a = crypto.randomUUID();`,
+    );
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+  });
+});
+
 describe("i18n guardrail", () => {
   it.each([
     ["literal JSX text", `export const a = () => <div>Save changes</div>;`],

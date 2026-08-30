@@ -4,12 +4,8 @@ github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7Oputl
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
 github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc=
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260827083250-92857be1c470 h1:riHLXjXR8elcBmQrwFmHC7dqCqvpYadddXx5mTIwS08=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260827083250-92857be1c470/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260828061915-255058975ab2 h1:4CItKzhdBNuWywS4nTxN/8TkSGIJuq8KwoCkZt2TK70=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260828061915-255058975ab2/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260828074017-460859ddaada h1:UEq538mBL+QUQoMNhlQZYMCP3bYGrDk6/b6exDR3B74=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260828074017-460859ddaada/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260830074150-3f538e9dc3e8 h1:az7iyB+AoT+nJVT/Hrwidb5+kEGeEj+UI9/JFE4Q2oY=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260830074150-3f538e9dc3e8/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a h1:HbKu58rmZpUGpz5+4FfNmIU+FmZg2P3Xaj2v2bfNWmk=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
 github.com/alicebob/miniredis/v2 v2.32.1 h1:Bz7CciDnYSaa0mX5xODh6GUITRSx+cVhjNoOR4JssBo=
@@ -27,8 +23,6 @@ github.com/bytedance/sonic v1.12.5/go.mod h1:B8Gt/XvtZ3Fqj+iSKMypzymZxw/FVwgIGKz
 github.com/bytedance/sonic/loader v0.1.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
 github.com/bytedance/sonic/loader v0.2.1 h1:1GgorWTqf12TA8mma4DDSbaQigE2wOgQo7iCjjJv3+E=
 github.com/bytedance/sonic/loader v0.2.1/go.mod h1:ncP89zfokxS5LZrJxl5z0UJcsk4M4yY2JpfqGeCtNLU=
-github.com/cago-frame/cago v0.0.0-20260423074423-9a4902409f48 h1:sTkPF1sq/O285geBLCxZ2KM0zKi+APAST5phiBCmsPQ=
-github.com/cago-frame/cago v0.0.0-20260423074423-9a4902409f48/go.mod h1:Z1Ej4kHLccX0njPnJA5K0eawJLC7VgwtcLegt38IjQA=
 github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729 h1:HtiDxeq5rPdJaRQI7XzJbly1WPCeLKaEa9txs2SKnFM=
 github.com/cago-frame/cago v0.0.0-20260609091633-ba2f550b2729/go.mod h1:Z1Ej4kHLccX0njPnJA5K0eawJLC7VgwtcLegt38IjQA=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=

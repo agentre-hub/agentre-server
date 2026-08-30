@@ -138,7 +138,18 @@ export function ProjectAgentPane({
             </div>
           )}
           <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
-            {members.direct.length === 0 && members.inherited.length === 0 ? (
+            {/* 一个项目都还没有：这一半不能谈论「这个项目」——没有那个项目。
+                左边已经说了「还没有项目」，这里接着说该去哪儿建，而不是让两句话
+                一起把用户送去找一个不存在的项目。 */}
+            {!selectedProject ? (
+              <p
+                data-testid="project-none-yet"
+                className="text-sm text-muted-foreground"
+              >
+                {t("chat.noProjectsYetHint")}
+              </p>
+            ) : members.direct.length === 0 &&
+              members.inherited.length === 0 ? (
               <p
                 data-testid="project-agents-empty"
                 className="text-sm text-muted-foreground"

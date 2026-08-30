@@ -292,6 +292,9 @@ export function useSessionIndex({
     async (row: IndexRow) => {
       const entry: MirroredSession = {
         peer_fingerprint: row.fingerprint,
+        machine_fingerprint:
+          devices.find((d) => d.id === row.deviceId)?.fingerprint ??
+          row.fingerprint,
         session_id: String(row.sessionId),
         title: row.title,
         agent_sync_id: row.agentSyncId || undefined,

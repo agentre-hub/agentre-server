@@ -235,6 +235,9 @@ type SavedSessionSummaryView struct {
 	// PeerFingerprint 是发起这条对话那一端的设备指纹（决策 17 的身份键的一半），
 	// 不是此刻承载它的那台机器；详情页发消息要用它定位承载连接的目标。
 	PeerFingerprint string
+	// MachineFingerprint 是承载这条对话、详情页实际要连接的账号设备；它与发起端
+	// 可以不同（浏览器派发到 agentred 时就是不同值）。
+	MachineFingerprint string
 	// SessionID 是发起端本地自增的会话标识，服务端只当不透明指针；配
 	// PeerFingerprint 才是完整身份。
 	SessionID string

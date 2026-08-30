@@ -1,18 +1,12 @@
 import { api } from "@/lib/api";
+import { randomId } from "@/lib/randomId";
 
 const CLIENT_ID_KEY = "agentre.browserClientId";
-
-function createClientId(): string {
-  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 export function browserClientId(): string {
   const existing = storedBrowserClientId();
   if (existing) return existing;
-  const created = createClientId();
+  const created = randomId();
   localStorage.setItem(CLIENT_ID_KEY, created);
   return created;
 }

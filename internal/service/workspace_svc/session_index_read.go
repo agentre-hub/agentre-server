@@ -609,17 +609,18 @@ func (s *workspaceSvc) viewsOf(
 	out := make([]SavedSessionSummaryView, 0, len(rows))
 	for _, r := range rows {
 		view := SavedSessionSummaryView{
-			PeerFingerprint: r.PeerFingerprint,
-			SessionID:       r.PeerSessionID,
-			Title:           r.Title,
-			AgentSyncID:     r.AgentSyncID,
-			BackendType:     r.BackendType,
-			LifecycleState:  r.LifecycleState,
-			WaitingForInput: r.WaitingForInput,
-			LastMessageAt:   r.LastMessageAt,
-			LastReadAt:      r.LastReadAt,
-			ProviderKey:     r.ProviderKey,
-			ModelKey:        r.ModelKey,
+			PeerFingerprint:    r.PeerFingerprint,
+			MachineFingerprint: r.MachineFingerprint,
+			SessionID:          r.PeerSessionID,
+			Title:              r.Title,
+			AgentSyncID:        r.AgentSyncID,
+			BackendType:        r.BackendType,
+			LifecycleState:     r.LifecycleState,
+			WaitingForInput:    r.WaitingForInput,
+			LastMessageAt:      r.LastMessageAt,
+			LastReadAt:         r.LastReadAt,
+			ProviderKey:        r.ProviderKey,
+			ModelKey:           r.ModelKey,
 		}
 		// Cwd 只在这里参与一次比较，判完立刻出局——它本身永不进入 View（R19）。
 		view.ProjectSyncID = affinity.projectOf(r.ProjectSyncID, r.PeerFingerprint, r.Cwd)
