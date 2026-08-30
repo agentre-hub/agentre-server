@@ -185,6 +185,28 @@ describe("共享包发布的样式表一份都不能漏", () => {
   });
 });
 
+describe("Tailwind 能扫描共享包的组件类名", () => {
+  const sourceRoots = [...css.matchAll(/@source\s+"([^"]+)";/g)]
+    .map(([, source]) => source)
+    .filter((source) => source.includes("@agentre-hub/agentre-ui"))
+    .map((source) => source.slice(0, source.search(/[*!{]/)))
+    .map((source) =>
+      path.resolve(path.dirname(GLOBALS_CSS), source.replace(/\/$/, "")),
+    );
+
+  it("共享包的 @source 扫描根真实存在", () => {
+    expect(
+      sourceRoots.length,
+      "globals.css 没有声明共享包的 @source",
+    ).toBeGreaterThan(0);
+    expect(
+      sourceRoots.filter((sourceRoot) => !fs.existsSync(sourceRoot)),
+      "@source 指向不存在的目录时 Tailwind 不会报错，只会漏掉共享组件的 utility；" +
+        "Lucide 图标会因此退回默认的 24px。",
+    ).toEqual([]);
+  });
+});
+
 /**
  * 圆角三档的期望值，从**包的声明算出来**而不是手抄一张表。
  *

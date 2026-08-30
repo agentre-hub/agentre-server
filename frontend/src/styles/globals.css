@@ -40,9 +40,14 @@
    不加这一行，包里的卡片会照常渲染 DOM，但一条样式都不生成——界面是散架的，
    而且构建不报错，只能靠眼睛发现。
 
-   只扫 dist（产物），不扫包的 src：src 里有守卫用例的「违规样本」，
-   与上面 @source not 排除本仓库测试是同一个理由。 */
-@source "../../node_modules/@agentre-hub/agentre-ui/dist/**/*.js";
+   包发布并导出的入口就是 src（package.json 的 files / exports 均如此），没有 dist
+   目录。这里扫描生产 ts/tsx，再显式排除测试；指向不存在的 dist 不会让 Tailwind
+   报错，只会静默漏掉 Button 对 SVG 的尺寸约束，让 Lucide 退回默认 24px。 */
+@source "../../node_modules/@agentre-hub/agentre-ui/src/**/*.ts";
+@source "../../node_modules/@agentre-hub/agentre-ui/src/**/*.tsx";
+@source not "../../node_modules/@agentre-hub/agentre-ui/src/**/*.test.ts";
+@source not "../../node_modules/@agentre-hub/agentre-ui/src/**/*.test.tsx";
+@source not "../../node_modules/@agentre-hub/agentre-ui/src/**/__tests__/**";
 
 /* Tailwind v4 没有 darkMode: 'class' 配置项了，改成显式声明 dark 变体。
    下面 `.dark { ... }` 那整块 token 靠这一行才生效——删掉它不会报错，
