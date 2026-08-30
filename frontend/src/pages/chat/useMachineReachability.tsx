@@ -1,6 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
-  decodeSessionListResult,
+  sessionListFromProtobuf,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
 import {
@@ -64,7 +64,7 @@ function MachineSessionResolver({
     client
       .request(rpcMethods.sessionList, {})
       .then((raw) => {
-        const res = decodeSessionListResult(raw);
+        const res = sessionListFromProtobuf(raw);
         onResolved(fingerprint, {
           sessions: res.sessions,
         });

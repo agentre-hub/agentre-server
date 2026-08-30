@@ -16,7 +16,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
  * 路径（Cwd）随确认派发阶段的计划到达浏览器，供屏幕 25 呈现与派发 runtime.run——
  * 这是 R19 红线在主动派活场景下的唯一例外（见 workspace_svc.WebDispatchChoice）。
  */
-import { decodeRunAck, type RunParams } from "@agentre-hub/agentre-wire";
+import { runAckFromProtobuf, type RunParams } from "@agentre-hub/agentre-wire";
 
 import { api } from "@/lib/api";
 import { RelayClient, RelayError } from "@/lib/relayClient";
@@ -159,23 +159,6 @@ export class DispatchRunError extends Error {
   }
 }
 
-/** RelayClient 交回的是 Protobuf message shape，int64 字段在浏览器里是 bigint。 */
-function decodeRPCrunAck(value: unknown) {
-  if (
-    value &&
-    typeof value === "object" &&
-    "sessionId" in value &&
-    typeof value.sessionId === "bigint"
-  ) {
-    const sessionId = Number(value.sessionId);
-    if (!Number.isSafeInteger(sessionId)) {
-      throw new TypeError("runtime.run returned an unsafe session ID");
-    }
-    return decodeRunAck({ ...value, sessionId });
-  }
-  return decodeRunAck(value);
-}
-
 /**
  * 发起：连到选中的那台 agentred → runtime.run（新会话）→ 立刻保存进账号（R16）。
  * 连接失败 / 派发失败都会抛错，由界面就地说明，不静默。
@@ -254,13 +237,13 @@ export async function dispatchNewConversation(
       const generationOwner = `web-pi-generation-${crypto.randomUUID()}`;
       const piParams = { ...params, permissionMode: generationOwner };
       try {
-        const registration = decodeRPCrunAck(await requestRun(piParams));
+        const registration = runAckFromProtobuf(await requestRun(piParams));
         if (registration.sessionId !== params.sessionId) {
           throw new DispatchRunError(
             new Error("Pi registration acknowledged a different session"),
           );
         }
-        const prepared = decodeRPCrunAck(await requestRun(piParams));
+        const prepared = runAckFromProtobuf(await requestRun(piParams));
         const providerSessionId = prepared.providerSessionId?.trim() ?? "";
         if (
           prepared.sessionId !== params.sessionId ||
@@ -270,7 +253,7 @@ export async function dispatchNewConversation(
             new Error("Pi preparation returned an invalid session identity"),
           );
         }
-        ack = decodeRPCrunAck(
+        ack = runAckFromProtobuf(
           await requestRun({
             ...piParams,
             providerSessionId,
@@ -298,7 +281,7 @@ export async function dispatchNewConversation(
       const raw = await requestRun({
         ...params,
       });
-      ack = decodeRPCrunAck(raw);
+      ack = runAckFromProtobuf(raw);
     }
     // R16 的发起即保存是派发**成功之后**的收尾:ack 一到手,那台机器上就已经真真切切
     // 多了一条会话。保存写失败只是这条不会自动出现在「对话」页(用户仍能在会话详情

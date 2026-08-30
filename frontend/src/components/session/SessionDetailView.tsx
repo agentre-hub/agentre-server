@@ -1,6 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
-  decodeSessionListResult,
+  sessionListFromProtobuf,
   SessionLifecycleRunning,
   type EventFrame,
   type SessionSummary,
@@ -414,7 +414,7 @@ export default function SessionDetailView({
       (async () => {
         try {
           const listRaw = await client.request(rpcMethods.sessionList, {});
-          const list = decodeSessionListResult(listRaw);
+          const list = sessionListFromProtobuf(listRaw);
           const s = list.sessions.find((x) => x.sessionId === sid);
           // origin 在 attach 之前就得学到（下一行就要用它）。
           const origin = s?.peerFingerprint?.trim() || undefined;

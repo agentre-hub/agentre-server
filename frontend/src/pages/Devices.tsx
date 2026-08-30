@@ -1,5 +1,4 @@
-import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { decodeSessionListResult } from "@agentre-hub/agentre-wire";
+import { rpcMethods, sessionListFromProtobuf } from "@agentre-hub/agentre-wire";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -129,7 +128,7 @@ function useSessionCounts(
         .request(rpcMethods.sessionList, {})
         .then((raw) => {
           if (!alive()) return;
-          const res = decodeSessionListResult(raw);
+          const res = sessionListFromProtobuf(raw);
           setCounts({
             total: res.sessions.length,
             waiting: res.sessions.filter((s) => s.waitingForInput).length,
