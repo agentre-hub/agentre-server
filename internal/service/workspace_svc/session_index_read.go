@@ -178,7 +178,7 @@ var projectAffinityKinds = []string{sync_entity.KindProject, sync_entity.KindPro
 
 // projectAffinity 是判一次项目归属要的两份名单。
 type projectAffinity struct {
-	// byLocation 是账号项目树上的全部位置：(指纹, cwd) → 项目同步标识。
+	// byLocation 是账号项目树上的全部位置：(承载机器指纹, cwd) → 项目同步标识。
 	byLocation map[string]string
 	// liveProjects 是账号里还活着的项目同步标识。对端报上来的标识要先过这一关：
 	// 项目删了以后指着它的对话落回「随手对话」（决策 13），而不是变成一个只有标识、
@@ -194,12 +194,15 @@ type projectAffinity struct {
 //     按项目本机路径现算的——而且它的本机路径存在另一张表（device_local_paths、按
 //     上报设备分命名空间）里，压根不在 byLocation 这份名单中。不认它的话，桌面端的
 //     每一条对话都只能落进「随手对话」。
-//   - agentred 不报项目，拿它的落地位置去跟账号项目树上的路径比（决策 12）。
+//   - agentred 不报项目，拿它的落地位置去跟账号项目树上的路径比（决策 12）。位置的
+//     指纹那一半是**承载**这条对话的机器，不是发起端：目录长在承载机器上，账号项目
+//     树上的位置也是按 agentred 指纹配的。控制台派活时发起端是浏览器的中继标识，拿
+//     它去比的话，用户明明选了项目的对话一条都配不上位置。
 //
 // 点了名但那个项目已经不在了，就当没点：**不**再回头去比位置。位置那条路答的是
 // 「这台机器的这个目录属于哪个项目」，而报了项目的对话通常连 cwd 都没有；真要撞上
 // 一个同名位置，那也是另一个项目，把它塞进去比落进「随手对话」更难解释。
-func (a projectAffinity) projectOf(reported, peerFingerprint, cwd string) string {
+func (a projectAffinity) projectOf(reported, machineFingerprint, cwd string) string {
 	if reported != "" {
 		if a.liveProjects[reported] {
 			return reported
@@ -209,7 +212,7 @@ func (a projectAffinity) projectOf(reported, peerFingerprint, cwd string) string
 	if cwd == "" {
 		return ""
 	}
-	return a.byLocation[peerFingerprint+"\x00"+cwd]
+	return a.byLocation[machineFingerprint+"\x00"+cwd]
 }
 
 // projectLocations 读出判一次项目归属要的那两份名单。它同时供三件事用：把分组计数
@@ -260,7 +263,7 @@ func (c *projectLocationCache) get(ctx context.Context) (projectAffinity, error)
 // splitLocationKey 把 projectSyncIDByLocation 的键拆回 (指纹, cwd)。
 func splitLocationKey(key string) agent_session_repo.SummaryLocation {
 	fp, cwd, _ := strings.Cut(key, "\x00")
-	return agent_session_repo.SummaryLocation{PeerFingerprint: fp, Cwd: cwd}
+	return agent_session_repo.SummaryLocation{MachineFingerprint: fp, Cwd: cwd}
 }
 
 // locationsOfProject 是某个项目名下的全部位置；allLocations 是账号已知的全部位置
@@ -290,8 +293,8 @@ func allLocations(byLocation map[string]string) []agent_session_repo.SummaryLoca
 // 同一次查询的语句文本随机变化（查询缓存、日志与测试断言都会跟着抖）。
 func sortLocations(locations []agent_session_repo.SummaryLocation) {
 	sort.Slice(locations, func(i, j int) bool {
-		if locations[i].PeerFingerprint != locations[j].PeerFingerprint {
-			return locations[i].PeerFingerprint < locations[j].PeerFingerprint
+		if locations[i].MachineFingerprint != locations[j].MachineFingerprint {
+			return locations[i].MachineFingerprint < locations[j].MachineFingerprint
 		}
 		return locations[i].Cwd < locations[j].Cwd
 	})
@@ -557,7 +560,7 @@ func (s *workspaceSvc) projectGroupSpecs(
 	byProject := map[string]int64{}
 	var unassigned int64
 	for _, c := range counts {
-		if proj := affinity.projectOf(c.ProjectSyncID, c.PeerFingerprint, c.Cwd); proj != "" {
+		if proj := affinity.projectOf(c.ProjectSyncID, c.MachineFingerprint, c.Cwd); proj != "" {
 			byProject[proj] += c.Total
 			continue
 		}
@@ -623,7 +626,7 @@ func (s *workspaceSvc) viewsOf(
 			ModelKey:           r.ModelKey,
 		}
 		// Cwd 只在这里参与一次比较，判完立刻出局——它本身永不进入 View（R19）。
-		view.ProjectSyncID = affinity.projectOf(r.ProjectSyncID, r.PeerFingerprint, r.Cwd)
+		view.ProjectSyncID = affinity.projectOf(r.ProjectSyncID, r.MachineFingerprint, r.Cwd)
 		out = append(out, view)
 	}
 	return out, nil

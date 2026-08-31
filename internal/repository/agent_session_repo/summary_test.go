@@ -238,22 +238,26 @@ func TestListSummariesPage_AgentScope_EmptyStringIsTheUnnamedGroup(t *testing.T)
 // 项目轴的一组有两拨会话，判据因此是**或**：对端自己报了这个项目的（桌面端），
 // 以及没报项目、但位置落在该项目任一位置上的（agentred，决策 12）。
 //
-// 位置是 (发起端指纹, cwd) 这个**对**，不是 cwd 单独一列：同一个路径在两台机器上是
+// 位置是 (承载机器指纹, cwd) 这个**对**，不是 cwd 单独一列：同一个路径在两台机器上是
 // 两个不同的地方。两半写成**与**的话这一组一条都取不到——没有哪条会话两边都占。
+//
+// 指纹那一半取自保存名单（承载这条对话的那台机器），不是 agent_sessions 的
+// peer_fingerprint：浏览器派出去的对话，发起端是浏览器，配不上任何机器上的路径。
 func TestListSummariesPage_ProjectScope_MatchesReportedOrLocated(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"(project_sync_id=? OR (project_sync_id='' AND (peer_fingerprint, cwd) IN ((?,?),(?,?))))")).
+		"(project_sync_id=? OR (project_sync_id='' AND ("+machineFingerprintExpr+
+			", cwd) IN ((?,?),(?,?))))")).
 		WithArgs(int64(7), "proj-1", "fp-a", "/repo/x", "fp-b", "/repo/y", 50).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
 	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
 		SummaryQuery: SummaryQuery{UserID: 7, ProjectMode: ProjectIs, ProjectSyncID: "proj-1",
 			Locations: []SummaryLocation{
-				{PeerFingerprint: "fp-a", Cwd: "/repo/x"},
-				{PeerFingerprint: "fp-b", Cwd: "/repo/y"},
+				{MachineFingerprint: "fp-a", Cwd: "/repo/x"},
+				{MachineFingerprint: "fp-b", Cwd: "/repo/y"},
 			}},
 		Limit: 50,
 	})
@@ -287,13 +291,13 @@ func TestListSummariesPage_UnassignedProjectScope_ExcludesReportedAndKnownLocati
 	r := NewSummary()
 
 	mock.ExpectQuery(regexp.QuoteMeta("project_sync_id=''")+`.*`+
-		regexp.QuoteMeta("(peer_fingerprint, cwd) NOT IN ((?,?))")).
+		regexp.QuoteMeta("("+machineFingerprintExpr+", cwd) NOT IN ((?,?))")).
 		WithArgs(int64(7), "fp-a", "/repo/x", 50).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
 	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
 		SummaryQuery: SummaryQuery{UserID: 7, ProjectMode: ProjectUnassigned,
-			Locations: []SummaryLocation{{PeerFingerprint: "fp-a", Cwd: "/repo/x"}}},
+			Locations: []SummaryLocation{{MachineFingerprint: "fp-a", Cwd: "/repo/x"}}},
 		Limit: 50,
 	})
 	require.NoError(t, err)
@@ -389,9 +393,9 @@ func TestCountSummariesByProjectKey_GroupsByReportedProjectAndLocation(t *testin
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
-	mock.ExpectQuery(regexp.QuoteMeta("GROUP BY `project_sync_id`,`peer_fingerprint`,`cwd`")).
+	mock.ExpectQuery(regexp.QuoteMeta("GROUP BY `project_sync_id`,`machine_fingerprint`,`cwd`")).
 		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"project_sync_id", "peer_fingerprint", "cwd", "total"}).
+		WillReturnRows(sqlmock.NewRows([]string{"project_sync_id", "machine_fingerprint", "cwd", "total"}).
 			AddRow("", "fp-a", "/repo/x", int64(3)).
 			AddRow("proj-1", "fp-desktop", "", int64(2)).
 			AddRow("", "fp-a", "", int64(1)))
@@ -399,9 +403,9 @@ func TestCountSummariesByProjectKey_GroupsByReportedProjectAndLocation(t *testin
 	got, err := r.CountSummariesByProjectKey(ctx, SummaryQuery{UserID: 7})
 	require.NoError(t, err)
 	assert.Equal(t, []SummaryProjectKeyCount{
-		{SummaryProjectKey: SummaryProjectKey{PeerFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 3},
-		{SummaryProjectKey: SummaryProjectKey{ProjectSyncID: "proj-1", PeerFingerprint: "fp-desktop"}, Total: 2},
-		{SummaryProjectKey: SummaryProjectKey{PeerFingerprint: "fp-a"}, Total: 1},
+		{SummaryProjectKey: SummaryProjectKey{MachineFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 3},
+		{SummaryProjectKey: SummaryProjectKey{ProjectSyncID: "proj-1", MachineFingerprint: "fp-desktop"}, Total: 2},
+		{SummaryProjectKey: SummaryProjectKey{MachineFingerprint: "fp-a"}, Total: 1},
 	}, got)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

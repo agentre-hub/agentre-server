@@ -83,9 +83,9 @@ func TestSessionIndex_ProjectAxis_FoldsLocationCountsIntoProjects(t *testing.T) 
 	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(int64(10), nil)
 	mSummary.EXPECT().CountSummariesByProjectKey(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(
 		[]agent_session_repo.SummaryProjectKeyCount{
-			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{PeerFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 4},
-			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{PeerFingerprint: "fp-b", Cwd: "/repo/y"}, Total: 3},
-			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{PeerFingerprint: "fp-c", Cwd: "/elsewhere"}, Total: 3},
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{MachineFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 4},
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{MachineFingerprint: "fp-b", Cwd: "/repo/y"}, Total: 3},
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{MachineFingerprint: "fp-c", Cwd: "/elsewhere"}, Total: 3},
 		}, nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).
 		Return([]*agent_session_entity.SessionSummary{}, nil).AnyTimes()
@@ -215,7 +215,7 @@ func TestSessionIndex_UnassignedProjectScope_NegatesEveryKnownLocation(t *testin
 	want := agent_session_repo.SummaryQuery{
 		UserID:      7,
 		ProjectMode: agent_session_repo.ProjectUnassigned,
-		Locations:   []agent_session_repo.SummaryLocation{{PeerFingerprint: "fp-a", Cwd: "/repo/x"}},
+		Locations:   []agent_session_repo.SummaryLocation{{MachineFingerprint: "fp-a", Cwd: "/repo/x"}},
 	}
 	mSummary.EXPECT().CountSummaries(ctx, want).Return(int64(3), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
@@ -265,7 +265,7 @@ func TestSessionIndex_RowsCarryProjectAttributionWithoutCwd(t *testing.T) {
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-a", PeerSessionID: "1", Cwd: "/repo/x", Title: "t"},
+		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", PeerSessionID: "1", Cwd: "/repo/x", Title: "t"},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
@@ -293,7 +293,11 @@ func TestSessionIndex_AxisSkeleton_ReadsProjectLocationsOnce(t *testing.T) {
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).DoAndReturn(
 		func(_ context.Context, q agent_session_repo.SummaryPageQuery) ([]*agent_session_entity.SessionSummary, error) {
 			return []*agent_session_entity.SessionSummary{
-				{PeerFingerprint: *q.PeerFingerprint, PeerSessionID: "1", Cwd: "/repo/x"},
+				// 这一档上的会话由那台机器自己发起，承载机器就是它自己。
+				{
+					PeerFingerprint: *q.PeerFingerprint, MachineFingerprint: *q.PeerFingerprint,
+					PeerSessionID: "1", Cwd: "/repo/x",
+				},
 			}, nil
 		}).Times(3)
 
@@ -371,7 +375,7 @@ func TestSessionIndex_RowFromAgentred_StillResolvedByLocation(t *testing.T) {
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-a", PeerSessionID: "1", Cwd: "/repo/x", Title: "t"},
+		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", PeerSessionID: "1", Cwd: "/repo/x", Title: "t"},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
@@ -396,13 +400,13 @@ func TestSessionIndex_ProjectAxis_CountsReportedProjectsAlongsideLocations(t *te
 		[]agent_session_repo.SummaryProjectKeyCount{
 			// agentred：没报项目，位置配得上 proj-1。
 			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{
-				PeerFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 4},
+				MachineFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 4},
 			// 桌面端：报了 proj-1，没有 cwd。
 			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{
-				PeerFingerprint: "fp-desktop", ProjectSyncID: "proj-1"}, Total: 3},
+				MachineFingerprint: "fp-desktop", ProjectSyncID: "proj-1"}, Total: 3},
 			// 哪一头都对不上。
 			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{
-				PeerFingerprint: "fp-c", Cwd: "/elsewhere"}, Total: 2},
+				MachineFingerprint: "fp-c", Cwd: "/elsewhere"}, Total: 2},
 		}, nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).
 		Return([]*agent_session_entity.SessionSummary{}, nil).AnyTimes()
@@ -432,7 +436,7 @@ func TestSessionIndex_ProjectScope_AsksForBothReportedAndLocated(t *testing.T) {
 		UserID:        7,
 		ProjectMode:   agent_session_repo.ProjectIs,
 		ProjectSyncID: "proj-1",
-		Locations:     []agent_session_repo.SummaryLocation{{PeerFingerprint: "fp-a", Cwd: "/repo/x"}},
+		Locations:     []agent_session_repo.SummaryLocation{{MachineFingerprint: "fp-a", Cwd: "/repo/x"}},
 	}
 	mSummary.EXPECT().CountSummaries(ctx, want).Return(int64(7), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
@@ -480,4 +484,64 @@ func TestWaitingCount_NothingWaitingIsZeroNotAnError(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Zero(t, got)
+}
+
+// 浏览器发起、落在 agentred 上的那条对话：位置那一半的指纹必须是**承载**它的那台
+// 机器（machine_fingerprint），不是发起端。web 派发时发起端是这个浏览器的中继标识，
+// 而项目位置是按 agentred 指纹配的；拿发起端去比，凡是从控制台里选着项目发起的对话
+// 都配不上任何位置，全部落进「随手对话」——用户明明选了项目。
+func TestSessionIndex_WebDispatchedRow_ResolvesProjectByHostingMachine(t *testing.T) {
+	ctx, mSummary, _, mObj, svc := setupMirrorReadTest(t)
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
+		[]*sync_entity.SyncObject{
+			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
+			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+				AgentredFingerprint: "machine-fp", Payload: mustJSON(t, map[string]any{"path": "/root/code"})},
+		}, nil).AnyTimes()
+	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
+		{
+			PeerFingerprint: "browser-fp", MachineFingerprint: "machine-fp",
+			PeerSessionID: "1", Cwd: "/root/code", Title: "看看目录",
+		},
+	}, nil)
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, "proj-1", page.Items[0].ProjectSyncID)
+}
+
+// 项目轴的组计数走的是同一条判据：仓储数出来的位置那一半也必须是承载机器，否则
+// 「测试」那一组的条数是 0、它们全被数进「未归项目」。
+func TestSessionIndex_ProjectAxis_FoldsCountsByHostingMachine(t *testing.T) {
+	ctx, mSummary, _, mObj, svc := setupMirrorReadTest(t)
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
+		[]*sync_entity.SyncObject{
+			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
+			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+				AgentredFingerprint: "machine-fp", Payload: mustJSON(t, map[string]any{"path": "/root/code"})},
+		}, nil).AnyTimes()
+	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(int64(2), nil)
+	mSummary.EXPECT().CountSummariesByProjectKey(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(
+		[]agent_session_repo.SummaryProjectKeyCount{
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{
+				MachineFingerprint: "machine-fp", Cwd: "/root/code"}, Total: 2},
+		}, nil)
+	var asked []agent_session_repo.SummaryLocation
+	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).DoAndReturn(
+		func(_ context.Context, q agent_session_repo.SummaryPageQuery) ([]*agent_session_entity.SessionSummary, error) {
+			asked = q.Locations
+			return nil, nil
+		}).AnyTimes()
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisProject})
+	require.NoError(t, err)
+	require.Len(t, page.Groups, 1)
+	assert.Equal(t, "project:proj-1", page.Groups[0].Scope)
+	assert.Equal(t, int64(2), page.Groups[0].Total)
+	require.Len(t, asked, 1)
+	assert.Equal(t, "machine-fp", asked[0].MachineFingerprint)
 }

@@ -48,7 +48,7 @@ type SummaryRepo interface {
 	CountSummariesByAgent(ctx context.Context, q SummaryQuery) (map[string]int64, error)
 	CountSummariesByPeer(ctx context.Context, q SummaryQuery) (map[string]int64, error)
 	// CountSummariesByProjectKey 按「据以判定项目归属的那一组值」聚合：对端自己报的
-	// project_sync_id，加上 (发起端指纹, cwd) 这个位置。
+	// project_sync_id，加上 (承载机器指纹, cwd) 这个位置。
 	//
 	// 折算成项目仍然是**服务层**的事，SQL 一步都不做：报上来的标识可能指着一个已经
 	// 被删掉的项目（决策 13：那样的对话落回未归项目），而位置要拿去跟账号项目树比
@@ -83,12 +83,17 @@ type SummaryCursor struct {
 // 它们的游标 ID 不为 0，因此不会被误判成起点。
 func (c SummaryCursor) IsZero() bool { return c.LastMessageAt == 0 && c.ID == 0 }
 
-// SummaryLocation 是一条对话的落地位置：(发起端指纹, cwd)。项目归属就是拿它跟账号
+// SummaryLocation 是一条对话的落地位置：(承载机器指纹, cwd)。项目归属就是拿它跟账号
 // 项目树上的位置比出来的——**指纹是这个键的一半**：同一个路径在两台机器上是两个
 // 不同的地方。
+//
+// 指纹这一半是**承载**这条对话的那台机器（agent_session_saves 记的
+// device_fingerprint），不是发起端：目录长在承载机器上，账号项目树上的位置也是按
+// agentred 指纹配的。两者只在对话由那台机器自己发起时才相等；浏览器从控制台派活时
+// 发起端是浏览器的中继标识，拿它去比，选着项目发起的对话一条都配不上位置。
 type SummaryLocation struct {
-	PeerFingerprint string
-	Cwd             string
+	MachineFingerprint string
+	Cwd                string
 }
 
 // SummaryProjectKey 是一条对话据以判定项目归属的那一组值。它有两半，因为两种对端
@@ -96,14 +101,14 @@ type SummaryLocation struct {
 //
 //   - ProjectSyncID：桌面端自己点的名。它没有「这条会话的 cwd」这种东西（工作目录
 //     是每轮按项目本机路径现算的），项目同步标识才是它手里真实存在的那一维。
-//   - PeerFingerprint + Cwd：agentred 的落地位置，拿去跟账号项目树上的路径比
-//     （决策 12）。**指纹是这个键的一半**：同一个路径在两台机器上是两个不同的地方。
+//   - MachineFingerprint + Cwd：agentred 的落地位置，拿去跟账号项目树上的路径比
+//     （决策 12）。**指纹是这个键的一半**，而且是承载机器那一半，理由见 SummaryLocation。
 //
 // 一条对话上只会有一半非空。非空的那一半就是它的判据，两者不相加也不互相覆盖。
 type SummaryProjectKey struct {
-	ProjectSyncID   string
-	PeerFingerprint string
-	Cwd             string
+	ProjectSyncID      string
+	MachineFingerprint string
+	Cwd                string
 }
 
 // SummaryProjectKeyCount 是同一组判据下有多少条对话。
@@ -213,14 +218,26 @@ func (r *summaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]
 	return out, nil
 }
 
+// machineFingerprintExpr 是「承载这条对话的那台机器」的取值式：保存名单里记的
+// device_fingerprint。它既投影进读模型，也参与项目位置的判据，所以只有这一份——
+// 两处各写一遍就会在下一次演化里分家，而分家的那一天索引会安静地把对话分错组。
+//
+// 子查询至多一行：agent_session_saves 的唯一键正是 (user_id, peer_fingerprint,
+// peer_session_id)。
+//
+// 外面套 COALESCE 是因为这个式子也进 WHERE：名单里没有这条对话时子查询给 NULL，而
+// `(NULL, cwd) NOT IN (…)` 判出的是 NULL 而不是真——那条对话会同时掉出「某个项目」
+// 与「未归项目」两组，从项目轴上整个消失。空串配不上任何位置，于是它老老实实落进
+// 「未归项目」。
+const machineFingerprintExpr = "COALESCE((SELECT device_fingerprint FROM agent_session_saves " +
+	"WHERE agent_session_saves.user_id=agent_sessions.user_id " +
+	"AND agent_session_saves.peer_fingerprint=agent_sessions.peer_fingerprint " +
+	"AND agent_session_saves.peer_session_id=agent_sessions.peer_session_id LIMIT 1), '')"
+
 // withMachineFingerprint 把保存名单里记录的承载机器投影到摘要读模型。会话身份仍是
 // (账号, 发起端, 会话标识)；浏览器发起的会话不能拿发起端指纹冒充承载机器。
 func withMachineFingerprint(tx *gorm.DB) *gorm.DB {
-	return tx.Select("agent_sessions.*, (SELECT device_fingerprint FROM agent_session_saves " +
-		"WHERE agent_session_saves.user_id=agent_sessions.user_id " +
-		"AND agent_session_saves.peer_fingerprint=agent_sessions.peer_fingerprint " +
-		"AND agent_session_saves.peer_session_id=agent_sessions.peer_session_id LIMIT 1) " +
-		"AS machine_fingerprint")
+	return tx.Select("agent_sessions.*, " + machineFingerprintExpr + " AS machine_fingerprint")
 }
 
 // DeleteSummary 的 WHERE 与 UpsertSummary 的冲突判定同一组列：删的必须正好是那条
@@ -265,7 +282,7 @@ func likeEscape(s string) string {
 func locationPairs(locations []SummaryLocation) [][]any {
 	pairs := make([][]any, 0, len(locations))
 	for _, l := range locations {
-		pairs = append(pairs, []any{l.PeerFingerprint, l.Cwd})
+		pairs = append(pairs, []any{l.MachineFingerprint, l.Cwd})
 	}
 	return pairs
 }
@@ -304,12 +321,13 @@ func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 		switch {
 		case q.ProjectSyncID != "" && len(q.Locations) > 0:
 			tx = tx.Where(
-				"(project_sync_id=? OR (project_sync_id='' AND (peer_fingerprint, cwd) IN ?))",
+				"(project_sync_id=? OR (project_sync_id='' AND ("+
+					machineFingerprintExpr+", cwd) IN ?))",
 				q.ProjectSyncID, locationPairs(q.Locations))
 		case q.ProjectSyncID != "":
 			tx = tx.Where("project_sync_id=?", q.ProjectSyncID)
 		case len(q.Locations) > 0:
-			tx = tx.Where("project_sync_id='' AND (peer_fingerprint, cwd) IN ?",
+			tx = tx.Where("project_sync_id='' AND ("+machineFingerprintExpr+", cwd) IN ?",
 				locationPairs(q.Locations))
 		default:
 			// 一个位置都没配、也没有任何对端点过名的项目里一条对话都没有。这里必须
@@ -323,7 +341,7 @@ func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 		tx = tx.Where("project_sync_id=''")
 		// 名单为空时「不落在任何已知位置」对每一条都成立，因此不加位置条件。
 		if len(q.Locations) > 0 {
-			tx = tx.Where("(peer_fingerprint, cwd) NOT IN ?", locationPairs(q.Locations))
+			tx = tx.Where("("+machineFingerprintExpr+", cwd) NOT IN ?", locationPairs(q.Locations))
 		}
 	case ProjectAny:
 	}
@@ -396,8 +414,9 @@ func (r *summaryRepo) CountSummariesByProjectKey(
 ) ([]SummaryProjectKeyCount, error) {
 	var out []SummaryProjectKeyCount
 	if err := r.scoped(ctx, q).
-		Select("project_sync_id, peer_fingerprint, cwd, count(*) AS total").
-		Group("project_sync_id").Group("peer_fingerprint").Group("cwd").
+		Select("project_sync_id, " + machineFingerprintExpr + " AS machine_fingerprint, " +
+			"cwd, count(*) AS total").
+		Group("project_sync_id").Group("machine_fingerprint").Group("cwd").
 		Scan(&out).Error; err != nil {
 		return nil, err
 	}
