@@ -34,6 +34,7 @@ import { ApiError } from "@/lib/api";
 import { RelayError } from "@/lib/relayClient";
 
 import { createProjectFsPort } from "@/lib/projectFsPort";
+import { relayClientPool } from "@/lib/relayClientPool";
 
 /**
  * 本站这一侧的 `ProjectFsPort`（规格 2026-08-22 D 段）。
@@ -43,6 +44,8 @@ import { createProjectFsPort } from "@/lib/projectFsPort";
  */
 describe("本站的 ProjectFsPort", () => {
   beforeEach(() => {
+    // 同上：池化之后连接会跨用例存活，逐条收掉才有干净的起点。
+    relayClientPool.closeAll();
     vi.clearAllMocks();
     relayMocks.connect.mockResolvedValue(undefined);
   });
@@ -131,13 +134,18 @@ describe("本站的 ProjectFsPort", () => {
     port.dispose();
   });
 
-  it("换一台机器就另起一条，dispose 时全部收掉", async () => {
+  it("换一台机器就另起一条，dispose 时全部还回池子", async () => {
     relayMocks.request.mockResolvedValue({ path: "/a", entries: [] });
     const port = createProjectFsPort();
     await port.listDir("fp-1", "/a");
     await port.listDir("fp-2", "/a");
     expect(relayMocks.ctor).toHaveBeenCalledTimes(2);
     port.dispose();
+    // dispose 是**还回去**，不是关掉：这两条连接归 relayClientPool，详情页可能正
+    // 靠着其中一条收事件。真正关掉由池子的空闲宽限决定（见 relay-client-pool 用例）。
+    expect(relayMocks.close).not.toHaveBeenCalled();
+    // 还回去之后没人再用，池子收掉它们 —— 这里直接问池子要这个保证。
+    relayClientPool.closeAll();
     expect(relayMocks.close).toHaveBeenCalledTimes(2);
   });
 

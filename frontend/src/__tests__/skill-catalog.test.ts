@@ -23,6 +23,7 @@ import {
   setSkillTriState,
   skillTriState,
 } from "@/lib/skillCatalog";
+import { relayClientPool } from "@/lib/relayClientPool";
 
 vi.mock("@/lib/relayClient", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/relayClient")>();
@@ -55,6 +56,9 @@ function stubRelay(result: unknown): FakeClient {
 }
 
 beforeEach(() => {
+  // 中继连接现在是池化的（relayClientPool）：不收掉的话，上一条用例建的那条会被
+  // 下一条借走，于是每一条都读到上一条打的桩。
+  relayClientPool.closeAll();
   MockRelayClient.mockReset();
   mockedTicket.mockReset();
   mockedTicket.mockResolvedValue({
@@ -95,7 +99,8 @@ describe("fetchSkillCatalog", () => {
       backendType: "claudecode",
       authorized: [{ id: "agentre/web", enabled: true }],
     });
-    expect(fake.close).toHaveBeenCalled();
+    // 不再由调用方 close：连接归池子，用完只是还回去（withRelayClient 的 release）。
+    expect(fake.close).not.toHaveBeenCalled();
 
     expect(got.discovery).toBe("ok");
     expect(got.packs).toHaveLength(1);
@@ -149,6 +154,7 @@ describe("fetchSkillCatalog", () => {
         authorized: [],
       }),
     ).rejects.toThrow();
+    // 连不上那一条**要**关掉：池子当场把这个失败条目摘掉，不留给下一个人捡。
     expect(fake.close).toHaveBeenCalled();
   });
 

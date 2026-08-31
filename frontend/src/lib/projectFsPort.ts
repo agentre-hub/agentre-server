@@ -19,9 +19,8 @@ import type {
   ProjectFsPort,
 } from "@agentre-hub/agentre-ui";
 
-import { RelayClient } from "@/lib/relayClient";
-import { relayClientUrl } from "@/lib/relayUrl";
-import { ensureRelayTicket } from "@/lib/relayTicket";
+import type { RelayClient } from "@/lib/relayClient";
+import { acquireRelayClient, type RelayLease } from "@/lib/relayClientPool";
 import {
   classifyRemoteFsError,
   listDir as rpcListDir,
@@ -73,60 +72,53 @@ function failureOf(err: unknown) {
 }
 
 export function createProjectFsPort(): DisposableProjectFsPort {
-  const clients = new Map<string, Promise<RelayClient>>();
+  const leases = new Map<string, Promise<RelayLease>>();
   /**
-   * 已经握上手的那几条，**同步**记着。
+   * 本 port 手里那几份租约，**同步**记着。
    *
-   * `dispose()` 不能只靠 `promise.then(close)`：那是一个微任务，调用方一收手这一拍
-   * 连接还开着；更糟的是 dispose 之后才决议的那一条会漏在外面永远没人收。
+   * `dispose()` 不能只靠 `promise.then(release)`：那是一个微任务，调用方一收手这一拍
+   * 租约还在手里；更糟的是 dispose 之后才决议的那一份会漏在外面永远没人还。
    */
-  const live = new Set<RelayClient>();
+  const held = new Set<RelayLease>();
   /**
    * 第几代。`dispose()` 只是**翻页**，不是一道不可逆的闸。
    *
    * React 18 的 StrictMode 在开发下把 effect 跑两遍（mount → cleanup → mount），
    * 而 `useMemo` 交出来的还是同一个 port —— 把「已经收手」记成一个 boolean，
    * `make dev` 下目录选择器就永远说「连接断了」。用代数记：翻页之后新的请求照常
-   * 开工，只有**上一代**那些迟到决议的连接会自己收掉。
+   * 开工，只有**上一代**那些迟到决议的租约会自己还掉。
    */
   let generation = 0;
 
   function connected(fingerprint: string): Promise<RelayClient> {
-    const existing = clients.get(fingerprint);
+    return leaseFor(fingerprint).then((lease) => lease.client);
+  }
+
+  function leaseFor(fingerprint: string): Promise<RelayLease> {
+    const existing = leases.get(fingerprint);
     if (existing) return existing;
     const era = generation;
     const pending = (async () => {
-      const ticket = await ensureRelayTicket();
-      const client = new RelayClient({
-        url: relayClientUrl(fingerprint, ticket.accessToken),
-        jwt: ticket.accessToken,
-        deviceFingerprint: ticket.clientId,
-        refreshCredentials: async () => {
-          const fresh = await ensureRelayTicket();
-          return {
-            url: relayClientUrl(fingerprint, fresh.accessToken),
-            jwt: fresh.accessToken,
-          };
-        },
-      });
+      let lease: RelayLease;
       try {
-        await client.connect();
+        lease = await acquireRelayClient(fingerprint);
       } catch (e) {
-        client.close();
+        // 握手失败在这里翻成 RelayUnreachable：failureOf 靠它把「那台机器连不上」
+        // 与「远端 RPC 报错」分开说。
         throw new RelayUnreachable(String(e));
       }
-      // 已经翻页了：这一条是上一代迟到的，当场收掉，别留在外面。
+      // 已经翻页了：这一份是上一代迟到的，当场还掉，别留在外面。
       if (era !== generation) {
-        client.close();
+        lease.release();
         throw new RelayUnreachable("relay: superseded");
       }
-      live.add(client);
-      return client;
+      held.add(lease);
+      return lease;
     })();
     // 连失败就把这条从缓存里摘掉：留着的话那台机器在这一屏里永远打不开，
     // 而用户手里的「重试」按钮会变成一颗每次都复读同一句失败的按钮。
-    pending.catch(() => clients.delete(fingerprint));
-    clients.set(fingerprint, pending);
+    pending.catch(() => leases.delete(fingerprint));
+    leases.set(fingerprint, pending);
     return pending;
   }
 
@@ -152,9 +144,10 @@ export function createProjectFsPort(): DisposableProjectFsPort {
 
     dispose() {
       generation += 1;
-      for (const client of live) client.close();
-      live.clear();
-      clients.clear();
+      // 还回去，不是关掉：这几条连接归池子，详情页可能正靠着同一条收事件。
+      for (const lease of held) lease.release();
+      held.clear();
+      leases.clear();
     },
   };
 }

@@ -18,6 +18,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useRelayMachine } from "@/hooks/use-relay";
 import type { RelayState } from "@/lib/relayClient";
+import { relayClientPool } from "@/lib/relayClientPool";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 
 vi.mock("@/lib/relayTicket", async (importOriginal) => {
@@ -73,6 +74,10 @@ function pending<T>(): {
 }
 
 beforeEach(() => {
+  // 连接现在归 relayClientPool，而池子是模块单例、活得比一条用例久：不收掉的话，
+  // 上一条用例给 "fp-1" 建的那条会被下一条直接借走 —— 取票压根不会再发生，
+  // 于是「取票失败」这一档根本走不到。
+  relayClientPool.closeAll();
   fake.instances.length = 0;
   mockedEnsureRelayTicket.mockReset();
 });
@@ -116,9 +121,9 @@ describe("useRelayMachine 的连接状态", () => {
     const { result } = renderHook(() => useRelayMachine("fp-1"));
     await waitFor(() => expect(fake.instances).toHaveLength(1));
 
-    // 重连是「换一个 client 从取票整条重来」：旧 client 先被 close 掉,于是这里
-    // 同样有一段没有 client 的时间。按下按钮后立刻退回「已经不再自动重试」,
-    // 说的正好和按钮做的事相反。
+    // 重连是「让池子把这台机器那条连接原地换掉」：旧 client 先被 close 掉、重新
+    // 取票、再建一条，于是这里同样有一段没有连接的时间。按下按钮后立刻退回
+    // 「已经不再自动重试」,说的正好和按钮做的事相反。
     const gate = pending<typeof TICKET>();
     mockedEnsureRelayTicket.mockReturnValue(gate.promise);
     act(() => result.current.reconnect());

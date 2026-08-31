@@ -21,7 +21,7 @@ import { runAckFromProtobuf, type RunParams } from "@agentre-hub/agentre-wire";
 import { api } from "@/lib/api";
 import { randomId } from "@/lib/randomId";
 import { RelayClient, RelayError } from "@/lib/relayClient";
-import { relayClientUrl } from "@/lib/relayUrl";
+import { acquireRelayClient, type RelayLease } from "@/lib/relayClientPool";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 
 export type DispatchAvailability =
@@ -300,26 +300,18 @@ export async function dispatchNewConversation(
     // R17：不注入 mcpServers —— org / subagent / hook 是真身在桌面端的内置工具，
     // web 发起的对话用不了它们（发起前已由界面说明）。
   };
-  const owned = input.client
-    ? null
-    : new RelayClient({
-        url: relayClientUrl(
-          choice.device_fingerprint,
-          input.sourceClient.accessToken,
-        ),
-        jwt: input.sourceClient.accessToken,
-        deviceFingerprint: input.sourceClient.clientId,
-        reconnect: false,
-      });
-  const client = input.client ?? owned!;
-  try {
-    if (owned) {
-      try {
-        await owned.connect();
-      } catch (error: unknown) {
-        throw new DispatchConnectionError(error);
-      }
+  // 调用方给了连接就用它；没给就向池子借一条——详情页 / 新建弹窗开着的时候，
+  // 借到的通常就是它们已经握好手的那一条。
+  let borrowed: RelayLease | null = null;
+  if (!input.client) {
+    try {
+      borrowed = await acquireRelayClient(choice.device_fingerprint);
+    } catch (error: unknown) {
+      throw new DispatchConnectionError(error);
     }
+  }
+  const client = input.client ?? borrowed!.client;
+  try {
     const requestRun = async (runParams: RunParams) => {
       try {
         return await client.request(rpcMethods.runtimeRun, {
@@ -422,8 +414,9 @@ export async function dispatchNewConversation(
         : true,
     };
   } finally {
-    // 只关自己建的那条:复用进来的连接还归调用方用。
-    owned?.close();
+    // 只还自己借的那份:复用进来的连接还归调用方用。还回去不是关掉 —— 池子里
+    // 可能还有别人（详情页）正靠着同一条收事件。
+    borrowed?.release();
   }
 }
 

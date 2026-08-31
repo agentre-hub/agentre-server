@@ -31,9 +31,7 @@ import {
   type SkillPackSummary,
 } from "@agentre-hub/agentre-wire";
 
-import { RelayClient } from "@/lib/relayClient";
-import { ensureRelayTicket } from "@/lib/relayTicket";
-import { relayClientUrl } from "@/lib/relayUrl";
+import { withRelayClient } from "@/lib/relayClientPool";
 
 /** 目录问出来了没有。取值与 wire 的三个常量逐字相同。 */
 export type SkillDiscovery = "ok" | "unavailable" | "unsupported";
@@ -96,15 +94,7 @@ export async function fetchSkillCatalog(
     // 没有可拨的对象，就不该发出一次注定失败的连接。
     throw new Error("skill catalog: 这一档没有可拨的机器");
   }
-  const ticket = await ensureRelayTicket();
-  const client = new RelayClient({
-    url: relayClientUrl(input.fingerprint, ticket.accessToken),
-    jwt: ticket.accessToken,
-    deviceFingerprint: ticket.clientId,
-    reconnect: false,
-  });
-  try {
-    await client.connect();
+  return withRelayClient(input.fingerprint, async (client) => {
     const params: SkillCatalogParams = {
       backendType: input.backendType,
       authorized: input.authorized,
@@ -116,9 +106,7 @@ export async function fetchSkillCatalog(
       packs: decoded.packs,
       discovery: normalizeDiscovery(decoded.discovery),
     };
-  } finally {
-    client.close();
-  }
+  });
 }
 
 /** `skills_json` → 授权集。解不动、不是数组都当空授权，不炸掉整个详情。 */

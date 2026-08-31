@@ -153,14 +153,18 @@ describe("账号级实时通道", () => {
     const view = makeView();
     const ws = await connect({ onRefresh: view.onRefresh });
 
-    // 浏览器原生 WebSocket 设不了请求头，票据只能走 query（沿用中继那条搬运）。
+    // 浏览器原生 WebSocket 设不了请求头，但子协议列表设得了 —— 票走那里，
+    // 于是它不进 URL、也就不进 access log / history / Referer（见 relayUrl.ts）。
     expect(mockedApi).toHaveBeenCalledWith("/v1/relay/ticket", {
       method: "POST",
     });
-    expect(ws.url).toBe(accountChannelUrl("ticket-1"));
-    expect(ws.url).toContain("/v1/account/channel?access_token=ticket-1");
+    expect(ws.url).toBe(accountChannelUrl());
+    expect(ws.url).not.toContain("access_token");
     expect(ws.url).not.toContain("daemon_fingerprint");
-    expect(ws.protocols).toEqual(["agentre-protobuf"]);
+    expect(ws.protocols).toEqual([
+      "agentre-protobuf",
+      "agentre.bearer.ticket-1",
+    ]);
   });
 
   // a

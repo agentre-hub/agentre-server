@@ -9,9 +9,7 @@ import type {
 
 import { api } from "@/lib/api";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
-import { RelayClient } from "@/lib/relayClient";
-import { ensureRelayTicket } from "@/lib/relayTicket";
-import { relayClientUrl } from "@/lib/relayUrl";
+import { withRelayClient } from "@/lib/relayClientPool";
 
 type ProviderDTO = {
   provider_key: string;
@@ -433,19 +431,10 @@ export function createBrowserEngineSettingsPorts(
     method: AnyRpcMethod,
     params: object = {},
   ): Promise<T> {
-    const ticket = await ensureRelayTicket();
-    const client = new RelayClient({
-      url: relayClientUrl(fingerprint, ticket.accessToken),
-      jwt: ticket.accessToken,
-      deviceFingerprint: ticket.clientId,
-      reconnect: false,
-    });
-    try {
-      await client.connect();
-      return (await client.request(method, params as never)) as T;
-    } finally {
-      client.close();
-    }
+    return withRelayClient(
+      fingerprint,
+      async (client) => (await client.request(method, params as never)) as T,
+    );
   }
 
   // 打开新建弹窗会对三个 CLI 类型各探一次同一台机器；共享这一次在飞的 engine.scan

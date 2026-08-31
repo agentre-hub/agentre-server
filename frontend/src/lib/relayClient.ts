@@ -66,6 +66,7 @@ import {
 import type { MessageInitShape, MessageShape } from "@bufbuild/protobuf";
 
 import { RedialTimer } from "@/lib/redialTimer";
+import { bearerSubprotocol } from "@/lib/relayUrl";
 
 export type RelayState =
   "connecting" | "connected" | "disconnected" | "reconnecting";
@@ -245,7 +246,12 @@ export class RelayClient {
         this.opts.createWebSocket ??
         ((url: string, _headers: Record<string, string>, protocols: string[]) =>
           new WebSocket(url, protocols));
-      const ws = factory(this.opts.url, headers, [PROTOBUF_SUBPROTOCOL]);
+      // 票走子协议而不是 URL：那样它不进 access log / history / Referer。
+      // headers 仍然传给工厂——测试注入的假工厂断言的是它，而真浏览器忽略它。
+      const ws = factory(this.opts.url, headers, [
+        PROTOBUF_SUBPROTOCOL,
+        bearerSubprotocol(this.opts.jwt),
+      ]);
       ws.binaryType = "arraybuffer";
       this.ws = ws;
       ws.onopen = () => {

@@ -21,6 +21,7 @@
  */
 import { RedialTimer } from "@/lib/redialTimer";
 import { ensureRelayTicket } from "@/lib/relayTicket";
+import { bearerSubprotocol } from "@/lib/relayUrl";
 import {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,
@@ -99,11 +100,10 @@ export interface AccountChannelHandle {
   stop(): void;
 }
 
-/** 通道端点。票据走 query：浏览器原生 WebSocket 设不了 Authorization 头。 */
-export function accountChannelUrl(accessToken: string): string {
+/** 通道端点。票据不在 URL 上，它走子协议（见 relayUrl.ts）。 */
+export function accountChannelUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const params = new URLSearchParams({ access_token: accessToken });
-  return `${proto}//${window.location.host}/v1/account/channel?${params.toString()}`;
+  return `${proto}//${window.location.host}/v1/account/channel`;
 }
 
 /** 解一帧信号；读不懂或不是调用方要的种类时返回 null。 */
@@ -207,8 +207,9 @@ export function startAccountChannel(
     try {
       const accessToken = await ensureTicket();
       if (stopped) return;
-      ws = createWebSocket(accountChannelUrl(accessToken), [
+      ws = createWebSocket(accountChannelUrl(), [
         ProtobufSubprotocol,
+        bearerSubprotocol(accessToken),
       ]);
     } catch {
       // 票据取不到、连接建不起来：退回轮询，隔一会儿再试。不抛给调用方——

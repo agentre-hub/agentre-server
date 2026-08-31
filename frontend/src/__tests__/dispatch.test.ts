@@ -12,6 +12,8 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
+import { relayClientPool } from "@/lib/relayClientPool";
+import { ensureRelayTicket } from "@/lib/relayTicket";
 import { RelayClient, RelayError } from "@/lib/relayClient";
 import {
   DispatchConnectionError,
@@ -36,11 +38,18 @@ vi.mock("@/lib/relayClient", async (importOriginal) => {
 });
 vi.mock("@/lib/relayTicket", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/relayTicket")>();
-  return { ...actual, browserDisplayName: () => "Chrome · macOS" };
+  return {
+    ...actual,
+    browserDisplayName: () => "Chrome · macOS",
+    // 自建连接那一路现在向 relayClientPool 借，票由池子取（此前是直接用调用方
+    // sourceClient 手里那张）。两者是同一张票：clientId 都来自 localStorage。
+    ensureRelayTicket: vi.fn(),
+  };
 });
 
 const mockedApi = vi.mocked(api);
 const MockRelayClient = vi.mocked(RelayClient);
+const mockedTicket = vi.mocked(ensureRelayTicket);
 
 const availablePlan: DispatchPlan = {
   agent_sync_id: "agent-1",
@@ -170,7 +179,14 @@ const sourceClient = {
 // `Reflect.construct(impl)`，箭头函数不可构造（TypeError: ... is not a constructor），
 // 所以假实现必须写成普通函数——构造调用返回对象即覆盖 this，拿到的还是这个假 client。
 beforeEach(() => {
+  // 中继连接是池化的：不收掉的话，上一条用例建的那条会被下一条借走。
+  relayClientPool.closeAll();
   vi.clearAllMocks();
+  mockedTicket.mockResolvedValue({
+    accessToken: "relay-token",
+    clientId: "browser-1",
+    clientName: "Chrome · macOS",
+  });
   MockRelayClient.mockImplementation(function () {
     return fakeClient();
   } as never);
@@ -255,7 +271,7 @@ describe("标题与本地会话标识", () => {
   */
   it("同一毫秒内连发 5000 个:号互不相同,且都在 53 位内", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(nextAnchor());
+    vi.setSystemTime(FIXED_NOW);
     try {
       const ids = new Set<number>();
       for (let i = 0; i < 5000; i++) {
@@ -403,16 +419,18 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     });
 
     // 连的是选中那一档（设备指纹在 URL 里，JWT 走 Authorization 头）。
+    //
+    // 票来自 relayClientPool 而不是调用方手里那张：这条连接是**共享**的，谁的票
+    // 说了算不能由借用方决定。真要复用时（详情页已经开着一条）根本不会取票 ——
+    // 这里是冷路径，池子里还没有这台机器。
     const constructorOpts = MockRelayClient.mock.calls[0][0] as {
       url: string;
       jwt: string;
-      reconnect: boolean;
     };
     expect(constructorOpts.url).toContain("fp-online");
-    expect(constructorOpts.url).toContain("web-jwt");
-    expect(constructorOpts.jwt).toBe("web-jwt");
-    // 一次性派发，不自动重连。
-    expect(constructorOpts.reconnect).toBe(false);
+    // 票不在 URL 上：它走 Sec-WebSocket-Protocol（见 relayUrl.ts）。
+    expect(constructorOpts.url).not.toContain("relay-token");
+    expect(constructorOpts.jwt).toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
@@ -454,7 +472,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
-    expect(client.close).toHaveBeenCalled();
+    // 不关：连接归池子，派发只是把租约还回去。
+    expect(client.close).not.toHaveBeenCalled();
   });
 
   it("全部档不可用时直接抛错，不发任何中继帧", async () => {
@@ -487,11 +506,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     const constructorOpts = MockRelayClient.mock.calls[0][0] as {
       url: string;
       jwt: string;
-      reconnect: boolean;
     };
     expect(constructorOpts.url).toContain("fp-desk");
-    expect(constructorOpts.jwt).toBe("web-jwt");
-    expect(constructorOpts.reconnect).toBe(false);
+    expect(constructorOpts.jwt).toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
@@ -526,7 +543,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
-    expect(client.close).toHaveBeenCalled();
+    // 不关：连接归池子，派发只是把租约还回去。
+    expect(client.close).not.toHaveBeenCalled();
   });
 
   // R16 的发起即保存是**派发成功之后**的收尾动作:runtime.run 一旦返回 ack,那台机器上
@@ -557,7 +575,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
-    expect(client.close).toHaveBeenCalled();
+    // 不关：连接归池子，派发只是把租约还回去。
+    expect(client.close).not.toHaveBeenCalled();
   });
 
   it("连接失败时抛错并释放连接，不静默", async () => {
@@ -575,6 +594,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       }),
     ).rejects.toEqual(expect.any(DispatchConnectionError));
     expect(client.request).not.toHaveBeenCalled();
+    // 连不上那一条**要**关掉：池子当场把这个失败条目摘掉，不留给下一个人捡到
+    // 一条注定发不出请求的连接。
     expect(client.close).toHaveBeenCalled();
   });
 
@@ -598,7 +619,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       message: 'exec: "claude": executable file not found in $PATH',
     } satisfies Partial<DispatchRunError>);
     expect(client.connect).toHaveBeenCalled();
-    expect(client.close).toHaveBeenCalled();
+    // 派发失败也不关这条连接：它可能正被详情页用着。
+    expect(client.close).not.toHaveBeenCalled();
   });
 
   it("连接复用期间 socket 未就绪时标记为连接失败，不谎称 Agent 启动失败", async () => {

@@ -23,8 +23,7 @@
  */
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { RelayClient, RelayError } from "@/lib/relayClient";
-import { ensureRelayTicket } from "@/lib/relayTicket";
-import { relayClientUrl } from "@/lib/relayUrl";
+import { withRelayClient } from "@/lib/relayClientPool";
 
 export const MethodProjectSetLocalPath = "project.setLocalPath";
 export const MethodProjectClearLocalPath = "project.clearLocalPath";
@@ -130,8 +129,10 @@ export function classifyProjectLocalPathError(
 }
 
 /**
- * 两个「拨过去、调一次、关掉」的外层。与 `fetchSkillCatalog` 同一形状——一次写入
- * 不值得一条常驻连接，而目录选择器那条常驻连接属于它自己那个弹窗。
+ * 两个「借一条连接、调一次、还回去」的外层。与 `fetchSkillCatalog` 同一形状——一次
+ * 写入不值得自己建一条连接，而池子里通常已经有一条了（详情页开着的那条）。
+ *
+ * 还回去用的是 `release()` 而不是 `close()`：这条连接不是我们建的，也不归我们关。
  *
  * 拨不通、握手失败、对面报错都**抛**：调用方据此就地给出可分辨的说明，
  * 而不是拿一个成功的应答冒充。
@@ -160,17 +161,5 @@ async function callOnMachine<T>(
   call: (client: ProjectLocalPathCaller) => Promise<T>,
 ): Promise<T> {
   if (!fingerprint) throw disconnected();
-  const ticket = await ensureRelayTicket();
-  const client = new RelayClient({
-    url: relayClientUrl(fingerprint, ticket.accessToken),
-    jwt: ticket.accessToken,
-    deviceFingerprint: ticket.clientId,
-    reconnect: false,
-  });
-  try {
-    await client.connect();
-    return await call(client);
-  } finally {
-    client.close();
-  }
+  return withRelayClient(fingerprint, (client) => call(client));
 }

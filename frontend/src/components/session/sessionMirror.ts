@@ -7,9 +7,8 @@ import type {
 
 import { doneEventFrame } from "@/components/session/turnDone";
 import { api } from "@/lib/api";
-import { applyJournalFrames, RelayClient } from "@/lib/relayClient";
-import { ensureRelayTicket } from "@/lib/relayTicket";
-import { relayClientUrl } from "@/lib/relayUrl";
+import { applyJournalFrames } from "@/lib/relayClient";
+import { withRelayClient } from "@/lib/relayClientPool";
 
 /**
  * GET /v1/agent-sessions 的一行。前两列是身份（决策 17 的键），其余是这条对话
@@ -117,8 +116,8 @@ export function mirrorRowToSummary(
 /**
  * 把模型目标也写到**发起端**那一台。
  *
- * 承载连接的那台未必是发起这条对话的那台，而两边各有一份自己的会话行。这里为发起端
- * 单开一条短连接写一次，写完就关——它不是这个页面的长连接，没有事件要收。
+ * 承载连接的那台未必是发起这条对话的那台，而两边各有一份自己的会话行。这里向池子借
+ * 一条到发起端的连接写一次，写完还回去——它不是这个页面的长连接，没有事件要收。
  *
  * 够不着（那台离线、或它太老不认识这个方法）时**抛出**，由调用方折进「只写成一台」：
  * 这一次选择在承载者上确实生效了，回滚掉是在说一句假话。
@@ -127,23 +126,13 @@ export async function writeModelTargetToOrigin(
   origin: string,
   params: { sessionId: number; providerKey: string; modelKey: string },
 ): Promise<void> {
-  const ticket = await ensureRelayTicket();
-  const client = new RelayClient({
-    url: relayClientUrl(origin, ticket.accessToken),
-    jwt: ticket.accessToken,
-    deviceFingerprint: ticket.clientId,
-    reconnect: false,
-  });
-  try {
-    await client.connect();
+  await withRelayClient(origin, async (client) => {
     await client.request(rpcMethods.setModelTarget, {
       ...params,
       sessionId: BigInt(params.sessionId),
       peerFingerprint: origin,
     });
-  } finally {
-    client.close();
-  }
+  });
 }
 
 /**

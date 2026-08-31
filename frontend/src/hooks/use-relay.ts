@@ -6,9 +6,13 @@ import type {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAliveEffect } from "@/hooks/use-api-query";
-import { RelayClient, type RelayState } from "@/lib/relayClient";
-import { relayClientUrl } from "@/lib/relayUrl";
-import { ensureRelayTicket, type RelayTicket } from "@/lib/relayTicket";
+import type { RelayClient, RelayState } from "@/lib/relayClient";
+import {
+  acquireRelayClient,
+  relayClientPool,
+  type RelayLease,
+} from "@/lib/relayClientPool";
+import type { RelayTicket } from "@/lib/relayTicket";
 
 /**
  * 一台 agentred 的中继连接：用登录 session 换短效 ticket → 连 /v1/relay/client →
@@ -73,9 +77,28 @@ export function useRelayMachine(
     setRelayState(initialState(fingerprint));
   }
   const [client, setClient] = useState<RelayClient | null>(null);
-  /** 手动重连的计数器：变一次就把下面那个 effect 整个重跑一遍。 */
+  /** 兜底的手动重连计数器：变一次就把下面那个 effect 整个重跑一遍。 */
   const [attempt, setAttempt] = useState(0);
-  const reconnect = useCallback(() => setAttempt((n) => n + 1), []);
+  /**
+   * 从头再连一次。
+   *
+   * 首选让**池子**原地重建那条连接：这台机器上可能还有别的使用方（目录选择器、
+   * 派发）搭在同一条上，它们靠 `onClient` 跟着换手，不会被甩下。单纯把自己这份
+   * 租约还掉再借一次是没用的 —— 借回来的还是池子里那条坏的。
+   *
+   * 池子里没有这台机器的条目（票根本没换到，连接压根没建出来）时才退回计数器，
+   * 让整只 effect 从取票重跑。
+   */
+  const reconnect = useCallback(() => {
+    if (!fingerprint) return;
+    setRelayState("connecting");
+    void relayClientPool
+      .reconnect(fingerprint)
+      .catch(() => false)
+      .then((rebuilt) => {
+        if (!rebuilt) setAttempt((n) => n + 1);
+      });
+  }, [fingerprint]);
   const optsRef = useRef(opts);
   // 每次渲染后把最新回调收进 ref，避免 RelayClient 持有的回调读到陈旧闭包。
   useEffect(() => {
@@ -91,48 +114,46 @@ export function useRelayMachine(
       // 都盖在红色终态横幅「已经不再自动重试」底下 —— 而它正是最有进展的时候。
       // 这里在发请求前就把话说对:我们在连。
       setRelayState("connecting");
-      let c: RelayClient | null = null;
-      ensureRelayTicket()
-        .then((ticket) => {
-          if (!alive()) return;
-          setRelayTicket(ticket);
-          c = new RelayClient({
-            url: relayClientUrl(fingerprint, ticket.accessToken),
-            jwt: ticket.accessToken,
-            deviceFingerprint: ticket.clientId,
-            refreshCredentials: async () => {
-              const fresh = await ensureRelayTicket();
-              return {
-                url: relayClientUrl(fingerprint, fresh.accessToken),
-                jwt: fresh.accessToken,
-              };
-            },
-            onStateChange: setRelayState,
-            onEvent: (frame) => optsRef.current.onEvent?.(frame),
-            onRunResultDone: (frame) =>
-              optsRef.current.onRunResultDone?.(frame),
-            onAutonomousTurnStarted: (frame) =>
-              optsRef.current.onAutonomousTurnStarted?.(frame),
-          });
-          setClient(c);
-          void c.connect().catch(() => {
-            // 首次连接失败：RelayClient 已进入自动重连，这里不打断——页面靠
-            // relayState 的 reconnecting 去探测原因（R11）。
-          });
+      let lease: RelayLease | null = null;
+      // waitForConnect:false —— 拿到 client 就挂上去，首次连不上交给 RelayClient
+      // 自己退避重连，页面靠 relayState 的 reconnecting 去探测原因（R11）。等连上
+      // 再交付会把这条路堵死：首次失败当场被说成 disconnected。
+      acquireRelayClient(
+        fingerprint,
+        {
+          onStateChange: setRelayState,
+          onEvent: (frame) => optsRef.current.onEvent?.(frame),
+          onRunResultDone: (frame) => optsRef.current.onRunResultDone?.(frame),
+          onAutonomousTurnStarted: (frame) =>
+            optsRef.current.onAutonomousTurnStarted?.(frame),
+          // 池子重建这条连接（手动重连）时跟着换手里这一个。
+          onClient: setClient,
+        },
+        { waitForConnect: false },
+      )
+        .then((acquired) => {
+          if (!alive()) {
+            acquired.release();
+            return;
+          }
+          lease = acquired;
+          setRelayTicket(acquired.ticket);
+          setClient(acquired.client);
         })
         .catch((e: unknown) => {
           if (!alive()) return;
           setRelayTicketError(e);
-          // 票都没换到就没有自动重连可言(RelayClient 压根没建出来)。退回
-          // "disconnected" 让页面走「lost + 重新连接」那一档 —— 否则上面那句
-          // "connecting" 会把一次彻底的失败永远显示成转圈。
+          // 走到这里只有一种来路：票没换到（waitForConnect:false 不看握手成败）。
+          // 没有票就没有自动重连可言。退回 "disconnected" 让页面走「lost + 重新
+          // 连接」那一档 —— 否则上面那句 "connecting" 会把一次彻底的失败永远显示
+          // 成转圈。
           setRelayState("disconnected");
         });
       return () => {
-        c?.close();
+        // 还回去，不是关掉：同一台机器上目录选择器 / 派发可能正搭着这一条。
+        lease?.release();
       };
-      // attempt 变化即「用户按了重新连接」：清理跑一遍（旧 client close），
-      // 再从取 ticket 开始整条重来。
+      // attempt 变化即「池子里压根没有这台机器的条目、只能整条重来」，见 reconnect。
     },
     [fingerprint, attempt],
   );

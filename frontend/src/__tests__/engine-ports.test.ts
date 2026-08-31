@@ -2,6 +2,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
+import { relayClientPool } from "@/lib/relayClientPool";
 import { createBrowserEngineSettingsPorts } from "@/lib/enginePorts";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 
@@ -57,6 +58,9 @@ function ports() {
 }
 
 beforeEach(() => {
+  // 中继连接是池化的（relayClientPool）：不收掉的话，上一条用例建的那条会被下一条
+  // 借走，于是「拨了哪几台」「建了几条」这些断言全部读到上一条的残留。
+  relayClientPool.closeAll();
   mockedApi.mockReset();
   mockedEnsureRelayTicket.mockReset();
   relay.connect.mockReset();
@@ -364,7 +368,10 @@ describe("browser engine settings ports", () => {
         providerKey: "anthropic-main",
       },
     );
-    expect(relay.close).toHaveBeenCalledTimes(2);
+    // 两次调用打在同一台机器上，因此共用池子里那**一条**连接，而且谁都不关它
+    // （关连接的权力只在 relayClientPool 手里，见它的 release/空闲宽限）。
+    expect(relayTargets()).toEqual(["agentred-b"]);
+    expect(relay.close).not.toHaveBeenCalled();
   });
 
   it("lists only the account devices that can actually run a backend", async () => {
@@ -431,7 +438,8 @@ describe("browser engine settings ports", () => {
       adapter.resolveBackendCLIPath!("codex", "agentred-b"),
     ).resolves.toEqual({ found: false, path: "" });
 
-    expect(relayTargets()).toEqual(["agentred-b", "agentred-b"]);
+    // 同一台机器上的两次探测搭同一条中继：此前是各拨一条，各握一次手。
+    expect(relayTargets()).toEqual(["agentred-b"]);
     expect(relay.request).toHaveBeenCalledWith(rpcMethods.engineScan, {});
   });
 

@@ -109,7 +109,9 @@ describe("RelayClient Protobuf RPC boundary", () => {
   it("negotiates the binary subprotocol and multiplexes typed descriptors", async () => {
     const { client, socket, protocols } = setup();
     await authenticate(client, socket);
-    expect(protocols).toEqual(["agentre-protobuf"]);
+    // 第二个是携票的伪子协议：浏览器设不了 Authorization 头，而票走 URL 会落进
+    // access log / history / Referer（见 relayUrl.ts）。
+    expect(protocols).toEqual(["agentre-protobuf", "agentre.bearer.jwt"]);
 
     const list = client.request(rpcMethods.sessionList, {});
     const pull = client.request(rpcMethods.sessionPull, {
