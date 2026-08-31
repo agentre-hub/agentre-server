@@ -3,10 +3,15 @@ import {
   ProtobufRpcCodec,
   encodeRpcCancel,
   rpcMethods,
+  type JournaledNotification,
 } from "@agentre-hub/agentre-wire";
 import { describe, expect, it, vi } from "vitest";
 
-import { RelayClient, type RelayClientOptions } from "@/lib/relayClient";
+import {
+  applyJournalFrames,
+  RelayClient,
+  type RelayClientOptions,
+} from "@/lib/relayClient";
 
 class BinarySocket {
   readyState = 0;
@@ -237,5 +242,218 @@ describe("RelayClient Protobuf RPC boundary", () => {
         { sessionId: 7, seq: 1, event: { kind: "text_delta", text: "hello" } },
       ]),
     );
+  });
+  // Given 日志里除了 runtime.event 还有轮次结束帧（`RpcNotification.run_result_done`，
+  // 每跑完一轮就落一条）；When 打开一条已经跑完的对话、按游标补齐这一页；Then 整页
+  // 必须照常交付 —— 事件进转录、结束帧进 onRunResultDone。
+  //
+  // 这一条守的是「补齐不因一种通知形态而整页失败」：补齐是 `notifications.map(...)`
+  // 一次性投影的，任何一行抛出都会让整页连同 `catchUp()` 一起拒绝，详情页于是停在
+  // 「没能从这台机器读到这条对话的内容」——而机器在线、内容也确实在那里。
+  it("catches up a page that carries a run-result-done frame", async () => {
+    const events: unknown[] = [];
+    const done: unknown[] = [];
+    const { client, socket } = setup({
+      onEvent: (event) => events.push(event),
+      onRunResultDone: (frame) => done.push(frame),
+    });
+    await authenticate(client, socket);
+
+    const caughtUp = client.catchUp(7, "fp-origin");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    const attach = ProtobufRpcCodec.decode(socket.sent[0]);
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        attach.id,
+        rpcMethods.sessionAttach,
+        {
+          sessionId: 7n,
+          backendType: "codex",
+          lifecycleState: "idle",
+          latestSeq: 2n,
+        },
+      ),
+    );
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    const pull = ProtobufRpcCodec.decode(socket.sent[1]);
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        pull.id,
+        rpcMethods.sessionPull,
+        {
+          notifications: [
+            {
+              seq: 1n,
+              payload: {
+                payload: {
+                  case: "runtimeEvent",
+                  value: {
+                    sessionId: 7n,
+                    event: { case: "textDelta", value: { text: "hi" } },
+                  },
+                },
+              },
+            },
+            {
+              seq: 2n,
+              payload: {
+                payload: {
+                  case: "runResultDone",
+                  value: {
+                    sessionId: 7n,
+                    providerSessionId: "p-1",
+                    turnToken: 1n,
+                  },
+                },
+              },
+            },
+          ],
+          cursor: 2n,
+          hasMore: false,
+          oldestSeq: 1n,
+        },
+      ),
+    );
+
+    await expect(caughtUp).resolves.toBeUndefined();
+    // toMatchObject 而不是 toEqual：protobuf-es 解出来的事件带一个 $typeName
+    // 运行时标记，它不是投影的一部分，断言它等于把 wire 运行时的实现细节钉进本仓。
+    expect(events).toMatchObject([
+      { sessionId: 7, seq: 1, event: { kind: "text_delta", text: "hi" } },
+    ]);
+    expect(done).toMatchObject([
+      { sessionId: 7, seq: 2, providerSessionId: "p-1", turnToken: 1 },
+    ]);
+  });
+  // Given server 镜像交出的一页历史里同样有轮次结束帧(GET /v1/agent-sessions/transcript
+  // 的 `runtime.runResultDone`,由 Go 侧 internal/pkg/wireview 投影);When 详情页回放
+  // 这一页;Then 它要投到 onRunResultDone —— loadMirrorTail 正是靠这一口在转录里补一条
+  // 轮次结束的标记,解不出来就等于历史里每一轮都没有结束过。
+  it("replays a mirror page whose frames include a run-result-done marker", () => {
+    const events: unknown[] = [];
+    const done: unknown[] = [];
+    const last = applyJournalFrames(
+      [
+        {
+          seq: 12,
+          method: "runtime.event",
+          params: {
+            sessionId: 7,
+            seq: 12,
+            event: { kind: "text_delta", text: "hi" },
+          },
+        },
+        {
+          seq: 13,
+          method: "runtime.runResultDone",
+          params: {
+            sessionId: 7,
+            seq: 13,
+            providerSessionId: "01a05211",
+            model: "gpt-5.6-sol",
+            contextWindow: 258400,
+            turnToken: 1,
+            usage: { promptTokens: 13694, completionTokens: 41 },
+          },
+        },
+      ] as unknown as JournaledNotification[],
+      {
+        onEvent: (frame) => events.push(frame),
+        onRunResultDone: (frame) => done.push(frame),
+      },
+    );
+
+    expect(last).toBe(13);
+    expect(events).toMatchObject([
+      { sessionId: 7, event: { kind: "text_delta", text: "hi" } },
+    ]);
+    expect(done).toMatchObject([
+      {
+        sessionId: 7,
+        seq: 13,
+        providerSessionId: "01a05211",
+        model: "gpt-5.6-sol",
+        contextWindow: 258400,
+        turnToken: 1,
+        usage: { promptTokens: 13694, completionTokens: 41 },
+      },
+    ]);
+  });
+  // Given 日志里可以出现 RpcNotification 的**任意**一种形态（普通轮次的事件与结束、
+  // 自主续轮的起/事件/止）；When 补齐把这一页翻成中间形状再投递；Then 五种都要
+  // 落到各自那一口。
+  //
+  // 这一条是「按形态穷举」的守卫，不是又一条用例：上面那条 run-result-done 的红
+  // 之所以能长期存在，正是因为补齐路径此前只被 textDelta 一种形态测过。少了这条，
+  // 另外三种自主续轮的形态仍然是同一个坑，只是还没有人踩到。
+  it("catches up every RpcNotification shape the journal can hold", async () => {
+    const events: unknown[] = [];
+    const done: unknown[] = [];
+    const started: unknown[] = [];
+    const { client, socket } = setup({
+      onEvent: (frame) => events.push(frame),
+      onRunResultDone: (frame) => done.push(frame),
+      onAutonomousTurnStarted: (frame) => started.push(frame),
+    });
+    await authenticate(client, socket);
+
+    const runtimeEvent = {
+      sessionId: 7n,
+      event: { case: "textDelta" as const, value: { text: "hi" } },
+    };
+    const doneValue = {
+      sessionId: 7n,
+      providerSessionId: "p-1",
+      turnToken: 1n,
+    };
+    const shapes = [
+      { case: "runtimeEvent", value: runtimeEvent },
+      { case: "runResultDone", value: doneValue },
+      {
+        case: "autonomousTurnStarted",
+        value: { sessionId: 7n, trigger: "idle", turnToken: 2n },
+      },
+      { case: "autonomousTurnEvent", value: runtimeEvent },
+      { case: "autonomousTurnDone", value: doneValue },
+    ] as const;
+
+    const caughtUp = client.catchUp(7, "fp-origin");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    const attach = ProtobufRpcCodec.decode(socket.sent[0]);
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        attach.id,
+        rpcMethods.sessionAttach,
+        {
+          sessionId: 7n,
+          backendType: "codex",
+          lifecycleState: "idle",
+          latestSeq: BigInt(shapes.length),
+        },
+      ),
+    );
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    const pull = ProtobufRpcCodec.decode(socket.sent[1]);
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        pull.id,
+        rpcMethods.sessionPull,
+        {
+          notifications: shapes.map((payload, i) => ({
+            seq: BigInt(i + 1),
+            payload: { payload },
+          })),
+          cursor: BigInt(shapes.length),
+          hasMore: false,
+          oldestSeq: 1n,
+        },
+      ),
+    );
+
+    await expect(caughtUp).resolves.toBeUndefined();
+    // 自主续轮的事件与结束共用普通那两口（见 decodeNotification），所以是 2 / 2 / 1。
+    expect(events.map((f) => (f as { seq: number }).seq)).toEqual([1, 4]);
+    expect(done.map((f) => (f as { seq: number }).seq)).toEqual([2, 5]);
+    expect(started.map((f) => (f as { seq: number }).seq)).toEqual([3]);
   });
 });

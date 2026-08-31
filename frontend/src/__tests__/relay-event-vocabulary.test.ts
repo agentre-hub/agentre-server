@@ -58,7 +58,11 @@ import {
   type TranscriptFrame,
 } from "@agentre-hub/agentre-ui";
 
-import { RelayClient, type RelayClientOptions } from "@/lib/relayClient";
+import {
+  applyJournalFrames,
+  RelayClient,
+  type RelayClientOptions,
+} from "@/lib/relayClient";
 
 /** Protobuf `RuntimeEventNotification.event` oneof 的全部 case 名。 */
 type RuntimeEventCase = RuntimeEventNotificationFrame["event"]["case"];
@@ -162,7 +166,13 @@ const SAMPLES: Record<
     durationMs: 5,
   },
   runtimeStatus: { case: "runtimeStatus", status: "compacting" },
-  done: { case: "done" },
+  done: {
+    case: "done",
+    model: "",
+    durationMs: 0,
+    firstTokenMs: 0,
+    tokensPerSec: 0,
+  },
   error: { case: "error", message: "boom" },
   userMessage: {
     case: "userMessage",
@@ -357,5 +367,33 @@ describe("relay 事件词表", () => {
     ]);
 
     expect(reduceSessionState(frames).contextWindow).toBe(64000);
+  });
+  // Given 这些事件已经落进日志，被当作历史回放（server 镜像的
+  // `/v1/agent-sessions/transcript`、中继的 `session.pull` 与往回续读三条路都
+  // 汇到同一个 `{method, params}` 中间形状）；When 这一页经 applyJournalFrames
+  // 回放；Then 每一帧必须与它当初实时穿过来时**一模一样**。
+  //
+  // 回放要把中间形状翻回 oneof case 名，那是 EVENT_KINDS 的反向。它此前是按
+  // snake_case → camelCase **猜**的，而 EVENT_KINDS 自己的注释就写着两边没有可
+  // 推导的规则（`tool_use_start` 的 case 是 `toolCall`）。猜错的那几种翻回来是
+  // 词表外的判别值，归约器的 switch 落进 default —— 历史里的工具卡与提问卡就此
+  // 铺成一坨 JSON，而同一条对话正在跑的那一轮（不过回放）是好的。
+  //
+  // 断言整帧相等而不只是 kind：载荷也要原样，少一层就是卡片空着。
+  it("日志回放一遍不改变任何一帧", async () => {
+    const cases = Object.keys(SAMPLES) as RuntimeEventCase[];
+    const live = await relayEvents(cases.map((name) => SAMPLES[name]));
+
+    const replayed: TranscriptFrame[] = [];
+    applyJournalFrames(
+      live.map((frame, index) => ({
+        seq: index + 1,
+        method: "runtime.event",
+        params: { sessionId: 7, seq: index + 1, event: frame.event },
+      })) as unknown as Parameters<typeof applyJournalFrames>[0],
+      { onEvent: (frame) => replayed.push(frame as TranscriptFrame) },
+    );
+
+    expect(replayed).toEqual(live);
   });
 });

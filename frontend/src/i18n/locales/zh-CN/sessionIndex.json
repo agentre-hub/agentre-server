@@ -4,10 +4,12 @@
     "all": "全部",
     "running": "运行中",
     "waiting": "等你处理",
-    "empty": "没有符合这个筛选的对话。",
     "unread": "未读",
-    "emptyWithTotal": "这一档里一条都没有。账号里还有 {{count}} 条。",
-    "seeAll": "看全部 {{count}} 条"
+    "seeAll": "看全部 {{count}} 条",
+    "emptyTitle": "「{{label}}」里没有对话",
+    "emptyBodyWithTotal": "账号里还有 {{count}} 条对话。",
+    "emptyBody": "换一个筛选，或者回到「全部」。",
+    "seeAllPlain": "看全部对话"
   },
   "loadMore": {
     "label": "加载更多",
@@ -16,12 +18,14 @@
     "failed": "这一页没能取回来。"
   },
   "search": {
-    "empty": "没有匹配这次搜索的对话。",
-    "clear": "清除搜索"
+    "clear": "清除搜索",
+    "emptyTitle": "没有匹配的对话",
+    "emptyBody": "换个词试试，或者清除搜索。"
   },
   "group": {
     "unassignedProject": "随手对话",
-    "unnamedAgent": "未命名"
+    "unnamedAgent": "未命名",
+    "overflowEmpty": "这一组现在一条都没有。"
   },
   "machine": {
     "offline": "离线",

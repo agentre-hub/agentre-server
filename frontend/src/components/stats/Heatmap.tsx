@@ -5,15 +5,40 @@ import { cn } from "@agentre-hub/agentre-ui";
 
 import { buildHeatGrid, type HeatDay, type HeatLevel } from "@/lib/heatmap";
 
-/** 一年 = 53 列，13px 格 + 3px 缝隙 = 845px。桌面端的卡刚好放得下。 */
+/** 一年 = 53 列，13px 格 + 3px 缝隙 = 845px 网格。桌面端的卡刚好放得下。 */
 export const HEATMAP_DESKTOP_WEEKS = 53;
 /**
- * 窄屏只出近 19 周。
+ * 窄屏只出近 18 周。
  *
  * 53 周要 845px，390 宽放不下；也**不做横向滚动**——手机上横滚的热力图没法用，
  * 一屏永远只看得到一小段，还会把整页的纵向滚动抢走。更长的历史引导去桌面端。
+ *
+ * 这个数由 `heatmapWidthPx` 与 `MOBILE_CARD_CONTENT_PX` 定死（守卫见
+ * heatmap-grid.test.ts）：此前写的 19 是拿视口宽算的，漏了网格左边那条星期栏，
+ * 19 列连星期栏要 334px，比 390 手机上的卡片内容区宽 10px——最后那一列（今天）
+ * 压在卡片边上（2026-08-31 在真机宽度下量到）。
  */
-export const HEATMAP_MOBILE_WEEKS = 19;
+export const HEATMAP_MOBILE_WEEKS = 18;
+
+/** 格子边长与缝隙。与下面 CELL_CLASS / `gap-[3px]` 是同一组数，改一处要改另一处。 */
+const CELL_PX = 13;
+const CELL_GAP_PX = 3;
+/**
+ * 星期栏吃掉的宽：`w-6` (24) + `mr-1.5` (6) + 网格行的一个缝隙 (3)。
+ * 它在网格左边，任何「放不放得下」的账都要算上它。
+ */
+const WEEKDAY_GUTTER_PX = 24 + 6 + CELL_GAP_PX;
+
+/**
+ * 窄屏的宽度预算：390 的视口 − main 的 `px-4` (32) − 卡片的 `px-4` 与边框 (34)
+ * = 324px。390 是文档里点名支持的最窄一档（docs/design.md#responsive）。
+ */
+export const MOBILE_CARD_CONTENT_PX = 324;
+
+/** 整张网格实际占的宽（含星期栏）。窄屏列数按它定。 */
+export function heatmapWidthPx(weeks: number): number {
+  return WEEKDAY_GUTTER_PX + weeks * COLUMN_PITCH - CELL_GAP_PX;
+}
 
 /** 五档色阶的类名。索引就是档位，heat-0 = 那天没有活动（可见的浅灰，不是透明）。 */
 const LEVEL_CLASS: Record<HeatLevel, string> = {
@@ -26,7 +51,7 @@ const LEVEL_CLASS: Record<HeatLevel, string> = {
 
 const CELL_CLASS = "size-[13px] shrink-0 rounded-[2px]";
 /** 一列的步距：13px 格 + 3px 缝隙。月份标签按它定位。 */
-const COLUMN_PITCH = 16;
+const COLUMN_PITCH = CELL_PX + CELL_GAP_PX;
 
 /**
  * GitHub 式活跃热力格子图。

@@ -392,7 +392,7 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     await waitFor(() => expect(screen.queryByText("等你批")).toBeNull());
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
     expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search.",
+      "No conversations match your search",
     );
   });
 

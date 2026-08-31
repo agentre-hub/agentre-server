@@ -58,6 +58,7 @@ export default function Transcript({
   agentName,
   agentAvatar,
   agentPending = false,
+  fallbackModel = "",
   streaming = false,
   pendingAssistant = false,
   reconnecting = false,
@@ -96,6 +97,15 @@ export default function Transcript({
    * 空窗而是终局，照旧退回中性抬头。
    */
   agentPending?: boolean;
+  /**
+   * 这条对话此刻钉的模型名，用在还没收到终态帧的那一轮上。
+   *
+   * 消息自己的 `model` 只有 `runtime.runResultDone` 这一条来路（wire 上的 usage 帧
+   * 没有这个字段），而那一帧要等一轮跑完才来。不给这个回退，流式期间模型那一格
+   * 是空的，等 done 到了再「跳」出一个名字 —— 而底栏那颗 pill 从头到尾都在显示它。
+   * 与桌面端 `chat.tsx` 交给行渲染器的是同一样东西。
+   */
+  fallbackModel?: string;
   /**
    * 这条会话此刻有没有一轮在跑。为 true 时最后一条助手消息末尾出三点。
    *
@@ -389,6 +399,7 @@ export default function Transcript({
                     }
                     compacting={false}
                     reconnecting={reconnecting}
+                    fallbackModel={fallbackModel}
                   />
                 </div>
               );

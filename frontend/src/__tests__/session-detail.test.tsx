@@ -543,21 +543,33 @@ describe("会话详情页", () => {
     ).toBeTruthy();
   });
 
-  // 与上一条是**两句不同的话**：这一条是稳定答案（builtin 没有权限门），上一条是
-  // 「此刻问不到」。整颗不摆会把两者混成同一件事，用户无从分辨。
-  it("这个后端本来就没有权限档位时，说的是另一句", async () => {
+  // 与上一条是**两件不同的事**，但只有上一条值得说：这一条是稳定答案（builtin
+  // 没有权限门），底栏空着本身就是完整的答案 —— 桌面端也是这么办的，没有档可切
+  // 就不摆那颗 pill。写一句「这个后端没有权限档位」是在给用户一件他既做不了、
+  // 也不必知道的事。上一条不同：那是本该有档却问不出来，属于异常，仍要说。
+  it("这个后端本来就没有权限档位时，控件整颗不摆", async () => {
     mockCapabilities({
       capabilities: [],
       permissionMode: { allowedModes: [] },
     });
 
     renderPage();
+    await screen.findByTestId("session-detail-composer");
+    await vi.waitFor(() =>
+      expect(fakeClient.request).toHaveBeenCalledWith(
+        rpcMethods.runtimeCapabilities,
+        expect.anything(),
+      ),
+    );
+    // 应答已消费：底栏要说的话此刻早该在了。
+    await act(async () => {});
+
     expect(
       screen.queryByRole("button", { name: /Permission mode/ }),
     ).toBeNull();
     expect(
-      await screen.findByText("This backend has no permission modes"),
-    ).toBeTruthy();
+      screen.queryByText("This backend has no permission modes"),
+    ).toBeNull();
   });
 
   // ── 模型目标：三态、持久化、两台机器 ─────────────────────────────────────
@@ -2061,6 +2073,109 @@ describe("会话详情：历史来自 server 镜像", () => {
     expect(screen.queryByText(/不该被看到的转录/)).toBeNull();
     expect(screen.queryByTestId("session-detail-composer")).toBeNull();
   });
+
+  // Given 一条会话正在输出；When 在桌面右栏切到另一条会话再切回来；Then 刚才那几帧
+  // 只能出现一次。
+  //
+  // 切换是同实例换 props：渲染期重置把 `events` 清空、`history.settled` 打回 false，
+  // 于是镜像历史要重取一遍。但**中继客户端没换也没 detach**（同一台机器就是同一个
+  // client），它对这条会话仍在关注名单上，实时帧在镜像那一趟 HTTP 还没回来时就已经
+  // 落进刚清空的 `events` 了。镜像那一段随后原样前插——它覆盖的正是同一段 seq，
+  // 屏幕上就是同一句话说两遍。
+  //
+  // 首屏没有这个洞：那时客户端还没 attach（attach 排在 history.settled 之后），
+  // 实时帧不可能抢在镜像前面。所以这条只在「切走再切回」这条路上成立。
+  it("输出中切走再切回：镜像历史不与已经收到的实时帧重复", async () => {
+    let mirrorCalls = 0;
+    let releaseSecond = () => {};
+    const secondPage = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        if (path.includes("session_id=43")) return framePage([]);
+        mirrorCalls += 1;
+        // 第二趟（切回来那一次）压住不回，好让实时帧先落地——这正是真实时序：
+        // 客户端还连着，HTTP 要一个来回。
+        if (mirrorCalls >= 2) await secondPage;
+        return mirrorCalls >= 2
+          ? // 切回来时镜像已经跟到了第二帧。
+            framePage([
+              { seq: 1, text: "第一句" },
+              { seq: 2, text: "输出中的一句" },
+            ])
+          : framePage([{ seq: 1, text: "第一句" }]);
+      }
+      if (path.startsWith("/v1/agent-sessions?")) {
+        const id = path.includes("session_id=43") ? "43" : "42";
+        return { items: [{ peer_fingerprint: "fp-1", session_id: id }] };
+      }
+      // 其余端点（agents / 已读回执 …）不是本条的判据，如实回空即可。
+      return {};
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    const at = (sessionId: number) => (
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            sessionId={sessionId}
+            form="embedded"
+          />
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+
+    const { rerender } = render(at(42));
+    await screen.findByText(/第一句/);
+
+    rerender(at(43));
+    await vi.waitFor(() => expect(screen.queryByText(/第一句/)).toBeNull());
+
+    rerender(at(42));
+    // 客户端一直连着这条会话，输出继续推过来——镜像那一趟还在路上。
+    await vi.waitFor(() => expect(mirrorCalls).toBe(2));
+    act(() => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: { kind: "text_delta", text: "输出中的一句" },
+        seq: 2,
+      });
+    });
+    // 这一刻转录还没显示出来（history.loaded 要等镜像那一趟），但帧已经在
+    // `events` 里了 —— 镜像一落地两边一起画出来，重复就是在那一刻现形的。
+    releaseSecond();
+
+    await screen.findByText(/第一句/);
+    await vi.waitFor(() => {
+      const said = (text: string) =>
+        (
+          screen.getByTestId("session-detail-transcript").textContent ?? ""
+        ).split(text).length - 1;
+      expect(said("第一句")).toBe(1);
+      expect(said("输出中的一句")).toBe(1);
+    });
+  });
 });
 
 /**
@@ -2159,10 +2274,16 @@ describe("会话详情：头部", () => {
     { sync_id: "ag-1", name: "后端 Agent", avatar_color: "agent-3" },
   ];
 
-  function stubHeader() {
+  function stubHeader(
+    agents: {
+      sync_id: string;
+      name: string;
+      avatar_color?: string;
+    }[] = workspaceAgents,
+  ) {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
-      if (path === "/v1/workspace/agents") return { agents: workspaceAgents };
+      if (path === "/v1/workspace/agents") return { agents };
       throw new Error("unexpected: " + path);
     });
     fakeClient.request.mockImplementation(async (method) => {
@@ -2219,6 +2340,29 @@ describe("会话详情：头部", () => {
     const avatar = within(head).getByRole("img", { name: "后端 Agent" });
     // token 要落成 CSS 变量再进 backgroundColor —— 直接塞 token 等于没上色。
     expect(avatar.style.backgroundColor).toBe("var(--agent-3)");
+  });
+
+  /**
+   * 没设过颜色的 Agent（同步载荷里根本没有 avatar_color）是常态，不是异常：
+   * 桌面端不逼用户选色。此前这一档退化成「不给 backgroundColor」，方块透明，
+   * 白色首字母落在深色底上 —— 看起来就是一枚黑方块，而同一个 Agent 在左栏
+   * 索引里是蓝的（那边走共享包的 AgentAvatar，缺色退回 agent-1）。
+   */
+  it("Agent 没设颜色：头像退回调色板首色，不是一枚透明方块", async () => {
+    stubHeader([{ sync_id: "ag-1", name: "后端 Agent" }]);
+    const { container } = renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const head = screen.getByTestId("session-detail-header");
+    const avatar = within(head).getByRole("img", { name: "后端 Agent" });
+    expect(avatar.style.backgroundColor).toBe("var(--agent-1)");
+    // 转录里那一枚同理：两处是同一个身份记号，不该一处有底色一处没有。
+    const inTranscript = container.querySelector(
+      '[data-testid="session-detail-transcript"] [role="img"]',
+    );
+    expect((inTranscript as HTMLElement | null)?.style.backgroundColor).toBe(
+      "var(--agent-1)",
+    );
   });
 
   it("meta 行只在真的有前一段时才摆分隔符（老会话没有状态/时间，不该留一个孤零零的「·」）", async () => {
@@ -3334,7 +3478,16 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     fakeClient.catchUp.mockRejectedValue(new Error("boom"));
     renderPage();
 
-    expect(await screen.findByTestId("session-catchup-failed")).toBeTruthy();
+    const alert = await screen.findByTestId("session-catchup-failed");
+    /*
+      文案必须落在 description 槽里。Alert 是两列 grid，第一列专留给图标、没有
+      图标时宽度为 0（`grid-cols-[0_1fr]`），只有 AlertTitle / AlertDescription
+      带 `col-start-2`。裸文本进的是第一列 —— 2026-08-30 在真实控制台上量到
+      这句话被压成 28px 宽、457px 高的一竖行字。jsdom 算不出布局，所以这里断言
+      的是「文案在哪个槽里」这个前提。
+    */
+    const description = alert.querySelector('[data-slot="alert-description"]');
+    expect(description?.textContent).toContain("It may still be catching up.");
   });
 
   /**

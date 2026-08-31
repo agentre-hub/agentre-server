@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 
 import {
   Alert,
+  AlertDescription,
   Button,
   countTurnsAfterMessage,
   TranscriptJumpControl,
@@ -56,6 +57,8 @@ export interface SessionScrollBodyProps {
   /** 转录行那一档头像。在 JSX 之外算好，见 SessionDetailView 的 rowAvatar。 */
   agentAvatar: ReactNode;
   agentPending: boolean;
+  /** 还没收到终态帧的那一轮，模型退到这一个（见 Transcript 的同名 prop）。 */
+  fallbackModel: string;
   streaming: boolean;
   pendingAssistant: boolean;
 
@@ -92,6 +95,7 @@ export default function SessionScrollBody({
   agentName,
   agentAvatar,
   agentPending,
+  fallbackModel,
   streaming,
   pendingAssistant,
   decisions,
@@ -200,7 +204,9 @@ export default function SessionScrollBody({
             variant="destructive"
             data-testid="session-catchup-failed"
           >
-            {t("session.transcript.catchUpFailed")}
+            <AlertDescription>
+              {t("session.transcript.catchUpFailed")}
+            </AlertDescription>
           </Alert>
         )}
 
@@ -233,6 +239,7 @@ export default function SessionScrollBody({
               agentName={agentName}
               agentAvatar={agentAvatar}
               agentPending={agentPending}
+              fallbackModel={fallbackModel}
               streaming={streaming}
               pendingAssistant={pendingAssistant}
               // 通道断了就先说通道：此刻「还在不在生成」根本观察不到，继续转三个点

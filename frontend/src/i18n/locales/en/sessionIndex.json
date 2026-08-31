@@ -4,10 +4,12 @@
     "all": "All",
     "running": "Running",
     "waiting": "Waiting for you",
-    "empty": "No conversations match this filter.",
     "unread": "Unread",
-    "emptyWithTotal": "Nothing in this filter. {{count}} conversations in your account.",
-    "seeAll": "See all {{count}}"
+    "seeAll": "See all {{count}}",
+    "emptyTitle": "Nothing in “{{label}}”",
+    "emptyBodyWithTotal": "{{count}} conversations in your account.",
+    "emptyBody": "Try another filter, or go back to All.",
+    "seeAllPlain": "See all conversations"
   },
   "loadMore": {
     "label": "Load more",
@@ -16,12 +18,14 @@
     "failed": "Couldn't load that page."
   },
   "search": {
-    "empty": "No conversations match your search.",
-    "clear": "Clear search"
+    "clear": "Clear search",
+    "emptyTitle": "No conversations match your search",
+    "emptyBody": "Try a different term, or clear the search."
   },
   "group": {
     "unassignedProject": "Quick chats",
-    "unnamedAgent": "Unnamed"
+    "unnamedAgent": "Unnamed",
+    "overflowEmpty": "Nothing in this group right now."
   },
   "machine": {
     "offline": "Offline",

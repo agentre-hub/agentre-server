@@ -53,6 +53,11 @@ import {
   EventUsage,
   EventUnrecognizedBlock,
   EventUserMessage,
+  NotifyAutonomousTurnDone,
+  NotifyAutonomousTurnEvent,
+  NotifyAutonomousTurnStarted,
+  NotifyEvent,
+  NotifyRunResultDone,
   ProtobufRpcCodec,
   encodeRpcCancel,
   encodeRpcMethodRequest,
@@ -723,6 +728,9 @@ function decodeNotification(
       userAnchor: body.userAnchor,
       model: body.model,
       contextWindow: body.contextWindow,
+      durationMs: body.durationMs,
+      firstTokenMs: body.firstTokenMs,
+      tokensPerSec: body.tokensPerSec,
       turnToken: Number(body.turnToken),
       stopErrMsg: body.stopErrorMessage,
       stopErrCode: body.stopErrorCode,
@@ -801,6 +809,26 @@ const EVENT_KINDS: Record<RuntimeEventCase, EventKind> = {
 };
 
 /**
+ * 上面那张表的反向：判别值 → oneof case 名。回放路径（server 镜像的历史、中继
+ * 补齐、往回续读）要把中间形状翻回 Protobuf 的 oneof 才能走同一条解帧路径。
+ *
+ * **就地反转生成，不手写第二份**。此前它是按 snake_case → camelCase 猜的，而
+ * 上面那张表的注释写的正是「两边不是同一套拼法，也没有可推导的规则」：
+ * `tool_use_start` 的 case 是 `toolCall`、`ask_user_question` 是 `userAskRequest`、
+ * 它的答案是 `userAskResolved`。这三种因此在回放时翻成词表外的判别值，再翻回来
+ * 就成了 `toolUseStart` 这种谁都不认得的东西 —— 归约器的 switch 落进 default，
+ * 历史里的工具卡与提问卡铺成一坨 JSON，工具结果连挂靠的卡都没有、整块消失。
+ * 实时帧不过这一跳，所以同一条对话「正在跑的那一轮好好的、翻上去全坏」。
+ */
+const RUNTIME_EVENT_CASES: Readonly<Record<string, RuntimeEventCase>> =
+  Object.fromEntries(
+    Object.entries(EVENT_KINDS).map(([eventCase, kind]) => [
+      kind,
+      eventCase as RuntimeEventCase,
+    ]),
+  );
+
+/**
  * wire 上的 `bytes` 字段还原成载荷本身。
  *
  * 事件里每一个 `bytes` 都是 Go 侧的 `json.RawMessage`（工具入参、canonical、
@@ -836,66 +864,176 @@ function runtimeEventToViewEvent(
   };
 }
 
+/**
+ * 日志行的 RpcNotification oneof ↔ 中间形状的方法名。
+ *
+ * 日志里**不只有** runtime.event:每跑完一轮就落一条轮次结束帧,自主续轮另有起止两条。
+ * 两条补齐路径最终汇到同一个 (method, params) 中间形状 —— server 镜像那条由 Go 侧
+ * internal/pkg/wireview 投影,中继这条由这里投影 —— 所以两边必须是同一张表。
+ */
+const JOURNALED_METHODS: Record<string, string> = {
+  runtimeEvent: NotifyEvent,
+  autonomousTurnEvent: NotifyAutonomousTurnEvent,
+  runResultDone: NotifyRunResultDone,
+  autonomousTurnDone: NotifyAutonomousTurnDone,
+  autonomousTurnStarted: NotifyAutonomousTurnStarted,
+};
+
+/**
+ * 一行 wire.JournaledNotification(typed Protobuf)→ 与 server 镜像同形的中间帧。
+ *
+ * 认不出的通知形态交回一条**空 params 的行**而不是抛:这一页是 `map` 一次性投影的,
+ * 其中一行抛出会让整页连同 catchUp() 一起被拒 —— 详情页于是停在「没能从这台机器读到
+ * 这条对话的内容」,而机器在线、内容也确实在那里。空 params 那行交付不出去,但它照样
+ * 占掉自己那一格游标(见 applyDedup 的注释),后面的帧不会被判成跳号。
+ */
 function journaledFromProtobuf(input: unknown): JournaledNotification {
   const entry = input as {
     seq: bigint;
-    payload?: {
-      payload: {
-        value?: {
-          sessionId: bigint;
-          event: { case: string; value?: object };
-        };
-      };
-    };
+    payload?: { payload?: { case?: string; value?: Record<string, unknown> } };
   };
-  const runtime = entry.payload?.payload.value;
+  const seq = Number(entry.seq);
+  const payload = entry.payload?.payload;
+  const method =
+    payload?.case === undefined ? "" : (JOURNALED_METHODS[payload.case] ?? "");
+  const value = payload?.value;
+  if (method === "" || value === undefined) {
+    return { seq, method, params: {} };
+  }
+  if (method === NotifyEvent || method === NotifyAutonomousTurnEvent) {
+    const event = value.event as { case: string; value?: object } | undefined;
+    if (event === undefined) return { seq, method, params: {} };
+    return {
+      seq,
+      method,
+      params: {
+        sessionId: Number(value.sessionId),
+        seq,
+        event: runtimeEventToViewEvent({
+          case: event.case,
+          ...(event.value ?? {}),
+        }),
+      },
+    };
+  }
+  if (method === NotifyAutonomousTurnStarted) {
+    return {
+      seq,
+      method,
+      params: {
+        sessionId: Number(value.sessionId),
+        seq,
+        trigger: value.trigger,
+        turnToken: Number(value.turnToken ?? 0),
+      },
+    };
+  }
+  const usage = value.usage as Record<string, number> | undefined;
   return {
-    seq: Number(entry.seq),
-    method: "runtime.event",
-    params:
-      runtime === undefined
-        ? {}
-        : {
-            sessionId: Number(runtime.sessionId),
-            seq: Number(entry.seq),
-            event: runtimeEventToViewEvent({
-              case: runtime.event.case,
-              ...(runtime.event.value ?? {}),
-            }),
-          },
+    seq,
+    method,
+    params: {
+      sessionId: Number(value.sessionId),
+      seq,
+      providerSessionId: value.providerSessionId,
+      ...(usage === undefined ? {} : { usage: { ...usage } }),
+      userAnchor: value.userAnchor,
+      model: value.model,
+      contextWindow: value.contextWindow,
+      turnToken: Number(value.turnToken ?? 0),
+      // 与 Go 侧 wireview.doneView 同名:中间形状是两条路径的会合点,少一个别名就是
+      // 镜像那条路上的停止原因读不出来。
+      stopErrMsg: value.stopErrorMessage,
+      stopErrCode: value.stopErrorCode,
+    },
   };
 }
 
+/**
+ * 中间形状的一行 → 与实时流同一套解帧/投递路径认得的帧。日志行上的 seq 盖在帧上
+ * (params 里那份是投影时补的,不是权威)。
+ *
+ * 认不出的 method / 解不动的载荷交回 null:调用方按「交付不出去也占掉这一格游标」
+ * 处理(applyJournaled / applyJournalFrames),不报错、不跳号。
+ */
 function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
   if (!n.params || typeof n.params !== "object") return null;
-  const value = n.params as { sessionId?: unknown; event?: unknown };
-  if (
-    typeof value.sessionId !== "number" ||
-    !value.event ||
-    typeof value.event !== "object"
-  )
+  const value = n.params as Record<string, unknown>;
+  if (typeof value.sessionId !== "number") return null;
+  const sessionId = value.sessionId;
+  if (n.method === NotifyEvent || n.method === NotifyAutonomousTurnEvent) {
+    if (!value.event || typeof value.event !== "object") return null;
+    return {
+      id: 0n,
+      body: {
+        case:
+          n.method === NotifyEvent
+            ? "runtimeEventNotification"
+            : "autonomousTurnEventNotification",
+        sessionId,
+        seq: n.seq,
+        event: viewEventToRuntimeEvent(
+          value.event as Record<string, unknown>,
+        ) as never,
+      },
+    } as ProtobufRpcFrame;
+  }
+  if (n.method === NotifyAutonomousTurnStarted) {
+    return {
+      id: 0n,
+      body: {
+        case: "autonomousTurnStartedNotification",
+        sessionId,
+        seq: n.seq,
+        trigger: str(value.trigger),
+        turnToken: BigInt(num(value.turnToken)),
+      },
+    } as ProtobufRpcFrame;
+  }
+  if (n.method !== NotifyRunResultDone && n.method !== NotifyAutonomousTurnDone)
     return null;
+  const usage = value.usage as Record<string, number> | undefined;
   return {
     id: 0n,
     body: {
-      case: "runtimeEventNotification",
-      sessionId: value.sessionId,
+      case:
+        n.method === NotifyRunResultDone
+          ? "runResultDoneNotification"
+          : "autonomousTurnDoneNotification",
+      sessionId,
       seq: n.seq,
-      event: viewEventToRuntimeEvent(
-        value.event as Record<string, unknown>,
-      ) as never,
+      providerSessionId: str(value.providerSessionId),
+      ...(usage === undefined ? {} : { usage: { ...usage } }),
+      userAnchor: str(value.userAnchor),
+      model: str(value.model),
+      contextWindow: num(value.contextWindow),
+      turnToken: BigInt(num(value.turnToken)),
+      stopErrorMessage: str(value.stopErrMsg),
+      stopErrorCode: num(value.stopErrCode),
+      durationMs: num(value.durationMs),
+      firstTokenMs: num(value.firstTokenMs),
+      tokensPerSec: num(value.tokensPerSec),
     },
   } as ProtobufRpcFrame;
+}
+
+/** 投影按「零值省略」写(wireview.putNonempty/putNonzero),读回时补回零值。 */
+function str(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function num(value: unknown): number {
+  return typeof value === "number" ? value : 0;
 }
 
 function viewEventToRuntimeEvent(
   event: Record<string, unknown>,
 ): { case: string } & Record<string, unknown> {
   const { kind, ...fields } = event;
+  // 词表外的判别值原样当 case 名交出去：运行期照样可能来一个比本仓新的 daemon，
+  // 而 runtimeEventToViewEvent 的兜底也是原样透出 —— 两头都不改写，回放才是恒等的。
   const eventCase =
-    typeof kind === "string"
-      ? kind.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
-      : "";
+    typeof kind === "string" ? (RUNTIME_EVENT_CASES[kind] ?? kind) : "";
   return { case: eventCase, ...fields };
 }
 

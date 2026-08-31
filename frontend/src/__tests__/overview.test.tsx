@@ -8,6 +8,7 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HEATMAP_MOBILE_WEEKS } from "@/components/stats/Heatmap";
 import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -722,17 +723,53 @@ describe("overview: 非稳态", () => {
 
 // ── 移动端（设计稿 SoTuq） ───────────────────────────────────────────────
 describe("overview: 移动端", () => {
-  it("热力图只出近 19 周，并把更长的历史指向桌面端", async () => {
+  // 周数按常量断言而不是抄一个字面量：那个数是按卡片宽度预算算出来的
+  // （heatmap-grid.test.ts 守着那笔账），抄进来只会在它变了之后各说各的。
+  it("热力图只出窄屏那一档的周数，并把更长的历史指向桌面端", async () => {
     setViewport(true);
     serve();
     renderOverview();
 
     await screen.findByTestId("heatmap-grid");
-    expect(screen.getAllByTestId("heat-week").length).toBe(19);
-    expect(screen.getByText("Last 19 weeks")).toBeTruthy();
+    expect(screen.getAllByTestId("heat-week").length).toBe(
+      HEATMAP_MOBILE_WEEKS,
+    );
+    expect(screen.getByText(`Last ${HEATMAP_MOBILE_WEEKS} weeks`)).toBeTruthy();
     expect(
       screen.getByText("A longer history is on the desktop app."),
     ).toBeTruthy();
+  });
+
+  /**
+   * 顶栏在 390 宽的手机上放不下「标题 + Desktop connected + 三档范围 + 头像 +
+   * 两颗图标按钮」：2026-08-31 量到范围控件（154–304）压在头像（258–286）和语言
+   * 按钮（302–336）上，标题被截成「O...」。窄屏的顶栏只留标题与账号那一组，
+   * 页面自己的两样东西下沉到内容第一行（与 Chat 的 ownHeader 同一条思路：
+   * 移动端是另一棵树，不是压扁的桌面端）。
+   */
+  it("窄屏顶栏不摆页面自己的控件：范围分段与在线指示下沉到内容里", async () => {
+    setViewport(true);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    const rangeGroup = screen.getByRole("group", { name: "Stats range" });
+    expect(screen.getByRole("banner").contains(rangeGroup)).toBe(false);
+    expect(screen.getByRole("main").contains(rangeGroup)).toBe(true);
+
+    const fresh = screen.getByText("Desktop connected");
+    expect(screen.getByRole("banner").contains(fresh)).toBe(false);
+    expect(screen.getByRole("main").contains(fresh)).toBe(true);
+  });
+
+  it("宽屏照旧摆在顶栏里", async () => {
+    setViewport(false);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    const rangeGroup = screen.getByRole("group", { name: "Stats range" });
+    expect(screen.getByRole("banner").contains(rangeGroup)).toBe(true);
   });
 
   it("窄屏不做横向滚动：热力卡身上没有 overflow-x-auto", async () => {

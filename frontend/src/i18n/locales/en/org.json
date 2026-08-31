@@ -15,8 +15,8 @@
       "clearAll": "Clear filters"
     },
     "noMatch": {
-      "title": "No agents found",
-      "conditions": "Matching: {{conditions}}"
+      "title": "No agents match",
+      "body": "{{count}} agents in this org."
     },
     "emptyDepartments": {
       "title": "No departments yet",

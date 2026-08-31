@@ -470,7 +470,10 @@ the page is now stats-first.
 - **TopBar**: **Fresh** (only when an `agentred` device is online) plus a three-way range
   segment — Last 7 days / Last 30 days / All time, `role="group"` labelled
   `overview.stats.range.label`. **The range only governs the summary and the three
-  distribution cards; the heatmap is always one year.**
+  distribution cards; the heatmap is always one year.** Below `md` both leave the bar and
+  render as the page's first row instead: at 390px the bar cannot hold them next to the
+  title, the account and `AppControls` — until 2026-08-31 it did not, and the range
+  segment sat on top of the account avatar with the title clipped to one character.
 - **Four stat tiles** through the shared `Metric`, `grid grid-cols-2 gap-3 md:grid-cols-4`:
   Conversations (range count, account total as the sub), Current streak, Active days
   (`active_days / window_days`), Devices online. All four have a real source, so none of
@@ -497,9 +500,15 @@ the page is now stats-first.
   - **`heat-0` means "nothing started that day", not "no data".** Which is why the skeleton is
     the same grid: before the fetch resolves the grid is already there in `heat-0`, so an
     845px block does not appear out of nowhere and shove the page down.
-  - **Mobile draws 19 weeks, not 53, and never scrolls horizontally** — 53 weeks need
+  - **Mobile draws 18 weeks, not 53, and never scrolls horizontally** — 53 weeks need
     845px, and a horizontally scrolling heatmap on a phone is unusable. The card says so
-    and points at the desktop app.
+    (interpolating the count, so the copy cannot drift from the grid) and points at the
+    desktop app. The count is a width budget, not a taste: the grid also carries a 33px
+    weekday gutter, and a 390px phone leaves 324px of card content —
+    `heatmapWidthPx`/`MOBILE_CARD_CONTENT_PX` own that arithmetic and
+    `heatmap-grid.test.ts` guards it in both directions. It was 19 until 2026-08-31,
+    which was budgeted against the viewport with the gutter forgotten and overflowed the
+    card by 10px, clipping today's column; e2e's Pixel 7 (412px) is wide enough to hide it.
 - **`scope`** has two values and both carry real data. `full` = activity reporting is on.
   `saved` = it is off, and the numbers cover only conversations saved to the account; a
   single `bg-primary-soft` notice at the top of the page says so once (not per card) and
@@ -951,6 +960,13 @@ Two shapes that look interchangeable and are not:
   `shadow-sm` — Tailwind's 12px, not the boards' 14px, and it carries elevation the auth
   screens do not have. It is what the device list uses. An auth card is written out:
   `rounded-lg border border-border bg-card`.
+- **`Alert` has content slots; text is not one of them.** `Alert` is a two-column grid
+  whose first column exists for an icon and is **zero-wide when there is none**; only
+  `AlertTitle` and `AlertDescription` carry `col-start-2`. Text placed directly in
+  `<Alert>` lands in that zero-wide column and renders as a single column of characters
+  — measured at 28px wide by 457px tall on the live console before this was fixed. Put
+  the copy in `<AlertDescription>` (and a heading in `<AlertTitle>`); the icon, if any,
+  stays a direct child. A lint rule enforces it (`eslint-rules/alert-slots.js`).
 - **`Dialog` is not a screen.** The approval step is a region of `/device`, not a dialog,
   because `role="dialog"` tells a screen reader the rest of the page is inert when it is
   the whole page. Reach for `Dialog` for a confirm-and-dismiss interaction, as the device

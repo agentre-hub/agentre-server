@@ -115,6 +115,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  // isSecureContext 那条用 spyOn 换掉取值器，不还原会活到后面的用例里。
+  vi.restoreAllMocks();
   // beforeEach 无条件删掉了这个属性，所以「本来就没有」的那一支已经没什么可做；
   // 要还原的恰恰是「本来有」的那一支——原来的判据写反了，于是唯一需要还原的情形
   // 从来没被还原过。
@@ -382,6 +384,25 @@ describe("Account page: unsupported browsers disable add and change the empty-st
     expect(addButton.getAttribute("title")).toMatch(
       /does not support passkeys/i,
     );
+  });
+
+  // Given 本站用 http 提供 / When 打开账号页 / Then 说的是这个源，不是浏览器。
+  //
+  // 此前这里一律写「这个浏览器不支持通行密钥 · 换用较新的 Chrome、Safari 或 Edge
+  // 即可添加」——浏览器支持得好好的，用户照着换几个都一样。
+  it("blames the http origin, not the browser, when the page is not a secure context", async () => {
+    vi.spyOn(window, "isSecureContext", "get").mockReturnValue(false);
+    mockDefaultApi();
+    renderAccount();
+
+    const addButton = (await screen.findByRole("button", {
+      name: /Add a passkey/i,
+    })) as HTMLButtonElement;
+    expect(addButton.disabled).toBe(true);
+    expect(addButton.getAttribute("title")).toMatch(/HTTPS/i);
+    expect(addButton.getAttribute("title")).not.toMatch(/does not support/i);
+    expect(screen.getByText(/served over HTTP/i)).toBeTruthy();
+    expect(screen.queryByText(/does not support passkeys/i)).toBeNull();
   });
 
   it("enables Add a passkey when window.PublicKeyCredential is present", async () => {

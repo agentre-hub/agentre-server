@@ -576,7 +576,7 @@ describe("对话页 = 统一会话索引", () => {
     );
     // 空态说的是「这次搜索没有匹配」，不是「你还没有对话」。
     expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search.",
+      "No conversations match your search",
     );
 
     fireEvent.change(search, { target: { value: "重构" } });

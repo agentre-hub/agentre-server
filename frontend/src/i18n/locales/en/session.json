@@ -3,7 +3,6 @@
     "permissionMode": "Permission mode",
     "modelTarget": "Provider and model",
     "permissionUnavailable": "This machine cannot list permission modes right now",
-    "permissionUnsupported": "This backend has no permission modes",
     "permissionSetFailed": "Permission mode was not changed: {{reason}}",
     "modelSetFailed": "Model was not changed: {{reason}}",
     "modelPartiallySynced": "The other machine has not caught up; opening it there may show the old value",

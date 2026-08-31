@@ -15,12 +15,19 @@ import { statusConfig } from "@agentre-hub/agentre-ui";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { Gauge, Laptop, LayoutDashboard, MessagesSquare } from "lucide-react";
+import {
+  Gauge,
+  Laptop,
+  LayoutDashboard,
+  ListFilter,
+  MessagesSquare,
+} from "lucide-react";
 
 import {
   ConsoleNavItem,
   EmptyState,
   FilterChip,
+  InlineEmpty,
   Metric,
   MobileTabBar,
   StatusMark,
@@ -346,5 +353,47 @@ describe("MobileTabBar（A6Z3k）", () => {
       "font-semibold",
     );
     assertNoNarration(document.body, "MobileTabBar");
+  });
+});
+
+/**
+ * 索引栏里的空态与页面级 EmptyState 是两件事：后者是一整块面板没内容（62px 图标圈、
+ * 18px 粗标题），前者是一条**窄栏**里当前这一屏筛空了。此前三处索引空态各画各的
+ * ——组织面的「未找到 Agent」是整栏垂直居中的一句 mono 小字，同一个面板下面的
+ * 「还没有任何部门」却是顶端的虚线卡片，会话索引又是第三种（裸图标 + 一行灰字 +
+ * 一个手搓的 border 按钮）。同一个信息层级三种形，这是「一个概念一个实现」的反例。
+ *
+ * InlineEmpty 把它们收成一种：虚线卡片、顶端对齐、图标 + 标题 + 正文 + 一条回程。
+ */
+describe("InlineEmpty（索引栏内空态）", () => {
+  it("虚线卡片 + 顶端对齐：不把一句话吊在整栏正中", () => {
+    const { container } = render(
+      <InlineEmpty
+        icon={ListFilter}
+        title="Nothing here"
+        body="12 conversations in your account."
+        action={<button type="button">See all</button>}
+        testId="inline-empty"
+      />,
+    );
+    const box = screen.getByTestId("inline-empty");
+    expect(box.className).toContain("border-dashed");
+    expect(box.className).toContain("rounded-lg");
+    // 顶端对齐：不能是 h-full + justify-center（那会在长栏里留一大块空白）。
+    expect(box.className).not.toContain("h-full");
+    expect(box.className).not.toContain("justify-center");
+    expect(screen.getByText("Nothing here").tagName).toBe("P");
+    expect(screen.getByText("12 conversations in your account.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "See all" })).toBeTruthy();
+    assertNoNarration(container, "InlineEmpty");
+  });
+
+  it("图标是装饰，正文与动作都可缺席", () => {
+    const { container } = render(
+      <InlineEmpty icon={ListFilter} title="Empty" testId="inline-empty" />,
+    );
+    expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+    expect(screen.getByText("Empty")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

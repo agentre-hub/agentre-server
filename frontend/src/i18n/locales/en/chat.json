@@ -19,12 +19,11 @@
   "availableAgents": "Ready",
   "unavailableAgents": "Can't start now",
   "searchAgents": "Search agents",
-  "noAgentMatches": "No agent matches this search.",
   "fromProject": "Pick an agent from a project",
   "projects": "Projects",
   "noProjects": "No projects yet.",
   "noProjectsYetHint": "Create a project from the “Projects” header in the left column and add an agent to it — then you can start a project conversation here.",
-  "noAgentsInProject": "No agents in this project yet.",
+  "noAgentsInProject": "No agents in this project",
   "directMembers": "Direct members",
   "inheritedMembers": "Inherited from parent project",
   "inheritedTag": "Inherited",
@@ -40,5 +39,12 @@
   "noProject": "No project",
   "freeSession": "Free-form session",
   "pickProjectTitle": "Which project it runs in",
-  "willRunOn": "Will run on <1></1>"
+  "willRunOn": "Will run on <1></1>",
+  "noAgentsTitle": "No agents yet",
+  "noAgentsBody": "Agents are created in the desktop app and sync here once you register a device.",
+  "noAgentMatchesTitle": "No agents match your search",
+  "noAgentMatchesBody": "Try a different term, or clear the search.",
+  "clearAgentSearch": "Clear search",
+  "noProjectsYetTitle": "No projects yet",
+  "noAgentsInProjectBody": "Add an agent to this project in the desktop app and it shows up here."
 }

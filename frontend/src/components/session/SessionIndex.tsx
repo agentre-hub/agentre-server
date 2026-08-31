@@ -42,9 +42,12 @@ import {
   FolderPlus,
   ListX,
   LoaderCircle,
+  MessagesSquare,
+  SearchX,
   Trash2,
 } from "lucide-react";
 
+import { InlineEmpty } from "@/components/console";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import { api } from "@/lib/api";
 import { createBrowserSessionImportPorts } from "@/lib/importPorts";
@@ -703,9 +706,14 @@ function GroupOverflowBody({
       {(hasMore || failed) && (
         <LoadMore loading={loading} failed={failed} onLoadMore={loadNext} />
       )}
+      {/* 借页面级空态那句「没有匹配这次搜索的对话」是错的：弹层未必开在搜索里。
+          这一句归它自己。 */}
       {!loading && !failed && rows.length === 0 && (
-        <p className="px-2 py-3 text-xs text-muted-foreground">
-          {t("sessionIndex.search.empty")}
+        <p
+          data-testid="group-overflow-empty"
+          className="px-2 py-3 text-xs text-muted-foreground"
+        >
+          {t("sessionIndex.group.overflowEmpty")}
         </p>
       )}
     </>
@@ -1437,11 +1445,18 @@ function LoadMore({
 }
 
 /**
- * 三种空态，各带一条回程（决策 12）。
+ * 三种空态，各带一条回程（决策 12），形取共享的 `InlineEmpty`。
  *
  * 此前三种共用一行 14px 灰字，靠左，没有任何出路：chips 还在，但没人说该按哪个。
  * 而它们说的不是一回事——筛空了要回「全部」，搜空了要清搜索词，真空要开第一条。
- * 说出**账号里还有多少条**是关键的一句：读者据此立刻知道东西还在。
+ *
+ * 后来补上了出路，但那句话还是含糊的：「这一档里一条都没有」——「档」是这份代码
+ * 里的说法，读者眼前只有 chip 上的「运行中」「等你处理」。标题现在**逐字回指**
+ * 那个 chip，正文才说账号里还有多少条：读者据此立刻知道东西还在。
+ *
+ * `accountTotal` 是可选的，undefined ≠ 0：宿主没算出来只是少说一句正文，不该把
+ * 回「全部」的路也一起吞掉（此前 `?? 0` 把两者揉成一个，筛进空档就出不来了）。
+ * 真的一条都没有时才不摆按钮——那条路通向的是另一块空白。
  *
  * 接不住那个动作（宿主没给回调）就不摆按钮：一个按下去什么都不发生的按钮比没有
  * 按钮更坏。
@@ -1461,48 +1476,61 @@ function IndexEmpty({
 }) {
   const { t } = useTranslation();
   const filtered = filter !== "all";
-  const total = accountTotal ?? 0;
+  // 账号里确实一条都没有（0）与「宿主没算」（undefined）是两回事。
+  const emptyAccount = accountTotal === 0;
 
-  const copy = filtered
-    ? total > 0
-      ? t("sessionIndex.filter.emptyWithTotal", { count: total })
-      : t("sessionIndex.filter.empty")
-    : narrowed
-      ? t("sessionIndex.search.empty")
-      : t("chat.noSessions");
+  let icon = MessagesSquare;
+  let title = t("chat.noSessions");
+  let body: string | undefined;
+  let action: { label: string; run: () => void } | undefined;
 
-  const action = filtered
-    ? total > 0
-      ? {
-          label: t("sessionIndex.filter.seeAll", { count: total }),
-          run: () => onFilterChange("all"),
-        }
-      : null
-    : narrowed && onClearSearch
-      ? { label: t("sessionIndex.search.clear"), run: onClearSearch }
-      : null;
+  if (filtered) {
+    icon = ListX;
+    title = t("sessionIndex.filter.emptyTitle", {
+      label: t(`sessionIndex.filter.${filter}`),
+    });
+    if (accountTotal !== undefined && accountTotal > 0) {
+      body = t("sessionIndex.filter.emptyBodyWithTotal", {
+        count: accountTotal,
+      });
+      action = {
+        label: t("sessionIndex.filter.seeAll", { count: accountTotal }),
+        run: () => onFilterChange("all"),
+      };
+    } else if (!emptyAccount) {
+      body = t("sessionIndex.filter.emptyBody");
+      action = {
+        label: t("sessionIndex.filter.seeAllPlain"),
+        run: () => onFilterChange("all"),
+      };
+    }
+  } else if (narrowed) {
+    icon = SearchX;
+    title = t("sessionIndex.search.emptyTitle");
+    body = t("sessionIndex.search.emptyBody");
+    if (onClearSearch)
+      action = { label: t("sessionIndex.search.clear"), run: onClearSearch };
+  }
 
   return (
-    <div
-      data-testid="session-index-empty"
-      className="flex flex-col items-center gap-2 px-4 py-6 text-center"
-    >
-      <ListX
-        aria-hidden="true"
-        className="size-5 text-decorative-foreground"
-        strokeWidth={1.6}
-      />
-      <p className="text-sm text-muted-foreground">{copy}</p>
-      {action && (
-        <button
-          type="button"
-          data-testid="empty-action"
-          onClick={action.run}
-          className="rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent"
-        >
-          {action.label}
-        </button>
-      )}
-    </div>
+    <InlineEmpty
+      testId="session-index-empty"
+      icon={icon}
+      title={title}
+      body={body}
+      action={
+        action && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2.5 text-2xs"
+            data-testid="empty-action"
+            onClick={action.run}
+          >
+            {action.label}
+          </Button>
+        )
+      }
+    />
   );
 }

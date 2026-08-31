@@ -19,12 +19,11 @@
   "availableAgents": "可以开",
   "unavailableAgents": "现在开不了",
   "searchAgents": "搜索 Agent",
-  "noAgentMatches": "没有匹配这次搜索的 Agent。",
   "fromProject": "从项目里挑一个 Agent",
   "projects": "项目",
   "noProjects": "还没有项目。",
   "noProjectsYetHint": "先在左栏的「项目」旁边新建一个项目，把 Agent 加进去，就能从这里开项目对话了。",
-  "noAgentsInProject": "这个项目里还没有 Agent。",
+  "noAgentsInProject": "这个项目里还没有 Agent",
   "directMembers": "直接成员",
   "inheritedMembers": "继承自父项目",
   "inheritedTag": "继承",
@@ -40,5 +39,12 @@
   "noProject": "不指定项目",
   "freeSession": "自由会话",
   "pickProjectTitle": "在哪个项目里跑",
-  "willRunOn": "将在 <1></1> 上运行"
+  "willRunOn": "将在 <1></1> 上运行",
+  "noAgentsTitle": "还没有 Agent",
+  "noAgentsBody": "Agent 在桌面端建，登记设备之后同步到这里。",
+  "noAgentMatchesTitle": "没有匹配的 Agent",
+  "noAgentMatchesBody": "换个词试试，或者清除搜索。",
+  "clearAgentSearch": "清除搜索",
+  "noProjectsYetTitle": "还没有项目",
+  "noAgentsInProjectBody": "在桌面端把 Agent 加进这个项目，它就会出现在这里。"
 }

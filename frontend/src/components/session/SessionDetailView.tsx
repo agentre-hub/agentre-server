@@ -9,13 +9,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
+  AgentAvatar,
   MESSAGE_AVATAR_CLASS,
-  tokenToCssColor,
   Alert,
-  cn,
+  AlertDescription,
   createTranscriptProjector,
   opensAssistantMessage,
   reduceSessionState,
+  resolveProviderPillState,
   type ModelTarget,
 } from "@agentre-hub/agentre-ui";
 
@@ -24,6 +25,7 @@ import SessionDetailHeader from "@/components/session/SessionDetailHeader";
 import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
 import SessionModelControl from "@/components/session/SessionModelControl";
+import { doneEventFrame } from "@/components/session/turnDone";
 import {
   useReconnectProbe,
   useSessionTargetDevice,
@@ -288,13 +290,10 @@ export default function SessionDetailView({
           decisions.requestWaitersRefresh();
         }
       },
-      onRunResultDone: () => {
+      onRunResultDone: (frame) => {
         turn.markTurnActive(false);
         turn.setPendingAssistant(false);
-        setEvents((prev) => [
-          ...prev,
-          { sessionId: sid, event: { kind: "done" }, seq: undefined },
-        ]);
+        setEvents((prev) => [...prev, doneEventFrame(sid, frame)]);
         // 「已排进这一轮」是对**那一轮**的说明:轮次结束后它已经过期(要么被消费、
         // 回复就在转录里,要么随轮次一起没了),留着就是在骗人。
         turn.setSendFeedback((prev) =>
@@ -388,7 +387,23 @@ export default function SessionDetailView({
           mirrorSeqRef.current = tail.lastSeq;
           // 历史落在最前面：这一段还没有经过中继客户端的游标去重，实时那一段由预置
           // 游标接在它后面（见下面的 attach effect）。
-          setEvents((prev) => [...tail.events, ...prev]);
+          //
+          // 但「后面」不能靠假设——手上已经有的帧要按 seq **就地让位**给这一段：
+          // 桌面右栏切走再切回是同实例换 props，渲染期重置把 events 清空、
+          // history.settled 打回 false，可**中继客户端没换也没 detach**（同一台机器
+          // 就是同一个 client，这条会话仍在它的关注名单上）。于是一条正在输出的对话，
+          // 实时帧会在这一趟 HTTP 还没回来时就落进刚清空的列表里，而镜像这一段覆盖的
+          // 正是同一截 seq——原样前插就是同一句话说两遍。预置游标只管得住往后的帧，
+          // 管不住已经进来的。
+          //
+          // 判据用 lastSeq（这一页最新那条**原始行**的 seq，与预置给中继的游标同一个
+          // 数）而不是逐帧比对：服务端会把连续的 delta 合成一条，合出来那条的 seq 是
+          // 该段最后一帧的，逐帧比对会漏掉被合掉的那些。没有 seq 的帧（轮次结束标记）
+          // 留着——它不占游标，也无从判断归属哪一段。
+          setEvents((prev) => [
+            ...tail.events,
+            ...prev.filter((f) => f.seq === undefined || f.seq > tail.lastSeq),
+          ]);
           // loaded 说的是「账号里**有**这一份」，不是「问过了」。镜像如实回 0 帧时
           // （未保存的对话，机器轴上的大多数）它必须是假：当成读到了，页面就会摆一条
           // 空转录说「还没有消息」——那是在说这条对话是空的，而事实是还没读到。
@@ -682,9 +697,11 @@ export default function SessionDetailView({
   if (deviceError) {
     const alert = (
       <Alert variant="destructive">
-        {deviceError instanceof ApiError
-          ? deviceError.message
-          : t("device.manage.loadError")}
+        <AlertDescription>
+          {deviceError instanceof ApiError
+            ? deviceError.message
+            : t("device.manage.loadError")}
+        </AlertDescription>
       </Alert>
     );
     // 页面形态连壳一起报错；嵌入形态直接就地报错（外层容器给尺寸）。
@@ -746,6 +763,23 @@ export default function SessionDetailView({
     });
   }
 
+  /**
+   * 一轮还没跑完时，meta 栏的模型退到这一个 —— 就是底栏那颗 pill 此刻显示的名字。
+   *
+   * 消息自己的 `model` 只有终态帧一条来路（wire 上的 usage 帧没有这个字段），
+   * 而那一帧要等一轮跑完才来。四态推导仍归共享包的 `resolveProviderPillState`
+   * （pill 自己也调它），这里只取它算出来的那一格；失效（invalid）时留空：那时
+   * pill 显示的就不是一个能用的模型，把它当成「这一轮用的是它」是在撒谎。
+   */
+  const modelPill = resolveProviderPillState({
+    boundProviderKey: engineBackend?.provider_key,
+    boundModelKey: engineBackend?.model_key,
+    catalog: pickerCatalog,
+    target: effectiveTarget,
+  });
+  const fallbackModel =
+    modelPill.mode === "invalid" ? "" : modelPill.modelLabel;
+
   const modelControl = (
     <SessionModelControl
       backendType={summary?.backendType ?? ""}
@@ -772,7 +806,6 @@ export default function SessionDetailView({
   const agent = identity?.agentSyncId
     ? (agents.find((a) => a.sync_id === identity.agentSyncId) ?? null)
     : null;
-  const agentColor = tokenToCssColor(agent?.avatar_color);
 
   /**
    * 名字还在路上：**已知**这条对话有 Agent（agentSyncId 在手），只是账号的 Agent
@@ -785,23 +818,25 @@ export default function SessionDetailView({
   const agentPending = Boolean(identity?.agentSyncId) && !agentsSettled;
 
   /**
-   * 头部与转录共用同一枚头像：agent 调色板底 + 白色首字母 + role="img"，
-   * 与桌面端 primitives.tsx 的 AgentAvatar 同形。解不出 Agent 时不摆（不画一个
-   * 没有身份的方块）。转录那一档尺寸套包的 MESSAGE_AVATAR_CLASS 与行排版对齐。
+   * 头部与转录共用同一枚头像，走共享包的 AgentAvatar（与桌面端 chat.tsx 同一枚
+   * 记号）。解不出 Agent 时不摆（不画一个没有身份的方块）。转录那一档尺寸套包的
+   * MESSAGE_AVATAR_CLASS 与行排版对齐。
+   *
+   * 此前这里是就地手搓的一枚方块，缺的正是包里那条兜底：**没设过颜色**的 Agent
+   * （同步载荷里根本没有 avatar_color，桌面端不逼用户选色）拿不到 backgroundColor，
+   * 方块透明、白字落在深色底上 —— 看着就是一枚黑方块，而同一个 Agent 在左栏索引
+   * 里是蓝的（那边一直走 AgentAvatar，缺色退回 agent-1）。
    */
   const agentAvatar = (size: "md" | "row") =>
     agent ? (
-      <span
-        role="img"
-        aria-label={agent.name}
-        className={cn(
-          "inline-flex shrink-0 items-center justify-center font-semibold text-agent-foreground",
-          size === "md" ? "size-8 rounded-lg text-sm" : MESSAGE_AVATAR_CLASS,
-        )}
-        style={agentColor ? { backgroundColor: agentColor } : undefined}
-      >
-        {agent.name.charAt(0)}
-      </span>
+      <AgentAvatar
+        name={agent.name}
+        // 首字母原样取（不大写）：中文名没有大小写，拉丁名这里也与桌面端一致。
+        initials={agent.name.charAt(0)}
+        color={agent.avatar_color}
+        size="md"
+        className={size === "row" ? MESSAGE_AVATAR_CLASS : undefined}
+      />
     ) : null;
 
   // 在 JSX 之外先算好：i18next/no-literal-string 会把 JSX 里的 agentAvatar("md")
@@ -862,6 +897,7 @@ export default function SessionDetailView({
       agentName={agent?.name}
       agentAvatar={rowAvatar}
       agentPending={agentPending}
+      fallbackModel={fallbackModel}
       streaming={turn.turnActive}
       pendingAssistant={turn.pendingAssistant}
       decisions={decisions}

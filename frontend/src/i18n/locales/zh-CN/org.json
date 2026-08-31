@@ -15,8 +15,8 @@
       "clearAll": "清除筛选"
     },
     "noMatch": {
-      "title": "未找到 Agent",
-      "conditions": "命中条件：{{conditions}}"
+      "title": "没有匹配的 Agent",
+      "body": "组织里一共 {{count}} 个 Agent。"
     },
     "emptyDepartments": {
       "title": "还没有任何部门",

@@ -6,6 +6,7 @@ import { ChevronDown, ChevronUp, Cpu, MoreVertical, Plus } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
   Alert,
+  AlertDescription,
   Button,
   DialogShell,
   DialogShellBody,
@@ -216,7 +217,11 @@ function DeviceExpandDetail({
       t,
       "device.manage.detailLoadError",
     );
-    return <Alert variant="destructive">{message}</Alert>;
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>{message}</AlertDescription>
+      </Alert>
+    );
   }
   const detail = state.data;
   if (!detail) return null;
@@ -741,7 +746,9 @@ export default function Devices() {
         {/* 设备行列表（桌面与移动共用；不再有右列常驻撤销说明卡） */}
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
           {loadError !== null && (
-            <Alert variant="destructive">{listErrorMessage}</Alert>
+            <Alert variant="destructive">
+              <AlertDescription>{listErrorMessage}</AlertDescription>
+            </Alert>
           )}
 
           {/* 动作行：整页唯一的添加入口。引导展开时它不渲染——同一件事不给两个按钮。 */}

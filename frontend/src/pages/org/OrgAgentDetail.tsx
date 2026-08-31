@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
+  AgentAvatar,
   Button,
   DialogShell,
   DialogShellBody,
@@ -45,7 +46,6 @@ import {
 import {
   OrgDetailBadge,
   OrgDetailChip,
-  OrgDetailGlyph,
   OrgDetailHeader,
   useOrgSaveState,
 } from "./OrgDetailHeader";
@@ -181,13 +181,27 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
     >
       <OrgDetailHeader
         avatar={
-          <OrgDetailGlyph label={agent.name} color={agent.avatar_color}>
-            {avatarIconComponent ? (
-              <RenderIcon Icon={avatarIconComponent} className="size-[18px]" />
-            ) : (
-              agent.name.trim().charAt(0).toUpperCase()
-            )}
-          </OrgDetailGlyph>
+          /*
+            身份方块走共享包的 AgentAvatar —— 与左边索引行、对话页那两处同一枚记号
+            （包里 agent-avatar.tsx 的开头就写着这条：三份实现的兜底各不相同，同一个
+            Agent 会长成三个样子）。没设过颜色的 Agent 因此和索引行一样退回调色板
+            首色，而不是此前那枚中性灰方块。
+          */
+          <AgentAvatar
+            testId="org-detail-avatar"
+            name={agent.name}
+            color={agent.avatar_color}
+            initials={agent.name.trim().charAt(0).toUpperCase()}
+            icon={
+              avatarIconComponent ? (
+                <RenderIcon
+                  Icon={avatarIconComponent}
+                  className="size-[18px]"
+                />
+              ) : undefined
+            }
+            className="size-9"
+          />
         }
         title={agent.name}
         badges={

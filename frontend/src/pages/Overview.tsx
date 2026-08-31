@@ -14,6 +14,7 @@ import {
 import { EmptyState, Metric } from "@/components/console";
 import {
   Alert,
+  AlertDescription,
   Button,
   cn,
   orgBackendTypeLabel,
@@ -343,14 +344,30 @@ export default function Overview() {
   return (
     <AppShell
       title={t("nav.overview")}
+      /*
+        窄屏顶栏不摆页面自己的控件：390 宽的手机上「标题 + 在线指示 + 三档范围 +
+        头像 + 两颗图标按钮」放不下，量下来范围控件直接压在头像与语言按钮上，标题
+        被截成一个字。这两样下沉到内容第一行（与 Chat 的 ownHeader 同一条思路：
+        移动端是另一棵树，不是压扁的桌面端）。
+      */
       right={
-        <div className="flex min-w-0 items-center gap-3">
-          <Fresh connected={desktopConnected} />
-          <RangeSwitch value={range} onChange={setRange} />
-        </div>
+        isMobile ? undefined : (
+          <div className="flex min-w-0 items-center gap-3">
+            <Fresh connected={desktopConnected} />
+            <RangeSwitch value={range} onChange={setRange} />
+          </div>
+        )
       }
     >
       <div className="mx-auto w-full max-w-[1200px] space-y-4">
+        {isMobile ? (
+          <div className="flex min-w-0 items-center gap-3">
+            <Fresh connected={desktopConnected} />
+            {/* 弹簧：在线指示可能整个不画，范围控件仍旧靠右。 */}
+            <span className="flex-1" />
+            <RangeSwitch value={range} onChange={setRange} />
+          </div>
+        ) : null}
         {/* 范围收窄时页顶一条说明覆盖全页，不逐卡重复。 */}
         {stats?.scope === "saved" ? (
           <div
@@ -396,7 +413,9 @@ export default function Overview() {
         {statsError !== null ? (
           <>
             <Alert variant="destructive">
-              <span className="flex min-w-0 flex-wrap items-center gap-3">
+              {/* 一行摆开：文案 + 弹簧 + 重试。AlertDescription 自身是 grid，
+                  这里把它换成同一行的 flex（display 由 className 定，最后一个赢）。 */}
+              <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
                 <span className="min-w-0">{statsErrorMessage}</span>
                 <span className="flex-1" />
                 <Button
@@ -406,7 +425,7 @@ export default function Overview() {
                 >
                   {t("overview.stats.error.retry")}
                 </Button>
-              </span>
+              </AlertDescription>
             </Alert>
             {/* 统计取不到就说取不到，绝不退回一张全是 0 的摘要——那是一句用户
                 无法证伪的假话。同时说清什么**不**受影响，并给一条走得通的路。 */}
@@ -528,7 +547,9 @@ export default function Overview() {
                 <span className="flex min-w-0 items-center gap-3">
                   <span className="text-xs text-muted-foreground">
                     {isMobile
-                      ? t("overview.stats.heatmap.mobileWeeks")
+                      ? t("overview.stats.heatmap.mobileWeeks", {
+                          weeks: HEATMAP_MOBILE_WEEKS,
+                        })
                       : monthRange}
                   </span>
                   {/* scope 为 saved 时不再给这条链接：页顶那条说明条上已经有一条

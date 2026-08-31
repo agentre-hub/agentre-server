@@ -13,6 +13,7 @@ import { computeBottomVisibleMessageId } from "@agentre-hub/agentre-ui";
 import type { EventFrame } from "@agentre-hub/agentre-wire";
 
 import { loadMirrorTail } from "@/components/session/sessionMirror";
+import { doneEventFrame } from "@/components/session/turnDone";
 import { applyJournalFrames, type RelayClient } from "@/lib/relayClient";
 
 /**
@@ -218,8 +219,7 @@ export function useTranscriptScrollback({
       // 判成跳号，反手从游标往后把整条日志再拉一遍。
       applyJournalFrames(res.frames, {
         onEvent: (f) => evs.push(f),
-        onRunResultDone: () =>
-          evs.push({ sessionId: sid, event: { kind: "done" }, seq: undefined }),
+        onRunResultDone: (frame) => evs.push(doneEventFrame(sid, frame)),
       });
       append(evs, res.frames[0]?.seq ?? 0, res.hasBefore);
     } catch {

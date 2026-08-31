@@ -20,7 +20,10 @@
  * 4. ResizeObserver。jsdom 没有实现，而转录的行虚拟化（@tanstack/react-virtual）
  *    拿它测量视口与行高——缺了它，虚拟器在装配的第一步就抛。
  *
- * 四处都只在「当前环境确实没有」时才安装，真浏览器行为优先。
+ * 5. isSecureContext。jsdom 没有实现（是 undefined，不是 false）。通行密钥那条
+ *    「不能用是因为浏览器太老，还是因为这个源信不过」的判断要读它。
+ *
+ * 五处都只在「当前环境确实没有」时才安装，真浏览器行为优先。
  */
 
 class MemoryStorage implements Storage {
@@ -99,4 +102,22 @@ if (typeof globalThis.ResizeObserver !== "function") {
     disconnect(): void {}
   }
   globalThis.ResizeObserver = NoopResizeObserver;
+}
+
+if (!("isSecureContext" in window)) {
+  // 5. isSecureContext。**装的时候按当时的源算一次**，之后不再跟着 location 走：
+  //    好几个用例会把 window.location 整个换成一个字面量对象（Login.tsx 直接读
+  //    window.location.search），跟着它走的话那些用例会莫名其妙地变成「不安全的源」。
+  //
+  //    算法照浏览器的可信源规则：https，或 localhost / 环回地址。vitest 的 jsdom
+  //    默认跑在 http://localhost:3000 上，真浏览器在那里报的正是 true。
+  //    装成取值器而不是数据属性，这样用例能用 vi.spyOn(window, "isSecureContext",
+  //    "get") 把它换掉。
+  const secure =
+    location.protocol === "https:" ||
+    ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+  Object.defineProperty(window, "isSecureContext", {
+    configurable: true,
+    get: () => secure,
+  });
 }

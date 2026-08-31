@@ -4,6 +4,7 @@ import { Check, MessagesSquare, X } from "lucide-react";
 
 import {
   Alert,
+  AlertDescription,
   Button,
   Checkbox,
   DialogShell,
@@ -91,7 +92,11 @@ export function ActivityStatsPanel() {
       t,
       "settings.privacy.activity.loadError",
     );
-    return <Alert variant="destructive">{message}</Alert>;
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>{message}</AlertDescription>
+      </Alert>
+    );
   }
   if (settings === null) return null;
 

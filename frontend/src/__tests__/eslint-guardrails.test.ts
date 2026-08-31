@@ -203,6 +203,78 @@ export const a = randomId();`,
   });
 });
 
+describe("alert slot guardrail", () => {
+  // Alert 是两列 grid：第一列留给图标，没有图标时宽度是 0，只有 AlertTitle /
+  // AlertDescription 带 col-start-2。文案直接摆进 <Alert> 就落在那条 0 宽的列里，
+  // 2026-08-30 在真实控制台上量到「补齐失败」那句被压成 28px 宽、457px 高的竖排字。
+  // jsdom 算不出布局，所以这一档只能由 lint 在源码形态上拦。
+  it.each([
+    [
+      "bare expression child",
+      `export const a = ({ Alert, msg }) => <Alert>{msg}</Alert>;`,
+    ],
+    [
+      "bare expression next to an icon",
+      `export const a = ({ Alert, Info, msg }) => <Alert><Info />{msg}</Alert>;`,
+    ],
+    [
+      "plain element child",
+      `export const a = ({ Alert, msg }) => <Alert><span>{msg}</span></Alert>;`,
+    ],
+  ])("rejects %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    [
+      "description slot",
+      `export const a = ({ Alert, AlertDescription, msg }) => (
+  <Alert>
+    <AlertDescription>{msg}</AlertDescription>
+  </Alert>
+);`,
+    ],
+    [
+      "icon plus title and description",
+      `export const a = ({ Alert, AlertTitle, AlertDescription, Info, msg }) => (
+  <Alert>
+    <Info />
+    <AlertTitle>{msg}</AlertTitle>
+    <AlertDescription>{msg}</AlertDescription>
+  </Alert>
+);`,
+    ],
+    // 条件渲染的槽还是槽：门控写在外面还是里面不改变文案落在哪一列。
+    [
+      "conditionally rendered slot",
+      `export const a = ({ Alert, AlertDescription, msg }) => (
+  <Alert>
+    {msg && <AlertDescription>{msg}</AlertDescription>}
+  </Alert>
+);`,
+    ],
+    // JSX 注释也是 JSXExpressionContainer，但它不渲染任何东西。
+    [
+      "jsx comment",
+      `export const a = ({ Alert, AlertDescription, msg }) => (
+  <Alert>
+    {/* 说明这条横幅为什么在这里 */}
+    <AlertDescription>{msg}</AlertDescription>
+  </Alert>
+);`,
+    ],
+    // 别的组件照旧随便塞：这条规则只认 Alert。
+    [
+      "bare child of some other component",
+      `export const a = ({ Card, msg }) => <Card>{msg}</Card>;`,
+    ],
+  ])("accepts %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+  });
+});
+
 describe("i18n guardrail", () => {
   it.each([
     ["literal JSX text", `export const a = () => <div>Save changes</div>;`],

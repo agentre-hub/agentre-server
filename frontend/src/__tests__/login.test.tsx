@@ -40,6 +40,8 @@ beforeEach(async () => {
 // 的失败。vitest.config.ts 没开 unstubGlobals，所以得自己来。
 afterEach(() => {
   vi.unstubAllGlobals();
+  // isSecureContext 那几条用 spyOn 换掉取值器，不还原同样会活到后面的用例里。
+  vi.restoreAllMocks();
   Reflect.deleteProperty(window, "PublicKeyCredential");
 });
 
@@ -242,6 +244,32 @@ describe("Login", () => {
 
       renderLogin();
       expect(screen.queryByRole("button", { name: /passkey/i })).toBeNull();
+    });
+
+    // Given 本站用 http 提供（源不是安全上下文，PublicKeyCredential 与
+    // navigator.credentials 在那里整个不存在）/ When 打开登录页 / Then 不摆按钮，
+    // 但要说清为什么。
+    //
+    // 此前这一整块是**静默消失**的：注册过通行密钥的人在这个部署上找不到入口，
+    // 也读不到任何解释，只会以为功能没了。
+    it("explains the http origin instead of dropping the passkey block silently", () => {
+      Reflect.deleteProperty(window, "PublicKeyCredential");
+      vi.spyOn(window, "isSecureContext", "get").mockReturnValue(false);
+
+      renderLogin();
+      expect(screen.queryByRole("button", { name: /passkey/i })).toBeNull();
+      expect(screen.getByText(/only available over HTTPS/i)).toBeTruthy();
+    });
+
+    // 浏览器是真的老时保持沉默：那不是本站能替他解决的事，界面上也没有可执行的
+    // 下一步——把「换成 https」摆给他看反而是句用不上的话。
+    it("stays silent when the browser itself is too old", () => {
+      Reflect.deleteProperty(window, "PublicKeyCredential");
+      vi.spyOn(window, "isSecureContext", "get").mockReturnValue(true);
+
+      renderLogin();
+      expect(screen.queryByRole("button", { name: /passkey/i })).toBeNull();
+      expect(screen.queryByText(/HTTPS/i)).toBeNull();
     });
 
     it("hides passkey button when error is shown", () => {

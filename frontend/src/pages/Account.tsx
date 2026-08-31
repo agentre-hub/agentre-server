@@ -6,6 +6,7 @@ import AppShell from "@/components/AppShell";
 import { EmptyState, StatusMark } from "@/components/console";
 import {
   Alert,
+  AlertDescription,
   Button,
   DialogShell,
   DialogShellBody,
@@ -24,6 +25,7 @@ import {
   encodeCreationResponse,
   type RawCreationOptions,
 } from "@/lib/webauthn";
+import { passkeySupport, type PasskeySupport } from "@/lib/passkeySupport";
 
 /** 通行密钥清单里的一条（`GET /v1/passkeys`）。 */
 interface PasskeyRow {
@@ -47,11 +49,6 @@ interface SessionRow {
 }
 
 type Translate = (key: string, options?: Record<string, unknown>) => string;
-
-/** 决策 17：只按 `window.PublicKeyCredential` 特性探测，不猜浏览器版本。 */
-function webauthnSupported(): boolean {
-  return typeof window !== "undefined" && "PublicKeyCredential" in window;
-}
 
 function formatDate(ms: number): string {
   if (!ms) return "—";
@@ -86,11 +83,28 @@ function sessionTimesLine(t: Translate, s: SessionRow): string {
   );
 }
 
-function unsupportedBannerText(t: Translate): string {
-  return [
-    t("account.passkeys.unsupported"),
-    t("account.passkeys.unsupportedHint"),
-  ].join(" · ");
+/**
+ * 用不了通行密钥时那句话。**说的必须是真正的原因**：源不是安全上下文（本站有时
+ * 用 http 提供）与浏览器太老，补救办法相反 —— 前者换几个浏览器都一样。
+ * 此前这里一律说「这个浏览器不支持」，对着一个完全支持的浏览器。
+ */
+function unavailableBannerText(t: Translate, why: PasskeySupport): string {
+  return why === "insecure-origin"
+    ? [
+        t("account.passkeys.insecureOrigin"),
+        t("account.passkeys.insecureOriginHint"),
+      ].join(" · ")
+    : [
+        t("account.passkeys.unsupported"),
+        t("account.passkeys.unsupportedHint"),
+      ].join(" · ");
+}
+
+/** 禁用的「添加」按钮上那句 title：同一个原因的短版。 */
+function unavailableReason(t: Translate, why: PasskeySupport): string {
+  return why === "insecure-origin"
+    ? t("account.passkeys.insecureOrigin")
+    : t("account.passkeys.unsupported");
 }
 
 /** 通行密钥段位里前端表自己声明的码 → 该码对应的账号页文案键。 */
@@ -179,7 +193,8 @@ export default function Account() {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
 
-  const supported = webauthnSupported();
+  const passkeySupportState = passkeySupport();
+  const supported = passkeySupportState === "available";
 
   useAliveEffect((alive) => {
     api<{ passkeys: PasskeyRow[] }>("/v1/passkeys")
@@ -338,7 +353,9 @@ export default function Account() {
                 onClick={openAdd}
                 disabled={!supported || adding}
                 title={
-                  supported ? undefined : t("account.passkeys.unsupported")
+                  supported
+                    ? undefined
+                    : unavailableReason(t, passkeySupportState)
                 }
               >
                 <KeyRound />
@@ -351,7 +368,7 @@ export default function Account() {
             {!supported && (
               // 不支持就说清楚为什么，不让用户去撞一次可预知的失败（决策 17）。
               <p className="border-b border-border bg-status-waiting-bg px-4 py-2.5 text-xs text-status-waiting">
-                {unsupportedBannerText(t)}
+                {unavailableBannerText(t, passkeySupportState)}
               </p>
             )}
             {passkeys === null ? (
@@ -360,9 +377,11 @@ export default function Account() {
               </p>
             ) : passkeysError ? (
               <Alert variant="destructive" className="m-4">
-                {passkeysError instanceof ApiError
-                  ? passkeysError.message
-                  : t("account.passkeys.loadError")}
+                <AlertDescription>
+                  {passkeysError instanceof ApiError
+                    ? passkeysError.message
+                    : t("account.passkeys.loadError")}
+                </AlertDescription>
               </Alert>
             ) : passkeys.length === 0 ? (
               <EmptyState
@@ -441,9 +460,11 @@ export default function Account() {
               </p>
             ) : sessionsError ? (
               <Alert variant="destructive" className="m-4">
-                {sessionsError instanceof ApiError
-                  ? sessionsError.message
-                  : t("account.sessions.loadError")}
+                <AlertDescription>
+                  {sessionsError instanceof ApiError
+                    ? sessionsError.message
+                    : t("account.sessions.loadError")}
+                </AlertDescription>
               </Alert>
             ) : (
               <>

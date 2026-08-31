@@ -43,9 +43,10 @@ function stringValue(value: unknown): string {
  * 解 `runtime.capabilities` 的应答。
  *
  * 解不动（对端太老、字段缺失、形状不对）时返回 **null**，而不是一份空的档位集合：
- * 空集合在契约里是「这个后端没有权限门」这句**肯定**的话，拿它冒充「此刻问不到」
- * 会让界面对着一台答不上来的机器说「这个后端没有权限档位」——一句用户无法证伪的
- * 假话。这与 skillCatalog 的 normalizeDiscovery 是同一条口径。
+ * 空集合在契约里是「这个后端没有权限门」这句**肯定**的话，界面据此静默地不摆控件；
+ * 拿它冒充「此刻问不到」，一台答不上来的机器就会被当成一台本来就没有权限门的机器
+ * 悄悄放过，用户连「这里为什么空着」都问不出来。这与 skillCatalog 的
+ * normalizeDiscovery 是同一条口径。
  */
 export function decodePermissionModeMeta(
   raw: unknown,

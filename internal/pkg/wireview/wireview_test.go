@@ -194,3 +194,29 @@ func TestNotificationViewKeepsUnrecognizedBlockPayloadAsJSON(t *testing.T) {
 		`{"sessionId":42,"seq":9,"event":{"kind":"unrecognized_block","blockType":"future_block","data":{"nested":{"keep":true}}}}`,
 		string(params))
 }
+
+// 终态帧的本轮计时必须一起过投影。
+//
+// 这条路径是**账号镜像**：库里存着的原始 journal 帧解出来发给浏览器，转录里那一
+// 行 meta（模型 · 耗时 · 首字 · 速率）就靠它。doneView 是逐字段手写的，漏一个的
+// 表现不是报错而是**静默变空**——历史会话上那三个数没了，实时那一轮却有，两边
+// 对不上还查不出来路。
+func TestNotificationViewCarriesTurnStats(t *testing.T) {
+	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
+		RunResultDone: &agentrewire.RunResultDoneNotification{
+			SessionId: 42, DurationMs: 9640, FirstTokenMs: 8010, TokensPerSec: 14.2,
+		},
+	}})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"sessionId":42,"durationMs":9640,"firstTokenMs":8010,"tokensPerSec":14.2}`, string(params))
+}
+
+// 零值按本包的约定省略（putNonzero）：浏览器那侧 journaledToFrame 会把它补回 0，
+// 而 0 在转录里读作「这台机器答不出这个数」，不是「这一轮零耗时」。
+func TestNotificationViewOmitsZeroTurnStats(t *testing.T) {
+	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
+		RunResultDone: &agentrewire.RunResultDoneNotification{SessionId: 42},
+	}})
+	require.NoError(t, err)
+	require.JSONEq(t, `{"sessionId":42}`, string(params))
+}

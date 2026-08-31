@@ -86,11 +86,13 @@ export default function SessionComposer({
   /**
    * 执行端报出来的档位元数据。
    *   - `undefined` = 还没问到（连着但应答没回来），控件不摆；
-   *   - `null` = **问不出**（对端太老 / 机器答不上来），控件常显但禁用并写明原因；
-   *   - `allowedModes` 为空 = 这个后端没有权限门，同样禁用，但说的是另一句话。
+   *   - `null` = **问不出**（对端太老 / 机器答不上来），写一句说明为什么这里空着；
+   *   - `allowedModes` 为空 = 这个后端没有权限门，控件同样不摆，且**不说话**。
    *
-   * 这三态必须分别表达：拿一份空清单冒充「问不出」，界面就会对着一台答不上来的
-   * 机器说「这个后端没有权限档位」——用户无法证伪的假话。
+   * 三态在解码那一侧仍必须分开（拿空清单冒充「问不出」是句用户无法证伪的假话），
+   * 但摆到界面上只剩两种处置：只有「本该有档却问不出」是异常，值得占一行说明；
+   * 「这个后端就是没有权限门」是稳定答案，底栏空着本身已经把话说完了——桌面端
+   * 也是这么办的，没有档可切就不摆那颗 pill。
    */
   permissionModeMeta?: PermissionModeMeta | null;
   /** 这条会话的 runtime key（claudecode 的 bypass 锁死规则要用）。 */
@@ -190,14 +192,11 @@ export default function SessionComposer({
           leadingControls={
             <div className="flex shrink-0 items-center gap-1">
               {permissionModeMeta !== undefined && onPermissionModeChange ? (
-                permissionModeMeta === null ||
-                permissionModeMeta.allowedModes.length === 0 ? (
+                permissionModeMeta === null ? (
                   <span className="text-2xs text-muted-foreground">
-                    {permissionModeMeta === null
-                      ? t("session.composerControls.permissionUnavailable")
-                      : t("session.composerControls.permissionUnsupported")}
+                    {t("session.composerControls.permissionUnavailable")}
                   </span>
-                ) : (
+                ) : permissionModeMeta.allowedModes.length === 0 ? null : (
                   <PermissionModePill
                     mode={permissionMode || permissionModeMeta.defaultMode}
                     modes={permissionModeMeta.order}

@@ -450,3 +450,66 @@ describe("转录的行虚拟化", () => {
     host.remove();
   });
 });
+
+/**
+ * 一轮的 meta（模型 · ↑↓ · 首字 · 耗时 · 速率）。
+ *
+ * 画这一行的 `TranscriptMessageMeta` 一直就是共享包的 —— 本站从来没有自己的一份。
+ * 它此前全是空值，是因为数据没上过 wire：模型只在终态帧 `runtime.runResultDone`
+ * 上（`usage` 帧根本没有这个字段），计时由 agentred 就着它扇出的同一条事件流量出
+ * 来。宿主把那一帧压成一条空的 `done` 标记，于是 meta 恒为「模型 —、耗时 0.0s」。
+ *
+ * 这一组从**帧**进（本站真实的输入就是帧），钉住那条链路真的通到了像素。
+ */
+describe("Transcript 的一轮 meta", () => {
+  it("给定终态帧带模型与计时，当渲染，则 meta 栏画出来", async () => {
+    renderFrames(
+      f({ kind: "text_delta", text: "好的" }),
+      f({
+        kind: "done",
+        model: "claude-sonnet-4-6",
+        durationMs: 9640,
+        firstTokenMs: 8010,
+        tokensPerSec: 14.2,
+      }),
+    );
+
+    expect(await screen.findByText("claude-sonnet-4-6")).toBeTruthy();
+    expect(screen.getByText("9.6s")).toBeTruthy();
+    expect(screen.getByTestId("message-first-token").textContent).toContain(
+      "8.0s",
+    );
+    expect(screen.getByTestId("message-tokens-per-sec").textContent).toContain(
+      "14 tok/s",
+    );
+  });
+
+  /**
+   * 老 agentred 答不出这三个数：那时一格都不该画。渲染成「0.0s」等于把「没上报」
+   * 说成「这一轮零耗时」。
+   */
+  it("给定终态帧不带计时，当渲染，则不编出 0.0s", () => {
+    renderFrames(f({ kind: "text_delta", text: "好的" }), f({ kind: "done" }));
+
+    expect(screen.queryByText("0.0s")).toBeNull();
+    expect(screen.queryByTestId("message-first-token")).toBeNull();
+    expect(screen.queryByTestId("message-tokens-per-sec")).toBeNull();
+  });
+
+  /**
+   * 一轮还在跑时终态帧还没来 —— 而这一轮用的是哪个模型，本站此刻就知道（底栏那颗
+   * pill 正显示着它）。桌面端把它作为 `fallbackModel` 交给行渲染器，本站此前不交，
+   * 于是流式期间模型那一格是空的，等 done 到了才「跳」出一个名字。
+   */
+  it("给定还没收到终态帧，当渲染，则模型退到会话此刻钉的那一个", async () => {
+    render(
+      <Transcript
+        messages={reduceFrames([f({ kind: "text_delta", text: "在写了" })], 1)}
+        sessionId={1}
+        fallbackModel="glm-5.3"
+      />,
+    );
+
+    expect(await screen.findByText("glm-5.3")).toBeTruthy();
+  });
+});

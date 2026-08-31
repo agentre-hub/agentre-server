@@ -9,6 +9,7 @@ import {
   type ModelTarget,
   type TranscriptMessage,
   Alert,
+  AlertDescription,
   cn,
 } from "@agentre-hub/agentre-ui";
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
@@ -149,8 +150,8 @@ export function DraftSession({
 
   /**
    * 执行端报的档位元数据。三态与详情页逐字同义：undefined = 还没问到（控件不摆）、
-   * null = 问不出（常显但禁用，写「这台机器此刻列不出档位」）、allowedModes 为空
-   * = 这个后端没有权限门（同样禁用，但说的是另一句）。
+   * null = 问不出（控件不摆，但写一句「这台机器此刻列不出档位」说明为什么空着）、
+   * allowedModes 为空 = 这个后端没有权限门（控件不摆，也不说话）。
    */
   const [permissionModeMeta, setPermissionModeMeta] = useState<
     PermissionModeMeta | null | undefined
@@ -309,9 +310,11 @@ export function DraftSession({
 
           {planError ? (
             <Alert variant="destructive">
-              {planError instanceof ApiError
-                ? planError.message
-                : t("device.manage.loadError")}
+              <AlertDescription>
+                {planError instanceof ApiError
+                  ? planError.message
+                  : t("device.manage.loadError")}
+              </AlertDescription>
             </Alert>
           ) : !plan ? (
             <p className="text-xs text-muted-foreground">

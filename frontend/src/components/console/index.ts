@@ -5,11 +5,13 @@
  *
  * 对应画板节点：ConsoleNavItem=ZC7pI、MobileTabBar=A6Z3k、
  * StatusMark=zF5jv、FilterChip=rNQXR、Metric=IhldU 统计卡、
- * EmptyState=正式空态画板。行级菜单已归共享包的 DropdownMenu（规格 2026-08-22 E 段）。
+ * EmptyState=正式空态画板。InlineEmpty 是索引栏里的窄栏变体（见其自身注释）。
+ * 行级菜单已归共享包的 DropdownMenu（规格 2026-08-22 E 段）。
  */
 export { ConsoleNavItem } from "./ConsoleNavItem";
 export { EmptyState } from "./EmptyState";
 export { FilterChip } from "./FilterChip";
+export { InlineEmpty } from "./InlineEmpty";
 export { Metric } from "./Metric";
 export { MobileTabBar, type MobileTab } from "./MobileTabBar";
 export { StatusMark, type StatusTone } from "./StatusMark";

@@ -6,6 +6,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
+import { alertSlotSyntax } from "./eslint-rules/alert-slots.js";
 import { restrictedSyntax } from "./eslint-rules/design-tokens.js";
 import { nativeControlSyntax } from "./eslint-rules/native-controls.js";
 import { secureContextSyntax } from "./eslint-rules/secure-context.js";
@@ -32,14 +33,16 @@ export default defineConfig([
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
 
-      // ── 设计 token 守卫 + 原生表单控件守卫 + 安全上下文守卫 ────────
+      // ── 设计 token 守卫 + 原生表单控件守卫 + 安全上下文守卫 + Alert 内容槽守卫 ──
       // 详见 eslint-rules/design-tokens.js（与 docs/design.md#colour-tokens）、
-      // eslint-rules/native-controls.js 与 eslint-rules/secure-context.js。
+      // eslint-rules/native-controls.js、eslint-rules/secure-context.js
+      // 与 eslint-rules/alert-slots.js。
       "no-restricted-syntax": [
         "error",
         ...restrictedSyntax,
         ...nativeControlSyntax,
         ...secureContextSyntax,
+        ...alertSlotSyntax,
       ],
 
       // ── i18n 守卫 ─────────────────────────────────────────────────

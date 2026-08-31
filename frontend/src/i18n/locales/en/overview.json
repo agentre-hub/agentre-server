@@ -5,7 +5,6 @@
   "noDevice": "No device set",
   "offline": "Offline",
   "unpaired": "Not paired",
-  "empty": "No agents yet.",
   "stats": {
     "range": {
       "label": "Stats range",
@@ -51,7 +50,7 @@
       "settings": "Stats settings →",
       "less": "Less",
       "more": "More",
-      "mobileWeeks": "Last 19 weeks",
+      "mobileWeeks": "Last {{weeks}} weeks",
       "mobileHint": "A longer history is on the desktop app.",
       "greyNote": "This grey means there was no activity on that day — nothing is broken.",
       "busiest": "Busiest day",

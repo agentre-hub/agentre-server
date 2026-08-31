@@ -122,6 +122,11 @@ func doneView(value *agentrewire.RunResultDoneNotification) map[string]any {
 	putNonzero(out, "turnToken", value.GetTurnToken())
 	putNonempty(out, "stopErrMsg", value.GetStopErrorMessage())
 	putNonzero(out, "stopErrCode", value.GetStopErrorCode())
+	// 本轮计时。转录里那一行 meta（模型 · 耗时 · 首字 · 速率）在镜像这条路径上
+	// 只靠这一帧 —— usage 帧上没有模型，计时更是只有 agentred 量得出来。
+	putNonzero(out, "durationMs", value.GetDurationMs())
+	putNonzero(out, "firstTokenMs", value.GetFirstTokenMs())
+	putNonzero(out, "tokensPerSec", value.GetTokensPerSec())
 	if value.GetUsage() != nil {
 		out["usage"] = usageView(value.GetUsage())
 	}

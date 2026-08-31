@@ -3,7 +3,6 @@
     "permissionMode": "权限模式",
     "modelTarget": "供应商与模型",
     "permissionUnavailable": "这台机器此刻列不出权限档位",
-    "permissionUnsupported": "这个后端没有权限档位",
     "permissionSetFailed": "权限档位没改成：{{reason}}",
     "modelSetFailed": "模型没改成：{{reason}}",
     "modelPartiallySynced": "另一台机器此刻没跟上，在那边打开可能看到旧值",

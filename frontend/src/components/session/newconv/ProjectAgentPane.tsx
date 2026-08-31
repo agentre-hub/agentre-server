@@ -1,5 +1,5 @@
 import { AgentAvatar, ProjectGlyph, cn } from "@agentre-hub/agentre-ui";
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, Bot, ChevronRight, FolderTree } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -9,6 +9,8 @@ import { useTranslation } from "react-i18next";
  * （与 SessionIndex 的 DIMENSION_SEPARATOR 同一条理由）。
  */
 const COUNT_SEPARATOR = " · ";
+
+import { EmptyState } from "@/components/console";
 
 import { membersOfProject } from "./projectMembers";
 import { targetSummary, type NewConvAgent, type NewConvProject } from "./types";
@@ -142,20 +144,20 @@ export function ProjectAgentPane({
                 左边已经说了「还没有项目」，这里接着说该去哪儿建，而不是让两句话
                 一起把用户送去找一个不存在的项目。 */}
             {!selectedProject ? (
-              <p
-                data-testid="project-none-yet"
-                className="text-sm text-muted-foreground"
-              >
-                {t("chat.noProjectsYetHint")}
-              </p>
+              <EmptyState
+                testId="project-none-yet"
+                icon={FolderTree}
+                title={t("chat.noProjectsYetTitle")}
+                body={t("chat.noProjectsYetHint")}
+              />
             ) : members.direct.length === 0 &&
               members.inherited.length === 0 ? (
-              <p
-                data-testid="project-agents-empty"
-                className="text-sm text-muted-foreground"
-              >
-                {t("chat.noAgentsInProject")}
-              </p>
+              <EmptyState
+                testId="project-agents-empty"
+                icon={Bot}
+                title={t("chat.noAgentsInProject")}
+                body={t("chat.noAgentsInProjectBody")}
+              />
             ) : (
               <div className="flex flex-col gap-4">
                 <MemberGroup

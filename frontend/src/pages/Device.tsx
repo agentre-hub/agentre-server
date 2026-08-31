@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate, useNavigate } from "react-router-dom";
 import { CircleAlert, ShieldCheck } from "lucide-react";
-import { Button, Alert } from "@agentre-hub/agentre-ui";
+import { Button, Alert, AlertDescription } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import CodeInput from "@/components/CodeInput";
 import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
@@ -205,7 +205,7 @@ export default function Device() {
               variant="destructive"
               className="border-destructive bg-destructive-soft"
             >
-              {failureText(failure)}
+              <AlertDescription>{failureText(failure)}</AlertDescription>
             </Alert>
           )}
 

@@ -57,7 +57,7 @@ export function NewConversationPane({
           recentIds={recentIds}
           onPick={onPick}
           columns={2}
-          emptyHint={query ? t("chat.noAgentMatches") : undefined}
+          search={{ query, onClear: () => setQuery("") }}
         />
       </div>
 

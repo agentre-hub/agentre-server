@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Laptop, ShieldCheck, Timer } from "lucide-react";
 
-import { Alert, Button } from "@agentre-hub/agentre-ui";
+import { Alert, AlertDescription, Button } from "@agentre-hub/agentre-ui";
 import PageTitle from "@/components/PageTitle";
 import { useMe } from "@/hooks/use-me";
 import { deviceKindLabel } from "@/lib/deviceKind";
@@ -187,7 +187,7 @@ export default function DeviceApproval({
           variant="destructive"
           className="border-destructive bg-destructive-soft"
         >
-          {error}
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
 

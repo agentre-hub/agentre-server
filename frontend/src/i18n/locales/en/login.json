@@ -3,6 +3,7 @@
   "github": "Sign in with GitHub",
   "or": "or",
   "passkey": "Sign in with a passkey",
+  "passkeyInsecureOrigin": "Passkeys are only available over HTTPS. This site is served over HTTP.",
   "userCodeLabel": "Continue to device authorization after signing in",
   "failureTitle": "Sign in unsuccessful",
   "retryLogin": "Sign in again",

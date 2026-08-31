@@ -5,6 +5,7 @@ import type {
   SessionSummary,
 } from "@agentre-hub/agentre-wire";
 
+import { doneEventFrame } from "@/components/session/turnDone";
 import { api } from "@/lib/api";
 import { applyJournalFrames, RelayClient } from "@/lib/relayClient";
 import { ensureRelayTicket } from "@/lib/relayTicket";
@@ -177,10 +178,10 @@ export async function loadMirrorTail(
   );
   applyJournalFrames(page.frames ?? [], {
     onEvent: (f) => events.push(f),
-    // 轮次结束在转录里是一条分隔标记。实时那条还兼着翻「这一轮在不在跑」并刷新
-    // 待决策 —— 那两件事回放教不了（见 turnActiveRef），所以这里只留标记。
-    onRunResultDone: () =>
-      events.push({ sessionId, event: { kind: "done" }, seq: undefined }),
+    // 轮次结束在转录里是一条分隔标记，同时是这一轮 meta（模型 / 耗时 / 首字 /
+    // 速率）的唯一来路 —— 见 doneEventFrame。实时那条还兼着翻「这一轮在不在跑」
+    // 并刷新待决策，那两件事回放教不了（见 turnActiveRef），这里只有标记这一半。
+    onRunResultDone: (frame) => events.push(doneEventFrame(sessionId, frame)),
   });
   return {
     events,

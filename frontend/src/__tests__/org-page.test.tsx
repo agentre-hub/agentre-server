@@ -198,6 +198,49 @@ describe("组织索引：与桌面端同形（共享组件搭成）", () => {
 });
 
 /**
+ * 筛空了的那一块（会话索引同一条：`session-index.test.tsx`「空态与失败的出路」）。
+ *
+ * 此前它是整栏垂直居中的两行：「未找到 Agent」+ 一行 mono 小字「命中条件：foo ·
+ * 后端：Claude Code」。三处不对——「命中」说的是**没有命中**；那排条件在正上方的
+ * 搜索框与 chip 里逐字重复了一遍；而同一个面板里「还没有任何部门」用的却是顶端的
+ * 虚线卡片，同一个信息层级两种形。
+ *
+ * 改成与会话索引同一句式：标题说什么空了，正文说**外面还有多少**（读者据此知道东西
+ * 还在），一条回程按钮。
+ */
+describe("组织索引：筛到一个都不剩时的那一块", () => {
+  it("说没有匹配 + 组织里一共几个 Agent，不复述正上方就有的条件", async () => {
+    renderOrg();
+    await screen.findByText("Alice");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search agents" }), {
+      target: { value: "zzz" },
+    });
+
+    const empty = await screen.findByTestId("org-index-no-match");
+    expect(empty.textContent).toContain("No agents match");
+    // fixture 里是 CEO Agent + Alice。
+    expect(empty.textContent).toContain("2");
+    expect(empty.textContent).not.toContain("zzz");
+  });
+
+  it("「清除筛选」把行放回来", async () => {
+    renderOrg();
+    await screen.findByText("Alice");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search agents" }), {
+      target: { value: "zzz" },
+    });
+    await screen.findByTestId("org-index-no-match");
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+
+    expect(await screen.findByText("Alice")).toBeTruthy();
+    expect(screen.queryByTestId("org-index-no-match")).toBeNull();
+  });
+});
+
+/**
  * 索引收敛（规格 2026-08-18「组织索引收敛」+ 共享包 commit 9e015b13）：行尾那枚
  * 机器名徽标、「无目标」、组头的收放与右侧动作，全部由宿主喂进共享包的呈现件。
  */
@@ -751,6 +794,25 @@ describe("详情头部：谁在编辑、改动落没落库（mockup 的 mhead）
     expect(within(header).getByTestId("org-detail-avatar")).toBeTruthy();
     expect(within(header).getByText("Department lead")).toBeTruthy();
     expect(within(header).getByText("Engineering")).toBeTruthy();
+  });
+
+  /**
+   * 同一个 Agent 在同一屏里只能是一个颜色。左边那一列的行走共享包的 AgentAvatar，
+   * 缺色退回 agent-1（调色板首色）；详情头部此前是就地手搓的一枚方块，缺色退的是
+   * 中性灰 —— 于是「没设过颜色」的 Agent（同步载荷里根本没有 avatar_color，是常态）
+   * 在列表里是蓝的、点开是灰的。
+   */
+  it("没设颜色的 Agent：详情头像与索引行同色，不是一枚中性灰方块", async () => {
+    renderOrg();
+    const nameNode = await screen.findByText("CEO Agent");
+    const row = nameNode.closest('[data-slot="org-index-row"]') as HTMLElement;
+    const rowGlyph = within(row).getByRole("img", { name: "CEO Agent" });
+    fireEvent.click(within(row).getByTestId(/^org-row-select-/));
+
+    const header = await screen.findByTestId("org-detail-header");
+    const avatar = within(header).getByTestId("org-detail-avatar");
+    expect(avatar.style.backgroundColor).toBe("var(--agent-1)");
+    expect(avatar.style.backgroundColor).toBe(rowGlyph.style.backgroundColor);
   });
 
   it("不是负责人就不画「部门长」——徽标只画算得出来的那一维", async () => {

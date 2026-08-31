@@ -6,6 +6,12 @@ github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260830074150-3f538e9dc3e8 h1:az7iyB+AoT+nJVT/Hrwidb5+kEGeEj+UI9/JFE4Q2oY=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260830074150-3f538e9dc3e8/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831025003-6458a348de1c h1:sNzpOdZeKzfEnMFjYrduUWTe7Tq7EMytFMETkrp2544=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831025003-6458a348de1c/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831035330-3ceae5af303f h1:bDISP4Zabs8foLpkfiagwVHbtkWcCozxsUxQ4Ur4r3k=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831035330-3ceae5af303f/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831040959-95027d400ca2 h1:kpDR3U+s+Myn/0hzxcdV+/KUpLrLq2+wPUMExTKA6z4=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831040959-95027d400ca2/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a h1:HbKu58rmZpUGpz5+4FfNmIU+FmZg2P3Xaj2v2bfNWmk=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
 github.com/alicebob/miniredis/v2 v2.32.1 h1:Bz7CciDnYSaa0mX5xODh6GUITRSx+cVhjNoOR4JssBo=

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  HEATMAP_DESKTOP_WEEKS,
+  HEATMAP_MOBILE_WEEKS,
+  MOBILE_CARD_CONTENT_PX,
+  heatmapWidthPx,
+} from "@/components/stats/Heatmap";
 import { buildHeatGrid, type HeatDay } from "@/lib/heatmap";
 
 /**
@@ -100,5 +106,33 @@ describe("buildHeatGrid", () => {
     const labels = grid.months.map((m) => `${m.year}-${m.month}`);
     expect(labels).toContain("2025-11");
     expect(labels).toContain("2026-0");
+  });
+});
+
+/**
+ * 窄屏列数的宽度预算。
+ *
+ * 「19 周」这个数当初是拿视口宽算的，漏了网格左边那条星期栏（`w-6` + `mr-1.5`
+ * + 一个行缝隙 = 33px）：390 宽的手机上卡片内容区只有 324px，而 19 列连星期栏
+ * 要 334px —— 最后那一列（今天）压在卡片边上。e2e 的 mobile-chromium 是
+ * Pixel 7（412 宽），那里 334px 刚好放得下，所以它一直是绿的。
+ *
+ * 这条守卫按两个方向断言：当前列数放得下，多一列就放不下 —— 只断言前者的话，
+ * 一个「1 列」的答案也能过。
+ */
+describe("热力图窄屏的宽度预算", () => {
+  it("整张网格（含星期栏）放得进最窄那张卡，多一列就放不下", () => {
+    expect(heatmapWidthPx(HEATMAP_MOBILE_WEEKS)).toBeLessThanOrEqual(
+      MOBILE_CARD_CONTENT_PX,
+    );
+    expect(heatmapWidthPx(HEATMAP_MOBILE_WEEKS + 1)).toBeGreaterThan(
+      MOBILE_CARD_CONTENT_PX,
+    );
+  });
+
+  // 桌面端那一档没有这个问题（卡片宽得多），但 845px 的网格是文档里写死的数字，
+  // 一并钉住：改了格子尺寸而没改文档时这里会响（878 = 845 网格 + 33 星期栏）。
+  it("桌面端 53 列仍是文档里那张 845px 的网格", () => {
+    expect(heatmapWidthPx(HEATMAP_DESKTOP_WEEKS)).toBe(878);
   });
 });

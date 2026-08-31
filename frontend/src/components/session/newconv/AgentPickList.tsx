@@ -1,9 +1,10 @@
 import {
   AgentAvatar,
+  Button,
   cn,
   groupAgentsForPicking,
 } from "@agentre-hub/agentre-ui";
-import { ChevronRight } from "lucide-react";
+import { Bot, ChevronRight, SearchX } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -13,6 +14,8 @@ import { useTranslation } from "react-i18next";
  * （与 SessionIndex 的 DIMENSION_SEPARATOR 同一条理由）。
  */
 const COUNT_SEPARATOR = " · ";
+
+import { EmptyState } from "@/components/console";
 
 import { targetSummary, type NewConvAgent } from "./types";
 
@@ -31,14 +34,18 @@ export function AgentPickList({
   recentIds,
   onPick,
   columns = 1,
-  emptyHint,
+  search,
 }: {
   agents: NewConvAgent[];
   recentIds: string[];
   onPick: (agent: NewConvAgent) => void;
   columns?: 1 | 2;
-  /** 一个 Agent 都没有时说的话（账号里还没建过 Agent）。 */
-  emptyHint?: string;
+  /**
+   * 宿主正按词收窄时给。空态要分得清「账号里没有 Agent」与「这次搜索不收」——
+   * 后者东西还在，回程是清掉那个词，所以清空的能力必须一起传进来（贴底弹层
+   * 没有搜索框，它不给）。
+   */
+  search?: { query: string; onClear: () => void };
 }) {
   const { t } = useTranslation();
 
@@ -66,14 +73,30 @@ export function AgentPickList({
     ].filter((g) => g.items.length > 0);
   }, [agents, recentIds, t]);
 
+  // 这一格是「新建对话」的主体区，不是索引窄栏：用页面级 `EmptyState`。
+  // 两句都归 chat 命名空间——此前「账号里没有 Agent」借的是总览页的
+  // `overview.empty`，借来的键别人改名时这里不报错，只在运行时印裸键号。
   if (agents.length === 0) {
-    return (
-      <p
-        data-testid="agent-pick-empty"
-        className="text-sm text-muted-foreground"
-      >
-        {emptyHint ?? t("overview.empty")}
-      </p>
+    return search?.query ? (
+      <EmptyState
+        testId="agent-pick-empty"
+        icon={SearchX}
+        title={t("chat.noAgentMatchesTitle")}
+        body={t("chat.noAgentMatchesBody")}
+        action={
+          <Button variant="outline" size="sm" onClick={search.onClear}>
+            {t("chat.clearAgentSearch")}
+          </Button>
+        }
+      />
+    ) : (
+      <EmptyState
+        testId="agent-pick-empty"
+        icon={Bot}
+        // 只说「还没有 Agent」是半句：得说清楚它们从哪来，否则读者不知道下一步。
+        title={t("chat.noAgentsTitle")}
+        body={t("chat.noAgentsBody")}
+      />
     );
   }
 

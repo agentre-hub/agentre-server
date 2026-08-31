@@ -19,6 +19,7 @@ import {
   FolderPlus,
   MoreVertical,
   Plus,
+  SearchX,
   Server,
   SlidersHorizontal,
   X,
@@ -44,6 +45,8 @@ import {
   type OrgIndexGroup,
   type OrgSelection,
 } from "@agentre-hub/agentre-ui";
+
+import { InlineEmpty } from "@/components/console";
 
 import { filterRowsByBackend, type OrgIdMaps } from "./adapter";
 import type { OrgAgentItem, OrgBackendItem } from "./types";
@@ -258,22 +261,25 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
         data-slot="org-index-body"
       >
         {noMatch ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-            <span className="text-sm text-muted-foreground">
-              {t("org.index.noMatch.title")}
-            </span>
-            <span
-              className="font-mono text-2xs text-muted-foreground"
-              data-testid="org-index-no-match-conditions"
-            >
-              {t("org.index.noMatch.conditions", {
-                conditions: conditions.map((c) => c.label).join(" · "),
-              })}
-            </span>
-            <Button variant="outline" size="sm" onClick={clearAll}>
-              {t("org.index.filters.clearAll")}
-            </Button>
-          </div>
+          /* 正文说的是**组织里一共有多少个 Agent**，不是复述当前条件：那排条件
+             逐字就在正上方（搜索框里的词 + 一排可点掉的 chip），再抄一遍是噪声。
+             有用的那句是「东西还在，只是这一屏不收」。 */
+          <InlineEmpty
+            testId="org-index-no-match"
+            icon={SearchX}
+            title={t("org.index.noMatch.title")}
+            body={t("org.index.noMatch.body", { count: agents.length })}
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2.5 text-2xs"
+                onClick={clearAll}
+              >
+                {t("org.index.filters.clearAll")}
+              </Button>
+            }
+          />
         ) : (
           <>
             {topRows.map((row) => (
@@ -324,37 +330,35 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
               </React.Fragment>
             ))}
             {departments.length === 0 && (
-              <div
-                className="m-2.5 flex flex-col items-center gap-2 rounded-lg border border-dashed border-border p-6 text-center"
-                data-slot="org-index-empty-departments"
-              >
-                <span className="text-sm font-semibold">
-                  {t("org.index.emptyDepartments.title")}
-                </span>
-                <span className="text-2xs text-muted-foreground">
-                  {t("org.index.emptyDepartments.description")}
-                </span>
-                <div className="mt-1 flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2.5 text-2xs"
-                    onClick={() => props.onCreateDepartment()}
-                  >
-                    <FolderPlus className="size-3" aria-hidden="true" />
-                    {t("org.index.emptyDepartments.newDepartment")}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 px-2.5 text-2xs"
-                    onClick={() => props.onCreateAgent()}
-                  >
-                    <Plus className="size-3" aria-hidden="true" />
-                    {t("org.index.emptyDepartments.addAgent")}
-                  </Button>
-                </div>
-              </div>
+              /* 这张卡片本来就是本栏空态的形，现在由 InlineEmpty 统一出——
+                 上面「没有匹配的 Agent」与它同处一个面板，不能是两种形。 */
+              <InlineEmpty
+                slot="org-index-empty-departments"
+                title={t("org.index.emptyDepartments.title")}
+                body={t("org.index.emptyDepartments.description")}
+                action={
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-2xs"
+                      onClick={() => props.onCreateDepartment()}
+                    >
+                      <FolderPlus className="size-3" aria-hidden="true" />
+                      {t("org.index.emptyDepartments.newDepartment")}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2.5 text-2xs"
+                      onClick={() => props.onCreateAgent()}
+                    >
+                      <Plus className="size-3" aria-hidden="true" />
+                      {t("org.index.emptyDepartments.addAgent")}
+                    </Button>
+                  </>
+                }
+              />
             )}
           </>
         )}

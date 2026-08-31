@@ -1,11 +1,17 @@
 import { Laptop, AlertTriangle, Github, Key, Info } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { Button, Alert } from "@agentre-hub/agentre-ui";
+import {
+  Button,
+  Alert,
+  AlertTitle,
+  AlertDescription,
+} from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
 import { api, ApiError } from "@/lib/api";
 import { ACCOUNT_CODES, PASSKEY_LOGIN_CODES } from "@/lib/errorCodes";
+import { passkeySupport } from "@/lib/passkeySupport";
 import {
   decodeRequestOptions,
   encodeAssertionResponse,
@@ -181,8 +187,9 @@ export default function Login() {
 
   // 通行密钥被取消不算错误，只是平和的重试提示
   const showError = !!err && !isPasskeyCancelled;
-  const supportsWebAuthn =
-    typeof window !== "undefined" && !!window.PublicKeyCredential;
+  // 不能用时还要分清是哪一种：源不是安全上下文（本站有时用 http 提供）要说出来，
+  // 浏览器太老则保持沉默 —— 那不是本站能替他解决的事。
+  const passkeys = passkeySupport();
 
   return (
     <AuthLayout>
@@ -204,11 +211,9 @@ export default function Login() {
         {isPasskeyCancelled && (
           <Alert className="border-border bg-secondary">
             <Info className="h-4 w-4" />
-            <div>
-              <div className="text-sm text-secondary-foreground">
-                {t("login.errors.passkey_cancelled")}
-              </div>
-            </div>
+            <AlertDescription className="text-sm text-secondary-foreground">
+              {t("login.errors.passkey_cancelled")}
+            </AlertDescription>
           </Alert>
         )}
 
@@ -219,14 +224,14 @@ export default function Login() {
               className="border-destructive bg-destructive-soft"
             >
               <AlertTriangle className="h-4 w-4" />
-              <div>
-                <div className="font-semibold text-destructive">
-                  {t("login.failureTitle")}
-                </div>
-                {errorText && (
-                  <div className="text-sm text-destructive">{errorText}</div>
-                )}
-              </div>
+              <AlertTitle className="font-semibold text-destructive">
+                {t("login.failureTitle")}
+              </AlertTitle>
+              {errorText && (
+                <AlertDescription className="text-sm text-destructive">
+                  {errorText}
+                </AlertDescription>
+              )}
             </Alert>
             <Button className="w-full" onClick={onLogin}>
               {t("login.retryLogin")}
@@ -239,7 +244,7 @@ export default function Login() {
               {t("login.github")}
             </Button>
 
-            {supportsWebAuthn && (
+            {passkeys === "available" ? (
               <>
                 <div className="relative">
                   <div className="absolute inset-0 flex items-center">
@@ -261,7 +266,13 @@ export default function Login() {
                   {t("login.passkey")}
                 </Button>
               </>
-            )}
+            ) : passkeys === "insecure-origin" ? (
+              // 不摆一颗按不动的按钮：这里没有用户能执行的下一步，只有一句事实。
+              // 但整块静默消失也不行——注册过通行密钥的人会以为功能没了。
+              <p className="text-center text-xs text-muted-foreground">
+                {t("login.passkeyInsecureOrigin")}
+              </p>
+            ) : null}
           </>
         )}
 

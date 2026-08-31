@@ -63,8 +63,8 @@ describe("decodePermissionModeMeta", () => {
     expect(meta?.allowedModes).toEqual([]);
   });
 
-  // 而解不动一律是 null。混成空集合，界面就会对着一台答不上来的机器说
-  // 「这个后端没有权限档位」——用户无法证伪的假话。
+  // 而解不动一律是 null。混成空集合，一台答不上来的机器就会被当成一台本来就没有
+  // 权限门的机器悄悄放过（那一态界面是不说话的），用户连问都无从问起。
   it.each([
     ["空对象", {}],
     ["permission_mode 没报（对端太老）", { capabilities: [] }],

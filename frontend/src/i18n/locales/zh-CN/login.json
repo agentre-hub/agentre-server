@@ -3,6 +3,7 @@
   "github": "使用 GitHub 登录",
   "or": "或",
   "passkey": "用通行密钥登录",
+  "passkeyInsecureOrigin": "通行密钥只在 https 下可用，这个站点用的是 http。",
   "userCodeLabel": "登录后继续授权设备",
   "failureTitle": "登录未完成",
   "retryLogin": "重新登录",

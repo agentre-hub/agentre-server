@@ -753,7 +753,7 @@ describe("统一会话索引：筛选 chips", () => {
 
     // 会话还在，只是这一档不收：空态不能说成「还没有对话」。
     expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match this filter.",
+      "Nothing in \u201cRunning\u201d",
     );
     expect(screen.getByTestId("filter-chip-all")).toBeTruthy();
   });
@@ -762,7 +762,7 @@ describe("统一会话索引：筛选 chips", () => {
     renderIndex({ axis: "project", rows: [], narrowed: true });
 
     expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search.",
+      "No conversations match your search",
     );
   });
 });
@@ -1124,6 +1124,34 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
     expect(await screen.findByText("第三条")).toBeTruthy();
   });
 
+  /**
+   * 弹层是按 scope 现翻的，翻回来可能是空的（打开的那一刻宿主的搜索/筛选又收窄了，
+   * 或者这一组刚被清空）。它此前借了**页面级**空态那句「没有匹配这次搜索的对话」
+   * ——可这里未必在搜索。借来的键还有更实的风险：它属于别人，别人改名/删键时这里
+   * 不报错，只在运行时把裸键号印到界面上。所以这一句必须是它自己的。
+   */
+  it("弹层翻回来是空的：说一句它自己的话，不是页面级空态那句，更不是裸键号", async () => {
+    const loadGroupPage = vi.fn(async () => ({
+      rows: [],
+      cursor: null,
+      hasMore: false,
+    }));
+    renderIndex({
+      axis: "project",
+      rows,
+      groupTotals: { "p-server": 9 },
+      loadGroupPage,
+    });
+
+    fireEvent.click(screen.getByText("View all 9 sessions"));
+    await waitFor(() => expect(loadGroupPage).toHaveBeenCalled());
+
+    const empty = await screen.findByTestId("group-overflow-empty");
+    expect(empty.textContent).not.toContain("sessionIndex.");
+    expect(empty.textContent).not.toContain("match your search");
+    expect(empty.textContent?.trim()).toBeTruthy();
+  });
+
   it("收起的组里的行不在 ↑↓ 的路线上（规格 2026-08-19「组怎么收怎么放」可达性）", () => {
     renderIndex({
       axis: "project",
@@ -1368,7 +1396,7 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
       screen.queryByText("No conversations on this machine yet."),
     ).toBeNull();
     expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search.",
+      "No conversations match your search",
     );
   });
 });
@@ -1407,14 +1435,41 @@ describe("会话索引：空态与失败的出路", () => {
     );
   }
 
-  it("筛选筛空了：说出账号里还有多少条,并给一条回「全部」的路", () => {
+  it("筛选筛空了：标题点名是**哪一档**空了,正文说账号里还有多少条", () => {
     const onFilterChange = vi.fn();
     renderIndex({ filter: "waiting", onFilterChange, accountTotal: 24 });
 
     const empty = screen.getByTestId("session-index-empty");
+    // 「这一档」是黑话：读者眼前只有 chip 上那几个字。空态要用同一个词回指。
+    expect(empty.textContent).toContain("Waiting for you");
     expect(empty.textContent).toContain("24");
     within(empty).getByTestId("empty-action").click();
     expect(onFilterChange).toHaveBeenCalledWith("all");
+  });
+
+  /**
+   * accountTotal 是可选的：宿主没算出来时它是 undefined，而不是 0。此前两者被
+   * `?? 0` 揉成一个，于是「不知道有多少条」被当成「一条都没有」，回「全部」的按钮
+   * 一起被吞掉——用户筛进一个空档就出不来了。不知道总数只是少说一句，不是没有出路。
+   */
+  it("账号总数没算出来时照样给回「全部」的路,只是不报数", () => {
+    const onFilterChange = vi.fn();
+    renderIndex({ filter: "running", onFilterChange });
+
+    const empty = screen.getByTestId("session-index-empty");
+    expect(empty.textContent).toContain("Running");
+    within(empty).getByTestId("empty-action").click();
+    expect(onFilterChange).toHaveBeenCalledWith("all");
+  });
+
+  it("账号里确实一条都没有：不摆一个通向另一块空白的按钮", () => {
+    renderIndex({ filter: "running", accountTotal: 0 });
+
+    expect(
+      within(screen.getByTestId("session-index-empty")).queryByTestId(
+        "empty-action",
+      ),
+    ).toBeNull();
   });
 
   it("搜索搜空了：给的是「清除搜索」,不是「看全部」——它们是两件事", () => {
@@ -1422,6 +1477,7 @@ describe("会话索引：空态与失败的出路", () => {
     renderIndex({ narrowed: true, onClearSearch });
 
     const empty = screen.getByTestId("session-index-empty");
+    expect(empty.textContent).toContain("No conversations match your search");
     within(empty).getByTestId("empty-action").click();
     expect(onClearSearch).toHaveBeenCalledOnce();
   });

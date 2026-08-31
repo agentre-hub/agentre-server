@@ -12,6 +12,8 @@
     "adding": "Finish the check in your browser prompt…",
     "unsupported": "This browser does not support passkeys",
     "unsupportedHint": "A recent Chrome, Safari, or Edge can add one.",
+    "insecureOrigin": "Passkeys need HTTPS, and this site is served over HTTP",
+    "insecureOriginHint": "Your browser supports passkeys — serve the site over https (or use localhost) to add one.",
     "loadError": "Could not load your passkeys. Try again.",
     "created": "Added {{date}}",
     "lastUsed": "Last used {{date}}",

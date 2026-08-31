@@ -11,7 +11,13 @@
  *     chosen 上），挑中的档跑不了时不回落。
  *   - 还没发出去时左栏不多出任何一行：它还不是一条会话。
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +36,12 @@ import { useRelayMachine } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
+import { NewConversationPane } from "@/components/session/newconv/NewConversationPane";
+import { ProjectAgentPane } from "@/components/session/newconv/ProjectAgentPane";
+import type {
+  NewConvAgent,
+  NewConvProject,
+} from "@/components/session/newconv/types";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -747,6 +759,101 @@ describe("从项目里挑一个 Agent", () => {
   });
 });
 
+/**
+ * 「挑一个 Agent」的三种空，与会话索引空态同一条判据（`session-index.test.tsx`
+ * 「空态与失败的出路」）：说清楚**什么**空了、外面还有什么、给一条回程。
+ *
+ * 此前这一格是一行 14px 灰字，而且账号里没有 Agent 时借的是**总览页**的
+ * `overview.empty`。借键有两个后果：总览改一句文案会连带改这里；总览删/改名时
+ * 这里不报错，只在运行时把裸键号印到界面上（`sessionIndex.search.empty` 已经
+ * 这样咬过一次）。
+ */
+describe("挑一个 Agent：空的时候说什么", () => {
+  const agent: NewConvAgent = {
+    sync_id: "a-1",
+    name: "Reviewer",
+    has_available_target: true,
+    exec_targets: [
+      { rank: 1, availability: "available", current: true, device_name: "box" },
+    ],
+  };
+
+  function renderPane(agents: NewConvAgent[]) {
+    return render(
+      <ThemeProvider>
+        <NewConversationPane
+          agents={agents}
+          recentIds={[]}
+          onPick={vi.fn()}
+          onFromProject={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+  }
+
+  it("账号里一个 Agent 都没有：这一句归自己，不借总览页的键", () => {
+    renderPane([]);
+
+    const empty = screen.getByTestId("agent-pick-empty");
+    expect(empty.textContent).not.toContain("overview.");
+    expect(empty.textContent).not.toContain("chat.");
+    // 只说「还没有 Agent」是半句：得说清楚它们从哪来，否则读者不知道下一步。
+    expect(empty.textContent).toContain("desktop");
+  });
+
+  it("搜索搜空了：说的是这次搜索,并给一条清除搜索的回程", () => {
+    renderPane([agent]);
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search agents" }), {
+      target: { value: "zzz" },
+    });
+
+    const empty = screen.getByTestId("agent-pick-empty");
+    expect(empty.textContent).toContain("No agents match your search");
+    fireEvent.click(screen.getByRole("button", { name: "Clear search" }));
+
+    // 清完之后清单回来了，空态收走。
+    expect(screen.queryByTestId("agent-pick-empty")).toBeNull();
+    expect(screen.getByText("Reviewer")).toBeTruthy();
+  });
+});
+
+/**
+ * 「从项目里挑一个」的两种空与上面同一条。它们此前也是一行 14px 灰字——同一个
+ * 「新建对话」流里三种空态三种形，读者读到的分量不一样，可它们说的是同一级别的事。
+ */
+describe("从项目里挑：空的时候用同一种形", () => {
+  function renderProjectPane(projects: NewConvProject[]) {
+    return render(
+      <ThemeProvider>
+        <ProjectAgentPane
+          projects={projects}
+          agents={[]}
+          onPick={vi.fn()}
+          onBack={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+  }
+
+  it("一个项目都没有：走共享 EmptyState，且仍然说清去哪儿建", () => {
+    renderProjectPane([]);
+
+    const empty = screen.getByTestId("project-none-yet");
+    // 共享 EmptyState 的图标圈：证明这里不是第三种手搓形态。
+    expect(within(empty).getByTestId("empty-icon")).toBeTruthy();
+    expect(empty.textContent).toContain("Projects");
+  });
+
+  it("项目里一个 Agent 都没有：同一种形，并说清 Agent 从哪来", () => {
+    renderProjectPane([{ sync_id: "p-1", name: "server" }]);
+
+    const empty = screen.getByTestId("project-agents-empty");
+    expect(within(empty).getByTestId("empty-icon")).toBeTruthy();
+    expect(empty.textContent).toContain("desktop");
+  });
+});
+
 describe("开着新对话时还回得去", () => {
   // 桌面右栏被「新对话」接管之后，左栏那一列会话仍然点得动——点了就该回到那条
   // 会话。不清掉 compose 的话，点哪一行右栏都纹丝不动，人被困在挑 Agent 那一屏，
@@ -1018,20 +1125,31 @@ describe("草稿页的权限档位与模型控件", () => {
     ).toBeTruthy();
   });
 
-  // 与上一条是两句不同的话：这一条是稳定答案（这个后端没有权限门），上一条是
-  // 「此刻问不到」。整颗不摆会把两者混成同一件事。
-  it("Given 后端本来就没有权限门, When 打开草稿, Then 说的是另一句，且档位不随第一句过线", async () => {
-    stubMachine({ capabilities: [], permissionMode: { allowedModes: [] } });
+  // 与上一条是两件不同的事，但只有上一条值得说：这一条是稳定答案（这个后端没有
+  // 权限门），底栏空着就是完整的答案，与桌面端同一处置；上一条是本该有档却问不
+  // 出来，属于异常，仍要说。
+  it("Given 后端本来就没有权限门, When 打开草稿, Then 控件整颗不摆，且档位不随第一句过线", async () => {
+    const request = stubMachine({
+      capabilities: [],
+      permissionMode: { allowedModes: [] },
+    });
     renderChat();
     await openDraft();
     await awaitDraftComposer();
 
+    // 应答已消费：底栏要说的话此刻早该在了。
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        rpcMethods.runtimeCapabilities,
+        expect.anything(),
+      ),
+    );
     expect(
       screen.queryByRole("button", { name: /Permission mode/ }),
     ).toBeNull();
     expect(
-      await screen.findByText("This backend has no permission modes"),
-    ).toBeTruthy();
+      screen.queryByText("This backend has no permission modes"),
+    ).toBeNull();
 
     await typeInDraft("hi");
     const send = screen.getByTestId("session-detail-send");

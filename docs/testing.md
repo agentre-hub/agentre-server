@@ -159,7 +159,7 @@ They live next to what they guard.
 | --- | --- |
 | `internal/pkg/jwt/testkeys/isolation_test.go` | Test keys are not in `cmd/server`'s dependency graph |
 | `internal/api/http_golden_test.go` | The committed `/v1/sync/*` and `/v1/engine/*` response samples still match what the real server emits |
-| `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token and i18n rules fire, at error severity, over `src/` |
+| `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token, native-control, secure-context, Alert-slot and i18n rules fire, at error severity, over `src/` |
 | `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
 | `frontend/src/__tests__/user-code-contract.test.ts` | `lib/userCode.ts`'s alphabet and length still match `internal/pkg/usercode` |
 | `frontend/src/__tests__/login-error-contract.test.ts` | `Login.tsx`'s `KNOWN_ERRORS` still matches the `/login?err=` values `auth_ctr` redirects with, and each has copy in both locales |
