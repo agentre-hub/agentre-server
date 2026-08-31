@@ -96,9 +96,88 @@ export function pickFirstAvailable(tiers: DispatchTier[]): DispatchTier | null {
   return tiers.find((t) => t.availability === "available") ?? null;
 }
 
-/** 新建会话的本地会话标识：正整数、非零（wire sessionId 语义，按对端隔离）。 */
+/**
+ * 会话号的纪元：2024-01-01T00:00:00Z。
+ *
+ * 定一个自己的起点而不是用 Unix 纪元，是为了把毫秒差压进 41 位（2^41 ms ≈ 69.7
+ * 年，够到 2093 年）；剩下 12 位才装得下序列，两段合起来正好 53 位 —— JS 的
+ * `number` 能精确表示的上限。多一位就会在 `BigInt(sid)` 过 wire、`String(sid)`
+ * 过账号镜像 HTTP 的两条路上悄悄变成另一个号。
+ */
+export const SESSION_ID_EPOCH_MS = Date.UTC(2024, 0, 1);
+
+/** 低位序列的进制（12 位）。高位乘它、低位加它，正好拼成 41 + 12。 */
+export const SESSION_ID_SEQUENCE_SPAN = 4096;
+
+/**
+ * 逻辑时钟：只准往前。
+ *
+ * 系统时钟会倒回去（对时、改时区、休眠唤醒），而朴素的雪花在那一刻会把已经发过
+ * 的那几毫秒原样重发一遍 —— 号直接重复。这里以「发过的最大毫秒」为准，系统时钟
+ * 落在它后面时就地踏步，靠序列继续往下走。
+ */
+let lastMs = 0;
+/** 这一毫秒已经发了几个。发满 4096 就把逻辑时钟推到下一毫秒，而不是绕回去。 */
+let issuedThisMs = 0;
+/**
+ * 序列的**起点**是每个标签页各自随机抽的，不是固定 0。
+ *
+ * 同一浏览器的两个标签页可能在同一毫秒里各开一条对话；序列都从 0 起的话那是
+ * **必撞**，而随机起点把它降回 1/4096。这是这套布局唯一还靠概率的地方 ——
+ * 因为标签页之间没有可协调的东西（localStorage 的读-改-写不是原子的，
+ * 在取号这条热路径上引入跨标签页竞态比它要解决的问题更糟）。
+ */
+let sequence = randomSequenceSeed();
+
+function randomSequenceSeed(): number {
+  const webCrypto = globalThis.crypto;
+  if (webCrypto?.getRandomValues) {
+    const buf = new Uint32Array(1);
+    webCrypto.getRandomValues(buf);
+    return buf[0] % SESSION_ID_SEQUENCE_SPAN;
+  }
+  // 没有 WebCrypto 的环境（老 WebView、非安全上下文的某些实现）退回 Math.random：
+  // 这一位只用来错开标签页，不承担任何安全语义。
+  return Math.floor(Math.random() * SESSION_ID_SEQUENCE_SPAN);
+}
+
+/**
+ * 新建会话的本地会话标识：53 位雪花（41 位毫秒 + 12 位序列），正整数、非零
+ * （wire sessionId 语义，按对端隔离）。
+ *
+ * 为什么低位是**序列**而不是随机：批量导入（`importPorts.ts`）是在一个循环里
+ * 连着要号的，一毫秒里几十上百个。纯随机在这里靠生日概率，序列是确定不撞。
+ *
+ * 一句话说清这套布局的收益边界：会话号在 daemon 与账号镜像两侧都是按
+ * **(发起端指纹, 会话号)** 建键的（daemon 的 `runtimeSessionID`、镜像的决策 17），
+ * 所以要防的从来只是「同一个浏览器自己撞自己」。这套布局对那个域是确定不撞的；
+ * 跨标签页同毫秒那一格仍是 1/4096（见 `sequence` 的注释）。反过来说，它比此前
+ * 那个 53 位均匀随机在**跨浏览器**那一格上是退步的 —— 但那一格本来就不共享
+ * 键空间，撞了也互不相干。
+ *
+ * 「按时间有序」只在**毫秒这一层**成立：同一毫秒内的先后由序列决定，而序列的起点
+ * 是随机的、走到 4095 会绕回 0，所以同一毫秒里后发的号可能更小。绕回不会让号重复
+ * —— `issuedThisMs` 盯着这件事，发满 4096 就把逻辑时钟推到下一毫秒。
+ *
+ * 位运算在这里用不了：JS 的 `<<` / `|` 一律先截成 32 位，41 位的时间戳会被削掉
+ * 一半。所以高位用乘法、低位用加法。
+ */
 export function newSessionId(): number {
-  return Math.floor(Math.random() * Number.MAX_SAFE_INTEGER) + 1;
+  // 纪元之前的系统时钟（用户把日期调回 2020）会让号变成负数，而 backend 一律
+  // 拒绝非正数会话 id。三者取最大，一次把「回拨」与「早于纪元」都挡掉。
+  let ms = Math.max(Date.now(), lastMs, SESSION_ID_EPOCH_MS + 1);
+  if (ms === lastMs) {
+    if (issuedThisMs >= SESSION_ID_SEQUENCE_SPAN) {
+      ms += 1;
+      issuedThisMs = 0;
+    }
+  } else {
+    issuedThisMs = 0;
+  }
+  lastMs = ms;
+  issuedThisMs += 1;
+  sequence = (sequence + 1) % SESSION_ID_SEQUENCE_SPAN;
+  return (ms - SESSION_ID_EPOCH_MS) * SESSION_ID_SEQUENCE_SPAN + sequence;
 }
 
 /** 标题派生：首行 + 视觉截断（镜像桌面端 sessionTitleFromFirstMessage）。 */
