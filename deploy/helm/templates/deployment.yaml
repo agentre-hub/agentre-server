@@ -28,6 +28,17 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "agentre-server.serviceAccountName" . }}
+      # 中继是长连接，硬断和优雅让位对客户端完全不是一回事，所以停机分两拍：
+      #
+      #   1. preStop 先睡一会儿。SIGTERM 与「把 Pod 从 Service endpoints 里摘掉」
+      #      是**并行**发生的，摘除要经 kube-proxy / ingress 逐跳传播。不等这一下
+      #      就排空，客户端立刻重连，很可能又被路由回这个正在退出的 Pod。
+      #   2. 睡醒后才是 SIGTERM → cago 逆序关组件 → task.RelayDrain 给每条中继写
+      #      一个 1001(Going Away) 再关 → 客户端认出「服务端要走了」，退避清零、
+      #      立刻重连，这次落到别的副本上（见 relaytransport.ErrRelayGoingAway）。
+      #
+      # 宽限期必须大于 preStop + 排空，否则第 2 拍还没跑完就被 SIGKILL，等于没做。
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -61,6 +72,13 @@ spec:
               port: http
             periodSeconds: 10
             failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - sleep {{ .Values.preStopDrainDelaySeconds }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

@@ -60,6 +60,14 @@ type redisForwarder struct {
 	routes   map[string]clientRoute
 	routeTTL time.Duration
 	now      func() time.Time
+
+	// 投不出去的副本,见 unreachableInstanceTTL。与 routes 共用 routeMu:两者
+	// 都在同一条转发路径上被读写,分两把锁只会多一次加锁。
+	unreachable map[string]time.Time
+
+	// deliveryWait 是等一帧投递回执的上限,默认 deliveryWaitTimeout。做成字段
+	// 只为让用例不必真的等满 —— 超时时长本身不是那些用例要钉的东西。
+	deliveryWait time.Duration
 }
 
 // clientRoute 是「这条虚拟通道的浏览器连在哪个副本」的一份本地答案,以及它何时作废。
@@ -79,6 +87,30 @@ const clientRouteCacheTTL = 5 * time.Second
 // 才发现过期」清不掉那些再也不会被问到的。
 const clientRouteSweepThreshold = 1024
 
+// unreachableInstanceTTL 是「这个副本此刻投不出去」这条判断的保鲜期,也就是熔断
+// 窗口。
+//
+// 为什么需要它:浏览器所在的副本**崩掉**(不是正常下线)时,它来不及发那条通道关闭
+// 帧,而 relay:client:* 的在线登记要到 TTL 才过期。这段窗口里 daemon 并不知道对面
+// 没了,会继续推流,于是每一帧都要重新发现一次「投不出去」—— 每次一个投递超时,
+// 而这条路径是 daemon 读循环上的同步调用:那台机器上所有会话一起停摆。
+//
+// 发现一次就够了。窗口取得比投递超时略长:短于它等于没熔断,长得多则一次瞬时抖动
+// 会把一个已经恢复的副本一直拒在门外。一次成功投递立刻解除,不必等满。
+const unreachableInstanceTTL = 10 * time.Second
+
+// clientPresenceTTL 是虚拟通道在线登记(relay:client:*)的保鲜期。
+//
+// 它**不该**跟 daemon 在线态共用一个数,那是两件事:daemon 在线态问「这台机器还
+// 连着吗」,续期靠对端的心跳;而这条登记问「这条通道的浏览器在哪个副本」,续期是
+// 本副本自己的 goroutine 干的。本副本崩掉之后,这条登记就是纯粹的误导 —— daemon
+// 照着它往一个死副本投,直到 TTL 到期。
+//
+// 所以它该短,短到什么程度由本地续期够不够得上决定(renewClientPresence 每 TTL/2
+// 一次),而不是由在线态那个数决定。副本崩溃后的误导窗口因此从 30 秒缩到 10 秒;
+// 窗口内的每一帧还有熔断兜着(见 unreachableInstanceTTL)。
+const clientPresenceTTL = 10 * time.Second
+
 type attachedPeer struct {
 	channelID string
 	writer    FrameWriter
@@ -94,13 +126,15 @@ func NewRedisForwarder(config Config, redisClient *goredis.Client) Forwarder {
 	}
 	return &redisForwarder{
 		redis: redisClient, instanceID: config.InstanceID, ttl: ttl,
-		attachments: make(map[string]map[Peer]map[*attachedPeer]struct{}),
-		consumers:   make(map[string]context.CancelFunc),
-		presence:    make(map[string]context.CancelFunc),
-		ackWaiters:  make(map[string]chan struct{}),
-		routes:      make(map[string]clientRoute),
-		routeTTL:    min(clientRouteCacheTTL, ttl),
-		now:         time.Now,
+		attachments:  make(map[string]map[Peer]map[*attachedPeer]struct{}),
+		consumers:    make(map[string]context.CancelFunc),
+		presence:     make(map[string]context.CancelFunc),
+		ackWaiters:   make(map[string]chan struct{}),
+		routes:       make(map[string]clientRoute),
+		routeTTL:     min(clientRouteCacheTTL, ttl),
+		now:          time.Now,
+		unreachable:  make(map[string]time.Time),
+		deliveryWait: deliveryWaitTimeout,
 	}
 }
 
@@ -180,7 +214,41 @@ func (f *redisForwarder) dispatch(ctx context.Context, destination Route, peer P
 	if destination.InstanceID == f.instanceID {
 		return f.deliver(streamKey(destination), peer, channelID, messageType, frame)
 	}
-	return f.publishAndWait(ctx, destination, peer, channelID, messageType, frame)
+	// 熔断:这个副本刚刚投不出去,窗口内直接判失败,不再进入等待。见
+	// unreachableInstanceTTL。
+	if f.isUnreachable(destination.InstanceID) {
+		return fmt.Errorf("relay instance %q is unreachable", destination.InstanceID)
+	}
+	err := f.publishAndWait(ctx, destination, peer, channelID, messageType, frame)
+	f.recordReachability(destination.InstanceID, err)
+	return err
+}
+
+// isUnreachable 回答「这个副本此刻还在熔断窗口里吗」。过期条目顺手删掉。
+func (f *redisForwarder) isUnreachable(instanceID string) bool {
+	f.routeMu.Lock()
+	defer f.routeMu.Unlock()
+	at, ok := f.unreachable[instanceID]
+	if !ok {
+		return false
+	}
+	if f.now().Sub(at) < unreachableInstanceTTL {
+		return true
+	}
+	delete(f.unreachable, instanceID)
+	return false
+}
+
+// recordReachability 按这一次投递的成败开合熔断。成功立刻解除:副本恢复了就该
+// 马上恢复投递,不必等满窗口。
+func (f *redisForwarder) recordReachability(instanceID string, err error) {
+	f.routeMu.Lock()
+	defer f.routeMu.Unlock()
+	if err == nil {
+		delete(f.unreachable, instanceID)
+		return
+	}
+	f.unreachable[instanceID] = f.now()
 }
 
 // forwardToClient 把 daemon 发来的一帧送到那条虚拟通道的浏览器那边。
@@ -198,6 +266,7 @@ func (f *redisForwarder) dispatch(ctx context.Context, destination Route, peer P
 func (f *redisForwarder) forwardToClient(ctx context.Context, target Route, channelID string, messageType int, frame []byte) error {
 	key := clientChannelKey(target, channelID)
 	// 至多两轮:第一轮可能用了缓存,第二轮一定是刚从 Redis 读回来的。
+	var failed string
 	for attempt := 0; attempt < 2; attempt++ {
 		instanceID, cached, found, err := f.clientDestination(ctx, key)
 		if err != nil {
@@ -206,12 +275,18 @@ func (f *redisForwarder) forwardToClient(ctx context.Context, target Route, chan
 		if !found {
 			return nil
 		}
+		// 重解析出来还是刚刚失败的那个副本:同一个答案、同一个死副本,不会有不同
+		// 的结果。再投一次只是白等一个投递超时。
+		if instanceID == failed {
+			return fmt.Errorf("relay client instance %q is unreachable", instanceID)
+		}
 		destination := target
 		destination.InstanceID = instanceID
 		err = f.dispatch(ctx, destination, PeerClient, channelID, messageType, frame)
 		if err == nil {
 			return nil
 		}
+		failed = instanceID
 		if cached {
 			f.forgetClientRoute(key)
 			continue
@@ -247,7 +322,7 @@ func (f *redisForwarder) publishAndWait(ctx context.Context, target Route, peer 
 	if err := f.redis.Expire(ctx, stream, f.ttl).Err(); err != nil {
 		return fmt.Errorf("expire relay stream: %w", err)
 	}
-	if err := f.waitForAck(ctx, ack, acked); err != nil {
+	if err := f.waitForAck(ctx, f.deliveryWait, acked); err != nil {
 		return fmt.Errorf("confirm relay frame delivery: %w", err)
 	}
 	return nil
@@ -320,8 +395,8 @@ func (f *redisForwarder) dispatchAcks(ctx context.Context, key string) {
 
 // waitForAck 等一帧的投递回执。正常路径是回执分发协程把 waiter 关掉——一次往返、
 // 零轮询。从前这里是 10ms 一跳的 ticker,一帧最坏空转 500 次 GET。
-func (f *redisForwarder) waitForAck(ctx context.Context, _ string, acked <-chan struct{}) error {
-	ctx, cancel := context.WithTimeout(ctx, deliveryWaitTimeout)
+func (f *redisForwarder) waitForAck(ctx context.Context, budget time.Duration, acked <-chan struct{}) error {
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	select {
 	case <-acked:
@@ -550,9 +625,16 @@ func (f *redisForwarder) detach(stream string, peer Peer, attachment *attachedPe
 	}
 }
 
+// clientTTL 是通道登记实际用的保鲜期:取 clientPresenceTTL 与本实例在线态 TTL 的
+// 较小者。用例里常把 OnlineTTL 配成 1 秒来逼出过期路径,硬用 10 秒会把那些用例的
+// 前提抽掉。
+func (f *redisForwarder) clientTTL() time.Duration {
+	return min(clientPresenceTTL, f.ttl)
+}
+
 func (f *redisForwarder) registerClient(ctx context.Context, target Route, channelID string) error {
 	presence := clientChannelKey(target, channelID)
-	if err := f.redis.Set(ctx, presence, target.InstanceID, f.ttl).Err(); err != nil {
+	if err := f.redis.Set(ctx, presence, target.InstanceID, f.clientTTL()).Err(); err != nil {
 		return fmt.Errorf("register relay client channel: %w", err)
 	}
 	f.mu.Lock()
@@ -566,7 +648,7 @@ func (f *redisForwarder) registerClient(ctx context.Context, target Route, chann
 }
 
 func (f *redisForwarder) renewClientPresence(ctx context.Context, target Route, channelID string) {
-	interval := f.ttl / 2
+	interval := f.clientTTL() / 2
 	if interval < time.Second {
 		interval = time.Second
 	}
@@ -577,7 +659,7 @@ func (f *redisForwarder) renewClientPresence(ctx context.Context, target Route, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = f.redis.Expire(ctx, clientChannelKey(target, channelID), f.ttl).Err()
+			_ = f.redis.Expire(ctx, clientChannelKey(target, channelID), f.clientTTL()).Err()
 		}
 	}
 }

@@ -390,7 +390,6 @@ func TestRedisForwarderRemoteMissingClientTargetReturnsForwardingErrorWithoutDel
 	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
 	forwarderA := NewRedisForwarder(configA, clientA)
 	forwarderB := NewRedisForwarder(configB, clientB)
-	svc := New(configA, nil, clientA, forwarderA)
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configA.InstanceID}
 
 	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
@@ -403,17 +402,19 @@ func TestRedisForwarderRemoteMissingClientTargetReturnsForwardingErrorWithoutDel
 	require.NoError(t, clientB.Set(
 		context.Background(), clientChannelKey(route, staleChannel), configB.InstanceID, time.Second,
 	).Err())
-	envelope, err := wrapEnvelope(staleChannel, []byte("late-response"))
-	require.NoError(t, err)
+	// 这条用例钉的是**帧总线**的契约（投不出去要如实报失败、且不写回执），所以直接
+	// 调它。svc.ForwardDaemon 现在只把帧排给那条虚拟通道就返回 —— 转发的成败发生在
+	// worker 里，不再同步回到读循环（见 fanout.go）。服务层那一侧的契约由
+	// framebus_fanout_test.go 覆盖。
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
+	forwardErr := forwarderA.Forward(ctx, route, PeerDaemon, staleChannel, 2, []byte("late-response"))
 	stream := streamKey(Route{
 		AccountID: route.AccountID, Fingerprint: route.Fingerprint, InstanceID: configB.InstanceID,
 	})
 	requireRelayStreamDrained(t, clientB, stream)
 	requireNoDeliveryAck(t, clientB, stream)
-	require.ErrorIs(t, forwardErr, ErrForwardFailed)
+	require.Error(t, forwardErr)
 }
 
 func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStream(t *testing.T) {
@@ -428,7 +429,6 @@ func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStrea
 			t.Cleanup(func() { require.NoError(t, client.Close()) })
 			config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
 			forwarder := NewRedisForwarder(config, client)
-			svc := New(config, nil, client, forwarder)
 			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
 			channelID := "stale-local-channel"
 
@@ -437,9 +437,9 @@ func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStrea
 					context.Background(), clientChannelKey(route, channelID), config.InstanceID, time.Second,
 				).Err())
 			}
-			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
-			require.NoError(t, err)
-			require.NoError(t, svc.ForwardDaemon(context.Background(), route, 2, envelope))
+			// 同上：这里钉的是帧总线在「本机根本没有这条通道」时的行为。
+			require.NoError(t, forwarder.Forward(
+				context.Background(), route, PeerDaemon, channelID, 2, []byte("late-response")))
 			length, err := client.XLen(context.Background(), streamKey(route)).Result()
 			require.NoError(t, err)
 			require.Zero(t, length)
@@ -473,7 +473,6 @@ func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliver
 			if remote {
 				clientForwarder = NewRedisForwarder(clientConfig, clientRedis)
 			}
-			svc := New(daemonConfig, nil, daemonRedis, daemonForwarder)
 			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: daemonConfig.InstanceID}
 			channelID := "closing-client"
 			writer := &failingFrameWriter{writes: make(chan recordedFrame, 1)}
@@ -482,11 +481,11 @@ func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliver
 			require.NoError(t, err)
 			t.Cleanup(detach)
 
-			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
-			require.NoError(t, err)
+			// 同上：写失败要如实回到帧总线的调用方（现在那是 fanout 的 worker）。
 			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 			defer cancel()
-			forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
+			forwardErr := daemonForwarder.Forward(
+				ctx, route, PeerDaemon, channelID, 2, []byte("late-response"))
 			received := receiveRecordedFrame(t, writer.writes)
 			require.Equal(t, []byte("late-response"), received.frame)
 			if remote {
@@ -497,7 +496,7 @@ func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliver
 				requireRelayStreamDrained(t, clientRedis, stream)
 				requireNoDeliveryAck(t, clientRedis, stream)
 			}
-			require.ErrorIs(t, forwardErr, ErrForwardFailed)
+			require.Error(t, forwardErr)
 		})
 	}
 }

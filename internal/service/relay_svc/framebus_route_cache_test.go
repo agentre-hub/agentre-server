@@ -161,3 +161,128 @@ func TestForward_CachedRouteExpires(t *testing.T) {
 	_, ok = f.cachedClientRoute(key)
 	assert.False(t, ok, "过了期限就不该再用这份答案")
 }
+
+// deadRouteRig 起「浏览器所在副本已经没了」的形状:daemon 连在本副本,而那条虚拟
+// 通道的在线登记指着另一个副本 —— 那个副本崩了,所以它的 stream 没有消费者,发过去
+// 的帧只会等满投递超时。登记键要到 TTL 才过期,这段窗口正是问题所在。
+func deadRouteRig(t *testing.T) (*redisForwarder, *commandCounter, Route, string, func()) {
+	t.Helper()
+	mini := miniredis.RunT(t)
+	counter := newCommandCounter()
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	client.AddHook(counter)
+	config := Config{InstanceID: "server-a", OnlineTTL: 30 * time.Second}
+	f := NewRedisForwarder(config, client).(*redisForwarder)
+	// 用例不该真的等 5 秒 × N。超时时长本身不是这几条用例要钉的东西。
+	f.deliveryWait = 50 * time.Millisecond
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+	const channelID = "chan-orphan"
+
+	ctx := context.Background()
+	detachDaemon, err := f.Attach(ctx, route, PeerDaemon, "", &discardingFrameWriter{})
+	require.NoError(t, err)
+	// 崩掉的那个副本留下的在线登记。
+	require.NoError(t, client.Set(ctx, clientChannelKey(route, channelID), "server-dead", time.Minute).Err())
+
+	return f, counter, route, channelID, func() {
+		detachDaemon()
+		_ = client.Close()
+	}
+}
+
+/*
+重解析出来还是刚刚失败的那个副本,就不该再投一次。
+
+forwardToClient 至多两轮:第一轮可能用了缓存,第二轮一定是刚从 Redis 读回来的。
+可它此前**不看**第二轮读回来的是不是同一个副本,直接又投一次 —— 而浏览器所在
+副本崩掉的场景下,读回来的必然还是那个死的(登记键要到 TTL 才过期)。于是每一帧
+要等满**两次**投递超时,而这条路径跑在 daemon 的读循环上:那台机器上所有会话
+一起停摆。
+
+第二次超时是白付的:同一个答案,同一个死副本,不会有不同的结果。
+*/
+func TestForward_GivenReResolvedToTheSameDeadInstance_ThenDoesNotPayASecondTimeout(t *testing.T) {
+	f, counter, route, channelID, cleanup := deadRouteRig(t)
+	defer cleanup()
+
+	require.Error(t, f.Forward(context.Background(), route, PeerDaemon, channelID, 2, []byte("x")),
+		"投不出去要如实报失败")
+
+	assert.Equal(t, 1, counter.count("xadd"),
+		"同一个死副本只该试一次;试第二次是白等一个投递超时")
+}
+
+/*
+投不出去的副本要被记住,别每一帧都重新发现一遍。
+
+即便只等一次超时,登记键的整个 TTL 窗口里每一帧都要付这一次 —— 而这条路径是
+daemon 读循环上的同步调用。一次就够了:失败过的目的地短期内直接判失败,不再
+进入等待。
+*/
+func TestForward_GivenAnInstanceJustTimedOut_ThenLaterFramesFailFastWithoutWaiting(t *testing.T) {
+	f, counter, route, channelID, cleanup := deadRouteRig(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	require.Error(t, f.Forward(ctx, route, PeerDaemon, channelID, 2, []byte("x")))
+	before := counter.count("xadd")
+
+	started := time.Now()
+	require.Error(t, f.Forward(ctx, route, PeerDaemon, channelID, 2, []byte("x")))
+	elapsed := time.Since(started)
+
+	assert.Equal(t, before, counter.count("xadd"), "熔断期间不该再往那个副本发帧")
+	assert.Less(t, elapsed, f.deliveryWait, "熔断期间不该再等投递超时")
+}
+
+// 熔断是**短期**的:副本可能只是抖了一下,或者同一个实例 ID 重新上线。过了窗口
+// 就要重新试一次,否则一次瞬时故障会把这个目的地永久拉黑。
+func TestForward_GivenTheBreakerWindowPassed_ThenTriesTheInstanceAgain(t *testing.T) {
+	f, counter, route, channelID, cleanup := deadRouteRig(t)
+	defer cleanup()
+	ctx := context.Background()
+	now := time.Now()
+	f.now = func() time.Time { return now }
+
+	require.Error(t, f.Forward(ctx, route, PeerDaemon, channelID, 2, []byte("x")))
+	before := counter.count("xadd")
+
+	now = now.Add(unreachableInstanceTTL + time.Second)
+	require.Error(t, f.Forward(ctx, route, PeerDaemon, channelID, 2, []byte("x")))
+
+	assert.Greater(t, counter.count("xadd"), before, "过了熔断窗口必须重新试一次")
+}
+
+/*
+通道登记的 TTL 不该跟 daemon 在线态共用同一个数。
+
+它俩问的是两件事:daemon 在线态是「这台机器还连着吗」,续期靠对端的心跳,慢一点
+无所谓;而 relay:client:* 是「这条通道的浏览器在哪个副本」,续期是本副本自己的
+goroutine 干的 —— 这个副本**崩掉**之后,这条登记就是纯粹的误导:daemon 会照着
+它一直往一个死副本投,直到 TTL 到期。
+
+所以它该短。短到什么程度由「本地续期够不够得上」决定,而不是由在线态那个数决定。
+*/
+func TestClientPresence_UsesItsOwnShorterTTLThanDaemonPresence(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	config := Config{InstanceID: "server-a", OnlineTTL: 30 * time.Second}
+	f := NewRedisForwarder(config, client).(*redisForwarder)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
+
+	ctx := context.Background()
+	detachDaemon, err := f.Attach(ctx, route, PeerDaemon, "", &discardingFrameWriter{})
+	require.NoError(t, err)
+	t.Cleanup(detachDaemon)
+	detachClient, err := f.Attach(ctx, route, PeerClient, "chan-1", &discardingFrameWriter{})
+	require.NoError(t, err)
+	t.Cleanup(detachClient)
+
+	ttl, err := client.TTL(ctx, clientChannelKey(route, "chan-1")).Result()
+	require.NoError(t, err)
+	assert.LessOrEqual(t, ttl, clientPresenceTTL,
+		"通道登记该用自己那个更短的 TTL,而不是 daemon 在线态的 30 秒")
+	assert.Less(t, clientPresenceTTL, config.OnlineTTL,
+		"这个数存在的意义就是比在线态短:副本崩掉后的误导窗口跟着变短")
+}

@@ -15,6 +15,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/healthz_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/passkey_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr"
+	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
 	"github.com/agentre-hub/agentre-server/internal/controller/saved_session_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/sessionimport_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/stats_ctr"
@@ -34,6 +35,32 @@ type RouterDeps struct {
 	// AccountChan 留给测试注入自己那份实时通道实现：两个副本要各带一份，
 	// 而 accountchan_svc.Default() 一个进程只有一个。为空时取默认单例。
 	AccountChan accountchan_svc.AccountChanSvc
+
+	// drainers 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
+	// 长连接逐条礼貌关掉(见 DrainRelays)。
+	//
+	// 控制器是在 Router 里现造的,main 拿不到它们;而 RouterDeps 本来就是 main
+	// 持有的那个指针,把把手挂回它身上比给 Router 加一个返回值省事,也不必让
+	// main 去认识 relay_ctr / accountchan_ctr。
+	drainers []relayws.Drainer
+}
+
+// DrainRelays 优雅下线:把这个副本手里的中继与账号通道 websocket 逐条礼貌关掉
+// (1001 Going Away),交回一共关了几条。
+//
+// 为什么必须有这一步。这些是长连接,读循环阻塞在 ReadMessage 上永远不返回,于是:
+//   - 什么都不做直接退出 → 对端读到 1006,与网线被拔分不开,只能按网络抖动退避;
+//     而这一次它本该立刻重连、并落到另一个还活着的副本上;
+//   - mux 的 Shutdown 会等 handler 返回 → 没有这一步,进程会一直卡在停止那一步,
+//     直到宽限期结束被 SIGKILL,连接照样是硬断的。
+//
+// 幂等:排空过的连接已经从登记表里摘掉,重复调用交回 0。
+func (r *RouterDeps) DrainRelays() int {
+	total := 0
+	for _, d := range r.drainers {
+		total += d.Drain()
+	}
+	return total
 }
 
 // Router 构造完整路由树。
@@ -56,6 +83,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		accountChan = accountchan_svc.Default()
 	}
 	accountChanCtr := accountchan_ctr.New(accountChan)
+	r.drainers = []relayws.Drainer{relayCtr, accountChanCtr}
 	syncCtr := sync_ctr.New()
 	workspaceCtr := workspace_ctr.New()
 	engineCtr := engine_ctr.New()
@@ -261,9 +289,10 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受真实
 	// Device JWT；client 同时接受原生端 Device JWT 与浏览器短效 relay ticket。
-	// 浏览器原生 WebSocket 无法设头，ticket 经 queryTokenBridge 从 query 搬入头部。
+	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议（首选）
+	// 或 query（过渡期退路）搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
-	tokenBridged := g.Group("/", queryTokenBridge(), middleware.RelayClientJWT(r.Signer))
+	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(r.Signer))
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)
 	// 账号级实时通道：常连、不指定目标 daemon，服务端只往上面推「这个账号的同步
 	// 版本推进到 V」。两端凭据形状与 client 那条完全一样，因此挂在同一组上。

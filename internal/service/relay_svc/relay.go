@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -149,11 +150,18 @@ type relaySvc struct {
 	devices   device_repo.DeviceRepo
 	redis     *goredis.Client
 	forwarder Forwarder
+
+	// 每条 daemon 链路一个分派器,把转发从读循环上摘下来,见 fanout.go。
+	fanoutMu sync.Mutex
+	fanouts  map[Route]*daemonFanout
 }
 
 // New 创建 RelaySvc。实例 ID 必须在每个 server 进程中唯一。
 func New(config Config, devices device_repo.DeviceRepo, redisClient *goredis.Client, forwarder Forwarder) RelaySvc {
-	return &relaySvc{config: config, devices: devices, redis: redisClient, forwarder: forwarder}
+	return &relaySvc{
+		config: config, devices: devices, redis: redisClient, forwarder: forwarder,
+		fanouts: map[Route]*daemonFanout{},
+	}
 }
 
 func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64, kind string) (Route, error) {
@@ -242,7 +250,16 @@ func (s *relaySvc) IsDaemonOnline(ctx context.Context, accountID int64, fingerpr
 const channelCloseTimeout = 3 * time.Second
 
 func (s *relaySvc) AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error) {
-	return s.attach(ctx, target, PeerDaemon, "", writer)
+	detach, err := s.attach(ctx, target, PeerDaemon, "", writer)
+	if err != nil {
+		return nil, err
+	}
+	// 分派器与这条链路同生共死:它一收工,排着的帧就不该再投,新来的帧也不该再收。
+	closeFanout := s.registerFanout(target)
+	return func() {
+		closeFanout()
+		detach()
+	}, nil
 }
 
 func (s *relaySvc) AttachClient(ctx context.Context, target Route, writer FrameWriter) (string, func(), error) {
@@ -274,6 +291,13 @@ func (s *relaySvc) attach(ctx context.Context, target Route, peer Peer, channelI
 	return forwarder.Attach(ctx, target, peer, channelID, writer)
 }
 
+// ForwardDaemon 只做两件事:拆信封、把内层帧排给它那条虚拟通道。**不等转发完成**。
+//
+// 调用它的是 daemon 的读循环,而转发在跨副本时要等一次 Redis 投递回执。在这里等
+// 就等于让一台机器上所有会话的每一个 token 排同一条队(见 fanout.go 开头)。
+//
+// 信封解不开是**协议违例**,不是转发失败:它照旧同步报上去,控制器据此拆掉这条链路。
+// 而转发本身的失败发生在 worker 里,不再连坐这条共享的物理连接。
 func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error {
 	if messageType != websocket.BinaryMessage {
 		return errors.New("relay daemon envelope must be a binary websocket message")
@@ -282,7 +306,11 @@ func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType 
 	if err != nil {
 		return fmt.Errorf("decode relay daemon envelope: %w", err)
 	}
-	return s.forward(ctx, target, PeerDaemon, channelID, websocket.BinaryMessage, innerFrame)
+	fanout, ok := s.fanoutFor(target)
+	if !ok {
+		return fmt.Errorf("%w: relay daemon link is not attached", ErrForwardFailed)
+	}
+	return fanout.enqueue(ctx, channelID, innerFrame)
 }
 
 func (s *relaySvc) ForwardClient(ctx context.Context, target Route, channelID string, messageType int, frame []byte) error {

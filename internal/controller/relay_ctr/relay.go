@@ -17,12 +17,28 @@ import (
 )
 
 type Relay struct {
-	svc       relay_svc.RelaySvc
-	transport relayws.Transport
+	svc relay_svc.RelaySvc
+	// 两个端点的读上限不同,所以是两个 transport:daemon 那条收的是信封(载荷 +
+	// 通道 ID 头),客户端那条收的是裸载荷。见 relayws.MaxPayloadBytes。
+	daemonTransport relayws.Transport
+	clientTransport relayws.Transport
 }
 
 func New(svc relay_svc.RelaySvc) *Relay {
-	return &Relay{svc: svc, transport: relayws.New()}
+	return &Relay{
+		svc:             svc,
+		daemonTransport: relayws.New(relayws.DaemonReadLimit),
+		clientTransport: relayws.New(relayws.ClientReadLimit),
+	}
+}
+
+// Drain 优雅下线:把这个进程手里两个端点上还活着的中继 websocket 逐条礼貌关掉
+// (1001 Going Away),让对端立刻重连到别的副本,而不是当成网络抖动慢慢退避。
+//
+// 关掉之后每个 handler 的读循环随即出错返回,它的 detach 才跑得到 —— 那是把连接
+// 从帧总线上摘下来的唯一一步,也是 mux 的 Shutdown 等的那件事。
+func (r *Relay) Drain() int {
+	return r.daemonTransport.Drain() + r.clientTransport.Drain()
 }
 
 // Daemon 接收 agentred 的出站连接。在线态只由 Redis TTL 表示；连接断开时
@@ -37,7 +53,7 @@ func (r *Relay) Daemon(c *gin.Context) {
 		return
 	}
 	guard := connguard.New(ctx, accountID, jti)
-	conn, err := r.transport.Upgrade(c.Writer, c.Request, relayws.Hooks{
+	conn, err := r.daemonTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: func() error {
 			if err := guard(); err != nil {
 				return err
@@ -119,7 +135,7 @@ func (r *Relay) Client(c *gin.Context) {
 		return
 	}
 	guard := connguard.New(ctx, accountID, jti)
-	conn, err := r.transport.Upgrade(c.Writer, c.Request, relayws.Hooks{
+	conn, err := r.clientTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: guard, OnHeartbeat: guard,
 	})
 	if err != nil {

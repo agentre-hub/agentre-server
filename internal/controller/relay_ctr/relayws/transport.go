@@ -17,6 +17,10 @@ var ErrCredentialRevoked = errors.New("relay credential revoked")
 
 const credentialRevokedReason = "credential revoked"
 
+// drainingReason 是优雅下线时写进关闭帧的原因。它跟着 1001 一起过去,对端据此
+// 在日志里说得出「是服务端要走了」,而不是留下一条没头没尾的 1006。
+const drainingReason = "server draining"
+
 // ProtobufSubprotocol 是客户端主动声明时协商的 WebSocket 子协议。未声明子协议也能
 // 建立 relay；relay 只路由 opaque Protobuf RPC 字节，不解析其中的 RpcFrame。
 const ProtobufSubprotocol = "agentre-protobuf"
@@ -31,8 +35,33 @@ type Hooks struct {
 	OnHeartbeat func() error
 }
 
+// MaxPayloadBytes 是一条 RPC 载荷的上限，**整条链路共用这一个数**：桌面端 ↔ agentred
+// 的直连（agentre 的 protorpc.MaxFrameBytes）、浏览器接入这一侧、以及 daemon 那条中继
+// 链路，三处必须同源。
+//
+// 三处曾经不同源：直连与 daemon 侧是 16 MiB，服务端这里是 10 MiB。后果不是「大一点的
+// 请求失败了」——超限时 gorilla 回 1009 并让读循环出错，于是**整条物理连接**被拆掉，
+// 而 daemon 那条链路上跑着那台机器的全部虚拟通道，所有会话一起断线重连。
+//
+// 取小的那个数（10 MiB）而不是大的：中继上跑的是别的设备发来的字节，不是本机可信输入。
+const MaxPayloadBytes int64 = 10 << 20
+
+// MaxEnvelopeBytes 是 daemon 那条链路上信封头的余量：2 字节长度 + 通道 ID
+// （对侧 relaytransport 的 maxRelayChannelIDLength 是 128）。
+//
+// 只有 daemon 那一侧要加它。浏览器 / 桌面端接入的那条收的是**裸载荷**（信封由服务端
+// 在 relay_svc.wrapEnvelope 里加、在 unwrapEnvelope 里拆，对端不感知），多给余量等于
+// 放进一份对面装不下的载荷 —— 那正是上面说的「整条连接陪葬」。
+const MaxEnvelopeBytes int64 = 2 + 128
+
+// DaemonReadLimit / ClientReadLimit 是两个端点各自的读上限，由上面两个数推出来，
+// 不另外写字面量。
 const (
-	maxMessageSize = 10 << 20
+	DaemonReadLimit = MaxPayloadBytes + MaxEnvelopeBytes
+	ClientReadLimit = MaxPayloadBytes
+)
+
+const (
 	// HeartbeatInterval 是服务端发 ping 的周期,也是对端 pong 触发 OnPeerActivity
 	// 的周期。控制器按它给读循环里的在线态续期节流,所以它是导出的:两处必须是
 	// 同一个数,否则续期的实际间隔会脱离心跳的保证。
@@ -57,14 +86,34 @@ type Connection interface {
 // Transport 将 HTTP 请求升级为受生命周期策略管理的 WebSocket 连接。
 type Transport interface {
 	Upgrade(w http.ResponseWriter, r *http.Request, hooks Hooks) (Connection, error)
+	Drainer
+}
+
+// Drainer 是优雅下线那一步:把这个 transport 手里还活着的连接**逐条礼貌关掉**。
+//
+// 为什么不能什么都不做就退出:中继是长连接,进程一走对端读到的是 1006
+// (abnormal closure),那与「网线被拔了」完全一样 —— 对端只能按网络抖动退避重试。
+// 而这一次它本该立刻重连,并且落到另一个还活着的副本上。1001(Going Away)在协议里
+// 的含义正是「服务端要走了」,是唯一说得清这件事的信号。
+//
+// 交回这一次真的关掉了几条,调用方据此记一行日志。
+type Drainer interface {
+	Drain() int
 }
 
 type transport struct {
-	timing   timing
-	upgrader websocket.Upgrader
+	timing    timing
+	readLimit int64
+	upgrader  websocket.Upgrader
+
+	// live 是本 transport 此刻还握着的连接。只增不减会变成一份内存泄漏,所以
+	// connection.Close 里同步摘除(见 forget)。
+	mu   sync.Mutex
+	live map[*connection]struct{}
 }
 
 type connection struct {
+	owner        *transport
 	conn         *websocket.Conn
 	readTimeout  time.Duration
 	writeTimeout time.Duration
@@ -75,14 +124,22 @@ type connection struct {
 }
 
 // New 创建采用固定生产生命周期策略的 WebSocket 传输组件。
-func New() Transport {
-	return newWithTiming(defaultTiming())
+//
+// readLimit 由端点决定：收信封的那一侧是 DaemonReadLimit，收裸载荷的是
+// ClientReadLimit。两者都从 MaxPayloadBytes 推出来，调用方不该另写一个数。
+func New(readLimit int64) Transport {
+	return newWithTiming(defaultTiming(), readLimit)
 }
 
-func newWithTiming(cfg timing) Transport {
+func newWithTiming(cfg timing, readLimit int64) Transport {
+	if readLimit <= 0 {
+		readLimit = ClientReadLimit
+	}
 	return &transport{
-		timing:   cfg,
-		upgrader: websocket.Upgrader{Subprotocols: []string{ProtobufSubprotocol}},
+		timing:    cfg,
+		readLimit: readLimit,
+		upgrader:  websocket.Upgrader{Subprotocols: []string{ProtobufSubprotocol}},
+		live:      map[*connection]struct{}{},
 	}
 }
 
@@ -100,13 +157,14 @@ func (t *transport) Upgrade(w http.ResponseWriter, r *http.Request, hooks Hooks)
 		return nil, err
 	}
 	peer := &connection{
+		owner:        t,
 		conn:         conn,
 		readTimeout:  t.timing.readTimeout,
 		writeTimeout: t.timing.writeTimeout,
 		hooks:        hooks,
 		done:         make(chan struct{}),
 	}
-	conn.SetReadLimit(maxMessageSize)
+	conn.SetReadLimit(t.readLimit)
 	if err := peer.extendReadDeadline(); err != nil {
 		_ = peer.Close()
 		return nil, err
@@ -126,8 +184,41 @@ func (t *transport) Upgrade(w http.ResponseWriter, r *http.Request, hooks Hooks)
 		}
 		return peer.peerActivity()
 	})
+	t.remember(peer)
 	go peer.heartbeat(t.timing.heartbeatInterval)
 	return peer, nil
+}
+
+func (t *transport) remember(peer *connection) {
+	t.mu.Lock()
+	t.live[peer] = struct{}{}
+	t.mu.Unlock()
+}
+
+func (t *transport) forget(peer *connection) {
+	t.mu.Lock()
+	delete(t.live, peer)
+	t.mu.Unlock()
+}
+
+// Drain 先把登记表整个取走再逐条关:关连接会回头调 forget,握着锁做这件事就是
+// 自锁。取走之后表是空的,于是重复调用交回 0 —— 排空天然幂等。
+func (t *transport) Drain() int {
+	t.mu.Lock()
+	draining := make([]*connection, 0, len(t.live))
+	for peer := range t.live {
+		draining = append(draining, peer)
+	}
+	t.live = map[*connection]struct{}{}
+	t.mu.Unlock()
+
+	for _, peer := range draining {
+		// 关闭帧写不出去(对端已经没了)不影响下一步:该关的还是要关。
+		_ = peer.writeControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, drainingReason))
+		_ = peer.Close()
+	}
+	return len(draining)
 }
 
 func (p *connection) ReadMessage() (int, []byte, error) {
@@ -156,7 +247,12 @@ func (p *connection) WriteMessage(messageType int, data []byte) error {
 }
 
 func (p *connection) Close() error {
-	p.closeOnce.Do(func() { close(p.done) })
+	p.closeOnce.Do(func() {
+		close(p.done)
+		if p.owner != nil {
+			p.owner.forget(p)
+		}
+	})
 	return p.conn.Close()
 }
 

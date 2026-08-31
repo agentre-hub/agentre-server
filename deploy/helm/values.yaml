@@ -72,6 +72,12 @@ resources:
     cpu: 500m
     memory: 512Mi
 
+# 优雅停机（见 deployment.yaml 里那段说明）。两个数是一组：
+# terminationGracePeriodSeconds 必须明显大于 preStopDrainDelaySeconds，剩下的差额
+# 留给排空本身与 cago 收尾（镜像租约让出、cron 停摆）。
+preStopDrainDelaySeconds: 10
+terminationGracePeriodSeconds: 45
+
 autoscaling:
   enabled: true
   minReplicas: 2

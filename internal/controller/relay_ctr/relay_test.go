@@ -365,9 +365,18 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 			t.Cleanup(func() { _ = conn.Close() })
 
 			require.NoError(t, conn.SetWriteDeadline(time.Now().Add(2*time.Second)))
-			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize(10<<20, tc.daemonWire)))
-			receiveWithin(t, tc.framesOf(stub), time.Second, "10 MiB relay message was not accepted")
-			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize((10<<20)+1, tc.daemonWire)))
+			// 上限是**载荷**的上限，三个仓同一个数（relayws.MaxPayloadBytes）。
+			// daemon 那条链路上跑的是信封（2 字节长度 + 通道 ID），所以它的读上限
+			// 要比载荷预算高出一个信封头 —— 否则一份刚好 10 MiB 的合法载荷，只因为
+			// 服务端替它套了个信封就被 1009 打掉，而且打掉的是**整条**物理连接，
+			// 那台机器上所有虚拟通道一起陪葬。
+			limit := int(relayws.MaxPayloadBytes)
+			if tc.daemonWire {
+				limit += int(relayws.MaxEnvelopeBytes)
+			}
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize(limit, tc.daemonWire)))
+			receiveWithin(t, tc.framesOf(stub), time.Second, "maximum relay message was not accepted")
+			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize(limit+1, tc.daemonWire)))
 			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
 			_, _, err = conn.ReadMessage()
 			require.True(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig), err)
@@ -731,15 +740,26 @@ func activeRelayDaemon() *device_entity.Device {
 
 func newRelayServer(t *testing.T, signer *jwt.Signer, svc relay_svc.RelaySvc) *httptest.Server {
 	t.Helper()
+	server, _ := newRelayServerWithDeps(t, signer, svc)
+	return server
+}
+
+// newRelayServerWithDeps 额外交回装配用的 RouterDeps —— 优雅下线那条路要拿它
+// 排空中继 websocket(DrainRelays)。
+func newRelayServerWithDeps(
+	t *testing.T, signer *jwt.Signer, svc relay_svc.RelaySvc,
+) (*httptest.Server, *api.RouterDeps) {
+	t.Helper()
 	testMux := muxtest.NewTestMux()
-	require.NoError(t, (&api.RouterDeps{
+	deps := &api.RouterDeps{
 		Cfg:    &bootstrap.ServerConfig{},
 		Signer: signer,
 		Relay:  svc,
-	}).Router(context.Background(), testMux.Router))
+	}
+	require.NoError(t, deps.Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server
+	return server, deps
 }
 
 func newRelayRedisClient(t *testing.T, mini *miniredis.Miniredis) *goredis.Client {
@@ -935,4 +955,49 @@ func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
 
 	// 登记这一步刚刚把 TTL 写满,这一串帧一次续期都不该再发。
 	require.Empty(t, stub.renewed, "读循环对每一帧都续了一次在线态")
+}
+
+/*
+优雅下线:副本要走的时候,先告诉对端再关。
+
+不这么做的话,对端读到的是 1006 —— 与网线被拔一模一样,于是它按网络抖动退避
+重试。而这一次它本该立刻重连、并落到另一个还活着的副本上(LB 已经把这个 Pod
+摘出去了)。1001(Going Away)是唯一能把这两件事分开的信号。
+
+同时 handler 必须**返回**:它的 detach 是把这条连接从帧总线上摘掉的唯一一步,
+而 mux 的 Shutdown 会等 handler 返回 —— 读循环阻塞在 ReadMessage 上不返回,
+整个进程就卡在停止那一步直到被 SIGKILL。
+*/
+func TestRelayDrainTellsPeersAndReleasesHandlers(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+	stub := &relayStub{
+		daemonRoute:    relay_svc.Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"},
+		registered:     make(chan struct{}, 1),
+		renewed:        make(chan struct{}, 1),
+		daemonFrames:   make(chan struct{}, 1),
+		clientFrames:   make(chan struct{}, 1),
+		daemonDetached: make(chan struct{}, 1),
+		clientDetached: make(chan struct{}, 1),
+	}
+	server, deps := newRelayServerWithDeps(t, signer, stub)
+	token, _, err := signer.Sign(
+		jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
+	require.NoError(t, err)
+	conn, _, err := protobufRelayDialer.Dial(
+		wsURL(server.URL, "/v1/relay/daemon"), http.Header{"Authorization": {"Bearer " + token}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	receiveWithin(t, stub.registered, time.Second, "daemon did not register")
+
+	require.Positive(t, deps.DrainRelays(), "排空必须数到这条 daemon 连接")
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.True(t, websocket.IsCloseError(err, websocket.CloseGoingAway),
+		"daemon 必须收到 1001 而不是 1006: %v", err)
+	receiveWithin(t, stub.daemonDetached, time.Second,
+		"排空之后 handler 没有返回:它的 detach 一直没跑,mux 的 Shutdown 会一直等它")
 }

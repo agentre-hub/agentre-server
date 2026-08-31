@@ -27,8 +27,12 @@ type AccountChannel struct {
 // New 创建通道控制器。传输沿用中继那套连接生命周期策略：心跳不依赖对端配合，
 // 凭据的逐次复查因此挂得住（见 relayws.Hooks 的说明）。
 func New(svc accountchan_svc.AccountChanSvc) *AccountChannel {
-	return &AccountChannel{svc: svc, transport: relayws.New()}
+	return &AccountChannel{svc: svc, transport: relayws.New(relayws.ClientReadLimit)}
 }
+
+// Drain 优雅下线:与中继同一件事 —— 账号通道也是长连接,进程要走时先说一声
+// (1001 Going Away)再关,浏览器据此立刻重连到别的副本。
+func (a *AccountChannel) Drain() int { return a.transport.Drain() }
 
 // Channel 是 GET /v1/account/channel：一条只出不进的常连通道。
 //

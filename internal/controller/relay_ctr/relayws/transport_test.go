@@ -19,6 +19,7 @@ type receivedFrame struct {
 
 type transportHarness struct {
 	server     *httptest.Server
+	transport  Transport
 	peers      chan Connection
 	frames     chan receivedFrame
 	readErrors chan error
@@ -228,7 +229,8 @@ func newTransportHarness(
 		frames:     make(chan receivedFrame, 16),
 		readErrors: make(chan error, 1),
 	}
-	transport := newWithTiming(cfg)
+	transport := newWithTiming(cfg, ClientReadLimit)
+	harness.transport = transport
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer, err := transport.Upgrade(w, r, hooks)
 		if err != nil {
@@ -350,4 +352,57 @@ func drainConnection(conn *websocket.Conn) {
 
 func wsURL(httpURL string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http")
+}
+
+/*
+优雅下线。
+
+副本被缩掉 / 滚动更新时,进程收到 SIGTERM 就没了,而中继连接是长连接:什么都不做
+的话对端读到的是 1006(abnormal closure)—— 它与「网线被拔了」一模一样,对端只能
+按网络抖动退避重试,而这一次它本该**立刻**重连、并且落到另一个还活着的副本上。
+
+所以下线要说一声:先写一个 1001(Going Away)关闭帧,再关连接。1001 在协议里的
+含义正是「服务端要走了」,对端据此把退避清零、马上重拨。
+*/
+func TestTransportDrainTellsPeersTheServerIsGoingAwayBeforeClosing(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
+
+	drained := harness.transport.Drain()
+	require.Equal(t, 1, drained, "本进程那一条连接必须被数进来")
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.True(t, websocket.IsCloseError(err, websocket.CloseGoingAway),
+		"对端必须收到 1001 而不是 1006(那与网络中断分不开): %v", err)
+	require.Contains(t, err.Error(), drainingReason)
+}
+
+// 关掉的连接不能再被数第二遍:排空是一次性的,重复调用(收到两次信号、或
+// CloseHandle 被跑了两遍)必须安全。
+func TestTransportDrainIsIdempotent(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
+
+	require.Equal(t, 1, harness.transport.Drain())
+	require.Equal(t, 0, harness.transport.Drain())
+}
+
+// 连接自己正常关掉之后要从登记表里摘掉,否则一个长跑的进程会把每一条来过的连接
+// 都留在表里 —— 那是一份只增不减的内存。
+func TestTransportForgetsClosedConnections(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	peer := receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
+	require.NoError(t, peer.Close())
+	_ = conn.Close()
+
+	require.Equal(t, 0, harness.transport.Drain())
 }

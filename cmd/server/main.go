@@ -143,6 +143,11 @@ func main() {
 		Registry(task.MirrorResident()).
 		Registry(cago.FuncComponent(web.MountSPA)).
 		RegistryCancel(mux.HTTP(deps.Router)).
+		// 中继排空**必须**注册在 mux 之后:cago 按注册逆序关组件,于是它排在 mux
+		// 之前关。反过来的话,进程已经卡在 mux 的 Shutdown 里等中继的读循环返回,
+		// 而那个循环阻塞在 ReadMessage 上永远不会自己返回 —— 这一步根本轮不到跑。
+		// 详见 task.RelayDrain 的注释。
+		Registry(task.RelayDrain(deps)).
 		Start()
 	if err != nil {
 		log.Fatalf("server start: %v", err)

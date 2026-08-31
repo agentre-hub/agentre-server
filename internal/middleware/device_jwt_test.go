@@ -128,3 +128,61 @@ func TestRelayClientJWTBoundary(t *testing.T) {
 		})
 	}
 }
+
+/*
+浏览器票据是**一次性**的。
+
+浏览器原生 WebSocket 设不了请求头，票只能走 query（relayUrl.ts → queryTokenBridge），
+于是它会落进 ingress access log、反代日志、浏览器 history 与 Referer。TTL 短、登出
+时按 sid 批量拉黑都已经有了，但那些都拦不住「泄漏之后、有效期之内」这一段。
+
+用后即焚把那一段压到零：一张票只换得到一条连接，日志里那份是废票。浏览器每建一条
+连接本来就现取一张（relayClientPool 与 accountChannel 都是每次现取），所以这条限制
+不改变任何正常用法。
+
+原生端的设备 JWT 不在此列：它是长期凭据，本来就要反复使用。
+*/
+func TestRelayClientJWT_BrowserTicketIsSingleUse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	testutils.Redis()
+	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := gin.New()
+	handler.GET("/relay", middleware.RelayClientJWT(signer), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	call := func(token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/relay", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	Convey("RelayClientJWT", t, func() {
+		Convey("browser ticket works once and only once", func() {
+			tok, _, err := signer.Sign(hubjwt.Claims{UID: 7, Kind: "relay_client"}, time.Hour)
+			So(err, ShouldBeNil)
+			So(call(tok), ShouldEqual, http.StatusOK)
+			So(call(tok), ShouldEqual, http.StatusUnauthorized)
+		})
+
+		Convey("two different tickets are independent", func() {
+			first, _, err := signer.Sign(hubjwt.Claims{UID: 7, Kind: "relay_client"}, time.Hour)
+			So(err, ShouldBeNil)
+			second, _, err := signer.Sign(hubjwt.Claims{UID: 7, Kind: "relay_client"}, time.Hour)
+			So(err, ShouldBeNil)
+			So(call(first), ShouldEqual, http.StatusOK)
+			So(call(second), ShouldEqual, http.StatusOK)
+		})
+
+		Convey("a native device JWT stays reusable", func() {
+			tok, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "agentred"}, time.Hour)
+			So(err, ShouldBeNil)
+			So(call(tok), ShouldEqual, http.StatusOK)
+			So(call(tok), ShouldEqual, http.StatusOK)
+		})
+	})
+}
