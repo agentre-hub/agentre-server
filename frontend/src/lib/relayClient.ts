@@ -945,6 +945,11 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
       // 镜像那条路上的停止原因读不出来。
       stopErrMsg: value.stopErrorMessage,
       stopErrCode: value.stopErrorCode,
+      // 本轮统计。漏掉这三格只在**刷新之后**看得见:实时那一轮 meta 是全的,页面一刷、
+      // 同一条消息从这条补齐路径重建出来,耗时就掉回 0.0s、首字与速率整行消失。
+      durationMs: value.durationMs,
+      firstTokenMs: value.firstTokenMs,
+      tokensPerSec: value.tokensPerSec,
     },
   };
 }

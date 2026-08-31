@@ -457,3 +457,78 @@ describe("RelayClient Protobuf RPC boundary", () => {
     expect(started.map((f) => (f as { seq: number }).seq)).toEqual([3]);
   });
 });
+
+/**
+ * 补齐这条路上的终态帧要把本轮统计带全。
+ *
+ * `journaledFromProtobuf` 是这三份终态帧投影里的第三份（另两份是实时的
+ * `decodeNotification` 与 server 镜像的 `wireview.doneView`），一样是逐字段手写的。
+ * 漏一格的表现只在**刷新之后**看得见：实时那一轮 meta 是全的，页面一刷、同一条
+ * 消息从补齐路径重建出来，耗时就掉回 0.0s、首字与速率整行消失。2026-08-31 在
+ * coding.local 上就是这么撞出来的。
+ */
+describe("catch-up 的终态帧", () => {
+  it("给定日志里的终态帧带本轮统计，当补齐，则一格都不丢", async () => {
+    const done: unknown[] = [];
+    const { client, socket } = setup({
+      onRunResultDone: (frame) => done.push(frame),
+    });
+    await authenticate(client, socket);
+
+    const caughtUp = client.catchUp(9, "fp-origin");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    const attach = ProtobufRpcCodec.decode(socket.sent[0]);
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        attach.id,
+        rpcMethods.sessionAttach,
+        {
+          sessionId: 9n,
+          backendType: "codex",
+          lifecycleState: "idle",
+          latestSeq: 1n,
+        },
+      ),
+    );
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    const pull = ProtobufRpcCodec.decode(socket.sent[1]);
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        pull.id,
+        rpcMethods.sessionPull,
+        {
+          notifications: [
+            {
+              seq: 1n,
+              payload: {
+                payload: {
+                  case: "runResultDone" as const,
+                  value: {
+                    sessionId: 9n,
+                    model: "gpt-5.6-sol",
+                    turnToken: 1n,
+                    durationMs: 7400,
+                    firstTokenMs: 7200,
+                    tokensPerSec: 0.7,
+                  },
+                },
+              },
+            },
+          ],
+          cursor: 1n,
+          hasMore: false,
+          oldestSeq: 1n,
+        },
+      ),
+    );
+
+    await expect(caughtUp).resolves.toBeUndefined();
+    expect(done).toHaveLength(1);
+    expect(done[0]).toMatchObject({
+      model: "gpt-5.6-sol",
+      durationMs: 7400,
+      firstTokenMs: 7200,
+      tokensPerSec: 0.7,
+    });
+  });
+});
