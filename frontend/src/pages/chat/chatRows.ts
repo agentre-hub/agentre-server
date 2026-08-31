@@ -4,7 +4,6 @@ import type { DeviceItem } from "@/lib/devices";
 import type { IndexRow } from "@/lib/sessionAxes";
 import { groupKeyOfScope } from "@/lib/sessionScope";
 import {
-  matchesRowSearch,
   matchesSessionFilter,
   sessionTitle,
   type SessionFilter,
@@ -236,7 +235,6 @@ export function buildMachineRows(input: {
     s: SessionSummary,
     localFingerprint: string | undefined,
   ) => IndexRow;
-  search: string;
   filter: SessionFilter;
 }): Map<number, MirrorIndexRow[]> {
   const savedByKey = new Map(
@@ -267,12 +265,12 @@ export function buildMachineRows(input: {
           origin === device.fingerprint ? row.key : `${device.id}:${row.key}`,
       };
     });
-    // 机器上报的那一份没有经过服务端的搜索与筛选（这一档本轮不向机器翻页，
-    // 决策 12），就地按同一条口径过滤：搜索只按标题，chips 的判据与服务端
-    // 逐字一致——两处不一样的话，同一个 chip 在这一档筛出的就是另一批。
-    if (input.search) {
-      rows = rows.filter((r) => matchesRowSearch([r.title], input.search));
-    }
+    // 搜索**不在这里**过：关键词随 session.list 下推给机器了，这份清单已经是命中项。
+    // 在这里再按标题筛一遍会把机器按 agent 名 / 项目名命中的那些丢掉（桌面端手上有
+    // 这些名字，agentred 只有标题——见 wire 里 SessionListRequest.keyword 的注释）。
+    //
+    // chips 仍要就地过：它判的是运行态与未读，机器上报的那一份没有这些口径，判据
+    // 与服务端逐字一致——两处不一样的话，同一个 chip 在这一档筛出的就是另一批。
     if (input.filter !== "all") {
       rows = rows.filter((r) => matchesSessionFilter(r, input.filter));
     }

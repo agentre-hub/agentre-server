@@ -352,9 +352,14 @@ export default function Chat() {
 
   /**
    * 机器可达性整族住在 useMachineReachability 里：中继连接、每台的解析状态、重试，
-   * 以及由设备名单派生的那几份表。它与索引只在设备名单这一份数据上碰头。
+   * 以及由设备名单派生的那几份表。它与索引在设备名单和搜索词这两份数据上碰头 ——
+   * 后者随 session.list 下推给机器，由机器自己筛（否则整份清单过线，绝大多数与搜索无关）。
    */
-  const reach = useMachineReachability({ devices, axis });
+  const reach = useMachineReachability({
+    devices,
+    axis,
+    keyword: sessionIndex.debouncedSearch,
+  });
   const { forgetResolved } = reach;
 
   const projectNodes = useMemo<ProjectNode[]>(
@@ -478,7 +483,6 @@ export default function Chat() {
             mirrorRows: sessionIndex.mirrorRows,
             fromMirrorRow,
             fromMachineRow,
-            search: sessionIndex.debouncedSearch,
             filter,
           })
         : null,
@@ -489,7 +493,6 @@ export default function Chat() {
       sessionIndex.mirrorRows,
       fromMirrorRow,
       fromMachineRow,
-      sessionIndex.debouncedSearch,
       filter,
     ],
   );

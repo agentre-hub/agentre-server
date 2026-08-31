@@ -664,11 +664,24 @@ describe("对话页:机器轴", () => {
   function stubMachineScope(over: Partial<{ mirror: unknown[] }> = {}) {
     stubApi({ mirror: over.mirror ?? [], devices: [agentred] });
     mockUseRelay.mockReturnValue(connectedRelay());
-    fakeClient.request.mockImplementation(async (method: unknown) => {
-      if (method === rpcMethods.sessionList)
-        return { sessions: [summary, stranger] };
-      throw new Error("unexpected method: " + method);
-    });
+    // 关键词由**机器**筛（wire 的 SessionListRequest.keyword），假机器照做：
+    // 客户端不再在收到之后重筛一遍，重筛会把机器按 agent 名 / 项目名命中的丢掉。
+    fakeClient.request.mockImplementation(
+      async (method: unknown, params: unknown) => {
+        if (method !== rpcMethods.sessionList) {
+          throw new Error("unexpected method: " + method);
+        }
+        const keyword = (params as { keyword?: string })?.keyword ?? "";
+        const all = [summary, stranger];
+        return {
+          sessions: keyword
+            ? all.filter((x) =>
+                x.title.toLowerCase().includes(keyword.toLowerCase()),
+              )
+            : all,
+        };
+      },
+    );
   }
 
   it("那台机器上有、账号里还没有的一同列出，行尾是「保存」", async () => {
@@ -876,7 +889,9 @@ describe("对话页:机器轴", () => {
     expect(screen.queryByText("机器上已经没有了")).toBeNull();
   });
 
-  it("机器那一档就地按标题过滤(与镜像那几档同一条口径)", async () => {
+  // 搜索在这一档由机器自己做：整份拉回来再在浏览器里筛，机器上有几千条对话时就是
+  // 几千份摘要过线，其中绝大多数与搜索无关。
+  it("机器那一档的搜索下推给机器，回来的就是命中项", async () => {
     stubMachineScope({ mirror: [mirrored()] });
     renderChat("/chat?axis=machine");
     await screen.findByText("临时跑一下 benchmark");

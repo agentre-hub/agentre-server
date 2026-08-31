@@ -32,24 +32,33 @@ export interface ResolvedMachine {
 
 /**
  * 一台在线目标机器的会话解析器：用 useRelayMachine 连到桌面端或 agentred，连上后
- * session.list，把那台机器上的会话整份回传。只有机器轴选中一台机器时才挂——
+ * session.list，把那台机器上的会话回传。只有机器轴选中一台机器时才挂——
  * 「那台机器上有什么」只有机器自己知道（决策 11）。
+ *
+ * `keyword` 随请求下推给机器，由机器自己筛：机器上有几千条对话时，整份拉回来再在
+ * 浏览器里按标题过滤，等于把几千份摘要送过线，其中绝大多数与搜索无关。命中口径的
+ * 保底是标题子串；桌面端另外匹配 agent 名与项目名（它手上有这些名字，agentred 存的
+ * 是 sync id）——所以这一档不再在客户端重筛一遍，重筛会把机器按名字命中的那些丢掉。
  */
 function MachineSessionResolver({
   fingerprint,
+  keyword,
   onResolved,
   onState,
 }: {
   fingerprint: string;
+  keyword: string;
   onResolved: (fp: string, resolved: ResolvedMachine) => void;
   onState: (fp: string, state: MachineState) => void;
 }) {
   const { client, relayState, relayTicket } = useRelayMachine(fingerprint);
-  const resolvedRef = useRef(false);
+  // 记的是「已经按哪个关键词解析过」而不是一个布尔：关键词一变就得重问一次，
+  // 而连接本身没有断，不该整个重挂。null = 本次连接还没解析过。
+  const resolvedForRef = useRef<string | null>(null);
 
   useEffect(() => {
     const state: MachineState =
-      relayState === "connected" && resolvedRef.current
+      relayState === "connected" && resolvedForRef.current !== null
         ? "connected"
         : relayState === "reconnecting"
           ? "unreachable"
@@ -63,14 +72,17 @@ function MachineSessionResolver({
       // 也可能停下来等审批，连回来必须重新解析一次，否则页面一直挂着断线前那一刻
       // 的状态。标记记的是「解析过没有」而不是状态字符串本身 —— 拿状态跟它自己比
       // 恒成立（这个 effect 只在 connected 时走到这里），重连后一次也不会再解析。
-      resolvedRef.current = false;
+      resolvedForRef.current = null;
       return;
     }
-    if (resolvedRef.current) return;
-    resolvedRef.current = true;
+    if (resolvedForRef.current === keyword) return;
+    resolvedForRef.current = keyword;
     client
-      .request(rpcMethods.sessionList, {})
+      .request(rpcMethods.sessionList, { keyword })
       .then((raw) => {
+        // 打字期间两次请求可能乱序回来。只认「此刻要的那个关键词」那一份，
+        // 否则慢一步的旧结果会把新结果盖回去。
+        if (resolvedForRef.current !== keyword) return;
         const res = sessionListFromProtobuf(raw);
         onResolved(fingerprint, {
           sessions: res.sessions,
@@ -78,8 +90,21 @@ function MachineSessionResolver({
         });
         onState(fingerprint, "connected");
       })
-      .catch(() => onState(fingerprint, "unreachable"));
-  }, [relayState, client, fingerprint, relayTicket, onResolved, onState]);
+      .catch(() => {
+        if (resolvedForRef.current !== keyword) return;
+        // 这一次没答上来：清掉标记，关键词再变或重连时还会再问。
+        resolvedForRef.current = null;
+        onState(fingerprint, "unreachable");
+      });
+  }, [
+    relayState,
+    client,
+    fingerprint,
+    keyword,
+    relayTicket,
+    onResolved,
+    onState,
+  ]);
 
   return null;
 }
@@ -90,6 +115,8 @@ export interface MachineReachabilityInput {
   devices: DeviceItem[];
   /** 当前轴：只有机器轴才真的去连那些机器。 */
   axis: IndexAxis;
+  /** 已去抖的搜索词。随 session.list 下推给机器，由机器自己筛。 */
+  keyword: string;
 }
 
 /** 「对话」页与机器可达性那一族之间的全部契约。 */
@@ -126,6 +153,7 @@ export interface MachineReachability {
 export function useMachineReachability({
   devices,
   axis,
+  keyword,
 }: MachineReachabilityInput): MachineReachability {
   /**
    * 「重新问一次这台机器」的计数器，按指纹。加一下让那一台的 resolver 整个重挂
@@ -245,6 +273,7 @@ export function useMachineReachability({
     <MachineSessionResolver
       key={`${device.fingerprint}:${machineNonce[device.fingerprint] ?? 0}`}
       fingerprint={device.fingerprint}
+      keyword={keyword}
       onResolved={onResolved}
       onState={onState}
     />

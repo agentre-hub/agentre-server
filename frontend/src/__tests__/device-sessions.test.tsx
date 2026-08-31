@@ -10,7 +10,13 @@
  * 列出，行尾是「保存」（规格 2026-08-18 决策 11）。这一条守的是**重定向本身与它
  * 落到的形态**；索引内部的分组 / 行由 session-index.test.tsx 与 chat.test.tsx 守。
  */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -69,9 +75,20 @@ const sessions = [
 ];
 
 const fakeClient = {
-  request: vi.fn(async (method: unknown) => {
-    if (method === rpcMethods.sessionList) return { sessions };
-    throw new Error("unexpected method: " + method);
+  // 关键词由**机器**筛（wire 的 SessionListRequest.keyword）：这份假机器照做，
+  // 客户端收到之后不再重筛一遍。
+  request: vi.fn(async (method: unknown, params?: unknown) => {
+    if (method !== rpcMethods.sessionList) {
+      throw new Error("unexpected method: " + method);
+    }
+    const keyword = (params as { keyword?: string })?.keyword ?? "";
+    return {
+      sessions: keyword
+        ? sessions.filter((s) =>
+            (s.title ?? "").toLowerCase().includes(keyword.toLowerCase()),
+          )
+        : sessions,
+    };
   }),
   attach: vi.fn(async () => ({})),
   catchUp: vi.fn(async () => {}),
@@ -138,7 +155,65 @@ describe("设备下钻地址重定向进统一索引", () => {
     expect(await screen.findByText("重构登录页")).toBeTruthy();
     expect(screen.getByText("/var/proj · codex · Idle")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Save" }).length).toBe(2);
-    // 「那台机器上有什么」只能问机器本身，与旧的下钻页同一条路。
-    expect(fakeClient.request).toHaveBeenCalledWith(rpcMethods.sessionList, {});
+    // 「那台机器上有什么」只能问机器本身，与旧的下钻页同一条路。没在搜索时关键词是
+    // 空串，机器照旧回整份清单。
+    const call = fakeClient.request.mock.calls.at(-1);
+    expect(call?.[0]).toBe(rpcMethods.sessionList);
+    expect(call?.[1]).toEqual({ keyword: "" });
+  });
+});
+
+// ── 机器轴的搜索 ────────────────────────────────────────────────────────────
+//
+// 「那台机器上有什么」只有机器自己知道，所以这一档的行来自实时 session.list。此前
+// 整份拉回来再在浏览器里按标题筛（chatRows.buildMachineRows），机器上有几千条对话
+// 时就是几千份摘要过线，其中绝大多数与搜索无关。关键词因此进请求，由机器自己筛。
+describe("机器轴的搜索下推到机器", () => {
+  it("Given 机器轴上输入了搜索词, When 索引重取, Then session.list 带着关键词发出去", async () => {
+    renderAt("/devices/1/sessions");
+    await screen.findByText("重构登录页");
+    fakeClient.request.mockClear();
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search conversations" }),
+      { target: { value: "登录" } },
+    );
+
+    await waitFor(
+      () => {
+        const last = fakeClient.request.mock.calls.at(-1);
+        expect(last?.[0]).toBe(rpcMethods.sessionList);
+        expect(last?.[1]).toEqual({ keyword: "登录" });
+      },
+      { timeout: 5000 },
+    );
+  });
+
+  it("Given 搜索词被清空, When 索引重取, Then 请求回到不带关键词的整份清单", async () => {
+    renderAt("/devices/1/sessions");
+    await screen.findByText("重构登录页");
+    const box = screen.getByRole("searchbox", { name: "Search conversations" });
+    fireEvent.change(box, { target: { value: "登录" } });
+    await waitFor(
+      () => {
+        const last = fakeClient.request.mock.calls.at(-1);
+        expect(last?.[0]).toBe(rpcMethods.sessionList);
+        expect(last?.[1]).toEqual({ keyword: "登录" });
+      },
+      { timeout: 5000 },
+    );
+    fakeClient.request.mockClear();
+
+    fireEvent.change(box, { target: { value: "" } });
+
+    // 搜索词有 250ms 去抖，再加一趟中继往返：默认 1s 的 waitFor 在整包并发跑时不够。
+    await waitFor(
+      () => {
+        const last = fakeClient.request.mock.calls.at(-1);
+        expect(last?.[0]).toBe(rpcMethods.sessionList);
+        expect(last?.[1]).toEqual({ keyword: "" });
+      },
+      { timeout: 5000 },
+    );
   });
 });
