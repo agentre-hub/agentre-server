@@ -13,10 +13,15 @@ import (
 )
 
 // Claims 是 access token 内嵌的业务字段。
+//
+// PFP 是这枚凭据说了算的**对端身份**：设备 JWT 填该设备的 devices.fingerprint，
+// 中继票填账号级的网页对端标识（AccountPeerFingerprint）。agentred 的 auth.account
+// 从这里取对端身份，不再采信请求体里的自报值；缺了它握手会被拒。
 type Claims struct {
 	UID  int64  `json:"uid"`
 	DID  int64  `json:"did"`
 	Kind string `json:"kind"`
+	PFP  string `json:"pfp,omitempty"`
 	JTI  string `json:"-"`
 }
 
@@ -24,6 +29,7 @@ type registered struct {
 	UID  int64  `json:"uid"`
 	DID  int64  `json:"did"`
 	Kind string `json:"kind"`
+	PFP  string `json:"pfp,omitempty"`
 	jwtv5.RegisteredClaims
 }
 
@@ -98,7 +104,7 @@ func (s *Signer) Sign(c Claims, ttl time.Duration) (string, string, error) {
 	now := time.Now()
 	jti := ulid.MustNew(ulid.Timestamp(now), rand.Reader).String()
 	reg := registered{
-		UID: c.UID, DID: c.DID, Kind: c.Kind,
+		UID: c.UID, DID: c.DID, Kind: c.Kind, PFP: c.PFP,
 		RegisteredClaims: jwtv5.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   fmt.Sprintf("device:%d", c.DID),
@@ -146,6 +152,6 @@ func (s *Signer) Verify(token string) (*Claims, error) {
 		}
 	}
 	return &Claims{
-		UID: reg.UID, DID: reg.DID, Kind: reg.Kind, JTI: reg.ID,
+		UID: reg.UID, DID: reg.DID, Kind: reg.Kind, PFP: reg.PFP, JTI: reg.ID,
 	}, nil
 }

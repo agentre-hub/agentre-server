@@ -760,3 +760,35 @@ func TestListRevokedJTI_WindowStartsOneLeewayBeforeAccessTTL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"jti-1"}, got)
 }
+
+// TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprint
+// 决策 8：agentred 的 auth.account 从**已验签的凭据**取对端身份，不再看请求体。
+// 桌面端与 agentred 出示的正是这枚设备 JWT，所以它必须把该设备的 fingerprint 签进
+// pfp —— 少了它，这条路上的账号握手会被对端以 ErrUnauthorized 全数拒绝。
+func TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprint(t *testing.T) {
+	const fingerprint = "sha256:475776c61078781c9fda7b3345d232e32d5f176a7220ce2d129c5e39ac2db3de"
+	ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+	mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+		&device_flow_entity.DeviceFlowCode{
+			DeviceCode: "dc-x", IntervalSeconds: 5,
+			ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+			AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+			DeviceKind: "agentred", ClientFingerprint: fingerprint,
+		}, nil,
+	)
+	mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
+	)
+	mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	out, err := svc.ExchangeToken(ctx, "dc-x")
+
+	require.NoError(t, err)
+	claims, err := svc.signer.Verify(out.AccessToken)
+	require.NoError(t, err)
+	assert.Equal(t, fingerprint, claims.PFP)
+}

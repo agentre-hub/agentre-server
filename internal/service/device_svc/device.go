@@ -288,8 +288,11 @@ func (s *deviceSvc) issueTokenPair(
 	txCtx, ctx context.Context, d *device_entity.Device, nowMs, rotatedFromID int64,
 ) (*TokenOutput, error) {
 	access, jti, err := s.signer.Sign(jwt.Claims{
-		UID:  d.UserID,
-		DID:  d.ID,
+		UID: d.UserID,
+		DID: d.ID,
+		// 对端身份签进凭据（决策 8）：agentred 的 auth.account 从这里取，不再采信
+		// 请求体里的自报指纹。设备这一侧填的就是它自己那条 devices.fingerprint。
+		PFP:  d.Fingerprint,
 		Kind: d.Kind,
 	}, s.cfg.AccessTTL)
 	if err != nil {

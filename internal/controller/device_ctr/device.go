@@ -119,7 +119,10 @@ func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.Re
 	if userID == 0 || d.signer == nil {
 		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
 	}
-	token, jti, err := d.signer.Sign(jwt.Claims{UID: userID, Kind: "relay_client"}, relayTicketTTL)
+	// 对端身份由账号派生并签进票里（决策 8/9）：agentred 的 auth.account 从凭据取
+	// 身份，浏览器在请求体里已经报不了自己是谁。
+	peerFingerprint := jwt.AccountPeerFingerprint(userID)
+	token, jti, err := d.signer.Sign(jwt.Claims{UID: userID, Kind: "relay_client", PFP: peerFingerprint}, relayTicketTTL)
 	if err != nil {
 		return nil, i18n.NewInternalError(ctx, code.ServerError)
 	}
@@ -133,7 +136,10 @@ func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.Re
 	if err := auth_svc.Default().TrackRelayTicket(ctx, sid, jti, relayTicketTTL); err != nil {
 		return nil, i18n.NewInternalError(ctx, code.ServerError)
 	}
-	return &api.RelayTicketResponse{AccessToken: token, ExpiresIn: int(relayTicketTTL / time.Second)}, nil
+	return &api.RelayTicketResponse{
+		AccessToken: token, ExpiresIn: int(relayTicketTTL / time.Second),
+		ClientID: peerFingerprint,
+	}, nil
 }
 
 // Revoke 撤销一台设备的凭据。

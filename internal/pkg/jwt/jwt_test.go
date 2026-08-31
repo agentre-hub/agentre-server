@@ -218,3 +218,29 @@ func TestSign_EmitsNoCapsClaim(t *testing.T) {
 	_, present := claims["caps"]
 	assert.False(t, present, "signed payload must not carry a caps claim, got: %s", payload)
 }
+
+// TestSignVerify_GivenPeerFingerprintClaim_ThenItSurvivesTheRoundTrip
+// pfp 是凭据里说了算的对端身份（agentred 的 Mode C 握手从它取，不再看请求体）。
+// 它必须原样签进去、原样验出来 —— 少一环，握手侧就只能退回去采信自报值。
+func TestSignVerify_GivenPeerFingerprintClaim_ThenItSurvivesTheRoundTrip(t *testing.T) {
+	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "agentred", PFP: "sha256:device-42"}, time.Hour)
+	require.NoError(t, err)
+	claims, err := signer.Verify(token)
+
+	require.NoError(t, err)
+	assert.Equal(t, "sha256:device-42", claims.PFP)
+}
+
+// TestAccountPeerFingerprint_GivenTheSameAccount_ThenIsStableAndAccountScoped
+// 决策 9：网页对端身份由账号派生 —— 同一账号在任意浏览器、清过站点数据之后拿到的
+// 都是同一个值，不同账号之间不相等。它是「清一次缓存就换人」那条毛病的修法。
+func TestAccountPeerFingerprint_GivenTheSameAccount_ThenIsStableAndAccountScoped(t *testing.T) {
+	first := hubjwt.AccountPeerFingerprint(7)
+
+	assert.Equal(t, first, hubjwt.AccountPeerFingerprint(7))
+	assert.NotEqual(t, first, hubjwt.AccountPeerFingerprint(8))
+	assert.True(t, strings.HasPrefix(first, "sha256:"), "与设备指纹同一形态，daemon 侧不必分两种解析")
+}

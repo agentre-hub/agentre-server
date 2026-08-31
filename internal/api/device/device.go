@@ -81,6 +81,10 @@ type RelayTicketRequest struct {
 type RelayTicketResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
+	// ClientID 是这枚票里签着的网页对端身份（账号级派生，决策 8/9）。浏览器拿它当
+	// 自己的对端标识，而不是自己生成一个存在 localStorage 里——那个清一次站点数据
+	// 就换人，此前从网页发起的对话在镜像里当场成为孤儿。
+	ClientID string `json:"client_id"`
 }
 
 type TokenRefreshRequest struct {
