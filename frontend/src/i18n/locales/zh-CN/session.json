@@ -110,5 +110,11 @@
     "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。",
     "retry": "重试"
   },
-  "abort": "停止"
+  "abort": "停止",
+  "menu": {
+    "more": "更多操作",
+    "copySessionId": "复制会话号",
+    "sessionIdCopied": "已复制会话号",
+    "copySessionIdFailed": "复制会话号失败"
+  }
 }

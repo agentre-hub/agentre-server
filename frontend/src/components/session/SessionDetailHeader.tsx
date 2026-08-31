@@ -3,9 +3,18 @@ import type { SessionSummary } from "@agentre-hub/agentre-wire";
 import { useState, type ReactNode, type RefObject } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Monitor, Square } from "lucide-react";
+import { ArrowLeft, Monitor, MoreHorizontal, Square } from "lucide-react";
 
-import { StatusDot, Button, cn } from "@agentre-hub/agentre-ui";
+import {
+  copyTextWithToast,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  StatusDot,
+  Button,
+  cn,
+} from "@agentre-hub/agentre-ui";
 
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
 import { useIsMobile } from "@/components/use-is-mobile";
@@ -86,6 +95,26 @@ export default function SessionDetailHeader({
     } finally {
       setAborting(false);
     }
+  }
+
+  /**
+   * 把会话号交给剪贴板。
+   *
+   * 交的是**裸号**，不带 `#`：复制出来是要拿去搜 daemon 日志、查 `agent_sessions`、
+   * 或者贴给别人的，多一个字符每次都得手动删掉。
+   *
+   * 回执只能是 toast —— 菜单一选就关，内联的「已复制」没有地方留（设备指引那处
+   * 的按钮一直在屏上，所以那边才用得起内联态）。所以走共享包的 `copyTextWithToast`
+   * 而不是自己拼一遍：复制不成时它给的说明恰好是本站最常撞上的那一种 ——
+   * `http://<局域网 IP>:port` 不是安全上下文，`navigator.clipboard` 整个对象都不
+   * 存在，`execCommand` 也兜不住。谎报成功比复制失败更糟：用户会带着一个空剪贴板
+   * 去粘贴，而屏幕刚说过复制好了。
+   */
+  async function copySessionId() {
+    await copyTextWithToast(String(sid), {
+      successTitle: t("session.menu.sessionIdCopied"),
+      errorTitle: t("session.menu.copySessionIdFailed"),
+    });
   }
 
   /** mono meta 行的各段。只有拿得出来的才进来（分隔符由渲染处夹在两段之间）。 */
@@ -303,6 +332,31 @@ export default function SessionDetailHeader({
             {t("session.abort")}
           </Button>
         )}
+        {/* 更多操作。形态跟桌面端 chat-panel-header 同一套：**点击**打开的下拉。
+            右键那份在左栏的行上（SessionIndex 的 RowContextMenu），而右栏正读着
+            这条对话时没有「哪一行」可点。
+
+            这颗按钮此前不摆，理由写在 SessionDetailView 的抬头：画板里那几样在
+            协议上没有对应物，点开全是灰项不如不摆。复制会话号把这条理由破了 ——
+            号就在这一屏手里，不需要任何协议支持，而它恰恰是排查时第一件要的
+            东西（对 daemon 日志、查 agent_sessions、跟人报问题）。 */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("session.menu.more")}
+              data-testid="session-detail-menu-trigger"
+            >
+              <MoreHorizontal aria-hidden="true" className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[160px]">
+            <DropdownMenuItem onSelect={() => void copySessionId()}>
+              {t("session.menu.copySessionId")}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

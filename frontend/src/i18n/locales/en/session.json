@@ -110,5 +110,11 @@
     "submitFailed": "That decision could not be submitted. Nothing was sent — try again.",
     "retry": "Retry"
   },
-  "abort": "Stop"
+  "abort": "Stop",
+  "menu": {
+    "more": "More actions",
+    "copySessionId": "Copy session ID",
+    "sessionIdCopied": "Session ID copied",
+    "copySessionIdFailed": "Could not copy the session ID"
+  }
 }

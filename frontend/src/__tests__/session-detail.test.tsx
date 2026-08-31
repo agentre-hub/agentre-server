@@ -4462,3 +4462,111 @@ describe("会话详情：回到底部", () => {
     );
   });
 });
+
+/**
+ * 头部的「更多」菜单，以及它现在唯一一条真项目：复制会话号。
+ *
+ * 这颗按钮此前是**刻意不摆**的 —— 组件抬头那段注释点名说过，画板里的「分享链接 /
+ * more」在协议上没有对应物，摆一个点开全是灰项的菜单不如不摆。复制会话号把这条
+ * 理由破了：号就在这一屏手里，不需要任何协议支持，而排查时（对 daemon 日志、查
+ * `agent_sessions`、给人报问题）第一件要的东西就是它。
+ *
+ * 形态跟桌面端 `chat-panel-header.tsx` 同一套：**点击**打开的下拉，不是右键菜单
+ * ——右键那份在左栏的行上（`SessionIndex` 的 RowContextMenu），而右栏正读着这条
+ * 对话时没有「哪一行」可点。
+ */
+describe("会话详情：头部的更多菜单", () => {
+  function stubIdle() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  /** Radix 的下拉开在 pointerdown 上，不是 click。 */
+  function openMenu() {
+    const trigger = screen.getByTestId("session-detail-menu-trigger");
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    if (!screen.queryByRole("menu")) fireEvent.click(trigger);
+  }
+
+  function stubClipboard() {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    return writeText;
+  }
+
+  it("复制会话号:把号原样交给剪贴板", async () => {
+    stubIdle();
+    const writeText = stubClipboard();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    openMenu();
+    fireEvent.click(await screen.findByText("Copy session ID"));
+
+    // 交出去的是 wire 上那个号本身，不带 `#` —— 复制出来是要拿去搜日志、
+    // 查 `agent_sessions` 的，多一个字符就得手动删。
+    expect(writeText).toHaveBeenCalledWith("42");
+  });
+
+  // 复制完菜单就关了，内联的「已复制」没有地方留 —— 回执只能是 toast。
+  // 断言打在 `toast.success` 上而不是渲染出来的字：Toaster 挂在 App 上，这一屏
+  // 没有它（与本文件里决策提交失败那条同一套办法）。
+  it("复制成功给回执", async () => {
+    stubIdle();
+    stubClipboard();
+    // 同一个文件里前面的用例也 spy 过它，而 spy 不会自己清零。
+    const succeeded = vi.spyOn(toast, "success").mockClear();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    openMenu();
+    fireEvent.click(await screen.findByText("Copy session ID"));
+
+    await vi.waitFor(() =>
+      expect(succeeded.mock.calls[0]?.[0]).toBe("Session ID copied"),
+    );
+  });
+
+  /*
+    复制不成的时候不许说「已复制」。
+
+    非安全上下文（本站就是 http 部署的常客）没有 Clipboard API，共享包的
+    `copyTextToClipboard` 会退回 `execCommand`；jsdom 两样都没有，于是这里落到
+    的正是「彻底复制不成」那一档。谎报成功比复制失败更糟：用户会带着一个空剪贴板
+    去粘贴，而屏幕刚说过复制好了。
+  */
+  it("复制不成时不谎报成功", async () => {
+    stubIdle();
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    Object.defineProperty(document, "execCommand", {
+      value: vi.fn(() => false),
+      configurable: true,
+    });
+    const succeeded = vi.spyOn(toast, "success").mockClear();
+    const failed = vi.spyOn(toast, "error").mockClear();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    openMenu();
+    fireEvent.click(await screen.findByText("Copy session ID"));
+
+    await vi.waitFor(() =>
+      expect(failed.mock.calls[0]?.[0]).toBe("Could not copy the session ID"),
+    );
+    expect(succeeded).not.toHaveBeenCalled();
+  });
+});
