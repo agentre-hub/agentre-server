@@ -242,6 +242,32 @@ describe("账号级实时通道", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  // c 的另一半：兜底是**通道不在时**的兜底，不是无条件的心跳
+  it("通道连着的时候不跑兜底轮询：没有信号就不发请求", async () => {
+    const view = makeView();
+    await connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear(); // 建连那一次由 b 守
+
+    // 连着、且服务端什么都没发生：稳态下一次都不该喊「该拉了」。每喊一次，
+    // 订阅到这条通道上的每个页面都会各拉一遍自己那份数据。
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+
+    expect(view.onRefresh).not.toHaveBeenCalled();
+  });
+
+  it("连接断了轮询就回来：兜底照旧不丢变更", async () => {
+    const view = makeView();
+    const ws = await connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    // 断开之后重连不上（假连接构造得出来但永远不 open），退回轮询那一档。
+    ws.serverClose();
+    view.changeOnServer("v2");
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+
+    expect(view.state.inView).toBe("v2");
+  });
+
   // d
   it("重复与乱序的信号都无害，版本号不做闸门", async () => {
     const view = makeView();
@@ -378,12 +404,16 @@ describe("账号级实时通道：多种信号", () => {
 
   it("收窄种类不影响建连重拉与兜底轮询：它们本来就不是按种类来的", async () => {
     const view = makeView();
-    await connect({
+    const ws = await connect({
       onRefresh: view.onRefresh,
       signalTypes: [AccountChannelMirrorChanged],
     });
 
     expect(view.onRefresh).toHaveBeenCalledTimes(1);
+
+    // 轮询那一半得从**断开**跑：兜底只在通道不在时才跑（见上面「通道连着的时候
+    // 不跑兜底轮询」）。断开之后它照样不看种类——收窄的是信号那一路。
+    ws.serverClose();
     view.changeOnServer("v2");
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(view.state.inView).toBe("v2");

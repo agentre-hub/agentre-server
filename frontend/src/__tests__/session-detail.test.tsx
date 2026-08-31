@@ -1755,6 +1755,74 @@ describe("会话详情：历史来自 server 镜像", () => {
     );
   });
 
+  /**
+   * 左栏点一行进右栏时，那一整行本来就在宿主手里——它就是索引取回来的那一行，
+   * 标题、Agent 身份、发起端指纹都在上面。
+   *
+   * 此前详情页仍会回头向服务端再要一遍（resolveMirrorRow 的
+   * `/v1/agent-sessions?session_id=`）：一条纯属重复的请求，而且头部要等它往返
+   * 回来才认得出这是哪条对话。宿主给得出整行时就不该再问。
+   *
+   * 从 URL 直接进来（移动端下钻、分享链接）没有这一行，那条认领路径照旧——本条
+   * 守的是「给得出的时候不问」，不是把认领删掉。
+   */
+  it("宿主把索引行整行传下来时不再回头认领，头部与转录照常", async () => {
+    const asked: string[] = [];
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [offlineDevice] };
+      if (path.startsWith("/v1/agent-sessions?")) {
+        asked.push(path);
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+        };
+      }
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          ...framePage([{ seq: 9, text: "离线也读得到的最后一句" }]),
+          oldest_seq: 9,
+          has_before: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            sessionId={42}
+            form="embedded"
+            initialRow={{
+              peer_fingerprint: "fp-1",
+              session_id: "42",
+              title: "重构登录页",
+              backend_type: "claudecode",
+            }}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText(/离线也读得到的最后一句/)).toBeTruthy();
+    // 认领那条一次都没发：这一行的内容宿主已经给过了。
+    expect(asked).toEqual([]);
+    // 而头部照样认得出这是哪条对话——替补摘要由传下来的那一行派生。
+    expect(screen.getByTestId("session-detail-header").textContent).toContain(
+      "重构登录页",
+    );
+  });
+
   it("机器离线：发送入口不可用，说明在等哪台机器且不排队（决策 13）", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/devices") return { devices: [offlineDevice] };

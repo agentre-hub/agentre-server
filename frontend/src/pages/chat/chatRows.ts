@@ -178,6 +178,17 @@ export function mergeMirrorRows(input: {
   appended: MirroredSession[];
   optimisticSaved: MirroredSession[];
   optimisticRemoved: string[];
+  /**
+   * 「刚打开过」的那几条各自的已读时刻（键同 rowKey）。
+   *
+   * 打开一条对话就把它标成已读，而服务端把新的已读时刻原样回给了客户端
+   * （MarkSessionReadResponse.last_read_at「供客户端就地覆盖那一行」）。盖在这里
+   * 而不是重取一遍索引：重取拿回来的是同一份行，只是多两条请求，而这条路是
+   * **每次点进一条对话**都要走的。
+   *
+   * 与另外两层覆盖同寿：活到下一次取数为止，那时服务端的真值把它整份换掉。
+   */
+  optimisticRead?: ReadonlyMap<string, number>;
 }): MirroredSession[] {
   const byKey = new Map<string, MirroredSession>();
   for (const group of input.indexGroups) {
@@ -192,6 +203,18 @@ export function mergeMirrorRows(input: {
     byKey.set(rowKey(item.peer_fingerprint, item.session_id), item);
   }
   for (const key of input.optimisticRemoved) byKey.delete(key);
+  for (const [key, lastReadAt] of input.optimisticRead ?? []) {
+    const row = byKey.get(key);
+    // 只盖在场的那一行。覆盖层里可能留着已经不在这一轮范围里的键（换了搜索词、
+    // 换了轴），那时它什么都不该凭空造出来。
+    if (!row) continue;
+    // 取大的那个：服务端交出来的行可能比这次点击还新（另一端刚打开过同一条）。
+    // 往回退等于把一条已经读过的对话重新标成未读。
+    byKey.set(key, {
+      ...row,
+      last_read_at: Math.max(row.last_read_at ?? 0, lastReadAt),
+    });
+  }
   return [...byKey.values()];
 }
 

@@ -42,6 +42,15 @@ vi.mock("@/lib/accountChannel", async (importOriginal) => {
 // 桌面右栏嵌的是 task 5 的真实 SessionDetailView（其真实 relay/审批行为由
 // session-detail.test.tsx 守）；本文件把真实详情 mock 成探针，只断言 Chat 以正确的
 // deviceId/sessionId/form 消费它。
+/**
+ * 详情每次拿到的 onMarkedRead。它的**引用**是被守的东西：真实详情把这个 prop 列进
+ * 了「session.list + attach + 补齐」那条 effect 的依赖数组，换一次引用就是让正开着
+ * 的那条对话重跑一遍握手。
+ */
+const { markedReadProps } = vi.hoisted(() => ({
+  markedReadProps: [] as unknown[],
+}));
+
 vi.mock("@/components/session/SessionDetailView", () => ({
   __esModule: true,
   default: (props: {
@@ -49,21 +58,34 @@ vi.mock("@/components/session/SessionDetailView", () => ({
     sessionId: number;
     peerFingerprint?: string;
     form?: "page" | "embedded";
-    onMarkedRead?: () => void;
-  }) => (
-    <div
-      data-testid="embedded-session-detail"
-      data-device-id={props.deviceId}
-      data-session-id={props.sessionId}
-      data-peer-fingerprint={props.peerFingerprint ?? ""}
-      data-form={props.form ?? "page"}
-    >
-      embedded-detail
-      <button type="button" onClick={props.onMarkedRead}>
-        marked-read
-      </button>
-    </div>
-  ),
+    initialRow?: { session_id: string; title?: string };
+    onMarkedRead?: (peerFingerprint: string, lastReadAt: number) => void;
+  }) => {
+    markedReadProps.push(props.onMarkedRead);
+    return (
+      <div
+        data-testid="embedded-session-detail"
+        data-device-id={props.deviceId}
+        data-session-id={props.sessionId}
+        data-peer-fingerprint={props.peerFingerprint ?? ""}
+        data-initial-row={props.initialRow?.session_id ?? ""}
+        data-form={props.form ?? "page"}
+      >
+        embedded-detail
+        {/* 真实详情把它标在哪个身份上、以及 /v1/agent-sessions/read 回的那个时刻
+            原样递上来（时刻晚于 mirrored() 的 last_message_at，因此这一行从此不再
+            算未读）。 */}
+        <button
+          type="button"
+          onClick={() =>
+            props.onMarkedRead?.(props.peerFingerprint ?? "", 1754800001000)
+          }
+        >
+          marked-read
+        </button>
+      </div>
+    );
+  },
 }));
 
 const mockedApi = vi.mocked(api);
@@ -275,6 +297,7 @@ beforeEach(async () => {
   mockedApi.mockReset();
   mockUseRelay.mockReset();
   indexRequests = [];
+  markedReadProps.length = 0;
   clientsByFingerprint.clear();
   fakeClient.request.mockReset();
   fakeClient.request.mockImplementation(async (method: unknown) => {
@@ -1566,18 +1589,23 @@ describe("对话页：未读", () => {
     );
   });
 
-  it("详情确认标记已读后立即重取索引并清掉旧的未读数", async () => {
-    let unread = 1;
+  /**
+   * 「打开即已读」是**每次点进一条对话**都会走的那条路，因此它多发几条请求，代价
+   * 是按点击次数算的。
+   *
+   * 服务端为此专门把新的已读时刻回给了客户端（MarkSessionReadResponse.last_read_at
+   * 「供客户端就地覆盖那一行」），页面据此改自己手里那一行就够了——重取一遍索引
+   * 拿回来的是同一份数据，只是多了两条请求（当前范围一条、完整集合上的未读数一条）。
+   *
+   * 这一条此前叫「详情确认标记已读后**立即重取索引**并清掉旧的未读数」：用户可见的
+   * 那一半（未读数掉下来）原样留着，换掉的是它拿什么去兑现。
+   */
+  it("详情确认标记已读后就地清掉未读数，不再重取一遍索引", async () => {
     stubApi({
       mirror: [mirrored()],
       devices: [agentred],
-      index: (params) => {
+      index: () => {
         const items = [mirrored()];
-        if (isWaitingProbe(params))
-          return {
-            total: unread,
-            groups: [{ scope: "time", total: unread, items }],
-          };
         return { total: 1, groups: [{ scope: "time", total: 1, items }] };
       },
     });
@@ -1589,7 +1617,9 @@ describe("对话页：未读", () => {
     fireEvent.click(screen.getByText("重构登录页"));
     await screen.findByTestId("embedded-session-detail");
 
-    unread = 0;
+    // 服务端此后一直说「还有 1 条未读」：这一格掉下来只可能是就地改的，不可能是
+    // 重取回来的。
+    const before = indexRequests.length;
     fireEvent.click(screen.getByRole("button", { name: "marked-read" }));
 
     await waitFor(() =>
@@ -1597,6 +1627,57 @@ describe("对话页：未读", () => {
         screen.getByTestId("filter-chip-unread").textContent,
       ).not.toContain("1"),
     );
+    expect(indexRequests.length).toBe(before);
+  });
+
+  /**
+   * 点一行进右栏时，索引取回来的**那一行**要整个递下去。
+   *
+   * 详情拿它当替补摘要（标题 / Agent 身份 / 离线时的模型那一格），此前是详情自己
+   * 回头向服务端要一遍 `/v1/agent-sessions?session_id=`——一条纯重复的请求，而且
+   * 头部要等它往返回来才认得出这是哪条对话。「详情拿到之后怎么用」由
+   * session-detail.test.tsx 守，这里守的是宿主确实给了。
+   */
+  it("点一行进右栏：把索引取回来的那一整行递给详情", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    await screen.findByText("重构登录页");
+    fireEvent.click(screen.getByText("重构登录页"));
+
+    const detail = await screen.findByTestId("embedded-session-detail");
+    expect(detail.getAttribute("data-initial-row")).toBe("42");
+  });
+
+  /**
+   * 递给详情的 onMarkedRead 必须**引用恒定**。
+   *
+   * 真实详情把它列进了「session.list + attach + 按游标补齐」那条 effect 的依赖数组
+   * （SessionDetailView 里那一处）。换一次引用，正开着的那条对话就重跑一遍那整套握手
+   * ——而索引一收到镜像变更信号就会重取，也就是说对面每说一句话，这边正在读的这条
+   * 对话都要重新 attach 一次。本轮是来省请求的，那样是反着加。
+   *
+   * 此前这个 prop 是 refetch（useCallback 空依赖，恒定），换成就地标记之后很容易
+   * 顺手把行钉进依赖——这条就是钉住那件事的。
+   */
+  it("递给详情的已读回调引用恒定：索引重取不会让它重新 attach", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    await screen.findByText("重构登录页");
+    fireEvent.click(screen.getByText("重构登录页"));
+    await screen.findByTestId("embedded-session-detail");
+    const first = markedReadProps.at(-1);
+    expect(first).toBeTypeOf("function");
+
+    // 别的端跑出来一条新消息：索引整份重取，行因此是全新的一批。
+    const before = indexRequests.length;
+    deliver(accountChannel.AccountChannelMirrorChanged);
+    await waitFor(() => expect(indexRequests.length).toBeGreaterThan(before));
+
+    expect(markedReadProps.at(-1)).toBe(first);
   });
 });
 

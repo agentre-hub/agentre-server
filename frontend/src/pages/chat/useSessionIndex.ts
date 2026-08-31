@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-api-query";
@@ -54,6 +54,29 @@ export interface SessionIndexData {
   setLoadError: (err: unknown) => void;
   /** 范围没变、但账号里的会话集合变了：重跑取数那一遍。 */
   refetch: () => void;
+  /**
+   * 打开一条对话之后把它就地标成已读（时刻由服务端在 /read 的应答里给）。
+   * 不重取：改的只是那一行上的一列，见实现处。
+   */
+  markRead: (
+    peerFingerprint: string,
+    sessionId: string,
+    lastReadAt: number,
+  ) => void;
+  /**
+   * 按身份取回**原始**的那一行（线上载荷形状）。点一行进右栏时把它整个递给详情，
+   * 详情因此不必回头再向服务端认领一次。
+   *
+   * 交回原始行而不是投影后的 IndexRow：详情的替补摘要要用到 provider_key /
+   * model_key，机器离线时模型那一格全靠它们，投影里没有这两列。
+   *
+   * 与 markRead 一样**引用恒定**（行走 ref）：它会进 onSelect 的依赖，而 onSelect
+   * 造出来的行又喂给整片列表。
+   */
+  mirrorRowOf: (
+    peerFingerprint: string,
+    sessionId: number | string,
+  ) => MirroredSession | undefined;
 
   /** 搜索框里的原文，与它防抖之后真正拿去问服务端的那一份。 */
   searchQuery: string;
@@ -127,6 +150,15 @@ export function useSessionIndex({
   const [optimisticSaved, setOptimisticSaved] = useState<MirroredSession[]>([]);
   const [optimisticRemoved, setOptimisticRemoved] = useState<string[]>([]);
   /**
+   * 「刚打开过」的那几条各自的已读时刻。与上面两层同寿，下一次取数清空。
+   *
+   * 与另外两层不同的是它**不改集合**，只改行上的一列：打开一条对话既不会把它加进
+   * 账号也不会拿走，只是这一行从此不算未读。
+   */
+  const [optimisticRead, setOptimisticRead] = useState<Map<string, number>>(
+    () => new Map(),
+  );
+  /**
    * 账号里一共保存过几条（不带任何搜索与筛选）。第一次保存的说明弹层认的是
    * 「一条都还没保存过」，那件事不能拿收窄过的计数去判——搜不到不等于没有。
    */
@@ -199,6 +231,7 @@ export function useSessionIndex({
             setAccountTotal(page.total ?? 0);
           setOptimisticSaved([]);
           setOptimisticRemoved([]);
+          setOptimisticRead(new Map());
           setUnreadTotal(unread.total ?? 0);
           // 平铺那一档（时间轴只有一个组）才有「接着往下翻」这回事。
           const flat =
@@ -262,8 +295,65 @@ export function useSessionIndex({
         appended,
         optimisticSaved,
         optimisticRemoved,
+        optimisticRead,
       }),
-    [indexGroups, appended, optimisticSaved, optimisticRemoved],
+    [indexGroups, appended, optimisticSaved, optimisticRemoved, optimisticRead],
+  );
+  /**
+   * 当前这批行的一份 ref。markRead 要回答「这一条本来算不算未读」，答案就在这批行
+   * 里，但它**不能**因此把 mirrorRows 钉进依赖数组——那个回调会一路传到
+   * SessionDetailView，落进它那条「session.list + attach + 补齐」effect 的依赖里。
+   * 行一变它就换一次引用，正开着的那条对话于是每次索引重取都重跑一遍 attach 与补齐：
+   * 本轮是来省请求的，那样反而给它添了往返。
+   *
+   * 所以行走 ref，回调本身恒定（依赖数组是空的）。它只在事件回调里被调用，那时提交
+   * 早已结束，ref 里就是最新的一批。
+   */
+  const mirrorRowsRef = useRef<MirroredSession[]>([]);
+  useEffect(() => {
+    mirrorRowsRef.current = mirrorRows;
+  });
+
+  /** 按身份取回原始那一行。见 SessionIndexData.mirrorRowOf。 */
+  const mirrorRowOf = useCallback(
+    (peerFingerprint: string, sessionId: number | string) => {
+      const key = rowKey(peerFingerprint, sessionId);
+      return mirrorRowsRef.current.find(
+        (r) => rowKey(r.peer_fingerprint, r.session_id) === key,
+      );
+    },
+    [],
+  );
+
+  /**
+   * 「打开即已读」落到索引这一侧：把那一行的已读时刻就地盖上，未读徽标跟着搬一格。
+   *
+   * 这条路此前是 refetch()——重取一遍整页索引外加一次完整集合上的未读数探测，两条
+   * 请求，而**每次点进一条对话**都会走一遍。服务端已经把新的已读时刻回给了客户端
+   * （MarkSessionReadResponse.last_read_at「供客户端就地覆盖那一行」），够改这一行了。
+   *
+   * 徽标只在这一条**本来算未读**时才减：重复标记同一条不会连着减两次（第一次盖上
+   * 之后它就不算未读了）。行不在这一轮列出来的范围里时不动徽标——那时判不出它算不算
+   * 未读，宁可让它多留一格到下一次取数，也不去猜一个会往下错的数。
+   */
+  const markRead = useCallback(
+    (peerFingerprint: string, sessionId: string, lastReadAt: number) => {
+      if (!peerFingerprint || lastReadAt <= 0) return;
+      const key = rowKey(peerFingerprint, sessionId);
+      const row = mirrorRowsRef.current.find(
+        (r) => rowKey(r.peer_fingerprint, r.session_id) === key,
+      );
+      const wasUnread =
+        row !== undefined &&
+        (row.last_message_at ?? 0) > (row.last_read_at ?? 0);
+      setOptimisticRead((prev) => {
+        const next = new Map(prev);
+        next.set(key, Math.max(prev.get(key) ?? 0, lastReadAt));
+        return next;
+      });
+      if (wasUnread) setUnreadTotal((n) => Math.max(0, n - 1));
+    },
+    [],
   );
 
   /**
@@ -398,6 +488,8 @@ export function useSessionIndex({
     loadError,
     setLoadError,
     refetch,
+    markRead,
+    mirrorRowOf,
 
     searchQuery,
     setSearchQuery,

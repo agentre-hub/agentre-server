@@ -180,6 +180,12 @@ export default function Chat() {
      * 入口都拿得到：点行时是那一行的标题，草稿派发时是刚发出去那一句。
      */
     title?: string;
+    /**
+     * 账号镜像里的那一行（见 SessionDetailView 的 initialRow）。点左栏一行进来时
+     * 就是索引取回来的那一行，递下去详情就不必回头再认领一次。草稿刚派发出来的
+     * 那条账号里还没有这一行，那时留空。
+     */
+    row?: MirroredSession;
     /** 刚从草稿页发起、而模型没能钉住时要说的那一句（见 initialModelNote）。 */
     modelNote?: string;
   } | null>(null);
@@ -215,7 +221,7 @@ export default function Chat() {
   // 这两个（连同下面 reach 的 forgetResolved）单独拎出来：整个 hook 结果每次渲染都是
   // 新对象，把它整个钉进依赖数组会让下面几个 useCallback 每渲染换一次引用，索引里的
   // 行因此整片重造（见 sessionDetailPath 上那一段）。它们本身是 useCallback，稳定。
-  const { refetch, fetchGroupPage } = sessionIndex;
+  const { refetch, fetchGroupPage, markRead, mirrorRowOf } = sessionIndex;
   /**
    * 从别处进来的「新建一个会话」。目前唯一的来源是会话详情的「机器离线」横幅：
    * 那条对话钉在一台够不着的机器上、续轮不会改派，唯一走得通的路是另起一条。
@@ -287,6 +293,20 @@ export default function Chat() {
     },
     [refetch, isMobile, nav, t],
   );
+  /**
+   * 右栏「打开即已读」回来了：把左栏那一行就地改掉。
+   *
+   * 此前这里是 refetch()——为了一个服务端刚刚告诉过我们的时刻，重取一遍当前范围的
+   * 索引外加一次完整集合上的未读数探测。这条路每点开一条对话就走一遍。
+   */
+  const onMarkedRead = useCallback(
+    (peerFingerprint: string, lastReadAt: number) => {
+      if (!selected) return;
+      markRead(peerFingerprint, String(selected.sessionId), lastReadAt);
+    },
+    [markRead, selected],
+  );
+
   /** 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。 */
   useAliveEffect((alive) => {
     Promise.all([
@@ -409,20 +429,26 @@ export default function Chat() {
   );
 
   // 桌面点行 / 选中一条真实会话 → 右栏嵌入真实详情视图。
-  const onSelect = useCallback((row: IndexRow) => {
-    if (row.deviceId === undefined) return;
-    // 开着「新对话」时右栏归它，选中的会话渲染不出来。点了左栏的一条就是要看
-    // 那一条——不在这里收掉 compose，人会被困在挑 Agent 那一屏，除了真开一条
-    // 对话没有别的出路。草稿本来就没落任何东西，收掉不会丢下什么。
-    setCompose(null);
-    setSelected({
-      deviceId: row.deviceId,
-      sessionId: row.sessionId,
-      peerFingerprint: row.fingerprint,
-      // 这一行的标题就在手上：右栏没有理由为了同一个名字再等一次往返。
-      title: row.title,
-    });
-  }, []);
+  const onSelect = useCallback(
+    (row: IndexRow) => {
+      if (row.deviceId === undefined) return;
+      // 开着「新对话」时右栏归它，选中的会话渲染不出来。点了左栏的一条就是要看
+      // 那一条——不在这里收掉 compose，人会被困在挑 Agent 那一屏，除了真开一条
+      // 对话没有别的出路。草稿本来就没落任何东西，收掉不会丢下什么。
+      setCompose(null);
+      setSelected({
+        deviceId: row.deviceId,
+        sessionId: row.sessionId,
+        peerFingerprint: row.fingerprint,
+        // 这一行的标题就在手上：右栏没有理由为了同一个名字再等一次往返。
+        title: row.title,
+        // 整行也在手上（机器轴那一档列的是机器实时报的，账号里未必有对应的一行，
+        // 取不到就留空，详情照旧自己认）。
+        row: mirrorRowOf(row.fingerprint, row.sessionId),
+      });
+    },
+    [mirrorRowOf],
+  );
 
   /** 行投影的两层薄包装：真正的投影是 chatRows 里的纯函数。 */
   const fromMirrorRow = useCallback(
@@ -771,8 +797,9 @@ export default function Chat() {
                   peerFingerprint={selected.peerFingerprint}
                   form="embedded"
                   initialTitle={selected.title}
+                  initialRow={selected.row}
                   initialModelNote={selected.modelNote}
-                  onMarkedRead={refetch}
+                  onMarkedRead={onMarkedRead}
                 />
               </div>
             ) : (

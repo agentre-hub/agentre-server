@@ -44,6 +44,7 @@ import {
   loadMirrorTail,
   mirrorRowToSummary,
   resolveMirrorRow,
+  type MirrorSessionItem,
   writeModelTargetToOrigin,
 } from "@/components/session/sessionMirror";
 import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
@@ -118,8 +119,31 @@ export interface SessionDetailViewProps {
    * 所以这里给的是不是最新的并不要紧。给不出时照旧退回 `#<会话号>`。
    */
   initialTitle?: string;
-  /** 标记已读成功后通知拥有索引的宿主，让未读数立即用服务端真值重取。 */
-  onMarkedRead?: () => void;
+  /**
+   * 账号镜像里的**那一行**，由宿主直接递下来。
+   *
+   * 左栏点一行进右栏时，这一行就是索引取回来的那一行——标题、Agent 身份、发起端
+   * 指纹、模型目标都在上面，正是本页认领那一趟要问回来的东西。递下来就省掉那次
+   * `/v1/agent-sessions?session_id=`，而且头部不必等一个 HTTP 往返才认得出这是哪
+   * 条对话。
+   *
+   * 给不出时（移动端从 URL 下钻、分享链接进来）照旧自己认，不猜。它与
+   * `initialTitle` 的区别是**整行**与**一个名字**：给了整行就连替补摘要一起有了，
+   * `initialTitle` 只填得了标题那一格。
+   */
+  initialRow?: MirrorSessionItem;
+  /**
+   * 标记已读成功后通知拥有索引的宿主：**标在哪个身份上**，以及服务端记下的时刻。
+   *
+   * 递这两样而不是只喊一声：服务端专门把时刻回了出来（MarkSessionReadResponse
+   * 「供客户端就地覆盖那一行」），宿主拿它改自己手里那一行就够了，不必为了一个
+   * 已经知道的值再重取一遍整页索引。
+   *
+   * 指纹也要递：本页认发起端有一条四格的次序（见下面的 readOrigin），落到哪一格
+   * 只有这里知道 —— 宿主手上那个 peerFingerprint 可能是空的（从控制台派发的对话
+   * 两边都给不出），拿它去凑键会凑到一条账号里不存在的对话上。
+   */
+  onMarkedRead?: (peerFingerprint: string, lastReadAt: number) => void;
 }
 
 /**
@@ -142,6 +166,7 @@ export default function SessionDetailView({
   form = "page",
   initialModelNote,
   initialTitle,
+  initialRow,
   onMarkedRead,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
@@ -379,18 +404,22 @@ export default function SessionDetailView({
   useAliveEffect(
     (alive) => {
       if (history.settled) return;
-      // 没有现成指纹时，得先有设备——认自己那一行要拿它的指纹去比。
-      if (!originProp && !device) return;
+      // 没有现成指纹时，得先有设备——认自己那一行要拿它的指纹去比。宿主把整行
+      // 递下来时两样都不用等：那一行上就带着发起端指纹。
+      if (!initialRow && !originProp && !device) return;
       mirrorSeqRef.current = 0;
       void (async () => {
         try {
-          // 两条路都把那一行整个取回来（不只是指纹）：标题与 Agent 身份在它上面，
-          // 机器离线时中继给不出摘要，头部只认得动这一行。
-          const row = await resolveMirrorRow(
-            sid,
-            originProp,
-            device?.fingerprint,
-          );
+          // 那一行要整个拿到手（不只是指纹）：标题与 Agent 身份在它上面，机器离线时
+          // 中继给不出摘要，头部只认得动这一行。
+          //
+          // 宿主给得出就不再去问：左栏点一行进右栏时，这一行**就是**索引取回来的那
+          // 一行，回头再向服务端要一遍是一条纯重复的请求，而且头部要等它往返回来才
+          // 认得出这是哪条对话。从 URL 直接进来（移动端下钻、分享链接）没有这一行，
+          // 那时照旧自己认。
+          const row =
+            initialRow ??
+            (await resolveMirrorRow(sid, originProp, device?.fingerprint));
           if (!alive()) return;
           // 指纹仍以索引行传下来的那个为准：认领落空（端点抖动 / 账号里还没有这一行）
           // 时转录照读得到，只是头部少一份替补。
@@ -486,14 +515,14 @@ export default function SessionDetailView({
           const readKey = `${readOrigin}:${sid}`;
           if (readOrigin && markedReadRef.current !== readKey) {
             markedReadRef.current = readKey;
-            void api("/v1/agent-sessions/read", {
+            void api<{ last_read_at: number }>("/v1/agent-sessions/read", {
               method: "POST",
               body: JSON.stringify({
                 peer_fingerprint: readOrigin,
                 session_id: String(sid),
               }),
             })
-              .then(() => onMarkedRead?.())
+              .then((res) => onMarkedRead?.(readOrigin, res.last_read_at))
               .catch(() => {});
           }
           if (alive()) {
@@ -577,6 +606,7 @@ export default function SessionDetailView({
       sid,
       device?.fingerprint,
       originProp,
+      initialRow,
       onMarkedRead,
       markTurnActive,
     ],

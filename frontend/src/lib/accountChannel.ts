@@ -12,8 +12,9 @@
  *    通道不保存未送达的信号，断线期间的变更由这一次补齐；
  *  - 漏帧、乱序、重复：都无害。版本号只用于「该拉了」的判断，绝不拿它当闸门。
  *
- * **30 秒轮询保留，不缩短也不删除**：它是通道的兜底，也是「不丢变更」的依据。
- * 判据是「把通道整个关掉，所有功能仍然正确，只是变慢到 30 秒」。
+ * **30 秒轮询保留，不缩短**：它是通道的兜底，也是「不丢变更」的依据。判据是「把
+ * 通道整个关掉，所有功能仍然正确，只是变慢到 30 秒」。但它只在**通道不在**的时候跑
+ * ——连着的时候变更由信号送达，再定时喊一次只会让每个订阅页面白拉一遍（见 poll）。
  *
  * 鉴权：浏览器原生 WebSocket 设不了请求头，票据沿用中继那条 query 搬运
  * （server 的 queryTokenBridge）。票据短效，因此每次建连都现取一张。
@@ -138,6 +139,14 @@ export function startAccountChannel(
 
   let stopped = false;
   let socket: WebSocket | null = null;
+  /**
+   * 这条通道此刻**连着**吗。兜底轮询据此让路（见下面的 poll）。
+   *
+   * 自己记一个而不是去读 `socket.readyState`：读 readyState 会把「连着」这件事系在
+   * WebSocket 的实现细节上，而这里要的判据是「onopen 到过、onclose / onerror 还没
+   * 到」——测试里的假连接也正是按这几个回调驱动的。
+   */
+  let connected = false;
   const redial = new RedialTimer();
   let failures = 0;
 
@@ -166,8 +175,23 @@ export function startAccountChannel(
     return socket === ws;
   }
 
-  // 兜底轮询：无条件跑，通道在不在、连不连得上都一样。它才是「不丢变更」的依据。
-  const poll = setInterval(() => refresh(null), pollMs);
+  /**
+   * 兜底轮询：**通道不在时**的那一档，连着的时候让路。
+   *
+   * `refresh(null)` 说的是「你可能已经落后了」，因此它会喊醒**所有**订阅者
+   * （见 use-account-channel 的 fanOut），每个页面各拉一遍自己那份数据——一个开着
+   * 「对话」页的标签页就是七条请求。连着的时候这七条一条都换不来新东西：真变了
+   * 服务端会推信号，而信号那条路是按种类分发的。
+   *
+   * 所以判据仍是那一条「把通道整个关掉，所有功能仍然正确，只是变慢到 30 秒」——
+   * 关掉之后 connected 永远是 false，轮询就是今天的样子。变的只是**连着**的时候
+   * 不再空转。代价说清楚：连着但服务端漏发了信号时，页面会停在旧数据上直到下一
+   * 条信号或用户自己刷新，不再有 30 秒把它拉回来。
+   */
+  const poll = setInterval(() => {
+    if (connected) return;
+    refresh(null);
+  }, pollMs);
 
   /** 排一次重连。退让封顶到一个轮询周期——通道只是优化，重连不该比兜底还急。 */
   function scheduleRedial(): void {
@@ -196,6 +220,7 @@ export function startAccountChannel(
     socket = ws;
     ws.onopen = () => {
       failures = 0;
+      connected = true;
       // 建连成功（首次或重连都一样）：立刻主动拉一次，断线期间的变更由它补齐。
       refresh(null);
     };
@@ -207,10 +232,12 @@ export function startAccountChannel(
     ws.onerror = () => {
       // 浏览器在建连失败时先 error 后 close；scheduleRedial 自己防重排。
       if (!isCurrent(ws)) return;
+      connected = false;
       scheduleRedial();
     };
     ws.onclose = () => {
       if (!isCurrent(ws)) return;
+      connected = false;
       socket = null;
       scheduleRedial();
     };
