@@ -11,6 +11,7 @@ import {
   SessionLifecycleRunning,
   type AnyRpcMethod,
 } from "@agentre-hub/agentre-wire";
+import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -2391,15 +2392,53 @@ describe("会话详情：头部", () => {
     });
   }
 
-  function renderEmbeddedDetail() {
+  function renderEmbeddedDetail(headerRight?: ReactNode) {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView
+            deviceId={1}
+            sessionId={42}
+            form="embedded"
+            headerRight={headerRight}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
   }
+
+  /*
+    嵌入形态（桌面 Chat 右栏）里这个头部**就是**那一页的顶带：外面没有壳的顶栏
+    托着它了。此前它是 `py-2.5` 外层套一个恒高 68px 的身份行，那圈外层内边距是
+    给面包屑那一行留的，而面包屑只在路由页形态渲染 —— 嵌进 Chat 里时它把 68px
+    撑成 89px，什么都没多装。桌面端同形的 chat-panel-header 一直是平的 68px。
+  */
+  it("嵌入形态的头部是平的 68px：没有面包屑就没有那圈外层内边距", async () => {
+    stubHeader();
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const head = screen.getByTestId("session-detail-header");
+    expect(head.className).toMatch(/h-\[68px\]/);
+    expect(head.className).not.toMatch(/py-/);
+    // 面包屑是路由页形态独有的，嵌入形态本来就不该有。
+    expect(within(head).queryByRole("navigation")).toBeNull();
+  });
+
+  /*
+    顶带合并之后，页面级那簇控件（连接态 + 语言/主题）没有别的落点：Chat 把它们
+    递进来，摆在这一行的最右端——与「停止」同一带。
+  */
+  it("headerRight 递进来的那簇控件落在头部右端", async () => {
+    stubHeader();
+    renderEmbeddedDetail(<button type="button">page-chrome</button>);
+
+    await screen.findByText("跑着呢");
+    const head = screen.getByTestId("session-detail-header");
+    expect(
+      within(head).getByRole("button", { name: "page-chrome" }),
+    ).toBeTruthy();
+  });
 
   it("头部说得出是哪个 Agent 在跑，头像上的是那个 Agent 的调色板色", async () => {
     stubHeader();

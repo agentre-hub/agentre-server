@@ -5,7 +5,7 @@ import {
   type EventFrame,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -133,6 +133,14 @@ export interface SessionDetailViewProps {
    */
   initialRow?: MirrorSessionItem;
   /**
+   * 宿主页面级的那簇控件，摆在详情头部的最右端（嵌入形态才有）。
+   *
+   * 桌面 Chat 把转录上方那两条带并成一条之后，壳不再画 52px 顶栏，连接态与
+   * 语言/主题就落在这里 —— 详情头部本身**就是**那一页的顶带。路由页形态不传：
+   * 壳的顶栏还在，那簇控件仍归它。
+   */
+  headerRight?: ReactNode;
+  /**
    * 标记已读成功后通知拥有索引的宿主：**标在哪个身份上**，以及服务端记下的时刻。
    *
    * 递这两样而不是只喊一声：服务端专门把时刻回了出来（MarkSessionReadResponse
@@ -167,6 +175,7 @@ export default function SessionDetailView({
   initialModelNote,
   initialTitle,
   initialRow,
+  headerRight,
   onMarkedRead,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
@@ -941,6 +950,7 @@ export default function SessionDetailView({
       // 「这一轮在不在跑」这里仍只认 summary：停止要的是执行端此刻的实况，
       // 一份离线快照回答不了。
       running={summary?.lifecycleState === SessionLifecycleRunning}
+      headerRight={headerRight}
       clientRef={clientRef}
       originRef={originRef}
     />

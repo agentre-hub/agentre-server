@@ -19,6 +19,7 @@ import {
   within,
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
+import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -58,6 +59,7 @@ vi.mock("@/components/session/SessionDetailView", () => ({
     sessionId: number;
     peerFingerprint?: string;
     form?: "page" | "embedded";
+    headerRight?: ReactNode;
     initialRow?: { session_id: string; title?: string };
     onMarkedRead?: (peerFingerprint: string, lastReadAt: number) => void;
   }) => {
@@ -72,9 +74,12 @@ vi.mock("@/components/session/SessionDetailView", () => ({
         data-form={props.form ?? "page"}
       >
         embedded-detail
+        {/* 顶带合并之后，页面级的那簇控件由 Chat 递进详情头部的右端（真实位置由
+          session-detail.test.tsx 守）；这里只认它确实被递了进来。 */}
+        <div data-testid="embedded-header-right">{props.headerRight}</div>
         {/* 真实详情把它标在哪个身份上、以及 /v1/agent-sessions/read 回的那个时刻
-            原样递上来（时刻晚于 mirrored() 的 last_message_at，因此这一行从此不再
-            算未读）。 */}
+          原样递上来（时刻晚于 mirrored() 的 last_message_at，因此这一行从此不再
+          算未读）。 */}
         <button
           type="button"
           onClick={() =>
@@ -323,9 +328,9 @@ describe("对话页 = 统一会话索引", () => {
     stubApi();
     renderChat();
 
-    // 页标题移进外壳 TopBar（设计稿屏 49b），不再有正文 h1。
-    const banner = screen.getByRole("banner");
-    expect(within(banner).getByText("Chat")).toBeTruthy();
+    // 桌面档的这一页自己画顶带：壳那条 52px 顶栏不再叠在上面，页标题也不重复
+    // ——左侧导航同一时刻正高亮着「对话」。
+    expect(screen.queryByTestId("app-topbar")).toBeNull();
     // 桌面形态:320px 左会话列表列 + 右侧详情区。
     const listCol = screen.getByTestId("chat-list-col");
     expect(listCol.className).toContain("w-[320px]");
@@ -347,6 +352,49 @@ describe("对话页 = 统一会话索引", () => {
     // 桌面不弹层：右栏本来就摆着空态，「挑一个 Agent」直接接管它。
     fireEvent.click(startBtn);
     expect(await screen.findByTestId("new-conversation-pane")).toBeTruthy();
+  });
+
+  /*
+    转录上方此前叠着两条带：壳的 52px 顶栏（只放一个与侧栏高亮重复的「Chat」
+    标题 + 连接态 + 语言/主题）和 89px 的详情头部，合计 141px 只承载了一行标题
+    与一行 meta。两条并成一条 68px：这一页自己画顶带，页面级那簇控件（连接态 +
+    语言/主题）跟着落到右栏顶带的右端——没选中对话时是右栏自己那条，选中之后
+    就是详情头部本身，位置不跳。
+
+    左列顶行同时抬到 68px：两列顶边因此是**同一条**横线，省下的 16px 换不来一条
+    断开的顶边。
+  */
+  it("桌面顶带只剩一条：左右两列顶边齐平，页面级控件在右栏顶带里", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat();
+
+    await screen.findByRole("link", { name: /重构登录页/ });
+    expect(screen.queryByTestId("app-topbar")).toBeNull();
+
+    const listHead = screen.getByTestId("chat-list-head");
+    expect(listHead.className).toMatch(/h-\[68px\]/);
+    const chrome = screen.getByTestId("chat-chrome");
+    expect(chrome.className).toMatch(/h-\[68px\]/);
+    // 语言 / 主题在这一端仍够得着——壳不画顶栏之后它们没有别的落点。
+    expect(
+      within(chrome).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+    expect(within(chrome).getByRole("button", { name: /Theme/i })).toBeTruthy();
+    expect(within(chrome).getByText("Desktop connected")).toBeTruthy();
+  });
+
+  it("选中一条对话：那簇控件进详情头部的右端，右栏不再多叠一条带", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat();
+
+    fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
+    const slot = await screen.findByTestId("embedded-header-right");
+    expect(
+      within(slot).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+    expect(within(slot).getByText("Desktop connected")).toBeTruthy();
+    // 详情头部自己就是顶带，右栏不该再单画一条——那正是要消掉的那 52px。
+    expect(screen.queryByTestId("chat-chrome")).toBeNull();
   });
 
   /**

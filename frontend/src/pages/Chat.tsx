@@ -626,7 +626,31 @@ export default function Chat() {
     />
   );
 
-  const topBarRight = reach.hasOnlineDesktop ? <ChatFreshIndicator /> : null;
+  /*
+    页面级的那簇控件：连接态 + 语言/主题。
+
+    转录上方此前叠着两条带 —— 壳的 52px 顶栏（一个与侧栏高亮重复的「对话」标题，
+    外加这簇控件）和 89px 的详情头部，合计 141px 只承载一行标题和一行 meta。桌面档
+    因此也走壳的 `ownHeader`：顶栏下线，这簇控件跟着落到右栏顶带的右端 —— 选中
+    对话时那条带**就是**详情头部本身，没选中时才由下面那条 `chat-chrome` 承接。
+    两种情形同高（68px），控件的位置不跳。
+  */
+  const pageChrome = !isMobile ? (
+    <div className="flex shrink-0 items-center gap-2">
+      {reach.hasOnlineDesktop && <ChatFreshIndicator />}
+      <AppControls />
+    </div>
+  ) : null;
+
+  /** 没选中对话时右栏自己那条顶带：只承载 pageChrome，与左列顶行同高。 */
+  const chromeBand = pageChrome ? (
+    <div
+      data-testid="chat-chrome"
+      className="flex h-[68px] shrink-0 items-center justify-end border-b border-border bg-card px-5"
+    >
+      {pageChrome}
+    </div>
+  ) : null;
 
   /* 真实搜索：判据在服务端（决策 8，只按标题）。两处形态共用一份，只差尺寸。 */
   const renderSearchField = (size: "sm" | "md") => (
@@ -643,12 +667,7 @@ export default function Chat() {
   const searchFieldMd = renderSearchField("md");
 
   return (
-    <AppShell
-      title={t("nav.chat")}
-      right={topBarRight}
-      flush
-      ownHeader={isMobile}
-    >
+    <AppShell flush ownHeader>
       {isMobile &&
       (compose?.step === "draft" || compose?.step === "project") ? (
         /* 窄屏没有第二栏可用：这两步各占一整屏，返回回到底部弹层那一步。 */
@@ -751,7 +770,12 @@ export default function Chat() {
             data-testid="chat-list-col"
             className="flex w-[320px] shrink-0 flex-col border-r border-border bg-card"
           >
-            <div className="flex h-[52px] shrink-0 items-center gap-1.5 border-b border-border px-2.5">
+            {/* 左列顶行与右栏那条顶带同高：两列的顶边因此是同一条横线。省下的
+                16px 换不来一条断开的顶边。 */}
+            <div
+              data-testid="chat-list-head"
+              className="flex h-[68px] shrink-0 items-center gap-1.5 border-b border-border px-2.5"
+            >
               {searchFieldSm}
               <Button
                 variant="ghost"
@@ -775,6 +799,10 @@ export default function Chat() {
             data-testid="chat-detail"
             className="flex min-w-0 flex-1 flex-col"
           >
+            {/* 选中对话时详情头部**就是**这一栏的顶带，那簇控件递进它的右端；
+                其余几档没有那样一条带，才由 chromeBand 顶上。两者同高，控件
+                因此不会随着选中与否上下跳。 */}
+            {!selected && chromeBand}
             {/* 右栏这一格不是列表，摆骨架行会像是在等**某一条对话**的内容，而此刻
                 还没有任何目标被选中。留空：左列的骨架已经说了「在取」。 */}
             {!sessionIndex.loaded ? (
@@ -799,6 +827,7 @@ export default function Chat() {
                   initialTitle={selected.title}
                   initialRow={selected.row}
                   initialModelNote={selected.modelNote}
+                  headerRight={pageChrome}
                   onMarkedRead={onMarkedRead}
                 />
               </div>

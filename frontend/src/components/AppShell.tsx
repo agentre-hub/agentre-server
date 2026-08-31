@@ -234,7 +234,10 @@ export default function AppShell({
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {!ownHeader && (
-          <header className="flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-card px-4">
+          <header
+            data-testid="app-topbar"
+            className="flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-card px-4"
+          >
             {title ? (
               <span className="truncate text-prose font-bold text-foreground">
                 {title}

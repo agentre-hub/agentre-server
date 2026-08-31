@@ -4,7 +4,6 @@ import { useState, type ReactNode, type RefObject } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Monitor, MoreHorizontal, Square } from "lucide-react";
-
 import {
   copyTextWithToast,
   DropdownMenu,
@@ -48,6 +47,13 @@ export interface SessionDetailHeaderProps {
   status: SessionViewStatus;
   /** 这一轮在不在跑 —— 只有在跑的时候才摆「停止」。 */
   running: boolean;
+  /**
+   * 宿主页面级的那簇控件（Chat 桌面档的连接态 + 语言/主题）。
+   *
+   * 嵌入形态下这个头部**就是**那一页的顶带：壳不再画 52px 顶栏，那簇控件没有别的
+   * 落点，于是摆在这一行的最右端。路由页形态不传（壳的顶栏还在）。
+   */
+  headerRight?: ReactNode;
   clientRef: RefObject<RelayClient | null>;
   originRef: RefObject<string | undefined>;
 }
@@ -71,6 +77,7 @@ export default function SessionDetailHeader({
   machineOnline,
   status,
   running,
+  headerRight,
   clientRef,
   originRef,
 }: SessionDetailHeaderProps) {
@@ -197,7 +204,14 @@ export default function SessionDetailHeader({
     <div
       data-testid="session-detail-header"
       // relative：连接指示器的那条进度条按头部定位，铺满它的底边（决策 2）。
-      className="relative flex shrink-0 flex-col gap-2 border-b border-border bg-card px-5 py-2.5"
+      //
+      // 两种形态的外层不同高：路由页形态要在身份行之上再摆一行面包屑，所以是
+      // 「面包屑 + 身份行」两段加一圈内边距；嵌入形态没有面包屑，外层就**是**那条
+      // 68px 顶带 —— 此前它照样带着那圈 `py-2.5`，把 68 撑成 89，什么都没多装。
+      className={cn(
+        "relative flex shrink-0 flex-col border-b border-border bg-card px-5",
+        isPage ? "gap-2 py-2.5" : "h-[68px]",
+      )}
     >
       {isPage && (
         /* 路由页导航（决策 16，屏 22）：移动返回 + 设备名；桌面面包屑。 */
@@ -357,6 +371,14 @@ export default function SessionDetailHeader({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        {/* 宿主的那簇页面级控件（嵌入形态才有）：与「停止」隔一条竖线，免得两组
+            不同层级的东西看起来是一排同类按钮。 */}
+        {headerRight && (
+          <>
+            <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
+            {headerRight}
+          </>
+        )}
       </div>
     </div>
   );
