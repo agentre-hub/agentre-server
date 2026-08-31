@@ -12,10 +12,12 @@
  *
  * 取票是连接的一部分，那这段时间对外就得说「连接中」。
  */
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useRelayMachine } from "@/hooks/use-relay";
+import type { RelayState } from "@/lib/relayClient";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 
 vi.mock("@/lib/relayTicket", async (importOriginal) => {
@@ -122,5 +124,59 @@ describe("useRelayMachine 的连接状态", () => {
     act(() => result.current.reconnect());
 
     expect(result.current.relayState).toBe("connecting");
+  });
+
+  /**
+   * 目标机器**刚定下来**的那一帧。
+   *
+   * 详情页传进来的是 `device?.online ? device.fingerprint : null`：`/v1/devices`
+   * 回来之前是 null（effect 直接早退，state 停在初值 "disconnected"），回来那一
+   * 拍指纹和 `machineOnline: true` 同时落地。而 effect 排在渲染**之后** —— 于是
+   * 中间夹着一整帧 `{ relayState: "disconnected", machineOnline: true }`，
+   * `deriveSessionViewStatus` 把它判成 "lost"，屏幕上闪一条红色的「连接已断开，
+   * 已经不再自动重试」。
+   *
+   * `machineOnline === null` 那道守卫（session-status 那侧）挡不住这一帧：它挡的
+   * 是设备清单**还没回来**的那一段，而这一帧恰恰是它刚回来。所以话要在同一帧里
+   * 就说对，不能等 effect。
+   *
+   * 断言收的是**每一次提交**交出的值，不是 `result.current`：`renderHook` 会在
+   * act 里把 effect 一并刷掉，只读末值的话这一帧根本观察不到。收在无依赖的
+   * `useEffect` 里 —— 它每次提交后跑一遍，而只有提交过的那些渲染才上得了屏
+   * （渲染期调整 state 会让 React 丢掉当前这一趟重来，那一趟不算数）。
+   */
+  it("目标机器刚定下来的那一帧就说「连接中」,不闪一下「已断开」", () => {
+    mockedEnsureRelayTicket.mockReturnValue(pending<typeof TICKET>().promise);
+    const committed: RelayState[] = [];
+    function Probe({ fp }: { fp: string | null }) {
+      const { relayState } = useRelayMachine(fp);
+      useEffect(() => {
+        committed.push(relayState);
+      });
+      return null;
+    }
+
+    const { rerender } = render(<Probe fp={null} />);
+    committed.length = 0;
+    rerender(<Probe fp="fp-1" />);
+
+    expect(committed).not.toContain("disconnected");
+  });
+
+  /** 第一帧就已经有目标机器（右栏换会话、路由直接进详情）时同样不许闪。 */
+  it("首帧就带着目标机器时也不闪「已断开」", () => {
+    mockedEnsureRelayTicket.mockReturnValue(pending<typeof TICKET>().promise);
+    const committed: RelayState[] = [];
+    function Probe() {
+      const { relayState } = useRelayMachine("fp-1");
+      useEffect(() => {
+        committed.push(relayState);
+      });
+      return null;
+    }
+
+    render(<Probe />);
+
+    expect(committed).not.toContain("disconnected");
   });
 });

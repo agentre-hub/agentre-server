@@ -48,7 +48,30 @@ export function useRelayMachine(
 ): UseRelayMachineResult {
   const [relayTicket, setRelayTicket] = useState<RelayTicket | null>(null);
   const [relayTicketError, setRelayTicketError] = useState<unknown>(null);
-  const [relayState, setRelayState] = useState<RelayState>("disconnected");
+  /*
+    有目标机器 = 我们在连。这句话必须在**渲染期**就成立,不能等 effect。
+
+    `fingerprint` 是 `device?.online ? device.fingerprint : null`:设备清单回来
+    那一拍,指纹与 `machineOnline: true` 同时落地,而下面那只 effect 排在渲染之后
+    ——中间夹着整整一帧 `{ relayState: "disconnected", machineOnline: true }`,
+    `deriveSessionViewStatus` 把它读作「连过又放弃了」,屏幕上闪一条红色的
+    「连接已断开,已经不再自动重试」。取票之前那句 `setRelayState("connecting")`
+    补不上这一帧:它自己就在 effect 里。
+
+    所以初值按有没有目标机器给,换目标时用 React 官方的「prop 变化时重置 state」
+    渲染期调整模式跟着改(不能在 effect 里裸调 setState —— lint 禁止)。
+    "disconnected" 从此只有一种来路:连过又放弃了(close 之后)、或票根本没换到。
+  */
+  const initialState = (fp: string | null): RelayState =>
+    fp ? "connecting" : "disconnected";
+  const [relayState, setRelayState] = useState<RelayState>(() =>
+    initialState(fingerprint),
+  );
+  const [lastFingerprint, setLastFingerprint] = useState(fingerprint);
+  if (lastFingerprint !== fingerprint) {
+    setLastFingerprint(fingerprint);
+    setRelayState(initialState(fingerprint));
+  }
   const [client, setClient] = useState<RelayClient | null>(null);
   /** 手动重连的计数器：变一次就把下面那个 effect 整个重跑一遍。 */
   const [attempt, setAttempt] = useState(0);

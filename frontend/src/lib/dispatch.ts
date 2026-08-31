@@ -112,6 +112,15 @@ export interface DispatchedSession {
   deviceId: number;
   deviceFingerprint: string;
   /**
+   * 这条对话的标题 —— `deriveTitle(第一句话)`，就是这一次送给 daemon 的那一份。
+   *
+   * 交出来是为了落地那一屏的**第一帧**就说得出这条对话叫什么：`session.list` 要
+   * 等中继票 + WS + attach，账号镜像那一行要等一次 HTTP，两条都没落地时详情头部
+   * 只能退回 `#<会话号>`。而这个名字派发那一刻就在手里，没有理由让用户先看一串
+   * 十六位数字。它不是猜的，也不会与落库那一份不一致 —— 同一个函数算的同一件事。
+   */
+  title: string;
+  /**
    * 这条对话的**发起端**指纹 —— 就是这个浏览器的中继标识（`sourceClient.clientId`），
    * 与承载它的 `deviceFingerprint` 不是一回事。
    *
@@ -183,9 +192,12 @@ export async function dispatchNewConversation(
     input.modelTarget && input.modelTarget.providerKey !== ""
       ? input.modelTarget
       : null;
+  // 交出去与送过线的是同一个值，不是各算一次：`RunParams.title` 在生成的类型上是
+  // 可选的，取回来会是 `string | undefined`。
+  const title = deriveTitle(input.message);
   const params: RunParams = {
     sessionId: newSessionId(),
-    title: deriveTitle(input.message),
+    title,
     // agentId 是**桌面端本地**自增主键，浏览器没有也不该编一个：账号级归属由
     // agentSyncId（决策 3 的 ULID）表达。Go 侧 RunParams.AgentID 没有 omitempty，
     // 生成的类型因此是必填 —— 显式 0 与此前省略这个键在 daemon 上解出的值相同。
@@ -324,6 +336,7 @@ export async function dispatchNewConversation(
       sessionId: ack.sessionId,
       deviceId: choice.device_id,
       deviceFingerprint: choice.device_fingerprint,
+      title,
       peerFingerprint: input.sourceClient.clientId,
       modelPinned: pinTarget
         ? await pinModelTarget(client, ack.sessionId, pinTarget)

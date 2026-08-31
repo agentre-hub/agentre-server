@@ -175,6 +175,11 @@ export default function Chat() {
     deviceId: number;
     sessionId: number;
     peerFingerprint: string;
+    /**
+     * 右栏冷启动那一段先摆的标题（见 SessionDetailView 的 initialTitle）。两个
+     * 入口都拿得到：点行时是那一行的标题，草稿派发时是刚发出去那一句。
+     */
+    title?: string;
     /** 刚从草稿页发起、而模型没能钉住时要说的那一句（见 initialModelNote）。 */
     modelNote?: string;
   } | null>(null);
@@ -253,6 +258,7 @@ export default function Chat() {
       deviceId,
       sessionId,
       peerFingerprint,
+      title,
       modelPinned,
     }: DispatchedSession) => {
       setCompose(null);
@@ -264,7 +270,7 @@ export default function Chat() {
         : t("session.composerControls.modelNotPinnedOnStart");
       if (isMobile) {
         nav(`/devices/${deviceId}/sessions/${sessionId}`, {
-          state: modelNote ? { modelNote } : undefined,
+          state: { title, ...(modelNote ? { modelNote } : {}) },
         });
         return;
       }
@@ -272,6 +278,7 @@ export default function Chat() {
         deviceId,
         sessionId,
         peerFingerprint,
+        title,
         modelNote,
       });
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
@@ -412,6 +419,8 @@ export default function Chat() {
       deviceId: row.deviceId,
       sessionId: row.sessionId,
       peerFingerprint: row.fingerprint,
+      // 这一行的标题就在手上：右栏没有理由为了同一个名字再等一次往返。
+      title: row.title,
     });
   }, []);
 
@@ -761,6 +770,7 @@ export default function Chat() {
                   sessionId={selected.sessionId}
                   peerFingerprint={selected.peerFingerprint}
                   form="embedded"
+                  initialTitle={selected.title}
                   initialModelNote={selected.modelNote}
                   onMarkedRead={refetch}
                 />

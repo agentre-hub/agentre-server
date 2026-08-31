@@ -14,6 +14,7 @@ import {
   Alert,
   AlertDescription,
   createTranscriptProjector,
+  indicatorHostMessageId,
   opensAssistantMessage,
   reduceSessionState,
   resolveProviderPillState,
@@ -104,6 +105,19 @@ export interface SessionDetailViewProps {
    * 明明选过。用户改一次模型就被顶掉，它说的本来就是发起那一刻的事。
    */
   initialModelNote?: string | null;
+  /**
+   * 摘要两条来路都还没落地时先摆的标题。
+   *
+   * 唯一的作用是**填掉冷启动那一段空窗**：`session.list`（中继票 + WS + attach）
+   * 与账号镜像那一行（一次 HTTP）都要往返，期间头部只能退回 `#<会话号>` —— 一串
+   * 十六位数字，用户认不出那是哪条对话，而这正是「消息发出去之后画面在闪」的那
+   * 一段。宿主手上本来就有这个名字：左栏点行时是那一行的标题，草稿派发时是
+   * `deriveTitle(第一句话)`，两者都不必再问一次。
+   *
+   * 只是**兜底**，不是覆盖：任一条来路落地后一律以它为准（见 displayTitle），
+   * 所以这里给的是不是最新的并不要紧。给不出时照旧退回 `#<会话号>`。
+   */
+  initialTitle?: string;
   /** 标记已读成功后通知拥有索引的宿主，让未读数立即用服务端真值重取。 */
   onMarkedRead?: () => void;
 }
@@ -123,6 +137,7 @@ export default function SessionDetailView({
   peerFingerprint,
   form = "page",
   initialModelNote,
+  initialTitle,
   onMarkedRead,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
@@ -598,6 +613,28 @@ export default function SessionDetailView({
     [projector, events],
   );
 
+  /**
+   * 要不要为这一轮摆一枚空的助手占位（三点挂在它上面）。
+   *
+   * 两个判据是**或**的关系，各自补另一个够不着的那一半：
+   *
+   *   - `turn.pendingAssistant` —— 本轮刚由**这个浏览器**开起来（发送 / 自主续轮），
+   *     而转录末条还是上一轮那条已经说完的助手消息。只看转录的话三点会挂回那条上，
+   *     等于说「上面那段还在写」。这一半只有开轮的那一刻知道。
+   *
+   *   - 转录里**根本没有能挂三点的宿主**（`indicatorHostMessageId` 返回 null =
+   *     末条是用户消息）。轮次不是这个浏览器开起来的时候只有这一半算数：从草稿页
+   *     交接过来的那一条（DraftSession 自己派发了 run，右栏换成详情时这一轮已经在
+   *     跑）、以及轮次中途刷新页面 —— 两种情形下 attach 只把 `turnActive` 按
+   *     session.list 的 lifecycleState 接回来，占位没有任何东西会去设。少了这一半，
+   *     用户对着自己刚发的那句话干等到助手开口为止（联调机上实测 88 秒）。
+   *
+   * 助手一开口两半同时落下：`opensAssistantMessage` 撤掉前者，后者的宿主变成那条
+   * 助手消息。转录只在 `streaming` 也为真时才用它（见 Transcript 的 displayMessages）。
+   */
+  const pendingAssistant =
+    turn.pendingAssistant || indicatorHostMessageId(messages) === null;
+
   // 会话级状态（上下文窗口 / 权限模式）不进转录正文，单独归约一遍。
   const sessionRuntime = useMemo(() => reduceSessionState(events), [events]);
 
@@ -797,11 +834,14 @@ export default function SessionDetailView({
    * 详情页不另立一套：没有标题的老会话在索引上退化为「工作目录 · 后端 · 状态」，
    * 这里此前却写死 `#<会话号>`，同一条对话于是在列表里叫一个名字、点进去叫另一个。
    *
-   * `#<会话号>` 仍是**什么都还不知道**时的兜底（摘要两条来路都还没落地）：那一刻
-   * 连后端和状态都拿不出来，退化式会摆成一行「— · — · 闲置」，比一个诚实的会话号
-   * 更没有信息。
+   * 摘要两条来路都还没落地时先用宿主给的那个名字（`initialTitle`：左栏那一行的
+   * 标题、或草稿刚派发出去的第一句）—— 那一刻连后端和状态都拿不出来，退化式会摆
+   * 成一行「— · — · 闲置」，而这个名字是现成的、也是对的。宿主也给不出时才退回
+   * `#<会话号>`：那一刻确实什么都还不知道，一个诚实的会话号好过编一个名字。
    */
-  const displayTitle = identity ? sessionTitle(identity, t) : `#${sid}`;
+  const displayTitle = identity
+    ? sessionTitle(identity, t)
+    : (initialTitle?.trim() ?? "") || `#${sid}`;
 
   const agent = identity?.agentSyncId
     ? (agents.find((a) => a.sync_id === identity.agentSyncId) ?? null)
@@ -899,7 +939,7 @@ export default function SessionDetailView({
       agentPending={agentPending}
       fallbackModel={fallbackModel}
       streaming={turn.turnActive}
-      pendingAssistant={turn.pendingAssistant}
+      pendingAssistant={pendingAssistant}
       decisions={decisions}
       send={send}
     />

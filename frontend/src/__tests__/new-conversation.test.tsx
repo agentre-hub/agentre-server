@@ -409,6 +409,7 @@ describe("一条还没发第一句的对话", () => {
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
       modelPinned: true,
     });
     renderChat();
@@ -518,6 +519,7 @@ describe("一条还没发第一句的对话", () => {
         deviceId: 20,
         deviceFingerprint: "fp-a",
         peerFingerprint: "fp-web",
+        title: "跑一下失败的测试",
         modelPinned: true,
       };
     });
@@ -874,6 +876,26 @@ describe("开着新对话时还回得去", () => {
     );
   });
 
+  /*
+    同一段空窗也落在左栏点行上：右栏要重新去问一次 `/v1/agent-sessions?session_id=`,
+    而那一行的标题**就在刚点的那一行上**。等一次往返只为拿回已经有的东西,期间头部
+    写着裸会话号。
+
+    断言就落在点击**返回的那一刻**:`fireEvent.click` 会把渲染与 effect 刷掉,但
+    那次取数的 promise 还没兑现 —— 这一帧正是用户看到闪动的那一帧。
+  */
+  it("点行进右栏那一刻,头部写的是这一行的标题,不是裸会话号", async () => {
+    stubReads({}, [mirroredSession]);
+    renderChat();
+
+    fireEvent.click(await screen.findByText("重构登录页"));
+
+    expect(
+      within(screen.getByTestId("session-detail-identity")).getByRole("heading")
+        .textContent,
+    ).toBe("重构登录页");
+  });
+
   it("从 draft 那一步点回一条会话同样回得去", async () => {
     stubReads({}, [mirroredSession]);
     mockFetchPlan.mockResolvedValue(availablePlan);
@@ -959,6 +981,7 @@ describe("移动端派发成功后的落地", () => {
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
       modelPinned: true,
     });
     renderChat();
@@ -1093,6 +1116,7 @@ describe("草稿页的权限档位与模型控件", () => {
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
       modelPinned: true,
     });
   });
@@ -1231,6 +1255,7 @@ describe("草稿页的权限档位与模型控件", () => {
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
       modelPinned: false,
     });
     // 左栏已经有一行了，空态那颗主动作不在：走 compose 那个入口进草稿。
@@ -1252,6 +1277,52 @@ describe("草稿页的权限档位与模型控件", () => {
         ),
       { timeout: 3000 },
     );
+  });
+
+  /*
+    交接那一拍的标题。
+
+    右栏换成真详情时，这一屏什么都还没问到：`session.list` 要等中继票 + WS +
+    attach，账号镜像那一行要等一次 HTTP。两条都没落地时头部退回 `#<会话号>` ——
+    一串十六位数字，既不是这条对话的名字，也不是用户认得的任何东西。实测在联调
+    机上摆了约 800 毫秒，正好是「消息发出去之后画面在闪」的那一段。
+
+    而这个名字**派发那一刻就在手里**：标题就是 `deriveTitle(第一句话)`，
+    `dispatchNewConversation` 自己算出来送给 daemon 的那一份。交接时把它一起递
+    过来，头部第一帧就说得出这条对话叫什么，不必等任何一次往返。
+  */
+  it("Given 摘要与镜像都还没落地, When 右栏换成详情, Then 头部写的是刚发出去那一句,不是裸会话号", async () => {
+    stubReads(engineReads, [mirroredSession]);
+    // 清单里**没有** 99 号：摘要这条来路就停在这儿。镜像那一行是 42 号，也配不上
+    // ——两条来路都空着，正是交接那一拍的样子，只是把它定住了。
+    stubMachine(fourModes, { sessions: [] });
+    mockDispatch.mockResolvedValue({
+      sessionId: 99,
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      modelPinned: true,
+    });
+    renderChat("/chat?compose=1");
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    await awaitDraftComposer();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    expect(await screen.findByTestId("session-detail-view")).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("session-detail-identity")).getByRole(
+          "heading",
+        ).textContent,
+      ).toBe("跑一下失败的测试"),
+    );
+    expect(screen.queryByText("#99")).toBeNull();
   });
 
   // 没有选中的机器就没有「哪个后端」这一问：此刻摆一颗禁用的 pill 是在暗示

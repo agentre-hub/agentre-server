@@ -298,6 +298,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 交出去的必须是这条对话的**发起端**——就是这个浏览器。落地那一屏拿它去问
       // 镜像的历史与「已读」；给成机器指纹的话两处都在问一个账号里不存在的身份。
       peerFingerprint: "fp-web",
+      // 与送给 daemon 的那一份是同一个 deriveTitle 结果：落地那一屏拿它填掉摘要
+      // 还没回来那一段，用户不必先看一串会话号。
+      title: "讲讲这个项目",
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
@@ -369,6 +372,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       deviceId: 30,
       deviceFingerprint: "fp-desk",
       peerFingerprint: "fp-web",
+      title: "帮我看看这个项目",
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });
@@ -399,6 +403,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       deviceId: 21,
       deviceFingerprint: "fp-online",
       peerFingerprint: "fp-web",
+      title: "讲讲这个项目",
       // 跟随 Agent 绑定：没什么可钉，恒为真。
       modelPinned: true,
     });

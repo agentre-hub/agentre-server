@@ -6,7 +6,11 @@
  *   - 待决策已被别的端回答 → 就地说明「已被处理」并刷新状态（R10）。
  */
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { rpcMethods, type AnyRpcMethod } from "@agentre-hub/agentre-wire";
+import {
+  rpcMethods,
+  SessionLifecycleRunning,
+  type AnyRpcMethod,
+} from "@agentre-hub/agentre-wire";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -3871,6 +3875,46 @@ describe("会话详情页:一轮在跑时的三点", () => {
 
     await vi.waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
     expect(typing()).toBeTruthy();
+  });
+
+  /*
+    从「新对话」交接过来的那一条，以及轮次中途刷新页面。
+
+    草稿页自己把 `runtime.run` 派发出去了（DraftSession.start），右栏随后换成真
+    详情——挂载那一刻这一轮**已经在跑**，而转录里只有用户那句话，助手一个字都还
+    没回。attach 那条路径只把 `turnActive` 接回来（按 session.list 的
+    lifecycleState），占位没人接：`indicatorHostMessageId` 在末条是用户消息时返回
+    null，于是整段等待里一个三点都没有。
+
+    症状与「三点从来没接上」那一版一模一样：用户对着自己刚发的那句话干等，分不清
+    是在跑还是发丢了——联调机上实测干等 88 秒。
+  */
+  it("接手一条已经在跑、助手还没开口的会话:三点在", async () => {
+    wireRelay();
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, lifecycleState: SessionLifecycleRunning }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        sessionId: 42,
+        event: {
+          kind: "user_message",
+          text: "看看目录",
+          sourceDevice: "fp-web",
+        },
+        seq: 1,
+      });
+    });
+    renderPage();
+    expect(await screen.findByText("看看目录")).toBeTruthy();
+
+    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 2000 });
   });
 
   // 助手真开口之后三点才该跟着正文走 —— 这一条守住上面两条不是靠「永不熄灭」

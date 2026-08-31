@@ -13,15 +13,22 @@ export default function SessionDetail() {
   // 移动端从草稿页下钻过来时，「模型没能钉住」那一句随导航 state 一起来 ——
   // 它说的是发起那一刻的事，没有别的来路，也不该进 URL。
   const { state } = useLocation();
+  const navState = state as {
+    modelNote?: unknown;
+    title?: unknown;
+  } | null;
   const modelNote =
-    typeof (state as { modelNote?: unknown } | null)?.modelNote === "string"
-      ? (state as { modelNote: string }).modelNote
-      : undefined;
+    typeof navState?.modelNote === "string" ? navState.modelNote : undefined;
+  // 冷启动那一段的兜底标题（见 SessionDetailView 的 initialTitle）。与 modelNote
+  // 同一条来路：从草稿页下钻过来时它就在手上，不必等摘要落地。
+  const title =
+    typeof navState?.title === "string" ? navState.title : undefined;
   return (
     <SessionDetailView
       deviceId={Number(deviceId)}
       sessionId={Number(sessionId)}
       form="page"
+      initialTitle={title}
       initialModelNote={modelNote}
     />
   );
