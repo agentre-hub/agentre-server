@@ -31,10 +31,10 @@ export interface UseRelayMachineResult {
   /**
    * 从头再连一次：重取 ticket、新建 RelayClient、connect。
    *
-   * **不是**在旧 client 上重试。`relayState` 走到 "disconnected" 只有一条来历
-   * ——`RelayClient.close()` 已经被调用过（`handleClose` 里 `closedByUser` 那一支）：
-   * 自动重连那一路停在 "reconnecting"，永远不落到 "disconnected"。一个已经
-   * closed 的 client 上没有可重试的东西，唯一能做的就是换一个。
+   * **不是**在旧 client 上重试。`relayState` 走到 "disconnected" 只有两条来历，
+   * 两条都没有可重试的东西：`RelayClient.close()` 已经被调用过（`handleClose` 里
+   * `closedByUser` 那一支），或者票根本没换到、client 压根没建出来。自动重连那
+   * 一路停在 "reconnecting"，永远不落到 "disconnected"。唯一能做的就是换一个。
    *
    * 页面据此给「lost」那一档一个真的出路 —— 横幅说的是「已经不再自动重试」，
    * 那句话必须配一个按钮，否则用户只能刷新整页而界面没说。
@@ -62,6 +62,12 @@ export function useRelayMachine(
   useAliveEffect(
     (alive) => {
       if (!fingerprint) return;
+      // 取票是连接的第一步,不是连接之前的准备:这一步期间还没有 RelayClient,
+      // 没人会把状态推离初值 "disconnected",而那个值被 deriveSessionViewStatus
+      // 读作「连过又放弃了」= lost。于是刷新页面后第一次打开对话,整个取票往返
+      // 都盖在红色终态横幅「已经不再自动重试」底下 —— 而它正是最有进展的时候。
+      // 这里在发请求前就把话说对:我们在连。
+      setRelayState("connecting");
       let c: RelayClient | null = null;
       ensureRelayTicket()
         .then((ticket) => {
@@ -92,7 +98,12 @@ export function useRelayMachine(
           });
         })
         .catch((e: unknown) => {
-          if (alive()) setRelayTicketError(e);
+          if (!alive()) return;
+          setRelayTicketError(e);
+          // 票都没换到就没有自动重连可言(RelayClient 压根没建出来)。退回
+          // "disconnected" 让页面走「lost + 重新连接」那一档 —— 否则上面那句
+          // "connecting" 会把一次彻底的失败永远显示成转圈。
+          setRelayState("disconnected");
         });
       return () => {
         c?.close();
