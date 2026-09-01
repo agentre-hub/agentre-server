@@ -1,4 +1,5 @@
 import {
+  ErrCodeNoActiveTurn,
   PROTOCOL_VERSION,
   ProtobufRpcCodec,
   encodeRpcCancel,
@@ -104,6 +105,47 @@ async function authenticate(
   );
   await connected;
   socket.sent = [];
+}
+
+/**
+ * RpcFrame{id, error:{code, message}} 的 canonical Protobuf bytes。
+ *
+ * wire 包只让**应答端**编错误帧(ProtobufRpcCodec.encode 撞上 error 直接抛),而这条
+ * 假 socket 演的正是应答端,所以这里按线格式手写:RpcFrame.id = 1(varint)、
+ * RpcFrame.error = 5、RpcError.code = 1(int32 varint)、RpcError.message = 2(string)。
+ * code 是 int32,负值按 64 位补码编成 varint —— daemon 的错误码全是负数。
+ */
+function encodeRpcErrorFrame(
+  id: bigint,
+  code: number,
+  message: string,
+): Uint8Array {
+  const varint = (value: bigint): number[] => {
+    const out: number[] = [];
+    let rest = value;
+    do {
+      let byte = Number(rest & 0x7fn);
+      rest >>= 7n;
+      if (rest > 0n) byte |= 0x80;
+      out.push(byte);
+    } while (rest > 0n);
+    return out;
+  };
+  const text = new TextEncoder().encode(message);
+  const error = [
+    0x08,
+    ...varint(BigInt.asUintN(64, BigInt(code))),
+    0x12,
+    ...varint(BigInt(text.length)),
+    ...text,
+  ];
+  return new Uint8Array([
+    0x08,
+    ...varint(id),
+    0x2a,
+    ...varint(BigInt(error.length)),
+    ...error,
+  ]);
 }
 
 describe("RelayClient Protobuf RPC boundary", () => {
@@ -367,6 +409,72 @@ describe("RelayClient Protobuf RPC boundary", () => {
       { conversationId: CID, seq: 2, providerSessionId: "p-1", turnToken: 1 },
     ]);
   });
+
+  // Given agentred 每次重启都把非终态会话标成 interrupted(daemon.New 的「marked N
+  // non-terminal sessions interrupted after restart」),而 daemon 的 Attach 对
+  // interrupted 一律回 ErrNoActiveTurn —— 它同一处注释也写明:**历史仍可 Pull**;
+  // When 页面补齐这条对话;Then 这一串必须接着发 session.pull,把历史交出来。
+  //
+  // 详情页那一层的防护挡不住这里:它认出 interrupted 就跳过 attach,st.attached 因此
+  // 始终为空,补齐进来又问了一次 —— 这一次抛出去就是一条 pull 都没发出去,页面停在
+  // 「没能从这台机器读到这条对话的内容」,而机器在线、历史也确实在那里。存量一旦全
+  // 沉淀成 interrupted(开发机重启若干次之后就是),每一条对话都打不开。
+  it("补齐里那次 attach 被拒:历史照样 pull 回来", async () => {
+    const events: unknown[] = [];
+    const { client, socket } = setup({
+      onEvent: (event) => events.push(event),
+    });
+    await authenticate(client, socket);
+
+    const caughtUp = client.catchUp(CID, "fp-origin");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    const attach = ProtobufRpcCodec.decode(socket.sent[0]);
+    socket.receive(
+      encodeRpcErrorFrame(attach.id, ErrCodeNoActiveTurn, "no active turn"),
+    );
+
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    const pull = ProtobufRpcCodec.decode(socket.sent[1]);
+    expect(pull.body.case).toBe("typedMethodRequest");
+    expect((pull.body as { method: string }).method).toBe(
+      rpcMethods.sessionPull.name,
+    );
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        pull.id,
+        rpcMethods.sessionPull,
+        {
+          notifications: [
+            {
+              seq: 1n,
+              payload: {
+                payload: {
+                  case: "runtimeEvent",
+                  value: {
+                    conversationId: CID,
+                    event: { case: "textDelta", value: { text: "hi" } },
+                  },
+                },
+              },
+            },
+          ],
+          cursor: 1n,
+          hasMore: false,
+          oldestSeq: 1n,
+        },
+      ),
+    );
+
+    await expect(caughtUp).resolves.toBeUndefined();
+    expect(events).toMatchObject([
+      {
+        conversationId: CID,
+        seq: 1,
+        event: { kind: "text_delta", text: "hi" },
+      },
+    ]);
+  });
+
   // Given server 镜像交出的一页历史里同样有轮次结束帧(GET /v1/agent-sessions/transcript
   // 的 `runtime.runResultDone`,由 Go 侧 internal/pkg/wireview 投影);When 详情页回放
   // 这一页;Then 它要投到 onRunResultDone —— loadMirrorTail 正是靠这一口在转录里补一条

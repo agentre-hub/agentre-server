@@ -412,7 +412,22 @@ export class RelayClient {
   }
 
   private async pullUntilCaughtUp(st: SessionState): Promise<void> {
-    await this.attach(st.conversationId, st.origin);
+    // 接回实时流与读历史是两件事,**接不回不等于读不到**。
+    //
+    // agentred 每次重启都把非终态会话标成 interrupted,而 daemon 的 Attach 对
+    // interrupted 一律回 ErrNoActiveTurn ——「那一轮的子进程随上一个 daemon 进程消亡
+    // 了」——它同一处也写明:历史仍可 Pull。这里抛出去,下面一条 pull 都发不出,详情页
+    // 停在「没能从这台机器读到这条对话的内容」,而机器在线、历史也确实在那里;存量一旦
+    // 全沉淀成 interrupted(开发机重启若干次之后就是),每一条对话都打不开。
+    //
+    // 详情页那一层已按同一条纪律防过一次(interrupted 不问 attach、问了失败也只吞掉),
+    // 但那挡不住这里:跳过 attach 意味着 st.attached 始终为空,补齐进来照样问一遍。
+    // 形状与同仓库的 mirror_svc.catchUp 一致:少一次实时接管而已,补齐照走。
+    try {
+      await this.attach(st.conversationId, st.origin);
+    } catch {
+      // 真正断掉的连接会让紧接着的 pull 一并失败,那时才是「读不到」。
+    }
     for (;;) {
       const sentCursor = st.cursor;
       const response = await this.request(rpcMethods.sessionPull, {
