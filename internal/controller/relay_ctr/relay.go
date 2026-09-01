@@ -2,6 +2,7 @@
 package relay_ctr
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -17,17 +18,29 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
+// AccountSignals 是中继客户端连接上那条保留通道要的全部能力（ISP）：订阅一个账号，
+// 拿一条已经编好的线上帧流。中继因此不认识 accountchan_svc，也不解释信号内容。
+type AccountSignals interface {
+	// SubscribeSignals 订阅一个账号的信号，交回帧流与它的收尾。
+	//
+	// 它由 Client 在 upgrade **之前**调用：upgrade 成功之后发生的每一次广播都必然
+	// 落在这份订阅上，不留漏帧窗口（Hard invariant 5）。
+	SubscribeSignals(ctx context.Context, accountID int64) (<-chan []byte, func(), error)
+}
+
 type Relay struct {
-	svc relay_svc.RelaySvc
+	svc     relay_svc.RelaySvc
+	signals AccountSignals
 	// 两个端点的读上限不同,所以是两个 transport:daemon 那条收的是信封(载荷 +
 	// 通道 ID 头),客户端那条收的是裸载荷。见 relayws.MaxPayloadBytes。
 	daemonTransport relayws.Transport
 	clientTransport relayws.Transport
 }
 
-func New(svc relay_svc.RelaySvc) *Relay {
+func New(svc relay_svc.RelaySvc, signals AccountSignals) *Relay {
 	return &Relay{
 		svc:             svc,
+		signals:         signals,
 		daemonTransport: relayws.New(relayws.DaemonReadLimit),
 		clientTransport: relayws.New(relayws.ClientReadLimit),
 	}
@@ -137,6 +150,16 @@ func (t *renewThrottle) due(now time.Time) bool {
 func (r *Relay) Client(c *gin.Context) {
 	ctx := c.Request.Context()
 	accountID, _, _, jti := deviceClaims(c)
+	// 账号信号的订阅排在 upgrade **之前**（决策 13 + Hard invariant 5）：合并之后
+	// 它跑在这条 socket 的保留通道上，但「先订阅再握手」这条不变量原样成立。
+	//
+	// 订阅失败**不**挡住 upgrade：这条连接上还要跑别人的 RPC，为一个「尽力而为、
+	// 可合并、可丢弃」的订阅回一个 HTTP 错误等于杀掉全部 RPC。失败改由保留通道
+	// 自己收一帧通道级错误，客户端据此只把信号那一路退回 30 秒轮询。
+	signals, stopSignals, signalErr := r.subscribeSignals(ctx, accountID)
+	if stopSignals != nil {
+		defer stopSignals()
+	}
 	guard := connguard.New(ctx, accountID, jti)
 	conn, err := r.clientTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: guard, OnHeartbeat: guard,
@@ -149,6 +172,11 @@ func (r *Relay) Client(c *gin.Context) {
 	// 连接走人时逐条摘：daemon 那侧收不到任何整链路断开事件，只能靠逐通道信号
 	// 避免留下幽灵对端。
 	defer channels.closeAll()
+	if signalErr != nil {
+		channels.signalUnavailable(ctx)
+	} else {
+		go channels.pumpSignals(signals)
+	}
 
 	for {
 		messageType, frame, err := conn.ReadMessage()
@@ -176,6 +204,17 @@ func (r *Relay) Client(c *gin.Context) {
 // 两条判据的失败方向刻意相反，别顺手统一掉：凭据撤销判不出来时不断开
 // （auth_svc.WatchRelayCredential 的 fail-open，那只是一次早已生效的撤销的收尾），
 // 账号闸门判不出来时断开（user_svc.AccountGate 的 fail-closed，那是授权判定本身）。
+// subscribeSignals 建立账号信号订阅。没有配置信号源时按「订阅建不起来」处理——
+// 那与 Redis 连不上对客户端是同一件事：信号那一路不可用，退回轮询。
+func (r *Relay) subscribeSignals(
+	ctx context.Context, accountID int64,
+) (<-chan []byte, func(), error) {
+	if r.signals == nil {
+		return nil, nil, relay_svc.ErrRelayUnconfigured
+	}
+	return r.signals.SubscribeSignals(ctx, accountID)
+}
+
 func deviceClaims(c *gin.Context) (int64, int64, string, string) {
 	return ginctx.UserID(c), ginctx.DeviceID(c), ginctx.DeviceKind(c), ginctx.JTI(c)
 }

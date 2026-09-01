@@ -25,6 +25,13 @@ const (
 // 对端 daemon 可通知。客户端也不许自己开保留号，见 relay_ctr。
 const ReservedChannelPrefix = "~"
 
+// SignalChannelID 是账号信号那条保留通道（决策 13）。一条中继客户端连接上只有
+// 这一条：普通通道承载 RPC，它承载 sync_version / mirror_changed / device_presence。
+//
+// 它**只出不进**：服务端开、服务端写，客户端往它写任何东西（包括普通通道上表示
+// 「关掉这条」的空载荷）都按协议错误处理，见 relay_ctr。
+const SignalChannelID = ReservedChannelPrefix + "signal"
+
 // ResolveTarget 把一条通道声明的目标解析成路由。
 //
 // 两种形式最终都汇到 ConnectClient，那是有意的：那里握着这个账号能不能寻址这台

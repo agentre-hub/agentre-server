@@ -34,6 +34,7 @@ type RouterDeps struct {
 	Relay  relay_svc.RelaySvc
 	// AccountChan 留给测试注入自己那份实时通道实现：两个副本要各带一份，
 	// 而 accountchan_svc.Default() 一个进程只有一个。为空时取默认单例。
+	// 它没有自己的端点，账号信号走中继客户端连接的保留通道（决策 13）。
 	AccountChan accountchan_svc.AccountChanSvc
 
 	// drainers 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
@@ -41,11 +42,11 @@ type RouterDeps struct {
 	//
 	// 控制器是在 Router 里现造的,main 拿不到它们;而 RouterDeps 本来就是 main
 	// 持有的那个指针,把把手挂回它身上比给 Router 加一个返回值省事,也不必让
-	// main 去认识 relay_ctr / accountchan_ctr。
+	// main 去认识 relay_ctr。
 	drainers []relayws.Drainer
 }
 
-// DrainRelays 优雅下线:把这个副本手里的中继与账号通道 websocket 逐条礼貌关掉
+// DrainRelays 优雅下线:把这个副本手里的中继 websocket 逐条礼貌关掉
 // (1001 Going Away),交回一共关了几条。
 //
 // 为什么必须有这一步。这些是长连接,读循环阻塞在 ReadMessage 上永远不返回,于是:
@@ -77,13 +78,14 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if relaySvc == nil {
 		relaySvc = relay_svc.Default()
 	}
-	relayCtr := relay_ctr.New(relaySvc)
 	accountChan := r.AccountChan
 	if accountChan == nil {
 		accountChan = accountchan_svc.Default()
 	}
-	accountChanCtr := accountchan_ctr.New(accountChan)
-	r.drainers = []relayws.Drainer{relayCtr, accountChanCtr}
+	// 账号信号没有自己的端点了（决策 13）：它跑在中继客户端连接的保留通道上，
+	// 因此在这里装配进 relay_ctr，而不是另挂一条路由。
+	relayCtr := relay_ctr.New(relaySvc, accountchan_ctr.New(accountChan))
+	r.drainers = []relayws.Drainer{relayCtr}
 	syncCtr := sync_ctr.New()
 	workspaceCtr := workspace_ctr.New()
 	engineCtr := engine_ctr.New()
@@ -293,10 +295,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 或 query（过渡期退路）搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
 	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(r.Signer))
+	// 这一条同时承载账号信号：普通通道跑 RPC，保留通道（relay_svc.SignalChannelID）
+	// 推 sync_version / mirror_changed / device_presence。/v1/account/channel 已删除。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)
-	// 账号级实时通道：常连、不指定目标 daemon，服务端只往上面推「这个账号的同步
-	// 版本推进到 V」。两端凭据形状与 client 那条完全一样，因此挂在同一组上。
-	tokenBridged.GET("/v1/account/channel", accountChanCtr.Channel)
 
 	return nil
 }

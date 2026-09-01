@@ -60,6 +60,16 @@ func newClientChannels(svc relay_svc.RelaySvc, conn FrameConn, accountID int64) 
 // 它**不返回错误**：通道级的失败只答复给那一条通道，绝不牵连同一连接上的其它通道。
 // 唯一能关掉整条连接的是鉴权失效（连接守卫，见 Client）。
 func (c *clientChannels) handle(ctx context.Context, channelID string, payload []byte) {
+	// 保留通道只出不进（决策 13/14）：号归服务端，客户端往它写任何东西——包括普通
+	// 通道上表示「关掉这条」的空载荷——都是协议违例。判在最前面而不是开通道那一步：
+	// 服务端已经开着的那条保留通道在注册表里没有条目，落到 lookup 之后会被当成
+	// 「客户端要开一条新通道」，那时再拒就把两种违例混成一种。
+	if strings.HasPrefix(channelID, relay_svc.ReservedChannelPrefix) {
+		// 不带关闭帧：保留通道是服务端开的，客户端的一次违例不该把它自己的信号路
+		// 判死——它还在收信号。
+		c.writeError(ctx, channelID, relay_svc.ChannelCodeReserved, code.InvalidParameter)
+		return
+	}
 	if len(payload) == 0 {
 		c.close(channelID)
 		return
@@ -82,13 +92,9 @@ func (c *clientChannels) handle(ctx context.Context, channelID string, payload [
 // 每条通道开通那一刻（之后的帧走 lookup 直接转发），但一次很慢的解析确实会推迟
 // 同连接其它通道的帧——那是延迟，不是隔离：解析失败仍然只判死这一条通道。
 func (c *clientChannels) openChannel(ctx context.Context, channelID, target string) {
-	// 保留号归服务端（决策 14）：客户端自己开一个只能被拒。它也因此**不会**走到
-	// AttachClient——那条路径结束时要往通道上发一帧空载荷通知对端 daemon，而保留
-	// 通道压根没有对端 daemon。
-	if strings.HasPrefix(channelID, relay_svc.ReservedChannelPrefix) {
-		c.writeError(ctx, channelID, relay_svc.ChannelCodeReserved, code.InvalidParameter)
-		return
-	}
+	// 保留号在 handle 那一步就被挡掉了，因此这里的通道一定有一台对端机器可以附着
+	// ——AttachClient 结束时要往通道上发一帧空载荷通知对端 daemon，而保留通道压根
+	// 没有对端 daemon。
 	route, err := c.svc.ResolveTarget(ctx, c.client, target)
 	if err != nil {
 		c.fail(ctx, channelID, err)
@@ -126,10 +132,38 @@ func (c *clientChannels) close(channelID string) {
 	}
 }
 
+// pumpSignals 把账号信号写进保留通道（决策 13）。
+//
+// 帧流关掉意味着这份订阅没了（Redis 订阅彻底失败，或连接正在收尾）：关掉的是这
+// **一条**通道而不是整条连接——上面还跑着 RPC。客户端据此把信号那一路标为不可用
+// 并退回 30 秒轮询，重连或下一次主动读取补齐断流期间的变更。
+func (c *clientChannels) pumpSignals(frames <-chan []byte) {
+	writer := &channelWriter{conn: c.conn, channelID: relay_svc.SignalChannelID}
+	for frame := range frames {
+		if err := writer.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+			return
+		}
+	}
+	// 空载荷 = 这条通道关了，与普通通道同一个约定。
+	_ = writer.WriteMessage(websocket.BinaryMessage, nil)
+}
+
+// signalUnavailable 告诉客户端信号那一路建不起来。它是**通道级**的：整条连接照常
+// 服务 RPC，只有保留通道当场关掉，客户端退回 30 秒轮询。
+func (c *clientChannels) signalUnavailable(ctx context.Context) {
+	c.writeError(ctx, relay_svc.SignalChannelID,
+		relay_svc.ChannelCodeSignalUnavailable, code.AccountChannelUnavailable)
+	writer := &channelWriter{conn: c.conn, channelID: relay_svc.SignalChannelID}
+	_ = writer.WriteMessage(websocket.BinaryMessage, nil)
+}
+
 // fail 把一条通道判死：告诉客户端为什么，再关掉它。整条连接不受影响。
 func (c *clientChannels) fail(ctx context.Context, channelID string, err error) {
 	channelCode, businessCode := channelFailure(err)
 	c.writeError(ctx, channelID, channelCode, businessCode)
+	// 空载荷 = 这条通道关了，与 daemon 那条链路上同一个约定。
+	_ = (&channelWriter{conn: c.conn, channelID: channelID}).
+		WriteMessage(websocket.BinaryMessage, nil)
 	c.close(channelID)
 }
 
@@ -144,11 +178,7 @@ func (c *clientChannels) writeError(ctx context.Context, channelID string, chann
 		return
 	}
 	writer := &channelWriter{conn: c.conn, channelID: channelID}
-	if err := writer.WriteMessage(websocket.BinaryMessage, frame); err != nil {
-		return
-	}
-	// 空载荷 = 这条通道关了，与 daemon 那条链路上同一个约定。
-	_ = writer.WriteMessage(websocket.BinaryMessage, nil)
+	_ = writer.WriteMessage(websocket.BinaryMessage, frame)
 }
 
 // closeAll 在连接走人时逐条摘掉，让每台机器都收到自己那条通道的关闭信号。

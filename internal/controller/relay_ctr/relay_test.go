@@ -37,6 +37,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo/mock_user_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
@@ -781,11 +782,32 @@ func newRelayServerWithDeps(
 	t *testing.T, signer *jwt.Signer, svc relay_svc.RelaySvc,
 ) (*httptest.Server, *api.RouterDeps) {
 	t.Helper()
+	return newRelayServerDeps(t, signer, svc,
+		accountchan_svc.New(newRelayRedisClient(t, miniredis.RunT(t))))
+}
+
+// newRelayServerWithAccountChan 换掉账号信号那一路的实现：中继客户端连接现在同时
+// 承载保留通道上的账号信号（决策 13），所以它是这个端点装配的一部分。
+func newRelayServerWithAccountChan(
+	t *testing.T, signer *jwt.Signer, svc relay_svc.RelaySvc,
+	accountChan accountchan_svc.AccountChanSvc,
+) *httptest.Server {
+	t.Helper()
+	server, _ := newRelayServerDeps(t, signer, svc, accountChan)
+	return server
+}
+
+func newRelayServerDeps(
+	t *testing.T, signer *jwt.Signer, svc relay_svc.RelaySvc,
+	accountChan accountchan_svc.AccountChanSvc,
+) (*httptest.Server, *api.RouterDeps) {
+	t.Helper()
 	testMux := muxtest.NewTestMux()
 	deps := &api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{},
-		Signer: signer,
-		Relay:  svc,
+		Cfg:         &bootstrap.ServerConfig{},
+		Signer:      signer,
+		Relay:       svc,
+		AccountChan: accountChan,
 	}
 	require.NoError(t, deps.Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))

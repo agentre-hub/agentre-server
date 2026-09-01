@@ -21,6 +21,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
@@ -28,13 +29,22 @@ import (
 // relay_svc + 真的 Redis 帧总线，daemon 与客户端都是真的 websocket。桩件只在
 // 仓库那一层。
 type channelHarness struct {
-	server  *httptest.Server
-	signer  *jwt.Signer
-	devices *mock_device_repo.MockDeviceRepo
-	saves   *mock_agent_session_repo.MockSaveRepo
+	server      *httptest.Server
+	signer      *jwt.Signer
+	devices     *mock_device_repo.MockDeviceRepo
+	saves       *mock_agent_session_repo.MockSaveRepo
+	accountChan accountchan_svc.AccountChanSvc
 }
 
 func newChannelHarness(t *testing.T) *channelHarness {
+	t.Helper()
+	testutils.Redis()
+	return newSignalHarnessWith(t, accountchan_svc.New(newRelayRedisClient(t, miniredis.RunT(t))))
+}
+
+// newSignalHarnessWith 换掉账号信号那一路的实现：保留通道的用例按它驱动订阅失败、
+// 订阅缓慢与信号源中断三种形态。
+func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanSvc) *channelHarness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis()
@@ -49,7 +59,11 @@ func newChannelHarness(t *testing.T) *channelHarness {
 	redisClient := newRelayRedisClient(t, mini)
 	svc := relay_svc.New(config, devices, saves, redisClient, relay_svc.NewRedisForwarder(config, redisClient))
 	return &channelHarness{
-		server: newRelayServer(t, signer, svc), signer: signer, devices: devices, saves: saves,
+		server:      newRelayServerWithAccountChan(t, signer, svc, accountChan),
+		signer:      signer,
+		devices:     devices,
+		saves:       saves,
+		accountChan: accountChan,
 	}
 }
 
