@@ -1,6 +1,7 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
   sessionListFromProtobuf,
+  SessionLifecycleInterrupted,
   SessionLifecycleRunning,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
@@ -548,17 +549,31 @@ export default function SessionDetailView({
           ) {
             client.setCursor(sid, mirrorSeqRef.current, origin);
           }
-          const attached = await client.attach(sid, origin);
+          // attach（接回实时流）与补齐（读历史）是两件事，**接不回不等于读不到**。
+          //
+          // daemon 对 interrupted 的会话一律回 ErrNoActiveTurn（那一轮的子进程随上一个
+          // daemon 进程消亡了），而它同一处也写明「历史仍可 Pull」。agentred 每次重启
+          // 都会把非终态会话标成 interrupted，存量因此会整批沉淀到这一档——把 attach 的
+          // 失败当成整条读不到，这些对话就再也打不开，而机器在线、历史也确实在那里。
+          //
+          // 形状照搬同仓库的 mirror_svc.catchUp：interrupted 不去问，问了失败也只是
+          // 少一次实时接管，高水位退回清单快照那一份，补齐照走。
+          let latestSeq = s?.latestSeq ?? 0;
+          if (s?.lifecycleState !== SessionLifecycleInterrupted) {
+            try {
+              latestSeq = (await client.attach(sid, origin)).latestSeq;
+            } catch {
+              // 清单与接入之间它刚被中断，或这条会话已经不在这台机器上。真正断掉的
+              // 连接会让紧接着的 catchUp 一并失败，那时才是「读不到」。
+            }
+          }
           // 会话标识是各端本地自增、会被复用的：那条会话在执行端被删掉重排之后，它的
           // 日志高水位比镜像里这一段低。游标停在高水位上面的话，此后每一条实时帧都
           // 「不大于游标」被当成重复丢光——会话没有报错、也没有跳号地冻住。attach 交回
           // 来的 latestSeq 就是执行端此刻的高水位，据它复位（桌面端 reconnect.go 的
           // dropCursorAboveHighWater 同一条规则）。
-          if (
-            attached.latestSeq > 0 &&
-            attached.latestSeq < client.getCursor(sid, origin)
-          ) {
-            client.setCursor(sid, attached.latestSeq, origin);
+          if (latestSeq > 0 && latestSeq < client.getCursor(sid, origin)) {
+            client.setCursor(sid, latestSeq, origin);
           }
           // 账号里没有这一份（未保存的对话，机器轴上的大多数）：内容只有中继给得出，
           // 而从游标 0 补齐就是把整份 journal 拉回来。按对端交回的高水位反推起点，
@@ -568,19 +583,15 @@ export default function SessionDetailView({
           // 预算（轮次 / 字节）。所以「够不够一屏」全靠下面那条顶补兜着。
           const relayTail =
             mirrorSeqRef.current === 0 &&
-            attached.latestSeq > RELAY_TAIL_FRAMES &&
+            latestSeq > RELAY_TAIL_FRAMES &&
             client.getCursor(sid, origin) === 0;
           if (relayTail) {
-            client.setCursor(
-              sid,
-              attached.latestSeq - RELAY_TAIL_FRAMES,
-              origin,
-            );
+            client.setCursor(sid, latestSeq - RELAY_TAIL_FRAMES, origin);
           }
           await client.catchUp(sid, origin);
           if (alive() && mirrorSeqRef.current === 0) {
             // 这一段的最老一条就是游标的下一格；更早的还在对端那里。
-            const from = relayTail ? attached.latestSeq - RELAY_TAIL_FRAMES : 0;
+            const from = relayTail ? latestSeq - RELAY_TAIL_FRAMES : 0;
             scrollback.noteRelayHistory(from + 1, from > 0);
           }
           if (alive()) {

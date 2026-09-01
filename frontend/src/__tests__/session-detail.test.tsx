@@ -201,6 +201,110 @@ describe("会话详情页", () => {
     expect(fakeClient.catchUp).toHaveBeenCalledWith("42", undefined);
   });
 
+  // agentred 每次重启都会把非终态会话标成 interrupted（daemon.New 的
+  // 「marked N non-terminal sessions interrupted after restart」），而 daemon 的
+  // Attach 对 interrupted 一律回 ErrNoActiveTurn ——「那一轮的子进程随上一个 daemon
+  // 进程消亡了」，接回实时流没有意义。但它同一处注释也写明：**历史仍可 Pull**。
+  //
+  // 此前本页把 attach 与补齐放在同一个 try 里、attach 在前，于是这条「接不回实时流」
+  // 被整体当成「这条对话读不到」：补齐一次都不发，页面停在
+  // 「没能从这台机器读到这条对话的内容」——而机器在线、历史也确实在那里。存量一旦
+  // 全沉淀成 interrupted（开发机重启若干次之后就是），每一条对话都打不开。
+  //
+  // 正确形状在同仓库里已有一份：mirror_svc.catchUp —— interrupted 直接跳过 attach，
+  // 高水位退回清单快照那一份，补齐照常。
+  it("interrupted 会话:跳过 attach,历史照样补齐渲染,不报读不到", async () => {
+    const interrupted = { ...summary, lifecycleState: "interrupted" };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [interrupted] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    // 真 daemon 对 interrupted 会话的回答。桩成拒绝，才能证明本页没有去问它。
+    fakeClient.attach.mockRejectedValue(
+      new RelayError(-32002, "no active turn"),
+    );
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "你好" },
+        seq: 1,
+      });
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByText("你好", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
+    expect(fakeClient.attach).not.toHaveBeenCalled();
+    expect(fakeClient.catchUp).toHaveBeenCalledWith("42", undefined);
+    expect(screen.queryByTestId("session-catchup-failed")).toBeNull();
+  });
+
+  // 清单说 idle、接入那一刻已经被中断（两次往返之间会话状态会变），或这条会话已经
+  // 不在这台机器上：attach 失败仍然只是「接不回实时流」这一件事，历史照拉。
+  // mirror_svc 在 attach 成功与否两条路上都继续 pull，本页也必须如此。
+  it("attach 被拒:仍然补齐历史并渲染,不报读不到", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.attach.mockRejectedValue(
+      new RelayError(-32002, "no active turn"),
+    );
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "你好" },
+        seq: 1,
+      });
+    });
+
+    renderPage();
+
+    expect(
+      await screen.findByText("你好", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
+    expect(fakeClient.catchUp).toHaveBeenCalledWith("42", undefined);
+    expect(screen.queryByTestId("session-catchup-failed")).toBeNull();
+  });
+
+  // 补齐本身失败才是「读不到」：那一句必须留着，它守的是 R6 的另一半
+  // （此前是空 catch，页面停在一条空转录上不出声）。
+  it("补齐失败:如实报读不到", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockRejectedValue(new RelayError(-32012, "pull failed"));
+
+    renderPage();
+
+    expect(
+      await screen.findByTestId("session-catchup-failed", undefined, {
+        timeout: 3_000,
+      }),
+    ).toBeTruthy();
+  });
+
   // 真实的 session.list 每一次都解出**新的**摘要对象（Protobuf → domain 的转换按调用
   // 生成，见 agentre-wire 的 sessionListFromProtobuf）。装载 effect 的依赖里因此不能
   // 出现「每次渲染都换身份」的东西：那样 setSummary 引起的重渲染会把 effect 整只重挂，
