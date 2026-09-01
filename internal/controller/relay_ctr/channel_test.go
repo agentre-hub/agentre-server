@@ -194,6 +194,23 @@ func readDaemonEnvelope(t *testing.T, conn *websocket.Conn, failure string) (str
 	return decodeRelayEnvelope(t, payload)
 }
 
+// readDaemonEnvelopeSkippingSignal 跳过落在账号信号保留通道上的帧，交回第一条
+// 落在别的通道上的帧。
+//
+// daemon 连接现在也订阅账号信号（决策 13 对称），它自己的保留通道帧与 RPC 转发帧
+// 各走各的 goroutine（前者是 pumpSignals，后者是 daemonFanout 的 worker），到达
+// 顺序不保证——用这个帮手代替 readDaemonEnvelope，测 RPC 转发的用例才不会因为
+// 先收到一帧无关的信号帧而误判。
+func readDaemonEnvelopeSkippingSignal(t *testing.T, conn *websocket.Conn, failure string) (string, []byte) {
+	t.Helper()
+	for {
+		channelID, frame := readDaemonEnvelope(t, conn, failure)
+		if channelID != relay_svc.SignalChannelID {
+			return channelID, frame
+		}
+	}
+}
+
 // 目标下沉到通道：同一条中继连接上的两条通道落在两台不同的机器上，一条按对话
 // 寻址（服务端查名单解析出承载机器），另一条按机器寻址。
 func TestRelayClient_GivenTwoChannelsOnOneConnection_ThenEachLandsOnItsOwnMachine(t *testing.T) {

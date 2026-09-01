@@ -66,6 +66,16 @@ func (r *Relay) Daemon(c *gin.Context) {
 		relayError(c, err)
 		return
 	}
+	// 账号信号并入这条 daemon 连接（决策 13），与 Client 对称：订阅排在 upgrade
+	// **之前**（Hard invariant 5），upgrade 成功之后发生的每一次广播都必然落在
+	// 这份订阅上。订阅失败**不**挡住 upgrade——这条连接上还要跑 agentred 的 RPC
+	// 转发，为一个「尽力而为、可合并、可丢弃」的订阅拒绝整条连接不成立；agentred
+	// 该用哪台机器的信号权威仍在数据库，失去这一路只是退回下一次重连或
+	// 下一次成功的引擎快照拉取。
+	signals, stopSignals, signalErr := r.subscribeSignals(ctx, accountID)
+	if stopSignals != nil {
+		defer stopSignals()
+	}
 	guard := connguard.New(ctx, accountID, jti)
 	conn, err := r.daemonTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: func() error {
@@ -80,6 +90,11 @@ func (r *Relay) Daemon(c *gin.Context) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
+	if signalErr != nil {
+		signalUnavailable(ctx, conn)
+	} else {
+		go pumpSignals(conn, signals)
+	}
 	detach, err := r.svc.AttachDaemon(ctx, route, conn)
 	if err != nil {
 		return
@@ -173,9 +188,9 @@ func (r *Relay) Client(c *gin.Context) {
 	// 避免留下幽灵对端。
 	defer channels.closeAll()
 	if signalErr != nil {
-		channels.signalUnavailable(ctx)
+		signalUnavailable(ctx, conn)
 	} else {
-		go channels.pumpSignals(signals)
+		go pumpSignals(conn, signals)
 	}
 
 	for {

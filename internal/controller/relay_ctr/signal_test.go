@@ -84,7 +84,9 @@ func TestRelayClient_GivenTheSignalSubscriptionFails_ThenOnlyTheSignalChannelDeg
 	link.open(t, "c-alpha", "machine:fp-alpha")
 	request := []byte{0x08, 0x01, 0x12, 0x01, 0x7f}
 	link.send(t, "c-alpha", request)
-	_, frame := readDaemonEnvelope(t, alpha, "信号订阅失败连坐了同一条连接上的 RPC")
+	// daemon 那条链路同样订阅了这份（失败的）账号信号（决策 13 对称），alpha 自己
+	// 的保留通道也会收到同一个通道级错误；跳过它才是要断言的 RPC 转发帧。
+	_, frame := readDaemonEnvelopeSkippingSignal(t, alpha, "信号订阅失败连坐了同一条连接上的 RPC")
 	require.Equal(t, request, frame)
 }
 
@@ -155,7 +157,9 @@ func TestRelayClient_GivenTheSignalStreamStops_ThenOnlyTheSignalChannelCloses(t 
 
 	link.open(t, "c-alpha", "machine:fp-alpha")
 	link.send(t, "c-alpha", []byte{0x08, 0x09})
-	_, frame := readDaemonEnvelope(t, alpha, "信号源没了连坐了整条连接")
+	// daemon 那条链路同样订阅了这份信号（决策 13 对称），流关闭同样会给 alpha 自己
+	// 的保留通道写一帧空载荷；跳过它才是要断言的 RPC 转发帧。
+	_, frame := readDaemonEnvelopeSkippingSignal(t, alpha, "信号源没了连坐了整条连接")
 	require.Equal(t, []byte{0x08, 0x09}, frame)
 }
 

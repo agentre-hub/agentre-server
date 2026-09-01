@@ -132,13 +132,15 @@ func (c *clientChannels) close(channelID string) {
 	}
 }
 
-// pumpSignals 把账号信号写进保留通道（决策 13）。
+// pumpSignals 把账号信号写进一条共享中继连接的保留通道（决策 13）。两种对端
+// 落点不同、机制相同（浏览器/桌面端的 Client，agentred 的 Daemon），因此这里不
+// 认识调用方是哪一种连接，只认一个能写帧的 FrameConn。
 //
 // 帧流关掉意味着这份订阅没了（Redis 订阅彻底失败，或连接正在收尾）：关掉的是这
-// **一条**通道而不是整条连接——上面还跑着 RPC。客户端据此把信号那一路标为不可用
-// 并退回 30 秒轮询，重连或下一次主动读取补齐断流期间的变更。
-func (c *clientChannels) pumpSignals(frames <-chan []byte) {
-	writer := &channelWriter{conn: c.conn, channelID: relay_svc.SignalChannelID}
+// **一条**通道而不是整条连接——上面还跑着 RPC。对端据此把信号那一路标为不可用
+// 并退回轮询，重连或下一次主动读取补齐断流期间的变更。
+func pumpSignals(conn FrameConn, frames <-chan []byte) {
+	writer := &channelWriter{conn: conn, channelID: relay_svc.SignalChannelID}
 	for frame := range frames {
 		if err := writer.WriteMessage(websocket.BinaryMessage, frame); err != nil {
 			return
@@ -148,12 +150,12 @@ func (c *clientChannels) pumpSignals(frames <-chan []byte) {
 	_ = writer.WriteMessage(websocket.BinaryMessage, nil)
 }
 
-// signalUnavailable 告诉客户端信号那一路建不起来。它是**通道级**的：整条连接照常
-// 服务 RPC，只有保留通道当场关掉，客户端退回 30 秒轮询。
-func (c *clientChannels) signalUnavailable(ctx context.Context) {
-	c.writeError(ctx, relay_svc.SignalChannelID,
+// signalUnavailable 告诉对端信号那一路建不起来。它是**通道级**的：整条连接照常
+// 服务 RPC，只有保留通道当场关掉，对端退回轮询。
+func signalUnavailable(ctx context.Context, conn FrameConn) {
+	writeChannelError(ctx, conn, relay_svc.SignalChannelID,
 		relay_svc.ChannelCodeSignalUnavailable, code.AccountChannelUnavailable)
-	writer := &channelWriter{conn: c.conn, channelID: relay_svc.SignalChannelID}
+	writer := &channelWriter{conn: conn, channelID: relay_svc.SignalChannelID}
 	_ = writer.WriteMessage(websocket.BinaryMessage, nil)
 }
 
@@ -168,6 +170,12 @@ func (c *clientChannels) fail(ctx context.Context, channelID string, err error) 
 }
 
 func (c *clientChannels) writeError(ctx context.Context, channelID string, channelCode int32, businessCode int) {
+	writeChannelError(ctx, c.conn, channelID, channelCode, businessCode)
+}
+
+// writeChannelError 把一个通道级失败编成 RpcFrame_Error 帧写给对端。两条链路
+// （client 的普通/保留通道失败、daemon 的保留通道失败）共用这一个编码。
+func writeChannelError(ctx context.Context, conn FrameConn, channelID string, channelCode int32, businessCode int) {
 	frame, err := relaywire.EncodeFrame(&agentrewire.RpcFrame{
 		Body: &agentrewire.RpcFrame_Error{Error: &agentrewire.RpcError{
 			Code: channelCode, Message: i18n.T(ctx, businessCode),
@@ -177,7 +185,7 @@ func (c *clientChannels) writeError(ctx context.Context, channelID string, chann
 		logger.Ctx(ctx).Error("encode relay channel error", zap.Error(err))
 		return
 	}
-	writer := &channelWriter{conn: c.conn, channelID: channelID}
+	writer := &channelWriter{conn: conn, channelID: channelID}
 	_ = writer.WriteMessage(websocket.BinaryMessage, frame)
 }
 
