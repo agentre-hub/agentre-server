@@ -56,7 +56,7 @@ const deviceRow = {
 
 const sessions = [
   {
-    sessionId: 42,
+    conversationId: "42",
     title: "重构登录页",
     agentSyncId: "ag-1",
     cwd: "/home/agent/proj",
@@ -66,7 +66,7 @@ const sessions = [
     latestSeq: 12,
   },
   {
-    sessionId: 8,
+    conversationId: "8",
     cwd: "/var/proj",
     backendType: "codex",
     lifecycleState: "idle",

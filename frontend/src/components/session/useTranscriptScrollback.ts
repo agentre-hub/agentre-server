@@ -10,9 +10,11 @@ import {
 } from "react";
 
 import { computeBottomVisibleMessageId } from "@agentre-hub/agentre-ui";
-import type { EventFrame } from "@agentre-hub/agentre-wire";
-
 import { loadMirrorTail } from "@/components/session/sessionMirror";
+import {
+  toTranscriptFrame,
+  type SessionEventFrame,
+} from "@/components/session/transcriptFrame";
 import { doneEventFrame } from "@/components/session/turnDone";
 import { applyJournalFrames, type RelayClient } from "@/lib/relayClient";
 
@@ -60,17 +62,16 @@ export interface EarlierState {
 export interface TranscriptScrollbackParams {
   /** 已装载的目标会话：这三样一变，滚动位置与顶补计数都要重来。 */
   did: number;
-  sid: number;
+  sid: string;
   originProp: string | undefined;
   /** 转录事件流。往回取那一页前插进它，钉底与顶补也按它的变化重新量。 */
-  events: EventFrame[];
-  setEvents: Dispatch<SetStateAction<EventFrame[]>>;
+  events: SessionEventFrame[];
+  setEvents: Dispatch<SetStateAction<SessionEventFrame[]>>;
   /** 中继客户端。往回取时走它的 pullBefore（账号里没有这一份的那一路）。 */
   clientRef: RefObject<RelayClient | null>;
   /** 这条对话的发起端指纹，pullBefore 要原样带回。 */
   originRef: RefObject<string | undefined>;
   /** 首屏认出来的发起端指纹，往回问镜像时用它。 */
-  mirrorOriginRef: RefObject<string | undefined>;
 }
 
 /** 详情视图从这一族拿到的东西。除此之外的滚动细节（pinRef / 前插补偿）不外泄。 */
@@ -112,7 +113,6 @@ export function useTranscriptScrollback({
   setEvents,
   clientRef,
   originRef,
-  mirrorOriginRef,
 }: TranscriptScrollbackParams): TranscriptScrollback {
   const [earlier, setEarlier] = useState<EarlierState>({
     source: "none",
@@ -183,7 +183,11 @@ export function useTranscriptScrollback({
     const el = scrollRef.current;
     if (el) restoreRef.current = { height: el.scrollHeight, top: el.scrollTop };
     setEarlier((p) => ({ ...p, loading: true }));
-    const append = (evs: EventFrame[], oldest: number, hasBefore: boolean) => {
+    const append = (
+      evs: SessionEventFrame[],
+      oldest: number,
+      hasBefore: boolean,
+    ) => {
       setEvents((prev) => [...evs, ...prev]);
       setEarlier((p) => ({
         ...p,
@@ -194,12 +198,7 @@ export function useTranscriptScrollback({
     };
     try {
       if (earlier.source === "mirror") {
-        const origin = mirrorOriginRef.current;
-        if (!origin) {
-          setEarlier((p) => ({ ...p, loading: false, hasBefore: false }));
-          return;
-        }
-        const page = await loadMirrorTail(sid, origin, earlier.oldestSeq);
+        const page = await loadMirrorTail(sid, earlier.oldestSeq);
         append(page.events, page.oldestSeq, page.hasBefore);
         return;
       }
@@ -214,11 +213,11 @@ export function useTranscriptScrollback({
         RELAY_TAIL_FRAMES,
         originRef.current,
       );
-      const evs: EventFrame[] = [];
+      const evs: SessionEventFrame[] = [];
       // 与首屏同一条解帧路径。**不**走客户端的去重投递：那套 seq 闸门会把这一段
       // 判成跳号，反手从游标往后把整条日志再拉一遍。
       applyJournalFrames(res.frames, {
-        onEvent: (f) => evs.push(f),
+        onEvent: (f) => evs.push(toTranscriptFrame(f)),
         onRunResultDone: (frame) => evs.push(doneEventFrame(sid, frame)),
       });
       append(evs, res.frames[0]?.seq ?? 0, res.hasBefore);
@@ -230,7 +229,7 @@ export function useTranscriptScrollback({
     }
     // 后四样都是稳定引用（ref 对象与 useState 的 setter），列进依赖只为如实交代
     // 读了什么，不会让 loadEarlier 多换一次身份。
-  }, [earlier, sid, setEvents, clientRef, originRef, mirrorOriginRef]);
+  }, [earlier, sid, setEvents, clientRef, originRef]);
 
   /**
    * 滚动那几个 ref 随目标一起重来。右栏换会话是同实例换 props，不清的话新的一条会

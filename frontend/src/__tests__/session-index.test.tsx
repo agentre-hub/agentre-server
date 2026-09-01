@@ -24,7 +24,7 @@ import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
 import SessionIndex from "@/components/session/SessionIndex";
 import { formatRelativeTime } from "@/lib/sessionView";
 import i18n from "@/i18n";
-import type { IndexRow } from "@agentre-hub/agentre-ui";
+import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
 beforeEach(async () => {
@@ -62,9 +62,13 @@ const machines = [
   { deviceId: 21, name: "Old laptop", online: false },
 ];
 
-function row(over: Partial<IndexRow> & { key: string }): IndexRow {
+function row(over: Partial<MirrorIndexRow> & { key: string }): MirrorIndexRow {
   return {
-    sessionId: 42,
+    // 行的身份是 conversation_id（决策 1）。用例里给的是短号：宿主不校验它的形状
+    // ——它只把这个值原样放进 URL 与交给宿主的回调。
+    conversationId: "42",
+    // 共享包那一格旧身份本宿主一律不读，见 chatRows 的 MirrorIndexRow。
+    sessionId: 0,
     deviceId: 20,
     fingerprint: "fp-a",
     agentSyncId: "ag-fe",
@@ -122,8 +126,8 @@ function renderIndex(
           machines={machines}
           filter="all"
           onFilterChange={vi.fn()}
-          sessionPath={(deviceId, sessionId) =>
-            `/devices/${deviceId}/sessions/${sessionId}`
+          sessionPath={(deviceId, conversationId) =>
+            `/devices/${deviceId}/sessions/${conversationId}`
           }
           {...props}
         />
@@ -668,13 +672,13 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
 describe("统一会话索引：筛选 chips", () => {
   const running = row({
     key: "running",
-    sessionId: 1,
+    conversationId: "1",
     title: "跑着呢",
     lifecycleState: "running",
   });
   const waiting = row({
     key: "waiting",
-    sessionId: 2,
+    conversationId: "2",
     title: "等你批",
     lifecycleState: "running",
     waitingForInput: true,
@@ -682,7 +686,7 @@ describe("统一会话索引：筛选 chips", () => {
   });
   const idle = row({
     key: "idle",
-    sessionId: 3,
+    conversationId: "3",
     title: "歇着",
     lifecycleState: "idle",
     projectSyncId: "p-web",
@@ -789,7 +793,7 @@ describe("统一会话索引：保存与删除", () => {
     expect(onSave.mock.calls[0][0]).toMatchObject({
       key: "a",
       fingerprint: "fp-a",
-      sessionId: 42,
+      conversationId: "42",
     });
   });
 
@@ -929,8 +933,8 @@ describe("删除确认弹层", () => {
  * Enter 才有一个明确的「当前这条」可开。
  */
 describe("统一会话索引：↑↓ 键盘导航 + Enter 打开", () => {
-  const first = row({ key: "a", sessionId: 42, title: "第一条" });
-  const second = row({ key: "b", sessionId: 43, title: "第二条" });
+  const first = row({ key: "a", conversationId: "42", title: "第一条" });
+  const second = row({ key: "b", conversationId: "43", title: "第二条" });
 
   it("↑↓ 在行之间移动焦点，越界不回绕", () => {
     renderIndex({ axis: "time", rows: [first, second] });
@@ -956,12 +960,12 @@ describe("统一会话索引：↑↓ 键盘导航 + Enter 打开", () => {
     fireEvent.keyDown(nav, { key: "ArrowDown" });
     fireEvent.keyDown(nav, { key: "Enter" });
 
-    // 整行交出去（不是 deviceId + sessionId 两个数）：宿主要用行上的发起端指纹
+    // 整行交出去（不是 deviceId + 身份两个值）：宿主要用行上的发起端指纹
     // 去取镜像里的转录，与保存 / 删除同一条口径。
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onSelect.mock.calls[0][0]).toMatchObject({
       key: "b",
-      sessionId: 43,
+      conversationId: "43",
     });
   });
 
@@ -982,8 +986,8 @@ describe("统一会话索引：↑↓ 键盘导航 + Enter 打开", () => {
                   machines={machines}
                   filter="all"
                   onFilterChange={vi.fn()}
-                  sessionPath={(deviceId, sessionId) =>
-                    `/devices/${deviceId}/sessions/${sessionId}`
+                  sessionPath={(deviceId, conversationId) =>
+                    `/devices/${deviceId}/sessions/${conversationId}`
                   }
                 />
               }
@@ -1042,10 +1046,15 @@ describe("统一会话索引：↑↓ 键盘导航 + Enter 打开", () => {
  */
 describe("统一会话索引：组的收放与「查看全部 N」", () => {
   const rows = [
-    row({ key: "a", sessionId: 1, title: "第一条", projectSyncId: "p-server" }),
+    row({
+      key: "a",
+      conversationId: "1",
+      title: "第一条",
+      projectSyncId: "p-server",
+    }),
     row({
       key: "b",
-      sessionId: 2,
+      conversationId: "2",
       title: "等你批",
       projectSyncId: "p-server",
       waitingForInput: true,
@@ -1105,7 +1114,7 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
 
   it("点「查看全部 N」按这一组的 scope 翻页，列出翻回来的行", async () => {
     const loadGroupPage = vi.fn(async () => ({
-      rows: [row({ key: "c", sessionId: 3, title: "第三条" })],
+      rows: [row({ key: "c", conversationId: "3", title: "第三条" })],
       cursor: null,
       hasMore: false,
     }));
@@ -1159,7 +1168,7 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
         ...rows,
         row({
           key: "c",
-          sessionId: 3,
+          conversationId: "3",
           title: "另一个项目",
           projectSyncId: "p-web",
         }),
@@ -1200,8 +1209,18 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
  */
 describe("统一会话索引：与桌面端对齐的组头与溢出入口", () => {
   const rows = [
-    row({ key: "a", sessionId: 1, title: "第一条", projectSyncId: "p-server" }),
-    row({ key: "b", sessionId: 2, title: "第二条", projectSyncId: "p-server" }),
+    row({
+      key: "a",
+      conversationId: "1",
+      title: "第一条",
+      projectSyncId: "p-server",
+    }),
+    row({
+      key: "b",
+      conversationId: "2",
+      title: "第二条",
+      projectSyncId: "p-server",
+    }),
   ];
 
   it("组头摆一枚会转的箭头：收起来的时候它转 90°（收放这件事得看得见）", () => {
@@ -1237,7 +1256,7 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
   it("兜底组叫「随手对话」，字形是「对话」而不是一个项目字形（它是正当去处，不是分类失败的残留）", () => {
     renderIndex({
       axis: "project",
-      rows: [row({ key: "f", sessionId: 5, projectSyncId: undefined })],
+      rows: [row({ key: "f", conversationId: "5", projectSyncId: undefined })],
     });
 
     expect(screen.getByText("Quick chats")).toBeTruthy();
@@ -1280,7 +1299,12 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
     renderIndex({
       axis: "machine",
       rows: [
-        row({ key: "on", sessionId: 1, deviceId: 20, fingerprint: "fp-on" }),
+        row({
+          key: "on",
+          conversationId: "1",
+          deviceId: 20,
+          fingerprint: "fp-on",
+        }),
       ],
     });
 

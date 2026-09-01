@@ -10,8 +10,9 @@
  * `agentre-protobuf` 与 `agentre.bearer.<token>`；服务端的 relayTokenBridge 从提议
  * 列表里取票搬进 Authorization，照常回选前者（后者只是载体，不参与协商）。
  *
- * URL 上只剩 daemon_fingerprint —— 目标指纹不是凭据，它本来就该在那儿
- * （relay_svc.ConnectClient 据此校验目标与在线态）。
+ * URL 上现在**什么都不剩**：目标从连接级降到了通道级（决策 10），
+ * `daemon_fingerprint` 随之取消，一个账号一条连接，目标由每条虚拟通道自己声明
+ * （见 relayTarget）。
  */
 
 /** 携带票据的伪子协议前缀，与服务端 api.bearerSubprotocolPrefix 同源。 */
@@ -22,8 +23,7 @@ export function bearerSubprotocol(accessToken: string): string {
   return `${BearerSubprotocolPrefix}${accessToken}`;
 }
 
-export function relayClientUrl(fingerprint: string): string {
+export function relayClientUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const params = new URLSearchParams({ daemon_fingerprint: fingerprint });
-  return `${proto}//${window.location.host}/v1/relay/client?${params.toString()}`;
+  return `${proto}//${window.location.host}/v1/relay/client`;
 }

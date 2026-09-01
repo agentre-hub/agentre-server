@@ -51,7 +51,7 @@ const deviceRow = {
 };
 
 const summary = {
-  sessionId: 42,
+  conversationId: "42",
   title: "重构登录页",
   agentSyncId: "ag-1",
   cwd: "/home/agent/proj",
@@ -162,7 +162,7 @@ function renderPage() {
       <ThemeProvider>
         <Routes>
           <Route
-            path="/devices/:deviceId/sessions/:sessionId"
+            path="/devices/:deviceId/sessions/:conversationId"
             element={<SessionDetail />}
           />
         </Routes>
@@ -185,7 +185,7 @@ describe("会话详情页", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "你好" },
         seq: 1,
       });
@@ -197,8 +197,8 @@ describe("会话详情页", () => {
       await screen.findByText("你好", undefined, { timeout: 3_000 }),
     ).toBeTruthy();
     // 自己发起的会话没有 origin：省略即「调用方自己的对端」。
-    expect(fakeClient.attach).toHaveBeenCalledWith(42, undefined);
-    expect(fakeClient.catchUp).toHaveBeenCalledWith(42, undefined);
+    expect(fakeClient.attach).toHaveBeenCalledWith("42", undefined);
+    expect(fakeClient.catchUp).toHaveBeenCalledWith("42", undefined);
   });
 
   // 真实的 session.list 每一次都解出**新的**摘要对象（Protobuf → domain 的转换按调用
@@ -234,7 +234,7 @@ describe("会话详情页", () => {
     fakeClient.catchUp.mockImplementation(async () => {
       await tick();
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "你好" },
         seq: 1,
       });
@@ -278,8 +278,8 @@ describe("会话详情页", () => {
 
     // 读路径：attach 与游标补齐都指向发起端那条会话。
     await vi.waitFor(() => {
-      expect(fakeClient.attach).toHaveBeenCalledWith(42, "fp-desktop");
-      expect(fakeClient.catchUp).toHaveBeenCalledWith(42, "fp-desktop");
+      expect(fakeClient.attach).toHaveBeenCalledWith("42", "fp-desktop");
+      expect(fakeClient.catchUp).toHaveBeenCalledWith("42", "fp-desktop");
     });
     // 待决策快照同样按 origin 问（否则问到的是空会话，审批卡永远不出现）。
     await vi.waitFor(() => {
@@ -296,7 +296,7 @@ describe("会话详情页", () => {
         (c) => c[0] === rpcMethods.runtimeRun,
       );
       expect(call?.[1]).toMatchObject({
-        sessionId: 42n,
+        conversationId: "42",
         peerFingerprint: "fp-desktop",
       });
     });
@@ -326,7 +326,7 @@ describe("会话详情页", () => {
       );
       expect(call).toBeTruthy();
       expect(call?.[1]).toMatchObject({
-        sessionId: 42n,
+        conversationId: "42",
         cwd: "/home/agent/proj",
         title: "重构登录页",
         agentSyncId: "ag-1",
@@ -702,7 +702,7 @@ describe("会话详情页", () => {
         (entry) => entry[0] === rpcMethods.setModelTarget,
       );
       expect(call?.[1]).toMatchObject({
-        sessionId: 42n,
+        conversationId: "42",
         providerKey: "anthropic",
         modelKey: "opus",
       });
@@ -764,7 +764,7 @@ describe("会话详情页", () => {
     // daemon 实时推来 tool_permission_request 事件。
     await act(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: {
           kind: "tool_permission_request",
           requestId: "tp-1",
@@ -820,7 +820,7 @@ describe("会话详情页", () => {
       );
       expect(call).toBeTruthy();
       expect(call?.[1]).toMatchObject({
-        sessionId: 42n,
+        conversationId: "42",
         requestId: "tp-1",
         allow: true,
         alwaysAllowSession: false,
@@ -995,7 +995,7 @@ describe("会话详情页:提交决策的失败路径", () => {
 
     await act(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "tool_permission_request", requestId: "tp-2" },
         seq: 9,
       });
@@ -1088,7 +1088,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -1107,7 +1107,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "嵌入式转录" },
         seq: 1,
       });
@@ -1122,17 +1122,17 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     // 桌面嵌入:无关注按钮(关注入口在列表行 R12 / 页面顶栏决策 16)。
     expect(screen.queryByRole("button", { name: /Follow/i })).toBeNull();
     // relay attach/catchup 照常走。
-    expect(fakeClient.attach).toHaveBeenCalledWith(42, undefined);
-    expect(fakeClient.catchUp).toHaveBeenCalledWith(42, undefined);
+    expect(fakeClient.attach).toHaveBeenCalledWith("42", undefined);
+    expect(fakeClient.catchUp).toHaveBeenCalledWith("42", undefined);
     // 发送能力仍在(桌面右栏同样要能回复)。
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
   });
 
   // 桌面 Chat 右栏点行 A 再点行 B:同实例换 props,无 key 强制重挂。会话级状态
-  // (summary / events / originRef / ready)必须按 deviceId/sessionId 重置并重新
+  // (summary / events / originRef / ready)必须按 deviceId/conversationId 重置并重新
   // attach + 补齐,否则右栏残留上一条会话的标题/转录,发消息也落在 A 的 origin 上。
   it("切换选中会话(同实例新 props):重置转录并重新 attach,不残留上一条会话", async () => {
-    const summaryB = { ...summary, sessionId: 43, title: "重构列表页" };
+    const summaryB = { ...summary, conversationId: "43", title: "重构列表页" };
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
       throw new Error("unexpected: " + path);
@@ -1145,7 +1145,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "A 的转录" },
         seq: 1,
       });
@@ -1163,7 +1163,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 43,
+        conversationId: "43",
         event: { kind: "text_delta", text: "B 的转录" },
         seq: 1,
       });
@@ -1172,7 +1172,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     rerender(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={43} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="43" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -1181,7 +1181,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     expect(await screen.findByText("B 的转录")).toBeTruthy();
     expect(screen.queryByText("A 的转录")).toBeNull();
     await vi.waitFor(() => {
-      expect(fakeClient.attach).toHaveBeenCalledWith(43, undefined);
+      expect(fakeClient.attach).toHaveBeenCalledWith("43", undefined);
     });
   });
 
@@ -1224,7 +1224,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     const { rerender } = render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -1235,7 +1235,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     rerender(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={2} sessionId={43} form="embedded" />
+          <SessionDetailView deviceId={2} conversationId="43" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -1366,7 +1366,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
 
     await vi.waitFor(() => {
       expect(callsOf(rpcMethods.runtimeSteer)[0]?.[1]).toMatchObject({
-        sessionId: 42n,
+        conversationId: "42",
         peerFingerprint: "fp-desktop",
         text: "顺便把标题也改了",
       });
@@ -1633,7 +1633,7 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
     const { rerender } = render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -1647,7 +1647,7 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
     rerender(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={2} sessionId={43} form="embedded" />
+          <SessionDetailView deviceId={2} conversationId="43" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -1674,7 +1674,7 @@ describe("会话详情：历史来自 server 镜像", () => {
         seq: f.seq,
         method: "runtime.event",
         params: {
-          sessionId: 42,
+          conversationId: "42",
           event: { kind: "text_delta", text: f.text },
         },
       })),
@@ -1700,7 +1700,7 @@ describe("会话详情：历史来自 server 镜像", () => {
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:sessionId"
+              path="/devices/:deviceId/sessions/:conversationId"
               element={<SessionDetail />}
             />
             {/* 「新建一个会话」的落点。真页面在这一组里跑不起来（它自己要取
@@ -1720,14 +1720,14 @@ describe("会话详情：历史来自 server 镜像", () => {
    * scrollHeight / clientHeight 恒为 0，这里驱动不动滚动。本条守的是离线时**读得到**
    * 这件事本身，以及首屏的取数形状。
    */
-  it("机器离线：转录照读，首屏是最后那一段，且按 (发起端指纹, 会话 id) 取数", async () => {
+  it("机器离线：转录照读，首屏是最后那一段，且按 conversation_id 取数", async () => {
     const asked: string[] = [];
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/devices") return { devices: [offlineDevice] };
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript")) {
         asked.push(path);
@@ -1745,8 +1745,9 @@ describe("会话详情：历史来自 server 镜像", () => {
     // 机器不在线，但账号里那一段照样读得到 —— 首屏是**最后**那一段，不是从头翻。
     expect(await screen.findByText(/离线也读得到的最后一句/)).toBeTruthy();
     expect(asked).toHaveLength(1);
-    expect(asked[0]).toContain("peer_fingerprint=fp-1");
-    expect(asked[0]).toContain("session_id=42");
+    expect(asked[0]).toContain("conversation_id=42");
+    // 发起端指纹不再参与寻址：端点的身份键就是 conversation_id（决策 1）。
+    expect(asked[0]).not.toContain("peer_fingerprint");
     expect(asked[0]).toContain("direction=backward");
     expect(asked[0]).toContain("cursor=0");
 
@@ -1761,7 +1762,7 @@ describe("会话详情：历史来自 server 镜像", () => {
    * 标题、Agent 身份、发起端指纹都在上面。
    *
    * 此前详情页仍会回头向服务端再要一遍（resolveMirrorRow 的
-   * `/v1/agent-sessions?session_id=`）：一条纯属重复的请求，而且头部要等它往返
+   * `/v1/agent-sessions?conversation_id=`）：一条纯属重复的请求，而且头部要等它往返
    * 回来才认得出这是哪条对话。宿主给得出整行时就不该再问。
    *
    * 从 URL 直接进来（移动端下钻、分享链接）没有这一行，那条认领路径照旧——本条
@@ -1775,7 +1776,7 @@ describe("会话详情：历史来自 server 镜像", () => {
         asked.push(path);
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       }
       if (path.startsWith("/v1/agent-sessions/transcript"))
@@ -1802,11 +1803,12 @@ describe("会话详情：历史来自 server 镜像", () => {
         <ThemeProvider>
           <SessionDetailView
             deviceId={1}
-            sessionId={42}
+            conversationId="42"
             form="embedded"
             initialRow={{
+              conversation_id: "42",
               peer_fingerprint: "fp-1",
-              session_id: "42",
+              machine_fingerprint: "fp-1",
               title: "重构登录页",
               backend_type: "claudecode",
             }}
@@ -1830,7 +1832,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript"))
         return framePage([{ seq: 1, text: "离线转录" }]);
@@ -1867,7 +1869,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript"))
         return framePage([{ seq: 1, text: "离线转录" }]);
@@ -1899,7 +1901,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript"))
         return framePage([{ seq: 1, text: "撤销之后仍读得到" }]);
@@ -1928,7 +1930,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript")) {
         order.push("mirror");
@@ -1954,7 +1956,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       order.push("catchUp");
       // 中继只补 server 还没有的那一段（seq 3）。
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "中继补上的新一句" },
         seq: 3,
       });
@@ -1967,7 +1969,7 @@ describe("会话详情：历史来自 server 镜像", () => {
     // 游标预置到镜像交出的最后一个 seq，且必须落在 attach/补齐之前。
     // 第三个参数是这条对话的发起端指纹（中继客户端按 (指纹, 会话 id) 记游标）；
     // 这个 summary 没报 peerFingerprint，因此是 undefined =「调用方自己的对端」。
-    expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 2, undefined);
+    expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 2, undefined);
     expect(order.indexOf("mirror")).toBeLessThan(order.indexOf("setCursor"));
     expect(order.indexOf("setCursor")).toBeLessThan(order.indexOf("attach"));
     expect(order.indexOf("attach")).toBeLessThan(order.indexOf("catchUp"));
@@ -1986,7 +1988,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-desktop", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-desktop", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript"))
         return framePage([{ seq: 1, text: "镜像里的历史" }]);
@@ -2006,11 +2008,11 @@ describe("会话详情：历史来自 server 镜像", () => {
     await screen.findByText(/镜像里的历史/);
 
     await vi.waitFor(() => {
-      expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 1, "fp-desktop");
+      expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 1, "fp-desktop");
     });
-    expect(fakeClient.getCursor).toHaveBeenCalledWith(42, "fp-desktop");
-    expect(fakeClient.attach).toHaveBeenCalledWith(42, "fp-desktop");
-    expect(fakeClient.catchUp).toHaveBeenCalledWith(42, "fp-desktop");
+    expect(fakeClient.getCursor).toHaveBeenCalledWith("42", "fp-desktop");
+    expect(fakeClient.attach).toHaveBeenCalledWith("42", "fp-desktop");
+    expect(fakeClient.catchUp).toHaveBeenCalledWith("42", "fp-desktop");
   });
 
   // 会话标识是各端本地自增、会被复用的：执行端那边被删掉重排之后，日志的高水位比
@@ -2023,7 +2025,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript"))
         return framePage([
@@ -2044,7 +2046,7 @@ describe("会话详情：历史来自 server 镜像", () => {
     );
     // 执行端手里只剩到 seq 2（那条会话被重排过）。
     fakeClient.attach.mockResolvedValue({
-      sessionId: 42,
+      conversationId: "42",
       lifecycleState: "idle",
       latestSeq: 2,
     } as never);
@@ -2053,8 +2055,8 @@ describe("会话详情：历史来自 server 镜像", () => {
     await screen.findByText(/镜像里的最后一句/);
 
     await vi.waitFor(() => {
-      expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 5, undefined);
-      expect(fakeClient.setCursor).toHaveBeenCalledWith(42, 2, undefined);
+      expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 5, undefined);
+      expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 2, undefined);
     });
   });
 
@@ -2065,7 +2067,7 @@ describe("会话详情：历史来自 server 镜像", () => {
       if (path.startsWith("/v1/agent-sessions?"))
         return {
           total: 1,
-          items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
         };
       if (path.startsWith("/v1/agent-sessions/transcript"))
         return framePage([{ seq: 1, text: "没名字的机器上的转录" }]);
@@ -2086,9 +2088,10 @@ describe("会话详情：历史来自 server 镜像", () => {
     );
   });
 
-  // 决策 17：镜像身份键是**发起端**，而路由里的 deviceId 是承载这条连接的机器 ——
-  // 同一条对话常常桌面端与 agentred 各有一份，两者不是一回事。
-  it("发起端不是这台机器：账号里只有这一条同号对话时认下来，不落空", async () => {
+  // 发起端与承载这条连接的机器常常不是同一台（同一条对话桌面端与 agentred 各有
+  // 一份）。从前这一点会逼出一段猜测：镜像的身份键是 (发起端指纹, 会话号)，而 URL
+  // 上只有会话号。现在两处都以 conversation_id 为键，发起端是谁与读不读得到无关。
+  it("发起端不是这台机器：照样读得到，寻址不经过发起端", async () => {
     const asked: string[] = [];
     const askedSessions: string[] = [];
     mockedApi.mockImplementation(async (path: string) => {
@@ -2097,11 +2100,13 @@ describe("会话详情：历史来自 server 镜像", () => {
         // 认领改成按会话号精确查（规格 2026-08-19 决策 13）：拉全份再本地筛的那条
         // 路在分页之后会漏掉本来存在的对话。替身照着端点来——只回该号的那些。
         askedSessions.push(path);
-        const id = new URL(path, "http://x").searchParams.get("session_id");
+        const id = new URL(path, "http://x").searchParams.get(
+          "conversation_id",
+        );
         const rows = [
-          { peer_fingerprint: "fp-desktop-9", session_id: "42" },
-          { peer_fingerprint: "fp-desktop-9", session_id: "7" },
-        ].filter((r) => !id || r.session_id === id);
+          { peer_fingerprint: "fp-desktop-9", conversation_id: "42" },
+          { peer_fingerprint: "fp-desktop-9", conversation_id: "7" },
+        ].filter((r) => !id || r.conversation_id === id);
         return { total: rows.length, items: rows };
       }
       if (path.startsWith("/v1/agent-sessions/transcript")) {
@@ -2114,36 +2119,33 @@ describe("会话详情：历史来自 server 镜像", () => {
     renderOfflinePage();
 
     expect(await screen.findByText(/桌面端发起的那条/)).toBeTruthy();
-    expect(asked[0]).toContain("peer_fingerprint=fp-desktop-9");
-    // 精确查而不是拉全份：分页之后后者会漏掉本来存在的对话。
-    expect(askedSessions.some((p) => p.includes("session_id=42"))).toBe(true);
+    expect(asked[0]).toContain("conversation_id=42");
+    expect(asked[0]).not.toContain("peer_fingerprint");
+    // 精确查而不是拉全份：conversation_id 全局唯一，这条路至多命中一行。
+    expect(askedSessions.some((p) => p.includes("conversation_id=42"))).toBe(
+      true,
+    );
   });
 
-  it("同号对话有多条且都不属于这台机器：不猜指纹，如实说明离线读不到", async () => {
-    const asked: string[] = [];
+  // 从前这里守的是一段**猜测**：镜像身份是 (发起端指纹, 会话号)，URL 上只有会话号，
+  // 于是同号对话有多条时「不猜、如实说读不到」。`conversation_id` 全局唯一之后那种
+  // 歧义**由构造消失**——账号里至多一行，读不到只可能是真没有。
+  //
+  // 换下来的这一条守它的后继：账号里没有这条对话时（机器轴上没保存过的那些）不
+  // 谎报成空转录，离线时如实说读不到。
+  it("账号里没有这条对话且机器离线：如实说读不到，不摆一份空转录", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/devices") return { devices: [offlineDevice] };
       if (path.startsWith("/v1/agent-sessions?"))
-        return {
-          total: 2,
-          items: [
-            { peer_fingerprint: "fp-desktop-9", session_id: "42" },
-            { peer_fingerprint: "fp-laptop-3", session_id: "42" },
-          ],
-        };
-      if (path.startsWith("/v1/agent-sessions/transcript")) {
-        asked.push(path);
-        return framePage([{ seq: 1, text: "不该被看到的转录" }]);
-      }
+        return { total: 0, items: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([]);
       throw new Error("unexpected: " + path);
     });
 
     renderOfflinePage();
 
-    // 猜错发起端就会把**别的对话**摆在这个 URL 下：宁可什么都不取。
     await screen.findByTestId("session-history-unavailable");
-    expect(asked).toEqual([]);
-    expect(screen.queryByText(/不该被看到的转录/)).toBeNull();
     expect(screen.queryByTestId("session-detail-composer")).toBeNull();
   });
 
@@ -2167,7 +2169,7 @@ describe("会话详情：历史来自 server 镜像", () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
       if (path.startsWith("/v1/agent-sessions/transcript")) {
-        if (path.includes("session_id=43")) return framePage([]);
+        if (path.includes("conversation_id=43")) return framePage([]);
         mirrorCalls += 1;
         // 第二趟（切回来那一次）压住不回，好让实时帧先落地——这正是真实时序：
         // 客户端还连着，HTTP 要一个来回。
@@ -2181,8 +2183,8 @@ describe("会话详情：历史来自 server 镜像", () => {
           : framePage([{ seq: 1, text: "第一句" }]);
       }
       if (path.startsWith("/v1/agent-sessions?")) {
-        const id = path.includes("session_id=43") ? "43" : "42";
-        return { items: [{ peer_fingerprint: "fp-1", session_id: id }] };
+        const id = path.includes("conversation_id=43") ? "43" : "42";
+        return { items: [{ peer_fingerprint: "fp-1", conversation_id: id }] };
       }
       // 其余端点（agents / 已读回执 …）不是本条的判据，如实回空即可。
       return {};
@@ -2207,30 +2209,30 @@ describe("会话详情：历史来自 server 镜像", () => {
         reconnect: vi.fn(),
       };
     });
-    const at = (sessionId: number) => (
+    const at = (conversationId: string) => (
       <MemoryRouter>
         <ThemeProvider>
           <SessionDetailView
             deviceId={1}
-            sessionId={sessionId}
+            conversationId={conversationId}
             form="embedded"
           />
         </ThemeProvider>
       </MemoryRouter>
     );
 
-    const { rerender } = render(at(42));
+    const { rerender } = render(at("42"));
     await screen.findByText(/第一句/);
 
-    rerender(at(43));
+    rerender(at("43"));
     await vi.waitFor(() => expect(screen.queryByText(/第一句/)).toBeNull());
 
-    rerender(at(42));
+    rerender(at("42"));
     // 客户端一直连着这条会话，输出继续推过来——镜像那一趟还在路上。
     await vi.waitFor(() => expect(mirrorCalls).toBe(2));
     act(() => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "输出中的一句" },
         seq: 2,
       });
@@ -2276,7 +2278,7 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "很长的一段转录" },
         seq: 1,
       });
@@ -2302,7 +2304,7 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -2371,7 +2373,7 @@ describe("会话详情：头部", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "跑着呢" },
         seq: 1,
       });
@@ -2398,7 +2400,7 @@ describe("会话详情：头部", () => {
         <ThemeProvider>
           <SessionDetailView
             deviceId={1}
-            sessionId={42}
+            conversationId="42"
             form="embedded"
             headerRight={headerRight}
           />
@@ -2488,7 +2490,7 @@ describe("会话详情：头部", () => {
         return {
           sessions: [
             {
-              sessionId: 42,
+              conversationId: "42",
               lifecycleState: "",
               latestSeq: 2,
               cwd: "/home/agent/proj",
@@ -2501,7 +2503,7 @@ describe("会话详情：头部", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "老会话" },
         seq: 1,
       });
@@ -2545,7 +2547,7 @@ describe("会话详情：头部", () => {
           items: [
             {
               peer_fingerprint: "fp-1",
-              session_id: "42",
+              conversation_id: "42",
               title: "重构登录页",
               agent_sync_id: "ag-1",
               lifecycle_state: "idle",
@@ -2560,7 +2562,7 @@ describe("会话详情：头部", () => {
               seq: 1,
               method: "runtime.event",
               params: {
-                sessionId: 42,
+                conversationId: "42",
                 event: { kind: "text_delta", text: "离线转录" },
               },
             },
@@ -2621,7 +2623,7 @@ describe("会话详情：头部", () => {
           items: [
             {
               peer_fingerprint: "fp-1",
-              session_id: "42",
+              conversation_id: "42",
               title: "重构登录页",
               agent_sync_id: "ag-1",
               lifecycle_state: "idle",
@@ -2635,7 +2637,7 @@ describe("会话详情：头部", () => {
               seq: 1,
               method: "runtime.event",
               params: {
-                sessionId: 42,
+                conversationId: "42",
                 event: { kind: "text_delta", text: "离线转录" },
               },
             },
@@ -2692,7 +2694,7 @@ describe("会话详情：头部", () => {
           items: [
             {
               peer_fingerprint: "fp-1",
-              session_id: "42",
+              conversation_id: "42",
               // 老会话：没有 title，也没有 agent_sync_id。
               backend_type: "claude",
               lifecycle_state: "idle",
@@ -2706,7 +2708,7 @@ describe("会话详情：头部", () => {
               seq: 1,
               method: "runtime.event",
               params: {
-                sessionId: 42,
+                conversationId: "42",
                 event: { kind: "text_delta", text: "老会话转录" },
               },
             },
@@ -2797,7 +2799,7 @@ describe("会话详情：输入框", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "开场白" },
         seq: 1,
       });
@@ -2822,7 +2824,7 @@ describe("会话详情：输入框", () => {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -2858,17 +2860,17 @@ describe("会话详情：输入框", () => {
     stubComposer();
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "开场白" },
         seq: 1,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "context_window_updated", tokens: 200000 },
         seq: 2,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "usage", totalInputTokens: 41200 },
         seq: 3,
       });
@@ -2894,17 +2896,17 @@ describe("会话详情：输入框", () => {
     stubComposer();
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "开场白" },
         seq: 1,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "context_window_updated", tokens: 200000 },
         seq: 2,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "usage", totalInputTokens: 41200 },
         seq: 3,
       });
@@ -2930,17 +2932,17 @@ describe("会话详情：输入框", () => {
     stubComposer();
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "开场白" },
         seq: 1,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "context_window_updated", tokens: 200000 },
         seq: 2,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "usage", totalInputTokens: 41200 },
         seq: 3,
       });
@@ -2960,17 +2962,17 @@ describe("会话详情：输入框", () => {
     stubComposer();
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "开场白" },
         seq: 1,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "context_window_updated", tokens: 200000 },
         seq: 2,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "usage", totalInputTokens: 164000 },
         seq: 3,
       });
@@ -3035,7 +3037,10 @@ describe("会话详情：输入框", () => {
  * 承载连接的那台机器的指纹会记到另一条对话上。
  */
 describe("会话详情：打开即标记已读", () => {
-  it("索引已经给出发起端身份时不被实时会话里的对端指纹覆盖", async () => {
+  // 从前这条守的是「四格次序里索引行那一格最优先」：已读的身份是发起端指纹，凑错
+  // 就记在别的对话上。身份换成 conversation_id 之后没有可凑的东西了——这一条改守
+  // 「不管实时连接那一端报的是谁，记的都是这条对话本身」。
+  it("实时会话报的对端指纹不参与已读的身份", async () => {
     const posted: unknown[] = [];
     const onMarkedRead = vi.fn();
     mockedApi.mockImplementation(async (path, init) => {
@@ -3077,7 +3082,7 @@ describe("会话详情：打开即标记已读", () => {
         <ThemeProvider>
           <SessionDetailView
             deviceId={1}
-            sessionId={42}
+            conversationId="42"
             peerFingerprint="fp-index-origin"
             form="embedded"
             onMarkedRead={onMarkedRead}
@@ -3086,15 +3091,13 @@ describe("会话详情：打开即标记已读", () => {
       </MemoryRouter>,
     );
 
-    await vi.waitFor(() =>
-      expect(posted).toEqual([
-        { peer_fingerprint: "fp-index-origin", session_id: "42" },
-      ]),
-    );
+    await vi.waitFor(() => expect(posted).toEqual([{ conversation_id: "42" }]));
+    // 交回宿主的也是这条对话的身份：宿主手里那一行的键就是它。
     expect(onMarkedRead).toHaveBeenCalledTimes(1);
+    expect(onMarkedRead).toHaveBeenCalledWith("42", 1_700_000_000_000);
   });
 
-  it("打开一条对话时按发起端身份记一次已读", async () => {
+  it("打开一条对话时按这条对话的身份记一次已读", async () => {
     const posted: unknown[] = [];
     mockedApi.mockImplementation(async (path, init) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
@@ -3132,16 +3135,15 @@ describe("会话详情：打开即标记已读", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
 
     await vi.waitFor(() =>
-      expect(posted).toEqual([
-        // 发起端是桌面端那台，不是承载这条连接的 deviceRow。
-        { peer_fingerprint: "fp-desktop", session_id: "42" },
-      ]),
+      // 身份就是 conversation_id 一个值（决策 1）：从前这里还要按四格次序凑一个
+      // 发起端指纹，凑错就把已读记在一条账号里不存在的对话上。
+      expect(posted).toEqual([{ conversation_id: "42" }]),
     );
   });
 
@@ -3159,7 +3161,7 @@ describe("会话详情：打开即标记已读", () => {
     fakeClient.request.mockImplementation(async (method) => {
       if (method === rpcMethods.sessionList)
         return {
-          sessions: [summary, { ...summary, sessionId: 43 }],
+          sessions: [summary, { ...summary, conversationId: "43" }],
         };
       if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
@@ -3183,7 +3185,7 @@ describe("会话详情：打开即标记已读", () => {
     const { rerender } = render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -3193,7 +3195,7 @@ describe("会话详情：打开即标记已读", () => {
     rerender(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -3202,7 +3204,7 @@ describe("会话详情：打开即标记已读", () => {
     rerender(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={43} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="43" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -3240,7 +3242,7 @@ describe("会话详情：/compact", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "开场白" },
         seq: 1,
       });
@@ -3262,7 +3264,7 @@ describe("会话详情：/compact", () => {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -3361,7 +3363,10 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
       frames: frames.map((f) => ({
         seq: f.seq,
         method: "runtime.event",
-        params: { sessionId: 42, event: { kind: "text_delta", text: f.text } },
+        params: {
+          conversationId: "42",
+          event: { kind: "text_delta", text: f.text },
+        },
       })),
       cursor: frames.length ? frames[frames.length - 1].seq : 0,
       oldest_seq: frames.length ? frames[0].seq : 0,
@@ -3371,7 +3376,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
 
   const mirrorRow = {
     total: 1,
-    items: [{ peer_fingerprint: "fp-1", session_id: "42" }],
+    items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
   };
 
   /** 装一个只答镜像的 api：pages 按请求顺序发。 */
@@ -3413,7 +3418,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain("direction=backward");
     expect(asked[0]).toContain("cursor=0");
-    expect(asked[0]).toContain("peer_fingerprint=fp-1");
+    expect(asked[0]).toContain("conversation_id=42");
   });
 
   it("进去就停在底部", async () => {
@@ -3622,7 +3627,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
       throw new Error("unexpected: " + method);
     });
     fakeClient.attach.mockResolvedValue({
-      sessionId: 42,
+      conversationId: "42",
       lifecycleState: "idle",
       latestSeq: 5000,
     } as never);
@@ -3630,7 +3635,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
 
     await vi.waitFor(() =>
       expect(fakeClient.setCursor).toHaveBeenCalledWith(
-        42,
+        "42",
         5000 - RELAY_TAIL_FRAMES,
         undefined,
       ),
@@ -3669,7 +3674,7 @@ describe("会话详情：输入框那一带的三种形态", () => {
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:sessionId"
+              path="/devices/:deviceId/sessions/:conversationId"
               element={<SessionDetail />}
             />
           </Routes>
@@ -3878,12 +3883,12 @@ describe("会话详情页:一轮在跑时的三点", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "上一轮说完了" },
         seq: 1,
       });
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "done" },
         seq: 2,
       });
@@ -3940,7 +3945,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
 
     act(() =>
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: {
           kind: "user_message",
           text: "再改一处",
@@ -3974,7 +3979,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
 
     act(() =>
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
         seq: 1,
       }),
@@ -4009,7 +4014,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: {
           kind: "user_message",
           text: "看看目录",
@@ -4037,14 +4042,14 @@ describe("会话详情页:一轮在跑时的三点", () => {
     await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
     act(() =>
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
         seq: 1,
       }),
     );
     act(() =>
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "在的" },
         seq: 2,
       }),
@@ -4090,7 +4095,7 @@ describe("会话详情页:连接彻底断掉之后的出路", () => {
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:sessionId"
+              path="/devices/:deviceId/sessions/:conversationId"
               element={<SessionDetail />}
             />
           </Routes>
@@ -4157,7 +4162,7 @@ describe("会话详情：重连期间的发送", () => {
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:sessionId"
+              path="/devices/:deviceId/sessions/:conversationId"
               element={<SessionDetail />}
             />
           </Routes>
@@ -4282,7 +4287,7 @@ describe("会话详情：与桌面端对齐的外壳", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "很长的一段转录" },
         seq: 1,
       });
@@ -4307,7 +4312,7 @@ describe("会话详情：与桌面端对齐的外壳", () => {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -4409,7 +4414,7 @@ describe("会话详情：回到底部", () => {
     });
     fakeClient.catchUp.mockImplementation(async () => {
       capturedOpts.onEvent?.({
-        sessionId: 42,
+        conversationId: "42",
         event: { kind: "text_delta", text: "很长的一段转录" },
         seq: 1,
       });
@@ -4448,7 +4453,7 @@ describe("会话详情：回到底部", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -4462,7 +4467,7 @@ describe("会话详情：回到底部", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -4503,7 +4508,7 @@ describe("会话详情：回到底部", () => {
         { kind: "text_delta", text: "第三答" },
       ];
       frames.forEach((event, i) => {
-        capturedOpts.onEvent?.({ sessionId: 42, event, seq: i + 1 });
+        capturedOpts.onEvent?.({ conversationId: "42", event, seq: i + 1 });
       });
     });
   }
@@ -4526,7 +4531,7 @@ describe("会话详情：回到底部", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -4550,7 +4555,7 @@ describe("会话详情：回到底部", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );

@@ -174,7 +174,7 @@ describe("预览", () => {
 describe("执行导入", () => {
   it("浏览器铸号并把选中的候选交上去", async () => {
     mockedApi.mockResolvedValueOnce({
-      session_id: "4242",
+      conversation_id: "22222222-2222-7222-8222-222222222222",
       peer_fingerprint: "sha256:aaaa",
       cwd: "/repos/spider",
       imported_turns: 12,
@@ -200,9 +200,12 @@ describe("执行导入", () => {
       locator: "loc-1",
       agent_sync_id: "agent-1",
     });
-    expect(body.session_id).toBeGreaterThan(0);
+    // 号由浏览器铸：UUIDv7 的规范形式（决策 1）。
+    expect(body.conversation_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     expect(outcome).toEqual({
-      sessionId: "4242",
+      sessionId: "22222222-2222-7222-8222-222222222222",
       alreadyImported: false,
       readOnly: false,
       cwd: "/repos/spider",
@@ -223,9 +226,11 @@ describe("打开已导入的那条", () => {
       titleQuery: "",
     });
 
-    ports.openSession("4242");
+    ports.openSession("22222222-2222-7222-8222-222222222222");
 
-    expect(opened).toEqual([{ deviceId: 11, sessionId: "4242" }]);
+    expect(opened).toEqual([
+      { deviceId: 11, sessionId: "22222222-2222-7222-8222-222222222222" },
+    ]);
   });
 });
 

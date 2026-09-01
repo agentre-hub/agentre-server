@@ -1,27 +1,24 @@
 /**
- * 账号级实时通道在浏览器这一侧（server 的 GET /v1/account/channel）。
+ * 账号级实时信号在浏览器这一侧。
  *
- * 一条**常连**的 websocket，服务端在这个账号的同步版本推进时往上面推一个信号
- * 「该拉了」。它与中继的 /v1/relay/client 的根本区别是**不指定目标 daemon**，
- * 也**不送对象内容** —— 收到信号之后拉什么、怎么拉，由调用方自己决定。
+ * 它**不再有自己的 socket**：`/v1/account/channel` 已经删除，信号跑在那条账号级中继
+ * 连接的**保留通道**上（决策 13 / 14）。合并的是传输，不是总线——服务端每副本一份
+ * Redis Pub/Sub 订阅原样保留，这里只是换了个到达口。
  *
- * 这条通道的设计前提就是**它可以不可靠**：
+ * 这条信号路的设计前提仍然是**它可以不可靠**：
  *
- *  - 连不上 / 断开：退回 30 秒轮询，即没有通道时的行为。不重试到底、不阻塞任何操作；
- *  - 建连成功（首次与重连一视同仁）：立刻主动拉一次，而不是等服务端补发 ——
+ *  - 不可用（订阅建不起来、信号源中断、连接断开）：退回 30 秒轮询，即没有它时的
+ *    行为。不重试到底、不阻塞任何操作；这是**通道级**的失败，同一条 socket 上的
+ *    RPC 照常；
+ *  - 连上（首次与重连一视同仁）：立刻主动拉一次，而不是等服务端补发 ——
  *    通道不保存未送达的信号，断线期间的变更由这一次补齐；
  *  - 漏帧、乱序、重复：都无害。版本号只用于「该拉了」的判断，绝不拿它当闸门。
  *
- * **30 秒轮询保留，不缩短**：它是通道的兜底，也是「不丢变更」的依据。判据是「把
- * 通道整个关掉，所有功能仍然正确，只是变慢到 30 秒」。但它只在**通道不在**的时候跑
+ * **30 秒轮询保留，不缩短**：它是兜底，也是「不丢变更」的依据。判据是「把信号那一路
+ * 整个关掉，所有功能仍然正确，只是变慢到 30 秒」。但它只在**信号不在**的时候跑
  * ——连着的时候变更由信号送达，再定时喊一次只会让每个订阅页面白拉一遍（见 poll）。
- *
- * 鉴权：浏览器原生 WebSocket 设不了请求头，票据沿用中继那条 query 搬运
- * （server 的 queryTokenBridge）。票据短效，因此每次建连都现取一张。
  */
-import { RedialTimer } from "@/lib/redialTimer";
-import { ensureRelayTicket } from "@/lib/relayTicket";
-import { bearerSubprotocol } from "@/lib/relayUrl";
+import { relayClientPool } from "@/lib/relayClientPool";
 import {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,
@@ -31,8 +28,6 @@ import {
   type AccountChannelSignal,
 } from "@agentre-hub/agentre-wire";
 
-const ProtobufSubprotocol = "agentre-protobuf";
-
 export {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,
@@ -41,15 +36,11 @@ export {
 
 /**
  * 通道上的信号种类与 notification codec 由 `@agentre-hub/agentre-wire` 统一拥有；
- * 本文件只负责浏览器鉴权、连接生命周期与刷新回调。
+ * 本文件只负责订阅那条保留通道并把「该拉了」分发出去。
  *
  * 每一种都只说「这一类东西变了，该拉了」。不认识的种类**忽略但不断连**（见
  * decodeSignal），所以 server 新加一种可以先发后收。
  */
-/** 账号的同步版本推进了（组织架构、Agent、执行目标……）。只有这一种带版本号。 */
-/** 会话镜像与设备在线态的通知常量由共享 wire 包拥有。 */
-
-/** 本轮认得的全部种类，也是 signalTypes 的默认值。 */
 export const AccountChannelKnownTypes = [
   AccountChannelSyncVersion,
   AccountChannelMirrorChanged,
@@ -61,15 +52,18 @@ export type AccountChannelFrame = AccountChannelSignal;
 /** 兜底轮询周期。与桌面端的 sync_svc.PollInterval 同一个 30 秒。 */
 export const AccountChannelPollMs = 30_000;
 
-/** 首次重连的等待，之后按指数退让，封顶到一个轮询周期。 */
-export const AccountChannelReconnectMs = 1_000;
+/** 池子上信号那一路要的那一小块能力（ISP），测试据此注入替身。 */
+export type AccountSignalSource = Pick<
+  typeof relayClientPool,
+  "subscribeSignals"
+>;
 
 export interface AccountChannelOptions {
   /**
-   * 「该拉了」。建连、每一次重连、每一条信号、以及兜底轮询都会调用它 ——
+   * 「该拉了」。连上、每一次重连、每一条信号、以及兜底轮询都会调用它 ——
    * 调用方据此重新读一遍自己展示的数据。它必须是幂等的：重复调用只是多读一次。
    *
-   * 参数是**哪一类**变了：收到信号时是那一帧的种类；建连 / 重连 / 兜底轮询触发时
+   * 参数是**哪一类**变了：收到信号时是那一帧的种类；连上 / 重连 / 兜底轮询触发时
    * 是 `null`，意思是「你可能已经落后了」——那三条路本来就不知道落后的是哪一类，
    * 拿它们当某一类的信号会漏掉别的。分发给多个消费者的调用方据此过滤。
    */
@@ -77,33 +71,21 @@ export interface AccountChannelOptions {
   /**
    * 只在这几种信号上回调，默认全部认得的种类。
    *
-   * 收窄的是**信号**这一路，不是另外两路：建连/重连后的那一次主动拉、以及兜底轮询
+   * 收窄的是**信号**这一路，不是另两路：连上/重连后的那一次主动拉、以及兜底轮询
    * 照样无条件跑——它们说的是「你可能已经落后了」，与哪一类东西变了无关。
-   *
-   * 页面据此只被自己展示的东西吵醒：设备列表不必因为别人发了条消息就重拉一遍。
    */
   signalTypes?: readonly string[];
   /** 兜底轮询周期，默认 30 秒。 */
   pollIntervalMs?: number;
-  /** 首次重连等待，默认 1 秒（之后指数退让）。 */
-  reconnectDelayMs?: number;
-  /** 建连接缝：默认取一张中继票据。 */
-  ensureTicket?: () => Promise<string>;
-  /** WebSocket 工厂接缝，测试注入假连接。 */
-  createWebSocket?: (url: string, protocols: string[]) => WebSocket;
+  /** 信号来源接缝，默认那条共用的账号级中继连接。 */
+  source?: AccountSignalSource;
   /** 线上帧 codec；默认使用共享包生成的 Protobuf codec。 */
   codec?: AccountChannelCodec;
 }
 
 export interface AccountChannelHandle {
-  /** 停掉通道与兜底轮询。停掉之后不再重连、不再回调。 */
+  /** 停掉信号订阅与兜底轮询。停掉之后不再回调。 */
   stop(): void;
-}
-
-/** 通道端点。票据不在 URL 上，它走子协议（见 relayUrl.ts）。 */
-export function accountChannelUrl(): string {
-  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${window.location.host}/v1/account/channel`;
 }
 
 /** 解一帧信号；读不懂或不是调用方要的种类时返回 null。 */
@@ -125,38 +107,24 @@ export function startAccountChannel(
   options: AccountChannelOptions,
 ): AccountChannelHandle {
   const pollMs = options.pollIntervalMs ?? AccountChannelPollMs;
-  const baseRedialMs = options.reconnectDelayMs ?? AccountChannelReconnectMs;
-  const ensureTicket =
-    options.ensureTicket ??
-    (async () => (await ensureRelayTicket()).accessToken);
-  const createWebSocket =
-    options.createWebSocket ??
-    ((url: string, protocols: string[]) => new WebSocket(url, protocols));
+  const source = options.source ?? relayClientPool;
   const codec = options.codec ?? ProtobufAccountChannelCodec;
   const wanted = new Set<string>(
     options.signalTypes ?? AccountChannelKnownTypes,
   );
 
   let stopped = false;
-  let socket: WebSocket | null = null;
   /**
-   * 这条通道此刻**连着**吗。兜底轮询据此让路（见下面的 poll）。
+   * 信号那一路此刻**通着**吗。兜底轮询据此让路（见下面的 poll）。
    *
-   * 自己记一个而不是去读 `socket.readyState`：读 readyState 会把「连着」这件事系在
-   * WebSocket 的实现细节上，而这里要的判据是「onopen 到过、onclose / onerror 还没
-   * 到」——测试里的假连接也正是按这几个回调驱动的。
+   * 判据是「连接连上过、保留通道还没被判死」，与 WebSocket 的实现细节无关——那条
+   * socket 归池子，这里只认它交上来的三种事件。
    */
-  let connected = false;
-  const redial = new RedialTimer();
-  let failures = 0;
+  let live = false;
 
   /**
-   * 「该拉了」唯一的出口。
-   *
-   * `stop()` 关的是 websocket，而关闭是**异步**的：连接先进 CLOSING，onclose 要等
-   * 之后才到，这中间已经在途的一帧照样会交给 onmessage。所以「停掉之后不再回调」
-   * （见 AccountChannelHandle.stop）不能只靠停掉重连与轮询来兑现，得在这里挡一道
-   * ——调用方 stop 多半是因为自己正在拆掉，这时再喊一次只会去拉一个没人看的视图。
+   * 「该拉了」唯一的出口。停掉之后不再喊：调用方 stop 多半是因为自己正在拆掉，
+   * 这时再喊一次只会去拉一个没人看的视图。
    */
   function refresh(signalType: string | null): void {
     if (stopped) return;
@@ -164,95 +132,50 @@ export function startAccountChannel(
   }
 
   /**
-   * 这条回调是不是**当前**那条连接发来的。
-   *
-   * 重连等待由调用方给（reconnectDelayMs），给得够短时新连接就可能排在旧连接的
-   * onerror / onclose 之前。那之后旧连接说的话一句都不算数——尤其不能让它把
-   * `socket` 置空：置掉的是刚换上的那一条，stop() 从此关不到它，留下一条没人持有
-   * 也没人关的连接在后台跟着心跳活下去。
-   */
-  function isCurrent(ws: WebSocket): boolean {
-    return socket === ws;
-  }
-
-  /**
-   * 兜底轮询：**通道不在时**的那一档，连着的时候让路。
+   * 兜底轮询：**信号不在时**的那一档，通着的时候让路。
    *
    * `refresh(null)` 说的是「你可能已经落后了」，因此它会喊醒**所有**订阅者
    * （见 use-account-channel 的 fanOut），每个页面各拉一遍自己那份数据——一个开着
-   * 「对话」页的标签页就是七条请求。连着的时候这七条一条都换不来新东西：真变了
+   * 「对话」页的标签页就是七条请求。通着的时候这七条一条都换不来新东西：真变了
    * 服务端会推信号，而信号那条路是按种类分发的。
    *
-   * 所以判据仍是那一条「把通道整个关掉，所有功能仍然正确，只是变慢到 30 秒」——
-   * 关掉之后 connected 永远是 false，轮询就是今天的样子。变的只是**连着**的时候
-   * 不再空转。代价说清楚：连着但服务端漏发了信号时，页面会停在旧数据上直到下一
-   * 条信号或用户自己刷新，不再有 30 秒把它拉回来。
+   * 代价说清楚：通着但服务端漏发了信号时，页面会停在旧数据上直到下一条信号或用户
+   * 自己刷新，不再有 30 秒把它拉回来。
    */
   const poll = setInterval(() => {
-    if (connected) return;
+    if (live) return;
     refresh(null);
   }, pollMs);
 
-  /** 排一次重连。退让封顶到一个轮询周期——通道只是优化，重连不该比兜底还急。 */
-  function scheduleRedial(): void {
-    if (stopped || redial.pending) return;
-    const delay = Math.min(baseRedialMs * 2 ** failures, pollMs);
-    failures += 1;
-    redial.schedule(delay, () => void connect());
-  }
-
-  async function connect(): Promise<void> {
-    if (stopped) return;
-    let ws: WebSocket;
-    try {
-      const accessToken = await ensureTicket();
-      if (stopped) return;
-      ws = createWebSocket(accountChannelUrl(), [
-        ProtobufSubprotocol,
-        bearerSubprotocol(accessToken),
-      ]);
-    } catch {
-      // 票据取不到、连接建不起来：退回轮询，隔一会儿再试。不抛给调用方——
-      // 通道连不上不是一次失败，是这条通道本来就允许不在。
-      scheduleRedial();
-      return;
-    }
-    ws.binaryType = "arraybuffer";
-    socket = ws;
-    ws.onopen = () => {
-      failures = 0;
-      connected = true;
-      // 建连成功（首次或重连都一样）：立刻主动拉一次，断线期间的变更由它补齐。
-      refresh(null);
-    };
-    ws.onmessage = (ev: MessageEvent) => {
-      const frame = decodeSignal(ev.data, wanted, codec);
+  const unsubscribe = source.subscribeSignals(
+    (payload: Uint8Array) => {
+      const frame = decodeSignal(payload, wanted, codec);
       if (frame === null) return;
       refresh(frame.type);
-    };
-    ws.onerror = () => {
-      // 浏览器在建连失败时先 error 后 close；scheduleRedial 自己防重排。
-      if (!isCurrent(ws)) return;
-      connected = false;
-      scheduleRedial();
-    };
-    ws.onclose = () => {
-      if (!isCurrent(ws)) return;
-      connected = false;
-      socket = null;
-      scheduleRedial();
-    };
-  }
-
-  void connect();
+    },
+    {
+      // 保留通道被判死：订阅建不起来，或信号源中途断了。整条连接照常服务 RPC，
+      // 这里只把信号那一路标为不可用并退回 30 秒轮询。
+      onSignalClosed: () => {
+        live = false;
+      },
+      onStateChange: (state) => {
+        if (state === "connected") {
+          live = true;
+          // 连上（首次或重连都一样）：立刻主动拉一次，断线期间的变更由它补齐。
+          refresh(null);
+          return;
+        }
+        live = false;
+      },
+    },
+  );
 
   return {
     stop() {
       stopped = true;
       clearInterval(poll);
-      redial.cancel();
-      socket?.close();
-      socket = null;
+      unsubscribe();
     },
   };
 }

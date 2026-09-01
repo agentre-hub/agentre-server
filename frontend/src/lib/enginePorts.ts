@@ -10,6 +10,7 @@ import type {
 import { api } from "@/lib/api";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import { withRelayClient } from "@/lib/relayClientPool";
+import { machineTarget } from "@/lib/relayTarget";
 
 type ProviderDTO = {
   provider_key: string;
@@ -432,7 +433,7 @@ export function createBrowserEngineSettingsPorts(
     params: object = {},
   ): Promise<T> {
     return withRelayClient(
-      fingerprint,
+      machineTarget(fingerprint),
       async (client) => (await client.request(method, params as never)) as T,
     );
   }

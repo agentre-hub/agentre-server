@@ -1,15 +1,40 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RelayClientPool } from "@/lib/relayClientPool";
 import type { RelayClient, RelayClientOptions } from "@/lib/relayClient";
+import { RelayClientPool } from "@/lib/relayClientPool";
+import type { RelayConnection } from "@/lib/relayConnection";
+import { machineTarget } from "@/lib/relayTarget";
 import type { RelayTicket } from "@/lib/relayTicket";
 
 /**
- * 池子的行为规格。这里**不**碰真的 WebSocket：池子的职责是「同一台机器只开一条
- * 连接、谁都不许替别人关掉它」，与帧怎么编解码无关（那是 relay-client-protobuf
- * 那一份用例的事）。所以 RelayClient 整个被替成一个能数出「建了几条、关了几条」
- * 的替身。
+ * 池子的行为规格。这里**不**碰真的 WebSocket：池子的职责是「一个账号一条连接、
+ * 一个目标一条通道、谁都不许替别人关掉它」，与帧怎么编解码无关（那是
+ * relay-client-protobuf 那一份用例的事）。所以连接与客户端整个被替成能数出
+ * 「建了几条、关了几条」的替身。
+ *
+ * socket 总数那一条单独住在 relay-socket-count 里——它是本轮的目标数字。
  */
+class FakeConnection {
+  closed = 0;
+  connects = 0;
+  reconnects = 0;
+  state = "connecting";
+  constructor(readonly opts: unknown) {}
+  connect(): Promise<void> {
+    this.connects++;
+    return Promise.resolve();
+  }
+  async reconnect(): Promise<void> {
+    this.reconnects++;
+  }
+  close(): void {
+    this.closed++;
+  }
+  subscribeSignals(): () => void {
+    return () => {};
+  }
+}
+
 class FakeClient {
   closed = 0;
   connects = 0;
@@ -21,6 +46,9 @@ class FakeClient {
   }
   close(): void {
     this.closed++;
+  }
+  get state(): string {
+    return "connecting";
   }
 }
 
@@ -38,12 +66,18 @@ function setup(
   } = {},
 ) {
   const built: FakeClient[] = [];
+  const sockets: FakeConnection[] = [];
   let fail = overrides.failNextConnect ?? false;
   const tickets = vi.fn(() => Promise.resolve(ticket));
   const pool = new RelayClientPool({
     idleGraceMs: overrides.idleGraceMs ?? 30_000,
     ensureTicket: tickets,
-    clientUrl: (fingerprint) => `ws://relay.test/${fingerprint}`,
+    connectionUrl: () => "ws://relay.test/v1/relay/client",
+    createConnection: (opts) => {
+      const connection = new FakeConnection(opts);
+      sockets.push(connection);
+      return connection as unknown as RelayConnection;
+    },
     createClient: (opts) => {
       const client = new FakeClient(opts);
       if (fail) {
@@ -56,49 +90,50 @@ function setup(
       return client as unknown as RelayClient;
     },
   });
-  return { pool, built, tickets };
+  return { pool, built, sockets, tickets };
 }
+
+const FP1 = machineTarget("fp-1");
+const FP2 = machineTarget("fp-2");
 
 describe("RelayClientPool", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
 
-  it("同一台机器的多个使用方共用一条连接", async () => {
+  it("同一个目标的多个使用方共用一条通道", async () => {
     const { pool, built, tickets } = setup();
-    const a = await pool.acquire("fp-1");
-    const b = await pool.acquire("fp-1");
+    const a = await pool.acquire(FP1);
+    const b = await pool.acquire(FP1);
     expect(built).toHaveLength(1);
     expect(a.client).toBe(b.client);
-    // 票也只换一次：每个使用方各换一张是当前一次性调用最贵的那一步。
+    // 票只换一次：连接是账号级的，通道再多也只有一条 socket。
     expect(tickets).toHaveBeenCalledTimes(1);
   });
 
-  it("并发 acquire 不会抢建出两条连接", async () => {
+  it("并发 acquire 不会抢建出两条通道", async () => {
     const { pool, built } = setup();
-    const [a, b] = await Promise.all([
-      pool.acquire("fp-1"),
-      pool.acquire("fp-1"),
-    ]);
+    const [a, b] = await Promise.all([pool.acquire(FP1), pool.acquire(FP1)]);
     expect(built).toHaveLength(1);
     expect(a.client).toBe(b.client);
   });
 
-  it("不同机器各自一条连接", async () => {
-    const { pool, built } = setup();
-    await pool.acquire("fp-1");
-    await pool.acquire("fp-2");
+  it("不同目标各自一条通道，但共用那一条 socket", async () => {
+    const { pool, built, sockets } = setup();
+    await pool.acquire(FP1);
+    await pool.acquire(FP2);
     expect(built).toHaveLength(2);
+    expect(sockets).toHaveLength(1);
   });
 
   it("通知扇出给此刻在场的每个监听者", async () => {
     const { pool, built } = setup();
     const first = vi.fn();
     const second = vi.fn();
-    await pool.acquire("fp-1", { onEvent: first });
-    await pool.acquire("fp-1", { onEvent: second });
+    await pool.acquire(FP1, { onEvent: first });
+    await pool.acquire(FP1, { onEvent: second });
 
-    const frame = { sessionId: 1, seq: 1, event: {} } as never;
+    const frame = { conversationId: "c-1", seq: 1, event: {} } as never;
     built[0].opts.onEvent?.(frame);
     expect(first).toHaveBeenCalledWith(frame);
     expect(second).toHaveBeenCalledWith(frame);
@@ -108,11 +143,15 @@ describe("RelayClientPool", () => {
     const { pool, built } = setup();
     const leaving = vi.fn();
     const staying = vi.fn();
-    const lease = await pool.acquire("fp-1", { onEvent: leaving });
-    await pool.acquire("fp-1", { onEvent: staying });
+    const lease = await pool.acquire(FP1, { onEvent: leaving });
+    await pool.acquire(FP1, { onEvent: staying });
 
     lease.release();
-    built[0].opts.onEvent?.({ sessionId: 1, seq: 1, event: {} } as never);
+    built[0].opts.onEvent?.({
+      conversationId: "c-1",
+      seq: 1,
+      event: {},
+    } as never);
     expect(leaving).not.toHaveBeenCalled();
     expect(staying).toHaveBeenCalledTimes(1);
   });
@@ -121,8 +160,8 @@ describe("RelayClientPool", () => {
     const { pool, built } = setup();
     const first = vi.fn();
     const second = vi.fn();
-    await pool.acquire("fp-1", { onStateChange: first });
-    await pool.acquire("fp-1", { onStateChange: second });
+    await pool.acquire(FP1, { onStateChange: first });
+    await pool.acquire(FP1, { onStateChange: second });
 
     built[0].opts.onStateChange?.("reconnecting");
     expect(first).toHaveBeenCalledWith("reconnecting");
@@ -131,34 +170,36 @@ describe("RelayClientPool", () => {
 
   it("最后一个使用方走后进入空闲宽限，宽限内再来的人复用同一条", async () => {
     const { pool, built } = setup({ idleGraceMs: 30_000 });
-    const lease = await pool.acquire("fp-1");
+    const lease = await pool.acquire(FP1);
     lease.release();
 
     vi.advanceTimersByTime(29_000);
-    const again = await pool.acquire("fp-1");
+    const again = await pool.acquire(FP1);
     expect(built).toHaveLength(1);
     expect(again.client).toBe(lease.client);
     expect(built[0].closed).toBe(0);
   });
 
-  it("空闲宽限走完才真正关掉", async () => {
-    const { pool, built } = setup({ idleGraceMs: 30_000 });
-    const lease = await pool.acquire("fp-1");
+  it("空闲宽限走完才真正关掉那一条通道", async () => {
+    const { pool, built, sockets } = setup({ idleGraceMs: 30_000 });
+    const lease = await pool.acquire(FP1);
     lease.release();
     expect(built[0].closed).toBe(0);
 
     vi.advanceTimersByTime(30_000);
     expect(built[0].closed).toBe(1);
+    // 关的是通道不是 socket：宽限只管普通通道的关闭时机（决策 13）。
+    expect(sockets[0].closed).toBe(0);
 
     // 关掉之后再来的人拿到的是新的一条。
-    await pool.acquire("fp-1");
+    await pool.acquire(FP1);
     expect(built).toHaveLength(2);
   });
 
-  it("还有人在用时，某一个使用方 release 不会关掉连接", async () => {
+  it("还有人在用时，某一个使用方 release 不会关掉通道", async () => {
     const { pool, built } = setup({ idleGraceMs: 1_000 });
-    const lease = await pool.acquire("fp-1");
-    await pool.acquire("fp-1");
+    const lease = await pool.acquire(FP1);
+    await pool.acquire(FP1);
 
     lease.release();
     vi.advanceTimersByTime(10_000);
@@ -167,8 +208,8 @@ describe("RelayClientPool", () => {
 
   it("release 是幂等的：同一份租约调两次不会扣掉别人的引用", async () => {
     const { pool, built } = setup({ idleGraceMs: 1_000 });
-    const lease = await pool.acquire("fp-1");
-    await pool.acquire("fp-1");
+    const lease = await pool.acquire(FP1);
+    await pool.acquire(FP1);
 
     lease.release();
     lease.release();
@@ -176,104 +217,78 @@ describe("RelayClientPool", () => {
     expect(built[0].closed).toBe(0);
   });
 
-  it("连不上时把条目摘掉，下一次 acquire 真的重拨而不是复读同一个失败", async () => {
+  it("连不上时把条目摘掉，下一次 acquire 真的重开而不是复读同一个失败", async () => {
     const { pool, built } = setup({ failNextConnect: true });
-    await expect(pool.acquire("fp-1")).rejects.toThrow("boom");
+    await expect(pool.acquire(FP1)).rejects.toThrow("boom");
     // 失败那条不能留在池子里：留着的话这台机器在这一屏里永远打不开。
-    await pool.acquire("fp-1");
+    await pool.acquire(FP1);
     expect(built).toHaveLength(2);
   });
 
   /*
     长连接的使用方(详情页)要的是**另一档**语义:它不等连上,拿到 client 就挂上去,
-    首次连不上交给 RelayClient 自己退避重连,页面从 onStateChange 读 "reconnecting"。
+    首次连不上交给连接自己退避重连,页面从 onStateChange 读 "reconnecting"。
     等连上再交付会把这条路堵死 —— 首次失败当场变成 "disconnected"(「已经不再自动
     重试」),而实际上它正在重试。
   */
   it("waitForConnect:false 不等连上就交出租约", async () => {
     const { pool, built } = setup({ hangConnect: true });
-    // 连接永远不落定，租约照样到手 —— 默认那一档在这里会一直挂着。
-    const lease = await pool.acquire("fp-1", {}, { waitForConnect: false });
+    const lease = await pool.acquire(FP1, {}, { waitForConnect: false });
     expect(lease.client).toBe(built[0] as unknown as RelayClient);
     expect(built[0].connects).toBe(1);
   });
 
-  it("waitForConnect:false 时首次连不上不摘条目：交给 RelayClient 自己重连", async () => {
+  it("waitForConnect:false 时首次连不上不摘条目：交给连接自己重连", async () => {
     const { pool, built } = setup({ failNextConnect: true });
-    const lease = await pool.acquire("fp-1", {}, { waitForConnect: false });
+    const lease = await pool.acquire(FP1, {}, { waitForConnect: false });
     expect(built).toHaveLength(1);
     expect(built[0].closed).toBe(0);
-    // 条目还在：后来的人搭的是同一条，而不是又建一条。
-    await pool.acquire("fp-1", {}, { waitForConnect: false });
+    // 条目还在：后来的人搭的是同一条，而不是又开一条。
+    await pool.acquire(FP1, {}, { waitForConnect: false });
     expect(built).toHaveLength(1);
     lease.release();
   });
 
-  it("reconnect 关掉旧的、建新的，并把新 client 交给还在场的监听者", async () => {
-    const { pool, built } = setup();
-    const onClient = vi.fn();
-    const lease = await pool.acquire("fp-1", { onClient });
-    expect(built).toHaveLength(1);
+  /*
+    重连换的是**那一条 socket**，不是每个目标各自重来：这个账号只有一条连接，
+    通道与引用计数原样留着，手里的 RelayClient 也不换人——每条通道在新 socket 上
+    重新声明目标、重做自己的握手（RelayConnection.reconnect）。
+  */
+  it("reconnect 换掉底下那条 socket，通道与租约原样留着", async () => {
+    const { pool, built, sockets } = setup();
+    const lease = await pool.acquire(FP1);
+    await pool.acquire(FP2);
 
-    await expect(pool.reconnect("fp-1")).resolves.toBe(true);
+    await expect(pool.reconnect(FP1)).resolves.toBe(true);
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].reconnects).toBe(1);
     expect(built).toHaveLength(2);
-    expect(built[0].closed).toBe(1);
-    expect(onClient).toHaveBeenCalledWith(built[1]);
-    // 租约仍然有效，且指向新的那一条。
-    expect(lease.client).toBe(built[1] as unknown as RelayClient);
+    expect(lease.client).toBe(built[0] as unknown as RelayClient);
+    expect(built[0].closed).toBe(0);
   });
 
   /*
-    池子里没有这台机器（票根本没换到、连接压根没建出来）时 reconnect 交回 false：
+    池子里没有这条通道（票根本没换到、连接压根没建出来）时 reconnect 交回 false：
     use-relay 据此退回「整只 effect 从取票重跑」那条兜底路。分不出这一档的话，
     「重新连接」按钮在取票失败之后会变成一颗按了什么都不发生的按钮。
   */
-  /*
-    重建期间旧那条会被 close，而 close 会让 RelayClient 播一次 "disconnected"。
-    那一声不能落到监听者身上：详情页刚把状态设成 "connecting"（用户按了重新连接），
-    紧接着被这一声改写成 "disconnected" —— 界面当场退回红色终态「已经不再自动重试」，
-    说的和按钮正在做的事恰好相反。被顶替的那条连接说什么都不再作数。
-  */
-  it("重建时旧连接的 close 不再被当作状态变化播出去", async () => {
+  it("池子里没有这条通道时 reconnect 交回 false", async () => {
     const { pool, built } = setup();
-    const onStateChange = vi.fn();
-    await pool.acquire("fp-1", { onStateChange });
-
-    const old = built[0];
-    await pool.reconnect("fp-1");
-    onStateChange.mockClear();
-    old.opts.onStateChange?.("disconnected");
-    expect(onStateChange).not.toHaveBeenCalled();
-
-    // 现役那条照常播。
-    built[1].opts.onStateChange?.("connected");
-    expect(onStateChange).toHaveBeenCalledWith("connected");
-  });
-
-  it("被顶替的连接也不再投递通知", async () => {
-    const { pool, built } = setup();
-    const onEvent = vi.fn();
-    await pool.acquire("fp-1", { onEvent });
-    const old = built[0];
-    await pool.reconnect("fp-1");
-
-    old.opts.onEvent?.({ sessionId: 1, seq: 1, event: {} } as never);
-    expect(onEvent).not.toHaveBeenCalled();
-  });
-
-  it("池子里没有这台机器时 reconnect 交回 false", async () => {
-    const { pool, built } = setup();
-    await expect(pool.reconnect("fp-nobody")).resolves.toBe(false);
+    await expect(pool.reconnect(machineTarget("fp-nobody"))).resolves.toBe(
+      false,
+    );
     expect(built).toHaveLength(0);
   });
 
-  it("closeAll 收掉全部连接（登出）", async () => {
-    const { pool, built } = setup();
-    await pool.acquire("fp-1");
-    await pool.acquire("fp-2");
+  it("closeAll 收掉全部通道与那条连接（登出）", async () => {
+    const { pool, built, sockets } = setup();
+    await pool.acquire(FP1);
+    await pool.acquire(FP2);
     pool.closeAll();
     expect(built[0].closed).toBe(1);
     expect(built[1].closed).toBe(1);
+    expect(sockets[0].closed).toBe(1);
     expect(pool.size).toBe(0);
+    expect(pool.channelCount).toBe(0);
   });
 });

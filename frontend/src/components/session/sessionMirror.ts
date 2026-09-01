@@ -1,24 +1,32 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import type {
-  EventFrame,
   JournaledNotification,
   SessionSummary,
 } from "@agentre-hub/agentre-wire";
 
+import {
+  toTranscriptFrame,
+  type SessionEventFrame,
+} from "@/components/session/transcriptFrame";
 import { doneEventFrame } from "@/components/session/turnDone";
 import { api } from "@/lib/api";
 import { applyJournalFrames } from "@/lib/relayClient";
 import { withRelayClient } from "@/lib/relayClientPool";
+import { machineTarget } from "@/lib/relayTarget";
 
 /**
- * GET /v1/agent-sessions 的一行。前两列是身份（决策 17 的键），其余是这条对话
- * 在**账号**里记着的样子 —— 机器离线时中继给不出摘要，头部认得出这条对话全靠它。
+ * GET /v1/agent-sessions 的一行。第一列是身份（`conversation_id`，决策 1），其余是
+ * 这条对话在**账号**里记着的样子 —— 机器离线时中继给不出摘要，头部认得出这条对话
+ * 全靠它。
  *
  * cwd 不在这里，而且永远不会在（R19：路径不下行），所以由它派生的摘要上没有 cwd。
  */
 export interface MirrorSessionItem {
+  conversation_id: string;
+  /** 发起这条对话那一端的指纹。留作来源标注与授权，不再是身份的一半。 */
   peer_fingerprint: string;
-  session_id: string;
+  /** 当前承载这条对话的机器；与发起端可以不同。 */
+  machine_fingerprint: string;
   title?: string;
   agent_sync_id?: string;
   backend_type?: string;
@@ -51,40 +59,32 @@ export interface MirrorTranscriptPage {
 }
 
 /**
- * 认出这条对话在账号镜像里的那一行。身份键是 (**发起端**指纹, 会话 id)（决策 17），
- * 而路由给的是**承载**这条连接的设备 —— 同一条对话常常桌面端与 agentred 各有一份，
- * 发起的那一端不一定就是你点进来的这台机器。
+ * 取这条对话在账号镜像里的那一行。
  *
- * 顺序：索引行已经交出发起端指纹时就认那一行；否则先认这台机器自己发起的那条，
- * 再否则认账号里唯一一条同号对话。再往下是歧义：猜错发起端会把**别的对话**摆在
- * 这个 URL 下，那比空着严重得多，所以不猜。
+ * 从前这里有一整段**猜**：身份是 (发起端指纹, 那一端的会话号) 一对，而 URL 上只有
+ * 会话号，于是要按「索引行给了发起端就认那一行、否则先认这台机器自己发起的、再否则
+ * 认账号里唯一一条同号的」逐级退让。`conversation_id` 全局唯一之后没有可猜的余地：
+ * 按它精确查，至多命中一行（服务端 `SavedSessionsRequest.conversation_id` 那条路
+ * 不分组、不分页）。
  *
- * 交回的是整行而不只是那个指纹：标题与 Agent 身份都在这一行上，而机器离线时中继
- * 根本给不出摘要，头部要认得出这条对话就只剩这一条来路。
+ * 交回的是整行：标题、Agent 身份、模型目标都在这一行上，而机器离线时中继根本给不出
+ * 摘要，头部要认得出这条对话就只剩这一条来路；`machine_fingerprint` 同时是「该连
+ * 哪台机器」的答案。
  *
- * 读不到（端点失败 / 没有这一行）时交回 undefined 而不抛：调用方手里可能已经有
- * 索引行传下来的指纹，转录照读得到，不该被这一次取数失败连坐。
+ * 读不到（端点失败 / 没有这一行）时交回 undefined 而不抛：调用方手里可能已经有索引
+ * 行传下来的东西，转录照读得到，不该被这一次取数失败连坐。
  */
-export async function resolveMirrorRow(
-  sessionId: number,
-  origin: string | undefined,
-  deviceFingerprint: string | undefined,
+export async function fetchMirrorRow(
+  conversationId: string,
 ): Promise<MirrorSessionItem | undefined> {
-  // 按会话号精确查（规格 2026-08-19 决策 13）：索引分页之后「拉全份再本地筛」
-  // 只筛得到第一页，本来存在的对话会被当成不存在，页面于是显示成空。
-  let rows: MirrorSessionItem[];
   try {
     const res = await api<{ items?: MirrorSessionItem[] }>(
-      `/v1/agent-sessions?session_id=${encodeURIComponent(String(sessionId))}`,
+      `/v1/agent-sessions?conversation_id=${encodeURIComponent(conversationId)}`,
     );
-    rows = (res.items ?? []).filter((r) => r.session_id === String(sessionId));
+    return (res.items ?? []).find((r) => r.conversation_id === conversationId);
   } catch {
     return undefined;
   }
-  if (origin) return rows.find((r) => r.peer_fingerprint === origin);
-  const own = rows.find((r) => r.peer_fingerprint === deviceFingerprint);
-  if (own) return own;
-  return rows.length === 1 ? rows[0] : undefined;
 }
 
 /**
@@ -94,12 +94,9 @@ export async function resolveMirrorRow(
  * 才知道（这里填 0，补齐的游标另有 mirrorSeqRef 一路），cwd 则永不下行（R19）。
  * 缺的字段一律如实留空，不猜、不填占位。
  */
-export function mirrorRowToSummary(
-  row: MirrorSessionItem,
-  sessionId: number,
-): SessionSummary {
+export function mirrorRowToSummary(row: MirrorSessionItem): SessionSummary {
   return {
-    sessionId,
+    conversationId: row.conversation_id,
     peerFingerprint: row.peer_fingerprint,
     title: row.title,
     agentSyncId: row.agent_sync_id,
@@ -117,19 +114,20 @@ export function mirrorRowToSummary(
  * 把模型目标也写到**发起端**那一台。
  *
  * 承载连接的那台未必是发起这条对话的那台，而两边各有一份自己的会话行。这里向池子借
- * 一条到发起端的连接写一次，写完还回去——它不是这个页面的长连接，没有事件要收。
+ * 一条到发起端**机器**的通道写一次，写完还回去——它不是这个页面的长连接，没有事件要收。
+ * 走 `machine:` 而不是 `conversation:`：目标就是「那一台」，而服务端按对话解析出的是
+ * **承载**机器，正是这里要绕开的那一台。
  *
  * 够不着（那台离线、或它太老不认识这个方法）时**抛出**，由调用方折进「只写成一台」：
  * 这一次选择在承载者上确实生效了，回滚掉是在说一句假话。
  */
 export async function writeModelTargetToOrigin(
   origin: string,
-  params: { sessionId: number; providerKey: string; modelKey: string },
+  params: { conversationId: string; providerKey: string; modelKey: string },
 ): Promise<void> {
-  await withRelayClient(origin, async (client) => {
+  await withRelayClient(machineTarget(origin), async (client) => {
     await client.request(rpcMethods.setModelTarget, {
       ...params,
-      sessionId: BigInt(params.sessionId),
       peerFingerprint: origin,
     });
   });
@@ -141,24 +139,25 @@ export async function writeModelTargetToOrigin(
  * beforeSeq=0 是首屏（从最新往回）；往上滚续读时传手上最老那条的 seq，服务端按它
  * 作排他上界再给一页。一页有多大由服务端的预算说了算，这边不传 limit。
  *
+ * 入参只有 `conversation_id`：端点的身份键换成它之后不再需要发起端指纹——那正是
+ * 从前那段猜测存在的理由。
+ *
  * 交回的 lastSeq 是这一页里**最新**那条原始行的 seq（服务端的 cursor，按原始行算，
  * 与投影削掉了多少无关）：首屏拿它预置中继游标，实时流从它之后接上。
  */
 export async function loadMirrorTail(
-  sessionId: number,
-  origin: string,
+  conversationId: string,
   beforeSeq: number,
 ): Promise<{
-  events: EventFrame[];
+  events: SessionEventFrame[];
   lastSeq: number;
   oldestSeq: number;
   hasBefore: boolean;
   frameCount: number;
 }> {
-  const events: EventFrame[] = [];
+  const events: SessionEventFrame[] = [];
   const query = new URLSearchParams({
-    peer_fingerprint: origin,
-    session_id: String(sessionId),
+    conversation_id: conversationId,
     direction: "backward",
     cursor: String(beforeSeq),
   });
@@ -166,11 +165,12 @@ export async function loadMirrorTail(
     `/v1/agent-sessions/transcript?${query.toString()}`,
   );
   applyJournalFrames(page.frames ?? [], {
-    onEvent: (f) => events.push(f),
+    onEvent: (f) => events.push(toTranscriptFrame(f)),
     // 轮次结束在转录里是一条分隔标记，同时是这一轮 meta（模型 / 耗时 / 首字 /
     // 速率）的唯一来路 —— 见 doneEventFrame。实时那条还兼着翻「这一轮在不在跑」
     // 并刷新待决策，那两件事回放教不了（见 turnActiveRef），这里只有标记这一半。
-    onRunResultDone: (frame) => events.push(doneEventFrame(sessionId, frame)),
+    onRunResultDone: (frame) =>
+      events.push(doneEventFrame(conversationId, frame)),
   });
   return {
     events,

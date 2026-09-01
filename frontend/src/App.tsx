@@ -71,7 +71,7 @@ export default function App() {
           }
         />
         <Route
-          path="/devices/:deviceId/sessions/:sessionId"
+          path="/devices/:deviceId/sessions/:conversationId"
           element={
             <RequireAuth>
               <SessionDetail />
@@ -104,7 +104,7 @@ export default function App() {
         />
         <Route
           // 选中哪一行写在地址里：移动端下钻靠它让手机的返回键有用，深链接也因此
-          // 白拿（与会话详情 /devices/:did/sessions/:sid 同一条做法）。
+          // 白拿（与会话详情 /devices/:did/sessions/:conversationId 同一条做法）。
           // 两段是**可选段**而不是另开一条 Route —— 分成两条的话，在「没选中」与
           // 「选中了」之间导航会换掉 element，整个页面卸载重挂：useOrgData 重拉一遍，
           // 并且闪一下 loading。一条路由则只是 params 变了。

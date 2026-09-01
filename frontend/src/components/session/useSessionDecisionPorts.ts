@@ -28,7 +28,7 @@ export interface Waiters {
 }
 
 export interface SessionDecisionPortsParams {
-  sid: number;
+  sid: string;
   clientRef: RefObject<RelayClient | null>;
   originRef: RefObject<string | undefined>;
 }
@@ -87,7 +87,7 @@ export function useSessionDecisionPorts({
     if (!c) return null;
     try {
       const raw = await c.request(rpcMethods.sessionPendingWaiters, {
-        sessionId: BigInt(sid),
+        conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       });
       const res = decodeSessionPendingWaitersResult(raw);
@@ -186,7 +186,7 @@ export function useSessionDecisionPorts({
       async answerToolPermission(input) {
         await runPanelDecision(input.requestId, () =>
           clientRef.current!.request(rpcMethods.runtimeSubmitToolPermission, {
-            sessionId: BigInt(sid),
+            conversationId: sid,
             ...(originRef.current
               ? { peerFingerprint: originRef.current }
               : {}),
@@ -200,7 +200,7 @@ export function useSessionDecisionPorts({
       async answerUserQuestion(input) {
         await runPanelDecision(input.requestId, () =>
           clientRef.current!.request(rpcMethods.runtimeSubmitAnswer, {
-            sessionId: BigInt(sid),
+            conversationId: sid,
             ...(originRef.current
               ? { peerFingerprint: originRef.current }
               : {}),
@@ -245,7 +245,7 @@ export function useSessionDecisionPorts({
     const res = await clientRef.current!.request(
       rpcMethods.runtimeSubmitToolPermission,
       {
-        sessionId: BigInt(sid),
+        conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId: input.requestId,
         allow: input.allow,
@@ -265,7 +265,7 @@ export function useSessionDecisionPorts({
     const res = await clientRef.current!.request(
       rpcMethods.runtimeSubmitAnswer,
       {
-        sessionId: BigInt(sid),
+        conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         requestId: input.requestId,
         // 包的端口用 camelCase，daemon 的 submitAnswer 收的是 PascalCase

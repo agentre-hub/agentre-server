@@ -21,6 +21,7 @@ import Transcript from "@/components/session/Transcript";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import { useRelayMachine } from "@/hooks/use-relay";
+import { machineTarget } from "@/lib/relayTarget";
 import { ApiError } from "@/lib/api";
 import {
   decodePermissionModeMeta,
@@ -144,8 +145,10 @@ export function DraftSession({
    *
    * 这条连接随后**就是**派发用的那一条：再开一条等于同一台机器上两条会话连接。
    */
+  // 按**机器**寻址（决策 11）：这条对话还不存在，服务端解析不出承载它的机器，
+  // 而机器正是用户刚在派发计划里选定的那一台。
   const { client, relayState } = useRelayMachine(
-    chosen?.device_fingerprint ?? null,
+    chosen ? machineTarget(chosen.device_fingerprint) : null,
   );
 
   /**

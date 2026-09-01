@@ -2,7 +2,6 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
   sessionListFromProtobuf,
   SessionLifecycleRunning,
-  type EventFrame,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -33,6 +32,12 @@ import {
 } from "@/components/session/useSessionTargetDevice";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import { useRelayMachine } from "@/hooks/use-relay";
+import {
+  TranscriptSessionId,
+  toTranscriptFrame,
+  type SessionEventFrame,
+} from "@/components/session/transcriptFrame";
+import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
 import {
   decodePermissionModeMeta,
@@ -43,7 +48,7 @@ import { deriveSessionViewStatus, sessionTitle } from "@/lib/sessionView";
 import {
   loadMirrorTail,
   mirrorRowToSummary,
-  resolveMirrorRow,
+  fetchMirrorRow,
   type MirrorSessionItem,
   writeModelTargetToOrigin,
 } from "@/components/session/sessionMirror";
@@ -88,12 +93,12 @@ export type SessionDetailViewForm = "page" | "embedded";
 export interface SessionDetailViewProps {
   /** 目标设备（agentred）在账号下的 id。 */
   deviceId: number;
-  /** 目标会话在 daemon 上的 id。 */
-  sessionId: number;
+  /** 这条对话的身份，全局唯一（决策 1）。URL、索引行与镜像都拿它寻址。 */
+  conversationId: string;
   /**
-   * 这条对话的**发起端**指纹 —— 镜像身份键的另一半（决策 17）。索引行直接知道它
-   * （/v1/agent-sessions 的 peer_fingerprint），传进来就省掉一次认领；不传时本页
-   * 按 (这台机器的指纹, 会话 id) 自己去账号镜像里认，认不出就不猜。
+   * 这条对话的**发起端**指纹。它不再是身份的一半，但仍是请求参数：wire 的
+   * `ResolveSessionPeer` 省略它就是「调用方自己的对端」。索引行直接知道它
+   * （/v1/agent-sessions 的 peer_fingerprint），传进来就省掉一次认领。
    */
   peerFingerprint?: string;
   form?: SessionDetailViewForm;
@@ -147,11 +152,10 @@ export interface SessionDetailViewProps {
    * 「供客户端就地覆盖那一行」），宿主拿它改自己手里那一行就够了，不必为了一个
    * 已经知道的值再重取一遍整页索引。
    *
-   * 指纹也要递：本页认发起端有一条四格的次序（见下面的 readOrigin），落到哪一格
-   * 只有这里知道 —— 宿主手上那个 peerFingerprint 可能是空的（从控制台派发的对话
-   * 两边都给不出），拿它去凑键会凑到一条账号里不存在的对话上。
+   * 交回的是这条对话的身份（`conversation_id`）：宿主手里那一行的键就是它，
+   * 不必再凑一个。
    */
-  onMarkedRead?: (peerFingerprint: string, lastReadAt: number) => void;
+  onMarkedRead?: (conversationId: string, lastReadAt: number) => void;
 }
 
 /**
@@ -169,7 +173,7 @@ export interface SessionDetailViewProps {
  */
 export default function SessionDetailView({
   deviceId,
-  sessionId,
+  conversationId,
   peerFingerprint,
   form = "page",
   initialModelNote,
@@ -179,7 +183,7 @@ export default function SessionDetailView({
   onMarkedRead,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
-  const sid = Number(sessionId);
+  const sid = conversationId;
   const originProp = peerFingerprint?.trim() || undefined;
   const { t } = useTranslation();
   const isPage = form === "page";
@@ -225,7 +229,7 @@ export default function SessionDetailView({
   const [mirrorSummary, setMirrorSummary] = useState<SessionSummary | null>(
     null,
   );
-  const [events, setEvents] = useState<EventFrame[]>([]);
+  const [events, setEvents] = useState<SessionEventFrame[]>([]);
   // 桌面端仍在场时写失败：表示该会话钉住的 agentred 当前不可用（历史可读、新写入停用）。
   const [pinnedAgentredUnavailable, setPinnedAgentredUnavailable] =
     useState(false);
@@ -250,8 +254,8 @@ export default function SessionDetailView({
    */
   const originRef = useRef<string | undefined>(undefined);
   /**
-   * 已经为哪一条对话记过「读到这里」了。键是 `<发起端指纹>:<会话号>` —— 与账号
-   * 镜像的身份键同一组（决策 17）。同一条重渲染不再记一次；换一条才再记。
+   * 已经为哪一条对话记过「读到这里」了。键就是 `conversation_id`（决策 1）。
+   * 同一条重渲染不再记一次；换一条才再记。
    */
   const markedReadRef = useRef<string | null>(null);
   /**
@@ -259,12 +263,6 @@ export default function SessionDetailView({
    * 是异步的），所以预置游标要落在 attach 之前那一刻，而不是历史刚读完的那一刻。
    */
   const mirrorSeqRef = useRef(0);
-  /**
-   * 首屏认出来的发起端指纹。往上滚续读时还要用它去问镜像 —— 那时候索引行给的
-   * originProp 可能本来就没有（按会话号认出来的那条），重认一次是多余的一次取数。
-   */
-  const mirrorOriginRef = useRef<string | undefined>(undefined);
-
   /**
    * 转录的滚动、钉底、前插补偿与「更早的」续读整片归 useTranscriptScrollback；
    * 本组件只读它交出来的那几样，不碰 pinRef / 前插补偿那些内部账。
@@ -277,7 +275,6 @@ export default function SessionDetailView({
     setEvents,
     clientRef,
     originRef,
-    mirrorOriginRef,
   });
   /**
    * 待决清单与那两条提交路径（面板 / 转录里的卡）整片归 useSessionDecisionPorts。
@@ -322,15 +319,36 @@ export default function SessionDetailView({
   const target = useSessionTargetDevice(did);
   const { device, deviceError, machineOnline, meValid } = target;
 
+  /**
+   * 这条通道声明的目标（决策 11 的入口分流）。
+   *
+   * 账号里**有**这条对话（宿主递下来那一行，或本页自己认出来的那一行）时按对话寻址
+   * ——服务端查名单解析出承载它的机器，这一页全程不需要知道那是哪一台。账号里没有
+   * （机器轴上那些还没保存的对话是大多数，服务端解析不出它们）时按机器寻址，而那时
+   * 机器正是用户刚点进来的这一台，本来就在上下文里。
+   *
+   * 认领落定之前**不开通道**：分流一旦选错就是一条通道级错误，而账号那一行本页无论
+   * 如何都要问一次，等它一个往返比猜一次再改口干净。
+   */
+  const savedInAccount = initialRow !== undefined || mirrorSummary !== null;
+  const relayTarget = !history.settled
+    ? null
+    : savedInAccount
+      ? conversationTarget(sid)
+      : device?.online
+        ? machineTarget(device.fingerprint)
+        : null;
+
   const { client, relayState, relayTicket, relayTicketError, reconnect } =
-    useRelayMachine(device?.online ? device.fingerprint : null, {
+    useRelayMachine(relayTarget, {
       onEvent: (f) => {
-        if (f.sessionId === sid) {
-          setEvents((prev) => [...prev, f]);
+        if (f.conversationId === sid) {
+          setEvents((prev) => [...prev, toTranscriptFrame(f)]);
           // 撤占位的判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
           // daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点
           // 熄了,而这一轮再没有别的东西能重新点亮它。
-          if (opensAssistantMessage(f, sid)) turn.setPendingAssistant(false);
+          if (opensAssistantMessage(toTranscriptFrame(f), TranscriptSessionId))
+            turn.setPendingAssistant(false);
         }
         // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,
         // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
@@ -407,15 +425,15 @@ export default function SessionDetailView({
 
   /**
    * 历史从 server 镜像取 —— 机器在不在线都跑，这正是本轮的目的（规格「机器离线时
-   * 只读」）。发起端指纹优先用索引行传下来的那个；没有就按 (这台机器的指纹, 会话 id)
-   * 自己去账号镜像里认，认不出**不猜**。
+   * 只读」）。
+   *
+   * 从前这里还要**认发起端**：镜像的身份键是 (发起端指纹, 那一端的会话号)，而 URL
+   * 上只有会话号，于是要逐级退让地猜。`conversation_id` 全局唯一之后这一整段没有
+   * 了——URL、索引行与镜像三处是同一个值，转录按它直取。
    */
   useAliveEffect(
     (alive) => {
       if (history.settled) return;
-      // 没有现成指纹时，得先有设备——认自己那一行要拿它的指纹去比。宿主把整行
-      // 递下来时两样都不用等：那一行上就带着发起端指纹。
-      if (!initialRow && !originProp && !device) return;
       mirrorSeqRef.current = 0;
       void (async () => {
         try {
@@ -426,20 +444,12 @@ export default function SessionDetailView({
           // 一行，回头再向服务端要一遍是一条纯重复的请求，而且头部要等它往返回来才
           // 认得出这是哪条对话。从 URL 直接进来（移动端下钻、分享链接）没有这一行，
           // 那时照旧自己认。
-          const row =
-            initialRow ??
-            (await resolveMirrorRow(sid, originProp, device?.fingerprint));
+          const row = initialRow ?? (await fetchMirrorRow(sid));
           if (!alive()) return;
-          // 指纹仍以索引行传下来的那个为准：认领落空（端点抖动 / 账号里还没有这一行）
-          // 时转录照读得到，只是头部少一份替补。
-          const origin = originProp ?? row?.peer_fingerprint;
-          if (row) setMirrorSummary(mirrorRowToSummary(row, sid));
-          if (!origin) {
-            setHistory({ settled: true, loaded: false });
-            return;
-          }
-          mirrorOriginRef.current = origin;
-          const tail = await loadMirrorTail(sid, origin, 0);
+          // 认领落空（端点抖动 / 账号里还没有这一行）不挡住读转录：那两件事现在
+          // 各走各的，头部只是少一份替补摘要。
+          if (row) setMirrorSummary(mirrorRowToSummary(row));
+          const tail = await loadMirrorTail(sid, 0);
           if (!alive()) return;
           mirrorSeqRef.current = tail.lastSeq;
           // 历史落在最前面：这一段还没有经过中继客户端的游标去重，实时那一段由预置
@@ -475,7 +485,7 @@ export default function SessionDetailView({
         }
       })();
     },
-    [history.settled, originProp, device, sid],
+    [history.settled, initialRow, sid],
   );
 
   /**
@@ -502,36 +512,24 @@ export default function SessionDetailView({
         try {
           const listRaw = await client.request(rpcMethods.sessionList, {});
           const list = sessionListFromProtobuf(listRaw);
-          const s = list.sessions.find((x) => x.sessionId === sid);
+          const s = list.sessions.find((x) => x.conversationId === sid);
           // origin 在 attach 之前就得学到（下一行就要用它）。
           const origin = s?.peerFingerprint?.trim() || undefined;
           originRef.current = origin;
-          // 打开即已读。身份用**发起端**指纹（承载连接的那台机器可能是另一台），
-          // 时刻由服务端就地取——客户端的钟不可信。
+          // 打开即已读。身份就是 conversation_id 一个值（决策 1）——从前这里要按
+          // 「索引行给的 → 机器报的 → 镜像认出来的 → 这台机器」四格去凑发起端指纹，
+          // 凑错就把已读记在一条账号里不存在的对话上。时刻由服务端就地取，客户端
+          // 的钟不可信。
           //
           // 记不上不影响读这条对话：它只让「未读」那一档多留一条，比拿一次失败去打断
           // 阅读要好。所以这里既不重试也不报错面。
-          // 认发起端的次序：索引行给的 → 机器报的 → 镜像那一行认出来的 → 这台机器。
-          // 倒数第二格不能少：从控制台派发的对话两边都给不出 origin（索引行没传下来，
-          // 机器报的是空 = 「调用方自己」），而镜像那一行记的正是浏览器自己的标识；
-          // 少了它就退到机器指纹，「已读」记在一条账号里不存在的对话上。
-          const readOrigin =
-            originProp ??
-            origin ??
-            mirrorOriginRef.current ??
-            device?.fingerprint ??
-            "";
-          const readKey = `${readOrigin}:${sid}`;
-          if (readOrigin && markedReadRef.current !== readKey) {
-            markedReadRef.current = readKey;
+          if (markedReadRef.current !== sid) {
+            markedReadRef.current = sid;
             void api<{ last_read_at: number }>("/v1/agent-sessions/read", {
               method: "POST",
-              body: JSON.stringify({
-                peer_fingerprint: readOrigin,
-                session_id: String(sid),
-              }),
+              body: JSON.stringify({ conversation_id: sid }),
             })
-              .then((res) => onMarkedRead?.(readOrigin, res.last_read_at))
+              .then((res) => onMarkedRead?.(sid, res.last_read_at))
               .catch(() => {});
           }
           if (alive()) {
@@ -650,7 +648,14 @@ export default function SessionDetailView({
   // 整段重算会让每个 token 都换掉**全部**消息对象,而共享包的行缓存正是以
   // TranscriptMessage 为键的 WeakMap——那等于每帧全表 miss,整段行组件跟着重渲染。
   // projector 按会话建一次;换会话时 sid 变,自然换一个新的。
-  const projector = useMemo(() => createTranscriptProjector(sid), [sid]);
+  const projector = useMemo(
+    () => createTranscriptProjector(TranscriptSessionId),
+    // 换对话时重新建一个：投影器是增量累积的，接着上一条的状态往下投就是两条对话
+    // 的转录拼在一起。身份那一格恒为常量（见 transcriptFrame），因此这条依赖对
+    // 工厂本身是多余的——留着它才是这个 memo 的意义。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sid],
+  );
   const messages = useMemo(
     () => projector.project(events),
     [projector, events],
@@ -723,7 +728,7 @@ export default function SessionDetailView({
     if (!c) return;
     void c
       .request(rpcMethods.runtimeSetPermissionMode, {
-        sessionId: BigInt(sid),
+        conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
         mode: next,
       })
@@ -807,7 +812,7 @@ export default function SessionDetailView({
     if (!c) return;
     const origin = originRef.current;
     const params = {
-      sessionId: sid,
+      conversationId: sid,
       providerKey: next.providerKey,
       modelKey: next.modelKey,
     };
@@ -815,7 +820,7 @@ export default function SessionDetailView({
     const writes: Promise<unknown>[] = [
       c.request(rpcMethods.setModelTarget, {
         ...params,
-        sessionId: BigInt(params.sessionId),
+        conversationId: params.conversationId,
         ...(origin ? { peerFingerprint: origin } : {}),
       }),
     ];
@@ -880,11 +885,12 @@ export default function SessionDetailView({
    * 摘要两条来路都还没落地时先用宿主给的那个名字（`initialTitle`：左栏那一行的
    * 标题、或草稿刚派发出去的第一句）—— 那一刻连后端和状态都拿不出来，退化式会摆
    * 成一行「— · — · 闲置」，而这个名字是现成的、也是对的。宿主也给不出时才退回
-   * `#<会话号>`：那一刻确实什么都还不知道，一个诚实的会话号好过编一个名字。
+   * `#<身份前 8 位>`：那一刻确实什么都还不知道，一个诚实的短号好过编一个名字。
+   * 只摆前 8 位——整串 uuid 是 36 个字符，摆进标题里既认不出也放不下。
    */
   const displayTitle = identity
     ? sessionTitle(identity, t)
-    : (initialTitle?.trim() ?? "") || `#${sid}`;
+    : (initialTitle?.trim() ?? "") || `#${sid.slice(0, 8)}`;
 
   const agent = identity?.agentSyncId
     ? (agents.find((a) => a.sync_id === identity.agentSyncId) ?? null)

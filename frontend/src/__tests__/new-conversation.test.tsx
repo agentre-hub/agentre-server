@@ -185,7 +185,7 @@ const mirroredSession = {
   // 承载它的那台机器：索引行按这一维认设备（详情要连的就是它）。服务端从保存名单
   // 投影出来，每一条镜像行上都有。
   machine_fingerprint: "fp-a",
-  session_id: "42",
+  conversation_id: "42",
   title: "重构登录页",
   agent_sync_id: "agent-1",
   backend_type: "claudecode",
@@ -205,20 +205,20 @@ function stubReads(
           ? [{ scope: "time", total: sessions.length, items: sessions }]
           : [],
       };
+    // 设备名单与「账号里保存过几条对话」无关：派发计划里那台机器本来就在账号下，
+    // 详情页要靠这一份认出承载它的是谁（认不出就整屏只剩一条「读不到设备」）。
     if (path === "/v1/devices")
       return {
-        devices: sessions.length
-          ? [
-              {
-                id: 20,
-                name: "Study Mini",
-                kind: "agentred",
-                fingerprint: "fp-a",
-                online: true,
-                status: 1,
-              },
-            ]
-          : [],
+        devices: [
+          {
+            id: 20,
+            name: "Study Mini",
+            kind: "agentred",
+            fingerprint: "fp-a",
+            online: true,
+            status: 1,
+          },
+        ],
       };
     if (path.startsWith("/v1/workspace/agents")) return { agents };
     if (path.startsWith("/v1/workspace/projects")) return { projects };
@@ -243,7 +243,7 @@ function renderChat(entry = "/chat") {
         <Routes>
           <Route path="/chat" element={<Chat />} />
           <Route
-            path="/devices/:deviceId/sessions/:sessionId"
+            path="/devices/:deviceId/sessions/:conversationId"
             element={<p>session page</p>}
           />
         </Routes>
@@ -405,7 +405,7 @@ describe("一条还没发第一句的对话", () => {
     mockFetchPlan.mockResolvedValue(availablePlan);
     mockEnsureRelayTicket.mockResolvedValue(relayTicket);
     mockDispatch.mockResolvedValue({
-      sessionId: 99,
+      conversationId: "99",
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
@@ -511,11 +511,11 @@ describe("一条还没发第一句的对话", () => {
       // 才有这一行。
       listed.push({
         ...mirroredSession,
-        session_id: "99",
+        conversation_id: "99",
         title: "跑一下失败的测试",
       });
       return {
-        sessionId: 99,
+        conversationId: "99",
         deviceId: 20,
         deviceFingerprint: "fp-a",
         peerFingerprint: "fp-web",
@@ -877,7 +877,7 @@ describe("开着新对话时还回得去", () => {
   });
 
   /*
-    同一段空窗也落在左栏点行上：右栏要重新去问一次 `/v1/agent-sessions?session_id=`,
+    同一段空窗也落在左栏点行上：右栏要重新去问一次 `/v1/agent-sessions?conversation_id=`,
     而那一行的标题**就在刚点的那一行上**。等一次往返只为拿回已经有的东西,期间头部
     写着裸会话号。
 
@@ -977,7 +977,7 @@ describe("移动端派发成功后的落地", () => {
     mockFetchPlan.mockResolvedValue(availablePlan);
     mockEnsureRelayTicket.mockResolvedValue(relayTicket);
     mockDispatch.mockResolvedValue({
-      sessionId: 99,
+      conversationId: "99",
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
@@ -1002,7 +1002,7 @@ describe("移动端派发成功后的落地", () => {
  *
  * 此前这一屏一颗都没有：用户在发出第一句之前既看不见这一轮会用哪个档位、哪个
  * 模型，也改不了——要等派发成功进了详情页才第一次见到它们。而桌面端在同一处
- * （chat-panel 的 sessionId<=0 那一路）两颗都在。
+ * （chat-panel 的「还没有对话」那一路）两颗都在。
  *
  * 档位只能问执行端本人：服务端不掌握任何后端的档位集合。所以这一屏在计划落定时
  * 就连上选中那台机器，问 `runtime.capabilities` 与 `runtime.session.list`。
@@ -1057,7 +1057,7 @@ describe("草稿页的权限档位与模型控件", () => {
     list: unknown = {
       sessions: [
         {
-          sessionId: 99,
+          conversationId: "99",
           title: "跑一下失败的测试",
           agentSyncId: "agent-1",
           backendType: "claudecode",
@@ -1112,7 +1112,7 @@ describe("草稿页的权限档位与模型控件", () => {
     mockFetchPlan.mockResolvedValue(availablePlan);
     mockEnsureRelayTicket.mockResolvedValue(relayTicket);
     mockDispatch.mockResolvedValue({
-      sessionId: 99,
+      conversationId: "99",
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
@@ -1251,7 +1251,7 @@ describe("草稿页的权限档位与模型控件", () => {
     stubReads(engineReads, [mirroredSession]);
     stubMachine(fourModes);
     mockDispatch.mockResolvedValue({
-      sessionId: 99,
+      conversationId: "99",
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
@@ -1283,21 +1283,21 @@ describe("草稿页的权限档位与模型控件", () => {
     交接那一拍的标题。
 
     右栏换成真详情时，这一屏什么都还没问到：`session.list` 要等中继票 + WS +
-    attach，账号镜像那一行要等一次 HTTP。两条都没落地时头部退回 `#<会话号>` ——
-    一串十六位数字，既不是这条对话的名字，也不是用户认得的任何东西。实测在联调
+    attach，账号镜像那一行要等一次 HTTP。两条都没落地时头部退回 `#<身份前 8 位>` ——
+    一串十六进制，既不是这条对话的名字，也不是用户认得的任何东西。实测在联调
     机上摆了约 800 毫秒，正好是「消息发出去之后画面在闪」的那一段。
 
     而这个名字**派发那一刻就在手里**：标题就是 `deriveTitle(第一句话)`，
     `dispatchNewConversation` 自己算出来送给 daemon 的那一份。交接时把它一起递
     过来，头部第一帧就说得出这条对话叫什么，不必等任何一次往返。
   */
-  it("Given 摘要与镜像都还没落地, When 右栏换成详情, Then 头部写的是刚发出去那一句,不是裸会话号", async () => {
+  it("Given 摘要与镜像都还没落地, When 右栏换成详情, Then 头部写的是刚发出去那一句,不是裸身份", async () => {
     stubReads(engineReads, [mirroredSession]);
     // 清单里**没有** 99 号：摘要这条来路就停在这儿。镜像那一行是 42 号，也配不上
     // ——两条来路都空着，正是交接那一拍的样子，只是把它定住了。
     stubMachine(fourModes, { sessions: [] });
     mockDispatch.mockResolvedValue({
-      sessionId: 99,
+      conversationId: "99",
       deviceId: 20,
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",

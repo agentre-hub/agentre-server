@@ -106,7 +106,7 @@ export function useTurnActivity(): TurnActivity {
 export interface SessionSendParams {
   /** 已装载的目标会话：这三样一变，排着的与没发出去的都属于上一条，要清掉。 */
   did: number;
-  sid: number;
+  sid: string;
   originProp: string | undefined;
   /** 七类不可达状态。排队与回落都按它判（R11）。 */
   status: SessionViewStatus;
@@ -150,7 +150,7 @@ export interface SessionSend {
  */
 function useTargetChanged(
   did: number,
-  sid: number,
+  sid: string,
   originProp: string | undefined,
 ): boolean {
   const [last, setLast] = useState({ did, sid, originProp });
@@ -221,7 +221,7 @@ export function useSessionSend({
     const { providerKey: llmProviderKey, modelKey: llmModelKey } =
       effectiveTarget;
     return c.request(rpcMethods.runtimeRun, {
-      sessionId: BigInt(sid),
+      conversationId: sid,
       ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       cwd: summary?.cwd,
       title: summary?.title,
@@ -251,7 +251,7 @@ export function useSessionSend({
     body: string,
   ): Promise<unknown> {
     return c.request(rpcMethods.runtimeSteer, {
-      sessionId: BigInt(sid),
+      conversationId: sid,
       ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       // queuedId 是这条 steer 的不透明标识，**每条一个新的**。直连 agentred 的
       // 目标按它记提交方（handlers/runtime.go 的 SteerSource，门槛就是非空），
@@ -316,7 +316,7 @@ export function useSessionSend({
     c: import("@/lib/relayClient").RelayClient,
   ): Promise<unknown> {
     return c.request(rpcMethods.runtimeRun, {
-      sessionId: BigInt(sid),
+      conversationId: sid,
       ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       cwd: summary?.cwd,
       title: summary?.title,

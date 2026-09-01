@@ -24,9 +24,6 @@ import {
   type AgentInfo,
   type ImportDialogPrefill,
   type ImportOutcome,
-  type IndexGroup,
-  type IndexGroupRow,
-  type IndexRow,
   type MachineInfo,
   type ProjectHeaderActionsProps,
   type ProjectNode,
@@ -51,6 +48,11 @@ import { InlineEmpty } from "@/components/console";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import { api } from "@/lib/api";
 import { createBrowserSessionImportPorts } from "@/lib/importPorts";
+import type {
+  MirrorIndexGroup,
+  MirrorIndexGroupRow,
+  MirrorIndexRow,
+} from "@/pages/chat/chatRows";
 import type { NewConvAgent } from "@/components/session/newconv/types";
 import { INDEX_AXES, type IndexAxis } from "@/lib/sessionAxes";
 import {
@@ -144,11 +146,11 @@ function LastActive({ ms, locale }: { ms: number; locale: string }) {
  * 那些同形，排序也照它那条：在线在前、离线沉底，同一档按名字。
  */
 function withEveryMachine(
-  groups: IndexGroup[],
+  groups: MirrorIndexGroup[],
   machines: MachineInfo[],
-): IndexGroup[] {
+): MirrorIndexGroup[] {
   const present = new Set(groups.map((g) => g.key));
-  const filled: IndexGroup[] = [
+  const filled: MirrorIndexGroup[] = [
     ...groups,
     ...machines
       .filter((m) => !present.has(machineGroupKey(m.deviceId)))
@@ -162,10 +164,10 @@ function withEveryMachine(
       })),
   ];
   // 认不出机器的那一组不是一台机器，它永远排最后（包里也是这么摆的）。
-  const rank = (g: IndexGroup) => (g.key === UNKNOWN_MACHINE_KEY ? 1 : 0);
+  const rank = (g: MirrorIndexGroup) => (g.key === UNKNOWN_MACHINE_KEY ? 1 : 0);
   // 同名的两台机器按设备标识收尾，**比的是数**：包里那条是 `a.deviceId - b.deviceId`，
   // 这里拿组键的字符串比的话 `device-10` 会排到 `device-9` 前面——同一件事两个次序。
-  const deviceId = (g: IndexGroup) => deviceIdOfGroupKey(g.key) ?? 0;
+  const deviceId = (g: MirrorIndexGroup) => deviceIdOfGroupKey(g.key) ?? 0;
   return filled.sort(
     (a, b) =>
       rank(a) - rank(b) ||
@@ -304,7 +306,7 @@ function RowContextMenu({
  * 接着跑。Agent 组头预选那个 Agent —— 它带出后端与模型，底部那一步只剩确认。
  * 随手对话那一组不预填任何一维。
  */
-function importPrefillOf(group: IndexGroup): ImportDialogPrefill {
+function importPrefillOf(group: MirrorIndexGroup): ImportDialogPrefill {
   switch (group.kind) {
     case "machine": {
       const deviceId = deviceIdOfGroupKey(group.key);
@@ -333,7 +335,7 @@ function GroupHeader({
   projectHandlers,
   onImport,
 }: {
-  group: IndexGroup;
+  group: MirrorIndexGroup;
   /** 这台机器的额外说明（最后在线）。 */
   note?: { lastSeenAt?: number };
   /** 这一组有几条。**已经答上来**的机器才给（含 0）——没答上来时它不成立。 */
@@ -547,7 +549,7 @@ function GroupHeader({
  * 一行在共享包 attention 气泡里的展示模型。气泡里的行只用来「看见还有这么一条在
  * 等你」并点进去，因此不带右键删除与行尾动作——那些要的是完整的行上下文。
  */
-function attentionModel(row: IndexGroupRow, href?: string) {
+function attentionModel(row: MirrorIndexGroupRow, href?: string) {
   return {
     id: row.key,
     status: toAgentStatus(row),
@@ -583,8 +585,12 @@ function GroupOverflowTrigger({
   loadGroupPage: (
     scope: string,
     cursor: string | null,
-  ) => Promise<{ rows: IndexRow[]; cursor: string | null; hasMore: boolean }>;
-  renderRow: (row: IndexGroupRow) => React.ReactNode;
+  ) => Promise<{
+    rows: MirrorIndexRow[];
+    cursor: string | null;
+    hasMore: boolean;
+  }>;
+  renderRow: (row: MirrorIndexGroupRow) => React.ReactNode;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -627,8 +633,12 @@ function GroupOverflow({
   loadGroupPage: (
     scope: string,
     cursor: string | null,
-  ) => Promise<{ rows: IndexRow[]; cursor: string | null; hasMore: boolean }>;
-  renderRow: (row: IndexGroupRow) => React.ReactNode;
+  ) => Promise<{
+    rows: MirrorIndexRow[];
+    cursor: string | null;
+    hasMore: boolean;
+  }>;
+  renderRow: (row: MirrorIndexGroupRow) => React.ReactNode;
 }) {
   return (
     <PopoverContent
@@ -657,11 +667,15 @@ function GroupOverflowBody({
   loadGroupPage: (
     scope: string,
     cursor: string | null,
-  ) => Promise<{ rows: IndexRow[]; cursor: string | null; hasMore: boolean }>;
-  renderRow: (row: IndexGroupRow) => React.ReactNode;
+  ) => Promise<{
+    rows: MirrorIndexRow[];
+    cursor: string | null;
+    hasMore: boolean;
+  }>;
+  renderRow: (row: MirrorIndexGroupRow) => React.ReactNode;
 }) {
   const { t } = useTranslation();
-  const [rows, setRows] = useState<IndexRow[]>([]);
+  const [rows, setRows] = useState<MirrorIndexRow[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   // 一挂上就在取第一页，因此初值就是「取着呢」——effect 里再同步置一次 state 会多
@@ -730,7 +744,7 @@ export type MachineConnectionState = "connecting" | "connected" | "unreachable";
 export interface SessionIndexProps {
   axis: IndexAxis;
   onAxisChange: (axis: IndexAxis) => void;
-  rows: IndexRow[];
+  rows: MirrorIndexRow[];
   projects: ProjectNode[];
   agents: AgentInfo[];
   machines: MachineInfo[];
@@ -753,17 +767,17 @@ export interface SessionIndexProps {
    * （`connecting` 自己会走完，`离线` 等的是那台机器而不是这一次请求）。
    */
   onRetryMachine?: (deviceId: number) => void;
-  sessionPath: (deviceId: number, sessionId: number) => string;
+  sessionPath: (deviceId: number, conversationId: string) => string;
   /**
    * 保存一条还没进账号的对话（决策 11）。不传即不摆保存动作；已经在账号里的行
    * 无论传不传都不摆——那一列不会变的图标是纯噪声。
    */
-  onSave?: (row: IndexRow) => void;
+  onSave?: (row: MirrorIndexRow) => void;
   /**
    * 删除一条已保存的对话（决策 6）。不传即行上没有右键菜单。**确认由宿主给**：
    * 文案要按执行机在线与否、是不是桌面端分不同的说法，那些只有宿主知道。
    */
-  onDelete?: (row: IndexRow) => void;
+  onDelete?: (row: MirrorIndexRow) => void;
   /**
    * 行尾是否摆本地化的状态文字徽标。移动端开（规格「已知的可见变化」3：共享
    * `StatusDot` 的可访问名只剩英文状态码，行上得有一处看得见的本地化状态）；
@@ -795,7 +809,11 @@ export interface SessionIndexProps {
   loadGroupPage?: (
     scope: string,
     cursor: string | null,
-  ) => Promise<{ rows: IndexRow[]; cursor: string | null; hasMore: boolean }>;
+  ) => Promise<{
+    rows: MirrorIndexRow[];
+    cursor: string | null;
+    hasMore: boolean;
+  }>;
   /** 还有下一页时摆「加载更多」。分页的位置与取数都在宿主手里。 */
   hasMore?: boolean;
   loadingMore?: boolean;
@@ -815,7 +833,7 @@ export interface SessionIndexProps {
    * 点开一行。交出去的是**整行**：宿主要用行上的发起端指纹去镜像里取转录（机器
    * 离线时那是唯一的来源），与保存 / 删除同一条口径。
    */
-  onSelect?: (row: IndexRow) => void;
+  onSelect?: (row: MirrorIndexRow) => void;
   /**
    * 项目组头上那三样动作（规格 2026-08-20）。宿主给才有——索引自己既不知道账号里有
    * 哪些 Agent，也不该替调用方决定「点了之后去哪」；不给就是今天这个样子：组头上
@@ -917,8 +935,8 @@ export default function SessionIndex({
           online: m.online,
         })),
         agents: importAgents,
-        openSession: (deviceId, sessionId) =>
-          navigate(sessionPath(deviceId, Number(sessionId))),
+        openSession: (deviceId, conversationId) =>
+          navigate(sessionPath(deviceId, conversationId)),
       }),
     [machines, importAgents, navigate, sessionPath],
   );
@@ -952,7 +970,10 @@ export default function SessionIndex({
         unknownMachine: t("chat.noMachine"),
       },
     });
-    return axis === "machine" ? withEveryMachine(built, machines) : built;
+    // 共享包用 `...row` 原样摊行，宿主那两维（conversationId / lastReadAt）因此
+    // 照样在，只是包的类型说不出来。见 chatRows 的 MirrorIndexGroupRow。
+    const groups = built as MirrorIndexGroup[];
+    return axis === "machine" ? withEveryMachine(groups, machines) : groups;
   }, [axis, rows, groupTotals, projects, agents, machines, t]);
 
   const hasRows = groups.some((g) => g.rows.length > 0);
@@ -978,11 +999,11 @@ export default function SessionIndex({
   const activeKey = cursorKey ?? selectedKey;
 
   const openRow = useCallback(
-    (row: IndexGroupRow) => {
+    (row: MirrorIndexGroupRow) => {
       const deviceId = row.deviceId;
       if (deviceId === undefined) return;
       if (onSelect) onSelect(row);
-      else navigate(sessionPath(deviceId, row.sessionId));
+      else navigate(sessionPath(deviceId, row.conversationId));
     },
     [onSelect, navigate, sessionPath],
   );
@@ -992,7 +1013,7 @@ export default function SessionIndex({
    * 全部 N」弹层里翻出来的那些。两处各写一遍就会长成两种行。
    */
   const renderRow = useCallback(
-    (row: IndexGroupRow) => (
+    (row: MirrorIndexGroupRow) => (
       <RowContextMenu
         key={row.key}
         // 删除只对已保存的行成立：没保存过的对话账号里没有它。
@@ -1011,7 +1032,7 @@ export default function SessionIndex({
           href={
             row.deviceId === undefined
               ? undefined
-              : sessionPath(row.deviceId, row.sessionId)
+              : sessionPath(row.deviceId, row.conversationId)
           }
           renderLink={({ href, children, ...rest }) => (
             <Link to={href} data-nav-target={row.key} {...rest}>
@@ -1318,7 +1339,7 @@ export default function SessionIndex({
                       r,
                       r.deviceId === undefined
                         ? undefined
-                        : sessionPath(r.deviceId, r.sessionId),
+                        : sessionPath(r.deviceId, r.conversationId),
                     ),
                   )}
                 renderLink={({ href, children, ...rest }) => (

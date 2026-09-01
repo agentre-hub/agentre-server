@@ -21,6 +21,7 @@ import type {
 
 import type { RelayClient } from "@/lib/relayClient";
 import { acquireRelayClient, type RelayLease } from "@/lib/relayClientPool";
+import { machineTarget } from "@/lib/relayTarget";
 import {
   classifyRemoteFsError,
   listDir as rpcListDir,
@@ -101,7 +102,7 @@ export function createProjectFsPort(): DisposableProjectFsPort {
     const pending = (async () => {
       let lease: RelayLease;
       try {
-        lease = await acquireRelayClient(fingerprint);
+        lease = await acquireRelayClient(machineTarget(fingerprint));
       } catch (e) {
         // 握手失败在这里翻成 RelayUnreachable：failureOf 靠它把「那台机器连不上」
         // 与「远端 RPC 报错」分开说。

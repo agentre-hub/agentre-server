@@ -63,6 +63,11 @@ import {
   RelayClient,
   type RelayClientOptions,
 } from "@/lib/relayClient";
+import { RelayConnection } from "@/lib/relayConnection";
+import { unwrapEnvelope, wrapEnvelope } from "@/lib/relayEnvelope";
+import { machineTarget } from "@/lib/relayTarget";
+
+const CID = "11111111-1111-7111-8111-111111111111";
 
 /** Protobuf `RuntimeEventNotification.event` oneof 的全部 case 名。 */
 type RuntimeEventCase = RuntimeEventNotificationFrame["event"]["case"];
@@ -76,8 +81,16 @@ class BinarySocket {
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
 
+  /** 通道号：第一帧是目标声明（决策 10），它属于连接那一层，这里不计。 */
+  channelId = "";
+
   send(data: unknown): void {
-    this.sent.push(data as Uint8Array);
+    const { channelId, frame } = unwrapEnvelope(data as Uint8Array);
+    if (this.channelId === "") {
+      this.channelId = channelId;
+      return;
+    }
+    this.sent.push(frame);
   }
   close(): void {
     this.readyState = 3;
@@ -88,7 +101,7 @@ class BinarySocket {
     this.onopen?.();
   }
   receive(data: Uint8Array): void {
-    this.onmessage?.({ data });
+    this.onmessage?.({ data: wrapEnvelope(this.channelId, data) });
   }
 }
 
@@ -101,13 +114,19 @@ async function relayEvents(
 ): Promise<TranscriptFrame[]> {
   const socket = new BinarySocket();
   const received: TranscriptFrame[] = [];
-  const options: RelayClientOptions = {
+  const connection = new RelayConnection({
     url: "ws://relay.test/v1/relay/client",
     jwt: "jwt",
-    deviceFingerprint: "fp-web",
     reconnect: false,
     createWebSocket: () => socket as unknown as WebSocket,
-    onEvent: (event) => received.push(event as TranscriptFrame),
+  });
+  const options: RelayClientOptions = {
+    connection,
+    target: machineTarget("fp-daemon"),
+    jwt: "jwt",
+    // 转录投影那一格由宿主补（见 transcriptFrame）；这一族只关心事件本身。
+    onEvent: (event) =>
+      received.push({ ...event, sessionId: 1 } as TranscriptFrame),
   };
   const client = new RelayClient(options);
   const connected = client.connect();
@@ -129,7 +148,7 @@ async function relayEvents(
         id: 0n,
         body: {
           case: "runtimeEventNotification",
-          sessionId: 7,
+          conversationId: CID,
           seq: index + 1,
           event,
         },
@@ -389,9 +408,12 @@ describe("relay 事件词表", () => {
       live.map((frame, index) => ({
         seq: index + 1,
         method: "runtime.event",
-        params: { sessionId: 7, seq: index + 1, event: frame.event },
+        params: { conversationId: CID, seq: index + 1, event: frame.event },
       })) as unknown as Parameters<typeof applyJournalFrames>[0],
-      { onEvent: (frame) => replayed.push(frame as TranscriptFrame) },
+      {
+        onEvent: (frame) =>
+          replayed.push({ ...frame, sessionId: 1 } as TranscriptFrame),
+      },
     );
 
     expect(replayed).toEqual(live);

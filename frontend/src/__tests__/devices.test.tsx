@@ -18,24 +18,28 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // 副行 cardSummary 的「对话在跑」数要真去问那台 agentred（与 DeviceSessionCounts
 // 同一真相源）：3 条会话里 2 条 running。
 vi.mock("@/hooks/use-relay", () => ({
-  useRelayMachine: (fingerprint: string | null) => ({
-    client: fingerprint
+  useRelayMachine: (target: string | null) => ({
+    client: target
       ? {
           request: async () => ({
             sessions: [
               {
-                sessionId: 1,
+                conversationId: "c-1",
                 lifecycleState: "running",
                 latestSeq: 1,
                 waitingForInput: true,
               },
-              { sessionId: 2, lifecycleState: "idle", latestSeq: 1 },
-              { sessionId: 3, lifecycleState: "running", latestSeq: 1 },
+              { conversationId: "c-2", lifecycleState: "idle", latestSeq: 1 },
+              {
+                conversationId: "c-3",
+                lifecycleState: "running",
+                latestSeq: 1,
+              },
             ],
           }),
         }
       : null,
-    relayState: fingerprint ? "connected" : "disconnected",
+    relayState: target ? "connected" : "disconnected",
     relayTicket: null,
     relayTicketError: null,
   }),

@@ -13,6 +13,7 @@ import {
 } from "react";
 
 import { useRelayMachine } from "@/hooks/use-relay";
+import { machineTarget } from "@/lib/relayTarget";
 import type { DeviceItem } from "@/lib/devices";
 import type { IndexAxis, MachineInfo } from "@/lib/sessionAxes";
 
@@ -31,9 +32,12 @@ export interface ResolvedMachine {
 }
 
 /**
- * 一台在线目标机器的会话解析器：用 useRelayMachine 连到桌面端或 agentred，连上后
- * session.list，把那台机器上的会话回传。只有机器轴选中一台机器时才挂——
+ * 一台在线目标机器的会话解析器：在那条共用的账号级中继连接上开一条到这台机器的
+ * 通道，连上后 session.list，把那台机器上的会话回传。只有机器轴选中一台机器时才挂——
  * 「那台机器上有什么」只有机器自己知道（决策 11）。
+ *
+ * 每台机器一个解析器，但**不是**每台机器一条 socket：它们共用同一条连接，各占一条
+ * 虚拟通道（决策 10）。
  *
  * `keyword` 随请求下推给机器，由机器自己筛：机器上有几千条对话时，整份拉回来再在
  * 浏览器里按标题过滤，等于把几千份摘要送过线，其中绝大多数与搜索无关。命中口径的
@@ -51,7 +55,12 @@ function MachineSessionResolver({
   onResolved: (fp: string, resolved: ResolvedMachine) => void;
   onState: (fp: string, state: MachineState) => void;
 }) {
-  const { client, relayState, relayTicket } = useRelayMachine(fingerprint);
+  // 机器轴按**机器**寻址（决策 11）：这一档列的是这台机器实时报的整份 session.list，
+  // 其中未保存的对话是大多数，服务端解析不出它们的承载机器；而机器是用户刚选的，
+  // 本来就在上下文里。N 台机器 = 同一条 socket 上的 N 条通道（决策 10）。
+  const { client, relayState, relayTicket } = useRelayMachine(
+    machineTarget(fingerprint),
+  );
   // 记的是「已经按哪个关键词解析过」而不是一个布尔：关键词一变就得重问一次，
   // 而连接本身没有断，不该整个重挂。null = 本次连接还没解析过。
   const resolvedForRef = useRef<string | null>(null);

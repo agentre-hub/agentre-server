@@ -64,7 +64,6 @@ import { useSessionIndex } from "@/pages/chat/useSessionIndex";
 import {
   INDEX_AXES,
   type IndexAxis,
-  type IndexRow,
   type ProjectNode,
 } from "@/lib/sessionAxes";
 import { type SessionFilter } from "@/lib/sessionView";
@@ -169,11 +168,11 @@ export default function Chat() {
     // projectSyncId 只有从项目组头进来时才有：那颗 ＋ 问的是「在这个项目里开对话」。
     | { step: "draft"; agent: NewConvAgent; projectSyncId?: string }
   >(null);
-  // 桌面右栏：当前选中的真实会话（未选中 = kpP7A 空态）。发起端指纹一起记着：
-  // 详情按镜像的身份（发起端指纹 + 会话标识）取历史。
+  // 桌面右栏：当前选中的真实会话（未选中 = kpP7A 空态）。身份就是 conversation_id
+  // 一个值（决策 1）；发起端指纹一起记着，它是某些 wire 请求要点名的那一格。
   const [selected, setSelected] = useState<{
     deviceId: number;
-    sessionId: number;
+    conversationId: string;
     peerFingerprint: string;
     /**
      * 右栏冷启动那一段先摆的标题（见 SessionDetailView 的 initialTitle）。两个
@@ -197,15 +196,11 @@ export default function Chat() {
     setCompose({ step: "pick" });
   }, []);
   /** 删掉一条之后：右栏归这一页管，因此这一步借给索引数据层。 */
-  const onSessionDeleted = useCallback((row: IndexRow) => {
+  const onSessionDeleted = useCallback((row: MirrorIndexRow) => {
     // 右栏正开着这一条时一并收起：它已经不存在了，留在那里等于让用户对着一份
-    // 已经删掉的转录继续读。身份按（发起端指纹, 会话标识）比，与行的键同一套。
+    // 已经删掉的转录继续读。身份就是 conversation_id，与行的键同一个值。
     setSelected((prev) =>
-      prev &&
-      prev.peerFingerprint === row.fingerprint &&
-      prev.sessionId === row.sessionId
-        ? null
-        : prev,
+      prev && prev.conversationId === row.conversationId ? null : prev,
     );
   }, []);
   /**
@@ -253,16 +248,15 @@ export default function Chat() {
    *
    * 移动端仍旧下钻：单列没有第二栏可落，而下钻正是它读一条已有对话的形态。
    *
-   * 身份的另一半用 `peerFingerprint`——从控制台派发出去的对话，**发起端是这个浏览器**，
+   * `peerFingerprint` 记的是**发起端**——从控制台派发出去的对话发起端是这个浏览器，
    * 承载它的才是那台 agentred，两者不是同一个值（dispatch 那一步的保存也正是这么
-   * 分开报的）。这里若用 `deviceFingerprint`，右栏一落地就拿机器指纹去问镜像的历史
-   * 与「已读」，而账号里这条对话的身份键是 (浏览器标识, 会话号)：转录一帧都读不回来，
-   * 屏上只剩「正在从这台机器读取这条对话…」。
+   * 分开报的）。它不再参与寻址（身份是 conversation_id），只在点名发起端的那几个
+   * wire 请求上用得到。
    */
   const onDraftStarted = useCallback(
     ({
       deviceId,
-      sessionId,
+      conversationId,
       peerFingerprint,
       title,
       modelPinned,
@@ -275,14 +269,14 @@ export default function Chat() {
         ? undefined
         : t("session.composerControls.modelNotPinnedOnStart");
       if (isMobile) {
-        nav(`/devices/${deviceId}/sessions/${sessionId}`, {
+        nav(`/devices/${deviceId}/sessions/${conversationId}`, {
           state: { title, ...(modelNote ? { modelNote } : {}) },
         });
         return;
       }
       setSelected({
         deviceId,
-        sessionId,
+        conversationId,
         peerFingerprint,
         title,
         modelNote,
@@ -300,11 +294,10 @@ export default function Chat() {
    * 索引外加一次完整集合上的未读数探测。这条路每点开一条对话就走一遍。
    */
   const onMarkedRead = useCallback(
-    (peerFingerprint: string, lastReadAt: number) => {
-      if (!selected) return;
-      markRead(peerFingerprint, String(selected.sessionId), lastReadAt);
+    (conversationId: string, lastReadAt: number) => {
+      markRead(conversationId, lastReadAt);
     },
-    [markRead, selected],
+    [markRead],
   );
 
   /** 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。 */
@@ -435,7 +428,7 @@ export default function Chat() {
 
   // 桌面点行 / 选中一条真实会话 → 右栏嵌入真实详情视图。
   const onSelect = useCallback(
-    (row: IndexRow) => {
+    (row: MirrorIndexRow) => {
       if (row.deviceId === undefined) return;
       // 开着「新对话」时右栏归它，选中的会话渲染不出来。点了左栏的一条就是要看
       // 那一条——不在这里收掉 compose，人会被困在挑 Agent 那一屏，除了真开一条
@@ -443,13 +436,13 @@ export default function Chat() {
       setCompose(null);
       setSelected({
         deviceId: row.deviceId,
-        sessionId: row.sessionId,
+        conversationId: row.conversationId,
         peerFingerprint: row.fingerprint,
         // 这一行的标题就在手上：右栏没有理由为了同一个名字再等一次往返。
         title: row.title,
         // 整行也在手上（机器轴那一档列的是机器实时报的，账号里未必有对应的一行，
         // 取不到就留空，详情照旧自己认）。
-        row: mirrorRowOf(row.fingerprint, row.sessionId),
+        row: mirrorRowOf(row.conversationId),
       });
     },
     [mirrorRowOf],
@@ -824,7 +817,7 @@ export default function Chat() {
               <div className="min-h-0 flex-1">
                 <SessionDetailView
                   deviceId={selected.deviceId}
-                  sessionId={selected.sessionId}
+                  conversationId={selected.conversationId}
                   peerFingerprint={selected.peerFingerprint}
                   form="embedded"
                   initialTitle={selected.title}

@@ -1,7 +1,7 @@
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
 
 import type { DeviceItem } from "@/lib/devices";
-import type { IndexRow } from "@/lib/sessionAxes";
+import type { IndexGroup, IndexGroupRow, IndexRow } from "@/lib/sessionAxes";
 import { groupKeyOfScope } from "@/lib/sessionScope";
 import {
   matchesSessionFilter,
@@ -20,11 +20,18 @@ import type { ResolvedMachine } from "@/pages/chat/useMachineReachability";
 
 /** 一条账号镜像里的会话（线上载荷形状，下划线键）。 */
 export interface MirroredSession {
-  /** 发起端指纹：与 session_id 一起构成这条对话在账号里的身份（决策 17）。 */
+  /**
+   * 这条对话的身份，全局唯一（决策 1）。索引行、URL、转录、标记已读、删除都拿它
+   * 寻址——从前的身份是 (发起端指纹, 那一端的会话号) 一对。
+   */
+  conversation_id: string;
+  /**
+   * 发起这条对话那一端的设备指纹。它**不再是身份的一半**，留作来源标注与授权
+   * （某些 wire 请求要点名发起端，见 ResolveSessionPeer）。
+   */
   peer_fingerprint: string;
   /** 承载这条对话、详情实际要连接的账号设备；与发起端可以不同。 */
   machine_fingerprint: string;
-  session_id: string;
   title?: string;
   agent_sync_id?: string;
   project_sync_id?: string;
@@ -37,11 +44,35 @@ export interface MirroredSession {
 }
 
 /**
- * 索引行加一维「读到哪了」。共享包的 `IndexRow` 上没有这一列（它是本站账号镜像
- * 独有的），而机器轴那一档要在**本地**判「未读」——那份清单是机器实时报的，没经过
- * 服务端的筛选。其余三个轴由服务端筛，用不到它。
+ * 索引行加两维：这条对话的**身份**，以及「读到哪了」。
+ *
+ * `conversationId` 是本站行的真身份（决策 1）。共享包的 `IndexRow` 上仍有一格
+ * `sessionId: number`——那是它按旧身份（各端本地自增的会话号）留下的一列，本宿主
+ * 的每一行都填 0 并且**从不读它**：本站的行身份是 `key` / `conversationId`。轴投影
+ * （`buildAxisGroups`）不看这一格，共享的 SessionRow 认的是宿主给的 `id`（= key），
+ * 所以填 0 不会让任何两行并成一行。包那一侧的重键在另一轮里做。
+ *
+ * `lastReadAt` 是本站账号镜像独有的：机器轴那一档要在**本地**判「未读」——那份清单
+ * 是机器实时报的，没经过服务端的筛选。其余三个轴由服务端筛，用不到它。
  */
-export type MirrorIndexRow = IndexRow & { lastReadAt?: number };
+export type MirrorIndexRow = IndexRow & {
+  conversationId: string;
+  lastReadAt?: number;
+};
+
+/**
+ * 轴投影之后的行 / 组。共享包的 `buildAxisGroups` 用 `...row` 原样把行摊进去，所以
+ * 宿主自己加的那两维照样在，只是包的类型说不出它们——投影那一步在这里收窄回来，
+ * 索引层因此照旧读得到 `conversationId`，不必逐处断言。
+ */
+export type MirrorIndexGroupRow = IndexGroupRow & {
+  conversationId: string;
+  lastReadAt?: number;
+};
+
+export type MirrorIndexGroup = Omit<IndexGroup, "rows"> & {
+  rows: MirrorIndexGroupRow[];
+};
 
 /** GET /v1/agent-sessions 的一组：组的身份、它在当前范围下的真数、先给的那几条。 */
 export interface IndexGroupPayload {
@@ -74,12 +105,14 @@ type Translate = (key: string, opts?: Record<string, unknown>) => string;
  */
 const MACHINE_PAGE_SIZE = 5;
 
-/** 账号里一条对话的身份：（发起端指纹, 那一端的会话标识）。 */
-export function rowKey(
-  fingerprint: string,
-  sessionId: number | string,
-): string {
-  return `${fingerprint}:${sessionId}`;
+/**
+ * 账号里一条对话的身份：`conversation_id` 一个值（决策 1）。
+ *
+ * 从前是（发起端指纹, 那一端的会话号）一对，因为会话号是各端本地自增的。现在这个
+ * 值全局唯一，所以键就是它本身——留一层函数是为了让「行的身份是什么」只有一处答案。
+ */
+export function rowKey(conversationId: string): string {
+  return conversationId;
 }
 
 /**
@@ -95,8 +128,10 @@ export function toMirrorRow(
 ): MirrorIndexRow {
   const device = devicesByFp.get(s.machine_fingerprint);
   return {
-    key: rowKey(s.peer_fingerprint, s.session_id),
-    sessionId: Number(s.session_id),
+    key: rowKey(s.conversation_id),
+    conversationId: s.conversation_id,
+    // 见 MirrorIndexRow：共享包那一格旧身份本宿主一律不读。
+    sessionId: 0,
     deviceId: device?.id,
     fingerprint: s.peer_fingerprint,
     agentSyncId: s.agent_sync_id?.trim() ?? "",
@@ -147,11 +182,12 @@ export function toMachineRow(
   s: SessionSummary,
   t: Translate,
   localFingerprint?: string,
-): IndexRow {
+): MirrorIndexRow {
   const origin = machineRowOrigin(s, device, localFingerprint);
   return {
-    key: rowKey(origin, s.sessionId),
-    sessionId: s.sessionId,
+    key: rowKey(s.conversationId),
+    conversationId: s.conversationId,
+    sessionId: 0,
     // 这一档看的就是这台机器，行因此挂在它下面（读写都要连到它）。
     deviceId: device.id,
     fingerprint: origin,
@@ -192,14 +228,14 @@ export function mergeMirrorRows(input: {
   const byKey = new Map<string, MirroredSession>();
   for (const group of input.indexGroups) {
     for (const item of group.items ?? []) {
-      byKey.set(rowKey(item.peer_fingerprint, item.session_id), item);
+      byKey.set(rowKey(item.conversation_id), item);
     }
   }
   for (const item of input.appended) {
-    byKey.set(rowKey(item.peer_fingerprint, item.session_id), item);
+    byKey.set(rowKey(item.conversation_id), item);
   }
   for (const item of input.optimisticSaved) {
-    byKey.set(rowKey(item.peer_fingerprint, item.session_id), item);
+    byKey.set(rowKey(item.conversation_id), item);
   }
   for (const key of input.optimisticRemoved) byKey.delete(key);
   for (const [key, lastReadAt] of input.optimisticRead ?? []) {
@@ -234,11 +270,11 @@ export function buildMachineRows(input: {
     device: DeviceItem,
     s: SessionSummary,
     localFingerprint: string | undefined,
-  ) => IndexRow;
+  ) => MirrorIndexRow;
   filter: SessionFilter;
 }): Map<number, MirrorIndexRow[]> {
   const savedByKey = new Map(
-    input.mirrorRows.map((s) => [rowKey(s.peer_fingerprint, s.session_id), s]),
+    input.mirrorRows.map((s) => [rowKey(s.conversation_id), s]),
   );
   const byDevice = new Map<number, MirrorIndexRow[]>();
   for (const device of input.onlineMachines) {
@@ -249,7 +285,7 @@ export function buildMachineRows(input: {
       const localFingerprint =
         input.resolved[device.fingerprint]?.localFingerprint;
       const origin = machineRowOrigin(s, device, localFingerprint);
-      const mirroredRow = savedByKey.get(rowKey(origin, s.sessionId));
+      const mirroredRow = savedByKey.get(rowKey(s.conversationId));
       // 账号里已经有的那条：标出来，并把只有服务端判得出的项目归属带上（决策 12）。
       const row = mirroredRow
         ? { ...input.fromMirrorRow(mirroredRow), deviceId: device.id }
@@ -310,7 +346,7 @@ export function buildGroupTotals(input: {
 
 /** 索引这一刻列出来的行，外加「这一份是不是被搜索/筛选收窄过」。 */
 export interface IndexView {
-  rows: IndexRow[];
+  rows: MirrorIndexRow[];
   narrowed: boolean;
 }
 
@@ -337,14 +373,15 @@ export function buildView(input: {
 
 /** 右栏正开着的那一条在这一份行里的键（列不出来时 null）。 */
 export function findSelectedKey(
-  rows: IndexRow[],
-  selected: { deviceId: number; sessionId: number } | null,
+  rows: MirrorIndexRow[],
+  selected: { deviceId: number; conversationId: string } | null,
 ): string | null {
   if (!selected) return null;
   return (
     rows.find(
       (r) =>
-        r.deviceId === selected.deviceId && r.sessionId === selected.sessionId,
+        r.deviceId === selected.deviceId &&
+        r.conversationId === selected.conversationId,
     )?.key ?? null
   );
 }

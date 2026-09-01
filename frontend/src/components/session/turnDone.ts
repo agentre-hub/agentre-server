@@ -1,5 +1,10 @@
 import type { EventFrame, RunResultDoneFrame } from "@agentre-hub/agentre-wire";
 
+import {
+  toTranscriptFrame,
+  type SessionEventFrame,
+} from "@/components/session/transcriptFrame";
+
 /**
  * 终态帧（`runtime.runResultDone`）→ 转录里的那条结束标记。
  *
@@ -23,14 +28,18 @@ import type { EventFrame, RunResultDoneFrame } from "@agentre-hub/agentre-wire";
  * `seq` 留空：这条标记是宿主合成的，不占中继日志的序号。
  */
 export function doneEventFrame(
-  sessionId: number,
+  conversationId: string,
   frame: RunResultDoneFrame,
-): EventFrame {
+): SessionEventFrame {
   const event: Record<string, unknown> = { kind: "done" };
   if (frame.model) event.model = frame.model;
   if (frame.durationMs) event.durationMs = frame.durationMs;
   if (frame.firstTokenMs) event.firstTokenMs = frame.firstTokenMs;
   if (frame.tokensPerSec) event.tokensPerSec = frame.tokensPerSec;
   if (frame.usage) event.usage = { ...frame.usage };
-  return { sessionId, event, seq: undefined } as EventFrame;
+  return toTranscriptFrame({
+    conversationId,
+    event,
+    seq: undefined,
+  } as EventFrame);
 }

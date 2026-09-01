@@ -5,7 +5,7 @@ import { useAliveEffect } from "@/hooks/use-api-query";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import type { DeviceItem } from "@/lib/devices";
-import type { IndexAxis, IndexRow } from "@/lib/sessionAxes";
+import type { IndexAxis } from "@/lib/sessionAxes";
 import type { SessionFilter } from "@/lib/sessionView";
 import {
   mergeMirrorRows,
@@ -13,6 +13,7 @@ import {
   type IndexGroupPayload,
   type IndexResponse,
   type MirroredSession,
+  type MirrorIndexRow,
 } from "@/pages/chat/chatRows";
 
 /**
@@ -34,7 +35,7 @@ export interface SessionIndexInput {
   /** 筛选 chip：同样是范围的一部分。它归索引外壳管，因此是借的。 */
   filter: SessionFilter;
   /** 删掉一条之后：右栏正开着它的话要收起来——那是右栏的事，不是索引的事。 */
-  onDeleted: (row: IndexRow) => void;
+  onDeleted: (row: MirrorIndexRow) => void;
 }
 
 /** 「对话」页与索引数据层之间的全部契约。 */
@@ -58,11 +59,7 @@ export interface SessionIndexData {
    * 打开一条对话之后把它就地标成已读（时刻由服务端在 /read 的应答里给）。
    * 不重取：改的只是那一行上的一列，见实现处。
    */
-  markRead: (
-    peerFingerprint: string,
-    sessionId: string,
-    lastReadAt: number,
-  ) => void;
+  markRead: (conversationId: string, lastReadAt: number) => void;
   /**
    * 按身份取回**原始**的那一行（线上载荷形状）。点一行进右栏时把它整个递给详情，
    * 详情因此不必回头再向服务端认领一次。
@@ -73,10 +70,7 @@ export interface SessionIndexData {
    * 与 markRead 一样**引用恒定**（行走 ref）：它会进 onSelect 的依赖，而 onSelect
    * 造出来的行又喂给整片列表。
    */
-  mirrorRowOf: (
-    peerFingerprint: string,
-    sessionId: number | string,
-  ) => MirroredSession | undefined;
+  mirrorRowOf: (conversationId: string) => MirroredSession | undefined;
 
   /** 搜索框里的原文，与它防抖之后真正拿去问服务端的那一份。 */
   searchQuery: string;
@@ -99,15 +93,15 @@ export interface SessionIndexData {
   }>;
 
   /** 行尾「保存」。第一次保存要先把说明弹层摆出来，因此不是直接写。 */
-  onSave: (row: IndexRow) => void;
+  onSave: (row: MirrorIndexRow) => void;
   /** 第一次保存的说明弹层挡着的那一条。 */
-  pendingSave: IndexRow | null;
+  pendingSave: MirrorIndexRow | null;
   cancelSave: () => void;
   confirmSave: () => void;
 
   /** 删除确认挡着的那一条。 */
-  pendingDelete: IndexRow | null;
-  askDelete: (row: IndexRow) => void;
+  pendingDelete: MirrorIndexRow | null;
+  askDelete: (row: MirrorIndexRow) => void;
   cancelDelete: () => void;
   deleting: boolean;
   confirmDelete: () => Promise<void>;
@@ -166,9 +160,11 @@ export function useSessionIndex({
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<unknown>(null);
   /** 第一次保存的说明弹层挡着的那一条（确认之后才真的写）。 */
-  const [pendingSave, setPendingSave] = useState<IndexRow | null>(null);
+  const [pendingSave, setPendingSave] = useState<MirrorIndexRow | null>(null);
   /** 删除确认挡着的那一条。 */
-  const [pendingDelete, setPendingDelete] = useState<IndexRow | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<MirrorIndexRow | null>(
+    null,
+  );
   const [deleting, setDeleting] = useState(false);
   // 搜索词：真实过滤索引里的行，不是假交互。
   const [searchQuery, setSearchQuery] = useState("");
@@ -315,15 +311,11 @@ export function useSessionIndex({
   });
 
   /** 按身份取回原始那一行。见 SessionIndexData.mirrorRowOf。 */
-  const mirrorRowOf = useCallback(
-    (peerFingerprint: string, sessionId: number | string) => {
-      const key = rowKey(peerFingerprint, sessionId);
-      return mirrorRowsRef.current.find(
-        (r) => rowKey(r.peer_fingerprint, r.session_id) === key,
-      );
-    },
-    [],
-  );
+  const mirrorRowOf = useCallback((conversationId: string) => {
+    return mirrorRowsRef.current.find(
+      (r) => r.conversation_id === conversationId,
+    );
+  }, []);
 
   /**
    * 「打开即已读」落到索引这一侧：把那一行的已读时刻就地盖上，未读徽标跟着搬一格。
@@ -336,25 +328,21 @@ export function useSessionIndex({
    * 之后它就不算未读了）。行不在这一轮列出来的范围里时不动徽标——那时判不出它算不算
    * 未读，宁可让它多留一格到下一次取数，也不去猜一个会往下错的数。
    */
-  const markRead = useCallback(
-    (peerFingerprint: string, sessionId: string, lastReadAt: number) => {
-      if (!peerFingerprint || lastReadAt <= 0) return;
-      const key = rowKey(peerFingerprint, sessionId);
-      const row = mirrorRowsRef.current.find(
-        (r) => rowKey(r.peer_fingerprint, r.session_id) === key,
-      );
-      const wasUnread =
-        row !== undefined &&
-        (row.last_message_at ?? 0) > (row.last_read_at ?? 0);
-      setOptimisticRead((prev) => {
-        const next = new Map(prev);
-        next.set(key, Math.max(prev.get(key) ?? 0, lastReadAt));
-        return next;
-      });
-      if (wasUnread) setUnreadTotal((n) => Math.max(0, n - 1));
-    },
-    [],
-  );
+  const markRead = useCallback((conversationId: string, lastReadAt: number) => {
+    if (!conversationId || lastReadAt <= 0) return;
+    const key = rowKey(conversationId);
+    const row = mirrorRowsRef.current.find(
+      (r) => r.conversation_id === conversationId,
+    );
+    const wasUnread =
+      row !== undefined && (row.last_message_at ?? 0) > (row.last_read_at ?? 0);
+    setOptimisticRead((prev) => {
+      const next = new Map(prev);
+      next.set(key, Math.max(prev.get(key) ?? 0, lastReadAt));
+      return next;
+    });
+    if (wasUnread) setUnreadTotal((n) => Math.max(0, n - 1));
+  }, []);
 
   /**
    * 保存 / 删除之后把那几个计数跟着搬一格。
@@ -365,7 +353,7 @@ export function useSessionIndex({
    * 保存一条就再来一遍，删光了主空态也回不来。下一次取数会用服务端的真数把这里的
    * 推算整份盖掉。
    */
-  const shiftTotals = useCallback((row: IndexRow, delta: number) => {
+  const shiftTotals = useCallback((row: MirrorIndexRow, delta: number) => {
     // 不越过 0：推算只在两次取数之间生效，负数在界面上没有意义。
     const bump = (n: number) => Math.max(0, n + delta);
     setAccountTotal((prev) => (prev === null ? prev : bump(prev)));
@@ -379,13 +367,13 @@ export function useSessionIndex({
    * ——行尾那个动作不能说谎。
    */
   const doSave = useCallback(
-    async (row: IndexRow) => {
+    async (row: MirrorIndexRow) => {
       const entry: MirroredSession = {
+        conversation_id: row.conversationId,
         peer_fingerprint: row.fingerprint,
         machine_fingerprint:
           devices.find((d) => d.id === row.deviceId)?.fingerprint ??
           row.fingerprint,
-        session_id: String(row.sessionId),
         title: row.title,
         agent_sync_id: row.agentSyncId || undefined,
         project_sync_id: row.projectSyncId || undefined,
@@ -407,18 +395,12 @@ export function useSessionIndex({
               row.fingerprint,
             // 行的身份指纹就是发起端（IndexRow.fingerprint 的定义）。
             peer_fingerprint: row.fingerprint,
-            session_id: String(row.sessionId),
+            conversation_id: row.conversationId,
           }),
         });
       } catch {
         setOptimisticSaved((prev) =>
-          prev.filter(
-            (s) =>
-              !(
-                s.peer_fingerprint === row.fingerprint &&
-                s.session_id === String(row.sessionId)
-              ),
-          ),
+          prev.filter((s) => s.conversation_id !== row.conversationId),
         );
         shiftTotals(row, -1);
       }
@@ -427,7 +409,7 @@ export function useSessionIndex({
   );
 
   const onSave = useCallback(
-    (row: IndexRow) => {
+    (row: MirrorIndexRow) => {
       // 账号里一条都还没保存过 = 还没同意过：先把「内容会被存下来」说清楚。
       if (accountTotal === 0) {
         setPendingSave(row);
@@ -445,7 +427,10 @@ export function useSessionIndex({
     if (row) void doSave(row);
   }, [pendingSave, doSave]);
 
-  const askDelete = useCallback((row: IndexRow) => setPendingDelete(row), []);
+  const askDelete = useCallback(
+    (row: MirrorIndexRow) => setPendingDelete(row),
+    [],
+  );
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
   /**
@@ -459,15 +444,9 @@ export function useSessionIndex({
     try {
       await api("/v1/saved-sessions/delete", {
         method: "POST",
-        body: JSON.stringify({
-          peer_fingerprint: row.fingerprint,
-          session_id: String(row.sessionId),
-        }),
+        body: JSON.stringify({ conversation_id: row.conversationId }),
       });
-      setOptimisticRemoved((prev) => [
-        ...prev,
-        rowKey(row.fingerprint, row.sessionId),
-      ]);
+      setOptimisticRemoved((prev) => [...prev, rowKey(row.conversationId)]);
       shiftTotals(row, -1);
       onDeleted(row);
       setPendingDelete(null);

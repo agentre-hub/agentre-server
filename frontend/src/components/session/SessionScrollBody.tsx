@@ -16,6 +16,7 @@ import DecisionPanel from "@/components/session/DecisionPanel";
 import PendingSendBubble from "@/components/session/PendingSendBubble";
 import SendFailureBubble from "@/components/session/SendFailureBubble";
 import SessionStatusBanner from "@/components/session/SessionStatusBanner";
+import { TranscriptSessionId } from "@/components/session/transcriptFrame";
 import Transcript from "@/components/session/Transcript";
 import {
   selectPanelWaiters,
@@ -26,7 +27,7 @@ import type { EarlierState } from "@/components/session/useTranscriptScrollback"
 import type { SessionViewStatus } from "@/lib/sessionView";
 
 export interface SessionScrollBodyProps {
-  sid: number;
+  sid: string;
   /** 这条滚动带本身。滚动位置、前插补偿与续读触发都由 useTranscriptScrollback 量。 */
   scrollRef: RefObject<HTMLDivElement | null>;
   onScroll: () => void;
@@ -73,7 +74,6 @@ export interface SessionScrollBodyProps {
  * 读者，摊在详情视图里只会让那边多出四个只用一次的派生值。
  */
 export default function SessionScrollBody({
-  sid,
   scrollRef,
   onScroll,
   getScrollElement,
@@ -233,7 +233,9 @@ export default function SessionScrollBody({
             )}
             <Transcript
               messages={messages}
-              sessionId={sid}
+              // 共享包的转录消息仍带一格旧身份 sessionId:number，本宿主一律填同一个
+              // 常量（见 transcriptFrame）。对话的真身份是上面那条 sid。
+              sessionId={TranscriptSessionId}
               localFingerprint={localFingerprint}
               ports={decisions.transcriptPorts}
               agentName={agentName}
@@ -254,7 +256,7 @@ export default function SessionScrollBody({
               一遍只会让两处慢慢漂开。空态由它 return null。
             */}
             <DecisionPanel
-              sessionId={sid}
+              sessionId={TranscriptSessionId}
               toolPermissions={panelWaiters.toolPermissions}
               askUserQuestions={panelWaiters.askUserQuestions}
               handledRequestId={decisions.handledRequestId}

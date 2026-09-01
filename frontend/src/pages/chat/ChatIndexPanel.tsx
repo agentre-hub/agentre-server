@@ -5,7 +5,8 @@ import { useTranslation } from "react-i18next";
 
 import SessionIndex from "@/components/session/SessionIndex";
 import { loadErrorText } from "@/lib/loadError";
-import type { IndexAxis, IndexRow, ProjectNode } from "@/lib/sessionAxes";
+import type { IndexAxis, ProjectNode } from "@/lib/sessionAxes";
+import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 import type { SessionFilter } from "@/lib/sessionView";
 import type { IndexView } from "@/pages/chat/chatRows";
 import type { MachineReachability } from "@/pages/chat/useMachineReachability";
@@ -21,8 +22,8 @@ type SessionIndexProps = ComponentProps<typeof SessionIndex>;
  * 只挡住网络请求、挡不住渲染)、每 30 秒的兜底轮询、每条 mirror_changed 信号,都会
  * 走一遍。它不依赖任何 props 或 state,本来就没有留在组件里的理由。
  */
-const sessionDetailPath = (deviceId: number, sessionId: number) =>
-  `/devices/${deviceId}/sessions/${sessionId}`;
+const sessionDetailPath = (deviceId: number, conversationId: string) =>
+  `/devices/${deviceId}/sessions/${conversationId}`;
 
 /**
  * 这一次取数**有结论了**——成功或失败都算。索引的外壳（轴选择器、筛选 chips、
@@ -117,7 +118,7 @@ export interface ChatIndexPanelProps {
   view: IndexView;
   selectedKey: string | null;
   /** 移动端下钻走路由，因此不给这一条（行自己是链接）。 */
-  onSelect?: (row: IndexRow) => void;
+  onSelect?: (row: MirrorIndexRow) => void;
   projects: ProjectNode[];
   agents: SessionIndexProps["agents"];
   groupTotals: Record<string, number>;

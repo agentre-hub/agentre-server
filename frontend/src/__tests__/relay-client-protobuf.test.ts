@@ -12,18 +12,41 @@ import {
   RelayClient,
   type RelayClientOptions,
 } from "@/lib/relayClient";
+import { RelayConnection } from "@/lib/relayConnection";
+import { unwrapEnvelope, wrapEnvelope } from "@/lib/relayEnvelope";
+import { machineTarget } from "@/lib/relayTarget";
 
+/** 这一族用例里那条对话的身份。 */
+const CID = "11111111-1111-7111-8111-111111111111";
+
+/**
+ * 一条假 socket。
+ *
+ * 它现在收发的是**信封**（决策 10：一条连接多条通道），而这一族用例问的是通道
+ * 里面那一层 RPC，所以信封在这里拆开：`sent` 只收载荷，通道开通那一帧（目标声明）
+ * 不计——它是连接那一层的事，`relay-socket-count` 与服务端的通道用例各自守着它。
+ */
 class BinarySocket {
   readyState = 0;
   binaryType = "blob";
   sent: Uint8Array[] = [];
+  /** 客户端给这条通道自选的号；回程按它套信封。 */
+  channelId = "";
+  /** 通道开通时声明的目标。 */
+  target = "";
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: (() => void) | null = null;
 
   send(data: unknown): void {
-    this.sent.push(data as Uint8Array);
+    const { channelId, frame } = unwrapEnvelope(data as Uint8Array);
+    if (this.channelId === "") {
+      this.channelId = channelId;
+      this.target = new TextDecoder().decode(frame);
+      return;
+    }
+    this.sent.push(frame);
   }
   close(): void {
     this.readyState = 3;
@@ -34,7 +57,7 @@ class BinarySocket {
     this.onopen?.();
   }
   receive(data: Uint8Array): void {
-    this.onmessage?.({ data });
+    this.onmessage?.({ data: wrapEnvelope(this.channelId, data) });
   }
 }
 
@@ -45,15 +68,19 @@ function setup(overrides: Partial<RelayClientOptions> = {}): {
 } {
   const socket = new BinarySocket();
   const protocols: string[] = [];
-  const options: RelayClientOptions = {
+  const connection = new RelayConnection({
     url: "ws://relay.test/v1/relay/client",
     jwt: "jwt",
-    deviceFingerprint: "fp-web",
     reconnect: false,
     createWebSocket: (_url, _headers, offered) => {
       protocols.push(...offered);
       return socket as unknown as WebSocket;
     },
+  });
+  const options: RelayClientOptions = {
+    connection,
+    target: machineTarget("fp-daemon"),
+    jwt: "jwt",
     ...overrides,
   };
   return { client: new RelayClient(options), socket, protocols };
@@ -113,9 +140,12 @@ describe("RelayClient Protobuf RPC boundary", () => {
     // access log / history / Referer（见 relayUrl.ts）。
     expect(protocols).toEqual(["agentre-protobuf", "agentre.bearer.jwt"]);
 
+    // 通道开通那一帧声明的就是这台机器（决策 10/11）。
+    expect(socket.target).toBe("machine:fp-daemon");
+
     const list = client.request(rpcMethods.sessionList, {});
     const pull = client.request(rpcMethods.sessionPull, {
-      sessionId: 7n,
+      conversationId: CID,
       cursor: 0n,
       limit: 200,
     });
@@ -169,7 +199,9 @@ describe("RelayClient Protobuf RPC boundary", () => {
   it("routes typed errors by request ID without disturbing another request", async () => {
     const { client, socket } = setup();
     await authenticate(client, socket);
-    const failed = client.request(rpcMethods.sessionAttach, { sessionId: 9n });
+    const failed = client.request(rpcMethods.sessionAttach, {
+      conversationId: CID,
+    });
     const healthy = client.request(rpcMethods.sessionList, {});
     await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
     const failedFrame = ProtobufRpcCodec.decode(socket.sent[0]);
@@ -233,7 +265,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
         id: 0n,
         body: {
           case: "runtimeEventNotification",
-          sessionId: 7,
+          conversationId: CID,
           seq: 1,
           event: { case: "textDelta", text: "hello" },
         },
@@ -241,7 +273,11 @@ describe("RelayClient Protobuf RPC boundary", () => {
     );
     await vi.waitFor(() =>
       expect(events).toEqual([
-        { sessionId: 7, seq: 1, event: { kind: "text_delta", text: "hello" } },
+        {
+          conversationId: CID,
+          seq: 1,
+          event: { kind: "text_delta", text: "hello" },
+        },
       ]),
     );
   });
@@ -261,7 +297,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
     });
     await authenticate(client, socket);
 
-    const caughtUp = client.catchUp(7, "fp-origin");
+    const caughtUp = client.catchUp(CID, "fp-origin");
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
     const attach = ProtobufRpcCodec.decode(socket.sent[0]);
     socket.receive(
@@ -269,7 +305,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
         attach.id,
         rpcMethods.sessionAttach,
         {
-          sessionId: 7n,
+          conversationId: CID,
           backendType: "codex",
           lifecycleState: "idle",
           latestSeq: 2n,
@@ -290,7 +326,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
                 payload: {
                   case: "runtimeEvent",
                   value: {
-                    sessionId: 7n,
+                    conversationId: CID,
                     event: { case: "textDelta", value: { text: "hi" } },
                   },
                 },
@@ -302,7 +338,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
                 payload: {
                   case: "runResultDone",
                   value: {
-                    sessionId: 7n,
+                    conversationId: CID,
                     providerSessionId: "p-1",
                     turnToken: 1n,
                   },
@@ -321,10 +357,14 @@ describe("RelayClient Protobuf RPC boundary", () => {
     // toMatchObject 而不是 toEqual：protobuf-es 解出来的事件带一个 $typeName
     // 运行时标记，它不是投影的一部分，断言它等于把 wire 运行时的实现细节钉进本仓。
     expect(events).toMatchObject([
-      { sessionId: 7, seq: 1, event: { kind: "text_delta", text: "hi" } },
+      {
+        conversationId: CID,
+        seq: 1,
+        event: { kind: "text_delta", text: "hi" },
+      },
     ]);
     expect(done).toMatchObject([
-      { sessionId: 7, seq: 2, providerSessionId: "p-1", turnToken: 1 },
+      { conversationId: CID, seq: 2, providerSessionId: "p-1", turnToken: 1 },
     ]);
   });
   // Given server 镜像交出的一页历史里同样有轮次结束帧(GET /v1/agent-sessions/transcript
@@ -340,7 +380,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
           seq: 12,
           method: "runtime.event",
           params: {
-            sessionId: 7,
+            conversationId: CID,
             seq: 12,
             event: { kind: "text_delta", text: "hi" },
           },
@@ -349,7 +389,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
           seq: 13,
           method: "runtime.runResultDone",
           params: {
-            sessionId: 7,
+            conversationId: CID,
             seq: 13,
             providerSessionId: "01a05211",
             model: "gpt-5.6-sol",
@@ -367,11 +407,11 @@ describe("RelayClient Protobuf RPC boundary", () => {
 
     expect(last).toBe(13);
     expect(events).toMatchObject([
-      { sessionId: 7, event: { kind: "text_delta", text: "hi" } },
+      { conversationId: CID, event: { kind: "text_delta", text: "hi" } },
     ]);
     expect(done).toMatchObject([
       {
-        sessionId: 7,
+        conversationId: CID,
         seq: 13,
         providerSessionId: "01a05211",
         model: "gpt-5.6-sol",
@@ -400,11 +440,11 @@ describe("RelayClient Protobuf RPC boundary", () => {
     await authenticate(client, socket);
 
     const runtimeEvent = {
-      sessionId: 7n,
+      conversationId: CID,
       event: { case: "textDelta" as const, value: { text: "hi" } },
     };
     const doneValue = {
-      sessionId: 7n,
+      conversationId: CID,
       providerSessionId: "p-1",
       turnToken: 1n,
     };
@@ -413,13 +453,13 @@ describe("RelayClient Protobuf RPC boundary", () => {
       { case: "runResultDone", value: doneValue },
       {
         case: "autonomousTurnStarted",
-        value: { sessionId: 7n, trigger: "idle", turnToken: 2n },
+        value: { conversationId: CID, trigger: "idle", turnToken: 2n },
       },
       { case: "autonomousTurnEvent", value: runtimeEvent },
       { case: "autonomousTurnDone", value: doneValue },
     ] as const;
 
-    const caughtUp = client.catchUp(7, "fp-origin");
+    const caughtUp = client.catchUp(CID, "fp-origin");
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
     const attach = ProtobufRpcCodec.decode(socket.sent[0]);
     socket.receive(
@@ -427,7 +467,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
         attach.id,
         rpcMethods.sessionAttach,
         {
-          sessionId: 7n,
+          conversationId: CID,
           backendType: "codex",
           lifecycleState: "idle",
           latestSeq: BigInt(shapes.length),
@@ -477,7 +517,7 @@ describe("catch-up 的终态帧", () => {
     });
     await authenticate(client, socket);
 
-    const caughtUp = client.catchUp(9, "fp-origin");
+    const caughtUp = client.catchUp(CID, "fp-origin");
     await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
     const attach = ProtobufRpcCodec.decode(socket.sent[0]);
     socket.receive(
@@ -485,7 +525,7 @@ describe("catch-up 的终态帧", () => {
         attach.id,
         rpcMethods.sessionAttach,
         {
-          sessionId: 9n,
+          conversationId: CID,
           backendType: "codex",
           lifecycleState: "idle",
           latestSeq: 1n,
@@ -506,7 +546,7 @@ describe("catch-up 的终态帧", () => {
                 payload: {
                   case: "runResultDone" as const,
                   value: {
-                    sessionId: 9n,
+                    conversationId: CID,
                     model: "gpt-5.6-sol",
                     turnToken: 1n,
                     durationMs: 7400,

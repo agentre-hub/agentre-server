@@ -1,18 +1,18 @@
 /**
- * 浏览器中继客户端:连到 server 的 /v1/relay/client,对一台 agentred 说 wire 协议。
+ * 一条**虚拟通道**上的中继客户端:对通道那一头的那台机器说 wire 协议。
+ *
+ * socket 不归它:账号级连接由 RelayConnection 持有,一个账号一条(决策 10 + 13),
+ * 这里只借它开一条通道并声明目标(`conversation:<uuid>` 或 `machine:<fingerprint>`)。
+ * 从前这里自己拨 socket,于是同时看三台机器就是三条物理连接。
  *
  * 职责(测试接缝 2,Go 侧对照 internal/daemon/client/client_test.go):
- *  1. 多路复用:一个 socket 上并发多个 typed Protobuf RPC 请求,按 id 路由响应,不串道。
- *  2. 断线补齐:自动重连后,对关注的会话 attach(显式接管)→ 按 seq 游标 pull,
+ *  1. 多路复用:一条通道上并发多个 typed Protobuf RPC 请求,按 id 路由响应,不串道。
+ *  2. 断线补齐:连接重连后,对关注的对话 attach(显式接管)→ 按 seq 游标 pull,
  *     补齐的通知与实时通知走**同一套去重**(seq ≤ 游标即重复,只应用一次)。
- *  3. attach 幂等:同一会话重复 attach 不重复发请求,成功后走缓存。
+ *  3. attach 幂等:同一对话重复 attach 不重复发请求,成功后走缓存。
  *
- * 传输:浏览器通过 `agentre-protobuf` 子协议只发/收 Protobuf RpcFrame。channelID
- * 信封是 server 内部(relay_svc wrapEnvelope/unwrapEnvelope)的职责,浏览器不感知。
- *
- * 鉴权:设备 JWT 经 Authorization: Bearer 传给 createWebSocket。浏览器原生
- * WebSocket 无法设置自定义 header —— 默认工厂忽略 headers(真实浏览器里 token
- * 要另走服务端补的浏览器可携带机制);测试注入假工厂断言 header 正确传递。
+ * 鉴权:握手是**逐通道**的(auth.account)——一条连接上的两条通道接的是两台不同的
+ * 机器,各自要向自己那台出示凭据。
  */
 import {
   DefaultSessionPullLimit,
@@ -65,11 +65,13 @@ import {
 } from "@agentre-hub/agentre-wire";
 import type { MessageInitShape, MessageShape } from "@bufbuild/protobuf";
 
-import { RedialTimer } from "@/lib/redialTimer";
-import { bearerSubprotocol } from "@/lib/relayUrl";
+import type {
+  RelayChannelHandle,
+  RelayConnection,
+  RelayState,
+} from "@/lib/relayConnection";
 
-export type RelayState =
-  "connecting" | "connected" | "disconnected" | "reconnecting";
+export type { RelayState } from "@/lib/relayConnection";
 
 export class RelayError extends Error {
   constructor(
@@ -92,35 +94,30 @@ export interface NotificationHandlers {
   onRunResultDone?: (frame: RunResultDoneFrame) => void;
   onAutonomousTurnStarted?: (frame: AutonomousTurnStartedFrame) => void;
 }
-
 export interface RelayClientOptions extends NotificationHandlers {
-  /** ws(s)://host/v1/relay/client?daemon_fingerprint=<fp> —— 由调用方拼好。 */
-  url: string;
-  /** 设备 JWT → Authorization: Bearer <jwt>。 */
+  /**
+   * 共用的那条账号级连接。这个客户端跑在它的**一条虚拟通道**上（决策 10）：
+   * 从前每个客户端自己开一条 socket，于是同时看三台机器就是三条。
+   */
+  connection: RelayConnectionLike;
+  /**
+   * 这条通道的目标：`conversation:<uuid>` 或 `machine:<fingerprint>`
+   * （见 relayTarget 的入口分流）。服务端据此把这条通道接到承载它的机器上。
+   */
+  target: string;
+  /**
+   * 出示给 daemon 的账号凭据（auth.account）。握手是**逐通道**的：一条连接上的
+   * 两条通道接的是两台不同的机器，各自要向自己那台出示凭据。
+   */
   jwt: string;
-  /** 断线重连前换取新的短效凭据，同时更新 query token 与握手 JWT。 */
-  refreshCredentials?: () => Promise<{ url: string; jwt: string }>;
-  /**
-   * 本浏览器自己的设备指纹,随 auth.account 出示(与 Go 侧 daemon/client 的中继
-   * 路径同一握手:连接建立后先 auth.account 再用 runtime.* 与 session.* 方法)。
-   * 没有它 daemon 无法把这条连接认成一个对端,后续请求都被 requireAuth 拒掉。
-   */
-  deviceFingerprint: string;
-  /** 断线自动重连(默认 true)。 */
-  reconnect?: boolean;
-  /** 重连退避间隔毫秒(默认 1000)。 */
-  reconnectDelayMs?: number;
-  /**
-   * 创建 WebSocket 的工厂。默认用浏览器原生 WebSocket(忽略 headers,见文件头);
-   * 测试注入假实现断言 URL / 鉴权头 / 二进制帧。
-   */
-  createWebSocket?: (
-    url: string,
-    headers: Record<string, string>,
-    protocols: string[],
-  ) => WebSocket;
   onStateChange?: (state: RelayState) => void;
 }
+
+/** RelayClient 用得到的那一小块连接能力（ISP）。 */
+export type RelayConnectionLike = Pick<
+  RelayConnection,
+  "state" | "connect" | "openChannel"
+>;
 
 interface PendingRequest {
   method: AnyRpcMethod;
@@ -129,20 +126,21 @@ interface PendingRequest {
   cleanup?: () => void;
 }
 
-const OPEN = 1;
-const PROTOBUF_SUBPROTOCOL = "agentre-protobuf";
-
 /**
- * 一条会话在本客户端这边的全部状态。身份是 (origin, sessionId) 这一对,见
- * RelayClient.sessions 的注释。
+ * 一条对话在本客户端这边的全部状态。
+ *
+ * 身份就是 `conversationId` 一个值（决策 1）：它全局唯一，所以「同一条连接上换看
+ * 同号的另一条对话」那类并轨**由构造消失**——从前的键是 (origin, sessionId) 一对，
+ * 因为会话号是各端本地自增的。origin 留下来只作**请求参数**（wire 的
+ * ResolveSessionPeer：省略 = 调用方自己的对端），不再是身份的一半。
  */
 interface SessionState {
-  readonly sessionId: number;
+  readonly conversationId: string;
   /**
    * 发起端指纹。空串 = 「调用方自己的对端」—— 那是 wire 上**省略 origin** 的含义
    * (ResolveSessionPeer),是一个确定的身份,不是「任意」或「还不知道」。
    */
-  readonly origin: string;
+  origin: string;
   /** 已收到的最后 seq(独占游标,首次 0)。 */
   cursor: number;
   /** 本次连接已成功 attach 的结果(断线清空,重连重发)。 */
@@ -160,51 +158,28 @@ interface SessionState {
   watched: boolean;
 }
 
-/** 会话表的键。origin 在前,空串是「调用方自己的对端」那个确定身份。 */
-function sessionKey(sessionId: number, origin: string): string {
-  return `${origin}\u0000${sessionId}`;
-}
-
 export class RelayClient {
-  private readonly opts: Required<
-    Pick<RelayClientOptions, "url" | "jwt" | "deviceFingerprint">
-  > &
-    RelayClientOptions;
-  private ws: WebSocket | null = null;
+  private readonly opts: RelayClientOptions;
+  private readonly connection: RelayConnectionLike;
+  private channel: RelayChannelHandle | null = null;
   private nextId = 1n;
   private pending = new Map<string, PendingRequest>();
   /**
-   * 每条会话在本客户端这边的全部状态,按 **(发起端指纹, 会话 id)** 索引。
+   * 每条对话在本客户端这边的全部状态，按 `conversation_id` 索引。
    *
-   * 键必须是这一对,不能只是会话 id:daemon 上会话的键就是这一对
-   * (ResolveSessionPeer),而会话 id 是**各端本地从 1 自增**的 —— 一台机器上同时挂着
-   * 别的对端发起的同号会话是常态(会话清单列的是这台机器上的**全部**会话)。
-   * 少了 origin 那一半,同一条连接上换看同号的另一条对话就会读到上一条的游标与
-   * attach 结果:attach 命中缓存(新那条从来没被接管过、交回来的 latestSeq 是上一条
-   * 的高水位),pull 又带着上一条的游标出发 —— 新那条比旧那条短时一行都拉不回来,
-   * 页面整个空白,而且没有任何报错。
+   * 一个值就够了：`conversation_id` 全局唯一（决策 1），所以「同一条连接上换看同号
+   * 的另一条对话会读到上一条的游标与 attach 结果」那条路径由构造消失，不是防得更
+   * 好了，是没有了。实时通知也因此认得出自己属于哪一条，不再需要「最后一次 attach
+   * 的那条赢」这种取舍。
    */
   private sessions = new Map<string, SessionState>();
-  /**
-   * 会话 id → 此刻该由哪条会话消费这个 id 的**实时帧**。
-   *
-   * 实时通知(EventFrame)线上只带 `{sessionId, event, seq}`,**不带发起端指纹**,
-   * 所以同号的两条会话在实时流上本身就分不开 —— 这是 wire 的缺口,不是这里能补的。
-   * 本客户端的取舍:最后一次 attach 的那条赢。详情页一次只看一条对话,因此这与
-   * 「用户正在看的那条」一致。真要根治得让 EventFrame 带上 origin(在 agentre 仓)。
-   */
-  private liveBySessionId = new Map<number, SessionState>();
   private closedByUser = false;
-  private readonly redial = new RedialTimer();
-  private connectPromise: Promise<void> | null = null;
+  private authenticating: Promise<void> | null = null;
   private currentState: RelayState = "disconnected";
 
   constructor(opts: RelayClientOptions) {
-    this.opts = {
-      reconnect: true,
-      reconnectDelayMs: 1000,
-      ...opts,
-    };
+    this.opts = opts;
+    this.connection = opts.connection;
   }
 
   /**
@@ -212,16 +187,18 @@ export class RelayClient {
    * daemon/client 的中继路径同一握手)。必须在任何 runtime.* 与 session.* 之前完成 ——
    * daemon 对非 auth.* 方法一律 requireAuth。
    *
-   * protocolVersion 是握手的一部分而不是可选装饰:对端按**精确匹配**校验,并且把
-   * 空版本判成「对端太旧」(proto3 下缺字段与显式空串同为零值)。不带它 = 每一次
-   * 建连都在 auth.account 上被拒 = 浏览器端整个不可用。版本取自 wire 包导出的
-   * 常量,与本次编译进来的 schema 同源。
+   * 请求体里**不再给对端身份**（决策 8：`AuthAccountRequest.device_fingerprint`
+   * 已删）——身份必须来自被验证的凭据，而不是请求体里的一句自报。
+   *
+   * protocolVersion 是握手的一部分而不是可选装饰:对端按 [min_supported, protocol]
+   * 两个窗口的交集判定,空版本被判成「对端太旧」(proto3 下缺字段与显式空串同为零值)。
+   * 版本取自 wire 包导出的常量,与本次编译进来的 schema 同源。
    */
   private authenticate(): Promise<unknown> {
     return this.request(rpcMethods.authAccount, {
       credential: this.opts.jwt,
-      deviceFingerprint: this.opts.deviceFingerprint,
       protocolVersion: PROTOCOL_VERSION,
+      minSupportedProtocolVersion: PROTOCOL_VERSION,
     });
   }
 
@@ -235,81 +212,41 @@ export class RelayClient {
     this.opts.onStateChange?.(state);
   }
 
-  /** 建立(或重连)WebSocket;已在连接中时返回同一个 promise。 */
+  /**
+   * 接上这条通道：连接就绪 → 开通道并声明目标 → auth.account。
+   *
+   * 「connected」只在握手成功后才对外暴露,connect() 也只在此时 resolve;消费者的
+   * session.* 请求因此必然晚于握手完成,不会抢在 auth.account 之前到达 daemon 被
+   * Unauthorized 拒掉(实测竞态)。
+   */
   connect(): Promise<void> {
-    if (this.connectPromise) return this.connectPromise;
+    if (this.authenticating) return this.authenticating;
     this.closedByUser = false;
     this.setState("connecting");
-    this.connectPromise = new Promise<void>((resolve, reject) => {
-      const headers = { Authorization: `Bearer ${this.opts.jwt}` };
-      const factory =
-        this.opts.createWebSocket ??
-        ((url: string, _headers: Record<string, string>, protocols: string[]) =>
-          new WebSocket(url, protocols));
-      // 票走子协议而不是 URL：那样它不进 access log / history / Referer。
-      // headers 仍然传给工厂——测试注入的假工厂断言的是它，而真浏览器忽略它。
-      const ws = factory(this.opts.url, headers, [
-        PROTOBUF_SUBPROTOCOL,
-        bearerSubprotocol(this.opts.jwt),
-      ]);
-      ws.binaryType = "arraybuffer";
-      this.ws = ws;
-      ws.onopen = () => {
-        // 连接建立 ≠ 可用。daemon 对非 auth.* 方法一律 requireAuth,而 auth.account
-        // 与随后的 session.* / runtime.* 是并发处理的 —— 在握手返回前就把 relayState
-        // 置 connected,页面会立刻发 session.list,抢在 auth.account 之前到达 daemon
-        // 被 Unauthorized 拒掉(实测竞态)。所以「connected」只在 auth.account 成功后才
-        // 对外暴露,connect() 也只在此时 resolve;消费者的 session.* 请求因此必然晚于
-        // 握手完成,不再抢跑。
-        void this.authenticate()
-          .then(() => {
-            this.setState("connected");
-            resolve();
-          })
-          .catch((err) => {
-            this.connectPromise = null;
-            reject(
-              err instanceof RelayError
-                ? err
-                : new RelayError(-1, "relay: auth.account 失败", err),
-            );
-            // 握手失败:关掉这条未认证的连接,走 handleClose → reconnecting → 自动
-            // 重连,页面据此触发 R11 探测(被吊销 / 账号不匹配 / 凭据过期)。
-            ws.close();
-          });
-      };
-      ws.onerror = () => {
-        // 尚未 open 就出错:让 connect() 失败,并清掉 connectPromise,使下一次
-        // 重试能真正新建连接(否则重连会一直拿到同一个已拒绝的 promise)。
-        if (ws.readyState !== OPEN) {
-          this.connectPromise = null;
-          reject(new RelayError(-1, "relay: WebSocket 连接失败", null));
-        }
-      };
-      ws.onmessage = (ev: MessageEvent) => this.handleMessage(ev.data);
-      ws.onclose = () => {
-        // 只有**当前**这条 socket 的收尾才作数:连接失败重试时,被换掉的旧
-        // socket 的 close 事件总在新连接建立之后才到。照单全收会把一条刚连上的
-        // 连接判成断线 —— 未决请求被拒、状态翻成 disconnected,页面当场「连不上」。
-        if (this.ws !== ws) return;
-        this.ws = null;
-        this.connectPromise = null;
-        this.handleClose();
-      };
-    });
-    return this.connectPromise;
+    const run = (async () => {
+      await this.connection.connect();
+      if (this.closedByUser) return;
+      this.openChannel();
+      await this.handshake();
+    })();
+    this.authenticating = run;
+    void run.then(
+      () => {
+        if (this.authenticating === run) this.authenticating = null;
+      },
+      () => {
+        if (this.authenticating === run) this.authenticating = null;
+      },
+    );
+    return run;
   }
 
-  /** 主动关闭,不再自动重连。 */
+  /** 主动关掉这条通道。连接本身留着——它是账号级的，别人还在用。 */
   close(): void {
     this.closedByUser = true;
-    this.redial.cancel();
-    this.ws?.close();
-    this.ws = null;
-    // 浏览器的 ws.close() 不同步回调 onclose,而那条迟到的 onclose 已经不属于
-    // 当前 socket、不会再跑收尾。connectPromise 就地清掉,否则下一次 connect()
-    // 直接拿到这个已结束的 promise —— 客户端没有 socket 却自称连着。
-    this.connectPromise = null;
+    this.channel?.close();
+    this.channel = null;
+    this.authenticating = null;
     this.failPending(new RelayError(-1, "relay: 客户端已关闭", null));
     this.setState("disconnected");
   }
@@ -350,25 +287,23 @@ export class RelayClient {
   }
 
   /**
-   * 显式接管一条会话(幂等):成功后该会话进入关注名单,断线重连自动补齐。
+   * 显式接管一条对话(幂等):成功后该对话进入关注名单,断线重连自动补齐。
    * 重复调用(含并发)不重复发请求。
    */
   attach(
-    sessionId: number,
+    conversationId: string,
     peerFingerprint?: string,
   ): Promise<SessionAttachResult> {
-    const st = this.stateOf(sessionId, peerFingerprint);
-    // 实时帧只带会话 id,认不出发起端:最后接管的那条赢(见 liveBySessionId)。
-    this.liveBySessionId.set(sessionId, st);
+    const st = this.stateOf(conversationId, peerFingerprint);
     if (st.attached) return Promise.resolve(st.attached);
     if (st.attaching) return st.attaching;
     const p = (async (): Promise<SessionAttachResult> => {
       const result = await this.request(rpcMethods.sessionAttach, {
-        sessionId: BigInt(sessionId),
+        conversationId,
         peerFingerprint: st.origin,
       });
       const decoded: SessionAttachResult = {
-        sessionId: Number(result.sessionId),
+        conversationId: result.conversationId,
         backendType: result.backendType,
         lifecycleState: result.lifecycleState,
         latestSeq: Number(result.latestSeq),
@@ -390,14 +325,14 @@ export class RelayClient {
   }
 
   /**
-   * 按 seq 游标补齐一条会话:attach → pull 翻页直到 HasMore=false。
+   * 按 seq 游标补齐一条对话:attach → pull 翻页直到 HasMore=false。
    * 补齐的通知与实时同一套去重(seq ≤ 游标即丢弃、seq > 游标+1 即跳号)。
    *
-   * 同一会话的补齐串行:已有一串在飞时复用它,并记下「补完再补一轮」——
+   * 同一对话的补齐串行:已有一串在飞时复用它,并记下「补完再补一轮」——
    * 跳号触发的补洞与页面发起的补齐因此不会并发翻页、互相踩游标。
    */
-  catchUp(sessionId: number, peerFingerprint?: string): Promise<void> {
-    const st = this.stateOf(sessionId, peerFingerprint);
+  catchUp(conversationId: string, peerFingerprint?: string): Promise<void> {
+    const st = this.stateOf(conversationId, peerFingerprint);
     const running = st.catchingUp;
     if (running) {
       st.refill = true;
@@ -416,7 +351,7 @@ export class RelayClient {
       // 重发同一条 pull,补齐原地打转、把 daemon 与中继一起打满。补不动就停在这里,
       // 等下一条实时帧 / 下次重连再试(Go 侧 scheduleGapFill 的 filling 闸门同一纪律)。
       if (queued && st.cursor > before) {
-        void this.catchUp(st.sessionId, st.origin).catch(() => {
+        void this.catchUp(st.conversationId, st.origin).catch(() => {
           // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
         });
       }
@@ -439,14 +374,14 @@ export class RelayClient {
    * 会把它前插到手上那一段的前面,转录就乱序了。
    */
   async pullBefore(
-    sessionId: number,
+    conversationId: string,
     beforeSeq: number,
     limit: number,
     peerFingerprint?: string,
   ): Promise<{ frames: JournaledNotification[]; hasBefore: boolean }> {
     const origin = peerFingerprint?.trim() ?? "";
     const res = await this.request(rpcMethods.sessionPull, {
-      sessionId: BigInt(sessionId),
+      conversationId,
       peerFingerprint: origin,
       cursor: BigInt(Math.max(0, beforeSeq - 1 - limit)),
       limit,
@@ -462,11 +397,11 @@ export class RelayClient {
   }
 
   private async pullUntilCaughtUp(st: SessionState): Promise<void> {
-    await this.attach(st.sessionId, st.origin);
+    await this.attach(st.conversationId, st.origin);
     for (;;) {
       const sentCursor = st.cursor;
       const response = await this.request(rpcMethods.sessionPull, {
-        sessionId: BigInt(st.sessionId),
+        conversationId: st.conversationId,
         peerFingerprint: st.origin,
         cursor: BigInt(sentCursor),
         limit: DefaultSessionPullLimit,
@@ -495,17 +430,22 @@ export class RelayClient {
   }
 
   /**
-   * 取(必要时新建)一条会话的状态。身份是 (origin, sessionId) 这一对 —— 省略
-   * origin 不是「随便哪条同号的」,而是「调用方自己的对端」那一条(wire 的约定),
-   * 因此它有自己的一格,不会与点名了发起端的那条合并。
+   * 取(必要时新建)一条对话的状态。身份是 `conversation_id` 一个值；点名的发起端
+   * 只是请求参数，点名一次就记住（省略 origin 的含义是「调用方自己的对端」，那是
+   * 一个确定身份，不能拿它去覆盖已经知道的发起端）。
    */
-  private stateOf(sessionId: number, peerFingerprint?: string): SessionState {
+  private stateOf(
+    conversationId: string,
+    peerFingerprint?: string,
+  ): SessionState {
     const origin = peerFingerprint?.trim() ?? "";
-    const key = sessionKey(sessionId, origin);
-    const existing = this.sessions.get(key);
-    if (existing) return existing;
+    const existing = this.sessions.get(conversationId);
+    if (existing) {
+      if (origin !== "" && existing.origin === "") existing.origin = origin;
+      return existing;
+    }
     const created: SessionState = {
-      sessionId,
+      conversationId,
       origin,
       cursor: 0,
       attached: null,
@@ -514,33 +454,99 @@ export class RelayClient {
       refill: false,
       watched: false,
     };
-    this.sessions.set(key, created);
+    this.sessions.set(conversationId, created);
     return created;
   }
 
-  /** 一条会话此刻的游标。origin 是身份的一半,省略即「调用方自己的对端」那一条。 */
-  getCursor(sessionId: number, peerFingerprint?: string): number {
-    return this.stateOf(sessionId, peerFingerprint).cursor;
+  /** 一条对话此刻的游标。 */
+  getCursor(conversationId: string, peerFingerprint?: string): number {
+    return this.stateOf(conversationId, peerFingerprint).cursor;
   }
 
-  /** 由外部(如从 server 镜像预置)设置会话游标。 */
-  setCursor(sessionId: number, seq: number, peerFingerprint?: string): void {
-    this.stateOf(sessionId, peerFingerprint).cursor = seq;
+  /** 由外部(如从 server 镜像预置)设置对话游标。 */
+  setCursor(
+    conversationId: string,
+    seq: number,
+    peerFingerprint?: string,
+  ): void {
+    this.stateOf(conversationId, peerFingerprint).cursor = seq;
   }
 
-  // ── 内部:发送 / 接收 ────────────────────────────────────────────────────
+  // ── 内部:通道 / 发送 / 接收 ──────────────────────────────────────────
+
+  /** 开这条客户端自己那条通道，并把目标声明出去。 */
+  private openChannel(): void {
+    if (this.channel) return;
+    this.channel = this.connection.openChannel(this.opts.target, {
+      // 每一次（重）连：新 socket 上服务端认不得旧通道，握手要重做，关注的对话
+      // 要按游标补齐。
+      onOpen: () => void this.handshake().catch(() => {}),
+      onFrame: (payload) => this.handleMessage(payload),
+      onClose: () => this.handleChannelClosed(),
+      onConnectionState: (state) => this.handleConnectionState(state),
+    });
+  }
+
+  /** 握手 + 重连后的补齐。失败时把这条通道判为断开，由连接那层退避重连。 */
+  private async handshake(): Promise<void> {
+    try {
+      await this.authenticate();
+    } catch (err) {
+      this.setState("reconnecting");
+      throw err instanceof RelayError
+        ? err
+        : new RelayError(-1, "relay: auth.account 失败", err);
+    }
+    this.setState("connected");
+    for (const st of [...this.sessions.values()].filter((s) => s.watched)) {
+      try {
+        await this.catchUp(st.conversationId, st.origin);
+      } catch {
+        // 该对话补齐失败,保持关注,下一条 / 下次重连再试。
+      }
+    }
+  }
+
+  private handleConnectionState(state: RelayState): void {
+    if (this.closedByUser) return;
+    // "connected" 由握手那一步自己说：连接建立 ≠ 这条通道可用。
+    if (state === "connected") return;
+    for (const st of this.sessions.values()) {
+      st.attached = null;
+      st.attaching = null;
+    }
+    this.failPending(new RelayError(-1, "relay: 连接已断开", null));
+    this.setState(state);
+  }
+
+  /**
+   * 服务端关掉了这条通道：目标不存在 / 离线 / 转发失败 / 不许寻址。这是**通道级**
+   * 的失败，同一条连接上别人的通道照常收发，所以这里既不重连也不动连接。
+   */
+  private handleChannelClosed(): void {
+    this.channel = null;
+    for (const st of this.sessions.values()) {
+      st.attached = null;
+      st.attaching = null;
+    }
+    this.failPending(new RelayError(-1, "relay: 通道已被服务端关闭", null));
+    if (this.closedByUser) return;
+    this.setState("reconnecting");
+  }
 
   private sendBytes(bytes: Uint8Array): void {
-    if (!this.ws || this.ws.readyState !== OPEN) {
-      throw new RelayError(-1, "relay: 连接未就绪", null);
+    if (!this.channel) throw new RelayError(-1, "relay: 连接未就绪", null);
+    try {
+      this.channel.send(bytes);
+    } catch (err) {
+      throw new RelayError(-1, "relay: 连接未就绪", err);
     }
-    this.ws.send(bytes);
   }
 
-  private handleMessage(data: unknown): void {
+  private handleMessage(payload: Uint8Array): void {
     let frame: ProtobufRpcFrame;
     try {
-      frame = ProtobufRpcCodec.decode(binaryPayload(data));
+      frame = ProtobufRpcCodec.decode(payload);
     } catch {
       // 单帧坏掉不影响连接:丢掉继续等下一帧。
       return;
@@ -574,9 +580,8 @@ export class RelayClient {
   }
 
   /**
-   * 投递一帧通知。`target` 是补齐路径交来的那条会话 —— 它自己知道自己是谁,不必
-   * 也**不能**去猜:补齐拉回来的帧与实时帧在线上长得一模一样,靠 liveBySessionId
-   * 去认的话,同号的另一条会话正被看着时,这一页会算到它头上。
+   * 投递一帧通知。`target` 是补齐路径交来的那条对话 —— 它自己知道自己是谁,不必
+   * 也**不能**去猜。实时帧带的 `conversation_id` 全局唯一,认得出自己属于哪一条。
    */
   private dispatchNotification(
     frame: ProtobufRpcFrame,
@@ -586,17 +591,8 @@ export class RelayClient {
     if (!decoded) {
       return;
     }
-    const st = target ?? this.liveStateOf(decoded.sessionId);
+    const st = target ?? this.stateOf(decoded.conversationId);
     this.applyDedup(st, decoded.seq, () => decoded.deliver(this.opts));
-  }
-
-  /**
-   * 一帧**实时**通知该记到哪条会话上。线上只有会话 id 认得出来,所以取最后一次
-   * attach 的那条;一次都没 attach 过时落到「调用方自己的对端」那一格 —— 与
-   * 省略 origin 的那条请求同一个身份,不新造第三种含义。
-   */
-  private liveStateOf(sessionId: number): SessionState {
-    return this.liveBySessionId.get(sessionId) ?? this.stateOf(sessionId);
   }
 
   /**
@@ -626,7 +622,7 @@ export class RelayClient {
     }
     if (seq <= st.cursor) return;
     if (seq > st.cursor + 1) {
-      void this.catchUp(st.sessionId, st.origin).catch(() => {
+      void this.catchUp(st.conversationId, st.origin).catch(() => {
         // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
       });
       return;
@@ -641,22 +637,6 @@ export class RelayClient {
     if (frame) this.dispatchNotification(frame, st);
   }
 
-  private handleClose(): void {
-    // 游标与关注名单留着(重连要接着补),本次连接的 attach 结果作废:新连接上
-    // 每条会话都要重新接管。
-    for (const st of this.sessions.values()) {
-      st.attached = null;
-      st.attaching = null;
-    }
-    this.failPending(new RelayError(-1, "relay: 连接已断开", null));
-    if (this.closedByUser || this.opts.reconnect === false) {
-      this.setState("disconnected");
-      return;
-    }
-    this.setState("reconnecting");
-    this.scheduleReconnect();
-  }
-
   private failPending(err: RelayError): void {
     for (const [, entry] of this.pending) {
       entry.cleanup?.();
@@ -664,38 +644,10 @@ export class RelayClient {
     }
     this.pending.clear();
   }
-
-  private scheduleReconnect(): void {
-    this.redial.schedule(this.opts.reconnectDelayMs ?? 1000, () => {
-      void this.reconnect();
-    });
-  }
-
-  private async reconnect(): Promise<void> {
-    try {
-      if (this.opts.refreshCredentials) {
-        const credentials = await this.opts.refreshCredentials();
-        this.opts.url = credentials.url;
-        this.opts.jwt = credentials.jwt;
-      }
-      await this.connect();
-      // 重连后:对关注的会话逐个 attach(新连接需重发)→ 按游标补齐。
-      // 单条会话补齐失败不阻断其它会话。
-      for (const st of [...this.sessions.values()].filter((s) => s.watched)) {
-        try {
-          await this.catchUp(st.sessionId, st.origin);
-        } catch {
-          // 该会话补齐失败,保持关注,下一条 / 下次重连再试。
-        }
-      }
-    } catch {
-      this.scheduleReconnect();
-    }
-  }
 }
 
 interface DecodedNotification {
-  sessionId: number;
+  conversationId: string;
   seq: number | undefined;
   deliver: (handlers: NotificationHandlers) => void;
 }
@@ -713,12 +665,12 @@ function decodeNotification(
     body.case === "autonomousTurnEventNotification"
   ) {
     const value: EventFrame = {
-      sessionId: body.sessionId,
+      conversationId: body.conversationId,
       seq: body.seq,
       event: runtimeEventToViewEvent(body.event),
     };
     return {
-      sessionId: value.sessionId,
+      conversationId: value.conversationId,
       seq: value.seq,
       deliver: (h) => h.onEvent?.(value),
     };
@@ -728,7 +680,7 @@ function decodeNotification(
     body.case === "autonomousTurnDoneNotification"
   ) {
     const value: RunResultDoneFrame = {
-      sessionId: body.sessionId,
+      conversationId: body.conversationId,
       providerSessionId: body.providerSessionId,
       usage: body.usage === undefined ? undefined : { ...body.usage },
       userAnchor: body.userAnchor,
@@ -743,20 +695,20 @@ function decodeNotification(
       seq: body.seq,
     };
     return {
-      sessionId: value.sessionId,
+      conversationId: value.conversationId,
       seq: value.seq,
       deliver: (h) => h.onRunResultDone?.(value),
     };
   }
   if (body.case === "autonomousTurnStartedNotification") {
     const value: AutonomousTurnStartedFrame = {
-      sessionId: body.sessionId,
+      conversationId: body.conversationId,
       trigger: body.trigger,
       turnToken: Number(body.turnToken),
       seq: body.seq,
     };
     return {
-      sessionId: value.sessionId,
+      conversationId: value.conversationId,
       seq: value.seq,
       deliver: (h) => h.onAutonomousTurnStarted?.(value),
     };
@@ -913,7 +865,7 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
       seq,
       method,
       params: {
-        sessionId: Number(value.sessionId),
+        conversationId: String(value.conversationId ?? ""),
         seq,
         event: runtimeEventToViewEvent({
           case: event.case,
@@ -927,7 +879,7 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
       seq,
       method,
       params: {
-        sessionId: Number(value.sessionId),
+        conversationId: String(value.conversationId ?? ""),
         seq,
         trigger: value.trigger,
         turnToken: Number(value.turnToken ?? 0),
@@ -939,7 +891,7 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
     seq,
     method,
     params: {
-      sessionId: Number(value.sessionId),
+      conversationId: String(value.conversationId ?? ""),
       seq,
       providerSessionId: value.providerSessionId,
       ...(usage === undefined ? {} : { usage: { ...usage } }),
@@ -970,8 +922,9 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
 function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
   if (!n.params || typeof n.params !== "object") return null;
   const value = n.params as Record<string, unknown>;
-  if (typeof value.sessionId !== "number") return null;
-  const sessionId = value.sessionId;
+  if (typeof value.conversationId !== "string" || value.conversationId === "")
+    return null;
+  const conversationId = value.conversationId;
   if (n.method === NotifyEvent || n.method === NotifyAutonomousTurnEvent) {
     if (!value.event || typeof value.event !== "object") return null;
     return {
@@ -981,7 +934,7 @@ function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
           n.method === NotifyEvent
             ? "runtimeEventNotification"
             : "autonomousTurnEventNotification",
-        sessionId,
+        conversationId,
         seq: n.seq,
         event: viewEventToRuntimeEvent(
           value.event as Record<string, unknown>,
@@ -994,7 +947,7 @@ function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
       id: 0n,
       body: {
         case: "autonomousTurnStartedNotification",
-        sessionId,
+        conversationId,
         seq: n.seq,
         trigger: str(value.trigger),
         turnToken: BigInt(num(value.turnToken)),
@@ -1011,7 +964,7 @@ function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
         n.method === NotifyRunResultDone
           ? "runResultDoneNotification"
           : "autonomousTurnDoneNotification",
-      sessionId,
+      conversationId,
       seq: n.seq,
       providerSessionId: str(value.providerSessionId),
       ...(usage === undefined ? {} : { usage: { ...usage } }),
@@ -1046,13 +999,6 @@ function viewEventToRuntimeEvent(
   const eventCase =
     typeof kind === "string" ? (RUNTIME_EVENT_CASES[kind] ?? kind) : "";
   return { case: eventCase, ...fields };
-}
-
-function binaryPayload(data: unknown): Uint8Array {
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (ArrayBuffer.isView(data))
-    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  throw new TypeError("relay: WebSocket payload must be binary");
 }
 
 function isNotification(frame: ProtobufRpcFrame): boolean {

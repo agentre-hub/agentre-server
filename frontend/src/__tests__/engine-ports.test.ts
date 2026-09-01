@@ -10,7 +10,7 @@ const relay = vi.hoisted(() => ({
   connect: vi.fn(),
   request: vi.fn(),
   close: vi.fn(),
-  urls: [] as string[],
+  targets: [] as string[],
 }));
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -25,8 +25,8 @@ vi.mock("@/lib/relayTicket", async (importOriginal) => {
 
 vi.mock("@/lib/relayClient", () => ({
   RelayClient: class {
-    constructor(options: { url: string }) {
-      relay.urls.push(options.url);
+    constructor(options: { target: string }) {
+      relay.targets.push(options.target);
     }
     connect = relay.connect;
     request = relay.request;
@@ -34,14 +34,13 @@ vi.mock("@/lib/relayClient", () => ({
   },
 }));
 
-/** 中继连到了哪台机器：URL 里的 daemon_fingerprint 就是被检测的那一台。 */
+/**
+ * 中继开到了哪台机器：通道声明的目标就是被检测的那一台。
+ *
+ * URL 上已经没有目标了（决策 10）——一个账号一条连接，目标由每条虚拟通道自己声明。
+ */
 function relayTargets(): string[] {
-  return relay.urls.map(
-    (url) =>
-      new URLSearchParams(url.slice(url.indexOf("?"))).get(
-        "daemon_fingerprint",
-      ) ?? "",
-  );
+  return relay.targets.map((target) => target.replace(/^machine:/, ""));
 }
 
 const mockedApi = vi.mocked(api);
@@ -66,7 +65,7 @@ beforeEach(() => {
   relay.connect.mockReset();
   relay.request.mockReset();
   relay.close.mockReset();
-  relay.urls.length = 0;
+  relay.targets.length = 0;
   relay.connect.mockResolvedValue(undefined);
   mockedEnsureRelayTicket.mockResolvedValue({
     accessToken: "ticket",

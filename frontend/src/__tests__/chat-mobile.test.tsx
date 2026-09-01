@@ -86,7 +86,7 @@ const agents = [
 const waitingMirrored = {
   peer_fingerprint: "fp-1",
   machine_fingerprint: "fp-1",
-  session_id: "42",
+  conversation_id: "42",
   title: "等你批",
   agent_sync_id: "ag-1",
   backend_type: "claudecode",
@@ -97,7 +97,7 @@ const waitingMirrored = {
 const runningMirrored = {
   peer_fingerprint: "fp-1",
   machine_fingerprint: "fp-1",
-  session_id: "43",
+  conversation_id: "43",
   title: "跑着呢",
   agent_sync_id: "ag-1",
   backend_type: "claudecode",
@@ -142,7 +142,7 @@ function stubApi(saved: unknown[], devices: unknown[] = [agentred]) {
 
 /** 机器轴上那台在线机器交出的清单（账号里没有它，行尾因此是「保存」）。 */
 const onMachineOnly = {
-  sessionId: 77,
+  conversationId: "77",
   title: "机器上才有的",
   agentSyncId: "ag-1",
   cwd: "/home/agent/proj",
@@ -301,7 +301,7 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     renderChat();
 
     expect(await screen.findByText("等你批")).toBeTruthy();
-    expect(screen.getByTestId("row-secondary-fp-1:42").textContent).toContain(
+    expect(screen.getByTestId("row-secondary-42").textContent).toContain(
       "书房小主机",
     );
   });

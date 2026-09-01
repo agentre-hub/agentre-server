@@ -13,6 +13,8 @@ import type { IndexAxis } from "@agentre-hub/agentre-ui";
 
 export type {
   IndexAxis,
+  IndexGroup,
+  IndexGroupRow,
   IndexRow,
   MachineInfo,
   ProjectNode,

@@ -21,9 +21,6 @@ import {
   deriveTitle,
   dispatchNewConversation,
   fetchDispatchPlan,
-  newSessionId,
-  SESSION_ID_EPOCH_MS,
-  SESSION_ID_SEQUENCE_SPAN,
   pickFirstAvailable,
   type DispatchPlan,
 } from "@/lib/dispatch";
@@ -161,8 +158,11 @@ function fakeClient() {
   return {
     connect: vi.fn(async () => {}),
     request: vi.fn(
-      async (_method: unknown, _params?: unknown): Promise<unknown> => ({
-        sessionId: 9001,
+      async (_method: unknown, params?: unknown): Promise<unknown> => ({
+        // daemon 是回声的（handlers/runtime.go 的 wire.RunAck{ConversationID:
+        // p.ConversationID}），假的照它来。
+        conversationId:
+          (params as { conversationId?: string })?.conversationId ?? "",
       }),
     ),
     close: vi.fn(),
@@ -222,146 +222,10 @@ describe("pickFirstAvailable（R15d 守卫）", () => {
   });
 });
 
-/**
- * 取号用的固定时刻，**刻意放在未来**。
- *
- * 逻辑时钟（`lastMs`）是模块级的、只增不减：同一个测试文件里先跑过的用例已经把它
- * 推到了「真实此刻」。假时间若落在那之前，会被单调守卫原样顶住 —— 断言量到的就
- * 不是这一条设定的时刻，而是上一条留下的残值。
- */
-const FIXED_NOW = new Date("2030-01-01T00:00:00.000Z");
-
-/**
- * 每条用例领一个**互不重叠**的时刻，各自往后一小时。
- *
- * 同上：逻辑时钟只增。两条用例共用同一个时刻的话，先跑那条留下的 `lastMs`（连发
- * 5000 个还会把它推到下一毫秒）会顶住后跑那条，断言就量在了别人的残值上。领号
- * 之后这几条用例彼此无序，随便怎么排都成立。
- */
-let anchorHour = 0;
-function nextAnchor(): Date {
-  anchorHour += 1;
-  return new Date(FIXED_NOW.getTime() + anchorHour * 3_600_000);
-}
-
-describe("标题与本地会话标识", () => {
+describe("标题", () => {
   it("从首条消息派生标题（首行 + 截断）", () => {
     expect(deriveTitle("  讲讲这个项目  \n第二行")).toBe("讲讲这个项目");
     expect(deriveTitle("x".repeat(80)).length).toBeLessThanOrEqual(61);
-  });
-
-  it("生成非零正整数会话标识（wire sessionId 语义）", () => {
-    for (let i = 0; i < 20; i++) {
-      const id = newSessionId();
-      expect(Number.isInteger(id)).toBe(true);
-      expect(id).toBeGreaterThan(0);
-      // 53 位是硬边界：再宽一位 JS 的 number 就存不准了，而这个号要经
-      // `BigInt(sid)` 过 wire 的 int64、经 `String(sid)` 过账号镜像的 HTTP。
-      // 一旦越界，两条路上都会悄悄变成另一个号。
-      expect(id).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
-    }
-  });
-
-  /*
-    同一毫秒内连发。
-
-    这不是假想：`importPorts.ts` 的批量导入就是在一个循环里连着要号，一毫秒里
-    要出几十上百个。纯随机取号在这里靠的是生日概率（12 位低位那一档下 100 个号
-    有约 1.2% 撞上），而序列位是**确定**不撞的 —— 雪花的低位就是干这个的。
-  */
-  it("同一毫秒内连发 5000 个:号互不相同,且都在 53 位内", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(FIXED_NOW);
-    try {
-      const ids = new Set<number>();
-      for (let i = 0; i < 5000; i++) {
-        const id = newSessionId();
-        expect(id).toBeGreaterThan(0);
-        expect(id).toBeLessThanOrEqual(Number.MAX_SAFE_INTEGER);
-        ids.add(id);
-      }
-      expect(ids.size).toBe(5000);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  /*
-    位布局本身。这一条是这次改动的**主张**：高 41 位是毫秒、低 12 位是序列。
-
-    断言结构而不是只断言「不重复」——后者纯随机取号也能靠概率蒙过去（5000 个号
-    撞在 2^53 里的概率约 1e-9），测不出这次到底改了什么。而结构一旦对了，
-    「同一毫秒不重复」就从概率变成了确定性。
-  */
-  it("高位就是毫秒偏移,低 12 位是序列", () => {
-    vi.useFakeTimers();
-    try {
-      const now = nextAnchor();
-      vi.setSystemTime(now);
-      const id = newSessionId();
-      const offset = now.getTime() - SESSION_ID_EPOCH_MS;
-      // 先钉住这两个常量真的存在：少了它们下面那行会拿 NaN 跟 NaN 比，绿得毫无
-      // 意义（Object.is(NaN, NaN) 为真）。
-      expect(offset).toBeGreaterThan(0);
-      expect(Math.floor(id / SESSION_ID_SEQUENCE_SPAN)).toBe(offset);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // 高位是时间：晚发的号一定更大。会话号因此可读、可排序 —— 排查时不必再去
-  // 别处对时间。逐对断言 20 次：纯随机取号每对只有一半概率碰巧递增,20 对连中
-  // 的概率是百万分之一,红得稳。
-  it("号随时间严格递增", () => {
-    vi.useFakeTimers();
-    try {
-      const base = nextAnchor();
-      let previous = 0;
-      for (let i = 0; i < 20; i++) {
-        vi.setSystemTime(new Date(base.getTime() + i * 1000));
-        const id = newSessionId();
-        expect(id).toBeGreaterThan(previous);
-        previous = id;
-      }
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  /*
-    时钟回拨（对时、跨时区改系统时间、休眠唤醒）。
-
-    朴素的雪花在这里会把已经发过的那一毫秒重发一遍 —— 号直接重复。逻辑时钟只准
-    往前，不准跟着系统时钟倒回去。
-  */
-  it("系统时钟回拨时不重复,毫秒位也不倒退", () => {
-    vi.useFakeTimers();
-    try {
-      const base = nextAnchor();
-      vi.setSystemTime(new Date(base.getTime() + 10_000));
-      const before = new Set<number>();
-      for (let i = 0; i < 50; i++) before.add(newSessionId());
-      const msBefore = Math.max(
-        ...[...before].map((id) => Math.floor(id / SESSION_ID_SEQUENCE_SPAN)),
-      );
-
-      vi.setSystemTime(new Date(base.getTime() + 5_000));
-      for (let i = 0; i < 50; i++) {
-        const id = newSessionId();
-        // 要守的是**不重复**：回拨之后再发的号不能撞上回拨之前发过的。
-        expect(before.has(id)).toBe(false);
-        // 以及**毫秒位不倒退**。断言只到毫秒位为止，不断言整个号递增 —— 同一毫秒
-        // 内的先后由 12 位序列决定，而序列的起点是每个标签页随机抽的（见
-        // `newSessionId` 的注释），走到 4095 会绕回 0。那一绕不会让号重复
-        // （`issuedThisMs` 盯着这件事），但确实会让同一毫秒里后发的号更小。
-        // 「按时间有序」这个性质本来就只在毫秒这一层成立。
-        expect(
-          Math.floor(id / SESSION_ID_SEQUENCE_SPAN),
-        ).toBeGreaterThanOrEqual(msBefore);
-      }
-    } finally {
-      vi.useRealTimers();
-    }
   });
 });
 
@@ -374,21 +238,24 @@ describe("标题与本地会话标识", () => {
  * （`handlers/runtime.go` 的 `wire.RunAck{SessionID: p.SessionID}`），假的照它来，
  * 顺带比钉常量更像真的。
  */
-function echoedSessionId(params: unknown): number {
-  return Number((params as { sessionId: bigint }).sessionId);
+function echoedConversationId(params: unknown): string {
+  return (params as { conversationId: string }).conversationId;
 }
 
-/** 三次 runtime.run 报的会话号（BigInt，过线时的形态）。 */
-function runSessionIds(client: ReturnType<typeof fakeClient>): unknown[] {
+/** 三次 runtime.run 报的对话身份。 */
+function runConversationIds(client: ReturnType<typeof fakeClient>): unknown[] {
   return client.request.mock.calls
     .filter(([method]) => method === rpcMethods.runtimeRun)
-    .map(([, value]) => (value as Record<string, unknown>).sessionId);
+    .map(([, value]) => (value as Record<string, unknown>).conversationId);
 }
 
+/** 浏览器铸的 UUIDv7（决策 1）的规范形式。 */
+const CONVERSATION_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => {
-  it("接受真实 Protobuf RPC 返回的 bigint 会话标识", async () => {
+  it("交回执行端 ack 里那个对话身份，并按它保存进账号", async () => {
     const client = fakeClient();
-    client.request.mockResolvedValueOnce({ sessionId: 9001n });
     MockRelayClient.mockImplementation(function () {
       return client;
     } as never);
@@ -399,10 +266,12 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       sourceClient,
     });
 
-    expect(out.sessionId).toBe(9001);
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
     expect(mockedApi).toHaveBeenCalledWith("/v1/saved-sessions", {
       method: "POST",
-      body: expect.stringContaining('"session_id":"9001"'),
+      body: expect.stringContaining(
+        `"conversation_id":"${out.conversationId}"`,
+      ),
     });
   });
 
@@ -418,24 +287,23 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       sourceClient,
     });
 
-    // 连的是选中那一档（设备指纹在 URL 里，JWT 走 Authorization 头）。
+    // 通道声明的目标是选中那一档（决策 11：新建对话按机器寻址——对话还不存在，
+    // 服务端解析不出承载它的机器）。
     //
-    // 票来自 relayClientPool 而不是调用方手里那张：这条连接是**共享**的，谁的票
-    // 说了算不能由借用方决定。真要复用时（详情页已经开着一条）根本不会取票 ——
-    // 这里是冷路径，池子里还没有这台机器。
+    // 票来自 relayClientPool 而不是调用方手里那张：连接是**账号级共享**的，谁的
+    // 票说了算不能由借用方决定。
     const constructorOpts = MockRelayClient.mock.calls[0][0] as {
-      url: string;
+      target: string;
       jwt: string;
     };
-    expect(constructorOpts.url).toContain("fp-online");
-    // 票不在 URL 上：它走 Sec-WebSocket-Protocol（见 relayUrl.ts）。
-    expect(constructorOpts.url).not.toContain("relay-token");
+    expect(constructorOpts.target).toBe("machine:fp-online");
     expect(constructorOpts.jwt).toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
     expect(method).toBe(rpcMethods.runtimeRun);
-    expect(p.sessionId).toBeGreaterThan(0);
+    // 号由发起端（这个浏览器）铸：UUIDv7 的规范形式。
+    expect(p.conversationId).toMatch(CONVERSATION_ID);
     expect(p.agentSyncId).toBe("agent-1");
     expect(p.cwd).toBe("/srv/agentre-server");
     expect(p.userText).toBe("讲讲这个项目");
@@ -455,12 +323,12 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       body: JSON.stringify({
         machine_fingerprint: "fp-online",
         peer_fingerprint: "fp-web",
-        session_id: "9001",
+        conversation_id: out.conversationId,
       }),
     });
 
     expect(out).toEqual({
-      sessionId: 9001,
+      conversationId: out.conversationId,
       deviceId: 21,
       deviceFingerprint: "fp-online",
       // 交出去的必须是这条对话的**发起端**——就是这个浏览器。落地那一屏拿它去问
@@ -504,16 +372,16 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     });
 
     const constructorOpts = MockRelayClient.mock.calls[0][0] as {
-      url: string;
+      target: string;
       jwt: string;
     };
-    expect(constructorOpts.url).toContain("fp-desk");
+    expect(constructorOpts.target).toBe("machine:fp-desk");
     expect(constructorOpts.jwt).toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
     expect(method).toBe(rpcMethods.runtimeRun);
-    expect(p.sessionId).toBeGreaterThan(0);
+    expect(p.conversationId).toMatch(CONVERSATION_ID);
     expect(p.agentSyncId).toBe("agent-1");
     expect(p.cwd).toBe("/Users/wyz/agentre-server");
     expect(p.userText).toBe("帮我看看这个项目");
@@ -530,12 +398,12 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       body: JSON.stringify({
         machine_fingerprint: "fp-desk",
         peer_fingerprint: "fp-web",
-        session_id: "9001",
+        conversation_id: out.conversationId,
       }),
     });
 
     expect(out).toEqual({
-      sessionId: 9001,
+      conversationId: out.conversationId,
       deviceId: 30,
       deviceFingerprint: "fp-desk",
       peerFingerprint: "fp-web",
@@ -567,7 +435,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
 
     expect(client.request).toHaveBeenCalled();
     expect(out).toEqual({
-      sessionId: 9001,
+      conversationId: out.conversationId,
       deviceId: 21,
       deviceFingerprint: "fp-online",
       peerFingerprint: "fp-web",
@@ -647,11 +515,11 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       async (method: unknown, params?: unknown) => {
         if (method !== rpcMethods.runtimeRun) return {};
         step += 1;
-        const sessionId = echoedSessionId(params);
+        const conversationId = echoedConversationId(params);
         // 第一步是注册，它还没有 provider 会话；后两步才带回来。
         return step === 1
-          ? { sessionId }
-          : { sessionId, providerSessionId: "pi-provider-1" };
+          ? { conversationId }
+          : { conversationId, providerSessionId: "pi-provider-1" };
       },
     );
     MockRelayClient.mockImplementation(function () {
@@ -670,8 +538,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     expect(runs).toHaveLength(3);
     const params = runs.map(([, value]) => value as Record<string, unknown>);
     // 三步同一个号，且就是最终交出去的那一个 —— 这才是「同一代身份」的意思。
-    expect(new Set(runSessionIds(client)).size).toBe(1);
-    expect(params[0].sessionId).toBe(BigInt(out.sessionId));
+    expect(new Set(runConversationIds(client)).size).toBe(1);
+    expect(params[0].conversationId).toBe(out.conversationId);
     expect(params[0].permissionMode).toEqual(expect.any(String));
     expect(params[0].permissionMode).not.toBe("");
     expect(params[1].permissionMode).toBe(params[0].permissionMode);
@@ -703,10 +571,10 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       async (method: unknown, params?: unknown) => {
         if (method !== rpcMethods.runtimeRun) return {};
         step += 1;
-        const sessionId = echoedSessionId(params);
+        const conversationId = echoedConversationId(params);
         return step === 1
-          ? { sessionId }
-          : { sessionId, providerSessionId: "pi-provider-2" };
+          ? { conversationId }
+          : { conversationId, providerSessionId: "pi-provider-2" };
       },
     );
     MockRelayClient.mockImplementation(function () {
@@ -729,7 +597,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     expect(owners[0]).toEqual(expect.any(String));
     expect(owners[0]).not.toBe("");
     expect(new Set(owners).size).toBe(1);
-    expect(runSessionIds(client)[0]).toBe(BigInt(out.sessionId));
+    expect(runConversationIds(client)[0]).toBe(out.conversationId);
   });
 
   it("Pi 注册后准备失败会清理这一代，且不保存未启动的会话", async () => {
@@ -740,7 +608,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
         const runCount = client.request.mock.calls.filter(
           ([called]) => called === rpcMethods.runtimeRun,
         ).length;
-        if (runCount === 1) return { sessionId: echoedSessionId(params) };
+        if (runCount === 1)
+          return { conversationId: echoedConversationId(params) };
         throw new Error("Pi prepare failed");
       },
     );
@@ -761,7 +630,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     });
     // 清理的必须是**刚注册的那一条**，不是随手一个号。
     expect(client.request).toHaveBeenCalledWith(rpcMethods.runtimeAbort, {
-      sessionId: runSessionIds(client)[0],
+      conversationId: runConversationIds(client)[0],
     });
     expect(mockedApi).not.toHaveBeenCalled();
     expect(client.close).not.toHaveBeenCalled();
@@ -913,7 +782,7 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
     );
     expect(pin).toBeTruthy();
     expect(pin?.[1]).toEqual({
-      sessionId: 9001n,
+      conversationId: out.conversationId,
       providerKey: "pk-1",
       modelKey: "",
     });
@@ -924,11 +793,16 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
   // 报成派发失败，用户一重试就凭空再开一条 —— 与 R16 保存失败同一条规矩。
   it("钉不住不算派发失败，如实回报没钉住", async () => {
     const client = fakeClient();
-    client.request.mockImplementation(async (method: unknown) => {
-      if (method === rpcMethods.setModelTarget)
-        throw new Error("unknown method");
-      return { sessionId: 9001 };
-    });
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method === rpcMethods.setModelTarget)
+          throw new Error("unknown method");
+        return {
+          conversationId:
+            (params as { conversationId?: string })?.conversationId ?? "",
+        };
+      },
+    );
     MockRelayClient.mockImplementation(function () {
       return client;
     } as never);
@@ -940,7 +814,7 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
       modelTarget: { providerKey: "pk-1", modelKey: "mk-1" },
     });
 
-    expect(out.sessionId).toBe(9001);
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
     expect(out.modelPinned).toBe(false);
   });
 
@@ -960,6 +834,6 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
     expect(client.connect).not.toHaveBeenCalled();
     // 连接不是这次派发建的，就不该由这次派发关掉：草稿页还要用它。
     expect(client.close).not.toHaveBeenCalled();
-    expect(out.sessionId).toBe(9001);
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
   });
 });

@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { JournaledNotification } from "@agentre-hub/agentre-wire";
 
 import { doneEventFrame } from "@/components/session/turnDone";
+import { TranscriptSessionId } from "@/components/session/transcriptFrame";
 import { applyJournalFrames } from "@/lib/relayClient";
+
+const CID = "11111111-1111-7111-8111-111111111111";
 
 /**
  * 终态帧（`runtime.runResultDone`）→ 转录里的那条结束标记。
@@ -17,8 +20,8 @@ import { applyJournalFrames } from "@/lib/relayClient";
  */
 describe("doneEventFrame", () => {
   it("给定带 meta 的终态帧，当转成事件，则模型与计时原样带过去", () => {
-    const frame = doneEventFrame(42, {
-      sessionId: 42,
+    const frame = doneEventFrame(CID, {
+      conversationId: CID,
       model: "claude-sonnet-4-6",
       durationMs: 9640,
       firstTokenMs: 8010,
@@ -33,7 +36,9 @@ describe("doneEventFrame", () => {
       },
     });
 
-    expect(frame.sessionId).toBe(42);
+    expect(frame.conversationId).toBe(CID);
+    // 共享包的转录投影那一格恒为常量（见 transcriptFrame）。
+    expect(frame.sessionId).toBe(TranscriptSessionId);
     expect(frame.event).toMatchObject({
       kind: "done",
       model: "claude-sonnet-4-6",
@@ -50,7 +55,7 @@ describe("doneEventFrame", () => {
    * 那是在替对端撒谎，而它真实的意思是「这台机器还答不出这个数」。
    */
   it("给定老 agentred 的终态帧，当转成事件，则不编出零值", () => {
-    const event = doneEventFrame(42, { sessionId: 42 }).event as Record<
+    const event = doneEventFrame(CID, { conversationId: CID }).event as Record<
       string,
       unknown
     >;
@@ -65,7 +70,7 @@ describe("doneEventFrame", () => {
 
   /** seq 留空是有意的：这条标记是宿主合成的，不占中继日志的序号。 */
   it("给定终态帧，当转成事件，则不占 seq", () => {
-    expect(doneEventFrame(42, { sessionId: 42 }).seq).toBeUndefined();
+    expect(doneEventFrame(CID, { conversationId: CID }).seq).toBeUndefined();
   });
 });
 
@@ -83,7 +88,7 @@ describe("镜像回放的终态帧", () => {
           seq: 7,
           method: "runtime.runResultDone",
           params: {
-            sessionId: 42,
+            conversationId: CID,
             model: "claude-sonnet-4-6",
             durationMs: 9640,
             firstTokenMs: 8010,
@@ -94,7 +99,7 @@ describe("镜像回放的终态帧", () => {
       {
         onRunResultDone: (frame) =>
           seen.push(
-            doneEventFrame(42, frame) as unknown as {
+            doneEventFrame(CID, frame) as unknown as {
               event: Record<string, unknown>;
             },
           ),

@@ -32,6 +32,7 @@ import {
 } from "@agentre-hub/agentre-wire";
 
 import { withRelayClient } from "@/lib/relayClientPool";
+import { machineTarget } from "@/lib/relayTarget";
 
 /** 目录问出来了没有。取值与 wire 的三个常量逐字相同。 */
 export type SkillDiscovery = "ok" | "unavailable" | "unsupported";
@@ -94,7 +95,7 @@ export async function fetchSkillCatalog(
     // 没有可拨的对象，就不该发出一次注定失败的连接。
     throw new Error("skill catalog: 这一档没有可拨的机器");
   }
-  return withRelayClient(input.fingerprint, async (client) => {
+  return withRelayClient(machineTarget(input.fingerprint), async (client) => {
     const params: SkillCatalogParams = {
       backendType: input.backendType,
       authorized: input.authorized,

@@ -52,6 +52,9 @@ function mockMobileViewport() {
   })) as typeof window.matchMedia;
 }
 
+/** 这条对话的身份（决策 1）。 */
+const CID = "11111111-1111-7111-8111-111111111111";
+
 const deviceRow = {
   id: 1,
   name: "书房小主机",
@@ -63,7 +66,7 @@ const deviceRow = {
 };
 
 const summary = {
-  sessionId: 42,
+  conversationId: CID,
   title: "重构登录页",
   agentSyncId: "ag-1",
   cwd: "/home/agent/proj",
@@ -115,11 +118,11 @@ function renderPage() {
     reconnect: vi.fn(),
   }));
   return render(
-    <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+    <MemoryRouter initialEntries={[`/devices/1/sessions/${CID}`]}>
       <ThemeProvider>
         <Routes>
           <Route
-            path="/devices/:deviceId/sessions/:sessionId"
+            path="/devices/:deviceId/sessions/:conversationId"
             element={<SessionDetail />}
           />
         </Routes>
@@ -185,7 +188,11 @@ describe("SessionDetailView embedded 形态(任务 5 重构边界)", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView deviceId={1} sessionId={42} form="embedded" />
+          <SessionDetailView
+            deviceId={1}
+            conversationId={CID}
+            form="embedded"
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );

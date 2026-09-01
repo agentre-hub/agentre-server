@@ -42,7 +42,7 @@ vi.mock("@/lib/accountChannel", async (importOriginal) => {
 });
 // 桌面右栏嵌的是 task 5 的真实 SessionDetailView（其真实 relay/审批行为由
 // session-detail.test.tsx 守）；本文件把真实详情 mock 成探针，只断言 Chat 以正确的
-// deviceId/sessionId/form 消费它。
+// deviceId/conversationId/form 消费它。
 /**
  * 详情每次拿到的 onMarkedRead。它的**引用**是被守的东西：真实详情把这个 prop 列进
  * 了「session.list + attach + 补齐」那条 effect 的依赖数组，换一次引用就是让正开着
@@ -56,21 +56,21 @@ vi.mock("@/components/session/SessionDetailView", () => ({
   __esModule: true,
   default: (props: {
     deviceId: number;
-    sessionId: number;
+    conversationId: string;
     peerFingerprint?: string;
     form?: "page" | "embedded";
     headerRight?: ReactNode;
-    initialRow?: { session_id: string; title?: string };
-    onMarkedRead?: (peerFingerprint: string, lastReadAt: number) => void;
+    initialRow?: { conversation_id: string; title?: string };
+    onMarkedRead?: (conversationId: string, lastReadAt: number) => void;
   }) => {
     markedReadProps.push(props.onMarkedRead);
     return (
       <div
         data-testid="embedded-session-detail"
         data-device-id={props.deviceId}
-        data-session-id={props.sessionId}
+        data-session-id={props.conversationId}
         data-peer-fingerprint={props.peerFingerprint ?? ""}
-        data-initial-row={props.initialRow?.session_id ?? ""}
+        data-initial-row={props.initialRow?.conversation_id ?? ""}
         data-form={props.form ?? "page"}
       >
         embedded-detail
@@ -83,7 +83,7 @@ vi.mock("@/components/session/SessionDetailView", () => ({
         <button
           type="button"
           onClick={() =>
-            props.onMarkedRead?.(props.peerFingerprint ?? "", 1754800001000)
+            props.onMarkedRead?.(props.conversationId, 1754800001000)
           }
         >
           marked-read
@@ -155,7 +155,7 @@ function mirrored(over: Record<string, unknown> = {}) {
     peer_fingerprint: "fp-1",
     machine_fingerprint:
       over.machine_fingerprint ?? over.peer_fingerprint ?? "fp-1",
-    session_id: "42",
+    conversation_id: "42",
     title: "重构登录页",
     agent_sync_id: "ag-1",
     backend_type: "claudecode",
@@ -175,7 +175,7 @@ function mirrored(over: Record<string, unknown> = {}) {
  * 混作一谈。
  */
 const summary = {
-  sessionId: 42,
+  conversationId: "42",
   peerFingerprint: "fp-1",
   title: "重构登录页",
   agentSyncId: "ag-1",
@@ -214,8 +214,9 @@ function connectedRelay(): UseRelayMachineResult {
 const clientsByFingerprint = new Map<string, typeof fakeClient>();
 
 function relayByMachine(sessionsByFingerprint: Record<string, unknown[]>) {
-  mockUseRelay.mockImplementation((fingerprint) => {
-    const fp = fingerprint ?? "";
+  mockUseRelay.mockImplementation((target) => {
+    // hook 的入参现在是**通道目标**（决策 10/11）：机器轴走 machine:<fingerprint>。
+    const fp = (target ?? "").replace(/^machine:/, "");
     let client = clientsByFingerprint.get(fp);
     if (!client) {
       client = {
@@ -440,7 +441,7 @@ describe("对话页 = 统一会话索引", () => {
     expect(mockUseRelay).not.toHaveBeenCalled();
     expect(fakeClient.request).not.toHaveBeenCalled();
 
-    // 点行:桌面右栏嵌入真实详情视图(deviceId/sessionId, form=embedded)。
+    // 点行:桌面右栏嵌入真实详情视图(deviceId/conversationId, form=embedded)。
     fireEvent.click(link);
     const embedded = await screen.findByTestId("embedded-session-detail");
     expect(embedded.getAttribute("data-device-id")).toBe("1");
@@ -495,7 +496,7 @@ describe("对话页 = 统一会话索引", () => {
       mirror: [
         mirrored({
           peer_fingerprint: "fp-2",
-          session_id: "7",
+          conversation_id: "7",
           title: "接口迁移的第二批",
           project_sync_id: "p-1",
         }),
@@ -517,7 +518,7 @@ describe("对话页 = 统一会话索引", () => {
     expect(screen.getByText("agentre-server")).toBeTruthy();
     expect(screen.queryByText("Not visible right now")).toBeNull();
     // 第二行：机器名 + 离线。
-    const second = screen.getByTestId("row-secondary-fp-2:7");
+    const second = screen.getByTestId("row-secondary-7");
     expect(second.textContent).toContain("公司 Mac mini");
     expect(second.textContent).toContain("Offline");
     // 行是可点的真链接（不是灰行）。
@@ -565,7 +566,11 @@ describe("对话页 = 统一会话索引", () => {
     stubApi({
       mirror: [
         mirrored({ last_message_at: lastActive }),
-        mirrored({ session_id: "43", title: "老会话", last_message_at: 0 }),
+        mirrored({
+          conversation_id: "43",
+          title: "老会话",
+          last_message_at: 0,
+        }),
       ],
       devices: [agentred],
     });
@@ -586,8 +591,8 @@ describe("对话页 = 统一会话索引", () => {
         if (isWaitingProbe(params)) return { total: 0 };
         const q = params.get("q");
         const items = q
-          ? [mirrored({ session_id: "43", title: "修 bug" })]
-          : [mirrored(), mirrored({ session_id: "43", title: "修 bug" })];
+          ? [mirrored({ conversation_id: "43", title: "修 bug" })]
+          : [mirrored(), mirrored({ conversation_id: "43", title: "修 bug" })];
         return {
           total: items.length,
           groups: [{ scope: "time", total: items.length, items }],
@@ -659,7 +664,11 @@ describe("对话页 = 统一会话索引", () => {
 // 「在这台机器上找」那一层，也不再有 ?machine=。索引因此列出那些机器上有、账号里
 // 还没保存的对话，行尾是「保存」（决策 11 的口径从「选中的那一台」扩到「每一台」）。
 describe("对话页:机器轴", () => {
-  const stranger = { ...summary, sessionId: 77, title: "临时跑一下 benchmark" };
+  const stranger = {
+    ...summary,
+    conversationId: "77",
+    title: "临时跑一下 benchmark",
+  };
 
   function stubMachineScope(over: Partial<{ mirror: unknown[] }> = {}) {
     stubApi({ mirror: over.mirror ?? [], devices: [agentred] });
@@ -703,11 +712,11 @@ describe("对话页:机器轴", () => {
   it("多台在线机器：各自一组，各列各自实时上报的那份", async () => {
     stubApi({ mirror: [], devices: [agentred, desktop] });
     relayByMachine({
-      "fp-1": [{ ...summary, sessionId: 61, title: "小主机上跑着的" }],
+      "fp-1": [{ ...summary, conversationId: "61", title: "小主机上跑着的" }],
       "fp-desktop": [
         {
           ...summary,
-          sessionId: 62,
+          conversationId: "62",
           peerFingerprint: "fp-desktop",
           title: "MacBook 上跑着的",
         },
@@ -737,21 +746,19 @@ describe("对话页:机器轴", () => {
     renderChat("/chat?axis=machine");
 
     await screen.findByText("临时跑一下 benchmark");
-    fireEvent.click(screen.getByTestId("row-save-fp-1:77"));
+    fireEvent.click(screen.getByTestId("row-save-77"));
 
     await waitFor(() =>
       expect(posted).toEqual([
         {
           machine_fingerprint: "fp-1",
           peer_fingerprint: "fp-1",
-          session_id: "77",
+          conversation_id: "77",
         },
       ]),
     );
     // 保存之后它不再是「还没保存」的那种：行尾不再有保存。
-    await waitFor(() =>
-      expect(screen.queryByTestId("row-save-fp-1:77")).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByTestId("row-save-77")).toBeNull());
   });
 
   /**
@@ -766,7 +773,7 @@ describe("对话页:机器轴", () => {
     const posted: unknown[] = [];
     const fromBrowser = {
       ...summary,
-      sessionId: 88,
+      conversationId: "88",
       title: "从控制台开的",
       peerFingerprint: "991b9464868dfb6340bd09eeef14f196",
     };
@@ -790,18 +797,14 @@ describe("对话页:机器轴", () => {
 
     await screen.findByText("从控制台开的");
     // 机器轴上行键带着那台机器（deviceId），因为同一条对话在两台机器上各有一份是常态。
-    fireEvent.click(
-      await screen.findByTestId(
-        "row-save-1:991b9464868dfb6340bd09eeef14f196:88",
-      ),
-    );
+    fireEvent.click(await screen.findByTestId("row-save-1:88"));
 
     await waitFor(() =>
       expect(posted).toEqual([
         {
           machine_fingerprint: "fp-1",
           peer_fingerprint: "991b9464868dfb6340bd09eeef14f196",
-          session_id: "88",
+          conversation_id: "88",
         },
       ]),
     );
@@ -821,7 +824,7 @@ describe("对话页:机器轴", () => {
     // 关键：机器报回来的这一条**不带** origin —— 它是从这个浏览器派出去的。
     const fromThisBrowser = {
       ...summary,
-      sessionId: 99,
+      conversationId: "99",
       peerFingerprint: undefined,
       title: "控制台开的",
     };
@@ -830,7 +833,7 @@ describe("对话页:机器轴", () => {
         mirrored({
           peer_fingerprint: "fp-web",
           machine_fingerprint: "fp-1",
-          session_id: "99",
+          conversation_id: "99",
           title: "控制台开的",
         }),
       ],
@@ -847,7 +850,7 @@ describe("对话页:机器轴", () => {
     await screen.findByText("控制台开的");
     // 账号里已经有它了：行尾不该再有「保存」。
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
-    expect(screen.queryByTestId("row-save-fp-1:99")).toBeNull();
+    expect(screen.queryByTestId("row-save-99")).toBeNull();
   });
 
   it("离线的机器:组头在、标离线、一行都不列(规格 2026-08-19 决策 11)", async () => {
@@ -855,7 +858,7 @@ describe("对话页:机器轴", () => {
       mirror: [
         mirrored({
           peer_fingerprint: "fp-2",
-          session_id: "7",
+          conversation_id: "7",
           title: "离线那条",
         }),
       ],
@@ -879,7 +882,7 @@ describe("对话页:机器轴", () => {
       mirror: [
         mirrored(),
         // 发起自这台机器、账号里还留着，但机器本地已经没有了的一条。
-        mirrored({ session_id: "99", title: "机器上已经没有了" }),
+        mirrored({ conversation_id: "99", title: "机器上已经没有了" }),
       ],
     });
     renderChat("/chat?axis=machine");
@@ -910,7 +913,7 @@ describe("对话页:机器轴", () => {
   it("机器那一档的 chips 也就地过滤这份清单(规格 2026-08-19 决策 12)", async () => {
     const running = {
       ...summary,
-      sessionId: 78,
+      conversationId: "78",
       title: "正在跑",
       lifecycleState: "running",
     };
@@ -934,7 +937,7 @@ describe("对话页:机器轴", () => {
   it("机器那一档的「未读」不收还没保存进账号的那些", async () => {
     const onMachineOnly = {
       ...summary,
-      sessionId: 78,
+      conversationId: "78",
       title: "机器上才有的",
       updatedAt: 1754800000000,
     };
@@ -974,7 +977,7 @@ describe("对话页:机器轴", () => {
   it("机器上会话多时也先只列几条,其余走「查看全部 N」——N 是它上报的总数", async () => {
     const many = Array.from({ length: 8 }, (_, i) => ({
       ...summary,
-      sessionId: 100 + i,
+      conversationId: String(100 + i),
       title: `机器上第 ${i} 条`,
     }));
     stubApi({ mirror: [], devices: [agentred] });
@@ -1032,11 +1035,11 @@ describe("对话页:机器轴", () => {
   it("地址上带着旧的 ?machine= 也照样列全部机器", async () => {
     stubApi({ mirror: [], devices: [agentred, desktop] });
     relayByMachine({
-      "fp-1": [{ ...summary, sessionId: 61, title: "小主机上跑着的" }],
+      "fp-1": [{ ...summary, conversationId: "61", title: "小主机上跑着的" }],
       "fp-desktop": [
         {
           ...summary,
-          sessionId: 62,
+          conversationId: "62",
           peerFingerprint: "fp-desktop",
           title: "MacBook 上跑着的",
         },
@@ -1064,7 +1067,7 @@ describe("对话页:机器轴", () => {
       "fp-desktop": [
         {
           ...summary,
-          sessionId: 88,
+          conversationId: "88",
           peerFingerprint: "fp-desktop",
           title: "两台都在报的",
         },
@@ -1073,7 +1076,7 @@ describe("对话页:机器轴", () => {
       "fp-1": [
         {
           ...summary,
-          sessionId: 88,
+          conversationId: "88",
           title: "两台都在报的",
           peerFingerprint: "fp-desktop",
         },
@@ -1145,7 +1148,11 @@ describe("对话页:机器轴", () => {
  * 时要把「内容会存在 server 上」说清楚，而不是藏在一个图标里。
  */
 describe("对话页:第一次保存时的说明", () => {
-  const stranger = { ...summary, sessionId: 77, title: "临时跑一下 benchmark" };
+  const stranger = {
+    ...summary,
+    conversationId: "77",
+    title: "临时跑一下 benchmark",
+  };
 
   function stubFirstSave(mirror: unknown[], sessions: unknown[] = [stranger]) {
     stubApi({ mirror, devices: [agentred] });
@@ -1170,7 +1177,7 @@ describe("对话页:第一次保存时的说明", () => {
     renderChat("/chat?axis=machine");
 
     await screen.findByText("临时跑一下 benchmark");
-    fireEvent.click(screen.getByTestId("row-save-fp-1:77"));
+    fireEvent.click(screen.getByTestId("row-save-77"));
 
     const dialog = await screen.findByRole("dialog");
     expect(
@@ -1188,7 +1195,7 @@ describe("对话页:第一次保存时的说明", () => {
         {
           machine_fingerprint: "fp-1",
           peer_fingerprint: "fp-1",
-          session_id: "77",
+          conversation_id: "77",
         },
       ]),
     );
@@ -1199,7 +1206,7 @@ describe("对话页:第一次保存时的说明", () => {
     renderChat("/chat?axis=machine");
 
     await screen.findByText("临时跑一下 benchmark");
-    fireEvent.click(screen.getByTestId("row-save-fp-1:77"));
+    fireEvent.click(screen.getByTestId("row-save-77"));
     await screen.findByRole("dialog");
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -1211,16 +1218,20 @@ describe("对话页:第一次保存时的说明", () => {
   // 话，同一次访问里每按一次「保存」都要再看一遍同意说明——第二条起它说的已经不是
   // 事实了（账号里明明已经有一条）。
   it("第一条存进去之后就不再是第一次:第二条直接保存,不再弹说明", async () => {
-    const another = { ...stranger, sessionId: 78, title: "再来一条没保存的" };
+    const another = {
+      ...stranger,
+      conversationId: "78",
+      title: "再来一条没保存的",
+    };
     const posted = stubFirstSave([], [stranger, another]);
     renderChat("/chat?axis=machine");
 
     await screen.findByText("临时跑一下 benchmark");
-    fireEvent.click(screen.getByTestId("row-save-fp-1:77"));
+    fireEvent.click(screen.getByTestId("row-save-77"));
     fireEvent.click(await screen.findByTestId("first-save-confirm"));
     await waitFor(() => expect(posted).toHaveLength(1));
 
-    fireEvent.click(screen.getByTestId("row-save-fp-1:78"));
+    fireEvent.click(screen.getByTestId("row-save-78"));
     await waitFor(() => expect(posted).toHaveLength(2));
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -1230,14 +1241,14 @@ describe("对话页:第一次保存时的说明", () => {
     renderChat("/chat?axis=machine");
 
     await screen.findByText("临时跑一下 benchmark");
-    fireEvent.click(screen.getByTestId("row-save-fp-1:77"));
+    fireEvent.click(screen.getByTestId("row-save-77"));
 
     await waitFor(() =>
       expect(posted).toEqual([
         {
           machine_fingerprint: "fp-1",
           peer_fingerprint: "fp-1",
-          session_id: "77",
+          conversation_id: "77",
         },
       ]),
     );
@@ -1284,7 +1295,8 @@ describe("对话页:删除一条对话", () => {
 
     fireEvent.click(screen.getByTestId("delete-session-confirm"));
     await waitFor(() =>
-      expect(posted).toEqual([{ peer_fingerprint: "fp-1", session_id: "42" }]),
+      // 只要身份：承载它的机器与发起端都由服务端自己查出来（决策 1）。
+      expect(posted).toEqual([{ conversation_id: "42" }]),
     );
     await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
   });
@@ -1307,7 +1319,7 @@ describe("对话页:删除一条对话", () => {
 
   it("机器离线:确认里说的是「账号里当场删掉,那台机器下次上线时补删」", async () => {
     stubDelete({
-      mirror: [mirrored({ peer_fingerprint: "fp-2", session_id: "7" })],
+      mirror: [mirrored({ peer_fingerprint: "fp-2", conversation_id: "7" })],
       devices: [offlineMachine],
     });
     renderChat();
@@ -1445,7 +1457,7 @@ describe("索引按轴分页", () => {
                   total: 2,
                   cursor: "1754800000000.1",
                   has_more: true,
-                  items: [mirrored({ session_id: "42", title: "第一页" })],
+                  items: [mirrored({ conversation_id: "42", title: "第一页" })],
                 },
               ],
             }
@@ -1453,7 +1465,7 @@ describe("索引按轴分页", () => {
               total: 2,
               cursor: "1754700000000.2",
               has_more: false,
-              items: [mirrored({ session_id: "43", title: "第二页" })],
+              items: [mirrored({ conversation_id: "43", title: "第二页" })],
             };
       },
     });
@@ -1514,7 +1526,7 @@ describe("索引：每组的真数与「查看全部 N」", () => {
           return {
             total: 9,
             has_more: false,
-            items: [mirrored({ session_id: "44", title: "翻出来的" })],
+            items: [mirrored({ conversation_id: "44", title: "翻出来的" })],
           };
         }
         return {
@@ -1697,7 +1709,7 @@ describe("对话页：未读", () => {
    * 点一行进右栏时，索引取回来的**那一行**要整个递下去。
    *
    * 详情拿它当替补摘要（标题 / Agent 身份 / 离线时的模型那一格），此前是详情自己
-   * 回头向服务端要一遍 `/v1/agent-sessions?session_id=`——一条纯重复的请求，而且
+   * 回头向服务端要一遍 `/v1/agent-sessions?conversation_id=`——一条纯重复的请求，而且
    * 头部要等它往返回来才认得出这是哪条对话。「详情拿到之后怎么用」由
    * session-detail.test.tsx 守，这里守的是宿主确实给了。
    */
@@ -2022,7 +2034,7 @@ describe("对话页：从控件行建顶层项目", () => {
 describe("对话页跟着通道走", () => {
   const listed = {
     peer_fingerprint: "fp-1",
-    session_id: "1",
+    conversation_id: "1",
     title: "写个爬虫",
     lifecycle_state: "running",
     last_message_at: 1754000000000,

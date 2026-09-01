@@ -4,7 +4,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
  * 「你上面装了哪些技能包」，替掉此前的「手打 skill id」。
  *
  * 三件事在这一层钉死：
- *   1. 中继是点对点的 —— URL 上必须带这一档的 `daemon_fingerprint`，否则拨到的
+ *   1. 中继按通道寻址 —— 通道必须声明这一档的 `machine:<fingerprint>`，否则拨到的
  *      不是这台机器；请求带的是**调用方报进去的**授权集（agentred 上没有组织
  *      架构库，见 wire 的 rpcMethods.skillCatalog 注释）。
  *   2. `discovery` 三态各自保真：`unavailable` / `unsupported` 都会带回空
@@ -92,9 +92,9 @@ describe("fetchSkillCatalog", () => {
     });
 
     const opts = MockRelayClient.mock.calls[0][0];
-    expect(opts.url).toContain("daemon_fingerprint=fp-online");
+    // 目标在**通道**上声明（决策 10/11）：技能目录是机器作用域的操作，走 machine:。
+    expect(opts.target).toBe("machine:fp-online");
     expect(opts.jwt).toBe("ticket-token");
-    expect(opts.deviceFingerprint).toBe("browser-1");
     expect(fake.request).toHaveBeenCalledWith(rpcMethods.skillCatalog, {
       backendType: "claudecode",
       authorized: [{ id: "agentre/web", enabled: true }],

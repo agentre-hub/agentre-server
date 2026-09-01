@@ -9,7 +9,7 @@ import SessionDetailView from "@/components/session/SessionDetailView";
  * form="embedded" 消费同一份实现（任务 5）。
  */
 export default function SessionDetail() {
-  const { deviceId, sessionId } = useParams();
+  const { deviceId, conversationId } = useParams();
   // 移动端从草稿页下钻过来时，「模型没能钉住」那一句随导航 state 一起来 ——
   // 它说的是发起那一刻的事，没有别的来路，也不该进 URL。
   const { state } = useLocation();
@@ -26,7 +26,7 @@ export default function SessionDetail() {
   return (
     <SessionDetailView
       deviceId={Number(deviceId)}
-      sessionId={Number(sessionId)}
+      conversationId={conversationId ?? ""}
       form="page"
       initialTitle={title}
       initialModelNote={modelNote}

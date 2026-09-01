@@ -15,9 +15,13 @@ import {
 import type { RelayTicket } from "@/lib/relayTicket";
 
 /**
- * 一台 agentred 的中继连接：用登录 session 换短效 ticket → 连 /v1/relay/client →
- * 持续暴露连接状态与可用的 RelayClient。断线自动重连由 RelayClient 自己负责，
- * 本 hook 只做生命周期（卸载时 close）。
+ * 一条**虚拟通道**上的中继客户端：向共用的账号级连接（一个账号一条 socket）借一条
+ * 到指定目标的通道，持续暴露它的状态与可用的 RelayClient。
+ *
+ * 参数是**通道目标**而不是机器指纹：`conversation:<uuid>`（已保存的对话，服务端解析
+ * 出承载机器）或 `machine:<fingerprint>`（机器轴、新建对话、未保存的对话），见
+ * `@/lib/relayTarget` 的入口分流。断线重连由连接自己负责，本 hook 只做生命周期
+ * （卸载时归还租约）。
  *
  * 实时回调经 ref 转发，避免回调闭包读到陈旧 state；页面可以放心传引用 setter。
  */
@@ -47,34 +51,34 @@ export interface UseRelayMachineResult {
 }
 
 export function useRelayMachine(
-  fingerprint: string | null,
+  target: string | null,
   opts: UseRelayMachineOptions = {},
 ): UseRelayMachineResult {
   const [relayTicket, setRelayTicket] = useState<RelayTicket | null>(null);
   const [relayTicketError, setRelayTicketError] = useState<unknown>(null);
   /*
-    有目标机器 = 我们在连。这句话必须在**渲染期**就成立,不能等 effect。
+    有目标 = 我们在连。这句话必须在**渲染期**就成立,不能等 effect。
 
-    `fingerprint` 是 `device?.online ? device.fingerprint : null`:设备清单回来
-    那一拍,指纹与 `machineOnline: true` 同时落地,而下面那只 effect 排在渲染之后
+    `target` 只在目标确定之后才非空(设备清单回来、或账号那一行认领落定):它与
+    `machineOnline: true` 同时落地,而下面那只 effect 排在渲染之后
     ——中间夹着整整一帧 `{ relayState: "disconnected", machineOnline: true }`,
     `deriveSessionViewStatus` 把它读作「连过又放弃了」,屏幕上闪一条红色的
     「连接已断开,已经不再自动重试」。取票之前那句 `setRelayState("connecting")`
     补不上这一帧:它自己就在 effect 里。
 
-    所以初值按有没有目标机器给,换目标时用 React 官方的「prop 变化时重置 state」
+    所以初值按有没有目标给,换目标时用 React 官方的「prop 变化时重置 state」
     渲染期调整模式跟着改(不能在 effect 里裸调 setState —— lint 禁止)。
     "disconnected" 从此只有一种来路:连过又放弃了(close 之后)、或票根本没换到。
   */
-  const initialState = (fp: string | null): RelayState =>
-    fp ? "connecting" : "disconnected";
+  const initialState = (value: string | null): RelayState =>
+    value ? "connecting" : "disconnected";
   const [relayState, setRelayState] = useState<RelayState>(() =>
-    initialState(fingerprint),
+    initialState(target),
   );
-  const [lastFingerprint, setLastFingerprint] = useState(fingerprint);
-  if (lastFingerprint !== fingerprint) {
-    setLastFingerprint(fingerprint);
-    setRelayState(initialState(fingerprint));
+  const [lastTarget, setLastTarget] = useState(target);
+  if (lastTarget !== target) {
+    setLastTarget(target);
+    setRelayState(initialState(target));
   }
   const [client, setClient] = useState<RelayClient | null>(null);
   /** 兜底的手动重连计数器：变一次就把下面那个 effect 整个重跑一遍。 */
@@ -82,23 +86,24 @@ export function useRelayMachine(
   /**
    * 从头再连一次。
    *
-   * 首选让**池子**原地重建那条连接：这台机器上可能还有别的使用方（目录选择器、
-   * 派发）搭在同一条上，它们靠 `onClient` 跟着换手，不会被甩下。单纯把自己这份
-   * 租约还掉再借一次是没用的 —— 借回来的还是池子里那条坏的。
+   * 首选让**池子**原地换掉那条 socket：这个账号只有一条，上面还跑着别的使用方
+   * （目录选择器、派发、别的机器的通道），换 socket 不动通道与引用计数，所以谁都
+   * 不会被甩下，手里的 RelayClient 也不换人。单纯把自己这份租约还掉再借一次是没
+   * 用的 —— 借回来的还是同一条。
    *
-   * 池子里没有这台机器的条目（票根本没换到，连接压根没建出来）时才退回计数器，
+   * 池子里没有这条通道的条目（票根本没换到，连接压根没建出来）时才退回计数器，
    * 让整只 effect 从取票重跑。
    */
   const reconnect = useCallback(() => {
-    if (!fingerprint) return;
+    if (!target) return;
     setRelayState("connecting");
     void relayClientPool
-      .reconnect(fingerprint)
+      .reconnect(target)
       .catch(() => false)
       .then((rebuilt) => {
         if (!rebuilt) setAttempt((n) => n + 1);
       });
-  }, [fingerprint]);
+  }, [target]);
   const optsRef = useRef(opts);
   // 每次渲染后把最新回调收进 ref，避免 RelayClient 持有的回调读到陈旧闭包。
   useEffect(() => {
@@ -107,7 +112,7 @@ export function useRelayMachine(
 
   useAliveEffect(
     (alive) => {
-      if (!fingerprint) return;
+      if (!target) return;
       // 取票是连接的第一步,不是连接之前的准备:这一步期间还没有 RelayClient,
       // 没人会把状态推离初值 "disconnected",而那个值被 deriveSessionViewStatus
       // 读作「连过又放弃了」= lost。于是刷新页面后第一次打开对话,整个取票往返
@@ -119,15 +124,13 @@ export function useRelayMachine(
       // 自己退避重连，页面靠 relayState 的 reconnecting 去探测原因（R11）。等连上
       // 再交付会把这条路堵死：首次失败当场被说成 disconnected。
       acquireRelayClient(
-        fingerprint,
+        target,
         {
           onStateChange: setRelayState,
           onEvent: (frame) => optsRef.current.onEvent?.(frame),
           onRunResultDone: (frame) => optsRef.current.onRunResultDone?.(frame),
           onAutonomousTurnStarted: (frame) =>
             optsRef.current.onAutonomousTurnStarted?.(frame),
-          // 池子重建这条连接（手动重连）时跟着换手里这一个。
-          onClient: setClient,
         },
         { waitForConnect: false },
       )
@@ -155,7 +158,7 @@ export function useRelayMachine(
       };
       // attempt 变化即「池子里压根没有这台机器的条目、只能整条重来」，见 reconnect。
     },
-    [fingerprint, attempt],
+    [target, attempt],
   );
 
   return { client, relayState, relayTicket, relayTicketError, reconnect };

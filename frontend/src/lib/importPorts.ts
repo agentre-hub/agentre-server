@@ -8,7 +8,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import { api } from "@/lib/api";
-import { newSessionId } from "@/lib/dispatch";
+import { newConversationId } from "@/lib/conversationId";
 import type { NewConvAgent } from "@/components/session/newconv/types";
 
 /**
@@ -96,7 +96,7 @@ interface PreviewDTO {
 }
 
 interface RunDTO {
-  session_id: string;
+  conversation_id: string;
   peer_fingerprint: string;
   cwd?: string;
   title?: string;
@@ -251,13 +251,13 @@ export function createBrowserSessionImportPorts(
           device_id: Number(remember(req.deviceId)),
           backend: req.backend,
           locator: req.locator,
-          // 会话号由浏览器铸，与「新对话」同一条规矩（服务端与 daemon 都不发号）。
-          session_id: newSessionId(),
+          // 号由浏览器铸，与「新对话」同一条规矩（服务端与 daemon 都不发号）。
+          conversation_id: newConversationId(),
           agent_sync_id: req.agentId,
         }),
       });
       return {
-        sessionId: res.session_id,
+        sessionId: res.conversation_id,
         alreadyImported: res.already_imported ?? false,
         // 只读那一档是「工作目录没了所以不能续跑」，而那件事由那台机器判；
         // 本站这条路上没有它，如实报 false。

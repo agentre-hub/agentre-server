@@ -31,7 +31,7 @@ export interface SessionDetailHeaderProps {
   /** 路由页形态才有面包屑 / 移动返回（决策 16）。 */
   isPage: boolean;
   did: number;
-  sid: number;
+  sid: string;
   /**
    * 头部认这条对话用的摘要：中继的实况优先，没有时退到账号镜像那一行。
    * 派生规则在 SessionDetailView 的 `identity` 那里。
@@ -94,7 +94,7 @@ export default function SessionDetailHeader({
     setAborting(true);
     try {
       await c.request(rpcMethods.runtimeAbort, {
-        sessionId: BigInt(sid),
+        conversationId: sid,
         ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
       });
     } catch {

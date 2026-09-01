@@ -51,7 +51,7 @@ function useSessionComposerModule(): SessionComposerModule | null {
 
 export interface SessionComposerBandProps {
   did: number;
-  sid: number;
+  sid: string;
   status: SessionViewStatus;
   /** 贴底与否决定这一带的上边界（规格 2026-08-23 决策 6）。 */
   atBottom: boolean;

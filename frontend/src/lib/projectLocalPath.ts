@@ -24,6 +24,7 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { RelayClient, RelayError } from "@/lib/relayClient";
 import { withRelayClient } from "@/lib/relayClientPool";
+import { machineTarget } from "@/lib/relayTarget";
 
 export const MethodProjectSetLocalPath = "project.setLocalPath";
 export const MethodProjectClearLocalPath = "project.clearLocalPath";
@@ -161,5 +162,5 @@ async function callOnMachine<T>(
   call: (client: ProjectLocalPathCaller) => Promise<T>,
 ): Promise<T> {
   if (!fingerprint) throw disconnected();
-  return withRelayClient(fingerprint, (client) => call(client));
+  return withRelayClient(machineTarget(fingerprint), (client) => call(client));
 }

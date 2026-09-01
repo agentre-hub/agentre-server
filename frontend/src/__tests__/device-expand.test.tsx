@@ -14,24 +14,28 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 // 展开一台在线 agentred 时，「对话」一节的条数与等待数要真去问那台机器（帧 47）。
 vi.mock("@/hooks/use-relay", () => ({
-  useRelayMachine: (fingerprint: string | null) => ({
-    client: fingerprint
+  useRelayMachine: (target: string | null) => ({
+    client: target
       ? {
           request: async () => ({
             sessions: [
               {
-                sessionId: 1,
+                conversationId: "c-1",
                 lifecycleState: "running",
                 latestSeq: 1,
                 waitingForInput: true,
               },
-              { sessionId: 2, lifecycleState: "idle", latestSeq: 1 },
-              { sessionId: 3, lifecycleState: "running", latestSeq: 1 },
+              { conversationId: "c-2", lifecycleState: "idle", latestSeq: 1 },
+              {
+                conversationId: "c-3",
+                lifecycleState: "running",
+                latestSeq: 1,
+              },
             ],
           }),
         }
       : null,
-    relayState: fingerprint ? "connected" : "disconnected",
+    relayState: target ? "connected" : "disconnected",
     relayTicket: null,
     relayTicketError: null,
   }),
