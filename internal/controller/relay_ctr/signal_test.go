@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -147,6 +148,7 @@ func TestRelayClient_GivenTheSubscriptionIsSlow_ThenTheUpgradeWaitsForIt(t *test
 // 上面还跑着 RPC。客户端据此把信号那一路标为不可用并退回 30 秒轮询。
 func TestRelayClient_GivenTheSignalStreamStops_ThenOnlyTheSignalChannelCloses(t *testing.T) {
 	stalling := &stallingAccountChan{signals: make(chan accountchan_svc.Frame)}
+	t.Cleanup(func() { stalling.closeOnce.Do(func() { close(stalling.signals) }) })
 	harness := newSignalHarnessWith(t, stalling)
 	alpha := harness.machine(t, 9, "fp-alpha", device_entity.KindAgentred)
 	link := harness.client(t)
@@ -267,7 +269,10 @@ func (g *gatedAccountChan) Subscribe(
 }
 
 // stallingAccountChan 给出一份订阅上去就不再有信号的通道，用来驱动「信号源没了」。
-type stallingAccountChan struct{ signals chan accountchan_svc.Frame }
+type stallingAccountChan struct {
+	signals   chan accountchan_svc.Frame
+	closeOnce sync.Once
+}
 
 func (s *stallingAccountChan) Broadcast(context.Context, int64, accountchan_svc.Frame) error {
 	return nil
@@ -276,11 +281,23 @@ func (s *stallingAccountChan) Broadcast(context.Context, int64, accountchan_svc.
 func (s *stallingAccountChan) Subscribe(
 	context.Context, int64,
 ) (accountchan_svc.Subscription, error) {
-	return stalledSignalSubscription{signals: s.signals}, nil
+	return stalledSignalSubscription{signals: s.signals, closeOnce: &s.closeOnce}, nil
 }
 
-type stalledSignalSubscription struct{ signals chan accountchan_svc.Frame }
+// stalledSignalSubscription 交出一条**永远不来帧**的信号流，用来构造「订阅建起来了
+// 但一直没动静」这个状态。
+//
+// Close 必须真的关掉那条 channel：accountchan_svc.Subscription 的约定就是「Close 之后
+// Signals() 走到头」，而 pumpSignals / encodeSignals 都靠 `range` 它来收尾。空实现会让
+// 每个用它的用例各留一条永远 parked 的 goroutine，同时也让这些用例看不见收尾那一侧的
+// 回归 —— 它们本来就是在测收尾。
+type stalledSignalSubscription struct {
+	signals   chan accountchan_svc.Frame
+	closeOnce *sync.Once
+}
 
 func (s stalledSignalSubscription) Signals() <-chan accountchan_svc.Frame { return s.signals }
 
-func (s stalledSignalSubscription) Close() {}
+func (s stalledSignalSubscription) Close() {
+	s.closeOnce.Do(func() { close(s.signals) })
+}

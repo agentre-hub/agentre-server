@@ -93,3 +93,23 @@ describe("isConversationId", () => {
     expect(isConversationId("9001")).toBe(false);
   });
 });
+
+// Given 这个运行环境取不到 CSPRNG，Then 铸号当场失败，而不是悄悄换成 Math.random。
+//
+// 铸出来的值是四张镜像表的主键，唯一性全靠那 74 位随机——没有发号器可以复核。用一个
+// 可预测的 PRNG 顶上，只会在没人看得见的环境里把「不需要协调」这个前提换掉。
+it("没有 crypto.getRandomValues 时如实失败，不退回可预测的随机源", () => {
+  const original = globalThis.crypto;
+  Object.defineProperty(globalThis, "crypto", {
+    value: undefined,
+    configurable: true,
+  });
+  try {
+    expect(() => newConversationId()).toThrow(/getRandomValues/);
+  } finally {
+    Object.defineProperty(globalThis, "crypto", {
+      value: original,
+      configurable: true,
+    });
+  }
+});

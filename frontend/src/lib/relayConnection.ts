@@ -88,6 +88,16 @@ export interface RelayConnectionOptions {
   reconnectDelayMs?: number;
   /** 退让的封顶（默认 30 秒）。 */
   maxReconnectDelayMs?: number;
+  /**
+   * 连上之后活满多久才算「这次是成功的」，退让计数据此归零（默认 10 秒）。
+   *
+   * 不能一 `onopen` 就归零：服务端接受 upgrade 之后随即断开是一条真实路径——连接
+   * 守卫每次心跳复查账号闸门，而闸门判不出来时是 fail-closed。那时每条连接都在
+   * 「连上 → 立刻断 → 等 1 秒」上打转，等于对着一个已经不健康的依赖每秒一次。
+   */
+  stableConnectionMs?: number;
+  /** [0,1) 的抖动源，测试注入定值。 */
+  random?: () => number;
   /** WebSocket 工厂接缝，测试注入假实现。 */
   createWebSocket?: (
     url: string,
@@ -117,6 +127,8 @@ export class RelayConnection {
   private currentState: RelayState = "disconnected";
   /** 连着失败了几次。重连按它指数退让。 */
   private failures = 0;
+  /** 当前这条 socket 是什么时候连上的；没连上时为 null。见 stableConnectionMs。 */
+  private connectedAt: number | null = null;
 
   constructor(opts: RelayConnectionOptions) {
     this.opts = { reconnect: true, reconnectDelayMs: 1000, ...opts };
@@ -145,7 +157,7 @@ export class RelayConnection {
       ws.binaryType = "arraybuffer";
       this.ws = ws;
       ws.onopen = () => {
-        this.failures = 0;
+        this.connectedAt = Date.now();
         this.setState("connected");
         // 新 socket 上服务端认不得旧通道：逐条重新声明目标，再让每条通道自己
         // 重做握手与补齐。顺序要紧——目标声明必须是这条通道的第一帧。
@@ -183,6 +195,9 @@ export class RelayConnection {
    * socket 上重新声明目标、重做自己的握手。
    */
   async reconnect(): Promise<void> {
+    // 人点的「重新连接」是一次全新的尝试：不该继承上一轮攒下来的退让，否则紧接着
+    // 的一次失败要等满累积的那个时长才会再试。
+    this.failures = 0;
     if (this.opts.refreshCredentials) {
       const credentials = await this.opts.refreshCredentials();
       this.opts.url = credentials.url;
@@ -304,6 +319,15 @@ export class RelayConnection {
   }
 
   private handleClose(): void {
+    // 「连上过」不等于「连成功过」：活够 stableConnectionMs 才算，退让计数这时才归零。
+    const stableMs = this.opts.stableConnectionMs ?? 10_000;
+    if (
+      this.connectedAt !== null &&
+      Date.now() - this.connectedAt >= stableMs
+    ) {
+      this.failures = 0;
+    }
+    this.connectedAt = null;
     for (const channel of this.channels.values()) channel.declared = false;
     for (const listener of [...this.signalListeners]) {
       listener.onSignalClosed?.();
@@ -319,7 +343,14 @@ export class RelayConnection {
     // 服务端每秒拨一次，直到标签页关掉。
     const base = this.opts.reconnectDelayMs ?? 1000;
     const cap = this.opts.maxReconnectDelayMs ?? 30_000;
-    const delay = Math.min(base * 2 ** this.failures, cap);
+    // 抖动：所有标签页（以及所有装着这个前端的机器）看到的是同一次服务端故障，
+    // 没有抖动它们会整整齐齐地同时重拨，把退让的意义抵消掉。取半幅抖动，与 daemon
+    // 侧 relaytransport.HubLink.backoff 同一形状。
+    const jitter = this.opts.random ? this.opts.random() : Math.random();
+    const ceiling = Math.min(base * 2 ** this.failures, cap);
+    const delay = Math.round(
+      ceiling * (0.5 + Math.min(Math.max(jitter, 0), 1) / 2),
+    );
     this.failures += 1;
     this.redial.schedule(delay, () => {
       void this.redialOnce();

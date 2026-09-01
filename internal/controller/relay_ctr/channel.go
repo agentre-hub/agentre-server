@@ -27,6 +27,19 @@ import (
 // 通道号有两套：客户端在自己这条连接里自选的号（客户端侧命名空间，键就是它），
 // 与服务端分配给 daemon 那条链路的号（AttachClient 交回，账号+机器范围内唯一）。
 // 两者在这里翻译，客户端因此撞不到、也猜不到别人那条通道的服务端号。
+// maxOpenChannelsPerConnection 是一条中继客户端连接上同时开着的虚拟通道数上限。
+//
+// 目标降到通道级之后,开一条通道要一次库 + 一次 Redis,并在服务端留下一份附着与
+// 一份在线登记(带自己的续期 goroutine);而这些只在客户端主动关、或整条连接断掉时
+// 回收。没有上限,一个已鉴权的账号在**一条** socket 上就能把它们无限开下去。
+// 取值远高于任何真实用法(浏览器一条对话一条通道,桌面端一台机器一条)。
+const maxOpenChannelsPerConnection = 256
+
+// maxChannelIDLength 与对端 relaytransport.maxRelayChannelIDLength 同值。信封头
+// 允许 65535 字节的通道号,但通道号是客户端自选的、要被服务端存进注册表并原样回写
+// 到每一帧上 —— 不设限就等于让对面用通道号本身放大内存占用。
+const maxChannelIDLength = 128
+
 type clientChannels struct {
 	svc    relay_svc.RelaySvc
 	conn   FrameConn
@@ -64,6 +77,10 @@ func (c *clientChannels) handle(ctx context.Context, channelID string, payload [
 	// 通道上表示「关掉这条」的空载荷——都是协议违例。判在最前面而不是开通道那一步：
 	// 服务端已经开着的那条保留通道在注册表里没有条目，落到 lookup 之后会被当成
 	// 「客户端要开一条新通道」，那时再拒就把两种违例混成一种。
+	if len(channelID) > maxChannelIDLength {
+		c.writeError(ctx, channelID, relay_svc.ChannelCodeTargetInvalid, code.InvalidParameter)
+		return
+	}
 	if strings.HasPrefix(channelID, relay_svc.ReservedChannelPrefix) {
 		// 不带关闭帧：保留通道是服务端开的，客户端的一次违例不该把它自己的信号路
 		// 判死——它还在收信号。
@@ -95,6 +112,18 @@ func (c *clientChannels) openChannel(ctx context.Context, channelID, target stri
 	// 保留号在 handle 那一步就被挡掉了，因此这里的通道一定有一台对端机器可以附着
 	// ——AttachClient 结束时要往通道上发一帧空载荷通知对端 daemon，而保留通道压根
 	// 没有对端 daemon。
+	c.mu.Lock()
+	overCap := len(c.open) >= maxOpenChannelsPerConnection
+	c.mu.Unlock()
+	if overCap {
+		// 通道级失败:已经开着的那些照常收发,只是不再接受新的。
+		c.writeError(ctx, channelID, relay_svc.ChannelCodeTargetInvalid, code.InvalidParameter)
+		_ = (&channelWriter{conn: c.conn, channelID: channelID}).
+			WriteMessage(websocket.BinaryMessage, nil)
+		logger.Ctx(ctx).Warn("relay_ctr.openChannel: connection is at its channel cap",
+			zap.Int64("accountId", c.client), zap.Int("openChannels", maxOpenChannelsPerConnection))
+		return
+	}
 	route, err := c.svc.ResolveTarget(ctx, c.client, target)
 	if err != nil {
 		c.fail(ctx, channelID, err)
@@ -162,6 +191,17 @@ func signalUnavailable(ctx context.Context, conn FrameConn) {
 // fail 把一条通道判死：告诉客户端为什么，再关掉它。整条连接不受影响。
 func (c *clientChannels) fail(ctx context.Context, channelID string, err error) {
 	channelCode, businessCode := channelFailure(err)
+	// 记一行。客户端只拿得到一个码 + 一句语言包文案,而 default 分支恰恰是「谁也没
+	// 认出这个失败」—— 库挂了 / Redis 挂了都长这样。不记的话,一次依赖故障在服务端
+	// 一点痕迹都不留,只在每条通道上变成一个泛泛的 -32603。
+	if channelCode == relay_svc.ChannelCodeInternal {
+		logger.Ctx(ctx).Error("relay_ctr.channel: unmapped channel failure",
+			zap.String("channelId", channelID), zap.Int64("accountId", c.client), zap.Error(err))
+	} else {
+		logger.Ctx(ctx).Warn("relay_ctr.channel: channel failed",
+			zap.String("channelId", channelID), zap.Int64("accountId", c.client),
+			zap.Int32("channelCode", channelCode), zap.Error(err))
+	}
 	c.writeError(ctx, channelID, channelCode, businessCode)
 	// 空载荷 = 这条通道关了，与 daemon 那条链路上同一个约定。
 	_ = (&channelWriter{conn: c.conn, channelID: channelID}).
@@ -189,15 +229,25 @@ func writeChannelError(ctx context.Context, conn FrameConn, channelID string, ch
 	_ = writer.WriteMessage(websocket.BinaryMessage, frame)
 }
 
-// closeAll 在连接走人时逐条摘掉，让每台机器都收到自己那条通道的关闭信号。
+// closeAll 在连接走人时把每条通道都摘掉，让每台机器都收到自己那条通道的关闭信号。
+//
+// 并发摘而不是顺序摘:每个 detach 底下是一次 ForwardClient,跨副本时要等一次投递
+// 回执(relay_svc 的 channelCloseTimeout)。顺序摘的话 N 条通道最坏要等 N 倍,而这
+// 段跑在连接处理器的 defer 上 —— 它同时挡着这条连接的信号订阅收尾与 mux.Shutdown。
 func (c *clientChannels) closeAll() {
 	c.mu.Lock()
 	channels := c.open
 	c.open = map[string]*clientChannel{}
 	c.mu.Unlock()
+	var wg sync.WaitGroup
 	for _, channel := range channels {
-		channel.detach()
+		wg.Add(1)
+		go func(detach func()) {
+			defer wg.Done()
+			detach()
+		}(channel.detach)
 	}
+	wg.Wait()
 }
 
 // channelWriter 把一条通道的出帧套上**客户端自己那个号**的信封再写进共享连接。

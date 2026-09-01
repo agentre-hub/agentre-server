@@ -77,8 +77,8 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).
-		AddRow(7, "fp-daemon-1", "sess-9", 101, []byte{0x0a, 0x01, 0xff}, 1000).
-		AddRow(7, "fp-daemon-1", "sess-9", 102, []byte{0x12, 0x01, 0x00}, 1001)
+		AddRow(7, "conv-9", "fp-daemon-1", 101, []byte{0x0a, 0x01, 0xff}, 1000).
+		AddRow(7, "conv-9", "fp-daemon-1", 102, []byte{0x12, 0x01, 0x00}, 1001)
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", int64(100), 50).WillReturnRows(rows)
@@ -88,6 +88,9 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 	require.Len(t, out, 2)
 	assert.Equal(t, int64(101), out[0].Seq)
 	assert.Equal(t, int64(102), out[1].Seq)
+	// 列名换过顺序,只断言 Seq 的话「扫错列」会静默通过:身份那两列必须各归各位。
+	assert.Equal(t, "conv-9", out[0].ConversationID)
+	assert.Equal(t, "fp-daemon-1", out[0].PeerFingerprint)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -128,8 +131,8 @@ func TestListFramesBefore_NewestFirstAndExclusiveUpperBound(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).
-		AddRow(7, "fp-daemon-1", "sess-9", 102, []byte{0x12, 0x01, 0x00}, 1001).
-		AddRow(7, "fp-daemon-1", "sess-9", 101, []byte{0x0a, 0x01, 0xff}, 1000)
+		AddRow(7, "conv-9", "fp-daemon-1", 102, []byte{0x12, 0x01, 0x00}, 1001).
+		AddRow(7, "conv-9", "fp-daemon-1", 101, []byte{0x0a, 0x01, 0xff}, 1000)
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", int64(103), 50).WillReturnRows(rows)
@@ -139,6 +142,8 @@ func TestListFramesBefore_NewestFirstAndExclusiveUpperBound(t *testing.T) {
 	require.Len(t, out, 2)
 	assert.Equal(t, int64(102), out[0].Seq)
 	assert.Equal(t, int64(101), out[1].Seq)
+	assert.Equal(t, "conv-9", out[0].ConversationID)
+	assert.Equal(t, "fp-daemon-1", out[0].PeerFingerprint)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -150,7 +155,7 @@ func TestListFramesBefore_ZeroUpperBoundReadsFromNewest(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
-	}).AddRow(7, "fp-daemon-1", "sess-9", 300, []byte{0x0a, 0x01, 0xff}, 1009)
+	}).AddRow(7, "conv-9", "fp-daemon-1", 300, []byte{0x0a, 0x01, 0xff}, 1009)
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? ORDER BY seq DESC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", 50).WillReturnRows(rows)

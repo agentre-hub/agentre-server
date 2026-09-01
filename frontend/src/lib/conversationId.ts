@@ -21,18 +21,20 @@ const HEX = Array.from({ length: 256 }, (_, i) =>
  * 取 16 字节随机数。
  *
  * 非安全上下文（http 部署）里 `crypto.getRandomValues` 仍然可用——它不像
- * `crypto.subtle` 那样被安全上下文限制住。真的取不到时退回 `Math.random`：一个
- * 铸不出号的浏览器等于一条对话也发不起，而这个值不承担任何安全语义（它只是身份，
- * 猜到它也访问不了任何东西——授权在凭据上）。
+ * `crypto.subtle` 那样被安全上下文限制住，所以这里没有需要兜底的真实浏览器。
+ *
+ * 取不到就**如实报错**，不退回 `Math.random`。铸出来的这个值是四张镜像表的主键，
+ * 唯一性完全由这 74 位随机承担（v7 没有发号器可以复核）；用一个可预测的 PRNG 悄悄
+ * 顶上，只会在没人看得见的环境里把「不需要协调」这个前提换掉。一个铸不出号的浏览器
+ * 本来就发不起对话，当场失败比发一个来路不明的主键便宜。
  */
 function randomBytes(length: number): Uint8Array {
-  const bytes = new Uint8Array(length);
   const webCrypto = globalThis.crypto;
-  if (webCrypto?.getRandomValues) {
-    webCrypto.getRandomValues(bytes);
-    return bytes;
+  if (!webCrypto?.getRandomValues) {
+    throw new Error("conversation id requires crypto.getRandomValues");
   }
-  for (let i = 0; i < length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  const bytes = new Uint8Array(length);
+  webCrypto.getRandomValues(bytes);
   return bytes;
 }
 

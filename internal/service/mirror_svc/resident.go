@@ -185,7 +185,7 @@ func (s *Supervisor) dial(
 	if onNotify == nil {
 		onNotify = func(*agentrewire.RpcNotification) {}
 	}
-	conn, err := dialMachine(ctx, s.relay, credential, s.clientFingerprint(),
+	conn, err := dialMachine(ctx, s.relay, credential,
 		key, s.cfg.CallTimeout, onNotify)
 	if err != nil {
 		if errors.Is(err, relay_svc.ErrDaemonOffline) {

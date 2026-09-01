@@ -618,3 +618,87 @@ describe("RelayClient 通道级失败", () => {
     );
   });
 });
+
+/**
+ * 连接层的重连纪律（不是通道层的）。
+ *
+ * 这条常驻连接在登录期间永不释放，所以「连不上」时它会一直重拨下去；退让因此是它
+ * 唯一的自我约束。两件事各自会把这个约束抵消掉：
+ *
+ *  1. 一 `onopen` 就把失败计数归零。服务端接受 upgrade 之后随即断开是一条真实路径
+ *     （连接守卫每次心跳复查账号闸门，闸门判不出来时 fail-closed），那时每条连接都在
+ *     「连上 → 立刻断 → 等一个 base」上打转，等于对着一个已经不健康的依赖每秒一次，
+ *     而且每一轮还各换一张票。
+ *  2. 没有抖动。所有标签页看到的是同一次故障，会整整齐齐地同时回来。
+ */
+describe("RelayConnection 的重连退让", () => {
+  function connectionWithSockets(): {
+    sockets: BinarySocket[];
+    delays: number[];
+    fire: () => void;
+    connection: RelayConnection;
+  } {
+    const sockets: BinarySocket[] = [];
+    const delays: number[] = [];
+    const timers: Array<() => void> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      delays.push(ms ?? 0);
+      timers.push(fn);
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const connection = new RelayConnection({
+      url: "ws://relay.test/v1/relay/client",
+      jwt: "jwt",
+      reconnectDelayMs: 1000,
+      stableConnectionMs: 10_000,
+      random: () => 1,
+      createWebSocket: () => {
+        const socket = new BinarySocket();
+        sockets.push(socket);
+        return socket as unknown as WebSocket;
+      },
+    });
+    return {
+      sockets,
+      delays,
+      fire: () => timers.shift()?.(),
+      connection,
+    };
+  }
+
+  it("连上之后立刻被断开不算一次成功，退让继续增长", async () => {
+    const { sockets, delays, fire, connection } = connectionWithSockets();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+    // 连上就断（服务端接受 upgrade 之后随即关闭）。
+    sockets[0].close();
+    expect(delays).toEqual([1000]);
+
+    // 重拨，再来一次同样的「连上就断」。
+    fire();
+    await Promise.resolve();
+    await Promise.resolve();
+    sockets[1].open();
+    await Promise.resolve();
+    sockets[1].close();
+    // 计数没有被那次 onopen 抹掉，等待翻倍。
+    expect(delays).toEqual([1000, 2000]);
+    connection.close();
+  });
+
+  it("退让带抖动，不是一个所有标签页共用的定值", async () => {
+    const { sockets, delays, connection } = connectionWithSockets();
+    const connecting = connection.connect();
+    sockets[0].open();
+    await connecting;
+    connection["opts"].random = () => 0;
+    sockets[0].close();
+    // 半幅抖动：random=0 取下界。定值实现在这里会给出 1000。
+    expect(delays).toEqual([500]);
+    connection.close();
+  });
+});

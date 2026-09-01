@@ -61,8 +61,11 @@ type machineConn struct {
 	closed  bool
 }
 
+// dialMachine 不再收「本副本的对端指纹」:决策 8 之后身份不在请求体里,它由对端从
+// 已验签凭据的 pfp claim 取,所以本副本出示什么身份完全取决于 Supervisor.dial 往
+// 凭据里签了什么(见下面 AuthAccount 处的注释)。
 func dialMachine(
-	ctx context.Context, relay RelayDialer, credential, clientFingerprint string,
+	ctx context.Context, relay RelayDialer, credential string,
 	m machineKey, timeout time.Duration, onNotify func(*agentrewire.RpcNotification),
 ) (*machineConn, error) {
 	route, err := relay.ConnectClient(ctx, m.userID, m.fingerprint)

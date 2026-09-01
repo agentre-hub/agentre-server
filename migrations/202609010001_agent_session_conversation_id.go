@@ -36,8 +36,16 @@ func migration202609010001() *gormigrate.Migration {
 	}
 	return &gormigrate.Migration{
 		ID: "202609010001",
+		// 每张表先问一句「这一列在不在」。MySQL 的 DDL 各自自动提交,而
+		// gormigrate.DefaultOptions.UseTransaction 是 false —— 四条 ALTER 里第三条
+		// 失败(被杀、锁等待、连接断)时前两条已经生效,台账行却一行都没写。不带这道
+		// 判断的话,下一次启动重跑必然死在 Duplicate column name,而且**每次**都死,
+		// 只能人工进库改。同一条纪律见 agentred 侧的 202609010001。
 		Migrate: func(tx *gorm.DB) error {
 			for _, table := range tables {
+				if tx.Migrator().HasColumn(table, "conversation_id") {
+					continue
+				}
 				if err := tx.Exec("ALTER TABLE " + table + " ADD COLUMN conversation_id " +
 					"char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT ''").Error; err != nil {
 					return err
@@ -47,6 +55,9 @@ func migration202609010001() *gormigrate.Migration {
 		},
 		Rollback: func(tx *gorm.DB) error {
 			for _, table := range tables {
+				if !tx.Migrator().HasColumn(table, "conversation_id") {
+					continue
+				}
 				if err := tx.Exec("ALTER TABLE " + table + " DROP COLUMN conversation_id").Error; err != nil {
 					return err
 				}
