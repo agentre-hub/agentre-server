@@ -22,6 +22,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
@@ -371,7 +372,8 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		OnlineTTL:  30 * time.Second,
 	}
 	relay_svc.SetDefault(relay_svc.New(
-		relayConfig, device_repo.Device(), redis.Default(), relay_svc.NewRedisForwarder(relayConfig, redis.Default()),
+		relayConfig, device_repo.Device(), agent_session_repo.Save(), redis.Default(),
+		relay_svc.NewRedisForwarder(relayConfig, redis.Default()),
 	))
 	// 总览页「当前生效」那一档要问 daemon 是否在线；workspace_svc 只依赖窄接口
 	// DaemonOnlineChecker（ISP），relay_svc.Default() 结构性满足它。

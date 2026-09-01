@@ -628,7 +628,7 @@ func TestListUserDevices(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
 		relay := relay_svc.New(
 			relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second},
-			nil, redisClient, relay_svc.NewUnavailableForwarder(),
+			nil, nil, redisClient, relay_svc.NewUnavailableForwarder(),
 		)
 		relay_svc.SetDefault(relay)
 		t.Cleanup(func() { relay_svc.SetDefault(nil) })

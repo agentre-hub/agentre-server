@@ -130,7 +130,7 @@ func BenchmarkRelayRenewDaemon(b *testing.B) {
 	client.AddHook(hook)
 	defer func() { _ = client.Close() }()
 	config := Config{InstanceID: "server-a", OnlineTTL: 30 * time.Second}
-	svc := New(config, nil, client, fakeForwarder{})
+	svc := New(config, nil, nil, client, fakeForwarder{})
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
 	ctx := context.Background()
 	if err := client.Set(ctx, routeKey(route.AccountID, route.Fingerprint),

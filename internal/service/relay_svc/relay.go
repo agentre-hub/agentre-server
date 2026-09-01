@@ -15,6 +15,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 )
@@ -24,6 +25,10 @@ var (
 	ErrDaemonOffline   = errors.New("relay daemon offline")
 	ErrForwardFailed   = errors.New("relay forwarding failed")
 	ErrDaemonForbidden = errors.New("relay daemon forbidden")
+	// ErrTargetInvalid 是通道声明的目标本身不成形：既不是
+	// conversation:<uuid> 也不是 machine:<fingerprint>。它与「解析不出机器」
+	// (ErrDaemonNotFound) 是两件事——前者是客户端写错了，后者是账号里确实没有。
+	ErrTargetInvalid = errors.New("relay channel target is invalid")
 	// ErrRelayUnconfigured 由 Default() 的安全占位实现返回：调用方从未
 	// SetDefault() 过真实的 RelaySvc（例如只装配了 device flow、没有跑完整
 	// bootstrap 的测试或 handler）。区别于 nil 接口——调用方能拿到一个明确
@@ -64,6 +69,10 @@ func (unavailableRelaySvc) RenewDaemon(context.Context, Route) error {
 }
 
 func (unavailableRelaySvc) ConnectClient(context.Context, int64, string) (Route, error) {
+	return Route{}, ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) ResolveTarget(context.Context, int64, string) (Route, error) {
 	return Route{}, ErrRelayUnconfigured
 }
 
@@ -138,6 +147,10 @@ type RelaySvc interface {
 	RegisterDaemon(ctx context.Context, route Route) error
 	RenewDaemon(ctx context.Context, route Route) error
 	ConnectClient(ctx context.Context, accountID int64, fingerprint string) (Route, error)
+	// ResolveTarget 解析一条**虚拟通道**声明的目标。中继连接本身不再有目标
+	// （决策 10），所以这件事逐通道发生，一条连接上的两条通道可以落在两台
+	// 不同的机器上。
+	ResolveTarget(ctx context.Context, accountID int64, target string) (Route, error)
 	IsDaemonOnline(ctx context.Context, accountID int64, fingerprint string) (bool, error)
 	AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error)
 	AttachClient(ctx context.Context, target Route, writer FrameWriter) (channelID string, detach func(), err error)
@@ -148,6 +161,7 @@ type RelaySvc interface {
 type relaySvc struct {
 	config    Config
 	devices   device_repo.DeviceRepo
+	saves     agent_session_repo.SaveRepo
 	redis     *goredis.Client
 	forwarder Forwarder
 
@@ -157,9 +171,12 @@ type relaySvc struct {
 }
 
 // New 创建 RelaySvc。实例 ID 必须在每个 server 进程中唯一。
-func New(config Config, devices device_repo.DeviceRepo, redisClient *goredis.Client, forwarder Forwarder) RelaySvc {
+func New(
+	config Config, devices device_repo.DeviceRepo, saves agent_session_repo.SaveRepo,
+	redisClient *goredis.Client, forwarder Forwarder,
+) RelaySvc {
 	return &relaySvc{
-		config: config, devices: devices, redis: redisClient, forwarder: forwarder,
+		config: config, devices: devices, saves: saves, redis: redisClient, forwarder: forwarder,
 		fanouts: map[Route]*daemonFanout{},
 	}
 }
@@ -302,7 +319,7 @@ func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType 
 	if messageType != websocket.BinaryMessage {
 		return errors.New("relay daemon envelope must be a binary websocket message")
 	}
-	channelID, innerFrame, err := unwrapEnvelope(frame)
+	channelID, innerFrame, err := UnwrapEnvelope(frame)
 	if err != nil {
 		return fmt.Errorf("decode relay daemon envelope: %w", err)
 	}
@@ -314,7 +331,7 @@ func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType 
 }
 
 func (s *relaySvc) ForwardClient(ctx context.Context, target Route, channelID string, messageType int, frame []byte) error {
-	envelope, err := wrapEnvelope(channelID, frame)
+	envelope, err := WrapEnvelope(channelID, frame)
 	if err != nil {
 		return fmt.Errorf("encode relay client envelope: %w", err)
 	}
@@ -336,7 +353,11 @@ func newChannelID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
-func wrapEnvelope(channelID string, frame []byte) ([]byte, error) {
+// WrapEnvelope 把一帧套上通道信封：2 字节通道 ID 长度 + 通道 ID + 载荷。
+//
+// 两条链路共用这一个格式。目标下沉到通道之后（决策 10），客户端那条链路上一条
+// 物理连接同时跑多条通道，因此它也开始收发信封，而不再是裸载荷。
+func WrapEnvelope(channelID string, frame []byte) ([]byte, error) {
 	if channelID == "" {
 		return nil, errors.New("relay channel ID is required")
 	}
@@ -351,7 +372,8 @@ func wrapEnvelope(channelID string, frame []byte) ([]byte, error) {
 	return envelope, nil
 }
 
-func unwrapEnvelope(envelope []byte) (string, []byte, error) {
+// UnwrapEnvelope 拆开通道信封。空载荷是合法的：它是「这条通道关了」的信号。
+func UnwrapEnvelope(envelope []byte) (string, []byte, error) {
 	if len(envelope) < 2 {
 		return "", nil, errors.New("relay envelope is shorter than channel length")
 	}

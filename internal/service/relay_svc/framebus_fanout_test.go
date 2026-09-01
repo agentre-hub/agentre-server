@@ -195,7 +195,7 @@ func TestForwardDaemon_MalformedEnvelopeStillFailsSynchronously(t *testing.T) {
 }
 
 func daemonEnvelope(channelID string, frame []byte) []byte {
-	envelope, err := wrapEnvelope(channelID, frame)
+	envelope, err := WrapEnvelope(channelID, frame)
 	if err != nil {
 		panic(err)
 	}

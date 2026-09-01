@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 
 	"github.com/agentre-hub/agentre-server/internal/controller/connguard"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
@@ -124,16 +125,18 @@ func (t *renewThrottle) due(now time.Time) bool {
 	return true
 }
 
-// Client 接收同账号客户端指定目标 daemon 的连接。所有能在 upgrade 前判定的
-// 错误都以 HTTP 响应返回，使调用方能区分未登记、离线和转发不可用。
+// Client 接收同账号客户端的**账号级**中继连接。
+//
+// 连接本身不再有目标（决策 10）：URL 上没有 daemon_fingerprint，鉴权之外没有别的
+// 准入判据，因此这里除了鉴权不会再有 upgrade 前的失败。目标由每条虚拟通道开通时
+// 自己声明（conversation:<uuid> 或 machine:<fingerprint>），于是同一条连接上的两条
+// 通道可以落在两台不同的机器上。
+//
+// 单条通道的目标不存在 / 离线 / 转发失败只答复给那一条通道（可区分的通道级错误码），
+// 同连接其它通道照常收发；只有鉴权失效（连接守卫）才关掉整条连接。
 func (r *Relay) Client(c *gin.Context) {
 	ctx := c.Request.Context()
 	accountID, _, _, jti := deviceClaims(c)
-	route, err := r.svc.ConnectClient(ctx, accountID, c.Query("daemon_fingerprint"))
-	if err != nil {
-		relayError(c, err)
-		return
-	}
 	guard := connguard.New(ctx, accountID, jti)
 	conn, err := r.clientTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: guard, OnHeartbeat: guard,
@@ -142,20 +145,26 @@ func (r *Relay) Client(c *gin.Context) {
 		return
 	}
 	defer func() { _ = conn.Close() }()
-	channelID, detach, err := r.svc.AttachClient(ctx, route, conn)
-	if err != nil {
-		return
-	}
-	defer detach()
+	channels := newClientChannels(r.svc, conn, accountID)
+	// 连接走人时逐条摘：daemon 那侧收不到任何整链路断开事件，只能靠逐通道信号
+	// 避免留下幽灵对端。
+	defer channels.closeAll()
 
 	for {
 		messageType, frame, err := conn.ReadMessage()
 		if err != nil {
 			return
 		}
-		if err := r.svc.ForwardClient(ctx, route, channelID, messageType, frame); err != nil {
+		if messageType != websocket.BinaryMessage {
+			// 客户端那条链路现在也收发信封，非二进制帧是协议违例。
 			return
 		}
+		channelID, payload, err := relay_svc.UnwrapEnvelope(frame)
+		if err != nil {
+			// 信封拆不开就归不到任何一条通道头上，只能按整条连接的协议违例处理。
+			return
+		}
+		channels.handle(ctx, channelID, payload)
 	}
 }
 

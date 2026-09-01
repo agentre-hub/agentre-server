@@ -25,12 +25,8 @@ func (f fakeForwarder) Forward(context.Context, Route, Peer, string, int, []byte
 
 func newRelayForTest(t *testing.T, forwarder Forwarder) (RelaySvc, *miniredis.Miniredis, *mock_device_repo.MockDeviceRepo) {
 	t.Helper()
-	mini := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-	controller := gomock.NewController(t)
-	devices := mock_device_repo.NewMockDeviceRepo(controller)
-	return New(Config{InstanceID: "server-a", OnlineTTL: time.Second}, devices, client, forwarder), mini, devices
+	svc, mini, devices, _ := newRelayWithSaves(t, forwarder)
+	return svc, mini, devices
 }
 
 func activeDaemon() *device_entity.Device {
@@ -138,7 +134,7 @@ func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
 	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	forwarder := NewRedisForwarder(config, client)
 	controller := gomock.NewController(t)
-	svc := New(config, mock_device_repo.NewMockDeviceRepo(controller), client, forwarder)
+	svc := New(config, mock_device_repo.NewMockDeviceRepo(controller), nil, client, forwarder)
 
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
 	daemonWriter := &recordingFrameWriter{frames: make(chan recordedFrame, 4)}
@@ -154,7 +150,7 @@ func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
 
 	select {
 	case received := <-daemonWriter.frames:
-		gotChannel, payload, err := unwrapEnvelope(received.frame)
+		gotChannel, payload, err := UnwrapEnvelope(received.frame)
 		require.NoError(t, err)
 		require.Equal(t, channelID, gotChannel)
 		require.Empty(t, payload, "通道关闭以空载荷信封表示")
@@ -220,7 +216,7 @@ func TestPrepareDaemonAcceptsOnlyThisAccountsActiveAddressableDevices(t *testing
 }
 
 func TestUnwrapEnvelopeRejectsNonUTF8ChannelID(t *testing.T) {
-	_, _, err := unwrapEnvelope([]byte{0, 1, 0xff})
+	_, _, err := UnwrapEnvelope([]byte{0, 1, 0xff})
 	require.Error(t, err)
 }
 

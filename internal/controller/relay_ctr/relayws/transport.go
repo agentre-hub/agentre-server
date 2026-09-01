@@ -46,19 +46,22 @@ type Hooks struct {
 // 取小的那个数（10 MiB）而不是大的：中继上跑的是别的设备发来的字节，不是本机可信输入。
 const MaxPayloadBytes int64 = 10 << 20
 
-// MaxEnvelopeBytes 是 daemon 那条链路上信封头的余量：2 字节长度 + 通道 ID
-// （对侧 relaytransport 的 maxRelayChannelIDLength 是 128）。
+// MaxEnvelopeBytes 是信封头的余量：2 字节长度 + 通道 ID（对侧 relaytransport 的
+// maxRelayChannelIDLength 是 128）。
 //
-// 只有 daemon 那一侧要加它。浏览器 / 桌面端接入的那条收的是**裸载荷**（信封由服务端
-// 在 relay_svc.wrapEnvelope 里加、在 unwrapEnvelope 里拆，对端不感知），多给余量等于
-// 放进一份对面装不下的载荷 —— 那正是上面说的「整条连接陪葬」。
+// **两个端点都要加它。** 从前只有 daemon 那侧加：客户端那条收的是裸载荷，一条连接
+// 一条通道，信封由服务端替它套上。目标下沉到通道之后（决策 10），客户端那条连接上
+// 同时跑着多条通道，它自己也开始收发信封（relay_svc.WrapEnvelope / UnwrapEnvelope），
+// 因此两侧的读上限同为「载荷预算 + 一个信封头」——少给这一份余量，一份刚好 10 MiB
+// 的合法载荷会只因为带了信封就被 1009 打掉，而打掉的是整条连接，上面所有通道一起
+// 陪葬。
 const MaxEnvelopeBytes int64 = 2 + 128
 
 // DaemonReadLimit / ClientReadLimit 是两个端点各自的读上限，由上面两个数推出来，
 // 不另外写字面量。
 const (
 	DaemonReadLimit = MaxPayloadBytes + MaxEnvelopeBytes
-	ClientReadLimit = MaxPayloadBytes
+	ClientReadLimit = MaxPayloadBytes + MaxEnvelopeBytes
 )
 
 const (
@@ -125,8 +128,9 @@ type connection struct {
 
 // New 创建采用固定生产生命周期策略的 WebSocket 传输组件。
 //
-// readLimit 由端点决定：收信封的那一侧是 DaemonReadLimit，收裸载荷的是
-// ClientReadLimit。两者都从 MaxPayloadBytes 推出来，调用方不该另写一个数。
+// readLimit 由端点决定。两个端点如今收的都是信封，两个上限也因此同值；保留两个
+// 名字是因为它们各自表达一个端点的预算，都从 MaxPayloadBytes 推出来，调用方不该
+// 另写一个数。
 func New(readLimit int64) Transport {
 	return newWithTiming(defaultTiming(), readLimit)
 }

@@ -96,6 +96,12 @@ func (s *relayStub) ConnectClient(_ context.Context, accountID int64, target str
 	return s.daemonRoute, nil
 }
 
+func (s *relayStub) ResolveTarget(ctx context.Context, accountID int64, target string) (relay_svc.Route, error) {
+	return s.ConnectClient(ctx, accountID, target)
+}
+
+// 票据认得出账号，而目标由通道自己声明（决策 10）：URL 上不再有 daemon_fingerprint，
+// 两者在通道开通那一刻汇合。
 func TestRelayClientAcceptsSessionTicketFromQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis()
@@ -108,17 +114,19 @@ func TestRelayClientAcceptsSessionTicketFromQuery(t *testing.T) {
 	stub.clientAccounts = make(chan int64, 1)
 	stub.clientTargets = make(chan string, 1)
 	server := newRelayServer(t, signer, stub)
-	endpoint := wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon&access_token="+ticket)
+	endpoint := wsURL(server.URL, "/v1/relay/client?access_token="+ticket)
 	conn, response, err := protobufRelayDialer.Dial(endpoint, nil)
 	if response != nil {
 		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
+		relayEnvelope("c1", []byte("machine:fp-daemon"))))
 	require.Equal(t, int64(7), receiveWithin(t, stub.clientAccounts, time.Second,
-		"relay ticket user id did not reach ConnectClient"))
-	require.Equal(t, "fp-daemon", receiveWithin(t, stub.clientTargets, time.Second,
-		"relay target did not reach ConnectClient"))
+		"relay ticket user id did not reach the channel target resolver"))
+	require.Equal(t, "machine:fp-daemon", receiveWithin(t, stub.clientTargets, time.Second,
+		"relay channel target did not reach the resolver"))
 }
 
 func (s *relayStub) IsDaemonOnline(context.Context, int64, string) (bool, error) {
@@ -249,7 +257,7 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) 
 	default:
 	}
 
-	clientConn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon"), headers)
+	clientConn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/client"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
 	clientPongs := make(chan struct{}, 1)
@@ -268,7 +276,10 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) 
 		t.Fatal("client ping renewed a daemon route")
 	default:
 	}
-	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, []byte("request")))
+	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage,
+		relayEnvelope("c1", []byte("machine:fp-daemon"))))
+	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage,
+		relayEnvelope("c1", []byte("request"))))
 	select {
 	case <-stub.clientFrames:
 	case <-time.After(time.Second):
@@ -294,7 +305,7 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 	config := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	redisClient := newRelayRedisClient(t, mini)
 	server := newRelayServer(t, signer, relay_svc.New(
-		config, devices, redisClient, relay_svc.NewRedisForwarder(config, redisClient),
+		config, devices, nil, redisClient, relay_svc.NewRedisForwarder(config, redisClient),
 	))
 	targetToken, _, err := signer.Sign(jwt.Claims{
 		UID: desktop.UserID, DID: desktop.ID, Kind: device_entity.KindDesktop,
@@ -313,7 +324,7 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, targetConn.Close()) })
 
 	clientConn, response, err := protobufRelayDialer.Dial(
-		wsURL(server.URL, "/v1/relay/client?daemon_fingerprint="+desktop.Fingerprint),
+		wsURL(server.URL, "/v1/relay/client"),
 		http.Header{"Authorization": {"Bearer " + clientToken}},
 	)
 	if response != nil {
@@ -321,6 +332,19 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 	}
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
+
+	// 可寻址与否现在是逐通道判的，所以判据也得逐通道看：一条声明了这台桌面端的
+	// 通道，其请求确实落到了它身上。
+	request := []byte{0x08, 0x01, 0x12, 0x01, 0x2a}
+	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage,
+		relayEnvelope("c1", []byte("machine:"+desktop.Fingerprint))))
+	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, relayEnvelope("c1", request)))
+	require.NoError(t, targetConn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	messageType, frame, err := targetConn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, messageType)
+	_, inner := decodeRelayEnvelope(t, frame)
+	require.Equal(t, request, inner)
 }
 
 func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
@@ -343,7 +367,7 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.daemonDetached },
 		},
 		{
-			name: "client", path: "/v1/relay/client?daemon_fingerprint=fp-daemon", kind: device_entity.KindDesktop,
+			name: "client", path: "/v1/relay/client", kind: device_entity.KindDesktop, daemonWire: true,
 			framesOf:   func(stub *relayStub) <-chan struct{} { return stub.clientFrames },
 			detachedOf: func(stub *relayStub) <-chan struct{} { return stub.clientDetached },
 		},
@@ -365,11 +389,15 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 			t.Cleanup(func() { _ = conn.Close() })
 
 			require.NoError(t, conn.SetWriteDeadline(time.Now().Add(2*time.Second)))
+			if tc.path == "/v1/relay/client" {
+				// 客户端那条链路上通道要先声明目标，之后的帧才是载荷。
+				require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
+					relayEnvelope("channel-id", []byte("machine:fp-daemon"))))
+			}
 			// 上限是**载荷**的上限，三个仓同一个数（relayws.MaxPayloadBytes）。
-			// daemon 那条链路上跑的是信封（2 字节长度 + 通道 ID），所以它的读上限
-			// 要比载荷预算高出一个信封头 —— 否则一份刚好 10 MiB 的合法载荷，只因为
-			// 服务端替它套了个信封就被 1009 打掉，而且打掉的是**整条**物理连接，
-			// 那台机器上所有虚拟通道一起陪葬。
+			// 两条链路上跑的都是信封（2 字节长度 + 通道 ID），所以读上限都要比载荷
+			// 预算高出一个信封头 —— 否则一份刚好 10 MiB 的合法载荷，只因为带了信封
+			// 就被 1009 打掉，而且打掉的是**整条**物理连接，上面所有虚拟通道一起陪葬。
 			limit := int(relayws.MaxPayloadBytes)
 			if tc.daemonWire {
 				limit += int(relayws.MaxEnvelopeBytes)
@@ -410,7 +438,9 @@ func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
 		"client delivery failure closed the shared daemon websocket before a later response")
 }
 
-func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
+// 转发失败发生在通道开通**之后**：它同样只判死那一条通道。从前它关掉整条客户端
+// 连接，那时一条连接只有一条通道，两者是同一件事；现在连接上还跑着别人的通道。
+func TestRelayClientForwardingErrorFailsOnlyThatChannel(t *testing.T) {
 	stub := newForwardingRelayStub()
 	stub.clientForwardErrs = make(chan error, 1)
 	stub.clientForwardErrs <- relay_svc.ErrForwardFailed
@@ -418,12 +448,19 @@ func TestRelayClientForwardingErrorStillClosesClientConnection(t *testing.T) {
 	conn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/client"), headers)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
+	link := newClientLink(conn)
 
-	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, []byte("request")))
+	link.open(t, "c-broken", "machine:fp-daemon")
+	link.send(t, "c-broken", []byte("request"))
 	receiveWithin(t, stub.clientFrames, time.Second, "failed client request did not reach forwarding")
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
-	_, _, err = conn.ReadMessage()
-	require.Error(t, err)
+	require.Equal(t, relay_svc.ChannelCodeForwardFailed,
+		requireChannelError(t, link.next(t, "c-broken", "转发失败没有给出通道级错误")))
+	require.Empty(t, link.next(t, "c-broken", "失败的通道必须随即关闭"))
+
+	// 连接还在：还能开新通道、还能转发。
+	link.open(t, "c-live", "machine:fp-daemon")
+	link.send(t, "c-live", []byte("request"))
+	receiveWithin(t, stub.clientFrames, time.Second, "一条通道转发失败连坐了整条连接")
 }
 
 // PrepareDaemon 的准入判据（本账号名下、活跃且可寻址的设备）被拒时必须走 403，
@@ -465,7 +502,10 @@ func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
 	}
 }
 
-func TestRelayClientFailureStatusesAreDistinct(t *testing.T) {
+// 通道开通失败的三种理由必须互相区分得开。从前它们是三个 HTTP 状态码，那时目标在
+// 连接级、判定在 upgrade 之前；目标下沉到通道之后判定在 upgrade 之后，于是同一组
+// 区分改由通道级错误码承担——每个码仍对应 upgrade 前那一版的业务码与文案。
+func TestRelayClientChannelFailureCodesAreDistinct(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis()
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
@@ -474,39 +514,32 @@ func TestRelayClientFailureStatusesAreDistinct(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, tc := range []struct {
-		name   string
-		err    error
-		status int
-		code   string
+		name string
+		err  error
+		code int32
 	}{
-		{name: "not found", err: relay_svc.ErrDaemonNotFound, status: http.StatusNotFound, code: "30400"},
-		{name: "offline", err: relay_svc.ErrDaemonOffline, status: http.StatusConflict, code: "30401"},
-		{name: "forward failed", err: relay_svc.ErrForwardFailed, status: http.StatusBadGateway, code: "30402"},
+		{name: "not found", err: relay_svc.ErrDaemonNotFound, code: relay_svc.ChannelCodeTargetNotFound},
+		{name: "offline", err: relay_svc.ErrDaemonOffline, code: relay_svc.ChannelCodeTargetOffline},
+		{name: "forward failed", err: relay_svc.ErrForwardFailed, code: relay_svc.ChannelCodeForwardFailed},
+		{name: "forbidden target", err: relay_svc.ErrDaemonForbidden, code: relay_svc.ChannelCodeTargetForbidden},
+		{name: "malformed target", err: relay_svc.ErrTargetInvalid, code: relay_svc.ChannelCodeTargetInvalid},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testMux := muxtest.NewTestMux()
 			stub := &relayStub{
 				clientErr: tc.err, registered: make(chan struct{}, 1), renewed: make(chan struct{}, 1),
 				daemonFrames: make(chan struct{}, 1), clientFrames: make(chan struct{}, 1),
+				clientDetached: make(chan struct{}, 1),
 			}
-			require.NoError(t, (&api.RouterDeps{
-				Cfg:    &bootstrap.ServerConfig{},
-				Signer: signer,
-				Relay:  stub,
-			}).Router(context.Background(), testMux.Router))
-			server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
-			t.Cleanup(server.Close)
+			server := newRelayServer(t, signer, stub)
+			conn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/client"),
+				http.Header{"Authorization": {"Bearer " + token}})
+			require.NoError(t, err, "目标失败不再挡在 upgrade 之前")
+			t.Cleanup(func() { _ = conn.Close() })
+			link := newClientLink(conn)
 
-			req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/relay/client?daemon_fingerprint=fp-daemon", nil)
-			require.NoError(t, err)
-			req.Header.Set("Authorization", "Bearer "+token)
-			response, err := http.DefaultClient.Do(req)
-			require.NoError(t, err)
-			defer response.Body.Close()
-			require.Equal(t, tc.status, response.StatusCode)
-			body, err := io.ReadAll(response.Body)
-			require.NoError(t, err)
-			require.Contains(t, string(body), `"code":`+tc.code)
+			link.open(t, "c1", "machine:fp-daemon")
+			require.Equal(t, tc.code, requireChannelError(t, link.next(t, "c1", "通道开通失败没有答复")))
+			require.Empty(t, link.next(t, "c1", "失败的通道必须随即关闭"))
 		})
 	}
 }
@@ -528,12 +561,12 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	configA := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	redisA := newRelayRedisClient(t, mini)
 	serverA := newRelayServer(t, signer, relay_svc.New(
-		configA, clientDevices, redisA, relay_svc.NewRedisForwarder(configA, redisA),
+		configA, clientDevices, nil, redisA, relay_svc.NewRedisForwarder(configA, redisA),
 	))
 	configB := relay_svc.Config{InstanceID: "server-b", OnlineTTL: time.Second}
 	redisB := newRelayRedisClient(t, mini)
 	serverB := newRelayServer(t, signer, relay_svc.New(
-		configB, daemonDevices, redisB, relay_svc.NewRedisForwarder(configB, redisB),
+		configB, daemonDevices, nil, redisB, relay_svc.NewRedisForwarder(configB, redisB),
 	))
 
 	daemonToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
@@ -549,7 +582,7 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, daemonConn.Close()) })
 
 	clientConn, response, err := protobufRelayDialer.Dial(
-		wsURL(serverA.URL, "/v1/relay/client?daemon_fingerprint="+daemon.Fingerprint),
+		wsURL(serverA.URL, "/v1/relay/client"),
 		http.Header{"Authorization": {"Bearer " + clientToken}},
 	)
 	if response != nil {
@@ -558,15 +591,21 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, clientConn.Close()) })
 	otherClientConn, _, err := protobufRelayDialer.Dial(
-		wsURL(serverA.URL, "/v1/relay/client?daemon_fingerprint="+daemon.Fingerprint),
+		wsURL(serverA.URL, "/v1/relay/client"),
 		http.Header{"Authorization": {"Bearer " + clientToken}},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, otherClientConn.Close()) })
 
+	link := newClientLink(clientConn)
+	otherLink := newClientLink(otherClientConn)
+	// 两条连接各开一条通道，都指向同一台机器：帧不能串道。
+	link.open(t, "c1", "machine:"+daemon.Fingerprint)
+	otherLink.open(t, "c1", "machine:"+daemon.Fingerprint)
+
 	requestFrame := []byte{0x08, 0x01, 0x12, 0x03, 0x00, 0xff, 0x80}
-	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, requestFrame))
-	daemonConn.SetReadDeadline(time.Now().Add(time.Second))
+	link.send(t, "c1", requestFrame)
+	daemonConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	messageType, frame, err := daemonConn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, websocket.BinaryMessage, messageType)
@@ -576,18 +615,10 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 
 	responseFrame := []byte{0x08, 0x01, 0x1a, 0x04, 0xde, 0xad, 0x00, 0xbe}
 	require.NoError(t, daemonConn.WriteMessage(websocket.BinaryMessage, relayEnvelope(channelID, responseFrame)))
-	clientConn.SetReadDeadline(time.Now().Add(time.Second))
-	messageType, frame, err = clientConn.ReadMessage()
-	require.NoError(t, err)
-	require.Equal(t, websocket.BinaryMessage, messageType)
-	require.Equal(t, responseFrame, frame, "relay must preserve opaque Protobuf response bytes")
+	require.Equal(t, responseFrame, link.next(t, "c1", "跨副本的应答没有回到发起它的那条通道"),
+		"relay must preserve opaque Protobuf response bytes")
 
-	otherClientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	_, _, err = otherClientConn.ReadMessage()
-	require.Error(t, err)
-	var networkErr net.Error
-	require.ErrorAs(t, err, &networkErr)
-	require.True(t, networkErr.Timeout())
+	otherLink.requireQuiet(t, "c1", "另一条连接上同号的通道收到了不属于它的帧")
 }
 
 // 中继的两个 websocket 端点只在 upgrade 那一刻过一次鉴权中间件，之后不再经过任何
@@ -660,7 +691,7 @@ func TestRelayDaemonClosesWhenDeviceCredentialRevokedOnAnotherInstance(t *testin
 func dialRelayClient(t *testing.T, server *httptest.Server, ticket string) *websocket.Conn {
 	t.Helper()
 	conn, response, err := protobufRelayDialer.Dial(
-		wsURL(server.URL, "/v1/relay/client?daemon_fingerprint=fp-daemon&access_token="+ticket), nil)
+		wsURL(server.URL, "/v1/relay/client?access_token="+ticket), nil)
 	if response != nil {
 		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
 	}
