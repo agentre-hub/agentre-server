@@ -28,15 +28,27 @@ vi.mock("@/lib/relayTicket", async (importOriginal) => {
 
 /** 假 client：只把 onStateChange 的把手交出来，连接由用例自己驱动。 */
 const fake = vi.hoisted(() => {
-  const instances: { connect: () => Promise<void>; close: () => void }[] = [];
+  const instances: {
+    connect: () => Promise<void>;
+    close: () => void;
+    state: string;
+    emit: (s: string) => void;
+  }[] = [];
   class FakeRelayClient {
     private readonly onStateChange: (s: string) => void;
+    /** 真 client 有的那个只读状态：池子给后来者补状态时读的就是它。 */
+    state = "disconnected";
     connect = vi.fn(async () => {
-      this.onStateChange("connecting");
+      this.emit("connecting");
     });
     close = vi.fn(() => {
-      this.onStateChange("disconnected");
+      this.emit("disconnected");
     });
+    /** 由用例驱动一次状态变化，模拟握手完成 / 断线。 */
+    emit = (s: string) => {
+      this.state = s;
+      this.onStateChange(s);
+    };
     constructor(opts: { onStateChange: (s: string) => void }) {
       this.onStateChange = opts.onStateChange;
       instances.push(this);
@@ -166,6 +178,34 @@ describe("useRelayMachine 的连接状态", () => {
     rerender(<Probe fp="fp-1" />);
 
     expect(committed).not.toContain("disconnected");
+  });
+
+  /**
+   * 切走再切回来。
+   *
+   * 通道归池子管，最后一个使用方走掉之后还有 30 秒空闲宽限——所以切回来时借到的
+   * 是**同一条已经连上的**通道，`RelayClient` 不会再动一次状态（`setState` 相同
+   * 值直接早退）。而 hook 的初值是 "connecting"：没人推它离开，屏幕上那条
+   * 「连接中…」就永远转下去。状态变化是事件，后来的订阅者等不到它，池子必须在
+   * 交出租约时把当下的状态补给新监听者。
+   */
+  it("切走再切回来:借到池子里那条已连上的通道时不会卡在「连接中」", async () => {
+    mockedEnsureRelayTicket.mockResolvedValue(TICKET);
+    const first = renderHook(() => useRelayMachine("fp-1"));
+    await waitFor(() => expect(fake.instances).toHaveLength(1));
+    act(() => fake.instances[0].emit("connected"));
+    await waitFor(() =>
+      expect(first.result.current.relayState).toBe("connected"),
+    );
+
+    first.unmount();
+    const second = renderHook(() => useRelayMachine("fp-1"));
+
+    await waitFor(() =>
+      expect(second.result.current.relayState).toBe("connected"),
+    );
+    // 借的就是原来那条：这一条是前提，不是附带收获。
+    expect(fake.instances).toHaveLength(1);
   });
 
   /** 第一帧就已经有目标机器（右栏换会话、路由直接进详情）时同样不许闪。 */

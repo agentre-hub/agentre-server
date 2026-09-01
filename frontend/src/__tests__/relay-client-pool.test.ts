@@ -52,9 +52,7 @@ class FakeClient {
   close(): void {
     this.closed++;
   }
-  get state(): string {
-    return "connecting";
-  }
+  state = "connecting";
 }
 
 const ticket: RelayTicket = {
@@ -171,6 +169,27 @@ describe("RelayClientPool", () => {
     built[0].opts.onStateChange?.("reconnecting");
     expect(first).toHaveBeenCalledWith("reconnecting");
     expect(second).toHaveBeenCalledWith("reconnecting");
+  });
+
+  /**
+   * 状态变化是**事件**：`RelayClient.setState` 遇到相同值直接早退，所以一条早就
+   * 连上的通道此后再也不会说话。后来的使用方（切走再切回来的详情页）因此永远等
+   * 不到那一句，屏幕上停在自己的初值「连接中…」。
+   *
+   * 交出租约时把当下的状态补给新监听者，这条路才闭合——`subscribeSignals` 那侧
+   * 早就这么做了，普通通道漏了。
+   */
+  it("借到一条早就连上的通道时，当场把状态补给新监听者", async () => {
+    const { pool, built } = setup();
+    const first = await pool.acquire(FP1);
+    built[0].state = "connected";
+    built[0].opts.onStateChange?.("connected");
+
+    const late = vi.fn();
+    await pool.acquire(FP1, { onStateChange: late });
+
+    expect(late).toHaveBeenCalledWith("connected");
+    expect(first.client).toBe(built[0] as unknown as RelayClient);
   });
 
   it("最后一个使用方走后进入空闲宽限，宽限内再来的人复用同一条", async () => {

@@ -176,6 +176,12 @@ export class RelayClientPool {
       },
     };
 
+    // 状态变化是**事件**，而这条通道可能早就连上了（切走再切回来时借到的正是它）：
+    // `RelayClient.setState` 相同值直接早退，此后再也不会说话，于是新监听者永远停在
+    // 自己的初值「连接中」。所以交出租约时把当下的状态当场补一遍——信号那一路
+    // （subscribeSignals）早就这么做了，普通通道漏了这一下。
+    listener.onStateChange?.(entry.client.state);
+
     if (options.waitForConnect === false) return lease;
     // 已经连着就不必等那个早已落定的首次握手：它可能是一次**失败**的首次握手，
     // 而客户端此后自己重连上了 —— 拿它判断会把一条好通道说成连不上。
