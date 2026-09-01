@@ -39,9 +39,9 @@ export interface OrgExecTargetItem {
   device_id?: number;
   device_name?: string;
   /**
-   * 这一档所在那台机器的 agentred 指纹。浏览器的中继是点对点的
-   * （`/v1/relay/client?daemon_fingerprint=…` 认指纹，不认 device_id），技能选择器
-   * 靠它拨到那台机器问「这个后端上装了哪些技能包」。
+   * 这一档所在那台机器的 agentred 指纹。中继的目标是逐通道声明的（决策 10），
+   * 机器作用域的操作声明 `machine:<fingerprint>`（认指纹，不认 device_id），
+   * 技能选择器靠它开一条通道到那台机器问「这个后端上装了哪些技能包」。
    *
    * 本机相对引用与「后端已不在」的档没有它：浏览器语境下没有指代对象 / 不知道是
    * 哪台机器（Go 侧 `OrgExecTargetItem.DeviceFingerprint` 的注释是事实源）。

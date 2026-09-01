@@ -241,6 +241,21 @@ export class RelayClient {
     return run;
   }
 
+  /**
+   * 重开被服务端单独关掉的那条通道。
+   *
+   * 通道级失败（目标不存在 / 离线 / 转发失败）只关掉这一条通道，它随即从连接的
+   * 通道表里消失——换一条 socket 也带不回它（`RelayConnection.connect` 只重新声明
+   * 表里还在的那些）。因此「重新连接」这条路必须自己把它开回来。
+   *
+   * 通道还在时是空操作：那是「换 socket」那一路，重做握手由通道的 onOpen 负责，
+   * 这里再来一次就是多一次 auth.account。
+   */
+  reopen(): Promise<void> {
+    if (this.channel) return Promise.resolve();
+    return this.connect();
+  }
+
   /** 主动关掉这条通道。连接本身留着——它是账号级的，别人还在用。 */
   close(): void {
     this.closedByUser = true;
@@ -522,6 +537,12 @@ export class RelayClient {
   /**
    * 服务端关掉了这条通道：目标不存在 / 离线 / 转发失败 / 不许寻址。这是**通道级**
    * 的失败，同一条连接上别人的通道照常收发，所以这里既不重连也不动连接。
+   *
+   * 状态置 `disconnected` 而不是 `reconnecting`：在这个宿主里 `reconnecting` 的
+   * 意思是「有人正在重试」（见 use-relay.ts），而通道级失败之后没有任何人在重试
+   * ——连接本身好得很，服务端只是关掉了这一条。规格说的是「客户端据此只把那一条
+   * 通道标为不可达」，`disconnected` 正是这个宿主里「连过又放弃了」那一格，页面
+   * 据它给出重新连接的入口（走 reopen）。
    */
   private handleChannelClosed(): void {
     this.channel = null;
@@ -531,7 +552,7 @@ export class RelayClient {
     }
     this.failPending(new RelayError(-1, "relay: 通道已被服务端关闭", null));
     if (this.closedByUser) return;
-    this.setState("reconnecting");
+    this.setState("disconnected");
   }
 
   private sendBytes(bytes: Uint8Array): void {

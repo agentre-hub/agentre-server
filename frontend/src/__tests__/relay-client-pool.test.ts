@@ -38,11 +38,16 @@ class FakeConnection {
 class FakeClient {
   closed = 0;
   connects = 0;
+  reopens = 0;
   connectResult: Promise<void> = Promise.resolve();
   constructor(readonly opts: RelayClientOptions) {}
   connect(): Promise<void> {
     this.connects++;
     return this.connectResult;
+  }
+  reopen(): Promise<void> {
+    this.reopens++;
+    return Promise.resolve();
   }
   close(): void {
     this.closed++;
@@ -290,5 +295,34 @@ describe("RelayClientPool", () => {
     expect(sockets[0].closed).toBe(1);
     expect(pool.size).toBe(0);
     expect(pool.channelCount).toBe(0);
+  });
+
+  /*
+    规格「按对话寻址 · 失败按通道隔离」：通道级失败（目标不存在 / 离线 / 转发失败）
+    只判死那一条通道，「客户端据此只把那一条通道标为不可达」。
+
+    被判死之后它必须还能被重新开出来——用户按「重新连接」走的正是 pool.reconnect。
+    换 socket 只会把连接**通道表里还在**的那些重新声明一遍，被服务端关掉的这一条
+    已经不在表里了，所以池子得显式让它重开。
+
+    RED 之前：reconnect 只换 socket 就返回 true，use-relay 据此不再退回「整只
+    effect 重跑」那条兜底路，于是那条对话在这个标签页里永久死亡。
+  */
+  it("重连把被服务端关掉的通道重新开出来", async () => {
+    const { pool, built, sockets } = setup();
+    await pool.acquire(FP1);
+    await pool.acquire(FP2);
+    expect(sockets).toHaveLength(1);
+
+    expect(await pool.reconnect(FP1)).toBe(true);
+
+    // 换的是那条共享 socket，不是某一条通道。
+    expect(sockets[0].reconnects).toBe(1);
+    // 而这条通道自己要被重开：reopen 对「通道还在」是空操作，所以调它是安全的，
+    // 不调则被关掉的那一条再也回不来。
+    expect(built[0].reopens).toBe(1);
+    // 别人的通道不受牵连：换 socket 之后它们由连接自己重新声明。
+    expect(built[1].reopens).toBe(0);
+    expect(built[1].closed).toBe(0);
   });
 });

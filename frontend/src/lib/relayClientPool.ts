@@ -202,10 +202,16 @@ export class RelayClientPool {
    * 退回「整只 effect 从取票重跑」那条兜底路。
    */
   async reconnect(target: string): Promise<boolean> {
-    if (!this.entries.has(target) || !this.connection) return false;
+    const entry = this.entries.get(target);
+    if (!entry || !this.connection) return false;
     const ticket = await this.ensureTicket();
     this.connectionTicket = ticket;
     await this.connection.reconnect();
+    // 通道级失败（目标不存在 / 离线 / 转发失败）只关掉这一条通道，它随即从连接的
+    // 通道表里消失——换 socket 只重新声明表里还在的那些，带不回它。所以这里显式
+    // 让它重开；通道还在时 reopen 是空操作（那一路的握手由通道的 onOpen 负责）。
+    entry.ready = entry.client.reopen();
+    entry.ready.catch(() => {});
     return true;
   }
 

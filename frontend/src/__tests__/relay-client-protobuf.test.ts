@@ -574,3 +574,47 @@ describe("catch-up 的终态帧", () => {
     });
   });
 });
+
+describe("RelayClient 通道级失败", () => {
+  /*
+    规格「按对话寻址 · 失败按通道隔离」：单条通道的目标不存在 / 离线 / 转发失败
+    改由通道开通应答里的可区分错误码作答，「客户端据此只把那一条通道标为不可达」。
+
+    「标为不可达」有两层，缺一不可：
+      1. 状态要说实话。`reconnecting` 在这个宿主里的意思是「有人正在重试」
+         （use-relay.ts 的状态注释），而通道级失败之后没有任何人在重试——连接本身
+         好得很，服务端只是关掉了这一条。说成 reconnecting 会让页面一直停在
+         「正在重连」上，而那条对话其实已经死了。
+      2. 它必须重开得起来。用户按「重新连接」走的是 pool.reconnect → 换 socket，
+         而被关掉的这条通道已经不在连接的通道表里了，换 socket 带不回它。
+
+    RED 之前：handleChannelClosed 置 reconnecting 且没有任何重开路径，于是这条对话
+    在这个标签页里永久死亡，而横幅还在说它在重试。
+  */
+  it("把被服务端关掉的通道标为不可达，而不是谎称还在重连", async () => {
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+    expect(client.state).toBe("connected");
+
+    // 空载荷 = 服务端关掉了这一条通道（通道级失败的收尾）。
+    socket.receive(new Uint8Array(0));
+
+    expect(client.state).toBe("disconnected");
+  });
+
+  it("重开被服务端关掉的通道：目标声明重新发出去", async () => {
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+    socket.receive(new Uint8Array(0));
+
+    socket.sent = [];
+    void client.reopen();
+    await vi.waitFor(() =>
+      expect(socket.sent.length).toBeGreaterThanOrEqual(1),
+    );
+    // 目标声明永远是一条通道的第一帧（决策 10）。
+    expect(new TextDecoder().decode(socket.sent[0])).toBe(
+      machineTarget("fp-daemon"),
+    );
+  });
+});

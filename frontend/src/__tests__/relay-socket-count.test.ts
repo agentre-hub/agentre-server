@@ -39,6 +39,9 @@ class FakeClient {
   connect(): Promise<void> {
     return Promise.resolve();
   }
+  reopen(): Promise<void> {
+    return Promise.resolve();
+  }
   close(): void {
     this.closed++;
   }

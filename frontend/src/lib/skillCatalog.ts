@@ -18,8 +18,10 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
  *     带回空 `packs`；把空目录读成「这台机器没有技能」是协议注释点名不许的一步，
  *     因此认不出的取值一律降级成 `unavailable` 而不是 `ok`。
  *
- * 中继是点对点的：URL 上的 `daemon_fingerprint` 指明拨哪一台（见 `relayUrl.ts`），
- * 那个指纹随组织读端点的每一档下行（`OrgExecTargetItem.device_fingerprint`）。
+ * 目标是**逐通道**声明的（决策 10）：技能目录是机器作用域的操作，所以它开的通道
+ * 声明 `machine:<fingerprint>`（见 `relayTarget.ts`；URL 上已经没有
+ * `daemon_fingerprint` 了）。那个指纹随组织读端点的每一档下行
+ * （`OrgExecTargetItem.device_fingerprint`）。
  */
 import {
   SkillDiscoveryOK,
