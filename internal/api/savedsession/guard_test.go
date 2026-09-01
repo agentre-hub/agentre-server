@@ -61,7 +61,16 @@ func TestUnsavedConversation_LeavesNoContentInDatabase_Guard(t *testing.T) {
 	})
 
 	t.Run("写镜像内容的只有 mirror_svc", func(t *testing.T) {
-		for _, c := range disallowedContentWriters(scanContentWriterCallers(t, root)) {
+		calls := scanContentWriterCallers(t, root)
+		// 扫到零处不是「干净」，是扫描器瞎了：这一段按**方法名字符串**认写入方，
+		// 改建时顺手把 UpsertSummary / WriteFrames 改个名，守卫就会一处都扫不到、
+		// 无声通过，而内容写入方从此不受任何约束。仓储自己那两处实现恒在，所以
+		// 「一处都没有」只可能是扫描器与被扫对象对不上了。
+		if len(calls) == 0 {
+			t.Fatalf("一处写入方都没扫到：contentWriterMethods %v 里的方法名多半被改过，"+
+				"守卫已经在空扫。同步改这里的名字，别让它绿着", contentWriterMethods)
+		}
+		for _, c := range disallowedContentWriters(calls) {
 			t.Errorf("%s 调用了 %s：写镜像内容的地方多了一处。"+
 				"范围（哪条对话可以被存下来）只有 mirror_svc 一个地方判定；"+
 				"保存 / 删除这一侧只说「开始镜像」「清掉镜像」，自己不落内容。", c.pos, c.method)
