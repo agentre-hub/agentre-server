@@ -90,7 +90,7 @@ func TestImports_MethodNotFound_PreservesProtocolError(t *testing.T) {
 
 // Given 执行导入这一次真的写到了那台机器上;When 发 execute;
 // Then 铸好的会话号与点名的发起端原样过线 —— 这两格决定导出来的会话是谁的、叫什么号。
-func TestImports_Execute_CarriesMintedSessionIDAndNamedOrigin(t *testing.T) {
+func TestImports_Execute_CarriesTheMintedConversationIDAndNamedOrigin(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
 	a := rig.replica(t, replicaA)
@@ -100,18 +100,18 @@ func TestImports_Execute_CarriesMintedSessionIDAndNamedOrigin(t *testing.T) {
 		func(ctx context.Context, peer TranscriptImportPeer) error {
 			var callErr error
 			result, callErr = peer.TranscriptImportExecute(ctx, &agentrewire.TranscriptImportExecuteRequest{
-				Backend: "claudecode", Locator: "loc-1", SessionId: 4242,
+				Backend: "claudecode", Locator: "loc-1", ConversationId: conv42,
 				AgentSyncId: "agent-1", PeerFingerprint: testMachine,
 			})
 			return callErr
 		})
 
 	require.NoError(t, err)
-	assert.Equal(t, int64(4242), result.GetSessionId())
+	assert.Equal(t, conv42, result.GetConversationId())
 	executes := rig.peer.callsOf(agentrewire.RpcMethod_RPC_METHOD_TRANSCRIPT_IMPORT_EXECUTE)
 	require.Len(t, executes, 1)
 	p := executes[0].(*agentrewire.TranscriptImportExecuteRequest)
-	assert.Equal(t, int64(4242), p.GetSessionId())
+	assert.Equal(t, conv42, p.GetConversationId())
 	assert.Equal(t, testMachine, p.GetPeerFingerprint(),
 		"点名发起端是账号级能力:不点名的话这条会话会落在 server 那个合成指纹名下")
 	assert.Equal(t, "agent-1", p.GetAgentSyncId())

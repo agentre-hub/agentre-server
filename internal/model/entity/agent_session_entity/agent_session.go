@@ -14,11 +14,14 @@
 // grow locally originated sessions, and a name that encodes today's invariant
 // breaks on that day.
 //
-// Identity across all four tables is **(account, originating peer
-// fingerprint, that peer's local session id)** — never the machine currently
-// carrying the connection (decision 17): the same conversation can have a
-// copy on both the desktop and agentred, and which machine currently carries
-// it can change without changing who originated it.
+// Identity across all four tables is **(account, conversation_id)** — the
+// conversation's own global id, minted once by whoever created it and identical
+// in all three databases and on the wire
+// (2026-08-31-conversation-centric-addressing.md decisions 1/2). It is never the
+// machine currently carrying the connection: the same conversation can have a
+// copy on both the desktop and agentred, and which machine carries it can change
+// without changing the conversation. PeerFingerprint / PeerSessionID survive as
+// ordinary columns — provenance and authorization, not identity.
 //
 // SessionSummary mirrors agentre's wire.SessionSummary field-for-field
 // (internal/pkg/agentruntime/runtimes/remote/wire/wire.go in the agentre
@@ -34,10 +37,19 @@ package agent_session_entity
 // itself (decision 12), but it is a hard invariant that it never leaves the
 // server in any response (R19) — callers must not add it to a DTO.
 type SessionSummary struct {
-	ID              int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID          int64  `gorm:"column:user_id;type:bigint;not null"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// UserID + ConversationID 是这一行的身份键（uk_agent_sessions_identity）。
+	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
+	// ConversationID 是这条对话的全局标识：新对话由发起端铸 UUIDv7，存量对话按
+	// 决策 2 从 (peer_fingerprint, peer_session_id) 派生 UUIDv5，桌面端、agentred
+	// 与本库因此指的是同一个值。
+	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
+	// PeerFingerprint 是**发起**这条对话那一端。它已退出身份键（决策 7 / 8），
+	// 留下来承担来源标注（索引里按对端分组的那一轴）与授权。
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
+	// PeerSessionID 是发起端本地那条会话的号。同样退出身份键，留作来源标注：
+	// 存量行靠它与 PeerFingerprint 派生出上面的 ConversationID。
+	PeerSessionID string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	// MachineFingerprint 是索引读取时从 agent_session_saves 投影出的承载机器指纹。
 	// 它不是摘要表的一列，也不是会话身份的一半；只读标签防止摘要 upsert 写它。
 	MachineFingerprint string `gorm:"column:machine_fingerprint;->"`
@@ -104,14 +116,17 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 // own notification log. Payload is an opaque Protobuf binary frame; readers
 // decode it with the local generated contract.
 //
-// 这四列既是身份也是主键（migrations/202608280008_agent_sessions.go）：帧按 (账号, 发起端, 会话, seq)
-// 聚簇存放，没有代理自增列。转录尾部因此是聚簇索引上的一段连续范围，而不是二级索引
-// 扫一段再逐行随机回表取 longblob。
+// 这三列既是身份也是主键（migrations/202609010003_agent_session_identity_key.go）：
+// 帧按 (账号, 对话, seq) 聚簇存放，没有代理自增列。转录尾部因此是聚簇索引上的一段
+// 连续范围，而不是二级索引扫一段再逐行随机回表取 longblob。
+//
+// PeerFingerprint / PeerSessionID 留在表上作来源标注，但**不再是主键的一部分**。
 type JournalFrame struct {
 	UserID          int64  `gorm:"column:user_id;type:bigint;not null;primaryKey"`
-	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null;primaryKey"`
-	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null;primaryKey"`
+	ConversationID  string `gorm:"column:conversation_id;type:char(36);not null;primaryKey"`
 	Seq             int64  `gorm:"column:seq;type:bigint;not null;primaryKey"`
+	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
+	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	Payload         []byte `gorm:"column:payload;type:longblob;not null"`
 	Createtime      int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
@@ -126,8 +141,12 @@ func (*JournalFrame) TableName() string { return "agent_session_notification_jou
 // it outright instead (decision 7), since a revoked peer never executes
 // anything on this account's behalf again.
 type DeleteTodo struct {
-	ID              int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID          int64  `gorm:"column:user_id;type:bigint;not null"`
+	ID     int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
+	// ConversationID 与 UserID 一起是这条待办的身份键：同一条对话只欠一条删除。
+	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
+	// PeerFingerprint 在这张表上记的是**要拨给谁**（补删时拨的那台机器），
+	// 不是身份的一半——见 ListPendingMachines 与 saved_session_svc.Delete。
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
 	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	Createtime      int64  `gorm:"column:createtime;type:bigint;not null;default:0"`

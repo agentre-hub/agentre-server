@@ -110,7 +110,7 @@ func TestMachineConn_ConcurrentCallsCorrelateOutOfOrderBinaryResponses(t *testin
 	pullErr := make(chan error, 1)
 	go func() {
 		response, err := conn.SessionPull(context.Background(), &agentrewire.SessionPullRequest{
-			SessionId: 42, Cursor: 7,
+			ConversationId: conv42, Cursor: 7,
 		})
 		pullResult <- response
 		pullErr <- err
@@ -126,13 +126,13 @@ func TestMachineConn_ConcurrentCallsCorrelateOutOfOrderBinaryResponses(t *testin
 	require.NoError(t, proto.Unmarshal(
 		requests[agentrewire.RpcMethod_RPC_METHOD_SESSION_PULL].GetRequest().GetEncodedPayload(), pullRequest,
 	))
-	assert.Equal(t, int64(42), pullRequest.GetSessionId())
+	assert.Equal(t, conv42, pullRequest.GetConversationId())
 	assert.Equal(t, int64(7), pullRequest.GetCursor())
 
 	writeResponse(t, conn, requests[agentrewire.RpcMethod_RPC_METHOD_SESSION_PULL],
 		&agentrewire.SessionPullResponse{Cursor: 9})
 	writeResponse(t, conn, requests[agentrewire.RpcMethod_RPC_METHOD_SESSION_LIST],
-		&agentrewire.SessionListResponse{Sessions: []*agentrewire.SessionSummary{{SessionId: 101}}})
+		&agentrewire.SessionListResponse{Sessions: []*agentrewire.SessionSummary{{ConversationId: conv101}}})
 
 	require.NoError(t, <-pullErr)
 	assert.Equal(t, int64(9), (<-pullResult).GetCursor())
@@ -141,7 +141,7 @@ func TestMachineConn_ConcurrentCallsCorrelateOutOfOrderBinaryResponses(t *testin
 	// list 的会话号，而不是 pull 的游标。
 	list := <-listResult
 	require.Len(t, list.GetSessions(), 1)
-	assert.Equal(t, int64(101), list.GetSessions()[0].GetSessionId())
+	assert.Equal(t, conv101, list.GetSessions()[0].GetConversationId())
 }
 
 func TestMachineConn_ContextCancellationSendsTypedCancel(t *testing.T) {
@@ -194,7 +194,7 @@ func TestMachineConn_TypedErrorsAndNotificationsRemainLossless(t *testing.T) {
 	})
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := conn.SessionDelete(context.Background(), &agentrewire.SessionDeleteRequest{SessionId: 42})
+		_, err := conn.SessionDelete(context.Background(), &agentrewire.SessionDeleteRequest{ConversationId: conv42})
 		errCh <- err
 	}()
 	request := decodeForwardedRequest(t, <-dialer.frames)
@@ -211,7 +211,7 @@ func TestMachineConn_TypedErrorsAndNotificationsRemainLossless(t *testing.T) {
 	assert.Equal(t, "already gone", rpcErr.Message)
 	assert.Equal(t, details, rpcErr.Details)
 
-	note := notification(42, 8, "typed")
+	note := notification(conv42, 8, "typed")
 	encodedNote, err := relaywire.EncodeFrame(&agentrewire.RpcFrame{Body: &agentrewire.RpcFrame_Notification{
 		Notification: note,
 	}})
@@ -234,13 +234,13 @@ func TestMachineConn_MalformedFrameDoesNotPoisonTheNextResponse(t *testing.T) {
 
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, []byte{0xff, 0xff}))
 	writeResponse(t, conn, request,
-		&agentrewire.SessionListResponse{Sessions: []*agentrewire.SessionSummary{{SessionId: 202}}})
+		&agentrewire.SessionListResponse{Sessions: []*agentrewire.SessionSummary{{ConversationId: conv202}}})
 
 	require.NoError(t, <-errCh)
 	// 坏帧之后那一条应答要**原样**送到，载荷一格不少。
 	response := <-result
 	require.Len(t, response.GetSessions(), 1)
-	assert.Equal(t, int64(202), response.GetSessions()[0].GetSessionId())
+	assert.Equal(t, conv202, response.GetSessions()[0].GetConversationId())
 }
 
 func TestMachineConn_ResponseMethodMustMatchRequest(t *testing.T) {
@@ -326,7 +326,7 @@ func TestMachineConn_TranscriptImportCallsCarryTheirOwnMethodID(t *testing.T) {
 	executeCh := make(chan *agentrewire.TranscriptImportExecuteResponse, 1)
 	go func() {
 		response, err := conn.TranscriptImportExecute(context.Background(),
-			&agentrewire.TranscriptImportExecuteRequest{SessionId: 42, PeerFingerprint: "fp-1"})
+			&agentrewire.TranscriptImportExecuteRequest{ConversationId: conv42, PeerFingerprint: "fp-1"})
 		assert.NoError(t, err)
 		executeCh <- response
 	}()
@@ -338,7 +338,7 @@ func TestMachineConn_TranscriptImportCallsCarryTheirOwnMethodID(t *testing.T) {
 	assert.Equal(t, "fp-1", executeParams.GetPeerFingerprint(),
 		"发起端指纹必须原样过线：它决定导出来的会话归谁")
 	writeResponse(t, conn, executeRequest, &agentrewire.TranscriptImportExecuteResponse{
-		SessionId: 42, Turns: 8,
+		ConversationId: conv42, Turns: 8,
 	})
 	assert.Equal(t, int32(8), (<-executeCh).GetTurns())
 }

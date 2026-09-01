@@ -181,22 +181,23 @@ func TestSessionIndex_SearchAndFilterReachBothCountAndPage(t *testing.T) {
 	assert.Equal(t, int64(2), page.Total)
 }
 
-// 按会话号精确认领（决策 13）：它要的不是一页，因此不分组、不限条数，同号多条时如实
-// 全给——由调用方去判「是不是只有一条」。
-func TestSessionIndex_SessionIDLookup_IgnoresGroupingAndPaging(t *testing.T) {
+// 按对话标识精确认领（决策 13）：它要的不是一页，因此不分组、不限条数。
+// conversation_id 全局唯一，所以这条路至多命中一行——「同号多条由调用方判歧义」
+// 那件事随身份收缩消失了。
+func TestSessionIndex_ConversationIDLookup_IgnoresGroupingAndPaging(t *testing.T) {
 	ctx, mSummary, _, _, svc := setupMirrorReadTest(t)
 
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
-		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7, PeerSessionID: "42"},
+		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7, ConversationID: "conv-42"},
 	}).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-a", PeerSessionID: "42"},
-		{PeerFingerprint: "fp-b", PeerSessionID: "42"},
+		{PeerFingerprint: "fp-a", ConversationID: "conv-42"},
 	}, nil)
 
-	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, SessionID: "42"})
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, ConversationID: "conv-42"})
 	require.NoError(t, err)
 	assert.Empty(t, page.Groups)
-	require.Len(t, page.Items, 2)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, "conv-42", page.Items[0].ConversationID)
 	assert.False(t, page.HasMore)
 }
 

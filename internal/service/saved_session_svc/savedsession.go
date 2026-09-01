@@ -34,27 +34,26 @@ type SavedSessionSvc interface {
 	List(ctx context.Context, userID int64) ([]SavedSessionRef, error)
 }
 
-// SessionRef 指向一条对话：账号 + **承载它的机器** + **发起它的那一端** + 它那边的
-// 会话标识。UserID 来自调用方上下文，不由调用方填。SessionID 是发起端本地自增的
-// 标识，服务端只把它当作不透明指针，不解析、也不知道它指哪条会话。
+// SessionRef 指向一条对话：账号 + 它的 **conversation_id** + 承载它的机器 + 发起它
+// 的那一端。UserID 来自调用方上下文，不由调用方填。
 //
-// 两个指纹分开，是因为它们回答的是两个不同的问题，而对 web 控制台派发出去的对话
-// 答案不同：
+// **身份只有 ConversationID 一个**
+// （2026-08-31-conversation-centric-addressing.md「会话身份」）。另外两个指纹回答
+// 的是别的问题：
 //
-//   - PeerFingerprint 是**身份**的一半：执行端按 (发起端指纹, 会话标识) 解会话
-//     （决策 17），镜像内容也照这把键存。它与 UserID / SessionID 一起唯一确定这
-//     条对话。
 //   - MachineFingerprint 回答「去连哪一台」，对得上 devices.fingerprint。它是这
 //     条对话的**属性**，不是身份的一部分。
+//   - PeerFingerprint 是**发起**它的那一端，落进 peer_fingerprint 那一列作来源
+//     标注与授权。在本机 daemon 上开的对话（桌面端）两者同值，所以保存时它允许
+//     留空，Save 会把它落成 MachineFingerprint；取值一律走 Initiator()。
 //
-// 在本机 daemon 上开的对话（桌面端）两者同值，所以保存时 PeerFingerprint 允许
-// 留空，Save 会把它落成 MachineFingerprint；取值一律走 Initiator()。删除只要身份
-// ——机器由服务端自己查出来，因为发起端是浏览器时调用方压根不认识那台机器。
+// 删除只要身份——机器由服务端自己按 conversation_id 查出来，因为发起端是浏览器时
+// 调用方压根不认识那台机器。
 type SessionRef struct {
 	UserID             int64
+	ConversationID     string
 	MachineFingerprint string
 	PeerFingerprint    string
-	SessionID          string
 }
 
 // Initiator 解出这条对话的发起端：留空即「就是承载它的那台机器自己」。
@@ -98,7 +97,7 @@ type SessionMirror interface {
 }
 
 // PeerSessionDeleter 把删除传播到执行那条对话的机器上：中继 wire 的
-// runtime.session.delete（params {sessionId, peerFingerprint?}，result 带 deleted）。
+// runtime.session.delete（params {conversationId, peerFingerprint?}，result 带 deleted）。
 // agentred 上删的是会话行与它的整段通知日志，桌面端上删的是那台电脑自己那条对话
 // 本体，两种端一视同仁（决策 16）。
 //
@@ -153,7 +152,7 @@ func (unreachablePeer) DeleteOnPeer(context.Context, SessionRef) error { return 
 // SavedSessionRef 是账号里已保存的一条。
 type SavedSessionRef struct {
 	DeviceFingerprint string
-	SessionID         string
+	ConversationID    string
 	FollowedAt        int64
 	// Invalid 目标设备已不在账号活跃设备里（被撤销 / 从未存在）时为 true。
 	// 名单内容本身不变——R14 解除某台设备的授权不改变名单——只是这一条已无对可指。
@@ -184,9 +183,9 @@ func (s *savedSessionSvc) Save(ctx context.Context, ref SessionRef) error {
 	// 控制台派发出去的对话因为两者不同值而永远进不了镜像。
 	f := &agent_session_entity.SessionSave{
 		UserID:            ref.UserID,
+		ConversationID:    ref.ConversationID,
 		DeviceFingerprint: ref.MachineFingerprint,
 		PeerFingerprint:   ref.Initiator(),
-		PeerSessionID:     ref.SessionID,
 		FollowedAt:        now,
 		Createtime:        now,
 		Updatetime:        now,
@@ -208,9 +207,7 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 	// 承载它的机器由账号这边查出来，而不是要调用方报：发起端是浏览器时（web 控制台
 	// 派发出去的那些），调用方手上只有身份，它压根不认识那台机器。查不到（早已删过）
 	// 就沿用调用方给的那一份 —— 幂等删除照常往下走，只是没有机器可通知。
-	row, err := agent_session_repo.Save().FindByIdentity(
-		ctx, ref.UserID, ref.Initiator(), ref.SessionID,
-	)
+	row, err := agent_session_repo.Save().FindByIdentity(ctx, ref.UserID, ref.ConversationID)
 	if err != nil {
 		return "", err
 	}
@@ -220,9 +217,7 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 	if err := sessionMirror.Purge(ctx, ref); err != nil {
 		return "", err
 	}
-	if err := agent_session_repo.Save().Delete(
-		ctx, ref.UserID, ref.Initiator(), ref.SessionID,
-	); err != nil {
+	if err := agent_session_repo.Save().Delete(ctx, ref.UserID, ref.ConversationID); err != nil {
 		return "", err
 	}
 	// 到这里 server 那一份已经没了：它立刻从索引里消失，没有「已删除但还在」的中间态。
@@ -233,23 +228,23 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 			zap.Int64("userId", ref.UserID),
 			zap.String("machineFingerprint", ref.MachineFingerprint),
 			zap.String("peerFingerprint", ref.Initiator()),
-			zap.String("sessionId", ref.SessionID))
+			zap.String("conversationId", ref.ConversationID))
 		return PeerDeleted, nil
 	case errors.Is(err, ErrPeerProtocolViolation):
 		logger.Ctx(ctx).Error("saved_session_svc.Delete: peer violated the negotiated protocol",
 			zap.Int64("userId", ref.UserID),
 			zap.String("machineFingerprint", ref.MachineFingerprint),
 			zap.String("peerFingerprint", ref.Initiator()),
-			zap.String("sessionId", ref.SessionID), zap.Error(err))
+			zap.String("conversationId", ref.ConversationID), zap.Error(err))
 		return "", err
 	default:
 		// 离线，或这一次没删成：都是「等它回来再删一遍就成了」，留一条待办。
 		now := time.Now().UnixMilli()
 		if addErr := agent_session_repo.DeleteTodo().AddDeleteTodo(ctx, &agent_session_entity.DeleteTodo{
-			UserID: ref.UserID,
+			UserID:         ref.UserID,
+			ConversationID: ref.ConversationID,
 			// 待办表这一列是**机器**（补删时要拨的就是它，见 ReplayPendingDeletes）。
 			PeerFingerprint: ref.MachineFingerprint,
-			PeerSessionID:   ref.SessionID,
 			Createtime:      now,
 		}); addErr != nil {
 			// 待办没记下来，删除就没走完：如实报错，别让执行端那一份被静默地永远
@@ -260,7 +255,7 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 			zap.Int64("userId", ref.UserID),
 			zap.String("machineFingerprint", ref.MachineFingerprint),
 			zap.String("peerFingerprint", ref.Initiator()),
-			zap.String("sessionId", ref.SessionID),
+			zap.String("conversationId", ref.ConversationID),
 			zap.Error(err))
 		return PeerDeletePending, nil
 	}
@@ -289,7 +284,7 @@ func (s *savedSessionSvc) List(ctx context.Context, userID int64) ([]SavedSessio
 		_, ok := active[r.DeviceFingerprint]
 		out = append(out, SavedSessionRef{
 			DeviceFingerprint: r.DeviceFingerprint,
-			SessionID:         r.PeerSessionID,
+			ConversationID:    r.ConversationID,
 			FollowedAt:        r.FollowedAt,
 			Invalid:           !ok,
 		})

@@ -13,7 +13,7 @@ import (
 )
 
 // WriteFrames 必须批量落在一条语句里，且用 DO NOTHING 收主键
-// (user_id, peer_fingerprint, peer_session_id, seq)：attach 期间的实时通知与断连重连后的
+// (user_id, conversation_id, seq)：attach 期间的实时通知与断连重连后的
 // pull 补齐窗口会有重叠，同一条帧落两次不能变成两行,也不能报错。
 func TestWriteFrames_BatchSingleStatement(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
@@ -23,14 +23,14 @@ func TestWriteFrames_BatchSingleStatement(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(
 		"INSERT INTO `agent_session_notification_journal`",
 	)).WithArgs(
-		int64(7), "fp-daemon-1", "sess-9", int64(101), []byte{0x0a, 0x01, 0xff}, int64(1000),
-		int64(7), "fp-daemon-1", "sess-9", int64(102), []byte{0x12, 0x01, 0x00}, int64(1001),
+		int64(7), "conv-9", int64(101), "fp-daemon-1", "", []byte{0x0a, 0x01, 0xff}, int64(1000),
+		int64(7), "conv-9", int64(102), "fp-daemon-1", "", []byte{0x12, 0x01, 0x00}, int64(1001),
 	).WillReturnResult(sqlmock.NewResult(1, 2))
 	mock.ExpectCommit()
 
 	frames := []*agent_session_entity.JournalFrame{
-		{UserID: 7, PeerFingerprint: "fp-daemon-1", PeerSessionID: "sess-9", Seq: 101, Payload: []byte{0x0a, 0x01, 0xff}, Createtime: 1000},
-		{UserID: 7, PeerFingerprint: "fp-daemon-1", PeerSessionID: "sess-9", Seq: 102, Payload: []byte{0x12, 0x01, 0x00}, Createtime: 1001},
+		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: []byte{0x0a, 0x01, 0xff}, Createtime: 1000},
+		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 102, Payload: []byte{0x12, 0x01, 0x00}, Createtime: 1001},
 	}
 	require.NoError(t, r.WriteFrames(ctx, frames))
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -51,7 +51,7 @@ func TestWriteFrames_GivenReplayedFrame_ThenNoDuplicateNoError(t *testing.T) {
 	mock.ExpectCommit()
 
 	frames := []*agent_session_entity.JournalFrame{
-		{UserID: 7, PeerFingerprint: "fp-daemon-1", PeerSessionID: "sess-9", Seq: 101, Payload: []byte{0x0a, 0x01, 0xff}, Createtime: 1000},
+		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: []byte{0x0a, 0x01, 0xff}, Createtime: 1000},
 	}
 	require.NoError(t, r.WriteFrames(ctx, frames))
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -67,7 +67,7 @@ func TestWriteFrames_GivenEmptySlice_ThenNoStatement(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet()) // 没有设任何期望：一发语句这里就会报错
 }
 
-// ListFramesBySeq 按 (user_id, peer_fingerprint, peer_session_id) 圈定单条会话,
+// ListFramesBySeq 按 (user_id, conversation_id) 圈定单条会话,
 // seq 严格大于游标（独占,与 wire.SessionPullParams.Cursor 同一口径),按 seq 升序、
 // 用 limit 分页——断连重连时按自己存的游标补齐缺口靠的就是这个形状。
 func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
@@ -75,15 +75,15 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 	r := NewJournalFrame()
 
 	rows := sqlmock.NewRows([]string{
-		"user_id", "peer_fingerprint", "peer_session_id", "seq", "payload", "createtime",
+		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).
 		AddRow(7, "fp-daemon-1", "sess-9", 101, []byte{0x0a, 0x01, 0xff}, 1000).
 		AddRow(7, "fp-daemon-1", "sess-9", 102, []byte{0x12, 0x01, 0x00}, 1001)
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_notification_journal` WHERE user_id=? AND peer_fingerprint=? AND peer_session_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
-	)).WithArgs(int64(7), "fp-daemon-1", "sess-9", int64(100), 50).WillReturnRows(rows)
+		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
+	)).WithArgs(int64(7), "conv-9", int64(100), 50).WillReturnRows(rows)
 
-	out, err := r.ListFramesBySeq(ctx, 7, "fp-daemon-1", "sess-9", 100, 50)
+	out, err := r.ListFramesBySeq(ctx, 7, "conv-9", 100, 50)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	assert.Equal(t, int64(101), out[0].Seq)
@@ -94,7 +94,7 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 // DeleteFrames 清掉一条对话在这个身份键下的全部帧：删除时清账号里那一份，以及
 // 会话标识被执行端复用时把旧对话的整段先清干净——批量写是 ON CONFLICT DO NOTHING，
 // 不清就会让旧帧原地胜出，页面上显示的是另一条对话的转录。
-// 三列缺一不可：少了 user_id 是跨账号删，少了 peer_fingerprint 会连累别的发起端
+// 两列缺一不可：少了 user_id 是跨账号删，少了 conversation_id 会连累别的
 // 那条同号会话。
 func TestDeleteFrames_ScopedToTheWholeIdentity(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
@@ -102,11 +102,11 @@ func TestDeleteFrames_ScopedToTheWholeIdentity(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"DELETE FROM `agent_session_notification_journal` WHERE user_id=? AND peer_fingerprint=? AND peer_session_id=?",
-	)).WithArgs(int64(7), "fp-daemon-1", "42").WillReturnResult(sqlmock.NewResult(0, 5))
+		"DELETE FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=?",
+	)).WithArgs(int64(7), "conv-42").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.DeleteFrames(ctx, 7, "fp-daemon-1", "42"))
+	require.NoError(t, r.DeleteFrames(ctx, 7, "conv-42"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -126,15 +126,15 @@ func TestListFramesBefore_NewestFirstAndExclusiveUpperBound(t *testing.T) {
 	r := NewJournalFrame()
 
 	rows := sqlmock.NewRows([]string{
-		"user_id", "peer_fingerprint", "peer_session_id", "seq", "payload", "createtime",
+		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).
 		AddRow(7, "fp-daemon-1", "sess-9", 102, []byte{0x12, 0x01, 0x00}, 1001).
 		AddRow(7, "fp-daemon-1", "sess-9", 101, []byte{0x0a, 0x01, 0xff}, 1000)
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_notification_journal` WHERE user_id=? AND peer_fingerprint=? AND peer_session_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
-	)).WithArgs(int64(7), "fp-daemon-1", "sess-9", int64(103), 50).WillReturnRows(rows)
+		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
+	)).WithArgs(int64(7), "conv-9", int64(103), 50).WillReturnRows(rows)
 
-	out, err := r.ListFramesBefore(ctx, 7, "fp-daemon-1", "sess-9", 103, 50)
+	out, err := r.ListFramesBefore(ctx, 7, "conv-9", 103, 50)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	assert.Equal(t, int64(102), out[0].Seq)
@@ -149,13 +149,13 @@ func TestListFramesBefore_ZeroUpperBoundReadsFromNewest(t *testing.T) {
 	r := NewJournalFrame()
 
 	rows := sqlmock.NewRows([]string{
-		"user_id", "peer_fingerprint", "peer_session_id", "seq", "payload", "createtime",
+		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).AddRow(7, "fp-daemon-1", "sess-9", 300, []byte{0x0a, 0x01, 0xff}, 1009)
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_notification_journal` WHERE user_id=? AND peer_fingerprint=? AND peer_session_id=? ORDER BY seq DESC LIMIT ?",
-	)).WithArgs(int64(7), "fp-daemon-1", "sess-9", 50).WillReturnRows(rows)
+		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? ORDER BY seq DESC LIMIT ?",
+	)).WithArgs(int64(7), "conv-9", 50).WillReturnRows(rows)
 
-	out, err := r.ListFramesBefore(ctx, 7, "fp-daemon-1", "sess-9", 0, 50)
+	out, err := r.ListFramesBefore(ctx, 7, "conv-9", 0, 50)
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	assert.Equal(t, int64(300), out[0].Seq)

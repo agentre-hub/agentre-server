@@ -38,6 +38,12 @@ type stubImportSvc struct {
 	err          error
 }
 
+// 浏览器这次铸的号，与库里那条早就存在的号：导入路径允许交回后者（幂等收敛）。
+const (
+	mintedConversationID = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
+	storedConversationID = "5b8c9d2e-1f30-7c55-b214-9d7e3a6b0c11"
+)
+
 func (s *stubImportSvc) ListCandidates(
 	_ context.Context, in sessionimport_svc.ListCandidatesInput,
 ) (*sessionimport_svc.CandidatesView, error) {
@@ -227,32 +233,34 @@ func TestPreview_ReturnsFramesShapedLikeTheMirrorTranscript(t *testing.T) {
 	assert.Equal(t, -1, got.RemainingTurns, "「说不出还剩几轮」必须原样过去，不是 0")
 }
 
-// 执行导入是写方法：浏览器铸的号原样转给 service，回执带着**发起端指纹 + 会话号**
-// 这一对身份——少了指纹，浏览器定位不到刚导进来的这条对话。
-func TestRun_ForwardsMintedSessionIDAndReturnsTheIdentityPair(t *testing.T) {
+// 执行导入是写方法：浏览器铸的 conversation_id 原样转给 service，回执带回**这条
+// 对话的身份**——已经导过时它是库里那条的标识，未必等于这次铸的号。
+func TestRun_ForwardsTheMintedConversationIDAndReturnsTheStoredOne(t *testing.T) {
 	stub := &stubImportSvc{imported: &sessionimport_svc.ImportResultView{
-		SessionID: "4242", PeerFingerprint: "sha256:aaaa", Cwd: "/repos/spider",
+		ConversationID: storedConversationID, PeerFingerprint: "sha256:aaaa", Cwd: "/repos/spider",
 		Title: "写个爬虫", ImportedTurns: 12,
 	}}
 	server := newTestServer(t, stub)
 	cookie, csrf := newSession(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/session-import/run", cookie, csrf,
-		`{"device_id":11,"backend":"claudecode","locator":"loc-1","session_id":4242,"agent_sync_id":"agent-1"}`)
+		`{"device_id":11,"backend":"claudecode","locator":"loc-1","conversation_id":"`+
+			mintedConversationID+`","agent_sync_id":"agent-1"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	require.Len(t, stub.importIn, 1)
-	assert.Equal(t, int64(4242), stub.importIn[0].SessionID)
+	assert.Equal(t, mintedConversationID, stub.importIn[0].ConversationID)
 	assert.Equal(t, "agent-1", stub.importIn[0].AgentSyncID)
 	assert.Equal(t, int64(7), stub.importIn[0].UserID)
 
 	var got struct {
-		SessionID       string `json:"session_id"`
+		ConversationID  string `json:"conversation_id"`
 		PeerFingerprint string `json:"peer_fingerprint"`
 		ImportedTurns   int    `json:"imported_turns"`
 	}
 	decodeEnvelope(t, resp, &got)
-	assert.Equal(t, "4242", got.SessionID)
+	assert.Equal(t, storedConversationID, got.ConversationID,
+		"交回的是库里那条的标识，不是这次送进去的那个")
 	assert.Equal(t, "sha256:aaaa", got.PeerFingerprint)
 	assert.Equal(t, 12, got.ImportedTurns)
 }
@@ -268,15 +276,19 @@ func TestSessionImport_WithoutASession_IsRefused(t *testing.T) {
 	assert.Empty(t, stub.candidatesIn, "service 一次都不该被调到")
 }
 
-// 铸号是浏览器的事，但 0 号在那台机器上建不出来：绑定层就地拒掉，不到 service。
-func TestRun_WithoutAMintedSessionID_IsRejectedAtBinding(t *testing.T) {
+// 铸号是浏览器的事，但给不出身份、或给一个旧的整数会话号，在那台机器上都建不出
+// 对话：绑定层就地拒掉，不到 service。
+func TestRun_WithoutACanonicalConversationID_IsRejectedAtBinding(t *testing.T) {
 	stub := &stubImportSvc{imported: &sessionimport_svc.ImportResultView{}}
 	server := newTestServer(t, stub)
 	cookie, csrf := newSession(t, 7)
 
-	resp := postJSON(t, server.URL+"/v1/session-import/run", cookie, csrf,
-		`{"device_id":11,"backend":"claudecode","locator":"loc-1"}`)
-
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	for _, body := range []string{
+		`{"device_id":11,"backend":"claudecode","locator":"loc-1"}`,
+		`{"device_id":11,"backend":"claudecode","locator":"loc-1","conversation_id":"4242"}`,
+	} {
+		resp := postJSON(t, server.URL+"/v1/session-import/run", cookie, csrf, body)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "body: %s", body)
+	}
 	assert.Empty(t, stub.importIn)
 }

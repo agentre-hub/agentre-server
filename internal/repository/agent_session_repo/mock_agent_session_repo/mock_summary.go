@@ -103,17 +103,17 @@ func (mr *MockSummaryRepoMockRecorder) CountSummariesByProjectKey(ctx, q any) *g
 }
 
 // DeleteSummary mocks base method.
-func (m *MockSummaryRepo) DeleteSummary(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) error {
+func (m *MockSummaryRepo) DeleteSummary(ctx context.Context, userID int64, conversationID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteSummary", ctx, userID, peerFingerprint, peerSessionID)
+	ret := m.ctrl.Call(m, "DeleteSummary", ctx, userID, conversationID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteSummary indicates an expected call of DeleteSummary.
-func (mr *MockSummaryRepoMockRecorder) DeleteSummary(ctx, userID, peerFingerprint, peerSessionID any) *gomock.Call {
+func (mr *MockSummaryRepoMockRecorder) DeleteSummary(ctx, userID, conversationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSummary", reflect.TypeOf((*MockSummaryRepo)(nil).DeleteSummary), ctx, userID, peerFingerprint, peerSessionID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSummary", reflect.TypeOf((*MockSummaryRepo)(nil).DeleteSummary), ctx, userID, conversationID)
 }
 
 // ListSummariesByUser mocks base method.
@@ -147,17 +147,17 @@ func (mr *MockSummaryRepoMockRecorder) ListSummariesPage(ctx, q any) *gomock.Cal
 }
 
 // MarkSummaryRead mocks base method.
-func (m *MockSummaryRepo) MarkSummaryRead(ctx context.Context, userID int64, peerFingerprint, peerSessionID string, at int64) error {
+func (m *MockSummaryRepo) MarkSummaryRead(ctx context.Context, userID int64, conversationID string, at int64) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MarkSummaryRead", ctx, userID, peerFingerprint, peerSessionID, at)
+	ret := m.ctrl.Call(m, "MarkSummaryRead", ctx, userID, conversationID, at)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // MarkSummaryRead indicates an expected call of MarkSummaryRead.
-func (mr *MockSummaryRepoMockRecorder) MarkSummaryRead(ctx, userID, peerFingerprint, peerSessionID, at any) *gomock.Call {
+func (mr *MockSummaryRepoMockRecorder) MarkSummaryRead(ctx, userID, conversationID, at any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkSummaryRead", reflect.TypeOf((*MockSummaryRepo)(nil).MarkSummaryRead), ctx, userID, peerFingerprint, peerSessionID, at)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkSummaryRead", reflect.TypeOf((*MockSummaryRepo)(nil).MarkSummaryRead), ctx, userID, conversationID, at)
 }
 
 // UpsertSummary mocks base method.

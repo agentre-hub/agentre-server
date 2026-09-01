@@ -22,7 +22,7 @@ func TestMirrorResident_CloseHandle_StopsTheResident(t *testing.T) {
 	component.CloseHandle()
 
 	_, err := sup.Follow(context.Background(), 7, "fp-daemon-1",
-		[]mirror_svc.SavedSession{{PeerFingerprint: "fp-daemon-1", SessionID: "42"}})
+		[]mirror_svc.SavedSession{{ConversationID: "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"}})
 	require.ErrorIs(t, err, mirror_svc.ErrStopped, "收工之后不该再认领机器")
 }
 

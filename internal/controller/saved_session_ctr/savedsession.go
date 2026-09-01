@@ -30,7 +30,7 @@ func (f *Follow) Save(c *gin.Context, req *api.SaveSessionRequest) (*api.SaveSes
 		UserID:             userID,
 		MachineFingerprint: req.MachineFingerprint,
 		PeerFingerprint:    req.PeerFingerprint,
-		SessionID:          req.SessionID,
+		ConversationID:     req.ConversationID,
 	}); err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}
@@ -46,9 +46,8 @@ func (f *Follow) Delete(c *gin.Context, req *api.DeleteSessionRequest) (*api.Del
 	}
 	// 承载它的机器不由请求体提供：service 按身份从账号里查出来。
 	outcome, err := saved_session_svc.Default().Delete(c.Request.Context(), saved_session_svc.SessionRef{
-		UserID:          userID,
-		PeerFingerprint: req.PeerFingerprint,
-		SessionID:       req.SessionID,
+		UserID:         userID,
+		ConversationID: req.ConversationID,
 	})
 	if err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
@@ -66,7 +65,7 @@ func (f *Follow) List(c *gin.Context, _ *api.ListSavedSessionsRequest) (*api.Lis
 	for _, it := range items {
 		resp.Items = append(resp.Items, api.SavedSessionRef{
 			DeviceFingerprint: it.DeviceFingerprint,
-			SessionID:         it.SessionID,
+			ConversationID:    it.ConversationID,
 			FollowedAt:        it.FollowedAt,
 			Invalid:           it.Invalid,
 		})

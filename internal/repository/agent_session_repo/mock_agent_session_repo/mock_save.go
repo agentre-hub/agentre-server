@@ -43,32 +43,32 @@ func (m *MockSaveRepo) EXPECT() *MockSaveRepoMockRecorder {
 }
 
 // Delete mocks base method.
-func (m *MockSaveRepo) Delete(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) error {
+func (m *MockSaveRepo) Delete(ctx context.Context, userID int64, conversationID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", ctx, userID, peerFingerprint, peerSessionID)
+	ret := m.ctrl.Call(m, "Delete", ctx, userID, conversationID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockSaveRepoMockRecorder) Delete(ctx, userID, peerFingerprint, peerSessionID any) *gomock.Call {
+func (mr *MockSaveRepoMockRecorder) Delete(ctx, userID, conversationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSaveRepo)(nil).Delete), ctx, userID, peerFingerprint, peerSessionID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockSaveRepo)(nil).Delete), ctx, userID, conversationID)
 }
 
 // FindByIdentity mocks base method.
-func (m *MockSaveRepo) FindByIdentity(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) (*agent_session_entity.SessionSave, error) {
+func (m *MockSaveRepo) FindByIdentity(ctx context.Context, userID int64, conversationID string) (*agent_session_entity.SessionSave, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindByIdentity", ctx, userID, peerFingerprint, peerSessionID)
+	ret := m.ctrl.Call(m, "FindByIdentity", ctx, userID, conversationID)
 	ret0, _ := ret[0].(*agent_session_entity.SessionSave)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // FindByIdentity indicates an expected call of FindByIdentity.
-func (mr *MockSaveRepoMockRecorder) FindByIdentity(ctx, userID, peerFingerprint, peerSessionID any) *gomock.Call {
+func (mr *MockSaveRepoMockRecorder) FindByIdentity(ctx, userID, conversationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIdentity", reflect.TypeOf((*MockSaveRepo)(nil).FindByIdentity), ctx, userID, peerFingerprint, peerSessionID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindByIdentity", reflect.TypeOf((*MockSaveRepo)(nil).FindByIdentity), ctx, userID, conversationID)
 }
 
 // ListByUser mocks base method.

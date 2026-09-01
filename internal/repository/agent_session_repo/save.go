@@ -14,21 +14,20 @@ import (
 //go:generate mockgen -source save.go -destination mock_agent_session_repo/mock_save.go
 
 type SaveRepo interface {
-	// Save 把一条对话收进账号的名单；同 (user_id, peer_fingerprint,
-	// peer_session_id) 已存在时是 no-op（R12 幂等），保留首次保存时间。
+	// Save 把一条对话收进账号的名单；同 (user_id, conversation_id) 已存在时是
+	// no-op（R12 幂等），保留首次保存时间。
 	Save(ctx context.Context, f *agent_session_entity.SessionSave) error
 	// Delete 把一条移出名单；从未保存过时是 no-op（R12 幂等），不触碰别的条目。
 	//
-	// 按身份删，不按机器：身份是 (账号, 发起端, 会话标识)，承载它的机器是这条
+	// 按身份删，不按机器：身份是 (账号, conversation_id)，承载它的机器是这条
 	// 记录的属性而不是它的一半。
-	Delete(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) error
+	Delete(ctx context.Context, userID int64, conversationID string) error
 	// FindByIdentity 取出一条已保存的对话，没有则交回 nil（不是错误）。
 	//
 	// 存在的理由只有一个：删除要知道**去哪台机器**补删，而那件事只有账号这边记着
-	// ——调用方手上通常只有身份（发起端 + 会话标识），发起端是浏览器时它压根不
-	// 认识承载它的机器。
+	// ——调用方手上只有对话标识，发起端是浏览器时它压根不认识承载它的机器。
 	FindByIdentity(
-		ctx context.Context, userID int64, peerFingerprint, peerSessionID string,
+		ctx context.Context, userID int64, conversationID string,
 	) (*agent_session_entity.SessionSave, error)
 	// ListByUser 返回账号里保存的全部对话。只按账号过滤、不按在线态过滤：机器离线时
 	// 该条仍在名单里（R13）。
@@ -62,29 +61,23 @@ type saveRepo struct{}
 // 走到 INSERT，竞败方撞唯一索引拿到一个约束错误。
 func (r *saveRepo) Save(ctx context.Context, f *agent_session_entity.SessionSave) error {
 	return db.Ctx(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "user_id"}, {Name: "peer_fingerprint"}, {Name: "peer_session_id"},
-		},
+		Columns:   []clause.Column{{Name: "user_id"}, {Name: "conversation_id"}},
 		DoNothing: true,
 	}).Create(f).Error
 }
 
-func (r *saveRepo) Delete(
-	ctx context.Context, userID int64, peerFingerprint, peerSessionID string,
-) error {
+func (r *saveRepo) Delete(ctx context.Context, userID int64, conversationID string) error {
 	return db.Ctx(ctx).Where(
-		"user_id=? AND peer_fingerprint=? AND peer_session_id=?",
-		userID, peerFingerprint, peerSessionID,
+		"user_id=? AND conversation_id=?", userID, conversationID,
 	).Delete(&agent_session_entity.SessionSave{}).Error
 }
 
 func (r *saveRepo) FindByIdentity(
-	ctx context.Context, userID int64, peerFingerprint, peerSessionID string,
+	ctx context.Context, userID int64, conversationID string,
 ) (*agent_session_entity.SessionSave, error) {
 	// 没保存过不是错误：删一条早已删过的对话照样是成功（R12 幂等）。
 	return dbutil.FindOne[agent_session_entity.SessionSave](db.Ctx(ctx).Where(
-		"user_id=? AND peer_fingerprint=? AND peer_session_id=?",
-		userID, peerFingerprint, peerSessionID,
+		"user_id=? AND conversation_id=?", userID, conversationID,
 	))
 }
 

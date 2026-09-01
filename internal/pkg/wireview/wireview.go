@@ -56,7 +56,7 @@ func Notification(notification *agentrewire.RpcNotification) (string, json.RawMe
 	case *agentrewire.RpcNotification_AutonomousTurnStarted:
 		method = "runtime.autonomousTurn.started"
 		value := payload.AutonomousTurnStarted
-		out := map[string]any{"sessionId": value.GetSessionId()}
+		out := map[string]any{"conversationId": value.GetConversationId()}
 		putNonzero(out, "seq", value.GetSeq())
 		putNonempty(out, "trigger", value.GetTrigger())
 		putNonzero(out, "turnToken", value.GetTurnToken())
@@ -71,7 +71,7 @@ func Notification(notification *agentrewire.RpcNotification) (string, json.RawMe
 	return method, encoded, nil
 }
 
-// RuntimeEvent 把一条 typed runtime 事件摊成 params 正文（{sessionId, seq?, event}）。
+// RuntimeEvent 把一条 typed runtime 事件摊成 params 正文（{conversationId, seq?, event}）。
 func RuntimeEvent(frame *agentrewire.RuntimeEventNotification) (map[string]any, error) {
 	if frame == nil || frame.GetEvent() == nil {
 		return nil, errors.New("wireview: runtime event has no typed event")
@@ -107,13 +107,13 @@ func RuntimeEvent(frame *agentrewire.RuntimeEventNotification) (map[string]any, 
 			event["usage"] = usageView(value.UsageUpdate.GetUsage())
 		}
 	}
-	out := map[string]any{"sessionId": frame.GetSessionId(), "event": event}
+	out := map[string]any{"conversationId": frame.GetConversationId(), "event": event}
 	putNonzero(out, "seq", frame.GetSeq())
 	return out, nil
 }
 
 func doneView(value *agentrewire.RunResultDoneNotification) map[string]any {
-	out := map[string]any{"sessionId": value.GetSessionId()}
+	out := map[string]any{"conversationId": value.GetConversationId()}
 	putNonzero(out, "seq", value.GetSeq())
 	putNonempty(out, "providerSessionId", value.GetProviderSessionId())
 	putNonempty(out, "userAnchor", value.GetUserAnchor())

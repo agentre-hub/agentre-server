@@ -14,4 +14,4 @@ package wireversion
 // Protocol 是每一次握手自报的 wire 协议版本。
 //
 // 与 frontend/package.json 钉住的 @agentre-hub/agentre-wire 版本保持逐字一致。
-const Protocol = "0.3.0"
+const Protocol = "0.1.0"

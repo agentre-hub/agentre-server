@@ -66,7 +66,7 @@ func TestBackfillConversationIDs_GivenLegacyRows_ThenWritesTheDecisionTwoDerivat
 
 // Given 一张已经回填过（或本来就空）的表，When 再跑一遍，Then 一条 UPDATE 都不发。
 //
-// 这是「回填幂等」的机械形态：判据是 `conversation_id = ''`，重跑选不出行，因此
+// 这是「回填幂等」的机械形态：判据是 `conversation_id = ”`，重跑选不出行，因此
 // 既不会改写换键之后新写进来的行，也不会把同一条对话算成第二个值。
 func TestBackfillConversationIDs_GivenEveryRowAlreadyHasAnIdentity_ThenChangesNothing(t *testing.T) {
 	_, gormDB, mock := hubtest.Database(t)

@@ -87,17 +87,17 @@ func (mr *MockDeleteTodoRepoMockRecorder) ListPendingMachines(ctx any) *gomock.C
 }
 
 // RemoveDeleteTodo mocks base method.
-func (m *MockDeleteTodoRepo) RemoveDeleteTodo(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) error {
+func (m *MockDeleteTodoRepo) RemoveDeleteTodo(ctx context.Context, userID int64, conversationID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RemoveDeleteTodo", ctx, userID, peerFingerprint, peerSessionID)
+	ret := m.ctrl.Call(m, "RemoveDeleteTodo", ctx, userID, conversationID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // RemoveDeleteTodo indicates an expected call of RemoveDeleteTodo.
-func (mr *MockDeleteTodoRepoMockRecorder) RemoveDeleteTodo(ctx, userID, peerFingerprint, peerSessionID any) *gomock.Call {
+func (mr *MockDeleteTodoRepoMockRecorder) RemoveDeleteTodo(ctx, userID, conversationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveDeleteTodo", reflect.TypeOf((*MockDeleteTodoRepo)(nil).RemoveDeleteTodo), ctx, userID, peerFingerprint, peerSessionID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveDeleteTodo", reflect.TypeOf((*MockDeleteTodoRepo)(nil).RemoveDeleteTodo), ctx, userID, conversationID)
 }
 
 // RemoveDeleteTodosByPeer mocks base method.

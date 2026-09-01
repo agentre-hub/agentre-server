@@ -49,9 +49,9 @@ func syncedRig(t *testing.T) (*rig, *fakeFlushClock) {
 	r := newRig(t)
 	clock := &fakeFlushClock{}
 	r.mirror.schedule = clock.schedule
-	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(42, "写个爬虫")}
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
 	require.NoError(t, r.mirror.Sync(context.Background(),
-		[]SavedSession{{PeerFingerprint: testMachine, SessionID: "42"}}))
+		[]SavedSession{{ConversationID: conv42}}))
 	return r, clock
 }
 
@@ -75,7 +75,7 @@ func TestApply_SummaryWriteIsCoalescedNotPerFrame(t *testing.T) {
 
 	const frames = 40
 	for seq := int64(1); seq <= frames; seq++ {
-		require.NoError(t, r.mirror.Apply(ctx, notification(42, seq, fmt.Sprintf("t%d", seq))))
+		require.NoError(t, r.mirror.Apply(ctx, notification(conv42, seq, fmt.Sprintf("t%d", seq))))
 	}
 
 	require.Len(t, r.seqs(), frames, "帧必须照旧一帧一行立刻落库")
@@ -93,7 +93,7 @@ func TestApply_CoalescedSummaryStillPersistsTheFinalCursor(t *testing.T) {
 
 	const frames = 40
 	for seq := int64(1); seq <= frames; seq++ {
-		require.NoError(t, r.mirror.Apply(ctx, notification(42, seq, fmt.Sprintf("t%d", seq))))
+		require.NoError(t, r.mirror.Apply(ctx, notification(conv42, seq, fmt.Sprintf("t%d", seq))))
 	}
 	require.Equal(t, 1, clock.scheduled(), "首发之后必须排上一次尾补")
 
@@ -108,7 +108,7 @@ func TestApply_QuietWindowDoesNotWriteAgain(t *testing.T) {
 	r, clock := syncedRig(t)
 	ctx := context.Background()
 
-	require.NoError(t, r.mirror.Apply(ctx, notification(42, 1, "只有一帧")))
+	require.NoError(t, r.mirror.Apply(ctx, notification(conv42, 1, "只有一帧")))
 	afterFirst := r.upsertCount()
 	require.Equal(t, int64(1), r.lastCursor(t), "第一帧的游标要立刻落库,不等窗口")
 
@@ -124,13 +124,13 @@ func TestApply_NewWindowOpensAfterTheTail(t *testing.T) {
 	ctx := context.Background()
 
 	for seq := int64(1); seq <= 5; seq++ {
-		require.NoError(t, r.mirror.Apply(ctx, notification(42, seq, "第一轮")))
+		require.NoError(t, r.mirror.Apply(ctx, notification(conv42, seq, "第一轮")))
 	}
 	clock.fire()
 	require.Equal(t, int64(5), r.lastCursor(t))
 
 	for seq := int64(6); seq <= 10; seq++ {
-		require.NoError(t, r.mirror.Apply(ctx, notification(42, seq, "第二轮")))
+		require.NoError(t, r.mirror.Apply(ctx, notification(conv42, seq, "第二轮")))
 	}
 	clock.fire()
 
@@ -151,11 +151,11 @@ func TestForget_PendingSummaryFlushDoesNotResurrectTheRow(t *testing.T) {
 	ctx := context.Background()
 
 	for seq := int64(1); seq <= 10; seq++ {
-		require.NoError(t, r.mirror.Apply(ctx, notification(42, seq, "还在说")))
+		require.NoError(t, r.mirror.Apply(ctx, notification(conv42, seq, "还在说")))
 	}
 	beforeForget := r.upsertCount()
 
-	r.mirror.Forget(SavedSession{PeerFingerprint: testMachine, SessionID: "42"})
+	r.mirror.Forget(SavedSession{ConversationID: conv42})
 	clock.fire()
 
 	assert.Equal(t, beforeForget, r.upsertCount(),

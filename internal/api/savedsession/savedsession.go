@@ -18,17 +18,16 @@ type SaveSessionRequest struct {
 	// MachineFingerprint 是**承载**这条对话的那台机器（对得上 devices.fingerprint）。
 	// 镜像据它决定去连谁。
 	MachineFingerprint string `json:"machine_fingerprint" binding:"required,min=8,max=128"`
-	// PeerFingerprint 是**发起**这条对话那一端的指纹，身份键的另一半（决策 17）：
-	// 执行端按 (发起端指纹, 会话标识) 解会话，同一台机器上同号的两条对话是常态。
+	// PeerFingerprint 是**发起**这条对话那一端的指纹。它已经不是身份的一半
+	// （2026-08-31-conversation-centric-addressing.md「会话身份」），落库只作来源
+	// 标注与授权。
 	//
 	// 可以留空，意为「就是这台机器自己」——在本机 daemon 上开的对话（桌面端）不带
-	// origin，执行端报回来的也是空。web 控制台派发出去的那些必须填：发起端是浏览器，
-	// 承载它的是 agentred 那台机器，两者不是同一个值，混作一谈这条对话就永远进不了
-	// 镜像（左栏因此一行都没有）。
+	// origin，执行端报回来的也是空。
 	PeerFingerprint string `json:"peer_fingerprint" binding:"omitempty,min=8,max=128"`
-	// SessionID 是发起端本地自增的会话标识。服务端只把它当作不透明指针落库，
-	// 不解析、也不知道它指哪条会话。
-	SessionID string `json:"session_id" binding:"required,min=1,max=256"`
+	// ConversationID 是这条对话的身份：发起端建档那一刻铸的 UUIDv7（存量对话是
+	// 按决策 2 派生的 UUIDv5）。名单、摘要、转录、待办四张表都照它存。
+	ConversationID string `json:"conversation_id" binding:"required,uuid"`
 }
 
 type SaveSessionResponse struct{}
@@ -40,9 +39,9 @@ type SaveSessionResponse struct{}
 // 报的话，发起端是浏览器的那些对话（web 控制台派发出去的）根本报不出来——索引行上
 // 只有身份，没有机器。
 type DeleteSessionRequest struct {
-	mux.Meta        `path:"/v1/saved-sessions/delete" method:"POST"`
-	PeerFingerprint string `json:"peer_fingerprint" binding:"required,min=8,max=128"`
-	SessionID       string `json:"session_id" binding:"required,min=1,max=256"`
+	mux.Meta `path:"/v1/saved-sessions/delete" method:"POST"`
+	// 只要身份：conversation_id 全局唯一，机器与发起端都由服务端自己查出来。
+	ConversationID string `json:"conversation_id" binding:"required,uuid"`
 }
 
 // DeleteSessionResponse 交代**执行端那一份**的去向；应答返回时 server 那一份一定
@@ -66,7 +65,7 @@ type ListSavedSessionsRequest struct {
 // SavedSessionRef 是名单里的一条：只有指向与时间。
 type SavedSessionRef struct {
 	DeviceFingerprint string `json:"device_fingerprint"`
-	SessionID         string `json:"session_id"`
+	ConversationID    string `json:"conversation_id"`
 	FollowedAt        int64  `json:"followed_at"`
 	// Invalid 目标设备已不在账号活跃设备里（被撤销 / 不存在）时为 true：名单内容
 	// 不变（R14），只是这一条已无对可指，客户端可据此移除。

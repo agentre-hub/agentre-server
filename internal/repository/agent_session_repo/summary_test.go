@@ -14,7 +14,7 @@ import (
 )
 
 // UpsertSummary 必须是一条语句：命中 uk_agent_sessions_identity
-// (user_id, peer_fingerprint, peer_session_id) 时覆盖除 createtime 外的全部可变列——
+// (user_id, conversation_id) 时覆盖除 createtime 外的全部可变列——
 // 这条记录反映的是发起端上报的最新状态，不是「谁先谁赢」的版本竞态。绑定值一并
 // 钉住：少绑一列时唯一索引的裁决对象或者覆盖到的字段就变了，只看 SQL 文本看不出来。
 func TestUpsertSummary_SingleStatementOverwritesAllButCreatetime(t *testing.T) {
@@ -24,7 +24,7 @@ func TestUpsertSummary_SingleStatementOverwritesAllButCreatetime(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("ON DUPLICATE KEY UPDATE")).
 		WithArgs(
-			int64(7), "fp-daemon-1", "sess-9", // user_id, peer_fingerprint, peer_session_id
+			int64(7), "conv-1", "fp-daemon-1", "sess-9", // user_id, conversation_id, peer_fingerprint, peer_session_id
 			"Fix the bug", "agent-sync-1", "provider-sess-1", "/repo",
 			"01KZN9FVVD69NY8M0VCEAABNMZ", // project_sync_id：对端自己说出来的项目归属
 			"claude_code", "running",
@@ -37,7 +37,8 @@ func TestUpsertSummary_SingleStatementOverwritesAllButCreatetime(t *testing.T) {
 	mock.ExpectCommit()
 
 	s := &agent_session_entity.SessionSummary{
-		UserID: 7, PeerFingerprint: "fp-daemon-1", PeerSessionID: "sess-9",
+		UserID: 7, ConversationID: "conv-1",
+		PeerFingerprint: "fp-daemon-1", PeerSessionID: "sess-9",
 		Title: "Fix the bug", AgentSyncID: "agent-sync-1", ProviderSessionID: "provider-sess-1",
 		Cwd: "/repo", ProjectSyncID: "01KZN9FVVD69NY8M0VCEAABNMZ",
 		BackendType: "claude_code", LifecycleState: "running",
@@ -60,7 +61,7 @@ func TestUpsertSummary_NeverResetsLastReadAt(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"ON DUPLICATE KEY UPDATE `title`=VALUES(`title`),"+
+		"ON DUPLICATE KEY UPDATE `peer_fingerprint`=VALUES(`peer_fingerprint`),`title`=VALUES(`title`),"+
 			"`agent_sync_id`=VALUES(`agent_sync_id`),"+
 			"`provider_session_id`=VALUES(`provider_session_id`),"+
 			"`cwd`=VALUES(`cwd`),`project_sync_id`=VALUES(`project_sync_id`),"+
@@ -74,7 +75,9 @@ func TestUpsertSummary_NeverResetsLastReadAt(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	s := &agent_session_entity.SessionSummary{UserID: 7, PeerFingerprint: "fp-1", PeerSessionID: "sess-9"}
+	s := &agent_session_entity.SessionSummary{
+		UserID: 7, ConversationID: "conv-1", PeerFingerprint: "fp-1", PeerSessionID: "sess-9",
+	}
 	require.NoError(t, r.UpsertSummary(ctx, s))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -86,11 +89,11 @@ func TestListSummariesByUser_AccountScoped(t *testing.T) {
 	r := NewSummary()
 
 	rows := sqlmock.NewRows([]string{
-		"id", "user_id", "peer_fingerprint", "peer_session_id", "title", "last_message_at",
+		"id", "user_id", "conversation_id", "peer_fingerprint", "title", "last_message_at",
 		"machine_fingerprint",
 	}).
-		AddRow(1, 7, "fp-browser-1", "sess-9", "Fix the bug", 2000, "fp-daemon-1").
-		AddRow(2, 7, "fp-daemon-1", "sess-8", "Refactor", 1000, "fp-daemon-1")
+		AddRow(1, 7, "conv-9", "fp-browser-1", "Fix the bug", 2000, "fp-daemon-1").
+		AddRow(2, 7, "conv-8", "fp-daemon-1", "Refactor", 1000, "fp-daemon-1")
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_sessions` WHERE user_id=? ORDER BY last_message_at DESC, id DESC",
 	)).WithArgs(int64(7)).WillReturnRows(rows)
@@ -98,7 +101,7 @@ func TestListSummariesByUser_AccountScoped(t *testing.T) {
 	out, err := r.ListSummariesByUser(ctx, 7)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
-	assert.Equal(t, "sess-9", out[0].PeerSessionID)
+	assert.Equal(t, "conv-9", out[0].ConversationID)
 	assert.Equal(t, int64(7), out[0].UserID)
 	assert.Equal(t, "fp-browser-1", out[0].PeerFingerprint)
 	assert.Equal(t, "fp-daemon-1", out[0].MachineFingerprint)
@@ -107,18 +110,18 @@ func TestListSummariesByUser_AccountScoped(t *testing.T) {
 
 // DeleteSummary 撤掉一条对话的摘要：删除时账号里这一份连同它的转录一起消失，
 // 索引里立刻看不到它（决策 6：界面上不留「已删除但还在」的中间态）。
-// 身份键三列齐全，理由与 DeleteFrames 相同。
+// 身份键两列齐全，理由与 DeleteFrames 相同。
 func TestDeleteSummary_ScopedToTheWholeIdentity(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"DELETE FROM `agent_sessions` WHERE user_id=? AND peer_fingerprint=? AND peer_session_id=?",
-	)).WithArgs(int64(7), "fp-daemon-1", "42").WillReturnResult(sqlmock.NewResult(0, 1))
+		"DELETE FROM `agent_sessions` WHERE user_id=? AND conversation_id=?",
+	)).WithArgs(int64(7), "conv-42").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.DeleteSummary(ctx, 7, "fp-daemon-1", "42"))
+	require.NoError(t, r.DeleteSummary(ctx, 7, "conv-42"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -323,18 +326,18 @@ func TestListSummariesPage_ProjectScopeWithNoCriteria_MatchesNothing(t *testing.
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 详情页认领发起端走的是按会话号的精确查询（决策 13）：它要的不是一页，而是
-// 「这个号有没有、有几条」，所以既不排序也不限条数。
-func TestListSummariesPage_SessionIDIsExactAndUnpaged(t *testing.T) {
+// 详情页按对话标识精确查（决策 13）：它要的不是一页，而是「这条在不在」，
+// 所以既不排序也不限条数。
+func TestListSummariesPage_ConversationIDIsExactAndUnpaged(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
-	mock.ExpectQuery(regexp.QuoteMeta("peer_session_id=?")).
-		WithArgs(int64(7), "42").
+	mock.ExpectQuery(regexp.QuoteMeta("conversation_id=?")).
+		WithArgs(int64(7), "conv-42").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
 	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
-		SummaryQuery: SummaryQuery{UserID: 7, PeerSessionID: "42"},
+		SummaryQuery: SummaryQuery{UserID: 7, ConversationID: "conv-42"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -432,13 +435,13 @@ func TestMarkSummaryRead_TouchesOnlyLastReadAtAndOnlyMovesForward(t *testing.T) 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
 		"UPDATE `agent_sessions` SET `last_read_at`=?,`updatetime`=? "+
-			"WHERE user_id=? AND peer_fingerprint=? AND peer_session_id=? AND last_read_at<?",
+			"WHERE user_id=? AND conversation_id=? AND last_read_at<?",
 	)).
-		WithArgs(int64(1700), int64(1700), int64(7), "fp-1", "sess-9", int64(1700)).
+		WithArgs(int64(1700), int64(1700), int64(7), "conv-9", int64(1700)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.MarkSummaryRead(ctx, 7, "fp-1", "sess-9", 1700))
+	require.NoError(t, r.MarkSummaryRead(ctx, 7, "conv-9", 1700))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

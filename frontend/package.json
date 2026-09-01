@@ -13,8 +13,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@agentre-hub/agentre-ui": "github:agentre-hub/agentre#5f3e9cab6f1a0af4628bc6d1b757cb1054b8e435&path:/frontend/packages/agentre-ui",
-    "@agentre-hub/agentre-wire": "github:agentre-hub/agentre#3172b8d9857932835377c68a4300b1fd3f689649&path:/frontend/packages/agentre-wire",
+    "@agentre-hub/agentre-ui": "github:agentre-hub/agentre#47ad37114eb1f3b6b296b4b16d5415ba9c71bccd&path:/frontend/packages/agentre-ui",
+    "@agentre-hub/agentre-wire": "github:agentre-hub/agentre#47ad37114eb1f3b6b296b4b16d5415ba9c71bccd&path:/frontend/packages/agentre-wire",
     "@bufbuild/protobuf": "^2.14.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",

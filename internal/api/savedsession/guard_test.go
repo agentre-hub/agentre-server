@@ -48,16 +48,19 @@ func TestUnsavedConversation_LeavesNoContentInDatabase_Guard(t *testing.T) {
 	})
 
 	t.Run("镜像内容以「保存过的那条对话」为身份键", func(t *testing.T) {
-		// 保存名单那一条的身份：账号 + 发起端指纹（落在 device_fingerprint 列上）
-		// + 它那边的会话标识。
+		// 保存名单那一条的身份：账号 + 这条对话的 conversation_id
+		// （2026-08-31-conversation-centric-addressing.md「会话身份」：身份键收缩为
+		// 一列，peer_fingerprint / peer_session_id 退出身份、降级为来源标注）。
+		// device_fingerprint 不是身份的一半，是「去连哪一台」这个属性，但它必须在：
+		// 没有它就补删不了执行端那一份。
 		requireFields(t, agent_session_entity.SessionSave{}, "SessionSave",
-			"UserID", "DeviceFingerprint", "PeerSessionID")
+			"UserID", "ConversationID", "DeviceFingerprint")
 		// 持有内容的镜像行必须带同一把键，少一个都会让某一行内容脱离「谁保存的、
 		// 保存的是哪条」——删除时清不掉，保存范围也圈不住它。
 		requireFields(t, agent_session_entity.SessionSummary{}, "SessionSummary",
-			"UserID", "PeerFingerprint", "PeerSessionID")
+			"UserID", "ConversationID")
 		requireFields(t, agent_session_entity.JournalFrame{}, "JournalFrame",
-			"UserID", "PeerFingerprint", "PeerSessionID")
+			"UserID", "ConversationID")
 	})
 
 	t.Run("写镜像内容的只有 mirror_svc", func(t *testing.T) {

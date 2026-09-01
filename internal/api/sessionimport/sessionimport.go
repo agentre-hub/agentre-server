@@ -128,24 +128,25 @@ type PreviewResponse struct {
 // 的主键，服务端与 daemon 都不发号）。标题、工作目录与 provider 会话身份不在入参
 // 里——它们是那份转录自己的事实，由那台机器读出来写下去。
 type RunRequest struct {
-	mux.Meta  `path:"/v1/session-import/run" method:"POST"`
-	DeviceID  int64  `json:"device_id" binding:"required"`
-	Backend   string `json:"backend" binding:"required,max=64"`
-	Locator   string `json:"locator" binding:"required,max=4096"`
-	SessionID int64  `json:"session_id" binding:"required,min=1"`
+	mux.Meta `path:"/v1/session-import/run" method:"POST"`
+	DeviceID int64  `json:"device_id" binding:"required"`
+	Backend  string `json:"backend" binding:"required,max=64"`
+	Locator  string `json:"locator" binding:"required,max=4096"`
+	// ConversationID 是浏览器为这条对话铸的全局标识（决策 1）。
+	ConversationID string `json:"conversation_id" binding:"required,uuid"`
 	// AgentSyncID 是这条会话挂在哪个 Agent 名下（账号级标识）。空 = 不挂。
 	AgentSyncID string `json:"agent_sync_id" binding:"omitempty,max=255"`
 }
 
 // RunResponse 是一次导入的结果。
 //
-// AlreadyImported 为真表示这条 provider 会话在那台机器上早就有一条会话了，
-// SessionID 指的是**它那条**（未必等于这次铸的号），ImportedTurns 为 0 ——
+// AlreadyImported 为真表示这条 provider 会话在那台机器上早就有一条对话了，
+// ConversationID 指的是**它那条**（未必等于这次铸的号），ImportedTurns 为 0 ——
 // 重复导入是可预期的正常分支，不是错误。
 type RunResponse struct {
-	// SessionID 是那台机器上这条会话的标识；PeerFingerprint 是它的发起端——两者
-	// 合起来才是这条对话的身份，浏览器拿它去打开详情页。
-	SessionID       string `json:"session_id"`
+	// ConversationID 是这条对话的身份，浏览器拿它去打开详情页；PeerFingerprint 是
+	// 它的发起端，只作来源标注。
+	ConversationID  string `json:"conversation_id"`
 	PeerFingerprint string `json:"peer_fingerprint"`
 	// Cwd 同上：本包的显式例外，界面用它说明「这条会话会在哪儿接着跑」。
 	Cwd               string `json:"cwd,omitempty"`

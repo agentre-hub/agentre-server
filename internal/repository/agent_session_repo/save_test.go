@@ -13,7 +13,7 @@ import (
 )
 
 // Follow 必须是一条语句：一条 INSERT，命中 uk_agent_session_saves_identity
-// (user_id, device_fingerprint, peer_session_id) 时什么都不改。重复关注（同账号、同一目标会话）是
+// (user_id, conversation_id) 时什么都不改。重复关注（同账号、同一目标会话）是
 // no-op，由数据库原子裁决：不新增行、也不重置首次关注时间——R12「关注幂等」在
 // 数据层的落点。这里用 0 行受影响的结果模拟「已关注」的那次重复请求。
 func TestFollow_SingleStatementOnConflictDoNothing(t *testing.T) {
@@ -25,14 +25,14 @@ func TestFollow_SingleStatementOnConflictDoNothing(t *testing.T) {
 	// 裁决对象就变了，只验 SQL 文本看不出来。
 	mock.ExpectExec(regexp.QuoteMeta(
 		`ON DUPLICATE KEY UPDATE`,
-	)).WithArgs(int64(7), "fp-daemon-1", "fp-browser-1", "sess-9",
+	)).WithArgs(int64(7), "conv-9", "fp-daemon-1", "fp-browser-1", "",
 		int64(1000), int64(1000), int64(1000)).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 行 = 已关注，冲突 no-op
 	mock.ExpectCommit()
 
 	f := &agent_session_entity.SessionSave{
-		UserID: 7, DeviceFingerprint: "fp-daemon-1", PeerFingerprint: "fp-browser-1",
-		PeerSessionID: "sess-9", FollowedAt: 1000, Createtime: 1000, Updatetime: 1000,
+		UserID: 7, ConversationID: "conv-9", DeviceFingerprint: "fp-daemon-1",
+		PeerFingerprint: "fp-browser-1", FollowedAt: 1000, Createtime: 1000, Updatetime: 1000,
 	}
 	require.NoError(t, r.Save(ctx, f))
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -45,11 +45,11 @@ func TestUnfollow_DeleteIsIdempotent(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `agent_session_saves`")).
-		WithArgs(int64(7), "fp-browser-1", "sess-9").
+		WithArgs(int64(7), "conv-9").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.Delete(ctx, 7, "fp-browser-1", "sess-9"))
+	require.NoError(t, r.Delete(ctx, 7, "conv-9"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -60,10 +60,10 @@ func TestListByUser_AccountScoped(t *testing.T) {
 	r := NewSave()
 
 	rows := sqlmock.NewRows([]string{
-		"id", "user_id", "device_fingerprint", "peer_session_id", "followed_at", "createtime", "updatetime",
+		"id", "user_id", "conversation_id", "device_fingerprint", "followed_at", "createtime", "updatetime",
 	}).
-		AddRow(1, 7, "fp-daemon-1", "sess-9", 2000, 2000, 2000).
-		AddRow(2, 7, "fp-daemon-1", "sess-8", 1000, 1000, 1000)
+		AddRow(1, 7, "conv-9", "fp-daemon-1", 2000, 2000, 2000).
+		AddRow(2, 7, "conv-8", "fp-daemon-1", 1000, 1000, 1000)
 	// 排序也钉在 SQL 上：sqlmock 按给定顺序回行，光比第一行的内容，把 ORDER BY
 	// 整句删掉这个用例照样绿。「最近关注的排在前面」是 R13 列表的顺序承诺。
 	mock.ExpectQuery(regexp.QuoteMeta(
@@ -73,7 +73,7 @@ func TestListByUser_AccountScoped(t *testing.T) {
 	out, err := r.ListByUser(ctx, 7)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
-	assert.Equal(t, "sess-9", out[0].PeerSessionID)
+	assert.Equal(t, "conv-9", out[0].ConversationID)
 	assert.Equal(t, "fp-daemon-1", out[0].DeviceFingerprint)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

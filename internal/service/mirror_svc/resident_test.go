@@ -126,8 +126,9 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 	switch {
 	case method == agentrewire.RpcMethod_RPC_METHOD_AUTH_ACCOUNT:
 		p := &agentrewire.AuthAccountRequest{}
-		if proto.Unmarshal(request.GetEncodedPayload(), p) != nil ||
-			p.GetCredential() == "" || p.GetDeviceFingerprint() == "" {
+		// AuthAccountRequest 已经没有可以自报身份的字段(决策 8):对端身份只从已验签
+		// 凭据的 pfp claim 取,所以这里能校验的只剩「有没有凭据」。
+		if proto.Unmarshal(request.GetEncodedPayload(), p) != nil || p.GetCredential() == "" {
 			response.Body = &agentrewire.RpcFrame_Error{Error: &agentrewire.RpcError{
 				Code: -32602, Message: "invalid params",
 			}}
@@ -146,7 +147,7 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 			break
 		}
 		f.mu.Lock()
-		ch.authed, ch.credential, ch.fingerprint = true, p.GetCredential(), p.GetDeviceFingerprint()
+		ch.authed, ch.credential = true, p.GetCredential()
 		f.mu.Unlock()
 		encoded, marshalErr := proto.Marshal(&agentrewire.AuthAccountResponse{Ok: true, InstanceUuid: "fake"})
 		if marshalErr != nil {
@@ -305,9 +306,8 @@ func (f *fakeDaemonNet) firstChannel(t *testing.T) fakeChannel {
 // ── 共享的假库:两个副本读写同一份数据,幂等键与真表一致 ──────────────────────
 
 type frameWrite struct {
-	fingerprint string
-	sessionID   string
-	seq         int64
+	conversationID string
+	seq            int64
 }
 
 type fakeStore struct {
@@ -326,14 +326,14 @@ func newFakeStore() *fakeStore {
 	}
 }
 
-func identityOfRow(userID int64, fingerprint, sessionID string) string {
-	return fmt.Sprintf("%d|%s|%s", userID, fingerprint, sessionID)
+func identityOfRow(userID int64, conversationID string) string {
+	return fmt.Sprintf("%d|%s", userID, conversationID)
 }
 
 func (s *fakeStore) UpsertSummary(_ context.Context, row *agent_session_entity.SessionSummary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.summaries[identityOfRow(row.UserID, row.PeerFingerprint, row.PeerSessionID)] = *row
+	s.summaries[identityOfRow(row.UserID, row.ConversationID)] = *row
 	return nil
 }
 
@@ -390,7 +390,7 @@ func (s *fakeStore) CountSummariesByProjectKey(
 
 // MarkSummaryRead 不参与镜像那几条路径（它是索引「未读」那一档的写侧）。
 func (s *fakeStore) MarkSummaryRead(
-	_ context.Context, _ int64, _, _ string, _ int64,
+	_ context.Context, _ int64, _ string, _ int64,
 ) error {
 	return nil
 }
@@ -399,10 +399,8 @@ func (s *fakeStore) WriteFrames(_ context.Context, frames []*agent_session_entit
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range frames {
-		s.writes = append(s.writes, frameWrite{
-			fingerprint: row.PeerFingerprint, sessionID: row.PeerSessionID, seq: row.Seq,
-		})
-		key := fmt.Sprintf("%s|%d", identityOfRow(row.UserID, row.PeerFingerprint, row.PeerSessionID), row.Seq)
+		s.writes = append(s.writes, frameWrite{conversationID: row.ConversationID, seq: row.Seq})
+		key := fmt.Sprintf("%s|%d", identityOfRow(row.UserID, row.ConversationID), row.Seq)
 		if _, exists := s.rows[key]; exists {
 			continue
 		}
@@ -412,14 +410,13 @@ func (s *fakeStore) WriteFrames(_ context.Context, frames []*agent_session_entit
 }
 
 func (s *fakeStore) ListFramesBySeq(
-	_ context.Context, userID int64, peerFingerprint, sessionID string, fromSeq int64, limit int,
+	_ context.Context, userID int64, conversationID string, fromSeq int64, limit int,
 ) ([]*agent_session_entity.JournalFrame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*agent_session_entity.JournalFrame, 0, len(s.rows))
 	for _, row := range s.rows {
-		if row.UserID != userID || row.PeerFingerprint != peerFingerprint ||
-			row.PeerSessionID != sessionID || row.Seq <= fromSeq {
+		if row.UserID != userID || row.ConversationID != conversationID || row.Seq <= fromSeq {
 			continue
 		}
 		copied := row
@@ -435,14 +432,13 @@ func (s *fakeStore) ListFramesBySeq(
 // ListFramesBefore 是反向读：seq 严格小于上界（0 = 从最新往回），按 seq 降序取
 // limit 条。本包不读它（镜像写入侧只正向补齐），但桩要实现全接口才注册得进去。
 func (s *fakeStore) ListFramesBefore(
-	_ context.Context, userID int64, peerFingerprint, sessionID string, beforeSeq int64, limit int,
+	_ context.Context, userID int64, conversationID string, beforeSeq int64, limit int,
 ) ([]*agent_session_entity.JournalFrame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]*agent_session_entity.JournalFrame, 0, len(s.rows))
 	for _, row := range s.rows {
-		if row.UserID != userID || row.PeerFingerprint != peerFingerprint ||
-			row.PeerSessionID != sessionID {
+		if row.UserID != userID || row.ConversationID != conversationID {
 			continue
 		}
 		if beforeSeq > 0 && row.Seq >= beforeSeq {
@@ -470,33 +466,33 @@ func (s *fakeStore) writtenSeqs() []int64 {
 }
 
 // DeleteFrames / DeleteSummary 照真表的样子清掉这条对话在这个身份键下的行:
-// 别的会话、别的发起端、别的账号一行都不碰。
-func (s *fakeStore) DeleteFrames(_ context.Context, userID int64, fingerprint, sessionID string) error {
+// 别的对话、别的账号一行都不碰。
+func (s *fakeStore) DeleteFrames(_ context.Context, userID int64, conversationID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for key, row := range s.rows {
-		if row.UserID == userID && row.PeerFingerprint == fingerprint && row.PeerSessionID == sessionID {
+		if row.UserID == userID && row.ConversationID == conversationID {
 			delete(s.rows, key)
 		}
 	}
 	return nil
 }
 
-func (s *fakeStore) DeleteSummary(_ context.Context, userID int64, fingerprint, sessionID string) error {
+func (s *fakeStore) DeleteSummary(_ context.Context, userID int64, conversationID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.summaries, identityOfRow(userID, fingerprint, sessionID))
+	delete(s.summaries, identityOfRow(userID, conversationID))
 	return nil
 }
 
 // framesOf 是某条会话此刻真正躺在库里的帧,按 seq 升序 —— 内容一并交出,
 // 「库里剩下的是哪条对话」只有看 params 才答得出来。
-func (s *fakeStore) framesOf(fingerprint, sessionID string) []agent_session_entity.JournalFrame {
+func (s *fakeStore) framesOf(conversationID string) []agent_session_entity.JournalFrame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []agent_session_entity.JournalFrame
 	for _, row := range s.rows {
-		if row.PeerFingerprint == fingerprint && row.PeerSessionID == sessionID {
+		if row.ConversationID == conversationID {
 			out = append(out, row)
 		}
 	}
@@ -506,10 +502,10 @@ func (s *fakeStore) framesOf(fingerprint, sessionID string) []agent_session_enti
 
 // summaryOf 是某条对话此刻的摘要行,没有时交出空切片 —— 「索引里还看不看得到它」
 // 问的就是这个。
-func (s *fakeStore) summaryOf(userID int64, fingerprint, sessionID string) []agent_session_entity.SessionSummary {
+func (s *fakeStore) summaryOf(userID int64, conversationID string) []agent_session_entity.SessionSummary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	row, ok := s.summaries[identityOfRow(userID, fingerprint, sessionID)]
+	row, ok := s.summaries[identityOfRow(userID, conversationID)]
 	if !ok {
 		return nil
 	}
@@ -517,12 +513,12 @@ func (s *fakeStore) summaryOf(userID int64, fingerprint, sessionID string) []age
 }
 
 // rowSeqs 是某条会话真正落库的行,按 seq 升序。
-func (s *fakeStore) rowSeqs(fingerprint, sessionID string) []int64 {
+func (s *fakeStore) rowSeqs(conversationID string) []int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []int64
 	for _, row := range s.rows {
-		if row.PeerFingerprint == fingerprint && row.PeerSessionID == sessionID {
+		if row.ConversationID == conversationID {
 			out = append(out, row.Seq)
 		}
 	}
@@ -598,16 +594,16 @@ func (r *residentRig) replica(t *testing.T, instanceID string) *replica {
 // machineSession 造一条这台机器上的会话。真 daemon 在账号鉴权的连接上会给**每一行**
 // 都标上发起端指纹(它只在 row.PeerFingerprint == 调用方自己的指纹时才省略,而镜像
 // 的合成指纹不可能等于任何真设备的指纹),这里照那个样子造。
-func machineSession(sid int64, title string) *agentrewire.SessionSummary {
+func machineSession(sid string, title string) *agentrewire.SessionSummary {
 	s := runningSession(sid, title)
 	s.PeerFingerprint = testMachine
 	return s
 }
 
-func savedOn(sessionIDs ...string) []SavedSession {
-	out := make([]SavedSession, 0, len(sessionIDs))
-	for _, id := range sessionIDs {
-		out = append(out, SavedSession{PeerFingerprint: testMachine, SessionID: id})
+func savedOn(conversationIDs ...string) []SavedSession {
+	out := make([]SavedSession, 0, len(conversationIDs))
+	for _, id := range conversationIDs {
+		out = append(out, SavedSession{ConversationID: id})
 	}
 	return out
 }
@@ -626,22 +622,22 @@ func lastPullCursor(t *testing.T, peer *fakeRelay) int64 {
 // Then 只建一条中继连接、只接一次,而那条对话的转录照样镜像下来。
 func TestFollow_OnlineMachineWithSavedSessions_KeepsExactlyOneConnection(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{journalRow(42, 1), journalRow(42, 2)}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1), journalRow(conv42, 2)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 
-	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
-	again, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	again, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 
 	assert.True(t, again, "已经在跟的机器,再要求一次仍然算跟着")
 	connects, attaches, _ := a.net.counts()
 	assert.Equal(t, 1, connects, "一台机器只该有一条中继连接")
 	assert.Equal(t, 1, attaches)
-	assert.Equal(t, []int64{1, 2}, rig.store.rowSeqs(testMachine, "42"))
+	assert.Equal(t, []int64{1, 2}, rig.store.rowSeqs(conv42))
 	assert.True(t, a.sup.follows(testUserID, testMachine))
 }
 
@@ -650,10 +646,10 @@ func TestFollow_OnlineMachineWithSavedSessions_KeepsExactlyOneConnection(t *test
 // 签的短效账号凭据与合成指纹 —— 少了这一步,补齐族全被 Unauthorized 拒掉。
 func TestFollow_AuthenticatesTheChannelBeforeAnySessionCall(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
 	a := rig.replica(t, replicaA)
 
-	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
@@ -669,7 +665,11 @@ func TestFollow_AuthenticatesTheChannelBeforeAnySessionCall(t *testing.T) {
 	assert.Zero(t, issued[0].claims.DID, "镜像不是一台设备,不占 devices 行")
 	assert.Positive(t, issued[0].ttl)
 	assert.LessOrEqual(t, issued[0].ttl, 2*time.Minute, "票短命是它唯一的边界:jti 没人跟踪")
-	assert.Equal(t, a.sup.clientFingerprint(), ch.fingerprint)
+	// pfp 是这枚凭据说了算的对端身份(决策 8)。新版 agentred 在 HandleAccount 里
+	// 缺它就以 ErrUnauthorized 拒掉整条连接 —— 不签它,服务端的常驻镜像一台机器
+	// 都连不上,而这件事在假对端上看不出来:凭据对它是不透明的。所以断言签的是什么。
+	assert.Equal(t, a.sup.clientFingerprint(), issued[0].claims.PFP,
+		"凭据必须签上本副本的对端身份,否则新版 agentred 拒掉整条镜像连接")
 }
 
 // Given 对端在 auth.account 上按精确匹配校验 wire 协议版本,空版本一律判成「对端太旧」
@@ -677,10 +677,10 @@ func TestFollow_AuthenticatesTheChannelBeforeAnySessionCall(t *testing.T) {
 // 构建所说的那个版本 —— 少了它,这条通道从第一个方法就被拒,整台机器都镜像不下来。
 func TestFollow_HandshakeAdvertisesTheWireProtocolVersion(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
 	a := rig.replica(t, replicaA)
 
-	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
@@ -693,15 +693,15 @@ func TestFollow_HandshakeAdvertisesTheWireProtocolVersion(t *testing.T) {
 // Then 第二条连接用的是**新签**的一张票,而不是攥着上一张。
 func TestFollow_EachConnectionSignsAFreshCredential(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 
-	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 	a.sup.Unfollow(ctx, testUserID, testMachine)
-	claimed, err = a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err = a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
@@ -754,7 +754,7 @@ func deviceFingerprintMaxLength(t *testing.T) int {
 // Then 既不连也不占租约 —— 镜像的范围只有账号里保存过的那些对话。
 func TestFollow_MachineWithNothingSaved_NeitherConnectsNorClaims(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "没保存的")}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "没保存的")}
 	a := rig.replica(t, replicaA)
 
 	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, nil)
@@ -773,7 +773,7 @@ func TestFollow_MachineOffline_LeavesNoClaimBehind(t *testing.T) {
 	a := rig.replica(t, replicaA)
 	a.net.setOnline(false)
 
-	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
 
 	require.Error(t, err)
 	assert.False(t, claimed)
@@ -787,16 +787,16 @@ func TestFollow_MachineOffline_LeavesNoClaimBehind(t *testing.T) {
 // Then B 一条连接都不建 —— 两个副本同时接入 = 同一条对话被镜像两次。
 func TestFollow_MachineAlreadyFollowedByAnotherReplica_DoesNotConnect(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{journalRow(42, 1)}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	b := rig.replica(t, replicaB)
 	ctx := context.Background()
-	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	claimedByB, err := b.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimedByB, err := b.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 
 	require.NoError(t, err, "被别的副本跟着不是故障")
 	assert.False(t, claimedByB)
@@ -810,10 +810,10 @@ func TestFollow_MachineAlreadyFollowedByAnotherReplica_DoesNotConnect(t *testing
 // When A 的续期轮到;Then A 当场收工、把通道摘掉,并且**不**把别人的租约删掉。
 func TestFollower_LeaseTakenByAnotherReplica_LetsGoWithoutStealingItBack(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
-	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
@@ -832,10 +832,10 @@ func TestFollower_LeaseTakenByAnotherReplica_LetsGoWithoutStealingItBack(t *test
 // Given 机器下线了;When 续期轮到;Then 收工并放掉租约 —— 它回来时任何副本都接得上。
 func TestFollower_MachineWentOffline_ReleasesTheClaim(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
-	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
@@ -855,30 +855,30 @@ func TestFollower_MachineWentOffline_ReleasesTheClaim(t *testing.T) {
 // Then B 从**本 server 存的游标 3** 起拉,只补 4、5 —— 全程每条 seq 只被写一次。
 func TestFollow_TakeoverAfterReplicaStops_ResumesFromStoredCursor(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{
-		journalRow(42, 1), journalRow(42, 2), journalRow(42, 3),
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{
+		journalRow(conv42, 1), journalRow(conv42, 2), journalRow(conv42, 3),
 	}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
-	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 	require.Equal(t, []int64{1, 2, 3}, rig.store.writtenSeqs())
 
 	a.sup.Stop(ctx)
-	rig.peer.journal[42] = append(rig.peer.journal[42], journalRow(42, 4), journalRow(42, 5))
+	rig.peer.journal[conv42] = append(rig.peer.journal[conv42], journalRow(conv42, 4), journalRow(conv42, 5))
 	b := rig.replica(t, replicaB)
-	claimedByB, err := b.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimedByB, err := b.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 
 	require.NoError(t, err)
 	require.True(t, claimedByB, "副本退出后必须有人接得了手")
 	assert.Equal(t, int64(3), lastPullCursor(t, rig.peer),
 		"接手要走自己存的游标,从 0 重来会把整段转录再走一遍")
 	assert.Equal(t, []int64{1, 2, 3, 4, 5}, rig.store.writtenSeqs(), "接手不得重复写已经镜像过的那一段")
-	assert.Equal(t, []int64{1, 2, 3, 4, 5}, rig.store.rowSeqs(testMachine, "42"), "也不得漏掉一段")
+	assert.Equal(t, []int64{1, 2, 3, 4, 5}, rig.store.rowSeqs(conv42), "也不得漏掉一段")
 
-	stillFollowing, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	stillFollowing, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.ErrorIs(t, err, ErrStopped, "已经收工的副本不得再认领机器")
 	assert.False(t, stillFollowing)
 }
@@ -888,16 +888,16 @@ func TestFollow_TakeoverAfterReplicaStops_ResumesFromStoredCursor(t *testing.T) 
 // Given 已经跟着这台机器;When 一条实时通知到达;Then 它按 seq 落库。
 func TestFollow_LiveNotification_IsMirroredWhileFollowing(t *testing.T) {
 	rig := newResidentRig(t)
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
 	a := rig.replica(t, replicaA)
-	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	a.net.emit(t, notification(42, 1, "接着说"))
+	a.net.emit(t, notification(conv42, 1, "接着说"))
 
 	require.Eventually(t, func() bool {
-		return len(rig.store.rowSeqs(testMachine, "42")) == 1
+		return len(rig.store.rowSeqs(conv42)) == 1
 	}, time.Second, 5*time.Millisecond, "接入期间的实时通知没落库")
 }
 
@@ -906,23 +906,23 @@ func TestFollow_LiveNotification_IsMirroredWhileFollowing(t *testing.T) {
 func TestFollow_SavedSetGrows_ResyncsOnTheSameConnection(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{
-		machineSession(42, "写个爬虫"), machineSession(77, "刚保存的"),
+		machineSession(conv42, "写个爬虫"), machineSession(conv77, "刚保存的"),
 	}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{journalRow(42, 1)}
-	rig.peer.journal[77] = []*agentrewire.JournaledNotification{journalRow(77, 1)}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
+	rig.peer.journal[conv77] = []*agentrewire.JournaledNotification{journalRow(conv77, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
-	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
-	require.Empty(t, rig.store.rowSeqs(testMachine, "77"))
+	require.Empty(t, rig.store.rowSeqs(conv77))
 
-	claimed, err = a.sup.Follow(ctx, testUserID, testMachine, savedOn("42", "77"))
+	claimed, err = a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42, conv77))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
 	require.Eventually(t, func() bool {
-		return len(rig.store.rowSeqs(testMachine, "77")) == 1
+		return len(rig.store.rowSeqs(conv77)) == 1
 	}, time.Second, 5*time.Millisecond, "新保存的对话要在同一条连接上跟起来")
 	connects, _, _ := a.net.counts()
 	assert.Equal(t, 1, connects, "保存集变了不该重连")

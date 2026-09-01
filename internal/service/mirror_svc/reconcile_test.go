@@ -21,23 +21,23 @@ import (
 // 恰恰漏掉巡检唯一存在的理由 —— 一条保存了、却还一个字都没镜像下来的对话。
 func TestReconcile_SavedButNeverMirrored_MachineIsPickedUp(t *testing.T) {
 	rig := newResidentRig(t)
-	newFakeSaves(saved(testUserID, testMachine, "42"))
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "还没镜像过的")}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{journalRow(42, 1), journalRow(42, 2)}
+	newFakeSaves(saved(testUserID, testMachine, conv42))
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "还没镜像过的")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1), journalRow(conv42, 2)}
 	a := rig.replica(t, replicaA)
-	require.Empty(t, rig.store.rowSeqs(testMachine, "42"), "起点:库里一行都没有")
+	require.Empty(t, rig.store.rowSeqs(conv42), "起点:库里一行都没有")
 
 	require.NoError(t, NewReconciler(a.sup).Reconcile(context.Background()))
 
 	assert.True(t, a.sup.follows(testUserID, testMachine))
-	assert.Equal(t, []int64{1, 2}, rig.store.rowSeqs(testMachine, "42"))
+	assert.Equal(t, []int64{1, 2}, rig.store.rowSeqs(conv42))
 }
 
 // Given 那台机器不在线;When 巡检跑一轮;Then 不连它、也不占租约 ——
 // 它回来时任何副本都接得上,而离线不该让巡检报错。
 func TestReconcile_OfflineMachine_NotClaimed(t *testing.T) {
 	rig := newResidentRig(t)
-	newFakeSaves(saved(testUserID, testMachine, "42"))
+	newFakeSaves(saved(testUserID, testMachine, conv42))
 	a := rig.replica(t, replicaA)
 	a.net.setOnline(false)
 
@@ -53,11 +53,11 @@ func TestReconcile_OfflineMachine_NotClaimed(t *testing.T) {
 // Then 不重复认领 —— 同一条对话在任何时刻只被镜像一次。
 func TestReconcile_MachineHeldByAnotherReplica_LeftAlone(t *testing.T) {
 	rig := newResidentRig(t)
-	newFakeSaves(saved(testUserID, testMachine, "42"))
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
+	newFakeSaves(saved(testUserID, testMachine, conv42))
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
 	a := rig.replica(t, replicaA)
 	b := rig.replica(t, replicaB)
-	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn("42"))
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
@@ -73,9 +73,9 @@ func TestReconcile_MachineHeldByAnotherReplica_LeftAlone(t *testing.T) {
 // When 下一轮巡检;Then 它被重新认领 —— 没有这一轮,一台机器一旦掉出去就再也没人跟。
 func TestReconcile_FollowerLetGo_MachineIsPickedUpAgain(t *testing.T) {
 	rig := newResidentRig(t)
-	newFakeSaves(saved(testUserID, testMachine, "42"))
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{journalRow(42, 1)}
+	newFakeSaves(saved(testUserID, testMachine, conv42))
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 	require.NoError(t, NewReconciler(a.sup).Reconcile(ctx))
@@ -95,9 +95,9 @@ func TestReconcile_FollowerLetGo_MachineIsPickedUpAgain(t *testing.T) {
 func TestReconcile_OneMachineFails_TheRestStillGetFollowed(t *testing.T) {
 	rig := newResidentRig(t)
 	const broken = "fp-broken-0"
-	newFakeSaves(saved(testUserID, broken, "7"), saved(testUserID, testMachine, "42"))
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{journalRow(42, 1)}
+	newFakeSaves(saved(testUserID, broken, conv7), saved(testUserID, testMachine, conv42))
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	a.net.failConnect(broken)
 
@@ -105,7 +105,7 @@ func TestReconcile_OneMachineFails_TheRestStillGetFollowed(t *testing.T) {
 
 	require.Error(t, err, "连不上的那台要如实上交,别让巡检看起来一切正常")
 	assert.True(t, a.sup.follows(testUserID, testMachine), "后面那台照样跟上")
-	assert.Equal(t, []int64{1}, rig.store.rowSeqs(testMachine, "42"))
+	assert.Equal(t, []int64{1}, rig.store.rowSeqs(conv42))
 }
 
 // Given 本副本正跟着一台机器,而账号在**另一个副本**上把它承载的最后一条对话删掉了
@@ -118,19 +118,19 @@ func TestReconcile_OneMachineFails_TheRestStillGetFollowed(t *testing.T) {
 // 下一条实时帧原样写回账号里(决策 2 的隐私边界正是破在这里)。
 func TestReconcile_MachineNoLongerCarriesAnySavedConversation_IsLetGo(t *testing.T) {
 	rig := newResidentRig(t)
-	follows := newFakeSaves(saved(testUserID, testMachine, "42"))
-	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(42, "写个爬虫")}
-	rig.peer.journal[42] = []*agentrewire.JournaledNotification{journalRow(42, 1)}
+	follows := newFakeSaves(saved(testUserID, testMachine, conv42))
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 	require.NoError(t, NewReconciler(a.sup).Reconcile(ctx))
 	require.True(t, a.sup.follows(testUserID, testMachine))
-	require.Equal(t, []int64{1}, rig.store.rowSeqs(testMachine, "42"))
+	require.Equal(t, []int64{1}, rig.store.rowSeqs(conv42))
 
 	// 另一个副本上的删除:名单里撤掉这一条,server 上那份内容当场清干净。
-	require.NoError(t, follows.Delete(ctx, testUserID, testMachine, "42"))
-	require.NoError(t, rig.store.DeleteFrames(ctx, testUserID, testMachine, "42"))
-	require.NoError(t, rig.store.DeleteSummary(ctx, testUserID, testMachine, "42"))
+	require.NoError(t, follows.Delete(ctx, testUserID, conv42))
+	require.NoError(t, rig.store.DeleteFrames(ctx, testUserID, conv42))
+	require.NoError(t, rig.store.DeleteSummary(ctx, testUserID, conv42))
 
 	require.NoError(t, NewReconciler(a.sup).Reconcile(ctx))
 
@@ -141,9 +141,9 @@ func TestReconcile_MachineNoLongerCarriesAnySavedConversation_IsLetGo(t *testing
 	assert.Equal(t, 1, detaches, "通道要摘干净")
 
 	// 那台机器照旧在推实时帧(它自己那份对话还在跑):删掉的这一条一个字都不该回来。
-	a.net.emit(t, notification(42, 2, "又长了一句"))
+	a.net.emit(t, notification(conv42, 2, "又长了一句"))
 	assert.Never(t, func() bool {
-		return len(rig.store.rowSeqs(testMachine, "42")) > 0 ||
-			len(rig.store.summaryOf(testUserID, testMachine, "42")) > 0
+		return len(rig.store.rowSeqs(conv42)) > 0 ||
+			len(rig.store.summaryOf(testUserID, conv42)) > 0
 	}, 200*time.Millisecond, 10*time.Millisecond, "已经删掉的对话又被实时帧写回了账号里")
 }

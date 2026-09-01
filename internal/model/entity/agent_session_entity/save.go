@@ -11,12 +11,14 @@ package agent_session_entity
 type SessionSave struct {
 	ID     int64 `gorm:"column:id;primaryKey;autoIncrement"`
 	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
+	// ConversationID 与 UserID 一起是这一条的身份键
+	// （uk_agent_session_saves_identity）：一条对话在一个账号里只保存一次。
+	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
 	// DeviceFingerprint 是**承载**这条对话的那台机器（对得上 devices.fingerprint），
 	// 也就是镜像该去连哪一台。
 	DeviceFingerprint string `gorm:"column:device_fingerprint;type:varchar(255);not null"`
-	// PeerFingerprint 是**发起**这条对话的那一端。它与 UserID / PeerSessionID 一起
-	// 构成这条对话的身份（决策 17）：执行端按 (发起端指纹, 会话标识) 解会话，
-	// 同一台机器上同号的两条对话是常态。
+	// PeerFingerprint 是**发起**这条对话的那一端。它已退出身份键
+	// （2026-08-31-conversation-centric-addressing.md「会话身份」），留作来源标注。
 	//
 	// 恒有值，不用空串表示「就是这台机器自己」：在本机 daemon 上开的对话（桌面端）
 	// 这一列就等于 DeviceFingerprint，写进去而不是留空，按身份查才写得成一条等值

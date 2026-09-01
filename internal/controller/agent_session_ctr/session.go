@@ -21,9 +21,9 @@ func savedSessionItems(views []workspace_svc.SavedSessionSummaryView) []api.Save
 	items := make([]api.SavedSessionItem, 0, len(views))
 	for _, it := range views {
 		items = append(items, api.SavedSessionItem{
+			ConversationID:     it.ConversationID,
 			PeerFingerprint:    it.PeerFingerprint,
 			MachineFingerprint: it.MachineFingerprint,
-			SessionID:          it.SessionID,
 			Title:              it.Title,
 			AgentSyncID:        it.AgentSyncID,
 			ProjectSyncID:      it.ProjectSyncID,
@@ -45,7 +45,7 @@ func (m *AgentSession) MarkSessionRead(
 	c *gin.Context, req *api.MarkSessionReadRequest,
 ) (*api.MarkSessionReadResponse, error) {
 	at, err := workspace_svc.SessionRead().MarkSessionRead(
-		c.Request.Context(), ginctx.UserID(c), req.PeerFingerprint, req.SessionID,
+		c.Request.Context(), ginctx.UserID(c), req.ConversationID,
 	)
 	if err != nil {
 		return nil, err
@@ -69,15 +69,15 @@ func (m *AgentSession) SavedSessions(c *gin.Context, req *api.SavedSessionsReque
 		filter = workspace_svc.SessionFilterAll
 	}
 	page, err := workspace_svc.SessionRead().SessionIndex(c.Request.Context(), workspace_svc.SessionIndexQuery{
-		UserID:    ginctx.UserID(c),
-		Axis:      axis,
-		Scope:     req.Scope,
-		Search:    req.Q,
-		Filter:    filter,
-		SessionID: req.SessionID,
-		Cursor:    req.Cursor,
-		Limit:     req.Limit,
-		PerGroup:  req.PerGroup,
+		UserID:         ginctx.UserID(c),
+		Axis:           axis,
+		Scope:          req.Scope,
+		Search:         req.Q,
+		Filter:         filter,
+		ConversationID: req.ConversationID,
+		Cursor:         req.Cursor,
+		Limit:          req.Limit,
+		PerGroup:       req.PerGroup,
 	})
 	if err != nil {
 		return nil, err
@@ -113,10 +113,9 @@ func (m *AgentSession) Transcript(c *gin.Context, req *api.TranscriptRequest) (*
 	// Cursor 在两个方向上是两件事：正向是「我读到哪了」（不含），反向是「比这个更早」
 	// （不含）。所以按方向送进不同的入参，而不是让服务层去猜调用方的意思。
 	q := workspace_svc.TranscriptQuery{
-		UserID:          ginctx.UserID(c),
-		PeerFingerprint: req.PeerFingerprint,
-		SessionID:       req.SessionID,
-		Limit:           req.Limit,
+		UserID:         ginctx.UserID(c),
+		ConversationID: req.ConversationID,
+		Limit:          req.Limit,
 	}
 	if req.Direction == directionBackward {
 		q.Backward = true

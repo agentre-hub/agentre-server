@@ -13,7 +13,7 @@ import (
 )
 
 // AddDeleteTodo 是一条条件插入：命中 uk_agent_session_delete_todos_identity
-// (user_id, peer_fingerprint, peer_session_id) 时什么都不改——同一条待办不会被记两遍
+// (user_id, conversation_id) 时什么都不改——同一条待办不会被记两遍
 // （执行机离线期间账号侧可能因为别的原因重复触发同一次清理）。
 func TestAddDeleteTodo_OnConflictDoNothing(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
@@ -21,12 +21,12 @@ func TestAddDeleteTodo_OnConflictDoNothing(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `agent_session_delete_todos`")).
-		WithArgs(int64(7), "fp-desktop-1", "sess-9", int64(1000)).
+		WithArgs(int64(7), "conv-9", "fp-desktop-1", "", int64(1000)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	require.NoError(t, r.AddDeleteTodo(ctx, &agent_session_entity.DeleteTodo{
-		UserID: 7, PeerFingerprint: "fp-desktop-1", PeerSessionID: "sess-9", Createtime: 1000,
+		UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-desktop-1", Createtime: 1000,
 	}))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -37,9 +37,9 @@ func TestListDeleteTodosByPeer_AccountAndPeerScoped(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeleteTodo()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "peer_fingerprint", "peer_session_id", "createtime"}).
-		AddRow(1, 7, "fp-desktop-1", "sess-9", 1000).
-		AddRow(2, 7, "fp-desktop-1", "sess-8", 900)
+	rows := sqlmock.NewRows([]string{"id", "user_id", "conversation_id", "peer_fingerprint", "createtime"}).
+		AddRow(1, 7, "conv-9", "fp-desktop-1", 1000).
+		AddRow(2, 7, "conv-8", "fp-desktop-1", 900)
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_session_delete_todos` WHERE user_id=? AND peer_fingerprint=? ORDER BY id ASC",
 	)).WithArgs(int64(7), "fp-desktop-1").WillReturnRows(rows)
@@ -47,7 +47,7 @@ func TestListDeleteTodosByPeer_AccountAndPeerScoped(t *testing.T) {
 	out, err := r.ListDeleteTodosByPeer(ctx, 7, "fp-desktop-1")
 	require.NoError(t, err)
 	require.Len(t, out, 2)
-	assert.Equal(t, "sess-9", out[0].PeerSessionID)
+	assert.Equal(t, "conv-9", out[0].ConversationID)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -59,11 +59,11 @@ func TestRemoveDeleteTodo_DeleteIsIdempotent(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `agent_session_delete_todos`")).
-		WithArgs(int64(7), "fp-desktop-1", "sess-9").
+		WithArgs(int64(7), "conv-9").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.RemoveDeleteTodo(ctx, 7, "fp-desktop-1", "sess-9"))
+	require.NoError(t, r.RemoveDeleteTodo(ctx, 7, "conv-9"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

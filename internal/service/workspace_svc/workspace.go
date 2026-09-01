@@ -232,15 +232,14 @@ type OrgChartView struct {
 // 由服务端就地判定（决策 12）——镜像的 cwd 与账号项目树上的路径比对，配不上时留
 // 空（未归项目），cwd 本身永不下行（R19）。
 type SavedSessionSummaryView struct {
-	// PeerFingerprint 是发起这条对话那一端的设备指纹（决策 17 的身份键的一半），
-	// 不是此刻承载它的那台机器；详情页发消息要用它定位承载连接的目标。
+	// ConversationID 是这条对话的全局标识，也是它在镜像库里的身份。
+	ConversationID string
+	// PeerFingerprint 是发起这条对话那一端的设备指纹。它已退出身份键，留作来源
+	// 标注（机器轴那一组的分组键）与授权。
 	PeerFingerprint string
 	// MachineFingerprint 是承载这条对话、详情页实际要连接的账号设备；它与发起端
 	// 可以不同（浏览器派发到 agentred 时就是不同值）。
 	MachineFingerprint string
-	// SessionID 是发起端本地自增的会话标识，服务端只当不透明指针；配
-	// PeerFingerprint 才是完整身份。
-	SessionID string
 	// Title / AgentSyncID 为空 = 发起端还没报过这两格。标题由首条消息派生、每轮随
 	// RunParams 幂等覆盖，所以还没发出第一句的会话就是没有标题。如实留空，不猜、
 	// 不填占位。
@@ -266,11 +265,12 @@ type SavedSessionSummaryView struct {
 // 调用方填，跨账号因此读不到。AfterSeq 是调用方自己的位置（不含），0 表示从头翻；
 // Limit<=0 时走服务端默认档，服务端同样会夹一个上限。
 type TranscriptQuery struct {
-	UserID          int64
-	PeerFingerprint string
-	SessionID       string
-	AfterSeq        int64
-	Limit           int
+	UserID int64
+	// ConversationID 是这条对话的全局标识，也是镜像库里帧的身份键的一半
+	// （另一半是 UserID）。
+	ConversationID string
+	AfterSeq       int64
+	Limit          int
 	// Backward 为 true 时改成**从最新往回**按预算取一页（详情页打开一条对话时要的
 	// 是它最后那一段，规格 2026-08-21-transcript-tail-loading 决策 7）。此时
 	// AfterSeq 与 Limit 都不参与：这个方向的一页有多大由预算说了算。
@@ -404,9 +404,7 @@ type SessionReadSvc interface {
 	// 时刻由服务端就地取，不收客户端的：客户端的钟不可信，而这个时刻要和服务端自己
 	// 记的 updated_at 相比。返回落定的那个时刻，供调用方就地覆盖那一行。
 	// 账号里没有这条对话时不是错——标记已读幂等，回落定值即可。
-	MarkSessionRead(
-		ctx context.Context, userID int64, peerFingerprint, sessionID string,
-	) (int64, error)
+	MarkSessionRead(ctx context.Context, userID int64, conversationID string) (int64, error)
 	// WaitingCount 是侧栏「对话」那颗角标要的那个数：账号里此刻**等你处理**的对话
 	// 条数。判据与索引上那个 chip 是同一个（LifecycleWaiting）——侧栏说有 3 条等你、
 	// 点进去筛选却是 2 条，是一种没有任何地方会报错而用户一眼就看得见的错。

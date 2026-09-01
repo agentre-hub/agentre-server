@@ -108,7 +108,7 @@ func (s *sessionImportSvc) machine(ctx context.Context, userID, deviceID int64) 
 }
 
 // importedByProviderSession 交回「这台机器名下、账号已经镜像着的那些 provider 会话」
-// → 它们在那台机器上的会话号。
+// → 它们的 conversation_id。
 //
 // 判重锚点是 **provider 会话身份**而不是定位符：同一条磁盘会话导第二次时定位符可能
 // 变（文件被移动、重命名），而 provider 会话身份是那条会话自己的名字。
@@ -127,7 +127,7 @@ func (s *sessionImportSvc) importedByProviderSession(
 		if row.ProviderSessionID == "" || row.PeerFingerprint != fingerprint {
 			continue
 		}
-		out[row.ProviderSessionID] = row.PeerSessionID
+		out[row.ProviderSessionID] = row.ConversationID
 	}
 	return out, nil
 }

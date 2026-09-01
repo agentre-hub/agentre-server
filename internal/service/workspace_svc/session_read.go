@@ -13,11 +13,11 @@ import (
 // 上报的活动时刻，也是毫秒。收客户端传来的时刻会让「未读」的判定跟着一台不可信的
 // 钟走：钟快的浏览器一打开就把之后几分钟里的新活动一并标成已读。
 func (s *workspaceSvc) MarkSessionRead(
-	ctx context.Context, userID int64, peerFingerprint, sessionID string,
+	ctx context.Context, userID int64, conversationID string,
 ) (int64, error) {
 	at := time.Now().UnixMilli()
 	if err := agent_session_repo.Summary().MarkSummaryRead(
-		ctx, userID, peerFingerprint, sessionID, at,
+		ctx, userID, conversationID, at,
 	); err != nil {
 		return 0, err
 	}

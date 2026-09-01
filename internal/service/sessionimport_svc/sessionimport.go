@@ -128,11 +128,10 @@ type PreviewView struct {
 
 // ImportResultView 是一次导入的结果。
 type ImportResultView struct {
-	// SessionID 是那台机器上这条会话的标识。AlreadyImported 为真时它是**库里那条**，
-	// 未必等于浏览器这次铸的号。
-	SessionID string
+	// ConversationID 是这条对话的全局标识。AlreadyImported 为真时它是**库里那条**
+	// 的标识，未必等于浏览器这次铸的号——导入路径的幂等语义就落在这里。
+	ConversationID string
 	// PeerFingerprint 是这条会话的发起端 —— 就是执行它的那台机器（见 Import）。
-	// 浏览器拿它 + SessionID 才定位得到这条对话。
 	PeerFingerprint   string
 	ProviderSessionID string
 	Title             string
@@ -163,16 +162,16 @@ type PreviewInput struct {
 
 // ImportInput 是一次执行。
 //
-// SessionID 由**浏览器**铸（与 runtime.run 同一条规矩：会话 id 是各客户端本地自增
-// 的主键，服务端与 daemon 都不发号）。标题、工作目录与 provider 会话身份不在入参里
+// ConversationID 由**浏览器**铸（与 runtime.run 同一条规矩：发起端在建档那一刻铸，
+// 服务端与 daemon 都不发号）。标题、工作目录与 provider 会话身份不在入参里
 // ——它们是那份转录自己的事实，由握着它的机器读出来写下去。
 type ImportInput struct {
-	UserID      int64
-	DeviceID    int64
-	Backend     string
-	Locator     string
-	SessionID   int64
-	AgentSyncID string
+	UserID         int64
+	DeviceID       int64
+	Backend        string
+	Locator        string
+	ConversationID string
+	AgentSyncID    string
 }
 
 // TranscriptImportPeer 是一条已经建好的连接上、导入这一族的四个方法（消费侧声明）。
@@ -207,13 +206,13 @@ type SavedSessions interface {
 	Save(ctx context.Context, ref SessionRef) error
 }
 
-// SessionRef 指向一条对话：承载它的机器 + 发起它的那一端 + 那一端的会话标识。
+// SessionRef 指向一条对话：它的 conversation_id，加上承载它的机器与发起它的那一端。
 // 导入这条路上两个指纹是同一个值 —— 导入由那台机器自己执行，会话也归它。
 type SessionRef struct {
 	UserID             int64
 	MachineFingerprint string
 	PeerFingerprint    string
-	SessionID          string
+	ConversationID     string
 }
 
 type SessionImportSvc interface {

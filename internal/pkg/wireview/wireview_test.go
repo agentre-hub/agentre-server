@@ -9,27 +9,30 @@ import (
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 )
 
+// conversationID 是一条对话的全局标识（UUIDv7），线格式上取代了原先的 int64 会话号。
+const conversationID = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
+
 func TestNotificationViewProjectsTypedRuntimeEvent(t *testing.T) {
 	method, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{RuntimeEvent: &agentrewire.RuntimeEventNotification{
-		SessionId: 42, Seq: 7, Event: &agentrewire.RuntimeEventNotification_TextDelta{
+		ConversationId: conversationID, Seq: 7, Event: &agentrewire.RuntimeEventNotification_TextDelta{
 			TextDelta: &agentrewire.TextDelta{Text: "你好"},
 		},
 	}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "runtime.event", method)
-	require.JSONEq(t, `{"sessionId":42,"seq":7,"event":{"kind":"text_delta","text":"你好"}}`, string(params))
+	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","seq":7,"event":{"kind":"text_delta","text":"你好"}}`, string(params))
 }
 
 func TestNotificationViewKeepsToolInputAsJSONObject(t *testing.T) {
 	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{RuntimeEvent: &agentrewire.RuntimeEventNotification{
-		SessionId: 42, Seq: 8, Event: &agentrewire.RuntimeEventNotification_ToolCall{
+		ConversationId: conversationID, Seq: 8, Event: &agentrewire.RuntimeEventNotification_ToolCall{
 			ToolCall: &agentrewire.ToolCall{Id: "tool-1", Name: "Read", Input: []byte(`{"path":"README.md"}`)},
 		},
 	}},
 	})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"sessionId":42,"seq":8,"event":{"kind":"tool_use_start","id":"tool-1","name":"Read","input":{"path":"README.md"}}}`, string(params))
+	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","seq":8,"event":{"kind":"tool_use_start","id":"tool-1","name":"Read","input":{"path":"README.md"}}}`, string(params))
 }
 
 func TestNotificationViewOmitsOptionalZeroValuesFromTerminalFrames(t *testing.T) {
@@ -41,16 +44,16 @@ func TestNotificationViewOmitsOptionalZeroValuesFromTerminalFrames(t *testing.T)
 		{
 			name: "run result done",
 			notification: &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
-				RunResultDone: &agentrewire.RunResultDoneNotification{SessionId: 42},
+				RunResultDone: &agentrewire.RunResultDoneNotification{ConversationId: conversationID},
 			}},
-			want: `{"sessionId":42}`,
+			want: `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"}`,
 		},
 		{
 			name: "autonomous turn started",
 			notification: &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_AutonomousTurnStarted{
-				AutonomousTurnStarted: &agentrewire.AutonomousTurnStartedNotification{SessionId: 42},
+				AutonomousTurnStarted: &agentrewire.AutonomousTurnStartedNotification{ConversationId: conversationID},
 			}},
-			want: `{"sessionId":42}`,
+			want: `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"}`,
 		},
 	}
 	for _, test := range tests {
@@ -67,7 +70,7 @@ func TestNotificationViewOmitsOptionalZeroValuesFromTerminalFrames(t *testing.T)
 
 func TestNotificationViewProjectsPlanAsCanonicalPlanObject(t *testing.T) {
 	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
-		RuntimeEvent: &agentrewire.RuntimeEventNotification{SessionId: 42, Seq: 9,
+		RuntimeEvent: &agentrewire.RuntimeEventNotification{ConversationId: conversationID, Seq: 9,
 			Event: &agentrewire.RuntimeEventNotification_PlanUpdated{PlanUpdated: &agentrewire.PlanUpdated{
 				Steps: []*agentrewire.PlanStep{{Id: "one", Step: "检查", Status: "inProgress"}},
 				Text:  "# 计划",
@@ -79,7 +82,7 @@ func TestNotificationViewProjectsPlanAsCanonicalPlanObject(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	require.JSONEq(t, `{
-		"sessionId":42,"seq":9,"event":{"kind":"plan_updated","plan":{
+		"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","seq":9,"event":{"kind":"plan_updated","plan":{
 			"steps":[{"id":"one","step":"检查","status":"inProgress"}],
 			"text":"# 计划",
 			"actions":[{"id":"plan.execute","kind":"approve","requiresFeedback":true}]
@@ -96,22 +99,22 @@ func TestNotificationViewPreservesRequiredRuntimeEventFields(t *testing.T) {
 		{
 			name: "empty text delta still has text",
 			notification: &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
-				RuntimeEvent: &agentrewire.RuntimeEventNotification{SessionId: 42,
+				RuntimeEvent: &agentrewire.RuntimeEventNotification{ConversationId: conversationID,
 					Event: &agentrewire.RuntimeEventNotification_TextDelta{TextDelta: &agentrewire.TextDelta{}},
 				},
 			}},
-			want: `{"sessionId":42,"event":{"kind":"text_delta","text":""}}`,
+			want: `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","event":{"kind":"text_delta","text":""}}`,
 		},
 		{
 			name: "zero context window still has tokens",
 			notification: &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
-				RuntimeEvent: &agentrewire.RuntimeEventNotification{SessionId: 42,
+				RuntimeEvent: &agentrewire.RuntimeEventNotification{ConversationId: conversationID,
 					Event: &agentrewire.RuntimeEventNotification_ContextWindowUpdated{
 						ContextWindowUpdated: &agentrewire.ContextWindowUpdated{},
 					},
 				},
 			}},
-			want: `{"sessionId":42,"event":{"kind":"context_window_updated","tokens":0}}`,
+			want: `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","event":{"kind":"context_window_updated","tokens":0}}`,
 		},
 	}
 	for _, test := range tests {
@@ -125,10 +128,10 @@ func TestNotificationViewPreservesRequiredRuntimeEventFields(t *testing.T) {
 
 func TestNotificationViewUsageObjectRetainsItsStableFields(t *testing.T) {
 	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
-		RunResultDone: &agentrewire.RunResultDoneNotification{SessionId: 42, Usage: &agentrewire.Usage{}},
+		RunResultDone: &agentrewire.RunResultDoneNotification{ConversationId: conversationID, Usage: &agentrewire.Usage{}},
 	}})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"sessionId":42,"usage":{
+	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","usage":{
 		"promptTokens":0,"completionTokens":0,"reasoningTokens":0,
 		"cachedTokens":0,"cacheCreationTokens":0,"totalTokens":0
 	}}`, string(params))
@@ -153,7 +156,7 @@ func TestNotificationViewCoversEveryRuntimeEventCase(t *testing.T) {
 	for i := 0; i < fields.Len(); i++ {
 		field := fields.Get(i)
 		t.Run(string(field.Name()), func(t *testing.T) {
-			frame := &agentrewire.RuntimeEventNotification{SessionId: 42, Seq: 1}
+			frame := &agentrewire.RuntimeEventNotification{ConversationId: conversationID, Seq: 1}
 			message := frame.ProtoReflect()
 			// 按 descriptor 直接置上这一路 oneof,不必手写 26 个 Go 类型。
 			message.Set(field, message.NewField(field))
@@ -182,7 +185,7 @@ func TestNotificationViewCoversEveryRuntimeEventCase(t *testing.T) {
 // 全部意义就是把原件原样交出去,编成 base64 等于把它藏了。
 func TestNotificationViewKeepsUnrecognizedBlockPayloadAsJSON(t *testing.T) {
 	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{RuntimeEvent: &agentrewire.RuntimeEventNotification{
-		SessionId: 42, Seq: 9, Event: &agentrewire.RuntimeEventNotification_UnrecognizedBlock{
+		ConversationId: conversationID, Seq: 9, Event: &agentrewire.RuntimeEventNotification_UnrecognizedBlock{
 			UnrecognizedBlock: &agentrewire.UnrecognizedBlock{
 				BlockType: "future_block",
 				Data:      []byte(`{"nested":{"keep":true}}`),
@@ -191,7 +194,7 @@ func TestNotificationViewKeepsUnrecognizedBlockPayloadAsJSON(t *testing.T) {
 	}}})
 	require.NoError(t, err)
 	require.JSONEq(t,
-		`{"sessionId":42,"seq":9,"event":{"kind":"unrecognized_block","blockType":"future_block","data":{"nested":{"keep":true}}}}`,
+		`{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","seq":9,"event":{"kind":"unrecognized_block","blockType":"future_block","data":{"nested":{"keep":true}}}}`,
 		string(params))
 }
 
@@ -204,19 +207,19 @@ func TestNotificationViewKeepsUnrecognizedBlockPayloadAsJSON(t *testing.T) {
 func TestNotificationViewCarriesTurnStats(t *testing.T) {
 	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
 		RunResultDone: &agentrewire.RunResultDoneNotification{
-			SessionId: 42, DurationMs: 9640, FirstTokenMs: 8010, TokensPerSec: 14.2,
+			ConversationId: conversationID, DurationMs: 9640, FirstTokenMs: 8010, TokensPerSec: 14.2,
 		},
 	}})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"sessionId":42,"durationMs":9640,"firstTokenMs":8010,"tokensPerSec":14.2}`, string(params))
+	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","durationMs":9640,"firstTokenMs":8010,"tokensPerSec":14.2}`, string(params))
 }
 
 // 零值按本包的约定省略（putNonzero）：浏览器那侧 journaledToFrame 会把它补回 0，
 // 而 0 在转录里读作「这台机器答不出这个数」，不是「这一轮零耗时」。
 func TestNotificationViewOmitsZeroTurnStats(t *testing.T) {
 	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
-		RunResultDone: &agentrewire.RunResultDoneNotification{SessionId: 42},
+		RunResultDone: &agentrewire.RunResultDoneNotification{ConversationId: conversationID},
 	}})
 	require.NoError(t, err)
-	require.JSONEq(t, `{"sessionId":42}`, string(params))
+	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"}`, string(params))
 }

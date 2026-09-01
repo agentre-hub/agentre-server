@@ -14,8 +14,8 @@ import (
 // JournalFrameRepo is the data access seam for agent_session_notification_journal.
 type JournalFrameRepo interface {
 	// WriteFrames batch-writes frames replayed off a peer's own notification
-	// log, keyed by (user_id, peer_fingerprint, peer_session_id, seq) — this
-	// table's one unique key. A frame that was already written lands on that
+	// log, keyed by (user_id, conversation_id, seq) — this table's one unique
+	// key. A frame that was already written lands on that
 	// key and is a no-op, not a duplicate row or an error: attach's live
 	// notifications and a reconnect's pull-based catch-up both call this, and
 	// their windows overlap by construction, so the same frame arriving twice
@@ -26,14 +26,14 @@ type JournalFrameRepo interface {
 	// than fromSeq (the caller's own cursor, exclusive — mirrors
 	// wire.SessionPullParams.Cursor), ordered seq ascending and capped at
 	// limit for paging through a large backlog. Scoped by (user_id,
-	// peer_fingerprint, peer_session_id): a read that drops user_id leaks another
-	// account's transcript.
+	// conversation_id): a read that drops user_id leaks another account's
+	// transcript.
 	ListFramesBySeq(
-		ctx context.Context, userID int64, peerFingerprint, peerSessionID string, fromSeq int64, limit int,
+		ctx context.Context, userID int64, conversationID string, fromSeq int64, limit int,
 	) ([]*agent_session_entity.JournalFrame, error)
 	// ListFramesBefore reads the same session **backwards**: up to limit rows
 	// with seq strictly less than beforeSeq, newest first. beforeSeq 0 means
-	// "from the newest row". Scoped by the same three identity columns.
+	// "from the newest row". Scoped by the same two identity columns.
 	//
 	// Descending is not a formatting choice. The detail page wants a
 	// conversation's *last* stretch, and the caller accumulates it newest-first
@@ -41,14 +41,13 @@ type JournalFrameRepo interface {
 	// ascending and applying limit would return the oldest n rows of the whole
 	// conversation instead — the exact opposite of what was asked for.
 	ListFramesBefore(
-		ctx context.Context, userID int64, peerFingerprint, peerSessionID string, beforeSeq int64, limit int,
+		ctx context.Context, userID int64, conversationID string, beforeSeq int64, limit int,
 	) ([]*agent_session_entity.JournalFrame, error)
 	// DeleteFrames 清掉一条对话在这个身份键下的全部帧。两条路都用它：账号里删掉
-	// 这条对话时清 server 那一份（决策 6），以及执行端复用了会话标识时把旧对话
-	// 的整段先清干净——WriteFrames 的唯一键新旧两条对话一模一样，而它是 DO
-	// NOTHING，不清就是旧帧原地胜出，页面显示的会是另一条对话的转录。
+	// 这条对话时清 server 那一份（决策 6），以及对端的通知日志倒退回去时把旧的
+	// 整段先清干净——WriteFrames 是 DO NOTHING，不清就是旧帧原地胜出。
 	// 一条都没有时是 no-op 而不是错误：删除与复位都要幂等。
-	DeleteFrames(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) error
+	DeleteFrames(ctx context.Context, userID int64, conversationID string) error
 }
 
 var defaultJournalFrame JournalFrameRepo
@@ -63,7 +62,7 @@ type journalFrameRepo struct{}
 // （clause.OnConflict{DoNothing:true}，与 sync_repo.avatarRepo.Save 同一写法）：
 // 赋值右边就是被赋的那一列，命中已有行时一个字节都不改，于是重放同一批帧时已经落库
 // 的那些行原样保留，不产生第二行也不报错。
-// agent_session_notification_journal 上只有主键 (user_id, peer_fingerprint, peer_session_id, seq)
+// agent_session_notification_journal 上只有主键 (user_id, conversation_id, seq)
 // 这一个键，DoNothing 因此收敛到它。
 func (r *journalFrameRepo) WriteFrames(ctx context.Context, frames []*agent_session_entity.JournalFrame) error {
 	if len(frames) == 0 {
@@ -73,12 +72,12 @@ func (r *journalFrameRepo) WriteFrames(ctx context.Context, frames []*agent_sess
 }
 
 func (r *journalFrameRepo) ListFramesBySeq(
-	ctx context.Context, userID int64, peerFingerprint, peerSessionID string, fromSeq int64, limit int,
+	ctx context.Context, userID int64, conversationID string, fromSeq int64, limit int,
 ) ([]*agent_session_entity.JournalFrame, error) {
 	var out []*agent_session_entity.JournalFrame
 	if err := db.Ctx(ctx).Where(
-		"user_id=? AND peer_fingerprint=? AND peer_session_id=? AND seq>?",
-		userID, peerFingerprint, peerSessionID, fromSeq,
+		"user_id=? AND conversation_id=? AND seq>?",
+		userID, conversationID, fromSeq,
 	).Order("seq ASC").Limit(limit).Find(&out).Error; err != nil {
 		return nil, err
 	}
@@ -88,13 +87,13 @@ func (r *journalFrameRepo) ListFramesBySeq(
 // ListFramesBefore 与 ListFramesBySeq 是同一张表的两个方向。上界为 0 时**不发**
 // seq<0 那一段条件——发出去会一行都取不到，详情页于是把一条有内容的对话显示成空的。
 func (r *journalFrameRepo) ListFramesBefore(
-	ctx context.Context, userID int64, peerFingerprint, peerSessionID string, beforeSeq int64, limit int,
+	ctx context.Context, userID int64, conversationID string, beforeSeq int64, limit int,
 ) ([]*agent_session_entity.JournalFrame, error) {
 	var out []*agent_session_entity.JournalFrame
-	// 条件拼成**一条** Where 而不是链式两条：链式会生成 `WHERE (a AND b AND c) AND d`，
+	// 条件拼成**一条** Where 而不是链式两条：链式会生成 `WHERE (a AND b) AND c`，
 	// 与同一张表上 ListFramesBySeq 的形状不一样，两条读语句的 SQL 从此对不上眼。
-	cond := "user_id=? AND peer_fingerprint=? AND peer_session_id=?"
-	args := []any{userID, peerFingerprint, peerSessionID}
+	cond := "user_id=? AND conversation_id=?"
+	args := []any{userID, conversationID}
 	if beforeSeq > 0 {
 		cond += " AND seq<?"
 		args = append(args, beforeSeq)
@@ -106,13 +105,11 @@ func (r *journalFrameRepo) ListFramesBefore(
 	return out, nil
 }
 
-// DeleteFrames 是一条 DELETE，WHERE 带齐身份键三列：少了 user_id 是跨账号删，
-// 少了 peer_fingerprint 会连累别的发起端那条同号会话（会话标识各端本地自增，
-// 跨发起端必然重号）。
+// DeleteFrames 是一条 DELETE，WHERE 带齐身份键两列：少了 user_id 是跨账号删。
 func (r *journalFrameRepo) DeleteFrames(
-	ctx context.Context, userID int64, peerFingerprint, peerSessionID string,
+	ctx context.Context, userID int64, conversationID string,
 ) error {
 	return db.Ctx(ctx).Where(
-		"user_id=? AND peer_fingerprint=? AND peer_session_id=?", userID, peerFingerprint, peerSessionID,
+		"user_id=? AND conversation_id=?", userID, conversationID,
 	).Delete(&agent_session_entity.JournalFrame{}).Error
 }

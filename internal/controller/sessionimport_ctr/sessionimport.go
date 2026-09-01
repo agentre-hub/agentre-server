@@ -81,13 +81,13 @@ func (s *SessionImport) Run(c *gin.Context, req *api.RunRequest) (*api.RunRespon
 		sessionimport_svc.ImportInput{
 			UserID: ginctx.UserID(c), DeviceID: req.DeviceID,
 			Backend: req.Backend, Locator: req.Locator,
-			SessionID: req.SessionID, AgentSyncID: req.AgentSyncID,
+			ConversationID: req.ConversationID, AgentSyncID: req.AgentSyncID,
 		})
 	if err != nil {
 		return nil, err
 	}
 	return &api.RunResponse{
-		SessionID: view.SessionID, PeerFingerprint: view.PeerFingerprint,
+		ConversationID: view.ConversationID, PeerFingerprint: view.PeerFingerprint,
 		Cwd: view.Cwd, Title: view.Title, ProviderSessionID: view.ProviderSessionID,
 		ImportedTurns: view.ImportedTurns, AlreadyImported: view.AlreadyImported,
 	}, nil

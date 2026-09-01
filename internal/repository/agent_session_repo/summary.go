@@ -25,8 +25,8 @@ import (
 // SummaryRepo is the data access seam for agent_sessions.
 type SummaryRepo interface {
 	// UpsertSummary writes the peer's latest reported state for one
-	// conversation, keyed by (user_id, peer_fingerprint, peer_session_id) —
-	// agent_sessions' one unique key (migrations/202608280008_agent_sessions.go). A
+	// conversation, keyed by (user_id, conversation_id) — agent_sessions' one
+	// unique key (migrations/202609010003_agent_session_identity_key.go). A
 	// later summary for the same identity overwrites the earlier one in a
 	// single statement; createtime is preserved.
 	UpsertSummary(ctx context.Context, s *agent_session_entity.SessionSummary) error
@@ -61,14 +61,12 @@ type SummaryRepo interface {
 	// 时刻**只往前走**：同一条对话在两个标签页里打开时，后到的那次请求可能带着
 	// 更早的时刻（网络乱序），允许它往回退等于把刚读过的那条重新标成未读。
 	// 一行都没命中仍然成功——没镜像过的对话没有「读到哪」这回事。
-	MarkSummaryRead(
-		ctx context.Context, userID int64, peerFingerprint, peerSessionID string, at int64,
-	) error
-	// DeleteSummary 撤掉一条对话的摘要，按同一个身份键
-	// (user_id, peer_fingerprint, peer_session_id)。账号里删掉这条对话时它与转录一起
-	// 消失，索引里当场就没了（决策 6：不留「已删除但还在」的中间态）。
+	MarkSummaryRead(ctx context.Context, userID int64, conversationID string, at int64) error
+	// DeleteSummary 撤掉一条对话的摘要，按同一个身份键 (user_id, conversation_id)。
+	// 账号里删掉这条对话时它与转录一起消失，索引里当场就没了（决策 6：不留
+	// 「已删除但还在」的中间态）。
 	// 从来没镜像过的对话删不到行，仍然成功——删除幂等。
-	DeleteSummary(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) error
+	DeleteSummary(ctx context.Context, userID int64, conversationID string) error
 }
 
 // SummaryCursor 是「上一页读到哪」：(last_message_at, id) 这个**复合**位置。只比
@@ -162,8 +160,8 @@ type SummaryQuery struct {
 	// 调用方传的是用户敲的那几个字符，不是一段模式。
 	TitleLike string
 	Lifecycle LifecycleFilter
-	// PeerSessionID 非空时按会话号精确匹配（决策 13，详情页认领发起端用）。
-	PeerSessionID string
+	// ConversationID 非空时按对话标识精确匹配（决策 13，详情页认领用）。
+	ConversationID string
 	// AgentSyncID / PeerFingerprint 用指针区分「不过滤」与「过滤成空串」——
 	// 空串是「未命名 Agent」那一组的**真实键**，不是缺省值。
 	AgentSyncID     *string
@@ -190,18 +188,21 @@ func NewSummary() SummaryRepo       { return &summaryRepo{} }
 
 type summaryRepo struct{}
 
-// UpsertSummary 的赋值列里没有 user_id / peer_fingerprint / session_id
-// （它们是冲突判定的身份键，改它们就等于改成另一条记录的身份）也没有 createtime
-// （命中已有行时保留它首次落地的时间）。agent_sessions 上只有
-// uk_agent_sessions_identity 这一个唯一键（migrations/202608280008_agent_sessions.go 的
-// 注释），因此 ON DUPLICATE KEY UPDATE 命中的必然是它——docs/architecture.md
-// 「只在表恰好一个唯一键时安全」。
+// UpsertSummary 的赋值列里没有 user_id / conversation_id（它们是冲突判定的身份键，
+// 改它们就等于改成另一条记录的身份）也没有 createtime（命中已有行时保留它首次落地
+// 的时间）。agent_sessions 上只有 uk_agent_sessions_identity 这一个唯一键
+// （migrations/202609010003_agent_session_identity_key.go），因此 ON DUPLICATE KEY
+// UPDATE 命中的必然是它——docs/architecture.md「只在表恰好一个唯一键时安全」。
+//
+// peer_fingerprint **在**赋值列里：它已经不是身份，而是对端每轮重报的来源标注，
+// 跟着标题与生命周期一起被覆盖。peer_session_id **不在**：线格式上已经没有这个值了
+// （决策 3 把它整个换成了 conversation_id），把它列进赋值等于每一次 upsert 都拿空串
+// 覆盖掉回填时留下的那一份来源记录。
 func (r *summaryRepo) UpsertSummary(ctx context.Context, s *agent_session_entity.SessionSummary) error {
 	return db.Ctx(ctx).Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "user_id"}, {Name: "peer_fingerprint"}, {Name: "peer_session_id"},
-		},
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "conversation_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
+			"peer_fingerprint",
 			"title", "agent_sync_id", "provider_session_id", "cwd", "project_sync_id",
 			"backend_type", "lifecycle_state", "waiting_for_input", "latest_seq",
 			"last_message_at", "provider_key", "model_key", "updatetime",
@@ -222,8 +223,7 @@ func (r *summaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]
 // device_fingerprint。它既投影进读模型，也参与项目位置的判据，所以只有这一份——
 // 两处各写一遍就会在下一次演化里分家，而分家的那一天索引会安静地把对话分错组。
 //
-// 子查询至多一行：agent_session_saves 的唯一键正是 (user_id, peer_fingerprint,
-// peer_session_id)。
+// 子查询至多一行：agent_session_saves 的唯一键正是 (user_id, conversation_id)。
 //
 // 外面套 COALESCE 是因为这个式子也进 WHERE：名单里没有这条对话时子查询给 NULL，而
 // `(NULL, cwd) NOT IN (…)` 判出的是 NULL 而不是真——那条对话会同时掉出「某个项目」
@@ -231,32 +231,29 @@ func (r *summaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]
 // 「未归项目」。
 const machineFingerprintExpr = "COALESCE((SELECT device_fingerprint FROM agent_session_saves " +
 	"WHERE agent_session_saves.user_id=agent_sessions.user_id " +
-	"AND agent_session_saves.peer_fingerprint=agent_sessions.peer_fingerprint " +
-	"AND agent_session_saves.peer_session_id=agent_sessions.peer_session_id LIMIT 1), '')"
+	"AND agent_session_saves.conversation_id=agent_sessions.conversation_id LIMIT 1), '')"
 
-// withMachineFingerprint 把保存名单里记录的承载机器投影到摘要读模型。会话身份仍是
-// (账号, 发起端, 会话标识)；浏览器发起的会话不能拿发起端指纹冒充承载机器。
+// withMachineFingerprint 把保存名单里记录的承载机器投影到摘要读模型。会话身份是
+// (账号, conversation_id)；浏览器发起的会话不能拿发起端指纹冒充承载机器。
 func withMachineFingerprint(tx *gorm.DB) *gorm.DB {
 	return tx.Select("agent_sessions.*, " + machineFingerprintExpr + " AS machine_fingerprint")
 }
 
 // DeleteSummary 的 WHERE 与 UpsertSummary 的冲突判定同一组列：删的必须正好是那条
 // upsert 认作「同一条」的记录，少一列就删多了。
-func (r *summaryRepo) DeleteSummary(
-	ctx context.Context, userID int64, peerFingerprint, peerSessionID string,
-) error {
+func (r *summaryRepo) DeleteSummary(ctx context.Context, userID int64, conversationID string) error {
 	return db.Ctx(ctx).Where(
-		"user_id=? AND peer_fingerprint=? AND peer_session_id=?", userID, peerFingerprint, peerSessionID,
+		"user_id=? AND conversation_id=?", userID, conversationID,
 	).Delete(&agent_session_entity.SessionSummary{}).Error
 }
 
 func (r *summaryRepo) MarkSummaryRead(
-	ctx context.Context, userID int64, peerFingerprint, peerSessionID string, at int64,
+	ctx context.Context, userID int64, conversationID string, at int64,
 ) error {
 	return db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).
 		Where(
-			"user_id=? AND peer_fingerprint=? AND peer_session_id=? AND last_read_at<?",
-			userID, peerFingerprint, peerSessionID, at,
+			"user_id=? AND conversation_id=? AND last_read_at<?",
+			userID, conversationID, at,
 		).
 		// UpdateColumns 而不是 Updates：这里的 updatetime 是本行自己算好的值（就是
 		// at），Updates 会在它之上再叠一次 GORM 的自动时间戳与钩子。
@@ -291,8 +288,8 @@ func locationPairs(locations []SummaryLocation) [][]any {
 // 计数因此不可能对不上（「这一组显示 N 条，翻出来却是别的集合」正是这么来的）。
 func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 	tx := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).Where("user_id=?", q.UserID)
-	if q.PeerSessionID != "" {
-		tx = tx.Where("peer_session_id=?", q.PeerSessionID)
+	if q.ConversationID != "" {
+		tx = tx.Where("conversation_id=?", q.ConversationID)
 	}
 	if q.TitleLike != "" {
 		tx = tx.Where("title LIKE ?", "%"+likeEscape(q.TitleLike)+"%")

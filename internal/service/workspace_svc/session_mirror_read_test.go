@@ -39,20 +39,20 @@ func setupMirrorReadTest(t *testing.T) (
 // 一页帧按 seq 升序原样带出，Cursor 推进到这一页最后一条的 seq。
 func TestTranscript_GivenFramesAfterCursor_ReturnsInOrderAndAdvancesCursor(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "fp-a", "sess-9", int64(5), defaultTranscriptLimit+1).
+	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(5), defaultTranscriptLimit+1).
 		Return([]*agent_session_entity.JournalFrame{
 			frame(6, "text_delta", "hi"),
 			frame(7, "text_delta", "there"),
 		}, nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", AfterSeq: 5,
+		UserID: 7, ConversationID: "conv-9", AfterSeq: 5,
 	})
 	require.NoError(t, err)
 	require.Len(t, page.Frames, 2)
 	assert.EqualValues(t, 6, page.Frames[0].Seq)
 	assert.Equal(t, "runtime.event", page.Frames[0].Method)
-	assert.JSONEq(t, `{"sessionId":42,"seq":6,"event":{"kind":"text_delta","text":"hi"}}`, string(page.Frames[0].Params))
+	assert.JSONEq(t, `{"conversationId":"conv-9","seq":6,"event":{"kind":"text_delta","text":"hi"}}`, string(page.Frames[0].Params))
 	assert.EqualValues(t, 7, page.Frames[1].Seq)
 	assert.EqualValues(t, 7, page.Cursor)
 	assert.False(t, page.HasMore)
@@ -62,11 +62,11 @@ func TestTranscript_GivenFramesAfterCursor_ReturnsInOrderAndAdvancesCursor(t *te
 // 否则调用方会把整段日志当成需要重放。
 func TestTranscript_GivenNoNewFrames_ThenCursorUnchanged(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "fp-a", "sess-9", int64(9), gomock.Any()).
+	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(9), gomock.Any()).
 		Return(nil, nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", AfterSeq: 9,
+		UserID: 7, ConversationID: "conv-9", AfterSeq: 9,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, page.Frames)
@@ -78,13 +78,13 @@ func TestTranscript_GivenNoNewFrames_ThenCursorUnchanged(t *testing.T) {
 // 那一条多余的，不能把它算进这一页。
 func TestTranscript_GivenMoreRowsThanLimit_ThenHasMoreTrueAndExtraRowTrimmed(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "fp-a", "sess-9", int64(0), 3).
+	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(0), 3).
 		Return([]*agent_session_entity.JournalFrame{
 			frame(1, "text_delta", "a"), frame(2, "text_delta", "b"), frame(3, "text_delta", "c"),
 		}, nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Limit: 2,
+		UserID: 7, ConversationID: "conv-9", Limit: 2,
 	})
 	require.NoError(t, err)
 	require.Len(t, page.Frames, 2)
@@ -95,21 +95,21 @@ func TestTranscript_GivenMoreRowsThanLimit_ThenHasMoreTrueAndExtraRowTrimmed(t *
 // Limit<=0 走服务端默认档。
 func TestTranscript_GivenZeroLimit_ThenDefaultApplied(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "fp-a", "sess-9", int64(0), defaultTranscriptLimit+1).
+	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(0), defaultTranscriptLimit+1).
 		Return(nil, nil)
 
-	_, err := svc.Transcript(ctx, TranscriptQuery{UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9"})
+	_, err := svc.Transcript(ctx, TranscriptQuery{UserID: 7, ConversationID: "conv-9"})
 	require.NoError(t, err)
 }
 
 // 调用方给的 Limit 超过服务端上限时被夹住，不能拿一次请求把整段日志都翻出来。
 func TestTranscript_GivenLimitAboveMax_ThenClamped(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "fp-a", "sess-9", int64(0), maxTranscriptLimit+1).
+	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(0), maxTranscriptLimit+1).
 		Return(nil, nil)
 
 	_, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Limit: 999999,
+		UserID: 7, ConversationID: "conv-9", Limit: 999999,
 	})
 	require.NoError(t, err)
 }
@@ -118,7 +118,7 @@ func TestTranscript_GivenLimitAboveMax_ThenClamped(t *testing.T) {
 
 // frame 造一条镜像行。
 func frame(seq int64, kind, text string) *agent_session_entity.JournalFrame {
-	event := &agentrewire.RuntimeEventNotification{SessionId: 42, Seq: seq}
+	event := &agentrewire.RuntimeEventNotification{ConversationId: "conv-9", Seq: seq}
 	switch kind {
 	case "user_message":
 		event.Event = &agentrewire.RuntimeEventNotification_UserMessage{UserMessage: &agentrewire.UserMessage{Text: text}}
@@ -171,11 +171,11 @@ func seqsOf(frames []TranscriptFrameView) []int64 {
 // 满 N 轮就停：交回的是最后 3 轮，按 seq 升序，Cursor 是窗口里**最新**那条原始行。
 func TestTranscriptTail_StopsAtTurnBudget(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "fp-a", "sess-9", int64(0), tailBatchRows).
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(newestFirst(turn(1), turn(4), turn(7), turn(10)), nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Backward: true,
+		UserID: 7, ConversationID: "conv-9", Backward: true,
 	})
 	require.NoError(t, err)
 	// 每轮投影成两条：user_message + 合并后的 text_delta（seq 取该段最后一帧）。
@@ -191,11 +191,11 @@ func TestTranscriptTail_NeverSplitsATurnAtTheByteBudget(t *testing.T) {
 	huge := frame(11, "text_delta", strings.Repeat("x", tailBytes+1))
 	rows := append([]*agent_session_entity.JournalFrame{huge, frame(10, "user_message", "问")},
 		newestFirst(turn(1), turn(4), turn(7))...)
-	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "fp-a", "sess-9", int64(0), tailBatchRows).
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(rows, nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Backward: true,
+		UserID: 7, ConversationID: "conv-9", Backward: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []int64{10, 11}, seqsOf(page.Frames), "只给这一轮，且这一轮是完整的")
@@ -207,11 +207,11 @@ func TestTranscriptTail_NeverSplitsATurnAtTheByteBudget(t *testing.T) {
 // 整条对话都在预算之内：一次给完，has_before 为假——短对话因此根本不进分页。
 func TestTranscriptTail_WholeConversationFitsInOnePage(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "fp-a", "sess-9", int64(0), tailBatchRows).
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(newestFirst(turn(1), turn(4)), nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Backward: true,
+		UserID: 7, ConversationID: "conv-9", Backward: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []int64{1, 3, 4, 6}, seqsOf(page.Frames))
@@ -229,11 +229,11 @@ func TestTranscriptTail_CursorCountsRawRowsNotProjectedOnes(t *testing.T) {
 		[]*agent_session_entity.JournalFrame{frame(20, "runtime_status", "")},
 		newestFirst(turn(1))...,
 	)
-	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "fp-a", "sess-9", int64(0), tailBatchRows).
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(rows, nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Backward: true,
+		UserID: 7, ConversationID: "conv-9", Backward: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []int64{1, 3}, seqsOf(page.Frames), "被丢掉的那条不下行")
@@ -248,8 +248,8 @@ func TestTranscriptTail_RowCapStopsAConversationWithoutTurnBoundaries(t *testing
 	for i := tailRowCap + tailBatchRows; i >= 1; i-- {
 		all = append(all, frame(int64(i), "tool_use_start", ""))
 	}
-	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "fp-a", "sess-9", gomock.Any(), tailBatchRows).
-		DoAndReturn(func(_ context.Context, _ int64, _, _ string, before int64, limit int,
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", gomock.Any(), tailBatchRows).
+		DoAndReturn(func(_ context.Context, _ int64, _ string, before int64, limit int,
 		) ([]*agent_session_entity.JournalFrame, error) {
 			out := make([]*agent_session_entity.JournalFrame, 0, limit)
 			for _, r := range all {
@@ -265,7 +265,7 @@ func TestTranscriptTail_RowCapStopsAConversationWithoutTurnBoundaries(t *testing
 		}).AnyTimes()
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Backward: true,
+		UserID: 7, ConversationID: "conv-9", Backward: true,
 	})
 	require.NoError(t, err)
 	assert.Len(t, page.Frames, tailRowCap)
@@ -275,11 +275,11 @@ func TestTranscriptTail_RowCapStopsAConversationWithoutTurnBoundaries(t *testing
 // 一帧都没有：空页，也没有更早的。
 func TestTranscriptTail_Empty(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "fp-a", "sess-9", int64(0), tailBatchRows).
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(nil, nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Backward: true,
+		UserID: 7, ConversationID: "conv-9", Backward: true,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, page.Frames)
@@ -290,11 +290,11 @@ func TestTranscriptTail_Empty(t *testing.T) {
 // 往上翻：上界是调用方手上最老那条的 seq，排他。
 func TestTranscriptTail_BeforeSeqIsExclusive(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "fp-a", "sess-9", int64(4), tailBatchRows).
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(4), tailBatchRows).
 		Return(newestFirst(turn(1)), nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
-		UserID: 7, PeerFingerprint: "fp-a", SessionID: "sess-9", Backward: true, BeforeSeq: 4,
+		UserID: 7, ConversationID: "conv-9", Backward: true, BeforeSeq: 4,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []int64{1, 3}, seqsOf(page.Frames))

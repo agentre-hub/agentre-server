@@ -98,8 +98,11 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 		// 不是 API Key（供应商凭据从不离开服务端，这里带的只是它的标识）。带出去是
 		// 因为机器离线时详情页仍要显示得出这条对话用的是哪个模型，而那正是「已保存」
 		// 承诺的一部分。
+		// ConversationID 取代了 SessionID：它是这条对话的全局标识（UUIDv7 / 存量的
+		// UUIDv5），同 AgentSyncID / ProjectSyncID 一样是不透明标识，不是路径也不是凭据。
 		"SavedSessionItem": {
-			"PeerFingerprint", "MachineFingerprint", "SessionID", "Title", "AgentSyncID", "ProjectSyncID",
+			"ConversationID", "PeerFingerprint", "MachineFingerprint", "Title",
+			"AgentSyncID", "ProjectSyncID",
 			"BackendType", "LifecycleState", "WaitingForInput", "LastMessageAt",
 			"LastReadAt", "ProviderKey", "ModelKey",
 		},

@@ -64,7 +64,7 @@ func (s *workspaceSvc) Transcript(ctx context.Context, in TranscriptQuery) (Tran
 		limit = maxTranscriptLimit
 	}
 	rows, err := agent_session_repo.JournalFrame().ListFramesBySeq(
-		ctx, in.UserID, in.PeerFingerprint, in.SessionID, in.AfterSeq, limit+1)
+		ctx, in.UserID, in.ConversationID, in.AfterSeq, limit+1)
 	if err != nil {
 		return TranscriptPage{}, err
 	}
@@ -138,7 +138,7 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 	full := false
 	for !full {
 		batch, err := agent_session_repo.JournalFrame().ListFramesBefore(
-			ctx, in.UserID, in.PeerFingerprint, in.SessionID, before, tailBatchRows)
+			ctx, in.UserID, in.ConversationID, before, tailBatchRows)
 		if err != nil {
 			return TranscriptPage{}, err
 		}

@@ -82,8 +82,9 @@ type SessionIndexQuery struct {
 	// Search 只按标题匹配（决策 8）。它是用户敲的字符，不是一段模式。
 	Search string
 	Filter SessionFilter
-	// SessionID 非空时走精确认领：不分组、不分页，同号多条如实全给。
-	SessionID string
+	// ConversationID 非空时走精确认领：不分组、不分页。conversation_id 全局唯一，
+	// 所以这条路至多命中一行——「同号多条由调用方判歧义」那件事随身份收缩消失了。
+	ConversationID string
 	// Cursor 是上一页给的位置，空表示从头。
 	Cursor string
 	// Limit 是带 scope 时的一页大小；PerGroup 是不带 scope 时每组先给几条。
@@ -155,9 +156,9 @@ func clamp(v, fallback, max int) int {
 // 出发，判据因此只有一处——组头说「9 条」翻出来却是另一批，就是这里分了两处才会有。
 func baseQuery(in SessionIndexQuery) agent_session_repo.SummaryQuery {
 	q := agent_session_repo.SummaryQuery{
-		UserID:        in.UserID,
-		TitleLike:     strings.TrimSpace(in.Search),
-		PeerSessionID: in.SessionID,
+		UserID:         in.UserID,
+		TitleLike:      strings.TrimSpace(in.Search),
+		ConversationID: in.ConversationID,
 	}
 	switch in.Filter {
 	case SessionFilterRunning:
@@ -374,8 +375,8 @@ func (s *workspaceSvc) SessionIndex(ctx context.Context, in SessionIndexQuery) (
 	// 这一次读取里的每一处项目归属都从这一份名单来，它最多被查一遍。
 	locations := &projectLocationCache{svc: s, userID: in.UserID}
 
-	// 按会话号精确认领（决策 13）：要的不是一页，因此不分组、不排序也不限条数。
-	if in.SessionID != "" {
+	// 按对话标识精确认领（决策 13）：要的不是一页，因此不分组、不排序也不限条数。
+	if in.ConversationID != "" {
 		rows, err := agent_session_repo.Summary().ListSummariesPage(
 			ctx, agent_session_repo.SummaryPageQuery{SummaryQuery: base})
 		if err != nil {
@@ -612,9 +613,9 @@ func (s *workspaceSvc) viewsOf(
 	out := make([]SavedSessionSummaryView, 0, len(rows))
 	for _, r := range rows {
 		view := SavedSessionSummaryView{
+			ConversationID:     r.ConversationID,
 			PeerFingerprint:    r.PeerFingerprint,
 			MachineFingerprint: r.MachineFingerprint,
-			SessionID:          r.PeerSessionID,
 			Title:              r.Title,
 			AgentSyncID:        r.AgentSyncID,
 			BackendType:        r.BackendType,

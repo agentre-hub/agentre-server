@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -34,21 +33,21 @@ func NewSessions(sup *Supervisor) *Sessions { return &Sessions{sup: sup} }
 //
 // 机器联系不上时如实报错：账号里那一条留着，巡检会替它接上，但调用方不能被告知
 // 「已经在存了」。
-func (s *Sessions) Begin(ctx context.Context, userID int64, peerFingerprint, sessionID string) error {
-	saved, err := savedOnMachine(ctx, userID, peerFingerprint)
+func (s *Sessions) Begin(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
+	saved, err := savedOnMachine(ctx, userID, machineFingerprint)
 	if err != nil {
 		return err
 	}
-	claimed, err := s.sup.Follow(ctx, userID, peerFingerprint, saved)
+	claimed, err := s.sup.Follow(ctx, userID, machineFingerprint, saved)
 	if err != nil {
-		return fmt.Errorf("start mirroring %s@%s: %w", sessionID, peerFingerprint, err)
+		return fmt.Errorf("start mirroring %s on %s: %w", conversationID, machineFingerprint, err)
 	}
 	if !claimed {
 		// 别的副本正跟着这台机器：它下一轮巡检会把这条新保存的对话一起同步。
 		// 正常路径，不是错误——同一台机器只该被一个副本跟着。
 		logger.Ctx(ctx).Info("mirror_svc.Begin: machine is followed by another replica",
-			zap.Int64("userId", userID), zap.String("peerFingerprint", peerFingerprint),
-			zap.String("sessionId", sessionID))
+			zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
+			zap.String("conversationId", conversationID))
 	}
 	return nil
 }
@@ -61,17 +60,17 @@ func (s *Sessions) Begin(ctx context.Context, userID int64, peerFingerprint, ses
 //   - 帧在摘要之前：清帧失败时摘要还在，这条对话仍列在索引里、调用方收到错误可以
 //     重试；反过来清则会留下一段读不到、也没人知道还在的转录——决策 2 的隐私边界
 //     正是破在这里。
-func (s *Sessions) Purge(ctx context.Context, userID int64, peerFingerprint, sessionID string) error {
-	s.sup.forgetSession(userID, peerFingerprint, sessionID)
-	if err := agent_session_repo.JournalFrame().DeleteFrames(ctx, userID, peerFingerprint, sessionID); err != nil {
+func (s *Sessions) Purge(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
+	s.sup.forgetSession(userID, machineFingerprint, conversationID)
+	if err := agent_session_repo.JournalFrame().DeleteFrames(ctx, userID, conversationID); err != nil {
 		return fmt.Errorf("purge mirrored frames: %w", err)
 	}
-	if err := agent_session_repo.Summary().DeleteSummary(ctx, userID, peerFingerprint, sessionID); err != nil {
+	if err := agent_session_repo.Summary().DeleteSummary(ctx, userID, conversationID); err != nil {
 		return fmt.Errorf("purge mirrored summary: %w", err)
 	}
 	logger.Ctx(ctx).Info("mirror_svc.Purge: server copy removed",
-		zap.Int64("userId", userID), zap.String("peerFingerprint", peerFingerprint),
-		zap.String("sessionId", sessionID))
+		zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
+		zap.String("conversationId", conversationID))
 	return nil
 }
 
@@ -81,14 +80,8 @@ func (s *Sessions) Purge(ctx context.Context, userID int64, peerFingerprint, ses
 // 它每次自己拨一条短连接，用完就收，即使本副本正跟着这台机器也一样：删除是用户
 // 手点出来的、极少发生，而复用常驻连接要把那条连接的生命周期暴露给请求路径，换来
 // 的只是省下一次握手。
-func (s *Sessions) DeleteOnPeer(ctx context.Context, userID int64, peerFingerprint, sessionID string) error {
-	sid, err := strconv.ParseInt(sessionID, 10, 64)
-	if err != nil {
-		// 会话标识是执行端本地自增的整数：解不出来的值在那一端根本不存在，
-		// 拨过去也只会被拒。
-		return fmt.Errorf("session id %q is not a peer session id: %w", sessionID, err)
-	}
-	conn, err := s.sup.dial(ctx, machineKey{userID: userID, fingerprint: peerFingerprint}, nil)
+func (s *Sessions) DeleteOnPeer(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
+	conn, err := s.sup.dial(ctx, machineKey{userID: userID, fingerprint: machineFingerprint}, nil)
 	if err != nil {
 		return err
 	}
@@ -98,12 +91,14 @@ func (s *Sessions) DeleteOnPeer(ctx context.Context, userID int64, peerFingerpri
 	// 应答里的 deleted 有意不看：契约是**后置条件**——「那一端已经没有这条会话了」，
 	// 而不是「这一次删掉了几行」。对面回 deleted:false（它那儿早就没有了）与
 	// deleted:true 对调用方是同一件事，重复删除因此照样成功。
-	if _, err := conn.SessionDelete(ctx, &agentrewire.SessionDeleteRequest{SessionId: sid}); err != nil {
+	if _, err := conn.SessionDelete(ctx, &agentrewire.SessionDeleteRequest{
+		ConversationId: conversationID,
+	}); err != nil {
 		return fmt.Errorf("delete session on peer: %w", err)
 	}
 	logger.Ctx(ctx).Info("mirror_svc.DeleteOnPeer: peer deleted its own copy",
-		zap.Int64("userId", userID), zap.String("peerFingerprint", peerFingerprint),
-		zap.String("sessionId", sessionID))
+		zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
+		zap.String("conversationId", conversationID))
 	return nil
 }
 
@@ -172,43 +167,43 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 	}
 	savedAgain := make(map[string]bool, len(saved))
 	for _, one := range saved {
-		savedAgain[one.SessionID] = true
+		savedAgain[one.ConversationID] = true
 	}
 	var (
 		errs    []error
 		cleared int
 	)
 	for _, todo := range todos {
-		if savedAgain[todo.PeerSessionID] {
+		if savedAgain[todo.ConversationID] {
 			// 收回的删除意图也不该一直排在那儿。
 			logger.Ctx(ctx).Info("mirror_svc.ReplayPendingDeletes: conversation was saved again, dropping the delete",
-				zap.Int64("userId", todo.UserID), zap.String("peerFingerprint", todo.PeerFingerprint),
-				zap.String("sessionId", todo.PeerSessionID))
+				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.PeerFingerprint),
+				zap.String("conversationId", todo.ConversationID))
 			if err := agent_session_repo.DeleteTodo().RemoveDeleteTodo(
-				ctx, todo.UserID, todo.PeerFingerprint, todo.PeerSessionID); err != nil {
-				errs = append(errs, fmt.Errorf("session %s: clear todo: %w", todo.PeerSessionID, err))
+				ctx, todo.UserID, todo.ConversationID); err != nil {
+				errs = append(errs, fmt.Errorf("conversation %s: clear todo: %w", todo.ConversationID, err))
 				continue
 			}
 			cleared++
 			continue
 		}
-		err := s.DeleteOnPeer(ctx, todo.UserID, todo.PeerFingerprint, todo.PeerSessionID)
+		err := s.DeleteOnPeer(ctx, todo.UserID, todo.PeerFingerprint, todo.ConversationID)
 		switch {
 		case err == nil:
 		case isMethodNotFound(err):
 			logger.Ctx(ctx).Error("mirror_svc.ReplayPendingDeletes: peer violated the negotiated protocol",
-				zap.Int64("userId", todo.UserID), zap.String("peerFingerprint", todo.PeerFingerprint),
-				zap.String("sessionId", todo.PeerSessionID), zap.Error(err))
-			errs = append(errs, fmt.Errorf("session %s: protocol method missing: %w", todo.PeerSessionID, err))
+				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.PeerFingerprint),
+				zap.String("conversationId", todo.ConversationID), zap.Error(err))
+			errs = append(errs, fmt.Errorf("conversation %s: protocol method missing: %w", todo.ConversationID, err))
 		default:
 			// 机器又走了，或这一次没删成：待办留着，下一轮再来。
-			errs = append(errs, fmt.Errorf("session %s: %w", todo.PeerSessionID, err))
+			errs = append(errs, fmt.Errorf("conversation %s: %w", todo.ConversationID, err))
 			continue
 		}
 		if err := agent_session_repo.DeleteTodo().RemoveDeleteTodo(
-			ctx, todo.UserID, todo.PeerFingerprint, todo.PeerSessionID); err != nil {
+			ctx, todo.UserID, todo.ConversationID); err != nil {
 			// 删是删掉了，待办没勾掉：下一轮会再删一遍，而两端都幂等。
-			errs = append(errs, fmt.Errorf("session %s: clear todo: %w", todo.PeerSessionID, err))
+			errs = append(errs, fmt.Errorf("conversation %s: clear todo: %w", todo.ConversationID, err))
 			continue
 		}
 		cleared++
@@ -236,10 +231,8 @@ func (s *Sessions) PurgeMachineDeleteTodos(ctx context.Context, userID int64, pe
 // 名单（agent_session_saves）是镜像范围的唯一来源，也就是隐私开关本身：没保存过的
 // 对话一个字都不会落在 server 上（决策 2）。
 //
-// fingerprint 是**承载**这条对话的那台机器（要连的就是它）；交回去的
-// SavedSession.PeerFingerprint 是**发起端**（身份键的另一半，拿去跟 Mirror.Sync 里
-// identityOf 报的 owner 比对）。两者对本机开的对话是同一个值，对 web 派发出去的
-// 那些不是 —— 详见 savedByMachine。
+// fingerprint 是**承载**这条对话的那台机器（要连的就是它）；交回去的是每条对话的
+// conversation_id，Mirror.Sync 拿它跟执行端报的清单逐条比对。
 func savedOnMachine(ctx context.Context, userID int64, fingerprint string) ([]SavedSession, error) {
 	byMachine, err := savedByMachine(ctx, userID)
 	if err != nil {
@@ -251,22 +244,15 @@ func savedOnMachine(ctx context.Context, userID int64, fingerprint string) ([]Sa
 // savedByMachine 把账号的保存名单按机器分好组：巡检一个账号只读一次名单，而不是
 // 每台机器读一次。
 //
-// **分组键与身份键是两回事**，这是本函数唯一要讲清楚的事：
+// **分组键与身份是两回事**，这是本函数唯一要讲清楚的事：
 //
 //   - 分组键 device_fingerprint = 承载这条对话的那台机器。巡检据它决定去连谁
 //     （ListMachines / IsDaemonOnline / dial 用的都是它）。
-//   - SavedSession.PeerFingerprint = 发起这条对话的那一端。Mirror.Sync 拿它跟
-//     执行端报回来的 owner 比对，决定这条对话在不在镜像范围里。
+//   - SavedSession.ConversationID = 这条对话本身。Mirror.Sync 拿它跟执行端报回来
+//     的清单比对，决定这条对话在不在镜像范围里。
 //
-// 此前两者取的是同一列，前提是「发起端就是承载它的那台机器」。这个前提只对在本机
-// daemon 上开的对话成立（桌面端：不带 origin，identityOf 回落到机器指纹）。web
-// 控制台派发出去的那些不成立：发起端是浏览器，承载它的是 agentred 那台机器，于是
-// wanted 判定永远不相等，对话在机器上真的建起来了、账号里也真的保存了，却每一轮都
-// 被当成「没保存过的、别人的对话」跳过去，左栏一行都没有。
-//
-// 回落：加列那条迁移已经把存量行回填成各自的 device_fingerprint，所以正常情况下
-// 这一列恒有值。留着回落是为了**滚动发布**——多副本升级期间还没换掉的老副本仍会
-// 写下不带这一列的行，它们的意思正是「发起端就是这台机器自己」。
+// 发起端指纹此前兼任身份的一半，那一段（以及它在 web 派发场景下的失配）随
+// conversation_id 落地一并消失：两条不同的对话由构造不可能同号，比对因此只有一个键。
 func savedByMachine(ctx context.Context, userID int64) (map[string][]SavedSession, error) {
 	rows, err := agent_session_repo.Save().ListByUser(ctx, userID)
 	if err != nil {
@@ -274,18 +260,8 @@ func savedByMachine(ctx context.Context, userID int64) (map[string][]SavedSessio
 	}
 	out := make(map[string][]SavedSession, len(rows))
 	for _, row := range rows {
-		out[row.DeviceFingerprint] = append(out[row.DeviceFingerprint], SavedSession{
-			PeerFingerprint: initiatorOf(row.DeviceFingerprint, row.PeerFingerprint),
-			SessionID:       row.PeerSessionID,
-		})
+		out[row.DeviceFingerprint] = append(out[row.DeviceFingerprint],
+			SavedSession{ConversationID: row.ConversationID})
 	}
 	return out, nil
-}
-
-// initiatorOf 解出一条保存记录的发起端：空即「就是这台机器自己」。
-func initiatorOf(machine, peer string) string {
-	if peer == "" {
-		return machine
-	}
-	return peer
 }

@@ -173,7 +173,12 @@ func (s *Supervisor) Follow(ctx context.Context, userID int64, fingerprint strin
 func (s *Supervisor) dial(
 	ctx context.Context, key machineKey, onNotify func(*agentrewire.RpcNotification),
 ) (*machineConn, error) {
-	credential, _, err := s.signer.Sign(jwt.Claims{UID: key.userID, Kind: relayClientKind}, credentialTTL)
+	// pfp 是这枚凭据说了算的**对端身份**（决策 8）：对端从已验签凭据里取它，
+	// AuthAccountRequest 已经没有可以自报身份的字段了。不签它，新版 agentred 会以
+	// ErrUnauthorized 拒掉这条常驻镜像连接——整条镜像链路当场断掉。
+	credential, _, err := s.signer.Sign(
+		jwt.Claims{UID: key.userID, Kind: relayClientKind, PFP: s.clientFingerprint()},
+		credentialTTL)
 	if err != nil {
 		return nil, fmt.Errorf("sign mirror relay credential: %w", err)
 	}
@@ -194,12 +199,12 @@ func (s *Supervisor) dial(
 // forgetSession 让本副本这条连接不再镜像某一条对话。删除路径在清库之前调它——
 // 只清库不摘，下一帧就把刚删掉的内容写回来了。本副本没跟着这台机器时什么都不做：
 // 跟着它的那个副本会在自己下一轮同步时按保存名单收敛。
-func (s *Supervisor) forgetSession(userID int64, fingerprint, sessionID string) {
+func (s *Supervisor) forgetSession(userID int64, fingerprint, conversationID string) {
 	s.mu.Lock()
 	f := s.followers[machineKey{userID: userID, fingerprint: fingerprint}]
 	s.mu.Unlock()
 	if f != nil {
-		f.drop(SavedSession{PeerFingerprint: fingerprint, SessionID: sessionID})
+		f.drop(SavedSession{ConversationID: conversationID})
 	}
 }
 

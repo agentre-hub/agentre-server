@@ -43,6 +43,12 @@ type fakePeer struct {
 	executed []*agentrewire.TranscriptImportExecuteRequest
 }
 
+// 浏览器这次铸的号，与库里那条早就存在的号（导入路径允许交回后者）。
+const (
+	mintedConversation = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
+	storedConversation = "5b8c9d2e-1f30-7c55-b214-9d7e3a6b0c11"
+)
+
 func (p *fakePeer) TranscriptImportScan(_ context.Context, request *agentrewire.TranscriptImportScanRequest) (*agentrewire.TranscriptImportScanResponse, error) {
 	p.scanned = append(p.scanned, request)
 	if p.callErr != nil {
@@ -199,7 +205,7 @@ func TestListCandidates_AlreadyMirroredProviderSession_IsMarkedImported(t *testi
 	summaries.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).Return(
 		[]*agent_session_entity.SessionSummary{{
 			UserID: testUserID, PeerFingerprint: testFingerprint,
-			PeerSessionID: "4242", ProviderSessionID: "prov-1",
+			ConversationID: storedConversation, ProviderSessionID: "prov-1",
 		}}, nil).AnyTimes()
 	agent_session_repo.RegisterSummary(summaries)
 	r.peer.scan = &agentrewire.TranscriptImportScanResponse{
@@ -217,7 +223,7 @@ func TestListCandidates_AlreadyMirroredProviderSession_IsMarkedImported(t *testi
 	require.NoError(t, err)
 	require.Len(t, view.Candidates, 1)
 	assert.True(t, view.Candidates[0].Imported)
-	assert.Equal(t, "4242", view.Candidates[0].ImportedSessionID)
+	assert.Equal(t, storedConversation, view.Candidates[0].ImportedSessionID)
 }
 
 // Given 那台机器现在联系不上;When 列候选;Then 交回一份空清单 + 一条**设备级**的
@@ -360,57 +366,57 @@ func TestPreview_MachineOffline_ReportsFailure(t *testing.T) {
 
 // ── 执行：机器在导，导完这条会话必须进账号 ──────────────────────────────────
 
-// Given 浏览器铸好了会话号、选了一台机器;When 执行导入;
-// Then 请求带着铸好的号与**点名的发起端**过去,而且导完这条会话被收进账号 ——
+// Given 浏览器铸好了 conversation_id、选了一台机器;When 执行导入;
+// Then 请求带着铸好的标识与**点名的发起端**过去,而且导完这条会话被收进账号 ——
 // 少了收进账号这一步,会话在机器上真的建起来了,账号里却一行都没有(镜像的范围
 // 就是保存过的那些对话)。
 func TestImport_RunsOnTheMachineAndSavesTheSessionIntoTheAccount(t *testing.T) {
 	r := newRig(t)
 	r.peer.execute = &agentrewire.TranscriptImportExecuteResponse{
-		SessionId: 4242, ProviderSessionId: "prov-1", Cwd: "/repos/spider",
+		ConversationId: mintedConversation, ProviderSessionId: "prov-1", Cwd: "/repos/spider",
 		Title: "写个爬虫", Turns: 12,
 	}
 
 	view, err := r.svc.Import(context.Background(), ImportInput{
 		UserID: testUserID, DeviceID: testDeviceID, Backend: "claudecode",
-		Locator: "loc-1", SessionID: 4242, AgentSyncID: "agent-1",
+		Locator: "loc-1", ConversationID: mintedConversation, AgentSyncID: "agent-1",
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, "4242", view.SessionID)
+	assert.Equal(t, mintedConversation, view.ConversationID)
 	assert.Equal(t, 12, view.ImportedTurns)
 	assert.Equal(t, testFingerprint, view.PeerFingerprint)
 	require.Len(t, r.peer.executed, 1)
-	assert.Equal(t, int64(4242), r.peer.executed[0].GetSessionId())
+	assert.Equal(t, mintedConversation, r.peer.executed[0].GetConversationId())
 	assert.Equal(t, "agent-1", r.peer.executed[0].GetAgentSyncId())
 	assert.Equal(t, testFingerprint, r.peer.executed[0].GetPeerFingerprint(),
 		"点名发起端:不点名的话这条会话会落在 server 那个合成指纹名下")
 	require.Len(t, r.saved.refs, 1)
 	assert.Equal(t, SessionRef{
 		UserID: testUserID, MachineFingerprint: testFingerprint,
-		PeerFingerprint: testFingerprint, SessionID: "4242",
+		PeerFingerprint: testFingerprint, ConversationID: mintedConversation,
 	}, r.saved.refs[0])
 }
 
 // Given 这条转录在那台机器上早就导过一次;When 再导一次;
-// Then 交回**库里那条**的会话号（未必是这次铸的），并且照样收进账号 ——
+// Then 交回**库里那条**的标识（未必是这次铸的），并且照样收进账号 ——
 // 「机器上有」与「账号里保存了」是两件事,前一次导入可能根本没在这个账号里。
 func TestImport_AlreadyImportedOnThatMachine_StillEntersTheAccount(t *testing.T) {
 	r := newRig(t)
 	r.peer.execute = &agentrewire.TranscriptImportExecuteResponse{
-		SessionId: 99, ProviderSessionId: "prov-1", AlreadyImported: true,
+		ConversationId: storedConversation, ProviderSessionId: "prov-1", AlreadyImported: true,
 	}
 
 	view, err := r.svc.Import(context.Background(), ImportInput{
 		UserID: testUserID, DeviceID: testDeviceID, Backend: "claudecode",
-		Locator: "loc-1", SessionID: 4242,
+		Locator: "loc-1", ConversationID: mintedConversation,
 	})
 
 	require.NoError(t, err)
 	assert.True(t, view.AlreadyImported)
-	assert.Equal(t, "99", view.SessionID, "指向库里那条,不是这次铸的号")
+	assert.Equal(t, storedConversation, view.ConversationID, "指向库里那条,不是这次铸的号")
 	require.Len(t, r.saved.refs, 1)
-	assert.Equal(t, "99", r.saved.refs[0].SessionID)
+	assert.Equal(t, storedConversation, r.saved.refs[0].ConversationID)
 }
 
 // Given 导入本身成了,但把它收进账号那一步失败了;When 执行导入;
@@ -418,20 +424,20 @@ func TestImport_AlreadyImportedOnThatMachine_StillEntersTheAccount(t *testing.T)
 // 而重试是安全的:那台机器上的导入判重会认出同一条 provider 会话。
 func TestImport_SavingIntoTheAccountFails_IsReportedNotSwallowed(t *testing.T) {
 	r := newRig(t)
-	r.peer.execute = &agentrewire.TranscriptImportExecuteResponse{SessionId: 4242}
+	r.peer.execute = &agentrewire.TranscriptImportExecuteResponse{ConversationId: mintedConversation}
 	r.saved.err = errors.New("库写不进去")
 
 	_, err := r.svc.Import(context.Background(), ImportInput{
 		UserID: testUserID, DeviceID: testDeviceID, Backend: "claudecode",
-		Locator: "loc-1", SessionID: 4242,
+		Locator: "loc-1", ConversationID: mintedConversation,
 	})
 
 	require.Error(t, err)
 }
 
-// Given 浏览器没铸号（0）;When 执行导入;Then 就地拒掉,一次连接都不拨 ——
-// 0 号在那台机器上是个建不出来的会话,拨过去只会被拒。
-func TestImport_WithoutAMintedSessionID_IsRefusedBeforeDialing(t *testing.T) {
+// Given 浏览器没给 conversation_id;When 执行导入;Then 就地拒掉,一次连接都不拨 ——
+// 给不出身份的对话在那台机器上建不出来,拨过去只会被拒。
+func TestImport_WithoutAMintedConversationID_IsRefusedBeforeDialing(t *testing.T) {
 	r := newRig(t)
 
 	_, err := r.svc.Import(context.Background(), ImportInput{

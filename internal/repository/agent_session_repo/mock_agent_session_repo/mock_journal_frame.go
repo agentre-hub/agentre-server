@@ -42,47 +42,47 @@ func (m *MockJournalFrameRepo) EXPECT() *MockJournalFrameRepoMockRecorder {
 }
 
 // DeleteFrames mocks base method.
-func (m *MockJournalFrameRepo) DeleteFrames(ctx context.Context, userID int64, peerFingerprint, peerSessionID string) error {
+func (m *MockJournalFrameRepo) DeleteFrames(ctx context.Context, userID int64, conversationID string) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteFrames", ctx, userID, peerFingerprint, peerSessionID)
+	ret := m.ctrl.Call(m, "DeleteFrames", ctx, userID, conversationID)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // DeleteFrames indicates an expected call of DeleteFrames.
-func (mr *MockJournalFrameRepoMockRecorder) DeleteFrames(ctx, userID, peerFingerprint, peerSessionID any) *gomock.Call {
+func (mr *MockJournalFrameRepoMockRecorder) DeleteFrames(ctx, userID, conversationID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFrames", reflect.TypeOf((*MockJournalFrameRepo)(nil).DeleteFrames), ctx, userID, peerFingerprint, peerSessionID)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteFrames", reflect.TypeOf((*MockJournalFrameRepo)(nil).DeleteFrames), ctx, userID, conversationID)
 }
 
 // ListFramesBefore mocks base method.
-func (m *MockJournalFrameRepo) ListFramesBefore(ctx context.Context, userID int64, peerFingerprint, peerSessionID string, beforeSeq int64, limit int) ([]*agent_session_entity.JournalFrame, error) {
+func (m *MockJournalFrameRepo) ListFramesBefore(ctx context.Context, userID int64, conversationID string, beforeSeq int64, limit int) ([]*agent_session_entity.JournalFrame, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListFramesBefore", ctx, userID, peerFingerprint, peerSessionID, beforeSeq, limit)
+	ret := m.ctrl.Call(m, "ListFramesBefore", ctx, userID, conversationID, beforeSeq, limit)
 	ret0, _ := ret[0].([]*agent_session_entity.JournalFrame)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListFramesBefore indicates an expected call of ListFramesBefore.
-func (mr *MockJournalFrameRepoMockRecorder) ListFramesBefore(ctx, userID, peerFingerprint, peerSessionID, beforeSeq, limit any) *gomock.Call {
+func (mr *MockJournalFrameRepoMockRecorder) ListFramesBefore(ctx, userID, conversationID, beforeSeq, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListFramesBefore", reflect.TypeOf((*MockJournalFrameRepo)(nil).ListFramesBefore), ctx, userID, peerFingerprint, peerSessionID, beforeSeq, limit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListFramesBefore", reflect.TypeOf((*MockJournalFrameRepo)(nil).ListFramesBefore), ctx, userID, conversationID, beforeSeq, limit)
 }
 
 // ListFramesBySeq mocks base method.
-func (m *MockJournalFrameRepo) ListFramesBySeq(ctx context.Context, userID int64, peerFingerprint, peerSessionID string, fromSeq int64, limit int) ([]*agent_session_entity.JournalFrame, error) {
+func (m *MockJournalFrameRepo) ListFramesBySeq(ctx context.Context, userID int64, conversationID string, fromSeq int64, limit int) ([]*agent_session_entity.JournalFrame, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListFramesBySeq", ctx, userID, peerFingerprint, peerSessionID, fromSeq, limit)
+	ret := m.ctrl.Call(m, "ListFramesBySeq", ctx, userID, conversationID, fromSeq, limit)
 	ret0, _ := ret[0].([]*agent_session_entity.JournalFrame)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListFramesBySeq indicates an expected call of ListFramesBySeq.
-func (mr *MockJournalFrameRepoMockRecorder) ListFramesBySeq(ctx, userID, peerFingerprint, peerSessionID, fromSeq, limit any) *gomock.Call {
+func (mr *MockJournalFrameRepoMockRecorder) ListFramesBySeq(ctx, userID, conversationID, fromSeq, limit any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListFramesBySeq", reflect.TypeOf((*MockJournalFrameRepo)(nil).ListFramesBySeq), ctx, userID, peerFingerprint, peerSessionID, fromSeq, limit)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListFramesBySeq", reflect.TypeOf((*MockJournalFrameRepo)(nil).ListFramesBySeq), ctx, userID, conversationID, fromSeq, limit)
 }
 
 // WriteFrames mocks base method.

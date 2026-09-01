@@ -27,6 +27,13 @@ type stubMirror struct {
 	purgeErr error
 }
 
+// 三条对话的 conversation_id（决策 1 的规范形式）。
+const (
+	conversationA = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
+	conversationB = "5b8c9d2e-1f30-7c55-b214-9d7e3a6b0c11"
+	conversationC = "7d1e4f60-2a55-7e01-83c9-4b2f5d8a6e33"
+)
+
 func (s *stubMirror) Begin(_ context.Context, ref SessionRef) error {
 	*s.calls = append(*s.calls, "mirror:begin")
 	if s.beginErr != nil {
@@ -87,10 +94,10 @@ func setupSavedSessionTest(t *testing.T) *savedFixture {
 	// 各条用例量的都不是它，所以在这里一次给足：交回一条「发起端就是这台机器
 	// 自己」的记录，也就是桌面端那一档。
 	f.follow.EXPECT().
-		FindByIdentity(gomock.Any(), int64(7), "fp-desktop-1", "42").
+		FindByIdentity(gomock.Any(), int64(7), conversationA).
 		Return(&agent_session_entity.SessionSave{
-			UserID: 7, DeviceFingerprint: "fp-desktop-1",
-			PeerFingerprint: "fp-desktop-1", PeerSessionID: "42",
+			UserID: 7, ConversationID: conversationA,
+			DeviceFingerprint: "fp-desktop-1", PeerFingerprint: "fp-desktop-1",
 		}, nil).
 		AnyTimes()
 	agent_session_repo.RegisterSave(f.follow)
@@ -107,7 +114,7 @@ func setupSavedSessionTest(t *testing.T) *savedFixture {
 }
 
 func ref7() SessionRef {
-	return SessionRef{UserID: 7, MachineFingerprint: "fp-desktop-1", SessionID: "42"}
+	return SessionRef{UserID: 7, MachineFingerprint: "fp-desktop-1", ConversationID: conversationA}
 }
 
 // 保存：一条还没在账号里的对话进入账号，镜像随即对它开始（规格「保存与删除」）。
@@ -120,7 +127,7 @@ func TestSave_EntersAccountThenMirroringBegins(t *testing.T) {
 			f.calls = append(f.calls, "account:add")
 			assert.Equal(t, int64(7), e.UserID)
 			assert.Equal(t, "fp-desktop-1", e.DeviceFingerprint)
-			assert.Equal(t, "42", e.PeerSessionID)
+			assert.Equal(t, conversationA, e.ConversationID)
 			assert.Positive(t, e.FollowedAt)
 			return nil
 		},
@@ -151,15 +158,15 @@ func TestDelete_WebDispatchedConversation_ResolvesItsMachineFromTheAccount(t *te
 	const browser = "991b9464868dfb6340bd09eeef14f196"
 	f := setupSavedSessionTest(t)
 	f.follow.EXPECT().
-		FindByIdentity(gomock.Any(), int64(7), browser, "42").
+		FindByIdentity(gomock.Any(), int64(7), conversationB).
 		Return(&agent_session_entity.SessionSave{
-			UserID: 7, DeviceFingerprint: "fp-agentred-1",
-			PeerFingerprint: browser, PeerSessionID: "42",
+			UserID: 7, ConversationID: conversationB,
+			DeviceFingerprint: "fp-agentred-1", PeerFingerprint: browser,
 		}, nil)
-	f.follow.EXPECT().Delete(gomock.Any(), int64(7), browser, "42").Return(nil)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationB).Return(nil)
 
 	outcome, err := f.svc.Delete(context.Background(), SessionRef{
-		UserID: 7, PeerFingerprint: browser, SessionID: "42",
+		UserID: 7, ConversationID: conversationB,
 	})
 
 	require.NoError(t, err)
@@ -168,15 +175,17 @@ func TestDelete_WebDispatchedConversation_ResolvesItsMachineFromTheAccount(t *te
 	assert.Equal(t, "fp-agentred-1", f.peer.deleted[0].MachineFingerprint,
 		"通知执行端要拨的是承载它的机器，不是发起它的浏览器")
 	require.Len(t, f.mirror.purged, 1)
-	assert.Equal(t, browser, f.mirror.purged[0].Initiator(),
-		"清镜像内容按的是发起端那把键 —— 内容就是照它存的")
+	assert.Equal(t, conversationB, f.mirror.purged[0].ConversationID,
+		"清镜像内容按的是 conversation_id —— 四张表就是照它存的")
+	assert.Equal(t, "fp-agentred-1", f.mirror.purged[0].MachineFingerprint,
+		"摘连接要认得承载它的那台机器，而那是服务端自己查出来的")
 }
 
 // 删除 + 机器在线：server 那份与执行端那份一起没了，不留待办。
 func TestDelete_PeerOnline_BothCopiesGone(t *testing.T) {
 	f := setupSavedSessionTest(t)
-	f.follow.EXPECT().Delete(gomock.Any(), int64(7), "fp-desktop-1", "42").DoAndReturn(
-		func(_ context.Context, _ int64, _, _ string) error {
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).DoAndReturn(
+		func(_ context.Context, _ int64, _ string) error {
 			f.calls = append(f.calls, "account:remove")
 			return nil
 		},
@@ -199,8 +208,8 @@ func TestDelete_PeerOnline_BothCopiesGone(t *testing.T) {
 func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 	f := setupSavedSessionTest(t)
 	f.peer.err = ErrPeerOffline
-	f.follow.EXPECT().Delete(gomock.Any(), int64(7), "fp-desktop-1", "42").DoAndReturn(
-		func(_ context.Context, _ int64, _, _ string) error {
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).DoAndReturn(
+		func(_ context.Context, _ int64, _ string) error {
 			f.calls = append(f.calls, "account:remove")
 			return nil
 		},
@@ -209,8 +218,8 @@ func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 		func(_ context.Context, todo *agent_session_entity.DeleteTodo) error {
 			f.calls = append(f.calls, "todo:add")
 			assert.Equal(t, int64(7), todo.UserID)
+			assert.Equal(t, conversationA, todo.ConversationID)
 			assert.Equal(t, "fp-desktop-1", todo.PeerFingerprint)
-			assert.Equal(t, "42", todo.PeerSessionID)
 			assert.Positive(t, todo.Createtime)
 			return nil
 		},
@@ -229,7 +238,7 @@ func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 func TestDelete_PeerProtocolViolation_ReturnsErrorWithoutTodo(t *testing.T) {
 	f := setupSavedSessionTest(t)
 	f.peer.err = ErrPeerProtocolViolation
-	f.follow.EXPECT().Delete(gomock.Any(), int64(7), "fp-desktop-1", "42").Return(nil)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).Return(nil)
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
 	require.ErrorIs(t, err, ErrPeerProtocolViolation)
@@ -243,7 +252,7 @@ func TestDelete_PeerProtocolViolation_ReturnsErrorWithoutTodo(t *testing.T) {
 func TestDelete_PeerFailedThisTime_LeavesTodo(t *testing.T) {
 	f := setupSavedSessionTest(t)
 	f.peer.err = errors.New("write to relay failed")
-	f.follow.EXPECT().Delete(gomock.Any(), int64(7), "fp-desktop-1", "42").Return(nil)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).Return(nil)
 	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).Return(nil)
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
@@ -256,7 +265,7 @@ func TestDelete_PeerFailedThisTime_LeavesTodo(t *testing.T) {
 func TestDelete_TodoNotRecorded_ReportsError(t *testing.T) {
 	f := setupSavedSessionTest(t)
 	f.peer.err = ErrPeerOffline
-	f.follow.EXPECT().Delete(gomock.Any(), int64(7), "fp-desktop-1", "42").Return(nil)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).Return(nil)
 	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).Return(errors.New("db down"))
 
 	_, err := f.svc.Delete(context.Background(), ref7())
@@ -267,7 +276,7 @@ func TestDelete_TodoNotRecorded_ReportsError(t *testing.T) {
 // 照样回成功（幂等，与 wire 的 SessionDeleteResult.Deleted 是后置条件同一口径）。
 func TestDelete_Twice_IsNotAnError(t *testing.T) {
 	f := setupSavedSessionTest(t)
-	f.follow.EXPECT().Delete(gomock.Any(), int64(7), "fp-desktop-1", "42").Return(nil).Times(2)
+	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).Return(nil).Times(2)
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
 	require.NoError(t, err)
@@ -297,9 +306,9 @@ func TestDelete_ServerCopyNotPurged_StopsAndReports(t *testing.T) {
 func TestList_AccountScopedAndInvalidFlag(t *testing.T) {
 	f := setupSavedSessionTest(t)
 	f.follow.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*agent_session_entity.SessionSave{
-		{UserID: 7, DeviceFingerprint: "fp-agentred-1", PeerSessionID: "sess-a", FollowedAt: 3000},
-		{UserID: 7, DeviceFingerprint: "fp-revoked", PeerSessionID: "sess-b", FollowedAt: 2000},
-		{UserID: 7, DeviceFingerprint: "fp-agentred-1", PeerSessionID: "sess-c", FollowedAt: 1000},
+		{UserID: 7, DeviceFingerprint: "fp-agentred-1", ConversationID: conversationA, FollowedAt: 3000},
+		{UserID: 7, DeviceFingerprint: "fp-revoked", ConversationID: conversationB, FollowedAt: 2000},
+		{UserID: 7, DeviceFingerprint: "fp-agentred-1", ConversationID: conversationC, FollowedAt: 1000},
 	}, nil)
 	// fp-revoked 不在账号的活跃设备里：它已被撤销 / 不存在，目标已不存在。
 	f.device.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
@@ -312,7 +321,7 @@ func TestList_AccountScopedAndInvalidFlag(t *testing.T) {
 	assert.False(t, items[0].Invalid)
 	assert.True(t, items[1].Invalid)
 	assert.False(t, items[2].Invalid)
-	assert.Equal(t, "sess-a", items[0].SessionID)
+	assert.Equal(t, conversationA, items[0].ConversationID)
 	assert.Equal(t, "fp-agentred-1", items[0].DeviceFingerprint)
 	assert.Equal(t, int64(3000), items[0].FollowedAt)
 }

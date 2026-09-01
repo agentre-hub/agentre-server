@@ -42,23 +42,22 @@ type SavedSessionsRequest struct {
 	// 轴和组头那条正路。
 	Q      string `form:"q" binding:"omitempty,max=200"`
 	Filter string `form:"filter" binding:"omitempty,oneof=all running waiting unread"`
-	// SessionID 非空时走精确认领：不分组、不分页，同号多条如实全给，由调用方判
-	// 歧义（详情页认领发起端用，决策 13）。
-	SessionID string `form:"session_id" binding:"omitempty,max=256"`
+	// ConversationID 非空时走精确认领：不分组、不分页。conversation_id 全局唯一，
+	// 这条路至多命中一行（详情页按对话直取，决策 13）。
+	ConversationID string `form:"conversation_id" binding:"omitempty,uuid"`
 }
 
 // SavedSessionItem 是索引一行的材料。
 type SavedSessionItem struct {
-	// PeerFingerprint 是发起这条对话那一端的设备指纹（决策 17 的身份键的一半，不是
-	// 此刻承载它的那台机器）：详情页发消息要用它定位承载连接的目标，没有它这条对话
-	// 就发不出新消息。
+	// ConversationID 是这条对话的身份，三套库与线格式上同一个值（决策 1）：
+	// 详情页、转录、标记已读、删除都拿它寻址。
+	ConversationID string `json:"conversation_id"`
+	// PeerFingerprint 是发起这条对话那一端的设备指纹。它**不再是身份的一半**，
+	// 留作来源标注（机器轴那一组的分组键）与授权。
 	PeerFingerprint string `json:"peer_fingerprint"`
 	// MachineFingerprint 是当前承载这条对话的账号设备指纹，供 web 选择实际连接目标；
 	// 与上面的发起端指纹分开，二者不能互相代替。
 	MachineFingerprint string `json:"machine_fingerprint"`
-	// SessionID 是发起端本地自增的会话标识，服务端只当不透明指针；配
-	// PeerFingerprint 才是完整身份（决策 17）。
-	SessionID string `json:"session_id"`
 	// Title / AgentSyncID 为空 = 发起端还没报过这两格。标题由首条消息派生、每轮随
 	// RunParams 幂等覆盖，所以还没发出第一句的会话就是没有标题。如实留空，不猜、
 	// 不填占位。
@@ -110,15 +109,16 @@ type SavedSessionsResponse struct {
 	Total   int64               `json:"total"`
 }
 
-// MarkSessionReadRequest 记下「这个账号此刻读到这条对话为止」。身份键与账号镜像
-// 其余端点同一组（决策 17：发起端指纹 + 那一端的会话标识）。
+// MarkSessionReadRequest 记下「这个账号此刻读到这条对话为止」。身份就是
+// conversation_id 一个值（决策 1），账号取自鉴权上下文。
 //
 // 请求里**不带时刻**：客户端的钟不可信，而这个时刻要和服务端自己记的
 // last_message_at 相比。服务端就地取当下。
 type MarkSessionReadRequest struct {
-	mux.Meta        `path:"/v1/agent-sessions/read" method:"POST"`
-	PeerFingerprint string `json:"peer_fingerprint" binding:"required,min=8,max=128"`
-	SessionID       string `json:"session_id" binding:"required,min=1,max=256"`
+	mux.Meta `path:"/v1/agent-sessions/read" method:"POST"`
+	// uuid 这条校验挡的是「拿旧的整数会话号来寻址」：那种值在这里认不出任何一条
+	// 对话，与其静默地标不到行，不如在边界上拒掉。
+	ConversationID string `json:"conversation_id" binding:"required,uuid"`
 }
 
 // MarkSessionReadResponse 回这条对话现在的已读时刻，供客户端就地覆盖那一行。
@@ -139,12 +139,12 @@ type MarkSessionReadResponse struct {
 // （规格 2026-08-21-transcript-tail-loading 决策 7）。详情页打开一条对话走的是
 // 这个方向：要的是它最后那一段，不是从头翻。
 type TranscriptRequest struct {
-	mux.Meta        `path:"/v1/agent-sessions/transcript" method:"GET"`
-	PeerFingerprint string `form:"peer_fingerprint" binding:"required,min=8,max=128"`
-	SessionID       string `form:"session_id" binding:"required,min=1,max=256"`
-	Cursor          int64  `form:"cursor"`
-	Limit           int    `form:"limit"`
-	Direction       string `form:"direction" binding:"omitempty,oneof=forward backward"`
+	mux.Meta `path:"/v1/agent-sessions/transcript" method:"GET"`
+	// ConversationID 是这条对话的身份，与镜像库里帧的身份键同一个值。
+	ConversationID string `form:"conversation_id" binding:"required,uuid"`
+	Cursor         int64  `form:"cursor"`
+	Limit          int    `form:"limit"`
+	Direction      string `form:"direction" binding:"omitempty,oneof=forward backward"`
 }
 
 // TranscriptFrameItem 是 Web HTTP view 的一行。镜像库保存 typed Protobuf

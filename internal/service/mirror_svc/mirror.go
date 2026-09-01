@@ -50,7 +50,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
@@ -87,25 +86,20 @@ type summaryStore interface {
 
 type frameStore interface {
 	WriteFrames(ctx context.Context, frames []*agent_session_entity.JournalFrame) error
-	DeleteFrames(ctx context.Context, userID int64, peerFingerprint, sessionID string) error
+	DeleteFrames(ctx context.Context, userID int64, conversationID string) error
 }
 
-// SavedSession identifies one conversation the account has saved: the
-// originating peer's fingerprint and that peer's own session id, in the
-// opaque string form the agent_session_* tables store.
+// SavedSession identifies one conversation the account has saved: its
+// conversation_id, the one value that names it in all three databases and on
+// the wire (2026-08-31-conversation-centric-addressing.md 决策 1).
 //
-// Both halves matter. Session ids are locally assigned by whoever created the
-// conversation, so the same id turns up under several origins on one
-// connection; matching on the id alone would mirror a conversation nobody
-// saved.
+// It used to be a pair (originating peer + that peer's local session id),
+// because those ids were locally assigned and the same number turned up under
+// several origins on one connection. A conversation_id is globally unique by
+// construction, so that whole failure mode is gone — not defended against
+// better, gone.
 type SavedSession struct {
-	PeerFingerprint string
-	SessionID       string
-}
-
-type identity struct {
-	owner string
-	key   string
+	ConversationID string
 }
 
 // Mirror mirrors one account's saved conversations over one relay connection.
@@ -132,24 +126,25 @@ type Mirror struct {
 	summaryWindow time.Duration
 	schedule      func(time.Duration, func())
 
-	mu      sync.Mutex
-	tracked map[identity]*trackedSession
-	// live routes an incoming notification to a conversation by the bare
-	// sessionId in its payload — the only routing key the wire carries. A
-	// present-but-nil entry means two mirrored conversations share that id on
-	// this connection: their live frames are indistinguishable, so none is
-	// written and both stay correct through Sync's identity-keyed pulls.
-	live map[int64]*trackedSession
+	mu sync.Mutex
+	// tracked holds one entry per mirrored conversation, keyed by the same
+	// conversation_id the rows are keyed by and the same one a live
+	// notification carries in its payload. One map, because routing a live
+	// frame and finding the storage identity are now the same lookup.
+	tracked map[string]*trackedSession
 }
 
 // trackedSession is one mirrored conversation's state on this connection.
 type trackedSession struct {
-	sid int64
-	// key / owner are the storage halves of the identity (decision 17).
-	key   string
+	// conversationID is the storage identity, whole.
+	conversationID string
+	// owner is what lands in the peer_fingerprint column: the peer that
+	// originated this conversation. It no longer carries identity — it is
+	// provenance and authorization (决策 8), and the machine-axis grouping.
 	owner string
 	// origin is the wire value, echoed verbatim — empty means "this
 	// connection's own peer", which is not the same statement as naming it.
+	// The daemon authorizes attach/pull against it (handlers.ResolveSessionPeer).
 	origin string
 
 	mu      sync.Mutex
@@ -218,8 +213,7 @@ func New(userID int64, machineFingerprint string, peer RelaySession) *Mirror {
 		peer:        peer,
 		summaries:   agent_session_repo.Summary(),
 		frames:      agent_session_repo.JournalFrame(),
-		tracked:     make(map[identity]*trackedSession),
-		live:        make(map[int64]*trackedSession),
+		tracked:     make(map[string]*trackedSession),
 		signals:     mirrorChanges,
 
 		now:           func() int64 { return time.Now().UnixMilli() },
@@ -249,22 +243,24 @@ func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
 	if err != nil {
 		return fmt.Errorf("list mirrored summaries: %w", err)
 	}
-	wanted := make(map[SavedSession]bool, len(saved))
+	wanted := make(map[string]bool, len(saved))
 	for _, s := range saved {
-		wanted[s] = true
+		wanted[s.ConversationID] = true
 	}
 	// 名单是这一刻的权威：不在名单里的对话此刻就摘掉，不等到这轮补齐结束。
 	m.pruneUnwanted(wanted)
 	var errs []error
 	for _, s := range list.GetSessions() {
-		id := m.identityOf(s)
-		if !wanted[SavedSession{PeerFingerprint: id.owner, SessionID: id.key}] {
-			// 没保存过的对话一个字都不落库(决策 2)。会话标识跨发起端重号,
-			// 所以判据是身份键整体,不是标识本身。
+		if s.GetConversationId() == "" {
+			// 对端没给身份的会话镜不下来:它落进哪一行说不出来。
 			continue
 		}
-		if err := m.catchUp(ctx, m.track(id, s, stored)); err != nil {
-			errs = append(errs, fmt.Errorf("session %s@%s: %w", id.key, id.owner, err))
+		if !wanted[s.GetConversationId()] {
+			// 没保存过的对话一个字都不落库(决策 2)。
+			continue
+		}
+		if err := m.catchUp(ctx, m.track(s, stored)); err != nil {
+			errs = append(errs, fmt.Errorf("conversation %s: %w", s.GetConversationId(), err))
 		}
 	}
 	return errors.Join(errs...)
@@ -287,25 +283,19 @@ func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
 // cursor, its only reader is storedCursor, and falling behind costs exactly
 // what it always cost — one idempotent re-pull, nothing more.
 func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotification) error {
-	sessionID, seq, method := notificationHead(notification)
-	if sessionID == 0 || method == "" {
+	conversationID, seq, method := notificationHead(notification)
+	if conversationID == "" || method == "" {
 		logger.Ctx(ctx).Warn("mirror typed notification unsupported")
 		return nil
 	}
-	ts, known := m.liveSession(sessionID)
+	ts, known := m.liveSession(conversationID)
 	if !known {
 		// 没保存过的对话:一个字都不落库。
 		return nil
 	}
-	if ts == nil {
-		logger.Ctx(ctx).Warn("mirror notification session id is ambiguous on this connection",
-			zap.Int64("userId", m.userID), zap.Int64("sessionId", sessionID),
-			zap.String("method", method))
-		return nil
-	}
 	if seq == 0 {
 		logger.Ctx(ctx).Warn("mirror notification carries no seq, cannot be keyed",
-			zap.Int64("userId", m.userID), zap.Int64("sessionId", sessionID),
+			zap.Int64("userId", m.userID), zap.String("conversationId", conversationID),
 			zap.String("method", method))
 		return nil
 	}
@@ -313,12 +303,12 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 	switch {
 	case seq <= cursor:
 		logger.Ctx(ctx).Debug("mirror duplicate notification dropped",
-			zap.Int64("sessionId", sessionID), zap.Int64("seq", seq),
+			zap.String("conversationId", conversationID), zap.Int64("seq", seq),
 			zap.Int64("cursor", cursor), zap.String("method", method))
 		return nil
 	case seq > cursor+1:
 		logger.Ctx(ctx).Warn("mirror notification seq gap, pulling",
-			zap.Int64("sessionId", sessionID), zap.Int64("seq", seq),
+			zap.String("conversationId", conversationID), zap.Int64("seq", seq),
 			zap.Int64("cursor", cursor), zap.String("method", method))
 		if err := m.pullUntilCaughtUp(ctx, ts); err != nil {
 			return err
@@ -430,7 +420,7 @@ func (m *Mirror) summaryWindowElapsed(ctx context.Context, ts *trackedSession) {
 		// 只是重连时多拉一段，而那一段是幂等的。
 		logger.Ctx(ctx).Warn("mirror trailing summary write failed",
 			zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
-			zap.String("sessionId", ts.key), zap.Error(err))
+			zap.String("conversationId", ts.conversationID), zap.Error(err))
 	}
 	m.schedule(m.summaryWindow, func() { m.summaryWindowElapsed(ctx, ts) })
 }
@@ -457,7 +447,7 @@ func (m *Mirror) catchUp(ctx context.Context, ts *trackedSession) error {
 			// 不因为接不上就整条丢掉。真正断掉的连接会让紧接着的 pull 一并失败。
 			logger.Ctx(ctx).Warn("mirror attach failed, mirroring history only",
 				zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
-				zap.String("sessionId", ts.key), zap.Error(err))
+				zap.String("conversationId", ts.conversationID), zap.Error(err))
 		} else {
 			highWater = hw
 		}
@@ -507,10 +497,10 @@ func (m *Mirror) dropCursorAboveHighWater(ctx context.Context, ts *trackedSessio
 	ts.reset()
 	logger.Ctx(ctx).Warn("mirror cursor beyond peer high-water, restarting catch-up from scratch",
 		zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
-		zap.String("sessionId", ts.key), zap.Int64("cursor", pinned),
+		zap.String("conversationId", ts.conversationID), zap.Int64("cursor", pinned),
 		zap.Int64("latestSeq", highWater))
-	if err := m.frames.DeleteFrames(ctx, m.userID, ts.owner, ts.key); err != nil {
-		return fmt.Errorf("purge frames of the reused session id: %w", err)
+	if err := m.frames.DeleteFrames(ctx, m.userID, ts.conversationID); err != nil {
+		return fmt.Errorf("purge frames of the rewound journal: %w", err)
 	}
 	return m.saveSummary(ctx, ts)
 }
@@ -529,7 +519,7 @@ func (m *Mirror) pullUntilCaughtUp(ctx context.Context, ts *trackedSession) erro
 	for {
 		before := ts.cursorNow()
 		res, err := m.peer.SessionPull(ctx, &agentrewire.SessionPullRequest{
-			SessionId:       ts.sid,
+			ConversationId:  ts.conversationID,
 			PeerFingerprint: ts.origin,
 			Cursor:          before,
 			Limit:           int32(relaywire.DefaultSessionPullLimit),
@@ -554,7 +544,7 @@ func (m *Mirror) pullUntilCaughtUp(ctx context.Context, ts *trackedSession) erro
 
 func (m *Mirror) attach(ctx context.Context, ts *trackedSession) (int64, error) {
 	res, err := m.peer.SessionAttach(ctx, &agentrewire.SessionAttachRequest{
-		SessionId: ts.sid, PeerFingerprint: ts.origin,
+		ConversationId: ts.conversationID, PeerFingerprint: ts.origin,
 	})
 	if err != nil {
 		return 0, err
@@ -563,7 +553,7 @@ func (m *Mirror) attach(ctx context.Context, ts *trackedSession) (int64, error) 
 }
 
 // writeFrames stores canonical typed notifications, keyed by
-// (account, originating peer, session, seq). The journal row's seq is the
+// (account, conversation, seq). The journal row's seq is the
 // metadata source of truth, so it is stamped into the serialized notification
 // for both live delivery and pull replay before persistence.
 func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agentrewire.JournaledNotification) error {
@@ -581,8 +571,8 @@ func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agen
 		}
 		rows = append(rows, &agent_session_entity.JournalFrame{
 			UserID:          m.userID,
+			ConversationID:  ts.conversationID,
 			PeerFingerprint: ts.owner,
-			PeerSessionID:   ts.key,
 			Seq:             n.GetSeq(),
 			Payload:         encoded,
 			Createtime:      now,
@@ -602,8 +592,8 @@ func (m *Mirror) saveSummary(ctx context.Context, ts *trackedSession) error {
 	now := m.now()
 	if err := m.summaries.UpsertSummary(ctx, &agent_session_entity.SessionSummary{
 		UserID:            m.userID,
+		ConversationID:    ts.conversationID,
 		PeerFingerprint:   ts.owner,
-		PeerSessionID:     ts.key,
 		Title:             s.Title,
 		AgentSyncID:       s.AgentSyncId,
 		ProviderSessionID: s.ProviderSessionId,
@@ -628,35 +618,36 @@ func (m *Mirror) saveSummary(ctx context.Context, ts *trackedSession) error {
 	return nil
 }
 
-// identityOf resolves the storage identity of one listed session: an omitted
+// ownerOf resolves the provenance column of one listed session: an omitted
 // origin means the conversation started on the machine this connection
 // reaches (agentre's handlers.ResolveSessionPeer), and that machine is then
-// the owner the rows are keyed by.
-func (m *Mirror) identityOf(s *agentrewire.SessionSummary) identity {
-	owner := s.GetPeerFingerprint()
-	if owner == "" {
-		owner = m.fingerprint
+// what the row's peer_fingerprint records.
+func (m *Mirror) ownerOf(s *agentrewire.SessionSummary) string {
+	if owner := s.GetPeerFingerprint(); owner != "" {
+		return owner
 	}
-	return identity{owner: owner, key: strconv.FormatInt(s.GetSessionId(), 10)}
+	return m.fingerprint
 }
 
-func (m *Mirror) track(id identity, s *agentrewire.SessionSummary, stored []*agent_session_entity.SessionSummary) *trackedSession {
+func (m *Mirror) track(
+	s *agentrewire.SessionSummary, stored []*agent_session_entity.SessionSummary,
+) *trackedSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ts, ok := m.tracked[id]
+	conversationID := s.GetConversationId()
+	ts, ok := m.tracked[conversationID]
 	if !ok {
-		ts = &trackedSession{sid: s.GetSessionId(), key: id.key, owner: id.owner, origin: s.GetPeerFingerprint()}
-		m.tracked[id] = ts
-		if _, taken := m.live[s.GetSessionId()]; taken {
-			m.live[s.GetSessionId()] = nil // 重号:此后这个标识的实时帧谁都不认领。
-		} else {
-			m.live[s.GetSessionId()] = ts
+		ts = &trackedSession{
+			conversationID: conversationID,
+			owner:          m.ownerOf(s),
+			origin:         s.GetPeerFingerprint(),
 		}
+		m.tracked[conversationID] = ts
 	}
 	ts.setSummary(s)
 	// 库里那份与内存里的取较大者:本进程已经消费到更远是常事,拿旧值去拉会把
 	// 已经镜像过的那一段再走一遍(结果幂等,但白跑一趟)。
-	if seq, found := storedCursor(stored, m.userID, id); found {
+	if seq, found := storedCursor(stored, m.userID, conversationID); found {
 		ts.advanceTo(seq)
 	}
 	return ts
@@ -671,7 +662,7 @@ func (m *Mirror) track(id identity, s *agentrewire.SessionSummary, stored []*age
 func (m *Mirror) Forget(ref SavedSession) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.forgetLocked(identity{owner: ref.PeerFingerprint, key: ref.SessionID})
+	m.forgetLocked(ref.ConversationID)
 }
 
 // pruneUnwanted drops every tracked conversation the account no longer has
@@ -679,42 +670,39 @@ func (m *Mirror) Forget(ref SavedSession) {
 // that replica cleared the rows, and this connection would otherwise keep
 // writing the conversation back from its live stream. The saved list handed to
 // Sync is the authority; anything outside it is out of scope (decision 2).
-func (m *Mirror) pruneUnwanted(wanted map[SavedSession]bool) {
+func (m *Mirror) pruneUnwanted(wanted map[string]bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for id := range m.tracked {
-		if wanted[SavedSession{PeerFingerprint: id.owner, SessionID: id.key}] {
+	for conversationID := range m.tracked {
+		if wanted[conversationID] {
 			continue
 		}
-		m.forgetLocked(id)
+		m.forgetLocked(conversationID)
 	}
 }
 
-// forgetLocked drops one identity from both maps. The live map is only cleared
-// when it still points at this very conversation: a shared session id parks a
-// nil there deliberately, and that ambiguity marker must survive.
-func (m *Mirror) forgetLocked(id identity) {
-	ts, tracked := m.tracked[id]
+// forgetLocked drops one conversation.
+func (m *Mirror) forgetLocked(conversationID string) {
+	ts, tracked := m.tracked[conversationID]
 	if !tracked {
 		return
 	}
-	delete(m.tracked, id)
+	delete(m.tracked, conversationID)
 	ts.abandonSummaryFlush()
-	if live, ok := m.live[ts.sid]; ok && live == ts {
-		delete(m.live, ts.sid)
-	}
 }
 
-func (m *Mirror) liveSession(sid int64) (*trackedSession, bool) {
+func (m *Mirror) liveSession(conversationID string) (*trackedSession, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	ts, known := m.live[sid]
+	ts, known := m.tracked[conversationID]
 	return ts, known
 }
 
-func storedCursor(stored []*agent_session_entity.SessionSummary, userID int64, id identity) (int64, bool) {
+func storedCursor(
+	stored []*agent_session_entity.SessionSummary, userID int64, conversationID string,
+) (int64, bool) {
 	for _, row := range stored {
-		if row.UserID == userID && row.PeerFingerprint == id.owner && row.PeerSessionID == id.key {
+		if row.UserID == userID && row.ConversationID == conversationID {
 			return row.LatestSeq, true
 		}
 	}

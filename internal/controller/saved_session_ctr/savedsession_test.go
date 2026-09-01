@@ -36,6 +36,12 @@ type stubSavedSessionSvc struct {
 	peerOutcome saved_session_svc.PeerDeleteOutcome
 }
 
+// 两条对话的 conversation_id（决策 1 的 UUIDv7 规范形式）。
+const (
+	conversationNine  = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
+	conversationEight = "5b8c9d2e-1f30-7c55-b214-9d7e3a6b0c11"
+)
+
 func newStubSavedSessionSvc() *stubSavedSessionSvc {
 	return &stubSavedSessionSvc{
 		saved:       map[int64][]saved_session_svc.SavedSessionRef{},
@@ -45,12 +51,12 @@ func newStubSavedSessionSvc() *stubSavedSessionSvc {
 
 func (s *stubSavedSessionSvc) Save(_ context.Context, ref saved_session_svc.SessionRef) error {
 	for _, it := range s.saved[ref.UserID] {
-		if it.DeviceFingerprint == ref.MachineFingerprint && it.SessionID == ref.SessionID {
+		if it.DeviceFingerprint == ref.MachineFingerprint && it.ConversationID == ref.ConversationID {
 			return nil // 幂等：已经保存过
 		}
 	}
 	s.saved[ref.UserID] = append(s.saved[ref.UserID], saved_session_svc.SavedSessionRef{
-		DeviceFingerprint: ref.MachineFingerprint, SessionID: ref.SessionID, FollowedAt: 1000,
+		DeviceFingerprint: ref.MachineFingerprint, ConversationID: ref.ConversationID, FollowedAt: 1000,
 	})
 	return nil
 }
@@ -62,7 +68,7 @@ func (s *stubSavedSessionSvc) Delete(
 	for i, it := range items {
 		// 删除按身份：这个桩里两个指纹同值（桌面端那一档），拿哪一个都行，
 		// 用发起端是为了跟真实现同一口径。
-		if it.DeviceFingerprint == ref.Initiator() && it.SessionID == ref.SessionID {
+		if it.ConversationID == ref.ConversationID {
 			s.saved[ref.UserID] = append(items[:i], items[i+1:]...)
 			break
 		}
@@ -130,7 +136,7 @@ func TestSave_OneEndSaves_OtherEndReadsSameList(t *testing.T) {
 	cookieB, _ := newSessionCookie(t, 7) // 同账号的另一端
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookieA.Value, "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`, csrfA)
+		cookieA.Value, "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`, csrfA)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	resp = doRequest(t, http.MethodGet, server.URL+"/v1/follows", cookieB.Value, "", "")
@@ -140,7 +146,7 @@ func TestSave_OneEndSaves_OtherEndReadsSameList(t *testing.T) {
 		Data struct {
 			Items []struct {
 				DeviceFingerprint string `json:"device_fingerprint"`
-				SessionID         string `json:"session_id"`
+				ConversationID    string `json:"conversation_id"`
 				FollowedAt        int64  `json:"followed_at"`
 				Invalid           bool   `json:"invalid"`
 			} `json:"items"`
@@ -150,7 +156,7 @@ func TestSave_OneEndSaves_OtherEndReadsSameList(t *testing.T) {
 	require.Equal(t, 0, envelope.Code)
 	require.Len(t, envelope.Data.Items, 1)
 	require.Equal(t, "fp-daemon-1", envelope.Data.Items[0].DeviceFingerprint)
-	require.Equal(t, "sess-9", envelope.Data.Items[0].SessionID)
+	require.Equal(t, conversationNine, envelope.Data.Items[0].ConversationID)
 }
 
 // 账号隔离：另一个账号看不到这条。
@@ -162,7 +168,7 @@ func TestList_ScopedToAccount(t *testing.T) {
 	cookieOther, _ := newSessionCookie(t, 99)
 
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookieA.Value, "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`, csrfA)
+		cookieA.Value, "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`, csrfA)
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/follows", cookieOther.Value, "", "")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -198,18 +204,18 @@ func TestDelete_RemovesOnlyThatEntry(t *testing.T) {
 	cookie, csrf := newSessionCookie(t, 7)
 
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`, csrf)
+		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`, csrf)
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-8"}`, csrf)
+		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationEight+`"}`, csrf)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/delete",
-		cookie.Value, "", `{"peer_fingerprint":"fp-daemon-1","session_id":"sess-9"}`, csrf)
+		cookie.Value, "", `{"conversation_id":"`+conversationNine+`"}`, csrf)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, "deleted", peerStatus(t, resp))
 
 	items := stub.saved[7]
 	require.Len(t, items, 1)
-	require.Equal(t, "sess-8", items[0].SessionID)
+	require.Equal(t, conversationEight, items[0].ConversationID)
 }
 
 // 机器离线：应答如实说执行端那一份还欠着（server 那份已经没了），前端据此说明
@@ -221,9 +227,9 @@ func TestDelete_PeerOffline_ReportsPending(t *testing.T) {
 	cookie, csrf := newSessionCookie(t, 7)
 
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`, csrf)
+		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`, csrf)
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/delete",
-		cookie.Value, "", `{"peer_fingerprint":"fp-daemon-1","session_id":"sess-9"}`, csrf)
+		cookie.Value, "", `{"conversation_id":"`+conversationNine+`"}`, csrf)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Equal(t, "pending", peerStatus(t, resp))
 	require.Empty(t, stub.saved[7])
@@ -236,7 +242,7 @@ func TestSave_RejectsMissingCSRF(t *testing.T) {
 	cookie, _ := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`)
+		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`)
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	require.Empty(t, stub.saved[7])
 }
@@ -248,10 +254,10 @@ func TestDelete_RejectsMissingCSRF(t *testing.T) {
 	cookie, csrf := newSessionCookie(t, 7)
 
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`, csrf)
+		cookie.Value, "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`, csrf)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions/delete",
-		cookie.Value, "", `{"peer_fingerprint":"fp-daemon-1","session_id":"sess-9"}`)
+		cookie.Value, "", `{"conversation_id":"`+conversationNine+`"}`)
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	require.Len(t, stub.saved[7], 1)
 }
@@ -264,7 +270,7 @@ func TestSave_DeviceJWT_NoCSRFNeeded(t *testing.T) {
 	require.NoError(t, err)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		"", token, `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`)
+		"", token, `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.Len(t, stub.saved[7], 1)
 }
@@ -275,7 +281,7 @@ func TestSave_UnauthenticatedRejected(t *testing.T) {
 	server, _ := newSavedSessionTestServer(t, stub)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		"", "", `{"machine_fingerprint":"fp-daemon-1","session_id":"sess-9"}`)
+		"", "", `{"machine_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`)
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 	require.Empty(t, stub.saved[7])
 }

@@ -418,13 +418,13 @@ type sessionMirror struct{ sessions *mirror_svc.Sessions }
 
 func (m sessionMirror) Begin(ctx context.Context, ref saved_session_svc.SessionRef) error {
 	// 开始镜像要连的是**承载它的机器**。
-	return m.sessions.Begin(ctx, ref.UserID, ref.MachineFingerprint, ref.SessionID)
+	return m.sessions.Begin(ctx, ref.UserID, ref.MachineFingerprint, ref.ConversationID)
 }
 
 func (m sessionMirror) Purge(ctx context.Context, ref saved_session_svc.SessionRef) error {
-	// 清镜像内容按的是**发起端**那把键：agent_sessions /
-	// agent_session_notification_journal 就是照它存的（Mirror.identityOf）。
-	return m.sessions.Purge(ctx, ref.UserID, ref.Initiator(), ref.SessionID)
+	// 摘连接要认得那台机器（承载它的那一台），清库按的是 conversation_id ——
+	// 四张镜像表就是照它存的。
+	return m.sessions.Purge(ctx, ref.UserID, ref.MachineFingerprint, ref.ConversationID)
 }
 
 type peerSessionDeleter struct{ sessions *mirror_svc.Sessions }
@@ -432,7 +432,7 @@ type peerSessionDeleter struct{ sessions *mirror_svc.Sessions }
 // DeleteOnPeer 把传输层失败翻译成 saved_session_svc 的业务判据。
 func (d peerSessionDeleter) DeleteOnPeer(ctx context.Context, ref saved_session_svc.SessionRef) error {
 	// 拨的是承载它的那台机器。
-	err := d.sessions.DeleteOnPeer(ctx, ref.UserID, ref.MachineFingerprint, ref.SessionID)
+	err := d.sessions.DeleteOnPeer(ctx, ref.UserID, ref.MachineFingerprint, ref.ConversationID)
 	switch {
 	case errors.Is(err, mirror_svc.ErrMachineOffline):
 		return saved_session_svc.ErrPeerOffline
@@ -481,7 +481,7 @@ func (s savedSessions) Save(ctx context.Context, ref sessionimport_svc.SessionRe
 		UserID:             ref.UserID,
 		MachineFingerprint: ref.MachineFingerprint,
 		PeerFingerprint:    ref.PeerFingerprint,
-		SessionID:          ref.SessionID,
+		ConversationID:     ref.ConversationID,
 	})
 }
 

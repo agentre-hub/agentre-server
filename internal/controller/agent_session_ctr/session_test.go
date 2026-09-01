@@ -28,6 +28,9 @@ import (
 
 const testCookieName = "server_session"
 
+// testConversationID 是一条对话的全局标识（UUIDv7 的规范形式）。
+const testConversationID = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
+
 // stubWorkspaceSvc 只实现 workspace_svc.SessionReadSvc——agent_session_ctr 用到的就是这
 // 三个方法。router.go 把 agent_session_ctr 与 workspace_ctr 绑在同一棵路由树上，但两者
 // 各取各的那一片：组织面那 12 个方法仍走 workspace_svc.Default() 的真实实现，
@@ -36,8 +39,8 @@ type stubWorkspaceSvc struct {
 	index      workspace_svc.SessionIndexPage
 	indexErr   error
 	indexInput workspace_svc.SessionIndexQuery
-	// markReadInput 记 (账号, 发起端指纹, 会话标识)：控制器只负责把它们原样转下去。
-	markReadInput [3]string
+	// markReadInput 记 (账号, conversation_id)：控制器只负责把它们原样转下去。
+	markReadInput [2]string
 	markReadAt    int64
 	markReadErr   error
 
@@ -60,11 +63,9 @@ func (s *stubWorkspaceSvc) SessionIndex(
 }
 
 func (s *stubWorkspaceSvc) MarkSessionRead(
-	_ context.Context, userID int64, peerFingerprint, sessionID string,
+	_ context.Context, userID int64, conversationID string,
 ) (int64, error) {
-	s.markReadInput = [3]string{
-		strconv.FormatInt(userID, 10), peerFingerprint, sessionID,
-	}
+	s.markReadInput = [2]string{strconv.FormatInt(userID, 10), conversationID}
 	if s.markReadErr != nil {
 		return 0, s.markReadErr
 	}
@@ -149,7 +150,8 @@ func decodeEnvelope(t *testing.T, resp *http.Response, into any) {
 	require.NoError(t, json.Unmarshal(envelope.Data, into))
 }
 
-// 摘要必须带发起端指纹与会话标识（决策 17 的身份键），少了它详情页发不出消息。
+// 摘要必须带 conversation_id（身份）与两个指纹（来源 / 承载机器），少了它详情页
+// 既定位不到这条对话，也发不出消息。
 // 不带 scope 时给的是组骨架：每组带自己的真数，顶栏那个数是账号级的（决策 10）。
 func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 	stub := &stubWorkspaceSvc{index: workspace_svc.SessionIndexPage{
@@ -157,8 +159,9 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 		Groups: []workspace_svc.SessionIndexGroup{{
 			Scope: "agent:agent-1", Total: 9, HasMore: true, Cursor: "1700.42",
 			Items: []workspace_svc.SavedSessionSummaryView{{
+				ConversationID:  testConversationID,
 				PeerFingerprint: "fp-browser-1", MachineFingerprint: "fp-daemon-1",
-				SessionID: "sess-9", Title: "调试登录页",
+				Title:       "调试登录页",
 				AgentSyncID: "agent-1", ProjectSyncID: "proj-1", BackendType: "claude_code",
 				LifecycleState: "waiting_for_input", WaitingForInput: true, LastMessageAt: 12345,
 			}},
@@ -178,9 +181,9 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 			Cursor  string `json:"cursor"`
 			HasMore bool   `json:"has_more"`
 			Items   []struct {
+				ConversationID     string `json:"conversation_id"`
 				PeerFingerprint    string `json:"peer_fingerprint"`
 				MachineFingerprint string `json:"machine_fingerprint"`
-				SessionID          string `json:"session_id"`
 				Title              string `json:"title"`
 				AgentSyncID        string `json:"agent_sync_id"`
 				ProjectSyncID      string `json:"project_sync_id"`
@@ -203,7 +206,7 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 	item := group.Items[0]
 	assert.Equal(t, "fp-browser-1", item.PeerFingerprint)
 	assert.Equal(t, "fp-daemon-1", item.MachineFingerprint)
-	assert.Equal(t, "sess-9", item.SessionID)
+	assert.Equal(t, testConversationID, item.ConversationID)
 	assert.Equal(t, "调试登录页", item.Title)
 	assert.Equal(t, "agent-1", item.AgentSyncID)
 	assert.Equal(t, "proj-1", item.ProjectSyncID)
@@ -241,7 +244,7 @@ func TestSavedSessions_ScopedReadReturnsRowsAtTopLevel(t *testing.T) {
 	stub := &stubWorkspaceSvc{index: workspace_svc.SessionIndexPage{
 		Total: 9, Cursor: "1600.41", HasMore: true,
 		Items: []workspace_svc.SavedSessionSummaryView{
-			{PeerFingerprint: "fp-a", SessionID: "1"},
+			{PeerFingerprint: "fp-a", ConversationID: testConversationID},
 		},
 	}}
 	server, _ := newMirrorTestServer(t, stub)
@@ -300,7 +303,7 @@ func TestTranscript_PagesByCursor(t *testing.T) {
 	server, _ := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	resp := get(t, server.URL+"/v1/agent-sessions/transcript?peer_fingerprint=fp-daemon-1&session_id=sess-9&cursor=5&limit=1",
+	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+"&cursor=5&limit=1",
 		cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -321,8 +324,7 @@ func TestTranscript_PagesByCursor(t *testing.T) {
 	assert.EqualValues(t, 6, got.Cursor)
 	assert.True(t, got.HasMore)
 
-	assert.Equal(t, "fp-daemon-1", stub.transcript.PeerFingerprint)
-	assert.Equal(t, "sess-9", stub.transcript.SessionID)
+	assert.Equal(t, testConversationID, stub.transcript.ConversationID)
 	assert.EqualValues(t, 5, stub.transcript.AfterSeq)
 	assert.Equal(t, 1, stub.transcript.Limit)
 	assert.EqualValues(t, 7, stub.transcript.UserID)
@@ -342,8 +344,8 @@ func TestTranscript_BackwardReadsTheTail(t *testing.T) {
 	server, _ := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	resp := get(t, server.URL+"/v1/agent-sessions/transcript?peer_fingerprint=fp-daemon-1"+
-		"&session_id=sess-9&cursor=20&direction=backward", cookie.Value)
+	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+
+		"&cursor=20&direction=backward", cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var got struct {
@@ -370,7 +372,7 @@ func TestTranscript_DefaultDirectionStaysForward(t *testing.T) {
 	server, _ := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	resp := get(t, server.URL+"/v1/agent-sessions/transcript?peer_fingerprint=fp-daemon-1&session_id=sess-9&cursor=5",
+	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+"&cursor=5",
 		cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.False(t, stub.transcript.Backward)
@@ -385,20 +387,25 @@ func TestTranscript_RejectsUnknownDirection(t *testing.T) {
 	server, _ := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	resp := get(t, server.URL+"/v1/agent-sessions/transcript?peer_fingerprint=fp-daemon-1"+
-		"&session_id=sess-9&direction=sideways", cookie.Value)
+	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+
+		"&direction=sideways", cookie.Value)
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	assert.Zero(t, stub.transcript.UserID, "校验没过就不该走到 service")
 }
 
-// peer_fingerprint / session_id 缺失时请求校验直接拒绝，走不到 service。
-func TestTranscript_RequiresPeerFingerprintAndSessionID(t *testing.T) {
+// conversation_id 缺失、或拿旧的整数会话号来寻址时，请求校验直接拒绝，走不到
+// service —— 换判据必须真的换掉：旧值在这里认不出任何一条对话，静默地读回空转录
+// 比一个 400 难查得多。
+func TestTranscript_RequiresACanonicalConversationID(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
 	server, _ := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	resp := get(t, server.URL+"/v1/agent-sessions/transcript", cookie.Value)
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	for _, query := range []string{"", "?conversation_id=42", "?conversation_id=sess-9"} {
+		resp := get(t, server.URL+"/v1/agent-sessions/transcript"+query, cookie.Value)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode, "query: %q", query)
+	}
+	assert.Zero(t, stub.transcript.UserID, "校验没过就不该走到 service")
 }
 
 // ── 标记已读（2026-08-20 对话页 UI/UX 改版）─────────────────────────────────
@@ -411,7 +418,7 @@ func TestMarkSessionRead_PassesIdentityThroughAndReturnsTheStampedTime(t *testin
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/agent-sessions/read", cookie.Value, csrf,
-		`{"peer_fingerprint":"fp-daemon-1","session_id":"sess-9"}`)
+		`{"conversation_id":"`+testConversationID+`"}`)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var got struct {
@@ -419,7 +426,7 @@ func TestMarkSessionRead_PassesIdentityThroughAndReturnsTheStampedTime(t *testin
 	}
 	decodeEnvelope(t, resp, &got)
 	assert.EqualValues(t, 1_700_000_000_123, got.LastReadAt)
-	assert.Equal(t, [3]string{"7", "fp-daemon-1", "sess-9"}, stub.markReadInput)
+	assert.Equal(t, [2]string{"7", testConversationID}, stub.markReadInput)
 }
 
 // 请求体里**没有**时刻这个字段：客户端的钟不可信，而这个时刻要跟服务端自己记的
@@ -430,7 +437,7 @@ func TestMarkSessionRead_IgnoresAnyClientSuppliedTime(t *testing.T) {
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/agent-sessions/read", cookie.Value, csrf,
-		`{"peer_fingerprint":"fp-daemon-1","session_id":"sess-9","last_read_at":999999}`)
+		`{"conversation_id":"`+testConversationID+`","last_read_at":999999}`)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var got struct {
@@ -440,20 +447,23 @@ func TestMarkSessionRead_IgnoresAnyClientSuppliedTime(t *testing.T) {
 	assert.EqualValues(t, 42, got.LastReadAt)
 }
 
-// 身份键缺一半在绑定这一层就被拒：少了指纹的「已读」不知道该记在哪条对话上。
-func TestMarkSessionRead_RejectsMissingIdentity(t *testing.T) {
+// 身份缺失、或给的是旧的整数会话号，都在绑定这一层就被拒：一条标不到任何行的
+// 「已读」不该静默成功。
+func TestMarkSessionRead_RejectsAnythingThatIsNotAConversationID(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
 	server, _ := newMirrorTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	for _, body := range []string{
-		`{"session_id":"sess-9"}`,
-		`{"peer_fingerprint":"fp-daemon-1"}`,
+		`{}`,
+		`{"conversation_id":""}`,
+		`{"conversation_id":"42"}`,
+		`{"peer_fingerprint":"fp-daemon-1","session_id":"sess-9"}`,
 	} {
 		resp := postJSON(t, server.URL+"/v1/agent-sessions/read", cookie.Value, csrf, body)
 		assert.NotEqual(t, http.StatusOK, resp.StatusCode, "body: %s", body)
 	}
-	assert.Equal(t, [3]string{}, stub.markReadInput)
+	assert.Equal(t, [2]string{}, stub.markReadInput)
 }
 
 func postJSON(t *testing.T, url, cookie, csrf, body string) *http.Response {

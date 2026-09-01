@@ -11,7 +11,7 @@ import (
 
 func TestEncodeRequestUsesStableMethodIDAndBinaryPayload(t *testing.T) {
 	encoded, err := EncodeRequest(73, agentrewire.RpcMethod_RPC_METHOD_SESSION_PULL,
-		&agentrewire.SessionPullRequest{SessionId: 42, Cursor: 9, Limit: 200})
+		&agentrewire.SessionPullRequest{ConversationId: "conv-42", Cursor: 9, Limit: 200})
 	require.NoError(t, err)
 	require.NotEqual(t, byte('{'), encoded[0], "Protobuf frame must not be a JSON carrier")
 
@@ -22,7 +22,7 @@ func TestEncodeRequestUsesStableMethodIDAndBinaryPayload(t *testing.T) {
 
 	var request agentrewire.SessionPullRequest
 	require.NoError(t, proto.Unmarshal(frame.GetRequest().GetEncodedPayload(), &request))
-	require.Equal(t, int64(42), request.GetSessionId())
+	require.Equal(t, "conv-42", request.GetConversationId())
 	require.Equal(t, int64(9), request.GetCursor())
 	require.Equal(t, int32(200), request.GetLimit())
 }
