@@ -1666,6 +1666,91 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
  * 后面：应用完历史先预置游标，中继才 attach + 补齐，浏览器因此不会把 server 已经
  * 有的那一段再从 daemon 拉一遍；跳号仍由中继客户端回执行端补洞。
  */
+/**
+ * 决策 11 的**入口分流**在详情页这一侧。
+ *
+ * 账号里有这条对话 → 按对话寻址：服务端查名单解析出承载它的机器，这一页全程不需要
+ * 知道那是哪一台（跨机器的统一列表与深链接靠的就是它）。账号里没有（机器轴上那些
+ * 还没保存的对话是大多数，服务端解析不出它们的承载机器）→ 按机器寻址，而那时机器
+ * 正是用户刚点进来的这一台，本来就在上下文里。
+ *
+ * 分流一旦选错就是一条通道级错误，所以钉的是**开通道时声明的目标**本身。
+ */
+describe("会话详情：这条通道声明的目标", () => {
+  function stubDevices() {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, items: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return { frames: [], cursor: 0, has_more: false };
+      throw new Error("unexpected: " + path);
+    });
+  }
+
+  /** 认领落定之前一条通道都不开：猜一次再改口等于白开一条会被判死的通道。 */
+  function targets(): (string | null)[] {
+    return mockUseRelay.mock.calls.map((c) => c[0]);
+  }
+
+  function mountDetail(
+    initialRow?: Parameters<typeof SessionDetailView>[0]["initialRow"],
+  ) {
+    mockUseRelay.mockImplementation((_target, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "connecting",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            form="embedded"
+            initialRow={initialRow}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("账号里有这条对话：按对话寻址，不点名机器", async () => {
+    stubDevices();
+    mountDetail({
+      conversation_id: "42",
+      peer_fingerprint: "fp-desktop",
+      machine_fingerprint: "fp-1",
+      title: "重构登录页",
+    });
+
+    await vi.waitFor(() => expect(targets()).toContain("conversation:42"));
+    expect(targets().some((t) => t?.startsWith("machine:"))).toBe(false);
+  });
+
+  it("账号里没有这条对话：退回按机器寻址（机器轴上那些还没保存的）", async () => {
+    stubDevices();
+    mountDetail();
+
+    await vi.waitFor(() => expect(targets()).toContain("machine:fp-1"));
+    expect(targets().some((t) => t?.startsWith("conversation:"))).toBe(false);
+  });
+
+  it("认领落定之前一条通道都不开", () => {
+    stubDevices();
+    mountDetail();
+
+    // 首帧：账号那一行还没问回来，分流还没有答案。
+    expect(targets()).toEqual([null]);
+  });
+});
+
 describe("会话详情：历史来自 server 镜像", () => {
   /** 一页镜像转录：frames 是 wire.JournaledNotification 原样。 */
   function framePage(frames: { seq: number; text: string }[], hasMore = false) {
