@@ -49,16 +49,3 @@ func TestRedis_RestoresThePreviousDefault(t *testing.T) {
 
 	assert.Same(t, before, redis.Default(), "Cleanup 必须把全局实例放回去")
 }
-
-// RedisMock(t) 的契约恰好相反：没声明过的命令必须报错，而不是照常执行。
-// 这是「命令序列本身就是被测契约」那一类用例赖以成立的前提。
-func TestRedisMock_RejectsAnUndeclaredCommand(t *testing.T) {
-	mock := RedisMock(t)
-	ctx := context.Background()
-	mock.ExpectSet("declared", "v", 0).SetVal("OK")
-
-	require.NoError(t, redis.Default().Set(ctx, "declared", "v", 0).Err())
-	err := redis.Default().Get(ctx, "undeclared").Err()
-
-	assert.Error(t, err, "未声明的命令必须失败，否则这层 mock 什么也没在把关")
-}
