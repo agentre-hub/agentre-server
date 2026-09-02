@@ -81,7 +81,6 @@ import (
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -559,7 +558,7 @@ func record(t *testing.T, ex exchange) []byte {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	// DeviceJWT 中间件要查吊销黑名单，那条链路直接读 redis.Default()。
-	testutils.Redis()
+	hubtest.Redis(t)
 
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)

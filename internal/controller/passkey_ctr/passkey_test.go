@@ -10,11 +10,12 @@ import (
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/i18n"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
@@ -101,7 +102,7 @@ func (s *stubPasskeySvc) Delete(ctx context.Context, userID, id int64) error {
 func newServer(t *testing.T, stub *stubPasskeySvc, rl bootstrap.RLConfig) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	passkey_svc.SetDefault(stub)

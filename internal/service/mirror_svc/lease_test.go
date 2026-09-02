@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // 租约照 relay_svc.RegisterDaemon / RenewDaemon 的形状复刻:Redis key 存 InstanceID
@@ -22,14 +23,12 @@ const (
 	replicaB = "replica-b"
 )
 
-// leaseRedis 起 miniredis(prior art: internal/task/lock_test.go:20)并清干净 ——
-// testutils.Redis() 是进程级单例,同包的用例共用同一个实例。
+// leaseRedis 起 miniredis(prior art: internal/task/lock_test.go:20)。
+// internal/testutils.Redis(t) 每个用例一个实例,不再需要 FlushAll 互相让路。
 func leaseRedis(t *testing.T) *goredis.Client {
 	t.Helper()
-	testutils.Redis()
-	rdb := redis.Default()
-	require.NoError(t, rdb.FlushAll(context.Background()).Err())
-	return rdb
+	testutils.Redis(t)
+	return redis.Default()
 }
 
 func testLease(rdb *goredis.Client, instanceID string, userID int64, fingerprint string) *machineLease {

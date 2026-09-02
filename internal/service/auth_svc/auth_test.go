@@ -8,10 +8,11 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
@@ -26,7 +27,7 @@ func newSvc() AuthSvc {
 // 观察 TTL 到期，而不污染同包其它用例共用的那一个。
 func ownRedis(t *testing.T) *miniredis.Miniredis {
 	t.Helper()
-	testutils.Redis()
+	testutils.Redis(t)
 	prev := redis.Default()
 	mini := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
@@ -39,7 +40,7 @@ func ownRedis(t *testing.T) *miniredis.Miniredis {
 }
 
 func TestOAuthState_Roundtrip(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 	state, err := s.CreateOAuthState(ctx, OAuthStatePayload{Next: "/device", UserCode: "A4F-7Q2", IP: "1.2.3.4"})
@@ -56,7 +57,7 @@ func TestOAuthState_Roundtrip(t *testing.T) {
 }
 
 func TestStartSession(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 	sid, sess, err := s.StartSession(ctx, 42)
@@ -201,7 +202,7 @@ func TestTrackRelayTicket_RejectsEmptyIdentifiers(t *testing.T) {
 // 「登出其它全部」结束除当前之外的全部会话，并如实返回撤销条数。每一条都走与
 // EndSession 相同的顺序：先把它签发、仍在有效期内的 relay ticket 拉黑，再删 session。
 func TestEndOtherSessions_EndsOthersKeepsCurrentAndCountsRevoked(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 
@@ -243,7 +244,7 @@ func TestEndOtherSessions_EndsOthersKeepsCurrentAndCountsRevoked(t *testing.T) {
 
 // 清单按账号归集，逐条给出 UA / IP / 两个时刻，sid 一并交给调用方去认「哪条是当前」。
 func TestListSessions_ReturnsThisAccountsLoginsOnly(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 

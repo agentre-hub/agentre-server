@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
@@ -45,7 +46,7 @@ func TestRelayClient_GivenAnAccountBroadcast_ThenItArrivesOnTheReservedChannel(t
 // 通道是账号级且跨副本的：同一个账号连在两个副本上的两条中继连接都要收到任一
 // 副本发出的那一次广播，而别的账号一条都收不到。
 func TestRelayClient_GivenTwoReplicas_ThenOneBroadcastReachesBothAndOnlyThatAccount(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	mini := miniredis.RunT(t)
 	signer := newSignalSigner(t)
 	replicaA := accountchan_svc.New(newRelayRedisClient(t, mini))
@@ -179,7 +180,7 @@ func TestAccountChannelEndpointIsGone(t *testing.T) {
 
 func newSignalHarness(t *testing.T) *channelHarness {
 	t.Helper()
-	testutils.Redis()
+	testutils.Redis(t)
 	return newSignalHarnessWith(t, accountchan_svc.New(newRelayRedisClient(t, miniredis.RunT(t))))
 }
 

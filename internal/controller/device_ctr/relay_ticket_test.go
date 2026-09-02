@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
@@ -23,7 +24,7 @@ import (
 
 func TestRelayTicket_FromSessionWithoutCreatingDevice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
@@ -57,7 +58,7 @@ func TestRelayTicket_FromSessionWithoutCreatingDevice(t *testing.T) {
 // 自己的 clientId，而不是自己再生成一个。
 func TestRelayTicket_GivenTheSameAccountOnAnotherBrowser_ThenCarriesTheSamePeerFingerprint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))

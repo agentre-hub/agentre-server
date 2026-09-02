@@ -16,13 +16,14 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
@@ -104,7 +105,7 @@ func (s *relayStub) ResolveTarget(ctx context.Context, accountID int64, target s
 // 票据认得出账号，而目标由通道自己声明（决策 10）：URL 上不再有 daemon_fingerprint，
 // 两者在通道开通那一刻汇合。
 func TestRelayClientAcceptsSessionTicketFromQuery(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	ticket, _, err := signer.Sign(jwt.Claims{UID: 7, Kind: "relay_client"}, time.Minute)
@@ -178,7 +179,7 @@ func (s *relayStub) ForwardClient(context.Context, relay_svc.Route, string, int,
 }
 
 func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	stub := &relayStub{
@@ -287,7 +288,7 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) 
 }
 
 func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	mini := miniredis.RunT(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -346,7 +347,7 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 }
 
 func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 
@@ -464,7 +465,7 @@ func TestRelayClientForwardingErrorFailsOnlyThatChannel(t *testing.T) {
 // 而且必须**在 websocket upgrade 之前**答复：不支持的设备种类拿不到升级后的连接，
 // 也就没机会占住这个账号+指纹的中继路由。
 func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindWeb}, time.Hour)
@@ -502,7 +503,7 @@ func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
 // 连接级、判定在 upgrade 之前；目标下沉到通道之后判定在 upgrade 之后，于是同一组
 // 区分改由通道级错误码承担——每个码仍对应 upgrade 前那一版的业务码与文案。
 func TestRelayClientChannelFailureCodesAreDistinct(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
@@ -540,7 +541,7 @@ func TestRelayClientChannelFailureCodesAreDistinct(t *testing.T) {
 }
 
 func TestRelayFramesCrossServerInstances(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	mini := miniredis.RunT(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -623,7 +624,7 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 // 承担，不依赖对端配合）。断开必须是一个真正的 websocket 关闭帧，好让对端能把它与
 // 网络中断区分开：daemon 会退避重连，重连在 upgrade 处被拒才是正确结局。
 func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	auth := auth_svc.New(session.New(redis.Default(), "server_session", 86400))
 	auth_svc.SetDefault(auth)
 	ctx := context.Background()
@@ -656,7 +657,7 @@ func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
 // 紧要，判据是共享 Redis 里的 jti 黑名单（device_svc.Revoke 已经在写它），持有那条
 // 连接的实例自己读得到，不需要任何实例间寻址。
 func TestRelayDaemonClosesWhenDeviceCredentialRevokedOnAnotherInstance(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -828,7 +829,7 @@ func newAuthenticatedRelayServer(
 	path string,
 ) (*httptest.Server, http.Header) {
 	t.Helper()
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	server := newRelayServer(t, signer, stub)
@@ -873,7 +874,7 @@ var _ relay_svc.RelaySvc = (*relayStub)(nil)
 // 的 FastForward 让缓存到期，再用一个 ping 逼服务端立刻复查（生产里由 15s 心跳承担，
 // 不依赖对端配合）。
 func TestRelayDaemonClosesWhenAccountBannedAfterConnect(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	const gateTTL = time.Minute
 	banned := installRelayAccountGate(t, gateTTL)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
@@ -955,7 +956,7 @@ func installRelayAccountGate(t *testing.T, ttl time.Duration) *relayAccountGate 
 // 保留读循环这一路(而不是删掉、只靠 pong)是因为:一条只顾发数据、pong 迟迟不来的
 // 连接,读超时是 45 秒而 TTL 只有 30 秒,中间那 15 秒它会被当成离线。
 func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	const frames = 5
@@ -1010,7 +1011,7 @@ func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
 整个进程就卡在停止那一步直到被 SIGKILL。
 */
 func TestRelayDrainTellsPeersAndReleasesHandlers(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	stub := &relayStub{

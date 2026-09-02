@@ -11,12 +11,13 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/middleware"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
@@ -69,7 +70,7 @@ func gatedRoute(handler gin.HandlerFunc) *gin.Engine {
 // sessionCookieFor 起一次真实的登录会话，返回可直接挂到请求上的 cookie。
 func sessionCookieFor(t *testing.T, userID int64) *http.Cookie {
 	t.Helper()
-	testutils.Redis()
+	testutils.Redis(t)
 	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
 	sid, _, err := auth_svc.Default().StartSession(context.Background(), userID)
 	require.NoError(t, err)
@@ -122,7 +123,7 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnSessionBranch(t *testing.T) 
 
 func TestSessionOrDeviceAuth_BannedAccountRejectedOnBearerBranch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	installAccountGate(t, consts.BAN)
 	signer := gatedAuthTestSigner(t)
 	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "desktop"}, time.Hour)
@@ -139,7 +140,7 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnBearerBranch(t *testing.T) {
 
 func TestDeviceJWT_BannedAccountRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	installAccountGate(t, consts.BAN)
 	signer := gatedAuthTestSigner(t)
 	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "desktop"}, time.Hour)
@@ -157,7 +158,7 @@ func TestDeviceJWT_BannedAccountRejected(t *testing.T) {
 // relay ticket 走的是另一个中间件（DeviceJWT 刻意拒绝它），闸门必须一样挡得住。
 func TestRelayClientJWT_BannedAccountRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	installAccountGate(t, consts.BAN)
 	signer := gatedAuthTestSigner(t)
 	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, Kind: "relay_client"}, 2*time.Minute)

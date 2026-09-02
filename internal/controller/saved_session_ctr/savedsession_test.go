@@ -10,10 +10,11 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
@@ -83,7 +84,7 @@ func (s *stubSavedSessionSvc) List(_ context.Context, userID int64) ([]saved_ses
 func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) (*httptest.Server, *jwt.Signer) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	testutils.Redis() // miniredis → session 存储 + jwt 黑名单
+	testutils.Redis(t) // miniredis → session 存储 + jwt 黑名单
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	saved_session_svc.SetDefault(stub)

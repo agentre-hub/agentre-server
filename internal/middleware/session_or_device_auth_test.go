@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/middleware"
 	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
@@ -20,7 +21,7 @@ import (
 
 func TestSessionOrDeviceAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {

@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
@@ -54,7 +55,7 @@ func newSyncTestServer(t *testing.T, stub *stubSyncSvc) (*httptest.Server, *jwt.
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	// DeviceJWT 中间件要查吊销黑名单，那条链路直接读 redis.Default()。
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	sync_svc.SetDefault(stub)

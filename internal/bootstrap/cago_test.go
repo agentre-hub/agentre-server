@@ -10,8 +10,9 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/configs/memory"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
@@ -74,7 +75,7 @@ func TestLoadServerConfig_AccountGateCacheTTLIsConfigurable(t *testing.T) {
 // 中间件与中继心跳在闸门未装配时按「不判定」处理（判定无从做起），因此「生产上一定
 // 装配」这件事必须由这里钉住：漏了它，四条鉴权路径会安静地退回封禁前的行为。
 func TestRegisterDefaults_InstallsAccountGate(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	assert.NoError(t, err)
 	user_svc.SetGate(nil)
@@ -91,7 +92,7 @@ func TestRegisterDefaults_InstallsAccountGate(t *testing.T) {
 // repository 那一类已经由 cmd/server/repository_wiring_test.go 整类钉住，
 // service 单例目前还是一条一条钉。
 func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	assert.NoError(t, err)
 	passkey_svc.SetDefault(nil)

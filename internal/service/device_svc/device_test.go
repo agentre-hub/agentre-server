@@ -10,7 +10,6 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -284,7 +283,7 @@ func TestRefresh(t *testing.T) {
 func TestRevoke(t *testing.T) {
 	convey.Convey("Revoke", t, func() {
 		convey.Convey("把被撤设备已签发的 access jti 全部写入黑名单（在线设备立即失效）", func() {
-			testutils.Redis()
+			hubtest.Redis(t)
 			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return([]string{"jti-aaa", "jti-bbb"}, nil)
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -306,7 +305,7 @@ func TestRevoke(t *testing.T) {
 		// TTL 只取 AccessTTL 时,它从吊销那一刻起算,12:00:05 撤销的话黑名单
 		// 12:00:05+AccessTTL 就到期 —— 中间那 55s 里被撤销的设备又能用了。
 		convey.Convey("黑名单 TTL 覆盖到 token 真正失效为止（含验签时钟偏移）", func() {
-			testutils.Redis()
+			hubtest.Redis(t)
 			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return([]string{"jti-aaa"}, nil)
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -325,7 +324,7 @@ func TestRevoke(t *testing.T) {
 		// access token 的 AccessTTL 窗口，真正让设备回不来的是 devices 行被置为
 		// 已撤销后 Refresh 的这道判定 —— 少了它，撤销一台设备只是让它等 15 分钟。
 		convey.Convey("撤销后该设备手上未过期的 refresh token 也换不到新凭据", func() {
-			testutils.Redis()
+			hubtest.Redis(t)
 			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 			dev := &device_entity.Device{ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Status: consts.ACTIVE}
 
@@ -400,7 +399,7 @@ func (s *stubDeviceDataPurger) PurgeDeviceDeleteTodos(_ context.Context, userID 
 // 永远执行不了——它随撤销一并消失。账号里那些对话本身不受影响：留着、读得到、只读。
 func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	convey.Convey("撤销设备时清掉挂在它上面、永远执行不了的删除待办（决策 7）", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -418,7 +417,7 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	})
 
 	convey.Convey("清待办失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -437,7 +436,7 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	// 设备行查不到就没有账号与指纹可用——待办按（账号, 指纹）圈定，与账号级同步
 	// 对象同一处境：跳过，绝不能拿空指纹去删。
 	convey.Convey("设备行查不到时跳过待办清理，撤销照常成功", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -457,7 +456,7 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 // （撤销）一台设备时，该设备上报的本机路径清单一并消失。
 func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 	convey.Convey("撤销设备时清掉它上报的本机路径清单（R18）", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -473,7 +472,7 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 	})
 
 	convey.Convey("purger 落库失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -497,7 +496,7 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 // 授权」与机器上 `agentred unclaim` 走的是同一条服务端路径，因此这一条同时覆盖两者。
 func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 	convey.Convey("撤销设备时把只属于它的账号级同步对象落墓碑", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -517,7 +516,7 @@ func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 	// 撤销本身已经生效，这里只能跳过并记日志，绝不能拿一个空指纹去清（那会命中
 	// 账号下每一个「本机」backend）。
 	convey.Convey("设备行查不到时跳过账号级清理，撤销照常成功", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
@@ -540,7 +539,7 @@ func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 // 而不是对 nil 接口调用方法 panic（与 relay_svc.Default() 的既有安全占位同一模式）。
 func TestRevoke_GivenNoPurgerConfigured_DoesNotPanic(t *testing.T) {
 	convey.Convey("未装配 purger 时 Revoke 不 panic（默认空操作）", t, func() {
-		testutils.Redis()
+		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)

@@ -7,9 +7,10 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // commandRecorder 是一个 go-redis hook，记录实际下发的顶层命令名，
@@ -43,7 +44,7 @@ func (r *commandRecorder) names() []string {
 }
 
 func TestAllow_UnderLimit(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	l := New(redis.Default(), "rl:test:", 3, time.Minute)
 
@@ -55,7 +56,7 @@ func TestAllow_UnderLimit(t *testing.T) {
 }
 
 func TestAllow_OverLimitDenied(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	l := New(redis.Default(), "rl:test:", 2, time.Minute)
 	_, _ = l.Allow(ctx, "ip-x")
@@ -66,7 +67,7 @@ func TestAllow_OverLimitDenied(t *testing.T) {
 }
 
 func TestAllow_IsolatedByKey(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	l := New(redis.Default(), "rl:test:", 1, time.Minute)
 	ok1, _ := l.Allow(ctx, "a")
@@ -79,7 +80,7 @@ func TestAllow_IsolatedByKey(t *testing.T) {
 // 计数自增与首次过期必须在同一条命令里落地，Redis 层面不存在
 // 「计数已写、TTL 还没设上」的中间态。
 func TestAllow_FirstCallSetsTTLAtomically(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	rc := redis.Default()
 	rec := &commandRecorder{}
 	rc.AddHook(rec)

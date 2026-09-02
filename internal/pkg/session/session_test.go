@@ -10,13 +10,14 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 func TestCreate_ReturnsSidAndCsrf(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 
@@ -28,7 +29,7 @@ func TestCreate_ReturnsSidAndCsrf(t *testing.T) {
 }
 
 func TestGet_RoundTrip(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 
@@ -42,7 +43,7 @@ func TestGet_RoundTrip(t *testing.T) {
 }
 
 func TestGet_Missing(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 	got, err := store.Get(ctx, "no-such-sid")
@@ -51,7 +52,7 @@ func TestGet_Missing(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 
@@ -68,7 +69,7 @@ func TestDelete(t *testing.T) {
 // Exists 判存在但不续期：长连接反复轮询「这次登录还在吗」时，用 Get 的话一条空闲
 // 的 websocket 就能把滑动 TTL 无限续下去，session 永远不过期。
 func TestExists_DoesNotSlideTTL(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 
@@ -97,7 +98,7 @@ func TestExists_DoesNotSlideTTL(t *testing.T) {
 // TTL 到期，而不污染同包其它用例共用的那一个。
 func ownRedis(t *testing.T) *miniredis.Miniredis {
 	t.Helper()
-	testutils.Redis()
+	testutils.Redis(t)
 	prev := redis.Default()
 	mini := miniredis.RunT(t)
 	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
@@ -113,7 +114,7 @@ func ownRedis(t *testing.T) *miniredis.Miniredis {
 // 浏览器、哪一条不认识」的全部依据。UA 原样存：任何解析都是猜测，猜错会让用户撤销掉
 // 自己正在用的那一条。
 func TestListByUser_ReportsClientOfEachLoginSession(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 	const uid = 4101
@@ -142,7 +143,7 @@ func TestListByUser_ReportsClientOfEachLoginSession(t *testing.T) {
 // IP 按 45 字符存，与 device_tokens.ip 同规格：客户端能塞进 X-Forwarded-For 的东西
 // 长度不受我们控制，落库宽度必须是一个定数。
 func TestCreate_TruncatesIPToStorageWidth(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 	const uid = 4102
@@ -159,7 +160,7 @@ func TestCreate_TruncatesIPToStorageWidth(t *testing.T) {
 // 还要把它重写一遍，而它最终会原样出现在 /account 的会话清单上。IP 早就按 45
 // 字节收口了，UA 不收就是同一个函数里的两套标准。
 func TestCreate_TruncatesAnOversizedUserAgent(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 
@@ -173,7 +174,7 @@ func TestCreate_TruncatesAnOversizedUserAgent(t *testing.T) {
 // 截断按**字符**边界落刀，不许把一个多字节字符劈成两半：切出半个 rune 的结果是
 // 一段非法 UTF-8，json.Marshal 会把它换成 U+FFFD，于是清单上出现一个乱码尾巴。
 func TestCreate_TruncatedUserAgentStaysValidUTF8(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 
@@ -189,7 +190,7 @@ func TestCreate_TruncatedUserAgentStaysValidUTF8(t *testing.T) {
 // 逐个问 session:<sid> 还在不在，不在的当场 SREM 掉。判活刻意不滑动 TTL，
 // 否则打开一次清单就把名下所有会话都续了 14 天。
 func TestListByUser_DropsDeadMembersWithoutSlidingTTL(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 	const uid = 4103
@@ -242,7 +243,7 @@ func TestGet_RefreshesIndexTTLSoALongLivedSessionStaysListed(t *testing.T) {
 
 // 每次会话被读到都记一次最后活动时间：清单上「最后活动」这一列的全部来源。
 func TestGet_RecordsLastActivity(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 	const uid = 4105
@@ -265,7 +266,7 @@ func TestGet_RecordsLastActivity(t *testing.T) {
 
 // 删除会话时顺手 SREM：登出后那一条不该继续挂在索引上。
 func TestDelete_RemovesSessionFromUserIndex(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 	const uid = 4106
@@ -286,7 +287,7 @@ func TestDelete_RemovesSessionFromUserIndex(t *testing.T) {
 // 否则滚动发布之后，老用户在清单上看不见自己当前这一条，「登出其它全部」也撤不掉
 // 那些老会话——而丢了笔记本的人按的正是那个按钮。
 func TestGet_BackfillsIndexForSessionsCreatedBeforeTheIndexExisted(t *testing.T) {
-	testutils.Redis()
+	testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 14*24*3600)
 	const uid = 4107

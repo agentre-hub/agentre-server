@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
@@ -37,7 +38,7 @@ type channelHarness struct {
 
 func newChannelHarness(t *testing.T) *channelHarness {
 	t.Helper()
-	testutils.Redis()
+	testutils.Redis(t)
 	return newSignalHarnessWith(t, accountchan_svc.New(newRelayRedisClient(t, miniredis.RunT(t))))
 }
 
@@ -45,7 +46,7 @@ func newChannelHarness(t *testing.T) *channelHarness {
 // 订阅缓慢与信号源中断三种形态。
 func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanSvc) *channelHarness {
 	t.Helper()
-	testutils.Redis()
+	testutils.Redis(t)
 	mini := miniredis.RunT(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)

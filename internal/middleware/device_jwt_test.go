@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/middleware"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
@@ -20,7 +21,7 @@ import (
 
 func TestDeviceJWT_Blacklist(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +73,7 @@ func TestDeviceJWT_Blacklist(t *testing.T) {
 
 func TestRelayClientJWTBoundary(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)
@@ -144,7 +145,7 @@ func TestRelayClientJWTBoundary(t *testing.T) {
 */
 func TestRelayClientJWT_BrowserTicketIsSingleUse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)

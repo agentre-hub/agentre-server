@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/middleware"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
@@ -60,7 +61,7 @@ func serveBearer(mw gin.HandlerFunc, token string) *httptest.ResponseRecorder {
 func bearerTestSigner(t *testing.T) *hubjwt.Signer {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)

@@ -10,12 +10,13 @@ import (
 	"testing"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
@@ -37,7 +38,7 @@ const testCookieName = "server_session"
 func newAuthTestServer(t *testing.T) (*httptest.Server, *jwt.Signer) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
@@ -242,7 +243,7 @@ func TestRevokeOtherSessions_EndsTheOthersAndKeepsTheCurrentOne(t *testing.T) {
 // 向 Me 返回的数据里编入 github_login：从 user_identities.provider_login 读出来。
 func TestMe_FillsGithubLogin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -322,7 +323,7 @@ func TestMe_FillsGithubLogin(t *testing.T) {
 // 没有 GitHub 身份关联时，github_login 返回空字符串。
 func TestMe_ReturnsEmptyGithubLoginWithoutGithubIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -385,7 +386,7 @@ func TestMe_ReturnsEmptyGithubLoginWithoutGithubIdentity(t *testing.T) {
 // GithubAuthorize 端点按 IP 限流，超限返回 429 并带 Retry-After。
 func TestGithubAuthorize_RateLimitByIP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -424,7 +425,7 @@ func TestGithubAuthorize_RateLimitByIP(t *testing.T) {
 // GithubCallback 端点按 IP 限流，超限返回 429 并带 Retry-After。
 func TestGithubCallback_RateLimitByIP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
+	testutils.Redis(t)
 
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
