@@ -4,6 +4,7 @@
 deploy/
   Dockerfile              镜像：前端和后端都在里面构建，产物是单个静态二进制
   docker-compose.yml      单机部署：server + MySQL + Redis
+  Dockerfile.dev          dev 专用：只把编好的二进制装进运行时镜像，不在镜像里构建
   docker-compose.dev.yml  dev 环境：只有 server，MySQL/Redis/etcd 用外部现成的
   config.docker.yaml      compose 用的配置
   helm/                   Kubernetes 部署
@@ -129,6 +130,22 @@ docker run --rm -p 8443:8443 \
 
 dev 跑在 `coding.local`（192.168.8.188）上，一个容器，编排是 `docker-compose.dev.yml`。
 
+**dev 的镜像不在 CI 里构建，也不过 registry。** 流水线在 runner 上 `make build` 出
+静态二进制，`scp` 到 `/srv/agentre-dev/bin/server`，再在目标机上用 `Dockerfile.dev`
+做一次只有一层 `COPY` 的 build（实测 3.6 秒），打成固定 tag `agentre-server:dev`。
+原来那种 `docker build` 每次都在新容器里从零跑 pnpm install + go build，Go 的 build
+cache 和 pnpm 的 store 一次都用不上；放回 runner 后两个缓存都能命中，也省掉了
+push/pull 几十 MB。dev 的流水线同样不跑 lint 和 test，门禁在 GitHub 侧的 `ci.yml`
+和本地 `make test` 上。
+
+代价是 dev 跑的东西没有 registry 里可追溯的 digest，只有二进制里 ldflags 钉的
+`dev.<短 commit>`（启动首行日志能看到）和目标机上的本地镜像 ID。要 digest 就走
+`deploy.yaml` 那条链路（main / release/* / test/*）。
+
+从镜像式部署切过来不需要在机器上做任何事：下一次推 `dev` 时流水线会自己建 `bin/`、
+覆盖编排与 `Dockerfile.dev` 并重建容器。历史的 `dev.<短 commit>` 镜像从此不再增加，
+想清就 `docker image rm`。
+
 和上面的「Docker 单机部署」不是一回事，别混用：那份会额外拉起 MySQL 和 Redis 并把
 数据落在仓库根的 `data/`；dev 的 MySQL、Redis、etcd 都是外部既有服务，套用那份等于
 把现有的 `agentre_server_dev` 数据旁路掉。
@@ -144,22 +161,31 @@ dev 的配置和 k8s 一样放在 etcd 里，`/config/dev/agentre-server/` 下�
 ```text
 /srv/agentre-dev/
   docker-compose.dev.yml   流水线每次部署覆盖
-  .env                     机器本地；流水线只改写其中的 SERVER_IMAGE 一项
+  Dockerfile.dev           流水线每次部署覆盖
+  bin/server               流水线每次部署覆盖，runner 上编出来的静态二进制，
+                           同时是 docker build 的整个上下文
   config.yaml              机器本地引导配置（env: dev, source: etcd）
   keys/jwt.key jwt.pub     机器本地 JWT 密钥对
 ```
+
+`.env` 已经没用了：流水线不写也不读它，`SERVER_IMAGE` 那一项（如果还留着）没有任何
+东西会去解析。构建上下文只给 `bin/`，不是整个部署目录——`config.yaml` 和 `keys/`
+一个字节都不该进构建上下文。
 
 手动起停：
 
 ```bash
 cd /srv/agentre-dev
-docker compose -f docker-compose.dev.yml up -d
+docker build -f Dockerfile.dev -t agentre-server:dev bin
+docker compose -f docker-compose.dev.yml up -d --force-recreate
 docker compose -f docker-compose.dev.yml logs -f server
 ```
 
-上面两条都只用本地已有的镜像，不需要 registry 凭据。流水线的 registry 登录是
-一次性的，`pull` 完就 `docker logout`，不在机器上留 `~/.docker/config.json`；
-所以要手动 `docker compose pull` 得自己先 `docker login`。
+换了 `bin/server` 就要连 `docker build` 一起跑，否则镜像还是上一版。tag 固定不带
+commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreate` 只是保险。
+
+这里不需要 registry 凭据：二进制和镜像都不经过 registry，只有基础镜像
+`gcr.io/distroless/static-debian12` 需要能拉到（`coding.local` 已确认可达）。
 
 ### 第一次切换要做的（只做一次）
 
@@ -305,7 +331,7 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 
 ## 自动发布
 
-推分支到 Gitea 会自动构建镜像并发布，规则：
+推分支到 Gitea 会自动发布，规则：
 
 | 分支 | 环境 | 域名 |
 | --- | --- | --- |
@@ -314,23 +340,25 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 | `test/*` | test | `test.app.agentrehub.com` |
 | `dev` | dev | `coding.local:8443`（内网单机，不上 k8s） |
 
-前三行走 `deploy.yaml`：构建镜像后 helm 上 k8s，生产的资源配额高一些并开自动扩缩，
-其余环境单副本。`dev` 走的是另一条 `dev.yaml`：构建镜像后 SSH 到 `coding.local`
-执行 `docker compose`。两个 workflow 的分支集合不相交，同一次推送只会触发一条。
+前三行走 `deploy.yaml`：跑 lint + test，构建镜像后 helm 上 k8s，生产的资源配额高一些
+并开自动扩缩，其余环境单副本。镜像 tag 一律是 `<环境>.<短 commit>`。
 
-镜像 tag 一律是 `<环境>.<短 commit>`。
+`dev` 走的是另一条 `dev.yaml`，刻意跟上面不一样：**不跑 lint / test，镜像也不在 CI
+里构建**——在 runner 上 `make build` 出二进制，`scp` 到 `coding.local`，在目标机上
+用 `Dockerfile.dev` 打成本地镜像再 `docker compose`，不经过 registry。理由见上面
+「dev 环境」那节。两个 workflow 的分支集合不相交，同一次推送只会触发一条。
 
 需要在 Gitea 里配好这些 secret：
 
 | secret | 必填 | 不填时 |
 | --- | --- | --- |
-| `DOCKER_USERNAME`、`DOCKER_TOKEN` | 是 | — |
+| `DOCKER_USERNAME`、`DOCKER_TOKEN` | 是（dev 不用） | — |
 | `KUBE_CONFIG` | 是 | — |
 | `ETCD_CONFIG_PASSWORD` | 是 | — |
 | `DOCKER_REGISTRY` | 否 | `docker.io` |
 | `GOPROXY` | 否 | `https://goproxy.cn,direct` |
 | `NPM_REGISTRY` | 否 | `https://registry.npmmirror.com` |
-| `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE` | 否 | 上游地址 |
+| `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE` | 否（dev 不用） | 上游地址 |
 | `TLS_SECRET_NAME` | 否 | `agentrehub-com-tls` |
 | `DEV_SSH_KEY` | dev 必填 | — |
 | `DEV_SSH_HOST` | 否 | `coding.local` |
@@ -338,8 +366,9 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 | `DEV_SSH_PORT` | 否 | `22` |
 | `DEV_DEPLOY_DIR` | 否 | `/srv/agentre-dev` |
 
-`KUBE_CONFIG` 与 `ETCD_CONFIG_PASSWORD` 只有 k8s 那条链路用得到；dev 只用
-`DOCKER_*` 和 `DEV_*`。
+`KUBE_CONFIG`、`ETCD_CONFIG_PASSWORD`、`DOCKER_*` 和几个 `*_IMAGE` 只有 k8s 那条
+链路用得到——dev 既不推镜像也不构建镜像。dev 只用 `DEV_*` 加可选的
+`GOPROXY` / `NPM_REGISTRY`。
 
 三个容易踩的：
 

@@ -1,0 +1,10 @@
+# dev 专用：只把 runner 上编好的二进制装进运行时镜像，不在镜像里构建任何东西。
+# 上下文是部署目录下的 bin/：docker build -f Dockerfile.dev -t agentre-server:dev bin
+
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12
+FROM ${RUNTIME_IMAGE}
+WORKDIR /app
+COPY server /app/server
+EXPOSE 8443
+USER 65532:65532
+ENTRYPOINT ["/app/server"]

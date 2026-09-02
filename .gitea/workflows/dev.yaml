@@ -1,13 +1,9 @@
-# 这个目录存在时 Gitea 不再读 .github/workflows/，两者不合并。
-# uses 走 actions/* 是本 Gitea 实例的动作镜像位置，上游名字见各自上一行。
+# dev 只覆盖 dev 分支：不跑 lint / test，二进制在 runner 上编好后送到目标机，
+# 目标机上用 Dockerfile.dev 打成镜像再 compose。
 #
-# 与同目录 deploy.yaml 的分工：那条覆盖 main / release/* / test/*(构建镜像 → helm
-# 上 k8s)；这条只覆盖 dev(构建镜像 → SSH 到目标机 → docker compose)。两边的分支
-# 集合不相交，同一次推送不会同时触发两条链路。
-#
-# 单独成文件而不是往 deploy.yaml 里加分支条件：dev 不需要 QEMU / 多架构 /
-# kubeconfig / helm / TLS secret，且 deploy.yaml 正在服务 prod，dev 的迭代不该
-# 有机会碰坏它。
+# 这条流水线没有门禁，dev 分支上也没有别的门禁接着：.github/workflows/ci.yml 只在
+# push main 和 pull_request 上触发，而 dev 只推 gitea、不推 GitHub。lint / test 靠
+# 本地 make lint / make test，以及 dev 合入 main 时那个 PR 上的 ci.yml。
 
 name: Deploy dev
 
@@ -16,25 +12,18 @@ on:
     branches:
       - dev
 
-# 连着推两次 dev 会让两条流水线同时改目标机的同一个 .env、再各自 compose up:
-# 后写的覆盖先写的,机器上可能停在旧镜像,而 healthz 三项照样为真,流水线全绿。
-# 排队串行,不取消在跑的那条——取消会把目标机停在半个部署上。
 concurrency:
   group: deploy-dev
   cancel-in-progress: false
 
 env:
-  REGISTRY: ${{ secrets.DOCKER_REGISTRY && secrets.DOCKER_REGISTRY || 'docker.io' }}
-  REPOSITORY: ${{ github.repository }}
   GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
-  NPM_REGISTRY: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
-  NODE_IMAGE: ${{ secrets.NODE_IMAGE && secrets.NODE_IMAGE || 'node:22-alpine' }}
-  GO_IMAGE: ${{ secrets.GO_IMAGE && secrets.GO_IMAGE || 'golang:1.26-alpine' }}
-  RUNTIME_IMAGE: ${{ secrets.RUNTIME_IMAGE && secrets.RUNTIME_IMAGE || 'gcr.io/distroless/static-debian12' }}
   DEPLOY_HOST: ${{ secrets.DEV_SSH_HOST && secrets.DEV_SSH_HOST || 'coding.local' }}
   DEPLOY_USER: ${{ secrets.DEV_SSH_USER && secrets.DEV_SSH_USER || 'root' }}
   DEPLOY_PORT: ${{ secrets.DEV_SSH_PORT && secrets.DEV_SSH_PORT || '22' }}
   DEPLOY_DIR: ${{ secrets.DEV_DEPLOY_DIR && secrets.DEV_DEPLOY_DIR || '/srv/agentre-dev' }}
+  npm_config_registry: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
+  npm_config_store_dir: ${{ github.workspace }}/.pnpm-store
 
 jobs:
   deploy:
@@ -46,66 +35,34 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache-dependency-path: go.sum
 
-      # 不造这个占位文件，下面的 lint 和 test 会在 //go:embed 上编译期失败
-      - name: Prepare embedded frontend placeholder
+      - name: Set up pnpm
         run: |
-          mkdir -p internal/web/dist
-          test -f internal/web/dist/index.html || printf '<!doctype html>\n' > internal/web/dist/index.html
+          set -euo pipefail
+          command -v node >/dev/null || { echo "runner 上没有 node,前端编不出来" >&2; exit 1; }
+          corepack enable
 
-      - name: Lint
-        # 上游是 golangci/golangci-lint-action@v8
-        uses: actions/golangci-lint-action@v8
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        continue-on-error: true
         with:
-          version: v2.12.2
-          # 默认的下载二进制模式要连 GitHub releases，走 goinstall 更稳
-          install-mode: goinstall
-          args: --timeout=10m
-
-      # 与 make test-backend 同一条命令。前端门禁在 GitHub 侧的 ci.yml
-      - name: Test
-        run: go test -race ./...
+          path: ${{ github.workspace }}/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
 
       - name: Set outputs
         id: vars
         run: |
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Set up Docker Buildx
-        # 上游是 docker/setup-buildx-action@v3
-        uses: actions/setup-buildx-action@v3
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: make build VERSION=dev.${{ steps.vars.outputs.sha_short }} COMMIT=${{ steps.vars.outputs.sha_short }}
 
-      - name: Login to registry
-        # 上游是 docker/login-action@v3
-        uses: actions/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-
-      # 只构建目标机需要的这一种架构:coding.local 是 x86_64,不装 QEMU
-      - name: Docker build and push
-        # 上游是 docker/build-push-action@v6
-        uses: actions/build-push-action@v6
-        with:
-          push: true
-          file: deploy/Dockerfile
-          context: .
-          platforms: linux/amd64
-          tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:dev.${{ steps.vars.outputs.sha_short }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            NODE_IMAGE=${{ env.NODE_IMAGE }}
-            GO_IMAGE=${{ env.GO_IMAGE }}
-            RUNTIME_IMAGE=${{ env.RUNTIME_IMAGE }}
-            GOPROXY=${{ env.GOPROXY }}
-            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
-            VERSION=dev.${{ steps.vars.outputs.sha_short }}
-            COMMIT=${{ steps.vars.outputs.sha_short }}
-
-      # 用原生 ssh/scp 而不是某个 ssh-action:本实例的动作镜像集是定制的,仓库里
-      # 也没有任何 ssh-action 先例,赌一个可能不存在的镜像不如用 runner 自带的 ssh。
       - name: Set up SSH
         env:
           SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
@@ -115,13 +72,6 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/dev_deploy
           chmod 600 ~/.ssh/dev_deploy
-          # 连接参数集中成一份 ssh_config,后面两步只用 -F 引它,命令行上不再各写
-          # 一遍。散着写迟早再抄错一次:端口在 ssh 是 -p,在 scp 是 -P,而 -p 在
-          # scp 里是「保留时间戳」,会让它把端口号当成一个源文件("stat local 22")。
-          # accept-new 是首连信任:目标机在内网且主机密钥未入库。要收紧就把已知主机
-          # 密钥写进目标机侧的运维流程,或改用固定 known_hosts。
-          # IdentitiesOnly 挡住 runner 上可能存在的 ssh-agent:多余的公钥会被抢先
-          # 试一遍,试满 MaxAuthTries 就在轮到这把私钥之前被服务端断开。
           printf '%s\n' \
             'Host dev-deploy' \
             "  HostName $DEPLOY_HOST" \
@@ -134,49 +84,43 @@ jobs:
           chmod 600 ~/.ssh/dev_deploy.conf
 
       - name: Deploy to ${{ env.DEPLOY_HOST }}
-        env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:dev.${{ steps.vars.outputs.sha_short }}
-          REGISTRY_USER: ${{ secrets.DOCKER_USERNAME }}
-          REGISTRY_TOKEN: ${{ secrets.DOCKER_TOKEN }}
         run: |
           set -euo pipefail
 
-          # 编排文件每次部署覆盖,保证机器上跑的就是本 commit 声明的编排
-          scp -F ~/.ssh/dev_deploy.conf deploy/docker-compose.dev.yml \
-            "dev-deploy:$DEPLOY_DIR/docker-compose.dev.yml"
+          ssh -F ~/.ssh/dev_deploy.conf dev-deploy "mkdir -p '$DEPLOY_DIR/bin'"
 
-          # 远端脚本整段用引号 heredoc,runner 侧一个字都不插值。插值版本的文本会被
-          # 目标机的 bash 当源码重新解析一遍:令牌里有一个 " 就拆掉引号(登录用错
-          # 密码),有 $ 就被再展开一次,有 $(...) 或反引号就是以 root 在目标机执行
-          # 令牌里的东西。要带过去的值先 %q 转义成 bash 字面量,当脚本头几行一起从
-          # stdin 送进去——既不进 runner 的 argv,也不进目标机的进程表。
+          scp -F ~/.ssh/dev_deploy.conf deploy/docker-compose.dev.yml deploy/Dockerfile.dev \
+            "dev-deploy:$DEPLOY_DIR/"
+          scp -F ~/.ssh/dev_deploy.conf bin/server "dev-deploy:$DEPLOY_DIR/bin/server.next"
+
+          # 远端脚本用引号 heredoc，runner 侧不插值；要带过去的值先 %q 转义
           {
-          printf 'REGISTRY=%q\nREGISTRY_USER=%q\nREGISTRY_TOKEN=%q\nIMAGE=%q\nDEPLOY_DIR=%q\n' \
-            "$REGISTRY" "$REGISTRY_USER" "$REGISTRY_TOKEN" "$IMAGE" "$DEPLOY_DIR"
+          printf 'DEPLOY_DIR=%q\n' "$DEPLOY_DIR"
           cat <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_DIR"
 
-          # 登录只为这一次 pull:退出时无条件 logout。docker 把凭据明文 base64 存进
-          # ~/.docker/config.json,留着就等于在这台内网机器上长期落盘一份 registry 令牌。
-          trap 'docker logout "$REGISTRY" >/dev/null 2>&1 || true' EXIT
-          printf '%s' "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          test -s bin/server.next || { echo "bin/server.next 没传上来或者是空的" >&2; exit 1; }
+          chmod 755 bin/server.next
+          mv -f bin/server.next bin/server
 
-          # .env 是机器本地资产,只改写 SERVER_IMAGE 这一项,其余键原样保留
-          touch .env
-          { grep -v '^SERVER_IMAGE=' .env || true; echo "SERVER_IMAGE=$IMAGE"; } > .env.next
-          mv .env.next .env
+          # 上下文只给 bin/：部署目录里的 config.yaml 和 keys/ 不该进构建上下文
+          prev=$(docker image inspect -f '{{.Id}}' agentre-server:dev 2>/dev/null || true)
+          docker build -f Dockerfile.dev -t agentre-server:dev bin
 
-          # 校验放在目标机而不是 runner:.env 是机器本地文件,从不离开这台机器,
-          # runner 上根本没有它可校验。这里用真实 .env 解析,才能挡住空 tag。
           docker compose -f docker-compose.dev.yml config -q
-          docker compose -f docker-compose.dev.yml pull
-          docker compose -f docker-compose.dev.yml up -d
+          docker compose -f docker-compose.dev.yml up -d --force-recreate
+
+          # tag 每次复用，上一个镜像会变成 dangling 攒在机器上。容器已经换到新镜像了才删得掉；
+          # 不用 image prune -f，那会连这台机器上别的 dangling 镜像一起收走
+          now=$(docker image inspect -f '{{.Id}}' agentre-server:dev)
+          if [ -n "$prev" ] && [ "$prev" != "$now" ]; then
+            docker image rm "$prev" >/dev/null 2>&1 || true
+          fi
           REMOTE
           } | ssh -F ~/.ssh/dev_deploy.conf dev-deploy bash -s
 
-      # status 在 handler 里是硬编码的 "ok"(internal/controller/healthz_ctr/healthz.go),
-      # 只看它会在 DB 挂掉时也判成功。三项都要为真才算起来了。
+      # status 是硬编码的 "ok"，三项都要为真才算起来了
       - name: Wait for healthz
         run: |
           set -euo pipefail
@@ -185,8 +129,6 @@ jobs:
           cat <<'REMOTE'
           set -uo pipefail
           cd "$DEPLOY_DIR" || exit 1
-          # 轮询靠目标机的 python3。没有它的话下面每次都是 127,会白等两分钟,再报
-          # 一个跟真实原因("这台机器没装 python3")毫无关系的「healthz 没通过」。
           command -v python3 >/dev/null || { echo "目标机上没有 python3,healthz 轮询跑不了" >&2; exit 1; }
           for i in $(seq 1 60); do
             if python3 - <<'PY'
@@ -194,7 +136,6 @@ jobs:
           try:
               body = urllib.request.urlopen("http://127.0.0.1:8443/v1/healthz", timeout=3).read()
               payload = json.loads(body)
-              # 与 e2e/run.mjs:527 的 body.data ?? body 同一写法
               data = payload.get("data") or payload
           except Exception:
               sys.exit(1)
@@ -212,8 +153,6 @@ jobs:
           REMOTE
           } | ssh -F ~/.ssh/dev_deploy.conf dev-deploy bash -s
 
-      # 自托管 runner 的 $HOME 可能跨 job 复用,私钥留在那儿就等于交给下一个 job。
-      # always():前面任何一步失败也照样清。
       - name: Remove SSH credentials
         if: always()
         run: rm -f ~/.ssh/dev_deploy ~/.ssh/dev_deploy.conf
