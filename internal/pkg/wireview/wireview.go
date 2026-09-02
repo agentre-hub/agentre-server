@@ -61,6 +61,14 @@ func Notification(notification *agentrewire.RpcNotification) (string, json.RawMe
 		putNonempty(out, "trigger", value.GetTrigger())
 		putNonzero(out, "turnToken", value.GetTurnToken())
 		view = out
+	case *agentrewire.RpcNotification_TurnStarted:
+		// 客户端要的那一轮开始了。它只带会话身份与 seq ——「开始了」本身就是全部
+		// 内容，用户那句话紧接着作为本轮第一条事件到达。
+		method = "runtime.turnStarted"
+		value := payload.TurnStarted
+		out := map[string]any{"conversationId": value.GetConversationId()}
+		putNonzero(out, "seq", value.GetSeq())
+		view = out
 	default:
 		return "", nil, fmt.Errorf("wireview: unsupported typed notification %T", payload)
 	}

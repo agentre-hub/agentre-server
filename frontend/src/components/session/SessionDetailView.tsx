@@ -474,6 +474,21 @@ export default function SessionDetailView({
         liveTurn.beginTurn(Date.now());
         decisions.requestWaitersRefresh();
       },
+      onTurnStarted: () => {
+        // 客户端要的那一轮开始了(wire 2026-09-02 新增)。此前这一路一个信号都没有:
+        // **别的端**在这条会话上发消息时,这一屏只看得到轮次结束,整轮里头部都是
+        // 灰的、「停止」也摆不出来。
+        //
+        // daemon 把它扇给这条会话的**全部**订阅者,发起方自己也在里面,而补齐还会
+        // 把历史里的这一帧重放一遍。已经知道在跑就什么都不做:重开表会把自己发送
+        // 那一刻起的计时抹掉(回声隔着一个往返才回来),重设占位则会在助手已经开口
+        // 之后又点亮一次三点。
+        if (turn.turnActiveRef.current) return;
+        turn.markTurnActive(true);
+        turn.setPendingAssistant(true);
+        liveTurn.beginTurn(Date.now());
+        decisions.requestWaitersRefresh();
+      },
     });
 
   // 断线原因探测排在中继之后：它看的正是中继吐出来的 relayState。

@@ -1,5 +1,6 @@
 import type {
   AutonomousTurnStartedFrame,
+  TurnStartedFrame,
   EventFrame,
   RunResultDoneFrame,
 } from "@agentre-hub/agentre-wire";
@@ -33,6 +34,8 @@ export interface UseRelayMachineOptions {
     frame: AutonomousTurnStartedFrame,
     createtime?: number,
   ) => void;
+  /** 客户端要的那一轮开始了，见 `NotificationHandlers.onTurnStarted`。 */
+  onTurnStarted?: (frame: TurnStartedFrame, createtime?: number) => void;
 }
 
 export interface UseRelayMachineResult {
@@ -136,6 +139,8 @@ export function useRelayMachine(
             optsRef.current.onRunResultDone?.(frame, at),
           onAutonomousTurnStarted: (frame, at) =>
             optsRef.current.onAutonomousTurnStarted?.(frame, at),
+          onTurnStarted: (frame, at) =>
+            optsRef.current.onTurnStarted?.(frame, at),
         },
         { waitForConnect: false },
       )

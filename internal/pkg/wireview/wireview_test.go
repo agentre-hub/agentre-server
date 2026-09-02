@@ -223,3 +223,20 @@ func TestNotificationViewOmitsZeroTurnStats(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"}`, string(params))
 }
+
+// Given daemon 现在会在客户端要的一轮开始时发一条 runtime.turnStarted;
+// When 它经镜像落库、再从库里投影给浏览器;Then 照常投影成 (方法名, params)。
+//
+// 认不出的通知这里是**报错**的（丢一帧就是页面上一段无声消失的转录），而账号镜像
+// 的详情页整页共用这一次投影 —— 不接这一格，新 agentred 上线之后每一条跑过轮次的
+// 对话，历史都读不出来。
+func TestNotificationViewProjectsTurnStarted(t *testing.T) {
+	method, params, err := Notification(&agentrewire.RpcNotification{
+		Payload: &agentrewire.RpcNotification_TurnStarted{
+			TurnStarted: &agentrewire.TurnStartedNotification{ConversationId: conversationID, Seq: 3},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "runtime.turnStarted", method)
+	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","seq":3}`, string(params))
+}

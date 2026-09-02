@@ -8,6 +8,7 @@ const (
 	notifyAutonomousTurnStarted = "runtime.autonomousTurn.started"
 	notifyAutonomousTurnEvent   = "runtime.autonomousTurn.event"
 	notifyAutonomousTurnDone    = "runtime.autonomousTurn.done"
+	notifyTurnStarted           = "runtime.turnStarted"
 )
 
 func notificationHead(notification *agentrewire.RpcNotification) (string, int64, string) {
@@ -25,6 +26,8 @@ func notificationHead(notification *agentrewire.RpcNotification) (string, int64,
 		return payload.AutonomousTurnEvent.GetConversationId(), payload.AutonomousTurnEvent.GetSeq(), notifyAutonomousTurnEvent
 	case *agentrewire.RpcNotification_AutonomousTurnDone:
 		return payload.AutonomousTurnDone.GetConversationId(), payload.AutonomousTurnDone.GetSeq(), notifyAutonomousTurnDone
+	case *agentrewire.RpcNotification_TurnStarted:
+		return payload.TurnStarted.GetConversationId(), payload.TurnStarted.GetSeq(), notifyTurnStarted
 	default:
 		return "", 0, ""
 	}
@@ -45,6 +48,8 @@ func setNotificationSeq(notification *agentrewire.RpcNotification, seq int64) bo
 		payload.AutonomousTurnEvent.Seq = seq
 	case *agentrewire.RpcNotification_AutonomousTurnDone:
 		payload.AutonomousTurnDone.Seq = seq
+	case *agentrewire.RpcNotification_TurnStarted:
+		payload.TurnStarted.Seq = seq
 	default:
 		return false
 	}

@@ -414,10 +414,14 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 // 清单：那一行会一直停在 running，左栏于是把一条早就结束的对话长期显示成「运行中」，
 // 直到别的事情碰巧触发了一次 Sync（实测能挂十几分钟以上）。
 //
-// 拿这三个方法当判据不是猜，而是对端自己的次序保证：daemon **先**把行落回 idle /
-// 推回 running，**再**发这一帧（handlers.RuntimeHandlers.fanout 与
+// 拿这四个方法当判据不是猜，而是对端自己的次序保证：daemon **先**把行落回 idle /
+// 推回 running，**再**发这一帧（handlers.RuntimeHandlers.Run / fanout 与
 // forwardAutonomousTurn，理由正是「客户端收到终态帧后立刻查清单必须已经看到 idle」）。
 // 所以收到帧的这一刻，对端那边就是这个值。
+//
+// 客户端自己发起的那一轮此前没有开始通知（协议上就没有），所以「我刚发了一条消息」
+// 在左栏看不出来：整轮里那条对话都是灰的，跑完了被推回 idle，还是灰的。turnStarted
+// （wire 2026-09-02 新增）补的正是这一半。
 //
 // 只动这一列：等待输入与标题之类仍然只由清单说了算，帧里没有它们的答案。
 func (ts *trackedSession) followTurn(method string) {
@@ -425,7 +429,7 @@ func (ts *trackedSession) followTurn(method string) {
 	switch method {
 	case notifyRunResultDone, notifyAutonomousTurnDone:
 		state = relaywire.SessionLifecycleIdle
-	case notifyAutonomousTurnStarted:
+	case notifyAutonomousTurnStarted, notifyTurnStarted:
 		state = relaywire.SessionLifecycleRunning
 	default:
 		return

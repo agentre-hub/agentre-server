@@ -340,6 +340,12 @@ func autonomousTurnStarted(sid string, seq int64) *agentrewire.RpcNotification {
 	}}
 }
 
+func turnStarted(sid string, seq int64) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_TurnStarted{
+		TurnStarted: &agentrewire.TurnStartedNotification{ConversationId: sid, Seq: seq},
+	}}
+}
+
 func autonomousTurnDone(sid string, seq int64) *agentrewire.RpcNotification {
 	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_AutonomousTurnDone{
 		AutonomousTurnDone: &agentrewire.RunResultDoneNotification{ConversationId: sid, Seq: seq},
@@ -1058,4 +1064,28 @@ func TestApply_TurnDoneArrivesThroughAGap_StillLandsIdle(t *testing.T) {
 	r.flush()
 	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t),
 		"漏了一帧不该让这条对话永久停在「运行中」")
+}
+
+// Given 一条闲着的会话;When 用户在别处（控制台 / 手机）对它发了一条消息,
+// daemon 发出这一轮的开始通知;Then 镜像那一行立刻变成 running。
+//
+// 此前镜像只认得轮次的**结束**：用户自己发起的那一轮在协议上没有开始通知，所以
+// 「我刚发了一条消息」在左栏是看不出来的 —— 点是灰的，等这一轮跑完了才被推回
+// idle（还是灰的）。整轮里那条对话从头到尾显示成闲着。
+func TestApply_UserTurnStarted_MovesLifecycleToRunning(t *testing.T) {
+	r := newRig(t)
+	idle := runningSession(conv42, "写个爬虫")
+	idle.LifecycleState = relaywire.SessionLifecycleIdle
+	r.relay.sessions = []*agentrewire.SessionSummary{idle}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, turnStarted(conv42, 1)))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 2)))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t), "跑完了还是要落回 idle")
 }

@@ -323,6 +323,52 @@ describe("RelayClient Protobuf RPC boundary", () => {
       ]),
     );
   });
+  // Given daemon 现在会在客户端要的一轮开始时先发一条 turnStarted（seq 1）；
+  // When 本轮第一条事件跟在它后面（seq 2）到达；
+  // Then 开始帧投给 onTurnStarted，事件照常交付 —— 序号闸门必须把开始帧也算进游标。
+  //
+  // 不认它就是每一轮都跳一号：`decodeNotification` 返回 null 的那条路**在 applyDedup
+  // 之前就 return 了**，那一格游标没人占，于是下一条实时帧被判成漏帧、起一次补齐
+  // 拉取。轮轮如此，每一轮的第一个 token 都要多等一个往返。
+  it("delivers a turn-started notification and lets it consume its seq", async () => {
+    const events: unknown[] = [];
+    const starts: unknown[] = [];
+    const { client, socket } = setup({
+      onEvent: (event) => events.push(event),
+      onTurnStarted: (frame) => starts.push(frame),
+    });
+    await authenticate(client, socket);
+    socket.receive(
+      ProtobufRpcCodec.encode({
+        id: 0n,
+        body: { case: "turnStartedNotification", conversationId: CID, seq: 1 },
+      }),
+    );
+    socket.receive(
+      ProtobufRpcCodec.encode({
+        id: 0n,
+        body: {
+          case: "runtimeEventNotification",
+          conversationId: CID,
+          seq: 2,
+          event: { case: "textDelta", text: "第一句" },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(starts).toEqual([{ conversationId: CID, seq: 1 }]);
+    expect(events).toEqual([
+      {
+        conversationId: CID,
+        seq: 2,
+        event: { kind: "text_delta", text: "第一句" },
+      },
+    ]);
+    // 补洞会往线上发一次 attach + pull；开始帧占掉了 seq 1，一帧都不该发。
+    expect(socket.sent).toHaveLength(0);
+  });
+
   // Given 日志里除了 runtime.event 还有轮次结束帧（`RpcNotification.run_result_done`，
   // 每跑完一轮就落一条）；When 打开一条已经跑完的对话、按游标补齐这一页；Then 整页
   // 必须照常交付 —— 事件进转录、结束帧进 onRunResultDone。
@@ -529,9 +575,9 @@ describe("RelayClient Protobuf RPC boundary", () => {
       },
     ]);
   });
-  // Given 日志里可以出现 RpcNotification 的**任意**一种形态（普通轮次的事件与结束、
-  // 自主续轮的起/事件/止）；When 补齐把这一页翻成中间形状再投递；Then 五种都要
-  // 落到各自那一口。
+  // Given 日志里可以出现 RpcNotification 的**任意**一种形态（普通轮次的起/事件/
+  // 结束、自主续轮的起/事件/止）；When 补齐把这一页翻成中间形状再投递；Then 六种
+  // 都要落到各自那一口。
   //
   // 这一条是「按形态穷举」的守卫，不是又一条用例：上面那条 run-result-done 的红
   // 之所以能长期存在，正是因为补齐路径此前只被 textDelta 一种形态测过。少了这条，
@@ -540,10 +586,12 @@ describe("RelayClient Protobuf RPC boundary", () => {
     const events: unknown[] = [];
     const done: unknown[] = [];
     const started: unknown[] = [];
+    const turnStarts: unknown[] = [];
     const { client, socket } = setup({
       onEvent: (frame) => events.push(frame),
       onRunResultDone: (frame) => done.push(frame),
       onAutonomousTurnStarted: (frame) => started.push(frame),
+      onTurnStarted: (frame) => turnStarts.push(frame),
     });
     await authenticate(client, socket);
 
@@ -565,6 +613,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
       },
       { case: "autonomousTurnEvent", value: runtimeEvent },
       { case: "autonomousTurnDone", value: doneValue },
+      { case: "turnStarted", value: { conversationId: CID } },
     ] as const;
 
     const caughtUp = client.catchUp(CID, "fp-origin");
@@ -601,10 +650,11 @@ describe("RelayClient Protobuf RPC boundary", () => {
     );
 
     await expect(caughtUp).resolves.toBeUndefined();
-    // 自主续轮的事件与结束共用普通那两口（见 decodeNotification），所以是 2 / 2 / 1。
+    // 自主续轮的事件与结束共用普通那两口（见 decodeNotification），所以是 2 / 2 / 1 / 1。
     expect(events.map((f) => (f as { seq: number }).seq)).toEqual([1, 4]);
     expect(done.map((f) => (f as { seq: number }).seq)).toEqual([2, 5]);
     expect(started.map((f) => (f as { seq: number }).seq)).toEqual([3]);
+    expect(turnStarts.map((f) => (f as { seq: number }).seq)).toEqual([6]);
   });
 });
 

@@ -5801,6 +5801,21 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
     expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
   });
 
+  // 别的端（另一台桌面端 / 手机）在这条会话上开了一轮：daemon 现在会发
+  // `runtime.turnStarted`（wire 2026-09-02 新增），这一屏据此也该显示成在跑。
+  // 此前这一路一个信号都没有 —— 只有轮次**结束**看得见，整轮里头部都是灰的。
+  it("Given 别的端在这条会话上发了消息 When 收到 turnStarted Then 头部变 Running", async () => {
+    wireIdleSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    expect(statusText()).toContain("Idle");
+
+    act(() => capturedOpts.onTurnStarted?.({ conversationId: "42" }));
+
+    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
+  });
+
   // 装载那一刻对端就在跑：`markTurnActive` 在 attach 之后按 lifecycleState 接回来，
   // 头部照样要显示 Running —— 这一档此前是唯一显示对的，不能改回归时丢掉。
   it("Given 装载时对端正在跑 Then 头部一开始就是 Running", async () => {

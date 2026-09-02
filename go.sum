@@ -8,8 +8,8 @@ github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7Oputl
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
 github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc=
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902135744-45af92936043 h1:qOaASM47LZ/7MkeQWtc672oVuYKaEuvYFeIMR5Yms54=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902135744-45af92936043/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902162113-94fc8dccdd13 h1:RogFVGjtkSfjPC8KlMvCdHQmVG0twiDY8kfUmEAhp/g=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902162113-94fc8dccdd13/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/alicebob/miniredis/v2 v2.38.0 h1:nZAzCR+Lj+Vxk4ZXzm2NuKq2O33RXj1XxJ2e2uP9jiw=
 github.com/alicebob/miniredis/v2 v2.38.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=

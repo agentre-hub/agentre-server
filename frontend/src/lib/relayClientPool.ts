@@ -21,6 +21,7 @@
  */
 import type {
   AutonomousTurnStartedFrame,
+  TurnStartedFrame,
   EventFrame,
   RunResultDoneFrame,
 } from "@agentre-hub/agentre-wire";
@@ -51,6 +52,8 @@ export interface RelayListener {
     frame: AutonomousTurnStartedFrame,
     createtime?: number,
   ) => void;
+  /** 客户端要的那一轮开始了，见 `NotificationHandlers.onTurnStarted`。 */
+  onTurnStarted?: (frame: TurnStartedFrame, createtime?: number) => void;
   onStateChange?: (state: RelayState) => void;
 }
 
@@ -401,6 +404,9 @@ export class RelayClientPool {
       ),
       onAutonomousTurnStarted: fanout<[AutonomousTurnStartedFrame, number?]>(
         (l) => l.onAutonomousTurnStarted,
+      ),
+      onTurnStarted: fanout<[TurnStartedFrame, number?]>(
+        (l) => l.onTurnStarted,
       ),
       onStateChange: fanout<[RelayState]>((l) => l.onStateChange),
     });

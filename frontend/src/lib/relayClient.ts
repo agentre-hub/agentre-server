@@ -23,6 +23,7 @@ import {
   type RunResultDoneFrame,
   type SessionAttachResult,
   type AutonomousTurnStartedFrame,
+  type TurnStartedFrame,
   type ProtobufRpcFrame,
   type RuntimeEventNotificationFrame,
   type EventKind,
@@ -56,6 +57,7 @@ import {
   NotifyAutonomousTurnDone,
   NotifyAutonomousTurnEvent,
   NotifyAutonomousTurnStarted,
+  NotifyTurnStarted,
   NotifyEvent,
   NotifyRunResultDone,
   ProtobufRpcCodec,
@@ -109,6 +111,14 @@ export interface NotificationHandlers {
     frame: AutonomousTurnStartedFrame,
     createtime?: number,
   ) => void;
+  /**
+   * 客户端要的那一轮开始了（wire 2026-09-02 新增）。
+   *
+   * 与 `onAutonomousTurnStarted` 分开一口，因为两者说的不是同一件事：那一条是后台
+   * 任务替用户开的一轮，这一条可能就是**本浏览器**刚发的那条消息（daemon 扇给这条
+   * 会话的全部订阅者，发起方自己也在里面）。读者据此自己判要不要动。
+   */
+  onTurnStarted?: (frame: TurnStartedFrame, createtime?: number) => void;
 }
 export interface RelayClientOptions extends NotificationHandlers {
   /**
@@ -771,6 +781,17 @@ function decodeNotification(
       deliver: (h, at) => h.onAutonomousTurnStarted?.(value, at),
     };
   }
+  if (body.case === "turnStartedNotification") {
+    const value: TurnStartedFrame = {
+      conversationId: body.conversationId,
+      seq: body.seq,
+    };
+    return {
+      conversationId: value.conversationId,
+      seq: value.seq,
+      deliver: (h, at) => h.onTurnStarted?.(value, at),
+    };
+  }
   return null;
 }
 
@@ -893,6 +914,7 @@ const JOURNALED_METHODS: Record<string, string> = {
   runResultDone: NotifyRunResultDone,
   autonomousTurnDone: NotifyAutonomousTurnDone,
   autonomousTurnStarted: NotifyAutonomousTurnStarted,
+  turnStarted: NotifyTurnStarted,
 };
 
 /**
@@ -949,6 +971,16 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
         trigger: value.trigger,
         turnToken: Number(value.turnToken ?? 0),
       },
+    };
+  }
+  if (method === NotifyTurnStarted) {
+    // 「开始了」本身就是全部内容:这一轮的模型 / 用量 / 计时都要到终态帧才知道,
+    // 用户那句话紧接着作为本轮第一条事件到达。
+    return {
+      seq,
+      method,
+      createtime,
+      params: { conversationId: String(value.conversationId ?? ""), seq },
     };
   }
   const usage = value.usage as Record<string, number> | undefined;
@@ -1018,6 +1050,12 @@ function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
         trigger: str(value.trigger),
         turnToken: BigInt(num(value.turnToken)),
       },
+    } as ProtobufRpcFrame;
+  }
+  if (n.method === NotifyTurnStarted) {
+    return {
+      id: 0n,
+      body: { case: "turnStartedNotification", conversationId, seq: n.seq },
     } as ProtobufRpcFrame;
   }
   if (n.method !== NotifyRunResultDone && n.method !== NotifyAutonomousTurnDone)
