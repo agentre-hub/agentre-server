@@ -1,6 +1,3 @@
-# 这个目录存在时 Gitea 不再读 .github/workflows/，两者不合并。
-# uses 走 actions/* 是本 Gitea 实例的动作镜像位置，上游名字见各自上一行。
-
 name: Deploy
 
 on:
@@ -35,22 +32,18 @@ jobs:
         with:
           go-version: '1.26'
 
-      # 不造这个占位文件，下面的 lint 和 test 会在 //go:embed 上编译期失败
       - name: Prepare embedded frontend placeholder
         run: |
           mkdir -p internal/web/dist
           test -f internal/web/dist/index.html || printf '<!doctype html>\n' > internal/web/dist/index.html
 
       - name: Lint
-        # 上游是 golangci/golangci-lint-action@v8
         uses: actions/golangci-lint-action@v8
         with:
           version: v2.12.2
-          # 默认的下载二进制模式要连 GitHub releases，走 goinstall 更稳
           install-mode: goinstall
           args: --timeout=10m
 
-      # 与 make test-backend 同一条命令。前端门禁在 GitHub 侧的 ci.yml
       - name: Test
         run: go test -race ./...
 
@@ -60,15 +53,12 @@ jobs:
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Set up QEMU
-        # 上游是 docker/setup-qemu-action@v3
         uses: actions/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        # 上游是 docker/setup-buildx-action@v3
         uses: actions/setup-buildx-action@v3
 
       - name: Login to registry
-        # 上游是 docker/login-action@v3
         uses: actions/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -76,7 +66,6 @@ jobs:
           password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Docker build and push
-        # 上游是 docker/build-push-action@v6
         uses: actions/build-push-action@v6
         with:
           push: true
@@ -95,7 +84,6 @@ jobs:
             COMMIT=${{ steps.vars.outputs.sha_short }}
 
       - name: Set up kubeconfig
-        # 上游是 azure/k8s-set-context@v4
         uses: actions/k8s-set-context@v4
         with:
           method: kubeconfig
@@ -103,7 +91,6 @@ jobs:
           context: k8s-context
 
       - name: Set up Helm
-        # 上游是 azure/setup-helm@v4
         uses: actions/setup-helm@v4
         with:
           version: 'v3.13.1'
@@ -118,8 +105,6 @@ jobs:
           AUTO_SCALING_MIN_REPLICAS: ${{ env.ENV=='prod' && '2' || '1' }}
           ETCD_PASSWORD: ${{ secrets.ETCD_CONFIG_PASSWORD }}
         run: |
-          # --set 会做类型推断（纯数字密码变整数），字符串一律 --set-string。
-          # 两者都按逗号切分，etcd 密码里不能有逗号。
           helm upgrade --install "$RELEASE" ./deploy/helm \
             --namespace "$NAMESPACE" \
             --set-string image.repository="$REGISTRY/$REPOSITORY" \
