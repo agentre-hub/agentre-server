@@ -157,6 +157,10 @@ docker compose -f docker-compose.dev.yml up -d
 docker compose -f docker-compose.dev.yml logs -f server
 ```
 
+上面两条都只用本地已有的镜像，不需要 registry 凭据。流水线的 registry 登录是
+一次性的，`pull` 完就 `docker logout`，不在机器上留 `~/.docker/config.json`；
+所以要手动 `docker compose pull` 得自己先 `docker login`。
+
 ### 第一次切换要做的（只做一次）
 
 流水线只负责「拉新镜像 + compose up」。下面这些是一次性且不可逆的动作，没放进流水线
