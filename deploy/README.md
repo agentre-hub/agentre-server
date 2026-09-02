@@ -183,6 +183,18 @@ docker compose -f docker-compose.dev.yml logs -f server
    cp /root/code/agentre/agentre-server/runtime/keys/jwt.key /srv/agentre-dev/keys/
    cp /root/code/agentre/agentre-server/runtime/keys/jwt.pub /srv/agentre-dev/keys/
    chmod 600 /srv/agentre-dev/keys/jwt.key
+   # 镜像里跑的是 uid 65532(Dockerfile 的 USER 65532:65532),不是 root。上面几个
+   # 文件从源处继承的是 600 root,不交出去容器一个都读不到,启动就挂。
+   chown 65532:65532 /srv/agentre-dev/config.yaml /srv/agentre-dev/keys \
+                     /srv/agentre-dev/keys/jwt.key /srv/agentre-dev/keys/jwt.pub
+   ```
+
+   验一下容器那个 uid 真的读得到（三个都要是 0）：
+
+   ```bash
+   for f in /srv/agentre-dev/config.yaml /srv/agentre-dev/keys/jwt.key /srv/agentre-dev/keys/jwt.pub; do
+     setpriv --reuid=65532 --regid=65532 --clear-groups cat "$f" >/dev/null; echo "$? $f"
+   done
    ```
 
 3. **把 etcd 里的 JWT 路径改成容器路径。** 现在 `/config/dev/agentre-server/server`
@@ -191,12 +203,25 @@ docker compose -f docker-compose.dev.yml logs -f server
    把那两条路径改成 `/keys/jwt.key` 和 `/keys/jwt.pub`，该键的其余内容原样保留，
    改法见上面「配置放在 etcd 里」。
 
-4. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
-   对应的私钥就是下面要配的 `DEV_SSH_KEY`。
+4. **把 etcd 里 dev 的 `logFile.enable` 关掉。** `/config/dev/agentre-server/logger` 现在是
+   `enable: true`，写 `./runtime/logs/cago.log`。容器的 WORKDIR 是 `/app` 且属 root，
+   uid 65532 建不出 `runtime/logs`。这和上面 k8s 那节写的是同一条约束——容器里
+   `logFile.enable` 必须是 `false`，只是 dev 一样绕不过去。日志照样从
+   `docker compose logs` 看，`disableConsole` 保持 `false` 就行。
 
-5. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
+5. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
+   对应的私钥就是下面要配的 `DEV_SSH_KEY`。没有现成密钥就在目标机上现生一对，
+   私钥不必落到第三处：
 
-6. **建 dev 分支并推上去**，这一推就会跑第一次部署：
+   ```bash
+   ssh-keygen -t ed25519 -N '' -C 'gitea-dev-deploy' -f /root/.ssh/gitea_dev_deploy
+   cat /root/.ssh/gitea_dev_deploy.pub >> /root/.ssh/authorized_keys
+   cat /root/.ssh/gitea_dev_deploy      # 这一份贴进 Gitea 的 DEV_SSH_KEY
+   ```
+
+6. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
+
+7. **建 dev 分支并推上去**，这一推就会跑第一次部署：
 
    ```bash
    git checkout -b dev
