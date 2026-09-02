@@ -1204,6 +1204,12 @@ describe("草稿页的权限档位与模型控件", () => {
     return request;
   }
 
+  // 同一份应答里另一格：`capabilities` 是一串 {name, enabled}。
+  const capsWithEffort = {
+    capabilities: [{ name: "reasoning_effort", enabled: true }],
+    permissionMode: { allowedModes: [] },
+  };
+
   // Protobuf 的 RuntimeCapabilitiesResponse：档位在自己那一格 permission_mode 上。
   const fourModes = {
     capabilities: [],
@@ -1349,6 +1355,47 @@ describe("草稿页的权限档位与模型控件", () => {
       providerKey: "pk-1",
       modelKey: "mk-2",
     });
+  });
+
+  /**
+   * 草稿页的第三颗控件：会话级思考力度（规格 2026-09-01）。草稿态还没有会话行，
+   * 所选档位是纯瞬态的，随第一句一并过线（并由派发在 ack 之后补钉）。
+   *
+   * 支不支持同样问执行端本人：能力位为假（openclaw）时整颗不渲染。
+   */
+  it("Given 后端声明 reasoning_effort, When 选一档并发出第一句, Then 它随第一句过线", async () => {
+    stubMachine(capsWithEffort);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Reasoning effort/ }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: "xhigh" }));
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(mockDispatch.mock.calls[0][0].reasoningEffort).toBe("xhigh");
+  });
+
+  it("Given 后端没有这个能力, When 打开草稿, Then 力度控件整颗不摆", async () => {
+    const request = stubMachine(fourModes);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        rpcMethods.runtimeCapabilities,
+        expect.anything(),
+      ),
+    );
+    expect(screen.queryByTestId("composer-reasoning-effort")).toBeNull();
   });
 
   // 钉不住不影响这条对话开起来（第一轮就是按所选模型跑的），但后续轮次会回到跟随

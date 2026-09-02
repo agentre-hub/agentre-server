@@ -70,6 +70,8 @@ export interface SessionComposerBandProps {
   onPermissionModeChange: (value: string) => void;
   /** 模型控件由详情视图拼好交进来：改模型要写两台机器，那是它的事。 */
   modelControl: ReactNode;
+  /** 思考力度控件同理（同样是两台机器都要写）；后端不支持时详情视图给 null。 */
+  reasoningEffortControl: ReactNode;
   sendFeedback: SendFeedback;
 }
 
@@ -96,6 +98,7 @@ export default function SessionComposerBand({
   permissionError,
   onPermissionModeChange,
   modelControl,
+  reasoningEffortControl,
   sendFeedback,
 }: SessionComposerBandProps) {
   const { t } = useTranslation();
@@ -212,6 +215,7 @@ export default function SessionComposerBand({
             permissionError={permissionError}
             onPermissionModeChange={onPermissionModeChange}
             modelControl={modelControl}
+            reasoningEffortControl={reasoningEffortControl}
             feedback={
               // 失败不在这里了：它成了转录流里的一条气泡（决策 7）。这一格只剩
               // 「已排进这一轮」——那条消息**发出去了**，说的是另一件事。

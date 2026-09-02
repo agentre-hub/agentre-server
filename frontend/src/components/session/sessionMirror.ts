@@ -134,6 +134,28 @@ export async function writeModelTargetToOrigin(
 }
 
 /**
+ * 把这条会话的思考力度也写到**发起端**那一台（规格 2026-09-01）。
+ *
+ * 与上面那一跳逐字同构，理由也同一条：两边各有一份自己的会话行，只写承载者的话，
+ * 用户在发起端打开会看到旧档位。`reasoningEffort` 空串是**要写下去的值**（改回
+ * 跟随后端配置），不是「不改」，所以这里不做任何空值省略。
+ *
+ * 够不着时**抛出**，由调用方折进「只写成一台」：承载者上那一次确实生效了，回滚掉
+ * 是在说一句假话。
+ */
+export async function writeReasoningEffortToOrigin(
+  origin: string,
+  params: { conversationId: string; reasoningEffort: string },
+): Promise<void> {
+  await withRelayClient(machineTarget(origin), async (client) => {
+    await client.request(rpcMethods.setSessionReasoningEffort, {
+      ...params,
+      peerFingerprint: origin,
+    });
+  });
+}
+
+/**
  * 从 server 镜像取这条对话**最后那一段**（规格 2026-08-21-transcript-tail-loading）。
  *
  * beforeSeq=0 是首屏（从最新往回）；往上滚续读时传手上最老那条的 seq，服务端按它

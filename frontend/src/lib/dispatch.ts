@@ -161,6 +161,12 @@ export interface DispatchInput {
    * 这条对话钉的模型目标。两格皆空 = 跟随 Agent 绑定：既不带过线也不去钉。
    */
   modelTarget?: { providerKey: string; modelKey: string };
+  /**
+   * 这条对话选定的思考力度（六档，空 = 跟随后端配置）。空时既不带过线也不去钉:
+   * 带一个空值等于浏览器在主张「这条会话显式选了默认档」，执行端据此会把后端配置
+   * 整个丢掉（规格 2026-09-01 硬不变量 6）。
+   */
+  reasoningEffort?: string;
 }
 
 export class DispatchConnectionError extends Error {
@@ -190,6 +196,7 @@ export async function dispatchNewConversation(
     input.modelTarget && input.modelTarget.providerKey !== ""
       ? input.modelTarget
       : null;
+  const pinEffort = input.reasoningEffort?.trim() || "";
   // 交出去与送过线的是同一个值，不是各算一次：`RunParams.title` 在生成的类型上是
   // 可选的，取回来会是 `string | undefined`。
   const title = deriveTitle(input.message);
@@ -217,6 +224,9 @@ export async function dispatchNewConversation(
           llmModelKey: pinTarget.modelKey,
         }
       : {}),
+    // 力度是**单列**过线的（RunParams.reasoningEffort），不是塞在 backend 负载里:
+    // 浏览器发的是空壳 backend，塞进去那条路上恒为空。
+    ...(pinEffort ? { reasoningEffort: pinEffort } : {}),
     // R17：不注入 mcpServers —— org / subagent / hook 是真身在桌面端的内置工具，
     // web 发起的对话用不了它们（发起前已由界面说明）。
   };
@@ -326,6 +336,10 @@ export async function dispatchNewConversation(
     } catch {
       // 保存没写上:会话已经建起来了,交给调用方照常跳转。
     }
+    // 钉住力度与钉住模型是同一件事的两半（都是「过线只管当轮，会话行得另写一次」），
+    // 所以排在同一处、走同一条规矩：钉不住不算派发失败。
+    if (pinEffort)
+      await pinReasoningEffort(client, ack.conversationId, pinEffort);
     return {
       conversationId: ack.conversationId,
       deviceId: choice.device_id,
@@ -372,5 +386,31 @@ async function pinModelTarget(
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * 把这条对话选定的思考力度钉在它自己身上。
+ *
+ * 与 pinModelTarget 同一条理由:`runtime.run` 上的力度只管**这一轮**（daemon 按轮
+ * 取 run 参数），会话行那一格只有 `runtime.setSessionReasoningEffort` 一条写路。
+ * 只过线不钉住，用户选的档位第一轮生效、随后打开详情页却读回「跟随后端配置」——
+ * 一句用户无法证伪的假话。
+ *
+ * 派发时选中的那一台既是发起端也是承载者，所以只写它一台，不做详情页那套「两台都
+ * 写」。写不上不抛错:派发已经成功，报成失败用户一重试就凭空再开一条。
+ */
+async function pinReasoningEffort(
+  client: RelayClient,
+  conversationId: string,
+  reasoningEffort: string,
+): Promise<void> {
+  try {
+    await client.request(rpcMethods.setSessionReasoningEffort, {
+      conversationId,
+      reasoningEffort,
+    });
+  } catch {
+    // 钉不住:第一轮仍按所选档位跑了，后续轮次回到后端配置。
   }
 }

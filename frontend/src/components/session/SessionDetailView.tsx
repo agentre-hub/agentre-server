@@ -19,6 +19,7 @@ import {
   reduceSessionState,
   resolveProviderPillState,
   type ModelTarget,
+  type ReasoningEffortValue,
 } from "@agentre-hub/agentre-ui";
 
 import AppShell from "@/components/AppShell";
@@ -26,6 +27,8 @@ import SessionDetailHeader from "@/components/session/SessionDetailHeader";
 import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
 import SessionModelControl from "@/components/session/SessionModelControl";
+import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
+import { decodeReasoningEffortSupport } from "@/components/session/reasoningEffortSupport";
 import { doneEventFrame } from "@/components/session/turnDone";
 import {
   useReconnectProbe,
@@ -52,6 +55,7 @@ import {
   fetchMirrorRow,
   type MirrorSessionItem,
   writeModelTargetToOrigin,
+  writeReasoningEffortToOrigin,
 } from "@/components/session/sessionMirror";
 import { useLiveTurnTiming } from "@/components/session/useLiveTurnTiming";
 import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
@@ -233,6 +237,17 @@ export default function SessionDetailView({
   const [modelTargetNote, setModelTargetNote] = useState<string | null>(
     initialModelNote ?? null,
   );
+  /**
+   * 这个后端支不支持会话级思考力度（执行端自报的能力位，规格 2026-09-01 决策 6）。
+   * 为假时整颗控件不渲染 —— 不置灰、也不解释一个用户改不了的事实。
+   */
+  const [supportsReasoningEffort, setSupportsReasoningEffort] = useState(false);
+  /** 用户这一次选的力度；null = 还没选过，按落库那一份显示。 */
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
+  /** 上一次改力度失败 / 只写成一台的说明。 */
+  const [reasoningEffortNote, setReasoningEffortNote] = useState<string | null>(
+    null,
+  );
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   /**
    * 账号镜像那一行派生出来的摘要 —— 头部的**替补**来路。
@@ -332,6 +347,11 @@ export default function SessionDetailView({
     turn.reset();
     liveTurn.reset();
     setPinnedAgentredUnavailable(false);
+    // 力度那三格同属会话级：不清的话，B 的控件会摆着 A 刚选的那一档，而能力位
+    // 要等新摘要落地才重问（此刻摆的是上一条会话那个后端的答案）。
+    setReasoningEffort(null);
+    setReasoningEffortNote(null);
+    setSupportsReasoningEffort(false);
     setReady(false);
     scrollback.reset();
     setCatchUpFailed(false);
@@ -446,10 +466,14 @@ export default function SessionDetailView({
         .then((raw) => {
           if (!alive()) return;
           setPermissionModeMeta(decodePermissionModeMeta(raw));
+          // 力度那一格在同一份应答的 capabilities 上（见 reasoningEffortSupport）。
+          setSupportsReasoningEffort(decodeReasoningEffortSupport(raw));
         })
         .catch(() => {
           // 报错与解不动是同一件事：这台机器此刻答不出档位。
-          if (alive()) setPermissionModeMeta(null);
+          if (!alive()) return;
+          setPermissionModeMeta(null);
+          setSupportsReasoningEffort(false);
         });
     },
     [client, relayState, summary?.backendType],
@@ -905,6 +929,73 @@ export default function SessionDetailView({
   }
 
   /**
+   * 会话行上钉的力度（空串 = 跟随后端配置）。来路与模型目标那两格同一条：执行端
+   * 的会话摘要，那正是本页刚才双写过去的那一格。
+   *
+   * 它**不是**「有效档位」：有效档位由控件自己合成（会话值优先、否则后端配置），
+   * 宿主这里不合成第二次。写入与回滚认的都是这一格 —— 会话行为空而后端配的是 high
+   * 时，用户显式选 high 是一次真实写入，不是空操作。
+   */
+  const sessionReasoningEffort =
+    reasoningEffort ?? identity?.reasoningEffort ?? "";
+  /**
+   * 后端配置的那一档，会话行为空时由控件用它兜底显示。
+   *
+   * `/v1/engine/backends` 那一行上确实带着 `reasoning_effort`
+   * （`internal/api/engine.BackendItem`），只是本站 `EngineBackend` 那个**窄视图**
+   * 没有声明它。按存在性读这一格，读不到就当没配 —— 不假设它一定在。
+   */
+  const backendReasoningEffort =
+    engineBackend && "reasoning_effort" in engineBackend
+      ? String(engineBackend.reasoning_effort ?? "")
+      : "";
+
+  /**
+   * 改这条会话的思考力度（规格 2026-09-01「agentre-server 宿主」）。
+   *
+   * 与改模型逐条同构：**两台都写**（承载者是此刻这条连接，发起端另借一条），
+   * 只写成一台仍算成功但要如实说出另一台没跟上，两台都没写成才回滚控件。
+   * 不回滚的理由不是省事：那一次写入在承载者上真真切切生效了，下一轮就按它跑。
+   */
+  function changeReasoningEffort(next: ReasoningEffortValue) {
+    const previous = sessionReasoningEffort;
+    setReasoningEffort(next);
+    setReasoningEffortNote(null);
+
+    const c = clientRef.current;
+    if (!c) return;
+    const origin = originRef.current;
+    const params = { conversationId: sid, reasoningEffort: next };
+    const writes: Promise<unknown>[] = [
+      c.request(rpcMethods.setSessionReasoningEffort, {
+        ...params,
+        ...(origin ? { peerFingerprint: origin } : {}),
+      }),
+    ];
+    if (origin && origin !== device?.fingerprint) {
+      writes.push(writeReasoningEffortToOrigin(origin, params));
+    }
+    void Promise.allSettled(writes).then((results) => {
+      const ok = results.filter((r) => r.status === "fulfilled").length;
+      if (ok === 0) {
+        setReasoningEffort(previous);
+        const reason = results.find((r) => r.status === "rejected")?.reason;
+        setReasoningEffortNote(
+          t("session.composerControls.effortSetFailed", {
+            reason: reason instanceof Error ? reason.message : String(reason),
+          }),
+        );
+        return;
+      }
+      setReasoningEffortNote(
+        ok < results.length
+          ? t("session.composerControls.effortPartiallySynced")
+          : null,
+      );
+    });
+  }
+
+  /**
    * 一轮还没跑完时，meta 栏的模型退到这一个 —— 就是底栏那颗 pill 此刻显示的名字。
    *
    * 消息自己的 `model` 只有终态帧一条来路（wire 上的 usage 帧没有这个字段），
@@ -920,6 +1011,15 @@ export default function SessionDetailView({
   });
   const fallbackModel =
     modelPill.mode === "invalid" ? "" : modelPill.modelLabel;
+
+  const reasoningEffortControl = supportsReasoningEffort ? (
+    <SessionReasoningEffortControl
+      value={sessionReasoningEffort}
+      backendValue={backendReasoningEffort}
+      onChange={changeReasoningEffort}
+      note={reasoningEffortNote}
+    />
+  ) : null;
 
   const modelControl = (
     <SessionModelControl
@@ -1070,6 +1170,7 @@ export default function SessionDetailView({
       permissionError={permissionError}
       onPermissionModeChange={changePermissionMode}
       modelControl={modelControl}
+      reasoningEffortControl={reasoningEffortControl}
       sendFeedback={turn.sendFeedback}
     />
   );

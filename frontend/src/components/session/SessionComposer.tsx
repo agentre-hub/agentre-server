@@ -67,6 +67,7 @@ export default function SessionComposer({
   permissionError,
   onPermissionModeChange,
   modelControl,
+  reasoningEffortControl,
 }: {
   backendType?: string;
   agents: ComposerAgent[];
@@ -111,6 +112,12 @@ export default function SessionComposer({
    */
   modelControl?: ReactNode;
   /**
+   * 思考力度控件整块同样由宿主递进来（理由同 modelControl）。它排在**右侧**、紧邻
+   * 提交键（规格 2026-09-01 决策 9）：底栏左边是「怎么跑」，右边是「这一轮花多少」，
+   * 思考力度属于后者。后端不支持时宿主根本不递，这一格连同它的空档一起消失。
+   */
+  reasoningEffortControl?: ReactNode;
+  /**
    * 想从外面往输入框里塞字时给（草稿态的「快捷开头」按钮）。不给就用内部这只 ——
    * 富文本的内容住在编辑器里而不是 React state，外面拼字符串是够不着的。
    */
@@ -144,6 +151,12 @@ export default function SessionComposer({
       ),
     [agents],
   );
+
+  /** 上下文计量器：给不出窗口时整块不摆（不拿一个编出来的分母画进度条）。 */
+  const contextMeter =
+    contextUsage && contextUsage.max > 0 ? (
+      <ContextMeter {...contextUsage} dataTestId="composer-context-meter" />
+    ) : null;
 
   return (
     <div data-testid="session-detail-composer-form">
@@ -211,11 +224,11 @@ export default function SessionComposer({
             </div>
           }
           trailingControls={
-            contextUsage && contextUsage.max > 0 ? (
-              <ContextMeter
-                {...contextUsage}
-                dataTestId="composer-context-meter"
-              />
+            contextMeter || reasoningEffortControl ? (
+              <>
+                {contextMeter}
+                {reasoningEffortControl}
+              </>
             ) : null
           }
         />

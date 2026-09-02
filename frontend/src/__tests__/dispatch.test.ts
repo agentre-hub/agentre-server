@@ -789,6 +789,86 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
     expect(out.modelPinned).toBe(true);
   });
 
+  /**
+   * 思考力度与模型目标同形（规格 2026-09-01「agentre-server 宿主」）：随第一句
+   * 过线让这一轮就按它跑，ack 之后再补钉一次 —— 只过线不钉住的话，用户选的档位
+   * 第一轮生效、随后打开详情页却读回「跟随后端配置」。
+   */
+  it("选了思考力度：随第一句过线，ack 之后补钉一次", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      reasoningEffort: "high",
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.reasoningEffort).toBe("high");
+    const pins = client.request.mock.calls.filter(
+      ([m]) => m === rpcMethods.setSessionReasoningEffort,
+    );
+    expect(pins).toHaveLength(1);
+    expect(pins[0][1]).toEqual({
+      conversationId: out.conversationId,
+      reasoningEffort: "high",
+    });
+  });
+
+  // 空 = 跟随后端配置，而「跟随」本来就是不主张：带一个空值过线会被执行端当成
+  // 「这条会话显式选了默认档」，把后端配置整个丢掉（硬不变量 6）。
+  it("没选思考力度时不带它过线，也不去钉", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.reasoningEffort).toBeUndefined();
+    expect(
+      client.request.mock.calls.some(
+        ([m]) => m === rpcMethods.setSessionReasoningEffort,
+      ),
+    ).toBe(false);
+  });
+
+  // 与钉模型同一条规矩：派发已经成功，钉不住不能把它报成失败。
+  it("力度钉不住不算派发失败", async () => {
+    const client = fakeClient();
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method === rpcMethods.setSessionReasoningEffort)
+          throw new Error("unknown method");
+        return {
+          conversationId:
+            (params as { conversationId?: string })?.conversationId ?? "",
+        };
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      reasoningEffort: "max",
+    });
+
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
+  });
+
   // 派发已经成功，那台机器上真真切切多了一条按所选模型跑起来的会话。把钉不住
   // 报成派发失败，用户一重试就凭空再开一条 —— 与 R16 保存失败同一条规矩。
   it("钉不住不算派发失败，如实回报没钉住", async () => {

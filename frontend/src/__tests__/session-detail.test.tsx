@@ -29,6 +29,7 @@ import SessionDetailView, {
   RELAY_TAIL_FRAMES,
 } from "@/components/session/SessionDetailView";
 import SessionDetail from "@/pages/SessionDetail";
+import { writeReasoningEffortToOrigin } from "@/components/session/sessionMirror";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -37,8 +38,17 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
 
+// 发起端那一台由 sessionMirror 向连接池另借一条通道写（承载端就是页面手上这条）。
+// 只桩这一个导出：这个文件的其余部分照旧走真实实现。
+vi.mock("@/components/session/sessionMirror", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/components/session/sessionMirror")>();
+  return { ...actual, writeReasoningEffortToOrigin: vi.fn(async () => {}) };
+});
+
 const mockedApi = vi.mocked(api);
 const mockUseRelay = vi.mocked(useRelayMachine);
+const mockWriteEffortToOrigin = vi.mocked(writeReasoningEffortToOrigin);
 
 const deviceRow = {
   id: 1,
@@ -132,6 +142,8 @@ beforeEach(async () => {
   mockedApi.mockReset();
   mockUseRelay.mockReset();
   capturedOpts = {};
+  mockWriteEffortToOrigin.mockReset();
+  mockWriteEffortToOrigin.mockResolvedValue(undefined);
   fakeClient.request.mockReset();
   fakeClient.attach.mockClear();
   fakeClient.catchUp.mockClear();
@@ -5123,5 +5135,230 @@ describe("会话详情：头部的更多菜单", () => {
       expect(failed.mock.calls[0]?.[0]).toBe("Could not copy the session ID"),
     );
     expect(succeeded).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 会话级思考力度控件（规格 2026-09-01「跨宿主：agentre-server 宿主」）。
+ *
+ * 网页端渲染的是共享包**同一颗** `ReasoningEffortPicker`（决策 8），宿主只接三样：
+ * 后端支不支持（执行端自报的能力位，不按 backendType 猜）、选定后往两台机器写、
+ * 以及只写成一台时如实说明。
+ */
+describe("会话详情页 · 会话级思考力度", () => {
+  /**
+   * @param capable 执行端报不报 reasoning_effort 能力位
+   * @param origin 会话摘要上的发起端指纹（与承载机 fp-1 不同时才有第二台要写）
+   */
+  function mockEffort(opts: {
+    capable: boolean;
+    origin?: string;
+    sessionEffort?: string;
+    backendEffort?: string;
+    setEffort?: () => unknown;
+  }) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            {
+              sync_id: "ag-1",
+              name: "Claude",
+              exec_targets: [{ backend_sync_id: "backend-1", current: true }],
+            },
+          ],
+        };
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            {
+              sync_id: "backend-1",
+              provider_key: "anthropic",
+              model_key: "sonnet",
+              default_permission_mode: "default",
+              reasoning_effort: opts.backendEffort ?? "",
+            },
+          ],
+        };
+      if (path === "/v1/engine/providers") return { providers: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [
+            {
+              ...summary,
+              peerFingerprint: opts.origin,
+              reasoningEffort: opts.sessionEffort ?? "",
+            },
+            // 同机器上的另一条会话：换会话那条用例要它，且它**没有**钉力度。
+            { ...summary, conversationId: "43", reasoningEffort: "" },
+          ],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeCapabilities)
+        return {
+          capabilities: opts.capable
+            ? [{ name: "reasoning_effort", enabled: true }]
+            : [{ name: "reasoning_effort", enabled: false }],
+          permissionMode: { allowedModes: [] },
+        };
+      if (method === rpcMethods.setSessionReasoningEffort)
+        return opts.setEffort ? opts.setEffort() : {};
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  async function pickEffort(level: string) {
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Reasoning effort/ }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: level }));
+  }
+
+  it("后端声明该能力时控件摆在底栏右侧、提交键之前", async () => {
+    mockEffort({ capable: true, backendEffort: "high" });
+
+    renderPage();
+
+    const pill = await screen.findByTestId("composer-reasoning-effort");
+    // 脸上写的是**有效**档位：会话没钉时就是后端配置的那一档。
+    expect(pill.textContent).toContain("high");
+    const gap = document.querySelector('[data-slot="composer-gap"]')!;
+    const send = screen.getByTestId("session-detail-send");
+    // trailing 侧 = 弹性空档之后、提交键之前。
+    expect(
+      gap.compareDocumentPosition(pill) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      pill.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("后端没有这个能力（openclaw）时整颗控件不渲染", async () => {
+    mockEffort({ capable: false });
+
+    renderPage();
+
+    await screen.findByTestId("session-detail-send");
+    await vi.waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          ([m]) => m === rpcMethods.runtimeCapabilities,
+        ),
+      ).toBe(true),
+    );
+    expect(screen.queryByTestId("composer-reasoning-effort")).toBeNull();
+  });
+
+  it("选定一档时承载端与发起端各写一次", async () => {
+    mockEffort({ capable: true, origin: "fp-origin" });
+
+    renderPage();
+    await pickEffort("high");
+
+    await vi.waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        ([m]) => m === rpcMethods.setSessionReasoningEffort,
+      );
+      expect(call?.[1]).toMatchObject({
+        conversationId: "42",
+        reasoningEffort: "high",
+        peerFingerprint: "fp-origin",
+      });
+    });
+    expect(mockWriteEffortToOrigin).toHaveBeenCalledWith("fp-origin", {
+      conversationId: "42",
+      reasoningEffort: "high",
+    });
+  });
+
+  it("只写成一台时如实说明，且不回滚已经生效的那一次", async () => {
+    mockEffort({ capable: true, origin: "fp-origin" });
+    mockWriteEffortToOrigin.mockRejectedValueOnce(new Error("origin offline"));
+
+    renderPage();
+    await pickEffort("high");
+
+    const note = await screen.findByTestId("composer-effort-note");
+    expect(note.textContent).toContain("has not caught up");
+    // 承载端那一次真的生效了，脸上就得留着它。
+    expect(
+      screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
+    ).toContain("high");
+  });
+
+  /*
+    右栏换会话是**同实例换 props**（桌面 Chat 点行 A 再点行 B）：会话级状态不随
+    (did, sid) 重置的话，B 的控件会摆着 A 刚选的那一档 —— 一句 B 这条会话上不存在
+    的话。
+  */
+  it("换到另一条会话时不带着上一条选的档位", async () => {
+    mockEffort({ capable: true });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    const { rerender } = render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await pickEffort("high");
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
+      ).toContain("high"),
+    );
+
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="43" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
+      ).toContain("Default"),
+    );
+  });
+
+  it("两台都写不进去时回滚控件并如实说明", async () => {
+    mockEffort({
+      capable: true,
+      origin: "fp-origin",
+      setEffort: () => {
+        throw new Error("machine says no");
+      },
+    });
+    mockWriteEffortToOrigin.mockRejectedValueOnce(new Error("origin offline"));
+
+    renderPage();
+    await pickEffort("high");
+
+    const note = await screen.findByTestId("composer-effort-note");
+    expect(note.textContent).toContain("Reasoning effort was not changed");
+    expect(
+      screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
+    ).toContain("Default");
   });
 });

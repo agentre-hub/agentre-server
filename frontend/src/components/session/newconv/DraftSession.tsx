@@ -17,6 +17,8 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import SessionModelControl from "@/components/session/SessionModelControl";
+import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
+import { decodeReasoningEffortSupport } from "@/components/session/reasoningEffortSupport";
 import Transcript from "@/components/session/Transcript";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-api-query";
@@ -163,6 +165,13 @@ export function DraftSession({
   const [permissionMode, setPermissionMode] = useState("");
   /** 用户这一次选的模型目标；null = 没选过 = 跟随 Agent 绑定。 */
   const [modelTarget, setModelTarget] = useState<ModelTarget | null>(null);
+  /** 这个后端支不支持会话级思考力度（执行端自报，openclaw 为假 → 整颗不摆）。 */
+  const [supportsReasoningEffort, setSupportsReasoningEffort] = useState(false);
+  /**
+   * 用户这一次选的思考力度；空 = 跟随后端配置。草稿态还没有会话行，所以它是**纯
+   * 瞬态**的：随第一句一并过线（并由派发在 ack 之后补钉），发出前切走就随草稿消失。
+   */
+  const [reasoningEffort, setReasoningEffort] = useState("");
 
   const probeKey = `${chosen?.device_fingerprint ?? ""}|${chosen?.backend_type ?? ""}`;
   useAliveEffect(
@@ -174,10 +183,17 @@ export function DraftSession({
           backendType: chosen.backend_type,
         })
         .then((raw) => {
-          if (alive()) setPermissionModeMeta(decodePermissionModeMeta(raw));
+          if (!alive()) return;
+          setPermissionModeMeta(decodePermissionModeMeta(raw));
+          // 力度那一格在同一份应答的 capabilities 上。
+          setSupportsReasoningEffort(decodeReasoningEffortSupport(raw));
         })
         // 报错与解不动是同一件事：这台机器此刻答不出档位。
-        .catch(() => alive() && setPermissionModeMeta(null));
+        .catch(() => {
+          if (!alive()) return;
+          setPermissionModeMeta(null);
+          setSupportsReasoningEffort(false);
+        });
       // probeKey 覆盖了 chosen 的两个字段：换机器 / 换后端都要重问。
     },
     [client, relayState, chosen?.backend_type, probeKey],
@@ -199,6 +215,18 @@ export function DraftSession({
     permissionModeMeta?.defaultMode ||
     engineBackend?.default_permission_mode ||
     "";
+
+  /**
+   * 后端配置的那一档，用户没选时由控件用它兜底显示（「→ 跟随后端配置 · <档位>」）。
+   *
+   * `/v1/engine/backends` 那一行上带着 `reasoning_effort`
+   * （`internal/api/engine.BackendItem`），只是本站 `EngineBackend` 那个**窄视图**
+   * 没声明它。按存在性读这一格，读不到就当没配。
+   */
+  const backendReasoningEffort =
+    engineBackend && "reasoning_effort" in engineBackend
+      ? String(engineBackend.reasoning_effort ?? "")
+      : "";
 
   /** 两格皆空 = 跟随 Agent 绑定。 */
   const effectiveTarget = useMemo<ModelTarget>(
@@ -234,6 +262,11 @@ export function DraftSession({
               ? effectivePermissionMode
               : undefined,
           modelTarget: effectiveTarget,
+          // 空 = 跟随后端配置，那本来就是不主张：既不带过线也不去钉。闸门与档位
+          // 那一行同一条：**执行端报了这项能力**才带。挑完一档又把执行目标换成
+          // openclaw 时，选过的值还留在 state 里，而 openclaw 的会话上不允许有
+          // 力度（entity 层的既有校验）。
+          reasoningEffort: supportsReasoningEffort ? reasoningEffort : "",
         });
         // 记在派发**成功之后**：开不起来的那次不算「用过」。
         rememberAgent(agent.sync_id);
@@ -254,7 +287,9 @@ export function DraftSession({
       onStarted,
       permissionModeMeta,
       plan,
+      reasoningEffort,
       relayState,
+      supportsReasoningEffort,
     ],
   );
 
@@ -371,6 +406,17 @@ export function DraftSession({
               // 这条对话还没启动过 —— bypass 锁死规则的另一半在这里恒为假。
               permissionHasActiveSession={false}
               onPermissionModeChange={setPermissionMode}
+              // 力度控件在**右侧**、紧邻提交键（规格 2026-09-01 决策 9）；同样只在
+              // 有选中的机器、且那台机器报了这项能力时才摆。
+              reasoningEffortControl={
+                chosen && supportsReasoningEffort ? (
+                  <SessionReasoningEffortControl
+                    value={reasoningEffort}
+                    backendValue={backendReasoningEffort}
+                    onChange={setReasoningEffort}
+                  />
+                ) : undefined
+              }
               modelControl={
                 chosen ? (
                   <SessionModelControl
