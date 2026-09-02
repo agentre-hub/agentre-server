@@ -203,6 +203,10 @@ export default function Chat() {
   const openCompose = useCallback(() => {
     setRecentIds(readRecentAgents());
     setCompose({ step: "pick" });
+    // 右栏从此归「新对话」这一路，没有任何一条对话开着了：选中一并松开，否则
+    // 左栏还标着上一条，看上去像是正往那条对话里写。见 onProjectNewChat 那处
+    // 同一句。
+    setSelected(null);
   }, []);
   /** 删掉一条之后：右栏归这一页管，因此这一步借给索引数据层。 */
   const onSessionDeleted = useCallback((row: MirrorIndexRow) => {
@@ -406,8 +410,11 @@ export default function Chat() {
    * 这两份数据上碰头，因此借走它们，另外借一条「挑定 Agent 之后去哪」。
    */
   const onProjectNewChat = useCallback(
-    (agent: NewConvAgent, projectSyncId: string) =>
-      setCompose({ step: "draft", agent, projectSyncId }),
+    (agent: NewConvAgent, projectSyncId: string) => {
+      setCompose({ step: "draft", agent, projectSyncId });
+      // 同 openCompose：草稿接管右栏之后没有对话开着，左栏的高亮跟着松开。
+      setSelected(null);
+    },
     [],
   );
   const projectManagement = useProjectManagement({

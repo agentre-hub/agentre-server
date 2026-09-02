@@ -995,7 +995,15 @@ export default function SessionIndex({
         .filter((r) => r.deviceId !== undefined),
     [groups, collapsed],
   );
-  /** 光标行；宿主选中的那一条是它的初值（点了一行再按 ↑ 就从那一条往上走）。 */
+  /**
+   * ↑↓ 从哪一行接着走；宿主选中的那一条是它的初值（点了一行再按 ↑ 就从那一条
+   * 往上走）。
+   *
+   * **只管键盘**：行上那一层高亮说的是「右栏此刻开着哪一条」，那件事只有宿主
+   * 知道（`selectedKey`）。两者曾是同一个值，于是点过一行之后光标就把高亮钉死
+   * 在那一行上——宿主后来把右栏换成别的（刚开出来的新对话、删掉当前这条之后
+   * 收起右栏），左栏还标着上一条。
+   */
   const activeKey = cursorKey ?? selectedKey;
 
   const openRow = useCallback(
@@ -1028,7 +1036,7 @@ export default function SessionIndex({
           trailingLabel={
             rowStatusLabel ? sessionStatusLabel(row, t) : undefined
           }
-          selected={activeKey === row.key}
+          selected={selectedKey === row.key}
           href={
             row.deviceId === undefined
               ? undefined
@@ -1082,7 +1090,7 @@ export default function SessionIndex({
     ),
     [
       axis,
-      activeKey,
+      selectedKey,
       i18n.language,
       onDelete,
       onSave,

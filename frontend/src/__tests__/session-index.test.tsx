@@ -1605,3 +1605,80 @@ describe("会话索引：机器轴组头的三档", () => {
     expect(screen.getByTestId("group-count-device-20").textContent).toBe("0");
   });
 });
+
+/**
+ * 选中高亮说的是「右栏此刻开着哪一条」，因此它归宿主（selectedKey）。
+ * 键盘光标是另一回事：↑↓ 走到哪一行只是把焦点挪过去，不代表那一条被打开了。
+ * 两者混作一谈时，点过一行之后光标就把高亮钉死在那一行上——宿主之后无论把右栏
+ * 换成哪一条（新开的对话、删掉当前这条之后收起右栏），左栏都还标着上一条。
+ */
+describe("统一会话索引：高亮说的是宿主开着的那一条", () => {
+  const first = row({ key: "a", conversationId: "42", title: "第一条" });
+  const second = row({ key: "b", conversationId: "43", title: "第二条" });
+
+  function tree(selectedKey: string | null) {
+    return (
+      <ThemeProvider>
+        <MemoryRouter>
+          <SessionIndex
+            axis="time"
+            onAxisChange={vi.fn()}
+            rows={[first, second]}
+            projects={projects}
+            agents={agents}
+            machines={machines}
+            filter="all"
+            onFilterChange={vi.fn()}
+            selectedKey={selectedKey}
+            onSelect={vi.fn()}
+            sessionPath={(deviceId, conversationId) =>
+              `/devices/${deviceId}/sessions/${conversationId}`
+            }
+          />
+        </MemoryRouter>
+      </ThemeProvider>
+    );
+  }
+
+  /** 行链接（共享包把 aria-current 放在它身上）。 */
+  function rowLink(key: string): HTMLElement {
+    const el = document.querySelector<HTMLElement>(
+      `[data-nav-target="${key}"]`,
+    );
+    if (!el) throw new Error("没有这一行：" + key);
+    return el;
+  }
+
+  it("宿主把选中换到另一条：高亮跟着走，不钉在点过的那一行上", () => {
+    const { rerender } = render(tree("a"));
+    // 点开第一条（这一步同时把键盘光标挪了过来）。
+    fireEvent.click(rowLink("a"));
+    expect(rowLink("a").getAttribute("aria-current")).toBe("true");
+
+    // 宿主换了右栏：新开的一条对话进来了。
+    rerender(tree("b"));
+
+    expect(rowLink("b").getAttribute("aria-current")).toBe("true");
+    expect(rowLink("a").getAttribute("aria-current")).toBeNull();
+  });
+
+  it("宿主收起右栏（没有任何一条开着）：左栏一条都不标", () => {
+    const { rerender } = render(tree("a"));
+    fireEvent.click(rowLink("a"));
+
+    rerender(tree(null));
+
+    expect(rowLink("a").getAttribute("aria-current")).toBeNull();
+    expect(rowLink("b").getAttribute("aria-current")).toBeNull();
+  });
+
+  it("↑↓ 只移焦点：走过的那一行不冒充「正开着」", () => {
+    render(tree(null));
+    const nav = screen.getByTestId("session-index-nav");
+
+    fireEvent.keyDown(nav, { key: "ArrowDown" });
+
+    expect(document.activeElement?.getAttribute("data-nav-target")).toBe("a");
+    expect(rowLink("a").getAttribute("aria-current")).toBeNull();
+  });
+});

@@ -2091,3 +2091,34 @@ describe("对话页跟着通道走", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * 左栏的高亮说的是「右栏此刻开着哪一条」。
+ *
+ * 开「新对话」时右栏归 compose 那一路，没有任何一条对话开着；此时左栏还标着
+ * 上一条的话，人会以为自己在往那条对话里写。派发之后右栏换成刚开的那一条，
+ * 高亮也该跟着落到它身上。
+ */
+describe("对话页：左栏高亮跟着右栏走", () => {
+  it("开「新对话」：上一条不再标成正开着的那一条", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat();
+
+    fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
+    await screen.findByTestId("embedded-session-detail");
+    expect(
+      screen
+        .getByRole("link", { name: /重构登录页/ })
+        .getAttribute("aria-current"),
+    ).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    await screen.findByTestId("new-conversation-pane");
+
+    expect(
+      screen
+        .getByRole("link", { name: /重构登录页/ })
+        .getAttribute("aria-current"),
+    ).toBeNull();
+  });
+});
