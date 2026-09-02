@@ -4,8 +4,8 @@ github.com/DATA-DOG/go-sqlmock v1.5.2 h1:OcvFkGmslmlZibjAjaHm3L//6LiuBgolP7Oputl
 github.com/DATA-DOG/go-sqlmock v1.5.2/go.mod h1:88MAG/4G7SMwSE3CeA0ZKzrT5CiOU3OJ+JlNzwDqpNU=
 github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc=
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902082408-e40a1bff16c2 h1:z6/P8NaBUEMALnCRm90FOfYBiLQybw88OBUV4pBpw4o=
-github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902082408-e40a1bff16c2/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902094010-816792823e76 h1:icPYpWV38ztqzAjUiuxgrBizzP9VsCg8D2dzhZuuWis=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260902094010-816792823e76/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a h1:HbKu58rmZpUGpz5+4FfNmIU+FmZg2P3Xaj2v2bfNWmk=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
 github.com/alicebob/miniredis/v2 v2.32.1 h1:Bz7CciDnYSaa0mX5xODh6GUITRSx+cVhjNoOR4JssBo=
