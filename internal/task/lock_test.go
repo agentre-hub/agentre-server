@@ -15,8 +15,14 @@ import (
 
 // TestWithPeriodLock_SecondCallInSamePeriodSkips 是决定性用例：同一把锁在
 // 同一周期内被调用两次，只有第一次真正执行 job，第二次安静跳过且不报错。
+//
+// 这一条走 RedisMock 而不是 Redis(t)：抢锁发出去的那条命令**本身**就是契约。
+// 副本之间只靠它协调，而它有三处一漂就出事、又都不会有任何东西报错——key 掉出
+// task:cron 命名空间（撞上业务锁）、少了 NX（每个副本都抢得到，任务跑 N 遍）、
+// TTL 不是传进来的那个周期（大了就再也不跑，小了就重复跑）。miniredis 照单执行，
+// 三种都照样绿；这里把它们钉在期望上。
 func TestWithPeriodLock_SecondCallInSamePeriodSkips(t *testing.T) {
-	testutils.Redis(t)
+	mock := testutils.RedisMock(t)
 	ctx := context.Background()
 
 	var runs int32
@@ -25,7 +31,14 @@ func TestWithPeriodLock_SecondCallInSamePeriodSkips(t *testing.T) {
 		return nil
 	}
 
-	wrapped := withPeriodLock("test:same_period", time.Minute, job)
+	const key = "test:same_period"
+	const ttl = time.Minute
+	// 键名写成字面量而不是 lockKeyPrefix+":"+key：那样两边同源，前缀改成什么
+	// 期望就跟着变成什么，命名空间漂了也照样绿。这里要钉的正是那个字面量。
+	mock.ExpectSetNX("task:cron:test:same_period", 1, ttl).SetVal(true)
+	mock.ExpectSetNX("task:cron:test:same_period", 1, ttl).SetVal(false)
+
+	wrapped := withPeriodLock(key, ttl, job)
 
 	assert.NoError(t, wrapped(ctx))
 	err2 := wrapped(ctx)

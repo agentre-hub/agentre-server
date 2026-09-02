@@ -6,9 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
-	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -21,22 +19,6 @@ import (
 
 func newSvc() AuthSvc {
 	return New(session.New(redis.Default(), "server_session", 86400))
-}
-
-// ownRedis 换上一个本测试独享的 miniredis（用完还原），这样才能 FastForward
-// 观察 TTL 到期，而不污染同包其它用例共用的那一个。
-func ownRedis(t *testing.T) *miniredis.Miniredis {
-	t.Helper()
-	testutils.Redis(t)
-	prev := redis.Default()
-	mini := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
-	redis.SetDefault(client)
-	t.Cleanup(func() {
-		redis.SetDefault(prev)
-		_ = client.Close()
-	})
-	return mini
 }
 
 func TestOAuthState_Roundtrip(t *testing.T) {
@@ -68,7 +50,7 @@ func TestStartSession(t *testing.T) {
 }
 
 func TestEndSession_BlacklistsTrackedRelayTickets(t *testing.T) {
-	mini := ownRedis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 	const ticketTTL = 2 * time.Minute
@@ -94,7 +76,7 @@ func TestEndSession_BlacklistsTrackedRelayTickets(t *testing.T) {
 
 // 没人登出时，归集键跟着票自然过期，不会在 Redis 里按会话越堆越多。
 func TestTrackRelayTicket_SetExpiresWithTheTicket(t *testing.T) {
-	mini := ownRedis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 
@@ -107,7 +89,7 @@ func TestTrackRelayTicket_SetExpiresWithTheTicket(t *testing.T) {
 
 // 已过可验签窗口的票不再写黑名单：它验签本来就过不了，拉黑只是给 Redis 添垃圾。
 func TestEndSession_SkipsRelayTicketsPastTheirWindow(t *testing.T) {
-	mini := ownRedis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 
@@ -126,7 +108,7 @@ func TestEndSession_SkipsRelayTicketsPastTheirWindow(t *testing.T) {
 // 一条已经建好的 client 连接活得比票久得多：票只有 2 分钟，连接可以挂几个小时。
 // 归属会话在 upgrade 时解析一次、留在闭包里，票的登记过期之后登出照样撤得掉它。
 func TestWatchRelayCredential_SurvivesTicketRegistrationExpiry(t *testing.T) {
-	mini := ownRedis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 
@@ -146,7 +128,7 @@ func TestWatchRelayCredential_SurvivesTicketRegistrationExpiry(t *testing.T) {
 
 // 撤销判据逐凭据独立：登出只撤这次会话签发的票，撤设备只撤那台设备的 jti。
 func TestWatchRelayCredential_IsScopedToOneCredential(t *testing.T) {
-	ownRedis(t)
+	testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 
@@ -176,7 +158,7 @@ func TestWatchRelayCredential_IsScopedToOneCredential(t *testing.T) {
 // 判不出来就不断连：撤销本身早已生效（session 已删、jti 已拉黑），这里只是收尾；
 // 一次 Redis 抖动把全部中继连接一起踢下线，比晚一个心跳才踢差得多。
 func TestWatchRelayCredential_FailsOpenWhenRedisIsUnavailable(t *testing.T) {
-	mini := ownRedis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 
@@ -190,7 +172,7 @@ func TestWatchRelayCredential_FailsOpenWhenRedisIsUnavailable(t *testing.T) {
 }
 
 func TestTrackRelayTicket_RejectsEmptyIdentifiers(t *testing.T) {
-	ownRedis(t)
+	testutils.Redis(t)
 	ctx := context.Background()
 	s := newSvc()
 

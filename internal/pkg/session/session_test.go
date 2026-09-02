@@ -8,7 +8,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
@@ -92,22 +91,6 @@ func TestExists_DoesNotSlideTTL(t *testing.T) {
 	alive, err = store.Exists(ctx, sid)
 	assert.NoError(t, err)
 	assert.False(t, alive)
-}
-
-// ownRedis 换上一个本测试独享的 miniredis（用完还原），这样才能 FastForward 观察
-// TTL 到期，而不污染同包其它用例共用的那一个。
-func ownRedis(t *testing.T) *miniredis.Miniredis {
-	t.Helper()
-	testutils.Redis(t)
-	prev := redis.Default()
-	mini := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
-	redis.SetDefault(client)
-	t.Cleanup(func() {
-		redis.SetDefault(prev)
-		_ = client.Close()
-	})
-	return mini
 }
 
 // 清单要给出每次登录的 UA 原文、IP 与两个时刻——这是用户认出「哪一条是我现在用的
@@ -219,7 +202,7 @@ func TestListByUser_DropsDeadMembersWithoutSlidingTTL(t *testing.T) {
 // 集合自身的 TTL 要随会话活动刷新：否则一条一直在用、TTL 一直被滑动的会话，
 // 会在集合到点时从索引里掉出去，清单和「登出其它全部」从此看不见它。
 func TestGet_RefreshesIndexTTLSoALongLivedSessionStaysListed(t *testing.T) {
-	mini := ownRedis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 	store := New(redis.Default(), "server_session", 3600)
 	const uid = 4104
@@ -337,7 +320,7 @@ func (h deleteAfterGet) ProcessHook(next goredis.ProcessHook) goredis.ProcessHoo
 // 「登出其它全部」必须删得掉：被登出的浏览器有一个在途请求时，它的滑动 TTL 写回
 // 不能把刚删掉的会话原地复活——否则丢了笔记本的人按下按钮也撤不干净。
 func TestGet_DoesNotResurrectASessionDeletedMidRequest(t *testing.T) {
-	mini := ownRedis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 	const uid = 4108
 	killer := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
