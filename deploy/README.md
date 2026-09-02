@@ -135,8 +135,10 @@ dev 跑在 `coding.local`（192.168.8.188）上，一个容器，编排是 `dock
 做一次只有一层 `COPY` 的 build（实测 3.6 秒），打成固定 tag `agentre-server:dev`。
 原来那种 `docker build` 每次都在新容器里从零跑 pnpm install + go build，Go 的 build
 cache 和 pnpm 的 store 一次都用不上；放回 runner 后两个缓存都能命中，也省掉了
-push/pull 几十 MB。dev 的流水线同样不跑 lint 和 test，门禁在 GitHub 侧的 `ci.yml`
-和本地 `make test` 上。
+push/pull 几十 MB。dev 的流水线同样不跑 lint 和 test——而且推到 dev 之后没有任何
+别的门禁接着：`ci.yml` 在 GitHub 上，只在 push `main` 和 pull_request 时触发，`dev`
+不推 GitHub。这些改动第一次被 `ci.yml` 看到，是它合入 `main` 的那个 PR。在那之前只有
+本地 `make lint` / `make test`。
 
 代价是 dev 跑的东西没有 registry 里可追溯的 digest，只有二进制里 ldflags 钉的
 `dev.<短 commit>`（启动首行日志能看到）和目标机上的本地镜像 ID。要 digest 就走

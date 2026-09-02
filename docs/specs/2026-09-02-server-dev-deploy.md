@@ -21,7 +21,7 @@
 ## Actors and user stories
 
 1. 作为在本机开发的维护者，我希望 `git push gitea dev` 之后 dev 环境自动变成这个 commit，这样我不必再上机手工构建和重启。
-2. 作为维护者，我希望推上去之后几十秒内就能看到效果，这样 dev 环境是拿来验证想法的而不是拿来等的；门禁由 GitHub 侧 `ci.yml` 与本地 `make test` 负责。
+2. 作为维护者，我希望推上去之后几十秒内就能看到效果，这样 dev 环境是拿来验证想法的而不是拿来等的；门禁由本地 `make lint` / `make test`，以及 dev 合入 `main` 时那个 PR 上的 `ci.yml` 负责。
 3. 作为维护者，我希望部署失败时流水线是红的且 dev 环境保持在旧版本，这样我不会以为部署成功了却在对着一个起不来的服务排查。
 
 ## Design decisions
@@ -41,7 +41,7 @@
 
 推送到 Gitea 的 `dev` 分支触发 dev 流水线。除此之外没有别的触发源：`main` / `release/*` / `test/*` 仍然只被 `deploy.yaml` 接管，两个 workflow 的分支集合不相交，同一次推送不会同时跑两条链路。
 
-dev 链路不设门禁：不跑 lint，也不跑测试。唯一挡在部署前的是构建本身——编不过就没有产物可送，流水线为红且 dev 环境停留在上一个成功版本。lint 与 Go / 前端测试由 GitHub 侧的 `ci.yml` 与本地 `make test` 负责，`main` / `release/*` / `test/*` 的门禁不受影响。
+dev 链路不设门禁：不跑 lint，也不跑测试。唯一挡在部署前的是构建本身——编不过就没有产物可送，流水线为红且 dev 环境停留在上一个成功版本。lint 与 Go / 前端测试由本地 `make lint` / `make test` 负责。GitHub 侧的 `ci.yml` 接不住推到 dev 的每一次改动：它只在 `push: branches: [main]` 与 `pull_request` 上触发，而 `dev` 只推 Gitea、不推 GitHub——它第一次看到这些改动，是 dev 合入 `main` 的那个 PR。`main` / `release/*` / `test/*` 的门禁不受影响。
 
 ## 构建
 
