@@ -2,10 +2,11 @@
 
 ```
 deploy/
-  Dockerfile            镜像：前端和后端都在里面构建，产物是单个静态二进制
-  docker-compose.yml    单机部署：server + MySQL + Redis
-  config.docker.yaml    compose 用的配置
-  helm/                 Kubernetes 部署
+  Dockerfile              镜像：前端和后端都在里面构建，产物是单个静态二进制
+  docker-compose.yml      单机部署：server + MySQL + Redis
+  docker-compose.dev.yml  dev 环境：只有 server，MySQL/Redis/etcd 用外部现成的
+  config.docker.yaml      compose 用的配置
+  helm/                   Kubernetes 部署
 ```
 
 服务是一个二进制，前端 SPA 用 `go:embed` 打进去了，所以运行时不需要 nginx，
@@ -124,6 +125,90 @@ docker run --rm -p 8443:8443 \
 默认路径。E2E 专库配置和 CI 临时服务不属于部署配置，见
 [`../e2e/README.md`](../e2e/README.md)。
 
+## dev 环境（coding.local）
+
+dev 跑在 `coding.local`（192.168.8.188）上，一个容器，编排是 `docker-compose.dev.yml`。
+
+和上面的「Docker 单机部署」不是一回事，别混用：那份会额外拉起 MySQL 和 Redis 并把
+数据落在仓库根的 `data/`；dev 的 MySQL、Redis、etcd 都是外部既有服务，套用那份等于
+把现有的 `agentre_server_dev` 数据旁路掉。
+
+dev 的配置和 k8s 一样放在 etcd 里，`/config/dev/agentre-server/` 下那几个键。改配置
+改 etcd，不用重新部署。
+
+### 部署目录
+
+部署目录在机器上，不在仓库里——引导配置含内网端点，而且 `.gitignore` 本来就把
+`configs/config.yaml` 排除在外：引导配置属于机器，不属于代码。
+
+```text
+/srv/agentre-dev/
+  docker-compose.dev.yml   流水线每次部署覆盖
+  .env                     机器本地；流水线只改写其中的 SERVER_IMAGE 一项
+  config.yaml              机器本地引导配置（env: dev, source: etcd）
+  keys/jwt.key jwt.pub     机器本地 JWT 密钥对
+```
+
+手动起停：
+
+```bash
+cd /srv/agentre-dev
+docker compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml logs -f server
+```
+
+### 第一次切换要做的（只做一次）
+
+流水线只负责「拉新镜像 + compose up」。下面这些是一次性且不可逆的动作，没放进流水线
+——放进去也只有第一次有用，之后永远是死代码。按顺序做：
+
+1. **停掉现在的裸进程，把 8443 让出来。** dev 以前是从 tmux 窗口跑
+   `/root/code/agentre/agentre-server/bin/server`：
+
+   ```bash
+   pkill -f '^\./bin/server$' || true
+   tmux kill-window -t 0:agentre-server 2>/dev/null || true
+   ss -ltnp | grep 8443 || echo "8443 已空出"
+   ```
+
+2. **建部署目录，放引导配置和密钥。** 引导配置直接沿用机器上现成的那份：
+
+   ```bash
+   mkdir -p /srv/agentre-dev/keys
+   cp /root/code/agentre/agentre-server/configs/config.yaml /srv/agentre-dev/config.yaml
+   cp /root/code/agentre/agentre-server/runtime/keys/jwt.key /srv/agentre-dev/keys/
+   cp /root/code/agentre/agentre-server/runtime/keys/jwt.pub /srv/agentre-dev/keys/
+   chmod 600 /srv/agentre-dev/keys/jwt.key
+   ```
+
+3. **把 etcd 里的 JWT 路径改成容器路径。** 现在 `/config/dev/agentre-server/server`
+   里写的是宿主绝对路径 `/root/code/agentre/agentre-server/runtime/keys/jwt.key`，
+   容器里没有这个路径，不改就是启动即挂（`read pem ...: no such file or directory`）。
+   把那两条路径改成 `/keys/jwt.key` 和 `/keys/jwt.pub`，该键的其余内容原样保留，
+   改法见上面「配置放在 etcd 里」。
+
+4. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
+   对应的私钥就是下面要配的 `DEV_SSH_KEY`。
+
+5. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
+
+6. **建 dev 分支并推上去**，这一推就会跑第一次部署：
+
+   ```bash
+   git checkout -b dev
+   git push gitea dev
+   ```
+
+跑完确认一下：
+
+```bash
+curl -s http://coding.local:8443/v1/healthz
+docker compose -f /srv/agentre-dev/docker-compose.dev.yml ps
+```
+
+`data` 里 `status`、`db_ping`、`redis` 三项都为真才算成功。**只看 `status` 没用**——
+它在代码里是写死的 `"ok"`，数据库挂了它照样是 `ok`。
+
 ## Kubernetes 部署
 
 `helm/` 下是 chart，只部署服务本身——MySQL、Redis、etcd 都用集群里现成的。
@@ -198,8 +283,13 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 | `main` | prod | `app.agentrehub.com` |
 | `release/*` | pre | `pre.app.agentrehub.com` |
 | `test/*` | test | `test.app.agentrehub.com` |
+| `dev` | dev | `coding.local:8443`（内网单机，不上 k8s） |
 
-生产的资源配额高一些并开自动扩缩，其余环境单副本。镜像 tag 是 `<环境>.<短 commit>`。
+前三行走 `deploy.yaml`：构建镜像后 helm 上 k8s，生产的资源配额高一些并开自动扩缩，
+其余环境单副本。`dev` 走的是另一条 `dev.yaml`：构建镜像后 SSH 到 `coding.local`
+执行 `docker compose`。两个 workflow 的分支集合不相交，同一次推送只会触发一条。
+
+镜像 tag 一律是 `<环境>.<短 commit>`。
 
 需要在 Gitea 里配好这些 secret：
 
@@ -213,19 +303,32 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 | `NPM_REGISTRY` | 否 | `https://registry.npmmirror.com` |
 | `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE` | 否 | 上游地址 |
 | `TLS_SECRET_NAME` | 否 | `agentrehub-com-tls` |
+| `DEV_SSH_KEY` | dev 必填 | — |
+| `DEV_SSH_HOST` | 否 | `coding.local` |
+| `DEV_SSH_USER` | 否 | `root` |
+| `DEV_SSH_PORT` | 否 | `22` |
+| `DEV_DEPLOY_DIR` | 否 | `/srv/agentre-dev` |
 
-两个容易踩的：
+`KUBE_CONFIG` 与 `ETCD_CONFIG_PASSWORD` 只有 k8s 那条链路用得到；dev 只用
+`DOCKER_*` 和 `DEV_*`。
+
+三个容易踩的：
 
 - **加了 `.gitea/workflows/` 之后，Gitea 就不看 `.github/workflows/` 了**，两边不合并。
   所以 GitHub 上的 `ci.yml` 只在 GitHub 生效，Gitea 这边只跑发布流水线里的门禁。
 - 流水线里的 `uses:` 都写成了 `actions/*`，这是当前这台 Gitea 实例的动作镜像位置。
   **换一台实例可能要改回 `docker/*` 之类的上游名字。**
+- dev 的部署步骤用的是 runner 自带的 `ssh`/`scp`，没走任何 ssh-action。这台实例的
+  动作镜像集是定制的，仓库里也没有 ssh-action 的先例，赌一个可能不存在的镜像不如
+  用原生命令。主机密钥是首连信任（`StrictHostKeyChecking=accept-new`）。
 
 ## 起不来的时候
 
 ```bash
-# docker
+# docker（单机）
 docker compose -f deploy/docker-compose.yml logs -f server
+# docker（dev，在 coding.local 上跑）
+docker compose -f /srv/agentre-dev/docker-compose.dev.yml logs -f server
 # k8s
 kubectl -n app logs -l app.kubernetes.io/instance=agentre-server --tail=50
 ```
