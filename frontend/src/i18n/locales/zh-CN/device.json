@@ -104,7 +104,7 @@
       "agentredTitle": "把 agentred 注册成后台服务",
       "agentredDesc": "这一步留到最后、等设备批准之后再做：注册完它会开机自启，关掉终端也不掉线。",
       "commandLabel": "设备批准之后，那台机器的终端",
-      "tip1": "必须排在最后：agentred login 要等你批准了才把 state.json 写下去。daemon 只要起得更早，手里拿的就是旧的、未认领的 state.json，它下一次写盘会不声不响地把认领覆盖掉 —— 症状是设备看着授权成功，却永远连不上。",
+      "tip1": "必须排在最后：agentred login 要等你批准了才把 state.json 写下去。daemon 只要起得更早，手里拿的就是旧的、未登录的 state.json，它下一次写盘会不声不响地把认领覆盖掉 —— 症状是设备看着授权成功，却永远连不上。",
       "tip2": "重复运行没有副作用：这条命令是幂等的，会更新配置并确保服务在跑。",
       "desktopTitle": "桌面端没有第二个服务要注册",
       "desktopDesc": "桌面端自带 agentred：应用开着它就在线，不必再注册一个后台服务。",

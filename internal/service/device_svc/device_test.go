@@ -493,7 +493,7 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 
 // TestRevoke_TombstonesDeviceScopedSyncObjects 一台设备离开账号时，账号级同步数据里
 // 只属于它的那两类行跟着消失（指向它的 backend、它上面的项目路径）。控制台「解除
-// 授权」与机器上 `agentred unclaim` 走的是同一条服务端路径，因此这一条同时覆盖两者。
+// 授权」与机器上 `agentred logout` 走的是同一条服务端路径，因此这一条同时覆盖两者。
 func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 	convey.Convey("撤销设备时把只属于它的账号级同步对象落墓碑", t, func() {
 		hubtest.Redis(t)

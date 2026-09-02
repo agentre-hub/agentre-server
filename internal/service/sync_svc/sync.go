@@ -534,7 +534,7 @@ func (s *syncSvc) PurgeDeviceLocalPaths(ctx context.Context, deviceID int64) err
 var deviceScopedKinds = []string{sync_entity.KindProjectLocation, sync_entity.KindAgentBackendCLI}
 
 // PurgeDeviceSyncObjects 把只属于某台机器的账号级同步对象落墓碑：控制台「解除授权」
-// 与机器上 `agentred unclaim` 共用这一条路径（两者都经 device_svc.Revoke 到这里）。
+// 与机器上 `agentred logout` 共用这一条路径（两者都经 device_svc.Revoke 到这里）。
 //
 // **必须是墓碑，不能是硬删。** 这些对象的删除要随同步游标传给其它设备；硬删会让
 // 旧副本永远不知道该撤掉自己的路径或 CLI 覆盖，后续一次编辑还会把它重新推回来，

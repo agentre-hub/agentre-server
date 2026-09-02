@@ -1126,7 +1126,7 @@ func expectListByKinds(m *syncMocks, rows []*sync_entity.SyncObject) {
 	).AnyTimes()
 }
 
-// 一台设备离开账号（控制台解除授权，或机器上 agentred unclaim）时，账号级同步数据里
+// 一台设备离开账号（控制台解除授权，或机器上 agentred logout）时，账号级同步数据里
 // **只属于这台设备**的两类行跟着消失：该指纹的 CLI 覆盖、它上面的项目路径。账号级
 // backend 身份与 llm_provider 必须继续存活。
 //

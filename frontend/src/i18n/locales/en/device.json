@@ -104,7 +104,7 @@
       "agentredTitle": "Register agentred as a background service",
       "agentredDesc": "Do this last, once the device is approved: the service starts on boot, so the machine stays connected after you close the terminal.",
       "commandLabel": "That machine's terminal, once the device is approved",
-      "tip1": "This has to come last: agentred login writes state.json only when you approve it. A daemon started any earlier holds the old, unclaimed state.json in memory, and its next write silently overwrites that — the device looks authorized but never connects.",
+      "tip1": "This has to come last: agentred login writes state.json only when you approve it. A daemon started any earlier holds the old, logged-out state.json in memory, and its next write silently overwrites that — the device looks authorized but never connects.",
       "tip2": "Running it again is harmless: the command is idempotent, it updates the configuration and makes sure the service is up.",
       "desktopTitle": "Nothing else to register for the desktop app",
       "desktopDesc": "The desktop app has agentred built in: it is online while the app is open, so there is no separate background service to register.",

@@ -29,7 +29,7 @@ func TestDerive_GivenTheDecisionTwoVectors_ThenMatchesTheCrossRepositoryExpectat
 		{"sha256:aaaa", "1", "dd5414f5-0877-5e9d-9656-b3b44e49697f"},
 		{"sha256:aaaa", "2", "4d7f58e9-9881-5189-a9cd-b62f817db549"},
 		{"sha256:bbbb", "1", "88f2b427-8035-57d5-8e8b-64fa700ea77a"},
-		// 空指纹是「未认领 daemon / 自己对端」那条路径上的合法输入，它同样必须确定。
+		// 空指纹是「未登录账号的 daemon / 自己对端」那条路径上的合法输入，它同样必须确定。
 		{"", "1", "d7bb9a66-20f7-5477-9ecd-cec26ec3d769"},
 	}
 	for _, c := range cases {
