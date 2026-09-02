@@ -313,6 +313,39 @@ describe("ConsoleNavItem（ZC7pI）", () => {
     expect(screen.getByText("2/3")).toBeTruthy();
     expect(container.querySelector('span[aria-hidden="true"]')).toBeTruthy();
   });
+
+  /*
+    collapsed 是 56px 图标栏那一档（外壳的侧栏可以收起）。它改的是排布，不是这一
+    项还剩多少信息——三条尾巴各有各的去处，而不是一起消失：
+
+      文案 → sr-only：图标不是名字。视觉上收窄之后链接的可访问名要是也没了，
+             读屏用户看到的就是六个「link」。
+      meta → title：一行 mono 数字在 56px 里排不下，但「丢掉」和「换个地方说」
+             不是一回事。
+      badge → 图标角上：它是这条栏上唯一会变的东西。
+  */
+  it("collapsed：只剩图标，但可访问名、badge 与 meta 各自还在", () => {
+    renderNav({ route: "/chat", to: "/devices", collapsed: true, meta: "2/3" });
+
+    const link = screen.getByRole("link", { name: "Overview" });
+    expect(link.className).toContain("justify-center");
+    expect(link.className).not.toContain("px-2.5");
+    expect(within(link).getByText("Overview").className).toContain("sr-only");
+    // meta 不再占一行，改由悬浮说明承接。
+    expect(screen.queryByText("2/3")).toBeNull();
+    expect(link.getAttribute("title")).toBe("Overview 2/3");
+  });
+
+  it("collapsed 的 badge 挪到图标角上，数字本身不变", () => {
+    renderNav({ route: "/chat", collapsed: true, badge: 3 });
+
+    const badge = screen.getByText("3");
+    expect(badge.className).toContain("absolute");
+    // 定位要有参照系：链接自己得是 relative，否则角标会飞到最近的定位祖先上。
+    expect(screen.getByRole("link", { name: /Overview/ }).className).toContain(
+      "relative",
+    );
+  });
 });
 
 describe("MobileTabBar（A6Z3k）", () => {

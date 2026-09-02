@@ -423,3 +423,99 @@ describe("侧栏「对话」角标（等你处理）", () => {
     ).toBe(before);
   });
 });
+
+/**
+ * 侧栏收起（本轮 UI/UX）。
+ *
+ * 224px 的带文字侧栏在 13" 笔电上要从对话页的转录里割走一整列——而那一列的信息
+ * 在一次专注的会话里基本不变。收起之后它是一条 56px 的图标栏：**导航仍在**，
+ * 只是文字让位。整条藏掉是另一回事，那会让「换个目的地」先要想起有个按钮。
+ *
+ * 三件事必须同时成立，缺一条这个开关就不该做：
+ *   1. 收起后每个导航项仍是可达的链接，可访问名不变（图标不是名字）；
+ *   2. 状态不因为收窄而消失——「等你处理」的角标照挂，设备的在线/全部收进
+ *      悬浮说明，不是丢掉；
+ *   3. 记得住：这是每次进控制台都要重来一遍的选择，不该只活一屏。
+ *
+ * 移动端没有这条侧栏（主导航是底部 TabBar），因此也不该有这个按钮。
+ */
+describe("桌面 SideNav 收起", () => {
+  beforeEach(() => {
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+  afterEach(() => {
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+
+  function serveAll() {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return me;
+      if (path === "/v1/devices") return { devices };
+      if (path === "/v1/agent-sessions/waiting-count") return { waiting: 3 };
+      throw new Error("unexpected: " + path);
+    });
+  }
+
+  it("默认展开：224px，导航文案与设备 Meta 都在明面上", async () => {
+    serveAll();
+    renderShell();
+
+    expect(screen.getByRole("navigation").className).toContain("w-[224px]");
+    expect(screen.getByText("Console")).toBeTruthy();
+    expect(await screen.findByText("2/3")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Collapse sidebar" }),
+    ).toBeTruthy();
+  });
+
+  it("收起：侧栏收成 56px 图标栏，六个目的地一个不少", async () => {
+    serveAll();
+    renderShell();
+    await screen.findByText("2/3");
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+
+    const nav = screen.getByRole("navigation");
+    expect(nav.className).toContain("w-[56px]");
+    expect(nav.className).not.toContain("w-[224px]");
+    // 图标不是名字：文字退成屏幕阅读器可见，链接的可访问名一个都没丢。
+    for (const label of REAL_NAV) {
+      expect(
+        screen.getByRole("link", { name: new RegExp(`^${label}`) }),
+      ).toBeTruthy();
+    }
+    // 品牌副标与设备 Meta 是「宽出来的」信息，收窄就该让位。
+    expect(screen.queryByText("Console")).toBeNull();
+    expect(screen.queryByText("2/3")).toBeNull();
+    // 但在线/全部不是被丢掉，而是收进那一项的悬浮说明里。
+    expect(
+      screen.getByRole("link", { name: /^Devices/ }).getAttribute("title"),
+    ).toBe("Devices 2/3");
+    // 「等你处理」照挂：它是这条栏上唯一会变的东西，收窄不该把它变没。
+    expect(
+      within(screen.getByRole("link", { name: /^Chat/ })).getByText("3"),
+    ).toBeTruthy();
+  });
+
+  it("再点一次展开回来", async () => {
+    serveAll();
+    renderShell();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+
+    expect(screen.getByRole("navigation").className).toContain("w-[224px]");
+    expect(screen.getByText("Console")).toBeTruthy();
+  });
+
+  it("记得住：下次进来还是收着的", async () => {
+    serveAll();
+    const first = renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    first.unmount();
+
+    renderShell();
+    expect(screen.getByRole("navigation").className).toContain("w-[56px]");
+    expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeTruthy();
+  });
+});

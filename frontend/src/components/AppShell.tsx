@@ -6,6 +6,8 @@ import {
   LayoutDashboard,
   MessagesSquare,
   Monitor,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings as SettingsIcon,
   SquareTerminal,
 } from "lucide-react";
@@ -23,8 +25,9 @@ import {
   AccountChannelMirrorChanged,
 } from "@/lib/accountChannel";
 import { fetchDevices } from "@/lib/devices";
+import { readNavCollapsed, writeNavCollapsed } from "@/lib/navCollapsed";
 import { fetchWaitingCount } from "@/lib/waitingCount";
-import { cn } from "@agentre-hub/agentre-ui";
+import { Button, cn } from "@agentre-hub/agentre-ui";
 
 /** /v1/devices 只取算设备 Meta 需要的字段。 */
 interface DeviceMeta {
@@ -43,9 +46,14 @@ interface NavItem {
 }
 
 /**
- * 账号级控制台的外壳：桌面固定 224px SideNav（R969Y：Brand / 5 导航项 /
+ * 账号级控制台的外壳：桌面 224px SideNav（R969Y：Brand / 5 导航项 /
  * 账号区）+ 52px TopBar（title 槽 + right 槽 + AppControls）+ 主区；移动（≤767px）
  * 主导航改为 4 项的 A6Z3k 底部 TabBar，设置从账号菜单进入。
+ *
+ * 侧栏可以收成 56px 的图标栏，选择记在这台机器上（navCollapsed）。收起的是
+ * **文字**不是导航：六个目的地一个不少，可访问名、等你处理的角标都还在，
+ * 设备的在线/全部换到悬浮说明里（见 ConsoleNavItem 的 collapsed）。整条藏掉是
+ * 另一回事——那会让「换个目的地」先要想起有个按钮，而这块屏最常见的动作正是换页。
  *
  * 搜索无真实能力：外观保留但不可聚焦（div + aria-hidden，无 button/input/tabindex），
  * 也不显示 ⌘K 快捷键暗示。审计无后端，不进主导航。
@@ -83,6 +91,14 @@ export default function AppShell({
   // 等你处理的对话条数。null = 还没取到 / 取不到，那时角标整个不画——一个停在旧值上的
   // 数字比没有数字更糟：它会让人以为没有新的东西在等自己。
   const [waiting, setWaiting] = useState<number | null>(null);
+  // 收起态从本机偏好起手，而不是每次进来都从展开开始：这是每天要重做一遍的选择。
+  const [navCollapsed, setNavCollapsed] = useState(readNavCollapsed);
+  const toggleNav = useCallback(() => {
+    setNavCollapsed((prev) => {
+      writeNavCollapsed(!prev);
+      return !prev;
+    });
+  }, []);
 
   useAliveEffect((alive) => {
     fetchDevices()
@@ -158,22 +174,52 @@ export default function AppShell({
     { to: "/settings", labelKey: "nav.settings", Icon: SettingsIcon },
   ];
 
+  /*
+    Brand 与收放开关同一带。收起时它们改成上下排：56px 里并排放不下两个 28px 的
+    方块，而开关必须一直在——把它挪去顶栏的话，一条只在某些页出现的顶栏就成了
+    「侧栏能不能回来」的前提。
+  */
   const brand = (
-    <div className="flex items-center gap-2 p-1.5">
+    <div
+      className={cn(
+        "flex gap-2 p-1.5",
+        navCollapsed ? "flex-col items-center" : "items-center",
+      )}
+    >
       <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary">
         <SquareTerminal
           className="size-4 text-primary-foreground"
           aria-hidden="true"
         />
       </div>
-      <div className="flex min-w-0 flex-col leading-tight">
-        <span className="text-prose font-semibold text-foreground">
-          {t("authLayout.brand")}
-        </span>
-        <span className="text-3xs text-muted-foreground">
-          {t("appShell.productSub")}
-        </span>
-      </div>
+      {!navCollapsed && (
+        <div className="flex min-w-0 flex-col leading-tight">
+          <span className="text-prose font-semibold text-foreground">
+            {t("authLayout.brand")}
+          </span>
+          <span className="text-3xs text-muted-foreground">
+            {t("appShell.productSub")}
+          </span>
+        </div>
+      )}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className={cn("size-7 shrink-0", !navCollapsed && "ml-auto")}
+        aria-label={t(
+          navCollapsed ? "appShell.nav.expand" : "appShell.nav.collapse",
+        )}
+        title={t(
+          navCollapsed ? "appShell.nav.expand" : "appShell.nav.collapse",
+        )}
+        onClick={toggleNav}
+      >
+        {navCollapsed ? (
+          <PanelLeftOpen className="size-4" aria-hidden="true" />
+        ) : (
+          <PanelLeftClose className="size-4" aria-hidden="true" />
+        )}
+      </Button>
     </div>
   );
 
@@ -187,6 +233,7 @@ export default function AppShell({
           Icon={item.Icon}
           meta={item.meta ? `${item.meta.online}/${item.meta.total}` : null}
           badge={item.badge}
+          collapsed={navCollapsed}
         />
       ))}
     </div>
@@ -195,7 +242,7 @@ export default function AppShell({
   // 账号数据取不到就整块隐藏，不伪造头像/名字。桌面侧栏与移动 TopBar 共用
   // 同一个下拉菜单触发器（UserMenu）：可键盘打开/关闭，菜单项为账号信息
   // （只读）、账号与安全（去 /account）、登出。
-  const account = me ? <UserMenu me={me} /> : null;
+  const account = me ? <UserMenu me={me} compact={navCollapsed} /> : null;
 
   // 移动端账号进 TopBar：抽屉已移除，账号仍需可达，用紧凑形态（只有头像）。
   const mobileAccount = me ? <UserMenu me={me} compact /> : null;
@@ -222,7 +269,10 @@ export default function AppShell({
       {!isMobile && (
         <nav
           aria-label={t("common.appName")}
-          className="flex w-[224px] shrink-0 flex-col gap-3 border-r border-border bg-sidebar p-3"
+          className={cn(
+            "flex shrink-0 flex-col gap-3 border-r border-border bg-sidebar transition-[width]",
+            navCollapsed ? "w-[56px] p-2" : "w-[224px] p-3",
+          )}
         >
           {brand}
           {navItems}

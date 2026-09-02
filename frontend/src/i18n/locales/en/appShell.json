@@ -8,5 +8,9 @@
     "account": "Account & security",
     "settings": "Settings",
     "signOut": "Sign out"
+  },
+  "nav": {
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar"
   }
 }

@@ -8,5 +8,9 @@
     "account": "账号与安全",
     "settings": "设置",
     "signOut": "登出"
+  },
+  "nav": {
+    "collapse": "收起侧栏",
+    "expand": "展开侧栏"
   }
 }
