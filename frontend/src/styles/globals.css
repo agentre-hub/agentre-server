@@ -93,8 +93,10 @@
    `size-7 rounded-lg`，28px 配 14px 半径恰好是正圆，桌面端那里是个圆角方块。
    而 @theme inline 会把字面量编进工具类、不产出 --radius-* 自定义属性，
    所以一旦分叉就没法再按子树覆盖回来——包组件与本站组件只能一起圆或一起不圆。
-   这里因此只剩自托管等宽字体，以及本站独有的热力色阶 --color-heat-*（包里没有，
-   见下面那段注释）。
+   这里因此只剩自托管等宽字体：热力格子图那五档 --color-heat-*（连同它们指向的
+   --heat-0…4 深浅值）2026-09 也从本站升进了共享包的 :root/.dark/@theme inline
+   ——活跃热力图不再是服务端独有的一屏，桌面端弹层成了第二个消费者，色阶因此
+   变成两端共用的 token，本站不再持有任何一条。
    多写一条同名别名不会报错，只会让包里那条失效——所以别加回来。 */
 @theme inline {
   /* 字体命名空间是 --font-*，直接量声明即生成 font-mono 工具类；不像颜色
@@ -103,39 +105,6 @@
   --font-mono:
     "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas,
     "Liberation Mono", monospace;
-
-  /* 活跃热力格子图的五级色阶。写成 var(...) 而不是字面量：`inline` 只是把
-     **这一层**别名内联掉，指向的仍是下面 :root/.dark 里那对 token，所以深浅两套
-     照常跟着 .dark 切。漏掉这五条别名不会报错——`bg-heat-3` 只是生成不出任何规则，
-     整张网格变成没有底色的空格子，而 DOM 里的 class 照样在。 */
-  --color-heat-0: var(--heat-0);
-  --color-heat-1: var(--heat-1);
-  --color-heat-2: var(--heat-2);
-  --color-heat-3: var(--heat-3);
-  --color-heat-4: var(--heat-4);
-}
-
-/* 本站独有的色值 token：热力格子的五级色阶。
-   放在这里而不是共享包，是因为活跃热力图只有服务端控制台画——桌面端没有这一屏，
-   往包里加一对深浅值只会多出一对没人用、还会慢慢漂开的变量（docs/design.md 里
-   proj-1…5 缺席就是同一条理由）。值取自设计稿 agentre-server.pen 的
-   heat-0…heat-4 变量，深浅两套齐全。
-   heat-0 的含义是「那天没有活动」，不是「没有数据」——所以它是一个可见的浅灰格，
-   而不是透明。 */
-:root {
-  --heat-0: #eaeaee;
-  --heat-1: #cfe0f0;
-  --heat-2: #9cc0e0;
-  --heat-3: #6294c4;
-  --heat-4: #3b6896;
-}
-
-.dark {
-  --heat-0: #23262c;
-  --heat-1: #21384f;
-  --heat-2: #315b83;
-  --heat-3: #4a80b3;
-  --heat-4: #6fa4d4;
 }
 
 /* 连接中那条不定量进度条（规格 2026-08-21 决策 2）。
