@@ -83,6 +83,8 @@ export interface TranscriptScrollback {
   onScroll: () => void;
   /** 「回到底部」那枚药丸按下去做的事。 */
   jumpToBottom: () => void;
+  /** 用户自己发了一条消息：重新跟住底部。 */
+  pinToBottom: () => void;
   /** 此刻在不在底部。输入带的上边界与药丸的可见性都读它。 */
   atBottom: boolean;
   /** 视口下沿那条消息；贴底 / 量不出来时为 null。 */
@@ -248,18 +250,39 @@ export function useTranscriptScrollback({
   }, [did, sid, originProp]);
 
   /**
-   * 钉底与前插补偿。两者互斥，**钉底优先**：
-   *   - 用户就在底部（含首屏）→ 钉到底。顶补也走这一支：补完仍然停在最后一条。
-   *   - 用户已经往上滚开 → 前插了多少高度就往下挪多少，他看的那一行不动。
+   * 钉底：用户就在底部（含首屏）时，跟住内容的最后一行。顶补也走这一支——补完
+   * 仍然停在最后一条。
+   *
+   * **每次提交都跑一遍**，不挂 `events`：转录长高的路不止「多了一条事件」这一条。
+   * 排队与失败那两种气泡挂在转录之外（它们是用户自己写的字，不进 events），助手
+   * 那三个点、审批卡、行虚拟化复测出来的真实行高也都不产生事件。只认 events 的话
+   * 这些都会把内容顶到折叠线以下，而滚动位置停在原处 —— 看起来就是「发了没反应」。
+   *
+   * 代价是每次提交多读一次 scrollHeight（一次强制布局）。钉底本来就要读它，而
+   * 没钉底时这个 effect 在那个 if 之前就返回了。
+   *
+   * 与下面那条前插补偿**互斥且优先**：钉底时把补偿的存根丢掉（人在底部，脚下那
+   * 一行就是最后一行，没有「他看的那一行」要保）。声明在它前面，两条的先后就是
+   * 这个优先级。
+   */
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !pinRef.current) return;
+    restoreRef.current = null;
+    el.scrollTop = el.scrollHeight;
+  });
+
+  /**
+   * 前插补偿：用户已经往上滚开时，前插了多少高度就往下挪多少，他看的那一行不动。
+   *
+   * 这一条**只挂 `events`**，与上面那条相反：存根是在发请求那一刻记下的，而补偿
+   * 要等前插真的落地才算得出来。跟着每次提交跑的话，中间那些提交（比如「正在读
+   * 更早的」那行字）会拿一个高度根本没变的时刻把存根消费掉，等内容真到了反而没
+   * 得补 —— 视口当场跳走。
    */
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (pinRef.current) {
-      restoreRef.current = null;
-      el.scrollTop = el.scrollHeight;
-      return;
-    }
     const restore = restoreRef.current;
     if (!restore) return;
     restoreRef.current = null;
@@ -306,6 +329,23 @@ export function useTranscriptScrollback({
     el.scrollTop = el.scrollHeight;
     pinRef.current = true;
     setAtBottom(true);
+  }, []);
+
+  /**
+   * 用户自己发了一条消息：重新跟住底部。
+   *
+   * 与药丸那一枚的区别是**不当场推 scrollTop**：这一下发生在提交回调里，要跟的
+   * 那些东西（排队气泡、他自己那条消息、助手的三个点）都还没渲染出来，此刻推到
+   * 底也只是推到「旧的底」。改开 pin，由上面那条 layout effect 在往后的每次提交
+   * 里跟住 —— 内容长多少就跟多少。
+   *
+   * 「往回翻着看的人不该被新消息拽走」这条依然成立：拽走他的只有对端，而这一下
+   * 是他自己按的发送，他的话就落在最底下。
+   */
+  const pinToBottom = useCallback(() => {
+    pinRef.current = true;
+    setAtBottom(true);
+    setBottomVisibleId(null);
   }, []);
 
   /** 滚动：维护「在不在底部」，并在距顶两屏以内时预取下一页。 */
@@ -381,6 +421,7 @@ export function useTranscriptScrollback({
     getScrollElement,
     onScroll,
     jumpToBottom,
+    pinToBottom,
     atBottom,
     bottomVisibleId,
     earlier,

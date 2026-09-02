@@ -10,9 +10,11 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  ProjectGlyph,
   StatusDot,
   Button,
   cn,
+  type ProjectGlyphInfo,
 } from "@agentre-hub/agentre-ui";
 
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
@@ -20,6 +22,7 @@ import { useIsMobile } from "@/components/use-is-mobile";
 import type { RelayClient } from "@/lib/relayClient";
 import {
   formatRelativeTime,
+  sessionStatusLabel,
   toAgentStatus,
   type SessionViewStatus,
 } from "@/lib/sessionView";
@@ -39,13 +42,23 @@ export interface SessionDetailHeaderProps {
   identity: SessionSummary | null;
   /** 解出来的 Agent。解不出（老会话、或它已不在账号里）时为 null。 */
   agent: { name: string } | null;
+  /**
+   * 解出来的项目（名字 + 调色板色）。这条对话不属于任何项目、或名字还解不开时
+   * 为 null —— 两种情形这一维都不摆，派生规则在 SessionDetailView 的 `project`。
+   */
+  project: ProjectGlyphInfo | null;
   /** 头部那一档头像。在 JSX 之外算好，见 SessionDetailView 的 headerAvatar。 */
   avatar: ReactNode;
   displayTitle: string;
   machineName: string | undefined;
   machineOnline: boolean | null | undefined;
   status: SessionViewStatus;
-  /** 这一轮在不在跑 —— 只有在跑的时候才摆「停止」。 */
+  /**
+   * 这一轮在不在跑，**实时**的那一份（`turnActive`）。
+   *
+   * 两个读者：状态点/状态文字的「在不在跑」这一维（见下面的 `lifecycleNow`），
+   * 以及「停止」——只有在跑的时候才摆得出。
+   */
   running: boolean;
   /**
    * 宿主页面级的那簇控件（Chat 桌面档的连接态 + 语言/主题）。
@@ -71,6 +84,7 @@ export default function SessionDetailHeader({
   sid,
   identity,
   agent,
+  project,
   avatar,
   displayTitle,
   machineName,
@@ -124,6 +138,35 @@ export default function SessionDetailHeader({
     });
   }
 
+  /**
+   * 头部认这条对话此刻是什么状态 —— 「在不在跑」这一维认 `running`，不认快照。
+   *
+   * `identity` 背后的 `summary` 只在 attach 那一刻由 session.list 取一次、此后
+   * 永不刷新（见 SessionDetailView 的 `identity`）。整片状态挂在它上面就是「打开
+   * 时是什么样、之后一直是什么样」：自己发出去的一轮、别的端开起来的一轮、以及
+   * 这一轮跑完，头部一概看不见 —— 灰点会一直灰着，「停止」也一直不出现。
+   *
+   * `running` 走的是 `turnActive`，run/steer 选路与转录的三点认的也是它，这一屏
+   * 关于「这一轮在不在跑」只有那一个答案。
+   *
+   * 其余各维没有第二份来路，照旧退回快照：interrupted 原样带过来，认不出的旧状态
+   * 与空值一律作 idle（与此前的兜底同一条）。等待输入那面旗在跑的时候必然过期
+   * ——它就在同一份快照里——所以那一档直接落下。
+   *
+   * 判定与文案本身仍各自只有一处（`toAgentStatus` / `sessionStatusLabel`），这里
+   * 只是把过期的那两个**输入**换掉。
+   */
+  const lifecycleNow = running
+    ? "running"
+    : identity?.lifecycleState === "interrupted"
+      ? "interrupted"
+      : "idle";
+  const waitingNow = running ? false : Boolean(identity?.waitingForInput);
+  const statusNow = {
+    lifecycleState: lifecycleNow,
+    waitingForInput: waitingNow,
+  };
+
   /** mono meta 行的各段。只有拿得出来的才进来（分隔符由渲染处夹在两段之间）。 */
   /** `hideAt` = 窄档先收哪一段（决策 4）。收起的那一段在别处还说得出。 */
   const metaParts: {
@@ -131,7 +174,7 @@ export default function SessionDetailHeader({
     node: React.ReactNode;
     hideAt?: string;
   }[] = [];
-  if (identity?.lifecycleState || agent) {
+  if (identity?.lifecycleState || agent || running) {
     metaParts.push({
       key: "agent",
       node: (
@@ -139,25 +182,34 @@ export default function SessionDetailHeader({
           data-testid="session-detail-status"
           className="inline-flex shrink-0 items-center gap-1"
         >
-          {identity?.lifecycleState && (
-            <StatusDot
-              status={toAgentStatus({
-                lifecycleState: identity.lifecycleState,
-                waitingForInput: identity.waitingForInput,
-              })}
-              size="xs"
-            />
+          {(identity?.lifecycleState || running) && (
+            <StatusDot status={toAgentStatus(statusNow)} size="xs" />
           )}
           {/* 状态不只靠颜色：四个态都有可见文字（session.list.*）。Agent 名认不出来时
               （老会话没有 agentSyncId）退回状态文字，不填占位名。 */}
-          {agent?.name ??
-            (identity?.waitingForInput
-              ? t("session.list.waiting")
-              : identity?.lifecycleState === "running"
-                ? t("session.list.running")
-                : identity?.lifecycleState === "interrupted"
-                  ? t("session.list.interrupted")
-                  : t("session.list.idle"))}
+          {agent?.name ?? sessionStatusLabel(statusNow, t)}
+        </span>
+      ),
+    });
+  }
+  if (project) {
+    metaParts.push({
+      key: "project",
+      // 机器之后收（决策 4）：项目在左栏索引的行上还说得出（RowSecondaryLine 的
+      // project 那一段），断点与桌面端 chat-panel-header 的 topline 取同一个。
+      hideAt: "@max-[420px]/header:hidden",
+      node: (
+        <span className="inline-flex min-w-0 items-center gap-1">
+          {/* 项目在索引里只有**一枚**字形（组头 24px、行首 14px、时间轴第二行
+              那一半都是它）。头部是第四处，画一枚通用文件夹就会让同一个项目在
+              左栏与这里长成两个样子。尺寸取行里那一档，与旁边的 mono 小字齐。 */}
+          <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
+            <ProjectGlyph
+              project={project}
+              className="size-full rounded-sm text-[8px]"
+            />
+          </span>
+          <span className="truncate">{project.name}</span>
         </span>
       ),
     });
@@ -286,8 +338,10 @@ export default function SessionDetailHeader({
         此前只有三样：标题、一枚状态胶囊、「机器 · 在线」——打开一条对话看不出是哪个
         Agent 在跑、上一次动是什么时候，也没有办法把跑飞的一轮停下来。
 
-        **项目**那一维不摆：SessionSummary 上没有它（只有账号镜像那一行有），
-        摆一个猜出来的项目名比不摆更糟。
+        **项目**那一维在这里（顺序与索引一致：Agent → 项目 → 机器）。它一度不摆，
+        理由是「SessionSummary 上没有它」—— 线格式后来补上了 projectSyncId，账号
+        镜像那一行也带着服务端就地判定的 project_sync_id，于是不再需要猜：解得出
+        名字才摆，解不出就整段省略。
       */}
       {/* 身份行恒高（与桌面端同一条结论，规格 2026-08-23 决策 3）：高度写死为两行
           标题的高度、整块垂直居中 —— 标题长短不再改变它。

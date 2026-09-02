@@ -195,6 +195,27 @@ func (f *fakeRelay) TranscriptImportExecute(_ context.Context, request *agentrew
 	}, nil
 }
 
+// setAttachErr / setSessions 让用例在**跟随已经跑起来之后**改变对端的答复
+// （常驻循环在自己的 goroutine 上读它们，直接写字段会撞上竞态检测器）。
+func (f *fakeRelay) setAttachErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attachErr = err
+}
+
+func (f *fakeRelay) setSessions(sessions []*agentrewire.SessionSummary) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions = sessions
+}
+
+// callCount 是这条假中继迄今收到的请求总数。「什么都不该发」只有它答得出来。
+func (f *fakeRelay) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
 func (f *fakeRelay) callsOf(method agentrewire.RpcMethod) []proto.Message {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -940,4 +961,101 @@ func TestPullFrames_UnreportedCreatetimeStaysZero(t *testing.T) {
 
 	require.Len(t, r.frames, 1)
 	assert.Zero(t, r.frames[0].Createtime)
+}
+
+// ── 接不上的会话要有第二次机会 ─────────────────────────────────────────────
+
+// Given 一条 interrupted 的会话（同步那一刻接不上，因此镜像不在它的订阅者集合里）;
+// When 它在对端复活了（清单不再说 interrupted）、Revive 跑一遍;
+// Then 镜像重新接上它，此后的实时帧照常镜像，那一行的生命周期也跟着更新。
+//
+// 少了这一步，interrupted 是个**自锁**状态：接不上 = 收不到实时帧 = 没有任何东西
+// 能把那一行推离 interrupted（followTurn 要帧，Sync 只在出错 / 积压 / 保存名单变动
+// 时才跑）。agentred 每次重启都会把非终态会话整批标成 interrupted，于是左栏那一列
+// 状态点全部永久红着，「最近活动」也永久停在最后一次同步的时刻。
+func TestRevive_InterruptedSessionCameBack_ReattachesAndKeepsMirroring(t *testing.T) {
+	r := newRig(t)
+	s := runningSession(conv42, "上次没跑完的")
+	s.LifecycleState = relaywire.SessionLifecycleInterrupted
+	r.relay.sessions = []*agentrewire.SessionSummary{s}
+	r.relay.attachErr = errors.New("no active turn")
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.Equal(t, relaywire.SessionLifecycleInterrupted, r.lastLifecycle(t))
+
+	// 对端那边它又跑起来了（用户从控制台发了一条消息，daemon 把行推回 running）。
+	alive := runningSession(conv42, "上次没跑完的")
+	r.relay.sessions = []*agentrewire.SessionSummary{alive}
+	r.relay.attachErr = nil
+
+	require.NoError(t, r.mirror.Revive(ctx))
+
+	assert.NotEmpty(t, r.relay.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_ATTACH),
+		"复活之后要重新接上，否则再也收不到一帧")
+	assert.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 1)))
+	r.flush()
+	assert.Equal(t, []int64{1}, r.seqs(), "重新接上之后的实时帧照常落库")
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t))
+}
+
+// Given 全部会话都已经接上;When Revive 跑;Then 一个请求都不发 —— 它是常驻循环上
+// 的定期动作，没有接不上的会话时必须是零开销，否则每台机器每分钟都在白问一次清单。
+func TestRevive_NothingUnattached_MakesNoCalls(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	before := r.relay.callCount()
+
+	require.NoError(t, r.mirror.Revive(ctx))
+
+	assert.Equal(t, before, r.relay.callCount(), "没有接不上的会话时不该发任何请求")
+}
+
+// Given 那条会话在对端仍然是 interrupted;When Revive 跑;Then 只问清单、不试接入
+// —— daemon 对它一律回 ErrNoActiveTurn，试一次只是白发一个注定失败的请求。
+func TestRevive_StillInterrupted_ListsButDoesNotAttach(t *testing.T) {
+	r := newRig(t)
+	s := runningSession(conv42, "上次没跑完的")
+	s.LifecycleState = relaywire.SessionLifecycleInterrupted
+	r.relay.sessions = []*agentrewire.SessionSummary{s}
+	r.relay.attachErr = errors.New("no active turn")
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	lists := len(r.relay.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_LIST))
+
+	require.NoError(t, r.mirror.Revive(ctx))
+
+	assert.Len(t, r.relay.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_LIST), lists+1,
+		"要问一次清单才知道它是不是还中断着")
+	assert.Empty(t, r.relay.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_ATTACH),
+		"还中断着就不必试那个注定失败的接入")
+}
+
+// ── 补洞路径上的轮次边界同样要推进生命周期 ─────────────────────────────────
+
+// Given 一条在跑的会话;When 它的终态帧跳着号到达（seq > 游标 + 1，实时投递漏了
+// 中间那几条）;Then 补完洞之后那一行必须已经是 idle。
+//
+// 补洞分支此前拉完就 saveSummary，而 saveSummary 写的是**清单快照**里的生命周期
+// ——那一份还停在 running。于是「轮次跑完了」这件事只在实时帧恰好连号时才看得见，
+// 漏一帧就把这条对话永久钉在「运行中」。
+func TestApply_TurnDoneArrivesThroughAGap_StillLandsIdle(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	r.relay.journal[conv42] = []*agentrewire.JournaledNotification{
+		journalRow(conv42, 1), journalRow(conv42, 2),
+	}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	// 游标停在 2（同步时拉回来的），终态帧是 4：中间的 3 漏了。
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 4)))
+
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t),
+		"漏了一帧不该让这条对话永久停在「运行中」")
 }

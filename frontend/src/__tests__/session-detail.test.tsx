@@ -3208,6 +3208,179 @@ describe("会话详情：头部", () => {
     );
   });
 
+  /*
+    项目那一维（桌面端 chat-panel-header 的 topline 说的就是它）。
+
+    此前这一行只有「Agent · 时间 · 机器」：同一条对话在左栏索引的行上带着项目
+    （RowSecondaryLine 的 project 那一段），点进来项目就没了 —— 而项目恰恰是
+    「这条对话在动谁的代码」这句话里最要紧的一维。
+
+    协议上它一直在：wire 的 SessionSummary 有 projectSyncId（发起端自己报的），
+    账号镜像那一行有 project_sync_id（服务端按 cwd 与项目树就地判定，决策 12）。
+    名字与颜色则要拿它去问账号的项目树 —— 与 Agent 名同一种取法。
+  */
+  const projectRows = [
+    { sync_id: "p-1", name: "登录重构", color: "agent-5" },
+    { sync_id: "p-2", name: "别的项目", color: "agent-2" },
+  ];
+
+  /** stubHeader 的项目版：会话上钉了 p-1，账号项目树答得出它。 */
+  function stubHeaderWithProject(
+    projects: { sync_id: string; name: string; color?: string }[] = projectRows,
+    projectSyncId = "p-1",
+  ) {
+    stubHeader();
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: workspaceAgents };
+      if (path === "/v1/workspace/projects") return { projects };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, lifecycleState: "running", projectSyncId }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  it("会话属于某个项目：meta 行说得出项目名，位置在 Agent 与机器之间", async () => {
+    stubHeaderWithProject();
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const seg = await screen.findByTestId("session-detail-meta-project");
+    expect(seg.textContent).toContain("登录重构");
+    // 索引四个轴上说维的顺序是 Agent → 项目 → 机器，头部不另立一套。
+    const meta = screen.getByTestId("session-detail-meta");
+    expect(
+      [...meta.querySelectorAll("[data-testid^='session-detail-meta-']")].map(
+        (el) => el.getAttribute("data-testid"),
+      ),
+    ).toEqual([
+      "session-detail-meta-agent",
+      "session-detail-meta-project",
+      "session-detail-meta-machine",
+    ]);
+  });
+
+  /*
+    项目在索引里有**唯一**一枚字形（共享包的 ProjectGlyph：组头 24px、行首 14px、
+    时间轴第二行那一半）。头部是它的第四处出现，不能在这里画一枚通用文件夹图标 ——
+    那样同一个项目在左栏是橙方块、在头部是灰文件夹，认不出是同一个。
+  */
+  it("项目那一段带的是共享包那枚项目字形，颜色取项目自己的调色板色", async () => {
+    stubHeaderWithProject();
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const seg = await screen.findByTestId("session-detail-meta-project");
+    const glyph = within(seg).getByRole("img", { name: "登录重构" });
+    expect(glyph.style.backgroundColor).toBe("var(--agent-5)");
+  });
+
+  it("不属于任何项目的对话：不摆项目那一段，也不留一个孤零零的「·」", async () => {
+    stubHeaderWithProject(projectRows, "");
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    expect(screen.queryByTestId("session-detail-meta-project")).toBeNull();
+    const meta = screen.getByTestId("session-detail-meta").textContent ?? "";
+    expect(meta.startsWith("·")).toBe(false);
+  });
+
+  /*
+    项目树还没落地、或那个项目已经不在账号里：解不出名字就不摆这一段。摆一个
+    猜出来的项目名（比如 sync id 本身）比不摆更糟。
+  */
+  it("项目树里没有这条对话钉的那个项目：不摆项目那一段，不拿 sync id 顶上", async () => {
+    stubHeaderWithProject([{ sync_id: "p-2", name: "别的项目" }], "p-1");
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    expect(screen.queryByTestId("session-detail-meta-project")).toBeNull();
+    expect(
+      screen.getByTestId("session-detail-meta").textContent ?? "",
+    ).not.toContain("p-1");
+  });
+
+  /*
+    机器离线时中继给不出摘要，头部认这条对话全靠账号镜像那一行 —— 项目也一样。
+    镜像那一格是服务端按 cwd 就地判定出来的，正是 agentred 那种自己不记项目的
+    发起端唯一说得出项目的来路。
+  */
+  it("机器离线：项目改从账号镜像那一行的 project_sync_id 认", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      if (path === "/v1/workspace/agents") return { agents: workspaceAgents };
+      if (path === "/v1/workspace/projects") return { projects: projectRows };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [
+            {
+              peer_fingerprint: "fp-1",
+              conversation_id: "42",
+              title: "重构登录页",
+              agent_sync_id: "ag-1",
+              project_sync_id: "p-1",
+              lifecycle_state: "idle",
+            },
+          ],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          frames: [
+            {
+              seq: 1,
+              method: "runtime.event",
+              params: {
+                conversationId: "42",
+                event: { kind: "text_delta", text: "离线转录" },
+              },
+            },
+          ],
+          cursor: 1,
+          has_more: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    renderEmbeddedDetail();
+
+    await screen.findByText(/离线转录/);
+    expect(
+      (await screen.findByTestId("session-detail-meta-project")).textContent,
+    ).toContain("登录重构");
+  });
+
+  /*
+    窄档降级（决策 4）：机器先收（560px），项目其次（420px，与桌面端 topline 同一
+    个断点）—— 两维在左栏索引的行上都还说得出，Agent 与状态不能收。
+  */
+  it("面板变窄：项目那一段在机器之后被收起，不折行", async () => {
+    stubHeaderWithProject();
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    expect(screen.getByTestId("session-detail-meta-project").className).toMatch(
+      /@max-\[420px\]\/header:hidden/,
+    );
+  });
+
   it("转录里的头像也换成这个 Agent 的调色板色（此前是中性的 bg-muted）", async () => {
     stubHeader();
     const { container } = renderEmbeddedDetail();
@@ -4517,6 +4690,78 @@ describe("会话详情页:一轮在跑时的三点", () => {
     act(() => capturedOpts.onRunResultDone?.({} as never));
     await vi.waitFor(() => expect(typing()).toBeNull());
   });
+
+  /*
+    另一个窗口发的那条消息。同一个账号的两条连接都上过这条会话，daemon 按会话把
+    这一轮的事件扇给它们两个（connRegistry 的订阅者集合），所以这一屏收得到回声、
+    也收得到助手的正文——它只是**没发过**这一轮。
+
+    而「有一轮跑起来了」这件事,这一屏此前没有任何来路:`turnActive` 转真的三条路
+    （自己发送 / `autonomousTurn.started` / attach 那一刻的清单快照）一条也不成立
+    —— 起始通知只在**自主续轮**时发（handlers/runtime.go 的 forwardAutonomousTurn），
+    别人一次普通的 `runtime.run` 什么都不发,而快照是打开这一屏那一刻取的。
+
+    于是旁观的那个窗口从按下发送到回复到齐全程一动不动:自己那句话躺在那里,没有
+    三点、没有任何「在跑」的表示,回复也就那么突然冒出来。
+
+    说得出这件事的东西一直都在:一轮的第一帧永远是 daemon 把那条用户消息回声回来
+    （上面「自己那条消息回声回来」那条守的是同一件事的另一半）。
+  */
+  it("别的窗口开的一轮:回声一到,这一屏也出三点", async () => {
+    wireRelay();
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+    expect(typing()).toBeNull();
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "user_message",
+          text: "换成 zinc",
+          sourceDevice: "fp-other",
+        },
+        seq: 3,
+      }),
+    );
+
+    await vi.waitFor(() => expect(screen.getByText("换成 zinc")).toBeTruthy());
+    await vi.waitFor(() => expect(typing()).toBeTruthy());
+  });
+
+  // 旁观窗口的三点同样要收得掉。终态帧走的是同一条扇出，这一屏收得到——不然点亮
+  // 之后就再也熄不了，一条早就跑完的会话永远转着三点。
+  it("别的窗口开的一轮:这一屏的三点跟到助手那条上,轮次结束后熄灭", async () => {
+    wireRelay();
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "user_message",
+          text: "换成 zinc",
+          sourceDevice: "fp-other",
+        },
+        seq: 3,
+      }),
+    );
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "好的" },
+        seq: 4,
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(screen.getByText("好的").closest("article")).toContain(typing());
+    });
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+    await vi.waitFor(() => expect(typing()).toBeNull());
+  });
 });
 
 /**
@@ -5029,6 +5274,119 @@ describe("会话详情：回到底部", () => {
     );
   });
 });
+/**
+ * 发出去之后回到底部（2026-09-02）。
+ *
+ * 钉底此前只挂在 `events` 上 —— 那是**对端说过的话**。而「按下发送」这一下改变的
+ * 是别的东西：往回翻着看的人此刻明确表示要继续这条对话（他自己的话就在下面），
+ * 排队 / 失败那两种气泡也挂在转录之外、一条事件都不产生。两处都会把刚发生的事
+ * 留在折叠线以下，界面看起来像是「没反应」。
+ */
+describe("会话详情：发出去之后回到底部", () => {
+  /** 连上的那一档：转录读得到，run 由用例自己决定成不成。 */
+  function stubSend(run: () => unknown = () => ({})) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return run();
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "很长的一段转录" },
+        seq: 1,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  function mount() {
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  /**
+   * jsdom 不做布局，滚动容器的三个量恒为 0。这里钉上几何：高度按 `grow()` 说的
+   * 「此刻内容有多高」算，用例据此模拟「气泡挂上来之后内容长高了」。
+   */
+  function scrollerWithHeights(grow: () => number = () => 0): HTMLElement {
+    const el = screen.getByTestId("session-detail-scroll");
+    Object.defineProperty(el, "clientHeight", {
+      configurable: true,
+      get: () => 480,
+    });
+    Object.defineProperty(el, "scrollHeight", {
+      configurable: true,
+      get: () => 4_000 + grow(),
+    });
+    return el;
+  }
+
+  it("Given 用户往回翻着看, When 他发出一条消息, Then 视口滚回底部、药丸收走", async () => {
+    stubSend();
+    mount();
+
+    await screen.findByText("很长的一段转录");
+    const scroll = scrollerWithHeights();
+    act(() => {
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+    expect(screen.getByTestId("transcript-jump-control")).toBeTruthy();
+
+    await sendInComposer("再跑一遍 relay 那组测试");
+
+    await vi.waitFor(() => expect(scroll.scrollTop).toBe(4_000));
+    expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
+  });
+
+  it("Given 贴着底、这一条没发出去, When 失败气泡挂到转录下面, Then 视口跟着它长高", async () => {
+    stubSend(() => {
+      throw new Error("boom");
+    });
+    mount();
+
+    await screen.findByText("很长的一段转录");
+    // 气泡挂上来之后内容长高 600 —— 它在转录**之外**，一条事件都不产生。
+    const scroll = scrollerWithHeights(() =>
+      document.querySelector('[data-testid="send-failure"]') ? 600 : 0,
+    );
+    act(() => {
+      scroll.scrollTop = 4_000;
+      fireEvent.scroll(scroll);
+    });
+
+    await sendInComposer("这条会失败");
+
+    await screen.findByTestId("send-failure");
+    await vi.waitFor(() => expect(scroll.scrollTop).toBe(4_600));
+  });
+});
 
 /**
  * 头部的「更多」菜单，以及它现在唯一一条真项目：复制会话号。
@@ -5367,5 +5725,99 @@ describe("会话详情页 · 会话级思考力度", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reasoning effort/ }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Reasoning effort was not changed");
+  });
+});
+
+// ── 头部状态：这一轮在不在跑，认的是实时轮次不是装载快照 ─────────────────────
+//
+// `summary` 只在 attach 那一刻由 session.list 取一次，此后永不刷新（同一条事实在
+// 上面选路那一段也写着）。头部此前把状态点、状态文字与「停止」按钮全挂在它上面：
+// 打开会话时是 idle，之后自己发多少条消息，点都是灰的、「停止」也不出现 —— 而这
+// 一屏明明知道这一轮在跑（`turnActive` 正是 run/steer 选路和转录三点用的那一个）。
+describe("会话详情页:头部状态跟着实时轮次走", () => {
+  function wireIdleSession() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  /** 头部那一段的文字（Agent 名解不出来时它就是状态文字）。 */
+  const statusText = () =>
+    screen.getByTestId("session-detail-status").textContent;
+  /** 状态点的颜色类（`bg-status-*`）—— 状态不只靠文字，点也得对。 */
+  const statusDotClass = () =>
+    screen
+      .getByTestId("session-detail-status")
+      .querySelector("[aria-label$='status']")?.className ?? "";
+
+  it("Given 打开时是空闲 When 自己发一条 Then 头部变 Running 并摆出停止", async () => {
+    wireIdleSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    expect(statusText()).toContain("Idle");
+    expect(screen.queryByTestId("session-detail-stop")).toBeNull();
+
+    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await sendInComposer("开始重构");
+
+    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    expect(statusDotClass()).toContain("bg-status-running");
+    expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
+  });
+
+  it("Given 这一轮跑起来了 When 收到终态帧 Then 头部退回 Idle 并收起停止", async () => {
+    wireIdleSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await sendInComposer("开始重构");
+    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    await vi.waitFor(() => expect(statusText()).toContain("Idle"));
+    expect(screen.queryByTestId("session-detail-stop")).toBeNull();
+  });
+
+  // 别的端开的一轮同样算数：`autonomousTurn.started` 是这一屏唯一能知道「不是我
+  // 开的这一轮正在跑」的信号，快照那时早就过期了。
+  it("Given 别的端开了一轮 When 收到自主续轮开始 Then 头部也变 Running", async () => {
+    wireIdleSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    expect(statusText()).toContain("Idle");
+
+    act(() => capturedOpts.onAutonomousTurnStarted?.({} as never));
+
+    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
+  });
+
+  // 装载那一刻对端就在跑：`markTurnActive` 在 attach 之后按 lifecycleState 接回来，
+  // 头部照样要显示 Running —— 这一档此前是唯一显示对的，不能改回归时丢掉。
+  it("Given 装载时对端正在跑 Then 头部一开始就是 Running", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, lifecycleState: "running" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    await vi.waitFor(() => expect(statusText()).toContain("Running"));
   });
 });

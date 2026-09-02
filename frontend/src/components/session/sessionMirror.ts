@@ -29,6 +29,14 @@ export interface MirrorSessionItem {
   machine_fingerprint: string;
   title?: string;
   agent_sync_id?: string;
+  /**
+   * 这条对话归哪个项目。服务端按镜像的 cwd 与账号项目树上的路径就地判定（决策 12），
+   * 配不上时留空 —— 路径本身永不下行（R19），所以这里能拿到的只有这个标识。
+   *
+   * 它是 agentred 那种自己不记项目的发起端唯一说得出项目的来路：中继摘要上那一格
+   * 是发起端自己报的，两处各答各的。
+   */
+  project_sync_id?: string;
   backend_type?: string;
   lifecycle_state?: string;
   waiting_for_input?: boolean;
@@ -100,6 +108,7 @@ export function mirrorRowToSummary(row: MirrorSessionItem): SessionSummary {
     peerFingerprint: row.peer_fingerprint,
     title: row.title,
     agentSyncId: row.agent_sync_id,
+    projectSyncId: row.project_sync_id,
     backendType: row.backend_type,
     lifecycleState: row.lifecycle_state ?? "",
     waitingForInput: row.waiting_for_input,

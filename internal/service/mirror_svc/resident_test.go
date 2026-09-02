@@ -337,6 +337,14 @@ func (s *fakeStore) UpsertSummary(_ context.Context, row *agent_session_entity.S
 	return nil
 }
 
+// lifecycleOf 是库里那一行此刻的生命周期。读不出来时回空串 —— 它跑在 Eventually
+// 的条件 goroutine 上，那里不能 FailNow。
+func (s *fakeStore) lifecycleOf(userID int64, conversationID string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.summaries[identityOfRow(userID, conversationID)].LifecycleState
+}
+
 func (s *fakeStore) ListSummariesByUser(_ context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -559,6 +567,9 @@ type residentRig struct {
 	rdb   *goredis.Client
 	peer  *fakeRelay
 	store *fakeStore
+	// reviveEvery 默认长到在一次用例里不会响：Revive 会为接不上的会话补发
+	// list / attach / pull，而好几条用例数的正是那些请求。要它的用例自己调快。
+	reviveEvery time.Duration
 }
 
 type replica struct {
@@ -573,7 +584,7 @@ func newResidentRig(t *testing.T) *residentRig {
 	store := newFakeStore()
 	agent_session_repo.RegisterSummary(store)
 	agent_session_repo.RegisterJournalFrame(store)
-	return &residentRig{rdb: rdb, peer: newFakeRelay(), store: store}
+	return &residentRig{rdb: rdb, peer: newFakeRelay(), store: store, reviveEvery: time.Hour}
 }
 
 // replica 造一个「server 副本」:自己的 InstanceID、自己的中继与签名器,
@@ -583,9 +594,10 @@ func (r *residentRig) replica(t *testing.T, instanceID string) *replica {
 	net := newFakeDaemonNet(r.peer)
 	signer := &fakeSigner{}
 	sup := NewSupervisor(Config{
-		InstanceID: instanceID,
-		LeaseTTL:   time.Minute,
-		RenewEvery: 5 * time.Millisecond,
+		InstanceID:  instanceID,
+		LeaseTTL:    time.Minute,
+		RenewEvery:  5 * time.Millisecond,
+		ReviveEvery: r.reviveEvery,
 	}, net, signer, r.rdb)
 	t.Cleanup(func() { sup.Stop(context.Background()) })
 	return &replica{sup: sup, net: net, signer: signer}
@@ -939,4 +951,37 @@ func (r *residentRig) claims(t *testing.T, userID int64, fingerprint string) int
 		return 0
 	}
 	return n
+}
+
+// ── 接不上的会话由常驻循环定期再试 ─────────────────────────────────────────
+
+// Given 跟着的这台机器上唯一那条已保存对话是 interrupted 的（daemon 对它的 attach
+// 一律回 ErrNoActiveTurn，所以镜像不在它的订阅者集合里）;
+// When 用户在别处对它发了一条消息、对端把它推回 running;
+// Then 常驻循环自己把它接回来，库里那一行跟着不再是 interrupted。
+//
+// 这是 interrupted 自锁的出口（见 Mirror.Revive）：不定期再试的话，接不上 = 收不到
+// 实时帧 = 没有任何东西能把那一行推离 interrupted，而 agentred 每次重启都会把非终态
+// 会话整批标成 interrupted —— 左栏那一列状态点会全部永久红着。
+func TestFollower_InterruptedSessionCameBack_IsPickedUpByTheResidentLoop(t *testing.T) {
+	rig := newResidentRig(t)
+	stuck := machineSession(conv42, "上次没跑完的")
+	stuck.LifecycleState = relaywire.SessionLifecycleInterrupted
+	rig.peer.sessions = []*agentrewire.SessionSummary{stuck}
+	rig.peer.setAttachErr(errors.New("no active turn"))
+	rig.reviveEvery = 5 * time.Millisecond
+
+	a := rig.replica(t, replicaA)
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, relaywire.SessionLifecycleInterrupted, rig.store.lifecycleOf(testUserID, conv42))
+
+	rig.peer.setSessions([]*agentrewire.SessionSummary{machineSession(conv42, "上次没跑完的")})
+	rig.peer.setAttachErr(nil)
+
+	require.Eventually(t, func() bool {
+		return rig.store.lifecycleOf(testUserID, conv42) == relaywire.SessionLifecycleRunning
+	}, 2*time.Second, 5*time.Millisecond, "复活的会话没有被常驻循环接回来")
+	assert.NotEmpty(t, rig.peer.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_ATTACH))
 }

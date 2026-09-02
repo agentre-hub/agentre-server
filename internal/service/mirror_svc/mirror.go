@@ -150,6 +150,12 @@ type trackedSession struct {
 	mu      sync.Mutex
 	cursor  int64
 	summary *agentrewire.SessionSummary
+	// attached 记这条对话此刻在不在对端的订阅者集合里（一次成功的 session.attach）。
+	//
+	// 它是 Revive 的判据。接不上不是一次可以耸肩略过的失败：daemon 的实时扇出按
+	// **每条会话**的订阅者集合投递（agentre 的 connRegistry.addSubLocked），没接上
+	// 就是这条对话此后一帧都收不到，而 interrupted 恰恰是「接不上」的常态来源。
+	attached bool
 
 	// 摘要攒批的窗口状态，形状与 notify.go 的「首发 + 尾补」一致，见 touchSummary。
 	flushMu        sync.Mutex
@@ -168,6 +174,18 @@ func (ts *trackedSession) abandonSummaryFlush() {
 	defer ts.flushMu.Unlock()
 	ts.flushForgotten = true
 	ts.flushDirty = false
+}
+
+func (ts *trackedSession) markAttached(v bool) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.attached = v
+}
+
+func (ts *trackedSession) isAttached() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.attached
 }
 
 func (ts *trackedSession) cursorNow() int64 {
@@ -266,6 +284,62 @@ func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
 	return errors.Join(errs...)
 }
 
+// Revive 给「接不上」的会话第二次机会,是 interrupted 这个自锁状态唯一的出口。
+//
+// daemon 的实时扇出按**每条会话**的订阅者集合投递,而进入那个集合的唯一动作是一次
+// 成功的 session.attach(agentre 的 registerProtobufAttach → connRegistry.claimFor)。
+// 对 interrupted 的会话 attach 一律回 ErrNoActiveTurn(那一轮的子进程随上个 daemon
+// 进程消亡了),于是:
+//
+//	接不上 → 收不到实时帧 → followTurn 没有输入 → 那一行永远停在 interrupted
+//
+// 而 Sync 只在出错 / 积压 / 保存名单变动 / 换连接时才跑,补不上这个洞。agentred 每次
+// 重启都把非终态会话整批标成 interrupted,所以这不是边角情形:不管它,左栏那一列状态
+// 点会**全部**永久红着,「最近活动」也永久停在最后一次同步的时刻。
+//
+// 复活的时机只有对端知道(用户在别处对它发了一条消息),而问对端就是问清单——它一次
+// 把这台机器上所有会话的生命周期都带回来。所以这里发的是**一个**请求,不是每条会话
+// 一个;而且没有接不上的会话时一个请求都不发,常驻循环上的定期动作在稳态必须是零开销。
+//
+// 仍然中断着的不试接入:那是一个注定回 ErrNoActiveTurn 的请求。
+func (m *Mirror) Revive(ctx context.Context) error {
+	stale := m.unattached()
+	if len(stale) == 0 {
+		return nil
+	}
+	list, err := m.peer.SessionList(ctx, &agentrewire.SessionListRequest{})
+	if err != nil {
+		return fmt.Errorf("session list: %w", err)
+	}
+	var errs []error
+	for _, s := range list.GetSessions() {
+		ts, waiting := stale[s.GetConversationId()]
+		if !waiting || s.GetLifecycleState() == relaywire.SessionLifecycleInterrupted {
+			continue
+		}
+		// 元数据一并跟上:这一份清单比这条对话上一次同步时那份新,而 saveSummary
+		// 写的正是它(标题 / 生命周期 / 最近活动都在里面)。
+		ts.setSummary(s)
+		if err := m.catchUp(ctx, ts); err != nil {
+			errs = append(errs, fmt.Errorf("conversation %s: %w", s.GetConversationId(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// unattached 是此刻还没进对端订阅者集合的那些对话,按会话标识索引。
+func (m *Mirror) unattached() map[string]*trackedSession {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]*trackedSession{}
+	for id, ts := range m.tracked {
+		if !ts.isAttached() {
+			out[id] = ts
+		}
+	}
+	return out
+}
+
 // Apply stores one live notification received on this connection.
 //
 // It is the same three-rule seq gate the desktop runs on its own stream
@@ -313,6 +387,11 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		if err := m.pullUntilCaughtUp(ctx, ts); err != nil {
 			return err
 		}
+		// 轮次边界在这条路径上同样算数。少了它，「这一轮跑完了」只在实时帧恰好
+		// 连号时才看得见 —— 漏一帧就把这条对话永久钉在「运行中」，因为紧接着的
+		// saveSummary 写的是清单快照里那个已经过期的生命周期。到达的这一帧就是
+		// 最新的那个边界（补回来的都比它早）。
+		ts.followTurn(method)
 		// 补洞是罕见路径，而且刚跨过一段：游标立刻钉住，不进攒批。
 		return m.saveSummary(ctx, ts)
 	default:
@@ -442,6 +521,8 @@ func (m *Mirror) catchUp(ctx context.Context, ts *trackedSession) error {
 	pinned := ts.cursorNow()
 	summary := ts.peerSummary()
 	highWater := summary.LatestSeq
+	// 接得上没有就此定下来:接不上的那些由 Revive 定期再试一次(见它的说明)。
+	ts.markAttached(false)
 	if summary.LifecycleState != relaywire.SessionLifecycleInterrupted {
 		hw, err := m.attach(ctx, ts)
 		if err != nil {
@@ -452,6 +533,7 @@ func (m *Mirror) catchUp(ctx context.Context, ts *trackedSession) error {
 				zap.String("conversationId", ts.conversationID), zap.Error(err))
 		} else {
 			highWater = hw
+			ts.markAttached(true)
 		}
 	}
 	if err := m.dropCursorAboveHighWater(ctx, ts, pinned, highWater); err != nil {

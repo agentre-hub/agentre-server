@@ -1,5 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
+  EventUserMessage,
   sessionListFromProtobuf,
   SessionLifecycleInterrupted,
   SessionLifecycleRunning,
@@ -48,6 +49,7 @@ import {
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
 import { useEngineCatalog } from "@/lib/engineCatalog";
+import { fetchProjects, type ProjectNode } from "@/lib/projects";
 import { deriveSessionViewStatus, sessionTitle } from "@/lib/sessionView";
 import {
   loadMirrorTail,
@@ -222,6 +224,11 @@ export default function SessionDetailView({
    * 先摆中性名（见 agentPending）。
    */
   const [agentsSettled, setAgentsSettled] = useState(false);
+  /**
+   * 账号的项目树。头部要拿这条对话钉的 projectSyncId 换一个名字与调色板色 ——
+   * 与 Agent 名同一种取法：解不出就不摆那一维，不拿标识本身顶上。
+   */
+  const [projects, setProjects] = useState<ProjectNode[]>([]);
   const { backends: engineBackends, catalog: pickerCatalog } =
     useEngineCatalog();
   const [permissionMode, setPermissionMode] = useState("");
@@ -405,6 +412,29 @@ export default function SessionDetailView({
           setEvents((prev) => [...prev, toTranscriptFrame(f, at)]);
           // 计时也吃这条流:首字什么时候到、工具在跑的那几段不算生成,都只有帧说得清。
           liveTurn.noteFrame(kind);
+          /*
+            回声 = 一轮开起来了。`user_message` 是 daemon 在「开新一轮」事件流开头
+            注入的发起方标记(R18),不是转录里随便一条用户消息。
+
+            这一屏未必是发送方:同一个账号的两个窗口(或桌面与手机)都上过这条会话
+            时,daemon 把这一轮的事件**扇给两边**,而「有一轮跑起来了」此前只有发送
+            方自己知道 —— `turnActive` 转真的另外两条路都不成立:起始通知只在**自主
+            续轮**时发(daemon 的 forwardAutonomousTurn),别人一次普通的 runtime.run
+            什么都不发;attach 那一刻的清单快照说的是打开这一屏的那一瞬。于是旁观的
+            那个窗口从按下发送到回复到齐全程一动不动,回复就那么突然冒出来。
+
+            **只认实时帧**(ready 之后):补齐会把历史里的每一轮都回放一遍,拿回放去
+            点亮等于刚打开一条闲置会话就闪一下 Running。ready 之前那一段自有归宿 ——
+            attach 收尾处按清单快照 markTurnActive,它本来就排在补齐之后。
+
+            不开表(`liveTurn.beginTurn`):这一轮的起点这一屏观察不到 —— 回放来的回声
+            与实时的长得一样,而从半路起的表会给出一个偏小、却看着与真的一样的数
+            (与「接进来时对端已经在跑」同一档,见 useLiveTurnTiming)。三点不依赖它。
+          */
+          if (kind === EventUserMessage && ready) {
+            turn.markTurnActive(true);
+            turn.setPendingAssistant(true);
+          }
           // 撤占位的判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
           // daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点
           // 熄了,而这一轮再没有别的东西能重新点亮它。
@@ -461,6 +491,15 @@ export default function SessionDetailView({
       .catch(() => {})
       // 取不到也算问过：转录抬头不能为了一次失败永远吊着不写名字。
       .finally(() => alive() && setAgentsSettled(true));
+  }, []);
+
+  // 项目树（头部要「这条对话在动哪个项目」）。同样是锦上添花：取不到就少一维，
+  // 不阻塞详情渲染。这里不设 settled 那一格 —— 项目名解不开时整段不摆，没有
+  // 「先摆个中性的、等一下换掉」这种中间态要区分。
+  useAliveEffect((alive) => {
+    fetchProjects()
+      .then((got) => alive() && setProjects(got))
+      .catch(() => {});
   }, []);
 
   /**
@@ -1061,6 +1100,23 @@ export default function SessionDetailView({
     : null;
 
   /**
+   * 这条对话归哪个项目。
+   *
+   * 两条来路各答各的，所以不是简单地跟着 identity 走：中继摘要上那一格是**发起端
+   * 自己报的**（桌面端开的对话有，agentred 开的多半没有），镜像那一行上的是**服务端
+   * 按 cwd 与项目树就地判定的**（决策 12）。实况优先、空了退到镜像 —— 两边都空才是
+   * 「这条对话不属于任何项目」。
+   *
+   * 解不出名字（项目树还没落地、或那个项目已不在账号里）时不摆这一维：拿 sync id
+   * 顶上去只会在头部留一串谁也认不出的标识。
+   */
+  const projectSyncId =
+    identity?.projectSyncId || mirrorSummary?.projectSyncId || "";
+  const project = projectSyncId
+    ? (projects.find((p) => p.syncId === projectSyncId) ?? null)
+    : null;
+
+  /**
    * 名字还在路上：**已知**这条对话有 Agent（agentSyncId 在手），只是账号的 Agent
    * 清单还没落地。转录只要有消息就先铺出来，不等这个名字（内容比抬头重要），所以
    * 这段空窗真实存在 —— 期间摆中性抬头就会闪一下再换成真名。
@@ -1112,14 +1168,17 @@ export default function SessionDetailView({
       sid={sid}
       identity={identity}
       agent={agent}
+      project={project && { name: project.name, color: project.color }}
       avatar={headerAvatar}
       displayTitle={displayTitle}
       machineName={device?.name}
       machineOnline={machineOnline}
       status={status}
-      // 「这一轮在不在跑」这里仍只认 summary：停止要的是执行端此刻的实况，
-      // 一份离线快照回答不了。
-      running={summary?.lifecycleState === SessionLifecycleRunning}
+      // 「这一轮在不在跑」认 `turnActive`：它的起点就是 attach 那一刻的
+      // `lifecycleState`（见上面 markTurnActive 那处），此后每一个轮次边界都往里
+      // 写 —— 自己发送 / 别的端的自主续轮开起来、终态帧收掉。`summary` 相反是
+      // attach 那一刻的快照且此后永不刷新，挂在它上面头部就永远停在打开时那一档。
+      running={turn.turnActive}
       headerRight={headerRight}
       clientRef={clientRef}
       originRef={originRef}
@@ -1172,7 +1231,13 @@ export default function SessionDetailView({
       messages={messages}
       contextWindow={sessionRuntime.contextWindow}
       sending={send.sending}
-      onSubmit={(text, images) => void send.sendMessage({ text, images })}
+      // 自己按下的发送把视口带回底部：他要看的东西（排队气泡、这条消息本身、
+      // 助手的三个点）全落在最底下。往回翻着看时不被**对端**拽走那条规矩不受
+      // 影响 —— 那一条防的是别人说话，这一下是他自己说话。
+      onSubmit={(text, images) => {
+        scrollback.pinToBottom();
+        void send.sendMessage({ text, images });
+      }}
       permissionMode={effectivePermissionMode}
       permissionModeMeta={permissionModeMeta}
       permissionError={permissionError}

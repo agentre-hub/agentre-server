@@ -33,6 +33,13 @@ const (
 	defaultLeaseTTL    = 30 * time.Second
 	defaultRenewEvery  = 10 * time.Second
 	defaultCallTimeout = 15 * time.Second
+	// defaultReviveEvery 是「接不上的会话再试一次」的间隔（见 Mirror.Revive）。
+	//
+	// 它比续期慢得多是**故意**的：这一路问的是「对端那边它复活了吗」，而复活由人
+	// 触发（在别处对那条对话发了一条消息），一分钟的延迟对着这件事看不出来。稳态
+	// 下它一个请求都不发（全都接上时 Revive 直接返回），所以这个数只决定「卡住的
+	// 那些最多晚多久回来」，不决定常态开销。
+	defaultReviveEvery = time.Minute
 	// liveNoteBuffer 是实时通知在被镜像消化前的缓冲。它满了不会卡住帧总线：溢出的
 	// 帧丢掉并排一次重同步，缺口由 pull 按游标补回来（Mirror.Sync 的语义）。
 	liveNoteBuffer = 256
@@ -51,6 +58,8 @@ type Config struct {
 	LeaseTTL    time.Duration
 	RenewEvery  time.Duration
 	CallTimeout time.Duration
+	// ReviveEvery 是接不上的会话多久再试一次，见 defaultReviveEvery。
+	ReviveEvery time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -66,6 +75,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.CallTimeout <= 0 {
 		c.CallTimeout = defaultCallTimeout
+	}
+	if c.ReviveEvery <= 0 {
+		c.ReviveEvery = defaultReviveEvery
 	}
 	return c
 }
@@ -371,6 +383,10 @@ func (f *follower) run(ctx context.Context) {
 	}()
 	ticker := time.NewTicker(f.sup.cfg.RenewEvery)
 	defer ticker.Stop()
+	// 「接不上的会话再试一次」自成一档，不搭在续期那只表上：两件事的合适节奏差一个
+	// 数量级，共用一只表就得按快的那个跑（见 defaultReviveEvery）。
+	revive := time.NewTicker(f.sup.cfg.ReviveEvery)
+	defer revive.Stop()
 	for {
 		select {
 		case <-f.stop:
@@ -386,6 +402,14 @@ func (f *follower) run(ctx context.Context) {
 		case <-f.resync:
 			if err := f.mirrorNow().Sync(ctx, f.savedNow()); err != nil {
 				logger.Ctx(ctx).Warn("mirror resync failed",
+					zap.Int64("userId", f.key.userID), zap.String("machineFingerprint", f.key.fingerprint),
+					zap.Error(err))
+			}
+		case <-revive.C:
+			// 接不上的那些在这里拿到第二次机会。它跑在同一条 goroutine 上，因此
+			// 与 Apply / Sync 天然不并发（这只循环的既定前提）。
+			if err := f.mirrorNow().Revive(ctx); err != nil {
+				logger.Ctx(ctx).Warn("mirror revive failed",
 					zap.Int64("userId", f.key.userID), zap.String("machineFingerprint", f.key.fingerprint),
 					zap.Error(err))
 			}
