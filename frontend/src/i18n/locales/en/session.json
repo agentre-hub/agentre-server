@@ -7,6 +7,7 @@
     "modelSetFailed": "Model was not changed: {{reason}}",
     "modelPartiallySynced": "The other machine has not caught up; opening it there may show the old value",
     "modelNotPinnedOnStart": "This conversation could not pin your model choice; the first turn used it, later turns follow the agent binding",
+    "effortNotPinnedOnStart": "This conversation could not pin your reasoning effort; the first turn used it, later turns follow the backend config",
     "effortSetFailed": "Reasoning effort was not changed: {{reason}}",
     "effortPartiallySynced": "The other machine has not caught up; opening it there may show the old value"
   },

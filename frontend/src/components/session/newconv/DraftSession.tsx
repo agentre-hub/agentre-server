@@ -18,7 +18,6 @@ import { Trans, useTranslation } from "react-i18next";
 
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
-import { decodeReasoningEffortSupport } from "@/components/session/reasoningEffortSupport";
 import Transcript from "@/components/session/Transcript";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-api-query";
@@ -27,6 +26,7 @@ import { machineTarget } from "@/lib/relayTarget";
 import { ApiError } from "@/lib/api";
 import {
   decodePermissionModeMeta,
+  decodeReasoningEffortSupport,
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
 import { useEngineCatalog } from "@/lib/engineCatalog";
@@ -218,15 +218,8 @@ export function DraftSession({
 
   /**
    * 后端配置的那一档，用户没选时由控件用它兜底显示（「→ 跟随后端配置 · <档位>」）。
-   *
-   * `/v1/engine/backends` 那一行上带着 `reasoning_effort`
-   * （`internal/api/engine.BackendItem`），只是本站 `EngineBackend` 那个**窄视图**
-   * 没声明它。按存在性读这一格，读不到就当没配。
    */
-  const backendReasoningEffort =
-    engineBackend && "reasoning_effort" in engineBackend
-      ? String(engineBackend.reasoning_effort ?? "")
-      : "";
+  const backendReasoningEffort = engineBackend?.reasoning_effort ?? "";
 
   /** 两格皆空 = 跟随 Agent 绑定。 */
   const effectiveTarget = useMemo<ModelTarget>(

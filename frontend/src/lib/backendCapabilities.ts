@@ -72,3 +72,29 @@ export function decodePermissionModeMeta(
     switchableDuringTurn: m.switchableDuringTurn === true,
   };
 }
+
+/**
+ * 「这个后端支不支持会话级思考力度」——同一份应答的**另一格**（规格 2026-09-01
+ * 决策 6）。
+ *
+ * 读的是 `capabilities` 那一串 `CapabilityEntry`（`{name, enabled}`）：Go 侧把整张
+ * `Capabilities.Set` 映射逐条铺开，所以 `enabled: false` 的条目**也在**里面 ——
+ * 只认名字会把 openclaw 判成支持。
+ *
+ * 解不动（对端太老、形状不对、这一问失败）时按「不支持」处置，与上面档位那三态
+ * 不同：档位空着要说一句「这台机器此刻列不出档位」，而力度控件本来就有「后端不支持
+ * 就整颗不渲染」这条既定处置，此刻多摆一句说明只是在说一个用户改不了的事实。
+ */
+/** 能力位的名字与 Go 侧 `capability.CapReasoningEffort` 同一个词。 */
+const REASONING_EFFORT_CAPABILITY = "reasoning_effort";
+
+export function decodeReasoningEffortSupport(raw: unknown): boolean {
+  if (typeof raw !== "object" || raw === null) return false;
+  const list = (raw as { capabilities?: unknown }).capabilities;
+  if (!Array.isArray(list)) return false;
+  return list.some((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const item = entry as { name?: unknown; enabled?: unknown };
+    return item.name === REASONING_EFFORT_CAPABILITY && item.enabled === true;
+  });
+}

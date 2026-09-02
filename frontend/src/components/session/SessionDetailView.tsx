@@ -28,7 +28,6 @@ import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
-import { decodeReasoningEffortSupport } from "@/components/session/reasoningEffortSupport";
 import { doneEventFrame } from "@/components/session/turnDone";
 import {
   useReconnectProbe,
@@ -45,6 +44,7 @@ import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
 import {
   decodePermissionModeMeta,
+  decodeReasoningEffortSupport,
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
 import { useEngineCatalog } from "@/lib/engineCatalog";
@@ -117,6 +117,11 @@ export interface SessionDetailViewProps {
    * 明明选过。用户改一次模型就被顶掉，它说的本来就是发起那一刻的事。
    */
   initialModelNote?: string | null;
+  /**
+   * 「力度没能钉住」那一句（与 initialModelNote 同一条来路：草稿页刚把这条对话派发
+   * 出来，而那台机器没能把所选档位记下来）。
+   */
+  initialEffortNote?: string | null;
   /**
    * 摘要两条来路都还没落地时先摆的标题。
    *
@@ -195,6 +200,7 @@ export default function SessionDetailView({
   peerFingerprint,
   form = "page",
   initialModelNote,
+  initialEffortNote,
   initialTitle,
   initialTurnStartedAt,
   initialRow,
@@ -244,9 +250,9 @@ export default function SessionDetailView({
   const [supportsReasoningEffort, setSupportsReasoningEffort] = useState(false);
   /** 用户这一次选的力度；null = 还没选过，按落库那一份显示。 */
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
-  /** 上一次改力度失败 / 只写成一台的说明。 */
+  /** 上一次改力度失败 / 只写成一台 / 派发时没钉住的说明。 */
   const [reasoningEffortNote, setReasoningEffortNote] = useState<string | null>(
-    null,
+    initialEffortNote ?? null,
   );
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   /**
@@ -938,17 +944,8 @@ export default function SessionDetailView({
    */
   const sessionReasoningEffort =
     reasoningEffort ?? identity?.reasoningEffort ?? "";
-  /**
-   * 后端配置的那一档，会话行为空时由控件用它兜底显示。
-   *
-   * `/v1/engine/backends` 那一行上确实带着 `reasoning_effort`
-   * （`internal/api/engine.BackendItem`），只是本站 `EngineBackend` 那个**窄视图**
-   * 没有声明它。按存在性读这一格，读不到就当没配 —— 不假设它一定在。
-   */
-  const backendReasoningEffort =
-    engineBackend && "reasoning_effort" in engineBackend
-      ? String(engineBackend.reasoning_effort ?? "")
-      : "";
+  /** 后端配置的那一档，会话行为空时由控件用它兜底显示（空 = 后端也没配）。 */
+  const backendReasoningEffort = engineBackend?.reasoning_effort ?? "";
 
   /**
    * 改这条会话的思考力度（规格 2026-09-01「agentre-server 宿主」）。

@@ -37,6 +37,14 @@ export interface EngineBackend {
   provider_key: string;
   model_key: string;
   default_permission_mode: string;
+  /**
+   * 这个后端配的思考力度（六档，空 = 没配）。会话没自己钉一档时，composer 那颗
+   * 力度控件用它兜底显示「→ 跟随后端配置 · <档位>」。
+   *
+   * 可选：老应答里没有这一格（`internal/api/engine.BackendItem` 是后加的），缺席
+   * 与「配的是空」在界面上是同一句话（跟随后端配置 · 未设定）。
+   */
+  reasoning_effort?: string;
 }
 
 /**

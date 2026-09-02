@@ -137,6 +137,13 @@ export interface DispatchedSession {
    * Agent 绑定」，而用户明明选过。
    */
   modelPinned: boolean;
+  /**
+   * 这条对话钉住思考力度了没有。语义与上面那一格逐字同构：没选（跟随后端配置）时
+   * 恒为真；假只有一种含义 —— 用户选了一档、第一轮也确实按它跑了，但那台机器没能
+   * 把它记下来，于是后续轮次回到后端配置。不说出来的话，详情页会对着一条其实没钉
+   * 住的对话显示「默认」，而用户明明选过。
+   */
+  reasoningEffortPinned: boolean;
 }
 
 export interface DispatchInput {
@@ -337,9 +344,10 @@ export async function dispatchNewConversation(
       // 保存没写上:会话已经建起来了,交给调用方照常跳转。
     }
     // 钉住力度与钉住模型是同一件事的两半（都是「过线只管当轮，会话行得另写一次」），
-    // 所以排在同一处、走同一条规矩：钉不住不算派发失败。
-    if (pinEffort)
-      await pinReasoningEffort(client, ack.conversationId, pinEffort);
+    // 所以排在同一处、走同一条规矩：钉不住不算派发失败，但要如实回报。
+    const reasoningEffortPinned = pinEffort
+      ? await pinReasoningEffort(client, ack.conversationId, pinEffort)
+      : true;
     return {
       conversationId: ack.conversationId,
       deviceId: choice.device_id,
@@ -349,6 +357,7 @@ export async function dispatchNewConversation(
       modelPinned: pinTarget
         ? await pinModelTarget(client, ack.conversationId, pinTarget)
         : true,
+      reasoningEffortPinned,
     };
   } finally {
     // 只还自己借的那份:复用进来的连接还归调用方用。还回去不是关掉 —— 池子里
@@ -404,13 +413,15 @@ async function pinReasoningEffort(
   client: RelayClient,
   conversationId: string,
   reasoningEffort: string,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await client.request(rpcMethods.setSessionReasoningEffort, {
       conversationId,
       reasoningEffort,
     });
+    return true;
   } catch {
-    // 钉不住:第一轮仍按所选档位跑了，后续轮次回到后端配置。
+    // 钉不住:第一轮仍按所选档位跑了，后续轮次回到后端配置 —— 交回去让界面说。
+    return false;
   }
 }

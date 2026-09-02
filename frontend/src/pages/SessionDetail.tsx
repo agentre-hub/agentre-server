@@ -15,11 +15,15 @@ export default function SessionDetail() {
   const { state } = useLocation();
   const navState = state as {
     modelNote?: unknown;
+    effortNote?: unknown;
     title?: unknown;
     turnStartedAt?: unknown;
   } | null;
   const modelNote =
     typeof navState?.modelNote === "string" ? navState.modelNote : undefined;
+  // 「力度没能钉住」那一句，与 modelNote 同一条来路、同一种处置。
+  const effortNote =
+    typeof navState?.effortNote === "string" ? navState.effortNote : undefined;
   // 冷启动那一段的兜底标题（见 SessionDetailView 的 initialTitle）。与 modelNote
   // 同一条来路：从草稿页下钻过来时它就在手上，不必等摘要落地。
   const title =
@@ -37,6 +41,7 @@ export default function SessionDetail() {
       form="page"
       initialTitle={title}
       initialModelNote={modelNote}
+      initialEffortNote={effortNote}
       initialTurnStartedAt={turnStartedAt}
     />
   );

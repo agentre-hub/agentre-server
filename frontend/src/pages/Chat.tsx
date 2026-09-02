@@ -197,6 +197,8 @@ export default function Chat() {
     row?: MirroredSession;
     /** 刚从草稿页发起、而模型没能钉住时要说的那一句（见 initialModelNote）。 */
     modelNote?: string;
+    /** 同上，思考力度没能钉住时的那一句（见 initialEffortNote）。 */
+    effortNote?: string;
     /**
      * 刚从草稿页发起时，那一轮是什么时候派发出去的（见 initialTurnStartedAt）。
      * 点左栏一行进来时留空 —— 那时这一轮什么时候开的谁都不知道。
@@ -279,6 +281,7 @@ export default function Chat() {
       peerFingerprint,
       title,
       modelPinned,
+      reasoningEffortPinned,
     }: DispatchedSession) => {
       setCompose(null);
       // 钉不住不影响这条对话开起来（第一轮就是按所选模型跑的），但后续轮次会回到
@@ -287,13 +290,22 @@ export default function Chat() {
       const modelNote = modelPinned
         ? undefined
         : t("session.composerControls.modelNotPinnedOnStart");
+      // 力度没钉住是同一件事的另一半：第一轮按所选档位跑了，后续轮次回到后端配置。
+      const effortNote = reasoningEffortPinned
+        ? undefined
+        : t("session.composerControls.effortNotPinnedOnStart");
       // 这一轮**刚刚**由这一屏派发出去。详情页装载时 attach 只看得到「对端已经在
       // 跑」，而那种轮次它一律不计时（什么时候开的它不知道）——交出去，第一轮的耗时
       // 才不必等它跑完才出数。
       const turnStartedAt = Date.now();
       if (isMobile) {
         nav(`/devices/${deviceId}/sessions/${conversationId}`, {
-          state: { title, turnStartedAt, ...(modelNote ? { modelNote } : {}) },
+          state: {
+            title,
+            turnStartedAt,
+            ...(modelNote ? { modelNote } : {}),
+            ...(effortNote ? { effortNote } : {}),
+          },
         });
         return;
       }
@@ -303,6 +315,7 @@ export default function Chat() {
         peerFingerprint,
         title,
         modelNote,
+        effortNote,
         turnStartedAt,
       });
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
@@ -867,6 +880,7 @@ export default function Chat() {
                   initialTitle={selected.title}
                   initialRow={selected.row}
                   initialModelNote={selected.modelNote}
+                  initialEffortNote={selected.effortNote}
                   initialTurnStartedAt={selected.turnStartedAt}
                   headerRight={pageChrome}
                   onMarkedRead={onMarkedRead}

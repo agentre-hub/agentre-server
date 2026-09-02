@@ -7,6 +7,7 @@
     "modelSetFailed": "模型没改成：{{reason}}",
     "modelPartiallySynced": "另一台机器此刻没跟上，在那边打开可能看到旧值",
     "modelNotPinnedOnStart": "这条对话没能钉住你选的模型：第一轮按它跑了，后续轮次会回到跟随 Agent 绑定",
+    "effortNotPinnedOnStart": "这条对话没能钉住你选的思考力度：第一轮按它跑了，后续轮次会回到跟随后端配置",
     "effortSetFailed": "思考力度没改成：{{reason}}",
     "effortPartiallySynced": "另一台机器此刻没跟上，在那边打开可能看到旧值"
   },

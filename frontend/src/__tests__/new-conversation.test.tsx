@@ -442,6 +442,7 @@ describe("一条还没发第一句的对话", () => {
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
       modelPinned: true,
+      reasoningEffortPinned: true,
     });
     renderChat();
     await openDraft();
@@ -552,6 +553,7 @@ describe("一条还没发第一句的对话", () => {
         peerFingerprint: "fp-web",
         title: "跑一下失败的测试",
         modelPinned: true,
+        reasoningEffortPinned: true,
       };
     });
     renderChat();
@@ -1091,6 +1093,7 @@ describe("移动端派发成功后的落地", () => {
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
       modelPinned: true,
+      reasoningEffortPinned: true,
     });
     renderChat();
     await openDraft();
@@ -1232,6 +1235,7 @@ describe("草稿页的权限档位与模型控件", () => {
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
       modelPinned: true,
+      reasoningEffortPinned: true,
     });
   });
 
@@ -1412,6 +1416,7 @@ describe("草稿页的权限档位与模型控件", () => {
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
       modelPinned: false,
+      reasoningEffortPinned: true,
     });
     // 左栏已经有一行了，空态那颗主动作不在：走 compose 那个入口进草稿。
     renderChat("/chat?compose=1");
@@ -1429,6 +1434,43 @@ describe("草稿页的权限档位与模型控件", () => {
       () =>
         expect(screen.getByTestId("composer-model-note").textContent).toBe(
           "This conversation could not pin your model choice; the first turn used it, later turns follow the agent binding",
+        ),
+      { timeout: 3000 },
+    );
+  });
+
+  /*
+    力度没能钉住，与模型没能钉住是同一件事：第一轮按所选档位跑了，后续轮次会回到
+    跟随后端配置。不说的话，详情页会对着一条其实没钉住的对话显示「默认」，而用户
+    明明选过 —— 一句他无法证伪的假话，正是这一轮规格在治的东西。
+  */
+  it("Given 力度没能钉住, When 进了这条新对话, Then 详情页如实说出来", async () => {
+    stubReads(engineReads, [mirroredSession]);
+    stubMachine(capsWithEffort);
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: false,
+    });
+    renderChat("/chat?compose=1");
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    await awaitDraftComposer();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    expect(await screen.findByTestId("session-detail-view")).toBeTruthy();
+    await waitFor(
+      () =>
+        expect(screen.getByTestId("composer-effort-note").textContent).toBe(
+          "This conversation could not pin your reasoning effort; the first turn used it, later turns follow the backend config",
         ),
       { timeout: 3000 },
     );
@@ -1458,6 +1500,7 @@ describe("草稿页的权限档位与模型控件", () => {
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
       modelPinned: true,
+      reasoningEffortPinned: true,
     });
     renderChat("/chat?compose=1");
     fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));

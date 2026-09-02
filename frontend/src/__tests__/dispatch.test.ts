@@ -337,8 +337,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 与送给 daemon 的那一份是同一个 deriveTitle 结果：落地那一屏拿它填掉摘要
       // 还没回来那一段，用户不必先看一串会话号。
       title: "讲讲这个项目",
-      // 跟随 Agent 绑定：没什么可钉，恒为真。
+      // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
+      reasoningEffortPinned: true,
     });
     // 不关：连接归池子，派发只是把租约还回去。
     expect(client.close).not.toHaveBeenCalled();
@@ -408,8 +409,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       deviceFingerprint: "fp-desk",
       peerFingerprint: "fp-web",
       title: "帮我看看这个项目",
-      // 跟随 Agent 绑定：没什么可钉，恒为真。
+      // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
+      reasoningEffortPinned: true,
     });
     // 不关：连接归池子，派发只是把租约还回去。
     expect(client.close).not.toHaveBeenCalled();
@@ -440,8 +442,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       deviceFingerprint: "fp-online",
       peerFingerprint: "fp-web",
       title: "讲讲这个项目",
-      // 跟随 Agent 绑定：没什么可钉，恒为真。
+      // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
+      reasoningEffortPinned: true,
     });
     // 不关：连接归池子，派发只是把租约还回去。
     expect(client.close).not.toHaveBeenCalled();
@@ -817,6 +820,7 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
       conversationId: out.conversationId,
       reasoningEffort: "high",
     });
+    expect(out.reasoningEffortPinned).toBe(true);
   });
 
   // 空 = 跟随后端配置，而「跟随」本来就是不主张：带一个空值过线会被执行端当成
@@ -866,7 +870,10 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
       reasoningEffort: "max",
     });
 
+    // 派发成功照旧（这条对话真的开起来了），但**如实回报**没钉住：详情页据此
+    // 说明「第一轮按它跑了，后续轮次回到跟随后端配置」。
     expect(out.conversationId).toMatch(CONVERSATION_ID);
+    expect(out.reasoningEffortPinned).toBe(false);
   });
 
   // 派发已经成功，那台机器上真真切切多了一条按所选模型跑起来的会话。把钉不住

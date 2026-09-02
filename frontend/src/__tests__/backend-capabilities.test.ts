@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { decodePermissionModeMeta } from "@/lib/backendCapabilities";
+import {
+  decodePermissionModeMeta,
+  decodeReasoningEffortSupport,
+} from "@/lib/backendCapabilities";
 
 /**
  * 过线的是 Protobuf 的 `agentre.wire.RuntimeCapabilitiesResponse`：`capabilities` 是
@@ -74,5 +77,41 @@ describe("decodePermissionModeMeta", () => {
     ["字符串", "nope"],
   ])("解不动的应答（%s）返回 null 而不是空集合", (_label, raw) => {
     expect(decodePermissionModeMeta(raw)).toBeNull();
+  });
+});
+
+/**
+ * 同一份应答的**另一格**：`capabilities` 那一串。Go 侧把整张 `Capabilities.Set`
+ * 映射逐条铺开，所以 `enabled: false` 的条目也在里面 —— 只认名字会把 openclaw
+ * 判成支持（规格 2026-09-01 决策 6：它必须整颗不渲染）。
+ */
+describe("decodeReasoningEffortSupport", () => {
+  it("报了 reasoning_effort 且为真才算支持", () => {
+    expect(
+      decodeReasoningEffortSupport({
+        capabilities: [
+          { name: "set_permission_mode", enabled: true },
+          { name: "reasoning_effort", enabled: true },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("报了但为假（openclaw）不算支持", () => {
+    expect(
+      decodeReasoningEffortSupport({
+        capabilities: [{ name: "reasoning_effort", enabled: false }],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["整条没报（对端太老）", { capabilities: [] }],
+    ["capabilities 不是数组", { capabilities: 1 }],
+    ["空对象", {}],
+    ["null", null],
+    ["字符串", "nope"],
+  ])("解不动的应答（%s）按不支持处置", (_label, raw) => {
+    expect(decodeReasoningEffortSupport(raw)).toBe(false);
   });
 });
