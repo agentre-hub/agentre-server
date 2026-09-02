@@ -118,16 +118,18 @@ jobs:
           set -euo pipefail
           # accept-new 是首连信任:目标机在内网且主机密钥未入库。要收紧就把
           # 已知主机密钥写进目标机侧的运维流程,或改用固定 known_hosts。
-          SSH_OPTS="-i $HOME/.ssh/dev_deploy -p $DEPLOY_PORT -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+          # 端口不放进这组:scp 的端口是 -P,-p 在 scp 里是「保留时间戳」,
+          # 照抄 ssh 的 -p 会让 scp 把端口号当成一个源文件("stat local 22")。
+          SSH_OPTS="-i $HOME/.ssh/dev_deploy -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
 
           # 编排文件每次部署覆盖,保证机器上跑的就是本 commit 声明的编排
           # shellcheck disable=SC2086
-          scp $SSH_OPTS deploy/docker-compose.dev.yml \
+          scp -P "$DEPLOY_PORT" $SSH_OPTS deploy/docker-compose.dev.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker-compose.dev.yml"
 
           # 凭据经 stdin 进远端 bash,不出现在目标机的进程参数里
           # shellcheck disable=SC2086
-          ssh $SSH_OPTS "$DEPLOY_USER@$DEPLOY_HOST" "cd $DEPLOY_DIR && bash -s" <<REMOTE
+          ssh -p "$DEPLOY_PORT" $SSH_OPTS "$DEPLOY_USER@$DEPLOY_HOST" "cd $DEPLOY_DIR && bash -s" <<REMOTE
           set -euo pipefail
           echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
 
@@ -148,9 +150,9 @@ jobs:
       - name: Wait for healthz
         run: |
           set -euo pipefail
-          SSH_OPTS="-i $HOME/.ssh/dev_deploy -p $DEPLOY_PORT -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+          SSH_OPTS="-i $HOME/.ssh/dev_deploy -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
           # shellcheck disable=SC2086
-          ssh $SSH_OPTS "$DEPLOY_USER@$DEPLOY_HOST" "cd $DEPLOY_DIR && bash -s" <<'REMOTE'
+          ssh -p "$DEPLOY_PORT" $SSH_OPTS "$DEPLOY_USER@$DEPLOY_HOST" "cd $DEPLOY_DIR && bash -s" <<'REMOTE'
           set -uo pipefail
           for i in $(seq 1 60); do
             if python3 - <<'PY'
