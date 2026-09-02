@@ -2,8 +2,12 @@
 //
 // INCR 与首次过期合成一条 Lua 脚本，由 Redis 原子执行，
 // 不会出现「计数已写、TTL 还没设上」的中间态（该脚本已用
-// cago/pkg/utils/testutils.Redis() 起的 miniredis 实测跑通）。
+// internal/testutils.Redis() 起的 miniredis 实测跑通）。
 // 允许一个时间窗内允许 N 次。
+//
+// 没有换成 cago 的 pkg/limit.PeriodLimit：那个实现把「被限流」和「Redis 故障」
+// 塞进同一个 error，而 middleware/ratelimit.go 是刻意 fail-open 的，换过去
+// Redis 一抖动就会把限流路径上的正常请求全拒掉；它另外还是 3~4 次非原子往返。
 package ratelimit
 
 import (
