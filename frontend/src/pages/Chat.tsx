@@ -13,6 +13,7 @@ import {
   DialogShellFooter,
   DialogShellHeader,
   DialogShellSubmit,
+  ResizableSidebar,
 } from "@agentre-hub/agentre-ui";
 import AppShell from "@/components/AppShell";
 import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
@@ -787,9 +788,17 @@ export default function Chat() {
         /* 桌面（屏 49b）：320px 左会话列表列 + 右侧详情区。壳已经把整块主区交出来
            （flush），因此不再需要负 margin 去抵消它的 padding。 */
         <div data-testid="chat-layout" className="flex h-full min-h-0 flex-row">
-          <div
-            data-testid="chat-list-col"
-            className="flex w-[320px] shrink-0 flex-col border-r border-border bg-card"
+          {/*
+            320px 是起点不是结论：只列着几条短标题的人希望这一列让位给转录，
+            按项目分组、标题写满一行的人在 320px 里读到的全是省略号。谁对取决于
+            这一刻在做什么，所以交给拖（共享包的 ResizableSidebar，量程 220–640，
+            记在这台机器上），而不是再挑一个所有人都不满意的定值。
+          */}
+          <ResizableSidebar
+            persistenceKey="chat"
+            ariaLabel={t("chat.listAria")}
+            testId="chat-list-col"
+            className="bg-card"
           >
             {/* 左列顶行与右栏那条顶带同高：两列的顶边因此是同一条横线。省下的
                 16px 换不来一条断开的顶边。 */}
@@ -815,7 +824,7 @@ export default function Chat() {
             >
               {!settled ? <SessionListSkeleton rows={6} /> : index}
             </div>
-          </div>
+          </ResizableSidebar>
           <div
             data-testid="chat-detail"
             className="flex min-w-0 flex-1 flex-col"

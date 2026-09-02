@@ -46,5 +46,6 @@
   "noAgentMatchesBody": "Try a different term, or clear the search.",
   "clearAgentSearch": "Clear search",
   "noProjectsYetTitle": "No projects yet",
-  "noAgentsInProjectBody": "Add an agent to this project in the desktop app and it shows up here."
+  "noAgentsInProjectBody": "Add an agent to this project in the desktop app and it shows up here.",
+  "listAria": "Conversation list"
 }

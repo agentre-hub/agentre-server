@@ -46,5 +46,6 @@
   "noAgentMatchesBody": "换个词试试，或者清除搜索。",
   "clearAgentSearch": "清除搜索",
   "noProjectsYetTitle": "还没有项目",
-  "noAgentsInProjectBody": "在桌面端把 Agent 加进这个项目，它就会出现在这里。"
+  "noAgentsInProjectBody": "在桌面端把 Agent 加进这个项目，它就会出现在这里。",
+  "listAria": "对话列表"
 }

@@ -332,9 +332,10 @@ describe("对话页 = 统一会话索引", () => {
     // 桌面档的这一页自己画顶带：壳那条 52px 顶栏不再叠在上面，页标题也不重复
     // ——左侧导航同一时刻正高亮着「对话」。
     expect(screen.queryByTestId("app-topbar")).toBeNull();
-    // 桌面形态:320px 左会话列表列 + 右侧详情区。
+    // 桌面形态:320px 左会话列表列 + 右侧详情区。宽度现在是内联的（可拖拽调），
+    // 320 只是没拖过时的起点。
     const listCol = screen.getByTestId("chat-list-col");
-    expect(listCol.className).toContain("w-[320px]");
+    expect(listCol.style.width).toBe("320px");
     expect(screen.getByTestId("chat-detail")).toBeTruthy();
     // 决策 10：一条会话都没有时索引就是空的，不再拿账号下的 Agent 摆一列空组头。
     expect(await screen.findByTestId("session-index-empty")).toBeTruthy();
@@ -2120,5 +2121,53 @@ describe("对话页：左栏高亮跟着右栏走", () => {
         .getByRole("link", { name: /重构登录页/ })
         .getAttribute("aria-current"),
     ).toBeNull();
+  });
+});
+
+/**
+ * 左列可拖拽调宽（本轮 UI/UX）。
+ *
+ * 320px 对两类人都不对：只列着几条短标题的人希望它让位给转录，而按项目分组、
+ * 标题写满一行的人在 320px 里读到的全是省略号。这是个人偏好，不是能挑出一个
+ * 正确值的参数——所以交给拖，并且记住。
+ *
+ * 拖拽本身（document 级监听、量程封顶、抬起才落盘）是共享包 ResizableSidebar
+ * 的行为，钉在那边的用例里。这里只钉**这一页接对了**：起点、量程、持久化 key，
+ * 以及那条手柄真的在左列上。
+ */
+describe("对话页左列可调宽", () => {
+  beforeEach(() => localStorage.removeItem("agentre.sidebarWidth.chat"));
+  afterEach(() => localStorage.removeItem("agentre.sidebarWidth.chat"));
+
+  it("左列是带拖拽手柄的 aside，没拖过时 320px", async () => {
+    stubApi();
+    renderChat();
+
+    const listCol = screen.getByTestId("chat-list-col");
+    expect(listCol.tagName).toBe("ASIDE");
+    expect(listCol.style.width).toBe("320px");
+
+    const handle = within(listCol).getByRole("separator");
+    expect(handle.getAttribute("aria-orientation")).toBe("vertical");
+    // 量程要报得出来：拖到哪儿算到头，键盘/读屏用户不能只靠手感。
+    expect(handle.getAttribute("aria-valuemin")).toBe("220");
+    expect(handle.getAttribute("aria-valuemax")).toBe("640");
+    expect(handle.getAttribute("aria-valuenow")).toBe("320");
+  });
+
+  it("上次拖到的宽度还在——换一页回来不用重拖一次", async () => {
+    localStorage.setItem("agentre.sidebarWidth.chat", "460");
+    stubApi();
+    renderChat();
+
+    expect(screen.getByTestId("chat-list-col").style.width).toBe("460px");
+  });
+
+  it("存坏的值不当真：越界的记录按量程收回来", async () => {
+    localStorage.setItem("agentre.sidebarWidth.chat", "9999");
+    stubApi();
+    renderChat();
+
+    expect(screen.getByTestId("chat-list-col").style.width).toBe("640px");
   });
 });
