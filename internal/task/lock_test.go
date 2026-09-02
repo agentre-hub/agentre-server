@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	cagotest "github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
@@ -17,13 +16,14 @@ import (
 // TestWithPeriodLock_SecondCallInSamePeriodSkips 是决定性用例：同一把锁在
 // 同一周期内被调用两次，只有第一次真正执行 job，第二次安静跳过且不报错。
 //
-// 这一条走 cago 的严格 redismock 而不是 testutils.Redis(t)：抢锁发出去的那条命令**本身**就是契约。
-// 副本之间只靠它协调，而它有三处一漂就出事、又都不会有任何东西报错——key 掉出
-// task:cron 命名空间（撞上业务锁）、少了 NX（每个副本都抢得到，任务跑 N 遍）、
-// TTL 不是传进来的那个周期（大了就再也不跑，小了就重复跑）。miniredis 照单执行，
-// 三种都照样绿；这里把它们钉在期望上。
+// 抢锁那条命令**本身**就是契约：副本之间只靠它协调，而它有三处一漂就出事、
+// 又都不会有任何东西报错。三处在这里各有一条断言钉着，不需要严格 mock：
+//
+//   - key 掉出 task:cron 命名空间（撞上业务锁）→ 下面按字面量查 Exists
+//   - 少了 NX（每个副本都抢得到，任务跑 N 遍）→ runs 会变成 2
+//   - TTL 不是传进来的那个周期（大了就再也不跑，小了就重复跑）→ 下面查 TTL
 func TestWithPeriodLock_SecondCallInSamePeriodSkips(t *testing.T) {
-	mock := cagotest.Redis(t)
+	mini := testutils.Redis(t)
 	ctx := context.Background()
 
 	var runs int32
@@ -34,10 +34,6 @@ func TestWithPeriodLock_SecondCallInSamePeriodSkips(t *testing.T) {
 
 	const key = "test:same_period"
 	const ttl = time.Minute
-	// 键名写成字面量而不是 lockKeyPrefix+":"+key：那样两边同源，前缀改成什么
-	// 期望就跟着变成什么，命名空间漂了也照样绿。这里要钉的正是那个字面量。
-	mock.ExpectSetNX("task:cron:test:same_period", 1, ttl).SetVal(true)
-	mock.ExpectSetNX("task:cron:test:same_period", 1, ttl).SetVal(false)
 
 	wrapped := withPeriodLock(key, ttl, job)
 
@@ -45,7 +41,12 @@ func TestWithPeriodLock_SecondCallInSamePeriodSkips(t *testing.T) {
 	err2 := wrapped(ctx)
 
 	assert.NoError(t, err2, "没抢到锁的副本必须返回 nil，而不是错误")
-	assert.Equal(t, int32(1), atomic.LoadInt32(&runs), "job 本体在整个周期内只应该真正跑一次")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&runs), "job 本体在整个周期内只应该真正跑一次；变成 2 说明抢锁少了 NX")
+
+	// 键名写成字面量而不是 lockKeyPrefix+":"+key：那样两边同源，前缀改成什么
+	// 期望就跟着变成什么，命名空间漂了也照样绿。这里要钉的正是那个字面量。
+	assert.True(t, mini.Exists("task:cron:test:same_period"), "锁必须落在 task:cron 命名空间下的这个键上")
+	assert.Equal(t, ttl, mini.TTL("task:cron:test:same_period"), "锁的 TTL 必须是传进来的那个周期")
 }
 
 // TestWithPeriodLock_NextPeriodRunsAgain 验证锁过期后下一周期能重新抢到锁并

@@ -8,30 +8,20 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// 这个文件有两个入口，选哪个由**被测对象是不是 Redis 交互本身**决定，不是风格偏好。
-//
-// 判据是一句话：先写出「这条断言失败时说明什么坏了」。
-//
-//   - 答案里点不到具体的命令、键名或参数（「登录态没建起来」「限流没拦住」），
-//     那 Redis 只是环境依赖，被测的是别的东西 —— 用 Redis(t)。
-//     等价的说法：把这次 Redis 交互整个换成另一种存储，断言仍然该成立。
-//   - 答案就是某条命令发错了（「session 的 TTL 写成了秒」「锁没带 NX」），
-//     那命令序列本身就是契约 —— 用 cago 的 testutils.Redis(t)（严格 redismock：
-//     期望按声明顺序匹配，未声明的命令直接报错）。注意它和下面这个 Redis 同名反义。
-//
-// 反过来用的代价是具体的：给「只要 Redis 能用」的用例写 redismock 期望，等于在用例里
-// 抄一遍被测代码的命令序列，断言退化成同义反复，而且被测代码改一个键名就要跟着改一遍；
-// 给「命令序列是契约」的用例上 miniredis，则命令发错了也照样绿。
-
 // Redis 起一个**真的会存东西**的进程内 Redis，并把它装成全局 redis.Default()，
 // 返回底层实例供 FastForward / 直接读写。
 //
-// 适用面见文件头的判据：Redis 只是环境依赖的那一类用例。命令不需要预先声明，
-// 发什么都照常执行。
+// 这是本仓库测试里取 Redis 的唯一方式。不用命令级 mock：这里的 Redis 用例大多
+// 是行为测试，而让它们成立的正是 miniredis 真的在执行 Lua、TTL 与 SETNX——
+// 换成罐头返回值，断言就退化成把被测代码的命令序列再抄一遍。
 //
-// 与 cago 的 testutils.Redis 有两处不同：一是那边现在是严格 redismock，
-// 二是那边曾经的 miniredis 版本是进程级单例，同包用例共用一个实例、必须靠 FlushAll
-// 互相让路；这里每个用例一个实例，t.Cleanup 里还原上一个全局实例。
+// 命令序列本身是契约的那种用例（键名、TTL 单位、少了 NX），照样在这里钉得住：
+// 跑完之后按字面量查 mini.Exists / mini.TTL 即可，见 internal/task/lock_test.go。
+// 这比声明命令期望更耐改——它断言的是最终状态，不是达成状态的路径。
+//
+// 与 cago 的 testutils.Redis 有两处不同：一是那边现在返回严格的命令 mock，
+// 二是那边曾经的 miniredis 版本是进程级单例，同包用例共用一个实例、必须靠
+// FlushAll 互相让路；这里每个用例一个实例，t.Cleanup 里还原上一个全局实例。
 func Redis(t *testing.T) *miniredis.Miniredis {
 	t.Helper()
 	mini := miniredis.RunT(t)
