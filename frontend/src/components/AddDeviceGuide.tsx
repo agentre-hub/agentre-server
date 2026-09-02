@@ -40,7 +40,7 @@ const SERVICE_INSTALL = "agentred service install --start";
  *      拒绝，而 macOS 的 LaunchAgent 是 KeepAlive=true，pkill 也停不下来；
  *   2. **批准也必须排在它之前** —— 闸门拦不住「先 login 再起服务」这条：login
  *      过闸时 daemon 还没起来。daemon 抢在 login 退出前起来，就会拿着旧的
- *      （未认领的）state，它之后任何一次写盘都把刚落定的认领覆盖掉，症状是
+ *      （未登录的）state，它之后任何一次写盘都把刚落定的登录覆盖掉，症状是
  *      设备看着授权成功却永远连不上。
  *
  * 所以三步是：装 + 登录 → 输码批准 → 注册后台服务。二进制安装命令留在第 1 步：

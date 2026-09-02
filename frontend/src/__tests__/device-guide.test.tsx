@@ -42,8 +42,8 @@ function LocationProbe() {
  *      `state.json`；daemon 正在运行时它干脆直接拒绝
  *      （`cmd/agentred/login.go` 的 `requireNoRunningDaemon`）。
  *   2. 所以「批准」必须排在 `agentred service install --start` **之前**：
- *      daemon 早于 login 退出而起来，就会把旧的（未认领的）state 读进内存并
- *      持有它，之后任何一次写盘都会把刚落定的认领覆盖掉 —— 症状是设备看着
+ *      daemon 早于 login 退出而起来，就会把旧的（未登录的）state 读进内存并
+ *      持有它，之后任何一次写盘都会把刚落定的登录覆盖掉 —— 症状是设备看着
  *      授权成功却永远连不上。那道闸门拦不住这条：login 是在 daemon 起来之前
  *      过的闸。
  *
