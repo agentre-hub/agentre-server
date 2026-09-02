@@ -5355,10 +5355,17 @@ describe("会话详情页 · 会话级思考力度", () => {
     renderPage();
     await pickEffort("high");
 
-    const note = await screen.findByTestId("composer-effort-note");
-    expect(note.textContent).toContain("Reasoning effort was not changed");
-    expect(
-      screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
-    ).toContain("Default");
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
+      ).toContain("Default"),
+    );
+    // 两台都没写成不是「另一台没跟上」那种如实说明，是控件自己的失败：走弹层
+    // 底部的错误行（共享控件的 errorText），不是旁边那条 sibling note。
+    expect(screen.queryByTestId("composer-effort-note")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Reasoning effort/ }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Reasoning effort was not changed");
   });
 });

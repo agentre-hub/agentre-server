@@ -16,6 +16,7 @@ export default function SessionReasoningEffortControl({
   backendValue,
   onChange,
   note,
+  errorText,
 }: {
   /**
    * 会话行上的值（空串 = 跟随后端配置）。它同时是共享控件的 no-op 判据：会话行为空
@@ -25,8 +26,13 @@ export default function SessionReasoningEffortControl({
   /** 后端配置的档位，会话行为空时由它兜底显示。空串 = 后端也没配。 */
   backendValue: string;
   onChange: (next: ReasoningEffortValue) => void;
-  /** 旁边那一行如实说明（另一台没跟上 / 两台都写失败）。 */
+  /** 旁边那一行如实说明（只写成一台，另一台没跟上）——不是错误，是一句实话。 */
   note?: string | null;
+  /**
+   * 两台都没写成时的原因。这才是控件自己的失败，转给共享 Picker 的弹层底部
+   * 错误行，与桌面端（单机只有一次写）同一处置；不落进上面那条 sibling note。
+   */
+  errorText?: string | null;
 }) {
   return (
     <div className="flex min-w-0 items-center gap-1">
@@ -36,12 +42,13 @@ export default function SessionReasoningEffortControl({
         value={value as ReasoningEffortValue}
         backendValue={backendValue as ReasoningEffortValue}
         onChange={onChange}
+        errorText={errorText ?? undefined}
         dataTestId="composer-reasoning-effort"
       />
       {/*
-        说明摆在控件**旁边**而不是弹层里（共享控件的 errorText 那一格）：这一端的
-        失败有一半是「只写成一台」——那不是错误，而是一句必须当场看见的实话，
-        而弹层此刻已经关上了。模型 pill 的那一行说明是同一处置。
+        这一行说明摆在控件**旁边**而不是弹层里：「只写成一台」不是错误，而是一句
+        必须当场看见的实话，而弹层此刻已经关上了。模型 pill 的那一行说明是同一
+        处置。两台都写失败走的是上面的 errorText（弹层底部的错误行）。
       */}
       {note ? (
         <span

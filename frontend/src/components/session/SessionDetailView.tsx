@@ -250,10 +250,18 @@ export default function SessionDetailView({
   const [supportsReasoningEffort, setSupportsReasoningEffort] = useState(false);
   /** 用户这一次选的力度；null = 还没选过，按落库那一份显示。 */
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
-  /** 上一次改力度失败 / 只写成一台 / 派发时没钉住的说明。 */
+  /** 只写成一台 / 派发时没钉住的说明——摆在控件旁边，不是错误。 */
   const [reasoningEffortNote, setReasoningEffortNote] = useState<string | null>(
     initialEffortNote ?? null,
   );
+  /**
+   * 两台都没写成时的原因。这才是控件自己的失败，交给共享 Picker 的
+   * `errorText`，让它出现在弹层底部的错误行里（spec「失败与恢复」），
+   * 不进旁边那条如实说明的 sibling note。
+   */
+  const [reasoningEffortError, setReasoningEffortError] = useState<
+    string | null
+  >(null);
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   /**
    * 账号镜像那一行派生出来的摘要 —— 头部的**替补**来路。
@@ -357,6 +365,7 @@ export default function SessionDetailView({
     // 要等新摘要落地才重问（此刻摆的是上一条会话那个后端的答案）。
     setReasoningEffort(null);
     setReasoningEffortNote(null);
+    setReasoningEffortError(null);
     setSupportsReasoningEffort(false);
     setReady(false);
     scrollback.reset();
@@ -958,6 +967,7 @@ export default function SessionDetailView({
     const previous = sessionReasoningEffort;
     setReasoningEffort(next);
     setReasoningEffortNote(null);
+    setReasoningEffortError(null);
 
     const c = clientRef.current;
     if (!c) return;
@@ -977,7 +987,7 @@ export default function SessionDetailView({
       if (ok === 0) {
         setReasoningEffort(previous);
         const reason = results.find((r) => r.status === "rejected")?.reason;
-        setReasoningEffortNote(
+        setReasoningEffortError(
           t("session.composerControls.effortSetFailed", {
             reason: reason instanceof Error ? reason.message : String(reason),
           }),
@@ -1015,6 +1025,7 @@ export default function SessionDetailView({
       backendValue={backendReasoningEffort}
       onChange={changeReasoningEffort}
       note={reasoningEffortNote}
+      errorText={reasoningEffortError}
     />
   ) : null;
 
