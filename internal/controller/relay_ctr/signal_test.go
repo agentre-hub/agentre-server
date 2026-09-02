@@ -146,12 +146,12 @@ func TestRelayClient_GivenTheSubscriptionIsSlow_ThenTheUpgradeWaitsForIt(t *test
 // 上面还跑着 RPC。客户端据此把信号那一路标为不可用并退回 30 秒轮询。
 func TestRelayClient_GivenTheSignalStreamStops_ThenOnlyTheSignalChannelCloses(t *testing.T) {
 	stalling := &stallingAccountChan{signals: make(chan accountchan_svc.Frame)}
-	t.Cleanup(func() { stalling.closeOnce.Do(func() { close(stalling.signals) }) })
+	t.Cleanup(stalling.close)
 	harness := newSignalHarnessWith(t, stalling)
 	alpha := harness.machine(t, 9, "fp-alpha", device_entity.KindAgentred)
 	link := harness.client(t)
 
-	close(stalling.signals)
+	stalling.close()
 	require.Empty(t, link.next(t, relay_svc.SignalChannelID, "信号源没了之后保留通道没有关闭"),
 		"空载荷是「这条通道关了」的信号")
 
@@ -270,6 +270,14 @@ func (g *gatedAccountChan) Subscribe(
 type stallingAccountChan struct {
 	signals   chan accountchan_svc.Frame
 	closeOnce sync.Once
+}
+
+// close 关掉信号源，可重复调用。订阅那一侧的 Close 与用例自己的收尾共用同一个
+// Once —— 谁都不许裸关这条 channel。裸关之后，两侧里先走到 Once 的那个会在已关闭
+// 的 channel 上再 close 一次；Once 即使 f panic 了也算完成，所以只 panic 一次，
+// 落在服务端 goroutine 就被 gin recover 掉、落在 t.Cleanup 就是用例失败。
+func (s *stallingAccountChan) close() {
+	s.closeOnce.Do(func() { close(s.signals) })
 }
 
 func (s *stallingAccountChan) Broadcast(context.Context, int64, accountchan_svc.Frame) error {
