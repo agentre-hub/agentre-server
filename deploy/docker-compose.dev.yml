@@ -1,0 +1,39 @@
+# dev 环境编排：只跑 server 本身。
+#
+# 和同目录的 docker-compose.yml 不是一回事，别混用：那份是「单机自用」，会额外拉起
+# MySQL 9.7.2 与 Redis 7 并把数据落在仓库根的 data/；dev 的库是外部既有的
+# (192.168.8.141)，套用那份等于把现有的 agentre_server_dev 数据旁路掉。
+#
+# 配置不在这里，也不在仓库里：容器读挂进来的引导配置(env: dev, source: etcd)，
+# 其余全部从 etcd 的 /config/dev/agentre-server/ 读。改配置改 etcd,不用重新部署。
+#
+# 部署目录在机器上，不在仓库里(引导配置含内网端点，且 .gitignore 已把
+# configs/config.yaml 排除在外——引导配置属于机器不属于代码):
+#
+#   /srv/agentre-dev/
+#     docker-compose.dev.yml   流水线每次部署覆盖，即本文件
+#     .env                     机器本地；流水线只改写其中的 SERVER_IMAGE 一项
+#     config.yaml              机器本地引导配置
+#     keys/jwt.key jwt.pub     机器本地 JWT 密钥对
+#
+# 手动起停:
+#   cd /srv/agentre-dev && docker compose -f docker-compose.dev.yml up -d
+#   cd /srv/agentre-dev && docker compose -f docker-compose.dev.yml logs -f server
+# 钉死项目名:不钉的话 compose 取所在目录名,在仓库的 deploy/ 下跑就成了另一个
+# 项目,会起出第二套抢同一个 8443 的容器。
+name: agentre-dev
+
+services:
+  server:
+    # 由流水线写进同目录 .env，形如 <registry>/<repo>:dev.<short-sha>。
+    # 不给默认值:取不到 tag 就该在 compose 解析阶段失败，而不是静默跑上一个镜像。
+    image: ${SERVER_IMAGE:?SERVER_IMAGE 未设置,检查 /srv/agentre-dev/.env}
+    restart: unless-stopped
+    ports: ["8443:8443"]
+    volumes:
+      # 容器 WORKDIR 是 /app，cago 读的是相对路径 ./configs/config.yaml
+      - ./config.yaml:/app/configs/config.yaml:ro
+      # etcd 里 jwt.keys[].private_key_pem_path 指向 /keys/jwt.key
+      - ./keys:/keys:ro
+    # 不设 healthcheck:运行镜像是 distroless，里面没有 curl 也没有 shell，
+    # 任何 test 指令都只会恒定 unhealthy。健康判定由流水线在宿主侧轮询完成。

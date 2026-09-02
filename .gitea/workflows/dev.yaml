@@ -1,0 +1,176 @@
+# 这个目录存在时 Gitea 不再读 .github/workflows/，两者不合并。
+# uses 走 actions/* 是本 Gitea 实例的动作镜像位置，上游名字见各自上一行。
+#
+# 与同目录 deploy.yaml 的分工：那条覆盖 main / release/* / test/*(构建镜像 → helm
+# 上 k8s)；这条只覆盖 dev(构建镜像 → SSH 到目标机 → docker compose)。两边的分支
+# 集合不相交，同一次推送不会同时触发两条链路。
+#
+# 单独成文件而不是往 deploy.yaml 里加分支条件：dev 不需要 QEMU / 多架构 /
+# kubeconfig / helm / TLS secret，且 deploy.yaml 正在服务 prod，dev 的迭代不该
+# 有机会碰坏它。
+
+name: Deploy dev
+
+on:
+  push:
+    branches:
+      - dev
+
+env:
+  REGISTRY: ${{ secrets.DOCKER_REGISTRY && secrets.DOCKER_REGISTRY || 'docker.io' }}
+  REPOSITORY: ${{ github.repository }}
+  GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
+  NPM_REGISTRY: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
+  NODE_IMAGE: ${{ secrets.NODE_IMAGE && secrets.NODE_IMAGE || 'node:22-alpine' }}
+  GO_IMAGE: ${{ secrets.GO_IMAGE && secrets.GO_IMAGE || 'golang:1.26-alpine' }}
+  RUNTIME_IMAGE: ${{ secrets.RUNTIME_IMAGE && secrets.RUNTIME_IMAGE || 'gcr.io/distroless/static-debian12' }}
+  DEPLOY_HOST: ${{ secrets.DEV_SSH_HOST && secrets.DEV_SSH_HOST || 'coding.local' }}
+  DEPLOY_USER: ${{ secrets.DEV_SSH_USER && secrets.DEV_SSH_USER || 'root' }}
+  DEPLOY_PORT: ${{ secrets.DEV_SSH_PORT && secrets.DEV_SSH_PORT || '22' }}
+  DEPLOY_DIR: ${{ secrets.DEV_DEPLOY_DIR && secrets.DEV_DEPLOY_DIR || '/srv/agentre-dev' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      # 不造这个占位文件，下面的 lint 和 test 会在 //go:embed 上编译期失败
+      - name: Prepare embedded frontend placeholder
+        run: |
+          mkdir -p internal/web/dist
+          test -f internal/web/dist/index.html || printf '<!doctype html>\n' > internal/web/dist/index.html
+
+      - name: Lint
+        # 上游是 golangci/golangci-lint-action@v8
+        uses: actions/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          # 默认的下载二进制模式要连 GitHub releases，走 goinstall 更稳
+          install-mode: goinstall
+          args: --timeout=10m
+
+      # 与 make test-backend 同一条命令。前端门禁在 GitHub 侧的 ci.yml
+      - name: Test
+        run: go test -race ./...
+
+      - name: Set outputs
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        # 上游是 docker/setup-buildx-action@v3
+        uses: actions/setup-buildx-action@v3
+
+      - name: Login to registry
+        # 上游是 docker/login-action@v3
+        uses: actions/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      # 只构建目标机需要的这一种架构:coding.local 是 x86_64,不装 QEMU
+      - name: Docker build and push
+        # 上游是 docker/build-push-action@v6
+        uses: actions/build-push-action@v6
+        with:
+          push: true
+          file: deploy/Dockerfile
+          context: .
+          platforms: linux/amd64
+          tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:dev.${{ steps.vars.outputs.sha_short }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            GO_IMAGE=${{ env.GO_IMAGE }}
+            RUNTIME_IMAGE=${{ env.RUNTIME_IMAGE }}
+            GOPROXY=${{ env.GOPROXY }}
+            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
+            VERSION=dev.${{ steps.vars.outputs.sha_short }}
+            COMMIT=${{ steps.vars.outputs.sha_short }}
+
+      # 用原生 ssh/scp 而不是某个 ssh-action:本实例的动作镜像集是定制的,仓库里
+      # 也没有任何 ssh-action 先例,赌一个可能不存在的镜像不如用 runner 自带的 ssh。
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY" || { echo "缺少 secret DEV_SSH_KEY" >&2; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/dev_deploy
+          chmod 600 ~/.ssh/dev_deploy
+
+      - name: Deploy to ${{ env.DEPLOY_HOST }}
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:dev.${{ steps.vars.outputs.sha_short }}
+          REGISTRY_USER: ${{ secrets.DOCKER_USERNAME }}
+          REGISTRY_TOKEN: ${{ secrets.DOCKER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # accept-new 是首连信任:目标机在内网且主机密钥未入库。要收紧就把
+          # 已知主机密钥写进目标机侧的运维流程,或改用固定 known_hosts。
+          SSH_OPTS="-i $HOME/.ssh/dev_deploy -p $DEPLOY_PORT -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+
+          # 编排文件每次部署覆盖,保证机器上跑的就是本 commit 声明的编排
+          # shellcheck disable=SC2086
+          scp $SSH_OPTS deploy/docker-compose.dev.yml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker-compose.dev.yml"
+
+          # 凭据经 stdin 进远端 bash,不出现在目标机的进程参数里
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS "$DEPLOY_USER@$DEPLOY_HOST" "cd $DEPLOY_DIR && bash -s" <<REMOTE
+          set -euo pipefail
+          echo "$REGISTRY_TOKEN" | docker login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+
+          # .env 是机器本地资产,只改写 SERVER_IMAGE 这一项,其余键原样保留
+          touch .env
+          { grep -v '^SERVER_IMAGE=' .env || true; echo "SERVER_IMAGE=$IMAGE"; } > .env.next
+          mv .env.next .env
+
+          # 校验放在目标机而不是 runner:.env 是机器本地文件,从不离开这台机器,
+          # runner 上根本没有它可校验。这里用真实 .env 解析,才能挡住空 tag。
+          docker compose -f docker-compose.dev.yml config -q
+          docker compose -f docker-compose.dev.yml pull
+          docker compose -f docker-compose.dev.yml up -d
+          REMOTE
+
+      # status 在 handler 里是硬编码的 "ok"(internal/controller/healthz_ctr/healthz.go),
+      # 只看它会在 DB 挂掉时也判成功。三项都要为真才算起来了。
+      - name: Wait for healthz
+        run: |
+          set -euo pipefail
+          SSH_OPTS="-i $HOME/.ssh/dev_deploy -p $DEPLOY_PORT -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+          # shellcheck disable=SC2086
+          ssh $SSH_OPTS "$DEPLOY_USER@$DEPLOY_HOST" "cd $DEPLOY_DIR && bash -s" <<'REMOTE'
+          set -uo pipefail
+          for i in $(seq 1 60); do
+            if python3 - <<'PY'
+          import json, sys, urllib.request
+          try:
+              body = urllib.request.urlopen("http://127.0.0.1:8443/v1/healthz", timeout=3).read()
+              payload = json.loads(body)
+              # 与 e2e/run.mjs:527 的 body.data ?? body 同一写法
+              data = payload.get("data") or payload
+          except Exception:
+              sys.exit(1)
+          sys.exit(0 if data.get("status") == "ok" and data.get("db_ping") is True and data.get("redis") is True else 1)
+          PY
+            then
+              echo "healthz 通过(第 ${i} 次尝试)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "healthz 未在 120 秒内通过,dev 环境停留在坏状态(不自动回滚)" >&2
+          docker compose -f docker-compose.dev.yml logs --tail=80 server >&2 || true
+          exit 1
+          REMOTE
