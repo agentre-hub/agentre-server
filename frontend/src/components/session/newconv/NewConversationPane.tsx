@@ -17,12 +17,15 @@ export function NewConversationPane({
   recentIds,
   onPick,
   onFromProject,
+  settled = true,
 }: {
   agents: NewConvAgent[];
   recentIds: string[];
   onPick: (agent: NewConvAgent) => void;
   /** 通向「从项目里挑一个 Agent」。 */
   onFromProject: () => void;
+  /** 清单问回来了没有。没回来时清单那一格摆骨架，不说「一个都没有」。 */
+  settled?: boolean;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
@@ -51,13 +54,17 @@ export function NewConversationPane({
         </p>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+      <div
+        aria-busy={!settled || undefined}
+        className="min-h-0 flex-1 overflow-auto px-5 py-4"
+      >
         <AgentPickList
           agents={filtered}
           recentIds={recentIds}
           onPick={onPick}
           columns={2}
           search={{ query, onClear: () => setQuery("") }}
+          settled={settled}
         />
       </div>
 

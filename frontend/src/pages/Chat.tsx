@@ -154,7 +154,16 @@ export default function Chat() {
   const [filter, setFilter] = useState<SessionFilter>("all");
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [agents, setAgents] = useState<NewConvAgent[]>([]);
+  /**
+   * Agent 清单**问过了**没有。空数组是它的初值，而挑 Agent 那一屏把空清单读作
+   * 「账号里一个 Agent 都没有，去桌面端建一个」——`/chat?compose=1` 直接落在那一
+   * 屏（会话详情「机器离线」横幅给的正是这个出口），于是那一个往返里屏幕上写着
+   * 一句还没有任何依据的肯定话。问过了没有得自己记一格，清单本身答不了。
+   */
+  const [agentsSettled, setAgentsSettled] = useState(false);
   const [projects, setProjects] = useState<ApiProject[]>([]);
+  /** 项目树**问过了**没有。理由与 `agentsSettled` 同：空清单说不出自己是哪一种空。 */
+  const [projectsSettled, setProjectsSettled] = useState(false);
   /**
    * 「新对话」这一路走到哪了。null = 没在开新对话。
    *
@@ -313,6 +322,10 @@ export default function Chat() {
       })
       .catch((e: unknown) => {
         if (alive()) sessionIndex.setLoadError(e);
+      })
+      // 取不到也算问过：挑 Agent 那一屏不能为了一次失败永远转下去。
+      .finally(() => {
+        if (alive()) setAgentsSettled(true);
       });
   }, []);
 
@@ -328,7 +341,9 @@ export default function Chat() {
   const reloadProjects = useCallback(() => {
     fetchProjects()
       .then(setProjects)
-      .catch(() => {});
+      .catch(() => {})
+      // 取不到也算问过：那一屏不能为了一次失败永远转下去。
+      .finally(() => setProjectsSettled(true));
   }, []);
   useEffect(() => {
     reloadProjects();
@@ -577,6 +592,7 @@ export default function Chat() {
       recentIds={recentIds}
       onPick={(agent) => setCompose({ step: "draft", agent })}
       onFromProject={() => setCompose({ step: "project" })}
+      settled={agentsSettled}
     />
   );
   const composeProject = (
@@ -586,6 +602,8 @@ export default function Chat() {
       stacked={isMobile}
       onPick={(agent) => setCompose({ step: "draft", agent })}
       onBack={() => setCompose({ step: "pick" })}
+      projectsSettled={projectsSettled}
+      agentsSettled={agentsSettled}
     />
   );
   const composeDraft =
@@ -868,6 +886,7 @@ export default function Chat() {
           recentIds={recentIds}
           onPick={(agent) => setCompose({ step: "draft", agent })}
           onFromProject={() => setCompose({ step: "project" })}
+          settled={agentsSettled}
         />
       )}
 

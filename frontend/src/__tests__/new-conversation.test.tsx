@@ -336,6 +336,37 @@ describe("从别处进来的「新建一个会话」", () => {
   });
 });
 
+/**
+ * 「还没取到」不是「一个都没有」。
+ *
+ * `/v1/workspace/agents` 是页面挂载时才发的一次请求，而 `agents` 的初值是空数组
+ * ——`/chat?compose=1` 直接落在挑 Agent 那一屏（会话详情「机器离线」横幅给的正是
+ * 这个出口），于是那一个往返里屏幕上写的是「账号里还没有 Agent，去桌面端建一个」。
+ * 那句话是**肯定的**，而此刻还没有任何依据说它。
+ *
+ * 与「切对话闪红横幅」「切机器摆旧机器状态」是同一类错：瞬态被说成了终态。这一档
+ * 的正确表达是骨架——占住位置、说「在来」，不说任何一句可能是假的话。
+ */
+describe("挑 Agent：清单还在路上时不谎报「一个都没有」", () => {
+  it("Given Agent 清单还没回来, When 停在挑 Agent 那一屏, Then 摆骨架而不是空态", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, groups: [] };
+      if (path === "/v1/devices") return { devices: [] };
+      // 这一次永不落定：这就是「还没取到」的那一段。
+      if (path.startsWith("/v1/workspace/agents")) return new Promise(() => {});
+      if (path.startsWith("/v1/workspace/projects")) return { projects: [] };
+      throw new Error("unexpected: " + path);
+    });
+
+    renderChat("/chat?compose=1");
+
+    await screen.findByTestId("new-conversation-pane");
+    expect(screen.queryByTestId("agent-pick-empty")).toBeNull();
+    expect(screen.getByTestId("agent-pick-skeleton")).toBeTruthy();
+  });
+});
+
 describe("挑一个 Agent", () => {
   it("跑不了的 Agent 摆出来但点不动，且行尾说清楚为什么", async () => {
     stubReads();
@@ -853,6 +884,83 @@ describe("从项目里挑：空的时候用同一种形", () => {
     const empty = screen.getByTestId("project-agents-empty");
     expect(within(empty).getByTestId("empty-icon")).toBeTruthy();
     expect(empty.textContent).toContain("desktop");
+  });
+});
+
+/**
+ * 项目树同样是「还没取到」与「一个都没有」共用一个空清单（`/v1/workspace/projects`
+ * 单独取，`projects` 的初值是空数组）。两件事在这一屏上说的话完全不同，而且第二
+ * 条错得更久：选中项是 `useState` 的**初值**，项目晚一步到的话它永远停在 null
+ * ——左边树里项目都列出来了，右半屏还挂着「还没有项目，去建一个」，除非用户自己
+ * 点一下。这不是闪一下，是卡住。
+ */
+describe("从项目里挑：清单还在路上", () => {
+  function renderProjectPane(
+    projects: NewConvProject[],
+    props: { projectsSettled?: boolean } = {},
+  ) {
+    return render(
+      <ThemeProvider>
+        <ProjectAgentPane
+          projects={projects}
+          agents={[]}
+          onPick={vi.fn()}
+          onBack={vi.fn()}
+          {...props}
+        />
+      </ThemeProvider>,
+    );
+  }
+
+  it("Given 项目还没问回来, When 打开这一屏, Then 摆骨架而不是「还没有项目」", () => {
+    renderProjectPane([], { projectsSettled: false });
+
+    expect(screen.queryByTestId("project-none-yet")).toBeNull();
+    expect(screen.queryByText("No projects yet.")).toBeNull();
+    expect(screen.getByTestId("project-tree-skeleton")).toBeTruthy();
+  });
+
+  it("Given 项目晚一步才到, When 它到了, Then 选中跟上第一个,不永久停在空态", () => {
+    const { rerender } = renderProjectPane([], { projectsSettled: false });
+
+    rerender(
+      <ThemeProvider>
+        <ProjectAgentPane
+          projects={[{ sync_id: "p-1", name: "server" }]}
+          agents={[]}
+          onPick={vi.fn()}
+          onBack={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(screen.queryByTestId("project-none-yet")).toBeNull();
+    // 选中落在第一个项目上：右半屏谈的是它（这个项目里一个 Agent 都没有）。
+    expect(screen.getByTestId("project-agents-empty")).toBeTruthy();
+  });
+
+  // 上面两条钉的是组件自己；这一条钉的是**接线**——「问过了没有」这一格由页面持有，
+  // 不传下去的话组件那两条守卫一次都走不到（挑 Agent 那一处此前正是这么漏的）。
+  it("Given 页面上项目那一路还没回来, When 走到这一屏, Then 摆的是骨架", async () => {
+    stubReads();
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) =>
+      path.startsWith("/v1/workspace/projects")
+        ? new Promise(() => {}) // 永不落定
+        : base(path, init),
+    );
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+    fireEvent.click(await screen.findByTestId("new-conversation-from-project"));
+
+    await screen.findByTestId("project-agent-pane");
+    expect(screen.queryByTestId("project-none-yet")).toBeNull();
+    expect(screen.getByTestId("project-tree-skeleton")).toBeTruthy();
   });
 });
 

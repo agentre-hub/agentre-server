@@ -12,6 +12,7 @@ const COUNT_SEPARATOR = " · ";
 
 import { EmptyState } from "@/components/console";
 
+import { AgentPickSkeleton } from "./AgentPickList";
 import { membersOfProject } from "./projectMembers";
 import { targetSummary, type NewConvAgent, type NewConvProject } from "./types";
 
@@ -27,11 +28,21 @@ export function ProjectAgentPane({
   onPick,
   onBack,
   stacked = false,
+  projectsSettled = true,
+  agentsSettled = true,
 }: {
   projects: NewConvProject[];
   agents: NewConvAgent[];
   onPick: (agent: NewConvAgent) => void;
   onBack: () => void;
+  /**
+   * 那两份清单**已经问回来了**吗。默认 true（不传 = 手上这份就是全部）。
+   *
+   * 空清单在这一屏上会被说成两句肯定的话（「还没有项目，去建一个」「这个项目里
+   * 一个 Agent 都没有」），而它们各自单独取数、初值都是空数组。没问回来之前摆骨架。
+   */
+  projectsSettled?: boolean;
+  agentsSettled?: boolean;
   /**
    * 窄屏：项目树改成顶上一条横向 chip 条。390px 上再摆一列 252px 的树，
    * 右边只剩 138px，两边都用不了。
@@ -40,9 +51,21 @@ export function ProjectAgentPane({
 }) {
   const { t } = useTranslation();
   const ordered = useMemo(() => orderProjectTree(projects), [projects]);
-  const [selected, setSelected] = useState<string | null>(
-    ordered[0]?.project.sync_id ?? null,
-  );
+  /*
+    记的是「用户点过哪一个」，落到哪一个由下面那一行算。
+
+    此前它是 `useState(ordered[0] ?? null)` —— 初值只在挂载那一次算。项目是单独
+    取的一路，晚一步到的时候这一格永远停在 null：左边树里项目都列出来了，右半屏
+    还挂着「还没有项目，去建一个」，除非用户自己点一下。那不是闪一下，是卡住。
+
+    顺带接住另一头：点过的那个项目在重取后消失了（改名同步 / 被删）时回落到第一个，
+    而不是把右半屏留在一个不存在的项目上。
+  */
+  const [picked, setPicked] = useState<string | null>(null);
+  const selected =
+    picked && projects.some((p) => p.sync_id === picked)
+      ? picked
+      : (ordered[0]?.project.sync_id ?? null);
 
   const members = useMemo(
     () =>
@@ -52,6 +75,14 @@ export function ProjectAgentPane({
     [agents, projects, selected],
   );
   const selectedProject = projects.find((p) => p.sync_id === selected) ?? null;
+
+  /** 项目那一路还没回来。空清单此刻说的是「还没取到」，不是「一个都没有」。 */
+  const projectsPending = !projectsSettled && ordered.length === 0;
+  const membersEmpty =
+    members.direct.length === 0 && members.inherited.length === 0;
+  /** 项目已经选定、Agent 那一路还没回来：右半边同样不能说「一个都没有」。 */
+  const agentsPending =
+    selectedProject !== null && !agentsSettled && membersEmpty;
 
   return (
     <div
@@ -76,6 +107,7 @@ export function ProjectAgentPane({
         <nav
           data-testid="project-tree"
           aria-label={t("chat.projects")}
+          aria-busy={projectsPending || undefined}
           className={cn(
             "bg-card",
             stacked
@@ -83,7 +115,9 @@ export function ProjectAgentPane({
               : "flex w-[252px] shrink-0 flex-col gap-0.5 overflow-auto border-r border-border p-2",
           )}
         >
-          {ordered.length === 0 ? (
+          {projectsPending ? (
+            <ProjectTreeSkeleton stacked={stacked} />
+          ) : ordered.length === 0 ? (
             <p className="px-2 py-1.5 text-[11.5px] text-muted-foreground">
               {t("chat.noProjects")}
             </p>
@@ -94,7 +128,7 @@ export function ProjectAgentPane({
                 type="button"
                 data-testid={`project-node-${project.sync_id}`}
                 aria-current={selected === project.sync_id ? "true" : undefined}
-                onClick={() => setSelected(project.sync_id)}
+                onClick={() => setPicked(project.sync_id)}
                 style={stacked ? undefined : { paddingLeft: 8 + depth * 14 }}
                 className={cn(
                   "flex items-center gap-2 rounded-md text-left transition-colors",
@@ -139,19 +173,25 @@ export function ProjectAgentPane({
               </span>
             </div>
           )}
-          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
-            {/* 一个项目都还没有：这一半不能谈论「这个项目」——没有那个项目。
+          <div
+            aria-busy={projectsPending || agentsPending || undefined}
+            className="min-h-0 flex-1 overflow-auto px-5 py-4"
+          >
+            {/* 还没取到：占住位置说「在来」，一句可能是假的话都不说。它排在两条
+                空态之前——那两条都是**肯定**的结论，此刻还没有依据下。 */}
+            {projectsPending || agentsPending ? (
+              <AgentPickSkeleton columns={1} />
+            ) : /* 一个项目都还没有：这一半不能谈论「这个项目」——没有那个项目。
                 左边已经说了「还没有项目」，这里接着说该去哪儿建，而不是让两句话
-                一起把用户送去找一个不存在的项目。 */}
-            {!selectedProject ? (
+                一起把用户送去找一个不存在的项目。 */
+            !selectedProject ? (
               <EmptyState
                 testId="project-none-yet"
                 icon={FolderTree}
                 title={t("chat.noProjectsYetTitle")}
                 body={t("chat.noProjectsYetHint")}
               />
-            ) : members.direct.length === 0 &&
-              members.inherited.length === 0 ? (
+            ) : membersEmpty ? (
               <EmptyState
                 testId="project-agents-empty"
                 icon={Bot}
@@ -178,6 +218,41 @@ export function ProjectAgentPane({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 项目树的首屏骨架。摆的是**项目行的形**（色块 + 名字），横向 chip 条那一档跟着
+ * 变形——形不对的话行落地时整列（或整条）重排一次。
+ */
+const PROJECT_SKELETON_ROWS = [0.95, 0.75, 0.55];
+
+function ProjectTreeSkeleton({ stacked }: { stacked: boolean }) {
+  return (
+    <div
+      data-testid="project-tree-skeleton"
+      aria-hidden="true"
+      className={cn("flex", stacked ? "gap-1.5" : "flex-col gap-0.5")}
+    >
+      {PROJECT_SKELETON_ROWS.map((opacity, i) => (
+        <div
+          key={i}
+          style={{ opacity }}
+          className={cn(
+            "flex items-center gap-2",
+            stacked
+              ? "shrink-0 rounded-md border border-border px-2.5 py-1.5"
+              : "py-1.5 pr-2",
+          )}
+        >
+          <span className="size-5 shrink-0 animate-pulse rounded-md bg-secondary motion-reduce:animate-none" />
+          <span
+            className="block h-3 animate-pulse rounded bg-secondary motion-reduce:animate-none"
+            style={{ width: stacked ? 56 : `${68 - i * 12}%` }}
+          />
+        </div>
+      ))}
     </div>
   );
 }

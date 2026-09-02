@@ -35,11 +35,19 @@ export function AgentPickList({
   onPick,
   columns = 1,
   search,
+  settled = true,
 }: {
   agents: NewConvAgent[];
   recentIds: string[];
   onPick: (agent: NewConvAgent) => void;
   columns?: 1 | 2;
+  /**
+   * 宿主那份 Agent 清单**已经问回来了**吗。默认 true（不传 = 手上这份就是全部）。
+   *
+   * false 时空清单说的是「还没取到」，不是「账号里一个都没有」——后者是一句肯定的
+   * 话，还带着一条「去桌面端建一个」的号召，而此刻没有任何依据说它。这一档摆骨架。
+   */
+  settled?: boolean;
   /**
    * 宿主正按词收窄时给。空态要分得清「账号里没有 Agent」与「这次搜索不收」——
    * 后者东西还在，回程是清掉那个词，所以清空的能力必须一起传进来（贴底弹层
@@ -72,6 +80,12 @@ export function AgentPickList({
       },
     ].filter((g) => g.items.length > 0);
   }, [agents, recentIds, t]);
+
+  // 还没取到：占住位置说「在来」，不说任何一句可能是假的话（与会话列表那三处
+  // 同一条原则，见 SessionListSkeleton）。搜索那一档不看它——收窄的是手上这份。
+  if (!settled && agents.length === 0) {
+    return <AgentPickSkeleton columns={columns} />;
+  }
 
   // 这一格是「新建对话」的主体区，不是索引窄栏：用页面级 `EmptyState`。
   // 两句都归 chat 命名空间——此前「账号里没有 Agent」借的是总览页的
@@ -124,6 +138,47 @@ export function AgentPickList({
             ))}
           </ul>
         </section>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * 挑 Agent 清单的首屏骨架。摆的是**行的形**（头像 + 两行）而不是几条通用灰条：
+ * 这一格落地的是卡片网格，形不对的话行落地时整格重排一次。
+ *
+ * 对读屏隐藏：正在取这件事由容器上的 `aria-busy` 说（与 SessionListSkeleton 同）。
+ *
+ * 导出给「从项目里挑一个」那一屏的右半边：它落地的也是这一种行，两处各画一份的话
+ * 同一个「在取」会有两种形。
+ */
+const SKELETON_ROWS = [0.95, 0.8, 0.65, 0.5];
+
+export function AgentPickSkeleton({ columns }: { columns: 1 | 2 }) {
+  return (
+    <div
+      data-testid="agent-pick-skeleton"
+      aria-hidden="true"
+      className={cn(
+        "grid gap-2.5",
+        columns === 2 ? "grid-cols-2" : "grid-cols-1",
+      )}
+    >
+      {SKELETON_ROWS.map((opacity, i) => (
+        <div
+          key={i}
+          style={{ opacity }}
+          className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2.5"
+        >
+          <span className="size-7 shrink-0 animate-pulse rounded-full bg-secondary motion-reduce:animate-none" />
+          <span className="min-w-0 flex-1">
+            <span
+              className="block h-3 animate-pulse rounded bg-secondary motion-reduce:animate-none"
+              style={{ width: `${68 - i * 8}%` }}
+            />
+            <span className="mt-1.5 block h-2.5 w-2/5 animate-pulse rounded bg-secondary motion-reduce:animate-none" />
+          </span>
+        </div>
       ))}
     </div>
   );

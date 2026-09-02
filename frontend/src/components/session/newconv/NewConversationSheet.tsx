@@ -22,6 +22,7 @@ export function NewConversationSheet({
   recentIds,
   onPick,
   onFromProject,
+  settled = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -29,6 +30,8 @@ export function NewConversationSheet({
   recentIds: string[];
   onPick: (agent: NewConvAgent) => void;
   onFromProject: () => void;
+  /** 清单问回来了没有。没回来时清单那一格摆骨架，不说「一个都没有」。 */
+  settled?: boolean;
 }) {
   const { t } = useTranslation();
   // 刻意不走 DialogShell：它的 sheet 形态只在窄屏成立（`sm:` 断点之上变回浮卡），
@@ -50,12 +53,16 @@ export function NewConversationSheet({
             {t("chat.pickAgentHint")}
           </p>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2">
+        <div
+          aria-busy={!settled || undefined}
+          className="min-h-0 flex-1 overflow-y-auto px-4 pb-2"
+        >
           <AgentPickList
             agents={agents}
             recentIds={recentIds}
             onPick={onPick}
             columns={1}
+            settled={settled}
           />
         </div>
         <button
