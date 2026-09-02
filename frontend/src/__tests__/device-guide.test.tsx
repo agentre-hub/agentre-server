@@ -389,14 +389,24 @@ describe("add-device guide · steps and commands", () => {
       value: undefined,
       configurable: true,
     });
+    // 按浏览器的规则算「这一刻按下复制会拿走什么」：焦点在可编辑控件里时是那个
+    // 控件的选区，否则是文档选区。断言不能打在 execCommand 的返回值上——Chromium
+    // 什么都没选中时照样返回 true（共享包的兜底正因此改走文档选区）。
     const selectedAtCopy: string[] = [];
     Object.defineProperty(document, "execCommand", {
       configurable: true,
       value: vi.fn((command: string) => {
         if (command !== "copy") return false;
-        selectedAtCopy.push(
-          (document.activeElement as HTMLTextAreaElement | null)?.value ?? "",
-        );
+        const active = document.activeElement;
+        const field =
+          active instanceof HTMLTextAreaElement ||
+          active instanceof HTMLInputElement
+            ? active.value.slice(
+                active.selectionStart ?? 0,
+                active.selectionEnd ?? 0,
+              )
+            : "";
+        selectedAtCopy.push(field || String(window.getSelection() ?? ""));
         return true;
       }),
     });
