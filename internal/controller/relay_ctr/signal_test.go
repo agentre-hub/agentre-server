@@ -11,7 +11,6 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
@@ -46,7 +45,6 @@ func TestRelayClient_GivenAnAccountBroadcast_ThenItArrivesOnTheReservedChannel(t
 // 通道是账号级且跨副本的：同一个账号连在两个副本上的两条中继连接都要收到任一
 // 副本发出的那一次广播，而别的账号一条都收不到。
 func TestRelayClient_GivenTwoReplicas_ThenOneBroadcastReachesBothAndOnlyThatAccount(t *testing.T) {
-	gin.SetMode(gin.TestMode)
 	testutils.Redis()
 	mini := miniredis.RunT(t)
 	signer := newSignalSigner(t)

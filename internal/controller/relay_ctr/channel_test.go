@@ -9,7 +9,6 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/pkg/utils/testutils"
-	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -46,7 +45,6 @@ func newChannelHarness(t *testing.T) *channelHarness {
 // 订阅缓慢与信号源中断三种形态。
 func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanSvc) *channelHarness {
 	t.Helper()
-	gin.SetMode(gin.TestMode)
 	testutils.Redis()
 	mini := miniredis.RunT(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
