@@ -300,3 +300,23 @@ func TestTranscriptTail_BeforeSeqIsExclusive(t *testing.T) {
 	assert.Equal(t, []int64{1, 3}, seqsOf(page.Frames))
 	assert.False(t, page.HasBefore)
 }
+
+// 帧行上记的发生时刻要跟着这一页出去。它是浏览器控制台转录上那个 HH:mm 的唯一来源:
+// 那一侧从帧现折转录,没有本地消息表可读（桌面端读的是 chat_messages.createtime）。
+func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
+	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
+	first := frame(6, "user_message", "在吗")
+	first.Createtime = 1_700_000_000_111
+	second := frame(7, "tool_use_start", "Read")
+	second.Createtime = 1_700_000_009_222
+	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(5), defaultTranscriptLimit+1).
+		Return([]*agent_session_entity.JournalFrame{first, second}, nil)
+
+	page, err := svc.Transcript(ctx, TranscriptQuery{
+		UserID: 7, ConversationID: "conv-9", AfterSeq: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Frames, 2)
+	assert.EqualValues(t, 1_700_000_000_111, page.Frames[0].Createtime)
+	assert.EqualValues(t, 1_700_000_009_222, page.Frames[1].Createtime)
+}

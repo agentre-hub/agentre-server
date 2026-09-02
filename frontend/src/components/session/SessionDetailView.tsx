@@ -342,13 +342,15 @@ export default function SessionDetailView({
 
   const { client, relayState, relayTicket, relayTicketError, reconnect } =
     useRelayMachine(relayTarget, {
-      onEvent: (f) => {
+      onEvent: (f, at) => {
         if (f.conversationId === sid) {
-          setEvents((prev) => [...prev, toTranscriptFrame(f)]);
+          setEvents((prev) => [...prev, toTranscriptFrame(f, at)]);
           // 撤占位的判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
           // daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点
           // 熄了,而这一轮再没有别的东西能重新点亮它。
-          if (opensAssistantMessage(toTranscriptFrame(f), TranscriptSessionId))
+          if (
+            opensAssistantMessage(toTranscriptFrame(f, at), TranscriptSessionId)
+          )
             turn.setPendingAssistant(false);
         }
         // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,

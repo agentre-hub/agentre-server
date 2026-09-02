@@ -2785,6 +2785,69 @@ describe("会话详情：头部", () => {
   });
 
   /**
+   * 转录里每条消息头上的时间。
+   *
+   * 这一侧的转录是从帧现折的：时刻只能由帧带来，而帧上这一格从前根本不存在，于是
+   * 共享包的 `formatHHmm(0)` 返回空串 —— 控制台上每条消息都没有时间，同一条对话在
+   * 桌面端却有（那边读的是自己库里的 chat_messages.createtime）。
+   *
+   * 走的是**镜像**这条路：一页 JournaledNotification 上的 createtime 要一路穿过
+   * applyJournalFrames → toTranscriptFrame → 共享归约器，落到消息上。
+   */
+  it("镜像的一页带 createtime：转录里每条消息头上出 HH:mm", async () => {
+    const at = new Date(2026, 8, 1, 9, 41, 7).getTime();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      if (path === "/v1/workspace/agents") return { agents: workspaceAgents };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [
+            {
+              peer_fingerprint: "fp-1",
+              conversation_id: "42",
+              title: "重构登录页",
+              agent_sync_id: "ag-1",
+              lifecycle_state: "idle",
+            },
+          ],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          frames: [
+            {
+              seq: 1,
+              createtime: at,
+              method: "runtime.event",
+              params: {
+                conversationId: "42",
+                event: { kind: "user_message", text: "离线转录" },
+              },
+            },
+          ],
+          cursor: 1,
+          has_more: false,
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    renderEmbeddedDetail();
+
+    await screen.findByText(/离线转录/);
+    expect(screen.getByText("09:41")).toBeTruthy();
+  });
+
+  /**
    * 转录抬头的「助手」闪一下：Agent 名要两条异步各自到齐才解得开（账号的 Agent 清单
    * + 这条对话的 agentSyncId），而转录只要有消息就先铺出来了。中间那一段空窗里
    * 共享包按约定退回中性抬头「Assistant」，等清单落地再换成真名 —— 用户看到的就是

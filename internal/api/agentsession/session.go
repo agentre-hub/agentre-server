@@ -154,6 +154,15 @@ type TranscriptFrameItem struct {
 	Seq    int64           `json:"seq"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+	// Createtime 是这一帧**发生**的时刻（Unix 毫秒），由产生它的那一端报出。
+	// 浏览器的转录是从帧现折的，每条消息头上那个 HH:mm 只有这一个来源——桌面端读的
+	// 是自己库里的 chat_messages.createtime，这一侧没有那张表。
+	//
+	// 0 = 那一端没报过（还没升级的对端）。**没有 omitempty**：省掉之后「报了 0」与
+	// 「这一版服务端还没有这个字段」在线上长得一模一样，而前端对这两件事该做的不是
+	// 同一件。0 读作「不知道」，时间戳如实不显示，绝不就地补一个当下——补齐是成批
+	// 到达的，那会把一条离线两天的对话整段盖上今天的时间。
+	Createtime int64 `json:"createtime"`
 }
 
 // TranscriptResponse 是一页。Cursor 是这一页读到的位置，**不是**这条对话的

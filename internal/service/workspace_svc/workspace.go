@@ -286,6 +286,12 @@ type TranscriptFrameView struct {
 	Seq    int64
 	Method string
 	Params json.RawMessage
+	// Createtime 是这一帧**发生**的时刻（Unix 毫秒），由产生它的那一端报出、镜像原样
+	// 落库。0 = 那一端没报过（还没升级的对端），读作「不知道」，不是 1970。
+	//
+	// 浏览器的转录是从帧现折出来的，除了这一格没有别的时刻可读（桌面端读的是自己
+	// 库里的 chat_messages.createtime），所以它必须一路下行到 HTTP view。
+	Createtime int64
 }
 
 // TranscriptPage 是一页。Cursor 是这一页读到的位置，**不是**这条对话的「最新」

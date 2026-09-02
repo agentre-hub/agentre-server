@@ -128,7 +128,16 @@ type JournalFrame struct {
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
 	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	Payload         []byte `gorm:"column:payload;type:longblob;not null"`
-	Createtime      int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	// Createtime 记的是这一帧**发生**的时刻（Unix 毫秒），不是这台 server 存下它的
+	// 时刻。实时那一路两者只差一跳网络，补齐那一路差得很远——补齐成批到达，一条离线
+	// 两天的对话几百帧会落在同一毫秒里，拿收帧时刻当发生时刻，浏览器控制台上整段
+	// 转录就显示成同一分钟。所以它由产生这一帧的那一端报出（agentred 的
+	// daemon_notification_journal.createtime、桌面端消息自己的 createtime），
+	// mirror_svc 原样落库。
+	//
+	// 0 = 那一端没报过（还没升级的对端）。0 一路保持「不知道」下行，渲染成不显示
+	// 时间——不在任何一跳上补一个当下。
+	Createtime int64 `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
 
 func (*JournalFrame) TableName() string { return "agent_session_notification_journal" }

@@ -810,3 +810,56 @@ describe("RelayConnection 的重连退让", () => {
     connection.close();
   });
 });
+
+/**
+ * 帧上的**发生时刻**要一路交到 handler 手里。
+ *
+ * 浏览器的转录是从帧现折的,除了这一格没有别的时刻可读(桌面端读的是自己库里的
+ * chat_messages.createtime)。少了它,控制台上每条消息都不显示时间。
+ *
+ * 三条投递路径的时刻各有来路,而只有这一层同时认得三条:补齐(server 镜像的一页 /
+ * 客户端自己回机器补的一页)带着原点报的时刻,实时帧没有 —— 它刚刚才到,此刻就是它
+ * 的时刻。所以在这里分流,而不是让每个宿主各判一次。
+ */
+describe("帧的发生时刻", () => {
+  it("补齐的一页把每一帧报的 createtime 交给 handler", () => {
+    const seen: Array<[string, number]> = [];
+    applyJournalFrames(
+      [
+        {
+          seq: 12,
+          createtime: 1700000000111,
+          method: "runtime.event",
+          params: {
+            conversationId: CID,
+            seq: 12,
+            event: { kind: "text_delta", text: "hi" },
+          },
+        },
+        {
+          seq: 13,
+          method: "runtime.event",
+          params: {
+            conversationId: CID,
+            seq: 13,
+            event: { kind: "text_delta", text: "there" },
+          },
+        },
+      ] as unknown as JournaledNotification[],
+      {
+        onEvent: (frame, createtime) => {
+          seen.push([
+            (frame.event as { text?: string }).text ?? "",
+            createtime ?? -1,
+          ]);
+        },
+      },
+    );
+
+    // 没报过的那一条留 0:「不知道」不能在这一层被补成当下,补齐是成批到达的。
+    expect(seen).toEqual([
+      ["hi", 1700000000111],
+      ["there", 0],
+    ]);
+  });
+});

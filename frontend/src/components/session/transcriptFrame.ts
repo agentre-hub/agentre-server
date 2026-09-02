@@ -20,7 +20,20 @@ export const TranscriptSessionId = 1;
 /** 详情页手里的一帧：wire 的事件帧 + 共享包转录投影认得的那一格。 */
 export type SessionEventFrame = EventFrame & TranscriptFrame;
 
-/** 把一帧 wire 事件帧接上共享包转录投影的形状。 */
-export function toTranscriptFrame(frame: EventFrame): SessionEventFrame {
-  return { ...frame, sessionId: TranscriptSessionId };
+/**
+ * 把一帧 wire 事件帧接上共享包转录投影的形状。
+ *
+ * `createtime` 是这一帧**发生**的时刻（Unix 毫秒），由中继那一层按来路分好之后交进来
+ * （补齐带原点报的值、实时帧就是收到的此刻，见 `NotificationHandlers.onEvent`）。
+ * 它是转录里每条消息头上那个 HH:mm 的唯一来源——这一侧从帧现折转录，没有桌面端那张
+ * `chat_messages` 表可读。
+ *
+ * 缺省 0 而不是 `Date.now()`：0 在共享包里读作「不知道」并如实不显示时间，就地补一个
+ * 当下则会给一条两天前的对话盖上今天的时间。
+ */
+export function toTranscriptFrame(
+  frame: EventFrame,
+  createtime = 0,
+): SessionEventFrame {
+  return { ...frame, sessionId: TranscriptSessionId, createtime };
 }

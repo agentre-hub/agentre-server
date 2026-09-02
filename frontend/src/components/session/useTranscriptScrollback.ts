@@ -217,8 +217,9 @@ export function useTranscriptScrollback({
       // 与首屏同一条解帧路径。**不**走客户端的去重投递：那套 seq 闸门会把这一段
       // 判成跳号，反手从游标往后把整条日志再拉一遍。
       applyJournalFrames(res.frames, {
-        onEvent: (f) => evs.push(toTranscriptFrame(f)),
-        onRunResultDone: (frame) => evs.push(doneEventFrame(sid, frame)),
+        onEvent: (f, at) => evs.push(toTranscriptFrame(f, at)),
+        onRunResultDone: (frame, at) =>
+          evs.push(doneEventFrame(sid, frame, at)),
       });
       append(evs, res.frames[0]?.seq ?? 0, res.hasBefore);
     } catch {

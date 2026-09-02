@@ -8,6 +8,8 @@ github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831103928-a58a6903cea1 h1:b2
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831103928-a58a6903cea1/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831164031-47ad37114eb1 h1:bBCSy/Wi3UkUs6X84RFL0pitCZJCySbFv4Y9gtC79Qk=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260831164031-47ad37114eb1/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260901095350-69fadf2021e8 h1:pAW1KMPrlYLq6BpDesLaQ6Y9RFGSxSGH6WT1XbGlu60=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260901095350-69fadf2021e8/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a h1:HbKu58rmZpUGpz5+4FfNmIU+FmZg2P3Xaj2v2bfNWmk=
 github.com/alicebob/gopher-json v0.0.0-20200520072559-a9ecdc9d1d3a/go.mod h1:SGnFV6hVsYE877CKEZ6tDNTjaSXYUk6QqoIK6PrAtcc=
 github.com/alicebob/miniredis/v2 v2.32.1 h1:Bz7CciDnYSaa0mX5xODh6GUITRSx+cVhjNoOR4JssBo=

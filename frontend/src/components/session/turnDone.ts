@@ -30,6 +30,7 @@ import {
 export function doneEventFrame(
   conversationId: string,
   frame: RunResultDoneFrame,
+  createtime = 0,
 ): SessionEventFrame {
   const event: Record<string, unknown> = { kind: "done" };
   if (frame.model) event.model = frame.model;
@@ -37,9 +38,15 @@ export function doneEventFrame(
   if (frame.firstTokenMs) event.firstTokenMs = frame.firstTokenMs;
   if (frame.tokensPerSec) event.tokensPerSec = frame.tokensPerSec;
   if (frame.usage) event.usage = { ...frame.usage };
-  return toTranscriptFrame({
-    conversationId,
-    event,
-    seq: undefined,
-  } as EventFrame);
+  return toTranscriptFrame(
+    {
+      conversationId,
+      event,
+      seq: undefined,
+    } as EventFrame,
+    // 这条标记合成自终态帧，时刻因此就是那一帧的。它落在**已经开着**的那条助手消息
+    // 上（归约器的 done 分支不新建消息），所以这个值实际上不会成为谁的 createtime——
+    // 传它是为了不在这条路上凭空断掉时刻，而不是为了让它显示出来。
+    createtime,
+  );
 }

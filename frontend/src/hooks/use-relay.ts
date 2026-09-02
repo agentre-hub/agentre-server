@@ -26,9 +26,13 @@ import type { RelayTicket } from "@/lib/relayTicket";
  * 实时回调经 ref 转发，避免回调闭包读到陈旧 state；页面可以放心传引用 setter。
  */
 export interface UseRelayMachineOptions {
-  onEvent?: (frame: EventFrame) => void;
-  onRunResultDone?: (frame: RunResultDoneFrame) => void;
-  onAutonomousTurnStarted?: (frame: AutonomousTurnStartedFrame) => void;
+  /** 第二个参数是这一帧发生的时刻，见 `NotificationHandlers.onEvent`。 */
+  onEvent?: (frame: EventFrame, createtime?: number) => void;
+  onRunResultDone?: (frame: RunResultDoneFrame, createtime?: number) => void;
+  onAutonomousTurnStarted?: (
+    frame: AutonomousTurnStartedFrame,
+    createtime?: number,
+  ) => void;
 }
 
 export interface UseRelayMachineResult {
@@ -127,10 +131,11 @@ export function useRelayMachine(
         target,
         {
           onStateChange: setRelayState,
-          onEvent: (frame) => optsRef.current.onEvent?.(frame),
-          onRunResultDone: (frame) => optsRef.current.onRunResultDone?.(frame),
-          onAutonomousTurnStarted: (frame) =>
-            optsRef.current.onAutonomousTurnStarted?.(frame),
+          onEvent: (frame, at) => optsRef.current.onEvent?.(frame, at),
+          onRunResultDone: (frame, at) =>
+            optsRef.current.onRunResultDone?.(frame, at),
+          onAutonomousTurnStarted: (frame, at) =>
+            optsRef.current.onAutonomousTurnStarted?.(frame, at),
         },
         { waitForConnect: false },
       )

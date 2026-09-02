@@ -521,3 +521,35 @@ func TestWaitingCount_ZeroIsAnAnswerNotAnOmission(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"waiting":0`)
 }
+
+// 每一帧的发生时刻要出现在 HTTP 应答上。浏览器的转录是从帧现折的,除了这一列它没有
+// 别的时刻可读 —— 少了它,控制台上每条消息都不显示时间,而同一条对话在桌面端有。
+//
+// **没有 omitempty**:0 与「这一版服务端还不报」在线上必须分得开,前者读作
+// 「对端没报过」而如实不显示,后者是需要升级的信号。
+func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
+	stub := &stubWorkspaceSvc{page: workspace_svc.TranscriptPage{
+		Frames: []workspace_svc.TranscriptFrameView{
+			{Seq: 6, Method: "runtime.event", Params: json.RawMessage(`{"a":1}`), Createtime: 1_700_000_000_111},
+			{Seq: 7, Method: "runtime.event", Params: json.RawMessage(`{"a":2}`)},
+		},
+		Cursor: 7,
+	}}
+	server, _ := newMirrorTestServer(t, stub)
+	cookie := newSessionCookie(t, 7)
+
+	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID,
+		cookie.Value)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got struct {
+		Frames []struct {
+			Seq        int64 `json:"seq"`
+			Createtime int64 `json:"createtime"`
+		} `json:"frames"`
+	}
+	decodeEnvelope(t, resp, &got)
+	require.Len(t, got.Frames, 2)
+	assert.EqualValues(t, 1_700_000_000_111, got.Frames[0].Createtime)
+	assert.Zero(t, got.Frames[1].Createtime, "对端没报过就是 0,不补一个当下")
+}

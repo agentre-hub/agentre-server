@@ -120,6 +120,10 @@ func projectTranscriptFrames(in []TranscriptFrameView) []TranscriptFrameView {
 	var runBody eventBody
 	var runText string
 	var runSeq int64
+	// 这一段的**发生时刻**取第一帧,与 runSeq 取最后一帧刻意相反:seq 回答「接着从哪
+	// 读」,时刻回答「这条消息什么时候开始」。取最后一帧会让一段跑了两分钟的回答显示
+	// 成它结束的那一刻。
+	var runAt int64
 
 	flush := func() {
 		if runKind == "" {
@@ -128,10 +132,10 @@ func projectTranscriptFrames(in []TranscriptFrameView) []TranscriptFrameView {
 		merged, err := encodeMergedText(runBody, runText)
 		if err == nil {
 			out = append(out, TranscriptFrameView{
-				Seq: runSeq, Method: methodRuntimeEvent, Params: merged,
+				Seq: runSeq, Method: methodRuntimeEvent, Params: merged, Createtime: runAt,
 			})
 		}
-		runKind, runBody, runText, runSeq = "", eventBody{}, "", 0
+		runKind, runBody, runText, runSeq, runAt = "", eventBody{}, "", 0, 0
 	}
 
 	for _, f := range in {
@@ -154,6 +158,9 @@ func projectTranscriptFrames(in []TranscriptFrameView) []TranscriptFrameView {
 		}
 		if runKind != "" && runKind != kind {
 			flush()
+		}
+		if runKind == "" {
+			runAt = f.Createtime
 		}
 		runKind = kind
 		runBody = body

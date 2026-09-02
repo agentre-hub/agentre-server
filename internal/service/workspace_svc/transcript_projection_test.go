@@ -192,3 +192,37 @@ func TestProjectTranscriptFrames_MergedTextSurvivesEscaping(t *testing.T) {
 	assert.Equal(t, "他说\"好\"\n然后走了", textOf(t, out[0]))
 	assert.False(t, strings.Contains(textOf(t, out[0]), `\n`), "换行不该被二次转义")
 }
+
+// 合并出来的那一段正文,时刻取这一段**第一**帧 —— 与 seq 取最后一帧刻意相反。
+//
+// 两个字段回答的不是同一个问题:seq 是「调用方接着从哪读」(取第一帧会让随后每条实时
+// 帧都被判成跳号,见 dropCursorAboveHighWater 那条注释记的事故),时刻是「这条消息什么
+// 时候开始的」(取最后一帧会让一段跑了两分钟的回答显示成它结束的那一刻)。
+func TestProjectTranscriptFrames_MergedRunTakesTheFirstFramesCreatetime(t *testing.T) {
+	first := ev(1, "text_delta", "我把")
+	first.Createtime = 1_700_000_000_111
+	middle := ev(2, "text_delta", "校验")
+	middle.Createtime = 1_700_000_004_222
+	last := ev(3, "text_delta", "挪走了")
+	last.Createtime = 1_700_000_009_333
+
+	out := projectTranscriptFrames([]TranscriptFrameView{first, middle, last})
+
+	require.Len(t, out, 1)
+	assert.Equal(t, int64(3), out[0].Seq, "seq 仍取最后一帧")
+	assert.Equal(t, int64(1_700_000_000_111), out[0].Createtime)
+}
+
+// 被丢掉的那些 kind 不打断合并,自然也不该把时刻带偏:一段的起点仍是它第一条**留下来**
+// 的帧。
+func TestProjectTranscriptFrames_DroppedFramesDoNotBecomeTheRunsStart(t *testing.T) {
+	dropped := ev(1, "runtime_status", "")
+	dropped.Createtime = 1_600_000_000_000
+	first := ev(2, "text_delta", "答")
+	first.Createtime = 1_700_000_000_111
+
+	out := projectTranscriptFrames([]TranscriptFrameView{dropped, first})
+
+	require.Len(t, out, 1)
+	assert.Equal(t, int64(1_700_000_000_111), out[0].Createtime)
+}

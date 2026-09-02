@@ -137,9 +137,10 @@ describe("RelayClientPool", () => {
     await pool.acquire(FP1, { onEvent: second });
 
     const frame = { conversationId: "c-1", seq: 1, event: {} } as never;
-    built[0].opts.onEvent?.(frame);
-    expect(first).toHaveBeenCalledWith(frame);
-    expect(second).toHaveBeenCalledWith(frame);
+    // 第二个实参是这一帧发生的时刻：扇出原样转出去，不在这一层改写。
+    built[0].opts.onEvent?.(frame, 1700000000111);
+    expect(first).toHaveBeenCalledWith(frame, 1700000000111);
+    expect(second).toHaveBeenCalledWith(frame, 1700000000111);
   });
 
   it("release 之后这个监听者不再收到通知，别人照收", async () => {
@@ -150,11 +151,14 @@ describe("RelayClientPool", () => {
     await pool.acquire(FP1, { onEvent: staying });
 
     lease.release();
-    built[0].opts.onEvent?.({
-      conversationId: "c-1",
-      seq: 1,
-      event: {},
-    } as never);
+    built[0].opts.onEvent?.(
+      {
+        conversationId: "c-1",
+        seq: 1,
+        event: {},
+      } as never,
+      1700000000111,
+    );
     expect(leaving).not.toHaveBeenCalled();
     expect(staying).toHaveBeenCalledTimes(1);
   });

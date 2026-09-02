@@ -902,3 +902,42 @@ func TestWriteFrames_StampsTheInjectedClock(t *testing.T) {
 		assert.Equal(t, frozen, u.Updatetime, "摘要与帧必须落在同一个时刻上")
 	}
 }
+
+// 补齐回来的帧,时刻取**对端报的**那个,不是这台 server 收到它的时刻。
+//
+// 两者在补齐这条路上差得很远:补齐是成批的,一条离线两天的对话几百帧会在同一毫秒里
+// 落库,拿收帧时刻当发生时刻,浏览器控制台上整段转录就显示成同一分钟。对端的日志行
+// 自己记着每一帧发生在什么时候(agentred 的 daemon_notification_journal.createtime),
+// 那才是唯一说得通的来源。
+func TestPullFrames_TakeThePeersReportedCreatetime(t *testing.T) {
+	r := newRig(t)
+	r.mirror.now = func() int64 { return 1_800_000_000_000 }
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	first := journalText(conv42, 1, "第一句")
+	first.Createtime = 1_700_000_000_111
+	second := journalText(conv42, 2, "第二句")
+	second.Createtime = 1_700_000_009_222
+	r.relay.journal[conv42] = []*agentrewire.JournaledNotification{first, second}
+	ctx := context.Background()
+
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.Len(t, r.frames, 2)
+	assert.Equal(t, int64(1_700_000_000_111), r.frames[0].Createtime)
+	assert.Equal(t, int64(1_700_000_009_222), r.frames[1].Createtime)
+}
+
+// 还没升级到会报时刻的对端交出 0。0 原样落库,**不就地补成当下** —— 那会给一条两天前
+// 的对话盖上今天的时间。下游读 0 为「不知道」,时间戳如实不显示。
+func TestPullFrames_UnreportedCreatetimeStaysZero(t *testing.T) {
+	r := newRig(t)
+	r.mirror.now = func() int64 { return 1_800_000_000_000 }
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	r.relay.journal[conv42] = []*agentrewire.JournaledNotification{journalText(conv42, 1, "第一句")}
+	ctx := context.Background()
+
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.Len(t, r.frames, 1)
+	assert.Zero(t, r.frames[0].Createtime)
+}

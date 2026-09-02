@@ -317,7 +317,9 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		return m.saveSummary(ctx, ts)
 	default:
 		if err := m.writeFrames(ctx, ts, []*agentrewire.JournaledNotification{
-			{Seq: seq, Payload: notification},
+			// 实时这一路的发生时刻就是此刻:这一帧刚从中继上过来,唯一的误差是一跳
+			// 网络。补齐那一路正相反 —— 见 writeFrames 上的说明。
+			{Seq: seq, Payload: notification, Createtime: m.now()},
 		}); err != nil {
 			return err
 		}
@@ -556,8 +558,15 @@ func (m *Mirror) attach(ctx context.Context, ts *trackedSession) (int64, error) 
 // (account, conversation, seq). The journal row's seq is the
 // metadata source of truth, so it is stamped into the serialized notification
 // for both live delivery and pull replay before persistence.
+//
+// Createtime 原样取自载体,这一层一个时刻都不编。
+//
+// 它是**发生**时刻,不是这台 server 的收帧时刻:实时那一路由 Apply 就地盖当下
+// (差一跳网络),补齐那一路由对端的日志行报出来。两者不能互换 —— 补齐是成批到达
+// 的,拿收帧时刻当发生时刻会把一条离线两天的对话整段盖成同一毫秒。对端报不出来时
+// 是 0,0 照样原样落库:「不知道」在下游读作「不显示时间」,补一个当下则是显示一个
+// 假的。
 func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agentrewire.JournaledNotification) error {
-	now := m.now()
 	rows := make([]*agent_session_entity.JournalFrame, 0, len(ns))
 	for _, n := range ns {
 		if n.GetPayload() == nil {
@@ -575,7 +584,7 @@ func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agen
 			PeerFingerprint: ts.owner,
 			Seq:             n.GetSeq(),
 			Payload:         encoded,
-			Createtime:      now,
+			Createtime:      n.GetCreatetime(),
 		})
 	}
 	if err := m.frames.WriteFrames(ctx, rows); err != nil {

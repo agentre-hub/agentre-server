@@ -513,3 +513,46 @@ describe("Transcript 的一轮 meta", () => {
     expect(await screen.findByText("glm-5.3")).toBeTruthy();
   });
 });
+
+/**
+ * 每条消息头上的时间。
+ *
+ * 这一侧的转录是从帧现折的,时刻只能由帧带来 —— 桌面端读的是自己库里的
+ * chat_messages.createtime,浏览器没有那张表。此前帧上根本没有这一格,于是共享包
+ * 的 `formatHHmm(0)` 返回空串,控制台上每条消息都没有时间,而同一条对话在桌面端有。
+ */
+describe("Transcript 的时间戳", () => {
+  it("给定帧带 createtime，当渲染，则消息头上出这条消息开始的 HH:mm", () => {
+    // 固定成本地时区的 09:41,断言用同一份格式化算出来的字面量,免得用例随 TZ 变红。
+    const at = new Date(2026, 8, 1, 9, 41, 7).getTime();
+    render(
+      <Transcript
+        messages={reduceFrames(
+          [
+            {
+              sessionId: 1,
+              seq: 1,
+              createtime: at,
+              event: { kind: "user_message", text: "在吗" },
+            },
+          ],
+          1,
+        )}
+        sessionId={1}
+      />,
+    );
+
+    expect(screen.getByText("09:41")).toBeTruthy();
+  });
+
+  it("给定帧没报时刻，当渲染，则不显示时间而不是显示 1970 的某个点", () => {
+    render(
+      <Transcript
+        messages={reduceFrames([f({ kind: "user_message", text: "在吗" })], 1)}
+        sessionId={1}
+      />,
+    );
+
+    expect(screen.queryByText(/^\d{2}:\d{2}$/)).toBeNull();
+  });
+});

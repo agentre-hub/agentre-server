@@ -9,11 +9,11 @@ importers:
   .:
     dependencies:
       '@agentre-hub/agentre-ui':
-        specifier: github:agentre-hub/agentre#47ad37114eb1f3b6b296b4b16d5415ba9c71bccd&path:/frontend/packages/agentre-ui
-        version: https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd#path:/frontend/packages/agentre-ui(97863f1c4b8e420407e11ff24ffeedfb)
+        specifier: github:agentre-hub/agentre#69fadf2021e8f9c16d5831a821425249e871c338&path:/frontend/packages/agentre-ui
+        version: https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338#path:/frontend/packages/agentre-ui(97863f1c4b8e420407e11ff24ffeedfb)
       '@agentre-hub/agentre-wire':
-        specifier: github:agentre-hub/agentre#47ad37114eb1f3b6b296b4b16d5415ba9c71bccd&path:/frontend/packages/agentre-wire
-        version: https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd#path:/frontend/packages/agentre-wire
+        specifier: github:agentre-hub/agentre#69fadf2021e8f9c16d5831a821425249e871c338&path:/frontend/packages/agentre-wire
+        version: https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338#path:/frontend/packages/agentre-wire
       '@bufbuild/protobuf':
         specifier: ^2.14.0
         version: 2.14.0
@@ -168,8 +168,8 @@ importers:
 
 packages:
 
-  '@agentre-hub/agentre-ui@https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd#path:/frontend/packages/agentre-ui':
-    resolution: {path: /frontend/packages/agentre-ui, tarball: https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd}
+  '@agentre-hub/agentre-ui@https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338#path:/frontend/packages/agentre-ui':
+    resolution: {path: /frontend/packages/agentre-ui, tarball: https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338}
     version: 0.1.0
     peerDependencies:
       '@iconify/react': ^6.0.0
@@ -188,8 +188,8 @@ packages:
       react-i18next: ^17.0.0
       sonner: ^2.0.0
 
-  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd#path:/frontend/packages/agentre-wire':
-    resolution: {path: /frontend/packages/agentre-wire, tarball: https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd}
+  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338#path:/frontend/packages/agentre-wire':
+    resolution: {path: /frontend/packages/agentre-wire, tarball: https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338}
     version: 0.1.0
 
   '@asamuzakjp/css-color@5.1.11':
@@ -3302,7 +3302,7 @@ packages:
 
 snapshots:
 
-  '@agentre-hub/agentre-ui@https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd#path:/frontend/packages/agentre-ui(97863f1c4b8e420407e11ff24ffeedfb)':
+  '@agentre-hub/agentre-ui@https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338#path:/frontend/packages/agentre-ui(97863f1c4b8e420407e11ff24ffeedfb)':
     dependencies:
       '@bufbuild/protobuf': 2.14.0
       '@iconify/react': 6.0.2(react@19.2.6)
@@ -3336,7 +3336,7 @@ snapshots:
       - '@types/react'
       - supports-color
 
-  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/47ad37114eb1f3b6b296b4b16d5415ba9c71bccd#path:/frontend/packages/agentre-wire':
+  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/69fadf2021e8f9c16d5831a821425249e871c338#path:/frontend/packages/agentre-wire':
     dependencies:
       '@bufbuild/protobuf': 2.14.0
 

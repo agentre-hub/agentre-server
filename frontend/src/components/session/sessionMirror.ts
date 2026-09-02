@@ -165,12 +165,12 @@ export async function loadMirrorTail(
     `/v1/agent-sessions/transcript?${query.toString()}`,
   );
   applyJournalFrames(page.frames ?? [], {
-    onEvent: (f) => events.push(toTranscriptFrame(f)),
+    onEvent: (f, at) => events.push(toTranscriptFrame(f, at)),
     // 轮次结束在转录里是一条分隔标记，同时是这一轮 meta（模型 / 耗时 / 首字 /
     // 速率）的唯一来路 —— 见 doneEventFrame。实时那条还兼着翻「这一轮在不在跑」
     // 并刷新待决策，那两件事回放教不了（见 turnActiveRef），这里只有标记这一半。
-    onRunResultDone: (frame) =>
-      events.push(doneEventFrame(conversationId, frame)),
+    onRunResultDone: (frame, at) =>
+      events.push(doneEventFrame(conversationId, frame, at)),
   });
   return {
     events,

@@ -135,7 +135,9 @@ func (m *AgentSession) Transcript(c *gin.Context, req *api.TranscriptRequest) (*
 		HasBefore: page.HasBefore,
 	}
 	for _, f := range page.Frames {
-		resp.Frames = append(resp.Frames, api.TranscriptFrameItem{Seq: f.Seq, Method: f.Method, Params: f.Params})
+		resp.Frames = append(resp.Frames, api.TranscriptFrameItem{
+			Seq: f.Seq, Method: f.Method, Params: f.Params, Createtime: f.Createtime,
+		})
 	}
 	return resp, nil
 }

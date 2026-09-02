@@ -44,9 +44,13 @@ const DEFAULT_IDLE_GRACE_MS = 30_000;
  * 一个使用方的收件口。全是可选的：一次性调用只是想借条通道发个请求，什么都不听。
  */
 export interface RelayListener {
-  onEvent?: (frame: EventFrame) => void;
-  onRunResultDone?: (frame: RunResultDoneFrame) => void;
-  onAutonomousTurnStarted?: (frame: AutonomousTurnStartedFrame) => void;
+  /** 第二个参数是这一帧发生的时刻，见 `NotificationHandlers.onEvent`。 */
+  onEvent?: (frame: EventFrame, createtime?: number) => void;
+  onRunResultDone?: (frame: RunResultDoneFrame, createtime?: number) => void;
+  onAutonomousTurnStarted?: (
+    frame: AutonomousTurnStartedFrame,
+    createtime?: number,
+  ) => void;
   onStateChange?: (state: RelayState) => void;
 }
 
@@ -378,21 +382,27 @@ export class RelayClientPool {
     connection: RelayConnection,
     ticket: RelayTicket,
   ): RelayClient {
+    // 变参而不是单参：事件那三口现在还带一个「这一帧什么时候发生的」，而
+    // onStateChange 仍是单参 —— 转发原样把收到的实参转出去，不逐个数。
     const fanout =
-      <T>(pick: (l: RelayListener) => ((arg: T) => void) | undefined) =>
-      (arg: T) => {
-        for (const listener of [...entry.listeners]) pick(listener)?.(arg);
+      <A extends unknown[]>(
+        pick: (l: RelayListener) => ((...args: A) => void) | undefined,
+      ) =>
+      (...args: A) => {
+        for (const listener of [...entry.listeners]) pick(listener)?.(...args);
       };
     return this.createClient({
       connection,
       target: entry.target,
       jwt: ticket.accessToken,
-      onEvent: fanout<EventFrame>((l) => l.onEvent),
-      onRunResultDone: fanout<RunResultDoneFrame>((l) => l.onRunResultDone),
-      onAutonomousTurnStarted: fanout<AutonomousTurnStartedFrame>(
+      onEvent: fanout<[EventFrame, number?]>((l) => l.onEvent),
+      onRunResultDone: fanout<[RunResultDoneFrame, number?]>(
+        (l) => l.onRunResultDone,
+      ),
+      onAutonomousTurnStarted: fanout<[AutonomousTurnStartedFrame, number?]>(
         (l) => l.onAutonomousTurnStarted,
       ),
-      onStateChange: fanout<RelayState>((l) => l.onStateChange),
+      onStateChange: fanout<[RelayState]>((l) => l.onStateChange),
     });
   }
 

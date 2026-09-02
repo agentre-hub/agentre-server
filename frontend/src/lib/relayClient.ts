@@ -89,10 +89,26 @@ export class RelayError extends Error {
  * 的历史帧走的是**与实时同一条**解帧与投递路径(applyJournalFrames),而不是另写一份。
  */
 export interface NotificationHandlers {
-  /** 实时与补齐的事件帧,去重后投递。 */
-  onEvent?: (frame: EventFrame) => void;
-  onRunResultDone?: (frame: RunResultDoneFrame) => void;
-  onAutonomousTurnStarted?: (frame: AutonomousTurnStartedFrame) => void;
+  /**
+   * 实时与补齐的事件帧,去重后投递。
+   *
+   * 第二个参数是这一帧**发生**的时刻(Unix 毫秒),不是收到它的时刻 —— 两者只在实时
+   * 那条路上相等。补齐带的是原点报的时刻(server 镜像的一页 / 客户端自己回机器补的
+   * 那一页都带),实时帧没有可带的,就是此刻。三条路只有这一层同时认得,所以分流在
+   * 这里做,不让每个宿主各判一次。
+   *
+   * 0 = 那一端还没升级到会报它。0 一路读作「不知道」,渲染成不显示时间;补一个当下
+   * 会给一条两天前的对话盖上今天的时间。
+   *
+   * 参数**可选**:说不上时刻的调用方(测试替身、别的合成路径)就是不传,由读者当 0
+   * 处理 —— 强制它们编一个数出来,编出来的只会是假的。
+   */
+  onEvent?: (frame: EventFrame, createtime?: number) => void;
+  onRunResultDone?: (frame: RunResultDoneFrame, createtime?: number) => void;
+  onAutonomousTurnStarted?: (
+    frame: AutonomousTurnStartedFrame,
+    createtime?: number,
+  ) => void;
 }
 export interface RelayClientOptions extends NotificationHandlers {
   /**
@@ -622,13 +638,17 @@ export class RelayClient {
   private dispatchNotification(
     frame: ProtobufRpcFrame,
     target?: SessionState,
+    createtime?: number,
   ): void {
     const decoded = decodeNotification(frame);
     if (!decoded) {
       return;
     }
     const st = target ?? this.stateOf(decoded.conversationId);
-    this.applyDedup(st, decoded.seq, () => decoded.deliver(this.opts));
+    // 实时帧没有可带的时刻:它刚从中继上过来,唯一的误差是一跳网络,所以此刻就是它
+    // 的时刻。补齐那一路由调用方把原点报的值传进来(见 applyJournaled)。
+    const at = createtime ?? Date.now();
+    this.applyDedup(st, decoded.seq, () => decoded.deliver(this.opts, at));
   }
 
   /**
@@ -670,7 +690,9 @@ export class RelayClient {
   /** 补齐页里的一条通知:按 method 解成帧、把日志行上的 seq 盖上去,再走同一套去重投递。 */
   private applyJournaled(st: SessionState, n: JournaledNotification): void {
     const frame = journaledToFrame(n);
-    if (frame) this.dispatchNotification(frame, st);
+    // 时刻取日志行报的那个,**不**退回当下:这一页可能是一段离线期间的成批补齐,
+    // 拿此刻去盖会让整段转录显示成同一分钟。报不出来时是 0,读作「不知道」。
+    if (frame) this.dispatchNotification(frame, st, n.createtime ?? 0);
   }
 
   private failPending(err: RelayError): void {
@@ -685,7 +707,7 @@ export class RelayClient {
 interface DecodedNotification {
   conversationId: string;
   seq: number | undefined;
-  deliver: (handlers: NotificationHandlers) => void;
+  deliver: (handlers: NotificationHandlers, createtime: number) => void;
 }
 
 /**
@@ -708,7 +730,7 @@ function decodeNotification(
     return {
       conversationId: value.conversationId,
       seq: value.seq,
-      deliver: (h) => h.onEvent?.(value),
+      deliver: (h, at) => h.onEvent?.(value, at),
     };
   }
   if (
@@ -733,7 +755,7 @@ function decodeNotification(
     return {
       conversationId: value.conversationId,
       seq: value.seq,
-      deliver: (h) => h.onRunResultDone?.(value),
+      deliver: (h, at) => h.onRunResultDone?.(value, at),
     };
   }
   if (body.case === "autonomousTurnStartedNotification") {
@@ -746,7 +768,7 @@ function decodeNotification(
     return {
       conversationId: value.conversationId,
       seq: value.seq,
-      deliver: (h) => h.onAutonomousTurnStarted?.(value),
+      deliver: (h, at) => h.onAutonomousTurnStarted?.(value, at),
     };
   }
   return null;
@@ -884,22 +906,28 @@ const JOURNALED_METHODS: Record<string, string> = {
 function journaledFromProtobuf(input: unknown): JournaledNotification {
   const entry = input as {
     seq: bigint;
+    createtime?: bigint | number;
     payload?: { payload?: { case?: string; value?: Record<string, unknown> } };
   };
   const seq = Number(entry.seq);
+  // 这一帧在**原点**发生的时刻。这条路是客户端自己回那台机器补的一页,行上这一格
+  // 正是 agentred 的 daemon_notification_journal.createtime —— 转录里那个 HH:mm 的
+  // 来源。报不出来的对端交出 0,读作「不知道」。
+  const createtime = Number(entry.createtime ?? 0);
   const payload = entry.payload?.payload;
   const method =
     payload?.case === undefined ? "" : (JOURNALED_METHODS[payload.case] ?? "");
   const value = payload?.value;
   if (method === "" || value === undefined) {
-    return { seq, method, params: {} };
+    return { seq, method, createtime, params: {} };
   }
   if (method === NotifyEvent || method === NotifyAutonomousTurnEvent) {
     const event = value.event as { case: string; value?: object } | undefined;
-    if (event === undefined) return { seq, method, params: {} };
+    if (event === undefined) return { seq, method, createtime, params: {} };
     return {
       seq,
       method,
+      createtime,
       params: {
         conversationId: String(value.conversationId ?? ""),
         seq,
@@ -914,6 +942,7 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
     return {
       seq,
       method,
+      createtime,
       params: {
         conversationId: String(value.conversationId ?? ""),
         seq,
@@ -926,6 +955,7 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
   return {
     seq,
     method,
+    createtime,
     params: {
       conversationId: String(value.conversationId ?? ""),
       seq,
@@ -1061,7 +1091,7 @@ export function applyJournalFrames(
   for (const n of frames) {
     if (typeof n.seq === "number" && n.seq > last) last = n.seq;
     const frame = journaledToFrame(n);
-    if (frame) decodeNotification(frame)?.deliver(handlers);
+    if (frame) decodeNotification(frame)?.deliver(handlers, n.createtime ?? 0);
   }
   return last;
 }

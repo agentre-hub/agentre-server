@@ -134,8 +134,11 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 		// 字段集不长出 cwd 这一类新字段。
 		// OldestSeq / HasBefore 是反向读那一页的两个数（规格 2026-08-21-transcript-
 		// tail-loading 决策 2）：都是 seq 与布尔，不带任何机器上的东西。
+		// Createtime 是这一帧发生的时刻（Unix 毫秒），同样只是一个数：它说的是「什么
+		// 时候」，不是「在哪台机器上的哪个路径」。浏览器的转录从帧现折，每条消息头上
+		// 那个 HH:mm 只有这一个来源。
 		"TranscriptResponse":  {"Frames", "Cursor", "HasMore", "OldestSeq", "HasBefore"},
-		"TranscriptFrameItem": {"Seq", "Method", "Params"},
+		"TranscriptFrameItem": {"Seq", "Method", "Params", "Createtime"},
 		// 看板（规格 2026-08-27）：卡片、标签目录与两套计数。整族只有「指向」——
 		// 标题、描述、阶段、位置，以及项目 / Agent / 机器的**同步标识**。
 		// AgentBackendSyncID 是那个标识本身，不是后端的正文：cli_path 与 env_json

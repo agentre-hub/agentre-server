@@ -218,7 +218,7 @@ func journalFrameView(row *agent_session_entity.JournalFrame) (TranscriptFrameVi
 	if err != nil {
 		return TranscriptFrameView{}, fmt.Errorf("project mirror journal seq %d: %w", row.Seq, err)
 	}
-	return TranscriptFrameView{Seq: row.Seq, Method: method, Params: params}, nil
+	return TranscriptFrameView{Seq: row.Seq, Method: method, Params: params, Createtime: row.Createtime}, nil
 }
 
 func stampNotificationSeq(notification *agentrewire.RpcNotification, seq int64) {
