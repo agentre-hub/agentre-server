@@ -466,6 +466,37 @@ describe("状态横幅:三档形态", () => {
       "lost",
     );
   });
+
+  /**
+   * 切对话那一瞬：`machineOnline` 属于**设备**轴，切同一台机器上的另一条对话时它
+   * 一直是 true，所以上面那条「还没问出来」的判据接不住这一段 —— 而这一段里
+   * `relayTarget` 确实还没定下来（认领要重来一遍），`relayState` 因此停在没有目标
+   * 时的初值 "disconnected"。两件事凑起来又被读成「连过又放弃了」。
+   *
+   * 「连过」要求先有过一条通道。目标都还没定下来时一条都还没开。
+   */
+  it("换对话:目标还没定下来时是「连接中」,哪怕机器已知在线", () => {
+    const switching: Parameters<typeof deriveSessionViewStatus>[0] = {
+      relayState: "disconnected",
+      meValid: true,
+      machineOnline: true,
+      targetKind: "agentred",
+      pinnedAgentredUnavailable: false,
+      relayTargetResolved: false,
+    };
+    expect(deriveSessionViewStatus(switching)).toBe("connecting");
+    // 目标定下来了、通道仍是断的 —— 这才是「连过又放弃了」。
+    expect(
+      deriveSessionViewStatus({ ...switching, relayTargetResolved: true }),
+    ).toBe("lost");
+    // 不传等于「有目标」：其余调用方与既有断言的含义一个字都不变。
+    expect(
+      deriveSessionViewStatus({
+        ...switching,
+        relayTargetResolved: undefined,
+      }),
+    ).toBe("lost");
+  });
 });
 
 /**

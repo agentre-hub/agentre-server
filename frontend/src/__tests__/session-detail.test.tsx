@@ -1855,6 +1855,197 @@ describe("会话详情：这条通道声明的目标", () => {
   });
 });
 
+/**
+ * 切对话的那一瞬（同实例换 props，桌面右栏与索引页点下一行都是这条路）。
+ *
+ * `sid` 一变，重置块把 `history.settled` 拨回 false，`relayTarget` 因此短暂为
+ * null；真 hook 在**没有目标**时的状态就是初值 "disconnected"（见 use-relay 的
+ * `initialState`）。而 `machineOnline` 属于设备轴、不随 sid 重置 —— 切同一台机器
+ * 上的另一条对话时它一直是 true。两件事凑在一起被 `deriveSessionViewStatus` 读作
+ * 「连过又放弃了」，于是每切一次对话都先闪一条红色的「连接断了，已经不再自动
+ * 重试」，横跨认领那一个往返。
+ *
+ * 「lost」的含义是「连过又放弃了」，那要求先有过一条通道。目标都还没定下来的
+ * 那一段，正确的说法是「还在连」。
+ */
+describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
+  /** 与真 hook 一致：没有目标 = 还没开始连，状态停在初值 "disconnected"。 */
+  function stubRelayFollowingTarget() {
+    mockUseRelay.mockImplementation((target, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: target ? (fakeClient as never) : null,
+        relayState: target ? "connected" : "disconnected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  function row(id: string) {
+    return {
+      conversation_id: id,
+      peer_fingerprint: "fp-1",
+      machine_fingerprint: "fp-1",
+      title: "对话 " + id,
+    };
+  }
+
+  function ui(id: string) {
+    return (
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId={id}
+            form="embedded"
+            initialRow={row(id)}
+          />
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+  }
+
+  function lostBanner() {
+    return screen.queryByText(i18n.t("session.banner.lost.title"));
+  }
+
+  it("切到同机器上的另一条对话：整段认领期间只说「连接中」,不报「已经不再自动重试」", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, items: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return { frames: [], cursor: 0, has_more: false };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    stubRelayFollowingTarget();
+
+    const { rerender } = render(ui("42"));
+    // 第一条连上了：机器在线（machineOnline=true）也已经问回来了。
+    await vi.waitFor(() =>
+      expect(mockUseRelay.mock.calls.map((c) => c[0])).toContain(
+        "conversation:42",
+      ),
+    );
+    expect(lostBanner()).toBeNull();
+
+    // 切到 43：认领重来一遍，这一帧 relayTarget 又是 null。
+    rerender(ui("43"));
+    expect(lostBanner()).toBeNull();
+    expect(
+      document.querySelector('[data-session-status="connecting"]'),
+    ).toBeTruthy();
+
+    // 认领落定、通道重新开出来之后照常连上，不残留任何横幅。
+    await vi.waitFor(() =>
+      expect(mockUseRelay.mock.calls.map((c) => c[0])).toContain(
+        "conversation:43",
+      ),
+    );
+    expect(lostBanner()).toBeNull();
+  });
+});
+
+/**
+ * 切到**另一台机器**上的对话那一瞬。
+ *
+ * `useSessionTargetDevice` 的 device / machineOnline 是 `did` 变化时**重新去取**、
+ * 而不是先清空：新设备那一个往返里，屏幕上挂着的仍是**上一台**的在线状态、名字
+ * 与撤销状态。上一台离线时，新目标因此先被扣一顶「机器离线」的红帽子，横幅里还
+ * 写着上一台的名字；反过来（上一台在线、新的其实离线）则更糟——那一段里输入框
+ * 是可用的，敲进去的话发不出去。
+ *
+ * 与「切对话」那一处是同一类错：**还没问出来**被当成了一句肯定的答复。设备轴的
+ * 正确初值是 null（「不知道」），`deriveSessionViewStatus` 早就为它留好了
+ * 「连接中」那一档。
+ */
+describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态", () => {
+  const dev1 = { ...deviceRow, id: 1, name: "机器A", online: false };
+  const dev2 = { ...deviceRow, id: 2, name: "机器B", online: true };
+
+  function bannerStatus() {
+    return document
+      .querySelector("[data-session-status]")
+      ?.getAttribute("data-session-status");
+  }
+
+  function ui(deviceId: number, conversationId: string) {
+    return (
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={deviceId}
+            conversationId={conversationId}
+            form="embedded"
+          />
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+  }
+
+  it("旧机器离线、新机器还没问回来：那一段说「连接中」,不报「机器离线」", async () => {
+    // 设备 2 那一次取数挂起：这就是「还没问出来」的那一段。
+    let resolveDev2!: (v: unknown) => void;
+    const pendingDev2 = new Promise((r) => {
+      resolveDev2 = r;
+    });
+    let deviceCalls = 0;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return { total: 0, items: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return { frames: [], cursor: 0, has_more: false };
+      if (path !== "/v1/devices") throw new Error("unexpected: " + path);
+      deviceCalls += 1;
+      return deviceCalls === 1 ? { devices: [dev1] } : pendingDev2;
+    });
+    mockUseRelay.mockImplementation((target, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: target ? (fakeClient as never) : null,
+        relayState: target ? "connected" : "disconnected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    const { rerender } = render(ui(1, "42"));
+    // 机器 A 确实离线：这一档本身是对的。
+    await vi.waitFor(() => expect(bannerStatus()).toBe("machineOffline"));
+
+    // 切到机器 B 上的另一条对话：B 在不在线还没问回来。
+    rerender(ui(2, "43"));
+    expect(bannerStatus()).not.toBe("machineOffline");
+    expect(screen.queryByText(/机器A/)).toBeNull();
+    expect(bannerStatus()).toBe("connecting");
+
+    // 问回来了（B 在线）：照常连上，不残留任何横幅。
+    await act(async () => {
+      resolveDev2({ devices: [dev2] });
+    });
+    await vi.waitFor(() => expect(bannerStatus()).toBeUndefined());
+  });
+});
+
 describe("会话详情：历史来自 server 镜像", () => {
   /** 一页镜像转录：frames 是 wire.JournaledNotification 原样。 */
   function framePage(frames: { seq: number; text: string }[], hasMore = false) {

@@ -62,6 +62,14 @@ export interface SessionViewInput {
   pinnedAgentredUnavailable?: boolean;
   /** 设备已从账号撤销，会话永久只读。 */
   deviceRevoked?: boolean;
+  /**
+   * 这一屏要连的那条通道**已经定下来了**吗。默认 true（不传 = 有目标）。
+   *
+   * false 说的是「目标还没解析出来」：入口分流要等账号那一行认领落定，而换对话
+   * 时它整个重来一遍。这一段里 `use-relay` 手上没有目标，`relayState` 停在初值
+   * "disconnected" —— 那是「还没开始连」，不是「连过又放弃了」。
+   */
+  relayTargetResolved?: boolean;
 }
 
 export function deriveSessionViewStatus(
@@ -74,6 +82,7 @@ export function deriveSessionViewStatus(
     targetKind,
     pinnedAgentredUnavailable,
     deviceRevoked,
+    relayTargetResolved,
   } = input;
   if (!meValid) return "loggedOut";
   if (deviceRevoked) return "deviceRevoked";
@@ -94,17 +103,21 @@ export function deriveSessionViewStatus(
       /*
         default 就是 relayState === "disconnected"。它有两种来历，说的不是同一件事：
 
-          - **还没开始连**：页面刚挂载，`use-relay` 的初值就是 "disconnected"，
-            此时 `/v1/devices` 也还没回来，`machineOnline` 是 null。
+          - **还没开始连**：`use-relay` 手上还没有目标，状态停在初值 "disconnected"。
           - **连过又放弃了**：这才是 "lost"，横幅据此说「已经不再自动重试」。
 
-        分不开的时候两种都算 lost，于是每一次打开任何一条对话都先闪一条红色横幅，
-        横跨取设备 + 取中继票两个往返。瞬态与终态因此糊成一档，最刺眼的那一档
-        警报变成了必经画面。
+        分不开的时候两种都算 lost，于是每打开或每切一条对话都先闪一条红色横幅。
+        瞬态与终态因此糊成一档，最刺眼的那一档警报变成了必经画面。
 
-        判据用 `machineOnline === null`：机器在不在线是页面启动时问的第一件事，
-        它还没有答案就说明这一屏根本还没开始连。
+        「还没开始连」有两副面孔，两条判据各接一段：
+
+          - **刚挂载**：`/v1/devices` 还没回来，`machineOnline` 是 null。机器在不
+            在线是页面启动时问的第一件事，它还没有答案就说明这一屏根本还没开始连。
+          - **换对话**：`machineOnline` 属于设备轴、不随会话重置，切同一台机器上
+            的另一条对话时它一直是 true，上一条判据接不住。这一段真正还没定下来
+            的是**通道目标**（认领要重来一遍），所以由调用方直说。
       */
+      if (relayTargetResolved === false) return "connecting";
       return machineOnline === null ? "connecting" : "lost";
   }
 }

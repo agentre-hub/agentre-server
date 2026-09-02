@@ -40,6 +40,27 @@ export function useSessionTargetDevice(did: number): SessionTargetDevice {
   const [machineOnline, setMachineOnline] = useState<boolean | null>(null);
   const [meValid, setMeValid] = useState(true);
 
+  /*
+    换目标机器时先把这一片**清空**，不要等新的取回来再覆盖。
+
+    下面那只 effect 排在渲染之后，中间隔着整整一个往返：不清的话，那一段里屏幕上
+    挂的是**上一台**的在线状态、名字与撤销状态，全部记在新目标账上。上一台离线时
+    新目标先被扣一顶红色的「机器离线」（横幅里还写着上一台的名字）；反过来（上一台
+    在线、新的其实离线）更糟——那一段输入框是可用的，敲进去的话发不出去。
+
+    `machineOnline` 的 null 是「还没问出来」，不是「离线」：`deriveSessionViewStatus`
+    早就为它留好了「连接中」那一档，清空即接上那一档。
+
+    `meValid` 不在此列：它是**账号**级的事实，不随目标机器变。
+  */
+  const [lastDid, setLastDid] = useState(did);
+  if (lastDid !== did) {
+    setLastDid(did);
+    setDevice(null);
+    setDeviceError(null);
+    setMachineOnline(null);
+  }
+
   // 取设备。换设备时同时重新允许一次 reconnecting 原因探测（R11）——旧设备的探测
   // 结论不属于新设备。
   useAliveEffect(

@@ -649,6 +649,11 @@ export default function SessionDetailView({
       ),
     machineOnline,
     targetKind: device?.kind,
+    // 认领落定之前 relayTarget 是 null，中继手上没有目标、状态停在「没连」。换对话
+    // 时这一段会重来一遍，而 machineOnline 属于设备轴不跟着重置（切的是同一台机器
+    // 上的另一条对话时它一直是 true）—— 不把这件事说出来，那一帧就会被读成
+    // 「连过又放弃了」，每切一次对话都先闪一条红色的「已经不再自动重试」。
+    relayTargetResolved: relayTarget !== null,
     pinnedAgentredUnavailable,
     // 被撤销的设备仍留在清单上（status 不再是 ACTIVE）：它与「机器离线」是两回事，
     // 离线随时会结束，撤销是永久的（决策 7）。两者的分类在 deriveSessionViewStatus
