@@ -53,6 +53,7 @@ import {
   type MirrorSessionItem,
   writeModelTargetToOrigin,
 } from "@/components/session/sessionMirror";
+import { useLiveTurnTiming } from "@/components/session/useLiveTurnTiming";
 import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
 import {
   useSessionSend,
@@ -139,6 +140,18 @@ export interface SessionDetailViewProps {
    */
   initialRow?: MirrorSessionItem;
   /**
+   * 这条对话的第一轮是**什么时候派发出去的**（`Date.now()`）。
+   *
+   * 唯一来路与 `initialModelNote` 同一条：草稿页刚把它发起出来。那一轮是这个浏览器
+   * 几百毫秒前开的，可本页装载时 attach 只看得到「对端已经在跑」——而「接进来时
+   * 已经在跑」本页一律不计时（那种轮次什么时候开的它不知道）。交出这个时刻，第一轮
+   * 的耗时才不必等它跑完才出数。
+   *
+   * 过期的一律不作数（见 `useLiveTurnTiming` 的窗口）：导航 state 会跟着历史记录
+   * 一直留着，十分钟后刷新页面它还在手上。
+   */
+  initialTurnStartedAt?: number;
+  /**
    * 宿主页面级的那簇控件，摆在详情头部的最右端（嵌入形态才有）。
    *
    * 桌面 Chat 把转录上方那两条带并成一条之后，壳不再画 52px 顶栏，连接态与
@@ -179,6 +192,7 @@ export default function SessionDetailView({
   form = "page",
   initialModelNote,
   initialTitle,
+  initialTurnStartedAt,
   initialRow,
   headerRight,
   onMarkedRead,
@@ -289,6 +303,13 @@ export default function SessionDetailView({
    * 它排在中继之前：onRunResultDone / onAutonomousTurnStarted 与 attach 都要写它。
    */
   const turn = useTurnActivity();
+  /**
+   * 这一轮跑到第几秒。共享包那条 meta 靠它才开表 —— 耗时 / 首字 / tok/s 在 wire 上
+   * 只出现在终态帧（见 turnDone），不自己数的话，跑的那几十秒里那一格是死的。
+   *
+   * 排在中继之前的理由与上面那只一样：实时回调要往里写。
+   */
+  const liveTurn = useLiveTurnTiming(initialTurnStartedAt);
   // 已装载的目标会话标识：桌面 Chat 右栏点行 A 再点行 B 时是同实例换 props（无
   // key 强制重挂），会话级状态必须随 (did, sid) 变化重置，否则右栏残留上一条会话的
   // 标题/转录/决策，发消息也落在上一条的 origin 上。用 React 官方的「prop 变化时
@@ -309,6 +330,7 @@ export default function SessionDetailView({
     setEvents([]);
     decisions.reset();
     turn.reset();
+    liveTurn.reset();
     setPinnedAgentredUnavailable(false);
     setReady(false);
     scrollback.reset();
@@ -343,8 +365,11 @@ export default function SessionDetailView({
   const { client, relayState, relayTicket, relayTicketError, reconnect } =
     useRelayMachine(relayTarget, {
       onEvent: (f, at) => {
+        const kind = (f.event as { kind?: string } | undefined)?.kind;
         if (f.conversationId === sid) {
           setEvents((prev) => [...prev, toTranscriptFrame(f, at)]);
+          // 计时也吃这条流:首字什么时候到、工具在跑的那几段不算生成,都只有帧说得清。
+          liveTurn.noteFrame(kind);
           // 撤占位的判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
           // daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点
           // 熄了,而这一轮再没有别的东西能重新点亮它。
@@ -356,7 +381,6 @@ export default function SessionDetailView({
         // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,
         // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
         // run 不会结束,onRunResultDone 那一条刷新路径到不了;R10)。
-        const kind = (f.event as { kind?: string } | undefined)?.kind;
         if (
           kind === "tool_permission_request" ||
           kind === "ask_user_question"
@@ -366,6 +390,9 @@ export default function SessionDetailView({
       },
       onRunResultDone: (frame) => {
         turn.markTurnActive(false);
+        // 收表:终态帧自带的那几个数是 agentred 就着自己扇出的事件流量的,比浏览器
+        // 这边隔着一条中继数出来的准,接下来画的是它们。
+        liveTurn.endTurn();
         turn.setPendingAssistant(false);
         setEvents((prev) => [...prev, doneEventFrame(sid, frame)]);
         // 「已排进这一轮」是对**那一轮**的说明:轮次结束后它已经过期(要么被消费、
@@ -378,6 +405,8 @@ export default function SessionDetailView({
       onAutonomousTurnStarted: () => {
         turn.markTurnActive(true);
         turn.setPendingAssistant(true);
+        // 这一轮是后台任务替用户开起来的,起点就是此刻 —— 与自己发送开轮同一档。
+        liveTurn.beginTurn(Date.now());
         decisions.requestWaitersRefresh();
       },
     });
@@ -502,6 +531,8 @@ export default function SessionDetailView({
    * 补齐在中继上无限重跑，转录永远停在「正在从这台机器读取这条对话…」。
    */
   const { markTurnActive } = turn;
+  // 同上：装载那一遍只用得上这一只，它同样是稳定的。
+  const { noteAttachedTurn } = liveTurn;
 
   // 已连接 → 取会话摘要 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
   useAliveEffect(
@@ -601,7 +632,11 @@ export default function SessionDetailView({
             // runResultDone 也经 onRunResultDone 回放一遍，落在前面会被上一轮的终态
             // 清成 false。（镜像那一段不参与这件事：回放教不了「此刻在不在跑」，
             // 它只往转录里补一条轮次结束的标记。）
-            markTurnActive(s?.lifecycleState === SessionLifecycleRunning);
+            const running = s?.lifecycleState === SessionLifecycleRunning;
+            markTurnActive(running);
+            // 计时同理排在补齐之后:草稿页刚派发过来的那一条要在这里开表,落在前面
+            // 会被回放的终态帧收掉。
+            noteAttachedTurn(running);
             setReady(true);
             // 待决策刷新交给下面的「connected && ready」effect，避免重复拉取。
           }
@@ -629,6 +664,7 @@ export default function SessionDetailView({
       initialRow,
       onMarkedRead,
       markTurnActive,
+      noteAttachedTurn,
     ],
   );
 
@@ -795,6 +831,8 @@ export default function SessionDetailView({
     effectiveTarget,
     effectivePermissionMode,
     setPinnedAgentredUnavailable,
+    // 自己开的这一轮，起点就是此刻 —— 那条 meta 的耗时从这里开始走。
+    onOwnTurnStarted: () => liveTurn.beginTurn(Date.now()),
   });
 
   if (deviceError) {
@@ -1006,6 +1044,7 @@ export default function SessionDetailView({
       agentAvatar={rowAvatar}
       agentPending={agentPending}
       fallbackModel={fallbackModel}
+      liveTurnTiming={liveTurn.timing}
       streaming={turn.turnActive}
       pendingAssistant={pendingAssistant}
       decisions={decisions}

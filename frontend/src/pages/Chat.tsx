@@ -197,6 +197,11 @@ export default function Chat() {
     row?: MirroredSession;
     /** 刚从草稿页发起、而模型没能钉住时要说的那一句（见 initialModelNote）。 */
     modelNote?: string;
+    /**
+     * 刚从草稿页发起时，那一轮是什么时候派发出去的（见 initialTurnStartedAt）。
+     * 点左栏一行进来时留空 —— 那时这一轮什么时候开的谁都不知道。
+     */
+    turnStartedAt?: number;
   } | null>(null);
   // 「最近用过」只在打开这一路时读一次：读它是为了排个序，不值得每次渲染都碰
   // 一次 localStorage。
@@ -282,9 +287,13 @@ export default function Chat() {
       const modelNote = modelPinned
         ? undefined
         : t("session.composerControls.modelNotPinnedOnStart");
+      // 这一轮**刚刚**由这一屏派发出去。详情页装载时 attach 只看得到「对端已经在
+      // 跑」，而那种轮次它一律不计时（什么时候开的它不知道）——交出去，第一轮的耗时
+      // 才不必等它跑完才出数。
+      const turnStartedAt = Date.now();
       if (isMobile) {
         nav(`/devices/${deviceId}/sessions/${conversationId}`, {
-          state: { title, ...(modelNote ? { modelNote } : {}) },
+          state: { title, turnStartedAt, ...(modelNote ? { modelNote } : {}) },
         });
         return;
       }
@@ -294,6 +303,7 @@ export default function Chat() {
         peerFingerprint,
         title,
         modelNote,
+        turnStartedAt,
       });
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
       // 却列不出来，看上去就像它没进账号。重取一次让它落成一行。
@@ -857,6 +867,7 @@ export default function Chat() {
                   initialTitle={selected.title}
                   initialRow={selected.row}
                   initialModelNote={selected.modelNote}
+                  initialTurnStartedAt={selected.turnStartedAt}
                   headerRight={pageChrome}
                   onMarkedRead={onMarkedRead}
                 />

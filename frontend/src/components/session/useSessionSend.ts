@@ -121,6 +121,14 @@ export interface SessionSendParams {
   effectivePermissionMode: string;
   /** 「钉住的 agentred 不可用」是会话级状态，归详情视图；这里只在发送时翻它。 */
   setPinnedAgentredUnavailable: Dispatch<SetStateAction<boolean>>;
+  /**
+   * 这一次发送**开了新的一轮**（不是插话进正在跑的那一轮）。
+   *
+   * 只有这一处知道选路的结果，而「一轮的起点观察得到」正是那条 meta 敢不敢自己
+   * 计时的判据（见 useLiveTurnTiming）。与 `setPendingAssistant(true)` 同进同退：
+   * 那一行说的也是同一件事——这一轮刚由这个浏览器开起来。
+   */
+  onOwnTurnStarted?: () => void;
 }
 
 /** 详情视图从这一族拿到的东西。 */
@@ -178,6 +186,7 @@ export function useSessionSend({
   effectiveTarget,
   effectivePermissionMode,
   setPinnedAgentredUnavailable,
+  onOwnTurnStarted,
 }: SessionSendParams): SessionSend {
   const {
     turnActiveRef,
@@ -287,7 +296,10 @@ export function useSessionSend({
     try {
       await (running ? steerTurn(c, body) : startTurn(c, message));
       markTurnActive(true);
-      if (!running) setPendingAssistant(true);
+      if (!running) {
+        setPendingAssistant(true);
+        onOwnTurnStarted?.();
+      }
       return running;
     } catch (err) {
       // 只有对端真的收到并拒绝了，才值得换一条路重试。请求没走到对端（传输失败）
@@ -296,7 +308,10 @@ export function useSessionSend({
       try {
         await (running ? startTurn(c, message) : steerTurn(c, body));
         markTurnActive(true);
-        if (running) setPendingAssistant(true);
+        if (running) {
+          setPendingAssistant(true);
+          onOwnTurnStarted?.();
+        }
         return !running;
       } catch {
         // 两条路都被拒 = 不是竞态。交出**第一条**（按选路本该走的那条）的说明：

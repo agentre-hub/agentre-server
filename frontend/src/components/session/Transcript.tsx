@@ -10,6 +10,7 @@ import {
   TranscriptRenderContext,
   TranscriptRowView,
   TranscriptUIStateProvider,
+  type LiveTurnInput,
   type TranscriptMessage,
   type TranscriptRow,
   type TranscriptPorts,
@@ -20,6 +21,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import type { LiveTurnTiming } from "@/components/session/liveTurnTiming";
 import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
 
 /**
@@ -59,6 +61,7 @@ export default function Transcript({
   agentAvatar,
   agentPending = false,
   fallbackModel = "",
+  liveTurnTiming = null,
   streaming = false,
   pendingAssistant = false,
   reconnecting = false,
@@ -106,6 +109,17 @@ export default function Transcript({
    * 与桌面端 `chat.tsx` 交给行渲染器的是同一样东西。
    */
   fallbackModel?: string;
+  /**
+   * 还在跑的这一轮的计时（宿主从帧流上攒的，见 `useLiveTurnTiming`）。
+   *
+   * 给了它，包里那条 meta 才会开表：耗时自己走、首帧没回来时说「已经等了多久」、
+   * tok/s 现算。不给（历史转录、以及接进来时对端已经在跑的那种轮次）就只画终态帧
+   * 上的那几个数 —— 那正是此前的样子：一轮跑完才出数。
+   *
+   * 只是计时那一半。token 列从消息自己身上取（`usage` 帧逐跳喂进来的那一列），
+   * 正在长的正文取 `liveTail`：两样这里都有，不必让宿主再送一遍。
+   */
+  liveTurnTiming?: LiveTurnTiming | null;
   /**
    * 这条会话此刻有没有一轮在跑。为 true 时最后一条助手消息末尾出三点。
    *
@@ -251,6 +265,34 @@ export default function Transcript({
     };
   }, [displayMessages, liveMessageId]);
 
+  /**
+   * 交给包的那份「这一轮此刻是什么样」。
+   *
+   * 计时由宿主攒（帧流是它的），token 列与正在长的正文从这条消息自己身上取 ——
+   * 前者是 `usage` 帧逐跳喂进来的那一列，后者就是上面摘下来的尾巴，两样这里都有，
+   * 不必让宿主再送一遍。
+   *
+   * `model` 刻意留空：一轮跑完之前 wire 上根本没有这个字段，包会自己退到行渲染器的
+   * `fallbackModel`（桌面端交出去的也是空串，同一条路）。
+   */
+  const liveTurn = useMemo<LiveTurnInput | null>(() => {
+    if (!liveTurnTiming || liveMessageId == null) return null;
+    const target = displayMessages.find(
+      (message) => message.id === liveMessageId,
+    );
+    if (!target) return null;
+    return {
+      ...liveTurnTiming,
+      promptTokens: target.promptTokens,
+      completionTokens: target.completionTokens,
+      cachedTokens: target.cachedTokens,
+      cacheCreationTokens: target.cacheCreationTokens,
+      reasoningTokens: target.reasoningTokens,
+      model: "",
+      liveText: liveByMessageId.get(liveMessageId)?.liveTail ?? "",
+    };
+  }, [displayMessages, liveByMessageId, liveMessageId, liveTurnTiming]);
+
   const settled = useMemo(
     () =>
       buildSettledTranscriptRows({
@@ -392,6 +434,13 @@ export default function Transcript({
                     liveTail={liveTailOf(liveByMessageId, row)}
                     liveBlocks={undefined}
                     liveRetry={null}
+                    // 同上：只有正在跑的那条消息的**末行**画 meta，其余行收敛到
+                    // 稳定空值。
+                    liveTurn={
+                      row.isLastOfMessage && row.messageId === liveMessageId
+                        ? liveTurn
+                        : null
+                    }
                     showIndicator={
                       row.isLastOfMessage &&
                       streaming &&

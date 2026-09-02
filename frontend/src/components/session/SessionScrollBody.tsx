@@ -22,6 +22,7 @@ import {
   selectPanelWaiters,
   type SessionDecisionPorts,
 } from "@/components/session/useSessionDecisionPorts";
+import type { LiveTurnTiming } from "@/components/session/liveTurnTiming";
 import type { SessionSend } from "@/components/session/useSessionSend";
 import type { EarlierState } from "@/components/session/useTranscriptScrollback";
 import type { SessionViewStatus } from "@/lib/sessionView";
@@ -60,6 +61,8 @@ export interface SessionScrollBodyProps {
   agentPending: boolean;
   /** 还没收到终态帧的那一轮，模型退到这一个（见 Transcript 的同名 prop）。 */
   fallbackModel: string;
+  /** 还在跑的这一轮的计时。同上，见 Transcript 的同名 prop。 */
+  liveTurnTiming: LiveTurnTiming | null;
   streaming: boolean;
   pendingAssistant: boolean;
 
@@ -96,6 +99,7 @@ export default function SessionScrollBody({
   agentAvatar,
   agentPending,
   fallbackModel,
+  liveTurnTiming,
   streaming,
   pendingAssistant,
   decisions,
@@ -242,6 +246,7 @@ export default function SessionScrollBody({
               agentAvatar={agentAvatar}
               agentPending={agentPending}
               fallbackModel={fallbackModel}
+              liveTurnTiming={liveTurnTiming}
               streaming={streaming}
               pendingAssistant={pendingAssistant}
               // 通道断了就先说通道：此刻「还在不在生成」根本观察不到，继续转三个点
