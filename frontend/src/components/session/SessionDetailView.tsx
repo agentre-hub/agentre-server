@@ -17,6 +17,7 @@ import {
   createTranscriptProjector,
   iconNode,
   indicatorHostMessageId,
+  normalizePermissionMode,
   opensAssistantMessage,
   reduceSessionState,
   resolveProviderPillState,
@@ -856,12 +857,26 @@ export default function SessionDetailView({
   const engineBackend = engineBackends.find(
     (backend) => backend.sync_id === backendSyncID,
   );
-  const effectivePermissionMode =
-    permissionMode ||
-    sessionRuntime.permissionMode ||
-    engineBackend?.default_permission_mode ||
-    permissionModeMeta?.defaultMode ||
-    "";
+  /**
+   * 起手值的归一化用共享包那一份（与草稿页、与桌面端 usePermissionMode 同一个
+   * 实现）：用户这次选的 → 执行端报过的当前档 → 账号侧那一档的预设 → 执行端报的
+   * 默认档，且账号侧那一档必须在这台机器报的集合里才算数。
+   *
+   * 那道集合校验不是装饰：`engineBackend` 是 Agent **当前执行目标**上的那一行，
+   * 而这条对话跑在它当初派发到的那一档上，两者的后端种类可以不同（claudecode 四档
+   * / codex 两档）。不校验的话，一条 codex 对话会顶着一颗 claudecode 才有的
+   * Bypass，而这一档每一轮都随 runtime.run 过线（useSessionSend），执行端
+   * ApplyRequested 会拿 ChatPermissionModeInvalid 把这一轮直接顶回来。
+   */
+  const rawPermissionMode = permissionMode || sessionRuntime.permissionMode;
+  const effectivePermissionMode = permissionModeMeta
+    ? normalizePermissionMode(
+        rawPermissionMode,
+        permissionModeMeta.allowedModes,
+        permissionModeMeta.defaultMode,
+        engineBackend?.default_permission_mode,
+      )
+    : rawPermissionMode;
 
   /**
    * 切档：先乐观反映，再设到执行端；失败回滚到上一次成功的那一档并如实说明。
@@ -1215,7 +1230,9 @@ export default function SessionDetailView({
     <SessionScrollBody
       sid={sid}
       scrollRef={scrollRef}
+      contentRef={scrollback.contentRef}
       onScroll={scrollback.onScroll}
+      onUserScroll={scrollback.noteUserScroll}
       getScrollElement={scrollback.getScrollElement}
       atBottom={scrollback.atBottom}
       bottomVisibleId={scrollback.bottomVisibleId}

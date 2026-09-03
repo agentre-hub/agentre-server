@@ -31,7 +31,14 @@ export interface SessionScrollBodyProps {
   sid: string;
   /** 这条滚动带本身。滚动位置、前插补偿与续读触发都由 useTranscriptScrollback 量。 */
   scrollRef: RefObject<HTMLDivElement | null>;
+  /** 滚动带里面那一层内容。跟随期间它一长高就得跟着钉底，见 useTranscriptScrollback。 */
+  contentRef: (node: HTMLDivElement | null) => void;
   onScroll: () => void;
+  /**
+   * 用户对这条带子动手了。滚动事件本身说不出这个：虚拟器复测行高时自己就会把位置
+   * 往回挪，和上滚在位置上同形（见 useTranscriptScrollback 的 userIntentUntilRef）。
+   */
+  onUserScroll: () => void;
   getScrollElement: () => HTMLDivElement | null;
   atBottom: boolean;
   /** 视口下沿那条消息；「下面还有 N 轮」从它之后数起。 */
@@ -78,7 +85,9 @@ export interface SessionScrollBodyProps {
  */
 export default function SessionScrollBody({
   scrollRef,
+  contentRef,
   onScroll,
+  onUserScroll,
   getScrollElement,
   atBottom,
   bottomVisibleId,
@@ -176,12 +185,20 @@ export default function SessionScrollBody({
     <div
       ref={scrollRef}
       onScroll={onScroll}
+      // 这四件事就是「他动的手」的全部证人：滚轮、触摸、按键，以及摁在滚动条上拖。
+      onWheel={onUserScroll}
+      onTouchMove={onUserScroll}
+      onKeyDown={onUserScroll}
+      onPointerDown={onUserScroll}
       data-testid="session-detail-scroll"
       // 「下面还会变」由这一条说，读屏据此不必把半截内容当成全部（决策 17）。
       aria-busy={awaitingTranscript || undefined}
       className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-2"
     >
-      <div className="mx-auto flex w-full max-w-measure flex-col gap-4">
+      <div
+        ref={contentRef}
+        className="mx-auto flex w-full max-w-measure flex-col gap-4"
+      >
         <SessionStatusBanner
           status={status}
           machineName={machineName}

@@ -9,7 +9,10 @@ import {
   type SetStateAction,
 } from "react";
 
-import { computeBottomVisibleMessageId } from "@agentre-hub/agentre-ui";
+import {
+  computeBottomVisibleMessageId,
+  nextAutoFollow,
+} from "@agentre-hub/agentre-ui";
 import { loadMirrorTail } from "@/components/session/sessionMirror";
 import {
   toTranscriptFrame,
@@ -33,6 +36,14 @@ const TOPUP_CAP = 5;
 
 /** 判「在底部」的容差：像素级的小数差不该让自动跟随失效。 */
 const AT_BOTTOM_SLACK = 24;
+
+/**
+ * 一次用户输入之后，多久之内的滚动仍算他的手笔。
+ *
+ * 滚轮的惯性、拖住滚动条不放、一路按着方向键，都是一串滚动事件配零星几个输入事件；
+ * 而每一次算数的滚动又会把这个窗口续上，所以只要够盖住两次事件之间的间隔即可。
+ */
+const USER_INTENT_MS = 400;
 
 /**
  * 续读的触发点：距顶还有这么多屏时就去取下一页。
@@ -78,9 +89,16 @@ export interface TranscriptScrollbackParams {
 export interface TranscriptScrollback {
   /** 挂到那条滚动带上。 */
   scrollRef: RefObject<HTMLDivElement | null>;
+  /**
+   * 挂到滚动带**里面**那一层内容上。跟随期间它一长高就跟着钉底 —— 行虚拟化的
+   * 复测不经过本视图的提交，只有量它才知道。
+   */
+  contentRef: (node: HTMLDivElement | null) => void;
   /** 交给转录做行虚拟化的滚动容器（取值函数，稳定引用）。 */
   getScrollElement: () => HTMLDivElement | null;
   onScroll: () => void;
+  /** 用户对这条滚动带动手了。滚轮 / 触摸 / 按键 / 摁下都接到它。 */
+  noteUserScroll: () => void;
   /** 「回到底部」那枚药丸按下去做的事。 */
   jumpToBottom: () => void;
   /** 用户自己发了一条消息：重新跟住底部。 */
@@ -140,10 +158,32 @@ export function useTranscriptScrollback({
    */
   const getScrollElement = useCallback(() => scrollRef.current, []);
   /**
-   * 下一次布局要不要钉到底。初值 true = 首屏进去停在最后一条；此后由滚动事件按
-   * 「用户此刻在不在底部」维护：正在往回读的人不该被新消息拽走。
+   * 下一次布局要不要钉到底 —— 记的是**跟随意图**，不是「此刻在不在底部」。
+   *
+   * 初值 true = 首屏进去停在最后一条；此后只有用户主动上滚才解除，滚回底部再置回
+   * （共享包的 nextAutoFollow，桌面端同一份）。位置式的判据在这里是错的：钉底写完
+   * scrollTop 之后，那一次程序化滚动自己的 scroll 事件要等到帧末才送到，而行虚拟化
+   * 早已在这中间把估算行高换成实测行高——事件送到时位置已经落后好几百像素，按位置
+   * 判就成了「用户离开了底部」，跟随从此永久关掉（联调机上停在离底 717px）。
    */
   const pinRef = useRef(true);
+  /**
+   * 上一次观察到的 scrollTop。用来分辨「用户上滚（变小）」与「内容长高 / 程序化
+   * 贴底（不变或变大）」——只有前者算离开的意图。
+   *
+   * 程序化的每一次写也要更新它：浏览器里那一次写会发出 scroll 事件、事件里就把它
+   * 记上了，而 jsdom 不发；两边都写就都是同一条时间线。
+   */
+  const lastTopRef = useRef(0);
+  /**
+   * 用户的手到什么时候为止还算在场（见 USER_INTENT_MS）。
+   *
+   * 光看位置往回走是不够的：行虚拟化复测出视口上方那些行的真高之后，会调自己的
+   * scrollToFn 把 scrollTop 往回补（联调机上实测 1065 → 879），好让人正在看的那一行
+   * 不漂 —— 那一下和「用户上滚」在位置上完全同形。所以解除跟随要问的是「这一下是不是
+   * 他动的手」，由滚轮 / 触摸 / 按键 / 摁下这几件事作证。
+   */
+  const userIntentUntilRef = useRef(0);
   /**
    * `pinRef` 的可渲染镜像。输入带的上边界要跟着「在不在底部」变（规格 2026-08-23
    * 决策 6），而 ref 改了不重渲染 —— 布局仍然只读 `pinRef`（同步、不掉帧），
@@ -270,7 +310,38 @@ export function useTranscriptScrollback({
     if (!el || !pinRef.current) return;
     restoreRef.current = null;
     el.scrollTop = el.scrollHeight;
+    lastTopRef.current = el.scrollTop;
   });
+
+  /**
+   * 跟随期间盯住内容本身的高度。
+   *
+   * 上面那条只在**本视图提交**时才跑，而转录长高的路有一整条不经过它：行虚拟化先
+   * 按估算行高占位、随后逐行复测，那次重渲染发生在 Transcript 里，本视图一次都不
+   * 提交。首屏尤其明显——钉底钉的是估算高度的底，复测把内容又撑高几百像素，人就
+   * 停在离底几百像素的地方（联调机上实测 911px，另一次却是 0：全看这一帧的时序）。
+   * 图片、表格、字体这些异步长高的东西同样不产生提交。
+   *
+   * 所以改看高度：内容一变高就跟上去。回调在布局之后、绘制之前跑，写 scrollTop
+   * 不会多闪一帧；写完不改变任何盒子的尺寸，不会把观察器自己转起来。
+   */
+  const contentObserverRef = useRef<ResizeObserver | null>(null);
+  const contentRef = useCallback((node: HTMLDivElement | null) => {
+    contentObserverRef.current?.disconnect();
+    contentObserverRef.current = null;
+    if (!node) return;
+    const observer = new ResizeObserver(() => {
+      const el = scrollRef.current;
+      if (!el || !pinRef.current) return;
+      // 量不出视口就什么都不做：那是「不知道」，不是「内容为零」——此刻把
+      // scrollTop 推到一个 0 高度的底，等它显示出来就停在顶上了。
+      if (el.clientHeight === 0) return;
+      el.scrollTop = el.scrollHeight;
+      lastTopRef.current = el.scrollTop;
+    });
+    observer.observe(node);
+    contentObserverRef.current = observer;
+  }, []);
 
   /**
    * 前插补偿：用户已经往上滚开时，前插了多少高度就往下挪多少，他看的那一行不动。
@@ -287,6 +358,7 @@ export function useTranscriptScrollback({
     if (!restore) return;
     restoreRef.current = null;
     el.scrollTop = restore.top + (el.scrollHeight - restore.height);
+    lastTopRef.current = el.scrollTop;
   }, [events]);
 
   /**
@@ -327,6 +399,7 @@ export function useTranscriptScrollback({
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
+    lastTopRef.current = el.scrollTop;
     pinRef.current = true;
     setAtBottom(true);
   }, []);
@@ -348,12 +421,36 @@ export function useTranscriptScrollback({
     setBottomVisibleId(null);
   }, []);
 
+  /**
+   * 用户对这条滚动带动手了（滚轮 / 触摸 / 按键 / 摁下滚动条）。
+   *
+   * 记的是**时刻**而不是「这一下滚了多少」：浏览器把输入与它引起的滚动分成两拨事件
+   * 送来，中间还夹着惯性，位置的变化只能在随后的 scroll 里读到。
+   */
+  const noteUserScroll = useCallback(() => {
+    userIntentUntilRef.current = performance.now() + USER_INTENT_MS;
+  }, []);
+
   /** 滚动：维护「在不在底部」，并在距顶两屏以内时预取下一页。 */
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const pinned =
-      el.scrollHeight - el.scrollTop - el.clientHeight <= AT_BOTTOM_SLACK;
+    const top = el.scrollTop;
+    const prevTop = lastTopRef.current;
+    lastTopRef.current = top;
+    const now = performance.now();
+    const byUser = now <= userIntentUntilRef.current;
+    // 用户在场时，这一串滚动（惯性、拖着滚动条）整段都算他的。
+    if (byUser) userIntentUntilRef.current = now + USER_INTENT_MS;
+    // 位置只是入参之一：解除跟随还要求这一下是**用户往回滚**。内容长高把底部推远
+    // （行虚拟化复测、图片、表格）同样会让位置落在容差外，那不是他的意思；虚拟器
+    // 复测时自己往回补的那一下更是连方向都和上滚一样 —— 不是他动的手，就当没往回走。
+    const pinned = nextAutoFollow({
+      prev: pinRef.current,
+      prevScrollTop: byUser ? prevTop : top,
+      scrollTop: top,
+      atBottom: el.scrollHeight - top - el.clientHeight <= AT_BOTTOM_SLACK,
+    });
     pinRef.current = pinned;
     setAtBottom((prev) => (prev === pinned ? prev : pinned));
     // 边界只随用户滚动而变；轮数则挂在 messages 上，人停在原地不动、对端又连出
@@ -375,6 +472,7 @@ export function useTranscriptScrollback({
    */
   const reset = useCallback(() => {
     setAtBottom(true);
+    lastTopRef.current = 0;
     setEarlier({
       source: "none",
       oldestSeq: 0,
@@ -418,8 +516,10 @@ export function useTranscriptScrollback({
 
   return {
     scrollRef,
+    contentRef,
     getScrollElement,
     onScroll,
+    noteUserScroll,
     jumpToBottom,
     pinToBottom,
     atBottom,

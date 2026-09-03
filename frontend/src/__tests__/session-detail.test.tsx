@@ -650,6 +650,69 @@ describe("会话详情页", () => {
     expect(screen.getAllByRole("option")).toHaveLength(2);
   });
 
+  /**
+   * 账号侧那一档是**当前执行目标**上的预设，而这条对话跑在它当初派发到的那一档
+   * 上——两者的后端种类可以不同（claudecode 四档 / codex 两档）。所以拿它当起手值
+   * 之前必须先问「这台机器认不认」：不认就退回执行端报的默认档。
+   *
+   * 不校验的话，一条 codex 对话会在头上顶一颗红色的 Bypass（codex 根本没有这一
+   * 档），而且这一档**每一轮都随 runtime.run 过线**（useSessionSend），执行端
+   * ApplyRequested 会拿 ChatPermissionModeInvalid 把这一轮直接顶回来。
+   */
+  it("账号侧那一档不在这台机器的集合里时，退回执行端的默认档", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            {
+              sync_id: "ag-1",
+              name: "Claude",
+              exec_targets: [{ backend_sync_id: "backend-1", current: true }],
+            },
+          ],
+        };
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            {
+              sync_id: "backend-1",
+              provider_key: "anthropic",
+              model_key: "sonnet",
+              // 当前执行目标是 claudecode，管理员在它上面配了 bypass。
+              default_permission_mode: "bypassPermissions",
+            },
+          ],
+        };
+      if (path === "/v1/engine/providers") return { providers: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      // 这条对话本人跑在 codex 上：两档，没有 bypass。
+      if (method === rpcMethods.runtimeCapabilities)
+        return {
+          capabilities: [],
+          permissionMode: {
+            allowedModes: ["default", "plan"],
+            defaultMode: "default",
+            order: ["default", "plan"],
+            switchableDuringTurn: false,
+          },
+        };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    // 输入框那一 chunk 是 lazy 的，pill 在它里面：先等它到位，再看脸上写的是哪一档。
+    await awaitComposer();
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    await vi.waitFor(() => expect(pill.textContent).toContain("Default"));
+    expect(pill.textContent).not.toContain("Bypass");
+  });
+
   it("这台机器答不出档位时直接说明问不到，不显示 unknown 档位", async () => {
     mockCapabilities(new Error("machine says no"));
 
@@ -4117,6 +4180,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
 
     // 滚到距顶两屏以内（clientHeight=500 → 阈值 1000）。
     const el = scroller();
+    fireEvent.wheel(el, { deltaY: -600 });
     el.scrollTop = 900;
     fireEvent.scroll(el);
 
@@ -4139,6 +4203,8 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     const el = scroller();
     await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
 
+    // 他自己往回翻 —— 转轮子这一下就是「离开底部」的证人（见 noteUserScroll）。
+    fireEvent.wheel(el, { deltaY: -600 });
     el.scrollTop = 900;
     fireEvent.scroll(el);
     // 前插使内容长高 1200；补偿之后用户看的那一行应该还在原处。
@@ -4204,6 +4270,161 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     await vi.waitFor(() => expect(asked.length).toBe(before + 1), {
       timeout: 5000,
     });
+  });
+
+  /**
+   * 迟到的 scroll 事件（2026-09-03）。
+   *
+   * 联调机上实测：点进一条长对话，转录停在离底 717px 的地方，药丸当场浮出来写着
+   * 「下面还有 2 轮」。时间线是——钉底把 scrollTop 推到当时的底（h=1281），46ms 后
+   * 那一次**程序化滚动自己的 scroll 事件**才送到，而此刻行虚拟化已经把估算高度换成
+   * 实测高度（h=1391）。位置式的判据据此认定「用户离开了底部」，从此再也不跟随。
+   *
+   * 跟随是**意图**不是位置：只有用户主动上滚才该解除它，内容长高把底部推远不算。
+   * 桌面端把这条记在共享包的 nextAutoFollow 上（同一个回归 bug），这一端接同一份。
+   */
+  it("钉底之后内容才长高：迟到的 scroll 事件不解除跟随", async () => {
+    serveMirror([tailPage([{ seq: 99, text: "最后一句" }], false)]);
+    renderPage();
+    await screen.findByText(/最后一句/);
+    const el = scroller();
+    await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+
+    // 行虚拟化复测出真实行高，内容长高 600 —— 这条路不经过本视图的一次提交。
+    geo.scrollHeight = 2600;
+    // 我们自己那一次钉底的 scroll 事件此刻才送到：位置已经落后 100px。
+    act(() => {
+      fireEvent.scroll(el);
+    });
+
+    expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
+
+    // 还在跟随：下一帧到达时照样咬住底部。
+    act(() => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "再来一句" },
+        seq: 100,
+      });
+    });
+    await screen.findByText(/再来一句/);
+    await vi.waitFor(() => expect(el.scrollTop).toBe(2600));
+  });
+
+  /**
+   * 复测长高之后没人再钉底（2026-09-03）。
+   *
+   * 上面那条只修好了「跟随意图别被误解除」，落地位置还差一半：钉底写完 scrollTop
+   * 之后，行虚拟化才把估算行高换成实测行高，内容又长高几百像素——而这次重渲染发生在
+   * **转录**里，本视图根本不提交，那条「每次提交都钉一遍」的 layout effect 一次都不
+   * 跑。联调机上实测同一条对话有时停在离底 911px（同一份代码，另一次却是 0：谁先谁后
+   * 全看这一帧的时序）。
+   *
+   * 所以跟随期间还要盯着内容的高度本身：它一长高就跟上去。
+   */
+  it("跟随期间内容被复测撑高：不等下一次提交就跟上去", async () => {
+    const realRO = globalThis.ResizeObserver;
+    const observers: { cb: ResizeObserverCallback; targets: Element[] }[] = [];
+    class SpyResizeObserver implements ResizeObserver {
+      private entry: { cb: ResizeObserverCallback; targets: Element[] };
+      constructor(cb: ResizeObserverCallback) {
+        this.entry = { cb, targets: [] };
+        observers.push(this.entry);
+      }
+      observe(target: Element): void {
+        this.entry.targets.push(target);
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.entry.targets.length = 0;
+      }
+    }
+    globalThis.ResizeObserver = SpyResizeObserver;
+    try {
+      serveMirror([tailPage([{ seq: 99, text: "最后一句" }], false)]);
+      renderPage();
+      await screen.findByText(/最后一句/);
+      const el = scroller();
+      await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+
+      // 行虚拟化复测出真实行高，内容长高 600。没有任何一次本视图的提交。
+      geo.scrollHeight = 2600;
+      const content = screen.getByTestId(
+        "session-detail-transcript",
+      ).parentElement!;
+      act(() => {
+        for (const o of observers) {
+          if (o.targets.some((t) => t.contains(content))) {
+            o.cb([], {} as ResizeObserver);
+          }
+        }
+      });
+
+      expect(el.scrollTop).toBe(2600);
+    } finally {
+      globalThis.ResizeObserver = realRO;
+    }
+  });
+
+  /**
+   * 虚拟器自己把位置往回挪（2026-09-03）。
+   *
+   * 联调机上抓到的第二个动手的人：行虚拟化复测出「视口上方那些行」的真实高度后，
+   * 会调自己的 scrollToFn 把 scrollTop 往回补（实测 1065 → 879，同一帧内容从 1777
+   * 长到 2175），好让用户正在看的那一行不跟着漂。这一下与「用户上滚」在位置上完全
+   * 同形，按方向判就又把跟随关掉了 —— 于是首屏停在离底 911px。
+   *
+   * 所以解除跟随的前提不止「位置往回走」，还得**这一下确实是用户的手**。
+   */
+  it("虚拟器复测时自己把位置往回挪：不算用户上滚", async () => {
+    const realRO = globalThis.ResizeObserver;
+    const observers: { cb: ResizeObserverCallback; targets: Element[] }[] = [];
+    class SpyResizeObserver implements ResizeObserver {
+      private entry: { cb: ResizeObserverCallback; targets: Element[] };
+      constructor(cb: ResizeObserverCallback) {
+        this.entry = { cb, targets: [] };
+        observers.push(this.entry);
+      }
+      observe(target: Element): void {
+        this.entry.targets.push(target);
+      }
+      unobserve(): void {}
+      disconnect(): void {
+        this.entry.targets.length = 0;
+      }
+    }
+    globalThis.ResizeObserver = SpyResizeObserver;
+    try {
+      serveMirror([tailPage([{ seq: 99, text: "最后一句" }], false)]);
+      renderPage();
+      await screen.findByText(/最后一句/);
+      const el = scroller();
+      await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+
+      // 虚拟器复测上方那些行，自己 scrollTo 把位置往回补，同时内容长高。
+      geo.scrollHeight = 2600;
+      act(() => {
+        el.scrollTop = 1400;
+        fireEvent.scroll(el);
+      });
+
+      expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
+
+      // 还在跟随：内容再长高就跟上去。
+      const content = screen.getByTestId(
+        "session-detail-transcript",
+      ).parentElement!;
+      act(() => {
+        for (const o of observers) {
+          if (o.targets.some((t) => t.contains(content))) {
+            o.cb([], {} as ResizeObserver);
+          }
+        }
+      });
+      expect(el.scrollTop).toBe(2600);
+    } finally {
+      globalThis.ResizeObserver = realRO;
+    }
   });
 
   it("没有更早的了：既不续读也不出按钮", async () => {
@@ -5129,6 +5350,7 @@ describe("会话详情：与桌面端对齐的外壳", () => {
       get: () => 4_000,
     });
     act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
       scroll.scrollTop = 1_000;
       fireEvent.scroll(scroll);
     });
@@ -5224,6 +5446,7 @@ describe("会话详情：回到底部", () => {
     await screen.findByText("很长的一段转录");
     const scroll = scrollerWithHeights();
     act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
       scroll.scrollTop = 1_000;
       fireEvent.scroll(scroll);
     });
@@ -5290,6 +5513,7 @@ describe("会话详情：回到底部", () => {
     // 下沿落在第 2 行之后 —— 那是第一轮的助手回复，它之后还开了第二、第三两轮。
     expect(layoutRows(scroll, 2)).toBe(6);
     act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
       scroll.scrollTop = 1_000;
       fireEvent.scroll(scroll);
     });
@@ -5314,6 +5538,7 @@ describe("会话详情：回到底部", () => {
     // 下沿落在第 5 行之后 —— 第三轮的用户消息，其后只有本轮的助手回复。
     layoutRows(scroll, 5);
     act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
       scroll.scrollTop = 1_000;
       fireEvent.scroll(scroll);
     });
@@ -5403,6 +5628,7 @@ describe("会话详情：发出去之后回到底部", () => {
     await screen.findByText("很长的一段转录");
     const scroll = scrollerWithHeights();
     act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
       scroll.scrollTop = 1_000;
       fireEvent.scroll(scroll);
     });
