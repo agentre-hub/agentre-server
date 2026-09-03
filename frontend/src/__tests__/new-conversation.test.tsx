@@ -1181,7 +1181,9 @@ describe("草稿页的权限档位与模型控件", () => {
           sync_id: "b-a",
           provider_key: "pk-1",
           model_key: "mk-1",
-          default_permission_mode: "default",
+          // 空 = 管理员没在 Agent 后端上预设档位。这一格非空的用例各自就地覆盖，
+          // 免得「账号侧压过执行端」那条口径悄悄渗进本来无关的几条里。
+          default_permission_mode: "",
         },
       ],
     },
@@ -1301,9 +1303,92 @@ describe("草稿页的权限档位与模型控件", () => {
     await awaitDraftComposer();
 
     const pill = await screen.findByRole("button", { name: /Permission mode/ });
-    // 起手值取执行端自己报的 DefaultMode，不是本站写死的第一档。
+    // 账号侧没有预设（engineReads 里那一格是空串），此时起手值取执行端自己报的
+    // DefaultMode，不是本站写死的第一档。
     expect(pill.textContent).toContain("Accept Edits");
     expect(screen.getByTestId("composer-model-target")).toBeTruthy();
+  });
+
+  /**
+   * 账号侧那一档必须压过执行端报的 DefaultMode。
+   *
+   * claudecode 的 DefaultMode 是 runtime 能力矩阵里写死的常量 "acceptEdits"
+   * （agentre `runtimes/claudecode/runtime.go`），不是「这台机器的偏好」；把它排在
+   * 管理员预设前面，等于让 Agent 上配的 bypass 永远够不着。而且这一档会**显式**
+   * 随第一句过线，执行端 `CreatePermissionMode` 收到非空值就直接采信，连它自己那
+   * 条 backend 兜底也一并跳过——所以这不只是显示错，会话是真的按错的档起手的。
+   *
+   * 顺序与桌面端 `normalizePermissionMode(raw, allowed, defaultMode, backendDefault)`
+   * 同一份实现，也与本站会话详情页同一条口径。
+   */
+  it("Given Agent 后端预设了 bypass, When 打开草稿, Then 起手值是账号侧那一档并随第一句过线", async () => {
+    stubReads({
+      ...engineReads,
+      "/v1/engine/backends": {
+        backends: [
+          {
+            sync_id: "b-a",
+            provider_key: "pk-1",
+            model_key: "mk-1",
+            default_permission_mode: "bypassPermissions",
+          },
+        ],
+      },
+    });
+    stubMachine(fourModes);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    expect(pill.textContent).toContain("Bypass");
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(mockDispatch.mock.calls[0][0].permissionMode).toBe(
+      "bypassPermissions",
+    );
+  });
+
+  /**
+   * 归一化的另一半：账号侧那一档如果不在这台机器报的集合里（换了执行目标、或后端
+   * 换了种类），它就不算数，退回执行端的默认档，而不是把一个这台机器不认的字面量
+   * 摆上去、再随第一句发出去让执行端报非法。
+   */
+  it("Given 账号侧那一档不在这台机器的集合里, When 打开草稿, Then 退回执行端的默认档", async () => {
+    stubReads({
+      ...engineReads,
+      "/v1/engine/backends": {
+        backends: [
+          {
+            sync_id: "b-a",
+            provider_key: "pk-1",
+            model_key: "mk-1",
+            default_permission_mode: "bypassPermissions",
+          },
+        ],
+      },
+    });
+    stubMachine({
+      capabilities: [],
+      permissionMode: {
+        allowedModes: ["default", "plan"],
+        defaultMode: "default",
+        order: ["default", "plan"],
+        switchableDuringTurn: true,
+      },
+    });
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const pill = await screen.findByRole("button", { name: /Permission mode/ });
+    expect(pill.textContent).toContain("Default");
+    expect(pill.textContent).not.toContain("Bypass");
   });
 
   it("Given 机器答不出档位, When 打开草稿, Then 直接说明问不到，不显示 unknown 档位", async () => {

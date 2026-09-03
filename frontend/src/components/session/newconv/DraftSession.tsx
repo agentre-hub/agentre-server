@@ -12,6 +12,7 @@ import {
   AlertDescription,
   cn,
   iconNode,
+  normalizePermissionMode,
 } from "@agentre-hub/agentre-ui";
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -208,14 +209,23 @@ export function DraftSession({
   }, [backends, plan]);
 
   /**
-   * 起手值以**执行端报的默认档**为准，它没报才退到账号侧那一档的预设。
-   * 反过来会让界面对着一台明确说了「我默认 plan」的机器显示管理员填的另一档。
+   * 起手值的归一化用共享包那一份：用户这次选的 → 账号侧那一档的预设 → 执行端报的
+   * 默认档，且账号侧那一档必须在这台机器报的集合里才算数。
+   *
+   * 账号侧压在执行端前面，是因为 claudecode 报的 DefaultMode 是 runtime 能力矩阵
+   * 里写死的常量（恒为 acceptEdits），不是「这台机器的偏好」；排在它后面等于管理员
+   * 在 Agent 后端上配的档位永远够不着。而这一档会**显式**随第一句过线，执行端
+   * CreatePermissionMode 收到非空值就直接采信，连它自己那条 backend 兜底也跳过 ——
+   * 于是会话真的按错的档起手，不只是这一屏显示错。
    */
-  const effectivePermissionMode =
-    permissionMode ||
-    permissionModeMeta?.defaultMode ||
-    engineBackend?.default_permission_mode ||
-    "";
+  const effectivePermissionMode = permissionModeMeta
+    ? normalizePermissionMode(
+        permissionMode,
+        permissionModeMeta.allowedModes,
+        permissionModeMeta.defaultMode,
+        engineBackend?.default_permission_mode,
+      )
+    : permissionMode;
 
   /**
    * 后端配置的那一档，用户没选时由控件用它兜底显示（「→ 跟随后端配置 · <档位>」）。
