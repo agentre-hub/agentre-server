@@ -4,9 +4,24 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 )
+
+// upgradeCallTimeout 是这一次调用等应答的预算。
+//
+// 它必须与镜像那几个方法共用的 Config.CallTimeout（缺省 15 秒）分开：那个数是按
+// 「问一句答一句」的会话 RPC 给的，而 daemon 的受理判定把解析发布、下载、校验、
+// 替换**全部**跑完才应答——这正是 DOWNLOAD_FAILED / NOT_WRITABLE / ALREADY_LATEST
+// 能作为这次调用确定性结果的原因。换一个几十 MB 的二进制不会在 15 秒里跑完，沿用
+// 那个预算等于让每一次真能成功的升级都在本端超时：控制器把超时折成 500、控制台落进
+// failed 态，而那台机器照样升完重启，界面从此再没有东西把它纠正回来。
+//
+// 取 5 分钟，与控制台自己那扇「升级中」的窗口同宽（前端 use-device-upgrade 的
+// TIMEOUT_MS）：更长没有意义（用户那侧已经按超时收场），更短则会把还在下载的机器
+// 判死。
+const upgradeCallTimeout = 5 * time.Minute
 
 // ErrMirrorUnavailable 是「这个部署没装配镜像」：没有镜像就没有通往那台机器的连接，
 // 一键升级因此够不着它。与 ErrMachineOffline 分开——那是机器不在线，这是本端没有这
@@ -92,6 +107,10 @@ func (s *Supervisor) UpgradeMachine(
 		return UpgradeResult{}, err
 	}
 	defer conn.Close()
+	// 这条连接是这次升级专用的短连接（上面那段），本方法是它唯一的使用者，握手也已经
+	// 做完——此刻改它的调用预算不与任何人竞争。换掉的只是这一条，常驻镜像上那些会话
+	// RPC 仍旧按 Config.CallTimeout 走。
+	conn.timeout = upgradeCallTimeout
 	// Channel 有意不填：空串 = 「这台机器自己配着的那个通道」，控制台不必（也无从）
 	// 知道那台机器跟的是 stable 还是 beta。
 	resp, err := conn.AgentredSelfUpdate(ctx, &agentrewire.AgentredSelfUpdateRequest{Force: force})

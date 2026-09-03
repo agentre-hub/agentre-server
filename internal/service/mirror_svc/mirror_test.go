@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +64,9 @@ type fakeRelay struct {
 	transcriptImportErr error
 	// selfUpdateReply 非 nil 时 agentred.self_update 一律以它作答（受理判定归 daemon）。
 	selfUpdateReply *agentrewire.AgentredSelfUpdateResponse
+	// selfUpdateBudget 是那次调用到达这台假 daemon 时还剩多少等待预算（本端给的
+	// 超时）。真 daemon 要在应答之前跑完下载校验替换，这个数决定了它来不来得及。
+	selfUpdateBudget time.Duration
 	// deleted 是被删掉的对话标识,按到达顺序。
 	deleted []string
 	calls   []recordedCall

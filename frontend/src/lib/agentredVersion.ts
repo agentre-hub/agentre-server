@@ -5,7 +5,10 @@
  * 呈现层只读这里的结论，不自己比版本号——一处比法，两处画法（宽屏与窄屏）。
  */
 
-const RELEASE_VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+](.+))?$/;
+// 预发布段与构建元数据分开捕获：按 semver，只有前者参与排序，后者（`+` 之后那一段）
+// 不参与。两者都塞进「预发布」的话，一台跑 0.6.0+abc 的机器会被永久判成旧于 0.6.0，
+// 一直劝升，而点下去的每一次一键升级都只会拿回 ALREADY_LATEST。
+const RELEASE_VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-([^+]+))?(?:\+[^+]*)?$/;
 
 type ParsedVersion = {
   parts: [number, number, number];
@@ -35,11 +38,37 @@ export function compareVersions(a: string, b: string): number | null {
   for (let i = 0; i < 3; i++) {
     if (pa.parts[i] !== pb.parts[i]) return pa.parts[i] - pb.parts[i];
   }
-  if (pa.prerelease === pb.prerelease) return 0;
+  return comparePrerelease(pa.prerelease, pb.prerelease);
+}
+
+/**
+ * 按 semver 比较两个预发布段（空串 = 正式版）。
+ *
+ * 逐节（`.` 分隔）比，纯数字节按**数值**比 —— 字面比法会把 `beta.10` 排在 `beta.2`
+ * 之前，于是一台跑 beta.2 的机器在 beta.10 已经发布之后被判成「已是最新」。
+ */
+function comparePrerelease(a: string, b: string): number {
+  if (a === b) return 0;
   // 预发布排在同号正式版之前：0.6.0-beta.1 旧于 0.6.0。
-  if (pa.prerelease === "") return 1;
-  if (pb.prerelease === "") return -1;
-  return pa.prerelease < pb.prerelease ? -1 : 1;
+  if (a === "") return 1;
+  if (b === "") return -1;
+  const left = a.split(".");
+  const right = b.split(".");
+  for (let i = 0; i < Math.max(left.length, right.length); i++) {
+    const x = left[i];
+    const y = right[i];
+    // 前缀相同时，标识符少的那个更旧（0.6.0-beta 旧于 0.6.0-beta.1）。
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    if (x === y) continue;
+    const xNum = /^\d+$/.test(x);
+    const yNum = /^\d+$/.test(y);
+    if (xNum && yNum) return Number(x) - Number(y);
+    // 纯数字节低于带字母的节（semver 的既定顺序）。
+    if (xNum !== yNum) return xNum ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
 }
 
 /**

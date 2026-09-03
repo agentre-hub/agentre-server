@@ -3,6 +3,7 @@ package mirror_svc
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,10 +21,13 @@ func (f *fakeRelay) setSelfUpdateReply(reply *agentrewire.AgentredSelfUpdateResp
 }
 
 func (f *fakeRelay) AgentredSelfUpdate(
-	_ context.Context, request *agentrewire.AgentredSelfUpdateRequest,
+	ctx context.Context, request *agentrewire.AgentredSelfUpdateRequest,
 ) (*agentrewire.AgentredSelfUpdateResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if deadline, ok := ctx.Deadline(); ok {
+		f.selfUpdateBudget = time.Until(deadline)
+	}
 	f.calls = append(f.calls, recordedCall{
 		method: agentrewire.RpcMethod_RPC_METHOD_AGENTRED_SELF_UPDATE, request: request,
 	})
@@ -120,6 +124,31 @@ func TestSupervisor_UpgradeMachine_EachRejectReasonIsDistinguishable(t *testing.
 			assert.Equal(t, c.want, result.RejectReason)
 		})
 	}
+}
+
+// Given daemon 的受理判定把解析发布、下载、校验、替换**全部**跑完才应答（这正是
+// DOWNLOAD_FAILED / NOT_WRITABLE / ALREADY_LATEST 能作为这次调用确定性结果的原因，
+// 见 handlers.SelfUpdateHandlers.Update 的顺序注释）；When 控制台点了一键升级；
+// Then 这次调用带到那台机器的等待预算必须按「换一个几十 MB 的二进制」来给，而不是
+// 沿用镜像那几个「问一句答一句」会话 RPC 的 15 秒。
+//
+// 沿用 15 秒的后果不是慢一点：本端一超时就把这次调用判成失败（500 → 控制台的
+// failed 态），而那台机器照样把升级跑完、重启回来 —— 一次成功的升级被报成故障，
+// 且从此没有任何东西会把界面纠正回来。
+func TestSupervisor_UpgradeMachine_GivesTheDownloadEnoughBudget(t *testing.T) {
+	rig := newResidentRig(t)
+	a := rig.replica(t, replicaA)
+
+	_, err := a.sup.UpgradeMachine(context.Background(), testUserID, testMachine, false)
+
+	require.NoError(t, err)
+	rig.peer.mu.Lock()
+	budget := rig.peer.selfUpdateBudget
+	rig.peer.mu.Unlock()
+	assert.Greater(t, budget, defaultCallTimeout,
+		"自更新不能沿用会话 RPC 的调用预算：对端要先下载校验替换完才应答")
+	assert.Equal(t, upgradeCallTimeout, budget.Round(time.Second),
+		"预算就是 upgradeCallTimeout，不是碰巧比 15 秒长一点")
 }
 
 // Given 那台机器现在联系不上；When 要升级它；Then 报「机器离线」——
