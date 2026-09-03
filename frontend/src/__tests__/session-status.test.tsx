@@ -659,12 +659,9 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
       statusDotClass({ lifecycleState: "running", waitingForInput: true }),
     ).toBe(dot("waiting"));
     expect(statusDotClass({ lifecycleState: "running" })).toBe(dot("running"));
-    expect(statusDotClass({ lifecycleState: "interrupted" })).toBe(
-      dot("error"),
-    );
-    // failed 是 wire 上「上一轮跑挂了」那一档（与 interrupted 分家：后者是自锁
-    // 终态、接不回实时流，前者只是一个关于上一轮的事实）。两者在**点上**同色，
-    // 因为用户要看的都是「这条出过错」。
+    // 中断归中性：那是 daemon 重启后的常态，不是故障（见下面那条用例）。
+    expect(statusDotClass({ lifecycleState: "interrupted" })).toBe(dot("idle"));
+    // failed 是 wire 上「上一轮跑挂了」那一档，也是**唯一**上错误色的一档。
     expect(statusDotClass({ lifecycleState: "failed" })).toBe(dot("error"));
     expect(statusDotClass({ lifecycleState: "idle" })).toBe(dot("idle"));
     // 不认识的旧状态如实归灰,不猜。
@@ -688,6 +685,32 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
     expect(
       sessionStatusLabel({ lifecycleState: "failed" }, i18n.t.bind(i18n)),
     ).toBe("Failed");
+  });
+
+  /**
+   * 红只留给 `failed`。
+   *
+   * wire 上这两个值是**两件事**（remote/wire 生命周期常量那一段说得很死）：`failed`
+   * 是「上一轮的结局是错误」，`interrupted` 是「这条会话此刻接不回实时流」——后者
+   * 是 agentred 每次重启后所有非终态会话的**常态**（daemon.New 的 R10 整批标记），
+   * 不是任何一次故障。把它折进出错那一档的代价在联调机上量得到：重启一次，账号里
+   * 29 条对话在同一个 305 毫秒窗口里全变红且永不复原（`Mirror.Revive` 对仍是
+   * interrupted 的会话刻意不试接入），于是红色变廉价，真跑挂的那条没人再当回事。
+   *
+   * 桌面端的同一处判定就是这么分的（remote-devices/desktop-device-row 的
+   * SessionLifecycleBadge）：`interrupted` 是中性徽标 + 它自己的文字，只有 `failed`
+   * 上错误色。
+   */
+  it("interrupted:归中性档，红只留给 failed", () => {
+    expect(toAgentStatus({ lifecycleState: "interrupted" })).toBe("idle");
+    // 点归中性不等于这条对话没话说：文字仍是它自己的说法，不冒充「空闲」。
+    expect(
+      sessionStatusLabel({ lifecycleState: "interrupted" }, i18n.t.bind(i18n)),
+    ).toBe("Interrupted");
+    // 等你处理照旧盖过它。
+    expect(
+      toAgentStatus({ lifecycleState: "interrupted", waitingForInput: true }),
+    ).toBe("waiting");
   });
 });
 
