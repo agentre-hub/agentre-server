@@ -1,4 +1,12 @@
-import { Laptop, AlertTriangle, Github, Key, Info } from "lucide-react";
+import {
+  Laptop,
+  AlertTriangle,
+  Github,
+  Key,
+  Info,
+  Loader2,
+} from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -108,6 +116,9 @@ export default function Login() {
   const userCode = params.get("user_code") ?? "";
   const err = params.get("err");
 
+  /** 通行密钥仪式在途。整条链路只有这一处写操作，防的是连点。 */
+  const [passkeyPending, setPasskeyPending] = useState(false);
+
   // 首次登录与失败后重试走的是同一件事：带着 next / user_code 重新发起
   // authorize（err 不透传，它是上一次的结果）。所以只有一个处理函数。
   const onLogin = () => {
@@ -130,6 +141,11 @@ export default function Login() {
   };
 
   const onPasskeyLogin = async () => {
+    // 整条仪式期间按钮既不禁用也不换样子，用户很容易再点一次；而第二次
+    // `credentials.get` 会让浏览器中止第一次，抛 NotAllowedError → 被判成
+    // 「用户取消」→ 一次本来会成功的登录被自己的第二次点击取消掉。
+    if (passkeyPending) return;
+    setPasskeyPending(true);
     try {
       // 1. 取登录选项。走 api() 而不是裸 fetch：回应是 cago 的
       //    `{code,msg,data}` 信封，publicKey 在 data 里面。
@@ -149,6 +165,7 @@ export default function Login() {
         // 用户取消了选择——浏览器多数情况下抛 NotAllowedError，少数返回 null。
         // 这不是错误，只是用户的选择，所以回登录页显示平和的提示
         backToLogin("passkey_cancelled");
+        setPasskeyPending(false);
         return;
       }
 
@@ -167,6 +184,7 @@ export default function Login() {
       // 服务端判失败、网络错误、认证器异常都落这里。信封里的业务码是数字、
       // 进不了 URL，先翻成这条路自己的 err 码再带回登录页。
       backToLogin(passkeyLoginErr(err));
+      setPasskeyPending(false);
     }
   };
 
@@ -260,9 +278,15 @@ export default function Login() {
                 <Button
                   variant="outline"
                   className="w-full"
+                  disabled={passkeyPending}
+                  aria-busy={passkeyPending || undefined}
                   onClick={onPasskeyLogin}
                 >
-                  <Key className="mr-2 h-4 w-4" />
+                  {passkeyPending ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
+                  ) : (
+                    <Key className="mr-2 h-4 w-4" />
+                  )}
                   {t("login.passkey")}
                 </Button>
               </>

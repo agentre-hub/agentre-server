@@ -77,7 +77,8 @@
         "setOn": "Force on {{name}}",
         "setOff": "Force off {{name}}"
       },
-      "moved": "Moved to position {{position}} of {{total}}."
+      "moved": "Moved to position {{position}} of {{total}}.",
+      "orderFailed": "Could not save the new order. The list is unchanged."
     },
     "delete": {
       "agentTitle": "Delete {{name}}?",
@@ -122,6 +123,7 @@
     "cancel": "Cancel"
   },
   "errors": {
+    "loadFailed": "Could not load your organization chart.",
     "generic": "Something went wrong. Please try again."
   }
 }

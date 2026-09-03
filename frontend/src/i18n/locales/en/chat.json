@@ -11,6 +11,7 @@
   "noProjectsOnMachine": "No projects are configured on this machine.",
   "projectPathMissing": "Path not configured on this machine",
   "connectFailed": "Could not reach {{machine}}. Please try again.",
+  "planFailed": "Could not check for an execution target.",
   "remoteStartFailed": "{{machine}} is connected, but the agent failed to start: {{error}}",
   "cancel": "Cancel",
   "back": "Back",

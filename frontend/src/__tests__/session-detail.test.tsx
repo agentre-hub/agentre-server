@@ -164,6 +164,7 @@ function renderPage() {
         clientId: "fp-web",
         clientName: "Browser",
         accessToken: "t",
+        expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
       reconnect: vi.fn(),
@@ -453,6 +454,33 @@ describe("会话详情页", () => {
         backend: { type: "claudecode" },
       });
     });
+  });
+
+  it("发送在途：提交键转成 spinner，输入框不再整块禁用", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      // 一直在飞：这条用例量的就是「按下之后到回声落地之前」那段窗口。
+      if (method === rpcMethods.runtimeRun) return new Promise(() => {});
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("把按钮改成蓝色");
+
+    // 这段窗口里用户那句话在转录里还不存在（要等 daemon 的 user_message 回声过一个
+    // 往返），三点也要等 runtime.run 应答才点亮。此前 sending 被折进 disabled：
+    // 输入框被清空并整块禁用，屏幕上一个字都没有他刚说的话。
+    await vi.waitFor(() =>
+      expect(screen.getByLabelText("Sending…")).toBeTruthy(),
+    );
+    expect(composerDisabled()).toBe(false);
   });
 
   it("选择图片后发送会把图片编码为 runtime.run userBlocks", async () => {
@@ -1259,6 +1287,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -1395,6 +1424,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
         clientId: "fp-web",
         clientName: "Browser",
         accessToken: "t",
+        expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
       reconnect: vi.fn(),
@@ -1796,6 +1826,7 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
         clientId: "fp-web",
         clientName: "Browser",
         accessToken: "t",
+        expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
       reconnect: vi.fn(),
@@ -1955,6 +1986,7 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -2097,6 +2129,7 @@ describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态"
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -2659,6 +2692,7 @@ describe("会话详情：历史来自 server 镜像", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -2747,6 +2781,7 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -2848,6 +2883,7 @@ describe("会话详情：头部", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -3000,6 +3036,7 @@ describe("会话详情：头部", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -3553,6 +3590,7 @@ describe("会话详情：输入框", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -3811,6 +3849,7 @@ describe("会话详情：打开即标记已读", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -3866,6 +3905,7 @@ describe("会话详情：打开即标记已读", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -3916,6 +3956,7 @@ describe("会话详情：打开即标记已读", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -3996,6 +4037,7 @@ describe("会话详情：/compact", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -4191,6 +4233,45 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     // 顺序：更早的在前。
     const body = screen.getByTestId("session-detail-transcript").textContent!;
     expect(body.indexOf("更早的那句")).toBeLessThan(body.indexOf("最后一句"));
+  });
+
+  it("往回读失败：说出来并给一条重试，不让人读成「翻到开头了」", async () => {
+    let n = 0;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?")) return mirrorRow;
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        n += 1;
+        if (n === 1) return tailPage([{ seq: 99, text: "最后一句" }], true);
+        if (n === 2) throw new Error("mirror unavailable");
+        return tailPage([{ seq: 50, text: "更早的那句" }], false);
+      }
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/最后一句/);
+    const el = scroller();
+    await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+
+    fireEvent.wheel(el, { deltaY: -600 });
+    el.scrollTop = 900;
+    fireEvent.scroll(el);
+
+    // 此前这一档只把 loading 关掉、不记失败：那行「正在读取更早的…」消失后什么都
+    // 不出现，而更早的内容明明还在。用户会把这一片空白读成对话的开头。
+    const failed = await screen.findByTestId("session-earlier-failed");
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText(/更早的那句/)).toBeTruthy();
+    expect(screen.queryByTestId("session-earlier-failed")).toBeNull();
   });
 
   it("前插之后视口不跳：加了多少高度就往下挪多少", async () => {
@@ -5120,6 +5201,7 @@ describe("会话详情：重连期间的发送", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -5271,6 +5353,7 @@ describe("会话详情：与桌面端对齐的外壳", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -5399,6 +5482,7 @@ describe("会话详情：回到底部", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -5587,6 +5671,7 @@ describe("会话详情：发出去之后回到底部", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),
@@ -5940,6 +6025,7 @@ describe("会话详情页 · 会话级思考力度", () => {
           clientId: "fp-web",
           clientName: "Browser",
           accessToken: "t",
+          expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
         reconnect: vi.fn(),

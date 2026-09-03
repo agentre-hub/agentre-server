@@ -17,6 +17,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Skeleton,
   cn,
 } from "@agentre-hub/agentre-ui";
 import { Card } from "@/components/ui/card";
@@ -196,12 +197,76 @@ function DeviceRowMenu({
   );
 }
 
+/**
+ * 设备列表首屏的骨架。
+ *
+ * 它取代的是一行 `common.loading`。那行字有两个问题：**不占位置**——加载期间动作行、
+ * 引导、顶栏计数全都不渲染，数据落地时一次性把内容顶下去；以及它和「这个账号一台
+ * 设备都没有」看起来差不多。骨架按真实卡片的构成摆，占的正是最终布局的位置。
+ *
+ * 骨架自己 `aria-hidden`：正在取这件事由容器上的 `aria-busy` 说。
+ */
+function DeviceListSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div data-testid="device-list-loading" aria-busy="true">
+      <div
+        data-testid="device-list-skeleton"
+        aria-hidden="true"
+        className="flex flex-col gap-2.5"
+      >
+        {Array.from({ length: rows }, (_, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3.5"
+          >
+            <Skeleton className="size-9 shrink-0 rounded-md" />
+            <span className="flex min-w-0 flex-1 flex-col gap-2">
+              <Skeleton className="h-3.5" style={{ width: `${44 - i * 8}%` }} />
+              <Skeleton className="h-2.5 w-3/5" />
+            </span>
+            <Skeleton className="h-5 w-16 shrink-0 rounded-md" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 展开区正文的骨架：两节，各一条组标题 + 两行内容。 */
+function DeviceDetailSkeleton() {
+  return (
+    <div data-testid="device-detail-loading" aria-busy="true">
+      <div
+        data-testid="device-detail-skeleton"
+        aria-hidden="true"
+        className="flex flex-col gap-3"
+      >
+        {[0, 1].map((section) => (
+          <div key={section} className="flex flex-col gap-2">
+            <Skeleton className="h-2.5 w-20" />
+            <div className="flex flex-wrap gap-2">
+              {[0, 1, 2].map((chip) => (
+                <Skeleton
+                  key={chip}
+                  className="h-6 rounded-md"
+                  style={{ width: 72 + chip * 24 }}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeviceExpandDetail({
   state,
   device,
   counts,
   t,
   locale,
+  onRetry,
 }: {
   state: { loading: boolean; error: unknown; data: DeviceDetail | null };
   device: DeviceItem;
@@ -209,11 +274,11 @@ function DeviceExpandDetail({
   t: (key: string, opts?: Record<string, unknown>) => string;
   /** i18n.language。相对时刻要它，`t` 带不出来。 */
   locale: string;
+  /** 详情读失败后重来一次。 */
+  onRetry: () => void;
 }) {
   if (state.loading) {
-    return (
-      <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
-    );
+    return <DeviceDetailSkeleton />;
   }
   if (state.error) {
     const message = loadErrorText(
@@ -222,8 +287,16 @@ function DeviceExpandDetail({
       "device.manage.detailLoadError",
     );
     return (
+      // 「收起再展开」确实会重试（不缓存失败是刻意的），但那条出路界面上一个字都
+      // 没提过，用户只会去刷新整页。
       <Alert variant="destructive">
-        <AlertDescription>{message}</AlertDescription>
+        <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
+          <span className="min-w-0">{message}</span>
+          <span className="flex-1" />
+          <Button size="xs" variant="outline" onClick={onRetry}>
+            {t("common.retry")}
+          </Button>
+        </AlertDescription>
       </Alert>
     );
   }
@@ -368,6 +441,7 @@ function DeviceRow({
   onToggle,
   onRevoke,
   detailState,
+  onRetryDetail,
   t,
   locale,
 }: {
@@ -377,6 +451,7 @@ function DeviceRow({
   onToggle: () => void;
   onRevoke: () => void;
   detailState: { loading: boolean; error: unknown; data: DeviceDetail | null };
+  onRetryDetail: () => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
   /** i18n.language。相对时刻要它，`t` 带不出来。 */
   locale: string;
@@ -480,6 +555,7 @@ function DeviceRow({
               counts={counts}
               t={t}
               locale={locale}
+              onRetry={onRetryDetail}
             />
           </div>
         )}
@@ -551,6 +627,7 @@ function DeviceRow({
             counts={counts}
             t={t}
             locale={locale}
+            onRetry={onRetryDetail}
           />
         </div>
       )}
@@ -648,6 +725,10 @@ export default function Devices() {
     // 在整个页面生命周期里永久坏掉，只能整页刷新。失败后再展开就重试一次。
     const cached = details[d.id];
     if (cached && (cached.loading || !cached.error)) return;
+    loadDetail(d);
+  }
+
+  function loadDetail(d: DeviceItem) {
     setDetails((prev) => ({
       ...prev,
       [d.id]: { loading: true, error: null, data: null },
@@ -777,7 +858,7 @@ export default function Devices() {
           )}
 
           {loading ? (
-            <p className="text-muted-foreground">{t("common.loading")}</p>
+            <DeviceListSkeleton />
           ) : (
             devices.map((d) => (
               <DeviceRow
@@ -797,6 +878,7 @@ export default function Devices() {
                     data: null,
                   }
                 }
+                onRetryDetail={() => loadDetail(d)}
                 t={t}
                 locale={locale}
               />

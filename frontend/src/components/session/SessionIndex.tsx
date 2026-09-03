@@ -729,6 +729,16 @@ function GroupOverflowBody({
       .finally(() => setLoading(false));
   }, [loadGroupPage, scope, cursor]);
 
+  if (loading && rows.length === 0 && !failed) {
+    // 首屏此前三个分支全落空：点开「查看全部 N」得到的是一个 360px 宽的空白浮层，
+    // 第一页回来才突然填满。骨架用组内空态那同一件。
+    return (
+      <div data-testid="group-overflow-loading" aria-busy="true">
+        <SessionListSkeleton rows={3} />
+      </div>
+    );
+  }
+
   return (
     <>
       <div className="space-y-0.5">{rows.map(renderRow)}</div>

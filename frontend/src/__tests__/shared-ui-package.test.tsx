@@ -475,3 +475,38 @@ describe("2026-08-26 收进共享包的四件，本站不留副本", () => {
     );
   });
 });
+
+/**
+ * 骨架的那一条占位归包所有（agentre bf911fe5）。
+ *
+ * 这一条守的是「副本没有偷偷长回来」：本站此前在总览、隐私、账户、设备、组织各写了
+ * 一份逐字相同的 SKELETON_BAR，会话列表骨架又内联了一遍同样的类。删掉之后什么都不会
+ * 红——它们本来就跑得通——所以只能靠守卫。
+ *
+ * 尤其是取色：桌面端曾有两处漂成 `bg-muted`（浅色下几乎不显影，静止的灰块读起来像
+ * 渲染坏了），正是「同一个概念各留一份」的结果。
+ */
+describe("骨架那条占位只剩包里那一份", () => {
+  const read = (rel: string) =>
+    fs.readFileSync(path.join(FRONTEND_ROOT, rel), "utf8");
+  const SITES = [
+    "src/pages/Overview.tsx",
+    "src/pages/Account.tsx",
+    "src/pages/Devices.tsx",
+    "src/pages/Org.tsx",
+    "src/components/settings/ActivityStatsPanel.tsx",
+    "src/components/session/SessionListSkeleton.tsx",
+  ];
+
+  it("本站不再自建占位条：既没有各自的常量，也没有内联那串类", () => {
+    for (const site of SITES) {
+      const src = read(site);
+      expect(src, `${site} 还留着自己的占位常量`).not.toContain("SKELETON_BAR");
+      // `animate-pulse` 只该由包里那个件带进来。
+      expect(src, `${site} 还在内联脉冲类`).not.toContain("animate-pulse");
+      expect(src).toMatch(
+        /import\s*\{[^}]*\bSkeleton\b[^}]*\}\s*from\s*"@agentre-hub\/agentre-ui"/s,
+      );
+    }
+  });
+});

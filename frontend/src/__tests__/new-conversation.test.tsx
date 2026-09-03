@@ -179,6 +179,7 @@ const relayTicket = {
   clientId: "fp-web",
   clientName: "Chrome · macOS",
   accessToken: "web-jwt",
+  expiresAt: Date.now() + 120_000,
 };
 
 /** 账号里镜像着的一条真实会话（左栏据此列出一行）。 */
@@ -632,6 +633,56 @@ describe("一条还没发第一句的对话", () => {
 
     await waitFor(() => expect(mockDispatch).toHaveBeenCalled());
     expect(readRecentAgents()).toEqual([]);
+  });
+
+  it("计划取不到时不谎称「没有可用的执行目标」，并给一条重试", async () => {
+    stubReads();
+    let calls = 0;
+    mockFetchPlan.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("plan unavailable");
+      return availablePlan;
+    });
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    renderChat();
+    await openDraft();
+
+    // 「这次没问到计划」和「问到了，一档都不可用」是两件事。此前 planError 落到
+    // 最后一支，输入框下沿写的是后者——一句此刻无从证实的话。
+    const failed = await screen.findByTestId("draft-plan-failed");
+    await waitFor(() =>
+      expect(screen.queryByText("No available execution target")).toBeNull(),
+    );
+
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(calls).toBe(2));
+    expect(screen.queryByTestId("draft-plan-failed")).toBeNull();
+  });
+
+  it("派发失败时用户那句话还回输入框，不随占位一起消失", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(new Error("relay down"));
+    renderChat();
+    await openDraft();
+
+    await typeInDraft(
+      "把登录页的按钮改成蓝色，另外顺手把那个 flaky 的用例修了",
+    );
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    // 提交那一刻输入框已被清空，唯一显示这句话的是派发占位；失败时占位跟着卸载，
+    // 屏幕上只剩一行红字，用户写的整段话就没了。SendFailureBubble 立的规矩正相反：
+    // 用户写的字要留在屏幕上，复制得走。
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(draftEditable().textContent).toContain(
+        "把登录页的按钮改成蓝色，另外顺手把那个 flaky 的用例修了",
+      ),
+    );
   });
 
   it("Given coding 已连接但远端 CLI 启动失败, When 发第一句, Then 展示远端错误而不是误报连不上", async () => {

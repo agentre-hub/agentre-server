@@ -247,6 +247,35 @@ describe("exec target ordering: keyboard fallback on the handle", () => {
   // 播报的**内容**（「挪到第 2 位，共 3 档」）还缺一个 i18n 词条
   // `org.detail.execTargets.moved`——locales/ 归另一位 agent 管，这里只钉住
   // 「有一个 role=status 的活动区，并且移动之后它说了话」这两件结构性的事。
+  it("Given the order fails to save, Then it says so and does not announce a move that did not happen", async () => {
+    const onReordered = vi.fn();
+    mockedApi.mockRejectedValue(new Error("order save failed"));
+    renderSection(
+      [
+        target("et-1", "b1", "available", 0),
+        target("et-2", "b2", "available", 1),
+      ],
+      onReordered,
+    );
+
+    const grip = handles()[0];
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowDown", code: "ArrowDown" });
+
+    // 此前两个调用点都是裸 `void commit(...)`：保存抛出去没人接——未处理的 rejection、
+    // 界面一声不吭、`onReordered` 不触发所以行弹回原处，而读屏刚刚被告知「已移到
+    // 第 2 位」。播报必须排在保存**之后**。
+    await waitFor(() =>
+      expect(screen.getByTestId("exec-target-announcer").textContent).toContain(
+        "Could not save",
+      ),
+    );
+    expect(
+      screen.getByTestId("exec-target-announcer").textContent,
+    ).not.toContain("Moved to position");
+    expect(onReordered).not.toHaveBeenCalled();
+  });
+
   it("Given a completed move, When the announcement region is read, Then it says where the tier landed", async () => {
     renderSection([
       target("et-1", "b1", "available", 0),

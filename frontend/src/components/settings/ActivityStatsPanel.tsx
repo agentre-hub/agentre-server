@@ -12,6 +12,7 @@ import {
   DialogShellFooter,
   DialogShellHeader,
   DialogShellSubmit,
+  Skeleton,
   Switch,
   cn,
 } from "@agentre-hub/agentre-ui";
@@ -39,28 +40,67 @@ import {
  *  3. **服务端没交出来的东西一律不画**：逐台上报进度、已保存条数都可缺席，缺了
  *     就少一段，不摆一排「未知」。
  */
+/**
+ * 取数期间摆在正文位置的两张卡壳。
+ *
+ * 此前这一档整个返回 `null`——页签行和标题之下一个像素都没有，两张卡在数据落地时
+ * 一次性撑开；而且「还没取到」和「这个账号没有隐私设置」长得一模一样。
+ *
+ * 骨架自己 `aria-hidden`，「正在取」由外面那层的 `aria-busy` 说。
+ */
+function ActivityStatsSkeleton() {
+  return (
+    <div
+      data-testid="privacy-activity-skeleton"
+      aria-hidden="true"
+      className="flex min-w-0 flex-col gap-4"
+    >
+      {[0, 1].map((card) => (
+        <div
+          key={card}
+          className="flex min-w-0 flex-col gap-3.5 rounded-lg border border-border bg-card p-4 sm:p-5"
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <Skeleton className="h-4 w-28" />
+            <span className="flex-1" />
+            {card === 0 ? <Skeleton className="h-5 w-9 rounded-full" /> : null}
+          </div>
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-3/5" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ActivityStatsPanel() {
   const { t, i18n } = useTranslation();
 
   const [settings, setSettings] = useState<StatsSettings | null>(null);
+  /** 手动重试用的一次性游标：改它即让取数 effect 重跑一轮。 */
+  const [reloadKey, setReloadKey] = useState(0);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [confirm, setConfirm] = useState<"enable" | "disable" | null>(null);
   const [backfill, setBackfill] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  useAliveEffect((alive) => {
-    fetchStatsSettings()
-      .then((got) => {
-        if (!alive()) return;
-        setSettings(got);
-        setLoadError(null);
-      })
-      .catch((e: unknown) => {
-        // 读不到就说读不到：给一个猜出来的开关状态，用户会以为上报正开着（或正关着）。
-        if (alive()) setLoadError(e ?? new Error("stats settings load failed"));
-      });
-  }, []);
+  useAliveEffect(
+    (alive) => {
+      fetchStatsSettings()
+        .then((got) => {
+          if (!alive()) return;
+          setSettings(got);
+          setLoadError(null);
+        })
+        .catch((e: unknown) => {
+          // 读不到就说读不到：给一个猜出来的开关状态，用户会以为上报正开着（或正关着）。
+          if (alive())
+            setLoadError(e ?? new Error("stats settings load failed"));
+        });
+    },
+    [reloadKey],
+  );
 
   const openConfirm = useCallback((next: "enable" | "disable") => {
     setSaveError(null);
@@ -93,12 +133,33 @@ export function ActivityStatsPanel() {
       "settings.privacy.activity.loadError",
     );
     return (
+      // 一行摆开：文案 + 弹簧 + 重试（与总览统计那条同形）。读不到之后唯一的出路
+      // 不该是「刷新整页」。
       <Alert variant="destructive">
-        <AlertDescription>{message}</AlertDescription>
+        <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
+          <span className="min-w-0">{message}</span>
+          <span className="flex-1" />
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              setLoadError(null);
+              setReloadKey((k) => k + 1);
+            }}
+          >
+            {t("common.retry")}
+          </Button>
+        </AlertDescription>
       </Alert>
     );
   }
-  if (settings === null) return null;
+  if (settings === null) {
+    return (
+      <div data-testid="privacy-activity-loading" aria-busy="true">
+        <ActivityStatsSkeleton />
+      </div>
+    );
+  }
 
   const enabled = settings.activity_stats_enabled;
 

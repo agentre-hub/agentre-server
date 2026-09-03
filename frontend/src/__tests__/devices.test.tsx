@@ -375,6 +375,58 @@ describe("device page design alignment", () => {
 // 规格「web 控制台：设备页 · 入口与展开条件」：整页只有一个「添加设备」入口，
 // 点它就地在列表上方展开三步引导；空态默认展开并取代那句孤立的空句；
 // 列表加载失败时只留既有错误 —— 不展开引导，也不改口说没有设备。
+describe("设备页的非稳态", () => {
+  it("列表首屏摆骨架并由容器说自己在取，而不是一行不占位的字", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return new Promise(() => {});
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+
+    // 加载期间此前只有一行字：动作行、引导、计数角标全不渲染，数据落地时一次性
+    // 把内容顶下去。骨架占的正是最终布局的位置。
+    const holder = await screen.findByTestId("device-list-loading");
+    expect(holder.getAttribute("aria-busy")).toBe("true");
+    expect(
+      within(holder)
+        .getByTestId("device-list-skeleton")
+        .getAttribute("aria-hidden"),
+    ).toBe("true");
+    expect(screen.queryByText("Loading…")).toBeNull();
+  });
+
+  it("展开详情读失败时给一条重试的路，不必收起再展开", async () => {
+    let calls = 0;
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      if (path === "/v1/workspace/device-detail?device_id=1") {
+        calls += 1;
+        if (calls === 1) throw new TypeError("network down");
+        return {
+          device_id: 1,
+          kind: "agentred",
+          runnable_agents: [],
+          projects: [],
+        };
+      }
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+
+    const card = (await screen.findByText("nuc-01")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+    fireEvent.click(within(card).getByTestId("device-expand-1"));
+    await within(card).findByText(/could not load this device's details/i);
+
+    // 「收起再展开」确实会重试（device-expand 那条用例守着），但界面上一个字都没
+    // 提过这条出路，用户只会去刷新整页。
+    fireEvent.click(within(card).getByRole("button", { name: "Retry" }));
+    await within(card).findByText("No agents can run on this device yet.");
+    expect(calls).toBe(2);
+  });
+});
+
 describe("add-device entry and guide expansion", () => {
   it("有设备时：列表上方只有一个『添加设备』入口，引导不渲染", async () => {
     mockedApi.mockImplementation(async (path) => {

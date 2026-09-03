@@ -68,6 +68,13 @@ export interface EarlierState {
   hasBefore: boolean;
   loading: boolean;
   capped: boolean;
+  /**
+   * 上一次往回读失败了。
+   *
+   * 不记这一格的话，那行「正在读取更早的…」消失之后什么都不出现，而更早的内容明明
+   * 还在——用户会把这一片空白读成对话的开头。索引侧对同一件事早就是这么处理的。
+   */
+  failed: boolean;
 }
 
 export interface TranscriptScrollbackParams {
@@ -140,6 +147,7 @@ export function useTranscriptScrollback({
     hasBefore: false,
     loading: false,
     capped: false,
+    failed: false,
   });
 
   // ── 滚动 ──────────────────────────────────────────────────────────────
@@ -224,7 +232,7 @@ export function useTranscriptScrollback({
     earlierInFlightRef.current = true;
     const el = scrollRef.current;
     if (el) restoreRef.current = { height: el.scrollHeight, top: el.scrollTop };
-    setEarlier((p) => ({ ...p, loading: true }));
+    setEarlier((p) => ({ ...p, loading: true, failed: false }));
     const append = (
       evs: SessionEventFrame[],
       oldest: number,
@@ -234,6 +242,7 @@ export function useTranscriptScrollback({
       setEarlier((p) => ({
         ...p,
         loading: false,
+        failed: false,
         oldestSeq: oldest > 0 ? oldest : p.oldestSeq,
         hasBefore,
       }));
@@ -246,7 +255,7 @@ export function useTranscriptScrollback({
       }
       const c = clientRef.current;
       if (!c) {
-        setEarlier((p) => ({ ...p, loading: false }));
+        setEarlier((p) => ({ ...p, loading: false, failed: true }));
         return;
       }
       const res = await c.pullBefore(
@@ -265,7 +274,7 @@ export function useTranscriptScrollback({
       });
       append(evs, res.frames[0]?.seq ?? 0, res.hasBefore);
     } catch {
-      setEarlier((p) => ({ ...p, loading: false }));
+      setEarlier((p) => ({ ...p, loading: false, failed: true }));
       restoreRef.current = null;
     } finally {
       earlierInFlightRef.current = false;
@@ -479,6 +488,7 @@ export function useTranscriptScrollback({
       hasBefore: false,
       loading: false,
       capped: false,
+      failed: false,
     });
   }, []);
 
@@ -510,7 +520,7 @@ export function useTranscriptScrollback({
   /** 手点就是一次新的开始：把顶补的计数清掉，让它重新有机会自动补。 */
   const retryEarlier = useCallback(() => {
     topupsRef.current = 0;
-    setEarlier((p) => ({ ...p, capped: false }));
+    setEarlier((p) => ({ ...p, capped: false, failed: false }));
     void loadEarlier();
   }, [loadEarlier]);
 

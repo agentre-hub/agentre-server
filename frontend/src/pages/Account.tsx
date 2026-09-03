@@ -14,6 +14,7 @@ import {
   DialogShellHeader,
   DialogShellSubmit,
   Input,
+  Skeleton,
   cn,
 } from "@agentre-hub/agentre-ui";
 import { useAliveEffect } from "@/hooks/use-api-query";
@@ -167,6 +168,72 @@ function SectionCard({
 }
 
 /**
+ * 卡片正文位置的行骨架。
+ *
+ * 它取代的是一行居中的 `common.loading`：那行字**不占位置**，两张卡在数据落地时
+ * 各抽一下。骨架按真实行的构成摆（图标 + 名条 + meta 副行），高度贴着落地后的样子。
+ *
+ * 骨架自己 `aria-hidden`——「正在取」由外面那层的 `aria-busy` 说。
+ */
+function CardListSkeleton({ rows }: { rows: number }) {
+  return (
+    <div data-testid="card-loading" aria-busy="true">
+      <ul
+        data-testid="card-skeleton"
+        aria-hidden="true"
+        className="flex flex-col"
+      >
+        {Array.from({ length: rows }, (_, i) => (
+          <li
+            key={i}
+            className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+          >
+            <Skeleton className="size-8 shrink-0 rounded-md" />
+            <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+              <Skeleton
+                className="h-3.5"
+                style={{ width: `${52 - i * 12}%` }}
+              />
+              <Skeleton className="h-2.5 w-2/5" />
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * 卡片读取失败：说出原因，并给一条回程。
+ *
+ * 没有这颗按钮的话，用户唯一的出路是刷新整页——而这一页另外两张卡此刻可能好好的。
+ */
+function CardLoadError({
+  error,
+  fallback,
+  onRetry,
+}: {
+  error: unknown;
+  fallback: string;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Alert variant="destructive" className="m-4 w-auto">
+      <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
+        <span className="min-w-0">
+          {error instanceof ApiError ? error.message : fallback}
+        </span>
+        <span className="flex-1" />
+        <Button size="xs" variant="outline" onClick={onRetry}>
+          {t("common.retry")}
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/**
  * `/account`：受 `RequireAuth` 保护、不进主导航（规格「用户菜单与 /account」）。
  * 三张卡纵向堆叠，桌面与移动同一条流，390 宽下不产生横向溢出。
  */
@@ -176,8 +243,11 @@ export default function Account() {
 
   const [passkeys, setPasskeys] = useState<PasskeyRow[] | null>(null);
   const [passkeysError, setPasskeysError] = useState<unknown>(null);
+  /** 手动重试用的一次性游标：改它即让对应的取数 effect 重跑一轮。 */
+  const [passkeysReload, setPasskeysReload] = useState(0);
   const [sessions, setSessions] = useState<SessionRow[] | null>(null);
   const [sessionsError, setSessionsError] = useState<unknown>(null);
+  const [sessionsReload, setSessionsReload] = useState(0);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<PasskeyRow | null>(null);
@@ -196,28 +266,37 @@ export default function Account() {
   const passkeySupportState = passkeySupport();
   const supported = passkeySupportState === "available";
 
-  useAliveEffect((alive) => {
-    api<{ passkeys: PasskeyRow[] }>("/v1/passkeys")
-      .then((r) => {
-        if (alive()) setPasskeys(r.passkeys);
-      })
-      .catch((e: unknown) => {
-        if (alive()) setPasskeysError(e ?? new Error("passkeys load failed"));
-      });
-  }, []);
+  useAliveEffect(
+    (alive) => {
+      api<{ passkeys: PasskeyRow[] }>("/v1/passkeys")
+        .then((r) => {
+          if (!alive()) return;
+          setPasskeys(r.passkeys);
+          setPasskeysError(null);
+        })
+        .catch((e: unknown) => {
+          if (alive()) setPasskeysError(e ?? new Error("passkeys load failed"));
+        });
+    },
+    [passkeysReload],
+  );
 
   function loadSessions() {
     return api<{ sessions: SessionRow[] }>("/v1/auth/sessions").then((r) => {
       setSessions(r.sessions);
+      setSessionsError(null);
       return r.sessions;
     });
   }
 
-  useAliveEffect((alive) => {
-    loadSessions().catch((e: unknown) => {
-      if (alive()) setSessionsError(e ?? new Error("sessions load failed"));
-    });
-  }, []);
+  useAliveEffect(
+    (alive) => {
+      loadSessions().catch((e: unknown) => {
+        if (alive()) setSessionsError(e ?? new Error("sessions load failed"));
+      });
+    },
+    [sessionsReload],
+  );
 
   async function onConfirmDelete() {
     if (!deleteTarget) return;
@@ -243,16 +322,22 @@ export default function Account() {
       await api("/v1/auth/sessions/revoke-others", { method: "POST" });
       setConfirmingSignOutOthers(false);
       setExpandedIndex(null);
-      // 尽力删除、单条失败不影响其余（决策 8）：用真实清单刷新，而不是本地
-      // 推算「应该只剩当前一条」，如实反映还剩几个。
-      await loadSessions();
     } catch (e) {
       setSignOutError(
         e instanceof ApiError ? e.message : t("account.sessions.signOutError"),
       );
+      return;
     } finally {
       setSigningOut(false);
     }
+    // 尽力删除、单条失败不影响其余（决策 8）：用真实清单刷新，而不是本地推算
+    // 「应该只剩当前一条」，如实反映还剩几个。
+    //
+    // 这一步在弹窗关掉之后才发生，所以它的失败不能再写进弹窗脚部——那句话会落进
+    // 一个已经卸载的容器，用户既看不到提示，看到的又是一份没刷新的旧清单。
+    await loadSessions().catch((e: unknown) => {
+      setSessionsError(e ?? new Error("sessions load failed"));
+    });
   }
 
   function openAdd() {
@@ -371,18 +456,19 @@ export default function Account() {
                 {unavailableBannerText(t, passkeySupportState)}
               </p>
             )}
-            {passkeys === null ? (
-              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-                {t("common.loading")}
-              </p>
-            ) : passkeysError ? (
-              <Alert variant="destructive" className="m-4">
-                <AlertDescription>
-                  {passkeysError instanceof ApiError
-                    ? passkeysError.message
-                    : t("account.passkeys.loadError")}
-                </AlertDescription>
-              </Alert>
+            {passkeysError ? (
+              // 错误排在「还没到」前面：失败路径不写 passkeys，排在后面的话这张卡
+              // 会永远停在「加载中…」，而这条文案永远渲染不到。
+              <CardLoadError
+                error={passkeysError}
+                fallback={t("account.passkeys.loadError")}
+                onRetry={() => {
+                  setPasskeysError(null);
+                  setPasskeysReload((k) => k + 1);
+                }}
+              />
+            ) : passkeys === null ? (
+              <CardListSkeleton rows={2} />
             ) : passkeys.length === 0 ? (
               <EmptyState
                 icon={KeyRound}
@@ -454,18 +540,17 @@ export default function Account() {
               ) : undefined
             }
           >
-            {sessions === null ? (
-              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-                {t("common.loading")}
-              </p>
-            ) : sessionsError ? (
-              <Alert variant="destructive" className="m-4">
-                <AlertDescription>
-                  {sessionsError instanceof ApiError
-                    ? sessionsError.message
-                    : t("account.sessions.loadError")}
-                </AlertDescription>
-              </Alert>
+            {sessionsError ? (
+              <CardLoadError
+                error={sessionsError}
+                fallback={t("account.sessions.loadError")}
+                onRetry={() => {
+                  setSessionsError(null);
+                  setSessionsReload((k) => k + 1);
+                }}
+              />
+            ) : sessions === null ? (
+              <CardListSkeleton rows={2} />
             ) : (
               <>
                 <ul>

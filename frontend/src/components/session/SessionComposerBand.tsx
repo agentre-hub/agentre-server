@@ -202,9 +202,10 @@ export default function SessionComposerBand({
                 重连期间**不禁用**（决策 6）：重连通常几秒就回来，禁用换来的只是
                 让人干等着。这时按发送会排一条看得见的队，连上自动发出。
               */
-            disabled={
-              sending || (status !== "connected" && status !== "reconnecting")
-            }
+            disabled={status !== "connected" && status !== "reconnecting"}
+            // 在途单独说，不折进 disabled：包据此把提交键转成 spinner，输入框保持
+            // 可用，用户还能接着敲下一句。
+            sending={sending}
             onSubmit={(text, images) => onSubmit(text, images)}
             contextUsage={contextUsage}
             permissionMode={permissionMode}

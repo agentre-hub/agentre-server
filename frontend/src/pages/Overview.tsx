@@ -16,6 +16,7 @@ import {
   Alert,
   AlertDescription,
   Button,
+  Skeleton,
   cn,
   orgBackendTypeLabel,
 } from "@agentre-hub/agentre-ui";
@@ -137,6 +138,7 @@ function StatsCard({
   meta,
   action,
   testId,
+  busy,
   children,
   className,
 }: {
@@ -144,12 +146,15 @@ function StatsCard({
   meta?: string | null;
   action?: React.ReactNode;
   testId?: string;
+  /** 这张卡的内容还在路上。骨架自己是 aria-hidden 的，只能由这里说。 */
+  busy?: boolean;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
     <section
       data-testid={testId}
+      aria-busy={busy || undefined}
       className={cn(
         "flex min-w-0 flex-col rounded-lg border border-border bg-card",
         className,
@@ -215,9 +220,9 @@ function TileSkeletons() {
           aria-hidden="true"
           className="flex min-w-0 flex-col gap-2.5 rounded-md border border-border bg-card px-3.5 py-3"
         >
-          <span className="h-[11px] w-16 rounded-sm bg-muted" />
-          <span className="h-6 w-12 rounded-sm bg-muted" />
-          <span className="h-2 w-24 rounded-sm bg-muted" />
+          <Skeleton className="h-[11px] w-16" />
+          <Skeleton className="h-6 w-12" />
+          <Skeleton className="h-2 w-24" />
         </div>
       ))}
     </>
@@ -229,8 +234,8 @@ function CardSkeleton({ rows }: { rows: number }) {
     <div aria-hidden="true" className="flex flex-col gap-3.5">
       {Array.from({ length: rows }, (_, i) => (
         <div key={i} className="flex flex-col gap-1.5">
-          <span className="h-[11px] w-24 rounded-sm bg-muted" />
-          <span className="h-1.5 w-full rounded-full bg-muted" />
+          <Skeleton className="h-[11px] w-24" />
+          <Skeleton className="h-1.5 w-full rounded-full" />
         </div>
       ))}
     </div>
@@ -247,6 +252,21 @@ export default function Overview() {
 
   const [stats, setStats] = useState<StatsOverview | null>(null);
   const [statsError, setStatsError] = useState<unknown>(null);
+  /**
+   * 这一轮的答复回来了没有，以及屏幕上那组数字是哪个范围的。
+   *
+   * 不另立一个 `loading` 标志：那种写法要在 effect 体里 setState（本仓禁），而且
+   * 「置真」漏一次就永远转不完。改成拿答复自带的轮次与当前这一轮比——换范围、按
+   * 重试，key 当场对不上，界面自动回到「在取」。
+   *
+   * `loadedRange` 只在成功时落。标签跟着它走而不是跟着 `range` 走，否则点下「7 天」
+   * 到新数字回来之间，四个格子会写着「近 7 天」却摆着 30 天的数——一组可读且错误
+   * 的数字，比闪一下骨架坏得多。
+   */
+  const requestKey = `${range}|${reloadKey}`;
+  const [settledKey, setSettledKey] = useState<string | null>(null);
+  const [loadedRange, setLoadedRange] = useState<StatsRange | null>(null);
+  const fetching = settledKey !== requestKey;
 
   // 三份辅助数据都是锦上添花：取不到就保持空，对应的那一段不画，不阻塞整页。
   const [devices, setDevices] = useState<DeviceItem[] | null>(null);
@@ -255,15 +275,20 @@ export default function Overview() {
 
   useAliveEffect(
     (alive) => {
+      const key = `${range}|${reloadKey}`;
       fetchStatsOverview(range)
         .then((got) => {
           if (!alive()) return;
           setStats(got);
           setStatsError(null);
+          setLoadedRange(range);
+          setSettledKey(key);
         })
         .catch((e: unknown) => {
+          if (!alive()) return;
           // 一律存真值：reject(undefined) 是存在的，原样存进去会让页面永远停在骨架上。
-          if (alive()) setStatsError(e ?? new Error("stats load failed"));
+          setStatsError(e ?? new Error("stats load failed"));
+          setSettledKey(key);
         });
     },
     [range, reloadKey],
@@ -313,7 +338,7 @@ export default function Overview() {
     [projects],
   );
 
-  const rangeLabel = t(`overview.stats.range.${range}`);
+  const rangeLabel = t(`overview.stats.range.${loadedRange ?? range}`);
   const heatmapWeeks = isMobile ? HEATMAP_MOBILE_WEEKS : HEATMAP_DESKTOP_WEEKS;
 
   const monthRange = useMemo(() => {
@@ -421,6 +446,9 @@ export default function Overview() {
                 <Button
                   size="xs"
                   variant="outline"
+                  // 按下去要有反应：第二次也失败的话界面一个像素都不会变，
+                  // 用户无从判断自己是不是点空了，只会连点。
+                  disabled={fetching}
                   onClick={() => setReloadKey((k) => k + 1)}
                 >
                   {t("overview.stats.error.retry")}
@@ -452,6 +480,7 @@ export default function Overview() {
             {/* 摘要四格 */}
             <div
               data-testid="overview-tiles"
+              aria-busy={fetching || undefined}
               className="grid grid-cols-2 gap-3 md:grid-cols-4"
             >
               {summary === undefined ? (
@@ -632,6 +661,7 @@ export default function Overview() {
             >
               <StatsCard
                 testId="card-agents"
+                busy={fetching}
                 className="min-w-0 flex-1"
                 title={t("overview.stats.agents.title")}
                 meta={rangeLabel}
@@ -672,6 +702,7 @@ export default function Overview() {
               >
                 <StatsCard
                   testId="card-backends"
+                  busy={fetching}
                   title={t("overview.stats.backends.title")}
                   meta={rangeLabel}
                 >
@@ -694,6 +725,7 @@ export default function Overview() {
 
                 <StatsCard
                   testId="card-projects"
+                  busy={fetching}
                   title={t("overview.stats.projects.title")}
                   meta={rangeLabel}
                 >

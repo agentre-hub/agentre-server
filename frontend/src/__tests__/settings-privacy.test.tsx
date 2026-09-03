@@ -196,6 +196,46 @@ describe("设置 · 隐私", () => {
     expect(within(saved).queryByTestId("privacy-saved-count")).toBeNull();
   });
 
+  it("首屏不留白：正文位置先摆骨架，「在取」由容器说", async () => {
+    let release: (v: unknown) => void = () => {};
+    serve({
+      "/v1/stats/settings": () => new Promise((r) => (release = r)),
+    });
+    renderSettings("/settings?tab=privacy");
+
+    // 此前这一档整个返回 null：页签行和标题之下一个像素都没有，数据落地时两张卡
+    // 一次性撑开；而且它和「这个账号没有隐私设置」长得一模一样。
+    const holder = await screen.findByTestId("privacy-activity-loading");
+    expect(holder.getAttribute("aria-busy")).toBe("true");
+    // 骨架自己对读屏隐藏：几条灰条不必把「在取」再念一遍。
+    expect(
+      within(holder)
+        .getByTestId("privacy-activity-skeleton")
+        .getAttribute("aria-hidden"),
+    ).toBe("true");
+
+    release({ ...settingsResponse(), code: 0 });
+    await screen.findByTestId("privacy-activity-panel");
+    expect(screen.queryByTestId("privacy-activity-loading")).toBeNull();
+  });
+
+  it("读失败给一条重试的路，按下去真的重取", async () => {
+    let calls = 0;
+    serve({
+      "/v1/stats/settings": () => {
+        calls += 1;
+        if (calls === 1) throw new Error("stats settings unavailable");
+        return settingsResponse();
+      },
+    });
+    renderSettings("/settings?tab=privacy");
+
+    // 读不到之后唯一的出路不该是「刷新整页」。
+    fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+    expect(await screen.findByTestId("privacy-activity-panel")).toBeTruthy();
+    expect(calls).toBe(2);
+  });
+
   it("读失败就说读失败，不给一个猜出来的开关状态", async () => {
     serve({
       "/v1/stats/settings": () => {

@@ -134,6 +134,61 @@ beforeEach(async () => {
   mockOrgApi();
 });
 
+describe("组织页的非稳态", () => {
+  function renderOrgAt(entry: string) {
+    return render(
+      <MemoryRouter initialEntries={[entry]}>
+        <ThemeProvider>
+          <Routes>
+            <Route path="/org/:kind?/:syncId?" element={<Org />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("深链接首屏：详情列摆骨架，不先画一次「没选中任何一行」", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/workspace/org") return new Promise(() => {});
+      if (path === "/v1/workspace/org/backends") return { backends };
+      throw new Error(`unexpected request: ${path}`);
+    });
+    renderOrgAt("/org/agent/alice-sync");
+
+    // 这条路径就是为深链接设计的，而 chart 还没到时详情列照样走到最后一档：
+    // 「没选中任何一行，来新建吧」——一句在此刻确定为假的话。
+    const holder = await screen.findByTestId("org-detail-loading");
+    expect(holder.getAttribute("aria-busy")).toBe("true");
+    expect(screen.queryByTestId("org-detail-empty")).toBeNull();
+  });
+
+  it("拉取失败：说没能加载并给重试，不伪装成「还没有任何部门」", async () => {
+    let calls = 0;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (
+        path === "/v1/workspace/org" &&
+        (!init || init.method === undefined)
+      ) {
+        calls += 1;
+        if (calls === 1) throw new Error("org unavailable");
+        return chart;
+      }
+      if (path === "/v1/workspace/org/backends") return { backends };
+      throw new Error(`unexpected request: ${path}`);
+    });
+    renderOrgAt("/org");
+
+    // 空的 models 画出来就是「还没有任何部门 / 新建一个部门开始」——用户可能据此
+    // 去建一个已经存在的部门。
+    const failed = await screen.findByTestId("org-index-failed");
+    expect(screen.queryByTestId("org-index-empty-departments")).toBeNull();
+
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Alice")).toBeTruthy();
+    expect(calls).toBe(2);
+  });
+});
+
 describe("组织索引：与桌面端同形（共享组件搭成）", () => {
   it("空部门照常摆组头，即使一个 Agent 都没有（决策 13）", async () => {
     renderOrg();

@@ -133,7 +133,7 @@
     "notConfigured": "未配置",
     "noProjectsReported": "这台设备还没有上报任何项目。",
     "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
-    "detailLoadError": "无法加载这台设备的详情，请重试。",
+    "detailLoadError": "无法加载这台设备的详情。",
     "sessions": "对话",
     "countLabel": "{{count}} 台设备",
     "sessionCount": "{{count}} 条对话",

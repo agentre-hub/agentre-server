@@ -133,7 +133,7 @@
     "notConfigured": "Not configured",
     "noProjectsReported": "No projects reported from this device yet.",
     "noRunnableAgents": "No agents can run on this device yet.",
-    "detailLoadError": "Could not load this device's details. Please try again.",
+    "detailLoadError": "Could not load this device's details.",
     "sessions": "Conversations",
     "countLabel": "{{count}} devices",
     "sessionCount": "{{count}} conversations",

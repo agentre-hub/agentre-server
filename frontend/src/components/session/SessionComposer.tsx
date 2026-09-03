@@ -56,6 +56,7 @@ export default function SessionComposer({
   agents,
   disabled,
   disabledReason,
+  sending,
   onSubmit,
   contextUsage,
   feedback,
@@ -74,6 +75,14 @@ export default function SessionComposer({
   disabled: boolean;
   /** 发不出去时的如实说明（离线 / 设备已撤销 / 机器没升级）。 */
   disabledReason?: string | null;
+  /**
+   * 发送 RPC 在途。包据此把提交键转成 spinner。
+   *
+   * 它与 `disabled` 是两件事：按下之后到回声落地之前，用户那句话在转录里还不存在，
+   * 三点也没点亮——把在途折进 `disabled` 的话，输入框整块变灰而屏幕上一个字都没有
+   * 他刚说的话，这段窗口里界面看起来像卡住了。
+   */
+  sending?: boolean;
   onSubmit: (text: string, images?: ChatImageAttachment[]) => void;
   /**
    * 上下文用量。给不出（runtime 还没探到窗口）时整块不摆 —— 不拿一个编出来的
@@ -164,6 +173,7 @@ export default function SessionComposer({
         <ChatComposer
           inputHandleRef={inputRef}
           disabled={disabled}
+          sending={sending}
           backendType={backendType}
           supportsImageInput
           sendButtonTestId="session-detail-send"

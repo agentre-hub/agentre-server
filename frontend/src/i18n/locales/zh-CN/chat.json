@@ -11,6 +11,7 @@
   "noProjectsOnMachine": "这台机器上没有已配置的项目。",
   "projectPathMissing": "该设备未配置远端路径",
   "connectFailed": "连不上 {{machine}}，请重试。",
+  "planFailed": "这次没问到执行目标。",
   "remoteStartFailed": "{{machine}} 已连接，但 Agent 启动失败：{{error}}",
   "cancel": "取消",
   "back": "返回",

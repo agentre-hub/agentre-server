@@ -245,13 +245,29 @@ export default function SessionScrollBody({
                 {t("session.transcript.loadingEarlier")}
               </p>
             )}
-            {!earlier.loading && earlier.capped && earlier.hasBefore && (
-              <div className="flex justify-center py-1">
+            {!earlier.loading && earlier.failed && (
+              // 说出来并给一条回程。这一档与「补到封顶」互斥地摆在同一带上：
+              // 两者都是「更早的还在，只是这一下没读到」。
+              <div
+                data-testid="session-earlier-failed"
+                className="flex flex-wrap items-center justify-center gap-2 py-1 text-xs text-muted-foreground"
+              >
+                <span>{t("session.transcript.earlierFailed")}</span>
                 <Button variant="outline" size="sm" onClick={onLoadEarlier}>
-                  {t("session.transcript.loadEarlier")}
+                  {t("common.retry")}
                 </Button>
               </div>
             )}
+            {!earlier.loading &&
+              !earlier.failed &&
+              earlier.capped &&
+              earlier.hasBefore && (
+                <div className="flex justify-center py-1">
+                  <Button variant="outline" size="sm" onClick={onLoadEarlier}>
+                    {t("session.transcript.loadEarlier")}
+                  </Button>
+                </div>
+              )}
             <Transcript
               messages={messages}
               // 共享包的转录消息仍带一格旧身份 sessionId:number，本宿主一律填同一个

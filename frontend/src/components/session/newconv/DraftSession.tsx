@@ -10,6 +10,7 @@ import {
   type TranscriptMessage,
   Alert,
   AlertDescription,
+  Button,
   cn,
   iconNode,
   normalizePermissionMode,
@@ -108,7 +109,9 @@ export function DraftSession({
    * 清一次 state。这样既不用在 effect 体里 setState，也顺带堵住一种真实的错序——
    * 上一组入参的响应晚于新的一组回来时，它带的 key 已经不是当前这组，覆盖不上。
    */
-  const planKey = `${agent.sync_id}|${projectSyncId ?? ""}|${targetBackendSyncId ?? ""}`;
+  /** 手动重试的轮次。并进 planKey：按一次就对不上，界面当场回到「还在算」。 */
+  const [planAttempt, setPlanAttempt] = useState(0);
+  const planKey = `${agent.sync_id}|${projectSyncId ?? ""}|${targetBackendSyncId ?? ""}|${planAttempt}`;
   const [planState, setPlanState] = useState<{
     key: string;
     plan?: DispatchPlan;
@@ -277,9 +280,10 @@ export function DraftSession({
         onStarted(out);
       } catch (e: unknown) {
         setStartError(e);
-      } finally {
-        // 只在**失败**时收回：成功那一路紧接着就换成真会话详情了，此刻把这句话
-        // 撤掉只会让屏幕空一拍。
+        // 提交那一刻输入框已经被清空，而占位是唯一显示这句话的地方——占位一撤，
+        // 用户写的整段话就没了。把它还回输入框：字留在屏幕上、改得动、重发只差
+        // 一次回车。SendFailureBubble 立的就是这条规矩。
+        composerRef.current?.loadDraft(message);
         setStarting(null);
       }
     },
@@ -356,11 +360,23 @@ export function DraftSession({
           </p>
 
           {planError ? (
-            <Alert variant="destructive">
-              <AlertDescription>
-                {planError instanceof ApiError
-                  ? planError.message
-                  : t("device.manage.loadError")}
+            // 这条 effect 只在 agent/项目/执行档变化时重跑：没有这颗按钮的话，用户
+            // 唯一的出路是去换个项目再换回来。
+            <Alert variant="destructive" data-testid="draft-plan-failed">
+              <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
+                <span className="min-w-0">
+                  {planError instanceof ApiError
+                    ? planError.message
+                    : t("device.manage.loadError")}
+                </span>
+                <span className="flex-1" />
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setPlanAttempt((k) => k + 1)}
+                >
+                  {t("common.retry")}
+                </Button>
               </AlertDescription>
             </Alert>
           ) : !plan ? (
@@ -438,13 +454,16 @@ export function DraftSession({
                   />
                 ) : undefined
               }
-              // 发不出去时如实说是哪一种：还在算计划，还是一档都不可用。
+              // 发不出去时如实说是哪一种：还在算计划、这次没问到、还是问到了但
+              // 一档都不可用。后两者是两件事，合并等于替服务端下一个它没下的结论。
               disabledReason={
                 chosen
                   ? null
-                  : !plan && !planError
-                    ? t("common.loading")
-                    : t("overview.noAvailableTarget")
+                  : planError
+                    ? t("chat.planFailed")
+                    : !plan
+                      ? t("common.loading")
+                      : t("overview.noAvailableTarget")
               }
               onSubmit={(text) => void start(text)}
               feedback={

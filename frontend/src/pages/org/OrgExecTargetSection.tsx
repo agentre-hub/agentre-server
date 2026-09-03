@@ -214,17 +214,26 @@ export function OrgExecTargetSection(props: OrgExecTargetSectionProps) {
   const orderable = props.targets.map(toOrderable);
 
   // 拖拽、拖拽柄上的 ↑/↓ 全部收敛到这里：一次移动只有一个提交口，播报也只有一处。
+  //
+  // 播报排在保存**之后**：抢在前面的话，保存失败时读屏刚被告知「已移到第 N 位」，
+  // 而行其实弹回了原处。失败也必须有人接——两个调用点都是 `void commit(...)`，
+  // 抛出去就是一条未处理的 rejection 加一个一声不吭的界面。
   const commit = async (move: TierMove) => {
+    try {
+      await saveExecTargetOrder({
+        agentSyncId: props.agentSyncId,
+        backendSyncIds: move.ids,
+      });
+    } catch {
+      setAnnouncement(t("org.detail.execTargets.orderFailed"));
+      return;
+    }
     setAnnouncement(
       t("org.detail.execTargets.moved", {
         position: move.landed + 1,
         total,
       }),
     );
-    await saveExecTargetOrder({
-      agentSyncId: props.agentSyncId,
-      backendSyncIds: move.ids,
-    });
     props.onReordered();
   };
 

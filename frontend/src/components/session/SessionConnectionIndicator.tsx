@@ -60,7 +60,10 @@ export default function SessionConnectionIndicator({
           className,
         )}
       >
-        <LoaderCircle aria-hidden className="size-3 animate-spin" />
+        <LoaderCircle
+          aria-hidden
+          className="size-3 animate-spin motion-reduce:animate-none"
+        />
         {t(shape.copyKey)}
       </span>
       {/* 进度条对读屏隐藏：芯片上的文字已经把同一件事说完了，一条量不出进度的

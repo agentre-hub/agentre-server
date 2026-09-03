@@ -1173,6 +1173,25 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
     expect(screen.queryByText(/View all/)).toBeNull();
   });
 
+  it("弹层首屏不是一块空白：第一页回来之前先摆骨架", async () => {
+    // 第一页一直在飞：这条用例量的就是点开之后到第一页落地之间那段窗口。
+    const loadGroupPage = vi.fn(() => new Promise<never>(() => {}));
+    renderIndex({
+      axis: "project",
+      rows,
+      groupTotals: { "p-server": 9 },
+      loadGroupPage,
+    });
+
+    fireEvent.click(screen.getByText("View all 9 sessions"));
+
+    // 首屏三个分支此前全落空（loading=true、hasMore=false、rows 为空），
+    // 用户点开得到的是一个 360px 宽的空白浮层。
+    const holder = await screen.findByTestId("group-overflow-loading");
+    expect(holder.getAttribute("aria-busy")).toBe("true");
+    expect(within(holder).getByTestId("session-list-skeleton")).toBeTruthy();
+  });
+
   it("点「查看全部 N」按这一组的 scope 翻页，列出翻回来的行", async () => {
     const loadGroupPage = vi.fn(async () => ({
       rows: [row({ key: "c", conversationId: "3", title: "第三条" })],

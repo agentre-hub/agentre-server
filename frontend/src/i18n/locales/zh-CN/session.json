@@ -100,6 +100,7 @@
     "error": "错误",
     "waiting": "正在等待你的输入…",
     "loadEarlier": "加载更早的",
+    "earlierFailed": "没能读到更早的内容。",
     "loadingEarlier": "正在读取更早的…",
     "readingFromMachine": "正在从这台机器读取这条对话…",
     "catchUpFailed": "没能从这台机器读到这条对话的内容，它可能还在补齐。"

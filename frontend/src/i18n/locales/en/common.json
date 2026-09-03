@@ -4,6 +4,7 @@
   "close": "Close",
   "cancel": "Cancel",
   "loading": "Loading…",
+  "retry": "Retry",
   "saving": "Saving…",
   "saved": "Saved",
   "saveFailed": "Save failed",

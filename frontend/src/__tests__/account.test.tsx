@@ -175,6 +175,82 @@ describe("Account page: three cards render real data", () => {
   });
 });
 
+describe("Account page: a card that fails to load says so and offers a way back", () => {
+  it("shows the passkey load error with a retry instead of a spinner that never ends", async () => {
+    let calls = 0;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/auth/me") return ME;
+      if (path === "/v1/auth/sessions") return SESSIONS;
+      if (
+        path === "/v1/passkeys" &&
+        (!init || (init.method ?? "GET") === "GET")
+      ) {
+        calls += 1;
+        if (calls === 1) throw new Error("passkeys unavailable");
+        return PASSKEYS;
+      }
+      throw new Error(`unexpected call: ${path}`);
+    });
+    renderAccount();
+
+    // 此前 `passkeys === null` 排在错误分支前面，而失败路径不写 passkeys：
+    // 于是这张卡永远停在「加载中…」，那条已经翻译好的错误文案永远渲染不到。
+    expect(
+      await screen.findByText("Could not load your passkeys."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Loading…")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("YubiKey 5C")).toBeTruthy();
+    expect(calls).toBe(2);
+  });
+
+  it("shows the session load error with a retry", async () => {
+    let calls = 0;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/auth/me") return ME;
+      if (
+        path === "/v1/passkeys" &&
+        (!init || (init.method ?? "GET") === "GET")
+      )
+        return PASSKEYS;
+      if (path === "/v1/auth/sessions") {
+        calls += 1;
+        if (calls === 1) throw new Error("sessions unavailable");
+        return SESSIONS;
+      }
+      throw new Error(`unexpected call: ${path}`);
+    });
+    renderAccount();
+
+    expect(
+      await screen.findByText("Could not load your sessions."),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("203.0.113.24")).toBeTruthy();
+    expect(calls).toBe(2);
+  });
+
+  it("holds each card's height with a skeleton while it loads, and says it is busy", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return ME;
+      return new Promise(() => {});
+    });
+    renderAccount();
+
+    // 一行居中的「加载中…」不占位置：三张卡在数据落地时各抽一下。
+    const holders = await screen.findAllByTestId("card-loading");
+    expect(holders.length).toBe(2);
+    for (const holder of holders) {
+      expect(holder.getAttribute("aria-busy")).toBe("true");
+      expect(
+        within(holder).getByTestId("card-skeleton").getAttribute("aria-hidden"),
+      ).toBe("true");
+    }
+    expect(screen.queryByText("Loading…")).toBeNull();
+  });
+});
+
 describe("Account page: passkey deletion and sign-out-elsewhere are confirmed twice", () => {
   it("deleting a passkey opens a confirmation and only calls DELETE after it is confirmed", async () => {
     markWebauthnSupported();

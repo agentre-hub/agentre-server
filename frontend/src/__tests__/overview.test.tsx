@@ -678,6 +678,114 @@ describe("overview: 非稳态", () => {
     expect(calls).toBe(2);
   });
 
+  it("加载中这件事由容器上的 aria-busy 说，落地后当场撤掉", async () => {
+    let release: (v: unknown) => void = () => {};
+    serve({
+      "/v1/stats/overview": () => new Promise((r) => (release = r)),
+    });
+    renderOverview();
+
+    // 骨架自己是 aria-hidden 的（见 SessionListSkeleton 的成文约定），所以
+    // 「正在取」只能由承载它的容器说；不说的话读屏用户整段加载期一片安静。
+    const tiles = await screen.findByTestId("overview-tiles");
+    expect(tiles.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByTestId("card-agents").getAttribute("aria-busy")).toBe(
+      "true",
+    );
+
+    release({ ...statsResponse(), code: 0 });
+    await screen.findByTestId("tile-conversations");
+    expect(screen.getByTestId("overview-tiles").getAttribute("aria-busy")).toBe(
+      null,
+    );
+    expect(screen.getByTestId("card-agents").getAttribute("aria-busy")).toBe(
+      null,
+    );
+  });
+
+  it("骨架条是会动的占位，不是静止的灰块", async () => {
+    serve({ "/v1/stats/overview": () => new Promise(() => {}) });
+    renderOverview();
+
+    const bar = (await screen.findAllByTestId("tile-skeleton"))[0]
+      .firstElementChild!;
+    // 与既有三处骨架同色（bg-secondary）：bg-muted 压在 --background 上几乎不显影，
+    // 静止的灰块读起来像内容坏了而不像占位。
+    expect(bar.className).toContain("bg-secondary");
+    expect(bar.className).toContain("animate-pulse");
+    expect(bar.className).toContain("motion-reduce:animate-none");
+  });
+
+  it("切范围：新数字没回来之前，标签不许先跳到新范围", async () => {
+    let release: (v: unknown) => void = () => {};
+    let calls = 0;
+    serve({
+      "/v1/stats/overview": () => {
+        calls += 1;
+        if (calls === 1) return statsResponse();
+        return new Promise((r) => (release = r));
+      },
+    });
+    renderOverview();
+
+    const tile = await screen.findByTestId("tile-conversations");
+    expect(within(tile).getByText("Last 30 days")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
+    await waitFor(() => expect(calls).toBe(2));
+
+    // 分段控件当场跟手（aria-pressed 已经在 7 天上），但格子里那个数还是 30 天的。
+    // 标签跟着 range 走的话，这段窗口里界面在给一组贴错标签的数字——可读且错误，
+    // 比闪一下骨架坏得多。
+    expect(
+      screen
+        .getByRole("button", { name: "Last 7 days" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      within(screen.getByTestId("tile-conversations")).getByText(
+        "Last 30 days",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByTestId("overview-tiles").getAttribute("aria-busy")).toBe(
+      "true",
+    );
+
+    release({ ...statsResponse(), code: 0 });
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId("tile-conversations")).getByText(
+          "Last 7 days",
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("重试按下去要有反应：请求在路上时按钮停用", async () => {
+    let calls = 0;
+    serve({
+      "/v1/stats/overview": () => {
+        calls += 1;
+        if (calls === 1) throw new Error("stats unavailable");
+        return new Promise(() => {});
+      },
+    });
+    renderOverview();
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    fireEvent.click(retry);
+
+    // 第二次也失败的话界面上一个像素都不会变，用户只会连点。
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(calls).toBe(2);
+  });
+
   it("全新账号：引导先登记一台设备，热力图全灰并说明这片灰是什么", async () => {
     serve({
       "/v1/stats/overview": freshAccountResponse(),

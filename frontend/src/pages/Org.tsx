@@ -18,7 +18,12 @@ import { useNavigate, useParams } from "react-router-dom";
 import AppShell from "@/components/AppShell";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { EmptyState } from "@/components/console";
-import { Button, cn, type OrgSelection } from "@agentre-hub/agentre-ui";
+import {
+  Button,
+  Skeleton,
+  cn,
+  type OrgSelection,
+} from "@agentre-hub/agentre-ui";
 
 import { buildOrgModels } from "./org/adapter";
 import {
@@ -30,6 +35,63 @@ import { OrgDepartmentDetail } from "./org/OrgDepartmentDetail";
 import { OrgIndexPanel } from "./org/OrgIndexPanel";
 import { useOrgData } from "./org/useOrgData";
 import * as writes from "./org/writes";
+
+/**
+ * 索引列首屏的骨架：一条工具条 + 交替的组头/缩进行。
+ *
+ * 形照索引的真实构成来，**不**做成树骨架（三角、连接线）——这一屏本来就是扁平的
+ * 组头加缩进行，没有展开动画。骨架自己 aria-hidden，「在取」由容器上的 aria-busy 说。
+ */
+function OrgIndexSkeleton() {
+  return (
+    <div data-testid="org-index-loading" aria-busy="true" className="min-w-0">
+      <div aria-hidden="true" className="flex flex-col gap-2 p-2.5">
+        <Skeleton className="h-8 w-full rounded-md" />
+        {[0, 1, 2, 3, 4, 5].map((i) => {
+          const isHeader = i % 3 === 0;
+          return (
+            <Skeleton
+              key={i}
+              className={isHeader ? "h-3" : "h-6 rounded-md"}
+              style={{
+                marginLeft: isHeader ? 4 : 18,
+                width: isHeader ? "38%" : `${72 - (i % 3) * 10}%`,
+              }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** 详情列首屏的骨架：头部一条标题 + 两节字段。 */
+function OrgDetailSkeleton() {
+  return (
+    <div
+      data-testid="org-detail-loading"
+      aria-busy="true"
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      <div aria-hidden="true" className="flex flex-col gap-5 p-5">
+        <div className="flex items-center gap-3">
+          <Skeleton className="size-10 shrink-0 rounded-md" />
+          <span className="flex min-w-0 flex-1 flex-col gap-2">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-2.5 w-24" />
+          </span>
+        </div>
+        {[0, 1].map((section) => (
+          <div key={section} className="flex flex-col gap-2.5">
+            <Skeleton className="h-2.5 w-20" />
+            <Skeleton className="h-9 w-full rounded-md" />
+            <Skeleton className="h-9 w-3/4 rounded-md" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 type SyncSelection = { kind: "agent" | "department"; syncId: string } | null;
 
@@ -153,6 +215,21 @@ export default function Org() {
   const showIndex = !isMobile || !selection;
   const showDetail = !isMobile || Boolean(selection);
 
+  /**
+   * 首屏的两档非稳态。**两列共用**，因为它们说的是同一件事：整份组织架构是一次性
+   * 拉全的，没到就是两列都没到。
+   *
+   * 此前 `loading && !chart` 只守了索引列，详情列照样走到最后一档——带
+   * `/org/agent/<sync>` 的深链接（这条路径就是为深链接设计的）会先看到「没选中任何
+   * 一行，来新建吧」，一句在那一刻确定为假的话；移动端更糟：有 selection 时索引列
+   * 整个不渲染，那唯一一处 loading 提示也不存在。
+   *
+   * 失败同理：空的 models 画出来就是「还没有任何部门 / 新建一个部门开始」，用户可能
+   * 据此去建一个已经存在的部门。
+   */
+  const initialLoading = loading && !chart;
+  const initialFailed = error !== null && !chart;
+
   return (
     <AppShell title={t("org.pageTitle")}>
       <div
@@ -180,10 +257,24 @@ export default function Org() {
                 : "w-[320px] shrink-0 border-r border-sidebar-border",
             )}
           >
-            {loading && !chart ? (
-              <p className="p-4 text-sm text-muted-foreground">
-                {t("common.loading")}
-              </p>
+            {initialFailed ? (
+              <div
+                data-testid="org-index-failed"
+                className="flex flex-col items-start gap-2.5 p-4"
+              >
+                <p className="text-sm text-muted-foreground">
+                  {t("org.errors.loadFailed")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void reload()}
+                >
+                  {t("common.retry")}
+                </Button>
+              </div>
+            ) : initialLoading ? (
+              <OrgIndexSkeleton />
             ) : (
               <OrgIndexPanel
                 departments={models.departments}
@@ -207,7 +298,7 @@ export default function Org() {
                 }
               />
             )}
-            {(error ?? mutationError) && (
+            {!initialFailed && (error ?? mutationError) && (
               <p
                 role="alert"
                 className="border-t border-border p-2.5 text-2xs text-destructive"
@@ -223,7 +314,25 @@ export default function Org() {
             data-testid="org-detail-col"
             className="flex min-w-0 flex-1 flex-col"
           >
-            {selectedAgent && selectedAgentModel ? (
+            {initialFailed ? (
+              <div
+                data-testid="org-detail-failed"
+                className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 p-6"
+              >
+                <p className="text-sm text-muted-foreground">
+                  {t("org.errors.loadFailed")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void reload()}
+                >
+                  {t("common.retry")}
+                </Button>
+              </div>
+            ) : initialLoading ? (
+              <OrgDetailSkeleton />
+            ) : selectedAgent && selectedAgentModel ? (
               <OrgAgentDetail
                 // key 强制在切到另一个 Agent 时整个重挂载：详情表单的字段状态
                 // （name/description/…）只在挂载时从 props 取初值，同一个组件实例

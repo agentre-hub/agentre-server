@@ -234,6 +234,37 @@ describe("Login", () => {
       expect(screen.getByRole("button", { name: /passkey/i })).toBeTruthy();
     });
 
+    it("goes busy while the ceremony is in flight, so a second click cannot cancel the first", async () => {
+      Object.defineProperty(window, "PublicKeyCredential", {
+        value: function PublicKeyCredential() {},
+        configurable: true,
+        writable: true,
+      });
+
+      // begin 一直不回：这就是用户看着一颗没有任何反应的按钮的那段窗口。
+      const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+      vi.stubGlobal("fetch", fetchMock);
+      const get = vi.fn();
+      vi.stubGlobal(
+        "navigator",
+        Object.create(navigator, { credentials: { value: { get } } }),
+      );
+
+      renderLogin();
+      const btn = screen.getByRole("button", { name: /passkey/i });
+      fireEvent.click(btn);
+
+      // 第二次点击会让浏览器中止第一次 credentials.get，抛 NotAllowedError，
+      // 被判成「用户取消」→ 一次本来会成功的登录被自己的第二次点击取消掉。
+      await Promise.resolve();
+      expect(
+        (screen.getByRole("button", { name: /passkey/i }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: /passkey/i }));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
     it("does not show passkey button when WebAuthn is not supported", () => {
       // 浏览器不支持时 window.PublicKeyCredential 不存在
       Object.defineProperty(window, "PublicKeyCredential", {
