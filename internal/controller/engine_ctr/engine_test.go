@@ -34,9 +34,8 @@ import (
 )
 
 type stubEngineSvc struct {
-	providerIn    engine_svc.ProviderWriteInput
-	backendIn     engine_svc.BackendWriteInput
-	isSandboxOfID string
+	providerIn engine_svc.ProviderWriteInput
+	backendIn  engine_svc.BackendWriteInput
 }
 
 func (s *stubEngineSvc) ListProviders(context.Context, int64) ([]engine_svc.ProviderView, error) {
@@ -66,10 +65,6 @@ func (s *stubEngineSvc) CreateBackend(_ context.Context, in engine_svc.BackendWr
 }
 func (s *stubEngineSvc) UpdateBackend(context.Context, engine_svc.BackendWriteInput) (*engine_svc.BackendView, error) {
 	return nil, nil
-}
-func (s *stubEngineSvc) AddBackendIsSandbox(_ context.Context, _ int64, id string) (*engine_svc.BackendView, error) {
-	s.isSandboxOfID = id
-	return &engine_svc.BackendView{SyncID: id, Name: "Claude Code", Type: "claudecode"}, nil
 }
 func (s *stubEngineSvc) DeleteBackend(context.Context, int64, string) error { return nil }
 func (s *stubEngineSvc) ListCLIOverlays(context.Context, int64) ([]engine_svc.CLIOverlayView, error) {
@@ -198,23 +193,6 @@ func TestDeviceSnapshot_RevokedDeviceIsRejected(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.NotContains(t, string(body), "sk-secret", "撤销的设备不能拿到明文凭据")
-}
-
-// 一键加 IS_SANDBOX：路由把 sync_id 从 URI 取出交给服务层。
-//
-// 控制台不再走这条路——它现在读得到 env 表，改本地 entries 再整体保存，与桌面端同一
-// 套交互。这个只收 sync_id 的服务端合并接口保留给读不到表的调用方，它的契约仍然是
-// 「URI 里的 sync_id 就是要改的那条后端」，这里钉的就是这一点。
-func TestBrowserBackendAddIsSandbox_PassesSyncIDThroughToTheService(t *testing.T) {
-	stub := &stubEngineSvc{}
-	server, _ := newEngineServer(t, stub)
-	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
-	require.NoError(t, err)
-
-	resp := postEngine(t, server.URL+"/v1/engine/backends/backend-1/is-sandbox", sid, sess.CSRFToken, `{}`)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, "backend-1", stub.isSandboxOfID)
 }
 
 // env 表整表往返：请求体里的 env_json 原样落进 BackendWriteInput.EnvJSON，

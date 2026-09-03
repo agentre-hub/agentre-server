@@ -715,10 +715,9 @@ export function createBrowserEngineSettingsPorts(
       backendDTOs.delete(key);
     },
 
-    // addIsSandbox 这个 port 本站不再实现：env 表整表下发之后，一键补 IS_SANDBOX
-    // 走的是共享包里桌面端那条路（改本地 entries、随整体保存落盘）。留着它等于同一个
-    // 动作有两条实现，而其中一条永远不会被调用——服务端 /is-sandbox 那个只收 sync_id
-    // 的合并接口仍在，留给读不到这张表的调用方。
+    // addIsSandbox 这个 port 本站不实现：env 表整表下发之后，一键补 IS_SANDBOX 走的是
+    // 共享包里桌面端那条路（改本地 entries、随整体保存落盘）。服务端那个只收 sync_id
+    // 的合并接口也一并删了——它存在的前提是「浏览器读不到这张表」，前提没了。
 
     async testProvider(providerKey, modelKey) {
       const result = await relayRequest<EngineRPCResult>(

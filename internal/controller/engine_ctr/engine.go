@@ -91,14 +91,6 @@ func (e *Engine) UpdateBackend(c *gin.Context, req *api.UpdateBackendRequest) (*
 	out := backend(*item)
 	return &out, nil
 }
-func (e *Engine) AddBackendIsSandbox(c *gin.Context, req *api.AddBackendIsSandboxRequest) (*api.Backend, error) {
-	item, err := engine_svc.Default().AddBackendIsSandbox(c.Request.Context(), ginctx.UserID(c), req.SyncID)
-	if err != nil {
-		return nil, err
-	}
-	out := backend(*item)
-	return &out, nil
-}
 func (e *Engine) DeleteBackend(c *gin.Context, req *api.DeleteBackendRequest) (*struct{}, error) {
 	if err := engine_svc.Default().DeleteBackend(c.Request.Context(), ginctx.UserID(c), req.SyncID); err != nil {
 		return nil, err
