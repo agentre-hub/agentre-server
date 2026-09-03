@@ -56,13 +56,25 @@ type fakeDaemonNet struct {
 	connects int
 	attaches int
 	detaches int
+	// links 数这台 daemon 换过几条中继链路,当前那条的身份由它派生 —— 真中继在
+	// PrepareDaemon 里逐连接现取一个,登记进在线态键(relay_svc.Route.ConnID)。
+	links int
 }
 
 func newFakeDaemonNet(peer *fakeRelay) *fakeDaemonNet {
 	return &fakeDaemonNet{
-		peer: peer, online: true,
+		peer: peer, online: true, links: 1,
 		broken: map[string]bool{}, channels: map[string]*fakeChannel{},
 	}
+}
+
+func (f *fakeDaemonNet) DaemonConnID(_ context.Context, _ int64, _ string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.online {
+		return "", relay_svc.ErrDaemonOffline
+	}
+	return fmt.Sprintf("daemon-link-%d", f.links), nil
 }
 
 func (f *fakeDaemonNet) ConnectClient(_ context.Context, accountID int64, fingerprint string) (relay_svc.Route, error) {
@@ -301,6 +313,36 @@ func (f *fakeDaemonNet) firstChannel(t *testing.T) fakeChannel {
 	return fakeChannel{authed: ch.authed, credential: ch.credential,
 		fingerprint: ch.fingerprint, protocolVersion: ch.protocolVersion,
 		methods: append([]agentrewire.RpcMethod(nil), ch.methods...)}
+}
+
+// lastChannel 交出最近建立的那条通道,与 firstChannel 同一份快照。
+func (f *fakeDaemonNet) lastChannel(t *testing.T) fakeChannel {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.NotEmpty(t, f.order, "一条通道都没建起来")
+	ch, ok := f.channels[f.order[len(f.order)-1]]
+	require.True(t, ok, "最后一条通道已经被摘掉了")
+	return fakeChannel{authed: ch.authed, credential: ch.credential,
+		fingerprint: ch.fingerprint, protocolVersion: ch.protocolVersion,
+		methods: append([]agentrewire.RpcMethod(nil), ch.methods...)}
+}
+
+// daemonRelinked 模拟 daemon 换了一条中继链路:进程重启,或者链路断开重连。
+//
+// 照真 daemon 的样子:通道 id 与鉴权状态都活在 daemon **那条链路**上,链路一换就都
+// 没了。而中继按指纹寻址,旧通道 id 的帧照样投给新接上的那条 websocket
+// (relay_svc.TestRedisForwarderNewDaemonAttachmentSupersedesOldConnection),daemon 对
+// 没见过的通道 id **新建一条未鉴权通道**(agentre 的 Multiplexer.dispatch),于是那条
+// 通道上除 auth.* 之外的方法一律 Unauthorized。在线态不受影响:容器重启比 OnlineTTL
+// (30 秒)快得多,在线键根本没到期。
+func (f *fakeDaemonNet) daemonRelinked() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.links++
+	for _, ch := range f.channels {
+		ch.authed, ch.credential = false, ""
+	}
 }
 
 // ── 共享的假库:两个副本读写同一份数据,幂等键与真表一致 ──────────────────────
@@ -858,6 +900,43 @@ func TestFollower_MachineWentOffline_ReleasesTheClaim(t *testing.T) {
 		return detaches == 1 && !a.sup.follows(testUserID, testMachine) &&
 			rig.claims(t, testUserID, testMachine) == 0
 	}, time.Second, 5*time.Millisecond)
+}
+
+// Given daemon 换了一条中继链路(进程重启或链路断开重连):它那侧的通道连同鉴权状态
+// 一起没了,而在线态键比这次重连活得久,所以这台机器全程都是「在线」;
+// When 续期轮到;Then 收工并放掉租约 —— 让下一轮巡检重新认领、重新握手。
+//
+// 不放手就是 2026-09-03 在 dev 上实测到的那个形态:keepalive 那两问(租约还在我手里
+// 吗、机器在线吗)全答「是」,常驻循环对 RPC 错误只记一条日志、没有别的出口,而
+// Follow 是幂等的 —— 巡检每轮都报 followed:1 offline:0 failed:0,镜像却一直坏着。
+// 实测连续 9 小时每分钟一条 "session list: Unauthorized",期间保存的三条对话一条都
+// 没镜像下来,已经镜像的那条停在 9 小时前的 seq 上,只有重启 server 才恢复。
+func TestFollower_DaemonRelinked_ReleasesTheClaimSoTheNextPassCanHandshakeAgain(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	a := rig.replica(t, replicaA)
+	ctx := context.Background()
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	a.net.daemonRelinked()
+
+	require.Eventually(t, func() bool {
+		_, _, detaches := a.net.counts()
+		return detaches == 1 && !a.sup.follows(testUserID, testMachine) &&
+			rig.claims(t, testUserID, testMachine) == 0
+	}, time.Second, 5*time.Millisecond,
+		"daemon 换了链路,旧通道在它那侧已经不存在:再跟下去每个 session.* 都是 Unauthorized")
+
+	// 下一轮巡检要能真的把它接回来,而不是把那条废掉的连接再交出去一次。
+	again, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, again, "放手之后下一轮巡检必须认领得回来")
+	connects, attaches, _ := a.net.counts()
+	assert.Equal(t, 2, connects, "重新认领必须新建一条中继连接")
+	assert.Equal(t, 2, attaches)
+	assert.True(t, a.net.lastChannel(t).authed, "新连接上必须重新握手,否则换了通道也还是 Unauthorized")
 }
 
 // ── 副本重启后由别的副本接手,且不产生重复的转录行 ───────────────────────────

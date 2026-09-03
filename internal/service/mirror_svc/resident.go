@@ -29,6 +29,10 @@ var ErrStopped = errors.New("mirror supervisor is stopped")
 // 补做，而不是当成一次失败去重试。
 var ErrMachineOffline = errors.New("mirror machine is offline")
 
+// ErrMachineRelinked 是「这台机器还在线，但换了一条中继链路」。手里那条虚拟通道
+// 在 daemon 那侧已经不存在，接着用只会一路 Unauthorized，见 follower.keepalive。
+var ErrMachineRelinked = errors.New("mirror machine relinked on a new daemon connection")
+
 const (
 	defaultLeaseTTL    = 30 * time.Second
 	defaultRenewEvery  = 10 * time.Second
@@ -287,6 +291,9 @@ type follower struct {
 	lease  *machineLease
 	conn   *machineConn
 	mirror *Mirror
+	// connID 是建这条通道时对端那条 daemon 链路的身份，keepalive 拿它比对，
+	// 只由 start 写一次。
+	connID string
 
 	notes  chan liveNote
 	resync chan struct{}
@@ -330,12 +337,24 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 		// 别的副本正跟着它。正常路径，不打日志、不报错。
 		return false, nil
 	}
+	// 先读链路身份再拨号，顺序是有讲究的：反过来的话，「拨号与读之间对端刚好换了
+	// 链路」会记下**新**链路的身份，而通道建在旧链路上——比对永远相等，换代永远
+	// 发现不了。这个顺序下同一个race 最多让 keepalive 多放一次手，下一轮巡检就接
+	// 回来了。
+	connID, err := f.sup.relay.DaemonConnID(ctx, f.key.userID, f.key.fingerprint)
+	if err != nil {
+		f.releaseLease(ctx)
+		if errors.Is(err, relay_svc.ErrDaemonOffline) {
+			return false, ErrMachineOffline
+		}
+		return false, fmt.Errorf("read machine relay connection: %w", err)
+	}
 	conn, err := f.sup.dial(ctx, f.key, f.enqueue)
 	if err != nil {
 		f.releaseLease(ctx)
 		return false, err
 	}
-	f.conn = conn
+	f.conn, f.connID = conn, connID
 	// Mirror 的第三个身份参数是「这条连接通到哪台机器」，只在对端省略 origin 时用得上。
 	// 真 daemon 在账号鉴权的连接上会给每一行都标上发起端指纹（它只对调用方自己那台
 	// 省略，而这条连接的合成指纹撞不上任何真设备），所以那条回落实际上不会触发——
@@ -428,16 +447,34 @@ func (f *follower) run(ctx context.Context) {
 //
 // 答不上来也算否：Redis 出故障时本副本证明不了租约还在自己手里，继续镜像就可能与
 // 接手方一起写同一条对话。放手是可逆的（下一轮扫描会有人重新认领），重复镜像不是。
+//
+// 「还该由我跟吗」分三问：租约还在我手里吗、机器还在线吗、**我手里那条通道还是它
+// 认的那条吗**。第三问不能省：daemon 侧的虚拟通道连同鉴权状态都活在它那条中继链路
+// 上，进程重启或链路重连之后旧通道在它那侧已经不存在，而中继按指纹寻址，帧照样投给
+// 新链路，daemon 把它当成一条没握过手的新通道 —— 从此这条连接上每个 session.* 都是
+// Unauthorized。前两问对此全答「是」（容器重启比 OnlineTTL 快得多，在线键根本没到
+// 期），所以少了第三问，这条连接会一直烂到进程重启：2026-09-03 在 dev 上实测连续
+// 9 小时，期间保存的对话一条都没镜像下来。
+//
+// 这一问必须是**主动**的，不能改成「等某次调用被 Unauthorized 拒了再说」：换链路
+// 之后那条通道一帧都收不到，而稳态下镜像自己也不发请求——会话都 attach 着时 Revive
+// 开头 unattached() 为空就直接返回（attached 是本端记账，换链路不会把它清掉），保存集
+// 不变就不 Sync。于是根本没有哪一次 RPC 会失败，等错误的判据永远等不到，镜像静静地
+// 死着、日志里一行都没有。dev 上那次能被发现，只是因为当时恰好有几条会话没 attach 上，
+// Revive 才每分钟叫一次。
 func (f *follower) keepalive(ctx context.Context) error {
 	if err := f.lease.renew(ctx); err != nil {
 		return err
 	}
-	online, err := f.sup.relay.IsDaemonOnline(ctx, f.key.userID, f.key.fingerprint)
+	connID, err := f.sup.relay.DaemonConnID(ctx, f.key.userID, f.key.fingerprint)
+	if errors.Is(err, relay_svc.ErrDaemonOffline) {
+		return ErrMachineOffline
+	}
 	if err != nil {
 		return fmt.Errorf("check machine presence: %w", err)
 	}
-	if !online {
-		return ErrMachineOffline
+	if connID != f.connID {
+		return ErrMachineRelinked
 	}
 	return nil
 }

@@ -37,6 +37,7 @@ type RelayDialer interface {
 	AttachClient(ctx context.Context, target relay_svc.Route, writer relay_svc.FrameWriter) (string, func(), error)
 	ForwardClient(ctx context.Context, target relay_svc.Route, channelID string, messageType int, frame []byte) error
 	IsDaemonOnline(ctx context.Context, accountID int64, fingerprint string) (bool, error)
+	DaemonConnID(ctx context.Context, accountID int64, fingerprint string) (string, error)
 }
 
 type rpcResult struct {

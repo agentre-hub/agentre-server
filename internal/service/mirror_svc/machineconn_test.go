@@ -59,6 +59,10 @@ func (d *recordingDialer) IsDaemonOnline(context.Context, int64, string) (bool, 
 	return true, nil
 }
 
+func (d *recordingDialer) DaemonConnID(context.Context, int64, string) (string, error) {
+	return "conn-1", nil
+}
+
 func (d *recordingDialer) detachCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()

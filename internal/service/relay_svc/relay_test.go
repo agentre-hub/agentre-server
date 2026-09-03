@@ -169,8 +169,10 @@ func TestDesktopCanRegisterAndBeResolvedWithinAccount(t *testing.T) {
 	route, err := svc.PrepareDaemon(ctx, desktop.UserID, desktop.ID, device_entity.KindDesktop)
 	require.NoError(t, err)
 	require.Equal(t, Route{
-		AccountID: desktop.UserID, Fingerprint: desktop.Fingerprint, InstanceID: "server-a",
+		AccountID: desktop.UserID, Fingerprint: desktop.Fingerprint,
+		InstanceID: "server-a", ConnID: route.ConnID,
 	}, route)
+	require.NotEmpty(t, route.ConnID, "每条 daemon 连接都要有自己的身份,见 Route.ConnID")
 	require.NoError(t, svc.RegisterDaemon(ctx, route))
 
 	resolved, err := svc.ConnectClient(ctx, desktop.UserID, desktop.Fingerprint)
@@ -211,7 +213,9 @@ func TestPrepareDaemonAcceptsOnlyThisAccountsActiveAddressableDevices(t *testing
 		devices.EXPECT().Find(gomock.Any(), int64(9)).Return(activeDaemon(), nil)
 		route, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
 		require.NoError(t, err)
-		require.Equal(t, Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}, route)
+		require.Equal(t, Route{
+			AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a", ConnID: route.ConnID,
+		}, route)
 	})
 }
 
@@ -934,6 +938,47 @@ func TestRegisterDaemon_SignalsThatPresenceChanged(t *testing.T) {
 
 // Given 一台已经在线的 daemon;When 心跳续期;Then 一声不出。续期不是状态变化,
 // 每 15 秒喊一次会让这个账号所有在线连接跟着白拉一页设备列表。
+// Given 一台 daemon 在线;When 它断开重连(handler 把 PrepareDaemon + RegisterDaemon
+// 重跑一遍);Then 在线态答得出「换了一条链路」—— DaemonConnID 的值必须变。
+//
+// 只答「在不在线」答不出这件事:容器重启比 OnlineTTL(30 秒)快得多,在线态键从头到尾
+// 没断过。而 daemon 侧的虚拟通道连同鉴权状态都活在那条链路上,换代之后旧通道在它那侧
+// 已经不存在 —— 拿着旧值的常驻镜像正是靠这个差别发现自己手里那条通道作废了,
+// 见 mirror_svc.follower.keepalive。
+func TestDaemonConnID_ChangesWhenTheDaemonRelinks(t *testing.T) {
+	svc, _, devices := newRelayForTest(t, fakeForwarder{})
+	devices.EXPECT().Find(gomock.Any(), int64(9)).Return(activeDaemon(), nil).Times(2)
+	ctx := context.Background()
+
+	first, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+	require.NoError(t, err)
+	require.NoError(t, svc.RegisterDaemon(ctx, first))
+	before, err := svc.DaemonConnID(ctx, 7, "fp-daemon")
+	require.NoError(t, err)
+	require.NotEmpty(t, before, "在线的机器必须报得出自己那条链路")
+
+	second, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+	require.NoError(t, err)
+	require.NoError(t, svc.RegisterDaemon(ctx, second))
+	after, err := svc.DaemonConnID(ctx, 7, "fp-daemon")
+
+	require.NoError(t, err)
+	require.NotEqual(t, before, after, "换了一条链路,在线态必须答得出来")
+	online, err := svc.IsDaemonOnline(ctx, 7, "fp-daemon")
+	require.NoError(t, err)
+	require.True(t, online, "换链路期间在线态一秒都没断 —— 这正是只看在线态发现不了换代的原因")
+}
+
+// Given 机器不在线;When 问它那条链路;Then ErrDaemonOffline —— 调用方要把「联系不上」
+// 与「在线但换了链路」分开处理。
+func TestDaemonConnID_OfflineMachineIsNotARelink(t *testing.T) {
+	svc, _, _ := newRelayForTest(t, fakeForwarder{})
+
+	_, err := svc.DaemonConnID(context.Background(), 7, "fp-daemon")
+
+	require.ErrorIs(t, err, ErrDaemonOffline)
+}
+
 func TestRenewDaemon_SaysNothing(t *testing.T) {
 	svc, _, _ := newRelayForTest(t, fakeForwarder{})
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}

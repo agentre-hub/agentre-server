@@ -134,6 +134,10 @@ func (s *relayStub) IsDaemonOnline(context.Context, int64, string) (bool, error)
 	return false, nil
 }
 
+func (s *relayStub) DaemonConnID(context.Context, int64, string) (string, error) {
+	return "", relay_svc.ErrDaemonOffline
+}
+
 func (s *relayStub) AttachDaemon(_ context.Context, _ relay_svc.Route, _ relay_svc.FrameWriter) (func(), error) {
 	return func() {
 		select {
