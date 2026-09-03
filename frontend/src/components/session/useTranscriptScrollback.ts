@@ -18,7 +18,7 @@ import {
   toTranscriptFrame,
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
-import { doneEventFrame } from "@/components/session/turnDone";
+import { turnDoneFrames } from "@/components/session/turnDone";
 import { applyJournalFrames, type RelayClient } from "@/lib/relayClient";
 
 /**
@@ -261,7 +261,7 @@ export function useTranscriptScrollback({
       applyJournalFrames(res.frames, {
         onEvent: (f, at) => evs.push(toTranscriptFrame(f, at)),
         onRunResultDone: (frame, at) =>
-          evs.push(doneEventFrame(sid, frame, at)),
+          evs.push(...turnDoneFrames(sid, frame, at)),
       });
       append(evs, res.frames[0]?.seq ?? 0, res.hasBefore);
     } catch {

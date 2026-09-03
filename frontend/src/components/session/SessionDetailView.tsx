@@ -31,7 +31,7 @@ import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
-import { doneEventFrame } from "@/components/session/turnDone";
+import { turnDoneFrames } from "@/components/session/turnDone";
 import {
   useReconnectProbe,
   useSessionTargetDevice,
@@ -463,7 +463,7 @@ export default function SessionDetailView({
         // 这边隔着一条中继数出来的准,接下来画的是它们。
         liveTurn.endTurn();
         turn.setPendingAssistant(false);
-        setEvents((prev) => [...prev, doneEventFrame(sid, frame)]);
+        setEvents((prev) => [...prev, ...turnDoneFrames(sid, frame)]);
         // 「已排进这一轮」是对**那一轮**的说明:轮次结束后它已经过期(要么被消费、
         // 回复就在转录里,要么随轮次一起没了),留着就是在骗人。
         turn.setSendFeedback((prev) =>

@@ -8,7 +8,7 @@ import {
   toTranscriptFrame,
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
-import { doneEventFrame } from "@/components/session/turnDone";
+import { turnDoneFrames } from "@/components/session/turnDone";
 import { api } from "@/lib/api";
 import { applyJournalFrames } from "@/lib/relayClient";
 import { withRelayClient } from "@/lib/relayClientPool";
@@ -201,7 +201,7 @@ export async function loadMirrorTail(
     // 速率）的唯一来路 —— 见 doneEventFrame。实时那条还兼着翻「这一轮在不在跑」
     // 并刷新待决策，那两件事回放教不了（见 turnActiveRef），这里只有标记这一半。
     onRunResultDone: (frame, at) =>
-      events.push(doneEventFrame(conversationId, frame, at)),
+      events.push(...turnDoneFrames(conversationId, frame, at)),
   });
   return {
     events,
