@@ -15,6 +15,7 @@ import {
   Alert,
   AlertDescription,
   createTranscriptProjector,
+  iconNode,
   indicatorHostMessageId,
   opensAssistantMessage,
   reduceSessionState,
@@ -74,11 +75,13 @@ import {
 // 因为它本来就是从这个模块公开出去的。
 export { RELAY_TAIL_FRAMES };
 
-/** GET /v1/workspace/agents 里头部要的三列：身份、名字、调色板色。 */
+/** GET /v1/workspace/agents 里头部要的四列：身份、名字、调色板色、图标键。 */
 interface WorkspaceAgent {
   sync_id: string;
   name: string;
   avatar_color?: string;
+  /** 图标词表的 key；解成图标那一步走共享包的 `iconNode`，两端同一份词表。 */
+  avatar_icon?: string;
   exec_targets?: {
     backend_sync_id?: string;
     current?: boolean;
@@ -1158,6 +1161,7 @@ export default function SessionDetailView({
         // 首字母原样取（不大写）：中文名没有大小写，拉丁名这里也与桌面端一致。
         initials={agent.name.charAt(0)}
         color={agent.avatar_color}
+        icon={iconNode(agent.avatar_icon)}
         size="md"
         className={size === "row" ? MESSAGE_AVATAR_CLASS : undefined}
       />

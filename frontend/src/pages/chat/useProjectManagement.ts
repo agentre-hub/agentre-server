@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { ProjectHeaderActionsProps } from "@agentre-hub/agentre-ui";
+import {
+  iconNode,
+  type ProjectHeaderActionsProps,
+} from "@agentre-hub/agentre-ui";
 
 import { membersOfProject } from "@/components/session/newconv/projectMembers";
 import type {
@@ -123,14 +126,23 @@ export function useProjectManagement({
       color: project.color,
       parentId: project.parentSyncId,
       // 包删成员用的是 view 上的 id，本站删的是那条成员关系记录 —— 所以给 syncId。
-      members: project.members.map((m) => ({
-        id: m.syncId,
-        name: nameOf(m.agentSyncId),
-        color: agents.find((a) => a.sync_id === m.agentSyncId)?.avatar_color,
-      })),
+      members: project.members.map((m) => {
+        const agent = agents.find((a) => a.sync_id === m.agentSyncId);
+        return {
+          id: m.syncId,
+          name: nameOf(m.agentSyncId),
+          color: agent?.avatar_color,
+          avatarIcon: iconNode(agent?.avatar_icon),
+        };
+      }),
       candidates: agents
         .filter((a) => !memberAgentIds.has(a.sync_id))
-        .map((a) => ({ id: a.sync_id, name: a.name, color: a.avatar_color })),
+        .map((a) => ({
+          id: a.sync_id,
+          name: a.name,
+          color: a.avatar_color,
+          avatarIcon: iconNode(a.avatar_icon),
+        })),
     };
   }, [projects, settingsFor, agents]);
 
@@ -169,6 +181,7 @@ export function useProjectManagement({
         id: a.sync_id,
         name: a.name,
         color: a.avatar_color,
+        avatarIcon: iconNode(a.avatar_icon),
         inherited: isInherited,
       });
       const members = [

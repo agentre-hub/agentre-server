@@ -11,6 +11,7 @@ import {
   Alert,
   AlertDescription,
   cn,
+  iconNode,
 } from "@agentre-hub/agentre-ui";
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -316,7 +317,12 @@ export function DraftSession({
             <ArrowLeft aria-hidden="true" className="size-4" />
           </button>
         )}
-        <AgentAvatar name={agent.name} color={agent.avatar_color} size="sm" />
+        <AgentAvatar
+          name={agent.name}
+          color={agent.avatar_color}
+          icon={iconNode(agent.avatar_icon)}
+          size="sm"
+        />
         <span className="truncate text-sm font-semibold text-foreground">
           {agent.name}
         </span>
@@ -507,6 +513,7 @@ function DraftPending({ agent, text }: { agent: NewConvAgent; text: string }) {
             <AgentAvatar
               name={agent.name}
               color={agent.avatar_color}
+              icon={iconNode(agent.avatar_icon)}
               className={MESSAGE_AVATAR_CLASS}
             />
           }

@@ -78,6 +78,8 @@ const agents = [
     sync_id: "agent-1",
     name: "Backend Agent",
     avatar_color: "agent-1",
+    // Agent 自己选的图标键（共享包 org/icon-registry 的 key）。
+    avatar_icon: "bot",
     project_sync_ids: ["proj-1"],
     has_available_target: true,
     exec_targets: [
@@ -391,6 +393,25 @@ describe("挑一个 Agent", () => {
 
     fireEvent.click(blocked);
     expect(screen.queryByTestId("draft-session")).toBeNull();
+  });
+
+  it("Agent 选过图标时清单里画的是那一枚，不是名字首字母", async () => {
+    stubReads();
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+
+    const row = await screen.findByTestId("agent-pick-agent-1");
+    expect(
+      within(row)
+        .getByRole("img", { name: "Backend Agent" })
+        .querySelector("svg")
+        ?.getAttribute("class"),
+    ).toContain("lucide-bot");
   });
 
   it("只取一次光杆 Agent 清单，不为此把这台浏览器注册成设备", async () => {
@@ -894,6 +915,24 @@ describe("从项目里挑：空的时候用同一种形", () => {
         "lucide-code-xml",
       );
     }
+  });
+
+  it("Agent 的图标在「从项目里挑」这一屏同样画得出来", () => {
+    render(
+      <ThemeProvider>
+        <ProjectAgentPane
+          projects={[{ sync_id: "proj-1", name: "server" }]}
+          agents={agents}
+          onPick={vi.fn()}
+          onBack={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    const avatar = screen.getByRole("img", { name: "Backend Agent" });
+    expect(avatar.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-bot",
+    );
   });
 
   it("项目里一个 Agent 都没有：同一种形，并说清 Agent 从哪来", () => {

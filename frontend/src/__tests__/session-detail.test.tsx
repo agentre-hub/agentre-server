@@ -2738,7 +2738,12 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
  */
 describe("会话详情：头部", () => {
   const workspaceAgents = [
-    { sync_id: "ag-1", name: "后端 Agent", avatar_color: "agent-3" },
+    {
+      sync_id: "ag-1",
+      name: "后端 Agent",
+      avatar_color: "agent-3",
+      avatar_icon: "bot",
+    },
   ];
 
   function stubHeader(
@@ -2746,6 +2751,7 @@ describe("会话详情：头部", () => {
       sync_id: string;
       name: string;
       avatar_color?: string;
+      avatar_icon?: string;
     }[] = workspaceAgents,
   ) {
     mockedApi.mockImplementation(async (path) => {
@@ -2845,6 +2851,28 @@ describe("会话详情：头部", () => {
     const avatar = within(head).getByRole("img", { name: "后端 Agent" });
     // token 要落成 CSS 变量再进 backgroundColor —— 直接塞 token 等于没上色。
     expect(avatar.style.backgroundColor).toBe("var(--agent-3)");
+  });
+
+  /**
+   * Agent 自己选的图标（`avatar_icon`）与项目那一维同一条：词表与解 key 都在共享包
+   * 里，本站只要把 key 递下去。此前这一格根本没读，于是组织面详情画得出图标、
+   * 对话里同一个 Agent 还是一个字。
+   */
+  it("Agent 选过图标时头部与转录画的都是那一枚，不是首字", async () => {
+    stubHeader();
+    const { container } = renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const head = screen.getByTestId("session-detail-header");
+    const avatar = within(head).getByRole("img", { name: "后端 Agent" });
+    expect(avatar.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-bot",
+    );
+    // 转录里那一枚是同一个身份记号，不该一处有图标一处没有。
+    const inTranscript = container.querySelector(
+      '[data-testid="session-detail-transcript"] [role="img"] svg',
+    );
+    expect(inTranscript?.getAttribute("class")).toContain("lucide-bot");
   });
 
   /**

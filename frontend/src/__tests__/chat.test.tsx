@@ -136,6 +136,7 @@ const agents = [
     sync_id: "ag-1",
     name: "后端 Agent",
     avatar_color: "agent-3",
+    avatar_icon: "bot",
     has_available_target: true,
     exec_targets: [
       {
@@ -1807,6 +1808,30 @@ describe("对话页：项目设置弹窗", () => {
       throw new Error("unexpected: " + path);
     });
   }
+
+  it("成员候选行上画的是那个 Agent 自己的图标，不是名字首字", async () => {
+    // 桌面端的成员浮层与设置弹窗一直画图标（它把 avatarIcon 递进去），本站这一格
+    // 从来没读过 avatar_icon —— 同一个 Agent 在两个宿主的同一处长成两个样子。
+    stubProjectApi();
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    await screen.findByText("agentre-server");
+    fireEvent.pointerDown(screen.getByTestId("project-menu-p-1"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByTestId("project-menu-item-settings"));
+    fireEvent.click(await screen.findByTestId("project-member-add-open"));
+
+    const candidate = await screen.findByTestId("project-member-add-ag-1");
+    expect(
+      within(candidate)
+        .getByRole("img", { name: "后端 Agent" })
+        .querySelector("svg")
+        ?.getAttribute("class"),
+    ).toContain("lucide-bot");
+  });
 
   it("加一个成员之后，弹窗里的清单当场就变——它读的是重取回来的项目", async () => {
     stubProjectApi();

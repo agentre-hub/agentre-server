@@ -1,4 +1,9 @@
-import { AgentAvatar, ProjectGlyph, cn } from "@agentre-hub/agentre-ui";
+import {
+  AgentAvatar,
+  ProjectGlyph,
+  cn,
+  iconNode,
+} from "@agentre-hub/agentre-ui";
 import { ArrowLeft, Bot, ChevronRight, FolderTree } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -305,6 +310,7 @@ function MemberGroup({
               <AgentAvatar
                 name={agent.name}
                 color={agent.avatar_color}
+                icon={iconNode(agent.avatar_icon)}
                 size="sm"
               />
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
