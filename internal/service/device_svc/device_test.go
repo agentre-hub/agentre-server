@@ -27,6 +27,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo/mock_device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
@@ -673,6 +674,55 @@ func TestListUserDevices_RelayNotConfigured(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(len(items), convey.ShouldEqual, 1)
 		convey.So(items[0].Online, convey.ShouldBeFalse)
+	})
+}
+
+// Given 镜像握手记下了「这台机器上一次握手被协议拒绝」的共享状态(mirror_svc 决策 14 /
+// spec「控制台呈现与 latest 来源」一节最后一段);When 列出设备;
+// Then 那台机器的这一行透出这件事,没被记录的机器不受影响 —— 这是设备读端点让协议
+// 不匹配「读得到」的地方,渲染留给后续任务。
+func TestListUserDevices_ReportsProtocolMismatch(t *testing.T) {
+	convey.Convey("ListUserDevices 透出镜像记下的协议不匹配状态", t, func() {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+		userID := int64(7)
+
+		mini := miniredis.RunT(t)
+		redisClient := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+		t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+		sup := mirror_svc.NewSupervisor(mirror_svc.Config{InstanceID: "server-a"}, nil, nil, redisClient)
+		mirror_svc.SetDefault(sup)
+		t.Cleanup(func() { mirror_svc.SetDefault(nil) })
+		sup.RecordProtocolMismatch(ctx, userID, "fp-a")
+
+		mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+			{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+			{ID: 43, UserID: 7, Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+		}, nil)
+
+		items, err := svc.ListUserDevices(ctx, userID, 0)
+
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(items[0].ProtocolMismatch, convey.ShouldBeTrue)
+		convey.So(items[1].ProtocolMismatch, convey.ShouldBeFalse)
+	})
+}
+
+// Given 没有装配镜像(mirror_svc.Default() 为 nil,例如只跑 device flow 的测试/调用方);
+// When 列出设备;Then 不 panic,协议不匹配一律 fail-open 为 false —— 与在线态同一习惯。
+func TestListUserDevices_MirrorNotConfigured(t *testing.T) {
+	convey.Convey("mirror_svc 未装配时 ListUserDevices 不 panic，协议不匹配 fail-open 为 false", t, func() {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+		mirror_svc.SetDefault(nil)
+		t.Cleanup(func() { mirror_svc.SetDefault(nil) })
+
+		mD.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
+			{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+		}, nil)
+
+		items, err := svc.ListUserDevices(ctx, 7, 0)
+
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(items[0].ProtocolMismatch, convey.ShouldBeFalse)
 	})
 }
 

@@ -398,7 +398,7 @@ func TestDialMachine_HandshakeAdvertisesTheMinSupportedProtocolVersion(t *testin
 		defer close(done)
 		// 没有人应答这次握手,c.call 会在 timeout 后带着 ctx.Err() 收尾——测试只关心
 		// 发出去的请求长什么样,不需要等它真正建立连接。
-		_, _ = dialMachine(context.Background(), dialer, "cred-1",
+		_, _, _ = dialMachine(context.Background(), dialer, "cred-1",
 			machineKey{userID: 1, fingerprint: "fp-1"}, 50*time.Millisecond, nil)
 	}()
 

@@ -28,6 +28,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
@@ -563,17 +564,22 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 		if err != nil {
 			online = false
 		}
+		// 协议不匹配是镜像握手记下的共享状态（mirror_svc 决策 14），未装配镜像时
+		// mirror_svc.Default() 为 nil——ProtocolMismatch 自己对 nil 接收者兜底，
+		// 与在线态同一 fail-open 习惯，这里不需要重复判 nil。
+		protocolMismatch := mirror_svc.Default().ProtocolMismatch(ctx, userID, d.Fingerprint)
 		out = append(out, api.ListDevicesItem{
-			ID:           d.ID,
-			Name:         d.Name,
-			Kind:         d.Kind,
-			Platform:     d.Platform,
-			Version:      d.Version,
-			Fingerprint:  d.Fingerprint,
-			LastSeenAt:   d.LastSeenAt,
-			Status:       d.Status,
-			Online:       online,
-			IsThisDevice: d.ID == callerDeviceID,
+			ID:               d.ID,
+			Name:             d.Name,
+			Kind:             d.Kind,
+			Platform:         d.Platform,
+			Version:          d.Version,
+			Fingerprint:      d.Fingerprint,
+			LastSeenAt:       d.LastSeenAt,
+			Status:           d.Status,
+			Online:           online,
+			IsThisDevice:     d.ID == callerDeviceID,
+			ProtocolMismatch: protocolMismatch,
 		})
 	}
 	return out, nil

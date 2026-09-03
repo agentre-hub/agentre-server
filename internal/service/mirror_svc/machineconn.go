@@ -65,13 +65,15 @@ type machineConn struct {
 // dialMachine 不再收「本副本的对端指纹」:决策 8 之后身份不在请求体里,它由对端从
 // 已验签凭据的 pfp claim 取,所以本副本出示什么身份完全取决于 Supervisor.dial 往
 // 凭据里签了什么(见下面 AuthAccount 处的注释)。
+// dialMachine 的第二个返回值是握手应答本身：调用方（Supervisor.dial）据此把这台机器
+// 自报的构建版本刷回 devices.version（spec「控制台呈现与 latest 来源」一节，决策 14）。
 func dialMachine(
 	ctx context.Context, relay RelayDialer, credential string,
 	m machineKey, timeout time.Duration, onNotify func(*agentrewire.RpcNotification),
-) (*machineConn, error) {
+) (*machineConn, *agentrewire.AuthAccountResponse, error) {
 	route, err := relay.ConnectClient(ctx, m.userID, m.fingerprint)
 	if err != nil {
-		return nil, fmt.Errorf("connect relay client: %w", err)
+		return nil, nil, fmt.Errorf("connect relay client: %w", err)
 	}
 	c := &machineConn{
 		ctx: ctx, relay: relay, route: route, timeout: timeout, onNotify: onNotify,
@@ -79,7 +81,7 @@ func dialMachine(
 	}
 	channelID, detach, err := relay.AttachClient(ctx, route, c)
 	if err != nil {
-		return nil, fmt.Errorf("attach relay client: %w", err)
+		return nil, nil, fmt.Errorf("attach relay client: %w", err)
 	}
 	c.channelID, c.detach = channelID, detach
 	// ProtocolVersion 是握手的必填项:对端按**精确匹配**校验,并且把空版本判成
@@ -92,14 +94,15 @@ func dialMachine(
 	// （2026-08-31-conversation-centric-addressing.md 决策 8，AuthAccountRequest 的
 	// device_fingerprint 字段已删）。本副本出示什么身份，因此完全取决于
 	// Supervisor.dial 往凭据里签了什么。
-	if _, err := c.AuthAccount(ctx, &agentrewire.AuthAccountRequest{
+	response, err := c.AuthAccount(ctx, &agentrewire.AuthAccountRequest{
 		Credential: credential, ProtocolVersion: wireversion.Protocol,
 		MinSupportedProtocolVersion: wireversion.MinSupported,
-	}); err != nil {
+	})
+	if err != nil {
 		c.Close()
-		return nil, fmt.Errorf("relay account handshake: %w", err)
+		return nil, nil, fmt.Errorf("relay account handshake: %w", err)
 	}
-	return c, nil
+	return c, response, nil
 }
 
 func (c *machineConn) AuthAccount(ctx context.Context, request *agentrewire.AuthAccountRequest) (*agentrewire.AuthAccountResponse, error) {

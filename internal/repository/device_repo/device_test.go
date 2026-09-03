@@ -36,3 +36,19 @@ func TestUpsert_AtomicWriteThenReadsFinalRow(t *testing.T) {
 	assert.Equal(t, int64(1000), d.Createtime)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// UpdateVersion 是镜像握手成功后按新值刷新 devices.version 的写入侧（spec「控制台呈现
+// 与 latest 来源」一节：值不同才写）。调用方（mirror_svc）自己先比过版本才落到这里，
+// 因此这条 UPDATE 本身不必再带条件——它只管把这一次决定要写的值写进去。
+func TestUpdateVersion_WritesVersionAndUpdatetime(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `devices` SET")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.UpdateVersion(ctx, 100, "0.4.2", 5000))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

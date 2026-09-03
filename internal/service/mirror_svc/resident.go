@@ -186,9 +186,17 @@ func (s *Supervisor) Follow(ctx context.Context, userID int64, fingerprint strin
 //
 // 机器不在线时交出 ErrMachineOffline：调用方（常驻的认领、一次性的删除传播）对这件事
 // 的反应各不相同，但都需要把它与「连上了、这一次没成」分开。
+//
+// 握手被协议拒绝时交出 ErrProtocolVersionMismatch，并且这一次**不重试**：一台此刻
+// 正处在退避窗口里的机器直接短路，连 ConnectClient 都不发——版本不合不是瞬时故障，
+// 让对账周期按分钟级节奏反复拨同一个必然被拒的握手没有意义（spec「控制台呈现与
+// latest 来源」一节）。
 func (s *Supervisor) dial(
 	ctx context.Context, key machineKey, onNotify func(*agentrewire.RpcNotification),
 ) (*machineConn, error) {
+	if s.protocolMismatchActive(ctx, key) {
+		return nil, ErrProtocolVersionMismatch
+	}
 	// pfp 是这枚凭据说了算的**对端身份**（决策 8）：对端从已验签凭据里取它，
 	// AuthAccountRequest 已经没有可以自报身份的字段了。不签它，新版 agentred 会以
 	// ErrUnauthorized 拒掉这条常驻镜像连接——整条镜像链路当场断掉。
@@ -201,14 +209,19 @@ func (s *Supervisor) dial(
 	if onNotify == nil {
 		onNotify = func(*agentrewire.RpcNotification) {}
 	}
-	conn, err := dialMachine(ctx, s.relay, credential,
+	conn, response, err := dialMachine(ctx, s.relay, credential,
 		key, s.cfg.CallTimeout, onNotify)
 	if err != nil {
 		if errors.Is(err, relay_svc.ErrDaemonOffline) {
 			return nil, ErrMachineOffline
 		}
+		if isProtocolVersionMismatch(err) {
+			s.recordProtocolMismatch(ctx, key)
+			return nil, ErrProtocolVersionMismatch
+		}
 		return nil, err
 	}
+	s.refreshDeviceVersion(ctx, key, response.GetDaemonVersion())
 	return conn, nil
 }
 

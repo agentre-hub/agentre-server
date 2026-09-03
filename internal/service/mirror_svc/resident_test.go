@@ -16,16 +16,20 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
 	"github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/pkg/wireversion"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
@@ -59,6 +63,13 @@ type fakeDaemonNet struct {
 	// links 数这台 daemon 换过几条中继链路,当前那条的身份由它派生 —— 真中继在
 	// PrepareDaemon 里逐连接现取一个,登记进在线态键(relay_svc.Route.ConnID)。
 	links int
+	// daemonVersion 是 auth.account 握手成功时应答里带出的自报构建版本
+	// （AuthAccountResponse.daemon_version，wire 0.3.0）。空串等同于真 daemon 未注入
+	// 构建变量的情形。
+	daemonVersion string
+	// rejectHandshake 为真时,握手一律以 -32006(协议版本不匹配)拒绝,不看实际协议
+	// 版本是否匹配 —— 用来在测试里复现「对端判定版本不合」而不必真的造两个不同构建。
+	rejectHandshake bool
 }
 
 func newFakeDaemonNet(peer *fakeRelay) *fakeDaemonNet {
@@ -148,11 +159,15 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 		}
 		f.mu.Lock()
 		ch.protocolVersion = p.GetProtocolVersion()
+		reject := f.rejectHandshake
+		daemonVersion := f.daemonVersion
 		f.mu.Unlock()
 		// 真对端(agentred 的 protobuf registry / 桌面端的 peer registry)在看凭据之前
 		// 先按**精确匹配**校验协议版本,并且把空串判成「对端太旧」——proto3 下缺字段与
 		// 显式空串同为零值。假对端照抄这条,否则「握手少带一个字段」在这里永远是绿的。
-		if p.GetProtocolVersion() != wireversion.Protocol {
+		// rejectHandshake 让测试能在两边协议版本本来就相等时,仍然复现「对端判定版本
+		// 不合」这一支(daemon 侧真正的构建太旧,而不是这次请求缺字段)。
+		if reject || p.GetProtocolVersion() != wireversion.Protocol {
 			response.Body = &agentrewire.RpcFrame_Error{Error: &agentrewire.RpcError{
 				Code: -32006, Message: "protocol version mismatch",
 			}}
@@ -161,7 +176,9 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 		f.mu.Lock()
 		ch.authed, ch.credential = true, p.GetCredential()
 		f.mu.Unlock()
-		encoded, marshalErr := proto.Marshal(&agentrewire.AuthAccountResponse{Ok: true, InstanceUuid: "fake"})
+		encoded, marshalErr := proto.Marshal(&agentrewire.AuthAccountResponse{
+			Ok: true, InstanceUuid: "fake", DaemonVersion: daemonVersion,
+		})
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -294,6 +311,22 @@ func (f *fakeDaemonNet) setOnline(online bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.online = online
+}
+
+// setDaemonVersion 是这台假 daemon 此后在握手成功时自报的构建版本。
+func (f *fakeDaemonNet) setDaemonVersion(version string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.daemonVersion = version
+}
+
+// rejectHandshakeForProtocolVersion 让这台假 daemon 此后的每一次握手都以 -32006 拒绝,
+// 复现「对端判定版本不合」——真实场景里是 daemon 自己的构建太旧,与这次请求本身是否
+// 带全字段无关。
+func (f *fakeDaemonNet) rejectHandshakeForProtocolVersion() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rejectHandshake = true
 }
 
 func (f *fakeDaemonNet) counts() (int, int, int) {
@@ -741,6 +774,95 @@ func TestFollow_HandshakeAdvertisesTheWireProtocolVersion(t *testing.T) {
 	ch := a.net.firstChannel(t)
 	assert.Equal(t, wireversion.Protocol, ch.protocolVersion)
 	assert.NotEmpty(t, ch.protocolVersion, "空版本会被对端判成「对端太旧」")
+}
+
+// ── 握手成功后把自报版本刷回 devices.version(spec「控制台呈现与 latest 来源」,决策 14) ──
+
+// Given 库里这台机器的 devices.version 是旧值;When 握手自报的版本与它不同;
+// Then 按新值写回 —— 设备卡上的版本因此是实时的,不再是装机那天的化石(问题 4)。
+func TestFollow_HandshakeReportsADifferentVersion_UpdatesStoredDeviceVersion(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	a := rig.replica(t, replicaA)
+	a.net.setDaemonVersion("0.5.0")
+
+	ctrl := gomock.NewController(t)
+	mockDevices := mock_device_repo.NewMockDeviceRepo(ctrl)
+	device_repo.RegisterDevice(mockDevices)
+	t.Cleanup(func() { device_repo.RegisterDevice(nil) })
+	mockDevices.EXPECT().FindByFingerprint(gomock.Any(), testUserID, testMachine).
+		Return(&device_entity.Device{ID: 900, UserID: testUserID, Fingerprint: testMachine, Version: "0.4.0"}, nil)
+	mockDevices.EXPECT().UpdateVersion(gomock.Any(), int64(900), "0.5.0", gomock.Any()).Return(nil)
+
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+
+	require.NoError(t, err)
+	require.True(t, claimed)
+}
+
+// Given 库里这台机器的 devices.version 已经等于握手自报的版本;When 跟住它;
+// Then 一行都不写 —— 断言落在「有没有调写方法」上,而不是「那一行有没有变」,后者对
+// 一开始就没变过的行永远为真,证明不了这条判断真的生效过。
+func TestFollow_HandshakeReportsTheSameVersion_WritesNothing(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	a := rig.replica(t, replicaA)
+	a.net.setDaemonVersion("0.5.0")
+
+	ctrl := gomock.NewController(t)
+	mockDevices := mock_device_repo.NewMockDeviceRepo(ctrl)
+	device_repo.RegisterDevice(mockDevices)
+	t.Cleanup(func() { device_repo.RegisterDevice(nil) })
+	mockDevices.EXPECT().FindByFingerprint(gomock.Any(), testUserID, testMachine).
+		Return(&device_entity.Device{ID: 900, UserID: testUserID, Fingerprint: testMachine, Version: "0.5.0"}, nil)
+	mockDevices.EXPECT().UpdateVersion(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+
+	require.NoError(t, err)
+	require.True(t, claimed)
+}
+
+// ── 握手被协议拒绝时记成按 (账号, 机器) 的共享状态,并拉长退避 ─────────────────
+
+// Given daemon 判定这次握手协议版本不合并拒绝;When 跟这台机器;
+// Then Follow 报错、一条连接都建不起来,而「协议不匹配」被记成一份跨副本共享的状态——
+// 换一个副本读,看到的是同一个答案(spec「控制台呈现与 latest 来源」一节最后一段)。
+func TestFollow_HandshakeRejectedForProtocolVersion_RecordsSharedMismatchState(t *testing.T) {
+	rig := newResidentRig(t)
+	a := rig.replica(t, replicaA)
+	a.net.rejectHandshakeForProtocolVersion()
+
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrProtocolVersionMismatch)
+	assert.False(t, claimed)
+	assert.True(t, a.sup.ProtocolMismatch(context.Background(), testUserID, testMachine))
+
+	b := rig.replica(t, replicaB)
+	assert.True(t, b.sup.ProtocolMismatch(context.Background(), testUserID, testMachine),
+		"协议不匹配是账号 + 机器这一级的事实,不该只留在发现它的那个副本进程里")
+}
+
+// Given 上一次握手已经因协议不匹配被拒、退避已经记下;When 紧接着(对账周期那么快)
+// 再跟这台机器一次;Then 这次不再重新拨号握手 —— 版本不匹配不是瞬时故障,不能按对账
+// 周期(每分钟)的节奏重试。
+func TestFollow_ProtocolMismatch_DoesNotRedialOnTheFastPath(t *testing.T) {
+	rig := newResidentRig(t)
+	a := rig.replica(t, replicaA)
+	a.net.rejectHandshakeForProtocolVersion()
+	_, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+	require.ErrorIs(t, err, ErrProtocolVersionMismatch)
+	connectsAfterFirst, _, _ := a.net.counts()
+	require.Equal(t, 1, connectsAfterFirst, "第一次尝试必须真的拨过一次号,不然测不出「第二次没有再拨」")
+
+	_, err = a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+
+	require.ErrorIs(t, err, ErrProtocolVersionMismatch)
+	connectsAfterSecond, _, _ := a.net.counts()
+	assert.Equal(t, connectsAfterFirst, connectsAfterSecond,
+		"退避期内不该再对这台机器发起一次新的连接/握手")
 }
 
 // Given 每次连接都要出示凭据;When 同一个副本先放开一台机器、再重新跟住它;

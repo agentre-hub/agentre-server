@@ -119,6 +119,10 @@ type ListDevicesItem struct {
 	Status       int    `json:"status"`
 	Online       bool   `json:"online"`
 	IsThisDevice bool   `json:"is_this_device"`
+	// ProtocolMismatch 为真表示这台机器上一次镜像握手被 daemon 判定协议版本不合而
+	// 拒绝（spec「控制台呈现与 latest 来源」一节：「这要求 server 把握手被拒这件事记成
+	// 按 (账号, 机器) 的共享状态供设备卡读取」）。渲染留给后续任务，这里只负责读得到。
+	ProtocolMismatch bool `json:"protocol_mismatch"`
 }
 
 type ListDevicesResponse struct {

@@ -11,9 +11,9 @@ package mock_device_repo
 
 import (
 	context "context"
-	device_entity "github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	reflect "reflect"
 
+	device_entity "github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -112,6 +112,20 @@ func (m *MockDeviceRepo) Touch(ctx context.Context, id, nowMs int64) error {
 func (mr *MockDeviceRepoMockRecorder) Touch(ctx, id, nowMs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Touch", reflect.TypeOf((*MockDeviceRepo)(nil).Touch), ctx, id, nowMs)
+}
+
+// UpdateVersion mocks base method.
+func (m *MockDeviceRepo) UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateVersion", ctx, id, version, nowMs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateVersion indicates an expected call of UpdateVersion.
+func (mr *MockDeviceRepoMockRecorder) UpdateVersion(ctx, id, version, nowMs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateVersion", reflect.TypeOf((*MockDeviceRepo)(nil).UpdateVersion), ctx, id, version, nowMs)
 }
 
 // Upsert mocks base method.
