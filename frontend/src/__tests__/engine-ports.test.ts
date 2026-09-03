@@ -419,48 +419,40 @@ describe("browser engine settings ports", () => {
     );
   });
 
-  it("probes the CLI on the named device, telling installed from not installed", async () => {
+  /**
+   * 探测要回**真实路径**，不只是「装没装」。
+   *
+   * 共享包的「自动识别」按钮是 `r.found ? r.path : null`：回一个 found=true 但 path
+   * 为空的结果，按钮会在 CLI 明明装着的时候显示「没找到」。所以这里改调 cliResolvePath
+   * ——daemon 上本来就注册着这个方法，回 {path, found}，和桌面端调的是同一个。
+   *
+   * 代价是每个类型各拨一次 RPC（engineScan 一次能答三个类型，但它按设计不带路径）。
+   * 连接仍是池化的同一条，多的只是帧。
+   */
+  it("resolves the real CLI path on the named device", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/devices") return devicesResponse();
       throw new Error(`unexpected api call: ${path}`);
     });
-    relay.request.mockResolvedValue({
-      items: [
-        { backendType: "claudecode", status: "recognized" },
-        { backendType: "codex", status: "unchecked" },
-      ],
-    });
+    relay.request.mockImplementation(
+      async (_method: unknown, params: unknown) =>
+        (params as { type: string }).type === "claudecode"
+          ? { path: "/usr/local/bin/claude", found: true }
+          : { path: "", found: false },
+    );
 
     const adapter = ports();
     await expect(
       adapter.resolveBackendCLIPath!("claudecode", "agentred-b"),
-    ).resolves.toEqual({ found: true, path: "" });
+    ).resolves.toEqual({ found: true, path: "/usr/local/bin/claude" });
     await expect(
       adapter.resolveBackendCLIPath!("codex", "agentred-b"),
     ).resolves.toEqual({ found: false, path: "" });
 
-    // 同一台机器上的两次探测搭同一条中继：此前是各拨一条，各握一次手。
     expect(relayTargets()).toEqual(["agentred-b"]);
-    expect(relay.request).toHaveBeenCalledWith(rpcMethods.engineScan, {});
-  });
-
-  it("asks the named device once for a whole group of probes", async () => {
-    mockedApi.mockImplementation(async (path: string) => {
-      if (path === "/v1/devices") return devicesResponse();
-      throw new Error(`unexpected api call: ${path}`);
+    expect(relay.request).toHaveBeenCalledWith(rpcMethods.cliResolvePath, {
+      type: "claudecode",
     });
-    relay.request.mockResolvedValue({
-      items: [{ backendType: "claudecode", status: "recognized" }],
-    });
-
-    const adapter = ports();
-    await Promise.all([
-      adapter.resolveBackendCLIPath!("claudecode", "agentred-b"),
-      adapter.resolveBackendCLIPath!("codex", "agentred-b"),
-      adapter.resolveBackendCLIPath!("piagent", "agentred-b"),
-    ]);
-
-    expect(relay.request).toHaveBeenCalledTimes(1);
   });
 
   it("says a probe was never answered instead of inventing 'not installed'", async () => {
@@ -720,6 +712,93 @@ describe("browser engine settings ports", () => {
    */
   it("opens the shared env editor now that the table is readable", () => {
     expect(ports().canEditEnvJSON).toBe(true);
+  });
+
+  /**
+   * cli_path 的读回与保存。
+   *
+   * 它不在 backend 载荷里，而是一条按 (后端, 机器) 的覆盖——同一条后端在不同机器上
+   * 是不同的可执行文件。`get` 因此必须按**这条后端绑定的那台设备**去挑，挑错就会把
+   * 另一台机器上的路径显示成本机的。
+   */
+  it("reads back the CLI path of the bound device only", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays")
+        return {
+          overlays: [
+            {
+              backend_sync_id: "backend-1",
+              fingerprint: "agentred-b",
+              status: "recognized",
+              cli_path: "/other/machine/claude",
+            },
+            {
+              backend_sync_id: "backend-1",
+              fingerprint: "desktop-a",
+              status: "recognized",
+              cli_path: "/usr/local/bin/claude",
+            },
+          ],
+        };
+      return {
+        backends: [
+          backendDTO({
+            sync_id: "backend-1",
+            name: "CC",
+            type: "claudecode",
+            device_id: "desktop-a",
+          }),
+        ],
+      };
+    });
+
+    await expect(ports().cliPath!.get("backend-1")).resolves.toBe(
+      "/usr/local/bin/claude",
+    );
+  });
+
+  it("sends the CLI path with the backend it belongs to", async () => {
+    const bodies: unknown[] = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        bodies.push(JSON.parse(String(init.body)));
+        return backendDTO({
+          sync_id: "backend-1",
+          name: "CC",
+          type: "claudecode",
+          device_id: "desktop-a",
+        });
+      }
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      return {
+        backends: [
+          backendDTO({
+            sync_id: "backend-1",
+            name: "CC",
+            type: "claudecode",
+            device_id: "desktop-a",
+          }),
+        ],
+      };
+    });
+
+    const adapter = ports();
+    const [listed] = await adapter.listBackends();
+    await adapter.updateBackend(listed.id, {
+      type: "claudecode",
+      name: "CC",
+      deviceId: "desktop-a",
+      cliPath: "/opt/homebrew/bin/claude",
+    });
+
+    expect(bodies[0]).toMatchObject({
+      cli_path: "/opt/homebrew/bin/claude",
+      device_id: "desktop-a",
+    });
   });
 
   it("carries the OpenClaw session mapping through create and edit", async () => {

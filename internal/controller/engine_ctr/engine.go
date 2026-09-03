@@ -122,7 +122,7 @@ func (e *Engine) ListCLIOverlays(c *gin.Context, _ *api.ListCLIOverlaysRequest) 
 	}
 	out := make([]api.CLIOverlay, 0, len(items))
 	for _, o := range items {
-		out = append(out, api.CLIOverlay{BackendSyncID: o.BackendSyncID, Fingerprint: o.Fingerprint, Status: o.Status})
+		out = append(out, api.CLIOverlay{BackendSyncID: o.BackendSyncID, Fingerprint: o.Fingerprint, Status: o.Status, CLIPath: o.CLIPath})
 	}
 	return &api.ListCLIOverlaysResponse{Overlays: out}, nil
 }

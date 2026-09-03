@@ -303,13 +303,6 @@ func TestUpdateBackend_GivenUnknownID_ThenReturnsTheDedicatedBackendNotFoundCode
 	assert.Equal(t, 30901, engineErrorCode(t, err))
 }
 
-func TestCreateBackend_GivenCLIPath_ThenReturnsTheDedicatedPathForbiddenCode(t *testing.T) {
-	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), CLIPath: stringPtr("/usr/local/bin/claude"),
-	})
-	assert.Equal(t, 30902, engineErrorCode(t, err))
-}
-
 func TestCreateBackend_GivenBuiltinType_ThenReturnsTheDedicatedBuiltinForbiddenCode(t *testing.T) {
 	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
 		UserID: 7, Name: stringPtr("Builtin"), Type: stringPtr("builtin"),
@@ -419,4 +412,128 @@ func TestUpdateBackend_GivenNoEnvJSON_ThenKeepsTheStoredTable(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"MY_TOKEN":"s3cret"}`, payloadString(t, saved.Payload, "env_json"))
+}
+
+// ── cli_path 的按设备覆盖（控制台与桌面端对齐）────────────────────────────────
+//
+// cli_path 不在 backend 载荷里，它是一条独立的 agent_backend_cli 同步对象，身份是
+// (backend 同步标识, 机器指纹)——同一条后端在不同机器上各有一个可执行文件路径。
+// 控制台此前连提交都被拒（EngineCLIPathForbidden），于是网页上建的后端永远配不出
+// 路径。放开之后落在**这条后端绑定的那台设备**上（决策 5 已要求运行设备必填）。
+
+// 新建：后端行之外再落一条覆盖行，身份是 (backend, 绑定设备)。
+func TestCreateBackend_GivenCLIPath_ThenWritesThePerDeviceOverlay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	registerActiveDevice(ctrl, 7, "sha256:aaaa")
+	// 覆盖行要先看这台机器上有没有既存的一条
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
+		Return([]*sync_entity.SyncObject{}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil).Times(2)
+	var saved []*sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = append(saved, row)
+		return nil
+	}).Times(2)
+
+	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
+		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claudecode"),
+		DeviceID: stringPtr("sha256:aaaa"), CLIPath: stringPtr("/usr/local/bin/claude"),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, saved, 2)
+	backendRow := saved[0]
+	overlay := saved[1]
+	assert.Equal(t, sync_entity.KindAgentBackend, backendRow.Kind)
+	// 路径不进 backend 载荷——它不是后端配置的一部分，而是那台机器上的东西
+	assert.NotContains(t, backendRow.Payload, "cli_path")
+	assert.Equal(t, sync_entity.KindAgentBackendCLI, overlay.Kind)
+	assert.Equal(t, backendRow.SyncID, overlay.ProjectSyncID)
+	assert.Equal(t, "sha256:aaaa", overlay.AgentredFingerprint)
+	assert.JSONEq(t, `{"cli_path":"/usr/local/bin/claude"}`, overlay.Payload)
+}
+
+// 编辑：改的是绑定设备上那一条，**别的机器上的覆盖一个字不动**。
+// 这是整件事最容易写错的地方：cli_path 按机器分身，拿 backend 同步标识当唯一键
+// 就会把用户在另一台机器上填的路径覆盖掉。
+func TestUpdateBackend_GivenCLIPath_ThenRewritesOnlyTheBoundDeviceOverlay(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		AgentredFingerprint: "sha256:aaaa",
+		Payload:             `{"name":"CC","type":"claudecode"}`,
+	}, nil)
+	registerActiveDevice(ctrl, 7, "sha256:aaaa")
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
+		Return([]*sync_entity.SyncObject{
+			{ID: 9, UserID: 7, Kind: sync_entity.KindAgentBackendCLI, SyncID: "overlay-a",
+				ProjectSyncID: "backend-1", AgentredFingerprint: "sha256:aaaa", Payload: `{"cli_path":"/old/claude"}`},
+			{ID: 10, UserID: 7, Kind: sync_entity.KindAgentBackendCLI, SyncID: "overlay-b",
+				ProjectSyncID: "backend-1", AgentredFingerprint: "sha256:bbbb", Payload: `{"cli_path":"/other/machine/claude"}`},
+		}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil).Times(2)
+	var saved []*sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = append(saved, row)
+		return nil
+	}).Times(2)
+
+	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:aaaa"),
+		CLIPath: stringPtr("/opt/homebrew/bin/claude"),
+	})
+
+	require.NoError(t, err)
+	require.Len(t, saved, 2)
+	overlay := saved[1]
+	assert.Equal(t, "overlay-a", overlay.SyncID, "改的必须是绑定设备上那一条既存覆盖")
+	assert.JSONEq(t, `{"cli_path":"/opt/homebrew/bin/claude"}`, overlay.Payload)
+}
+
+// 不带 cli_path 的写（改名、换模型）不碰覆盖行——一次都不该多存。
+func TestUpdateBackend_GivenNoCLIPath_ThenLeavesTheOverlayAlone(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		AgentredFingerprint: "sha256:aaaa", Payload: `{"name":"CC","type":"claudecode"}`,
+	}, nil)
+	registerActiveDevice(ctrl, 7, "sha256:aaaa")
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+
+	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+		UserID: 7, SyncID: "backend-1", Name: stringPtr("CC 2"), DeviceID: stringPtr("sha256:aaaa"),
+	})
+
+	require.NoError(t, err)
+}
+
+// 读侧：路径随覆盖清单下发，控制台开编辑器时按 (backend, 绑定设备) 取回它。
+func TestListCLIOverlays_ThenReturnsThePathForBrowserEdits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
+		Return([]*sync_entity.SyncObject{{
+			Kind: sync_entity.KindAgentBackendCLI, ProjectSyncID: "backend-1",
+			AgentredFingerprint: "sha256:aaaa", Payload: `{"cli_path":"/usr/local/bin/claude"}`,
+		}}, nil)
+
+	got, err := New().ListCLIOverlays(context.Background(), 7)
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "/usr/local/bin/claude", got[0].CLIPath)
 }

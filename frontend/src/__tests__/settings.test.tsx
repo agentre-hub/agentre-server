@@ -110,9 +110,14 @@ describe("Settings", () => {
     expect(document.querySelector('[data-backend-type="builtin"]')).toBeNull();
   });
 
-  it("offers neither a CLI path field nor a Gateway token field, since neither can be stored here", async () => {
-    // 两者都只存在于跑后端的那台机器上：路径是按设备的可执行文件覆盖，token 进的是
-    // 本机安全存储。控制台两样都写不进去，摆出来只会让人白填一次、再打开发现是空的。
+  // CLI 路径配得了，Gateway token 仍然不给——两者此前一起被挡着，但它们不是一回事。
+  //
+  // 路径是**用户要填的配置**：不给这个框，网页上建的后端就只能靠 $PATH 撞运气，撞不上
+  // 没有第二条路。它按 (后端, 绑定设备) 存成一条覆盖，服务端存得下，也读得回。
+  //
+  // token 不一样，它进的是那台机器的本机安全存储，服务端根本没有落点。摆出来只会让人
+  // 白填一次、再打开发现是空的。
+  it("offers a CLI path field but still no Gateway token field", async () => {
     renderSettings();
 
     fireEvent.click(await screen.findByRole("tab", { name: "Agent backends" }));
@@ -125,8 +130,8 @@ describe("Settings", () => {
         '[data-backend-type="claudecode"]',
       )!,
     );
-    expect(screen.queryByText("CLI Path")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Detect" })).toBeNull();
+    expect(await screen.findByText("CLI Path")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Detect" })).toBeTruthy();
 
     fireEvent.click(
       document.querySelector<HTMLButtonElement>(

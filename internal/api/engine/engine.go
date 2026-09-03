@@ -126,6 +126,9 @@ type CLIOverlay struct {
 	BackendSyncID string `json:"backend_sync_id"`
 	Fingerprint   string `json:"fingerprint"`
 	Status        string `json:"status"`
+	// CLIPath 是那台机器上的可执行文件绝对路径，**刻意**下发（唯一一个这样的浏览器
+	// DTO 字段，guard_test.go 钉着这一点）：控制台要配它，就得先读得回配过的值。
+	CLIPath string `json:"cli_path"`
 }
 type ListCLIOverlaysRequest struct {
 	mux.Meta `path:"/v1/engine/cli-overlays" method:"GET"`

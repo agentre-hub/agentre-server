@@ -16,7 +16,6 @@ func TestBrowserResponses_CannotCarryCredentialsOrCLIPaths(t *testing.T) {
 	browser := []reflect.Type{
 		reflect.TypeOf(Provider{}),
 		reflect.TypeOf(Backend{}),
-		reflect.TypeOf(CLIOverlay{}),
 		reflect.TypeOf(CLIByDevice{}),
 	}
 	for _, typ := range browser {
@@ -70,5 +69,25 @@ func TestBrowserBackendDTO_DeliberatelyCarriesTheEnvTable(t *testing.T) {
 	write, ok := reflect.TypeOf(backendFields{}).FieldByName("EnvJSON")
 	if !ok || !strings.HasPrefix(write.Tag.Get("json"), "env_json") {
 		t.Fatal("the browser write DTO must accept env_json so the console can save the env table")
+	}
+}
+
+// CLIOverlay 是**唯一**刻意携带 cli_path 的浏览器 DTO，所以它从上面那份清单里退出来，
+// 换成这条正向断言。
+//
+// 它曾经和别的响应一样被挡着，代价是控制台配不出可执行文件路径：网页上建的后端只能
+// 靠 $PATH 撞运气，撞不上就没有第二条路。放开的是**读回自己配过的值**——不读回就
+// 编辑不了（打开是空框，一保存把填过的路径抹掉）。
+//
+// 松的只有这一个字段。api_key 仍在探测器里：那是服务端替用户保管的凭据，只在设备
+// 快照里出现；而 cli_path 是用户自己要填的配置。CLIByDevice 也仍在清单里——它是
+// 后端列表上的按机器状态，那里只需要「装没装」，不需要路径正文。
+func TestCLIOverlayDTO_DeliberatelyCarriesThePath(t *testing.T) {
+	field, ok := reflect.TypeOf(CLIOverlay{}).FieldByName("CLIPath")
+	if !ok || field.Tag.Get("json") != "cli_path" {
+		t.Fatal("the browser CLI overlay must carry cli_path so the console can read back what it configured")
+	}
+	if browserDTOCarriesForbiddenField(reflect.TypeOf(CLIByDevice{})) {
+		t.Error("the per-device status row must stay path-free; it only answers installed-or-not")
 	}
 }

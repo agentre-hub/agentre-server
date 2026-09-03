@@ -120,6 +120,10 @@ type CLIOverlayView struct {
 	BackendSyncID string `json:"backend_sync_id"`
 	Fingerprint   string `json:"fingerprint"`
 	Status        string `json:"status"`
+	// CLIPath 是那台机器上的可执行文件绝对路径。它**刻意**下发浏览器：控制台要能
+	// 配这条路径，就得先读得回已经配过的值，否则打开编辑器看到的是空框，一保存
+	// 就把用户填过的路径抹掉。api_key 没有跟着松，见 api 层的 guard_test.go。
+	CLIPath string `json:"cli_path"`
 }
 
 type CLIOverlaySnapshot struct {
@@ -292,7 +296,12 @@ func (s *engineSvc) CreateBackend(ctx context.Context, in BackendWriteInput) (*B
 	if err := validateBackendWrite(ctx, b, in); err != nil {
 		return nil, err
 	}
-	return s.saveBackend(ctx, in.UserID, newSyncID(s.now()), nil, b, strings.TrimSpace(*in.DeviceID))
+	fingerprint := strings.TrimSpace(*in.DeviceID)
+	out, err := s.saveBackend(ctx, in.UserID, newSyncID(s.now()), nil, b, fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	return out, s.saveCLIOverlay(ctx, in, out.SyncID, fingerprint)
 }
 func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*BackendView, error) {
 	row, err := findLive(ctx, in.UserID, in.SyncID, sync_entity.KindAgentBackend)
@@ -310,7 +319,12 @@ func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*B
 	if err := validateBackendWrite(ctx, b, in); err != nil {
 		return nil, err
 	}
-	return s.saveBackend(ctx, in.UserID, row.SyncID, row, b, strings.TrimSpace(*in.DeviceID))
+	fingerprint := strings.TrimSpace(*in.DeviceID)
+	out, err := s.saveBackend(ctx, in.UserID, row.SyncID, row, b, fingerprint)
+	if err != nil {
+		return nil, err
+	}
+	return out, s.saveCLIOverlay(ctx, in, row.SyncID, fingerprint)
 }
 
 // saveBackend 把运行设备写进既有列 sync_objects.agentred_fingerprint，而不是塞进
@@ -341,6 +355,55 @@ func (s *engineSvc) saveBackend(ctx context.Context, userID int64, id string, ro
 	return &out, nil
 }
 
+// saveCLIOverlay 把 cli_path 落到 (backend, 绑定设备) 这一条 agent_backend_cli 上。
+//
+// 路径**不进 backend 载荷**：同一条后端在不同机器上是不同的可执行文件，载荷是跨机
+// 共享的，把路径塞进去就等于让一台机器的路径盖住另一台。身份因此是两段——
+// ProjectSyncID 记后端，AgentredFingerprint 记机器。
+//
+// 只在浏览器显式送来 cli_path 时才动它：改名、换模型那种写不带这个字段，覆盖行
+// 一次都不该多存（多存一版会让所有设备白拉一次同步）。
+//
+// 空串是合法取值，表示「不指定路径，用 $PATH 里的那个」——如实写下去，不删行，
+// 这样 overlayStatus 仍然区分得出「配过但清空了」与「从没配过」。
+func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, backendSyncID, fingerprint string) error {
+	if in.CLIPath == nil {
+		return nil
+	}
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, in.UserID, []string{sync_entity.KindAgentBackendCLI})
+	if err != nil {
+		return err
+	}
+	var row *sync_entity.SyncObject
+	for _, candidate := range rows {
+		if candidate.ProjectSyncID == backendSyncID && candidate.AgentredFingerprint == fingerprint && !candidate.IsDeleted() {
+			row = candidate
+			break
+		}
+	}
+	payload, err := json.Marshal(cliOverlayPayload{CLIPath: *in.CLIPath})
+	if err != nil {
+		return err
+	}
+	v, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	if row == nil {
+		row = &sync_entity.SyncObject{
+			UserID: in.UserID, Kind: sync_entity.KindAgentBackendCLI, SyncID: newSyncID(now),
+			ProjectSyncID: backendSyncID, AgentredFingerprint: fingerprint, Createtime: now,
+		}
+	}
+	row.Payload, row.Version, row.SyncUpdatedAt, row.OriginFingerprint, row.Updatetime = string(payload), v, now, ServerOriginFingerprint, now
+	if err := sync_repo.SyncObject().Save(ctx, row); err != nil {
+		return err
+	}
+	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, v)
+	return nil
+}
+
 func backendView(syncID string, b backendPayload) BackendView {
 	return BackendView{
 		SyncID: syncID, Name: b.Name, Type: b.Type, ProviderKey: b.ProviderKey, ModelKey: b.ModelKey,
@@ -364,7 +427,7 @@ func (s *engineSvc) ListCLIOverlays(ctx context.Context, userID int64) ([]CLIOve
 	out := make([]CLIOverlayView, 0, len(rows))
 	for _, row := range rows {
 		if o, ok := decodeOverlay(row); ok {
-			out = append(out, CLIOverlayView{BackendSyncID: row.ProjectSyncID, Fingerprint: row.AgentredFingerprint, Status: overlayStatus(o.CLIPath)})
+			out = append(out, CLIOverlayView{BackendSyncID: row.ProjectSyncID, Fingerprint: row.AgentredFingerprint, Status: overlayStatus(o.CLIPath), CLIPath: o.CLIPath})
 		}
 	}
 	return out, nil
@@ -506,9 +569,6 @@ func validBackend(b backendPayload, in BackendWriteInput) bool {
 }
 
 func validateBackendWrite(ctx context.Context, b backendPayload, in BackendWriteInput) error {
-	if in.CLIPath != nil {
-		return i18n.NewError(ctx, code.EngineCLIPathForbidden)
-	}
 	if b.Type == "builtin" {
 		return i18n.NewError(ctx, code.EngineBuiltinForbidden)
 	}

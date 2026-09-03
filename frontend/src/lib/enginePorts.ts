@@ -36,6 +36,7 @@ type CLIOverlayDTO = {
   backend_sync_id: string;
   fingerprint: string;
   status: "recognized" | "path" | "unchecked";
+  cli_path: string;
 };
 
 type BackendDTO = {
@@ -262,6 +263,9 @@ function backendBody(input: Record<string, unknown>): Record<string, unknown> {
           : undefined,
     sandbox: input.sandbox,
     approval: input.approval,
+    // 可执行文件路径。它落在按 (后端, 绑定设备) 的覆盖上，不进 backend 载荷——
+    // 服务端拆的，这一侧只管如实带上。
+    cli_path: input.cliPath,
     // 编辑器序列化回来的整张表原样发回。缺省（compact 会剔掉 undefined）即不改，
     // 服务端据此保留存着的表——只换设备之类的保存不会顺手把它抹掉。
     env_json: input.envJson,
@@ -787,14 +791,48 @@ export function createBrowserEngineSettingsPorts(
       );
     },
 
+    // 探测走 cliResolvePath 而不是 engineScan：后者一次能答三个类型，但它按设计
+    // 只带「装没装」，不带路径。而共享包的「自动识别」是 `r.found ? r.path : null`
+    // ——回一个 found=true、path 空的结果，按钮会在 CLI 装着的时候显示「没找到」。
+    // 换成每类型各拨一次，多的只是帧，连接仍是池化的同一条。
     async resolveBackendCLIPath(backendType, deviceId) {
-      const result = await scanDevice(stringValue(deviceId));
-      const item = (result.items ?? []).find(
-        (candidate) => candidate.backendType === backendType,
+      const device = await executionDevice(stringValue(deviceId));
+      const result = await relayCall<{ path?: string; found?: boolean }>(
+        device.fingerprint,
+        rpcMethods.cliResolvePath,
+        { type: backendType },
       );
-      // 路径不出浏览器（R19）：三态里只回得起「装了 / 没装」，「没探到」由上面的
-      // reject 表达。扫不到这个类型的条目就是那台机器上没有它。
-      return { path: "", found: item?.status === "recognized" };
+      return { path: stringValue(result.path), found: result.found === true };
+    },
+
+    cliPath: {
+      // 按 (后端, **绑定设备**) 取回配过的路径。同一条后端在别的机器上另有一条
+      // 覆盖，挑错就会把那台机器的路径显示成这一台的。
+      async get(backendSyncId) {
+        const backends = await fetchBackends();
+        const fingerprint =
+          backends.find((item) => item.sync_id === backendSyncId)?.device_id ??
+          "";
+        const overlays = await fetchCLIOverlays();
+        const hit = overlays.find(
+          (overlay) =>
+            overlay.backend_sync_id === backendSyncId &&
+            overlay.fingerprint === fingerprint,
+        );
+        return hit ? hit.cli_path : null;
+      },
+      // 面板保存走的是 updateBackend（路径在 BackendInput 里一起发），这个 set 是
+      // 端口契约的另一半：单独改路径时同样要带上设备，服务端才知道落在哪台机器上。
+      async set(backendSyncId, path) {
+        const backends = await fetchBackends();
+        const current = backends.find((item) => item.sync_id === backendSyncId);
+        await api(`/v1/engine/backends/${encodeURIComponent(backendSyncId)}`, {
+          method: "PATCH",
+          body: JSON.stringify(
+            compact({ cli_path: path, device_id: current?.device_id }),
+          ),
+        });
+      },
     },
 
     async scanBackendResults(deviceId) {

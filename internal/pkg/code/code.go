@@ -164,7 +164,9 @@ const (
 	EngineProviderNotFound = iota + 30900
 	// EngineBackendNotFound 当前账号下没有这个后端身份（或它已删除）。
 	EngineBackendNotFound
-	// EngineCLIPathForbidden 浏览器不得提交设备本机的 CLI 绝对路径。
+	// EngineCLIPathForbidden 已停用：控制台现在配得了 cli_path（按设备的覆盖），
+	// 不再有「浏览器不得提交路径」这条拒绝。保留这个名字只为不让后面几个码变号——
+	// 它们是 iota 派生的，删一个会把 30903/30904 整体前移。
 	EngineCLIPathForbidden
 	// EngineBuiltinForbidden builtin 只有本机桌面端可创建，浏览器没有执行落点。
 	EngineBuiltinForbidden
