@@ -123,8 +123,10 @@ function backendDTO(fields: {
   name: string;
   type: string;
   device_id: string;
+  env_json?: string;
 }) {
   return {
+    env_json: "",
     ...fields,
     provider_key: "",
     model_key: "",
@@ -660,28 +662,64 @@ describe("browser engine settings ports", () => {
   });
 
   /**
-   * 一键补 IS_SANDBOX 走的是专用端点，请求体里**没有** env 表。
+   * env 表整表往返：读得回来才编辑得动。
    *
-   * 本站读不到 env_json（R19），桌面端那套「读进本地 entries、改完整体保存」在这里
-   * 不成立；合并整个由服务端做，浏览器只送 sync_id。这条用例钉的就是「只送 sync_id」——
-   * 哪天有人图省事把 env 表塞进请求体，R19 就从这一侧破了。
+   * 这张表此前不下发浏览器，控制台因此既列不出用户在桌面端填过的透传环境变量，也改
+   * 不了它——同一份配置两个入口两种能力。放开后宿主要做的只有两件事：把 DTO 上的
+   * env_json 映成共享包的 envJson，以及把编辑器序列化回来的那张表原样发回去。
    */
-  it("adds IS_SANDBOX through the dedicated endpoint, sending no env table", async () => {
-    const calls: Array<{ path: string; init?: RequestInit }> = [];
+  it("maps the env table in both directions", async () => {
+    const bodies: unknown[] = [];
     mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
-      calls.push({ path, init });
+      if (init?.method === "PATCH") {
+        bodies.push(JSON.parse(String(init.body)));
+        return backendDTO({
+          sync_id: "backend-1",
+          name: "CC",
+          type: "claudecode",
+          device_id: "desktop-a",
+          env_json: '{"HTTPS_PROXY":"http://127.0.0.1:7890"}',
+        });
+      }
       if (path === "/v1/devices") return devicesResponse();
       if (path === "/v1/engine/providers") return { providers: [] };
       if (path === "/v1/engine/cli-overlays") return { overlays: [] };
-      return {};
+      return {
+        backends: [
+          backendDTO({
+            sync_id: "backend-1",
+            name: "CC",
+            type: "claudecode",
+            device_id: "desktop-a",
+            env_json: '{"MY_TOKEN":"s3cret"}',
+          }),
+        ],
+      };
     });
 
-    await ports().addIsSandbox?.("backend-1");
+    const adapter = ports();
+    const [listed] = await adapter.listBackends();
+    expect(listed.envJson).toBe('{"MY_TOKEN":"s3cret"}');
 
-    const call = calls.find((c) => c.path.includes("is-sandbox"));
-    expect(call?.path).toBe("/v1/engine/backends/backend-1/is-sandbox");
-    expect(call?.init?.method).toBe("POST");
-    expect(call?.init?.body).toBeUndefined();
+    const saved = await adapter.updateBackend(listed.id, {
+      type: "claudecode",
+      name: "CC",
+      deviceId: "desktop-a",
+      envJson: '{"HTTPS_PROXY":"http://127.0.0.1:7890"}',
+    });
+    expect(bodies[0]).toMatchObject({
+      env_json: '{"HTTPS_PROXY":"http://127.0.0.1:7890"}',
+    });
+    expect(saved.envJson).toBe('{"HTTPS_PROXY":"http://127.0.0.1:7890"}');
+  });
+
+  /**
+   * 读得到整表，编辑器就该开——这颗开关是共享包渲染 EnvJsonField 的唯一门控，
+   * 也是那颗一键补 IS_SANDBOX 走「改本地 entries」还是「调服务端合并」的分水岭。
+   * 关着它，控制台就退回只能补一个固定键、什么也看不见的老样子。
+   */
+  it("opens the shared env editor now that the table is readable", () => {
+    expect(ports().canEditEnvJSON).toBe(true);
   });
 
   it("carries the OpenClaw session mapping through create and edit", async () => {

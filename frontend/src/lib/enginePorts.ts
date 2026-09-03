@@ -48,6 +48,7 @@ type BackendDTO = {
   model_routes: string;
   sandbox: string;
   approval: string;
+  env_json: string;
   reasoning_effort: string;
   default_permission_mode: string;
   default_model: string;
@@ -261,6 +262,9 @@ function backendBody(input: Record<string, unknown>): Record<string, unknown> {
           : undefined,
     sandbox: input.sandbox,
     approval: input.approval,
+    // 编辑器序列化回来的整张表原样发回。缺省（compact 会剔掉 undefined）即不改，
+    // 服务端据此保留存着的表——只换设备之类的保存不会顺手把它抹掉。
+    env_json: input.envJson,
     reasoning_effort: input.reasoningEffort,
     default_permission_mode: input.defaultPermissionMode,
     default_model: input.defaultModel,
@@ -511,6 +515,7 @@ export function createBrowserEngineSettingsPorts(
       modelRoutes: parseModelRoutes(backend.model_routes),
       sandbox: backend.sandbox,
       approval: backend.approval,
+      envJson: backend.env_json,
       reasoningEffort: backend.reasoning_effort,
       defaultPermissionMode: backend.default_permission_mode,
       defaultModel: backend.default_model,
@@ -530,7 +535,10 @@ export function createBrowserEngineSettingsPorts(
   }
 
   const ports: EngineSettingsPorts = {
-    canEditEnvJSON: false,
+    // 整张 env 表现在随 Backend DTO 下发，控制台因此用的是共享包里桌面端那套编辑器：
+    // 读进 entries、改完整体保存。这颗开关同时把一键补 IS_SANDBOX 切回「改本地
+    // entries」那条路——与桌面端同一套交互，点完就能在展开的表里看见结果。
+    canEditEnvJSON: true,
     canCreateBuiltin: false,
     async listProviders() {
       return (await fetchProviders()).map(providerView);
@@ -707,19 +715,10 @@ export function createBrowserEngineSettingsPorts(
       backendDTOs.delete(key);
     },
 
-    // 远端 agentred 以 root 跑时 claude CLI 会拒掉 bypassPermissions（它内部视同
-    // --dangerously-skip-permissions），一轮启动就死。桌面端的一键按钮改的是本地
-    // envEntries 再随整体保存落盘；本站**读不到 env_json**（R19，BackendWriteInput
-    // 里根本没有这个字段），所以只送 sync_id，合并整个由服务端做。
-    //
-    // 不落 backendDTOs 缓存：响应里那份 Backend 与别处同形，本来就不带 env 表，
-    // 写回去也不会让本地多知道一件事。
-    async addIsSandbox(backendSyncId) {
-      await api(
-        `/v1/engine/backends/${encodeURIComponent(backendSyncId)}/is-sandbox`,
-        { method: "POST" },
-      );
-    },
+    // addIsSandbox 这个 port 本站不再实现：env 表整表下发之后，一键补 IS_SANDBOX
+    // 走的是共享包里桌面端那条路（改本地 entries、随整体保存落盘）。留着它等于同一个
+    // 动作有两条实现，而其中一条永远不会被调用——服务端 /is-sandbox 那个只收 sync_id
+    // 的合并接口仍在，留给读不到这张表的调用方。
 
     async testProvider(providerKey, modelKey) {
       const result = await relayRequest<EngineRPCResult>(

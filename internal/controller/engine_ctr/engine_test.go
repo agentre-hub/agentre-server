@@ -59,6 +59,9 @@ func (s *stubEngineSvc) CreateBackend(_ context.Context, in engine_svc.BackendWr
 	if in.DeviceID != nil {
 		view.DeviceID = *in.DeviceID
 	}
+	if in.EnvJSON != nil {
+		view.EnvJSON = *in.EnvJSON
+	}
 	return &view, nil
 }
 func (s *stubEngineSvc) UpdateBackend(context.Context, engine_svc.BackendWriteInput) (*engine_svc.BackendView, error) {
@@ -197,12 +200,12 @@ func TestDeviceSnapshot_RevokedDeviceIsRejected(t *testing.T) {
 	assert.NotContains(t, string(body), "sk-secret", "撤销的设备不能拿到明文凭据")
 }
 
-// 一键加 IS_SANDBOX：路由把 sync_id 从 URI 取出交给服务层，响应里**没有** env 表。
+// 一键加 IS_SANDBOX：路由把 sync_id 从 URI 取出交给服务层。
 //
-// 这个接口存在的理由就是「浏览器不碰 env_json 的内容」（R19）：请求体是空的，
-// 响应走的是与别处同一个 Backend DTO，而那个 DTO 在类型层就装不下 env_json
-// （internal/api/engine/guard_test.go 钉着这一点）。
-func TestBrowserBackendAddIsSandbox_PassesSyncIDAndReturnsNoEnvTable(t *testing.T) {
+// 控制台不再走这条路——它现在读得到 env 表，改本地 entries 再整体保存，与桌面端同一
+// 套交互。这个只收 sync_id 的服务端合并接口保留给读不到表的调用方，它的契约仍然是
+// 「URI 里的 sync_id 就是要改的那条后端」，这里钉的就是这一点。
+func TestBrowserBackendAddIsSandbox_PassesSyncIDThroughToTheService(t *testing.T) {
 	stub := &stubEngineSvc{}
 	server, _ := newEngineServer(t, stub)
 	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
@@ -212,10 +215,27 @@ func TestBrowserBackendAddIsSandbox_PassesSyncIDAndReturnsNoEnvTable(t *testing.
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "backend-1", stub.isSandboxOfID)
+}
+
+// env 表整表往返：请求体里的 env_json 原样落进 BackendWriteInput.EnvJSON，
+// 服务层回的那张表也如实带回浏览器——控制台的编辑器全靠这一条往返才编辑得动。
+func TestBrowserBackendCreate_CarriesTheEnvTableBothWays(t *testing.T) {
+	stub := &stubEngineSvc{}
+	server, _ := newEngineServer(t, stub)
+	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
+	require.NoError(t, err)
+
+	resp := postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken,
+		`{"name":"CC","type":"claudecode","device_id":"sha256:aaaa","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\"}"}`)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	require.NotNil(t, stub.backendIn.EnvJSON)
+	assert.JSONEq(t, `{"HTTPS_PROXY":"http://127.0.0.1:7890"}`, *stub.backendIn.EnvJSON)
 	var envelope struct {
-		Data json.RawMessage `json:"data"`
+		Data struct {
+			EnvJSON string `json:"env_json"`
+		} `json:"data"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
-	assert.NotContains(t, string(envelope.Data), "env_json")
-	assert.NotContains(t, string(envelope.Data), "IS_SANDBOX")
+	assert.JSONEq(t, `{"HTTPS_PROXY":"http://127.0.0.1:7890"}`, envelope.Data.EnvJSON)
 }

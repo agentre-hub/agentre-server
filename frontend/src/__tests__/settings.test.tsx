@@ -84,7 +84,14 @@ describe("Settings", () => {
     expect(screen.queryByLabelText(/CLI path/i)).toBeNull();
   });
 
-  it("does not offer an EnvJSON editor in the console backend form", async () => {
+  // 透传环境变量表在控制台里编辑得动，与桌面端同一个编辑器（共享包的 EnvJsonField）。
+  //
+  // 它曾经被挡在外面：这张表不下发浏览器，读不到现有的键就不能整体保存——那会把用户
+  // 自填的键连同密钥一起抹掉，而他还看不见。整表下发之后前提没了，同一份配置不该再
+  // 因为入口不同而给出两种能力。
+  //
+  // builtin 是另一回事，仍然不给建：内置后端只跑在本机，控制台建出来的必然用不了。
+  it("offers the same EnvJSON editor as the desktop in the console backend form", async () => {
     renderSettings();
 
     fireEvent.click(await screen.findByRole("tab", { name: "Agent backends" }));
@@ -98,8 +105,8 @@ describe("Settings", () => {
     fireEvent.click(claudeCode!);
 
     expect(
-      screen.queryByText("Advanced · Custom Environment Variables"),
-    ).toBeNull();
+      await screen.findByText("Advanced · Custom Environment Variables"),
+    ).toBeTruthy();
     expect(document.querySelector('[data-backend-type="builtin"]')).toBeNull();
   });
 

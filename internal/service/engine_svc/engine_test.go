@@ -468,3 +468,87 @@ func TestAddBackendIsSandbox_GivenUnknownID_ThenReturnsTheDedicatedBackendNotFou
 
 	assert.Equal(t, 30901, engineErrorCode(t, err))
 }
+
+// ── env_json 整表读写（控制台与桌面端对齐）──────────────────────────────────
+//
+// 这张表此前不下发浏览器：控制台看不到用户在桌面端填过的透传环境变量，也就改不了，
+// 只能通过 is-sandbox 那个专用接口补一个固定键。本轮按「两个入口一份能力」放开整表。
+
+// 读侧：存量后端里填过的表原样读回，控制台据此渲染编辑器。
+func TestListBackends_GivenEnvJSON_ThenReturnsTheTableForBrowserEdits(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
+		sync_entity.KindAgentBackend, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentExecTarget,
+	}).Return([]*sync_entity.SyncObject{{
+		Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		Payload: `{"name":"CC","type":"claudecode","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\"}"}`,
+	}}, nil)
+
+	got, err := New().ListBackends(context.Background(), 7)
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.JSONEq(t, `{"HTTPS_PROXY":"http://127.0.0.1:7890"}`, got[0].EnvJSON)
+}
+
+// 写侧：给了就是整表覆写，和桌面端同一套语义——编辑器把读到的表读进 entries，
+// 保存时把 entries 序列化回来。删掉一个键，保存后它就该没了。
+func TestUpdateBackend_GivenEnvJSON_ThenReplacesTheWholeTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		AgentredFingerprint: "sha256:aaaa",
+		Payload:             `{"name":"CC","type":"claudecode","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\",\"STALE\":\"1\"}"}`,
+	}, nil)
+	registerActiveDevice(ctrl, 7, "sha256:aaaa")
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	got, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:aaaa"),
+		EnvJSON: stringPtr(`{"HTTPS_PROXY":"http://127.0.0.1:7890","IS_SANDBOX":"1"}`),
+	})
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"HTTPS_PROXY":"http://127.0.0.1:7890","IS_SANDBOX":"1"}`, payloadString(t, saved.Payload, "env_json"))
+	assert.JSONEq(t, `{"HTTPS_PROXY":"http://127.0.0.1:7890","IS_SANDBOX":"1"}`, got.EnvJSON)
+}
+
+// **整表覆写的代价全在这一条上。** 不带这个字段的 PATCH（比如只换执行设备）不能把
+// 存着的表顺手抹掉——`applyBackend` 逐字段判 nil 就是为了这个，这里把它钉住。
+func TestUpdateBackend_GivenNoEnvJSON_ThenKeepsTheStoredTable(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		AgentredFingerprint: "sha256:aaaa",
+		Payload:             `{"name":"CC","type":"claudecode","env_json":"{\"MY_TOKEN\":\"s3cret\"}"}`,
+	}, nil)
+	registerActiveDevice(ctrl, 7, "sha256:bbbb")
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:bbbb"),
+	})
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"MY_TOKEN":"s3cret"}`, payloadString(t, saved.Payload, "env_json"))
+}

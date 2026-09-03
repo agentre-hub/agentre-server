@@ -63,15 +63,18 @@ type ProviderWriteInput struct {
 }
 
 type BackendWriteInput struct {
-	UserID                int64
-	SyncID                string
-	Name                  *string
-	Type                  *string
-	ProviderKey           *string
-	ModelKey              *string
-	ModelRoutes           *string
-	Sandbox               *string
-	Approval              *string
+	UserID      int64
+	SyncID      string
+	Name        *string
+	Type        *string
+	ProviderKey *string
+	ModelKey    *string
+	ModelRoutes *string
+	Sandbox     *string
+	Approval    *string
+	// EnvJSON 给了就是整表覆写（与桌面端同语义：编辑器读进 entries、保存序列化回来）；
+	// nil 表示这次不改，存着的表原样保留。
+	EnvJSON               *string
 	ReasoningEffort       *string
 	DefaultPermissionMode *string
 	DefaultModel          *string
@@ -99,6 +102,7 @@ type BackendView struct {
 	ModelRoutes           string        `json:"model_routes"`
 	Sandbox               string        `json:"sandbox"`
 	Approval              string        `json:"approval"`
+	EnvJSON               string        `json:"env_json"`
 	ReasoningEffort       string        `json:"reasoning_effort"`
 	DefaultPermissionMode string        `json:"default_permission_mode"`
 	DefaultModel          string        `json:"default_model"`
@@ -344,7 +348,7 @@ func backendView(syncID string, b backendPayload) BackendView {
 	return BackendView{
 		SyncID: syncID, Name: b.Name, Type: b.Type, ProviderKey: b.ProviderKey, ModelKey: b.ModelKey,
 		ModelRoutes: b.ModelRoutes, Sandbox: b.Sandbox, Approval: b.Approval,
-		ReasoningEffort: b.ReasoningEffort, DefaultPermissionMode: b.DefaultPermissionMode,
+		EnvJSON: b.EnvJSON, ReasoningEffort: b.ReasoningEffort, DefaultPermissionMode: b.DefaultPermissionMode,
 		DefaultModel: b.DefaultModel, OpenClawGatewayURL: b.OpenClawGatewayURL,
 		OpenClawAgentID: b.OpenClawAgentID, OpenClawDefaultModel: b.OpenClawDefaultModel,
 		OpenClawSessionMode: b.OpenClawSessionMode,
@@ -531,6 +535,9 @@ func applyBackend(b *backendPayload, in BackendWriteInput) {
 	}
 	if in.Approval != nil {
 		b.Approval = *in.Approval
+	}
+	if in.EnvJSON != nil {
+		b.EnvJSON = *in.EnvJSON
 	}
 	if in.ReasoningEffort != nil {
 		b.ReasoningEffort = *in.ReasoningEffort

@@ -54,14 +54,18 @@ type CLIByDevice struct {
 	Status      string `json:"status"`
 }
 type Backend struct {
-	SyncID                string        `json:"sync_id"`
-	Name                  string        `json:"name"`
-	Type                  string        `json:"type"`
-	ProviderKey           string        `json:"provider_key"`
-	ModelKey              string        `json:"model_key"`
-	ModelRoutes           string        `json:"model_routes"`
-	Sandbox               string        `json:"sandbox"`
-	Approval              string        `json:"approval"`
+	SyncID      string `json:"sync_id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	ProviderKey string `json:"provider_key"`
+	ModelKey    string `json:"model_key"`
+	ModelRoutes string `json:"model_routes"`
+	Sandbox     string `json:"sandbox"`
+	Approval    string `json:"approval"`
+	// EnvJSON 是这条后端的透传环境变量表（JSON 文本）。它**刻意**下发浏览器：控制台
+	// 与桌面端用同一个编辑器，读得到才编辑得动。api_key 与 cli_path 没有跟着松，
+	// 见 guard_test.go。
+	EnvJSON               string        `json:"env_json"`
 	ReasoningEffort       string        `json:"reasoning_effort"`
 	DefaultPermissionMode string        `json:"default_permission_mode"`
 	DefaultModel          string        `json:"default_model"`
@@ -76,13 +80,16 @@ type Backend struct {
 	DeviceID string `json:"device_id"`
 }
 type backendFields struct {
-	Name                  *string `json:"name" binding:"omitempty,max=255"`
-	Type                  *string `json:"type" binding:"omitempty,max=64"`
-	ProviderKey           *string `json:"provider_key" binding:"omitempty,max=255"`
-	ModelKey              *string `json:"model_key" binding:"omitempty,max=255"`
-	ModelRoutes           *string `json:"model_routes" binding:"omitempty,max=65535"`
-	Sandbox               *string `json:"sandbox" binding:"omitempty,max=255"`
-	Approval              *string `json:"approval" binding:"omitempty,max=255"`
+	Name        *string `json:"name" binding:"omitempty,max=255"`
+	Type        *string `json:"type" binding:"omitempty,max=64"`
+	ProviderKey *string `json:"provider_key" binding:"omitempty,max=255"`
+	ModelKey    *string `json:"model_key" binding:"omitempty,max=255"`
+	ModelRoutes *string `json:"model_routes" binding:"omitempty,max=65535"`
+	Sandbox     *string `json:"sandbox" binding:"omitempty,max=255"`
+	Approval    *string `json:"approval" binding:"omitempty,max=255"`
+	// EnvJSON 缺省即不改：整表覆写只在浏览器显式送来这个字段时发生，
+	// 只换设备之类的 PATCH 不会顺手抹掉用户存着的表（engine_svc.applyBackend）。
+	EnvJSON               *string `json:"env_json" binding:"omitempty,max=65535"`
 	ReasoningEffort       *string `json:"reasoning_effort" binding:"omitempty,max=255"`
 	DefaultPermissionMode *string `json:"default_permission_mode" binding:"omitempty,max=255"`
 	DefaultModel          *string `json:"default_model" binding:"omitempty,max=255"`

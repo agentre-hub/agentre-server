@@ -76,7 +76,7 @@ func (e *Engine) ListBackends(c *gin.Context, _ *api.ListBackendsRequest) (*api.
 	return &api.ListBackendsResponse{Backends: out}, nil
 }
 func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*api.Backend, error) {
-	item, err := engine_svc.Default().CreateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), "", req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceID))
+	item, err := engine_svc.Default().CreateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), "", req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceID, req.EnvJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*
 	return &out, nil
 }
 func (e *Engine) UpdateBackend(c *gin.Context, req *api.UpdateBackendRequest) (*api.Backend, error) {
-	item, err := engine_svc.Default().UpdateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), req.SyncID, req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceID))
+	item, err := engine_svc.Default().UpdateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), req.SyncID, req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceID, req.EnvJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +105,8 @@ func (e *Engine) DeleteBackend(c *gin.Context, req *api.DeleteBackendRequest) (*
 	}
 	return &struct{}{}, nil
 }
-func backendInput(userID int64, id string, name, kind, providerKey, modelKey, modelRoutes, sandbox, approval, reasoning, permission, defaultModel, gateway, agentID, openClawModel, sessionMode, cliPath, deviceID *string) engine_svc.BackendWriteInput {
-	return engine_svc.BackendWriteInput{UserID: userID, SyncID: id, Name: name, Type: kind, ProviderKey: providerKey, ModelKey: modelKey, ModelRoutes: modelRoutes, Sandbox: sandbox, Approval: approval, ReasoningEffort: reasoning, DefaultPermissionMode: permission, DefaultModel: defaultModel, OpenClawGatewayURL: gateway, OpenClawAgentID: agentID, OpenClawDefaultModel: openClawModel, OpenClawSessionMode: sessionMode, CLIPath: cliPath, DeviceID: deviceID}
+func backendInput(userID int64, id string, name, kind, providerKey, modelKey, modelRoutes, sandbox, approval, reasoning, permission, defaultModel, gateway, agentID, openClawModel, sessionMode, cliPath, deviceID, envJSON *string) engine_svc.BackendWriteInput {
+	return engine_svc.BackendWriteInput{UserID: userID, SyncID: id, Name: name, Type: kind, ProviderKey: providerKey, ModelKey: modelKey, ModelRoutes: modelRoutes, Sandbox: sandbox, Approval: approval, ReasoningEffort: reasoning, DefaultPermissionMode: permission, DefaultModel: defaultModel, OpenClawGatewayURL: gateway, OpenClawAgentID: agentID, OpenClawDefaultModel: openClawModel, OpenClawSessionMode: sessionMode, CLIPath: cliPath, DeviceID: deviceID, EnvJSON: envJSON}
 }
 func backend(b engine_svc.BackendView) api.Backend {
 	cli := make([]api.CLIByDevice, len(b.CLIByDevice))
@@ -116,7 +116,7 @@ func backend(b engine_svc.BackendView) api.Backend {
 	return api.Backend{
 		SyncID: b.SyncID, Name: b.Name, Type: b.Type, ProviderKey: b.ProviderKey, ModelKey: b.ModelKey,
 		ModelRoutes: b.ModelRoutes, Sandbox: b.Sandbox, Approval: b.Approval,
-		ReasoningEffort: b.ReasoningEffort, DefaultPermissionMode: b.DefaultPermissionMode,
+		EnvJSON: b.EnvJSON, ReasoningEffort: b.ReasoningEffort, DefaultPermissionMode: b.DefaultPermissionMode,
 		DefaultModel: b.DefaultModel, OpenClawGatewayURL: b.OpenClawGatewayURL,
 		OpenClawAgentID: b.OpenClawAgentID, OpenClawDefaultModel: b.OpenClawDefaultModel,
 		OpenClawSessionMode: b.OpenClawSessionMode, RefCount: b.RefCount, CLIByDevice: cli,
