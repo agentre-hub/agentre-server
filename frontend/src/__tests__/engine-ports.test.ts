@@ -659,6 +659,31 @@ describe("browser engine settings ports", () => {
     expect(calls.length).toBe(before);
   });
 
+  /**
+   * 一键补 IS_SANDBOX 走的是专用端点，请求体里**没有** env 表。
+   *
+   * 本站读不到 env_json（R19），桌面端那套「读进本地 entries、改完整体保存」在这里
+   * 不成立；合并整个由服务端做，浏览器只送 sync_id。这条用例钉的就是「只送 sync_id」——
+   * 哪天有人图省事把 env 表塞进请求体，R19 就从这一侧破了。
+   */
+  it("adds IS_SANDBOX through the dedicated endpoint, sending no env table", async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      return {};
+    });
+
+    await ports().addIsSandbox?.("backend-1");
+
+    const call = calls.find((c) => c.path.includes("is-sandbox"));
+    expect(call?.path).toBe("/v1/engine/backends/backend-1/is-sandbox");
+    expect(call?.init?.method).toBe("POST");
+    expect(call?.init?.body).toBeUndefined();
+  });
+
   it("carries the OpenClaw session mapping through create and edit", async () => {
     // 会话映射是桌面端 entity 的硬校验（不是 per-agentre-session 就整条判非法）。
     // 控制台漏发这一个字段，等于在服务端存下一条同步下去必被拒的后端。

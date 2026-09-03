@@ -707,6 +707,20 @@ export function createBrowserEngineSettingsPorts(
       backendDTOs.delete(key);
     },
 
+    // 远端 agentred 以 root 跑时 claude CLI 会拒掉 bypassPermissions（它内部视同
+    // --dangerously-skip-permissions），一轮启动就死。桌面端的一键按钮改的是本地
+    // envEntries 再随整体保存落盘；本站**读不到 env_json**（R19，BackendWriteInput
+    // 里根本没有这个字段），所以只送 sync_id，合并整个由服务端做。
+    //
+    // 不落 backendDTOs 缓存：响应里那份 Backend 与别处同形，本来就不带 env 表，
+    // 写回去也不会让本地多知道一件事。
+    async addIsSandbox(backendSyncId) {
+      await api(
+        `/v1/engine/backends/${encodeURIComponent(backendSyncId)}/is-sandbox`,
+        { method: "POST" },
+      );
+    },
+
     async testProvider(providerKey, modelKey) {
       const result = await relayRequest<EngineRPCResult>(
         rpcMethods.engineTest,
