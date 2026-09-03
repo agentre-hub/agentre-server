@@ -1909,6 +1909,38 @@ describe("对话页：子项目的 ＋", () => {
 });
 
 /**
+ * Agent 轴的组头上那颗 ＋（共享包 6568f81d）。项目组头与「随手对话」组头一直有
+ * ＋，Agent 组头没有——同一份索引里换一条轴，「在这一组里开一条」这个入口就没了，
+ * 而桌面端 AgentGroup 上那颗一直在。
+ */
+describe("对话页：Agent 组头的 ＋", () => {
+  it("点它直接开这个 Agent 的草稿，不必先绕一遍「挑一个 Agent」", async () => {
+    stubApi({ mirror: [mirrored()] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    await screen.findByText("重构登录页");
+    fireEvent.pointerDown(screen.getByTestId("axis-picker"), { button: 0 });
+    fireEvent.click(screen.getByTestId("axis-option-agent"));
+
+    const header = screen
+      .getAllByTestId("group-header")
+      .find((el) => el.textContent?.includes("后端 Agent"));
+    if (!header) throw new Error("Agent 轴上没有这个 Agent 的组头");
+    fireEvent.click(within(header).getByTestId("group-header-plus"));
+
+    // 落到的是草稿本身（compose 的 draft 档），不是「挑一个 Agent」那一屏。
+    const draft = await screen.findByTestId("draft-session");
+    expect(
+      within(draft).getByText(
+        i18n.t("chat.startWithAgent", { agent: "后端 Agent" }),
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("new-conversation-pane")).toBeNull();
+  });
+});
+
+/**
  * 索引取不出来时不再顶掉整页（规格 2026-08-21 决策 14）。
  *
  * 此前是 `if (loadError) return <AppShell><Alert/></AppShell>`：侧栏还在，内容区

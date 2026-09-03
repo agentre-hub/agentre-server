@@ -441,6 +441,23 @@ export default function Chat() {
     },
     [],
   );
+  /**
+   * Agent 轴的组头上那颗 ＋。索引报回来的是组键，而 Agent 轴的组键就是
+   * agentSyncId——在这儿换回「新对话」那一族要的那份 Agent 载荷。
+   *
+   * 认不出来就什么都不做：清单还没回来、或这个 Agent 已经从账号里去掉了，都不该
+   * 开一份没有 Agent 的草稿出来。
+   */
+  const onAgentNewSession = useCallback(
+    (agentSyncId: string) => {
+      const agent = agents.find((a) => a.sync_id === agentSyncId);
+      if (!agent) return;
+      setCompose({ step: "draft", agent });
+      // 同 openCompose：草稿接管右栏之后没有对话开着，左栏的高亮跟着松开。
+      setSelected(null);
+    },
+    [agents],
+  );
   const projectManagement = useProjectManagement({
     projects,
     agents,
@@ -667,6 +684,7 @@ export default function Chat() {
       groupTotals={groupTotals}
       loadGroupPage={loadGroupPage}
       projectManagement={projectManagement}
+      onAgentNewSession={onAgentNewSession}
       rowStatusLabel={isMobile}
     />
   );

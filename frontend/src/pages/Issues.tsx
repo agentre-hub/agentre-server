@@ -123,6 +123,7 @@ export default function Issues() {
       return {
         name: project.name,
         color: project.color,
+        icon: project.icon,
         nested:
           query.scope.kind === "project" &&
           ids.idOf(projectSyncId) !== query.scope.projectId,
@@ -140,6 +141,7 @@ export default function Issues() {
         name: row.project.name,
         depth: row.depth,
         color: row.project.color,
+        icon: row.project.icon,
         unfinished: board.projectCountOf(row.project.sync_id),
       })),
     [board, ids, ordered],

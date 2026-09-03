@@ -3226,7 +3226,12 @@ describe("会话详情：头部", () => {
 
   /** stubHeader 的项目版：会话上钉了 p-1，账号项目树答得出它。 */
   function stubHeaderWithProject(
-    projects: { sync_id: string; name: string; color?: string }[] = projectRows,
+    projects: {
+      sync_id: string;
+      name: string;
+      color?: string;
+      icon?: string;
+    }[] = projectRows,
     projectSyncId = "p-1",
   ) {
     stubHeader();
@@ -3280,6 +3285,22 @@ describe("会话详情：头部", () => {
     const seg = await screen.findByTestId("session-detail-meta-project");
     const glyph = within(seg).getByRole("img", { name: "登录重构" });
     expect(glyph.style.backgroundColor).toBe("var(--agent-5)");
+  });
+
+  it("项目选过图标时头部画的也是那一枚：四处出现必须是同一个记号", async () => {
+    // 组头 / 行首 / 时间轴第二行都已经画得出项目自己的图标（解 key 那一步在共享包
+    // 里），头部只把 icon 一起递下去就行 —— 少递这一格，同一个项目在头部就退回首字。
+    stubHeaderWithProject([
+      { sync_id: "p-1", name: "登录重构", color: "agent-5", icon: "code-xml" },
+    ]);
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const seg = await screen.findByTestId("session-detail-meta-project");
+    const glyph = within(seg).getByRole("img", { name: "登录重构" });
+    expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-code-xml",
+    );
   });
 
   it("不属于任何项目的对话：不摆项目那一段，也不留一个孤零零的「·」", async () => {

@@ -333,6 +333,7 @@ function GroupHeader({
   toggle,
   onExpandedChange,
   projectHandlers,
+  onAgentNewSession,
   onImport,
 }: {
   group: MirrorIndexGroup;
@@ -353,6 +354,11 @@ function GroupHeader({
    * 自己既不知道账号里有哪些 Agent，也不该替调用方决定「点了之后去哪」。
    */
   projectHandlers?: (projectSyncId: string) => ProjectHeaderActionsProps | null;
+  /**
+   * Agent 组头上那颗 ＋ 的去处。收的是**组键**——Agent 轴上组键就是 agentSyncId
+   * （共享包 buildAxisGroups 的约定），与项目组头收 projectSyncId 同一条路子。
+   */
+  onAgentNewSession?: (agentSyncId: string) => void;
   /** 时间轴那一组没有组头，因此这两个只在可收放的轴上给。 */
   expanded?: boolean;
   toggle?: () => void;
@@ -507,7 +513,9 @@ function GroupHeader({
       <ProjectGroupHeader
         {...common}
         actions={actions}
-        project={{ name: group.label, color: group.color }}
+        // 图标跟着组走（共享包的 IndexGroup 把 ProjectNode.icon 原样带出来）：
+        // 只给颜色的话，同一个项目在组头上是首字、在行首是图标。
+        project={{ name: group.label, color: group.color, icon: group.icon }}
         depth={group.depth}
         // 层级在本站是**平铺一列**，所以除了包给的那条尺码阶梯还要缩进；桌面端把
         // 子项目嵌在父组的容器里，那边因此不需要这一行。
@@ -529,6 +537,13 @@ function GroupHeader({
       <AgentGroupHeader
         {...common}
         actions={actions}
+        // ＋ 只给认得出 Agent 的那些组：`unnamedAgent` 那一组的组键是个占位串
+        // （UNNAMED_AGENT_KEY），拿它去开对话开不出任何东西。
+        onNewSession={
+          onAgentNewSession && group.kind === "agent"
+            ? () => onAgentNewSession(group.key)
+            : undefined
+        }
         // 没有 Agent 标识的老会话那一组：头像不编身份，组名由本站给一句兜底文案。
         agent={{
           name: group.kind === "unnamedAgent" ? "" : group.label,
@@ -846,6 +861,13 @@ export interface SessionIndexProps {
    * 只在项目轴上渲染——别的轴没有项目这一维，摆了就是问一个它答不出的问题。
    */
   onNewProject?: () => void;
+  /**
+   * 与某个 Agent 开一条新对话（Agent 轴的组头上那颗 ＋，共享包 6568f81d）。与
+   * `projectHandlers` / `onNewProject` 同一条口径：宿主给才有，索引不替它决定
+   * 点了之后去哪。**只在认得出 Agent 的那些组上渲染**——没有 Agent 标识的老会话
+   * 那一组答不出「哪个 Agent」，摆一颗点了没反应的 ＋ 是骗人。
+   */
+  onAgentNewSession?: (agentSyncId: string) => void;
 }
 
 export default function SessionIndex({
@@ -878,6 +900,7 @@ export default function SessionIndex({
   onSelect,
   projectHandlers,
   onNewProject,
+  onAgentNewSession,
 }: SessionIndexProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -1333,6 +1356,7 @@ export default function SessionIndex({
                     toggle={toggle}
                     onExpandedChange={onGroupExpandedChange}
                     projectHandlers={projectHandlers}
+                    onAgentNewSession={onAgentNewSession}
                     onImport={setImportPrefill}
                   />
                 )}

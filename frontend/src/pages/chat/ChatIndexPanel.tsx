@@ -124,6 +124,8 @@ export interface ChatIndexPanelProps {
   groupTotals: Record<string, number>;
   loadGroupPage: SessionIndexProps["loadGroupPage"];
   projectManagement: ProjectManagement;
+  /** Agent 组头上那颗 ＋ 的去处：直接开这个 Agent 的草稿。 */
+  onAgentNewSession: (agentSyncId: string) => void;
   /** 「已知的可见变化」3：移动端行尾保留本地化的状态文字徽标。 */
   rowStatusLabel: boolean;
 }
@@ -143,6 +145,7 @@ export function ChatIndexPanel({
   groupTotals,
   loadGroupPage,
   projectManagement,
+  onAgentNewSession,
   rowStatusLabel,
 }: ChatIndexPanelProps) {
   const { t } = useTranslation();
@@ -220,6 +223,9 @@ export function ChatIndexPanel({
         // 正是它覆盖不到的那一半——账号里一个项目都没有时的第一个，以及与现有
         // 项目平级的那种。
         onNewProject={projectManagement.openCreate}
+        // Agent 轴上「在这一组里开一条」：项目组头的 ＋ 还要先挑成员，这里那一维
+        // 本来就定了，因此直接落到草稿。
+        onAgentNewSession={onAgentNewSession}
         sessionPath={sessionDetailPath}
       />
     </div>

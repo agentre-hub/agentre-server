@@ -1183,7 +1183,13 @@ export default function SessionDetailView({
       sid={sid}
       identity={identity}
       agent={agent}
-      project={project && { name: project.name, color: project.color }}
+      project={
+        project && {
+          name: project.name,
+          color: project.color,
+          icon: project.icon,
+        }
+      }
       avatar={headerAvatar}
       displayTitle={displayTitle}
       machineName={device?.name}

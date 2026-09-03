@@ -141,7 +141,11 @@ export function ProjectAgentPane({
                 )}
               >
                 <ProjectGlyph
-                  project={{ name: project.name, color: project.color }}
+                  project={{
+                    name: project.name,
+                    color: project.color,
+                    icon: project.icon,
+                  }}
                 />
                 <span
                   className={cn(
@@ -165,6 +169,7 @@ export function ProjectAgentPane({
                 project={{
                   name: selectedProject.name,
                   color: selectedProject.color,
+                  icon: selectedProject.icon,
                 }}
                 className="size-6 rounded-md text-2xs"
               />

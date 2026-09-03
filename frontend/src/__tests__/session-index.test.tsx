@@ -44,8 +44,8 @@ const projects = [
     syncId: "p-server",
     name: "agentre-server",
     color: "agent-11",
-    // 项目自己的图标键（icon-registry 的 key）。已经从服务端接通到这一层，
-    // 但键 → 图标的注册表还没进共享包，所以字形照旧退回项目名首字。
+    // 项目自己的图标键（共享包 org/icon-registry 的 key）。词表与「key → 图标」
+    // 都在包里，字形因此自己解得出来，不再等宿主递一个画好的节点。
     icon: "code-xml",
     sortOrder: 0,
   },
@@ -315,6 +315,40 @@ describe("统一会话索引", () => {
   });
 
   /**
+   * 项目组头与「随手对话」组头都有 ＋，Agent 组头此前没有——同一份索引里换一条轴，
+   * 「在这一组里开一条」这个入口就没了（桌面端 AgentGroup 上那颗一直在）。
+   */
+  it("Agent 组头上那颗 ＋ 报的是哪个 Agent，且不把这一组收起来", () => {
+    const onAgentNewSession = vi.fn();
+    renderIndex({ axis: "agent", onAgentNewSession });
+
+    const header = groupHeaderFor("Frontend Agent");
+    expect(groupToggleFor("Frontend Agent").getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    fireEvent.click(within(header).getByTestId("group-header-plus"));
+
+    expect(onAgentNewSession).toHaveBeenCalledWith("ag-fe");
+    // ＋ 在收放按钮之外：点它不该顺手折叠这一组。
+    expect(groupToggleFor("Frontend Agent").getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+  });
+
+  it("没有 Agent 标识的那一组不摆 ＋——那儿没有「哪个 Agent」可谈", () => {
+    renderIndex({
+      axis: "agent",
+      rows: [row({ key: "a", agentSyncId: "" })],
+      onAgentNewSession: vi.fn(),
+    });
+
+    const header = groupHeaderFor(
+      i18n.t("sessionIndex.group.unnamedAgent") as string,
+    );
+    expect(within(header).queryByTestId("group-header-plus")).toBeNull();
+  });
+
+  /**
    * 决策 8 把行首那一维**照搬桌面端决策 4**，而那一条写的是「自由会话在「按 Agent」
    * 下槽位保留、字形置灰，行的左缘不参差」，并明确拒绝了「这一维缺席就不渲染字形」。
    * 共享 `SessionRow` 的 `leading` 是普通 flex 子项、不给空槽留位，所以缺席时不画
@@ -576,8 +610,29 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
     }
   });
 
-  it("项目的 icon 字段已接通，但注册表还没共享，因此照旧退回项目名首字（不猜图标）", () => {
+  it("项目选过图标就画那一枚：解 key 这一步在共享包里，本站不必递节点", () => {
     renderIndex({ axis: "agent" });
+
+    const glyph = leadingGlyph();
+    expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-code-xml",
+    );
+    // 图标顶掉首字，而不是叠在它上面。
+    expect(glyph.textContent).toBe("");
+  });
+
+  it("项目没选过图标时退回项目名首字：猜一枚图标比一个字母更糟", () => {
+    renderIndex({
+      axis: "agent",
+      projects: [
+        {
+          syncId: "p-server",
+          name: "agentre-server",
+          color: "agent-11",
+          sortOrder: 0,
+        },
+      ],
+    });
 
     expect(leadingGlyph().textContent).toBe("a");
   });
@@ -603,13 +658,15 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
     expect(leadingGlyph().style.backgroundColor).toBe("");
   });
 
-  it("项目字形是项目色方块 + 项目名首字，不是一枚通用文件夹描边", () => {
+  it("项目字形是项目色方块 + 它自己那枚记号，不是一枚通用文件夹描边", () => {
     renderIndex({ axis: "agent" });
 
     const glyph = leadingGlyph();
     expect(glyph.tagName).toBe("SPAN");
-    expect(glyph.textContent).toBe("a");
     expect(glyph.className).toContain("rounded-sm");
+    expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-code-xml",
+    );
   });
 
   it("判不出项目时保留槽位、给中性面、不编名字（决策 8：字形置灰不是不画）", () => {
@@ -645,7 +702,11 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
     const glyph = within(groupHeaderFor("agentre-server")).getByTestId(
       "project-group-glyph",
     );
-    expect(glyph.textContent).toBe("a");
+    // 组头与行首是同一枚字形，图标也必须是同一枚：组上画图标、行里退回首字的话，
+    // 同一个项目在一屏之内长成两个样子。
+    expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-code-xml",
+    );
     expect(glyph.style.backgroundColor).toBe("var(--agent-11)");
     // 根项目那一档是 24px，与桌面端逐字同一条尺码阶梯（包里的 groupGlyphClassName）。
     // 本站此前一律 16px，同一个项目在两端因此长成两个大小。

@@ -77,6 +77,8 @@ const projects = [
     sync_id: "proj-api",
     name: "API",
     color: "agent-2",
+    // 项目自己选的图标键（共享包 org/icon-registry 的 key）。
+    icon: "code-xml",
     parent_sync_id: "proj-web",
     sort_order: 0,
   },
@@ -217,6 +219,21 @@ describe("the six filters travel to the server", () => {
       expect(lastBoardQuery().get("project_sync_id")).toBe("proj-api");
     });
     expect(lastBoardQuery().get("scope")).toBe("project");
+  });
+
+  it("范围选择器里的项目画的是它自己那枚图标，不是项目名首字", async () => {
+    // 字形与解 key 都在共享包里，本站只要把 icon 带进 ScopeProjectNode；
+    // 漏带这一格，选择器里三个项目就只剩三个字母。
+    mockBoardApi();
+    await renderBoard();
+
+    open(screen.getByTestId("scope-trigger"));
+    await screen.findByText("API");
+
+    const glyph = screen.getAllByRole("img", { name: "API" })[0];
+    expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
+      "lucide-code-xml",
+    );
   });
 
   it("asks for no ordering at all — the board's order is the one people dragged", async () => {

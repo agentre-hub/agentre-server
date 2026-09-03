@@ -880,6 +880,22 @@ describe("从项目里挑：空的时候用同一种形", () => {
     expect(empty.textContent).toContain("Projects");
   });
 
+  it("项目选过图标时左树与右侧标题画的是同一枚：字形只有一种", () => {
+    // 这一屏上同一个项目出现两次（左边树里一次、右半屏标题上一次）。解 key 那一步
+    // 在共享包里，本站只要把 icon 一起递下去；漏递哪一处，那一处就退回项目名首字。
+    renderProjectPane([
+      { sync_id: "p-1", name: "server", color: "agent-3", icon: "code-xml" },
+    ]);
+
+    const glyphs = screen.getAllByRole("img", { name: "server" });
+    expect(glyphs).toHaveLength(2);
+    for (const glyph of glyphs) {
+      expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
+        "lucide-code-xml",
+      );
+    }
+  });
+
   it("项目里一个 Agent 都没有：同一种形，并说清 Agent 从哪来", () => {
     renderProjectPane([{ sync_id: "p-1", name: "server" }]);
 
