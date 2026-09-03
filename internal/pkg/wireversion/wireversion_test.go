@@ -14,16 +14,12 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/wireversion"
 )
 
-// Given 协议版本的主人是 @agentre-hub/agentre-wire 的 package.json，而这个仓库只钉一个
-// 不可变 revision 消费它；When 读 Go 侧那个复述出来的常量；Then 它必须与钉住的那份包
-// 的版本逐字相等。
-//
-// 锚点取 frontend/pnpm-lock.yaml：它是本仓**已提交**的那份「钉住的包到底是哪个版本」
-// 的记录（node_modules 不入库，CI 的 test-backend 也不装前端依赖），并且每次改 pin
-// 重装都会跟着动。Go 读不到 package.json，这条守卫是唯一挡住「握手自报一个没人认的
-// 版本」的东西。
-func TestProtocol_GivenThePinnedWirePackage_WhenCompared_ThenTheGoConstantMatchesVerbatim(t *testing.T) {
-	t.Parallel()
+// pinnedWireVersion 读 frontend/pnpm-lock.yaml，返回钉住的 @agentre-hub/agentre-wire
+// 版本。它是仓库里**已提交**的那份「钉住的包到底是哪个版本」的记录（node_modules 不
+// 入库，CI 的 test-backend 也不装前端依赖），并且每次改 pin 重装都会跟着动。Go 读不到
+// package.json，这是 Protocol 与 MinSupported 两条常量守卫共用的唯一锚点。
+func pinnedWireVersion(t *testing.T) string {
+	t.Helper()
 
 	_, filename, _, ok := runtime.Caller(0)
 	require.True(t, ok, "resolve guard test path")
@@ -50,9 +46,30 @@ func TestProtocol_GivenThePinnedWirePackage_WhenCompared_ThenTheGoConstantMatche
 	}
 	require.Len(t, pinned, 1, "锁文件里应当只钉住一个 @agentre-hub/agentre-wire")
 	require.NotEmpty(t, pinned[0], "锁文件没记下 @agentre-hub/agentre-wire 的版本")
+	return pinned[0]
+}
 
-	require.Equal(t, pinned[0], wireversion.Protocol,
+// Given 协议版本的主人是 @agentre-hub/agentre-wire 的 package.json，而这个仓库只钉一个
+// 不可变 revision 消费它；When 读 Go 侧那个复述出来的常量；Then 它必须与钉住的那份包
+// 的版本逐字相等。这条守卫是唯一挡住「握手自报一个没人认的版本」的东西。
+func TestProtocol_GivenThePinnedWirePackage_WhenCompared_ThenTheGoConstantMatchesVerbatim(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, pinnedWireVersion(t), wireversion.Protocol,
 		"wireversion.Protocol 必须与 frontend/package.json 钉住的 @agentre-hub/agentre-wire 版本一同更新")
+}
+
+// Given server 侧新增的 MinSupported 复述的是与 Protocol 同一个来源（钉住的
+// @agentre-hub/agentre-wire 版本）；When 与钉住的包版本及 Protocol 分别对比；Then 三者
+// 逐字相等 —— 本轮它不产生宽限（spec 决策 3：「本轮它与 Protocol 相等、不产生宽限」），
+// 漏改任何一处都必须炸,而不是悄悄留下一个比 Protocol 更旧的 floor。
+func TestMinSupported_GivenThePinnedWirePackageAndProtocol_WhenCompared_ThenTheGoConstantMatchesBothVerbatim(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, pinnedWireVersion(t), wireversion.MinSupported,
+		"wireversion.MinSupported 必须与 frontend/package.json 钉住的 @agentre-hub/agentre-wire 版本一同更新")
+	require.Equal(t, wireversion.Protocol, wireversion.MinSupported,
+		"本轮 MinSupported 与 Protocol 相等，不产生宽限窗口（spec 决策 3）")
 }
 
 // Given Go 与 TypeScript 都消费同一份 wire 源码；When 两边各自钉不可变 revision；

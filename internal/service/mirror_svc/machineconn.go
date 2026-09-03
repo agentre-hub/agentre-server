@@ -85,12 +85,16 @@ func dialMachine(
 	// ProtocolVersion 是握手的必填项:对端按**精确匹配**校验,并且把空版本判成
 	// 「对端太旧」(proto3 下缺字段与显式空串同为零值)。不带它 = 每一台机器都在
 	// auth.account 上被拒 = 一条会话都镜像不下来。
+	// MinSupportedProtocolVersion 本轮与 ProtocolVersion 相等,不产生宽限窗口,但让
+	// daemon 收到的握手里这个字段不再是空串——它因而不必再按「对端预先窗口机制」保守
+	// 推断(spec「协议：版本窗口与自报版本」一节，决策 3)。
 	// 对端身份**不在请求体里**：它由对端从已验签凭据的 pfp claim 取
 	// （2026-08-31-conversation-centric-addressing.md 决策 8，AuthAccountRequest 的
 	// device_fingerprint 字段已删）。本副本出示什么身份，因此完全取决于
 	// Supervisor.dial 往凭据里签了什么。
 	if _, err := c.AuthAccount(ctx, &agentrewire.AuthAccountRequest{
 		Credential: credential, ProtocolVersion: wireversion.Protocol,
+		MinSupportedProtocolVersion: wireversion.MinSupported,
 	}); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("relay account handshake: %w", err)

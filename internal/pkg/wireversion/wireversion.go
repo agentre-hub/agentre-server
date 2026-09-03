@@ -14,4 +14,13 @@ package wireversion
 // Protocol 是每一次握手自报的 wire 协议版本。
 //
 // 与 frontend/package.json 钉住的 @agentre-hub/agentre-wire 版本保持逐字一致。
-const Protocol = "0.2.0"
+const Protocol = "0.3.0"
+
+// MinSupported 是本副本在 auth.account 握手里出示的、自己还能接受的最旧对端版本。
+//
+// 本轮它与 Protocol 相等，不产生宽限窗口——可观察结果只有一条：daemon 收到的握手里
+// 这个字段不再是空串，因而不再需要按「对端预先窗口机制」保守推断（spec「协议：版本
+// 窗口与自报版本」一节，决策 3）。从下一轮只加字段、不改方法集的改动开始，这里可以让
+// floor 落后于 Protocol 而不必打断全网；在那之前，两者必须逐字相等，wireversion_test.go
+// 盯着。
+const MinSupported = "0.3.0"

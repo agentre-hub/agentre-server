@@ -14,6 +14,7 @@ import (
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
+	"github.com/agentre-hub/agentre-server/internal/pkg/wireversion"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
@@ -382,4 +383,34 @@ func TestMachineConn_ActivityRollup_CarriesTheWindowAndZone(t *testing.T) {
 	require.Len(t, buckets, 1)
 	assert.Equal(t, "2026-08-28", buckets[0].GetDay())
 	assert.Equal(t, int32(3), buckets[0].GetSessionCount())
+}
+
+// Given 对端在 auth.account 上按精确匹配校验协议版本，proto3 下缺字段与显式空串同为
+// 零值——一个空的 min_supported_protocol_version 从今往后会被对端判成「这一跳不具备
+// 窗口能力」，只能继续保守推断（spec「协议：版本窗口与自报版本」一节，决策 3）；
+// When 本副本握手；Then 请求里带出的 min_supported_protocol_version 必须是
+// wireversion.MinSupported，而不是零值。
+func TestDialMachine_HandshakeAdvertisesTheMinSupportedProtocolVersion(t *testing.T) {
+	dialer := newRecordingDialer()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// 没有人应答这次握手,c.call 会在 timeout 后带着 ctx.Err() 收尾——测试只关心
+		// 发出去的请求长什么样,不需要等它真正建立连接。
+		_, _ = dialMachine(context.Background(), dialer, "cred-1",
+			machineKey{userID: 1, fingerprint: "fp-1"}, 50*time.Millisecond, nil)
+	}()
+
+	frame := decodeForwardedRequest(t, <-dialer.frames)
+	require.Equal(t, uint32(agentrewire.RpcMethod_RPC_METHOD_AUTH_ACCOUNT), frame.GetRequest().GetMethodId())
+	request := &agentrewire.AuthAccountRequest{}
+	require.NoError(t, proto.Unmarshal(frame.GetRequest().GetEncodedPayload(), request))
+
+	assert.Equal(t, wireversion.Protocol, request.GetProtocolVersion())
+	assert.Equal(t, wireversion.MinSupported, request.GetMinSupportedProtocolVersion())
+	assert.NotEmpty(t, request.GetMinSupportedProtocolVersion(),
+		"空版本会被对端判成「这一跳不具备窗口能力」")
+
+	<-done
 }
