@@ -24,10 +24,16 @@ import { Card } from "@/components/ui/card";
 import { StatusMark } from "@/components/console";
 import type { StatusTone } from "@/components/console";
 import { AddDeviceGuide } from "@/components/AddDeviceGuide";
+import {
+  DeviceUpgradePanel,
+  DeviceVersionBadge,
+  deviceVersionState,
+} from "@/components/devices/DeviceUpgrade";
 import AppShell from "@/components/AppShell";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-api-query";
+import { useLatestRelease } from "@/hooks/use-latest-release";
 import { useRelayMachine } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { AccountChannelDevicePresence } from "@/lib/accountChannel";
@@ -442,6 +448,8 @@ function DeviceRow({
   onRevoke,
   detailState,
   onRetryDetail,
+  latest,
+  onDevices,
   t,
   locale,
 }: {
@@ -452,6 +460,10 @@ function DeviceRow({
   onRevoke: () => void;
   detailState: { loading: boolean; error: unknown; data: DeviceDetail | null };
   onRetryDetail: () => void;
+  /** 服务端缓存的最新发布版本；空串 = 不知道，此时卡上不下任何判断（决策 12/19）。 */
+  latest: string;
+  /** 升级轮询取到的新清单：回填给页面，卡上的版本因此跟着变。 */
+  onDevices: (devices: DeviceItem[]) => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
   /** i18n.language。相对时刻要它，`t` 带不出来。 */
   locale: string;
@@ -475,6 +487,10 @@ function DeviceRow({
           m: counts.running,
         })
       : null;
+
+  // agentred 才有自更新这件事：桌面端的版本由它自己的更新流程管，控制台不插手。
+  const isAgentred = d.kind === KIND_AGENTRED;
+  const versionState = deviceVersionState(d, latest);
 
   const meta = [d.platform, d.version, formatLastActive(d.last_seen_at, locale)]
     .filter(Boolean)
@@ -521,6 +537,12 @@ function DeviceRow({
             >
               {meta}
             </span>
+            {/* 版本徽标跟着版本走，接在 Meta 之后、窄屏折到下一行（决策 17）。 */}
+            {isAgentred && (
+              <span className="flex flex-wrap items-center gap-2">
+                <DeviceVersionBadge state={versionState} deviceID={d.id} />
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <StatusMark
@@ -548,7 +570,14 @@ function DeviceRow({
           </div>
         </div>
         {isExpanded && (
-          <div className="px-4 pt-3">
+          <div className="flex flex-col gap-3 px-4 pt-3">
+            {isAgentred && (
+              <DeviceUpgradePanel
+                device={d}
+                state={versionState}
+                onDevices={onDevices}
+              />
+            )}
             <DeviceExpandDetail
               state={detailState}
               device={d}
@@ -615,12 +644,22 @@ function DeviceRow({
         >
           {meta}
         </span>
+        {isAgentred && (
+          <DeviceVersionBadge state={versionState} deviceID={d.id} />
+        )}
         {subRow && (
           <span className="text-xs text-muted-foreground">{subRow}</span>
         )}
       </div>
       {isExpanded && (
-        <div className="px-5 pt-3">
+        <div className="flex flex-col gap-3 px-5 pt-3">
+          {isAgentred && (
+            <DeviceUpgradePanel
+              device={d}
+              state={versionState}
+              onDevices={onDevices}
+            />
+          )}
           <DeviceExpandDetail
             state={detailState}
             device={d}
@@ -639,6 +678,9 @@ export default function Devices() {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const isMobile = useIsMobile();
+  // 最新发布版本来自服务端自己的只读端点（决策 12）：一页问一次，各行共用同一个
+  // 答案 —— 每行各问一次等于把「不知道」这件事问上 N 遍。
+  const latest = useLatestRelease();
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [loading, setLoading] = useState(true);
   // 存住失败本身，渲染时才翻译成文案：effect 里不碰 t，就不必把它拉进依赖数组
@@ -879,6 +921,8 @@ export default function Devices() {
                   }
                 }
                 onRetryDetail={() => loadDetail(d)}
+                latest={latest}
+                onDevices={applyList}
                 t={t}
                 locale={locale}
               />

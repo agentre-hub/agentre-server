@@ -61,6 +61,8 @@ type fakeRelay struct {
 	candidates []*agentrewire.TranscriptImportCandidate
 	// transcriptImportErr 非 nil 时导入这一族一律以它作答。
 	transcriptImportErr error
+	// selfUpdateReply 非 nil 时 agentred.self_update 一律以它作答（受理判定归 daemon）。
+	selfUpdateReply *agentrewire.AgentredSelfUpdateResponse
 	// deleted 是被删掉的对话标识,按到达顺序。
 	deleted []string
 	calls   []recordedCall

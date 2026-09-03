@@ -255,6 +255,12 @@ func (f *fakeDaemonNet) dispatch(
 			return nil, err
 		}
 		return f.peer.ActivityRollup(ctx, request)
+	case agentrewire.RpcMethod_RPC_METHOD_AGENTRED_SELF_UPDATE:
+		request := &agentrewire.AgentredSelfUpdateRequest{}
+		if err := proto.Unmarshal(payload, request); err != nil {
+			return nil, err
+		}
+		return f.peer.AgentredSelfUpdate(ctx, request)
 	case agentrewire.RpcMethod_RPC_METHOD_TRANSCRIPT_IMPORT_SCAN:
 		request := &agentrewire.TranscriptImportScanRequest{}
 		if err := proto.Unmarshal(payload, request); err != nil {

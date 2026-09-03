@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
@@ -17,33 +17,38 @@ vi.mock("@/lib/api", async (importOriginal) => {
 
 // 副行 cardSummary 的「对话在跑」数要真去问那台 agentred（与 DeviceSessionCounts
 // 同一真相源）：3 条会话里 2 条 running。
-vi.mock("@/hooks/use-relay", () => ({
-  useRelayMachine: (target: string | null) => ({
-    client: target
-      ? {
-          request: async () => ({
-            sessions: [
-              {
-                conversationId: "c-1",
-                lifecycleState: "running",
-                latestSeq: 1,
-                waitingForInput: true,
-              },
-              { conversationId: "c-2", lifecycleState: "idle", latestSeq: 1 },
-              {
-                conversationId: "c-3",
-                lifecycleState: "running",
-                latestSeq: 1,
-              },
-            ],
-          }),
-        }
-      : null,
-    relayState: target ? "connected" : "disconnected",
-    relayTicket: null,
-    relayTicketError: null,
-  }),
-}));
+//
+// 每个 target 只造一份并缓存住：真 useRelayMachine 交出的 client 在同一个目标上是
+// **稳定**的，而 useSessionCounts 把它写进 effect 依赖。每次渲染新造一个对象会让
+// 「取计数 → setState → 重渲染 → 又取一次」永远转下去，假时钟下这会把整条微任务
+// 队列占死。
+vi.mock("@/hooks/use-relay", () => {
+  const sessions = [
+    {
+      conversationId: "c-1",
+      lifecycleState: "running",
+      latestSeq: 1,
+      waitingForInput: true,
+    },
+    { conversationId: "c-2", lifecycleState: "idle", latestSeq: 1 },
+    { conversationId: "c-3", lifecycleState: "running", latestSeq: 1 },
+  ];
+  const perTarget = new Map<string, unknown>();
+  return {
+    useRelayMachine: (target: string | null) => {
+      const key = target ?? "";
+      if (!perTarget.has(key)) {
+        perTarget.set(key, {
+          client: target ? { request: async () => ({ sessions }) } : null,
+          relayState: target ? "connected" : "disconnected",
+          relayTicket: null,
+          relayTicketError: null,
+        });
+      }
+      return perTarget.get(key);
+    },
+  };
+});
 
 vi.mock("@/lib/accountChannel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
@@ -537,5 +542,311 @@ describe("设备页跟着通道走", () => {
     );
 
     expect(await screen.findByText("nuc-02")).toBeTruthy();
+  });
+});
+
+// ── 版本可见与升级出口（规格 2026-09-03「控制台呈现与 latest 来源」）─────────
+
+const AGENTRED_UPGRADABLE = {
+  id: 1,
+  name: "build-box-02",
+  kind: "agentred",
+  platform: "linux/amd64",
+  version: "0.5.2",
+  fingerprint: "fp-1",
+  last_seen_at: 1754000000000,
+  status: 1,
+  online: true,
+  is_this_device: false,
+  protocol_mismatch: false,
+};
+
+/** daemon 那句拒绝的原文（cmd/agentred 与桌面端说的是同一句 —— 决策 22）。 */
+const DAEMON_ACTIVE_TURNS_WORDING =
+  "this machine has 2 running conversation(s); upgrading would interrupt them";
+
+type UpgradeReply = {
+  accepted: boolean;
+  reject_reason?: string;
+  message?: string;
+  active_turns?: number;
+  target_version?: string;
+};
+
+/** 本轮四条真实端点的桩：设备清单（可变）、latest、设备详情、一键升级。 */
+function mockConsole(opts: {
+  devices: () => unknown[];
+  latest?: { known: boolean; version?: string };
+  upgrade?: (body: { device_id: number; force?: boolean }) => UpgradeReply;
+  upgradeCalls?: { device_id: number; force?: boolean }[];
+}) {
+  mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path === "/v1/devices") return { devices: opts.devices() };
+    if (path === "/v1/release/latest") return opts.latest ?? { known: false };
+    if (path.startsWith("/v1/workspace/device-detail"))
+      return {
+        device_id: 1,
+        kind: "agentred",
+        runnable_agents: [],
+        projects: [],
+      };
+    if (path === "/v1/devices/upgrade") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      opts.upgradeCalls?.push(body);
+      return opts.upgrade ? opts.upgrade(body) : { accepted: true };
+    }
+    throw new Error("unexpected call: " + path);
+  });
+}
+
+async function expandRow(id: number) {
+  fireEvent.click(screen.getByTestId(`device-expand-${id}`));
+  await screen.findByTestId(`device-upgrade-${id}`);
+}
+
+describe("设备卡的版本与升级出口", () => {
+  it("卡上的版本就是那台 agentred 此刻自报的版本：列表重取后跟着变", async () => {
+    let version = "0.5.2";
+    mockConsole({ devices: () => [{ ...AGENTRED_UPGRADABLE, version }] });
+    renderDevices();
+    await screen.findByText("build-box-02");
+    expect(screen.getByTestId("device-meta").textContent).toContain("0.5.2");
+
+    // 握手写回把 devices.version 刷新了（T8）：下一次列表重取，卡上就是新版本。
+    version = "0.6.0";
+    mockedStartChannel.mock.calls[0][0].onRefresh(
+      accountChannel.AccountChannelDevicePresence,
+    );
+    await screen.findByText(/0\.6\.0/);
+    expect(screen.getByTestId("device-meta").textContent).toContain("0.6.0");
+  });
+
+  it("最新版已知且更新：副行出一枚弱徽标", async () => {
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: true, version: "0.6.0" },
+    });
+    renderDevices();
+    await screen.findByText("build-box-02");
+
+    expect(
+      (await screen.findByTestId("device-version-badge-1")).textContent,
+    ).toContain("Upgradable to 0.6.0");
+  });
+
+  it("已是最新：不出徽标，展开区说「已是最新」并注明版本", async () => {
+    mockConsole({
+      devices: () => [{ ...AGENTRED_UPGRADABLE, version: "0.6.0" }],
+      latest: { known: true, version: "0.6.0" },
+    });
+    renderDevices();
+    await screen.findByText("build-box-02");
+    await expandRow(1);
+
+    expect(screen.queryByTestId("device-version-badge-1")).toBeNull();
+    const action = screen.getByTestId("device-upgrade-action-1");
+    expect(action.textContent).toContain("Up to date (0.6.0)");
+    expect((action as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("拿不到最新版：同样不出徽标，但展开区两句都不说 —— 与「已是最新」分得开", async () => {
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: false },
+    });
+    renderDevices();
+    await screen.findByText("build-box-02");
+    await expandRow(1);
+
+    expect(screen.queryByTestId("device-version-badge-1")).toBeNull();
+    // 不冒充「已是最新」，也不编一个「有新版本」。
+    expect(screen.queryByText(/Up to date/)).toBeNull();
+    expect(screen.queryByText(/New version/)).toBeNull();
+    // 出口仍在：一键升级与命令卡始终并列（决策 18）。
+    const action = screen.getByTestId("device-upgrade-action-1");
+    expect((action as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      screen.getByTestId("device-upgrade-command-1").textContent,
+    ).toContain("agentred update");
+  });
+
+  it("协议不匹配：强提示 + 可复制的命令卡，一键升级够不着就不画", async () => {
+    mockConsole({
+      devices: () => [
+        { ...AGENTRED_UPGRADABLE, version: "0.4.1", protocol_mismatch: true },
+      ],
+      latest: { known: true, version: "0.6.0" },
+    });
+    renderDevices();
+    await screen.findByText("build-box-02");
+
+    expect(screen.getByTestId("device-version-badge-1").textContent).toContain(
+      "Too old",
+    );
+    await expandRow(1);
+    expect(screen.getByText("Too old to connect")).toBeTruthy();
+    expect(
+      screen.getByTestId("device-upgrade-command-1").textContent,
+    ).toContain("agentred update");
+    // 握手都没过，一键升级必然够不着：出口只有命令卡。
+    expect(screen.queryByTestId("device-upgrade-action-1")).toBeNull();
+  });
+});
+
+describe("一键升级走完整条路", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  /**
+   * 假时钟下不用 findBy*：testing-library 的 waitFor 自己要跑真定时器，与被冻住的
+   * 时钟互相等。这里改成「推一格时钟 + 同步查询」，等待关系因此完全显式。
+   */
+  async function renderAndExpand() {
+    renderDevices();
+    await advance(0);
+    fireEvent.click(screen.getByTestId("device-expand-1"));
+    await advance(0);
+    expect(screen.getByTestId("device-upgrade-1")).toBeTruthy();
+  }
+
+  it("升级中 → 成功：重连后读到的版本变了就是成功", async () => {
+    let version = "0.5.2";
+    mockConsole({
+      devices: () => [{ ...AGENTRED_UPGRADABLE, version }],
+      latest: { known: true, version: "0.6.0" },
+      upgrade: () => ({ accepted: true, target_version: "0.6.0" }),
+    });
+    await renderAndExpand();
+
+    fireEvent.click(screen.getByTestId("device-upgrade-action-1"));
+    await advance(0);
+    expect(screen.getByText("Upgrading to 0.6.0")).toBeTruthy();
+
+    // 它重启回来了，自报的版本变了。
+    version = "0.6.0";
+    await advance(5_000);
+    expect(screen.getByText("Upgrade complete")).toBeTruthy();
+  });
+
+  it("升级中 → 5 分钟没回来：超时失败，出口回到命令卡", async () => {
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: true, version: "0.6.0" },
+      upgrade: () => ({ accepted: true, target_version: "0.6.0" }),
+    });
+    await renderAndExpand();
+
+    fireEvent.click(screen.getByTestId("device-upgrade-action-1"));
+    await advance(0);
+    expect(screen.getByText("Upgrading to 0.6.0")).toBeTruthy();
+
+    // 4 分 59 秒还在等 —— 不提前判死。
+    await advance(4 * 60_000 + 59_000);
+    expect(screen.queryByText("It didn't come back")).toBeNull();
+
+    await advance(2_000);
+    expect(screen.getByText("It didn't come back")).toBeTruthy();
+    expect(
+      screen.getByTestId("device-upgrade-command-1").textContent,
+    ).toContain("agentred update");
+  });
+
+  it("有对话在跑：主动作不禁用、改口「仍要升级」，force 只在二次确认之后才出去", async () => {
+    const upgradeCalls: { device_id: number; force?: boolean }[] = [];
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: true, version: "0.6.0" },
+      upgradeCalls,
+      upgrade: (body) =>
+        body.force
+          ? { accepted: true, target_version: "0.6.0" }
+          : {
+              accepted: false,
+              reject_reason: "active_turns",
+              message: DAEMON_ACTIVE_TURNS_WORDING,
+              active_turns: 2,
+            },
+    });
+    await renderAndExpand();
+
+    fireEvent.click(screen.getByTestId("device-upgrade-action-1"));
+    await advance(0);
+    expect(upgradeCalls).toEqual([{ device_id: 1, force: false }]);
+
+    // 不禁用：禁用了这台整天有对话在跑的机器就彻底没有出口（决策 21）。
+    const action = screen.getByTestId(
+      "device-upgrade-action-1",
+    ) as HTMLButtonElement;
+    expect(action.disabled).toBe(false);
+    expect(action.textContent).toContain("Upgrade anyway");
+    // daemon 那句话原样呈现，不重翻一遍（决策 22）。
+    expect(screen.getByText(DAEMON_ACTIVE_TURNS_WORDING)).toBeTruthy();
+
+    // 点它只打开确认，一次调用都不发。
+    fireEvent.click(action);
+    await advance(0);
+    expect(upgradeCalls).toHaveLength(1);
+    expect(screen.getByText("2 conversation(s) still running")).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("device-upgrade-confirm-1"));
+    await advance(0);
+    expect(upgradeCalls).toEqual([
+      { device_id: 1, force: false },
+      { device_id: 1, force: true },
+    ]);
+    expect(screen.getByText("Upgrading to 0.6.0")).toBeTruthy();
+  });
+});
+
+describe("窄屏也要成立", () => {
+  it("移动端卡片同样出弱徽标与展开区的升级出口", async () => {
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: true, version: "0.6.0" },
+    });
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+
+    try {
+      renderDevices();
+      await screen.findByText("build-box-02");
+      const row = screen
+        .getByText("build-box-02")
+        .closest('[data-slot="card"]') as HTMLElement;
+      expect(
+        within(row).getByTestId("device-version-badge-1").textContent,
+      ).toContain("Upgradable to 0.6.0");
+
+      await expandRow(1);
+      expect(
+        within(row).getByTestId("device-upgrade-action-1").textContent,
+      ).toContain("Upgrade agentred");
+      expect(
+        within(row).getByTestId("device-upgrade-command-1").textContent,
+      ).toContain("agentred update");
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
   });
 });

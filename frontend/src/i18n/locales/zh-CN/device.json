@@ -145,5 +145,34 @@
     "desktopAppNotRunningDetail": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可查看它的对话。",
     "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑",
     "revokeConfirmTitleNamed": "解除「{{name}}」的授权？"
+  },
+  "upgrade": {
+    "badge": "可升级 {{version}}",
+    "blockedBadge": "版本太旧",
+    "blockedTitle": "版本太旧，连不上",
+    "blockedBody": "机器还在线，但升级之前看不到它的对话。",
+    "availableTitle": "有新版本 {{version}}",
+    "availableBody": "升级会重启 agentred：正在跑的对话会中断，已产生的内容保留。",
+    "commandLabel": "到那台机器上执行",
+    "action": {
+      "default": "升级 agentred",
+      "upgrading": "正在升级…",
+      "forceLabel": "仍要升级",
+      "upToDate": "已是最新（{{version}}）"
+    },
+    "confirm": {
+      "title": "还有 {{count}} 条对话在跑",
+      "body": "升级会重启 agentred，这些轮次会中断，已产生的内容保留。",
+      "cancel": "稍后再说",
+      "confirm": "仍然升级"
+    },
+    "status": {
+      "upgradingTitle": "正在升级到 {{version}}",
+      "upgradingBody": "重启一次，通常不到 1 分钟。",
+      "successTitle": "升级完成",
+      "timeoutTitle": "没等到它回来",
+      "timeoutBody": "等了 5 分钟。如果它不是以服务或容器方式运行，升级后不会自动启动。",
+      "failedTitle": "升级没能开始"
+    }
   }
 }

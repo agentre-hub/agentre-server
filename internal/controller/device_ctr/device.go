@@ -10,16 +10,30 @@ import (
 	"github.com/gin-gonic/gin"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/device"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
 )
+
+// MachineUpgrader 是本包对「让那台机器把自己升上去」的全部需要（ISP）：一台机器、
+// 一个显式的 force 位、一个受理判定。接口声明在消费侧，实现是 mirror_svc.Supervisor
+// ——它才知道怎么借那条已鉴权的镜像连接把调用送过去。
+type MachineUpgrader interface {
+	UpgradeMachine(
+		ctx context.Context, userID int64, fingerprint string, force bool,
+	) (mirror_svc.UpgradeResult, error)
+}
 
 type Device struct {
 	publicKeys *api.PublicKeyResponse
 	signer     *jwt.Signer
+	// upgrader 由装配处注入（router.go）。为空时落到本进程那份常驻镜像——它同样
+	// 可能没装配，UpgradeMachine 的 nil 接收者会如实说「这个部署够不着那台机器」。
+	upgrader MachineUpgrader
 }
 
 func NewDevice() *Device { return &Device{} }
@@ -32,6 +46,16 @@ func NewDeviceWithPublicKeys(currentKID string, keys map[string]string, maxToken
 }
 
 func (d *Device) SetSigner(signer *jwt.Signer) { d.signer = signer }
+
+// SetMachineUpgrader 注入「够到那台机器」的实现（组合根 / 测试各注一份）。
+func (d *Device) SetMachineUpgrader(u MachineUpgrader) { d.upgrader = u }
+
+func (d *Device) machineUpgrader() MachineUpgrader {
+	if d.upgrader != nil {
+		return d.upgrader
+	}
+	return mirror_svc.Default()
+}
 
 // PublicKey 返回供 agentred 离线验签的 RS256 公钥。
 func (d *Device) PublicKey(c *gin.Context, _ *api.PublicKeyRequest) {
@@ -192,6 +216,54 @@ func (d *Device) List(c *gin.Context, _ *api.ListDevicesRequest) (*api.ListDevic
 		return nil, err
 	}
 	return &api.ListDevicesResponse{Devices: items}, nil
+}
+
+// Upgrade 让控制台点名的那台 agentred 把自己升上去（规格 2026-09-03
+// 「控制台呈现与 latest 来源」）。
+//
+// 鉴权沿用既有的两条：浏览器会话 + CSRF 圈定账号，归属判定圈定机器——升级借的是那台
+// 机器上**已经鉴权的**镜像连接，本身不引入新的授权面（决策 15）。
+//
+// 受理判定完全归 daemon：这里既不判「有没有对话在跑」，也不重写它给出的那句人话
+// （决策 22）——两端与命令行对同一件事只说一句话，前提是中间这几层谁都不改口。
+func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.DeviceUpgradeResponse, error) {
+	ctx := c.Request.Context()
+	userID := ginctx.UserID(c)
+	if userID == 0 {
+		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
+	}
+	owned, err := device_svc.Default().ListUserDevices(ctx, userID, 0)
+	if err != nil {
+		return nil, err
+	}
+	target := api.ListDevicesItem{}
+	for _, it := range owned {
+		if it.ID == req.DeviceID {
+			target = it
+			break
+		}
+	}
+	// 不是本账号的设备、或者根本不是一台 agentred：一次调用都不发。自更新方法只有
+	// agentred 认，对着桌面端发等于拿一个必然的协议错误当业务答复。
+	if target.ID == 0 || target.Kind != device_entity.KindAgentred {
+		return nil, i18n.NewForbiddenError(ctx, code.Forbidden)
+	}
+	result, err := d.machineUpgrader().UpgradeMachine(ctx, userID, target.Fingerprint, req.Force)
+	switch {
+	case errors.Is(err, mirror_svc.ErrMachineOffline):
+		// 离线不是「升级被拒绝」：用户该做的事不一样（等它回来，而不是换个说法再点
+		// 一次）。与 relay_ctr 对 daemon 离线的答复同一形状。
+		return nil, i18n.NewErrorWithStatus(ctx, http.StatusConflict, code.RelayDaemonOffline)
+	case err != nil:
+		return nil, i18n.NewInternalError(ctx, code.ServerError)
+	}
+	return &api.DeviceUpgradeResponse{
+		Accepted:      result.Accepted,
+		RejectReason:  string(result.RejectReason),
+		Message:       result.Message,
+		ActiveTurns:   result.ActiveTurns,
+		TargetVersion: result.TargetVersion,
+	}, nil
 }
 
 // Revocations 供 daemon 定期拉取吊销列表（R4 producer）。设备 JWT 鉴权，

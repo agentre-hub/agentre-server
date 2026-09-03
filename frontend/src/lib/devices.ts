@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
  * 少写的字段不会报错，只会在那个页面上安静地缺一段。device-item-contract.test.ts
  * 逐字段盯着它与 Go 那份对齐，也盯着不许有第二份。
  *
- * 字段全是必填：后端结构体里没有 omitempty，一条设备行永远带齐这十个键。
+ * 字段全是必填：后端结构体里没有 omitempty，一条设备行永远带齐这十一个键。
  */
 export interface DeviceItem {
   id: number;
@@ -21,6 +21,11 @@ export interface DeviceItem {
   status: number;
   online: boolean;
   is_this_device: boolean;
+  /**
+   * 上一次镜像握手是不是被那台机器判定协议版本不合而拒绝（server 按 (账号, 机器)
+   * 记的共享状态）。设备卡据此出「版本太旧」的强提示，而不是一句泛泛的连不上。
+   */
+  protocol_mismatch: boolean;
 }
 
 /**

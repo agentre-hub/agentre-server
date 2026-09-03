@@ -145,5 +145,34 @@
     "desktopAppNotRunningDetail": "Agentre is not running on this computer. Open Agentre to view its conversations.",
     "cardSummary": "{{projects}} projects · {{m}} conversations running",
     "revokeConfirmTitleNamed": "Revoke {{name}}?"
+  },
+  "upgrade": {
+    "badge": "Upgradable to {{version}}",
+    "blockedBadge": "Too old",
+    "blockedTitle": "Too old to connect",
+    "blockedBody": "This machine is online, but its conversations stay out of reach until agentred is upgraded there.",
+    "availableTitle": "New version {{version}}",
+    "availableBody": "Upgrading restarts agentred: conversations running on it are interrupted, and what they already produced is kept.",
+    "commandLabel": "Run on that machine",
+    "action": {
+      "default": "Upgrade agentred",
+      "upgrading": "Upgrading…",
+      "forceLabel": "Upgrade anyway",
+      "upToDate": "Up to date ({{version}})"
+    },
+    "confirm": {
+      "title": "{{count}} conversation(s) still running",
+      "body": "Upgrading restarts agentred, so those turns are interrupted. What they already produced is kept.",
+      "cancel": "Not now",
+      "confirm": "Upgrade anyway"
+    },
+    "status": {
+      "upgradingTitle": "Upgrading to {{version}}",
+      "upgradingBody": "Restarting once — usually under a minute.",
+      "successTitle": "Upgrade complete",
+      "timeoutTitle": "It didn't come back",
+      "timeoutBody": "Waited 5 minutes. If it isn't running as a service or container, it won't restart on its own after the upgrade.",
+      "failedTitle": "The upgrade didn't start"
+    }
   }
 }

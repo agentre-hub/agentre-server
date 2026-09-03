@@ -125,6 +125,35 @@ type ListDevicesItem struct {
 	ProtocolMismatch bool `json:"protocol_mismatch"`
 }
 
+// DeviceUpgradeRequest 是控制台点「升级 agentred」发出的那一次调用（规格
+// 2026-09-03-client-upgrade-guidance「控制台呈现与 latest 来源」）：server 借它对那台
+// 机器已鉴权的镜像连接发起自更新，不引入新的授权面（决策 15）。
+type DeviceUpgradeRequest struct {
+	mux.Meta `path:"/v1/devices/upgrade" method:"POST"`
+	DeviceID int64 `json:"device_id" binding:"required"`
+	// Force 越过「有对话在跑就拒绝」那道闸（决策 8）。它是请求里的一个**显式**位：
+	// 界面必须先走完二次确认才允许带上它，一次重试绝不能被读成默许。
+	Force bool `json:"force"`
+}
+
+// DeviceUpgradeResponse 与 agentrewire.AgentredSelfUpdateResponse 一一对应：
+// 「受理了没有」由 daemon 判定，server 与浏览器都只是把它原样传下去。
+//
+// 升成了没有不在这里答——受理之后 daemon 就重启了，判据是重连后 devices.version
+// 变没变，由控制台自己轮询（规格「远程一键升级」）。
+type DeviceUpgradeResponse struct {
+	Accepted bool `json:"accepted"`
+	// RejectReason 空串即受理；其余取值见 mirror_svc.UpgradeRejectReason。
+	RejectReason string `json:"reject_reason"`
+	// Message 是那句人话，逐字来自 daemon（与 `agentred update` 命令行、与桌面端同一
+	// 句话——决策 22）。界面照抄它，不重翻一遍。
+	Message string `json:"message"`
+	// ActiveTurns 只在 reject_reason 是 active_turns 时非零。
+	ActiveTurns int32 `json:"active_turns"`
+	// TargetVersion 是 daemon 解析出来准备安装的版本；拿不到时是空串。
+	TargetVersion string `json:"target_version"`
+}
+
 type ListDevicesResponse struct {
 	Devices []ListDevicesItem `json:"devices"`
 }

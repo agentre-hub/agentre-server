@@ -37,6 +37,9 @@ type RouterDeps struct {
 	// 而 accountchan_svc.Default() 一个进程只有一个。为空时取默认单例。
 	// 它没有自己的端点，账号信号走中继客户端连接的保留通道（决策 13）。
 	AccountChan accountchan_svc.AccountChanSvc
+	// MachineUpgrader 是控制台一键升级够到那台机器的实现。留给测试注入自己那份；
+	// 为空时控制器落到本进程那份常驻镜像（mirror_svc.Default()）。
+	MachineUpgrader device_ctr.MachineUpgrader
 
 	// drainers 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
 	// 长连接逐条礼貌关掉(见 DrainRelays)。
@@ -75,6 +78,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	deviceCtr := device_ctr.NewDeviceWithPublicKeys(publicKeys.CurrentKID, publicKeys.Keys,
 		int64(r.Cfg.JWT.AccessTTL/time.Second))
 	deviceCtr.SetSigner(r.Signer)
+	if r.MachineUpgrader != nil {
+		deviceCtr.SetMachineUpgrader(r.MachineUpgrader)
+	}
 	relaySvc := r.Relay
 	if relaySvc == nil {
 		relaySvc = relay_svc.Default()
@@ -132,6 +138,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		deviceCtr.Approve,
 		deviceCtr.Deny,
 		deviceCtr.RelayTicket,
+		// 一键升级会重启用户的机器：浏览器会话 + CSRF 那一组，与撤销设备同级。
+		// 它只走 web 控制台这条路——桌面端有自己那条直连（remote_device_svc）。
+		deviceCtr.Upgrade,
 		engineCtr.ListProviders,
 		engineCtr.CreateProvider,
 		engineCtr.UpdateProvider,

@@ -158,6 +158,20 @@ func (c *machineConn) SessionDelete(ctx context.Context, request *agentrewire.Se
 	return response, nil
 }
 
+// AgentredSelfUpdate 让那台机器把自己换成新版本（规格 2026-09-03「远程一键升级」）。
+//
+// 应答只说「受理了没有」：受理之后 daemon 就会重启，这条连接随即断开，升级过程本身
+// 在 wire 上不可观察。因此这里没有、也不该有「等它升完」的语义。
+func (c *machineConn) AgentredSelfUpdate(
+	ctx context.Context, request *agentrewire.AgentredSelfUpdateRequest,
+) (*agentrewire.AgentredSelfUpdateResponse, error) {
+	response := &agentrewire.AgentredSelfUpdateResponse{}
+	if err := c.call(ctx, agentrewire.RpcMethod_RPC_METHOD_AGENTRED_SELF_UPDATE, request, response); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 // ── transcriptimport.*（导入本地会话，规格 2026-08-26）─────────────────────
 //
 // 不认识这一族的 agentred 回 -32601，业务层据此说「这台机器的协议错误」，而不是

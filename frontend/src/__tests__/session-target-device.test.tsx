@@ -27,6 +27,7 @@ function machine(over: Partial<DeviceItem> = {}): DeviceItem {
     status: 1,
     online: true,
     is_this_device: false,
+    protocol_mismatch: false,
     ...over,
   };
 }
