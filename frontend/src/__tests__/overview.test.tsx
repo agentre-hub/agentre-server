@@ -8,7 +8,10 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { HEATMAP_MOBILE_WEEKS } from "@/components/stats/Heatmap";
+import {
+  HEATMAP_MOBILE_WEEKS,
+  heatmapColumnsFor,
+} from "@/components/stats/Heatmap";
 import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -342,13 +345,16 @@ describe("overview: 顶栏", () => {
 
 // ── 活跃热力格子图 ───────────────────────────────────────────────────────
 describe("overview: 活跃热力", () => {
-  it("桌面端画满一年（53 周），当天那格上到最高档", async () => {
+  it("每列 7 格，当天那格上到最高档，to 之后的日子不画", async () => {
     serve();
     renderOverview();
 
     await screen.findByTestId("heatmap-grid");
     const columns = screen.getAllByTestId("heat-week");
-    expect(columns.length).toBe(53);
+    // 列数由左列**实测的宽度**定（heatmapColumnsFor，账在 heatmap-grid.test.ts）。
+    // jsdom 没有布局、clientWidth 恒为 0，所以这里落在「还没量到」的兜底那一档；
+    // 真实宽度那条路由 heatmap-fit.test.tsx 覆盖。
+    expect(columns.length).toBe(heatmapColumnsFor(0));
     // 每列 7 格，一格不少——少一格就是把某个星期几整行错开。
     for (const col of columns)
       expect(within(col).getAllByTestId("heat-cell").length).toBe(7);
@@ -622,9 +628,10 @@ describe("overview: 非稳态", () => {
     });
     renderOverview();
 
-    // 845px 的网格不该在取到数那一刻凭空出现——取数前它就在那儿，只是没有颜色。
+    // 网格不该在取到数那一刻凭空出现——取数前它就在那儿，只是没有颜色。
     const grid = await screen.findByTestId("heatmap-grid");
-    expect(within(grid).getAllByTestId("heat-week").length).toBe(53);
+    const skeletonColumns = within(grid).getAllByTestId("heat-week").length;
+    expect(skeletonColumns).toBeGreaterThan(0);
     expect(
       within(grid)
         .getAllByTestId("heat-cell")
@@ -635,6 +642,13 @@ describe("overview: 非稳态", () => {
     expect(screen.queryByTestId("tile-conversations")).toBeNull();
 
     release({ ...statsResponse(), code: 0 });
+
+    // 落地之后仍是同样多的列：断言的是「不凭空撑开」这件事本身，而不是某个
+    // 列数——列数已经跟着容器宽度走了。
+    await screen.findByTestId("tile-conversations");
+    expect(within(grid).getAllByTestId("heat-week").length).toBe(
+      skeletonColumns,
+    );
   });
 
   it("取数失败：整块统计区退成一句说明，并说清什么不受影响", async () => {

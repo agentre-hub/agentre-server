@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   HEATMAP_DESKTOP_WEEKS,
+  heatmapColumnsFor,
   HEATMAP_MOBILE_WEEKS,
   MOBILE_CARD_CONTENT_PX,
   heatmapWidthPx,
@@ -134,5 +135,37 @@ describe("热力图窄屏的宽度预算", () => {
   // 一并钉住：改了格子尺寸而没改文档时这里会响（878 = 845 网格 + 33 星期栏）。
   it("桌面端 53 列仍是文档里那张 845px 的网格", () => {
     expect(heatmapWidthPx(HEATMAP_DESKTOP_WEEKS)).toBe(878);
+  });
+});
+
+/**
+ * 列数按**量到的可用宽度**定，不按视口断点。
+ *
+ * 断点那一版的账是错的：左列拿到的宽度还要减掉侧栏（224 / 收起 56）、页面
+ * `md:px-8`、卡片 `px-4` 与右侧那一栏的 240 + 分隔线，容器又被 `max-w-[1200px]`
+ * 封顶——53 列的 878px 要到视口 ~1512 才够。2026-09-03 在真浏览器上量到：1280 的
+ * 屏上左列只有 702px，最后一列的右缘落在 1151，而右列从 991 起，160px 的格子直接
+ * 画在分割线和「最活跃的一天」上；<1024 时更是冲出卡片被外壳裁掉。
+ */
+describe("heatmapColumnsFor", () => {
+  it("给出放得下的最大列数，且再多一列就放不下", () => {
+    // 324 = 390 手机上的卡片内容区；702 / 862 = 1280 / 1440 上量到的左列宽。
+    for (const available of [324, 446, 578, 702, 788, 862]) {
+      const cols = heatmapColumnsFor(available);
+      expect(heatmapWidthPx(cols)).toBeLessThanOrEqual(available);
+      expect(heatmapWidthPx(cols + 1)).toBeGreaterThan(available);
+    }
+  });
+
+  it("宽到放得下一整年就停在 53 列，不往外长", () => {
+    expect(heatmapColumnsFor(878)).toBe(HEATMAP_DESKTOP_WEEKS);
+    expect(heatmapColumnsFor(4000)).toBe(HEATMAP_DESKTOP_WEEKS);
+  });
+
+  it("还没量到（0）退回窄屏那一档，而不是 0 列", () => {
+    // 提交阶段之前、以及 jsdom 里 clientWidth 恒为 0：那是「不知道」，不是
+    // 「一列都放不下」。18 列在文档点名支持的最窄一档（390）上也放得下。
+    expect(heatmapColumnsFor(0)).toBe(HEATMAP_MOBILE_WEEKS);
+    expect(heatmapColumnsFor(-1)).toBe(HEATMAP_MOBILE_WEEKS);
   });
 });

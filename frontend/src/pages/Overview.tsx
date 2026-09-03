@@ -25,7 +25,7 @@ import {
   Heatmap,
   HeatmapLegend,
   HEATMAP_DESKTOP_WEEKS,
-  HEATMAP_MOBILE_WEEKS,
+  useHeatmapWeeks,
 } from "@/components/stats/Heatmap";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
@@ -339,7 +339,11 @@ export default function Overview() {
   );
 
   const rangeLabel = t(`overview.stats.range.${loadedRange ?? range}`);
-  const heatmapWeeks = isMobile ? HEATMAP_MOBILE_WEEKS : HEATMAP_DESKTOP_WEEKS;
+  /**
+   * 画几列由**左列实测的宽度**说了算，不是由视口断点说了算：侧栏收起、右边那栏
+   * 在不在、容器的 max-w 封顶都会改这个宽度，而它们都不体现在视口宽上。
+   */
+  const { ref: heatmapRef, weeks: heatmapWeeks } = useHeatmapWeeks();
 
   const monthRange = useMemo(() => {
     if (!stats) return "";
@@ -574,12 +578,14 @@ export default function Overview() {
               title={t("overview.stats.heatmap.title")}
               action={
                 <span className="flex min-w-0 items-center gap-3">
+                  {/* 放不下一整年时，标签必须说的是**画出来的**那一段：写一整年的
+                      月份区间而只画了 42 周，就是给一组数字贴了个错标签。 */}
                   <span className="text-xs text-muted-foreground">
-                    {isMobile
-                      ? t("overview.stats.heatmap.mobileWeeks", {
-                          weeks: HEATMAP_MOBILE_WEEKS,
-                        })
-                      : monthRange}
+                    {heatmapWeeks >= HEATMAP_DESKTOP_WEEKS
+                      ? monthRange
+                      : t("overview.stats.heatmap.weeksShown", {
+                          weeks: heatmapWeeks,
+                        })}
                   </span>
                   {/* scope 为 saved 时不再给这条链接：页顶那条说明条上已经有一条
                       「开启完整活跃统计 →」指向同一处，一屏两条同去处的链接只是
@@ -596,7 +602,13 @@ export default function Overview() {
               }
             >
               <div className="flex min-w-0 flex-col gap-4 lg:flex-row">
-                <div className="flex min-w-0 flex-col gap-2.5">
+                {/* `lg:flex-1` 是给测量用的：不占满剩下的宽，这一列会缩到内容宽，
+                    量出来的就不是「还能放多少」而是「已经放了多少」，列数会一路
+                    往下棘轮。列方向上不能用 flex-1（那管的是高度）。 */}
+                <div
+                  ref={heatmapRef}
+                  className="flex min-w-0 flex-col gap-2.5 lg:flex-1"
+                >
                   {/* 取数前后是同一张网格，只是没有颜色——845px 的网格不该在取到数
                       那一刻凭空出现，把整页往下顶一大截。 */}
                   <Heatmap

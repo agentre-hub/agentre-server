@@ -50,7 +50,7 @@
       "settings": "统计设置 →",
       "less": "更少",
       "more": "更多",
-      "mobileWeeks": "近 {{weeks}} 周",
+      "weeksShown": "近 {{weeks}} 周",
       "mobileHint": "更长的历史在桌面端看。",
       "greyNote": "这一片灰是「那天没有活动」，不是坏了。",
       "busiest": "最活跃的一天",
