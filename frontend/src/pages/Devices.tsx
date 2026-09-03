@@ -28,6 +28,7 @@ import {
   DeviceUpgradePanel,
   DeviceVersionBadge,
   deviceVersionState,
+  deviceVersionText,
 } from "@/components/devices/DeviceUpgrade";
 import AppShell from "@/components/AppShell";
 import { useIsMobile } from "@/components/use-is-mobile";
@@ -492,7 +493,16 @@ function DeviceRow({
   const isAgentred = d.kind === KIND_AGENTRED;
   const versionState = deviceVersionState(d, latest);
 
-  const meta = [d.platform, d.version, formatLastActive(d.last_seen_at, locale)]
+  // 版本位上画的是判定之后的说法：开发构建如实说是开发构建，而不是它自称的那个
+  // 不可比的版本号（决策 5）。非 agentred 的行没有这项判定，原样显示自报版本。
+  const versionText = isAgentred
+    ? deviceVersionText(versionState, t)
+    : d.version;
+  const meta = [
+    d.platform,
+    versionText,
+    formatLastActive(d.last_seen_at, locale),
+  ]
     .filter(Boolean)
     .join(" · ");
   const metaTitle = lastActiveTitle(d.last_seen_at);

@@ -559,6 +559,8 @@ const AGENTRED_UPGRADABLE = {
   online: true,
   is_this_device: false,
   protocol_mismatch: false,
+  daemon_commit: "a1b2c3d",
+  daemon_build_known: true,
 };
 
 /** daemon 那句拒绝的原文（cmd/agentred 与桌面端说的是同一句 —— 决策 22）。 */
@@ -668,6 +670,65 @@ describe("设备卡的版本与升级出口", () => {
     expect(
       screen.getByTestId("device-upgrade-command-1").textContent,
     ).toContain("agentred update");
+  });
+
+  // 决策 5：「可升级」判定只在短 commit 非空（发布构建）时做；commit 为空的机器显示
+  // 为开发构建，永不劝升。它的依据正是这条用例的取值：未注入版本的构建自称 1.0.0，
+  // 比任何 0.x 正式版都「新」——不加这道闸，这台机器会被判成「已是最新」。
+  it("开发构建：如实说是开发构建，不出徽标、不劝升，也不冒充「已是最新」", async () => {
+    mockConsole({
+      devices: () => [
+        {
+          ...AGENTRED_UPGRADABLE,
+          version: "1.0.0",
+          daemon_commit: "",
+          daemon_build_known: true,
+        },
+      ],
+      latest: { known: true, version: "0.6.0" },
+    });
+    renderDevices();
+    await screen.findByText("build-box-02");
+
+    expect(screen.queryByTestId("device-version-badge-1")).toBeNull();
+    expect(screen.getByTestId("device-meta").textContent).toContain(
+      "Development build",
+    );
+    await expandRow(1);
+    expect(screen.queryByText(/Up to date/)).toBeNull();
+    expect(
+      (screen.getByTestId("device-upgrade-action-1") as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    // 出口仍在：命令卡与一键升级始终并列（决策 18）。
+    expect(
+      screen.getByTestId("device-upgrade-command-1").textContent,
+    ).toContain("agentred update");
+  });
+
+  // 「知不知道这台机器的构建」与「commit 是空串」是两件事（决策 19：拿不到就是拿不到）。
+  // 从没跟这台机器握过手时，server 说不出它是不是发布构建 —— 此时不能借「commit 为空」
+  // 把它说成开发构建，也不能拿一个不可比的版本号判它「已是最新」。
+  it("server 还不知道这台机器的构建：既不说开发构建，也不下版本判断", async () => {
+    mockConsole({
+      devices: () => [
+        {
+          ...AGENTRED_UPGRADABLE,
+          version: "1.0.0",
+          daemon_commit: "",
+          daemon_build_known: false,
+        },
+      ],
+      latest: { known: true, version: "0.6.0" },
+    });
+    renderDevices();
+    await screen.findByText("build-box-02");
+
+    expect(screen.queryByTestId("device-version-badge-1")).toBeNull();
+    expect(screen.getByTestId("device-meta").textContent).toContain("1.0.0");
+    expect(screen.queryByText("Development build")).toBeNull();
+    await expandRow(1);
+    expect(screen.queryByText(/Up to date/)).toBeNull();
   });
 
   it("协议不匹配：强提示 + 可复制的命令卡，一键升级够不着就不画", async () => {

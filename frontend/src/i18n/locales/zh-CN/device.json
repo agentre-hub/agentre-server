@@ -173,6 +173,9 @@
       "timeoutTitle": "没等到它回来",
       "timeoutBody": "等了 5 分钟。如果它不是以服务或容器方式运行，升级后不会自动启动。",
       "failedTitle": "升级没能开始"
-    }
+    },
+    "devBuild": "开发构建",
+    "devBuildTitle": "这是开发构建",
+    "devBuildBody": "它自报的版本号无法与发布版本比较，因此不劝升。"
   }
 }

@@ -123,6 +123,18 @@ type ListDevicesItem struct {
 	// 拒绝（spec「控制台呈现与 latest 来源」一节：「这要求 server 把握手被拒这件事记成
 	// 按 (账号, 机器) 的共享状态供设备卡读取」）。渲染留给后续任务，这里只负责读得到。
 	ProtocolMismatch bool `json:"protocol_mismatch"`
+	// DaemonCommit 是这台机器最近一次镜像握手自报的短 commit（spec「协议：版本窗口
+	// 与自报版本」）。空串 = 非发布构建：消费端据此显示为开发构建、永不劝升
+	// （决策 5——未注入版本的构建自称 1.0.0，比任何 0.x 正式版都「新」，不加这道闸
+	// 就会把本地构建的机器判成最新）。
+	//
+	// 只在 DaemonBuildKnown 为真时才有这层含义。
+	DaemonCommit string `json:"daemon_commit"`
+	// DaemonBuildKnown 为真表示 server 至少成功握过一次手、记下了这台机器自报的构建。
+	// 为假时 DaemonCommit 恒为空串，且那个空串**不**表示开发构建——它表示不知道，
+	// 消费端此时不下任何判断（决策 19：拿不到就是拿不到，不能借「没有值」冒充一个
+	// 结论）。
+	DaemonBuildKnown bool `json:"daemon_build_known"`
 }
 
 // DeviceUpgradeRequest 是控制台点「升级 agentred」发出的那一次调用（规格

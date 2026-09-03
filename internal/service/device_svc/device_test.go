@@ -707,6 +707,45 @@ func TestListUserDevices_ReportsProtocolMismatch(t *testing.T) {
 	})
 }
 
+// Given 镜像握手记下了这台机器自报的短 commit(spec「协议：版本窗口与自报版本」：
+// 「短 commit 为空 = 非发布构建」，决策 5 据此判定「显示为开发构建，永不劝升」);
+// When 列出设备;Then 那一行既带出 commit 本身，也带出「server 到底知不知道这台机器
+// 的构建」—— 两者必须分开：没记录过的机器不能被当成「commit 为空」，那会把一台正式版
+// 机器说成开发构建。
+func TestListUserDevices_ReportsTheDaemonBuildTheHandshakeRecorded(t *testing.T) {
+	convey.Convey("ListUserDevices 透出镜像握手记下的短 commit 与「知不知道」", t, func() {
+		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+		userID := int64(7)
+
+		mini := miniredis.RunT(t)
+		redisClient := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
+		t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
+		sup := mirror_svc.NewSupervisor(mirror_svc.Config{InstanceID: "server-a"}, nil, nil, redisClient)
+		mirror_svc.SetDefault(sup)
+		t.Cleanup(func() { mirror_svc.SetDefault(nil) })
+		sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
+		// 本地构建：握过手、报的 commit 就是空串。它与「没握过手」在库里长得一样,
+		// 只有 known 分得开。
+		sup.RecordDaemonBuild(ctx, userID, "fp-b", "")
+
+		mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+			{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+			{ID: 43, UserID: 7, Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+			{ID: 44, UserID: 7, Kind: "agentred", Fingerprint: "fp-c", Status: 1},
+		}, nil)
+
+		items, err := svc.ListUserDevices(ctx, userID, 0)
+
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(items[0].DaemonCommit, convey.ShouldEqual, "a1b2c3d")
+		convey.So(items[0].DaemonBuildKnown, convey.ShouldBeTrue)
+		convey.So(items[1].DaemonCommit, convey.ShouldEqual, "")
+		convey.So(items[1].DaemonBuildKnown, convey.ShouldBeTrue)
+		// 从没握过手的那台：不知道就是不知道,不能借「commit 为空」冒充开发构建。
+		convey.So(items[2].DaemonBuildKnown, convey.ShouldBeFalse)
+	})
+}
+
 // Given 没有装配镜像(mirror_svc.Default() 为 nil,例如只跑 device flow 的测试/调用方);
 // When 列出设备;Then 不 panic,协议不匹配一律 fail-open 为 false —— 与在线态同一习惯。
 func TestListUserDevices_MirrorNotConfigured(t *testing.T) {

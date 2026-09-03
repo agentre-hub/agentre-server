@@ -39,8 +39,26 @@ export function deviceVersionState(
   return agentredVersionState({
     version: device.version,
     protocolMismatch: device.protocol_mismatch,
+    commit: device.daemon_commit,
+    buildKnown: device.daemon_build_known,
     latest,
   });
+}
+
+/**
+ * 副行上那段版本文字（决策 17：版本挂在 `平台 · 版本 · 最后在线` 那一行）。
+ *
+ * 开发构建如实说是开发构建：它自称的版本号（未注入构建变量时是 1.0.0）不可比，
+ * 原样摆出来只会让人以为这台机器跑着一个比正式版还新的东西（决策 5）。桌面端的
+ * 设备行说的是同一句话（remoteDevices.upgrade.devBuild）—— 两端对同一台机器的
+ * 说法必须一致。
+ */
+export function deviceVersionText(
+  state: AgentredVersionState,
+  t: (key: string) => string,
+): string {
+  if (state.kind === "dev-build") return t("device.upgrade.devBuild");
+  return state.kind === "unknown" ? "" : state.version;
 }
 
 /**
@@ -146,6 +164,15 @@ function actionLabel(
       secondary: true,
     };
   }
+  // 开发构建：入口同样保留，但禁用 —— 永不劝升（决策 5），而隐藏入口会让人怀疑
+  // 自己记错了位置（决策 20 的同一条理由）。
+  if (state.kind === "dev-build") {
+    return {
+      label: t("device.upgrade.action.default"),
+      disabled: true,
+      secondary: true,
+    };
+  }
   // 已是最新：入口保留为禁用态并注明版本，不隐藏（决策 20）。
   if (state.kind === "current") {
     return {
@@ -246,6 +273,18 @@ function UpgradeHeadline({ state }: { state: AgentredVersionState }) {
         </span>
         <span className="text-xs text-muted-foreground">
           {t("device.upgrade.blockedBody")}
+        </span>
+      </div>
+    );
+  }
+  if (state.kind === "dev-build") {
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-semibold text-foreground">
+          {t("device.upgrade.devBuildTitle")}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {t("device.upgrade.devBuildBody")}
         </span>
       </div>
     );

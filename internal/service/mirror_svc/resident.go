@@ -222,6 +222,7 @@ func (s *Supervisor) dial(
 		return nil, err
 	}
 	s.refreshDeviceVersion(ctx, key, response.GetDaemonVersion())
+	s.recordDaemonBuild(ctx, key, response.GetDaemonCommit())
 	return conn, nil
 }
 

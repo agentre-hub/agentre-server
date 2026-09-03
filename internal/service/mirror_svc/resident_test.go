@@ -67,6 +67,10 @@ type fakeDaemonNet struct {
 	// （AuthAccountResponse.daemon_version，wire 0.3.0）。空串等同于真 daemon 未注入
 	// 构建变量的情形。
 	daemonVersion string
+	// daemonCommit 是握手应答里带出的自报短 commit
+	// （AuthAccountResponse.daemon_commit，wire 0.3.0）。空串等同于真 daemon 未注入
+	// 构建变量的情形 —— 消费端据此把它显示为开发构建、永不劝升（决策 5）。
+	daemonCommit string
 	// rejectHandshake 为真时,握手一律以 -32006(协议版本不匹配)拒绝,不看实际协议
 	// 版本是否匹配 —— 用来在测试里复现「对端判定版本不合」而不必真的造两个不同构建。
 	rejectHandshake bool
@@ -160,7 +164,7 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 		f.mu.Lock()
 		ch.protocolVersion = p.GetProtocolVersion()
 		reject := f.rejectHandshake
-		daemonVersion := f.daemonVersion
+		daemonVersion, daemonCommit := f.daemonVersion, f.daemonCommit
 		f.mu.Unlock()
 		// 真对端(agentred 的 protobuf registry / 桌面端的 peer registry)在看凭据之前
 		// 先按**精确匹配**校验协议版本,并且把空串判成「对端太旧」——proto3 下缺字段与
@@ -178,6 +182,7 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 		f.mu.Unlock()
 		encoded, marshalErr := proto.Marshal(&agentrewire.AuthAccountResponse{
 			Ok: true, InstanceUuid: "fake", DaemonVersion: daemonVersion,
+			DaemonCommit: daemonCommit,
 		})
 		if marshalErr != nil {
 			return marshalErr
@@ -324,6 +329,13 @@ func (f *fakeDaemonNet) setDaemonVersion(version string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.daemonVersion = version
+}
+
+// setDaemonCommit 是这台假 daemon 此后在握手成功时自报的短 commit。
+func (f *fakeDaemonNet) setDaemonCommit(commit string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.daemonCommit = commit
 }
 
 // rejectHandshakeForProtocolVersion 让这台假 daemon 此后的每一次握手都以 -32006 拒绝,
@@ -827,6 +839,56 @@ func TestFollow_HandshakeReportsTheSameVersion_WritesNothing(t *testing.T) {
 
 	require.NoError(t, err)
 	require.True(t, claimed)
+}
+
+// Given 握手应答里带着这台机器自报的短 commit(spec「协议：版本窗口与自报版本」);
+// When 跟住它;Then 这份构建被记成按 (账号, 机器) 的共享状态 —— 换一个副本读到的是
+// 同一个答案,因为设备读端点未必落在跟着这台机器的那个副本上。commit 为空的本地构建
+// 与「从没握过手」必须分得开:前者是 daemon 给的确定答案(开发构建,永不劝升 ——
+// 决策 5),后者是没有答案。
+func TestFollow_HandshakeReportsAShortCommit_RecordsItAsSharedBuildState(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	a := rig.replica(t, replicaA)
+	a.net.setDaemonVersion("0.5.0")
+	a.net.setDaemonCommit("a1b2c3d")
+	ctx := context.Background()
+
+	_, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
+	require.False(t, known, "还没握过手就「知道」的话,后面那条断言证明不了任何事")
+
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	commit, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
+	assert.True(t, known)
+	assert.Equal(t, "a1b2c3d", commit)
+
+	b := rig.replica(t, replicaB)
+	commitOnB, knownOnB := b.sup.DaemonBuild(ctx, testUserID, testMachine)
+	assert.True(t, knownOnB, "这台机器跑的是不是发布构建,是账号 + 机器这一级的事实")
+	assert.Equal(t, "a1b2c3d", commitOnB)
+}
+
+// Given 这台机器是未注入构建变量的本地构建,握手自报的短 commit 是空串;
+// When 跟住它;Then 记下的是「知道,而且是空」—— 消费端据此显示为开发构建、永不劝升
+// (决策 5),而不是退回「不知道」。
+func TestFollow_HandshakeReportsAnEmptyCommit_StillRecordsThatItIsKnown(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	a := rig.replica(t, replicaA)
+	a.net.setDaemonVersion("1.0.0")
+	a.net.setDaemonCommit("")
+	ctx := context.Background()
+
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	commit, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
+	assert.True(t, known, "握过手就是知道了:空 commit 是 daemon 给的答案,不是没有答案")
+	assert.Empty(t, commit)
 }
 
 // ── 握手被协议拒绝时记成按 (账号, 机器) 的共享状态,并拉长退避 ─────────────────

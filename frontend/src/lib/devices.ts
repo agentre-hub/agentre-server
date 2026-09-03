@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
  * 少写的字段不会报错，只会在那个页面上安静地缺一段。device-item-contract.test.ts
  * 逐字段盯着它与 Go 那份对齐，也盯着不许有第二份。
  *
- * 字段全是必填：后端结构体里没有 omitempty，一条设备行永远带齐这十一个键。
+ * 字段全是必填：后端结构体里没有 omitempty，一条设备行永远带齐这十三个键。
  */
 export interface DeviceItem {
   id: number;
@@ -26,6 +26,16 @@ export interface DeviceItem {
    * 记的共享状态）。设备卡据此出「版本太旧」的强提示，而不是一句泛泛的连不上。
    */
   protocol_mismatch: boolean;
+  /**
+   * 那台机器最近一次镜像握手自报的短 commit。空串 = 非发布构建（开发构建）——
+   * 只有 `daemon_build_known` 为真时这层含义才成立。
+   */
+  daemon_commit: string;
+  /**
+   * server 到底知不知道那台机器跑的是哪个构建（至少成功握过一次手）。为假时
+   * `daemon_commit` 的空串表示「不知道」而不是「开发构建」，卡上因此不下任何判断。
+   */
+  daemon_build_known: boolean;
 }
 
 /**

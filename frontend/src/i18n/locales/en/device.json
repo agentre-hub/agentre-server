@@ -173,6 +173,9 @@
       "timeoutTitle": "It didn't come back",
       "timeoutBody": "Waited 5 minutes. If it isn't running as a service or container, it won't restart on its own after the upgrade.",
       "failedTitle": "The upgrade didn't start"
-    }
+    },
+    "devBuild": "Development build",
+    "devBuildTitle": "This is a development build",
+    "devBuildBody": "Its version cannot be compared with a release, so it is never nudged to upgrade."
   }
 }
