@@ -26,6 +26,7 @@ vi.mock("@/lib/relayClient", async (importOriginal) => {
 vi.mock("@/lib/relayTicket", () => ({
   ensureRelayTicket: vi.fn(async () => ({
     accessToken: "tok",
+    expiresAt: Date.now() + 120_000,
     clientId: "browser-1",
   })),
 }));

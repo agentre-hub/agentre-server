@@ -81,7 +81,7 @@ function setup(overrides: Partial<RelayClientOptions> = {}): {
   const options: RelayClientOptions = {
     connection,
     target: machineTarget("fp-daemon"),
-    jwt: "jwt",
+    credential: () => "jwt",
     ...overrides,
   };
   return { client: new RelayClient(options), socket, protocols };

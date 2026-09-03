@@ -66,6 +66,7 @@ const mockedEnsureRelayTicket = vi.mocked(ensureRelayTicket);
 
 const TICKET = {
   accessToken: "tok",
+  expiresAt: Date.now() + 120_000,
   clientId: "browser-1",
   clientName: "Chrome · macOS",
 };

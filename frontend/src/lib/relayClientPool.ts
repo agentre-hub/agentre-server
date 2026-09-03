@@ -42,6 +42,14 @@ import { relayClientUrl } from "@/lib/relayUrl";
 const DEFAULT_IDLE_GRACE_MS = 30_000;
 
 /**
+ * 票剩这么多寿命之内就当它不能用了，重换一张。
+ *
+ * 留这一段余量是因为票是**发出去之前**取的：握手要走一个往返才到 agentred，而它按
+ * 自己的钟判过期。贴着到期线用一张票，等于把这次握手押在两台机器的时钟差上。
+ */
+const TICKET_RENEW_MARGIN_MS = 30_000;
+
+/**
  * 一个使用方的收件口。全是可选的：一次性调用只是想借条通道发个请求，什么都不听。
  */
 export interface RelayListener {
@@ -217,8 +225,7 @@ export class RelayClientPool {
   async reconnect(target: string): Promise<boolean> {
     const entry = this.entries.get(target);
     if (!entry || !this.connection) return false;
-    const ticket = await this.ensureTicket();
-    this.connectionTicket = ticket;
+    await this.mintTicket();
     await this.connection.reconnect();
     // 通道级失败（目标不存在 / 离线 / 转发失败）只关掉这一条通道，它随即从连接的
     // 通道表里消失——换 socket 只重新声明表里还在的那些，带不回它。所以这里显式
@@ -290,19 +297,19 @@ export class RelayClientPool {
     }
     if (this.connecting) return this.connecting;
     const building = (async () => {
-      const ticket = await this.ensureTicket();
+      const ticket = await this.mintTicket();
       const connection = this.createConnection({
         url: this.connectionUrl(),
         jwt: ticket.accessToken,
+        // 重拨之前一定换新的：走到这里说明上一张要么连不上、要么被服务端拒了，
+        // 而它此刻可能还没到期——`freshTicket` 会把它当成还能用。
         refreshCredentials: async () => {
-          const fresh = await this.ensureTicket();
-          this.connectionTicket = fresh;
+          const fresh = await this.mintTicket();
           return { url: this.connectionUrl(), jwt: fresh.accessToken };
         },
         onStateChange: (state) => this.fanOutSignalState(state),
       });
       this.connection = connection;
-      this.connectionTicket = ticket;
       connection.subscribeSignals({
         onSignal: (payload) => {
           for (const s of [...this.signalSubscribers]) s.onSignal?.(payload);
@@ -328,6 +335,39 @@ export class RelayClientPool {
     return building;
   }
 
+  /**
+   * 一张**此刻还能用**的票。还够用就是手上这张，不够了就现换一张。
+   *
+   * 这是通道握手的凭据来源。握手不是只做一次（换 socket 重做、通道重开重做、后开的
+   * 每条通道各做一次），而票只活两分钟；把建通道那一刻那张一直用下去，几分钟之后
+   * 每次握手都会被 agentred 判成 `account credential expired`，那条通道从此停在
+   * 「重连中…」不动。
+   *
+   * 换回来的这张同时归连接用（`connectionTicket`）：一次换 socket 后 N 条通道各自
+   * 重做握手，它们共用刚换的这一张，而不是各发一次 POST。
+   */
+  private freshTicket(): Promise<RelayTicket> {
+    const current = this.connectionTicket;
+    if (current && current.expiresAt - Date.now() > TICKET_RENEW_MARGIN_MS) {
+      return Promise.resolve(current);
+    }
+    return this.mintTicket();
+  }
+
+  /**
+   * 换一张新票，并把它记成这条连接手上那张。
+   *
+   * 这里**不**做在途去重。同时换两张票的代价只是多一次 POST；而记住「正在换的那
+   * 一张」的代价是：那一次要是永远不回（取票的请求挂住），此后每一次握手都在等
+   * 一个不会落定的东西，整条线从此停摆——比多发一次请求贵得多。
+   */
+  private mintTicket(): Promise<RelayTicket> {
+    return this.ensureTicket().then((ticket) => {
+      this.connectionTicket = ticket;
+      return ticket;
+    });
+  }
+
   private fanOutSignalState(state: RelayState): void {
     for (const subscriber of [...this.signalSubscribers]) {
       subscriber.onStateChange?.(state);
@@ -349,7 +389,7 @@ export class RelayClientPool {
   }
 
   private async open(target: string): Promise<Entry> {
-    const { connection, ticket } = await this.ensureConnection();
+    const { connection } = await this.ensureConnection();
     const entry: Entry = {
       target,
       listeners: new Set(),
@@ -359,7 +399,7 @@ export class RelayClientPool {
       client: null as unknown as RelayClient,
       ready: Promise.resolve(),
     };
-    entry.client = this.build(entry, connection, ticket);
+    entry.client = this.build(entry, connection);
     this.entries.set(target, entry);
     entry.ready = entry.client.connect();
     entry.ready.catch(() => {});
@@ -380,11 +420,7 @@ export class RelayClientPool {
    * 是构造期单值，共享之后必须变成一个集合，否则后来的使用方要么收不到、要么把前一个
    * 覆盖掉。
    */
-  private build(
-    entry: Entry,
-    connection: RelayConnection,
-    ticket: RelayTicket,
-  ): RelayClient {
+  private build(entry: Entry, connection: RelayConnection): RelayClient {
     // 变参而不是单参：事件那三口现在还带一个「这一帧什么时候发生的」，而
     // onStateChange 仍是单参 —— 转发原样把收到的实参转出去，不逐个数。
     const fanout =
@@ -397,7 +433,8 @@ export class RelayClientPool {
     return this.createClient({
       connection,
       target: entry.target,
-      jwt: ticket.accessToken,
+      // 现取而不是把手上这张记下来：这条通道的握手会一次次重做，而票只活两分钟。
+      credential: () => this.freshTicket().then((t) => t.accessToken),
       onEvent: fanout<[EventFrame, number?]>((l) => l.onEvent),
       onRunResultDone: fanout<[RunResultDoneFrame, number?]>(
         (l) => l.onRunResultDone,

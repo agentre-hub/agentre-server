@@ -57,6 +57,7 @@ class FakeClient {
 
 const ticket: RelayTicket = {
   accessToken: "tok",
+  expiresAt: Date.now() + 120_000,
   clientId: "browser-1",
   clientName: "Chrome · macOS",
 };
@@ -66,12 +67,25 @@ function setup(
     idleGraceMs?: number;
     failNextConnect?: boolean;
     hangConnect?: boolean;
+    /** 每次换票都发一张带号的新票，寿命与线上一致（两分钟）。 */
+    agingTickets?: boolean;
   } = {},
 ) {
   const built: FakeClient[] = [];
   const sockets: FakeConnection[] = [];
   let fail = overrides.failNextConnect ?? false;
-  const tickets = vi.fn(() => Promise.resolve(ticket));
+  let minted = 0;
+  const tickets = vi.fn(() =>
+    Promise.resolve(
+      overrides.agingTickets
+        ? {
+            ...ticket,
+            accessToken: `tok-${++minted}`,
+            expiresAt: Date.now() + 120_000,
+          }
+        : ticket,
+    ),
+  );
   const pool = new RelayClientPool({
     idleGraceMs: overrides.idleGraceMs ?? 30_000,
     ensureTicket: tickets,
@@ -331,6 +345,41 @@ describe("RelayClientPool", () => {
     RED 之前：reconnect 只换 socket 就返回 true，use-relay 据此不再退回「整只
     effect 重跑」那条兜底路，于是那条对话在这个标签页里永久死亡。
   */
+  /*
+    握手的凭据由池子现给，不是建通道那一刻记下来的那张。
+
+    中继票只活两分钟（server 的 relayTicketTTL），而这条 socket 在登录期间常驻：
+    页面开着不动几分钟，再点开一条此前没开过的对话，那条通道的 auth.account 用的
+    要是建它那一刻手上这张，agentred 回的就是 `account credential expired`——真机
+    上复现出来正是「重连中…」永远转下去。
+
+    RED 之前：`build` 把 `ticket.accessToken` 记进客户端，池子这边换多少次票都与
+    它无关。
+  */
+  it("通道握手现取凭据：手上那张过期了就换一张", async () => {
+    const { pool, built, tickets } = setup({ agingTickets: true });
+    await pool.acquire(FP1);
+    await expect(built[0].opts.credential()).resolves.toBe("tok-1");
+    expect(tickets).toHaveBeenCalledTimes(1);
+
+    // socket 一直连着（没有重拨，也就没有换票的时机），票却已经老了。
+    await vi.advanceTimersByTimeAsync(100_000);
+
+    await expect(built[0].opts.credential()).resolves.toBe("tok-2");
+    expect(tickets).toHaveBeenCalledTimes(2);
+  });
+
+  it("票还够用就不重复换：一次重拨后 N 条通道共用刚换的那一张", async () => {
+    const { pool, built, tickets } = setup({ agingTickets: true });
+    await pool.acquire(FP1);
+    await pool.acquire(FP2);
+    expect(tickets).toHaveBeenCalledTimes(1);
+
+    await Promise.all([built[0].opts.credential(), built[1].opts.credential()]);
+
+    expect(tickets).toHaveBeenCalledTimes(1);
+  });
+
   it("重连把被服务端关掉的通道重新开出来", async () => {
     const { pool, built, sockets } = setup();
     await pool.acquire(FP1);

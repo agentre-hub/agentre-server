@@ -201,6 +201,7 @@ function connectedRelay(): UseRelayMachineResult {
       clientId: "fp-web",
       clientName: "Browser",
       accessToken: "t",
+      expiresAt: Date.now() + 120_000,
     },
     relayTicketError: null,
     reconnect: vi.fn(),

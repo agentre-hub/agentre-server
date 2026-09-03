@@ -69,6 +69,7 @@ beforeEach(() => {
   relay.connect.mockResolvedValue(undefined);
   mockedEnsureRelayTicket.mockResolvedValue({
     accessToken: "ticket",
+    expiresAt: Date.now() + 120_000,
     clientId: "browser-fp",
     clientName: "Browser",
   });

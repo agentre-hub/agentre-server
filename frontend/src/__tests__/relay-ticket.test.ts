@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
 import { browserDisplayName, ensureRelayTicket } from "@/lib/relayTicket";
@@ -13,6 +13,12 @@ const mockedApi = vi.mocked(api);
 beforeEach(() => {
   localStorage.clear();
   mockedApi.mockReset();
+  // 到期时刻是本机时钟上的一个绝对值，钉死它才比得出来。
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 // 决策 8/9：对端身份由服务端从账号派生并签进票里，浏览器只是把它读出来用。
@@ -29,6 +35,9 @@ it("takes its client id from the ticket the server issued", async () => {
 
   expect(ticket).toEqual({
     accessToken: "relay-ticket",
+    // 服务端说的寿命要带出来：票只活两分钟，而通道握手会一次次重做，「手上这张
+    // 还能不能用」问不出来就只能一直用第一张，几分钟后每次握手都被判过期。
+    expiresAt: Date.now() + 120_000,
     clientId: "sha256:account-web-peer",
     clientName: browserDisplayName(),
   });

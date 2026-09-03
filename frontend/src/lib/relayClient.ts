@@ -67,6 +67,8 @@ import {
 } from "@agentre-hub/agentre-wire";
 import type { MessageInitShape, MessageShape } from "@bufbuild/protobuf";
 
+import { RedialTimer } from "@/lib/redialTimer";
+import { backoffDelay } from "@/lib/relayBackoff";
 import type {
   RelayChannelHandle,
   RelayConnection,
@@ -132,10 +134,15 @@ export interface RelayClientOptions extends NotificationHandlers {
    */
   target: string;
   /**
-   * 出示给 daemon 的账号凭据（auth.account）。握手是**逐通道**的：一条连接上的
-   * 两条通道接的是两台不同的机器，各自要向自己那台出示凭据。
+   * 出示给 daemon 的账号凭据（auth.account）的**来源**。握手是**逐通道**的：一条
+   * 连接上的两条通道接的是两台不同的机器，各自要向自己那台出示凭据。
+   *
+   * 是个来源而不是一个值：中继票只活两分钟（server 的 relayTicketTTL），而握手
+   * 会一次次重做——换 socket 之后重做、通道被单独关掉后重开时重做、同一条连接上
+   * 后开的每条通道各做一次。记住建通道那一刻那张票、以后每次都出示它，几分钟后
+   * 就是 `account credential expired`，而那条通道从此停在「重连中…」再也不动。
    */
-  jwt: string;
+  credential: () => string | Promise<string>;
   onStateChange?: (state: RelayState) => void;
 }
 
@@ -202,6 +209,10 @@ export class RelayClient {
   private closedByUser = false;
   private authenticating: Promise<void> | null = null;
   private currentState: RelayState = "disconnected";
+  /** 握手连着失败了几次。重试按它指数退让。 */
+  private handshakeFailures = 0;
+  /** 排着的那一次重做握手，见 scheduleHandshakeRetry。 */
+  private readonly handshakeRetry = new RedialTimer();
 
   constructor(opts: RelayClientOptions) {
     this.opts = opts;
@@ -220,9 +231,9 @@ export class RelayClient {
    * 两个窗口的交集判定,空版本被判成「对端太旧」(proto3 下缺字段与显式空串同为零值)。
    * 版本取自 wire 包导出的常量,与本次编译进来的 schema 同源。
    */
-  private authenticate(): Promise<unknown> {
+  private async authenticate(): Promise<unknown> {
     return this.request(rpcMethods.authAccount, {
-      credential: this.opts.jwt,
+      credential: await this.opts.credential(),
       protocolVersion: PROTOCOL_VERSION,
       minSupportedProtocolVersion: PROTOCOL_VERSION,
     });
@@ -285,6 +296,7 @@ export class RelayClient {
   /** 主动关掉这条通道。连接本身留着——它是账号级的，别人还在用。 */
   close(): void {
     this.closedByUser = true;
+    this.handshakeRetry.cancel();
     this.channel?.close();
     this.channel = null;
     this.authenticating = null;
@@ -543,16 +555,28 @@ export class RelayClient {
     });
   }
 
-  /** 握手 + 重连后的补齐。失败时把这条通道判为断开，由连接那层退避重连。 */
+  /**
+   * 握手 + 重连后的补齐。
+   *
+   * 失败时**自己排下一次**：连接那一层不会替这条通道重试——socket 好得很，它既不
+   * 会断也不会再来一次 onOpen，于是这条通道从此一动不动。而 `reconnecting` 在这个
+   * 宿主里的意思是「有人正在重试」（见 use-relay.ts），没有那个人的话它就是一句
+   * 空话：页面永远转着圈，连「重新连接」那颗按钮都不给（那是 lost 那一档的）。
+   *
+   * 重试**会**换到一张新票（凭据是现取的），所以最常见的那种失败——票在这条 socket
+   * 活着的这段时间里过期了——下一次就好了。
+   */
   private async handshake(): Promise<void> {
     try {
       await this.authenticate();
     } catch (err) {
       this.setState("reconnecting");
+      this.scheduleHandshakeRetry();
       throw err instanceof RelayError
         ? err
         : new RelayError(-1, "relay: auth.account 失败", err);
     }
+    this.handshakeFailures = 0;
     this.setState("connected");
     for (const st of [...this.sessions.values()].filter((s) => s.watched)) {
       try {
@@ -561,6 +585,23 @@ export class RelayClient {
         // 该对话补齐失败,保持关注,下一条 / 下次重连再试。
       }
     }
+  }
+
+  /**
+   * 排下一次握手。已经排着就什么都不做（RedialTimer 单飞）——一次失败的握手同时被
+   * `connect()` 的调用方和通道的 onOpen 看见是常态，各排一次就是两串重试。
+   */
+  private scheduleHandshakeRetry(): void {
+    if (this.closedByUser || !this.channel) return;
+    const delay = backoffDelay(this.handshakeFailures, {
+      baseMs: 1000,
+      capMs: 30_000,
+    });
+    this.handshakeFailures += 1;
+    this.handshakeRetry.schedule(delay, () => {
+      if (this.closedByUser || !this.channel) return;
+      void this.handshake().catch(() => {});
+    });
   }
 
   private handleConnectionState(state: RelayState): void {
@@ -586,6 +627,8 @@ export class RelayClient {
    * 据它给出重新连接的入口（走 reopen）。
    */
   private handleChannelClosed(): void {
+    // 通道没了，重做握手无处可发：这一路的出路是 reopen（把通道开回来），不是重试。
+    this.handshakeRetry.cancel();
     this.channel = null;
     for (const st of this.sessions.values()) {
       st.attached = null;

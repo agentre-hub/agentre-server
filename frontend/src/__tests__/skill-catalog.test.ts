@@ -63,6 +63,7 @@ beforeEach(() => {
   mockedTicket.mockReset();
   mockedTicket.mockResolvedValue({
     accessToken: "ticket-token",
+    expiresAt: Date.now() + 120_000,
     clientId: "browser-1",
     clientName: "Chrome · macOS",
   });
@@ -94,7 +95,7 @@ describe("fetchSkillCatalog", () => {
     const opts = MockRelayClient.mock.calls[0][0];
     // 目标在**通道**上声明（决策 10/11）：技能目录是机器作用域的操作，走 machine:。
     expect(opts.target).toBe("machine:fp-online");
-    expect(opts.jwt).toBe("ticket-token");
+    await expect(opts.credential()).resolves.toBe("ticket-token");
     expect(fake.request).toHaveBeenCalledWith(rpcMethods.skillCatalog, {
       backendType: "claudecode",
       authorized: [{ id: "agentre/web", enabled: true }],

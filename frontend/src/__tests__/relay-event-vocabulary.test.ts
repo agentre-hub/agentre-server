@@ -123,7 +123,7 @@ async function relayEvents(
   const options: RelayClientOptions = {
     connection,
     target: machineTarget("fp-daemon"),
-    jwt: "jwt",
+    credential: () => "jwt",
     // 转录投影那一格由宿主补（见 transcriptFrame）；这一族只关心事件本身。
     onEvent: (event) =>
       received.push({ ...event, sessionId: 1 } as TranscriptFrame),

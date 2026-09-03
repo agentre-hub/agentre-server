@@ -15,6 +15,7 @@
  * 起来同理——它也是通道级的，连接照常服务 RPC。
  */
 import { RedialTimer } from "@/lib/redialTimer";
+import { backoffDelay } from "@/lib/relayBackoff";
 import {
   binaryPayload,
   unwrapEnvelope,
@@ -340,17 +341,12 @@ export class RelayConnection {
     if (this.redial.pending) return;
     // 指数退让并封顶：这条连接**登录期间常驻**（信号通道是永不释放的使用方），
     // 所以连不上的时候它会一直重试下去。固定 1 秒的重试等于对着一个够不着的
-    // 服务端每秒拨一次，直到标签页关掉。
-    const base = this.opts.reconnectDelayMs ?? 1000;
-    const cap = this.opts.maxReconnectDelayMs ?? 30_000;
-    // 抖动：所有标签页（以及所有装着这个前端的机器）看到的是同一次服务端故障，
-    // 没有抖动它们会整整齐齐地同时重拨，把退让的意义抵消掉。取半幅抖动，与 daemon
-    // 侧 relaytransport.HubLink.backoff 同一形状。
-    const jitter = this.opts.random ? this.opts.random() : Math.random();
-    const ceiling = Math.min(base * 2 ** this.failures, cap);
-    const delay = Math.round(
-      ceiling * (0.5 + Math.min(Math.max(jitter, 0), 1) / 2),
-    );
+    // 服务端每秒拨一次，直到标签页关掉。形状（含抖动）见 relayBackoff。
+    const delay = backoffDelay(this.failures, {
+      baseMs: this.opts.reconnectDelayMs ?? 1000,
+      capMs: this.opts.maxReconnectDelayMs ?? 30_000,
+      random: this.opts.random,
+    });
     this.failures += 1;
     this.redial.schedule(delay, () => {
       void this.redialOnce();

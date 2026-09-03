@@ -173,6 +173,7 @@ const sourceClient = {
   clientId: "fp-web",
   clientName: "Chrome · macOS",
   accessToken: "web-jwt",
+  expiresAt: Date.now() + 120_000,
 };
 
 // RelayClient 是被 `new` 出来的。vitest 4 起，mock 收到构造调用会直接
@@ -184,6 +185,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockedTicket.mockResolvedValue({
     accessToken: "relay-token",
+    expiresAt: Date.now() + 120_000,
     clientId: "browser-1",
     clientName: "Chrome · macOS",
   });
@@ -292,12 +294,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     //
     // 票来自 relayClientPool 而不是调用方手里那张：连接是**账号级共享**的，谁的
     // 票说了算不能由借用方决定。
-    const constructorOpts = MockRelayClient.mock.calls[0][0] as {
-      target: string;
-      jwt: string;
-    };
+    const constructorOpts = MockRelayClient.mock.calls[0][0];
     expect(constructorOpts.target).toBe("machine:fp-online");
-    expect(constructorOpts.jwt).toBe("relay-token");
+    await expect(constructorOpts.credential()).resolves.toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
@@ -372,12 +371,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       sourceClient,
     });
 
-    const constructorOpts = MockRelayClient.mock.calls[0][0] as {
-      target: string;
-      jwt: string;
-    };
+    const constructorOpts = MockRelayClient.mock.calls[0][0];
     expect(constructorOpts.target).toBe("machine:fp-desk");
-    expect(constructorOpts.jwt).toBe("relay-token");
+    await expect(constructorOpts.credential()).resolves.toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
