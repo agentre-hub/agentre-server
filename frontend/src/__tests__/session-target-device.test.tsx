@@ -28,6 +28,8 @@ function machine(over: Partial<DeviceItem> = {}): DeviceItem {
     online: true,
     is_this_device: false,
     protocol_mismatch: false,
+    daemon_commit: "a1b2c3d",
+    daemon_build_known: true,
     ...over,
   };
 }

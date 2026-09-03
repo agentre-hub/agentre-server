@@ -568,6 +568,10 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 		// mirror_svc.Default() 为 nil——ProtocolMismatch 自己对 nil 接收者兜底，
 		// 与在线态同一 fail-open 习惯，这里不需要重复判 nil。
 		protocolMismatch := mirror_svc.Default().ProtocolMismatch(ctx, userID, d.Fingerprint)
+		// 短 commit 同样来自镜像握手记下的共享状态（决策 5：commit 为空的机器显示为
+		// 开发构建、永不劝升）。第二个返回值是「知不知道」——没握过手时不能把「没有
+		// 答案」读成「commit 为空」，那会把一台正式版机器说成开发构建。
+		daemonCommit, daemonBuildKnown := mirror_svc.Default().DaemonBuild(ctx, userID, d.Fingerprint)
 		out = append(out, api.ListDevicesItem{
 			ID:               d.ID,
 			Name:             d.Name,
@@ -580,6 +584,8 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 			Online:           online,
 			IsThisDevice:     d.ID == callerDeviceID,
 			ProtocolMismatch: protocolMismatch,
+			DaemonCommit:     daemonCommit,
+			DaemonBuildKnown: daemonBuildKnown,
 		})
 	}
 	return out, nil

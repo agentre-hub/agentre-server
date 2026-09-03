@@ -51,9 +51,11 @@ export function compareVersions(a: string, b: string): number | null {
 export type AgentredVersionState =
   /** 还没读到版本（还没握过手，或者旧 daemon 不自报）：什么都不说。 */
   | { kind: "unknown" }
+  /** 短 commit 为空 = 非发布构建：如实显示，永不劝升（决策 5）。 */
+  | { kind: "dev-build"; version: string }
   /** 已是最新。 */
   | { kind: "current"; version: string }
-  /** 拿不到最新版信息，或这个版本号根本不可比：显示版本，不下判断。 */
+  /** 拿不到最新版信息、版本号不可比，或者根本不知道这台机器的构建：显示版本，不下判断。 */
   | { kind: "latest-unknown"; version: string }
   /** 旧于最新版：弱徽标 + 升级出口。 */
   | { kind: "upgradable"; version: string; latest: string }
@@ -65,6 +67,15 @@ export type AgentredVersionInput = {
   version: string;
   /** 上一次握手是不是被 daemon 判定协议版本不合（ListDevicesItem.protocol_mismatch）。 */
   protocolMismatch: boolean;
+  /**
+   * 那台机器自报的短 commit；空串 = 非发布构建。只有 buildKnown 为真时才作数。
+   */
+  commit: string;
+  /**
+   * server 知不知道那台机器跑的是哪个构建。为假时不下任何版本判断 —— 一个不可比的
+   * 版本号（本地构建自称的 1.0.0）在不知道构建的前提下既不「过期」也不「已是最新」。
+   */
+  buildKnown: boolean;
   /** 服务端缓存的最新发布版本；空串 = 服务端也不知道（决策 12）。 */
   latest: string;
 };
@@ -78,6 +89,15 @@ export function agentredVersionState(
     return { kind: "protocol-mismatch", version: input.version };
   }
   if (!input.version) return { kind: "unknown" };
+  // 「不知道这台机器的构建」与「commit 是空串」是两件事，不能混：前者没有答案，
+  // 后者是 daemon 给的确定答案。不知道时一律不下判断（决策 19：拿不到就是拿不到），
+  // 否则一台本地构建的机器（自称 1.0.0，比任何 0.x 正式版都「新」）会被判成已是最新。
+  if (!input.buildKnown) {
+    return { kind: "latest-unknown", version: input.version };
+  }
+  // 短 commit 为空 = 非发布构建：显示出来，但不参与「可升级」判定，也不出徽标
+  // （决策 5，spec「协议：版本窗口与自报版本」）。
+  if (!input.commit) return { kind: "dev-build", version: input.version };
   if (!input.latest) return { kind: "latest-unknown", version: input.version };
   const order = compareVersions(input.version, input.latest);
   // 比不了就不比：本地构建自称的版本号、带日期的 nightly 都落在这里，它们既不
