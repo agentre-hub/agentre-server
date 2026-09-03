@@ -34,8 +34,9 @@ import (
 )
 
 type stubEngineSvc struct {
-	providerIn engine_svc.ProviderWriteInput
-	backendIn  engine_svc.BackendWriteInput
+	providerIn    engine_svc.ProviderWriteInput
+	backendIn     engine_svc.BackendWriteInput
+	isSandboxOfID string
 }
 
 func (s *stubEngineSvc) ListProviders(context.Context, int64) ([]engine_svc.ProviderView, error) {
@@ -62,6 +63,10 @@ func (s *stubEngineSvc) CreateBackend(_ context.Context, in engine_svc.BackendWr
 }
 func (s *stubEngineSvc) UpdateBackend(context.Context, engine_svc.BackendWriteInput) (*engine_svc.BackendView, error) {
 	return nil, nil
+}
+func (s *stubEngineSvc) AddBackendIsSandbox(_ context.Context, _ int64, id string) (*engine_svc.BackendView, error) {
+	s.isSandboxOfID = id
+	return &engine_svc.BackendView{SyncID: id, Name: "Claude Code", Type: "claudecode"}, nil
 }
 func (s *stubEngineSvc) DeleteBackend(context.Context, int64, string) error { return nil }
 func (s *stubEngineSvc) ListCLIOverlays(context.Context, int64) ([]engine_svc.CLIOverlayView, error) {
@@ -190,4 +195,27 @@ func TestDeviceSnapshot_RevokedDeviceIsRejected(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.NotContains(t, string(body), "sk-secret", "撤销的设备不能拿到明文凭据")
+}
+
+// 一键加 IS_SANDBOX：路由把 sync_id 从 URI 取出交给服务层，响应里**没有** env 表。
+//
+// 这个接口存在的理由就是「浏览器不碰 env_json 的内容」（R19）：请求体是空的，
+// 响应走的是与别处同一个 Backend DTO，而那个 DTO 在类型层就装不下 env_json
+// （internal/api/engine/guard_test.go 钉着这一点）。
+func TestBrowserBackendAddIsSandbox_PassesSyncIDAndReturnsNoEnvTable(t *testing.T) {
+	stub := &stubEngineSvc{}
+	server, _ := newEngineServer(t, stub)
+	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
+	require.NoError(t, err)
+
+	resp := postEngine(t, server.URL+"/v1/engine/backends/backend-1/is-sandbox", sid, sess.CSRFToken, `{}`)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "backend-1", stub.isSandboxOfID)
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	assert.NotContains(t, string(envelope.Data), "env_json")
+	assert.NotContains(t, string(envelope.Data), "IS_SANDBOX")
 }

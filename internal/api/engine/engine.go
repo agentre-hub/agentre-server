@@ -114,6 +114,17 @@ type DeleteBackendRequest struct {
 	mux.Meta `path:"/v1/engine/backends/:sync_id" method:"DELETE"`
 	SyncID   string `uri:"sync_id" binding:"required,max=255"`
 }
+
+// AddBackendIsSandboxRequest 给这条后端补 IS_SANDBOX=1。
+//
+// **请求体里没有、也不会有 env 表。** 浏览器读不到 env_json（R19），也就无从把
+// 合并后的整表发回来；这个接口因此只收 sync_id，合并全在服务端做。写死一个键而不是
+// 开一个「设置任意 env」的口子，是为了让「浏览器不参与 env_json 的内容」这条继续
+// 在类型层成立。
+type AddBackendIsSandboxRequest struct {
+	mux.Meta `path:"/v1/engine/backends/:sync_id/is-sandbox" method:"POST"`
+	SyncID   string `uri:"sync_id" binding:"required,max=255"`
+}
 type CLIOverlay struct {
 	BackendSyncID string `json:"backend_sync_id"`
 	Fingerprint   string `json:"fingerprint"`

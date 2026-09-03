@@ -136,6 +136,9 @@ type EngineSvc interface {
 	ListBackends(context.Context, int64) ([]BackendView, error)
 	CreateBackend(context.Context, BackendWriteInput) (*BackendView, error)
 	UpdateBackend(context.Context, BackendWriteInput) (*BackendView, error)
+	// AddBackendIsSandbox 往这条后端的 env_json 里合入 IS_SANDBOX=1。
+	// 入参只有 sync_id：env_json 永不下发浏览器，合并因此只能在服务端做。
+	AddBackendIsSandbox(context.Context, int64, string) (*BackendView, error)
 	DeleteBackend(context.Context, int64, string) error
 	ListCLIOverlays(context.Context, int64) ([]CLIOverlayView, error)
 	Snapshot(context.Context, int64, string) (*SnapshotView, error)
@@ -347,6 +350,64 @@ func backendView(syncID string, b backendPayload) BackendView {
 		OpenClawSessionMode: b.OpenClawSessionMode,
 	}
 }
+
+// AddBackendIsSandbox 给一条后端补上 IS_SANDBOX=1。
+//
+// 为什么要有这么一个专用接口，而不是像桌面端那样让前端改完整体保存：桌面端手里有
+// env_json（它就是那台机器的 App），一键按钮改的是本地 envEntries；控制台**永远拿
+// 不到 env_json**（R19，`BackendWriteInput` 里根本没有这个字段），所以它没法在前端
+// 合并——只能把「合入这一个键」这件事整个交给服务端。
+//
+// 合并逐键进行，不整表覆写：env_json 是用户自填的透传环境变量表，里面可能有他自己
+// 放的密钥（见 sync_entity/payload.go「这条守卫不是凭据扫描器」）。覆写就是在替用户
+// 丢东西，而且丢了他还看不见。
+//
+// 不按 backend type 设限：服务端不持有 type 的枚举（它只是同步载荷里的一个字符串），
+// 在这里认 "claudecode" 等于把桌面端的词表复制一份到服务端，改一边就会错位。该不该
+// 提供这个动作由 UI 判断，这里只负责如实写。
+func (s *engineSvc) AddBackendIsSandbox(ctx context.Context, userID int64, id string) (*BackendView, error) {
+	row, err := findLive(ctx, userID, id, sync_entity.KindAgentBackend)
+	if err != nil {
+		return nil, err
+	}
+	if row == nil {
+		return nil, i18n.NewNotFoundError(ctx, code.EngineBackendNotFound)
+	}
+	b, ok := decodeBackend(row)
+	if !ok {
+		return nil, i18n.NewError(ctx, code.InvalidParameter)
+	}
+	merged, err := withIsSandbox(b.EnvJSON)
+	if err != nil {
+		return nil, i18n.NewError(ctx, code.InvalidParameter)
+	}
+	b.EnvJSON = merged
+	// 指纹原样带回：saveBackend 会把这个值盖到 AgentredFingerprint 上，传空就是把
+	// 这条后端与机器的绑定悄悄解开，而这个接口不该碰执行目标。
+	return s.saveBackend(ctx, userID, row.SyncID, row, b, row.AgentredFingerprint)
+}
+
+// withIsSandbox 把 IS_SANDBOX=1 合进一张 env 表，返回新的 JSON 文本。
+// 空表（存量后端多半没填过）从零起一张，不报错。
+func withIsSandbox(envJSON string) (string, error) {
+	env := map[string]string{}
+	if trimmed := strings.TrimSpace(envJSON); trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &env); err != nil {
+			return "", err
+		}
+	}
+	env[envKeyIsSandbox] = "1"
+	out, err := json.Marshal(env)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
+// envKeyIsSandbox 是 claude CLI 自带的沙箱逃生口：置位后 CLI 跳过
+// --dangerously-skip-permissions 的 root 检查（bypassPermissions 走的就是这条检查）。
+// 名字与桌面端共享包里那颗一键按钮写的键必须一致。
+const envKeyIsSandbox = "IS_SANDBOX"
 
 func (s *engineSvc) DeleteBackend(ctx context.Context, userID int64, id string) error {
 	return s.delete(ctx, userID, id, sync_entity.KindAgentBackend, code.EngineBackendNotFound)

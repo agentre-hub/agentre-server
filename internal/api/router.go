@@ -137,6 +137,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		engineCtr.ListBackends,
 		engineCtr.CreateBackend,
 		engineCtr.UpdateBackend,
+		engineCtr.AddBackendIsSandbox,
 		engineCtr.DeleteBackend,
 		engineCtr.ListCLIOverlays,
 		// 账号活跃统计：总览一条读、设置一读一写。三条都是 web 控制台自己的端点

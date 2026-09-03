@@ -335,3 +335,136 @@ func payloadString(t *testing.T, payload, key string) string {
 	got, _ := values[key].(string)
 	return got
 }
+
+// AddBackendIsSandbox 是「一键给这台机器加 IS_SANDBOX=1」的服务端合并。
+//
+// 浏览器永不拿到 env_json（R19），所以桌面端那套「读进本地 envEntries、改完整体
+// 保存」在控制台上不成立：这里由服务端自己 read-modify-write，请求里只有 sync_id。
+func TestAddBackendIsSandbox_GivenBackendWithoutEnvJSON_ThenWritesTheSingleKey(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		AgentredFingerprint: "sha256:aaaa",
+		Payload:             `{"name":"Claude Code","type":"claudecode"}`,
+	}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	_, err := New().AddBackendIsSandbox(context.Background(), 7, "backend-1")
+
+	require.NoError(t, err)
+	assert.Contains(t, saved.Payload, `"IS_SANDBOX\":\"1\"`)
+	assert.Contains(t, saved.Payload, `"name":"Claude Code"`)
+}
+
+// **这条是这个接口的全部风险所在。** env_json 是用户自填的透传环境变量表，里面可能
+// 有他自己放的密钥（payload.go 的守卫明说「不是凭据扫描器」）。合并必须逐键进行，
+// 整表覆写就是在替用户丢东西，而丢了他还看不见（浏览器读不到 env_json）。
+func TestAddBackendIsSandbox_GivenExistingEnvJSON_ThenMergesWithoutDroppingOtherKeys(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		AgentredFingerprint: "sha256:aaaa",
+		Payload:             `{"name":"CC","type":"claudecode","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\",\"MY_TOKEN\":\"s3cret\"}"}`,
+	}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	_, err := New().AddBackendIsSandbox(context.Background(), 7, "backend-1")
+
+	require.NoError(t, err)
+	var payload struct {
+		EnvJSON string `json:"env_json"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(saved.Payload), &payload))
+	var env map[string]string
+	require.NoError(t, json.Unmarshal([]byte(payload.EnvJSON), &env))
+	assert.Equal(t, map[string]string{
+		"HTTPS_PROXY": "http://127.0.0.1:7890",
+		"MY_TOKEN":    "s3cret",
+		"IS_SANDBOX":  "1",
+	}, env)
+}
+
+// 重复点按钮是幂等的：控制台看不到「已配置 ✓」（那需要下发一个布尔，本轮不做），
+// 用户只能靠再点一次确认，所以第二次不能把值改坏。
+func TestAddBackendIsSandbox_GivenIsSandboxAlreadySet_ThenStaysOne(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		Payload: `{"name":"CC","type":"claudecode","env_json":"{\"IS_SANDBOX\":\"0\"}"}`,
+	}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	_, err := New().AddBackendIsSandbox(context.Background(), 7, "backend-1")
+
+	require.NoError(t, err)
+	var payload struct {
+		EnvJSON string `json:"env_json"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(saved.Payload), &payload))
+	assert.JSONEq(t, `{"IS_SANDBOX":"1"}`, payload.EnvJSON)
+}
+
+// saveBackend 会把传进去的指纹盖到 AgentredFingerprint 上。这个接口不该碰执行目标，
+// 传空就是把这条后端与机器的绑定悄悄解开。
+func TestAddBackendIsSandbox_GivenBoundDevice_ThenKeepsTheFingerprint(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
+		AgentredFingerprint: "sha256:aaaa",
+		Payload:             `{"name":"CC","type":"claudecode"}`,
+	}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	got, err := New().AddBackendIsSandbox(context.Background(), 7, "backend-1")
+
+	require.NoError(t, err)
+	assert.Equal(t, "sha256:aaaa", saved.AgentredFingerprint)
+	assert.Equal(t, "sha256:aaaa", got.DeviceID)
+}
+
+func TestAddBackendIsSandbox_GivenUnknownID_ThenReturnsTheDedicatedBackendNotFoundCode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "missing").Return(nil, nil)
+
+	_, err := New().AddBackendIsSandbox(context.Background(), 7, "missing")
+
+	assert.Equal(t, 30901, engineErrorCode(t, err))
+}
