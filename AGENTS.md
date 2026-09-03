@@ -25,7 +25,7 @@ Workspace-wide facts live in [`../AGENTS.md`](../AGENTS.md).
 | Adding a scheduled task, or assuming only one replica is running | [docs/architecture.md](docs/architecture.md) | What you may assume about process-local state, how to add a cron job |
 | Writing any test | [docs/testing.md](docs/testing.md) | What to write per layer, sqlmock vs mockgen, build tags, the guard tests |
 | Confirming a change actually works | [docs/verification.md](docs/verification.md) | Which form a one-off check takes — drive it by hand before writing a spec — scratch workflow, verdicts and report rules |
-| Touching the frontend | [docs/architecture.md](docs/architecture.md) + [docs/design.md](docs/design.md) | Shared-package ownership and consumption; colour tokens, dark/light, responsive, i18n, the new-page recipe |
+| Touching the frontend | [docs/architecture.md](docs/architecture.md) + [docs/design.md](docs/design.md) | Shared-package ownership and consumption; colour tokens, dark/light, responsive, i18n, async state, accessibility, the new-page recipe |
 | Deploying, or changing the image/chart/workflow | [deploy/README.md](deploy/README.md) | Docker and Kubernetes deployment, chart values, etcd seeding, the Gitea pipeline |
 | Adding a log line, metric or span | [docs/observability.md](docs/observability.md) | Log levels and fields, metrics, traces |
 | Editing docs | [docs/documentation.md](docs/documentation.md) | Who owns which fact, how docs are fact-checked |

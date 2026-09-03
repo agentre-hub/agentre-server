@@ -1036,6 +1036,130 @@ width, not the container's, so shrinking a box inside a wide window shows you a
 centred card that no phone will ever render. Use the browser's device toolbar, or a
 real device.
 
+## Async state
+
+**There is no shared query layer.** Each page or feature hook owns its own `loading` /
+`error` state and calls `api()` directly. The one shared piece is `useAliveEffect`
+(`frontend/src/hooks/use-api-query.ts`, used in 19 production files): it stops a round's
+callbacks from writing state once that round no longer counts. Its own doc comment owns
+why, including the fetch race it prevents. `useApiQuery` in the same file folds
+mount-guard + loading + error together for a plain read, but only `use-me.ts` needs that
+shape — `Promise.all`, relay calls and post-success work do not fit one hook, and forcing
+them through it only adds a shell.
+
+**Pending → empty → data, at the container that changed.** `ProjectAgentPane`:
+
+```tsx
+<nav aria-label={t('chat.projects')} aria-busy={projectsPending || undefined}>
+  {projectsPending ? (
+    <ProjectTreeSkeleton stacked={stacked} />
+  ) : ordered.length === 0 ? (
+    <p className="px-2 py-1.5 text-[11.5px] text-muted-foreground">
+      {t('chat.noProjects')}
+    </p>
+  ) : (
+    ordered.map(/* … */)
+  )}
+</nav>
+```
+
+**Skeleton for a first paint, spinner for something in flight.** A list or grid whose
+shape is already known paints that shape — `SessionListSkeleton`, `AgentPickList`,
+`ProjectTreeSkeleton`, `DeviceListSkeleton`, `CardListSkeleton`, `OrgIndexSkeleton`,
+`OrgDetailSkeleton`, `ActivityStatsSkeleton`, the `Overview` tiles and heatmap. A spinner
+is only ever a small marker on a live control or status: `SessionConnectionIndicator`, the
+transient state in `SessionIndex`, `OrgDetailHeader`'s save state, `DialogShellSubmit busy`,
+and the composer's own submit key while a send is in flight (`ChatComposer sending`).
+
+**The bar itself is not written here.** Every one of those skeletons is built from
+`Skeleton`, the primitive exported by `@agentre-hub/agentre-ui`; it carries the fill, the
+pulse, the reduced-motion form and `aria-hidden`, and the caller supplies only size, radius
+and — where the placeholder is a card face rather than a bar — a different surface. Do not
+re-declare that class string locally: it had been inlined at ten sites across the two hosts
+and the package, and two of them had already drifted to `bg-muted`, which is nearly
+invisible against `--background` in light mode and reads as a broken render rather than a
+placeholder. `src/__tests__/shared-ui-package.test.tsx` guards that the copies do not grow
+back.
+
+**A skeleton has to hold the space it is standing in.** A single centred "Loading…" line
+occupies almost no height, so the page jumps once when the real content lands — and it
+looks identical to "this account has nothing here". Shape the placeholder like the rows it
+replaces.
+
+**A re-fetch over content already on screen does not go back to the skeleton.**
+`useOrgData.reload()` sets data and error but never raises `loading` again, so the account
+channel's `sync_version` signals refresh the org chart in place; only the first load
+paints the skeleton.
+
+**Nor does its label move before its numbers do.** `Overview` keeps the range that the
+figures on screen actually came from (`loadedRange`, settled with the response) and labels
+them with that, not with the range the user just clicked. Flipping the label first leaves a
+window where four tiles read "Last 7 days" over 30-day numbers — legible and wrong, which
+is worse than a moment of skeleton. The same shape answers "is this round still in
+flight": compare the answer's key with the current one instead of keeping a `loading` flag
+that some path forgets to raise (`OrgExecTargetSection`'s skill catalogue and
+`DraftSession`'s dispatch plan are the other two).
+
+**An error is not a slow load, and it always has a way back.** Test the error branch
+*before* the not-yet-arrived branch: a failed round typically leaves the data `null`, so
+ordering `data === null` first parks the card on a "Loading…" that never ends and renders
+the translated failure copy nowhere (`Account`'s passkey and session cards both did). Every
+load failure carries a retry next to it — `CardLoadError`, the `Overview` and privacy
+alerts, `Org`'s two columns, the device detail panel, `SessionScrollBody`'s earlier-messages
+row — because the alternative is asking the reader to reload a page whose other cards are
+fine. A retry that is already in flight disables its own button; otherwise a second failure
+changes nothing on screen and the reader just clicks again.
+
+**A failed round must not be readable as a finished one.** Silence at the top of a
+transcript reads as "this is the beginning of the conversation"; a dispatch placeholder
+that unmounts on failure takes the user's typed message with it. Say the round failed, keep
+what the reader wrote, and offer the retry.
+
+## Accessibility
+
+**Never encode meaning in colour alone.** Selection carries `aria-pressed` (`FilterChip`,
+`AddDeviceGuide`'s device/OS buttons, the `SessionIndex` filter, the `Overview` range),
+position in a flow carries `aria-current` (`"step"` on `AddDeviceGuide`'s step bar,
+`"true"` on `ProjectAgentPane`'s project tree), and a collapsible row carries
+`aria-expanded` (`Devices`, `Account`).
+
+**A control with nothing behind it leaves the focus order** rather than rendering as a
+disabled button. `FilterChip disabled` and the `AppShell` search display are the two
+instances, each specified where it is defined above.
+
+**Icons are decoration; text is the name.** An icon beside its own label carries
+`aria-hidden="true"`; an icon that *is* the control carries `aria-label`. When
+`ConsoleNavItem` collapses, its label drops to `sr-only` instead of unmounting — a link's
+accessible name must not change with the sidebar's width.
+
+**Announce by urgency.** In-place, non-urgent state uses `role="status"`
+(`PendingSendBubble`, `DecisionPanel`, the composer's model and effort controls, and
+`SessionConnectionIndicator`, which adds `aria-live="polite"`). A failure uses
+`role="alert"` (`SendFailureBubble`, `DraftSession`, `Issues`, `Org`, `ChatIndexPanel`).
+When the change has no visible text of its own, add an `sr-only` announcer, as
+`DeviceApproval` and `OrgExecTargetSection` do.
+
+**Fetching is announced once, by the container being filled.** `aria-busy` sits on that
+region — `ProjectAgentPane`'s nav and list, `SessionScrollBody`, `Chat`'s panes,
+`NewConversationSheet`, `NewConversationPane`, the `Overview` tile grid and its three
+distribution cards, the device list and each expanded device panel, `Account`'s two cards,
+the privacy panel, `Org`'s index and detail columns, and the group overflow popover — and
+the skeleton inside it stays silent. A dozen grey bars read aloud add nothing the container
+has not already said; the shared `Skeleton` is `aria-hidden` by default and records why at
+its definition, so the only thing a caller has to remember is the `aria-busy` on the
+container above it.
+
+**Every animation has a reduced-motion form.** Skeleton pulses and spinners carry
+`motion-reduce:animate-none` — for skeletons the primitive carries it, so it cannot be
+forgotten one placeholder at a time. Degrade, do not delete: `SessionConnectionIndicator`'s
+travelling bar becomes a static full-width line at 40% opacity, because the connection is
+still live and the indicator still has something to say.
+
+A hand-written focusable control brings its own ring —
+`outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50`, as `UserMenu`,
+`AddDeviceGuide`, `Account` and `OrgIndexPanel` write it. Shadcn primitives from
+`@agentre-hub/agentre-ui` already carry theirs; do not restyle those.
+
 ## Adding a page
 
 1. Component under `frontend/src/pages/`, route in `App.tsx`. Wrap in `<RequireAuth>` if
@@ -1068,6 +1192,7 @@ real device.
    ```
 
 5. Sizes, spacing and radii from the three scale tables above; the width from the board.
-6. Check light **and** dark, desktop **and** mobile.
+6. Check light **and** dark, desktop **and** mobile, keyboard focus order, and the
+   pending → empty → data transition.
 7. Run the frontend lint, test and build gates. Use `make e2e` when real browser coverage
    is required; [verification.md](verification.md) owns how to choose and report that run.

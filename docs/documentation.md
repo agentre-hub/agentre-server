@@ -13,7 +13,7 @@ and the reader hits the stale one without knowing it is stale.
 | Test strategy per layer, build tags, guard tests | [testing.md](testing.md) |
 | Verification workflow, report rules, honesty clause | [verification.md](verification.md) |
 | e2e mechanics: configs, ports, hermetic guarantees | [`../e2e/README.md`](../e2e/README.md) |
-| Tokens and the canvas↔code name mapping, type/spacing/radius scales, the auth shell and page skeleton, theming, responsive, i18n | [design.md](design.md) |
+| Tokens and the canvas↔code name mapping, type/spacing/radius scales, the auth shell and page skeleton, theming, responsive, i18n, async-state rendering, accessibility | [design.md](design.md) |
 | Logging, metrics, traces | [observability.md](observability.md) |
 | Deployment: Docker, Kubernetes, chart values, etcd seeding, release pipeline | [`../deploy/README.md`](../deploy/README.md) |
 | Quick start, Docker, GitHub OAuth setup | [`../README.md`](../README.md) |
