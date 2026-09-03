@@ -59,6 +59,8 @@
     "resend": "Resend",
     "copy": "Copy text",
     "discard": "Discard",
+    "copied": "Message text copied",
+    "copyFailed": "Could not copy the message text",
     "notSent": {
       "titleUnknown": "Not sent yet",
       "body": "The connection dropped; this never reached that machine — resending is clean."

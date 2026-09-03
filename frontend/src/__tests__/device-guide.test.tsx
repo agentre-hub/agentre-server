@@ -16,6 +16,7 @@ import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import i18n from "@/i18n";
 import { ApiError, api } from "@/lib/api";
 import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
+import { installCopyCommandModel } from "@/test/clipboard";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Device from "@/pages/Device";
 
@@ -389,27 +390,7 @@ describe("add-device guide · steps and commands", () => {
       value: undefined,
       configurable: true,
     });
-    // 按浏览器的规则算「这一刻按下复制会拿走什么」：焦点在可编辑控件里时是那个
-    // 控件的选区，否则是文档选区。断言不能打在 execCommand 的返回值上——Chromium
-    // 什么都没选中时照样返回 true（共享包的兜底正因此改走文档选区）。
-    const selectedAtCopy: string[] = [];
-    Object.defineProperty(document, "execCommand", {
-      configurable: true,
-      value: vi.fn((command: string) => {
-        if (command !== "copy") return false;
-        const active = document.activeElement;
-        const field =
-          active instanceof HTMLTextAreaElement ||
-          active instanceof HTMLInputElement
-            ? active.value.slice(
-                active.selectionStart ?? 0,
-                active.selectionEnd ?? 0,
-              )
-            : "";
-        selectedAtCopy.push(field || String(window.getSelection() ?? ""));
-        return true;
-      }),
-    });
+    const selectedAtCopy = installCopyCommandModel();
 
     renderGuide();
     fireEvent.click(screen.getByTestId("add-device-copy-install"));

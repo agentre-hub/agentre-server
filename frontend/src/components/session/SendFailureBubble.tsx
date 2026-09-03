@@ -1,7 +1,11 @@
 import { CircleAlert, Copy, RotateCw, TriangleAlert, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { Button, ChatMessage } from "@agentre-hub/agentre-ui";
+import {
+  Button,
+  ChatMessage,
+  copyTextWithToast,
+} from "@agentre-hub/agentre-ui";
 import type { SendFailureKind } from "@/lib/sessionView";
 
 /**
@@ -55,6 +59,25 @@ export default function SendFailureBubble({
   onDiscard: () => void;
 }) {
   const { t } = useTranslation();
+
+  /**
+   * 把这条没发出去的文本交给剪贴板。
+   *
+   * 走共享包的 `copyTextWithToast` 而不是自己摸 `navigator.clipboard`：本站是
+   * http 部署的常客，那里 Clipboard API 整个对象都不存在，直接摸（哪怕带可选链）
+   * 的结果是**一声不吭地什么都没发生**——按钮看着按下去了，粘贴出来是空的。
+   * 包里那层有 `execCommand` 兜底，复制得成。
+   *
+   * 回执只能是 toast：这条气泡站在转录流里，会随着新消息滚出视野，没有地方留
+   * 一个就地的「已复制」（设备指引那处的按钮一直在屏上，所以那边用得起内联态）。
+   */
+  async function copyText() {
+    await copyTextWithToast(failure.text, {
+      successTitle: t("session.sendFailure.copied"),
+      errorTitle: t("session.sendFailure.copyFailed"),
+    });
+  }
+
   // 只有 transport 那一类要先看一眼：另外两类都没走到对端，重发是干净的。
   const transport = failure.kind === "transport";
   const Icon =
@@ -102,7 +125,7 @@ export default function SendFailureBubble({
             size="xs"
             variant="ghost"
             data-testid="send-failure-copy"
-            onClick={() => void navigator.clipboard?.writeText(failure.text)}
+            onClick={() => void copyText()}
           >
             <Copy aria-hidden="true" className="size-3" />
             {t("session.sendFailure.copy")}

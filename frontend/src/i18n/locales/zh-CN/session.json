@@ -59,6 +59,8 @@
     "resend": "重发",
     "copy": "复制文本",
     "discard": "丢弃",
+    "copied": "已复制这条消息的文本",
+    "copyFailed": "复制这条消息的文本失败",
     "notSent": {
       "titleUnknown": "还没发出去",
       "body": "连接断了，这条从来没送到那台机器——重发是干净的。"
