@@ -38,6 +38,12 @@ func Task(ctx context.Context, _ *configs.Config) error {
 	// 而每分钟去问每台在线机器一遍，换来的只是同一天的计数被反复覆盖。锁的 TTL
 	// 照例略短于周期。
 	_, _ = cron.Default().AddFunc("*/10 * * * *", withPeriodLock("pull_activity_rollups", 9*time.Minute, crontab.PullActivityRollups))
+	// 控制台的 latest 来源（规格 2026-09-03-client-upgrade-guidance 决策 12）：半小时
+	// 一轮足够——发布本来就不是分钟级事件，缓存 TTL（release_svc.DefaultCacheTTL）
+	// 比这个周期更长，端点不会在两轮之间的空档掉回「不知道」。锁的 TTL 照例略短于
+	// 周期，这正是「多副本下不重复拉取」的落点：同一周期内两个副本各跑一次时，只有
+	// 抢到锁的那个会真的问上游。
+	_, _ = cron.Default().AddFunc("*/30 * * * *", withPeriodLock("pull_latest_release", 25*time.Minute, crontab.PullLatestRelease))
 	return nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/service/passkey_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/release_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
@@ -205,4 +206,53 @@ func TestApplyDBPool_WritesLimitsIntoSQLDB(t *testing.T) {
 
 	// database/sql 只把连接数上限暴露在 Stats 上,空闲上限与寿命没有公开读法。
 	assert.Equal(t, 7, sqlDB.Stats().MaxOpenConnections)
+}
+
+// release.cache_ttl 缺省时必须落到 release_svc.DefaultCacheTTL,而不是 0——0 会让
+// Redis 里的缓存值永不过期,一次拉取失败之后端点也就再也不会自然退回「不知道」。
+// enabled 缺省时必须是 false：cago 的 Scan 分不出「配置没写这个键」与「显式写了
+// false」,只能在两者中选一个安全的默认——未部署上游镜像的场景不该在没人要求的情况
+// 下就开始往外发请求。
+func TestLoadServerConfig_ReleaseHasSafeDefaults(t *testing.T) {
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{},
+	})))
+	assert.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.False(t, got.Release.Enabled)
+	assert.Equal(t, release_svc.DefaultCacheTTL, got.Release.CacheTTL)
+	assert.Empty(t, got.Release.BaseURL)
+}
+
+// 走真实的 YAML 文件源：configs/*.yaml 里写的是 server.release.*,键名对不上的话运维
+// 打开开关也不生效。
+func TestLoadServerConfig_ReleaseIsConfigurable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	assert.NoError(t, os.WriteFile(path, []byte(
+		"env: dev\ndebug: true\nsource: file\nserver:\n  release:\n"+
+			"    enabled: true\n    base_url: \"https://mirror.example/latest\"\n    cache_ttl: 5m\n"), 0o600))
+	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(path))
+	assert.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.True(t, got.Release.Enabled)
+	assert.Equal(t, "https://mirror.example/latest", got.Release.BaseURL)
+	assert.Equal(t, 5*time.Minute, got.Release.CacheTTL)
+}
+
+// 生产上一定装配:漏了它,/v1/release/latest 会在 release_svc.Release() 上拿到 nil,
+// 控制器眼下会把它当「不知道」处理而不炸,但那样这条链路就从来没有真的跑起来过。
+func TestRegisterDefaults_InstallsReleaseService(t *testing.T) {
+	testutils.Redis(t)
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	assert.NoError(t, err)
+	release_svc.SetDefault(nil)
+	t.Cleanup(func() { release_svc.SetDefault(nil) })
+
+	RegisterDefaults(&ServerConfig{Release: ReleaseConfig{CacheTTL: time.Hour}}, signer)
+
+	assert.NotNil(t, release_svc.Release(), "RegisterDefaults 必须装配 release 服务")
 }

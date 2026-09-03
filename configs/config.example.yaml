@@ -102,3 +102,15 @@ server:
       - "https://server.agentre.dev"
     # 每账号能注册多少把。超出时注册端点明确拒绝，不是静默忽略。
     max_per_account: 10
+  # 控制台的 latest 来源（规格 2026-09-03-client-upgrade-guidance 决策 12）：定时拉取
+  # 上游发布版本、写进跨副本共享的 Redis 缓存，/v1/release/latest 只读这份缓存。
+  # enabled 缺省是 false——内网部署的这台服务端未必连得到默认的上游，关闭时端点
+  # 如实回「不知道」，不是伪装成「已是最新」。
+  release:
+    enabled: false
+    # 留空则问 GitHub 的 releases/latest API（桌面端仓库）；内网部署把它指到自己的
+    # 镜像，形状需与该 API 一致（{"tag_name": "..."}）。
+    base_url: ""
+    # 缓存值的存活时间：持续拉取失败时，过期让端点从「上一次的旧值」自然退回
+    # 「不知道」，而不是无限期地回答一个可能早已过时的版本号。
+    cache_ttl: 1h

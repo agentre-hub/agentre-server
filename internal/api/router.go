@@ -16,6 +16,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/passkey_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
+	"github.com/agentre-hub/agentre-server/internal/controller/release_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/saved_session_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/sessionimport_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/stats_ctr"
@@ -94,6 +95,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	passkeyCtr := passkey_ctr.New(r.Cfg.InsecureCookies)
 	sessionImportCtr := sessionimport_ctr.New()
 	statsCtr := stats_ctr.New()
+	releaseCtr := release_ctr.New()
 
 	// 公开
 	g.Group("/").Bind(
@@ -148,6 +150,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		statsCtr.Overview,
 		statsCtr.Settings,
 		statsCtr.SaveSettings,
+		// 控制台的 latest 来源（决策 12）：只读、账号无关的全局事实，但眼下只有
+		// web 控制台会问它，与统计三条同组即可——不必新开一个鉴权面。
+		releaseCtr.Latest,
 	)
 
 	// 通行密钥：注册与管理一律要求浏览器会话 + CSRF。设备 JWT 那条路径上没有

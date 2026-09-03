@@ -31,6 +31,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/oauth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/passkey_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/release_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/saved_session_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/sessionimport_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
@@ -49,6 +50,22 @@ type ServerConfig struct {
 	AccountGate     AccountGateConfig `yaml:"account_gate"`
 	WebAuthn        WebAuthnConfig    `yaml:"webauthn"`
 	DBPool          DBPoolConfig      `yaml:"db_pool"`
+	Release         ReleaseConfig     `yaml:"release"`
+}
+
+// ReleaseConfig 是控制台「最新发布是多少」这条链路的配置（规格
+// 2026-09-03-client-upgrade-guidance 决策 12）：拉哪、多久缓存一次、要不要拉。
+type ReleaseConfig struct {
+	// Enabled 关闭时定时任务不发出任何上游请求，端点恒回「不知道」——内网部署的
+	// 浏览器（这里其实是服务端自己）未必连得到默认的上游。
+	Enabled bool `yaml:"enabled"`
+	// BaseURL 是上游发布信息的地址，空则退回 release_svc.DefaultBaseURL（GitHub
+	// releases/latest API）。内网部署把它指到自己的镜像，形状需与该 API 一致
+	// （decision 12：「内网部署可以指向自己的镜像」）。
+	BaseURL string `yaml:"base_url"`
+	// CacheTTL 是缓存值在 Redis 里的存活时间。拉取持续失败时，过期让端点从「上一次
+	// 的旧值」自然退回「不知道」。
+	CacheTTL time.Duration `yaml:"cache_ttl"`
 }
 
 // DBPoolConfig 是 database/sql 连接池的参数。cago 的 db 组件不认这几项(它的
@@ -235,6 +252,9 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	if out.AccountGate.CacheTTL <= 0 {
 		out.AccountGate.CacheTTL = user_svc.DefaultGateCacheTTL
 	}
+	if out.Release.CacheTTL <= 0 {
+		out.Release.CacheTTL = release_svc.DefaultCacheTTL
+	}
 	applyWebAuthnDefaults(out)
 	return out
 }
@@ -362,6 +382,15 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		RefreshTTL:      cfg.JWT.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}, signer))
+
+	// 控制台的 latest 来源（决策 12）：Enabled=false 时 Pull 与 Latest 都恒回
+	// 「不关心/不知道」，装配与否不影响这一点——这里始终装配，只是配置决定它会不会
+	// 真的发出请求。
+	release_svc.SetDefault(release_svc.New(
+		release_svc.Config{Enabled: cfg.Release.Enabled, CacheTTL: cfg.Release.CacheTTL},
+		release_svc.NewGithubUpstream(cfg.Release.BaseURL),
+		redis.Default(),
+	))
 
 	hostname, err := os.Hostname()
 	if err != nil {
