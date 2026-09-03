@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/turnstate"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
@@ -1088,4 +1089,231 @@ func TestApply_UserTurnStarted_MovesLifecycleToRunning(t *testing.T) {
 	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 2)))
 	r.flush()
 	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t), "跑完了还是要落回 idle")
+}
+
+// ── 审批与提问:等待输入同样跟着帧走 ────────────────────────────────────────
+
+// lastWaiting 是摘要最后一次落库时的「正在等你处理」。
+func (r *rig) lastWaiting(t *testing.T) bool {
+	t.Helper()
+	require.NotEmpty(t, r.upserts, "摘要从来没落过库")
+	return r.upserts[len(r.upserts)-1].WaitingForInput
+}
+
+func toolPermissionRequest(sid string, seq int64, requestID string) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
+		RuntimeEvent: &agentrewire.RuntimeEventNotification{
+			ConversationId: sid, Seq: seq,
+			Event: &agentrewire.RuntimeEventNotification_ToolPermissionRequest{
+				ToolPermissionRequest: &agentrewire.ToolPermissionRequest{
+					RequestId: requestID, ToolName: "Bash",
+				},
+			},
+		},
+	}}
+}
+
+func toolPermissionResolved(sid string, seq int64, requestID string) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
+		RuntimeEvent: &agentrewire.RuntimeEventNotification{
+			ConversationId: sid, Seq: seq,
+			Event: &agentrewire.RuntimeEventNotification_ToolPermissionResolved{
+				ToolPermissionResolved: &agentrewire.ToolPermissionResolved{
+					RequestId: requestID, Allowed: true,
+				},
+			},
+		},
+	}}
+}
+
+func userAskRequest(sid string, seq int64, requestID string) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
+		RuntimeEvent: &agentrewire.RuntimeEventNotification{
+			ConversationId: sid, Seq: seq,
+			Event: &agentrewire.RuntimeEventNotification_UserAskRequest{
+				UserAskRequest: &agentrewire.UserAskRequest{RequestId: requestID},
+			},
+		},
+	}}
+}
+
+func userAskResolved(sid string, seq int64, requestID string) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
+		RuntimeEvent: &agentrewire.RuntimeEventNotification{
+			ConversationId: sid, Seq: seq,
+			Event: &agentrewire.RuntimeEventNotification_UserAskResolved{
+				UserAskResolved: &agentrewire.UserAskResolved{RequestId: requestID},
+			},
+		},
+	}}
+}
+
+// Given 一条在跑、还没有人在等的会话;When 它发出一次工具审批请求;
+// Then 镜像那一行立刻是「正在等你处理」,审批落定之后又立刻不是。
+//
+// 「等待输入」的另一条来路是 Sync 的清单快照，而 Sync 只在出错 / 积压 / 保存名单
+// 变动 / 换连接时才跑：常驻循环上没有任何定期的清单请求。于是一条卡在审批上的对话
+// 在控制台的列表里始终是「运行中」，审批完成之后（如果快照恰好在等待时拍过）又会
+// 始终停在「等你处理」。这一列必须和生命周期一样跟着帧走。
+func TestApply_ToolPermission_TracksWaitingForInput(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.False(t, r.lastWaiting(t), "起手没有人在等")
+
+	require.NoError(t, r.mirror.Apply(ctx, toolPermissionRequest(conv42, 1, "req-1")))
+	r.flush()
+	assert.True(t, r.lastWaiting(t), "审批请求发出来了，列表得说得出「等你处理」")
+
+	require.NoError(t, r.mirror.Apply(ctx, toolPermissionResolved(conv42, 2, "req-1")))
+	r.flush()
+	assert.False(t, r.lastWaiting(t), "审批落定之后不该一直挂着")
+}
+
+// 提问（AskUserQuestion）与工具审批在 daemon 那侧是同一个判据的两半
+// （waitingForInput = 待决审批数 + 待决提问数 > 0），镜像这一侧同样两半都认。
+func TestApply_UserAsk_TracksWaitingForInput(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, userAskRequest(conv42, 1, "ask-1")))
+	r.flush()
+	assert.True(t, r.lastWaiting(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, userAskResolved(conv42, 2, "ask-1")))
+	r.flush()
+	assert.False(t, r.lastWaiting(t))
+}
+
+// Given 一条正等着审批的会话;When 这一轮结束了(用户中断 / 后端自己收场),而那次审批
+// 从来没有一条落定帧;Then 镜像那一行不再说「等你处理」。
+//
+// waiter 是**进程内、按轮**的（daemon 的 R11：落库的等待标志会活过重启，变成一个
+// 没人能回答的问题）。轮次一结束它就不可能还活着，所以终态帧就是这一列的兜底出口
+// ——否则一次没有落定帧的中断会把那一行永久钉在「等你处理」。
+func TestApply_TurnDone_ClearsWaitingForInput(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, toolPermissionRequest(conv42, 1, "req-1")))
+	r.flush()
+	require.True(t, r.lastWaiting(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 2)))
+	r.flush()
+	assert.False(t, r.lastWaiting(t), "轮次结束了，那次审批不可能还有人能回答")
+}
+
+// Given 对端的清单快照说这条会话正在等输入;When 还没有任何 waiter 帧到达;
+// Then 镜像照抄快照 —— 帧没说话时快照仍然是权威，本地不擅自清掉它。
+func TestSync_WaitingFromSnapshot_SurvivesUnrelatedFrames(t *testing.T) {
+	r := newRig(t)
+	waiting := runningSession(conv42, "写个爬虫")
+	waiting.WaitingForInput = true
+	r.relay.sessions = []*agentrewire.SessionSummary{waiting}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.True(t, r.lastWaiting(t))
+
+	// 一条与审批无关的实时帧不改这一列。
+	require.NoError(t, r.mirror.Apply(ctx, notification(conv42, 1, "hi")))
+	r.flush()
+	assert.True(t, r.lastWaiting(t))
+}
+
+// ── 跑挂的那一轮:镜像那一行落 failed,而不是被推回 idle ──────────────────────
+
+// runResultFailed 造一条**故障收场**的终态帧:带停止文案、没有中断 sentinel。
+func runResultFailed(sid string, seq int64, msg string) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
+		RunResultDone: &agentrewire.RunResultDoneNotification{
+			ConversationId: sid, Seq: seq, StopErrorMessage: msg,
+		},
+	}}
+}
+
+// runResultAborted 造一条**用户按了停止**的终态帧:同样带文案,但带中断 sentinel。
+func runResultAborted(sid string, seq int64) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
+		RunResultDone: &agentrewire.RunResultDoneNotification{
+			ConversationId: sid, Seq: seq,
+			StopErrorMessage: "aborted", StopErrorCode: turnstate.AbortedCode,
+		},
+	}}
+}
+
+// Given 一条在跑的会话;When 它以故障收场;Then 镜像那一行是 failed。
+//
+// followTurn 此前把**每一条**终态帧都翻译成 idle:哪怕 agentred 刚把自己那一行落成
+// failed,紧接着的这次镜像写入也会原地把它冲回 idle —— 跑挂在控制台的列表里因此照样
+// 看不出来。判据走共享 module 的 turnstate.IsFailure,与 agentred 落行时用的是同一句话。
+func TestApply_TurnFailed_LandsFailedLifecycle(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultFailed(conv42, 1, "exit status 1")))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleFailed, r.lastLifecycle(t),
+		"跑挂的那一轮不能被推回 idle")
+}
+
+// Given 用户自己按了停止;When 那一轮收场;Then 镜像照旧落 idle。
+//
+// 中断在线上同样带停止文案,只有 sentinel 分得开。不认这一格的话,每点一次「停止」
+// 都会在列表里留下一条红着的会话。
+func TestApply_TurnAborted_StaysIdle(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultAborted(conv42, 1)))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t),
+		"用户按的停止不是故障")
+}
+
+// Given 一条上一轮跑挂的会话;When 用户再发一轮;Then 它回到 running,跑完落回 idle。
+// failed 只是一个关于上一轮的事实,不是终点 —— 与 interrupted 的分界正在这里。
+func TestApply_AfterFailure_NextTurnClearsIt(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultFailed(conv42, 1, "boom")))
+	r.flush()
+	require.Equal(t, relaywire.SessionLifecycleFailed, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, turnStarted(conv42, 2)))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 3)))
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t))
+}
+
+// 跑挂的那一轮同样把待决清空:waiter 是按轮的,轮结束它不可能还有人能回答。
+func TestApply_TurnFailed_ClearsWaitingForInput(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, toolPermissionRequest(conv42, 1, "req-1")))
+	r.flush()
+	require.True(t, r.lastWaiting(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultFailed(conv42, 2, "boom")))
+	r.flush()
+	assert.False(t, r.lastWaiting(t))
 }

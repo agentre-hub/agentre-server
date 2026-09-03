@@ -14,8 +14,12 @@ import (
 const (
 	CodeMethodNotFound int32 = -32601
 
-	SessionLifecycleRunning     = "running"
-	SessionLifecycleIdle        = "idle"
+	SessionLifecycleRunning = "running"
+	SessionLifecycleIdle    = "idle"
+	// SessionLifecycleFailed 是「上一轮以故障收场」。它与 Interrupted 是两件事：
+	// Interrupted 是自锁终态（本站据它一律不去 attach，见 lib/relayClient），
+	// Failed 只是一个关于上一轮的事实——会话照旧接得上、发得出下一轮。
+	SessionLifecycleFailed      = "failed"
 	SessionLifecycleInterrupted = "interrupted"
 
 	DefaultSessionPullLimit = 200

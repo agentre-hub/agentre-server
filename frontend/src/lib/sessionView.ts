@@ -233,6 +233,8 @@ function lifecycleLabel(state: string, t: Translate): string {
       return t("session.list.idle");
     case "interrupted":
       return t("session.list.interrupted");
+    case "failed":
+      return t("session.list.failed");
     default:
       // 不认识的旧状态如实显示原文，不猜。
       return state;
@@ -276,7 +278,11 @@ export function sessionTitle(
  * 会话状态 → 共享包 `SessionRow` / `StatusDot` 的 AgentStatus。
  *
  * 这是本站关于「这条会话算什么状态」的**唯一**判定：等待输入盖过一切、
- * running=运行中、interrupted=出错，其余（idle 与不认识的旧状态）=闲置。
+ * running=运行中、interrupted / failed=出错，其余（idle 与不认识的旧状态）=闲置。
+ *
+ * failed 与 interrupted 在**点上**同色而在**文字上**分家，因为它们回答的不是同一个
+ * 问题：点回答「这条出没出错」（两者都出了），文字回答「它此刻怎么了」——interrupted
+ * 是接不回实时流的自锁终态，failed 只是上一轮的结局，会话照旧发得出下一轮。
  */
 export function toAgentStatus(s: {
   lifecycleState: string;
@@ -287,6 +293,7 @@ export function toAgentStatus(s: {
     case "running":
       return "running";
     case "interrupted":
+    case "failed":
       return "error";
     default:
       return "idle";

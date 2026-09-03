@@ -509,13 +509,34 @@ describe("统一会话索引", () => {
    * 桌面端不开——那一端的状态由状态点承担。
    */
   it("宿主要求时行尾摆本地化状态徽标（移动端兜底）", () => {
+    // 有理由时徽标说的就是**理由**（与桌面端同一条：共享包的行尾优先说「为什么需要
+    // 你」）。不能两样都摆：「审批」与「运行中」同时出现在一行里是自相矛盾的两句话。
     renderIndex({
       axis: "time",
       rows: [row({ key: "a", waitingForInput: true })],
       rowStatusLabel: true,
     });
 
-    expect(screen.getByText("Waiting for your input")).toBeTruthy();
+    expect(screen.getByText("Approval")).toBeTruthy();
+  });
+
+  it("没有理由可说时退回生命周期的本地化说法", () => {
+    // 兜底本身仍在（规格「已知的可见变化」3：共享 StatusDot 的可访问名只剩英文状态
+    // 码，行上得有一处看得见的本地化状态）。读过的闲置会话就是这一档。
+    renderIndex({
+      axis: "time",
+      rows: [
+        row({
+          key: "a",
+          lifecycleState: "idle",
+          updatedAt: 1_000,
+          lastReadAt: 2_000,
+        }),
+      ],
+      rowStatusLabel: true,
+    });
+
+    expect(screen.getByText("Idle")).toBeTruthy();
   });
 
   it("宿主没要求时不摆（桌面端行尾只有最后活动时间）", () => {
@@ -833,6 +854,147 @@ describe("统一会话索引：筛选 chips", () => {
 });
 
 /**
+ * 行上的 attention 记号。
+ *
+ * 判定与文案都走共享包（`computeAttention` / `reasonToDisplayStatus` /
+ * `reasonToPillText`），与桌面端逐字同源：此前本站只有 chip 上那一个未读总数，看得见
+ * 「有 3 条未读」却看不出是**哪三条**；而「上一轮跑挂了」在列表里干脆没有说法。
+ *
+ * 本站只保留自己的排布：记号摆在行尾、`<time>` 之后，语义时间标签不动。
+ */
+describe("统一会话索引：行上的 attention 记号", () => {
+  const unreadRow = row({
+    key: "unread",
+    conversationId: "u1",
+    title: "还没看",
+    lifecycleState: "idle",
+    updatedAt: 2_000,
+    lastReadAt: 1_000,
+  });
+  const readRow = row({
+    key: "read",
+    conversationId: "r1",
+    title: "看过了",
+    lifecycleState: "idle",
+    updatedAt: 1_000,
+    lastReadAt: 2_000,
+  });
+
+  it("闲着但有新东西没看过的行带「未读」，读过的那条什么都不带", () => {
+    renderIndex({ axis: "time", rows: [unreadRow, readRow] });
+
+    expect(screen.getByTestId("row-attention-unread").textContent).toBe(
+      "Unread",
+    );
+    expect(screen.queryByTestId("row-attention-read")).toBeNull();
+  });
+
+  it("从没打开过的行（没有已读时刻）也算未读", () => {
+    renderIndex({
+      axis: "time",
+      rows: [
+        row({
+          key: "never",
+          conversationId: "n1",
+          title: "没开过",
+          lifecycleState: "idle",
+        }),
+      ],
+    });
+
+    expect(screen.getByTestId("row-attention-never")).toBeTruthy();
+  });
+
+  it("还没保存进账号的行不算未读——账号里压根没有它", () => {
+    renderIndex({
+      axis: "time",
+      rows: [
+        row({
+          key: "unsaved",
+          conversationId: "s1",
+          title: "机器上的",
+          lifecycleState: "idle",
+          saved: false,
+          updatedAt: 2_000,
+          lastReadAt: 0,
+        }),
+      ],
+    });
+
+    expect(screen.queryByTestId("row-attention-unsaved")).toBeNull();
+  });
+
+  it("跑挂过、还没看的那条说「出错」——列表里必须看得出上一轮的结局", () => {
+    renderIndex({
+      axis: "time",
+      rows: [
+        row({
+          key: "failed",
+          conversationId: "f1",
+          title: "跑挂了",
+          lifecycleState: "failed",
+          updatedAt: 2_000,
+          lastReadAt: 1_000,
+        }),
+      ],
+    });
+
+    expect(screen.getByTestId("row-attention-failed").textContent).toBe(
+      "Error",
+    );
+  });
+
+  it("有东西等你按时说「审批」，它盖过未读", () => {
+    renderIndex({
+      axis: "time",
+      rows: [
+        row({
+          key: "waiting",
+          conversationId: "w1",
+          title: "等你批",
+          lifecycleState: "running",
+          waitingForInput: true,
+          updatedAt: 2_000,
+          lastReadAt: 1_000,
+        }),
+      ],
+    });
+
+    expect(screen.getByTestId("row-attention-waiting").textContent).toBe(
+      "Approval",
+    );
+  });
+
+  it("在跑的那条不摆记号——它自己那颗点已经在说这件事", () => {
+    renderIndex({
+      axis: "time",
+      rows: [
+        row({
+          key: "running",
+          conversationId: "g1",
+          title: "跑着呢",
+          lifecycleState: "running",
+          updatedAt: 2_000,
+          lastReadAt: 1_000,
+        }),
+      ],
+    });
+
+    expect(screen.queryByTestId("row-attention-running")).toBeNull();
+  });
+
+  it("记号的文案跟着语言走", async () => {
+    renderIndex({ axis: "time", rows: [unreadRow] });
+    expect(screen.getByTestId("row-attention-unread").textContent).toBe(
+      "Unread",
+    );
+
+    await i18n.changeLanguage("zh-CN");
+    expect(screen.getByTestId("row-attention-unread").textContent).toBe("未读");
+  });
+});
+
+/**
  * 保存与删除（规格 2026-08-18 决策 5 / 6 / 11）。
  *
  * 「保存」只摆在**还没进账号**的那些行上——机器轴选中一台在线机器时列出的那些。
@@ -1140,7 +1302,22 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
   });
 
   it("收起来的组头上仍看得见「等你处理」那条（收起不等于把提醒也收掉）", () => {
-    const { container } = renderIndex({ axis: "project", rows });
+    const { container } = renderIndex({
+      axis: "project",
+      rows: [
+        ...rows,
+        // 读过的闲会话没有任何理由需要你，它才是不该冒出来的那种。
+        row({
+          key: "quiet",
+          conversationId: "3",
+          title: "读过的闲会话",
+          projectSyncId: "p-server",
+          lifecycleState: "idle",
+          updatedAt: 1_000,
+          lastReadAt: 2_000,
+        }),
+      ],
+    });
 
     fireEvent.click(groupToggleFor("agentre-server"));
 
@@ -1148,7 +1325,41 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
       '[data-slot="agent-attention-bubble"]',
     );
     expect(bubble?.textContent).toContain("等你批");
-    expect(bubble?.textContent).not.toContain("第一条");
+    expect(bubble?.textContent).not.toContain("读过的闲会话");
+  });
+
+  it("跑挂过的那条也冒出来——气泡认的是 attention 判定，不只是「等你按」", () => {
+    // 此前这里写死 `r.waitingForInput`：一条上一轮跑挂的对话在收起的组里彻底消失。
+    // 判定改走共享包之后，出错与未读同样是「需要你」的理由（与桌面端同一套词汇）。
+    const { container } = renderIndex({
+      axis: "project",
+      rows: [
+        row({
+          key: "boom",
+          conversationId: "b1",
+          title: "跑挂了",
+          lifecycleState: "failed",
+          updatedAt: 2_000,
+          lastReadAt: 1_000,
+        }),
+        row({
+          key: "quiet",
+          conversationId: "q1",
+          title: "读过的闲会话",
+          lifecycleState: "idle",
+          updatedAt: 1_000,
+          lastReadAt: 2_000,
+        }),
+      ],
+    });
+
+    fireEvent.click(groupToggleFor("agentre-server"));
+
+    const bubble = container.querySelector(
+      '[data-slot="agent-attention-bubble"]',
+    );
+    expect(bubble?.textContent).toContain("跑挂了");
+    expect(bubble?.textContent).not.toContain("读过的闲会话");
   });
 
   it("真数大于已列条数时出现「查看全部 N」，N 用服务端给的那个数", () => {

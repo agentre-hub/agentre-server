@@ -16,6 +16,7 @@ import {
   ProjectGroupHeader,
   ProjectHeaderActions,
   ProjectHeaderContextMenu,
+  reasonToDisplayStatus,
   RowLeadingSlot,
   RowSecondaryLine,
   SessionGroup,
@@ -66,6 +67,7 @@ import {
   toAgentStatus,
   type SessionFilter,
 } from "@/lib/sessionView";
+import { attentionPillText, attentionReasonOf } from "@/lib/attentionAdapter";
 import SessionListSkeleton from "@/components/session/SessionListSkeleton";
 
 /**
@@ -561,15 +563,40 @@ function GroupHeader({
 }
 
 /**
+ * 行上的 attention 记号：一段短文字，说的是「这一行为什么需要你」。
+ *
+ * 判定与文案全在共享包里（见 `lib/attentionAdapter`），与桌面端逐字同源。此前这里是
+ * 本站手画的一枚圆点，只认「未读」一件事 —— 而「上一轮跑挂了」在列表里没有任何说法。
+ *
+ * 摆在行尾、`<time>` 之后：本站的行尾有一个带 `dateTime` 的语义时间标签（桌面端那一
+ * 端是纯文本），排布因此留在宿主，不跟着包的 `trailingLabel` 走。
+ *
+ * 「在跑」没有记号：那一档的状态点已经在说这件事，再加一段字是重复。
+ */
+function AttentionPill({ testId, text }: { testId: string; text: string }) {
+  return (
+    <span
+      data-testid={testId}
+      className="shrink-0 rounded-sm bg-secondary px-1 text-3xs font-medium text-muted-foreground"
+    >
+      {text}
+    </span>
+  );
+}
+
+/**
  * 一行在共享包 attention 气泡里的展示模型。气泡里的行只用来「看见还有这么一条在
  * 等你」并点进去，因此不带右键删除与行尾动作——那些要的是完整的行上下文。
  */
 function attentionModel(row: MirrorIndexGroupRow, href?: string) {
+  const reason = attentionReasonOf(row);
   return {
     id: row.key,
-    status: toAgentStatus(row),
+    status: reasonToDisplayStatus(reason, toAgentStatus(row)),
     title: row.title,
-    attentionRank: "waiting",
+    // rank 是**真的判定**，不再硬写一个 "waiting"：气泡里冒出来的那几条因此说得出
+    // 各自的理由（等你批 / 出错 / 未读），与桌面端同一套词汇。
+    ...(reason !== null ? { attentionRank: reason } : {}),
     href,
   };
 }
@@ -1054,73 +1081,95 @@ export default function SessionIndex({
    * 全部 N」弹层里翻出来的那些。两处各写一遍就会长成两种行。
    */
   const renderRow = useCallback(
-    (row: MirrorIndexGroupRow) => (
-      <RowContextMenu
-        key={row.key}
-        // 删除只对已保存的行成立：没保存过的对话账号里没有它。
-        onDelete={
-          onDelete && row.saved !== false ? () => onDelete(row) : undefined
-        }
-      >
-        <SessionRow
-          status={toAgentStatus(row)}
-          title={row.title}
-          // 移动端的本地化状态兜底（规格「已知的可见变化」3）。
-          trailingLabel={
-            rowStatusLabel ? sessionStatusLabel(row, t) : undefined
+    (row: MirrorIndexGroupRow) => {
+      // 判定每行只算一次：状态点、移动端行尾与桌面端那段记号读的必须是同一个答案，
+      // 分头各算一遍迟早长出「点说等你、字说闲着」。
+      const reason = attentionReasonOf(row);
+      const pill = attentionPillText(reason);
+      return (
+        <RowContextMenu
+          key={row.key}
+          // 删除只对已保存的行成立：没保存过的对话账号里没有它。
+          onDelete={
+            onDelete && row.saved !== false ? () => onDelete(row) : undefined
           }
-          selected={selectedKey === row.key}
-          href={
-            row.deviceId === undefined
-              ? undefined
-              : sessionPath(row.deviceId, row.conversationId)
-          }
-          renderLink={({ href, children, ...rest }) => (
-            <Link to={href} data-nav-target={row.key} {...rest}>
-              {children}
-            </Link>
-          )}
-          onClick={
-            onSelect
-              ? (e) => {
-                  e.preventDefault();
-                  // 点行 = 把键盘光标也挪过来：↑↓ 接着从这一条走。
-                  setCursorKey(row.key);
-                  openRow(row);
-                }
-              : undefined
-          }
-          leading={
-            <RowLeadingSlot
-              axis={axis}
-              agent={row.agent}
-              project={row.project}
-            />
-          }
-          secondaryLabel={
-            <RowSecondaryLine
-              axis={axis}
-              agent={row.agent}
-              project={row.project}
-              machine={row.machine}
-              // 项目那一维缺席时如实写「随手对话」并把字形置灰（决策 7）：
-              // 与它在项目轴上的兜底组头同一句文案，也与桌面端同源。
-              freeLabel={t("sessionIndex.group.unassignedProject")}
-              testId={`row-secondary-${row.key}`}
-            />
-          }
-          trailing={<LastActive ms={row.updatedAt} locale={i18n.language} />}
-          rowActions={
-            onSave && row.saved === false ? (
-              <SaveButton
-                testId={`row-save-${row.key}`}
-                onSave={() => onSave(row)}
+        >
+          <SessionRow
+            // 点的档位由 attention 判定投影而来，不是原始生命周期：一条闲着但有新东西
+            // 没看过的会话画的是「等你」那一档 —— 与桌面端同一条（共享包
+            // `reasonToDisplayStatus`）。
+            status={reasonToDisplayStatus(reason, toAgentStatus(row))}
+            title={row.title}
+            // 移动端的本地化状态兜底（规格「已知的可见变化」3）。行尾那段记号在移动端
+            // 不另摆一份：有理由时它就是理由本身，没有才退回生命周期的说法——否则
+            // 「未读」与「闲置」会在同一行里同时出现，自相矛盾。
+            trailingLabel={
+              rowStatusLabel ? (pill ?? sessionStatusLabel(row, t)) : undefined
+            }
+            selected={selectedKey === row.key}
+            href={
+              row.deviceId === undefined
+                ? undefined
+                : sessionPath(row.deviceId, row.conversationId)
+            }
+            renderLink={({ href, children, ...rest }) => (
+              <Link to={href} data-nav-target={row.key} {...rest}>
+                {children}
+              </Link>
+            )}
+            onClick={
+              onSelect
+                ? (e) => {
+                    e.preventDefault();
+                    // 点行 = 把键盘光标也挪过来：↑↓ 接着从这一条走。
+                    setCursorKey(row.key);
+                    openRow(row);
+                  }
+                : undefined
+            }
+            leading={
+              <RowLeadingSlot
+                axis={axis}
+                agent={row.agent}
+                project={row.project}
               />
-            ) : undefined
-          }
-        />
-      </RowContextMenu>
-    ),
+            }
+            secondaryLabel={
+              <RowSecondaryLine
+                axis={axis}
+                agent={row.agent}
+                project={row.project}
+                machine={row.machine}
+                // 项目那一维缺席时如实写「随手对话」并把字形置灰（决策 7）：
+                // 与它在项目轴上的兜底组头同一句文案，也与桌面端同源。
+                freeLabel={t("sessionIndex.group.unassignedProject")}
+                testId={`row-secondary-${row.key}`}
+              />
+            }
+            trailing={
+              <>
+                <LastActive ms={row.updatedAt} locale={i18n.language} />
+                {/* 移动端行尾已经有一份（trailingLabel），这里不再摆第二份。 */}
+                {!rowStatusLabel && pill !== null && (
+                  <AttentionPill
+                    testId={`row-attention-${row.key}`}
+                    text={pill}
+                  />
+                )}
+              </>
+            }
+            rowActions={
+              onSave && row.saved === false ? (
+                <SaveButton
+                  testId={`row-save-${row.key}`}
+                  onSave={() => onSave(row)}
+                />
+              ) : undefined
+            }
+          />
+        </RowContextMenu>
+      );
+    },
     [
       axis,
       selectedKey,
@@ -1370,12 +1419,15 @@ export default function SessionIndex({
                     onImport={setImportPrefill}
                   />
                 )}
-                // 收起来时组头上仍露出这一组里在等你处理的那些：收起的是列表，
+                // 收起来时组头上仍露出这一组里**需要你**的那些：收起的是列表，
                 // 不是提醒。展开时气泡为空——那几条已经在下面的列表里了，再冒一遍
                 // 就是同一条会话在同一个组里出现两次。
+                //
+                // 判据是 attention 判定而不是「等你按」一件事：一条上一轮跑挂的
+                // 对话此前在收起的组里彻底消失，而它恰恰是最该冒出来的那种。
                 attentionSessions={[]}
                 collapsedAttentionSessions={group.rows
-                  .filter((r) => r.waitingForInput)
+                  .filter((r) => attentionReasonOf(r) !== null)
                   .map((r) =>
                     attentionModel(
                       r,

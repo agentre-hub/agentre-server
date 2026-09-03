@@ -157,6 +157,12 @@ type trackedSession struct {
 	// 就是这条对话此后一帧都收不到，而 interrupted 恰恰是「接不上」的常态来源。
 	attached bool
 
+	// waiters 是从实时帧上看见、此刻还没落定的待决（审批 / 提问）请求标识。
+	//
+	// nil 的语义是「帧还没就这一列说过话」，这时清单快照仍然是权威 —— 见
+	// followWaiter。空但非 nil 表示帧说过话，而此刻一个待决都没有。
+	waiters map[string]struct{}
+
 	// 摘要攒批的窗口状态，形状与 notify.go 的「首发 + 尾补」一致，见 touchSummary。
 	flushMu        sync.Mutex
 	flushOpen      bool
@@ -218,6 +224,9 @@ func (ts *trackedSession) setSummary(s *agentrewire.SessionSummary) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.summary = proto.Clone(s).(*agentrewire.SessionSummary)
+	// 新快照是对端此刻的原话，比本地从帧上攒出来的那份新：待决集合就此作废，
+	// 这一列重新由快照说了算（followWaiter 的 nil 语义）。
+	ts.waiters = nil
 }
 
 // New builds a mirror for one account over one machine's connection. The
@@ -391,7 +400,8 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		// 连号时才看得见 —— 漏一帧就把这条对话永久钉在「运行中」，因为紧接着的
 		// saveSummary 写的是清单快照里那个已经过期的生命周期。到达的这一帧就是
 		// 最新的那个边界（补回来的都比它早）。
-		ts.followTurn(method)
+		ts.followTurn(notification, method)
+		ts.followWaiter(notification)
 		// 补洞是罕见路径，而且刚跨过一段：游标立刻钉住，不进攒批。
 		return m.saveSummary(ctx, ts)
 	default:
@@ -403,7 +413,8 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 			return err
 		}
 		ts.advanceTo(seq)
-		ts.followTurn(method)
+		ts.followTurn(notification, method)
+		ts.followWaiter(notification)
 		return m.touchSummary(ctx, ts)
 	}
 }
@@ -423,12 +434,22 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 // 在左栏看不出来：整轮里那条对话都是灰的，跑完了被推回 idle，还是灰的。turnStarted
 // （wire 2026-09-02 新增）补的正是这一半。
 //
-// 只动这一列：等待输入与标题之类仍然只由清单说了算，帧里没有它们的答案。
-func (ts *trackedSession) followTurn(method string) {
+// 轮次**怎么收的场**同样只有帧说得出来：agentred 已经把自己那一行落成 failed 了
+// （handlers.settleSession），但清单快照要等下一次 Sync 才来，而这里紧接着的一次
+// 写入会拿快照里那个过期的生命周期把它盖掉 —— 所以终态帧要分两档翻译，不能一律
+// 翻成 idle。判据与 agentred 落行时用的是同一句话（turnstate.IsFailure）。
+//
+// 只动这一列：标题之类仍然只由清单说了算，帧里没有它们的答案。
+func (ts *trackedSession) followTurn(
+	notification *agentrewire.RpcNotification, method string,
+) {
 	var state string
 	switch method {
 	case notifyRunResultDone, notifyAutonomousTurnDone:
 		state = relaywire.SessionLifecycleIdle
+		if turnFailed(notification) {
+			state = relaywire.SessionLifecycleFailed
+		}
 	case notifyAutonomousTurnStarted, notifyTurnStarted:
 		state = relaywire.SessionLifecycleRunning
 	default:
@@ -444,6 +465,56 @@ func (ts *trackedSession) followTurn(method string) {
 	// 这里跟着同一条纪律。
 	next := proto.Clone(ts.summary).(*agentrewire.SessionSummary)
 	next.LifecycleState = state
+	// 轮次一结束，那一轮的待决就不可能还有人能回答：waiter 是**进程内、按轮**的
+	// （daemon 的 R11：落库的等待标志会活过重启，变成一个没人能回答的问题）。终态帧
+	// 因此是这一列的兜底出口 —— 少了它，一次没有落定帧的收场（用户中断、后端自己
+	// 断掉）会把那一行永久钉在「等你处理」。
+	if state == relaywire.SessionLifecycleIdle || state == relaywire.SessionLifecycleFailed {
+		ts.waiters = map[string]struct{}{}
+		next.WaitingForInput = false
+	}
+	ts.summary = next
+}
+
+// followWaiter 让镜像里的「正在等你处理」跟着审批 / 提问的两个边界走，理由与
+// followTurn 同一条：这一列的另一条来路是 Sync 的清单快照，而常驻循环上没有任何
+// 定期的清单请求（Sync 只在出错 / 积压 / 保存名单变动 / 换连接时才跑）。不管它，
+// 一条卡在审批上的对话在控制台列表里始终是「运行中」，而快照恰好在等待时拍过的
+// 那些又会始终停在「等你处理」——两个方向都错，而且都是长期错。
+//
+// 按**请求标识**记一个集合而不是翻一个布尔：同一条会话上可以先后有多次待决，只按
+// 「来过请求」置真、「来过落定」置假的话，两次交错就会把还在等的那一次抹掉。
+//
+// nil 与空集合是两件事：nil = 帧还没就这一列说过话，快照仍是权威（对端在我们接上
+// 之前就已经等在那儿了，那件事只有快照知道）；空集合 = 帧说过话，此刻没有待决。
+// 因此**落定帧也建集合**——它清掉的可能正是快照带来的那一次等待。
+func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification) {
+	kind, requestID := waiterSignal(notification)
+	if kind == waiterNone {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.summary == nil {
+		return
+	}
+	if ts.waiters == nil {
+		ts.waiters = map[string]struct{}{}
+	}
+	switch kind {
+	case waiterOpened:
+		ts.waiters[requestID] = struct{}{}
+	case waiterClosed:
+		delete(ts.waiters, requestID)
+	case waiterNone:
+		return
+	}
+	waiting := len(ts.waiters) > 0
+	if ts.summary.GetWaitingForInput() == waiting {
+		return
+	}
+	next := proto.Clone(ts.summary).(*agentrewire.SessionSummary)
+	next.WaitingForInput = waiting
 	ts.summary = next
 }
 
@@ -455,9 +526,10 @@ func (ts *trackedSession) followTurn(method string) {
 //
 // 为什么这里可以攒批 —— Apply 的注释原本说「没有一个诚实的攒批点」：
 //
-//   - 摘要那一行在 **Apply 这条路上唯一会变的字段就是游标**。元数据只由 Sync 经
-//     setSummary 改，实时帧一个字段都动不了，所以窗口里被压住的那些次写的是同一行
-//     的同一个值，只有 latest_seq 在动。
+//   - 摘要那一行在 Apply 这条路上会变的字段只有游标、生命周期（followTurn）与
+//     「等你处理」（followWaiter）三格。窗口里被压住的那些次写的是同一行的同一个
+//     值，而这三格最终都由**窗口结束时那次尾补**带出去 —— 用户看到的因此最多晚
+//     一个窗口，且从不是一个中间态。其余元数据只由 Sync 经 setSummary 改。
 //   - latest_seq 只有一个读者：storedCursor，也就是重启后从哪儿接着拉。没有任何
 //     用户可见的东西读它。它落后一点的代价 Apply 的注释自己写着 —— 「one idempotent
 //     re-pull, nothing more」（帧表是 OnConflict DoNothing）。

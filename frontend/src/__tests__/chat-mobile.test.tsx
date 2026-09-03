@@ -374,7 +374,10 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     renderChat();
 
     expect(await screen.findByText("等你批")).toBeTruthy();
-    expect(screen.getByText("Waiting for your input")).toBeTruthy();
+    // 徽标说的是**这一行为什么需要你**（共享包的 attention 文案），不再是生命周期
+    // 的原话：一条正等着审批的对话，「审批」比「运行中」更接近用户要知道的事。
+    // 守的那一条没变——行上仍有一处看得见的本地化状态，不只靠颜色。
+    expect(screen.getByText("Approval")).toBeTruthy();
   });
 
   // 搜索与筛选同一条口径：只收窄行。搜不到不等于账号里没有对话——把整页翻成

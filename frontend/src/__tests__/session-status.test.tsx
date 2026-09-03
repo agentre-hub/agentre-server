@@ -29,8 +29,10 @@ import {
   formatTokens,
   matchesRowSearch,
   matchesSessionFilter,
+  sessionStatusLabel,
   sessionTitle,
   statusDotClass,
+  toAgentStatus,
 } from "@/lib/sessionView";
 import { RelayError, type RelayState } from "@/lib/relayClient";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -660,9 +662,32 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
     expect(statusDotClass({ lifecycleState: "interrupted" })).toBe(
       dot("error"),
     );
+    // failed 是 wire 上「上一轮跑挂了」那一档（与 interrupted 分家：后者是自锁
+    // 终态、接不回实时流，前者只是一个关于上一轮的事实）。两者在**点上**同色，
+    // 因为用户要看的都是「这条出过错」。
+    expect(statusDotClass({ lifecycleState: "failed" })).toBe(dot("error"));
     expect(statusDotClass({ lifecycleState: "idle" })).toBe(dot("idle"));
     // 不认识的旧状态如实归灰,不猜。
     expect(statusDotClass({ lifecycleState: "weird" })).toBe(dot("idle"));
+  });
+
+  /**
+   * 「上一轮跑挂了」在列表里必须说得出来。
+   *
+   * 此前 agentred 无论那一轮怎么收的场都把会话落回 idle，跑挂与跑成功在列表里长得
+   * 一模一样；桌面端记了（AgentStatus="error"），但过线时编码成 `interrupted`，
+   * 而消费方对 interrupted 的纪律是不去 attach——跑挂一次就再也接不上实时流。
+   * `failed` 是这两件事共同的出路。
+   */
+  it("failed:状态点是出错这一档，文字是它自己的说法", () => {
+    expect(toAgentStatus({ lifecycleState: "failed" })).toBe("error");
+    // 等你处理仍然盖过它：有东西挡在那儿等你按，比「上一轮的结局」更要紧。
+    expect(
+      toAgentStatus({ lifecycleState: "failed", waitingForInput: true }),
+    ).toBe("waiting");
+    expect(
+      sessionStatusLabel({ lifecycleState: "failed" }, i18n.t.bind(i18n)),
+    ).toBe("Failed");
   });
 });
 

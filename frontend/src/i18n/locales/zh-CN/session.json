@@ -88,6 +88,7 @@
     "running": "运行中",
     "idle": "空闲",
     "interrupted": "已中断",
+    "failed": "出错",
     "waiting": "正在等待你的输入",
     "untitled": "{{cwd}} · {{backend}} · {{status}}"
   },
