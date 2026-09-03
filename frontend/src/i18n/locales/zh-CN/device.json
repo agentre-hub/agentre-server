@@ -157,6 +157,7 @@
     "action": {
       "default": "升级 agentred",
       "upgrading": "正在升级…",
+      "requesting": "正在准备…",
       "forceLabel": "仍要升级",
       "upToDate": "已是最新（{{version}}）"
     },
@@ -167,6 +168,8 @@
       "confirm": "仍然升级"
     },
     "status": {
+      "requestingTitle": "正在准备升级",
+      "requestingBody": "那台机器正在取新版本并校验，可能要几分钟。这段时间不用再点。",
       "upgradingTitle": "正在升级到 {{version}}",
       "upgradingBody": "重启一次，通常不到 1 分钟。",
       "successTitle": "升级完成",

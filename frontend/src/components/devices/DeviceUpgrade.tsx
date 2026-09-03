@@ -147,6 +147,14 @@ function actionLabel(
   phase: UpgradePhase,
   t: (key: string, opts?: Record<string, unknown>) => string,
 ): { label: string; disabled: boolean; secondary: boolean } {
+  // 调用还在飞与升级已受理，主动作是同一件事：不可再点。差别只在它此刻说什么。
+  if (phase.kind === "requesting") {
+    return {
+      label: t("device.upgrade.action.requesting"),
+      disabled: true,
+      secondary: false,
+    };
+  }
   if (phase.kind === "upgrading") {
     return {
       label: t("device.upgrade.action.upgrading"),
@@ -197,6 +205,20 @@ function UpgradeStatus({
   deviceID: number;
 }) {
   const { t } = useTranslation();
+  if (phase.kind === "requesting") {
+    // 这一段可以长达几分钟：受理判定在那台机器上把下载与校验都做完了才应答。说清
+    // 楚它在做什么，比一个转着的图标更能让人不去点第二次。
+    return (
+      <div className="flex flex-col gap-1">
+        <span className="text-xs font-semibold text-primary-text">
+          {t("device.upgrade.status.requestingTitle")}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {t("device.upgrade.status.requestingBody")}
+        </span>
+      </div>
+    );
+  }
   if (phase.kind === "upgrading") {
     return (
       <div className="flex flex-col gap-1">

@@ -579,7 +579,10 @@ type UpgradeReply = {
 function mockConsole(opts: {
   devices: () => unknown[];
   latest?: { known: boolean; version?: string };
-  upgrade?: (body: { device_id: number; force?: boolean }) => UpgradeReply;
+  upgrade?: (body: {
+    device_id: number;
+    force?: boolean;
+  }) => UpgradeReply | Promise<UpgradeReply>;
   upgradeCalls?: { device_id: number; force?: boolean }[];
 }) {
   mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
@@ -867,6 +870,44 @@ describe("一键升级走完整条路", () => {
       { device_id: 1, force: false },
       { device_id: 1, force: true },
     ]);
+    expect(screen.getByText("Upgrading to 0.6.0")).toBeTruthy();
+  });
+
+  it("受理还没回来的这段时间：主动作立刻改口并禁用，点不出第二次调用", async () => {
+    // daemon 是把解析发布、下载、校验、替换**全部**跑完才应答的（受理即已装好），
+    // 这次调用因此可以跑上几分钟（本端预算就是 5 分钟）。这段时间界面必须有话说：
+    // 沉默会被读成「没点上」，而再点一次只会撞上那台机器的并发闸门，拿回一句
+    // 「已经有一次升级在跑」——那是我们自己制造的失败。
+    const upgradeCalls: { device_id: number; force?: boolean }[] = [];
+    let accept: (reply: UpgradeReply) => void = () => {};
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: true, version: "0.6.0" },
+      upgradeCalls,
+      upgrade: () =>
+        new Promise<UpgradeReply>((resolve) => {
+          accept = resolve;
+        }),
+    });
+    await renderAndExpand();
+
+    fireEvent.click(screen.getByTestId("device-upgrade-action-1"));
+    await advance(0);
+
+    const action = screen.getByTestId(
+      "device-upgrade-action-1",
+    ) as HTMLButtonElement;
+    expect(action.disabled).toBe(true);
+    expect(screen.getByText("Preparing the upgrade")).toBeTruthy();
+
+    // 再点也发不出第二次调用：并发闸门那句拒绝根本不该有机会出现。
+    fireEvent.click(action);
+    await advance(0);
+    expect(upgradeCalls).toHaveLength(1);
+
+    // 应答终于回来，照常接上「升级中」。
+    accept({ accepted: true, target_version: "0.6.0" });
+    await advance(0);
     expect(screen.getByText("Upgrading to 0.6.0")).toBeTruthy();
   });
 });

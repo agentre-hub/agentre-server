@@ -157,6 +157,7 @@
     "action": {
       "default": "Upgrade agentred",
       "upgrading": "Upgrading…",
+      "requesting": "Preparing…",
       "forceLabel": "Upgrade anyway",
       "upToDate": "Up to date ({{version}})"
     },
@@ -167,6 +168,8 @@
       "confirm": "Upgrade anyway"
     },
     "status": {
+      "requestingTitle": "Preparing the upgrade",
+      "requestingBody": "That machine is fetching and verifying the new version — this can take a few minutes. Leave this open.",
       "upgradingTitle": "Upgrading to {{version}}",
       "upgradingBody": "Restarting once — usually under a minute.",
       "successTitle": "Upgrade complete",
