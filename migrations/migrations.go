@@ -110,23 +110,34 @@ func releaseMigrationLock(ctx context.Context, conn *sql.Conn) {
 	}
 }
 
+// 退役号段（不得复用）
+//
+// 2026-09-04 发布前，产品尚未上线、所有开发/联调库一律删库重建，因此把当时的 16 条
+// 迁移压缩成了下面这一套基线建表迁移，全部旧号一次性退役：
+//
+//   - 202608280001 ~ 202608280010（十个域的初始建表）
+//   - 202609010001 ~ 202609010003（conversation_id 加列 / 回填 / 换身份键）
+//   - 202609040001 ~ 202609040003（drop 死列 / drop email_verified / delete_todos 改名）
+//
+// 那些迁移的最终结果已经折进 202609040101 起的建表语句里：加过的列直接建在表上，
+// drop 掉的列在基线里根本不建，纯回填迁移因为没有存量库需要回填而整条消失。
+//
+// **这些号一个都不许再用。** gormigrate 只认台账（migrations 表）里的 id 字符串：
+// 一个曾经跑过的号再次出现时，它会认为那条迁移已经执行过而**静默跳过**，新迁移的
+// DDL 一行都不会跑，而启动日志上什么都不会说。同类事故的记录见桌面仓库的
+// agentre/migrations/migrations.go。新迁移一律取一个从未出现过的号，追加在下面这个
+// 列表的末尾。
 func migrationList() []*gormigrate.Migration {
 	return []*gormigrate.Migration{
-		migration202608280001(),
-		migration202608280002(),
-		migration202608280003(),
-		migration202608280004(),
-		migration202608280005(),
-		migration202608280006(),
-		migration202608280007(),
-		migration202608280008(),
-		migration202608280009(),
-		migration202608280010(),
-		migration202609010001(),
-		migration202609010002(),
-		migration202609010003(),
-		migration202609040001(),
-		migration202609040002(),
-		migration202609040003(),
+		migration202609040101(),
+		migration202609040102(),
+		migration202609040103(),
+		migration202609040104(),
+		migration202609040105(),
+		migration202609040106(),
+		migration202609040107(),
+		migration202609040108(),
+		migration202609040109(),
+		migration202609040110(),
 	}
 }

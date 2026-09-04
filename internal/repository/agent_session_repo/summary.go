@@ -26,7 +26,7 @@ import (
 type SummaryRepo interface {
 	// UpsertSummary writes the peer's latest reported state for one
 	// conversation, keyed by (user_id, conversation_id) — agent_sessions' one
-	// unique key (migrations/202609010003_agent_session_identity_key.go). A
+	// unique key (migrations/202609040108_agent_sessions.go). A
 	// later summary for the same identity overwrites the earlier one in a
 	// single statement; createtime is preserved.
 	UpsertSummary(ctx context.Context, s *agent_session_entity.SessionSummary) error
@@ -229,7 +229,7 @@ type summaryRepo struct{}
 // UpsertSummary 的赋值列里没有 user_id / conversation_id（它们是冲突判定的身份键，
 // 改它们就等于改成另一条记录的身份）也没有 createtime（命中已有行时保留它首次落地
 // 的时间）。agent_sessions 上只有 uk_agent_sessions_identity 这一个唯一键
-// （migrations/202609010003_agent_session_identity_key.go），因此 ON DUPLICATE KEY
+// （migrations/202609040108_agent_sessions.go），因此 ON DUPLICATE KEY
 // UPDATE 命中的必然是它——docs/architecture.md「只在表恰好一个唯一键时安全」。
 //
 // peer_fingerprint **在**赋值列里：它已经不是身份，而是对端每轮重报的来源标注，

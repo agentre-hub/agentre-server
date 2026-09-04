@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280004 创建 device_tokens 表。
+// migration202609040104 创建 device_tokens 表。
 //
 // refresh_token_hash 是 sha256 的十六进制（device_svc 里 hex.EncodeToString，恒为
 // 64 位小写），access_jti 是 ULID：两者都是机器生成的凭据/标识，用
@@ -18,9 +18,14 @@ import (
 //
 // idx_dtokens_device_active 把 revoked_at 放进键里代替 PG 的 `WHERE revoked_at = 0`，
 // 理由同 devices：一条复合索引就能服务查询，不必为此加生成列。
-func migration202608280004() *gormigrate.Migration {
+//
+// **没有 rotated_from_id 列**：那一列记「这条 token 是轮换掉哪一条得来的」，而轮换链
+// 从来没有被消费——撤销按 device_id 整批走（RevokeByDevice），清理按时间窗走
+// （CleanupDeviceTokens），没有任何一条路径顺着它往回走。真要做轮换链审计时，它要
+// 连同读取点一起加回来。
+func migration202609040104() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280004",
+		ID: "202609040104",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE device_tokens (
@@ -30,7 +35,6 @@ func migration202608280004() *gormigrate.Migration {
 				  refresh_token_hash  varchar(64) COLLATE utf8mb4_0900_bin NOT NULL,
 				  refresh_expires_at  bigint NOT NULL DEFAULT 0,
 				  last_used_at        bigint NOT NULL DEFAULT 0,
-				  rotated_from_id     bigint NOT NULL DEFAULT 0,
 				  revoked_at          bigint NOT NULL DEFAULT 0,
 				  user_agent          varchar(512) NOT NULL DEFAULT '',
 				  ip                  varchar(45),

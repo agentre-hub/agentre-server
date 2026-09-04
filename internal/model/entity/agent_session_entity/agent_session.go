@@ -116,7 +116,7 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 // own notification log. Payload is an opaque Protobuf binary frame; readers
 // decode it with the local generated contract.
 //
-// 这三列既是身份也是主键（migrations/202609010003_agent_session_identity_key.go）：
+// 这三列既是身份也是主键（migrations/202609040108_agent_sessions.go）：
 // 帧按 (账号, 对话, seq) 聚簇存放，没有代理自增列。转录尾部因此是聚簇索引上的一段
 // 连续范围，而不是二级索引扫一段再逐行随机回表取 longblob。
 //
@@ -158,7 +158,7 @@ type DeleteTodo struct {
 	// 见 ListPendingMachines 与 saved_session_svc.Delete。它曾经叫
 	// peer_fingerprint，而那个名字说的是发起端：两个角色的取值范围重叠（本机开的
 	// 对话两者同值），拿错了列不会有任何一处报错，只会把待办拨给一台从来没跑过这
-	// 条对话的机器。改名见迁移 202609040003。
+	// 条对话的机器。这个名字的理由见 migrations/202609040108_agent_sessions.go。
 	DeviceFingerprint string `gorm:"column:device_fingerprint;type:varchar(255);not null"`
 	PeerSessionID     string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	Createtime        int64  `gorm:"column:createtime;type:bigint;not null;default:0"`

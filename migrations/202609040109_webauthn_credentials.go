@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280009 创建 webauthn_credentials 表（通行密钥）。
+// migration202609040109 创建 webauthn_credentials 表（通行密钥）。
 //
 // credential_id / public_key / aaguid 用 **varbinary** 而不是 varchar：它们是认证器
 // 给出的原始字节，不是文本。存 base64 也能塞进 varchar，但那样每次读写都要多一层
@@ -27,9 +27,9 @@ import (
 //
 // (user_id, id) 的联合索引而不是单列 user_id：清单按账号取、按 id 倒序排，联合索引
 // 让排序直接走索引，不必回表再排。
-func migration202608280009() *gormigrate.Migration {
+func migration202609040109() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280009",
+		ID: "202609040109",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE webauthn_credentials (

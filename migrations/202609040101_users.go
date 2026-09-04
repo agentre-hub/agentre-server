@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280001 创建 users 表。
+// migration202609040101 创建 users 表。
 //
 // email 用 utf8mb4_0900_as_ci：**大小写不敏感、但不折叠重音**。
 //
@@ -29,15 +29,20 @@ import (
 // 键写成 (email, active_flag) 而不是 (active_flag, email)，是为了让同一个索引
 // 既做约束、又能被 user_repo.FindByEmail 的 `WHERE email=?` 当最左前缀用上——
 // 否则 email 上就一个索引都没有，登录路径每次都是全表扫。
-func migration202608280001() *gormigrate.Migration {
+//
+// **没有 email_verified 列**：唯一的写入点会把它硬编码成 true（账号只能由 GitHub
+// OAuth 创建），没有任何一处读它，也不进任何 API 响应。一个不被读的 email_verified
+// 看上去像一道校验，实际上系统此刻就把所有邮箱一视同仁——它提供的是安全感而不是安全。
+// 接入第二种**不**保证邮箱已验证的身份来源时再加回来，届时它要连同真正的读取点
+// （拒绝未验证邮箱的那条判断）一起落地，而不是先建一列空着。
+func migration202609040101() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280001",
+		ID: "202609040101",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE users (
 				  id              bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  email           varchar(320) COLLATE utf8mb4_0900_as_ci NOT NULL,
-				  email_verified  boolean NOT NULL DEFAULT false,
 				  display_name    varchar(255) NOT NULL DEFAULT '',
 				  avatar_url      varchar(2048) NOT NULL DEFAULT '',
 				  webauthn_handle varbinary(64) NOT NULL DEFAULT '',

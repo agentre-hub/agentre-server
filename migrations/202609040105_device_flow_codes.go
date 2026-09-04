@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280005 创建 device_flow_codes 表（RFC 8628 的 device_code /
+// migration202609040105 创建 device_flow_codes 表（RFC 8628 的 device_code /
 // user_code 状态机）。
 //
 // device_code 是机器之间传递的 bearer 凭据，用 utf8mb4_0900_bin 逐字节判等：大小写
@@ -28,9 +28,9 @@ import (
 // `WHERE user_code=? AND consumed_at=0 AND denied_at=0` 当最左前缀用上——这条路径
 // 是设备每 5 秒一次的轮询和 approve/deny 两条 UPDATE，没有索引就是全表扫，
 // 而全表扫的 UPDATE 在 InnoDB 下还会把 next-key 锁铺满整张表。
-func migration202608280005() *gormigrate.Migration {
+func migration202609040105() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280005",
+		ID: "202609040105",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE device_flow_codes (

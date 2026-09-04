@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280008 creates the three account-scoped agent-session tables
+// migration202609040108 creates the three account-scoped agent-session tables
 // (2026-08-18-server-session-mirror.md "存什么" / decision 17): a summary per
 // conversation, its raw journal frames, and pending cross-peer deletes.
 //
@@ -15,17 +15,39 @@ import (
 // properties of one list and one column, not of the domain. Mirroring survives
 // as a verb on mirror_svc.
 //
-// Identity across all three tables is (user_id, peer_fingerprint,
-// peer_session_id) — the *originating* peer and its own local session id
-// (decision 17), not whichever machine currently carries the connection.
+// Identity across all three tables is (user_id, conversation_id) —
+// agent_session_notification_journal adds seq
+// (2026-08-31-conversation-centric-addressing.md「会话身份」). conversation_id is
+// one and the same identity for a conversation across the desktop, agentred and
+// server databases and on the wire (决策 1); the originating peer mints it as a
+// UUIDv7. peer_fingerprint / peer_session_id stay on the tables but have left
+// identity: they are provenance and authorization columns now.
+//
+// conversation_id is char(36) rather than varchar(36): a canonical uuid is
+// always 36 characters, so a fixed width drops one length prefix per row — and
+// agent_session_notification_journal is the only unbounded table here (frames go
+// away only when the conversation does), where this column is part of the
+// primary key and therefore copied into every secondary index.
+// COLLATE utf8mb4_0900_bin for the same reason as its neighbours: it is an
+// opaque identifier, and folding case would merge two distinct conversations.
+//
 // peer_fingerprint has to compare equal against devices.fingerprint, so it takes
-// the same utf8mb4_0900_bin collation; peer_session_id aligns with the existing
-// agent_session_saves.peer_session_id column (varchar(255) COLLATE
-// utf8mb4_0900_bin) for the same reason — both are opaque, byte-exact
-// identifiers, and folding case would merge two distinct sessions or widen a
-// fingerprint match. The name says *whose* session id it is: the desktop's own
-// peer_session_id means its local chat_sessions.id, and the same word for two things
-// is the failure mode 决策 12 removes.
+// the same utf8mb4_0900_bin collation; peer_session_id aligns with
+// agent_session_saves.peer_session_id (varchar(255) COLLATE utf8mb4_0900_bin)
+// for the same reason — both are opaque, byte-exact identifiers, and folding
+// case would merge two distinct sessions or widen a fingerprint match. The name
+// says *whose* session id it is: the desktop's own peer_session_id means its
+// local chat_sessions.id, and the same word for two things is the failure mode
+// 决策 12 removes.
+//
+// agent_session_delete_todos calls its machine column **device_fingerprint**,
+// not peer_fingerprint: what it stores is the machine that *carries* the
+// conversation (the one to dial when replaying the delete), not the originating
+// peer. The two ranges overlap — for a conversation opened on this machine they
+// are the same value — so getting the column wrong raises no error anywhere, it
+// just sends the todo to a machine that never ran the conversation. The other
+// four aliases (agentred_ / daemon_ / machine_ / sync_origin_) name their role
+// correctly and stay; see agentre/docs/architecture.md「Device fingerprints」.
 //
 // Each table carries exactly one unique key, so an ON DUPLICATE KEY UPDATE
 // replay is unambiguous about which row it collided with
@@ -40,15 +62,15 @@ import (
 // DESC LIMIT n, ListFramesBefore): a secondary-index range scan followed by
 // one random primary-key lookup per row to fetch the longblob. Clustering on
 // the identity makes that one contiguous range, removes the duplicate copy of
-// two varchar(255) columns that the separate unique index would hold, and
-// turns DeleteFrames into a range delete. Inserts stop being globally
-// monotonic, but within a conversation they still append by seq, and there
-// are far fewer conversations than frames — so the shape is "several tails
-// being appended to", not random writes.
+// the identity that a separate unique index would hold, and turns DeleteFrames
+// into a range delete. Inserts stop being globally monotonic, but within a
+// conversation they still append by seq, and there are far fewer conversations
+// than frames — so the shape is "several tails being appended to", not random
+// writes.
 //
 // agent_session_notification_journal.params is a json column, not text: text's 64KB
 // ceiling would truncate a large frame (same reasoning as
-// sync_objects.payload in migration202608280006).
+// sync_objects.payload in migration202609040106).
 //
 // title is text, not varchar: it is whatever display string the peer reports,
 // and nothing on either side bounds its length — the desktop's rename path
@@ -57,14 +79,15 @@ import (
 // it fails the whole upsert with ER_DATA_TOO_LONG, so that conversation never
 // mirrors at all and the error names neither the column nor the title. cwd is
 // text for the same reason.
-func migration202608280008() *gormigrate.Migration {
+func migration202609040108() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280008",
+		ID: "202609040108",
 		Migrate: func(tx *gorm.DB) error {
 			statements := []string{`
 				CREATE TABLE agent_sessions (
 				  id                   bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id              bigint NOT NULL,
+				  conversation_id      char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  peer_fingerprint     varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  peer_session_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  title                text NOT NULL DEFAULT (''),
@@ -85,8 +108,7 @@ func migration202608280008() *gormigrate.Migration {
 				  last_message_at      bigint NOT NULL DEFAULT 0,
 				  createtime           bigint NOT NULL DEFAULT 0,
 				  updatetime           bigint NOT NULL DEFAULT 0,
-				  UNIQUE KEY uk_agent_sessions_identity
-				    (user_id, peer_fingerprint, peer_session_id),
+				  UNIQUE KEY uk_agent_sessions_identity (user_id, conversation_id),
 				  KEY idx_agent_sessions_recent (user_id, last_message_at, id),
 				  KEY idx_agent_sessions_agent_recent
 				    (user_id, agent_sync_id, last_message_at, id),
@@ -95,21 +117,22 @@ func migration202608280008() *gormigrate.Migration {
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE agent_session_notification_journal (
 				  user_id              bigint NOT NULL,
+				  conversation_id      char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  peer_fingerprint     varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  peer_session_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  seq                  bigint NOT NULL,
 				  payload              longblob NOT NULL,
 				  createtime           bigint NOT NULL DEFAULT 0,
-				  PRIMARY KEY (user_id, peer_fingerprint, peer_session_id, seq)
+				  PRIMARY KEY (user_id, conversation_id, seq)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE agent_session_delete_todos (
 				  id                   bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id              bigint NOT NULL,
-				  peer_fingerprint     varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
+				  conversation_id      char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
+				  device_fingerprint   varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  peer_session_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  createtime           bigint NOT NULL DEFAULT 0,
-				  UNIQUE KEY uk_agent_session_delete_todos_identity
-				    (user_id, peer_fingerprint, peer_session_id)
+				  UNIQUE KEY uk_agent_session_delete_todos_identity (user_id, conversation_id)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
 			}
 			for _, statement := range statements {

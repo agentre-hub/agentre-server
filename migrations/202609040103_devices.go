@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280003 创建 devices 表。
+// migration202609040103 创建 devices 表。
 //
 // fingerprint 是设备的自然键、由桌面端生成，kind 是枚举字面量，两者都用
 // utf8mb4_0900_bin：指纹大小写不敏感地判重会把两台不同的机器认成同一台，进而让第二台
@@ -18,9 +18,9 @@ import (
 // `WHERE status = 1`，MySQL 没有部分索引，但把 status 放进键里同样能服务
 // `WHERE user_id=? AND status=?`，只是索引会连非活跃行一起收——设备表很小，不值得
 // 为此再加一个生成列。
-func migration202608280003() *gormigrate.Migration {
+func migration202609040103() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280003",
+		ID: "202609040103",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE devices (

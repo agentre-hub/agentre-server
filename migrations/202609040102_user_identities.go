@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// migration202608280002 创建 user_identities 表。
+// migration202609040102 创建 user_identities 表。
 //
 // provider / provider_uid 用 utf8mb4_0900_bin 逐字节判等：provider_uid 是 OAuth 提供方
 // 给的不透明标识，大小写不敏感地判重会把两个不同的上游账号认成同一个。
@@ -18,9 +18,9 @@ import (
 //
 // raw_profile 带上 DEFAULT ('{}')（MySQL 8.0.13+ 的表达式默认值）：让「没有 profile」
 // 这件事由 schema 表达一次，而不是在每个写入方各自兜一遍。
-func migration202608280002() *gormigrate.Migration {
+func migration202609040102() *gormigrate.Migration {
 	return &gormigrate.Migration{
-		ID: "202608280002",
+		ID: "202609040102",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE user_identities (
