@@ -26,8 +26,13 @@ import (
 )
 
 // accountChanCall 是 stubAccountChan 记下的一次广播。
+//
+// 帧的种类也记：同一条通道上跑着两类帧（带版本号的 sync_version 与不带版本号的
+// 信号），只比对账号与版本号的断言分不出「发出去的是哪一种」——把 mirror_changed
+// 错发成 sync_version 会让桌面端白跑一次同步对象的 Pull，而版本号那一格恰好也是 0。
 type accountChanCall struct {
 	accountID int64
+	frameType string
 	version   int64
 }
 
@@ -43,7 +48,9 @@ type stubAccountChan struct {
 func (s *stubAccountChan) Broadcast(_ context.Context, accountID int64, frame accountchan_svc.Frame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, accountChanCall{accountID: accountID, version: frame.Version})
+	s.calls = append(s.calls, accountChanCall{
+		accountID: accountID, frameType: frame.Type, version: frame.Version,
+	})
 	return s.err
 }
 
@@ -994,7 +1001,7 @@ func TestSetExecTargetOrder_GivenPermutation_ThenBroadcastsHighestVersion(t *tes
 	}))
 
 	// 两档都换了位置，各烧一个版本号（301, 302）；广播的是这一批里最新的那个。
-	assert.Equal(t, []accountChanCall{{accountID: 7, version: 302}}, stub.recordedCalls())
+	assert.Equal(t, []accountChanCall{{accountID: 7, frameType: accountchan_svc.FrameTypeSyncVersion, version: 302}}, stub.recordedCalls())
 }
 
 // 提交的排列与当前顺序完全一致时没有一行会被写（「位置没变的行不写」），因此也不该
@@ -1328,7 +1335,7 @@ func TestCreateOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 		UserID: 7, Kind: sync_entity.KindDepartment, Fields: map[string]any{"name": "工程"}})
 	require.NoError(t, err)
 
-	assert.Equal(t, []accountChanCall{{accountID: 7, version: 201}}, stub.recordedCalls())
+	assert.Equal(t, []accountChanCall{{accountID: 7, frameType: accountchan_svc.FrameTypeSyncVersion, version: 201}}, stub.recordedCalls())
 }
 
 func TestUpdateOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
@@ -1346,7 +1353,7 @@ func TestUpdateOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 		Fields: map[string]any{"name": "平台工程"}})
 	require.NoError(t, err)
 
-	assert.Equal(t, []accountChanCall{{accountID: 7, version: 202}}, stub.recordedCalls())
+	assert.Equal(t, []accountChanCall{{accountID: 7, frameType: accountchan_svc.FrameTypeSyncVersion, version: 202}}, stub.recordedCalls())
 }
 
 func TestDeleteOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
@@ -1362,7 +1369,7 @@ func TestDeleteOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1"})
 	require.NoError(t, err)
 
-	assert.Equal(t, []accountChanCall{{accountID: 7, version: 203}}, stub.recordedCalls())
+	assert.Equal(t, []accountChanCall{{accountID: 7, frameType: accountchan_svc.FrameTypeSyncVersion, version: 203}}, stub.recordedCalls())
 }
 
 // 建在校验阶段就被拒时不该碰仓储，自然也不该广播——这条既有的拒绝路径本就不烧
