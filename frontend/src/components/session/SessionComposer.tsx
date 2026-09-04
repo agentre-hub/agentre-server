@@ -9,6 +9,10 @@
  * **这一端接得上什么、接不上什么**是有依据的，不照抄桌面端那张表：
  *   @ 引用       接得上 —— Agent 提及序列化成 `<agent id="N">名字</agent>` 写进正文，
  *                「正文里是对的」（桌面端 chat_svc 的原话），模型读得懂。
+ *                **设备**同样摆得上：`/v1/devices` 给得出指纹，而设备提及在正文里
+ *                只存指纹（`<device fp="…">机器名</device>`）—— 那条消息被别的机器
+ *                读到时，只有指纹还指得回同一台。这一端没有「本机」那一档：浏览器
+ *                不是一台机器。
  *                **项目**提及不摆：它的 XML 带 `path` 属性，而服务端响应里一条路径
  *                都没有（R19），摆上去就是个空 path 的假引用。
  *   / 触发命令    接得上 —— 见 lib/slashCommands.ts 逐条对照的结果。
@@ -41,6 +45,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 
+import { useDeviceMentions } from "@/hooks/use-device-mentions";
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
 import { buildSlashCommands } from "@/lib/slashCommands";
 
@@ -148,6 +153,7 @@ export default function SessionComposer({
       : [];
   }, [backendType, t]);
 
+  const devices = useDeviceMentions();
   const mentionSources = useMemo(
     () =>
       buildMentionSources(
@@ -157,8 +163,9 @@ export default function SessionComposer({
           avatarColor: a.avatarColor,
         })),
         [],
+        devices,
       ),
-    [agents],
+    [agents, devices],
   );
 
   /** 上下文计量器：给不出窗口时整块不摆（不拿一个编出来的分母画进度条）。 */
