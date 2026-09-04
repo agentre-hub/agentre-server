@@ -1,7 +1,10 @@
 .PHONY: dev build test test-backend test-frontend e2e test-cover \
         lint lint-backend lint-frontend lint-e2e fmt prepare-web-dist mock migrate docker
 
-VERSION := $(shell git describe --tags --always 2>/dev/null || echo dev)
+# 版本号是显式的、不从 tag 反推：git describe 在没打 tag 的分支上会退成 "dev"，
+# 而带 tag 时又会多出一个 "v" 前缀，跟桌面端 Makefile 的 0.1.0 对不上号。排障
+# 要的那一维由下面的 COMMIT 单独注入。
+VERSION ?= 0.1.0
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 dev:
@@ -25,7 +28,7 @@ build:
 
 # 传版本号，否则镜像启动日志是 "dev (unknown)"，排障时对不回 commit
 docker:
-	docker build -f deploy/Dockerfile -t agentre/server:0.1 \
+	docker build -f deploy/Dockerfile -t agentre/server:$(VERSION) \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT=$(COMMIT) .
 

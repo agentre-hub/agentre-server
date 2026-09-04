@@ -23,7 +23,7 @@ make lint-e2e          # cd e2e && pnpm lint  (prettier --check)
 make fmt               # prettier --write across frontend/ and e2e/
 
 make mock              # go generate ./... (mockgen)
-make docker            # docker build -t agentre/server:0.1
+make docker            # docker build -t agentre/server:0.1.0
 ```
 
 The split exists because there are two package managers: Go via the Makefile,

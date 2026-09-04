@@ -173,7 +173,7 @@ docker pull ghcr.io/agentre-hub/agentre-server:nightly   # 每天从 nightly 分
 自己打：
 
 ```bash
-make docker          # 打成 agentre/server:0.1，带上当前 commit 号
+make docker          # 打成 agentre/server:0.1.0，带上当前 commit 号
 ```
 
 镜像里的地址都能换，内网环境下可以指到自己的镜像源：
