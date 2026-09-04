@@ -74,7 +74,7 @@ func newTestServer(t *testing.T, stub *stubImportSvc) *httptest.Server {
 	require.NoError(t, err)
 	sessionimport_svc.SetDefault(stub)
 	t.Cleanup(func() { sessionimport_svc.SetDefault(nil) })
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

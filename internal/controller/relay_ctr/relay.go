@@ -4,11 +4,15 @@ package relay_ctr
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 
 	"github.com/agentre-hub/agentre-server/internal/controller/connguard"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
@@ -77,6 +81,15 @@ func (r *Relay) Daemon(c *gin.Context) {
 		defer stopSignals()
 	}
 	guard := connguard.New(ctx, accountID, jti)
+	// 这条连接的每一行日志都带同一组身份字段：出问题时是按机器还是按账号捞，
+	// 取决于报障的人手里有什么,两个都得能捞。
+	peer := func(extra ...zap.Field) []zap.Field {
+		return append([]zap.Field{
+			zap.Int64("accountId", accountID), zap.Int64("deviceId", deviceID),
+			zap.String("fingerprint", route.Fingerprint),
+			zap.String("instanceId", route.InstanceID),
+		}, extra...)
+	}
 	conn, err := r.daemonTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: func() error {
 			if err := guard(); err != nil {
@@ -87,22 +100,43 @@ func (r *Relay) Daemon(c *gin.Context) {
 		OnHeartbeat: guard,
 	})
 	if err != nil {
+		// 握手没成多半是对端的锅(少了 Upgrade 头、子协议对不上),服务端照常活着,
+		// 所以是 Warn 不是 Error。但它必须留痕——「连不上」的现场在服务端本来
+		// 一片空白,而这是唯一能说明「请求到了、只是没握上手」的一行。
+		logger.Ctx(ctx).Warn("relay daemon websocket upgrade failed", peer(zap.Error(err))...)
 		return
 	}
 	defer func() { _ = conn.Close() }()
 	if signalErr != nil {
+		logger.Ctx(ctx).Warn("relay account signals unavailable",
+			zap.Int64("accountId", accountID), zap.String("peer", "daemon"), zap.Error(signalErr))
 		signalUnavailable(ctx, conn)
 	} else {
 		go pumpSignals(conn, signals)
 	}
 	detach, err := r.svc.AttachDaemon(ctx, route, conn)
 	if err != nil {
+		// 挂不上帧总线 = 这台 daemon 一条跨实例来的帧都收不到;登记不上在线态 =
+		// 客户端全都解析不到这台机器。两件都是服务端侧坏了,要人去看,Error。
+		logger.Ctx(ctx).Error("relay daemon attach failed", peer(zap.Error(err))...)
 		return
 	}
 	defer detach()
 	if err := r.svc.RegisterDaemon(ctx, route); err != nil {
+		logger.Ctx(ctx).Error("relay daemon registration failed", peer(zap.Error(err))...)
 		return
 	}
+	// 记在登记之后而不是 upgrade 之后:在此之前这条连接还不算在线,提前记一行
+	// 「已连接」会把上面两个失败分支盖过去。
+	logger.Ctx(ctx).Info("relay daemon connected", peer()...)
+
+	// exit 是读循环的收场,由下面每个 return 点填上;defer 据它决定这次断开
+	// 记 Info 还是 Warn。
+	var exit error
+	defer func() {
+		logRelayDisconnect(ctx, "relay daemon disconnected",
+			"relay daemon disconnected unexpectedly", exit, peer()...)
+	}()
 
 	// 登记这一步刚把在线态 TTL 写满,所以从现在开始计时。
 	renew := &renewThrottle{interval: relayws.HeartbeatInterval, last: time.Now()}
@@ -110,10 +144,12 @@ func (r *Relay) Daemon(c *gin.Context) {
 	for {
 		messageType, frame, err := conn.ReadMessage()
 		if err != nil {
+			exit = err
 			return
 		}
 		if renew.due(time.Now()) {
 			if err := r.svc.RenewDaemon(ctx, route); err != nil {
+				exit = fmt.Errorf("renew daemon presence: %w", err)
 				return
 			}
 		}
@@ -123,9 +159,41 @@ func (r *Relay) Daemon(c *gin.Context) {
 			if errors.Is(err, relay_svc.ErrForwardFailed) {
 				continue
 			}
+			exit = fmt.Errorf("forward daemon frame: %w", err)
 			return
 		}
 	}
+}
+
+// logRelayDisconnect 把一条中继连接的收场记成一行。
+//
+// 分级判据是「这次断开要不要人去看」：对端好好地关掉、以及服务端优雅下线自己关掉
+// 的，是 Info——那是一条连接本来的结局，但必须留得下来，否则「这台机器什么时候
+// 在线过、什么时候走的」在服务端无从回答。其余（读超时、1006、对端进程没了、
+// 协议违例）是 Warn。Error 不用在这里：断开不等于服务端坏了。
+func logRelayDisconnect(
+	ctx context.Context, orderly, unexpected string, err error, fields ...zap.Field,
+) {
+	// 复制一份再追加:调用方传进来的那截还可能被它自己接着用。
+	fields = append(append(make([]zap.Field, 0, len(fields)+1), fields...), zap.Error(err))
+	if isOrderlyClose(err) {
+		logger.Ctx(ctx).Info(orderly, fields...)
+		return
+	}
+	logger.Ctx(ctx).Warn(unexpected, fields...)
+}
+
+func isOrderlyClose(err error) bool {
+	if err == nil {
+		return true
+	}
+	if websocket.IsCloseError(err, websocket.CloseNormalClosure,
+		websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+		return true
+	}
+	// 优雅下线（Drain）是服务端自己把连接关掉的：读循环随后拿到的是「在已关闭的
+	// 连接上读」，那是下线流程的正常结局，不是对端异常。
+	return errors.Is(err, net.ErrClosed)
 }
 
 // renewThrottle 把 daemon 读循环里的在线态续期压到每 interval 至多一次。
@@ -176,10 +244,15 @@ func (r *Relay) Client(c *gin.Context) {
 		defer stopSignals()
 	}
 	guard := connguard.New(ctx, accountID, jti)
+	// 客户端连接没有机器身份可记（目标是逐通道声明的），账号就是它的全部身份。
+	peer := func(extra ...zap.Field) []zap.Field {
+		return append([]zap.Field{zap.Int64("accountId", accountID)}, extra...)
+	}
 	conn, err := r.clientTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: guard, OnHeartbeat: guard,
 	})
 	if err != nil {
+		logger.Ctx(ctx).Warn("relay client websocket upgrade failed", peer(zap.Error(err))...)
 		return
 	}
 	defer func() { _ = conn.Close() }()
@@ -188,23 +261,38 @@ func (r *Relay) Client(c *gin.Context) {
 	// 避免留下幽灵对端。
 	defer channels.closeAll()
 	if signalErr != nil {
+		logger.Ctx(ctx).Warn("relay account signals unavailable",
+			zap.Int64("accountId", accountID), zap.String("peer", "client"), zap.Error(signalErr))
 		signalUnavailable(ctx, conn)
 	} else {
 		go pumpSignals(conn, signals)
 	}
+	logger.Ctx(ctx).Info("relay client connected", peer()...)
+
+	var exit error
+	defer func() {
+		logRelayDisconnect(ctx, "relay client disconnected",
+			"relay client disconnected unexpectedly", exit, peer()...)
+	}()
 
 	for {
 		messageType, frame, err := conn.ReadMessage()
 		if err != nil {
+			exit = err
 			return
 		}
 		if messageType != websocket.BinaryMessage {
 			// 客户端那条链路现在也收发信封，非二进制帧是协议违例。
+			//
+			// 违例把整条连接判死,而客户端只看得到「又断了」。断开的原因因此必须
+			// 落在服务端这一行上,否则它和一次网络抖动在日志里长得一模一样。
+			exit = fmt.Errorf("relay client protocol violation: non-binary frame type %d", messageType)
 			return
 		}
 		channelID, payload, err := relay_svc.UnwrapEnvelope(frame)
 		if err != nil {
 			// 信封拆不开就归不到任何一条通道头上，只能按整条连接的协议违例处理。
+			exit = fmt.Errorf("relay client protocol violation: undecodable envelope: %w", err)
 			return
 		}
 		channels.handle(ctx, channelID, payload)

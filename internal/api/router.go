@@ -4,7 +4,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/server/mux"
+	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/controller/accountchan_ctr"
@@ -24,6 +26,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/workspace_ctr"
 	"github.com/agentre-hub/agentre-server/internal/middleware"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
@@ -40,6 +44,9 @@ type RouterDeps struct {
 	// MachineUpgrader 是控制台一键升级够到那台机器的实现。留给测试注入自己那份；
 	// 为空时控制器落到本进程那份常驻镜像（mirror_svc.Default()）。
 	MachineUpgrader device_ctr.MachineUpgrader
+	// Redis 是鉴权中间件要用的那台：jti 黑名单与中继票据的焚毁记号都从它派生。
+	// 留给测试注入自己那台；为空时取全局默认单例（与上面两项同一约定）。
+	Redis *goredis.Client
 
 	// drainers 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
 	// 长连接逐条礼貌关掉(见 DrainRelays)。
@@ -89,6 +96,14 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if accountChan == nil {
 		accountChan = accountchan_svc.Default()
 	}
+	// 黑名单与票据记号在这里各造一份，交给下面三个鉴权中间件。它们是本层唯一
+	// 认识「Redis 是哪一台」的地方——中间件自己只认拿到的那两个对象。
+	redisClient := r.Redis
+	if redisClient == nil {
+		redisClient = redis.Default()
+	}
+	blacklist := jwtblacklist.New(redisClient)
+	relayTickets := relayticket.New(redisClient)
 	// 账号信号没有自己的端点了（决策 13）：它跑在中继客户端连接的保留通道上，
 	// 因此在这里装配进 relay_ctr，而不是另挂一条路由。
 	relayCtr := relay_ctr.New(relaySvc, accountchan_ctr.New(accountChan))
@@ -187,7 +202,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	g.Group("/").Bind(passkeyCtr.FinishLogin)
 
 	// session 或 device JWT 都可以
-	g.Group("/", middleware.SessionOrDeviceAuth(r.Signer)).Bind(
+	g.Group("/", middleware.SessionOrDeviceAuth(r.Signer, blacklist)).Bind(
 		authCtr.Me,
 		deviceCtr.Revoke,
 		deviceCtr.List,
@@ -292,7 +307,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	)
 
 	// device JWT
-	deviceJWT := g.Group("/", middleware.DeviceJWT(r.Signer))
+	deviceJWT := g.Group("/", middleware.DeviceJWT(r.Signer, blacklist))
 	deviceJWT.Bind(deviceCtr.Revocations)
 	// 工作区多端同步：账号与设备一律取自 JWT claims，不接受参数里的身份。
 	deviceJWT.Bind(
@@ -308,7 +323,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议（首选）
 	// 或 query（过渡期退路）搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
-	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(r.Signer))
+	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(r.Signer, blacklist, relayTickets))
 	// 这一条同时承载账号信号：普通通道跑 RPC，保留通道（relay_svc.SignalChannelID）
 	// 推 sync_version / mirror_changed / device_presence。/v1/account/channel 已删除。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)

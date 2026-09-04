@@ -9,12 +9,13 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/apierr"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 )
 
-func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {
+func DeviceJWT(signer *jwt.Signer, blacklist *jwtblacklist.Blacklist) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, biz, ok := verifiedJWT(c, signer)
+		claims, biz, ok := verifiedJWT(c, signer, blacklist)
 		if !ok {
 			apierr.Abort(c, http.StatusUnauthorized, biz)
 			return
@@ -38,8 +39,8 @@ const relayTicketBurnTTL = 2*time.Minute + jwt.Leeway
 
 // consumeBrowserTicket 认领这张浏览器票据。已经用过、或判不出来,都当场拒掉
 // (fail-closed,理由见 relayticket.Consume)。
-func consumeBrowserTicket(c *gin.Context, jti string) bool {
-	first, err := relayticket.Consume(c.Request.Context(), jti, relayTicketBurnTTL)
+func consumeBrowserTicket(c *gin.Context, jti string, tickets *relayticket.Tickets) bool {
+	first, err := tickets.Consume(c.Request.Context(), jti, relayTicketBurnTTL)
 	if err != nil || !first {
 		apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
 		return false
@@ -49,9 +50,10 @@ func consumeBrowserTicket(c *gin.Context, jti string) bool {
 
 // RelayClientJWT accepts ordinary device JWTs for native clients and the browser's
 // short-lived relay_client ticket. The latter is deliberately rejected by DeviceJWT.
-func RelayClientJWT(signer *jwt.Signer) gin.HandlerFunc {
+func RelayClientJWT(signer *jwt.Signer, blacklist *jwtblacklist.Blacklist,
+	tickets *relayticket.Tickets) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, biz, ok := verifiedJWT(c, signer)
+		claims, biz, ok := verifiedJWT(c, signer, blacklist)
 		if !ok {
 			apierr.Abort(c, http.StatusUnauthorized, biz)
 			return
@@ -62,7 +64,7 @@ func RelayClientJWT(signer *jwt.Signer) gin.HandlerFunc {
 		}
 		// 浏览器票据用后即焚，见 auth_svc.ConsumeRelayTicket。原生端的设备 JWT
 		// (DID != 0) 不在此列:它是长期凭据,本来就要反复使用。
-		if claims.Kind == "relay_client" && !consumeBrowserTicket(c, claims.JTI) {
+		if claims.Kind == "relay_client" && !consumeBrowserTicket(c, claims.JTI, tickets) {
 			return
 		}
 		if accountBlocked(c, claims.UID) {

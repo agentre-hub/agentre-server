@@ -44,9 +44,7 @@ trace:
 
 server:
   public_url: "https://server.agentre.dev"
-  insecure_cookies: false
   session:
-    cookie_name: "server_session"
     ttl: 336h
   device_flow:
     user_code_ttl: 10m
@@ -57,15 +55,12 @@ server:
       - kid: "2026-08-a"
         private_key_pem_path: "/etc/agentre-server/keys/2026-08-a.key"
         public_key_pem_path: "/etc/agentre-server/keys/2026-08-a.pub"
-    issuer:   "agentre-server"
-    audience: "agentre"
     access_ttl: 15m
     refresh_ttl: 2160h
   oauth:
     github:
       client_id:     ""
       client_secret: ""
-      callback_path: "/v1/auth/oauth/github/callback"
   rate_limit:
     authorize_per_ip_per_min: 3
     github_authorize_per_ip_per_min: 10

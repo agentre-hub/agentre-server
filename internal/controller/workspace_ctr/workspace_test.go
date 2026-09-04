@@ -182,7 +182,7 @@ func newWorkspaceTestServer(t *testing.T, stub *stubWorkspaceSvc) (*httptest.Ser
 	require.NoError(t, err)
 	workspace_svc.SetDefault(stub)
 	t.Cleanup(func() { workspace_svc.SetDefault(workspace_svc.New()) })
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

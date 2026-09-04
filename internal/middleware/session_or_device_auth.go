@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 )
 
 // SessionOrDeviceAuth accepts either a device-JWT Bearer token (preferred) or a
@@ -18,12 +19,12 @@ import (
 // isDeviceCredential，cookie 分支与 SessionAuth 共用 sessionPrincipal。这里只
 // 编排先后与本组的终止形态——业务码一律笼统的 Unauthorized，因为同时接受两种
 // 凭据时说不清是哪条路走岔了。
-func SessionOrDeviceAuth(signer *jwt.Signer) gin.HandlerFunc {
+func SessionOrDeviceAuth(signer *jwt.Signer, blacklist *jwtblacklist.Blacklist) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 出示了 Bearer 就只走 Bearer：验签或黑名单没过时不回落到 cookie，
 		// 否则一枚已被拉黑的凭据只要同时带着一份有效 cookie 就还能进来。
 		if strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") {
-			claims, _, ok := verifiedJWT(c, signer)
+			claims, _, ok := verifiedJWT(c, signer, blacklist)
 			if !ok || !isDeviceCredential(claims) {
 				abortUnauthorized(c)
 				return

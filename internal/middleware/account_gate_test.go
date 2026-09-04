@@ -24,6 +24,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo/mock_user_repo"
@@ -71,7 +73,7 @@ func gatedRoute(handler gin.HandlerFunc) *gin.Engine {
 func sessionCookieFor(t *testing.T, userID int64) *http.Cookie {
 	t.Helper()
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
 	sid, _, err := auth_svc.Default().StartSession(context.Background(), userID)
 	require.NoError(t, err)
 	return &http.Cookie{Name: "server_session", Value: sid}
@@ -115,7 +117,7 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnSessionBranch(t *testing.T) 
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.AddCookie(cookie)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.SessionOrDeviceAuth(gatedAuthTestSigner(t))).ServeHTTP(w, req)
+	gatedRoute(middleware.SessionOrDeviceAuth(gatedAuthTestSigner(t), jwtblacklist.New(redis.Default()))).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
@@ -132,7 +134,7 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnBearerBranch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.SessionOrDeviceAuth(signer)).ServeHTTP(w, req)
+	gatedRoute(middleware.SessionOrDeviceAuth(signer, jwtblacklist.New(redis.Default()))).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
@@ -149,7 +151,7 @@ func TestDeviceJWT_BannedAccountRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.DeviceJWT(signer)).ServeHTTP(w, req)
+	gatedRoute(middleware.DeviceJWT(signer, jwtblacklist.New(redis.Default()))).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
@@ -167,7 +169,7 @@ func TestRelayClientJWT_BannedAccountRejected(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.RelayClientJWT(signer)).ServeHTTP(w, req)
+	gatedRoute(middleware.RelayClientJWT(signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default()))).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())

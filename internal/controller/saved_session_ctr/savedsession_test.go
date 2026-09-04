@@ -88,7 +88,7 @@ func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) (*httpte
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	saved_session_svc.SetDefault(stub)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

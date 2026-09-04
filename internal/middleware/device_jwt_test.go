@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cago-frame/cago/database/redis"
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
 
@@ -17,6 +18,7 @@ import (
 	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 )
 
 func TestDeviceJWT_Blacklist(t *testing.T) {
@@ -29,7 +31,7 @@ func TestDeviceJWT_Blacklist(t *testing.T) {
 
 	makeHandler := func() *gin.Engine {
 		r := gin.New()
-		r.GET("/protected", middleware.DeviceJWT(signer), func(c *gin.Context) {
+		r.GET("/protected", middleware.DeviceJWT(signer, jwtblacklist.New(redis.Default())), func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"ok": true})
 		})
 		return r
@@ -48,7 +50,7 @@ func TestDeviceJWT_Blacklist(t *testing.T) {
 		Convey("blacklisted jti is rejected with JWTBlacklisted", func() {
 			tok, jti, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "agentred"}, time.Hour)
 			So(err, ShouldBeNil)
-			So(jwtblacklist.Add(t.Context(), jti, 3600), ShouldBeNil)
+			So(jwtblacklist.New(redis.Default()).Add(t.Context(), jti, 3600), ShouldBeNil)
 
 			req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 			req.Header.Set("Authorization", "Bearer "+tok)
@@ -101,13 +103,13 @@ func TestRelayClientJWTBoundary(t *testing.T) {
 				t.Fatal(signErr)
 			}
 			if tt.blacklist {
-				if addErr := jwtblacklist.Add(t.Context(), jti, 60); addErr != nil {
+				if addErr := jwtblacklist.New(redis.Default()).Add(t.Context(), jti, 60); addErr != nil {
 					t.Fatal(addErr)
 				}
 			}
 
 			router := gin.New()
-			router.GET("/relay", middleware.RelayClientJWT(signer), func(c *gin.Context) {
+			router.GET("/relay", middleware.RelayClientJWT(signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default())), func(c *gin.Context) {
 				if got := c.GetInt64("user_id"); got != tt.claims.UID {
 					t.Errorf("user_id = %d, want %d", got, tt.claims.UID)
 				}
@@ -151,7 +153,7 @@ func TestRelayClientJWT_BrowserTicketIsSingleUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := gin.New()
-	handler.GET("/relay", middleware.RelayClientJWT(signer), func(c *gin.Context) {
+	handler.GET("/relay", middleware.RelayClientJWT(signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default())), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	call := func(token string) int {

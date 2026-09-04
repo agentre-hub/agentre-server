@@ -21,6 +21,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo/mock_device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -59,7 +60,7 @@ func setupDeviceTest(t *testing.T) (
 		VerificationURI: "https://server/device",
 	}
 	ctx, _, mock := hubtest.Database(t)
-	return ctx, mD, mT, mF, newDeviceSvc(cfg, signer), mock
+	return ctx, mD, mT, mF, newDeviceSvc(cfg, signer, jwtblacklist.New(redis.Default())), mock
 }
 
 func TestAuthorize_ReturnsUserCode(t *testing.T) {

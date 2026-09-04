@@ -25,6 +25,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_identity_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo/mock_user_identity_repo"
@@ -41,7 +43,7 @@ func newAuthTestServer(t *testing.T) (*httptest.Server, *jwt.Signer) {
 	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}, Signer: signer}).
@@ -91,7 +93,7 @@ func issueRelayTicket(t *testing.T, server *httptest.Server, sid, csrf string) s
 func relayGuardStatus(t *testing.T, signer *jwt.Signer, token string) int {
 	t.Helper()
 	router := gin.New()
-	router.GET("/relay", middleware.RelayClientJWT(signer), func(c *gin.Context) {
+	router.GET("/relay", middleware.RelayClientJWT(signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default())), func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
 	req := httptest.NewRequest(http.MethodGet, "/relay", nil)
@@ -285,7 +287,7 @@ func TestMe_FillsGithubLogin(t *testing.T) {
 
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}, Signer: signer}).
@@ -356,7 +358,7 @@ func TestMe_ReturnsEmptyGithubLoginWithoutGithubIdentity(t *testing.T) {
 
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}, Signer: signer}).

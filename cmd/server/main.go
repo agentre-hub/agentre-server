@@ -35,6 +35,9 @@ import (
 	"github.com/agentre-hub/agentre-server/migrations"
 )
 
+// defaultConfigPath 与 cago 不传 WithConfigFile 时的缺省值一致。
+const defaultConfigPath = "./configs/config.yaml"
+
 func loadConfig(args []string) (*configs.Config, error) {
 	flags := flag.NewFlagSet("agentre-server", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -42,10 +45,19 @@ func loadConfig(args []string) (*configs.Config, error) {
 	if err := flags.Parse(args); err != nil {
 		return nil, err
 	}
+	// 自己装配配置源，为的是套上 bootstrap 的环境变量覆盖层。
 	if *configPath == "" {
-		return configs.NewConfig("agentre-server")
+		src, err := bootstrap.NewConfigSource(defaultConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		return configs.NewConfig("agentre-server", configs.WithSource(src))
 	}
-	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(*configPath))
+	src, err := bootstrap.NewConfigSource(*configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config %q: %w", *configPath, err)
+	}
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(src))
 	if err != nil {
 		return nil, fmt.Errorf("load config %q: %w", *configPath, err)
 	}
@@ -62,6 +74,10 @@ func main() {
 	}
 
 	serverCfg := bootstrap.LoadServerConfig(ctx, cfg)
+	// 必须在 LoadJWTSigner 之前：后者读不到 pem 直接 Fatal
+	if err := bootstrap.EnsureJWTKeys(serverCfg); err != nil {
+		log.Fatalf("%v", err)
+	}
 	signer := bootstrap.LoadJWTSigner(serverCfg)
 
 	user_repo.RegisterUser(user_repo.NewUser())

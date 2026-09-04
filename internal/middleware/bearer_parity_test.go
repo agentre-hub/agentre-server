@@ -29,8 +29,8 @@ import (
 // 编译错误——只会留下一个能绕过它的入口。这组用例把「两处同形」变成机械检查。
 func bearerMiddlewares(signer *hubjwt.Signer) map[string]gin.HandlerFunc {
 	return map[string]gin.HandlerFunc{
-		"DeviceJWT":           middleware.DeviceJWT(signer),
-		"SessionOrDeviceAuth": middleware.SessionOrDeviceAuth(signer),
+		"DeviceJWT":           middleware.DeviceJWT(signer, jwtblacklist.New(redis.Default())),
+		"SessionOrDeviceAuth": middleware.SessionOrDeviceAuth(signer, jwtblacklist.New(redis.Default())),
 	}
 }
 
@@ -62,7 +62,7 @@ func bearerTestSigner(t *testing.T) *hubjwt.Signer {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	return signer
@@ -97,7 +97,7 @@ func TestBearerBranches_RejectTheSameCredentials(t *testing.T) {
 	require.NoError(t, err)
 	blacklisted, blacklistedJTI, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "desktop"}, time.Hour)
 	require.NoError(t, err)
-	require.NoError(t, jwtblacklist.Add(t.Context(), blacklistedJTI, 3600))
+	require.NoError(t, jwtblacklist.New(redis.Default()).Add(t.Context(), blacklistedJTI, 3600))
 
 	cases := map[string]string{
 		"浏览器中继票据不能进普通设备端点": relayTicket,

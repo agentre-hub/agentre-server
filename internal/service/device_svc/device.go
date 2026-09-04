@@ -96,6 +96,10 @@ func (noopDeviceDataPurger) PurgeDeviceDeleteTodos(context.Context, int64, strin
 type deviceSvc struct {
 	cfg    Config
 	signer Signer
+	// blacklist 是吊销时要写的那份 jti 黑名单。注入而不是够 jwtblacklist 的包级
+	// 函数：那两个函数背后是 redis.Default() 全局单例，撤销这条链路因此没法在不
+	// 改全局状态的前提下被测。
+	blacklist *jwtblacklist.Blacklist
 	// now 是这个服务的时钟。注入而不是就地 time.Now()，与 sync_svc / engine_svc /
 	// relay_svc.framebus 同一形状：这里的判定全是「距今多久」的边界（授权码过期、
 	// 刷新窗口、吊销列表窗口），用真实时钟只断言得了区间，而区间往往恰好盖得住
@@ -108,9 +112,12 @@ var defaultSvc DeviceSvc
 func Default() DeviceSvc     { return defaultSvc }
 func SetDefault(s DeviceSvc) { defaultSvc = s }
 
-func New(cfg Config, signer Signer) DeviceSvc { return newDeviceSvc(cfg, signer) }
-func newDeviceSvc(cfg Config, signer Signer) *deviceSvc {
-	return &deviceSvc{cfg: cfg, signer: signer, now: func() int64 { return time.Now().UnixMilli() }}
+func New(cfg Config, signer Signer, blacklist *jwtblacklist.Blacklist) DeviceSvc {
+	return newDeviceSvc(cfg, signer, blacklist)
+}
+func newDeviceSvc(cfg Config, signer Signer, blacklist *jwtblacklist.Blacklist) *deviceSvc {
+	return &deviceSvc{cfg: cfg, signer: signer, blacklist: blacklist,
+		now: func() int64 { return time.Now().UnixMilli() }}
 }
 
 func (s *deviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*device_entity.Device, error) {
@@ -481,7 +488,7 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	// Redis 不可用时不让 DB 侧吊销失败——黑名单本身 fail-open（spec §6.5）。
 	ttlSec := int((s.cfg.AccessTTL + jwt.Leeway) / time.Second)
 	for _, jti := range jtis {
-		_ = jwtblacklist.Add(ctx, jti, ttlSec)
+		_ = s.blacklist.Add(ctx, jti, ttlSec)
 	}
 	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
 		return err

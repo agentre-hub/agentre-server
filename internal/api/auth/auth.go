@@ -2,6 +2,11 @@ package auth
 
 import "github.com/cago-frame/cago/server/mux"
 
+// GithubCallbackPath 是 OAuth 回调落地的路径，与 GithubCallbackRequest 上注册的路由
+// 同值（由 callback_path_test.go 钉住）。oauth_svc 用它拼 redirect_uri，两者必须一致，
+// 所以它是路由表的推论而不是配置项。
+const GithubCallbackPath = "/v1/auth/oauth/github/callback"
+
 type GithubAuthorizeRequest struct {
 	mux.Meta `path:"/v1/auth/oauth/github/authorize" method:"GET"`
 	Next     string `form:"next"`

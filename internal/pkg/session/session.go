@@ -25,6 +25,13 @@ import (
 	"go.uber.org/zap"
 )
 
+// CookieName 是浏览器 session cookie 的名字。
+//
+// 它不是配置项：这枚 cookie 只由本服务写、也只由本服务读（写在 auth_ctr /
+// passkey_ctr，读在 middleware 与各控制器），名字唯一的作用是和自己对上。改它的
+// 效果只有一个——所有在线用户当场掉线。
+const CookieName = "server_session"
+
 // ipMaxLen 是 IP 的存储宽度，与 device_tokens.ip 的 varchar(45) 同规格：
 // 客户端能塞进代理头的东西长度不由我们决定，落存储的宽度必须是个定数。
 const ipMaxLen = 45

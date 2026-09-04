@@ -629,7 +629,7 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 // 网络中断区分开：daemon 会退避重连，重连在 upgrade 处被拒才是正确结局。
 func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
 	testutils.Redis(t)
-	auth := auth_svc.New(session.New(redis.Default(), "server_session", 86400))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
 	auth_svc.SetDefault(auth)
 	ctx := context.Background()
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
@@ -662,6 +662,11 @@ func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
 // 连接的实例自己读得到，不需要任何实例间寻址。
 func TestRelayDaemonClosesWhenDeviceCredentialRevokedOnAnotherInstance(t *testing.T) {
 	testutils.Redis(t)
+	// 这条用例自己装配 auth_svc：connguard.watch 判不出撤销时按「不撤销」处理
+	// （auth_svc 未装配是它的合法分支），所以少了这一行，用例会在**什么都没复查**
+	// 的情况下走完，断言反而靠同文件里前一条用例遗留的全局单例才碰巧成立。
+	auth_svc.SetDefault(auth_svc.New(redis.Default(),
+		session.New(redis.Default(), "server_session", 86400)))
 	ctx := context.Background()
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -679,7 +684,7 @@ func TestRelayDaemonClosesWhenDeviceCredentialRevokedOnAnotherInstance(t *testin
 	revoked := dialRelayDaemon(t, serverB, revokedToken) // 被撤销的那台，挂在实例 B
 
 	// device_svc.Revoke 的既有动作：把该设备已签发的 access token jti 全部拉黑。
-	require.NoError(t, jwtblacklist.Add(ctx, revokedJTI, int(15*time.Minute/time.Second)))
+	require.NoError(t, jwtblacklist.New(redis.Default()).Add(ctx, revokedJTI, int(15*time.Minute/time.Second)))
 
 	requireRelayPeerClosed(t, revoked, "设备撤销后它已经建好的 daemon 连接必须被断开")
 	requireRelayPeerAlive(t, kept, "撤销一台设备不能踢掉同账号另一台设备的 daemon 连接")
@@ -894,7 +899,7 @@ func TestRelayDaemonClosesWhenAccountBannedAfterConnect(t *testing.T) {
 	// client 那条连接的票要挂在一次**真实存在**的登录会话上：否则归属会话查无此 key，
 	// 既有的凭据复查自己就会断开它，用例便测不出账号闸门有没有生效。
 	ctx := context.Background()
-	auth := auth_svc.New(session.New(redis.Default(), "server_session", 86400))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
 	auth_svc.SetDefault(auth)
 	sid, _, err := auth.StartSession(ctx, 7)
 	require.NoError(t, err)

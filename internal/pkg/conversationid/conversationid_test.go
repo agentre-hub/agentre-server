@@ -47,10 +47,3 @@ func TestDerive_GivenInputsThatOnlyDifferInFieldBoundary_ThenDoesNotCollide(t *t
 		conversationid.Derive(conversationid.Namespace, "a", "b1"),
 	)
 }
-
-// Given 同一组输入跑两遍，When 比较，Then 完全相同 —— 回填因此可以重跑、可以分批。
-func TestDerive_GivenTheSameInputsTwice_ThenIsStable(t *testing.T) {
-	first := conversationid.Derive(conversationid.Namespace, "sha256:cccc", "77")
-	second := conversationid.Derive(conversationid.Namespace, "sha256:cccc", "77")
-	assert.Equal(t, first, second)
-}

@@ -15,6 +15,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/middleware"
 	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 )
@@ -22,7 +23,7 @@ import (
 func TestSessionOrDeviceAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)
@@ -30,7 +31,7 @@ func TestSessionOrDeviceAuth(t *testing.T) {
 
 	makeHandler := func() *gin.Engine {
 		r := gin.New()
-		r.GET("/me", middleware.SessionOrDeviceAuth(signer), func(c *gin.Context) {
+		r.GET("/me", middleware.SessionOrDeviceAuth(signer, jwtblacklist.New(redis.Default())), func(c *gin.Context) {
 			uid, _ := c.Get("user_id")
 			did, _ := c.Get("device_id")
 			c.JSON(http.StatusOK, gin.H{"uid": uid, "did": did})

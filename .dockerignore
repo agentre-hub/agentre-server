@@ -26,6 +26,8 @@ configs/config.yaml
 e2e
 docs
 deploy
+# 例外：这一份要 bake 进镜像当默认配置（见 Dockerfile 最后那段 COPY）
+!deploy/config.docker.yaml
 README.md
 AGENTS.md
 CLAUDE.md

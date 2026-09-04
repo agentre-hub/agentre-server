@@ -17,6 +17,8 @@
 # data
 /data/
 /.env
+# compose 读的是 deploy/.env，不是这里的 /.env；含数据库口令
+/deploy/.env
 /config.yaml
 /configs/config.yaml
 /configs/config.e2e.yaml

@@ -4,20 +4,59 @@
 deploy/
   Dockerfile              镜像：前端和后端都在里面构建，产物是单个静态二进制
   docker-compose.yml      单机部署：server + MySQL + Redis
+  .env.example            单机部署的变量（镜像版本 / 端口 / 域名 / 数据库），抄成 .env
   Dockerfile.dev          dev 专用：只把编好的二进制装进运行时镜像，不在镜像里构建
   docker-compose.dev.yml  dev 环境：只有 server，MySQL/Redis/etcd 用外部现成的
   config.docker.yaml      compose 用的配置
   helm/                   Kubernetes 部署
 ```
 
+`config.docker.yaml` 同时是镜像里 bake 的默认配置（落在 `/app/configs/config.yaml`）：
+compose 仍把它挂到同一位置，好处是改配置不用重打镜像；helm 用自己的 configmap。
+
 服务是一个二进制，前端 SPA 用 `go:embed` 打进去了，所以运行时不需要 nginx，
 也不需要挂静态文件目录。默认监听 8443。
 
 ## Docker 单机部署
 
-最省事的一种，适合自用或者小规模。
+一条命令起全套（server + MySQL + Redis），镜像拉 GHCR 上流水线推的那份，
+不用本地构建，也不用先生成密钥：
 
-先生成 JWT 密钥（签发设备令牌用的，没有它起不来）：
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+curl http://localhost:8443/v1/healthz
+```
+
+响应里的 `data` 同时满足
+`{"status":"ok","db_ping":true,"redis":true}` 就是好了，浏览器打开
+<http://localhost:8443> 能看到界面。什么都不改也能起，要换端口 / 域名 / 数据库 /
+镜像版本见[要改配置](#要改配置)。
+
+数据落在仓库根的 `data/mysql` 和 `data/redis`，删掉等于重置；JWT 密钥落在具名卷
+`deploy_keys` 里。
+
+Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 MySQL 官方
+升级路径检查目标版本是否支持直接读取当前数据目录；不要让不兼容的大版本
+直接复用 `data/mysql`。
+
+### JWT 密钥
+
+签发设备令牌用的，没有它起不来。compose 默认 `JWT_AUTO_GENERATE=1`：首次启动时
+`/keys` 里没有私钥就自己补一把 RSA-2048（kid `local-1`），启动日志里有一行说明；
+已存在的不会被覆盖。
+
+- **别删 `deploy_keys` 卷**，密钥没了等于所有设备和浏览器重新登录。备份它：
+
+  ```bash
+  docker run --rm -v deploy_keys:/keys -v "$PWD:/out" alpine \
+    tar -czf /out/agentre-keys.tgz -C /keys .
+  ```
+
+- **多副本必须关掉**（改成 0 并自备密钥）：每个副本各生成一把，令牌换个副本就验
+  不过，而且是静默的。
+
+自备密钥就设 `JWT_AUTO_GENERATE=0`，并把 compose 里的 `- keys:/keys` 换成
+`- ../runtime/keys:/keys:ro`，格式与自动生成的一致：
 
 ```bash
 mkdir -p runtime/keys
@@ -48,52 +87,70 @@ server:
 完全离线的 agentred 无法获知服务端状态变化，仍会保留旧公钥；私钥泄漏时必须把这些
 节点视为尚未完成处置，待其重新连上并成功刷新 key set 后才算废弃生效。
 
-然后起起来：
-
-```bash
-docker compose -f deploy/docker-compose.yml up -d
-curl http://localhost:8443/v1/healthz
-```
-
-响应里的 `data` 同时满足
-`{"status":"ok","db_ping":true,"redis":true}` 就是好了，浏览器打开
-<http://localhost:8443> 能看到界面。
-
-数据落在仓库根的 `data/mysql` 和 `data/redis`，删掉就等于重置。
-
-Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 MySQL 官方
-升级路径检查目标版本是否支持直接读取当前数据目录；不要让不兼容的大版本
-直接复用 `data/mysql`。
-
 ### 要改配置
 
-改 `deploy/config.docker.yaml` 后重启已在运行的服务，让进程重新读取 bind mount
-里的配置：
+- **`deploy/.env`** —— 随环境变的（镜像、端口、域名、数据库、OAuth）：
+  `cp deploy/.env.example deploy/.env`，每项都有缺省值。**别放仓库根** —— compose 的
+  项目目录是编排文件所在的目录，放错不会报错，只是所有变量静默用了缺省值。
+- **`deploy/config.docker.yaml`** —— 其余配置，bind mount 进容器。
 
 ```bash
-docker compose -f deploy/docker-compose.yml restart server
+docker compose -f deploy/docker-compose.yml up -d            # 改了 .env
+docker compose -f deploy/docker-compose.yml restart server   # 只改了 config.docker.yaml
 ```
 
-第一次启动整套服务仍使用上面的 `up -d`。
-常改的几处：
+`.env` 各项见 `.env.example`。几处不那么直白的：
 
 | 想做什么 | 改哪里 |
 | --- | --- |
-| 换数据库/Redis 地址 | `db.dsn`、`redis.addr` |
-| 对外域名（拼 OAuth 回调和设备验证链接用） | 根目录 `.env` 的 `SERVER_PUBLIC_URL`（Compose 环境变量覆盖 yaml） |
-| 域名变更后的通行密钥绑定 | `server.webauthn.rp_id` 和 `server.webauthn.origins` |
-| 上了 HTTPS 之后 | `server.insecure_cookies` 改成 `false` |
-| 日志详细一点 | `logger.level` 改成 `debug` |
+| 连外部数据库 | `.env` 的 `DB_DSN`（整条覆盖，`DB_USER` 那几项对 server 不再起作用） |
+| 用源码构建而不是拉镜像 | `.env` 的 `SERVER_PULL_POLICY=build` |
+| 换域名 | 只改 `.env` 的 `SERVER_PUBLIC_URL`，通行密钥的 `rp_id` / `origins` 跟着推导 |
+| 连外部 Redis | `.env` 的 `REDIS_ADDR` |
+| 给内置 Redis 设口令 | `.env` 的 `REDIS_PASSWORD`（同时喂给 redis 服务的 `--requirepass` 和 server） |
+| 上了 HTTPS | `config.docker.yaml` 的 `server.insecure_cookies` 改成 `false` |
+| 日志详细一点 | `config.docker.yaml` 的 `logger.level` 改成 `debug` |
 
 GitHub 登录要在 <https://github.com/settings/developers> 建一个 OAuth App，回调地址填
-`<你的域名>/v1/auth/oauth/github/callback`，然后把 id 和 secret 写进仓库根的 `.env`：
+`<你的域名>/v1/auth/oauth/github/callback`，id 和 secret 写进 `deploy/.env`。
+
+### 不用 compose，只跑一个容器
+
+已经有 MySQL 和 Redis 的话，`docker run` 就够——镜像里那份配置已经是照容器写的，
+连接信息全走环境变量：
 
 ```bash
-GH_CLIENT_ID=xxx
-GH_CLIENT_SECRET=xxx
-SESSION_SECRET=$(openssl rand -base64 32)
-SERVER_PUBLIC_URL=https://your-domain
+docker volume create agentre-keys
+
+docker run -d --name agentre-server -p 8443:8443 \
+  -v agentre-keys:/keys \
+  -e AGENTRE_SERVER_DB_DSN="user:pass@tcp(192.168.1.10:3306)/agentre?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true" \
+  -e AGENTRE_SERVER_REDIS_ADDR="192.168.1.10:6379" \
+  -e AGENTRE_SERVER_PUBLIC_URL="http://192.168.1.10:8443" \
+  -e AGENTRE_SERVER_JWT_AUTO_GENERATE=1 \
+  ghcr.io/agentre-hub/agentre-server:latest
+
+curl http://localhost:8443/v1/healthz
 ```
+
+库要先建好（服务自己跑迁移，但不会替你 `CREATE DATABASE`）。两个容易踩的：
+
+- **`/keys` 一定要挂卷**，否则密钥随容器消失，`docker rm` 重建就是所有设备重新登录。
+- **`AGENTRE_SERVER_PUBLIC_URL` 要填浏览器真正访问到的地址**：Cookie 上的 `Secure`
+  与通行密钥的 `rp_id` / `origins` 都由它推出来，填错的症状是登录不生效。
+
+能覆盖的就下面这些，其余仍要靠配置文件（`-v /你的/config.yaml:/app/configs/config.yaml:ro`）：
+
+| 环境变量 | 覆盖的配置项 |
+| --- | --- |
+| `AGENTRE_SERVER_DB_DSN` | `db.dsn` |
+| `AGENTRE_SERVER_REDIS_ADDR` / `AGENTRE_SERVER_REDIS_PASSWORD` | `redis.addr` / `redis.password` |
+| `AGENTRE_SERVER_PUBLIC_URL` | `server.public_url` |
+| `AGENTRE_SERVER_JWT_AUTO_GENERATE` | 私钥不存在时生成一把（`1` / `true` 才算开） |
+| `AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID` / `_SECRET` | `server.oauth.github.*` |
+
+> 覆盖只在 `source: file` 下生效：配置源是 etcd 时（k8s 那条链路）cago 会换掉整个
+> 配置源，这一层就不在链路上了。
 
 ### 只要个镜像
 
@@ -131,7 +188,9 @@ docker build -f deploy/Dockerfile -t agentre-server:local \
 可以换的有 `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE`、`GOPROXY`、`NPM_REGISTRY`、
 `VERSION`、`COMMIT`，不传就用上游默认值。
 
-容器默认读取 `/app/configs/config.yaml`，想用自己的就盖掉它：
+容器默认读取 `/app/configs/config.yaml`，镜像里那份来自
+`deploy/config.docker.yaml`（连接信息走环境变量，见
+[不用 compose，只跑一个容器](#不用-compose只跑一个容器)）。想整份换掉就盖住它：
 
 ```bash
 docker run --rm -p 8443:8443 \

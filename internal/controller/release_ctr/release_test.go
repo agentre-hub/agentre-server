@@ -48,7 +48,7 @@ func serve(t *testing.T, svc release_svc.ReleaseSvc) (*httptest.Server, string, 
 
 	release_svc.SetDefault(svc)
 	t.Cleanup(func() { release_svc.SetDefault(nil) })
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	tm := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

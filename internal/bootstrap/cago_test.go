@@ -199,3 +199,35 @@ func TestRegisterDefaults_InstallsReleaseService(t *testing.T) {
 
 	assert.NotNil(t, release_svc.Release(), "RegisterDefaults 必须装配 release 服务")
 }
+
+// Cookie 上的 Secure 由 public_url 的 scheme 决定，不是一个独立的开关。
+//
+// 两者对不上时没有任何一层会报错，症状还都不像配置问题：https 上关掉 Secure 是一次
+// 静默降级；http 上开着 Secure 则是浏览器根本不回传 cookie，表现为「登录了但一直没
+// 登上」。既然写错的两种方式都无声,就别留下写错的余地——与 webauthn 的 rp_id /
+// origins 同一个处理。
+func TestLoadServerConfig_InsecureCookiesFollowPublicURLScheme(t *testing.T) {
+	load := func(t *testing.T, body string) *ServerConfig {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		assert.NoError(t, os.WriteFile(path,
+			[]byte("env: dev\ndebug: true\nsource: file\nserver:\n"+body), 0o600))
+		cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(path))
+		assert.NoError(t, err)
+		return LoadServerConfig(context.Background(), cfg)
+	}
+
+	assert.True(t, load(t, "  public_url: \"http://localhost:8443\"\n").InsecureCookies,
+		"http 上必须去掉 Secure，否则浏览器不回传 cookie，登录永远不生效")
+	assert.False(t, load(t, "  public_url: \"https://server.agentre.dev\"\n").InsecureCookies,
+		"https 上必须带 Secure")
+
+	// 配置里写死的开关不再有话语权：留着它就等于留着「和 scheme 写反」这一种配错法。
+	assert.False(t, load(t,
+		"  public_url: \"https://server.agentre.dev\"\n  insecure_cookies: true\n").InsecureCookies,
+		"insecure_cookies 已不是配置项，https 上写 true 也不该关掉 Secure")
+
+	// public_url 缺失或不是个 http(s) 地址时按安全的一侧兜底：宁可 cookie 带 Secure
+	// 让人当场看见登录不生效，也不要在一台不知道自己是谁的服务上悄悄发出裸 cookie。
+	assert.False(t, load(t, "  public_url: \"\"\n").InsecureCookies)
+}

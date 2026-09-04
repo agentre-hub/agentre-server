@@ -1,22 +1,27 @@
 # 路径都相对本文件所在目录。从仓库根跑：
 #   docker compose -f deploy/docker-compose.yml up -d
+# 变量都有缺省值；要改就照 .env.example 抄一份 deploy/.env，各项含义也在那边。
 services:
   server:
-    image: agentre/server:0.1
+    image: ${SERVER_IMAGE:-ghcr.io/agentre-hub/agentre-server:latest}
+    pull_policy: ${SERVER_PULL_POLICY:-always}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
     restart: unless-stopped
-    ports: ["8443:8443"]
+    ports: ["${SERVER_PORT:-8443}:8443"]
     volumes:
       - ./config.docker.yaml:/app/configs/config.yaml:ro
-      - ../runtime/keys:/keys:ro
+      # 具名卷而不是 bind：容器以 65532 跑，宿主目录挂进来是 root 属主，写不进密钥
+      - keys:/keys
     environment:
-      # 只有这几个 AGENTRE_SERVER_* 会被读取，其余配置走上面挂进去的文件
       AGENTRE_SERVER_PUBLIC_URL: "${SERVER_PUBLIC_URL:-http://localhost:8443}"
       AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID: "${GH_CLIENT_ID:-}"
       AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET: "${GH_CLIENT_SECRET:-}"
-      AGENTRE_SERVER_SESSION_SECRET: "${SESSION_SECRET:-}"
+      AGENTRE_SERVER_DB_DSN: "${DB_DSN:-${DB_USER:-server}:${DB_PASSWORD:-server}@tcp(mysql:3306)/${DB_NAME:-server}?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true}"
+      AGENTRE_SERVER_REDIS_ADDR: "${REDIS_ADDR:-redis:6379}"
+      AGENTRE_SERVER_REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      AGENTRE_SERVER_JWT_AUTO_GENERATE: "${JWT_AUTO_GENERATE:-1}"
     depends_on:
       mysql: { condition: service_healthy }
       redis: { condition: service_started }
@@ -24,16 +29,21 @@ services:
   mysql:
     image: mysql:9.7.2
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: server
-      MYSQL_USER: server
-      MYSQL_PASSWORD: server
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${DB_NAME:-server}
+      MYSQL_USER: ${DB_USER:-server}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-server}
     volumes: ["../data/mysql:/var/lib/mysql"]
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -proot --silent"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p${DB_ROOT_PASSWORD:-root} --silent"]
       interval: 5s
       retries: 10
 
   redis:
     image: redis:7-alpine
+    # :+ 而不是 :-：口令留空时这个参数整个不能出现，--requirepass "" 会真的要求 AUTH
+    command: redis-server ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
     volumes: ["../data/redis:/data"]
+
+volumes:
+  keys:

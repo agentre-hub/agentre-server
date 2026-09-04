@@ -44,6 +44,10 @@ linters:
         linters: [forbidigo]
       - path: internal/bootstrap/cago\.go
         linters: [forbidigo]
+      # 同一个窗口：EnsureJWTKeys 由 main 在 cago.New 之前调用，而生成了密钥这件事
+      # 必须让运维看见。
+      - path: internal/bootstrap/jwtkeys\.go
+        linters: [forbidigo]
 
 # golangci-lint v2 把格式化器从 linters 里拆了出来，需要单独这一段；缺了它 gofmt
 # 从来不会被执行。这正是 202608150002 那个多余空注释行能从 92dd273 一路躺到

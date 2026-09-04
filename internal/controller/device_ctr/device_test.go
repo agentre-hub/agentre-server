@@ -94,7 +94,7 @@ func newDeviceTestServer(t *testing.T, stub *stubDeviceSvc) (*httptest.Server, *
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	device_svc.SetDefault(stub)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
@@ -300,7 +300,7 @@ func TestRevocations_RejectsRevokedCallerDevice(t *testing.T) {
 	server, signer := newDeviceTestServer(t, stub)
 	token, jti, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
 	require.NoError(t, err)
-	require.NoError(t, jwtblacklist.Add(context.Background(), jti, 3600))
+	require.NoError(t, jwtblacklist.New(redis.Default()).Add(context.Background(), jti, 3600))
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", "", token, "")
 	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -414,7 +414,7 @@ func newUpgradeTestServer(
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	device_svc.SetDefault(stub)
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

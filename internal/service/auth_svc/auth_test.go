@@ -18,7 +18,7 @@ import (
 )
 
 func newSvc() AuthSvc {
-	return New(session.New(redis.Default(), "server_session", 86400))
+	return New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
 }
 
 func TestOAuthState_Roundtrip(t *testing.T) {
@@ -61,10 +61,10 @@ func TestEndSession_BlacklistsTrackedRelayTickets(t *testing.T) {
 
 	require.NoError(t, s.EndSession(ctx, "sid-a"))
 
-	assert.True(t, jwtblacklist.Has(ctx, "jti-a1"))
-	assert.True(t, jwtblacklist.Has(ctx, "jti-a2"))
+	assert.True(t, jwtblacklist.New(redis.Default()).Has(ctx, "jti-a1"))
+	assert.True(t, jwtblacklist.New(redis.Default()).Has(ctx, "jti-a2"))
 	// 另一次会话（可能是同账号的另一个浏览器）的票不受牵连
-	assert.False(t, jwtblacklist.Has(ctx, "jti-b1"))
+	assert.False(t, jwtblacklist.New(redis.Default()).Has(ctx, "jti-b1"))
 	assert.False(t, mini.Exists(relayTicketKey("sid-a")), "撤完票该把归集键清掉")
 	assert.True(t, mini.Exists(relayTicketKey("sid-b")))
 
@@ -101,8 +101,8 @@ func TestEndSession_SkipsRelayTicketsPastTheirWindow(t *testing.T) {
 
 	require.NoError(t, s.EndSession(ctx, "sid-a"))
 
-	assert.True(t, jwtblacklist.Has(ctx, "jti-live"))
-	assert.False(t, jwtblacklist.Has(ctx, "jti-stale"))
+	assert.True(t, jwtblacklist.New(redis.Default()).Has(ctx, "jti-live"))
+	assert.False(t, jwtblacklist.New(redis.Default()).Has(ctx, "jti-stale"))
 }
 
 // 一条已经建好的 client 连接活得比票久得多：票只有 2 分钟，连接可以挂几个小时。
@@ -147,7 +147,7 @@ func TestWatchRelayCredential_IsScopedToOneCredential(t *testing.T) {
 
 	require.NoError(t, s.EndSession(ctx, sidA))
 	// device_svc.Revoke 的既有动作：把该设备已签发的 jti 拉黑。
-	require.NoError(t, jwtblacklist.Add(ctx, "jti-device-1", 900))
+	require.NoError(t, jwtblacklist.New(redis.Default()).Add(ctx, "jti-device-1", 900))
 
 	assert.True(t, browserA(ctx))
 	assert.False(t, browserB(ctx), "登出一个浏览器不能撤掉同账号另一个浏览器的连接")
@@ -215,8 +215,8 @@ func TestEndOtherSessions_EndsOthersKeepsCurrentAndCountsRevoked(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, got, "别的账号的会话不该被牵连")
 
-	assert.True(t, jwtblacklist.Has(ctx, "jti-other-a"), "被结束的会话仍有效的中继票必须先拉黑")
-	assert.False(t, jwtblacklist.Has(ctx, "jti-current"), "当前会话的票照常可用")
+	assert.True(t, jwtblacklist.New(redis.Default()).Has(ctx, "jti-other-a"), "被结束的会话仍有效的中继票必须先拉黑")
+	assert.False(t, jwtblacklist.New(redis.Default()).Has(ctx, "jti-current"), "当前会话的票照常可用")
 
 	// 再点一次：只剩当前这一条了，如实返回 0。
 	revoked, err = s.EndOtherSessions(ctx, 7, current)

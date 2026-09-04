@@ -107,7 +107,7 @@ func serve(t *testing.T, act *stubActivity, dev *stubDevices) (*httptest.Server,
 	t.Cleanup(func() { activity_svc.SetDefault(activity_svc.New()) })
 	device_svc.SetDefault(dev)
 	t.Cleanup(func() { device_svc.SetDefault(nil) })
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	tm := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

@@ -445,18 +445,80 @@ func (f *redisForwarder) renewStream(ctx context.Context, stream string) {
 // daemon 的 websocket 还连着、Check 仍然通过,但跨实例来的帧从此无人消费,每一帧
 // 都只能等到 deliveryWaitTimeout。所以这里退避重试,只在 ctx 结束时才真正退出。
 func (f *redisForwarder) consume(ctx context.Context, stream string) {
-	failures := 0
+	outage := &consumerOutage{stream: stream, instanceID: f.instanceID, now: f.now}
+	healthy := func() { outage.recovered(ctx) }
 	for ctx.Err() == nil {
-		if f.consumeOnce(ctx, stream) {
-			failures = 0
-			continue
-		}
-		if !sleepContext(ctx, consumerRetryDelay(failures)) {
+		err := f.consumeOnce(ctx, stream, healthy)
+		if err == nil {
 			return
 		}
-		failures++
+		// 退避时长按**本次失败之前**的计数取，与从前逐字一致：第一次失败等
+		// 50ms，之后翻倍。interrupted 随后才把计数推进一格。
+		retryIn := consumerRetryDelay(outage.attempts)
+		outage.interrupted(ctx, err, retryIn)
+		if !sleepContext(ctx, retryIn) {
+			return
+		}
 	}
 }
+
+// consumerOutage 记一段故障的始末，并决定这段故障在日志上说几句、说到哪个级别。
+//
+// 分级的判据是「要不要人来看」，不是「出没出错」：
+//   - 第一次失败 → Warn。退避重试本来就是为瞬时故障（主从切换 / LOADING /
+//     读超时）准备的，绝大多数在毫秒级自愈，够得上「降级但已处理」。
+//   - 失败累计到 consumerOutageEscalation → Error 一次。退避已经打满，说明这不是
+//     抖动，跨实例的帧从此每一帧都只能等满 deliveryWaitTimeout，得有人去看 Redis。
+//   - 恢复 → Info，带上试了多少次、断了多久。这一行是「这段故障已经结束」的收口，
+//     没有它，Warn/Error 那两行永远读不出「后来呢」。
+//
+// 每段故障在每个级别上只说一行。50ms 起步的重试阶梯若逐次记账，一次十分钟的
+// Redis 故障会刷出几万行，那和没有日志是同一个效果。
+type consumerOutage struct {
+	stream     string
+	instanceID string
+	now        func() time.Time
+	attempts   int
+	since      time.Time
+}
+
+func (o *consumerOutage) interrupted(ctx context.Context, err error, retryIn time.Duration) {
+	o.attempts++
+	switch o.attempts {
+	case 1:
+		o.since = o.now()
+		logger.Ctx(ctx).Warn("relay frame bus consumer interrupted, retrying",
+			zap.String("stream", o.stream), zap.String("instanceId", o.instanceID),
+			zap.Duration("retryIn", retryIn), zap.Error(err))
+	case consumerOutageEscalation:
+		logger.Ctx(ctx).Error("relay frame bus consumer down",
+			zap.String("stream", o.stream), zap.String("instanceId", o.instanceID),
+			zap.Int("attempts", o.attempts),
+			zap.Duration("outage", o.now().Sub(o.since)), zap.Error(err))
+	}
+}
+
+// recovered 由消费循环在每一次成功的读之后调用；没有正在进行的故障时它什么也不做。
+//
+// 顺带把退避阶梯归零。从前那句 `failures = 0` 挂在 consumeOnce 返回 true 上，而
+// 它只在 ctx 结束时才返回 true——也就是说阶梯从来没有真正重置过，一次抖动之后
+// 半小时才发生的第二次抖动会直接从封顶的 1s 起步。
+func (o *consumerOutage) recovered(ctx context.Context) {
+	if o.attempts == 0 {
+		return
+	}
+	logger.Ctx(ctx).Info("relay frame bus consumer recovered",
+		zap.String("stream", o.stream), zap.String("instanceId", o.instanceID),
+		zap.Int("attempts", o.attempts),
+		zap.Duration("outage", o.now().Sub(o.since)))
+	o.attempts = 0
+}
+
+// consumerOutageEscalation 是「抖动」与「挂了」之间那条线：退避阶梯打满(见
+// consumerRetryDelay,第 5 次失败起固定 1s)说明这已经不是一次瞬时故障,日志从
+// Warn 升到 Error。取这个数而不是随手一个常量,是为了让升级点跟着退避走——改了
+// 阶梯,升级点自动还是「退避已经没得退了」那一刻。
+const consumerOutageEscalation = 5
 
 // consumerRetryDelay 是消费循环的重连退避阶梯:抖动通常是秒级的,上限压在
 // deliveryWaitTimeout 以内,恢复后最多耽误一个投递窗口。
@@ -488,18 +550,22 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-// consumeOnce 跑一轮消费,返回 false 表示这一轮被 Redis 错误打断、需要退避重试。
+// consumeOnce 跑一轮消费,交回打断它的 Redis 错误;nil 表示 ctx 结束、正常收工。
 // 重新进入时 pending 从 true 起步,先把本消费者 PEL 里没确认的帧重读一遍。
-func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
+//
+// 错误必须交回而不是就地咽掉:调用方要拿它记账并写进日志,否则一次故障在服务端的
+// 全部痕迹就只剩「每一帧都等满 deliveryWaitTimeout」。onHealthy 在每一次 Redis 正常
+// 应答之后调用,是「这段故障结束了」的唯一判据——建组成功不算数,那时读还没发生。
+func (f *redisForwarder) consumeOnce(ctx context.Context, stream string, onHealthy func()) error {
 	if err := f.redis.XGroupCreateMkStream(ctx, stream, frameBusGroup, "0").Err(); err != nil && !isBusyGroup(err) {
-		return false
+		return fmt.Errorf("create relay frame bus group: %w", err)
 	}
 	_ = f.redis.Expire(ctx, stream, f.ttl).Err()
 	pending := true
 	for {
 		select {
 		case <-ctx.Done():
-			return true
+			return nil
 		default:
 		}
 		start := ">"
@@ -511,11 +577,13 @@ func (f *redisForwarder) consumeOnce(ctx context.Context, stream string) bool {
 			Streams: []string{stream, start},
 		}).Result()
 		if errors.Is(err, goredis.Nil) {
+			onHealthy()
 			continue
 		}
 		if err != nil {
-			return false
+			return fmt.Errorf("read relay frame bus group: %w", err)
 		}
+		onHealthy()
 		for _, result := range streams {
 			for _, message := range result.Messages {
 				peer, channelID, messageType, frame, ack, ackTo, err := decodeFrame(message.Values)

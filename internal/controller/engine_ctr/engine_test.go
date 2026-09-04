@@ -25,6 +25,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -87,10 +88,10 @@ func newEngineServer(t *testing.T, stub *stubEngineSvc) (*httptest.Server, *jwt.
 	require.NoError(t, err)
 	engine_svc.SetDefault(stub)
 	t.Cleanup(func() { engine_svc.SetDefault(engine_svc.New()) })
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
 	// 快照端点要先确认「这台设备归调用方且还能用」，判定归 device_svc.OwnedDevice；
 	// 它只走 device_repo（下面用 mock 装配），配置与签名器都用不上。
-	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil))
+	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil, jwtblacklist.New(redis.Default())))
 	t.Cleanup(func() { device_svc.SetDefault(nil) })
 	tm := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}}, Signer: signer}).Router(context.Background(), tm.Router))

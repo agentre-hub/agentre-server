@@ -38,11 +38,10 @@ trace:
   useSSL: false
 
 server:
+  # 走 http，所以 Cookie 不带 Secure、通行密钥的 rp_id 是 localhost——两者都由这一行
+  # 推出来，换域名只改它（或 SERVER_PUBLIC_URL）。
   public_url: "http://localhost:8443"
-  # 本机没有 TLS，Cookie 不能带 Secure
-  insecure_cookies: true
   session:
-    cookie_name: "server_session"
     ttl: 336h
   device_flow:
     user_code_ttl: 10m
@@ -53,15 +52,12 @@ server:
       - kid: "local-1"
         private_key_pem_path: "/keys/jwt.key"
         public_key_pem_path: "/keys/jwt.pub"
-    issuer: "agentre-server"
-    audience: "agentre"
-    access_ttl: 1h
+    access_ttl: 15m
     refresh_ttl: 2160h
   oauth:
     github:
       client_id: ""
       client_secret: ""
-      callback_path: "/v1/auth/oauth/github/callback"
   rate_limit:
     authorize_per_ip_per_min: 3
     # 计数前缀与设备流的 authorize 分开；authorize 每次都会往 Redis 写一条 state。
@@ -75,11 +71,8 @@ server:
   # 判定结论按 user_id 缓存的时长，即「改库封禁后多久在所有入口失效」的上界。
   account_gate:
     cache_ttl: 60s
-  # rp_id 跟着 public_url 走，换域名时两处一起改。rp_id 只能是有效域名，不带
-  # scheme、不带端口；origins 要列浏览器地址栏里真正出现的那几个。
+  # rp_id 与 origins 留空，由 public_url 推导；换域名只改 SERVER_PUBLIC_URL。
+  # 要列多个 origin（前后端分端口之类）才显式写回来。
   webauthn:
-    rp_id: "localhost"
     rp_name: "AgentRe"
-    origins:
-      - "http://localhost:8443"
     max_per_account: 10

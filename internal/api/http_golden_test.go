@@ -93,6 +93,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -575,10 +576,10 @@ func record(t *testing.T, ex exchange) []byte {
 	sync_repo.RegisterSyncLocalPath(m.localPath)
 	device_repo.RegisterDevice(m.device)
 	engine_svc.SetDefault(engine_svc.New())
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
 	// 快照端点要先确认「这台设备归调用方且还能用」，判定归 device_svc.OwnedDevice；
 	// 它只走上面装好的 device_repo mock，配置与签名器都用不上。
-	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil))
+	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil, jwtblacklist.New(redis.Default())))
 	// 没有 EXPECT 的调用会被 gomock 判失败：这些样本都不该碰到浏览器的执行目标排列。
 
 	// Push 外层有一个事务。gin 造出来的请求 ctx 里没有数据库实例，db.Ctx 会回落到默认

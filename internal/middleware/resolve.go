@@ -23,7 +23,7 @@ import (
 
 // verifiedJWT 验一枚 Bearer 凭据：取头、验签、查黑名单。
 // 失败时返回该用的业务码，由调用方决定怎么终止。
-func verifiedJWT(c *gin.Context, signer *jwt.Signer) (*jwt.Claims, int, bool) {
+func verifiedJWT(c *gin.Context, signer *jwt.Signer, blacklist *jwtblacklist.Blacklist) (*jwt.Claims, int, bool) {
 	h := c.GetHeader("Authorization")
 	if !strings.HasPrefix(h, "Bearer ") {
 		return nil, code.Unauthorized, false
@@ -32,7 +32,7 @@ func verifiedJWT(c *gin.Context, signer *jwt.Signer) (*jwt.Claims, int, bool) {
 	if err != nil {
 		return nil, code.JWTSignatureInvalid, false
 	}
-	if jwtblacklist.Has(c.Request.Context(), claims.JTI) {
+	if blacklist.Has(c.Request.Context(), claims.JTI) {
 		return nil, code.JWTBlacklisted, false
 	}
 	return claims, 0, true

@@ -18,7 +18,9 @@ import (
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/database/redis"
 
+	"github.com/agentre-hub/agentre-server/internal/api/auth"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
@@ -39,8 +41,10 @@ import (
 )
 
 type ServerConfig struct {
-	PublicURL       string            `yaml:"public_url"`
-	InsecureCookies bool              `yaml:"insecure_cookies"`
+	PublicURL string `yaml:"public_url"`
+	// InsecureCookies 由 PublicURL 的 scheme 推出，不从配置读（没有 yaml tag）：
+	// 「要不要给 cookie 带 Secure」和「浏览器用什么协议访问到我」是同一个事实。
+	InsecureCookies bool
 	Session         SessionConfig     `yaml:"session"`
 	DeviceFlow      DFConfig          `yaml:"device_flow"`
 	JWT             JWTConfig         `yaml:"jwt"`
@@ -88,10 +92,18 @@ type AccountGateConfig struct {
 	CacheTTL time.Duration `yaml:"cache_ttl"`
 }
 
+// JWTIssuer / JWTAudience 是本服务签发令牌时写进 iss / aud 的值。
+//
+// 它们不是配置项：签名与验签都发生在本进程（internal/pkg/jwt.Signer 用同一对值
+// 生成和校验），桌面端拿走 /v1/keys 的公钥后离线验签时并不检查这两个 claim。
+// 也就是说改它们没有任何可观察效果，只会让所有在途令牌一次性失效。
+const (
+	JWTIssuer   = "agentre-server"
+	JWTAudience = "agentre"
+)
+
 type SessionConfig struct {
-	CookieName string        `yaml:"cookie_name"`
-	TTL        time.Duration `yaml:"ttl"`
-	Secret     string        `yaml:"secret"`
+	TTL time.Duration `yaml:"ttl"`
 }
 
 type DFConfig struct {
@@ -102,8 +114,6 @@ type DFConfig struct {
 type JWTConfig struct {
 	ActiveKID  string         `yaml:"active_kid"`
 	Keys       []JWTKeyConfig `yaml:"keys"`
-	Issuer     string         `yaml:"issuer"`
-	Audience   string         `yaml:"audience"`
 	AccessTTL  time.Duration  `yaml:"access_ttl"`
 	RefreshTTL time.Duration  `yaml:"refresh_ttl"`
 }
@@ -126,7 +136,6 @@ type OAuthConfig struct {
 type GithubOAuthConfig struct {
 	ClientID     string `yaml:"client_id"`
 	ClientSecret string `yaml:"client_secret"`
-	CallbackPath string `yaml:"callback_path"`
 }
 
 type RLConfig struct {
@@ -152,13 +161,6 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	setIfPresent("AGENTRE_SERVER_PUBLIC_URL", &out.PublicURL)
 	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID", &out.OAuth.Github.ClientID)
 	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET", &out.OAuth.Github.ClientSecret)
-	setIfPresent("AGENTRE_SERVER_SESSION_SECRET", &out.Session.Secret)
-	if v := os.Getenv("AGENTRE_SERVER_INSECURE_COOKIES"); v == "1" || strings.EqualFold(v, "true") {
-		out.InsecureCookies = true
-	}
-	if out.Session.CookieName == "" {
-		out.Session.CookieName = "server_session"
-	}
 	if out.Session.TTL == 0 {
 		out.Session.TTL = 14 * 24 * time.Hour
 	}
@@ -174,15 +176,6 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	}
 	if out.JWT.RefreshTTL == 0 {
 		out.JWT.RefreshTTL = 90 * 24 * time.Hour
-	}
-	if out.JWT.Issuer == "" {
-		out.JWT.Issuer = "agentre-server"
-	}
-	if out.JWT.Audience == "" {
-		out.JWT.Audience = "agentre"
-	}
-	if out.OAuth.Github.CallbackPath == "" {
-		out.OAuth.Github.CallbackPath = "/v1/auth/oauth/github/callback"
 	}
 	if out.RateLimit.AuthorizePerIPPerMin == 0 {
 		out.RateLimit.AuthorizePerIPPerMin = 3
@@ -208,8 +201,23 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	if out.Release.CacheTTL <= 0 {
 		out.Release.CacheTTL = release_svc.DefaultCacheTTL
 	}
+	out.InsecureCookies = insecureCookies(out.PublicURL)
 	applyWebAuthnDefaults(out)
 	return out
+}
+
+// insecureCookies 判断会话 cookie 该不该去掉 Secure，判据只有一个：浏览器用什么协议
+// 访问到这台服务，也就是 PublicURL 的 scheme。
+//
+// 只认显式的 http。PublicURL 空或不是个 http(s) 地址时按带 Secure 处理：那种部署已经
+// 不知道自己是谁了，此时发出裸 cookie 是把一个配置错误升级成一次凭据泄露；带着
+// Secure 则会当场表现为「登录不生效」，看得见、也改得动。
+func insecureCookies(publicURL string) bool {
+	parsed, err := url.Parse(publicURL)
+	if err != nil {
+		return false
+	}
+	return parsed.Scheme == "http"
 }
 
 // applyWebAuthnDefaults 把没配的 WebAuthn 项按 PublicURL 补齐。
@@ -253,7 +261,7 @@ func LoadJWTSigner(cfg *ServerConfig) *jwt.Signer {
 		jwtKeys = append(jwtKeys, jwt.Key{ID: key.KID, PrivatePEM: privatePEM,
 			PublicPEM: loadPEM(key.PublicKeyPEMPath)})
 	}
-	s, err := jwt.NewKeyRing(activeKID, jwtKeys, cfg.JWT.Issuer, cfg.JWT.Audience, cfg.JWT.AccessTTL)
+	s, err := jwt.NewKeyRing(activeKID, jwtKeys, JWTIssuer, JWTAudience, cfg.JWT.AccessTTL)
 	if err != nil {
 		log.Fatalf("init jwt signer: %v", err)
 	}
@@ -310,11 +318,11 @@ func readPEM(path string) ([]byte, error) {
 func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 	oauth_svc.SetDefaultGithub(oauth_svc.NewGithub(oauth_svc.GithubConfig{
 		ClientID: cfg.OAuth.Github.ClientID, ClientSecret: cfg.OAuth.Github.ClientSecret,
-		CallbackPath: cfg.OAuth.Github.CallbackPath, PublicURL: cfg.PublicURL,
+		CallbackPath: auth.GithubCallbackPath, PublicURL: cfg.PublicURL,
 	}))
 
-	store := session.New(redis.Default(), cfg.Session.CookieName, int(cfg.Session.TTL/time.Second))
-	auth_svc.SetDefault(auth_svc.New(store))
+	store := session.New(redis.Default(), session.CookieName, int(cfg.Session.TTL/time.Second))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), store))
 
 	// 账号闸门：session / device JWT / relay 三条鉴权路径与中继心跳共用的那一处判定。
 	// 没有它，四条路径会退回「凭据有效就放行」，改库封禁只挡得住新的登录。
@@ -334,7 +342,7 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		AccessTTL:       cfg.JWT.AccessTTL,
 		RefreshTTL:      cfg.JWT.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
-	}, signer))
+	}, signer, jwtblacklist.New(redis.Default())))
 
 	// 控制台的 latest 来源（决策 12）：Enabled=false 时 Pull 与 Latest 都恒回
 	// 「不关心/不知道」，装配与否不影响这一点——这里始终装配，只是配置决定它会不会

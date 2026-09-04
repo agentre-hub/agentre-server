@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/logger"
 	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -54,11 +53,17 @@ type AuthSvc interface {
 type RelayCredentialWatch func(ctx context.Context) bool
 
 type authSvc struct {
-	store *session.Store
+	redis     *goredis.Client
+	blacklist *jwtblacklist.Blacklist
+	store     *session.Store
 }
 
-func New(store *session.Store) AuthSvc {
-	return &authSvc{store: store}
+// New 接收这个 service 要用的 Redis 客户端，不去够 redis.Default()。
+//
+// 与 session.Store / passkey_svc / user_svc.Gate 同一形状：全局单例只在组合根
+// （bootstrap.RegisterDefaults）出现一次，其余各层拿到的都是构造时注入的那一个。
+func New(rc *goredis.Client, store *session.Store) AuthSvc {
+	return &authSvc{redis: rc, blacklist: jwtblacklist.New(rc), store: store}
 }
 
 var defaultSvc AuthSvc
@@ -76,7 +81,7 @@ func (s *authSvc) CreateOAuthState(ctx context.Context, p OAuthStatePayload) (st
 	state := base64.RawURLEncoding.EncodeToString(buf)
 	p.CreatedAt = time.Now().UnixMilli()
 	body, _ := json.Marshal(p)
-	if err := redis.Default().Set(ctx, "oauth_state:"+state, body, oauthStateTTL).Err(); err != nil {
+	if err := s.redis.Set(ctx, "oauth_state:"+state, body, oauthStateTTL).Err(); err != nil {
 		return "", err
 	}
 	return state, nil
@@ -87,14 +92,14 @@ func (s *authSvc) ConsumeOAuthState(ctx context.Context, state string) (*OAuthSt
 		return nil, nil
 	}
 	key := "oauth_state:" + state
-	val, err := redis.Default().Get(ctx, key).Bytes()
+	val, err := s.redis.Get(ctx, key).Bytes()
 	if errors.Is(err, goredis.Nil) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	_ = redis.Default().Del(ctx, key).Err()
+	_ = s.redis.Del(ctx, key).Err()
 	var p OAuthStatePayload
 	if err := json.Unmarshal(val, &p); err != nil {
 		return nil, err
@@ -187,16 +192,16 @@ func (s *authSvc) TrackRelayTicket(ctx context.Context, sid, jti string, ttl tim
 	lifetime := ttl + jwt.Leeway
 	member := strconv.FormatInt(time.Now().Add(lifetime).UnixMilli(), 10) + ":" + jti
 	key := relayTicketKey(sid)
-	if err := redis.Default().SAdd(ctx, key, member).Err(); err != nil {
+	if err := s.redis.SAdd(ctx, key, member).Err(); err != nil {
 		return err
 	}
 	// 整个集合与最后签发的那张票同寿（票只有 2 分钟），到点自然回收：
 	// 长命的浏览器 session 不会在 Redis 里堆一辈子的 jti。
-	if err := redis.Default().Expire(ctx, key, lifetime).Err(); err != nil {
+	if err := s.redis.Expire(ctx, key, lifetime).Err(); err != nil {
 		return err
 	}
 	// 反向索引同样 fail-closed：写不上就等于发一张「连上之后再也踢不掉」的票。
-	return redis.Default().Set(ctx, relayTicketSessionKey(jti), sid, lifetime).Err()
+	return s.redis.Set(ctx, relayTicketSessionKey(jti), sid, lifetime).Err()
 }
 
 // WatchRelayCredential 解析一条**已经建好**的中继连接背后的撤销判据，返回一个可被
@@ -218,7 +223,7 @@ func (s *authSvc) TrackRelayTicket(ctx context.Context, sid, jti string, ttl tim
 func (s *authSvc) WatchRelayCredential(ctx context.Context, jti string) RelayCredentialWatch {
 	sid := ""
 	if jti != "" {
-		resolved, err := redis.Default().Get(ctx, relayTicketSessionKey(jti)).Result()
+		resolved, err := s.redis.Get(ctx, relayTicketSessionKey(jti)).Result()
 		switch {
 		case err == nil:
 			sid = resolved
@@ -230,7 +235,7 @@ func (s *authSvc) WatchRelayCredential(ctx context.Context, jti string) RelayCre
 		}
 	}
 	return func(ctx context.Context) bool {
-		if jti != "" && jwtblacklist.Has(ctx, jti) {
+		if jti != "" && s.blacklist.Has(ctx, jti) {
 			return true
 		}
 		if sid == "" {
@@ -262,7 +267,7 @@ func (s *authSvc) revokeRelayTickets(ctx context.Context, sid string) {
 		return
 	}
 	key := relayTicketKey(sid)
-	members, err := redis.Default().SMembers(ctx, key).Result()
+	members, err := s.redis.SMembers(ctx, key).Result()
 	if err != nil {
 		logger.Ctx(ctx).Warn("auth_svc.revokeRelayTickets: 读取会话 relay ticket 失败，票据只能等自然过期",
 			zap.Error(err))
@@ -280,12 +285,12 @@ func (s *authSvc) revokeRelayTickets(ctx context.Context, sid string) {
 			continue
 		}
 		ttlSec := int((remainMs + 999) / 1000) // 向上取整，别让黑名单比票先过期
-		if err := jwtblacklist.Add(ctx, jti, ttlSec); err != nil {
+		if err := s.blacklist.Add(ctx, jti, ttlSec); err != nil {
 			logger.Ctx(ctx).Warn("auth_svc.revokeRelayTickets: relay ticket 拉黑失败",
 				zap.String("jti", jti), zap.Error(err))
 		}
 	}
-	if err := redis.Default().Del(ctx, key).Err(); err != nil {
+	if err := s.redis.Del(ctx, key).Err(); err != nil {
 		logger.Ctx(ctx).Warn("auth_svc.revokeRelayTickets: 清理会话 relay ticket 集合失败", zap.Error(err))
 	}
 }
