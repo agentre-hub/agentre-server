@@ -754,7 +754,8 @@ export class RelayClient {
    *     attach 之后的第一条实时帧 seq 远高于本地游标(浏览器刚打开,游标是 0),
    *     用户看到的转录会从半截开始;
    *   - seq <= 游标      → 重复投递,丢弃。
-   * 老 daemon 不带 seq(可选追加字段)时无游标可言,一律投递。
+   * 不带号的帧无游标可言,一律投递 —— 与 Go 侧 `head.Seq == 0` 那条同一个理由:
+   * 闸门只对编了号的帧成立,拿 0 去比游标会把它当成重复静默丢掉。
    */
   private applyDedup(
     st: SessionState,

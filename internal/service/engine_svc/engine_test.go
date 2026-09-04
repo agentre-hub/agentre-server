@@ -192,16 +192,17 @@ func TestUpdateBackend_GivenNewDeviceID_ThenRewritesFingerprintWithoutLosingOthe
 	assert.Equal(t, "claude", got.Type)
 }
 
-// 存量行没有登记设备：读回原样是空指纹，不被悄悄补一台机器。
-func TestListBackends_GivenLegacyRowWithoutDevice_ThenReadsBackEmptyDeviceID(t *testing.T) {
+// 没登记设备的行（agent_backend 不受上行的指纹非空校验约束）：读回原样是空指纹，
+// 不被悄悄补一台机器。
+func TestListBackends_GivenRowWithoutDevice_ThenReadsBackEmptyDeviceID(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindAgentBackend, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentExecTarget,
 	}).Return([]*sync_entity.SyncObject{{
-		Kind: sync_entity.KindAgentBackend, SyncID: "backend-legacy",
-		Payload: `{"name":"Legacy","type":"claude"}`,
+		Kind: sync_entity.KindAgentBackend, SyncID: "backend-no-device",
+		Payload: `{"name":"No device","type":"claude"}`,
 	}}, nil)
 
 	got, err := New().ListBackends(context.Background(), 7)

@@ -112,7 +112,9 @@ type BackendView struct {
 	OpenClawSessionMode   string        `json:"openclaw_session_mode"`
 	RefCount              int           `json:"ref_count"`
 	CLIByDevice           []CLIByDevice `json:"cli_by_device"`
-	// DeviceID 读自 sync_objects.agentred_fingerprint；存量行没有登记设备时如实为空。
+	// DeviceID 读自 sync_objects.agentred_fingerprint。agent_backend 这一 kind 不在
+	// 上行的指纹非空校验里（只有 project_location / agent_backend_cli 受约束），
+	// 所以没登记设备的行是合法的，读回来如实为空。
 	DeviceID string `json:"device_id"`
 }
 
