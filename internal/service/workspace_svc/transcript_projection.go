@@ -13,12 +13,13 @@
 //
 // # 谁是真源
 //
-// 下面那份「丢掉」的清单不是这里定的，它是 `frontend/src/lib/transcriptFrames.ts`
-// 里归约器**明确 return 掉**的那些（该文件 :437-441 与 :448-451）。哪天其中某一种
+// 下面那份「丢掉」的清单不是这里定的，它是共享包 `@agentre-hub/agentre-ui` 的归约器
+// （`transcript/frames.ts` 的 applyFrame）**明确 return 掉**的那些。哪天其中某一种
 // 有了显示面，那边会先动，这里必须跟着动——否则数据在传输中途就没了，前端改了也
-// 看不见。反过来，`context_window_updated` 与 `usage` 虽然也在那段「记而不显」的
-// 注释里，却**有**显示面（同文件 :527 的 reduceSessionState 喂 Composer 底栏那条
-// 上下文用量），所以它们不在清单里。
+// 看不见。`steer_consumed` 就是这么离开清单的：它是「轮次在跑时插进来的那句话」唯一
+// 的来路（runtime.steer 不发 user_message），归约器认了它之后这里必须放行。反过来，
+// `context_window_updated` 与 `usage` 虽然也在那段「记而不显」的注释里，却**有**显示
+// 面（reduceSessionState 喂 Composer 底栏那条上下文用量），所以它们不在清单里。
 package workspace_svc
 
 import (
@@ -34,7 +35,6 @@ const methodRuntimeEvent = "runtime.event"
 var droppedEventKinds = map[string]bool{
 	"runtime_status":          true,
 	"permission_mode_changed": true,
-	"steer_consumed":          true,
 	"tool_use_end":            true,
 	"retry":                   true,
 	"subagent_started":        true,

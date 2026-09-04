@@ -49,14 +49,13 @@ func textOf(t *testing.T, f TranscriptFrameView) string {
 	return p.Event.Text
 }
 
-// 归约器明确不消费的那 9 种（frontend/src/lib/transcriptFrames.ts:437-441 与
-// :448-451）在传输里就不该出现——它们到了浏览器也只是被 return 掉。
+// 归约器明确不消费的那 8 种（共享包 `@agentre-hub/agentre-ui` 的 transcript/frames.ts，
+// applyFrame 里 return 掉的那一档）在传输里就不该出现——它们到了浏览器也只是被丢掉。
 func TestProjectTranscriptFrames_DropsKindsTheReducerNeverConsumes(t *testing.T) {
 	in := []TranscriptFrameView{
 		ev(1, "user_message", "改一下"),
 		ev(2, "runtime_status", ""),
 		ev(3, "permission_mode_changed", ""),
-		ev(4, "steer_consumed", ""),
 		ev(5, "tool_use_end", ""),
 		ev(6, "retry", ""),
 		ev(7, "subagent_started", ""),
@@ -67,6 +66,23 @@ func TestProjectTranscriptFrames_DropsKindsTheReducerNeverConsumes(t *testing.T)
 	}
 	out := projectTranscriptFrames(in)
 	assert.Equal(t, []string{"user_message", "done"}, kindsOf(t, out))
+}
+
+// steer_consumed 是「轮次在跑时插进来的那句话」唯一的来路：runtime.steer 不发
+// user_message，文本与提交方只在这一帧的 steers 里。丢掉它，控制台的转录上就只剩
+// 回答、没有问题——用户看到的是自己那句话凭空消失（归约器已在共享包里认它，
+// transcript/frames.ts 的 EventSteerConsumed 分支）。
+func TestProjectTranscriptFrames_KeepsSteerConsumed(t *testing.T) {
+	steer := TranscriptFrameView{Seq: 1, Method: "runtime.event", Params: json.RawMessage(
+		`{"sessionId":42,"event":{"kind":"steer_consumed","steers":[` +
+			`{"queuedId":"q1","text":"顺便看下这个","sourcePeer":"fp-1","sourceName":"Chrome"}]}}`)}
+
+	out := projectTranscriptFrames([]TranscriptFrameView{steer})
+
+	require.Len(t, out, 1)
+	assert.Equal(t, []string{"steer_consumed"}, kindsOf(t, out))
+	// 载荷原样下行：文本没了这一帧就画不出消息，来源没了就标不出「来自哪台」。
+	assert.JSONEq(t, string(steer.Params), string(out[0].Params))
 }
 
 // context_window_updated 与 usage 也在那段「记而不显」的注释里，但它们**有**显示面：

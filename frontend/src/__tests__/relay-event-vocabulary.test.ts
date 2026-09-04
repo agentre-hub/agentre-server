@@ -206,7 +206,19 @@ const SAMPLES: Record<
     input: utf8({ file_path: "/tmp/a" }),
   },
   toolResult: { case: "toolResult", toolCallId: "t1", content: "ok" },
-  steerConsumed: { case: "steerConsumed" },
+  // 排队消息要带全：这一帧是「轮次在跑时插进来的那句话」唯一的来路（runtime.steer
+  // 不发 user_message），文本与提交方掉在回放路上，转录就只剩回答、没有问题。
+  steerConsumed: {
+    case: "steerConsumed",
+    steers: [
+      {
+        queuedId: "q1",
+        text: "顺便看下这个",
+        sourcePeer: "fp-1",
+        sourceName: "Chrome",
+      },
+    ],
+  },
   userAskRequest: {
     case: "userAskRequest",
     requestId: "q1",
