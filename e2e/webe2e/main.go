@@ -201,15 +201,14 @@ func runSeed(args []string) error {
 	now := time.Now().UnixMilli()
 	out := &seedResult{RunID: *runID, Email: accountEmail(*runID), FlowFingerprint: flowFingerprint(*runID)}
 	user := struct {
-		ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
-		Email         string `gorm:"column:email"`
-		EmailVerified bool   `gorm:"column:email_verified"`
-		DisplayName   string `gorm:"column:display_name"`
-		AvatarURL     string `gorm:"column:avatar_url"`
-		Status        int    `gorm:"column:status"`
-		Createtime    int64  `gorm:"column:createtime"`
-		Updatetime    int64  `gorm:"column:updatetime"`
-	}{Email: out.Email, EmailVerified: true, DisplayName: "webe2e " + *runID, Status: 1, Createtime: now, Updatetime: now}
+		ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+		Email       string `gorm:"column:email"`
+		DisplayName string `gorm:"column:display_name"`
+		AvatarURL   string `gorm:"column:avatar_url"`
+		Status      int    `gorm:"column:status"`
+		Createtime  int64  `gorm:"column:createtime"`
+		Updatetime  int64  `gorm:"column:updatetime"`
+	}{Email: out.Email, DisplayName: "webe2e " + *runID, Status: 1, Createtime: now, Updatetime: now}
 	if err := gdb.Table("users").Create(&user).Error; err != nil {
 		return fmt.Errorf("insert user: %w", err)
 	}
