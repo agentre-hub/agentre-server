@@ -490,13 +490,13 @@ describe("状态横幅:三档形态", () => {
 
   /**
    * daemon 回的那句话（`wireversion.Reject`）里写着**两边各自的版本窗口**，例如
-   * 「peer speaks protocol version 0.3.0, this build accepts 0.4.0 to 0.4.0」。
+   * 「peer speaks protocol version 0.3.0, this build accepts 0.1.0 to 0.1.0」。
    * 它是这一屏唯一说得出「该去更新哪一头」的东西，所以必须原样出现在横幅上——
    * 把它吞掉，用户看到的就只是一句「版本不一致」，然后无从下手。
    */
   it("协议版本横幅带上对端的原话:两边的版本都在里面", () => {
     const detail =
-      "peer speaks protocol version 0.3.0, this build accepts protocol versions 0.4.0 to 0.4.0";
+      "peer speaks protocol version 0.3.0, this build accepts protocol versions 0.1.0 to 0.1.0";
     renderStatus("protocolMismatch", { protocolMismatchDetail: detail });
     const root = bannerOf("protocolMismatch");
     expect(root).not.toBeNull();
