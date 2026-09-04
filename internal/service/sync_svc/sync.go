@@ -499,7 +499,6 @@ func (s *syncSvc) PutAvatar(ctx context.Context, in AvatarInput) error {
 		ContentHash: hash,
 		ContentType: in.ContentType,
 		Content:     in.Content,
-		ByteSize:    int64(len(in.Content)),
 		Createtime:  s.now(),
 	})
 }

@@ -968,7 +968,7 @@ func TestPutAvatar_GivenContent_ThenStoredUnderItsContentHash(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, hash, saved.ContentHash)
 		assert.Equal(t, testUserID, saved.UserID)
-		assert.Equal(t, int64(len(content)), saved.ByteSize)
+		assert.Equal(t, content, saved.Content)
 	})
 }
 

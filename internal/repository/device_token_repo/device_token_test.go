@@ -75,13 +75,13 @@ func TestCreate(t *testing.T) {
 	r := NewDeviceToken()
 	mock.ExpectBegin()
 	// R4 整条链路都挂在 access_jti 真的被写进去上（Revoke 拉黑它、吊销列表分发它）。
-	// 十个 AnyArg 的期望连列名都不看，删掉 AccessJTI 字段照样绿，所以这里把列名和
+	// 一串 AnyArg 的期望连列名都不看，删掉 AccessJTI 字段照样绿，所以这里把列名和
 	// 那一列的值都钉死。
 	mock.ExpectExec(regexp.QuoteMeta(
 		"INSERT INTO `device_tokens` (`device_id`,`refresh_token_hash`,`access_jti`")).
 		WithArgs(int64(42), "h", "jti-1", sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(99, 1))
 	mock.ExpectCommit()
 	e := &device_token_entity.DeviceToken{DeviceID: 42, RefreshTokenHash: "h", RefreshExpiresAt: 1000, AccessJTI: "jti-1"}

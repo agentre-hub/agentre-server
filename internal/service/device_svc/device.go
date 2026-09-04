@@ -260,8 +260,7 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			return err
 		}
 
-		// 首次签发，没有被轮换掉的前一条，rotatedFromID 传 0。
-		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs, 0)
+		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs)
 		if err != nil {
 			return err
 		}
@@ -281,12 +280,11 @@ func sha256Hex(s string) string {
 }
 
 // issueTokenPair 在事务内为设备签发一对令牌并落库：access token 由 signer 签出，
-// refresh token 只有哈希入库、明文仅在这一次响应里回给客户端。rotatedFromID 为 0
-// 表示首次签发（ExchangeToken），非 0 时是这次刷新轮换掉的那条 token 行（Refresh）。
+// refresh token 仅保存哈希，明文只在本次响应中返回。
 //
 // txCtx 用于落库，必须是事务里的那个；IP / UA 仍从外层 ctx 取，与抽出前一致。
 func (s *deviceSvc) issueTokenPair(
-	txCtx, ctx context.Context, d *device_entity.Device, nowMs, rotatedFromID int64,
+	txCtx, ctx context.Context, d *device_entity.Device, nowMs int64,
 ) (*TokenOutput, error) {
 	access, jti, err := s.signer.Sign(jwt.Claims{
 		UID: d.UserID,
@@ -310,7 +308,6 @@ func (s *deviceSvc) issueTokenPair(
 		RefreshTokenHash: sha256Hex(refreshPlain),
 		AccessJTI:        jti,
 		RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
-		RotatedFromID:    rotatedFromID,
 		UserAgent:        ua,
 		IP:               ip,
 		Createtime:       nowMs,
@@ -381,7 +378,7 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			return newOAuthErr(ErrInvalidGrant, "refresh_token already rotated")
 		}
 
-		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs, row.ID)
+		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs)
 		if err != nil {
 			return err
 		}

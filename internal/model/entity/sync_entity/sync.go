@@ -100,7 +100,6 @@ type SyncAvatar struct {
 	ContentHash string `gorm:"column:content_hash;primaryKey"`
 	ContentType string `gorm:"column:content_type;type:text;not null;default:''"`
 	Content     string `gorm:"column:content;type:text;not null"`
-	ByteSize    int64  `gorm:"column:byte_size;type:bigint;not null;default:0"`
 	Createtime  int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
 

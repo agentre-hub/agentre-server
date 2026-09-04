@@ -431,7 +431,7 @@ func goldenExchanges() []exchange {
 				m.avatar.EXPECT().Find(gomock.Any(), goldenUserID, avatarHash).Return(&sync_entity.SyncAvatar{
 					UserID: goldenUserID, ContentHash: avatarHash,
 					ContentType: "image/png", Content: avatarContent,
-					ByteSize: int64(len(avatarContent)), Createtime: 1700000000000,
+					Createtime: 1700000000000,
 				}, nil)
 			},
 			wantStatus: http.StatusOK,
