@@ -84,6 +84,15 @@ func TestUpsertSummary_NeverResetsLastReadAt(t *testing.T) {
 
 // ListSummariesByUser 只按账号过滤：一条镜像行属于一个账号，读的时候忘记这一条
 // 就是跨账号泄漏。
+// savesJoinSQL 是 joinSaves 拼出的那条 LEFT JOIN。**只有问到承载机器的路径带它**
+// （投影 machine_fingerprint、按机器过滤、按机器/位置分组）；纯计数那几条不带，
+// 见 TestCountSummaries_AggregatesInSQL 与 TestCountAttention_BothNumbersInOneQuery
+// 里刻意钉住的「FROM `agent_sessions` WHERE」——它们每进一次页面就跑一遍，白接一次
+// 索引查找是实打实的成本。
+const savesJoinSQL = "LEFT JOIN agent_session_saves" +
+	" ON agent_session_saves.user_id=agent_sessions.user_id" +
+	" AND agent_session_saves.conversation_id=agent_sessions.conversation_id"
+
 func TestListSummariesByUser_AccountScoped(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
@@ -95,7 +104,8 @@ func TestListSummariesByUser_AccountScoped(t *testing.T) {
 		AddRow(1, 7, "conv-9", "fp-browser-1", "Fix the bug", 2000, "fp-daemon-1").
 		AddRow(2, 7, "conv-8", "fp-daemon-1", "Refactor", 1000, "fp-daemon-1")
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_sessions` WHERE user_id=? ORDER BY last_message_at DESC, id DESC",
+		"FROM `agent_sessions` " + savesJoinSQL +
+			" WHERE agent_sessions.user_id=? ORDER BY last_message_at DESC, agent_sessions.id DESC",
 	)).WithArgs(int64(7)).WillReturnRows(rows)
 
 	out, err := r.ListSummariesByUser(ctx, 7)
@@ -134,7 +144,7 @@ func TestListSummariesPage_FirstPage_AccountScopedOrderedAndLimited(t *testing.T
 	r := NewSummary()
 
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"WHERE user_id=? ORDER BY last_message_at DESC, id DESC LIMIT ?",
+		"WHERE agent_sessions.user_id=? ORDER BY last_message_at DESC, agent_sessions.id DESC LIMIT ?",
 	)).WithArgs(int64(7), 50).WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}).AddRow(1, 7))
 
 	out, err := r.ListSummariesPage(ctx, SummaryPageQuery{
@@ -152,7 +162,7 @@ func TestListSummariesPage_WithCursor_TakesStrictlyAfterIt(t *testing.T) {
 	r := NewSummary()
 
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"(last_message_at < ? OR (last_message_at = ? AND id < ?))",
+		"(last_message_at < ? OR (last_message_at = ? AND agent_sessions.id < ?))",
 	)).WithArgs(int64(7), int64(1700), int64(1700), int64(42), 50).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
@@ -348,7 +358,7 @@ func TestCountSummaries_AggregatesInSQL(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT count(*) FROM `agent_sessions` WHERE user_id=?")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT count(*) FROM `agent_sessions` WHERE agent_sessions.user_id=?")).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(137)))
 
@@ -470,7 +480,7 @@ func TestCountAttention_BothNumbersInOneQuery(t *testing.T) {
 			"AS needs_attention, "+
 			"COALESCE(SUM(CASE WHEN waiting_for_input=? AND lifecycle_state NOT IN (?,?) "+
 			"AND last_message_at>last_read_at THEN 1 ELSE 0 END), 0) AS unread "+
-			"FROM `agent_sessions` WHERE user_id=?",
+			"FROM `agent_sessions` WHERE agent_sessions.user_id=?",
 	)).
 		WithArgs(true, false, "running", "failed", int64(7)).
 		WillReturnRows(
@@ -615,7 +625,7 @@ func TestListSummariesPage_MachineScope_FiltersByTheCarryingMachine(t *testing.T
 	r := NewSummary()
 
 	fp := "fp-agentred"
-	mock.ExpectQuery(regexp.QuoteMeta(machineFingerprintExpr+"=?")).
+	mock.ExpectQuery(regexp.QuoteMeta("agent_session_saves.device_fingerprint=?")).
 		WithArgs(int64(7), fp, 50).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 

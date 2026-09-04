@@ -237,26 +237,42 @@ func (r *summaryRepo) UpsertSummary(ctx context.Context, s *agent_session_entity
 
 func (r *summaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {
 	var out []*agent_session_entity.SessionSummary
-	if err := withMachineFingerprint(db.Ctx(ctx)).Where("user_id=?", userID).
-		Order("last_message_at DESC, id DESC").Find(&out).Error; err != nil {
+	tx := joinSaves(db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}))
+	if err := withMachineFingerprint(tx).Where("agent_sessions.user_id=?", userID).
+		Order("last_message_at DESC, agent_sessions.id DESC").Find(&out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
 // machineFingerprintExpr 是「承载这条对话的那台机器」的取值式：保存名单里记的
-// device_fingerprint。它既投影进读模型，也参与项目位置的判据，所以只有这一份——
-// 两处各写一遍就会在下一次演化里分家，而分家的那一天索引会安静地把对话分错组。
+// device_fingerprint，由 joinSaves 那条 LEFT JOIN 带进来。它既投影进读模型，也参与
+// 项目位置的判据，所以只有这一份 —— 两处各写一遍就会在下一次演化里分家，而分家的
+// 那一天索引会安静地把对话分错组。
 //
-// 子查询至多一行：agent_session_saves 的唯一键正是 (user_id, conversation_id)。
+// 它曾经是一条相关子查询。子查询进 WHERE / GROUP BY 意味着 MySQL 要对
+// agent_sessions 的**每一行**各跑一次，而且没有任何一条 agent_sessions 上的索引能
+// 先把候选集收窄；换成 JOIN 之后优化器可以反过来以 agent_session_saves 当驱动表。
 //
-// 外面套 COALESCE 是因为这个式子也进 WHERE：名单里没有这条对话时子查询给 NULL，而
-// `(NULL, cwd) NOT IN (…)` 判出的是 NULL 而不是真——那条对话会同时掉出「某个项目」
-// 与「未归项目」两组，从项目轴上整个消失。空串配不上任何位置，于是它老老实实落进
-// 「未归项目」。
-const machineFingerprintExpr = "COALESCE((SELECT device_fingerprint FROM agent_session_saves " +
-	"WHERE agent_session_saves.user_id=agent_sessions.user_id " +
-	"AND agent_session_saves.conversation_id=agent_sessions.conversation_id LIMIT 1), '')"
+// 外面套 COALESCE 是因为这个式子也进 WHERE：名单里没有这条对话时 LEFT JOIN 给
+// NULL，而 `(NULL, cwd) NOT IN (…)` 判出的是 NULL 而不是真——那条对话会同时掉出
+// 「某个项目」与「未归项目」两组，从项目轴上整个消失。空串配不上任何位置，于是它
+// 老老实实落进「未归项目」。
+//
+// **等值过滤不走这个式子**（见 scoped 里的 MachineFingerprint 分支）：COALESCE 是
+// 函数谓词，优化器在它上面定位不到索引，那样 JOIN 也白换。
+const machineFingerprintExpr = "COALESCE(agent_session_saves.device_fingerprint, '')"
+
+// joinSaves 把保存名单接上来。至多一行：agent_session_saves 的唯一键正是
+// (user_id, conversation_id)，所以这条 LEFT JOIN 不会让任何一条对话变成多行——
+// CountSummaries 的 count(*) 因此仍然是对话数。
+//
+// 全部读路径都从 scoped 拿到它，只接一次；ListSummariesByUser 不走 scoped，自己接。
+func joinSaves(tx *gorm.DB) *gorm.DB {
+	return tx.Joins("LEFT JOIN agent_session_saves" +
+		" ON agent_session_saves.user_id=agent_sessions.user_id" +
+		" AND agent_session_saves.conversation_id=agent_sessions.conversation_id")
+}
 
 // withMachineFingerprint 把保存名单里记录的承载机器投影到摘要读模型。会话身份是
 // (账号, conversation_id)；浏览器发起的会话不能拿发起端指纹冒充承载机器。
@@ -343,9 +359,32 @@ func attentionExpr(f AttentionFilter) (string, []any, bool) {
 // scoped 把 SummaryQuery 翻成 WHERE。全部读路径共用它——判据只有一处，分页与三种
 // 计数因此不可能对不上（「这一组显示 N 条，翻出来却是别的集合」正是这么来的）。
 func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
-	tx := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).Where("user_id=?", q.UserID)
+	return r.scopedFor(ctx, q, q.needsSaves())
+}
+
+// needsSaves 回答「这份判据用不用得上保存名单」。**只在用得上时才接那条 LEFT
+// JOIN**：CountSummaries / CountAttention / CountSummariesByAgent 压根不问承载机器，
+// 而 CountAttention 每进一次页面就跑一遍。MySQL 不做 LEFT JOIN 消除，无条件接等于
+// 让最热的三条路各自多付一次索引查找，去换一条冷路径的收益。
+//
+// 宁可多接不可少接：少接了那条 SQL 直接报 unknown column，多接只是慢一点。
+func (q SummaryQuery) needsSaves() bool {
+	return q.MachineFingerprint != nil || (q.ProjectMode != ProjectAny && len(q.Locations) > 0)
+}
+
+// scopedFor 是 scoped 的本体；withSaves 由调用方决定——投影承载机器的两条列表路径
+// 无论判据如何都要接（machine_fingerprint 那一列从名单来）。
+func (r *summaryRepo) scopedFor(ctx context.Context, q SummaryQuery, withSaves bool) *gorm.DB {
+	// user_id / conversation_id / id 三个列名在 agent_session_saves 上也有，接上
+	// JOIN 之后不限定归属就是 ambiguous column。为了让带不带 JOIN 两档拼出的
+	// WHERE 完全一致，这里一律限定归属，不按 withSaves 分叉。
+	tx := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{})
+	if withSaves {
+		tx = joinSaves(tx)
+	}
+	tx = tx.Where("agent_sessions.user_id=?", q.UserID)
 	if q.ConversationID != "" {
-		tx = tx.Where("conversation_id=?", q.ConversationID)
+		tx = tx.Where("agent_sessions.conversation_id=?", q.ConversationID)
 	}
 	if q.TitleLike != "" {
 		tx = tx.Where("title LIKE ?", "%"+likeEscape(q.TitleLike)+"%")
@@ -357,7 +396,16 @@ func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 		tx = tx.Where("agent_sync_id=?", *q.AgentSyncID)
 	}
 	if q.MachineFingerprint != nil {
-		tx = tx.Where(machineFingerprintExpr+"=?", *q.MachineFingerprint)
+		// 刻意不复用 machineFingerprintExpr：COALESCE 包着列名是函数谓词，优化器
+		// 定位不到 idx_agent_session_saves_machine (user_id, device_fingerprint)。
+		// 拆开之后两支各自等价——非空时 COALESCE 与裸列判出的是同一批行（NULL 本来
+		// 就不等于任何非空值），空串那一支则是「名单里没有这条对话」。
+		if *q.MachineFingerprint == "" {
+			tx = tx.Where("(agent_session_saves.device_fingerprint IS NULL" +
+				" OR agent_session_saves.device_fingerprint='')")
+		} else {
+			tx = tx.Where("agent_session_saves.device_fingerprint=?", *q.MachineFingerprint)
+		}
 	}
 	switch q.ProjectMode {
 	case ProjectIs:
@@ -396,14 +444,14 @@ func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 func (r *summaryRepo) ListSummariesPage(
 	ctx context.Context, q SummaryPageQuery,
 ) ([]*agent_session_entity.SessionSummary, error) {
-	tx := withMachineFingerprint(r.scoped(ctx, q.SummaryQuery))
+	tx := withMachineFingerprint(r.scopedFor(ctx, q.SummaryQuery, true))
 	if !q.Cursor.IsZero() {
 		// 严格排在游标之后：先比活动时刻，同一刻内再比 id。两者缺一，同毫秒的那几条
 		// 要么重复发一遍、要么整批被跳过。
-		tx = tx.Where("(last_message_at < ? OR (last_message_at = ? AND id < ?))",
+		tx = tx.Where("(last_message_at < ? OR (last_message_at = ? AND agent_sessions.id < ?))",
 			q.Cursor.LastMessageAt, q.Cursor.LastMessageAt, q.Cursor.ID)
 	}
-	tx = tx.Order("last_message_at DESC, id DESC")
+	tx = tx.Order("last_message_at DESC, agent_sessions.id DESC")
 	if q.Limit > 0 {
 		tx = tx.Limit(q.Limit)
 	}
@@ -509,7 +557,8 @@ func (r *summaryRepo) CountSummariesByMachine(
 		MachineFingerprint string
 		Total              int64
 	}
-	if err := r.scoped(ctx, q).
+	// 分组键就取自名单，判据里有没有机器条件都必须接（scoped 的按需判断不够）。
+	if err := r.scopedFor(ctx, q, true).
 		Select(machineFingerprintExpr + " AS machine_fingerprint, count(*) AS total").
 		Group("machine_fingerprint").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -525,7 +574,8 @@ func (r *summaryRepo) CountSummariesByProjectKey(
 	ctx context.Context, q SummaryQuery,
 ) ([]SummaryProjectKeyCount, error) {
 	var out []SummaryProjectKeyCount
-	if err := r.scoped(ctx, q).
+	// 同 CountSummariesByMachine：分组键取自名单，必须接。
+	if err := r.scopedFor(ctx, q, true).
 		Select("project_sync_id, " + machineFingerprintExpr + " AS machine_fingerprint, " +
 			"cwd, count(*) AS total").
 		Group("project_sync_id").Group("machine_fingerprint").Group("cwd").
