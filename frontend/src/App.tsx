@@ -1,4 +1,5 @@
 import { useAutoHideScrollbars, useTheme } from "@agentre-hub/agentre-ui";
+import { useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import Login from "./pages/Login";
@@ -15,11 +16,14 @@ import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import ComingSoon from "./pages/ComingSoon";
 import RequireAuth from "./components/RequireAuth";
-import { lazyPage } from "./lib/lazyPage";
+import { lazyPage, warmPages } from "./lib/lazyPage";
 
-// 会话那两页背后是整套转录渲染，切出入口 chunk（见 lazyPage）。
-const SessionDetail = lazyPage(() => import("./pages/SessionDetail"));
-const Chat = lazyPage(() => import("./pages/Chat"));
+// 会话那两页背后是整套转录渲染，切出入口 chunk（见 lazyPage）。导出是给
+// app-routes 的接线用例认预热这条线用的，路由本身只用它们当 element。
+export const SessionDetailPage = lazyPage(
+  () => import("./pages/SessionDetail"),
+);
+export const ChatPage = lazyPage(() => import("./pages/Chat"));
 
 /**
  * 设备下钻的会话列表页并入统一索引（规格 2026-08-17 决策 1）：它与索引渲染的是
@@ -40,6 +44,10 @@ export default function App() {
   // 滚动条的另一半：base.css 把滑块颜色绑到 --sb-thumb 并默认透明，这里在滚动时
   // 改值、停手 900ms 后清掉。只 import 样式不调它，滚动条恒为透明（滚动仍可用）。
   useAutoHideScrollbars();
+
+  // 切出去的那两页趁空闲先取回来：不预热的话，第一次从别的页切到 /chat 要等
+  // ~308 KB（gzip）下完才有第一帧，而那一帧空的是整个视口（见 warmPages）。
+  useEffect(() => warmPages([ChatPage, SessionDetailPage]), []);
 
   return (
     <BrowserRouter>
@@ -74,7 +82,7 @@ export default function App() {
           path="/devices/:deviceId/sessions/:conversationId"
           element={
             <RequireAuth>
-              <SessionDetail />
+              <SessionDetailPage />
             </RequireAuth>
           }
         />
@@ -90,7 +98,7 @@ export default function App() {
           path="/chat"
           element={
             <RequireAuth>
-              <Chat />
+              <ChatPage />
             </RequireAuth>
           }
         />

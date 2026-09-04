@@ -1,7 +1,7 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import App from "@/App";
+import App, { ChatPage, SessionDetailPage } from "@/App";
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
@@ -74,6 +74,24 @@ describe("App shell wiring", () => {
     expect(screen.getAllByRole("button", { name: /Language/i })).toHaveLength(
       1,
     );
+  });
+
+  it("挂载后趁空闲预热对话两页：首次从别处切过去不再空屏一下", async () => {
+    await i18n.changeLanguage("en");
+    mockSignedIn();
+    // 真去 import 会把 xterm / highlight.js 那一堆拉进这个用例；这里只认「有没有
+    // 按空闲预热」这条接线，模块本身的契约在 lazy-page.test.tsx。
+    const chat = vi.spyOn(ChatPage, "preload").mockResolvedValue();
+    const detail = vi.spyOn(SessionDetailPage, "preload").mockResolvedValue();
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
+
+    renderAt("/overview");
+    await screen.findByRole("group", { name: "Stats range" });
+
+    await waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
+    expect(detail).toHaveBeenCalledTimes(1);
   });
 
   it.each(["/terms", "/privacy", "/status"])(
