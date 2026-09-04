@@ -219,7 +219,7 @@ func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 			f.calls = append(f.calls, "todo:add")
 			assert.Equal(t, int64(7), todo.UserID)
 			assert.Equal(t, conversationA, todo.ConversationID)
-			assert.Equal(t, "fp-desktop-1", todo.PeerFingerprint)
+			assert.Equal(t, "fp-desktop-1", todo.DeviceFingerprint)
 			assert.Positive(t, todo.Createtime)
 			return nil
 		},

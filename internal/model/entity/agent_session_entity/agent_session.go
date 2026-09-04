@@ -154,11 +154,14 @@ type DeleteTodo struct {
 	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
 	// ConversationID 与 UserID 一起是这条待办的身份键：同一条对话只欠一条删除。
 	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
-	// PeerFingerprint 在这张表上记的是**要拨给谁**（补删时拨的那台机器），
-	// 不是身份的一半——见 ListPendingMachines 与 saved_session_svc.Delete。
-	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
-	Createtime      int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	// DeviceFingerprint 是**要拨给谁**（补删时拨的那台机器），不是身份的一半——
+	// 见 ListPendingMachines 与 saved_session_svc.Delete。它曾经叫
+	// peer_fingerprint，而那个名字说的是发起端：两个角色的取值范围重叠（本机开的
+	// 对话两者同值），拿错了列不会有任何一处报错，只会把待办拨给一台从来没跑过这
+	// 条对话的机器。改名见迁移 202609040003。
+	DeviceFingerprint string `gorm:"column:device_fingerprint;type:varchar(255);not null"`
+	PeerSessionID     string `gorm:"column:peer_session_id;type:varchar(255);not null"`
+	Createtime        int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
 
 func (*DeleteTodo) TableName() string { return "agent_session_delete_todos" }

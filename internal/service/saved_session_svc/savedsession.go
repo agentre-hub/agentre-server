@@ -241,11 +241,10 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 		// 离线，或这一次没删成：都是「等它回来再删一遍就成了」，留一条待办。
 		now := time.Now().UnixMilli()
 		if addErr := agent_session_repo.DeleteTodo().AddDeleteTodo(ctx, &agent_session_entity.DeleteTodo{
-			UserID:         ref.UserID,
-			ConversationID: ref.ConversationID,
-			// 待办表这一列是**机器**（补删时要拨的就是它，见 ReplayPendingDeletes）。
-			PeerFingerprint: ref.MachineFingerprint,
-			Createtime:      now,
+			UserID:            ref.UserID,
+			ConversationID:    ref.ConversationID,
+			DeviceFingerprint: ref.MachineFingerprint,
+			Createtime:        now,
 		}); addErr != nil {
 			// 待办没记下来，删除就没走完：如实报错，别让执行端那一份被静默地永远
 			// 留着。重试是安全的——两边都幂等。

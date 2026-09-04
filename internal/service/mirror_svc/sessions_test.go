@@ -128,7 +128,7 @@ func newFakeTodos(rows ...agent_session_entity.DeleteTodo) *fakeTodos {
 
 func todo(userID int64, fingerprint, conversationID string) agent_session_entity.DeleteTodo {
 	return agent_session_entity.DeleteTodo{
-		UserID: userID, ConversationID: conversationID, PeerFingerprint: fingerprint,
+		UserID: userID, ConversationID: conversationID, DeviceFingerprint: fingerprint,
 	}
 }
 
@@ -139,14 +139,14 @@ func (f *fakeTodos) AddDeleteTodo(_ context.Context, row *agent_session_entity.D
 	return nil
 }
 
-func (f *fakeTodos) ListDeleteTodosByPeer(
+func (f *fakeTodos) ListDeleteTodosByDevice(
 	_ context.Context, userID int64, fingerprint string,
 ) ([]*agent_session_entity.DeleteTodo, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []*agent_session_entity.DeleteTodo
 	for _, row := range f.rows {
-		if row.UserID == userID && row.PeerFingerprint == fingerprint {
+		if row.UserID == userID && row.DeviceFingerprint == fingerprint {
 			copied := row
 			out = append(out, &copied)
 		}
@@ -168,12 +168,12 @@ func (f *fakeTodos) RemoveDeleteTodo(_ context.Context, userID int64, conversati
 	return nil
 }
 
-func (f *fakeTodos) RemoveDeleteTodosByPeer(_ context.Context, userID int64, fingerprint string) error {
+func (f *fakeTodos) RemoveDeleteTodosByDevice(_ context.Context, userID int64, fingerprint string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	kept := f.rows[:0]
 	for _, row := range f.rows {
-		if row.UserID == userID && row.PeerFingerprint == fingerprint {
+		if row.UserID == userID && row.DeviceFingerprint == fingerprint {
 			continue
 		}
 		kept = append(kept, row)
@@ -188,14 +188,14 @@ func (f *fakeTodos) ListPendingMachines(_ context.Context) ([]agent_session_repo
 	seen := map[agent_session_repo.PendingMachine]bool{}
 	var out []agent_session_repo.PendingMachine
 	for _, row := range f.rows {
-		m := agent_session_repo.PendingMachine{UserID: row.UserID, PeerFingerprint: row.PeerFingerprint}
+		m := agent_session_repo.PendingMachine{UserID: row.UserID, DeviceFingerprint: row.DeviceFingerprint}
 		if seen[m] {
 			continue
 		}
 		seen[m] = true
 		out = append(out, m)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].PeerFingerprint < out[j].PeerFingerprint })
+	sort.Slice(out, func(i, j int) bool { return out[i].DeviceFingerprint < out[j].DeviceFingerprint })
 	return out, nil
 }
 

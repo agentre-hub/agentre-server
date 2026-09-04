@@ -26,25 +26,25 @@ func TestAddDeleteTodo_OnConflictDoNothing(t *testing.T) {
 	mock.ExpectCommit()
 
 	require.NoError(t, r.AddDeleteTodo(ctx, &agent_session_entity.DeleteTodo{
-		UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-desktop-1", Createtime: 1000,
+		UserID: 7, ConversationID: "conv-9", DeviceFingerprint: "fp-desktop-1", Createtime: 1000,
 	}))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// ListDeleteTodosByPeer 按账号 + 这台机器过滤：待办要执行的机器是身份的一部分，
+// ListDeleteTodosByDevice 按账号 + 这台机器过滤：待办要执行的机器是身份的一部分，
 // 少了 user_id 就是跨账号读到别的账号压在这台机器上的待办。
-func TestListDeleteTodosByPeer_AccountAndPeerScoped(t *testing.T) {
+func TestListDeleteTodosByDevice_AccountAndPeerScoped(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeleteTodo()
 
-	rows := sqlmock.NewRows([]string{"id", "user_id", "conversation_id", "peer_fingerprint", "createtime"}).
+	rows := sqlmock.NewRows([]string{"id", "user_id", "conversation_id", "device_fingerprint", "createtime"}).
 		AddRow(1, 7, "conv-9", "fp-desktop-1", 1000).
 		AddRow(2, 7, "conv-8", "fp-desktop-1", 900)
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_delete_todos` WHERE user_id=? AND peer_fingerprint=? ORDER BY id ASC",
+		"FROM `agent_session_delete_todos` WHERE user_id=? AND device_fingerprint=? ORDER BY id ASC",
 	)).WithArgs(int64(7), "fp-desktop-1").WillReturnRows(rows)
 
-	out, err := r.ListDeleteTodosByPeer(ctx, 7, "fp-desktop-1")
+	out, err := r.ListDeleteTodosByDevice(ctx, 7, "fp-desktop-1")
 	require.NoError(t, err)
 	require.Len(t, out, 2)
 	assert.Equal(t, "conv-9", out[0].ConversationID)
@@ -67,27 +67,27 @@ func TestRemoveDeleteTodo_DeleteIsIdempotent(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// RemoveDeleteTodosByPeer 清掉挂在一台机器上的全部待办：设备被撤销之后那些删除
+// RemoveDeleteTodosByDevice 清掉挂在一台机器上的全部待办：设备被撤销之后那些删除
 // 指令永远执行不了（决策 7），留着没有意义。按账号 + 这台机器圈定，别的机器上
 // 的待办一条都不能碰。
-func TestRemoveDeleteTodosByPeer_ClearsOnlyThatMachine(t *testing.T) {
+func TestRemoveDeleteTodosByDevice_ClearsOnlyThatMachine(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeleteTodo()
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"DELETE FROM `agent_session_delete_todos` WHERE user_id=? AND peer_fingerprint=?",
+		"DELETE FROM `agent_session_delete_todos` WHERE user_id=? AND device_fingerprint=?",
 	)).WithArgs(int64(7), "fp-desktop-1").WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.RemoveDeleteTodosByPeer(ctx, 7, "fp-desktop-1"))
+	require.NoError(t, r.RemoveDeleteTodosByDevice(ctx, 7, "fp-desktop-1"))
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ListPendingMachines 是巡检的取材面：全库范围内还欠着删除的机器，按
-// (user_id, peer_fingerprint) 去重。它按定义没有账号作用域——巡检问的是「整个部署里
+// (user_id, device_fingerprint) 去重。它按定义没有账号作用域——巡检问的是「整个部署里
 // 哪些机器欠着删除」，而请求路径上的每一次读都限定在调用方自己的账号里
-// （那是 ListDeleteTodosByPeer 的事）。
+// （那是 ListDeleteTodosByDevice 的事）。
 //
 // 取材必须来自待办表本身，不能借用保存名单：删掉一台离线机器上**最后**一条对话
 // 之后，那台机器就再也不出现在保存名单里，而它恰恰还欠着一条删除。
@@ -95,17 +95,17 @@ func TestListPendingMachines_DistinctByAccountAndPeer(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeleteTodo()
 
-	rows := sqlmock.NewRows([]string{"user_id", "peer_fingerprint"}).
+	rows := sqlmock.NewRows([]string{"user_id", "device_fingerprint"}).
 		AddRow(7, "fp-desktop-1").
 		AddRow(9, "fp-agentred-2")
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"SELECT DISTINCT `user_id`,`peer_fingerprint` FROM `agent_session_delete_todos` ORDER BY user_id ASC",
+		"SELECT DISTINCT `user_id`,`device_fingerprint` FROM `agent_session_delete_todos` ORDER BY user_id ASC",
 	)).WillReturnRows(rows)
 
 	out, err := r.ListPendingMachines(ctx)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
-	assert.Equal(t, PendingMachine{UserID: 7, PeerFingerprint: "fp-desktop-1"}, out[0])
-	assert.Equal(t, PendingMachine{UserID: 9, PeerFingerprint: "fp-agentred-2"}, out[1])
+	assert.Equal(t, PendingMachine{UserID: 7, DeviceFingerprint: "fp-desktop-1"}, out[0])
+	assert.Equal(t, PendingMachine{UserID: 9, DeviceFingerprint: "fp-agentred-2"}, out[1])
 	require.NoError(t, mock.ExpectationsWereMet())
 }

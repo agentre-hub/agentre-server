@@ -128,9 +128,9 @@ func (s *Sessions) ReplayPendingDeletes(ctx context.Context) error {
 		waiting int
 	)
 	for _, m := range machines {
-		online, err := s.sup.relay.IsDaemonOnline(ctx, m.UserID, m.PeerFingerprint)
+		online, err := s.sup.relay.IsDaemonOnline(ctx, m.UserID, m.DeviceFingerprint)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("machine %s: check presence: %w", m.PeerFingerprint, err))
+			errs = append(errs, fmt.Errorf("machine %s: check presence: %w", m.DeviceFingerprint, err))
 			continue
 		}
 		if !online {
@@ -141,7 +141,7 @@ func (s *Sessions) ReplayPendingDeletes(ctx context.Context) error {
 		cleared, err := s.replayMachineDeletes(ctx, m)
 		done += cleared
 		if err != nil {
-			errs = append(errs, fmt.Errorf("machine %s: %w", m.PeerFingerprint, err))
+			errs = append(errs, fmt.Errorf("machine %s: %w", m.DeviceFingerprint, err))
 		}
 	}
 	logger.Ctx(ctx).Info("mirror_svc.ReplayPendingDeletes: pass finished",
@@ -154,14 +154,14 @@ func (s *Sessions) ReplayPendingDeletes(ctx context.Context) error {
 //
 // 一条失败不跳过后面几条：它们各是一条对话，彼此不相干。
 func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_repo.PendingMachine) (int, error) {
-	todos, err := agent_session_repo.DeleteTodo().ListDeleteTodosByPeer(ctx, m.UserID, m.PeerFingerprint)
+	todos, err := agent_session_repo.DeleteTodo().ListDeleteTodosByDevice(ctx, m.UserID, m.DeviceFingerprint)
 	if err != nil {
 		return 0, fmt.Errorf("list pending deletes: %w", err)
 	}
 	// 账号此刻的保存名单是权威（与 Mirror.pruneUnwanted 同一条原则）：机器回来之后
 	// 用户可能把同一条**重新保存**了，那条删除的意图已经被他自己收回。照着待办打
 	// 过去，毁掉的是他刚刚保存的那条对话——而两次动作之间只隔着一轮巡检。
-	saved, err := savedOnMachine(ctx, m.UserID, m.PeerFingerprint)
+	saved, err := savedOnMachine(ctx, m.UserID, m.DeviceFingerprint)
 	if err != nil {
 		return 0, err
 	}
@@ -177,7 +177,7 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 		if savedAgain[todo.ConversationID] {
 			// 收回的删除意图也不该一直排在那儿。
 			logger.Ctx(ctx).Info("mirror_svc.ReplayPendingDeletes: conversation was saved again, dropping the delete",
-				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.PeerFingerprint),
+				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.DeviceFingerprint),
 				zap.String("conversationId", todo.ConversationID))
 			if err := agent_session_repo.DeleteTodo().RemoveDeleteTodo(
 				ctx, todo.UserID, todo.ConversationID); err != nil {
@@ -187,12 +187,12 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 			cleared++
 			continue
 		}
-		err := s.DeleteOnPeer(ctx, todo.UserID, todo.PeerFingerprint, todo.ConversationID)
+		err := s.DeleteOnPeer(ctx, todo.UserID, todo.DeviceFingerprint, todo.ConversationID)
 		switch {
 		case err == nil:
 		case isMethodNotFound(err):
 			logger.Ctx(ctx).Error("mirror_svc.ReplayPendingDeletes: peer violated the negotiated protocol",
-				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.PeerFingerprint),
+				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.DeviceFingerprint),
 				zap.String("conversationId", todo.ConversationID), zap.Error(err))
 			errs = append(errs, fmt.Errorf("conversation %s: protocol method missing: %w", todo.ConversationID, err))
 		default:
@@ -220,7 +220,7 @@ func isMethodNotFound(err error) bool {
 // 指令永远执行不了——那台机器已经不归这个账号管（决策 7）。账号里那些对话本身不动：
 // 它们留着、读得到，只是此后只读。
 func (s *Sessions) PurgeMachineDeleteTodos(ctx context.Context, userID int64, peerFingerprint string) error {
-	if err := agent_session_repo.DeleteTodo().RemoveDeleteTodosByPeer(ctx, userID, peerFingerprint); err != nil {
+	if err := agent_session_repo.DeleteTodo().RemoveDeleteTodosByDevice(ctx, userID, peerFingerprint); err != nil {
 		return fmt.Errorf("purge delete todos of the revoked machine: %w", err)
 	}
 	return nil
