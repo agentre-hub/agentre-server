@@ -29,6 +29,11 @@
       "title": "New messages cannot be sent; history still reads",
       "body": "This conversation is pinned to a compute node that is currently unavailable. It resumes once that node is back."
     },
+    "protocolMismatch": {
+      "title": "This machine and this page are on different versions",
+      "body": "It refused the connection, and that will not clear on its own until one of the two is updated.",
+      "bodyDetailed": "It refused the connection, and that will not clear on its own until one of the two is updated. It said: {{detail}}"
+    },
     "deviceRevoked": {
       "title": "This device was removed from the account",
       "body": "Permanently. History still reads; this conversation is read-only from now on."

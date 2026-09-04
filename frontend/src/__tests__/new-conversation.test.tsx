@@ -304,6 +304,7 @@ beforeEach(async () => {
     relayState: "disconnected",
     relayTicket: null,
     relayTicketError: null,
+    handshakeRejection: null,
     reconnect: vi.fn(),
   });
 });
@@ -1354,6 +1355,7 @@ describe("草稿页的权限档位与模型控件", () => {
       relayState,
       relayTicket,
       relayTicketError: null,
+      handshakeRejection: null,
       reconnect: vi.fn(),
     });
     return request;

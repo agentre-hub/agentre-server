@@ -33,9 +33,12 @@ const fake = vi.hoisted(() => {
     close: () => void;
     state: string;
     emit: (s: string) => void;
+    /** 演一次「对端按协议版本拒了这次握手」。 */
+    rejectHandshake: (detail: string) => void;
   }[] = [];
   class FakeRelayClient {
     private readonly onStateChange: (s: string) => void;
+    private readonly onHandshakeRejected?: (detail: string) => void;
     /** 真 client 有的那个只读状态：池子给后来者补状态时读的就是它。 */
     state = "disconnected";
     connect = vi.fn(async () => {
@@ -49,8 +52,17 @@ const fake = vi.hoisted(() => {
       this.state = s;
       this.onStateChange(s);
     };
-    constructor(opts: { onStateChange: (s: string) => void }) {
+    /** 被拒之后真 client 不再重试，落在 disconnected（见 relayClient.handshake）。 */
+    rejectHandshake = (detail: string) => {
+      this.emit("disconnected");
+      this.onHandshakeRejected?.(detail);
+    };
+    constructor(opts: {
+      onStateChange: (s: string) => void;
+      onHandshakeRejected?: (detail: string) => void;
+    }) {
       this.onStateChange = opts.onStateChange;
+      this.onHandshakeRejected = opts.onHandshakeRejected;
       instances.push(this);
     }
   }
@@ -114,6 +126,30 @@ describe("useRelayMachine 的连接状态", () => {
     gate.resolve(TICKET);
     await waitFor(() => expect(fake.instances).toHaveLength(1));
     await waitFor(() => expect(result.current.relayState).toBe("connecting"));
+  });
+
+  /**
+   * 对端按协议版本拒了握手（daemon 的 -32006）。
+   *
+   * 这条原因必须一路交到页面：`relayState` 那一格说不出它 —— 落在 disconnected 上
+   * 与「票没换到」长得一模一样，而两者要说的话、要给的出口完全不同。换目标时得跟着
+   * 清掉：上一台机器版本对不上，不代表下一台也对不上。
+   */
+  it("对端按协议版本拒了握手时把原话交出来,换目标时清掉", async () => {
+    const detail = "peer speaks protocol version 0.3.0, this build accepts …";
+    mockedEnsureRelayTicket.mockResolvedValue(TICKET);
+    const { result, rerender } = renderHook(
+      ({ target }: { target: string }) => useRelayMachine(target),
+      { initialProps: { target: "fp-1" } },
+    );
+    await waitFor(() => expect(fake.instances).toHaveLength(1));
+    expect(result.current.handshakeRejection).toBeNull();
+
+    act(() => fake.instances[0].rejectHandshake(detail));
+    await waitFor(() => expect(result.current.handshakeRejection).toBe(detail));
+
+    rerender({ target: "fp-2" });
+    expect(result.current.handshakeRejection).toBeNull();
   });
 
   it("取票失败后回到「已断开」,好让页面给出重连的出口", async () => {

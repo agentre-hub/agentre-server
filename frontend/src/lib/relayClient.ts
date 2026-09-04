@@ -144,7 +144,30 @@ export interface RelayClientOptions extends NotificationHandlers {
    */
   credential: () => string | Promise<string>;
   onStateChange?: (state: RelayState) => void;
+  /**
+   * 对端按**协议版本**拒绝了这条通道的握手，参数是它自己那句说明。
+   *
+   * 与 `onStateChange` 分开，因为它说的不是「连上没有」而是「为什么永远连不上」：
+   * 这一档不会自愈（见 ProtocolVersionRejectionCode），页面据此换一套说法与出路，
+   * 而不是继续画那个承诺「会自己回来」的转圈。
+   */
+  onHandshakeRejected?: (detail: string) => void;
 }
+
+/**
+ * daemon 一侧 `rpcerror.CodeProtocolVersion`（agentre 的 internal/pkg/rpcerror）：
+ * `requireProtocolVersion` 判定两边的版本窗口不相交时，握手就是拿着这个码被拒的。
+ *
+ * 这里复述一份而不是从 wire 包 import：它不在 `constants.gen.ts` 导出的那一批里，
+ * 而为了一个常量去改跨仓的 wire 包要走「共享包发布 → 钉住新 revision」整条依赖序。
+ * 同一条线上的 Go 侧（`mirror_svc/protocol_mismatch.go` 的
+ * `protocolVersionRejectionCode`）出于同样的理由也是复述一份并注明来路。
+ *
+ * 它与 `MaxPeerErrorCode`（sessionView.ts）不同：那个是本站自己的分类阈值，这个是
+ * 对端发出的码，改了那边这里不会变红。所以它值一句注释：**这个码的主人在 agentre
+ * 仓库**，跟着它走。
+ */
+export const ProtocolVersionRejectionCode = -32006;
 
 /** RelayClient 用得到的那一小块连接能力（ISP）。 */
 export type RelayConnectionLike = Pick<
@@ -565,11 +588,24 @@ export class RelayClient {
    *
    * 重试**会**换到一张新票（凭据是现取的），所以最常见的那种失败——票在这条 socket
    * 活着的这段时间里过期了——下一次就好了。
+   *
+   * **例外是协议版本被拒**：同一个 agentred 二进制不会自己变新，重拨一万次拿回来的
+   * 还是同一句话。那一档不排重试，也不置 `reconnecting`——那个状态对页面的承诺正是
+   * 「有人正在重试」。落到 `disconnected`（「连过又放弃了」），并把对端那句说明单独
+   * 交出去：它写着两边各自的版本窗口，是这一屏唯一说得出「该去更新哪一头」的东西。
    */
   private async handshake(): Promise<void> {
     try {
       await this.authenticate();
     } catch (err) {
+      if (
+        err instanceof RelayError &&
+        err.code === ProtocolVersionRejectionCode
+      ) {
+        this.setState("disconnected");
+        this.opts.onHandshakeRejected?.(err.message);
+        throw err;
+      }
       this.setState("reconnecting");
       this.scheduleHandshakeRetry();
       throw err instanceof RelayError

@@ -120,6 +120,7 @@ function renderPage(navState?: Record<string, unknown>) {
         expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
+      handshakeRejection: null,
       reconnect: vi.fn(),
     };
   });

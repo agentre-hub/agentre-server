@@ -52,6 +52,7 @@ export type SessionViewStatus =
   | "machineOffline"
   | "desktopAppNotRunning"
   | "pinnedAgentredUnavailable"
+  | "protocolMismatch"
   | "deviceRevoked"
   | "loggedOut";
 
@@ -67,6 +68,15 @@ export interface SessionViewInput {
   pinnedAgentredUnavailable?: boolean;
   /** 设备已从账号撤销，会话永久只读。 */
   deviceRevoked?: boolean;
+  /**
+   * 对端按协议版本拒绝了这条通道的握手（daemon 的 -32006，见
+   * `relayClient.ts` 的 `ProtocolVersionRejectionCode`）。
+   *
+   * 它与 `relayState` 是两件事，所以单独占一个入参而不是折进那个枚举：中继连接态
+   * 说的是「连上没有」，这一格说的是「为什么永远连不上」，而且**它不会自愈**——
+   * 客户端那一侧已经据此停掉重试了。
+   */
+  protocolMismatch?: boolean;
   /**
    * 这一屏要连的那条通道**已经定下来了**吗。默认 true（不传 = 有目标）。
    *
@@ -88,12 +98,25 @@ export function deriveSessionViewStatus(
     pinnedAgentredUnavailable,
     deviceRevoked,
     relayTargetResolved,
+    protocolMismatch,
   } = input;
   if (!meValid) return "loggedOut";
   if (deviceRevoked) return "deviceRevoked";
   if (machineOnline === false) {
     return targetKind === "desktop" ? "desktopAppNotRunning" : "machineOffline";
   }
+  /*
+    排在中继连接态**之前**、目标不可达之后。
+
+    在前：被拒之后 `RelayClient` 落在 disconnected（不再重试），照 relayState 读会说
+    成 `lost`——「连接断了」配一颗按下去只会被同样拒一次的「重新连接」，而真正该做的
+    是把两头里旧的那个更新掉。换 socket 时通道还会重做握手、重新被拒，于是 reconnecting
+    与 disconnected 交替出现，头部那枚芯片跟着一闪一闪。
+
+    在后：账号没了 / 设备被撤 / 机器根本不在线时，版本合不合无从谈起，那三句话也都
+    比它更接近用户此刻要做的事。
+  */
+  if (protocolMismatch) return "protocolMismatch";
   if (relayState === "connected" && pinnedAgentredUnavailable) {
     return "pinnedAgentredUnavailable";
   }

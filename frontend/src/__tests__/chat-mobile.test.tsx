@@ -172,6 +172,7 @@ function connectedRelay(): UseRelayMachineResult {
       expiresAt: Date.now() + 120_000,
     },
     relayTicketError: null,
+    handshakeRejection: null,
     reconnect: vi.fn(),
   };
 }

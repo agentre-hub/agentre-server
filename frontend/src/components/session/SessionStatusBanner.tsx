@@ -1,6 +1,7 @@
 import {
   Lock,
   LogIn,
+  GitCompareArrows,
   MonitorOff,
   RotateCw,
   TriangleAlert,
@@ -69,6 +70,9 @@ const SHAPE: Record<string, Shape> = {
   lost: { tone: "alarm", Icon: Unplug },
   desktopAppNotRunning: { tone: "alarm", Icon: MonitorOff },
   pinnedAgentredUnavailable: { tone: "limited", Icon: TriangleAlert },
+  // `alarm` 而不是 `limited`：这一档读也读不成（握手就没过），而且不会自己恢复——
+  // 得有人去更新两头里旧的那个。
+  protocolMismatch: { tone: "alarm", Icon: GitCompareArrows },
   deviceRevoked: { tone: "settled", Icon: Lock },
   loggedOut: { tone: "settled", Icon: LogIn },
 };
@@ -87,6 +91,7 @@ export default function SessionStatusBanner({
   status,
   machineName,
   machineLastSeenMs,
+  protocolMismatchDetail,
   onReconnect,
   onStartNew,
 }: {
@@ -94,6 +99,13 @@ export default function SessionStatusBanner({
   /** 目标机器的名字。取不到就不编一个占位名，标题退到「这台机器」。 */
   machineName?: string;
   machineLastSeenMs?: number;
+  /**
+   * 对端拒绝握手时它自己那句说明（`wireversion.Reject`）。
+   *
+   * 原样显示，不改写、不翻译：它里面写着**两边各自的版本窗口**，是这一屏唯一说得出
+   * 「该去更新哪一头」的东西。取不到时退到通用说明——编一个版本号出来更坏。
+   */
+  protocolMismatchDetail?: string;
   /**
    * 「重新连接」。只有 `lost`（重试已经耗尽）用得上，而且**只在调用方接得住时
    * 才摆**——一个按下去什么都不会发生的按钮比没有按钮更坏。
@@ -162,7 +174,13 @@ export default function SessionStatusBanner({
       tone={tone}
       icon={<Icon className="size-4" aria-hidden />}
       title={title}
-      body={t(`session.banner.${status}.body`)}
+      body={
+        status === "protocolMismatch" && protocolMismatchDetail
+          ? t("session.banner.protocolMismatch.bodyDetailed", {
+              detail: protocolMismatchDetail,
+            })
+          : t(`session.banner.${status}.body`)
+      }
       meta={
         lastSeenMs ? (
           <>
@@ -197,6 +215,10 @@ export default function SessionStatusBanner({
             {t("session.banner.reconnect")}
           </Button>
         ) : null;
+      // 这三档的出口都是设备页。`protocolMismatch` 尤其不能给「重新连接」：重拨
+      // 一次只会被同样拒一次（客户端那一侧已经据此停掉重试了），要动的是那台机器
+      // 上的构建。
+      case "protocolMismatch":
       case "desktopAppNotRunning":
       case "pinnedAgentredUnavailable":
         return (

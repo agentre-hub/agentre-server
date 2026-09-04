@@ -44,6 +44,14 @@ export interface UseRelayMachineResult {
   relayTicket: RelayTicket | null;
   relayTicketError: unknown;
   /**
+   * 对端按协议版本拒了这条通道的握手时，它自己那句说明；没被拒过就是 null。
+   *
+   * 与 `relayState` 分开报，因为那一格说不出这件事：被拒之后客户端落在
+   * "disconnected"（它不再重试了），而那与「票根本没换到」长得一模一样 —— 两者要说
+   * 的话和要给的出口完全不同（页面据此走 `protocolMismatch` 而不是 `lost`）。
+   */
+  handshakeRejection: string | null;
+  /**
    * 从头再连一次：重取 ticket、新建 RelayClient、connect。
    *
    * **不是**在旧 client 上重试。`relayState` 走到 "disconnected" 只有两条来历，
@@ -82,10 +90,16 @@ export function useRelayMachine(
   const [relayState, setRelayState] = useState<RelayState>(() =>
     initialState(target),
   );
+  const [handshakeRejection, setHandshakeRejection] = useState<string | null>(
+    null,
+  );
   const [lastTarget, setLastTarget] = useState(target);
   if (lastTarget !== target) {
     setLastTarget(target);
     setRelayState(initialState(target));
+    // 上一台机器的构建版本对不上，不代表下一台也对不上：不清的话，切过去的那一屏
+    // 会挂着一条属于别人的横幅，而它那条通道可能好得很。
+    setHandshakeRejection(null);
   }
   const [client, setClient] = useState<RelayClient | null>(null);
   /** 兜底的手动重连计数器：变一次就把下面那个 effect 整个重跑一遍。 */
@@ -134,6 +148,7 @@ export function useRelayMachine(
         target,
         {
           onStateChange: setRelayState,
+          onHandshakeRejected: setHandshakeRejection,
           onEvent: (frame, at) => optsRef.current.onEvent?.(frame, at),
           onRunResultDone: (frame, at) =>
             optsRef.current.onRunResultDone?.(frame, at),
@@ -171,5 +186,12 @@ export function useRelayMachine(
     [target, attempt],
   );
 
-  return { client, relayState, relayTicket, relayTicketError, reconnect };
+  return {
+    client,
+    relayState,
+    relayTicket,
+    relayTicketError,
+    handshakeRejection,
+    reconnect,
+  };
 }

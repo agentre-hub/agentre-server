@@ -82,6 +82,7 @@ const ALL_STATUSES: SessionViewStatus[] = [
   "machineOffline",
   "desktopAppNotRunning",
   "pinnedAgentredUnavailable",
+  "protocolMismatch",
   "deviceRevoked",
   "loggedOut",
 ];
@@ -92,6 +93,7 @@ const BANNER_STATUSES: SessionViewStatus[] = [
   "machineOffline",
   "desktopAppNotRunning",
   "pinnedAgentredUnavailable",
+  "protocolMismatch",
   "deviceRevoked",
   "loggedOut",
 ];
@@ -106,6 +108,8 @@ describe("状态横幅:三档形态", () => {
       "machineOffline",
       "desktopAppNotRunning",
       "pinnedAgentredUnavailable",
+      // 协议版本不合是 blocking 而不是 final：它不是既成事实，换一头去更新就好了。
+      "protocolMismatch",
     ] as SessionViewStatus[]) {
       expect(tierOf(status), status).toBe("blocking");
     }
@@ -442,6 +446,61 @@ describe("状态横幅:三档形态", () => {
       deriveSessionViewStatus({ ...base, relayState: "reconnecting" }),
     ).toBe("reconnecting");
     expect(deriveSessionViewStatus(base)).toBe("lost");
+  });
+
+  /**
+   * 对端按协议版本拒了这条通道的握手（daemon 的 -32006）。
+   *
+   * 这一档必须盖过中继连接态：`RelayClient` 那一侧已经不再重试了（见
+   * relay-protocol-version-rejection.test.ts），若这里仍按 relayState 报，页面就会
+   * 拿 `lost` 的说法（「连接断了」+ 一颗按下去只会再被拒一次的「重新连接」）去讲一件
+   * 完全不同的事——真正该做的是把两头里旧的那个更新掉。
+   *
+   * 但它盖不过前面三档：账号没了 / 设备被撤 / 机器根本不在线时，版本合不合无从谈起，
+   * 而那三句话都比它更接近用户此刻要做的事。
+   */
+  it("deriveSessionViewStatus:协议版本不合盖过中继连接态,但让位于账号/设备/离线", () => {
+    const base = {
+      relayState: "disconnected" as RelayState,
+      meValid: true,
+      machineOnline: true,
+      targetKind: "agentred" as const,
+      protocolMismatch: true,
+    };
+    expect(deriveSessionViewStatus(base)).toBe("protocolMismatch");
+    // 被拒之后客户端落在 disconnected，但重连中那一档也一样要被盖住：换 socket 会让
+    // 通道重做握手，于是重连与被拒会交替出现，芯片跟着一闪一闪。
+    expect(
+      deriveSessionViewStatus({ ...base, relayState: "reconnecting" }),
+    ).toBe("protocolMismatch");
+    expect(deriveSessionViewStatus({ ...base, machineOnline: false })).toBe(
+      "machineOffline",
+    );
+    expect(deriveSessionViewStatus({ ...base, deviceRevoked: true })).toBe(
+      "deviceRevoked",
+    );
+    expect(deriveSessionViewStatus({ ...base, meValid: false })).toBe(
+      "loggedOut",
+    );
+    // 没被拒过的时候什么都不变。
+    expect(deriveSessionViewStatus({ ...base, protocolMismatch: false })).toBe(
+      "lost",
+    );
+  });
+
+  /**
+   * daemon 回的那句话（`wireversion.Reject`）里写着**两边各自的版本窗口**，例如
+   * 「peer speaks protocol version 0.3.0, this build accepts 0.4.0 to 0.4.0」。
+   * 它是这一屏唯一说得出「该去更新哪一头」的东西，所以必须原样出现在横幅上——
+   * 把它吞掉，用户看到的就只是一句「版本不一致」，然后无从下手。
+   */
+  it("协议版本横幅带上对端的原话:两边的版本都在里面", () => {
+    const detail =
+      "peer speaks protocol version 0.3.0, this build accepts protocol versions 0.4.0 to 0.4.0";
+    renderStatus("protocolMismatch", { protocolMismatchDetail: detail });
+    const root = bannerOf("protocolMismatch");
+    expect(root).not.toBeNull();
+    expect((root as HTMLElement).textContent).toContain(detail);
   });
 
   /**

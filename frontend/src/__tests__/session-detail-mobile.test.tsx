@@ -116,6 +116,7 @@ function renderPage() {
       expiresAt: Date.now() + 120_000,
     },
     relayTicketError: null,
+    handshakeRejection: null,
     reconnect: vi.fn(),
   }));
   return render(
@@ -185,6 +186,7 @@ describe("SessionDetailView embedded 形态(任务 5 重构边界)", () => {
         expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
+      handshakeRejection: null,
       reconnect: vi.fn(),
     }));
     render(

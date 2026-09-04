@@ -51,6 +51,8 @@ export interface SessionScrollBodyProps {
   status: SessionViewStatus;
   machineName: string | undefined;
   machineLastSeenMs: number | undefined;
+  /** 对端拒绝握手时它自己那句说明，见 SessionStatusBanner。 */
+  protocolMismatchDetail: string | undefined;
   onReconnect: () => void;
   /** 中继此刻的连线状态。转录的三点要它才知道该不该继续转。 */
   relayState: string;
@@ -105,6 +107,7 @@ export default function SessionScrollBody({
   status,
   machineName,
   machineLastSeenMs,
+  protocolMismatchDetail,
   onReconnect,
   relayState,
   history,
@@ -219,6 +222,7 @@ export default function SessionScrollBody({
           status={status}
           machineName={machineName}
           machineLastSeenMs={machineLastSeenMs}
+          protocolMismatchDetail={protocolMismatchDetail}
           // 「lost」说的是「已经不再自动重试」——一句终局的话，那就必须配一个
           // 出路，否则用户只能刷新整页而界面没说。这里给的是重开一条连接
           // （见 useRelayMachine.reconnect：已经 close 的 client 上没有可重试的东西）。

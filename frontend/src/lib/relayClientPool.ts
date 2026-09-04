@@ -63,6 +63,8 @@ export interface RelayListener {
   /** 客户端要的那一轮开始了，见 `NotificationHandlers.onTurnStarted`。 */
   onTurnStarted?: (frame: TurnStartedFrame, createtime?: number) => void;
   onStateChange?: (state: RelayState) => void;
+  /** 对端按协议版本拒了这条通道的握手，见 `RelayClientOptions.onHandshakeRejected`。 */
+  onHandshakeRejected?: (detail: string) => void;
 }
 
 /** 一份租约。 */
@@ -446,6 +448,7 @@ export class RelayClientPool {
         (l) => l.onTurnStarted,
       ),
       onStateChange: fanout<[RelayState]>((l) => l.onStateChange),
+      onHandshakeRejected: fanout<[string]>((l) => l.onHandshakeRejected),
     });
   }
 
