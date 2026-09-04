@@ -1035,7 +1035,16 @@ describe("对话页:机器轴", () => {
     fireEvent.click(await screen.findByText("View all 8 sessions"));
 
     // 弹层先摆已经在手的那一页,第 7 条要等游标那一次才来。
+    // (真实浏览器里滚到底由 IntersectionObserver 自动续取;jsdom 没有它,按钮同源。)
     expect(await screen.findByText("机器上第 4 条")).toBeTruthy();
+    expect(screen.queryByText("机器上第 7 条")).toBeNull();
+
+    fireEvent.click(
+      within(screen.getByTestId("group-overflow")).getByTestId(
+        "index-load-more",
+      ),
+    );
+
     expect(await screen.findByText("机器上第 7 条")).toBeTruthy();
     const cursors = fakeClient.request.mock.calls.map(
       ([, params]) => (params as { cursor?: string })?.cursor ?? "",

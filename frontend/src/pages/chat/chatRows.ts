@@ -260,12 +260,69 @@ export function mergeMirrorRows(input: {
 }
 
 /**
- * 机器轴上每台在线机器**各自的整份**（规格 2026-08-21 决策 1，口径沿用
+ * 一台机器交出来的**一页**会话 → 索引的行。
+ *
+ * 首屏那一页与「查看全部 N」里翻出来的每一页都走这里：两处各写一份就会长出两种行
+ * （键不同、已保存标记不同），而它们要出现在同一个列表里。
+ */
+export function toMachineRows(input: {
+  device: DeviceItem;
+  sessions: readonly SessionSummary[];
+  localFingerprint: string | undefined;
+  mirrorRows: MirroredSession[];
+  fromMirrorRow: (s: MirroredSession) => MirrorIndexRow;
+  fromMachineRow: (
+    device: DeviceItem,
+    s: SessionSummary,
+    localFingerprint: string | undefined,
+  ) => MirrorIndexRow;
+  filter: SessionFilter;
+}): MirrorIndexRow[] {
+  const savedByKey = new Map(
+    input.mirrorRows.map((s) => [rowKey(s.conversation_id), s]),
+  );
+  const rows: MirrorIndexRow[] = input.sessions.map((s) => {
+    // 空 origin = 「这条连接的这一端」，也就是本浏览器（见 machineRowOrigin）。
+    const origin = machineRowOrigin(s, input.device, input.localFingerprint);
+    const mirroredRow = savedByKey.get(rowKey(s.conversationId));
+    // 账号里已经有的那条：标出来，并把只有服务端判得出的项目归属带上（决策 12）。
+    const row = mirroredRow
+      ? { ...input.fromMirrorRow(mirroredRow), deviceId: input.device.id }
+      : input.fromMachineRow(input.device, s, input.localFingerprint);
+    // 账号身份仍是 origin + session；但机器轴会让多台机器各自报告同一条
+    // 会话。渲染/键盘导航的行身份还必须包含报告机器，否则两行会共用一个
+    // React key 和 data-nav-target，ArrowDown 永远把焦点送回第一行。
+    return {
+      ...row,
+      // 自己报告自己的常规行保留账号身份键（行尾动作与已有选择状态都认它）；
+      // 只有代另一发起端报告时才补报告机器维度，这正是会发生重复的分支。
+      key:
+        origin === input.device.fingerprint
+          ? row.key
+          : `${input.device.id}:${row.key}`,
+    };
+  });
+  // 搜索**不在这里**过：关键词随 session.list 下推给机器了，这份清单已经是命中项。
+  // 在这里再按标题筛一遍会把机器按 agent 名 / 项目名命中的那些丢掉（桌面端手上有
+  // 这些名字，agentred 只有标题——见 wire 里 SessionListRequest.keyword 的注释）。
+  //
+  // chips 仍要就地过：它判的是运行态与未读，机器上报的那一份没有这些口径，判据
+  // 与服务端逐字一致——两处不一样的话，同一个 chip 在这一档筛出的就是另一批。
+  if (input.filter === "all") return rows;
+  return rows.filter((r) => matchesSessionFilter(r, input.filter));
+}
+
+/**
+ * 机器轴上每台在线机器**手上那一页**（规格 2026-08-21 决策 1，口径沿用
  * 2026-08-19 决策 11 / 12，只是从「选中的那一台」扩到「每一台」）。
  *
  * 在线的机器以它自己上报的那份为准：镜像里发起自这台机器、但机器本地已经没有了的
  * 那些不在其中——它们不在这个问题的答案里（其余三个轴上照常在）。离线的机器压根
  * 不在这张表里：它答不出，一行都不列。
+ *
+ * 这里是**第一页**而不是整份:机器上可能有几千条,整份拉回来再一次画出来正是机器轴
+ * 卡住的原因。其余的走「查看全部 N」按游标续取(见 useMachineReachability 的
+ * loadMachinePage)。
  */
 export function buildMachineRows(input: {
   onlineMachines: DeviceItem[];
@@ -279,44 +336,21 @@ export function buildMachineRows(input: {
   ) => MirrorIndexRow;
   filter: SessionFilter;
 }): Map<number, MirrorIndexRow[]> {
-  const savedByKey = new Map(
-    input.mirrorRows.map((s) => [rowKey(s.conversation_id), s]),
-  );
   const byDevice = new Map<number, MirrorIndexRow[]>();
   for (const device of input.onlineMachines) {
-    let rows: MirrorIndexRow[] = (
-      input.resolved[device.fingerprint]?.sessions ?? []
-    ).map((s) => {
-      // 空 origin = 「这条连接的这一端」，也就是本浏览器（见 machineRowOrigin）。
-      const localFingerprint =
-        input.resolved[device.fingerprint]?.localFingerprint;
-      const origin = machineRowOrigin(s, device, localFingerprint);
-      const mirroredRow = savedByKey.get(rowKey(s.conversationId));
-      // 账号里已经有的那条：标出来，并把只有服务端判得出的项目归属带上（决策 12）。
-      const row = mirroredRow
-        ? { ...input.fromMirrorRow(mirroredRow), deviceId: device.id }
-        : input.fromMachineRow(device, s, localFingerprint);
-      // 账号身份仍是 origin + session；但机器轴会让多台机器各自报告同一条
-      // 会话。渲染/键盘导航的行身份还必须包含报告机器，否则两行会共用一个
-      // React key 和 data-nav-target，ArrowDown 永远把焦点送回第一行。
-      return {
-        ...row,
-        // 自己报告自己的常规行保留账号身份键（行尾动作与已有选择状态都认它）；
-        // 只有代另一发起端报告时才补报告机器维度，这正是会发生重复的分支。
-        key:
-          origin === device.fingerprint ? row.key : `${device.id}:${row.key}`,
-      };
-    });
-    // 搜索**不在这里**过：关键词随 session.list 下推给机器了，这份清单已经是命中项。
-    // 在这里再按标题筛一遍会把机器按 agent 名 / 项目名命中的那些丢掉（桌面端手上有
-    // 这些名字，agentred 只有标题——见 wire 里 SessionListRequest.keyword 的注释）。
-    //
-    // chips 仍要就地过：它判的是运行态与未读，机器上报的那一份没有这些口径，判据
-    // 与服务端逐字一致——两处不一样的话，同一个 chip 在这一档筛出的就是另一批。
-    if (input.filter !== "all") {
-      rows = rows.filter((r) => matchesSessionFilter(r, input.filter));
-    }
-    byDevice.set(device.id, rows);
+    const machine = input.resolved[device.fingerprint];
+    byDevice.set(
+      device.id,
+      toMachineRows({
+        device,
+        sessions: machine?.sessions ?? [],
+        localFingerprint: machine?.localFingerprint,
+        mirrorRows: input.mirrorRows,
+        fromMirrorRow: input.fromMirrorRow,
+        fromMachineRow: input.fromMachineRow,
+        filter: input.filter,
+      }),
+    );
   }
   return byDevice;
 }
@@ -330,12 +364,21 @@ export function buildGroupTotals(input: {
   indexGroups: IndexGroupPayload[];
   devicesByFp: Map<string, DeviceItem>;
   machineRowsByDevice: Map<number, MirrorIndexRow[]> | null;
+  /**
+   * 机器自己报的总数（设备标识 → 条数）。手上那一份只是第一页，数它会让一台有
+   * 3500 条会话的机器写着「查看全部 20」。
+   *
+   * 缺一台就退回那一台手上的条数：不认得分页的老机器不报总数，而它交出来的本来
+   * 就是整份；调用方按当前筛选给不出总数时（chips 生效那一档）同理。
+   */
+  machineTotals?: Record<number, number>;
 }): Record<string, number> {
   const totals: Record<string, number> = {};
-  // 机器那一档的数不来自服务端：整份是机器自己上报的，就在手里。
+  // 机器那一档的数不来自服务端：那台机器自己才数得出。
   if (input.machineRowsByDevice) {
     for (const [deviceId, rows] of input.machineRowsByDevice) {
-      totals[`device-${deviceId}`] = rows.length;
+      totals[`device-${deviceId}`] =
+        input.machineTotals?.[deviceId] ?? rows.length;
     }
     return totals;
   }

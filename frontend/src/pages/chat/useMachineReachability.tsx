@@ -320,7 +320,10 @@ export function useMachineReachability({
   );
 
   const loadMachinePage = useCallback(
-    async (fingerprint: string, cursor: string): Promise<MachineSessionPage> => {
+    async (
+      fingerprint: string,
+      cursor: string,
+    ): Promise<MachineSessionPage> => {
       const loader = loadersRef.current[fingerprint];
       // 连接不在了就说出来,而不是回一页空的 —— 空页与「翻完了」无法区分,弹层会
       // 把一台刚掉线的机器显示成「就这些」。

@@ -24,6 +24,7 @@ import App from "@/App";
 import { api } from "@/lib/api";
 import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
+import { MACHINE_LIST_PAGE_SIZE } from "@/pages/chat/useMachineReachability";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -157,10 +158,10 @@ describe("设备下钻地址重定向进统一索引", () => {
     expect(screen.getByText("/var/proj · codex · Idle")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "Save" }).length).toBe(2);
     // 「那台机器上有什么」只能问机器本身，与旧的下钻页同一条路。没在搜索时关键词是
-    // 空串，机器照旧回整份清单。
+    // 空串；页大小照发 —— 机器上可能有几千条，整份要回来正是机器轴卡住的原因。
     const call = fakeClient.request.mock.calls.at(-1);
     expect(call?.[0]).toBe(rpcMethods.sessionList);
-    expect(call?.[1]).toEqual({ keyword: "" });
+    expect(call?.[1]).toEqual({ keyword: "", limit: MACHINE_LIST_PAGE_SIZE });
   });
 });
 
@@ -168,7 +169,8 @@ describe("设备下钻地址重定向进统一索引", () => {
 //
 // 「那台机器上有什么」只有机器自己知道，所以这一档的行来自实时 session.list。此前
 // 整份拉回来再在浏览器里按标题筛（chatRows.buildMachineRows），机器上有几千条对话
-// 时就是几千份摘要过线，其中绝大多数与搜索无关。关键词因此进请求，由机器自己筛。
+// 时就是几千份摘要过线，其中绝大多数与搜索无关。关键词因此进请求，由机器自己筛；
+// 页大小同理随请求走，其余的由「查看全部 N」按游标续取。
 describe("机器轴的搜索下推到机器", () => {
   it("Given 机器轴上输入了搜索词, When 索引重取, Then session.list 带着关键词发出去", async () => {
     renderAt("/devices/1/sessions");
@@ -184,7 +186,10 @@ describe("机器轴的搜索下推到机器", () => {
       () => {
         const last = fakeClient.request.mock.calls.at(-1);
         expect(last?.[0]).toBe(rpcMethods.sessionList);
-        expect(last?.[1]).toEqual({ keyword: "登录" });
+        expect(last?.[1]).toEqual({
+          keyword: "登录",
+          limit: MACHINE_LIST_PAGE_SIZE,
+        });
       },
       { timeout: 5000 },
     );
@@ -199,7 +204,10 @@ describe("机器轴的搜索下推到机器", () => {
       () => {
         const last = fakeClient.request.mock.calls.at(-1);
         expect(last?.[0]).toBe(rpcMethods.sessionList);
-        expect(last?.[1]).toEqual({ keyword: "登录" });
+        expect(last?.[1]).toEqual({
+          keyword: "登录",
+          limit: MACHINE_LIST_PAGE_SIZE,
+        });
       },
       { timeout: 5000 },
     );
@@ -212,7 +220,10 @@ describe("机器轴的搜索下推到机器", () => {
       () => {
         const last = fakeClient.request.mock.calls.at(-1);
         expect(last?.[0]).toBe(rpcMethods.sessionList);
-        expect(last?.[1]).toEqual({ keyword: "" });
+        expect(last?.[1]).toEqual({
+          keyword: "",
+          limit: MACHINE_LIST_PAGE_SIZE,
+        });
       },
       { timeout: 5000 },
     );

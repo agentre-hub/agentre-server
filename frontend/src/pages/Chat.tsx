@@ -47,6 +47,7 @@ import {
   buildView,
   findSelectedKey,
   toMachineRow,
+  toMachineRows,
   toMirrorRow,
   type MirroredSession,
   type MirrorIndexRow,
@@ -561,6 +562,22 @@ export default function Chat() {
   );
 
   /**
+   * 每台机器上匹配当前搜索的总数,由机器自己报(手上那一份只是第一页)。
+   *
+   * **chips 生效时不给**:那一档是在浏览器里按运行态 / 未读筛的,机器不知道这个
+   * 口径,拿它的总数去配筛过的行,组头会写着「查看全部 3500」而下面只有两条。
+   */
+  const machineTotals = useMemo(() => {
+    if (filter !== "all") return {};
+    const totals: Record<number, number> = {};
+    for (const device of reach.onlineMachines) {
+      const machine = reach.resolved[device.fingerprint];
+      if (machine) totals[device.id] = machine.total;
+    }
+    return totals;
+  }, [filter, reach.onlineMachines, reach.resolved]);
+
+  /**
    * 组键 → 这一组在当前范围下的真数（决策 6）。服务端按**它自己的**组身份说话
    * （`agent:<id>` / `machine:<指纹>`…），索引按客户端的组键分组，这里是两套词汇
    * 唯一的翻译处。认不出机器的那些行在客户端并成一组，因此它们的数要相加。
@@ -571,9 +588,20 @@ export default function Chat() {
         indexGroups: sessionIndex.indexGroups,
         devicesByFp: reach.devicesByFp,
         machineRowsByDevice,
+        machineTotals,
       }),
-    [sessionIndex.indexGroups, reach.devicesByFp, machineRowsByDevice],
+    [
+      sessionIndex.indexGroups,
+      reach.devicesByFp,
+      machineRowsByDevice,
+      machineTotals,
+    ],
   );
+
+  // 从那一族里取出下面这条路要用的三样。**不整个依赖 `reach`**:它每次渲染都是一个
+  // 新对象,把它列进依赖会让 loadGroupPage 每渲染一次就换一个身份 —— 而「查看全部」
+  // 弹层的取数 effect 认这个身份,于是它每渲染一次就重取一次第一页,自己把自己叫醒。
+  const { onlineMachines, resolved: resolvedMachines, loadMachinePage } = reach;
 
   /**
    * 翻某一组的下一页（「查看全部 N」那条路）。范围参数一并带上——弹层里翻的必须
@@ -581,17 +609,36 @@ export default function Chat() {
    */
   const loadGroupPage = useCallback(
     async (scope: string, cursor: string | null) => {
-      // 机器那一档整份就在手里，翻它不用再问任何人——更不该拿这个 scope 去问服务端
-      // （它只知道账号里保存过的那些）。
+      // 机器那一档问的是机器自己,不该拿这个 scope 去问服务端(它只知道账号里保存
+      // 过的那些)。翻页也走那台机器:它才知道自己上面还有什么。
       if (machineRowsByDevice) {
-        const machine = reach.onlineMachines.find(
+        const machine = onlineMachines.find(
           (d) => scope === `machine:${d.fingerprint}`,
         );
         if (machine) {
+          const resolved = resolvedMachines[machine.fingerprint];
+          if (cursor === null) {
+            // 第一页就是索引手上那一份 —— 弹层一打开就为已经拿到的东西再跑一次
+            // 往返,只会让它先空着。
+            return {
+              rows: machineRowsByDevice.get(machine.id) ?? [],
+              cursor: resolved?.hasMore ? resolved.cursor : null,
+              hasMore: !!resolved?.hasMore,
+            };
+          }
+          const page = await loadMachinePage(machine.fingerprint, cursor);
           return {
-            rows: machineRowsByDevice.get(machine.id) ?? [],
-            cursor: null,
-            hasMore: false,
+            rows: toMachineRows({
+              device: machine,
+              sessions: page.sessions,
+              localFingerprint: resolved?.localFingerprint,
+              mirrorRows: sessionIndex.mirrorRows,
+              fromMirrorRow,
+              fromMachineRow,
+              filter,
+            }),
+            cursor: page.hasMore ? page.cursor : null,
+            hasMore: page.hasMore,
           };
         }
       }
@@ -602,7 +649,17 @@ export default function Chat() {
         hasMore: page.hasMore,
       };
     },
-    [fetchGroupPage, fromMirrorRow, reach.onlineMachines, machineRowsByDevice],
+    [
+      fetchGroupPage,
+      fromMirrorRow,
+      fromMachineRow,
+      filter,
+      sessionIndex.mirrorRows,
+      onlineMachines,
+      resolvedMachines,
+      loadMachinePage,
+      machineRowsByDevice,
+    ],
   );
 
   const view = useMemo(

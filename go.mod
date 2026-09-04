@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260903091755-eac06906d46a
+	github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904083118-2a93c2a6260f
 	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/cago-frame/cago v0.0.0-20260902121753-076847c5da4a
 	github.com/gin-gonic/gin v1.12.0

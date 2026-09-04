@@ -10,6 +10,8 @@ github.com/KyleBanks/depth v1.2.1 h1:5h8fQADFrWtarTdtDudMmGsC7GPbOAu6RVB3ffsVFHc
 github.com/KyleBanks/depth v1.2.1/go.mod h1:jzSb9d0L43HxTQfT+oSA1EEp2q+ne2uh6XgeJcm8brE=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260903091755-eac06906d46a h1:fGR/ZzBiiuUJi5UIbrE860kb0dPG2D6CABx2wi1HUIg=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260903091755-eac06906d46a/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904083118-2a93c2a6260f h1:SekyLu7gcnuiGIZDby/h9ZBG6Y02kcGZ9enIhnzHiko=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904083118-2a93c2a6260f/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/alicebob/miniredis/v2 v2.38.0 h1:nZAzCR+Lj+Vxk4ZXzm2NuKq2O33RXj1XxJ2e2uP9jiw=
 github.com/alicebob/miniredis/v2 v2.38.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=

@@ -12,8 +12,8 @@ importers:
         specifier: github:agentre-hub/agentre#0e81d4e712aada807ba3e78c76bb5c4ebb7cca73&path:/frontend/packages/agentre-ui
         version: https://codeload.github.com/agentre-hub/agentre/tar.gz/0e81d4e712aada807ba3e78c76bb5c4ebb7cca73#path:/frontend/packages/agentre-ui(97863f1c4b8e420407e11ff24ffeedfb)
       '@agentre-hub/agentre-wire':
-        specifier: github:agentre-hub/agentre#eac06906d46af3eb65bac9b798e026114b0dec86&path:/frontend/packages/agentre-wire
-        version: https://codeload.github.com/agentre-hub/agentre/tar.gz/eac06906d46af3eb65bac9b798e026114b0dec86#path:/frontend/packages/agentre-wire
+        specifier: github:agentre-hub/agentre#2a93c2a6260fbbb8e27d0c6a31d3e99861ba1986&path:/frontend/packages/agentre-wire
+        version: https://codeload.github.com/agentre-hub/agentre/tar.gz/2a93c2a6260fbbb8e27d0c6a31d3e99861ba1986#path:/frontend/packages/agentre-wire
       '@bufbuild/protobuf':
         specifier: ^2.14.0
         version: 2.14.0
@@ -188,8 +188,8 @@ packages:
       react-i18next: ^17.0.0
       sonner: ^2.0.0
 
-  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/eac06906d46af3eb65bac9b798e026114b0dec86#path:/frontend/packages/agentre-wire':
-    resolution: {path: /frontend/packages/agentre-wire, tarball: https://codeload.github.com/agentre-hub/agentre/tar.gz/eac06906d46af3eb65bac9b798e026114b0dec86}
+  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/2a93c2a6260fbbb8e27d0c6a31d3e99861ba1986#path:/frontend/packages/agentre-wire':
+    resolution: {path: /frontend/packages/agentre-wire, tarball: https://codeload.github.com/agentre-hub/agentre/tar.gz/2a93c2a6260fbbb8e27d0c6a31d3e99861ba1986}
     version: 0.3.0
 
   '@asamuzakjp/css-color@5.1.11':
@@ -3336,7 +3336,7 @@ snapshots:
       - '@types/react'
       - supports-color
 
-  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/eac06906d46af3eb65bac9b798e026114b0dec86#path:/frontend/packages/agentre-wire':
+  '@agentre-hub/agentre-wire@https://codeload.github.com/agentre-hub/agentre/tar.gz/2a93c2a6260fbbb8e27d0c6a31d3e99861ba1986#path:/frontend/packages/agentre-wire':
     dependencies:
       '@bufbuild/protobuf': 2.14.0
 
