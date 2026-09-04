@@ -17,6 +17,7 @@ export default function SessionDetail() {
     modelNote?: unknown;
     effortNote?: unknown;
     title?: unknown;
+    userText?: unknown;
     turnStartedAt?: unknown;
   } | null;
   const modelNote =
@@ -28,6 +29,10 @@ export default function SessionDetail() {
   // 同一条来路：从草稿页下钻过来时它就在手上，不必等摘要落地。
   const title =
     typeof navState?.title === "string" ? navState.title : undefined;
+  // 刚发出去那一句（见 SessionDetailView 的 initialUserText）。与 title 同一条来路：
+  // 草稿页派发那一刻就在手上，而转录的两条真来路都还要往返。
+  const userText =
+    typeof navState?.userText === "string" ? navState.userText : undefined;
   // 第一轮是什么时候派发出去的（见 SessionDetailView 的 initialTurnStartedAt）。
   // 同样只有这一条来路：草稿页派发那一刻。
   const turnStartedAt =
@@ -40,6 +45,7 @@ export default function SessionDetail() {
       conversationId={conversationId ?? ""}
       form="page"
       initialTitle={title}
+      initialUserText={userText}
       initialModelNote={modelNote}
       initialEffortNote={effortNote}
       initialTurnStartedAt={turnStartedAt}

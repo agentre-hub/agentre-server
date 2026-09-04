@@ -47,6 +47,7 @@ import { useAliveEffect } from "@/hooks/use-api-query";
 import { useRelayMachine } from "@/hooks/use-relay";
 import {
   TranscriptSessionId,
+  pendingUserMessage,
   toTranscriptFrame,
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
@@ -174,6 +175,18 @@ export interface SessionDetailViewProps {
    */
   initialTurnStartedAt?: number;
   /**
+   * 刚从草稿页发出去的**那一句**（`DispatchedSession.userText`）。
+   *
+   * 与 `initialTitle` 同一条来路、同一件事，只是它填的是转录那一带而不是头部：
+   * 草稿页在派发在飞时已经把这句话与三点画出来了，而本视图从**空事件表**起手 ——
+   * 转录的两条来路（账号镜像的一次 HTTP、中继的票 + WS + attach + 补齐）都要往返，
+   * 期间那一带只剩一片骨架，用户刚说完话就眼看着自己的话消失、界面重搭一遍。
+   *
+   * 只是**接力**：转录一有内容（哪一条来路先到都算）它就整条让位，也从不进
+   * `events` —— 那一份是对端说过的话，混进去会让下一次按 seq 拼接对不上号。
+   */
+  initialUserText?: string;
+  /**
    * 宿主页面级的那簇控件，摆在详情头部的最右端（嵌入形态才有）。
    *
    * 桌面 Chat 把转录上方那两条带并成一条之后，壳不再画 52px 顶栏，连接态与
@@ -216,6 +229,7 @@ export default function SessionDetailView({
   initialEffortNote,
   initialTitle,
   initialTurnStartedAt,
+  initialUserText,
   initialRow,
   headerRight,
   onMarkedRead,
@@ -909,10 +923,35 @@ export default function SessionDetailView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sid],
   );
-  const messages = useMemo(
+  const projected = useMemo(
     () => projector.project(events),
     [projector, events],
   );
+  /**
+   * 屏幕上那一份转录：一帧都还没有、而宿主交了草稿页刚发出去的那句话时，先摆它。
+   *
+   * 让位的判据是「投影出来的转录有内容了」而不是「哪条来路落地了」：镜像与中继
+   * 各有各的往返，谁先到都算，而这一句本来就在两者之中 —— 再摆一次就是同一句话
+   * 说两遍。
+   */
+  const messages = useMemo(
+    () =>
+      projected.length === 0 && initialUserText
+        ? [pendingUserMessage(initialUserText, TranscriptSessionId)]
+        : projected,
+    [projected, initialUserText],
+  );
+  /** 此刻画的是那条接力消息，不是投影出来的转录。 */
+  const seeded = projected.length === 0 && messages.length > 0;
+  /**
+   * 这一轮在不在跑。
+   *
+   * `turn.turnActive` 的起点是 attach 那一刻的 `lifecycleState`，而接力那一段
+   * **还没 attach** —— 可那一轮正是这个浏览器几百毫秒前亲手开起来的，这件事没有比
+   * 此刻更确定的时候。不把它算进去，草稿页上转着的三点与头上那颗绿点会在交接那
+   * 一拍一起熄掉，等 attach 回来再亮 —— 又是一次「界面重搭」。
+   */
+  const running = turn.turnActive || seeded;
 
   /**
    * 要不要为这一轮摆一枚空的助手占位（三点挂在它上面）。
@@ -1330,7 +1369,7 @@ export default function SessionDetailView({
       // `lifecycleState`（见上面 markTurnActive 那处），此后每一个轮次边界都往里
       // 写 —— 自己发送 / 别的端的自主续轮开起来、终态帧收掉。`summary` 相反只在装载
       // 与每一轮**落定**时各取一份，轮次进行中它答不出「此刻在不在跑」。
-      running={turn.turnActive}
+      running={running}
       decisionPending={decisionPending}
       headerRight={headerRight}
       clientRef={clientRef}
@@ -1358,6 +1397,7 @@ export default function SessionDetailView({
       onReconnect={reconnect}
       relayState={relayState}
       history={history}
+      seeded={seeded}
       ready={ready}
       catchUpFailed={catchUpFailed}
       messages={messages}
@@ -1367,7 +1407,7 @@ export default function SessionDetailView({
       agentPending={agentPending}
       fallbackModel={fallbackModel}
       liveTurnTiming={liveTurn.timing}
-      streaming={turn.turnActive}
+      streaming={running}
       pendingAssistant={pendingAssistant}
       decisions={decisions}
       send={send}

@@ -56,6 +56,14 @@ export interface SessionScrollBodyProps {
   relayState: string;
   /** server 镜像里的历史读到哪一步。 */
   history: { settled: boolean; loaded: boolean };
+  /**
+   * 转录里那一条是**草稿页刚发出去的接力消息**，不是投影出来的（见
+   * SessionDetailView 的 `initialUserText`）。
+   *
+   * 它算「有东西可画」：骨架说的是「什么都还没有」，而这里手上正拿着用户几百毫秒前
+   * 说的那句话。「正在从这台机器读取…」那句同样让位 —— 三点已经在说在等了。
+   */
+  seeded: boolean;
   ready: boolean;
   catchUpFailed: boolean;
 
@@ -100,6 +108,7 @@ export default function SessionScrollBody({
   onReconnect,
   relayState,
   history,
+  seeded,
   ready,
   catchUpFailed,
   messages,
@@ -136,11 +145,23 @@ export default function SessionScrollBody({
     [messages, decisions.waiters],
   );
 
+  /** 这条对话钉着的那台机器**够不着**：这几档下转录不会来了（见下面两句各自的话）。 */
+  const unreachable =
+    status === "machineOffline" ||
+    status === "desktopAppNotRunning" ||
+    status === "deviceRevoked";
+
   // 转录有两个来源：server 镜像里的历史（机器离线照样有——本轮的目的），与中继接上
   // 之后的实时补齐。账号登出时两者都不算数：那时页面只剩重新登录这一条路。
+  //
+  // 那条接力消息排在两者之前：它就在手上，不必等任何一条来路。但只在机器还够得着
+  // 时算数 —— 挂着它就是挂着三点，而对着一台没人在的机器转三点是在替远端撒谎
+  // （与转录那边「通道断了就先说通道」同一条规矩）。派发成功后机器随即掉线正是
+  // 这一档。
   const showTranscript =
     status !== "loggedOut" &&
-    (history.loaded ||
+    ((seeded && !unreachable) ||
+      history.loaded ||
       (ready &&
         (status === "connected" ||
           status === "pinnedAgentredUnavailable" ||
@@ -164,12 +185,7 @@ export default function SessionScrollBody({
       status === "reconnecting");
 
   const historyUnavailable =
-    history.settled &&
-    !history.loaded &&
-    !showTranscript &&
-    (status === "machineOffline" ||
-      status === "desktopAppNotRunning" ||
-      status === "deviceRevoked");
+    history.settled && !history.loaded && !showTranscript && unreachable;
 
   /**
    * 还没有内容、但**有理由认为它会来**：这一段摆骨架（决策 2）。

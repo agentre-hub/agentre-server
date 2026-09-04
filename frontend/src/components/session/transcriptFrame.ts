@@ -1,4 +1,7 @@
-import type { TranscriptFrame } from "@agentre-hub/agentre-ui";
+import type {
+  TranscriptFrame,
+  TranscriptMessage,
+} from "@agentre-hub/agentre-ui";
 import type { EventFrame } from "@agentre-hub/agentre-wire";
 
 /**
@@ -36,4 +39,39 @@ export function toTranscriptFrame(
   createtime = 0,
 ): SessionEventFrame {
   return { ...frame, sessionId: TranscriptSessionId, createtime };
+}
+
+/**
+ * 刚发出去、转录里还没有它的那一句，摆成一条转录消息。
+ *
+ * 两处用它，画出来必须是**同一个气泡**：草稿页派发在飞时（`DraftPending`）与右栏
+ * 换成真详情之后（`SessionDetailView` 的 `initialUserText`）。交接就发生在这两者
+ * 之间 —— 形不一致的话，用户刚说完话就看见自己的气泡跳一下。
+ *
+ * 它不是一条真消息：不进 `events`，也不占 seq。转录一有内容它就整条让位。
+ *
+ * `sessionId` 由调用方给：详情那一侧要填 `TranscriptSessionId`（包里那张审批卡拿它
+ * 当存在性判据），草稿那一侧还没有号可填。
+ */
+export function pendingUserMessage(
+  text: string,
+  sessionId: number,
+): TranscriptMessage {
+  return {
+    id: 1,
+    sessionId,
+    role: "user",
+    blocks: [{ type: "text", text }],
+    model: "",
+    promptTokens: 0,
+    completionTokens: 0,
+    cachedTokens: 0,
+    cacheCreationTokens: 0,
+    reasoningTokens: 0,
+    totalInputTokens: 0,
+    durationMs: 0,
+    errorText: "",
+    seq: 0,
+    createtime: 0,
+  };
 }

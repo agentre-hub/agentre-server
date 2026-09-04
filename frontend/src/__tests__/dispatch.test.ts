@@ -336,6 +336,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 与送给 daemon 的那一份是同一个 deriveTitle 结果：落地那一屏拿它填掉摘要
       // 还没回来那一段，用户不必先看一串会话号。
       title: "讲讲这个项目",
+      // 送过线的那一句原样交回：落地那一屏拿它接上草稿页画的那条气泡，转录的两条
+      // 真来路（镜像 / 中继）都还在往返时那一带才不是一片骨架。
+      userText: "讲讲这个项目",
       // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
       reasoningEffortPinned: true,
@@ -405,6 +408,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       deviceFingerprint: "fp-desk",
       peerFingerprint: "fp-web",
       title: "帮我看看这个项目",
+      userText: "帮我看看这个项目",
       // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
       reasoningEffortPinned: true,
@@ -438,6 +442,9 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       deviceFingerprint: "fp-online",
       peerFingerprint: "fp-web",
       title: "讲讲这个项目",
+      // 送过线的那一句原样交回：落地那一屏拿它接上草稿页画的那条气泡，转录的两条
+      // 真来路（镜像 / 中继）都还在往返时那一带才不是一片骨架。
+      userText: "讲讲这个项目",
       // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
       reasoningEffortPinned: true,

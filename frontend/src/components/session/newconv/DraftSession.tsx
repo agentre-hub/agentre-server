@@ -25,6 +25,7 @@ import { Trans, useTranslation } from "react-i18next";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import Transcript from "@/components/session/Transcript";
+import { pendingUserMessage } from "@/components/session/transcriptFrame";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import { useRelayMachine } from "@/hooks/use-relay";
@@ -588,6 +589,12 @@ export function DraftSession({
 }
 
 /**
+ * 草稿这条对话在转录上下文里的号：这条对话还没有号（号由执行端在 `runtime.run`
+ * 里定），而包只拿它当渲染上下文的键。编一个假号才是骗人。
+ */
+const DraftSessionId = 0;
+
+/**
  * 派发在飞的那一段：**这条对话已经开始了**的样子。
  *
  * 与桌面端 `doSend` 同时插入 user + assistant 占位是同一件事，而且落的是同一批
@@ -597,31 +604,12 @@ export function DraftSession({
  *
  * 此前这里是空态原样留着、底下补一行小字「正在开始…」：输入框在提交那一刻已被
  * 清空，屏幕上一个字都没有他刚说的话。
- *
- * `sessionId` 给 0：这条对话还没有号（号由执行端在 `runtime.run` 里定），而包只
- * 拿它当渲染上下文的键。编一个假号才是骗人。
  */
 function DraftPending({ agent, text }: { agent: NewConvAgent; text: string }) {
+  // 与右栏换成详情之后摆的那一条**同一个构造**：交接就发生在这两者之间，形不一致
+  // 的话用户刚说完话就看见自己的气泡跳一下。
   const messages = useMemo<TranscriptMessage[]>(
-    () => [
-      {
-        id: 1,
-        sessionId: 0,
-        role: "user",
-        blocks: [{ type: "text", text }],
-        model: "",
-        promptTokens: 0,
-        completionTokens: 0,
-        cachedTokens: 0,
-        cacheCreationTokens: 0,
-        reasoningTokens: 0,
-        totalInputTokens: 0,
-        durationMs: 0,
-        errorText: "",
-        seq: 0,
-        createtime: 0,
-      },
-    ],
+    () => [pendingUserMessage(text, DraftSessionId)],
     [text],
   );
   return (
@@ -632,7 +620,7 @@ function DraftPending({ agent, text }: { agent: NewConvAgent; text: string }) {
       <div className="mx-auto w-full max-w-measure">
         <Transcript
           messages={messages}
-          sessionId={0}
+          sessionId={DraftSessionId}
           agentName={agent.name}
           agentAvatar={
             <AgentAvatar

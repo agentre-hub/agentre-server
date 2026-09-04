@@ -119,6 +119,19 @@ export interface DispatchedSession {
    */
   title: string;
   /**
+   * 送过线的**那一句**（`userText`，与上面的 `title` 出自同一段文字，只是没截断）。
+   *
+   * 交出来的理由与 `title` 逐字同构，只是它填的是转录那一带而不是头部：草稿页在派发
+   * 在飞时已经把这句话与三点画出来了（`DraftPending`），而落地那一屏从**空事件表**
+   * 起手 —— 转录的两条来路（账号镜像的一次 HTTP、中继的票 + WS + attach + 补齐）
+   * 都要往返，期间那一带只剩一片骨架。用户刚说完话就眼看着自己的话消失、界面重搭
+   * 一遍，而那正是他最想知道「开起来了没有」的时候。
+   *
+   * 只是**接力**，不是一条真消息：转录一有内容它就让位（见 SessionDetailView 的
+   * `initialUserText`），也从不进 `events`。
+   */
+  userText: string;
+  /**
    * 这条对话的**发起端**指纹 —— 就是这个浏览器的中继标识（`sourceClient.clientId`），
    * 与承载它的 `deviceFingerprint` 不是一回事。
    *
@@ -207,6 +220,8 @@ export async function dispatchNewConversation(
   // 交出去与送过线的是同一个值，不是各算一次：`RunParams.title` 在生成的类型上是
   // 可选的，取回来会是 `string | undefined`。
   const title = deriveTitle(input.message);
+  // 同上：送过线的与交回去的是同一个值，不是各 trim 一次。
+  const userText = input.message.trim();
   const params: RunParams = {
     // 号在**发起端**铸：不向 server 要，那会让新建对话需要联网 + 登录。
     conversationId: newConversationId(),
@@ -217,7 +232,7 @@ export async function dispatchNewConversation(
     agentId: 0,
     agentSyncId: input.plan.agent_sync_id,
     cwd: choice.cwd ?? "",
-    userText: input.message.trim(),
+    userText,
     // daemon 端按 {"type": ...} 解 backend（integration_test 的既有契约）。
     backend: { type: choice.backend_type },
     sourceDevice: input.sourceClient.clientId,
@@ -353,6 +368,7 @@ export async function dispatchNewConversation(
       deviceId: choice.device_id,
       deviceFingerprint: choice.device_fingerprint,
       title,
+      userText,
       peerFingerprint: input.sourceClient.clientId,
       modelPinned: pinTarget
         ? await pinModelTarget(client, ack.conversationId, pinTarget)

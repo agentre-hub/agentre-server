@@ -194,6 +194,11 @@ export default function Chat() {
      * 那条账号里还没有这一行，那时留空。
      */
     row?: MirroredSession;
+    /**
+     * 刚从草稿页发出去的**那一句**（见 SessionDetailView 的 initialUserText）。
+     * 点左栏一行进来时留空 —— 那条对话的转录只有两条真来路。
+     */
+    userText?: string;
     /** 刚从草稿页发起、而模型没能钉住时要说的那一句（见 initialModelNote）。 */
     modelNote?: string;
     /** 同上，思考力度没能钉住时的那一句（见 initialEffortNote）。 */
@@ -279,6 +284,7 @@ export default function Chat() {
       conversationId,
       peerFingerprint,
       title,
+      userText,
       modelPinned,
       reasoningEffortPinned,
     }: DispatchedSession) => {
@@ -301,6 +307,7 @@ export default function Chat() {
         nav(`/devices/${deviceId}/sessions/${conversationId}`, {
           state: {
             title,
+            userText,
             turnStartedAt,
             ...(modelNote ? { modelNote } : {}),
             ...(effortNote ? { effortNote } : {}),
@@ -313,6 +320,7 @@ export default function Chat() {
         conversationId,
         peerFingerprint,
         title,
+        userText,
         modelNote,
         effortNote,
         turnStartedAt,
@@ -886,6 +894,7 @@ export default function Chat() {
                   peerFingerprint={selected.peerFingerprint}
                   form="embedded"
                   initialTitle={selected.title}
+                  initialUserText={selected.userText}
                   initialRow={selected.row}
                   initialModelNote={selected.modelNote}
                   initialEffortNote={selected.effortNote}

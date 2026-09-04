@@ -463,6 +463,7 @@ describe("一条还没发第一句的对话", () => {
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
     });
@@ -575,6 +576,7 @@ describe("一条还没发第一句的对话", () => {
         deviceFingerprint: "fp-a",
         peerFingerprint: "fp-web",
         title: "跑一下失败的测试",
+        userText: "跑一下失败的测试",
         modelPinned: true,
         reasoningEffortPinned: true,
       };
@@ -1239,6 +1241,7 @@ describe("移动端派发成功后的落地", () => {
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
     });
@@ -1383,6 +1386,7 @@ describe("草稿页的权限档位与模型控件", () => {
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
     });
@@ -1647,6 +1651,7 @@ describe("草稿页的权限档位与模型控件", () => {
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
       modelPinned: false,
       reasoningEffortPinned: true,
     });
@@ -1685,6 +1690,7 @@ describe("草稿页的权限档位与模型控件", () => {
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: false,
     });
@@ -1731,6 +1737,7 @@ describe("草稿页的权限档位与模型控件", () => {
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
     });
@@ -1772,6 +1779,96 @@ describe("草稿页的权限档位与模型控件", () => {
 });
 
 /**
+ * 交接那一拍：右栏从草稿换成真详情，而转录的两条来路都还在路上（账号镜像是一次
+ * HTTP，中继要票 + WS + attach + 补齐）。
+ *
+ * 草稿那一屏在派发在飞时已经把用户刚说的那句话与三点画出来了；交接之后详情从空
+ * 事件表起手，于是那一段被一片骨架顶掉，等两条来路之一落地才回来 —— 用户发出第一句
+ * 之后眼看着自己的话消失、界面重搭一遍，而那正是他最想知道「开起来了没有」的时候。
+ */
+describe("交接那一拍：刚发出去的第一句不掉下去", () => {
+  beforeEach(() => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+    });
+  });
+
+  it("Given 转录两条来路都还没落地, When 右栏换成详情, Then 那句话与三点接着留在转录里", async () => {
+    renderChat("/chat?compose=1");
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    const view = await screen.findByTestId("session-detail-view");
+    expect(within(view).queryByTestId("draft-pending")).toBeNull();
+
+    // 标题那一格也写着同一句，所以只认转录那一带。
+    const scroll = await screen.findByTestId("session-detail-scroll");
+    await waitFor(() =>
+      expect(within(scroll).queryByText("跑一下失败的测试")).toBeTruthy(),
+    );
+    expect(screen.getByRole("status", { name: "Generating" })).toBeTruthy();
+    // 手上有东西可画就不摆骨架：骨架说的是「什么都还没有」。
+    expect(within(scroll).queryByTestId("transcript-skeleton")).toBeNull();
+  });
+
+  /**
+   * 派发成功之后那台机器随即掉线（派发那一刻它还在）。
+   *
+   * 接力那一条只在「还有理由认为转录会来」时算数：机器够不着时它得让位给那句
+   * 「读不到」，否则三点会对着一台没人在的机器一直转 —— 那是在替远端撒谎，
+   * 与转录那边「通道断了就先说通道」是同一条规矩。
+   */
+  it("Given 派发完那台机器就掉线, When 右栏换成详情, Then 让位给「读不到」而不是一直转三点", async () => {
+    stubReads();
+    // 设备名单那一路 stubReads 自己答（恒为在线），要的正好相反：包一层，只把
+    // 这一条换掉 —— 派发那一刻它还在，落地那一屏问到的已经是离线。
+    const reads = mockedApi.getMockImplementation();
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) =>
+      path === "/v1/devices"
+        ? {
+            devices: [
+              {
+                id: 20,
+                name: "Study Mini",
+                kind: "agentred",
+                fingerprint: "fp-a",
+                online: false,
+                status: 1,
+              },
+            ],
+          }
+        : reads!(path, init),
+    );
+    renderChat("/chat?compose=1");
+    fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    expect(
+      await screen.findByTestId("session-history-unavailable"),
+    ).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Generating" })).toBeNull();
+  });
+});
+
+/**
  * 顶带：**四态同一副外壳**（桌面端 chat-panel-header 的规格 2026-08-23 决策 2/3）。
  *
  * 「还没发第一句」与「这条对话已经开着」在桌面端是同一条 68px 带，只是标题与 meta
@@ -1805,6 +1902,7 @@ describe("草稿与详情共用同一条顶带", () => {
       deviceFingerprint: "fp-a",
       peerFingerprint: "fp-web",
       title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
     });
