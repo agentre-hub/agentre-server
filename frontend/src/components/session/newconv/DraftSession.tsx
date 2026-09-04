@@ -150,10 +150,28 @@ export function DraftSession({
   );
 
   const settled = planState.key === planKey;
-  const plan = settled ? (planState.plan ?? null) : null;
+  /**
+   * 屏幕上摆的那一份：重算期间**留着上一份**，只把这一带标成 busy。
+   *
+   * 此前这里是 `settled ? plan : null`，而这一屏底下每一样都挂在它上面 —— 执行目标
+   * 那一行、项目 chip、模型 / 档位 / 力度三颗控件一起卸掉，`useRelayMachine` 的目标
+   * 也跟着变 null，连着的那台机器白断一次再连回来。换项目根本不换机器，一次往返里
+   * 整个右栏拆了重搭。
+   *
+   * 上一份仍然是**这个 Agent 在这台机器上**的答案，只是还没算进刚改的那一维；
+   * 新的一份一到就整份换掉。
+   */
+  const plan = planState.plan ?? null;
   const planError = settled ? (planState.error ?? null) : null;
 
   const chosen = plan?.chosen ?? null;
+  /**
+   * 敢拿去派发的那一份：只有**这一组入参**算出来的才算数。
+   *
+   * 与上面那一份分开，正是因为上面那份重算期间是旧的：拿它去派发就是按旧项目、
+   * 旧机器开一条对话，而用户刚刚亲手改掉了那一维。
+   */
+  const readyPlan = settled ? plan : null;
   const { backends, catalog } = useEngineCatalog();
 
   /**
@@ -261,13 +279,13 @@ export function DraftSession({
 
   const start = useCallback(
     async (message: string) => {
-      if (!plan?.chosen || !message.trim()) return;
+      if (!readyPlan?.chosen || !message.trim()) return;
       setStarting(message);
       setStartError(null);
       try {
         const ticket = await ensureRelayTicket();
         const out = await dispatchNewConversation({
-          plan,
+          plan: readyPlan,
           message,
           sourceClient: ticket,
           // 开局连上的那条就是派发要用的那条。连接还没到位（刚落定计划的一瞬）
@@ -307,7 +325,7 @@ export function DraftSession({
       effectiveTarget,
       onStarted,
       permissionModeMeta,
-      plan,
+      readyPlan,
       reasoningEffort,
       relayState,
       supportsReasoningEffort,
@@ -420,7 +438,12 @@ export function DraftSession({
       {starting ? (
         <DraftPending agent={agent} text={starting} />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 px-6 py-8 text-center">
+        <div
+          // 重算期间这一带摆的还是上一份计划：说出来，读屏据此不把它当定论
+          // （屏幕上不换成骨架 —— 上一份仍然是同一个 Agent、同一台机器的答案）。
+          aria-busy={!settled || undefined}
+          className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 px-6 py-8 text-center"
+        >
           <p className="text-sm font-semibold text-foreground">
             {projectName
               ? t("chat.startWithAgentInProject", {
@@ -493,7 +516,9 @@ export function DraftSession({
               backendType={chosen?.backend_type}
               agents={mentionAgents}
               handleRef={composerRef}
-              disabled={!chosen || starting !== null}
+              // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧
+              // 摆着（它们是同一台机器的答案），但这一句要发到哪儿还没定。
+              disabled={!readyPlan?.chosen || starting !== null}
               // 两颗控件只在**有选中的机器**时摆：没有机器就没有「哪个后端」这一
               // 问，此刻摆一颗禁用的 pill 是在暗示「有台机器只是暂时答不上来」。
               permissionModeMeta={chosen ? permissionModeMeta : undefined}
@@ -528,11 +553,11 @@ export function DraftSession({
               // 发不出去时如实说是哪一种：还在算计划、这次没问到、还是问到了但
               // 一档都不可用。后两者是两件事，合并等于替服务端下一个它没下的结论。
               disabledReason={
-                chosen
+                readyPlan?.chosen
                   ? null
                   : planError
                     ? t("chat.planFailed")
-                    : !plan
+                    : !settled || !plan
                       ? t("common.loading")
                       : t("overview.noAvailableTarget")
               }

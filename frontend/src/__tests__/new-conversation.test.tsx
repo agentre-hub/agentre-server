@@ -794,6 +794,46 @@ describe("在哪个项目里跑", () => {
       await screen.findByText(/Start a project conversation with/),
     ).toBeTruthy();
   });
+
+  /**
+   * 换项目只是**重算一遍计划**，不是换一条对话。
+   *
+   * 此前重算期间 `plan` 整个落回 null，而这一屏底下每一样都挂在它上面：执行目标
+   * 那一行、项目 chip、模型 / 档位 / 力度三颗控件一起卸掉，中继连的那台机器也跟着
+   * 变 null —— 一次往返里整个右栏拆了重搭，连接也白断一次（换项目根本不换机器）。
+   */
+  it("重算计划时右栏不拆：那一行、chip 与控件都留在原地，中继也不断开", async () => {
+    stubReads();
+    let releaseSecond: ((plan: DispatchPlan) => void) | null = null;
+    let calls = 0;
+    mockFetchPlan.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return availablePlan;
+      // 第二次一直在飞：这条用例量的就是「在飞的那一段」右栏长什么样。
+      return new Promise<DispatchPlan>((resolve) => {
+        releaseSecond = resolve;
+      });
+    });
+    renderChat();
+    await openDraft();
+    await screen.findByTestId("draft-exec-target");
+    await awaitDraftComposer();
+    const machineBefore = mockUseRelay.mock.calls.at(-1)?.[0];
+
+    fireEvent.click(screen.getByTestId("draft-project-chip"));
+    fireEvent.click(await screen.findByTestId("draft-project-proj-1"));
+    await waitFor(() => expect(calls).toBe(2));
+
+    expect(screen.queryByTestId("draft-exec-target")).toBeTruthy();
+    // chip 上已经是新挑的那个项目：它是本地选择，不必等计划回来。
+    expect(screen.getByTestId("draft-project-chip").textContent).toContain(
+      "frontend",
+    );
+    expect(screen.queryByTestId("composer-model-target")).toBeTruthy();
+    // 换的是项目不是机器：这条连接没有任何理由断一次再连回来。
+    expect(mockUseRelay.mock.calls.at(-1)?.[0]).toBe(machineBefore);
+    expect(releaseSecond).toBeTruthy();
+  });
 });
 
 describe("从项目里挑一个 Agent", () => {
