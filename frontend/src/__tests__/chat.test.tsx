@@ -1485,6 +1485,94 @@ describe("索引按轴分页", () => {
     expect(lastIndexRequest().get("cursor")).toBe("1754800000000.1");
   });
 
+  /**
+   * 镜像变更的信号在一轮对话跑起来之后**每秒**来一条（服务端按账号攒批，见
+   * mirror_svc/notify.go）。它说的是「该拉了」，不是「回到第一页」——把翻出来的页
+   * 扔掉，等于 agent 一开口，用户往下翻的位置每秒被拽回顶上一次。
+   */
+  it("就地重取不把翻出来的页扔掉：信号一秒一条，位置不能跟着被拽回去", async () => {
+    // 信号到达之后，第一页上多出一条刚活跃的对话——拿它当「这一遍重取确实落地了」
+    // 的凭据，否则断言会跑在往返之前，什么都证明不了。
+    let refreshed = false;
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (params.get("cursor")) {
+          return {
+            total: 2,
+            cursor: "1754700000000.2",
+            has_more: false,
+            items: [mirrored({ conversation_id: "43", title: "第二页" })],
+          };
+        }
+        return {
+          total: refreshed ? 3 : 2,
+          groups: [
+            {
+              scope: "time",
+              total: refreshed ? 3 : 2,
+              cursor: "1754800000000.1",
+              has_more: true,
+              items: refreshed
+                ? [
+                    mirrored({ conversation_id: "44", title: "刚来的" }),
+                    mirrored({ conversation_id: "42", title: "第一页" }),
+                  ]
+                : [mirrored({ conversation_id: "42", title: "第一页" })],
+            },
+          ],
+        };
+      },
+    });
+    renderChat("/chat?axis=time");
+    await screen.findByText("第一页");
+    fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    await screen.findByText("第二页");
+
+    refreshed = true;
+    deliver(accountChannel.AccountChannelMirrorChanged);
+
+    // 重取那一遍落地了（新行进来了），而翻出来的第二页留在原地。
+    expect(await screen.findByText("刚来的")).toBeTruthy();
+    expect(screen.getByText("第一页")).toBeTruthy();
+    expect(screen.getByText("第二页")).toBeTruthy();
+  });
+
+  /** 反面：没翻过页的，就地重取照旧跟着第一页走——「还有下一页」这件事由它说了算。 */
+  it("没翻过页时，就地重取仍以第一页的说法为准", async () => {
+    let more = true;
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        return {
+          total: 1,
+          groups: [
+            {
+              scope: "time",
+              total: 1,
+              cursor: "1754800000000.1",
+              has_more: more,
+              items: [mirrored({ conversation_id: "42", title: "第一页" })],
+            },
+          ],
+        };
+      },
+    });
+    renderChat("/chat?axis=time");
+    expect(
+      await screen.findByRole("button", { name: "Load more" }),
+    ).toBeTruthy();
+
+    more = false;
+    deliver(accountChannel.AccountChannelMirrorChanged);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Load more" })).toBeNull(),
+    );
+  });
+
   it("下一页失败时已列出的行留在原地，并给得出重试", async () => {
     stubApi({
       devices: [agentred],

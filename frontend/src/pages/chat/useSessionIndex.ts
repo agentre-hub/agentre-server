@@ -205,6 +205,28 @@ export function useSessionIndex({
     [axis, debouncedSearch, filter],
   );
 
+  /**
+   * 上一遍取数**落地时**的范围。
+   *
+   * 这只 effect 有两种来路，它们要的位置行为相反：
+   *
+   *   - 换范围（轴 / 搜索 / 筛选）：问的是另一批了，位置回到起点；
+   *   - 就地重取（`indexNonce`：镜像变更的信号、本端派发）：说的只是「这一份变了，
+   *     该拉了」，位置一步都不该动。
+   *
+   * 而那条信号在一轮对话跑起来之后是**每秒一条**（服务端按账号攒批，见
+   * mirror_svc/notify.go）。不分开的话，agent 一开口，用户往下翻出来的页每秒被扔
+   * 一次、位置跟着弹回顶上 —— 正是「等回复的时候界面自己在重搭」。
+   */
+  const appliedRangeRef = useRef<string | null>(null);
+  const rangeKey = `${axis}|${debouncedSearch}|${filter}`;
+  /**
+   * 在这一范围里往下翻过没有。只有翻过的才需要护住游标 —— 没翻过时「还有没有
+   * 下一页」本来就该以这一遍第一页的说法为准，护着一个旧游标只会留下一颗翻出
+   * 空页的「加载更多」。
+   */
+  const pagedRef = useRef(false);
+
   useAliveEffect(
     (alive) => {
       // 「未读」那个数要的是完整集合上的真数，因此单独问一次：它跟当前选中哪个
@@ -223,7 +245,25 @@ export function useSessionIndex({
           if (!alive()) return;
           const groups = page.groups ?? [];
           setIndexGroups(groups);
-          setAppended([]);
+          const rangeChanged = appliedRangeRef.current !== rangeKey;
+          appliedRangeRef.current = rangeKey;
+          if (rangeChanged) {
+            // 换范围：翻页那一套整份作废，位置回到起点。
+            setAppended([]);
+            pagedRef.current = false;
+          } else {
+            // 就地重取：翻出来的页留在原地，只把这一遍也报了的那几条交还给它 ——
+            // 这一遍比翻页那次新，同一条对话不该由旧的那份说了算（合并按 key 去重，
+            // 见 mergeMirrorRows）。
+            const fresh = new Set(
+              groups.flatMap((g) =>
+                (g.items ?? []).map((item) => rowKey(item.conversation_id)),
+              ),
+            );
+            setAppended((prev) =>
+              prev.filter((row) => !fresh.has(rowKey(row.conversation_id))),
+            );
+          }
           if (!debouncedSearch && filter === "all")
             setAccountTotal(page.total ?? 0);
           setOptimisticSaved([]);
@@ -235,7 +275,11 @@ export function useSessionIndex({
             groups.length === 1 && groups[0].scope === "time"
               ? groups[0]
               : null;
-          setNextCursor(flat?.has_more ? (flat.cursor ?? null) : null);
+          // 游标同理：翻过页之后它指的是「已经翻到哪儿了」，而这一遍报的是第一页
+          // 的末尾 —— 拿它盖上去等于把接着往下翻这件事也退回起点。
+          if (rangeChanged || !pagedRef.current) {
+            setNextCursor(flat?.has_more ? (flat.cursor ?? null) : null);
+          }
           setLoadMoreFailed(false);
           setLoaded(true);
         })
@@ -243,7 +287,7 @@ export function useSessionIndex({
           if (alive()) setLoadError(e);
         });
     },
-    [rangeParams, debouncedSearch, filter, axis, indexNonce],
+    [rangeParams, debouncedSearch, filter, axis, indexNonce, rangeKey],
   );
 
   /**
@@ -260,6 +304,7 @@ export function useSessionIndex({
       .then((page) => {
         setAppended((prev) => [...prev, ...(page.items ?? [])]);
         setNextCursor(page.has_more ? (page.cursor ?? null) : null);
+        pagedRef.current = true;
       })
       .catch(() => setLoadMoreFailed(true))
       .finally(() => setLoadingMore(false));
