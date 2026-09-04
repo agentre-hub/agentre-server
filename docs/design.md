@@ -609,6 +609,12 @@ padding to cancel and no negative margin).
   `NewConversationPane` (pick an agent), then `DraftSession` (a conversation with nothing
   said yet). **Desktop needs no dialog**: this pane was already idle, and covering the screen
   to ask one question costs more than filling the space that was already there.
+  `DraftSession`'s top band **is** the detail's band (the same `SessionHeaderBand`), so the
+  page-level controls sit at its right end and `chat-chrome` is not drawn above it — sending
+  the first message swaps content inside one 68px band instead of collapsing two into one.
+  Its title reads `New chat · <agent>` until the message is handed off, then becomes
+  `deriveTitle(message)` — the same value dispatch puts on the wire and the landed detail
+  shows, so the title does not change again when the real detail takes over.
 - TopBar: **Fresh** only (online-`agentred` dot; web alone never counts). The bare count
   moved to the SideNav badge, and "find conversations on your devices" is gone — the
   machine axis answers that question **on this page**, and its online group headers carry a
@@ -631,14 +637,21 @@ the bottom, while the transcript kept growing underneath you. After the change t
 is exactly viewport height, the middle band scrolls internally, and the composer stays put
 (re-measured with a 3230px transcript: composer fixed at top 830 / bottom 888).
 
-- **Header** (`shrink-0 border-b bg-card`): the agent avatar (palette background + initial +
-  `role="img"`, the shape `primitives.tsx`'s `AgentAvatar` uses on the desktop app), the
-  title, and a mono meta line — `●Agent · relative time · machine online/offline`.
-  Separators sit **between** parts that actually exist; a legacy session with neither status
-  nor activity time must not leave a stray leading `·`. A **Stop** button appears only while
-  the turn is actually running, and sends the real `runtime.abort`.
-  **Project is deliberately absent**: `SessionSummary` has no project field (only the
-  account mirror row does), and a guessed project name is worse than none.
+- **Header** — the shared package's `SessionHeaderBand`, the same 68px shell the desktop
+  app's `chat-panel-header` uses for all four of its states (open session / nothing said yet
+  / loading / failed to load). Height is fixed at two title lines and the whole block is
+  centred in it, so title length, whether the identity resolves, and whether the first
+  message has been sent never move the transcript underneath. The band holds an avatar slot,
+  the title, a mono meta line, and a right-hand group; hosts compute what goes in each.
+  Here the meta line is `●Agent · project · relative time · machine online/offline`, with
+  separators **between** parts that actually exist — a legacy session with neither status nor
+  activity time must not leave a stray leading `·`. The avatar slot is occupied even when the
+  agent can't be resolved (a `size-8 bg-muted` square), otherwise the title jumps a slot
+  sideways on the first frame. A **Stop** button appears only while the turn is actually
+  running, and sends the real `runtime.abort`. Project used to be absent here because
+  `SessionSummary` carried no project field; the wire added `projectSyncId` and the account
+  mirror row carries the server's own `project_sync_id`, so the segment is shown when the
+  name resolves and omitted when it doesn't — never guessed.
 - **Transcript** (`min-h-0 flex-1 overflow-y-auto`), `max-w-measure` centred.
 - **Composer** (`shrink-0 border-t bg-card`) — see below. Approvals are **not** repeated
   here: the transcript already renders the card, and `interactiveRequestIds` dedupes the two
