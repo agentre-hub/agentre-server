@@ -204,13 +204,14 @@ export function useProjectManagement({
         onOpenSettings: (pid, focus) => setSettingsFor({ syncId: pid, focus }),
         onNewSubproject: () => setCreateParent(project),
         onDelete: () => {
-          setDeleteFor(project);
-          // 删除确认要点名「此刻离线、要等下次上线才跟着删」的机器，那份材料只有
-          // 这个端点答得出来；取不到就按「没有离线的」渲染，不阻塞确认。
+          // 先获取离线机器列表，再打开确认框；获取失败时按空列表处理。
           setDeleteMachines([]);
           fetchProjectMachines(project.syncId)
-            .then(setDeleteMachines)
-            .catch(() => {});
+            .then((machines) => {
+              setDeleteMachines(machines);
+              setDeleteFor(project);
+            })
+            .catch(() => setDeleteFor(project));
         },
       };
     },

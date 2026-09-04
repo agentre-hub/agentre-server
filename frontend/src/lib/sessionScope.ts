@@ -44,8 +44,13 @@ export function deviceIdOfGroupKey(key: string): number | undefined {
  *
  * 认不出机器的那一组**没有** scope：它是好几台机器的行凑在一起的，翻不成一组。
  * 返回 undefined 而不是编一个，界面据此不摆溢出入口。
+ * 只依赖行上的承载机器指纹，避免引入 chatRows 形成循环依赖。
  */
-export function scopeOfGroup(group: IndexGroup): string | undefined {
+export function scopeOfGroup(
+  group: Omit<IndexGroup, "rows"> & {
+    rows: ReadonlyArray<{ machineFingerprint: string }>;
+  },
+): string | undefined {
   switch (group.kind) {
     case "all":
       return SCOPE_TIME;
@@ -59,9 +64,13 @@ export function scopeOfGroup(group: IndexGroup): string | undefined {
       return SCOPE_PREFIX_AGENT + group.key;
     case "machine": {
       if (group.key === UNKNOWN_MACHINE_KEY) return undefined;
-      const fingerprints = new Set(group.rows.map((r) => r.fingerprint));
+      // 机器组按承载机器指纹，与发起端指纹无关。
+      const fingerprints = new Set(group.rows.map((r) => r.machineFingerprint));
       const only = [...fingerprints];
-      return only.length === 1 ? SCOPE_PREFIX_MACHINE + only[0] : undefined;
+      // 空串表示无法识别承载机器。
+      return only.length === 1 && only[0]
+        ? SCOPE_PREFIX_MACHINE + only[0]
+        : undefined;
     }
   }
 }

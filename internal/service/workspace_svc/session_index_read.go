@@ -337,7 +337,7 @@ func (s *workspaceSvc) applyScope(
 			return q, err
 		}
 		fingerprint := strings.TrimPrefix(scope, scopePrefixMachine)
-		q.PeerFingerprint = &fingerprint
+		q.MachineFingerprint = &fingerprint
 		return q, nil
 	case scope == ScopeUnassignedProject:
 		if err := wantAxis(AxisProject); err != nil {
@@ -524,14 +524,15 @@ func (s *workspaceSvc) groupSpecsFor(
 			specs = append(specs, groupSpec{scope: scope, total: n, query: q})
 		}
 	case AxisMachine:
-		counts, err := agent_session_repo.Summary().CountSummariesByPeer(ctx, base)
+		// 机器分组按承载机器指纹，而非对话发起端。
+		counts, err := agent_session_repo.Summary().CountSummariesByMachine(ctx, base)
 		if err != nil {
 			return nil, err
 		}
 		for fingerprint, n := range counts {
 			q := base
 			key := fingerprint
-			q.PeerFingerprint = &key
+			q.MachineFingerprint = &key
 			specs = append(specs, groupSpec{
 				scope: scopePrefixMachine + fingerprint, total: n, query: q,
 			})

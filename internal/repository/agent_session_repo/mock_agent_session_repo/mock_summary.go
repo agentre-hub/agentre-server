@@ -87,19 +87,19 @@ func (mr *MockSummaryRepoMockRecorder) CountSummariesByAgent(ctx, q any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountSummariesByAgent", reflect.TypeOf((*MockSummaryRepo)(nil).CountSummariesByAgent), ctx, q)
 }
 
-// CountSummariesByPeer mocks base method.
-func (m *MockSummaryRepo) CountSummariesByPeer(ctx context.Context, q agent_session_repo.SummaryQuery) (map[string]int64, error) {
+// CountSummariesByMachine mocks base method.
+func (m *MockSummaryRepo) CountSummariesByMachine(ctx context.Context, q agent_session_repo.SummaryQuery) (map[string]int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "CountSummariesByPeer", ctx, q)
+	ret := m.ctrl.Call(m, "CountSummariesByMachine", ctx, q)
 	ret0, _ := ret[0].(map[string]int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// CountSummariesByPeer indicates an expected call of CountSummariesByPeer.
-func (mr *MockSummaryRepoMockRecorder) CountSummariesByPeer(ctx, q any) *gomock.Call {
+// CountSummariesByMachine indicates an expected call of CountSummariesByMachine.
+func (mr *MockSummaryRepoMockRecorder) CountSummariesByMachine(ctx, q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountSummariesByPeer", reflect.TypeOf((*MockSummaryRepo)(nil).CountSummariesByPeer), ctx, q)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountSummariesByMachine", reflect.TypeOf((*MockSummaryRepo)(nil).CountSummariesByMachine), ctx, q)
 }
 
 // CountSummariesByProjectKey mocks base method.

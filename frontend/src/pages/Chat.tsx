@@ -699,7 +699,9 @@ export default function Chat() {
       />
     ) : null;
 
-  const settled = indexSettled(sessionIndex);
+  // 只有索引及项目、Agent、设备名单都完成后，分组结果才可靠。
+  const settled =
+    indexSettled(sessionIndex) && projectsSettled && agentsSettled;
 
   const index = (
     <ChatIndexPanel

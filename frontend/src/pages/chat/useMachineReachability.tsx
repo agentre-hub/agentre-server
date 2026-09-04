@@ -29,7 +29,37 @@ export interface ResolvedMachine {
    * 调用方只能拿机器指纹去顶，而那是另一个身份（见 chatRows.machineRowOrigin）。
    */
   localFingerprint: string;
+  /**
+   * 这台机器上匹配当前关键词的**总数**。组头的「查看全部 N」写它，而不是写
+   * `sessions.length`——手上这份只是第一页。
+   *
+   * 不认得分页的老机器不报这一格，那时它交出来的就是整份，条数即总数。
+   */
+  total: number;
+  /** 接着往下翻的游标；空 = 没有下一页（老机器整份交出，同样是空）。 */
+  cursor: string;
+  hasMore: boolean;
 }
+
+/**
+ * 每台机器首屏要几条。
+ *
+ * 比索引里一台机器摆的行数（chatRows 的 MACHINE_PAGE_SIZE = 5）大一截是有意的：
+ * 「查看全部」弹层的第一页直接用这一份，不必为了打开弹层再跑一次往返。再大就没有
+ * 意义了——那台机器上剩下的几千条，用户滚到那儿再要。
+ */
+export const MACHINE_LIST_PAGE_SIZE = 20;
+
+/** 机器交回来的一页。翻页的两端（首屏解析器与「查看全部」弹层）用同一个形状。 */
+export interface MachineSessionPage {
+  sessions: SessionSummary[];
+  cursor: string;
+  hasMore: boolean;
+  total: number;
+}
+
+/** 向一台机器要一页会话。connected 之后才有；断开时不存在。 */
+export type MachinePageLoader = (cursor: string) => Promise<MachineSessionPage>;
 
 /**
  * 一台在线目标机器的会话解析器：在那条共用的账号级中继连接上开一条到这台机器的
@@ -49,11 +79,14 @@ function MachineSessionResolver({
   keyword,
   onResolved,
   onState,
+  onLoader,
 }: {
   fingerprint: string;
   keyword: string;
   onResolved: (fp: string, resolved: ResolvedMachine) => void;
   onState: (fp: string, state: MachineState) => void;
+  /** 交出「向这台机器再要一页」的入口；断开时交 null。 */
+  onLoader: (fp: string, loader: MachinePageLoader | null) => void;
 }) {
   // 机器轴按**机器**寻址（决策 11）：这一档列的是这台机器实时报的整份 session.list，
   // 其中未保存的对话是大多数，服务端解析不出它们的承载机器；而机器是用户刚选的，
@@ -87,7 +120,10 @@ function MachineSessionResolver({
     if (resolvedForRef.current === keyword) return;
     resolvedForRef.current = keyword;
     client
-      .request(rpcMethods.sessionList, { keyword })
+      .request(rpcMethods.sessionList, {
+        keyword,
+        limit: MACHINE_LIST_PAGE_SIZE,
+      })
       .then((raw) => {
         // 打字期间两次请求可能乱序回来。只认「此刻要的那个关键词」那一份，
         // 否则慢一步的旧结果会把新结果盖回去。
@@ -96,6 +132,10 @@ function MachineSessionResolver({
         onResolved(fingerprint, {
           sessions: res.sessions,
           localFingerprint: relayTicket?.clientId ?? "",
+          // 老机器不报总数：它交出来的就是整份，条数即总数。
+          total: res.total ?? res.sessions.length,
+          cursor: res.cursor ?? "",
+          hasMore: res.hasMore ?? false,
         });
         onState(fingerprint, "connected");
       })
@@ -114,6 +154,31 @@ function MachineSessionResolver({
     onResolved,
     onState,
   ]);
+
+  // 「再要一页」的入口跟着连接走：连着时交给页面，断了就收回。弹层拿它翻页，
+  // 而翻页与首屏解析共用同一条通道 —— 不为翻页另开连接。
+  useEffect(() => {
+    if (relayState !== "connected" || !client) {
+      onLoader(fingerprint, null);
+      return;
+    }
+    const loader: MachinePageLoader = async (cursor) => {
+      const raw = await client.request(rpcMethods.sessionList, {
+        keyword,
+        limit: MACHINE_LIST_PAGE_SIZE,
+        cursor,
+      });
+      const res = sessionListFromProtobuf(raw);
+      return {
+        sessions: res.sessions,
+        cursor: res.cursor ?? "",
+        hasMore: res.hasMore ?? false,
+        total: res.total ?? res.sessions.length,
+      };
+    };
+    onLoader(fingerprint, loader);
+    return () => onLoader(fingerprint, null);
+  }, [relayState, client, fingerprint, keyword, onLoader]);
 
   return null;
 }
@@ -148,6 +213,14 @@ export interface MachineReachability {
   retryMachine: (deviceId: number) => void;
   /** 忘掉已经答上来的那些清单：离开机器轴时用。 */
   forgetResolved: () => void;
+  /**
+   * 向某台机器再要一页（「查看全部 N」翻页那条路）。走的是这台机器首屏解析用的
+   * 那条通道，不另开连接；机器不在线时抛错，由调用方原样报出去。
+   */
+  loadMachinePage: (
+    fingerprint: string,
+    cursor: string,
+  ) => Promise<MachineSessionPage>;
   /** 每台在线机器一条中继连接。由页面决定什么时候把它挂上去。 */
   resolvers: ReactNode;
 }
@@ -233,6 +306,30 @@ export function useMachineReachability({
     );
   }, []);
 
+  /**
+   * 每台机器「再要一页」的入口。放 ref 而不是 state：它变的时候没有任何东西要重画，
+   * 进 state 会让整棵索引跟着每条连接的起落重渲一遍。
+   */
+  const loadersRef = useRef<Record<string, MachinePageLoader>>({});
+  const onLoader = useCallback(
+    (fp: string, loader: MachinePageLoader | null) => {
+      if (loader) loadersRef.current[fp] = loader;
+      else delete loadersRef.current[fp];
+    },
+    [],
+  );
+
+  const loadMachinePage = useCallback(
+    async (fingerprint: string, cursor: string): Promise<MachineSessionPage> => {
+      const loader = loadersRef.current[fingerprint];
+      // 连接不在了就说出来,而不是回一页空的 —— 空页与「翻完了」无法区分,弹层会
+      // 把一台刚掉线的机器显示成「就这些」。
+      if (!loader) throw new Error("machine is not connected");
+      return loader(cursor);
+    },
+    [],
+  );
+
   // 机器交出的清单只对当前 relay 连接成立。离开机器轴会卸载解析器；下次
   // 回来必须重新问，不能拿上一条连接的答案顶在新的连接上。
   const forgetResolved = useCallback(() => {
@@ -285,6 +382,7 @@ export function useMachineReachability({
       keyword={keyword}
       onResolved={onResolved}
       onState={onState}
+      onLoader={onLoader}
     />
   ));
 
@@ -298,6 +396,7 @@ export function useMachineReachability({
     hasOnlineDesktop,
     retryMachine,
     forgetResolved,
+    loadMachinePage,
     resolvers,
   };
 }

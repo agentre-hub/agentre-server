@@ -45,11 +45,9 @@ type SummaryRepo interface {
 	// CountAttention 一次数出「等你处理」与「未读」两档——侧栏那颗角标底下的两件事。
 	// 一条 SQL 两个 SUM，判据与 CountSummaries 共用 attentionExpr。
 	CountAttention(ctx context.Context, q SummaryQuery) (AttentionCounts, error)
-	// CountSummariesByAgent / CountSummariesByPeer 是「查看全部 N」那个 N 的来源
-	// （决策 6）：一次按组聚合拿全，而不是每组各查一遍。键是 agent_sync_id /
-	// peer_fingerprint 的原值，空串是「未命名 Agent」那一组的真实键。
+	// CountSummariesByAgent / CountSummariesByMachine 返回各组的会话数。
 	CountSummariesByAgent(ctx context.Context, q SummaryQuery) (map[string]int64, error)
-	CountSummariesByPeer(ctx context.Context, q SummaryQuery) (map[string]int64, error)
+	CountSummariesByMachine(ctx context.Context, q SummaryQuery) (map[string]int64, error)
 	// CountSummariesByProjectKey 按「据以判定项目归属的那一组值」聚合：对端自己报的
 	// project_sync_id，加上 (承载机器指纹, cwd) 这个位置。
 	//
@@ -190,10 +188,9 @@ type SummaryQuery struct {
 	Attention AttentionFilter
 	// ConversationID 非空时按对话标识精确匹配（决策 13，详情页认领用）。
 	ConversationID string
-	// AgentSyncID / PeerFingerprint 用指针区分「不过滤」与「过滤成空串」——
-	// 空串是「未命名 Agent」那一组的**真实键**，不是缺省值。
-	AgentSyncID     *string
-	PeerFingerprint *string
+	// 指针区分“不按该字段过滤”和“过滤为空字符串”。机器指纹指向承载机器。
+	AgentSyncID        *string
+	MachineFingerprint *string
 	// ProjectSyncID / Locations 一起构成项目轴那一组的判据，怎么用由 ProjectMode 说了算。
 	ProjectSyncID string
 	Locations     []SummaryLocation
@@ -359,8 +356,8 @@ func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 	if q.AgentSyncID != nil {
 		tx = tx.Where("agent_sync_id=?", *q.AgentSyncID)
 	}
-	if q.PeerFingerprint != nil {
-		tx = tx.Where("peer_fingerprint=?", *q.PeerFingerprint)
+	if q.MachineFingerprint != nil {
+		tx = tx.Where(machineFingerprintExpr+"=?", *q.MachineFingerprint)
 	}
 	switch q.ProjectMode {
 	case ProjectIs:
@@ -504,10 +501,24 @@ func (r *summaryRepo) CountSummariesByAgent(
 	return r.countByColumn(ctx, q, "agent_sync_id")
 }
 
-func (r *summaryRepo) CountSummariesByPeer(
+// CountSummariesByMachine 按承载机器指纹聚合。
+func (r *summaryRepo) CountSummariesByMachine(
 	ctx context.Context, q SummaryQuery,
 ) (map[string]int64, error) {
-	return r.countByColumn(ctx, q, "peer_fingerprint")
+	var rows []struct {
+		MachineFingerprint string
+		Total              int64
+	}
+	if err := r.scoped(ctx, q).
+		Select(machineFingerprintExpr + " AS machine_fingerprint, count(*) AS total").
+		Group("machine_fingerprint").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.MachineFingerprint] = row.Total
+	}
+	return out, nil
 }
 
 func (r *summaryRepo) CountSummariesByProjectKey(

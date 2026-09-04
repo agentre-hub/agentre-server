@@ -107,10 +107,10 @@ func TestSessionIndex_ScopedRead_PagesOnlyThatGroup(t *testing.T) {
 
 	fp := "fp-a"
 	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{
-		UserID: 7, PeerFingerprint: &fp,
+		UserID: 7, MachineFingerprint: &fp,
 	}).Return(int64(9), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
-		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7, PeerFingerprint: &fp},
+		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7, MachineFingerprint: &fp},
 		Cursor:       agent_session_repo.SummaryCursor{LastMessageAt: 1800, ID: 50},
 		Limit:        3,
 	}).Return([]*agent_session_entity.SessionSummary{
@@ -289,14 +289,14 @@ func TestSessionIndex_AxisSkeleton_ReadsProjectLocationsOnce(t *testing.T) {
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).Times(1)
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(3), nil)
-	mSummary.EXPECT().CountSummariesByPeer(ctx, gomock.Any()).
+	mSummary.EXPECT().CountSummariesByMachine(ctx, gomock.Any()).
 		Return(map[string]int64{"fp-a": 1, "fp-b": 1, "fp-c": 1}, nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).DoAndReturn(
 		func(_ context.Context, q agent_session_repo.SummaryPageQuery) ([]*agent_session_entity.SessionSummary, error) {
 			return []*agent_session_entity.SessionSummary{
-				// 这一档上的会话由那台机器自己发起，承载机器就是它自己。
+				// 测试会话由同一台机器发起并承载。
 				{
-					PeerFingerprint: *q.PeerFingerprint, MachineFingerprint: *q.PeerFingerprint,
+					PeerFingerprint: *q.MachineFingerprint, MachineFingerprint: *q.MachineFingerprint,
 					PeerSessionID: "1", Cwd: "/repo/x",
 				},
 			}, nil
@@ -547,4 +547,47 @@ func TestSessionIndex_ProjectAxis_FoldsCountsByHostingMachine(t *testing.T) {
 	assert.Equal(t, int64(2), page.Groups[0].Total)
 	require.Len(t, asked, 1)
 	assert.Equal(t, "machine-fp", asked[0].MachineFingerprint)
+}
+
+// 机器轴按承载机器分组，而非按发起端分组。
+func TestSessionIndex_MachineAxis_GroupsByTheCarryingMachineNotTheInitiator(t *testing.T) {
+	ctx, mSummary, _, _, svc := setupMirrorReadTest(t)
+
+	agentred := "fp-agentred"
+	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).
+		Return(int64(2), nil)
+	mSummary.EXPECT().CountSummariesByMachine(ctx, agent_session_repo.SummaryQuery{UserID: 7}).
+		Return(map[string]int64{agentred: 2}, nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
+		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7, MachineFingerprint: &agentred},
+		Limit:        6,
+	}).Return([]*agent_session_entity.SessionSummary{
+		// 两条会话由同一台机器承载，发起端不同。
+		{PeerFingerprint: "fp-browser-1", MachineFingerprint: agentred, PeerSessionID: "1"},
+		{PeerFingerprint: "fp-browser-2", MachineFingerprint: agentred, PeerSessionID: "2"},
+	}, nil)
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisMachine})
+	require.NoError(t, err)
+	require.Len(t, page.Groups, 1, "两条都跑在同一台机器上,就是一组")
+	assert.Equal(t, "machine:"+agentred, page.Groups[0].Scope)
+	assert.Equal(t, int64(2), page.Groups[0].Total)
+}
+
+// 机器组分页与计数使用同一判据。
+func TestSessionIndex_MachineScope_PagesTheCarryingMachinesSessions(t *testing.T) {
+	ctx, mSummary, _, _, svc := setupMirrorReadTest(t)
+
+	agentred := "fp-agentred"
+	want := agent_session_repo.SummaryQuery{UserID: 7, MachineFingerprint: &agentred}
+	mSummary.EXPECT().CountSummaries(ctx, want).Return(int64(36), nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
+		SummaryQuery: want, Limit: 51,
+	}).Return(nil, nil)
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{
+		UserID: 7, Axis: AxisMachine, Scope: "machine:" + agentred,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(36), page.Total)
 }

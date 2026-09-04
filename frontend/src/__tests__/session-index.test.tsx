@@ -71,6 +71,8 @@ function row(over: Partial<MirrorIndexRow> & { key: string }): MirrorIndexRow {
     sessionId: 0,
     deviceId: 20,
     fingerprint: "fp-a",
+    // 测试行由同一台机器发起并承载。
+    machineFingerprint: "fp-a",
     agentSyncId: "ag-fe",
     projectSyncId: "p-server",
     updatedAt: 1_700_000_000_000,
@@ -1382,6 +1384,134 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
     });
 
     expect(screen.queryByText(/View all/)).toBeNull();
+  });
+
+  /**
+   * 弹层的朝向此前是写死的「往下开」：Radix 的碰撞规避确实开着，但弹层的高度也写死
+   * 在 `60vh`，于是触发器落在视口中段时**两边都放不下**，flip 只能挑一个少溢出的，
+   * 溢出的那一截连同内部滚动区一起被推到视口外，够不着。所以朝向要按触发器在视口里
+   * 的位置定，高度要收在 Radix 报的可用高度里。
+   */
+  /**
+   * jsdom 不排版：`documentElement.clientWidth/Height` 恒为 0，而 floating-ui 正是
+   * 按它算视口的。不摆一个真视口，Radix 的碰撞规避会把每个朝向都算成「全溢出」，
+   * 挑出来的边与我们请求的那一边无关——量朝向就成了掷骰子。
+   */
+  function stubViewport(width: number, height: number) {
+    const html = document.documentElement;
+    const original = {
+      clientWidth: Object.getOwnPropertyDescriptor(html, "clientWidth"),
+      clientHeight: Object.getOwnPropertyDescriptor(html, "clientHeight"),
+    };
+    Object.defineProperty(html, "clientWidth", {
+      configurable: true,
+      value: width,
+    });
+    Object.defineProperty(html, "clientHeight", {
+      configurable: true,
+      value: height,
+    });
+    return () => {
+      if (original.clientWidth) {
+        Object.defineProperty(html, "clientWidth", original.clientWidth);
+      } else {
+        delete (html as unknown as Record<string, unknown>).clientWidth;
+      }
+      if (original.clientHeight) {
+        Object.defineProperty(html, "clientHeight", original.clientHeight);
+      } else {
+        delete (html as unknown as Record<string, unknown>).clientHeight;
+      }
+    };
+  }
+
+  function stubTriggerRect(el: HTMLElement, top: number, bottom: number) {
+    el.getBoundingClientRect = () =>
+      ({
+        top,
+        bottom,
+        left: 0,
+        right: 160,
+        width: 160,
+        height: bottom - top,
+        x: 0,
+        y: top,
+        toJSON: () => ({}),
+      }) as DOMRect;
+  }
+
+  function overflowTriggerAt(top: number, bottom: number) {
+    const el = screen
+      .getByText("View all 9 sessions")
+      .closest("button") as HTMLButtonElement;
+    // jsdom 不排版，触发器的矩形只能自己摆——这条用例量的正是「按矩形选边」。
+    stubTriggerRect(el, top, bottom);
+    return el;
+  }
+
+  it("触发器贴着视口下沿时弹层朝上开", async () => {
+    const restore = stubViewport(1024, 768);
+    const loadGroupPage = vi.fn(async () => ({
+      rows: [],
+      cursor: null,
+      hasMore: false,
+    }));
+    renderIndex({
+      axis: "project",
+      rows,
+      groupTotals: { "p-server": 9 },
+      loadGroupPage,
+    });
+
+    fireEvent.click(overflowTriggerAt(708, 728));
+
+    const content = await screen.findByTestId("group-overflow");
+    expect(content.getAttribute("data-side")).toBe("top");
+    restore();
+  });
+
+  it("触发器在视口上半时弹层照旧朝下开", async () => {
+    const restore = stubViewport(1024, 768);
+    const loadGroupPage = vi.fn(async () => ({
+      rows: [],
+      cursor: null,
+      hasMore: false,
+    }));
+    renderIndex({
+      axis: "project",
+      rows,
+      groupTotals: { "p-server": 9 },
+      loadGroupPage,
+    });
+
+    fireEvent.click(overflowTriggerAt(40, 60));
+
+    const content = await screen.findByTestId("group-overflow");
+    expect(content.getAttribute("data-side")).toBe("bottom");
+    restore();
+  });
+
+  it("弹层的高度收在 Radix 报的可用高度里，不再写死 60vh", async () => {
+    const loadGroupPage = vi.fn(async () => ({
+      rows: [],
+      cursor: null,
+      hasMore: false,
+    }));
+    renderIndex({
+      axis: "project",
+      rows,
+      groupTotals: { "p-server": 9 },
+      loadGroupPage,
+    });
+
+    fireEvent.click(overflowTriggerAt(40, 60));
+
+    const content = await screen.findByTestId("group-overflow");
+    // 写死 60vh 时溢出的那一截连同内部滚动区一起在视口外，够不着；跟着可用高度走
+    // 才能既不被裁掉、又把翻页按钮留在能点到的地方。
+    expect(content.className).toContain(
+      "var(--radix-popover-content-available-height)",
+    );
   });
 
   it("弹层首屏不是一块空白：第一页回来之前先摆骨架", async () => {

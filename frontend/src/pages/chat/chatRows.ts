@@ -58,6 +58,8 @@ export interface MirroredSession {
 export type MirrorIndexRow = IndexRow & {
   conversationId: string;
   lastReadAt?: number;
+  /** 承载机器的指纹；与对话发起端 fingerprint 可能不同。 */
+  machineFingerprint: string;
 };
 
 /**
@@ -68,6 +70,7 @@ export type MirrorIndexRow = IndexRow & {
 export type MirrorIndexGroupRow = IndexGroupRow & {
   conversationId: string;
   lastReadAt?: number;
+  machineFingerprint: string;
 };
 
 export type MirrorIndexGroup = Omit<IndexGroup, "rows"> & {
@@ -134,6 +137,7 @@ export function toMirrorRow(
     sessionId: 0,
     deviceId: device?.id,
     fingerprint: s.peer_fingerprint,
+    machineFingerprint: s.machine_fingerprint,
     agentSyncId: s.agent_sync_id?.trim() ?? "",
     projectSyncId: s.project_sync_id?.trim() ?? "",
     updatedAt: s.last_message_at ?? 0,
@@ -191,6 +195,8 @@ export function toMachineRow(
     // 这一档看的就是这台机器，行因此挂在它下面（读写都要连到它）。
     deviceId: device.id,
     fingerprint: origin,
+    // 该列表只包含本机承载的会话。
+    machineFingerprint: device.fingerprint,
     agentSyncId: s.agentSyncId?.trim() ?? "",
     // 项目归属由服务端在镜像上判（决策 12）：还没保存的对话 server 手里没有
     // 它的任何东西，因此这一维如实空着，而不是拿 cwd 在浏览器里猜一个。

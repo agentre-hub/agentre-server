@@ -483,7 +483,7 @@ func (s *fakeStore) CountSummariesByAgent(
 	return nil, nil
 }
 
-func (s *fakeStore) CountSummariesByPeer(
+func (s *fakeStore) CountSummariesByMachine(
 	_ context.Context, _ agent_session_repo.SummaryQuery,
 ) (map[string]int64, error) {
 	return nil, nil

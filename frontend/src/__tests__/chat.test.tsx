@@ -1001,6 +1001,48 @@ describe("对话页:机器轴", () => {
     expect(await screen.findByText("机器上第 7 条")).toBeTruthy();
   });
 
+  // 机器轴此前整份取:session.list 不带 limit,那台机器上有多少条就过线多少条,
+  // 「查看全部」再把它们一次性画出来 —— 几千条时页面就卡在那儿。页因此下推给机器。
+  it("机器轴按页问机器要清单,不再一次要整份", async () => {
+    stubMachineScope();
+    renderChat("/chat?axis=machine");
+
+    await screen.findByText("临时跑一下 benchmark");
+    const [, params] = fakeClient.request.mock.calls[0] as [unknown, unknown];
+    expect((params as { limit?: number }).limit).toBeGreaterThan(0);
+  });
+
+  it("「查看全部 N」按机器给的游标续取下一页,而不是一次画完全部", async () => {
+    const page = (from: number, to: number) =>
+      Array.from({ length: to - from }, (_, i) => ({
+        ...summary,
+        conversationId: String(100 + from + i),
+        title: `机器上第 ${from + i} 条`,
+      }));
+    stubApi({ mirror: [], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) => {
+        const cursor = (params as { cursor?: string })?.cursor ?? "";
+        return cursor === "5"
+          ? { sessions: page(5, 8), cursor: "", hasMore: false, total: 8 }
+          : { sessions: page(0, 5), cursor: "5", hasMore: true, total: 8 };
+      },
+    );
+    renderChat("/chat?axis=machine");
+
+    // 组头写的是机器上报的总数,不是这一页有几条。
+    fireEvent.click(await screen.findByText("View all 8 sessions"));
+
+    // 弹层先摆已经在手的那一页,第 7 条要等游标那一次才来。
+    expect(await screen.findByText("机器上第 4 条")).toBeTruthy();
+    expect(await screen.findByText("机器上第 7 条")).toBeTruthy();
+    const cursors = fakeClient.request.mock.calls.map(
+      ([, params]) => (params as { cursor?: string })?.cursor ?? "",
+    );
+    expect(cursors).toContain("5");
+  });
+
   /**
    * 这一档的镜像行不再渲染，只用来标「已保存」与补项目归属（决策 8）：每组默认
    * 只回 5 条的话，一台机器上保存过第 6 条起就会被标成「还没保存」。
@@ -2317,5 +2359,165 @@ describe("对话页左列可调宽", () => {
     renderChat();
 
     expect(screen.getByTestId("chat-list-col").style.width).toBe("640px");
+  });
+});
+
+/** 索引及账号级名单未完成时不展示分组结论。 */
+describe("对话页：名单还没回来时不摆结论", () => {
+  const ULID = "01M190XT33REGJEMH1NABCDEF";
+
+  it("项目名单还悬着时索引不摆行：不写项目标识，也不把有项目的会话说成随手对话", async () => {
+    let release: (() => void) | null = null;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/agent-sessions?")) {
+        indexRequests.push(new URLSearchParams(path.split("?")[1] ?? ""));
+        const items = [mirrored({ project_sync_id: ULID })];
+        return {
+          total: items.length,
+          groups: [{ scope: "time", total: items.length, items }],
+        };
+      }
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      if (path === "/v1/workspace/projects") {
+        await held;
+        return {
+          projects: [{ sync_id: ULID, name: "agentre-server", sort_order: 0 }],
+        };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    // 索引已完成，项目名单仍在加载。
+    await waitFor(() => expect(indexRequests.length).toBeGreaterThan(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText(new RegExp(ULID))).toBeNull();
+    expect(screen.queryByText("Quick chats")).toBeNull();
+    expect(screen.getByTestId("session-list-skeleton")).toBeTruthy();
+
+    await act(async () => {
+      release?.();
+      await held;
+    });
+    expect(await screen.findByText("agentre-server")).toBeTruthy();
+    expect(screen.queryByText(new RegExp(ULID))).toBeNull();
+  });
+
+  it("设备名单还悬着时机器轴不摆组头：认不出的机器不算离线", async () => {
+    let release: (() => void) | null = null;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/agent-sessions?")) {
+        indexRequests.push(new URLSearchParams(path.split("?")[1] ?? ""));
+        const items = [mirrored()];
+        return {
+          total: items.length,
+          groups: [{ scope: "time", total: items.length, items }],
+        };
+      }
+      if (path === "/v1/devices") {
+        await held;
+        return { devices: [agentred] };
+      }
+      if (path === "/v1/workspace/agents") return { agents };
+      if (path === "/v1/workspace/projects") return { projects: [] };
+      throw new Error("unexpected: " + path);
+    });
+    relayByMachine({ "fp-1": [] });
+    renderChat("/chat?axis=machine");
+
+    await waitFor(() => expect(indexRequests.length).toBeGreaterThan(1));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // 设备名单未完成时不展示机器分组。
+    expect(screen.queryByText("No conversations yet.")).toBeNull();
+    expect(screen.queryByText("Unknown machine")).toBeNull();
+    expect(screen.queryByText("Offline")).toBeNull();
+    expect(screen.getByTestId("session-list-skeleton")).toBeTruthy();
+
+    await act(async () => {
+      release?.();
+      await held;
+    });
+    expect(await screen.findByText("书房小主机")).toBeTruthy();
+    expect(screen.queryByText("Offline")).toBeNull();
+  });
+
+  it("哪几台机器要等下次上线才跟着删还没问出来时，删除确认不开", async () => {
+    let release: (() => void) | null = null;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/agent-sessions?")) {
+        const items = [mirrored({ project_sync_id: "p-1" })];
+        return {
+          total: items.length,
+          groups: [{ scope: "time", total: items.length, items }],
+        };
+      }
+      if (path === "/v1/devices") return { devices: [agentred] };
+      if (path === "/v1/workspace/agents") return { agents };
+      if (path.startsWith("/v1/workspace/projects/machines")) {
+        await held;
+        return {
+          machines: [
+            {
+              device_id: 2,
+              device_name: "公司 Mac mini",
+              kind: "agentred",
+              fingerprint: "fp-2",
+              online: false,
+              configured: true,
+            },
+          ],
+        };
+      }
+      if (path === "/v1/workspace/projects")
+        return {
+          projects: [
+            {
+              sync_id: "p-1",
+              name: "agentre-server",
+              sort_order: 0,
+              configured: true,
+              members: [],
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    await screen.findByText("agentre-server");
+    fireEvent.pointerDown(screen.getByTestId("project-menu-p-1"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByTestId("project-menu-item-delete"));
+
+    // 离线机器列表未完成时不展示确认框。
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("delete-project-offline")).toBeNull();
+
+    await act(async () => {
+      release?.();
+      await held;
+    });
+    const line = await screen.findByTestId("delete-project-offline");
+    expect(line.textContent).toContain("公司 Mac mini");
   });
 });

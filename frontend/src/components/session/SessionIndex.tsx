@@ -641,10 +641,30 @@ function GroupOverflowTrigger({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [side, setSide] = useState<"top" | "bottom">("bottom");
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        // 朝向在**打开的那一拍**按触发器所在的位置定，不能交给 Radix 的碰撞规避
+        // 一家：弹层还收着可用高度（见 GroupOverflow），于是它总能把自己缩到
+        // 「往下也放得下」，flip 就永远不翻——触发器贴着视口下沿时得到的是一条
+        // 只剩两三行高的窄条。两边谁宽就朝谁开，缩高度只用来兜住剩下的溢出。
+        if (next) {
+          const rect = triggerRef.current?.getBoundingClientRect();
+          if (rect) {
+            setSide(
+              window.innerHeight - rect.bottom < rect.top ? "top" : "bottom",
+            );
+          }
+        }
+        setOpen(next);
+      }}
+    >
       <PopoverTrigger asChild>
         <button
+          ref={triggerRef}
           type="button"
           disabled={!expanded}
           className="flex cursor-pointer items-center gap-1 px-2 py-1.5 text-left text-2xs font-medium text-primary-text outline-none transition-colors hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-default"
@@ -656,6 +676,7 @@ function GroupOverflowTrigger({
       <GroupOverflow
         scope={scope}
         label={label}
+        side={side}
         loadGroupPage={loadGroupPage}
         renderRow={renderRow}
       />
@@ -672,11 +693,13 @@ function GroupOverflowTrigger({
 function GroupOverflow({
   scope,
   label,
+  side,
   loadGroupPage,
   renderRow,
 }: {
   scope: string;
   label: string;
+  side: "top" | "bottom";
   loadGroupPage: (
     scope: string,
     cursor: string | null,
@@ -690,8 +713,14 @@ function GroupOverflow({
   return (
     <PopoverContent
       align="start"
-      className="max-h-[60vh] w-[360px] overflow-y-auto p-2"
+      side={side}
+      collisionPadding={12}
+      // 高度跟着 Radix 量出来的可用高度走。写死 60vh 的时候，触发器落在视口中段
+      // 那一段两边都放不下，超出的那一截连同**内部滚动区**一起被推到视口外：
+      // 里面还能滚，可最后几行与「加载更多」永远够不着。宽度同理让它别顶出窄屏。
+      className="max-h-[min(60vh,var(--radix-popover-content-available-height))] w-[360px] max-w-[calc(100vw-1.5rem)] overflow-y-auto p-2"
       aria-label={label}
+      data-testid="group-overflow"
     >
       {/* 取数放在 PopoverContent **之内**：Radix 在关着的时候不渲染它的孩子，
           因此这一组的行只在真的打开时才去翻。放在外面的话每个有溢出入口的组

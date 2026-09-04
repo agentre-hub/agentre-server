@@ -374,21 +374,6 @@ func TestCountSummariesByAgent_GroupsInSQL(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestCountSummariesByPeer_GroupsInSQL(t *testing.T) {
-	ctx, _, mock := hubtest.Database(t)
-	r := NewSummary()
-
-	mock.ExpectQuery(regexp.QuoteMeta("GROUP BY `peer_fingerprint`")).
-		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"group_key", "total"}).
-			AddRow("fp-a", int64(4)))
-
-	got, err := r.CountSummariesByPeer(ctx, SummaryQuery{UserID: 7})
-	require.NoError(t, err)
-	assert.Equal(t, map[string]int64{"fp-a": 4}, got)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
-
 // 项目轴的每组计数**不能**在 SQL 里直接按项目分组：报上来的标识可能指着一个已经被
 // 删掉的项目（决策 13），位置要拿去跟账号项目树比（决策 12），两件事都要账号的项目
 // 名单才判得了。SQL 数得出的只是判据本身，折算成项目是服务层的事。
@@ -590,5 +575,54 @@ func TestSessionSummaryEntity_PlainUpdatesNeverRewritesLastMessageAt(t *testing.
 	require.NoError(t, db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).
 		Where("id=?", 1).
 		Updates(map[string]any{"last_read_at": int64(5)}).Error)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 机器分组使用承载机器指纹，而非发起端指纹。
+func TestCountSummariesByMachine_GroupsByTheCarryingMachine(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	mock.ExpectQuery(regexp.QuoteMeta(machineFingerprintExpr + " AS machine_fingerprint")).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"machine_fingerprint", "total"}).
+			AddRow("fp-agentred", int64(36)).
+			AddRow("fp-desktop", int64(2)))
+
+	got, err := r.CountSummariesByMachine(ctx, SummaryQuery{UserID: 7})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int64{"fp-agentred": 36, "fp-desktop": 2}, got)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 分组使用投影别名。
+func TestCountSummariesByMachine_GroupsByTheProjectedAlias(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	mock.ExpectQuery(regexp.QuoteMeta("GROUP BY `machine_fingerprint`")).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"machine_fingerprint", "total"}))
+
+	_, err := r.CountSummariesByMachine(ctx, SummaryQuery{UserID: 7})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 机器组分页与计数使用同一承载机器判据。
+func TestListSummariesPage_MachineScope_FiltersByTheCarryingMachine(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	fp := "fp-agentred"
+	mock.ExpectQuery(regexp.QuoteMeta(machineFingerprintExpr+"=?")).
+		WithArgs(int64(7), fp, 50).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
+
+	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
+		SummaryQuery: SummaryQuery{UserID: 7, MachineFingerprint: &fp},
+		Limit:        50,
+	})
+	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
