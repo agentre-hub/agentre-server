@@ -1,11 +1,5 @@
-// Package ginctx 是鉴权中间件与控制器之间那几个 gin 上下文键的唯一来源。
-//
-// 键名本身是个跨包契约：中间件 c.Set 一处、控制器 c.Get 十几处，两边各写字面量的
-// 话，改名或写错都不会有编译错误，只会安静地读出零值——对 user_id 来说就是「这条
-// 请求属于谁」判错。所以键与它的取值断言在这里各存一份，两侧都只经由本包。
-//
-// 本包属于 internal/pkg 横切层：只依赖 gin，不引 service/repository，也不做任何
-// 鉴权判定——判定仍归 internal/middleware，这里只负责搬运已经验过的值。
+// Package ginctx 集中定义鉴权中间件与控制器共享的 gin 上下文键和访问器。
+// 本包只搬运已验证的值，不执行鉴权判定，也不依赖业务层。
 package ginctx
 
 import "github.com/gin-gonic/gin"
