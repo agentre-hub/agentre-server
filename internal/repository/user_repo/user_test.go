@@ -18,7 +18,7 @@ func TestCreate(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `users`")).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(42, 1))
 	mock.ExpectCommit()
 

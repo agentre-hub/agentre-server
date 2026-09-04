@@ -82,13 +82,12 @@ func (s *userSvc) FindOrCreateFromGithub(ctx context.Context, p GithubProfile) (
 		display = p.Login
 	}
 	newUser := &user_entity.User{
-		Email:         p.Email,
-		EmailVerified: true,
-		DisplayName:   display,
-		AvatarURL:     p.AvatarURL,
-		Status:        consts.ACTIVE,
-		Createtime:    now,
-		Updatetime:    now,
+		Email:       p.Email,
+		DisplayName: display,
+		AvatarURL:   p.AvatarURL,
+		Status:      consts.ACTIVE,
+		Createtime:  now,
+		Updatetime:  now,
 	}
 	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
