@@ -27,9 +27,9 @@ type SavedSessionSvc interface {
 	// Save 把一条对话收进账号并让镜像对它开始（幂等）。账号取自调用方上下文。
 	Save(ctx context.Context, ref SessionRef) error
 	// Delete 删掉账号里的这条对话，并让执行端也删（决策 6）。server 那一份在返回
-	// 时一定已经没了；执行端那一份的去向由 PeerDeleteOutcome 如实交代。幂等：
+	// 时一定已经没了；执行端那一份的去向由 MachineDeleteOutcome 如实交代。幂等：
 	// 删一条早已删过的对话不是错误。
-	Delete(ctx context.Context, ref SessionRef) (PeerDeleteOutcome, error)
+	Delete(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error)
 	// List 返回账号里已保存的全部对话（任一端读到同一份），并标明目标已不存在的条目。
 	List(ctx context.Context, userID int64) ([]SavedSessionRef, error)
 }
@@ -64,24 +64,24 @@ func (r SessionRef) Initiator() string {
 	return r.PeerFingerprint
 }
 
-// PeerDeleteOutcome 说的是**执行端那一份**的去向；server 那一份在所有分支里都已经
+// MachineDeleteOutcome 说的是**执行端那一份**的去向；server 那一份在所有分支里都已经
 // 删掉了（删除在机器离线时照样生效——界面上不留「已删除但还在」的中间态）。
-type PeerDeleteOutcome string
+type MachineDeleteOutcome string
 
 const (
-	// PeerDeleted 执行端也已经没有这条会话了。
-	PeerDeleted PeerDeleteOutcome = "deleted"
-	// PeerDeletePending 那台机器现在联系不上（或这一次没删成）：已经记下待办，
+	// MachineDeleted 执行端也已经没有这条会话了。
+	MachineDeleted MachineDeleteOutcome = "deleted"
+	// MachineDeletePending 那台机器现在联系不上（或这一次没删成）：已经记下待办，
 	// 它下次上线时补删。
-	PeerDeletePending PeerDeleteOutcome = "pending"
+	MachineDeletePending MachineDeleteOutcome = "pending"
 )
 
 var (
-	// ErrPeerOffline 执行那条对话的机器现在联系不上：删除留一条待办，机器回来时补删。
-	ErrPeerOffline = errors.New("saved_session_svc: peer is offline")
-	// ErrPeerProtocolViolation 表示已通过版本握手的执行端缺少当前协议要求的方法。
+	// ErrMachineOffline 执行那条对话的机器现在联系不上：删除留一条待办，机器回来时补删。
+	ErrMachineOffline = errors.New("saved_session_svc: machine is offline")
+	// ErrMachineProtocolViolation 表示已通过版本握手的执行端缺少当前协议要求的方法。
 	// 这不是可通过重试恢复的传输失败，也不是需要兼容的旧版本。
-	ErrPeerProtocolViolation = errors.New("saved_session_svc: peer violated the negotiated protocol")
+	ErrMachineProtocolViolation = errors.New("saved_session_svc: machine violated the negotiated protocol")
 )
 
 // SessionMirror 是保存 / 删除这一侧对「镜像」的全部需要（ISP：只有开始与清除两件
@@ -101,14 +101,14 @@ type SessionMirror interface {
 // agentred 上删的是会话行与它的整段通知日志，桌面端上删的是那台电脑自己那条对话
 // 本体，两种端一视同仁（决策 16）。
 //
-// 把 Protobuf RPC method-not-found 翻成 ErrPeerProtocolViolation
+// 把 Protobuf RPC method-not-found 翻成 ErrMachineProtocolViolation
 // 是**实现方**的事：wire 上的
 // 错误码只该出现在会说 wire 的那一层（对照桌面端的 wire.SessionDeleteCallError），
 // 本层只认下面这两个判据。
 type MachineSessionDeleter interface {
 	// DeleteOnMachine 回 nil = 那一端已经没有这条会话了。这是**后置条件**而不是
-	// 「删了几行」，因此重复删除照样回 nil。联系不上回 ErrPeerOffline；对面太老、
-	// 违反已协商协议回 ErrPeerProtocolViolation；其余错误当成「这一次没删成」。
+	// 「删了几行」，因此重复删除照样回 nil。联系不上回 ErrMachineOffline；对面太老、
+	// 违反已协商协议回 ErrMachineProtocolViolation；其余错误当成「这一次没删成」。
 	DeleteOnMachine(ctx context.Context, ref SessionRef) error
 }
 
@@ -147,7 +147,9 @@ func (noopSessionMirror) Purge(context.Context, SessionRef) error { return nil }
 // 并留下一条待办，绝不谎报「执行端也删了」。
 type unreachableMachine struct{}
 
-func (unreachableMachine) DeleteOnMachine(context.Context, SessionRef) error { return ErrPeerOffline }
+func (unreachableMachine) DeleteOnMachine(context.Context, SessionRef) error {
+	return ErrMachineOffline
+}
 
 // SavedSessionRef 是账号里已保存的一条。
 type SavedSessionRef struct {
@@ -203,7 +205,7 @@ func (s *savedSessionSvc) Save(ctx context.Context, ref SessionRef) error {
 //   - 执行端最后说，而且它答什么都不改变 server 这边已经删干净的事实：本轮的主
 //     场景恰恰是机器离线，要求两边都成功才算删，等于在最常见的情形下删不掉东西
 //     （决策 6）。
-func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDeleteOutcome, error) {
+func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error) {
 	// 承载它的机器由账号这边查出来，而不是要调用方报：发起端是浏览器时（web 控制台
 	// 派发出去的那些），调用方手上只有身份，它压根不认识那台机器。查不到（早已删过）
 	// 就沿用调用方给的那一份 —— 幂等删除照常往下走，只是没有机器可通知。
@@ -229,9 +231,9 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 			zap.String("machineFingerprint", ref.MachineFingerprint),
 			zap.String("peerFingerprint", ref.Initiator()),
 			zap.String("conversationId", ref.ConversationID))
-		return PeerDeleted, nil
-	case errors.Is(err, ErrPeerProtocolViolation):
-		logger.Ctx(ctx).Error("saved_session_svc.Delete: peer violated the negotiated protocol",
+		return MachineDeleted, nil
+	case errors.Is(err, ErrMachineProtocolViolation):
+		logger.Ctx(ctx).Error("saved_session_svc.Delete: machine violated the negotiated protocol",
 			zap.Int64("userId", ref.UserID),
 			zap.String("machineFingerprint", ref.MachineFingerprint),
 			zap.String("peerFingerprint", ref.Initiator()),
@@ -256,7 +258,7 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 			zap.String("peerFingerprint", ref.Initiator()),
 			zap.String("conversationId", ref.ConversationID),
 			zap.Error(err))
-		return PeerDeletePending, nil
+		return MachineDeletePending, nil
 	}
 }
 

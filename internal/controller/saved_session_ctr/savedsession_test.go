@@ -34,7 +34,7 @@ const testCookieName = "server_session"
 // peerOutcome 决定删除时执行端那一份的去向，让控制器如实转述这件事。
 type stubSavedSessionSvc struct {
 	saved       map[int64][]saved_session_svc.SavedSessionRef
-	peerOutcome saved_session_svc.PeerDeleteOutcome
+	peerOutcome saved_session_svc.MachineDeleteOutcome
 }
 
 // 两条对话的 conversation_id（决策 1 的 UUIDv7 规范形式）。
@@ -46,7 +46,7 @@ const (
 func newStubSavedSessionSvc() *stubSavedSessionSvc {
 	return &stubSavedSessionSvc{
 		saved:       map[int64][]saved_session_svc.SavedSessionRef{},
-		peerOutcome: saved_session_svc.PeerDeleted,
+		peerOutcome: saved_session_svc.MachineDeleted,
 	}
 }
 
@@ -64,7 +64,7 @@ func (s *stubSavedSessionSvc) Save(_ context.Context, ref saved_session_svc.Sess
 
 func (s *stubSavedSessionSvc) Delete(
 	_ context.Context, ref saved_session_svc.SessionRef,
-) (saved_session_svc.PeerDeleteOutcome, error) {
+) (saved_session_svc.MachineDeleteOutcome, error) {
 	items := s.saved[ref.UserID]
 	for i, it := range items {
 		// 删除按身份：这个桩里两个指纹同值（桌面端那一档），拿哪一个都行，
@@ -190,12 +190,12 @@ func peerStatus(t *testing.T, resp *http.Response) string {
 	var envelope struct {
 		Code int `json:"code"`
 		Data struct {
-			PeerStatus string `json:"peer_status"`
+			MachineStatus string `json:"machine_status"`
 		} `json:"data"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
 	require.Equal(t, 0, envelope.Code)
-	return envelope.Data.PeerStatus
+	return envelope.Data.MachineStatus
 }
 
 // 删除：只删这一条；机器在线时应答如实说执行端那一份也删掉了。
@@ -223,7 +223,7 @@ func TestDelete_RemovesOnlyThatEntry(t *testing.T) {
 // 那台机器回来时会补删——而不是谎称两边都清干净了。
 func TestDelete_PeerOffline_ReportsPending(t *testing.T) {
 	stub := newStubSavedSessionSvc()
-	stub.peerOutcome = saved_session_svc.PeerDeletePending
+	stub.peerOutcome = saved_session_svc.MachineDeletePending
 	server, _ := newSavedSessionTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 

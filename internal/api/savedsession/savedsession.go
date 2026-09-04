@@ -47,13 +47,13 @@ type DeleteSessionRequest struct {
 // DeleteSessionResponse 交代**执行端那一份**的去向；应答返回时 server 那一份一定
 // 已经没了（机器离线也照样当场删掉，界面上不留「已删除但还在」的中间态）。
 type DeleteSessionResponse struct {
-	// PeerStatus 取两个值（saved_session_svc.PeerDeleteOutcome 的全集）：
+	// MachineStatus 取两个值（saved_session_svc.MachineDeleteOutcome 的全集）：
 	//   deleted — 那台机器在线，它那一份也已经删了；
 	//   pending — 联系不上那台机器，已记下待办，它下次上线时补删。
 	//
-	// 执行端不认识删除方法**不在这里出档**：那是协议违约（ErrPeerProtocolViolation），
+	// 执行端不认识删除方法**不在这里出档**：那是协议违约（ErrMachineProtocolViolation），
 	// 以错误上交，不折成一个正常应答里的状态值。
-	PeerStatus string `json:"peer_status"`
+	MachineStatus string `json:"machine_status"`
 }
 
 // ListSavedSessionsRequest 读出账号里已保存的对话。路径与载荷本轮不动：索引改读镜像摘要

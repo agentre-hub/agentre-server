@@ -466,9 +466,9 @@ func (d machineSessionDeleter) DeleteOnMachine(ctx context.Context, ref saved_se
 	err := d.sessions.DeleteOnMachine(ctx, ref.UserID, ref.MachineFingerprint, ref.ConversationID)
 	switch {
 	case errors.Is(err, mirror_svc.ErrMachineOffline):
-		return saved_session_svc.ErrPeerOffline
+		return saved_session_svc.ErrMachineOffline
 	case isMethodNotFound(err):
-		return fmt.Errorf("%w: %v", saved_session_svc.ErrPeerProtocolViolation, err)
+		return fmt.Errorf("%w: %v", saved_session_svc.ErrMachineProtocolViolation, err)
 	default:
 		return err
 	}

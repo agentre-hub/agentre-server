@@ -191,7 +191,7 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 		switch {
 		case err == nil:
 		case isMethodNotFound(err):
-			logger.Ctx(ctx).Error("mirror_svc.ReplayPendingDeletes: peer violated the negotiated protocol",
+			logger.Ctx(ctx).Error("mirror_svc.ReplayPendingDeletes: machine violated the negotiated protocol",
 				zap.Int64("userId", todo.UserID), zap.String("machineFingerprint", todo.DeviceFingerprint),
 				zap.String("conversationId", todo.ConversationID), zap.Error(err))
 			errs = append(errs, fmt.Errorf("conversation %s: protocol method missing: %w", todo.ConversationID, err))

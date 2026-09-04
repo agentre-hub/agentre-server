@@ -53,7 +53,7 @@ func (s *stubMirror) Purge(_ context.Context, ref SessionRef) error {
 }
 
 // stubPeer 是执行端那一侧的假实现：err 决定这台机器怎么回话——nil 是删掉了，
-// ErrPeerOffline 是联系不上；协议方法缺失由 ErrPeerProtocolViolation 表达。
+// ErrMachineOffline 是联系不上；协议方法缺失由 ErrMachineProtocolViolation 表达。
 type stubPeer struct {
 	calls   *[]string
 	deleted []SessionRef
@@ -170,7 +170,7 @@ func TestDelete_WebDispatchedConversation_ResolvesItsMachineFromTheAccount(t *te
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, PeerDeleted, outcome)
+	assert.Equal(t, MachineDeleted, outcome)
 	require.Len(t, f.peer.deleted, 1)
 	assert.Equal(t, "fp-agentred-1", f.peer.deleted[0].MachineFingerprint,
 		"通知执行端要拨的是承载它的机器，不是发起它的浏览器")
@@ -193,7 +193,7 @@ func TestDelete_PeerOnline_BothCopiesGone(t *testing.T) {
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
 	require.NoError(t, err)
-	assert.Equal(t, PeerDeleted, outcome)
+	assert.Equal(t, MachineDeleted, outcome)
 	assert.Equal(t, []SessionRef{ref7()}, f.mirror.purged)
 	assert.Equal(t, []SessionRef{ref7()}, f.peer.deleted)
 	// 内容先清、名单后撤：反过来一旦清理失败，库里就会留下一条「没人保存过」的
@@ -207,7 +207,7 @@ func TestDelete_PeerOnline_BothCopiesGone(t *testing.T) {
 // 的中间态），那台机器记一条待办，它下次上线时补删（决策 6）。
 func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 	f := setupSavedSessionTest(t)
-	f.peer.err = ErrPeerOffline
+	f.peer.err = ErrMachineOffline
 	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).DoAndReturn(
 		func(_ context.Context, _ int64, _ string) error {
 			f.calls = append(f.calls, "account:remove")
@@ -227,7 +227,7 @@ func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
 	require.NoError(t, err)
-	assert.Equal(t, PeerDeletePending, outcome)
+	assert.Equal(t, MachineDeletePending, outcome)
 	assert.Equal(t, []SessionRef{ref7()}, f.mirror.purged)
 	assert.Empty(t, f.peer.deleted)
 	assert.Equal(t, []string{"mirror:purge", "account:remove", "peer:delete", "todo:add"}, f.calls)
@@ -237,11 +237,11 @@ func TestDelete_PeerOffline_ServerCopyGoneNowAndTodoRecorded(t *testing.T) {
 // 成 unsupported，**不留待办**——留下就是对着一台永远答不了的机器重放到天荒地老。
 func TestDelete_PeerProtocolViolation_ReturnsErrorWithoutTodo(t *testing.T) {
 	f := setupSavedSessionTest(t)
-	f.peer.err = ErrPeerProtocolViolation
+	f.peer.err = ErrMachineProtocolViolation
 	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).Return(nil)
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
-	require.ErrorIs(t, err, ErrPeerProtocolViolation)
+	require.ErrorIs(t, err, ErrMachineProtocolViolation)
 	assert.Empty(t, outcome)
 	// server 那份照样删干净了；没有 AddDeleteTodo（mock 未登记该调用，一旦调用即红）。
 	assert.Equal(t, []SessionRef{ref7()}, f.mirror.purged)
@@ -257,14 +257,14 @@ func TestDelete_PeerFailedThisTime_LeavesTodo(t *testing.T) {
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
 	require.NoError(t, err)
-	assert.Equal(t, PeerDeletePending, outcome)
+	assert.Equal(t, MachineDeletePending, outcome)
 }
 
 // 待办没记下来：删除没走完就得如实报错——不然执行端那一份会被静默地永远留着。
 // 重试是安全的（两边都幂等）。
 func TestDelete_TodoNotRecorded_ReportsError(t *testing.T) {
 	f := setupSavedSessionTest(t)
-	f.peer.err = ErrPeerOffline
+	f.peer.err = ErrMachineOffline
 	f.follow.EXPECT().Delete(gomock.Any(), int64(7), conversationA).Return(nil)
 	f.todo.EXPECT().AddDeleteTodo(gomock.Any(), gomock.Any()).Return(errors.New("db down"))
 
@@ -280,11 +280,11 @@ func TestDelete_Twice_IsNotAnError(t *testing.T) {
 
 	outcome, err := f.svc.Delete(context.Background(), ref7())
 	require.NoError(t, err)
-	assert.Equal(t, PeerDeleted, outcome)
+	assert.Equal(t, MachineDeleted, outcome)
 
 	outcome, err = f.svc.Delete(context.Background(), ref7())
 	require.NoError(t, err)
-	assert.Equal(t, PeerDeleted, outcome)
+	assert.Equal(t, MachineDeleted, outcome)
 }
 
 // server 那份没清掉：删除到此为止并如实报错——名单那一条留着（不然库里会剩下一条

@@ -52,7 +52,7 @@ func (f *Follow) Delete(c *gin.Context, req *api.DeleteSessionRequest) (*api.Del
 	if err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}
-	return &api.DeleteSessionResponse{PeerStatus: string(outcome)}, nil
+	return &api.DeleteSessionResponse{MachineStatus: string(outcome)}, nil
 }
 
 // List 返回账号里已保存的全部对话（R14：任一端读到同一份）。

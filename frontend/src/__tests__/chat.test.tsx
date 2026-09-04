@@ -1326,7 +1326,7 @@ function stubDelete(over: Partial<{ mirror: unknown[]; devices: unknown[] }>) {
   mockedApi.mockImplementation(async (path, init) => {
     if (path === "/v1/saved-sessions/delete" && init?.method === "POST") {
       posted.push(JSON.parse(String(init.body)));
-      return { peer_status: "deleted" };
+      return { machine_status: "deleted" };
     }
     return base(path, init);
   });
