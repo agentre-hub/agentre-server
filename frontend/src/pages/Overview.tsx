@@ -78,24 +78,6 @@ interface AgentItem {
   has_available_target: boolean;
 }
 
-// ── TopBar 的 Fresh 指示 ────────────────────────────────────────────────
-// 桌面端（agentred）有在线机器才算「已连接」；未连 / 未知则不渲染，不编状态。
-function Fresh({ connected }: { connected: boolean }) {
-  const { t } = useTranslation();
-  if (!connected) return null;
-  return (
-    <span className="flex items-center gap-1.5">
-      <span
-        aria-hidden="true"
-        className="size-[6px] rounded-full bg-status-running"
-      />
-      <span className="text-xs text-muted-foreground">
-        {t("appShell.topBar.fresh")}
-      </span>
-    </span>
-  );
-}
-
 // ── 顶栏右侧的范围分段控件 ───────────────────────────────────────────────
 // 只管统计区：热力图始终是一年，不跟着变（口径说明板「范围控件」）。
 function RangeSwitch({
@@ -321,10 +303,6 @@ export default function Overview() {
     setReloadKey((k) => k + 1),
   );
 
-  const desktopConnected = useMemo(
-    () => (devices ?? []).some((d) => d.kind === "agentred" && d.online),
-    [devices],
-  );
   const firstOffline = useMemo(
     () => (devices ?? []).find((d) => !d.online),
     [devices],
@@ -374,26 +352,18 @@ export default function Overview() {
     <AppShell
       title={t("nav.overview")}
       /*
-        窄屏顶栏不摆页面自己的控件：390 宽的手机上「标题 + 在线指示 + 三档范围 +
-        头像 + 两颗图标按钮」放不下，量下来范围控件直接压在头像与语言按钮上，标题
-        被截成一个字。这两样下沉到内容第一行（与 Chat 的 ownHeader 同一条思路：
-        移动端是另一棵树，不是压扁的桌面端）。
+        窄屏顶栏不摆页面自己的控件：390 宽的手机上「标题 + 三档范围 + 头像 +
+        两颗图标按钮」放不下，量下来范围控件直接压在头像与语言按钮上，标题被截成
+        一个字。它因此下沉到内容第一行（与 Chat 的 ownHeader 同一条思路：移动端是
+        另一棵树，不是压扁的桌面端）。
       */
       right={
-        isMobile ? undefined : (
-          <div className="flex min-w-0 items-center gap-3">
-            <Fresh connected={desktopConnected} />
-            <RangeSwitch value={range} onChange={setRange} />
-          </div>
-        )
+        isMobile ? undefined : <RangeSwitch value={range} onChange={setRange} />
       }
     >
       <div className="mx-auto w-full max-w-[1200px] space-y-4">
         {isMobile ? (
-          <div className="flex min-w-0 items-center gap-3">
-            <Fresh connected={desktopConnected} />
-            {/* 弹簧：在线指示可能整个不画，范围控件仍旧靠右。 */}
-            <span className="flex-1" />
+          <div className="flex min-w-0 items-center justify-end">
             <RangeSwitch value={range} onChange={setRange} />
           </div>
         ) : null}

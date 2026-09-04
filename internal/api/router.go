@@ -271,10 +271,10 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// 详情页按游标翻转录。cwd 不出现在任一响应里（R19，见 workspace 包守卫）。
 		agentSessionCtr.SavedSessions,
 		agentSessionCtr.Transcript,
-		// 侧栏「对话」那颗角标要的那一个数字。它单独成一条端点而不是让外壳去拉一页
-		// 索引：这条路在每一次进入任何页面时都会跑一遍，而一页摘要里的标题、游标、
-		// 项目归属一个都用不上。
-		agentSessionCtr.WaitingCount,
+		// 侧栏「对话」那颗角标要的那两个数字（等你处理 / 未读）。它单独成一条端点
+		// 而不是让外壳去拉一页索引：这条路在每一次进入任何页面时都会跑一遍，而一页
+		// 摘要里的标题、游标、项目归属一个都用不上。
+		agentSessionCtr.AttentionCount,
 		// 记下「读到这条对话为止」，供索引的「未读」那一档判定。它是写方法，
 		// 本组的 session 分支已经强制 CSRF（session_or_device_auth.go）。
 		agentSessionCtr.MarkSessionRead,

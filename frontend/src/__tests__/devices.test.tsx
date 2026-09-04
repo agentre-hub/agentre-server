@@ -103,7 +103,7 @@ beforeEach(async () => {
 });
 
 describe("device page design alignment", () => {
-  it("TopBar 注入设备总数 Cnt；有在线 agentred 时显示 Fresh『桌面端已连接』", async () => {
+  it("TopBar 注入设备总数 Cnt；不再有第二个连接说法", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return listResponse;
       throw new Error("unexpected call: " + path);
@@ -117,11 +117,13 @@ describe("device page design alignment", () => {
     expect(cnt.textContent).toBe("2");
     // 裸数字必须带 aria-label（设计文档：Cnt 一律 aria-label'd，SR 不能只听到「2」）。
     expect(cnt.getAttribute("aria-label")).toBe("2 devices");
-    // Fresh：agentred 在线 → 桌面端已连接
-    expect(screen.getByText("Desktop connected")).toBeTruthy();
+    // 顶栏此前有一条绿点 +「桌面端已连接」，说的是有没有机器在线；账号块那颗痣
+    // 说的是这一屏还是不是实时的。同一种绿点、同一族措辞讲两件事，还会互相矛盾。
+    // 实时性收成一个出口之后这条撤了 —— 在线/离线本来就是这一页每一行的正文。
+    expect(screen.queryByText("Desktop connected")).toBeNull();
   });
 
-  it("没有在线 agentred 时不渲染 Fresh（诚实不编状态）", async () => {
+  it("没有在线 agentred 时也一样没有（撤掉之前它就该是诚实的）", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices")
         return {

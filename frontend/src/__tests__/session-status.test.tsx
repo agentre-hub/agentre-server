@@ -552,8 +552,11 @@ describe("写入失败分类:三类互不相同", () => {
  * 哪些行、行上写什么」，因此和上面的视图状态同属 sessionView 这一个接缝。
  */
 describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
-  it("matchesSessionFilter:unread=账号里有、且最后活动晚于我最后一次读它", () => {
-    // 与桌面端 attention-store 的 lastMessageAt > lastReadAt 同一条判据。
+  it("matchesSessionFilter:unread=共享包 computeAttention 的 unread 那一档,本地不另写一遍", () => {
+    // 判据不在这里：机器轴那一档在本地筛(那份清单是机器实时报的,没经过服务端),
+    // 但它用的必须是**同一条**判定 —— 服务端 attentionExpr 与共享包 computeAttention
+    // 的 unread 那一档。此前这里自写了一遍 `updatedAt > lastReadAt`,于是同一批行在
+    // 机器轴与其余三个轴上筛出来的结果不一样。
     const unread = { lifecycleState: "idle", updatedAt: 200, lastReadAt: 100 };
     const read = { lifecycleState: "idle", updatedAt: 100, lastReadAt: 200 };
     const neverOpened = { lifecycleState: "idle", updatedAt: 200 };
@@ -569,7 +572,7 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
     expect(matchesSessionFilter(read, "unread")).toBe(false);
     expect(matchesSessionFilter(neverOpened, "unread")).toBe(true);
     expect(matchesSessionFilter(unsaved, "unread")).toBe(false);
-    // 「等你处理」是另一件事，不受已读状态影响：看过了但还停在那儿等输入的仍然是。
+    // 「等你处理」是另一件事,不受已读状态影响:看过了但还停在那儿等输入的仍然是。
     expect(
       matchesSessionFilter(
         {
@@ -581,6 +584,36 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
         "unread",
       ),
     ).toBe(false);
+  });
+
+  // 「未读」是 computeAttention 最弱的一档:在跑的、等你按的、跑挂的各有更强的理由,
+  // 都不算未读。这三条正是此前 chip 上那个数与列表里带「未读」记号的行对不上的来源
+  // —— 数把它们算了进去,行上写的却是 running / 等你处理 / 出错。
+  it("matchesSessionFilter:更强的理由压过未读——在跑的、等你按的、跑挂的都不算", () => {
+    const withNews = { updatedAt: 200, lastReadAt: 100 };
+    expect(
+      matchesSessionFilter(
+        { ...withNews, lifecycleState: "running" },
+        "unread",
+      ),
+    ).toBe(false);
+    expect(
+      matchesSessionFilter(
+        { ...withNews, lifecycleState: "idle", waitingForInput: true },
+        "unread",
+      ),
+    ).toBe(false);
+    expect(
+      matchesSessionFilter({ ...withNews, lifecycleState: "failed" }, "unread"),
+    ).toBe(false);
+    // interrupted 不是故障(共享包 lifecycleToAgentStatus:红只留给 failed),
+    // 它归闲置,因此照常算未读。
+    expect(
+      matchesSessionFilter(
+        { ...withNews, lifecycleState: "interrupted" },
+        "unread",
+      ),
+    ).toBe(true);
   });
 
   it("matchesSessionFilter:all 不过滤,running=运行中且不等待,waiting=等你处理", () => {

@@ -1,13 +1,13 @@
 /**
- * 账号块上的实时连接状态（V2：头像上一颗痣 + 降级时第二行改口）。
+ * 账号块上的实时连接状态（头像上一颗痣 + 菜单里那一段）。
  *
  * 报的是**账号级那条中继连接**（一个标签页一条，见 `@/lib/relayClientPool`）此刻
  * 的状态，也就是「这一屏看到的东西是不是实时的」。它挂在账号块上而不是自成一行：
  * 收起 56px 与移动 TopBar 里账号块都还在，那颗痣因此白拿了两个形态。
  *
  * 断言的是这几条：
- *  - 稳态一个字都不多说（第二行仍是邮箱），**不会自愈**的那一态才改口；
- *    正在重连只改痣的颜色（瞬态自愈不占内容区，与详情页那枚芯片同一条判断）；
+ *  - 三态第二行都是邮箱：状态由痣与菜单里那一段说，不跟账号身份抢那一行。
+ *    断线时的出路自己占一块，在侧栏上（AppShell 的 ConnectionEscape）；
  *  - 颜色不是唯一表达：降级时有可见文字，痣本身对读屏隐藏，另有 sr-only 播报；
  *  - 不会自愈的那一态给得出出路，且出路只在那一态出现；
  *  - 紧凑形态（移动 TopBar）没有第二行，痣的白环跟着所在的面走。
@@ -103,15 +103,17 @@ describe("账号块上的实时连接状态", () => {
     expect(pip().className).toContain("animate-pulse");
   });
 
-  it("不会自愈的那一态才改口：邮箱让位给状态", () => {
+  it("断线也不动那一行：邮箱留着，「有多旧」由侧栏那条降级条去说", () => {
     renderMenu();
     drive("disconnected");
 
-    expect(screen.getByText("Not connected · every 30s")).toBeTruthy();
+    // 邮箱曾经在这一态被顶掉，换成一行不可点的灰字——点下去只是把菜单打开。
+    // 出路现在自己占一块（AppShell 的 ConnectionEscape），这一行就没有理由再让位：
+    // 「我登的是哪个账号」与「我看到的东西有多旧」不必抢同一行。
+    expect(screen.getByText("dev@agentre.dev")).toBeTruthy();
+    expect(screen.queryByText("Not connected · every 30s")).toBeNull();
+    // 痣仍然照实说：三态都出（正向确认也是一句话）。
     expect(pip().className).toContain("bg-status-idle");
-    // 邮箱在触发器上让位了，但没从界面上消失——菜单里那一段仍然认得出账号。
-    expect(screen.queryAllByText("dev@agentre.dev")).toHaveLength(0);
-    expect(within(openMenu()).getByText("dev@agentre.dev")).toBeTruthy();
   });
 
   it("痣不是唯一表达：它对读屏隐藏，状态另有 sr-only 播报", () => {

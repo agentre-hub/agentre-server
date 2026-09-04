@@ -3979,6 +3979,79 @@ describe("会话详情：打开即标记已读", () => {
     );
   });
 
+  /**
+   * 机器离线时照样记得上。
+   *
+   * 这条对话的转录来自 server 镜像，已读也只是 server 上的一次写 —— 两件事都不需要
+   * 那台机器在线。而首次已读此前埋在中继那只 effect 里（`relayState === "connected"`
+   * 之后、还排在一次 `session.list` 往返**后面**），于是离线机器上的对话读完了也一直
+   * 亮着未读：刷新还在，侧栏那颗角标里也一直垫着它，谁都点不掉。
+   */
+  it("Given 机器离线 When 打开账号里的这条对话 Then 照样记一次已读", async () => {
+    const posted: unknown[] = [];
+    const onMarkedRead = vi.fn();
+    mockedApi.mockImplementation(async (path: string, init) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ conversation_id: "42", peer_fingerprint: "fp-1" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return {
+          frames: [
+            {
+              seq: 9,
+              method: "runtime.event",
+              params: {
+                conversationId: "42",
+                event: { kind: "text_delta", text: "离线也读得到的最后一句" },
+              },
+            },
+          ],
+          cursor: 9,
+          has_more: false,
+        };
+      if (path === "/v1/agent-sessions/read" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        return { last_read_at: 1_700_000_000_000 };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    // 机器不在线：借不到通道，没有中继客户端。
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            form="embedded"
+            onMarkedRead={onMarkedRead}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 这一屏确实被读到了（转录出得来），已读也就该记上。
+    expect(await screen.findByText(/离线也读得到的最后一句/)).toBeTruthy();
+    await vi.waitFor(() => expect(posted).toEqual([{ conversation_id: "42" }]));
+    // 宿主那一行跟着搬：未读徽标在它手上。
+    expect(onMarkedRead).toHaveBeenCalledWith("42", 1_700_000_000_000);
+  });
+
   it("同一条对话不重复记：换一条才再记一次", async () => {
     const posted: unknown[] = [];
     mockedApi.mockImplementation(async (path, init) => {

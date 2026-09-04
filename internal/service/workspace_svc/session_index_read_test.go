@@ -167,7 +167,7 @@ func TestSessionIndex_SearchAndFilterReachBothCountAndPage(t *testing.T) {
 	ctx, mSummary, _, _, svc := setupMirrorReadTest(t)
 
 	want := agent_session_repo.SummaryQuery{
-		UserID: 7, TitleLike: "登录", Lifecycle: agent_session_repo.LifecycleWaiting,
+		UserID: 7, TitleLike: "登录", Attention: agent_session_repo.AttentionNeedsAttention,
 	}
 	mSummary.EXPECT().CountSummaries(ctx, want).Return(int64(2), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
@@ -451,40 +451,42 @@ func TestSessionIndex_ProjectScope_AsksForBothReportedAndLocated(t *testing.T) {
 	assert.Equal(t, int64(7), page.Total)
 }
 
-// TestWaitingCount_AsksTheDatabaseToCountRatherThanFetching 覆盖侧栏「对话」那颗角标
-// 的取数：它要的只是一个数字。
+// TestAttentionCounts_AsksTheDatabaseToCountRatherThanFetching 覆盖侧栏「对话」那颗
+// 角标的取数：它要的只是两个数字。
 //
-// 判据与索引上「等你处理」那个 chip 是**同一个**（LifecycleWaiting），这一点必须由
-// 仓储判据本身保证而不是靠两处各写一遍：侧栏说有 3 条等你，点进去筛选却是 2 条，是
-// 一种没有任何地方会报错、而用户一眼就能看见的错。
+// 判据与索引上那几个 chip 是**同一个**（都走 attentionExpr），这一点必须由仓储判据
+// 本身保证而不是靠两处各写一遍：侧栏说有 3 条等你，点进去筛选却是 2 条，是一种没有
+// 任何地方会报错、而用户一眼就能看见的错——那正是 2026-09-04 之前的实况。
 //
-// 走 CountSummaries 而不是拉一页回来数长度：这条路在每一次进入任何页面时都会跑一遍，
+// 走 CountAttention 而不是拉一页回来数长度：这条路在每一次进入任何页面时都会跑一遍，
 // 而拉回来的那些标题、转录游标、项目归属，一个都不会被用到。
-func TestWaitingCount_AsksTheDatabaseToCountRatherThanFetching(t *testing.T) {
+func TestAttentionCounts_AsksTheDatabaseToCountRatherThanFetching(t *testing.T) {
 	ctx, mSummary, _, _, svc := setupMirrorReadTest(t)
 
-	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{
-		UserID: 7, Lifecycle: agent_session_repo.LifecycleWaiting,
-	}).Return(int64(3), nil)
+	mSummary.EXPECT().CountAttention(ctx, agent_session_repo.SummaryQuery{UserID: 7}).
+		Return(agent_session_repo.AttentionCounts{NeedsAttention: 3, Unread: 5}, nil)
 
-	got, err := svc.WaitingCount(ctx, 7)
+	got, err := svc.AttentionCounts(ctx, 7)
 
 	require.NoError(t, err)
-	assert.Equal(t, int64(3), got)
+	assert.Equal(t, int64(3), got.NeedsAttention)
+	assert.Equal(t, int64(5), got.Unread)
 }
 
-// TestWaitingCount_NothingWaitingIsZeroNotAnError 守空账号：0 是一个答案。
+// TestAttentionCounts_NothingWaitingIsZeroNotAnError 守空账号：0 是一个答案。
 // 侧栏那颗角标只在 > 0 时才画（ConsoleNavItem），所以 0 会让它整个不出现 —— 那正是
 // 对的，而一次失败会让调用方分不清「没人等你」和「问不出来」。
-func TestWaitingCount_NothingWaitingIsZeroNotAnError(t *testing.T) {
+func TestAttentionCounts_NothingWaitingIsZeroNotAnError(t *testing.T) {
 	ctx, mSummary, _, _, svc := setupMirrorReadTest(t)
 
-	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(0), nil)
+	mSummary.EXPECT().CountAttention(ctx, gomock.Any()).
+		Return(agent_session_repo.AttentionCounts{}, nil)
 
-	got, err := svc.WaitingCount(ctx, 7)
+	got, err := svc.AttentionCounts(ctx, 7)
 
 	require.NoError(t, err)
-	assert.Zero(t, got)
+	assert.Zero(t, got.NeedsAttention)
+	assert.Zero(t, got.Unread)
 }
 
 // 浏览器发起、落在 agentred 上的那条对话：位置那一半的指纹必须是**承载**它的那台

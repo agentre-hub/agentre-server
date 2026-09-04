@@ -467,6 +467,12 @@ func (s *fakeStore) ListSummariesPage(
 	return nil, nil
 }
 
+func (s *fakeStore) CountAttention(
+	_ context.Context, _ agent_session_repo.SummaryQuery,
+) (agent_session_repo.AttentionCounts, error) {
+	return agent_session_repo.AttentionCounts{}, nil
+}
+
 func (s *fakeStore) CountSummaries(_ context.Context, _ agent_session_repo.SummaryQuery) (int64, error) {
 	return 0, nil
 }

@@ -297,19 +297,18 @@ describe("overview: 摘要四格", () => {
 
 // ── 顶栏：Fresh 指示与范围分段控件 ───────────────────────────────────────
 describe("overview: 顶栏", () => {
-  it("Fresh 仅在有在线 agentred 时渲染", async () => {
+  /*
+    顶栏此前有一条绿点 + 「桌面端已连接」。它说的是**有没有机器在线**，而账号块上
+    那颗痣说的是**这一屏还是不是实时的** —— 两件事，同一种绿点、同一族措辞，还会
+    互相矛盾（通道断了，顶栏照说「已连接」）。实时性收成一个出口之后这条就撤了；
+    在线机器数本来就有更好的落点：这一页的「Devices online」tile 与侧栏的 2/3。
+  */
+  it("顶栏不再有第二个连接说法", async () => {
     serve();
     renderOverview();
     expect(
       (await screen.findAllByText("Overview")).length,
     ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Desktop connected")).toBeTruthy();
-  });
-
-  it("没有在线 agentred 时不渲染「桌面端已连接」", async () => {
-    serve({ "/v1/devices": { devices: [devices[1]] } });
-    renderOverview();
-    await screen.findByText("Conversations");
     expect(screen.queryByText("Desktop connected")).toBeNull();
   });
 
@@ -863,13 +862,13 @@ describe("overview: 移动端", () => {
   });
 
   /**
-   * 顶栏在 390 宽的手机上放不下「标题 + Desktop connected + 三档范围 + 头像 +
-   * 两颗图标按钮」：2026-08-31 量到范围控件（154–304）压在头像（258–286）和语言
-   * 按钮（302–336）上，标题被截成「O...」。窄屏的顶栏只留标题与账号那一组，
-   * 页面自己的两样东西下沉到内容第一行（与 Chat 的 ownHeader 同一条思路：
-   * 移动端是另一棵树，不是压扁的桌面端）。
+   * 顶栏在 390 宽的手机上放不下「标题 + 三档范围 + 头像 + 两颗图标按钮」：
+   * 2026-08-31 量到范围控件（154–304）压在头像（258–286）和语言按钮（302–336）
+   * 上，标题被截成「O...」。窄屏的顶栏只留标题与账号那一组，页面自己的控件下沉到
+   * 内容第一行（与 Chat 的 ownHeader 同一条思路：移动端是另一棵树，不是压扁的
+   * 桌面端）。
    */
-  it("窄屏顶栏不摆页面自己的控件：范围分段与在线指示下沉到内容里", async () => {
+  it("窄屏顶栏不摆页面自己的控件：范围分段下沉到内容里", async () => {
     setViewport(true);
     serve();
     renderOverview();
@@ -878,10 +877,6 @@ describe("overview: 移动端", () => {
     const rangeGroup = screen.getByRole("group", { name: "Stats range" });
     expect(screen.getByRole("banner").contains(rangeGroup)).toBe(false);
     expect(screen.getByRole("main").contains(rangeGroup)).toBe(true);
-
-    const fresh = screen.getByText("Desktop connected");
-    expect(screen.getByRole("banner").contains(fresh)).toBe(false);
-    expect(screen.getByRole("main").contains(fresh)).toBe(true);
   });
 
   it("宽屏照旧摆在顶栏里", async () => {
@@ -944,26 +939,29 @@ describe("overview: 跟着通道走", () => {
     mockedApi.mockClear();
 
     // 一条对话存进账号 = 统计变了，重取的是统计，不是 Agent 名单。外壳侧栏那颗
-    // 「等你处理」角标订的是同一类信号，所以这一发有两个订阅者应答——与上面设备
+    // 「需要你」角标订的是同一类信号，所以这一发有两个订阅者应答——与上面设备
     // 那一段同理，各取各的那一份。
     deliver(accountChannel.AccountChannelMirrorChanged);
     await waitFor(() => expect(pathsCalled().length).toBeGreaterThan(0));
     await waitFor(() =>
       expect(new Set(pathsCalled().map((p) => p.split("?")[0]))).toEqual(
-        new Set(["/v1/stats/overview", "/v1/agent-sessions/waiting-count"]),
+        new Set(["/v1/stats/overview", "/v1/agent-sessions/attention-count"]),
       ),
     );
   });
 
-  it("设备上线之后顶栏当场跟着变，不用刷新整页", async () => {
+  it("设备上线之后这一页当场跟着变，不用刷新整页", async () => {
+    // 观察点是在线 tile 上那句「谁离线了」：它读的是 /v1/devices 那一份名单，
+    // 与撤掉的顶栏指示同一个数据源，所以订阅还活着这件事照样验得出来。
     serve({ "/v1/devices": { devices: [{ ...devices[0], online: false }] } });
     renderOverview();
-    await waitFor(() => expect(pathsCalled()).toContain("/v1/devices"));
-    expect(screen.queryByText("Desktop connected")).toBeNull();
+    expect(await screen.findByText("Home NUC is offline")).toBeTruthy();
 
     serve({ "/v1/devices": { devices: [devices[0]] } });
     deliver(accountChannel.AccountChannelDevicePresence);
 
-    expect(await screen.findByText("Desktop connected")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByText("Home NUC is offline")).toBeNull(),
+    );
   });
 });

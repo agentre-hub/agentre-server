@@ -384,7 +384,9 @@ describe("对话页 = 统一会话索引", () => {
       within(chrome).getByRole("button", { name: /Language/i }),
     ).toBeTruthy();
     expect(within(chrome).getByRole("button", { name: /Theme/i })).toBeTruthy();
-    expect(within(chrome).getByText("Desktop connected")).toBeTruthy();
+    // 「桌面端已连接」不在这条带上了：实时性收成账号块那一个出口，机器在线数由
+    // 侧栏设备项的 2/3 与设备页说。
+    expect(within(chrome).queryByText("Desktop connected")).toBeNull();
   });
 
   it("选中一条对话：那簇控件进详情头部的右端，右栏不再多叠一条带", async () => {
@@ -396,7 +398,7 @@ describe("对话页 = 统一会话索引", () => {
     expect(
       within(slot).getByRole("button", { name: /Language/i }),
     ).toBeTruthy();
-    expect(within(slot).getByText("Desktop connected")).toBeTruthy();
+    expect(within(slot).queryByText("Desktop connected")).toBeNull();
     // 详情头部自己就是顶带，右栏不该再单画一条——那正是要消掉的那 52px。
     expect(screen.queryByTestId("chat-chrome")).toBeNull();
   });
@@ -454,7 +456,7 @@ describe("对话页 = 统一会话索引", () => {
     // 来源；不传的话详情只能反过来去认领自己那一行，同号会话还可能认岔。
     expect(embedded.getAttribute("data-peer-fingerprint")).toBe("fp-1");
     expect(screen.getByRole("link", { name: "Chat" }).textContent).toBe("Chat");
-    expect(screen.getByText("Desktop connected")).toBeTruthy();
+    expect(screen.queryByText("Desktop connected")).toBeNull();
   });
 
   it("浏览器发起、agentred 承载的项目会话：按承载机器打开详情", async () => {

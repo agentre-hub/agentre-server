@@ -1,3 +1,10 @@
+import { RefreshCw, Unplug } from "lucide-react";
+import { useTranslation } from "react-i18next";
+
+import {
+  retryAccountChannel,
+  useAccountChannelState,
+} from "@/hooks/use-account-channel";
 import type { AccountChannelState } from "@/lib/accountChannel";
 import { cn, statusConfig, type AgentStatus } from "@agentre-hub/agentre-ui";
 
@@ -66,5 +73,84 @@ export function ConnectionPip({
         state === "connecting" && "animate-pulse motion-reduce:animate-none",
       )}
     />
+  );
+}
+
+/**
+ * 断线时的出路：说得出后果，**一下点到重连**。
+ *
+ * 「未连接」此前只有两个说法：账号块第二行顶掉邮箱的一行灰字（不可点，点下去只是
+ * 把菜单打开），和账号菜单第三段里的「重新连接」（要先知道那个菜单里有这么一项）。
+ * 收起成 56px 之后更彻底：只剩一颗灰痣，与正常态几乎没有分别。
+ *
+ * 只画不会自愈的那一态。`connecting` 正在退避重拨，按一下只会打断它自己的节奏
+ * （见 relayConnection 的 handleClose）；`connected` 没有可修的东西。
+ *
+ * 底色用琥珀而不是那颗痣的中性灰：痣答的是「这一屏有多新」，一件不是错误的事；
+ * 这一块答的是「有件事等你按一下」，与「等你处理」的角标同一族。红仍然留给真的
+ * 出错——见 statusConfig 的 error。
+ */
+export function ConnectionEscape({ variant }: { variant: "bar" | "icon" }) {
+  const { t } = useTranslation();
+  const state = useAccountChannelState();
+  if (state !== "disconnected") return null;
+
+  const degraded = t("appShell.connection.degraded", {
+    status: t(connectionCopy.disconnected.labelKey),
+  });
+  const retry = t("appShell.connection.retry");
+
+  if (variant === "icon") {
+    // 56px 图标栏与移动 TopBar：排不下那句话，名字里说全。
+    return (
+      <button
+        type="button"
+        data-testid="connection-escape"
+        aria-label={`${degraded} · ${retry}`}
+        title={`${degraded} · ${retry}`}
+        onClick={retryAccountChannel}
+        className={cn(
+          "flex size-8 shrink-0 items-center justify-center self-center rounded-md",
+          "bg-status-waiting-bg text-status-waiting-text",
+          "hover:brightness-95 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+        )}
+      >
+        <Unplug className="size-4" aria-hidden="true" />
+      </button>
+    );
+  }
+
+  /*
+    展开态：整条都可点。可访问名由内容给出，不另设 aria-label——那会把「有多旧」
+    这句话从读屏用户的名字里抹掉。
+
+    状态与动作分两行，不并排：224px 减去两层内边距只剩 ~170px，英文那句
+    「Not connected · every 30s」与「Reconnect」并排时前者会被截成
+    「Not connected ·…」——被截掉的正好是「有多旧」这个唯一有信息量的部分。
+  */
+  return (
+    <button
+      type="button"
+      data-testid="connection-escape"
+      onClick={retryAccountChannel}
+      className={cn(
+        "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left",
+        "bg-status-waiting-bg text-status-waiting-text",
+        "hover:brightness-95 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+      )}
+    >
+      <span className="flex w-full items-center gap-1.5">
+        <Unplug className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-3xs leading-tight">
+          {degraded}
+        </span>
+      </span>
+      <span className="flex w-full items-center gap-1.5">
+        <RefreshCw className="size-3.5 shrink-0" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-3xs font-semibold">
+          {retry}
+        </span>
+      </span>
+    </button>
   );
 }

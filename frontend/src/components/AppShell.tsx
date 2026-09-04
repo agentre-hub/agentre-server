@@ -2,17 +2,18 @@ import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Building2,
+  ChevronLeft,
+  ChevronRight,
   KanbanSquare,
   LayoutDashboard,
   MessagesSquare,
   Monitor,
-  PanelLeftClose,
-  PanelLeftOpen,
   Settings as SettingsIcon,
   SquareTerminal,
 } from "lucide-react";
 
 import AppControls from "@/components/AppControls";
+import { ConnectionEscape } from "@/components/ConnectionStatus";
 import { ConsoleNavItem } from "@/components/console";
 import { MobileTabBar, type MobileTab } from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
@@ -26,8 +27,11 @@ import {
 } from "@/lib/accountChannel";
 import { fetchDevices } from "@/lib/devices";
 import { readNavCollapsed, writeNavCollapsed } from "@/lib/navCollapsed";
-import { fetchWaitingCount } from "@/lib/waitingCount";
-import { Button, cn } from "@agentre-hub/agentre-ui";
+import {
+  fetchAttentionCounts,
+  type AttentionCounts,
+} from "@/lib/attentionCount";
+import { cn } from "@agentre-hub/agentre-ui";
 
 /** /v1/devices 只取算设备 Meta 需要的字段。 */
 interface DeviceMeta {
@@ -41,8 +45,10 @@ interface NavItem {
   Icon: typeof LayoutDashboard;
   /** 设备：/v1/devices 在线/全部，与总览 tile 同一口径（取到才渲染 Meta）。 */
   meta?: DeviceMeta | null;
-  /** 对话：账号里此刻等你处理的条数（取到且 > 0 才渲染角标）。 */
+  /** 对话：账号里此刻需要你的条数（取到且 > 0 才渲染角标）。 */
   badge?: number | null;
+  /** 那个数是怎么来的（「N 条等你处理 · M 条未读」）。 */
+  badgeLabel?: string | null;
 }
 
 /**
@@ -88,9 +94,9 @@ export default function AppShell({
   const isMobile = useIsMobile();
   const { me } = useMe();
   const [deviceMeta, setDeviceMeta] = useState<DeviceMeta | null>(null);
-  // 等你处理的对话条数。null = 还没取到 / 取不到，那时角标整个不画——一个停在旧值上的
-  // 数字比没有数字更糟：它会让人以为没有新的东西在等自己。
-  const [waiting, setWaiting] = useState<number | null>(null);
+  // 需要你的对话条数，按理由分开。null = 还没取到 / 取不到，那时角标整个不画——一个
+  // 停在旧值上的数字比没有数字更糟：它会让人以为没有新的东西在等自己。
+  const [attention, setAttention] = useState<AttentionCounts | null>(null);
   // 收起态从本机偏好起手，而不是每次进来都从展开开始：这是每天要重做一遍的选择。
   const [navCollapsed, setNavCollapsed] = useState(readNavCollapsed);
   const toggleNav = useCallback(() => {
@@ -129,23 +135,52 @@ export default function AppShell({
   }, []);
   useAccountChannel([AccountChannelDevicePresence], reloadDeviceMeta);
 
-  // 「等你处理」的条数跟着镜像变。它与上面那条各订各的种类：别人发条消息不该让侧栏
+  // 「需要你」的条数跟着镜像变。它与上面那条各订各的种类：别人发条消息不该让侧栏
   // 重取一遍设备，一台机器上下线也不该让它重数一遍对话。共用的是同一条 websocket
   // （use-account-channel 的注释），多的只是一份订阅者名单。
-  const reloadWaiting = useCallback(() => {
-    fetchWaitingCount()
-      .then((r) => setWaiting(r.waiting))
+  const reloadAttention = useCallback(() => {
+    fetchAttentionCounts()
+      .then(setAttention)
       .catch(() => {});
   }, []);
   useAliveEffect((alive) => {
-    fetchWaitingCount()
-      .then((r) => {
+    fetchAttentionCounts()
+      .then((counts) => {
         if (!alive()) return;
-        setWaiting(r.waiting);
+        setAttention(counts);
       })
       .catch(() => {});
   }, []);
-  useAccountChannel([AccountChannelMirrorChanged], reloadWaiting);
+  useAccountChannel([AccountChannelMirrorChanged], reloadAttention);
+
+  /*
+    角标上那一个数字，与拆开说明它的那句话。
+
+    角标画的是**和**：它回答「还有几条要我管」，而「挡在那里等我按」与「跑出了新
+    东西我还没看」都属于这个问题。分成两颗并排的角标会让 34px 的一行开始排版，也
+    会逼用户在扫一眼导航时做加法。
+
+    但两件事不能就这么糊成一个数：拆开的那句话落在 title 与读屏文字上（NavBadge），
+    「3」从此说得出自己是 2 + 1 还是 0 + 3。0 的那一半不进这句话——一句「0 条等你
+    处理」是纯噪声。
+
+    counts 为 null（还没取到 / 取不到）时两样都是 null，角标整个不画。
+  */
+  const badge = attention ? attention.needsAttention + attention.unread : null;
+  const badgeLabel = attention
+    ? [
+        attention.needsAttention > 0
+          ? t("appShell.nav.chatBadge.needsAttention", {
+              count: attention.needsAttention,
+            })
+          : null,
+        attention.unread > 0
+          ? t("appShell.nav.chatBadge.unread", { count: attention.unread })
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
 
   // 第 4 项「组织」（规格 2026-08-18「server 端的组织管理面」）：与桌面端同形的
   // 组织索引 + 详情，外壳仍是这份 224px 带文字 SideNav。审计无后端，不进主导航。
@@ -159,7 +194,8 @@ export default function AppShell({
       to: "/chat",
       labelKey: "nav.chat",
       Icon: MessagesSquare,
-      badge: waiting,
+      badge,
+      badgeLabel,
     },
     // 第 3 项「看板」（规格 2026-08-27「看板：项目维度、筛选与呈现重构」）：与桌面端
     // 同一族共享呈现件画的那块板，账号级任务与标签都住在 sync_objects 里。
@@ -182,8 +218,8 @@ export default function AppShell({
   const brand = (
     <div
       className={cn(
-        "flex gap-2 p-1.5",
-        navCollapsed ? "flex-col items-center" : "items-center",
+        "flex h-10 items-center gap-2 p-1.5",
+        navCollapsed && "justify-center",
       )}
     >
       <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary">
@@ -202,25 +238,48 @@ export default function AppShell({
           </span>
         </div>
       )}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className={cn("size-7 shrink-0", !navCollapsed && "ml-auto")}
-        aria-label={t(
-          navCollapsed ? "appShell.nav.expand" : "appShell.nav.collapse",
-        )}
-        title={t(
-          navCollapsed ? "appShell.nav.expand" : "appShell.nav.collapse",
-        )}
-        onClick={toggleNav}
-      >
-        {navCollapsed ? (
-          <PanelLeftOpen className="size-4" aria-hidden="true" />
-        ) : (
-          <PanelLeftClose className="size-4" aria-hidden="true" />
-        )}
-      </Button>
     </div>
+  );
+
+  const toggleLabel = t(
+    navCollapsed ? "appShell.nav.expand" : "appShell.nav.collapse",
+  );
+
+  /*
+    收放开关钉在侧栏右边框上，而不是长在 brand 带里。
+
+    此前它在 brand 带里：展开时贴右端，收起时那一带改成上下排，于是 brand 区从
+    40px 变成 72px、整列导航跟着下移——收放两次，眼睛要重新找两次开关。它是这条栏
+    上唯一一个会改变自身位置的控件，偏偏又是那个「要能马上找回来」的。
+
+    钉在边框上之后，两态同一个 y（相对侧栏定位，不随内边距变），稳态下侧栏一个像素
+    都不给它：平时透明，鼠标进这条栏或键盘聚焦到它时才显形。顶栏那个位置不能用——
+    `ownHeader` 的页面自己画顶栏（移动端对话索引），把开关放上去等于让「侧栏能不能
+    回来」取决于当前在哪一页。
+
+    不配快捷键：这是一块偶尔来一次的 web 控制台，⌘B 在浏览器里另有主人（书签栏），
+    在输入框里是加粗，为一条一天按不了两次的收放去抢它不值。
+  */
+  const navToggle = (
+    <button
+      type="button"
+      aria-label={toggleLabel}
+      title={toggleLabel}
+      onClick={toggleNav}
+      className={cn(
+        "absolute top-5 -right-3 z-10 flex size-6 items-center justify-center rounded-full",
+        "border border-border bg-card text-muted-foreground shadow-overlay",
+        "opacity-0 transition-opacity hover:text-foreground",
+        "group-hover/nav:opacity-100 focus-visible:opacity-100",
+        "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+      )}
+    >
+      {navCollapsed ? (
+        <ChevronRight className="size-3.5" aria-hidden="true" />
+      ) : (
+        <ChevronLeft className="size-3.5" aria-hidden="true" />
+      )}
+    </button>
   );
 
   const navItems = (
@@ -233,6 +292,7 @@ export default function AppShell({
           Icon={item.Icon}
           meta={item.meta ? `${item.meta.online}/${item.meta.total}` : null}
           badge={item.badge}
+          badgeLabel={item.badgeLabel}
           collapsed={navCollapsed}
         />
       ))}
@@ -249,6 +309,10 @@ export default function AppShell({
 
   // 桌面 SideNav 第 5 项是设置，移动 TabBar 不要它：窄屏留给高频目的地，
   // 设置从 TopBar 的用户菜单进入。
+  //
+  // 角标跟着一起过去：这里此前只搬 key/to/label/Icon，于是「有多少条在等你」在窄屏
+  // 上完全看不到——而底部这条栏正是移动端的主导航。设备那格 meta 仍不搬：一行 mono
+  // 数字在 tab 底下排不下，那一维在移动端本来就由设备页自己说。
   const mobileTabs: MobileTab[] = NAV_ITEMS.filter(
     (item) => item.to !== "/settings",
   ).map((item) => ({
@@ -256,6 +320,8 @@ export default function AppShell({
     to: item.to,
     label: t(item.labelKey),
     Icon: item.Icon,
+    badge: item.badge,
+    badgeLabel: item.badgeLabel,
   }));
 
   /*
@@ -270,14 +336,18 @@ export default function AppShell({
         <nav
           aria-label={t("common.appName")}
           className={cn(
-            "flex shrink-0 flex-col gap-3 border-r border-border bg-sidebar transition-[width]",
+            "group/nav relative flex shrink-0 flex-col gap-3 border-r border-border bg-sidebar transition-[width]",
             navCollapsed ? "w-[56px] p-2" : "w-[224px] p-3",
           )}
         >
           {brand}
+          {navToggle}
           {navItems}
           <div className="flex-1" />
           <div className="border-t border-border" />
+          {/* 断线时的出路挨着账号块：那颗痣就在这里，说的是同一件事的两面
+              （见 ConnectionStatus 的 ConnectionEscape）。稳态下它整个不渲染。 */}
+          <ConnectionEscape variant={navCollapsed ? "icon" : "bar"} />
           {account}
         </nav>
       )}
@@ -295,6 +365,8 @@ export default function AppShell({
             ) : null}
             <span className="flex-1" />
             {right}
+            {/* 移动端没有侧栏，这一枚就落在 TopBar 上：断线在窄屏上一样要有出路。 */}
+            {isMobile && <ConnectionEscape variant="icon" />}
             {isMobile && mobileAccount}
             <AppControls />
           </header>

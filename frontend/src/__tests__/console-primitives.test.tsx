@@ -387,6 +387,40 @@ describe("MobileTabBar（A6Z3k）", () => {
     );
     assertNoNarration(document.body, "MobileTabBar");
   });
+
+  // 窄屏此前完全看不到「有多少条在等你」：外壳派生移动 tabs 时把 badge 丢掉了。
+  // 底部这条栏是移动端的主导航，那颗角标该在的地方就是这里。
+  it("角标与侧栏同一形状：>0 才画，带 title 说明它是什么", () => {
+    render(
+      <MemoryRouter initialEntries={["/overview"]}>
+        <MobileTabBar
+          items={[items[0], { ...items[1], badge: 3, badgeLabel: "3 unread" }]}
+        />
+      </MemoryRouter>,
+    );
+    const chat = screen.getByRole("link", { name: /Chat/ });
+    expect(within(chat).getByText("3")).toBeTruthy();
+    expect(within(chat).getByTitle("3 unread")).toBeTruthy();
+  });
+
+  it("0 与「没问出来」都不画——一个显示出来的 0 会被读成「都处理完了」", () => {
+    render(
+      <MemoryRouter initialEntries={["/overview"]}>
+        <MobileTabBar
+          items={[
+            { ...items[0], badge: 0 },
+            { ...items[1], badge: null },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    expect(
+      within(screen.getByRole("link", { name: /Overview/ })).queryByText("0"),
+    ).toBeNull();
+    expect(
+      within(screen.getByRole("link", { name: /Chat/ })).queryByText(/^\d+$/),
+    ).toBeNull();
+  });
 });
 
 /**

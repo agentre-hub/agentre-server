@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
+import { attentionReasonOf } from "@/lib/attentionAdapter";
 import { api } from "@/lib/api";
 import type { DeviceItem } from "@/lib/devices";
 import type { IndexAxis } from "@/lib/sessionAxes";
@@ -46,7 +47,7 @@ export interface SessionIndexData {
   mirrorRows: MirroredSession[];
   /** 账号里一共保存过几条（不带任何搜索与筛选）；还没问出来时 null。 */
   accountTotal: number | null;
-  /** 「等你处理」chip 上那个数。 */
+  /** 「未读」chip 上那个数。 */
   unreadTotal: number;
   /** 这一次取数成功过没有。 */
   loaded: boolean;
@@ -129,7 +130,7 @@ export function useSessionIndex({
   const [indexNonce, setIndexNonce] = useState(0);
   /** 时间轴上「加载更多」追加进来的页。分组轴的溢出走各组自己的入口（任务 4）。 */
   const [appended, setAppended] = useState<MirroredSession[]>([]);
-  /** 「等你处理」chip 上那个数，同样是服务端在完整集合上数出来的。 */
+  /** 「未读」chip 上那个数，同样是服务端在完整集合上数出来的。 */
   const [unreadTotal, setUnreadTotal] = useState(0);
   /** 平铺那一档的翻页位置。null = 没有下一页。 */
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -334,8 +335,17 @@ export function useSessionIndex({
     const row = mirrorRowsRef.current.find(
       (r) => r.conversation_id === conversationId,
     );
+    // 「本来算不算未读」不在这里判：判据是共享包 computeAttention 那一档，服务端
+    // 数这个徽标时用的也是它（attentionExpr）。此前这里自写了一遍两列相比，于是
+    // 打开一条**在跑的**对话会把徽标减一——而它压根就没被数进去。
     const wasUnread =
-      row !== undefined && (row.last_message_at ?? 0) > (row.last_read_at ?? 0);
+      row !== undefined &&
+      attentionReasonOf({
+        lifecycleState: row.lifecycle_state ?? "",
+        waitingForInput: row.waiting_for_input,
+        updatedAt: row.last_message_at ?? 0,
+        lastReadAt: row.last_read_at ?? 0,
+      }) === "unread";
     setOptimisticRead((prev) => {
       const next = new Map(prev);
       next.set(key, Math.max(prev.get(key) ?? 0, lastReadAt));
@@ -357,9 +367,16 @@ export function useSessionIndex({
     // 不越过 0：推算只在两次取数之间生效，负数在界面上没有意义。
     const bump = (n: number) => Math.max(0, n + delta);
     setAccountTotal((prev) => (prev === null ? prev : bump(prev)));
-    // 「未读」那个徽标数的是同一批对话里没读过的那些。刚保存进来的必然没读过；
-    // 删掉的那条如果本来算未读，也要跟着下来。
-    if (delta > 0 || (row.updatedAt ?? 0) > 0) setUnreadTotal(bump);
+    // 「未读」那个徽标数的是同一批对话里没读过、且没有更强理由的那些。判据同样走
+    // attentionReasonOf——刚保存进来的那条未必进得了这个徽标（它可能正在跑），而
+    // 删掉的那条只在它本来就被数进去时才跟着下来。
+    //
+    // `saved: true` 是**故意**盖上的：这两个动作的两端各在账号里的一侧（保存后进、
+    // 删除前在），而机器轴上那些还没保存的行带的是 saved=false，照原样问会一律得到
+    // null，保存进来的第一条永远不进徽标。
+    if (attentionReasonOf({ ...row, saved: true }) === "unread") {
+      setUnreadTotal(bump);
+    }
   }, []);
 
   /**

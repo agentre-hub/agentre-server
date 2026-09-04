@@ -142,17 +142,21 @@ func (m *AgentSession) Transcript(c *gin.Context, req *api.TranscriptRequest) (*
 	return resp, nil
 }
 
-// WaitingCount 交出账号里此刻等你处理的对话条数，供侧栏那颗角标用。
+// AttentionCount 交出账号里此刻需要你的对话条数，供侧栏那颗角标用。
 //
-// 判据不在这里：它与索引上「等你处理」那个 chip 共用仓储那一侧同一个
-// LifecycleWaiting（workspace_svc.WaitingCount 的注释）。侧栏说有 3 条等你、点进去
-// 筛选却是 2 条，是一种没有任何地方会报错、而用户一眼就能看见的错。
-func (m *AgentSession) WaitingCount(
-	c *gin.Context, _ *api.WaitingCountRequest,
-) (*api.WaitingCountResponse, error) {
-	n, err := workspace_svc.SessionRead().WaitingCount(c.Request.Context(), ginctx.UserID(c))
+// 判据不在这里：它与索引上那几个 chip 共用仓储那一侧同一个 attentionExpr
+// （workspace_svc.AttentionCounts 的注释）。侧栏说有 3 条等你、点进去筛选却是 2 条，
+// 是一种没有任何地方会报错、而用户一眼就能看见的错。
+func (m *AgentSession) AttentionCount(
+	c *gin.Context, _ *api.AttentionCountRequest,
+) (*api.AttentionCountResponse, error) {
+	counts, err := workspace_svc.SessionRead().AttentionCounts(
+		c.Request.Context(), ginctx.UserID(c))
 	if err != nil {
 		return nil, err
 	}
-	return &api.WaitingCountResponse{Waiting: n}, nil
+	return &api.AttentionCountResponse{
+		NeedsAttention: counts.NeedsAttention,
+		Unread:         counts.Unread,
+	}, nil
 }

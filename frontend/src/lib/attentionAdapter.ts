@@ -12,12 +12,13 @@
 import {
   AGENTRE_UI_NAMESPACE,
   computeAttention,
+  lifecycleToAgentStatus,
   reasonToPillText as reasonToPillTextWith,
+  type AgentStatus,
   type AttentionReason,
 } from "@agentre-hub/agentre-ui";
 
 import i18n from "@/i18n";
-import { toAgentStatus } from "@/lib/sessionView";
 
 /** 判定要用到的那几格。宿主的行比它宽，这里只声明读到的部分。 */
 export interface AttentionRowInput {
@@ -48,6 +49,24 @@ export function attentionReasonOf(
     needsAttention: !!row.waitingForInput,
     lastMessageAt: inAccount ? (row.updatedAt ?? 0) : 0,
     lastReadAt: inAccount ? (row.lastReadAt ?? 0) : 0,
+  });
+}
+
+/**
+ * 一行的生命周期 → 展示用的 `AgentStatus`。判定在共享包里（`lifecycleToAgentStatus`
+ * 是两端唯一的一份），这里只是把本站行上的两格喂进去。
+ *
+ * 它住在 attention 这一层而不是 `lib/sessionView`：`sessionView` 的
+ * `matchesSessionFilter` 现在要问 `attentionReasonOf`，而后者又要 agentStatus——
+ * 反过来放会绕成一个环。`sessionView` 从这里再导出一次，调用点一个都不用改。
+ */
+export function toAgentStatus(s: {
+  lifecycleState: string;
+  waitingForInput?: boolean;
+}): AgentStatus {
+  return lifecycleToAgentStatus({
+    lifecycleState: s.lifecycleState,
+    waiting: s.waitingForInput,
   });
 }
 

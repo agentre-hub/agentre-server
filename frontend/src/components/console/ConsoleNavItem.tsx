@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 
+import { NavBadge } from "@/components/console/NavBadge";
 import { cn } from "@agentre-hub/agentre-ui";
 
 /**
@@ -24,6 +25,7 @@ export function ConsoleNavItem({
   label,
   Icon,
   badge,
+  badgeLabel,
   meta,
   dot,
   collapsed = false,
@@ -32,8 +34,10 @@ export function ConsoleNavItem({
   to: string;
   label: string;
   Icon: LucideIcon;
-  /** 账号里已保存的对话数：>0 才渲染琥珀徽标。 */
+  /** 需要你的对话条数：>0 才渲染琥珀徽标（见 NavBadge）。 */
   badge?: number | null;
+  /** 那个数是怎么来的（「N 条等你处理 · M 条未读」）。 */
+  badgeLabel?: string | null;
   /** 设备在线/全部等 mono 元信息。 */
   meta?: string | null;
   /** 未读/告警圆点，仅在有真实数据时传入。 */
@@ -42,8 +46,6 @@ export function ConsoleNavItem({
   collapsed?: boolean;
   onClick?: () => void;
 }) {
-  const hasBadge = typeof badge === "number" && badge > 0;
-
   return (
     <NavLink
       to={to}
@@ -62,16 +64,13 @@ export function ConsoleNavItem({
       >
         {label}
       </span>
-      {hasBadge ? (
-        <span
-          className={cn(
-            "flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-status-waiting px-1.5 text-3xs font-semibold text-status-waiting-foreground",
-            collapsed && "absolute right-0.5 top-0 h-[15px] min-w-[15px] px-1",
-          )}
-        >
-          {badge}
-        </span>
-      ) : null}
+      <NavBadge
+        count={badge}
+        label={badgeLabel}
+        className={cn(
+          collapsed && "absolute right-0.5 top-0 h-[15px] min-w-[15px] px-1",
+        )}
+      />
       {meta && !collapsed ? (
         <span className="shrink-0 font-mono text-3xs font-semibold text-muted-foreground">
           {meta}

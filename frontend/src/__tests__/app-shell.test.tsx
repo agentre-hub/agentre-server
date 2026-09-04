@@ -11,6 +11,7 @@
  *     不阻塞整体渲染（无数据态）。对话导航不摆已保存总数，避免误读成未读数。
  */
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -138,17 +139,18 @@ describe("桌面 SideNav（任务 2 外壳，R969Y）", () => {
     expect(screen.getByText("page content")).toBeTruthy();
   });
 
-  it("有数据：对话导航挂「等你处理」角标，设备 Meta 与账号区照常显示", async () => {
+  it("有数据：对话导航挂「需要你」角标，设备 Meta 与账号区照常显示", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return me;
       if (path === "/v1/devices") return { devices };
-      if (path === "/v1/agent-sessions/waiting-count") return { waiting: 3 };
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 2, unread: 1 };
       throw new Error("unexpected: " + path);
     });
     renderShell();
     expect(await screen.findByText("2/3")).toBeTruthy(); // /v1/devices 在线/全部
-    // 角标数的是**等你处理**，不是已保存总数：后者摆在这里会被读成「有 N 条新的」，
-    // 而它其实一天都不会变。
+    // 角标数的是**需要你的那些**（等你处理 + 未读），不是已保存总数：后者摆在这里
+    // 会被读成「有 N 条新的」，而它其实一天都不会变。
     const chat = screen.getByRole("link", { name: /^Chat/ });
     expect(await within(chat).findByText("3")).toBeTruthy();
     // 为了一个数字拉一整页索引是这条路径上最贵的一件事——它每次进任何页面都跑。
@@ -259,6 +261,26 @@ describe("账号菜单（任务 7）", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  // 窄屏与侧栏同源：同一个数、同一句说明。此前 mobileTabs 派生时把 badge 丢了，
+  // 手机上因此完全看不到有多少条在等你。
+  it("移动 TabBar 的对话项带着与侧栏同一个角标", async () => {
+    mockMobileViewport();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return me;
+      if (path === "/v1/devices") return { devices };
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 2, unread: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    renderShell();
+
+    const chat = await screen.findByRole("link", { name: /Chat/ });
+    expect(await within(chat).findByText("3")).toBeTruthy();
+    expect(
+      within(chat).getByTitle("2 conversations need you · 1 unread"),
+    ).toBeTruthy();
+  });
+
   it("移动 TabBar 固定为 5 项，不把桌面末项设置挤进去", async () => {
     mockMobileViewport();
     renderShell();
@@ -344,7 +366,8 @@ describe("控制台外壳：设备 Meta 跟着通道走", () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return me;
       if (path === "/v1/devices") return { devices };
-      if (path === "/v1/agent-sessions/waiting-count") return { waiting: 0 };
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 0, unread: 0 };
       throw new Error("unexpected: " + path);
     });
     renderShell();
@@ -360,14 +383,14 @@ describe("控制台外壳：设备 Meta 跟着通道走", () => {
   });
 });
 
-describe("侧栏「对话」角标（等你处理）", () => {
-  function serve(waiting: unknown) {
+describe("侧栏「对话」角标（等你处理 + 未读）", () => {
+  function serve(counts: unknown, unread = 0) {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return me;
       if (path === "/v1/devices") return { devices };
-      if (path === "/v1/agent-sessions/waiting-count") {
-        if (waiting instanceof Error) throw waiting;
-        return { waiting };
+      if (path === "/v1/agent-sessions/attention-count") {
+        if (counts instanceof Error) throw counts;
+        return { needs_attention: counts, unread };
       }
       throw new Error("unexpected: " + path);
     });
@@ -405,12 +428,36 @@ describe("侧栏「对话」角标（等你处理）", () => {
     expect(await within(chat).findByText("1")).toBeTruthy();
   });
 
+  // 侧栏与筛选 chip 此前各问各的：侧栏数 waiting_for_input，chip 数
+  // last_message_at>last_read_at，两个判据毫无关系。联调库上因此出现过侧栏说 1 条、
+  // 点进去未读筛选是 0 条。现在两个数由同一条端点的同一批行交出来，角标是它们的和，
+  // title 把它们分开说 —— 用户看得见 3 从哪来，而不是只看到一个对不上的数字。
+  it("角标是两件事之和，title 把它们分开说", async () => {
+    serve(2, 1);
+    renderShell();
+
+    const chat = screen.getByRole("link", { name: /^Chat/ });
+    expect(await within(chat).findByText("3")).toBeTruthy();
+    expect(
+      within(chat).getByTitle("2 conversations need you · 1 unread"),
+    ).toBeTruthy();
+  });
+
+  it("只有未读时 title 只说未读——不摆一句「0 条等你处理」", async () => {
+    serve(0, 4);
+    renderShell();
+
+    const chat = screen.getByRole("link", { name: /^Chat/ });
+    expect(await within(chat).findByText("4")).toBeTruthy();
+    expect(within(chat).getByTitle("4 unread")).toBeTruthy();
+  });
+
   it("设备上下线不触发重数——那是另一类信号，各订各的", async () => {
     serve(3);
     renderShell();
     await within(screen.getByRole("link", { name: /^Chat/ })).findByText("3");
     const before = mockedApi.mock.calls.filter(
-      ([p]) => String(p) === "/v1/agent-sessions/waiting-count",
+      ([p]) => String(p) === "/v1/agent-sessions/attention-count",
     ).length;
 
     deliver(accountChannel.AccountChannelDevicePresence);
@@ -418,7 +465,7 @@ describe("侧栏「对话」角标（等你处理）", () => {
     await waitFor(() => expect(screen.getByText("2/3")).toBeTruthy());
     expect(
       mockedApi.mock.calls.filter(
-        ([p]) => String(p) === "/v1/agent-sessions/waiting-count",
+        ([p]) => String(p) === "/v1/agent-sessions/attention-count",
       ).length,
     ).toBe(before);
   });
@@ -451,7 +498,8 @@ describe("桌面 SideNav 收起", () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return me;
       if (path === "/v1/devices") return { devices };
-      if (path === "/v1/agent-sessions/waiting-count") return { waiting: 3 };
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 2, unread: 1 };
       throw new Error("unexpected: " + path);
     });
   }
@@ -517,5 +565,98 @@ describe("桌面 SideNav 收起", () => {
     renderShell();
     expect(screen.getByRole("navigation").className).toContain("w-[56px]");
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeTruthy();
+  });
+});
+
+/**
+ * 收放按钮自己的落点（本轮 UI/UX）。
+ *
+ * 此前它长在 brand 带里：展开时贴右端，收起时整块改成上下排，于是 brand 区从
+ * 40px 变成 72px，整列导航跟着下移——收放两次，眼睛要重新找两次开关。收放是这条
+ * 栏上**唯一**一个会改变自身位置的控件，而它恰恰是那个「要能马上找回来」的。
+ *
+ * 改成钉在右边框上的把手：它是 nav 自己的子元素，不进 brand 带，两态同一个落点。
+ * 不配快捷键：⌘B 在浏览器里另有主人，在输入框里是加粗，为一条一天按不了两次的
+ * 收放去抢它不值。
+ */
+describe("桌面 SideNav 收放按钮", () => {
+  beforeEach(() => {
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+  afterEach(() => {
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+
+  it("两态同一个落点：开关是侧栏自己的子元素，不在 brand 带里", async () => {
+    renderShell();
+
+    const nav = screen.getByRole("navigation");
+    expect(
+      screen.getByRole("button", { name: "Collapse sidebar" }).parentElement,
+    ).toBe(nav);
+    // brand 带里一个按钮都没有了：收窄时它因此不必改排布。
+    expect(
+      within(nav.firstElementChild as HTMLElement).queryByRole("button"),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+
+    expect(
+      screen.getByRole("button", { name: "Expand sidebar" }).parentElement,
+    ).toBe(nav);
+    expect(
+      within(nav.firstElementChild as HTMLElement).queryByRole("button"),
+    ).toBeNull();
+  });
+});
+
+describe("侧栏上的断线出路", () => {
+  beforeEach(() => {
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+  afterEach(() => {
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+
+  /** 把一次状态变化送进共用的那条通道。 */
+  function driveState(state: "connected" | "connecting" | "disconnected") {
+    const call = mockedStartChannel.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    act(() => call![0].onState?.(state));
+  }
+
+  it("断线：侧栏里出现一条说得出后果、点一下就重连的降级条", async () => {
+    renderShell();
+    driveState("disconnected");
+
+    const escape = screen.getByRole("button", { name: /Reconnect/ });
+    // 颜色不是唯一表达：那句「有多旧」就写在条上。
+    expect(escape.textContent).toContain("Not connected · every 30s");
+
+    // 重连 = 停掉旧的、起一条新的（见 hooks/use-account-channel 的 retry）。
+    // 数增量而不是总数：那条通道是模块级单例，同一个文件里前面的用例也起过它。
+    const before = mockedStartChannel.mock.calls.length;
+    fireEvent.click(escape);
+    expect(mockedStartChannel.mock.calls.length).toBe(before + 1);
+  });
+
+  it("收起成 56px 也还在：一枚警示按钮，名字里说得出是什么事", async () => {
+    renderShell();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+    driveState("disconnected");
+
+    const escape = screen.getByRole("button", { name: /Reconnect/ });
+    expect(escape.getAttribute("aria-label")).toContain("Not connected");
+  });
+
+  it("稳态不多占一个像素：连着与正在连都没有这一块", async () => {
+    renderShell();
+
+    driveState("connected");
+    expect(screen.queryByRole("button", { name: /Reconnect/ })).toBeNull();
+
+    // 正在连是瞬态自愈：按一下只会打断它自己的退避节奏。
+    driveState("connecting");
+    expect(screen.queryByRole("button", { name: /Reconnect/ })).toBeNull();
   });
 });

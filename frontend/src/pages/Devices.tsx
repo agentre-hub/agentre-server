@@ -830,10 +830,6 @@ export default function Devices() {
   }
 
   const deviceCount = !loading && loadError === null ? devices.length : null;
-  const hasOnlineAgentred = devices.some(
-    (d) => d.kind === KIND_AGENTRED && d.online,
-  );
-
   // 列表到底有几台，只有「加载完 + 不是那种一台都没取到的失败」时才答得上来。
   // 答不上来就既不展开引导、也不渲染入口，更不能改口说「还没有任何设备」——
   // 上面那条错误提示是此刻唯一诚实的内容。
@@ -863,17 +859,6 @@ export default function Devices() {
               className="font-mono text-xs text-muted-foreground"
             >
               {deviceCount}
-            </span>
-          )}
-          {hasOnlineAgentred && (
-            <span className="flex items-center gap-1.5">
-              <span
-                aria-hidden="true"
-                className="size-[6px] rounded-full bg-status-running"
-              />
-              <span className="text-xs text-muted-foreground">
-                {t("appShell.topBar.fresh")}
-              </span>
             </span>
           )}
         </>

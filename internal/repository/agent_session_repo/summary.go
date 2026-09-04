@@ -42,6 +42,9 @@ type SummaryRepo interface {
 	// CountSummaries 数出同一组判据下的条数——顶栏那个「这个账号有几条」（决策 10）。
 	// 它必须是 COUNT：把行拉回来再 len() 等于绕过分页又读一次全份。
 	CountSummaries(ctx context.Context, q SummaryQuery) (int64, error)
+	// CountAttention 一次数出「等你处理」与「未读」两档——侧栏那颗角标底下的两件事。
+	// 一条 SQL 两个 SUM，判据与 CountSummaries 共用 attentionExpr。
+	CountAttention(ctx context.Context, q SummaryQuery) (AttentionCounts, error)
 	// CountSummariesByAgent / CountSummariesByPeer 是「查看全部 N」那个 N 的来源
 	// （决策 6）：一次按组聚合拿全，而不是每组各查一遍。键是 agent_sync_id /
 	// peer_fingerprint 的原值，空串是「未命名 Agent」那一组的真实键。
@@ -132,24 +135,49 @@ const (
 	ProjectUnassigned
 )
 
-// LifecycleFilter 是索引上那三个筛选 chip 的服务端判据（决策 9）。
-type LifecycleFilter uint8
+// AttentionFilter 是「这条对话此刻需不需要你，以及为什么」在 SQL 这一侧的表达。
+//
+// 取值与共享包 `@agentre-hub/agentre-ui` 的 `session-index/attention` 那族
+// `AttentionReason` **逐字对应**（决策 9 的三个 chip 是它的一个子集）。它从前叫
+// `LifecycleFilter`，但这个筛选问的从来不是生命周期：`waiting_for_input` 不在生命
+// 周期那条链上，而「未读」两列相比更与它无关。名字对不上判据的代价 2026-09-04 兑现
+// 了一次——「未读」当时只写了 `last_message_at>last_read_at`，把在跑的、等你按的行
+// 一起数了进去，chip 上的数与列表里带「未读」记号的行对不上。
+//
+// **判据只有 attentionExpr 一处**：分页、三种分组计数、以及侧栏那两个数全从它出发。
+type AttentionFilter uint8
 
 const (
-	// LifecycleAny = 「全部」。
-	LifecycleAny LifecycleFilter = iota
-	// LifecycleRunning = 「运行中」：running **且不在等输入**。等你处理优先，
+	// AttentionAny = 「全部」：不按 attention 过滤。它不是一档理由。
+	AttentionAny AttentionFilter = iota
+	// AttentionNeedsAttention = 「等你处理」：有待决的审批 / 提问挡在那里。
+	AttentionNeedsAttention
+	// AttentionRunning = 「运行中」：running **且不在等输入**。等你处理优先，
 	// 两个 chip 不能同时命中同一条。
-	LifecycleRunning
-	// LifecycleWaiting = 「等你处理」。
-	LifecycleWaiting
-	// LifecycleUnread = 「未读」：这条对话最后一次活动晚于我最后一次读它。
-	// 与桌面端 attention-store 的 `lastMessageAt > lastReadAt` 同一条判据。
+	AttentionRunning
+	// AttentionError = 「上一轮跑挂了、而且你还没看过」。已经看过的那次失败不再拦你。
+	//
+	// 它没有自己的 chip（索引上摆的是全部 / 运行中 / 未读），存在是因为**它把这些
+	// 行从「未读」里排除掉了**：一条 failed 且有新消息的对话在行上写的是「出错」，
+	// 不是「未读」，未读那个数因此也不能把它算进去。
+	AttentionError
+	// AttentionUnread = 「未读」：最后一次活动晚于我最后一次读它，**且没有更强的
+	// 理由**——不在跑、不等你按、上一轮也没跑挂。
 	//
 	// 它与「等你处理」是**两件事**，不是同一件事的两个名字：一条你已经看过、
 	// 只是停在那儿等输入的对话不是未读；一条跑出了新结果但不等输入的是。
-	LifecycleUnread
+	AttentionUnread
 )
+
+// AttentionCounts 是侧栏那颗角标要的那两个数。
+//
+// 两个而不是一个：角标只有一个数字位，但它底下是两件事，`title` 要把它们分开说
+// （「N 条等你处理 · M 条未读」，与桌面端状态栏那颗胶囊同构）。合成一个数交出来的话，
+// 那句话就再也拆不回来了。
+type AttentionCounts struct {
+	NeedsAttention int64
+	Unread         int64
+}
 
 // SummaryQuery 是一次索引读取的全部判据。它只谈这张表自己的列：project_sync_id 在
 // 这里只是一个不透明的值，「这个标识还指着一个活着的项目吗」「这些位置属于哪个项目」
@@ -159,7 +187,7 @@ type SummaryQuery struct {
 	// TitleLike 是搜索词的原文（决策 8：只按标题）。LIKE 的元字符在这里转义，
 	// 调用方传的是用户敲的那几个字符，不是一段模式。
 	TitleLike string
-	Lifecycle LifecycleFilter
+	Attention AttentionFilter
 	// ConversationID 非空时按对话标识精确匹配（决策 13，详情页认领用）。
 	ConversationID string
 	// AgentSyncID / PeerFingerprint 用指针区分「不过滤」与「过滤成空串」——
@@ -284,6 +312,37 @@ func locationPairs(locations []SummaryLocation) [][]any {
 	return pairs
 }
 
+// attentionExpr 交出某一档 attention 的 WHERE 片段与它的参数。ok 为 false 表示
+// 「不过滤」（AttentionAny，以及任何不认识的取值）。
+//
+// **这是全仓唯一一处 attention 判据**：WHERE（scoped）与侧栏那两个 SUM
+// （CountAttention）都从它出发，因此「筛出来的那一批」与「数出来的那个数」不可能
+// 分家——分页说 5 条、角标说 3 条正是判据写在两处才会有的事。
+//
+// 每一档都带着**比它强的那几档的否定**，顺序与共享包 `computeAttention` 的 if 链
+// 逐字一致（needs_attention > running > error > unread）。因此任意一行至多命中一档，
+// 几档相加不会重复计数。
+//
+// 两列相比（last_message_at>last_read_at）没有索引帮得上——索引只排得了单列的值。
+// 它跟在 user_id 那段扫描之后，与其余判据同一条路径。
+func attentionExpr(f AttentionFilter) (string, []any, bool) {
+	switch f {
+	case AttentionNeedsAttention:
+		return "waiting_for_input=?", []any{true}, true
+	case AttentionRunning:
+		return "waiting_for_input=? AND lifecycle_state=?", []any{false, "running"}, true
+	case AttentionError:
+		return "waiting_for_input=? AND lifecycle_state=? AND last_message_at>last_read_at",
+			[]any{false, "failed"}, true
+	case AttentionUnread:
+		return "waiting_for_input=? AND lifecycle_state NOT IN (?,?) AND last_message_at>last_read_at",
+			[]any{false, "running", "failed"}, true
+	case AttentionAny:
+		return "", nil, false
+	}
+	return "", nil, false
+}
+
 // scoped 把 SummaryQuery 翻成 WHERE。全部读路径共用它——判据只有一处，分页与三种
 // 计数因此不可能对不上（「这一组显示 N 条，翻出来却是别的集合」正是这么来的）。
 func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
@@ -294,16 +353,8 @@ func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
 	if q.TitleLike != "" {
 		tx = tx.Where("title LIKE ?", "%"+likeEscape(q.TitleLike)+"%")
 	}
-	switch q.Lifecycle {
-	case LifecycleRunning:
-		tx = tx.Where("lifecycle_state=? AND waiting_for_input=?", "running", false)
-	case LifecycleWaiting:
-		tx = tx.Where("waiting_for_input=?", true)
-	case LifecycleUnread:
-		// 两列相比，没有索引帮得上（索引只排得了单列的值）。它跟在 user_id 那段
-		// 扫描之后，与其余判据同一条路径。
-		tx = tx.Where("last_message_at>last_read_at")
-	case LifecycleAny:
+	if expr, args, ok := attentionExpr(q.Attention); ok {
+		tx = tx.Where(expr, args...)
 	}
 	if q.AgentSyncID != nil {
 		tx = tx.Where("agent_sync_id=?", *q.AgentSyncID)
@@ -372,6 +423,59 @@ func (r *summaryRepo) CountSummaries(ctx context.Context, q SummaryQuery) (int64
 		return 0, err
 	}
 	return total, nil
+}
+
+// CountAttention 一条 SQL 数出两档。
+//
+// 不是两次 CountSummaries：这条路在**每一次进入任何页面**时都会跑一遍，两个数说的
+// 又必须是同一时刻的同一批行。判据仍走 attentionExpr，只是从 WHERE 换到了
+// SUM(CASE WHEN …)——它带的 q 本身可以照常收窄（搜索、项目轴），角标因此天然跟着
+// 当前范围走。
+func (r *summaryRepo) CountAttention(
+	ctx context.Context, q SummaryQuery,
+) (AttentionCounts, error) {
+	// 这一次问的是「各档各有多少」，所以基底必须是不按 attention 收窄的那一份：
+	// 带着某一档的 WHERE 去数另一档，第二个数恒为 0。
+	base := q
+	base.Attention = AttentionAny
+
+	var (
+		sel  []string
+		args []any
+	)
+	for _, f := range []AttentionFilter{AttentionNeedsAttention, AttentionUnread} {
+		expr, exprArgs, ok := attentionExpr(f)
+		if !ok {
+			continue
+		}
+		// COALESCE 不是保险，是**必需**：SUM 在空集合上返回 NULL 而不是 0，而 NULL
+		// 扫进 int64 直接报错。一条对话都没有的新账号第一次进站走的正是这条路。
+		sel = append(sel,
+			"COALESCE(SUM(CASE WHEN "+expr+" THEN 1 ELSE 0 END), 0) AS "+attentionColumn(f))
+		args = append(args, exprArgs...)
+	}
+
+	var out AttentionCounts
+	if err := r.scoped(ctx, base).
+		Select(strings.Join(sel, ", "), args...).
+		Scan(&out).Error; err != nil {
+		return AttentionCounts{}, err
+	}
+	return out, nil
+}
+
+// attentionColumn 是某一档在 CountAttention 那行结果里的列名，与 AttentionCounts
+// 的字段一一对应（GORM 按 snake_case 回填）。
+func attentionColumn(f AttentionFilter) string {
+	switch f {
+	case AttentionNeedsAttention:
+		return "needs_attention"
+	case AttentionUnread:
+		return "unread"
+	case AttentionAny, AttentionRunning, AttentionError:
+		return ""
+	}
+	return ""
 }
 
 // countByColumn 是两个单列分组计数的共同实现：同一份判据 + 一列 GROUP BY。

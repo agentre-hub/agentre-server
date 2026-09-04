@@ -1,8 +1,5 @@
 {
   "productSub": "控制台",
-  "topBar": {
-    "fresh": "桌面端已连接"
-  },
   "connection": {
     "connected": "实时更新中",
     "connecting": "正在连接…",
@@ -21,6 +18,12 @@
   },
   "nav": {
     "collapse": "收起侧栏",
-    "expand": "展开侧栏"
+    "expand": "展开侧栏",
+    "chatBadge": {
+      "needsAttention_one": "{{count}} 条等你处理",
+      "needsAttention_other": "{{count}} 条等你处理",
+      "unread_one": "{{count}} 条未读",
+      "unread_other": "{{count}} 条未读"
+    }
   }
 }

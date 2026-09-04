@@ -23,6 +23,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
@@ -48,9 +49,9 @@ type stubWorkspaceSvc struct {
 	page       workspace_svc.TranscriptPage
 	transcript workspace_svc.TranscriptQuery
 
-	waitingCount       int64
-	waitingCountUserID int64
-	waitingCountErr    error
+	attentionCounts      agent_session_repo.AttentionCounts
+	attentionCountUserID int64
+	attentionCountErr    error
 }
 
 func (s *stubWorkspaceSvc) SessionIndex(
@@ -80,12 +81,14 @@ func (s *stubWorkspaceSvc) Transcript(
 	return s.page, nil
 }
 
-func (s *stubWorkspaceSvc) WaitingCount(_ context.Context, userID int64) (int64, error) {
-	s.waitingCountUserID = userID
-	if s.waitingCountErr != nil {
-		return 0, s.waitingCountErr
+func (s *stubWorkspaceSvc) AttentionCounts(
+	_ context.Context, userID int64,
+) (agent_session_repo.AttentionCounts, error) {
+	s.attentionCountUserID = userID
+	if s.attentionCountErr != nil {
+		return agent_session_repo.AttentionCounts{}, s.attentionCountErr
 	}
-	return s.waitingCount, nil
+	return s.attentionCounts, nil
 }
 
 var _ workspace_svc.SessionReadSvc = (*stubWorkspaceSvc)(nil)
@@ -480,15 +483,17 @@ func postJSON(t *testing.T, url, cookie, csrf, body string) *http.Response {
 	return resp
 }
 
-// TestWaitingCount_CountsForTheAuthenticatedAccountOnly 守这条端点的账号作用域。
+// TestAttentionCount_CountsForTheAuthenticatedAccountOnly 守这条端点的账号作用域。
 //
 // 账号只由本组的鉴权圈定，请求里没有、也不该有任何身份参数：收一个 user_id 参数就是
 // 把「数谁的对话」交给了调用方，而这条端点每次进任何页面都会被调到。
-func TestWaitingCount_CountsForTheAuthenticatedAccountOnly(t *testing.T) {
-	stub := &stubWorkspaceSvc{waitingCount: 3}
+func TestAttentionCount_CountsForTheAuthenticatedAccountOnly(t *testing.T) {
+	stub := &stubWorkspaceSvc{
+		attentionCounts: agent_session_repo.AttentionCounts{NeedsAttention: 3, Unread: 5},
+	}
 	server, _ := newMirrorTestServer(t, stub)
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/agent-sessions/waiting-count", nil)
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/agent-sessions/attention-count", nil)
 	require.NoError(t, err)
 	req.AddCookie(newSessionCookie(t, 7))
 	resp, err := server.Client().Do(req)
@@ -498,20 +503,21 @@ func TestWaitingCount_CountsForTheAuthenticatedAccountOnly(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
-	assert.Equal(t, int64(7), stub.waitingCountUserID)
-	assert.Contains(t, string(body), `"waiting":3`)
+	assert.Equal(t, int64(7), stub.attentionCountUserID)
+	assert.Contains(t, string(body), `"needs_attention":3`)
+	assert.Contains(t, string(body), `"unread":5`)
 }
 
-// TestWaitingCount_ZeroIsAnAnswerNotAnOmission 守 0 说得出来。
+// TestAttentionCount_ZeroIsAnAnswerNotAnOmission 守 0 说得出来。
 //
 // 侧栏那颗角标只在 > 0 时才画，所以 0 让它整个不出现 —— 那是对的。但字段必须**在**：
 // 带 omitempty 的话，「没人等你」与「这次没问出来」在线上长得一模一样，而前端对这两种
 // 情形该做的事不同。
-func TestWaitingCount_ZeroIsAnAnswerNotAnOmission(t *testing.T) {
-	stub := &stubWorkspaceSvc{waitingCount: 0}
+func TestAttentionCount_ZeroIsAnAnswerNotAnOmission(t *testing.T) {
+	stub := &stubWorkspaceSvc{}
 	server, _ := newMirrorTestServer(t, stub)
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/agent-sessions/waiting-count", nil)
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/agent-sessions/attention-count", nil)
 	require.NoError(t, err)
 	req.AddCookie(newSessionCookie(t, 7))
 	resp, err := server.Client().Do(req)
@@ -520,7 +526,8 @@ func TestWaitingCount_ZeroIsAnAnswerNotAnOmission(t *testing.T) {
 
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
-	assert.Contains(t, string(body), `"waiting":0`)
+	assert.Contains(t, string(body), `"needs_attention":0`)
+	assert.Contains(t, string(body), `"unread":0`)
 }
 
 // 每一帧的发生时刻要出现在 HTTP 应答上。浏览器的转录是从帧现折的,除了这一列它没有

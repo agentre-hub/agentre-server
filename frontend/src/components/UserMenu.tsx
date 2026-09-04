@@ -114,24 +114,12 @@ export function UserMenu({
                 <div className="truncate text-xs font-semibold text-foreground">
                   {me.display_name}
                 </div>
-                {connection === "disconnected" ? (
-                  // 邮箱让位：这一态不会自己回来，而「我看到的东西有多旧」比
-                  // 「我登的是哪个账号」更需要现在说——后者在菜单里还在。
-                  <div
-                    className={cn(
-                      "truncate text-3xs",
-                      connectionTone.textClassName,
-                    )}
-                  >
-                    {t("appShell.connection.degraded", {
-                      status: connectionLabel,
-                    })}
-                  </div>
-                ) : (
-                  <div className="truncate text-3xs text-muted-foreground">
-                    {me.email}
-                  </div>
-                )}
+                {/* 三态都是邮箱。这一行曾经在断线时让位给状态，因为那时「未连接」
+                    在侧栏上没有别的地方可说；现在它自己占一块（AppShell 的
+                    ConnectionEscape），账号身份就不必再跟它抢这一行。 */}
+                <div className="truncate text-3xs text-muted-foreground">
+                  {me.email}
+                </div>
               </div>
               <ChevronsUpDown
                 className="size-3.5 shrink-0 text-decorative-foreground"

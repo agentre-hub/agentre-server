@@ -176,7 +176,7 @@ func TestListSummariesPage_TitleSearchAndWaitingFilterCompose(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
 	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
-		SummaryQuery: SummaryQuery{UserID: 7, TitleLike: "bug", Lifecycle: LifecycleWaiting},
+		SummaryQuery: SummaryQuery{UserID: 7, TitleLike: "bug", Attention: AttentionNeedsAttention},
 		Limit:        50,
 	})
 	require.NoError(t, err)
@@ -189,12 +189,12 @@ func TestListSummariesPage_RunningExcludesWaiting(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
-	mock.ExpectQuery(regexp.QuoteMeta("lifecycle_state=? AND waiting_for_input=?")).
-		WithArgs(int64(7), "running", false, 50).
+	mock.ExpectQuery(regexp.QuoteMeta("waiting_for_input=? AND lifecycle_state=?")).
+		WithArgs(int64(7), false, "running", 50).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
 	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
-		SummaryQuery: SummaryQuery{UserID: 7, Lifecycle: LifecycleRunning},
+		SummaryQuery: SummaryQuery{UserID: 7, Attention: AttentionRunning},
 		Limit:        50,
 	})
 	require.NoError(t, err)
@@ -445,19 +445,123 @@ func TestMarkSummaryRead_TouchesOnlyLastReadAtAndOnlyMovesForward(t *testing.T) 
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 「未读」的判据：这条对话最后一次活动晚于我最后一次读它。与桌面端
-// attention-store 的 `lastMessageAt > lastReadAt` 同一条。
+// 「未读」的判据与共享包 `computeAttention` 的 `unread` 那一档**逐字对应**：它是最弱
+// 的一档，在跑的、等你按的、跑挂的各有更强的理由，都不算未读。
+//
+// 此前这里只有 `last_message_at>last_read_at` 一句：chip 上那个数因此把在跑与等你按
+// 的行一起数了进去，点进去列出来的行却各自写着「running」「等你处理」，一个带
+// 「未读」记号的都没有——数字与看得见的东西对不上。
 func TestScoped_UnreadFilter(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
-	mock.ExpectQuery(regexp.QuoteMeta("last_message_at>last_read_at")).
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"waiting_for_input=? AND lifecycle_state NOT IN (?,?) AND last_message_at>last_read_at",
+	)).
+		WithArgs(int64(7), false, "running", "failed").
 		WillReturnRows(sqlmock.NewRows([]string{"count(*)"}).AddRow(int64(3)))
 
-	got, err := r.CountSummaries(ctx, SummaryQuery{UserID: 7, Lifecycle: LifecycleUnread})
+	got, err := r.CountSummaries(ctx, SummaryQuery{UserID: 7, Attention: AttentionUnread})
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), got)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 「等你处理」与「未读」是**两个数**，一次问出来。
+//
+// 侧栏那颗角标要说的是「有多少条在等你」，它此前只数 waiting_for_input——与索引上
+// 那个「未读」chip 是完全不同的判据，于是侧栏说 1 条、点进去筛选是 0 条。两个数
+// 由同一条 SQL 的两个 SUM 交出来，用的还是 attentionExpr 那一处判据，因此不可能
+// 与 chip 分家。
+func TestCountAttention_BothNumbersInOneQuery(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	// 整条 SQL 加参数一起钉：SELECT 子句里也有占位符，而它排在 WHERE 前面。只钉
+	// 「里面有个 SUM」的话，两组参数一旦串位（账号 id 被当成 waiting_for_input 去比）
+	// 这条用例照样绿，线上却会数出一个谁也解释不了的数。
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT COALESCE(SUM(CASE WHEN waiting_for_input=? THEN 1 ELSE 0 END), 0) "+
+			"AS needs_attention, "+
+			"COALESCE(SUM(CASE WHEN waiting_for_input=? AND lifecycle_state NOT IN (?,?) "+
+			"AND last_message_at>last_read_at THEN 1 ELSE 0 END), 0) AS unread "+
+			"FROM `agent_sessions` WHERE user_id=?",
+	)).
+		WithArgs(true, false, "running", "failed", int64(7)).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"needs_attention", "unread"}).AddRow(int64(2), int64(5)),
+		)
+
+	got, err := r.CountAttention(ctx, SummaryQuery{UserID: 7})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), got.NeedsAttention)
+	assert.Equal(t, int64(5), got.Unread)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 一条对话都没有的账号：SUM 在**空集合上返回 NULL**，不是 0。
+//
+// 这是新账号的第一次进站，而 NULL 扫进 int64 会直接报错——角标于是不是显示 0，
+// 而是整条取数失败。联调库上 `WHERE user_id=7` 正是这样一行 `NULL NULL`。
+// COALESCE 把它按住在数据库那一侧：0 是答案，不是错误。
+func TestCountAttention_EmptyAccountIsZeroNotAnError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	mock.ExpectQuery(regexp.QuoteMeta("COALESCE(SUM(CASE WHEN")).
+		WillReturnRows(
+			sqlmock.NewRows([]string{"needs_attention", "unread"}).AddRow(nil, nil),
+		)
+
+	got, err := r.CountAttention(ctx, SummaryQuery{UserID: 7})
+	require.NoError(t, err)
+	assert.Zero(t, got.NeedsAttention)
+	assert.Zero(t, got.Unread)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 五档 attention 的 SQL 判据与共享包 `computeAttention` 的 if 链**同一个顺序**：
+// 每一档都带着比它强的那几档的否定，因此任意一行至多命中一档，几档相加不会重复计数。
+//
+// 这条守的是那个顺序本身。共享包那一侧改了优先级而这里没跟上时，它红。
+func TestAttentionExpr_MirrorsTheSharedPackagePriority(t *testing.T) {
+	tests := []struct {
+		name    string
+		filter  AttentionFilter
+		wantSQL string
+	}{
+		{
+			name:    "needs_attention 压过一切，因此不带任何否定",
+			filter:  AttentionNeedsAttention,
+			wantSQL: "waiting_for_input=?",
+		},
+		{
+			name:    "running 让位给 needs_attention",
+			filter:  AttentionRunning,
+			wantSQL: "waiting_for_input=? AND lifecycle_state=?",
+		},
+		{
+			name:    "error 要未读才算，且让位给上面两档",
+			filter:  AttentionError,
+			wantSQL: "waiting_for_input=? AND lifecycle_state=? AND last_message_at>last_read_at",
+		},
+		{
+			name:    "unread 最弱：在跑的、等你按的、跑挂的都不算",
+			filter:  AttentionUnread,
+			wantSQL: "waiting_for_input=? AND lifecycle_state NOT IN (?,?) AND last_message_at>last_read_at",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expr, _, ok := attentionExpr(tt.filter)
+			require.True(t, ok)
+			assert.Equal(t, tt.wantSQL, expr)
+		})
+	}
+
+	// 「全部」不是一档理由，它是「不过滤」。
+	_, _, ok := attentionExpr(AttentionAny)
+	assert.False(t, ok)
 }
 
 // 这条钉的不是某个调用点，而是**实体本身**：GORM 的自动时间戳认的是 Go 的**字段名**

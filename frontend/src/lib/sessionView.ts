@@ -14,17 +14,17 @@
  * 账号没了其余全无意义；设备撤销时会话永久只读；目标不可达时
  * 中继必然连不上；钉住的 agentred 状态只在桌面中继仍连接时成立。
  */
-import {
-  lifecycleToAgentStatus,
-  SessionLifecycle,
-  statusConfig,
-  type AgentStatus,
-} from "@agentre-hub/agentre-ui";
+import { SessionLifecycle, statusConfig } from "@agentre-hub/agentre-ui";
 import {
   ErrCodePeerExecutionUnavailable,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
 
+import {
+  attentionReasonOf,
+  toAgentStatus,
+  type AttentionRowInput,
+} from "@/lib/attentionAdapter";
 import { RelayError, type RelayState } from "@/lib/relayClient";
 
 // ── 对端返回的错误码 ───────────────────────────────────────────────────────
@@ -176,13 +176,17 @@ export { formatIntlRelativeTime as formatRelativeTime } from "@agentre-hub/agent
  *
  * `unread` 曾经是个假名字：那一档叫过「未读」，判据却是 `waitingForInput`，规格
  * 2026-08-17 决策 3 因此把名字改成了「等你处理」——当时 web 侧没有已读状态。现在
- * 它有了自己的列（migration 202608200001 的 last_read_at），判据与桌面端
- * attention-store 的 `lastMessageAt > lastReadAt` 逐字一致，两端对「未读」的说法
- * 因此是同一个。
+ * 它有了自己的列（migration 202608200001 的 last_read_at），判据是共享包
+ * `computeAttention` 的 `unread` 那一档，两端对「未读」的说法因此是同一个。
  *
  * 「未读」与「等你处理」是**两件事**：一条你已经看过、只是停在那儿等输入的对话
- * 不是未读；一条跑出了新结果但不等输入的是。索引摆的是「未读」，总览那条操作条
- * 摆的仍是「等你处理」——两个页面问的本来就不是同一个问题。
+ * 不是未读；一条跑出了新结果但不等输入的是。索引摆的是「未读」；「等你处理」与它
+ * 一起进侧栏那颗角标（AppShell 的 badge / badgeLabel），在那里分开说。
+ *
+ * 光有「两件事」还不够——2026-09-04 之前这三处各写各的判据：侧栏数
+ * `waiting_for_input`，chip 数 `last_message_at > last_read_at`，行上的记号走
+ * `computeAttention`。三个数互不相等，而且没有任何地方会报错。现在只有一条判据
+ * （服务端 `attentionExpr`，前端一律经由 `attentionReasonOf`）。
  */
 export type SessionFilter = "all" | "running" | "waiting" | "unread";
 
@@ -194,22 +198,16 @@ export type SessionFilter = "all" | "running" | "waiting" | "unread";
  * 只进「等你处理」；其余按生命周期是否 running 判定。
  */
 export function matchesSessionFilter(
-  s: {
-    lifecycleState: string;
-    waitingForInput?: boolean;
-    /** 还没保存进账号的那些不算未读：它们压根不在你的账号里。 */
-    saved?: boolean;
-    updatedAt?: number;
-    lastReadAt?: number;
-  },
+  s: AttentionRowInput,
   filter: SessionFilter,
 ): boolean {
   if (filter === "all") return true;
   if (filter === "waiting") return !!s.waitingForInput;
-  if (filter === "unread") {
-    if (s.saved === false) return false;
-    return (s.updatedAt ?? 0) > (s.lastReadAt ?? 0);
-  }
+  // 「未读」不在这里判：它是共享包 computeAttention 最弱的那一档，判据带着比它强的
+  // 那几档的否定（在跑的、等你按的、跑挂的都不算）。本地另写一遍 `updatedAt >
+  // lastReadAt` 是此前的做法，代价是同一批行在机器轴与其余三个轴上筛出来的结果不同，
+  // 而 chip 上那个数又是第三处判据数出来的。
+  if (filter === "unread") return attentionReasonOf(s) === "unread";
   return s.lifecycleState === "running" && !s.waitingForInput;
 }
 
@@ -296,15 +294,7 @@ export function sessionTitle(
  * 归中性档不等于这条对话没话说：状态文字仍由 `sessionStatusLabel` 分家（「已中断」
  * 与「空闲」是两句话），点只回答「要不要紧」。
  */
-export function toAgentStatus(s: {
-  lifecycleState: string;
-  waitingForInput?: boolean;
-}): AgentStatus {
-  return lifecycleToAgentStatus({
-    lifecycleState: s.lifecycleState,
-    waiting: s.waitingForInput,
-  });
-}
+export { toAgentStatus };
 
 /**
  * 行首状态点的颜色。判定走上面那一处，类名走共享包的 `statusConfig`。

@@ -105,8 +105,12 @@ import SessionListSkeleton from "@/components/session/SessionListSkeleton";
  * chip 并把选中的那一档报给宿主。
  */
 // 第三档是「未读」而不是「等你处理」：它有了自己的判据（migration 202608200001
-// 的 last_read_at），与桌面端 attention-store 同一条。总览那条操作条摆的仍是
-// 「等你处理」——两个页面问的本来就不是同一个问题。
+// 的 last_read_at），与共享包 `computeAttention` 的 `unread` 那一档逐字同源 ——
+// 最后一次活动晚于我最后一次读它，**且没有更强的理由**（不在跑、不等你按、上一轮
+// 也没跑挂）。chip 上那个数与筛出来的行因此是同一批。
+//
+// 「等你处理」不在这排 chip 上，但它没有消失：它与未读一起进了侧栏那颗角标
+// （AppShell 的 badge / badgeLabel）——两件事在那里分开说。
 const FILTER_CHIPS: SessionFilter[] = ["all", "running", "unread"];
 
 /**
@@ -180,11 +184,12 @@ function withEveryMachine(
 }
 
 /**
- * 筛选 chips：全部 / 运行中 / 等你处理 N。跨四个轴一致，收窄的是**行**——一条都不
+ * 筛选 chips：全部 / 运行中 / 未读 N。跨四个轴一致，收窄的是**行**——一条都不
  * 剩的组头随之消失，因为分组是在收窄之后才做的（决策 10 的同一条规则）。
  *
- * 「等你处理」上那个数与当前选中哪一档无关（决策 3 只改名字，判据与计数照旧）：
- * 它说的是「还有几条在等你」，切到别的档不该让这句话变。
+ * 「未读」上那个数与当前选中哪一档无关：它说的是「还有几条你没看过」，切到别的档
+ * 不该让这句话变。它与筛出来的行、与行上那枚「未读」记号是**同一条判据**（服务端
+ * 的 attentionExpr / 共享包的 computeAttention），三者因此不可能对不上。
  */
 function FilterChips({
   filter,

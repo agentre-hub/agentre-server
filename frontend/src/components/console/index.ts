@@ -14,4 +14,5 @@ export { FilterChip } from "./FilterChip";
 export { InlineEmpty } from "./InlineEmpty";
 export { Metric } from "./Metric";
 export { MobileTabBar, type MobileTab } from "./MobileTabBar";
+export { NavBadge } from "./NavBadge";
 export { StatusMark, type StatusTone } from "./StatusMark";

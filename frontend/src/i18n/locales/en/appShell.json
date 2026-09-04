@@ -1,8 +1,5 @@
 {
   "productSub": "Console",
-  "topBar": {
-    "fresh": "Desktop connected"
-  },
   "connection": {
     "connected": "Live",
     "connecting": "Connecting…",
@@ -21,6 +18,12 @@
   },
   "nav": {
     "collapse": "Collapse sidebar",
-    "expand": "Expand sidebar"
+    "expand": "Expand sidebar",
+    "chatBadge": {
+      "needsAttention_one": "{{count}} conversation needs you",
+      "needsAttention_other": "{{count}} conversations need you",
+      "unread_one": "{{count}} unread",
+      "unread_other": "{{count}} unread"
+    }
   }
 }

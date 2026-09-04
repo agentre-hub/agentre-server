@@ -146,7 +146,7 @@ written as arbitrary values rather than rounded to the nearest one.
 | Metric value | `text-[23px] leading-none font-bold` | 23 / 700 | the shared `Metric` tiles (Overview) |
 | Metric label / sub | `text-[11.5px]` / `text-[10.5px]` | 11.5 / 10.5 | the shared `Metric` label and optional sub |
 | Empty-state title | `text-lg font-bold` | 18 / 700 | the shared `EmptyState` title |
-| Console small | `text-xs` | 12 / 400–500 | rows, chips, TopBar counts, `Fresh` |
+| Console small | `text-xs` | 12 / 400–500 | rows, chips, TopBar counts |
 | Console caption / mono meta | `text-[10px]` / `text-[11px]` | 10–11 / 400–600 | brand sub, account meta, badges, `online/total` Meta |
 
 The canvas's scale also names `Display / 32 · 600` and `H2 / 18 · 600`. Neither has a use in
@@ -391,10 +391,22 @@ bg-sidebar p-3`, drawn on `--sidebar` — the board's `chrome` surface, made its
 with this console (light #f4f4f5 / dark #111316, see [Colour tokens](#colour-tokens)).
 Top to bottom:
 
-- **Brand.** A 28px `rounded-md bg-primary` mark holding a `SquareTerminal` glyph
-  (`size-4 text-primary-foreground`), then the product name at `text-[15px] font-semibold`
-  — the same `authLayout.brand` string the login screen uses — over a 10px
-  `text-subtle-foreground` line: `appShell.productSub`, "Console" (「控制台」).
+- **Brand.** A 40px row (`h-10`) holding a 28px `rounded-md bg-primary` mark with a
+  `SquareTerminal` glyph (`size-4 text-primary-foreground`), then the product name at
+  `text-[15px] font-semibold` — the same `authLayout.brand` string the login screen uses —
+  over a 10px `text-subtle-foreground` line: `appShell.productSub`, "Console" (「控制台」).
+  Collapsed it keeps the same 40px row and centres the mark; the words are what give way,
+  not the shape.
+- **The collapse handle.** A 24px `rounded-full border border-border bg-card shadow-overlay`
+  button pinned to the sidebar's right edge (`absolute top-5 -right-3 z-10`), holding a
+  `ChevronLeft` / `ChevronRight`. It is transparent until the pointer enters the nav
+  (`group-hover/nav`) or it takes focus (`focus-visible`), so a settled sidebar spends no
+  space on it. It is a child of `nav`, **not of the brand row**: it used to live there, and
+  collapsing restacked that row from 40px to 72px, moving every destination down and the
+  control itself with it. There is no keyboard shortcut for it: ⌘B belongs to the browser
+  here and means bold inside an input, and this is a console you visit, not an editor you
+  live in. The TopBar is not an option either: `ownHeader` pages draw no shell header, so
+  the sidebar's way back would depend on which page you are on.
 - **Search, honestly disabled.** A 32px (`h-8`) full-width `rounded-md border border-border
   bg-card px-2.5` *display* element: a 13px `Search` icon and `appShell.searchPlaceholder`
   ("Search agents, devices, and records") at `text-xs`. There is no command palette, so it
@@ -419,7 +431,20 @@ Top to bottom:
   28px `rounded-full bg-primary-soft` avatar holding the first character of `display_name`
   at `text-sm font-semibold text-primary-text`, the name at `text-xs font-semibold`, and
   `appShell.accountMeta` at `text-[10px] text-subtle-foreground`. The row renders only once
-  `/v1/auth/me` resolves — no account fetched, no fake avatar.
+  `/v1/auth/me` resolves — no account fetched, no fake avatar. The second line is always the
+  email: identity and staleness do not compete for it.
+- **Is this screen live**, in one place. The avatar carries an 8px pip
+  (`ConnectionPip`, ringed in the surface it sits on) in all three states of the account
+  relay channel — `connected` green, `connecting` amber and pulsing, `disconnected` neutral
+  grey. Grey, not red: the data is still correct, only up to 30 seconds old. What needs a
+  hand gets its own block instead — `ConnectionEscape`, directly above the account row and
+  **only** while disconnected: expanded it is a full-width `bg-status-waiting-bg` button
+  reading `appShell.connection.degraded` over `appShell.connection.retry` on two lines
+  (side by side, English truncates the "every 30s" half away in 224px); collapsed and on the
+  mobile TopBar it is a 32px amber icon button carrying both strings in its accessible name.
+  One click reconnects. A settled channel costs the sidebar nothing: `connected` and
+  `connecting` draw no block at all, and `connecting` heals itself — pressing anything there
+  only interrupts its own backoff.
 
 **TopBar.** `h-[52px] shrink-0 items-center gap-3 border-b border-border bg-card px-4`.
 Left to right: a title slot at `text-[15px] font-bold` (the page's `nav.*` label), a
@@ -431,9 +456,13 @@ stay unchanged. Two `right` conventions recur:
   does not use it**: a bare number with no label next to it cannot be read as "how many
   conversations this account has", and the SideNav badge says the same thing with its label
   attached. Use Cnt only where the count sits next to something that names it.
-- **Fresh** — "Desktop connected" (`appShell.topBar.fresh`): a `size-[6px] rounded-full
-  bg-status-running` dot plus `text-xs`. It renders only when an `agentred` device is
-  online; a browser (`web`) alone, unknown or offline → nothing, never a fabricated status.
+There used to be a second one, **Fresh** — a green dot plus "Desktop connected" — on
+Overview, Chat and Devices. It said *some machine is online*, while the pip on the account
+block says *this screen is still live*: two different facts wearing the same green dot and
+the same wording, free to contradict each other (channel down, TopBar still reporting
+"connected"). Liveness now has exactly one outlet, on the account block; how many machines
+are online is already answered by the SideNav's Devices `2/3`, the Devices page and
+Overview's own online tile.
 
 A page can also take the whole band over with **`ownHeader`** — the shell then draws no
 header at all. Chat's mobile form does this: 52px cannot hold title + page actions + account
@@ -467,12 +496,11 @@ data-less cards. Two of its four tiles rendered `—` and half the page said "no
 stats endpoint replaced the missing sources, and the strip moved to the SideNav badge, so
 the page is now stats-first.
 
-- **TopBar**: **Fresh** (only when an `agentred` device is online) plus a three-way range
-  segment — Last 7 days / Last 30 days / All time, `role="group"` labelled
-  `overview.stats.range.label`. **The range only governs the summary and the three
-  distribution cards; the heatmap is always one year.** Below `md` both leave the bar and
-  render as the page's first row instead: at 390px the bar cannot hold them next to the
-  title, the account and `AppControls` — until 2026-08-31 it did not, and the range
+- **TopBar**: a three-way range segment — Last 7 days / Last 30 days / All time,
+  `role="group"` labelled `overview.stats.range.label`. **The range only governs the summary
+  and the three distribution cards; the heatmap is always one year.** Below `md` it leaves
+  the bar and renders as the page's first row instead: at 390px the bar cannot hold it next
+  to the title, the account and `AppControls` — until 2026-08-31 it did not, and the range
   segment sat on top of the account avatar with the title clipped to one character.
 - **Four stat tiles** through the shared `Metric`, `grid grid-cols-2 gap-3 md:grid-cols-4`:
   Conversations (range count, account total as the sub), Current streak, Active days
@@ -577,8 +605,8 @@ column and no persistent "撤销这台设备" explainer card**.
   bg-muted`), then name / kind chip / `StatusMark` / mono meta, expand and row menu — a
   different information order and density, not a squeezed desktop row. Revoke still goes
   through the row menu + confirm dialog.
-- TopBar: **Cnt** = device count (`aria-label`led) and **Fresh** when an `agentred` device
-  is online.
+- TopBar: **Cnt** = device count (`aria-label`led). Nothing else — "is a machine online"
+  is what every row on this page already answers.
 
 ### Chat (desktop `X9Mjl` / `uqEha` / `kpP7A`, mobile `IC5sH` / `C87ty` / `j571mC` / `eh9zO`)
 
@@ -615,13 +643,13 @@ padding to cancel and no negative margin).
   Its title reads `New chat · <agent>` until the message is handed off, then becomes
   `deriveTitle(message)` — the same value dispatch puts on the wire and the landed detail
   shows, so the title does not change again when the real detail takes over.
-- TopBar: **Fresh** only (online-`agentred` dot; web alone never counts). The bare count
-  moved to the SideNav badge, and "find conversations on your devices" is gone — the
-  machine axis answers that question **on this page**, and its online group headers carry a
-  「在这台机器上找」 affordance.
+- TopBar: nothing of its own. The bare count moved to the SideNav badge, "find
+  conversations on your devices" is gone — the machine axis answers that question **on this
+  page**, and its online group headers carry a 「在这台机器上找」 affordance — and the
+  Fresh dot went with the rest of them (see [TopBar](#the-console-shell)).
 - **Mobile** keeps the list → detail flow, never the two-pane layout. It owns its top band
-  (`ownHeader`): row 1 is title + a connection chip (dot **and** text) + account +
-  `AppControls`; row 2 is the same real search at `h-9`. Below that the index scrolls, with
+  (`ownHeader`): row 1 is title + account + `AppControls`; row 2 is the same real search at
+  `h-9`. Below that the index scrolls, with
   a `PenLine` FAB (`fixed bottom-24 right-4 size-14 rounded-full bg-primary`) that raises the
   agent-picker bottom sheet when sessions exist. Picking an agent replaces the whole screen
   with `DraftSession`; there is no second column to put it in.
@@ -817,7 +845,7 @@ two sections must not pay a request for a page they do not show.
 | The composer is pinned, not appended | `SessionDetailView` bands header / transcript / composer; only the middle scrolls, and `AppShell` stops the page scrolling at all | Measured: 2145px page against a 900px viewport put the input 1245px below the fold, and the transcript kept growing under it |
 | The placeholder states capabilities, not a backend | `AIChatInput` derives it from what this render wired up; the host passes no `placeholder` | A `backendType` table promises `@ / !` to hosts that wired neither — the desktop app had a call site hand-writing a replacement string for exactly that reason |
 | Sidebar is its own token | `--sidebar` (light #f4f4f5 = `--secondary`'s light, dark #111316 = `--code-surface`'s dark) | The board draws the nav in `chrome`; splitting it lets the nav and the code surfaces diverge independently |
-| Shell data is best-effort | Badge, Meta, Account and the TopBar Fresh/Cnt render only when their source resolves | The shell must not block the page on a number it cannot get |
+| Shell data is best-effort | Badge, Meta, Account and the TopBar Cnt render only when their source resolves | The shell must not block the page on a number it cannot get |
 
 ## Theming
 

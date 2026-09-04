@@ -42,6 +42,21 @@ func (m *MockSummaryRepo) EXPECT() *MockSummaryRepoMockRecorder {
 	return m.recorder
 }
 
+// CountAttention mocks base method.
+func (m *MockSummaryRepo) CountAttention(ctx context.Context, q agent_session_repo.SummaryQuery) (agent_session_repo.AttentionCounts, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountAttention", ctx, q)
+	ret0, _ := ret[0].(agent_session_repo.AttentionCounts)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountAttention indicates an expected call of CountAttention.
+func (mr *MockSummaryRepoMockRecorder) CountAttention(ctx, q any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountAttention", reflect.TypeOf((*MockSummaryRepo)(nil).CountAttention), ctx, q)
+}
+
 // CountSummaries mocks base method.
 func (m *MockSummaryRepo) CountSummaries(ctx context.Context, q agent_session_repo.SummaryQuery) (int64, error) {
 	m.ctrl.T.Helper()

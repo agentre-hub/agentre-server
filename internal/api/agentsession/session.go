@@ -186,18 +186,26 @@ type TranscriptResponse struct {
 	HasBefore bool  `json:"has_before,omitempty"`
 }
 
-// WaitingCountRequest 是侧栏「对话」那颗角标的取数：账号里此刻等你处理的对话条数。
+// AttentionCountRequest 是侧栏「对话」那颗角标的取数：账号里此刻需要你的对话条数。
 //
 // 没有任何参数。账号由本组的鉴权圈定 —— 收一个 user_id 就是把「数谁的对话」交给了
 // 调用方，而这条端点每一次进入任何页面都会被调到。
-type WaitingCountRequest struct {
-	mux.Meta `path:"/v1/agent-sessions/waiting-count" method:"GET"`
+type AttentionCountRequest struct {
+	mux.Meta `path:"/v1/agent-sessions/attention-count" method:"GET"`
 }
 
-// WaitingCountResponse 只回一个数。
-type WaitingCountResponse struct {
-	// Waiting **没有 omitempty**：侧栏那颗角标只在 > 0 时才画，所以 0 会让它整个不
-	// 出现，那是对的；但字段必须在。省掉之后「没人等你」与「这次没问出来」在线上
-	// 长得一模一样，而前端对这两件事该做的不是同一件。
-	Waiting int64 `json:"waiting"`
+// AttentionCountResponse 回两个数。
+//
+// 两个而不是一个：角标只有一个数字位，但它底下是两件事——「有东西挡在那里等你按」
+// 与「有东西你还没看过」。`title` 要把它们分开说（「N 条等你处理 · M 条未读」，
+// 与桌面端状态栏那颗胶囊同构），在服务端合成一个数交出来的话那句话就拆不回来了。
+//
+// 判据与索引上那几个 chip 共用仓储的 attentionExpr：`unread` 与 `?filter=unread`
+// 数的是同一批行，因此侧栏与 chip 上那两个数**不可能**对不上。
+type AttentionCountResponse struct {
+	// NeedsAttention / Unread 都**没有 omitempty**：侧栏那颗角标只在 > 0 时才画，
+	// 所以 0 会让它整个不出现，那是对的；但字段必须在。省掉之后「没人等你」与
+	// 「这次没问出来」在线上长得一模一样，而前端对这两件事该做的不是同一件。
+	NeedsAttention int64 `json:"needs_attention"`
+	Unread         int64 `json:"unread"`
 }

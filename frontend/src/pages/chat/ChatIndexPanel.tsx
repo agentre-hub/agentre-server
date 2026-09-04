@@ -87,18 +87,6 @@ export function ChatSearchField({
     「保存」。留着它是让人绕一次路去做同一件事。索引的机器组头上现在有
     「在这台机器上找」，那才是这个入口该在的位置。
 */
-export function ChatFreshIndicator() {
-  const { t } = useTranslation();
-  return (
-    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <span
-        aria-hidden="true"
-        className="size-1.5 rounded-full bg-status-running"
-      />
-      {t("appShell.topBar.fresh")}
-    </span>
-  );
-}
 
 /**
  * 索引这一栏：取数失败的横幅 + `SessionIndex` 本身。

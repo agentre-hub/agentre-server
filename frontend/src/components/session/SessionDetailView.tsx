@@ -681,6 +681,25 @@ export default function SessionDetailView({
     [onMarkedRead],
   );
 
+  /**
+   * 打开即已读，**与中继无关**。
+   *
+   * 这一发从前埋在下面那只 attach effect 里：门是 `relayState === "connected"`，而且
+   * 还排在一次 `session.list` 往返**后面**。两道门都是那台机器的事，而已读只是 server
+   * 上的一次写（身份是 conversation_id，时刻由服务端就地取）——机器离线时转录照样从
+   * 账号镜像读得到，已读却记不上：那条对话读完了仍一直亮着未读，刷新还在，侧栏那颗
+   * 角标里也一直垫着它。机器在线但这一次 `session.list` 失败（超时、会话已不在它那儿）
+   * 时同样漏记。
+   *
+   * 所以只跟着 `sid` 走：这一屏认得出是哪条对话，就够记这一笔了。同一条只记第一次
+   * （`markedReadRef`），此后每一轮落定时再补一次，见下面那只轮次边界的 effect。
+   */
+  useEffect(() => {
+    if (!sid || markedReadRef.current === sid) return;
+    markedReadRef.current = sid;
+    markRead(sid);
+  }, [sid, markRead]);
+
   // 已连接 → 取会话摘要 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
   useAliveEffect(
     (alive) => {
@@ -697,12 +716,6 @@ export default function SessionDetailView({
           // origin 在 attach 之前就得学到（下一行就要用它）。
           const origin = s?.peerFingerprint?.trim() || undefined;
           originRef.current = origin;
-          // 打开即已读。同一条只在这里记**第一次**——此后每一轮落定时再补一次，
-          // 见下面那只轮次边界的 effect。
-          if (markedReadRef.current !== sid) {
-            markedReadRef.current = sid;
-            markRead(sid);
-          }
           if (alive()) {
             setSummary(s ?? null);
           }
@@ -799,7 +812,6 @@ export default function SessionDetailView({
       device?.fingerprint,
       originProp,
       initialRow,
-      markRead,
       markTurnActive,
       noteAttachedTurn,
     ],

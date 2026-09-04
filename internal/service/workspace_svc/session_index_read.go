@@ -162,11 +162,11 @@ func baseQuery(in SessionIndexQuery) agent_session_repo.SummaryQuery {
 	}
 	switch in.Filter {
 	case SessionFilterRunning:
-		q.Lifecycle = agent_session_repo.LifecycleRunning
+		q.Attention = agent_session_repo.AttentionRunning
 	case SessionFilterWaiting:
-		q.Lifecycle = agent_session_repo.LifecycleWaiting
+		q.Attention = agent_session_repo.AttentionNeedsAttention
 	case SessionFilterUnread:
-		q.Lifecycle = agent_session_repo.LifecycleUnread
+		q.Attention = agent_session_repo.AttentionUnread
 	case SessionFilterAll:
 	}
 	return q
@@ -633,14 +633,15 @@ func (s *workspaceSvc) viewsOf(
 	return out, nil
 }
 
-// WaitingCount 把「等你处理」这一档的判据原样交给仓储去数。
+// AttentionCounts 把两档的判据原样交给仓储去数。
 //
-// 判据不在这里重写：LifecycleWaiting 的含义（等输入，且与「运行中」互斥）住在
-// agent_session_repo 那一侧，索引的 chip 与这颗角标因此必然是同一个数。在这里另写一遍
-// `WaitingForInput == true` 会让两者在下一次判据演化时悄悄分家。
-func (s *workspaceSvc) WaitingCount(ctx context.Context, userID int64) (int64, error) {
-	return agent_session_repo.Summary().CountSummaries(ctx, agent_session_repo.SummaryQuery{
-		UserID:    userID,
-		Lifecycle: agent_session_repo.LifecycleWaiting,
+// 判据不在这里重写：attentionExpr 住在 agent_session_repo 那一侧，索引的 chip 与这颗
+// 角标因此必然是同一批行。在这里另写一遍 `WaitingForInput == true` 会让两者在下一次
+// 判据演化时悄悄分家 —— 2026-09-04 之前正是这样：chip 改判据的那一轮，侧栏没跟上。
+func (s *workspaceSvc) AttentionCounts(
+	ctx context.Context, userID int64,
+) (agent_session_repo.AttentionCounts, error) {
+	return agent_session_repo.Summary().CountAttention(ctx, agent_session_repo.SummaryQuery{
+		UserID: userID,
 	})
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
@@ -411,13 +412,17 @@ type SessionReadSvc interface {
 	// 记的 updated_at 相比。返回落定的那个时刻，供调用方就地覆盖那一行。
 	// 账号里没有这条对话时不是错——标记已读幂等，回落定值即可。
 	MarkSessionRead(ctx context.Context, userID int64, conversationID string) (int64, error)
-	// WaitingCount 是侧栏「对话」那颗角标要的那个数：账号里此刻**等你处理**的对话
-	// 条数。判据与索引上那个 chip 是同一个（LifecycleWaiting）——侧栏说有 3 条等你、
-	// 点进去筛选却是 2 条，是一种没有任何地方会报错而用户一眼就看得见的错。
+	// AttentionCounts 是侧栏「对话」那颗角标底下的两个数：账号里此刻**等你处理**的
+	// 条数，与**未读**的条数。判据与索引上那几个 chip 是同一个（仓储的
+	// attentionExpr）——侧栏说有 3 条等你、点进去筛选却是 2 条，是一种没有任何地方
+	// 会报错而用户一眼就看得见的错。
 	//
-	// 只回一个数字：这条路在每一次进入任何页面时都会跑一遍，而一页摘要里的标题、
+	// 两个数而不是一个：角标只有一个数字位，但它底下是两件事，`title` 要把它们分开
+	// 说（「N 条等你处理 · M 条未读」）。合成一个交出来的话那句话就拆不回来了。
+	//
+	// 只回数字：这条路在每一次进入任何页面时都会跑一遍，而一页摘要里的标题、
 	// 游标、项目归属一个都用不上。0 是答案不是失败——那时角标整个不画。
-	WaitingCount(ctx context.Context, userID int64) (int64, error)
+	AttentionCounts(ctx context.Context, userID int64) (agent_session_repo.AttentionCounts, error)
 }
 
 type WorkspaceSvc interface {

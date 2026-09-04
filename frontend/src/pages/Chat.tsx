@@ -52,7 +52,6 @@ import {
   type MirrorIndexRow,
 } from "@/pages/chat/chatRows";
 import {
-  ChatFreshIndicator,
   ChatIndexPanel,
   ChatSearchField,
   indexSettled,
@@ -645,7 +644,6 @@ export default function Chat() {
   */
   const pageChrome = !isMobile ? (
     <div className="flex shrink-0 items-center gap-2">
-      {reach.hasOnlineDesktop && <ChatFreshIndicator />}
       <AppControls />
     </div>
   ) : null;
@@ -759,16 +757,6 @@ export default function Chat() {
               <span className="shrink-0 text-prose font-bold text-foreground">
                 {t("nav.chat")}
               </span>
-              {/* 状态不只靠颜色：点 + 可见文字一起给。 */}
-              {reach.hasOnlineDesktop && (
-                <span className="flex shrink-0 items-center gap-1 rounded-full bg-status-running-bg px-2 py-0.5 text-2xs font-medium text-status-running-text">
-                  <span
-                    aria-hidden="true"
-                    className="size-1.5 rounded-full bg-status-running"
-                  />
-                  {t("appShell.topBar.fresh")}
-                </span>
-              )}
               <span className="flex-1" />
               {me && <UserMenu me={me} compact />}
               <AppControls />
