@@ -114,18 +114,8 @@ func main() {
 		})).
 		// metric 会自行挂上 gin 中间件并暴露 GET /metrics（Prometheus 抓取端点）。
 		Registry(cago.FuncComponent(metric.Metrics)).
+		// 连接池由 cago 的 db 组件自己读 db.maxOpenConns 等四项并写进 database/sql。
 		Registry(component.Database()).
-		// 连接池必须紧跟在 Database 之后:cago 的 db 组件只认 driver/dsn/prefix/
-		// debug/prepareStmt,连接数与连接寿命它一概不设,不补这一步就一直是
-		// database/sql 的默认值(空闲上限 2、连接数无上限、连接永不过期)。
-		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
-			sqlDB, err := db.Default().DB()
-			if err != nil {
-				return fmt.Errorf("resolve sql db for pool settings: %w", err)
-			}
-			bootstrap.ApplyDBPool(sqlDB, serverCfg.DBPool)
-			return nil
-		})).
 		Registry(component.Redis()).
 		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
 			bootstrap.RegisterDefaults(serverCfg, signer)

@@ -12,6 +12,17 @@ db:
   dsn: "server:server@tcp(mysql:3306)/server?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
   debug: false
   prepareStmt: false
+  # 连接池。cago 的每项零值表示不设置,谁都不会替这里补缺省值,所以必须显式写:
+  # database/sql 的默认值对服务端是错的——空闲上限只有 2(并发一上来就不停建/拆
+  # 连接)、连接数无上限(一次尖峰顶穿 MySQL 的 max_connections)、连接永不过期
+  # (主从切换后攥着指向旧主的死连接)。
+  #
+  # 多副本:maxOpenConns 是**每个副本**的上限。调它之前先算
+  # 「副本数 x maxOpenConns <= MySQL 的 max_connections」——MySQL 那边默认只有 151。
+  maxOpenConns: 40
+  maxIdleConns: 20
+  connMaxLifetime: 30m
+  connMaxIdleTime: 5m
 
 redis:
   addr: "redis:6379"
@@ -31,20 +42,6 @@ trace:
   useSSL: false
 
 server:
-  # 连接池。cago 的 db 组件不认这几项,由 bootstrap.ApplyDBPool 在数据库组件起来
-  # 之后写进 database/sql;整段留空就用代码里的缺省值(40 / 20 / 30m / 5m)。
-  #
-  # 不配等于用 database/sql 的默认值,而那套默认值对服务端是错的:空闲上限只有 2
-  # (并发一上来就不停建/拆连接)、连接数无上限(一次尖峰顶穿 MySQL 的
-  # max_connections)、连接永不过期(主从切换后攥着指向旧主的死连接)。
-  #
-  # 多副本:max_open_conns 是**每个副本**的上限。调它之前先算
-  # 「副本数 x max_open_conns <= MySQL 的 max_connections」——MySQL 那边默认只有 151。
-  db_pool:
-    max_open_conns: 40
-    max_idle_conns: 20
-    conn_max_lifetime: 30m
-    conn_max_idle_time: 5m
   public_url: "http://localhost:8443"
   # 本机没有 TLS，Cookie 不能带 Secure
   insecure_cookies: true

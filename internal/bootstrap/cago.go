@@ -7,7 +7,6 @@ package bootstrap
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log"
@@ -49,7 +48,6 @@ type ServerConfig struct {
 	RateLimit       RLConfig          `yaml:"rate_limit"`
 	AccountGate     AccountGateConfig `yaml:"account_gate"`
 	WebAuthn        WebAuthnConfig    `yaml:"webauthn"`
-	DBPool          DBPoolConfig      `yaml:"db_pool"`
 	Release         ReleaseConfig     `yaml:"release"`
 }
 
@@ -66,34 +64,6 @@ type ReleaseConfig struct {
 	// CacheTTL 是缓存值在 Redis 里的存活时间。拉取持续失败时，过期让端点从「上一次
 	// 的旧值」自然退回「不知道」。
 	CacheTTL time.Duration `yaml:"cache_ttl"`
-}
-
-// DBPoolConfig 是 database/sql 连接池的参数。cago 的 db 组件不认这几项(它的
-// Config 只有 driver/dsn/prefix/debug/prepareStmt),因此它们由 ApplyDBPool 在
-// 数据库组件起来之后自己写进去。
-//
-// 不配等于用 database/sql 的默认值,而那套默认值对服务端是错的:
-//   - MaxIdleConns 默认 2 —— 并发一上来就不停地建/拆 TCP + MySQL 握手;
-//   - MaxOpenConns 默认无上限 —— 一次流量尖峰就能顶穿 MySQL 的 max_connections;
-//   - ConnMaxLifetime 默认 0(永不过期)—— 主从切换后会一直攥着指向旧主的死连接。
-//
-// 多副本:MaxOpenConns 是**每个副本**的上限,调它之前先算「副本数 × 上限 ≤ MySQL
-// 的 max_connections」,MySQL 那边默认只有 151。
-type DBPoolConfig struct {
-	MaxOpenConns    int           `yaml:"max_open_conns"`
-	MaxIdleConns    int           `yaml:"max_idle_conns"`
-	ConnMaxLifetime time.Duration `yaml:"conn_max_lifetime"`
-	ConnMaxIdleTime time.Duration `yaml:"conn_max_idle_time"`
-}
-
-// ApplyDBPool 把连接池参数写进 database/sql。必须在 component.Database() 起来之后
-// 调用:cago 的 db 组件在 Start 里建好 *gorm.DB,而这四项它的 Config 里根本没有,
-// 于是不写就一直是 database/sql 的默认值(见 DBPoolConfig 的注释)。
-func ApplyDBPool(sqlDB *sql.DB, pool DBPoolConfig) {
-	sqlDB.SetMaxOpenConns(pool.MaxOpenConns)
-	sqlDB.SetMaxIdleConns(pool.MaxIdleConns)
-	sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)
-	sqlDB.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
 }
 
 // WebAuthnConfig 是通行密钥的 Relying Party 配置。
@@ -213,23 +183,6 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	}
 	if out.OAuth.Github.CallbackPath == "" {
 		out.OAuth.Github.CallbackPath = "/v1/auth/oauth/github/callback"
-	}
-	if out.DBPool.MaxOpenConns == 0 {
-		out.DBPool.MaxOpenConns = 40
-	}
-	if out.DBPool.MaxIdleConns == 0 {
-		out.DBPool.MaxIdleConns = 20
-	}
-	if out.DBPool.MaxIdleConns > out.DBPool.MaxOpenConns {
-		// 空闲上限高于总上限没有意义,database/sql 也会自己压下来;这里显式对齐,
-		// 免得配置读起来像是生效了。
-		out.DBPool.MaxIdleConns = out.DBPool.MaxOpenConns
-	}
-	if out.DBPool.ConnMaxLifetime == 0 {
-		out.DBPool.ConnMaxLifetime = 30 * time.Minute
-	}
-	if out.DBPool.ConnMaxIdleTime == 0 {
-		out.DBPool.ConnMaxIdleTime = 5 * time.Minute
 	}
 	if out.RateLimit.AuthorizePerIPPerMin == 0 {
 		out.RateLimit.AuthorizePerIPPerMin = 3

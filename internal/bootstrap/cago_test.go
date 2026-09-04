@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/configs/memory"
 	"github.com/stretchr/testify/assert"
@@ -150,62 +149,6 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	assert.Equal(t, 3, got.WebAuthn.MaxPerAccount)
 	assert.Equal(t, int64(7), got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
 	assert.Equal(t, int64(5), got.RateLimit.PasskeyRegisterBeginPerAccountPerMin)
-}
-
-// 连接池不配就是 database/sql 的默认值:MaxIdleConns=2、MaxOpenConns 无上限。
-// 前者让并发一上来就不停地建/拆 TCP + MySQL 握手,后者让一次流量尖峰能把 MySQL
-// 的 max_connections 顶穿。cago 的 db 组件自己从不调用这三个 setter(它的 Config
-// 里根本没有这几个字段),所以缺省值只能在这里给。
-func TestLoadServerConfig_DBPoolHasBoundedDefaults(t *testing.T) {
-	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
-		"server": map[string]interface{}{},
-	})))
-	assert.NoError(t, err)
-
-	got := LoadServerConfig(context.Background(), cfg)
-
-	assert.Positive(t, got.DBPool.MaxOpenConns, "连接数必须有上限,否则尖峰会顶穿 MySQL")
-	assert.Greater(t, got.DBPool.MaxIdleConns, 2,
-		"空闲上限停在 database/sql 的默认 2 会让并发下不停重建连接")
-	assert.LessOrEqual(t, got.DBPool.MaxIdleConns, got.DBPool.MaxOpenConns)
-	assert.Positive(t, got.DBPool.ConnMaxLifetime,
-		"连接必须有寿命,否则主从切换后会一直攥着指向旧主的死连接")
-	assert.Positive(t, got.DBPool.ConnMaxIdleTime)
-}
-
-// 走真实 YAML:键名对不上的话,运维按副本数调完池子也不生效。
-func TestLoadServerConfig_DBPoolIsConfigurable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	assert.NoError(t, os.WriteFile(path, []byte(
-		"env: dev\ndebug: true\nsource: file\nserver:\n  db_pool:\n"+
-			"    max_open_conns: 7\n    max_idle_conns: 3\n"+
-			"    conn_max_lifetime: 90s\n    conn_max_idle_time: 30s\n"), 0o600))
-	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(path))
-	assert.NoError(t, err)
-
-	got := LoadServerConfig(context.Background(), cfg)
-
-	assert.Equal(t, 7, got.DBPool.MaxOpenConns)
-	assert.Equal(t, 3, got.DBPool.MaxIdleConns)
-	assert.Equal(t, 90*time.Second, got.DBPool.ConnMaxLifetime)
-	assert.Equal(t, 30*time.Second, got.DBPool.ConnMaxIdleTime)
-}
-
-// ApplyDBPool 是「配置读出来了」与「database/sql 真的收到了」之间的那一段。
-// 缺了它,上面两个用例全绿而池子仍然是默认值。
-func TestApplyDBPool_WritesLimitsIntoSQLDB(t *testing.T) {
-	sqlDB, mock, err := sqlmock.New()
-	assert.NoError(t, err)
-	mock.ExpectClose()
-	t.Cleanup(func() { assert.NoError(t, sqlDB.Close()) })
-
-	ApplyDBPool(sqlDB, DBPoolConfig{
-		MaxOpenConns: 7, MaxIdleConns: 3,
-		ConnMaxLifetime: 90 * time.Second, ConnMaxIdleTime: 30 * time.Second,
-	})
-
-	// database/sql 只把连接数上限暴露在 Stats 上,空闲上限与寿命没有公开读法。
-	assert.Equal(t, 7, sqlDB.Stats().MaxOpenConnections)
 }
 
 // release.cache_ttl 缺省时必须落到 release_svc.DefaultCacheTTL,而不是 0——0 会让

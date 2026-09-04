@@ -18,6 +18,13 @@ db:
   dsn: "e2e_user:e2e_password@tcp(127.0.0.1:3306)/agentre_e2e?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
   debug: false
   prepareStmt: false
+  # Connection pool. Every field defaults to zero in cago, meaning "leave
+  # database/sql alone" — and those defaults are wrong for a server (idle cap of
+  # 2, unbounded connections, connections that never expire), so set them here.
+  maxOpenConns: 40
+  maxIdleConns: 20
+  connMaxLifetime: 30m
+  connMaxIdleTime: 5m
 
 redis:
   addr: "127.0.0.1:6379"
