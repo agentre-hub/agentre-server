@@ -112,22 +112,15 @@ func (s *sessionImportSvc) machine(ctx context.Context, userID, deviceID int64) 
 //
 // 判重锚点是 **provider 会话身份**而不是定位符：同一条磁盘会话导第二次时定位符可能
 // 变（文件被移动、重命名），而 provider 会话身份是那条会话自己的名字。
+// 只认这台机器名下那些：同一份转录可能在两台机器上各导过一次，而候选清单问的是
+// 「**这台**机器上这条导过没有」——指向另一台机器那条的话，点「打开」会跳到一条
+// 别处的会话。这两个条件都在查询里，不再把账号的全部摘要读回来自己筛。
 func (s *sessionImportSvc) importedByProviderSession(
 	ctx context.Context, userID int64, fingerprint string,
 ) (map[string]string, error) {
-	rows, err := agent_session_repo.Summary().ListSummariesByUser(ctx, userID)
+	out, err := agent_session_repo.Summary().ListImportedProviderSessions(ctx, userID, fingerprint)
 	if err != nil {
 		return nil, fmt.Errorf("list mirrored sessions: %w", err)
-	}
-	out := make(map[string]string, len(rows))
-	for _, row := range rows {
-		// 只认这台机器名下那些：同一份转录可能在两台机器上各导过一次，而候选清单
-		// 问的是「**这台**机器上这条导过没有」——指向另一台机器那条的话，点「打开」
-		// 会跳到一条别处的会话。
-		if row.ProviderSessionID == "" || row.PeerFingerprint != fingerprint {
-			continue
-		}
-		out[row.ProviderSessionID] = row.ConversationID
 	}
 	return out, nil
 }

@@ -440,15 +440,21 @@ export default function SessionDetailView({
         ? machineTarget(device.fingerprint)
         : null;
 
-  const { client, relayState, relayTicket, relayTicketError, reconnect } =
-    useRelayMachine(relayTarget, {
-      onEvent: (f, at) => {
-        const kind = (f.event as { kind?: string } | undefined)?.kind;
-        if (f.conversationId === sid) {
-          setEvents((prev) => [...prev, toTranscriptFrame(f, at)]);
-          // 计时也吃这条流:首字什么时候到、工具在跑的那几段不算生成,都只有帧说得清。
-          liveTurn.noteFrame(kind);
-          /*
+  const {
+    client,
+    relayState,
+    relayTicket,
+    relayTicketError,
+    handshakeRejection,
+    reconnect,
+  } = useRelayMachine(relayTarget, {
+    onEvent: (f, at) => {
+      const kind = (f.event as { kind?: string } | undefined)?.kind;
+      if (f.conversationId === sid) {
+        setEvents((prev) => [...prev, toTranscriptFrame(f, at)]);
+        // 计时也吃这条流:首字什么时候到、工具在跑的那几段不算生成,都只有帧说得清。
+        liveTurn.noteFrame(kind);
+        /*
             回声 = 一轮开起来了。`user_message` 是 daemon 在「开新一轮」事件流开头
             注入的发起方标记(R18),不是转录里随便一条用户消息。
 
@@ -467,71 +473,68 @@ export default function SessionDetailView({
             与实时的长得一样,而从半路起的表会给出一个偏小、却看着与真的一样的数
             (与「接进来时对端已经在跑」同一档,见 useLiveTurnTiming)。三点不依赖它。
           */
-          if (kind === EventUserMessage && ready) {
-            turn.markTurnActive(true);
-            turn.setPendingAssistant(true);
-          }
-          // 撤占位的判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
-          // daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点
-          // 熄了,而这一轮再没有别的东西能重新点亮它。
-          if (
-            opensAssistantMessage(toTranscriptFrame(f, at), TranscriptSessionId)
-          )
-            turn.setPendingAssistant(false);
+        if (kind === EventUserMessage && ready) {
+          turn.markTurnActive(true);
+          turn.setPendingAssistant(true);
         }
-        // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,
-        // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
-        // run 不会结束,onRunResultDone 那一条刷新路径到不了;R10)。
+        // 撤占位的判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
+        // daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点
+        // 熄了,而这一轮再没有别的东西能重新点亮它。
         if (
-          kind === "tool_permission_request" ||
-          kind === "ask_user_question"
-        ) {
-          decisions.requestWaitersRefresh();
-        }
-      },
-      onRunResultDone: (frame) => {
-        turn.markTurnActive(false);
-        // 收表:终态帧自带的那几个数是 agentred 就着自己扇出的事件流量的,比浏览器
-        // 这边隔着一条中继数出来的准,接下来画的是它们。
-        liveTurn.endTurn();
-        turn.setPendingAssistant(false);
-        setEvents((prev) => [...prev, ...turnDoneFrames(sid, frame)]);
-        // 「已排进这一轮」是对**那一轮**的说明:轮次结束后它已经过期(要么被消费、
-        // 回复就在转录里,要么随轮次一起没了),留着就是在骗人。
-        turn.setSendFeedback((prev) =>
-          prev.kind === "queued" ? { kind: "none" } : prev,
-        );
+          opensAssistantMessage(toTranscriptFrame(f, at), TranscriptSessionId)
+        )
+          turn.setPendingAssistant(false);
+      }
+      // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,
+      // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
+      // run 不会结束,onRunResultDone 那一条刷新路径到不了;R10)。
+      if (kind === "tool_permission_request" || kind === "ask_user_question") {
         decisions.requestWaitersRefresh();
-        // 这一轮落定了 → 摘要重取 + 已读补记（见下面那只 effect 的说明）。
-        //
-        // 只认**实时**的那一遍（ready 之后）：补齐会把历史里的每一个终态帧都从这里
-        // 回放一遍，跟着走就是打开一条 40 轮的对话时连发 40 次 POST，而那 40 轮
-        // 用户一轮都没有「刚看着它跑完」。
-        if (ready) setTurnEpoch((n) => n + 1);
-      },
-      onAutonomousTurnStarted: () => {
-        turn.markTurnActive(true);
-        turn.setPendingAssistant(true);
-        // 这一轮是后台任务替用户开起来的,起点就是此刻 —— 与自己发送开轮同一档。
-        liveTurn.beginTurn(Date.now());
-        decisions.requestWaitersRefresh();
-      },
-      onTurnStarted: () => {
-        // 客户端要的那一轮开始了(wire 2026-09-02 新增)。此前这一路一个信号都没有:
-        // **别的端**在这条会话上发消息时,这一屏只看得到轮次结束,整轮里头部都是
-        // 灰的、「停止」也摆不出来。
-        //
-        // daemon 把它扇给这条会话的**全部**订阅者,发起方自己也在里面,而补齐还会
-        // 把历史里的这一帧重放一遍。已经知道在跑就什么都不做:重开表会把自己发送
-        // 那一刻起的计时抹掉(回声隔着一个往返才回来),重设占位则会在助手已经开口
-        // 之后又点亮一次三点。
-        if (turn.turnActiveRef.current) return;
-        turn.markTurnActive(true);
-        turn.setPendingAssistant(true);
-        liveTurn.beginTurn(Date.now());
-        decisions.requestWaitersRefresh();
-      },
-    });
+      }
+    },
+    onRunResultDone: (frame) => {
+      turn.markTurnActive(false);
+      // 收表:终态帧自带的那几个数是 agentred 就着自己扇出的事件流量的,比浏览器
+      // 这边隔着一条中继数出来的准,接下来画的是它们。
+      liveTurn.endTurn();
+      turn.setPendingAssistant(false);
+      setEvents((prev) => [...prev, ...turnDoneFrames(sid, frame)]);
+      // 「已排进这一轮」是对**那一轮**的说明:轮次结束后它已经过期(要么被消费、
+      // 回复就在转录里,要么随轮次一起没了),留着就是在骗人。
+      turn.setSendFeedback((prev) =>
+        prev.kind === "queued" ? { kind: "none" } : prev,
+      );
+      decisions.requestWaitersRefresh();
+      // 这一轮落定了 → 摘要重取 + 已读补记（见下面那只 effect 的说明）。
+      //
+      // 只认**实时**的那一遍（ready 之后）：补齐会把历史里的每一个终态帧都从这里
+      // 回放一遍，跟着走就是打开一条 40 轮的对话时连发 40 次 POST，而那 40 轮
+      // 用户一轮都没有「刚看着它跑完」。
+      if (ready) setTurnEpoch((n) => n + 1);
+    },
+    onAutonomousTurnStarted: () => {
+      turn.markTurnActive(true);
+      turn.setPendingAssistant(true);
+      // 这一轮是后台任务替用户开起来的,起点就是此刻 —— 与自己发送开轮同一档。
+      liveTurn.beginTurn(Date.now());
+      decisions.requestWaitersRefresh();
+    },
+    onTurnStarted: () => {
+      // 客户端要的那一轮开始了(wire 2026-09-02 新增)。此前这一路一个信号都没有:
+      // **别的端**在这条会话上发消息时,这一屏只看得到轮次结束,整轮里头部都是
+      // 灰的、「停止」也摆不出来。
+      //
+      // daemon 把它扇给这条会话的**全部**订阅者,发起方自己也在里面,而补齐还会
+      // 把历史里的这一帧重放一遍。已经知道在跑就什么都不做:重开表会把自己发送
+      // 那一刻起的计时抹掉(回声隔着一个往返才回来),重设占位则会在助手已经开口
+      // 之后又点亮一次三点。
+      if (turn.turnActiveRef.current) return;
+      turn.markTurnActive(true);
+      turn.setPendingAssistant(true);
+      liveTurn.beginTurn(Date.now());
+      decisions.requestWaitersRefresh();
+    },
+  });
 
   // 断线原因探测排在中继之后：它看的正是中继吐出来的 relayState。
   useReconnectProbe(target.probe, did, relayState);
@@ -724,7 +727,11 @@ export default function SessionDetailView({
       }
       (async () => {
         try {
-          const listRaw = await client.request(rpcMethods.sessionList, {});
+          // 点名要这一条,而不是把整台机器的清单翻一遍去找它:那台机器上可能有
+          // 几千条对话,而这里从头到尾只关心一条。
+          const listRaw = await client.request(rpcMethods.sessionList, {
+            conversationIds: [sid],
+          });
           const list = sessionListFromProtobuf(listRaw);
           const s = list.sessions.find((x) => x.conversationId === sid);
           // origin 在 attach 之前就得学到（下一行就要用它）。
@@ -856,8 +863,12 @@ export default function SessionDetailView({
       markRead(sid);
       void (async () => {
         try {
+          // 同上:每跑完一轮刷新摘要,点名要这一条 —— 此前这里每轮都把整台机器的
+          // 清单拉一遍,是这条路上最频繁的一次搬运。
           const list = sessionListFromProtobuf(
-            await client.request(rpcMethods.sessionList, {}),
+            await client.request(rpcMethods.sessionList, {
+              conversationIds: [sid],
+            }),
           );
           const fresh = list.sessions.find((x) => x.conversationId === sid);
           if (fresh && alive()) setSummary(fresh);
@@ -903,6 +914,9 @@ export default function SessionDetailView({
     // 上的另一条对话时它一直是 true）—— 不把这件事说出来，那一帧就会被读成
     // 「连过又放弃了」，每切一次对话都先闪一条红色的「已经不再自动重试」。
     relayTargetResolved: relayTarget !== null,
+    // 对端按协议版本拒了握手：中继那一侧已经不再重试，所以这一屏不能再按 relayState
+    // 说话——否则就是拿「连接断了 + 重新连接」去讲一件重拨一万次也不会变的事。
+    protocolMismatch: handshakeRejection !== null,
     pinnedAgentredUnavailable,
     // 被撤销的设备仍留在清单上（status 不再是 ACTIVE）：它与「机器离线」是两回事，
     // 离线随时会结束，撤销是永久的（决策 7）。两者的分类在 deriveSessionViewStatus
@@ -1394,6 +1408,7 @@ export default function SessionDetailView({
       status={status}
       machineName={device?.name}
       machineLastSeenMs={device?.last_seen_at}
+      protocolMismatchDetail={handshakeRejection ?? undefined}
       onReconnect={reconnect}
       relayState={relayState}
       history={history}

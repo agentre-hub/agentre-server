@@ -131,6 +131,21 @@ func (mr *MockSummaryRepoMockRecorder) DeleteSummary(ctx, userID, conversationID
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSummary", reflect.TypeOf((*MockSummaryRepo)(nil).DeleteSummary), ctx, userID, conversationID)
 }
 
+// ListImportedProviderSessions mocks base method.
+func (m *MockSummaryRepo) ListImportedProviderSessions(ctx context.Context, userID int64, fingerprint string) (map[string]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListImportedProviderSessions", ctx, userID, fingerprint)
+	ret0, _ := ret[0].(map[string]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListImportedProviderSessions indicates an expected call of ListImportedProviderSessions.
+func (mr *MockSummaryRepoMockRecorder) ListImportedProviderSessions(ctx, userID, fingerprint any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListImportedProviderSessions", reflect.TypeOf((*MockSummaryRepo)(nil).ListImportedProviderSessions), ctx, userID, fingerprint)
+}
+
 // ListSummariesByUser mocks base method.
 func (m *MockSummaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {
 	m.ctrl.T.Helper()
@@ -159,6 +174,21 @@ func (m *MockSummaryRepo) ListSummariesPage(ctx context.Context, q agent_session
 func (mr *MockSummaryRepoMockRecorder) ListSummariesPage(ctx, q any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSummariesPage", reflect.TypeOf((*MockSummaryRepo)(nil).ListSummariesPage), ctx, q)
+}
+
+// ListSummaryStats mocks base method.
+func (m *MockSummaryRepo) ListSummaryStats(ctx context.Context, userID int64) ([]agent_session_repo.SummaryStatsRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListSummaryStats", ctx, userID)
+	ret0, _ := ret[0].([]agent_session_repo.SummaryStatsRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListSummaryStats indicates an expected call of ListSummaryStats.
+func (mr *MockSummaryRepoMockRecorder) ListSummaryStats(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListSummaryStats", reflect.TypeOf((*MockSummaryRepo)(nil).ListSummaryStats), ctx, userID)
 }
 
 // MarkSummaryRead mocks base method.

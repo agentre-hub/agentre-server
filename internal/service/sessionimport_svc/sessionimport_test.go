@@ -15,7 +15,6 @@ import (
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
-	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
@@ -126,7 +125,7 @@ func newRig(t *testing.T) *rig {
 	device_repo.RegisterDevice(devices)
 
 	summaries := mock_agent_session_repo.NewMockSummaryRepo(ctrl)
-	summaries.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).
+	summaries.EXPECT().ListImportedProviderSessions(gomock.Any(), testUserID, testFingerprint).
 		Return(nil, nil).AnyTimes()
 	agent_session_repo.RegisterSummary(summaries)
 
@@ -202,11 +201,10 @@ func TestListCandidates_AlreadyMirroredProviderSession_IsMarkedImported(t *testi
 	// 换掉 rig 里那份空摘要:gomock 按登记顺序取第一条没用尽的期望,而 AnyTimes 那条
 	// 永远用不尽,直接再 EXPECT 一条是盖不住它的。
 	summaries := mock_agent_session_repo.NewMockSummaryRepo(gomock.NewController(t))
-	summaries.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).Return(
-		[]*agent_session_entity.SessionSummary{{
-			UserID: testUserID, PeerFingerprint: testFingerprint,
-			ConversationID: storedConversation, ProviderSessionID: "prov-1",
-		}}, nil).AnyTimes()
+	// 判重只关心 (provider 会话身份 → conversation_id) 这一对,而且只在这台机器名下 ——
+	// 两个条件都在查询里,不再把账号的全部摘要读回来自己筛。
+	summaries.EXPECT().ListImportedProviderSessions(gomock.Any(), testUserID, testFingerprint).
+		Return(map[string]string{"prov-1": storedConversation}, nil).AnyTimes()
 	agent_session_repo.RegisterSummary(summaries)
 	r.peer.scan = &agentrewire.TranscriptImportScanResponse{
 		Backends: []*agentrewire.TranscriptImportBackendResult{{

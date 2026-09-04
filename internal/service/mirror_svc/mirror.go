@@ -261,7 +261,15 @@ func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
 	if len(saved) == 0 {
 		return nil
 	}
-	list, err := m.peer.SessionList(ctx, &agentrewire.SessionListRequest{})
+	// 点名要保存过的那几条,而不是把整台机器的清单拉回来再筛掉其余的:机器上可能有
+	// 几千条对话,而这一侧只会为名单里的那些落库(决策 2),其余的全是白搬。
+	wantedIDs := make([]string, 0, len(saved))
+	for _, s := range saved {
+		if s.ConversationID != "" {
+			wantedIDs = append(wantedIDs, s.ConversationID)
+		}
+	}
+	sessions, err := m.listByConversationIDs(ctx, wantedIDs)
 	if err != nil {
 		return fmt.Errorf("session list: %w", err)
 	}
@@ -277,7 +285,7 @@ func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
 	// 名单是这一刻的权威：不在名单里的对话此刻就摘掉，不等到这轮补齐结束。
 	m.pruneUnwanted(wanted)
 	var errs []error
-	for _, s := range list.GetSessions() {
+	for _, s := range sessions {
 		if s.GetConversationId() == "" {
 			// 对端没给身份的会话镜不下来:它落进哪一行说不出来。
 			continue
@@ -316,12 +324,17 @@ func (m *Mirror) Revive(ctx context.Context) error {
 	if len(stale) == 0 {
 		return nil
 	}
-	list, err := m.peer.SessionList(ctx, &agentrewire.SessionListRequest{})
+	// 同 Sync:点名要「接不上的那几条」,不必把整台机器的清单要回来。
+	staleIDs := make([]string, 0, len(stale))
+	for id := range stale {
+		staleIDs = append(staleIDs, id)
+	}
+	sessions, err := m.listByConversationIDs(ctx, staleIDs)
 	if err != nil {
 		return fmt.Errorf("session list: %w", err)
 	}
 	var errs []error
-	for _, s := range list.GetSessions() {
+	for _, s := range sessions {
 		ts, waiting := stale[s.GetConversationId()]
 		if !waiting || s.GetLifecycleState() == relaywire.SessionLifecycleInterrupted {
 			continue
@@ -334,6 +347,33 @@ func (m *Mirror) Revive(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// sessionListMaxIDs 是一次点名最多带几条。与协议里那一格同值(wire 的
+// SessionListMaxIDs):对端超了会报错,而不是悄悄少给几条 —— 少给的那条在这一侧
+// 读起来是「这条对话已经不在那台机器上了」,于是它的镜像会停在旧状态。
+const sessionListMaxIDs = 200
+
+// listByConversationIDs 点名取这几条对话的摘要,按上限分批。
+//
+// 名单为空时**一个请求都不发**:没有要问的东西就不该占用那台机器的一次往返 ——
+// 常驻循环上的定期动作在稳态必须是零开销。
+func (m *Mirror) listByConversationIDs(ctx context.Context, ids []string) ([]*agentrewire.SessionSummary, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	out := make([]*agentrewire.SessionSummary, 0, len(ids))
+	for start := 0; start < len(ids); start += sessionListMaxIDs {
+		end := min(start+sessionListMaxIDs, len(ids))
+		list, err := m.peer.SessionList(ctx, &agentrewire.SessionListRequest{
+			ConversationIds: ids[start:end],
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, list.GetSessions()...)
+	}
+	return out, nil
 }
 
 // unattached 是此刻还没进对端订阅者集合的那些对话,按会话标识索引。

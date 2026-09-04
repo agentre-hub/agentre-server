@@ -5,7 +5,14 @@
  *   - 批准工具调用 → runtime.submitToolPermission（R10）。
  *   - 待决策已被别的端回答 → 就地说明「已被处理」并刷新状态（R10）。
  */
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   rpcMethods,
   SessionLifecycleRunning,
@@ -167,6 +174,7 @@ function renderPage() {
         expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
+      handshakeRejection: null,
       reconnect: vi.fn(),
     };
   });
@@ -185,6 +193,30 @@ function renderPage() {
 }
 
 describe("会话详情页", () => {
+  // 摘要此前是把整台机器的 session.list 拉过来再 .find() 出这一条 —— 开页一次、
+  // 每跑完一轮再一次。机器上有几千条对话时，那是这条路上最重也最频繁的一次搬运。
+  it("只问这一条对话的摘要，不翻整台机器的清单", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    const seen: unknown[] = [];
+    fakeClient.request.mockImplementation(async (method, params) => {
+      if (method === rpcMethods.sessionList) {
+        seen.push(params);
+        return { sessions: [summary] };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    expect(seen[0]).toMatchObject({ conversationIds: ["42"] });
+  });
+
   it("attach + 补齐后渲染转录", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
@@ -1290,6 +1322,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -1427,6 +1460,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
         expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
+      handshakeRejection: null,
       reconnect: vi.fn(),
     }));
 
@@ -1829,6 +1863,7 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
         expiresAt: Date.now() + 120_000,
       },
       relayTicketError: null,
+      handshakeRejection: null,
       reconnect: vi.fn(),
     }));
     fakeClient.request.mockImplementation(async (method: unknown) => {
@@ -1914,6 +1949,7 @@ describe("会话详情：这条通道声明的目标", () => {
         relayState: "connecting",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -1989,6 +2025,7 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -2132,6 +2169,7 @@ describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态"
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -2180,6 +2218,7 @@ describe("会话详情：历史来自 server 镜像", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -2282,6 +2321,7 @@ describe("会话详情：历史来自 server 镜像", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -2695,6 +2735,7 @@ describe("会话详情：历史来自 server 镜像", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -2784,6 +2825,7 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -2886,6 +2928,7 @@ describe("会话详情：头部", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3058,6 +3101,7 @@ describe("会话详情：头部", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3118,6 +3162,7 @@ describe("会话详情：头部", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3188,6 +3233,7 @@ describe("会话详情：头部", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3256,6 +3302,7 @@ describe("会话详情：头部", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3327,6 +3374,7 @@ describe("会话详情：头部", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3524,6 +3572,7 @@ describe("会话详情：头部", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3612,6 +3661,7 @@ describe("会话详情：输入框", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3850,6 +3900,7 @@ describe("会话详情：打开即标记已读", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3904,6 +3955,7 @@ describe("会话详情：打开即标记已读", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -3960,6 +4012,7 @@ describe("会话详情：打开即标记已读", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -4028,6 +4081,7 @@ describe("会话详情：打开即标记已读", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -4084,6 +4138,7 @@ describe("会话详情：打开即标记已读", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -4234,6 +4289,7 @@ describe("会话详情：/compact", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -4833,6 +4889,7 @@ describe("会话详情：输入框那一带的三种形态", () => {
         relayState: "connecting",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -5327,6 +5384,7 @@ describe("会话详情页:连接彻底断掉之后的出路", () => {
         relayState: "disconnected",
         relayTicket: null,
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect,
       };
     });
@@ -5398,6 +5456,7 @@ describe("会话详情：重连期间的发送", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -5550,6 +5609,7 @@ describe("会话详情：与桌面端对齐的外壳", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -5679,6 +5739,7 @@ describe("会话详情：回到底部", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -5868,6 +5929,7 @@ describe("会话详情：发出去之后回到底部", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });
@@ -6222,6 +6284,7 @@ describe("会话详情页 · 会话级思考力度", () => {
           expiresAt: Date.now() + 120_000,
         },
         relayTicketError: null,
+        handshakeRejection: null,
         reconnect: vi.fn(),
       };
     });

@@ -1,4 +1,7 @@
-import { rpcMethods, sessionListFromProtobuf } from "@agentre-hub/agentre-wire";
+import {
+  rpcMethods,
+  sessionCountsFromProtobuf,
+} from "@agentre-hub/agentre-wire";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -137,17 +140,13 @@ function useSessionCounts(
   useAliveEffect(
     (alive) => {
       if (!active || !client || relayState !== "connected") return;
+      // 问三个数,而不是把整份清单拉过来自己数:那台机器上可能有几千条对话,为了
+      // 卡片上这三个数字把它们全搬过线,正是设备页展开一下就卡住的原因。
       client
-        .request(rpcMethods.sessionList, {})
+        .request(rpcMethods.sessionCounts, {})
         .then((raw) => {
           if (!alive()) return;
-          const res = sessionListFromProtobuf(raw);
-          setCounts({
-            total: res.sessions.length,
-            waiting: res.sessions.filter((s) => s.waitingForInput).length,
-            running: res.sessions.filter((s) => s.lifecycleState === "running")
-              .length,
-          });
+          setCounts(sessionCountsFromProtobuf(raw));
         })
         .catch(() => {});
     },

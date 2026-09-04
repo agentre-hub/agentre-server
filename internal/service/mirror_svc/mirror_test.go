@@ -539,6 +539,22 @@ func TestSync_Reconnect_PullsFromOwnStoredCursor(t *testing.T) {
 	assert.Equal(t, int64(5), r.lastCursor(t))
 }
 
+// Given 账号只保存了其中几条对话;When 同步;Then 向机器点名要那几条,而不是把
+// 整台机器的清单拉回来再在内存里筛掉其余的 —— 机器上有几千条对话时,那是每次重连
+// 都要搬一遍的东西,而其中绝大多数这一侧一个字都不会落库。
+func TestSync_AsksThePeerOnlyForTheSavedConversations(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+
+	require.NoError(t, r.mirror.Sync(context.Background(),
+		[]SavedSession{{ConversationID: conv42}}))
+
+	lists := r.relay.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_LIST)
+	require.NotEmpty(t, lists)
+	first := lists[0].(*agentrewire.SessionListRequest)
+	assert.Equal(t, []string{conv42}, first.GetConversationIds())
+}
+
 // Given 对端把会话标题等元数据一并交出;When 同步完成;
 // Then 摘要按「账号 + 发起端指纹 + 会话标识」落库,内容原样(老 daemon 缺的字段留空不猜)。
 func TestSync_StoresSummaryUnderOriginIdentity(t *testing.T) {

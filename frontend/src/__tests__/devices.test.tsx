@@ -23,26 +23,19 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // 「取计数 → setState → 重渲染 → 又取一次」永远转下去，假时钟下这会把整条微任务
 // 队列占死。
 vi.mock("@/hooks/use-relay", () => {
-  const sessions = [
-    {
-      conversationId: "c-1",
-      lifecycleState: "running",
-      latestSeq: 1,
-      waitingForInput: true,
-    },
-    { conversationId: "c-2", lifecycleState: "idle", latestSeq: 1 },
-    { conversationId: "c-3", lifecycleState: "running", latestSeq: 1 },
-  ];
+  // 卡片上那三个数问的是 session.counts（三个数），不是把整份清单拉过来自己数。
+  const counts = { total: 3n, running: 2n, waiting: 1n };
   const perTarget = new Map<string, unknown>();
   return {
     useRelayMachine: (target: string | null) => {
       const key = target ?? "";
       if (!perTarget.has(key)) {
         perTarget.set(key, {
-          client: target ? { request: async () => ({ sessions }) } : null,
+          client: target ? { request: async () => counts } : null,
           relayState: target ? "connected" : "disconnected",
           relayTicket: null,
           relayTicketError: null,
+          handshakeRejection: null,
         });
       }
       return perTarget.get(key);

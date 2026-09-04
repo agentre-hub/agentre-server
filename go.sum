@@ -12,6 +12,10 @@ github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260903091755-eac06906d46a h1:fG
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260903091755-eac06906d46a/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904083118-2a93c2a6260f h1:SekyLu7gcnuiGIZDby/h9ZBG6Y02kcGZ9enIhnzHiko=
 github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904083118-2a93c2a6260f/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904091705-83e23cf620bb h1:gnjw6G03upVvanEfyEMVJsN/xRyc4k53DeUcoHlwsqQ=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904091705-83e23cf620bb/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904092015-5fd51a714616 h1:yNQL87cfjOtVs80BAqczF9RoaKtcSAlGIsirEvf6e6Q=
+github.com/agentre-hub/agentre/pkg/wire v0.0.0-20260904092015-5fd51a714616/go.mod h1:D/nSi1sigJ30bG30K/jckG31YjjD23KvEfYsHBQKN7o=
 github.com/alicebob/miniredis/v2 v2.38.0 h1:nZAzCR+Lj+Vxk4ZXzm2NuKq2O33RXj1XxJ2e2uP9jiw=
 github.com/alicebob/miniredis/v2 v2.38.0/go.mod h1:TcL7YfarKPGDAthEtl5NBeHZfeUQj6OXMm/+iu5cLMM=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=
@@ -30,6 +34,8 @@ github.com/bytedance/sonic/loader v0.5.1 h1:Ygpfa9zwRCCKSlrp5bBP/b/Xzc3VxsAW+5NI
 github.com/bytedance/sonic/loader v0.5.1/go.mod h1:AR4NYCk5DdzZizZ5djGqQ92eEhCCcdf5x77udYiSJRo=
 github.com/cago-frame/cago v0.0.0-20260902121753-076847c5da4a h1:540xjvzn8DKeBTCb+BJrUKdVNUbDx2RfJL+YUgdvAAw=
 github.com/cago-frame/cago v0.0.0-20260902121753-076847c5da4a/go.mod h1:OLDUyIuil1ATOw8ST5SCsbjumOCAbZQS/5nZ6XpgG0c=
+github.com/cago-frame/cago v0.0.0-20260904093313-91f5dd45559c h1:MGUmAosGqmeDHPPK+Gk9+vBejyoO6D5sjD5N/SWhtBo=
+github.com/cago-frame/cago v0.0.0-20260904093313-91f5dd45559c/go.mod h1:OLDUyIuil1ATOw8ST5SCsbjumOCAbZQS/5nZ6XpgG0c=
 github.com/cenkalti/backoff/v5 v5.0.3 h1:ZN+IMa753KfX5hd8vVaMixjnqRZ3y8CuJKRKj1xcsSM=
 github.com/cenkalti/backoff/v5 v5.0.3/go.mod h1:rkhZdG3JZukswDf7f0cwqPNk4K0sa+F97BxZthm/crw=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=

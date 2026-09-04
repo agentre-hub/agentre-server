@@ -2,6 +2,8 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { rpcMethods } from "@agentre-hub/agentre-wire";
+
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
@@ -12,32 +14,23 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-// 展开一台在线 agentred 时，「对话」一节的条数与等待数要真去问那台机器（帧 47）。
+// 展开一台在线 agentred 时，「对话」一节的条数与等待数要真去问那台机器（帧 47）——
+// 问的是**三个数**（session.counts），不是把整份清单拉过来自己数：那台机器上可能
+// 有几千条对话，为三个数搬一遍摘要正是设备页变卡的原因。
+const relayRequest = vi.fn(async (method: unknown) => {
+  if (method !== rpcMethods.sessionCounts) {
+    throw new Error("unexpected method");
+  }
+  return { total: 3n, running: 2n, waiting: 1n };
+});
+
 vi.mock("@/hooks/use-relay", () => ({
   useRelayMachine: (target: string | null) => ({
-    client: target
-      ? {
-          request: async () => ({
-            sessions: [
-              {
-                conversationId: "c-1",
-                lifecycleState: "running",
-                latestSeq: 1,
-                waitingForInput: true,
-              },
-              { conversationId: "c-2", lifecycleState: "idle", latestSeq: 1 },
-              {
-                conversationId: "c-3",
-                lifecycleState: "running",
-                latestSeq: 1,
-              },
-            ],
-          }),
-        }
-      : null,
+    client: target ? { request: relayRequest } : null,
     relayState: target ? "connected" : "disconnected",
     relayTicket: null,
     relayTicketError: null,
+    handshakeRejection: null,
   }),
 }));
 

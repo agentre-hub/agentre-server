@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/activitystats"
 	"github.com/agentre-hub/agentre-server/internal/repository/activity_repo"
@@ -96,8 +95,8 @@ func TestOverview_DisabledFallsBackToSavedSessionsWithoutTouchingRollups(t *test
 	f := setup(t)
 	f.settings.EXPECT().Get(gomock.Any(), testUserID).
 		Return(user_entity.Settings{UserID: testUserID}, nil)
-	f.summary.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).Return(
-		[]*agent_session_entity.SessionSummary{
+	f.summary.EXPECT().ListSummaryStats(gomock.Any(), testUserID).Return(
+		[]agent_session_repo.SummaryStatsRow{
 			{LastMessageAt: atDay(0), AgentSyncID: "a1", BackendType: "claudecode"},
 			{LastMessageAt: atDay(1), AgentSyncID: "a1", BackendType: "claudecode"},
 		}, nil)
@@ -122,8 +121,8 @@ func TestOverview_SavedPathIgnoresSessionsThatNeverReportedATurn(t *testing.T) {
 	f := setup(t)
 	f.settings.EXPECT().Get(gomock.Any(), testUserID).
 		Return(user_entity.Settings{UserID: testUserID}, nil)
-	f.summary.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).Return(
-		[]*agent_session_entity.SessionSummary{
+	f.summary.EXPECT().ListSummaryStats(gomock.Any(), testUserID).Return(
+		[]agent_session_repo.SummaryStatsRow{
 			{LastMessageAt: atDay(0)},
 			{LastMessageAt: 0},
 		}, nil)
@@ -148,8 +147,8 @@ func TestOverview_SavedPathKeepsBlankDimensionsAsTheirOwnGroup(t *testing.T) {
 	f := setup(t)
 	f.settings.EXPECT().Get(gomock.Any(), testUserID).
 		Return(user_entity.Settings{UserID: testUserID}, nil)
-	f.summary.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).Return(
-		[]*agent_session_entity.SessionSummary{
+	f.summary.EXPECT().ListSummaryStats(gomock.Any(), testUserID).Return(
+		[]agent_session_repo.SummaryStatsRow{
 			{
 				LastMessageAt: atDay(0), AgentSyncID: "a1", BackendType: "claudecode",
 				ProviderKey: "anthropic", ModelKey: "claude-sonnet-5", ProjectSyncID: "p1",
@@ -315,13 +314,13 @@ func TestOverview_DistributionsAreRankedDeterministically(t *testing.T) {
 	f := setup(t)
 	f.settings.EXPECT().Get(gomock.Any(), testUserID).
 		Return(user_entity.Settings{UserID: testUserID}, nil)
-	rows := []*agent_session_entity.SessionSummary{
+	rows := []agent_session_repo.SummaryStatsRow{
 		{LastMessageAt: atDay(0), AgentSyncID: "a2"},
 		{LastMessageAt: atDay(0), AgentSyncID: "a1"},
 		{LastMessageAt: atDay(0), AgentSyncID: "a3"},
 		{LastMessageAt: atDay(0), AgentSyncID: "a3"},
 	}
-	f.summary.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).Return(rows, nil)
+	f.summary.EXPECT().ListSummaryStats(gomock.Any(), testUserID).Return(rows, nil)
 
 	view, err := Activity().Overview(f.ctx, testUserID, "7d")
 
@@ -340,7 +339,7 @@ func TestOverview_EmptyAccountRendersEmptyListsNotNull(t *testing.T) {
 	f := setup(t)
 	f.settings.EXPECT().Get(gomock.Any(), testUserID).
 		Return(user_entity.Settings{UserID: testUserID}, nil)
-	f.summary.EXPECT().ListSummariesByUser(gomock.Any(), testUserID).Return(nil, nil)
+	f.summary.EXPECT().ListSummaryStats(gomock.Any(), testUserID).Return(nil, nil)
 
 	view, err := Activity().Overview(f.ctx, testUserID, "30d")
 

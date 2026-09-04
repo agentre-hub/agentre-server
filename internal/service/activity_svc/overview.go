@@ -153,7 +153,9 @@ func reportedSeries(ctx context.Context, userID int64, from, to string) (*series
 // LastMessageAt == 0 的会话不计数：0 不是 1970-01-01，是「对端从没报过一轮」。按 0 切
 // 日界会在热力图最左边凭空长出一格 1970，并把「历史最长连续」的起点拉到那一天。
 func savedSeries(ctx context.Context, userID int64, from, to string) (*series, error) {
-	rows, err := agent_session_repo.Summary().ListSummariesByUser(ctx, userID)
+	// 只读统计用得上的那几列：热力图问的是整段历史（连续天数只有全量答得出），
+	// 行数省不掉，但标题与 cwd 这些最占字节的列一个都用不上。
+	rows, err := agent_session_repo.Summary().ListSummaryStats(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +164,8 @@ func savedSeries(ctx context.Context, userID int64, from, to string) (*series, e
 	_, loc := activitystats.ServerZone()
 	out := newSeries()
 	for _, row := range rows {
+		// 0 不是 1970-01-01，是「对端从没报过一轮」。查询已经把这一档筛掉了，这里
+		// 仍然判一次：它是这段聚合自己的前提，而不是那条查询顺手带来的性质。
 		if row.LastMessageAt == 0 {
 			continue
 		}

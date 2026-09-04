@@ -35,6 +35,19 @@ type SummaryRepo interface {
 	// 对话). Account-scoped and nothing more: a read that drops user_id is a
 	// cross-account leak.
 	ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error)
+	// ListImportedProviderSessions 交回「这台机器名下、已经镜像着的那些 provider
+	// 会话」→ 它们的 conversation_id。
+	//
+	// 判重只关心这两列，因此它是一次带条件的点查，而不是把账号里的全部摘要读回来
+	// 再在内存里筛掉其余的——导入对话框每开一次就读一遍全份，那是这条路上最没有
+	// 必要的一次全表读。
+	ListImportedProviderSessions(ctx context.Context, userID int64, fingerprint string) (map[string]string, error)
+	// ListSummaryStats 交回统计要的那几列：最后活动时刻 + 五个维度键。
+	//
+	// 它与 ListSummariesByUser 的区别只在**读多少东西**：统计不看标题、cwd、
+	// 转录游标这些列，而它们恰好是这张表上最占字节的几列。热力图问的是整段历史
+	// （连续天数只有全量答得出），行数省不掉，那就至少别把用不上的文本搬一遍。
+	ListSummaryStats(ctx context.Context, userID int64) ([]SummaryStatsRow, error)
 	// ListSummariesPage 按游标读一页摘要，判据全在 SummaryPageQuery 里
 	// （2026-08-19-session-index-pagination.md 决策 1 / 7）。Limit ≤ 0 时不限条数
 	// ——那是「按会话号精确查」那条路径要的形状，它要的不是一页。
@@ -233,6 +246,48 @@ func (r *summaryRepo) UpsertSummary(ctx context.Context, s *agent_session_entity
 			"last_message_at", "provider_key", "model_key", "updatetime",
 		}),
 	}).Create(s).Error
+}
+
+// SummaryStatsRow 是统计用得上的那几列。刻意不是 SessionSummary：那一份带着标题与
+// cwd，而统计一个字都不看它们。
+type SummaryStatsRow struct {
+	LastMessageAt int64
+	AgentSyncID   string
+	BackendType   string
+	ProviderKey   string
+	ModelKey      string
+	ProjectSyncID string
+}
+
+func (r *summaryRepo) ListSummaryStats(ctx context.Context, userID int64) ([]SummaryStatsRow, error) {
+	var rows []SummaryStatsRow
+	// last_message_at = 0 是「对端从没报过一轮」，统计一律不计它（见 overview 的
+	// 注释）——那一档在这里就筛掉，不必读回去再丢。
+	if err := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).
+		Select("last_message_at", "agent_sync_id", "backend_type", "provider_key", "model_key", "project_sync_id").
+		Where("user_id = ? AND last_message_at > 0", userID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r *summaryRepo) ListImportedProviderSessions(ctx context.Context, userID int64, fingerprint string) (map[string]string, error) {
+	var rows []struct {
+		ProviderSessionID string
+		ConversationID    string
+	}
+	if err := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).
+		Select("provider_session_id", "conversation_id").
+		Where("user_id = ? AND peer_fingerprint = ? AND provider_session_id <> ''", userID, fingerprint).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.ProviderSessionID] = row.ConversationID
+	}
+	return out, nil
 }
 
 func (r *summaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {

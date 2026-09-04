@@ -461,6 +461,18 @@ func (s *fakeStore) ListSummariesByUser(_ context.Context, userID int64) ([]*age
 // 它只写摘要、按账号读回自己的游标（mirror.go 的 summaryStore 就是这么窄的）。
 // 这里只是把 RegisterSummary 要的完整接口补齐；真被调到时返回零值会让断言当场对不上，
 // 而不是悄悄给出一份看起来合理的假数据。
+func (s *fakeStore) ListImportedProviderSessions(
+	_ context.Context, _ int64, _ string,
+) (map[string]string, error) {
+	return nil, nil
+}
+
+func (s *fakeStore) ListSummaryStats(
+	_ context.Context, _ int64,
+) ([]agent_session_repo.SummaryStatsRow, error) {
+	return nil, nil
+}
+
 func (s *fakeStore) ListSummariesPage(
 	_ context.Context, _ agent_session_repo.SummaryPageQuery,
 ) ([]*agent_session_entity.SessionSummary, error) {
