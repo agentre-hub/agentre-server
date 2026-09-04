@@ -3,6 +3,16 @@
   "topBar": {
     "fresh": "桌面端已连接"
   },
+  "connection": {
+    "connected": "实时更新中",
+    "connecting": "正在连接…",
+    "disconnected": "未连接",
+    "degraded": "{{status}} · 每 30 秒刷新",
+    "connectedHint": "变更会立刻出现在这一页",
+    "connectingHint": "正在重连，这期间改为每 30 秒刷新一次",
+    "pollingHint": "实时信号不在，改为每 30 秒刷新一次",
+    "retry": "重新连接实时更新"
+  },
   "userMenu": {
     "trigger": "账号菜单",
     "account": "账号与安全",

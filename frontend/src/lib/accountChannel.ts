@@ -52,6 +52,16 @@ export type AccountChannelFrame = AccountChannelSignal;
 /** 兜底轮询周期。与桌面端的 sync_svc.PollInterval 同一个 30 秒。 */
 export const AccountChannelPollMs = 30_000;
 
+/**
+ * 这条通道此刻的状态，界面据此点灯。
+ *
+ * 三态而不是池子那四个 `RelayState` 的透传：`connecting` 与 `reconnecting` 在用户
+ * 那里是同一件事（在动、会自己回来），分成两个只会让灯多闪一次而说不出新东西。
+ * `disconnected` 与它们**不是**同一件事——它不会自己回来（见下面 onSignalClosed
+ * 那一段），所以它必须单独占一态，界面才有地方挂那个出路。
+ */
+export type AccountChannelState = "connected" | "connecting" | "disconnected";
+
 /** 池子上信号那一路要的那一小块能力（ISP），测试据此注入替身。 */
 export type AccountSignalSource = Pick<
   typeof relayClientPool,
@@ -81,6 +91,15 @@ export interface AccountChannelOptions {
   source?: AccountSignalSource;
   /** 线上帧 codec；默认使用共享包生成的 Protobuf codec。 */
   codec?: AccountChannelCodec;
+  /**
+   * 状态变了。**只在真的变了的时候**调用——退避重连期间每拨一次都喊一遍的话，
+   * 界面上那盏灯会跟着闪，而它想说的事从头到尾没变过。
+   *
+   * 与 onRefresh 分开的理由是它们服务两件事：onRefresh 是「去把数据读回来」，
+   * 这里是「告诉用户你看到的东西还是不是实时的」。合成一个的话，界面要么按
+   * 「有没有被喊过」猜状态，要么每次重拉都重画一遍灯。
+   */
+  onState?: (state: AccountChannelState) => void;
 }
 
 export interface AccountChannelHandle {
@@ -123,6 +142,24 @@ export function startAccountChannel(
   let live = false;
 
   /**
+   * 灯此刻的读数，以及**这条连接有没有说过话**。
+   *
+   * 后者用来分辨两种长得一样的「这一路不可用」：连过之后的每一次断开都伴随一次
+   * 状态事件（RelayConnection.handleClose 先喊 onSignalClosed，再置 reconnecting），
+   * 而池子在建连那一步就失败时**只有** onSignalClosed，一个状态事件都不会有。
+   * 后者才是那个不会自愈的：`ensureConnection` 已经把连接置回 null，此后没有任何
+   * 东西重试，页面就那么一直停在 30 秒轮询上。
+   */
+  let state: AccountChannelState = "connecting";
+  let heardConnection = false;
+
+  function setState(next: AccountChannelState): void {
+    if (stopped || next === state) return;
+    state = next;
+    options.onState?.(next);
+  }
+
+  /**
    * 「该拉了」唯一的出口。停掉之后不再喊：调用方 stop 多半是因为自己正在拆掉，
    * 这时再喊一次只会去拉一个没人看的视图。
    */
@@ -158,15 +195,20 @@ export function startAccountChannel(
       // 这里只把信号那一路标为不可用并退回 30 秒轮询。
       onSignalClosed: () => {
         live = false;
+        if (!heardConnection) setState("disconnected");
       },
-      onStateChange: (state) => {
-        if (state === "connected") {
+      onStateChange: (next) => {
+        heardConnection = true;
+        if (next === "connected") {
           live = true;
+          setState("connected");
           // 连上（首次或重连都一样）：立刻主动拉一次，断线期间的变更由它补齐。
           refresh(null);
           return;
         }
         live = false;
+        // connecting 与 reconnecting 折成同一态：都是「在动，会自己回来」。
+        setState(next === "disconnected" ? "disconnected" : "connecting");
       },
     },
   );

@@ -61,6 +61,14 @@ export interface SessionDetailHeaderProps {
    */
   running: boolean;
   /**
+   * 此刻有没有待决的审批 / 提问挡在那里，**实时**的那一份。
+   *
+   * 与摘要上那面 `waitingForInput` 旗是同一个事实（daemon 的
+   * `waitingForInput` 就写作 `len(pendingWaiters) > 0`），只是这一份跟着待决清单
+   * 走、事件一到就重拉。派生在 SessionDetailView 的 `decisionPending`。
+   */
+  decisionPending: boolean;
+  /**
    * 宿主页面级的那簇控件（Chat 桌面档的连接态 + 语言/主题）。
    *
    * 嵌入形态下这个头部**就是**那一页的顶带：壳不再画 52px 顶栏，那簇控件没有别的
@@ -91,6 +99,7 @@ export default function SessionDetailHeader({
   machineOnline,
   status,
   running,
+  decisionPending,
   headerRight,
   clientRef,
   originRef,
@@ -139,32 +148,28 @@ export default function SessionDetailHeader({
   }
 
   /**
-   * 头部认这条对话此刻是什么状态 —— 「在不在跑」这一维认 `running`，不认快照。
+   * 头部认这条对话此刻是什么状态。三个**输入**各有自己的来路，判定与文案仍各自只有
+   * 一处（`toAgentStatus` / `sessionStatusLabel`）—— 这里只负责把最新的那三样喂进去。
    *
-   * `identity` 背后的 `summary` 只在 attach 那一刻由 session.list 取一次、此后
-   * 永不刷新（见 SessionDetailView 的 `identity`）。整片状态挂在它上面就是「打开
-   * 时是什么样、之后一直是什么样」：自己发出去的一轮、别的端开起来的一轮、以及
-   * 这一轮跑完，头部一概看不见 —— 灰点会一直灰着，「停止」也一直不出现。
+   * 「在不在跑」认 `running`（`turnActive`）：run/steer 选路与转录的三点认的也是它，
+   * 这一屏关于这件事只有那一个答案。快照答不出它 —— 自己发出去的一轮、别的端开起来
+   * 的一轮都发生在两次取数之间。
    *
-   * `running` 走的是 `turnActive`，run/steer 选路与转录的三点认的也是它，这一屏
-   * 关于「这一轮在不在跑」只有那一个答案。
+   * 「有没有东西等你按」认 `decisionPending`（实时待决清单），**不**认快照上那面旗，
+   * 也不再在跑的时候把这一档让掉。让掉的理由从前是「那面旗在跑的时候必然过期」，
+   * 而现在这一维有了自己的实时来路；而且让掉本身是错的：待决挡住的那一轮在 daemon
+   * 眼里仍是 running，于是一条卡在审批上的对话，左栏是黄的（共享包
+   * `computeAttention` 把「等你按」排在「在跑」之前）、头部却是绿的。
    *
-   * 其余各维没有第二份来路，照旧退回快照：interrupted 原样带过来，认不出的旧状态
-   * 与空值一律作 idle（与此前的兜底同一条）。等待输入那面旗在跑的时候必然过期
-   * ——它就在同一份快照里——所以那一档直接落下。
-   *
-   * 判定与文案本身仍各自只有一处（`toAgentStatus` / `sessionStatusLabel`），这里
-   * 只是把过期的那两个**输入**换掉。
+   * 生命周期的其余各维（interrupted / failed / idle）没有实时来路，照旧读快照 ——
+   * 但那份快照现在每一轮落定都会重取（见 SessionDetailView 那只轮次边界的 effect），
+   * 不再是打开时那一瞬。所以这里把它**原样**交给 `toAgentStatus`，不再自己折一遍：
+   * 从前那道「只留 interrupted、其余作 idle」的折叠会把 failed 也读成闲置，而左栏
+   * 同一条对话是红的。
    */
-  const lifecycleNow = running
-    ? "running"
-    : identity?.lifecycleState === "interrupted"
-      ? "interrupted"
-      : "idle";
-  const waitingNow = running ? false : Boolean(identity?.waitingForInput);
   const statusNow = {
-    lifecycleState: lifecycleNow,
-    waitingForInput: waitingNow,
+    lifecycleState: running ? "running" : (identity?.lifecycleState ?? "idle"),
+    waitingForInput: decisionPending,
   };
 
   /** mono meta 行的各段。只有拿得出来的才进来（分隔符由渲染处夹在两段之间）。 */
@@ -174,7 +179,7 @@ export default function SessionDetailHeader({
     node: React.ReactNode;
     hideAt?: string;
   }[] = [];
-  if (identity?.lifecycleState || agent || running) {
+  if (identity?.lifecycleState || agent || running || decisionPending) {
     metaParts.push({
       key: "agent",
       node: (
@@ -182,7 +187,7 @@ export default function SessionDetailHeader({
           data-testid="session-detail-status"
           className="inline-flex shrink-0 items-center gap-1"
         >
-          {(identity?.lifecycleState || running) && (
+          {(identity?.lifecycleState || running || decisionPending) && (
             <StatusDot status={toAgentStatus(statusNow)} size="xs" />
           )}
           {/* 状态不只靠颜色：四个态都有可见文字（session.list.*）。Agent 名认不出来时

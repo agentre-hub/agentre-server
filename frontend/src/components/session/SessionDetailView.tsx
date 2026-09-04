@@ -6,7 +6,14 @@ import {
   SessionLifecycleRunning,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -297,6 +304,15 @@ export default function SessionDetailView({
   const [history, setHistory] = useState({ settled: false, loaded: false });
   /** 从这台机器补齐失败（此前是 catch {} 静默吞掉的）。 */
   const [catchUpFailed, setCatchUpFailed] = useState(false);
+  /**
+   * 已经看着几轮落定了。0 = 装载之后还没有过轮次边界。
+   *
+   * 「摘要重取」与「已读补记」两件事都挂在它上面：它们的触发时机是同一个（一轮跑
+   * 完），而两件事的收尾都要有 alive() 守着——异步应答不能落到已经换掉的目标上。
+   * 所以它是一个由回调点火、由 effect 消费的计数，而不是在回调里直接 await
+   * （回调里没有地方拿 alive()）。
+   */
+  const [turnEpoch, setTurnEpoch] = useState(0);
 
   const clientRef = useRef<import("@/lib/relayClient").RelayClient | null>(
     null,
@@ -381,6 +397,8 @@ export default function SessionDetailView({
     setReady(false);
     scrollback.reset();
     setCatchUpFailed(false);
+    // 不清的话，切过去那一瞬 effect 会带着上一条对话攒下的序号立刻跑一遍。
+    setTurnEpoch(0);
   }
 
   // 目标机器与它的可达性（device / deviceError / machineOnline / meValid）整片
@@ -470,6 +488,12 @@ export default function SessionDetailView({
           prev.kind === "queued" ? { kind: "none" } : prev,
         );
         decisions.requestWaitersRefresh();
+        // 这一轮落定了 → 摘要重取 + 已读补记（见下面那只 effect 的说明）。
+        //
+        // 只认**实时**的那一遍（ready 之后）：补齐会把历史里的每一个终态帧都从这里
+        // 回放一遍，跟着走就是打开一条 40 轮的对话时连发 40 次 POST，而那 40 轮
+        // 用户一轮都没有「刚看着它跑完」。
+        if (ready) setTurnEpoch((n) => n + 1);
       },
       onAutonomousTurnStarted: () => {
         turn.markTurnActive(true);
@@ -631,6 +655,32 @@ export default function SessionDetailView({
   // 同上：装载那一遍只用得上这一只，它同样是稳定的。
   const { noteAttachedTurn } = liveTurn;
 
+  /**
+   * 把「这个账号读到这条对话为止」记到服务端，并把服务端盖回来的时刻交给宿主
+   * （索引那一行的未读徽标在它手上）。
+   *
+   * 身份就是 conversation_id 一个值（决策 1）——从前这里要按「索引行给的 → 机器
+   * 报的 → 镜像认出来的 → 这台机器」四格去凑发起端指纹，凑错就把已读记在一条账号
+   * 里不存在的对话上。时刻由服务端就地取，客户端的钟不可信。
+   *
+   * 记不上不影响读这条对话：它只让「未读」那一档多留一条，比拿一次失败去打断阅读
+   * 要好。所以这里既不重试也不报错面。
+   *
+   * 两个调用方（装载那一遍、每一轮落定）都在这里过一趟，而不是各写一遍 POST：
+   * 「已读记在哪个身份上、失败怎么办」只有这一处说法。
+   */
+  const markRead = useCallback(
+    (conversationId: string) => {
+      void api<{ last_read_at: number }>("/v1/agent-sessions/read", {
+        method: "POST",
+        body: JSON.stringify({ conversation_id: conversationId }),
+      })
+        .then((res) => onMarkedRead?.(conversationId, res.last_read_at))
+        .catch(() => {});
+    },
+    [onMarkedRead],
+  );
+
   // 已连接 → 取会话摘要 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
   useAliveEffect(
     (alive) => {
@@ -647,21 +697,11 @@ export default function SessionDetailView({
           // origin 在 attach 之前就得学到（下一行就要用它）。
           const origin = s?.peerFingerprint?.trim() || undefined;
           originRef.current = origin;
-          // 打开即已读。身份就是 conversation_id 一个值（决策 1）——从前这里要按
-          // 「索引行给的 → 机器报的 → 镜像认出来的 → 这台机器」四格去凑发起端指纹，
-          // 凑错就把已读记在一条账号里不存在的对话上。时刻由服务端就地取，客户端
-          // 的钟不可信。
-          //
-          // 记不上不影响读这条对话：它只让「未读」那一档多留一条，比拿一次失败去打断
-          // 阅读要好。所以这里既不重试也不报错面。
+          // 打开即已读。同一条只在这里记**第一次**——此后每一轮落定时再补一次，
+          // 见下面那只轮次边界的 effect。
           if (markedReadRef.current !== sid) {
             markedReadRef.current = sid;
-            void api<{ last_read_at: number }>("/v1/agent-sessions/read", {
-              method: "POST",
-              body: JSON.stringify({ conversation_id: sid }),
-            })
-              .then((res) => onMarkedRead?.(sid, res.last_read_at))
-              .catch(() => {});
+            markRead(sid);
           }
           if (alive()) {
             setSummary(s ?? null);
@@ -759,10 +799,48 @@ export default function SessionDetailView({
       device?.fingerprint,
       originProp,
       initialRow,
-      onMarkedRead,
+      markRead,
       markTurnActive,
       noteAttachedTurn,
     ],
+  );
+
+  /**
+   * 一轮落定之后：把摘要重取一遍，并把已读推到这一轮之后。
+   *
+   * **摘要**从前只在 attach 那一刻取一次、此后永不刷新，头部于是只有「在不在跑」
+   * 这一维是活的，其余各维停在打开那一瞬。而 agentred 每次重启都会把非终态会话整批
+   * 标成 interrupted，于是一条打开时是中断态的对话，你在它上面跑完一轮之后头部又退
+   * 回红点的「已中断」，而账号镜像那一行早就是 idle 了 —— 同一条对话在左栏与头部同
+   * 时摆出两种颜色，而两边说的都是自己那份事实。
+   *
+   * **已读**同理只在装载那一遍记过一次，而「未读」的判据是
+   * `last_message_at > last_read_at`：你正盯着它跑完的这一轮把活动时刻推到了那次已读
+   * 之后，左栏那一行于是当着你的面重新亮起「未读」。桌面端同一处的做法是 lastMessageAt
+   * 每推进一次就补记一次（`chat-panel` 的 mark-read effect），这一端缺的就是这一档。
+   *
+   * 跟着轮次边界走而不是开一条定时轮询：这几维真变的时刻就是它 —— 生命周期落定、
+   * 待决清单结算、标题在首轮之后才有。
+   *
+   * 重取不到就留着上一份：一次失败的往返不该把头部打回「还不知道这是哪条对话」。
+   */
+  useAliveEffect(
+    (alive) => {
+      if (turnEpoch === 0 || !client || relayState !== "connected") return;
+      markRead(sid);
+      void (async () => {
+        try {
+          const list = sessionListFromProtobuf(
+            await client.request(rpcMethods.sessionList, {}),
+          );
+          const fresh = list.sessions.find((x) => x.conversationId === sid);
+          if (fresh && alive()) setSummary(fresh);
+        } catch {
+          // 见上：留着上一份。
+        }
+      })();
+    },
+    [turnEpoch, client, relayState, sid, markRead],
   );
 
   // 断线重连后刷新待决策：补齐只负责转录事件，pendingWaiters 需要重新拉一次（R10）。
@@ -772,6 +850,18 @@ export default function SessionDetailView({
   useEffect(() => {
     if (relayState === "connected" && ready) void refreshWaiters();
   }, [relayState, ready, refreshWaiters]);
+
+  /**
+   * 有待决的审批 / 提问挡在那里 —— 头部状态那一维的**实时**来路。
+   *
+   * 与摘要上那面 `waitingForInput` 旗是**同一个**事实，不是另一份判定：daemon 的
+   * `waitingForInput` 就写作 `len(pendingWaiters) > 0`（`session_catchup.go`，而且
+   * 明说了它永不落库、每次现算）。差别只在新鲜度 —— 这一份跟着待决清单走，事件一到
+   * 就重拉，而摘要那一份是上一次往返时的答案。
+   */
+  const decisionPending =
+    decisions.waiters.toolPermissions.length > 0 ||
+    decisions.waiters.askUserQuestions.length > 0;
 
   const status = deriveSessionViewStatus({
     relayState,
@@ -1216,9 +1306,10 @@ export default function SessionDetailView({
       status={status}
       // 「这一轮在不在跑」认 `turnActive`：它的起点就是 attach 那一刻的
       // `lifecycleState`（见上面 markTurnActive 那处），此后每一个轮次边界都往里
-      // 写 —— 自己发送 / 别的端的自主续轮开起来、终态帧收掉。`summary` 相反是
-      // attach 那一刻的快照且此后永不刷新，挂在它上面头部就永远停在打开时那一档。
+      // 写 —— 自己发送 / 别的端的自主续轮开起来、终态帧收掉。`summary` 相反只在装载
+      // 与每一轮**落定**时各取一份，轮次进行中它答不出「此刻在不在跑」。
       running={turn.turnActive}
+      decisionPending={decisionPending}
       headerRight={headerRight}
       clientRef={clientRef}
       originRef={originRef}

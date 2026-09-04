@@ -1,8 +1,13 @@
-import { render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as accountChannel from "@/lib/accountChannel";
-import { useAccountChannel } from "@/hooks/use-account-channel";
+import type { AccountChannelState } from "@/lib/accountChannel";
+import {
+  retryAccountChannel,
+  useAccountChannel,
+  useAccountChannelState,
+} from "@/hooks/use-account-channel";
 
 vi.mock("@/lib/accountChannel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
@@ -161,5 +166,99 @@ describe("useAccountChannel", () => {
     expect(mockedStart).toHaveBeenCalledTimes(2);
     deliver(PRESENCE);
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** 只看灯的那种订阅者：不要「该拉了」，只要状态。 */
+function Light() {
+  const state = useAccountChannelState();
+  return <span data-testid="light">{state}</span>;
+}
+
+/** 把一次状态变化送进共用的那条通道。 */
+function deliverState(state: AccountChannelState): void {
+  const call = mockedStart.mock.calls.at(-1);
+  expect(call).toBeDefined();
+  act(() => call![0].onState?.(state));
+}
+
+describe("useAccountChannelState", () => {
+  it("与「该拉了」的订阅者共用同一条通道，不为了点灯多开一条", () => {
+    const page = render(<Subscriber types={[PRESENCE]} onRefresh={vi.fn()} />);
+    const light = render(<Light />);
+
+    expect(mockedStart).toHaveBeenCalledTimes(1);
+
+    // 两种订阅者都走光了才停：灯还亮着的时候把通道停掉，灯就再也不会变了。
+    page.unmount();
+    expect(stopped).toBe(0);
+    light.unmount();
+    expect(stopped).toBe(1);
+  });
+
+  it("只有灯的页面也能把通道拉起来", () => {
+    render(<Light />);
+    expect(mockedStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("状态变了灯跟着变；起手是「连接中」而不是假装连上了", () => {
+    render(<Light />);
+    expect(screen.getByTestId("light").textContent).toBe("connecting");
+
+    deliverState("connected");
+    expect(screen.getByTestId("light").textContent).toBe("connected");
+
+    deliverState("disconnected");
+    expect(screen.getByTestId("light").textContent).toBe("disconnected");
+  });
+
+  it("后挂上来的灯读到的是当下的状态，不是初值", () => {
+    render(<Subscriber types={[PRESENCE]} onRefresh={vi.fn()} />);
+    deliverState("connected");
+
+    // 状态是**事件**：这条通道早就连上了，晚到的订阅者等不到它再说一次。
+    render(<Light />);
+    expect(screen.getByTestId("light").textContent).toBe("connected");
+  });
+
+  it("重试换一条新的通道，并且当场退回「连接中」", () => {
+    render(<Light />);
+    deliverState("disconnected");
+
+    act(() => retryAccountChannel());
+
+    expect(stopped).toBe(1);
+    expect(mockedStart).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("light").textContent).toBe("connecting");
+
+    // 新那条是真的接上了：它说话灯就跟着变。
+    deliverState("connected");
+    expect(screen.getByTestId("light").textContent).toBe("connected");
+  });
+});
+
+describe("通道压根起不来的时候那盏灯", () => {
+  it("落在「未连接」上，而不是永远停在「连接中」", () => {
+    mockedStart.mockImplementation(() => {
+      throw new Error("WebSocket 构造失败");
+    });
+
+    render(<Light />);
+
+    // 停在「连接中」的话，那颗「重新连接」永远不出现，用户手上一个可点的东西
+    // 都没有——而这一态恰恰是唯一需要他动手的那一态。
+    expect(screen.getByTestId("light").textContent).toBe("disconnected");
+  });
+
+  it("重试也起不来就还留在「未连接」上：按钮不会自己消失", () => {
+    render(<Light />);
+    deliverState("disconnected");
+    mockedStart.mockImplementation(() => {
+      throw new Error("WebSocket 构造失败");
+    });
+
+    act(() => retryAccountChannel());
+
+    expect(screen.getByTestId("light").textContent).toBe("disconnected");
   });
 });

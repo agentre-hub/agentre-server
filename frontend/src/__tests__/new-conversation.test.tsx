@@ -1729,3 +1729,99 @@ describe("草稿页的权限档位与模型控件", () => {
     ).toBeNull();
   });
 });
+
+/**
+ * 顶带：**四态同一副外壳**（桌面端 chat-panel-header 的规格 2026-08-23 决策 2/3）。
+ *
+ * 「还没发第一句」与「这条对话已经开着」在桌面端是同一条 68px 带，只是标题与 meta
+ * 各段换了内容。控制台此前是两副头：草稿那副 `py-3` + 24px 头像，右栏顶上还另叠
+ * 着一条 68px 的 chat-chrome；第一句一发出去，chrome 整条消失、头换成详情那副
+ * 68px 的 —— 顶部 116px 塌到 68px，头像 24→32，转录整体上跳。
+ *
+ * 现在两处共用共享包的 `SessionHeaderBand`，这一组用例盯的就是「同一副」。
+ */
+describe("草稿与详情共用同一条顶带", () => {
+  /** 一条带里的头像那一格。四态都要占住它。 */
+  function avatarIn(band: HTMLElement): HTMLElement {
+    const el = band.querySelector<HTMLElement>('[role="img"]');
+    if (!el) throw new Error("头像那一格空着");
+    return el;
+  }
+
+  it("草稿的顶带与发出去之后那条同形：68px、同一档头像，桌面右栏只此一条带", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+    });
+    renderChat();
+    await openDraft();
+
+    const draftBand = screen.getByTestId("draft-header");
+    expect(draftBand.className).toMatch(/h-\[68px\]/);
+    expect(draftBand.className).toContain("@container/header");
+    expect(avatarIn(draftBand).className).toContain("size-8");
+    // 草稿那条带**就是**右栏的顶带：页面级那簇控件落进它的右端，chat-chrome
+    // 因此不再另画一条 —— 那正是发出第一句时会凭空消失的 68px。
+    expect(screen.queryByTestId("chat-chrome")).toBeNull();
+    expect(
+      within(draftBand).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+
+    await typeInDraft("跑一下失败的测试");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-send").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+
+    await screen.findByTestId("session-detail-view");
+    const liveBand = screen.getByTestId("session-detail-identity");
+    expect(liveBand.className).toMatch(/h-\[68px\]/);
+    expect(liveBand.className).toContain("@container/header");
+    expect(avatarIn(liveBand).className).toContain("size-8");
+  });
+
+  it("标题槽先写「新对话 · Agent」；第一句一交出去就换成那句话本身", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    // 派发一直在飞：量的是「已经交出去、还没落地」的那一段。
+    mockDispatch.mockImplementation(() => new Promise(() => {}));
+    renderChat();
+    await openDraft();
+
+    const band = () => screen.getByTestId("draft-header");
+    expect(
+      within(band()).getByRole("heading", { name: "New chat · Backend Agent" }),
+    ).toBeTruthy();
+    // meta 行的第一段与详情那条同形同序：状态点 + Agent 名。
+    expect(screen.getByTestId("draft-header-meta").textContent).toContain(
+      "Backend Agent",
+    );
+
+    await typeInDraft("跑一下失败的测试");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-send").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+
+    // 标题这一刻就是详情落地后会显示的那一个（同一个 deriveTitle 算的同一件事），
+    // 于是右栏换成真详情时标题一个字都不动。
+    await waitFor(() =>
+      expect(
+        within(band()).getByRole("heading", { name: "跑一下失败的测试" }),
+      ).toBeTruthy(),
+    );
+  });
+});

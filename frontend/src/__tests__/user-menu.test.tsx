@@ -23,6 +23,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
+// 账号块上那颗痣读的是账号级通道的状态（见 UserMenu 的注释）。这里把通道钉住，
+// 用例才不必依赖「一次真的取票在这一刻有没有落定」——落定与否会决定第二行是邮箱
+// 还是状态文案，那是 user-menu-connection.test.tsx 的被测对象，不是这一族的。
+vi.mock("@/lib/accountChannel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
+  return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
+});
+
 const mockedApi = vi.mocked(api);
 
 const me = {

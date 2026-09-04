@@ -2939,6 +2939,25 @@ describe("会话详情：头部", () => {
     ).toBeTruthy();
   });
 
+  /*
+    身份认不出来时那一格**照样占住**（桌面端 chat-panel-header 的同一条）：
+    `/v1/workspace/agents` 还没回来、或者这条老会话上根本没有 agentSyncId 时，
+    此前这一格整个不渲染，标题于是横向跳一格（32px 头像 + 12px 间距）——同一条
+    对话打开的头一瞬和之后长得不一样。
+  */
+  it("认不出 Agent 时头像那一格仍占住，标题不横向跳一格", async () => {
+    // 账号里一个 Agent 都答不出来 → 头部解不出身份。
+    stubHeader([]);
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const band = screen.getByTestId("session-detail-identity");
+    expect(within(band).queryByRole("img")).toBeNull();
+    const slot = band.querySelector('[data-testid="session-detail-avatar"]');
+    expect(slot).toBeTruthy();
+    expect((slot as HTMLElement).className).toContain("size-8");
+  });
+
   it("头部说得出是哪个 Agent 在跑，头像上的是那个 Agent 的调色板色", async () => {
     stubHeader();
     renderEmbeddedDetail();
@@ -3815,6 +3834,39 @@ describe("会话详情：输入框", () => {
  * 承载连接的那台机器的指纹会记到另一条对话上。
  */
 describe("会话详情：打开即标记已读", () => {
+  /** 嵌入形态挂一次（宿主能递 onMarkedRead 的那一档就是它）。 */
+  function mountEmbedded(
+    props: { onMarkedRead?: (id: string, at: number) => void } = {},
+  ) {
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          clientId: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        reconnect: vi.fn(),
+      };
+    });
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            form="embedded"
+            {...props}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
   // 从前这条守的是「四格次序里索引行那一格最优先」：已读的身份是发起端指纹，凑错
   // 就记在别的对话上。身份换成 conversation_id 之后没有可凑的东西了——这一条改守
   // 「不管实时连接那一端报的是谁，记的都是这条对话本身」。
@@ -3990,6 +4042,75 @@ describe("会话详情：打开即标记已读", () => {
       </MemoryRouter>,
     );
     await vi.waitFor(() => expect(posted).toHaveLength(2));
+  });
+
+  // ── 开着的那条对话不该在你眼前变回未读 ──────────────────────────────────
+  //
+  // 已读只在 attach 那一刻记一次,而「未读」的判据是 `last_message_at > last_read_at`
+  // ——你正盯着它跑完的这一轮把 last_message_at 推到了已读时刻之后,于是左栏那一行
+  // 当着你的面重新亮起「未读」黄点。桌面端同一处的做法是 lastMessageAt 每推进一次
+  // 就补记一次(chat-panel 的 mark-read effect),这一端缺的就是「推进时补记」。
+  it("Given 打开着这条对话 When 一轮跑完 Then 把已读推到这一轮之后", async () => {
+    const posted: unknown[] = [];
+    const onMarkedRead = vi.fn();
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        return { last_read_at: 1_700_000_000_000 + posted.length };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    mountEmbedded({ onMarkedRead });
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    // 补齐跑完 → ready:回放来的终态帧不算数(见下一条),这一档要等它之后。
+    await vi.waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    await act(async () => {});
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    expect(posted[1]).toEqual({ conversation_id: "42" });
+    // 宿主那一行也要跟着搬:徽标在它手上。
+    expect(onMarkedRead).toHaveBeenLastCalledWith("42", 1_700_000_000_002);
+  });
+
+  // 补齐会把历史里的每一个终态帧都经 onRunResultDone 回放一遍(见 attach 那一段的
+  // 说明)。拿回放去补记已读,就是打开一条有 40 轮历史的对话时连发 40 次 POST。
+  it("Given 补齐回放历史的终态帧 Then 不跟着补记已读", async () => {
+    const posted: unknown[] = [];
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        return { last_read_at: 1 };
+      }
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onRunResultDone?.({} as never);
+      capturedOpts.onRunResultDone?.({} as never);
+    });
+
+    mountEmbedded();
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await act(async () => {});
+    expect(posted).toHaveLength(1);
   });
 });
 
@@ -6193,6 +6314,133 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
     });
     renderPage();
     await screen.findByText(/重构登录页/);
+
+    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+  });
+
+  // ── 轮次落定之后:快照要重取,不能停在打开那一刻 ──────────────────────────
+  //
+  // 「在不在跑」这一维接了实时,其余各维仍退回 attach 那一刻的快照,而 agentred
+  // 每次重启都会把非终态会话整批标成 interrupted。于是一条打开时是中断态的对话,
+  // 你在它上面跑完一轮之后头部又退回**中断**(红点),而账号镜像那一行早就是 idle
+  // 了 —— 同一条对话在左栏与头部同时摆出两种颜色。
+  it("Given 打开时报中断 When 一轮跑完 Then 头部按重取到的状态显示", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    let listCalls = 0;
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) {
+        listCalls += 1;
+        // 第一次(attach 那一遍)报中断,此后执行端已经把它跑回 idle。
+        return {
+          sessions: [
+            {
+              ...summary,
+              lifecycleState: listCalls === 1 ? "interrupted" : "idle",
+            },
+          ],
+        };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await vi.waitFor(() => expect(statusText()).toContain("Interrupted"));
+    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    await vi.waitFor(() => expect(statusText()).toContain("Idle"));
+    expect(statusDotClass()).toContain("bg-status-idle");
+  });
+
+  // ── 待决挡在那里:头部与列表行说同一件事 ────────────────────────────────
+  //
+  // 列表行的判定(共享包 computeAttention)把「有东西等你按」排在「在跑」之前,头部
+  // 却在 running 时把等待那一档直接落下 —— 一条卡在审批上的对话,左栏是黄的、头部
+  // 是绿的。等待这一维现在有实时来路(pendingWaiters 与快照上那个标志是**同一个**
+  // 事实:daemon 的 waitingForInput 就是 len(pendingWaiters) > 0),不必再让给快照。
+  it("Given 一轮在跑但有审批挡着 Then 头部说等待输入,而停止照旧摆得出", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, lifecycleState: "running" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return {
+          toolPermissions: [
+            {
+              requestId: "req-1",
+              toolName: "Bash",
+              input: "{}",
+            },
+          ],
+          askUserQuestions: [],
+        };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    await vi.waitFor(() =>
+      expect(statusText()).toContain("Waiting for your input"),
+    );
+    expect(statusDotClass()).toContain("bg-status-waiting");
+    // 这一轮**确实**还在跑:等待只改状态这一维,停不停得下来是另一件事。
+    expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
+  });
+
+  // 审批被别的端答掉之后要跟着收回去:等待那一档的来路是实时清单,不是一次性的。
+  it("Given 审批被答掉 When 待决清单空了 Then 头部退回 Running", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    let pending = true;
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, lifecycleState: "running" }] };
+      if (method === rpcMethods.sessionPendingWaiters) {
+        if (!pending) return { toolPermissions: [], askUserQuestions: [] };
+        return {
+          toolPermissions: [
+            { requestId: "req-1", toolName: "Bash", input: "{}" },
+          ],
+          askUserQuestions: [],
+        };
+      }
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await vi.waitFor(() =>
+      expect(statusText()).toContain("Waiting for your input"),
+    );
+
+    pending = false;
+    act(() =>
+      capturedOpts.onEvent?.(
+        {
+          conversationId: "42",
+          event: { kind: "tool_permission_request" },
+          seq: 3,
+        } as never,
+        0,
+      ),
+    );
 
     await vi.waitFor(() => expect(statusText()).toContain("Running"));
   });

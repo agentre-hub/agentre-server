@@ -3,6 +3,16 @@
   "topBar": {
     "fresh": "Desktop connected"
   },
+  "connection": {
+    "connected": "Live",
+    "connecting": "Connecting…",
+    "disconnected": "Not connected",
+    "degraded": "{{status}} · every 30s",
+    "connectedHint": "Changes show up here as they happen",
+    "connectingHint": "Reconnecting — refreshing every 30 seconds meanwhile",
+    "pollingHint": "No live signal — refreshing every 30 seconds instead",
+    "retry": "Reconnect live updates"
+  },
   "userMenu": {
     "trigger": "Account menu",
     "account": "Account & security",

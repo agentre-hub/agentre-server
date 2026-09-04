@@ -705,7 +705,10 @@ row's status colour (`statusDotClass`).
   `running` **and not** waiting for input. `unread` is a **real read state**, not a rename
   of "waiting": `last_message_at > last_read_at`, the same predicate the desktop app's
   attention-store uses, backed by `agent_sessions.last_read_at` and written by
-  `POST /v1/agent-sessions/read` when you open a conversation. The two are
+  `POST /v1/agent-sessions/read` when you open a conversation **and again at every turn
+  boundary while it stays open** — a single stamp taken at open is overtaken by the very
+  turn you are watching finish, and the row you are reading goes unread in front of you.
+  The two are
   different questions — a conversation you have read but which is parked waiting for input
   is not unread — so the SideNav badge keeps counting "waiting for you" while the
   index says "unread". The chip shows an amber count
@@ -797,7 +800,7 @@ two sections must not pay a request for a page they do not show.
 | Revoke lives in the row menu | Revoke is a shared-package `DropdownMenu` item → confirm `Dialog` → real `POST /v1/oauth/token/revoke`, with failure keeping the dialog and success refreshing the list; no persistent explainer card | A dangerous action must be discoverable without dominating the page |
 | Desktop chat embeds the real detail | The right pane renders `SessionDetailView` (`form="embedded"`), the same implementation the `/devices/:id/sessions/:id` route uses; unselected shows the `kpP7A` empty state | A static placeholder would drift from the real page; one implementation keeps relay/approval/composer behaviour shared |
 | Search is honest | Chat's list search really filters rows, server-side and by title only, and its copy says exactly that | A search affordance that promises more than it matches is a fake control either way |
-| Unread is a real column, not a relabel | `last_read_at` on the mirror row; opening a conversation writes it; the chip filters on `updated_at > last_read_at` | This chip was once called 「未读」 over a `waiting_for_input` predicate, and the 2026-08-17 rename to 「等你处理」 was the honest fix at the time. Giving it a real read state is the other way to make the name true — and it matches what the desktop app already means by "unread" |
+| Unread is a real column, not a relabel | `last_read_at` on the mirror row; opening a conversation writes it, and so does every turn that lands while it is open; the chip filters on `updated_at > last_read_at` | This chip was once called 「未读」 over a `waiting_for_input` predicate, and the 2026-08-17 rename to 「等你处理」 was the honest fix at the time. Giving it a real read state is the other way to make the name true — and it matches what the desktop app already means by "unread" |
 | The composer is pinned, not appended | `SessionDetailView` bands header / transcript / composer; only the middle scrolls, and `AppShell` stops the page scrolling at all | Measured: 2145px page against a 900px viewport put the input 1245px below the fold, and the transcript kept growing under it |
 | The placeholder states capabilities, not a backend | `AIChatInput` derives it from what this render wired up; the host passes no `placeholder` | A `backendType` table promises `@ / !` to hosts that wired neither — the desktop app had a call site hand-writing a replacement string for exactly that reason |
 | Sidebar is its own token | `--sidebar` (light #f4f4f5 = `--secondary`'s light, dark #111316 = `--code-surface`'s dark) | The board draws the nav in `chrome`; splitting it lets the nav and the code surfaces diverge independently |

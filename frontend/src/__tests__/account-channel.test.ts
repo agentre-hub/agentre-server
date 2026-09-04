@@ -25,6 +25,7 @@ import {
   AccountChannelSyncVersion,
   startAccountChannel,
   type AccountChannelHandle,
+  type AccountChannelState,
   type AccountSignalSource,
 } from "@/lib/accountChannel";
 import type { RelayState } from "@/lib/relayConnection";
@@ -66,6 +67,10 @@ class FakeSignalSource {
   /** 连接掉了，正在退避重连。 */
   reconnecting(): void {
     this.onStateChange?.("reconnecting");
+  }
+  /** 连接被判死，不再自动重拨（close() 过，或建连时就没起来）。 */
+  disconnected(): void {
+    this.onStateChange?.("disconnected");
   }
   /** 保留通道被判死：订阅建不起来，或信号源中途断了。 */
   signalClosed(): void {
@@ -361,5 +366,90 @@ describe("账号级实时信号：多种种类", () => {
     view.changeOnServer("v2");
     await vi.advanceTimersByTimeAsync(POLL_MS);
     expect(view.state.inView).toBe("v2");
+  });
+});
+
+/**
+ * 这条通道此刻的状态（规格「账号级实时通道 · 呈现」）。
+ *
+ * 灯是**三态**，不是池子那四个 RelayState 的透传：`connecting` 与 `reconnecting`
+ * 在用户那里是同一件事（在动、会自己回来），而 `disconnected` 与它们**不是**同一
+ * 件事——它不会自己回来，界面必须给出路。
+ */
+describe("这条通道此刻的状态", () => {
+  /** 起一路信号，把每一次状态变化按序记下来。 */
+  function watch(): { fake: FakeSignalSource; states: AccountChannelState[] } {
+    const fake = new FakeSignalSource();
+    const states: AccountChannelState[] = [];
+    start({
+      source: fake.source,
+      onRefresh: vi.fn(),
+      onState: (state) => states.push(state),
+    });
+    return { fake, states };
+  }
+
+  it("连上、掉线重连、被判死，三态各说一次", () => {
+    const { fake, states } = watch();
+
+    fake.connected();
+    fake.reconnecting();
+    fake.connected();
+    fake.disconnected();
+
+    expect(states).toEqual([
+      "connected",
+      "connecting",
+      "connected",
+      "disconnected",
+    ]);
+  });
+
+  it("同一个状态不重复说：退避期间每拨一次不该让灯闪一下", () => {
+    const { fake, states } = watch();
+
+    fake.connected();
+    fake.reconnecting();
+    fake.reconnecting();
+    fake.reconnecting();
+
+    expect(states).toEqual(["connected", "connecting"]);
+  });
+
+  it("首次就没连起来（只有这一路不可用，没有任何状态事件）判成已断开", () => {
+    const { fake, states } = watch();
+
+    // 池子取票失败时只调这一下（relayClientPool.subscribeSignals 的 catch），
+    // 此后**没有任何东西重试**——这是唯一一个不会自愈的状态，灯必须说出来。
+    fake.signalClosed();
+
+    expect(states).toEqual(["disconnected"]);
+  });
+
+  it("连过之后的每一次断开都伴随重连，不因为那一下就说成已断开", () => {
+    const { fake, states } = watch();
+
+    fake.connected();
+    // 真实顺序：RelayConnection.handleClose 先喊 onSignalClosed，再置
+    // reconnecting。拿前一下判「已断开」会把一条正在自愈的连接说成死了。
+    fake.signalClosed();
+    fake.reconnecting();
+
+    expect(states).toEqual(["connected", "connecting"]);
+  });
+
+  it("停掉之后不再说话：调用方多半正在拆自己", () => {
+    const fake = new FakeSignalSource();
+    const states: AccountChannelState[] = [];
+    const handle = start({
+      source: fake.source,
+      onRefresh: vi.fn(),
+      onState: (state) => states.push(state),
+    });
+
+    handle.stop();
+    fake.connected();
+
+    expect(states).toEqual([]);
   });
 });
