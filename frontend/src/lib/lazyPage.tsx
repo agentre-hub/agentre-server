@@ -2,7 +2,11 @@ import { useEffect, useState, type ComponentType } from "react";
 
 type PageModule = { default: ComponentType };
 
-/** 按路由切出去的页：既能当组件渲染，也能提前把模块取回来。 */
+/**
+ * 按路由切出去的页：既能当组件渲染，也能提前把模块取回来。
+ *
+ * `preload()` 取不到不报错——它只表示「这一趟结束了」，成没成看下一次渲染。
+ */
 export type PreloadablePage = ComponentType & { preload: () => Promise<void> };
 
 /**
@@ -24,14 +28,31 @@ export type PreloadablePage = ComponentType & { preload: () => Promise<void> };
 export function lazyPage(load: () => Promise<PageModule>): PreloadablePage {
   let loaded: PageModule | null = null;
   // 预热与渲染可能同时想要这份模块，谁先来谁发起，另一个搭同一趟车。
-  let inflight: Promise<PageModule> | null = null;
+  let inflight: Promise<PageModule | null> | null = null;
 
-  function fetchOnce(): Promise<PageModule> {
+  /**
+   * 取一次模块，取不到给 `null`。
+   *
+   * 失败在这里就收敛掉，不往外抛：两个调用方对「没取到」的答复是同一个「那就先不
+   * 画」——渲染那一支维持空页等下一次挂载，预热那一支本就是白赚的。留着这条拒绝，
+   * 就要在两处各写一遍同样的 catch，漏掉哪一处都会变成用户什么都没做却冒出来的
+   * 未处理拒绝。
+   *
+   * 失败也不进缓存：chunk 没拉到多半是网络抖动或刚好撞上换版本，把那次结果留着，
+   * 之后每一次进这一页都会搭上它、永远等不到模块。
+   */
+  function fetchOnce(): Promise<PageModule | null> {
     if (loaded) return Promise.resolve(loaded);
-    inflight ??= load().then((m) => {
-      loaded = m;
-      return m;
-    });
+    inflight ??= load().then(
+      (m) => {
+        loaded = m;
+        return m;
+      },
+      () => {
+        inflight = null;
+        return null;
+      },
+    );
     return inflight;
   }
 
@@ -41,7 +62,7 @@ export function lazyPage(load: () => Promise<PageModule>): PreloadablePage {
       if (loaded) return;
       let alive = true;
       void fetchOnce().then((m) => {
-        if (alive) setMod(m);
+        if (alive && m) setMod(m);
       });
       return () => {
         alive = false;
@@ -73,8 +94,10 @@ export function lazyPage(load: () => Promise<PageModule>): PreloadablePage {
  * 返回退订函数：还没跑的空闲回调在卸载时撤掉。
  */
 export function warmPages(
-  pages: { preload: () => Promise<unknown> }[],
+  pages: Pick<PreloadablePage, "preload">[],
 ): () => void {
+  // 预热是白赚的：取不到就当没赚到，真正切过去时 LazyPage 会自己重取。这里不接结果
+  // 也不接失败，是因为 `preload()` 按约定就不会拒绝（见 PreloadablePage）。
   const run = () => {
     for (const page of pages) void page.preload();
   };
