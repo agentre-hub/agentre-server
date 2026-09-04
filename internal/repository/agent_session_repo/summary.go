@@ -233,9 +233,7 @@ type summaryRepo struct{}
 // UPDATE 命中的必然是它——docs/architecture.md「只在表恰好一个唯一键时安全」。
 //
 // peer_fingerprint **在**赋值列里：它已经不是身份，而是对端每轮重报的来源标注，
-// 跟着标题与生命周期一起被覆盖。peer_session_id **不在**：线格式上已经没有这个值了
-// （决策 3 把它整个换成了 conversation_id），把它列进赋值等于每一次 upsert 都拿空串
-// 覆盖掉回填时留下的那一份来源记录。
+// 跟着标题与生命周期一起被覆盖。
 func (r *summaryRepo) UpsertSummary(ctx context.Context, s *agent_session_entity.SessionSummary) error {
 	return db.Ctx(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}, {Name: "conversation_id"}},

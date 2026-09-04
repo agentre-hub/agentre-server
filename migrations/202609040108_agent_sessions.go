@@ -20,8 +20,8 @@ import (
 // (2026-08-31-conversation-centric-addressing.md「会话身份」). conversation_id is
 // one and the same identity for a conversation across the desktop, agentred and
 // server databases and on the wire (决策 1); the originating peer mints it as a
-// UUIDv7. peer_fingerprint / peer_session_id stay on the tables but have left
-// identity: they are provenance and authorization columns now.
+// UUIDv7. peer_fingerprint stays on the tables but has left identity: it is a
+// provenance and authorization column now.
 //
 // conversation_id is char(36) rather than varchar(36): a canonical uuid is
 // always 36 characters, so a fixed width drops one length prefix per row — and
@@ -32,13 +32,8 @@ import (
 // opaque identifier, and folding case would merge two distinct conversations.
 //
 // peer_fingerprint has to compare equal against devices.fingerprint, so it takes
-// the same utf8mb4_0900_bin collation; peer_session_id aligns with
-// agent_session_saves.peer_session_id (varchar(255) COLLATE utf8mb4_0900_bin)
-// for the same reason — both are opaque, byte-exact identifiers, and folding
-// case would merge two distinct sessions or widen a fingerprint match. The name
-// says *whose* session id it is: the desktop's own peer_session_id means its
-// local chat_sessions.id, and the same word for two things is the failure mode
-// 决策 12 removes.
+// the same utf8mb4_0900_bin collation — it is an opaque, byte-exact identifier,
+// and folding case would widen a fingerprint match.
 //
 // agent_session_delete_todos calls its machine column **device_fingerprint**,
 // not peer_fingerprint: what it stores is the machine that *carries* the
@@ -89,7 +84,6 @@ func migration202609040108() *gormigrate.Migration {
 				  user_id              bigint NOT NULL,
 				  conversation_id      char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  peer_fingerprint     varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
-				  peer_session_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  title                text NOT NULL DEFAULT (''),
 				  agent_sync_id        varchar(255) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  provider_session_id  varchar(255) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
@@ -119,7 +113,6 @@ func migration202609040108() *gormigrate.Migration {
 				  user_id              bigint NOT NULL,
 				  conversation_id      char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  peer_fingerprint     varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
-				  peer_session_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  seq                  bigint NOT NULL,
 				  payload              longblob NOT NULL,
 				  createtime           bigint NOT NULL DEFAULT 0,
@@ -130,7 +123,6 @@ func migration202609040108() *gormigrate.Migration {
 				  user_id              bigint NOT NULL,
 				  conversation_id      char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  device_fingerprint   varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
-				  peer_session_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  createtime           bigint NOT NULL DEFAULT 0,
 				  UNIQUE KEY uk_agent_session_delete_todos_identity (user_id, conversation_id)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,

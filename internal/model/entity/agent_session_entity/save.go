@@ -25,7 +25,6 @@ type SessionSave struct {
 	// 条件。web 控制台派发出去的那些两者不同——发起端是浏览器，承载它的是 agentred
 	// 那台机器。
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	FollowedAt      int64  `gorm:"column:followed_at;type:bigint;not null;default:0"`
 	Createtime      int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 	Updatetime      int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`

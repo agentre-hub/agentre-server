@@ -25,7 +25,7 @@ func TestSessionIndex_TimeAxis_IsOneFlatGroupCarryingTheAccountTotal(t *testing.
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
 		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7}, Limit: 31,
 	}).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-a", PeerSessionID: "9", Title: "调试登录页", LastMessageAt: 1700, ID: 42},
+		{PeerFingerprint: "fp-a", Title: "调试登录页", LastMessageAt: 1700, ID: 42},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime})
@@ -51,10 +51,10 @@ func TestSessionIndex_AgentAxis_GroupPerAgentIncludingTheUnnamedOne(t *testing.T
 	named, unnamed := "agent-1", ""
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
 		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7, AgentSyncID: &named}, Limit: 6,
-	}).Return([]*agent_session_entity.SessionSummary{{PeerFingerprint: "fp-a", PeerSessionID: "1"}}, nil)
+	}).Return([]*agent_session_entity.SessionSummary{{PeerFingerprint: "fp-a"}}, nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
 		SummaryQuery: agent_session_repo.SummaryQuery{UserID: 7, AgentSyncID: &unnamed}, Limit: 6,
-	}).Return([]*agent_session_entity.SessionSummary{{PeerFingerprint: "fp-b", PeerSessionID: "2"}}, nil)
+	}).Return([]*agent_session_entity.SessionSummary{{PeerFingerprint: "fp-b"}}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisAgent})
 	require.NoError(t, err)
@@ -114,9 +114,9 @@ func TestSessionIndex_ScopedRead_PagesOnlyThatGroup(t *testing.T) {
 		Cursor:       agent_session_repo.SummaryCursor{LastMessageAt: 1800, ID: 50},
 		Limit:        3,
 	}).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-a", PeerSessionID: "1", LastMessageAt: 1700, ID: 42},
-		{PeerFingerprint: "fp-a", PeerSessionID: "2", LastMessageAt: 1600, ID: 41},
-		{PeerFingerprint: "fp-a", PeerSessionID: "3", LastMessageAt: 1500, ID: 40},
+		{PeerFingerprint: "fp-a", LastMessageAt: 1700, ID: 42},
+		{PeerFingerprint: "fp-a", LastMessageAt: 1600, ID: 41},
+		{PeerFingerprint: "fp-a", LastMessageAt: 1500, ID: 40},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{
@@ -266,7 +266,7 @@ func TestSessionIndex_RowsCarryProjectAttributionWithoutCwd(t *testing.T) {
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", PeerSessionID: "1", Cwd: "/repo/x", Title: "t"},
+		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", Cwd: "/repo/x", Title: "t"},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
@@ -297,7 +297,7 @@ func TestSessionIndex_AxisSkeleton_ReadsProjectLocationsOnce(t *testing.T) {
 				// 测试会话由同一台机器发起并承载。
 				{
 					PeerFingerprint: *q.MachineFingerprint, MachineFingerprint: *q.MachineFingerprint,
-					PeerSessionID: "1", Cwd: "/repo/x",
+					Cwd: "/repo/x",
 				},
 			}, nil
 		}).Times(3)
@@ -333,7 +333,7 @@ func TestSessionIndex_RowReportedByDesktop_UsesTheProjectItNamed(t *testing.T) {
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-desktop", PeerSessionID: "1", ProjectSyncID: "proj-1", Title: "t"},
+		{PeerFingerprint: "fp-desktop", ProjectSyncID: "proj-1", Title: "t"},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
@@ -354,7 +354,7 @@ func TestSessionIndex_ReportedProjectThatNoLongerExists_FallsBackToUnassigned(t 
 		Return([]*sync_entity.SyncObject{}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-desktop", PeerSessionID: "1", ProjectSyncID: "proj-gone", Title: "t"},
+		{PeerFingerprint: "fp-desktop", ProjectSyncID: "proj-gone", Title: "t"},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
@@ -376,7 +376,7 @@ func TestSessionIndex_RowFromAgentred_StillResolvedByLocation(t *testing.T) {
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
-		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", PeerSessionID: "1", Cwd: "/repo/x", Title: "t"},
+		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", Cwd: "/repo/x", Title: "t"},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
@@ -506,7 +506,7 @@ func TestSessionIndex_WebDispatchedRow_ResolvesProjectByHostingMachine(t *testin
 	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
 		{
 			PeerFingerprint: "browser-fp", MachineFingerprint: "machine-fp",
-			PeerSessionID: "1", Cwd: "/root/code", Title: "看看目录",
+			Cwd: "/root/code", Title: "看看目录",
 		},
 	}, nil)
 
@@ -563,8 +563,8 @@ func TestSessionIndex_MachineAxis_GroupsByTheCarryingMachineNotTheInitiator(t *t
 		Limit:        6,
 	}).Return([]*agent_session_entity.SessionSummary{
 		// 两条会话由同一台机器承载，发起端不同。
-		{PeerFingerprint: "fp-browser-1", MachineFingerprint: agentred, PeerSessionID: "1"},
-		{PeerFingerprint: "fp-browser-2", MachineFingerprint: agentred, PeerSessionID: "2"},
+		{PeerFingerprint: "fp-browser-1", MachineFingerprint: agentred},
+		{PeerFingerprint: "fp-browser-2", MachineFingerprint: agentred},
 	}, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisMachine})

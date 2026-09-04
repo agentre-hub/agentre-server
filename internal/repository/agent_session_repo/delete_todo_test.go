@@ -21,7 +21,7 @@ func TestAddDeleteTodo_OnConflictDoNothing(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `agent_session_delete_todos`")).
-		WithArgs(int64(7), "conv-9", "fp-desktop-1", "", int64(1000)).
+		WithArgs(int64(7), "conv-9", "fp-desktop-1", int64(1000)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 

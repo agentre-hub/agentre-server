@@ -23,8 +23,8 @@ func TestWriteFrames_BatchSingleStatement(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(
 		"INSERT INTO `agent_session_notification_journal`",
 	)).WithArgs(
-		int64(7), "conv-9", int64(101), "fp-daemon-1", "", []byte{0x0a, 0x01, 0xff}, int64(1000),
-		int64(7), "conv-9", int64(102), "fp-daemon-1", "", []byte{0x12, 0x01, 0x00}, int64(1001),
+		int64(7), "conv-9", int64(101), "fp-daemon-1", []byte{0x0a, 0x01, 0xff}, int64(1000),
+		int64(7), "conv-9", int64(102), "fp-daemon-1", []byte{0x12, 0x01, 0x00}, int64(1001),
 	).WillReturnResult(sqlmock.NewResult(1, 2))
 	mock.ExpectCommit()
 

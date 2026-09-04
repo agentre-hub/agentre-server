@@ -25,7 +25,7 @@ func TestFollow_SingleStatementOnConflictDoNothing(t *testing.T) {
 	// 裁决对象就变了，只验 SQL 文本看不出来。
 	mock.ExpectExec(regexp.QuoteMeta(
 		`ON DUPLICATE KEY UPDATE`,
-	)).WithArgs(int64(7), "conv-9", "fp-daemon-1", "fp-browser-1", "",
+	)).WithArgs(int64(7), "conv-9", "fp-daemon-1", "fp-browser-1",
 		int64(1000), int64(1000), int64(1000)).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 行 = 已关注，冲突 no-op
 	mock.ExpectCommit()

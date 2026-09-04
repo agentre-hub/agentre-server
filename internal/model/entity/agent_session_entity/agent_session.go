@@ -20,8 +20,8 @@
 // (2026-08-31-conversation-centric-addressing.md decisions 1/2). It is never the
 // machine currently carrying the connection: the same conversation can have a
 // copy on both the desktop and agentred, and which machine carries it can change
-// without changing the conversation. PeerFingerprint / PeerSessionID survive as
-// ordinary columns — provenance and authorization, not identity.
+// without changing the conversation. PeerFingerprint survives as an ordinary
+// column — provenance and authorization, not identity.
 //
 // SessionSummary mirrors agentre's wire.SessionSummary field-for-field
 // (internal/pkg/agentruntime/runtimes/remote/wire/wire.go in the agentre
@@ -40,16 +40,12 @@ type SessionSummary struct {
 	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
 	// UserID + ConversationID 是这一行的身份键（uk_agent_sessions_identity）。
 	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
-	// ConversationID 是这条对话的全局标识：新对话由发起端铸 UUIDv7，存量对话按
-	// 决策 2 从 (peer_fingerprint, peer_session_id) 派生 UUIDv5，桌面端、agentred
+	// ConversationID 是这条对话的全局标识，由发起端铸 UUIDv7，桌面端、agentred
 	// 与本库因此指的是同一个值。
 	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
 	// PeerFingerprint 是**发起**这条对话那一端。它已退出身份键（决策 7 / 8），
 	// 留下来承担来源标注（索引里按对端分组的那一轴）与授权。
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	// PeerSessionID 是发起端本地那条会话的号。同样退出身份键，留作来源标注：
-	// 存量行靠它与 PeerFingerprint 派生出上面的 ConversationID。
-	PeerSessionID string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	// MachineFingerprint 是索引读取时从 agent_session_saves 投影出的承载机器指纹。
 	// 它不是摘要表的一列，也不是会话身份的一半；只读标签防止摘要 upsert 写它。
 	MachineFingerprint string `gorm:"column:machine_fingerprint;->"`
@@ -120,13 +116,12 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 // 帧按 (账号, 对话, seq) 聚簇存放，没有代理自增列。转录尾部因此是聚簇索引上的一段
 // 连续范围，而不是二级索引扫一段再逐行随机回表取 longblob。
 //
-// PeerFingerprint / PeerSessionID 留在表上作来源标注，但**不再是主键的一部分**。
+// PeerFingerprint 留在表上作来源标注，但**不再是主键的一部分**。
 type JournalFrame struct {
 	UserID          int64  `gorm:"column:user_id;type:bigint;not null;primaryKey"`
 	ConversationID  string `gorm:"column:conversation_id;type:char(36);not null;primaryKey"`
 	Seq             int64  `gorm:"column:seq;type:bigint;not null;primaryKey"`
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	PeerSessionID   string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	Payload         []byte `gorm:"column:payload;type:longblob;not null"`
 	// Createtime 记的是这一帧**发生**的时刻（Unix 毫秒），不是这台 server 存下它的
 	// 时刻。实时那一路两者只差一跳网络，补齐那一路差得很远——补齐成批到达，一条离线
@@ -160,7 +155,6 @@ type DeleteTodo struct {
 	// 对话两者同值），拿错了列不会有任何一处报错，只会把待办拨给一台从来没跑过这
 	// 条对话的机器。这个名字的理由见 migrations/202609040108_agent_sessions.go。
 	DeviceFingerprint string `gorm:"column:device_fingerprint;type:varchar(255);not null"`
-	PeerSessionID     string `gorm:"column:peer_session_id;type:varchar(255);not null"`
 	Createtime        int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
 

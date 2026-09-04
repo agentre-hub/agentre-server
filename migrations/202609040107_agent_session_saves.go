@@ -23,10 +23,9 @@ import (
 // 定长省掉每行一个长度前缀。COLLATE utf8mb4_0900_bin 与同表其余标识同理——这是个不透明
 // 标识，大小写不敏感的比较会把两条不同的对话认成同一条。
 //
-// peer_fingerprint / peer_session_id 留着，但已经**退出身份**，只是来源标注与授权用的
-// 普通列。device_fingerprint 与 peer_session_id 是目标设备与会话的不透明标识，用
-// utf8mb4_0900_bin 逐字节判等；device_fingerprint 要能和 devices.fingerprint 比较，
-// 两列排序规则必须一致。
+// peer_fingerprint 留着，但已经**退出身份**，只是来源标注与授权用的普通列。
+// device_fingerprint 是目标设备的不透明标识，用 utf8mb4_0900_bin 逐字节判等；
+// 它要能和 devices.fingerprint 比较，两列排序规则必须一致。
 func migration202609040107() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "202609040107",
@@ -38,7 +37,6 @@ func migration202609040107() *gormigrate.Migration {
 				  conversation_id    char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  device_fingerprint varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  peer_fingerprint   varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
-				  peer_session_id    varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  followed_at        bigint NOT NULL DEFAULT 0,
 				  createtime         bigint NOT NULL DEFAULT 0,
 				  updatetime         bigint NOT NULL DEFAULT 0,

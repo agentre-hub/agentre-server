@@ -28,8 +28,8 @@ import (
 // 三段各守一处，合起来把那句话钉死：
 //  1. 会话内容只能落在 agent_session_entity 的表里（源码扫描全部实体包，新加的包自动纳入）；
 //  2. 每一张持有内容的镜像表都以「账号 + conversation_id」为身份键——正是保存名单
-//     那一条的身份（2026-08-31 起身份键收缩为一列，peer_fingerprint /
-//     peer_session_id 退出身份），因此每一行内容都属于某条保存过的对话，删除时按
+//     那一条的身份（2026-08-31 起身份键收缩为一列，peer_fingerprint 退出身份），
+//     因此每一行内容都属于某条保存过的对话，删除时按
 //     同一把键清得掉，没保存过的对话在这些表里无处落脚；
 //  3. 往镜像内容里写的代码只有 mirror_svc 一处，范围判定因此只有一个地方要守；
 //     保存 / 删除这一侧只经窄接口表达「开始镜像」「清掉镜像」，自己不写内容。
@@ -51,7 +51,7 @@ func TestUnsavedConversation_LeavesNoContentInDatabase_Guard(t *testing.T) {
 	t.Run("镜像内容以「保存过的那条对话」为身份键", func(t *testing.T) {
 		// 保存名单那一条的身份：账号 + 这条对话的 conversation_id
 		// （2026-08-31-conversation-centric-addressing.md「会话身份」：身份键收缩为
-		// 一列，peer_fingerprint / peer_session_id 退出身份、降级为来源标注）。
+		// 一列，peer_fingerprint 退出身份、降级为来源标注）。
 		// device_fingerprint 不是身份的一半，是「去连哪一台」这个属性，但它必须在：
 		// 没有它就补删不了执行端那一份。
 		requireFields(t, agent_session_entity.SessionSave{}, "SessionSave",

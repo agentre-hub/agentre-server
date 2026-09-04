@@ -24,7 +24,7 @@ func TestUpsertSummary_SingleStatementOverwritesAllButCreatetime(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("ON DUPLICATE KEY UPDATE")).
 		WithArgs(
-			int64(7), "conv-1", "fp-daemon-1", "sess-9", // user_id, conversation_id, peer_fingerprint, peer_session_id
+			int64(7), "conv-1", "fp-daemon-1", // user_id, conversation_id, peer_fingerprint
 			"Fix the bug", "agent-sync-1", "provider-sess-1", "/repo",
 			"01KZN9FVVD69NY8M0VCEAABNMZ", // project_sync_id：对端自己说出来的项目归属
 			"claude_code", "running",
@@ -38,8 +38,8 @@ func TestUpsertSummary_SingleStatementOverwritesAllButCreatetime(t *testing.T) {
 
 	s := &agent_session_entity.SessionSummary{
 		UserID: 7, ConversationID: "conv-1",
-		PeerFingerprint: "fp-daemon-1", PeerSessionID: "sess-9",
-		Title: "Fix the bug", AgentSyncID: "agent-sync-1", ProviderSessionID: "provider-sess-1",
+		PeerFingerprint: "fp-daemon-1",
+		Title:           "Fix the bug", AgentSyncID: "agent-sync-1", ProviderSessionID: "provider-sess-1",
 		Cwd: "/repo", ProjectSyncID: "01KZN9FVVD69NY8M0VCEAABNMZ",
 		BackendType: "claude_code", LifecycleState: "running",
 		WaitingForInput: true, LatestSeq: 42, LastMessageAt: 1700,
@@ -76,7 +76,7 @@ func TestUpsertSummary_NeverResetsLastReadAt(t *testing.T) {
 	mock.ExpectCommit()
 
 	s := &agent_session_entity.SessionSummary{
-		UserID: 7, ConversationID: "conv-1", PeerFingerprint: "fp-1", PeerSessionID: "sess-9",
+		UserID: 7, ConversationID: "conv-1", PeerFingerprint: "fp-1",
 	}
 	require.NoError(t, r.UpsertSummary(ctx, s))
 	require.NoError(t, mock.ExpectationsWereMet())
