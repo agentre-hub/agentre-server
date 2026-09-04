@@ -96,7 +96,7 @@ type SessionMirror interface {
 	Purge(ctx context.Context, ref SessionRef) error
 }
 
-// PeerSessionDeleter 把删除传播到执行那条对话的机器上：中继 wire 的
+// MachineSessionDeleter 把删除传播到执行那条对话的机器上：中继 wire 的
 // runtime.session.delete（params {conversationId, peerFingerprint?}，result 带 deleted）。
 // agentred 上删的是会话行与它的整段通知日志，桌面端上删的是那台电脑自己那条对话
 // 本体，两种端一视同仁（决策 16）。
@@ -105,19 +105,19 @@ type SessionMirror interface {
 // 是**实现方**的事：wire 上的
 // 错误码只该出现在会说 wire 的那一层（对照桌面端的 wire.SessionDeleteCallError），
 // 本层只认下面这两个判据。
-type PeerSessionDeleter interface {
-	// DeleteOnPeer 回 nil = 那一端已经没有这条会话了。这是**后置条件**而不是
+type MachineSessionDeleter interface {
+	// DeleteOnMachine 回 nil = 那一端已经没有这条会话了。这是**后置条件**而不是
 	// 「删了几行」，因此重复删除照样回 nil。联系不上回 ErrPeerOffline；对面太老、
 	// 违反已协商协议回 ErrPeerProtocolViolation；其余错误当成「这一次没删成」。
-	DeleteOnPeer(ctx context.Context, ref SessionRef) error
+	DeleteOnMachine(ctx context.Context, ref SessionRef) error
 }
 
-// sessionMirror / peerDeleter 的默认值都是「什么都还没接上」时的安全占位，与
+// sessionMirror / machineDeleter 的默认值都是「什么都还没接上」时的安全占位，与
 // device_svc.SetDeviceDataPurger 同一模式：调用方不会在 nil 接口上 panic，行为也
 // 不会谎报成功。真实实现由装配处注入。
 var (
-	sessionMirror SessionMirror      = noopSessionMirror{}
-	peerDeleter   PeerSessionDeleter = unreachablePeer{}
+	sessionMirror  SessionMirror         = noopSessionMirror{}
+	machineDeleter MachineSessionDeleter = unreachableMachine{}
 )
 
 // SetSessionMirror 注入镜像实现；传 nil 时恢复成空操作。
@@ -128,12 +128,12 @@ func SetSessionMirror(m SessionMirror) {
 	sessionMirror = m
 }
 
-// SetPeerSessionDeleter 注入执行端删除通道；传 nil 时恢复成「联系不上」。
-func SetPeerSessionDeleter(d PeerSessionDeleter) {
+// SetMachineSessionDeleter 注入执行端删除通道；传 nil 时恢复成「联系不上」。
+func SetMachineSessionDeleter(d MachineSessionDeleter) {
 	if d == nil {
-		d = unreachablePeer{}
+		d = unreachableMachine{}
 	}
-	peerDeleter = d
+	machineDeleter = d
 }
 
 // noopSessionMirror 未装配时保存 / 删除照常成立：没有镜像可开，也没有内容要清——
@@ -143,11 +143,11 @@ type noopSessionMirror struct{}
 func (noopSessionMirror) Begin(context.Context, SessionRef) error { return nil }
 func (noopSessionMirror) Purge(context.Context, SessionRef) error { return nil }
 
-// unreachablePeer 未装配时一律当成「联系不上那台机器」：删除照常在 server 这边生效
+// unreachableMachine 未装配时一律当成「联系不上那台机器」：删除照常在 server 这边生效
 // 并留下一条待办，绝不谎报「执行端也删了」。
-type unreachablePeer struct{}
+type unreachableMachine struct{}
 
-func (unreachablePeer) DeleteOnPeer(context.Context, SessionRef) error { return ErrPeerOffline }
+func (unreachableMachine) DeleteOnMachine(context.Context, SessionRef) error { return ErrPeerOffline }
 
 // SavedSessionRef 是账号里已保存的一条。
 type SavedSessionRef struct {
@@ -221,7 +221,7 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (PeerDelet
 		return "", err
 	}
 	// 到这里 server 那一份已经没了：它立刻从索引里消失，没有「已删除但还在」的中间态。
-	err = peerDeleter.DeleteOnPeer(ctx, ref)
+	err = machineDeleter.DeleteOnMachine(ctx, ref)
 	switch {
 	case err == nil:
 		logger.Ctx(ctx).Info("saved_session_svc.Delete: both copies deleted",

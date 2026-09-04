@@ -19,7 +19,7 @@ type TranscriptImportPeer interface {
 // 都不在这里 —— 本类型只负责把请求送到那台机器并把 wire 上的两种失败翻译成业务
 // 判据（离线）；协议错误原样返回。
 //
-// 与 Sessions.DeleteOnPeer 同一条路子:每次自己拨一条短连接,用完就收,即使本副本
+// 与 Sessions.DeleteOnMachine 同一条路子:每次自己拨一条短连接,用完就收,即使本副本
 // 正跟着这台机器也一样。导入是用户手点出来的、极少发生,而复用常驻连接要把那条
 // 连接的生命周期暴露给请求路径。
 type Imports struct {

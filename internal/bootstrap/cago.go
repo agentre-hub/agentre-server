@@ -429,7 +429,7 @@ func registerSessionMirror(instanceID string, signer *jwt.Signer) {
 	mirror_svc.SetDefault(supervisor)
 	sessions := mirror_svc.NewSessions(supervisor)
 	saved_session_svc.SetSessionMirror(sessionMirror{sessions: sessions})
-	saved_session_svc.SetPeerSessionDeleter(peerSessionDeleter{sessions: sessions})
+	saved_session_svc.SetMachineSessionDeleter(machineSessionDeleter{sessions: sessions})
 	// 导入本地会话（规格 2026-08-26）：两根线同样接在这里。「够到那台机器」的实现
 	// 在 mirror_svc（它才知道怎么拨中继），「把导出来的会话收进账号」的实现在
 	// saved_session_svc（它才是保存名单的主人）；sessionimport_svc 两边都不 import。
@@ -442,7 +442,7 @@ func registerSessionMirror(instanceID string, signer *jwt.Signer) {
 	device_svc.SetDeviceDataPurger(revokePurger{sync: sync_svc.Default(), mirror: sessions})
 }
 
-// sessionMirror / peerSessionDeleter 把 saved_session_svc 的保存 / 删除接到 mirror_svc 上。
+// sessionMirror / machineSessionDeleter 把 saved_session_svc 的保存 / 删除接到 mirror_svc 上。
 // 接口在消费侧（saved_session_svc）声明、实现在 mirror_svc，两个 service 谁都不 import 谁；
 // 这里是唯一同时认识两边的地方，也就是组合根该干的活。
 type sessionMirror struct{ sessions *mirror_svc.Sessions }
@@ -458,12 +458,12 @@ func (m sessionMirror) Purge(ctx context.Context, ref saved_session_svc.SessionR
 	return m.sessions.Purge(ctx, ref.UserID, ref.MachineFingerprint, ref.ConversationID)
 }
 
-type peerSessionDeleter struct{ sessions *mirror_svc.Sessions }
+type machineSessionDeleter struct{ sessions *mirror_svc.Sessions }
 
-// DeleteOnPeer 把传输层失败翻译成 saved_session_svc 的业务判据。
-func (d peerSessionDeleter) DeleteOnPeer(ctx context.Context, ref saved_session_svc.SessionRef) error {
+// DeleteOnMachine 把传输层失败翻译成 saved_session_svc 的业务判据。
+func (d machineSessionDeleter) DeleteOnMachine(ctx context.Context, ref saved_session_svc.SessionRef) error {
 	// 拨的是承载它的那台机器。
-	err := d.sessions.DeleteOnPeer(ctx, ref.UserID, ref.MachineFingerprint, ref.ConversationID)
+	err := d.sessions.DeleteOnMachine(ctx, ref.UserID, ref.MachineFingerprint, ref.ConversationID)
 	switch {
 	case errors.Is(err, mirror_svc.ErrMachineOffline):
 		return saved_session_svc.ErrPeerOffline
@@ -536,7 +536,7 @@ func (p revokePurger) PurgeDeviceDeleteTodos(ctx context.Context, userID int64, 
 }
 
 var (
-	_ saved_session_svc.SessionMirror      = sessionMirror{}
-	_ saved_session_svc.PeerSessionDeleter = peerSessionDeleter{}
-	_ device_svc.DeviceDataPurger          = revokePurger{}
+	_ saved_session_svc.SessionMirror         = sessionMirror{}
+	_ saved_session_svc.MachineSessionDeleter = machineSessionDeleter{}
+	_ device_svc.DeviceDataPurger             = revokePurger{}
 )

@@ -74,13 +74,13 @@ func (s *Sessions) Purge(ctx context.Context, userID int64, machineFingerprint, 
 	return nil
 }
 
-// DeleteOnPeer 把删除传到执行那条对话的机器上。返回 nil 表示那一端已经没有这条
+// DeleteOnMachine 把删除传到执行那条对话的机器上。返回 nil 表示那一端已经没有这条
 // 会话了——这是**后置条件**而不是「删了几行」，因此重复删除照样回 nil。
 //
 // 它每次自己拨一条短连接，用完就收，即使本副本正跟着这台机器也一样：删除是用户
 // 手点出来的、极少发生，而复用常驻连接要把那条连接的生命周期暴露给请求路径，换来
 // 的只是省下一次握手。
-func (s *Sessions) DeleteOnPeer(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
+func (s *Sessions) DeleteOnMachine(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
 	conn, err := s.sup.dial(ctx, machineKey{userID: userID, fingerprint: machineFingerprint}, nil)
 	if err != nil {
 		return err
@@ -96,7 +96,7 @@ func (s *Sessions) DeleteOnPeer(ctx context.Context, userID int64, machineFinger
 	}); err != nil {
 		return fmt.Errorf("delete session on peer: %w", err)
 	}
-	logger.Ctx(ctx).Info("mirror_svc.DeleteOnPeer: peer deleted its own copy",
+	logger.Ctx(ctx).Info("mirror_svc.DeleteOnMachine: machine deleted its own copy",
 		zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
 		zap.String("conversationId", conversationID))
 	return nil
@@ -187,7 +187,7 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 			cleared++
 			continue
 		}
-		err := s.DeleteOnPeer(ctx, todo.UserID, todo.DeviceFingerprint, todo.ConversationID)
+		err := s.DeleteOnMachine(ctx, todo.UserID, todo.DeviceFingerprint, todo.ConversationID)
 		switch {
 		case err == nil:
 		case isMethodNotFound(err):

@@ -60,7 +60,7 @@ type stubPeer struct {
 	err     error
 }
 
-func (s *stubPeer) DeleteOnPeer(_ context.Context, ref SessionRef) error {
+func (s *stubPeer) DeleteOnMachine(_ context.Context, ref SessionRef) error {
 	*s.calls = append(*s.calls, "peer:delete")
 	if s.err != nil {
 		return s.err
@@ -104,10 +104,10 @@ func setupSavedSessionTest(t *testing.T) *savedFixture {
 	device_repo.RegisterDevice(f.device)
 	agent_session_repo.RegisterDeleteTodo(f.todo)
 	SetSessionMirror(f.mirror)
-	SetPeerSessionDeleter(f.peer)
+	SetMachineSessionDeleter(f.peer)
 	t.Cleanup(func() {
 		SetSessionMirror(nil)
-		SetPeerSessionDeleter(nil)
+		SetMachineSessionDeleter(nil)
 	})
 	f.svc = newSavedSessionSvc()
 	return f

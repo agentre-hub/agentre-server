@@ -301,12 +301,12 @@ func TestPurge_NothingStored_IsIdempotent(t *testing.T) {
 
 // Given 执行那条对话的机器在线;When 把删除传过去;Then 它收到 typed session.delete,
 // 带着这条对话的 conversation_id,而且**不点名对端** —— 这条连接通到的就是它,点名会被拒。
-func TestDeleteOnPeer_OnlineMachine_SendsSessionDelete(t *testing.T) {
+func TestDeleteOnMachine_OnlineMachine_SendsSessionDelete(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
 	a := rig.replica(t, replicaA)
 
-	require.NoError(t, NewSessions(a.sup).DeleteOnPeer(context.Background(), testUserID, testMachine, conv42))
+	require.NoError(t, NewSessions(a.sup).DeleteOnMachine(context.Background(), testUserID, testMachine, conv42))
 
 	deletes := rig.peer.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_DELETE)
 	require.Len(t, deletes, 1)
@@ -317,13 +317,13 @@ func TestDeleteOnPeer_OnlineMachine_SendsSessionDelete(t *testing.T) {
 
 // Given 那台机器现在联系不上;When 把删除传过去;Then 报「机器离线」——
 // 调用方据此留一条待办,等它回来补删(决策 6)。
-func TestDeleteOnPeer_MachineOffline_ReportsOffline(t *testing.T) {
+func TestDeleteOnMachine_MachineOffline_ReportsOffline(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
 	a := rig.replica(t, replicaA)
 	a.net.setOnline(false)
 
-	err := NewSessions(a.sup).DeleteOnPeer(context.Background(), testUserID, testMachine, conv42)
+	err := NewSessions(a.sup).DeleteOnMachine(context.Background(), testUserID, testMachine, conv42)
 
 	require.ErrorIs(t, err, ErrMachineOffline)
 }
@@ -331,13 +331,13 @@ func TestDeleteOnPeer_MachineOffline_ReportsOffline(t *testing.T) {
 // Given 执行端太老、根本不认识这个 typed RPC method;When 把删除传过去;
 // Then 报「不支持」——它必须与「这一次没删成」分开:后者等机器回来再删一遍就成了,
 // 前者重试多少次都是同一个结果,留待办等于对着一台永远答不了的机器重放。
-func TestDeleteOnPeer_MethodNotFound_PreservesProtocolError(t *testing.T) {
+func TestDeleteOnMachine_MethodNotFound_PreservesProtocolError(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
 	rig.peer.deleteErr = &relaywire.Error{Code: relaywire.CodeMethodNotFound, Message: "Method not found"}
 	a := rig.replica(t, replicaA)
 
-	err := NewSessions(a.sup).DeleteOnPeer(context.Background(), testUserID, testMachine, conv42)
+	err := NewSessions(a.sup).DeleteOnMachine(context.Background(), testUserID, testMachine, conv42)
 
 	var wireErr *relaywire.Error
 	require.ErrorAs(t, err, &wireErr)

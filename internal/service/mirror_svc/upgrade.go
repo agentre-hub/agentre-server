@@ -89,7 +89,7 @@ type SelfUpdatePeer interface {
 
 // UpgradeMachine 让那台机器把自己升上去，交回 daemon 的受理判定。
 //
-// 与 Imports.WithPeer / Sessions.DeleteOnPeer / WithMachine 同一条路子：每次自己拨一条
+// 与 Imports.WithPeer / Sessions.DeleteOnMachine / WithMachine 同一条路子：每次自己拨一条
 // 短连接、用完就收，即使本副本此刻正跟着这台机器也一样。这里的理由格外硬——受理之后
 // daemon 就会重启，这条连接必然断；把它借给常驻镜像等于让一次升级去掐镜像的连接。
 //

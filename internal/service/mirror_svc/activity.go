@@ -23,7 +23,7 @@ type ActivityRollupClient interface {
 
 // WithMachine 拨一条通往这台机器的短连接，把它交给 fn，**无论成败都收掉**。
 //
-// 与 Imports.WithPeer / Sessions.DeleteOnPeer 同一条路子：每次自己拨、用完就收，
+// 与 Imports.WithPeer / Sessions.DeleteOnMachine 同一条路子：每次自己拨、用完就收，
 // 即使本副本此刻正跟着这台机器也一样。理由在这里比在那两处更硬——常驻那条连接是
 // 为镜像建的，它的租约、重同步与实时通知都围着转录转；活跃统计只该问出计数，借用
 // 那条连接等于把两条隐私边界不同的通道拧成一条，还会让一次周期性的拉取牵动常驻
