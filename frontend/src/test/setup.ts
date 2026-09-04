@@ -23,7 +23,11 @@
  * 5. isSecureContext。jsdom 没有实现（是 undefined，不是 false）。通行密钥那条
  *    「不能用是因为浏览器太老，还是因为这个源信不过」的判断要读它。
  *
- * 五处都只在「当前环境确实没有」时才安装，真浏览器行为优先。
+ * 6. Range 的取矩形。jsdom 只在 Element 上实现了 getClientRects /
+ *    getBoundingClientRect，Range 上一个都没有，而输入框每派发一次事务，
+ *    ProseMirror 都要量选区的位置好把它滚进视野。
+ *
+ * 六处都只在「当前环境确实没有」时才安装，真浏览器行为优先。
  */
 
 class MemoryStorage implements Storage {
@@ -102,6 +106,23 @@ if (typeof globalThis.ResizeObserver !== "function") {
     disconnect(): void {}
   }
   globalThis.ResizeObserver = NoopResizeObserver;
+}
+
+if (typeof Range.prototype.getClientRects !== "function") {
+  // 6. Range 的取矩形。缺了它，TipTap 每次 dispatch 事务后 ProseMirror 的
+  //    scrollToSelection 都会在 singleRect 里抛。那一抛发生在 ProseMirror 内部、
+  //    不在任何 await 的调用栈上，所以用例照旧全绿、整轮 vitest 却因为未捕获异常
+  //    退非零——症状与被测行为对不上，最难找的就是这一类。
+  //
+  //    jsdom 里没有布局，只能给零矩形（Element 上那份实现给的也是零），与
+  //    ResizeObserver 那处同一取舍：接住调用，不假装量得出东西。
+  const emptyRectList = () =>
+    Object.assign([] as DOMRect[], {
+      item: () => null,
+    }) as unknown as DOMRectList;
+  Range.prototype.getClientRects = emptyRectList;
+  // singleRect 在 getClientRects() 为空时回落到这一个，所以两个都要装。
+  Range.prototype.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
 }
 
 if (!("isSecureContext" in window)) {
