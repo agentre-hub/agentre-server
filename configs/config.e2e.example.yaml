@@ -1,26 +1,23 @@
-# Copy to configs/config.e2e.yaml. The copied file is gitignored.
-# Keep source=file: the E2E runner must be able to inspect the exact configuration
-# passed to `bin/server --config` before it touches a dedicated test database.
+# Copy to configs/config.e2e.yaml (gitignored). Keep source=file: the runner
+# inspects the exact config passed to `bin/server --config` before touching a database.
 env: test
 debug: false
 source: file
 
 http:
-  # Use a loopback-only, E2E-exclusive port. The runner refuses to reuse a process
-  # already listening here.
+  # Loopback-only, E2E-exclusive port. The runner refuses to reuse a process already here.
   address:
     - "127.0.0.1:18443"
 
 db:
   driver: mysql
-  # Placeholder credentials only. The database name must contain an e2e marker;
-  # the runner never creates, drops, renames, or truncates this database.
+  # Placeholder credentials. The database name must carry an e2e marker; the runner
+  # never creates, drops, renames, or truncates this database.
   dsn: "e2e_user:e2e_password@tcp(127.0.0.1:3306)/agentre_e2e?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
   debug: false
   prepareStmt: false
-  # Connection pool. Every field defaults to zero in cago, meaning "leave
-  # database/sql alone" — and those defaults are wrong for a server (idle cap of
-  # 2, unbounded connections, connections that never expire), so set them here.
+  # Pool settings must be explicit: a zero in cago means "don't set", which leaves the
+  # database/sql defaults — idle cap 2, unbounded connections, connections never expire.
   maxOpenConns: 40
   maxIdleConns: 20
   connMaxLifetime: 30m
@@ -57,8 +54,8 @@ server:
     active_kid: "e2e-local"
     keys:
       - kid: "e2e-local"
-        # Generate local test keys outside tracked files, for example under
-        # runtime/keys/, then put absolute paths in configs/config.e2e.yaml.
+        # Generate test keys outside tracked files (e.g. runtime/keys/) and use
+        # absolute paths here.
         private_key_pem_path: "/absolute/path/to/local/e2e-jwt.key"
         public_key_pem_path: "/absolute/path/to/local/e2e-jwt.pub"
     issuer: "agentre-server"
@@ -77,14 +74,14 @@ server:
     passkey_register_begin_per_ip_per_min: 100
     passkey_register_begin_per_account_per_min: 100
     passkey_login_begin_per_ip_per_min: 100
-  # Account gate: how long a verdict (usable / banned / missing) stays cached in Redis
-  # per user_id — the observable upper bound for a ban applied straight in the database.
+  # How long a verdict stays cached per user_id — the observable upper bound for a
+  # ban applied straight in the database.
   account_gate:
     cache_ttl: 60s
-  # Passkeys (WebAuthn). Browsers refuse WebAuthn on an IP origin, so the E2E browser
-  # must reach the server through localhost even though public_url uses 127.0.0.1.
-  # Both spellings are listed so switching either one does not silently break origin
-  # validation. rp_id is a bare domain: no scheme, no port.
+  # Browsers refuse WebAuthn on an IP origin, so the browser must reach the server
+  # through localhost even though public_url uses 127.0.0.1; both spellings are listed
+  # so switching either one does not silently break origin validation. rp_id is a bare
+  # domain: no scheme, no port.
   webauthn:
     rp_id: "localhost"
     rp_name: "AgentRe E2E"

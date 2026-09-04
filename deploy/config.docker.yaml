@@ -12,13 +12,9 @@ db:
   dsn: "server:server@tcp(mysql:3306)/server?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
   debug: false
   prepareStmt: false
-  # 连接池。cago 的每项零值表示不设置,谁都不会替这里补缺省值,所以必须显式写:
-  # database/sql 的默认值对服务端是错的——空闲上限只有 2(并发一上来就不停建/拆
-  # 连接)、连接数无上限(一次尖峰顶穿 MySQL 的 max_connections)、连接永不过期
-  # (主从切换后攥着指向旧主的死连接)。
-  #
-  # 多副本:maxOpenConns 是**每个副本**的上限。调它之前先算
-  # 「副本数 x maxOpenConns <= MySQL 的 max_connections」——MySQL 那边默认只有 151。
+  # 连接池必须显式配：cago 的零值表示不设置，会退回 database/sql 的默认值——空闲
+  # 上限 2、连接数无上限、连接永不过期。maxOpenConns 是每个副本的上限，多副本时
+  # 先算「副本数 x maxOpenConns <= MySQL 的 max_connections」（默认只有 151）。
   maxOpenConns: 40
   maxIdleConns: 20
   connMaxLifetime: 30m
@@ -68,23 +64,19 @@ server:
       callback_path: "/v1/auth/oauth/github/callback"
   rate_limit:
     authorize_per_ip_per_min: 3
-    # GitHub OAuth 的两个端点：各按 IP 一道，计数前缀与设备流的 authorize 分开。
-    # authorize 每次请求都会往 Redis 写一条 10 分钟 TTL 的 state。
+    # 计数前缀与设备流的 authorize 分开；authorize 每次都会往 Redis 写一条 state。
     github_authorize_per_ip_per_min: 10
     github_callback_per_ip_per_min: 10
-    # 通行密钥注册的 begin 端点：按 IP 与按账号各一道。注册要求已登录，同一个账号
-    # 换出口就能绕开 IP 那道，所以两道都要有。
+    # 注册要求已登录，同一账号换个出口就绕开了 IP 那道，所以按 IP 和按账号各一道。
     passkey_register_begin_per_ip_per_min: 10
     passkey_register_begin_per_account_per_min: 10
-    # 通行密钥登录的 begin 端点：只按 IP，计数前缀与注册那道分开。
+    # 登录时还没有账号可按，只能按 IP；计数前缀与注册分开。
     passkey_login_begin_per_ip_per_min: 10
-  # 账号闸门：判定结论（可用 / 已封禁 / 不存在）按 user_id 缓存在 Redis 的时长，
-  # 也就是「改库封禁后多久在所有入口失效」的可观察上界。
+  # 判定结论按 user_id 缓存的时长，即「改库封禁后多久在所有入口失效」的上界。
   account_gate:
     cache_ttl: 60s
-  # 通行密钥（WebAuthn）。compose 默认从 http://localhost:8443 访问，rp_id 因此是
-  # localhost；换成自己的域名时这里和 public_url 要一起改，rp_id 只能是有效域名，
-  # 不带 scheme、不带端口。origins 要列浏览器地址栏里真正出现的那几个。
+  # rp_id 跟着 public_url 走，换域名时两处一起改。rp_id 只能是有效域名，不带
+  # scheme、不带端口；origins 要列浏览器地址栏里真正出现的那几个。
   webauthn:
     rp_id: "localhost"
     rp_name: "AgentRe"

@@ -11,13 +11,9 @@ db:
   dsn: "server:server@tcp(127.0.0.1:3306)/server?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
   debug: false
   prepareStmt: false
-  # 连接池。cago 的每项零值表示不设置,谁都不会替这里补缺省值,所以必须显式写:
-  # database/sql 的默认值对服务端是错的——空闲上限只有 2(并发一上来就不停建/拆
-  # 连接)、连接数无上限(一次尖峰顶穿 MySQL 的 max_connections)、连接永不过期
-  # (主从切换后攥着指向旧主的死连接)。
-  #
-  # 多副本:maxOpenConns 是**每个副本**的上限。调它之前先算
-  # 「副本数 x maxOpenConns <= MySQL 的 max_connections」——MySQL 那边默认只有 151。
+  # 连接池必须显式配：cago 的零值表示不设置，会退回 database/sql 的默认值——空闲
+  # 上限 2、连接数无上限、连接永不过期。maxOpenConns 是每个副本的上限，多副本时
+  # 先算「副本数 x maxOpenConns <= MySQL 的 max_connections」（默认只有 151）。
   maxOpenConns: 40
   maxIdleConns: 20
   connMaxLifetime: 30m
@@ -36,18 +32,15 @@ logger:
     filename: ./runtime/logs/server.log
     errorFilename: ./runtime/logs/server.err.log
 
-# 链路追踪。type=empty 表示不往 collector 上报，但仍生成有效的
-# trace_id/span_id——日志里照样能关联一次请求，本地开发不需要起 Jaeger。
-# 接了 collector 之后改成 grpc/http 并填 endpoint、把 sample 调上去。
-# 详见 docs/observability.md#traces
+# type=empty 不上报 collector，但仍生成 trace_id/span_id 供日志关联；接上
+# collector 后改成 grpc/http 并填 endpoint。详见 docs/observability.md#traces
 trace:
   type: empty
   sample: 1
   endpoint: ""
   useSSL: false
 
-# 指标不需要额外配置：注册 metric 组件后自动暴露 GET /metrics 供 Prometheus 抓取。
-# 详见 docs/observability.md#metrics
+# 指标无需配置：注册 metric 组件即自动暴露 GET /metrics。详见 docs/observability.md#metrics
 
 server:
   public_url: "https://server.agentre.dev"
@@ -77,21 +70,17 @@ server:
     authorize_per_ip_per_min: 3
     github_authorize_per_ip_per_min: 10
     github_callback_per_ip_per_min: 10
-    # 通行密钥注册的 begin 端点：按 IP 与按账号各一道。注册要求已登录，同一个账号
-    # 换出口就能绕开 IP 那道，所以两道都要有。
+    # 注册要求已登录，同一账号换个出口就绕开了 IP 那道，所以按 IP 和按账号各一道。
     passkey_register_begin_per_ip_per_min: 10
     passkey_register_begin_per_account_per_min: 10
-    # 通行密钥登录的 begin 端点：只按 IP——登录不要求任何标识，此刻还没有账号可以
-    # 按。计数前缀与注册那道分开，一次登录洪水不会把注册一起锁死。
+    # 登录时还没有账号可按，只能按 IP；计数前缀与注册分开，登录洪水锁不死注册。
     passkey_login_begin_per_ip_per_min: 10
-  # 账号闸门：判定结论（可用 / 已封禁 / 不存在）按 user_id 缓存在 Redis 的时长，
-  # 也就是「改库封禁后多久在所有入口失效」的可观察上界。
+  # 判定结论按 user_id 缓存的时长，即「改库封禁后多久在所有入口失效」的上界。
   account_gate:
     cache_ttl: 60s
-  # 通行密钥（WebAuthn）。rp_id 与 origins 不填时由 public_url 推导：主机名当 rp_id、
-  # scheme://host 当唯一允许的 origin。前后端不同端口时（本地开发前端在 5174、
-  # 后端在 8443）必须把浏览器真正发出的那几个 origin 显式列全，否则 origin 校验一定
-  # 过不去；rp_id 只能是有效域名，不带 scheme、不带端口。
+  # rp_id 与 origins 留空则由 public_url 推导。前后端不同端口时（本地前端 5174、
+  # 后端 8443）必须显式列全浏览器真正发出的 origin，否则校验过不去；rp_id 只能是
+  # 有效域名，不带 scheme、不带端口。
   webauthn:
     rp_id: "server.agentre.dev"
     rp_name: "AgentRe"
@@ -99,15 +88,11 @@ server:
       - "https://server.agentre.dev"
     # 每账号能注册多少把。超出时注册端点明确拒绝，不是静默忽略。
     max_per_account: 10
-  # 控制台的 latest 来源（规格 2026-09-03-client-upgrade-guidance 决策 12）：定时拉取
-  # 上游发布版本、写进跨副本共享的 Redis 缓存，/v1/release/latest 只读这份缓存。
-  # enabled 缺省是 false——内网部署的这台服务端未必连得到默认的上游，关闭时端点
-  # 如实回「不知道」，不是伪装成「已是最新」。
+  # 控制台的 latest 来源：定时拉上游发布版本写进 Redis，/v1/release/latest 只读缓存。
+  # 缺省关闭——内网部署未必连得到上游，关掉时端点如实回「不知道」，不伪装成「已是最新」。
   release:
     enabled: false
-    # 留空则问 GitHub 的 releases/latest API（桌面端仓库）；内网部署把它指到自己的
-    # 镜像，形状需与该 API 一致（{"tag_name": "..."}）。
+    # 留空则问 GitHub 的 releases/latest API；内网镜像的形状需与该 API 一致。
     base_url: ""
-    # 缓存值的存活时间：持续拉取失败时，过期让端点从「上一次的旧值」自然退回
-    # 「不知道」，而不是无限期地回答一个可能早已过时的版本号。
+    # 过期让端点从旧值自然退回「不知道」，而不是无限期回答一个早已过时的版本号。
     cache_ttl: 1h
