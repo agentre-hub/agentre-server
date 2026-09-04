@@ -28,7 +28,7 @@
   "directMembers": "Direct members",
   "inheritedMembers": "Inherited from parent project",
   "inheritedTag": "Inherited",
-  "notSentYet": "Nothing sent yet",
+  "newSessionTitle": "New chat · {{name}}",
   "startWithAgent": "Start a conversation with {{agent}}",
   "startWithAgentInProject": "Start a project conversation with {{agent}} in {{project}}",
   "pickTargetTitle": "Where it runs",

@@ -11,10 +11,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   ProjectGlyph,
+  SessionHeaderBand,
   StatusDot,
   Button,
   cn,
   type ProjectGlyphInfo,
+  type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
 
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
@@ -26,9 +28,6 @@ import {
   toAgentStatus,
   type SessionViewStatus,
 } from "@/lib/sessionView";
-
-/** mono meta 行里各段之间的分隔符。在 JS 里拼，不进 JSX（裸字符串守卫）。 */
-const META_SEP = "\u00b7";
 
 export interface SessionDetailHeaderProps {
   /** 路由页形态才有面包屑 / 移动返回（决策 16）。 */
@@ -172,13 +171,9 @@ export default function SessionDetailHeader({
     waitingForInput: decisionPending,
   };
 
-  /** mono meta 行的各段。只有拿得出来的才进来（分隔符由渲染处夹在两段之间）。 */
+  /** mono meta 行的各段。只有拿得出来的才进来（分隔符由顶带夹在两段之间）。 */
   /** `hideAt` = 窄档先收哪一段（决策 4）。收起的那一段在别处还说得出。 */
-  const metaParts: {
-    key: string;
-    node: React.ReactNode;
-    hideAt?: string;
-  }[] = [];
+  const metaParts: SessionHeaderMetaPart[] = [];
   if (identity?.lifecycleState || agent || running || decisionPending) {
     metaParts.push({
       key: "agent",
@@ -348,97 +343,75 @@ export default function SessionDetailHeader({
         镜像那一行也带着服务端就地判定的 project_sync_id，于是不再需要猜：解得出
         名字才摆，解不出就整段省略。
       */}
-      {/* 身份行恒高（与桌面端同一条结论，规格 2026-08-23 决策 3）：高度写死为两行
-          标题的高度、整块垂直居中 —— 标题长短不再改变它。
-          @container/header 让 meta 行按**这一带的实际宽度**分档降级，而不是靠
-          flex-wrap 折行把头部撑高（决策 4）。 */}
-      <div
-        data-testid="session-detail-identity"
-        className="@container/header flex h-[68px] items-center gap-3"
-      >
-        {avatar}
-        <div className="min-w-0 flex-1">
-          {/* 页面形态的标题由 AppShell TopBar 呈现，不在这里重复。 */}
-          {!isPage && (
-            <h2 className="line-clamp-2 break-words text-sm font-semibold leading-snug text-foreground">
-              {displayTitle}
-            </h2>
-          )}
-          <div
-            data-testid="session-detail-meta"
-            className="mt-0.5 flex min-w-0 items-center gap-x-1.5 overflow-hidden font-mono text-2xs whitespace-nowrap text-muted-foreground"
-          >
-            {/* 分隔符夹在**真的存在的**相邻两段之间：还没跑过第一轮的会话没有
-                状态、也没有活动时间，逐段各自带一个前置「·」会在行首留下一个
-                孤零零的分隔符。 */}
-            {metaParts.map((part, i) => (
-              <span
-                key={part.key}
-                data-testid={`session-detail-meta-${part.key}`}
-                className={cn(
-                  "inline-flex min-w-0 items-center gap-1.5",
-                  part.hideAt,
-                )}
-              >
-                {i > 0 && (
-                  <span className="text-border-strong">{META_SEP}</span>
-                )}
-                {part.node}
-              </span>
-            ))}
-          </div>
-        </div>
-        {/* 正在连 / 正在重连（决策 2）：横幅不再承担这两个状态，它们在这里。
-            `connected` 与 B / C 档下这一枚不渲染，头部因此不会常驻一块噪音。 */}
-        <SessionConnectionIndicator status={status} />
-        {/* 停止：wire 上一直有 runtime.abort，这一端真发得出去。只在这一轮真的在跑
-            的时候摆——闲着的时候没有什么可停。 */}
-        {running && (
-          <Button
-            variant="outline"
-            size="sm"
-            data-testid="session-detail-stop"
-            disabled={aborting || status !== "connected"}
-            onClick={() => void abortTurn()}
-          >
-            <Square aria-hidden="true" className="size-3.5" />
-            {t("session.abort")}
-          </Button>
-        )}
-        {/* 更多操作。形态跟桌面端 chat-panel-header 同一套：**点击**打开的下拉。
-            右键那份在左栏的行上（SessionIndex 的 RowContextMenu），而右栏正读着
-            这条对话时没有「哪一行」可点。
-
-            这颗按钮此前不摆，理由写在 SessionDetailView 的抬头：画板里那几样在
-            协议上没有对应物，点开全是灰项不如不摆。复制会话号把这条理由破了 ——
-            号就在这一屏手里，不需要任何协议支持，而它恰恰是排查时第一件要的
-            东西（对 daemon 日志、查 agent_sessions、跟人报问题）。 */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("session.menu.more")}
-              data-testid="session-detail-menu-trigger"
-            >
-              <MoreHorizontal aria-hidden="true" className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[160px]">
-            <DropdownMenuItem onSelect={() => void copySessionId()}>
-              {t("session.menu.copySessionId")}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        {/* 宿主的那簇页面级控件（嵌入形态才有）：与「停止」隔一条竖线，免得两组
-            不同层级的东西看起来是一排同类按钮。 */}
-        {headerRight && (
+      {/* 身份行整块是共享包的 `SessionHeaderBand` —— 与桌面端 chat-panel-header
+          同一副外壳（规格 2026-08-23 决策 2/3）：高度写死为两行标题的高度、整块
+          垂直居中，标题长短不再改变它；`@container/header` 让 meta 行按**这一带的
+          实际宽度**分档降级，而不是靠 flex-wrap 折行把头部撑高（决策 4）。 */}
+      <SessionHeaderBand
+        testId="session-detail-identity"
+        metaTestId="session-detail-meta"
+        avatar={avatar}
+        // 页面形态的标题由 AppShell TopBar 呈现，不在这里重复。
+        title={isPage ? undefined : displayTitle}
+        meta={metaParts}
+        actions={
           <>
-            <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />
-            {headerRight}
+            {/* 正在连 / 正在重连（决策 2）：横幅不再承担这两个状态，它们在这里。
+                `connected` 与 B / C 档下这一枚不渲染，头部因此不会常驻一块噪音。 */}
+            <SessionConnectionIndicator status={status} />
+            {/* 停止：wire 上一直有 runtime.abort，这一端真发得出去。只在这一轮真的
+                在跑的时候摆——闲着的时候没有什么可停。 */}
+            {running && (
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="session-detail-stop"
+                disabled={aborting || status !== "connected"}
+                onClick={() => void abortTurn()}
+              >
+                <Square aria-hidden="true" className="size-3.5" />
+                {t("session.abort")}
+              </Button>
+            )}
+            {/* 更多操作。形态跟桌面端 chat-panel-header 同一套：**点击**打开的下拉。
+                右键那份在左栏的行上（SessionIndex 的 RowContextMenu），而右栏正读着
+                这条对话时没有「哪一行」可点。
+
+                这颗按钮此前不摆，理由写在 SessionDetailView 的抬头：画板里那几样在
+                协议上没有对应物，点开全是灰项不如不摆。复制会话号把这条理由破了 ——
+                号就在这一屏手里，不需要任何协议支持，而它恰恰是排查时第一件要的
+                东西（对 daemon 日志、查 agent_sessions、跟人报问题）。 */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("session.menu.more")}
+                  data-testid="session-detail-menu-trigger"
+                >
+                  <MoreHorizontal aria-hidden="true" className="size-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[160px]">
+                <DropdownMenuItem onSelect={() => void copySessionId()}>
+                  {t("session.menu.copySessionId")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            {/* 宿主的那簇页面级控件（嵌入形态才有）：与「停止」隔一条竖线，免得两组
+                不同层级的东西看起来是一排同类按钮。 */}
+            {headerRight && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="h-5 w-px shrink-0 bg-border"
+                />
+                {headerRight}
+              </>
+            )}
           </>
-        )}
-      </div>
+        }
+      />
     </div>
   );
 }

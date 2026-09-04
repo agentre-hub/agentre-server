@@ -11,12 +11,15 @@ import {
   Alert,
   AlertDescription,
   Button,
+  SessionHeaderBand,
+  StatusDot,
   cn,
   iconNode,
   normalizePermissionMode,
+  type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import SessionModelControl from "@/components/session/SessionModelControl";
@@ -35,6 +38,7 @@ import {
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import {
   DispatchRunError,
+  deriveTitle,
   dispatchNewConversation,
   fetchDispatchPlan,
   type DispatchPlan,
@@ -42,6 +46,7 @@ import {
   type DispatchedSession,
 } from "@/lib/dispatch";
 import { rememberAgent } from "@/lib/recentAgents";
+import { toAgentStatus } from "@/lib/sessionView";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 
 import {
@@ -69,6 +74,7 @@ export function DraftSession({
   initialProjectSyncId,
   onStarted,
   onBack,
+  headerRight,
 }: {
   agent: NewConvAgent;
   /** 账号里全部 Agent，供输入框的 @ 菜单用（第一句同样能提及别人）。 */
@@ -83,6 +89,13 @@ export function DraftSession({
   onStarted: (result: DispatchedSession) => void;
   /** 移动端的返回；桌面右栏里不给（左栏一直都在，没有「返回」这一说）。 */
   onBack?: () => void;
+  /**
+   * 宿主页面级的那簇控件（Chat 桌面档的连接态 + 语言/主题）。
+   *
+   * 与会话详情的 `headerRight` 同一件事：草稿这条带就是右栏的顶带，宿主不再另画
+   * 一条 chat-chrome，那簇控件因此落在这一行的最右端。
+   */
+  headerRight?: ReactNode;
 }) {
   const { t } = useTranslation();
   const composerModule = useSessionComposerModule();
@@ -315,36 +328,94 @@ export function DraftSession({
     [agents],
   );
 
+  /*
+    meta 行：与详情那条同序（Agent → 项目），说得出哪几维就摆哪几维。机器不进这一行
+    ——它在下面那枚可点的 chip 上，而那枚 chip 是**选择器**，不是一段陈述（桌面端
+    空会话态同此：机器在 NewSessionExecTargetLine 上，不在头部）。
+  */
+  const metaParts: SessionHeaderMetaPart[] = [
+    {
+      key: "agent",
+      node: (
+        <span
+          data-testid="draft-header-status"
+          className="inline-flex shrink-0 items-center gap-1"
+        >
+          {/* 交出去那一刻就转绿：转录里三点已经在转了，两处说的是同一件事。 */}
+          <StatusDot
+            status={toAgentStatus({
+              lifecycleState: starting ? "running" : "idle",
+            })}
+            size="xs"
+          />
+          {agent.name}
+        </span>
+      ),
+    },
+  ];
+  if (projectName) {
+    metaParts.push({
+      key: "project",
+      // 与详情那条同一个断点：项目在别处（下面那枚 chip、左栏的行上）还说得出。
+      hideAt: "@max-[420px]/header:hidden",
+      node: <span className="truncate">{projectName}</span>,
+    });
+  }
+
   return (
     <div
       data-testid="draft-session"
       className="flex h-full min-h-0 flex-col bg-background"
     >
-      <header className="flex shrink-0 items-center gap-2.5 border-b border-border bg-card px-5 py-3">
-        {onBack && (
-          <button
-            type="button"
-            aria-label={t("chat.back")}
-            className="-ml-1 flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
-            onClick={onBack}
-          >
-            <ArrowLeft aria-hidden="true" className="size-4" />
-          </button>
-        )}
-        <AgentAvatar
-          name={agent.name}
-          color={agent.avatar_color}
-          icon={iconNode(agent.avatar_icon)}
-          size="sm"
-        />
-        <span className="truncate text-sm font-semibold text-foreground">
-          {agent.name}
-        </span>
-        {/* 会话详情第二行摆的是状态与时刻；这里没有时刻可摆，只有一句事实。 */}
-        <span className="ml-auto font-mono text-2xs text-muted-foreground">
-          {t("chat.notSentYet")}
-        </span>
-      </header>
+      {/*
+        顶带与会话详情**是同一副**（共享包的 SessionHeaderBand）：固定 68px、同一档
+        头像、两行标题的高度、一行 mono meta。桌面端 chat-panel-header 的「四态同一
+        副外壳」就是这一条 —— 这里此前是另一副（py-3 + 24px 头像），右栏顶上还另叠
+        着一条 chat-chrome，第一句一发出去两条塌成一条，顶部 116px → 68px、头像
+        24→32，转录整体上跳。
+
+        右端收的是宿主那簇页面级控件：草稿这条带**就是**右栏的顶带，与详情落地后
+        那条同一个位置，控件因此不跳。
+      */}
+      <SessionHeaderBand
+        testId="draft-header"
+        metaTestId="draft-header-meta"
+        className="border-b border-border bg-card px-5"
+        leading={
+          onBack && (
+            <button
+              type="button"
+              aria-label={t("chat.back")}
+              className="-ml-1 flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent"
+              onClick={onBack}
+            >
+              <ArrowLeft aria-hidden="true" className="size-4" />
+            </button>
+          )
+        }
+        avatar={
+          <AgentAvatar
+            name={agent.name}
+            initials={agent.name.charAt(0)}
+            color={agent.avatar_color}
+            icon={iconNode(agent.avatar_icon)}
+            size="md"
+          />
+        }
+        /*
+          标题：还没交出去时是「新对话 · <Agent>」（与桌面端 newSessionTitle 同一句），
+          交出去之后就换成**那句话本身**。第一句的标题由 deriveTitle 算，派发送过线
+          的、账号里落库的、以及右栏落地后详情显示的都是同一个值 —— 所以这一刻换上
+          去，右栏换成真详情时标题一个字都不动。
+        */
+        title={
+          starting
+            ? deriveTitle(starting)
+            : t("chat.newSessionTitle", { name: agent.name })
+        }
+        meta={metaParts}
+        actions={headerRight}
+      />
 
       {starting ? (
         <DraftPending agent={agent} text={starting} />

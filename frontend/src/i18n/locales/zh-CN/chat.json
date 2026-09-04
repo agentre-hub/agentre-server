@@ -28,7 +28,7 @@
   "directMembers": "直接成员",
   "inheritedMembers": "继承自父项目",
   "inheritedTag": "继承",
-  "notSentYet": "还没发第一句",
+  "newSessionTitle": "新对话 · {{name}}",
   "startWithAgent": "和 {{agent}} 开始对话",
   "startWithAgentInProject": "在 {{project}} 中和 {{agent}} 开始项目对话",
   "pickTargetTitle": "在哪台机器上跑",

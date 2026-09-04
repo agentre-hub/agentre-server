@@ -448,7 +448,7 @@ describe("一条还没发第一句的对话", () => {
     // 来自账号的项目名单，与有没有会话无关，一条对话都没有时它照样在
     // （规格 2026-08-21-root-project-entry 决策 4）。拿 `group-` 当「列表是空的」
     // 的替身，量的就不再是这条用例要说的那件事。
-    expect(screen.queryByText("Nothing sent yet")).toBeTruthy();
+    expect(screen.queryByTestId("draft-session")).toBeTruthy();
     expect(document.querySelectorAll("[data-nav-target]")).toHaveLength(0);
     expect(screen.getByTestId("session-index-empty")).toBeTruthy();
   });
@@ -515,11 +515,12 @@ describe("一条还没发第一句的对话", () => {
     );
     fireEvent.click(screen.getByTestId("session-detail-send"));
 
-    expect(await screen.findByText("跑一下失败的测试")).toBeTruthy();
+    // 顶带的标题这一刻也换成了这一句（同一个 deriveTitle），所以按转录那一段找。
+    const pending = await screen.findByTestId("draft-pending");
+    expect(within(pending).getByText("跑一下失败的测试")).toBeTruthy();
     expect(screen.getByRole("status", { name: "Generating" })).toBeTruthy();
     expect(screen.queryByText("Starting…")).toBeNull();
 
-    const pending = screen.getByTestId("draft-pending");
     const avatars = pending.querySelectorAll('[role="img"]');
     expect(avatars).toHaveLength(2);
     expect(avatars[0].className).toContain("size-7");
@@ -1741,9 +1742,15 @@ describe("草稿页的权限档位与模型控件", () => {
  * 现在两处共用共享包的 `SessionHeaderBand`，这一组用例盯的就是「同一副」。
  */
 describe("草稿与详情共用同一条顶带", () => {
-  /** 一条带里的头像那一格。四态都要占住它。 */
+  /**
+   * 一条带里的头像那一格 —— 带的第一个孩子（这两屏都不带 leading）。
+   *
+   * 取位置而不是取 `role="img"`：身份认不出来时那一格摆的是一枚占位方块（详情
+   * 落地的头一瞬正是这样，账号 Agent 名单还没回来），而这条用例要说的恰恰是
+   * 「那一格无论如何都占住」。
+   */
   function avatarIn(band: HTMLElement): HTMLElement {
-    const el = band.querySelector<HTMLElement>('[role="img"]');
+    const el = band.firstElementChild as HTMLElement | null;
     if (!el) throw new Error("头像那一格空着");
     return el;
   }

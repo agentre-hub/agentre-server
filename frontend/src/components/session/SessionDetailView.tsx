@@ -1270,6 +1270,16 @@ export default function SessionDetailView({
         size="md"
         className={size === "row" ? MESSAGE_AVATAR_CLASS : undefined}
       />
+    ) : size === "md" ? (
+      /* 认不出 Agent（账号名单还没回来、或这条老会话上根本没有 agentSyncId）时
+         头部那一格**照样占住**——与桌面端 chat-panel-header 同一条。整格不渲染的
+         话标题会横向跳一格（32px + 12px 间距），同一条对话打开的头一瞬和之后长得
+         不是一个样。转录里的那一档没有这个问题：那里本来就按有没有头像排版。 */
+      <div
+        aria-hidden="true"
+        data-testid="session-detail-avatar"
+        className="size-8 shrink-0 rounded-lg bg-muted"
+      />
     ) : null;
 
   // 在 JSX 之外先算好：i18next/no-literal-string 会把 JSX 里的 agentAvatar("md")
