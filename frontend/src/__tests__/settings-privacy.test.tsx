@@ -65,7 +65,6 @@ function settingsResponse(over: Record<string, unknown> = {}) {
         device_id: 3,
         name: "MacBook-Pro",
         online: false,
-        pending_backfill_days: 90,
       },
     ],
     ...over,
@@ -167,9 +166,7 @@ describe("设置 · 隐私", () => {
     expect(within(rows[0]).getByText("mac-mini")).toBeTruthy();
     expect(within(rows[0]).getByText("Reported through today")).toBeTruthy();
     expect(within(rows[1]).getByText("MacBook-Pro")).toBeTruthy();
-    expect(
-      within(rows[1]).getByText("Offline · 90 days of backfill left"),
-    ).toBeTruthy();
+    expect(within(rows[1]).getByText("Offline")).toBeTruthy();
 
     const saved = screen.getByTestId("privacy-saved-conversations");
     expect(within(saved).getByText("Saved conversations")).toBeTruthy();

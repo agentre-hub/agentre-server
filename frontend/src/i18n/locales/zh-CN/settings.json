@@ -36,7 +36,6 @@
       "deviceReportedToday": "已上报到今天",
       "deviceReportedThrough": "已上报到 {{day}}",
       "deviceOffline": "离线",
-      "deviceBackfillLeft": "还差 {{count}} 天的回填",
       "danger": {
         "title": "关闭活跃统计",
         "body": "停止上报，并删除服务端已有的日计数。",

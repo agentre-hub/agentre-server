@@ -36,7 +36,6 @@
       "deviceReportedToday": "Reported through today",
       "deviceReportedThrough": "Reported through {{day}}",
       "deviceOffline": "Offline",
-      "deviceBackfillLeft": "{{count}} days of backfill left",
       "danger": {
         "title": "Turn off activity stats",
         "body": "Stop reporting, and delete the daily counts already on the server.",

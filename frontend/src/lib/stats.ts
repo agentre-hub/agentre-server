@@ -86,8 +86,8 @@ export interface StatsOverview {
 /**
  * 一台机器的上报进度。
  *
- * 全是可选的：服务端还没有逐台进度可交时，面板就**不画这一段**，而不是摆一排
- * 「未知」——那是编出来的状态。
+ * `reported_through` 是可选的：从没上报过的机器服务端**不发这个字段**，面板就少说
+ * 一句，而不是摆一个「未知」——那是编出来的状态。
  */
 export interface StatsDeviceReport {
   device_id: number;
@@ -95,8 +95,6 @@ export interface StatsDeviceReport {
   online: boolean;
   /** 已上报到哪一天（`YYYY-MM-DD`）。 */
   reported_through?: string;
-  /** 还差多少天的回填；离线机器上线后自动补。 */
-  pending_backfill_days?: number;
 }
 
 export interface StatsSettings {

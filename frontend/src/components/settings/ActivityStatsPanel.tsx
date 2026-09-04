@@ -309,13 +309,6 @@ function DeviceReportRow({
     }
   } else {
     parts.push(t("settings.privacy.activity.deviceOffline"));
-    if (device.pending_backfill_days && device.pending_backfill_days > 0) {
-      parts.push(
-        t("settings.privacy.activity.deviceBackfillLeft", {
-          count: device.pending_backfill_days,
-        }),
-      );
-    }
   }
   const status = parts.join(" · ");
   return (
