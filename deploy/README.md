@@ -97,6 +97,24 @@ SERVER_PUBLIC_URL=https://your-domain
 
 ### 只要个镜像
 
+GHCR 上有现成的，两条流水线推的，`linux/amd64` 与 `linux/arm64` 都有，
+`docker pull` 自己选架构：
+
+```bash
+docker pull ghcr.io/agentre-hub/agentre-server:latest    # 最近一个正式版
+docker pull ghcr.io/agentre-hub/agentre-server:nightly   # 每天从 nightly 分支构建
+```
+
+| tag | 来自 | 是什么 |
+| --- | --- | --- |
+| `latest` | `release.yml`（推 `v*` tag） | 最新正式版；beta / rc 不动它 |
+| `v1.2.0` | 同上 | 与 git tag 同名，要钉版本用这个 |
+| `nightly` | `nightly.yml`（每天 UTC 18:00） | 最新一次 nightly 构建 |
+| `nightly-20260904` | 同上 | 当天那一版，用于回退 |
+| `sha-abc1234` | 两条都打 | 精确到 commit |
+
+自己打：
+
 ```bash
 make docker          # 打成 agentre/server:0.1，带上当前 commit 号
 ```
@@ -381,6 +399,29 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 - dev 的部署步骤用的是 runner 自带的 `ssh`/`scp`，没走任何 ssh-action。这台实例的
   动作镜像集是定制的，仓库里也没有 ssh-action 的先例，赌一个可能不存在的镜像不如
   用原生命令。主机密钥是首连信任（`StrictHostKeyChecking=accept-new`）。
+
+### GitHub 侧：只出镜像，不部署
+
+GitHub 上另有两条流水线，它们只把镜像推到 GHCR，不碰任何环境——部署始终是 Gitea
+那边的事：
+
+- `release.yml`：推 `v*` tag 触发，打 `<tag>` 与 `sha-<短 commit>`，正式版另加 `latest`。
+- `nightly.yml`：每天 UTC 18:00（北京时间凌晨 2 点）把 `main` 合进 `nightly` 分支再构建，
+  打 `nightly`、`nightly-<日期>`、`sha-<短 commit>`。这个 commit 已经出过镜像就跳过——
+  判据是 registry 上 `sha-<短 commit>` 这个 tag 在不在，不另存状态，所以上一次构建
+  失败时下一次不会误判成「没有新提交」。
+
+两条都是两个原生 runner（`ubuntu-latest` + `ubuntu-24.04-arm`）各打一个架构、按 digest
+推上去，最后用 `docker buildx imagetools create` 合成一个 manifest list。不走 QEMU：
+镜像里那段 pnpm build 在模拟环境下要慢十几分钟，而公开仓库的 arm64 runner 是免费的。
+
+凭据只用内置的 `GITHUB_TOKEN`（job 上给 `packages: write`），不需要额外 secret。
+有两件一次性的事要做：
+
+1. **`nightly` 分支要先建出来**：`git push origin main:nightly`。定时任务读的是默认分支
+   上的 workflow 文件，但 checkout 的是 `nightly` 分支——分支不存在则 sync 那步直接红。
+2. **第一次推完要把 package 改成 public**：GHCR 上新建的 package 默认 private，不改
+   就匿名 `docker pull` 不到。
 
 ## 起不来的时候
 

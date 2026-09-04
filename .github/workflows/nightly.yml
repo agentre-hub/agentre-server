@@ -1,0 +1,200 @@
+name: Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * *" # UTC 18:00 = 北京时间凌晨 2:00
+  push:
+    branches:
+      - nightly
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+env:
+  # GHCR 的 owner 段必须全小写，这里写死避免 ${{ github.repository }} 大小写踩坑
+  IMAGE: ghcr.io/agentre-hub/agentre-server
+
+jobs:
+  sync:
+    name: Sync from main
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: nightly
+          fetch-depth: 0
+
+      - name: Merge main into nightly
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git merge origin/main --no-edit
+          git push
+
+  prepare:
+    name: Prepare version
+    needs: [sync]
+    if: ${{ always() && !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      sha: ${{ steps.ver.outputs.sha }}
+      short_sha: ${{ steps.ver.outputs.short_sha }}
+      date: ${{ steps.ver.outputs.date }}
+      skip: ${{ steps.ver.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: nightly
+          fetch-depth: 0
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute version
+        id: ver
+        run: |
+          SHA=$(git rev-parse HEAD)
+          SHORT=$(git rev-parse --short HEAD)
+          DATE=$(date -u +%Y%m%d)
+          echo "sha=${SHA}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT}" >> $GITHUB_OUTPUT
+          echo "date=${DATE}" >> $GITHUB_OUTPUT
+          # 跳过判据取自 registry 本身，不另存状态：sha-<short> 这个 tag 在就说明
+          # 这个 commit 已经出过镜像。用「上一次 nightly 的 commit」当判据的话，
+          # 上一次构建失败后下一次会误判成没有新提交。
+          if docker buildx imagetools inspect "${IMAGE}:sha-${SHORT}" >/dev/null 2>&1; then
+            echo "镜像 ${IMAGE}:sha-${SHORT} 已存在，跳过构建。"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "version=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # 版本号沿用桌面端 nightly 的规则：最新 tag + nightly 日期。仓库还没有
+          # tag 时退化成 v0.0.0-nightly.<日期>，第一个 tag 打上后自动跟上。
+          LATEST_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]' | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
+          BASE_VERSION="${LATEST_TAG#v}"
+          if [[ "$BASE_VERSION" == *-* ]]; then
+            VERSION="v${BASE_VERSION}.nightly.${DATE}"
+          else
+            VERSION="v${BASE_VERSION}-nightly.${DATE}"
+          fi
+          echo "skip=false" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+  build:
+    name: Image (${{ matrix.arch }})
+    needs: [prepare]
+    if: ${{ always() && !failure() && !cancelled() && needs.prepare.outputs.skip != 'true' }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 两个原生 runner 各打一个架构，不用 QEMU：镜像里那段 pnpm build 在
+          # 模拟环境下要慢十几分钟，而 arm64 runner 是免费的（公开仓库）。
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: nightly
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # 单架构产物先按 digest 推上去，tag 由 merge job 一次性挂到 manifest list。
+          # provenance 关掉：开着会让每个架构自己变成一个 index，合并时digest 对不上。
+          provenance: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version }}
+            COMMIT=${{ needs.prepare.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.prepare.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.prepare.outputs.version }}
+          cache-from: type=gha,scope=nightly-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=nightly-${{ matrix.arch }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nightly-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Publish manifest
+    needs: [prepare, build]
+    if: ${{ always() && !failure() && !cancelled() && needs.prepare.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: digests
+          pattern: nightly-digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest list and push
+        working-directory: digests
+        env:
+          DATE: ${{ needs.prepare.outputs.date }}
+          SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+        run: |
+          docker buildx imagetools create \
+            -t "${IMAGE}:nightly" \
+            -t "${IMAGE}:nightly-${DATE}" \
+            -t "${IMAGE}:sha-${SHORT_SHA}" \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      - name: Inspect
+        run: docker buildx imagetools inspect "${IMAGE}:nightly"
