@@ -46,6 +46,14 @@ import (
 
 var protobufRelayDialer = websocket.Dialer{Subprotocols: []string{relayws.ProtobufSubprotocol}}
 
+// ticketRelayDialer 照浏览器的样子提两个子协议：真协议 + 载着票的伪子协议
+// （api.relayTokenBridge 从后者取票）。票不进 URL，所以这里也不拼 query。
+func ticketRelayDialer(ticket string) websocket.Dialer {
+	return websocket.Dialer{Subprotocols: []string{
+		relayws.ProtobufSubprotocol, "agentre.bearer." + ticket,
+	}}
+}
+
 type relayStub struct {
 	daemonRoute       relay_svc.Route
 	daemonErr         error
@@ -104,7 +112,7 @@ func (s *relayStub) ResolveTarget(ctx context.Context, accountID int64, target s
 
 // 票据认得出账号，而目标由通道自己声明（决策 10）：URL 上不再有 daemon_fingerprint，
 // 两者在通道开通那一刻汇合。
-func TestRelayClientAcceptsSessionTicketFromQuery(t *testing.T) {
+func TestRelayClientAcceptsSessionTicketFromSubprotocol(t *testing.T) {
 	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -115,8 +123,9 @@ func TestRelayClientAcceptsSessionTicketFromQuery(t *testing.T) {
 	stub.clientAccounts = make(chan int64, 1)
 	stub.clientTargets = make(chan string, 1)
 	server := newRelayServer(t, signer, stub)
-	endpoint := wsURL(server.URL, "/v1/relay/client?access_token="+ticket)
-	conn, response, err := protobufRelayDialer.Dial(endpoint, nil)
+	endpoint := wsURL(server.URL, "/v1/relay/client")
+	dialer := ticketRelayDialer(ticket)
+	conn, response, err := dialer.Dial(endpoint, nil)
 	if response != nil {
 		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
 	}
@@ -692,8 +701,8 @@ func TestRelayDaemonClosesWhenDeviceCredentialRevokedOnAnotherInstance(t *testin
 
 func dialRelayClient(t *testing.T, server *httptest.Server, ticket string) *websocket.Conn {
 	t.Helper()
-	conn, response, err := protobufRelayDialer.Dial(
-		wsURL(server.URL, "/v1/relay/client?access_token="+ticket), nil)
+	dialer := ticketRelayDialer(ticket)
+	conn, response, err := dialer.Dial(wsURL(server.URL, "/v1/relay/client"), nil)
 	if response != nil {
 		t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
 	}

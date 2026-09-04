@@ -19,20 +19,12 @@ const bearerSubprotocolPrefix = "agentre.bearer."
 // relayTokenBridge 把浏览器带来的票搬进 Authorization 头，让后面的鉴权中间件
 // 不必知道它是怎么来的。
 //
-// 两条来路，优先级有讲究：
-//
-//   - **子协议**（首选）。票不进 URL，泄漏面小得多。
-//   - **query**（退路）。滚动更新期间新前端会连到旧副本、旧前端会连到新副本，
-//     两个方向都得通，所以这条要留。它是过渡期的形状，等前端全量走子协议之后
-//     就该删掉 —— 那时这个函数只剩上面一条分支。
-//
-// 两者都在时以子协议为准：它才是不进日志的那一条。
+// 只此一条来路：票走子协议，不进 URL，因此不进 ingress access log、反代日志、
+// 浏览器 history 与 Referer。已经带了 Authorization 的原生端不受影响。
 func relayTokenBridge() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.GetHeader("Authorization") == "" {
 			if token := bearerFromSubprotocols(c.GetHeader("Sec-WebSocket-Protocol")); token != "" {
-				c.Request.Header.Set("Authorization", "Bearer "+token)
-			} else if token := c.Query("access_token"); token != "" {
 				c.Request.Header.Set("Authorization", "Bearer "+token)
 			}
 		}

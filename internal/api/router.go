@@ -320,8 +320,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受真实
 	// Device JWT；client 同时接受原生端 Device JWT 与浏览器短效 relay ticket。
-	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议（首选）
-	// 或 query（过渡期退路）搬入头部。
+	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
 	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(r.Signer, blacklist, relayTickets))
 	// 这一条同时承载账号信号：普通通道跑 RPC，保留通道（relay_svc.SignalChannelID）

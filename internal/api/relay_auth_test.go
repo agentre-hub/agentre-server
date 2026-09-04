@@ -21,8 +21,8 @@ ingress access log、反代日志、浏览器 history 与 Referer —— 一处�
 所以票改走子协议：浏览器提两个，`agentre-protobuf` 与 `agentre.bearer.<token>`；
 服务端从提议列表里取票、照常回选前者（后者只是载体，不参与协商）。
 
-query 那条**保留**：滚动更新期间新前端会连到旧副本、旧前端会连到新副本，两个方向
-都得通。它是过渡期的退路，不是长期形状。
+这是**唯一**一条来路：前端与服务端 go:embed 进同一个二进制，永远同版本发布，没有
+「旧前端连到新副本」这回事，query 那条退路因此不存在。
 */
 func TestRelayTokenBridge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -46,19 +46,14 @@ func TestRelayTokenBridge(t *testing.T) {
 		assert.Equal(t, "Bearer tok-123", seen(t, req))
 	})
 
-	t.Run("子协议缺席时回落到 query（过渡期的退路）", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/relay?access_token=tok-legacy", nil)
-		assert.Equal(t, "Bearer tok-legacy", seen(t, req))
-	})
-
-	t.Run("两者都在时以子协议为准：它是不进日志的那一条", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/relay?access_token=tok-legacy", nil)
-		req.Header.Set("Sec-WebSocket-Protocol", "agentre-protobuf, agentre.bearer.tok-123")
-		assert.Equal(t, "Bearer tok-123", seen(t, req))
+	t.Run("URL 上的票一概不认：它是会进日志的那一条", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/relay?access_token=tok-in-url", nil)
+		assert.Empty(t, seen(t, req))
 	})
 
 	t.Run("已经带了 Authorization 的原生端不受影响", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/relay?access_token=tok-legacy", nil)
+		req := httptest.NewRequest(http.MethodGet, "/relay", nil)
+		req.Header.Set("Sec-WebSocket-Protocol", "agentre-protobuf, agentre.bearer.tok-123")
 		req.Header.Set("Authorization", "Bearer native")
 		assert.Equal(t, "Bearer native", seen(t, req))
 	})
@@ -69,9 +64,9 @@ func TestRelayTokenBridge(t *testing.T) {
 		assert.Empty(t, seen(t, req))
 	})
 
-	// 两条来路都没有票时头保持为空 —— 后面的 RelayClientJWT 会照常拒绝，
+	// 没有票时头保持为空 —— 后面的 RelayClientJWT 会照常拒绝，
 	// 这一层不负责放行，也不该编一个空 Bearer 出来。
-	t.Run("两条来路都没有票时头保持为空", func(t *testing.T) {
+	t.Run("没有票时头保持为空", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/relay?daemon_fingerprint=fp-1", nil)
 		assert.Empty(t, seen(t, req))
 	})
