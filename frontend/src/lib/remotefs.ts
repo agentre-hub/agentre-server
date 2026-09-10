@@ -142,33 +142,7 @@ export function isGitRepo(entries: RemoteFsEntry[]): boolean {
   return entries.some((e) => e.name === ".git");
 }
 
-/** 只有目录能被选中做项目根，文件不列——列出来只会让人点了没反应。 */
-export function directoriesOf(entries: RemoteFsEntry[]): RemoteFsEntry[] {
-  return entries
-    .filter((e) => e.isDir)
-    .slice()
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
 export function joinPath(parent: string, name: string): string {
   if (parent === "/") return `/${name}`;
   return `${parent.replace(/\/+$/, "")}/${name}`;
-}
-
-/** 面包屑：`/srv/work` → [{name:"/",path:"/"},{name:"srv",…},{name:"work",…}]。 */
-export function breadcrumbOf(path: string): { name: string; path: string }[] {
-  const segments = path.split("/").filter(Boolean);
-  const out = [{ name: "/", path: "/" }];
-  let acc = "";
-  for (const segment of segments) {
-    acc = `${acc}/${segment}`;
-    out.push({ name: segment, path: acc });
-  }
-  return out;
-}
-
-/** 上一级；已经在根上就还是根。 */
-export function parentOf(path: string): string {
-  const crumbs = breadcrumbOf(path);
-  return crumbs.length > 1 ? crumbs[crumbs.length - 2].path : "/";
 }

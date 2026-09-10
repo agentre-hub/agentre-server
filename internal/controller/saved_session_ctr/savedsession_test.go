@@ -33,7 +33,7 @@ const testCookieName = "server_session"
 // service 的语义：同一条重复保存不重复入桶，删除不存在的不是错误。
 // peerOutcome 决定删除时执行端那一份的去向，让控制器如实转述这件事。
 type stubSavedSessionSvc struct {
-	saved       map[int64][]saved_session_svc.SavedSessionRef
+	saved       map[int64][]saved_session_svc.SessionRef
 	peerOutcome saved_session_svc.MachineDeleteOutcome
 }
 
@@ -45,20 +45,18 @@ const (
 
 func newStubSavedSessionSvc() *stubSavedSessionSvc {
 	return &stubSavedSessionSvc{
-		saved:       map[int64][]saved_session_svc.SavedSessionRef{},
+		saved:       map[int64][]saved_session_svc.SessionRef{},
 		peerOutcome: saved_session_svc.MachineDeleted,
 	}
 }
 
 func (s *stubSavedSessionSvc) Save(_ context.Context, ref saved_session_svc.SessionRef) error {
 	for _, it := range s.saved[ref.UserID] {
-		if it.DeviceFingerprint == ref.MachineFingerprint && it.ConversationID == ref.ConversationID {
+		if it.MachineFingerprint == ref.MachineFingerprint && it.ConversationID == ref.ConversationID {
 			return nil // 幂等：已经保存过
 		}
 	}
-	s.saved[ref.UserID] = append(s.saved[ref.UserID], saved_session_svc.SavedSessionRef{
-		DeviceFingerprint: ref.MachineFingerprint, ConversationID: ref.ConversationID, FollowedAt: 1000,
-	})
+	s.saved[ref.UserID] = append(s.saved[ref.UserID], ref)
 	return nil
 }
 
@@ -75,10 +73,6 @@ func (s *stubSavedSessionSvc) Delete(
 		}
 	}
 	return s.peerOutcome, nil // 幂等：从未保存过也照样成功
-}
-
-func (s *stubSavedSessionSvc) List(_ context.Context, userID int64) ([]saved_session_svc.SavedSessionRef, error) {
-	return s.saved[userID], nil
 }
 
 func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) (*httptest.Server, *jwt.Signer) {
@@ -125,66 +119,6 @@ func doRequest(t *testing.T, method, url, cookie, bearer, body string, csrf ...s
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	return resp
-}
-
-// 保存：已登录浏览器 session 把一条对话收进账号；同账号另一个 session（另一个
-// 浏览器 = 另一端）读到同一份——账号里保存的对话属于账号，不属于某一个浏览器。
-func TestSave_OneEndSaves_OtherEndReadsSameList(t *testing.T) {
-	stub := newStubSavedSessionSvc()
-	server, _ := newSavedSessionTestServer(t, stub)
-
-	cookieA, csrfA := newSessionCookie(t, 7)
-	cookieB, _ := newSessionCookie(t, 7) // 同账号的另一端
-
-	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookieA.Value, "", `{"device_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`, csrfA)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	resp = doRequest(t, http.MethodGet, server.URL+"/v1/saved-sessions", cookieB.Value, "", "")
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var envelope struct {
-		Code int `json:"code"`
-		Data struct {
-			Items []struct {
-				DeviceFingerprint string `json:"device_fingerprint"`
-				ConversationID    string `json:"conversation_id"`
-				SavedAt           int64  `json:"saved_at"`
-				Invalid           bool   `json:"invalid"`
-			} `json:"items"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
-	require.Equal(t, 0, envelope.Code)
-	require.Len(t, envelope.Data.Items, 1)
-	require.Equal(t, "fp-daemon-1", envelope.Data.Items[0].DeviceFingerprint)
-	require.Equal(t, conversationNine, envelope.Data.Items[0].ConversationID)
-	// 保存时刻在应答里叫 saved_at：这一族端点里「关注」一词已经作废，字段名照实说
-	// 这件事，桩记的 1000 必须原样出现在这个键上。
-	require.Equal(t, int64(1000), envelope.Data.Items[0].SavedAt)
-}
-
-// 账号隔离：另一个账号看不到这条。
-func TestList_ScopedToAccount(t *testing.T) {
-	stub := newStubSavedSessionSvc()
-	server, _ := newSavedSessionTestServer(t, stub)
-
-	cookieA, csrfA := newSessionCookie(t, 7)
-	cookieOther, _ := newSessionCookie(t, 99)
-
-	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
-		cookieA.Value, "", `{"device_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`, csrfA)
-
-	resp := doRequest(t, http.MethodGet, server.URL+"/v1/saved-sessions", cookieOther.Value, "", "")
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	var envelope struct {
-		Code int `json:"code"`
-		Data struct {
-			Items []json.RawMessage `json:"items"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
-	require.Equal(t, 0, envelope.Code)
-	require.Empty(t, envelope.Data.Items)
 }
 
 // peerStatus 读出删除应答里执行端那一份的去向。

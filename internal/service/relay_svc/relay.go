@@ -53,9 +53,8 @@ func Default() RelaySvc {
 
 func SetDefault(s RelaySvc) { defaultSvc = s }
 
-// unavailableRelaySvc 是 Default() 在没有注册真实 RelaySvc 时的安全占位实现，
-// 与 unavailableForwarder 同一模式：每个方法都明确返回 ErrRelayUnconfigured，
-// 而不是把 nil 接口留给调用方去踩。
+// unavailableRelaySvc 是 Default() 在没有注册真实 RelaySvc 时的安全占位实现：
+// 每个方法都明确返回 ErrRelayUnconfigured，而不是把 nil 接口留给调用方去踩。
 type unavailableRelaySvc struct{}
 
 func (unavailableRelaySvc) PrepareDaemon(context.Context, int64, int64, string) (Route, error) {
@@ -141,22 +140,6 @@ const (
 type Forwarder interface {
 	Check(ctx context.Context, target Route) error
 	Forward(ctx context.Context, target Route, source Peer, channelID string, messageType int, frame []byte) error
-}
-
-type unavailableForwarder struct{}
-
-// NewUnavailableForwarder 为显式禁用帧总线的测试或降级装配保留。它让客户端在升级
-// websocket 前收到可区分的 upstream 错误，而不是建立一条无效连接。
-func NewUnavailableForwarder() Forwarder { return unavailableForwarder{} }
-
-func (unavailableForwarder) Check(context.Context, Route) error {
-	return errors.New("relay frame bus is unavailable")
-}
-
-func (unavailableForwarder) Forward(context.Context, Route, Peer, string, int, []byte) error {
-	// 客户端会在 Check 阶段被拒绝，因此此处只会消费 daemon 的心跳帧；
-	// 禁用总线不能让它们中断 TTL 续期。
-	return nil
 }
 
 // RelaySvc 协调设备归属校验、Redis 在线态与帧总线。

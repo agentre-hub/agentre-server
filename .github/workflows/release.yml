@@ -113,3 +113,29 @@ jobs:
 
       - name: Inspect
         run: docker buildx imagetools inspect "${IMAGE}:${VERSION}"
+
+  release:
+    name: Create Release
+    needs: [merge]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    # 镜像发布成功之后才建 Release:Release 就是「这版真的发出去了」的宣布,先宣布再
+    # 发现镜像没推上去就晚了。发布物本身是镜像,没有要附到 Release 上的文件。
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # 先删后建,与桌面端同形:重跑同一个 tag 不会因为 Release 已存在而失败。
+      - name: Create GitHub Release
+        run: |
+          gh release delete "${VERSION}" -y 2>/dev/null || true
+          # beta/rc 标成 prerelease:它还不到「拿来就能上生产」的那一版
+          case "${VERSION}" in
+            *-beta*|*-rc*) PRE=--prerelease ;;
+            *) PRE= ;;
+          esac
+          gh release create "${VERSION}" \
+            --title "${VERSION}" \
+            --generate-notes \
+            $PRE

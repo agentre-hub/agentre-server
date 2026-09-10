@@ -1,8 +1,9 @@
 /**
  * 设计 token 守卫的规则数据。
  *
- * 单独抽成模块，是为了让 eslint.config.js 和 guard test
- * (src/__tests__/eslint-design-tokens.test.ts) 引用同一份来源——
+ * 单独抽成模块，是为了让 eslint.config.js 和守卫测试
+ * (src/__tests__/eslint-guardrails.test.ts、src/__tests__/design-token-contract.test.ts)
+ * 引用同一份来源——
  * 否则守卫测试可能在测一份和实际生效的配置不一样的正则。
  *
  * 约定本身写在 docs/design.md#colour-tokens。
@@ -76,7 +77,7 @@ const RAW_COLOR_VALUE = "(?:#[0-9a-fA-F]{3,8}\\b|\\b(?:rgba?|hsla?)\\s*\\()";
 
 const TOKEN_HINT =
   "颜色必须走 design token：改用 bg-background / text-foreground / border-border / bg-scrim 这类语义类名。" +
-  " token 定义在 src/styles/globals.css，工具类映射在同一文件的 @theme 块。" +
+  " token 定义在共享包 @agentre-hub/agentre-ui 的 tokens.css，本站不再声明同名色值。" +
   " 需要新颜色时先加 token，不要就地写字面量——否则深色模式下它不会跟着变。" +
   " 见 docs/design.md#colour-tokens";
 

@@ -36,8 +36,6 @@ type Device struct {
 	upgrader MachineUpgrader
 }
 
-func NewDevice() *Device { return &Device{} }
-
 func NewDeviceWithPublicKeys(currentKID string, keys map[string]string, maxTokenLifetimeSeconds int64) *Device {
 	return &Device{publicKeys: &api.PublicKeyResponse{
 		Version: 1, CurrentKID: currentKID, Keys: keys,

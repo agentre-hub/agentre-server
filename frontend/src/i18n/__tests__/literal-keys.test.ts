@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 
 import i18n from "../index";
+import en from "../locales/en";
 import { AGENTRE_UI_NAMESPACE } from "@agentre-hub/agentre-ui/i18n";
 
 /**
@@ -104,5 +105,114 @@ describe("literal t() keys", () => {
     expect(missing, "这些键在语言包里不存在，界面上会直接印出键名本身").toEqual(
       [],
     );
+  });
+});
+
+/**
+ * 反向守卫：本站 `translation` bundle 里不应存在「没人用」的 key。
+ *
+ * 上面那条正向守卫只覆盖「代码 → 语言包」：删多了它不会红，界面却会直接印出
+ * `session.decision.allow` 这样的字面量。这里补反方向：
+ *
+ *   每个叶子 key 都必须被「代码里的引用」或「显式白名单」覆盖。
+ *
+ * 「代码里的引用」不只算 `t("…")`——把 `t` 转手交给别的模块去拼时（`deviceKind.ts`
+ * 的 `deviceKindLabel(kind, t)`），完整 key 永远不以字面量出现。所以这里同时收集
+ * **整份源码文本里出现过的点分路径**（含测试与注释），并允许宿主前缀。
+ *
+ * 白名单每条都注明是哪段代码在拼。宁可写宽：一条误报会逼后来的人关掉整条守卫。
+ */
+
+/** 运行期拼出来的 key 前缀。`device.kind.` 是最典型的一份：`lib/deviceKind.ts` 用
+ * `` const key = `device.kind.${kind}` `` 先拼再 `t(key)`。 */
+const DYNAMIC_KEY_PREFIXES = [
+  // pages/Account.tsx: t(`account.passkeys.errors.${PASSKEY_ERROR_KEY[…]}`)
+  "account.passkeys.errors.",
+  // components/AddDeviceGuide.tsx:
+  //   t(`device.add.steps.${key}.title`) / `.hint` / `.done`
+  "device.add.steps.",
+  // pages/Device.tsx: t(`device.entry.errors.${codeError}`)
+  "device.entry.errors.",
+  // lib/deviceKind.ts: const key = `device.kind.${kind}`; t(key)
+  "device.kind.",
+  // pages/Login.tsx: t(`login.errors.${err}`)
+  "login.errors.",
+  // pages/org/OrgExecTargetSection.tsx:
+  //   t(`org.detail.execTargets.skills.${catalog.status}`) / `.group.${group}` / `.state.${option}`
+  "org.detail.execTargets.skills.",
+  // pages/Overview.tsx: t(`overview.stats.range.${range}`)
+  "overview.stats.range.",
+  // components/session/SessionStatusBanner.tsx:
+  //   t(`session.banner.${status}.title`) / `.titleUnknown` / `.body`
+  "session.banner.",
+  // components/session/SendFailureBubble.tsx:
+  //   t(`session.sendFailure.${failure.kind}.title`) / `.titleUnknown` / `.body`
+  "session.sendFailure.",
+  // components/session/SessionIndex.tsx: t(`sessionIndex.filter.${option}`)
+  "sessionIndex.filter.",
+  // pages/chat/ChatIndexPanel.tsx: t(`sessionIndex.saveFailed.${saveFailure.kind}`)
+  "sessionIndex.saveFailed.",
+  // pages/Settings.tsx: t(`settings.sections.${section}`) / t(`settings.tabs.${key}`)
+  "settings.sections.",
+  "settings.tabs.",
+];
+
+type LocaleJson = { [key: string]: string | LocaleJson };
+
+function flattenLocale(obj: LocaleJson, prefix = ""): string[] {
+  return Object.entries(obj).flatMap(([key, value]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    return typeof value === "string" ? [path] : flattenLocale(value, path);
+  });
+}
+
+/** 源码文本里出现过的点分路径，及其每一级后缀。 */
+function collectReferencedKeyPaths(): Set<string> {
+  const paths = new Set<string>();
+  const tokenPattern = /[A-Za-z_$][\w$]*(?:\.[\w$]+)+/g;
+
+  for (const source of Object.values(SOURCES)) {
+    for (const match of source.matchAll(tokenPattern)) {
+      const token = match[0];
+      paths.add(token);
+      // 剥前缀：`i18n.t("a.b")` 与 `en.transcript.x` 都要能覆盖 bundle 里的 `a.b`。
+      let dot = token.indexOf(".");
+      while (dot !== -1) {
+        paths.add(token.slice(dot + 1));
+        dot = token.indexOf(".", dot + 1);
+      }
+    }
+  }
+
+  return paths;
+}
+
+describe("unused translation keys", () => {
+  it("every translation key is referenced by code or an explicit dynamic-key whitelist", () => {
+    const staticKeys = new Set(collectKeys().map(([key]) => key));
+
+    // 守卫自证「不空过」：正则或 glob 哪天写错，静态 key 会塌成 0 条，
+    // 下面的差集自动为空、守卫静默全绿。
+    expect(staticKeys.size).toBeGreaterThan(100);
+
+    const referencedPaths = collectReferencedKeyPaths();
+
+    const isCovered = (key: string): boolean => {
+      if (staticKeys.has(key)) return true;
+      if (referencedPaths.has(key)) return true;
+      return DYNAMIC_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
+    };
+
+    const unused = flattenLocale(en as LocaleJson).filter((key) => {
+      if (isCovered(key)) return false;
+      // 复数键：bundle 里是 `x_one` / `x_other`，代码里调的是 base `x`。
+      const base = key.replace(/_(?:one|other)$/, "");
+      return base === key || !isCovered(base);
+    });
+
+    expect(
+      unused,
+      "这些 key 在代码里已经没有读者，删掉它们，或把「哪段代码在拼」写进白名单",
+    ).toEqual([]);
   });
 });

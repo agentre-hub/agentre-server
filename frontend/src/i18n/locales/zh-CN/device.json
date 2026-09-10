@@ -96,7 +96,6 @@
     "statusOnline": "在线",
     "statusOffline": "离线",
     "statusRevoked": "已撤销",
-    "revokeConfirmTitle": "解除这台设备的授权？",
     "revokeConfirmBody": "确认后该设备将无法再刷新凭据。若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受——撤销并非即时生效。",
     "revokeCancel": "取消",
     "revokeConfirm": "解除授权",
@@ -150,8 +149,7 @@
       "upgradingBody": "重启一次，通常不到 1 分钟。",
       "successTitle": "升级完成",
       "timeoutTitle": "没等到它回来",
-      "timeoutBody": "等了 5 分钟。如果它不是以服务或容器方式运行，升级后不会自动启动。",
-      "failedTitle": "升级没能开始"
+      "timeoutBody": "等了 5 分钟。如果它不是以服务或容器方式运行，升级后不会自动启动。"
     },
     "devBuild": "开发构建",
     "devBuildTitle": "这是开发构建",

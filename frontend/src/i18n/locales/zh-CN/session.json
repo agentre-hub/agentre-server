@@ -1,6 +1,5 @@
 {
   "composerControls": {
-    "permissionMode": "权限模式",
     "modelTarget": "供应商与模型",
     "permissionUnavailable": "这台机器此刻列不出权限档位",
     "permissionSetFailed": "权限档位没改成：{{reason}}",
@@ -91,7 +90,6 @@
     "switchMachine": "换机器",
     "online": "在线",
     "offline": "离线",
-    "count": "{{count}} 条对话",
     "back": "返回"
   },
   "list": {
@@ -104,12 +102,7 @@
   },
   "transcript": {
     "empty": "还没有消息。",
-    "send": "发送",
     "assistant": "助手",
-    "tool": "工具",
-    "toolResult": "结果",
-    "error": "错误",
-    "waiting": "正在等待你的输入…",
     "loadEarlier": "加载更早的",
     "earlierFailed": "没能读到更早的内容。",
     "loadingEarlier": "正在读取更早的…",
@@ -117,12 +110,6 @@
     "catchUpFailed": "没能从这台机器读到这条对话的内容，它可能还在补齐。"
   },
   "decision": {
-    "allow": "允许",
-    "alwaysAllow": "本对话始终允许",
-    "deny": "拒绝",
-    "denyReason": "理由（可选）",
-    "submit": "提交",
-    "skip": "跳过",
     "alreadyHandled": "该请求已被处理。",
     "submitFailed": "这次决策没能提交出去，什么都没发出，请重试。",
     "retry": "重试"

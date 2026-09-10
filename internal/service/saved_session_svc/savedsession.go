@@ -20,7 +20,6 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
-	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 )
 
 type SavedSessionSvc interface {
@@ -30,8 +29,6 @@ type SavedSessionSvc interface {
 	// 时一定已经没了；执行端那一份的去向由 MachineDeleteOutcome 如实交代。幂等：
 	// 删一条早已删过的对话不是错误。
 	Delete(ctx context.Context, ref SessionRef) (MachineDeleteOutcome, error)
-	// List 返回账号里已保存的全部对话（任一端读到同一份），并标明目标已不存在的条目。
-	List(ctx context.Context, userID int64) ([]SavedSessionRef, error)
 }
 
 // SessionRef 指向一条对话：账号 + 它的 **conversation_id** + 承载它的机器 + 发起它
@@ -151,16 +148,6 @@ func (unreachableMachine) DeleteOnMachine(context.Context, SessionRef) error {
 	return ErrMachineOffline
 }
 
-// SavedSessionRef 是账号里已保存的一条。
-type SavedSessionRef struct {
-	DeviceFingerprint string
-	ConversationID    string
-	FollowedAt        int64
-	// Invalid 目标设备已不在账号活跃设备里（被撤销 / 从未存在）时为 true。
-	// 名单内容本身不变——R14 解除某台设备的授权不改变名单——只是这一条已无对可指。
-	Invalid bool
-}
-
 type savedSessionSvc struct{}
 
 var defaultSvc SavedSessionSvc = newSavedSessionSvc()
@@ -170,7 +157,6 @@ func Default() SavedSessionSvc { return defaultSvc }
 // SetDefault 换掉默认实现；controller 测试用它注入桩。
 func SetDefault(s SavedSessionSvc) { defaultSvc = s }
 
-func New() SavedSessionSvc                 { return newSavedSessionSvc() }
 func newSavedSessionSvc() *savedSessionSvc { return &savedSessionSvc{} }
 
 // Save 先把这一条写进账号，再让镜像开始——顺序是有意的：范围就是隐私开关
@@ -260,35 +246,4 @@ func (s *savedSessionSvc) Delete(ctx context.Context, ref SessionRef) (MachineDe
 			zap.Error(err))
 		return MachineDeletePending, nil
 	}
-}
-
-func (s *savedSessionSvc) List(ctx context.Context, userID int64) ([]SavedSessionRef, error) {
-	rows, err := agent_session_repo.Save().ListByUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	// 目标是否仍存活，按账号当前活跃设备集合判断。失效是读取时由名单（账号级）
-	// 与设备（设备级）对齐算出来的，不写名单——解除某台设备的授权因此不改变名单
-	// 内容（R14），只是这一条在读取时变得 invalid。离线设备仍在活跃集合里，
-	// 机器离线不影响名单（R13）。
-	active := make(map[string]struct{}, 8)
-	devices, err := device_repo.Device().ListByUser(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	for _, d := range devices {
-		active[d.Fingerprint] = struct{}{}
-	}
-
-	out := make([]SavedSessionRef, 0, len(rows))
-	for _, r := range rows {
-		_, ok := active[r.DeviceFingerprint]
-		out = append(out, SavedSessionRef{
-			DeviceFingerprint: r.DeviceFingerprint,
-			ConversationID:    r.ConversationID,
-			FollowedAt:        r.FollowedAt,
-			Invalid:           !ok,
-		})
-	}
-	return out, nil
 }

@@ -1,6 +1,5 @@
 {
   "composerControls": {
-    "permissionMode": "Permission mode",
     "modelTarget": "Provider and model",
     "permissionUnavailable": "This machine cannot list permission modes right now",
     "permissionSetFailed": "Permission mode was not changed: {{reason}}",
@@ -91,7 +90,6 @@
     "switchMachine": "Switch machine",
     "online": "Online",
     "offline": "Offline",
-    "count": "{{count}} conversations",
     "back": "Back"
   },
   "list": {
@@ -104,12 +102,7 @@
   },
   "transcript": {
     "empty": "No messages yet.",
-    "send": "Send",
     "assistant": "Assistant",
-    "tool": "Tool",
-    "toolResult": "Result",
-    "error": "Error",
-    "waiting": "Waiting for your input…",
     "loadEarlier": "Load earlier messages",
     "earlierFailed": "Could not load earlier messages.",
     "loadingEarlier": "Loading earlier messages…",
@@ -117,12 +110,6 @@
     "catchUpFailed": "Couldn't read this conversation from its machine. It may still be catching up."
   },
   "decision": {
-    "allow": "Allow",
-    "alwaysAllow": "Always allow in this conversation",
-    "deny": "Deny",
-    "denyReason": "Reason (optional)",
-    "submit": "Submit",
-    "skip": "Skip",
     "alreadyHandled": "This request has already been handled.",
     "submitFailed": "That decision could not be submitted. Nothing was sent — try again.",
     "retry": "Retry"

@@ -43,13 +43,15 @@ describe("language switching", () => {
 
   it("shared console copy differs per language", async () => {
     // task 1 共享控制台组件唯一的自有文案：行级菜单触发按钮的 aria-label。
+    // 生产只用带名字的那条（`console.aria.rowActionsNamed`，Devices.tsx 传入
+    // 行名），不带名字的 `rowActions` 是无人引用的遗留键，已删除。
     await i18n.changeLanguage("en");
-    const en = i18n.t("console.aria.rowActions");
+    const en = i18n.t("console.aria.rowActionsNamed", { name: "demo" });
     await i18n.changeLanguage("zh-CN");
-    const zh = i18n.t("console.aria.rowActions");
+    const zh = i18n.t("console.aria.rowActionsNamed", { name: "demo" });
 
-    expect(en).toBe("Row actions");
-    expect(zh).toBe("行操作");
+    expect(en).toBe("Actions for demo");
+    expect(zh).toBe("demo 的操作");
     expect(zh).not.toBe(en);
   });
 

@@ -11,11 +11,12 @@ with a React 19 + Vite + Tailwind + shadcn frontend embedded into the binary via
 Module path is `github.com/agentre-hub/agentre-server`. It is a standalone backend
 module and is not imported by the sibling repositories.
 
-Part of the `/Users/codfrm/Code/agentre` Go workspace. The sibling desktop app's Go module
-is **not** a backend dependency: server Go code must never import it. The frontend does
+Part of a multi-repository checkout: it is developed alongside the sibling desktop app and the
+community hub, and each repository commits independently. The sibling desktop app's Go
+module is **not** a backend dependency: server Go code must never import it. The frontend does
 consume the host-neutral `@agentre-hub/agentre-ui` and `@agentre-hub/agentre-wire` packages
 owned there, pinned to immutable Git commits; those packages must never import either host.
-Workspace-wide facts live in [`../AGENTS.md`](../AGENTS.md).
+Cross-repository facts live in [`../AGENTS.md`](../AGENTS.md).
 
 ## Read this before you touch anything
 

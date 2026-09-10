@@ -142,17 +142,3 @@ func (mr *MockDeviceTokenRepoMockRecorder) RevokeChain(ctx, deviceID, nowMs any)
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RevokeChain", reflect.TypeOf((*MockDeviceTokenRepo)(nil).RevokeChain), ctx, deviceID, nowMs)
 }
-
-// TouchLastUsed mocks base method.
-func (m *MockDeviceTokenRepo) TouchLastUsed(ctx context.Context, id, nowMs int64) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "TouchLastUsed", ctx, id, nowMs)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// TouchLastUsed indicates an expected call of TouchLastUsed.
-func (mr *MockDeviceTokenRepoMockRecorder) TouchLastUsed(ctx, id, nowMs any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TouchLastUsed", reflect.TypeOf((*MockDeviceTokenRepo)(nil).TouchLastUsed), ctx, id, nowMs)
-}

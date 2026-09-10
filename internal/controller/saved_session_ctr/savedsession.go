@@ -54,21 +54,3 @@ func (f *Follow) Delete(c *gin.Context, req *api.DeleteSessionRequest) (*api.Del
 	}
 	return &api.DeleteSessionResponse{MachineStatus: string(outcome)}, nil
 }
-
-// List 返回账号里已保存的全部对话（R14：任一端读到同一份）。
-func (f *Follow) List(c *gin.Context, _ *api.ListSavedSessionsRequest) (*api.ListSavedSessionsResponse, error) {
-	items, err := saved_session_svc.Default().List(c.Request.Context(), ginctx.UserID(c))
-	if err != nil {
-		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
-	}
-	resp := &api.ListSavedSessionsResponse{Items: make([]api.SavedSessionRef, 0, len(items))}
-	for _, it := range items {
-		resp.Items = append(resp.Items, api.SavedSessionRef{
-			DeviceFingerprint: it.DeviceFingerprint,
-			ConversationID:    it.ConversationID,
-			SavedAt:           it.FollowedAt,
-			Invalid:           it.Invalid,
-		})
-	}
-	return resp, nil
-}

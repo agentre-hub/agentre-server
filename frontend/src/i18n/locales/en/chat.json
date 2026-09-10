@@ -6,7 +6,6 @@
   "startFirst": "Start your first conversation",
   "startFirstBody": "Pick an agent to get started.",
   "noMachine": "Unknown machine",
-  "remove": "Remove",
   "pickAgentHint": "Pick an agent to start.",
   "noProjectsOnMachine": "No projects are configured on this machine.",
   "projectPathMissing": "Path not configured on this machine",

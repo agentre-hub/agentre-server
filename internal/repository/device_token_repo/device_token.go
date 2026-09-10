@@ -20,7 +20,6 @@ type DeviceTokenRepo interface {
 	// Revoke 返回受影响行数，由 service 判读竞态结果。
 	Revoke(ctx context.Context, id, nowMs int64) (int64, error)
 	RevokeChain(ctx context.Context, deviceID, nowMs int64) error
-	TouchLastUsed(ctx context.Context, id, nowMs int64) error
 	DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error
 }
 
@@ -85,11 +84,6 @@ func (r *repo) RevokeChain(ctx context.Context, deviceID, nowMs int64) error {
 	return db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).
 		Where("device_id=? AND revoked_at=0", deviceID).
 		Update("revoked_at", nowMs).Error
-}
-
-func (r *repo) TouchLastUsed(ctx context.Context, id, nowMs int64) error {
-	return db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).Where("id=?", id).
-		Update("last_used_at", nowMs).Error
 }
 
 // cleanupBatchSize 是清理 DELETE 每一批的行数上限。这张表增长很快——access TTL
