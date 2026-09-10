@@ -75,6 +75,15 @@ type Config struct {
 	IdleTimeout time.Duration
 	// CallTimeout 见 defaultCallTimeout。
 	CallTimeout time.Duration
+	// RenderFailure 是代理**自有失败**的渲染钩子（portforwardhost.WithFailureRenderer）：
+	// 端口没声明、映射停用、端口上没有服务、够不着设备……交给宿主的是「是哪一件事」，
+	// 由宿主决定说什么。nil 就用共享包那份默认纯文本。
+	//
+	// 它由装配处交进来（internal/bootstrap 传 portforward_ctr.RenderFailure）：出什么页
+	// 是表现层的事，本包不认识 HTML，也不得反向 import 控制器。
+	//
+	// 代理按端口缓存、跨请求共用，所以这个函数不得带任何一次请求的状态。
+	RenderFailure portforwardhost.FailureRenderer
 }
 
 func (c Config) withDefaults() Config {
@@ -278,9 +287,18 @@ func (p *Pool) proxyFor(entry *pooledConn, port uint32) http.Handler {
 	// 排在下面那次赋值之后。slot.proxy 的写与读都在这把锁下，没有竞态。
 	slot.proxy = portforwardhost.NewProxy(entry.conn, port, func(reason string) {
 		p.revokePort(entry, port, slot, reason)
-	})
+	}, p.proxyOptions()...)
 	entry.proxies[port] = slot
 	return slot.proxy
+}
+
+// proxyOptions 是每一个 Proxy 都要带上的那几项。今天只有一项：宿主的失败渲染。
+// 没配就不装，代理照旧用共享包那份默认纯文本（桌面端口径）。
+func (p *Pool) proxyOptions() []portforwardhost.Option {
+	if p.cfg.RenderFailure == nil {
+		return nil
+	}
+	return []portforwardhost.Option{portforwardhost.WithFailureRenderer(p.cfg.RenderFailure)}
 }
 
 // releaseRef 归还一次引用。归零之后不立刻收连接，先静置一段时间（见 defaultIdleTimeout）。

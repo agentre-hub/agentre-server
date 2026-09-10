@@ -46,6 +46,8 @@
   },
   "add": {
     "open": "Add device",
+    "copy": "Copy",
+    "copied": "Copied",
     "stepOf": "Step {{n}} of 3",
     "kindLabel": "Device type",
     "kindAgentred": "Compute node (agentred)",

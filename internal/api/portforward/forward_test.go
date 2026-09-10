@@ -3,6 +3,7 @@ package portforward_test
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -554,4 +555,67 @@ func TestForward_TrailingSlashBehaviourIsPinned(t *testing.T) {
 	assert.Equal(t, http.StatusOK, direct.Code, "不该先吃一个尾斜杠重定向")
 	assert.Equal(t, http.StatusMovedPermanently, bare.Code)
 	assert.Equal(t, "/fw/", bare.Header().Get("Location"))
+}
+
+// —— 本层自己那三句纯文本答复的缓存语义 ——
+
+// 这三句是**控制台自己**产生的失败（不经过共享代理），今天走 c.Data 直出。它们必须
+// 与出页的那条同一套缓存语义：no-store。
+//
+// 缺了它，404 那一条按 RFC 9111 是可被浏览器**启发式缓存**的——响应带 Date、没有
+// 任何 Cache-Control / Expires，浏览器就能自己挑一段新鲜期。于是设备重新配对回来、
+// 映射重新建好之后，同一条转发地址在那个标签页里刷新仍可能是旧的 404，而服务端这一
+// 侧完全看不出问题。
+func TestForward_ConsoleOwnedPlainAnswersAreNotCacheable(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		setup  func(h *harness)
+		path   string
+		status int
+	}{
+		{
+			name:   "地址形状不对",
+			setup:  func(*harness) {},
+			path:   "/fw/abc/3000/",
+			status: http.StatusNotFound,
+		},
+		{
+			name: "没有这台你能用的设备",
+			setup: func(h *harness) {
+				h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(nil, nil)
+			},
+			path:   "/fw/12/3000/",
+			status: http.StatusNotFound,
+		},
+		{
+			name: "这一跳没搭起来",
+			setup: func(h *harness) {
+				h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
+				h.forwarder.errs = []error{errors.New("protocol version mismatch")}
+			},
+			path:   "/fw/12/3000/",
+			status: http.StatusBadGateway,
+		},
+		{
+			name: "这个部署给不了转发",
+			setup: func(h *harness) {
+				h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
+				h.forwarder.errs = []error{portforward_svc.ErrStopped}
+			},
+			path:   "/fw/12/3000/",
+			status: http.StatusServiceUnavailable,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, true)
+			c.setup(h)
+
+			rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, c.path, nil)))
+
+			require.Equal(t, c.status, rec.Code)
+			assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+			assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"),
+				"这一句会被浏览器缓存下来，设备修好之后刷新还是它")
+		})
+	}
 }

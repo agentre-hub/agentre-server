@@ -113,7 +113,7 @@ function composerEditable(): HTMLElement & {
 
 /** 等输入框那一 chunk 加载完（它是 React.lazy 切出去的）。 */
 async function awaitComposer() {
-  await vi.waitFor(() => composerEditable());
+  await waitFor(() => composerEditable());
 }
 
 async function typeInComposer(text: string) {
@@ -554,12 +554,12 @@ describe("会话详情页", () => {
     await screen.findByText(/重构登录页/);
 
     // 读路径：attach 与游标补齐都指向发起端那条会话。
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(fakeClient.attach).toHaveBeenCalledWith("42", "fp-desktop");
       expect(fakeClient.catchUp).toHaveBeenCalledWith("42", "fp-desktop");
     });
     // 待决策快照同样按 origin 问（否则问到的是空会话，审批卡永远不出现）。
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (c) => c[0] === rpcMethods.sessionPendingWaiters,
       );
@@ -568,7 +568,7 @@ describe("会话详情页", () => {
 
     // 写路径：这一轮必须落在发起端那条会话上。
     await sendInComposer("把按钮改成蓝色");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (c) => c[0] === rpcMethods.runtimeRun,
       );
@@ -608,7 +608,7 @@ describe("会话详情页", () => {
 
     await sendInComposer("把按钮改成蓝色");
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(live.result.current.get("42")?.running).toBe(true),
     );
   });
@@ -635,7 +635,7 @@ describe("会话详情页", () => {
     renderPage();
     await screen.findByText(/重构登录页/);
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(live.result.current.get("42")).toEqual({ running: true, at: 0 }),
     );
   });
@@ -660,7 +660,7 @@ describe("会话详情页", () => {
     renderPage();
     await screen.findByText(/重构登录页/);
     await sendInComposer("把按钮改成蓝色");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(live.result.current.get("42")?.running).toBe(true),
     );
 
@@ -690,7 +690,7 @@ describe("会话详情页", () => {
 
     await sendInComposer("把按钮改成蓝色");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (c) => c[0] === rpcMethods.runtimeRun,
       );
@@ -730,9 +730,7 @@ describe("会话详情页", () => {
     // 这段窗口里用户那句话在转录里还不存在（要等 daemon 的 user_message 回声过一个
     // 往返），三点也要等 runtime.run 应答才点亮。此前 sending 被折进 disabled：
     // 输入框被清空并整块禁用，屏幕上一个字都没有他刚说的话。
-    await vi.waitFor(() =>
-      expect(screen.getByLabelText("Sending…")).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByLabelText("Sending…")).toBeTruthy());
     expect(composerDisabled()).toBe(false);
   });
 
@@ -766,7 +764,7 @@ describe("会话详情页", () => {
     await screen.findByAltText("shot.png");
     fireEvent.click(screen.getByTestId("session-detail-send"));
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (entry) => entry[0] === rpcMethods.runtimeRun,
       );
@@ -880,7 +878,7 @@ describe("会话详情页", () => {
     fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
     await sendInComposer("继续");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (entry) => entry[0] === rpcMethods.runtimeRun,
       );
@@ -990,7 +988,7 @@ describe("会话详情页", () => {
     // 输入框那一 chunk 是 lazy 的，pill 在它里面：先等它到位，再看脸上写的是哪一档。
     await awaitComposer();
     const pill = await screen.findByRole("button", { name: /Permission mode/ });
-    await vi.waitFor(() => expect(pill.textContent).toContain("Default"));
+    await waitFor(() => expect(pill.textContent).toContain("Default"));
     expect(pill.textContent).not.toContain("Bypass");
   });
 
@@ -1020,7 +1018,7 @@ describe("会话详情页", () => {
 
     renderPage();
     await screen.findByTestId("session-detail-composer");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(fakeClient.request).toHaveBeenCalledWith(
         rpcMethods.runtimeCapabilities,
         expect.anything(),
@@ -1127,7 +1125,7 @@ describe("会话详情页", () => {
 
     renderPage();
     // 解析到什么要等引擎目录落地：绑定那一档的模型是从目录里查出来的。
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const pill = screen.getByRole("button", { name: /Provider and model/ });
       expect(pill.textContent).toContain("Follow agent binding");
       expect(pill.textContent).toContain("claude-sonnet-4-6");
@@ -1141,7 +1139,7 @@ describe("会话详情页", () => {
     });
 
     renderPage();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const pill = screen.getByRole("button", { name: /Provider and model/ });
       expect(pill.textContent).toContain("claude-opus-4-6");
       expect(pill.textContent).not.toContain("Follow agent binding");
@@ -1157,7 +1155,7 @@ describe("会话详情页", () => {
     );
     fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (entry) => entry[0] === rpcMethods.setModelTarget,
       );
@@ -1274,7 +1272,7 @@ describe("会话详情页", () => {
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
       );
@@ -1360,7 +1358,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(
         fakeClient.request.mock.calls.some(
           (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
@@ -1400,7 +1398,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
 
-    await vi.waitFor(() => expect(errored).toHaveBeenCalled());
+    await waitFor(() => expect(errored).toHaveBeenCalled());
     expect(errored.mock.calls[0][0]).toBe(
       i18n.t("session.decision.submitFailed"),
     );
@@ -1465,7 +1463,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // 从面板里滤掉了（同一条待决不重复显示两处）。tp-1 只在 waiters 里出现过、
     // 事件流里没有，所以上面那一步仍然走的是面板 —— 这正是面板不能删的理由。
     expect(await screen.findByText("Allow Once")).toBeTruthy();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.queryByText("This request has already been handled.")).toBe(
         null,
       );
@@ -1642,7 +1640,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     // 必须重新 attach 43 并补齐,展示 B 的转录;A 的转录不再残留。
     expect(await screen.findByText("B 的转录")).toBeTruthy();
     expect(screen.queryByText("A 的转录")).toBeNull();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(fakeClient.attach).toHaveBeenCalledWith("43", undefined);
     });
   });
@@ -1782,7 +1780,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     await act(async () => {});
 
     // 设备2在线 + 中继 reconnecting → 状态横幅是 reconnecting,不是 machineOffline。
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const view = screen.getByTestId("session-detail-view");
       expect(
         view.querySelector('[data-session-status="reconnecting"]'),
@@ -1794,7 +1792,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       resolveProbe1({ devices: [dev1] });
     });
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const view = screen.getByTestId("session-detail-view");
       expect(
         view.querySelector('[data-session-status="machineOffline"]'),
@@ -1884,7 +1882,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
   async function send(text: string) {
     // 发送期间输入框是停用的（TipTap 的 setEditable(false)），这一档下
     // triggerSubmit 会直接 return —— 连发两条时必须等它恢复可编辑再打第二条。
-    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
     await sendInComposer(text);
   }
 
@@ -1904,7 +1902,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     await screen.findByText(/重构登录页/);
     await send("顺便把标题也改了");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(callsOf(rpcMethods.runtimeSteer)[0]?.[1]).toMatchObject({
         conversationId: "42",
         peerFingerprint: "fp-desktop",
@@ -1934,7 +1932,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     await screen.findByText(/重构登录页/);
     await send("插一句");
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(1),
     );
     const params = callsOf(rpcMethods.runtimeSteer)[0]?.[1] as {
@@ -1945,7 +1943,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     // 每条 steer 各自一个 id：agentred 那张表按 id 存提交方，撞 id 会让先来的
     // 那条被后来的覆盖掉。
     await send("再插一句");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(2),
     );
     const second = callsOf(rpcMethods.runtimeSteer)[1]?.[1] as {
@@ -1966,7 +1964,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     await screen.findByText(/重构登录页/);
     await send("开始重构");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1);
     });
     expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(0);
@@ -1984,12 +1982,10 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     renderPage();
     await screen.findByText(/重构登录页/);
     await send("开始重构");
-    await vi.waitFor(() =>
-      expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1),
-    );
+    await waitFor(() => expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1));
 
     await send("顺便把标题也改了");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(1),
     );
     expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1);
@@ -2008,7 +2004,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     await screen.findByText(/重构登录页/);
     await send("顺便把标题也改了");
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(1),
     );
     // 排进了当前这一轮：那句话此刻在队列里看得见（而不是一句解释文案），草稿清空，
@@ -2033,7 +2029,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     await send("继续");
 
     // 草稿清空是「这一条被接受了」的判据；等它落定，而不是只等请求发出去。
-    await vi.waitFor(
+    await waitFor(
       () => {
         expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(1);
         expect(composerText()).toBe("");
@@ -2043,7 +2039,7 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     expect(screen.queryByTestId("send-failure")).toBeNull();
     // 回落的是 run（开了新一轮），不是排队：先挂上去的那条 chip 要跟着撤掉，
     // 否则同一句话既在队列里排着、又作为新一轮发了出去。
-    await vi.waitFor(() => expect(screen.queryByText(/^Queued · /)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/^Queued · /)).toBeNull());
   });
 });
 
@@ -2074,7 +2070,7 @@ describe("会话详情页:插话之后的排队队列", () => {
   }
 
   async function send(text: string) {
-    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
     await sendInComposer(text);
   }
 
@@ -2133,7 +2129,7 @@ describe("会话详情页:插话之后的排队队列", () => {
 
     pushConsumed([{ queuedId: "q-remote-1", text: "先别动数据库" }]);
 
-    await vi.waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
   });
 
   // Given 队列里排着一条 / When 用户点撤回 / Then 发 runtime.cancelSteer，并按对端
@@ -2156,13 +2152,13 @@ describe("会话详情页:插话之后的排队队列", () => {
 
     fireEvent.click(cancel);
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(callsOf(rpcMethods.runtimeCancelSteer)[0]?.[1]).toMatchObject({
         conversationId: "42",
         queuedId: "q-remote-1",
       });
     });
-    await vi.waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
   });
 
   // Given 对端还没升级（应答里没有句柄）/ When 排队 / Then chip 照画但撤不掉。
@@ -2208,7 +2204,7 @@ describe("会话详情页:插话之后的排队队列", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore as draft" }));
 
-    await vi.waitFor(() => expect(composerText()).toContain("先别动数据库"));
+    await waitFor(() => expect(composerText()).toContain("先别动数据库"));
     expect(
       screen.queryByText("1 message(s) were not sent when the turn ended"),
     ).toBeNull();
@@ -2363,7 +2359,7 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
       </MemoryRouter>,
     );
     await act(async () => {});
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(
         screen.queryByText("Could not load your devices. Please try again."),
       ).toBeNull();
@@ -2442,7 +2438,7 @@ describe("会话详情：这条通道声明的目标", () => {
       title: "重构登录页",
     });
 
-    await vi.waitFor(() => expect(targets()).toContain("conversation:42"));
+    await waitFor(() => expect(targets()).toContain("conversation:42"));
     expect(targets().some((t) => t?.startsWith("machine:"))).toBe(false);
   });
 
@@ -2450,7 +2446,7 @@ describe("会话详情：这条通道声明的目标", () => {
     stubDevices();
     mountDetail();
 
-    await vi.waitFor(() => expect(targets()).toContain("machine:fp-1"));
+    await waitFor(() => expect(targets()).toContain("machine:fp-1"));
     expect(targets().some((t) => t?.startsWith("conversation:"))).toBe(false);
   });
 
@@ -2566,7 +2562,7 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
 
     const { rerender } = render(ui("42"));
     // 第一条连上了：机器在线（machineOnline=true）也已经问回来了。
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(mockUseRelay.mock.calls.map((c) => c[0])).toContain(
         "conversation:42",
       ),
@@ -2581,7 +2577,7 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
     expect(mockUseRelay.mock.calls.at(-1)?.[0]).toBe("conversation:43");
 
     // 认领落定、通道重新开出来之后照常连上，不残留任何横幅。
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(mockUseRelay.mock.calls.map((c) => c[0])).toContain(
         "conversation:43",
       ),
@@ -2660,7 +2656,7 @@ describe("会话详情：切过去那一瞬不抖", () => {
     mount(mirrorRow(lastMessageAt));
 
     const head = await screen.findByTestId("session-detail-header");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(head.querySelector("time")?.getAttribute("datetime")).toBe(
         new Date(lastMessageAt).toISOString(),
       ),
@@ -2754,7 +2750,7 @@ describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态"
 
     const { rerender } = render(ui(1, "42"));
     // 机器 A 确实离线：这一档本身是对的。
-    await vi.waitFor(() => expect(bannerStatus()).toBe("machineOffline"));
+    await waitFor(() => expect(bannerStatus()).toBe("machineOffline"));
 
     // 切到机器 B 上的另一条对话：B 在不在线还没问回来。
     rerender(ui(2, "43"));
@@ -2766,7 +2762,7 @@ describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态"
     await act(async () => {
       resolveDev2({ devices: [dev2] });
     });
-    await vi.waitFor(() => expect(bannerStatus()).toBeUndefined());
+    await waitFor(() => expect(bannerStatus()).toBeUndefined());
   });
 });
 
@@ -3113,7 +3109,7 @@ describe("会话详情：历史来自 server 镜像", () => {
     renderPage();
     await screen.findByText(/镜像里的历史/);
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 1, "fp-desktop");
     });
     expect(fakeClient.getCursor).toHaveBeenCalledWith("42", "fp-desktop");
@@ -3160,7 +3156,7 @@ describe("会话详情：历史来自 server 镜像", () => {
     renderPage();
     await screen.findByText(/镜像里的最后一句/);
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 5, undefined);
       expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 2, undefined);
     });
@@ -3333,11 +3329,11 @@ describe("会话详情：历史来自 server 镜像", () => {
     await screen.findByText(/第一句/);
 
     rerender(at("43"));
-    await vi.waitFor(() => expect(screen.queryByText(/第一句/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/第一句/)).toBeNull());
 
     rerender(at("42"));
     // 客户端一直连着这条会话，输出继续推过来——镜像那一趟还在路上。
-    await vi.waitFor(() => expect(mirrorCalls).toBe(2));
+    await waitFor(() => expect(mirrorCalls).toBe(2));
     act(() => {
       capturedOpts.onEvent?.({
         conversationId: "42",
@@ -3350,7 +3346,7 @@ describe("会话详情：历史来自 server 镜像", () => {
     releaseSecond();
 
     await screen.findByText(/第一句/);
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const said = (text: string) =>
         (
           screen.getByTestId("session-detail-transcript").textContent ?? ""
@@ -3445,13 +3441,13 @@ describe("会话详情：历史来自 server 镜像", () => {
     await screen.findByText(/离开期间的一句/);
 
     rerender(at("43"));
-    await vi.waitFor(() => expect(screen.queryByText(/第一句/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/第一句/)).toBeNull());
     rerender(at("42"));
 
     await screen.findByText(/第一句/);
     await screen.findByText(/离开期间的一句/);
     // 补回来的那一段只能出现一次：压回游标之后，中继与镜像覆盖的 seq 有重叠。
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const said = (text: string) =>
         (
           screen.getByTestId("session-detail-transcript").textContent ?? ""
@@ -3996,7 +3992,7 @@ describe("会话详情：头部", () => {
 
     // 清单落地后，真名补上。
     releaseAgents(undefined);
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByTestId("session-detail-transcript").textContent,
       ).toContain("后端 Agent"),
@@ -4057,14 +4053,12 @@ describe("会话详情：头部", () => {
 
     // 交接那一拍：用户那句话与三点都在（running = seeded），而这条对话是谁还没解开。
     const transcript = await screen.findByTestId("session-detail-transcript");
-    await vi.waitFor(() =>
-      expect(transcript.textContent).toContain("你好，看看"),
-    );
+    await waitFor(() => expect(transcript.textContent).toContain("你好，看看"));
     expect(transcript.textContent).not.toContain("Assistant");
 
     // 身份解开后，真名补上。
     releaseList();
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByTestId("session-detail-transcript").textContent,
       ).toContain("后端 Agent"),
@@ -4091,7 +4085,7 @@ describe("会话详情：头部", () => {
     expect(status.textContent).toBe("");
 
     releaseList();
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.getByTestId("session-detail-status").textContent).toContain(
         "后端 Agent",
       ),
@@ -4120,9 +4114,7 @@ describe("会话详情：头部", () => {
 
     // 身份（session.list）与清单都还没落地，而抬头已经是真名了。
     const transcript = await screen.findByTestId("session-detail-transcript");
-    await vi.waitFor(() =>
-      expect(transcript.textContent).toContain("你好，看看"),
-    );
+    await waitFor(() => expect(transcript.textContent).toContain("你好，看看"));
     expect(transcript.textContent).toContain("后端 Agent");
     expect(transcript.textContent).not.toContain("Assistant");
     // 头像也是真的那一枚（调色板色 + 图标），不是灰方块。
@@ -4184,7 +4176,7 @@ describe("会话详情：头部", () => {
       </MemoryRouter>,
     );
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.getByTestId("session-detail-status").textContent).toContain(
         "后端 Agent",
       ),
@@ -4211,7 +4203,7 @@ describe("会话详情：头部", () => {
     expect(screen.queryByTestId("composer-model-target")).toBeNull();
 
     releaseList();
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.getByTestId("composer-model-target")).toBeTruthy(),
     );
   });
@@ -4286,7 +4278,7 @@ describe("会话详情：头部", () => {
     await screen.findByText("跑着呢");
     fireEvent.click(screen.getByTestId("session-detail-stop"));
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         fakeClient.request.mock.calls.some(
           (c) => c[0] === rpcMethods.runtimeAbort,
@@ -4576,7 +4568,7 @@ describe("会话详情：输入框", () => {
     await screen.findByText("开场白");
     await sendInComposer("把按钮改成蓝色");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         (c) => c[0] === rpcMethods.runtimeRun,
       );
@@ -4761,7 +4753,7 @@ describe("会话详情：输入框", () => {
     expect(
       await screen.findByTestId("composer-local-command-unsupported"),
     ).toBeTruthy();
-    await vi.waitFor(() => expect(composerText()).toBe("!!! 这条很重要"));
+    await waitFor(() => expect(composerText()).toBe("!!! 这条很重要"));
     expect(
       fakeClient.request.mock.calls.some((c) => c[0] === rpcMethods.runtimeRun),
     ).toBe(false);
@@ -4866,7 +4858,7 @@ describe("会话详情：打开即标记已读", () => {
       </MemoryRouter>,
     );
 
-    await vi.waitFor(() => expect(posted).toEqual([{ conversation_id: "42" }]));
+    await waitFor(() => expect(posted).toEqual([{ conversation_id: "42" }]));
     // 交回宿主的也是这条对话的身份：宿主手里那一行的键就是它。
     expect(onMarkedRead).toHaveBeenCalledTimes(1);
     expect(onMarkedRead).toHaveBeenCalledWith("42", 1_700_000_000_000);
@@ -4917,7 +4909,7 @@ describe("会话详情：打开即标记已读", () => {
       </MemoryRouter>,
     );
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       // 身份就是 conversation_id 一个值（决策 1）：从前这里还要按四格次序凑一个
       // 发起端指纹，凑错就把已读记在一条账号里不存在的对话上。
       expect(posted).toEqual([{ conversation_id: "42" }]),
@@ -4993,7 +4985,7 @@ describe("会话详情：打开即标记已读", () => {
 
     // 这一屏确实被读到了（转录出得来），已读也就该记上。
     expect(await screen.findByText(/离线也读得到的最后一句/)).toBeTruthy();
-    await vi.waitFor(() => expect(posted).toEqual([{ conversation_id: "42" }]));
+    await waitFor(() => expect(posted).toEqual([{ conversation_id: "42" }]));
     // 宿主那一行跟着搬：未读徽标在它手上。
     expect(onMarkedRead).toHaveBeenCalledWith("42", 1_700_000_000_000);
   });
@@ -5042,7 +5034,7 @@ describe("会话详情：打开即标记已读", () => {
         </ThemeProvider>
       </MemoryRouter>,
     );
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitFor(() => expect(posted).toHaveLength(1));
 
     // 同一条重渲染不再记一次。
     rerender(
@@ -5061,7 +5053,7 @@ describe("会话详情：打开即标记已读", () => {
         </ThemeProvider>
       </MemoryRouter>,
     );
-    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    await waitFor(() => expect(posted).toHaveLength(2));
   });
 
   // ── 开着的那条对话不该在你眼前变回未读 ──────────────────────────────────
@@ -5090,14 +5082,14 @@ describe("会话详情：打开即标记已读", () => {
     });
 
     mountEmbedded({ onMarkedRead });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitFor(() => expect(posted).toHaveLength(1));
     // 补齐跑完 → ready:回放来的终态帧不算数(见下一条),这一档要等它之后。
-    await vi.waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
     await act(async () => {});
 
     act(() => capturedOpts.onRunResultDone?.({} as never));
 
-    await vi.waitFor(() => expect(posted).toHaveLength(2));
+    await waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[1]).toEqual({ conversation_id: "42" });
     // 宿主那一行也要跟着搬:徽标在它手上。
     expect(onMarkedRead).toHaveBeenLastCalledWith("42", 1_700_000_000_002);
@@ -5128,7 +5120,7 @@ describe("会话详情：打开即标记已读", () => {
     });
 
     mountEmbedded();
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await waitFor(() => expect(posted).toHaveLength(1));
     await act(async () => {});
     expect(posted).toHaveLength(1);
   });
@@ -5206,7 +5198,7 @@ describe("会话详情：/compact", () => {
 
     await sendInComposer("/compact");
 
-    await vi.waitFor(() => expect(runParams()?.compact).toBe(true));
+    await waitFor(() => expect(runParams()?.compact).toBe(true));
     // 压缩这一轮没有用户消息：把 `/compact` 也当正文送过去等于既压缩又多说一句。
     expect(runParams()?.userText).toBeFalsy();
   });
@@ -5217,7 +5209,7 @@ describe("会话详情：/compact", () => {
 
     await sendInComposer("/compact");
 
-    await vi.waitFor(() => expect(runParams()?.userText).toBe("/compact"));
+    await waitFor(() => expect(runParams()?.userText).toBe("/compact"));
     expect(runParams()?.compact).toBeFalsy();
   });
 
@@ -5227,7 +5219,7 @@ describe("会话详情：/compact", () => {
 
     await sendInComposer("/compact 之前先把结论记下来");
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(runParams()?.userText).toBe("/compact 之前先把结论记下来"),
     );
     expect(runParams()?.compact).toBeFalsy();
@@ -5350,7 +5342,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     renderPage();
     await screen.findByText(/最后一句/);
 
-    await vi.waitFor(() => expect(scroller().scrollTop).toBe(geo.scrollHeight));
+    await waitFor(() => expect(scroller().scrollTop).toBe(geo.scrollHeight));
   });
 
   it("往上滚到距顶两屏：用 oldest_seq 再取一页，接在前面", async () => {
@@ -5360,7 +5352,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     ]);
     renderPage();
     await screen.findByText(/最后一句/);
-    await vi.waitFor(() => expect(scroller().scrollTop).toBe(2000));
+    await waitFor(() => expect(scroller().scrollTop).toBe(2000));
 
     // 滚到距顶两屏以内（clientHeight=500 → 阈值 1000）。
     const el = scroller();
@@ -5402,7 +5394,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     renderPage();
     await screen.findByText(/最后一句/);
     const el = scroller();
-    await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+    await waitFor(() => expect(el.scrollTop).toBe(2000));
 
     fireEvent.wheel(el, { deltaY: -600 });
     el.scrollTop = 900;
@@ -5424,7 +5416,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     renderPage();
     await screen.findByText(/最后一句/);
     const el = scroller();
-    await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+    await waitFor(() => expect(el.scrollTop).toBe(2000));
 
     // 他自己往回翻 —— 转轮子这一下就是「离开底部」的证人（见 noteUserScroll）。
     fireEvent.wheel(el, { deltaY: -600 });
@@ -5433,7 +5425,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     // 前插使内容长高 1200；补偿之后用户看的那一行应该还在原处。
     geo.scrollHeight = 3200;
     await screen.findByText(/更早的那句/);
-    await vi.waitFor(() => expect(el.scrollTop).toBe(900 + 1200));
+    await waitFor(() => expect(el.scrollTop).toBe(900 + 1200));
   });
 
   it("不满一屏而还有更早的：自动顶补，直到溢出视口", async () => {
@@ -5490,7 +5482,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     expect(asked.length).toBe(before);
 
     fireEvent.click(btn);
-    await vi.waitFor(() => expect(asked.length).toBe(before + 1), {
+    await waitFor(() => expect(asked.length).toBe(before + 1), {
       timeout: 5000,
     });
   });
@@ -5511,7 +5503,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     renderPage();
     await screen.findByText(/最后一句/);
     const el = scroller();
-    await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+    await waitFor(() => expect(el.scrollTop).toBe(2000));
 
     // 行虚拟化复测出真实行高，内容长高 600 —— 这条路不经过本视图的一次提交。
     geo.scrollHeight = 2600;
@@ -5531,7 +5523,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
       });
     });
     await screen.findByText(/再来一句/);
-    await vi.waitFor(() => expect(el.scrollTop).toBe(2600));
+    await waitFor(() => expect(el.scrollTop).toBe(2600));
   });
 
   /**
@@ -5568,7 +5560,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
       renderPage();
       await screen.findByText(/最后一句/);
       const el = scroller();
-      await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+      await waitFor(() => expect(el.scrollTop).toBe(2000));
 
       // 行虚拟化复测出真实行高，内容长高 600。没有任何一次本视图的提交。
       geo.scrollHeight = 2600;
@@ -5622,7 +5614,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
       renderPage();
       await screen.findByText(/最后一句/);
       const el = scroller();
-      await vi.waitFor(() => expect(el.scrollTop).toBe(2000));
+      await waitFor(() => expect(el.scrollTop).toBe(2000));
 
       // 虚拟器复测上方那些行，自己 scrollTo 把位置往回补，同时内容长高。
       geo.scrollHeight = 2600;
@@ -5754,7 +5746,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
     } as never);
     renderPage();
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(fakeClient.setCursor).toHaveBeenCalledWith(
         "42",
         5000 - RELAY_TAIL_FRAMES,
@@ -5807,7 +5799,7 @@ describe("会话详情：输入框那一带的三种形态", () => {
 
   it("连接中：输入框就在,只是停用——连上那一刻版面不会被顶开", async () => {
     renderConnecting();
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByTestId("session-detail-send")).toBeTruthy();
     });
     expect(composerDisabled()).toBe(true);
@@ -5955,7 +5947,7 @@ describe("会话详情：发送失败的气泡", () => {
     await act(async () => {
       within(bubble).getByTestId("send-failure-retry").click();
     });
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.queryByTestId("send-failure")).toBeNull();
     });
     const runs = fakeClient.request.mock.calls.filter(
@@ -6035,10 +6027,10 @@ describe("会话详情页:一轮在跑时的三点", () => {
     expect(await screen.findByText("上一轮说完了")).toBeTruthy();
 
     act(() => capturedOpts.onAutonomousTurnStarted?.({} as never));
-    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    await waitFor(() => expect(typing()).toBeTruthy());
 
     act(() => capturedOpts.onRunResultDone?.({} as never));
-    await vi.waitFor(() => expect(typing()).toBeNull());
+    await waitFor(() => expect(typing()).toBeNull());
   });
 
   it("自己发出一条消息:这一轮跑起来,三点出现", async () => {
@@ -6047,7 +6039,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     expect(await screen.findByText("上一轮说完了")).toBeTruthy();
 
     await sendInComposer("再改一处");
-    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    await waitFor(() => expect(typing()).toBeTruthy());
     expect(screen.getByText("上一轮说完了").closest("article")).not.toContain(
       typing(),
     );
@@ -6063,7 +6055,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     expect(await screen.findByText("上一轮说完了")).toBeTruthy();
 
     await sendInComposer("再改一处");
-    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    await waitFor(() => expect(typing()).toBeTruthy());
 
     act(() =>
       capturedOpts.onEvent?.({
@@ -6077,7 +6069,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(screen.getByText("再改一处")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("再改一处")).toBeTruthy());
     expect(typing()).toBeTruthy();
     // 也不许退回去挂在上一轮那条助手消息上：那等于说「上面那段还在写」。
     expect(screen.getByText("上一轮说完了").closest("article")).not.toContain(
@@ -6097,7 +6089,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     await awaitComposer();
 
     await sendInComposer("你好");
-    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
+    await waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
 
     act(() =>
       capturedOpts.onEvent?.({
@@ -6107,7 +6099,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("你好")).toBeTruthy());
     expect(typing()).toBeTruthy();
   });
 
@@ -6148,7 +6140,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     renderPage();
     expect(await screen.findByText("看看目录")).toBeTruthy();
 
-    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 2000 });
+    await waitFor(() => expect(typing()).toBeTruthy(), { timeout: 2000 });
   });
 
   /*
@@ -6230,16 +6222,16 @@ describe("会话详情页:一轮在跑时的三点", () => {
     );
 
     // 交接那一拍:转录与三点就地铺出来（running = seeded）。
-    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    await waitFor(() => expect(typing()).toBeTruthy());
 
     // 回声落地,而补齐还停着 —— 这一拍 seeded 已到期、turnActive 还没接上。
-    await vi.waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    await waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
     await act(async () => {});
     expect(typing()).toBeTruthy();
 
     // 补齐回来之后照旧亮着（不是靠「亮得晚一点」蒙对的）。
     releaseCatchUp();
-    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    await waitFor(() => expect(typing()).toBeTruthy());
   });
 
   /*
@@ -6312,7 +6304,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     const stop = () => screen.queryByTestId("session-detail-stop");
     const { rerender } = render(view("42"));
     // A 在跑:三点与「停止」都在。
-    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    await waitFor(() => expect(typing()).toBeTruthy());
     expect(stop()).toBeTruthy();
 
     // 切到 B（同实例换 props）。B 的实况还没接回来 —— 转录那一段被读取态盖着,
@@ -6334,7 +6326,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     await awaitComposer();
 
     await sendInComposer("你好");
-    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
+    await waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
     act(() =>
       capturedOpts.onEvent?.({
         conversationId: "42",
@@ -6350,12 +6342,12 @@ describe("会话详情页:一轮在跑时的三点", () => {
       }),
     );
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByText("在的").closest("article")).toContain(typing());
     });
 
     act(() => capturedOpts.onRunResultDone?.({} as never));
-    await vi.waitFor(() => expect(typing()).toBeNull());
+    await waitFor(() => expect(typing()).toBeNull());
   });
 
   /*
@@ -6375,7 +6367,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
     await awaitComposer();
 
     await sendInComposer("你好");
-    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
+    await waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
     act(() =>
       capturedOpts.onEvent?.({
         conversationId: "42",
@@ -6390,7 +6382,7 @@ describe("会话详情页:一轮在跑时的三点", () => {
       }),
     );
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByText("在的").closest("article")).toContain(typing());
     });
   });
@@ -6429,8 +6421,8 @@ describe("会话详情页:一轮在跑时的三点", () => {
       }),
     );
 
-    await vi.waitFor(() => expect(screen.getByText("换成 zinc")).toBeTruthy());
-    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("换成 zinc")).toBeTruthy());
+    await waitFor(() => expect(typing()).toBeTruthy());
   });
 
   // 旁观窗口的三点同样要收得掉。终态帧走的是同一条扇出，这一屏收得到——不然点亮
@@ -6459,12 +6451,12 @@ describe("会话详情页:一轮在跑时的三点", () => {
       }),
     );
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.getByText("好的").closest("article")).toContain(typing());
     });
 
     act(() => capturedOpts.onRunResultDone?.({} as never));
-    await vi.waitFor(() => expect(typing()).toBeNull());
+    await waitFor(() => expect(typing()).toBeNull());
   });
 });
 
@@ -6625,13 +6617,13 @@ describe("会话详情：重连期间的发送", () => {
 
     await moveRelayTo("connected");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(runCalls().length).toBe(1);
     });
     expect((runCalls()[0][1] as { userText?: string }).userText).toBe(
       "继续那件事",
     );
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.queryByTestId("send-pending")).toBeNull();
     });
   });
@@ -7079,7 +7071,7 @@ describe("会话详情：发出去之后回到底部", () => {
 
     await sendInComposer("再跑一遍 relay 那组测试");
 
-    await vi.waitFor(() => expect(scroll.scrollTop).toBe(4_000));
+    await waitFor(() => expect(scroll.scrollTop).toBe(4_000));
     expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
   });
 
@@ -7102,7 +7094,7 @@ describe("会话详情：发出去之后回到底部", () => {
     await sendInComposer("这条会失败");
 
     await screen.findByTestId("send-failure");
-    await vi.waitFor(() => expect(scroll.scrollTop).toBe(4_600));
+    await waitFor(() => expect(scroll.scrollTop).toBe(4_600));
   });
 });
 
@@ -7176,7 +7168,7 @@ describe("会话详情：头部的更多菜单", () => {
     openMenu();
     fireEvent.click(await screen.findByText("Copy conversation ID"));
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(succeeded.mock.calls[0]?.[0]).toBe("Conversation ID copied"),
     );
   });
@@ -7207,7 +7199,7 @@ describe("会话详情：头部的更多菜单", () => {
     openMenu();
     fireEvent.click(await screen.findByText("Copy conversation ID"));
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(failed.mock.calls[0]?.[0]).toBe(
         "Could not copy the conversation ID",
       ),
@@ -7322,7 +7314,7 @@ describe("会话详情页 · 会话级思考力度", () => {
     renderPage();
 
     await screen.findByTestId("session-detail-send");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         fakeClient.request.mock.calls.some(
           ([m]) => m === rpcMethods.runtimeCapabilities,
@@ -7338,7 +7330,7 @@ describe("会话详情页 · 会话级思考力度", () => {
     renderPage();
     await pickEffort("high");
 
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
         ([m]) => m === rpcMethods.setSessionReasoningEffort,
       );
@@ -7401,7 +7393,7 @@ describe("会话详情页 · 会话级思考力度", () => {
       </MemoryRouter>,
     );
     await pickEffort("high");
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
       ).toContain("high"),
@@ -7415,7 +7407,7 @@ describe("会话详情页 · 会话级思考力度", () => {
       </MemoryRouter>,
     );
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
       ).toContain("Default"),
@@ -7435,7 +7427,7 @@ describe("会话详情页 · 会话级思考力度", () => {
     renderPage();
     await pickEffort("high");
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: /Reasoning effort/ }).textContent,
       ).toContain("Default"),
@@ -7487,10 +7479,10 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
     expect(statusText()).toContain("Idle");
     expect(screen.queryByTestId("session-detail-stop")).toBeNull();
 
-    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
     await sendInComposer("开始重构");
 
-    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    await waitFor(() => expect(statusText()).toContain("Running"));
     expect(statusDotClass()).toContain("bg-status-running");
     expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
   });
@@ -7499,13 +7491,13 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
     wireIdleSession();
     renderPage();
     await screen.findByText(/重构登录页/);
-    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
     await sendInComposer("开始重构");
-    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    await waitFor(() => expect(statusText()).toContain("Running"));
 
     act(() => capturedOpts.onRunResultDone?.({} as never));
 
-    await vi.waitFor(() => expect(statusText()).toContain("Idle"));
+    await waitFor(() => expect(statusText()).toContain("Idle"));
     expect(screen.queryByTestId("session-detail-stop")).toBeNull();
   });
 
@@ -7519,7 +7511,7 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
 
     act(() => capturedOpts.onAutonomousTurnStarted?.({} as never));
 
-    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    await waitFor(() => expect(statusText()).toContain("Running"));
     expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
   });
 
@@ -7534,7 +7526,7 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
 
     act(() => capturedOpts.onTurnStarted?.({ conversationId: "42" }));
 
-    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    await waitFor(() => expect(statusText()).toContain("Running"));
     expect(screen.getByTestId("session-detail-stop")).toBeTruthy();
   });
 
@@ -7555,7 +7547,7 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
     renderPage();
     await screen.findByText(/重构登录页/);
 
-    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    await waitFor(() => expect(statusText()).toContain("Running"));
   });
 
   // ── 轮次落定之后:快照要重取,不能停在打开那一刻 ──────────────────────────
@@ -7592,12 +7584,12 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
 
     renderPage();
     await screen.findByText(/重构登录页/);
-    await vi.waitFor(() => expect(statusText()).toContain("Interrupted"));
-    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await waitFor(() => expect(statusText()).toContain("Interrupted"));
+    await waitFor(() => expect(composerDisabled()).toBe(false));
 
     act(() => capturedOpts.onRunResultDone?.({} as never));
 
-    await vi.waitFor(() => expect(statusText()).toContain("Idle"));
+    await waitFor(() => expect(statusText()).toContain("Idle"));
     expect(statusDotClass()).toContain("bg-status-idle");
   });
 
@@ -7633,7 +7625,7 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
     renderPage();
     await screen.findByText(/重构登录页/);
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(statusText()).toContain("Waiting for your input"),
     );
     expect(statusDotClass()).toContain("bg-status-waiting");
@@ -7666,7 +7658,7 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
 
     renderPage();
     await screen.findByText(/重构登录页/);
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(statusText()).toContain("Waiting for your input"),
     );
 
@@ -7682,7 +7674,7 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
       ),
     );
 
-    await vi.waitFor(() => expect(statusText()).toContain("Running"));
+    await waitFor(() => expect(statusText()).toContain("Running"));
   });
 });
 
@@ -7742,13 +7734,13 @@ describe("会话详情页:上游正在重试", () => {
       3,
     );
 
-    await vi.waitFor(() => expect(retryCard()).toBeTruthy());
+    await waitFor(() => expect(retryCard()).toBeTruthy());
     expect(screen.getByText("Retrying 2/3")).toBeTruthy();
 
     // 模型开口 = 这一次重试成功了。卡不撤，用户会对着「正在重试」读下面正常长
     // 出来的回答。
     pushEvent({ kind: "text_delta", text: "连上了，继续" }, 4);
 
-    await vi.waitFor(() => expect(retryCard()).toBeNull());
+    await waitFor(() => expect(retryCard()).toBeNull());
   });
 });

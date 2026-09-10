@@ -10,61 +10,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/portforwardhost"
 	"github.com/agentre-hub/agentre/pkg/wire/protorpc"
+
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 )
-
-// ── 测试用的一对内存帧管道 ────────────────────────────────────────────────
-//
-// 生产上这一对是「协议引擎 ← relayFrameConn → 中继 → daemon」，本包只认引擎那一端
-// （*protorpc.Conn）。所以测试造的是同一个接缝：一条真的 protorpc.Conn，底下换成
-// 内存管道。上游 portforwardhost 自己那份 pipe_test.go 不导出，刻意不去复用它。
-
-type memFrameConn struct {
-	in   chan []byte
-	out  chan []byte
-	done chan struct{}
-	once sync.Once
-}
-
-func newFramePipe() (client, device *memFrameConn) {
-	toDevice := make(chan []byte, 64)
-	toClient := make(chan []byte, 64)
-	client = &memFrameConn{in: toClient, out: toDevice, done: make(chan struct{})}
-	device = &memFrameConn{in: toDevice, out: toClient, done: make(chan struct{})}
-	return client, device
-}
-
-func (c *memFrameConn) ReadFrame() ([]byte, error) {
-	select {
-	case frame := <-c.in:
-		return frame, nil
-	case <-c.done:
-		return nil, io.EOF
-	}
-}
-
-func (c *memFrameConn) WriteFrame(frame []byte) error {
-	select {
-	case c.out <- frame:
-		return nil
-	case <-c.done:
-		return protorpc.ErrConnClosed
-	}
-}
-
-func (c *memFrameConn) Close() error {
-	c.once.Do(func() { close(c.done) })
-	return nil
-}
-
-func (c *memFrameConn) Done() <-chan struct{} { return c.done }
-
-// pending 是「还没被对面消化的帧数」。设备那一侧刻意不跑 Serve，于是收到的每一帧都
-// 留在缓冲里可以数——「这次请求到底有没有发到设备上」因此是可断言的。
-func (c *memFrameConn) pending() int { return len(c.in) }
 
 // ── 测试用的拨号面 ──────────────────────────────────────────────────────
 
@@ -76,10 +30,10 @@ type stubDial struct {
 	ctx         context.Context
 
 	conn      *protorpc.Conn
-	transport *memFrameConn
+	transport *testutils.MemFrameConn
 	// device 只用来往本端推通知（撤销）；它不跑 Serve，于是发过去的帧留在缓冲里可数。
 	device          *protorpc.Conn
-	deviceTransport *memFrameConn
+	deviceTransport *testutils.MemFrameConn
 
 	mu     sync.Mutex
 	closed bool
@@ -131,7 +85,7 @@ func (d *stubDialer) DialPortForward(
 	if callTimeout <= 0 {
 		callTimeout = 50 * time.Millisecond
 	}
-	clientTransport, deviceTransport := newFramePipe()
+	clientTransport, deviceTransport := testutils.NewFramePipe()
 	conn := protorpc.NewConn(clientTransport, protorpc.NewRegistry(), protorpc.WithCallTimeout(callTimeout))
 	go conn.Serve(context.Background())
 	dial := &stubDial{
@@ -339,11 +293,11 @@ func TestPool_Revoked_ClosesOnlyThatPortsProxy(t *testing.T) {
 
 	// 被撤销的那个 Proxy 确实**关了**，不只是从表里摘掉：关掉的 Proxy 一个字节都不再
 	// 往设备上发，而还活着的那个会真的发出一次 open。
-	before := dial.deviceTransport.pending()
+	before := dial.deviceTransport.Pending()
 	revoked.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Equal(t, before, dial.deviceTransport.pending(), "关掉的 Proxy 不该再往设备上发东西")
+	require.Equal(t, before, dial.deviceTransport.Pending(), "关掉的 Proxy 不该再往设备上发东西")
 	kept.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
-	require.Greater(t, dial.deviceTransport.pending(), before, "还活着的 Proxy 照常发 open")
+	require.Greater(t, dial.deviceTransport.Pending(), before, "还活着的 Proxy 照常发 open")
 }
 
 // ── 连接的寿命不跟着建它的那次请求走 ──────────────────────────────────────
@@ -459,4 +413,38 @@ func TestPool_Stop_GivenAnUnsettledDial_ThenGivesUpWhenTheBudgetRunsOut(t *testi
 	<-acquired
 	require.Eventually(t, func() bool { return dialer.count() == 1 && dialer.at(0).isClosed() },
 		2*time.Second, 5*time.Millisecond, "收工之后才落定的那条连接该自己收掉")
+}
+
+// ── 渲染钩子交到每一个 Proxy 手里 ────────────────────────────────────────
+
+// 代理自有的失败要用宿主自己的话说（规格 2026-09-09-console-forward-failure-pages
+// 决策 3）。本包不认识 HTML，钩子由装配处交进来，本包只负责让每一个 Proxy 都拿到它。
+//
+// 这里让 open 真的失败（设备侧不应答，调用预算到点）——给一个贴好类别的假失败就等于
+// 把「共享包判类别」这一段绕过去了。
+func TestPool_ConfiguredFailureRenderer_IsHandedToEveryProxy(t *testing.T) {
+	var seen []portforwardhost.Failure
+	dialer := &stubDialer{}
+	pool := New(Config{
+		IdleTimeout: time.Minute,
+		RenderFailure: func(w http.ResponseWriter, _ *http.Request, f portforwardhost.Failure) {
+			seen = append(seen, f)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusTeapot)
+			_, _ = io.WriteString(w, "宿主自己的那张页")
+		},
+	}, dialer)
+	t.Cleanup(func() { pool.Stop(context.Background()) })
+
+	handler, release, err := pool.Acquire(context.Background(), testUserID, testFP, 3000)
+	require.NoError(t, err)
+	defer release()
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	require.Len(t, seen, 1, "代理自己的失败必须走宿主的钩子")
+	assert.Equal(t, uint32(3000), seen[0].Port, "钩子要说得出是哪个端口")
+	assert.NotEqual(t, portforwardhost.FailureKind(0), seen[0].Kind, "交出来的必须是一种失败")
+	assert.Equal(t, http.StatusTeapot, rec.Code, "状态码由宿主定")
+	assert.Equal(t, "宿主自己的那张页", rec.Body.String())
 }

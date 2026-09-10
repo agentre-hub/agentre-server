@@ -731,11 +731,15 @@ describe("对话页:机器轴", () => {
     });
     renderChat("/chat?axis=machine");
 
+    // 组头与行来自**两条不同的异步路径**：组来自设备列表，行来自按机器发的会话
+    // 查询。等到组不等于等到行——组先渲染出来、行还没落进去的那一瞬，同步的
+    // getByText 就扑空（把机器那条路径延迟 300ms 即可稳定复现）。所以两样都等。
     const box = await screen.findByTestId("group-device-1");
-    expect(within(box).getByText("小主机上跑着的")).toBeTruthy();
-    const laptop = screen.getByTestId("group-device-3");
-    expect(within(laptop).getByText("MacBook 上跑着的")).toBeTruthy();
-    // 两组各问各的机器，没有谁替谁答。
+    await within(box).findByText("小主机上跑着的");
+    const laptop = await screen.findByTestId("group-device-3");
+    await within(laptop).findByText("MacBook 上跑着的");
+    // 两组各问各的机器，没有谁替谁答。这一条**必须**放在两组都到齐之后：否则
+    // 「那台机器的行还没到」会被读成「没有谁替谁答」，断言等于没测。
     expect(within(box).queryByText("MacBook 上跑着的")).toBeNull();
   });
 
@@ -2267,11 +2271,11 @@ describe("对话页：索引取数失败", () => {
     await act(async () => {
       within(banner).getByRole("button").click();
     });
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(indexRequests.length).toBeGreaterThan(before);
     });
     // 取回来了就把横幅撤掉，不留一条已经不成立的错误。
-    await vi.waitFor(() => {
+    await waitFor(() => {
       expect(screen.queryByTestId("index-load-error")).toBeNull();
     });
   });

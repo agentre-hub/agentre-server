@@ -21,6 +21,7 @@ import (
 	"github.com/cago-frame/cago/database/redis"
 
 	"github.com/agentre-hub/agentre-server/internal/api/auth"
+	"github.com/agentre-hub/agentre-server/internal/controller/portforward_ctr"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
@@ -424,7 +425,13 @@ func registerSessionMirror(instanceID string, signer *jwt.Signer) {
 	//
 	// 结构上满足窄接口即可，两个 service 谁都不 import 谁；这里是唯一同时认识两边的
 	// 地方，也就是组合根该干的活。
-	portforward_svc.SetDefault(portforward_svc.New(portforward_svc.Config{}, supervisor))
+	//
+	// 失败页的措辞由控制器交给池（规格 2026-09-09-console-forward-failure-pages
+	// 决策 3）：共享代理判出「是哪一件事」，控制台用自己的话把它说出来。这里是唯一
+	// 同时认识「池」与「控制台文案」的地方——池不得反向 import 控制器。
+	portforward_svc.SetDefault(portforward_svc.New(portforward_svc.Config{
+		RenderFailure: portforward_ctr.RenderFailure,
+	}, supervisor))
 }
 
 // 端口转发的拨号面由那份常驻提供：签凭据、走中继、握手，它全都已经会了。**结构上**

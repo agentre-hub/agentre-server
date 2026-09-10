@@ -11,7 +11,13 @@
  * jsdom 不算布局（`docs/testing.md`「The jsdom environment」），在这里量位置量到的
  * 全是 0。真实的贴边翻转归运行时验证。
  */
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { OrgDetailHeader } from "@/pages/org/OrgDetailHeader";
@@ -86,17 +92,17 @@ describe("行级菜单用共享包那一份", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 
   it("Escape 关掉菜单并把焦点还给触发按钮", async () => {
     renderHeader();
     openMenu();
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
-    await vi.waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     // 焦点是**关闭之后**才还回去的（Radix 的 onCloseAutoFocus），所以要等一等；
     // 同步断言只能证明「这一帧还没还」，证明不了「不会还」。
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(document.activeElement).toBe(
         screen.getByTestId("org-detail-menu-trigger"),
       ),

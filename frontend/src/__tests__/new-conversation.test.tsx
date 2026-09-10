@@ -283,7 +283,7 @@ function draftEditable(): HTMLElement & {
 
 /** 等输入框那一 chunk 加载完（它是动态 import 切出去的）。 */
 async function awaitDraftComposer() {
-  await vi.waitFor(() => draftEditable());
+  await waitFor(() => draftEditable());
 }
 
 async function typeInDraft(text: string) {
@@ -346,7 +346,7 @@ describe("从别处进来的「新建一个会话」", () => {
     renderChat("/chat?compose=1&axis=project");
 
     await screen.findByTestId("agent-pick-agent-1");
-    await vi.waitFor(() => {
+    await waitFor(() => {
       const search = screen.getByTestId("location-search").textContent ?? "";
       expect(search).not.toContain("compose");
       // 别把同一屏别的范围一起冲掉：轴是页面此刻的范围，不是一次性的意图。
@@ -957,7 +957,11 @@ describe("一条还没发第一句的对话", () => {
     );
     // 缩略图回到输入框里 —— 不是回到某条气泡上:草稿这一屏没有转录流,输入框就是
     // 这句话唯一的容身处。
-    expect(screen.getByAltText("shot.png")).toBeTruthy();
+    //
+    // 等而不是同步取:上面那句 waitFor 分不开「字还没被清掉」与「字已经还回来了」,
+    // 它可能在**清空之前**就满足。此处曾在整套并发下红过一次(找不到 alt text
+    // shot.png)。图迟早要出现,等它不改变判据。
+    await screen.findByAltText("shot.png");
   });
 
   it("Given coding 已连接但远端 CLI 启动失败, When 发第一句, Then 展示远端错误而不是误报连不上", async () => {
@@ -1766,8 +1770,10 @@ describe("草稿页的权限档位与模型控件", () => {
     await openDraft();
     await awaitDraftComposer();
 
+    // pill 这个**元素**随输入框一起渲染，而它脸上的字来自机器能力那条查询——
+    // 等到元素不等于等到字。同步读会读到还没落定的那一版。
     const pill = await screen.findByRole("button", { name: /Permission mode/ });
-    expect(pill.textContent).toContain("Bypass");
+    await waitFor(() => expect(pill.textContent).toContain("Bypass"));
 
     await typeInDraft("跑一下失败的测试");
     const send = screen.getByTestId("session-detail-send");
@@ -1895,9 +1901,12 @@ describe("草稿页的权限档位与模型控件", () => {
     const pill = await screen.findByRole("button", {
       name: /Provider and model/,
     });
-    expect(pill.textContent).toContain("Follow agent binding");
+    // 同上：元素先在，字后到。标识符是这两句里最晚落定的那一样，等它。
     // 脸上写的是标识符而不是人读名 —— 与桌面端、与包里触发器的注释同一条口径。
-    expect(pill.textContent).toContain("claude-sonnet-4-6");
+    await waitFor(() =>
+      expect(pill.textContent).toContain("claude-sonnet-4-6"),
+    );
+    expect(pill.textContent).toContain("Follow agent binding");
   });
 
   it("Given 用户改了档位又挑了模型, When 发出第一句, Then 两样都随它过线", async () => {
@@ -1906,12 +1915,22 @@ describe("草稿页的权限档位与模型控件", () => {
     await openDraft();
     await awaitDraftComposer();
 
+    // 菜单项来自各自那条目录查询：把菜单点开不等于选项已经在里面了。
     fireEvent.click(
       await screen.findByRole("button", { name: /Permission mode/ }),
     );
-    fireEvent.click(screen.getByRole("option", { name: /Plan/ }));
-    fireEvent.click(screen.getByRole("button", { name: /Provider and model/ }));
-    fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
+    fireEvent.click(await screen.findByRole("option", { name: /Plan/ }));
+    const modelPill = await screen.findByRole("button", {
+      name: /Provider and model/,
+    });
+    fireEvent.click(modelPill);
+    fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
+    // 点中不等于选中：挑的那一档要先落进控件自己的状态，才谈得上随第一句过线。
+    // 判据取控件脸上的字——这是它对外唯一说得出「我此刻带着什么」的地方。脸上
+    // 写的是**标识符**而不是菜单里那个人读名（与上一条用例同一条口径）。
+    await waitFor(() =>
+      expect(modelPill.textContent).toContain("claude-opus-4-6"),
+    );
 
     await typeInDraft("跑一下失败的测试");
     const send = screen.getByTestId("session-detail-send");

@@ -6,10 +6,10 @@
 // device_id 翻成中继寻址用的指纹、剥掉前缀，然后把 ResponseWriter 原样交给共享包的
 // 转发代理。
 //
-// 交出去之前只包一层 failureRewriter（rewrite.go）：共享包把七种失败答成写死中文的
-// 纯文本，而用户此刻在浏览器标签里，那一层在 502 的那一刻把它换成一张完整的失败页。
-// **它不得攒响应体**——代理要 Hijacker（101 升级）与 Flusher（流式），缓冲起来就当场
-// 失效，纪律写在 rewrite.go。
+// ResponseWriter 是**原样**交出去的：不包任何一层。失败的措辞由本仓的渲染钩子
+// （failpage.go 的 RenderFailure）负责，它装在代理的构造处（internal/bootstrap），
+// 只在代理自己的失败上被调用——被转发应用自己的响应因此一个字节都不经过我们
+// （规格 2026-09-09-console-forward-failure-pages 决策 3）。
 //
 // 本包的用例住在 internal/api/portforward/：这里的判定只有跑在真实路由树 + 真实
 // SessionAuth + 真实 SPA 兜底上才说明问题——「形状不对的 /fw/… 不回落 SPA 外壳」
@@ -71,10 +71,11 @@ const (
 	// failureOffline 是「设备离线」。两条来路：open 之前的在线判定不过，以及拨号面
 	// 原样上交的 ErrMachineOffline。
 	failureOffline
-	// failureUpstream 是「机器在，这一跳没搭起来」：协议版本不合、连接反复断掉。
-	// 与 failureOffline 同一个状态码（502），因为共享包本来就把「端口上没有服务」
-	// 「上游把请求断了」「转发没完成」全答成 502，按状态码分不开它们（决策 13）；
-	// 分开成两类是为了不在这里说一句「设备离线」这样的假话。
+	// failureUpstream 是「机器在，这一跳没搭起来」：借连接时协议版本不合、连接反复
+	// 断掉。它与 failureOffline 同为 502，但分成两类，为的是不在这里说一句「设备
+	// 离线」这样的假话。
+	//
+	// 它发生在**借到代理之前**，所以共享包那套失败归因够不着它：本层自己答。
 	failureUpstream
 	// failureUnavailable 是「此刻这个部署给不了转发」：池没装配，或者进程正在退出。
 	// 与设备无关，所以不能说成「设备离线」——那会叫用户去等一台其实好好的机器。
@@ -85,16 +86,16 @@ type failureAnswer struct {
 	status int
 	// page 非空表示这一类答一张完整的 HTML 失败页；空的答 body 那句纯文本。
 	//
-	// **只有「设备离线」这一类有页**（规格「失败的呈现」只点名两张页，另一张由改写层
-	// 在 502 那一刻渲染）。其余三类刻意留纯文本：
+	// 这四类是**本层自己**产生的失败：它们不经过共享代理，渲染钩子够不着，所以答复
+	// 在这里定。规格 2026-09-09-console-forward-failure-pages 决策 7 明写它们维持
+	// 原样，因此只有「设备离线」这一类有页，其余三类刻意留纯文本：
 	//
-	//   - failureNotFound：规格明写 404 不改写。而且这一张两个出口都说不通——「刷新」
-	//     对一条形状不对的地址永远是同一个 404，剩下的只有「回到设备」，那正是用户已经
-	//     知道的那一页。
+	//   - failureNotFound：这一张两个出口都说不通——「刷新」对一条形状不对的地址永远
+	//     是同一个 404，剩下的只有「回到设备」，那正是用户已经知道的那一页。
 	//   - failureUpstream：机器在，这一跳没搭起来（协议版本不合之类）。它是 502，但
 	//     此刻我们**知道**它不是「端口上没有服务」，套那张页就等于叫用户去起一个其实
-	//     起着的服务。决策 13 明知的代价只覆盖分不开的那几种，不该往这里扩。
-	//   - failureUnavailable：与设备无关（池未装配 / 进程正在退出），两张页说的两件事
+	//     起着的服务。
+	//   - failureUnavailable：与设备无关（池未装配 / 进程正在退出），四张页说的四件事
 	//     哪一件都不是它。
 	page *failurePage
 	body string
@@ -106,9 +107,6 @@ var failureAnswers = map[failureKind]failureAnswer{
 	failureUpstream:    {status: http.StatusBadGateway, body: "转发没有建立起来。"},
 	failureUnavailable: {status: http.StatusServiceUnavailable, body: "这个部署此刻提供不了端口转发。"},
 }
-
-// failureContentType 是纯文本失败答复的类型。带页的那一类走 failurePageContentType。
-const failureContentType = "text/plain; charset=utf-8"
 
 type PortForward struct {
 	devices   DeviceLookup
@@ -172,43 +170,9 @@ func (p *PortForward) Forward(c *gin.Context) {
 	// 跟着 StripPrefix 改过的路径走。/fw/12/3000 因此变成 /（空 Path 的
 	// RequestURI() 就是 "/"），/fw/12/3000/assets/x.js 变成 /assets/x.js。
 	//
-	// c.Writer 外面只包 failureRewriter：它在 502 的那一刻把共享包那句纯文本换成一张
-	// 完整的失败页，其余一律原样放过，且把 Flusher / Hijacker / Unwrap 全部转下去
-	// ——代理要拿它们做 Hijack 与 Flush。
-	writer := &failureRewriter{
-		inner: c.Writer,
-		port:  addr.Port,
-		classify: func() failurePage {
-			return p.badGateway(ctx, userID, device.Fingerprint)
-		},
-	}
-	http.StripPrefix(addr.Prefix, handler).ServeHTTP(writer, c.Request)
-}
-
-// badGateway 分开共享包那四种共用 502 的失败（规格决策 13，用户拍板）。
-//
-// 判据是**再读一次在线状态**，不匹配上游文案：还在线 → 端口上没有服务，已离线 →
-// 设备离线。上游那几句中文常量在上游仓且未导出，认它们的话上游改一个字这里就静默
-// 失灵，而本仓不会有任何用例会红。
-//
-// 明知的代价：「上游把请求断了」「转发没完成」这两种也会落到「端口上没有服务」那一
-// 张。规格没有为它们定页，而按状态码分不开它们。
-func (p *PortForward) badGateway(
-	ctx context.Context, userID int64, fingerprint string,
-) failurePage {
-	online, err := p.presence.IsDaemonOnline(ctx, userID, fingerprint)
-	if err != nil {
-		// 与 open 之前那次同一条口径：问不到就当它不在线。这条路上唯一说得出口的话
-		// 是「等机器回来」，而不是叫用户去起一个其实起着的服务。
-		logger.Ctx(ctx).Warn("port forward presence re-read failed, answering offline",
-			zap.Int64("userId", userID), zap.String("machineFingerprint", fingerprint),
-			zap.Error(err))
-		return offlinePage
-	}
-	if online {
-		return noListenerPage
-	}
-	return offlinePage
+	// c.Writer 原样交出去：代理要拿 Hijacker（101 升级）与 Flusher（流式），而且中间
+	// 少一层就少一处会误伤被转发应用自己那份响应的地方。
+	http.StripPrefix(addr.Prefix, handler).ServeHTTP(c.Writer, c.Request)
 }
 
 // acquire 借一次转发入口，ErrConnectionGone 重试一次。
@@ -252,6 +216,10 @@ func (p *PortForward) answer(c *gin.Context, kind failureKind, port uint32) {
 		c.Abort()
 		return
 	}
-	c.Data(answer.status, failureContentType, []byte(answer.body))
+	// 与出页的那一条同一个出口：纯文本也要 no-store。少了它，404 那一句按 RFC 9111
+	// 是可被浏览器**启发式缓存**的（带 Date、没有任何 Cache-Control / Expires），
+	// 于是设备重新配对、映射重新建好之后，同一条转发地址在那个标签页里刷新仍可能
+	// 是旧的 404，而服务端这一侧完全看不出问题。
+	writeFailureBody(c.Writer, answer.status, failureTextContentType, answer.body)
 	c.Abort()
 }

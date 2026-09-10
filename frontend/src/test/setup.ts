@@ -30,6 +30,8 @@
  * 六处都只在「当前环境确实没有」时才安装，真浏览器行为优先。
  */
 
+import { configure } from "@testing-library/react";
+
 class MemoryStorage implements Storage {
   private map = new Map<string, string>();
 
@@ -142,3 +144,20 @@ if (!("isSecureContext" in window)) {
     get: () => secure,
   });
 }
+
+// testing-library 的异步查询（findBy* / waitFor）预算。原厂默认 1000ms。
+//
+// 与 vitest.config.ts 里那条 testTimeout 同一个理由：整套并发跑时 worker 会被卡住
+// 超过它，于是 `await screen.findByText(...)` 这种**本来写对了**的等待也会超时，
+// 红在每次都不同的文件上（诊断：.dev-kit/artifacts/2026-09-10-frontend-suite-flake/）。
+//
+// 5s 是这一层的预算，15s 是整条用例的预算：一条用例里往往串着好几次等待，
+// 两者留出倍数关系，超时报出来的才是**那一次等待**而不是笼统的「用例超时」。
+//
+// 代价同样要说清楚：一个真的永远等不到的元素，现在要 5 秒才报出来。
+//
+// 注意射程：`vi.waitFor` 的 1000ms 是写死的默认值、**不受这里管**（vitest 4 的
+// WaitForOptions 只能逐处传）。所以本仓渲染 React 的用例一律用 testing-library 的
+// waitFor；`vi.waitFor` 只剩在 relay-*.test.ts 那几个纯协议用例里，它们没有 DOM、
+// 也不在偶发红的名单上，把 RTL 拉进去反而是把 act 那套装置塞给不需要它的测试。
+configure({ asyncUtilTimeout: 5_000 });
