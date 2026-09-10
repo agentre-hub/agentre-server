@@ -1,12 +1,15 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   FilePreviewPanel,
+  previewNeedsMonaco,
+  type FilePreviewSegment,
   type FilePreviewTab,
   type MonacoNS,
 } from "@agentre-hub/agentre-ui";
 
 import { createFilePreviewPorts } from "@/lib/filePreviewPorts";
+import { loadMonaco } from "@/lib/monacoLoader";
 import type { RelayClient } from "@/lib/relayClient";
 
 /**
@@ -24,12 +27,14 @@ export default function SessionFilePreviewColumn({
   deviceOnline,
   tabs,
   activePath,
+  segment = null,
   onActivate,
   onPromote,
+  onTogglePin,
+  onSegmentChange,
   onClose,
   onCloseOthers,
   onCloseAll,
-  monaco = null,
 }: {
   /** 这条会话的身份。与 cwd 一起构成取数目标的 sourceKey。 */
   sid: string;
@@ -39,18 +44,45 @@ export default function SessionFilePreviewColumn({
   deviceOnline?: boolean;
   tabs: FilePreviewTab[];
   activePath: string | null;
+  /** 当前标签的 markdown 档位（渲染/文本/双栏）；存在宿主，见 useFilePreviewTabs。 */
+  segment?: FilePreviewSegment | null;
   onActivate: (path: string) => void;
+  /** 双击标签：转常驻。 */
   onPromote: (path: string) => void;
+  /** 右键菜单的固定 / 取消固定 —— 它是个**开关**，不是单向的「钉住」。 */
+  onTogglePin: (path: string) => void;
+  onSegmentChange: (segment: FilePreviewSegment) => void;
   onClose: (path: string) => void;
   onCloseOthers: (path: string) => void;
   onCloseAll: () => void;
-  /** 还没装载好时是 null：内容容器留空（装载器留在宿主，见共享包的 ./monaco）。 */
-  monaco?: MonacoNS | null;
 }) {
   const ports = useMemo(
     () => createFilePreviewPorts({ client, cwd }),
     [client, cwd],
   );
+
+  /**
+   * Monaco 只在**这个标签真的要它渲染**时才装（图片与工具 diff 不经 Monaco）。
+   * 装载失败保持 null：内容容器留空，面板照常在，不把整栏炸掉。
+   */
+  const [monaco, setMonaco] = useState<MonacoNS | null>(null);
+  const needsMonaco = previewNeedsMonaco(
+    activePath ? { path: activePath, sourceMode: "directory" } : null,
+  );
+  useEffect(() => {
+    if (!needsMonaco) return;
+    let cancelled = false;
+    loadMonaco()
+      .then((ns) => {
+        if (!cancelled) setMonaco(ns);
+      })
+      .catch(() => {
+        /* 拉不下来就保持 null，内容区留空。 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [needsMonaco]);
 
   // 换会话或换工作根就是换了一个取数目标，此前在途的结果一律作废 —— 面板拿这个
   // 键判定，两条会话恰好开着同一条 relPath 时才不会把上一条的正文提交出去一帧。
@@ -67,17 +99,17 @@ export default function SessionFilePreviewColumn({
       <FilePreviewPanel
         tabs={tabs}
         activePath={activePath}
-        segment={null}
+        segment={segment}
         sourceMode="directory"
         ports={ports}
         sourceKey={sourceKey}
         monaco={monaco}
         deviceName={deviceName}
         deviceOnline={deviceOnline}
-        onSegmentChange={() => {}}
+        onSegmentChange={onSegmentChange}
         onActivate={onActivate}
         onPromote={onPromote}
-        onPin={onPromote}
+        onPin={onTogglePin}
         onClose={onClose}
         onCloseOthers={onCloseOthers}
         onCloseAll={onCloseAll}

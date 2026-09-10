@@ -417,20 +417,22 @@ export default function SessionDetailView({
    * 那一刻**的事实，由 ref 后面这个函数当场回答。答 false 时包不会开面板。
    */
   const preview = useFilePreviewTabs();
-  // 实况 cwd 的当下值。渲染期就地写：链接点下去那一刻要的是**此刻**知不知道
-  // 工作目录，而不是上一次渲染时的答案。
   const previewCwdRef = useRef("");
-  previewCwdRef.current = summary?.cwd ?? "";
-  const previewFileRef = useRef((path: string) => {
-    if (!previewCwdRef.current) return false;
-    preview.open(path);
-    return true;
+  const previewFileRef = useRef<(path: string) => boolean>(() => false);
+  /**
+   * 两个 ref 在**提交之后**同步，不在渲染期写（react-hooks/refs：渲染期读写 ref
+   * 会让 React 的一致性假设失效）。这对语义没有损失：链接点下去那一刻已经过了
+   * 提交，读到的就是当下这一版 cwd。
+   */
+  useEffect(() => {
+    previewCwdRef.current = summary?.cwd ?? "";
+    previewFileRef.current = (path: string) => {
+      // 没有实况 cwd 就没有工作根可读 —— 答 false，包据此不出入口。
+      if (!previewCwdRef.current) return false;
+      preview.open(path);
+      return true;
+    };
   });
-  previewFileRef.current = (path: string) => {
-    if (!previewCwdRef.current) return false;
-    preview.open(path);
-    return true;
-  };
 
   const decisions = useSessionDecisionPorts({
     sid,
@@ -1730,6 +1732,11 @@ export default function SessionDetailView({
       did={did}
       sid={sid}
       status={status}
+      // Skill 补全要问的三样事实。`identity` 而不是 `summary`：镜像先于实时清单
+      // 落地，输入框不必等那一趟往返才拿得到补全。
+      agentSyncId={identity?.agentSyncId}
+      targetFingerprint={device?.fingerprint}
+      cwd={identity?.cwd}
       atBottom={scrollback.atBottom}
       machineName={device?.name}
       backendType={summary?.backendType}
@@ -1784,8 +1791,11 @@ export default function SessionDetailView({
           deviceOnline={device?.online}
           tabs={preview.tabs}
           activePath={preview.activePath}
+          segment={preview.activeSegment}
           onActivate={preview.open}
-          onPromote={preview.pin}
+          onPromote={preview.promote}
+          onTogglePin={preview.togglePin}
+          onSegmentChange={preview.setSegment}
           onClose={preview.close}
           onCloseOthers={preview.closeOthers}
           onCloseAll={preview.closeAll}

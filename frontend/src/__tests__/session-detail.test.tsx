@@ -251,6 +251,69 @@ describe("会话详情页", () => {
     expect(fakeClient.catchUp).toHaveBeenCalledWith("42", undefined);
   });
 
+  /**
+   * 详情列的分栏（规格 2026-09-08「预览开在哪」：详情列横向分成两栏，左侧转录
+   * 476，右侧预览 420，两栏同时可见；关掉最后一个标签时预览栏整个收起，转录回到
+   * 全宽）。
+   *
+   * 打在**页面**上而不是预览栏组件上：这一条要证明的正是宿主这一层的接线 ——
+   * 实况 cwd 有没有交给转录、点开的文件有没有落进右栏、关掉最后一个之后右栏是不
+   * 是真的没了。
+   */
+  it("点转录里的文件路径：详情列分成两栏，转录仍在；关掉最后一个标签整栏收起", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      // 正文经中继从那台机器直传，服务端一行不改（规格 Hard invariant）。
+      if (method === rpcMethods.workspaceFsReadFile)
+        return {
+          content: new TextEncoder().encode("# 标题\n\n文件正文\n"),
+          contentType: "",
+        };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "text_delta",
+          text: "改完了，见 [说明](/home/agent/proj/docs/a.md)。",
+        },
+        seq: 1,
+      });
+    });
+
+    renderPage();
+
+    // 开预览之前只有转录。
+    const link = await screen.findByText("说明", undefined, { timeout: 3_000 });
+    expect(screen.queryByTestId("session-file-preview")).toBeNull();
+
+    fireEvent.click(link);
+
+    // 两栏同时可见：右栏画出了那台机器上的正文，左栏的转录一个字都没少。
+    expect(
+      await screen.findByTestId("session-file-preview", undefined, {
+        timeout: 3_000,
+      }),
+    ).toBeTruthy();
+    expect(await screen.findByText("文件正文")).toBeTruthy();
+    expect(screen.getByText("说明")).toBeTruthy();
+
+    // 关掉最后一个标签 → 整栏收起，转录回到全宽。
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-file-preview")).toBeNull(),
+    );
+    expect(screen.getByText("说明")).toBeTruthy();
+  });
+
   // Given 协议 0.2.0 把同一段正文发两次：逐 token 的预览帧（不带 seq），随后是块定稿
   // 后带 seq 的持久帧，而持久文本块投影出来的判别值同样是 text_delta、载荷是**整段**；
   // When 两级帧都到达这一屏；

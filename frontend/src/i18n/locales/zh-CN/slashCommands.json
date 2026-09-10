@@ -1,8 +1,0 @@
-{
-  "compact": {
-    "description": "压缩当前上下文"
-  },
-  "goal": {
-    "description": "设定本轮目标"
-  }
-}

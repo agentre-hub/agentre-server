@@ -15,14 +15,18 @@
  *                不是一台机器。
  *                **项目**提及不摆：它的 XML 带 `path` 属性，而服务端响应里一条路径
  *                都没有（R19），摆上去就是个空 path 的假引用。
- *   / 触发命令    接得上 —— 见 lib/slashCommands.ts 逐条对照的结果。
- *   $ 调用 Skill  接不上 —— 要列 skill 目录，那是桌面端的 Wails 绑定。
+ *   / 触发命令    接得上 —— 清单在共享包里（`useSlashCommands`），与桌面端同一份。
+ *   $ 调用 Skill  **现在接得上**了 —— 此前这里写着「要列 skill 目录，那是桌面端的
+ *                Wails 绑定」，那是当时的事实：wire 上没有对应方法。`skills.commands`
+ *                补上之后，浏览器与桌面端问的是同一台机器、同一个方法（见
+ *                `useSessionSkillCommands`）。前缀按 backend 分 —— codex 是 `$`，
+ *                claudecode / Pi 是 `/`，与它们的内置命令同一个键。
  *   ! 执行终端命令 接不上 —— wire 上没有任何 PTY / 本地执行方法。而 `AIChatInput`
  *                缺 `onCommandSubmit` 时会把 `!foo` **静默吞掉**，所以回调照接，
  *                只是拿来挡一下、如实说一句（见下面的 localCommandsEnabled）。
  *
  * 占位文案不在这里拼：`AIChatInput` 自己按上面这几样接上没有推（省略 `placeholder`
- * 时生效）。原先两端各按 backendType 查一张表，而 backendType 与「宿主接没接那些
+ * 时生效）——Skill 接上之后，`/` 那一句会自动变成「/ 触发命令和 Skill」。原先两端各按 backendType 查一张表，而 backendType 与「宿主接没接那些
  * 能力」无关，照抄就是许诺做不到的事。
  *
  * 审批**不**在这一带：对话流里已经有审批卡了，底下再摆一条是同一件事说两遍。
@@ -32,10 +36,10 @@ import {
   ChatComposer,
   ContextMeter,
   PermissionModePill,
+  useSlashCommands,
   type AIChatInputHandle,
   type ChatComposerHandle,
   type ChatImageAttachment,
-  type SlashCommand,
 } from "@agentre-hub/agentre-ui";
 import {
   useMemo,
@@ -47,8 +51,8 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { useDeviceMentions } from "@/hooks/use-device-mentions";
+import { useSessionSkillCommands } from "@/hooks/use-session-skill-commands";
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
-import { buildSlashCommands } from "@/lib/slashCommands";
 
 /** @ 菜单里可提及的 Agent。项目那一维不给，理由见文件头。 */
 export interface ComposerAgent {
@@ -59,6 +63,9 @@ export interface ComposerAgent {
 
 export default function SessionComposer({
   backendType,
+  agentSyncId,
+  targetFingerprint,
+  cwd,
   agents,
   disabled,
   disabledReason,
@@ -79,6 +86,13 @@ export default function SessionComposer({
   composerHandleRef,
 }: {
   backendType?: string;
+  /**
+   * 这条会话的 Agent 同步标识、目标机器指纹与这一轮的工作目录 —— Skill 补全要问的
+   * 那三样事实（见 `useSessionSkillCommands` 的说明：三样来路各不相同）。
+   */
+  agentSyncId?: string;
+  targetFingerprint?: string;
+  cwd?: string;
   agents: ComposerAgent[];
   disabled: boolean;
   /** 发不出去时的如实说明（离线 / 设备已撤销 / 机器没升级）。 */
@@ -163,14 +177,15 @@ export default function SessionComposer({
   /** 刚刚有一行以 `!` 开头被挡下来了（见 onCommandSubmit）。 */
   const [localCommandRejected, setLocalCommandRejected] = useState(false);
 
-  const slashCommands = useMemo(() => {
-    const all = buildSlashCommands((k) => t(k));
-    // `filterByQuery` 不调 `resolve`，所以按 backend 过滤这件事必须宿主先做完 ——
-    // 否则菜单里会列出这个后端根本不支持的命令。
-    return backendType
-      ? all.filter((c) => c.resolve(backendType) !== null)
-      : [];
-  }, [backendType, t]);
+  // 清单、前缀、按 backend 过滤都归共享包；这一端只负责「问哪台机器要 Skill 目录」。
+  // `/new` 那一条不在这里：它是桌面端的开标签页动作，浏览器没有标签页这回事。
+  const skills = useSessionSkillCommands({
+    agentSyncId,
+    backendType,
+    fingerprint: targetFingerprint,
+    cwd,
+  });
+  const slashCommands = useSlashCommands({ backendType, skills });
 
   const devices = useDeviceMentions();
   const mentionSources = useMemo(
@@ -205,7 +220,7 @@ export default function SessionComposer({
           backendType={backendType}
           supportsImageInput
           sendButtonTestId="session-detail-send"
-          slashCommands={slashCommands as SlashCommand[]}
+          slashCommands={slashCommands}
           mentionSources={mentionSources}
           // 两个都给才启用 / 菜单（包的既定条件）。literal_text 由包自己填回编辑器，
           // 宿主这里没有 rpc 类命令要处理。

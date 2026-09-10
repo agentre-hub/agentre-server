@@ -10,6 +10,7 @@ import {
   type SetStateAction,
 } from "react";
 
+import { isNativeCompactBackend, SLASH_COMPACT } from "@agentre-hub/agentre-ui";
 import type { ChatComposerSubmit } from "@agentre-hub/agentre-ui";
 import type { ModelTarget } from "@agentre-hub/agentre-ui";
 
@@ -21,7 +22,7 @@ import { randomId } from "@/lib/randomId";
 import { encodeUserBlocks } from "@/lib/userBlocks";
 import type { RelayClient } from "@/lib/relayClient";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
-import { isNativeCompactBackend, SLASH_COMPACT } from "@/lib/slashCommands";
+
 import { classifySendFailure, type SessionViewStatus } from "@/lib/sessionView";
 
 /** 这一轮跑到哪一步。 */

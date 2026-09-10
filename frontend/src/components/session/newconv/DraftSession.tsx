@@ -544,6 +544,11 @@ export function DraftSession({
           {composerModule && (
             <composerModule.default
               backendType={chosen?.backend_type}
+              // Skill 补全按**这次挑出来的那一档**问：草稿页的机器还会变，换一台
+              // 就该重问一次（三个值都进 hook 的依赖）。
+              agentSyncId={plan?.agent_sync_id}
+              targetFingerprint={chosen?.device_fingerprint}
+              cwd={chosen?.cwd}
               agents={mentionAgents}
               composerHandleRef={composerRef}
               // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧

@@ -78,7 +78,10 @@ export function createServerTranscriptPorts(
     // 预览是浏览器里**做得到**的：正文经中继从那台机器直传过来（规格 2026-09-08）。
     // 但仍然按能力探测装：宿主没给动作就没有这个端口。
     ...(deps.previewFile
-      ? { previewFile: (_sessionId: number, path: string) => deps.previewFile!(path) }
+      ? {
+          previewFile: (_sessionId: number, path: string) =>
+            deps.previewFile!(path),
+        }
       : {}),
 
     // openPath / readWorkspaceFile 是桌面能力（在文件管理器里打开、读工作区文件），

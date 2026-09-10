@@ -17,7 +17,6 @@ import project from "./project.json";
 import session from "./session.json";
 import sessionIndex from "./sessionIndex.json";
 import settings from "./settings.json";
-import slashCommands from "./slashCommands.json";
 
 /**
  * zh-CN 语言包：模块划分与 `../en/index.ts` 一一对应，键集合以 en 为准
@@ -43,5 +42,4 @@ export default {
   session,
   sessionIndex,
   settings,
-  slashCommands,
 };

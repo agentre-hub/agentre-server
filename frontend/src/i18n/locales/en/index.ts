@@ -17,7 +17,6 @@ import project from "./project.json";
 import session from "./session.json";
 import sessionIndex from "./sessionIndex.json";
 import settings from "./settings.json";
-import slashCommands from "./slashCommands.json";
 
 /**
  * en 语言包：按模块拆成同目录下的 `<module>.json`，在这里合成一份交给 i18next。
@@ -46,5 +45,4 @@ export default {
   session,
   sessionIndex,
   settings,
-  slashCommands,
 };

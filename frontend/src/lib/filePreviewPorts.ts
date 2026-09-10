@@ -12,7 +12,12 @@
  * **失败一律 reject**：面板会把它冒泡进自己的错误态，宿主不吞异常、不做 toast
  * —— 这是包的端口契约已经定下的。
  */
-import type { FilePreviewPorts, ReadFileResult } from "@agentre-hub/agentre-ui";
+import type {
+  FilePreviewFailure,
+  FilePreviewPorts,
+  GitFileContentResult,
+  ReadFileResult,
+} from "@agentre-hub/agentre-ui";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 
 import { RelayError, type RelayClient } from "@/lib/relayClient";
@@ -30,6 +35,39 @@ export interface FilePreviewPortDeps {
 
 function disconnected(): RelayError {
   return new RelayError(-1, "relay: 连接未就绪", null);
+}
+
+/**
+ * workspacefs.* 的稳定 wire 错误码里，预览面区别对待的那一个。
+ *
+ * 出处是 `agentre/internal/pkg/workspacefs/wire/wire.go`（-32040..-32043 是本族
+ * 的稳定段）。那边改了码值这里要跟着改，两边都没有编译器会替我们发现 —— 与
+ * `remotefs.ts` 顶上那条双维护义务同一条。
+ */
+const WorkspaceFsErrorCode = {
+  notFound: -32043,
+} as const;
+
+/**
+ * 给失败贴上面板认得的分类标记（规格决策 4）。
+ *
+ * 认**错误码**不认文案：message 是那台机器上的 Go 错误文本，改一个字就把判断
+ * 打散。认不出的一律不贴 —— 包对没有 `kind` 的失败按「未归类」处理，如实显示
+ * 它自己的文案加重试，那比冒充一个已知失败诚实。
+ */
+function classify(err: unknown): unknown {
+  if (!(err instanceof RelayError)) return err;
+  if (err.code === WorkspaceFsErrorCode.notFound) {
+    return Object.assign(err, {
+      kind: "notFound",
+    } satisfies FilePreviewFailure);
+  }
+  // -1 是 RelayClient 自己造的那一类（连接未就绪 / 已关闭 / 断线）：那台机器
+  // 此刻够不着，过会儿可能就回来了 —— 这是唯一给重试按钮的失败态。
+  if (err.code === -1) {
+    return Object.assign(err, { kind: "offline" } satisfies FilePreviewFailure);
+  }
+  return err;
 }
 
 /**
@@ -74,11 +112,15 @@ export function createFilePreviewPorts(
 ): FilePreviewPorts {
   return {
     async readFile(path: string): Promise<ReadFileResult> {
-      if (!deps.client) throw disconnected();
-      const raw = await deps.client.request(rpcMethods.workspaceFsReadFile, {
-        root: deps.cwd,
-        relPath: path,
-      });
+      if (!deps.client) throw classify(disconnected());
+      const raw = await deps.client
+        .request(rpcMethods.workspaceFsReadFile, {
+          root: deps.cwd,
+          relPath: path,
+        })
+        .catch((err: unknown) => {
+          throw classify(err);
+        });
       const contentType = raw?.contentType ?? "";
       return {
         content: decodeContent(raw?.content, contentType),
@@ -89,10 +131,24 @@ export function createFilePreviewPorts(
       };
     },
 
-    async gitFileContent(): Promise<never> {
-      // 对比档是下一个任务的事：现在如实说「还没接」，而不是给面板一份空基线
-      // —— 空基线会被画成「整个文件都是新增」，那是一句假话。
-      throw new Error("gitFileContent 尚未接线");
+    async gitFileContent(path: string): Promise<GitFileContentResult> {
+      if (!deps.client) throw classify(disconnected());
+      const raw = await deps.client
+        .request(rpcMethods.workspaceFsGitFileContent, {
+          root: deps.cwd,
+          relPath: path,
+        })
+        .catch((err: unknown) => {
+          throw classify(err);
+        });
+      // notARepo / hasHead 是**视图事实**不是失败：不是 git 仓库、或这个文件还
+      // 不在 HEAD 里，面板据此画空基线。当成错误会让「新加的文件」看起来像出了
+      // 故障。proto3 的 omitempty：缺席即 false。
+      return {
+        content: decodeContent(raw?.content, ""),
+        ...(raw?.notARepo === true ? { notARepo: true } : {}),
+        ...(raw?.hasHead === true ? { hasHead: true } : {}),
+      };
     },
   };
 }

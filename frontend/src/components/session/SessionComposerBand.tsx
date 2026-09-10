@@ -59,6 +59,13 @@ export interface SessionComposerBandProps {
   atBottom: boolean;
   machineName: string | undefined;
   backendType: string | undefined;
+  /**
+   * 「问哪台机器要 Skill 补全」的三样事实，原样透传给输入框（见 SessionComposer 的
+   * `useSessionSkillCommands`）。它们不在这一带用，只是这一带是唯一的必经之路。
+   */
+  agentSyncId: string | undefined;
+  targetFingerprint: string | undefined;
+  cwd: string | undefined;
   /** @ 菜单要提及的 Agent 清单（账号级）。 */
   agents: { name: string; avatar_color?: string }[];
   /** 上下文用量按它与窗口算；「这条会话启动过没有」也读它的条数。 */
@@ -99,6 +106,9 @@ export default function SessionComposerBand({
   atBottom,
   machineName,
   backendType,
+  agentSyncId,
+  targetFingerprint,
+  cwd,
   agents,
   messages,
   contextWindow,
@@ -214,6 +224,9 @@ export default function SessionComposerBand({
             // （不整块重挂），所以由这个 key 把输入框自己重挂一次。
             key={`${did}:${sid}`}
             backendType={backendType}
+            agentSyncId={agentSyncId}
+            targetFingerprint={targetFingerprint}
+            cwd={cwd}
             composerHandleRef={composerHandleRef}
             agents={mentionAgents}
             /*

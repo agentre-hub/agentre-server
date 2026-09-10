@@ -18,6 +18,7 @@ import { RelayClient } from "@/lib/relayClient";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 import {
   fetchSkillCatalog,
+  fetchSkillCommands,
   parseSkillAuthorizations,
   serializeSkillAuthorizations,
   setSkillTriState,
@@ -209,5 +210,81 @@ describe("三态：继承全局 / 强制开 / 强制关", () => {
     expect(serializeSkillAuthorizations([{ id: "a", enabled: false }])).toBe(
       `[{"id":"a","enabled":false}]`,
     );
+  });
+});
+
+/**
+ * 命令清单取数（`fetchSkillCommands`）：与目录同一条中继、同一套三态判别，问的却是
+ * 另一件事 —— **输入框里打得出来的名字**。
+ *
+ * 它与 `fetchSkillCatalog` 的差别只有两处，两处都有理由：
+ *   1. 多带一个 `cwd` —— 项目级 skill（`<cwd>/.claude/skills`）只在那个目录下才解析
+ *      得出来，而「这一轮在哪跑」是会话的事实，那台机器不该去猜。
+ *   2. 回的是命令而不是包 —— 包只是它的一半，另一半（CLI 自己解析的 user /
+ *      project / system skill）配不了、也不在授权表里，却恰恰是日常打得最多的。
+ */
+describe("fetchSkillCommands", () => {
+  it("拨到这一档所在的那台机器，带上授权集与这一轮的 cwd", async () => {
+    const fake = stubRelay({
+      commands: [
+        { name: "superpowers:brainstorming", description: "先想清楚" },
+        { name: "cago" },
+      ],
+      discovery: "ok",
+    });
+
+    const got = await fetchSkillCommands({
+      fingerprint: "fp-online",
+      backendType: "claudecode",
+      cwd: "/srv/project",
+      authorized: [{ id: "agentre/web", enabled: true }],
+    });
+
+    expect(MockRelayClient.mock.calls[0][0].target).toBe("machine:fp-online");
+    expect(fake.request).toHaveBeenCalledWith(rpcMethods.skillCommands, {
+      backendType: "claudecode",
+      cwd: "/srv/project",
+      authorized: [{ id: "agentre/web", enabled: true }],
+    });
+
+    expect(got.discovery).toBe("ok");
+    expect(got.commands).toEqual([
+      { name: "superpowers:brainstorming", description: "先想清楚" },
+      // 描述可以为空：CLI 原生解析出来的 skill 常常只有一个裸名字。
+      { name: "cago", description: undefined },
+    ]);
+  });
+
+  it("unavailable：空清单不等于「这台机器没有 skill」", async () => {
+    stubRelay({ commands: [], discovery: "unavailable" });
+    const got = await fetchSkillCommands({
+      fingerprint: "fp-online",
+      backendType: "claudecode",
+      authorized: [],
+    });
+    expect(got.discovery).toBe("unavailable");
+    expect(got.commands).toEqual([]);
+  });
+
+  it("认不出的判别值一律降级成「答不出」，不冒充 ok", async () => {
+    stubRelay({ commands: [], discovery: "who-knows" });
+    const got = await fetchSkillCommands({
+      fingerprint: "fp-online",
+      backendType: "claudecode",
+      authorized: [],
+    });
+    expect(got.discovery).toBe("unavailable");
+  });
+
+  it("没有可拨的机器时不发出一次注定失败的连接", async () => {
+    stubRelay({ commands: [], discovery: "ok" });
+    await expect(
+      fetchSkillCommands({
+        fingerprint: "",
+        backendType: "claudecode",
+        authorized: [],
+      }),
+    ).rejects.toThrow();
+    expect(MockRelayClient).not.toHaveBeenCalled();
   });
 });

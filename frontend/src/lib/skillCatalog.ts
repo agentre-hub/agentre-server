@@ -23,13 +23,16 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
  * `daemon_fingerprint` 了）。那个指纹随组织读端点的每一档下行
  * （`OrgExecTargetItem.device_fingerprint`）。
  */
+import type { SkillCommandSource } from "@agentre-hub/agentre-ui";
 import {
   SkillDiscoveryOK,
   SkillDiscoveryUnavailable,
   SkillDiscoveryUnsupported,
   decodeSkillCatalogResult,
+  decodeSkillCommandsResult,
   type SkillAuthorization,
   type SkillCatalogParams,
+  type SkillCommandsParams,
   type SkillPackSummary,
 } from "@agentre-hub/agentre-wire";
 
@@ -160,4 +163,62 @@ export function setSkillTriState(
 ): SkillAuthorization[] {
   const rest = authorized.filter((s) => s.id !== id);
   return next === "inherit" ? rest : [...rest, { id, enabled: next === "on" }];
+}
+
+/**
+ * 命令清单：问同一台机器「这一档此刻**叫得动**哪些 skill」。
+ *
+ * 它与 `fetchSkillCatalog` 是同一条中继上的两件事,不是同一件事的两种粒度:
+ *
+ *   · 目录答的是**可配置的 plugin 包** —— 组织架构页拿它画那张授权表。
+ *   · 命令答的是**输入框里打得出来的名字** —— 除了包里的 skill,还含 CLI 自己解析
+ *     的 user / project / system skill(`~/.claude/skills`、`<cwd>/.claude/skills`)。
+ *     那一半不是包、配不了、也不该出现在授权表里,却恰恰是日常打得最多的那一半。
+ *
+ * 因此它多带一个 `cwd`:项目级 skill 只在那个目录下才解析得出来,而「这一轮在哪跑」
+ * 是会话的事实,那台机器不该去猜。授权集仍由调用方报进去(理由同目录)。
+ */
+export interface SkillCommandsInput {
+  /** 这一档所在机器的 agentred 指纹。 */
+  fingerprint: string;
+  backendType: string;
+  /** 这一轮的工作目录。留空 = 只解析 user / system 两档作用域。 */
+  cwd?: string;
+  /** 这一档已经授权的包。用来算生效集,也原样交给 CLI 决定挂哪些 plugin。 */
+  authorized: SkillAuthorization[];
+}
+
+export interface SkillCommands {
+  commands: SkillCommandSource[];
+  discovery: SkillDiscovery;
+}
+
+/**
+ * 问一次命令清单。拨不通、握手失败、对面报错都**抛** —— 调用方据此让输入框照常
+ * 可用、只是没有补全,而不是拿一份空清单冒充「这台机器上没有 skill」。
+ */
+export async function fetchSkillCommands(
+  input: SkillCommandsInput,
+): Promise<SkillCommands> {
+  if (!input.fingerprint) {
+    // 与目录同一条:没有可拨的对象,就不该发出一次注定失败的连接。
+    throw new Error("skill commands: 这一档没有可拨的机器");
+  }
+  return withRelayClient(machineTarget(input.fingerprint), async (client) => {
+    const params: SkillCommandsParams = {
+      backendType: input.backendType,
+      cwd: input.cwd ?? "",
+      authorized: input.authorized,
+    };
+    const decoded = decodeSkillCommandsResult(
+      await client.request(rpcMethods.skillCommands, params),
+    );
+    return {
+      commands: decoded.commands.map((command) => ({
+        name: command.name,
+        description: command.description,
+      })),
+      discovery: normalizeDiscovery(decoded.discovery),
+    };
+  });
 }
