@@ -209,11 +209,37 @@ func (d *Device) List(c *gin.Context, _ *api.ListDevicesRequest) (*api.ListDevic
 	userID := ginctx.UserID(c)
 	deviceID := ginctx.DeviceID(c)
 
-	items, err := device_svc.Default().ListUserDevices(c.Request.Context(), userID, deviceID)
+	views, err := device_svc.Default().ListUserDevices(c.Request.Context(), userID, deviceID)
 	if err != nil {
 		return nil, err
 	}
+	items := make([]api.ListDevicesItem, 0, len(views))
+	for _, view := range views {
+		items = append(items, toListDevicesItem(view))
+	}
 	return &api.ListDevicesResponse{Devices: items}, nil
+}
+
+// toListDevicesItem 把服务层的 view 映射成 wire 上的形状。
+//
+// 这一层映射就是分层的落点：服务层给的是领域事实（哪台机器、在不在线、握着哪个
+// commit），json 字段名与「空串表示什么」由 api 层的那份 DTO 解释。
+func toListDevicesItem(view device_svc.DeviceView) api.ListDevicesItem {
+	return api.ListDevicesItem{
+		ID:               view.ID,
+		Name:             view.Name,
+		Kind:             view.Kind,
+		Platform:         view.Platform,
+		Version:          view.Version,
+		Fingerprint:      view.Fingerprint,
+		LastSeenAt:       view.LastSeenAt,
+		Status:           view.Status,
+		Online:           view.Online,
+		IsThisDevice:     view.IsThisDevice,
+		ProtocolMismatch: view.ProtocolMismatch,
+		DaemonCommit:     view.DaemonCommit,
+		DaemonBuildKnown: view.DaemonBuildKnown,
+	}
 }
 
 // Upgrade 让控制台点名的那台 agentred 把自己升上去（规格 2026-09-03
@@ -234,7 +260,7 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 	if err != nil {
 		return nil, err
 	}
-	target := api.ListDevicesItem{}
+	target := device_svc.DeviceView{}
 	for _, it := range owned {
 		if it.ID == req.DeviceID {
 			target = it

@@ -40,7 +40,8 @@ The repo has **no build tags at all**, so `make test` runs everything there is. 
 ```bash
 cp configs/config.example.yaml configs/config.yaml   # gitignored runtime config
 # point db.dsn / redis.addr in configs/config.yaml at your own MySQL + Redis
-# export any required AGENTRE_SERVER_* variables in the shell; names are listed in .env.example
+# export any required AGENTRE_SERVER_* variables in the shell; the names are in
+# deploy/README.md (they only take effect under source: file)
 make dev
 ```
 
@@ -111,11 +112,14 @@ If you cannot write a reason, the code is what needs changing.
 Append-only. `migrations/migrations.go` holds `migrationList()`; new entries go at
 the **end**, and existing entries are never edited — someone's database has already
 run them. To correct an earlier migration, add a patch migration. Prefer native SQL
-for DDL.
+for DDL. The one exception is a pre-release squash, where the product has not shipped
+yet and every database can be rebuilt; those retire the folded-in IDs forever, see the
+retired-ID block in `migrations/migrations.go`.
 
-Sqlmock guard tests execute the migration functions and check DDL policy, but they do not
-prove that MySQL accepts the DDL or that upgrades preserve representative historical data.
-Verify migrations by hand before merging; see
+`internal/model/entity/schema_test.go` compares the entity structs against the baseline
+DDL (every writable field must have a column, every table must be claimed by an entity),
+but nothing proves that MySQL accepts the DDL or that upgrades preserve representative
+historical data. Verify migrations by hand before merging; see
 [testing.md](testing.md#migration-compatibility-is-not-automated).
 
 ## Configuration
@@ -127,7 +131,9 @@ Verify migrations by hand before merging; see
   `configs/config.e2e.yaml` is gitignored.
 - Secrets come from environment variables, injected by `bootstrap.LoadServerConfig`
   (cago's config source has no env override, so this is done by hand there).
-  `.env.example` lists them.
+  The `AGENTRE_SERVER_*` override names are listed in
+  [`../deploy/README.md`](../deploy/README.md); `deploy/.env.example` lists the
+  compose-level names that map onto them.
 
 Never commit a real key, and never read config from disk anywhere but bootstrap.
 

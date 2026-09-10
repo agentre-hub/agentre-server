@@ -16,12 +16,7 @@ var en = map[int]string{
 
 	UserNotFound:        "user not found",
 	UserBanned:          "user banned",
-	OAuthStateInvalid:   "oauth state invalid or expired",
 	OAuthExchangeFailed: "github oauth exchange failed",
-	OAuthProfileFailed:  "cannot fetch github user profile",
-	GithubEmailMissing:  "github primary email not accessible; set verified primary email in github settings",
-	SessionExpired:      "session expired, please login again",
-	SessionInvalid:      "invalid session",
 
 	DeviceFlowAuthorizationPending: "user has not approved the device yet",
 	DeviceFlowSlowDown:             "polling too fast, slow down",
@@ -29,7 +24,6 @@ var en = map[int]string{
 	DeviceFlowAccessDenied:         "user denied the authorization",
 	DeviceFlowInvalidGrant:         "invalid device_code",
 	DeviceFlowUserCodeInvalid:      "user_code malformed or not found",
-	DeviceFlowAlreadyConsumed:      "user_code already processed",
 
 	DeviceNotFound:      "device not found",
 	DeviceRevoked:       "device revoked",
@@ -39,15 +33,12 @@ var en = map[int]string{
 	JWTSignatureInvalid: "invalid access token signature",
 	JWTBlacklisted:      "access token revoked",
 	DeviceListFailed:    "failed to list devices",
-	DeviceKindMismatch:  "fingerprint already belongs to a non-browser device",
 
 	RelayDaemonNotFound: "daemon is not registered to this account",
 	RelayDaemonOffline:  "daemon is currently offline",
 	RelayForwardFailed:  "daemon is online but relay forwarding failed",
 
 	SyncResyncRequired:     "device offline too long, pull a full snapshot before syncing",
-	SyncPayloadRejected:    "sync payload carries fields that must not cross machines",
-	SyncKindInvalid:        "invalid sync object kind",
 	SyncAvatarHashMismatch: "avatar content does not match the declared hash",
 	SyncAvatarNotFound:     "avatar not found",
 	SyncCursorUnknown:      "unknown sync cursor, pull a full snapshot before syncing",
@@ -77,7 +68,6 @@ var en = map[int]string{
 
 	EngineProviderNotFound:      "provider not found",
 	EngineBackendNotFound:       "agent backend not found",
-	EngineCLIPathForbidden:      "CLI paths cannot be submitted from the browser",
 	EngineBuiltinForbidden:      "builtin backends cannot be created from the browser",
 	EngineBackendDeviceNotFound: "the selected device is not an active device on this account",
 }

@@ -705,7 +705,8 @@ actually wired up — omit the `placeholder` prop and you get a string that is t
 construction. That derivation used to be duplicated on both sides, keyed on `backendType`,
 which is unrelated to whether the host wired any of those triggers; it now lives in the
 package (`chat-input/placeholder.ts`) with its copy in the `agentreUi` namespace. Here the
-inputs resolve to: `@` yes (agent mentions), `/` yes (`lib/slashCommands.ts`), `$` no
+inputs resolve to: `@` yes (agent mentions), `/` yes (`chat-input/slash/registry.ts`,
+the package's `useSlashCommands`), `$` no
 (listing skills is a Wails binding), `!` no (the wire has no PTY method).
 
 `!` needs care twice over. With no `onCommandSubmit`, the package **clears** any line

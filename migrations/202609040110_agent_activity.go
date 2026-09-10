@@ -23,8 +23,8 @@ import (
 // 而它会被原样当成下一次的 since_day。char(10) 没有时区语义可供重新解释，逐字节的排序
 // 恰好就是日期序，范围查询照样吃索引。真要做日期运算时 STR_TO_DATE 一句话的事。
 //
-// dims_hash 是六个维度的 STORED 生成列，参与主键。这不是为了省空间，而是必须：六个
-// varchar(255) 直接拼进主键有 5000+ 字节，超过 InnoDB 3072 字节的索引上限，建表当场就
+// dims_hash 是六个维度的 STORED 生成列，参与唯一键。这不是为了省空间，而是必须：六个
+// varchar(255) 直接拼进唯一键有 5000+ 字节，超过 InnoDB 3072 字节的索引上限，建表当场就
 // 失败。让数据库自己算这个摘要（而不是应用算了再写）去掉了一整类 bug——应用与数据库对
 // 「什么算同一行」产生分歧时，upsert 会静默地变成插入，计数从此翻倍。
 //
@@ -53,6 +53,7 @@ func migration202609040110() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			if err := tx.Exec(`
 				CREATE TABLE agent_activity_daily (
+				  id               bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id          bigint NOT NULL,
 				  day              char(10) COLLATE utf8mb4_0900_bin NOT NULL,
 				  peer_fingerprint varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -67,7 +68,7 @@ func migration202609040110() *gormigrate.Migration {
 				  dims_hash        binary(32) AS (UNHEX(SHA2(CONCAT_WS(0x1F,
 				                     peer_fingerprint, agent_sync_id, backend_type,
 				                     provider_key, model_key, project_sync_id), 256))) STORED NOT NULL,
-				  PRIMARY KEY (user_id, day, dims_hash),
+				  UNIQUE KEY uk_agent_activity_daily_identity (user_id, day, dims_hash),
 				  KEY idx_agent_activity_daily_machine (user_id, peer_fingerprint, day)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 			`).Error; err != nil {
@@ -75,13 +76,15 @@ func migration202609040110() *gormigrate.Migration {
 			}
 			return tx.Exec(`
 				CREATE TABLE user_settings (
-				  user_id                   bigint NOT NULL PRIMARY KEY,
+				  id                        bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
+				  user_id                   bigint NOT NULL,
 				  activity_stats_enabled    tinyint(1) NOT NULL DEFAULT 0,
 				  activity_stats_enabled_at bigint NOT NULL DEFAULT 0,
 				  activity_last_pull_at     bigint NOT NULL DEFAULT 0,
 				  activity_backfill_from    char(10) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  createtime                bigint NOT NULL DEFAULT 0,
-				  updatetime                bigint NOT NULL DEFAULT 0
+				  updatetime                bigint NOT NULL DEFAULT 0,
+				  UNIQUE KEY uk_user_settings_identity (user_id)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 			`).Error
 		},

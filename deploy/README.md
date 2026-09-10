@@ -464,12 +464,14 @@ etcdctl --endpoints=<etcd> --user root:<password> \
   动作镜像集是定制的，仓库里也没有 ssh-action 的先例，赌一个可能不存在的镜像不如
   用原生命令。主机密钥是首连信任（`StrictHostKeyChecking=accept-new`）。
 
-### GitHub 侧：只出镜像，不部署
+### GitHub 侧：只出镜像与 Release，不部署
 
 GitHub 上另有两条流水线，它们只把镜像推到 GHCR，不碰任何环境——部署始终是 Gitea
 那边的事：
 
-- `release.yml`：推 `v*` tag 触发，打 `<tag>` 与 `sha-<短 commit>`，正式版另加 `latest`。
+- `release.yml`：推 `v*` tag 触发，打 `<tag>` 与 `sha-<短 commit>`，正式版另加
+  `latest`；镜像推成功后由 `release` job 建一个 GitHub Release（beta / rc 标成
+  prerelease，重跑同一个 tag 会先删后建）。
 - `nightly.yml`：每天 UTC 18:00（北京时间凌晨 2 点）把 `main` 合进 `nightly` 分支再构建，
   打 `nightly`、`nightly-<日期>`、`sha-<短 commit>`。这个 commit 已经出过镜像就跳过——
   判据是 registry 上 `sha-<短 commit>` 这个 tag 在不在，不另存状态，所以上一次构建
@@ -479,7 +481,8 @@ GitHub 上另有两条流水线，它们只把镜像推到 GHCR，不碰任何�
 推上去，最后用 `docker buildx imagetools create` 合成一个 manifest list。不走 QEMU：
 镜像里那段 pnpm build 在模拟环境下要慢十几分钟，而公开仓库的 arm64 runner 是免费的。
 
-凭据只用内置的 `GITHUB_TOKEN`（job 上给 `packages: write`），不需要额外 secret。
+凭据只用内置的 `GITHUB_TOKEN`：镜像 job 给 `packages: write`，`release.yml` 建 Release
+的 `release` job 给 `contents: write`，都不需要额外 secret。
 有两件一次性的事要做：
 
 1. **`nightly` 分支要先建出来**：`git push origin main:nightly`。定时任务读的是默认分支

@@ -1,5 +1,5 @@
 .PHONY: dev build test test-backend test-frontend e2e test-cover \
-        lint lint-backend lint-frontend lint-e2e fmt prepare-web-dist mock migrate docker
+        lint lint-backend lint-frontend lint-e2e fmt prepare-web-dist mock docker
 
 # 版本号是显式的、不从 tag 反推：git describe 在没打 tag 的分支上会退成 "dev"，
 # 而带 tag 时又会多出一个 "v" 前缀，跟桌面端 Makefile 的 0.1.0 对不上号。排障

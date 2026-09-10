@@ -36,7 +36,7 @@ const testCookieName = "server_session"
 
 // stubDeviceSvc 实现 device_svc.DeviceSvc，只覆盖本测试用到的端点。
 type stubDeviceSvc struct {
-	userDevices     []api_device.ListDevicesItem
+	userDevices     []device_svc.DeviceView
 	revoked         []int64
 	revokedJTI      []string
 	authorizeInputs []device_svc.AuthorizeInput
@@ -69,8 +69,8 @@ func (s *stubDeviceSvc) Revoke(_ context.Context, deviceID int64) error {
 
 // ListUserDevices 必须真的用上 callerDeviceID：这是「把自己标记出来」的唯一入口，
 // 丢掉它的桩会让 controller 停止转发 device_id 也照样测绿。
-func (s *stubDeviceSvc) ListUserDevices(_ context.Context, _ int64, callerDeviceID int64) ([]api_device.ListDevicesItem, error) {
-	out := make([]api_device.ListDevicesItem, len(s.userDevices))
+func (s *stubDeviceSvc) ListUserDevices(_ context.Context, _ int64, callerDeviceID int64) ([]device_svc.DeviceView, error) {
+	out := make([]device_svc.DeviceView, len(s.userDevices))
 	copy(out, s.userDevices)
 	for i := range out {
 		out[i].IsThisDevice = out[i].ID == callerDeviceID
@@ -144,8 +144,10 @@ func doRequest(t *testing.T, method, url, cookie, bearer, body string, csrf ...s
 	return resp
 }
 
-func deviceListBody() []api_device.ListDevicesItem {
-	return []api_device.ListDevicesItem{
+// deviceListBody 喂给服务层桩，所以用的是服务层的 view 类型；响应那一侧仍然按
+// api 的 DTO 解码（见各用例里的 Devices 字段）——分层之后测试也分两边站。
+func deviceListBody() []device_svc.DeviceView {
+	return []device_svc.DeviceView{
 		{ID: 1, Name: "nuc-01", Kind: device_entity.KindAgentred, Platform: "linux", Version: "0.4.0", Status: 1},
 		{ID: 2, Name: "laptop", Kind: device_entity.KindDesktop, Platform: "darwin", Version: "0.3.0", Status: 1},
 	}
@@ -427,8 +429,8 @@ func newUpgradeTestServer(
 	return server
 }
 
-func upgradeDeviceList() []api_device.ListDevicesItem {
-	return []api_device.ListDevicesItem{
+func upgradeDeviceList() []device_svc.DeviceView {
+	return []device_svc.DeviceView{
 		{
 			ID: 1, Name: "nuc-01", Kind: device_entity.KindAgentred, Platform: "linux",
 			Version: "0.5.2", Fingerprint: "fp-nuc-01", Status: 1,
