@@ -163,6 +163,7 @@ They live next to what they guard.
 | `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
 | `frontend/src/__tests__/user-code-contract.test.ts` | `lib/userCode.ts`'s alphabet and length still match `internal/pkg/usercode` |
 | `frontend/src/__tests__/login-error-contract.test.ts` | `Login.tsx`'s `KNOWN_ERRORS` still matches the `/login?err=` values `auth_ctr` redirects with, and each has copy in both locales |
+| `frontend/src/__tests__/desktop-answered-methods.test.ts` | Every `rpcMethods.X` call site that can reach a desktop machine uses a method the desktop host answers; the one declared agentred-only path is still restricted; channel targets still come only from `machineTarget`/`conversationTarget` |
 | `frontend/src/i18n/__tests__/locale-parity.test.ts` | Every locale has exactly the same keys |
 | `frontend/src/i18n/__tests__/locale-modules.test.ts` | Every per-module locale file is wired into its language bundle, under the key its filename names |
 | `frontend/src/i18n/__tests__/language-switch.test.ts` | Switching language actually changes the copy |
