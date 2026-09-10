@@ -10,8 +10,6 @@ import (
 	"github.com/cago-frame/cago/server/mux"
 )
 
-// ---------- 上行 ----------
-
 // PushItem 是一次上行里的一条改动。
 type PushItem struct {
 	Kind   string `json:"kind"    binding:"required,max=32"`
@@ -19,8 +17,12 @@ type PushItem struct {
 	// BaseVersion 是本端最后一次见到的同步版本号；本端新建、server 从未见过的行填 0。
 	BaseVersion int64 `json:"base_version"`
 	// UpdatedAt 是客户端的最后修改时间，只用于展示与 30 天窗口计算，不参与胜负。
-	UpdatedAt           int64           `json:"updated_at"`
-	Deleted             bool            `json:"deleted"`
+	UpdatedAt int64 `json:"updated_at"`
+	// DeletedAt 非零 = 这是一条墓碑，值是发起端记下的删除时刻（Unix 毫秒）。
+	// 契约上是**时刻**而不是布尔：桌面端库、线格式与 server 库三处都是时刻，
+	// 压成布尔后 server 落地只能另行编造一个删除时间
+	// （2026-08-27-schema-overhaul.md 决策 20）。
+	DeletedAt           int64           `json:"deleted_at"`
 	AgentredFingerprint string          `json:"agentred_fingerprint" binding:"max=128"`
 	ProjectSyncID       string          `json:"project_sync_id"      binding:"max=128"`
 	Payload             json.RawMessage `json:"payload"`
@@ -34,27 +36,26 @@ type PushRequest struct {
 // PushItemResult 是一条上行的处置结果。Overwritten* 只在 status 为 conflict 时有值，
 // Merged* 只在 R4b 的自然键合并发生时有值。
 type PushItemResult struct {
-	SyncID              string `json:"sync_id"`
-	Kind                string `json:"kind"`
-	Version             int64  `json:"version"`
-	Status              string `json:"status"`
-	Reason              string `json:"reason,omitempty"`
-	OverwrittenVersion  int64  `json:"overwritten_version,omitempty"`
-	OverwrittenDeviceID int64  `json:"overwritten_device_id,omitempty"`
+	SyncID                       string `json:"sync_id"`
+	Kind                         string `json:"kind"`
+	Version                      int64  `json:"version"`
+	Status                       string `json:"status"`
+	Reason                       string `json:"reason,omitempty"`
+	OverwrittenVersion           int64  `json:"overwritten_version,omitempty"`
+	OverwrittenOriginFingerprint string `json:"overwritten_origin_fingerprint,omitempty"`
 	// OverwrittenPayload 是被这次上行覆盖掉的那一版正文。上行端手上那份是覆盖
 	// 别人的那一份，被覆盖的内容只有 server 有——R5 的「追回被覆盖的那一版」
 	// 靠它。
 	OverwrittenPayload json.RawMessage `json:"overwritten_payload,omitempty"`
 	MergedSyncID       string          `json:"merged_sync_id,omitempty"`
 	MergedVersion      int64           `json:"merged_version,omitempty"`
-	MergedDeviceID     int64           `json:"merged_device_id,omitempty"`
+	// MergedOriginFingerprint 是落败那一份来自哪台机器（决策 14）；空串 = 服务端直写。
+	MergedOriginFingerprint string `json:"merged_origin_fingerprint,omitempty"`
 }
 
 type PushResponse struct {
 	Results []PushItemResult `json:"results"`
 }
-
-// ---------- 下行 ----------
 
 type PullRequest struct {
 	mux.Meta `path:"/v1/sync/pull" method:"GET"`
@@ -71,8 +72,11 @@ type PullItem struct {
 	Payload             json.RawMessage `json:"payload"`
 	Version             int64           `json:"version"`
 	UpdatedAt           int64           `json:"updated_at"`
-	SourceDeviceID      int64           `json:"source_device_id"`
-	Deleted             bool            `json:"deleted"`
+	// OriginFingerprint 是最后一次修改来自哪台机器（决策 14：跨机引用一律用指纹，
+	// 数值设备主键是 server 的本地键，桌面端离线创建的行没有它）。空串 = 服务端直写。
+	OriginFingerprint string `json:"origin_fingerprint"`
+	// DeletedAt 非零 = 墓碑，值是删除时刻（Unix 毫秒，决策 20）。
+	DeletedAt int64 `json:"deleted_at"`
 }
 
 type PullResponse struct {
@@ -80,8 +84,6 @@ type PullResponse struct {
 	NextCursor int64      `json:"next_cursor"`
 	HasMore    bool       `json:"has_more"`
 }
-
-// ---------- 上报组：本机路径 ----------
 
 type LocalPathItem struct {
 	ProjectSyncID string `json:"project_sync_id" binding:"required,max=128"`
@@ -95,8 +97,6 @@ type ReportLocalPathsRequest struct {
 }
 
 type ReportLocalPathsResponse struct{}
-
-// ---------- 头像 ----------
 
 type PutAvatarRequest struct {
 	mux.Meta    `path:"/v1/sync/avatars" method:"POST"`

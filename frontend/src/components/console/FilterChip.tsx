@@ -1,4 +1,4 @@
-import { cn } from "@/lib/utils";
+import { cn } from "@agentre-hub/agentre-ui";
 
 /**
  * 筛选项（Pencil 正式组件 rNQXR FilterChip）。
@@ -25,7 +25,7 @@ export function FilterChip({
       <span
         data-testid={testId}
         aria-disabled="true"
-        className="inline-flex h-[22px] cursor-not-allowed items-center rounded-full bg-secondary px-[9px] text-[11px] font-medium text-subtle-foreground opacity-60"
+        className="inline-flex h-[22px] cursor-not-allowed items-center rounded-full bg-secondary px-[9px] text-2xs font-medium text-muted-foreground opacity-60"
       >
         {label}
       </span>
@@ -38,7 +38,7 @@ export function FilterChip({
       aria-pressed={active}
       onClick={onClick}
       className={cn(
-        "inline-flex h-[22px] items-center rounded-full px-[9px] text-[11px] font-medium transition-colors",
+        "inline-flex h-[22px] items-center rounded-full px-[9px] text-2xs font-medium transition-colors",
         active
           ? "bg-primary-soft text-primary-text"
           : "bg-secondary text-muted-foreground hover:bg-accent",

@@ -6,8 +6,9 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 
-	"agentre-server/internal/model/entity/sync_entity"
-	"agentre-server/internal/pkg/dberr"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
 //go:generate mockgen -source object.go -destination mock_sync_repo/mock_object.go
@@ -19,6 +20,8 @@ type SyncObjectRepo interface {
 	// FindLocationByNaturalKey 按（账号, 项目同步标识, agentred 指纹）取存活的那条
 	// 路径记录，查不到返回 (nil, nil)。
 	FindLocationByNaturalKey(ctx context.Context, userID int64, projectSyncID, fingerprint string) (*sync_entity.SyncObject, error)
+	// FindCLIOverlayByNaturalKey 按（账号, backend 同步标识, 指纹）取存活的 CLI 覆盖。
+	FindCLIOverlayByNaturalKey(ctx context.Context, userID int64, backendSyncID, fingerprint string) (*sync_entity.SyncObject, error)
 	// Save 按（账号, 同步标识）落库，且只在版本号更大时才覆盖已有行。
 	Save(ctx context.Context, obj *sync_entity.SyncObject) error
 	// Tombstone 把一行标成墓碑并给它一个新版本，让删除本身也能被下行游标带走。
@@ -28,8 +31,16 @@ type SyncObjectRepo interface {
 	ListSince(ctx context.Context, userID, cursor int64, limit int) ([]*sync_entity.SyncObject, error)
 	// ListByKinds 取账号下这些类型里全部存活的行（墓碑不返回），不分页——
 	// web 控制台读账号级快照（总览页的 Agent 清单、设备展开的项目清单）要的是
-	// 当前状态的完整集合，不是同步用的增量游标。
+	// 当前状态的完整集合，不是同步用的增量游标。R6 的级联删除同样用它取回账号下
+	// 的存活执行目标，再在 Go 里按载荷里的 backend_sync_id 挑出引用者
+	// （见 sync_svc.tombstoneExecTargetsOf）。
 	ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error)
+	// ListLiveByFingerprint 取账号下这些类型里、agentred_fingerprint 命中某台机器的
+	// 全部**存活**行：一台设备离开账号时，只属于它的那些行据此圈定并落墓碑。
+	// 已经是墓碑的行不返回——再落一次只会白占一个版本号。
+	// fingerprint 由调用方保证非空（空串是「当前这台桌面端」的相对引用，见
+	// sync_svc.PurgeDeviceSyncObjects）。
+	ListLiveByFingerprint(ctx context.Context, userID int64, fingerprint string, kinds []string) ([]*sync_entity.SyncObject, error)
 	// DeleteTombstonesBefore 真正删掉删除时间早于 cutoff 的墓碑行（决策 9），
 	// 返回删掉的行数。cutoff 由 service 按墓碑窗口算出：窗口内的墓碑必须留着，
 	// 它是尚未拉取的设备赖以知道「这行被删了」的唯一凭据。
@@ -45,41 +56,38 @@ func NewSyncObject() SyncObjectRepo       { return &objectRepo{} }
 type objectRepo struct{}
 
 func (r *objectRepo) Find(ctx context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error) {
-	ret := &sync_entity.SyncObject{}
-	err := db.Ctx(ctx).Where("user_id=? AND sync_id=?", userID, syncID).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[sync_entity.SyncObject](db.Ctx(ctx).Where("user_id=? AND sync_id=?", userID, syncID))
 }
 
 // FindLocationByNaturalKey 只看存活的那一行：墓碑不占（账号, 项目, 指纹），
-// 否则删掉再建就建不回来了。这与 uk_sync_objects_location 这个部分唯一索引同源。
+// 否则删掉再建就建不回来了。这与 uk_sync_objects_natural 这个部分唯一索引同源。
 func (r *objectRepo) FindLocationByNaturalKey(
 	ctx context.Context, userID int64, projectSyncID, fingerprint string,
 ) (*sync_entity.SyncObject, error) {
-	ret := &sync_entity.SyncObject{}
-	err := db.Ctx(ctx).Where(
+	return r.findLiveByNaturalKey(ctx, userID, sync_entity.KindProjectLocation, projectSyncID, fingerprint)
+}
+
+func (r *objectRepo) FindCLIOverlayByNaturalKey(
+	ctx context.Context, userID int64, backendSyncID, fingerprint string,
+) (*sync_entity.SyncObject, error) {
+	return r.findLiveByNaturalKey(ctx, userID, sync_entity.KindAgentBackendCLI, backendSyncID, fingerprint)
+}
+
+func (r *objectRepo) findLiveByNaturalKey(
+	ctx context.Context, userID int64, kind, projectSyncID, fingerprint string,
+) (*sync_entity.SyncObject, error) {
+	return dbutil.FindOne[sync_entity.SyncObject](db.Ctx(ctx).Where(
 		"user_id=? AND kind=? AND project_sync_id=? AND agentred_fingerprint=? AND deleted_at=0",
-		userID, sync_entity.KindProjectLocation, projectSyncID, fingerprint,
-	).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+		userID, kind, projectSyncID, fingerprint,
+	))
 }
 
 // Save 按（账号, 同步标识）落库，且只在版本号更大时才覆盖已有行。
 //
 // **为什么不是一条 INSERT … ON DUPLICATE KEY UPDATE。** MySQL 的 ON DUPLICATE KEY
-// 命中的是**任意**唯一键，而 sync_objects 上有两个：uk_sync_objects_identity 和
-// uk_sync_objects_location。自然键被另一个 sync_id 占着时（R4b 竞态的兜底），那条
+// 命中的是**任意**唯一键，而 sync_objects 上有三个：uk_sync_objects_identity、
+// uk_sync_objects_natural。自然键被另一个 sync_id
+// 占着时（R4b 竞态的兜底），那条
 // 语句不会报错，而是去 UPDATE 别人那一行——身份键留旧的、内容换成新的，本次上行的
 // sync_id 从来没落库，调用方却拿到成功。客户端于是永远重推同一个 sync_id，每次都
 // 把别人那行再覆盖一遍。gorm 的 clause.OnConflict{Columns: …} 在 MySQL 方言下只是
@@ -95,7 +103,7 @@ func (r *objectRepo) FindLocationByNaturalKey(
 //     ON DUPLICATE 的 INSERT，让唯一键自己说话：
 //     撞 uk_sync_objects_identity = 行已存在且版本不比本次小，本次是 R4 的竞败方，
 //     这是预期内的正常路径，吞掉；
-//     撞 uk_sync_objects_location = 自然键上另一行还活着，这是 R4b 的兜底，必须响，
+//     撞 uk_sync_objects_natural = 自然键上另一行还活着，这是 R4b 的兜底，必须响，
 //     原样上抛。
 func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) error {
 	updated := db.Ctx(ctx).Model(&sync_entity.SyncObject{}).
@@ -106,8 +114,8 @@ func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) erro
 			"agentred_fingerprint": obj.AgentredFingerprint,
 			"payload":              obj.Payload,
 			"version":              obj.Version,
-			"sync_updated_at":      obj.SyncUpdatedAt,
-			"source_device_id":     obj.SourceDeviceID,
+			"updated_at":           obj.SyncUpdatedAt,
+			"origin_fingerprint":   obj.OriginFingerprint,
 			"deleted_at":           obj.DeletedAt,
 			"updatetime":           obj.Updatetime,
 		})
@@ -147,16 +155,48 @@ func (r *objectRepo) ListSince(ctx context.Context, userID, cursor int64, limit 
 //
 // 一条语句扫全表、不分账号：每一行都只按它自己的 user_id 归属被删，一个账号的
 // 回收不可能碰到另一个账号的行。
+// cleanupBatchSize 是清理类 DELETE 每一批的行数上限。
+//
+// 不分批的一条 DELETE 在 InnoDB 上会把 next-key 锁铺满它扫过的范围。这两张表都是
+// 稳态几十万到几百万行、每天/每小时回收一次的形状,一次回收可能删掉其中一大片,
+// 期间落在同一范围上的写全被挡在那把锁后面。分批之后每批各自提交,锁的持有时间被
+// 切成一小段一小段。
+const cleanupBatchSize = 1000
+
 func (r *objectRepo) DeleteTombstonesBefore(ctx context.Context, cutoff int64) (int64, error) {
-	res := db.Ctx(ctx).Where("deleted_at>0 AND deleted_at<?", cutoff).
-		Delete(&sync_entity.SyncObject{})
-	return res.RowsAffected, res.Error
+	var total int64
+	for {
+		res := db.Ctx(ctx).Where("deleted_at>0 AND deleted_at<?", cutoff).
+			Limit(cleanupBatchSize).
+			Delete(&sync_entity.SyncObject{})
+		if res.Error != nil {
+			return total, res.Error
+		}
+		total += res.RowsAffected
+		// 没删满说明够到底了。删满就得再来一批——剩下的行数无从得知。
+		if res.RowsAffected < cleanupBatchSize {
+			return total, nil
+		}
+	}
 }
 
 func (r *objectRepo) ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error) {
 	var out []*sync_entity.SyncObject
 	if err := db.Ctx(ctx).Where("user_id=? AND kind IN ? AND deleted_at=0", userID, kinds).
 		Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *objectRepo) ListLiveByFingerprint(
+	ctx context.Context, userID int64, fingerprint string, kinds []string,
+) ([]*sync_entity.SyncObject, error) {
+	var out []*sync_entity.SyncObject
+	if err := db.Ctx(ctx).Where(
+		"user_id=? AND kind IN ? AND agentred_fingerprint=? AND deleted_at=0",
+		userID, kinds, fingerprint,
+	).Order("id ASC").Find(&out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil

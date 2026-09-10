@@ -1,26 +1,29 @@
+import { rpcMethods } from "@agentre-hub/agentre-wire";
 /**
  * R15 / R16 的派发逻辑单测（测试接缝 8 的 web 侧）：
  *   - R15d 守卫：从 web 派发时跳过 device_id 为空的「本机」档，只在 agentred 里按
  *     顺序取第一档可用的；全部不可用时返回 null（前端逐档渲染原因，不静默失败）。
- *   - R16：runtime.run 成功后立刻把自己这条关注上（账号级名单），于是新对话不经
- *     「关注」就出现在「对话」页。
+ *   - R16：runtime.run 成功后立刻把这条对话保存进账号（POST /v1/saved-sessions），
+ *     于是新对话不经手动保存就出现在「对话」页——发起即保存（2026-08-18-server-
+ *     session-mirror 决策 2），镜像随即对它开始。
  *   - R17：派发的 RunParams 不注入 mcpServers —— org / subagent / hook 用不了这件事
  *     在发起前由界面说明，逻辑层不注入这三个内置工具。
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
-import { RelayClient } from "@/lib/relayClient";
+import { relayClientPool } from "@/lib/relayClientPool";
+import { ensureRelayTicket } from "@/lib/relayTicket";
+import { RelayClient, RelayError } from "@/lib/relayClient";
 import {
+  DispatchConnectionError,
+  DispatchRunError,
   deriveTitle,
   dispatchNewConversation,
   fetchDispatchPlan,
-  newSessionId,
   pickFirstAvailable,
   type DispatchPlan,
 } from "@/lib/dispatch";
-import { callerClientId } from "@/lib/execOrder";
-import { MethodRun } from "@/lib/wire";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -32,18 +35,23 @@ vi.mock("@/lib/relayClient", async (importOriginal) => {
 });
 vi.mock("@/lib/relayTicket", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/relayTicket")>();
-  return { ...actual, browserDisplayName: () => "Chrome · macOS" };
+  return {
+    ...actual,
+    browserDisplayName: () => "Chrome · macOS",
+    // 自建连接那一路现在向 relayClientPool 借，票由池子取（此前是直接用调用方
+    // sourceClient 手里那张）。两者是同一张票：clientId 都来自 localStorage。
+    ensureRelayTicket: vi.fn(),
+  };
 });
-vi.mock("@/lib/execOrder", () => ({ callerClientId: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
 const MockRelayClient = vi.mocked(RelayClient);
-const mockCallerDeviceFingerprint = vi.mocked(callerClientId);
+const mockedTicket = vi.mocked(ensureRelayTicket);
 
 const availablePlan: DispatchPlan = {
   agent_sync_id: "agent-1",
   tiers: [
-    { rank: 1, availability: "skipped_for_web", current: false },
+    { rank: 1, availability: "no_device", current: false },
     {
       rank: 2,
       device_id: 20,
@@ -74,7 +82,7 @@ const availablePlan: DispatchPlan = {
 };
 
 // R17：第一档可用的是桌面端时，派发计划选中它（kind=desktop），发起前界面据此
-// 说明 org/subagent/hook 可用（见 NewConversationDialog）。逻辑层照常用 runtime.run
+// 说明 org/subagent/hook 可用（见 newconv/DraftSession）。逻辑层照常用 runtime.run
 // 把对话建到那台桌面端上，不注入 mcpServers。
 const desktopPlan: DispatchPlan = {
   ...availablePlan,
@@ -99,10 +107,33 @@ const desktopPlan: DispatchPlan = {
   },
 };
 
+const agentredPiPlan: DispatchPlan = {
+  ...availablePlan,
+  tiers: [
+    {
+      rank: 1,
+      device_id: 40,
+      device_name: "Pi 主机",
+      backend_type: "piagent",
+      kind: "agentred",
+      availability: "available",
+      current: true,
+    },
+  ],
+  chosen: {
+    device_fingerprint: "fp-pi",
+    device_id: 40,
+    device_name: "Pi 主机",
+    backend_type: "piagent",
+    kind: "agentred",
+    cwd: "/srv/pi-project",
+  },
+};
+
 const allUnavailablePlan: DispatchPlan = {
   agent_sync_id: "agent-1",
   tiers: [
-    { rank: 1, availability: "skipped_for_web", current: false },
+    { rank: 1, availability: "no_device", current: false },
     { rank: 2, availability: "unpaired", current: false },
     {
       rank: 3,
@@ -126,9 +157,14 @@ const allUnavailablePlan: DispatchPlan = {
 function fakeClient() {
   return {
     connect: vi.fn(async () => {}),
-    request: vi.fn(async (_method: string, _params?: unknown) => ({
-      sessionId: 9001,
-    })),
+    request: vi.fn(
+      async (_method: unknown, params?: unknown): Promise<unknown> => ({
+        // daemon 是回声的（handlers/runtime.go 的 wire.RunAck{ConversationID:
+        // p.ConversationID}），假的照它来。
+        conversationId:
+          (params as { conversationId?: string })?.conversationId ?? "",
+      }),
+    ),
     close: vi.fn(),
   };
 }
@@ -137,11 +173,29 @@ const sourceClient = {
   clientId: "fp-web",
   clientName: "Chrome · macOS",
   accessToken: "web-jwt",
+  expiresAt: Date.now() + 120_000,
 };
 
+// RelayClient 是被 `new` 出来的。vitest 4 起，mock 收到构造调用会直接
+// `Reflect.construct(impl)`，箭头函数不可构造（TypeError: ... is not a constructor），
+// 所以假实现必须写成普通函数——构造调用返回对象即覆盖 this，拿到的还是这个假 client。
 beforeEach(() => {
+  // 中继连接是池化的：不收掉的话，上一条用例建的那条会被下一条借走。
+  relayClientPool.closeAll();
   vi.clearAllMocks();
-  MockRelayClient.mockImplementation((() => fakeClient()) as never);
+  mockedTicket.mockResolvedValue({
+    accessToken: "relay-token",
+    expiresAt: Date.now() + 120_000,
+    clientId: "browser-1",
+    clientName: "Chrome · macOS",
+  });
+  MockRelayClient.mockImplementation(function () {
+    return fakeClient();
+  } as never);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("pickFirstAvailable（R15d 守卫）", () => {
@@ -157,7 +211,7 @@ describe("pickFirstAvailable（R15d 守卫）", () => {
 
   it("本机档排在最前也不参与挑选（守卫断言：锁住块 1 R15d 在浏览器语境下的行为）", () => {
     const got = pickFirstAvailable([
-      { rank: 1, availability: "skipped_for_web", current: false },
+      { rank: 1, availability: "no_device", current: false },
       {
         rank: 2,
         device_id: 5,
@@ -170,25 +224,64 @@ describe("pickFirstAvailable（R15d 守卫）", () => {
   });
 });
 
-describe("标题与本地会话标识", () => {
+describe("标题", () => {
   it("从首条消息派生标题（首行 + 截断）", () => {
     expect(deriveTitle("  讲讲这个项目  \n第二行")).toBe("讲讲这个项目");
     expect(deriveTitle("x".repeat(80)).length).toBeLessThanOrEqual(61);
   });
-
-  it("生成非零正整数会话标识（wire sessionId 语义）", () => {
-    for (let i = 0; i < 20; i++) {
-      const id = newSessionId();
-      expect(Number.isInteger(id)).toBe(true);
-      expect(id).toBeGreaterThan(0);
-    }
-  });
 });
 
-describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
-  it("向选中的 agentred 发 runtime.run，随后立刻把自己这条关注上（R16）", async () => {
+/**
+ * Pi 那三步的假执行端：把调用方报的会话号**原样回声**回去。
+ *
+ * 此前这几条用例靠 `vi.spyOn(Math, "random")` 把号摆到 7001/7002/7003 —— 那等于在
+ * 测试里复刻取号函数的内部算法，取号方式一换（随机 → 雪花）就全红，而它们真正
+ * 断言的是「三步用的是同一代身份」，跟号是几无关。daemon 本来就是回声的
+ * （`handlers/runtime.go` 的 `wire.RunAck{SessionID: p.SessionID}`），假的照它来，
+ * 顺带比钉常量更像真的。
+ */
+function echoedConversationId(params: unknown): string {
+  return (params as { conversationId: string }).conversationId;
+}
+
+/** 三次 runtime.run 报的对话身份。 */
+function runConversationIds(client: ReturnType<typeof fakeClient>): unknown[] {
+  return client.request.mock.calls
+    .filter(([method]) => method === rpcMethods.runtimeRun)
+    .map(([, value]) => (value as Record<string, unknown>).conversationId);
+}
+
+/** 浏览器铸的 UUIDv7（决策 1）的规范形式。 */
+const CONVERSATION_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => {
+  it("交回执行端 ack 里那个对话身份，并按它保存进账号", async () => {
     const client = fakeClient();
-    MockRelayClient.mockImplementation((() => client) as never);
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "真实协议 ACK",
+      sourceClient,
+    });
+
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
+    expect(mockedApi).toHaveBeenCalledWith("/v1/saved-sessions", {
+      method: "POST",
+      body: expect.stringContaining(
+        `"conversation_id":"${out.conversationId}"`,
+      ),
+    });
+  });
+
+  it("向选中的 agentred 发 runtime.run，随后立刻把这条对话保存进账号（R16）", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
 
     const out = await dispatchNewConversation({
       plan: availablePlan,
@@ -196,22 +289,20 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
       sourceClient,
     });
 
-    // 连的是选中那一档（设备指纹在 URL 里，JWT 走 Authorization 头）。
-    const constructorOpts = MockRelayClient.mock.calls[0][0] as {
-      url: string;
-      jwt: string;
-      reconnect: boolean;
-    };
-    expect(constructorOpts.url).toContain("fp-online");
-    expect(constructorOpts.url).toContain("web-jwt");
-    expect(constructorOpts.jwt).toBe("web-jwt");
-    // 一次性派发，不自动重连。
-    expect(constructorOpts.reconnect).toBe(false);
+    // 通道声明的目标是选中那一档（决策 11：新建对话按机器寻址——对话还不存在，
+    // 服务端解析不出承载它的机器）。
+    //
+    // 票来自 relayClientPool 而不是调用方手里那张：连接是**账号级共享**的，谁的
+    // 票说了算不能由借用方决定。
+    const constructorOpts = MockRelayClient.mock.calls[0][0];
+    expect(constructorOpts.target).toBe("machine:fp-online");
+    await expect(constructorOpts.credential()).resolves.toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
-    expect(method).toBe(MethodRun);
-    expect(p.sessionId).toBeGreaterThan(0);
+    expect(method).toBe(rpcMethods.runtimeRun);
+    // 号由发起端（这个浏览器）铸：UUIDv7 的规范形式。
+    expect(p.conversationId).toMatch(CONVERSATION_ID);
     expect(p.agentSyncId).toBe("agent-1");
     expect(p.cwd).toBe("/srv/agentre-server");
     expect(p.userText).toBe("讲讲这个项目");
@@ -222,21 +313,38 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
     // R17：不注入 mcpServers —— org / subagent / hook 用不了。
     expect(p.mcpServers).toBeUndefined();
 
-    // R16：run 成功后立刻 POST /v1/follows，让这条不经「关注」就出现在「对话」页。
-    expect(mockedApi).toHaveBeenCalledWith("/v1/follows", {
+    // R16：run 成功后立刻 POST /v1/saved-sessions，让这条对话保存进账号（发起即保存）。
+    //
+    // 身份的两半分开报：承载它的是那台 agentred，发起它的是这个浏览器。合成一个
+    // 值的话这条对话在镜像里永远匹配不上 —— 账号里保存了，左栏却一行都没有。
+    expect(mockedApi).toHaveBeenCalledWith("/v1/saved-sessions", {
       method: "POST",
       body: JSON.stringify({
-        device_fingerprint: "fp-online",
-        session_id: "9001",
+        machine_fingerprint: "fp-online",
+        peer_fingerprint: "fp-web",
+        conversation_id: out.conversationId,
       }),
     });
 
     expect(out).toEqual({
-      sessionId: 9001,
+      conversationId: out.conversationId,
       deviceId: 21,
       deviceFingerprint: "fp-online",
+      // 交出去的必须是这条对话的**发起端**——就是这个浏览器。落地那一屏拿它去问
+      // 镜像的历史与「已读」；给成机器指纹的话两处都在问一个账号里不存在的身份。
+      peerFingerprint: "fp-web",
+      // 与送给 daemon 的那一份是同一个 deriveTitle 结果：落地那一屏拿它填掉摘要
+      // 还没回来那一段，用户不必先看一串会话号。
+      title: "讲讲这个项目",
+      // 送过线的那一句原样交回：落地那一屏拿它接上草稿页画的那条气泡，转录的两条
+      // 真来路（镜像 / 中继）都还在往返时那一带才不是一片骨架。
+      userText: "讲讲这个项目",
+      // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
+      modelPinned: true,
+      reasoningEffortPinned: true,
     });
-    expect(client.close).toHaveBeenCalled();
+    // 不关：连接归池子，派发只是把租约还回去。
+    expect(client.close).not.toHaveBeenCalled();
   });
 
   it("全部档不可用时直接抛错，不发任何中继帧", async () => {
@@ -256,7 +364,9 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
   // 本机内置工具，可用性由发起前的界面按 kind=desktop 如实说明，不由浏览器注入）。
   it("目标是桌面端时向桌面端发 runtime.run 建会话（不注入 mcpServers）", async () => {
     const client = fakeClient();
-    MockRelayClient.mockImplementation((() => client) as never);
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
 
     const out = await dispatchNewConversation({
       plan: desktopPlan,
@@ -264,19 +374,14 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
       sourceClient,
     });
 
-    const constructorOpts = MockRelayClient.mock.calls[0][0] as {
-      url: string;
-      jwt: string;
-      reconnect: boolean;
-    };
-    expect(constructorOpts.url).toContain("fp-desk");
-    expect(constructorOpts.jwt).toBe("web-jwt");
-    expect(constructorOpts.reconnect).toBe(false);
+    const constructorOpts = MockRelayClient.mock.calls[0][0];
+    expect(constructorOpts.target).toBe("machine:fp-desk");
+    await expect(constructorOpts.credential()).resolves.toBe("relay-token");
 
     const [method, params] = client.request.mock.calls[0];
     const p = params as Record<string, unknown>;
-    expect(method).toBe(MethodRun);
-    expect(p.sessionId).toBeGreaterThan(0);
+    expect(method).toBe(rpcMethods.runtimeRun);
+    expect(p.conversationId).toMatch(CONVERSATION_ID);
     expect(p.agentSyncId).toBe("agent-1");
     expect(p.cwd).toBe("/Users/wyz/agentre-server");
     expect(p.userText).toBe("帮我看看这个项目");
@@ -286,32 +391,43 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
     expect(p.sourceDeviceName).toBe("Chrome · macOS");
     expect(p.mcpServers).toBeUndefined();
 
-    // R16：桌面端建会话成功后同样立刻关注自己这条。
-    expect(mockedApi).toHaveBeenCalledWith("/v1/follows", {
+    // R16：桌面端建会话成功后同样立刻把这条保存进账号。目标换成桌面端不改变这件事：
+    // 发起端仍是这个浏览器，承载它的是那台桌面机。
+    expect(mockedApi).toHaveBeenCalledWith("/v1/saved-sessions", {
       method: "POST",
       body: JSON.stringify({
-        device_fingerprint: "fp-desk",
-        session_id: "9001",
+        machine_fingerprint: "fp-desk",
+        peer_fingerprint: "fp-web",
+        conversation_id: out.conversationId,
       }),
     });
 
     expect(out).toEqual({
-      sessionId: 9001,
+      conversationId: out.conversationId,
       deviceId: 30,
       deviceFingerprint: "fp-desk",
+      peerFingerprint: "fp-web",
+      title: "帮我看看这个项目",
+      userText: "帮我看看这个项目",
+      // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
+      modelPinned: true,
+      reasoningEffortPinned: true,
     });
-    expect(client.close).toHaveBeenCalled();
+    // 不关：连接归池子，派发只是把租约还回去。
+    expect(client.close).not.toHaveBeenCalled();
   });
 
-  // R16 的自关注是**派发成功之后**的收尾动作:runtime.run 一旦返回 ack,那台机器上
-  // 就已经真真切切多了一条会话。此时把关注写失败(网络抖动 / server 500)报成派发
+  // R16 的发起即保存是**派发成功之后**的收尾动作:runtime.run 一旦返回 ack,那台机器上
+  // 就已经真真切切多了一条会话。此时把保存写失败(网络抖动 / server 500)报成派发
   // 失败,界面会说「联系不上这台机器,请重试」——用户一重试就凭空又开一条真会话,
-  // 而第一条还留在机器上跑。关注写不进去只是这条不会自动出现在「对话」页,不该
+  // 而第一条还留在机器上跑。保存写不进去只是这条不会自动出现在「对话」页,不该
   // 把已经成功的派发说成失败。
-  it("自关注写失败不把已经成功的派发报成失败(否则重试会开出第二条真会话)", async () => {
+  it("保存写失败不把已经成功的派发报成失败(否则重试会开出第二条真会话)", async () => {
     const client = fakeClient();
-    MockRelayClient.mockImplementation((() => client) as never);
-    mockedApi.mockRejectedValue(new Error("follows unavailable"));
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+    mockedApi.mockRejectedValue(new Error("saved-sessions unavailable"));
 
     const out = await dispatchNewConversation({
       plan: availablePlan,
@@ -321,17 +437,28 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
 
     expect(client.request).toHaveBeenCalled();
     expect(out).toEqual({
-      sessionId: 9001,
+      conversationId: out.conversationId,
       deviceId: 21,
       deviceFingerprint: "fp-online",
+      peerFingerprint: "fp-web",
+      title: "讲讲这个项目",
+      // 送过线的那一句原样交回：落地那一屏拿它接上草稿页画的那条气泡，转录的两条
+      // 真来路（镜像 / 中继）都还在往返时那一带才不是一片骨架。
+      userText: "讲讲这个项目",
+      // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
+      modelPinned: true,
+      reasoningEffortPinned: true,
     });
-    expect(client.close).toHaveBeenCalled();
+    // 不关：连接归池子，派发只是把租约还回去。
+    expect(client.close).not.toHaveBeenCalled();
   });
 
   it("连接失败时抛错并释放连接，不静默", async () => {
     const client = fakeClient();
     client.connect.mockRejectedValue(new Error("connect refused"));
-    MockRelayClient.mockImplementation((() => client) as never);
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
 
     await expect(
       dispatchNewConversation({
@@ -339,37 +466,464 @@ describe("dispatchNewConversation（R15 派发 + R16 自关注）", () => {
         message: "hi",
         sourceClient,
       }),
-    ).rejects.toThrow("connect refused");
+    ).rejects.toEqual(expect.any(DispatchConnectionError));
     expect(client.request).not.toHaveBeenCalled();
+    // 连不上那一条**要**关掉：池子当场把这个失败条目摘掉，不留给下一个人捡到
+    // 一条注定发不出请求的连接。
     expect(client.close).toHaveBeenCalled();
+  });
+
+  it("连接成功后 runtime.run 失败时保留远端错误并标记为运行失败", async () => {
+    const client = fakeClient();
+    client.request.mockRejectedValue(
+      new Error('exec: "claude": executable file not found in $PATH'),
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await expect(
+      dispatchNewConversation({
+        plan: availablePlan,
+        message: "hi",
+        sourceClient,
+      }),
+    ).rejects.toMatchObject({
+      name: "DispatchRunError",
+      message: 'exec: "claude": executable file not found in $PATH',
+    } satisfies Partial<DispatchRunError>);
+    expect(client.connect).toHaveBeenCalled();
+    // 派发失败也不关这条连接：它可能正被详情页用着。
+    expect(client.close).not.toHaveBeenCalled();
+  });
+
+  it("连接复用期间 socket 未就绪时标记为连接失败，不谎称 Agent 启动失败", async () => {
+    const client = fakeClient();
+    client.request.mockRejectedValue(
+      new RelayError(-1, "relay: 连接未就绪", null),
+    );
+
+    await expect(
+      dispatchNewConversation({
+        plan: availablePlan,
+        message: "hi",
+        sourceClient,
+        client: client as never,
+      }),
+    ).rejects.toEqual(expect.any(DispatchConnectionError));
+    expect(client.close).not.toHaveBeenCalled();
+  });
+
+  it("agentred 上的 Pi 用同一代身份完成注册、准备、启动后才算派发成功", async () => {
+    const client = fakeClient();
+    let step = 0;
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method !== rpcMethods.runtimeRun) return {};
+        step += 1;
+        const conversationId = echoedConversationId(params);
+        // 第一步是注册，它还没有 provider 会话；后两步才带回来。
+        return step === 1
+          ? { conversationId }
+          : { conversationId, providerSessionId: "pi-provider-1" };
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: agentredPiPlan,
+      message: "用 Pi 看看",
+      sourceClient,
+    });
+
+    const runs = client.request.mock.calls.filter(
+      ([method]) => method === rpcMethods.runtimeRun,
+    );
+    expect(runs).toHaveLength(3);
+    const params = runs.map(([, value]) => value as Record<string, unknown>);
+    // 三步同一个号，且就是最终交出去的那一个 —— 这才是「同一代身份」的意思。
+    expect(new Set(runConversationIds(client)).size).toBe(1);
+    expect(params[0].conversationId).toBe(out.conversationId);
+    expect(params[0].permissionMode).toEqual(expect.any(String));
+    expect(params[0].permissionMode).not.toBe("");
+    expect(params[1].permissionMode).toBe(params[0].permissionMode);
+    expect(params[2].permissionMode).toBe(params[0].permissionMode);
+    expect(params[0].providerSessionId).toBeUndefined();
+    expect(params[1].providerSessionId).toBeUndefined();
+    expect(params[2].providerSessionId).toBe("pi-provider-1");
+    expect(mockedApi).toHaveBeenCalledTimes(1);
+  });
+
+  // Given 本站用 http 部署（`http://coding.local:8443` = 非安全上下文，那里
+  // `crypto.randomUUID` 带 [SecureContext] 门槛、根本不存在）/ When 往 agentred 上的
+  // Pi 派发 / Then 三步照常走完。
+  //
+  // 回归：这一代身份此前直接调 `crypto.randomUUID()`，在 http 部署上抛 TypeError。
+  // 它既不是 DispatchRunError 也不是 DispatchConnectionError，草稿页于是落到兜底那
+  // 一支，对着一台连得上的机器说「连不上 coding，请重试」——而一帧中继都没发出去。
+  it("非安全上下文里（http 部署，没有 crypto.randomUUID）Pi 派发照常完成", async () => {
+    const realCrypto = globalThis.crypto;
+    vi.stubGlobal("crypto", {
+      getRandomValues: (buffer: Uint8Array) =>
+        realCrypto.getRandomValues(buffer),
+    });
+    expect(typeof crypto.randomUUID).toBe("undefined");
+
+    const client = fakeClient();
+    let step = 0;
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method !== rpcMethods.runtimeRun) return {};
+        step += 1;
+        const conversationId = echoedConversationId(params);
+        return step === 1
+          ? { conversationId }
+          : { conversationId, providerSessionId: "pi-provider-2" };
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: agentredPiPlan,
+      message: "用 Pi 看看",
+      sourceClient,
+    });
+
+    const runs = client.request.mock.calls.filter(
+      ([method]) => method === rpcMethods.runtimeRun,
+    );
+    expect(runs).toHaveLength(3);
+    const owners = runs.map(
+      ([, value]) => (value as Record<string, unknown>).permissionMode,
+    );
+    expect(owners[0]).toEqual(expect.any(String));
+    expect(owners[0]).not.toBe("");
+    expect(new Set(owners).size).toBe(1);
+    expect(runConversationIds(client)[0]).toBe(out.conversationId);
+  });
+
+  it("Pi 注册后准备失败会清理这一代，且不保存未启动的会话", async () => {
+    const client = fakeClient();
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method === rpcMethods.runtimeAbort) return {};
+        const runCount = client.request.mock.calls.filter(
+          ([called]) => called === rpcMethods.runtimeRun,
+        ).length;
+        if (runCount === 1)
+          return { conversationId: echoedConversationId(params) };
+        throw new Error("Pi prepare failed");
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await expect(
+      dispatchNewConversation({
+        plan: agentredPiPlan,
+        message: "用 Pi 看看",
+        sourceClient,
+        client: client as never,
+      }),
+    ).rejects.toMatchObject({
+      name: "DispatchRunError",
+      message: "Pi prepare failed",
+    });
+    // 清理的必须是**刚注册的那一条**，不是随手一个号。
+    expect(client.request).toHaveBeenCalledWith(rpcMethods.runtimeAbort, {
+      conversationId: runConversationIds(client)[0],
+    });
+    expect(mockedApi).not.toHaveBeenCalled();
+    expect(client.close).not.toHaveBeenCalled();
   });
 });
 
-// 派发计划按**调用方设备自己的**排列解析：浏览器取计划时带上自己的指纹，
-// 服务端据此重排执行目标链再走「取第一个可用」，Chosen 与逐档原因随之改变。
-// 取不到设备身份时照常取计划（回落账号顺序，不报错）——派发不该因为一个偏好
-// 读不到就失败，也不该为了凑一个指纹先把这台浏览器注册成一台设备。
-describe("fetchDispatchPlan（按调用方设备的顺序解析）", () => {
-  it("带上这台浏览器的设备指纹", async () => {
-    mockCallerDeviceFingerprint.mockReturnValue(sourceClient.clientId);
+// 派发计划按账号默认顺序（sort_order）解析 —— 用户在总览页排的就是它，所以查询串
+// 里不该出现任何调用方标识（决策 14 之前这里带 client_id，那一层已整个删掉）。
+describe("fetchDispatchPlan", () => {
+  it("查询串带上 Agent 与项目", async () => {
     mockedApi.mockResolvedValue(availablePlan);
 
-    const plan = await fetchDispatchPlan("agent-1", "proj-1");
+    const plan = await fetchDispatchPlan({
+      agentSyncId: "agent-1",
+      projectSyncId: "proj-1",
+    });
 
     expect(mockedApi).toHaveBeenCalledWith(
-      "/v1/workspace/dispatch-target?agent_sync_id=agent-1&project_sync_id=proj-1&client_id=fp-web",
+      "/v1/workspace/dispatch-target?agent_sync_id=agent-1&project_sync_id=proj-1",
     );
     expect(plan).toBe(availablePlan);
   });
 
-  it("这台浏览器还没有设备身份时照常取计划，不带指纹、也不注册一台", async () => {
-    mockCallerDeviceFingerprint.mockReturnValue(null);
+  it("不带项目时只有 Agent —— 不挑项目是一条自由会话，不是缺参数", async () => {
     mockedApi.mockResolvedValue(availablePlan);
 
-    await fetchDispatchPlan("agent-1");
+    await fetchDispatchPlan({ agentSyncId: "agent-1" });
 
     expect(mockedApi).toHaveBeenCalledWith(
       "/v1/workspace/dispatch-target?agent_sync_id=agent-1",
     );
+  });
+
+  // 「在哪台机器上跑」挑完那一档之后，浏览器要的是**那一档**的指纹与 cwd。
+  // 档结构上没有这两样（只有 chosen 有），所以必须把选中的档报给服务端重算。
+  it("挑了执行档时把它带进查询串", async () => {
+    mockedApi.mockResolvedValue(availablePlan);
+
+    await fetchDispatchPlan({
+      agentSyncId: "agent-1",
+      projectSyncId: "proj-1",
+      targetBackendSyncId: "b-b",
+    });
+
+    expect(mockedApi).toHaveBeenCalledWith(
+      "/v1/workspace/dispatch-target?agent_sync_id=agent-1" +
+        "&project_sync_id=proj-1&target_backend_sync_id=b-b",
+    );
+  });
+
+  it("挑了执行档但没挑项目：项目这一键缺席，执行档照常带上", async () => {
+    mockedApi.mockResolvedValue(availablePlan);
+
+    await fetchDispatchPlan({
+      agentSyncId: "agent-1",
+      targetBackendSyncId: "b-b",
+    });
+
+    expect(mockedApi).toHaveBeenCalledWith(
+      "/v1/workspace/dispatch-target?agent_sync_id=agent-1&target_backend_sync_id=b-b",
+    );
+  });
+});
+
+/**
+ * 草稿页上定下的档位与模型（规格 2026-08-24「草稿页的两颗控件」）。
+ *
+ * 两件事在协议上是分开的：档位随 `runtime.run` 过线就地生效，而模型目标过线只
+ * 管当轮 —— daemon 的 run 按轮 resolveTarget，不写 `daemon_sessions` 的那两列。
+ * 所以钉住要在 ack 之后补一次 `runtime.setModelTarget`，否则用户选的模型第一轮
+ * 生效、详情页却读回空 = 「跟随 Agent 绑定」。
+ */
+describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
+  it("档位与模型目标随第一句过线", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      permissionMode: "acceptEdits",
+      modelTarget: { providerKey: "pk-1", modelKey: "mk-1" },
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.permissionMode).toBe("acceptEdits");
+    expect(p.llmProviderKey).toBe("pk-1");
+    expect(p.llmModelKey).toBe("mk-1");
+  });
+
+  it("跟随 Agent 绑定（两格皆空）时不带模型键过线，也不去钉", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      modelTarget: { providerKey: "", modelKey: "" },
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    // 空串与「不带」在 daemon 上解出的值相同，但带一个空 provider 会让人以为
+    // 浏览器在主张什么；跟随绑定就是不主张。
+    expect(p.llmProviderKey).toBeUndefined();
+    expect(p.llmModelKey).toBeUndefined();
+    expect(
+      client.request.mock.calls.some(([m]) => m === rpcMethods.setModelTarget),
+    ).toBe(false);
+    expect(out.modelPinned).toBe(true);
+  });
+
+  it("没给档位时不带 permissionMode 过线", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.permissionMode).toBeUndefined();
+  });
+
+  it("ack 之后把模型目标钉在那条会话上（否则详情页读回空 = 跟随绑定）", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      modelTarget: { providerKey: "pk-1", modelKey: "" },
+    });
+
+    const pin = client.request.mock.calls.find(
+      ([m]) => m === rpcMethods.setModelTarget,
+    );
+    expect(pin).toBeTruthy();
+    expect(pin?.[1]).toEqual({
+      conversationId: out.conversationId,
+      providerKey: "pk-1",
+      modelKey: "",
+    });
+    expect(out.modelPinned).toBe(true);
+  });
+
+  /**
+   * 思考力度与模型目标同形（规格 2026-09-01「agentre-server 宿主」）：随第一句
+   * 过线让这一轮就按它跑，ack 之后再补钉一次 —— 只过线不钉住的话，用户选的档位
+   * 第一轮生效、随后打开详情页却读回「跟随后端配置」。
+   */
+  it("选了思考力度：随第一句过线，ack 之后补钉一次", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      reasoningEffort: "high",
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.reasoningEffort).toBe("high");
+    const pins = client.request.mock.calls.filter(
+      ([m]) => m === rpcMethods.setSessionReasoningEffort,
+    );
+    expect(pins).toHaveLength(1);
+    expect(pins[0][1]).toEqual({
+      conversationId: out.conversationId,
+      reasoningEffort: "high",
+    });
+    expect(out.reasoningEffortPinned).toBe(true);
+  });
+
+  // 空 = 跟随后端配置，而「跟随」本来就是不主张：带一个空值过线会被执行端当成
+  // 「这条会话显式选了默认档」，把后端配置整个丢掉（硬不变量 6）。
+  it("没选思考力度时不带它过线，也不去钉", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.reasoningEffort).toBeUndefined();
+    expect(
+      client.request.mock.calls.some(
+        ([m]) => m === rpcMethods.setSessionReasoningEffort,
+      ),
+    ).toBe(false);
+  });
+
+  // 与钉模型同一条规矩：派发已经成功，钉不住不能把它报成失败。
+  it("力度钉不住不算派发失败", async () => {
+    const client = fakeClient();
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method === rpcMethods.setSessionReasoningEffort)
+          throw new Error("unknown method");
+        return {
+          conversationId:
+            (params as { conversationId?: string })?.conversationId ?? "",
+        };
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      reasoningEffort: "max",
+    });
+
+    // 派发成功照旧（这条对话真的开起来了），但**如实回报**没钉住：详情页据此
+    // 说明「第一轮按它跑了，后续轮次回到跟随后端配置」。
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
+    expect(out.reasoningEffortPinned).toBe(false);
+  });
+
+  // 派发已经成功，那台机器上真真切切多了一条按所选模型跑起来的会话。把钉不住
+  // 报成派发失败，用户一重试就凭空再开一条 —— 与 R16 保存失败同一条规矩。
+  it("钉不住不算派发失败，如实回报没钉住", async () => {
+    const client = fakeClient();
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method === rpcMethods.setModelTarget)
+          throw new Error("unknown method");
+        return {
+          conversationId:
+            (params as { conversationId?: string })?.conversationId ?? "",
+        };
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      modelTarget: { providerKey: "pk-1", modelKey: "mk-1" },
+    });
+
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
+    expect(out.modelPinned).toBe(false);
+  });
+
+  // 草稿页开局就连上了那台机器（问档位用的正是它）。再开一条等于同一台机器上
+  // 两条会话连接，而第一条的失败信息会被第二条覆盖。
+  it("给了现成连接就复用它，不再另开一条", async () => {
+    const client = fakeClient();
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      client: client as never,
+    });
+
+    expect(MockRelayClient).not.toHaveBeenCalled();
+    expect(client.connect).not.toHaveBeenCalled();
+    // 连接不是这次派发建的，就不该由这次派发关掉：草稿页还要用它。
+    expect(client.close).not.toHaveBeenCalled();
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
   });
 });

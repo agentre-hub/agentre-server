@@ -1,0 +1,8 @@
+{
+  "compact": {
+    "description": "Compact the current context"
+  },
+  "goal": {
+    "description": "Set a goal for this turn"
+  }
+}

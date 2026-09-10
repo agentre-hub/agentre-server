@@ -2,79 +2,75 @@ package middleware
 
 import (
 	"net/http"
-	"strings"
+	"time"
 
-	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	"agentre-server/internal/pkg/code"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/apierr"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 )
 
-func DeviceJWT(signer *jwt.Signer) gin.HandlerFunc {
+func DeviceJWT(signer *jwt.Signer, blacklist *jwtblacklist.Blacklist) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, ok := verifiedJWT(c, signer)
+		claims, biz, ok := verifiedJWT(c, signer, blacklist)
 		if !ok {
+			apierr.Abort(c, http.StatusUnauthorized, biz)
 			return
 		}
-		if claims.Kind == "relay_client" || claims.DID == 0 {
-			abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
+		if !isDeviceCredential(claims) {
+			apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+			return
+		}
+		if accountBlocked(c, claims.UID) {
 			return
 		}
 		setJWTClaims(c, claims)
 		c.Next()
 	}
+}
+
+// relayTicketBurnTTL 是焚毁记号的存活时间:盖住票自己的有效期(签发处的
+// relayTicketTTL,2 分钟)再加上验签允许的时钟偏移就够 —— 票在那之后本来就验不过,
+// 记号活得更久没有意义。
+const relayTicketBurnTTL = 2*time.Minute + jwt.Leeway
+
+// consumeBrowserTicket 认领这张浏览器票据。已经用过、或判不出来,都当场拒掉
+// (fail-closed,理由见 relayticket.Consume)。
+func consumeBrowserTicket(c *gin.Context, jti string, tickets *relayticket.Tickets) bool {
+	first, err := tickets.Consume(c.Request.Context(), jti, relayTicketBurnTTL)
+	if err != nil || !first {
+		apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+		return false
+	}
+	return true
 }
 
 // RelayClientJWT accepts ordinary device JWTs for native clients and the browser's
 // short-lived relay_client ticket. The latter is deliberately rejected by DeviceJWT.
-func RelayClientJWT(signer *jwt.Signer) gin.HandlerFunc {
+func RelayClientJWT(signer *jwt.Signer, blacklist *jwtblacklist.Blacklist,
+	tickets *relayticket.Tickets) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, ok := verifiedJWT(c, signer)
+		claims, biz, ok := verifiedJWT(c, signer, blacklist)
 		if !ok {
+			apierr.Abort(c, http.StatusUnauthorized, biz)
 			return
 		}
-		if claims.Kind == "relay_client" {
-			if claims.DID != 0 {
-				abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
-				return
-			}
-		} else if claims.DID == 0 {
-			abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
+		if !isRelayClientCredential(claims) {
+			apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+			return
+		}
+		// 浏览器票据用后即焚，见 auth_svc.ConsumeRelayTicket。原生端的设备 JWT
+		// (DID != 0) 不在此列:它是长期凭据,本来就要反复使用。
+		if claims.Kind == "relay_client" && !consumeBrowserTicket(c, claims.JTI, tickets) {
+			return
+		}
+		if accountBlocked(c, claims.UID) {
 			return
 		}
 		setJWTClaims(c, claims)
 		c.Next()
 	}
-}
-
-func verifiedJWT(c *gin.Context, signer *jwt.Signer) (*jwt.Claims, bool) {
-	h := c.GetHeader("Authorization")
-	if !strings.HasPrefix(h, "Bearer ") {
-		abortJWT(c, code.Unauthorized, http.StatusUnauthorized)
-		return nil, false
-	}
-	claims, err := signer.Verify(strings.TrimPrefix(h, "Bearer "))
-	if err != nil {
-		abortJWT(c, code.JWTSignatureInvalid, http.StatusUnauthorized)
-		return nil, false
-	}
-	if jwtblacklist.Has(c.Request.Context(), claims.JTI) {
-		abortJWT(c, code.JWTBlacklisted, http.StatusUnauthorized)
-		return nil, false
-	}
-	return claims, true
-}
-
-func setJWTClaims(c *gin.Context, claims *jwt.Claims) {
-	c.Set("user_id", claims.UID)
-	c.Set("device_id", claims.DID)
-	c.Set("device_kind", claims.Kind)
-}
-
-func abortJWT(c *gin.Context, biz int, status int) {
-	c.AbortWithStatusJSON(status, gin.H{
-		"code": biz, "msg": i18n.T(c.Request.Context(), biz), "data": nil,
-	})
 }

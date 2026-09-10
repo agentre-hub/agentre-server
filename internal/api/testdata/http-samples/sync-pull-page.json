@@ -1,0 +1,52 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/sync/pull?cursor=10&limit=3"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "msg": "success",
+      "data": {
+        "items": [
+          {
+            "kind": "project",
+            "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+            "payload": {
+              "name": "Alpha"
+            },
+            "version": 11,
+            "updated_at": 1700000000000,
+            "origin_fingerprint": "fp-desktop-02",
+            "deleted_at": 0
+          },
+          {
+            "kind": "project_location",
+            "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P2",
+            "project_sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+            "agentred_fingerprint": "fp-agentred-01",
+            "payload": {
+              "configured": true
+            },
+            "version": 12,
+            "updated_at": 1700000001000,
+            "origin_fingerprint": "fp-desktop-02",
+            "deleted_at": 0
+          },
+          {
+            "kind": "agent",
+            "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P3",
+            "payload": {},
+            "version": 13,
+            "updated_at": 1700000002000,
+            "origin_fingerprint": "fp-desktop-02",
+            "deleted_at": 1700000002000
+          }
+        ],
+        "next_cursor": 13,
+        "has_more": true
+      }
+    }
+  }
+}

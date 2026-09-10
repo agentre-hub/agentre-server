@@ -7,8 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	api "agentre-server/internal/api/sync"
-	"agentre-server/internal/service/sync_svc"
+	api "github.com/agentre-hub/agentre-server/internal/api/sync"
+	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
+	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
 )
 
 type Sync struct{}
@@ -18,11 +19,7 @@ func New() *Sync { return &Sync{} }
 // caller 取调用方账号与设备。这两个值只来自 device JWT 的 claims，不接受任何
 // URL 或 body 参数——否则任何设备都能冒充别人上行。
 func caller(c *gin.Context) (userID, deviceID int64) {
-	uid, _ := c.Get("user_id")
-	did, _ := c.Get("device_id")
-	userID, _ = uid.(int64)
-	deviceID, _ = did.(int64)
-	return userID, deviceID
+	return ginctx.UserID(c), ginctx.DeviceID(c)
 }
 
 func (s *Sync) Push(c *gin.Context, req *api.PushRequest) (*api.PushResponse, error) {
@@ -34,7 +31,7 @@ func (s *Sync) Push(c *gin.Context, req *api.PushRequest) (*api.PushResponse, er
 			SyncID:              it.SyncID,
 			BaseVersion:         it.BaseVersion,
 			UpdatedAt:           it.UpdatedAt,
-			Deleted:             it.Deleted,
+			DeletedAt:           it.DeletedAt,
 			AgentredFingerprint: it.AgentredFingerprint,
 			ProjectSyncID:       it.ProjectSyncID,
 			Payload:             it.Payload,
@@ -48,17 +45,17 @@ func (s *Sync) Push(c *gin.Context, req *api.PushRequest) (*api.PushResponse, er
 	resp := &api.PushResponse{Results: make([]api.PushItemResult, 0, len(out.Results))}
 	for _, r := range out.Results {
 		resp.Results = append(resp.Results, api.PushItemResult{
-			SyncID:              r.SyncID,
-			Kind:                r.Kind,
-			Version:             r.Version,
-			Status:              r.Status,
-			Reason:              r.Reason,
-			OverwrittenVersion:  r.OverwrittenVersion,
-			OverwrittenDeviceID: r.OverwrittenDeviceID,
-			OverwrittenPayload:  json.RawMessage(r.OverwrittenPayload),
-			MergedSyncID:        r.MergedSyncID,
-			MergedVersion:       r.MergedVersion,
-			MergedDeviceID:      r.MergedDeviceID,
+			SyncID:                       r.SyncID,
+			Kind:                         r.Kind,
+			Version:                      r.Version,
+			Status:                       r.Status,
+			Reason:                       r.Reason,
+			OverwrittenVersion:           r.OverwrittenVersion,
+			OverwrittenOriginFingerprint: r.OverwrittenOriginFingerprint,
+			OverwrittenPayload:           json.RawMessage(r.OverwrittenPayload),
+			MergedSyncID:                 r.MergedSyncID,
+			MergedVersion:                r.MergedVersion,
+			MergedOriginFingerprint:      r.MergedOriginFingerprint,
 		})
 	}
 	return resp, nil
@@ -86,8 +83,8 @@ func (s *Sync) Pull(c *gin.Context, req *api.PullRequest) (*api.PullResponse, er
 			Payload:             it.Payload,
 			Version:             it.Version,
 			UpdatedAt:           it.UpdatedAt,
-			SourceDeviceID:      it.SourceDeviceID,
-			Deleted:             it.Deleted,
+			OriginFingerprint:   it.OriginFingerprint,
+			DeletedAt:           it.DeletedAt,
 		})
 	}
 	return resp, nil

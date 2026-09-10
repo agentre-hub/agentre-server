@@ -19,6 +19,8 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
+
+	serversession "github.com/agentre-hub/agentre-server/internal/pkg/session"
 )
 
 func accountEmail(runID string) string { return "webe2e-" + runID + "@e2e.invalid" }
@@ -42,14 +44,8 @@ type browserSession struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
-type sessionPayload struct {
-	UserID    int64  `json:"user_id"`
-	CSRFToken string `json:"csrf_token"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-func newSessionPayload(userID int64, csrf string, createdAt int64) sessionPayload {
-	return sessionPayload{UserID: userID, CSRFToken: csrf, CreatedAt: createdAt}
+func newSessionPayload(userID int64, csrf string, createdAt int64) serversession.Session {
+	return serversession.Session{UserID: userID, CSRFToken: csrf, CreatedAt: createdAt}
 }
 
 type seedResult struct {
@@ -83,7 +79,11 @@ func cleanupSQL() []sqlStep {
 		{"sync_avatars", `DELETE FROM sync_avatars WHERE user_id = ?`},
 		{"sync_objects", `DELETE FROM sync_objects WHERE user_id = ?`},
 		{"sync_account_seqs", `DELETE FROM sync_account_seqs WHERE user_id = ?`},
-		{"followed_sessions", `DELETE FROM followed_sessions WHERE user_id = ?`},
+		{"agent_session_saves", `DELETE FROM agent_session_saves WHERE user_id = ?`},
+		// 通行密钥：webauthn_credentials 没有指向 users 的外键（迁移
+		// 202608180002 刻意不建），删账号不会带走它。不在这里删一次，凭证行就永久
+		// 留在专库里，账号却已经不存在了。
+		{"webauthn_credentials", `DELETE FROM webauthn_credentials WHERE user_id = ?`},
 		{"devices", `DELETE FROM devices WHERE user_id = ?`},
 		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`},
 		{"users", `DELETE FROM users WHERE id = ?`},
@@ -99,7 +99,8 @@ func residueSQL() []sqlStep {
 		{"sync_avatars", `SELECT count(*) FROM sync_avatars WHERE user_id = ?`},
 		{"sync_objects", `SELECT count(*) FROM sync_objects WHERE user_id = ?`},
 		{"sync_account_seqs", `SELECT count(*) FROM sync_account_seqs WHERE user_id = ?`},
-		{"followed_sessions", `SELECT count(*) FROM followed_sessions WHERE user_id = ?`},
+		{"agent_session_saves", `SELECT count(*) FROM agent_session_saves WHERE user_id = ?`},
+		{"webauthn_credentials", `SELECT count(*) FROM webauthn_credentials WHERE user_id = ?`},
 		{"devices", `SELECT count(*) FROM devices WHERE user_id = ?`},
 		{"user_identities", `SELECT count(*) FROM user_identities WHERE user_id = ?`},
 		{"users", `SELECT count(*) FROM users WHERE id = ?`},
@@ -115,6 +116,7 @@ func oracleSQL() []sqlStep {
 		{"device_flow_codes", `SELECT device_kind, authorized_user_id, approved_at, consumed_at, denied_at, expires_at FROM device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`},
 		{"devices", `SELECT id, kind, status FROM devices WHERE user_id = ?`},
 		{"device_tokens", `SELECT dt.device_id, dt.refresh_expires_at, dt.last_used_at, dt.revoked_at FROM device_tokens dt JOIN devices d ON d.id = dt.device_id WHERE d.user_id = ?`},
+		{"sync_objects", `SELECT sync_id, kind, version, deleted_at FROM sync_objects WHERE user_id = ? ORDER BY kind, sync_id`},
 	}
 }
 
@@ -199,15 +201,14 @@ func runSeed(args []string) error {
 	now := time.Now().UnixMilli()
 	out := &seedResult{RunID: *runID, Email: accountEmail(*runID), FlowFingerprint: flowFingerprint(*runID)}
 	user := struct {
-		ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
-		Email         string `gorm:"column:email"`
-		EmailVerified bool   `gorm:"column:email_verified"`
-		DisplayName   string `gorm:"column:display_name"`
-		AvatarURL     string `gorm:"column:avatar_url"`
-		Status        int    `gorm:"column:status"`
-		Createtime    int64  `gorm:"column:createtime"`
-		Updatetime    int64  `gorm:"column:updatetime"`
-	}{Email: out.Email, EmailVerified: true, DisplayName: "webe2e " + *runID, Status: 1, Createtime: now, Updatetime: now}
+		ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+		Email       string `gorm:"column:email"`
+		DisplayName string `gorm:"column:display_name"`
+		AvatarURL   string `gorm:"column:avatar_url"`
+		Status      int    `gorm:"column:status"`
+		Createtime  int64  `gorm:"column:createtime"`
+		Updatetime  int64  `gorm:"column:updatetime"`
+	}{Email: out.Email, DisplayName: "webe2e " + *runID, Status: 1, Createtime: now, Updatetime: now}
 	if err := gdb.Table("users").Create(&user).Error; err != nil {
 		return fmt.Errorf("insert user: %w", err)
 	}
@@ -387,12 +388,20 @@ type tokenState struct {
 	RevokedAt        int64 `json:"revoked_at"`
 }
 
+type syncObjectState struct {
+	SyncID    string `json:"sync_id"`
+	Kind      string `json:"kind"`
+	Version   int64  `json:"version"`
+	DeletedAt int64  `json:"deleted_at"`
+}
+
 type oracleResult struct {
-	RunID   string        `json:"run_id"`
-	UserID  int64         `json:"user_id"`
-	Flows   []flowState   `json:"flows"`
-	Devices []deviceState `json:"devices"`
-	Tokens  []tokenState  `json:"tokens"`
+	RunID       string            `json:"run_id"`
+	UserID      int64             `json:"user_id"`
+	Flows       []flowState       `json:"flows"`
+	Devices     []deviceState     `json:"devices"`
+	Tokens      []tokenState      `json:"tokens"`
+	SyncObjects []syncObjectState `json:"sync_objects"`
 }
 
 func runOracle(args []string) error {
@@ -417,7 +426,7 @@ func runOracle(args []string) error {
 	if users != 1 {
 		return fmt.Errorf("run user not found")
 	}
-	out := oracleResult{RunID: *runID, UserID: *userID, Flows: []flowState{}, Devices: []deviceState{}, Tokens: []tokenState{}}
+	out := oracleResult{RunID: *runID, UserID: *userID, Flows: []flowState{}, Devices: []deviceState{}, Tokens: []tokenState{}, SyncObjects: []syncObjectState{}}
 	steps := oracleSQL()
 	if err := gdb.Raw(steps[0].SQL, *userID, flowFingerprint(*runID)).Scan(&out.Flows).Error; err != nil {
 		return fmt.Errorf("query device flow state: %w", err)
@@ -427,6 +436,9 @@ func runOracle(args []string) error {
 	}
 	if err := gdb.Raw(steps[2].SQL, *userID).Scan(&out.Tokens).Error; err != nil {
 		return fmt.Errorf("query token state: %w", err)
+	}
+	if err := gdb.Raw(steps[3].SQL, *userID).Scan(&out.SyncObjects).Error; err != nil {
+		return fmt.Errorf("query sync object state: %w", err)
 	}
 	return emit(out)
 }

@@ -1,0 +1,29 @@
+{
+  "productSub": "Console",
+  "connection": {
+    "connected": "Live",
+    "connecting": "Connecting…",
+    "disconnected": "Not connected",
+    "degraded": "{{status}} · every 30s",
+    "connectedHint": "Changes show up here as they happen",
+    "connectingHint": "Reconnecting — refreshing every 30 seconds meanwhile",
+    "pollingHint": "No live signal — refreshing every 30 seconds instead",
+    "retry": "Reconnect live updates"
+  },
+  "userMenu": {
+    "trigger": "Account menu",
+    "account": "Account & security",
+    "settings": "Settings",
+    "signOut": "Sign out"
+  },
+  "nav": {
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar",
+    "chatBadge": {
+      "needsAttention_one": "{{count}} conversation needs you",
+      "needsAttention_other": "{{count}} conversations need you",
+      "unread_one": "{{count}} unread",
+      "unread_other": "{{count}} unread"
+    }
+  }
+}

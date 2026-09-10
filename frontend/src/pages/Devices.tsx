@@ -1,43 +1,51 @@
-import { useEffect, useState } from "react";
+import {
+  rpcMethods,
+  sessionCountsFromProtobuf,
+} from "@agentre-hub/agentre-wire";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp, Cpu, Plus } from "lucide-react";
+import { ChevronDown, ChevronUp, Cpu, MoreVertical, Plus } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Alert } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
-  Dialog,
-  DialogBody,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { RowMenu, StatusMark } from "@/components/console";
+  Alert,
+  AlertDescription,
+  Button,
+  DialogShell,
+  DialogShellBody,
+  DialogShellFooter,
+  DialogShellHeader,
+  DialogShellSubmit,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  Skeleton,
+  cn,
+} from "@agentre-hub/agentre-ui";
+import { Card } from "@/components/ui/card";
+import { StatusMark } from "@/components/console";
 import type { StatusTone } from "@/components/console";
 import { AddDeviceGuide } from "@/components/AddDeviceGuide";
+import {
+  DeviceUpgradePanel,
+  DeviceVersionBadge,
+  deviceVersionState,
+  deviceVersionText,
+} from "@/components/devices/DeviceUpgrade";
 import AppShell from "@/components/AppShell";
 import { useIsMobile } from "@/components/use-is-mobile";
+import { useAccountChannel } from "@/hooks/use-account-channel";
+import { useAliveEffect } from "@/hooks/use-api-query";
+import { useLatestRelease } from "@/hooks/use-latest-release";
 import { useRelayMachine } from "@/hooks/use-relay";
-import { api, ApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
-import { decodeSessionListResult, MethodSessionList } from "@/lib/wire";
+import { machineTarget } from "@/lib/relayTarget";
+import { AccountChannelDevicePresence } from "@/lib/accountChannel";
+import { api } from "@/lib/api";
 import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
-
-interface DeviceItem {
-  id: number;
-  name: string;
-  kind: string;
-  platform: string;
-  version: string;
-  fingerprint: string;
-  last_seen_at: number;
-  status: number;
-  online: boolean;
-  is_this_device: boolean;
-}
+import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { loadErrorText } from "@/lib/loadError";
+import { formatRelativeTime } from "@/lib/sessionView";
 
 interface RunnableAgentItem {
   sync_id: string;
@@ -69,20 +77,22 @@ const ACTIVE = 1;
 const KIND_AGENTRED = "agentred";
 const KIND_DESKTOP = "desktop";
 
-// 只有 ApiError 才带可展示的服务端文案；其余(代理返回非 JSON 的 502 → SyntaxError、
-// 离线 → TypeError)同样是失败，必须说出来 —— 静默吞掉会让页面渲染成「还没有任何
-// 设备」，而用户名下的设备一台没少。
-function loadErrorText(e: unknown, t: (key: string) => string): string {
-  return e instanceof ApiError ? e.message : t("device.manage.loadError");
-}
-
-function detailErrorText(e: unknown, t: (key: string) => string): string {
-  return e instanceof ApiError ? e.message : t("device.manage.detailLoadError");
-}
-
-function formatLastActive(ms: number): string {
+/**
+ * 「最后在线」的相对形态。
+ *
+ * 此前这里是裸的 `toLocaleString()` —— 一串机器格式的年月日时分秒挤进一行 mono
+ * 小字。全站其余各处（会话索引、状态横幅、总览、组织面详情头）早就是
+ * `formatRelativeTime` + `title` 挂绝对时刻这一套，只有这一页没跟上。
+ * 绝对时刻不丢，退到 title 上，见 lastActiveTitle。
+ */
+function formatLastActive(ms: number, locale: string): string {
   if (!ms) return "—";
-  return new Date(ms).toLocaleString();
+  return formatRelativeTime(ms, locale);
+}
+
+/** 那一行 meta 的 title：相对时刻读得快，绝对时刻仍然要拿得到。 */
+function lastActiveTitle(ms: number): string | undefined {
+  return ms ? new Date(ms).toLocaleString() : undefined;
 }
 
 /** 行首状态点（装饰）：online=运行绿，其余=中性灰。颜色不是状态的唯一表达—— */
@@ -121,29 +131,27 @@ function useSessionCounts(
   fingerprint: string | null,
   active: boolean,
 ): SessionCounts | null {
-  const { client, relayState } = useRelayMachine(fingerprint);
+  // 设备页问的是「这台机器上有什么」：机器作用域的操作走 machine:（决策 11）。
+  const { client, relayState } = useRelayMachine(
+    fingerprint ? machineTarget(fingerprint) : null,
+  );
   const [counts, setCounts] = useState<SessionCounts | null>(null);
 
-  useEffect(() => {
-    if (!active || !client || relayState !== "connected") return;
-    let alive = true;
-    client
-      .request(MethodSessionList)
-      .then((raw) => {
-        if (!alive) return;
-        const res = decodeSessionListResult(raw);
-        setCounts({
-          total: res.sessions.length,
-          waiting: res.sessions.filter((s) => s.waitingForInput).length,
-          running: res.sessions.filter((s) => s.lifecycleState === "running")
-            .length,
-        });
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, [active, client, relayState]);
+  useAliveEffect(
+    (alive) => {
+      if (!active || !client || relayState !== "connected") return;
+      // 问三个数,而不是把整份清单拉过来自己数:那台机器上可能有几千条对话,为了
+      // 卡片上这三个数字把它们全搬过线,正是设备页展开一下就卡住的原因。
+      client
+        .request(rpcMethods.sessionCounts, {})
+        .then((raw) => {
+          if (!alive()) return;
+          setCounts(sessionCountsFromProtobuf(raw));
+        })
+        .catch(() => {});
+    },
+    [active, client, relayState],
+  );
 
   return counts;
 }
@@ -157,25 +165,145 @@ function useSessionCounts(
  *
  * 只渲染真实数据；N1/N2 旁白（「只显示是否配置」「Agent 属于账号」）不进入产品。
  */
+/**
+ * 设备行的「更多操作」（规格 2026-08-22 E 段）。
+ *
+ * 宽屏与窄屏两处行布局各要一个，形状完全一样——立在这里而不是把同一段 Radix
+ * 组合贴两遍。菜单本身归共享包：视口封顶、内部可滚、贴边翻转、键盘语义都由它给，
+ * 此前本站那份手写实现这四样一样都没有。
+ */
+function DeviceRowMenu({
+  id,
+  name,
+  onRevoke,
+}: {
+  id: number;
+  name: string;
+  onRevoke: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("console.aria.rowActionsNamed", { name })}
+          data-testid={`device-menu-${id}-trigger`}
+        >
+          <MoreVertical className="size-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[160px]">
+        <DropdownMenuItem variant="destructive" onSelect={onRevoke}>
+          {t("device.manage.revokeConfirm")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * 设备列表首屏的骨架。
+ *
+ * 它取代的是一行 `common.loading`。那行字有两个问题：**不占位置**——加载期间动作行、
+ * 引导、顶栏计数全都不渲染，数据落地时一次性把内容顶下去；以及它和「这个账号一台
+ * 设备都没有」看起来差不多。骨架按真实卡片的构成摆，占的正是最终布局的位置。
+ *
+ * 骨架自己 `aria-hidden`：正在取这件事由容器上的 `aria-busy` 说。
+ */
+function DeviceListSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div data-testid="device-list-loading" aria-busy="true">
+      <div
+        data-testid="device-list-skeleton"
+        aria-hidden="true"
+        className="flex flex-col gap-2.5"
+      >
+        {Array.from({ length: rows }, (_, i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3.5"
+          >
+            <Skeleton className="size-9 shrink-0 rounded-md" />
+            <span className="flex min-w-0 flex-1 flex-col gap-2">
+              <Skeleton className="h-3.5" style={{ width: `${44 - i * 8}%` }} />
+              <Skeleton className="h-2.5 w-3/5" />
+            </span>
+            <Skeleton className="h-5 w-16 shrink-0 rounded-md" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 展开区正文的骨架：两节，各一条组标题 + 两行内容。 */
+function DeviceDetailSkeleton() {
+  return (
+    <div data-testid="device-detail-loading" aria-busy="true">
+      <div
+        data-testid="device-detail-skeleton"
+        aria-hidden="true"
+        className="flex flex-col gap-3"
+      >
+        {[0, 1].map((section) => (
+          <div key={section} className="flex flex-col gap-2">
+            <Skeleton className="h-2.5 w-20" />
+            <div className="flex flex-wrap gap-2">
+              {[0, 1, 2].map((chip) => (
+                <Skeleton
+                  key={chip}
+                  className="h-6 rounded-md"
+                  style={{ width: 72 + chip * 24 }}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function DeviceExpandDetail({
   state,
   device,
   counts,
   t,
+  locale,
+  onRetry,
 }: {
   state: { loading: boolean; error: unknown; data: DeviceDetail | null };
   device: DeviceItem;
   counts: SessionCounts | null;
   t: (key: string, opts?: Record<string, unknown>) => string;
+  /** i18n.language。相对时刻要它，`t` 带不出来。 */
+  locale: string;
+  /** 详情读失败后重来一次。 */
+  onRetry: () => void;
 }) {
   if (state.loading) {
-    return (
-      <p className="text-sm text-muted-foreground">{t("common.loading")}</p>
-    );
+    return <DeviceDetailSkeleton />;
   }
   if (state.error) {
+    const message = loadErrorText(
+      state.error,
+      t,
+      "device.manage.detailLoadError",
+    );
     return (
-      <Alert variant="destructive">{detailErrorText(state.error, t)}</Alert>
+      // 「收起再展开」确实会重试（不缓存失败是刻意的），但那条出路界面上一个字都
+      // 没提过，用户只会去刷新整页。
+      <Alert variant="destructive">
+        <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
+          <span className="min-w-0">{message}</span>
+          <span className="flex-1" />
+          <Button size="xs" variant="outline" onClick={onRetry}>
+            {t("common.retry")}
+          </Button>
+        </AlertDescription>
+      </Alert>
     );
   }
   const detail = state.data;
@@ -187,7 +315,7 @@ function DeviceExpandDetail({
     <div className="flex flex-col gap-3 border-t border-border pt-3">
       {isAgentred && (
         <div className="flex flex-col gap-1.5">
-          <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+          <span className="font-mono text-3xs font-medium text-muted-foreground">
             {t("device.manage.runnableAgents")}
           </span>
           {(detail.runnable_agents ?? []).length === 0 ? (
@@ -202,7 +330,7 @@ function DeviceExpandDetail({
                   className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
                 >
                   {a.name}
-                  <span className="font-mono text-[9px] text-subtle-foreground">
+                  <span className="font-mono text-[9px] text-muted-foreground">
                     {t("device.manage.rankLabel", { rank: a.rank })}
                   </span>
                 </span>
@@ -212,7 +340,7 @@ function DeviceExpandDetail({
         </div>
       )}
       <div className="flex flex-col gap-1.5">
-        <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+        <span className="font-mono text-3xs font-medium text-muted-foreground">
           {t("device.manage.projects")}
         </span>
         {detail.projects.length === 0 ? (
@@ -244,7 +372,7 @@ function DeviceExpandDetail({
       </div>
       {(isAgentred || isDesktop) && (
         <div className="flex flex-col gap-1.5 border-t border-border pt-3">
-          <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+          <span className="font-mono text-3xs font-medium text-muted-foreground">
             {t("device.manage.sessions")}
           </span>
           {device.online ? (
@@ -283,7 +411,7 @@ function DeviceExpandDetail({
                   : "device.manage.offlineNotEnterable",
               )}
               {device.last_seen_at > 0
-                ? ` ${new Date(device.last_seen_at).toLocaleString()}`
+                ? ` ${formatRelativeTime(device.last_seen_at, locale)}`
                 : ""}
             </p>
           )}
@@ -319,7 +447,11 @@ function DeviceRow({
   onToggle,
   onRevoke,
   detailState,
+  onRetryDetail,
+  latest,
+  onDevices,
   t,
+  locale,
 }: {
   d: DeviceItem;
   isMobile: boolean;
@@ -327,7 +459,14 @@ function DeviceRow({
   onToggle: () => void;
   onRevoke: () => void;
   detailState: { loading: boolean; error: unknown; data: DeviceDetail | null };
+  onRetryDetail: () => void;
+  /** 服务端缓存的最新发布版本；空串 = 不知道，此时卡上不下任何判断（决策 12/19）。 */
+  latest: string;
+  /** 升级轮询取到的新清单：回填给页面，卡上的版本因此跟着变。 */
+  onDevices: (devices: DeviceItem[]) => void;
   t: (key: string, opts?: Record<string, unknown>) => string;
+  /** i18n.language。相对时刻要它，`t` 带不出来。 */
+  locale: string;
 }) {
   // 只有展开的在线 agentred / 桌面端才去问中继；其余设备 fingerprint 传 null，不连。
   const sessionActive =
@@ -349,14 +488,25 @@ function DeviceRow({
         })
       : null;
 
-  const meta = [d.platform, d.version, formatLastActive(d.last_seen_at)]
+  // agentred 才有自更新这件事：桌面端的版本由它自己的更新流程管，控制台不插手。
+  const isAgentred = d.kind === KIND_AGENTRED;
+  const versionState = deviceVersionState(d, latest);
+
+  // 版本位上画的是判定之后的说法：开发构建如实说是开发构建，而不是它自称的那个
+  // 不可比的版本号（决策 5）。非 agentred 的行没有这项判定，原样显示自报版本。
+  const versionText = isAgentred
+    ? deviceVersionText(versionState, t)
+    : d.version;
+  const meta = [
+    d.platform,
+    versionText,
+    formatLastActive(d.last_seen_at, locale),
+  ]
     .filter(Boolean)
     .join(" · ");
+  const metaTitle = lastActiveTitle(d.last_seen_at);
 
   const revocable = isRevocable(d);
-  // 帧 47：浏览器行不接单、也不可展开——展开区列的是项目与能跑的 Agent，
-  // 浏览器两样都没有。
-  const expandable = d.kind !== "web";
 
   if (isMobile) {
     return (
@@ -385,13 +535,23 @@ function DeviceRow({
               <span className="truncate text-sm font-medium text-foreground">
                 {d.name}
               </span>
-              <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
+              <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
                 {deviceKindLabel(d.kind, t)}
               </span>
             </div>
-            <span className="truncate font-mono text-xs text-subtle-foreground">
+            <span
+              data-testid="device-meta"
+              title={metaTitle}
+              className="truncate font-mono text-xs text-muted-foreground"
+            >
               {meta}
             </span>
+            {/* 版本徽标跟着版本走，接在 Meta 之后、窄屏折到下一行（决策 17）。 */}
+            {isAgentred && (
+              <span className="flex flex-wrap items-center gap-2">
+                <DeviceVersionBadge state={versionState} deviceID={d.id} />
+              </span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <StatusMark
@@ -399,45 +559,41 @@ function DeviceRow({
               label={statusLabel(d, t)}
               testId={`device-status-${d.id}`}
             />
-            {expandable && (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                data-testid={`device-expand-${d.id}`}
-                aria-expanded={isExpanded}
-                aria-label={
-                  isExpanded
-                    ? t("device.manage.collapse")
-                    : t("device.manage.expand")
-                }
-                onClick={onToggle}
-              >
-                {isExpanded ? <ChevronUp /> : <ChevronDown />}
-              </Button>
-            )}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              data-testid={`device-expand-${d.id}`}
+              aria-expanded={isExpanded}
+              aria-label={
+                isExpanded
+                  ? t("device.manage.collapse")
+                  : t("device.manage.expand")
+              }
+              onClick={onToggle}
+            >
+              {isExpanded ? <ChevronUp /> : <ChevronDown />}
+            </Button>
             {revocable && (
-              <RowMenu
-                label={t("console.aria.rowActions")}
-                testId={`device-menu-${d.id}`}
-                items={[
-                  {
-                    key: "revoke",
-                    label: t("device.manage.revokeConfirm"),
-                    danger: true,
-                    onSelect: onRevoke,
-                  },
-                ]}
-              />
+              <DeviceRowMenu id={d.id} name={d.name} onRevoke={onRevoke} />
             )}
           </div>
         </div>
         {isExpanded && (
-          <div className="px-4 pt-3">
+          <div className="flex flex-col gap-3 px-4 pt-3">
+            {isAgentred && (
+              <DeviceUpgradePanel
+                device={d}
+                state={versionState}
+                onDevices={onDevices}
+              />
+            )}
             <DeviceExpandDetail
               state={detailState}
               device={d}
               counts={counts}
               t={t}
+              locale={locale}
+              onRetry={onRetryDetail}
             />
           </div>
         )}
@@ -461,10 +617,10 @@ function DeviceRow({
           testId={`device-icon-${d.id}`}
           className="size-[18px] shrink-0 text-muted-foreground"
         />
-        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold">
+        <span className="min-w-0 flex-1 truncate text-prose font-semibold">
           {d.name}
         </span>
-        <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] font-medium text-muted-foreground">
+        <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
           {deviceKindLabel(d.kind, t)}
         </span>
         <StatusMark
@@ -472,51 +628,54 @@ function DeviceRow({
           label={statusLabel(d, t)}
           testId={`device-status-${d.id}`}
         />
-        {expandable && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            data-testid={`device-expand-${d.id}`}
-            aria-expanded={isExpanded}
-            aria-label={
-              isExpanded
-                ? t("device.manage.collapse")
-                : t("device.manage.expand")
-            }
-            onClick={onToggle}
-          >
-            {isExpanded ? <ChevronUp /> : <ChevronDown />}
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          data-testid={`device-expand-${d.id}`}
+          aria-expanded={isExpanded}
+          aria-label={
+            isExpanded ? t("device.manage.collapse") : t("device.manage.expand")
+          }
+          onClick={onToggle}
+        >
+          {isExpanded ? <ChevronUp /> : <ChevronDown />}
+        </Button>
         {revocable && (
-          <RowMenu
-            label={t("console.aria.rowActions")}
-            testId={`device-menu-${d.id}`}
-            items={[
-              {
-                key: "revoke",
-                label: t("device.manage.revokeConfirm"),
-                danger: true,
-                onSelect: onRevoke,
-              },
-            ]}
-          />
+          <DeviceRowMenu id={d.id} name={d.name} onRevoke={onRevoke} />
         )}
       </div>
       {/* 副行（Q6qgs4 R2）：Meta · 项目/对话在跑（有数据才显示） */}
       <div className="flex flex-wrap items-center gap-x-2 px-5 pt-1.5">
-        <span className="font-mono text-xs text-subtle-foreground">{meta}</span>
+        <span
+          data-testid="device-meta"
+          title={metaTitle}
+          className="font-mono text-xs text-muted-foreground"
+        >
+          {meta}
+        </span>
+        {isAgentred && (
+          <DeviceVersionBadge state={versionState} deviceID={d.id} />
+        )}
         {subRow && (
           <span className="text-xs text-muted-foreground">{subRow}</span>
         )}
       </div>
       {isExpanded && (
-        <div className="px-5 pt-3">
+        <div className="flex flex-col gap-3 px-5 pt-3">
+          {isAgentred && (
+            <DeviceUpgradePanel
+              device={d}
+              state={versionState}
+              onDevices={onDevices}
+            />
+          )}
           <DeviceExpandDetail
             state={detailState}
             device={d}
             counts={counts}
             t={t}
+            locale={locale}
+            onRetry={onRetryDetail}
           />
         </div>
       )}
@@ -525,8 +684,12 @@ function DeviceRow({
 }
 
 export default function Devices() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language;
   const isMobile = useIsMobile();
+  // 最新发布版本来自服务端自己的只读端点（决策 12）：一页问一次，各行共用同一个
+  // 答案 —— 每行各问一次等于把「不知道」这件事问上 N 遍。
+  const latest = useLatestRelease();
   const [devices, setDevices] = useState<DeviceItem[]>([]);
   const [loading, setLoading] = useState(true);
   // 存住失败本身，渲染时才翻译成文案：effect 里不碰 t，就不必把它拉进依赖数组
@@ -534,6 +697,22 @@ export default function Devices() {
   const [loadError, setLoadError] = useState<unknown>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<DeviceItem | null>(null);
+  /**
+   * 撤销确认里那一行事实：种类 · 平台 · 版本 · 最后在线。
+   *
+   * 拼在 JSX 之外 —— 分隔点是排版符号不是文案，`i18next/no-literal-string` 只放行
+   * JSX 之外的字面量，而行首那条 meta 用的也是同一种拼法。
+   */
+  const revokingFacts = revoking
+    ? [
+        deviceKindLabel(revoking.kind, t),
+        revoking.platform,
+        revoking.version,
+        formatLastActive(revoking.last_seen_at, locale),
+      ]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
   const [submitting, setSubmitting] = useState(false);
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   // 用户点过「添加设备」；空态另有默认展开的规则，见下面的 guideOpen。
@@ -545,33 +724,39 @@ export default function Devices() {
     >
   >({});
 
-  // 只负责取数据，不碰状态；由调用方决定怎么落状态。
-  async function fetchDevices(): Promise<DeviceItem[]> {
-    const got = await api<{ devices: DeviceItem[] }>("/v1/devices");
-    return got.devices;
-  }
-
   function applyList(list: DeviceItem[]) {
     setDevices(list);
     setLoadError(null);
   }
 
-  useEffect(() => {
-    let alive = true;
+  useAliveEffect((alive) => {
     fetchDevices()
       .then((list) => {
-        if (alive) applyList(list);
+        if (alive()) applyList(list);
       })
       .catch((e: unknown) => {
-        if (alive) setLoadError(e ?? new Error("device list load failed"));
+        if (alive()) setLoadError(e ?? new Error("device list load failed"));
       })
       .finally(() => {
-        if (alive) setLoading(false);
+        if (alive()) setLoading(false);
       });
-    return () => {
-      alive = false;
-    };
   }, []);
+
+  // 列表此前只在挂载时取一次：一台机器上线要整页刷新或者切走再切回来才看得到。
+  // 只订在线态那一类信号——组织架构改了、别人发了条消息，都与这一页无关。
+  //
+  // 行展开的详情不跟着重取：那是按行缓存的、展开时才拉的东西（见 toggleExpand），
+  // 一条在线态信号没有理由把所有展开着的行全重拉一遍。
+  //
+  // 失败照旧只写进 loadError，不清空已经列出来的行：一次网络抖动不该把用户正在看的
+  // 设备抹掉。
+  useAccountChannel([AccountChannelDevicePresence], () => {
+    fetchDevices()
+      .then(applyList)
+      .catch((e: unknown) => {
+        setLoadError(e ?? new Error("device list load failed"));
+      });
+  });
 
   function toggleExpand(d: DeviceItem) {
     const collapsing = expanded.has(d.id);
@@ -591,6 +776,10 @@ export default function Devices() {
     // 在整个页面生命周期里永久坏掉，只能整页刷新。失败后再展开就重试一次。
     const cached = details[d.id];
     if (cached && (cached.loading || !cached.error)) return;
+    loadDetail(d);
+  }
+
+  function loadDetail(d: DeviceItem) {
     setDetails((prev) => ({
       ...prev,
       [d.id]: { loading: true, error: null, data: null },
@@ -640,10 +829,6 @@ export default function Devices() {
   }
 
   const deviceCount = !loading && loadError === null ? devices.length : null;
-  const hasOnlineAgentred = devices.some(
-    (d) => d.kind === KIND_AGENTRED && d.online,
-  );
-
   // 列表到底有几台，只有「加载完 + 不是那种一台都没取到的失败」时才答得上来。
   // 答不上来就既不展开引导、也不渲染入口，更不能改口说「还没有任何设备」——
   // 上面那条错误提示是此刻唯一诚实的内容。
@@ -652,6 +837,12 @@ export default function Devices() {
   // 一台都没有时，引导不是「展开态」而是这一页此刻的全部内容：默认展开且不给收起，
   // 它取代的正是原来那句孤立的「还没有任何设备。」。
   const guideOpen = listKnown && (noDevices || guideRequested);
+
+  /** 列表取数失败给用户看的那一句：服务端带了文案就用它，没有才落到兜底键。 */
+  const listErrorMessage =
+    loadError !== null
+      ? loadErrorText(loadError, t, "device.manage.loadError")
+      : null;
 
   return (
     <AppShell
@@ -664,20 +855,9 @@ export default function Devices() {
               aria-label={t("device.manage.countLabel", {
                 count: deviceCount,
               })}
-              className="font-mono text-xs text-subtle-foreground"
+              className="font-mono text-xs text-muted-foreground"
             >
               {deviceCount}
-            </span>
-          )}
-          {hasOnlineAgentred && (
-            <span className="flex items-center gap-1.5">
-              <span
-                aria-hidden="true"
-                className="size-[6px] rounded-full bg-status-running"
-              />
-              <span className="text-xs text-muted-foreground">
-                {t("appShell.topBar.fresh")}
-              </span>
             </span>
           )}
         </>
@@ -687,7 +867,9 @@ export default function Devices() {
         {/* 设备行列表（桌面与移动共用；不再有右列常驻撤销说明卡） */}
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">
           {loadError !== null && (
-            <Alert variant="destructive">{loadErrorText(loadError, t)}</Alert>
+            <Alert variant="destructive">
+              <AlertDescription>{listErrorMessage}</AlertDescription>
+            </Alert>
           )}
 
           {/* 动作行：整页唯一的添加入口。引导展开时它不渲染——同一件事不给两个按钮。 */}
@@ -712,7 +894,7 @@ export default function Devices() {
           )}
 
           {loading ? (
-            <p className="text-muted-foreground">{t("common.loading")}</p>
+            <DeviceListSkeleton />
           ) : (
             devices.map((d) => (
               <DeviceRow
@@ -732,7 +914,11 @@ export default function Devices() {
                     data: null,
                   }
                 }
+                onRetryDetail={() => loadDetail(d)}
+                latest={latest}
+                onDevices={applyList}
                 t={t}
+                locale={locale}
               />
             ))
           )}
@@ -740,7 +926,7 @@ export default function Devices() {
       </div>
 
       {/* 撤销确认：由行级菜单进入；失败保留上下文显示真实错误，成功刷新真实状态 */}
-      <Dialog
+      <DialogShell
         open={!!revoking}
         onOpenChange={(o) => {
           if (!o && !submitting) {
@@ -748,39 +934,53 @@ export default function Devices() {
             setRevoking(null);
           }
         }}
+        size="sm"
+        danger
+        busy={submitting}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("device.manage.revokeConfirmTitle")}</DialogTitle>
-          </DialogHeader>
-          <DialogBody>
-            <DialogDescription className="text-[13px] leading-relaxed">
-              {t("device.manage.revokeConfirmBody")}
-            </DialogDescription>
-            {revokeError && (
-              <Alert variant="destructive" className="mt-3">
-                {revokeError}
-              </Alert>
-            )}
-          </DialogBody>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={submitting}
-              onClick={() => setRevoking(null)}
+        {/*
+          标题点名是哪一台：入口是行菜单里的浮层，确认框是模态、盖住整页——
+          按下去那一刻用户已经看不见自己点的是哪一行了，而这一页上四台机器
+          名字相近是常态。
+        */}
+        <DialogShellHeader
+          title={t("device.manage.revokeConfirmTitleNamed", {
+            name: revoking?.name ?? "",
+          })}
+          danger
+          busy={submitting}
+        />
+        <DialogShellBody>
+          {revoking && (
+            <p
+              data-testid="revoke-device-facts"
+              className="mb-2 text-xs text-muted-foreground"
             >
-              {t("device.manage.revokeCancel")}
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={submitting}
-              onClick={onRevoke}
-            >
-              {t("device.manage.revokeConfirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+              {revokingFacts}
+            </p>
+          )}
+          <p className="text-aux leading-relaxed text-muted-foreground">
+            {t("device.manage.revokeConfirmBody")}
+          </p>
+        </DialogShellBody>
+        {/* 整窗级错误落在脚部左侧、与按钮同一行：点了按钮的人视线就在那（规范 4）。 */}
+        <DialogShellFooter error={revokeError}>
+          <Button
+            variant="outline"
+            disabled={submitting}
+            onClick={() => setRevoking(null)}
+          >
+            {t("device.manage.revokeCancel")}
+          </Button>
+          <DialogShellSubmit
+            variant="destructive"
+            busy={submitting}
+            onClick={onRevoke}
+          >
+            {t("device.manage.revokeConfirm")}
+          </DialogShellSubmit>
+        </DialogShellFooter>
+      </DialogShell>
     </AppShell>
   );
 }

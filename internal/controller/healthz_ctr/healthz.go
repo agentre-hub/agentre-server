@@ -6,7 +6,7 @@ import (
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/database/redis"
 
-	api "agentre-server/internal/api/healthz"
+	api "github.com/agentre-hub/agentre-server/internal/api/healthz"
 )
 
 type Healthz struct{}

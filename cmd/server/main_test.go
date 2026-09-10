@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/cago-frame/cago/database/db"
+
+	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 )
 
 const validConfig = "env: test\ndebug: false\nsource: file\n"
@@ -87,5 +92,32 @@ func TestLoadConfigDefaultsToConfigsConfigYAML(t *testing.T) {
 
 	if _, err := loadConfig(nil); err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+// 覆盖层要在 loadConfig 装配配置源时接上：漏接这一步的话它根本不在链路上，
+// 而两边的单测仍然全绿。
+func TestLoadConfigAppliesDBDSNFromEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := validConfig + "db:\n  driver: mysql\n  dsn: \"file:file@tcp(file:3306)/file\"\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(bootstrap.EnvDBDSN, "env:env@tcp(env:3306)/env")
+
+	cfg, err := loadConfig([]string{"--config", path})
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+
+	var got db.Config
+	if err := cfg.Scan(context.Background(), "db", &got); err != nil {
+		t.Fatalf("Scan(db) error = %v", err)
+	}
+	if got.Dsn != "env:env@tcp(env:3306)/env" {
+		t.Fatalf("db.dsn = %q, want the value from %s", got.Dsn, bootstrap.EnvDBDSN)
+	}
+	if got.Driver != "mysql" {
+		t.Fatalf("db.driver = %q, want the value from the config file", got.Driver)
 	}
 }

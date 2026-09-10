@@ -7,22 +7,29 @@
  *   - 尺寸：NavItem h-[34px]、TabBar h-[74px]、FilterChip h-[22px]、
  *     StatusMark 圆角胶囊、Metric value text-[23px]、EmptyState 62px 图标圈；
  *   - 状态：active/inactive、tone（StatusMark）、active/disabled（FilterChip）；
- *   - 真实动作边界：FilterChip disabled 不可交互、RowMenu 仅触发后出现且
- *     Escape/外部点击可关、危险项有独立样式；
+ *   - 真实动作边界：FilterChip disabled 不可交互；行级菜单已归共享包，
+ *     它的语义钉在 `row-actions-menu.test.tsx`（规格 2026-08-22 E 段）；
  *   - 旁白不得成为组件：渲染任意共享组件都不应带出设计旁白文案。
  */
+import { statusConfig } from "@agentre-hub/agentre-ui";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { Gauge, Laptop, LayoutDashboard, MessagesSquare } from "lucide-react";
+import {
+  Gauge,
+  Laptop,
+  LayoutDashboard,
+  ListFilter,
+  MessagesSquare,
+} from "lucide-react";
 
 import {
   ConsoleNavItem,
   EmptyState,
   FilterChip,
+  InlineEmpty,
   Metric,
   MobileTabBar,
-  RowMenu,
   StatusMark,
 } from "@/components/console";
 
@@ -70,19 +77,39 @@ describe("StatusMark（zF5jv）", () => {
     expect(pill.className).toContain("gap-1.5");
   });
 
-  it.each([
-    ["running", "bg-status-running-bg", "text-status-running"],
-    ["waiting", "bg-status-waiting-bg", "text-status-waiting"],
-    ["idle", "bg-secondary", "text-status-idle"],
-    ["error", "bg-destructive-soft", "text-destructive"],
-  ] as const)("tone=%s → 语义 token %s / %s", (tone, bg, text) => {
-    const { container } = render(
-      <StatusMark testId="pill" tone={tone} label="x" />,
-    );
-    const pill = container.querySelector('[data-testid="pill"]') as HTMLElement;
-    expect(pill.className).toContain(bg);
-    expect(pill.className).toContain(text);
-  });
+  /**
+   * 类名必须**取自**共享包的 `statusConfig`，不是照着它抄一份。
+   *
+   * 这条用例此前钉的是本站手抄的那份映射，四档全部与包不一致 —— 而且错在
+   * 同一处：把**点**的颜色当**文字**颜色用了。浅色下 running 是 #10b981 压
+   * #ecfdf5，对比度 2.41:1；waiting 是 #f59e0b 压 #fffbeb，2.07:1，都远低于
+   * WCAG AA 正文要求的 4.5:1。`--status-*-text` 这一档 token 存在的全部理由
+   * 就是「在 `-bg` 上当文字用」（包里是 5.21 / 4.84），本站没用它。
+   *
+   * 深色下 `-text` 与基色同值，所以这个缺陷只在浅色里显形 —— 这也是它能一直
+   * 躺着的原因。断言直接读包的值而不是写字面量：包再改一次，本站跟着走。
+   */
+  it.each(["running", "waiting", "idle", "error"] as const)(
+    "tone=%s → 胶囊与点的类名都来自包的 statusConfig",
+    (tone) => {
+      const { container } = render(
+        <StatusMark testId="pill" tone={tone} label="x" />,
+      );
+      const pill = container.querySelector(
+        '[data-testid="pill"]',
+      ) as HTMLElement;
+      for (const cls of statusConfig[tone].pillClassName.split(" ")) {
+        expect(pill.className, `胶囊缺了 ${cls}`).toContain(cls);
+      }
+
+      // 点用 dotClassName（亮色信号），文字用 pillClassName 里的深色 —— 两者
+      // 刻意不同色。此前点是 bg-current，于是跟着文字一起错。
+      const dot = container.querySelector(
+        'span[aria-hidden="true"]',
+      ) as HTMLElement;
+      expect(dot.className).toContain(statusConfig[tone].dotClassName);
+    },
+  );
 });
 
 describe("Metric（IhldU 统计卡）", () => {
@@ -286,6 +313,39 @@ describe("ConsoleNavItem（ZC7pI）", () => {
     expect(screen.getByText("2/3")).toBeTruthy();
     expect(container.querySelector('span[aria-hidden="true"]')).toBeTruthy();
   });
+
+  /*
+    collapsed 是 56px 图标栏那一档（外壳的侧栏可以收起）。它改的是排布，不是这一
+    项还剩多少信息——三条尾巴各有各的去处，而不是一起消失：
+
+      文案 → sr-only：图标不是名字。视觉上收窄之后链接的可访问名要是也没了，
+             读屏用户看到的就是六个「link」。
+      meta → title：一行 mono 数字在 56px 里排不下，但「丢掉」和「换个地方说」
+             不是一回事。
+      badge → 图标角上：它是这条栏上唯一会变的东西。
+  */
+  it("collapsed：只剩图标，但可访问名、badge 与 meta 各自还在", () => {
+    renderNav({ route: "/chat", to: "/devices", collapsed: true, meta: "2/3" });
+
+    const link = screen.getByRole("link", { name: "Overview" });
+    expect(link.className).toContain("justify-center");
+    expect(link.className).not.toContain("px-2.5");
+    expect(within(link).getByText("Overview").className).toContain("sr-only");
+    // meta 不再占一行，改由悬浮说明承接。
+    expect(screen.queryByText("2/3")).toBeNull();
+    expect(link.getAttribute("title")).toBe("Overview 2/3");
+  });
+
+  it("collapsed 的 badge 挪到图标角上，数字本身不变", () => {
+    renderNav({ route: "/chat", collapsed: true, badge: 3 });
+
+    const badge = screen.getByText("3");
+    expect(badge.className).toContain("absolute");
+    // 定位要有参照系：链接自己得是 relative，否则角标会飞到最近的定位祖先上。
+    expect(screen.getByRole("link", { name: /Overview/ }).className).toContain(
+      "relative",
+    );
+  });
 });
 
 describe("MobileTabBar（A6Z3k）", () => {
@@ -320,80 +380,87 @@ describe("MobileTabBar（A6Z3k）", () => {
     const active = screen.getByRole("link", { name: "Overview" });
     const idle = screen.getByRole("link", { name: "Chat" });
     expect(active.className).toContain("text-primary-text");
-    expect(idle.className).toContain("text-subtle-foreground");
+    expect(idle.className).toContain("text-muted-foreground");
     // 高亮 tab 的文案字重 600。
     expect(within(active).getByText("Overview").className).toContain(
       "font-semibold",
     );
     assertNoNarration(document.body, "MobileTabBar");
   });
+
+  // 窄屏此前完全看不到「有多少条在等你」：外壳派生移动 tabs 时把 badge 丢掉了。
+  // 底部这条栏是移动端的主导航，那颗角标该在的地方就是这里。
+  it("角标与侧栏同一形状：>0 才画，带 title 说明它是什么", () => {
+    render(
+      <MemoryRouter initialEntries={["/overview"]}>
+        <MobileTabBar
+          items={[items[0], { ...items[1], badge: 3, badgeLabel: "3 unread" }]}
+        />
+      </MemoryRouter>,
+    );
+    const chat = screen.getByRole("link", { name: /Chat/ });
+    expect(within(chat).getByText("3")).toBeTruthy();
+    expect(within(chat).getByTitle("3 unread")).toBeTruthy();
+  });
+
+  it("0 与「没问出来」都不画——一个显示出来的 0 会被读成「都处理完了」", () => {
+    render(
+      <MemoryRouter initialEntries={["/overview"]}>
+        <MobileTabBar
+          items={[
+            { ...items[0], badge: 0 },
+            { ...items[1], badge: null },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    expect(
+      within(screen.getByRole("link", { name: /Overview/ })).queryByText("0"),
+    ).toBeNull();
+    expect(
+      within(screen.getByRole("link", { name: /Chat/ })).queryByText(/^\d+$/),
+    ).toBeNull();
+  });
 });
 
-describe("RowMenu（行级菜单语义）", () => {
-  function renderMenu(
-    items = [
-      { key: "open", label: "Open", onSelect: vi.fn() },
-      {
-        key: "revoke",
-        label: "Revoke",
-        danger: true,
-        onSelect: vi.fn(),
-      },
-    ],
-  ) {
-    return render(<RowMenu label="Row actions" items={items} />);
-  }
-
-  it("触发按钮带 aria-haspopup/aria-expanded，未开时无菜单", () => {
-    renderMenu();
-    const trigger = screen.getByRole("button", { name: "Row actions" });
-    expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByRole("menu")).toBeNull();
-    assertNoNarration(document.body, "RowMenu");
-  });
-
-  it("点击触发后出现菜单并聚焦首个 menuitem；危险项用 destructive 色", () => {
-    renderMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    const menu = screen.getByRole("menu");
-    expect(menu).toBeTruthy();
-    const items = within(menu).getAllByRole("menuitem");
-    expect(items.map((i) => i.textContent)).toEqual(["Open", "Revoke"]);
-    expect(document.activeElement).toBe(items[0]);
-    expect(items[1].className).toContain("text-destructive");
-  });
-
-  it("选择菜单项后触发 onSelect 并关闭菜单", () => {
-    const onOpen = vi.fn();
-    const onRevoke = vi.fn();
-    renderMenu([
-      { key: "open", label: "Open", onSelect: onOpen },
-      { key: "revoke", label: "Revoke", danger: true, onSelect: onRevoke },
-    ]);
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Revoke" }));
-    expect(onRevoke).toHaveBeenCalledTimes(1);
-    expect(onOpen).not.toHaveBeenCalled();
-    expect(screen.queryByRole("menu")).toBeNull();
-  });
-
-  it("Escape 关闭菜单并把焦点还给触发按钮", () => {
-    renderMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    const menu = screen.getByRole("menu");
-    fireEvent.keyDown(menu, { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
-    expect(document.activeElement).toBe(
-      screen.getByRole("button", { name: "Row actions" }),
+/**
+ * 索引栏里的空态与页面级 EmptyState 是两件事：后者是一整块面板没内容（62px 图标圈、
+ * 18px 粗标题），前者是一条**窄栏**里当前这一屏筛空了。此前三处索引空态各画各的
+ * ——组织面的「未找到 Agent」是整栏垂直居中的一句 mono 小字，同一个面板下面的
+ * 「还没有任何部门」却是顶端的虚线卡片，会话索引又是第三种（裸图标 + 一行灰字 +
+ * 一个手搓的 border 按钮）。同一个信息层级三种形，这是「一个概念一个实现」的反例。
+ *
+ * InlineEmpty 把它们收成一种：虚线卡片、顶端对齐、图标 + 标题 + 正文 + 一条回程。
+ */
+describe("InlineEmpty（索引栏内空态）", () => {
+  it("虚线卡片 + 顶端对齐：不把一句话吊在整栏正中", () => {
+    const { container } = render(
+      <InlineEmpty
+        icon={ListFilter}
+        title="Nothing here"
+        body="12 conversations in your account."
+        action={<button type="button">See all</button>}
+        testId="inline-empty"
+      />,
     );
+    const box = screen.getByTestId("inline-empty");
+    expect(box.className).toContain("border-dashed");
+    expect(box.className).toContain("rounded-lg");
+    // 顶端对齐：不能是 h-full + justify-center（那会在长栏里留一大块空白）。
+    expect(box.className).not.toContain("h-full");
+    expect(box.className).not.toContain("justify-center");
+    expect(screen.getByText("Nothing here").tagName).toBe("P");
+    expect(screen.getByText("12 conversations in your account.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "See all" })).toBeTruthy();
+    assertNoNarration(container, "InlineEmpty");
   });
 
-  it("点击菜单外部关闭菜单", () => {
-    renderMenu();
-    fireEvent.click(screen.getByRole("button", { name: "Row actions" }));
-    expect(screen.getByRole("menu")).toBeTruthy();
-    fireEvent.mouseDown(document.body);
-    expect(screen.queryByRole("menu")).toBeNull();
+  it("图标是装饰，正文与动作都可缺席", () => {
+    const { container } = render(
+      <InlineEmpty icon={ListFilter} title="Empty" testId="inline-empty" />,
+    );
+    expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+    expect(screen.getByText("Empty")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 });

@@ -2,8 +2,10 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { rpcMethods } from "@agentre-hub/agentre-wire";
+
 import { api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
 
@@ -12,29 +14,23 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-// 展开一台在线 agentred 时，「对话」一节的条数与等待数要真去问那台机器（帧 47）。
+// 展开一台在线 agentred 时，「对话」一节的条数与等待数要真去问那台机器（帧 47）——
+// 问的是**三个数**（session.counts），不是把整份清单拉过来自己数：那台机器上可能
+// 有几千条对话，为三个数搬一遍摘要正是设备页变卡的原因。
+const relayRequest = vi.fn(async (method: unknown) => {
+  if (method !== rpcMethods.sessionCounts) {
+    throw new Error("unexpected method");
+  }
+  return { total: 3n, running: 2n, waiting: 1n };
+});
+
 vi.mock("@/hooks/use-relay", () => ({
-  useRelayMachine: (fingerprint: string | null) => ({
-    client: fingerprint
-      ? {
-          request: async () => ({
-            sessions: [
-              {
-                sessionId: 1,
-                lifecycleState: "running",
-                latestSeq: 1,
-                waitingForInput: true,
-              },
-              { sessionId: 2, lifecycleState: "idle", latestSeq: 1 },
-              { sessionId: 3, lifecycleState: "running", latestSeq: 1 },
-            ],
-            supportsSessionMetadata: true,
-          }),
-        }
-      : null,
-    relayState: fingerprint ? "connected" : "disconnected",
+  useRelayMachine: (target: string | null) => ({
+    client: target ? { request: relayRequest } : null,
+    relayState: target ? "connected" : "disconnected",
     relayTicket: null,
     relayTicketError: null,
+    handshakeRejection: null,
   }),
 }));
 
@@ -222,39 +218,6 @@ describe("device row expand", () => {
     expect(within(card).queryByRole("link", { name: /conversations/i })).toBe(
       null,
     );
-  });
-
-  // 帧 47：浏览器行不接单，也**不可展开** —— 展开它只会去问一台没有项目、没有
-  // Agent 的「设备」，把 agentred 的那套详情套在浏览器上是错的。
-  it("a kind=web row has no expand control", async () => {
-    mockedApi.mockImplementation(async (path) => {
-      if (path === "/v1/devices")
-        return {
-          devices: [
-            {
-              id: 3,
-              name: "Chrome · macOS",
-              kind: "web",
-              platform: "macOS",
-              version: "1",
-              fingerprint: "fp-web",
-              last_seen_at: 1754000000000,
-              status: 1,
-              online: true,
-              is_this_device: false,
-            },
-          ],
-        };
-      throw new Error("unexpected call: " + path);
-    });
-
-    renderDevices();
-    const card = (await screen.findByText("Chrome · macOS")).closest(
-      '[data-slot="card"]',
-    ) as HTMLElement;
-    expect(
-      within(card).queryByRole("button", { name: /show details/i }),
-    ).toBeNull();
   });
 
   it("expanding a desktop row lists every account project, configured or not, with no agents section", async () => {

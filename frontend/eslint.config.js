@@ -6,7 +6,10 @@ import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
+import { alertSlotSyntax } from "./eslint-rules/alert-slots.js";
 import { restrictedSyntax } from "./eslint-rules/design-tokens.js";
+import { nativeControlSyntax } from "./eslint-rules/native-controls.js";
+import { secureContextSyntax } from "./eslint-rules/secure-context.js";
 
 export default defineConfig([
   globalIgnores(["dist", "node_modules", "coverage"]),
@@ -30,9 +33,17 @@ export default defineConfig([
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
 
-      // ── 设计 token 守卫 ────────────────────────────────────────────
-      // 详见 eslint-rules/design-tokens.js 和 docs/design.md#colour-tokens
-      "no-restricted-syntax": ["error", ...restrictedSyntax],
+      // ── 设计 token 守卫 + 原生表单控件守卫 + 安全上下文守卫 + Alert 内容槽守卫 ──
+      // 详见 eslint-rules/design-tokens.js（与 docs/design.md#colour-tokens）、
+      // eslint-rules/native-controls.js、eslint-rules/secure-context.js
+      // 与 eslint-rules/alert-slots.js。
+      "no-restricted-syntax": [
+        "error",
+        ...restrictedSyntax,
+        ...nativeControlSyntax,
+        ...secureContextSyntax,
+        ...alertSlotSyntax,
+      ],
 
       // ── i18n 守卫 ─────────────────────────────────────────────────
       // 界面文案一律走 t()，否则新语言只能翻到一半而且没人发现。
@@ -75,6 +86,11 @@ export default defineConfig([
     // 现在没有任何 .ts/.tsx 能写死颜色值。
     // 新增豁免必须在这里写清理由。
     files: ["eslint-rules/**"],
+    rules: { "no-restricted-syntax": "off" },
+  },
+  {
+    // 随机标识的退化实现自己要调得动 crypto.randomUUID —— 安全上下文守卫的唯一豁免。
+    files: ["src/lib/randomId.ts"],
     rules: { "no-restricted-syntax": "off" },
   },
   {

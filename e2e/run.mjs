@@ -67,6 +67,22 @@ function blockScalar(text, block, key, fallback = "") {
   return match ? unquote(match[1]) : fallback;
 }
 
+function nestedBlock(text, parent, name) {
+  const body = yamlBlock(text, parent);
+  if (body === null) return null;
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((line) =>
+    new RegExp(`^  ${name}:[ \\t]*$`).test(line),
+  );
+  if (start < 0) return null;
+  const nested = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (lines[i].trim() && !/^ {4}/.test(lines[i])) break;
+    nested.push(lines[i]);
+  }
+  return nested.join("\n");
+}
+
 function assertKnownKeys(text, block, allowed) {
   const body = yamlBlock(text, block);
   if (body === null) throw new Error(`config has no ${block} block`);
@@ -135,6 +151,20 @@ function validateBrowserConfig(text, http) {
   const insecureCookies = blockScalar(text, "server", "insecure_cookies");
   if (insecureCookies !== "true") {
     throw new Error("server.insecure_cookies must be true for loopback E2E");
+  }
+  const webauthn = nestedBlock(text, "server", "webauthn");
+  const rpID = /^[ \t]*rp_id:[ \t]*(.*)$/m.exec(webauthn ?? "");
+  if (!rpID || unquote(rpID[1]) !== "localhost") {
+    throw new Error("server.webauthn.rp_id must equal localhost for E2E");
+  }
+  const passkeyOrigin = `http://localhost:${http.port}`;
+  const origins = [...(webauthn ?? "").matchAll(/^[ \t]*-[ \t]*(.*)$/gm)].map(
+    (match) => unquote(match[1]),
+  );
+  if (!origins.includes(passkeyOrigin)) {
+    throw new Error(
+      `server.webauthn.origins must include ${passkeyOrigin} for E2E`,
+    );
   }
 }
 

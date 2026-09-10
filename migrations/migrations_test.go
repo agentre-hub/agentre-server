@@ -8,7 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	hubtest "agentre-server/internal/testutils"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // withPatchedLockTiming 把轮询间隔和等待预算换成测试专用的小值，跑完自动还原，

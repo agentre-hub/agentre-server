@@ -17,21 +17,26 @@ import (
 	"github.com/cago-frame/cago/server/cron"
 	"github.com/cago-frame/cago/server/mux"
 
-	"agentre-server/internal/api"
-	"agentre-server/internal/bootstrap"
-	"agentre-server/internal/buildinfo"
-	"agentre-server/internal/repository/device_flow_repo"
-	"agentre-server/internal/repository/device_repo"
-	"agentre-server/internal/repository/device_token_repo"
-	"agentre-server/internal/repository/exec_order_repo"
-	"agentre-server/internal/repository/follow_repo"
-	"agentre-server/internal/repository/sync_repo"
-	"agentre-server/internal/repository/user_identity_repo"
-	"agentre-server/internal/repository/user_repo"
-	"agentre-server/internal/task"
-	"agentre-server/internal/web"
-	"agentre-server/migrations"
+	"github.com/agentre-hub/agentre-server/internal/api"
+	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/buildinfo"
+	"github.com/agentre-hub/agentre-server/internal/repository/activity_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/webauthn_credential_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/engine_svc"
+	"github.com/agentre-hub/agentre-server/internal/task"
+	"github.com/agentre-hub/agentre-server/internal/web"
+	"github.com/agentre-hub/agentre-server/migrations"
 )
+
+// defaultConfigPath 与 cago 不传 WithConfigFile 时的缺省值一致。
+const defaultConfigPath = "./configs/config.yaml"
 
 func loadConfig(args []string) (*configs.Config, error) {
 	flags := flag.NewFlagSet("agentre-server", flag.ContinueOnError)
@@ -40,10 +45,19 @@ func loadConfig(args []string) (*configs.Config, error) {
 	if err := flags.Parse(args); err != nil {
 		return nil, err
 	}
+	// 自己装配配置源，为的是套上 bootstrap 的环境变量覆盖层。
 	if *configPath == "" {
-		return configs.NewConfig("agentre-server")
+		src, err := bootstrap.NewConfigSource(defaultConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		return configs.NewConfig("agentre-server", configs.WithSource(src))
 	}
-	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(*configPath))
+	src, err := bootstrap.NewConfigSource(*configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config %q: %w", *configPath, err)
+	}
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(src))
 	if err != nil {
 		return nil, fmt.Errorf("load config %q: %w", *configPath, err)
 	}
@@ -60,6 +74,10 @@ func main() {
 	}
 
 	serverCfg := bootstrap.LoadServerConfig(ctx, cfg)
+	// 必须在 LoadJWTSigner 之前：后者读不到 pem 直接 Fatal
+	if err := bootstrap.EnsureJWTKeys(serverCfg); err != nil {
+		log.Fatalf("%v", err)
+	}
 	signer := bootstrap.LoadJWTSigner(serverCfg)
 
 	user_repo.RegisterUser(user_repo.NewUser())
@@ -71,8 +89,14 @@ func main() {
 	sync_repo.RegisterSyncState(sync_repo.NewSyncState())
 	sync_repo.RegisterSyncAvatar(sync_repo.NewSyncAvatar())
 	sync_repo.RegisterSyncLocalPath(sync_repo.NewSyncLocalPath())
-	follow_repo.RegisterFollow(follow_repo.NewFollow())
-	exec_order_repo.RegisterExecOrder(exec_order_repo.NewExecOrder())
+	agent_session_repo.RegisterSave(agent_session_repo.NewSave())
+	agent_session_repo.RegisterSummary(agent_session_repo.NewSummary())
+	agent_session_repo.RegisterJournalFrame(agent_session_repo.NewJournalFrame())
+	agent_session_repo.RegisterDeleteTodo(agent_session_repo.NewDeleteTodo())
+	webauthn_credential_repo.RegisterWebAuthnCredential(webauthn_credential_repo.NewWebAuthnCredential())
+	activity_repo.RegisterDaily(activity_repo.NewDaily())
+	user_repo.RegisterSettings(user_repo.NewSettings())
+	engine_svc.SetDefault(engine_svc.New())
 
 	deps := &api.RouterDeps{Cfg: serverCfg, Signer: signer}
 
@@ -106,6 +130,7 @@ func main() {
 		})).
 		// metric 会自行挂上 gin 中间件并暴露 GET /metrics（Prometheus 抓取端点）。
 		Registry(cago.FuncComponent(metric.Metrics)).
+		// 连接池由 cago 的 db 组件自己读 db.maxOpenConns 等四项并写进 database/sql。
 		Registry(component.Database()).
 		Registry(component.Redis()).
 		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
@@ -117,8 +142,18 @@ func main() {
 			return migrations.RunMigrations(db.Default())
 		})).
 		Registry(cago.FuncComponent(task.Task)).
+		// 常驻镜像自己不在 Start 里做事（那份常驻在 bootstrap.RegisterDefaults 里
+		// 就建好了），它在这里只为拿到 CloseHandle：进程退出时收工，手里每一份
+		// 机器租约当场让出，接手的副本不必等一整个 TTL。注册在 mux 之前，于是
+		// 关闭时排在它之后——先不再收请求，再停镜像。
+		Registry(task.MirrorResident()).
 		Registry(cago.FuncComponent(web.MountSPA)).
 		RegistryCancel(mux.HTTP(deps.Router)).
+		// 中继排空**必须**注册在 mux 之后:cago 按注册逆序关组件,于是它排在 mux
+		// 之前关。反过来的话,进程已经卡在 mux 的 Shutdown 里等中继的读循环返回,
+		// 而那个循环阻塞在 ReadMessage 上永远不会自己返回 —— 这一步根本轮不到跑。
+		// 详见 task.RelayDrain 的注释。
+		Registry(task.RelayDrain(deps)).
 		Start()
 	if err != nil {
 		log.Fatalf("server start: %v", err)

@@ -28,8 +28,7 @@ func Generate() string {
 	return string(buf[:3]) + "-" + string(buf[3:])
 }
 
-// Normalize 校验并规范化用户输入。允许大小写、空格、可选分隔符。
-// 返回规范形式 "XXX-XXX"。失败返回 ("", false)。
+// Normalize 接受大小写、空格和可选分隔符，返回 "XXX-XXX" 或失败。
 func Normalize(in string) (string, bool) {
 	s := strings.ToUpper(strings.TrimSpace(in))
 	cleaned := make([]byte, 0, codeLen)

@@ -31,9 +31,6 @@ func (c *DeviceFlowCode) IsDenied() bool   { return c != nil && c.DeniedAt > 0 }
 func (c *DeviceFlowCode) IsExpired(nowMs int64) bool {
 	return c != nil && c.ExpiresAt > 0 && c.ExpiresAt < nowMs
 }
-func (c *DeviceFlowCode) IsPending() bool {
-	return c != nil && !c.IsAuthorized() && !c.IsDenied() && !c.IsConsumed()
-}
 
 // NextPollAllowed 返回 nowMs 是否满足 interval 间隔（ms）。
 func (c *DeviceFlowCode) NextPollAllowed(nowMs int64) bool {

@@ -8,7 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
 //go:generate mockgen -source state.go -destination mock_sync_repo/mock_state.go
@@ -17,6 +18,12 @@ type SyncStateRepo interface {
 	// NextVersion 从账号级序列原子取走 n 个版本号，返回其中最大的那个（即本次
 	// 分配到的最后一个版本）。多副本并发下由数据库裁决，进程内计数器不行。
 	NextVersion(ctx context.Context, userID int64, n int64) (int64, error)
+	// CurrentVersion 取账号级序列**当前的头**（最近一次分配出去的版本号），
+	// 不推进它；账号还没分配过任何版本时返回 0。
+	//
+	// 它回答的是「这个账号的历史到哪为止」：设备送来的游标大于它，那段历史就不是
+	// 本账号发出的（库被重建，或换了一套服务端）。
+	CurrentVersion(ctx context.Context, userID int64) (int64, error)
 	// FindDeviceState 取某台设备最近一次成功同步的记录，没有返回 (nil, nil)
 	// ——那是首次登录的设备，不算超窗口。
 	FindDeviceState(ctx context.Context, userID, deviceID int64) (*sync_entity.DeviceSyncState, error)
@@ -40,9 +47,6 @@ type stateRepo struct{}
 // SELECT LAST_INSERT_ID() 就能取回。递增由行锁串行化。外面那层事务不是为了原子性，
 // 而是为了把两条语句钉在同一条连接上——LAST_INSERT_ID 是连接级的，走连接池会取到别人的值。
 func (r *stateRepo) NextVersion(ctx context.Context, userID int64, n int64) (int64, error) {
-	if n <= 0 {
-		n = 1
-	}
 	now := time.Now().UnixMilli()
 	var version int64
 	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
@@ -60,16 +64,23 @@ ON DUPLICATE KEY UPDATE version_seq = LAST_INSERT_ID(version_seq + ?), updatetim
 	return version, nil
 }
 
-func (r *stateRepo) FindDeviceState(ctx context.Context, userID, deviceID int64) (*sync_entity.DeviceSyncState, error) {
-	ret := &sync_entity.DeviceSyncState{}
-	err := db.Ctx(ctx).Where("user_id=? AND device_id=?", userID, deviceID).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
+// CurrentVersion 只读序列的当前值，绝不推进它——推进要么由 NextVersion 一次做完，
+// 要么就不该发生。sync_account_seqs 刻意没有 entity（见 sync_entity 的注释），这里
+// 因此是一条原生 SELECT；没有这一行说明该账号一个版本都没分配过，返回 0 而不是错误
+// ——那是「历史为空」，不是「查不到」。
+func (r *stateRepo) CurrentVersion(ctx context.Context, userID int64) (int64, error) {
+	var version int64
+	if err := db.Ctx(ctx).
+		Raw("SELECT version_seq FROM sync_account_seqs WHERE user_id = ?", userID).
+		Scan(&version).Error; err != nil {
+		return 0, err
 	}
-	return ret, nil
+	return version, nil
+}
+
+func (r *stateRepo) FindDeviceState(ctx context.Context, userID, deviceID int64) (*sync_entity.DeviceSyncState, error) {
+	return dbutil.FindOne[sync_entity.DeviceSyncState](
+		db.Ctx(ctx).Where("user_id=? AND device_id=?", userID, deviceID))
 }
 
 func (r *stateRepo) TouchDeviceState(ctx context.Context, userID, deviceID, nowMs int64) error {

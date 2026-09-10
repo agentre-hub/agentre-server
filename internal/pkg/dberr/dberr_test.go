@@ -18,7 +18,7 @@ func TestIsDuplicateKey_MatchesOnlyTheNamedIndex(t *testing.T) {
 	}
 
 	assert.True(t, IsDuplicateKey(err, "uk_sync_objects_identity"))
-	assert.False(t, IsDuplicateKey(err, "uk_sync_objects_location"),
+	assert.False(t, IsDuplicateKey(err, "uk_sync_objects_natural"),
 		"另一个唯一键上的冲突必须报错，不能被当成身份键冲突吞掉")
 }
 

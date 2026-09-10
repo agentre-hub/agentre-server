@@ -5,7 +5,8 @@ import (
 
 	"github.com/cago-frame/cago/database/db"
 
-	"agentre-server/internal/model/entity/device_flow_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
 //go:generate mockgen -source device_flow.go -destination mock_device_flow_repo/mock_device_flow.go
@@ -35,29 +36,12 @@ func (r *repo) Create(ctx context.Context, e *device_flow_entity.DeviceFlowCode)
 }
 
 func (r *repo) FindByDeviceCode(ctx context.Context, dc string) (*device_flow_entity.DeviceFlowCode, error) {
-	ret := &device_flow_entity.DeviceFlowCode{}
-	err := db.Ctx(ctx).Where("device_code=?", dc).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[device_flow_entity.DeviceFlowCode](db.Ctx(ctx).Where("device_code=?", dc))
 }
 
 func (r *repo) FindPendingByUserCode(ctx context.Context, uc string) (*device_flow_entity.DeviceFlowCode, error) {
-	ret := &device_flow_entity.DeviceFlowCode{}
-	err := db.Ctx(ctx).
-		Where("user_code=? AND consumed_at=0 AND denied_at=0", uc).
-		First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[device_flow_entity.DeviceFlowCode](
+		db.Ctx(ctx).Where("user_code=? AND consumed_at=0 AND denied_at=0", uc))
 }
 
 func (r *repo) Approve(ctx context.Context, uc string, userID, nowMs int64) (int64, error) {

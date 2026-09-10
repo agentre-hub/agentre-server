@@ -1,7 +1,10 @@
 .PHONY: dev build test test-backend test-frontend e2e test-cover \
         lint lint-backend lint-frontend lint-e2e fmt prepare-web-dist mock migrate docker
 
-VERSION := $(shell git describe --tags --always 2>/dev/null || echo dev)
+# 版本号是显式的、不从 tag 反推：git describe 在没打 tag 的分支上会退成 "dev"，
+# 而带 tag 时又会多出一个 "v" 前缀，跟桌面端 Makefile 的 0.1.0 对不上号。排障
+# 要的那一维由下面的 COMMIT 单独注入。
+VERSION ?= 0.1.0
 COMMIT  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 dev:
@@ -11,16 +14,21 @@ dev:
 
 build:
 	cd frontend && pnpm install --frozen-lockfile && pnpm build
+	# 先清空再拷：vite 的产物带内容哈希，文件名每次都不一样，只 cp 不删会让历史
+	# chunk 全部留下、一起被 //go:embed 进二进制（本地实测 19M vs 3.1M）。镜像不受
+	# 影响（.dockerignore 排除了这两个目录，Docker 从 web stage 干净拷贝），所以症状
+	# 是「本地 build 的二进制比镜像里的大一截」，排障时容易误判。
+	rm -rf internal/web/dist
 	mkdir -p internal/web/dist
 	cp -r frontend/dist/* internal/web/dist/
 	CGO_ENABLED=0 go build -ldflags "-s -w \
-	  -X agentre-server/internal/buildinfo.Version=$(VERSION) \
-	  -X agentre-server/internal/buildinfo.Commit=$(COMMIT)" \
+	  -X github.com/agentre-hub/agentre-server/internal/buildinfo.Version=$(VERSION) \
+	  -X github.com/agentre-hub/agentre-server/internal/buildinfo.Commit=$(COMMIT)" \
 	  -o bin/server ./cmd/server
 
 # 传版本号，否则镜像启动日志是 "dev (unknown)"，排障时对不回 commit
 docker:
-	docker build -f deploy/Dockerfile -t agentre/server:0.1 \
+	docker build -f deploy/Dockerfile -t agentre/server:$(VERSION) \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT=$(COMMIT) .
 

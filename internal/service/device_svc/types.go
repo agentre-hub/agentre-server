@@ -3,7 +3,7 @@ package device_svc
 import (
 	"time"
 
-	"agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 )
 
 // Config 装载从 cfg.Scan("server", ...) 得到的运行时参数。

@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Device from "@/pages/Device";
 
@@ -194,19 +194,9 @@ describe("设备码输入：代码不存在或已使用（30205）", () => {
   });
 });
 
-describe("设备码输入：中文文案照画板", () => {
+describe("设备码输入：中文错误映射", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("zh-CN");
-  });
-
-  it("标题与脚注用画板上的中文", () => {
-    renderEntry();
-    expect(
-      screen.getByRole("heading", { level: 1, name: "输入设备码" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("没有看到代码？回到设备上重新发起授权。"),
-    ).toBeTruthy();
   });
 
   it("30205 的中文错误文案照画板 18", async () => {

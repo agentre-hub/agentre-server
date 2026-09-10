@@ -6,7 +6,7 @@ Tests prove the code does what you told it to. Verification answers a different 
 
 Use targeted committed tests alone when they fully observe the changed logic ([testing.md](testing.md#the-cycle)). Use this route when real HTTP, database, session or cross-process wiring is needed, or when reproducing a runtime-only bug. It does not replace TDD: a reproduction confirms the bug is real and still owes the committed failing test.
 
-Verification is not how the smoke suite grows. Promotion is a separate, deliberate decision — things dropped into smoke because they were handy are what make it slow and flaky, and once it is flaky people stop believing it ([`../e2e/README.md`](../e2e/README.md#what-earns-a-place-in-the-smoke-track)).
+Verification is not how the smoke suite grows. Promotion is a separate, deliberate decision — things dropped into smoke because they were handy are what make it slow and flaky, and once it is flaky people stop believing it ([`../e2e/README.md`](../e2e/README.md#what-the-committed-smoke-covers)).
 
 ## Workflow
 
@@ -27,7 +27,7 @@ Verification is not how the smoke suite grows. Promotion is a separate, delibera
    | HTTP API, auth, device flow, session cookies | `go run ./cmd/server --config configs/config.e2e.yaml`, then `curl` against its port | nothing | a read-only SQL query against that config's `db.dsn`, or the server log |
    | a migration | the forward command against a database holding real existing rows | nothing | the same query before and after, side by side |
    | web UI rendering only — layout, copy, theme, anything reachable logged out | `make dev`, then `pnpm drive up --base http://127.0.0.1:5174` | nothing | the screenshot, in **both** form factors (`drive viewport`) |
-   | web UI behind auth, or touching real data | `cd e2e && pnpm serve` — a seeded account, already signed in — then `pnpm drive up` ([`../e2e/README.md`](../e2e/README.md#driving-by-hand-pnpm-serve--pnpm-drive)) | nothing | `drive sql`, plus the screenshots and `logs/drive.log` the run wrote |
+   | web UI behind auth, or touching real data | `cd e2e && pnpm serve` — a seeded account, already signed in — then `pnpm drive up` ([`../e2e/README.md`](../e2e/README.md#driving-by-hand)) | nothing | `drive sql`, plus the screenshots and `logs/drive.log` the run wrote |
    | replay, timing, or both form factors at once | the scratch track | a full spec | the spec's assertions |
 
    The committed smoke and default scratch route reach the formal backend; the E2E fixture has no API route mocks. `make e2e` covers desktop and mobile Chromium. Agentred, Wails, relay/WebSocket and multi-end synchronization are outside this harness ([`../e2e/README.md`](../e2e/README.md#what-the-committed-smoke-covers)).
@@ -50,7 +50,9 @@ cd e2e && pnpm scratch                                # uses pnpm serve's handof
 pnpm scratch --project=desktop-chromium -g "<title>"
 ```
 
-**Drive it before you write a spec.** A spec only asserts what you thought of in advance, and a one-line change costs a whole cold run; driving shows you what the page actually looks like now. That distinction is not theoretical here — the previous console round asserted elements existed and shipped a UI that did not match the design (`docs/specs/2026-08-12-console-design-fidelity.md`). Write a spec when the sequence must be **replayed**, not to look at something once.
+**Drive it before you write a spec.** A spec only asserts what you thought of in advance,
+while driving shows what the target actually does now. Write a spec when the sequence must
+be **replayed**, not merely to look at something once.
 
 For acceptance against a spec, `<scenario>` is that spec's slug, so the evidence and the spec are findable from each other. Extract each requirement into one verdict row and evidence section. Verdict labels are `holds`, `does not hold`, `not observed`, and they live only in the verdict table.
 
@@ -74,8 +76,8 @@ The same driver, commands and `drive.log` exist in the desktop repo (`agentre/e2
 Harness facts are owned by [`../e2e/README.md`](../e2e/README.md). Follow [documentation.md](documentation.md) after path or harness changes. What this route still owns:
 
 ```bash
-grep -n 'e2e/scratch' .gitignore                        # evidence stays local
-grep -n 'testDir' e2e/playwright.scratch.config.ts      # the scratch config still targets it
-grep -n 'scratch\|serve\|drive' e2e/package.json        # the run commands still exist
+git grep -n 'e2e/scratch' -- .gitignore                 # evidence stays local
+git grep -n 'testDir' -- e2e/playwright.scratch.config.ts # scratch config still targets it
+git grep -n -E 'scratch|serve|drive' -- e2e/package.json  # the run commands still exist
 git ls-files --error-unmatch e2e/drive.mjs e2e/lib/drive-target.mjs   # the driver is committed
 ```

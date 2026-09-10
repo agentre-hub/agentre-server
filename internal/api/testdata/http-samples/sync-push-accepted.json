@@ -1,0 +1,36 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/sync/push",
+    "body": {
+      "items": [
+        {
+          "kind": "project",
+          "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+          "base_version": 0,
+          "updated_at": 1700000000000,
+          "payload": {
+            "name": "Alpha"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "msg": "success",
+      "data": {
+        "results": [
+          {
+            "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+            "kind": "project",
+            "version": 12,
+            "status": "accepted"
+          }
+        ]
+      }
+    }
+  }
+}

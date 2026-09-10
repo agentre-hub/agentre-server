@@ -19,10 +19,41 @@ type receivedFrame struct {
 
 type transportHarness struct {
 	server     *httptest.Server
+	transport  Transport
 	peers      chan Connection
 	frames     chan receivedFrame
 	readErrors chan error
 	deadlines  <-chan deadlineEvent
+}
+
+func TestTransportGivenProtobufSubprotocolWhenUpgradingThenNegotiatesIt(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	const expectedSubprotocol = "agentre-protobuf"
+	dialer := websocket.Dialer{Subprotocols: []string{expectedSubprotocol}}
+	conn, _, err := dialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	require.Equal(t, expectedSubprotocol, conn.Subprotocol())
+}
+
+func TestTransportGivenNoSubprotocolWhenUpgradingThenCarriesBinaryFrames(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	conn, response, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	require.Equal(t, http.StatusSwitchingProtocols, response.StatusCode)
+	require.Empty(t, conn.Subprotocol())
+
+	peer := receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
+	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, []byte("request")))
+	frame := receiveWithin(t, harness.frames, time.Second, "transport did not carry binary frame")
+	require.Equal(t, websocket.BinaryMessage, frame.messageType)
+	require.Equal(t, []byte("request"), frame.data)
+	require.NoError(t, peer.WriteMessage(websocket.BinaryMessage, []byte("response")))
+	messageType, data, err := conn.ReadMessage()
+	require.NoError(t, err)
+	require.Equal(t, websocket.BinaryMessage, messageType)
+	require.Equal(t, []byte("response"), data)
 }
 
 func TestTransportUsesApprovedDefaultsAndPreservesOutboundFrames(t *testing.T) {
@@ -31,7 +62,7 @@ func TestTransportUsesApprovedDefaultsAndPreservesOutboundFrames(t *testing.T) {
 	require.Equal(t, 45*time.Second, cfg.readTimeout)
 	require.Equal(t, 10*time.Second, cfg.writeTimeout)
 
-	harness := newTransportHarness(t, cfg, nil, true)
+	harness := newTransportHarness(t, cfg, Hooks{}, true)
 	conn, peer := dialTransport(t, harness)
 	requireDeadlineWithin(t, harness.deadlines, "read", cfg.readTimeout)
 
@@ -69,7 +100,7 @@ func TestTransportHeartbeatsKeepResponsivePeersAlive(t *testing.T) {
 					return nil
 				}
 			}
-			harness := newTransportHarness(t, cfg, renew, false)
+			harness := newTransportHarness(t, cfg, Hooks{OnPeerActivity: renew}, false)
 			conn, _ := dialTransport(t, harness)
 
 			pings := make(chan struct{}, 16)
@@ -104,7 +135,7 @@ func TestTransportInboundDataExtendsReadLiveness(t *testing.T) {
 		readTimeout:       50 * time.Millisecond,
 		writeTimeout:      30 * time.Millisecond,
 	}
-	harness := newTransportHarness(t, cfg, nil, false)
+	harness := newTransportHarness(t, cfg, Hooks{}, false)
 	conn, _ := dialTransport(t, harness)
 
 	for range 4 {
@@ -122,13 +153,13 @@ func TestTransportPeerPingRenewsAndExtendsReadLiveness(t *testing.T) {
 		writeTimeout:      30 * time.Millisecond,
 	}
 	renewed := make(chan struct{}, 1)
-	harness := newTransportHarness(t, cfg, func() error {
+	harness := newTransportHarness(t, cfg, Hooks{OnPeerActivity: func() error {
 		select {
 		case renewed <- struct{}{}:
 		default:
 		}
 		return nil
-	}, false)
+	}}, false)
 	conn, _ := dialTransport(t, harness)
 
 	pongs := make(chan struct{}, 1)
@@ -156,7 +187,7 @@ func TestTransportUnresponsivePeerTimesOutAndCloses(t *testing.T) {
 		readTimeout:       40 * time.Millisecond,
 		writeTimeout:      20 * time.Millisecond,
 	}
-	harness := newTransportHarness(t, cfg, nil, false)
+	harness := newTransportHarness(t, cfg, Hooks{}, false)
 	conn, _ := dialTransport(t, harness)
 
 	receiveWithin(t, harness.readErrors, time.Second, "unresponsive relay peer did not time out")
@@ -165,10 +196,31 @@ func TestTransportUnresponsivePeerTimesOutAndCloses(t *testing.T) {
 	require.Error(t, err)
 }
 
+// 凭据撤销的复查必须挂在服务端自己的心跳上，不能只挂在「对端来了 ping/pong」上：
+// 一个只发帧、从不回应 ping 的对端会把读期限一直续下去，只靠对端活动的话它永远
+// 躲得掉复查。断开还必须是一个真正的关闭帧，对端才能与网络中断区分开。
+func TestTransportTerminatesRevokedCredentialOnItsOwnHeartbeat(t *testing.T) {
+	cfg := timing{
+		heartbeatInterval: 10 * time.Millisecond,
+		readTimeout:       2 * time.Second,
+		writeTimeout:      30 * time.Millisecond,
+	}
+	harness := newTransportHarness(t, cfg, Hooks{
+		OnHeartbeat: func() error { return ErrCredentialRevoked },
+	}, false)
+	conn, _ := dialTransport(t, harness)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err := conn.ReadMessage()
+	require.True(t, websocket.IsCloseError(err, websocket.ClosePolicyViolation), "%v", err)
+	require.Contains(t, err.Error(), credentialRevokedReason)
+	receiveWithin(t, harness.readErrors, time.Second, "revoked relay peer did not unblock the read loop")
+}
+
 func newTransportHarness(
 	t *testing.T,
 	cfg timing,
-	renew func() error,
+	hooks Hooks,
 	recordDeadlines bool,
 ) *transportHarness {
 	t.Helper()
@@ -177,9 +229,10 @@ func newTransportHarness(
 		frames:     make(chan receivedFrame, 16),
 		readErrors: make(chan error, 1),
 	}
-	transport := newWithTiming(cfg)
+	transport := newWithTiming(cfg, ClientReadLimit)
+	harness.transport = transport
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		peer, err := transport.Upgrade(w, r, renew)
+		peer, err := transport.Upgrade(w, r, hooks)
 		if err != nil {
 			select {
 			case harness.readErrors <- err:
@@ -214,7 +267,8 @@ func newTransportHarness(
 
 func dialTransport(t *testing.T, harness *transportHarness) (*websocket.Conn, Connection) {
 	t.Helper()
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	dialer := websocket.Dialer{Subprotocols: []string{ProtobufSubprotocol}}
+	conn, _, err := dialer.Dial(wsURL(harness.server.URL), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 	return conn, receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
@@ -298,4 +352,57 @@ func drainConnection(conn *websocket.Conn) {
 
 func wsURL(httpURL string) string {
 	return "ws" + strings.TrimPrefix(httpURL, "http")
+}
+
+/*
+优雅下线。
+
+副本被缩掉 / 滚动更新时,进程收到 SIGTERM 就没了,而中继连接是长连接:什么都不做
+的话对端读到的是 1006(abnormal closure)—— 它与「网线被拔了」一模一样,对端只能
+按网络抖动退避重试,而这一次它本该**立刻**重连、并且落到另一个还活着的副本上。
+
+所以下线要说一声:先写一个 1001(Going Away)关闭帧,再关连接。1001 在协议里的
+含义正是「服务端要走了」,对端据此把退避清零、马上重拨。
+*/
+func TestTransportDrainTellsPeersTheServerIsGoingAwayBeforeClosing(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
+
+	drained := harness.transport.Drain()
+	require.Equal(t, 1, drained, "本进程那一条连接必须被数进来")
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err = conn.ReadMessage()
+	require.True(t, websocket.IsCloseError(err, websocket.CloseGoingAway),
+		"对端必须收到 1001 而不是 1006(那与网络中断分不开): %v", err)
+	require.Contains(t, err.Error(), drainingReason)
+}
+
+// 关掉的连接不能再被数第二遍:排空是一次性的,重复调用(收到两次信号、或
+// CloseHandle 被跑了两遍)必须安全。
+func TestTransportDrainIsIdempotent(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
+
+	require.Equal(t, 1, harness.transport.Drain())
+	require.Equal(t, 0, harness.transport.Drain())
+}
+
+// 连接自己正常关掉之后要从登记表里摘掉,否则一个长跑的进程会把每一条来过的连接
+// 都留在表里 —— 那是一份只增不减的内存。
+func TestTransportForgetsClosedConnections(t *testing.T) {
+	harness := newTransportHarness(t, defaultTiming(), Hooks{}, false)
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL(harness.server.URL), nil)
+	require.NoError(t, err)
+	peer := receiveWithin(t, harness.peers, time.Second, "transport did not expose upgraded peer")
+	require.NoError(t, peer.Close())
+	_ = conn.Close()
+
+	require.Equal(t, 0, harness.transport.Drain())
 }

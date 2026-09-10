@@ -1,9 +1,8 @@
 // Package migrations 汇总并执行 agentre-server MySQL 全部迁移。
 //
 // 规范：
-//   - 文件名前缀 = 时间戳排序键（YYYYMMDDNNNN），调用顺序按时间升序。
-//   - 每个迁移返回一个 *gormigrate.Migration。
-//   - 一次迁移只做一件事。
+//   - 迁移使用时间戳文件名（YYYYMMDDNNNN），按时间升序追加执行。
+//   - 每个迁移返回一个 *gormigrate.Migration，一次迁移只做一件事。
 //   - DDL 用原生 SQL，不依赖 GORM AutoMigrate。
 //   - 禁止改动既有迁移；修复请新增补丁迁移。
 package migrations
@@ -22,7 +21,7 @@ import (
 
 // migrationLockName 是迁移串行化用的 MySQL named lock。锁名携应用名，
 // 避免同一 MySQL 实例上的其他应用迁移相互阻塞。
-const migrationLockName = "agentre-server/migrations"
+const migrationLockName = "github.com/agentre-hub/agentre-server/migrations"
 
 // migrationLockPollInterval / migrationLockWaitBudget 是轮询 GET_LOCK 的
 // 间隔与总预算，声明成变量是为了让测试能换成极小值而不必真的等待。
@@ -111,17 +110,34 @@ func releaseMigrationLock(ctx context.Context, conn *sql.Conn) {
 	}
 }
 
+// 退役号段（不得复用）
+//
+// 2026-09-04 发布前，产品尚未上线、所有开发/联调库一律删库重建，因此把当时的 16 条
+// 迁移压缩成了下面这一套基线建表迁移，全部旧号一次性退役：
+//
+//   - 202608280001 ~ 202608280010（十个域的初始建表）
+//   - 202609010001 ~ 202609010003（conversation_id 加列 / 回填 / 换身份键）
+//   - 202609040001 ~ 202609040003（drop 死列 / drop email_verified / delete_todos 改名）
+//
+// 那些迁移的最终结果已经折进 202609040101 起的建表语句里：加过的列直接建在表上，
+// drop 掉的列在基线里根本不建，纯回填迁移因为没有存量库需要回填而整条消失。
+//
+// **这些号一个都不许再用。** gormigrate 只认台账（migrations 表）里的 id 字符串：
+// 一个曾经跑过的号再次出现时，它会认为那条迁移已经执行过而**静默跳过**，新迁移的
+// DDL 一行都不会跑，而启动日志上什么都不会说。同类事故的记录见桌面仓库的
+// agentre/migrations/migrations.go。新迁移一律取一个从未出现过的号，追加在下面这个
+// 列表的末尾。
 func migrationList() []*gormigrate.Migration {
 	return []*gormigrate.Migration{
-		migration202605200001(),
-		migration202605200002(),
-		migration202605200003(),
-		migration202605200004(),
-		migration202605200005(),
-		migration202608090001(),
-		migration202608100001(),
-		migration202608140001(),
-		migration202608150001(),
-		migration202608150002(),
+		migration202609040101(),
+		migration202609040102(),
+		migration202609040103(),
+		migration202609040104(),
+		migration202609040105(),
+		migration202609040106(),
+		migration202609040107(),
+		migration202609040108(),
+		migration202609040109(),
+		migration202609040110(),
 	}
 }

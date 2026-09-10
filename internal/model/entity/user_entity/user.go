@@ -7,19 +7,18 @@ import (
 	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/i18n"
 
-	"agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 )
 
 // User 账号记录。
 type User struct {
-	ID            int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	Email         string `gorm:"column:email;type:text;not null"`
-	EmailVerified bool   `gorm:"column:email_verified;type:boolean;not null;default:false"`
-	DisplayName   string `gorm:"column:display_name;type:text;not null;default:''"`
-	AvatarURL     string `gorm:"column:avatar_url;type:text;not null;default:''"`
-	Status        int    `gorm:"column:status;type:smallint;not null;default:1"`
-	Createtime    int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
-	Updatetime    int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	Email       string `gorm:"column:email;type:text;not null"`
+	DisplayName string `gorm:"column:display_name;type:text;not null;default:''"`
+	AvatarURL   string `gorm:"column:avatar_url;type:text;not null;default:''"`
+	Status      int    `gorm:"column:status;type:smallint;not null;default:1"`
+	Createtime  int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	Updatetime  int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
 }
 
 func (*User) TableName() string { return "users" }

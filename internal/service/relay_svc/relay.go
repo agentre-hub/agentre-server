@@ -7,14 +7,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	goredis "github.com/redis/go-redis/v9"
 
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 )
 
 var (
@@ -22,6 +26,10 @@ var (
 	ErrDaemonOffline   = errors.New("relay daemon offline")
 	ErrForwardFailed   = errors.New("relay forwarding failed")
 	ErrDaemonForbidden = errors.New("relay daemon forbidden")
+	// ErrTargetInvalid 是通道声明的目标本身不成形：既不是
+	// conversation:<uuid> 也不是 machine:<fingerprint>。它与「解析不出机器」
+	// (ErrDaemonNotFound) 是两件事——前者是客户端写错了，后者是账号里确实没有。
+	ErrTargetInvalid = errors.New("relay channel target is invalid")
 	// ErrRelayUnconfigured 由 Default() 的安全占位实现返回：调用方从未
 	// SetDefault() 过真实的 RelaySvc（例如只装配了 device flow、没有跑完整
 	// bootstrap 的测试或 handler）。区别于 nil 接口——调用方能拿到一个明确
@@ -65,8 +73,16 @@ func (unavailableRelaySvc) ConnectClient(context.Context, int64, string) (Route,
 	return Route{}, ErrRelayUnconfigured
 }
 
+func (unavailableRelaySvc) ResolveTarget(context.Context, int64, string) (Route, error) {
+	return Route{}, ErrRelayUnconfigured
+}
+
 func (unavailableRelaySvc) IsDaemonOnline(context.Context, int64, string) (bool, error) {
 	return false, ErrRelayUnconfigured
+}
+
+func (unavailableRelaySvc) DaemonConnID(context.Context, int64, string) (string, error) {
+	return "", ErrRelayUnconfigured
 }
 
 func (unavailableRelaySvc) AttachDaemon(context.Context, Route, FrameWriter) (func(), error) {
@@ -96,6 +112,18 @@ type Route struct {
 	AccountID   int64
 	Fingerprint string
 	InstanceID  string
+	// ConnID 标识 daemon 的**这一条** websocket，每次 PrepareDaemon 现取一个。
+	//
+	// 在线态原本只答得出「这台机器在线吗」，答不出「还是不是原来那条连接」。而
+	// daemon 侧的虚拟通道连同它的鉴权状态都活在那条链路上，链路一换就都没了：中继
+	// 按指纹寻址，旧通道 id 的帧照样投给新接上的那条 websocket，daemon 对没见过的
+	// 通道 id 新建一条**未鉴权**通道，于是那条通道上的 session.* 从此一律
+	// Unauthorized。常驻镜像正是靠这个值发现自己手里那条通道已经作废
+	// （mirror_svc.follower.keepalive）。
+	//
+	// 客户端一侧解析出来的 Route（ConnectClient / ResolveTarget）带的是**此刻**登记
+	// 的那条链路，因此「解析出来的目标」与「daemon 登记的目标」始终是同一个值。
+	ConnID string
 }
 
 // Peer 标识帧从 daemon 或客户端一侧进入总线。
@@ -106,8 +134,9 @@ const (
 	PeerClient Peer = "client"
 )
 
-// Forwarder 是任务 11 实现的 Redis 帧总线边界。Check 必须在 websocket
-// upgrade 前返回可区分的转发失败；Forward 接收已 upgrade 的二进制或文本帧。
+// Forwarder 是 server-internal Redis 帧总线边界。Check 必须在 websocket upgrade
+// 前返回可区分的转发失败；Forward 的 peer/channel/messageType 是跨副本路由 metadata，
+// frame 是 opaque Protobuf RPC bytes，帧总线不解析其 method 或 payload。
 type Forwarder interface {
 	Check(ctx context.Context, target Route) error
 	Forward(ctx context.Context, target Route, source Peer, channelID string, messageType int, frame []byte) error
@@ -135,7 +164,17 @@ type RelaySvc interface {
 	RegisterDaemon(ctx context.Context, route Route) error
 	RenewDaemon(ctx context.Context, route Route) error
 	ConnectClient(ctx context.Context, accountID int64, fingerprint string) (Route, error)
+	// ResolveTarget 解析一条**虚拟通道**声明的目标。中继连接本身不再有目标
+	// （决策 10），所以这件事逐通道发生，一条连接上的两条通道可以落在两台
+	// 不同的机器上。
+	ResolveTarget(ctx context.Context, accountID int64, target string) (Route, error)
 	IsDaemonOnline(ctx context.Context, accountID int64, fingerprint string) (bool, error)
+	// DaemonConnID 交出这台机器此刻那条 daemon 连接的身份，机器不在线时交出
+	// ErrDaemonOffline。拿着旧值的调用方据此知道对端换过链路，自己手里那条虚拟
+	// 通道已经作废，见 Route.ConnID。
+	//
+	// 旧格式的在线态键（滚动升级期间）交出空串：认不出换代，而不是误判成换过代。
+	DaemonConnID(ctx context.Context, accountID int64, fingerprint string) (string, error)
 	AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error)
 	AttachClient(ctx context.Context, target Route, writer FrameWriter) (channelID string, detach func(), err error)
 	ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error
@@ -145,13 +184,24 @@ type RelaySvc interface {
 type relaySvc struct {
 	config    Config
 	devices   device_repo.DeviceRepo
+	saves     agent_session_repo.SaveRepo
 	redis     *goredis.Client
 	forwarder Forwarder
+
+	// 每条 daemon 链路一个分派器,把转发从读循环上摘下来,见 fanout.go。
+	fanoutMu sync.Mutex
+	fanouts  map[Route]*daemonFanout
 }
 
 // New 创建 RelaySvc。实例 ID 必须在每个 server 进程中唯一。
-func New(config Config, devices device_repo.DeviceRepo, redisClient *goredis.Client, forwarder Forwarder) RelaySvc {
-	return &relaySvc{config: config, devices: devices, redis: redisClient, forwarder: forwarder}
+func New(
+	config Config, devices device_repo.DeviceRepo, saves agent_session_repo.SaveRepo,
+	redisClient *goredis.Client, forwarder Forwarder,
+) RelaySvc {
+	return &relaySvc{
+		config: config, devices: devices, saves: saves, redis: redisClient, forwarder: forwarder,
+		fanouts: map[Route]*daemonFanout{},
+	}
 }
 
 func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64, kind string) (Route, error) {
@@ -162,10 +212,18 @@ func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64,
 	if err != nil {
 		return Route{}, err
 	}
-	if device == nil || device.UserID != accountID || !isAddressableKind(device.Kind) || !device.IsActive() {
+	if !device.UsableBy(accountID) || !isAddressableKind(device.Kind) {
 		return Route{}, ErrDaemonForbidden
 	}
-	return Route{AccountID: accountID, Fingerprint: device.Fingerprint, InstanceID: s.config.InstanceID}, nil
+	// 一条 websocket 一个 ConnID：PrepareDaemon 在 handler 里只跑一次，见 Route.ConnID。
+	connID, err := newDaemonConnID()
+	if err != nil {
+		return Route{}, err
+	}
+	return Route{
+		AccountID: accountID, Fingerprint: device.Fingerprint,
+		InstanceID: s.config.InstanceID, ConnID: connID,
+	}, nil
 }
 
 func isAddressableKind(kind string) bool {
@@ -173,22 +231,29 @@ func isAddressableKind(kind string) bool {
 }
 
 func (s *relaySvc) RegisterDaemon(ctx context.Context, route Route) error {
-	if err := s.redis.Set(ctx, routeKey(route.AccountID, route.Fingerprint), route.InstanceID, s.config.OnlineTTL).Err(); err != nil {
+	if err := s.redis.Set(ctx, routeKey(route.AccountID, route.Fingerprint), routeValue(route), s.config.OnlineTTL).Err(); err != nil {
 		return fmt.Errorf("register relay daemon: %w", err)
 	}
+	// 登记完才出声，而且只有登记这一处出声：RenewDaemon 是心跳续期，不是状态变化，
+	// 跟着喊会让这个账号所有在线连接每 15 秒白拉一页设备列表。下线没有对应的一条
+	// ——在线态的模型就是「键到期即离线，不主动删除」（见 accountchan_svc
+	// .FrameTypeDevicePresence）。
+	accountchan_svc.BroadcastSignalBestEffort(ctx, route.AccountID, accountchan_svc.FrameTypeDevicePresence)
 	return nil
 }
 
 func (s *relaySvc) RenewDaemon(ctx context.Context, route Route) error {
 	key := routeKey(route.AccountID, route.Fingerprint)
-	instanceID, err := s.redis.Get(ctx, key).Result()
+	value, err := s.redis.Get(ctx, key).Result()
 	if errors.Is(err, goredis.Nil) {
 		return ErrDaemonOffline
 	}
 	if err != nil {
 		return fmt.Errorf("get relay daemon: %w", err)
 	}
-	if instanceID != route.InstanceID {
+	// 只比实例：判据仍是「这台机器此刻归不归本副本」。同一副本上新连接接替旧连接时,
+	// 迟到的那次续期续的是同一个值,只动 TTL,不改在线态。
+	if instanceID, _ := splitRouteValue(value); instanceID != route.InstanceID {
 		return ErrDaemonOffline
 	}
 	if err := s.redis.Expire(ctx, key, s.config.OnlineTTL).Err(); err != nil {
@@ -206,14 +271,19 @@ func (s *relaySvc) ConnectClient(ctx context.Context, accountID int64, fingerpri
 		return Route{}, ErrDaemonNotFound
 	}
 
-	instanceID, err := s.redis.Get(ctx, routeKey(accountID, fingerprint)).Result()
+	value, err := s.redis.Get(ctx, routeKey(accountID, fingerprint)).Result()
 	if errors.Is(err, goredis.Nil) {
 		return Route{}, ErrDaemonOffline
 	}
 	if err != nil {
 		return Route{}, fmt.Errorf("resolve relay daemon: %w", err)
 	}
-	route := Route{AccountID: accountID, Fingerprint: fingerprint, InstanceID: instanceID}
+	// 拆开：InstanceID 是帧总线的寻址依据，整段复合值送进去谁都路由不到。
+	instanceID, connID := splitRouteValue(value)
+	route := Route{
+		AccountID: accountID, Fingerprint: fingerprint,
+		InstanceID: instanceID, ConnID: connID,
+	}
 	if err := s.forwarder.Check(ctx, route); err != nil {
 		return Route{}, fmt.Errorf("%w: %v", ErrForwardFailed, err)
 	}
@@ -230,12 +300,33 @@ func (s *relaySvc) IsDaemonOnline(ctx context.Context, accountID int64, fingerpr
 	return n > 0, nil
 }
 
+func (s *relaySvc) DaemonConnID(ctx context.Context, accountID int64, fingerprint string) (string, error) {
+	value, err := s.redis.Get(ctx, routeKey(accountID, fingerprint)).Result()
+	if errors.Is(err, goredis.Nil) {
+		return "", ErrDaemonOffline
+	}
+	if err != nil {
+		return "", fmt.Errorf("get relay daemon connection: %w", err)
+	}
+	_, connID := splitRouteValue(value)
+	return connID, nil
+}
+
 // channelCloseTimeout 限制「通知 daemon 通道关闭」这一步的耗时:它跑在客户端
 // 断开的清理路径上,阻塞在这里会拖住 websocket handler 的返回。
 const channelCloseTimeout = 3 * time.Second
 
 func (s *relaySvc) AttachDaemon(ctx context.Context, target Route, writer FrameWriter) (func(), error) {
-	return s.attach(ctx, target, PeerDaemon, "", writer)
+	detach, err := s.attach(ctx, target, PeerDaemon, "", writer)
+	if err != nil {
+		return nil, err
+	}
+	// 分派器与这条链路同生共死:它一收工,排着的帧就不该再投,新来的帧也不该再收。
+	closeFanout := s.registerFanout(target)
+	return func() {
+		closeFanout()
+		detach()
+	}, nil
 }
 
 func (s *relaySvc) AttachClient(ctx context.Context, target Route, writer FrameWriter) (string, func(), error) {
@@ -267,19 +358,30 @@ func (s *relaySvc) attach(ctx context.Context, target Route, peer Peer, channelI
 	return forwarder.Attach(ctx, target, peer, channelID, writer)
 }
 
+// ForwardDaemon 只做两件事:拆信封、把内层帧排给它那条虚拟通道。**不等转发完成**。
+//
+// 调用它的是 daemon 的读循环,而转发在跨副本时要等一次 Redis 投递回执。在这里等
+// 就等于让一台机器上所有会话的每一个 token 排同一条队(见 fanout.go 开头)。
+//
+// 信封解不开是**协议违例**,不是转发失败:它照旧同步报上去,控制器据此拆掉这条链路。
+// 而转发本身的失败发生在 worker 里,不再连坐这条共享的物理连接。
 func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType int, frame []byte) error {
 	if messageType != websocket.BinaryMessage {
 		return errors.New("relay daemon envelope must be a binary websocket message")
 	}
-	channelID, innerFrame, err := unwrapEnvelope(frame)
+	channelID, innerFrame, err := UnwrapEnvelope(frame)
 	if err != nil {
 		return fmt.Errorf("decode relay daemon envelope: %w", err)
 	}
-	return s.forward(ctx, target, PeerDaemon, channelID, websocket.BinaryMessage, innerFrame)
+	fanout, ok := s.fanoutFor(target)
+	if !ok {
+		return fmt.Errorf("%w: relay daemon link is not attached", ErrForwardFailed)
+	}
+	return fanout.enqueue(ctx, channelID, innerFrame)
 }
 
 func (s *relaySvc) ForwardClient(ctx context.Context, target Route, channelID string, messageType int, frame []byte) error {
-	envelope, err := wrapEnvelope(channelID, frame)
+	envelope, err := WrapEnvelope(channelID, frame)
 	if err != nil {
 		return fmt.Errorf("encode relay client envelope: %w", err)
 	}
@@ -301,7 +403,38 @@ func newChannelID() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
-func wrapEnvelope(channelID string, frame []byte) ([]byte, error) {
+func newDaemonConnID() (string, error) {
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		return "", fmt.Errorf("generate relay daemon connection ID: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+// routeValueSeparator 分开在线态值里的实例与连接。base64.RawURLEncoding 的字母表
+// （A-Z a-z 0-9 - _）里没有它，所以两段永远分得开。
+const routeValueSeparator = "|"
+
+// routeValue 是在线态键里存的东西：本副本的实例 id + daemon 的这条连接。
+func routeValue(route Route) string {
+	if route.ConnID == "" {
+		return route.InstanceID
+	}
+	return route.InstanceID + routeValueSeparator + route.ConnID
+}
+
+// splitRouteValue 拆回实例与连接。旧格式（滚动升级期间还没被覆盖的键）只有实例一段，
+// 连接交回空串——调用方据此退回「认不出换代」，而不是把每一台机器都判成换过代。
+func splitRouteValue(value string) (instanceID, connID string) {
+	instanceID, connID, _ = strings.Cut(value, routeValueSeparator)
+	return instanceID, connID
+}
+
+// WrapEnvelope 把一帧套上通道信封：2 字节通道 ID 长度 + 通道 ID + 载荷。
+//
+// 两条链路共用这一个格式。目标下沉到通道之后（决策 10），客户端那条链路上一条
+// 物理连接同时跑多条通道，因此它也开始收发信封，而不再是裸载荷。
+func WrapEnvelope(channelID string, frame []byte) ([]byte, error) {
 	if channelID == "" {
 		return nil, errors.New("relay channel ID is required")
 	}
@@ -316,7 +449,8 @@ func wrapEnvelope(channelID string, frame []byte) ([]byte, error) {
 	return envelope, nil
 }
 
-func unwrapEnvelope(envelope []byte) (string, []byte, error) {
+// UnwrapEnvelope 拆开通道信封。空载荷是合法的：它是「这条通道关了」的信号。
+func UnwrapEnvelope(envelope []byte) (string, []byte, error) {
 	if len(envelope) < 2 {
 		return "", nil, errors.New("relay envelope is shorter than channel length")
 	}

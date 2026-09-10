@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	serversession "github.com/agentre-hub/agentre-server/internal/pkg/session"
 )
 
 func TestSeedCreatesOnlyUserAndProductionSession(t *testing.T) {
@@ -11,8 +14,16 @@ func TestSeedCreatesOnlyUserAndProductionSession(t *testing.T) {
 	}
 
 	payload := newSessionPayload(42, "csrf", 1234)
-	if payload.UserID != 42 || payload.CSRFToken != "csrf" || payload.CreatedAt != 1234 {
-		t.Fatalf("session payload = %#v, want production user_id/csrf_token/created_at shape", payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal session payload: %v", err)
+	}
+	var decoded serversession.Session
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("decode fixture with production session contract: %v", err)
+	}
+	if decoded.UserID != 42 || decoded.CSRFToken != "csrf" || decoded.CreatedAt != 1234 {
+		t.Fatalf("production session decoded fixture as %#v, want user 42 with matching csrf and creation time", decoded)
 	}
 }
 
@@ -48,6 +59,9 @@ func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 	for _, name := range []string{
 		"users", "device_flow_codes", "devices", "device_tokens",
 		"sync_objects", "sync_account_seqs", "sync_device_states", "sync_avatars", "device_local_paths",
+		// 通行密钥的行没有指向 users 的外键：账号删掉它也留着，清理里不列一条就
+		// 永久留在专库里（本轮已实证留下两行属于已删账号的凭证）。
+		"webauthn_credentials",
 	} {
 		_ = findSQLStep(t, counts, name)
 	}
@@ -72,13 +86,20 @@ func TestOracleReportsStateWithoutSecretColumns(t *testing.T) {
 	}
 
 	steps := oracleSQL()
-	for _, name := range []string{"device_flow_codes", "devices", "device_tokens"} {
+	for _, name := range []string{"device_flow_codes", "devices", "device_tokens", "sync_objects"} {
 		step := findSQLStep(t, steps, name)
 		lower := strings.ToLower(step.SQL)
 		for _, secret := range []string{"device_code", "user_code", "access_jti", "refresh_token_hash"} {
 			if strings.Contains(lower, secret) {
 				t.Fatalf("oracle %s exposes secret column %s: %s", name, secret, step.SQL)
 			}
+		}
+	}
+
+	syncObjects := findSQLStep(t, steps, "sync_objects")
+	for _, column := range []string{"sync_id", "kind", "version", "deleted_at"} {
+		if !strings.Contains(strings.ToLower(syncObjects.SQL), column) {
+			t.Fatalf("oracle sync_objects does not report %s: %s", column, syncObjects.SQL)
 		}
 	}
 }

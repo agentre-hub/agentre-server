@@ -9,7 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
 
@@ -66,8 +66,13 @@ async function openRevokeDialog(deviceName: string) {
   const row = screen
     .getByText(deviceName)
     .closest('[data-slot="card"]') as HTMLElement;
-  fireEvent.click(within(row).getByRole("button", { name: "Row actions" }));
-  const menu = await within(row).findByRole("menu");
+  // Radix 的菜单开在 pointerdown 上，不是 click。
+  fireEvent.pointerDown(
+    within(row).getByRole("button", { name: `Actions for ${deviceName}` }),
+    { button: 0, ctrlKey: false },
+  );
+  // 菜单走 Portal 挂在 body 上，不在这张卡里面找。
+  const menu = await screen.findByRole("menu");
   fireEvent.click(within(menu).getByRole("menuitem", { name: "Revoke" }));
   return screen.findByRole("dialog");
 }
@@ -123,7 +128,8 @@ describe("device management page", () => {
     await screen.findByText("nuc-01");
 
     const dialog = await openRevokeDialog("nuc-01");
-    expect(within(dialog).getByText("Revoke this device?")).toBeTruthy();
+    // 标题点名是哪一台（撤销确认是模态、盖住整页，用户已经看不见自己点的是哪行）。
+    expect(within(dialog).getByText("Revoke nuc-01?")).toBeTruthy();
     const body =
       within(dialog).getByText(/can no longer refresh/i).textContent ?? "";
     expect(body).toMatch(/can no longer refresh/i);
@@ -222,7 +228,71 @@ describe("device management page", () => {
 
     // 已撤销行连行级菜单都不渲染（没有可做的动作）
     expect(
-      within(row).queryByRole("button", { name: "Row actions" }),
+      within(row).queryByRole("button", { name: /^Actions for / }),
     ).toBeNull();
+  });
+});
+
+/**
+ * 撤销是这一页最重的不可逆动作，而它的入口是行菜单里一个浮层、确认框是模态、
+ * 盖住整页 —— 按下去那一刻用户已经看不见自己点的是哪一行了。标题与正文却一个
+ * 插值都没有，四台名字相近的机器摆在一起时这是真会点错的。
+ *
+ * 行菜单的可访问名同理：每一行都念「行操作」，读屏用户听到 N 遍同一句话，
+ * 没有一处能分辨是谁的。同一个仓库里项目组头那边用的已经是带名字的插值。
+ */
+describe("设备页:撤销要点名是哪一台", () => {
+  it("确认框的标题带机器名，正文补上平台/版本/最后在线", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+    await screen.findByText("nuc-01");
+
+    const dialog = await openRevokeDialog("nuc-01");
+    expect(within(dialog).getByText(/nuc-01/)).toBeTruthy();
+    const facts = within(dialog).getByTestId("revoke-device-facts").textContent;
+    expect(facts).toMatch(/linux/);
+    expect(facts).toMatch(/0\.4\.0/);
+  });
+
+  /**
+   * 「最后在线」用相对时刻，绝对时刻退到 title 上 —— 这是全站其余各处已经在用的
+   * 那一套（会话索引、状态横幅、总览、组织面详情头都是 formatRelativeTime +
+   * title）。此前这一页是裸的 `toLocaleString()`，一串机器格式的年月日时分秒挤在
+   * 一行 mono 小字里，读起来比「3 分钟前」慢得多，也和别处对不上。
+   */
+  it("最后在线是相对时刻,绝对时刻退到 title 上", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+    const row = (await screen.findByText("nuc-01")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+
+    const meta = within(row).getByTestId("device-meta");
+    expect(meta.textContent).not.toMatch(/\d{4}/); // 不再出现年份
+    expect(meta.getAttribute("title")).toContain(
+      new Date(1754000000000).toLocaleString(),
+    );
+  });
+
+  it("每一行的菜单各自报出是哪台机器的菜单", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+    await screen.findByText("nuc-01");
+
+    expect(
+      screen.getByRole("button", { name: "Actions for nuc-01" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Actions for laptop" }),
+    ).toBeTruthy();
   });
 });

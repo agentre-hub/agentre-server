@@ -8,12 +8,12 @@ import (
 
 // testkeysPkg 是本包的完整导入路径；它 embed 了一对固定 RSA 私钥，
 // 只允许出现在测试二进制里。
-const testkeysPkg = "agentre-server/internal/pkg/jwt/testkeys"
+const testkeysPkg = "github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 
 // productionBinaries 列出所有会被发布出去的构建目标。
 // 新增 cmd/xxx 入口时，一并加到这里。
 var productionBinaries = []string{
-	"agentre-server/cmd/server",
+	"github.com/agentre-hub/agentre-server/cmd/server",
 }
 
 // TestTestkeysNotLinkedIntoProductionBinary 断言 testkeys 不在任何生产二进制的依赖图里。

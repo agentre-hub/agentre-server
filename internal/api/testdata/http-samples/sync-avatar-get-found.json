@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/sync/avatars?content_hash=e1e10747c2374f621aa59fefede6ef99dc6acdb41b267ab4af408d5529f89ea8"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "msg": "success",
+      "data": {
+        "content_hash": "e1e10747c2374f621aa59fefede6ef99dc6acdb41b267ab4af408d5529f89ea8",
+        "content_type": "image/png",
+        "content": "data:image/png;base64,iVBORw0KGgo="
+      }
+    }
+  }
+}

@@ -7,21 +7,23 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/redis"
-	"github.com/cago-frame/cago/pkg/utils/testutils"
 	"github.com/gin-gonic/gin"
 	. "github.com/smartystreets/goconvey/convey"
 
-	"agentre-server/internal/middleware"
-	hubjwt "agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
-	"agentre-server/internal/pkg/session"
-	"agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/testutils"
+
+	"github.com/agentre-hub/agentre-server/internal/middleware"
+	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 )
 
 func TestSessionOrDeviceAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	testutils.Redis()
-	auth_svc.SetDefault(auth_svc.New(session.New(redis.Default(), "server_session", 14*24*3600)))
+	testutils.Redis(t)
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
 	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	if err != nil {
 		t.Fatal(err)
@@ -29,7 +31,7 @@ func TestSessionOrDeviceAuth(t *testing.T) {
 
 	makeHandler := func() *gin.Engine {
 		r := gin.New()
-		r.GET("/me", middleware.SessionOrDeviceAuth(signer), func(c *gin.Context) {
+		r.GET("/me", middleware.SessionOrDeviceAuth(signer, jwtblacklist.New(redis.Default())), func(c *gin.Context) {
 			uid, _ := c.Get("user_id")
 			did, _ := c.Get("device_id")
 			c.JSON(http.StatusOK, gin.H{"uid": uid, "did": did})

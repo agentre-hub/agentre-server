@@ -1,0 +1,9 @@
+{
+  "brand": "AgentRe",
+  "footer": {
+    "copyright": "© {{year}} AgentRe",
+    "terms": "Terms of Service",
+    "privacy": "Privacy Policy",
+    "status": "Status"
+  }
+}
