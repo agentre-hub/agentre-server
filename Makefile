@@ -42,8 +42,11 @@ prepare-web-dist:
 test-backend: prepare-web-dist
 	go test -race ./...
 
+# typecheck 与 vitest 一起跑:vitest 走 esbuild 只转译不查类型,而 tsc 此前只挂在
+# build 上 —— 于是 make test / make lint 全绿、make build 红,类型闸形同虚设。
+# relay-event-vocabulary 那张 Record<RuntimeEventCase, ...> 正是靠 tsc 才发难的。
 test-frontend:
-	cd frontend && pnpm install --frozen-lockfile --silent && pnpm test
+	cd frontend && pnpm install --frozen-lockfile --silent && pnpm typecheck && pnpm test
 
 # 唯一自动 E2E 入口：正式 server + 真实 MySQL/Redis + 桌面/移动 Chromium。
 # configs/config.e2e.yaml 必须由本地专库配置或 CI setup 提供；runner 负责 build、

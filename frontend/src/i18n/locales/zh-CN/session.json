@@ -69,6 +69,10 @@
     "notSent": {
       "titleUnknown": "还没发出去",
       "body": "连接断了，这条从来没送到那台机器——重发是干净的。"
+    },
+    "imageWhileRunning": {
+      "titleUnknown": "图片插不进正在跑的这一轮",
+      "body": "这一轮还在跑，中途只添得进文字。这条一帧都没发出去——等它跑完再发。"
     }
   },
   "sendPending": {

@@ -793,7 +793,7 @@ func TestSync_PeerJournalRewound_OldTranscriptPurgedBeforeReplay(t *testing.T) {
 
 	old := make([]*agent_session_entity.JournalFrame, 0, 5)
 	for seq := int64(1); seq <= 5; seq++ {
-		payload, err := proto.Marshal(notification(conv42, seq, fmt.Sprintf("上一条对话第%d句", seq)))
+		payload, err := wireview.EncodeStoredFrame(notification(conv42, seq, fmt.Sprintf("上一条对话第%d句", seq)))
 		require.NoError(t, err)
 		old = append(old, &agent_session_entity.JournalFrame{
 			UserID: testUserID, ConversationID: conv42, PeerFingerprint: testMachine, Seq: seq,
@@ -1447,8 +1447,8 @@ func TestWriteFrames_StoresTheViewAsJSON(t *testing.T) {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params"`
 	}
-	require.NoError(t, json.Unmarshal(r.frames[0].Payload, &stored),
-		"payload 必须是 JSON：%q", string(r.frames[0].Payload))
+	require.NoError(t, json.Unmarshal([]byte(r.frames[0].Payload), &stored),
+		"payload 必须是 JSON：%q", r.frames[0].Payload)
 	assert.Equal(t, "runtime.event", stored.Method)
 	assert.JSONEq(t,
 		`{"conversationId":"`+conv42+`","seq":1,"event":{"kind":"text_delta","text":"你好"}}`,
@@ -1481,7 +1481,7 @@ func TestWriteFrames_UnprojectableFrameKeepsItsProtoBytes(t *testing.T) {
 	var escaped struct {
 		Proto string `json:"$proto"`
 	}
-	require.NoError(t, json.Unmarshal(r.frames[0].Payload, &escaped))
+	require.NoError(t, json.Unmarshal([]byte(r.frames[0].Payload), &escaped))
 	require.NotEmpty(t, escaped.Proto, "原件必须留在库里")
 	raw, err := base64.StdEncoding.DecodeString(escaped.Proto)
 	require.NoError(t, err)
@@ -1495,7 +1495,7 @@ func TestWriteFrames_UnprojectableFrameKeepsItsProtoBytes(t *testing.T) {
 // 比的是**落库形态**（wireview 的视图），因为 payload 已经不是 protobuf 字节了
 // （2026-09-07-journal-payload-json.md）。两边都走生产那一侧的编解码：形状漂了这里
 // 会红，而不是靠测试自己抄一份形状。
-func assertStoredFrameIs(t *testing.T, want *agentrewire.RpcNotification, payload []byte) {
+func assertStoredFrameIs(t *testing.T, want *agentrewire.RpcNotification, payload string) {
 	t.Helper()
 	wantMethod, wantParams, err := wireview.Notification(want)
 	require.NoError(t, err)
@@ -1506,7 +1506,7 @@ func assertStoredFrameIs(t *testing.T, want *agentrewire.RpcNotification, payloa
 }
 
 // storedText 取出这一行存着的那条 text_delta 的正文。
-func storedText(t *testing.T, payload []byte) string {
+func storedText(t *testing.T, payload string) string {
 	t.Helper()
 	_, params, err := wireview.DecodeStoredFrame(payload)
 	require.NoError(t, err)

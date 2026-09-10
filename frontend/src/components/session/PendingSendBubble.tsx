@@ -1,7 +1,14 @@
 import { Clock3, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { Button, ChatMessage, cn } from "@agentre-hub/agentre-ui";
+import {
+  Button,
+  ChatMessage,
+  cn,
+  type ChatImageAttachment,
+} from "@agentre-hub/agentre-ui";
+
+import SendAttachments from "@/components/session/SendAttachments";
 
 /**
  * 排着队等连接的那一条（规格 2026-08-21 决策 6）。
@@ -21,9 +28,12 @@ import { Button, ChatMessage, cn } from "@agentre-hub/agentre-ui";
  */
 export default function PendingSendBubble({
   text,
+  images,
   onCancel,
 }: {
   text: string;
+  /** 排着的这条带着的图。不摆的话它在屏幕上看着是一条纯文本消息。 */
+  images?: readonly ChatImageAttachment[];
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
@@ -65,6 +75,7 @@ export default function PendingSendBubble({
           <Clock3 aria-hidden="true" className="size-3 shrink-0" />
           {t("session.sendPending.title")}
         </p>
+        <SendAttachments images={images} />
         {/* 用户自己写的那段字。动态内容，不进 t(...)。 */}
         <p className="whitespace-pre-wrap break-words text-foreground">
           {text}

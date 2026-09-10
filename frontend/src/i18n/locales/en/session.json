@@ -69,6 +69,10 @@
     "notSent": {
       "titleUnknown": "Not sent yet",
       "body": "The connection dropped; this never reached that machine — resending is clean."
+    },
+    "imageWhileRunning": {
+      "titleUnknown": "Images can't join a running turn",
+      "body": "That turn is still going, and only text can be added to it. Nothing was sent — resend once it finishes."
     }
   },
   "sendPending": {

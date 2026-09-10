@@ -16,6 +16,7 @@ import type { ModelTarget } from "@agentre-hub/agentre-ui";
 import type { FailedSend } from "@/components/session/SendFailureBubble";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { randomId } from "@/lib/randomId";
+import { encodeUserBlocks } from "@/lib/userBlocks";
 import type { RelayClient } from "@/lib/relayClient";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 import { isNativeCompactBackend, SLASH_COMPACT } from "@/lib/slashCommands";
@@ -104,6 +105,21 @@ export function useTurnActivity(): TurnActivity {
   };
 }
 
+/**
+ * 这一条要走 `runtime.steer`,而它带着图 —— steer 的参数里只有 `text`
+ * （daemon 的 handlers/runtime.go），所以这条**确实**发不出去,一帧都没出门。
+ *
+ * 有自己的类型而不是裸 `Error`:裸 `Error` 不是 `RelayError`,
+ * `classifySendFailure` 认不出它、会归成 `transport`,气泡于是说「连接断了,可能
+ * 已经送达,再发一次可能变成两条」—— 连接好好的、这条没送达、重发也是干净的。
+ */
+class ImagesCannotSteer extends Error {
+  constructor() {
+    super("image input cannot be steered into an active turn");
+    this.name = "ImagesCannotSteer";
+  }
+}
+
 export interface SessionSendParams {
   /** 已装载的目标会话：这三样一变，排着的与没发出去的都属于上一条，要清掉。 */
   did: number;
@@ -137,7 +153,7 @@ export interface SessionSend {
   /** 这一次发送在飞。输入框与失败气泡的按钮都读它。 */
   sending: boolean;
   /** 排着队等连接的那一条（决策 6）。 */
-  pendingSend: string | null;
+  pendingSend: ChatComposerSubmit | null;
   /** 用户自己撤掉排着的那一条。 */
   cancelPendingSend: () => void;
   /** 没发出去的那些消息（决策 7）。 */
@@ -205,8 +221,14 @@ export function useSessionSend({
    * 排着队等连接的那一条（决策 6）。只留**一条**：重连期间连着敲好几段话，一个
    * 一个排进去、连上时一股脑发出去，读起来像自己被顶替了 —— 新的一条来时把旧的
    * 交给失败气泡，让用户自己决定。
+   *
+   * 排的是**整条消息**而不是一段文本:贴在这一句上的图与字同属用户刚说的那一条,
+   * 只排文本的话连上之后发出去的是一条纯文本 —— 图在排队那一瞬间就没了,而屏幕上
+   * 那条排队气泡看着一切正常。
    */
-  const [pendingSend, setPendingSend] = useState<string | null>(null);
+  const [pendingSend, setPendingSend] = useState<ChatComposerSubmit | null>(
+    null,
+  );
 
   const targetChanged = useTargetChanged(did, sid, originProp);
   if (targetChanged) {
@@ -232,13 +254,7 @@ export function useSessionSend({
     c: import("@/lib/relayClient").RelayClient,
     message: ChatComposerSubmit,
   ): Promise<unknown> {
-    const userBlocks = message.images?.map((image) => ({
-      type: "image",
-      data: {
-        media_type: image.mediaType,
-        source: { inline: image.dataUrl.split(",", 2)[1] ?? "" },
-      },
-    }));
+    const userBlocks = encodeUserBlocks(message.images);
     const { providerKey: llmProviderKey, modelKey: llmModelKey } =
       effectiveTarget;
     return c.request(rpcMethods.runtimeRun, {
@@ -248,14 +264,7 @@ export function useSessionSend({
       title: summary?.title,
       agentSyncId: summary?.agentSyncId,
       userText: message.text,
-      ...(userBlocks?.length
-        ? {
-            userBlocks: userBlocks.map((block) => ({
-              type: block.type,
-              data: new TextEncoder().encode(JSON.stringify(block.data)),
-            })),
-          }
-        : {}),
+      ...(userBlocks ? { userBlocks } : {}),
       permissionMode: effectivePermissionMode,
       ...(llmProviderKey ? { llmProviderKey, llmModelKey } : {}),
       sourceDevice: relayTicket?.peerFingerprint,
@@ -303,9 +312,21 @@ export function useSessionSend({
   ): Promise<boolean> {
     const body = message.text;
     const running = turnActiveRef.current;
-    if (running && message.images?.length) {
-      throw new Error("image input cannot be steered into an active turn");
-    }
+    const hasImages = !!message.images?.length;
+    /*
+      插话（`runtime.steer`）的参数里只有 `text`（daemon 的 handlers/runtime.go），
+      图带不动。所以「这一条带着图」与「这一条要走 steer」不能同时成立。
+
+      判在**选路这一处**,而不是进 `sendMessage` 之前:`turnActiveRef` 只是一份尽力
+      而为的快照,而通往 steer 的路有两条 —— 这一条(快照说在跑),以及下面回落的
+      那一条(快照说没在跑,run 却被对端拒了)。任何一条不拦,那张图就在一次报成
+      **成功**的发送里静默没了,用户没有任何理由再发一次。
+
+      抛的是一个自己的类型,不是裸 Error:裸 Error 不是 RelayError,
+      `classifySendFailure` 认不出它、归成 `transport`,气泡于是说「连接断了,可能
+      已经送达,再发一次可能变成两条」——三句全是假的。
+     */
+    if (running && hasImages) throw new ImagesCannotSteer();
     /**
      * 这一轮跑起来了。
      *
@@ -330,6 +351,11 @@ export function useSessionSend({
       // 只有对端真的收到并拒绝了，才值得换一条路重试。请求没走到对端（传输失败）
       // 时不回落：它可能已经送达，重发会多出一条消息。
       if (classifySendFailure(err).kind !== "rejected") throw err;
+      // 回落那一支走的是 steer(上面 `running` 为真的那条已经在函数开头拦掉了),
+      // 而它带不动图 —— 所以这一条**没有**第二条路。交出对端自己那句拒绝的原话:
+      // 它才是对当前状态的描述,而且已经由对端本地化过。改走 steer 等于把用户贴的
+      // 图悄悄摘掉再发一次,并把结果报成成功。
+      if (hasImages) throw err;
       try {
         await (running ? startTurn(c, message) : steerTurn(c, body));
         noteStarted(running);
@@ -385,9 +411,12 @@ export function useSessionSend({
       自动重连、要么等的是那台机器，排进去就是许一个不会到的承诺。
     */
     if (status === "reconnecting") {
+      // 从一条失败气泡上重发的:它现在排着队了,原来那条气泡就该撤掉。同一条消息
+      // 同时以两个身份摆在屏幕上（一个说排着队、一个说没发出去）比哪一个都糟。
+      if (replacing) dropFailedSend(replacing);
       setPendingSend((prev) => {
         if (prev) queueFailedSend(prev, "notSent");
-        return body;
+        return message;
       });
       return;
     }
@@ -400,8 +429,12 @@ export function useSessionSend({
         走到这儿。
 
         归 `notSent`：一次请求都没发出去，所以那颗「重发」是干净的。
+
+        `replacing` 要往下传：从一条失败气泡上重发而这时还没就绪的话，不传就成了
+        同一条消息在流里挂两条气泡 —— 与下面那句「重发失败时原地更新那一条」同一
+        条规矩，只是这一档此前漏了。
       */
-      queueFailedSend(body, "notSent");
+      queueFailedSend(message, "notSent", undefined, replacing);
       return;
     }
     /*
@@ -442,6 +475,15 @@ export function useSessionSend({
       // 这条消息属于**发起它的那条会话**。目标已经换了就一个字都不写：那条红气泡
       // 挂到新会话下面，它的「重发」会拿着新的 sid 把 A 的话真的发进 B。
       if (!stillHere()) return;
+      /*
+        这一轮还在跑,而这条带着图（见 `ImagesCannotSteer`）:一帧都没发出去,所以
+        重发是干净的,但要说清等的是这一轮跑完。判据由 `sendRouted` 在**选路那一处**
+        给出 —— 那里读到的 `turnActiveRef` 才是决定走 run 还是 steer 的那一份。
+      */
+      if (err instanceof ImagesCannotSteer) {
+        queueFailedSend(message, "imageWhileRunning", undefined, replacing);
+        return;
+      }
       const failure = classifySendFailure(err);
       if (failure.kind === "executionUnavailable") {
         // 对端明说了「执行目标不可用」：历史继续可读，但停用新写入并给专门说明。
@@ -456,7 +498,7 @@ export function useSessionSend({
         //
         // 重发失败时**原地更新**那一条，不再挂一条新的：同一段字在流里出现两次
         // 只会让人以为自己发了两遍。分类可能变（断线重发被拒），所以整条替换。
-        queueFailedSend(body, failure.kind, failure.detail, replacing);
+        queueFailedSend(message, failure.kind, failure.detail, replacing);
       }
     } finally {
       // 目标换了的话这一格已经由那次重置放下了；这里再写就成了「用 A 的结果去关
@@ -483,34 +525,39 @@ export function useSessionSend({
     const ready =
       status === "connected" && clientRef.current && summary && relayTicket;
     if (status === "connected" && !ready) return;
-    const body = pendingSend;
+    const queued = pendingSend;
     // 状态更新推到 effect 之后：`react-hooks/set-state-in-effect` 禁止在 effect
     // 体里裸调 setState，而这里本来就要跟着一次异步发送走。
     void (async () => {
       setPendingSend(null);
       if (ready) {
-        await sendMessage(body);
+        await sendMessage(queued);
         return;
       }
       // 剩下的档（lost / 机器不在 / 设备撤销）：这条永远发不出去了，与其一直排着，
       // 不如摆到用户眼前让他决定。它从来没走到对端，所以重发是干净的。
-      queueFailedSend(body, "notSent");
+      queueFailedSend(queued, "notSent");
     })();
     // 只跟这几样的变化走。sendMessage / queueFailedSend 每次渲染都是新函数，
     // 列进依赖会让这个 effect 每渲染跑一遍，同一条消息发好几次。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, pendingSend, summary, relayTicket]);
 
-  /** 往流里挂一条失败气泡。重发失败时原地替换 `replacing` 那一条。 */
+  /**
+   * 往流里挂一条失败气泡。重发失败时原地替换 `replacing` 那一条。
+   *
+   * 收的是**整条消息**:图与字一起进气泡,那颗「重发」才发得出和用户写的同一条。
+   */
   function queueFailedSend(
-    text: string,
+    message: ChatComposerSubmit,
     kind: FailedSend["kind"],
     detail?: string,
     replacing?: string,
   ) {
     const next: FailedSend = {
       id: replacing ?? randomId(),
-      text,
+      text: message.text,
+      images: message.images,
       kind,
       detail,
     };
@@ -542,7 +589,10 @@ export function useSessionSend({
         // 故意吞掉：补齐只是「看一眼」，它失败不该把重发这条路也堵死。
       }
     }
-    await sendMessage(failure.text, failure.id);
+    await sendMessage(
+      { text: failure.text, images: failure.images },
+      failure.id,
+    );
   }
 
   const cancelPendingSend = useCallback(() => setPendingSend(null), []);

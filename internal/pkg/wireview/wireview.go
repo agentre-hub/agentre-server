@@ -287,25 +287,30 @@ type storedFrame struct {
 //
 // 调用方**先把 seq 盖进通知**再调用它：seq 随视图一起进 params，读侧因此不必再盖
 // 一次；逃生路存的也是盖过 seq 的原件。
-func EncodeStoredFrame(notification *agentrewire.RpcNotification) ([]byte, error) {
+// 交回的是 string 而不是 []byte：落库那一列是 json，而驱动开了 interpolateParams
+// 时会把 []byte 插值成 `_binary'…'`，MySQL 对 json 列拒收二进制字符集。类型在这里
+// 就定成文本，调用方便无从传错（见 agent_session_entity.JournalFrame.Payload）。
+func EncodeStoredFrame(notification *agentrewire.RpcNotification) (string, error) {
 	method, params, err := Notification(notification)
 	if err != nil {
 		raw, marshalErr := proto.Marshal(notification)
 		if marshalErr != nil {
-			return nil, fmt.Errorf("wireview: escape unprojectable frame: %w", marshalErr)
+			return "", fmt.Errorf("wireview: escape unprojectable frame: %w", marshalErr)
 		}
-		return json.Marshal(storedFrame{Proto: base64.StdEncoding.EncodeToString(raw)})
+		encoded, encodeErr := json.Marshal(storedFrame{Proto: base64.StdEncoding.EncodeToString(raw)})
+		return string(encoded), encodeErr
 	}
-	return json.Marshal(storedFrame{Method: method, Params: params})
+	encoded, encodeErr := json.Marshal(storedFrame{Method: method, Params: params})
+	return string(encoded), encodeErr
 }
 
 // DecodeStoredFrame 是 EncodeStoredFrame 的逆运算：交回这一行的方法名与 params。
 //
 // 逃生路那一行在**读的时候**再投影一次：写入时投不出来的帧，换一个认得它的服务端
 // 版本读同一行仍然投得出来。
-func DecodeStoredFrame(data []byte) (string, json.RawMessage, error) {
+func DecodeStoredFrame(data string) (string, json.RawMessage, error) {
 	var stored storedFrame
-	if err := json.Unmarshal(data, &stored); err != nil {
+	if err := json.Unmarshal([]byte(data), &stored); err != nil {
 		return "", nil, fmt.Errorf("wireview: decode stored frame: %w", err)
 	}
 	if stored.Proto != "" {

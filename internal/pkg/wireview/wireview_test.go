@@ -275,6 +275,34 @@ var rawJSONByteFields = map[string]bool{
 	"agentre.wire.UnrecognizedBlock.data":      true,
 }
 
+// acceptedBinaryFields 是**明知是真二进制、仍然放它进镜像日志**的那几个字段。
+//
+// 它与 rawJSONByteFields 刻意分开：那张表说的是「这不是二进制，是 JSON」，而这张表
+// 说的是「这确实是二进制，我们认了」。合成一张会让前一句变成假话 —— 而那张表的读者
+// 正是靠它判断某个字段该不该 putRawJSON。
+//
+// 记在这里的代价与下面那半个守卫写的一字不差，它们**全部成立**：落进 JSON 列的图片
+// 字节就是一大段 base64，搜不到，会把这张唯一的无界表撑大，而且不会有任何报错。
+//
+// 认下来的理由：
+//
+//  1. **今天就是这样，不是本轮引入的。** 图片块的载荷此前经 UnrecognizedBlock.data
+//     过来 —— 那个字段在上面的白名单里，而块的 JSON
+//     （{"media_type":...,"source":{"inline":"<base64>"}}）确实是合法 JSON，于是守卫
+//     从来没看见过它。字节一直在这张表里，只是漏网，不是获准。给 image 建了一等的
+//     判别值之后它才显形。删掉这一条不会让字节消失，只会让守卫重新看不见。
+//  2. **外置是另一件事，且已被明确排除在本轮之外。** 把字节挪出帧要新增存储后端、
+//     上传路径、取图端点与删除时的引用清点，跨两个仓；规格
+//     2026-09-07-attachment-render-and-send-budget 的 Out of scope 已经把它记成
+//     「已知且被接受的代价」。
+//
+// 也就是说这一条不改变任何运行时事实，它只是把一个已经存在的决定从「漏网」写成
+// 「记录在案」。真要收掉这个代价，收的是存储形态，不是这张表。
+var acceptedBinaryFields = map[string]bool{
+	// 用户消息里图片附件的字节。见上面第 1 条：它一直在这张表里。
+	"agentre.wire.BlobSource.inline": true,
+}
+
 // projectableNotifications 是 Notification 认得的那些 RpcNotification 分支。
 var projectableNotifications = map[string]bool{
 	"runtime_event":           true,
@@ -338,8 +366,9 @@ func TestProjectableNotificationsCarryNoUnknownBinaryField(t *testing.T) {
 			field := descriptor.Fields().Get(i)
 			switch field.Kind() {
 			case protoreflect.BytesKind:
-				if !rawJSONByteFields[string(field.FullName())] {
-					found = append(found, string(field.FullName()))
+				name := string(field.FullName())
+				if !rawJSONByteFields[name] && !acceptedBinaryFields[name] {
+					found = append(found, name)
 				}
 			case protoreflect.MessageKind, protoreflect.GroupKind:
 				walk(field.Message())
@@ -357,7 +386,7 @@ func TestProjectableNotificationsCarryNoUnknownBinaryField(t *testing.T) {
 
 	require.Empty(t, found,
 		"这些 bytes 字段能进镜像日志：装 JSON 就补进 rawJSONByteFields 并在 RuntimeEvent 里 putRawJSON，"+
-			"是真二进制就不该走这条通道")
+			"是真二进制就不该走这条通道 —— 除非它是一条**明确认下代价**的例外，那就补进 acceptedBinaryFields 并在那里写清为什么")
 }
 
 // Given 一条投影得出来的通知；When 编码落库再解回来；Then 方法名与 params 与直接
@@ -373,7 +402,7 @@ func TestStoredFrameRoundTripsTheProjectedView(t *testing.T) {
 
 	stored, err := EncodeStoredFrame(notification)
 	require.NoError(t, err)
-	require.Contains(t, string(stored), `"method"`, "落库那一行必须是可读的 JSON")
+	require.Contains(t, stored, `"method"`, "落库那一行必须是可读的 JSON")
 
 	method, params, err := DecodeStoredFrame(stored)
 	require.NoError(t, err)
@@ -394,13 +423,13 @@ func TestStoredFrameEscapesWhatItCannotProject(t *testing.T) {
 
 	stored, err := EncodeStoredFrame(opaque)
 	require.NoError(t, err, "投影不出来不该让落库失败 —— 那会卡死整条镜像")
-	require.Contains(t, string(stored), storedFrameProtoKey)
+	require.Contains(t, stored, storedFrameProtoKey)
 
 	// 读的时候仍然读不懂,但原件还在:解出来的字节能还原成同一条通知。
 	var escaped struct {
 		Proto string `json:"$proto"`
 	}
-	require.NoError(t, json.Unmarshal(stored, &escaped))
+	require.NoError(t, json.Unmarshal([]byte(stored), &escaped))
 	raw, err := base64.StdEncoding.DecodeString(escaped.Proto)
 	require.NoError(t, err)
 	round := &agentrewire.RpcNotification{}
@@ -414,9 +443,9 @@ func TestStoredFrameEscapesWhatItCannotProject(t *testing.T) {
 // 形状不对的那一行要报错，不能悄悄交出一个空视图 —— 空视图在页面上是一段无声消失的
 // 转录，报错则由读侧兜成一个看得见的缺口帧。
 func TestStoredFrameRejectsAShapeItDoesNotRecognise(t *testing.T) {
-	for name, payload := range map[string][]byte{
-		"不是 JSON":             []byte("\x00\x01\xff"),
-		"既无 method 也无 $proto": []byte(`{"seq":3}`),
+	for name, payload := range map[string]string{
+		"不是 JSON":             "\x00\x01\xff",
+		"既无 method 也无 $proto": `{"seq":3}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, err := DecodeStoredFrame(payload)
@@ -475,4 +504,45 @@ func TestNotificationViewEscapesJSONThatIsNotValidUTF8(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, raw, decoded)
 	assert.True(t, utf8.Valid(params), "落库那一行必须是合法 utf8mb4")
+}
+
+// TestImageEventProjectsBareBase64 钉住图片字节在视图里的形态。
+//
+// putRawJSON 那条路是给「本该是 JSON 的字节」用的(input / canonical / meta / data):
+// 解不动时包成 {"$b64": ...} 消歧义 —— 载荷本来就是 JSON 字符串时,投影出的也是一个
+// 字符串,消费方分不出手里这串是原文还是编码。
+//
+// 图片字节从来不是 JSON,一定解不动,于是一旦走那条路就**一定**被包。而 source.inline
+// 这一格的语义从来不含糊,包一层只是白让消费方多剥一次壳。所以它必须停在 messageMap
+// 的 BytesKind 默认投射上 —— 裸 base64,前端直接拼进 data URL。
+func TestImageEventProjectsBareBase64(t *testing.T) {
+	frame := &agentrewire.RuntimeEventNotification{
+		ConversationId: conversationID,
+		Seq:            1,
+		Event: &agentrewire.RuntimeEventNotification_Image{Image: &agentrewire.ImageBlock{
+			MediaType: "image/png",
+			Source:    &agentrewire.BlobSource{Inline: []byte{0x01, 0x02, 0x03}},
+		}},
+	}
+
+	_, params, err := Notification(&agentrewire.RpcNotification{
+		Payload: &agentrewire.RpcNotification_RuntimeEvent{RuntimeEvent: frame},
+	})
+	require.NoError(t, err)
+
+	var view struct {
+		Event struct {
+			Kind      string `json:"kind"`
+			MediaType string `json:"mediaType"`
+			Source    struct {
+				Inline any `json:"inline"`
+			} `json:"source"`
+		} `json:"event"`
+	}
+	require.NoError(t, json.Unmarshal(params, &view))
+
+	require.Equal(t, "image", view.Event.Kind)
+	require.Equal(t, "image/png", view.Event.MediaType)
+	// 裸字符串,不是 {"$b64": "..."} 那个包装对象。
+	require.Equal(t, "AQID", view.Event.Source.Inline)
 }

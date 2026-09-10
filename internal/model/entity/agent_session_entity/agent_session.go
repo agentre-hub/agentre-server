@@ -130,7 +130,13 @@ type JournalFrame struct {
 	ConversationID  string `gorm:"column:conversation_id;type:char(36);not null;primaryKey"`
 	Seq             int64  `gorm:"column:seq;type:bigint;not null;primaryKey"`
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	Payload         []byte `gorm:"column:payload;type:json;not null"`
+	// Payload 是 string 而不是 []byte，这一条是**必需的**而不是风格：开了
+	// interpolateParams（本仓的 compose / docker 配置 / config.example 与 CI 的 e2e
+	// 都开着）之后，驱动把 []byte 插值成 `_binary'…'`，MySQL 对 json 列拒收二进制
+	// 字符集，每一帧都会以 `Error 3144 (22032): Cannot create a JSON value from a
+	// string with CHARACTER SET 'binary'` 落库失败。参数是 string 则两种模式都成。
+	// 由 agent_session_repo 的 TestWriteFrames_PassesThePayloadAsStringNotBinary 钉住。
+	Payload string `gorm:"column:payload;type:json;not null"`
 	// Createtime 记的是这一帧**发生**的时刻（Unix 毫秒），不是这台 server 存下它的
 	// 时刻。实时那一路两者只差一跳网络，补齐那一路差得很远——补齐成批到达，一条离线
 	// 两天的对话几百帧会落在同一毫秒里，拿收帧时刻当发生时刻，浏览器控制台上整段

@@ -17,6 +17,7 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
  * 这是 R19 红线在主动派活场景下的唯一例外（见 workspace_svc.WebDispatchChoice）。
  */
 import { runAckFromProtobuf, type RunParams } from "@agentre-hub/agentre-wire";
+import type { ChatImageAttachment } from "@agentre-hub/agentre-ui";
 
 import { api } from "@/lib/api";
 import { randomId } from "@/lib/randomId";
@@ -25,6 +26,7 @@ import { newConversationId } from "@/lib/conversationId";
 import { acquireRelayClient, type RelayLease } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
+import { encodeUserBlocks } from "@/lib/userBlocks";
 
 export type DispatchAvailability =
   "available" | "offline" | "unpaired" | "no_device" | "project_path_missing";
@@ -198,6 +200,13 @@ export interface DispatchInput {
    * 整个丢掉（规格 2026-09-01 硬不变量 6）。
    */
   reasoningEffort?: string;
+  /**
+   * 第一句话里贴的图。空 / 省略 = 这一轮没有附件,不带 `userBlocks` 过线。
+   *
+   * 与 `message` 同属**用户这一次说的话**,所以走同一次 `runtime.run`:分两次发的话
+   * 图会落成另一条用户消息,而它本来是这一句的一部分。
+   */
+  images?: readonly ChatImageAttachment[];
 }
 
 export class DispatchConnectionError extends Error {
@@ -233,6 +242,7 @@ export async function dispatchNewConversation(
   const title = deriveTitle(input.message);
   // 同上：送过线的与交回去的是同一个值，不是各 trim 一次。
   const userText = input.message.trim();
+  const userBlocks = encodeUserBlocks(input.images);
   const params: RunParams = {
     // 号在**发起端**铸：不向 server 要，那会让新建对话需要联网 + 登录。
     conversationId: newConversationId(),
@@ -244,6 +254,9 @@ export async function dispatchNewConversation(
     agentSyncId: input.plan.agent_sync_id,
     cwd: choice.cwd ?? "",
     userText,
+    // 贴了图才带这一维:空数组等于在主张「这一轮有附件」,而没贴图本来就是不主张
+    // （与下面档位 / 模型键那几行同一条规矩）。
+    ...(userBlocks ? { userBlocks } : {}),
     // daemon 端按 {"type": ...} 解 backend（integration_test 的既有契约）。
     backend: { type: choice.backend_type },
     sourceDevice: input.sourceClient.peerFingerprint,

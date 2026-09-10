@@ -291,6 +291,21 @@ async function typeInDraft(text: string) {
   draftEditable().editor?.commands.setContent(`<p>${text}</p>`);
 }
 
+/** 往草稿的输入框里贴一张图（走它自己那个隐藏的 file input）。 */
+async function attachImageInDraft() {
+  await awaitDraftComposer();
+  fireEvent.change(screen.getByLabelText("Add image", { selector: "input" }), {
+    target: {
+      files: [
+        new File([new Uint8Array([1, 2, 3])], "shot.png", {
+          type: "image/png",
+        }),
+      ],
+    },
+  });
+  await screen.findByAltText("shot.png");
+}
+
 beforeEach(async () => {
   await i18n.changeLanguage("en");
   localStorage.clear();
@@ -492,6 +507,84 @@ describe("一条还没发第一句的对话", () => {
     expect(screen.getByTestId("chat-detail")).toBeTruthy();
     // 「最近用过」记在派发成功之后。
     expect(readRecentAgents()).toEqual(["agent-1"]);
+  });
+
+  /**
+   * 草稿里贴的图必须跟着第一句话走。
+   *
+   * 输入框(共享包的 `ChatComposer`)把图片按钮摆着、缩略图也贴上了,提交时
+   * `images` 是 `onSubmit` 的第二个参数 —— 而这一页此前写的是
+   * `onSubmit={(text) => void start(text)}`,第二个参数根本不接。于是图在**这里**
+   * 就没了:派发照常成功,第一句话是纯文本,屏幕上不报一个字。
+   *
+   * 断言落在交给 `dispatchNewConversation` 的那一份输入上(编码成 `userBlocks` 是
+   * 派发自己的事,由 dispatch.test.ts 钉)。
+   */
+  it("草稿里贴的图跟着第一句话交给派发,不在这一页被丢掉", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "这张图哪里不对",
+      userText: "这张图哪里不对",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+      savedToAccount: true,
+    });
+    renderChat();
+    await openDraft();
+    await typeInDraft("这张图哪里不对");
+    await attachImageInDraft();
+
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(mockDispatch.mock.calls[0][0]).toMatchObject({
+      message: "这张图哪里不对",
+      images: [{ mediaType: "image/png", name: "shot.png" }],
+    });
+  });
+
+  /**
+   * 只贴图、一个字不打同样发得出去。
+   *
+   * 提交键在「有图」时就是启用的(共享包 `SubmitControl` 的 `empty && !hasImages`),
+   * 而这一页的 `start` 起手是 `if (!message.trim()) return` —— 按下去一声不吭什么
+   * 都没发生,是一次死点击。会话详情那条路早就允许这一档
+   * （`if (!body && !message.images?.length) return`）。
+   */
+  it("只贴图不打字照样发得出去,不是一次死点击", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    // 派发一直在飞：下面那条标题断言量的是「已经交出去、还没落地」的那一段,
+    // 落地了这一屏就换成详情了。
+    mockDispatch.mockImplementation(() => new Promise(() => {}));
+    renderChat();
+    await openDraft();
+    await attachImageInDraft();
+
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(mockDispatch.mock.calls[0][0]).toMatchObject({
+      message: "",
+      images: [{ name: "shot.png" }],
+    });
+    // 标题由第一句话派生,而这一条**没有**第一句话 —— `deriveTitle("")` 是空串,
+    // 顶带照着它写就成了一条连标题槽都空掉的对话。这一档还没有别的名字,就还叫它
+    // 开头那个名字,不摆一个空标题。
+    expect(
+      within(screen.getByTestId("draft-header")).getByRole("heading", {
+        name: "New chat · Backend Agent",
+      }),
+    ).toBeTruthy();
   });
 
   /**
@@ -833,6 +926,38 @@ describe("一条还没发第一句的对话", () => {
         "把登录页的按钮改成蓝色，另外顺手把那个 flaky 的用例修了",
       ),
     );
+  });
+
+  /**
+   * 图与字同进同退。
+   *
+   * 上一条钉的是「那句话还回输入框」,走的是 `AIChatInputHandle.loadDraft` ——
+   * 而那只句柄只认文本:富文本编辑器里没有附件这一维,附件住在
+   * `ChatComposer` 自己的 state 里。于是失败之后字回来了、图没回来,用户按回车
+   * 重发的是一条**和他刚写的不一样**的消息,而屏幕上没有任何东西说图丢了。
+   *
+   * 包早就备好了这条路（`ChatComposerHandle.restoreDraft(text, images)`),缺的只是
+   * 这一端没把那只句柄接出来。
+   */
+  it("派发失败时贴的图与那句话一起还回输入框", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(new Error("relay down"));
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("这张图哪里不对");
+    await attachImageInDraft();
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(draftEditable().textContent).toContain("这张图哪里不对"),
+    );
+    // 缩略图回到输入框里 —— 不是回到某条气泡上:草稿这一屏没有转录流,输入框就是
+    // 这句话唯一的容身处。
+    expect(screen.getByAltText("shot.png")).toBeTruthy();
   });
 
   it("Given coding 已连接但远端 CLI 启动失败, When 发第一句, Then 展示远端错误而不是误报连不上", async () => {

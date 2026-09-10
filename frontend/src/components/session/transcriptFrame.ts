@@ -1,4 +1,5 @@
 import type {
+  ChatImageAttachment,
   TranscriptFrame,
   TranscriptMessage,
 } from "@agentre-hub/agentre-ui";
@@ -56,12 +57,31 @@ export function toTranscriptFrame(
 export function pendingUserMessage(
   text: string,
   sessionId: number,
+  images?: readonly ChatImageAttachment[],
 ): TranscriptMessage {
   return {
     id: 1,
     sessionId,
     role: "user",
-    blocks: [{ type: "text", text }],
+    /*
+      正文在前、附件在后 —— 与两个宿主落库时的块序一致（桌面端
+      `chat_svc.userBlocksForSend`、agentred `daemon.transcriptStore.StartTurn` 都是
+      先 AddText 再追加附件）。这一条摆的是「还没落地的那一句」，它一落地就让位给
+      转录里那一条真的；两者块序不一致的话，用户刚说完话就看见图从文字上方跳到
+      下方。只贴图那一档若不摆这几块，屏幕上就是一个空气泡：用户刚贴的图连个影子
+      都没有。块的形状照共享包 `ImageBlockView` 读的那一份。
+    */
+    blocks: [
+      { type: "text", text },
+      ...(images ?? []).map((image) => ({
+        type: "image" as const,
+        image: {
+          dataUrl: image.dataUrl,
+          mediaType: image.mediaType,
+          name: image.name,
+        },
+      })),
+    ],
     model: "",
     promptTokens: 0,
     completionTokens: 0,

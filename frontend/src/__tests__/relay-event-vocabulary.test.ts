@@ -29,6 +29,7 @@ import {
   EventError,
   EventExecApprovalRequested,
   EventExecApprovalResolved,
+  EventImage,
   EventOutputActivity,
   EventPermissionModeChanged,
   EventPlanUpdated,
@@ -165,6 +166,10 @@ async function relayEvents(
 const utf8 = (value: unknown): Uint8Array =>
   new TextEncoder().encode(JSON.stringify(value));
 
+/** 一张 1x1 png 的头几个字节 —— 用户贴进来的图在 wire 上就是这样一串裸字节。 */
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
+const PNG_B64 = "iVBORw0K";
+
 /**
  * 每个 oneof case 一份最小样本。写成 `Record<RuntimeEventCase, …>` 而不是数组：
  * Go 那边新增一个事件、wire 包重新生成之后，这张表会在**编译期**变红，逼一次
@@ -267,6 +272,11 @@ const SAMPLES: Record<
     blockType: "future_block",
     data: utf8({ nested: { keep: true } }),
   },
+  image: {
+    case: "image",
+    mediaType: "image/png",
+    source: { inline: PNG_BYTES },
+  },
 };
 
 /** `EventKind` 词表的运行期形态。手写字面量的话守卫就成了复制品。 */
@@ -298,6 +308,7 @@ const VOCABULARY: ReadonlySet<string> = new Set<EventKind>([
   EventUserMessage,
   EventContextWindowUpdated,
   EventUnrecognizedBlock,
+  EventImage,
 ]);
 
 describe("relay 事件词表", () => {
@@ -384,6 +395,29 @@ describe("relay 事件词表", () => {
       blockType: "future_block",
       data: { nested: { keep: true } },
     });
+  });
+
+  // Given 用户在这条对话里贴了一张图；When 帧穿过 relayClient 走到转录归约；Then
+  // 应当是**用户**名下的一张图,而不是助手名下的一坨 base64。
+  //
+  // 这一档正是本站报的那个缺陷:此前 wire 上没有 image,宿主投影不出来只好走
+  // unrecognized_block 兜底,而那一支的落点是助手消息上的 JSON notice。断言落在
+  // 最终块与 role 上 —— 只对 kind 断言的话,归错人、或者 inline 这一格
+  // (wire 上是 bytes)没还原成 base64,照样测不出来。
+  it("用户贴的图画成用户名下的图块,不是助手名下的 base64", async () => {
+    const frames = await relayEvents([SAMPLES.image]);
+    const [message] = reduceFrames(frames, 7);
+
+    expect(message.role).toBe("user");
+    expect(message.blocks).toEqual([
+      {
+        type: "image",
+        image: {
+          mediaType: "image/png",
+          dataUrl: `data:image/png;base64,${PNG_B64}`,
+        },
+      },
+    ]);
   });
 
   // Given 后端不单发 context_window_updated、只把窗口挂在 usage 帧上；When 帧

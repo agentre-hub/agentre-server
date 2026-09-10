@@ -5,7 +5,8 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-  type AIChatInputHandle,
+  type ChatComposerHandle,
+  type ChatImageAttachment,
   type ModelTarget,
   type TranscriptMessage,
   Alert,
@@ -100,7 +101,13 @@ export function DraftSession({
 }) {
   const { t } = useTranslation();
   const composerModule = useSessionComposerModule();
-  const composerRef = useRef<AIChatInputHandle>(null);
+  /**
+   * 输入框整条草稿的句柄（那句话 + 贴的图）。
+   *
+   * 不是 `AIChatInputHandle`:那只句柄是富文本编辑器的,只认文本,而附件住在包的
+   * `ChatComposer` 自己的 state 里 —— 用它还原,派发失败之后字回来了、图没回来。
+   */
+  const composerRef = useRef<ChatComposerHandle>(null);
   const [projectSyncId, setProjectSyncId] = useState<string | null>(
     initialProjectSyncId ?? null,
   );
@@ -108,11 +115,18 @@ export function DraftSession({
     null,
   );
   /**
-   * 派发在飞时**用户刚说的那句话**。存的是文本而不是一个布尔：这一小段屏幕上要
-   * 摆的正是它（见下面的 `DraftPending`），而输入框在提交那一刻就已经被
-   * AIChatInput 清空了，不留在这里就真的没了。
+   * 派发在飞时**用户刚交出去的那一条**:那句话,以及贴在上面的图。存的是内容而不是
+   * 一个布尔，这一小段屏幕上要摆的正是它（见下面的 `DraftPending`），而输入框在
+   * 提交那一刻就已经被 AIChatInput 清空了，不留在这里就真的没了。
+   *
+   * 图也在这里,不只是文本:只贴图不打字是**发得出去的一条**（提交键在有图时就启用),
+   * 而 `starting` 若只存文本,这一档存进去的是空串 —— 落在 `starting ? ...` 上是假,
+   * 于是派发在飞时这一屏什么都不换。
    */
-  const [starting, setStarting] = useState<string | null>(null);
+  const [starting, setStarting] = useState<{
+    text: string;
+    images?: ChatImageAttachment[];
+  } | null>(null);
   const [startError, setStartError] = useState<unknown>(null);
 
   /**
@@ -279,15 +293,20 @@ export function DraftSession({
   );
 
   const start = useCallback(
-    async (message: string) => {
-      if (!readyPlan?.chosen || !message.trim()) return;
-      setStarting(message);
+    async (message: string, images?: ChatImageAttachment[]) => {
+      // 只贴图不打字同样算「说了一句」:提交键在有图时就是启用的,只认文本的话按
+      // 下去一声不吭什么都没发生。会话详情那条路早就是这么判的。
+      if (!readyPlan?.chosen || (!message.trim() && !images?.length)) return;
+      setStarting({ text: message, images });
       setStartError(null);
       try {
         const ticket = await ensureRelayTicket();
         const out = await dispatchNewConversation({
           plan: readyPlan,
           message,
+          // 贴在这一句上的图与它同属用户这一次说的话,走同一次派发 —— 分两次发的话
+          // 图会落成另一条用户消息,而它本来是这一句的一部分。
+          images,
           sourceClient: ticket,
           // 开局连上的那条就是派发要用的那条。连接还没到位（刚落定计划的一瞬）
           // 就照旧现开一条：这一句不该为了复用而等。
@@ -315,7 +334,10 @@ export function DraftSession({
         // 提交那一刻输入框已经被清空，而占位是唯一显示这句话的地方——占位一撤，
         // 用户写的整段话就没了。把它还回输入框：字留在屏幕上、改得动、重发只差
         // 一次回车。SendFailureBubble 立的就是这条规矩。
-        composerRef.current?.loadDraft(message);
+        //
+        // 图与字一起还:草稿这一屏没有转录流,输入框是这条消息唯一的容身处,少还
+        // 一样就等于把它丢了,而屏幕上不会有任何东西说这件事。
+        composerRef.current?.restoreDraft(message, images ?? []);
         setStarting(null);
       }
     },
@@ -428,8 +450,11 @@ export function DraftSession({
           去，右栏换成真详情时标题一个字都不动。
         */
         title={
-          starting
-            ? deriveTitle(starting)
+          // 只贴图不打字那一档没有「第一句话」可派生（`deriveTitle("")` 是空串），
+          // 照着它写的话标题槽整个空掉。这条对话此刻还没有别的名字,就还叫它开头
+          // 那个名字 —— 摆一个空标题不是更诚实,只是更少信息。
+          starting?.text.trim()
+            ? deriveTitle(starting.text)
             : t("chat.newSessionTitle", { name: agent.name })
         }
         meta={metaParts}
@@ -437,7 +462,11 @@ export function DraftSession({
       />
 
       {starting ? (
-        <DraftPending agent={agent} text={starting} />
+        <DraftPending
+          agent={agent}
+          text={starting.text}
+          images={starting.images}
+        />
       ) : (
         <div
           // 重算期间这一带摆的还是上一份计划：说出来，读屏据此不把它当定论
@@ -516,7 +545,7 @@ export function DraftSession({
             <composerModule.default
               backendType={chosen?.backend_type}
               agents={mentionAgents}
-              handleRef={composerRef}
+              composerHandleRef={composerRef}
               // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧
               // 摆着（它们是同一台机器的答案），但这一句要发到哪儿还没定。
               disabled={!readyPlan?.chosen || starting !== null}
@@ -562,7 +591,7 @@ export function DraftSession({
                       ? t("common.loading")
                       : t("overview.noAvailableTarget")
               }
-              onSubmit={(text) => void start(text)}
+              onSubmit={(text, images) => void start(text, images)}
               feedback={
                 startError ? (
                   <p
@@ -605,12 +634,21 @@ const DraftSessionId = 0;
  * 此前这里是空态原样留着、底下补一行小字「正在开始…」：输入框在提交那一刻已被
  * 清空，屏幕上一个字都没有他刚说的话。
  */
-function DraftPending({ agent, text }: { agent: NewConvAgent; text: string }) {
+function DraftPending({
+  agent,
+  text,
+  images,
+}: {
+  agent: NewConvAgent;
+  text: string;
+  images?: ChatImageAttachment[];
+}) {
   // 与右栏换成详情之后摆的那一条**同一个构造**：交接就发生在这两者之间，形不一致
-  // 的话用户刚说完话就看见自己的气泡跳一下。
+  // 的话用户刚说完话就看见自己的气泡跳一下。图一并摆上：只贴图那一档若不摆，这一
+  // 屏就是一个空气泡加三个点，看着像发了个寂寞。
   const messages = useMemo<TranscriptMessage[]>(
-    () => [pendingUserMessage(text, DraftSessionId)],
-    [text],
+    () => [pendingUserMessage(text, DraftSessionId, images)],
+    [text, images],
   );
   return (
     <div

@@ -348,7 +348,8 @@ export default function SessionScrollBody({
         ))}
         {send.pendingSend && (
           <PendingSendBubble
-            text={send.pendingSend}
+            text={send.pendingSend.text}
+            images={send.pendingSend.images}
             onCancel={send.cancelPendingSend}
           />
         )}

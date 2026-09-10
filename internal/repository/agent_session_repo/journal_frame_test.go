@@ -23,14 +23,14 @@ func TestWriteFrames_BatchSingleStatement(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(
 		"INSERT INTO `agent_session_notification_journal`",
 	)).WithArgs(
-		int64(7), "conv-9", int64(101), "fp-daemon-1", []byte{0x0a, 0x01, 0xff}, int64(1000),
-		int64(7), "conv-9", int64(102), "fp-daemon-1", []byte{0x12, 0x01, 0x00}, int64(1001),
+		int64(7), "conv-9", int64(101), "fp-daemon-1", `{"method":"a"}`, int64(1000),
+		int64(7), "conv-9", int64(102), "fp-daemon-1", `{"method":"b"}`, int64(1001),
 	).WillReturnResult(sqlmock.NewResult(1, 2))
 	mock.ExpectCommit()
 
 	frames := []*agent_session_entity.JournalFrame{
-		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: []byte{0x0a, 0x01, 0xff}, Createtime: 1000},
-		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 102, Payload: []byte{0x12, 0x01, 0x00}, Createtime: 1001},
+		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: `{"method":"a"}`, Createtime: 1000},
+		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 102, Payload: `{"method":"b"}`, Createtime: 1001},
 	}
 	require.NoError(t, r.WriteFrames(ctx, frames))
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -51,7 +51,7 @@ func TestWriteFrames_GivenReplayedFrame_ThenNoDuplicateNoError(t *testing.T) {
 	mock.ExpectCommit()
 
 	frames := []*agent_session_entity.JournalFrame{
-		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: []byte{0x0a, 0x01, 0xff}, Createtime: 1000},
+		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: `{"method":"a"}`, Createtime: 1000},
 	}
 	require.NoError(t, r.WriteFrames(ctx, frames))
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -77,8 +77,8 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).
-		AddRow(7, "conv-9", "fp-daemon-1", 101, []byte{0x0a, 0x01, 0xff}, 1000).
-		AddRow(7, "conv-9", "fp-daemon-1", 102, []byte{0x12, 0x01, 0x00}, 1001)
+		AddRow(7, "conv-9", "fp-daemon-1", 101, `{"method":"a"}`, 1000).
+		AddRow(7, "conv-9", "fp-daemon-1", 102, `{"method":"b"}`, 1001)
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", int64(100), 50).WillReturnRows(rows)
@@ -131,8 +131,8 @@ func TestListFramesBefore_NewestFirstAndExclusiveUpperBound(t *testing.T) {
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).
-		AddRow(7, "conv-9", "fp-daemon-1", 102, []byte{0x12, 0x01, 0x00}, 1001).
-		AddRow(7, "conv-9", "fp-daemon-1", 101, []byte{0x0a, 0x01, 0xff}, 1000)
+		AddRow(7, "conv-9", "fp-daemon-1", 102, `{"method":"b"}`, 1001).
+		AddRow(7, "conv-9", "fp-daemon-1", 101, `{"method":"a"}`, 1000)
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", int64(103), 50).WillReturnRows(rows)
@@ -155,7 +155,7 @@ func TestListFramesBefore_ZeroUpperBoundReadsFromNewest(t *testing.T) {
 
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
-	}).AddRow(7, "conv-9", "fp-daemon-1", 300, []byte{0x0a, 0x01, 0xff}, 1009)
+	}).AddRow(7, "conv-9", "fp-daemon-1", 300, `{"method":"a"}`, 1009)
 	mock.ExpectQuery(regexp.QuoteMeta(
 		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? ORDER BY seq DESC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", 50).WillReturnRows(rows)
@@ -164,5 +164,35 @@ func TestListFramesBefore_ZeroUpperBoundReadsFromNewest(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	assert.Equal(t, int64(300), out[0].Seq)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Given 一帧要落进 json 列的 payload；When 写库；Then 交给驱动的那个参数是
+// **string**，不是 []byte。
+//
+// 这不是风格问题。开了 `interpolateParams=true`（deploy/docker-compose.yml、
+// deploy/config.docker.yaml、configs/config.example.yaml 与 CI 的 e2e 都开着）之后，
+// 驱动把 []byte 插值成 `_binary'…'` 字面量，而 MySQL 对 json 列拒收二进制字符集：
+// `Error 3144 (22032): Cannot create a JSON value from a string with CHARACTER SET
+// 'binary'`。真实 MySQL 上实测过：同一条 GORM Create，参数是 string 则两种模式都成，
+// 是 []byte 则开插值必失败。
+//
+// sqlmock 逐字比较参数值，string 与 []byte 不相等，所以这条断言真的钉得住类型。
+func TestWriteFrames_PassesThePayloadAsStringNotBinary(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewJournalFrame()
+
+	const payload = `{"method":"runtime.event","params":{"event":{"kind":"text_delta","text":"你好"}}}`
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"INSERT INTO `agent_session_notification_journal`",
+	)).WithArgs(
+		int64(7), "conv-9", int64(101), "fp-daemon-1", payload, int64(1000),
+	).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	require.NoError(t, r.WriteFrames(ctx, []*agent_session_entity.JournalFrame{
+		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: payload, Createtime: 1000},
+	}))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

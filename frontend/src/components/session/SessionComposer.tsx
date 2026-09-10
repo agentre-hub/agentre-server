@@ -33,6 +33,7 @@ import {
   ContextMeter,
   PermissionModePill,
   type AIChatInputHandle,
+  type ChatComposerHandle,
   type ChatImageAttachment,
   type SlashCommand,
 } from "@agentre-hub/agentre-ui";
@@ -74,6 +75,7 @@ export default function SessionComposer({
   onPermissionModeChange,
   modelControl,
   reasoningEffortControl,
+  composerHandleRef,
 }: {
   backendType?: string;
   agents: ComposerAgent[];
@@ -136,6 +138,15 @@ export default function SessionComposer({
    * 富文本的内容住在编辑器里而不是 React state，外面拼字符串是够不着的。
    */
   handleRef?: RefObject<AIChatInputHandle | null>;
+  /**
+   * 想把**整条草稿**（那句话 + 贴的图）放回输入框时给。
+   *
+   * 与 `handleRef` 是两只不同的句柄,不是一件事说两遍:`AIChatInputHandle` 是富文本
+   * 编辑器的句柄,只认文本 —— 附件不住在编辑器里,而住在包的 `ChatComposer` 自己的
+   * state 里。发送失败要把用户刚写的东西原样还回去时,只有这一只够得着图
+   * （`restoreDraft(text, images)`）。
+   */
+  composerHandleRef?: RefObject<ChatComposerHandle | null>;
 }) {
   const { t } = useTranslation();
   // 发送按钮走输入框自己的 submit：只有它知道富文本里的提及要序列化成什么。
@@ -178,6 +189,7 @@ export default function SessionComposer({
     <div data-testid="session-detail-composer-form">
       <div data-testid="session-detail-composer">
         <ChatComposer
+          ref={composerHandleRef}
           inputHandleRef={inputRef}
           disabled={disabled}
           sending={sending}

@@ -5,7 +5,10 @@ import {
   Button,
   ChatMessage,
   copyTextWithToast,
+  type ChatImageAttachment,
 } from "@agentre-hub/agentre-ui";
+
+import SendAttachments from "@/components/session/SendAttachments";
 import type { SendFailureKind } from "@/lib/sessionView";
 
 /**
@@ -39,10 +42,25 @@ export interface FailedSend {
    * `notSent` 不来自 `classifySendFailure`：它是**一次请求都没发出去**——重连期间
    * 排着队、而连接最后彻底断了（决策 6）。与 `transport` 分开是要紧的：那一类
    * 「可能已经送达」，这一类明确没有，所以重发是干净的。
+   *
+   * `imageWhileRunning` 同样不来自 `classifySendFailure`,同样是「一次请求都没发
+   * 出去」——但**原因不是连接**:这一轮还在跑,而插话（`runtime.steer`）的参数里
+   * 只有 `text`,图带不动。它此前混在 `transport` 里,于是气泡说「连接断了,可能
+   * 已经送达,再发一次可能变成两条」,三件事全是假的。
    */
-  kind: Exclude<SendFailureKind, "executionUnavailable"> | "notSent";
+  kind:
+    | Exclude<SendFailureKind, "executionUnavailable">
+    | "notSent"
+    | "imageWhileRunning";
   /** 对端自己的说明（仅 rejected 有），它已按自己的语言本地化过。 */
   detail?: string;
+  /**
+   * 这条消息带着的图。
+   *
+   * 与 `text` 同等要紧:输入框在提交那一刻已经被 `ChatComposer` 清空,这里不留着
+   * 的话它就真的没了,而那颗「重发」会发出一条**和用户写的不一样**的消息。
+   */
+  images?: ChatImageAttachment[];
 }
 
 export default function SendFailureBubble({
@@ -78,13 +96,16 @@ export default function SendFailureBubble({
     });
   }
 
-  // 只有 transport 那一类要先看一眼：另外两类都没走到对端，重发是干净的。
+  // 只有 transport 那一类要先看一眼：另外几类都没走到对端，重发是干净的。
   const transport = failure.kind === "transport";
-  const Icon =
-    transport || failure.kind === "notSent" ? CircleAlert : TriangleAlert;
+  // 「没走到对端」的那几类:说的是一件还能重来的事,不用惊叹号那副样子。
+  const neverLeft =
+    failure.kind === "notSent" || failure.kind === "imageWhileRunning";
+  const Icon = transport || neverLeft ? CircleAlert : TriangleAlert;
 
-  const title =
-    machineName && failure.kind !== "notSent"
+  const title = neverLeft
+    ? t(`session.sendFailure.${failure.kind}.titleUnknown`)
+    : machineName
       ? t(`session.sendFailure.${failure.kind}.title`, { machine: machineName })
       : t(`session.sendFailure.${failure.kind}.titleUnknown`);
 
@@ -148,6 +169,7 @@ export default function SendFailureBubble({
           <Icon aria-hidden="true" className="size-3 shrink-0" />
           {title}
         </p>
+        <SendAttachments images={failure.images} />
         {/* 用户自己写的那段字。动态内容，不进 t(...)。 */}
         <p className="whitespace-pre-wrap break-words text-foreground">
           {failure.text}
@@ -155,8 +177,8 @@ export default function SendFailureBubble({
         <p className="mt-1.5 text-2xs leading-relaxed text-muted-foreground">
           {transport ? (
             t("session.sendFailure.transport.body")
-          ) : failure.kind === "notSent" ? (
-            t("session.sendFailure.notSent.body")
+          ) : neverLeft ? (
+            t(`session.sendFailure.${failure.kind}.body`)
           ) : failure.detail ? (
             // 「它说：」标出这是**那台机器的原话**，不是本站的判断。对端已经按它
             // 自己的语言本地化过，原样转述，不替换成我们编的故事。

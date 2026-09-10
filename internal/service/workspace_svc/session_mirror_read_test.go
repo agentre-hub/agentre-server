@@ -331,7 +331,7 @@ func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
 // 请求错误。坏的是一帧，不该由整页来赔。
 func TestTranscript_GivenAnUndecodableFrame_KeepsTheRestOfThePage(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	broken := &agent_session_entity.JournalFrame{Seq: 7, Payload: []byte{0xff, 0xfe, 0xfd}}
+	broken := &agent_session_entity.JournalFrame{Seq: 7, Payload: "\xff\xfe\xfd"}
 	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(5), defaultTranscriptLimit+1).
 		Return([]*agent_session_entity.JournalFrame{
 			frame(6, "text_delta", "前"),
@@ -355,7 +355,7 @@ func TestTranscript_GivenAnUndecodableFrame_KeepsTheRestOfThePage(t *testing.T) 
 func TestTranscriptTail_GivenAnUndecodableFrame_KeepsTheTurn(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
 	rows := newestFirst(turn(10))
-	rows[1] = &agent_session_entity.JournalFrame{Seq: rows[1].Seq, Payload: []byte{0x00, 0xff}}
+	rows[1] = &agent_session_entity.JournalFrame{Seq: rows[1].Seq, Payload: "\x00\xff"}
 	// 一批就到头（3 行 < tailBatchRows），不会有第二次取。
 	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(rows, nil)

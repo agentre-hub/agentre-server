@@ -39,6 +39,7 @@ import {
   rpcMethods,
 } from "@agentre-hub/agentre-wire";
 import type { MessageInitShape, MessageShape } from "@bufbuild/protobuf";
+import { base64Encode } from "@bufbuild/protobuf/wire";
 
 import { RedialTimer } from "@/lib/redialTimer";
 import { backoffDelay } from "@/lib/relayBackoff";
@@ -891,10 +892,40 @@ function decodeRawJSON(value: Uint8Array): unknown {
   }
 }
 
+/**
+ * 图片附件的字节还原成 base64。
+ *
+ * `decodeRawJSON` 那条路的前提是「事件里每一个 bytes 都是 json.RawMessage」——
+ * `ImageBlock.source.inline` 上线之后这句话不再成立:它是**真二进制**,不是 JSON。
+ * 拿 JSON 那把尺子量它,`JSON.parse` 抛出后按缺失处理,图就此凭空消失;而它嵌在
+ * `source` 里,上面那个只走顶层字段的循环根本够不着 —— 于是它原样是 Uint8Array,
+ * `JSON.stringify` 把它铺成 `{"0":137,"1":80,…}` 这种按字节下标编号的对象。
+ *
+ * 这正是 Go 侧 wireview 里两张表的分野:`rawJSONByteFields` 说「这不是二进制,是
+ * JSON」,`acceptedBinaryFields` 说「这确实是二进制」。本站此前只有前一半。
+ *
+ * 归约器要的是 `data:<mediaType>;base64,<inline>` 里那一段,所以这里交出 base64
+ * 字符串。用 wire 运行时的 `base64Encode` 而不是 `btoa(String.fromCharCode(...))`:
+ * 后者对一张几 MB 的图会把参数铺成几百万个实参,直接爆栈。
+ */
+function decodeImageSource(value: unknown): unknown {
+  if (typeof value !== "object" || value === null) return value;
+  const source = value as { inline?: unknown; url?: unknown };
+  if (!(source.inline instanceof Uint8Array)) return value;
+  return {
+    ...source,
+    // 空字节等于「没这个字段」(proto3 零值),别造一个空的 data: URL 出来。
+    inline: source.inline.length === 0 ? "" : base64Encode(source.inline),
+  };
+}
+
 function runtimeEventToViewEvent(
   event: { case: string } & Record<string, unknown>,
 ): Record<string, unknown> {
   const { case: eventCase, ...fields } = event;
+  if (eventCase === "image" && "source" in fields) {
+    fields.source = decodeImageSource(fields.source);
+  }
   for (const [key, value] of Object.entries(fields)) {
     if (value instanceof Uint8Array) fields[key] = decodeRawJSON(value);
   }

@@ -651,6 +651,69 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     expect(mockedApi).not.toHaveBeenCalled();
     expect(client.close).not.toHaveBeenCalled();
   });
+
+  /**
+   * 第一句话里贴的图必须跟着这一次派发过线。
+   *
+   * 此前 `DispatchInput` 上根本没有这一维：草稿页的输入框把图片按钮摆着、缩略图
+   * 也贴上了,按下发送时 `ChatComposer` 把 `images` 交了出来 —— 而这里只接得住
+   * `message`。于是第一句话是纯文本发出去的,屏幕上不报一个字,用户拿不到任何
+   * 「图没送到」的迹象。编码与会话详情那条路共用 `encodeUserBlocks`:同一个
+   * `runtime.run` 字段不该有两种拼法。
+   */
+  it("第一句话里贴的图随这一次派发过线（userBlocks）", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "这张图哪里不对",
+      sourceClient,
+      images: [
+        {
+          dataUrl: "data:image/png;base64,AQID",
+          mediaType: "image/png",
+          name: "shot.png",
+        },
+      ],
+    });
+
+    const [method, params] = client.request.mock.calls[0];
+    expect(method).toBe(rpcMethods.runtimeRun);
+    expect(params).toMatchObject({
+      userText: "这张图哪里不对",
+      userBlocks: [
+        {
+          type: "image",
+          data: new TextEncoder().encode(
+            JSON.stringify({
+              media_type: "image/png",
+              source: { inline: "AQID" },
+            }),
+          ),
+        },
+      ],
+    });
+  });
+
+  it("没贴图时不带 userBlocks 过线——空清单等于在主张「这一轮有附件」", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "只有文字",
+      sourceClient,
+      images: [],
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.userBlocks).toBeUndefined();
+  });
 });
 
 // 派发计划按账号默认顺序（sort_order）解析 —— 用户在总览页排的就是它，所以查询串
