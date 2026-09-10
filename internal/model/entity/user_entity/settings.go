@@ -8,7 +8,9 @@ package user_entity
 // 没有行 = 全部取默认值。默认必须是「关」——默认开等于替用户做了决定，而活跃上报这个
 // 开关的全部意义就是「用户显式同意之后才上报」。
 type Settings struct {
-	UserID int64 `gorm:"column:user_id;type:bigint;not null;primaryKey"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// UserID 是自然键，落在唯一索引上：一个账号至多一行；行身份由 ID 承担。
+	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
 	// ActivityStatsEnabled 决定服务端是否向各台机器拉取日活跃计数。
 	// 关闭时不仅停止拉取，已有的 agent_activity_daily 行也一并删除（关闭确认弹层里
 	// 明写了这一条）。

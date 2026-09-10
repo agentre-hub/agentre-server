@@ -126,9 +126,11 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 //
 // PeerFingerprint 留在表上作来源标注，但**不再是主键的一部分**。
 type JournalFrame struct {
-	UserID          int64  `gorm:"column:user_id;type:bigint;not null;primaryKey"`
-	ConversationID  string `gorm:"column:conversation_id;type:char(36);not null;primaryKey"`
-	Seq             int64  `gorm:"column:seq;type:bigint;not null;primaryKey"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// (user_id, conversation_id, seq) 是自然键，落在唯一索引上；行身份由 ID 承担。
+	UserID          int64  `gorm:"column:user_id;type:bigint;not null"`
+	ConversationID  string `gorm:"column:conversation_id;type:char(36);not null"`
+	Seq             int64  `gorm:"column:seq;type:bigint;not null"`
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
 	// Payload 是 string 而不是 []byte，这一条是**必需的**而不是风格：开了
 	// interpolateParams（本仓的 compose / docker 配置 / config.example 与 CI 的 e2e

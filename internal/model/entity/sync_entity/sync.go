@@ -89,8 +89,10 @@ func (o *SyncObject) IsDeleted() bool { return o != nil && o.DeletedAt > 0 }
 // DeviceSyncState 记录每台设备最近一次**把增量消费干净**的时刻，供 R6a 判超窗口
 // （见 sync_svc.Pull：只有拉回空页才刷新它）。没有这一行 = 首次登录，不算超窗口。
 type DeviceSyncState struct {
-	UserID     int64 `gorm:"column:user_id;primaryKey"`
-	DeviceID   int64 `gorm:"column:device_id;primaryKey"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// (user_id, device_id) 是自然键，落在唯一索引上；行身份由 ID 承担。
+	UserID     int64 `gorm:"column:user_id"`
+	DeviceID   int64 `gorm:"column:device_id"`
 	LastSyncAt int64 `gorm:"column:last_sync_at;type:bigint;not null;default:0"`
 	Updatetime int64 `gorm:"column:updatetime;type:bigint;not null;default:0"`
 }
@@ -99,8 +101,10 @@ func (*DeviceSyncState) TableName() string { return "sync_device_states" }
 
 // SyncAvatar 按内容哈希存放头像正文，与设备无关。
 type SyncAvatar struct {
-	UserID      int64  `gorm:"column:user_id;primaryKey"`
-	ContentHash string `gorm:"column:content_hash;primaryKey"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// (user_id, content_hash) 是自然键，落在唯一索引上；行身份由 ID 承担。
+	UserID      int64  `gorm:"column:user_id"`
+	ContentHash string `gorm:"column:content_hash"`
 	ContentType string `gorm:"column:content_type;type:text;not null;default:''"`
 	Content     string `gorm:"column:content;type:text;not null"`
 	Createtime  int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
@@ -110,9 +114,11 @@ func (*SyncAvatar) TableName() string { return "sync_avatars" }
 
 // DeviceLocalPath 是上报组的一行：某台设备上某个项目的本机路径。
 type DeviceLocalPath struct {
-	UserID        int64  `gorm:"column:user_id;primaryKey"`
-	DeviceID      int64  `gorm:"column:device_id;primaryKey"`
-	ProjectSyncID string `gorm:"column:project_sync_id;primaryKey"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// (user_id, device_id, project_sync_id) 是自然键，落在唯一索引上；行身份由 ID 承担。
+	UserID        int64  `gorm:"column:user_id"`
+	DeviceID      int64  `gorm:"column:device_id"`
+	ProjectSyncID string `gorm:"column:project_sync_id"`
 	Path          string `gorm:"column:path;type:text;not null"`
 	Updatetime    int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
 }

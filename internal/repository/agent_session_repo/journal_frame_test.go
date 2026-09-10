@@ -46,7 +46,7 @@ func TestWriteFrames_GivenReplayedFrame_ThenNoDuplicateNoError(t *testing.T) {
 	// 钉住**自赋值**这个形状，而不是只看见 "ON DUPLICATE KEY UPDATE" 就算数：
 	// 赋值右边一旦不是被赋的那一列，重放就从「什么都不改」变成「用后到的值覆盖」，
 	// 而两条断言的措辞完全一样。
-	mock.ExpectExec(regexp.QuoteMeta("ON DUPLICATE KEY UPDATE `user_id`=`user_id`")).
+	mock.ExpectExec(regexp.QuoteMeta("ON DUPLICATE KEY UPDATE `id`=`id`")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 

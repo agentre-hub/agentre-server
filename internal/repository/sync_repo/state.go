@@ -39,24 +39,31 @@ func NewSyncState() SyncStateRepo       { return &stateRepo{} }
 
 type stateRepo struct{}
 
-// NextVersion 的递增与取值必须由数据库一次做完。先读后写在多副本并发上行时会双双读到
+// NextVersion 的递增必须由数据库一条语句做完。先读后写在多副本并发上行时会双双读到
 // 同一个值、两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
 //
-// MySQL 没有 RETURNING，这里用它自己的写法：INSERT … ON DUPLICATE KEY UPDATE 里把新值
-// 套进 LAST_INSERT_ID(expr)，该函数在设置的同时把值记在**连接**上，紧接着一条
-// SELECT LAST_INSERT_ID() 就能取回。递增由行锁串行化。外面那层事务不是为了原子性，
-// 而是为了把两条语句钉在同一条连接上——LAST_INSERT_ID 是连接级的，走连接池会取到别人的值。
+// MySQL 没有 RETURNING，所以推进和取回是两条语句，钉在同一个事务里：那一行的排他锁
+// 由 upsert 持到提交，期间没有别人能改它，紧随其后的 SELECT 读到的因此就是本次分配到
+// 的值。事务在这里是**必需的**而不是修饰——没有它，两条语句之间会挤进另一个副本的
+// 推进，取回的就是别人的号。
+//
+// 取回**不能**走 LAST_INSERT_ID()。这张表现在有一个 AUTO_INCREMENT 的 id 主键，而一次
+// 真的插入了行的 INSERT 会把自增值写进同一个连接级变量，把 LAST_INSERT_ID(expr) 存进去
+// 的版本号顶掉；每个账号第一次分配因此会拿回 id 而不是版本号（MySQL 9.7 实测：期望 5、
+// 实得 1）。第二次起走 ON DUPLICATE 分支、不生成自增值，又是对的——这个 bug 只在每个
+// 账号的第一次分配上出现，且落库的 version_seq 始终正确，错的只有交回调用方的那个数。
 func (r *stateRepo) NextVersion(ctx context.Context, userID int64, n int64) (int64, error) {
 	now := time.Now().UnixMilli()
 	var version int64
 	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec(`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime)
-VALUES (?, LAST_INSERT_ID(?), ?)
-ON DUPLICATE KEY UPDATE version_seq = LAST_INSERT_ID(version_seq + ?), updatetime = ?`,
+VALUES (?, ?, ?)
+ON DUPLICATE KEY UPDATE version_seq = version_seq + ?, updatetime = ?`,
 			userID, n, now, n, now).Error; err != nil {
 			return err
 		}
-		return tx.Raw("SELECT LAST_INSERT_ID()").Scan(&version).Error
+		return tx.Raw("SELECT version_seq FROM sync_account_seqs WHERE user_id = ?", userID).
+			Scan(&version).Error
 	})
 	if err != nil {
 		return 0, err

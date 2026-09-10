@@ -89,16 +89,16 @@ func TestSetActivityStats_EnableIsASingleUpsertThatStampsTheMoment(t *testing.T)
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"INSERT INTO `user_settings` (`activity_stats_enabled`,"+
+		"INSERT INTO `user_settings` (`user_id`,`activity_stats_enabled`,"+
 			"`activity_stats_enabled_at`,`activity_last_pull_at`,`activity_backfill_from`,"+
-			"`createtime`,`updatetime`,`user_id`) VALUES (?,?,?,?,?,?,?) "+
+			"`createtime`,`updatetime`) VALUES (?,?,?,?,?,?,?) "+
 			"ON DUPLICATE KEY UPDATE `activity_stats_enabled`=VALUES(`activity_stats_enabled`),"+
 			"`activity_stats_enabled_at`=VALUES(`activity_stats_enabled_at`),"+
 			"`activity_backfill_from`=VALUES(`activity_backfill_from`),"+
 			"`updatetime`=VALUES(`updatetime`)",
 	)+"$").WithArgs(
-		true, int64(1700000000000), int64(0), "2026-08-28",
-		int64(1700000000000), int64(1700000000000), int64(7),
+		int64(7), true, int64(1700000000000), int64(0), "2026-08-28",
+		int64(1700000000000), int64(1700000000000),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -121,13 +121,13 @@ func TestSetActivityStats_DisableKeepsTheLastEnabledMoment(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"INSERT INTO `user_settings` (`activity_stats_enabled`,"+
+		"INSERT INTO `user_settings` (`user_id`,`activity_stats_enabled`,"+
 			"`activity_stats_enabled_at`,`activity_last_pull_at`,`activity_backfill_from`,"+
-			"`createtime`,`updatetime`,`user_id`) VALUES (?,?,?,?,?,?,?) "+
+			"`createtime`,`updatetime`) VALUES (?,?,?,?,?,?,?) "+
 			"ON DUPLICATE KEY UPDATE `activity_stats_enabled`=VALUES(`activity_stats_enabled`),"+
 			"`updatetime`=VALUES(`updatetime`)",
 	)+"$").WithArgs(
-		false, int64(0), int64(0), "", int64(1700000000000), int64(1700000000000), int64(7),
+		int64(7), false, int64(0), int64(0), "", int64(1700000000000), int64(1700000000000),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -165,8 +165,8 @@ func TestSetActivityStats_BackfillAsksForNoFloorAtAll(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("`activity_backfill_from`=VALUES(`activity_backfill_from`)")).
-		WithArgs(true, int64(1700000000000), int64(0), "",
-			int64(1700000000000), int64(1700000000000), int64(7)).
+		WithArgs(int64(7), true, int64(1700000000000), int64(0), "",
+			int64(1700000000000), int64(1700000000000)).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 

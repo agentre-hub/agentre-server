@@ -12,16 +12,24 @@ import (
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
-// 版本序列必须是一条语句：多副本并发上行时，先读后写会双双读到同一个值，
+// 推进序列必须是一条语句：多副本并发上行时，先读后写会双双读到同一个值，
 // 两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
+//
+// 取回分配到的值走的是同一事务里的一条 SELECT，而**不是** LAST_INSERT_ID()。
+// sync_account_seqs 有了 AUTO_INCREMENT 的 id 之后那条路就断了：一次真的插入了行的
+// INSERT 会把自增值写进同一个连接级变量，把 LAST_INSERT_ID(expr) 存进去的版本号顶掉，
+// 于是每个账号**第一次**分配拿回的是 id 而不是版本号（在 MySQL 9.7 上实测：期望 5、
+// 实得 1）。落库的 version_seq 一直是对的，错的只有交回调用方的那个数——所以它不会
+// 在库里留下痕迹，只会让那一批对象带着一个偏小的版本号发出去。
 func TestNextVersion_GivenConcurrentReplicas_ThenSingleAtomicStatement(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs`)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT LAST_INSERT_ID()`)).
-		WillReturnRows(sqlmock.NewRows([]string{"LAST_INSERT_ID()"}).AddRow(int64(42)))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(42)))
 	mock.ExpectCommit()
 
 	v, err := r.NextVersion(ctx, 7, 1)
@@ -30,6 +38,9 @@ func TestNextVersion_GivenConcurrentReplicas_ThenSingleAtomicStatement(t *testin
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// 取号不得再经过 LAST_INSERT_ID：那是个连接级变量，任何一次生成自增值的写都会顶掉它。
+// 这里钉的是「读回走的是 version_seq 列本身」，而不只是「拿到了一个数」——两者在断言
+// 措辞上分不出来，但只有前者在新账号第一次分配时也是对的。
 func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
@@ -38,8 +49,9 @@ func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).
 		WithArgs(int64(7), int64(3), sqlmock.AnyArg(), int64(3), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 2))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT LAST_INSERT_ID()`)).
-		WillReturnRows(sqlmock.NewRows([]string{"LAST_INSERT_ID()"}).AddRow(int64(45)))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(45)))
 	mock.ExpectCommit()
 
 	v, err := r.NextVersion(ctx, 7, 3)

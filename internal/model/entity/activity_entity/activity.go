@@ -14,7 +14,10 @@ package activity_entity
 // 对话跟随 Agent 绑定；ProjectSyncID 空 = 未归属项目；BackendType 空 = 发起端没报。
 // 聚合时它们必须各自成组，不能被并进「未知」。
 type DailyBucket struct {
-	UserID int64 `gorm:"column:user_id;type:bigint;not null;primaryKey"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// (user_id, day, dims_hash) 是自然键，落在唯一索引上；行身份由 ID 承担。
+	// upsert 认的仍是这个组合，聚合口径不变。
+	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
 	// Day 是这条会话**建立**那天的日界（"2006-01-02"），按**服务端机器时区**切。
 	//
 	// 一个账号下的机器可能分散在不同时区，日界只能有一套，否则同一天的活动会被劈到
@@ -26,7 +29,7 @@ type DailyBucket struct {
 	// string 字段时用 RFC3339Nano —— 一次整行读拿到的是 "2026-08-28T00:00:00+08:00"，
 	// 而这个值会原样变成下一次增量拉取的 since_day 发给机器。char(10) 没有时区语义
 	// 可供重新解释，那条路便不存在。
-	Day             string `gorm:"column:day;type:char(10);not null;primaryKey"`
+	Day             string `gorm:"column:day;type:char(10);not null"`
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
 	AgentSyncID     string `gorm:"column:agent_sync_id;type:varchar(255);not null;default:''"`
 	BackendType     string `gorm:"column:backend_type;type:varchar(64);not null;default:''"`
@@ -36,7 +39,7 @@ type DailyBucket struct {
 	SessionCount    int32  `gorm:"column:session_count;type:int;not null;default:0"`
 	Createtime      int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
 	Updatetime      int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
-	// DimsHash 是六个维度的摘要，由数据库自己算（STORED 生成列），参与主键。
+	// DimsHash 是六个维度的摘要，由数据库自己算（STORED 生成列），参与自然键的唯一索引。
 	//
 	// 只读：写入时必须让 GORM 跳过它。让数据库算而不是应用算，去掉的是一整类 bug——
 	// 应用与数据库对「什么算同一行」产生分歧时，upsert 会静默地变成插入，计数从此翻倍。
