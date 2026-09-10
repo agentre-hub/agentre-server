@@ -828,7 +828,6 @@ export default function Devices() {
     }
   }
 
-  const deviceCount = !loading && loadError === null ? devices.length : null;
   // 列表到底有几台，只有「加载完 + 不是那种一台都没取到的失败」时才答得上来。
   // 答不上来就既不展开引导、也不渲染入口，更不能改口说「还没有任何设备」——
   // 上面那条错误提示是此刻唯一诚实的内容。
@@ -845,24 +844,7 @@ export default function Devices() {
       : null;
 
   return (
-    <AppShell
-      title={t("nav.devices")}
-      right={
-        <>
-          {deviceCount !== null && (
-            <span
-              data-testid="devices-count"
-              aria-label={t("device.manage.countLabel", {
-                count: deviceCount,
-              })}
-              className="font-mono text-xs text-muted-foreground"
-            >
-              {deviceCount}
-            </span>
-          )}
-        </>
-      }
-    >
+    <AppShell title={t("nav.devices")}>
       <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5">
         {/* 设备行列表（桌面与移动共用；不再有右列常驻撤销说明卡） */}
         <div className="flex min-w-0 flex-1 flex-col gap-2.5">

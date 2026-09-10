@@ -5,6 +5,7 @@ import Transcript from "@/components/session/Transcript";
 import {
   createTranscriptProjector,
   reduceFrames,
+  reduceSessionState,
   type TranscriptFrame,
 } from "@agentre-hub/agentre-ui";
 
@@ -554,5 +555,72 @@ describe("Transcript 的时间戳", () => {
     );
 
     expect(screen.queryByText(/^\d{2}:\d{2}$/)).toBeNull();
+  });
+});
+
+/**
+ * 上游重试提示。
+ *
+ * 这一侧此前**根本画不出它**：`Transcript` 里 `liveRetry` 写死 `null`，理由（当时
+ * 写在文件头上）是「中转事件流没有已落库/未落库那条分界」。可那条分界管的是
+ * `liveBlocks` —— 正文块归谁；retry 从来不落块，它是转录末行那张卡，两件事被
+ * 一句话捆在了一起。结果是 agentre 上游连不上时，桌面端有一张转着圈的黄卡说
+ * 「Retrying 1/3」，控制台这边转录一动不动，用户分不清是在重试还是发丢了。
+ *
+ * 提示本身由共享包的 `reduceSessionState` 算（帧的寿命规则在那里，两个宿主同一份）；
+ * 这一层负责的只有两件事：**挂在哪一行**、**此刻还信不信这一轮在跑**。
+ */
+describe("Transcript 的重试提示", () => {
+  const retryCard = () => screen.queryByRole("status", { name: "Retrying" });
+
+  function renderWithRetry(frames: TranscriptFrame[], streaming: boolean) {
+    return render(
+      <Transcript
+        messages={reduceFrames(frames, 1)}
+        sessionId={1}
+        liveRetry={reduceSessionState(frames).retry}
+        streaming={streaming}
+      />,
+    );
+  }
+
+  it("给定归约出一次在等的重试且这一轮在跑，当渲染，则出重试卡并报第几次", () => {
+    renderWithRetry(
+      [
+        f({ kind: "text_delta", text: "我看一下" }),
+        f({
+          kind: "retry",
+          message: "Connection error",
+          attempt: 1,
+          max: 3,
+        }),
+      ],
+      true,
+    );
+
+    expect(retryCard()).toBeTruthy();
+    expect(screen.getByText("Retrying 1/3")).toBeTruthy();
+    expect(screen.getByText("Connection error")).toBeTruthy();
+  });
+
+  // 与 `compacting` 恒为 false 同一条规矩：宿主已经不信这一轮在跑了，还摆一张
+  // 转着圈的「正在重试」就是替远端撒谎。日志停在半次重试上（轮次被打断、没有
+  // done 帧收尾）时走的正是这一支。
+  it("给定同一份提示但宿主已不认为这一轮在跑，当渲染，则不画", () => {
+    renderWithRetry(
+      [
+        f({ kind: "text_delta", text: "我看一下" }),
+        f({ kind: "retry", message: "Connection error", attempt: 1, max: 3 }),
+      ],
+      false,
+    );
+
+    expect(retryCard()).toBeNull();
+  });
+
+  it("给定没有在等的重试，当渲染，则不画", () => {
+    renderWithRetry([f({ kind: "text_delta", text: "我看一下" })], true);
+
+    expect(retryCard()).toBeNull();
   });
 });

@@ -13,6 +13,7 @@ import {
   type LiveTurnInput,
   type TranscriptMessage,
   type TranscriptRow,
+  type RetryNotice,
   type TranscriptPorts,
   type TranscriptRenderContextValue,
   cn,
@@ -39,7 +40,12 @@ import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
  * 归约目标换成包的 DTO 之后，这两件事一起没了，不是分别修好的。
  *
  * 中转事件流是「到一条画一条」，没有桌面端那种「已落库 / 未落库」的分界，所以
- * `liveBlocks` / `liveRetry` 恒为空值 —— 那两样表达的正是那条分界。
+ * `liveBlocks` 恒为空值 —— 它表达的正是那条分界。
+ *
+ * `liveRetry` **不**在此列，此前跟着它一起写死成 null 是搭错了车：重试提示从来不
+ * 落块（桌面端的原话是「只 emit 不落 block」），它是末行那张卡，与「块归谁」无关。
+ * 归约由共享包的 `reduceSessionState` 做，寿命规则两个宿主同一份；这一层只决定
+ * **挂哪一行**与**此刻还信不信这一轮在跑** —— 两件事都由 `liveMessageId` 一并答了。
  *
  * 但 `liveTail` 是接的：包只在 liveTail 那一段上标 `streaming`，而只有标了
  * `streaming` 的文本才走 `StreamingMarkdown`（增量切分 + 分段 memo）。不接，
@@ -62,6 +68,7 @@ export default function Transcript({
   agentPending = false,
   fallbackModel = "",
   liveTurnTiming = null,
+  liveRetry = null,
   streaming = false,
   pendingAssistant = false,
   reconnecting = false,
@@ -120,6 +127,15 @@ export default function Transcript({
    * 正在长的正文取 `liveTail`：两样这里都有，不必让宿主再送一遍。
    */
   liveTurnTiming?: LiveTurnTiming | null;
+  /**
+   * 上游正在等下一次尝试。由宿主用共享包的 `reduceSessionState` 从同一份事件帧
+   * 算出来（该不该熄灭是那边的规则，不是这里的）。
+   *
+   * 摆在哪、什么时候不摆，归这里：跟 `liveTurn` 同一行，也跟它一样受 `streaming`
+   * 管。宿主已经不认为这一轮在跑时不画 —— 与 `compacting` 恒为 false 同一条规矩，
+   * 摆一张转着圈的「正在重试」是在替远端撒谎。
+   */
+  liveRetry?: RetryNotice | null;
   /**
    * 这条会话此刻有没有一轮在跑。为 true 时最后一条助手消息末尾出三点。
    *
@@ -433,7 +449,13 @@ export default function Transcript({
                     // 稳定空值,让 TranscriptRowView 的 memo 浅比较恒命中。
                     liveTail={liveTailOf(liveByMessageId, row)}
                     liveBlocks={undefined}
-                    liveRetry={null}
+                    // 与 liveTurn 同一个判据：只有正在跑的那条消息的**末行**承载
+                    // 它，其余行收敛到稳定空值让 memo 浅比较恒命中。
+                    liveRetry={
+                      row.isLastOfMessage && row.messageId === liveMessageId
+                        ? liveRetry
+                        : null
+                    }
                     // 同上：只有正在跑的那条消息的**末行**画 meta，其余行收敛到
                     // 稳定空值。
                     liveTurn={

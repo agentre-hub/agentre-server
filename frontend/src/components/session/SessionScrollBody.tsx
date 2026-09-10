@@ -6,9 +6,11 @@ import {
   Alert,
   AlertDescription,
   Button,
+  cn,
   countTurnsAfterMessage,
   TranscriptJumpControl,
   TranscriptSkeleton,
+  type RetryNotice,
   type TranscriptMessage,
 } from "@agentre-hub/agentre-ui";
 
@@ -80,6 +82,8 @@ export interface SessionScrollBodyProps {
   fallbackModel: string;
   /** 还在跑的这一轮的计时。同上，见 Transcript 的同名 prop。 */
   liveTurnTiming: LiveTurnTiming | null;
+  /** 上游正在等下一次尝试。同上，见 Transcript 的同名 prop。 */
+  liveRetry: RetryNotice | null;
   streaming: boolean;
   pendingAssistant: boolean;
 
@@ -121,6 +125,7 @@ export default function SessionScrollBody({
   agentPending,
   fallbackModel,
   liveTurnTiming,
+  liveRetry,
   streaming,
   pendingAssistant,
   decisions,
@@ -300,6 +305,7 @@ export default function SessionScrollBody({
               agentPending={agentPending}
               fallbackModel={fallbackModel}
               liveTurnTiming={liveTurnTiming}
+              liveRetry={liveRetry}
               streaming={streaming}
               pendingAssistant={pendingAssistant}
               // 通道断了就先说通道：此刻「还在不在生成」根本观察不到，继续转三个点
@@ -369,7 +375,18 @@ export default function SessionScrollBody({
         {/* 在等内容：摆骨架，不摆一行「正在加载转录…」。那行字与此前头上那条红色的
             「连接中…」横幅说的是同一件事，而且不占位置——内容落地时版面整块下跳。
             上面 readingFromMachine 那句留着：它说的是**在等哪台机器**，骨架说不出。 */}
-        {awaitingTranscript && <TranscriptSkeleton />}
+        {/* 出场延迟见 globals.css 的 transcript-skeleton-in：镜像那一趟在局域网上
+            100ms 就回来，骨架铺满再消失只会读成「闪了一下」。`motion-reduce` 下
+            淡入收成一瞬，延迟本身留着——那不是动效，是「别为一次快得看不清的等待
+            画一屏东西」。 */}
+        {awaitingTranscript && (
+          <TranscriptSkeleton
+            className={cn(
+              "animate-[transcript-skeleton-in_160ms_ease-out_180ms_both]",
+              "motion-reduce:animate-[transcript-skeleton-in_1ms_linear_180ms_both]",
+            )}
+          />
+        )}
         {/* 往回翻之后的出口（2026-08-24）。这一端此前根本没有它：长对话滚上去只能
             自己拖回来。控件与桌面端同一个实现，形状只有药丸一种。
             这一端没有「补齐」那套账，因此不传 catchUp，药丸就写「回到底部」。 */}

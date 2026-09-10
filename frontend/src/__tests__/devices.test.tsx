@@ -96,7 +96,7 @@ beforeEach(async () => {
 });
 
 describe("device page design alignment", () => {
-  it("TopBar 注入设备总数 Cnt；不再有第二个连接说法", async () => {
+  it("TopBar 不复述列表：既没有设备总数，也没有第二个连接说法", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return listResponse;
       throw new Error("unexpected call: " + path);
@@ -105,18 +105,16 @@ describe("device page design alignment", () => {
     renderDevices();
     await screen.findByText("nuc-01");
 
-    // Cnt = 设备总数（font-mono，text-muted-foreground）
-    const cnt = screen.getByTestId("devices-count");
-    expect(cnt.textContent).toBe("2");
-    // 裸数字必须带 aria-label（设计文档：Cnt 一律 aria-label'd，SR 不能只听到「2」）。
-    expect(cnt.getAttribute("aria-label")).toBe("2 devices");
-    // 顶栏此前有一条绿点 +「桌面端已连接」，说的是有没有机器在线；账号块那颗痣
+    // 顶栏此前挂着一个设备总数。列表就在下面一屏之内，数字只是把它数了一遍，
+    // 还容易被读成「在线几台」——它数的其实是全部，离线的也算。
+    expect(screen.queryByTestId("devices-count")).toBeNull();
+    // 顶栏此前还有一条绿点 +「桌面端已连接」，说的是有没有机器在线；账号块那颗痣
     // 说的是这一屏还是不是实时的。同一种绿点、同一族措辞讲两件事，还会互相矛盾。
     // 实时性收成一个出口之后这条撤了 —— 在线/离线本来就是这一页每一行的正文。
     expect(screen.queryByText("Desktop connected")).toBeNull();
   });
 
-  it("没有在线 agentred 时也一样没有（撤掉之前它就该是诚实的）", async () => {
+  it("没有在线 agentred 时顶栏也一样没有连接说法（撤掉之前它就该是诚实的）", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices")
         return {
@@ -141,7 +139,6 @@ describe("device page design alignment", () => {
     renderDevices();
     await screen.findByText("laptop");
 
-    expect(screen.getByTestId("devices-count").textContent).toBe("1");
     expect(screen.queryByText("Desktop connected")).toBeNull();
   });
 
@@ -495,9 +492,6 @@ describe("add-device entry and guide expansion", () => {
     ).toBeTruthy();
     expect(screen.queryByTestId("add-device-guide")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();
-    // 「没有设备」如今有两个说法：展开的引导，和顶栏那个数字。取不到列表时
-    // 两个都不许出现——写着 0 的计数和那句被删掉的空句是同一句谎话。
-    expect(screen.queryByTestId("devices-count")).toBeNull();
   });
 });
 

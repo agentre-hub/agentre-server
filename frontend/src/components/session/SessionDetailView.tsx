@@ -456,12 +456,26 @@ export default function SessionDetailView({
    *
    * 认领落定之前**不开通道**：分流一旦选错就是一条通道级错误，而账号那一行本页无论
    * 如何都要问一次，等它一个往返比猜一次再改口干净。
+   *
+   * 但「认领落定」说的是**这条对话在不在账号里**有了答案，不是「转录读回来了」。
+   * 这两件事此前共用 `history.settled` 一格，而它要等 `/v1/agent-sessions/transcript`
+   * 整趟回来才翻真 —— 账号那一行早在这之前就到手了（宿主直接递下来的话渲染期就有）。
+   * 于是每切一条对话都白等一趟 HTTP 才开始连，而 `deriveSessionViewStatus` 把「目标
+   * 还没定下来」读作 connecting，头部整段摆着一枚转圈的芯片和一条扫过底边的进度条，
+   * 说着一件此刻根本没在发生的事（联调机上实测 120ms）。所以答得出的时候就走：
+   * 账号里有这一行是**肯定**的答案，不会再被那一趟转录改口。
+   *
+   * 排序因此翻了过来 —— 只有「按机器寻址」那一支还等 `history.settled`：它是**否定**
+   * 的答案（账号里没有这一行），而否定要等那一趟真的问完才成立。
+   *
+   * 补齐的先后不受影响：attach 那只 effect 自己也守着 `history.settled`（镜像那一段
+   * 不走客户端的游标去重，必须先落地）。这里提前的只是**把通道开出来**。
    */
   const savedInAccount = initialRow !== undefined || mirrorSummary !== null;
-  const relayTarget = !history.settled
-    ? null
-    : savedInAccount
-      ? conversationTarget(sid)
+  const relayTarget = savedInAccount
+    ? conversationTarget(sid)
+    : !history.settled
+      ? null
       : device?.online
         ? machineTarget(device.fingerprint)
         : null;
@@ -1042,7 +1056,8 @@ export default function SessionDetailView({
   const pendingAssistant =
     turn.pendingAssistant || indicatorHostMessageId(messages) === null;
 
-  // 会话级状态（上下文窗口 / 权限模式）不进转录正文，单独归约一遍。
+  // 会话级状态（上下文窗口 / 权限模式 / 上游重试）不进转录正文，单独归约一遍。
+  // 落点不止底栏：前两样归 Composer，retry 归转录末行那张卡。
   const sessionRuntime = useMemo(() => reduceSessionState(events), [events]);
 
   /**
@@ -1510,6 +1525,7 @@ export default function SessionDetailView({
       agentPending={agentPending}
       fallbackModel={fallbackModel}
       liveTurnTiming={liveTurn.timing}
+      liveRetry={sessionRuntime.retry}
       streaming={running}
       pendingAssistant={pendingAssistant}
       decisions={decisions}

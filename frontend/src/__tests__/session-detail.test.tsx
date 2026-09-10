@@ -2055,6 +2055,27 @@ describe("会话详情：这条通道声明的目标", () => {
     // 首帧：账号那一行还没问回来，分流还没有答案。
     expect(targets()).toEqual([null]);
   });
+
+  /*
+    但「认领」说的是**这条对话在不在账号里**，不是「转录读回来了没有」。宿主
+    （左栏点一行进右栏）把那一行直接递下来时这一问渲染期就答得出，而此前分流
+    卡的是 `history.settled` —— 那一格要等 `/v1/agent-sessions/transcript` 整个
+    往返回来才翻真。于是每切一条对话，都有一整趟 HTTP 的工夫手上明明有答案却
+    一条通道都不开，头部还照着「目标还没定下来」摆一枚转圈的「连接中」芯片外加
+    一条扫过整条底边的进度条（联调机上实测 120ms），而那段时间根本没有任何连接
+    在进行。
+  */
+  it("宿主递下了账号那一行：首帧就把目标定下来，不等转录那一趟", () => {
+    stubDevices();
+    mountDetail({
+      conversation_id: "42",
+      peer_fingerprint: "fp-desktop",
+      device_fingerprint: "fp-1",
+      title: "重构登录页",
+    });
+
+    expect(targets()[0]).toBe("conversation:42");
+  });
 });
 
 /**
@@ -2119,7 +2140,7 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
     return screen.queryByText(i18n.t("session.banner.lost.title"));
   }
 
-  it("切到同机器上的另一条对话：整段认领期间只说「连接中」,不报「已经不再自动重试」", async () => {
+  it("切到同机器上的另一条对话：目标当帧就定下来,不报「已经不再自动重试」", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/devices") return { devices: [deviceRow] };
       if (path === "/v1/workspace/agents") return { agents: [] };
@@ -2146,12 +2167,12 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
     );
     expect(lostBanner()).toBeNull();
 
-    // 切到 43：认领重来一遍，这一帧 relayTarget 又是 null。
+    // 切到 43：宿主已经把账号那一行递下来了，「这条对话在不在账号里」这一问在
+    // 渲染期就答得出，通道目标因此这一帧就定得下来——不必先摆一句「连接中」，
+    // 更不会是「已经不再自动重试」。
     rerender(ui("43"));
     expect(lostBanner()).toBeNull();
-    expect(
-      document.querySelector('[data-session-status="connecting"]'),
-    ).toBeTruthy();
+    expect(mockUseRelay.mock.calls.at(-1)?.[0]).toBe("conversation:43");
 
     // 认领落定、通道重新开出来之后照常连上，不残留任何横幅。
     await vi.waitFor(() =>
@@ -2160,6 +2181,97 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
       ),
     );
     expect(lostBanner()).toBeNull();
+  });
+});
+
+/**
+ * 切过去那 300 毫秒里画面还剩下的两跳（2026-09-07，联调机上按帧录下来的）。
+ *
+ * 通道目标那一跳归上面那个 describe；这里是另外两处，它们各有各的来路，合起来
+ * 就是用户说的「切对话时画面在闪」：
+ *
+ *   - **meta 行少一段又长回来**：头部的最后活动时间读 `identity.lastMessageAt`，
+ *     而账号那一行派生出来的摘要把它写在了一个 `SessionSummary` 上根本不存在的
+ *     键上，于是这一段要等中继的 `session.list` 回来才出现（实测 230ms），
+ *     整条 meta 行跟着重排一次。
+ *   - **转录骨架闪一下**：镜像那一趟在局域网上 100ms 就回来了，骨架却在这 100ms
+ *     里铺满整条转录带再消失 —— 比眼睛分辨得出的还快，读起来就是抖了一下。
+ */
+describe("会话详情：切过去那一瞬不抖", () => {
+  const mirrorRow = (lastMessageAt: number) => ({
+    conversation_id: "42",
+    peer_fingerprint: "fp-1",
+    device_fingerprint: "fp-1",
+    title: "重构登录页",
+    last_message_at: lastMessageAt,
+  });
+
+  function stubOffline(transcript: () => Promise<unknown>) {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: false }] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path.startsWith("/v1/agent-sessions/transcript")) return transcript();
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 0 };
+      throw new Error("unexpected: " + path);
+    });
+    mockUseRelay.mockImplementation((_target, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: null,
+        relayState: "disconnected",
+        relayTicket: null,
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+  }
+
+  function mount(row: ReturnType<typeof mirrorRow>) {
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            form="embedded"
+            initialRow={row}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  /*
+    机器离线时中继一份摘要都给不出，头部认这条对话全靠账号那一行 —— 那一行上
+    明明记着最后活动时刻，界面却一个字都不说。切对话时它退化成「先没有、
+    230ms 后冒出来」，离线时则是**永远不出现**。
+  */
+  it("最后活动时间出自账号那一行，不必等中继的摘要", async () => {
+    const lastMessageAt = Date.now() - 5 * 60_000;
+    stubOffline(async () => ({ frames: [], cursor: 0, has_more: false }));
+    mount(mirrorRow(lastMessageAt));
+
+    const head = await screen.findByTestId("session-detail-header");
+    await vi.waitFor(() =>
+      expect(head.querySelector("time")?.getAttribute("datetime")).toBe(
+        new Date(lastMessageAt).toISOString(),
+      ),
+    );
+  });
+
+  /*
+    骨架说的是「在等，等得值」。等得起的那一段才该看见它：一趟 100ms 就回来的
+    请求配一整屏脉动的灰条，用户读到的不是「在加载」而是「刚才闪了一下」。
+    所以它带一段出场延迟——比那一趟还快回来的加载全程不着一笔。
+  */
+  it("转录骨架带一段出场延迟：比它先回来的那一趟不留痕迹", async () => {
+    stubOffline(() => new Promise(() => {}));
+    mount(mirrorRow(Date.now()));
+
+    const skeleton = await screen.findByTestId("transcript-skeleton");
+    expect(skeleton.className).toMatch(/transcript-skeleton-in/);
   });
 });
 
@@ -6854,5 +6966,72 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
     );
 
     await vi.waitFor(() => expect(statusText()).toContain("Running"));
+  });
+});
+
+/**
+ * 上游重试：整条路从中继事件走到那张卡。
+ *
+ * 帧一直到得了这里（`relay-event-vocabulary.test.ts` 就守着 `retry` 这一格翻成
+ * 词表内的 kind），断的是**显示面**：`Transcript` 里 `liveRetry` 写死 `null`，
+ * 没有人把归约出来的提示递下去。于是 agentre 上游连不上时，桌面端摆着一张
+ * 「Retrying 1/3」，这一端转录一动不动 —— 用户分不清是在重试还是发丢了。
+ *
+ * 单测那两层（包里的寿命规则、`transcript-render` 里的锚定与门槛）各自钉住自己
+ * 那一段；这里钉的是**接线**：少接一根，上面两层照样全绿，界面照样什么都没有。
+ */
+describe("会话详情页:上游正在重试", () => {
+  function wireRelay() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮说完了" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done" },
+        seq: 2,
+      });
+    });
+  }
+
+  const retryCard = () => screen.queryByRole("status", { name: "Retrying" });
+
+  function pushEvent(event: Record<string, unknown>, seq: number) {
+    act(() =>
+      capturedOpts.onEvent?.({ conversationId: "42", event, seq } as never, 0),
+    );
+  }
+
+  it("一轮在跑时来一条 retry 帧:转录里出重试卡;正文接上之后卡撤掉", async () => {
+    wireRelay();
+    renderPage();
+    expect(await screen.findByText("上一轮说完了")).toBeTruthy();
+
+    act(() => capturedOpts.onAutonomousTurnStarted?.({} as never));
+    pushEvent(
+      { kind: "retry", message: "Connection error", attempt: 2, max: 3 },
+      3,
+    );
+
+    await vi.waitFor(() => expect(retryCard()).toBeTruthy());
+    expect(screen.getByText("Retrying 2/3")).toBeTruthy();
+
+    // 模型开口 = 这一次重试成功了。卡不撤，用户会对着「正在重试」读下面正常长
+    // 出来的回答。
+    pushEvent({ kind: "text_delta", text: "连上了，继续" }, 4);
+
+    await vi.waitFor(() => expect(retryCard()).toBeNull());
   });
 });

@@ -426,19 +426,38 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		// 没保存过的对话:一个字都不落库。
 		return nil
 	}
-	if seq == 0 {
-		logger.Ctx(ctx).Warn("mirror notification carries no seq, cannot be keyed",
-			zap.Int64("userId", m.userID), zap.String("conversationId", conversationID),
-			zap.String("method", method))
-		return nil
-	}
 	cursor := ts.cursorNow()
-	switch {
-	case seq <= cursor:
+	if seq != 0 && seq <= cursor {
+		// 重复投递。这一帧带的事实**全部**应用过了 —— 连跟随都不必再跑一次,重放
+		// 一条早已落定的审批请求会把它重新算成「还等着」。
 		logger.Ctx(ctx).Debug("mirror duplicate notification dropped",
 			zap.String("conversationId", conversationID), zap.Int64("seq", seq),
 			zap.Int64("cursor", cursor), zap.String("method", method))
 		return nil
+	}
+	// 会话元数据的跟随排在编号之前,而且不看编号 —— 两件事正交,见 follow 的说明。
+	followed := ts.follow(notification, method)
+	switch {
+	case seq == 0:
+		// 轮次边界帧**线上就是不带号的**,这是协议定死的,不是异常。
+		//
+		// daemon 的 sessionEmitter 已经「不再落库」:取号只发生在 turnTranscript
+		// .publishDurable 那一路的块级帧上,而 turnStarted / runResultDone /
+		// autonomousTurn.{started,done} 是 em.emit 直接推出去的。从前这道闸门一律
+		// 当成「持久帧居然没有号」挡掉,恰好挡在跟随之前,于是唯一能把行推回 idle
+		// 的信号被整条吞掉:一条早就结束的对话在左栏长期是绿的,直到别的事情碰巧
+		// 踢起一次 Sync（新建一条对话就够——保存名单一变就重同步）。
+		//
+		// 没有号 = 没有落库的位置,所以这一档只落摘要、不进转录、不推游标。
+		if !followed {
+			// 这才是真异常:一条本该带号的帧没有号,而它也没说出任何元数据。
+			logger.Ctx(ctx).Warn("mirror notification carries no seq, cannot be keyed",
+				zap.Int64("userId", m.userID), zap.String("conversationId", conversationID),
+				zap.String("method", method))
+			return nil
+		}
+		// 与补洞同一条处置:这一档不推游标,进不了攒批那趟车,只能自己钉住。
+		return m.saveSummary(ctx, ts)
 	case seq > cursor+1:
 		logger.Ctx(ctx).Warn("mirror notification seq gap, pulling",
 			zap.String("conversationId", conversationID), zap.Int64("seq", seq),
@@ -446,12 +465,6 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		if err := m.pullUntilCaughtUp(ctx, ts); err != nil {
 			return err
 		}
-		// 轮次边界在这条路径上同样算数。少了它，「这一轮跑完了」只在实时帧恰好
-		// 连号时才看得见 —— 漏一帧就把这条对话永久钉在「运行中」，因为紧接着的
-		// saveSummary 写的是清单快照里那个已经过期的生命周期。到达的这一帧就是
-		// 最新的那个边界（补回来的都比它早）。
-		ts.followTurn(notification, method)
-		ts.followWaiter(notification)
 		// 补洞是罕见路径，而且刚跨过一段：游标立刻钉住，不进攒批。
 		return m.saveSummary(ctx, ts)
 	default:
@@ -463,10 +476,27 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 			return err
 		}
 		ts.advanceTo(seq)
-		ts.followTurn(notification, method)
-		ts.followWaiter(notification)
 		return m.touchSummary(ctx, ts)
 	}
+}
+
+// follow 让镜像里这条会话的**元数据**跟着这一帧走,回答「这一帧说出了元数据吗」。
+//
+// 它与上面那条 seq 闸门是**正交**的两件事,分开是这一轮重构的全部内容:
+//
+//   - **帧的编号路径** —— 落转录、去重、补洞、推游标。它要号,没有号就无从谈起。
+//   - **元数据的跟随** —— 生命周期与「正在等你处理」。它一个号都不需要:帧本身
+//     就是事实,daemon 的次序保证（先落行、再发帧）让收到的这一刻就是对端此刻的值。
+//
+// 从前两者挤在同一条 switch 里,于是前者的前置条件（必须有号）顺带成了后者的前置
+// 条件,而线上的轮次边界帧恰恰不带号 —— followTurn 那两个终态分支因此从未在生产
+// 上执行过一次,它自己注释里担心的「一条早就结束的对话长期显示成运行中」原样发生了。
+func (ts *trackedSession) follow(
+	notification *agentrewire.RpcNotification, method string,
+) bool {
+	turn := ts.followTurn(notification, method)
+	waiter := ts.followWaiter(notification)
+	return turn || waiter
 }
 
 // followTurn 让镜像里的生命周期跟着轮次的两个边界走。
@@ -490,9 +520,13 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 // 翻成 idle。判据与 agentred 落行时用的是同一句话（turnstate.IsFailure）。
 //
 // 只动这一列：标题之类仍然只由清单说了算，帧里没有它们的答案。
+//
+// 回报的是「这一帧是不是一个轮次边界」,而不是「这一列变了没有」:调用方据此决定
+// 要不要落一次摘要,而一条把 running 重申成 running 的边界帧同样值得落 —— 行上
+// 可能正带着一个来自旧快照的过期值。
 func (ts *trackedSession) followTurn(
 	notification *agentrewire.RpcNotification, method string,
-) {
+) bool {
 	var state string
 	switch method {
 	case notifyRunResultDone, notifyAutonomousTurnDone:
@@ -503,12 +537,12 @@ func (ts *trackedSession) followTurn(
 	case notifyAutonomousTurnStarted, notifyTurnStarted:
 		state = relaywire.SessionLifecycleRunning
 	default:
-		return
+		return false
 	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if ts.summary == nil {
-		return
+		return false
 	}
 	// 换指针而不是就地改：peerSummary 把这个指针交出去之后，读方在锁外逐字段读它
 	// （saveSummary 就是这么用的）。就地改会和那些读撞上；setSummary 一直是换指针，
@@ -524,6 +558,7 @@ func (ts *trackedSession) followTurn(
 		next.WaitingForInput = false
 	}
 	ts.summary = next
+	return true
 }
 
 // followWaiter 让镜像里的「正在等你处理」跟着审批 / 提问的两个边界走，理由与
@@ -538,15 +573,17 @@ func (ts *trackedSession) followTurn(
 // nil 与空集合是两件事：nil = 帧还没就这一列说过话，快照仍是权威（对端在我们接上
 // 之前就已经等在那儿了，那件事只有快照知道）；空集合 = 帧说过话，此刻没有待决。
 // 因此**落定帧也建集合**——它清掉的可能正是快照带来的那一次等待。
-func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification) {
+//
+// 与 followTurn 同一条回报口径:true = 这一帧是一个待决边界,不是「这一列变了」。
+func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification) bool {
 	kind, requestID := waiterSignal(notification)
 	if kind == waiterNone {
-		return
+		return false
 	}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	if ts.summary == nil {
-		return
+		return false
 	}
 	if ts.waiters == nil {
 		ts.waiters = map[string]struct{}{}
@@ -557,15 +594,16 @@ func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification
 	case waiterClosed:
 		delete(ts.waiters, requestID)
 	case waiterNone:
-		return
+		return false
 	}
 	waiting := len(ts.waiters) > 0
 	if ts.summary.GetWaitingForInput() == waiting {
-		return
+		return true
 	}
 	next := proto.Clone(ts.summary).(*agentrewire.SessionSummary)
 	next.WaitingForInput = waiting
 	ts.summary = next
+	return true
 }
 
 // touchSummary 记下「这条对话的游标又往前了」。可以随便调，限速在这里面。

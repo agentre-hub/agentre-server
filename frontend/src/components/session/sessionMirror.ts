@@ -112,7 +112,11 @@ export function mirrorRowToSummary(row: MirrorSessionItem): SessionSummary {
     backendType: row.backend_type,
     lifecycleState: row.lifecycle_state ?? "",
     waitingForInput: row.waiting_for_input,
-    updatedAt: row.last_message_at,
+    // `lastMessageAt` 才是 `SessionSummary` 上那一格（头部的最后活动时间读它）。
+    // 此前这里写的是 `updatedAt` —— 索引那一行的叫法，摘要上没有这个键，而
+    // `WireObject` 的索引签名让它连个类型错误都不报：多出来的键静静躺着没人读，
+    // 于是切对话时这一段要等中继的摘要回来才出现，机器离线时则永远不出现。
+    lastMessageAt: row.last_message_at,
     latestSeq: 0,
     providerKey: row.provider_key,
     modelKey: row.model_key,

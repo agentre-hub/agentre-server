@@ -474,6 +474,61 @@ func TestApply_TurnDone_MirrorsIdleWithoutWaitingForTheNextSync(t *testing.T) {
 		"一轮跑完了,镜像里那一行不能还停在 running")
 }
 
+// 线上的轮次边界帧**不带 seq**。daemon 的 sessionEmitter 早已「不再落库」（见
+// agentre/internal/daemon/handlers/runtime.go 的 sessionEmitter 说明）：取号只发生在
+// turnTranscript.publishDurable 那一路的块级帧上，而 turnStarted / runResultDone /
+// autonomousTurn.{started,done} 是 em.emit 直接推出去的，四条一律 Seq == 0。
+//
+// 上面那几个用例给这些帧手填了一个非零 seq，测的是线上从不存在的形状：Apply 里
+// 「持久帧居然没有号」那道闸门因此从没被走到，而它恰恰挡在 followTurn 之前，把唯一
+// 能把行推回 idle 的信号整条吞掉（线上实测：01a07ada… 那条对话 07:52 收到
+// runResultDone，日志只留下一条 "carries no seq, cannot be keyed"，行钉死在 running
+// 直到下一次 Sync 被别的事情碰巧踢起来）。
+func TestApply_TurnBoundaryCarriesNoSeq_StillMovesLifecycle(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 0)))
+
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleIdle, r.lastLifecycle(t),
+		"终态帧线上就是不带 seq 的,不能因为没号就把这一轮的收场丢掉")
+}
+
+// 开轮那一端同理:turnStarted 线上也不带 seq。
+func TestApply_TurnStartedCarriesNoSeq_StillMovesLifecycle(t *testing.T) {
+	r := newRig(t)
+	idle := runningSession(conv42, "写个爬虫")
+	idle.LifecycleState = relaywire.SessionLifecycleIdle
+	r.relay.sessions = []*agentrewire.SessionSummary{idle}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, turnStarted(conv42, 0)))
+
+	r.flush()
+	assert.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+}
+
+// 不带 seq 的终态帧一个字节都不该进转录:它不是持久帧,没有号就没有落库的位置。
+// 生命周期跟随与帧落库是两件事,这一条把它们钉开。
+func TestApply_TurnBoundaryCarriesNoSeq_WritesNoFrameAndKeepsCursor(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	before := r.lastCursor(t)
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 0)))
+
+	r.flush()
+	assert.Empty(t, r.frames, "没有号的帧没有落库的位置")
+	assert.Equal(t, before, r.lastCursor(t), "游标只由带号的持久帧推进")
+}
+
 // 自主续轮把会话推回 running,结束时再落回 idle —— 与 daemon 的两端推进同一条规则
 // （forwardAutonomousTurn:started 之前 runningSession,done 之前 finishSession）。
 func TestApply_AutonomousTurn_MovesLifecycleBothWays(t *testing.T) {

@@ -242,3 +242,60 @@ describe("失败轮次的归约结果", () => {
     expect(msgs[1].durationMs).toBe(83);
   });
 });
+
+/**
+ * 回归（用户报的现象）：出错的一轮在控制台上画出**两条**助手消息，同一句报错显示两次。
+ *
+ * 前一格（「只有用户消息与出错终态帧」）的一轮是在对端**启动就失败**的，事件流里
+ * 一条助手事件都没有。真正跑起来之后才失败的那一轮不是这样：runtime 自己就 emit 了
+ * `agentruntime.ErrorEvent`（openclaw `activeTurn.finish`、piagent `drainStream` 都是
+ * 「`result.StopErr = stopErr` 之后再 `out <- ErrorEvent{Err: stopErr}`」），
+ * 而 agentred 的 fanout 把事件流**原样**转发（`handlers/runtime.go` 那个 `for ev := range ch`
+ * 不认 ErrorEvent，`protowire` 有 `error` 分支）—— 所以事件流里已经有一条 `error` 了，
+ * 终态帧上的 `stopErrMsg` 说的是**同一件事**。
+ *
+ * 于是共享包收到两条 `error`：第一条落 errorText 并 `st.open = null`，第二条
+ * `openAssistant()` 见 `st.open` 已空，**新起一条助手消息**再落一次 errorText。
+ */
+describe("回归：事件流里已经有 error 的失败轮次", () => {
+  it("给定事件流已带 error、终态帧又带同一句 stopErrMsg，当归约，则只有一条助手消息", () => {
+    const stopErr = "openclaw: gateway: 402 insufficient credits";
+    const msgs = reduceFrames(
+      [
+        toTranscriptFrame(
+          {
+            conversationId: CID,
+            event: { kind: "user_message", text: "看看目录" },
+          } as unknown as EventFrame,
+          1788408834659,
+        ),
+        toTranscriptFrame(
+          {
+            conversationId: CID,
+            event: { kind: "text_delta", text: "我先看一下" },
+          } as unknown as EventFrame,
+          1788408834700,
+        ),
+        // runtime 自己 emit 的那一条，agentred 原样转发过来。
+        toTranscriptFrame(
+          {
+            conversationId: CID,
+            event: { kind: "error", message: stopErr },
+          } as unknown as EventFrame,
+          1788408834740,
+        ),
+        ...turnDoneFrames(
+          CID,
+          { conversationId: CID, stopErrMsg: stopErr, durationMs: 83 },
+          1788408834743,
+        ),
+      ],
+      TranscriptSessionId,
+    );
+
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(msgs[1].errorText).toBe(stopErr);
+    // meta 也得落在这条上，而不是被第二条空消息接走。
+    expect(msgs[1].durationMs).toBe(83);
+  });
+});
