@@ -18,7 +18,10 @@ import type {
   GitFileContentResult,
   ReadFileResult,
 } from "@agentre-hub/agentre-ui";
-import { rpcMethods } from "@agentre-hub/agentre-wire";
+import {
+  ErrCodeWorkspaceFSNotFound,
+  rpcMethods,
+} from "@agentre-hub/agentre-wire";
 
 import { RelayError, type RelayClient } from "@/lib/relayClient";
 
@@ -29,7 +32,10 @@ interface PreviewCaller {
 
 export interface FilePreviewPortDeps {
   client: PreviewCaller | null;
-  /** 这条会话此刻在那台机器上的工作目录。空串表示还不知道，端口不该被调到。 */
+  /**
+   * 这条会话此刻在那台机器上的工作目录。空串表示还不知道 —— 这一格空着时端口
+   * 一次请求都不发，如实交出「够不着」（见 noWorkRoot）。
+   */
   cwd: string;
 }
 
@@ -38,15 +44,15 @@ function disconnected(): RelayError {
 }
 
 /**
- * workspacefs.* 的稳定 wire 错误码里，预览面区别对待的那一个。
+ * 「还不知道工作根」与「够不着那台机器」是同一件事的两个说法：都是此刻发不出一次
+ * 有意义的请求，过会儿摘要回来了就能读。
  *
- * 出处是 `agentre/internal/pkg/workspacefs/wire/wire.go`（-32040..-32043 是本族
- * 的稳定段）。那边改了码值这里要跟着改，两边都没有编译器会替我们发现 —— 与
- * `remotefs.ts` 顶上那条双维护义务同一条。
+ * 空 root 不往线上发：那台机器会答 wire 的 `ErrCodeWorkspaceFSNoCwd`，而那是一个本站
+ * 认不出的码 —— 面板只能把那句 Go 原文照抄给用户，再配一颗永远失败的重试。
  */
-const WorkspaceFsErrorCode = {
-  notFound: -32043,
-} as const;
+function noWorkRoot(): RelayError {
+  return new RelayError(-1, "relay: 还不知道这条会话的工作目录", null);
+}
 
 /**
  * 给失败贴上面板认得的分类标记（规格决策 4）。
@@ -57,7 +63,7 @@ const WorkspaceFsErrorCode = {
  */
 function classify(err: unknown): unknown {
   if (!(err instanceof RelayError)) return err;
-  if (err.code === WorkspaceFsErrorCode.notFound) {
+  if (err.code === ErrCodeWorkspaceFSNotFound) {
     return Object.assign(err, {
       kind: "notFound",
     } satisfies FilePreviewFailure);
@@ -113,6 +119,7 @@ export function createFilePreviewPorts(
   return {
     async readFile(path: string): Promise<ReadFileResult> {
       if (!deps.client) throw classify(disconnected());
+      if (!deps.cwd) throw classify(noWorkRoot());
       const raw = await deps.client
         .request(rpcMethods.workspaceFsReadFile, {
           root: deps.cwd,
@@ -133,6 +140,7 @@ export function createFilePreviewPorts(
 
     async gitFileContent(path: string): Promise<GitFileContentResult> {
       if (!deps.client) throw classify(disconnected());
+      if (!deps.cwd) throw classify(noWorkRoot());
       const raw = await deps.client
         .request(rpcMethods.workspaceFsGitFileContent, {
           root: deps.cwd,

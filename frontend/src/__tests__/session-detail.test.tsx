@@ -1647,6 +1647,82 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     });
   });
 
+  /**
+   * 会话标识是**各端本地自增**的（见 relayClient 记游标那段注释：一台机器上同号
+   * 的两条对话都是常态），所以 (did=A, sid=42) 与 (did=B, sid=42) 是两台不同机器
+   * 上的两条对话 —— 左栏两行都点得到，右栏是同一个实例换 props。
+   *
+   * 预览标签是会话级状态：只按 sid 判定重置的话，这一次切换里它一格都不清，而
+   * summary 已经被清成 null —— 右栏当场拿一个空 root 去读，等 B 的摘要落地又把
+   * A 的 relPath 读成 B 机器上的同名文件。
+   */
+  it("切到另一台机器上同号的会话:预览栏跟着清空,不把 A 的标签读成 B 的文件", async () => {
+    const deviceRowB = {
+      ...deviceRow,
+      id: 2,
+      name: "客厅笔记本",
+      fingerprint: "fp-2",
+    };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow, deviceRowB] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.workspaceFsReadFile)
+        return {
+          content: new TextEncoder().encode("# 标题\n\nA 机器上的正文\n"),
+          contentType: "",
+        };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "text_delta",
+          text: "改完了，见 [说明](/home/agent/proj/docs/a.md)。",
+        },
+        seq: 1,
+      });
+    });
+
+    const { rerender } = renderEmbedded();
+    fireEvent.click(
+      await screen.findByText("说明", undefined, { timeout: 3_000 }),
+    );
+    expect(
+      await screen.findByTestId("session-file-preview", undefined, {
+        timeout: 3_000,
+      }),
+    ).toBeTruthy();
+
+    // 切到 B 机器上那条同号会话:转录换成 B 的。
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "B 机器的转录" },
+        seq: 1,
+      });
+    });
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={2} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // B 的转录落地之后预览栏仍然不在:标签没有漏过来,也就没有拿 B 的工作根去读
+    // A 那条 relPath。
+    expect(
+      await screen.findByText("B 机器的转录", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("session-file-preview")).toBeNull();
+  });
+
   // R11：reconnecting 时探测一次连接失败原因。旧设备那一次探测还在路上就切到新
   // 目标时,它的结论不得在切换之后落地——否则右栏会挂起旧机器的「离线」横幅（甚至
   // 把浏览器误判成已解除授权）直到整页刷新。与文件里其它异步 effect 一样,探测也

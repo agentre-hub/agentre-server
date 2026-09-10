@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
@@ -65,6 +65,42 @@ describe("控制台的预览栏", () => {
     renderColumn({ activePath: null, tabs: [] });
 
     expect(screen.queryByTestId("file-preview-panel")).toBeNull();
+  });
+
+  /**
+   * 预览的正是 agent 此刻在改的那些文件：一轮跑完就得重读一遍（桌面端把面板的
+   * `refreshToken` 接在 doneTick 上，同一条口径）。不接的话它停在打开那一刻的
+   * 那一版，而面板没有刷新入口 —— 那颗重试只在失败态出现。
+   *
+   * 用图片这一档：它不经 Monaco，闸门与重读互不牵扯。
+   */
+  it("轮次落定（refreshToken 变一次）就重读一次", async () => {
+    const request = vi.fn().mockResolvedValue({
+      content: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      contentType: "image/png",
+    });
+    const props = {
+      sid: "sess-1",
+      cwd: "/srv/work",
+      client: { request } as never,
+      tabs: [{ path: "assets/logo.png", isPreview: true, isPinned: false }],
+      activePath: "assets/logo.png",
+      onActivate: vi.fn(),
+      onPromote: vi.fn(),
+      onTogglePin: vi.fn(),
+      onSegmentChange: vi.fn(),
+      onClose: vi.fn(),
+      onCloseOthers: vi.fn(),
+      onCloseAll: vi.fn(),
+    };
+    const { rerender } = render(
+      <SessionFilePreviewColumn {...props} refreshToken={0} />,
+    );
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    rerender(<SessionFilePreviewColumn {...props} refreshToken={1} />);
+
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   });
 });
 

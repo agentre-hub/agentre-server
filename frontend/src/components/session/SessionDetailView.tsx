@@ -31,6 +31,7 @@ import {
   resolveProviderPillState,
   type ChatComposerHandle,
   type ModelTarget,
+  type PreviewAnchor,
   type ReasoningEffortValue,
 } from "@agentre-hub/agentre-ui";
 
@@ -418,7 +419,9 @@ export default function SessionDetailView({
    */
   const preview = useFilePreviewTabs();
   const previewCwdRef = useRef("");
-  const previewFileRef = useRef<(path: string) => boolean>(() => false);
+  const previewFileRef = useRef<
+    (path: string, anchor?: PreviewAnchor) => boolean
+  >(() => false);
   /**
    * 两个 ref 在**提交之后**同步，不在渲染期写（react-hooks/refs：渲染期读写 ref
    * 会让 React 的一致性假设失效）。这对语义没有损失：链接点下去那一刻已经过了
@@ -426,10 +429,12 @@ export default function SessionDetailView({
    */
   useEffect(() => {
     previewCwdRef.current = summary?.cwd ?? "";
-    previewFileRef.current = (path: string) => {
+    previewFileRef.current = (path: string, anchor?: PreviewAnchor) => {
       // 没有实况 cwd 就没有工作根可读 —— 答 false，包据此不出入口。
       if (!previewCwdRef.current) return false;
-      preview.open(path);
+      // 定位目标（链接里写的 `:311-330`）跟着一起进标签：这一层不解释它，面板
+      // 拿到之后才去滚编辑器。
+      preview.open(path, anchor);
       return true;
     };
   });
@@ -441,18 +446,6 @@ export default function SessionDetailView({
     previewFileRef,
   });
 
-  /**
-   * 换会话就是换了一批文件：上一条开着的标签不能漏到下一条里。
-   *
-   * 用「按 prop 变化就地调整状态」而不是 effect：effect 会在**挂载时**也跑一次，
-   * 白白多一轮渲染 —— 而这一带的通道是按渲染观察的（session-detail 的「认领落定
-   * 之前一条通道都不开」正是盯着这个），多出来的那一轮会被当成多开了一条。
-   */
-  const [previewSid, setPreviewSid] = useState(sid);
-  if (previewSid !== sid) {
-    setPreviewSid(sid);
-    preview.reset();
-  }
   /**
    * 轮次状态（转录的三点、占位）整片归 useTurnActivity。
    * 它排在中继之前：onRunResultDone / onAutonomousTurnStarted 与 attach 都要写它。
@@ -490,6 +483,12 @@ export default function SessionDetailView({
     setEvents([]);
     setPreviewTail([]);
     decisions.reset();
+    // 换目标就是换了一批文件：上一条开着的预览标签不能漏到下一条里。它跟着这
+    // 一族一起清，而不是自己再开一格按 sid 判定的状态 —— 会话标识是各端本地自
+    // 增的（见 relayClient 的游标注释），(did=A, sid=42) 与 (did=B, sid=42) 是
+    // 两条不同机器上的对话；只看 sid 的话切过去时标签留着、cwd 却已清空，右栏
+    // 当场拿一个空 root 去读，等 B 的摘要落地又把 A 的 relPath 读成 B 的文件。
+    preview.reset();
     turn.reset();
     // 排着的那几条属于**那一条**会话（而且只是这一屏本地的乐观状态）：跟着重来。
     steerQueue.reset();
@@ -1788,10 +1787,25 @@ export default function SessionDetailView({
           cwd={summary?.cwd ?? ""}
           client={client}
           deviceName={device?.name}
+          /*
+           * 这枚点目前**只能**取账号侧那条设备记录，而它是慢节奏的。
+           *
+           * 运行期实测（2026-09-08，把那台机器的 agentred 停掉）：内容区已经写着
+           * 「这台机器现在够不着」，这枚点仍然绿着，`machineOnline` 同样 90 秒没翻
+           * —— 两个候选来源都不反映「此刻读得到读不到」。唯一当场知道这件事的是
+           * 面板自己那次 offline 失败，而那个事实在包内部，宿主拿不到。
+           *
+           * 真正的修法是让共享面板用它自己的失败态点亮这枚点（跨仓一轮）；在那之前
+           * 这里如实保留账号视角，并把偏离记在验证报告里。
+           */
           deviceOnline={device?.online}
           tabs={preview.tabs}
           activePath={preview.activePath}
           segment={preview.activeSegment}
+          // 轮次一落定就重读：预览的正是 agent 刚改过的那些文件（桌面端接的
+          // doneTick 同一条口径）。turnEpoch 只认实时那一遍，补齐不点火。
+          refreshToken={turnEpoch}
+          revealTarget={preview.activeReveal ?? undefined}
           onActivate={preview.open}
           onPromote={preview.promote}
           onTogglePin={preview.togglePin}

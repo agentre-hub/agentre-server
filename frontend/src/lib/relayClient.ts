@@ -16,6 +16,7 @@
  */
 import {
   DefaultSessionPullLimit,
+  ErrCodeProtocolVersion,
   PROTOCOL_VERSION,
   type AnyRpcMethod,
   type EventFrame,
@@ -132,26 +133,11 @@ export interface RelayClientOptions extends NotificationHandlers {
    * 对端按**协议版本**拒绝了这条通道的握手，参数是它自己那句说明。
    *
    * 与 `onStateChange` 分开，因为它说的不是「连上没有」而是「为什么永远连不上」：
-   * 这一档不会自愈（见 ProtocolVersionRejectionCode），页面据此换一套说法与出路，
+   * 这一档不会自愈（对端拿 wire 的 `ErrCodeProtocolVersion` 拒的），页面据此换一套说法与出路，
    * 而不是继续画那个承诺「会自己回来」的转圈。
    */
   onHandshakeRejected?: (detail: string) => void;
 }
-
-/**
- * daemon 一侧 `rpcerror.CodeProtocolVersion`（agentre 的 internal/pkg/rpcerror）：
- * `requireProtocolVersion` 判定两边的版本窗口不相交时，握手就是拿着这个码被拒的。
- *
- * 这里复述一份而不是从 wire 包 import：它不在 `constants.gen.ts` 导出的那一批里，
- * 而为了一个常量去改跨仓的 wire 包要走「共享包发布 → 钉住新 revision」整条依赖序。
- * 同一条线上的 Go 侧（`mirror_svc/protocol_mismatch.go` 的
- * `protocolVersionRejectionCode`）出于同样的理由也是复述一份并注明来路。
- *
- * 它与 `MaxPeerErrorCode`（sessionView.ts）不同：那个是本站自己的分类阈值，这个是
- * 对端发出的码，改了那边这里不会变红。所以它值一句注释：**这个码的主人在 agentre
- * 仓库**，跟着它走。
- */
-export const ProtocolVersionRejectionCode = -32006;
 
 /**
  * 服务端判死一条虚拟通道时给的码里，**下一秒就可能不成立**的那两个（
@@ -645,10 +631,7 @@ export class RelayClient {
     try {
       await this.authenticate();
     } catch (err) {
-      if (
-        err instanceof RelayError &&
-        err.code === ProtocolVersionRejectionCode
-      ) {
+      if (err instanceof RelayError && err.code === ErrCodeProtocolVersion) {
         this.setState("disconnected");
         this.opts.onHandshakeRejected?.(err.message);
         throw err;

@@ -1,6 +1,7 @@
 import type {
   AnswerToolPermissionInput,
   AnswerUserQuestionInput,
+  PreviewAnchor,
   TranscriptPorts,
 } from "@agentre-hub/agentre-ui";
 
@@ -32,7 +33,7 @@ export interface ServerTranscriptPortDeps {
    * 返回 true 表示宿主接手了。路径是会话级 relPath —— 「读哪台机器的哪个工作根」
    * 由宿主自己闭包带着。
    */
-  previewFile?(path: string): boolean;
+  previewFile?(path: string, anchor?: PreviewAnchor): boolean;
 }
 
 /**
@@ -79,8 +80,13 @@ export function createServerTranscriptPorts(
     // 但仍然按能力探测装：宿主没给动作就没有这个端口。
     ...(deps.previewFile
       ? {
-          previewFile: (_sessionId: number, path: string) =>
-            deps.previewFile!(path),
+          // 定位目标（链接里写的 `:311-330`）原样转交：包解析、宿主执行，中间这
+          // 一层不解释也不补默认值——包没给就是「这次不定位」。
+          previewFile: (
+            _sessionId: number,
+            path: string,
+            anchor?: PreviewAnchor,
+          ) => deps.previewFile!(path, anchor),
         }
       : {}),
 

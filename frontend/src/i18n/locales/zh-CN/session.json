@@ -30,9 +30,11 @@
       "body": "这条对话钉在一台当前不可用的计算节点上，它恢复后即可继续。"
     },
     "protocolMismatch": {
-      "title": "这台机器和这个页面的版本对不上",
-      "body": "它拒绝了连接，等的两边有一头更新之前不会自己好。",
-      "bodyDetailed": "它拒绝了连接，等的两边有一头更新之前不会自己好。它说：{{detail}}"
+      "title": "这台机器和这个控制台的版本对不上",
+      "body": "它拒绝了连接，两边有一头更新之后才能连上。",
+      "bodyMachineStale": "这台机器只认到 {{machine}}，这个控制台已经是 {{page}}。在那台机器上升级 agentred 就能连上。",
+      "bodyPageStale": "这台机器要 {{machine}}，这个控制台还停在 {{page}}——它更新之后才能连上。",
+      "bodyDetailed": "它拒绝了连接，两边有一头更新之后才能连上。它说：{{detail}}"
     },
     "deviceRevoked": {
       "title": "这台设备已从账号移除",

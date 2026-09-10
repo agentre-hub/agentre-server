@@ -70,9 +70,29 @@ func (s *relaySvc) ResolveTarget(ctx context.Context, accountID int64, target st
 // HTTP 状态码作答——upgrade 早就发生过了，而整条连接上还跑着别的通道。它们改由
 // 通道自己收到一帧 RpcFrame.error，客户端据此只把那一条通道标为不可达。
 //
-// 取值落在客户端 RPC 层的同一个码空间里（桌面仓 internal/pkg/rpcerror 的
-// -32001…-32006 与 JSON-RPC 保留段），另开 -3201x 一段，因此与既有码不相撞。
 // 每个码都配一个业务码，文案由 internal/pkg/code 的中英语言包给出。
+//
+// **这一段与桌面仓的 runtime.* 段逐个撞号，而且是有意留着的。**
+// 下面的 -32010…-32016 与共享包 rpcerror 的 CodeRuntimeNoActiveTurn…
+// CodeRuntimePeerExecutionUnavailable（-32010…-32015）首尾完全重叠。这里曾经写着
+// 「另开 -3201x 一段，因此与既有码不相撞」——那句话不成立，别再照它推理。
+//
+// 不相撞的真正理由是**两套码在客户端根本不流进同一格**，这是结构性的，不是运气：
+//
+//   - 通道级的码只进 relayClient.ts 的 lastChannelErrorCode，唯一用途是判断要不要
+//     重开通道（TransientChannelCodes）。通道一关，在飞的请求收到的是
+//     RelayError(-1, "通道已被服务端关闭")，**带不上这个码**。
+//   - 对端的码只在 relayClient.ts:780 一处变成 RelayError.code——那是 RPC 应答帧
+//     （frame.body.code），来自机器那一侧，与通道死活无关。
+//
+// 由此有两条别踩的：
+//
+//  1. **不要把这一段“统一”到 @agentre-hub/agentre-wire 的 ErrCode* 去。** 数值相同、
+//     主人不同：那边的 -32011 是 steer 找不到，这边的 -32011 是目标机器离线。
+//     换过去等于把两个不同的失败合成一个。
+//  2. 要动就先看第一条的分界还成不成立：**哪天有人把 lastChannelErrorCode 当作
+//     RelayError.code 交出去，这次撞号立刻变成真缺陷**——客户端会拿另一族的翻译器
+//     去认它。那时该做的是重新分段，不是加 if。
 const (
 	// ChannelCodeTargetNotFound 目标解析不出机器：账号里没有这条对话，或指纹
 	// 不属于这个账号 / 不是可寻址的 kind（isAddressableKind）。

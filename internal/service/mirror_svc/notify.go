@@ -10,9 +10,12 @@ import (
 
 // mirrorChangeWindow 是「这个账号的会话镜像变了」这条信号的攒批窗口。
 //
-// 取一秒，而不是更短：这条信号只是让各端提前于 30 秒兜底轮询去拉一次，一秒的成组
-// 延迟在这个量级上看不出来，而它挡掉的是一轮活跃对话里成百上千次逐帧广播。
-const mirrorChangeWindow = time.Second
+// 取三秒，而不是更短：这条信号的收件人只有侧栏角标、会话索引与总览统计三处摘要，
+// 没有一处是正在看的转录（那条走中继，不经过这条信号路），三秒的成组延迟在这三处
+// 上看不出来，却挡掉了一轮活跃对话里成百上千次逐帧广播。这个数与浏览器侧
+// accountChannel 的攒批窗口刻意取同一个值——两侧说的是同一件事「摘要多久刷新一次
+// 算够」——但两侧各自声明各自的常量，不引入任何跨语言共享。
+const mirrorChangeWindow = 3 * time.Second
 
 // changeSignals 把镜像写入攒成有限速率的信号。
 //
@@ -99,6 +102,10 @@ type changeSignaller interface {
 	changed(ctx context.Context, userID int64)
 }
 
-// summaryFlushWindow 是摘要写入的攒批窗口，与 mirrorChangeWindow 同一个量级：
-// 让各端去读的是那条信号，摘要写得比信号还勤，多出来的那些次没有任何人看得见。
+// summaryFlushWindow 是摘要写入的攒批窗口。它攒的是**落库次数**，收件人是数据库
+// 而不是浏览器，与 mirrorChangeWindow 攒的那条信号不是一回事：两个数互相独立，曾经
+// 都取一秒是巧合，不是耦合。
+//
+// 所以 mirrorChangeWindow 放宽到三秒时这一个留在一秒，没有跟着一起放宽：摘要行要是
+// 落后于信号，各端被信号叫醒去读，读回来的却还是旧摘要。
 const summaryFlushWindow = time.Second

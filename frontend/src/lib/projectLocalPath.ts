@@ -16,25 +16,25 @@
  *   **出处是 `agentre/internal/pkg/agentruntime/runtimes/remote/wire/wire.go`。**
  *   那边改了键名或错误码，这里要跟着改，两边都没有编译器会替我们发现。
  *
- * 与 `remotefs.*` 有一处不同：这几个方法住在**会生成 TS 的**那个 wire 包里，因此
- * `@agentre-hub/agentre-wire` 的 `dist` 里迟早会有同名的常量与编解码。等本仓把
- * `frontend/package.json` 上那枚 commit 钉子挪过去之后，这一份就该删掉改用它——
- * 留着两份是这个文件唯一的债。
+ * 与 `remotefs.*` 有一处不同：这几个方法住在**会生成 TS 的**那个 wire 包里，所以
+ * 方法名、错误码与应答的 protobuf schema 都由 `@agentre-hub/agentre-wire` 供给，
+ * 这个文件不再自己抄一份——那三个错误码曾经在这里手写过，两边都没有编译器会发现
+ * 它们分了岔。
+ *
+ * 仍然留在本地的只有 `ProjectLocalPathResult` 与它的 `decode`：那一步读的是
+ * **protobuf 解出来的对象**（`rpcMethods.projectSetLocalPath` 带的是
+ * `ProjectLocalPathResponseSchema`），不是共享包里那个面向 JSON 线格式的
+ * `decodeProjectLocalPathResult`。两者形状同名而入口不同，换过去会把这条路读坏。
  */
-import { rpcMethods } from "@agentre-hub/agentre-wire";
+import {
+  ErrCodeProjectInvalidPath,
+  ErrCodeProjectNotSynced,
+  ErrCodeProjectPathNotFound,
+  rpcMethods,
+} from "@agentre-hub/agentre-wire";
 import { RelayClient, RelayError } from "@/lib/relayClient";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
-
-export const MethodProjectSetLocalPath = "project.setLocalPath";
-export const MethodProjectClearLocalPath = "project.clearLocalPath";
-
-/** Protobuf RPC 错误码，稳定 wire 值（wire.proto 的 -32050..-32052）。 */
-export const ProjectLocalPathErrorCode = {
-  notSynced: -32050,
-  invalidPath: -32051,
-  pathNotFound: -32052,
-} as const;
 
 export interface ProjectLocalPathResult {
   /** 生效后的本机路径；移除之后为空。 */
@@ -115,11 +115,11 @@ export function classifyProjectLocalPathError(
   const message = err instanceof Error ? err.message : String(err);
   if (!(err instanceof RelayError)) return { kind: "unknown", message };
   switch (err.code) {
-    case ProjectLocalPathErrorCode.notSynced:
+    case ErrCodeProjectNotSynced:
       return { kind: "notSynced", message };
-    case ProjectLocalPathErrorCode.invalidPath:
+    case ErrCodeProjectInvalidPath:
       return { kind: "invalidPath", message };
-    case ProjectLocalPathErrorCode.pathNotFound:
+    case ErrCodeProjectPathNotFound:
       return { kind: "pathNotFound", message };
     // -1 是 RelayClient 自己造的那一类（连接未就绪 / 客户端已关闭 / 断线）。
     case -1:

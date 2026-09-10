@@ -17,8 +17,15 @@ describe("控制台的预览标签", () => {
     act(() => result.current.open("docs/a.md"));
 
     expect(result.current.tabs).toEqual([
-      // segment 是宿主自己那一格（markdown 的视图档位），随标签一起生灭。
-      { path: "docs/a.md", isPreview: true, isPinned: false, segment: null },
+      // segment 是宿主自己那一格（markdown 的视图档位），随标签一起生灭；
+      // reveal 是「这次要滚到哪一段」，不带行号点开时为 null。
+      {
+        path: "docs/a.md",
+        isPreview: true,
+        isPinned: false,
+        segment: null,
+        reveal: null,
+      },
     ]);
     expect(result.current.activePath).toBe("docs/a.md");
   });
@@ -153,6 +160,57 @@ describe("markdown 的视图档位", () => {
 
 describe("控制台的预览标签（续）", () => {
   // 换会话就是换了一批文件：上一条会话开着的标签不能漏到下一条里。
+  // ── 定位目标（转录里点了一条带行号的链接）────────────────────────────────
+  it("带行号点开：定位目标连同一个 nonce 记在这个标签上", () => {
+    const { result } = renderHook(() => useFilePreviewTabs());
+
+    act(() => result.current.open("src/foo.go", { line: 311, endLine: 330 }));
+
+    expect(result.current.activeReveal).toMatchObject({
+      line: 311,
+      endLine: 330,
+      nonce: expect.any(Number),
+    });
+  });
+
+  it("同一条链接再点一次：nonce 变了，面板据此重新滚回去", () => {
+    const { result } = renderHook(() => useFilePreviewTabs());
+
+    act(() => result.current.open("src/foo.go", { line: 311 }));
+    const first = result.current.activeReveal?.nonce as number;
+    act(() => result.current.open("src/foo.go", { line: 311 }));
+
+    expect(result.current.activeReveal?.nonce).toBeGreaterThan(first);
+  });
+
+  it("同一个文件不带行号再点开：上一次的定位目标被清掉，不再生效", () => {
+    const { result } = renderHook(() => useFilePreviewTabs());
+
+    act(() => result.current.open("src/foo.go", { line: 311 }));
+    act(() => result.current.open("src/foo.go"));
+
+    expect(result.current.activeReveal).toBeNull();
+  });
+
+  it("带行号的 markdown 新开在文本档：渲染档没有行的概念", () => {
+    const { result } = renderHook(() => useFilePreviewTabs());
+
+    act(() => result.current.open("docs/guide.md", { line: 8, endLine: 9 }));
+
+    expect(result.current.activeSegment).toBe("text");
+  });
+
+  it("已经开着的 markdown 标签不被行号改掉它自己选的档位", () => {
+    const { result } = renderHook(() => useFilePreviewTabs());
+
+    act(() => result.current.open("docs/guide.md"));
+    act(() => result.current.setSegment("render"));
+    act(() => result.current.open("docs/guide.md", { line: 8 }));
+
+    expect(result.current.activeSegment).toBe("render");
+    expect(result.current.activeReveal).toMatchObject({ line: 8 });
+  });
+
   it("换会话时清空", () => {
     const { result } = renderHook(() => useFilePreviewTabs());
 

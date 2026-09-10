@@ -1,8 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 
-import type {
-  FilePreviewSegment,
-  FilePreviewTab,
+import {
+  previewKind,
+  type FilePreviewSegment,
+  type FilePreviewTab,
+  type PreviewAnchor,
+  type PreviewRevealTarget,
 } from "@agentre-hub/agentre-ui";
 
 /**
@@ -20,6 +23,23 @@ import type {
 interface ConsoleFilePreviewTab extends FilePreviewTab {
   /** markdown 的渲染/文本/双栏档；null 表示还没切过，由面板取它的默认档。 */
   segment: FilePreviewSegment | null;
+  /**
+   * 这个标签要滚到哪一段：转录里点了一条带行号的链接才有，其余情况恒为 null。
+   * 与桌面端同一条口径（file-preview-tabs-store 的 reveal）。
+   */
+  reveal: PreviewRevealTarget | null;
+}
+
+// 每记一次定位目标自增一次：同一条链接被重复点击时 path 与行号都不变，nonce 是
+// 唯一会变的东西，也是「再滚一次」在数据上的全部表达。
+let revealNonce = 0;
+
+function mintReveal(
+  anchor: PreviewAnchor | undefined,
+): PreviewRevealTarget | null {
+  if (!anchor) return null;
+  revealNonce += 1;
+  return { ...anchor, nonce: revealNonce };
 }
 
 export interface FilePreviewTabsState {
@@ -28,8 +48,13 @@ export interface FilePreviewTabsState {
   activePath: string | null;
   /** 当前标签的 markdown 档位。 */
   activeSegment: FilePreviewSegment | null;
-  /** 点开一个文件：已开着的只切过去，没开过的开一个临时标签。 */
-  open: (path: string) => void;
+  /** 当前标签要滚到哪一段；为 null 表示这次不定位。 */
+  activeReveal: PreviewRevealTarget | null;
+  /**
+   * 点开一个文件：已开着的只切过去，没开过的开一个临时标签。
+   * `anchor` 是链接里写的行号（`script.ts:311-330`），不带就是不定位。
+   */
+  open: (path: string, anchor?: PreviewAnchor) => void;
   /** 双击标签：把临时标签转成常驻。**不**顺带固定 —— 那是另一件事。 */
   promote: (path: string) => void;
   /** 右键菜单的固定 / 取消固定，是个开关；固定顺带转常驻（桌面端同一条）。 */
@@ -47,14 +72,31 @@ export function useFilePreviewTabs(): FilePreviewTabsState {
   const [tabs, setTabs] = useState<ConsoleFilePreviewTab[]>([]);
   const [activePath, setActivePath] = useState<string | null>(null);
 
-  const open = useCallback((path: string) => {
+  const open = useCallback((path: string, anchor?: PreviewAnchor) => {
     setTabs((prev) => {
-      if (prev.some((t) => t.path === path)) return prev;
+      const reveal = mintReveal(anchor);
+      const existing = prev.find((t) => t.path === path);
+      if (existing) {
+        // 已经开着：只切过去并重记定位目标（没带行号就清空，否则上一次跳过的位
+        // 置会挂在标签上一直生效）。档位是它自己选的，不动。
+        return prev.map((t) => (t.path === path ? { ...t, reveal } : t));
+      }
       // 临时标签最多一个：新的顶掉旧的（桌面端同一条规矩）。
       const kept = prev.filter((t) => !t.isPreview);
       return [
         ...kept,
-        { path, isPreview: true, isPinned: false, segment: null },
+        {
+          path,
+          isPreview: true,
+          isPinned: false,
+          // markdown 的渲染档没有行的概念，带着行号开进去就定位不上：新开标签
+          // 因此落在文本档（桌面端 initialSegment 同一条）。
+          segment:
+            anchor && previewKind(path) === "markdown"
+              ? ("text" as FilePreviewSegment)
+              : null,
+          reveal,
+        },
       ];
     });
     setActivePath(path);
@@ -117,14 +159,16 @@ export function useFilePreviewTabs(): FilePreviewTabsState {
     });
   }, []);
 
-  const activeSegment =
-    tabs.find((t) => t.path === activePath)?.segment ?? null;
+  const activeTab = tabs.find((t) => t.path === activePath);
+  const activeSegment = activeTab?.segment ?? null;
+  const activeReveal = activeTab?.reveal ?? null;
 
   return useMemo(
     () => ({
       tabs,
       activePath,
       activeSegment,
+      activeReveal,
       open,
       promote,
       togglePin,
@@ -138,6 +182,7 @@ export function useFilePreviewTabs(): FilePreviewTabsState {
       tabs,
       activePath,
       activeSegment,
+      activeReveal,
       open,
       promote,
       togglePin,

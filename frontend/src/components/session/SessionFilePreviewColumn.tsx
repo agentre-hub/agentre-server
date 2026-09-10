@@ -6,6 +6,7 @@ import {
   type FilePreviewSegment,
   type FilePreviewTab,
   type MonacoNS,
+  type PreviewRevealTarget,
 } from "@agentre-hub/agentre-ui";
 
 import { createFilePreviewPorts } from "@/lib/filePreviewPorts";
@@ -28,6 +29,8 @@ export default function SessionFilePreviewColumn({
   tabs,
   activePath,
   segment = null,
+  refreshToken = 0,
+  revealTarget,
   onActivate,
   onPromote,
   onTogglePin,
@@ -46,6 +49,17 @@ export default function SessionFilePreviewColumn({
   activePath: string | null;
   /** 当前标签的 markdown 档位（渲染/文本/双栏）；存在宿主，见 useFilePreviewTabs。 */
   segment?: FilePreviewSegment | null;
+  /**
+   * 变一次面板重读一次。接的是**本会话轮次结束**（桌面端接 doneTick，同一条口径）：
+   * 预览的文件正是 agent 此刻在改的那些，不接的话它停在打开那一刻的那一版，而面板
+   * 没有刷新入口（重试只在失败态出现）。
+   */
+  refreshToken?: number;
+  /**
+   * 当前标签要滚到哪一段：转录里点了一条带行号的链接才有（`script.ts:311-330`）。
+   * 缺席 = 不定位；怎么滚、越界怎么办都在共享包里，本站只负责把它交上去。
+   */
+  revealTarget?: PreviewRevealTarget;
   onActivate: (path: string) => void;
   /** 双击标签：转常驻。 */
   onPromote: (path: string) => void;
@@ -101,8 +115,10 @@ export default function SessionFilePreviewColumn({
         activePath={activePath}
         segment={segment}
         sourceMode="directory"
+        revealTarget={revealTarget}
         ports={ports}
         sourceKey={sourceKey}
+        refreshToken={refreshToken}
         monaco={monaco}
         deviceName={deviceName}
         deviceOnline={deviceOnline}

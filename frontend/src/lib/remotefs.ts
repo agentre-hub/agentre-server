@@ -10,30 +10,24 @@
  * 不记正文——这条能力因此**不改变 R19 的守卫面**：那道守卫走的是响应结构体的反射面，
  * 中继帧不在那个面上。
  *
- * **形状在这里重新声明，不改 agentre 仓**（决策 6）：`@agentre-hub/agentre-wire` 的
- * dist 里没有 remotefs 形状，而它按 commit 钉在 package.json 上；先给那个包加、
- * 再推送、再挪钉子、再 install，四步跨两个仓，期间本仓对着新组件写不了测试。
- * 本仓已有两处同形先例（`agent_session_entity` 重新声明 `wire.SessionSummary`、
- * `sync_entity.GuardPayload`），它们同样在注释里写明了双维护义务：
+ * 方法名与六个错误码都由 `@agentre-hub/agentre-wire` 供给，这个文件不再自己抄一份。
+ * 那六个码曾经在这里手写过，与 `agentre/internal/pkg/remotefs/wire/wire.go` 分了岔
+ * 两边都不会有任何东西变红 —— 现在它们已纳入生成，从 `constants.gen.ts` import。
  *
- *   **出处是 `agentre/internal/pkg/remotefs/wire/wire.go`。** 那边改了键名或错误码，
- *   这里要跟着改，两边都没有编译器会替我们发现。
+ * 仍然留在本地的只有 `RemoteFsEntry` / `ListDirResult`：那是**本站的适配形状**，
+ * 不是线上形状 —— 它把 protobuf 解出来的 `modTime` 改名成 `mtime`、把 bigint 收成
+ * number，专供这一屏的目录浏览器读。与 `projectLocalPath.ts` 留下 `decode` 同理。
  */
-import { rpcMethods } from "@agentre-hub/agentre-wire";
+import {
+  ErrCodeRemoteFSInvalidName,
+  ErrCodeRemoteFSMkdirExists,
+  ErrCodeRemoteFSNotDir,
+  ErrCodeRemoteFSNotFound,
+  ErrCodeRemoteFSPathRefused,
+  ErrCodeRemoteFSPermDenied,
+  rpcMethods,
+} from "@agentre-hub/agentre-wire";
 import { RelayClient, RelayError } from "@/lib/relayClient";
-
-export const MethodListDir = "remotefs.listDir";
-export const MethodMkdir = "remotefs.mkdir";
-
-/** Protobuf RPC 错误码，稳定 wire 值（wire.proto 的 -32030..-32035）。 */
-export const RemoteFsErrorCode = {
-  pathRefused: -32030,
-  permDenied: -32031,
-  notFound: -32032,
-  notDir: -32033,
-  mkdirExists: -32034,
-  invalidName: -32035,
-} as const;
 
 export interface RemoteFsEntry {
   name: string;
@@ -123,17 +117,17 @@ export function classifyRemoteFsError(err: unknown): RemoteFsFailure {
   const message = err instanceof Error ? err.message : String(err);
   if (!(err instanceof RelayError)) return { kind: "unknown", message };
   switch (err.code) {
-    case RemoteFsErrorCode.permDenied:
+    case ErrCodeRemoteFSPermDenied:
       return { kind: "denied", message };
-    case RemoteFsErrorCode.notFound:
+    case ErrCodeRemoteFSNotFound:
       return { kind: "notFound", message };
-    case RemoteFsErrorCode.notDir:
+    case ErrCodeRemoteFSNotDir:
       return { kind: "notDir", message };
-    case RemoteFsErrorCode.pathRefused:
+    case ErrCodeRemoteFSPathRefused:
       return { kind: "refused", message };
-    case RemoteFsErrorCode.mkdirExists:
+    case ErrCodeRemoteFSMkdirExists:
       return { kind: "exists", message };
-    case RemoteFsErrorCode.invalidName:
+    case ErrCodeRemoteFSInvalidName:
       return { kind: "invalidName", message };
     // -1 是 RelayClient 自己造的那一类（连接未就绪 / 客户端已关闭 / 断线）。
     case -1:

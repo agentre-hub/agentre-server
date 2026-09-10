@@ -16,12 +16,17 @@
  * 信号**不送数据**，只送「该拉了」：因此这里的被测对象只有「什么时候重拉」，
  * 拉什么由调用方自己决定。
  */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProtobufAccountChannelCodec } from "@agentre-hub/agentre-wire";
 
 import {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,
+  AccountChannelSignalWindowMs,
   AccountChannelSyncVersion,
   startAccountChannel,
   type AccountChannelHandle,
@@ -141,6 +146,11 @@ function syncVersion(version: number): Uint8Array {
   });
 }
 
+/** 造一帧不带版本号的信号（镜像与在线态都不在同步版本序列上）。 */
+function typedSignal(type: string): Uint8Array {
+  return ProtobufAccountChannelCodec.encode({ type, version: 0 });
+}
+
 describe("账号级实时信号", () => {
   it("账号信号通过共享 Protobuf codec 编成固定二进制 notification", () => {
     expect(AccountChannelSyncVersion).toBe("sync_version");
@@ -239,7 +249,7 @@ describe("账号级实时信号", () => {
   });
 
   // d
-  it("重复与乱序的信号都无害，版本号不做闸门", () => {
+  it("重复与乱序的信号都无害，版本号不做闸门", async () => {
     const view = makeView();
     const fake = connect({ onRefresh: view.onRefresh });
     view.onRefresh.mockClear();
@@ -249,8 +259,10 @@ describe("账号级实时信号", () => {
     view.changeOnServer("v2");
     fake.receive(syncVersion(3)); // 乱序：比刚见过的版本还旧
 
-    // 三条都照常触发重拉——版本号只是「该拉了」的提示，拿它当闸门会把 v2 漏掉。
-    expect(view.onRefresh).toHaveBeenCalledTimes(3);
+    // 三条都照常算数——版本号只是「该拉了」的提示，拿它当闸门会把 v2 漏掉。
+    // 首发立刻分发，后两条并进窗口结束时的那一次尾补（见「按种类分发的信号攒批」）。
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs);
+    expect(view.onRefresh).toHaveBeenCalledTimes(2);
     expect(view.state.inView).toBe("v2");
   });
 
@@ -314,22 +326,19 @@ describe("账号级实时信号", () => {
 });
 
 describe("账号级实时信号：多种种类", () => {
-  /** 造一帧不带版本号的信号（镜像与在线态都不在同步版本序列上）。 */
-  function signal(type: string): Uint8Array {
-    return ProtobufAccountChannelCodec.encode({ type, version: 0 });
-  }
-
-  it("镜像变更与设备上线也是「该拉了」，默认全认", () => {
+  it("镜像变更与设备上线也是「该拉了」，默认全认", async () => {
     const view = makeView();
     const fake = connect({ onRefresh: view.onRefresh });
     view.onRefresh.mockClear();
 
     view.changeOnServer("v2");
-    fake.receive(signal(AccountChannelMirrorChanged));
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
     expect(view.state.inView).toBe("v2");
 
     view.changeOnServer("v3");
-    fake.receive(signal(AccountChannelDevicePresence));
+    fake.receive(typedSignal(AccountChannelDevicePresence));
+    // 另一种落在同一个窗口里，尾补时才分发（见「按种类分发的信号攒批」）。
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs);
     expect(view.state.inView).toBe("v3");
     expect(fake.live).toBe(true);
   });
@@ -343,11 +352,11 @@ describe("账号级实时信号：多种种类", () => {
     view.onRefresh.mockClear();
 
     fake.receive(syncVersion(9));
-    fake.receive(signal(AccountChannelDevicePresence));
+    fake.receive(typedSignal(AccountChannelDevicePresence));
     expect(view.onRefresh).not.toHaveBeenCalled();
     expect(fake.live).toBe(true);
 
-    fake.receive(signal(AccountChannelMirrorChanged));
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
     expect(view.onRefresh).toHaveBeenCalledTimes(1);
   });
 
@@ -451,5 +460,327 @@ describe("这条通道此刻的状态", () => {
     fake.connected();
 
     expect(states).toEqual([]);
+  });
+});
+
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../..",
+);
+const NOTIFY_GO = path.join(REPO_ROOT, "internal/service/mirror_svc/notify.go");
+
+/**
+ * 读服务端那一侧的 `mirrorChangeWindow`，换算成毫秒；写法认不出来时返回 null
+ * （返回 null 会让下面那条守卫红，而不是悄悄放行）。
+ */
+function goMirrorChangeWindowMs(): number | null {
+  const go = fs.readFileSync(NOTIFY_GO, "utf8");
+  const m =
+    /const\s+mirrorChangeWindow\s*=\s*(?:(\d+)\s*\*\s*)?time\.(Second|Millisecond)\b/.exec(
+      go,
+    );
+  if (m === null) return null;
+  const count = m[1] === undefined ? 1 : Number(m[1]);
+  return count * (m[2] === "Second" ? 1_000 : 1);
+}
+
+/**
+ * 收件侧的攒批窗口（规格「收件侧：攒批与可见性」）。
+ *
+ * 形状与服务端那一侧一模一样：**首发 + 尾补**。压的是「一轮对话跑着的时候同一个
+ * 账号每秒被唤醒好几次」——每唤醒一次，订到这一路上的每个页面都各拉一遍自己那份
+ * 数据（见 use-account-channel 的 fanOut），所以省下的不是一次回调而是一批请求。
+ *
+ * 只挡**按种类分发**的那一路：`refresh(null)` 是「不丢变更」的依据，进窗口等于给
+ * 补齐加延迟，那条 Hard invariant 就不成立了。
+ */
+describe("按种类分发的信号攒批", () => {
+  /**
+   * 攒批窗口契约守卫（前端 ↔ internal/service/mirror_svc）。
+   *
+   * 两侧各自声明这个数，不跨语言共享；但它们说的是同一件事「摘要多久刷新一次算
+   * 够」，写歪了总时延就变成两个常量的和，而没有任何一处代码写得出这个和。
+   *
+   * 所以这里不能只断言前端那个字面量是 3000 —— 那样服务端把 mirrorChangeWindow
+   * 调成别的数时，这条用例照样是绿的，而它名字里说的那件事已经不成立了。手法与
+   * error-code-contract / user-code-contract 相同：直接读那份 Go 源文件，把常量
+   * 抠出来逐字比。
+   */
+  it("窗口与服务端 mirror_svc 的 mirrorChangeWindow 是同一个数", () => {
+    expect(
+      goMirrorChangeWindowMs(),
+      "internal/service/mirror_svc 的 mirrorChangeWindow 与 AccountChannelSignalWindowMs " +
+        "必须是同一个数；两边不一致时，一条变更要等两个窗口，而没有任何一处代码写得出这个和",
+    ).toBe(AccountChannelSignalWindowMs);
+  });
+
+  it("窗口外的第一条立刻分发，窗口内的同种压到窗口结束才补一条", async () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    // 首发不等窗口：一次突发里第一条的时延仍是零，叠加只发生在尾补上。
+    expect(view.onRefresh.mock.calls).toEqual([[AccountChannelMirrorChanged]]);
+
+    // 窗口走完之前，后面两条一条都不出去。
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs - 1);
+    expect(view.onRefresh).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(view.onRefresh.mock.calls).toEqual([
+      [AccountChannelMirrorChanged],
+      [AccountChannelMirrorChanged],
+    ]);
+  });
+
+  it("窗口结束时把攒下的种类各分发一次，不合成一条", async () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 首发
+    fake.receive(typedSignal(AccountChannelDevicePresence));
+    fake.receive(syncVersion(9));
+    fake.receive(typedSignal(AccountChannelDevicePresence)); // 同种再来一次
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs);
+
+    // 合成一条（或者补一条 null）会让只订某一种的订阅者被错误唤醒或错误跳过：
+    // fanOut 是按种类过滤订阅者的，种类是它唯一的判据。
+    expect(view.onRefresh.mock.calls).toEqual([
+      [AccountChannelMirrorChanged],
+      [AccountChannelDevicePresence],
+      [AccountChannelSyncVersion],
+    ]);
+  });
+
+  it("补过之后还有信号就再开一个窗口，空窗口才关掉", async () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 首发，开窗
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 被压住
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs);
+    expect(view.onRefresh).toHaveBeenCalledTimes(2); // 尾补
+
+    // 尾补之后紧接着又来一条：窗口续着，它不能当成「窗口外的第一条」立刻放行，
+    // 否则持续写入的账号又退回成一秒好几次。
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    expect(view.onRefresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs);
+    expect(view.onRefresh).toHaveBeenCalledTimes(3);
+
+    // 这一轮窗口里什么都没来：窗口关掉，安静下来之后的下一条又是零时延。
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs);
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    expect(view.onRefresh).toHaveBeenCalledTimes(4);
+  });
+
+  /**
+   * 分发是**同步**回调调用方的，而调用方在那一下里把通道停掉是它的正常出路：
+   * use-account-channel 的 fanOut 直说了「某个订阅者的 refresh 触发 setState，
+   * 可能同步卸载掉别的订阅者」，卸载走到 releaseChannel 就是 stop()。
+   *
+   * 于是「分发完再续一个窗口」这一步会踩在一个已经停掉的通道上，把一个定时器留在
+   * stop() 之后——handle 连同它闭包里那一份调用方状态被这个定时器吊着。停掉之后
+   * 不该再留下任何东西，这两条各守一个续窗的来路。
+   */
+  it("首发里被同步 stop() 时不续窗：定时器不留在 stop() 之后", () => {
+    let handle: AccountChannelHandle | null = null;
+    const fake = new FakeSignalSource();
+    handle = start({
+      source: fake.source,
+      onRefresh: () => handle?.stop(),
+    });
+
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 首发 → 同步 stop()
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("尾补里被同步 stop() 时不续窗：定时器不留在 stop() 之后", async () => {
+    let handle: AccountChannelHandle | null = null;
+    let stopOnNextRefresh = false;
+    const fake = new FakeSignalSource();
+    handle = start({
+      source: fake.source,
+      onRefresh: () => {
+        if (stopOnNextRefresh) handle?.stop();
+      },
+    });
+
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 首发，开窗
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 被压住
+    stopOnNextRefresh = true;
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs);
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("refresh(null) 的来路一条都不进窗口：兜底那一路不受攒批影响", async () => {
+    const view = makeView();
+    const fake = new FakeSignalSource();
+    // 一直没连上 ⇒ 信号那一路不算通着，兜底轮询照跑；把周期调到比窗口短，
+    // 才能让一次轮询正好落在开着的窗口里——这正是要守的那一刻。
+    start({
+      source: fake.source,
+      onRefresh: view.onRefresh,
+      pollIntervalMs: 1_000,
+    });
+
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 首发，开窗
+    fake.receive(typedSignal(AccountChannelMirrorChanged)); // 被压住
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(view.onRefresh.mock.calls).toEqual([
+      [AccountChannelMirrorChanged],
+      [null], // 轮询那一条一点没等窗口
+    ]);
+
+    // 连上／重连那一条同样立刻走，窗口还开着也一样。
+    fake.connected();
+    expect(view.onRefresh.mock.calls).toEqual([
+      [AccountChannelMirrorChanged],
+      [null],
+      [null],
+    ]);
+  });
+});
+
+/**
+ * 标签页不可见时（规格决策 4/5/6）。
+ *
+ * 看不见的页面上没有任何人在等这份数据；而恢复可见时的那一次 `refresh(null)` 与
+ * 重连时那一次是同一条补齐路径，不新增语义。判据取 `document.visibilityState` 而
+ * 不是窗口焦点：失焦但可见的窗口（分屏、并排对照）用户确实在看。
+ */
+describe("标签页不可见时", () => {
+  /** 改可见性并像浏览器那样喊一声——两件事必须同时发生，缺一不是真的切换。 */
+  function setVisibility(value: DocumentVisibilityState): void {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => value,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+  });
+
+  it("隐藏期间按种类的信号一条都不分发", async () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    const idle = vi.getTimerCount(); // 此刻只剩兜底轮询那一个
+
+    setVisibility("hidden");
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    fake.receive(syncVersion(9));
+
+    // 连窗口都不该**开出来**。只断言「没有回调」分不出这件事：refresh 自己也认
+    // 可见性，所以窗口照开着、每 3 秒醒一次、醒来什么都不分发的实现同样能让下面
+    // 那条通过。后台标签页上不能留着这么一个白醒的定时器，所以这里数定时器。
+    expect(vi.getTimerCount()).toBe(idle);
+
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs * 2);
+    expect(view.onRefresh).not.toHaveBeenCalled();
+  });
+
+  it("隐藏期间兜底轮询也停，恢复可见后回来", async () => {
+    const view = makeView();
+    const fake = new FakeSignalSource();
+    start({ source: fake.source, onRefresh: view.onRefresh });
+    fake.signalClosed(); // 信号那一路不在 ⇒ 轮询是唯一的取数来源
+    view.onRefresh.mockClear();
+
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3);
+    expect(view.onRefresh).not.toHaveBeenCalled();
+
+    setVisibility("visible");
+    view.onRefresh.mockClear(); // 恢复可见那一次由下一条守
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(view.onRefresh.mock.calls).toEqual([[null]]);
+  });
+
+  it("恢复可见时恰好补一次 refresh(null)", () => {
+    const view = makeView();
+    connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    setVisibility("hidden");
+    setVisibility("visible");
+
+    // 隐藏期间可能什么都变过，也可能什么都没变——补齐路径只有这一条，
+    // 与重连后那一次同形，因此它不能是按种类的，也不能是两次。
+    expect(view.onRefresh.mock.calls).toEqual([[null]]);
+  });
+
+  it("恢复可见先清空窗口：补齐之后不再冒出隐藏期间攒下的尾补", async () => {
+    const view = makeView();
+    const fake = connect({ onRefresh: view.onRefresh });
+    view.onRefresh.mockClear();
+
+    // 窗口里还压着一条的时候被切走。
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    fake.receive(typedSignal(AccountChannelMirrorChanged));
+    expect(view.onRefresh).toHaveBeenCalledTimes(1);
+
+    setVisibility("hidden");
+    await vi.advanceTimersByTimeAsync(1_000);
+    setVisibility("visible");
+    expect(view.onRefresh.mock.calls).toEqual([
+      [AccountChannelMirrorChanged],
+      [null],
+    ]);
+
+    // 不清空的话，刚补齐完几百毫秒后还会再无谓地重拉一遍。
+    await vi.advanceTimersByTimeAsync(AccountChannelSignalWindowMs * 2);
+    expect(view.onRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("stop() 把 visibilitychange 监听一并摘掉", () => {
+    const added = vi.spyOn(document, "addEventListener");
+    const removed = vi.spyOn(document, "removeEventListener");
+    const fake = new FakeSignalSource();
+    const handle = start({ source: fake.source, onRefresh: vi.fn() });
+
+    const registered = added.mock.calls.find(
+      ([type]) => type === "visibilitychange",
+    );
+    expect(registered).toBeDefined();
+
+    handle.stop();
+    // 摘的必须是同一个函数：留在 document 上的监听会把整个 handle 连同它闭包里
+    // 那一份调用方状态一起吊住，页面切一次就漏一份。
+    expect(
+      removed.mock.calls.some(
+        ([type, fn]) => type === "visibilitychange" && fn === registered?.[1],
+      ),
+    ).toBe(true);
+
+    added.mockRestore();
+    removed.mockRestore();
+  });
+
+  it("document 不可用的环境按一直可见处理，不抛错", () => {
+    // 这条通道允许自己不在，但不允许自己弄坏调用方。
+    vi.stubGlobal("document", undefined);
+    try {
+      const view = makeView();
+      const fake = connect({ onRefresh: view.onRefresh });
+      view.onRefresh.mockClear();
+
+      fake.receive(typedSignal(AccountChannelMirrorChanged));
+      expect(view.onRefresh.mock.calls).toEqual([
+        [AccountChannelMirrorChanged],
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

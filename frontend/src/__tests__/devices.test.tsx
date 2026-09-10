@@ -844,14 +844,18 @@ describe("一键升级走完整条路", () => {
     ) as HTMLButtonElement;
     expect(action.disabled).toBe(false);
     expect(action.textContent).toContain("Upgrade anyway");
-    // daemon 那句话原样呈现，不重翻一遍（决策 22）。
-    expect(screen.getByText(DAEMON_ACTIVE_TURNS_WORDING)).toBeTruthy();
+    // 说的是本地化的那一句，不是 daemon 的 Go 原话：条数是结构化字段
+    // （active_turns），这一屏说得出「还有 2 条在跑」，不必去贴半句英文。
+    expect(screen.getByText("2 conversation(s) still running")).toBeTruthy();
+    expect(screen.queryByText(DAEMON_ACTIVE_TURNS_WORDING)).toBeNull();
 
     // 点它只打开确认，一次调用都不发。
     fireEvent.click(action);
     await advance(0);
     expect(upgradeCalls).toHaveLength(1);
-    expect(screen.getByText("2 conversation(s) still running")).toBeTruthy();
+    expect(
+      screen.getAllByText("2 conversation(s) still running").length,
+    ).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByTestId("device-upgrade-confirm-1"));
     await advance(0);
@@ -860,6 +864,61 @@ describe("一键升级走完整条路", () => {
       { device_id: 1, force: true },
     ]);
     expect(screen.getByText("Upgrading to 0.6.0")).toBeTruthy();
+  });
+
+  /**
+   * 拒绝原因是 daemon 给的结构化枚举（reject_reason），界面据它说人话。此前这一档
+   * 只有一句中文标题「升级没能开始」，下面直接跟 daemon 的 Go 原话——中文界面上
+   * 出现的是「cannot replace /usr/local/bin/agentred: permission denied; re-run
+   * with enough privileges to write /usr/local/bin」。
+   */
+  it("认得出的拒绝原因用本站的话说，daemon 原话降为技术细节", async () => {
+    const daemonWording =
+      "cannot replace /usr/local/bin/agentred: permission denied; re-run with enough privileges to write /usr/local/bin";
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: true, version: "0.6.0" },
+      upgrade: () => ({
+        accepted: false,
+        reject_reason: "not_writable",
+        message: daemonWording,
+      }),
+    });
+    await renderAndExpand();
+
+    fireEvent.click(screen.getByTestId("device-upgrade-action-1"));
+    await advance(0);
+
+    expect(screen.getByText("No permission to replace agentred")).toBeTruthy();
+    // 原话留着，但它是等宽小字的佐证，不是那句解释。
+    expect(screen.getByTestId("device-upgrade-detail-1").textContent).toContain(
+      "permission denied",
+    );
+  });
+
+  /**
+   * 认不出的原因不冒充某一档：只说「升级没能开始」，再把原话原样给出来——那是这一屏
+   * 唯一剩下的线索。
+   */
+  it("认不出的拒绝原因退回原话，不硬塞一档中文", async () => {
+    mockConsole({
+      devices: () => [AGENTRED_UPGRADABLE],
+      latest: { known: true, version: "0.6.0" },
+      upgrade: () => ({
+        accepted: false,
+        reject_reason: "meteor_strike",
+        message: "something new happened",
+      }),
+    });
+    await renderAndExpand();
+
+    fireEvent.click(screen.getByTestId("device-upgrade-action-1"));
+    await advance(0);
+
+    expect(screen.getByText("The upgrade did not start")).toBeTruthy();
+    expect(screen.getByTestId("device-upgrade-detail-1").textContent).toContain(
+      "something new happened",
+    );
   });
 
   it("受理还没回来的这段时间：主动作立刻改口并禁用，点不出第二次调用", async () => {

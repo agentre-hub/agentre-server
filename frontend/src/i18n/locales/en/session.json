@@ -30,9 +30,11 @@
       "body": "This conversation is pinned to a compute node that is currently unavailable. It resumes once that node is back."
     },
     "protocolMismatch": {
-      "title": "This machine and this page are on different versions",
-      "body": "It refused the connection, and that will not clear on its own until one of the two is updated.",
-      "bodyDetailed": "It refused the connection, and that will not clear on its own until one of the two is updated. It said: {{detail}}"
+      "title": "This machine and this console are on different versions",
+      "body": "It refused the connection, and one of the two has to be updated before it will work.",
+      "bodyMachineStale": "That machine only accepts up to {{machine}}, and this console is already on {{page}}. Upgrade agentred there to connect.",
+      "bodyPageStale": "That machine needs {{machine}}, and this console is still on {{page}}. It will connect once the console is updated.",
+      "bodyDetailed": "It refused the connection, and one of the two has to be updated before it will work. It said: {{detail}}"
     },
     "deviceRevoked": {
       "title": "This device was removed from the account",

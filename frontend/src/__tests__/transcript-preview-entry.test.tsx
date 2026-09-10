@@ -21,10 +21,18 @@ function frames(...events: Record<string, unknown>[]): TranscriptFrame[] {
 
 function renderTranscript(opts: {
   cwd?: string;
-  previewFile?: (sessionId: number, path: string) => boolean;
+  href?: string;
+  previewFile?: (
+    sessionId: number,
+    path: string,
+    anchor?: { line: number; endLine?: number },
+  ) => boolean;
 }) {
   const events = [
-    { kind: "text_delta", text: "改完了，见 [说明](/srv/work/docs/a.md)。" },
+    {
+      kind: "text_delta",
+      text: `改完了，见 [说明](${opts.href ?? "/srv/work/docs/a.md"})。`,
+    },
   ];
   return render(
     <Transcript
@@ -51,6 +59,31 @@ describe("转录里的文件路径", () => {
     expect(previewFile.mock.calls[0][1]).toBe("docs/a.md");
   });
 
+  it("链接写了行范围时，起止行一起交给宿主当定位目标", () => {
+    const previewFile = vi.fn().mockReturnValue(true);
+    renderTranscript({
+      cwd: "/srv/work",
+      href: "/srv/work/src/foo.go:311-330",
+      previewFile,
+    });
+
+    fireEvent.click(screen.getByText("说明"));
+
+    expect(previewFile).toHaveBeenCalledWith(1, "src/foo.go", {
+      line: 311,
+      endLine: 330,
+    });
+  });
+
+  it("链接没写行号时一个参数都不多传：宿主据此知道这次不定位", () => {
+    const previewFile = vi.fn().mockReturnValue(true);
+    renderTranscript({ cwd: "/srv/work", previewFile });
+
+    fireEvent.click(screen.getByText("说明"));
+
+    expect(previewFile).toHaveBeenCalledWith(1, "docs/a.md");
+  });
+
   it("cwd 缺席（那台机器离线）时不出入口，点了什么都不发生", () => {
     const previewFile = vi.fn().mockReturnValue(true);
     renderTranscript({ previewFile });
@@ -64,6 +97,35 @@ describe("转录里的文件路径", () => {
 // 端口的**在不在**本身就是能力探测（包的既有约定）：宿主没接预览就不该有这个
 // 端口，链接因此整个不出入口，而不是出一个点了没反应的入口。
 describe("previewFile 端口的能力探测", () => {
+  it("把包给的定位目标原样转交给宿主的预览动作", () => {
+    const previewFile = vi.fn().mockReturnValue(true);
+    const ports = createServerTranscriptPorts({
+      submitToolPermission: async () => undefined,
+      submitAnswer: async () => undefined,
+      previewFile,
+    });
+
+    ports.previewFile?.(1, "src/foo.go", { line: 311, endLine: 330 });
+
+    expect(previewFile).toHaveBeenCalledWith("src/foo.go", {
+      line: 311,
+      endLine: 330,
+    });
+  });
+
+  it("包没给定位目标时也不凭空造一个", () => {
+    const previewFile = vi.fn().mockReturnValue(true);
+    const ports = createServerTranscriptPorts({
+      submitToolPermission: async () => undefined,
+      submitAnswer: async () => undefined,
+      previewFile,
+    });
+
+    ports.previewFile?.(1, "src/foo.go");
+
+    expect(previewFile).toHaveBeenCalledWith("src/foo.go", undefined);
+  });
+
   it("宿主给了预览动作才有这个端口", () => {
     const withPreview = createServerTranscriptPorts({
       submitToolPermission: async () => undefined,

@@ -17,6 +17,16 @@
  * **30 秒轮询保留，不缩短**：它是兜底，也是「不丢变更」的依据。判据是「把信号那一路
  * 整个关掉，所有功能仍然正确，只是变慢到 30 秒」。但它只在**信号不在**的时候跑
  * ——连着的时候变更由信号送达，再定时喊一次只会让每个订阅页面白拉一遍（见 poll）。
+ *
+ * 「该拉了」的出口上还有两道闸，压的都是**唤醒频率**，不是每次唤醒的成本：
+ *
+ *  - **攒批**（见 openWindow）：按种类分发的信号走 3 秒的首发 + 尾补窗口。持续写入
+ *    的账号一秒能来好几条，而每喊一次「该拉了」，订到这一路上的每个页面都各拉一遍
+ *    自己那份数据；
+ *  - **可见性**（见 visible）：页面不可见时信号与兜底轮询都不走，恢复可见时补一次
+ *    `refresh(null)`。
+ *
+ * 攒批只挡按种类的那一路——`refresh(null)` 是上面那条判据的依据，不能给它加延迟。
  */
 import { relayClientPool } from "@/lib/relayClientPool";
 import {
@@ -51,6 +61,15 @@ export type AccountChannelFrame = AccountChannelSignal;
 
 /** 兜底轮询周期。与桌面端的 sync_svc.PollInterval 同一个 30 秒。 */
 export const AccountChannelPollMs = 30_000;
+
+/**
+ * 按种类分发的信号在收件侧的攒批窗口。
+ *
+ * 刻意与服务端 `mirror_svc` 的 `mirrorChangeWindow` 取**同一个 3 秒**：两边说的是
+ * 同一件事「摘要多久刷新一次算够」，各取一个数的话总时延变成两个常量的和，而没有
+ * 任何一处代码写得出这个和。两侧各自声明，不引入跨语言共享的常量。
+ */
+export const AccountChannelSignalWindowMs = 3_000;
 
 /**
  * 这条通道此刻的状态，界面据此点灯。
@@ -160,13 +179,103 @@ export function startAccountChannel(
   }
 
   /**
-   * 「该拉了」唯一的出口。停掉之后不再喊：调用方 stop 多半是因为自己正在拆掉，
-   * 这时再喊一次只会去拉一个没人看的视图。
+   * 这一侧的 `document`，没有就是 null。
+   *
+   * SSR、Node 里跑的单测、以及任何不是浏览器的宿主都可能没有它。这条通道允许
+   * 自己不在（不可用就退回轮询），但不允许自己弄坏调用方——所以这里不能直接摸
+   * `document`，取不到时按「一直可见」处理。
+   */
+  const doc = typeof document === "undefined" ? null : document;
+
+  /** 这个页面此刻有人看着吗。判据是可见性，不是焦点（见 onVisibilityChange）。 */
+  function visible(): boolean {
+    return doc === null || doc.visibilityState !== "hidden";
+  }
+
+  /**
+   * 「该拉了」唯一的出口。两种情况不喊：
+   *
+   *  - 停掉之后：调用方 stop 多半是因为自己正在拆掉，这时再喊一次只会去拉一个
+   *    没人看的视图；
+   *  - 页面不可见：看不见的页面上没有任何人在等这份数据。信号与兜底轮询一起挡在
+   *    这里，只挡轮询的话后台标签页仍会被每一条信号逐条唤醒，省不下什么。隐藏期间
+   *    落下的所有变更由恢复可见时的那一次 refresh(null) 一次补齐（决策 4）。
    */
   function refresh(signalType: string | null): void {
-    if (stopped) return;
+    if (stopped || !visible()) return;
     options.onRefresh(signalType);
   }
+
+  /**
+   * 攒批窗口此刻的样子：开着的那个定时器，以及窗口里被压住的种类。
+   *
+   * 只压**按种类分发**的那一路。`refresh(null)` 不进这里（决策 3）：它说的是
+   * 「你可能已经落后了」，是「不丢变更」的依据，押进窗口等于给补齐加延迟。
+   */
+  let windowTimer: ReturnType<typeof setTimeout> | null = null;
+  const pending = new Set<string>();
+
+  function closeWindow(): void {
+    if (windowTimer !== null) clearTimeout(windowTimer);
+    windowTimer = null;
+    pending.clear();
+  }
+
+  /**
+   * 开一个窗口。窗口结束时把压住的种类**各分发一次**——不能合成一条，也不能换成
+   * 一条 null：fanOut 按种类过滤订阅者，合成会让只订某一种的订阅者被错误唤醒或
+   * 错误跳过。补过还有就再开一个窗口，与服务端那一侧的首发 + 尾补同形状。
+   */
+  function openWindow(): void {
+    // 分发是**同步**回调调用方的，而调用方可以在那一下里把通道停掉：use-account-channel
+    // 的 fanOut 会在一个订阅者的 refresh 里同步卸载别的订阅者，卸载走到 releaseChannel
+    // 就是 stop()。续窗排在分发之后，所以它必须自己认一次「已经停了」——否则这一步会把
+    // 一个定时器留在 stop() 之后，把 handle 连同它闭包里那一份调用方状态一起吊住。
+    if (stopped) return;
+    windowTimer = setTimeout(() => {
+      windowTimer = null;
+      const flushing = Array.from(pending);
+      pending.clear();
+      // 这一轮什么都没压住：安静下来了，窗口关掉，下一条信号又是零时延。
+      if (flushing.length === 0) return;
+      flushing.forEach((signalType) => refresh(signalType));
+      openWindow();
+    }, AccountChannelSignalWindowMs);
+  }
+
+  /**
+   * 一条按种类分发的信号到了。窗口外的第一条立刻分发（一次突发里第一条的时延仍是
+   * 零），窗口内再来的按种类记下。
+   *
+   * 不可见时在这里就掉头：让它走下去只会在一个没人看的标签页上留一个每 3 秒醒
+   * 一次的定时器，而醒来那一下什么都不会分发。
+   */
+  function dispatchSignal(signalType: string): void {
+    if (stopped || !visible()) return;
+    if (windowTimer !== null) {
+      pending.add(signalType);
+      return;
+    }
+    refresh(signalType);
+    openWindow();
+  }
+
+  /**
+   * 可见性变了。判据取 `document.visibilityState` 而不是窗口焦点：失焦但可见的
+   * 窗口（分屏、并排对照）用户确实在看，拿 blur/focus 判会让并排看两个标签页的
+   * 用户看到其中一个停止更新。
+   *
+   * 转为可见时先**清空窗口**再补齐（决策 6）：否则这一次 refresh(null) 之后，窗口
+   * 里可能还压着隐藏期间攒下的尾补，几百毫秒后再无谓地重拉一遍。清空之后语义干净
+   * ——恢复可见 = 一次完整补齐，窗口从零开始。
+   */
+  function onVisibilityChange(): void {
+    if (stopped || !visible()) return;
+    closeWindow();
+    refresh(null);
+  }
+
+  doc?.addEventListener("visibilitychange", onVisibilityChange);
 
   /**
    * 兜底轮询：**信号不在时**的那一档，通着的时候让路。
@@ -188,7 +297,7 @@ export function startAccountChannel(
     (payload: Uint8Array) => {
       const frame = decodeSignal(payload, wanted, codec);
       if (frame === null) return;
-      refresh(frame.type);
+      dispatchSignal(frame.type);
     },
     {
       // 保留通道被判死：订阅建不起来，或信号源中途断了。整条连接照常服务 RPC，
@@ -217,6 +326,10 @@ export function startAccountChannel(
     stop() {
       stopped = true;
       clearInterval(poll);
+      closeWindow();
+      // 留在 document 上的监听会把这个 handle 连同它闭包里那一份调用方状态一起
+      // 吊住，页面切一次就漏一份。
+      doc?.removeEventListener("visibilitychange", onVisibilityChange);
       unsubscribe();
     },
   };

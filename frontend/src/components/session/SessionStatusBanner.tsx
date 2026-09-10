@@ -17,6 +17,10 @@ import {
   StatusBanner,
   type StatusBannerTone,
 } from "@agentre-hub/agentre-ui";
+import {
+  readProtocolRejection,
+  type ProtocolRejection,
+} from "@/lib/protocolMismatch";
 import { formatRelativeTime, type SessionViewStatus } from "@/lib/sessionView";
 
 /**
@@ -102,8 +106,10 @@ export default function SessionStatusBanner({
   /**
    * 对端拒绝握手时它自己那句说明（`wireversion.Reject`）。
    *
-   * 原样显示，不改写、不翻译：它里面写着**两边各自的版本窗口**，是这一屏唯一说得出
-   * 「该去更新哪一头」的东西。取不到时退到通用说明——编一个版本号出来更坏。
+   * 读懂之后自己说，不原样贴：那句话里写着**两边各自的版本窗口**，是这一屏唯一说得出
+   * 「该去更新哪一头」的东西，但它是 Go 的 `fmt.Sprintf` 排版——中文界面上突然出现半句
+   * 英文源码日志，而真正的信息只有两个版本号。解析见 `lib/protocolMismatch`；认不出
+   * 那句话时才退回原样呈现，取不到时退到通用说明——编一个版本号出来更坏。
    */
   protocolMismatchDetail?: string;
   /**
@@ -160,6 +166,12 @@ export default function SessionStatusBanner({
   if (!shape) return null;
   const { tone, Icon } = shape;
 
+  /** 认得出方向时才有；认不出（或不是这一档）就是 null。 */
+  const rejection: ProtocolRejection | null =
+    status === "protocolMismatch"
+      ? readProtocolRejection(protocolMismatchDetail)
+      : null;
+
   const title = NAMED_STATUSES.has(status)
     ? machineName
       ? t(`session.banner.${status}.title`, { machine: machineName })
@@ -174,13 +186,7 @@ export default function SessionStatusBanner({
       tone={tone}
       icon={<Icon className="size-4" aria-hidden />}
       title={title}
-      body={
-        status === "protocolMismatch" && protocolMismatchDetail
-          ? t("session.banner.protocolMismatch.bodyDetailed", {
-              detail: protocolMismatchDetail,
-            })
-          : t(`session.banner.${status}.body`)
-      }
+      body={protocolBody() ?? t(`session.banner.${status}.body`)}
       meta={
         lastSeenMs ? (
           <>
@@ -218,19 +224,13 @@ export default function SessionStatusBanner({
       // 这三档的出口都是设备页。`protocolMismatch` 尤其不能给「重新连接」：重拨
       // 一次只会被同样拒一次（客户端那一侧已经据此停掉重试了），要动的是那台机器
       // 上的构建。
+      // 页面旧的那一头例外：要动的是这个控制台自己，用户在设备页什么都做不了。
       case "protocolMismatch":
+        if (rejection?.stale === "page") return null;
+        return deviceLink();
       case "desktopAppNotRunning":
       case "pinnedAgentredUnavailable":
-        return (
-          <Button
-            asChild
-            variant="outline"
-            size="sm"
-            className="w-full @md:w-auto"
-          >
-            <Link to="/devices">{t("session.banner.viewDevice")}</Link>
-          </Button>
-        );
+        return deviceLink();
       case "loggedOut":
         return (
           <Button asChild size="sm" className="w-full @md:w-auto">
@@ -242,5 +242,34 @@ export default function SessionStatusBanner({
         // 设备已被移除是永久的：没有任何一个按钮能改变它，所以一个都不摆。
         return null;
     }
+  }
+
+  function deviceLink(): ReactNode {
+    return (
+      <Button asChild variant="outline" size="sm" className="w-full @md:w-auto">
+        <Link to="/devices">{t("session.banner.viewDevice")}</Link>
+      </Button>
+    );
+  }
+
+  /**
+   * 协议版本这一档的正文：认得出方向就说清该动哪一头，认不出就带上对端原话，
+   * 两句都拿不到时交回 null，由通用正文接手。
+   */
+  function protocolBody(): string | null {
+    if (status !== "protocolMismatch") return null;
+    if (rejection) {
+      return t(
+        rejection.stale === "page"
+          ? "session.banner.protocolMismatch.bodyPageStale"
+          : "session.banner.protocolMismatch.bodyMachineStale",
+        { page: rejection.page, machine: rejection.machine },
+      );
+    }
+    return protocolMismatchDetail
+      ? t("session.banner.protocolMismatch.bodyDetailed", {
+          detail: protocolMismatchDetail,
+        })
+      : null;
   }
 }

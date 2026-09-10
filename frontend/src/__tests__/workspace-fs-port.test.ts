@@ -151,6 +151,29 @@ describe("读取失败的归类", () => {
     });
   });
 
+  // 还不知道工作根时（实况摘要没到 / 刚被清掉）一次请求都不发：空 root 发过去，
+  // 那台机器答的是 -32042(workspacefs: no cwd) —— 一个本站认不出的码，面板只能
+  // 把那句 Go 原文照抄给用户，再配一颗永远失败的重试。
+  it("cwd 还是空的时候不往线上发空 root，按 offline 落定", async () => {
+    // 桩成那台机器**真的**会怎么答一个空 root：-32042 是本站认不出的码，落到
+    // 面板上就是一句 Go 原文加一颗永远失败的重试。
+    const request = vi
+      .fn()
+      .mockRejectedValue(new RelayError(-32042, "workspacefs: no cwd", null));
+    const ports = createFilePreviewPorts({
+      client: { request } as never,
+      cwd: "",
+    });
+
+    await expect(ports.readFile("a.md")).rejects.toMatchObject({
+      kind: "offline",
+    });
+    await expect(ports.gitFileContent("a.md")).rejects.toMatchObject({
+      kind: "offline",
+    });
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("认不出的码不贴标记：如实显示它自己的文案 + 重试，不冒充已知失败", async () => {
     const ports = portsThatFail(new RelayError(-32040, "path refused", null));
 

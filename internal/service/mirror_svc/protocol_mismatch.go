@@ -13,13 +13,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// protocolVersionRejectionCode 复述 daemon 一侧 rpcerror.CodeProtocolVersion
-// (agentre/internal/pkg/rpcerror)：requireProtocolVersion 判定对端版本不合时,握手就是
-// 拿着这个 JSON-RPC 错误码被拒的。这里没有直接引用那个常量——它挂在 pkg/relaywire
-// 里,而这个包不在本次改动范围内(见 spec 决策 14 的落地边界),所以复述一份并注明来路,
-// 与 rpcerror.CodeMethodNotFound 同样的做法(那个常量倒是已经在这一侧存在)。
-const protocolVersionRejectionCode int32 = -32006
-
 // ErrProtocolVersionMismatch 是「daemon 判定这次握手的协议版本不合,拒绝了它」。
 //
 // 与 ErrMachineOffline 刻意分开：离线是暂时的、下一轮巡检就该再试；版本不合不是瞬时
@@ -39,7 +32,7 @@ const protocolMismatchBackoff = 30 * time.Minute
 // 而不是网络故障、超时或别的 RPC 错误。
 func isProtocolVersionMismatch(err error) bool {
 	var wireErr *rpcerror.Error
-	return errors.As(err, &wireErr) && wireErr.Code == protocolVersionRejectionCode
+	return errors.As(err, &wireErr) && wireErr.Code == rpcerror.CodeProtocolVersion
 }
 
 // protocolMismatchKey 是「(账号, 机器) 上一次握手被协议拒绝」这件事在 Redis 上的表示,

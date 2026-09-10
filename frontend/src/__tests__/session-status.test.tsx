@@ -489,18 +489,58 @@ describe("状态横幅:三档形态", () => {
   });
 
   /**
-   * daemon 回的那句话（`wireversion.Reject`）里写着**两边各自的版本窗口**，例如
-   * 「peer speaks protocol version 0.3.0, this build accepts 0.1.0 to 0.1.0」。
-   * 它是这一屏唯一说得出「该去更新哪一头」的东西，所以必须原样出现在横幅上——
-   * 把它吞掉，用户看到的就只是一句「版本不一致」，然后无从下手。
+   * daemon 回的那句话（`wireversion.Reject`）里写着**两边各自的版本窗口**，它是这一屏
+   * 唯一说得出「该去更新哪一头」的东西——吞掉它，用户看到的就只剩一句「版本不一致」，
+   * 然后无从下手。
+   *
+   * 但它是 Go 的 `fmt.Sprintf` 排版，不是给人读的句子。所以横幅**读懂**它再自己说：
+   * 两个版本号照样在场，而「该动哪一头」由横幅明说，不再要用户自己去解析半句英文。
    */
-  it("协议版本横幅带上对端的原话:两边的版本都在里面", () => {
+  it("协议版本横幅自己说人话:两个版本号都在,英文原话不在", () => {
     const detail =
-      "peer speaks protocol version 0.3.0, this build accepts protocol versions 0.1.0 to 0.1.0";
+      'peer speaks protocol version "0.5.0", this build accepts protocol versions 0.4.0 to 0.4.0';
     renderStatus("protocolMismatch", { protocolMismatchDetail: detail });
-    const root = bannerOf("protocolMismatch");
-    expect(root).not.toBeNull();
-    expect((root as HTMLElement).textContent).toContain(detail);
+    const text =
+      (bannerOf("protocolMismatch") as HTMLElement).textContent ?? "";
+    expect(text).toContain("0.5.0");
+    expect(text).toContain("0.4.0");
+    expect(text).not.toContain("peer speaks protocol version");
+  });
+
+  /**
+   * 方向不是装饰：机器旧要人去那台机器上升级 agentred，设备页是出口；页面旧要等这个
+   * 控制台自己更新，**用户在设备页什么都做不了**，于是那颗按钮不摆——「一个按下去
+   * 什么都不会发生的按钮比没有按钮更坏」在这一档同样成立。
+   */
+  it("机器旧才给设备页出口;页面旧时不摆一颗按不动的按钮", () => {
+    renderStatus("protocolMismatch", {
+      protocolMismatchDetail:
+        'peer speaks protocol version "0.5.0", this build accepts protocol versions 0.4.0 to 0.4.0',
+    });
+    expect(
+      within(bannerOf("protocolMismatch") as HTMLElement).queryByRole("link"),
+    ).not.toBeNull();
+
+    document.body.innerHTML = "";
+    renderStatus("protocolMismatch", {
+      protocolMismatchDetail:
+        'peer speaks protocol version "0.3.0", this build accepts protocol versions 0.4.0 to 0.4.0',
+    });
+    expect(
+      within(bannerOf("protocolMismatch") as HTMLElement).queryByRole("link"),
+    ).toBeNull();
+  });
+
+  /**
+   * 认不出那句话时退回原样呈现：宁可给一句英文，也不编一个版本号出来。出口照旧
+   * 留着——不知道该动哪一头的时候，设备页至少还说得出那台机器跑的是哪一版。
+   */
+  it("认不出对端那句话时原样带上它", () => {
+    const detail = "protocol version mismatch";
+    renderStatus("protocolMismatch", { protocolMismatchDetail: detail });
+    expect((bannerOf("protocolMismatch") as HTMLElement).textContent).toContain(
+      detail,
+    );
   });
 
   /**

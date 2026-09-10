@@ -261,27 +261,78 @@ function UpgradeStatus({
     );
   }
   if (phase.kind === "active-turns") {
-    // daemon 那句话原样呈现：界面、命令行与桌面端对同一件事只说一句话（决策 22）。
+    // 条数是结构化字段（active_turns），这一屏说得出「还有 N 条在跑」，不必去贴
+    // daemon 那句英文原话——确认框的标题说的也正是同一句。
     return (
       <span
         data-testid={`device-upgrade-refusal-${deviceID}`}
         className="text-xs text-status-waiting"
       >
-        {phase.message}
+        {t("device.upgrade.confirm.title", { count: phase.activeTurns })}
       </span>
     );
   }
-  if (phase.kind === "failed" && phase.message) {
-    return (
-      <div className="flex flex-col gap-1">
-        <span className="text-xs font-semibold text-destructive-text">
-          {t("device.upgrade.status.failedTitle")}
-        </span>
-        <span className="text-xs text-muted-foreground">{phase.message}</span>
-      </div>
-    );
+  if (phase.kind === "failed") {
+    return <UpgradeFailure phase={phase} deviceID={deviceID} />;
   }
   return null;
+}
+
+/**
+ * 拒绝原因 → 这一档自己的两句话。
+ *
+ * 原因是 daemon 给的结构化枚举（`reject_reason`，共享包解析在
+ * `AgentredUpgradeRejectReason`），所以这里说的是人话；`phase.message` 是它那句 Go
+ * 原话（`cannot replace …: permission denied; re-run with …`），降级成等宽小字的技术
+ * 细节——认不出原因时它是唯一剩下的线索，认得出时它只是佐证。桌面端的设备行按同一
+ * 张表画同一件事。
+ */
+const FAILURE_COPY: Record<string, { title: string; body: string }> = {
+  in_progress: {
+    title: "device.upgrade.failed.inProgressTitle",
+    body: "device.upgrade.failed.inProgressBody",
+  },
+  not_writable: {
+    title: "device.upgrade.failed.notWritableTitle",
+    body: "device.upgrade.failed.notWritableBody",
+  },
+  already_latest: {
+    title: "device.upgrade.failed.alreadyLatestTitle",
+    body: "device.upgrade.failed.alreadyLatestBody",
+  },
+  download_failed: {
+    title: "device.upgrade.failed.downloadFailedTitle",
+    body: "device.upgrade.failed.downloadFailedBody",
+  },
+};
+
+function UpgradeFailure({
+  phase,
+  deviceID,
+}: {
+  phase: Extract<UpgradePhase, { kind: "failed" }>;
+  deviceID: number;
+}) {
+  const { t } = useTranslation();
+  const copy = phase.reason ? FAILURE_COPY[phase.reason] : undefined;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-semibold text-destructive-text">
+        {t(copy?.title ?? "device.upgrade.failed.unknownTitle")}
+      </span>
+      {copy ? (
+        <span className="text-xs text-muted-foreground">{t(copy.body)}</span>
+      ) : null}
+      {phase.message ? (
+        <pre
+          data-testid={`device-upgrade-detail-${deviceID}`}
+          className="overflow-x-auto whitespace-pre-wrap font-mono text-2xs leading-relaxed text-muted-foreground"
+        >
+          {phase.message}
+        </pre>
+      ) : null}
+    </div>
+  );
 }
 
 /** 这一态的标题与那一行事实；「拿不到最新版信息」两句都不说（决策 19）。 */

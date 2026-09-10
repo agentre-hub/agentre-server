@@ -153,6 +153,17 @@
     },
     "devBuild": "Development build",
     "devBuildTitle": "This is a development build",
-    "devBuildBody": "Its version cannot be compared with a release, so it is never nudged to upgrade."
+    "devBuildBody": "Its version cannot be compared with a release, so it is never nudged to upgrade.",
+    "failed": {
+      "unknownTitle": "The upgrade did not start",
+      "inProgressTitle": "An upgrade is already running on this machine",
+      "inProgressBody": "Wait for it to finish, then try again.",
+      "notWritableTitle": "No permission to replace agentred",
+      "notWritableBody": "The current user cannot write to the directory it lives in. Run the command below on that machine with enough privileges.",
+      "alreadyLatestTitle": "Already up to date",
+      "alreadyLatestBody": "There is no newer version to install.",
+      "downloadFailedTitle": "Could not fetch the new version",
+      "downloadFailedBody": "The download or its checksum failed. The current agentred was not touched."
+    }
   }
 }

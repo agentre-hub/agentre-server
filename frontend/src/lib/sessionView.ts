@@ -69,8 +69,8 @@ export interface SessionViewInput {
   /** 设备已从账号撤销，会话永久只读。 */
   deviceRevoked?: boolean;
   /**
-   * 对端按协议版本拒绝了这条通道的握手（daemon 的 -32006，见
-   * `relayClient.ts` 的 `ProtocolVersionRejectionCode`）。
+   * 对端按协议版本拒绝了这条通道的握手（wire 的 `ErrCodeProtocolVersion`，
+   * 判定在 `relayClient.ts` 的握手里）。
    *
    * 它与 `relayState` 是两件事，所以单独占一个入参而不是折进那个枚举：中继连接态
    * 说的是「连上没有」，这一格说的是「为什么永远连不上」，而且**它不会自愈**——

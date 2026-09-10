@@ -1,4 +1,9 @@
-import { rpcMethods } from "@agentre-hub/agentre-wire";
+import {
+  ErrCodeProjectInvalidPath,
+  ErrCodeProjectNotSynced,
+  ErrCodeProjectPathNotFound,
+  rpcMethods,
+} from "@agentre-hub/agentre-wire";
 /**
  * 桌面端本机路径的写入通路（规格 2026-08-21 决策 1）。
  *
@@ -14,7 +19,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   classifyProjectLocalPathError,
   clearDesktopLocalPath,
-  ProjectLocalPathErrorCode,
   setDesktopLocalPath,
 } from "@/lib/projectLocalPath";
 import { RelayError } from "@/lib/relayClient";
@@ -70,9 +74,9 @@ describe("桌面端本机路径的写入", () => {
 describe("失败分类", () => {
   it("按错误码分，不按 message——message 是那一侧的 Go 文本，改一个字就散了", () => {
     const cases: [number, string][] = [
-      [ProjectLocalPathErrorCode.notSynced, "notSynced"],
-      [ProjectLocalPathErrorCode.invalidPath, "invalidPath"],
-      [ProjectLocalPathErrorCode.pathNotFound, "pathNotFound"],
+      [ErrCodeProjectNotSynced, "notSynced"],
+      [ErrCodeProjectInvalidPath, "invalidPath"],
+      [ErrCodeProjectPathNotFound, "pathNotFound"],
       [-1, "disconnected"],
     ];
     for (const [code, kind] of cases) {
@@ -91,11 +95,11 @@ describe("失败分类", () => {
   it("「那台机器还没同步到这个项目」与「路径不存在」必须是两类——出路完全不同", () => {
     expect(
       classifyProjectLocalPathError(
-        new RelayError(ProjectLocalPathErrorCode.notSynced, "x", null),
+        new RelayError(ErrCodeProjectNotSynced, "x", null),
       ).kind,
     ).not.toBe(
       classifyProjectLocalPathError(
-        new RelayError(ProjectLocalPathErrorCode.pathNotFound, "x", null),
+        new RelayError(ErrCodeProjectPathNotFound, "x", null),
       ).kind,
     );
   });

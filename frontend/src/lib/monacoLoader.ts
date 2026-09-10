@@ -17,17 +17,26 @@ export type { MonacoNS };
 
 let cached: Promise<MonacoNS> | null = null;
 
+async function load(): Promise<MonacoNS> {
+  await import("./monacoWorkerEnv");
+  await import("monaco-editor/basic-languages/monaco.contribution");
+  const monaco = await import("monaco-editor/editor/editor.api");
+  // json 0.56 起移出了 basic-languages，补一门纯词法的 JSON —— 语法住在共享包，
+  // 两端补的是同一门语言。
+  const { registerJsonLanguage } = await import("@agentre-hub/agentre-ui");
+  registerJsonLanguage(monaco);
+  return monaco;
+}
+
 /** 动态加载 Monaco 命名空间（幂等，进程内单例）。 */
 export function loadMonaco(): Promise<MonacoNS> {
-  cached ??= (async () => {
-    await import("./monacoWorkerEnv");
-    await import("monaco-editor/basic-languages/monaco.contribution");
-    const monaco = await import("monaco-editor/editor/editor.api");
-    // json 0.56 起移出了 basic-languages，补一门纯词法的 JSON —— 语法住在共享包，
-    // 两端补的是同一门语言。
-    const { registerJsonLanguage } = await import("@agentre-hub/agentre-ui");
-    registerJsonLanguage(monaco);
-    return monaco;
-  })();
+  cached ??= load().catch((err: unknown) => {
+    // **失败的那一份不留在缓存里**：这几个 chunk 是网络来的（部署换了带哈希的
+    // 产物、一次瞬时断网都会让它 404），而缓存一个已经 reject 的 promise 等于
+    // 让这一屏此后再也装不上 Monaco —— 换个文件、关掉再开都还是同一个失败，
+    // 面板那颗重试只重读文件、够不着装载器，用户只能刷新整页。
+    cached = null;
+    throw err;
+  });
   return cached;
 }
