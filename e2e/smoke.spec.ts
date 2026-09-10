@@ -58,14 +58,14 @@ test("真实 session 打开控制台并呈现隔离用户与真实空态", async
   await page.goto("/chat");
   await expect(page.getByTestId("chat-empty-state")).toBeVisible();
 
-  const [agents, devices, follows] = await Promise.all([
+  const [agents, devices, savedSessions] = await Promise.all([
     page.request.get("/v1/workspace/agents"),
     page.request.get("/v1/devices"),
-    page.request.get("/v1/follows"),
+    page.request.get("/v1/saved-sessions"),
   ]);
   expect((await agents.json()).data.agents).toEqual([]);
   expect((await devices.json()).data.devices).toEqual([]);
-  expect((await follows.json()).data.items).toEqual([]);
+  expect((await savedSessions.json()).data.items).toEqual([]);
 });
 
 test("Web 核心业务经真实 Session、CSRF 与 MySQL 创建并在刷新后呈现", async ({

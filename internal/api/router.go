@@ -278,8 +278,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// 删除清掉 server 那份，并让执行那条对话的机器也删掉它自己那一份。
 		savedSessionCtr.Save,
 		savedSessionCtr.Delete,
-		// 名单读取（R14：任一端读到同一份）。GET /v1/follows 只回指向，本轮起
-		// 统一会话索引改读下面这两个带内容的镜像端点（决策 9）。
+		// 名单读取（R14：任一端读到同一份）。GET /v1/saved-sessions 与上面两个写
+		// 方法同路径不同方法，只回指向；统一会话索引改读下面这两个带内容的镜像
+		// 端点（决策 9）。
 		savedSessionCtr.List,
 		// 账号里 agent 会话的两个只读端点（/v1/agent-sessions*）：索引读会话摘要
 		// （项目归属就地判定，决策 12，浏览器不再上送 (机器指纹, cwd) 探针），

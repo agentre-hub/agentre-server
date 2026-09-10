@@ -25,7 +25,7 @@ const relayRequest = vi.fn(async (method: unknown) => {
 });
 
 vi.mock("@/hooks/use-relay", () => ({
-  useRelayMachine: (target: string | null) => ({
+  useRelayChannel: (target: string | null) => ({
     client: target ? { request: relayRequest } : null,
     relayState: target ? "connected" : "disconnected",
     relayTicket: null,

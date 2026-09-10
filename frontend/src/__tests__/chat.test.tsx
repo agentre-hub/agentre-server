@@ -24,7 +24,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
-import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
+import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import * as accountChannel from "@/lib/accountChannel";
 import { formatRelativeTime } from "@/lib/sessionView";
@@ -35,7 +35,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 vi.mock("@/lib/accountChannel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
   return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
@@ -94,7 +94,7 @@ vi.mock("@/components/session/SessionDetailView", () => ({
 }));
 
 const mockedApi = vi.mocked(api);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 const mockedStartChannel = vi.mocked(accountChannel.startAccountChannel);
 
 /** 把一条信号送进这个标签页共用的那条通道。 */
@@ -154,8 +154,8 @@ const agents = [
 function mirrored(over: Record<string, unknown> = {}) {
   return {
     peer_fingerprint: "fp-1",
-    machine_fingerprint:
-      over.machine_fingerprint ?? over.peer_fingerprint ?? "fp-1",
+    device_fingerprint:
+      over.device_fingerprint ?? over.peer_fingerprint ?? "fp-1",
     conversation_id: "42",
     title: "重构登录页",
     agent_sync_id: "ag-1",
@@ -193,12 +193,12 @@ const fakeClient = {
   close: vi.fn(),
 };
 
-function connectedRelay(): UseRelayMachineResult {
+function connectedRelay(): UseRelayChannelResult {
   return {
     client: fakeClient as never,
     relayState: "connected",
     relayTicket: {
-      clientId: "fp-web",
+      peerFingerprint: "fp-web",
       clientName: "Browser",
       accessToken: "t",
       expiresAt: Date.now() + 120_000,
@@ -430,10 +430,10 @@ describe("对话页 = 统一会话索引", () => {
   });
 
   /**
-   * 决策 9：行来自镜像。首屏因此不等中继，也不再有「关注名单只有指向」那条链路——
-   * 三个旧请求（/v1/follows、逐台 session.list、cwd 探针）一个都不该再发。
+   * 决策 9：行来自镜像。首屏因此不等中继，也不再有「保存名单只有指向」那条链路——
+   * 三个旧请求（GET /v1/saved-sessions、逐台 session.list、cwd 探针）一个都不该再发。
    */
-  it("行来自镜像：只问 /v1/agent-sessions，不问关注名单、不连中继、不上送 cwd 探针", async () => {
+  it("行来自镜像：只问 /v1/agent-sessions，不问保存名单、不连中继、不上送 cwd 探针", async () => {
     stubApi({ mirror: [mirrored()], devices: [agentred] });
     renderChat();
 
@@ -441,7 +441,7 @@ describe("对话页 = 统一会话索引", () => {
     expect(link.getAttribute("href")).toBe("/devices/1/sessions/42");
     const paths = mockedApi.mock.calls.map((c) => c[0]);
     expect(paths.some((p) => p.startsWith("/v1/agent-sessions?"))).toBe(true);
-    expect(paths).not.toContain("/v1/follows");
+    expect(paths).not.toContain("/v1/saved-sessions");
     expect(paths).not.toContain("/v1/workspace/session-projects");
     // 默认范围下不为了列一行去连任何一台机器（首屏不等中继）。
     expect(mockUseRelay).not.toHaveBeenCalled();
@@ -465,7 +465,7 @@ describe("对话页 = 统一会话索引", () => {
       mirror: [
         mirrored({
           peer_fingerprint: "fp-web",
-          machine_fingerprint: "fp-1",
+          device_fingerprint: "fp-1",
           project_sync_id: "p-1",
           title: "从浏览器派发的会话",
         }),
@@ -667,8 +667,9 @@ describe("对话页 = 统一会话索引", () => {
 });
 
 // 规格 2026-08-21：机器轴**一进来**就是每台在线机器此刻自己的清单——不再有
-// 「在这台机器上找」那一层，也不再有 ?machine=。索引因此列出那些机器上有、账号里
+// 「在这台机器上找」那一层，也没有机器选择器。索引因此列出那些机器上有、账号里
 // 还没保存的对话，行尾是「保存」（决策 11 的口径从「选中的那一台」扩到「每一台」）。
+// 设备下钻带过来的 `?machine=` 只收**范围**，不是把那一层选择器请回来。
 describe("对话页:机器轴", () => {
   const stranger = {
     ...summary,
@@ -757,7 +758,7 @@ describe("对话页:机器轴", () => {
     await waitFor(() =>
       expect(posted).toEqual([
         {
-          machine_fingerprint: "fp-1",
+          device_fingerprint: "fp-1",
           peer_fingerprint: "fp-1",
           conversation_id: "77",
         },
@@ -852,7 +853,7 @@ describe("对话页:机器轴", () => {
     await waitFor(() =>
       expect(posted).toEqual([
         {
-          machine_fingerprint: "fp-1",
+          device_fingerprint: "fp-1",
           peer_fingerprint: "991b9464868dfb6340bd09eeef14f196",
           conversation_id: "88",
         },
@@ -864,7 +865,7 @@ describe("对话页:机器轴", () => {
    * 这一条盯的是**省略 origin 的语义**。`session.list` 只在「发起端不是调用方自己」
    * 时才交出 `peerFingerprint`（daemon 的 session_catchup.List：`row.PeerFingerprint
    * != peer` 才写）。所以从这个浏览器派发出去的对话，机器报回来的那份是**空的**，
-   * 而它的账号身份是浏览器自己的中继标识（`relayTicket.clientId`）。
+   * 而它的账号身份是浏览器自己的中继标识（`relayTicket.peerFingerprint`）。
    *
    * 空 origin 兜底成「这台机器自己」的话，行键就变成 `<机器指纹>:<会话号>`，跟镜像里
    * 那条 `<浏览器标识>:<会话号>` 永远对不上：账号里明明保存了，机器轴上每一条都还
@@ -882,7 +883,7 @@ describe("对话页:机器轴", () => {
       mirror: [
         mirrored({
           peer_fingerprint: "fp-web",
-          machine_fingerprint: "fp-1",
+          device_fingerprint: "fp-1",
           conversation_id: "99",
           title: "控制台开的",
         }),
@@ -1130,10 +1131,11 @@ describe("对话页:机器轴", () => {
   });
 
   /**
-   * 地址上不再有可选中的机器：`?machine=` 连同机器选择器一起下线（决策 5）。
-   * 带着旧参数进来也不该退化成「只看那一台」——它就是被忽略。
+   * 机器选择器下线了（决策 5），但**范围**没有：`?machine=<设备标识>` 把这一轴收
+   * 到一台上，`/devices/:deviceId/sessions`（「查看这台机器的对话」）重定向过来
+   * 时带的就是它。收范围的是地址，不是页面里的一个控件——选择器仍然不存在。
    */
-  it("地址上带着旧的 ?machine= 也照样列全部机器", async () => {
+  it("地址上带着 ?machine= 就只列那一台机器", async () => {
     stubApi({ mirror: [], devices: [agentred, desktop] });
     relayByMachine({
       "fp-1": [{ ...summary, conversationId: "61", title: "小主机上跑着的" }],
@@ -1147,6 +1149,28 @@ describe("对话页:机器轴", () => {
       ],
     });
     renderChat("/chat?axis=machine&machine=1");
+
+    expect(await screen.findByText("小主机上跑着的")).toBeTruthy();
+    expect(screen.queryByText("MacBook 上跑着的")).toBeNull();
+    expect(screen.queryByTestId("group-device-3")).toBeNull();
+    expect(screen.queryByTestId("machine-picker")).toBeNull();
+  });
+
+  /** 范围之外的东西不算范围：认不出的 `?machine=` 退回「每台各一组」。 */
+  it("?machine= 不是设备标识时当没带：仍是每台在线机器各一组", async () => {
+    stubApi({ mirror: [], devices: [agentred, desktop] });
+    relayByMachine({
+      "fp-1": [{ ...summary, conversationId: "61", title: "小主机上跑着的" }],
+      "fp-desktop": [
+        {
+          ...summary,
+          conversationId: "62",
+          peerFingerprint: "fp-desktop",
+          title: "MacBook 上跑着的",
+        },
+      ],
+    });
+    renderChat("/chat?axis=machine&machine=fp-1");
 
     expect(await screen.findByText("小主机上跑着的")).toBeTruthy();
     expect(screen.getByText("MacBook 上跑着的")).toBeTruthy();
@@ -1294,7 +1318,7 @@ describe("对话页:第一次保存时的说明", () => {
     await waitFor(() =>
       expect(posted).toEqual([
         {
-          machine_fingerprint: "fp-1",
+          device_fingerprint: "fp-1",
           peer_fingerprint: "fp-1",
           conversation_id: "77",
         },
@@ -1347,7 +1371,7 @@ describe("对话页:第一次保存时的说明", () => {
     await waitFor(() =>
       expect(posted).toEqual([
         {
-          machine_fingerprint: "fp-1",
+          device_fingerprint: "fp-1",
           peer_fingerprint: "fp-1",
           conversation_id: "77",
         },
@@ -1842,7 +1866,7 @@ describe("对话页：顶栏与搜索框", () => {
     ).toBeNull();
   });
 
-  it("搜索框说的是「搜索会话」——搜索只按标题（决策 8），旧文案承诺的三样有两样搜不到", async () => {
+  it("搜索框说的是「搜索对话」——搜索只按标题（决策 8），旧文案承诺的三样有两样搜不到", async () => {
     stubApi({ mirror: [mirrored()], devices: [agentred] });
     mockUseRelay.mockReturnValue(connectedRelay());
     renderChat();

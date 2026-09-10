@@ -24,7 +24,7 @@ type PushItem struct {
 	// （2026-08-27-schema-overhaul.md 决策 20）。
 	DeletedAt           int64           `json:"deleted_at"`
 	AgentredFingerprint string          `json:"agentred_fingerprint" binding:"max=128"`
-	ProjectSyncID       string          `json:"project_sync_id"      binding:"max=128"`
+	ScopeSyncID         string          `json:"scope_sync_id"        binding:"max=128"`
 	Payload             json.RawMessage `json:"payload"`
 }
 
@@ -67,7 +67,7 @@ type PullRequest struct {
 type PullItem struct {
 	Kind                string          `json:"kind"`
 	SyncID              string          `json:"sync_id"`
-	ProjectSyncID       string          `json:"project_sync_id,omitempty"`
+	ScopeSyncID         string          `json:"scope_sync_id,omitempty"`
 	AgentredFingerprint string          `json:"agentred_fingerprint,omitempty"`
 	Payload             json.RawMessage `json:"payload"`
 	Version             int64           `json:"version"`

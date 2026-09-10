@@ -80,7 +80,7 @@ func TestCreateOrgObject_GivenProjectKinds_ThenServerAllocatesIDVersionAndRecord
 		assert.Equal(t, int64(202), saved.Version)
 		assert.Equal(t, "proj-1", payloadKey(t, saved.Payload, "project_sync_id"))
 		assert.Equal(t, "agent-1", payloadKey(t, saved.Payload, "agent_sync_id"))
-		assert.Empty(t, saved.ProjectSyncID,
+		assert.Empty(t, saved.ScopeSyncID,
 			"成员关系的项目在载荷里表达，不占 project_sync_id 列——那一列是路径记录的自然键")
 		assert.Positive(t, payloadKey(t, saved.Payload, "joined_at"),
 			"入组时刻由服务端补上：留 0 会让这条关系在每一台机器上都显示成 1970 年加入")
@@ -307,9 +307,9 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenDescendantsMembersAndLocati
 			"project_sync_id": "proj-b", "agent_sync_id": "agent-1"})},
 		{ID: 6, Kind: sync_entity.KindProjectAgent, SyncID: "pa-x", Payload: mustJSON(t, map[string]any{
 			"project_sync_id": "proj-x", "agent_sync_id": "agent-1"})},
-		{ID: 7, Kind: sync_entity.KindProjectLocation, SyncID: "pl-c", ProjectSyncID: "proj-c",
+		{ID: 7, Kind: sync_entity.KindProjectLocation, SyncID: "pl-c", ScopeSyncID: "proj-c",
 			AgentredFingerprint: "fp-1", Payload: mustJSON(t, map[string]any{"path": "/srv/c"})},
-		{ID: 8, Kind: sync_entity.KindProjectLocation, SyncID: "pl-x", ProjectSyncID: "proj-x",
+		{ID: 8, Kind: sync_entity.KindProjectLocation, SyncID: "pl-x", ScopeSyncID: "proj-x",
 			AgentredFingerprint: "fp-1", Payload: mustJSON(t, map[string]any{"path": "/srv/x"})},
 	}, nil)
 

@@ -273,7 +273,7 @@ func (s *engineSvc) ListBackends(ctx context.Context, userID int64) ([]BackendVi
 			}
 		case sync_entity.KindAgentBackendCLI:
 			if o, ok := decodeOverlay(row); ok {
-				overlays[row.ProjectSyncID] = append(overlays[row.ProjectSyncID], CLIByDevice{Fingerprint: row.AgentredFingerprint, Status: overlayStatus(o.CLIPath)})
+				overlays[row.ScopeSyncID] = append(overlays[row.ScopeSyncID], CLIByDevice{Fingerprint: row.AgentredFingerprint, Status: overlayStatus(o.CLIPath)})
 			}
 		case sync_entity.KindAgentBackend:
 			if b, ok := decodeBackend(row); ok {
@@ -378,7 +378,7 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 	}
 	var row *sync_entity.SyncObject
 	for _, candidate := range rows {
-		if candidate.ProjectSyncID == backendSyncID && candidate.AgentredFingerprint == fingerprint && !candidate.IsDeleted() {
+		if candidate.ScopeSyncID == backendSyncID && candidate.AgentredFingerprint == fingerprint && !candidate.IsDeleted() {
 			row = candidate
 			break
 		}
@@ -395,7 +395,7 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 	if row == nil {
 		row = &sync_entity.SyncObject{
 			UserID: in.UserID, Kind: sync_entity.KindAgentBackendCLI, SyncID: newSyncID(now),
-			ProjectSyncID: backendSyncID, AgentredFingerprint: fingerprint, Createtime: now,
+			ScopeSyncID: backendSyncID, AgentredFingerprint: fingerprint, Createtime: now,
 		}
 	}
 	row.Payload, row.Version, row.SyncUpdatedAt, row.OriginFingerprint, row.Updatetime = string(payload), v, now, ServerOriginFingerprint, now
@@ -429,7 +429,7 @@ func (s *engineSvc) ListCLIOverlays(ctx context.Context, userID int64) ([]CLIOve
 	out := make([]CLIOverlayView, 0, len(rows))
 	for _, row := range rows {
 		if o, ok := decodeOverlay(row); ok {
-			out = append(out, CLIOverlayView{BackendSyncID: row.ProjectSyncID, Fingerprint: row.AgentredFingerprint, Status: overlayStatus(o.CLIPath), CLIPath: o.CLIPath})
+			out = append(out, CLIOverlayView{BackendSyncID: row.ScopeSyncID, Fingerprint: row.AgentredFingerprint, Status: overlayStatus(o.CLIPath), CLIPath: o.CLIPath})
 		}
 	}
 	return out, nil
@@ -449,7 +449,7 @@ func (s *engineSvc) Snapshot(ctx context.Context, userID int64, fingerprint stri
 		case sync_entity.KindAgentBackendCLI:
 			if row.AgentredFingerprint == fingerprint {
 				if o, ok := decodeOverlay(row); ok {
-					out.CLIOverlays = append(out.CLIOverlays, CLIOverlaySnapshot{BackendSyncID: row.ProjectSyncID, CLIPath: o.CLIPath})
+					out.CLIOverlays = append(out.CLIOverlays, CLIOverlaySnapshot{BackendSyncID: row.ScopeSyncID, CLIPath: o.CLIPath})
 				}
 			}
 		}

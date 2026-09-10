@@ -155,6 +155,9 @@ describe("Account page: three cards render real data", () => {
     expect(screen.getByText("YubiKey 5C")).toBeTruthy();
     expect(screen.getByText(/Never used/)).toBeTruthy();
 
+    // 这张卡说的是**浏览器登录**，不是 AI 对话：站内 session* 一律指后者，
+    // 标题因此不叫 Sessions（i18n 命名空间同理是 account.signins）。
+    expect(screen.getByText("Signed-in browsers")).toBeTruthy();
     expect(screen.getByText("203.0.113.24")).toBeTruthy();
     expect(screen.getByText("198.51.100.7")).toBeTruthy();
     expect(screen.getByText("This session")).toBeTruthy();

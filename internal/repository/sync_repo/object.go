@@ -76,7 +76,7 @@ func (r *objectRepo) findLiveByNaturalKey(
 	ctx context.Context, userID int64, kind, projectSyncID, fingerprint string,
 ) (*sync_entity.SyncObject, error) {
 	return dbutil.FindOne[sync_entity.SyncObject](db.Ctx(ctx).Where(
-		"user_id=? AND kind=? AND project_sync_id=? AND agentred_fingerprint=? AND deleted_at=0",
+		"user_id=? AND kind=? AND scope_sync_id=? AND agentred_fingerprint=? AND deleted_at=0",
 		userID, kind, projectSyncID, fingerprint,
 	))
 }
@@ -113,7 +113,7 @@ func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) erro
 		Where("user_id=? AND sync_id=? AND version<?", obj.UserID, obj.SyncID, obj.Version).
 		Updates(map[string]interface{}{
 			"kind":                 obj.Kind,
-			"project_sync_id":      obj.ProjectSyncID,
+			"scope_sync_id":        obj.ScopeSyncID,
 			"agentred_fingerprint": obj.AgentredFingerprint,
 			"payload":              obj.Payload,
 			"version":              obj.Version,

@@ -55,7 +55,7 @@ func TestRelayTicket_FromSessionWithoutCreatingDevice(t *testing.T) {
 // 决策 8/9：网页对端身份写在票里，由账号派生。同一账号换一个会话（等价于清空站点
 // 数据、换一台设备重新登录）取票，拿到的必须是同一个 pfp —— 否则此前从网页发起的
 // 对话在账号镜像里当场没了身份键的一半。它同时必须原样交给浏览器：浏览器要拿它当
-// 自己的 clientId，而不是自己再生成一个。
+// 自己的对端指纹，而不是自己再生成一个。
 func TestRelayTicket_GivenTheSameAccountOnAnotherBrowser_ThenCarriesTheSamePeerFingerprint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
@@ -74,16 +74,16 @@ func TestRelayTicket_GivenTheSameAccountOnAnotherBrowser_ThenCarriesTheSamePeerF
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		var envelope struct {
 			Data struct {
-				AccessToken string `json:"access_token"`
-				ClientID    string `json:"client_id"`
+				AccessToken     string `json:"access_token"`
+				PeerFingerprint string `json:"peer_fingerprint"`
 			} `json:"data"`
 		}
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
-		return envelope.Data.AccessToken, envelope.Data.ClientID
+		return envelope.Data.AccessToken, envelope.Data.PeerFingerprint
 	}
 
-	firstToken, firstClientID := ticket(t)
-	secondToken, secondClientID := ticket(t)
+	firstToken, firstPFP := ticket(t)
+	secondToken, secondPFP := ticket(t)
 
 	firstClaims, err := signer.Verify(firstToken)
 	require.NoError(t, err)
@@ -91,8 +91,11 @@ func TestRelayTicket_GivenTheSameAccountOnAnotherBrowser_ThenCarriesTheSamePeerF
 	require.NoError(t, err)
 	require.Equal(t, jwt.AccountPeerFingerprint(7), firstClaims.PFP)
 	require.Equal(t, firstClaims.PFP, secondClaims.PFP)
-	// 浏览器拿到的 clientId 就是票里那个身份，两者不能各说各的。
-	require.Equal(t, firstClaims.PFP, firstClientID)
-	require.Equal(t, firstClientID, secondClientID)
+	// 浏览器拿到的对端指纹就是票里那个身份，两者不能各说各的。字段名也必须是
+	// peer_fingerprint：同一个值在 /v1/agent-sessions、/v1/session-import 和
+	// dispatch 的上行里一律叫这个名字，只有这里曾经叫 client_id——而 client_id
+	// 在同一个服务的 /v1/oauth/* 底下是 RFC 6749 的注册客户端，不是指纹。
+	require.Equal(t, firstClaims.PFP, firstPFP)
+	require.Equal(t, firstPFP, secondPFP)
 	require.Zero(t, firstClaims.DID, "网页仍然不是设备")
 }

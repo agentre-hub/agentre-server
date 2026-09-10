@@ -39,7 +39,7 @@ vi.mock("@/lib/relayTicket", async (importOriginal) => {
     ...actual,
     browserDisplayName: () => "Chrome · macOS",
     // 自建连接那一路现在向 relayClientPool 借，票由池子取（此前是直接用调用方
-    // sourceClient 手里那张）。两者是同一张票：clientId 都来自 localStorage。
+    // sourceClient 手里那张）。两者是同一张票：peerFingerprint 都来自 localStorage。
     ensureRelayTicket: vi.fn(),
   };
 });
@@ -170,7 +170,7 @@ function fakeClient() {
 }
 
 const sourceClient = {
-  clientId: "fp-web",
+  peerFingerprint: "fp-web",
   clientName: "Chrome · macOS",
   accessToken: "web-jwt",
   expiresAt: Date.now() + 120_000,
@@ -186,7 +186,7 @@ beforeEach(() => {
   mockedTicket.mockResolvedValue({
     accessToken: "relay-token",
     expiresAt: Date.now() + 120_000,
-    clientId: "browser-1",
+    peerFingerprint: "browser-1",
     clientName: "Chrome · macOS",
   });
   MockRelayClient.mockImplementation(function () {
@@ -320,7 +320,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     expect(mockedApi).toHaveBeenCalledWith("/v1/saved-sessions", {
       method: "POST",
       body: JSON.stringify({
-        machine_fingerprint: "fp-online",
+        device_fingerprint: "fp-online",
         peer_fingerprint: "fp-web",
         conversation_id: out.conversationId,
       }),
@@ -398,7 +398,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     expect(mockedApi).toHaveBeenCalledWith("/v1/saved-sessions", {
       method: "POST",
       body: JSON.stringify({
-        machine_fingerprint: "fp-desk",
+        device_fingerprint: "fp-desk",
         peer_fingerprint: "fp-web",
         conversation_id: out.conversationId,
       }),

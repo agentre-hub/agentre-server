@@ -65,7 +65,8 @@ export interface UseBoardResult {
   searching: boolean;
   error: string | null;
   reload: () => Promise<void>;
-  moveIssue: (id: number, stage: BoardStage, afterId: number) => Promise<void>;
+  /** 落库走 lib/issues 的 moveIssue：wire 那层是 issue,这一层对外一律 task。 */
+  moveTask: (id: number, stage: BoardStage, afterId: number) => Promise<void>;
   saveTask: (value: TaskFormValue) => Promise<void>;
   deleteTask: (id: number) => Promise<void>;
   mutateLabel: (mutation: LabelMutation) => Promise<void>;
@@ -175,7 +176,7 @@ export function useBoard(
     [ids, response.issues],
   );
 
-  const moveIssue = React.useCallback(
+  const moveTask = React.useCallback(
     async (id: number, stage: BoardStage, afterId: number) => {
       await moveIssueRequest(ids.syncIdOf(id), stage, ids.syncIdOf(afterId));
       await reload();
@@ -239,7 +240,7 @@ export function useBoard(
     searching: refreshing || loadedKey !== queryKey,
     error,
     reload,
-    moveIssue,
+    moveTask,
     saveTask,
     deleteTask,
     mutateLabel,

@@ -26,7 +26,7 @@ export interface MirrorSessionItem {
   /** 发起这条对话那一端的指纹。留作来源标注与授权，不再是身份的一半。 */
   peer_fingerprint: string;
   /** 当前承载这条对话的机器；与发起端可以不同。 */
-  machine_fingerprint: string;
+  device_fingerprint: string;
   title?: string;
   agent_sync_id?: string;
   /**
@@ -76,7 +76,7 @@ export interface MirrorTranscriptPage {
  * 不分组、不分页）。
  *
  * 交回的是整行：标题、Agent 身份、模型目标都在这一行上，而机器离线时中继根本给不出
- * 摘要，头部要认得出这条对话就只剩这一条来路；`machine_fingerprint` 同时是「该连
+ * 摘要，头部要认得出这条对话就只剩这一条来路；`device_fingerprint` 同时是「该连
  * 哪台机器」的答案。
  *
  * 读不到（端点失败 / 没有这一行）时交回 undefined 而不抛：调用方手里可能已经有索引

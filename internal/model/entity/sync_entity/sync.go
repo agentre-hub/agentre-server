@@ -46,11 +46,14 @@ func KindValid(kind string) bool {
 // 记录据此 join 到 devices，web 控制台不需要额外映射表；路径记录的账号内自然键
 // （项目同步标识, 指纹）也建在它上面，R4b 的重复由数据库唯一约束一次性挡住。
 type SyncObject struct {
-	ID                  int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID              int64  `gorm:"column:user_id;type:bigint;not null"`
-	Kind                string `gorm:"column:kind;type:text;not null"`
-	SyncID              string `gorm:"column:sync_id;type:text;not null"`
-	ProjectSyncID       string `gorm:"column:project_sync_id;type:text;not null;default:''"`
+	ID     int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID int64  `gorm:"column:user_id;type:bigint;not null"`
+	Kind   string `gorm:"column:kind;type:text;not null"`
+	SyncID string `gorm:"column:sync_id;type:text;not null"`
+	// ScopeSyncID 是这一行自然键的第二段：它装什么取决于 kind。
+	// project_location 装项目的 sync_id, agent_backend_cli 装**后端**的 sync_id;
+	// 其余七种 kind 恒为空串。叫 project_sync_id 时它对后者是句假话。
+	ScopeSyncID         string `gorm:"column:scope_sync_id;type:text;not null;default:''"`
 	AgentredFingerprint string `gorm:"column:agentred_fingerprint;type:text;not null;default:''"`
 	Payload             string `gorm:"column:payload;type:json;not null"`
 	// Version 由账号级单调序列分配，是 R4 唯一的胜负依据。

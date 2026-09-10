@@ -277,7 +277,7 @@ func goldenExchanges() []exchange {
 			method: http.MethodPost,
 			path:   "/v1/sync/push",
 			body: `{"items":[{"kind":"project_location","sync_id":"` + locationSyncID + `",` +
-				`"base_version":0,"updated_at":1700000000000,"project_sync_id":"` + projectSyncID + `",` +
+				`"base_version":0,"updated_at":1700000000000,"scope_sync_id":"` + projectSyncID + `",` +
 				`"agentred_fingerprint":"` + agentFingerpr + `","payload":{"configured":true}}]}`,
 			arrange: func(m *syncMocks) {
 				firstSyncDevice(m)
@@ -289,7 +289,7 @@ func goldenExchanges() []exchange {
 					gomock.Any(), goldenUserID, projectSyncID, agentFingerpr,
 				).Return(&sync_entity.SyncObject{
 					ID: 33, UserID: goldenUserID, Kind: sync_entity.KindProjectLocation,
-					SyncID: losingSyncID, ProjectSyncID: projectSyncID, AgentredFingerprint: agentFingerpr,
+					SyncID: losingSyncID, ScopeSyncID: projectSyncID, AgentredFingerprint: agentFingerpr,
 					Payload: `{"configured":true}`, Version: 9, OriginFingerprint: otherFingerprint,
 				}, nil)
 				m.state.EXPECT().NextVersion(gomock.Any(), goldenUserID, int64(1)).Return(int64(21), nil)
@@ -320,7 +320,7 @@ func goldenExchanges() []exchange {
 		// ---------- 下行 ----------
 		{
 			// 增量一页：一条普通对象、一条带自然键的路径记录、一条墓碑。
-			// project_sync_id / agentred_fingerprint 带 omitempty，第一条里因此看不到它们
+			// scope_sync_id / agentred_fingerprint 带 omitempty，第一条里因此看不到它们
 			// ——「这两个键可能整个消失」正是桌面端镜像必须知道的事。
 			// has_more 为 true：这一页取满了 limit，还有下一页。
 			name:   "sync-pull-page",
@@ -336,7 +336,7 @@ func goldenExchanges() []exchange {
 						},
 						{
 							Kind: sync_entity.KindProjectLocation, SyncID: locationSyncID,
-							ProjectSyncID: projectSyncID, AgentredFingerprint: agentFingerpr,
+							ScopeSyncID: projectSyncID, AgentredFingerprint: agentFingerpr,
 							Payload: `{"configured":true}`, Version: 12,
 							SyncUpdatedAt: 1700000001000, OriginFingerprint: otherFingerprint,
 						},
@@ -519,8 +519,8 @@ func goldenExchanges() []exchange {
 					sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI,
 				}).Return([]*sync_entity.SyncObject{
 					{Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main", Payload: `{"name":"Anthropic","type":"anthropic","base_url":"https://api.anthropic.com","api_key":"sk-engine-secret","models":[]}`},
-					{Kind: sync_entity.KindAgentBackendCLI, ProjectSyncID: "backend-1", AgentredFingerprint: agentFingerpr, Payload: `{"cli_path":"/usr/local/bin/claude"}`},
-					{Kind: sync_entity.KindAgentBackendCLI, ProjectSyncID: "backend-1", AgentredFingerprint: "other-fingerprint", Payload: `{"cli_path":"/opt/claude"}`},
+					{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: agentFingerpr, Payload: `{"cli_path":"/usr/local/bin/claude"}`},
+					{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "other-fingerprint", Payload: `{"cli_path":"/opt/claude"}`},
 				}, nil)
 			},
 			wantStatus: http.StatusOK,

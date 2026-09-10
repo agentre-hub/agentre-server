@@ -33,7 +33,7 @@ func (s *Sync) Push(c *gin.Context, req *api.PushRequest) (*api.PushResponse, er
 			UpdatedAt:           it.UpdatedAt,
 			DeletedAt:           it.DeletedAt,
 			AgentredFingerprint: it.AgentredFingerprint,
-			ProjectSyncID:       it.ProjectSyncID,
+			ScopeSyncID:         it.ScopeSyncID,
 			Payload:             it.Payload,
 		})
 	}
@@ -78,7 +78,7 @@ func (s *Sync) Pull(c *gin.Context, req *api.PullRequest) (*api.PullResponse, er
 		resp.Items = append(resp.Items, api.PullItem{
 			Kind:                it.Kind,
 			SyncID:              it.SyncID,
-			ProjectSyncID:       it.ProjectSyncID,
+			ScopeSyncID:         it.ScopeSyncID,
 			AgentredFingerprint: it.AgentredFingerprint,
 			Payload:             it.Payload,
 			Version:             it.Version,

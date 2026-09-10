@@ -185,16 +185,16 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 			Cursor  string `json:"cursor"`
 			HasMore bool   `json:"has_more"`
 			Items   []struct {
-				ConversationID     string `json:"conversation_id"`
-				PeerFingerprint    string `json:"peer_fingerprint"`
-				MachineFingerprint string `json:"machine_fingerprint"`
-				Title              string `json:"title"`
-				AgentSyncID        string `json:"agent_sync_id"`
-				ProjectSyncID      string `json:"project_sync_id"`
-				BackendType        string `json:"backend_type"`
-				LifecycleState     string `json:"lifecycle_state"`
-				WaitingForInput    bool   `json:"waiting_for_input"`
-				LastMessageAt      int64  `json:"last_message_at"`
+				ConversationID    string `json:"conversation_id"`
+				PeerFingerprint   string `json:"peer_fingerprint"`
+				DeviceFingerprint string `json:"device_fingerprint"`
+				Title             string `json:"title"`
+				AgentSyncID       string `json:"agent_sync_id"`
+				ProjectSyncID     string `json:"project_sync_id"`
+				BackendType       string `json:"backend_type"`
+				LifecycleState    string `json:"lifecycle_state"`
+				WaitingForInput   bool   `json:"waiting_for_input"`
+				LastMessageAt     int64  `json:"last_message_at"`
 			} `json:"items"`
 		} `json:"groups"`
 	}
@@ -209,7 +209,7 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 	require.Len(t, group.Items, 1)
 	item := group.Items[0]
 	assert.Equal(t, "fp-browser-1", item.PeerFingerprint)
-	assert.Equal(t, "fp-daemon-1", item.MachineFingerprint)
+	assert.Equal(t, "fp-daemon-1", item.DeviceFingerprint)
 	assert.Equal(t, testConversationID, item.ConversationID)
 	assert.Equal(t, "调试登录页", item.Title)
 	assert.Equal(t, "agent-1", item.AgentSyncID)

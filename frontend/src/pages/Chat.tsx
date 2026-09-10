@@ -87,9 +87,22 @@ import { type SessionFilter } from "@/lib/sessionView";
  * 「发现一条对话并把它收进账号」唯一的去处，也是 `/devices/:id/sessions` 重定向
  * 过来之后要落在的形态。
  */
-/** 轴与选中的机器都在 URL 上：设备下钻靠它重定向，链接也因此可分享。 */
+/** 轴与范围都在 URL 上：设备下钻靠它重定向，链接也因此可分享。 */
 function readAxis(raw: string | null): IndexAxis {
   return INDEX_AXES.includes(raw as IndexAxis) ? (raw as IndexAxis) : "project";
+}
+
+/**
+ * `?machine=<设备标识>`：把机器轴收到这一台上。
+ *
+ * `/devices/:deviceId/sessions`（「查看这台机器的对话」）重定向过来时带着它——
+ * 那句话说的是**一台**机器，不带范围的话落地看到的是账号下每一台。没带、或者
+ * 带了个不是设备标识的东西，就是不收范围：机器轴本身仍是每台在线机器各一组。
+ */
+function readMachineScope(raw: string | null): number | null {
+  if (!raw) return null;
+  const id = Number(raw);
+  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 /**
@@ -151,6 +164,7 @@ export default function Chat() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const axis = readAxis(searchParams.get("axis"));
+  const machineScope = readMachineScope(searchParams.get("machine"));
 
   const [filter, setFilter] = useState<SessionFilter>("all");
   const [devices, setDevices] = useState<DeviceItem[]>([]);
@@ -442,6 +456,7 @@ export default function Chat() {
   const reach = useMachineReachability({
     devices,
     axis,
+    machineScope,
     keyword: sessionIndex.debouncedSearch,
   });
   const { forgetResolved } = reach;
@@ -529,8 +544,8 @@ export default function Chat() {
       if (axis === "machine" && next !== "machine") forgetResolved();
       const params = new URLSearchParams(searchParams);
       params.set("axis", next);
-      // 「选中一台机器」这回事已经不存在了（规格 2026-08-21 决策 5）：旧地址上
-      // 带着的那个参数顺手清掉，免得它看起来还有用。
+      // 换轴就是重新分组，范围跟着丢掉：`?machine=` 是设备下钻带过来的收窄，
+      // 自己动手换轴的人要的是完整的那一份。再点一次机器轴因此回到每台一组。
       params.delete("machine");
       setSearchParams(params, { replace: true });
     },

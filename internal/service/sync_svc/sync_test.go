@@ -371,7 +371,7 @@ func TestPush_GivenSameProjectFingerprintFromBothEnds_ThenMergedIntoOneRow(t *te
 		m.object.EXPECT().FindLocationByNaturalKey(gomock.Any(), testUserID, "proj-1", "fp-a").
 			Return(&sync_entity.SyncObject{
 				ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
-				ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 4, OriginFingerprint: "fp-9",
+				ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 4, OriginFingerprint: "fp-9",
 			}, nil)
 		gomock.InOrder(
 			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil),
@@ -384,7 +384,7 @@ func TestPush_GivenSameProjectFingerprintFromBothEnds_ThenMergedIntoOneRow(t *te
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 0, UpdatedAt: testNow,
-			ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: []byte(`{"path":"/srv/a"}`),
+			ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: []byte(`{"path":"/srv/a"}`),
 		}}})
 
 		assert.NoError(t, err)
@@ -411,14 +411,14 @@ func TestPush_GivenIncomingLosesNaturalKeyMerge_ThenItIsTheOneTombstoned(t *test
 		m.object.EXPECT().FindLocationByNaturalKey(gomock.Any(), testUserID, "proj-1", "fp-a").
 			Return(&sync_entity.SyncObject{
 				ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
-				ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 10, OriginFingerprint: "fp-9",
+				ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 10, OriginFingerprint: "fp-9",
 			}, nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", UpdatedAt: testNow,
-			ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: []byte(`{"path":"/srv/a"}`),
+			ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: []byte(`{"path":"/srv/a"}`),
 		}}})
 
 		assert.NoError(t, err)
@@ -442,7 +442,7 @@ func TestPush_GivenLocationWithFreeNaturalKey_ThenNoMerge(t *testing.T) {
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", UpdatedAt: testNow,
-			ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: []byte(`{"path":"/srv/a"}`),
+			ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: []byte(`{"path":"/srv/a"}`),
 		}}})
 
 		assert.NoError(t, err)
@@ -466,7 +466,7 @@ func TestPush_GivenDeletedLocation_ThenNoNaturalKeyLookup(t *testing.T) {
 
 		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 4, DeletedAt: testNow,
-			ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a",
+			ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a",
 		}}})
 
 		assert.NoError(t, err)
@@ -1070,7 +1070,7 @@ func deviceScopedFixture() []*sync_entity.SyncObject {
 		{ID: 4, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "l1", AgentredFingerprint: testFingerprint, Version: 11},
 		{ID: 5, UserID: testUserID, Kind: sync_entity.KindAgentBackend, SyncID: "b2", AgentredFingerprint: "sha256:bbbb", Version: 12},
 		{ID: 6, UserID: testUserID, Kind: sync_entity.KindAgentBackend, SyncID: "b3", Version: 13},
-		{ID: 7, UserID: testUserID, Kind: sync_entity.KindAgentBackendCLI, SyncID: "cli-1", ProjectSyncID: "b1", AgentredFingerprint: testFingerprint, Version: 14},
+		{ID: 7, UserID: testUserID, Kind: sync_entity.KindAgentBackendCLI, SyncID: "cli-1", ScopeSyncID: "b1", AgentredFingerprint: testFingerprint, Version: 14},
 	}
 }
 

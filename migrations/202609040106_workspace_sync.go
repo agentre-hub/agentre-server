@@ -12,7 +12,7 @@ import (
 // 同步组双向同步、有版本号与墓碑；上报组按设备分命名空间、整份快照替换，
 // 没有删除时间也没有冲突元数据。
 //
-// sync_id / project_sync_id / agentred_fingerprint / kind 都是客户端自带的不透明
+// sync_id / scope_sync_id / agentred_fingerprint / kind 都是客户端自带的不透明
 // 标识，一律 utf8mb4_0900_bin 逐字节判等，同步的一切都建立在这个标识精确可比上。
 // 两个坑都要躲开：表默认的 utf8mb4_0900_ai_ci 大小写不敏感，会让 "abc" 与 "ABC"
 // 两个不同的 sync_id 撞上 uk_sync_objects_identity、`WHERE sync_id=?` 还会取回另一行；
@@ -26,7 +26,7 @@ import (
 // kind 时取 kind 本身、否则为 NULL）把墓碑摘出去——唯一键里出现 NULL 的行不参与约束，
 // 这正是 MySQL 表达部分唯一索引的写法，等价于 PG 那条带
 // `WHERE kind IN (…) AND deleted_at = 0` 的
-// (user_id, project_sync_id, agentred_fingerprint, kind) 部分唯一索引。
+// (user_id, scope_sync_id, agentred_fingerprint, kind) 部分唯一索引。
 //
 // 末尾放的是 **kind 本身而不是常数 1**，这样一条键就够了：
 // ('project_location', proj, fp) 与 ('agent_backend_cli', proj, fp) 在键上是不同的
@@ -34,7 +34,7 @@ import (
 // 而两条键的前三列完全相同）。
 //
 // **名单必须保持最小。** 九种 kind 里只有 project_location 与 agent_backend_cli 在
-// 写入侧被强制要求 project_sync_id 与 agentred_fingerprint 非空（sync_svc 的
+// 写入侧被强制要求 scope_sync_id 与 agentred_fingerprint 非空（sync_svc 的
 // rejectReason、workspace_svc 的 checkLocationNaturalKey）。其余七种这两列恒为空串，
 // 放进名单会让该 kind 下所有存活行退化成同一个键 (user_id, ”, ”, kind) 而互相顶掉
 // ——用户建第二个 Agent 就撞唯一索引。守卫见
@@ -44,7 +44,7 @@ import (
 // utf8mb4_0900_ai_ci 下 CHAR(0) 这类控制字符的排序权重为空、会被直接忽略，
 // ('proj','Xdev') 与 ('projX','dev') 会拼成同一个键、误判成重复。放真列既没有这个
 // 问题，又能让 objectRepo.FindLocationByNaturalKey 走
-// (user_id, project_sync_id, agentred_fingerprint) 这个最左前缀。
+// (user_id, scope_sync_id, agentred_fingerprint) 这个最左前缀。
 //
 // idx_sync_objects_fingerprint 让指纹能直接 join 到 devices.fingerprint：web 控制台
 // 不需要额外的映射表就能说出「这条配置属于哪台机器」。PG 那边它带一个「指纹非空」的
@@ -73,7 +73,7 @@ func migration202609040106() *gormigrate.Migration {
 				  user_id              bigint NOT NULL,
 				  kind                 varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
 				  sync_id              varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
-				  project_sync_id      varchar(255) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
+				  scope_sync_id        varchar(255) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  agentred_fingerprint varchar(255) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  payload              json NOT NULL DEFAULT ('{}'),
 				  version              bigint NOT NULL,
@@ -105,7 +105,7 @@ func migration202609040106() *gormigrate.Migration {
 				    (JSON_UNQUOTE(JSON_EXTRACT(payload, '$.avatar_hash'))) STORED,
 				  UNIQUE KEY uk_sync_objects_identity (user_id, sync_id),
 				  UNIQUE KEY uk_sync_objects_natural
-				    (user_id, project_sync_id, agentred_fingerprint, live_natural_key),
+				    (user_id, scope_sync_id, agentred_fingerprint, live_natural_key),
 				  KEY idx_sync_objects_cursor (user_id, version),
 				  KEY idx_sync_objects_fingerprint (user_id, agentred_fingerprint),
 				  KEY idx_sync_objects_tombstone (deleted_at),

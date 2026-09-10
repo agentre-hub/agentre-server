@@ -122,7 +122,7 @@ func TestSaveObject_GivenGreaterVersion_ThenConditionalUpdateWins(t *testing.T) 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
 		"UPDATE `sync_objects` SET `agentred_fingerprint`=?,`deleted_at`=?,`kind`=?,"+
-			"`origin_fingerprint`=?,`payload`=?,`project_sync_id`=?,`updated_at`=?,`updatetime`=?,`version`=? "+
+			"`origin_fingerprint`=?,`payload`=?,`scope_sync_id`=?,`updated_at`=?,`updatetime`=?,`version`=? "+
 			"WHERE user_id=? AND sync_id=? AND version<?")).
 		WithArgs("", int64(0), sync_entity.KindProject, "", `{"name":"a"}`, "", int64(0), int64(0), int64(9),
 			int64(7), "p1", int64(9)).
@@ -213,7 +213,7 @@ func TestSaveObject_GivenLocationConflict_ThenErrorIsLoud(t *testing.T) {
 
 	err := r.Save(ctx, &sync_entity.SyncObject{
 		UserID: 7, Kind: sync_entity.KindProjectLocation, SyncID: "loc-B",
-		ProjectSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: `{}`, Version: 9,
+		ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Payload: `{}`, Version: 9,
 	})
 	assert.ErrorIs(t, err, locationConflict)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -253,14 +253,15 @@ func TestFindLocationByNaturalKey_GivenTombstones_ThenOnlyLiveRowMatches(t *test
 
 // 打墓碑是条件更新，返回受影响行数：已经是墓碑时为 0，由 service 决定这意味着什么。
 // CLI 覆盖与项目路径一样，按（账号、backend sync id、设备指纹）天然去重；后端
-// sync id 复用 project_sync_id 列，以便这个查询与新增的部分唯一键走同一套列。
+// sync id 落在 scope_sync_id 列上——那一列装什么本就取决于 kind，这个查询与那条
+// 部分唯一键因此走同一套列。
 func TestFindCLIOverlayByNaturalKey_GivenLiveOverlay_ThenFindsOnlyThatNaturalKey(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`deleted_at=0`)).
 		WithArgs(int64(7), sync_entity.KindAgentBackendCLI, "backend-1", "fp-a", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "project_sync_id", "agentred_fingerprint"}).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "scope_sync_id", "agentred_fingerprint"}).
 			AddRow(int64(55), sync_entity.KindAgentBackendCLI, "backend-1", "fp-a"))
 
 	got, err := r.FindCLIOverlayByNaturalKey(ctx, 7, "backend-1", "fp-a")

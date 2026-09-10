@@ -9,7 +9,7 @@
           "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P2",
           "base_version": 0,
           "updated_at": 1700000000000,
-          "project_sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+          "scope_sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
           "agentred_fingerprint": "fp-agentred-01",
           "payload": {
             "configured": true

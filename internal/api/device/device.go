@@ -81,10 +81,14 @@ type RelayTicketRequest struct {
 type RelayTicketResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
-	// ClientID 是这枚票里签着的网页对端身份（账号级派生，决策 8/9）。浏览器拿它当
-	// 自己的对端标识，而不是自己生成一个存在 localStorage 里——那个清一次站点数据
-	// 就换人，此前从网页发起的对话在镜像里当场成为孤儿。
-	ClientID string `json:"client_id"`
+	// PeerFingerprint 是这枚票里签着的网页对端身份（账号级派生，决策 8/9）。浏览器
+	// 拿它当自己的对端标识，而不是自己生成一个存在 localStorage 里——那个清一次
+	// 站点数据就换人，此前从网页发起的对话在镜像里当场成为孤儿。
+	//
+	// 名字与 JWT 里的 pfp、与 /v1/agent-sessions、/v1/session-import、dispatch 上行
+	// 里的 peer_fingerprint 是同一个值同一个名字。它一度叫 client_id，而 client_id
+	// 在同一个服务的 /v1/oauth/* 底下是 RFC 6749 的注册客户端 —— 两回事。
+	PeerFingerprint string `json:"peer_fingerprint"`
 }
 
 type TokenRefreshRequest struct {

@@ -16,8 +16,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
 import {
-  useRelayMachine,
-  type UseRelayMachineOptions,
+  useRelayChannel,
+  type UseRelayChannelOptions,
 } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -28,10 +28,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 
 /** 冻住的起点。只假 `Date`，定时器保持真的 —— 心跳还是那 200ms 一跳。 */
 const T0 = 1_756_000_000_000;
@@ -56,7 +56,7 @@ const summary = {
   latestSeq: 1,
 };
 
-let capturedOpts: UseRelayMachineOptions = {};
+let capturedOpts: UseRelayChannelOptions = {};
 
 const fakeClient = {
   request: vi.fn(),
@@ -114,7 +114,7 @@ function renderPage(navState?: Record<string, unknown>) {
       client: fakeClient as never,
       relayState: "connected",
       relayTicket: {
-        clientId: "fp-web",
+        peerFingerprint: "fp-web",
         clientName: "Browser",
         accessToken: "t",
         expiresAt: Date.now() + 120_000,

@@ -28,7 +28,7 @@ func (f *Follow) Save(c *gin.Context, req *api.SaveSessionRequest) (*api.SaveSes
 	}
 	if err := saved_session_svc.Default().Save(c.Request.Context(), saved_session_svc.SessionRef{
 		UserID:             userID,
-		MachineFingerprint: req.MachineFingerprint,
+		MachineFingerprint: req.DeviceFingerprint,
 		PeerFingerprint:    req.PeerFingerprint,
 		ConversationID:     req.ConversationID,
 	}); err != nil {
@@ -66,7 +66,7 @@ func (f *Follow) List(c *gin.Context, _ *api.ListSavedSessionsRequest) (*api.Lis
 		resp.Items = append(resp.Items, api.SavedSessionRef{
 			DeviceFingerprint: it.DeviceFingerprint,
 			ConversationID:    it.ConversationID,
-			FollowedAt:        it.FollowedAt,
+			SavedAt:           it.FollowedAt,
 			Invalid:           it.Invalid,
 		})
 	}

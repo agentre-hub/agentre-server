@@ -1,6 +1,6 @@
 {
   "currentTarget": "当前落到 {{device}}",
-  "noAvailableTarget": "没有可用的执行机器",
+  "noAvailableTarget": "没有可用的执行目标",
   "thisDevice": "本机",
   "noDevice": "未指定设备",
   "offline": "离线",

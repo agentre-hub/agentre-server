@@ -1,7 +1,7 @@
 /**
  * 移动端会话详情页（屏 22 / 48c）：「关注 / 取消关注」这个概念已经作废
  * （2026-08-18-server-session-mirror.md 决策 5），详情页顶栏因此不再有那个开关。
- *   - 移动端顶栏没有 Follow / Unfollow，也不对 /v1/follows 发任何请求。
+ *   - 移动端顶栏没有 Follow / Unfollow，也不对 /v1/saved-sessions 这一族发任何请求。
  *   - 桌面（非移动）与右栏嵌入形态同样没有。
  *
  * 收进账号现在叫**保存**，入口在索引的机器轴那一档（决策 11），而且第一次保存要先
@@ -22,7 +22,7 @@ import {
 } from "vitest";
 
 import { api } from "@/lib/api";
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
@@ -32,10 +32,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 
 const originalMatchMedia = window.matchMedia;
 
@@ -110,7 +110,7 @@ function renderPage() {
     client: fakeClient as never,
     relayState: "connected",
     relayTicket: {
-      clientId: "fp-web",
+      peerFingerprint: "fp-web",
       clientName: "Browser",
       accessToken: "t",
       expiresAt: Date.now() + 120_000,
@@ -153,7 +153,7 @@ function stubApi() {
 }
 
 describe("移动端会话详情:「关注」已经作废(决策 5)", () => {
-  it("顶栏没有关注开关,也不对 /v1/follows 发任何请求", async () => {
+  it("顶栏没有关注开关,也不对 /v1/saved-sessions 发任何请求", async () => {
     mockMobileViewport();
     stubApi();
     renderPage();
@@ -163,12 +163,12 @@ describe("移动端会话详情:「关注」已经作废(决策 5)", () => {
     // 索引的机器轴上,而且第一次保存要先说清楚内容会被存下来。
     expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unfollow" })).toBeNull();
-    // 端点本身也没了(router 只留保存 / 删除 / 读名单):留着一个按了 404 的书签,
-    // 比没有按钮更糟 —— 它的失败被静默吞掉,用户以为自己保存过了。
-    const followCalls = mockedApi.mock.calls.filter((c) =>
-      String(c[0]).startsWith("/v1/follows"),
+    // 顶栏也不碰接替它的那一族端点:保存的入口在索引的机器轴上(决策 11),详情页
+    // 既不保存、不删除,也不去读名单——留着一个静默失败的书签比没有按钮更糟。
+    const savedSessionCalls = mockedApi.mock.calls.filter((c) =>
+      String(c[0]).startsWith("/v1/saved-sessions"),
     );
-    expect(followCalls).toEqual([]);
+    expect(savedSessionCalls).toEqual([]);
   });
 });
 
@@ -180,7 +180,7 @@ describe("SessionDetailView embedded 形态(任务 5 重构边界)", () => {
       client: fakeClient as never,
       relayState: "connected",
       relayTicket: {
-        clientId: "fp-web",
+        peerFingerprint: "fp-web",
         clientName: "Browser",
         accessToken: "t",
         expiresAt: Date.now() + 120_000,

@@ -80,7 +80,7 @@ func (s *workspaceSvc) ProjectMachines(
 	// 这个项目在各台 agentred 上的落脚点，按指纹索引。
 	locationByFingerprint := map[string]*sync_entity.SyncObject{}
 	for _, row := range rows {
-		if row.Kind == sync_entity.KindProjectLocation && row.ProjectSyncID == projectSyncID &&
+		if row.Kind == sync_entity.KindProjectLocation && row.ScopeSyncID == projectSyncID &&
 			row.AgentredFingerprint != "" {
 			locationByFingerprint[row.AgentredFingerprint] = row
 		}
@@ -253,13 +253,13 @@ func projectsWithARunnablePath(
 		}
 	}
 	for _, row := range rows {
-		if row.Kind != sync_entity.KindProjectLocation || row.ProjectSyncID == "" ||
+		if row.Kind != sync_entity.KindProjectLocation || row.ScopeSyncID == "" ||
 			!agentredFingerprints[row.AgentredFingerprint] {
 			continue
 		}
 		var lp projectLocationPayload
 		if json.Unmarshal([]byte(row.Payload), &lp) == nil && lp.Path != "" {
-			out[row.ProjectSyncID] = true
+			out[row.ScopeSyncID] = true
 		}
 	}
 	return out, nil

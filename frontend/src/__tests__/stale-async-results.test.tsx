@@ -17,7 +17,7 @@ import type { SessionSummary } from "@agentre-hub/agentre-wire";
 import { api } from "@/lib/api";
 import type { DeviceItem } from "@/lib/devices";
 import type { RelayState } from "@/lib/relayClient";
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import { loadMirrorTail } from "@/components/session/sessionMirror";
 import {
   useSessionSend,
@@ -36,7 +36,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 vi.mock("@/lib/accountChannel", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
   return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
@@ -49,7 +49,7 @@ vi.mock("@/components/session/sessionMirror", async (importOriginal) => {
 
 const mockedApi = vi.mocked(api);
 const mockedMirrorTail = vi.mocked(loadMirrorTail);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 
 /** 一个手动兑现的 promise：把「在飞」这段时间摊开来，好在中间换目标。 */
 function deferred<T>() {
@@ -74,7 +74,7 @@ const summary = {
 } as unknown as SessionSummary;
 
 const relayTicket = {
-  clientId: "fp-web",
+  peerFingerprint: "fp-web",
   clientName: "Browser",
   accessToken: "t",
   expiresAt: Date.now() + 120_000,
@@ -259,7 +259,7 @@ describe("在途的「加载更早」：目标换了就不拼进新目标的转�
 function mirrored(over: Partial<MirroredSession> = {}): MirroredSession {
   return {
     peer_fingerprint: "fp-1",
-    machine_fingerprint: "fp-1",
+    device_fingerprint: "fp-1",
     conversation_id: "42",
     title: "重构登录页",
     lifecycle_state: "idle",

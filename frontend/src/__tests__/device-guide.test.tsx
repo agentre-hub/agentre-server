@@ -2,7 +2,13 @@
  * @vitest-environment jsdom
  * @vitest-environment-options { "url": "https://console.example.test/devices" }
  */
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   BrowserRouter,
   MemoryRouter,
@@ -303,7 +309,7 @@ describe("add-device guide · steps and commands", () => {
     expect(step1.getAttribute("aria-current")).toBeNull();
     // 跳步过去的：第 1/2 步没有点过「下一步」，就不该显示完成
     expect(within(step1).queryByText("Signed in")).toBeNull();
-    expect(within(stepCell(2)).queryByText("Authorized")).toBeNull();
+    expect(within(stepCell(2)).queryByText("Approved")).toBeNull();
   });
 
   it("点过某一步的「下一步」才出现完成标记，并前进到下一步", () => {
@@ -317,7 +323,7 @@ describe("add-device guide · steps and commands", () => {
     const step2 = stepCell(2);
     expect(within(step1).getByText("Signed in")).toBeTruthy();
     expect(step2.getAttribute("aria-current")).toBe("step");
-    expect(within(step2).queryByText("Authorized")).toBeNull();
+    expect(within(step2).queryByText("Approved")).toBeNull();
   });
 
   it("最后一步的完成按钮只落一个勾：不把正文推进一个不存在的编号而渲染成空白", () => {
@@ -455,14 +461,19 @@ describe("add-device guide · steps and commands", () => {
       value: undefined,
       configurable: true,
     });
+    const execCommand = vi.fn().mockReturnValue(false);
     Object.defineProperty(document, "execCommand", {
       configurable: true,
-      value: vi.fn().mockReturnValue(false),
+      value: execCommand,
     });
 
     renderGuide();
     fireEvent.click(screen.getByTestId("add-device-copy-install"));
 
+    // 先等这次复制真的尝试过并把结果送回按钮 —— 少了这一步，下面那句
+    // queryByText 只是在断言「这一拍还没重渲染」（成功那条用例正是靠
+    // findByText 才等到「已复制」的），谎报成功也照样绿。
+    await waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
     expect(screen.queryByText("Copied")).toBeNull();
     expect(screen.getByTestId("add-device-command-install").textContent).toBe(
       INSTALL_UNIX,

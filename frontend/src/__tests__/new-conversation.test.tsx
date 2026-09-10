@@ -32,7 +32,7 @@ import {
 import { readRecentAgents } from "@/lib/recentAgents";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 import { RelayError } from "@/lib/relayClient";
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
@@ -59,7 +59,7 @@ vi.mock("@/lib/relayTicket", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/relayTicket")>();
   return { ...actual, ensureRelayTicket: vi.fn() };
 });
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 // 账号级实时通道自己要取一张票据（它就是靠票据接入的）。这个文件断言的是**挑
 // Agent 那条路**不取票据，所以把通道挡在外面，别让它替被测的那条路背锅。
 vi.mock("@/lib/accountChannel", async (importOriginal) => {
@@ -71,7 +71,7 @@ const mockedApi = vi.mocked(api);
 const mockFetchPlan = vi.mocked(fetchDispatchPlan);
 const mockDispatch = vi.mocked(dispatchNewConversation);
 const mockEnsureRelayTicket = vi.mocked(ensureRelayTicket);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 
 const agents = [
   {
@@ -176,7 +176,7 @@ const allUnavailablePlan: DispatchPlan = {
 };
 
 const relayTicket = {
-  clientId: "fp-web",
+  peerFingerprint: "fp-web",
   clientName: "Chrome · macOS",
   accessToken: "web-jwt",
   expiresAt: Date.now() + 120_000,
@@ -187,7 +187,7 @@ const mirroredSession = {
   peer_fingerprint: "fp-a",
   // 承载它的那台机器：索引行按这一维认设备（详情要连的就是它）。服务端从保存名单
   // 投影出来，每一条镜像行上都有。
-  machine_fingerprint: "fp-a",
+  device_fingerprint: "fp-a",
   conversation_id: "42",
   title: "重构登录页",
   agent_sync_id: "agent-1",
@@ -727,7 +727,7 @@ describe("一条还没发第一句的对话", () => {
     await waitFor(() =>
       expect(posted).toEqual([
         {
-          machine_fingerprint: "fp-a",
+          device_fingerprint: "fp-a",
           peer_fingerprint: "fp-web",
           conversation_id: "99",
         },

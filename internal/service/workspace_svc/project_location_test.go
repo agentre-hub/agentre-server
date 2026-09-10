@@ -43,7 +43,7 @@ func desktopDevice(id int64, name, fingerprint string) *device_entity.Device {
 func locationRow(id int64, syncID, projectSyncID, fingerprint, path string) *sync_entity.SyncObject {
 	return &sync_entity.SyncObject{
 		ID: id, UserID: 7, Kind: sync_entity.KindProjectLocation, SyncID: syncID,
-		ProjectSyncID: projectSyncID, AgentredFingerprint: fingerprint,
+		ScopeSyncID: projectSyncID, AgentredFingerprint: fingerprint,
 		Payload: `{"path":"` + path + `"}`, Version: 10,
 	}
 }
@@ -226,7 +226,7 @@ func TestSetProjectLocation_GivenNoExistingRow_ThenCreatesWithTheNaturalKeyOnCol
 	require.NotNil(t, saved)
 
 	assert.Equal(t, sync_entity.KindProjectLocation, saved.Kind)
-	assert.Equal(t, "proj-1", saved.ProjectSyncID, "自然键的一半在列上")
+	assert.Equal(t, "proj-1", saved.ScopeSyncID, "自然键的一半在列上")
 	assert.Equal(t, "fp-1", saved.AgentredFingerprint, "自然键的另一半也在列上")
 	assert.Equal(t, "/srv/agentre-server", payloadKey(t, saved.Payload, "path"))
 	assert.Equal(t, int64(401), saved.Version)

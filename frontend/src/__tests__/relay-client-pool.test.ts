@@ -58,7 +58,7 @@ class FakeClient {
 const ticket: RelayTicket = {
   accessToken: "tok",
   expiresAt: Date.now() + 120_000,
-  clientId: "browser-1",
+  peerFingerprint: "browser-1",
   clientName: "Chrome · macOS",
 };
 

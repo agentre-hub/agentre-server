@@ -18,7 +18,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
 // 副行 cardSummary 的「对话在跑」数要真去问那台 agentred（与 DeviceSessionCounts
 // 同一真相源）：3 条会话里 2 条 running。
 //
-// 每个 target 只造一份并缓存住：真 useRelayMachine 交出的 client 在同一个目标上是
+// 每个 target 只造一份并缓存住：真 useRelayChannel 交出的 client 在同一个目标上是
 // **稳定**的，而 useSessionCounts 把它写进 effect 依赖。每次渲染新造一个对象会让
 // 「取计数 → setState → 重渲染 → 又取一次」永远转下去，假时钟下这会把整条微任务
 // 队列占死。
@@ -27,7 +27,7 @@ vi.mock("@/hooks/use-relay", () => {
   const counts = { total: 3n, running: 2n, waiting: 1n };
   const perTarget = new Map<string, unknown>();
   return {
-    useRelayMachine: (target: string | null) => {
+    useRelayChannel: (target: string | null) => {
       const key = target ?? "";
       if (!perTarget.has(key)) {
         perTarget.set(key, {

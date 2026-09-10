@@ -9,11 +9,11 @@ import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
 import PageTitle from "@/components/PageTitle";
 import { api, ApiError } from "@/lib/api";
 import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
-import { normalize, toChars } from "@/lib/userCode";
+import { parseUserCode, toChars } from "@/lib/userCode";
 
 /**
  * 码格的就地校验错误。两种来源共用同一套「整排标红、停在原地」的呈现：
- * - incomplete：本地归一化就没过（不足六位、或含字母表外字符），不发请求
+ * - incomplete：本地解析就没过（不足六位、或含字母表外字符），不发请求
  * - invalid：后端回 30205，代码不存在或已被消费
  * 文案分开是因为「这个代码不存在」对一个只填了两位的人是句假话。
  */
@@ -42,7 +42,7 @@ export default function Device() {
   const errorId = useId();
 
   useEffect(() => {
-    const norm = normalize(initial);
+    const norm = parseUserCode(initial);
     if (norm) void loadPending(norm);
   }, [initial]);
 
@@ -82,8 +82,8 @@ export default function Device() {
 
   function onSubmitCode(e: FormEvent) {
     e.preventDefault();
-    const norm = normalize(chars.join(""));
-    // 归一化不过就地报错，一个请求都不发。
+    const norm = parseUserCode(chars.join(""));
+    // 解析不过就地报错，一个请求都不发。
     if (!norm) {
       setCodeError("incomplete");
       return;

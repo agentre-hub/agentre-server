@@ -71,7 +71,7 @@ func TestCreateIssue_ThenServerAllocatesIDVersionAndWritesTheWirePayload(t *test
 	assert.Equal(t, int64(301), row.Version)
 	assert.Empty(t, row.OriginFingerprint, "服务端直写的来源标识是空串")
 	assert.Zero(t, row.DeletedAt)
-	assert.Empty(t, row.ProjectSyncID,
+	assert.Empty(t, row.ScopeSyncID,
 		"任务的项目在载荷里表达，不占 project_sync_id 列——那一列是路径记录的自然键")
 
 	assert.Equal(t, "新卡", payloadKey(t, row.Payload, "title"))

@@ -44,7 +44,7 @@ import {
   useSessionTargetDevice,
 } from "@/components/session/useSessionTargetDevice";
 import { useAliveEffect } from "@/hooks/use-api-query";
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import {
   TranscriptSessionId,
   pendingUserMessage,
@@ -464,7 +464,7 @@ export default function SessionDetailView({
     relayTicketError,
     handshakeRejection,
     reconnect,
-  } = useRelayMachine(relayTarget, {
+  } = useRelayChannel(relayTarget, {
     onEvent: (f, at) => {
       const kind = (f.event as { kind?: string } | undefined)?.kind;
       if (f.conversationId === sid) {
@@ -1468,7 +1468,7 @@ export default function SessionDetailView({
       ready={ready}
       catchUpFailed={catchUpFailed}
       messages={messages}
-      localFingerprint={relayTicket?.clientId}
+      localFingerprint={relayTicket?.peerFingerprint}
       agentName={agent?.name}
       agentAvatar={rowAvatar}
       agentPending={agentPending}

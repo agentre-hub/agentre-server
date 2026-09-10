@@ -1,6 +1,12 @@
 import { useAutoHideScrollbars, useTheme } from "@agentre-hub/agentre-ui";
 import { useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Navigate,
+  useParams,
+} from "react-router-dom";
 import { Toaster } from "sonner";
 import Login from "./pages/Login";
 import Account from "./pages/Account";
@@ -30,12 +36,16 @@ export const ChatPage = lazyPage(() => import("./pages/Chat"));
  * 同一批会话，差别只是范围，而范围正是「轴」能表达的东西。因此这条旧地址重定向到
  * 机器轴——那台机器就是索引里的一组，落地的形态仍是它上报的全量会话加行尾「保存」。
  *
- * 「选中一台机器」这回事已经不存在了（规格 2026-08-21 决策 5），因此不再往地址上
- * 预置任何机器：机器轴一进来就是**每台**在线机器此刻的清单。**已知代价**：从这条
- * 旧地址落地后看到的是全部机器，而不是只有原先那一台。
+ * **范围随地址一起过去**：`:deviceId` 落成 `?machine=<设备标识>`，索引因此只列那
+ * 一台。入口那句话是「查看这台机器的对话」，丢掉这一段就名不副实——落地看到的是
+ * 账号下每一台在线机器。机器轴本身（不带 `?machine=`）仍是每台各一组，两者是
+ * 「这一台」与「全部」的关系，不是两套东西。
  */
 function DeviceSessionsRedirect() {
-  return <Navigate to="/chat?axis=machine" replace />;
+  const { deviceId } = useParams<{ deviceId: string }>();
+  const params = new URLSearchParams({ axis: "machine" });
+  if (deviceId) params.set("machine", deviceId);
+  return <Navigate to={`/chat?${params.toString()}`} replace />;
 }
 
 export default function App() {

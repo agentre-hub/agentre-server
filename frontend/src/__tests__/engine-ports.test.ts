@@ -70,7 +70,7 @@ beforeEach(() => {
   mockedEnsureRelayTicket.mockResolvedValue({
     accessToken: "ticket",
     expiresAt: Date.now() + 120_000,
-    clientId: "browser-fp",
+    peerFingerprint: "browser-fp",
     clientName: "Browser",
   });
 });

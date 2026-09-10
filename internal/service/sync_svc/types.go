@@ -48,8 +48,9 @@ type PushItem struct {
 	// 之后落地只能另行编造一个删除时间（2026-08-27-schema-overhaul.md 决策 20）。
 	DeletedAt           int64
 	AgentredFingerprint string
-	ProjectSyncID       string
-	Payload             []byte
+	// ScopeSyncID 见 sync_entity.SyncObject.ScopeSyncID：装什么取决于 kind。
+	ScopeSyncID string
+	Payload     []byte
 }
 
 type PushInput struct {
@@ -98,7 +99,7 @@ type PullInput struct {
 type PullItem struct {
 	Kind                string
 	SyncID              string
-	ProjectSyncID       string
+	ScopeSyncID         string
 	AgentredFingerprint string
 	Payload             []byte
 	Version             int64

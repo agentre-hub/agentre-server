@@ -38,7 +38,7 @@
       "generic": "添加失败，请重试。"
     }
   },
-  "sessions": {
+  "signins": {
     "title": "登录会话",
     "subtitle": "这个账号当前登录着的浏览器。",
     "current": "当前会话",

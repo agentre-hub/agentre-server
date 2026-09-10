@@ -76,8 +76,8 @@ function sessionTimesLine(t: Translate, s: SessionRow): string {
   return (
     " · " +
     [
-      t("account.sessions.signedInAt", { date: formatDate(s.created_at) }),
-      t("account.sessions.lastActiveAt", {
+      t("account.signins.signedInAt", { date: formatDate(s.created_at) }),
+      t("account.signins.lastActiveAt", {
         date: formatDate(s.last_active_at),
       }),
     ].join(" · ")
@@ -325,7 +325,7 @@ export default function Account() {
       setExpandedIndex(null);
     } catch (e) {
       setSignOutError(
-        e instanceof ApiError ? e.message : t("account.sessions.signOutError"),
+        e instanceof ApiError ? e.message : t("account.signins.signOutError"),
       );
       return;
     } finally {
@@ -524,8 +524,8 @@ export default function Account() {
 
           {/* 登录会话卡 */}
           <SectionCard
-            title={t("account.sessions.title")}
-            subtitle={t("account.sessions.subtitle")}
+            title={t("account.signins.title")}
+            subtitle={t("account.signins.subtitle")}
             action={
               otherCount > 0 ? (
                 <Button
@@ -536,7 +536,7 @@ export default function Account() {
                     setConfirmingSignOutOthers(true);
                   }}
                 >
-                  {t("account.sessions.signOutOthers")}
+                  {t("account.signins.signOutOthers")}
                 </Button>
               ) : undefined
             }
@@ -544,7 +544,7 @@ export default function Account() {
             {sessionsError ? (
               <CardLoadError
                 error={sessionsError}
-                fallback={t("account.sessions.loadError")}
+                fallback={t("account.signins.loadError")}
                 onRetry={() => {
                   setSessionsError(null);
                   setSessionsReload((k) => k + 1);
@@ -597,7 +597,7 @@ export default function Account() {
                               {s.current && (
                                 <StatusMark
                                   tone="running"
-                                  label={t("account.sessions.current")}
+                                  label={t("account.signins.current")}
                                 />
                               )}
                             </div>
@@ -613,7 +613,7 @@ export default function Account() {
                 </ul>
                 {otherCount === 0 && (
                   <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
-                    {t("account.sessions.onlyCurrent")}
+                    {t("account.signins.onlyCurrent")}
                   </p>
                 )}
               </>
@@ -728,7 +728,7 @@ export default function Account() {
         busy={signingOut}
       >
         <DialogShellHeader
-          title={t("account.sessions.signOutOthersTitle", {
+          title={t("account.signins.signOutOthersTitle", {
             count: otherCount,
           })}
           danger
@@ -737,7 +737,7 @@ export default function Account() {
         />
         <DialogShellBody>
           <p className="text-aux leading-relaxed text-muted-foreground">
-            {t("account.sessions.signOutOthersBody")}
+            {t("account.signins.signOutOthersBody")}
           </p>
         </DialogShellBody>
         <DialogShellFooter error={signOutError}>
@@ -753,7 +753,7 @@ export default function Account() {
             busy={signingOut}
             onClick={onConfirmSignOutOthers}
           >
-            {t("account.sessions.signOutOthersConfirm")}
+            {t("account.signins.signOutOthersConfirm")}
           </DialogShellSubmit>
         </DialogShellFooter>
       </DialogShell>

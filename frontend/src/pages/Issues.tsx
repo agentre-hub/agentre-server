@@ -160,15 +160,15 @@ export default function Issues() {
   const { bindings } = useBoardDrag(
     React.useCallback(
       (id: number, stage: BoardStage, afterId: number) => {
-        void board.moveIssue(id, stage, afterId);
+        void board.moveTask(id, stage, afterId);
       },
       [board],
     ),
   );
 
   const openTask = React.useCallback(
-    (cardId: number) => {
-      const task = board.taskOf(cardId);
+    (taskId: number) => {
+      const task = board.taskOf(taskId);
       if (task) setEditing(task);
     },
     [board],
@@ -248,8 +248,8 @@ export default function Issues() {
           drag={bindings}
           ports={{
             onEdit: openTask,
-            onDelete: (cardId) => void board.deleteTask(cardId),
-            onMove: (cardId, stage) => void board.moveIssue(cardId, stage, 0),
+            onDelete: (taskId) => void board.deleteTask(taskId),
+            onMove: (taskId, stage) => void board.moveTask(taskId, stage, 0),
             onCreateTask: (stage) =>
               setEditing(initialTaskFormValue({ stage, scope: query.scope })),
             onClearFilters: () => setQuery(EMPTY_BOARD_QUERY),

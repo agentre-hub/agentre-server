@@ -3,8 +3,11 @@
  *
  * 这条地址上曾经住着一整页「这台机器的对话」。它与索引渲染的是同一批会话，差别
  * 只是范围，而范围正是「轴」能表达的东西——因此它现在**重定向**到机器轴
- * （Devices 页与会话详情页的返回链接都还指着它）。机器轴上不再有「选中一台」
- * 这回事（规格 2026-08-21 决策 5）：每台机器各自一组，那台机器就在其中。
+ * （Devices 页与会话详情页的返回链接都还指着它）。
+ *
+ * **范围要跟着过去**：地址里的 `:deviceId` 落成 `?machine=<设备标识>`，索引因此
+ * 只列那一台机器这一组。入口那句话是「查看这台机器的对话」，落地看到每一台机器
+ * 就是名不副实；而机器轴本身（不带 `?machine=`）仍是每台在线机器各一组。
  *
  * 落地后的形态必须仍是「发现并保存」：那台机器上有、账号里还没保存的对话一同
  * 列出，行尾是「保存」（规格 2026-08-18 决策 11）。这一条守的是**重定向本身与它
@@ -22,7 +25,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "@/App";
 import { api } from "@/lib/api";
-import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
+import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { MACHINE_LIST_PAGE_SIZE } from "@/pages/chat/useMachineReachability";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -31,10 +34,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 
 const signedInMe = {
   user_id: 1,
@@ -50,6 +53,17 @@ const deviceRow = {
   name: "书房小主机",
   kind: "agentred",
   fingerprint: "fp-1",
+  last_seen_at: 1754000000000,
+  status: 1,
+  online: true,
+};
+
+/** 账号下的另一台在线机器：范围没跟过来的话，它也会摆一组出来。 */
+const otherDeviceRow = {
+  id: 2,
+  name: "客厅小主机",
+  kind: "agentred",
+  fingerprint: "fp-2",
   last_seen_at: 1754000000000,
   status: 1,
   online: true,
@@ -96,12 +110,12 @@ const fakeClient = {
   close: vi.fn(),
 };
 
-function connectedRelay(): UseRelayMachineResult {
+function connectedRelay(): UseRelayChannelResult {
   return {
     client: fakeClient as never,
     relayState: "connected",
     relayTicket: {
-      clientId: "fp-web",
+      peerFingerprint: "fp-web",
       clientName: "Browser",
       accessToken: "t",
       expiresAt: Date.now() + 120_000,
@@ -120,7 +134,7 @@ beforeEach(async () => {
   mockedApi.mockImplementation(async (path: string) => {
     if (path === "/v1/auth/me") return signedInMe;
     if (path.startsWith("/v1/agent-sessions?")) return { total: 0, groups: [] };
-    if (path === "/v1/devices") return { devices: [deviceRow] };
+    if (path === "/v1/devices") return { devices: [deviceRow, otherDeviceRow] };
     if (path === "/v1/workspace/agents")
       return { agents: [{ sync_id: "ag-1", name: "后端 Agent" }] };
     if (path === "/v1/workspace/projects") return { projects: [] };
@@ -142,13 +156,27 @@ describe("设备下钻地址重定向进统一索引", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/chat"));
     const params = new URLSearchParams(window.location.search);
     expect(params.get("axis")).toBe("machine");
-    // 「选中一台」不再存在，地址上因此也不带它。
-    expect(params.get("machine")).toBeNull();
     expect((await screen.findByTestId("axis-picker")).textContent).toContain(
       "Machine",
     );
     const box = await screen.findByTestId("group-device-1");
     expect(within(box).getByText("书房小主机")).toBeTruthy();
+  });
+
+  it("入口说的是「这台机器」：范围跟着地址过来，别的机器一组都不列", async () => {
+    renderAt("/devices/1/sessions");
+
+    await screen.findByTestId("group-device-1");
+    // 地址上留得住范围：刷新、分享这条链接看到的还是这一台。
+    expect(new URLSearchParams(window.location.search).get("machine")).toBe(
+      "1",
+    );
+    expect(screen.queryByTestId("group-device-2")).toBeNull();
+    expect(screen.queryByText("客厅小主机")).toBeNull();
+    // 那台没被点的机器也不该被问一遍：范围之外的机器不开中继通道。
+    expect(mockUseRelay.mock.calls.map((c) => c[0])).not.toContain(
+      "machine:fp-2",
+    );
   });
 
   it("落地形态仍是「发现并保存」:那台机器上还没保存的对话 + 行尾「保存」", async () => {

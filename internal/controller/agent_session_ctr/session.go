@@ -21,19 +21,19 @@ func savedSessionItems(views []workspace_svc.SavedSessionSummaryView) []api.Save
 	items := make([]api.SavedSessionItem, 0, len(views))
 	for _, it := range views {
 		items = append(items, api.SavedSessionItem{
-			ConversationID:     it.ConversationID,
-			PeerFingerprint:    it.PeerFingerprint,
-			MachineFingerprint: it.MachineFingerprint,
-			Title:              it.Title,
-			AgentSyncID:        it.AgentSyncID,
-			ProjectSyncID:      it.ProjectSyncID,
-			BackendType:        it.BackendType,
-			LifecycleState:     it.LifecycleState,
-			WaitingForInput:    it.WaitingForInput,
-			LastMessageAt:      it.LastMessageAt,
-			LastReadAt:         it.LastReadAt,
-			ProviderKey:        it.ProviderKey,
-			ModelKey:           it.ModelKey,
+			ConversationID:    it.ConversationID,
+			PeerFingerprint:   it.PeerFingerprint,
+			DeviceFingerprint: it.MachineFingerprint,
+			Title:             it.Title,
+			AgentSyncID:       it.AgentSyncID,
+			ProjectSyncID:     it.ProjectSyncID,
+			BackendType:       it.BackendType,
+			LifecycleState:    it.LifecycleState,
+			WaitingForInput:   it.WaitingForInput,
+			LastMessageAt:     it.LastMessageAt,
+			LastReadAt:        it.LastReadAt,
+			ProviderKey:       it.ProviderKey,
+			ModelKey:          it.ModelKey,
 		})
 	}
 	return items

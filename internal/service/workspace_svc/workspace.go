@@ -1066,7 +1066,7 @@ func configuredProjects(
 	if dev.Kind == device_entity.KindAgentred {
 		for _, row := range rows {
 			if row.Kind == sync_entity.KindProjectLocation && row.AgentredFingerprint == dev.Fingerprint {
-				configured[row.ProjectSyncID] = true
+				configured[row.ScopeSyncID] = true
 			}
 		}
 		return configured, nil
@@ -1198,12 +1198,12 @@ func projectSyncIDByLocation(rows []*sync_entity.SyncObject) map[string]string {
 	for _, row := range rows {
 		var lp projectLocationPayload
 		if json.Unmarshal([]byte(row.Payload), &lp) != nil || lp.Path == "" ||
-			row.ProjectSyncID == "" {
+			row.ScopeSyncID == "" {
 			continue
 		}
 		key := row.AgentredFingerprint + "\x00" + lp.Path
-		if taken, ok := byLocation[key]; !ok || row.ProjectSyncID < taken {
-			byLocation[key] = row.ProjectSyncID
+		if taken, ok := byLocation[key]; !ok || row.ScopeSyncID < taken {
+			byLocation[key] = row.ScopeSyncID
 		}
 	}
 	return byLocation
@@ -1448,7 +1448,7 @@ func (s *workspaceSvc) CreateOrgObject(ctx context.Context, in OrgWriteInput) (*
 	}
 	obj := &sync_entity.SyncObject{
 		UserID: in.UserID, Kind: in.Kind, SyncID: newOrgSyncID(now),
-		ProjectSyncID: in.ProjectSyncID, AgentredFingerprint: in.AgentredFingerprint,
+		ScopeSyncID: in.ProjectSyncID, AgentredFingerprint: in.AgentredFingerprint,
 		Payload: string(payload), SyncUpdatedAt: now,
 		OriginFingerprint: ServerOriginFingerprint, Createtime: now, Updatetime: now,
 	}

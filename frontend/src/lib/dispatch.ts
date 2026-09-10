@@ -132,7 +132,7 @@ export interface DispatchedSession {
    */
   userText: string;
   /**
-   * 这条对话的**发起端**指纹 —— 就是这个浏览器的中继标识（`sourceClient.clientId`），
+   * 这条对话的**发起端**指纹 —— 就是这个浏览器的中继标识（`sourceClient.peerFingerprint`），
    * 与承载它的 `deviceFingerprint` 不是一回事。
    *
    * 落地那一屏（右栏 / 移动端下钻）拿它去问镜像的历史、去记「已读」，而账号里这条
@@ -246,7 +246,7 @@ export async function dispatchNewConversation(
     userText,
     // daemon 端按 {"type": ...} 解 backend（integration_test 的既有契约）。
     backend: { type: choice.backend_type },
-    sourceDevice: input.sourceClient.clientId,
+    sourceDevice: input.sourceClient.peerFingerprint,
     sourceDeviceName: browserDisplayName(),
     // 档位与模型只在**用户真的定了**时才带：空串与省略在 daemon 上解出的值相同,
     // 但带一个空值等于浏览器在主张「就用空的」,而跟随绑定本来就是不主张。
@@ -349,7 +349,7 @@ export async function dispatchNewConversation(
     // 重试就凭空再开一条真会话,第一条还留在机器上跑。因此这一步不参与成败判定。
     //
     // 身份的两半分开报，因为对 web 派发它们不是同一个值：
-    //   machine_fingerprint 是**承载**它的那台机器（镜像据它决定去连谁）；
+    //   device_fingerprint 是**承载**它的那台机器（镜像据它决定去连谁）；
     //   peer_fingerprint 是**发起**它的那一端 —— 就是这个浏览器。它不再是身份的
     //   一半（身份就是 conversation_id），但仍是来源标注与授权的依据。
     //
@@ -367,8 +367,8 @@ export async function dispatchNewConversation(
       await api("/v1/saved-sessions", {
         method: "POST",
         body: JSON.stringify({
-          machine_fingerprint: choice.device_fingerprint,
-          peer_fingerprint: input.sourceClient.clientId,
+          device_fingerprint: choice.device_fingerprint,
+          peer_fingerprint: input.sourceClient.peerFingerprint,
           conversation_id: ack.conversationId,
         }),
       });
@@ -387,7 +387,7 @@ export async function dispatchNewConversation(
       deviceFingerprint: choice.device_fingerprint,
       title,
       userText,
-      peerFingerprint: input.sourceClient.clientId,
+      peerFingerprint: input.sourceClient.peerFingerprint,
       modelPinned: pinTarget
         ? await pinModelTarget(client, ack.conversationId, pinTarget)
         : true,

@@ -18,7 +18,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
-import { useRelayMachine, type UseRelayMachineResult } from "@/hooks/use-relay";
+import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
@@ -27,10 +27,10 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 
 const mockedApi = vi.mocked(api);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 
 const originalMatchMedia = window.matchMedia;
 
@@ -85,7 +85,7 @@ const agents = [
 ];
 const waitingMirrored = {
   peer_fingerprint: "fp-1",
-  machine_fingerprint: "fp-1",
+  device_fingerprint: "fp-1",
   conversation_id: "42",
   title: "等你批",
   agent_sync_id: "ag-1",
@@ -96,7 +96,7 @@ const waitingMirrored = {
 };
 const runningMirrored = {
   peer_fingerprint: "fp-1",
-  machine_fingerprint: "fp-1",
+  device_fingerprint: "fp-1",
   conversation_id: "43",
   title: "跑着呢",
   agent_sync_id: "ag-1",
@@ -161,12 +161,12 @@ const fakeClient = {
   close: vi.fn(),
 };
 
-function connectedRelay(): UseRelayMachineResult {
+function connectedRelay(): UseRelayChannelResult {
   return {
     client: fakeClient as never,
     relayState: "connected",
     relayTicket: {
-      clientId: "fp-web",
+      peerFingerprint: "fp-web",
       clientName: "Browser",
       accessToken: "t",
       expiresAt: Date.now() + 120_000,

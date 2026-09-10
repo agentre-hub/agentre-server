@@ -1,5 +1,5 @@
 /**
- * `useRelayMachine` 对外报的连接状态（`relayState`）。
+ * `useRelayChannel` 对外报的连接状态（`relayState`）。
  *
  * 这个 hook 做的**不止**是转发 `RelayClient.onStateChange`：连接是两步的 ——
  * 先向 `/v1/relay/ticket` 换一张短效票，拿到票才建得出 client。第一步期间还没有
@@ -16,7 +16,7 @@ import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import type { RelayState } from "@/lib/relayClient";
 import { relayClientPool } from "@/lib/relayClientPool";
 import { ensureRelayTicket } from "@/lib/relayTicket";
@@ -79,7 +79,7 @@ const mockedEnsureRelayTicket = vi.mocked(ensureRelayTicket);
 const TICKET = {
   accessToken: "tok",
   expiresAt: Date.now() + 120_000,
-  clientId: "browser-1",
+  peerFingerprint: "browser-1",
   clientName: "Chrome · macOS",
 };
 
@@ -107,9 +107,9 @@ beforeEach(() => {
   mockedEnsureRelayTicket.mockReset();
 });
 
-describe("useRelayMachine 的连接状态", () => {
+describe("useRelayChannel 的连接状态", () => {
   it("还没有目标机器时不谎称在连", () => {
-    const { result } = renderHook(() => useRelayMachine(null));
+    const { result } = renderHook(() => useRelayChannel(null));
     expect(result.current.relayState).toBe("disconnected");
     expect(mockedEnsureRelayTicket).not.toHaveBeenCalled();
   });
@@ -118,7 +118,7 @@ describe("useRelayMachine 的连接状态", () => {
     const gate = pending<typeof TICKET>();
     mockedEnsureRelayTicket.mockReturnValue(gate.promise);
 
-    const { result } = renderHook(() => useRelayMachine("fp-1"));
+    const { result } = renderHook(() => useRelayChannel("fp-1"));
 
     // 这一帧就是刷新后第一次打开对话看到的那一帧：票在路上，client 还不存在。
     expect(result.current.relayState).toBe("connecting");
@@ -139,7 +139,7 @@ describe("useRelayMachine 的连接状态", () => {
     const detail = "peer speaks protocol version 0.3.0, this build accepts …";
     mockedEnsureRelayTicket.mockResolvedValue(TICKET);
     const { result, rerender } = renderHook(
-      ({ target }: { target: string }) => useRelayMachine(target),
+      ({ target }: { target: string }) => useRelayChannel(target),
       { initialProps: { target: "fp-1" } },
     );
     await waitFor(() => expect(fake.instances).toHaveLength(1));
@@ -156,7 +156,7 @@ describe("useRelayMachine 的连接状态", () => {
     const gate = pending<typeof TICKET>();
     mockedEnsureRelayTicket.mockReturnValue(gate.promise);
 
-    const { result } = renderHook(() => useRelayMachine("fp-1"));
+    const { result } = renderHook(() => useRelayChannel("fp-1"));
     expect(result.current.relayState).toBe("connecting");
 
     gate.reject(new Error("boom"));
@@ -167,7 +167,7 @@ describe("useRelayMachine 的连接状态", () => {
 
   it("按下重新连接时立刻回到「连接中」,而不是先退回红色终态", async () => {
     mockedEnsureRelayTicket.mockResolvedValue(TICKET);
-    const { result } = renderHook(() => useRelayMachine("fp-1"));
+    const { result } = renderHook(() => useRelayChannel("fp-1"));
     await waitFor(() => expect(fake.instances).toHaveLength(1));
 
     // 重连是「让池子把这台机器那条连接原地换掉」：旧 client 先被 close 掉、重新
@@ -203,7 +203,7 @@ describe("useRelayMachine 的连接状态", () => {
     mockedEnsureRelayTicket.mockReturnValue(pending<typeof TICKET>().promise);
     const committed: RelayState[] = [];
     function Probe({ fp }: { fp: string | null }) {
-      const { relayState } = useRelayMachine(fp);
+      const { relayState } = useRelayChannel(fp);
       useEffect(() => {
         committed.push(relayState);
       });
@@ -228,7 +228,7 @@ describe("useRelayMachine 的连接状态", () => {
    */
   it("切走再切回来:借到池子里那条已连上的通道时不会卡在「连接中」", async () => {
     mockedEnsureRelayTicket.mockResolvedValue(TICKET);
-    const first = renderHook(() => useRelayMachine("fp-1"));
+    const first = renderHook(() => useRelayChannel("fp-1"));
     await waitFor(() => expect(fake.instances).toHaveLength(1));
     act(() => fake.instances[0].emit("connected"));
     await waitFor(() =>
@@ -236,7 +236,7 @@ describe("useRelayMachine 的连接状态", () => {
     );
 
     first.unmount();
-    const second = renderHook(() => useRelayMachine("fp-1"));
+    const second = renderHook(() => useRelayChannel("fp-1"));
 
     await waitFor(() =>
       expect(second.result.current.relayState).toBe("connected"),
@@ -250,7 +250,7 @@ describe("useRelayMachine 的连接状态", () => {
     mockedEnsureRelayTicket.mockReturnValue(pending<typeof TICKET>().promise);
     const committed: RelayState[] = [];
     function Probe() {
-      const { relayState } = useRelayMachine("fp-1");
+      const { relayState } = useRelayChannel("fp-1");
       useEffect(() => {
         committed.push(relayState);
       });

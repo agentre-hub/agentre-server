@@ -15,7 +15,7 @@ import { fetchDevices, type DeviceItem } from "@/lib/devices";
  * 探测撞上 401 要判会话失效。它们此前只能靠把整个详情页渲染出来间接碰到。
  *
  * 拆成两个 hook 是被调用顺序逼的，不是风格：中继连的是 device.fingerprint，
- * 所以 useRelayMachine 必须排在取设备之后；而断线原因探测要看它吐出来的
+ * 所以 useRelayChannel 必须排在取设备之后；而断线原因探测要看它吐出来的
  * relayState，只能再排在中继之后。中间那一层归组件，两头归这里。
  */
 export interface SessionTargetDevice {

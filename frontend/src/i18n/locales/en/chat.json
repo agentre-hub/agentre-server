@@ -38,7 +38,7 @@
   "pickedTargetUnavailable": "{{machine}} can't run it right now",
   "allUnavailableTitle": "“{{agent}}” has no machine available right now",
   "noProject": "No project",
-  "freeSession": "Free-form session",
+  "freeSession": "Free-form conversation",
   "pickProjectTitle": "Which project it runs in",
   "willRunOn": "Will run on <1></1>",
   "noAgentsTitle": "No agents yet",

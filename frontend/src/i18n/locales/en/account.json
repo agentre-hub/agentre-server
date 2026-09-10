@@ -38,8 +38,8 @@
       "generic": "Could not add this passkey. Try again."
     }
   },
-  "sessions": {
-    "title": "Sessions",
+  "signins": {
+    "title": "Signed-in browsers",
     "subtitle": "Browsers currently signed in to this account.",
     "current": "This session",
     "signedInAt": "Signed in {{date}}",

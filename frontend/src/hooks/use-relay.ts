@@ -26,7 +26,7 @@ import type { RelayTicket } from "@/lib/relayTicket";
  *
  * 实时回调经 ref 转发，避免回调闭包读到陈旧 state；页面可以放心传引用 setter。
  */
-export interface UseRelayMachineOptions {
+export interface UseRelayChannelOptions {
   /** 第二个参数是这一帧发生的时刻，见 `NotificationHandlers.onEvent`。 */
   onEvent?: (frame: EventFrame, createtime?: number) => void;
   onRunResultDone?: (frame: RunResultDoneFrame, createtime?: number) => void;
@@ -38,7 +38,7 @@ export interface UseRelayMachineOptions {
   onTurnStarted?: (frame: TurnStartedFrame, createtime?: number) => void;
 }
 
-export interface UseRelayMachineResult {
+export interface UseRelayChannelResult {
   client: RelayClient | null;
   relayState: RelayState;
   relayTicket: RelayTicket | null;
@@ -65,10 +65,10 @@ export interface UseRelayMachineResult {
   reconnect: () => void;
 }
 
-export function useRelayMachine(
+export function useRelayChannel(
   target: string | null,
-  opts: UseRelayMachineOptions = {},
-): UseRelayMachineResult {
+  opts: UseRelayChannelOptions = {},
+): UseRelayChannelResult {
   const [relayTicket, setRelayTicket] = useState<RelayTicket | null>(null);
   const [relayTicketError, setRelayTicketError] = useState<unknown>(null);
   /*

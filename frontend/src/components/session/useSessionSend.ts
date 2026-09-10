@@ -258,7 +258,7 @@ export function useSessionSend({
         : {}),
       permissionMode: effectivePermissionMode,
       ...(llmProviderKey ? { llmProviderKey, llmModelKey } : {}),
-      sourceDevice: relayTicket?.clientId,
+      sourceDevice: relayTicket?.peerFingerprint,
       sourceDeviceName: browserDisplayName(),
       backend: { type: summary?.backendType },
     });
@@ -358,7 +358,7 @@ export function useSessionSend({
       title: summary?.title,
       agentSyncId: summary?.agentSyncId,
       compact: true,
-      sourceDevice: relayTicket?.clientId,
+      sourceDevice: relayTicket?.peerFingerprint,
       sourceDeviceName: browserDisplayName(),
       backend: { type: summary?.backendType },
     });

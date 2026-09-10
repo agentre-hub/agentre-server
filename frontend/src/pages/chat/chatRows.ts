@@ -31,7 +31,7 @@ export interface MirroredSession {
    */
   peer_fingerprint: string;
   /** 承载这条对话、详情实际要连接的账号设备；与发起端可以不同。 */
-  machine_fingerprint: string;
+  device_fingerprint: string;
   title?: string;
   agent_sync_id?: string;
   project_sync_id?: string;
@@ -129,7 +129,7 @@ export function toMirrorRow(
   devicesByFp: Map<string, DeviceItem>,
   t: Translate,
 ): MirrorIndexRow {
-  const device = devicesByFp.get(s.machine_fingerprint);
+  const device = devicesByFp.get(s.device_fingerprint);
   return {
     key: rowKey(s.conversation_id),
     conversationId: s.conversation_id,
@@ -137,7 +137,7 @@ export function toMirrorRow(
     sessionId: 0,
     deviceId: device?.id,
     fingerprint: s.peer_fingerprint,
-    machineFingerprint: s.machine_fingerprint,
+    machineFingerprint: s.device_fingerprint,
     agentSyncId: s.agent_sync_id?.trim() ?? "",
     projectSyncId: s.project_sync_id?.trim() ?? "",
     updatedAt: s.last_message_at ?? 0,

@@ -55,9 +55,9 @@ type SavedSessionItem struct {
 	// PeerFingerprint 是发起这条对话那一端的设备指纹。它**不再是身份的一半**，
 	// 留作来源标注（机器轴那一组的分组键）与授权。
 	PeerFingerprint string `json:"peer_fingerprint"`
-	// MachineFingerprint 是当前承载这条对话的账号设备指纹，供 web 选择实际连接目标；
+	// DeviceFingerprint 是当前承载这条对话的账号设备指纹，供 web 选择实际连接目标；
 	// 与上面的发起端指纹分开，二者不能互相代替。
-	MachineFingerprint string `json:"machine_fingerprint"`
+	DeviceFingerprint string `json:"device_fingerprint"`
 	// Title / AgentSyncID 为空 = 发起端还没报过这两格。标题由首条消息派生、每轮随
 	// RunParams 幂等覆盖，所以还没发出第一句的会话就是没有标题。如实留空，不猜、
 	// 不填占位。

@@ -19,7 +19,7 @@ import {
 
 import CodeInput from "@/components/CodeInput";
 import { Card } from "@/components/ui/card";
-import { normalize, toChars } from "@/lib/userCode";
+import { parseUserCode, toChars } from "@/lib/userCode";
 
 /** 能被「加进来」的设备类型。浏览器不是可管理设备；移动端没有可装的客户端。 */
 type AddKind = "agentred" | "desktop";
@@ -132,7 +132,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
   }
 
   /**
-   * 第 2 步只做本地归一化，然后把设备码交给既有的授权确认屏。
+   * 第 2 步只做本地解析，然后把设备码交给既有的授权确认屏。
    *
    * 「这个代码存不存在 / 是不是已经用过」不在这里问：那一屏拿到 user_code
    * 就会自己查 pending，查不到时用同一套 device.entry.errors 就地标红且
@@ -141,7 +141,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
    */
   function submitCode(e: FormEvent) {
     e.preventDefault();
-    const norm = normalize(chars.join(""));
+    const norm = parseUserCode(chars.join(""));
     // 不足六位（码格本身已挡下字母表外的字符）：一个请求都不发，停在原地。
     if (!norm) {
       setIncomplete(true);

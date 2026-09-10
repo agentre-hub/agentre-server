@@ -75,9 +75,9 @@ func TestSessionIndex_ProjectAxis_FoldsLocationCountsIntoProjects(t *testing.T) 
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-b", Payload: mustJSON(t, map[string]any{"path": "/repo/y"})},
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(int64(10), nil)
@@ -210,7 +210,7 @@ func TestSessionIndex_UnassignedProjectScope_NegatesEveryKnownLocation(t *testin
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).AnyTimes()
 	want := agent_session_repo.SummaryQuery{
@@ -261,7 +261,7 @@ func TestSessionIndex_RowsCarryProjectAttributionWithoutCwd(t *testing.T) {
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
@@ -285,7 +285,7 @@ func TestSessionIndex_AxisSkeleton_ReadsProjectLocationsOnce(t *testing.T) {
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).Times(1)
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(3), nil)
@@ -371,7 +371,7 @@ func TestSessionIndex_RowFromAgentred_StillResolvedByLocation(t *testing.T) {
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
@@ -393,7 +393,7 @@ func TestSessionIndex_ProjectAxis_CountsReportedProjectsAlongsideLocations(t *te
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(int64(9), nil)
@@ -430,7 +430,7 @@ func TestSessionIndex_ProjectScope_AsksForBothReportedAndLocated(t *testing.T) {
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).AnyTimes()
 	want := agent_session_repo.SummaryQuery{
@@ -499,7 +499,7 @@ func TestSessionIndex_WebDispatchedRow_ResolvesProjectByHostingMachine(t *testin
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "machine-fp", Payload: mustJSON(t, map[string]any{"path": "/root/code"})},
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
@@ -524,7 +524,7 @@ func TestSessionIndex_ProjectAxis_FoldsCountsByHostingMachine(t *testing.T) {
 	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
 		[]*sync_entity.SyncObject{
 			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
-			{Kind: sync_entity.KindProjectLocation, ProjectSyncID: "proj-1",
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
 				AgentredFingerprint: "machine-fp", Payload: mustJSON(t, map[string]any{"path": "/root/code"})},
 		}, nil).AnyTimes()
 	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(int64(2), nil)

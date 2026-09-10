@@ -52,7 +52,7 @@
         "neverTitles": "对话标题与正文",
         "neverPaths": "文件路径与 cwd",
         "neverPrompts": "提示词与工具入参",
-        "backfill": "一并回填本机已有的历史",
+        "backfill": "一并回填各台机器上已有的历史",
         "backfillHint": "离线的机器等它上线后自动补，不用再点一次。",
         "foot": "随时可以在设置里关掉，关掉会一并删除已上报的计数。",
         "submit": "开启"

@@ -65,7 +65,7 @@ beforeEach(() => {
         return envelope({
           access_token: "tk",
           expires_in: 120,
-          client_id: "sha256:web",
+          peer_fingerprint: "sha256:web",
         });
       }
       return envelope(null);

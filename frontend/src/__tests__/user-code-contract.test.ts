@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { ALPHABET, CODE_LENGTH, normalize } from "@/lib/userCode";
+import { ALPHABET, CODE_LENGTH, parseUserCode } from "@/lib/userCode";
 
 /**
  * 设备码字母表契约守卫。
@@ -49,19 +49,19 @@ describe("设备码契约（前端 ↔ internal/pkg/usercode）", () => {
     expect(goConst("codeLen")).toBe(String(CODE_LENGTH));
   });
 
-  it("归一化后的形态就是后端 Normalize 返回的 XXX-XXX", () => {
+  it("解析通过后的形态就是后端 Normalize 返回的 XXX-XXX", () => {
     // 后端 Normalize 返回 string(cleaned[:3]) + "-" + string(cleaned[3:])。
     // 这条同时钉住「前端提交的是带连字符的形态」——approve/deny 拿的就是它。
-    expect(normalize("a4f7q2")).toBe("A4F-7Q2");
-    expect(normalize("a4f-7q2")).toBe("A4F-7Q2");
+    expect(parseUserCode("a4f7q2")).toBe("A4F-7Q2");
+    expect(parseUserCode("a4f-7q2")).toBe("A4F-7Q2");
   });
 
   it("字母表外的字符一律拒绝，长度不对也拒绝", () => {
     for (const bad of ["0", "O", "1", "I"]) {
       expect(ALPHABET.includes(bad), `${bad} 不该在字母表里`).toBe(false);
-      expect(normalize("A4F7Q" + bad)).toBeNull();
+      expect(parseUserCode("A4F7Q" + bad)).toBeNull();
     }
-    expect(normalize("A4F7Q")).toBeNull();
-    expect(normalize("A4F7Q22")).toBeNull();
+    expect(parseUserCode("A4F7Q")).toBeNull();
+    expect(parseUserCode("A4F7Q22")).toBeNull();
   });
 });

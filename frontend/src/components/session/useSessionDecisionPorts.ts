@@ -47,7 +47,7 @@ export interface SessionDecisionPorts {
    */
   refreshWaiters: () => Promise<Waiters | null>;
   /**
-   * 给实时回调用的稳定入口。中继那几个回调在 useRelayMachine 首次调用时就定了型，
+   * 给实时回调用的稳定入口。中继那几个回调在 useRelayChannel 首次调用时就定了型，
    * 拿不到后来渲染的 refreshWaiters —— 这一只每次都读最新那个。
    */
   requestWaitersRefresh: () => void;

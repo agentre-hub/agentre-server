@@ -271,8 +271,8 @@ func TestSnapshot_GivenTwoDeviceOverlays_ThenReturnsOnlyCallersPathAndProviderKe
 		sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI,
 	}).Return([]*sync_entity.SyncObject{
 		{Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main", Payload: `{"name":"Anthropic","api_key":"sk-secret"}`},
-		{Kind: sync_entity.KindAgentBackendCLI, ProjectSyncID: "backend-1", AgentredFingerprint: "fp-1", Payload: `{"cli_path":"/usr/local/bin/claude"}`},
-		{Kind: sync_entity.KindAgentBackendCLI, ProjectSyncID: "backend-1", AgentredFingerprint: "fp-2", Payload: `{"cli_path":"/opt/claude"}`},
+		{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-1", Payload: `{"cli_path":"/usr/local/bin/claude"}`},
+		{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-2", Payload: `{"cli_path":"/opt/claude"}`},
 	}, nil)
 
 	got, err := New().Snapshot(context.Background(), 7, "fp-1")
@@ -454,7 +454,7 @@ func TestCreateBackend_GivenCLIPath_ThenWritesThePerDeviceOverlay(t *testing.T) 
 	// 路径不进 backend 载荷——它不是后端配置的一部分，而是那台机器上的东西
 	assert.NotContains(t, backendRow.Payload, "cli_path")
 	assert.Equal(t, sync_entity.KindAgentBackendCLI, overlay.Kind)
-	assert.Equal(t, backendRow.SyncID, overlay.ProjectSyncID)
+	assert.Equal(t, backendRow.SyncID, overlay.ScopeSyncID)
 	assert.Equal(t, "sha256:aaaa", overlay.AgentredFingerprint)
 	assert.JSONEq(t, `{"cli_path":"/usr/local/bin/claude"}`, overlay.Payload)
 }
@@ -477,9 +477,9 @@ func TestUpdateBackend_GivenCLIPath_ThenRewritesOnlyTheBoundDeviceOverlay(t *tes
 	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
 		Return([]*sync_entity.SyncObject{
 			{ID: 9, UserID: 7, Kind: sync_entity.KindAgentBackendCLI, SyncID: "overlay-a",
-				ProjectSyncID: "backend-1", AgentredFingerprint: "sha256:aaaa", Payload: `{"cli_path":"/old/claude"}`},
+				ScopeSyncID: "backend-1", AgentredFingerprint: "sha256:aaaa", Payload: `{"cli_path":"/old/claude"}`},
 			{ID: 10, UserID: 7, Kind: sync_entity.KindAgentBackendCLI, SyncID: "overlay-b",
-				ProjectSyncID: "backend-1", AgentredFingerprint: "sha256:bbbb", Payload: `{"cli_path":"/other/machine/claude"}`},
+				ScopeSyncID: "backend-1", AgentredFingerprint: "sha256:bbbb", Payload: `{"cli_path":"/other/machine/claude"}`},
 		}, nil)
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil).Times(2)
 	var saved []*sync_entity.SyncObject
@@ -529,7 +529,7 @@ func TestListCLIOverlays_ThenReturnsThePathForBrowserEdits(t *testing.T) {
 	sync_repo.RegisterSyncObject(objects)
 	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
 		Return([]*sync_entity.SyncObject{{
-			Kind: sync_entity.KindAgentBackendCLI, ProjectSyncID: "backend-1",
+			Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1",
 			AgentredFingerprint: "sha256:aaaa", Payload: `{"cli_path":"/usr/local/bin/claude"}`,
 		}}, nil)
 

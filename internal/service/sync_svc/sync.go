@@ -239,7 +239,7 @@ func rejectReason(ctx context.Context, item PushItem) string {
 	// 自然键合并；而桌面端的 buildPushItem 删除分支刻意不读本地行（行可能已经软删），
 	// 因此路径记录的墓碑上行本来就不带 project_sync_id。
 	if (item.Kind == sync_entity.KindProjectLocation || item.Kind == sync_entity.KindAgentBackendCLI) &&
-		(item.ProjectSyncID == "" || item.AgentredFingerprint == "") && item.DeletedAt == 0 {
+		(item.ScopeSyncID == "" || item.AgentredFingerprint == "") && item.DeletedAt == 0 {
 		return PushRejectReasonKind
 	}
 	if err := sync_entity.ValidatePayload(item.Kind, item.Payload); err != nil {
@@ -311,7 +311,7 @@ func (s *syncSvc) applyItem(
 		UserID:              userID,
 		Kind:                item.Kind,
 		SyncID:              item.SyncID,
-		ProjectSyncID:       item.ProjectSyncID,
+		ScopeSyncID:         item.ScopeSyncID,
 		AgentredFingerprint: item.AgentredFingerprint,
 		Payload:             payloadOrEmptyObject(item.Payload),
 		SyncUpdatedAt:       item.UpdatedAt,
@@ -357,10 +357,10 @@ func (s *syncSvc) mergeLocationNaturalKey(
 	var err error
 	if obj.Kind == sync_entity.KindProjectLocation {
 		dup, err = sync_repo.SyncObject().FindLocationByNaturalKey(
-			ctx, userID, obj.ProjectSyncID, obj.AgentredFingerprint)
+			ctx, userID, obj.ScopeSyncID, obj.AgentredFingerprint)
 	} else {
 		dup, err = sync_repo.SyncObject().FindCLIOverlayByNaturalKey(
-			ctx, userID, obj.ProjectSyncID, obj.AgentredFingerprint)
+			ctx, userID, obj.ScopeSyncID, obj.AgentredFingerprint)
 	}
 	if err != nil {
 		return err
@@ -426,7 +426,7 @@ func (s *syncSvc) Pull(ctx context.Context, in PullInput) (*PullOutput, error) {
 		out.Items = append(out.Items, PullItem{
 			Kind:                row.Kind,
 			SyncID:              row.SyncID,
-			ProjectSyncID:       row.ProjectSyncID,
+			ScopeSyncID:         row.ScopeSyncID,
 			AgentredFingerprint: row.AgentredFingerprint,
 			Payload:             []byte(row.Payload),
 			Version:             row.Version,

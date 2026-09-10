@@ -25,8 +25,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { RelayError, type RelayState } from "@/lib/relayClient";
 import {
-  useRelayMachine,
-  type UseRelayMachineOptions,
+  useRelayChannel,
+  type UseRelayChannelOptions,
 } from "@/hooks/use-relay";
 import { toast } from "sonner";
 
@@ -43,7 +43,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 
-vi.mock("@/hooks/use-relay", () => ({ useRelayMachine: vi.fn() }));
+vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 
 // 发起端那一台由 sessionMirror 向连接池另借一条通道写（承载端就是页面手上这条）。
 // 只桩这一个导出：这个文件的其余部分照旧走真实实现。
@@ -54,7 +54,7 @@ vi.mock("@/components/session/sessionMirror", async (importOriginal) => {
 });
 
 const mockedApi = vi.mocked(api);
-const mockUseRelay = vi.mocked(useRelayMachine);
+const mockUseRelay = vi.mocked(useRelayChannel);
 const mockWriteEffortToOrigin = vi.mocked(writeReasoningEffortToOrigin);
 
 const deviceRow = {
@@ -77,7 +77,7 @@ const summary = {
   latestSeq: 2,
 };
 
-let capturedOpts: UseRelayMachineOptions = {};
+let capturedOpts: UseRelayChannelOptions = {};
 
 const fakeClient = {
   request: vi.fn(),
@@ -168,7 +168,7 @@ function renderPage() {
       client: fakeClient as never,
       relayState: "connected",
       relayTicket: {
-        clientId: "fp-web",
+        peerFingerprint: "fp-web",
         clientName: "Browser",
         accessToken: "t",
         expiresAt: Date.now() + 120_000,
@@ -1316,7 +1316,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -1454,7 +1454,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       client: fakeClient as never,
       relayState: "reconnecting",
       relayTicket: {
-        clientId: "fp-web",
+        peerFingerprint: "fp-web",
         clientName: "Browser",
         accessToken: "t",
         expiresAt: Date.now() + 120_000,
@@ -1857,7 +1857,7 @@ describe("SessionDetailView:设备取数失败后的恢复", () => {
       client: fakeClient as never,
       relayState: "connected",
       relayTicket: {
-        clientId: "fp-web",
+        peerFingerprint: "fp-web",
         clientName: "Browser",
         accessToken: "t",
         expiresAt: Date.now() + 120_000,
@@ -1972,7 +1972,7 @@ describe("会话详情：这条通道声明的目标", () => {
     mountDetail({
       conversation_id: "42",
       peer_fingerprint: "fp-desktop",
-      machine_fingerprint: "fp-1",
+      device_fingerprint: "fp-1",
       title: "重构登录页",
     });
 
@@ -2019,7 +2019,7 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
         client: target ? (fakeClient as never) : null,
         relayState: target ? "connected" : "disconnected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -2035,7 +2035,7 @@ describe("会话详情：切对话的那一瞬不闪「连接已断」", () => {
     return {
       conversation_id: id,
       peer_fingerprint: "fp-1",
-      machine_fingerprint: "fp-1",
+      device_fingerprint: "fp-1",
       title: "对话 " + id,
     };
   }
@@ -2163,7 +2163,7 @@ describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态"
         client: target ? (fakeClient as never) : null,
         relayState: target ? "connected" : "disconnected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -2336,7 +2336,7 @@ describe("会话详情：历史来自 server 镜像", () => {
             initialRow={{
               conversation_id: "42",
               peer_fingerprint: "fp-1",
-              machine_fingerprint: "fp-1",
+              device_fingerprint: "fp-1",
               title: "重构登录页",
               backend_type: "claudecode",
             }}
@@ -2729,7 +2729,7 @@ describe("会话详情：历史来自 server 镜像", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -2819,7 +2819,7 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -2922,7 +2922,7 @@ describe("会话详情：头部", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -3095,7 +3095,7 @@ describe("会话详情：头部", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -3868,7 +3868,7 @@ describe("会话详情：输入框", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -4107,7 +4107,7 @@ describe("会话详情：打开即标记已读", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -4162,7 +4162,7 @@ describe("会话详情：打开即标记已读", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -4219,7 +4219,7 @@ describe("会话详情：打开即标记已读", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -4345,7 +4345,7 @@ describe("会话详情：打开即标记已读", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -4496,7 +4496,7 @@ describe("会话详情：/compact", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -5663,7 +5663,7 @@ describe("会话详情：重连期间的发送", () => {
         client: fakeClient as never,
         relayState,
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -5816,7 +5816,7 @@ describe("会话详情：与桌面端对齐的外壳", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -5946,7 +5946,7 @@ describe("会话详情：回到底部", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -6136,7 +6136,7 @@ describe("会话详情：发出去之后回到底部", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,
@@ -6266,7 +6266,7 @@ describe("会话详情：头部的更多菜单", () => {
     await screen.findByText(/重构登录页/);
 
     openMenu();
-    fireEvent.click(await screen.findByText("Copy session ID"));
+    fireEvent.click(await screen.findByText("Copy conversation ID"));
 
     // 交出去的是 wire 上那个号本身，不带 `#` —— 复制出来是要拿去搜日志、
     // 查 `agent_sessions` 的，多一个字符就得手动删。
@@ -6285,10 +6285,10 @@ describe("会话详情：头部的更多菜单", () => {
     await screen.findByText(/重构登录页/);
 
     openMenu();
-    fireEvent.click(await screen.findByText("Copy session ID"));
+    fireEvent.click(await screen.findByText("Copy conversation ID"));
 
     await vi.waitFor(() =>
-      expect(succeeded.mock.calls[0]?.[0]).toBe("Session ID copied"),
+      expect(succeeded.mock.calls[0]?.[0]).toBe("Conversation ID copied"),
     );
   });
 
@@ -6316,10 +6316,12 @@ describe("会话详情：头部的更多菜单", () => {
     await screen.findByText(/重构登录页/);
 
     openMenu();
-    fireEvent.click(await screen.findByText("Copy session ID"));
+    fireEvent.click(await screen.findByText("Copy conversation ID"));
 
     await vi.waitFor(() =>
-      expect(failed.mock.calls[0]?.[0]).toBe("Could not copy the session ID"),
+      expect(failed.mock.calls[0]?.[0]).toBe(
+        "Could not copy the conversation ID",
+      ),
     );
     expect(succeeded).not.toHaveBeenCalled();
   });
@@ -6491,7 +6493,7 @@ describe("会话详情页 · 会话级思考力度", () => {
         client: fakeClient as never,
         relayState: "connected",
         relayTicket: {
-          clientId: "fp-web",
+          peerFingerprint: "fp-web",
           clientName: "Browser",
           accessToken: "t",
           expiresAt: Date.now() + 120_000,

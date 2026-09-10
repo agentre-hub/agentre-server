@@ -162,7 +162,7 @@ func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.Re
 	}
 	return &api.RelayTicketResponse{
 		AccessToken: token, ExpiresIn: int(relayTicketTTL / time.Second),
-		ClientID: peerFingerprint,
+		PeerFingerprint: peerFingerprint,
 	}, nil
 }
 

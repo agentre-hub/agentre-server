@@ -39,7 +39,7 @@ func indexProjectRows(
 			if locationsByFP[row.AgentredFingerprint] == nil {
 				locationsByFP[row.AgentredFingerprint] = map[string]string{}
 			}
-			locationsByFP[row.AgentredFingerprint][row.ProjectSyncID] = lp.Path
+			locationsByFP[row.AgentredFingerprint][row.ScopeSyncID] = lp.Path
 		}
 	}
 	return projectName, locationsByFP

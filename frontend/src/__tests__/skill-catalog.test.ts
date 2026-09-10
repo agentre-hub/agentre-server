@@ -64,7 +64,7 @@ beforeEach(() => {
   mockedTicket.mockResolvedValue({
     accessToken: "ticket-token",
     expiresAt: Date.now() + 120_000,
-    clientId: "browser-1",
+    peerFingerprint: "browser-1",
     clientName: "Chrome · macOS",
   });
 });

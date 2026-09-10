@@ -39,7 +39,7 @@ export interface RelayTicket {
    * 浏览器只读不写。被否掉的是「浏览器自己生成一个存 localStorage 的随机数」：
    * 那样清一次站点数据就换人，此前从网页发起的对话会在账号镜像里当场成为孤儿。
    */
-  clientId: string;
+  peerFingerprint: string;
   clientName: string;
 }
 
@@ -47,12 +47,12 @@ export async function ensureRelayTicket(): Promise<RelayTicket> {
   const response = await api<{
     access_token: string;
     expires_in: number;
-    client_id: string;
+    peer_fingerprint: string;
   }>("/v1/relay/ticket", { method: "POST" });
   return {
     accessToken: response.access_token,
     expiresAt: Date.now() + response.expires_in * 1000,
-    clientId: response.client_id,
+    peerFingerprint: response.peer_fingerprint,
     clientName: browserDisplayName(),
   };
 }

@@ -1,4 +1,4 @@
-// Package follow 定义账号里「保存的对话」这一族端点：保存、删除，以及读出这份名单。
+// Package savedsession 定义账号里「保存的对话」这一族端点：保存、删除，以及读出这份名单。
 //
 // 名单属于账号，不属于某一台设备或某一个浏览器。它同时是**镜像的范围**——账号里
 // 保存过的对话才有内容（标题与整条转录）镜像在 server 上，没保存过的一个字都不落库
@@ -15,9 +15,9 @@ import "github.com/cago-frame/cago/server/mux"
 // （会话 / 设备 JWT），不由请求体提供。重复保存幂等。
 type SaveSessionRequest struct {
 	mux.Meta `path:"/v1/saved-sessions" method:"POST"`
-	// MachineFingerprint 是**承载**这条对话的那台机器（对得上 devices.fingerprint）。
+	// DeviceFingerprint 是**承载**这条对话的那台机器（对得上 devices.fingerprint）。
 	// 镜像据它决定去连谁。
-	MachineFingerprint string `json:"machine_fingerprint" binding:"required,min=8,max=128"`
+	DeviceFingerprint string `json:"device_fingerprint" binding:"required,min=8,max=128"`
 	// PeerFingerprint 是**发起**这条对话那一端的指纹。它已经不是身份的一半
 	// （2026-08-31-conversation-centric-addressing.md「会话身份」），落库只作来源
 	// 标注与授权。
@@ -56,17 +56,21 @@ type DeleteSessionResponse struct {
 	MachineStatus string `json:"machine_status"`
 }
 
-// ListSavedSessionsRequest 读出账号里已保存的对话。路径与载荷本轮不动：索引改读镜像摘要
-// 那一轮会用带内容的摘要端点接手它。
+// ListSavedSessionsRequest 读出账号里已保存的对话。它与保存 / 删除同挂在
+// /v1/saved-sessions 这一族下，只是方法不同（GET 读名单，POST 保存）。
+//
+// 载荷为空：这里只回指向，带内容的摘要由 /v1/agent-sessions 那一族出。
 type ListSavedSessionsRequest struct {
-	mux.Meta `path:"/v1/follows" method:"GET"`
+	mux.Meta `path:"/v1/saved-sessions" method:"GET"`
 }
 
 // SavedSessionRef 是名单里的一条：只有指向与时间。
 type SavedSessionRef struct {
 	DeviceFingerprint string `json:"device_fingerprint"`
 	ConversationID    string `json:"conversation_id"`
-	FollowedAt        int64  `json:"followed_at"`
+	// SavedAt 是收进账号那一刻（毫秒）。库里那一列仍叫 followed_at（列名早于决策 5），
+	// 对外照实说的是「保存」。
+	SavedAt int64 `json:"saved_at"`
 	// Invalid 目标设备已不在账号活跃设备里（被撤销 / 不存在）时为 true：名单内容
 	// 不变（R14），只是这一条已无对可指，客户端可据此移除。
 	Invalid bool `json:"invalid"`

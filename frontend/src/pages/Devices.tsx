@@ -38,7 +38,7 @@ import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import { useLatestRelease } from "@/hooks/use-latest-release";
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { AccountChannelDevicePresence } from "@/lib/accountChannel";
 import { api } from "@/lib/api";
@@ -132,7 +132,7 @@ function useSessionCounts(
   active: boolean,
 ): SessionCounts | null {
   // 设备页问的是「这台机器上有什么」：机器作用域的操作走 machine:（决策 11）。
-  const { client, relayState } = useRelayMachine(
+  const { client, relayState } = useRelayChannel(
     fingerprint ? machineTarget(fingerprint) : null,
   );
   const [counts, setCounts] = useState<SessionCounts | null>(null);

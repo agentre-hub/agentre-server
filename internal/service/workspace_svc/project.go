@@ -273,7 +273,7 @@ func belongsToSubtree(row *sync_entity.SyncObject, subtree map[string]bool) bool
 		}
 		return subtree[pa.ProjectSyncID]
 	case sync_entity.KindProjectLocation:
-		return row.ProjectSyncID != "" && subtree[row.ProjectSyncID]
+		return row.ScopeSyncID != "" && subtree[row.ScopeSyncID]
 	}
 	return false
 }

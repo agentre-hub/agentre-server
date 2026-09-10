@@ -291,10 +291,10 @@ func TestDeviceDetail_GivenAgentred_ThenListsRunnableAgentsWithRankAndConfigured
 				{Kind: sync_entity.KindProject, SyncID: "proj-1", Payload: mustJSON(t, map[string]any{"name": "agentre-server"})},
 				{Kind: sync_entity.KindProject, SyncID: "proj-2", Payload: mustJSON(t, map[string]any{"name": "agentre-hub"})},
 				// 这台机器上配了路径的项目。
-				{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+				{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ScopeSyncID: "proj-1",
 					AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/srv/data/agentre-server"})},
 				// 另一台 agentred 上的路径记录：不属于这台机器，不算「已配置」。
-				{Kind: sync_entity.KindProjectLocation, SyncID: "loc-2", ProjectSyncID: "proj-2",
+				{Kind: sync_entity.KindProjectLocation, SyncID: "loc-2", ScopeSyncID: "proj-2",
 					AgentredFingerprint: "fp-b", Payload: mustJSON(t, map[string]any{"path": "/srv/other/agentre-hub"})},
 				{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "前端 Agent"})},
 				{Kind: sync_entity.KindAgent, SyncID: "agent-2", Payload: mustJSON(t, map[string]any{"name": "后端 Agent"})},
@@ -457,9 +457,9 @@ func twoAvailableTiersRows(t *testing.T) []*sync_entity.SyncObject {
 			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-a", "sort_order": 0})},
 		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
 			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-b", "sort_order": 1})},
-		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-a", ProjectSyncID: "proj-1",
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-a", ScopeSyncID: "proj-1",
 			AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/srv/agentre-server"})},
-		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-b", ProjectSyncID: "proj-1",
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-b", ScopeSyncID: "proj-1",
 			AgentredFingerprint: "fp-b", Payload: mustJSON(t, map[string]any{"path": "/home/wyz/agentre-server"})},
 	}
 }
@@ -488,7 +488,7 @@ func TestWebDispatchPlan_GivenDevicelessOfflineAvailable_ThenSkipsDevicelessAndP
 			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-offline", "sort_order": 1})},
 		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t3",
 			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-online", "sort_order": 2})},
-		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ScopeSyncID: "proj-1",
 			AgentredFingerprint: "fp-online", Payload: mustJSON(t, map[string]any{"path": "/srv/agentre-server"})},
 	}, nil)
 	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
@@ -591,7 +591,7 @@ func TestWebDispatchPlan_GivenProjectMissingOnFirstAvailable_ThenPicksNextWithPa
 		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
 			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-b", "sort_order": 1})},
 		// 只有 fp-b 配了 proj-1 的路径。
-		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ScopeSyncID: "proj-1",
 			AgentredFingerprint: "fp-b", Payload: mustJSON(t, map[string]any{"path": "/srv/hub"})},
 	}, nil)
 	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
@@ -733,7 +733,7 @@ func TestWebDispatchPlan_GivenDesktopMissingProjectPath_ThenSkipsToNextTargetWit
 			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-desk", "sort_order": 0})},
 		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t2",
 			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-agentred", "sort_order": 1})},
-		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ProjectSyncID: "proj-1",
+		{Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ScopeSyncID: "proj-1",
 			AgentredFingerprint: "fp-agentred", Payload: mustJSON(t, map[string]any{"path": "/srv/agentre-server"})},
 		// 桌面端上报组里没有 proj-1 的路径（它的 ListByDevice 返回空）。
 	}, nil)

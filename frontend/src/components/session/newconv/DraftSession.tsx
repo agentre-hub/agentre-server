@@ -28,7 +28,7 @@ import Transcript from "@/components/session/Transcript";
 import { pendingUserMessage } from "@/components/session/transcriptFrame";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-api-query";
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { ApiError } from "@/lib/api";
 import {
@@ -155,7 +155,7 @@ export function DraftSession({
    * 屏幕上摆的那一份：重算期间**留着上一份**，只把这一带标成 busy。
    *
    * 此前这里是 `settled ? plan : null`，而这一屏底下每一样都挂在它上面 —— 执行目标
-   * 那一行、项目 chip、模型 / 档位 / 力度三颗控件一起卸掉，`useRelayMachine` 的目标
+   * 那一行、项目 chip、模型 / 档位 / 力度三颗控件一起卸掉，`useRelayChannel` 的目标
    * 也跟着变 null，连着的那台机器白断一次再连回来。换项目根本不换机器，一次往返里
    * 整个右栏拆了重搭。
    *
@@ -186,7 +186,7 @@ export function DraftSession({
    */
   // 按**机器**寻址（决策 11）：这条对话还不存在，服务端解析不出承载它的机器，
   // 而机器正是用户刚在派发计划里选定的那一台。
-  const { client, relayState } = useRelayMachine(
+  const { client, relayState } = useRelayChannel(
     chosen ? machineTarget(chosen.device_fingerprint) : null,
   );
 

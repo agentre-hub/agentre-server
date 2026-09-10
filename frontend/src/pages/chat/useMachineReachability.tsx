@@ -12,7 +12,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { useRelayMachine } from "@/hooks/use-relay";
+import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import type { DeviceItem } from "@/lib/devices";
 import type { IndexAxis, MachineInfo } from "@/lib/sessionAxes";
@@ -23,7 +23,7 @@ export type MachineState = "connecting" | "connected" | "unreachable";
 export interface ResolvedMachine {
   sessions: SessionSummary[];
   /**
-   * **这条连接**在 daemon 眼里的对端指纹（中继 ticket 的 clientId）。
+   * **这条连接**在 daemon 眼里的对端指纹（中继 ticket 的 peerFingerprint）。
    *
    * 清单里省略 `peerFingerprint` 的那些会话，说的就是「发起端是这一端」——不记下它，
    * 调用方只能拿机器指纹去顶，而那是另一个身份（见 chatRows.machineRowOrigin）。
@@ -91,7 +91,7 @@ function MachineSessionResolver({
   // 机器轴按**机器**寻址（决策 11）：这一档列的是这台机器实时报的整份 session.list，
   // 其中未保存的对话是大多数，服务端解析不出它们的承载机器；而机器是用户刚选的，
   // 本来就在上下文里。N 台机器 = 同一条 socket 上的 N 条通道（决策 10）。
-  const { client, relayState, relayTicket } = useRelayMachine(
+  const { client, relayState, relayTicket } = useRelayChannel(
     machineTarget(fingerprint),
   );
   // 记的是「已经按哪个关键词解析过」而不是一个布尔：关键词一变就得重问一次，
@@ -131,7 +131,7 @@ function MachineSessionResolver({
         const res = sessionListFromProtobuf(raw);
         onResolved(fingerprint, {
           sessions: res.sessions,
-          localFingerprint: relayTicket?.clientId ?? "",
+          localFingerprint: relayTicket?.peerFingerprint ?? "",
           // 老机器不报总数：它交出来的就是整份，条数即总数。
           total: res.total ?? res.sessions.length,
           cursor: res.cursor ?? "",
@@ -189,6 +189,13 @@ export interface MachineReachabilityInput {
   devices: DeviceItem[];
   /** 当前轴：只有机器轴才真的去连那些机器。 */
   axis: IndexAxis;
+  /**
+   * 机器轴收到哪一台上（`?machine=<设备标识>`），不收范围时是 null。
+   *
+   * `/devices/:deviceId/sessions`（「查看这台机器的对话」）重定向过来时带着它：
+   * 那句话说的是**一台**机器，因此这一档下只有它成组、也只问它一台。
+   */
+  machineScope?: number | null;
   /** 已去抖的搜索词。随 session.list 下推给机器，由机器自己筛。 */
   keyword: string;
 }
@@ -235,6 +242,7 @@ export interface MachineReachability {
 export function useMachineReachability({
   devices,
   axis,
+  machineScope = null,
   keyword,
 }: MachineReachabilityInput): MachineReachability {
   /**
@@ -256,27 +264,38 @@ export function useMachineReachability({
     [devices],
   );
 
-  /** 可下钻的目标：能跑会话的机器（agentred / desktop）。 */
+  /**
+   * 可下钻的目标：能跑会话的机器（agentred / desktop）。收了范围就只剩那一台——
+   * 组头由这一份摆出来，它不收窄的话，「这台机器的对话」落地仍会列出别的机器
+   * （离线那些正是只靠组头存在的）。
+   */
   const machines = useMemo<MachineInfo[]>(
     () =>
       devices
         .filter((d) => d.kind === "agentred" || d.kind === "desktop")
+        .filter((d) => machineScope === null || d.id === machineScope)
         .map((d) => ({ deviceId: d.id, name: d.name, online: d.online })),
-    [devices],
+    [devices, machineScope],
   );
 
   /**
    * 机器轴上要**同时**去问的那些机器（规格 2026-08-21 决策 1）：能跑会话且此刻
    * 在线的都在其中。离线的不问——它答不出「上面有什么」，组头上说清楚就够了。
+   * 收了范围（`machineScope`）时这里只剩那一台。
    */
   const onlineMachines = useMemo(
     () =>
       axis === "machine"
         ? devices.filter(
-            (d) => (d.kind === "agentred" || d.kind === "desktop") && d.online,
+            (d) =>
+              (d.kind === "agentred" || d.kind === "desktop") &&
+              d.online &&
+              // 范围之外的机器连问都不问：多开的每条中继通道都是真往那台机器上
+              // 发的 session.list，而它的答案这一屏根本不会列。
+              (machineScope === null || d.id === machineScope),
           )
         : [],
-    [axis, devices],
+    [axis, devices, machineScope],
   );
 
   /**

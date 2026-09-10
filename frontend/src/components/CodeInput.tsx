@@ -7,7 +7,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@agentre-hub/agentre-ui";
-import { CODE_LENGTH, normalize, sanitize } from "@/lib/userCode";
+import { CODE_LENGTH, parseUserCode, sanitize } from "@/lib/userCode";
 
 /**
  * 六格设备码输入（画板 06）。
@@ -104,9 +104,9 @@ export default function CodeInput({
   function handlePaste(index: number, e: ClipboardEvent) {
     e.preventDefault();
     const text = e.clipboardData.getData("text");
-    // 整串（含或不含连字符、大小写任意）走严格归一化，一次填满六格；
+    // 整串（含或不含连字符、大小写任意）走严格解析，一次填满六格；
     // 半截或带杂质的粘贴退回宽松清洗，从当前格往后填。
-    const whole = normalize(text);
+    const whole = parseUserCode(text);
     if (whole) {
       fill(0, whole.replace("-", ""));
       return;
