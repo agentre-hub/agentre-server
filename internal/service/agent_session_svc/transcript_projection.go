@@ -22,7 +22,7 @@
 // 的来路（runtime.steer 不发 user_message），归约器认了它之后这里必须放行。反过来，
 // `context_window_updated` 与 `usage` 虽然也在那段「记而不显」的注释里，却**有**显示
 // 面（reduceSessionState 喂 Composer 底栏那条上下文用量），所以它们不在清单里。
-package workspace_svc
+package agent_session_svc
 
 import (
 	"bytes"

@@ -1,4 +1,4 @@
-package workspace_svc
+package issue_svc
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo/mock_sync_repo"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // ── 浏览器直写看板（规格 2026-08-27-issues-board-project-scope「`agentre-server` 端」）──
@@ -42,7 +43,7 @@ func rowOfKind(rows []*sync_entity.SyncObject, kind string) *sync_entity.SyncObj
 // 建一张卡：server 分配同步标识与版本号，来源记空串，载荷正好是桌面端那十个键。
 // 位置落在目标列的末尾——留 0 会让每一张新卡都和别人撞在同一个位置上。
 func TestCreateIssue_ThenServerAllocatesIDVersionAndWritesTheWirePayload(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
 		projectRow(t, "p-a", "甲", ""),
@@ -88,7 +89,7 @@ func TestCreateIssue_ThenServerAllocatesIDVersionAndWritesTheWirePayload(t *test
 // 建卡时挂上的标签各自是一行 issue_label，各吃一个版本号——关联本身也是一个
 // 同步对象，两端的本地主键在对方机器上指向完全不同的两行。
 func TestCreateIssue_GivenLabels_ThenEachLinkIsItsOwnSyncObject(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
 		labelRow(t, "l-bug", "bug", "red"),
@@ -132,7 +133,7 @@ func TestCreateIssue_GivenDanglingReferences_ThenRejected(t *testing.T) {
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
-			ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+			ctx, mObj := setupBoardTest(t)
 			mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return(nil, nil)
 			_, err := IssueBoard().CreateIssue(ctx, in)
 			assertWriteCode(t, err, code.OrgObjectNotFound)
@@ -140,7 +141,7 @@ func TestCreateIssue_GivenDanglingReferences_ThenRejected(t *testing.T) {
 	}
 
 	t.Run("标签", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return(nil, nil)
 		labels := []string{"l-gone"}
 		_, err := IssueBoard().CreateIssue(ctx, IssueWriteInput{
@@ -158,7 +159,7 @@ func TestCreateIssue_GivenInvalidFields_ThenRejectedWithoutWriting(t *testing.T)
 	}
 	for name, fields := range cases {
 		t.Run(name, func(t *testing.T) {
-			ctx, _, _, _, _ := setupWorkspaceTest(t)
+			ctx, _ := setupBoardTest(t)
 			_, err := IssueBoard().CreateIssue(ctx, IssueWriteInput{UserID: boardUser, Fields: fields})
 			assertWriteCode(t, err, code.InvalidParameter)
 		})
@@ -168,7 +169,7 @@ func TestCreateIssue_GivenInvalidFields_ThenRejectedWithoutWriting(t *testing.T)
 // 改一张卡：只覆盖这次请求明确涉及的键，载荷里其余的原值原样活着——sync_objects
 // 是整行 last-write-wins，把没提到的键一起写成零值就是静默的数据丢失。
 func TestUpdateIssue_ThenOnlyMentionedKeysAreOverwritten(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	existing := withPayload(t, issueRow(t, "i-1", "老标题", "todo", "p-a"),
 		map[string]any{"llm_model_key": "anthropic-opus-01", "position": 65536})
@@ -196,7 +197,7 @@ func TestUpdateIssue_ThenOnlyMentionedKeysAreOverwritten(t *testing.T) {
 // 改标签集合是一次**差集**：新挂的建一行关联，摘掉的落墓碑，没动的一行都不许碰
 // ——重建全部关联会让每一次保存都在账号里刷掉一批版本号。
 func TestUpdateIssue_GivenLabelSet_ThenOnlyTheDifferenceIsWritten(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	existing := issueRow(t, "i-1", "卡", "todo", "")
 	keep := linkRow(t, "k-keep", "i-1", "l-keep")
@@ -233,7 +234,7 @@ func TestUpdateIssue_GivenLabelSet_ThenOnlyTheDifferenceIsWritten(t *testing.T) 
 
 // 请求没提到标签时一行关联都不许动：省略与「清空标签」是两件事。
 func TestUpdateIssue_GivenNoLabelKey_ThenLinksAreLeftAlone(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	existing := issueRow(t, "i-1", "卡", "todo", "")
 	mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(existing, nil)
@@ -258,7 +259,7 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 	const now = int64(1_800_000_000_000)
 
 	t.Run("落在两卡之间", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mState := registerSyncStateMock(t)
 		moving := issueRow(t, "i-move", "被拖的", "todo", "")
@@ -282,7 +283,7 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 	})
 
 	t.Run("拖进已完成", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mState := registerSyncStateMock(t)
 		moving := issueRow(t, "i-move", "被拖的", "todo", "")
@@ -302,7 +303,7 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 	})
 
 	t.Run("拖出已完成", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mState := registerSyncStateMock(t)
 		moving := withPayload(t, issueRow(t, "i-move", "被拖的", "done", ""),
@@ -325,7 +326,7 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 // 删一张卡落墓碑而不是物理删除（删除本身要能被下行游标带到每一台机器上），
 // 它身上的关联行一并落——留着就是一串指向已消失任务的悬空引用。
 func TestDeleteIssue_ThenTheCardAndItsLabelLinksAreTombstoned(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	target := issueRow(t, "i-1", "卡", "todo", "")
 	target.ID = 11
@@ -352,21 +353,21 @@ func TestDeleteIssue_ThenTheCardAndItsLabelLinksAreTombstoned(t *testing.T) {
 // 「不存在」共用一个码——分开就等于给出一个跨账号的存在性探测器。
 func TestIssueWrites_GivenMissingDeletedOrForeignRow_ThenRefused(t *testing.T) {
 	t.Run("不存在或不属于本账号", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		mObj.EXPECT().Find(ctx, boardUser, "i-x").Return(nil, nil)
 		_, err := IssueBoard().DeleteIssue(ctx, boardUser, "i-x")
 		assertWriteCode(t, err, code.OrgObjectNotFound)
 	})
 
 	t.Run("类型不符", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		mObj.EXPECT().Find(ctx, boardUser, "p-a").Return(projectRow(t, "p-a", "甲", ""), nil)
 		_, err := IssueBoard().DeleteIssue(ctx, boardUser, "p-a")
 		assertWriteCode(t, err, code.OrgObjectNotFound)
 	})
 
 	t.Run("已是墓碑", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		row := issueRow(t, "i-1", "卡", "todo", "")
 		row.DeletedAt = 1
 		mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(row, nil)
@@ -378,7 +379,7 @@ func TestIssueWrites_GivenMissingDeletedOrForeignRow_ThenRefused(t *testing.T) {
 // 建标签：名字与色调进载荷，status 记成存活——server 没有本地行，读路径判「这个
 // 标签还在不在」靠的就是载荷里这一个键（桌面端 adapter_issue.go 的同一条理由）。
 func TestCreateLabel_ThenNameToneAndLiveStatusAreWritten(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, []string{sync_entity.KindLabel}).Return(nil, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(370), nil)
@@ -401,7 +402,7 @@ func TestCreateLabel_ThenNameToneAndLiveStatusAreWritten(t *testing.T) {
 // 色调取值域是设计系统那 8 档颜色名，越界即拒：库里落一个渲染不出来的色调，
 // 两端的标签 chip 都会掉回兜底底色。
 func TestCreateLabel_GivenToneOutsideThePalette_ThenRejected(t *testing.T) {
-	ctx, _, _, _, _ := setupWorkspaceTest(t)
+	ctx, _ := setupBoardTest(t)
 	for _, tone := range []string{"purple", "bug", "", "RED"} {
 		t.Run(tone, func(t *testing.T) {
 			_, err := IssueBoard().CreateLabel(ctx, LabelWriteInput{
@@ -414,7 +415,7 @@ func TestCreateLabel_GivenToneOutsideThePalette_ThenRejected(t *testing.T) {
 // 重名的标签拒收：名字就是标签的自然键（桌面端 uniq_labels_name_active），
 // 两行同名会在下行时被合并到本机同一行上，用户看到的是「删不掉」。
 func TestCreateLabel_GivenDuplicateName_ThenRejected(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, []string{sync_entity.KindLabel}).
 		Return([]*sync_entity.SyncObject{labelRow(t, "l-bug", "bug", "red")}, nil)
 
@@ -425,7 +426,7 @@ func TestCreateLabel_GivenDuplicateName_ThenRejected(t *testing.T) {
 
 // 改名 / 换色只覆盖提到的键；改成自己现在的名字不算重名。
 func TestUpdateLabel_ThenRenameAndRecolourKeepTheRestOfThePayload(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	existing := labelRow(t, "l-bug", "bug", "red")
 	mObj.EXPECT().Find(ctx, boardUser, "l-bug").Return(existing, nil)
@@ -448,7 +449,7 @@ func TestUpdateLabel_ThenRenameAndRecolourKeepTheRestOfThePayload(t *testing.T) 
 // 删标签落墓碑，并把它身上的全部关联一并落：留着关联行就等于在每一台机器上留下
 // 一串指向已消失标签的悬空引用（桌面端 labelAdapter.remove 也是这两步）。
 func TestDeleteLabel_ThenTheLabelAndEveryLinkToItAreTombstoned(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	target := labelRow(t, "l-bug", "bug", "red")
 	target.ID = 21
@@ -472,4 +473,200 @@ func TestDeleteLabel_ThenTheLabelAndEveryLinkToItAreTombstoned(t *testing.T) {
 	require.Len(t, saved, 1)
 	assert.Equal(t, sync_entity.KindLabel, rowOfKind(saved, sync_entity.KindLabel).Kind)
 	assert.Positive(t, saved[0].DeletedAt)
+}
+
+// ── 看板写入的事务边界 ──────────────────────────────────────────────────────
+//
+// 与组织面同一条理由（workspace_svc.WithOrgWriteTx 的注释）：版本号取自
+// sync_account_seqs 里该账号那一行，它的排他锁持到事务提交，因此取号在事务里，
+// 「谁先取到号」才等于「谁先提交」。取在事务外则两件事各自成序——看板这一次先取到
+// 100 而后提交，组织面那一次取到 101 先提交，设备拉到 101 就把游标推过去了，
+// version=100 的那张卡对它永远不会再被投递（下行只认 version > cursor，游标只增不
+// 减），而浏览器与设备都收到了成功。
+//
+// 边界画在**一次用户操作**上而不是每一行：建一张带标签的卡是「卡 + N 行关联」，
+// 改标签是「摘掉的墓碑 + 新挂的关联」，删一张卡是「关联的墓碑 + 卡的墓碑」。逐行
+// 各自提交时中途失败会留下一个谁也没要过的中间态（旧标签删了一半、新标签建了一半），
+// 而那个中间态会照常同步到每一台机器上。
+
+// 建一张带标签的卡是**一个**事务：卡与它的每一行关联，要么一起生效、要么一行都不动。
+func TestCreateIssue_ThenTheCardAndItsLabelLinksAreOneTransaction(t *testing.T) {
+	ctx, txLog, mObj := setupBoardTxTest(t)
+	mState := registerSyncStateMock(t)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
+		Return([]*sync_entity.SyncObject{
+			labelRow(t, "l-bug", "bug", "red"),
+			labelRow(t, "l-doc", "docs", "gray"),
+		}, nil)
+
+	var version int64 = 400
+	var allocatedInTx []bool
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).DoAndReturn(
+		func(ctx context.Context, _, _ int64) (int64, error) {
+			allocatedInTx = append(allocatedInTx, hubtest.InTransaction(ctx))
+			version++
+			return version, nil
+		}).AnyTimes()
+	var savedInTx []bool
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ *sync_entity.SyncObject) error {
+			savedInTx = append(savedInTx, hubtest.InTransaction(ctx))
+			return nil
+		}).AnyTimes()
+
+	labels := []string{"l-bug", "l-doc"}
+	_, err := IssueBoard().CreateIssue(ctx, IssueWriteInput{
+		UserID: boardUser, Fields: map[string]any{"title": "新卡", "stage": "todo"},
+		LabelSyncIDs: &labels})
+	require.NoError(t, err)
+
+	assert.Len(t, savedInTx, 3, "一张卡 + 两行关联")
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events(),
+		"三行是一次新建，不是三次各自提交的写入")
+	assert.NotContains(t, savedInTx, false, "每一行都要落在那个事务里")
+	assert.NotContains(t, allocatedInTx, false,
+		"版本号也要取在事务里：行锁持到提交，取号顺序才是提交顺序")
+}
+
+// 改标签集合的那次差集是**一个**事务：卡自己的载荷、摘掉的关联墓碑、新挂的关联行
+// 同进同出。
+func TestUpdateIssue_ThenTheWholeLabelDiffIsOneTransaction(t *testing.T) {
+	ctx, txLog, mObj := setupBoardTxTest(t)
+	mState := registerSyncStateMock(t)
+	existing := issueRow(t, "i-1", "卡", "todo", "")
+	existing.ID = 11
+	keep := linkRow(t, "k-keep", "i-1", "l-keep")
+	drop := linkRow(t, "k-drop", "i-1", "l-drop")
+	drop.ID = 42
+	mObj.EXPECT().Find(gomock.Any(), boardUser, "i-1").Return(existing, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
+		Return([]*sync_entity.SyncObject{
+			labelRow(t, "l-keep", "bug", "red"),
+			labelRow(t, "l-drop", "docs", "gray"),
+			labelRow(t, "l-new", "feature", "green"),
+			existing, keep, drop,
+		}, nil)
+
+	var version int64 = 500
+	var allocatedInTx []bool
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).DoAndReturn(
+		func(ctx context.Context, _, _ int64) (int64, error) {
+			allocatedInTx = append(allocatedInTx, hubtest.InTransaction(ctx))
+			version++
+			return version, nil
+		}).AnyTimes()
+	var savedInTx []bool
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ *sync_entity.SyncObject) error {
+			savedInTx = append(savedInTx, hubtest.InTransaction(ctx))
+			return nil
+		}).AnyTimes()
+	var tombstonedInTx []bool
+	mObj.EXPECT().Tombstone(gomock.Any(), int64(42), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _, _, _ int64) (int64, error) {
+			tombstonedInTx = append(tombstonedInTx, hubtest.InTransaction(ctx))
+			return 1, nil
+		})
+
+	labels := []string{"l-keep", "l-new"}
+	_, err := IssueBoard().UpdateIssue(ctx, IssueWriteInput{
+		UserID: boardUser, SyncID: "i-1", Fields: map[string]any{}, LabelSyncIDs: &labels})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events(),
+		"卡的载荷与整批标签差集是一次保存，不是三次各自提交的写入")
+	assert.Len(t, savedInTx, 2, "卡自己的载荷 + 新挂的那一行关联")
+	assert.Len(t, tombstonedInTx, 1, "摘掉的那一行关联")
+	assert.NotContains(t, savedInTx, false, "每一行都要落在那个事务里")
+	assert.NotContains(t, tombstonedInTx, false, "墓碑也要落在那个事务里")
+	assert.NotContains(t, allocatedInTx, false, "版本号也要取在事务里")
+}
+
+// 差集中途失败时整批回滚，不留下「旧标签删了一半、新标签建了一半」。
+//
+// 断言落在事务事件上而不是「哪几行被写了」：仓储是 mock，写入是否被撤销由数据库
+// 决定，这一层能证、也只需证「服务端把这一批交给数据库时是一个会被整体回滚的事务」。
+func TestUpdateIssue_GivenALabelLinkFailsMidway_ThenTheWholeDiffRollsBack(t *testing.T) {
+	ctx, txLog, mObj := setupBoardTxTest(t)
+	mState := registerSyncStateMock(t)
+	existing := issueRow(t, "i-1", "卡", "todo", "")
+	existing.ID = 11
+	drop := linkRow(t, "k-drop", "i-1", "l-drop")
+	drop.ID = 42
+	mObj.EXPECT().Find(gomock.Any(), boardUser, "i-1").Return(existing, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
+		Return([]*sync_entity.SyncObject{
+			labelRow(t, "l-drop", "docs", "gray"),
+			labelRow(t, "l-new", "feature", "green"),
+			existing, drop,
+		}, nil)
+
+	var version int64 = 600
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).DoAndReturn(
+		func(context.Context, int64, int64) (int64, error) { version++; return version, nil },
+	).AnyTimes()
+	mObj.EXPECT().Tombstone(gomock.Any(), int64(42), gomock.Any(), gomock.Any()).
+		Return(int64(1), nil).AnyTimes()
+	written := 0
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(context.Context, *sync_entity.SyncObject) error {
+			written++
+			// 卡的载荷先落，新挂的那一行关联失败。
+			if written == 2 {
+				return assert.AnError
+			}
+			return nil
+		}).AnyTimes()
+
+	labels := []string{"l-new"}
+	_, err := IssueBoard().UpdateIssue(ctx, IssueWriteInput{
+		UserID: boardUser, SyncID: "i-1", Fields: map[string]any{}, LabelSyncIDs: &labels})
+
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events(),
+		"新关联失败必须把卡的载荷与已落的墓碑一起撤销，否则账号里留着删了一半的标签集合")
+}
+
+// 删一张卡是**一个**事务：它身上的关联墓碑与卡自己的墓碑同进同出。
+func TestDeleteIssue_ThenTheWholeCascadeIsOneTransaction(t *testing.T) {
+	ctx, txLog, mObj := setupBoardTxTest(t)
+	mState := registerSyncStateMock(t)
+	target := issueRow(t, "i-1", "卡", "todo", "")
+	target.ID = 11
+	mine := linkRow(t, "k-1", "i-1", "l-bug")
+	mine.ID = 12
+	mObj.EXPECT().Find(gomock.Any(), boardUser, "i-1").Return(target, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
+		Return([]*sync_entity.SyncObject{target, mine}, nil)
+
+	var version int64 = 700
+	var allocatedInTx []bool
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).DoAndReturn(
+		func(ctx context.Context, _, _ int64) (int64, error) {
+			allocatedInTx = append(allocatedInTx, hubtest.InTransaction(ctx))
+			version++
+			return version, nil
+		}).AnyTimes()
+	var tombstonedInTx []bool
+	mObj.EXPECT().Tombstone(gomock.Any(), int64(12), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _, _, _ int64) (int64, error) {
+			tombstonedInTx = append(tombstonedInTx, hubtest.InTransaction(ctx))
+			return 1, nil
+		})
+	savedInTx := false
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ *sync_entity.SyncObject) error {
+			savedInTx = hubtest.InTransaction(ctx)
+			return nil
+		})
+
+	_, err := IssueBoard().DeleteIssue(ctx, boardUser, "i-1")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events(),
+		"关联与卡是一次删除，不是两次各自提交的写入")
+	assert.Len(t, tombstonedInTx, 1)
+	assert.NotContains(t, tombstonedInTx, false, "级联的每一行都要落在那个事务里")
+	assert.True(t, savedInTx, "卡自己的墓碑也在同一个事务里")
+	assert.NotContains(t, allocatedInTx, false, "版本号也要取在事务里")
 }

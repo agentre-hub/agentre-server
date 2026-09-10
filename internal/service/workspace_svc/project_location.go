@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/pkg/i18n"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
@@ -100,7 +101,7 @@ func (s *workspaceSvc) ProjectMachines(
 		if dev.Kind == device_entity.KindAgentred {
 			// agentred：路径在同步组里，逐条给正文。
 			if row, ok := locationByFingerprint[dev.Fingerprint]; ok {
-				var lp projectLocationPayload
+				var lp syncwire.ProjectLocationPayload
 				if json.Unmarshal([]byte(row.Payload), &lp) == nil && lp.Path != "" {
 					view.Configured, view.Path, view.LocationSyncID = true, lp.Path, row.SyncID
 				}
@@ -257,7 +258,7 @@ func projectsWithARunnablePath(
 			!agentredFingerprints[row.AgentredFingerprint] {
 			continue
 		}
-		var lp projectLocationPayload
+		var lp syncwire.ProjectLocationPayload
 		if json.Unmarshal([]byte(row.Payload), &lp) == nil && lp.Path != "" {
 			out[row.ScopeSyncID] = true
 		}

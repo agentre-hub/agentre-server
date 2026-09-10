@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -29,18 +30,9 @@ import (
 // 也还没有它。级联删除是个例外——它落的是**墓碑**而不是新内容，而一个指向已删项目
 // 的路径记录留着只会让那台机器上的目录一直挂在一个不存在的项目名下。
 
-// projectAgentPayload 是项目 ↔ Agent 成员关系的同步载荷，与桌面端
-// （agentre 侧 sync_svc/adapter_project.go 的同名结构体）同名同键。两端都用同步标识
+// 成员关系的载荷形状归共享契约 syncwire.ProjectAgentPayload：两端都用同步标识
 // 表达，**不占 sync_objects.project_sync_id 列**——那一列是路径记录的账号内自然键，
 // 桌面端推上来的成员关系同样不带它。
-//
-// 与本仓 agent_session_entity / sync_entity.GuardPayload 同一种「跨仓重新声明」的做法
-// （决策 6 的同一条理由）：键名改了两边都要改，因此这里写明出处。
-type projectAgentPayload struct {
-	ProjectSyncID string `json:"project_sync_id"`
-	AgentSyncID   string `json:"agent_sync_id"`
-	JoinedAt      int64  `json:"joined_at"`
-}
 
 // ProjectMemberView 是项目的一个直接成员。
 //
@@ -85,7 +77,7 @@ func checkProjectParent(ctx context.Context, in OrgWriteInput, selfSyncID string
 	}
 	parentOf := make(map[string]string, len(rows))
 	for _, row := range rows {
-		var pp projectPayload
+		var pp syncwire.ProjectPayload
 		if json.Unmarshal([]byte(row.Payload), &pp) != nil {
 			// 载荷解不开的行只是不知道它挂在谁下面，不该让整次写入失败；它在环检测里
 			// 相当于一个根节点，向上走到它就停。
@@ -140,7 +132,7 @@ func checkProjectMemberEnds(ctx context.Context, in OrgWriteInput, selfSyncID st
 			if row.SyncID == selfSyncID {
 				continue
 			}
-			var pa projectAgentPayload
+			var pa syncwire.ProjectAgentPayload
 			if json.Unmarshal([]byte(row.Payload), &pa) != nil {
 				continue
 			}
@@ -179,7 +171,7 @@ func withProjectMemberJoinedAt(kind string, fields map[string]any, nowMs int64) 
 // cascadeProjectDelete 落实决策 13 的那一半：删一个项目时，它的**全部子项目**、
 // 以及这整棵子树名下的成员关系与路径记录都跟着落墓碑。
 //
-// **对话一条都不删。** 项目归属是判出来的而不是存出来的（projectSyncIDByLocation），
+// **对话一条都不删。** 项目归属是判出来的而不是存出来的（ProjectSyncIDByLocation），
 // 项目行没了，那些对话自然落回「未归项目」组——删项目是整理，不是清账。
 //
 // 与桌面端 projectAdapter.children 是同一份清单，只是那一份由桌面端在本端发起删除时
@@ -199,7 +191,7 @@ func cascadeProjectDelete(
 	if err != nil {
 		return err
 	}
-	subtree := projectSubtree(rows, root.SyncID)
+	subtree := ProjectSubtree(rows, root.SyncID)
 
 	now := time.Now().UnixMilli()
 	cascaded := 0
@@ -226,20 +218,28 @@ func cascadeProjectDelete(
 	return nil
 }
 
-// projectSubtree 回「这个项目自己 + 它的全部后代」的标识集合。父子关系按载荷里的
-// parent_sync_id 建，访问过的节点不再展开——数据里已经有环时这里不该转不出来。
-func projectSubtree(rows []*sync_entity.SyncObject, rootSyncID string) map[string]bool {
+// ProjectChildren 把项目行整理成 父项目标识 → 直接子项目标识 的邻接表。父子关系是
+// 项目域自己的事实（载荷里的 parent_sync_id），子树展开与看板的按项目汇总读的都是
+// 它——两处各解一遍载荷就是两处对「谁是谁的孩子」各有一套说法的机会。
+func ProjectChildren(rows []*sync_entity.SyncObject) map[string][]string {
 	childrenOf := map[string][]string{}
 	for _, row := range rows {
 		if row.Kind != sync_entity.KindProject {
 			continue
 		}
-		var pp projectPayload
+		var pp syncwire.ProjectPayload
 		if json.Unmarshal([]byte(row.Payload), &pp) != nil || pp.ParentSyncID == "" {
 			continue
 		}
 		childrenOf[pp.ParentSyncID] = append(childrenOf[pp.ParentSyncID], row.SyncID)
 	}
+	return childrenOf
+}
+
+// ProjectSubtree 回「这个项目自己 + 它的全部后代」的标识集合。访问过的节点不再
+// 展开——数据里已经有环时这里不该转不出来。
+func ProjectSubtree(rows []*sync_entity.SyncObject, rootSyncID string) map[string]bool {
+	childrenOf := ProjectChildren(rows)
 	subtree := map[string]bool{rootSyncID: true}
 	queue := []string{rootSyncID}
 	for len(queue) > 0 {
@@ -267,7 +267,7 @@ func belongsToSubtree(row *sync_entity.SyncObject, subtree map[string]bool) bool
 	case sync_entity.KindProject:
 		return subtree[row.SyncID]
 	case sync_entity.KindProjectAgent:
-		var pa projectAgentPayload
+		var pa syncwire.ProjectAgentPayload
 		if json.Unmarshal([]byte(row.Payload), &pa) != nil {
 			return false
 		}
@@ -291,7 +291,7 @@ func projectMembersBySyncID(rows []*sync_entity.SyncObject) map[string][]Project
 		if row.Kind != sync_entity.KindProjectAgent {
 			continue
 		}
-		var pa projectAgentPayload
+		var pa syncwire.ProjectAgentPayload
 		if json.Unmarshal([]byte(row.Payload), &pa) != nil ||
 			pa.ProjectSyncID == "" || pa.AgentSyncID == "" {
 			continue

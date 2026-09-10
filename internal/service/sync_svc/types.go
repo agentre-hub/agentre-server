@@ -22,7 +22,7 @@ const (
 // PushItem 是一次上行里的一条改动。
 //
 // 这里没有、也不该有任何桌面端的本地自增 ID：跨机引用一律走同步标识
-// （字符串）、agentred 指纹或 provider_key，载荷本身还要过 ValidatePayload。
+// （字符串）、agentred 指纹或 provider_key，载荷本身还要过共享守卫 syncwire.GuardPayload。
 type PushItem struct {
 	Kind   string
 	SyncID string

@@ -1,4 +1,4 @@
-package workspace_svc
+package issue_svc
 
 import (
 	"testing"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
 // ── 看板读路径（规格 2026-08-27-issues-board-project-scope「`agentre-server` 端」）──
@@ -61,7 +62,7 @@ func issueRow(t *testing.T, syncID, title, stage, projectSyncID string) *sync_en
 
 func withPayload(t *testing.T, row *sync_entity.SyncObject, fields map[string]any) *sync_entity.SyncObject {
 	t.Helper()
-	next, err := withOrgFields(row.Payload, fields)
+	next, err := workspace_svc.WithOrgFields(row.Payload, fields)
 	require.NoError(t, err)
 	row.Payload = next
 	return row
@@ -92,7 +93,7 @@ func issueSyncIDs(view *IssueBoardView) []string {
 
 // 项目范围收窄到「选中项目 + 它的整棵子树」：兄弟项目与未归属都不在板上。
 func TestIssueBoard_GivenProjectScope_ThenOnlyTheSubtreeIsOnTheBoard(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		projectRow(t, "p-root", "后端", ""),
 		projectRow(t, "p-child", "网关", "p-root"),
@@ -116,7 +117,7 @@ func TestIssueBoard_GivenProjectScope_ThenOnlyTheSubtreeIsOnTheBoard(t *testing.
 // 于是 scope=project 静默变成一块未归属的板——那是另一个档，不能从一个漏填的参数
 // 里冒出来。
 func TestIssueBoard_GivenProjectScopeWithoutAProject_ThenRejected(t *testing.T) {
-	ctx, _, _, _, _ := setupWorkspaceTest(t)
+	ctx, _ := setupBoardTest(t)
 
 	_, err := IssueBoard().Board(ctx, IssueBoardQuery{
 		UserID: boardUser, Scope: IssueScopeProject})
@@ -125,7 +126,7 @@ func TestIssueBoard_GivenProjectScopeWithoutAProject_ThenRejected(t *testing.T) 
 
 // 未归属是一档**确定的范围**，不是「不加条件」：只有 project_sync_id 为空的卡在板上。
 func TestIssueBoard_GivenUnassignedScope_ThenOnlyIssuesWithoutAProjectAreOnTheBoard(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		projectRow(t, "p-root", "后端", ""),
 		issueRow(t, "i-root", "有项目", "todo", "p-root"),
@@ -142,7 +143,7 @@ func TestIssueBoard_GivenUnassignedScope_ThenOnlyIssuesWithoutAProjectAreOnTheBo
 // 关键词匹配标题与描述，大小写不敏感；`#编号` 那一半在这一侧退化成去掉井号后的
 // 文本匹配——同步载荷里没有任何一端的本地编号，server 手上根本没有那个数。
 func TestIssueBoard_GivenKeyword_ThenTitleAndDescriptionMatchCaseInsensitively(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		issueRow(t, "i-title", "修 Gateway 超时", "todo", ""),
 		withPayload(t, issueRow(t, "i-body", "另一件事", "todo", ""),
@@ -172,7 +173,7 @@ func TestIssueBoard_GivenLabelConditions_ThenAnyAllAndNoLabelEachSelectDifferent
 	}
 
 	t.Run("任意一个", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
 			UserID: boardUser, LabelSyncIDs: []string{"l-bug", "l-docs"}})
@@ -181,7 +182,7 @@ func TestIssueBoard_GivenLabelConditions_ThenAnyAllAndNoLabelEachSelectDifferent
 	})
 
 	t.Run("全部满足", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
 			UserID: boardUser, LabelSyncIDs: []string{"l-bug", "l-docs"}, LabelMatchAll: true})
@@ -190,7 +191,7 @@ func TestIssueBoard_GivenLabelConditions_ThenAnyAllAndNoLabelEachSelectDifferent
 	})
 
 	t.Run("只看没有标签的", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{UserID: boardUser, NoLabel: true})
 		require.NoError(t, err)
@@ -199,7 +200,7 @@ func TestIssueBoard_GivenLabelConditions_ThenAnyAllAndNoLabelEachSelectDifferent
 
 	// 卡片自己带着标签正文：看板要画 chip，再问一次服务端就是两趟。
 	t.Run("卡片带标签正文", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
 			UserID: boardUser, LabelSyncIDs: []string{"l-docs"}})
@@ -230,7 +231,7 @@ func TestIssueBoard_GivenTimeRanges_ThenEachNarrowsItsOwnAxis(t *testing.T) {
 	}
 
 	t.Run("更新时间", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
@@ -240,7 +241,7 @@ func TestIssueBoard_GivenTimeRanges_ThenEachNarrowsItsOwnAxis(t *testing.T) {
 	})
 
 	t.Run("创建时间", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
@@ -250,7 +251,7 @@ func TestIssueBoard_GivenTimeRanges_ThenEachNarrowsItsOwnAxis(t *testing.T) {
 	})
 
 	t.Run("已完成保留多久", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
@@ -263,7 +264,7 @@ func TestIssueBoard_GivenTimeRanges_ThenEachNarrowsItsOwnAxis(t *testing.T) {
 	// 上界单独成条：只给上界时下界不该跟着冒出来，`>` 与 `>=` 的差别也只有在这里
 	// 才看得见（两条区间测试的下界都远离边界值）。
 	t.Run("只给上界", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
@@ -275,7 +276,7 @@ func TestIssueBoard_GivenTimeRanges_ThenEachNarrowsItsOwnAxis(t *testing.T) {
 
 	// 两端都是闭区间：边界那一刻的卡在里面，差一毫秒的在外面。
 	t.Run("边界是闭的", func(t *testing.T) {
-		ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+		ctx, mObj := setupBoardTest(t)
 		freezeBoardNow(t, now)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 		view, err := IssueBoard().Board(ctx, IssueBoardQuery{
@@ -291,7 +292,7 @@ func TestIssueBoard_GivenTimeRanges_ThenEachNarrowsItsOwnAxis(t *testing.T) {
 func TestIssueBoard_GivenADoneCardWithoutAClosedAt_ThenTheRetentionWindowFallsBackToUpdatedAt(t *testing.T) {
 	const day = int64(24 * 60 * 60 * 1000)
 	now := int64(1_800_000_000_000)
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	freezeBoardNow(t, now)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		// 两张都没有 closed_at，只有最后修改时间分得出新旧。
@@ -309,7 +310,7 @@ func TestIssueBoard_GivenADoneCardWithoutAClosedAt_ThenTheRetentionWindowFallsBa
 // 空串与不认识的阶段一律归到第一列：把它们留在一个不存在的列里，等于让用户再也
 // 看不见那张卡——它既不在板上，也不在任何一个列头的计数里。
 func TestIssueBoard_GivenAnEmptyOrUnknownStage_ThenTheCardLandsInTheFirstColumn(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		issueRow(t, "i-empty", "迁移默认的空阶段", "", ""),
 		issueRow(t, "i-unknown", "另一端加出来的阶段", "archived", ""),
@@ -334,7 +335,7 @@ func TestIssueBoard_GivenAnEmptyOrUnknownStage_ThenTheCardLandsInTheFirstColumn(
 // (任务, 标签) 的关联行。卡上不能因此出现两枚一模一样的 chip，「被 N 个任务使用」
 // 也不能把一张卡数成两张。
 func TestIssueBoard_GivenTwoLinkRowsForTheSamePair_ThenTheChipAndTheUsageCountAreCountedOnce(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		labelRow(t, "l-bug", "bug", "red"),
 		issueRow(t, "i-1", "一张卡", "todo", ""),
@@ -354,7 +355,7 @@ func TestIssueBoard_GivenTwoLinkRowsForTheSamePair_ThenTheChipAndTheUsageCountAr
 // 「只看没有标签的」说了就不再看选中的是哪些标签：两个条件一起判必然一张卡都留不下，
 // 那是一块解释不了的空板，不是用户表达的意思。
 func TestIssueBoard_GivenNoLabelTogetherWithChosenLabels_ThenNoLabelWins(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		labelRow(t, "l-bug", "bug", "red"),
 		issueRow(t, "i-bare", "没有标签", "todo", ""),
@@ -371,7 +372,7 @@ func TestIssueBoard_GivenNoLabelTogetherWithChosenLabels_ThenNoLabelWins(t *test
 // 列头的「命中 / 全部」是两把尺子各量一次：命中吃全部筛选条件，全部只吃项目范围。
 // 零命中的列照常在计数里出现，界面才留得住那一列。
 func TestIssueBoard_ThenStageCountsHonourFiltersAndTotalsOnlyTheScope(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		projectRow(t, "p-a", "甲", ""),
 		issueRow(t, "i-1", "命中的卡", "todo", "p-a"),
@@ -394,7 +395,7 @@ func TestIssueBoard_ThenStageCountsHonourFiltersAndTotalsOnlyTheScope(t *testing
 // 项目选择器右侧的计数是「该项目及其子树里**未完成**的任务数」，且**不随筛选变**
 // ——打开选择器就是为了判断该切到哪，这个数跟着筛选缩水就失去了用途。
 func TestIssueBoard_ThenProjectCountsRollUpTheSubtreeAndIgnoreTheFilters(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		projectRow(t, "p-root", "后端", ""),
 		projectRow(t, "p-child", "网关", "p-root"),
@@ -422,7 +423,7 @@ func TestIssueBoard_ThenProjectCountsRollUpTheSubtreeAndIgnoreTheFilters(t *test
 // 标签目录随看板一起下发，每个带「被 N 个任务使用」——删一个标签之前要说得出
 // 爆炸半径。已落墓碑的任务不算数（ListByKinds 本就不返回墓碑）。
 func TestIssueBoard_ThenLabelCatalogueCarriesUsageCount(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		labelRow(t, "l-bug", "bug", "red"),
 		labelRow(t, "l-idle", "refactor", "steel"),
@@ -449,7 +450,7 @@ func TestIssueBoard_ThenLabelCatalogueCarriesUsageCount(t *testing.T) {
 // 软删（载荷里 status 不是 ACTIVE）的标签不出现在目录里，也不再把卡片染上颜色。
 // 桌面端刻意把 status 放进载荷，就是因为 server 没有本地行可判（adapter_issue.go）。
 func TestIssueBoard_GivenSoftDeletedLabel_ThenItLeavesTheCatalogueAndTheCards(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		labelRow(t, "l-live", "bug", "red"),
 		withPayload(t, labelRow(t, "l-dead", "docs", "gray"), map[string]any{"status": 2}),
@@ -481,7 +482,7 @@ func TestIssueBoard_GivenAnyBoard_ThenColumnOrderIsPositionOnly(t *testing.T) {
 		}
 	}
 
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return(rows(t), nil)
 
 	view, err := IssueBoard().Board(ctx, IssueBoardQuery{UserID: boardUser})
@@ -493,7 +494,7 @@ func TestIssueBoard_GivenAnyBoard_ThenColumnOrderIsPositionOnly(t *testing.T) {
 // 执行归属三个字段原样往返：本轮没有任何路径读它们，但它们必须能被看见与保存，
 // 否则表单打开时那三颗 pill 会是空的。
 func TestIssueBoard_ThenExecutionAssignmentSurvivesTheReadPath(t *testing.T) {
-	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
+	ctx, mObj := setupBoardTest(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardKinds).Return([]*sync_entity.SyncObject{
 		withPayload(t, issueRow(t, "i-1", "一", "todo", ""), map[string]any{
 			"agent_sync_id": "a-1", "agent_backend_sync_id": "b-1",

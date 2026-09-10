@@ -1,4 +1,4 @@
-package workspace_svc
+package agent_session_svc
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 
 // setupSessionReadTest 只装配「记已读」这条路要用到的那一个仓储与账号通道替身。
 func setupSessionReadTest(t *testing.T) (
-	context.Context, *mock_agent_session_repo.MockSummaryRepo, *stubAccountChan, *workspaceSvc,
+	context.Context, *mock_agent_session_repo.MockSummaryRepo, *stubAccountChan, *sessionReadSvc,
 ) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)

@@ -95,7 +95,7 @@ func setupWorkspaceTest(t *testing.T) (
 
 // setupWorkspaceTxTest 与 setupWorkspaceTest 只差一件东西：它还交回事务事件记录。
 //
-// 写路径把「取版本号 + 落库」钉在同一个事务里（withTx），ctx 因此必须真的带着一个
+// 写路径把「取版本号 + 落库」钉在同一个事务里（WithOrgWriteTx），ctx 因此必须真的带着一个
 // 开得起事务的连接；hubtest.TxDatabase 提供的正是它——只认 BEGIN/COMMIT/ROLLBACK，
 // 任何一条真的 SQL 都会当场失败（这一层的数据访问一律走 mockgen 注入的仓储）。
 // 只有断言事务边界本身的用例需要那份记录，其余的走 setupWorkspaceTest。
@@ -224,7 +224,7 @@ func TestListAccountAgents_NeverCarriesCLIPathOrEnvJSON(t *testing.T) {
 
 // 「从项目里挑一个 Agent」要的两样在 AgentView 上：Agent 自己的图标，以及它**直接
 // 加入**了哪些项目。成员关系存在同步组的 project_agent 里（桌面端 adapter_project 的
-// projectAgentPayload），此前这一档 kind 压根没被拉过——不拉它，浏览器就答不出
+// syncwire.ProjectAgentPayload），此前这一档 kind 压根没被拉过——不拉它，浏览器就答不出
 // 「这个项目里有哪些 Agent」，只能退回按机器列。
 //
 // 继承（子项目看得见父项目的成员）**不在这一层算**：项目树已经整份发给浏览器了
@@ -996,7 +996,7 @@ func TestSetExecTargetOrder_GivenUncoveredTarget_ThenItGoesToTheTail(t *testing.
 
 // SetExecTargetOrder 也是浏览器对 sync_objects 的直写（决策 14「浏览器排的就是账号
 // 默认顺序」）——它比 CreateOrgObject/UpdateOrgObject/DeleteOrgObject 更老，绕开了
-// saveOrgRow 自己取版本号，但一样落在「服务端直写（web 组织面）」这一类里：拖拽重排
+// SaveOrgRow 自己取版本号，但一样落在「服务端直写（web 组织面）」这一类里：拖拽重排
 // 同样要让在线的桌面端立刻看到，不然「只给新路径加信号」的半吊子后果就落在它头上。
 func TestSetExecTargetOrder_GivenPermutation_ThenBroadcastsHighestVersion(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)

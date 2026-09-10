@@ -258,8 +258,9 @@ func goldenExchanges() []exchange {
 			wantCode:   0,
 		},
 		{
-			// 单条被拒：载荷带了桌面端的本地自增 ID。桌面端有一份同规则的守卫
-			// （syncwire.GuardPayload），两边规则不一致时坏的一边就是靠这个 reason 现形。
+			// 单条被拒：载荷带了桌面端的本地自增 ID。守卫本身（syncwire.GuardPayload）
+			// 与它的向量归共享 module，这里钉的是**本仓这一层**：HTTP 路径确实调了它，
+			// 而且把拒绝落成单条 rejected + payload_rejected，不是整批失败。
 			name:   "sync-push-rejected-payload",
 			method: http.MethodPost,
 			path:   "/v1/sync/push",

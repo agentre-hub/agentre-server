@@ -6,7 +6,7 @@
 // 这一层是唯一认识「组」这个词的地方：仓储只谈自己的列（决策 1 把项目那一维留在这里，
 // 因为项目归属是拿 (指纹, cwd) 与账号项目树比出来的，决策 12），控制器只搬数据。
 // cwd 在这里参与比较后就地出局，一个字段都不往上传（R19）。
-package workspace_svc
+package agent_session_svc
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
 const (
@@ -225,7 +226,7 @@ func (a projectAffinity) projectOf(reported, machineFingerprint, cwd string) str
 // 是常态（删除的级联由另一端入队，路上有时差）。留着的话，报了这个标识的对话按
 // 决策 13 落回随手对话，落在它目录里的对话却被判进一个只有标识、没有名字的幽灵组
 // ——同一个不存在的项目两种答案。在这里筛掉，下游三处就都不必再各判一次活性。
-func (s *workspaceSvc) projectLocations(ctx context.Context, userID int64) (projectAffinity, error) {
+func (s *sessionReadSvc) projectLocations(ctx context.Context, userID int64) (projectAffinity, error) {
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, projectAffinityKinds)
 	if err != nil {
 		return projectAffinity{}, err
@@ -242,7 +243,7 @@ func (s *workspaceSvc) projectLocations(ctx context.Context, userID int64) (proj
 			locations = append(locations, row)
 		}
 	}
-	return projectAffinity{byLocation: projectSyncIDByLocation(locations), liveProjects: live}, nil
+	return projectAffinity{byLocation: workspace_svc.ProjectSyncIDByLocation(locations), liveProjects: live}, nil
 }
 
 // projectLocationCache 让**一次索引读取**只查一遍项目位置表：取一次用到底。
@@ -256,7 +257,7 @@ func (s *workspaceSvc) projectLocations(ctx context.Context, userID int64) (proj
 // 什么时候的。惰性也保留着——没有一行带 cwd 时根本不查（那次查询的结果只可能被拿
 // 去比 cwd）。
 type projectLocationCache struct {
-	svc    *workspaceSvc
+	svc    *sessionReadSvc
 	userID int64
 	loaded bool
 	rows   projectAffinity
@@ -274,7 +275,7 @@ func (c *projectLocationCache) get(ctx context.Context) (projectAffinity, error)
 	return c.rows, nil
 }
 
-// splitLocationKey 把 projectSyncIDByLocation 的键拆回 (指纹, cwd)。
+// splitLocationKey 把 workspace_svc.ProjectSyncIDByLocation 的键拆回 (指纹, cwd)。
 func splitLocationKey(key string) agent_session_repo.SummaryLocation {
 	fp, cwd, _ := strings.Cut(key, "\x00")
 	return agent_session_repo.SummaryLocation{MachineFingerprint: fp, Cwd: cwd}
@@ -350,7 +351,7 @@ func sortLocations(locations []agent_session_repo.SummaryLocation) {
 
 // applyScope 把一个组的身份翻成仓储判据。认不出来的 scope 是错，不是「当成没传」：
 // 静默忽略会把用户要的那一组悄悄换成整个账号。
-func (s *workspaceSvc) applyScope(
+func (s *sessionReadSvc) applyScope(
 	ctx context.Context, in SessionIndexQuery, q agent_session_repo.SummaryQuery,
 	locations *projectLocationCache,
 ) (agent_session_repo.SummaryQuery, error) {
@@ -410,7 +411,7 @@ func (s *workspaceSvc) applyScope(
 }
 
 // SessionIndex 见 WorkspaceSvc 上的接口注释。
-func (s *workspaceSvc) SessionIndex(ctx context.Context, in SessionIndexQuery) (SessionIndexPage, error) {
+func (s *sessionReadSvc) SessionIndex(ctx context.Context, in SessionIndexQuery) (SessionIndexPage, error) {
 	base := baseQuery(in)
 	// 这一次读取里的每一处项目归属都从这一份名单来，它最多被查一遍。
 	locations := &projectLocationCache{svc: s, userID: in.UserID}
@@ -437,7 +438,7 @@ func (s *workspaceSvc) SessionIndex(ctx context.Context, in SessionIndexQuery) (
 
 // scopedPage 翻一个组。多取一条判 HasMore，而不是靠「这页刚好装满」去猜——半满的
 // 最后一页与真的到头了否则分不清（与 Transcript 同一条做法）。
-func (s *workspaceSvc) scopedPage(
+func (s *sessionReadSvc) scopedPage(
 	ctx context.Context, in SessionIndexQuery, base agent_session_repo.SummaryQuery,
 	locations *projectLocationCache,
 ) (SessionIndexPage, error) {
@@ -463,7 +464,7 @@ func (s *workspaceSvc) scopedPage(
 
 // pageOf 取一页并把游标算好。空页上游标原样退回调用方送来的位置，不回退到起点——
 // 回退会让调用方把这一组从头再翻一遍。
-func (s *workspaceSvc) pageOf(
+func (s *sessionReadSvc) pageOf(
 	ctx context.Context, locations *projectLocationCache, q agent_session_repo.SummaryQuery,
 	cursor agent_session_repo.SummaryCursor, limit int,
 ) ([]SavedSessionSummaryView, string, bool, error) {
@@ -493,7 +494,7 @@ func (s *workspaceSvc) pageOf(
 //
 // 每组的头几条各是一次查询。组数由账号里的项目 / Agent / 机器数决定（个位到几十），
 // 这条代价换来的是每组各自的真数与「查看全部 N」能真的翻完那一组。
-func (s *workspaceSvc) axisSkeleton(
+func (s *sessionReadSvc) axisSkeleton(
 	ctx context.Context, in SessionIndexQuery, base agent_session_repo.SummaryQuery,
 	locations *projectLocationCache,
 ) (SessionIndexPage, error) {
@@ -540,7 +541,7 @@ type groupSpec struct {
 
 // groupSpecsFor 按轴摆出这一轮有哪些组。只在这里认识「哪个轴分出哪些组」，取内容
 // 与排序都不掺进来。
-func (s *workspaceSvc) groupSpecsFor(
+func (s *sessionReadSvc) groupSpecsFor(
 	ctx context.Context, in SessionIndexQuery, base agent_session_repo.SummaryQuery,
 	total int64, locations *projectLocationCache,
 ) ([]groupSpec, error) {
@@ -586,7 +587,7 @@ func (s *workspaceSvc) groupSpecsFor(
 }
 
 // projectGroupSpecs 摆出项目轴的组。它比别的轴多一步：仓储数出来的是判据，不是项目。
-func (s *workspaceSvc) projectGroupSpecs(
+func (s *sessionReadSvc) projectGroupSpecs(
 	ctx context.Context, base agent_session_repo.SummaryQuery, locations *projectLocationCache,
 ) ([]groupSpec, error) {
 	affinity, err := locations.get(ctx)
@@ -629,7 +630,7 @@ func (s *workspaceSvc) projectGroupSpecs(
 // 一行都没有、或没有任何一行带得出项目归属的判据（cwd 与对端报的项目标识都空）时
 // 不去查那两份名单：那次查询的结果只可能被用来判归属，没有判据就没有可判的东西。
 // 查得到的那一次由 locations 记着，同一次读取里的其余组直接复用。
-func (s *workspaceSvc) viewsOf(
+func (s *sessionReadSvc) viewsOf(
 	ctx context.Context, locations *projectLocationCache, rows []*agent_session_entity.SessionSummary,
 ) ([]SavedSessionSummaryView, error) {
 	needsProject := false
@@ -676,7 +677,7 @@ func (s *workspaceSvc) viewsOf(
 // 判据不在这里重写：attentionExpr 住在 agent_session_repo 那一侧，索引的 chip 与这颗
 // 角标因此必然是同一批行。在这里另写一遍 `WaitingForInput == true` 会让两者在下一次
 // 判据演化时悄悄分家 —— 2026-09-04 之前正是这样：chip 改判据的那一轮，侧栏没跟上。
-func (s *workspaceSvc) AttentionCounts(
+func (s *sessionReadSvc) AttentionCounts(
 	ctx context.Context, userID int64,
 ) (agent_session_repo.AttentionCounts, error) {
 	return agent_session_repo.Summary().CountAttention(ctx, agent_session_repo.SummaryQuery{

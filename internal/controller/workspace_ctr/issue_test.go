@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/agentre-hub/agentre-server/internal/service/issue_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
@@ -16,24 +17,24 @@ import (
 // 这一层只做两件事：把「这次请求提到了哪些键」翻成 service 要的 map，以及从鉴权
 // 上下文里取账号。判定一概不在这里，因此这些测试钉的也只有这两件事。
 
-// stubIssueBoardSvc 记下实际收到的入参，实现 workspace_svc.IssueBoardSvc。
+// stubIssueBoardSvc 记下实际收到的入参，实现 issue_svc.IssueBoardSvc。
 type stubIssueBoardSvc struct {
-	board       *workspace_svc.IssueBoardView
-	queries     []workspace_svc.IssueBoardQuery
+	board       *issue_svc.IssueBoardView
+	queries     []issue_svc.IssueBoardQuery
 	ops         []string
-	issueInputs []workspace_svc.IssueWriteInput
-	moveInputs  []workspace_svc.IssueMoveInput
-	labelInputs []workspace_svc.LabelWriteInput
+	issueInputs []issue_svc.IssueWriteInput
+	moveInputs  []issue_svc.IssueMoveInput
+	labelInputs []issue_svc.LabelWriteInput
 	deletes     []string
 	deleteUsers []int64
 }
 
 func (s *stubIssueBoardSvc) Board(
-	_ context.Context, q workspace_svc.IssueBoardQuery,
-) (*workspace_svc.IssueBoardView, error) {
+	_ context.Context, q issue_svc.IssueBoardQuery,
+) (*issue_svc.IssueBoardView, error) {
 	s.queries = append(s.queries, q)
 	if s.board == nil {
-		return &workspace_svc.IssueBoardView{}, nil
+		return &issue_svc.IssueBoardView{}, nil
 	}
 	return s.board, nil
 }
@@ -44,21 +45,21 @@ func (s *stubIssueBoardSvc) write(op string) (*workspace_svc.OrgWriteResult, err
 }
 
 func (s *stubIssueBoardSvc) CreateIssue(
-	_ context.Context, in workspace_svc.IssueWriteInput,
+	_ context.Context, in issue_svc.IssueWriteInput,
 ) (*workspace_svc.OrgWriteResult, error) {
 	s.issueInputs = append(s.issueInputs, in)
 	return s.write("create-issue")
 }
 
 func (s *stubIssueBoardSvc) UpdateIssue(
-	_ context.Context, in workspace_svc.IssueWriteInput,
+	_ context.Context, in issue_svc.IssueWriteInput,
 ) (*workspace_svc.OrgWriteResult, error) {
 	s.issueInputs = append(s.issueInputs, in)
 	return s.write("update-issue")
 }
 
 func (s *stubIssueBoardSvc) MoveIssue(
-	_ context.Context, in workspace_svc.IssueMoveInput,
+	_ context.Context, in issue_svc.IssueMoveInput,
 ) (*workspace_svc.OrgWriteResult, error) {
 	s.moveInputs = append(s.moveInputs, in)
 	return s.write("move-issue")
@@ -72,14 +73,14 @@ func (s *stubIssueBoardSvc) DeleteIssue(
 }
 
 func (s *stubIssueBoardSvc) CreateLabel(
-	_ context.Context, in workspace_svc.LabelWriteInput,
+	_ context.Context, in issue_svc.LabelWriteInput,
 ) (*workspace_svc.OrgWriteResult, error) {
 	s.labelInputs = append(s.labelInputs, in)
 	return s.write("create-label")
 }
 
 func (s *stubIssueBoardSvc) UpdateLabel(
-	_ context.Context, in workspace_svc.LabelWriteInput,
+	_ context.Context, in issue_svc.LabelWriteInput,
 ) (*workspace_svc.OrgWriteResult, error) {
 	s.labelInputs = append(s.labelInputs, in)
 	return s.write("update-label")
@@ -96,8 +97,8 @@ func newBoardTestServer(t *testing.T) (string, *stubIssueBoardSvc, *http.Cookie,
 	t.Helper()
 	stub := &stubIssueBoardSvc{}
 	server, _ := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
-	workspace_svc.SetIssueBoard(stub)
-	t.Cleanup(func() { workspace_svc.SetIssueBoard(workspace_svc.New()) })
+	issue_svc.SetIssueBoard(stub)
+	t.Cleanup(func() { issue_svc.SetIssueBoard(issue_svc.New()) })
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 	return server.URL, stub, cookie, csrf
 }
@@ -175,7 +176,7 @@ func TestMoveIssue_CarriesStageAndAnchorOnly(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	require.Len(t, stub.moveInputs, 1)
-	assert.Equal(t, workspace_svc.IssueMoveInput{
+	assert.Equal(t, issue_svc.IssueMoveInput{
 		UserID: 7, SyncID: "i-1", Stage: "doing", AfterSyncID: "i-2"}, stub.moveInputs[0])
 }
 
@@ -234,7 +235,7 @@ func TestBoard_PassesEverySixFilterThrough(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	require.Len(t, stub.queries, 1)
-	assert.Equal(t, workspace_svc.IssueBoardQuery{
+	assert.Equal(t, issue_svc.IssueBoardQuery{
 		UserID: 7, Scope: "project", ProjectSyncID: "p-1", Keyword: "#179",
 		LabelSyncIDs: []string{"l-a", "l-b"}, LabelMatchAll: true,
 		UpdatedFrom: 100, UpdatedTo: 200, CreatedFrom: 300, CreatedTo: 400,
@@ -245,16 +246,16 @@ func TestBoard_PassesEverySixFilterThrough(t *testing.T) {
 // 响应把卡、标签目录、两套列头计数与项目子树计数一次交齐——看板画一屏不该问两趟。
 func TestBoard_RendersCardsLabelsAndBothCountRows(t *testing.T) {
 	base, stub, cookie, _ := newBoardTestServer(t)
-	stub.board = &workspace_svc.IssueBoardView{
-		Issues: []workspace_svc.IssueCardView{{
+	stub.board = &issue_svc.IssueBoardView{
+		Issues: []issue_svc.IssueCardView{{
 			SyncID: "i-1", Title: "修网关超时", Stage: "todo", Position: 65536,
 			ProjectSyncID: "p-1", AgentBackendSyncID: "b-1", ClosedAt: 0,
-			Labels: []workspace_svc.IssueLabelView{{SyncID: "l-bug", Name: "bug", Tone: "red"}},
+			Labels: []issue_svc.IssueLabelView{{SyncID: "l-bug", Name: "bug", Tone: "red"}},
 		}},
-		Labels:        []workspace_svc.IssueLabelView{{SyncID: "l-bug", Name: "bug", Tone: "red", UsageCount: 3}},
+		Labels:        []issue_svc.IssueLabelView{{SyncID: "l-bug", Name: "bug", Tone: "red", UsageCount: 3}},
 		StageCounts:   map[string]int64{"todo": 1, "doing": 0},
 		StageTotals:   map[string]int64{"todo": 9, "doing": 2},
-		ProjectCounts: []workspace_svc.ProjectIssueCountView{{ProjectSyncID: "p-1", Count: 4}},
+		ProjectCounts: []issue_svc.ProjectIssueCountView{{ProjectSyncID: "p-1", Count: 4}},
 	}
 
 	resp := get(t, base+"/v1/workspace/issues", cookie.Value)

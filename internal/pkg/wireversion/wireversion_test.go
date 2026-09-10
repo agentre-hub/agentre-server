@@ -14,10 +14,10 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/wireversion"
 )
 
-// pinnedWireVersion 读 frontend/pnpm-lock.yaml，返回钉住的 @agentre-hub/agentre-wire
-// 版本。它是仓库里**已提交**的那份「钉住的包到底是哪个版本」的记录（node_modules 不
-// 入库，CI 的 test-backend 也不装前端依赖），并且每次改 pin 重装都会跟着动。Go 读不到
-// package.json，这是 Protocol 与 MinSupported 两条常量守卫共用的唯一锚点。
+// pinnedWireVersion 读 frontend/pnpm-lock.yaml，返回 npm 那一侧钉住的
+// @agentre-hub/agentre-wire 是哪个版本。它是仓库里**已提交**的那份记录（node_modules
+// 不入库，CI 的 test-backend 也不装前端依赖），并且每次改 pin 重装都会跟着动 —— Go
+// 读不到 package.json，这是从 Go 侧看得见 npm pin 的唯一锚点。
 func pinnedWireVersion(t *testing.T) string {
 	t.Helper()
 
@@ -49,25 +49,34 @@ func pinnedWireVersion(t *testing.T) string {
 	return pinned[0]
 }
 
-// Given 协议版本的主人是 @agentre-hub/agentre-wire 的 package.json，而这个仓库只钉一个
-// 不可变 revision 消费它；When 读 Go 侧那个复述出来的常量；Then 它必须与钉住的那份包
-// 的版本逐字相等。这条守卫是唯一挡住「握手自报一个没人认的版本」的东西。
-func TestProtocol_GivenThePinnedWirePackage_WhenCompared_ThenTheGoConstantMatchesVerbatim(t *testing.T) {
+// Given 这个仓库在两条轴上钉同一份 wire 协议 —— go.mod 里 pkg/wire 的 Go module
+// revision，与 frontend/pnpm-lock.yaml 里 @agentre-hub/agentre-wire 的 npm pin —— 两边各
+// 自有一个客户端在握手里自报版本（Go 侧 mirror_svc，浏览器侧 relay client 的
+// PROTOCOL_VERSION）；When 把 npm 那一侧钉住的包版本，与 Go 那一侧从已钉 module 的
+// schema 里读出来的 Protocol 对比；Then 两者逐字相等。
+//
+// 这条守卫已经不是「Go 常量复述了 npm pin」了：Protocol 现在直接来自 schema 自报的那
+// 一格，没有抄本可漂。它改瞄准的是另一件事 —— 同一次构建里，浏览器打包的那份 wire 与
+// Go 链接的那份 wire 必须声明同一代协议。下面的 TestPins_ 要求两条 pin 指向同一 commit，
+// 这条是同一件事的语义面：比的是真的那个版本值，而不是 commit 相等这个代理。
+func TestProtocol_GivenTheGoAndNpmPinsOfTheWireProtocol_WhenCompared_ThenBothDeclareTheSameVersion(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(t, pinnedWireVersion(t), wireversion.Protocol,
-		"wireversion.Protocol 必须与 frontend/package.json 钉住的 @agentre-hub/agentre-wire 版本一同更新")
+		"go.mod 里 pkg/wire 的 pin 与 frontend/pnpm-lock.yaml 里 @agentre-hub/agentre-wire 的 pin 必须声明同一代协议")
 }
 
-// Given server 侧新增的 MinSupported 复述的是与 Protocol 同一个来源（钉住的
-// @agentre-hub/agentre-wire 版本）；When 与钉住的包版本及 Protocol 分别对比；Then 三者
-// 逐字相等 —— 本轮它不产生宽限（spec 决策 3：「本轮它与 Protocol 相等、不产生宽限」），
-// 漏改任何一处都必须炸,而不是悄悄留下一个比 Protocol 更旧的 floor。
-func TestMinSupported_GivenThePinnedWirePackageAndProtocol_WhenCompared_ThenTheGoConstantMatchesBothVerbatim(t *testing.T) {
+// Given MinSupported 是本次构建自己的策略（「还接受多老的对端」），不是协议的属性，
+// 所以它是本包唯一还留着的字面量；When 与本次握手自报的 Protocol 对比；Then 两者逐字
+// 相等 —— 本轮窗口是一个点，不产生宽限（spec「协议：版本窗口与自报版本」决策 3）。
+//
+// 它此前比的是锁文件里钉住的包版本，那只是绕道说同一件事；现在 Protocol 自己就是那个
+// 值，直接比即可。这条守卫不能删：本仓没有桌面仓 methodset_test.go 那条无条件断言
+// MinSupported == Protocol 的守恒律，删掉之后这个下限就无人看管，可以悄悄落后于
+// Protocol 而没人发难。要真的张开宽限窗口，请连同这条守卫一起有意改写。
+func TestMinSupported_GivenThisBuildsOwnFloor_WhenComparedToProtocol_ThenTheWindowIsASinglePoint(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, pinnedWireVersion(t), wireversion.MinSupported,
-		"wireversion.MinSupported 必须与 frontend/package.json 钉住的 @agentre-hub/agentre-wire 版本一同更新")
 	require.Equal(t, wireversion.Protocol, wireversion.MinSupported,
 		"本轮 MinSupported 与 Protocol 相等，不产生宽限窗口（spec 决策 3）")
 }

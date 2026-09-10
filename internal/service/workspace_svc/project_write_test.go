@@ -24,7 +24,7 @@ import (
 
 // 建：项目与成员关系各自由 server 分配同步标识与版本号，来源记空串。
 //
-// 成员关系的两端在**载荷里**用同步标识表达（桌面端 projectAgentPayload 的
+// 成员关系的两端在**载荷里**用同步标识表达（syncwire.ProjectAgentPayload 的
 // project_sync_id / agent_sync_id），不写 sync_objects 的 project_sync_id 列——
 // 那一列是路径记录的自然键，桌面端推上来的成员关系同样不带它，服务端这一侧要写成
 // 同一个形状，否则两个来源的同一类行长得不一样。
@@ -403,7 +403,7 @@ func TestDeleteOrgObject_GivenProjectMember_ThenNoCascade(t *testing.T) {
 
 // ── 项目读侧新长出来的两块：描述与成员 ────────────────────────────────────────
 
-// 描述此前在服务端整条链上都不存在（projectPayload 没声明这个键，json.Unmarshal
+// 描述此前在服务端整条链上都不存在（当时那份私有抄本没声明这个键，json.Unmarshal
 // 直接把它丢掉）。项目设置要改它，就得先读得到它。
 func TestAccountProjects_GivenDescriptionInPayload_ThenItIsCarried(t *testing.T) {
 	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)

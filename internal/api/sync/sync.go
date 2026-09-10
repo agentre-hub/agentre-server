@@ -1,7 +1,7 @@
 // Package sync 定义工作区多端同步的请求与响应结构。
 //
 // 载荷里不出现任何桌面端的本地自增 ID：跨机引用一律是同步标识、agentred 指纹或
-// provider_key，全是字符串。载荷本身还要过 sync_entity.ValidatePayload 的守卫。
+// provider_key，全是字符串。载荷本身还要过共享守卫 syncwire.GuardPayload。
 package sync
 
 import (

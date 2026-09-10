@@ -8,37 +8,33 @@
 //     替换，因此不需要删除时间与冲突元数据。
 package sync_entity
 
-// 同步组承载的对象类型。桌面端的本地自增主键不过机，跨机引用一律用同步标识
-// （字符串）或 agentred 指纹表达。
+import "github.com/agentre-hub/agentre/pkg/syncwire"
+
+// 同步组承载的对象类型归共享契约 pkg/syncwire 所有——桌面端与本仓消费同一份词表
+// （syncwire.Kinds / syncwire.KindValid），成员资格只有一份枚举。取值域从前由两个
+// 宿主各自枚举，任何一边漏掉一个新 kind，那一类对象就在那一端整类静默不同步。
+//
+// 这里只做**别名再导出**：本仓有几十处 sync_entity.Kind* 的调用点，别名让它们一行
+// 不用改。判成员资格请直接用 syncwire.KindValid，本包刻意不再留第二份枚举。
+//
+// 桌面端的本地自增主键不过机，跨机引用一律用同步标识（字符串）或 agentred 指纹表达。
 const (
-	KindProject         = "project"
-	KindDepartment      = "department"
-	KindAgent           = "agent"
-	KindAgentBackend    = "agent_backend"
-	KindAgentExecTarget = "agent_exec_target"
-	KindProjectAgent    = "project_agent"
-	KindProjectLocation = "project_location"
-	KindLLMProvider     = "llm_provider"
-	KindAgentBackendCLI = "agent_backend_cli"
+	KindProject         = syncwire.KindProject
+	KindDepartment      = syncwire.KindDepartment
+	KindAgent           = syncwire.KindAgent
+	KindAgentBackend    = syncwire.KindAgentBackend
+	KindAgentExecTarget = syncwire.KindAgentExecTarget
+	KindProjectAgent    = syncwire.KindProjectAgent
+	KindProjectLocation = syncwire.KindProjectLocation
+	KindLLMProvider     = syncwire.KindLLMProvider
+	KindAgentBackendCLI = syncwire.KindAgentBackendCLI
 	// 看板三件（规格 2026-08-27-issues-board-project-scope「同步（跨仓）」）：
 	// 标签目录、任务本身，以及两者的关联。引用方向是 label ← issue_label → issue，
-	// 因此常量与 syncKinds 里的次序都按「被引用者在前」排。
-	KindLabel      = "label"
-	KindIssue      = "issue"
-	KindIssueLabel = "issue_label"
+	// 契约里 Kinds 的次序按「被引用者在前」排。
+	KindLabel      = syncwire.KindLabel
+	KindIssue      = syncwire.KindIssue
+	KindIssueLabel = syncwire.KindIssueLabel
 )
-
-// KindValid 判断上行声明的对象类型是否属于同步组。
-func KindValid(kind string) bool {
-	switch kind {
-	case KindProject, KindDepartment, KindAgent, KindAgentBackend,
-		KindAgentExecTarget, KindProjectAgent, KindProjectLocation,
-		KindLLMProvider, KindAgentBackendCLI,
-		KindLabel, KindIssue, KindIssueLabel:
-		return true
-	}
-	return false
-}
 
 // SyncObject 是同步组的一行。
 //

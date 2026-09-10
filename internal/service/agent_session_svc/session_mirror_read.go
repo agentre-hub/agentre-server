@@ -2,7 +2,7 @@
 // 转录（2026-08-18-server-session-mirror.md 「索引与详情读到什么」）。索引那一半在
 // session_index_read.go——它按组分页，两者的游标是两回事（一个数 seq，一个数
 // (updated_at, id)）。本文件只读 agent_session_repo，写路径在 mirror_svc。
-package workspace_svc
+package agent_session_svc
 
 import (
 	"context"
@@ -60,7 +60,7 @@ const (
 
 // Transcript 翻一页镜像里的原始帧。多请求 1 条（limit+1）用来判定 HasMore，而不是
 // 靠「这一页刚好装满」去猜——半满的最后一页与真的到头了否则会分不清。
-func (s *workspaceSvc) Transcript(ctx context.Context, in TranscriptQuery) (TranscriptPage, error) {
+func (s *sessionReadSvc) Transcript(ctx context.Context, in TranscriptQuery) (TranscriptPage, error) {
 	if in.Backward {
 		return s.transcriptTail(ctx, in)
 	}
@@ -100,7 +100,7 @@ func (s *workspaceSvc) Transcript(ctx context.Context, in TranscriptQuery) (Tran
 // （它是那一轮的起帧），这时候才判预算。判在轮次边界上，因此不会把一轮劈成两半。
 //
 // 三个数（Cursor / OldestSeq / HasBefore）按**原始行**记，与投影削掉了多少无关。
-func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (TranscriptPage, error) {
+func (s *sessionReadSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (TranscriptPage, error) {
 	var (
 		// turns 是已经收完的那些轮次，投影过、每一轮内部升序，**最新的一轮在前**。
 		turns [][]TranscriptFrameView

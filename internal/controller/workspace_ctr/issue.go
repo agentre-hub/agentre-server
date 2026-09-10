@@ -5,6 +5,7 @@ import (
 
 	api "github.com/agentre-hub/agentre-server/internal/api/workspace"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
+	"github.com/agentre-hub/agentre-server/internal/service/issue_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
@@ -16,7 +17,7 @@ import (
 
 // Board 一次取回看板要画的全部材料。
 func (w *Workspace) Board(c *gin.Context, req *api.IssueBoardRequest) (*api.IssueBoardResponse, error) {
-	view, err := workspace_svc.IssueBoard().Board(c.Request.Context(), workspace_svc.IssueBoardQuery{
+	view, err := issue_svc.IssueBoard().Board(c.Request.Context(), issue_svc.IssueBoardQuery{
 		UserID: ginctx.UserID(c), Scope: req.Scope, ProjectSyncID: req.ProjectSyncID,
 		Keyword: req.Keyword, LabelSyncIDs: req.LabelSyncIDs,
 		LabelMatchAll: req.LabelMatchAll, NoLabel: req.NoLabel,
@@ -51,7 +52,7 @@ func (w *Workspace) Board(c *gin.Context, req *api.IssueBoardRequest) (*api.Issu
 	return resp, nil
 }
 
-func toLabelItems(views []workspace_svc.IssueLabelView) []api.LabelItem {
+func toLabelItems(views []issue_svc.IssueLabelView) []api.LabelItem {
 	out := make([]api.LabelItem, 0, len(views))
 	for _, l := range views {
 		out = append(out, api.LabelItem{
@@ -93,8 +94,8 @@ func issueWriteResponse(res *workspace_svc.OrgWriteResult, err error) (*api.OrgW
 func (w *Workspace) CreateIssue(
 	c *gin.Context, req *api.CreateIssueRequest,
 ) (*api.OrgWriteResponse, error) {
-	return issueWriteResponse(workspace_svc.IssueBoard().CreateIssue(
-		c.Request.Context(), workspace_svc.IssueWriteInput{
+	return issueWriteResponse(issue_svc.IssueBoard().CreateIssue(
+		c.Request.Context(), issue_svc.IssueWriteInput{
 			UserID: ginctx.UserID(c), Fields: issueFields(req.IssueFields),
 			LabelSyncIDs: req.LabelSyncIDs,
 		}))
@@ -103,8 +104,8 @@ func (w *Workspace) CreateIssue(
 func (w *Workspace) UpdateIssue(
 	c *gin.Context, req *api.UpdateIssueRequest,
 ) (*api.OrgWriteResponse, error) {
-	return issueWriteResponse(workspace_svc.IssueBoard().UpdateIssue(
-		c.Request.Context(), workspace_svc.IssueWriteInput{
+	return issueWriteResponse(issue_svc.IssueBoard().UpdateIssue(
+		c.Request.Context(), issue_svc.IssueWriteInput{
 			UserID: ginctx.UserID(c), SyncID: req.SyncID,
 			Fields: issueFields(req.IssueFields), LabelSyncIDs: req.LabelSyncIDs,
 		}))
@@ -113,8 +114,8 @@ func (w *Workspace) UpdateIssue(
 func (w *Workspace) MoveIssue(
 	c *gin.Context, req *api.MoveIssueRequest,
 ) (*api.OrgWriteResponse, error) {
-	return issueWriteResponse(workspace_svc.IssueBoard().MoveIssue(
-		c.Request.Context(), workspace_svc.IssueMoveInput{
+	return issueWriteResponse(issue_svc.IssueBoard().MoveIssue(
+		c.Request.Context(), issue_svc.IssueMoveInput{
 			UserID: ginctx.UserID(c), SyncID: req.SyncID,
 			Stage: req.Stage, AfterSyncID: req.AfterSyncID,
 		}))
@@ -123,15 +124,15 @@ func (w *Workspace) MoveIssue(
 func (w *Workspace) DeleteIssue(
 	c *gin.Context, req *api.DeleteIssueRequest,
 ) (*api.OrgWriteResponse, error) {
-	return issueWriteResponse(workspace_svc.IssueBoard().DeleteIssue(
+	return issueWriteResponse(issue_svc.IssueBoard().DeleteIssue(
 		c.Request.Context(), ginctx.UserID(c), req.SyncID))
 }
 
 func (w *Workspace) CreateIssueLabel(
 	c *gin.Context, req *api.CreateIssueLabelRequest,
 ) (*api.OrgWriteResponse, error) {
-	return issueWriteResponse(workspace_svc.IssueBoard().CreateLabel(
-		c.Request.Context(), workspace_svc.LabelWriteInput{
+	return issueWriteResponse(issue_svc.IssueBoard().CreateLabel(
+		c.Request.Context(), issue_svc.LabelWriteInput{
 			UserID: ginctx.UserID(c), Fields: issueLabelFields(req.IssueLabelFields),
 		}))
 }
@@ -139,8 +140,8 @@ func (w *Workspace) CreateIssueLabel(
 func (w *Workspace) UpdateIssueLabel(
 	c *gin.Context, req *api.UpdateIssueLabelRequest,
 ) (*api.OrgWriteResponse, error) {
-	return issueWriteResponse(workspace_svc.IssueBoard().UpdateLabel(
-		c.Request.Context(), workspace_svc.LabelWriteInput{
+	return issueWriteResponse(issue_svc.IssueBoard().UpdateLabel(
+		c.Request.Context(), issue_svc.LabelWriteInput{
 			UserID: ginctx.UserID(c), SyncID: req.SyncID,
 			Fields: issueLabelFields(req.IssueLabelFields),
 		}))
@@ -149,6 +150,6 @@ func (w *Workspace) UpdateIssueLabel(
 func (w *Workspace) DeleteIssueLabel(
 	c *gin.Context, req *api.DeleteIssueLabelRequest,
 ) (*api.OrgWriteResponse, error) {
-	return issueWriteResponse(workspace_svc.IssueBoard().DeleteLabel(
+	return issueWriteResponse(issue_svc.IssueBoard().DeleteLabel(
 		c.Request.Context(), ginctx.UserID(c), req.SyncID))
 }

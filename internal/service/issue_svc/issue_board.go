@@ -1,4 +1,13 @@
-package workspace_svc
+// Package issue_svc 是议题看板这一个域：卡、标签、两者的关联，以及浏览器对它们的
+// 直写。
+//
+// 它按域从 workspace_svc 分出来（工作区规约「一个域一套包」）。写入走的仍是那一条
+// 「服务端直写 sync_objects」的通道——版本号、墓碑、来源指纹与广播都由
+// workspace_svc 那一格给出（SaveOrgRow 等），本包只写看板自己的判据。单向依赖，
+// workspace_svc 不认识本包。
+//
+// **不新增任何表。** 三类看板对象全部住在既有的 sync_objects 里，靠 kind 区分。
+package issue_svc
 
 import (
 	"context"
@@ -7,12 +16,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/cago-frame/cago/pkg/i18n"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
 // ── 看板的读路径（规格 2026-08-27-issues-board-project-scope「`agentre-server` 端」）──
@@ -24,7 +35,7 @@ import (
 // 投影表要多一条与同步下行竞争的写路径。
 //
 // 与桌面端的**唯一**语义差别在关键词那一条：桌面端还能按 `#编号` 命中，而编号是那台
-// 机器上的本地自增主键，同步载荷里根本没有它（adapter_issue.go 的 issuePayload）。
+// 机器上的本地自增主键，同步载荷里根本没有它（syncwire.IssuePayload）。
 // 这一侧因此把 `#179` 当成文本 `179` 去匹配标题与描述，而不是编造一个账号级编号——
 // 编造出来的号在两台机器上会指向不同的卡。
 //
@@ -62,37 +73,12 @@ var boardReadKinds = []string{
 	sync_entity.KindIssue, sync_entity.KindIssueLabel,
 }
 
-// labelPayload / issuePayload / issueLabelPayload 是三种载荷的键名形状，由桌面端
-// sync_svc/adapter_issue.go 定死，这一侧**逐字消费**。与 projectAgentPayload 同一种
-// 「跨仓重新声明」的做法：两个仓库不能互相 import，键名改了两边都要改，因此这里写明出处。
+// 看板三种载荷的形状归共享契约（syncwire.LabelPayload / IssuePayload /
+// IssueLabelPayload），这一侧只消费。
 //
-// labelPayload.Status 在载荷里而不像别的对象那样只靠墓碑表达：server 没有本地行，
-// 判「这个标签还在不在」只有这一个键。
-type labelPayload struct {
-	Name   string `json:"name"`
-	Tone   string `json:"tone"`
-	Status int    `json:"status"`
-}
-
-// issuePayload 里**没有** state：状态轴本轮消失，它完全由 stage 推导
-// （stage=done 即已完成），两端各自算，不进载荷。
-type issuePayload struct {
-	Title              string  `json:"title"`
-	Description        string  `json:"description"`
-	Stage              string  `json:"stage"`
-	Position           float64 `json:"position"`
-	ProjectSyncID      string  `json:"project_sync_id,omitempty"`
-	AgentSyncID        string  `json:"agent_sync_id,omitempty"`
-	AgentBackendSyncID string  `json:"agent_backend_sync_id,omitempty"`
-	LLMProviderKey     string  `json:"llm_provider_key"`
-	LLMModelKey        string  `json:"llm_model_key"`
-	ClosedAt           int64   `json:"closed_at"`
-}
-
-type issueLabelPayload struct {
-	IssueSyncID string `json:"issue_sync_id"`
-	LabelSyncID string `json:"label_sync_id"`
-}
+// LabelPayload.Status 在载荷里而不像别的对象那样只靠墓碑表达：server 没有本地行，
+// 判「这个标签还在不在」只有这一个键。IssuePayload 里则**没有** state——状态完全
+// 由 stage 推导（stage=done 即已完成），两端各自算，不进载荷。
 
 // IssueBoardQuery 是一次看板取数：项目范围加其余五个条件。
 //
@@ -164,26 +150,31 @@ type IssueBoardView struct {
 	ProjectCounts []ProjectIssueCountView
 }
 
-// IssueBoardSvc 是看板这一族的服务面。它与 WorkspaceSvc 分开声明、各有自己的默认值
-// （同 SessionReadSvc 的做法）：调用方各自换掉自己那一片，不必给对方那一片也造替身。
+// IssueBoardSvc 是看板这一族的服务面。
 type IssueBoardSvc interface {
 	// Board 一次取回看板要画的全部材料：卡、标签目录、两套列头计数、项目子树计数。
 	Board(ctx context.Context, q IssueBoardQuery) (*IssueBoardView, error)
 	// CreateIssue / UpdateIssue / MoveIssue / DeleteIssue 是浏览器直写任务：
 	// server 分配版本号、删除落墓碑，与设备上行完全一样的账号级语义。
-	CreateIssue(ctx context.Context, in IssueWriteInput) (*OrgWriteResult, error)
+	CreateIssue(ctx context.Context, in IssueWriteInput) (*workspace_svc.OrgWriteResult, error)
 	// UpdateIssue 只覆盖 in.Fields 里明确涉及的键；in.LabelSyncIDs 为 nil 即这次
 	// 请求没提到标签，一行关联都不动。
-	UpdateIssue(ctx context.Context, in IssueWriteInput) (*OrgWriteResult, error)
+	UpdateIssue(ctx context.Context, in IssueWriteInput) (*workspace_svc.OrgWriteResult, error)
 	// MoveIssue 拖一张卡：改 stage 与 position，关闭时刻随 stage 推导。
-	MoveIssue(ctx context.Context, in IssueMoveInput) (*OrgWriteResult, error)
+	MoveIssue(ctx context.Context, in IssueMoveInput) (*workspace_svc.OrgWriteResult, error)
 	// DeleteIssue 落墓碑，并把这张卡身上的标签关联一并落。
-	DeleteIssue(ctx context.Context, userID int64, syncID string) (*OrgWriteResult, error)
-	CreateLabel(ctx context.Context, in LabelWriteInput) (*OrgWriteResult, error)
-	UpdateLabel(ctx context.Context, in LabelWriteInput) (*OrgWriteResult, error)
+	DeleteIssue(ctx context.Context, userID int64, syncID string) (*workspace_svc.OrgWriteResult, error)
+	CreateLabel(ctx context.Context, in LabelWriteInput) (*workspace_svc.OrgWriteResult, error)
+	UpdateLabel(ctx context.Context, in LabelWriteInput) (*workspace_svc.OrgWriteResult, error)
 	// DeleteLabel 落墓碑，并把指向它的全部关联一并落。
-	DeleteLabel(ctx context.Context, userID int64, syncID string) (*OrgWriteResult, error)
+	DeleteLabel(ctx context.Context, userID int64, syncID string) (*workspace_svc.OrgWriteResult, error)
 }
+
+// issueBoardSvc 是这一族的实现。它无状态，每次调用都直接读 sync_repo 的当前状态。
+type issueBoardSvc struct{}
+
+// New 构造一个无状态的 IssueBoardSvc。
+func New() *issueBoardSvc { return &issueBoardSvc{} }
 
 var defaultIssueBoard IssueBoardSvc = New()
 
@@ -213,7 +204,7 @@ func loadBoardData(rows []*sync_entity.SyncObject) *boardData {
 		case sync_entity.KindIssue:
 			data.issues = append(data.issues, row)
 		case sync_entity.KindLabel:
-			var p labelPayload
+			var p syncwire.LabelPayload
 			if json.Unmarshal([]byte(row.Payload), &p) != nil || p.Status != consts.ACTIVE {
 				continue
 			}
@@ -232,7 +223,7 @@ func loadBoardData(rows []*sync_entity.SyncObject) *boardData {
 	// 「被 N 个任务使用」也会把一张卡数成两张。
 	seenPair := map[string]bool{}
 	for _, row := range data.linkRows {
-		var p issueLabelPayload
+		var p syncwire.IssueLabelPayload
 		if json.Unmarshal([]byte(row.Payload), &p) != nil {
 			continue
 		}
@@ -269,8 +260,8 @@ func sortLabelViews(items []IssueLabelView) {
 	})
 }
 
-func (s *workspaceSvc) Board(ctx context.Context, q IssueBoardQuery) (*IssueBoardView, error) {
-	// 「某个项目」这一档必须真的带着一个项目。空串会被 projectSubtree 当成「没挂
+func (s *issueBoardSvc) Board(ctx context.Context, q IssueBoardQuery) (*IssueBoardView, error) {
+	// 「某个项目」这一档必须真的带着一个项目。空串会被 ProjectSubtree 当成「没挂
 	// 项目」那一档的键，于是 scope=project 静默变成一块未归属的板——那是另一个档
 	// （IssueScopeUnassigned），不能让它从一个漏填的参数里冒出来。
 	if q.Scope == IssueScopeProject && q.ProjectSyncID == "" {
@@ -330,7 +321,7 @@ func emptyStageCounts() map[string]int64 {
 // toIssueCardView 把一行同步对象翻成一张卡。载荷解不开的行按空卡处理而不是让整次
 // 取数失败：一张画不出来的卡不该把整块板拖黑。
 func toIssueCardView(row *sync_entity.SyncObject, labels []IssueLabelView) IssueCardView {
-	var p issuePayload
+	var p syncwire.IssuePayload
 	_ = json.Unmarshal([]byte(row.Payload), &p)
 	if labels == nil {
 		labels = []IssueLabelView{}
@@ -368,7 +359,7 @@ func resolveIssueScope(
 			return issueProjectSyncID(row) == ""
 		}
 	case IssueScopeProject:
-		subtree := projectSubtree(rows, q.ProjectSyncID)
+		subtree := workspace_svc.ProjectSubtree(rows, q.ProjectSyncID)
 		return func(row *sync_entity.SyncObject) bool {
 			return subtree[issueProjectSyncID(row)]
 		}
@@ -378,7 +369,7 @@ func resolveIssueScope(
 }
 
 func issueProjectSyncID(row *sync_entity.SyncObject) string {
-	var p issuePayload
+	var p syncwire.IssuePayload
 	if json.Unmarshal([]byte(row.Payload), &p) != nil {
 		return ""
 	}
@@ -515,7 +506,7 @@ func sortIssueCards(cards []IssueCardView) {
 func rollUpProjectIssueCounts(rows []*sync_entity.SyncObject, data *boardData) []ProjectIssueCountView {
 	own := map[string]int64{}
 	for _, row := range data.issues {
-		var p issuePayload
+		var p syncwire.IssuePayload
 		if json.Unmarshal([]byte(row.Payload), &p) != nil {
 			continue
 		}
@@ -524,18 +515,15 @@ func rollUpProjectIssueCounts(rows []*sync_entity.SyncObject, data *boardData) [
 		}
 		own[p.ProjectSyncID]++
 	}
-	childrenOf := map[string][]string{}
+	// 父子关系由项目域给出（workspace_svc.ProjectChildren 解的是同一个
+	// parent_sync_id）：这里自己再解一遍，就是给「谁是谁的孩子」留下第二套说法。
+	childrenOf := workspace_svc.ProjectChildren(rows)
 	projectIDs := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.Kind != sync_entity.KindProject {
 			continue
 		}
 		projectIDs = append(projectIDs, row.SyncID)
-		var pp projectPayload
-		if json.Unmarshal([]byte(row.Payload), &pp) != nil || pp.ParentSyncID == "" {
-			continue
-		}
-		childrenOf[pp.ParentSyncID] = append(childrenOf[pp.ParentSyncID], row.SyncID)
 	}
 
 	total := map[string]int64{}

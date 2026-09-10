@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/pkg/i18n"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
@@ -24,7 +25,7 @@ func indexProjectRows(
 	for _, row := range rows {
 		switch row.Kind {
 		case sync_entity.KindProject:
-			var pp projectPayload
+			var pp syncwire.ProjectPayload
 			if json.Unmarshal([]byte(row.Payload), &pp) == nil {
 				projectName[row.SyncID] = pp.Name
 			}
@@ -32,7 +33,7 @@ func indexProjectRows(
 			if row.IsDeleted() || row.AgentredFingerprint == "" {
 				continue
 			}
-			var lp projectLocationPayload
+			var lp syncwire.ProjectLocationPayload
 			if json.Unmarshal([]byte(row.Payload), &lp) != nil {
 				continue
 			}

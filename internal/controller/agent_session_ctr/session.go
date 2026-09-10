@@ -8,7 +8,7 @@ import (
 
 	api "github.com/agentre-hub/agentre-server/internal/api/agentsession"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
-	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/agent_session_svc"
 )
 
 type AgentSession struct{}
@@ -17,7 +17,7 @@ func New() *AgentSession { return &AgentSession{} }
 
 // savedSessionItems 把服务层的视图搬成响应项。cwd 在视图上就没有字段，这里因此
 // 想漏也漏不出去（R19）。
-func savedSessionItems(views []workspace_svc.SavedSessionSummaryView) []api.SavedSessionItem {
+func savedSessionItems(views []agent_session_svc.SavedSessionSummaryView) []api.SavedSessionItem {
 	items := make([]api.SavedSessionItem, 0, len(views))
 	for _, it := range views {
 		items = append(items, api.SavedSessionItem{
@@ -44,7 +44,7 @@ func savedSessionItems(views []workspace_svc.SavedSessionSummaryView) []api.Save
 func (m *AgentSession) MarkSessionRead(
 	c *gin.Context, req *api.MarkSessionReadRequest,
 ) (*api.MarkSessionReadResponse, error) {
-	at, err := workspace_svc.SessionRead().MarkSessionRead(
+	at, err := agent_session_svc.SessionRead().MarkSessionRead(
 		c.Request.Context(), ginctx.UserID(c), req.ConversationID,
 	)
 	if err != nil {
@@ -60,15 +60,15 @@ func (m *AgentSession) MarkSessionRead(
 // 出错的一档。其余入参一律原样转给服务层，判定（夹取、scope 认不认得、游标合不合法）
 // 全在那边——本包不做判定。
 func (m *AgentSession) SavedSessions(c *gin.Context, req *api.SavedSessionsRequest) (*api.SavedSessionsResponse, error) {
-	axis := workspace_svc.SessionIndexAxis(req.Axis)
+	axis := agent_session_svc.SessionIndexAxis(req.Axis)
 	if axis == "" {
-		axis = workspace_svc.AxisTime
+		axis = agent_session_svc.AxisTime
 	}
-	filter := workspace_svc.SessionFilter(req.Filter)
+	filter := agent_session_svc.SessionFilter(req.Filter)
 	if filter == "all" {
-		filter = workspace_svc.SessionFilterAll
+		filter = agent_session_svc.SessionFilterAll
 	}
-	page, err := workspace_svc.SessionRead().SessionIndex(c.Request.Context(), workspace_svc.SessionIndexQuery{
+	page, err := agent_session_svc.SessionRead().SessionIndex(c.Request.Context(), agent_session_svc.SessionIndexQuery{
 		UserID:         ginctx.UserID(c),
 		Axis:           axis,
 		Scope:          req.Scope,
@@ -112,7 +112,7 @@ const directionBackward = "backward"
 func (m *AgentSession) Transcript(c *gin.Context, req *api.TranscriptRequest) (*api.TranscriptResponse, error) {
 	// Cursor 在两个方向上是两件事：正向是「我读到哪了」（不含），反向是「比这个更早」
 	// （不含）。所以按方向送进不同的入参，而不是让服务层去猜调用方的意思。
-	q := workspace_svc.TranscriptQuery{
+	q := agent_session_svc.TranscriptQuery{
 		UserID:         ginctx.UserID(c),
 		ConversationID: req.ConversationID,
 		Limit:          req.Limit,
@@ -123,7 +123,7 @@ func (m *AgentSession) Transcript(c *gin.Context, req *api.TranscriptRequest) (*
 	} else {
 		q.AfterSeq = req.Cursor
 	}
-	page, err := workspace_svc.SessionRead().Transcript(c.Request.Context(), q)
+	page, err := agent_session_svc.SessionRead().Transcript(c.Request.Context(), q)
 	if err != nil {
 		return nil, err
 	}
@@ -145,12 +145,12 @@ func (m *AgentSession) Transcript(c *gin.Context, req *api.TranscriptRequest) (*
 // AttentionCount 交出账号里此刻需要你的对话条数，供侧栏那颗角标用。
 //
 // 判据不在这里：它与索引上那几个 chip 共用仓储那一侧同一个 attentionExpr
-// （workspace_svc.AttentionCounts 的注释）。侧栏说有 3 条等你、点进去筛选却是 2 条，
+// （agent_session_svc.AttentionCounts 的注释）。侧栏说有 3 条等你、点进去筛选却是 2 条，
 // 是一种没有任何地方会报错、而用户一眼就能看见的错。
 func (m *AgentSession) AttentionCount(
 	c *gin.Context, _ *api.AttentionCountRequest,
 ) (*api.AttentionCountResponse, error) {
-	counts, err := workspace_svc.SessionRead().AttentionCounts(
+	counts, err := agent_session_svc.SessionRead().AttentionCounts(
 		c.Request.Context(), ginctx.UserID(c))
 	if err != nil {
 		return nil, err

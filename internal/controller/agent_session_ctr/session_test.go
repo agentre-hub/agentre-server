@@ -24,8 +24,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/agent_session_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
-	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
 const testCookieName = "server_session"
@@ -33,21 +33,21 @@ const testCookieName = "server_session"
 // testConversationID 是一条对话的全局标识（UUIDv7 的规范形式）。
 const testConversationID = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
 
-// stubWorkspaceSvc 只实现 workspace_svc.SessionReadSvc——agent_session_ctr 用到的就是这
+// stubWorkspaceSvc 只实现 agent_session_svc.SessionReadSvc——agent_session_ctr 用到的就是这
 // 三个方法。router.go 把 agent_session_ctr 与 workspace_ctr 绑在同一棵路由树上，但两者
-// 各取各的那一片：组织面那 12 个方法仍走 workspace_svc.Default() 的真实实现，
+// 各取各的那一片：组织面那 12 个方法仍走 agent_session_svc.Default() 的真实实现，
 // 本包的测试不碰那些路由，因此不需要替身。
 type stubWorkspaceSvc struct {
-	index      workspace_svc.SessionIndexPage
+	index      agent_session_svc.SessionIndexPage
 	indexErr   error
-	indexInput workspace_svc.SessionIndexQuery
+	indexInput agent_session_svc.SessionIndexQuery
 	// markReadInput 记 (账号, conversation_id)：控制器只负责把它们原样转下去。
 	markReadInput [2]string
 	markReadAt    int64
 	markReadErr   error
 
-	page       workspace_svc.TranscriptPage
-	transcript workspace_svc.TranscriptQuery
+	page       agent_session_svc.TranscriptPage
+	transcript agent_session_svc.TranscriptQuery
 
 	attentionCounts      agent_session_repo.AttentionCounts
 	attentionCountUserID int64
@@ -55,11 +55,11 @@ type stubWorkspaceSvc struct {
 }
 
 func (s *stubWorkspaceSvc) SessionIndex(
-	_ context.Context, in workspace_svc.SessionIndexQuery,
-) (workspace_svc.SessionIndexPage, error) {
+	_ context.Context, in agent_session_svc.SessionIndexQuery,
+) (agent_session_svc.SessionIndexPage, error) {
 	s.indexInput = in
 	if s.indexErr != nil {
-		return workspace_svc.SessionIndexPage{}, s.indexErr
+		return agent_session_svc.SessionIndexPage{}, s.indexErr
 	}
 	return s.index, nil
 }
@@ -75,8 +75,8 @@ func (s *stubWorkspaceSvc) MarkSessionRead(
 }
 
 func (s *stubWorkspaceSvc) Transcript(
-	_ context.Context, in workspace_svc.TranscriptQuery,
-) (workspace_svc.TranscriptPage, error) {
+	_ context.Context, in agent_session_svc.TranscriptQuery,
+) (agent_session_svc.TranscriptPage, error) {
 	s.transcript = in
 	return s.page, nil
 }
@@ -91,7 +91,7 @@ func (s *stubWorkspaceSvc) AttentionCounts(
 	return s.attentionCounts, nil
 }
 
-var _ workspace_svc.SessionReadSvc = (*stubWorkspaceSvc)(nil)
+var _ agent_session_svc.SessionReadSvc = (*stubWorkspaceSvc)(nil)
 
 func newMirrorTestServer(t *testing.T, stub *stubWorkspaceSvc) (*httptest.Server, *jwt.Signer) {
 	t.Helper()
@@ -99,8 +99,8 @@ func newMirrorTestServer(t *testing.T, stub *stubWorkspaceSvc) (*httptest.Server
 	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
-	workspace_svc.SetSessionRead(stub)
-	t.Cleanup(func() { workspace_svc.SetSessionRead(workspace_svc.New()) })
+	agent_session_svc.SetSessionRead(stub)
+	t.Cleanup(func() { agent_session_svc.SetSessionRead(agent_session_svc.New()) })
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
@@ -158,11 +158,11 @@ func decodeEnvelope(t *testing.T, resp *http.Response, into any) {
 // 既定位不到这条对话，也发不出消息。
 // 不带 scope 时给的是组骨架：每组带自己的真数，顶栏那个数是账号级的（决策 10）。
 func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
-	stub := &stubWorkspaceSvc{index: workspace_svc.SessionIndexPage{
+	stub := &stubWorkspaceSvc{index: agent_session_svc.SessionIndexPage{
 		Total: 137,
-		Groups: []workspace_svc.SessionIndexGroup{{
+		Groups: []agent_session_svc.SessionIndexGroup{{
 			Scope: "agent:agent-1", Total: 9, HasMore: true, Cursor: "1700.42",
-			Items: []workspace_svc.SavedSessionSummaryView{{
+			Items: []agent_session_svc.SavedSessionSummaryView{{
 				ConversationID:  testConversationID,
 				PeerFingerprint: "fp-browser-1", MachineFingerprint: "fp-daemon-1",
 				Title:       "调试登录页",
@@ -219,7 +219,7 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 	assert.True(t, item.WaitingForInput)
 	assert.EqualValues(t, 12345, item.LastMessageAt)
 	assert.EqualValues(t, 7, stub.indexInput.UserID)
-	assert.Equal(t, workspace_svc.AxisAgent, stub.indexInput.Axis)
+	assert.Equal(t, agent_session_svc.AxisAgent, stub.indexInput.Axis)
 }
 
 // 四组入参原样到达 service：轴、组、游标、两个大小、搜索词与筛选。控制器不判定
@@ -234,20 +234,20 @@ func TestSavedSessions_PassesEveryQueryParamThrough(t *testing.T) {
 		"&limit=20&per_group=3&q=%E7%99%BB%E5%BD%95&filter=waiting", cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	assert.Equal(t, workspace_svc.AxisProject, stub.indexInput.Axis)
+	assert.Equal(t, agent_session_svc.AxisProject, stub.indexInput.Axis)
 	assert.Equal(t, "project:proj-1", stub.indexInput.Scope)
 	assert.Equal(t, "1700.42", stub.indexInput.Cursor)
 	assert.Equal(t, 20, stub.indexInput.Limit)
 	assert.Equal(t, 3, stub.indexInput.PerGroup)
 	assert.Equal(t, "登录", stub.indexInput.Search)
-	assert.Equal(t, workspace_svc.SessionFilterWaiting, stub.indexInput.Filter)
+	assert.Equal(t, agent_session_svc.SessionFilterWaiting, stub.indexInput.Filter)
 }
 
 // 带 scope 时给的是这一组的行（不是组骨架），游标与 has_more 在顶层。
 func TestSavedSessions_ScopedReadReturnsRowsAtTopLevel(t *testing.T) {
-	stub := &stubWorkspaceSvc{index: workspace_svc.SessionIndexPage{
+	stub := &stubWorkspaceSvc{index: agent_session_svc.SessionIndexPage{
 		Total: 9, Cursor: "1600.41", HasMore: true,
-		Items: []workspace_svc.SavedSessionSummaryView{
+		Items: []agent_session_svc.SavedSessionSummaryView{
 			{PeerFingerprint: "fp-a", ConversationID: testConversationID},
 		},
 	}}
@@ -298,8 +298,8 @@ func TestSavedSessions_UnauthenticatedRejected(t *testing.T) {
 // 转录按游标翻页：请求里的 peer_fingerprint / session_id / cursor / limit 原样
 // 到达 service，应答带回一页帧与新游标。
 func TestTranscript_PagesByCursor(t *testing.T) {
-	stub := &stubWorkspaceSvc{page: workspace_svc.TranscriptPage{
-		Frames: []workspace_svc.TranscriptFrameView{
+	stub := &stubWorkspaceSvc{page: agent_session_svc.TranscriptPage{
+		Frames: []agent_session_svc.TranscriptFrameView{
 			{Seq: 6, Method: "session.notify", Params: json.RawMessage(`{"text":"hi"}`)},
 		},
 		Cursor: 6, HasMore: true,
@@ -338,8 +338,8 @@ func TestTranscript_PagesByCursor(t *testing.T) {
 // AfterSeq —— 送错那一个，服务端会从这条对话的开头往后翻，正好相反。
 // 应答上多出 oldest_seq / has_before 两列供往上翻。
 func TestTranscript_BackwardReadsTheTail(t *testing.T) {
-	stub := &stubWorkspaceSvc{page: workspace_svc.TranscriptPage{
-		Frames: []workspace_svc.TranscriptFrameView{
+	stub := &stubWorkspaceSvc{page: agent_session_svc.TranscriptPage{
+		Frames: []agent_session_svc.TranscriptFrameView{
 			{Seq: 10, Method: "runtime.event", Params: json.RawMessage(`{"a":1}`)},
 			{Seq: 12, Method: "runtime.event", Params: json.RawMessage(`{"a":2}`)},
 		},
@@ -372,7 +372,7 @@ func TestTranscript_BackwardReadsTheTail(t *testing.T) {
 // direction 缺省 = 正向，与今天逐字一致（这一条与既有 TestTranscript_PagesByCursor
 // 一起把「没传 direction 的老调用方行为不变」钉住）。
 func TestTranscript_DefaultDirectionStaysForward(t *testing.T) {
-	stub := &stubWorkspaceSvc{page: workspace_svc.TranscriptPage{Cursor: 5}}
+	stub := &stubWorkspaceSvc{page: agent_session_svc.TranscriptPage{Cursor: 5}}
 	server, _ := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
@@ -536,8 +536,8 @@ func TestAttentionCount_ZeroIsAnAnswerNotAnOmission(t *testing.T) {
 // **没有 omitempty**:0 与「这一版服务端还不报」在线上必须分得开,前者读作
 // 「对端没报过」而如实不显示,后者是需要升级的信号。
 func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
-	stub := &stubWorkspaceSvc{page: workspace_svc.TranscriptPage{
-		Frames: []workspace_svc.TranscriptFrameView{
+	stub := &stubWorkspaceSvc{page: agent_session_svc.TranscriptPage{
+		Frames: []agent_session_svc.TranscriptFrameView{
 			{Seq: 6, Method: "runtime.event", Params: json.RawMessage(`{"a":1}`), Createtime: 1_700_000_000_111},
 			{Seq: 7, Method: "runtime.event", Params: json.RawMessage(`{"a":2}`)},
 		},

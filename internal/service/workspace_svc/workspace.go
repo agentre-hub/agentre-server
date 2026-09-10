@@ -6,6 +6,11 @@
 // 而是这个包里解析 sync_objects.payload 用的几个结构体本来就没有能装下它们的
 // 字段——json.Unmarshal 对无 tag 对应的键直接丢弃，这几类敏感字段因此在
 // service 边界之前就已经出局，不依赖调用方守规矩。
+//
+// 字段集与共享契约本来就相同的那几类（项目、部门、成员关系、路径记录）直接消费
+// syncwire 的载荷类型；**刻意收窄的两个仍是本包自己的**——agentBackendPayload 与
+// agentPayload，见它们各自的注释。收窄就是那条红线的落实方式，换成完整的契约类型
+// 正好把口子打开。
 package workspace_svc
 
 import (
@@ -16,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/cago-frame/cago/pkg/logger"
@@ -26,7 +32,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
-	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
@@ -230,100 +235,6 @@ type OrgChartView struct {
 	Agents      []OrgAgentView
 }
 
-// SavedSessionSummaryView 是 web 统一会话索引一行的数据源：账号里已保存的一条
-// 对话，机器在线与否都在（内容来自镜像，不再逐台机器经中继解析）。ProjectSyncID
-// 由服务端就地判定（决策 12）——镜像的 cwd 与账号项目树上的路径比对，配不上时留
-// 空（未归项目），cwd 本身永不下行（R19）。
-type SavedSessionSummaryView struct {
-	// ConversationID 是这条对话的全局标识，也是它在镜像库里的身份。
-	ConversationID string
-	// PeerFingerprint 是发起这条对话那一端的设备指纹。它已退出身份键，留作来源
-	// 标注（机器轴那一组的分组键）与授权。
-	PeerFingerprint string
-	// MachineFingerprint 是承载这条对话、详情页实际要连接的账号设备；它与发起端
-	// 可以不同（浏览器派发到 agentred 时就是不同值）。
-	MachineFingerprint string
-	// Title / AgentSyncID 为空 = 发起端还没报过这两格。标题由首条消息派生、每轮随
-	// RunParams 幂等覆盖，所以还没发出第一句的会话就是没有标题。如实留空，不猜、
-	// 不填占位。
-	Title           string
-	AgentSyncID     string
-	ProjectSyncID   string
-	BackendType     string
-	LifecycleState  string
-	WaitingForInput bool
-	// LastMessageAt 是发起端自己记的最后活动时刻（Unix 毫秒），没记过时为 0。
-	LastMessageAt int64
-	// LastReadAt 是这个账号最后一次打开这条对话的时刻（Unix 毫秒），从没打开过为 0。
-	// 「未读」就是 LastMessageAt > LastReadAt。
-	LastReadAt int64
-	// ProviderKey / ModelKey 是这条对话自己钉的 LLM ModelTarget（两者皆空 = 跟随
-	// Agent 绑定）。镜像自发起端那两列，机器离线时详情页据此仍显示得出模型 ——
-	// 这正是「已保存」承诺的一部分。两者都是不透明稳定 key，不是路径（R19 不受影响）。
-	ProviderKey string
-	ModelKey    string
-}
-
-// TranscriptQuery 是一次按游标翻转录的入参。UserID 来自调用方鉴权上下文，不由
-// 调用方填，跨账号因此读不到。AfterSeq 是调用方自己的位置（不含），0 表示从头翻；
-// Limit<=0 时走服务端默认档，服务端同样会夹一个上限。
-type TranscriptQuery struct {
-	UserID int64
-	// ConversationID 是这条对话的全局标识，也是镜像库里帧的身份键的一半
-	// （另一半是 UserID）。
-	ConversationID string
-	AfterSeq       int64
-	Limit          int
-	// Backward 为 true 时改成**从最新往回**按预算取一页（详情页打开一条对话时要的
-	// 是它最后那一段，规格 2026-08-21-transcript-tail-loading 决策 7）。此时
-	// AfterSeq 与 Limit 都不参与：这个方向的一页有多大由预算说了算。
-	Backward bool
-	// BeforeSeq 是反向读的**排他上界**，0 表示从最新往回。它与 AfterSeq 分开而不是
-	// 复用同一个字段：一个字段在两个方向上表示两件事，是本仓注释反复防的形态。
-	BeforeSeq int64
-}
-
-// TranscriptFrameView 是给 Web HTTP API 的 JSON 投影视图。
-//
-// 它与镜像日志库里那一行**同形**：2026-09-07-journal-payload-json.md 之后
-// agent_session_notification_journal.payload 存的就是 {method, params} 的 JSON，
-// 读取边界只是把它取出来（wireview.DecodeStoredFrame），不再解一次 Protobuf。
-// 这一侧读不懂的那一行在这里出场为 methodUndecodableFrame 的缺口帧。
-type TranscriptFrameView struct {
-	Seq    int64
-	Method string
-	Params json.RawMessage
-	// Createtime 是这一帧**发生**的时刻（Unix 毫秒），由产生它的那一端报出、镜像原样
-	// 落库。0 = 那一端没报过（还没升级的对端），读作「不知道」，不是 1970。
-	//
-	// 浏览器的转录是从帧现折出来的，除了这一格没有别的时刻可读（桌面端读的是自己
-	// 库里的 chat_messages.createtime），所以它必须一路下行到 HTTP view。
-	Createtime int64
-}
-
-// TranscriptPage 是一页。Cursor 是这一页读到的位置，**不是**这条对话的「最新」
-// seq——它只代表这个 server 镜到哪（与 agent_sessions.latest_seq 同一个
-// 陷阱）：机器在线时浏览器还要从中继接实时，两者按 seq 拼在一起。HasMore 为 true
-// 时带着 Cursor 再翻一页；空页上 Cursor 保持不变（不回退到 0），否则调用方会把
-// 整段日志重放一遍。
-type TranscriptPage struct {
-	Frames []TranscriptFrameView
-	// Cursor 在**两个方向上同义**：这一页里最新那条的 seq。调用方拿它预置中继游标
-	// 那条路因此不必分方向。
-	Cursor  int64
-	HasMore bool
-	// OldestSeq 是这一页里**最老**那条的 seq，往上翻的下一次入参；HasBefore 说明
-	// 还有没有更早的。两者只有反向读会填。
-	//
-	// 单开两列而不是按方向改写 Cursor 的含义：一个字段两种意思，读的人分不清。
-	//
-	// 三个数（Cursor / OldestSeq / HasBefore）一律按**原始日志行**算，与投影后
-	// 交出了几条无关——投影丢掉窗口末尾那帧时若跟着把 Cursor 往回挪，调用方预置的
-	// 游标就会停在它前面，此后每条实时帧都被判成跳号丢光。
-	OldestSeq int64
-	HasBefore bool
-}
-
 // DeviceDetailView 是设备页展开一行时取到的详情。RunnableAgents 只在
 // Kind==agentred 时有值——Agent 不按桌面端归属（决策 13）。
 type DeviceDetailView struct {
@@ -394,41 +305,6 @@ type WebDispatchPlanInput struct {
 	// 挑中的档跑不了时 Chosen 留空——**不回落**到自动挑的那一档：用户挑的是这台
 	// 机器，悄悄换一台去跑，上下文与文件全在另一台上。
 	TargetBackendSyncID string
-}
-
-// SessionReadSvc 是「对话」页读侧需要的那一小片（ISP）：索引、转录、已读标记。
-//
-// 它从 WorkspaceSvc 里摘出来，是因为 agent_session_ctr 只用这三个方法，却因为共用一个
-// 15 方法的接口，连测试替身都得把另外 12 个全实现一遍（各写一句 panic）。
-// 具体实现仍是同一个 workspaceSvc——拆的是调用方看见的面，不是实现。
-type SessionReadSvc interface {
-	// Transcript 按游标翻一条对话的镜像转录：seq 严格大于 in.AfterSeq 的帧，按 seq
-	// 升序，翻页用。scoped by in.UserID——读到别的账号的转录就是一次跨账号泄漏。
-	Transcript(ctx context.Context, in TranscriptQuery) (TranscriptPage, error)
-	// SessionIndex 是「对话」页那个索引的读侧
-	// （2026-08-19-session-index-pagination.md）：不带 scope 时给出该轴全部组的骨架
-	// （组身份 + 每组在当前范围下的真数 + 每组先给的那几条），带 scope 时按游标翻
-	// 那一组。搜索只按标题、筛选按状态，两者与分页复合；项目归属仍就地判定，
-	// cwd 一路只参与比较（R19）。
-	SessionIndex(ctx context.Context, in SessionIndexQuery) (SessionIndexPage, error)
-	// MarkSessionRead 记下「这个账号此刻读到这条对话为止」，供索引的「未读」那一档
-	// 判定（unread = updated_at > last_read_at，与桌面端 attention-store 同一条）。
-	//
-	// 时刻由服务端就地取，不收客户端的：客户端的钟不可信，而这个时刻要和服务端自己
-	// 记的 updated_at 相比。返回落定的那个时刻，供调用方就地覆盖那一行。
-	// 账号里没有这条对话时不是错——标记已读幂等，回落定值即可。
-	MarkSessionRead(ctx context.Context, userID int64, conversationID string) (int64, error)
-	// AttentionCounts 是侧栏「对话」那颗角标底下的两个数：账号里此刻**等你处理**的
-	// 条数，与**未读**的条数。判据与索引上那几个 chip 是同一个（仓储的
-	// attentionExpr）——侧栏说有 3 条等你、点进去筛选却是 2 条，是一种没有任何地方
-	// 会报错而用户一眼就看得见的错。
-	//
-	// 两个数而不是一个：角标只有一个数字位，但它底下是两件事，`title` 要把它们分开
-	// 说（「N 条等你处理 · M 条未读」）。合成一个交出来的话那句话就拆不回来了。
-	//
-	// 只回数字：这条路在每一次进入任何页面时都会跑一遍，而一页摘要里的标题、
-	// 游标、项目归属一个都用不上。0 是答案不是失败——那时角标整个不画。
-	AttentionCounts(ctx context.Context, userID int64) (agent_session_repo.AttentionCounts, error)
 }
 
 type WorkspaceSvc interface {
@@ -521,18 +397,10 @@ type workspaceSvc struct{}
 // 的当前状态，不持有任何缓存。
 func New() *workspaceSvc { return &workspaceSvc{} }
 
-// 两个默认值指向同一个实现；分开存是为了让两族调用方能各自换掉自己那一片，
-// 而不必给对方那一片也造一个替身。
-var (
-	defaultSvc         WorkspaceSvc   = New()
-	defaultSessionRead SessionReadSvc = New()
-)
+var defaultSvc WorkspaceSvc = New()
 
 func Default() WorkspaceSvc     { return defaultSvc }
 func SetDefault(s WorkspaceSvc) { defaultSvc = s }
-
-func SessionRead() SessionReadSvc     { return defaultSessionRead }
-func SetSessionRead(s SessionReadSvc) { defaultSessionRead = s }
 
 // ---------- 载荷解析：只列 web 端要展示的安全字段 ----------
 
@@ -559,18 +427,6 @@ type agentPayload struct {
 	ToolsJSON  string `json:"tools_json"`
 }
 
-type departmentPayload struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Icon        string `json:"icon"`
-	AccentColor string `json:"accent_color"`
-	// ParentSyncID 为空即根部门；索引的组头按它递归缩进。
-	ParentSyncID string `json:"parent_sync_id"`
-	// LeadAgentSyncID 是组头上的负责人。
-	LeadAgentSyncID string `json:"lead_agent_sync_id"`
-	SortOrder       int    `json:"sort_order"`
-}
-
 // agentBackendPayload 是这个包认识的**全部**后端键：类型与名字。
 //
 // **这里没有、也不会有 CLIPath 与 EnvJSON。** 同步载荷里它们就摆在旁边（agentre 侧
@@ -594,31 +450,6 @@ type agentExecTargetPayload struct {
 // 就会让这一档从排序里整个消失。解不动时如实留空，其余字段照常。
 type execTargetSkillsPayload struct {
 	SkillsJSON string `json:"skills_json"`
-}
-
-// projectPayload 只声明 web 端要用的键。同步载荷实际还带 description（agentre 侧
-// adapter_project.go），这里不声明就解不进来——包注释那条「装不下就泄不出去」的
-// 做法在这里同样成立，路径更是从来就不在这个载荷里。icon 是例外：web 的项目轴要
-// 画和桌面端同一个图标，因此下面显式声明了它。
-type projectPayload struct {
-	Name string `json:"name"`
-	// Description 是项目简介。项目设置要能改它，就得先读得到它——此前这个键在服务端
-	// 整条链上都不存在（声明不出来就解不进来），落到浏览器手里永远是空的。
-	Description string `json:"description"`
-	// Icon 照抄同步载荷自己的拼法（agentre 侧 adapter_project.go 的
-	// projectPayload.Icon `json:"icon"`），不改名、不归一化。
-	Icon  string `json:"icon"`
-	Color string `json:"color"`
-	// ParentSyncID 为空即根项目；项目轴靠它把项目递归成树。
-	ParentSyncID string `json:"parent_sync_id"`
-	SortOrder    int    `json:"sort_order"`
-}
-
-// projectLocationPayload 只带路径正文（agentre 侧 adapter_project.go 的镜像）：
-// 路径在同步组里以 kind=project_location、agentred_fingerprint 等于目标机器指纹
-// 的行存放。
-type projectLocationPayload struct {
-	Path string `json:"path"`
 }
 
 // resolvedTarget 是「Agent → 执行目标 → backend」这条链解析到指纹这一层的中间
@@ -838,7 +669,7 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 	for _, row := range rows {
 		switch row.Kind {
 		case sync_entity.KindDepartment:
-			var dp departmentPayload
+			var dp syncwire.DepartmentPayload
 			if err := json.Unmarshal([]byte(row.Payload), &dp); err == nil {
 				deptName[row.SyncID] = dp.Name
 			}
@@ -846,7 +677,7 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 			if row.IsDeleted() {
 				continue
 			}
-			var pa projectAgentPayload
+			var pa syncwire.ProjectAgentPayload
 			if err := json.Unmarshal([]byte(row.Payload), &pa); err != nil {
 				continue
 			}
@@ -916,8 +747,8 @@ func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetO
 	// 新次序落库、后面几行还是旧值，于是两档拿到同一个 sort_order。而 ListByKinds 没有
 	// ORDER BY，并列之后谁在前由数据库那次返回顺序决定（见 withExecTargetTailSlot），
 	// 用户排在第一位的那台机器会被挤掉「当前生效」；浏览器同时收到一个错误，用户以为
-	// 什么都没发生。版本号同理取在事务里，理由见 withTx。
-	if err := withTx(ctx, func(ctx context.Context) error {
+	// 什么都没发生。版本号同理取在事务里，理由见 WithOrgWriteTx。
+	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
 		for i, row := range ordered {
 			payload, changed, err := withSortOrder(row.Payload, i)
 			if err != nil {
@@ -1115,7 +946,7 @@ func (s *workspaceSvc) DeviceDetail(ctx context.Context, userID, deviceID int64)
 		if row.Kind != sync_entity.KindProject {
 			continue
 		}
-		var pp projectPayload
+		var pp syncwire.ProjectPayload
 		if err := json.Unmarshal([]byte(row.Payload), &pp); err != nil {
 			continue
 		}
@@ -1163,7 +994,7 @@ func (s *workspaceSvc) AccountProjects(ctx context.Context, userID int64) ([]Pro
 		if row.Kind != sync_entity.KindProject {
 			continue
 		}
-		var pp projectPayload
+		var pp syncwire.ProjectPayload
 		if json.Unmarshal([]byte(row.Payload), &pp) != nil {
 			// 载荷解不开的行如实跳过：宁可少一个组头，也不摆一个没名字的项目。
 			continue
@@ -1188,7 +1019,7 @@ func (s *workspaceSvc) AccountProjects(ctx context.Context, userID int64) ([]Pro
 	return out, nil
 }
 
-// projectSyncIDByLocation 把 KindProjectLocation 那批行整理成
+// ProjectSyncIDByLocation 把 KindProjectLocation 那批行整理成
 // (指纹, 路径) → 项目同步标识 的索引，供 SavedSessionSummaries 就地判定项目归属
 // （决策 12）。（指纹, 路径）→ 项目同步标识：同一台机器上两个项目配同一条路径属于
 // 上游的配置错误（自然键是「项目同步标识 + 指纹」，挡不住这种撞车）：撞车时取
@@ -1197,10 +1028,10 @@ func (s *workspaceSvc) AccountProjects(ctx context.Context, userID int64) ([]Pro
 // 两个项目，那条会话就在两个项目组之间来回跳。指不出项目的行（半写入，
 // project_sync_id 为空）直接跳过：它占住这条路径只会把真正指得出项目的那一行
 // 挡掉，让会话平白掉进「未归项目」。
-func projectSyncIDByLocation(rows []*sync_entity.SyncObject) map[string]string {
+func ProjectSyncIDByLocation(rows []*sync_entity.SyncObject) map[string]string {
 	byLocation := make(map[string]string, len(rows))
 	for _, row := range rows {
-		var lp projectLocationPayload
+		var lp syncwire.ProjectLocationPayload
 		if json.Unmarshal([]byte(row.Payload), &lp) != nil || lp.Path == "" ||
 			row.ScopeSyncID == "" {
 			continue
@@ -1240,7 +1071,7 @@ func (s *workspaceSvc) OrgChart(ctx context.Context, userID int64) (*OrgChartVie
 		if row.Kind != sync_entity.KindDepartment {
 			continue
 		}
-		var dp departmentPayload
+		var dp syncwire.DepartmentPayload
 		if err := json.Unmarshal([]byte(row.Payload), &dp); err != nil {
 			continue
 		}
@@ -1446,18 +1277,18 @@ func (s *workspaceSvc) CreateOrgObject(ctx context.Context, in OrgWriteInput) (*
 	now := time.Now().UnixMilli()
 	fields = withProjectMemberJoinedAt(in.Kind, fields, now)
 
-	payload, err := json.Marshal(orgFieldsOrEmpty(fields))
+	payload, err := json.Marshal(OrgFieldsOrEmpty(fields))
 	if err != nil {
 		return nil, err
 	}
 	obj := &sync_entity.SyncObject{
-		UserID: in.UserID, Kind: in.Kind, SyncID: newOrgSyncID(now),
+		UserID: in.UserID, Kind: in.Kind, SyncID: NewOrgSyncID(now),
 		ScopeSyncID: in.ProjectSyncID, AgentredFingerprint: in.AgentredFingerprint,
 		Payload: string(payload), SyncUpdatedAt: now,
 		OriginFingerprint: ServerOriginFingerprint, Createtime: now, Updatetime: now,
 	}
-	// 取号与落库同在一个事务里，否则版本号顺序不再是提交顺序（见 withTx）。
-	if err := withTx(ctx, func(ctx context.Context) error {
+	// 取号与落库同在一个事务里，否则版本号顺序不再是提交顺序（见 WithOrgWriteTx）。
+	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
 		version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
 		if err != nil {
 			return err
@@ -1489,18 +1320,18 @@ func (s *workspaceSvc) UpdateOrgObject(ctx context.Context, in OrgWriteInput) (*
 	if err := checkProjectWrite(ctx, in, row.SyncID); err != nil {
 		return nil, err
 	}
-	payload, err := withOrgFields(row.Payload, in.Fields)
+	payload, err := WithOrgFields(row.Payload, in.Fields)
 	if err != nil {
 		return nil, err
 	}
 	row.Payload = payload
-	if err := s.saveOrgRow(ctx, in, row); err != nil {
+	if err := SaveOrgRow(ctx, in.UserID, row); err != nil {
 		return nil, err
 	}
 	logger.Ctx(ctx).Info("workspace_svc.UpdateOrgObject: org object updated from web",
 		zap.Int64("userId", in.UserID), zap.String("kind", in.Kind),
 		zap.String("syncId", row.SyncID), zap.Int64("version", row.Version),
-		zap.Strings("fields", keysOfOrgFields(in.Fields)))
+		zap.Strings("fields", KeysOfOrgFields(in.Fields)))
 	return &OrgWriteResult{SyncID: row.SyncID, Version: row.Version}, nil
 }
 
@@ -1521,12 +1352,12 @@ func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*
 	//
 	// 顺序仍是子树先落、主行最后落：主行因此拿到这次操作推进到的最高版本，提交之后
 	// 那一次广播就把整批改动的信号一起带出去了。
-	if err := withTx(ctx, func(ctx context.Context) error {
+	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
 		if err := cascadeProjectDelete(ctx, in, row); err != nil {
 			return err
 		}
 		row.DeletedAt = time.Now().UnixMilli()
-		return writeOrgRow(ctx, in.UserID, row)
+		return WriteOrgRow(ctx, in.UserID, row)
 	}); err != nil {
 		return nil, err
 	}
@@ -1566,7 +1397,7 @@ func (s *workspaceSvc) findOrgRowForWrite(
 	return row, nil
 }
 
-// withTx 把一段写入钉在一个事务里。**取版本号必须在其中**，这不是可选的。
+// WithOrgWriteTx 把一段写入钉在一个事务里。**取版本号必须在其中**，这不是可选的。
 //
 // 版本号取自 sync_account_seqs 里该账号那一行，它的排他锁持到事务提交：取号在事务里，
 // 「谁先取到号」就等于「谁先提交」。下行只认这一个顺序——ListSince 按 version > cursor
@@ -1580,34 +1411,40 @@ func (s *workspaceSvc) findOrgRowForWrite(
 // 广播一律留在外面：通道不是权威，写入的权威性在数据库。放进事务里既会让一次 redis
 // 抖动回滚一次已经算数的写入，又会在提交之前就把信号喊出去——另一端赶来拉取时还看不到
 // 这一版。
-func withTx(ctx context.Context, fn func(context.Context) error) error {
+//
+// 导出是因为这条规矩管的是「服务端直写 sync_objects」这条写通道，不是 workspace 这
+// 一个域：看板（issue_svc）走的是完全同一条通道，同一个账号级序列，同一个下行游标。
+// 它与 WriteOrgRow / SaveOrgRow / ServerOriginFingerprint 一起构成这条通道对外的那
+// 几格，住在一处，规矩才和它管的东西挨着（依赖方向不变：issue_svc → workspace_svc）。
+func WithOrgWriteTx(ctx context.Context, fn func(context.Context) error) error {
 	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		return fn(db.WithContextDB(ctx, tx))
 	})
 }
 
-// saveOrgRow 落这一行并广播：新版本号 + 服务端来源。改与删只差 DeletedAt，其余完全
+// SaveOrgRow 落这一行并广播：新版本号 + 服务端来源。改与删只差 DeletedAt，其余完全
 // 一样，因此共用这一段——两处各写一遍就是两处各漏一个字段的机会。
-func (s *workspaceSvc) saveOrgRow(
-	ctx context.Context, in OrgWriteInput, row *sync_entity.SyncObject,
-) error {
-	if err := withTx(ctx, func(ctx context.Context) error {
-		return writeOrgRow(ctx, in.UserID, row)
+//
+// 它是这条「服务端直写 sync_objects」通道对外的那一格：看板（issue_svc）走的是与
+// 组织面完全同一条通道，因此调它而不是自己再抄一遍取号 / 落库 / 广播。
+func SaveOrgRow(ctx context.Context, userID int64, row *sync_entity.SyncObject) error {
+	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
+		return WriteOrgRow(ctx, userID, row)
 	}); err != nil {
 		return err
 	}
 	// UpdateOrgObject 与 DeleteOrgObject 共用这一段（同上面的写入一样，两处各写一遍
 	// 就是两处各漏一次广播的机会）——两者都是「服务端直写（web 组织面）」这一类。
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, row.Version)
+	accountchan_svc.BroadcastBestEffort(ctx, userID, row.Version)
 	return nil
 }
 
-// writeOrgRow 是落库那一半：取一个新版本号、记下服务端来源、落库。
+// WriteOrgRow 是落库那一半：取一个新版本号、记下服务端来源、落库。
 //
-// **只能在事务里调用**（withTx）——取号与落库分开就不再有「版本号顺序 == 提交顺序」。
+// **只能在事务里调用**（WithOrgWriteTx）——取号与落库分开就不再有「版本号顺序 == 提交顺序」。
 // 单独拆出来是为了让「级联 + 主行墓碑」那种多行写入能与自己的级联同处一个事务，而广播
 // 仍然发生在提交之后（见 DeleteOrgObject）。
-func writeOrgRow(ctx context.Context, userID int64, row *sync_entity.SyncObject) error {
+func WriteOrgRow(ctx context.Context, userID int64, row *sync_entity.SyncObject) error {
 	version, err := sync_repo.SyncState().NextVersion(ctx, userID, 1)
 	if err != nil {
 		return err
@@ -1731,14 +1568,14 @@ func checkOrgWritableKind(ctx context.Context, kind string) error {
 	return nil
 }
 
-// withOrgFields 把这次请求涉及的键合进原载荷，**其余的键原样留下**。
+// WithOrgFields 把这次请求涉及的键合进原载荷，**其余的键原样留下**。
 //
 // 必须走 map[string]any 往返，不能解进一个 Go 结构体：sync_objects 是整行
 // last-write-wins（前置规格决策 4 把字段级合并列为非目标），任何结构体都只声明得出
 // 这一侧当下认识的键，解进去再 marshal 回来就把别的键——桌面端新版本刚加的、
 // 本轮没人读的——静默抹掉了。这不是假想的失误：SetExecTargetOrder 就是照着读路径
 // 的结构体写写路径，差点把 skills_json 抹掉（见 withSortOrder）。
-func withOrgFields(payload string, fields map[string]any) (string, error) {
+func WithOrgFields(payload string, fields map[string]any) (string, error) {
 	m := map[string]any{}
 	if strings.TrimSpace(payload) != "" {
 		if err := json.Unmarshal([]byte(payload), &m); err != nil {
@@ -1755,18 +1592,18 @@ func withOrgFields(payload string, fields map[string]any) (string, error) {
 	return string(next), nil
 }
 
-// orgFieldsOrEmpty 保证新建的载荷是一个 JSON 对象：nil map marshal 出来是 null，
+// OrgFieldsOrEmpty 保证新建的载荷是一个 JSON 对象：nil map marshal 出来是 null，
 // 而 sync_objects.payload 存的是对象（sync_entity.ValidatePayload 也只认对象）。
-func orgFieldsOrEmpty(fields map[string]any) map[string]any {
+func OrgFieldsOrEmpty(fields map[string]any) map[string]any {
 	if fields == nil {
 		return map[string]any{}
 	}
 	return fields
 }
 
-// keysOfOrgFields 只把**键名**排序后交给日志。载荷正文一律不进日志（里面有系统
+// KeysOfOrgFields 只把**键名**排序后交给日志。载荷正文一律不进日志（里面有系统
 // 提示词与简介），日志要回答的只是「这次改了哪几个键」。
-func keysOfOrgFields(fields map[string]any) []string {
+func KeysOfOrgFields(fields map[string]any) []string {
 	out := make([]string, 0, len(fields))
 	for k := range fields {
 		out = append(out, k)
@@ -1775,8 +1612,8 @@ func keysOfOrgFields(fields map[string]any) []string {
 	return out
 }
 
-// newOrgSyncID 给服务端直写的新行分配同步标识：与桌面端同一种形状（ULID，
+// NewOrgSyncID 给服务端直写的新行分配同步标识：与桌面端同一种形状（ULID，
 // 前置规格决策 3），单调时钟源 + 加密随机熵，两个副本同时新建也不会撞。
-func newOrgSyncID(nowMs int64) string {
+func NewOrgSyncID(nowMs int64) string {
 	return ulid.MustNew(ulid.Timestamp(time.UnixMilli(nowMs)), rand.Reader).String()
 }

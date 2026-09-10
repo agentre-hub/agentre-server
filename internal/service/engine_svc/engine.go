@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/oklog/ulid/v2"
 
@@ -160,37 +161,17 @@ var defaultSvc EngineSvc = New()
 func Default() EngineSvc     { return defaultSvc }
 func SetDefault(s EngineSvc) { defaultSvc = s }
 
-type providerPayload struct {
-	Name            string  `json:"name"`
-	Type            string  `json:"type"`
-	BaseURL         string  `json:"base_url"`
-	APIKey          string  `json:"api_key"`
-	DefaultModelKey string  `json:"default_model_key"`
-	Models          []Model `json:"models"`
-	Enabled         bool    `json:"enabled"`
-}
-
-type backendPayload struct {
-	Name                  string `json:"name"`
-	Type                  string `json:"type"`
-	ProviderKey           string `json:"provider_key"`
-	ModelKey              string `json:"model_key"`
-	ModelRoutes           string `json:"model_routes,omitempty"`
-	Sandbox               string `json:"sandbox,omitempty"`
-	Approval              string `json:"approval,omitempty"`
-	EnvJSON               string `json:"env_json,omitempty"`
-	ReasoningEffort       string `json:"reasoning_effort,omitempty"`
-	DefaultPermissionMode string `json:"default_permission_mode,omitempty"`
-	DefaultModel          string `json:"default_model,omitempty"`
-	OpenClawGatewayURL    string `json:"openclaw_gateway_url,omitempty"`
-	OpenClawAgentID       string `json:"openclaw_agent_id,omitempty"`
-	OpenClawDefaultModel  string `json:"openclaw_default_model,omitempty"`
-	OpenClawSessionMode   string `json:"openclaw_session_mode,omitempty"`
-}
-
-type cliOverlayPayload struct {
-	CLIPath string `json:"cli_path"`
-}
+// 三种载荷的形状归共享契约 syncwire（ProjectPayload 那一族的同一批）：这一侧
+// **只消费，不再自己声明一遍**。
+//
+// 三条写路径都是「解进结构体 → 整体 re-marshal」，而 sync_objects 是整行
+// last-write-wins：结构体没声明的键，每一次控制台编辑都会被静默抹掉。自己声明一份
+// 抄本时，这三份形状同时活在桌面端与本仓，加一个字段要改两处、漏一处不报错——只是
+// 那一列在控制台改过之后静默变空。钉在契约上之后，两个宿主写出去的字节逐字相同。
+//
+// 模型行是唯一一处还要转换的：契约的 LLMProviderModel 用 int（0 = 未知，带
+// omitempty），engine_svc 对外的 Model 用 *int64（REST 那一层 internal/api/engine.Model
+// 就是这个形状）。见 contractModels / viewModels。
 
 func (s *engineSvc) ListProviders(ctx context.Context, userID int64) ([]ProviderView, error) {
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{sync_entity.KindLLMProvider})
@@ -207,7 +188,7 @@ func (s *engineSvc) ListProviders(ctx context.Context, userID int64) ([]Provider
 }
 
 func (s *engineSvc) CreateProvider(ctx context.Context, in ProviderWriteInput) (*ProviderView, error) {
-	p := providerPayload{}
+	p := syncwire.LLMProviderPayload{}
 	applyProvider(&p, in, true)
 	if !validProvider(p) || strings.TrimSpace(p.APIKey) == "" {
 		return nil, i18n.NewError(ctx, code.InvalidParameter)
@@ -232,7 +213,7 @@ func (s *engineSvc) UpdateProvider(ctx context.Context, in ProviderWriteInput) (
 	}
 	return s.saveProvider(ctx, in.UserID, row.SyncID, row, p)
 }
-func (s *engineSvc) saveProvider(ctx context.Context, userID int64, key string, row *sync_entity.SyncObject, p providerPayload) (*ProviderView, error) {
+func (s *engineSvc) saveProvider(ctx context.Context, userID int64, key string, row *sync_entity.SyncObject, p syncwire.LLMProviderPayload) (*ProviderView, error) {
 	payload, err := json.Marshal(p)
 	if err != nil {
 		return nil, err
@@ -293,7 +274,7 @@ func (s *engineSvc) ListBackends(ctx context.Context, userID int64) ([]BackendVi
 	return out, nil
 }
 func (s *engineSvc) CreateBackend(ctx context.Context, in BackendWriteInput) (*BackendView, error) {
-	b := backendPayload{}
+	b := syncwire.AgentBackendPayload{}
 	applyBackend(&b, in)
 	if err := validateBackendWrite(ctx, b, in); err != nil {
 		return nil, err
@@ -330,9 +311,9 @@ func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*B
 }
 
 // saveBackend 把运行设备写进既有列 sync_objects.agentred_fingerprint，而不是塞进
-// backendPayload——载荷与身份指纹是两回事，读的一侧（ListBackends/backendView）也
-// 是分开取的。
-func (s *engineSvc) saveBackend(ctx context.Context, userID int64, id string, row *sync_entity.SyncObject, b backendPayload, fingerprint string) (*BackendView, error) {
+// 载荷——载荷与身份指纹是两回事，读的一侧（ListBackends/backendView）也是分开取的。
+// 契约那一侧写的是同一条（AgentBackendPayload 里没有指纹这个键）。
+func (s *engineSvc) saveBackend(ctx context.Context, userID int64, id string, row *sync_entity.SyncObject, b syncwire.AgentBackendPayload, fingerprint string) (*BackendView, error) {
 	payload, err := json.Marshal(b)
 	if err != nil {
 		return nil, err
@@ -383,7 +364,7 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 			break
 		}
 	}
-	payload, err := json.Marshal(cliOverlayPayload{CLIPath: *in.CLIPath})
+	payload, err := json.Marshal(syncwire.AgentBackendCLIPayload{CLIPath: *in.CLIPath})
 	if err != nil {
 		return err
 	}
@@ -406,7 +387,7 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 	return nil
 }
 
-func backendView(syncID string, b backendPayload) BackendView {
+func backendView(syncID string, b syncwire.AgentBackendPayload) BackendView {
 	return BackendView{
 		SyncID: syncID, Name: b.Name, Type: b.Type, ProviderKey: b.ProviderKey, ModelKey: b.ModelKey,
 		ModelRoutes: b.ModelRoutes, Sandbox: b.Sandbox, Approval: b.Approval,
@@ -444,7 +425,7 @@ func (s *engineSvc) Snapshot(ctx context.Context, userID int64, fingerprint stri
 		switch row.Kind {
 		case sync_entity.KindLLMProvider:
 			if p, ok := decodeProvider(row); ok {
-				out.Providers = append(out.Providers, ProviderSnapshot{ProviderKey: row.SyncID, Name: p.Name, Type: p.Type, BaseURL: p.BaseURL, APIKey: p.APIKey, DefaultModelKey: p.DefaultModelKey, Models: p.Models})
+				out.Providers = append(out.Providers, ProviderSnapshot{ProviderKey: row.SyncID, Name: p.Name, Type: p.Type, BaseURL: p.BaseURL, APIKey: p.APIKey, DefaultModelKey: p.DefaultModelKey, Models: viewModels(p.Models)})
 			}
 		case sync_entity.KindAgentBackendCLI:
 			if row.AgentredFingerprint == fingerprint {
@@ -487,7 +468,7 @@ func findLive(ctx context.Context, userID int64, id, kind string) (*sync_entity.
 	}
 	return row, nil
 }
-func applyProvider(p *providerPayload, in ProviderWriteInput, create bool) {
+func applyProvider(p *syncwire.LLMProviderPayload, in ProviderWriteInput, create bool) {
 	if in.Name != nil {
 		p.Name = *in.Name
 	}
@@ -504,7 +485,7 @@ func applyProvider(p *providerPayload, in ProviderWriteInput, create bool) {
 		p.DefaultModelKey = *in.DefaultModelKey
 	}
 	if in.Models != nil {
-		p.Models = *in.Models
+		p.Models = contractModels(*in.Models)
 	}
 	if in.Enabled != nil {
 		p.Enabled = *in.Enabled
@@ -512,13 +493,13 @@ func applyProvider(p *providerPayload, in ProviderWriteInput, create bool) {
 		p.Enabled = true
 	}
 	if p.Models == nil {
-		p.Models = []Model{}
+		p.Models = []syncwire.LLMProviderModel{}
 	}
 }
-func validProvider(p providerPayload) bool {
+func validProvider(p syncwire.LLMProviderPayload) bool {
 	return strings.TrimSpace(p.Name) != "" && strings.TrimSpace(p.Type) != "" && strings.TrimSpace(p.BaseURL) != ""
 }
-func applyBackend(b *backendPayload, in BackendWriteInput) {
+func applyBackend(b *syncwire.AgentBackendPayload, in BackendWriteInput) {
 	if in.Name != nil {
 		b.Name = *in.Name
 	}
@@ -565,12 +546,12 @@ func applyBackend(b *backendPayload, in BackendWriteInput) {
 		b.OpenClawSessionMode = *in.OpenClawSessionMode
 	}
 }
-func validBackend(b backendPayload, in BackendWriteInput) bool {
+func validBackend(b syncwire.AgentBackendPayload, in BackendWriteInput) bool {
 	return strings.TrimSpace(b.Name) != "" && strings.TrimSpace(b.Type) != "" &&
 		in.DeviceFingerprint != nil && strings.TrimSpace(*in.DeviceFingerprint) != ""
 }
 
-func validateBackendWrite(ctx context.Context, b backendPayload, in BackendWriteInput) error {
+func validateBackendWrite(ctx context.Context, b syncwire.AgentBackendPayload, in BackendWriteInput) error {
 	if b.Type == "builtin" {
 		return i18n.NewError(ctx, code.EngineBuiltinForbidden)
 	}
@@ -594,21 +575,64 @@ func requireActiveAccountDevice(ctx context.Context, userID int64, fingerprint s
 	}
 	return nil
 }
-func decodeProvider(row *sync_entity.SyncObject) (providerPayload, bool) {
-	var p providerPayload
+func decodeProvider(row *sync_entity.SyncObject) (syncwire.LLMProviderPayload, bool) {
+	var p syncwire.LLMProviderPayload
 	return p, json.Unmarshal([]byte(row.Payload), &p) == nil
 }
-func decodeBackend(row *sync_entity.SyncObject) (backendPayload, bool) {
-	var b backendPayload
+func decodeBackend(row *sync_entity.SyncObject) (syncwire.AgentBackendPayload, bool) {
+	var b syncwire.AgentBackendPayload
 	return b, json.Unmarshal([]byte(row.Payload), &b) == nil
 }
-func decodeOverlay(row *sync_entity.SyncObject) (cliOverlayPayload, bool) {
-	var o cliOverlayPayload
+func decodeOverlay(row *sync_entity.SyncObject) (syncwire.AgentBackendCLIPayload, bool) {
+	var o syncwire.AgentBackendCLIPayload
 	return o, json.Unmarshal([]byte(row.Payload), &o) == nil
 }
-func browserProvider(key string, p providerPayload) ProviderView {
-	return ProviderView{ProviderKey: key, Name: p.Name, Type: p.Type, BaseURL: p.BaseURL, MaskedTail: maskedTail(p.APIKey), DefaultModelKey: p.DefaultModelKey, Enabled: p.Enabled, Models: p.Models}
+func browserProvider(key string, p syncwire.LLMProviderPayload) ProviderView {
+	return ProviderView{ProviderKey: key, Name: p.Name, Type: p.Type, BaseURL: p.BaseURL, MaskedTail: maskedTail(p.APIKey), DefaultModelKey: p.DefaultModelKey, Enabled: p.Enabled, Models: viewModels(p.Models)}
 }
+
+// contractModels / viewModels 把模型行在契约与 web view 两种表达之间搬运。
+//
+// 「未知的上下文窗口」在两边不是同一个写法：契约是 0（带 omitempty，因此在载荷里
+// 缺席，桌面端逐字这么写），view 是 nil（REST 响应里同样是键缺席）。两边各自的
+// 「缺席」都表达同一件事，所以这里显式互转，不靠隐式零值糊过去。
+func contractModels(models []Model) []syncwire.LLMProviderModel {
+	out := make([]syncwire.LLMProviderModel, len(models))
+	for i, m := range models {
+		out[i] = syncwire.LLMProviderModel{
+			ModelKey: m.ModelKey, ModelID: m.ModelID, Name: m.Name, Enabled: m.Enabled,
+			ContextWindow: intOrZero(m.ContextWindow), MaxOutput: intOrZero(m.MaxOutput),
+		}
+	}
+	return out
+}
+
+func viewModels(models []syncwire.LLMProviderModel) []Model {
+	out := make([]Model, len(models))
+	for i, m := range models {
+		out[i] = Model{
+			ModelKey: m.ModelKey, ModelID: m.ModelID, Name: m.Name, Enabled: m.Enabled,
+			ContextWindow: int64OrNil(m.ContextWindow), MaxOutput: int64OrNil(m.MaxOutput),
+		}
+	}
+	return out
+}
+
+func intOrZero(v *int64) int {
+	if v == nil {
+		return 0
+	}
+	return int(*v)
+}
+
+func int64OrNil(v int) *int64 {
+	if v == 0 {
+		return nil
+	}
+	n := int64(v)
+	return &n
+}
+
 func maskedTail(key string) string {
 	r := []rune(key)
 	if len(r) <= 4 {

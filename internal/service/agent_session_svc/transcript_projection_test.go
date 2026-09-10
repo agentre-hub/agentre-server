@@ -1,4 +1,4 @@
-package workspace_svc
+package agent_session_svc
 
 import (
 	"encoding/json"

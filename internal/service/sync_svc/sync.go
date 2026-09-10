@@ -14,6 +14,8 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
+
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -229,7 +231,7 @@ func (s *syncSvc) beyondTombstoneWindow(ctx context.Context, userID, deviceID, n
 
 // rejectReason 报告这一条该不该被单独拒掉，空串 = 放行。
 func rejectReason(ctx context.Context, item PushItem) string {
-	if !sync_entity.KindValid(item.Kind) || item.SyncID == "" {
+	if !syncwire.KindValid(item.Kind) || item.SyncID == "" {
 		return PushRejectReasonKind
 	}
 	// 路径记录的账号内自然键是（项目同步标识, 指纹）；没有项目同步标识就没有自然键，
@@ -242,7 +244,7 @@ func rejectReason(ctx context.Context, item PushItem) string {
 		(item.ScopeSyncID == "" || item.AgentredFingerprint == "") && item.DeletedAt == 0 {
 		return PushRejectReasonKind
 	}
-	if err := sync_entity.ValidatePayload(item.Kind, item.Payload); err != nil {
+	if err := syncwire.GuardPayload(item.Kind, item.Payload); err != nil {
 		// 载荷内容一律不进日志：里面有项目路径、prompt 与 EnvJSON。
 		logger.Ctx(ctx).Warn("sync payload rejected",
 			zap.String("kind", item.Kind), zap.String("syncId", item.SyncID), zap.Error(err))

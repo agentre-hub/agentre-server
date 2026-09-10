@@ -1,4 +1,4 @@
-package workspace_svc
+package agent_session_svc
 
 import (
 	"context"
@@ -23,7 +23,7 @@ import (
 // 与 setupWorkspaceTest 分开：那批既有测试不关心镜像，混进去徒增无关的 mock 期望。
 func setupMirrorReadTest(t *testing.T) (
 	context.Context, *mock_agent_session_repo.MockSummaryRepo, *mock_agent_session_repo.MockJournalFrameRepo,
-	*mock_sync_repo.MockSyncObjectRepo, *workspaceSvc,
+	*mock_sync_repo.MockSyncObjectRepo, *sessionReadSvc,
 ) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)

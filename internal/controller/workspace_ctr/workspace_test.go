@@ -123,24 +123,6 @@ func (s *stubWorkspaceSvc) SetProjectLocation(
 	return &workspace_svc.OrgWriteResult{SyncID: "pl-written", Version: 43}, nil
 }
 
-func (s *stubWorkspaceSvc) SessionIndex(
-	_ context.Context, _ workspace_svc.SessionIndexQuery,
-) (workspace_svc.SessionIndexPage, error) {
-	panic("not used by workspace_ctr tests: covered by agent_session_ctr's own suite")
-}
-
-func (s *stubWorkspaceSvc) MarkSessionRead(
-	_ context.Context, _ int64, _, _ string,
-) (int64, error) {
-	panic("not used by workspace_ctr tests: covered by agent_session_ctr's own suite")
-}
-
-func (s *stubWorkspaceSvc) Transcript(
-	_ context.Context, _ workspace_svc.TranscriptQuery,
-) (workspace_svc.TranscriptPage, error) {
-	panic("not used by workspace_ctr tests: covered by agent_session_ctr's own suite")
-}
-
 // 组织面写通道：记下每一次调用是哪个动作、带着什么入参，controller 测试据此断言
 // 账号来自鉴权上下文、只有请求真的提到的键被送下去。
 func (s *stubWorkspaceSvc) CreateOrgObject(
