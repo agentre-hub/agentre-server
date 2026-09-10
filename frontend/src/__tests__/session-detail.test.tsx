@@ -1498,7 +1498,10 @@ describe("会话详情页:发送失败", () => {
     await sendInComposer("继续");
 
     expect(await screen.findByText(/New messages cannot be sent/)).toBeTruthy();
-    expect(composerDisabled()).toBe(true);
+    // 等而不是同步取:禁用是这次失败的**另一半渲染**,与那句提示不在同一帧 —— 提示已在、
+    // composer 还没禁用是真见过的样子(整套并发下在此红过一次:expected false to be
+    // true,而单跑与整套串行都绿)。禁用的判据是状态落定,等它不改变判据。
+    await waitFor(() => expect(composerDisabled()).toBe(true));
     expect(screen.queryByTestId("send-failure")).toBeNull();
   });
 
@@ -2276,7 +2279,10 @@ describe("会话详情页:发送失败的三类诊断(缺口二)", () => {
     await renderAndSend("继续");
 
     expect(await screen.findByText(/New messages cannot be sent/)).toBeTruthy();
-    expect(composerDisabled()).toBe(true);
+    // 等而不是同步取:禁用是这次失败的**另一半渲染**,与那句提示不在同一帧 —— 提示已在、
+    // composer 还没禁用是真见过的样子(整套并发下在此红过一次:expected false to be
+    // true,而单跑与整套串行都绿)。禁用的判据是状态落定,等它不改变判据。
+    await waitFor(() => expect(composerDisabled()).toBe(true));
     // 执行目标不可用不是竞态，不该再回落一次 steer。
     expect(
       fakeClient.request.mock.calls.some(

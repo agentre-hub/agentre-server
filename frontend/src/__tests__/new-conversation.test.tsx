@@ -303,7 +303,23 @@ async function attachImageInDraft() {
       ],
     },
   });
-  await screen.findByAltText("shot.png");
+  await within(composerRoot()).findByAltText("shot.png");
+}
+
+/**
+ * 输入框自己那棵子树。发送按钮是 `type="submit"`,所以它的 form 就是 composer。
+ *
+ * 这一带找图必须圈定在这里:派发在飞那一屏(DraftPending)与失败气泡走
+ * SendAttachments,用的是**同一个 alt**(文件名)—— 全局 findByAltText 会被它们
+ * 抢先满足,于是「图回到输入框」这条判据实际验的是「图还在这一页上」,什么都没验到。
+ * 这是它在整套并发下偶发红、单跑必绿的来源(两处别的面谁先出现取决于调度)。
+ */
+function composerRoot(): HTMLElement {
+  const form = screen.getByTestId("session-detail-send").closest("form");
+  if (!form) {
+    throw new Error("发送按钮不在 form 里:composerRoot 的锚点已失效");
+  }
+  return form;
 }
 
 beforeEach(async () => {
@@ -961,7 +977,11 @@ describe("一条还没发第一句的对话", () => {
     // 等而不是同步取:上面那句 waitFor 分不开「字还没被清掉」与「字已经还回来了」,
     // 它可能在**清空之前**就满足。此处曾在整套并发下红过一次(找不到 alt text
     // shot.png)。图迟早要出现,等它不改变判据。
-    await screen.findByAltText("shot.png");
+    //
+    // 图上哪儿等同样是判据的一部分:只在**输入框子树**里找(见 composerRoot)。
+    // 失败气泡也画这张图,全局找的话这一句会在气泡出现时就满足 —— 而气泡正是
+    // 图**没**回到输入框时出现的那一屏,等错了地方就把这条判据整个架空。
+    await within(composerRoot()).findByAltText("shot.png");
   });
 
   it("Given coding 已连接但远端 CLI 启动失败, When 发第一句, Then 展示远端错误而不是误报连不上", async () => {
