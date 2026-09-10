@@ -85,7 +85,7 @@ const sendClient = { request: vi.fn(), catchUp: vi.fn(async () => {}) };
 
 /** 两只 hook 在详情视图里是前后脚跑的，测试也照那个顺序装起来。 */
 function useSend(sid: string, withSummary = true) {
-  const turn = useTurnActivity();
+  const turn = useTurnActivity(sid);
   // 队列是这一屏本地的乐观状态，走 steer 的那条路会往里挂条目；这几条用例测的是
   // 发送本身，真接一只就够（不桩它，免得漏掉「chip 没挂上」这类回归）。
   const steerQueue = useSteerQueue();

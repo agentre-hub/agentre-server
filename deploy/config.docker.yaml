@@ -52,8 +52,8 @@ server:
       - kid: "local-1"
         private_key_pem_path: "/keys/jwt.key"
         public_key_pem_path: "/keys/jwt.pub"
-    access_ttl: 15m
-    refresh_ttl: 2160h
+    access_ttl: 2h
+    refresh_ttl: 720h
   oauth:
     github:
       client_id: ""

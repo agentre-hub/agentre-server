@@ -55,8 +55,8 @@ server:
       - kid: "2026-08-a"
         private_key_pem_path: "/etc/agentre-server/keys/2026-08-a.key"
         public_key_pem_path: "/etc/agentre-server/keys/2026-08-a.pub"
-    access_ttl: 15m
-    refresh_ttl: 2160h
+    access_ttl: 2h
+    refresh_ttl: 720h
   oauth:
     github:
       client_id:     ""

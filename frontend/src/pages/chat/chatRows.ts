@@ -1,6 +1,8 @@
+import { SessionLifecycle } from "@agentre-hub/agentre-ui";
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
 
 import type { DeviceItem } from "@/lib/devices";
+import type { LiveTurn } from "@/lib/liveSessions";
 import type { IndexGroup, IndexGroupRow, IndexRow } from "@/lib/sessionAxes";
 import { groupKeyOfScope } from "@/lib/sessionScope";
 import {
@@ -206,6 +208,39 @@ export function toMachineRow(
     lifecycleState: s.lifecycleState,
     waitingForInput: s.waitingForInput,
     saved: false,
+  };
+}
+
+/**
+ * 把这个浏览器亲眼看到的那一轮叠在镜像的行上（见 `@/lib/liveSessions`）。
+ *
+ * 叠在**行**上而不是画出来的那一刻：状态点、`running` / `unread` 两个 chip、组头上
+ * 的计数、以及行的排序读的全是这一行的 `lifecycleState` / `updatedAt`。只改画出来的
+ * 那一处，同一条会话会一边亮着绿点一边被「运行中」筛掉。
+ *
+ * **只做加法**（见 liveSessions 的文件头）：
+ *
+ *   - 在跑 → 生命周期改 `running`。反过来说不出「没在跑」—— 覆盖层敢说 idle 的话，
+ *     一条被 server 判成 `failed` 的会话会被它悄悄洗白；
+ *   - 时间取两者的大者，只前移不倒退。镜像可能比这一屏看到的还新（别的端刚说过话，
+ *     服务端在轮次边界已经前移过 `last_message_at`），往回写等于把它踢下去；
+ *   - 「等你处理」一个字都不碰：轮次边界说不出这一维（它是 daemon 应答时现算的实时
+ *     叠加），覆盖层不替它回答。
+ *
+ * 没有亲眼所见时**原样交回同一个引用**：绝大多数行任何时候都落在这一档，换一个新
+ * 对象只会让下游按引用比的 memo 全部失效。
+ */
+export function overlayLiveRow(
+  row: MirrorIndexRow,
+  live: LiveTurn | undefined,
+): MirrorIndexRow {
+  if (!live) return row;
+  return {
+    ...row,
+    lifecycleState: live.running
+      ? SessionLifecycle.running
+      : row.lifecycleState,
+    updatedAt: Math.max(row.updatedAt, live.at),
   };
 }
 

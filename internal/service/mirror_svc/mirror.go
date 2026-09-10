@@ -437,7 +437,7 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		return nil
 	}
 	// 会话元数据的跟随排在编号之前,而且不看编号 —— 两件事正交,见 follow 的说明。
-	followed := ts.follow(notification, method)
+	followed := ts.follow(notification, method, m.now())
 	switch {
 	case seq == 0:
 		// 轮次边界帧**线上就是不带号的**,这是协议定死的,不是异常。
@@ -493,9 +493,9 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 // 条件,而线上的轮次边界帧恰恰不带号 —— followTurn 那两个终态分支因此从未在生产
 // 上执行过一次,它自己注释里担心的「一条早就结束的对话长期显示成运行中」原样发生了。
 func (ts *trackedSession) follow(
-	notification *agentrewire.RpcNotification, method string,
+	notification *agentrewire.RpcNotification, method string, now int64,
 ) bool {
-	turn := ts.followTurn(notification, method)
+	turn := ts.followTurn(notification, method, now)
 	waiter := ts.followWaiter(notification)
 	return turn || waiter
 }
@@ -520,13 +520,13 @@ func (ts *trackedSession) follow(
 // 写入会拿快照里那个过期的生命周期把它盖掉 —— 所以终态帧要分两档翻译，不能一律
 // 翻成 idle。判据与 agentred 落行时用的是同一句话（turnstate.IsFailure）。
 //
-// 只动这一列：标题之类仍然只由清单说了算，帧里没有它们的答案。
+// 只动生命周期与「最后活动时刻」两列：标题之类仍然只由清单说了算，帧里没有它们的答案。
 //
 // 回报的是「这一帧是不是一个轮次边界」,而不是「这一列变了没有」:调用方据此决定
 // 要不要落一次摘要,而一条把 running 重申成 running 的边界帧同样值得落 —— 行上
 // 可能正带着一个来自旧快照的过期值。
 func (ts *trackedSession) followTurn(
-	notification *agentrewire.RpcNotification, method string,
+	notification *agentrewire.RpcNotification, method string, now int64,
 ) bool {
 	var state string
 	switch method {
@@ -550,6 +550,21 @@ func (ts *trackedSession) followTurn(
 	// 这里跟着同一条纪律。
 	next := proto.Clone(ts.summary).(*agentrewire.SessionSummary)
 	next.LifecycleState = state
+	// 「最后活动时刻」跟着同两个边界走：一轮开起来 = 刚落了一条用户消息，一轮跑完
+	// = 刚落了一段回复。它与生命周期是同一条来路上的同一件事，此前只跟了一半 ——
+	// 而左栏是按这一格排序的（共享包 byRecent），不动它就等于「发了消息也不置顶、
+	// 时间戳停在上一次 Sync」（联调机 2026-09-08 实测：状态点亮了又灭，时间一动
+	// 没动，直到 server 重启踢起一次 Sync）。
+	//
+	// 取的是**本 server 的钟**：轮次边界帧上没有对端时刻（TurnStartedFrame 只有
+	// conversationId）。它是个近似值，下一次 Sync 的快照会拿对端的真值盖回来；与
+	// 「停在几十分钟前」相比，一跳网络的误差不值一提。
+	//
+	// 只前移不倒退：两台机器的钟不必一致，对端报的时刻可能比这台 server 的钟还新，
+	// 往回写就是把一条刚说过话的对话在左栏里往下踢一截。
+	if now > next.LastMessageAt {
+		next.LastMessageAt = now
+	}
 	// 轮次一结束，那一轮的待决就不可能还有人能回答：waiter 是**进程内、按轮**的
 	// （daemon 的 R11：落库的等待标志会活过重启，变成一个没人能回答的问题）。终态帧
 	// 因此是这一列的兜底出口 —— 少了它，一次没有落定帧的收场（用户中断、后端自己

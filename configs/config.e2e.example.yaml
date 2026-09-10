@@ -56,8 +56,8 @@ server:
         # absolute paths here.
         private_key_pem_path: "/absolute/path/to/local/e2e-jwt.key"
         public_key_pem_path: "/absolute/path/to/local/e2e-jwt.pub"
-    access_ttl: 15m
-    refresh_ttl: 2160h
+    access_ttl: 2h
+    refresh_ttl: 720h
   oauth:
     github:
       client_id: ""

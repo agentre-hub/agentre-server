@@ -40,12 +40,14 @@ import {
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
 import { api } from "@/lib/api";
+import { useLiveTurns } from "@/lib/liveSessions";
 import { fetchProjects, type ProjectNode as ApiProject } from "@/lib/projects";
 import {
   buildGroupTotals,
   buildMachineRows,
   buildView,
   findSelectedKey,
+  overlayLiveRow,
   toMachineRow,
   toMachineRows,
   toMirrorRow,
@@ -574,15 +576,33 @@ export default function Chat() {
     [mirrorRowOf],
   );
 
-  /** 行投影的两层薄包装：真正的投影是 chatRows 里的纯函数。 */
+  /**
+   * 这个浏览器亲眼看到的那些轮次（见 `@/lib/liveSessions`）。它叠在**每一条**行上，
+   * 因此索引、「查看全部 N」弹层与机器那一档看到的是同一份事实。
+   */
+  const liveTurns = useLiveTurns();
+
+  /**
+   * 行投影的两层薄包装：真正的投影是 chatRows 里的纯函数。
+   *
+   * 实时覆盖就叠在这里 —— 这两只是**全部**行的必经之路（索引、弹层、机器轴），
+   * 叠在更外面的某一处就等于让另外两处继续画旧事实。
+   */
   const fromMirrorRow = useCallback(
-    (s: MirroredSession) => toMirrorRow(s, reach.devicesByFp, t),
-    [reach.devicesByFp, t],
+    (s: MirroredSession) =>
+      overlayLiveRow(
+        toMirrorRow(s, reach.devicesByFp, t),
+        liveTurns.get(s.conversation_id),
+      ),
+    [reach.devicesByFp, t, liveTurns],
   );
   const fromMachineRow = useCallback(
     (device: DeviceItem, s: SessionSummary, localFingerprint?: string) =>
-      toMachineRow(device, s, t, localFingerprint),
-    [t],
+      overlayLiveRow(
+        toMachineRow(device, s, t, localFingerprint),
+        liveTurns.get(s.conversationId),
+      ),
+    [t, liveTurns],
   );
 
   /**

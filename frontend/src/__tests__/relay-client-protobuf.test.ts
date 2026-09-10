@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyJournalFrames,
   RelayClient,
+  RequestTimeoutMs,
   type RelayClientOptions,
 } from "@/lib/relayClient";
 import { RelayConnection } from "@/lib/relayConnection";
@@ -837,6 +838,92 @@ describe("RelayClient 通道级失败", () => {
     expect(new TextDecoder().decode(socket.sent[0])).toBe(
       machineTarget("fp-daemon"),
     );
+  });
+
+  /*
+    对端**换过链路**（agentred 重启 / 中继重连）。
+
+    通道的鉴权状态活在 daemon 那条 websocket 上，换一条之后旧通道在它那侧根本不
+    存在；服务端因此判死这条通道：一帧 -32012（转发失败）+ 一帧空载荷。
+
+    这一档与「目标不存在 / 不许寻址」不是同一件事，所以不能共用「不再重试」那条
+    结论：机器还在、账号也没变，缺的只是一条新通道，而它下一秒就开得起来。此前
+    这里一律落到 disconnected，于是用户看到的是「连接断了，已经不再自动重试」——
+    而唯一能走的路是刷新整页（联调机 2026-09-08 实测）。
+
+    重试排上了，`reconnecting` 这句话才是真的（use-relay.ts 的状态注释：它的意思
+    是「有人正在重试」）。**没带码的那种关闭仍旧落 disconnected** —— 那时谁也说不
+    出还值不值得再试，见上一条用例。
+  */
+  it("对端换过链路时自己把通道重开，而不是把用户扔给刷新键", async () => {
+    const timers: Array<() => void> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void) => {
+      timers.push(fn);
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+
+    // 服务端判死这条通道：先说为什么（通道级错误没有 id），再关掉它。
+    socket.receive(encodeRpcErrorFrame(0n, -32012, "relay forward failed"));
+    socket.receive(new Uint8Array(0));
+
+    expect(client.state).toBe("reconnecting");
+    socket.sent = [];
+    // 排在最后的那只表就是这次重开（前面几只是在飞请求各自的超时表）。
+    timers.pop()?.();
+    await vi.waitFor(() =>
+      expect(socket.sent.length).toBeGreaterThanOrEqual(1),
+    );
+    expect(new TextDecoder().decode(socket.sent[0])).toBe(
+      machineTarget("fp-daemon"),
+    );
+  });
+
+  it("目标不存在时不排重试：重开一万次也换不来别的答案", async () => {
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+
+    socket.receive(encodeRpcErrorFrame(0n, -32010, "relay target not found"));
+    socket.receive(new Uint8Array(0));
+
+    expect(client.state).toBe("disconnected");
+  });
+});
+
+describe("RelayClient 请求超时", () => {
+  /*
+    一次投不出去的请求**永不落定**。
+
+    帧总线在拥塞时会把一条通道排着的帧整个丢掉（`relay_svc/fanout.go` 的 enqueue），
+    它给自己的交代是「在飞的 RPC 会超时，调用方重试」——而这一侧压根没有超时，那句
+    交代对浏览器不成立。丢掉的若是装载那一遍的 `session.list`，这一屏的 `summary`
+    就永远停在 null：转录空着、输入框却照常可用，发出去的每一条都落进「还没发出去」
+    那颗气泡，而页面从头到尾没有任何东西在动——只有刷新整页才好。
+
+    超时归 transport（RelayError(-1)）而不是 rejected：这条请求**可能已经送达**，
+    气泡据此说的是「再发一次可能变成两条」，那是实话。
+  */
+  it("请求超时后落定，而不是永远挂着", async () => {
+    const timers: Array<{ fn: () => void; ms: number }> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      timers.push({ fn, ms: ms ?? 0 });
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout);
+    const { client, socket } = setup();
+    await authenticate(client, socket);
+
+    const inflight = client.request(rpcMethods.sessionList, {
+      conversationIds: ["conv-1"],
+    });
+    const timeout = timers.pop();
+    expect(timeout?.ms).toBe(RequestTimeoutMs);
+    timeout!.fn();
+
+    await expect(inflight).rejects.toMatchObject({ code: -1 });
   });
 });
 

@@ -25,6 +25,14 @@ import type {
 export interface ServerTranscriptPortDeps {
   submitToolPermission(input: AnswerToolPermissionInput): Promise<unknown>;
   submitAnswer(input: AnswerUserQuestionInput): Promise<unknown>;
+  /**
+   * 请宿主接手预览这个文件。**给不给这个动作本身就是能力探测**：不给就不装这个
+   * 端口，包里的文件链接因此整个不出入口，而不是出一个点了没反应的入口。
+   *
+   * 返回 true 表示宿主接手了。路径是会话级 relPath —— 「读哪台机器的哪个工作根」
+   * 由宿主自己闭包带着。
+   */
+  previewFile?(path: string): boolean;
 }
 
 /**
@@ -66,6 +74,12 @@ export function createServerTranscriptPorts(
     openExternalURL(url) {
       window.open(url, "_blank", "noopener,noreferrer");
     },
+
+    // 预览是浏览器里**做得到**的：正文经中继从那台机器直传过来（规格 2026-09-08）。
+    // 但仍然按能力探测装：宿主没给动作就没有这个端口。
+    ...(deps.previewFile
+      ? { previewFile: (_sessionId: number, path: string) => deps.previewFile!(path) }
+      : {}),
 
     // openPath / readWorkspaceFile 是桌面能力（在文件管理器里打开、读工作区文件），
     // 浏览器里不存在。按包的约定，**不提供**就等于告诉组件「宿主没有这个能力」，

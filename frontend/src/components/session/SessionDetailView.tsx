@@ -37,7 +37,9 @@ import {
 import AppShell from "@/components/AppShell";
 import SessionDetailHeader from "@/components/session/SessionDetailHeader";
 import SessionComposerBand from "@/components/session/SessionComposerBand";
+import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
+import { useFilePreviewTabs } from "@/components/session/useFilePreviewTabs";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import { turnDoneFrames } from "@/components/session/turnDone";
@@ -408,12 +410,52 @@ export default function SessionDetailView({
   // 解出来单放一格：`ref={scrollback.scrollRef}` 这种成员表达式过不了
   // react-hooks/refs —— 规则看不出成员访问取到的是 ref 对象本身还是它的值。
   const { scrollRef } = scrollback;
-  const decisions = useSessionDecisionPorts({ sid, clientRef, originRef });
+  /**
+   * 转录里点开的文件预览（规格 2026-09-08）。标签状态住在宿主，取数经中继。
+   *
+   * `previewFileRef` 让端口对象不必随 cwd / 连接状态重建：能不能预览是**点下去
+   * 那一刻**的事实，由 ref 后面这个函数当场回答。答 false 时包不会开面板。
+   */
+  const preview = useFilePreviewTabs();
+  // 实况 cwd 的当下值。渲染期就地写：链接点下去那一刻要的是**此刻**知不知道
+  // 工作目录，而不是上一次渲染时的答案。
+  const previewCwdRef = useRef("");
+  previewCwdRef.current = summary?.cwd ?? "";
+  const previewFileRef = useRef((path: string) => {
+    if (!previewCwdRef.current) return false;
+    preview.open(path);
+    return true;
+  });
+  previewFileRef.current = (path: string) => {
+    if (!previewCwdRef.current) return false;
+    preview.open(path);
+    return true;
+  };
+
+  const decisions = useSessionDecisionPorts({
+    sid,
+    clientRef,
+    originRef,
+    previewFileRef,
+  });
+
+  /**
+   * 换会话就是换了一批文件：上一条开着的标签不能漏到下一条里。
+   *
+   * 用「按 prop 变化就地调整状态」而不是 effect：effect 会在**挂载时**也跑一次，
+   * 白白多一轮渲染 —— 而这一带的通道是按渲染观察的（session-detail 的「认领落定
+   * 之前一条通道都不开」正是盯着这个），多出来的那一轮会被当成多开了一条。
+   */
+  const [previewSid, setPreviewSid] = useState(sid);
+  if (previewSid !== sid) {
+    setPreviewSid(sid);
+    preview.reset();
+  }
   /**
    * 轮次状态（转录的三点、占位）整片归 useTurnActivity。
    * 它排在中继之前：onRunResultDone / onAutonomousTurnStarted 与 attach 都要写它。
    */
-  const turn = useTurnActivity();
+  const turn = useTurnActivity(sid);
   /**
    * 这一轮里排着的那几条插话（规格 2026-09-08-console-steer-queue）。它排在发送
    * 那一族之前：走 steer 的那条路要往里挂条目，中继回调要从里面消费。
@@ -920,7 +962,9 @@ export default function SessionDetailView({
             // 清成 false。（镜像那一段不参与这件事：回放教不了「此刻在不在跑」，
             // 它只往转录里补一条轮次结束的标记。）
             const running = s?.lifecycleState === SessionLifecycleRunning;
-            markTurnActive(running);
+            // 清单快照那一档：说得出「此刻在不在跑」，说不出「刚有动静」——
+            // 左栏因此只点亮、不改这一行的时间与位置（见 seedLiveTurn）。
+            markTurnActive(running, true);
             // 计时同理排在补齐之后:草稿页刚派发过来的那一条要在这里开表,落在前面
             // 会被回放的终态帧收掉。
             noteAttachedTurn(running);
@@ -1645,6 +1689,7 @@ export default function SessionDetailView({
   const scrollBody = (
     <SessionScrollBody
       sid={sid}
+      cwd={summary?.cwd}
       scrollRef={scrollRef}
       contentRef={scrollback.contentRef}
       onScroll={scrollback.onScroll}
@@ -1721,8 +1766,31 @@ export default function SessionDetailView({
       className="flex h-full min-h-0 flex-col bg-background"
     >
       {header}
-      {scrollBody}
-      {composerBand}
+      {/*
+        分栏切在头带**之下**（设计源 agentre.pen 的 B1）：头带横跨整列，转录与
+        输入带一起留在左栏，预览栏定宽 420 贴右。没有当前标签时右栏整个不渲染，
+        转录自动回到全宽 —— 不另设一个「收起」状态。
+      */}
+      <div className="flex min-h-0 flex-1 flex-row">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {scrollBody}
+          {composerBand}
+        </div>
+        <SessionFilePreviewColumn
+          sid={sid}
+          cwd={summary?.cwd ?? ""}
+          client={client}
+          deviceName={device?.name}
+          deviceOnline={device?.online}
+          tabs={preview.tabs}
+          activePath={preview.activePath}
+          onActivate={preview.open}
+          onPromote={preview.pin}
+          onClose={preview.close}
+          onCloseOthers={preview.closeOthers}
+          onCloseAll={preview.closeAll}
+        />
+      </div>
     </div>
   );
 

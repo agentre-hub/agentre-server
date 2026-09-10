@@ -21,7 +21,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
-func TestLoadServerConfig_AccessTTLDefaultIsMinuteLevel(t *testing.T) {
+func TestLoadServerConfig_AccessTTLDefaultIsWithinBound(t *testing.T) {
 	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
 		"server": map[string]interface{}{},
 	})))
@@ -29,9 +29,10 @@ func TestLoadServerConfig_AccessTTLDefaultIsMinuteLevel(t *testing.T) {
 
 	got := LoadServerConfig(context.Background(), cfg)
 
-	assert.Equal(t, 15*time.Minute, got.JWT.AccessTTL)
-	assert.Less(t, got.JWT.AccessTTL, time.Hour, "R4 要求访问凭据为分钟级短有效期")
-	assert.Equal(t, 90*24*time.Hour, got.JWT.RefreshTTL)
+	assert.Equal(t, 2*time.Hour, got.JWT.AccessTTL)
+	assert.LessOrEqual(t, got.JWT.AccessTTL, 2*time.Hour,
+		"access token 的有效期就是被盗凭据的存活窗口，上限 2h")
+	assert.Equal(t, 30*24*time.Hour, got.JWT.RefreshTTL)
 }
 
 func TestLoadServerConfig_DoesNotReadRemovedHubRoot(t *testing.T) {

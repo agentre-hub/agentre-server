@@ -26,13 +26,14 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(filename), "..", ".."))
 }
 
-// R4 要求访问凭据是分钟级短有效期，靠刷新续期。既有的
-// TestLoadServerConfig_AccessTTLDefaultIsMinuteLevel 只看得住**没配时**的缺省值——
+// 访问凭据靠刷新续期，有效期有上限。既有的
+// TestLoadServerConfig_AccessTTLDefaultIsWithinBound 只看得住**没配时**的缺省值——
 // 模板里显式写一个大数字，它一句话都不会说，而模板正是真实部署照抄的东西。
 //
 // 这与连接池是同一类失败：判据只存在于配置文件里，代码测试一路全绿，症状要等到
-// 线上才看得见（一张被盗的 access token 多活多久，就是这个数字）。
-func TestShippedConfigsKeepAccessTTLMinuteLevel(t *testing.T) {
+// 线上才看得见（一张被盗的 access token 多活多久，就是这个数字）。刷新凭据同理：
+// 它决定一台失联设备还能自证多久。
+func TestShippedConfigsKeepTokenTTLWithinBound(t *testing.T) {
 	t.Parallel()
 
 	root := repoRoot(t)
@@ -46,18 +47,22 @@ func TestShippedConfigsKeepAccessTTLMinuteLevel(t *testing.T) {
 			var doc struct {
 				Server struct {
 					JWT struct {
-						AccessTTL time.Duration `yaml:"access_ttl"`
+						AccessTTL  time.Duration `yaml:"access_ttl"`
+						RefreshTTL time.Duration `yaml:"refresh_ttl"`
 					} `yaml:"jwt"`
 				} `yaml:"server"`
 			}
 			require.NoError(t, yaml.Unmarshal(raw, &doc))
 
-			ttl := doc.Server.JWT.AccessTTL
-			if ttl == 0 {
-				return // 没写就是走代码缺省值，那一条另有守卫
+			// 没写就是走代码缺省值，那一条另有守卫
+			if ttl := doc.Server.JWT.AccessTTL; ttl != 0 {
+				require.LessOrEqual(t, ttl, 2*time.Hour,
+					"访问凭据有效期上限 2h，模板里不该写一个更大的数字")
 			}
-			require.Less(t, ttl, time.Hour,
-				"R4：访问凭据必须是分钟级短有效期，模板里不该写一个小时级的数字")
+			if ttl := doc.Server.JWT.RefreshTTL; ttl != 0 {
+				require.LessOrEqual(t, ttl, 30*24*time.Hour,
+					"刷新凭据有效期上限 30d，模板里不该写一个更大的数字")
+			}
 		})
 	}
 }

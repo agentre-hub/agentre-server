@@ -31,6 +31,11 @@ export interface SessionDecisionPortsParams {
   sid: string;
   clientRef: RefObject<RelayClient | null>;
   originRef: RefObject<string | undefined>;
+  /**
+   * 请宿主接手预览一个文件。不给这个 ref 就不装 previewFile 端口 —— 转录里的
+   * 文件链接因此整个不出入口（包的能力探测约定）。
+   */
+  previewFileRef?: RefObject<(path: string) => boolean>;
 }
 
 /** 详情视图从这一族拿到的东西。 */
@@ -67,6 +72,7 @@ export function useSessionDecisionPorts({
   sid,
   clientRef,
   originRef,
+  previewFileRef,
 }: SessionDecisionPortsParams): SessionDecisionPorts {
   const { t } = useTranslation();
   const [waiters, setWaiters] = useState<Waiters>({
@@ -293,6 +299,12 @@ export function useSessionDecisionPorts({
       createServerTranscriptPorts({
         submitToolPermission: (input) => submitToolPermissionPort(input),
         submitAnswer: (input) => submitAnswerPort(input),
+        // 与上面两个提交同一条路子：只在**事件回调**里读 ref，端口对象因此仍然
+        // 只随会话变。宿主此刻能不能预览（有没有 cwd / 中继连着）由 ref 后面那
+        // 个函数当场回答，不必让端口对象跟着抖。
+        ...(previewFileRef
+          ? { previewFile: (path: string) => previewFileRef.current(path) }
+          : {}),
       }),
     // 依赖只留 sid：两个提交的行为只随会话变。把函数本身放进依赖会让端口对象
     // 每次渲染都换一个新的，白白打掉包内 Provider 下游的 memo。

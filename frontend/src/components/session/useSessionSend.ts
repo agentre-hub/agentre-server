@@ -16,6 +16,7 @@ import type { ModelTarget } from "@agentre-hub/agentre-ui";
 import type { FailedSend } from "@/components/session/SendFailureBubble";
 import type { SteerQueue } from "@/components/session/useSteerQueue";
 import { useTargetGuard } from "@/hooks/use-target-guard";
+import { forgetLiveTurn, noteLiveTurn, seedLiveTurn } from "@/lib/liveSessions";
 import { randomId } from "@/lib/randomId";
 import { encodeUserBlocks } from "@/lib/userBlocks";
 import type { RelayClient } from "@/lib/relayClient";
@@ -29,7 +30,11 @@ export interface TurnActivity {
   turnActive: boolean;
   /** 选路那一刻同步读的那一份，见下面 turnActiveRef 的说明。 */
   turnActiveRef: RefObject<boolean>;
-  markTurnActive: (v: boolean) => void;
+  /**
+   * `fromSnapshot` = 这一句来自 attach 那一刻的清单快照，不是一次亲眼看到的轮次
+   * 边界。左栏据它分辨「刚有动静」与「打开时它就在跑」，见 `seedLiveTurn`。
+   */
+  markTurnActive: (v: boolean, fromSnapshot?: boolean) => void;
   pendingAssistant: boolean;
   setPendingAssistant: Dispatch<SetStateAction<boolean>>;
   /** 目标会话换了。由详情视图的渲染期重置调用。 */
@@ -44,7 +49,7 @@ export interface TurnActivity {
  * `effectiveTarget` **之前** —— 发送那一族恰恰要等这两样才拼得出参数。所以这一半
  * 先声明，发送那一半晚一步，中间隔着的正是它们各自等的东西。
  */
-export function useTurnActivity(): TurnActivity {
+export function useTurnActivity(conversationId: string): TurnActivity {
   /**
    * 这条会话此刻是否在跑一轮 —— 发消息的选路依据(在跑走 steer 插话,空闲走 run
    * 开新一轮)。
@@ -69,10 +74,41 @@ export function useTurnActivity(): TurnActivity {
   const turnActiveRef = useRef(false);
   const [turnActive, setTurnActive] = useState(false);
   const [pendingAssistant, setPendingAssistant] = useState(false);
-  const markTurnActive = useCallback((v: boolean) => {
+  /** 只动这一屏自己那两份。`reset` 走它 —— 它在渲染期被调用，不能往外说话。 */
+  const setTurnActiveLocal = useCallback((v: boolean) => {
     turnActiveRef.current = v;
     setTurnActive(v);
   }, []);
+  /**
+   * 除了这两份，还往 `@/lib/liveSessions` 记一笔：**左栏**据它在账号镜像之上叠一层。
+   *
+   * 左栏此前只有镜像一条来路，于是「我刚发了一条消息」要等一个来回才看得出来
+   * （联调机 2026-09-08 实测 2s），而镜像对一条 `interrupted` 的会话有意不 attach ——
+   * 那时它整轮一次都不亮。桌面端一直不吃这个亏（`session-status-store` 在发送成功
+   * 那一刻乐观置 running，"不依赖后端在 turn 起手时 emit session_status"）。
+   *
+   * 记在**这里**而不是各个调用点：`markTurnActive` 已经是这件事唯一的写入口
+   * （自己发送 / 回声 / 开轮帧 / 自主续轮 / attach 时的清单快照，五条路都经过它），
+   * 各写一遍就会漏掉其中几条。
+   */
+  const markTurnActive = useCallback(
+    (v: boolean, fromSnapshot?: boolean) => {
+      setTurnActiveLocal(v);
+      if (fromSnapshot) seedLiveTurn(conversationId, v);
+      else noteLiveTurn(conversationId, v);
+    },
+    [conversationId, setTurnActiveLocal],
+  );
+  /**
+   * 不再盯着这一条了（右栏换了一条 / 整屏卸载）：撤回「在跑」那半句。
+   *
+   * 它此后没有任何来路 —— 这个浏览器收不到这条会话的帧了，一条在你没看的时候跑完
+   * 的对话会永远绿着。时间那一半不撤：消息确实是那一刻发出去的（见 forgetLiveTurn）。
+   *
+   * 放在 effect 的清理里而不是 `reset` 里：`reset` 由渲染期的「prop 变了就重置」调用，
+   * 那里不能有外部副作用；而清理拿得到的正是**上一条**会话的标识。
+   */
+  useEffect(() => () => forgetLiveTurn(conversationId), [conversationId]);
   /**
    * 目标会话换了：这一族说的全是**那一条**会话的事，跟着重来。
    *
@@ -86,9 +122,9 @@ export function useTurnActivity(): TurnActivity {
    * 之前这一屏**不知道** —— 而上一条会话的答案与这个问题无关。
    */
   const reset = useCallback(() => {
-    markTurnActive(false);
+    setTurnActiveLocal(false);
     setPendingAssistant(false);
-  }, [markTurnActive]);
+  }, [setTurnActiveLocal]);
 
   return {
     turnActive,

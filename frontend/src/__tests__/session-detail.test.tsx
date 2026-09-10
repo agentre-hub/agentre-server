@@ -9,6 +9,7 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
@@ -37,6 +38,7 @@ import SessionDetailView, {
 } from "@/components/session/SessionDetailView";
 import SessionDetail from "@/pages/SessionDetail";
 import { writeReasoningEffortToOrigin } from "@/components/session/sessionMirror";
+import { resetLiveTurns, useLiveTurns } from "@/lib/liveSessions";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -160,6 +162,8 @@ beforeEach(async () => {
   fakeClient.getCursor.mockReturnValue(0);
   fakeClient.attach.mockImplementation(async () => ({}));
   fakeClient.catchUp.mockImplementation(async () => {});
+  // 「亲眼看到的那一轮」是模块级的一份（左栏跨组件读它），用例之间必须清干净。
+  resetLiveTurns();
 });
 
 function renderPage() {
@@ -510,6 +514,99 @@ describe("会话详情页", () => {
         peerFingerprint: "fp-desktop",
       });
     });
+  });
+
+  /**
+   * 左栏此前只有一条来路 —— server 的账号镜像，于是「我刚发了一条消息」要等一个
+   * 来回（联调机实测 2s）才在行上看得出来；镜像因为那条会话还是 `interrupted`
+   * 而没接上时（agentred 重启后的常态），整轮一次都不亮。
+   *
+   * 而正在看着这一屏的人手里有更强的事实：这一轮就是他发的。桌面端一直是这么做的
+   * （`session-status-store` 在发送成功那一刻乐观置 running），这里补上本站的那一半：
+   * 轮次状态每变一次就往 `@/lib/liveSessions` 记一笔，左栏据它在镜像之上叠一层。
+   */
+  it("发送成功当场记成「在跑」：左栏据此立刻点亮，不等镜像的来回", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+    const live = renderHook(() => useLiveTurns());
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    expect(live.result.current.get("42")?.running).toBeFalsy();
+
+    await sendInComposer("把按钮改成蓝色");
+
+    await vi.waitFor(() =>
+      expect(live.result.current.get("42")?.running).toBe(true),
+    );
+  });
+
+  // 打开一条**已经在跑**的对话：左栏该点亮，但不该因此把它顶到最前面 —— 那一轮
+  // 可能十分钟前就开了，「现在才打开它」不是一次新的活动。清单快照与亲眼看到的
+  // 轮次边界因此分成两句话（`seedLiveTurn` / `noteLiveTurn`）。
+  it("打开时它就在跑：只点亮，不改这一行的时间", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, lifecycleState: SessionLifecycleRunning }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    const live = renderHook(() => useLiveTurns());
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+
+    await vi.waitFor(() =>
+      expect(live.result.current.get("42")).toEqual({ running: true, at: 0 }),
+    );
+  });
+
+  // 轮次的另一端：这一屏亲眼看着它收场了，那半句 claim 当场收回去 —— 留着就是一颗
+  // 永远不会灭的绿点（此后没有任何东西再来纠正它）。时间那一半留着：回复确实是
+  // 那一刻落下的，那一行就该待在最上面。
+  it("轮次收场当场撤回「在跑」，时间那一半留着", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+    const live = renderHook(() => useLiveTurns());
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await sendInComposer("把按钮改成蓝色");
+    await vi.waitFor(() =>
+      expect(live.result.current.get("42")?.running).toBe(true),
+    );
+
+    await act(async () => {
+      capturedOpts.onRunResultDone?.({ conversationId: "42" } as never, 0);
+    });
+
+    expect(live.result.current.get("42")?.running).toBe(false);
+    expect(live.result.current.get("42")?.at).toBeGreaterThan(0);
   });
 
   it("发新消息走 runtime.run 并带来源设备", async () => {

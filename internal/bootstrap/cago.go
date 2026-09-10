@@ -183,11 +183,15 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 		out.DeviceFlow.PollInterval = 5 * time.Second
 	}
 	if out.JWT.AccessTTL == 0 {
-		// R4：访问凭据必须是分钟级短有效期，靠刷新续期。
-		out.JWT.AccessTTL = 15 * time.Minute
+		// 这个值同时决定 refresh token 的**轮换频率**：客户端在过期前
+		// defaultRefreshMargin 续期，而每次续期都轮换一次 refresh token。取 15m 时
+		// 是每 13 分钟换一次身份，任何快照 / 还原 / 并发实例都会踩到「盘上那一份已
+		// 经作废」；取 2h 后降到每 118 分钟一次。代价是被盗 access token 的存活窗口
+		// 变长，由 jti 黑名单与撤销列表兜底——它们的窗口都跟着 AccessTTL 走。
+		out.JWT.AccessTTL = 2 * time.Hour
 	}
 	if out.JWT.RefreshTTL == 0 {
-		out.JWT.RefreshTTL = 90 * 24 * time.Hour
+		out.JWT.RefreshTTL = 30 * 24 * time.Hour
 	}
 	if out.RateLimit.AuthorizePerIPPerMin == 0 {
 		out.RateLimit.AuthorizePerIPPerMin = 3

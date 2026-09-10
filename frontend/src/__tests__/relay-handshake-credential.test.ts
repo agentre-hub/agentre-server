@@ -141,8 +141,12 @@ describe("通道握手的凭据", () => {
       expect(client.state).toBe("reconnecting");
       expect(credentialsSent(connection)).toEqual([]);
 
-      // 退让封顶 30 秒，推过封顶就一定轮到下一次。
-      await vi.advanceTimersByTimeAsync(31_000);
+      // 退让封顶 30 秒，推到封顶就一定轮到下一次（延迟必然 ≤ capMs）。
+      //
+      // 不多推：在飞的请求自己也有一只表（RequestTimeoutMs 同样是 30 秒），推过头
+      // 会把这一次重试刚发出去的那条 auth.account 一起推超时，下面 answerAuth 的
+      // 应答就没有收件人了 —— 那是这只表在做它该做的事，不是握手重试坏了。
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(credentialsSent(connection)).toEqual(["ticket-2"]);
       answerAuth(connection);
       await vi.waitFor(() => expect(client.state).toBe("connected"));

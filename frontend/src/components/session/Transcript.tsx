@@ -72,6 +72,7 @@ export default function Transcript({
   streaming = false,
   pendingAssistant = false,
   reconnecting = false,
+  cwd,
   getScrollElement,
 }: {
   messages: TranscriptMessage[];
@@ -160,6 +161,14 @@ export default function Transcript({
    *
    * 取不到时整列渲染 —— 见下面 `windowed` 那段。
    */
+  /**
+   * 这条会话此刻在那台机器上的工作目录，取自中继上的**实况**摘要。
+   *
+   * 转录里的文件路径靠它判「在不在 cwd 内」，判得出来才出预览入口。给不出时
+   * （那台机器离线、摘要还没到）链接维持死文本 —— 那正是包里既有的那条口径：
+   * 会话没有 cwd 就不出入口，而不是出一个点了没反应的入口。
+   */
+  cwd?: string;
   getScrollElement?: () => HTMLElement | null;
 }) {
   const { t } = useTranslation();
@@ -181,8 +190,9 @@ export default function Transcript({
         </span>
       ),
       sessionId,
+      cwd,
     }),
-    [sessionId, fallbackName, agentName, agentAvatar, agentPending],
+    [sessionId, cwd, fallbackName, agentName, agentAvatar, agentPending],
   );
 
   const displayMessages = useMemo(() => {

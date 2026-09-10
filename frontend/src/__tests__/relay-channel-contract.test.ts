@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
+import { TransientChannelCodes } from "@/lib/relayClient";
 import { SignalChannelID } from "@/lib/relayConnection";
 import {
   ConversationTargetPrefix,
@@ -37,6 +38,13 @@ function goConst(name: string): string {
   return match![1];
 }
 
+/** 取一个 Go int32 常量的字面量值。 */
+function goIntConst(name: string): number {
+  const match = new RegExp(`${name}\\s+int32\\s*=\\s*(-?\\d+)`).exec(go);
+  expect(match, `relay_svc 里找不到常量 ${name}`).toBeTruthy();
+  return Number(match![1]);
+}
+
 describe("通道目标与保留通道号的两端契约", () => {
   it("两种目标前缀与服务端逐字相同", () => {
     expect(ConversationTargetPrefix).toBe(goConst("TargetPrefixConversation"));
@@ -66,5 +74,20 @@ describe("通道目标与保留通道号的两端契约", () => {
     for (let i = 1; i <= 100; i++) {
       expect(`c${i}`.startsWith(prefix)).toBe(false);
     }
+  });
+
+  /**
+   * 「这一档自己重开」那两个码同样是两端各写一份的裸数字（`relayClient` 的
+   * `TransientChannelCodes`）。服务端在 -3201x 段里插一个新码、或把这两个挪个位置，
+   * 浏览器不会报任何错——它只会把「几秒后就回来」的那一档认成永久失败，于是控制台
+   * 又退回「刷新整页」那条老路，而且一声不吭。
+   */
+  it("会自己重开的那两档与服务端逐字相同", () => {
+    expect([...TransientChannelCodes].sort((a, b) => a - b)).toEqual(
+      [
+        goIntConst("ChannelCodeTargetOffline"),
+        goIntConst("ChannelCodeForwardFailed"),
+      ].sort((a, b) => a - b),
+    );
   });
 });

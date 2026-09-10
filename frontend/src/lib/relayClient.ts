@@ -153,6 +153,37 @@ export interface RelayClientOptions extends NotificationHandlers {
  */
 export const ProtocolVersionRejectionCode = -32006;
 
+/**
+ * 服务端判死一条虚拟通道时给的码里，**下一秒就可能不成立**的那两个（
+ * `relay_svc/target.go` 的 `ChannelCodeTargetOffline` / `ChannelCodeForwardFailed`）。
+ *
+ * 它们与「目标不存在 / 不成形 / 不许寻址」分开，是因为那三个说的是这条通道**永远**
+ * 开不起来，而这两个说的只是「此刻这条通道投不出去」：机器还在册、账号也没变，缺的
+ * 只是一条新通道。agentred 重启就走这一路 —— 通道的鉴权状态活在它那条 websocket 上，
+ * 换一条之后旧通道在它那侧根本不存在（帧总线按 ConnID 判死，见 relay_svc 的
+ * `streamKey`），而机器本身几秒后就回来了。
+ *
+ * 数值与服务端逐字对齐由 `relay-channel-contract.test.ts` 守着：这一份是复述，改了
+ * 那边这里不会自己变红。
+ */
+export const TransientChannelCodes = new Set([-32011, -32012]);
+
+/**
+ * 一次中继 RPC 等应答的上限。
+ *
+ * 有这个数是因为**没有它的时候请求永不落定**：帧总线在拥塞时会把一条通道排着的帧
+ * 整个丢掉（`relay_svc/fanout.go` 的 enqueue），它给自己的交代是「在飞的 RPC 会
+ * 超时，调用方重试」——而这一侧此前压根没有超时，那句交代对浏览器不成立。丢掉的若
+ * 是装载那一遍的 `session.list`，这一屏的 `summary` 就永远停在 null，而输入框照常
+ * 可用：发出去的每一条都落进「还没发出去」，页面上没有任何东西在动。
+ *
+ * 30s 是「慢」与「没了」的分界，不是性能预算：这条链路上的 RPC 全是控制面的一问一
+ * 答（开一轮、要一页历史、列一条会话），真正长跑的东西走通知，不占应答。取得宽是
+ * 为了不把一次慢往返误判成掉线——误判的代价是气泡说「可能已经送达」，比永远挂着好，
+ * 但也不是免费的。
+ */
+export const RequestTimeoutMs = 30_000;
+
 /** RelayClient 用得到的那一小块连接能力（ISP）。 */
 export type RelayConnectionLike = Pick<
   RelayConnection,
@@ -220,6 +251,17 @@ export class RelayClient {
   private handshakeFailures = 0;
   /** 排着的那一次重做握手，见 scheduleHandshakeRetry。 */
   private readonly handshakeRetry = new RedialTimer();
+  /**
+   * 服务端判死这条通道时说的那个码。
+   *
+   * 通道级失败是**两帧**：先一帧不带 id 的 error 说为什么，再一帧空载荷说没了
+   * （服务端 relay_ctr 的 `fail`）。第二帧自己不带理由，所以第一帧要留到那时候。
+   */
+  private lastChannelErrorCode: number | null = null;
+  /** 通道被判死后连着重开失败了几次。重开按它指数退让。 */
+  private channelFailures = 0;
+  /** 排着的那一次重开通道，见 scheduleChannelReopen。 */
+  private readonly channelRetry = new RedialTimer();
 
   constructor(opts: RelayClientOptions) {
     this.opts = opts;
@@ -304,6 +346,7 @@ export class RelayClient {
   close(): void {
     this.closedByUser = true;
     this.handshakeRetry.cancel();
+    this.channelRetry.cancel();
     this.channel?.close();
     this.channel = null;
     this.authenticating = null;
@@ -322,6 +365,8 @@ export class RelayClient {
         const entry = this.pending.get(String(id));
         if (!entry) return;
         this.pending.delete(String(id));
+        // 这一条已经落定了，那只等应答的表也就没有意义了（见 RequestTimeoutMs）。
+        entry.cleanup?.();
         this.sendBytes(encodeRpcCancel(this.nextId++, id));
         reject(new DOMException("relay request aborted", "AbortError"));
       };
@@ -330,16 +375,34 @@ export class RelayClient {
         return;
       }
       options.signal?.addEventListener("abort", abort, { once: true });
+      // 等应答的上限，见 RequestTimeoutMs。落定成 transport（码 -1）而不是一个
+      // 「对端拒绝了」：这条请求可能已经送达，重发确实可能变成两条。
+      const expire = setTimeout(() => {
+        const entry = this.pending.get(String(id));
+        if (!entry) return;
+        this.pending.delete(String(id));
+        entry.cleanup?.();
+        try {
+          this.sendBytes(encodeRpcCancel(this.nextId++, id));
+        } catch {
+          // 通道此刻就没了：取消无处可发，而这条请求照样要落定。
+        }
+        reject(new RelayError(-1, "relay: 请求超时", null));
+      }, RequestTimeoutMs);
       this.pending.set(String(id), {
         method,
         resolve: resolve as (value: unknown) => void,
         reject,
-        cleanup: () => options.signal?.removeEventListener("abort", abort),
+        cleanup: () => {
+          clearTimeout(expire);
+          options.signal?.removeEventListener("abort", abort);
+        },
       });
       try {
         this.sendBytes(encodeRpcMethodRequest(id, method, params));
       } catch (err) {
         this.pending.delete(String(id));
+        clearTimeout(expire);
         options.signal?.removeEventListener("abort", abort);
         reject(err);
       }
@@ -597,6 +660,8 @@ export class RelayClient {
         : new RelayError(-1, "relay: auth.account 失败", err);
     }
     this.handshakeFailures = 0;
+    // 通道开回来了：下一次判死重新从最短的那一档退让起。
+    this.channelFailures = 0;
     this.setState("connected");
     for (const st of [...this.sessions.values()].filter((s) => s.watched)) {
       try {
@@ -640,11 +705,16 @@ export class RelayClient {
    * 服务端关掉了这条通道：目标不存在 / 离线 / 转发失败 / 不许寻址。这是**通道级**
    * 的失败，同一条连接上别人的通道照常收发，所以这里既不重连也不动连接。
    *
-   * 状态置 `disconnected` 而不是 `reconnecting`：在这个宿主里 `reconnecting` 的
-   * 意思是「有人正在重试」（见 use-relay.ts），而通道级失败之后没有任何人在重试
-   * ——连接本身好得很，服务端只是关掉了这一条。规格说的是「客户端据此只把那一条
-   * 通道标为不可达」，`disconnected` 正是这个宿主里「连过又放弃了」那一格，页面
-   * 据它给出重新连接的入口（走 reopen）。
+   * 分两档，判据是服务端刚说的那个码（`lastChannelErrorCode`）：
+   *
+   *  - **下一秒可能就好了**（离线 / 转发失败，见 TransientChannelCodes）：自己排一次
+   *    重开并置 `reconnecting` —— 那个状态在这个宿主里的意思正是「有人正在重试」
+   *    （use-relay.ts），排上了它才是真话。agentred 重启走的就是这一档：机器几秒后
+   *    就回来，缺的只是一条新通道。此前这一档也落 disconnected，于是控制台停在
+   *    「连接断了，已经不再自动重试」，唯一的出路是刷新整页（联调机 2026-09-08 实测）。
+   *  - **其余**（目标不存在 / 不成形 / 不许寻址，以及没带码的那种关闭）：仍旧
+   *    `disconnected`。重开一万次也换不来别的答案，而没带码时谁也说不出还值不值得
+   *    再试——那一格正是这个宿主里「连过又放弃了」，页面据它给出「重新连接」的入口。
    */
   private handleChannelClosed(): void {
     // 通道没了，重做握手无处可发：这一路的出路是 reopen（把通道开回来），不是重试。
@@ -656,7 +726,35 @@ export class RelayClient {
     }
     this.failPending(new RelayError(-1, "relay: 通道已被服务端关闭", null));
     if (this.closedByUser) return;
+    const code = this.lastChannelErrorCode;
+    this.lastChannelErrorCode = null;
+    if (code !== null && TransientChannelCodes.has(code)) {
+      this.setState("reconnecting");
+      this.scheduleChannelReopen();
+      return;
+    }
     this.setState("disconnected");
+  }
+
+  /**
+   * 排下一次重开。与 scheduleHandshakeRetry 同一副退让，理由也同一条：这条通道
+   * 是这一屏唯一的实时来路，而对端回来的时刻没人预告得了。
+   *
+   * 封顶 30s 而不是一直翻倍：机器离线也走这一档，它可能整夜不回来，而回来的那一刻
+   * 用户就在屏幕前。
+   */
+  private scheduleChannelReopen(): void {
+    if (this.closedByUser) return;
+    const delay = backoffDelay(this.channelFailures, {
+      baseMs: 1000,
+      capMs: 30_000,
+    });
+    this.channelFailures += 1;
+    this.channelRetry.schedule(delay, () => {
+      // 这段时间里用户自己点过「重新连接」、或整只客户端被收掉了：别再开一条。
+      if (this.closedByUser || this.channel) return;
+      void this.reopen().catch(() => {});
+    });
   }
 
   private sendBytes(bytes: Uint8Array): void {
@@ -683,6 +781,12 @@ export class RelayClient {
     const id = String(frame.id);
     const entry = this.pending.get(id);
     if (!entry) {
+      // 通道级失败没有 id(服务端 relay_ctr 的 writeChannelError 编的就是这一种):
+      // 它说的是**这条通道**为什么死,而紧跟着的那帧空载荷才是死讯、自己不带理由。
+      // 收下它,handleChannelClosed 据此判这一档值不值得自己重开。
+      if (frame.body.case === "error" && Number(frame.id) === 0) {
+        this.lastChannelErrorCode = frame.body.code;
+      }
       // 迟到 / 未知 id 的响应(已被 close 拒绝):丢弃。
       return;
     }

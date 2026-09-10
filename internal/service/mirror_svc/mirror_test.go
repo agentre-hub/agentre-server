@@ -333,6 +333,12 @@ func (r *rig) lastCursor(t *testing.T) int64 {
 	return r.upserts[len(r.upserts)-1].LatestSeq
 }
 
+func (r *rig) lastMessageAt(t *testing.T) int64 {
+	t.Helper()
+	require.NotEmpty(t, r.upserts, "摘要从来没落过库")
+	return r.upserts[len(r.upserts)-1].LastMessageAt
+}
+
 // notification 造一条实时通知的载荷:实时帧的 params 里带 conversationId 与 seq。
 func notification(sid string, seq int64, text string) *agentrewire.RpcNotification {
 	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
@@ -512,6 +518,82 @@ func TestApply_TurnStartedCarriesNoSeq_StillMovesLifecycle(t *testing.T) {
 
 	r.flush()
 	assert.Equal(t, relaywire.SessionLifecycleRunning, r.lastLifecycle(t))
+}
+
+// 轮次边界同时把「最后活动时刻」推到当下 —— 生命周期已经跟着帧走了,这一格没跟上
+// 的代价是控制台左栏那一行永远不动:行按 last_message_at 排序(共享包的 byRecent),
+// 时间不前移 = 发了消息也不置顶、时间戳还停在上一次 Sync。
+//
+// 联调机 2026-09-08 实测:向一条对话发一句话,行的状态点亮了又灭,而 last_message_at
+// 从 05:47:59 一直没动过,直到 server 重启才被一次 Sync 刷新 —— 用户看到的正是
+// 「得消息结束才更新」,其实是「得下一次 Sync 才更新」。
+//
+// 取的是**本 server 的钟**,不是对端的:轮次边界帧上没有对端时刻(TurnStartedFrame
+// 只有 conversationId)。它是个近似值,而下一次 Sync 的快照会拿对端的真值把它盖掉;
+// 与「停在几十分钟前」相比,一跳网络的误差不值一提。
+func TestApply_TurnStarted_AdvancesLastMessageAt(t *testing.T) {
+	r := newRig(t)
+	const frozen int64 = 1_800_000_000_000
+	r.mirror.now = func() int64 { return frozen }
+	idle := runningSession(conv42, "写个爬虫")
+	idle.LifecycleState = relaywire.SessionLifecycleIdle
+	r.relay.sessions = []*agentrewire.SessionSummary{idle}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.Equal(t, int64(1700000000000), r.lastMessageAt(t), "快照那一刻还是对端报的旧值")
+
+	require.NoError(t, r.mirror.Apply(ctx, turnStarted(conv42, 0)))
+
+	r.flush()
+	assert.Equal(t, frozen, r.lastMessageAt(t),
+		"一轮开起来了 = 刚落了一条用户消息,这一行的时间必须跟着走")
+}
+
+// 轮次的另一端同理:一轮跑完 = 刚落了一段回复。
+func TestApply_RunResultDone_AdvancesLastMessageAt(t *testing.T) {
+	r := newRig(t)
+	const frozen int64 = 1_800_000_000_000
+	r.mirror.now = func() int64 { return frozen }
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 0)))
+
+	r.flush()
+	assert.Equal(t, frozen, r.lastMessageAt(t))
+}
+
+// 只前移,不倒退。两台机器的钟不必一致,而对端报的时刻可能比本 server 的钟还新;
+// 往回写等于把一条刚说过话的对话在左栏里往下踢一截。
+func TestApply_TurnBoundary_NeverMovesLastMessageAtBackwards(t *testing.T) {
+	r := newRig(t)
+	// 对端报的时刻(1_700_000_000_000)比这台 server 的钟还新。
+	r.mirror.now = func() int64 { return 1_600_000_000_000 }
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, runResultDone(conv42, 0)))
+
+	r.flush()
+	assert.Equal(t, int64(1700000000000), r.lastMessageAt(t),
+		"对端报的时刻更新时保留它,别拿一台走慢的钟把行往下踢")
+}
+
+// 待决边界(审批 / 提问)**不动**这一格:它不是一条新消息,只是 running 之上的一层
+// 叠加。跟着动的话,一轮里每弹一次审批都会把这条对话重新顶到最上面。
+func TestApply_WaiterBoundary_LeavesLastMessageAt(t *testing.T) {
+	r := newRig(t)
+	r.mirror.now = func() int64 { return 1_800_000_000_000 }
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.NoError(t, r.mirror.Apply(ctx, toolPermissionRequest(conv42, 0, "req-1")))
+
+	r.flush()
+	assert.Equal(t, int64(1700000000000), r.lastMessageAt(t))
 }
 
 // 不带 seq 的终态帧一个字节都不该进转录:它不是持久帧,没有号就没有落库的位置。

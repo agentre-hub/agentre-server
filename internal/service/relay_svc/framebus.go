@@ -835,10 +835,26 @@ func decodeFrame(values map[string]any) (Peer, string, int, []byte, string, stri
 	return Peer(peer), channelID, messageType, frame, ack, ackTo, nil
 }
 
+// streamKey 是一条 daemon 链路的帧流。它按 **ConnID** 分,而不只按指纹 + 副本:
+// 通道的鉴权状态活在 daemon 那条 websocket 上,进程重启或链路重连之后旧通道在它
+// 那侧已经不存在了(见 Route.ConnID 的说明)。少了这一格,旧通道的帧会照样投给新
+// 接上的那条链路,daemon 把它当成一条没握过手的新通道 —— 那条通道上从此每个
+// session.* 都是 Unauthorized,而两端谁也不会知道:客户端手里那条通道没被关、
+// 连接也没断,它只是再也办不成事,只能靠刷新整页换一条新的。
+//
+// 带上 ConnID 之后,换链路即判死:投不出去 → ErrForwardFailed → clientChannels.fail
+// 关掉那一条通道,客户端据此重开。常驻镜像一直是自己比 DaemonConnID 才躲开这件事
+// (mirror_svc.follower.keepalive),现在这条纪律落在总线里,每条通道都受它保护。
+//
+// 滚动升级期间新旧副本各算各的键,于是**跨副本**的那些通道在窗口里投不出去。这是
+// 有意接受的:它们会走同一条判死→重开的路自己回来,而且这条路上没有误投——旧键的
+// 失败模式恰恰相反,它一声不吭地把帧投给了另一条链路。所以这里不做过渡期的双读:
+// 那要留一段以后必须记得删的代码,换来的只是把一次「失败并重开」变成不失败。
 func streamKey(route Route) string {
-	return fmt.Sprintf("relay:frames:%d:%s:%s", route.AccountID,
+	return fmt.Sprintf("relay:frames:%d:%s:%s:%s", route.AccountID,
 		base64.RawURLEncoding.EncodeToString([]byte(route.Fingerprint)),
-		base64.RawURLEncoding.EncodeToString([]byte(route.InstanceID)))
+		base64.RawURLEncoding.EncodeToString([]byte(route.InstanceID)),
+		base64.RawURLEncoding.EncodeToString([]byte(route.ConnID)))
 }
 
 func clientChannelKey(route Route, channelID string) string {
