@@ -296,10 +296,10 @@ func TestListSummariesPage_ProjectScopeWithNoLocations_StillMatchesReported(t *t
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 「未归项目」是**既没报项目、也不落在任何已知项目位置**上的那些，cwd 为空的自然
-// 也在其中。报了项目的一条都不在这里，哪怕它报的那个项目已经被删了——那种行由服务层
-// 在读回之后判掉（决策 13），因为「这个标识还活着吗」要拿账号项目名单才答得出。
-func TestListSummariesPage_UnassignedProjectScope_ExcludesReportedAndKnownLocations(t *testing.T) {
+// 「未归项目」的第一拨是**既没报项目、也不落在任何已知项目位置**上的那些，cwd 为空
+// 的自然也在其中。一个项目都没有的账号里，报了项目的每一条报的都是一个不存在的项目
+// （见下一条），因此那一半此刻只剩「报了项目」这一句。
+func TestListSummariesPage_UnassignedProjectScope_ExcludesKnownLocations(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
@@ -632,6 +632,32 @@ func TestListSummariesPage_MachineScope_FiltersByTheCarryingMachine(t *testing.T
 	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
 		SummaryQuery: SummaryQuery{UserID: 7, MachineFingerprint: &fp},
 		Limit:        50,
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 「未归项目」有**两拨**（决策 12 / 13）：没报项目、位置也配不上任何已知位置的，
+// 以及报了项目、但那个标识在账号项目名单里已经不在了的（删了 / 还没同步过来）。
+//
+// 第二拨从前不在这条判据里：服务层折算计数时把它们算进未归，翻这一组时 SQL 又只认
+// 「没报项目」那一句，于是那些行在项目轴上哪一组都进不去——组头写着 2 条，底下只
+// 摆得出 1 行。「还活着的项目」这份名单只有账号项目树答得出，因此由服务层传进来。
+func TestListSummariesPage_UnassignedProjectScope_AlsoTakesReportedProjectsThatAreGone(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSummary()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"((project_sync_id='' AND ("+machineFingerprintExpr+", cwd) NOT IN ((?,?)))"+
+			" OR (project_sync_id<>'' AND project_sync_id NOT IN (?)))")).
+		WithArgs(int64(7), "fp-a", "/repo/x", "proj-1", 50).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
+
+	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
+		SummaryQuery: SummaryQuery{UserID: 7, ProjectMode: ProjectUnassigned,
+			Locations:          []SummaryLocation{{MachineFingerprint: "fp-a", Cwd: "/repo/x"}},
+			LiveProjectSyncIDs: []string{"proj-1"}},
+		Limit: 50,
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

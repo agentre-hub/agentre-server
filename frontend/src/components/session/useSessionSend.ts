@@ -14,6 +14,7 @@ import type { ChatComposerSubmit } from "@agentre-hub/agentre-ui";
 import type { ModelTarget } from "@agentre-hub/agentre-ui";
 
 import type { FailedSend } from "@/components/session/SendFailureBubble";
+import type { SteerQueue } from "@/components/session/useSteerQueue";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { randomId } from "@/lib/randomId";
 import { encodeUserBlocks } from "@/lib/userBlocks";
@@ -22,17 +23,7 @@ import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
 import { isNativeCompactBackend, SLASH_COMPACT } from "@/lib/slashCommands";
 import { classifySendFailure, type SessionViewStatus } from "@/lib/sessionView";
 
-/**
- * 发一条消息之后就地给出的反馈。三种互斥形态,不折叠成一个布尔:
- *   - queued —— 消息排进了**正在跑的那一轮**(steer),还没被消费。
- *   - failed —— 没发出去;detail 是对端自己的说明(已本地化),原样转述。
- * 「钉住的 agentred 不可用」不在这里 —— 它是会话级状态(停用新写入 + 状态横幅),
- * 由 pinnedAgentredUnavailable 承载。
- */
-export type SendFeedback =
-  { kind: "none" } | { kind: "queued" } | { kind: "failed"; detail?: string };
-
-/** 这一轮跑到哪一步，以及发出去那一条的就地反馈。 */
+/** 这一轮跑到哪一步。 */
 export interface TurnActivity {
   /** 转录的三点读它。 */
   turnActive: boolean;
@@ -41,8 +32,6 @@ export interface TurnActivity {
   markTurnActive: (v: boolean) => void;
   pendingAssistant: boolean;
   setPendingAssistant: Dispatch<SetStateAction<boolean>>;
-  sendFeedback: SendFeedback;
-  setSendFeedback: Dispatch<SetStateAction<SendFeedback>>;
   /** 目标会话换了。由详情视图的渲染期重置调用。 */
   reset: () => void;
 }
@@ -84,14 +73,22 @@ export function useTurnActivity(): TurnActivity {
     turnActiveRef.current = v;
     setTurnActive(v);
   }, []);
-  const [sendFeedback, setSendFeedback] = useState<SendFeedback>({
-    kind: "none",
-  });
-
-  /** 目标会话换了：反馈说的是**那一条**发出去的消息，跟着重来。 */
+  /**
+   * 目标会话换了：这一族说的全是**那一条**会话的事，跟着重来。
+   *
+   * 「在不在跑」也在其中,而它此前留在这里没清 —— 桌面右栏切换是同实例换 props
+   * (没有 key 强制重挂),于是从在跑的 A 切到空闲的 B,B 一打开就摆着 A 那一份:
+   * 头部画出「停止」、状态点是绿的,而 B 根本没在跑,要等 attach 按 B 的清单快照
+   * 把它改回来。同一份还被 `turnActiveRef` 拿去做发送选路(在跑走 steer 插话,
+   * 空闲走 run 开新一轮),这一段里往 B 发消息会当成插话发给一轮并不存在的 turn。
+   *
+   * 清成 false 而不是「保持不动」：新会话在不在跑,只有 attach 答得出,在它回答
+   * 之前这一屏**不知道** —— 而上一条会话的答案与这个问题无关。
+   */
   const reset = useCallback(() => {
-    setSendFeedback({ kind: "none" });
-  }, []);
+    markTurnActive(false);
+    setPendingAssistant(false);
+  }, [markTurnActive]);
 
   return {
     turnActive,
@@ -99,8 +96,6 @@ export function useTurnActivity(): TurnActivity {
     markTurnActive,
     pendingAssistant,
     setPendingAssistant,
-    sendFeedback,
-    setSendFeedback,
     reset,
   };
 }
@@ -138,6 +133,11 @@ export interface SessionSendParams {
   effectivePermissionMode: string;
   /** 「钉住的 agentred 不可用」是会话级状态，归详情视图；这里只在发送时翻它。 */
   setPinnedAgentredUnavailable: Dispatch<SetStateAction<boolean>>;
+  /**
+   * 这一轮里排着的那几条插话。走 steer 的那条路由这里挂进去、换句柄、失败撤掉 ——
+   * 「这条消息是排进当前这一轮的」只有选路这一处知道。
+   */
+  steerQueue: SteerQueue;
   /**
    * 这一次发送**开了新的一轮**（不是插话进正在跑的那一轮）。
    *
@@ -203,14 +203,10 @@ export function useSessionSend({
   effectiveTarget,
   effectivePermissionMode,
   setPinnedAgentredUnavailable,
+  steerQueue,
   onOwnTurnStarted,
 }: SessionSendParams): SessionSend {
-  const {
-    turnActiveRef,
-    markTurnActive,
-    setPendingAssistant,
-    setSendFeedback,
-  } = turn;
+  const { turnActiveRef, markTurnActive, setPendingAssistant } = turn;
   const [sending, setSending] = useState(false);
   /**
    * 没发出去的那些消息（决策 7）。它们不进 `events`：转录那一份是**对端说过的
@@ -276,28 +272,44 @@ export function useSessionSend({
   /** 插话：把消息排进**正在跑的那一轮**（桌面端 internal/peer 与 agentred 都注册了
    *  runtime.steer）。origin 与 run 同样要带回：agentred 按 (发起端指纹, 会话 id)
    *  解会话。 */
-  function steerTurn(
+  async function steerTurn(
     c: import("@/lib/relayClient").RelayClient,
     body: string,
-  ): Promise<unknown> {
-    return c.request(rpcMethods.runtimeSteer, {
-      conversationId: sid,
-      ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
-      // queuedId 是这条 steer 的不透明标识，**每条一个新的**。直连 agentred 的
-      // 目标按它记提交方（handlers/runtime.go 的 SteerSource，门槛就是非空），
-      // 等 backend 消费掉这条 steer 时把「来自 <设备>」盖回去；不传就没有归属，
-      // 而同一个人用 run 发的消息是有的 —— 同一会话里两条消息标注不一致。
-      //
-      // 桌面端 peer 那条路径不看它（EnqueuePeerSession 自己 newQueuedID() 再按
-      // peerSource 记归属），传了也无害。这里不按目标类型分叉：一条发送路径就该
-      // 只有一种形状。
-      queuedId: randomId(),
-      text: body,
-    });
+  ): Promise<void> {
+    // queuedId 是这条 steer 的不透明标识，**每条一个新的**。直连 agentred 的
+    // 目标按它记提交方（handlers/runtime.go 的 SteerSource，门槛就是非空），
+    // 等 backend 消费掉这条 steer 时把「来自 <设备>」盖回去；不传就没有归属，
+    // 而同一个人用 run 发的消息是有的 —— 同一会话里两条消息标注不一致。
+    //
+    // 它同时是这条 chip 的**本地句柄**：应答回来之前队列只认这个号。桌面端托管的
+    // 那条路上 chat_svc 会另造一个号（EnqueuePeerSession → enqueue 的
+    // newQueuedID），所以应答带回来的才是权威的那个，见下面的 adopt。
+    const localId = randomId();
+    // 提交那一刻就挂上去：输入框在提交时已经被清空，这段字此刻只存在于队列里。
+    steerQueue.enqueue(localId, body);
+    try {
+      const result = (await c.request(rpcMethods.runtimeSteer, {
+        conversationId: sid,
+        ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
+        queuedId: localId,
+        text: body,
+      })) as { queuedId?: string; cancellable?: boolean } | undefined;
+      // 空 queuedId = 对端还没升级到会回传句柄的那一版：这条留在降级档（撤不掉，
+      // 只能靠文本抵消消费），不按版本号猜。
+      steerQueue.adopt(localId, {
+        queuedId: result?.queuedId ?? "",
+        cancellable: result?.cancellable === true,
+      });
+    } catch (err) {
+      // 这一条没排进去：chip 撤掉，那段字改由转录里的失败气泡承载。两处同时挂着
+      // 同一句会读成发了两遍。
+      steerQueue.drop([localId]);
+      throw err;
+    }
   }
 
   /**
-   * 按会话状态选路发送，返回 true = 这条消息是**排进当前这一轮**的（steer）。
+   * 按会话状态选路发送。走 steer 的那一条会由 `steerTurn` 挂进队列。
    *
    * 「会话正忙」在协议上没有专属错误码：chat_svc 的 ChatSendInFlight 经
    * daemon/rpc 落成 -32603 + 本地化 message。所以正忙不靠解析错误判定，而是
@@ -309,7 +321,7 @@ export function useSessionSend({
     c: import("@/lib/relayClient").RelayClient,
     message: ChatComposerSubmit,
     stillHere: () => boolean,
-  ): Promise<boolean> {
+  ): Promise<void> {
     const body = message.text;
     const running = turnActiveRef.current;
     const hasImages = !!message.images?.length;
@@ -346,7 +358,7 @@ export function useSessionSend({
     try {
       await (running ? steerTurn(c, body) : startTurn(c, message));
       noteStarted(!running);
-      return running;
+      return;
     } catch (err) {
       // 只有对端真的收到并拒绝了，才值得换一条路重试。请求没走到对端（传输失败）
       // 时不回落：它可能已经送达，重发会多出一条消息。
@@ -359,7 +371,7 @@ export function useSessionSend({
       try {
         await (running ? startTurn(c, message) : steerTurn(c, body));
         noteStarted(running);
-        return !running;
+        return;
       } catch {
         // 两条路都被拒 = 不是竞态。交出**第一条**（按选路本该走的那条）的说明：
         // 它才是对当前状态的描述。
@@ -443,7 +455,6 @@ export function useSessionSend({
     */
     const stillHere = guardTarget();
     setSending(true);
-    setSendFeedback({ kind: "none" });
     try {
       /*
         `/compact` 分两路，与桌面端 slash-commands/registry.ts 的注释逐条对上：
@@ -465,12 +476,11 @@ export function useSessionSend({
         setPinnedAgentredUnavailable(false);
         return;
       }
-      const queued = await sendRouted(c, message, stillHere);
+      await sendRouted(c, message, stillHere);
       if (!stillHere()) return;
       setPinnedAgentredUnavailable(false);
       // 重发成功：那条失败气泡的使命完成了，撤掉。
       if (replacing) dropFailedSend(replacing);
-      if (queued) setSendFeedback({ kind: "queued" });
     } catch (err) {
       // 这条消息属于**发起它的那条会话**。目标已经换了就一个字都不写：那条红气泡
       // 挂到新会话下面，它的「重发」会拿着新的 sid 把 A 的话真的发进 B。

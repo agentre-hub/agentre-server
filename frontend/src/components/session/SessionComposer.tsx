@@ -66,6 +66,7 @@ export default function SessionComposer({
   onSubmit,
   contextUsage,
   feedback,
+  queueSlot,
   handleRef,
   permissionMode,
   permissionModeMeta,
@@ -96,8 +97,15 @@ export default function SessionComposer({
    * 分母画进度条。
    */
   contextUsage?: { used: number; max: number };
-  /** 发送结果的反馈（失败 / 已排队）。 */
+  /** 发送结果的反馈（草稿页那条「起不起得来」的说明）。 */
   feedback?: ReactNode;
+  /**
+   * 输入框上方、卡片内的插槽：这一轮里排着的那几条插话（`QueuedMessagesBar`）。
+   *
+   * 队列整块由宿主递进来，与 `modelControl` 同一个道理——它要的东西（对端句柄、
+   * 撤回 RPC、轮末残留的去处）全在宿主手上。
+   */
+  queueSlot?: ReactNode;
   /** 当前生效的权限档位。 */
   permissionMode?: string;
   /**
@@ -123,8 +131,8 @@ export default function SessionComposer({
    * 模型选择器整块由宿主递进来，而不是拆成七八个 prop 传进这里。
    *
    * 它要的东西（目录、解析出的四态、写入与回滚、两台机器的写入结果）全在宿主手上；
-   * 把它们逐个搬过这道边界，只会让这个组件多知道一堆它不参与的事。`feedback` 那一
-   * 格早就是这么办的。
+   * 把它们逐个搬过这道边界，只会让这个组件多知道一堆它不参与的事。`feedback` 与
+   * `queueSlot` 那两格早就是这么办的。
    */
   modelControl?: ReactNode;
   /**
@@ -191,6 +199,7 @@ export default function SessionComposer({
         <ChatComposer
           ref={composerHandleRef}
           inputHandleRef={inputRef}
+          topSlot={queueSlot}
           disabled={disabled}
           sending={sending}
           backendType={backendType}

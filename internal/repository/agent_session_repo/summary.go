@@ -208,6 +208,10 @@ type SummaryQuery struct {
 	ProjectSyncID string
 	Locations     []SummaryLocation
 	ProjectMode   ProjectMode
+	// LiveProjectSyncIDs 是账号里**还活着**的项目标识，只有 ProjectUnassigned 读它：
+	// 报了名单外标识的那些对话也算未归项目（决策 13）。这份名单在账号项目树里，
+	// SQL 自己答不出，因此由服务层传进来；顺序由调用方定死（进语句文本）。
+	LiveProjectSyncIDs []string
 }
 
 // SummaryPageQuery 在判据之上加位置与大小。
@@ -475,14 +479,24 @@ func (r *summaryRepo) scopedFor(ctx context.Context, q SummaryQuery, withSaves b
 			tx = tx.Where("1=0")
 		}
 	case ProjectUnassigned:
-		// 报了项目的一条都不在这一组里，哪怕它报的那个项目已经不存在了——那种行由
-		// 服务层在读回之后判掉（决策 13），不在 SQL 这一层认，因为「这个标识还活着
-		// 吗」要拿账号项目名单才答得出。
-		tx = tx.Where("project_sync_id=''")
+		// 未归项目有**两拨**（决策 12 / 13），它们是或的关系：没报项目、位置也配不上
+		// 任何已知位置的；以及报了项目、但那个标识在账号项目名单里已经不在的（删了 /
+		// 还没同步过来）。第二拨少了的话，服务层把它们数进这一组、这里又取不出来，
+		// 那些对话在项目轴上哪一组都进不去。
+		unreported := "project_sync_id=''"
+		args := []any{}
 		// 名单为空时「不落在任何已知位置」对每一条都成立，因此不加位置条件。
 		if len(q.Locations) > 0 {
-			tx = tx.Where("("+machineFingerprintExpr+", cwd) NOT IN ?", locationPairs(q.Locations))
+			unreported += " AND (" + machineFingerprintExpr + ", cwd) NOT IN ?"
+			args = append(args, locationPairs(q.Locations))
 		}
+		// 一个项目都没有的账号里，报了项目的每一条报的都是一个不存在的项目。
+		stale := "project_sync_id<>''"
+		if len(q.LiveProjectSyncIDs) > 0 {
+			stale += " AND project_sync_id NOT IN ?"
+			args = append(args, q.LiveProjectSyncIDs)
+		}
+		tx = tx.Where("(("+unreported+") OR ("+stale+"))", args...)
 	case ProjectAny:
 	}
 	return tx

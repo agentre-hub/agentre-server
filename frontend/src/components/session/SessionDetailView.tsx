@@ -1,5 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import {
+  EventSteerConsumed,
   EventUserMessage,
   sessionListFromProtobuf,
   SessionLifecycleInterrupted,
@@ -28,6 +29,7 @@ import {
   opensAssistantMessage,
   reduceSessionState,
   resolveProviderPillState,
+  type ChatComposerHandle,
   type ModelTarget,
   type ReasoningEffortValue,
 } from "@agentre-hub/agentre-ui";
@@ -47,6 +49,7 @@ import { useAliveEffect } from "@/hooks/use-api-query";
 import { useRelayChannel } from "@/hooks/use-relay";
 import {
   TranscriptSessionId,
+  appendFrames,
   pendingUserMessage,
   toTranscriptFrame,
   type SessionEventFrame,
@@ -61,7 +64,11 @@ import {
 } from "@/lib/backendCapabilities";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
-import { deriveSessionViewStatus, sessionTitle } from "@/lib/sessionView";
+import {
+  classifySendFailure,
+  deriveSessionViewStatus,
+  sessionTitle,
+} from "@/lib/sessionView";
 import {
   loadMirrorTail,
   mirrorRowToSummary,
@@ -76,6 +83,10 @@ import {
   useSessionSend,
   useTurnActivity,
 } from "@/components/session/useSessionSend";
+import {
+  consumedSteerRefs,
+  useSteerQueue,
+} from "@/components/session/useSteerQueue";
 import {
   RELAY_TAIL_FRAMES,
   useTranscriptScrollback,
@@ -364,6 +375,11 @@ export default function SessionDetailView({
    */
   const originRef = useRef<string | undefined>(undefined);
   /**
+   * 输入框的整条草稿句柄。眼下只有一个用途：轮末没被取走的那几条，用户点「恢复为
+   * 草稿」时把那段字放回输入框（草稿页的「快捷开头」用的是同一只句柄）。
+   */
+  const composerHandleRef = useRef<ChatComposerHandle | null>(null);
+  /**
    * 已经为哪一条对话记过「读到这里」了。键就是 `conversation_id`（决策 1）。
    * 同一条重渲染不再记一次；换一条才再记。
    */
@@ -394,10 +410,15 @@ export default function SessionDetailView({
   const { scrollRef } = scrollback;
   const decisions = useSessionDecisionPorts({ sid, clientRef, originRef });
   /**
-   * 轮次状态与发送反馈（转录的三点、占位、「已排进这一轮」）整片归 useTurnActivity。
+   * 轮次状态（转录的三点、占位）整片归 useTurnActivity。
    * 它排在中继之前：onRunResultDone / onAutonomousTurnStarted 与 attach 都要写它。
    */
   const turn = useTurnActivity();
+  /**
+   * 这一轮里排着的那几条插话（规格 2026-09-08-console-steer-queue）。它排在发送
+   * 那一族之前：走 steer 的那条路要往里挂条目，中继回调要从里面消费。
+   */
+  const steerQueue = useSteerQueue();
   /**
    * 这一轮跑到第几秒。共享包那条 meta 靠它才开表 —— 耗时 / 首字 / tok/s 在 wire 上
    * 只出现在终态帧（见 turnDone），不自己数的话，跑的那几十秒里那一格是死的。
@@ -426,6 +447,8 @@ export default function SessionDetailView({
     setPreviewTail([]);
     decisions.reset();
     turn.reset();
+    // 排着的那几条属于**那一条**会话（而且只是这一屏本地的乐观状态）：跟着重来。
+    steerQueue.reset();
     liveTurn.reset();
     setPinnedAgentredUnavailable(false);
     // 力度那三格同属会话级：不清的话，B 的控件会摆着 A 刚选的那一档，而能力位
@@ -480,6 +503,34 @@ export default function SessionDetailView({
         ? machineTarget(device.fingerprint)
         : null;
 
+  /**
+   * 这条会话来了一帧 —— **两级帧共有**的那一半。
+   *
+   * 协议 0.2.0 把同一段正文发两次:逐 token 的预览帧在前,块定稿之后才是那份带 seq
+   * 的持久帧(见 `previewTail.ts`)。两级的分工只在「进不进转录的定稿部分」;下面这
+   * 两件事对两级是同一件事,因此只写一遍:
+   *
+   *   - **计时吃这一帧**。首字什么时候到、工具在跑的那几段不算生成,都只有帧说得清;
+   *     首字更是只有逐 token 那一路说得准 —— 块边界那一路量出来的是整块**写完**的
+   *     时刻。
+   *   - **撤掉助手占位**。判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
+   *     daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点熄了,而
+   *     这一轮再没有别的东西能重新点亮它。
+   *
+   * 后者此前只接在持久那一路上,而助手开口的第一帧**几乎总是预览帧** —— 一段两千多
+   * 字的思考,从第一个 token 到那一块定稿隔着十几秒。这十几秒里屏幕上是**两条**助手
+   * 消息:上面那条正逐字长出思考,下面那条空占位转着三点、还挂着这一轮的耗时。用户
+   * 看到的就是「一次回复分成了两个气泡,而上面那个好像还在写」。
+   *
+   * 转录本来就把两级喂进同一个投影器(`framesForProjection`),这里只是让判据接到
+   * 同一份输入上,而不是各认各的一路。
+   */
+  const noteFrameArrived = (frame: SessionEventFrame) => {
+    liveTurn.noteFrame((frame.event as { kind?: string } | undefined)?.kind);
+    if (opensAssistantMessage(frame, TranscriptSessionId))
+      turn.setPendingAssistant(false);
+  };
+
   const {
     client,
     relayState,
@@ -491,11 +542,12 @@ export default function SessionDetailView({
     onEvent: (f, at) => {
       const kind = (f.event as { kind?: string } | undefined)?.kind;
       if (f.conversationId === sid) {
-        setEvents((prev) => [...prev, toTranscriptFrame(f, at)]);
+        const frame = toTranscriptFrame(f, at);
+        // 经 appendFrames 而不是裸追加：这一趟的游标要与镜像末尾对齐（见下面 attach
+        // 那一段），压回去之后补齐会把已经实时收到的那几帧再送一遍。
+        setEvents((prev) => appendFrames(prev, [frame]));
         // 这一段正文定稿了：尾巴里攒着的预览此刻已经被它覆盖，留着就是渲染两遍。
         setPreviewTail((prev) => nextPreviewTail(prev, false));
-        // 计时也吃这条流:首字什么时候到、工具在跑的那几段不算生成,都只有帧说得清。
-        liveTurn.noteFrame(kind);
         /*
             回声 = 一轮开起来了。`user_message` 是 daemon 在「开新一轮」事件流开头
             注入的发起方标记(R18),不是转录里随便一条用户消息。
@@ -519,17 +571,17 @@ export default function SessionDetailView({
           turn.markTurnActive(true);
           turn.setPendingAssistant(true);
         }
-        // 撤占位的判据是「助手真的开口了」,不是「又来帧了」:一轮的第一帧是
-        // daemon 把用户自己那句话回声回来,拿它撤占位等于对端还没说话就把三点
-        // 熄了,而这一轮再没有别的东西能重新点亮它。
-        if (
-          opensAssistantMessage(toTranscriptFrame(f, at), TranscriptSessionId)
-        )
-          turn.setPendingAssistant(false);
+        noteFrameArrived(frame);
       }
       // 审批/提问事件到达时刷新待决策:DecisionPanel 的数据源是 pendingWaiters,
       // 不是事件流 —— 不主动重拉,审批卡就永远不出现(fake runtime 阻塞在审批上,
       // run 不会结束,onRunResultDone 那一条刷新路径到不了;R10)。
+      // 后端取走了排着的那几条:它们此刻已经进转录了,chip 该消失。按句柄消费,
+      // 对不上的(别的端排的)归约会原样放过。同一帧可能以预览与持久两种形态各到
+      // 一次,重复消费是空操作。
+      if (kind === EventSteerConsumed && f.conversationId === sid) {
+        steerQueue.consume(consumedSteerRefs(f.event));
+      }
       if (kind === "tool_permission_request" || kind === "ask_user_question") {
         decisions.requestWaitersRefresh();
       }
@@ -543,10 +595,9 @@ export default function SessionDetailView({
      */
     onPreviewEvent: (f, at) => {
       if (f.conversationId !== sid) return;
-      setPreviewTail((prev) =>
-        nextPreviewTail(prev, true, toTranscriptFrame(f, at)),
-      );
-      liveTurn.noteFrame((f.event as { kind?: string } | undefined)?.kind);
+      const frame = toTranscriptFrame(f, at);
+      setPreviewTail((prev) => nextPreviewTail(prev, true, frame));
+      noteFrameArrived(frame);
     },
     onRunResultDone: (frame) => {
       turn.markTurnActive(false);
@@ -555,11 +606,10 @@ export default function SessionDetailView({
       liveTurn.endTurn();
       turn.setPendingAssistant(false);
       setEvents((prev) => [...prev, ...turnDoneFrames(sid, frame)]);
-      // 「已排进这一轮」是对**那一轮**的说明:轮次结束后它已经过期(要么被消费、
-      // 回复就在转录里,要么随轮次一起没了),留着就是在骗人。
-      turn.setSendFeedback((prev) =>
-        prev.kind === "queued" ? { kind: "none" } : prev,
-      );
+      // 这一轮结束时还排着的那几条:不静默清掉。它们要么被 drain 成下一轮(那时
+      // steer_consumed 会把 chip 清掉),要么就是真的没被任何人取走 —— 后一种把
+      // 用户刚敲的字悄悄抹掉、且无从补救(规格决策 4)。
+      steerQueue.endTurn();
       decisions.requestWaitersRefresh();
       // 这一轮落定了 → 摘要重取 + 已读补记（见下面那只 effect 的说明）。
       //
@@ -803,9 +853,19 @@ export default function SessionDetailView({
           // （会话标识各端本地自增，一台机器上同号的两条对话是常态）。少带一半就是
           // 往「调用方自己的对端」那一格里预置，而 attach / catchUp 读的是这条对话
           // 自己那一格——等于没预置，server 已经有的那一段会再从执行端拉一遍。
+          //
+          // 对齐而不是抬高。游标是**客户端**的账，而客户端是池子里共用的那一个
+          // （空闲宽限 30s，切走再切回借到的正是它）：离开期间没有任何监听者，它
+          // 照样在消费这条会话的帧、游标一路往前走。切回来时右栏那次重置只清得掉
+          // `events`，历史从镜像重读，而镜像落库慢一拍——游标于是停在镜像末尾**前面**
+          // 的位置，「镜像末尾 → 游标」那一段谁都不再交付：补齐只拉游标之后的。
+          // 屏幕上就是几条消息凭空少了，只有刷新页面（新客户端游标从 0 起）才回来。
+          //
+          // 所以这一趟画的转录起点是哪儿，游标就该在哪儿：高了是洞，低了是重复，
+          // 而重复由 `appendFrames` 按 seq 挡掉，洞没有任何东西补得上。
           if (
             mirrorSeqRef.current > 0 &&
-            client.getCursor(sid, origin) < mirrorSeqRef.current
+            client.getCursor(sid, origin) !== mirrorSeqRef.current
           ) {
             client.setCursor(sid, mirrorSeqRef.current, origin);
           }
@@ -1022,17 +1082,55 @@ export default function SessionDetailView({
         : projected,
     [projected, initialUserText],
   );
-  /** 此刻画的是那条接力消息，不是投影出来的转录。 */
-  const seeded = projected.length === 0 && messages.length > 0;
+  /**
+   * attach 把这条会话的实况接回来了 —— 交接那一段到此为止。
+   *
+   * 「实况」不等于「读到了内容」：清单快照、补齐、以及据此定下的 `turnActive` 全在
+   * 那条 effect 的末尾一起落地（见上面 markTurnActive 那处）。在它之前，这一屏关于
+   * 这条会话唯一确定的事就是宿主刚交接过来的那两样。
+   *
+   * 失败也算落定：补齐失败时 `ready` 永远不为真，只认它的话交接那一段会一直挂着，
+   * 而那时页面已经在说读不到了。
+   */
+  const attachSettled = ready || catchUpFailed;
+  /**
+   * 宿主交接过来的那句话，在 attach 落定之前一直算数。
+   *
+   * 与 `seeded` 的差别正是这个 bug：`seeded` 说的是「此刻画的是不是那条接力消息」，
+   * 它在第一帧落地那一刻就到期 —— 而第一帧（daemon 把用户那句话回声回来）恒早于
+   * 补齐结束。拿它当「转录有东西可摆」的判据，回声一到整段转录就被换成读取骨架，
+   * 一拍之后 `ready` 到了再换回来。
+   */
+  const handedOverText = initialUserText != null && !attachSettled;
   /**
    * 这一轮在不在跑。
    *
-   * `turn.turnActive` 的起点是 attach 那一刻的 `lifecycleState`，而接力那一段
-   * **还没 attach** —— 可那一轮正是这个浏览器几百毫秒前亲手开起来的，这件事没有比
-   * 此刻更确定的时候。不把它算进去，草稿页上转着的三点与头上那颗绿点会在交接那
-   * 一拍一起熄掉，等 attach 回来再亮 —— 又是一次「界面重搭」。
+   * 两条来路各管一段时间，说的不是同一件事：
+   *
+   *   - `turn.turnActive` —— attach 把实况接回来**之后**的权威判据（起点是清单快照
+   *     的 `lifecycleState`，此后每个轮次边界往里写）。补齐会回放历史里的终态帧，
+   *     所以它刻意排在补齐之后（见上面 markTurnActive 那处）—— 也就是说，在 attach
+   *     落定之前它答不出这一格。
+   *   - `handedOverTurn` —— 在那之前唯一说得出话的：这一轮正是这个浏览器几百毫秒前
+   *     亲手派发的（草稿页交出 `turnStartedAt` 的那一刻），这件事没有比此刻更确定
+   *     的时候。
+   *
+   * 交接那一段**必须**由后者一路兜到 attach 落定为止。此前这里兜底的是 `seeded`，
+   * 而它是个**渲染**判据（「投影出来的转录还是空的」）：第一帧一落地它就到期，而
+   * 第一帧恒早于补齐结束 —— daemon 把用户那句话回声回来是这一轮的第一帧，补齐还在
+   * 往返。中间那段空窗谁都不认账，于是三点、头上那颗点与「停止」一起熄掉再亮：
+   * 用户看到的就是「AI 生成中」闪了一下。
+   *
+   * 落定认 `ready || catchUpFailed` 而不只是 `ready`：补齐失败时 `ready` 永远不为真，
+   * 只认它的话这一格会一直亮着，而那时页面已经在说读不到了。
+   *
+   * 不校验交接时刻的新鲜度（计时那一只要校验，见 useLiveTurnTiming 的
+   * SEEDED_START_MAX_AGE_MS）：那一只画的是**一个数**，拿过期时刻开表会画出
+   * 「已经跑了十分钟」；这一格只是个布尔、只活到 attach 落定为止，判错的代价是几百
+   * 毫秒的一颗点，紧接着就被实况纠正。渲染期也读不了 `Date.now()`。
    */
-  const running = turn.turnActive || seeded;
+  const handedOverTurn = initialTurnStartedAt != null && !attachSettled;
+  const running = turn.turnActive || handedOverTurn;
 
   /**
    * 要不要为这一轮摆一枚空的助手占位（三点挂在它上面）。
@@ -1148,6 +1246,55 @@ export default function SessionDetailView({
   const effectiveTarget = modelTarget ?? persistedTarget;
 
   /**
+   * 撤回一条排着的插话（空句柄 = 清空整条队列）。
+   *
+   * 撤掉了哪几条**由对端说了算**：按它返回的 removed 移除，不点一下就乐观清掉 ——
+   * 它可能刚好在这一瞬被后端取走了。撤不掉时那条留在原位、转成锁住，并把对端那句
+   * 已本地化的原话挂上去（规格 2026-09-08「撤销」）：撤不动最常见的原因就是它已经
+   * 被取走，而那时紧接着的 steer_consumed 会把它清掉。
+   *
+   * 目标会话在途中换了也无所谓：换会话会把整份队列重置，而句柄是随机的，落在新
+   * 队列上不会误伤任何一条。
+   */
+  const cancelQueued = useCallback(
+    async (queuedId: string) => {
+      const c = clientRef.current;
+      if (!c) return;
+      try {
+        const result = (await c.request(rpcMethods.runtimeCancelSteer, {
+          conversationId: sid,
+          ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
+          queuedId,
+        })) as { removed?: string[] } | undefined;
+        steerQueue.drop(result?.removed ?? []);
+      } catch (err) {
+        const detail = classifySendFailure(err).detail;
+        if (queuedId) {
+          steerQueue.refuseCancel(queuedId, detail);
+          return;
+        }
+        // 清空整条队列被拒：这一条命令说的是所有条目，逐条标记。
+        for (const item of steerQueue.items) {
+          steerQueue.refuseCancel(item.id, detail);
+        }
+      }
+    },
+    [sid, steerQueue],
+  );
+
+  /**
+   * 轮末没被取走的那几条，用户选择领回去：把文本放回输入框草稿。
+   *
+   * 与桌面端那一颗同名键落点不同（那边放回队列），因为这一轮已经结束了——放回队列
+   * 的话没有任何人会来取（规格决策 5）。多条按排队顺序拼接，中间空行分隔。
+   */
+  const restoreDropped = useCallback(() => {
+    const text = steerQueue.dropped.map((q) => q.text).join("\n\n");
+    if (text) composerHandleRef.current?.restoreDraft(text, []);
+    steerQueue.clearDropped();
+  }, [steerQueue]);
+
+  /**
    * 发送那一族（选路、`/compact` 的分叉、重连排队、没发出去的字）整片归
    * useSessionSend。它排在这里而不是上面：run 的参数要 `effectiveTarget` 与
    * `effectivePermissionMode`，排队与回落要 `status`，三样都在上面才算得出来。
@@ -1165,6 +1312,7 @@ export default function SessionDetailView({
     effectiveTarget,
     effectivePermissionMode,
     setPinnedAgentredUnavailable,
+    steerQueue,
     // 自己开的这一轮，起点就是此刻 —— 那条 meta 的耗时从这里开始走。
     onOwnTurnStarted: () => liveTurn.beginTurn(Date.now()),
   });
@@ -1406,7 +1554,7 @@ export default function SessionDetailView({
    *   - 这条对话**是谁**还没解开（`identity` 为 null）：账号镜像那一行还没认领回来、
    *     中继的 `session.list` 也还没回来。此刻 `agentSyncId` 取不出，不是因为这条
    *     对话没有 Agent，而是因为什么都还不知道 —— 把这两件事当成一件，交接那一拍
-   *     （草稿页递过来 `initialUserText`、`seeded` 就地铺出用户那句话与三点）抬头
+   *     （草稿页递过来 `initialUserText`，就地铺出用户那句话与三点）抬头
    *     就顶着「Assistant」和一枚「A」方块，等身份解开再换成真名与真头像。
    *
    * 问过之后仍解不出不算空窗，那是终局，照旧退回中性抬头：老会话的镜像行上根本没有
@@ -1482,10 +1630,9 @@ export default function SessionDetailView({
       machineName={device?.name}
       machineOnline={machineOnline}
       status={status}
-      // 「这一轮在不在跑」认 `turnActive`：它的起点就是 attach 那一刻的
-      // `lifecycleState`（见上面 markTurnActive 那处），此后每一个轮次边界都往里
-      // 写 —— 自己发送 / 别的端的自主续轮开起来、终态帧收掉。`summary` 相反只在装载
-      // 与每一轮**落定**时各取一份，轮次进行中它答不出「此刻在不在跑」。
+      // 「这一轮在不在跑」认 `running`（见上面它那处：attach 落定之后是 `turnActive`，
+      // 之前是宿主交接过来的那一轮）。`summary` 答不出这一格 —— 它只在装载与每一轮
+      // **落定**时各取一份，轮次进行中它说的是上一次落定时的事。
       running={running}
       decisionPending={decisionPending}
       headerRight={headerRight}
@@ -1515,7 +1662,7 @@ export default function SessionDetailView({
       onReconnect={reconnect}
       relayState={relayState}
       history={history}
-      seeded={seeded}
+      handedOver={handedOverText}
       ready={ready}
       catchUpFailed={catchUpFailed}
       messages={messages}
@@ -1558,7 +1705,13 @@ export default function SessionDetailView({
       onPermissionModeChange={changePermissionMode}
       modelControl={modelControl}
       reasoningEffortControl={reasoningEffortControl}
-      sendFeedback={turn.sendFeedback}
+      queued={steerQueue.items}
+      droppedQueue={steerQueue.dropped}
+      onCancelQueued={(id) => void cancelQueued(id)}
+      onClearQueued={() => void cancelQueued("")}
+      onRestoreDropped={restoreDropped}
+      onDiscardDropped={steerQueue.clearDropped}
+      composerHandleRef={composerHandleRef}
     />
   );
 

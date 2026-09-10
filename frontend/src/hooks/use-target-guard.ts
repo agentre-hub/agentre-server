@@ -26,16 +26,25 @@ import { useCallback, useEffect, useRef } from "react";
  * 捕获与比对都读同一份 ref，而它由 effect 在每次提交后写：捕获发生在事件回调 /
  * 异步续段里，那时提交早已结束，ref 里就是此刻真正打开的那个目标。渲染期既不读
  * 也不写它（`react-hooks/refs` 明令禁止）。
+ *
+ * 比的是**第几趟**而不是目标串本身：A→B→A 之后串又一模一样，而那中间已经隔着一次
+ * 完整的重来——`events` 清空过、「更早的」进度打回 none、发送那一族的气泡也清了。
+ * 按串比的话，第一趟发出去、迟到回来的那一页照样算「还在」，前插进第二趟自己已经
+ * 读过的转录里：同一段话说两遍，还插在最前面。「还是那条对话」不等于「还是那一趟」。
  */
 export function useTargetGuard(target: string): () => () => boolean {
   const currentRef = useRef(target);
+  /** 换过几次目标。捕获与比对都读它，首挂那一次不算换。 */
+  const visitRef = useRef(0);
   useEffect(() => {
+    if (currentRef.current === target) return;
     currentRef.current = target;
+    visitRef.current += 1;
   }, [target]);
   // 恒定引用：它会被列进 useCallback 的依赖（loadEarlier / loadMore），换一次身份
   // 就等于让那些回调也跟着换，而它们的身份又是别处 effect 的依赖。
   return useCallback(() => {
-    const captured = currentRef.current;
-    return () => currentRef.current === captured;
+    const captured = visitRef.current;
+    return () => visitRef.current === captured;
   }, []);
 }

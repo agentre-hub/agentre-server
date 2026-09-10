@@ -1,16 +1,18 @@
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleAlert, Lock } from "lucide-react";
 
 import {
   cn,
+  QueuedMessagesBar,
+  type ChatComposerHandle,
   type ChatComposerSubmit,
+  type QueuedItem,
   type TranscriptMessage,
 } from "@agentre-hub/agentre-ui";
 
 import { computeContextUsage } from "@/lib/sessionView";
 
-import type { SendFeedback } from "@/components/session/useSessionSend";
 import { useAliveEffect } from "@/hooks/use-api-query";
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
 import type { SessionViewStatus } from "@/lib/sessionView";
@@ -72,7 +74,16 @@ export interface SessionComposerBandProps {
   modelControl: ReactNode;
   /** 思考力度控件同理（同样是两台机器都要写）；后端不支持时详情视图给 null。 */
   reasoningEffortControl: ReactNode;
-  sendFeedback: SendFeedback;
+  /** 这一轮里排着的那几条插话；空队列时那一条自己不渲染。 */
+  queued: QueuedItem[];
+  /** 轮末没被取走、等用户处置的那几条。 */
+  droppedQueue: QueuedItem[];
+  onCancelQueued: (id: string) => void;
+  onClearQueued: () => void;
+  onRestoreDropped: () => void;
+  onDiscardDropped: () => void;
+  /** 把整条草稿放回输入框的句柄（「恢复为草稿」用它）。 */
+  composerHandleRef?: RefObject<ChatComposerHandle | null>;
 }
 
 /**
@@ -99,7 +110,13 @@ export default function SessionComposerBand({
   onPermissionModeChange,
   modelControl,
   reasoningEffortControl,
-  sendFeedback,
+  queued,
+  droppedQueue,
+  onCancelQueued,
+  onClearQueued,
+  onRestoreDropped,
+  onDiscardDropped,
+  composerHandleRef,
 }: SessionComposerBandProps) {
   const { t } = useTranslation();
   const composerModule = useSessionComposerModule();
@@ -197,6 +214,7 @@ export default function SessionComposerBand({
             // （不整块重挂），所以由这个 key 把输入框自己重挂一次。
             key={`${did}:${sid}`}
             backendType={backendType}
+            composerHandleRef={composerHandleRef}
             agents={mentionAgents}
             /*
                 重连期间**不禁用**（决策 6）：重连通常几秒就回来，禁用换来的只是
@@ -217,17 +235,20 @@ export default function SessionComposerBand({
             onPermissionModeChange={onPermissionModeChange}
             modelControl={modelControl}
             reasoningEffortControl={reasoningEffortControl}
-            feedback={
-              // 失败不在这里了：它成了转录流里的一条气泡（决策 7）。这一格只剩
-              // 「已排进这一轮」——那条消息**发出去了**，说的是另一件事。
-              sendFeedback.kind === "queued" ? (
-                <p
-                  role="status"
-                  className="border-t border-border px-3.5 py-1.5 text-xs text-muted-foreground"
-                >
-                  {t("session.sendQueued")}
-                </p>
-              ) : null
+            /*
+              排进这一轮的那几条摆在输入框**上方**、卡片里（与桌面端同位同样式）。
+              此前这里是一句解释文案「已排进当前这一轮……」：连发三条也还是那一句，
+              排了几条、排了什么、能不能撤回一概看不见（规格 2026-09-08）。
+            */
+            queueSlot={
+              <QueuedMessagesBar
+                queued={queued}
+                onCancel={onCancelQueued}
+                onClearAll={onClearQueued}
+                dropped={droppedQueue}
+                onRestoreDropped={onRestoreDropped}
+                onDiscardDropped={onDiscardDropped}
+              />
             }
           />
         ) : (

@@ -43,6 +43,31 @@ export function toTranscriptFrame(
 }
 
 /**
+ * 往转录后面追加几帧，号（seq）已经在里面的那几条丢掉。
+ *
+ * 同一段 seq 会被**两条路**各交付一遍，这不是异常而是构造使然：账号镜像那一趟 HTTP
+ * 与中继的补齐各自覆盖一段，谁也管不住对方。切走再切回时尤其明显——中继客户端是池子
+ * 里共用的那一个，它的游标是**客户端**的账，右栏那次重置只清得掉 `events`；游标要
+ * 与这一趟的镜像末尾对齐（高了就是洞），而对齐意味着压回去，压回去就会把这一趟已经
+ * 实时收到的那几帧再送一遍。
+ *
+ * 所以去重放在**写进转录**这一处，而不是让每条投递路径各自小心：闸门只有一道，才
+ * 说得清「同一号只画一次」。没有 seq 的帧（轮次结束标记那些宿主合成的）照单收下——
+ * 它们不占中继日志的号，也无从判断是不是同一条。
+ */
+export function appendFrames(
+  prev: SessionEventFrame[],
+  incoming: SessionEventFrame[],
+): SessionEventFrame[] {
+  if (incoming.length === 0) return prev;
+  const seen = new Set<number>();
+  for (const f of prev) if (f.seq !== undefined) seen.add(f.seq);
+  const fresh = incoming.filter((f) => f.seq === undefined || !seen.has(f.seq));
+  if (fresh.length === 0) return prev;
+  return [...prev, ...fresh];
+}
+
+/**
  * 刚发出去、转录里还没有它的那一句，摆成一条转录消息。
  *
  * 两处用它，画出来必须是**同一个气泡**：草稿页派发在飞时（`DraftPending`）与右栏

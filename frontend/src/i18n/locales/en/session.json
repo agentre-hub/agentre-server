@@ -47,7 +47,6 @@
     "viewDevice": "View device"
   },
   "relogin": "Sign in again",
-  "sendQueued": "This conversation is mid-turn, so your message was queued into the current turn. The agent will pick it up before the turn ends.",
   "sendFailure": {
     "transport": {
       "title": "Did not reach {{machine}}",

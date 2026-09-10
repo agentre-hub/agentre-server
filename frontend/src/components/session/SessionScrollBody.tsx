@@ -61,13 +61,17 @@ export interface SessionScrollBodyProps {
   /** server 镜像里的历史读到哪一步。 */
   history: { settled: boolean; loaded: boolean };
   /**
-   * 转录里那一条是**草稿页刚发出去的接力消息**，不是投影出来的（见
-   * SessionDetailView 的 `initialUserText`）。
+   * 这条会话是**草稿页刚交接过来的**，而 attach 还没把实况接回来（见
+   * SessionDetailView 的 `handedOverText`）。
    *
    * 它算「有东西可画」：骨架说的是「什么都还没有」，而这里手上正拿着用户几百毫秒前
    * 说的那句话。「正在从这台机器读取…」那句同样让位 —— 三点已经在说在等了。
+   *
+   * 它管到 attach 落定为止，而不是管到第一帧落地为止：此前这里收的是
+   * `seeded`（「此刻画的是不是那条接力消息」），回声一到它就到期，可那时补齐还在
+   * 往返 —— 整段转录被换成读取骨架，一拍之后再换回来。
    */
-  seeded: boolean;
+  handedOver: boolean;
   ready: boolean;
   catchUpFailed: boolean;
 
@@ -115,7 +119,7 @@ export default function SessionScrollBody({
   onReconnect,
   relayState,
   history,
-  seeded,
+  handedOver,
   ready,
   catchUpFailed,
   messages,
@@ -162,13 +166,13 @@ export default function SessionScrollBody({
   // 转录有两个来源：server 镜像里的历史（机器离线照样有——本轮的目的），与中继接上
   // 之后的实时补齐。账号登出时两者都不算数：那时页面只剩重新登录这一条路。
   //
-  // 那条接力消息排在两者之前：它就在手上，不必等任何一条来路。但只在机器还够得着
-  // 时算数 —— 挂着它就是挂着三点，而对着一台没人在的机器转三点是在替远端撒谎
-  // （与转录那边「通道断了就先说通道」同一条规矩）。派发成功后机器随即掉线正是
+  // 交接过来的那一段排在两者之前：那句话就在手上，不必等任何一条来路。但只在机器
+  // 还够得着时算数 —— 挂着它就是挂着三点，而对着一台没人在的机器转三点是在替远端
+  // 撒谎（与转录那边「通道断了就先说通道」同一条规矩）。派发成功后机器随即掉线正是
   // 这一档。
   const showTranscript =
     status !== "loggedOut" &&
-    ((seeded && !unreachable) ||
+    ((handedOver && !unreachable) ||
       history.loaded ||
       (ready &&
         (status === "connected" ||

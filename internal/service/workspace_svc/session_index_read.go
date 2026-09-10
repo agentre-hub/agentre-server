@@ -213,11 +213,18 @@ func (a projectAffinity) projectOf(reported, machineFingerprint, cwd string) str
 	if cwd == "" {
 		return ""
 	}
+	// byLocation 里只有还活着的项目的位置（见 projectLocations），所以这条路取到的
+	// 标识不必再验一次活性。
 	return a.byLocation[machineFingerprint+"\x00"+cwd]
 }
 
 // projectLocations 读出判一次项目归属要的那两份名单。它同时供三件事用：把分组计数
 // 折算成项目、把「某个项目」翻成一组位置、以及给行判项目归属。
+//
+// **位置只留还活着的项目那些**：项目行没了（删了 / 还没同步过来）而它的位置还在，
+// 是常态（删除的级联由另一端入队，路上有时差）。留着的话，报了这个标识的对话按
+// 决策 13 落回随手对话，落在它目录里的对话却被判进一个只有标识、没有名字的幽灵组
+// ——同一个不存在的项目两种答案。在这里筛掉，下游三处就都不必再各判一次活性。
 func (s *workspaceSvc) projectLocations(ctx context.Context, userID int64) (projectAffinity, error) {
 	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, projectAffinityKinds)
 	if err != nil {
@@ -229,7 +236,13 @@ func (s *workspaceSvc) projectLocations(ctx context.Context, userID int64) (proj
 			live[row.SyncID] = true
 		}
 	}
-	return projectAffinity{byLocation: projectSyncIDByLocation(rows), liveProjects: live}, nil
+	locations := make([]*sync_entity.SyncObject, 0, len(rows))
+	for _, row := range rows {
+		if row.Kind == sync_entity.KindProjectLocation && live[row.ScopeSyncID] {
+			locations = append(locations, row)
+		}
+	}
+	return projectAffinity{byLocation: projectSyncIDByLocation(locations), liveProjects: live}, nil
 }
 
 // projectLocationCache 让**一次索引读取**只查一遍项目位置表：取一次用到底。
@@ -265,6 +278,40 @@ func (c *projectLocationCache) get(ctx context.Context) (projectAffinity, error)
 func splitLocationKey(key string) agent_session_repo.SummaryLocation {
 	fp, cwd, _ := strings.Cut(key, "\x00")
 	return agent_session_repo.SummaryLocation{MachineFingerprint: fp, Cwd: cwd}
+}
+
+// liveProjectSyncIDs 是账号里还活着的项目标识，供未归项目那一组的判据用
+// （报了名单外标识的那些也是未归，决策 13）。排序固定：这份名单进 SQL 语句文本，
+// map 的遍历序会让同一次查询每次拼出不一样的语句（查询缓存、日志与测试断言都跟着抖）。
+func (a projectAffinity) liveProjectSyncIDs() []string {
+	out := make([]string, 0, len(a.liveProjects))
+	for syncID := range a.liveProjects {
+		out = append(out, syncID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unassignedQuery / projectQuery 是项目轴那两种组各自的判据。组骨架数它、「查看全部
+// N」翻它，两处都从这里拿：分两处拼就是「组头说 N 条、翻出来是另一批」的来路，
+// 而这正是未归项目那一组丢过行的原因。
+func unassignedQuery(
+	base agent_session_repo.SummaryQuery, affinity projectAffinity,
+) agent_session_repo.SummaryQuery {
+	base.ProjectMode = agent_session_repo.ProjectUnassigned
+	base.Locations = allLocations(affinity.byLocation)
+	base.LiveProjectSyncIDs = affinity.liveProjectSyncIDs()
+	return base
+}
+
+func projectQuery(
+	base agent_session_repo.SummaryQuery, affinity projectAffinity, projectSyncID string,
+) agent_session_repo.SummaryQuery {
+	base.ProjectMode = agent_session_repo.ProjectIs
+	// 两半都给：报了这个项目的（桌面端），与没报项目、位置落在它名下的（agentred）。
+	base.ProjectSyncID = projectSyncID
+	base.Locations = locationsOfProject(affinity.byLocation, projectSyncID)
+	return base
 }
 
 // locationsOfProject 是某个项目名下的全部位置；allLocations 是账号已知的全部位置
@@ -347,9 +394,7 @@ func (s *workspaceSvc) applyScope(
 		if err != nil {
 			return q, err
 		}
-		q.ProjectMode = agent_session_repo.ProjectUnassigned
-		q.Locations = allLocations(affinity.byLocation)
-		return q, nil
+		return unassignedQuery(q, affinity), nil
 	case strings.HasPrefix(scope, scopePrefixProject):
 		if err := wantAxis(AxisProject); err != nil {
 			return q, err
@@ -358,12 +403,7 @@ func (s *workspaceSvc) applyScope(
 		if err != nil {
 			return q, err
 		}
-		projectSyncID := strings.TrimPrefix(scope, scopePrefixProject)
-		q.ProjectMode = agent_session_repo.ProjectIs
-		// 两半都给：报了这个项目的（桌面端），与没报项目、位置落在它名下的（agentred）。
-		q.ProjectSyncID = projectSyncID
-		q.Locations = locationsOfProject(affinity.byLocation, projectSyncID)
-		return q, nil
+		return projectQuery(q, affinity, strings.TrimPrefix(scope, scopePrefixProject)), nil
 	default:
 		return q, fmt.Errorf("session index: unknown scope %q", scope)
 	}
@@ -570,19 +610,16 @@ func (s *workspaceSvc) projectGroupSpecs(
 	}
 	var specs []groupSpec
 	for projectSyncID, n := range byProject {
-		q := base
-		q.ProjectMode = agent_session_repo.ProjectIs
-		q.ProjectSyncID = projectSyncID
-		q.Locations = locationsOfProject(affinity.byLocation, projectSyncID)
 		specs = append(specs, groupSpec{
-			scope: scopePrefixProject + projectSyncID, total: n, query: q,
+			scope: scopePrefixProject + projectSyncID, total: n,
+			query: projectQuery(base, affinity, projectSyncID),
 		})
 	}
 	if unassigned > 0 {
-		q := base
-		q.ProjectMode = agent_session_repo.ProjectUnassigned
-		q.Locations = allLocations(affinity.byLocation)
-		specs = append(specs, groupSpec{scope: ScopeUnassignedProject, total: unassigned, query: q})
+		specs = append(specs, groupSpec{
+			scope: ScopeUnassignedProject, total: unassigned,
+			query: unassignedQuery(base, affinity),
+		})
 	}
 	return specs, nil
 }

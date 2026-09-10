@@ -47,7 +47,6 @@
     "viewDevice": "查看设备"
   },
   "relogin": "重新登录",
-  "sendQueued": "这条对话正在进行中，你的消息已排进当前这一轮，这一轮结束前它会读到。",
   "sendFailure": {
     "transport": {
       "title": "没送到 {{machine}}",

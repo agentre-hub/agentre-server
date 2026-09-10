@@ -23,6 +23,7 @@ import {
   useSessionSend,
   useTurnActivity,
 } from "@/components/session/useSessionSend";
+import { useSteerQueue } from "@/components/session/useSteerQueue";
 import { useTranscriptScrollback } from "@/components/session/useTranscriptScrollback";
 import type { SessionEventFrame } from "@/components/session/transcriptFrame";
 import { useSessionIndex } from "@/pages/chat/useSessionIndex";
@@ -85,6 +86,9 @@ const sendClient = { request: vi.fn(), catchUp: vi.fn(async () => {}) };
 /** 两只 hook 在详情视图里是前后脚跑的，测试也照那个顺序装起来。 */
 function useSend(sid: string, withSummary = true) {
   const turn = useTurnActivity();
+  // 队列是这一屏本地的乐观状态，走 steer 的那条路会往里挂条目；这几条用例测的是
+  // 发送本身，真接一只就够（不桩它，免得漏掉「chip 没挂上」这类回归）。
+  const steerQueue = useSteerQueue();
   const send = useSessionSend({
     did: 1,
     sid,
@@ -98,6 +102,7 @@ function useSend(sid: string, withSummary = true) {
     effectiveTarget: { providerKey: "", modelKey: "" },
     effectivePermissionMode: "default",
     setPinnedAgentredUnavailable: () => {},
+    steerQueue,
   });
   return { turn, send };
 }
@@ -251,6 +256,52 @@ describe("在途的「加载更早」：目标换了就不拼进新目标的转�
     });
 
     await waitFor(() => expect(result.current.events).toHaveLength(1));
+  });
+
+  /*
+    切走再切回**同一条**对话：守卫从前比的是目标串，而 A→B→A 之后这个串与第一趟
+    一模一样，于是第一趟迟到回来的那一页照样算「还在」，前插进第二趟自己已经读过
+    的转录里——同一段话说两遍，而且插在最前面（往回读那一路是前插且不去重）。
+
+    「还是那条对话」不等于「还是那一趟」：中间那次切换已经把 `events` 清空、把
+    「更早的」进度打回 none，第一趟捕获的 `oldestSeq` 说的是一份不复存在的转录。
+  */
+  it("Given A 的那一页在飞时切到 B 再切回 A, When 它回来, Then 不再前插一遍", async () => {
+    const gate = deferred<Awaited<ReturnType<typeof loadMirrorTail>>>();
+    const page = {
+      events: [frame("上一轮的回复")],
+      oldestSeq: 1,
+      hasBefore: false,
+    } as never;
+    mockedMirrorTail.mockReturnValueOnce(gate.promise);
+
+    const { result, rerender } = renderHook(({ sid }) => useScrollback(sid), {
+      initialProps: { sid: "A" },
+    });
+
+    // 第一趟：往回读那一页发出去了，还没回来。
+    act(() => result.current.scrollback.noteMirrorHistory(10, true));
+    act(() => result.current.scrollback.retryEarlier());
+
+    // 切到 B 再切回 A —— 两次都跟着详情视图渲染期那段重置。
+    rerender({ sid: "B" });
+    act(() => result.current.scrollback.reset());
+    rerender({ sid: "A" });
+    act(() => result.current.scrollback.reset());
+
+    // 切回来这一趟自己把同一页读了回来。
+    mockedMirrorTail.mockResolvedValue(page);
+    act(() => result.current.scrollback.noteMirrorHistory(10, true));
+    await act(async () => {
+      result.current.scrollback.retryEarlier();
+    });
+    expect(result.current.events).toHaveLength(1);
+
+    // 第一趟迟到了。
+    await act(async () => {
+      gate.resolve(page);
+    });
+    expect(result.current.events).toHaveLength(1);
   });
 });
 

@@ -214,9 +214,10 @@ func TestSessionIndex_UnassignedProjectScope_NegatesEveryKnownLocation(t *testin
 				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
 		}, nil).AnyTimes()
 	want := agent_session_repo.SummaryQuery{
-		UserID:      7,
-		ProjectMode: agent_session_repo.ProjectUnassigned,
-		Locations:   []agent_session_repo.SummaryLocation{{MachineFingerprint: "fp-a", Cwd: "/repo/x"}},
+		UserID:             7,
+		ProjectMode:        agent_session_repo.ProjectUnassigned,
+		Locations:          []agent_session_repo.SummaryLocation{{MachineFingerprint: "fp-a", Cwd: "/repo/x"}},
+		LiveProjectSyncIDs: []string{"proj-1"},
 	}
 	mSummary.EXPECT().CountSummaries(ctx, want).Return(int64(3), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
@@ -590,4 +591,140 @@ func TestSessionIndex_MachineScope_PagesTheCarryingMachinesSessions(t *testing.T
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(36), page.Total)
+}
+
+// 报了一个账号里不存在的项目（删了 / 还没同步过来）的那些对话，既要被数进「随手
+// 对话」，也要真的能从那一组里翻出来——两件事必须由**同一条判据**回答。
+//
+// 从前只有前一半：折算计数时它们落进未归项目，而翻这一组的判据只认「没报项目」，
+// 于是它们哪一组都进不去。界面上就是组头写着「查看全部 2 个会话」、底下只摆得出
+// 一行，那条对话在项目轴上凭空消失。
+func TestSessionIndex_UnassignedProjectScope_TakesRowsReportingAProjectThatIsGone(t *testing.T) {
+	ctx, mSummary, _, mObj, svc := setupMirrorReadTest(t)
+
+	// 账号里只有 proj-1；proj-gone 已经不在名单里。
+	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
+		[]*sync_entity.SyncObject{
+			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
+				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
+		}, nil).AnyTimes()
+	want := agent_session_repo.SummaryQuery{
+		UserID:      7,
+		ProjectMode: agent_session_repo.ProjectUnassigned,
+		Locations:   []agent_session_repo.SummaryLocation{{MachineFingerprint: "fp-a", Cwd: "/repo/x"}},
+		// 判据要带上「还活着的项目」这份名单：报了名单外标识的那些正是第二拨未归。
+		LiveProjectSyncIDs: []string{"proj-1"},
+	}
+	mSummary.EXPECT().CountSummaries(ctx, want).Return(int64(2), nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
+		SummaryQuery: want, Limit: defaultIndexLimit + 1,
+	}).Return([]*agent_session_entity.SessionSummary{
+		{PeerFingerprint: "fp-b", ConversationID: "conv-orphan"},
+		{PeerFingerprint: "fp-desktop", ConversationID: "conv-gone", ProjectSyncID: "proj-gone"},
+	}, nil)
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{
+		UserID: 7, Axis: AxisProject, Scope: "unassigned-project",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), page.Total)
+	require.Len(t, page.Items, 2, "组头数了几条,就要翻得出几条")
+	assert.Empty(t, page.Items[1].ProjectSyncID, "指着一个不存在的项目 = 未归项目")
+}
+
+// 组骨架上的「随手对话」与翻那一组用的是同一条判据：数出来的那个 N 与翻出来的行
+// 出自同一处，才不会一个把「项目没了」的那些算进去、另一个把它们漏掉。
+func TestSessionIndex_ProjectAxis_UnassignedSkeletonUsesTheSameCriteria(t *testing.T) {
+	ctx, mSummary, _, mObj, svc := setupMirrorReadTest(t)
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
+		[]*sync_entity.SyncObject{
+			{Kind: sync_entity.KindProject, SyncID: "proj-1"},
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1",
+				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
+		}, nil).AnyTimes()
+	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(int64(3), nil)
+	mSummary.EXPECT().CountSummariesByProjectKey(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(
+		[]agent_session_repo.SummaryProjectKeyCount{
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{
+				MachineFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 1},
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{
+				MachineFingerprint: "fp-desktop", ProjectSyncID: "proj-gone"}, Total: 1},
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{MachineFingerprint: "fp-b"}, Total: 1},
+		}, nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
+		SummaryQuery: agent_session_repo.SummaryQuery{
+			UserID:      7,
+			ProjectMode: agent_session_repo.ProjectUnassigned,
+			Locations: []agent_session_repo.SummaryLocation{
+				{MachineFingerprint: "fp-a", Cwd: "/repo/x"}},
+			LiveProjectSyncIDs: []string{"proj-1"},
+		},
+		Limit: defaultPerGroup + 1,
+	}).Return(nil, nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return(nil, nil).AnyTimes()
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisProject})
+	require.NoError(t, err)
+	byScope := map[string]int64{}
+	for _, g := range page.Groups {
+		byScope[g.Scope] = g.Total
+	}
+	assert.Equal(t, int64(2), byScope["unassigned-project"], "配不上位置的 + 项目没了的")
+}
+
+// 位置指着一个账号里已经不在的项目（项目行删了 / 还没同步过来）时，那条位置不算数：
+// 判归属的两条路都只认还活着的项目，否则报了它的那些落回随手对话、而落在它目录里的
+// 那些却被判进一个只有标识、没有名字的幽灵组——同一个不存在的项目，两条路两种答案。
+func TestSessionIndex_LocationOfAProjectThatIsGone_DoesNotResurrectIt(t *testing.T) {
+	ctx, mSummary, _, mObj, svc := setupMirrorReadTest(t)
+
+	// 名单里没有 proj-gone 那一行，只剩它的位置。
+	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
+		[]*sync_entity.SyncObject{
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-gone",
+				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
+		}, nil).AnyTimes()
+	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
+		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", Cwd: "/repo/x", Title: "t"},
+	}, nil)
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Empty(t, page.Items[0].ProjectSyncID, "项目没了，落在它目录里的对话也是未归项目")
+}
+
+// 同一条规则落在组骨架上：死项目的位置既不长出一个组，也不能出现在未归项目那一组
+// 要否定的名单里——否定了它，落在那个目录里的行就又一次哪一组都进不去。
+func TestSessionIndex_ProjectAxis_LocationOfAGoneProject_CountsAsUnassigned(t *testing.T) {
+	ctx, mSummary, _, mObj, svc := setupMirrorReadTest(t)
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(
+		[]*sync_entity.SyncObject{
+			{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-gone",
+				AgentredFingerprint: "fp-a", Payload: mustJSON(t, map[string]any{"path": "/repo/x"})},
+		}, nil).AnyTimes()
+	mSummary.EXPECT().CountSummaries(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(int64(2), nil)
+	mSummary.EXPECT().CountSummariesByProjectKey(ctx, agent_session_repo.SummaryQuery{UserID: 7}).Return(
+		[]agent_session_repo.SummaryProjectKeyCount{
+			{SummaryProjectKey: agent_session_repo.SummaryProjectKey{
+				MachineFingerprint: "fp-a", Cwd: "/repo/x"}, Total: 2},
+		}, nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
+		SummaryQuery: agent_session_repo.SummaryQuery{
+			UserID: 7, ProjectMode: agent_session_repo.ProjectUnassigned,
+			// 两份名单都空着：那条位置不算数，账号里也没有活着的项目。
+			Locations: []agent_session_repo.SummaryLocation{}, LiveProjectSyncIDs: []string{},
+		},
+		Limit: defaultPerGroup + 1,
+	}).Return(nil, nil)
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisProject})
+	require.NoError(t, err)
+	require.Len(t, page.Groups, 1, "死项目不长组")
+	assert.Equal(t, "unassigned-project", page.Groups[0].Scope)
+	assert.Equal(t, int64(2), page.Groups[0].Total)
 }

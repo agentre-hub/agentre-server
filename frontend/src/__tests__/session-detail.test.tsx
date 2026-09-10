@@ -82,7 +82,8 @@ let capturedOpts: UseRelayChannelOptions = {};
 const fakeClient = {
   request: vi.fn(),
   attach: vi.fn(async () => ({})),
-  catchUp: vi.fn(async () => {}),
+  // 形参照真实客户端留着会话标识：切换会话那条用例要按它分辨补齐的是哪一条。
+  catchUp: vi.fn(async (_conversationId?: string) => {}),
   // 镜像历史应用完之后由页面预置游标，实时流据此接上（不重拉 server 已有的那段）。
   setCursor: vi.fn(),
   getCursor: vi.fn(() => 0),
@@ -1774,10 +1775,10 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
     await vi.waitFor(() =>
       expect(callsOf(rpcMethods.runtimeSteer)).toHaveLength(1),
     );
-    // 排进了当前这一轮：给出最小诚实反馈，草稿清空，不报失败。
-    expect(
-      await screen.findByText(/queued into the current turn/i),
-    ).toBeTruthy();
+    // 排进了当前这一轮：那句话此刻在队列里看得见（而不是一句解释文案），草稿清空，
+    // 不报失败。
+    expect(await screen.findByText("顺便把标题也改了")).toBeTruthy();
+    expect(screen.getByText("Queued · 1")).toBeTruthy();
     expect(composerText()).toBe("");
     expect(screen.queryByTestId("send-failure")).toBeNull();
   });
@@ -1804,8 +1805,177 @@ describe("会话详情页:正在跑一轮时发消息走 steer(插话)", () => {
       { timeout: 3_000 },
     );
     expect(screen.queryByTestId("send-failure")).toBeNull();
-    // 回落的是 run（开了新一轮），不是排队：不该出现「已排进这一轮」。
-    expect(screen.queryByText(/queued into the current turn/i)).toBeNull();
+    // 回落的是 run（开了新一轮），不是排队：先挂上去的那条 chip 要跟着撤掉，
+    // 否则同一句话既在队列里排着、又作为新一轮发了出去。
+    await vi.waitFor(() => expect(screen.queryByText(/^Queued · /)).toBeNull());
+  });
+});
+
+// ── 排队消息队列（插话之后那几条的去处） ──────────────────────────────────────
+//
+// 此前这一带只有一句解释文案：「这条对话正在进行中，你的消息已排进当前这一轮……」。
+// 连发三条也还是那一句 —— 排了几条、排了什么、能不能撤回，一概看不见。桌面端一直
+// 有真队列（agentre 仓 frontend/src/components/agentre/queued-messages-bar.tsx），
+// 现在它连同状态迁移一起住进了共享包，两端画的是同一份。
+//
+// 队列是**这一屏本地的乐观状态**：协议上没有「列出未消费 steer」这一问，别的端排
+// 进去的消息在被消费之前看不见（spec 2026-09-08-console-steer-queue Out of scope）。
+describe("会话详情页:插话之后的排队队列", () => {
+  const runningSummary = { ...summary, lifecycleState: "running" };
+
+  function mountWith(onSend: (method: AnyRpcMethod) => unknown) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...runningSummary, peerFingerprint: "fp-x" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return onSend(method);
+    });
+  }
+
+  async function send(text: string) {
+    await vi.waitFor(() => expect(composerDisabled()).toBe(false));
+    await sendInComposer(text);
+  }
+
+  function callsOf(method: AnyRpcMethod) {
+    return fakeClient.request.mock.calls.filter((c) => c[0] === method);
+  }
+
+  /** 后端取走了这几条 steer。真实载荷见 wire 的 ConsumedSteer。 */
+  function pushConsumed(steers: { queuedId: string; text: string }[]) {
+    act(() =>
+      capturedOpts.onEvent?.(
+        {
+          conversationId: "42",
+          event: { kind: "steer_consumed", steers },
+          seq: 9,
+        } as never,
+        0,
+      ),
+    );
+  }
+
+  // Given 插话被对端收下 / When 应答带回执行端的句柄 / Then 队列里那条可撤回。
+  //
+  // 撤不撤得掉是**对端自报**的，不是这一屏按后端类型猜的：同一个 claudecode，
+  // 直连 agentred 撤得掉，而桌面端托管的那条路此前压根没注册 cancelSteer。
+  it("Given 插话成功 When 应答带句柄 Then 队列里逐条列出且可撤回", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+
+    expect(await screen.findByText("先别动数据库")).toBeTruthy();
+    expect(screen.getByText("Queued · 1")).toBeTruthy();
+    expect(
+      await screen.findByRole("button", { name: "Cancel this queued message" }),
+    ).toBeTruthy();
+  });
+
+  // Given 队列里排着一条 / When 后端取走它 / Then 那条 chip 消失（它已经进转录了）。
+  it("Given 排着一条 When steer_consumed 带同一个句柄 Then chip 消失", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    pushConsumed([{ queuedId: "q-remote-1", text: "先别动数据库" }]);
+
+    await vi.waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+  });
+
+  // Given 队列里排着一条 / When 用户点撤回 / Then 发 runtime.cancelSteer，并按对端
+  // 返回的 removed 移除 —— 撤掉了哪几条由对端说了算，不是点一下就乐观清掉。
+  it("Given 排着一条 When 点撤回 Then 发 cancelSteer 并按 removed 移除", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeCancelSteer)
+        return { removed: ["q-remote-1"] };
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    const cancel = await screen.findByRole("button", {
+      name: "Cancel this queued message",
+    });
+
+    fireEvent.click(cancel);
+
+    await vi.waitFor(() => {
+      expect(callsOf(rpcMethods.runtimeCancelSteer)[0]?.[1]).toMatchObject({
+        conversationId: "42",
+        queuedId: "q-remote-1",
+      });
+    });
+    await vi.waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+  });
+
+  // Given 对端还没升级（应答里没有句柄）/ When 排队 / Then chip 照画但撤不掉。
+  //
+  // 用户写的字在任何链路组合下都看得见；拿本地号去撤是撤不到任何东西的，所以那颗
+  // 键不摆（spec 决策 3）。
+  it("Given 老对端不回句柄 When 排队 Then chip 照画但没有撤回键", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer) return {};
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+
+    expect(await screen.findByText("先别动数据库")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Cancel this queued message" }),
+    ).toBeNull();
+    expect(screen.getByText("This backend cannot cancel")).toBeTruthy();
+  });
+
+  // Given 一轮结束时还有没被取走的 / When 收尾 / Then 不静默清掉,摆出丢弃横幅,
+  // 「恢复为草稿」把那段字放回输入框。
+  it("Given 轮末仍有残留 When 一轮结束 Then 给丢弃横幅且能恢复为草稿", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore as draft" }));
+
+    await vi.waitFor(() => expect(composerText()).toContain("先别动数据库"));
+    expect(
+      screen.queryByText("1 message(s) were not sent when the turn ended"),
+    ).toBeNull();
   });
 });
 
@@ -2951,6 +3121,107 @@ describe("会话详情：历史来自 server 镜像", () => {
         ).split(text).length - 1;
       expect(said("第一句")).toBe(1);
       expect(said("输出中的一句")).toBe(1);
+    });
+  });
+
+  /*
+    Given 离开这条对话期间它还在输出；When 切回来时镜像还没跟上；Then 那几帧仍要
+    出现在转录里。
+
+    中继客户端是池子里**共用**的那一个（空闲宽限 30s，切走再切回借到的正是它），
+    离开期间没有任何监听者，可它照样在消费这条会话的帧、游标一路往前走。切回来时
+    渲染期重置把 `events` 清空，历史只从镜像重读，而镜像落库有延迟——预置游标从前
+    只肯**往上**写（游标比镜像低才补），于是「镜像末尾 → 游标」这一段谁都不再交付：
+    catchUp 只拉游标之后的。屏幕上就是几条消息凭空少了，刷新页面才回来（新客户端
+    的游标从 0 起）。
+
+    所以预置改成**对齐**而不是抬高：这一趟画出来的转录起点就是镜像那一段，游标高
+    了就是洞。压回去带来的重复投递由 `appendFrames` 按 seq 挡掉。
+  */
+  it("切走再切回：离开期间到达的那几帧仍要在转录里", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?")) {
+        const id = path.includes("conversation_id=43") ? "43" : "42";
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", conversation_id: id }],
+        };
+      }
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        if (path.includes("conversation_id=43")) return framePage([]);
+        // 镜像只跟到第一句：落库比中继慢一拍，这正是常态。
+        return framePage([{ seq: 1, text: "第一句" }]);
+      }
+      return {};
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    // 游标是**客户端**的账，切换右栏不动它。
+    let cursor = 0;
+    fakeClient.getCursor.mockImplementation(() => cursor);
+    fakeClient.setCursor.mockImplementation((_c: unknown, seq: number) => {
+      cursor = seq;
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      if (cursor >= 2) return;
+      cursor = 2;
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "离开期间的一句" },
+        seq: 2,
+      } as never);
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    const at = (conversationId: string) => (
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId={conversationId}
+            form="embedded"
+          />
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+
+    const { rerender } = render(at("42"));
+    await screen.findByText(/第一句/);
+    await screen.findByText(/离开期间的一句/);
+
+    rerender(at("43"));
+    await vi.waitFor(() => expect(screen.queryByText(/第一句/)).toBeNull());
+    rerender(at("42"));
+
+    await screen.findByText(/第一句/);
+    await screen.findByText(/离开期间的一句/);
+    // 补回来的那一段只能出现一次：压回游标之后，中继与镜像覆盖的 seq 有重叠。
+    await vi.waitFor(() => {
+      const said = (text: string) =>
+        (
+          screen.getByTestId("session-detail-transcript").textContent ?? ""
+        ).split(text).length - 1;
+      expect(said("第一句")).toBe(1);
+      expect(said("离开期间的一句")).toBe(1);
     });
   });
 });
@@ -5644,6 +5915,179 @@ describe("会话详情页:一轮在跑时的三点", () => {
     await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 2000 });
   });
 
+  /*
+    从草稿页交接过来的那一条,回声落地的那一拍。
+
+    `running = turn.turnActive || seeded`,而 `seeded` 的判据是「投影出来的转录还是
+    空的」—— 它在**第一帧落地**那一刻就到期。可 `turnActive` 要等 attach 那条路走完
+    补齐才接上（markTurnActive 刻意排在 catchUp 之后,见 SessionDetailView）。两者
+    之间是一段谁都不认账的空窗:三点亮着 → 回声一到熄掉 → 补齐回来再亮。
+
+    用户看到的就是「AI 生成中」闪了一下。上面那条守不住它:它只 waitFor 末态,
+    中间熄没熄过它看不见。
+  */
+  it("从草稿页交接过来:回声落地那一拍三点不熄", async () => {
+    let releaseCatchUp: () => void = () => {};
+    const catchUpGate = new Promise<void>((r) => {
+      releaseCatchUp = () => r();
+    });
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      // 刚派发出去的对话:账号镜像里还没有这一行,也还没有转录。
+      if (String(path).startsWith("/v1/agent-sessions?")) return { items: [] };
+      if (String(path).startsWith("/v1/agent-sessions/transcript"))
+        return { frames: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, lifecycleState: SessionLifecycleRunning }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + String(method));
+    });
+    // 回声先落地,补齐停在这一拍:markTurnActive 还没跑到。
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "user_message",
+          text: "看看目录",
+          sourceDevice: "fp-web",
+        },
+        seq: 1,
+      });
+      await catchUpGate;
+    });
+
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            form="embedded"
+            initialTitle="看看目录"
+            initialUserText="看看目录"
+            initialTurnStartedAt={Date.now()}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 交接那一拍:转录与三点就地铺出来（running = seeded）。
+    await vi.waitFor(() => expect(typing()).toBeTruthy());
+
+    // 回声落地,而补齐还停着 —— 这一拍 seeded 已到期、turnActive 还没接上。
+    await vi.waitFor(() => expect(fakeClient.catchUp).toHaveBeenCalled());
+    await act(async () => {});
+    expect(typing()).toBeTruthy();
+
+    // 补齐回来之后照旧亮着（不是靠「亮得晚一点」蒙对的）。
+    releaseCatchUp();
+    await vi.waitFor(() => expect(typing()).toBeTruthy());
+  });
+
+  /*
+    同一处「在不在跑」的另一段错寿命:桌面右栏从**在跑的 A** 切到**空闲的 B**。
+
+    切换走的是同实例换 props(没有 key 强制重挂),会话级状态由详情视图的渲染期重置
+    清掉 —— 可 `turn.reset()` 只清了 `sendFeedback`,`turnActive` 留着 A 那一份。于是
+    B 一打开就转着三点,而它根本没在跑,要等 attach 按 B 的清单快照把它改回来。
+
+    同一份还被 `turnActiveRef` 拿去做**发送选路**(在跑走 steer 插话,空闲走 run 开
+    新一轮)——这一段里往 B 发消息会当成插话发给一轮并不存在的 turn。
+  */
+  it("从在跑的会话切到空闲的会话:不把上一条的三点带过去", async () => {
+    let releaseCatchUp: () => void = () => {};
+    const catchUpGate = new Promise<void>((r) => {
+      releaseCatchUp = () => r();
+    });
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (String(path).startsWith("/v1/agent-sessions?")) return { items: [] };
+      if (String(path).startsWith("/v1/agent-sessions/transcript"))
+        return { frames: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method, params) => {
+      if (method === rpcMethods.sessionList) {
+        const id = (params as { conversationIds: string[] }).conversationIds[0];
+        return {
+          sessions: [
+            {
+              ...summary,
+              conversationId: id,
+              lifecycleState: id === "42" ? SessionLifecycleRunning : "idle",
+            },
+          ],
+        };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + String(method));
+    });
+    fakeClient.catchUp.mockImplementation(async (id?: string) => {
+      // B 的补齐停住:这一段里 B 的实况还没接回来,画面上不许有 A 的残留。
+      if (id === "43") await catchUpGate;
+    });
+
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    const view = (id: string) => (
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId={id} form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    const stop = () => screen.queryByTestId("session-detail-stop");
+    const { rerender } = render(view("42"));
+    // A 在跑:三点与「停止」都在。
+    await vi.waitFor(() => expect(typing()).toBeTruthy());
+    expect(stop()).toBeTruthy();
+
+    // 切到 B（同实例换 props）。B 的实况还没接回来 —— 转录那一段被读取态盖着,
+    // 而头部立刻就画:「停止」是这一维唯一藏不住的出口。
+    rerender(view("43"));
+    await act(async () => {});
+    expect(stop()).toBeNull();
+
+    releaseCatchUp();
+  });
+
   // 助手真开口之后三点才该跟着正文走 —— 这一条守住上面两条不是靠「永不熄灭」
   // 蒙对的。
   it("助手开口:三点跟到助手那条上,轮次结束后熄灭", async () => {
@@ -5676,6 +6120,43 @@ describe("会话详情页:一轮在跑时的三点", () => {
 
     act(() => capturedOpts.onRunResultDone?.({} as never));
     await vi.waitFor(() => expect(typing()).toBeNull());
+  });
+
+  /*
+    助手开口的**第一帧是预览帧**——协议 0.2.0 下这是常态而不是边角:逐 token 的
+    text_delta / thinking_delta 先到,块定稿之后才有那一份带 seq 的持久帧。一段
+    两千多字的思考因此有十几秒钟只有预览帧。
+
+    占位撤不掉的话,这十几秒里屏幕上是**两条**助手消息:上面那条正逐字长出思考,
+    下面那条空占位转着三点、还挂着这一轮的耗时。用户看到的就是「一次回复分成了
+    两个气泡,而上面那个好像还在写」。
+  */
+  it("助手先经预览帧开口:占位撤掉,三点跟到助手那条上", async () => {
+    wireRelay((m) => (m === rpcMethods.runtimeRun ? {} : undefined));
+    fakeClient.catchUp.mockImplementation(async () => {});
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+
+    await sendInComposer("你好");
+    await vi.waitFor(() => expect(typing()).toBeTruthy(), { timeout: 5000 });
+    act(() =>
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "你好", sourceDevice: "fp-web" },
+        seq: 1,
+      }),
+    );
+    act(() =>
+      capturedOpts.onPreviewEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "在的" },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(screen.getByText("在的").closest("article")).toContain(typing());
+    });
   });
 
   /*

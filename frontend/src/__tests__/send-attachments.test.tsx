@@ -35,6 +35,7 @@ import {
   useSessionSend,
   useTurnActivity,
 } from "@/components/session/useSessionSend";
+import { useSteerQueue } from "@/components/session/useSteerQueue";
 import type { SessionViewStatus } from "@/lib/sessionView";
 
 const summary = {
@@ -72,6 +73,9 @@ const shotBlock = {
 
 function useSend(status: SessionViewStatus) {
   const turn = useTurnActivity();
+  // 队列是这一屏本地的乐观状态，走 steer 的那条路会往里挂条目；这几条用例测的是
+  // 发送本身，真接一只就够（不桩它，免得漏掉「chip 没挂上」这类回归）。
+  const steerQueue = useSteerQueue();
   const send = useSessionSend({
     did: 1,
     sid: "A",
@@ -85,6 +89,7 @@ function useSend(status: SessionViewStatus) {
     effectiveTarget: { providerKey: "", modelKey: "" },
     effectivePermissionMode: "default",
     setPinnedAgentredUnavailable: () => {},
+    steerQueue,
   });
   return { turn, send };
 }
