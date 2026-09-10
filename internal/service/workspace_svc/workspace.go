@@ -283,8 +283,12 @@ type TranscriptQuery struct {
 	BeforeSeq int64
 }
 
-// TranscriptFrameView 是给 Web HTTP API 的 JSON 投影视图。持久化层保存 typed
-// Protobuf RpcNotification，读取边界才将它转换为 method + params。
+// TranscriptFrameView 是给 Web HTTP API 的 JSON 投影视图。
+//
+// 它与镜像日志库里那一行**同形**：2026-09-07-journal-payload-json.md 之后
+// agent_session_notification_journal.payload 存的就是 {method, params} 的 JSON，
+// 读取边界只是把它取出来（wireview.DecodeStoredFrame），不再解一次 Protobuf。
+// 这一侧读不懂的那一行在这里出场为 methodUndecodableFrame 的缺口帧。
 type TranscriptFrameView struct {
 	Seq    int64
 	Method string

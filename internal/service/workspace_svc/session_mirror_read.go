@@ -6,11 +6,10 @@ package workspace_svc
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 
-	"google.golang.org/protobuf/proto"
-
-	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/wireview"
@@ -25,7 +24,7 @@ const (
 
 	// ── 反向读的预算（规格 2026-08-21-transcript-tail-loading 决策 7）──────
 	//
-	// 一页的量**不按帧数**定。params 是 json 列而不是 text，理由写在
+	// 一页的量**不按帧数**定。payload 是 json 列而不是 text，理由写在
 	// migrations/202609040108_agent_sessions.go：「text 的 64KB 上限会悄悄截断
 	// 一个大帧」。所以一帧可以 >64KB（带文件内容的 tool_result），也可以只有几十
 	// 字节（一个 text_delta 的 token 片）——固定帧数既框不住流量，也框不住「几段
@@ -48,6 +47,15 @@ const (
 	// eventKindUserMessage 是轮次的**起**帧。用它而不是 runResultDone 划边界：
 	// 被中断的、还等着输入的轮次没有终帧，但一定有起帧。
 	eventKindUserMessage = "user_message"
+
+	// methodUndecodableFrame 是一条**这一侧读不懂**的帧的方法名。
+	//
+	// 它刻意不是 runtime.* 里的任何一个：那个前缀下的方法都有确定的 params 形状，
+	// 而这一条恰恰是形状未知的那种。归约器据此原样放行，不会把它当正文。
+	//
+	// 帧的原件不在这里交出去 —— 它留在库里那一行。这个视图只回答「第几帧读不懂」，
+	// 好让页面显示得出一个缺口而不是整页塌掉。
+	methodUndecodableFrame = "journal.undecodable"
 )
 
 // Transcript 翻一页镜像里的原始帧。多请求 1 条（limit+1）用来判定 HasMore，而不是
@@ -80,11 +88,7 @@ func (s *workspaceSvc) Transcript(ctx context.Context, in TranscriptQuery) (Tran
 		HasMore: hasMore,
 	}
 	for _, r := range rows {
-		view, err := journalFrameView(r)
-		if err != nil {
-			return TranscriptPage{}, err
-		}
-		page.Frames = append(page.Frames, view)
+		page.Frames = append(page.Frames, journalFrameView(ctx, r))
 		page.Cursor = r.Seq
 	}
 	return page, nil
@@ -100,8 +104,10 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 	var (
 		// turns 是已经收完的那些轮次，投影过、每一轮内部升序，**最新的一轮在前**。
 		turns [][]TranscriptFrameView
-		// pending 是正在收的那一轮，原始行，最新在前。
-		pending   []*agent_session_entity.JournalFrame
+		// pending 是正在收的那一轮，**已投影**的视图，最新在前。存视图而不是原始行,
+		// 是因为轮次边界与最终下行要的是同一份投影 —— 一页里同一行只解一次
+		// （规格 2026-09-07-journal-payload-json.md 问题 3）。
+		pending   []TranscriptFrameView
 		newestSeq int64
 		oldestSeq int64
 		bytes     int
@@ -110,19 +116,14 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 		before    = in.BeforeSeq
 	)
 
-	// take 收完一轮：翻正、投影、记账。
-	take := func() error {
+	// take 收完一轮：翻正、削（丢弃/合并）、记账。两步都不会失败，所以它也不会。
+	take := func() {
 		if len(pending) == 0 {
-			return nil
+			return
 		}
 		asc := make([]TranscriptFrameView, 0, len(pending))
 		for i := len(pending) - 1; i >= 0; i-- {
-			r := pending[i]
-			view, err := journalFrameView(r)
-			if err != nil {
-				return err
-			}
-			asc = append(asc, view)
+			asc = append(asc, pending[i])
 		}
 		projected := projectTranscriptFrames(asc)
 		for _, f := range projected {
@@ -132,7 +133,6 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 		oldestSeq = pending[len(pending)-1].Seq
 		turns = append(turns, projected)
 		pending = nil
-		return nil
 	}
 
 	full := false
@@ -149,12 +149,11 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 			if newestSeq == 0 {
 				newestSeq = row.Seq
 			}
-			pending = append(pending, row)
+			view := journalFrameView(ctx, row)
+			pending = append(pending, view)
 			rows++
-			if isTurnStart(row) {
-				if err := take(); err != nil {
-					return TranscriptPage{}, err
-				}
+			if isTurnStart(view) {
+				take()
 				if len(turns) >= tailTurns || bytes >= tailBytes || rows >= tailRowCap {
 					// 还有没有更早的：这一批里没吃完的那些，或者这一批本来就是满的
 					// （满批说明库里可能还有）。宁可多说一句「还有」——下一页如实
@@ -167,9 +166,7 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 			}
 			if rows >= tailRowCap {
 				// 一条轮次边界都没遇上：按行硬顶收住，正在收的那一段照样交出去。
-				if err := take(); err != nil {
-					return TranscriptPage{}, err
-				}
+				take()
 				hasBefore = i < len(batch)-1 || len(batch) == tailBatchRows
 				full = true
 				break
@@ -180,9 +177,7 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 		}
 		if len(batch) < tailBatchRows {
 			// 库里到头了。正在收的那一段是这条对话真正的开头，一并交出去。
-			if err := take(); err != nil {
-				return TranscriptPage{}, err
-			}
+			take()
 			break
 		}
 		before = batch[len(batch)-1].Seq
@@ -197,41 +192,48 @@ func (s *workspaceSvc) transcriptTail(ctx context.Context, in TranscriptQuery) (
 	return page, nil
 }
 
-// isTurnStart 判一条原始行是不是某一轮的起帧。解不动的载荷一律**不是**边界：
-// 猜错边界会把两轮并成一轮，而收不到边界最多是多读一批。
-func isTurnStart(row *agent_session_entity.JournalFrame) bool {
-	view, err := journalFrameView(row)
-	if err != nil {
-		return false
-	}
+// isTurnStart 判一帧**已投影的**视图是不是某一轮的起帧。解不动的载荷一律**不是**
+// 边界：猜错边界会把两轮并成一轮，而收不到边界最多是多读一批。
+//
+// 它收视图而不是原始行：调用方投影一次就把这一份一路带到下行,同一行不会为了读一个
+// event.kind 再解一遍（规格 2026-09-07-journal-payload-json.md 问题 3）。
+func isTurnStart(view TranscriptFrameView) bool {
 	kind, _, ok := decodeEventKind(view)
 	return ok && kind == eventKindUserMessage
 }
 
-func journalFrameView(row *agent_session_entity.JournalFrame) (TranscriptFrameView, error) {
-	notification := &agentrewire.RpcNotification{}
-	if err := proto.Unmarshal(row.Payload, notification); err != nil {
-		return TranscriptFrameView{}, fmt.Errorf("decode mirror journal seq %d: %w", row.Seq, err)
-	}
-	stampNotificationSeq(notification, row.Seq)
-	method, params, err := wireview.Notification(notification)
+// journalFrameView 把库里的一行投影成下行视图。**它不会失败**：读不懂的那一行交出
+// 一个 methodUndecodableFrame 的缺口帧。
+//
+// 从前它把错误一路交回给调用方，而三个调用方都是 `return TranscriptPage{}, err` ——
+// 一条坏帧于是把整条对话的详情页变成一次请求错误。坏的是一帧，让整页跟着塌掉既救不
+// 回那一帧，又把它前后那些好帧一起藏了。
+//
+// 解不开的原件仍在库里那一行，没有任何东西被丢弃；能不能读懂它是**这一侧**的事，
+// 换个版本的服务端再读同一行仍可能读得懂。
+func journalFrameView(ctx context.Context, row *agent_session_entity.JournalFrame) TranscriptFrameView {
+	method, params, err := wireview.DecodeStoredFrame(row.Payload)
 	if err != nil {
-		return TranscriptFrameView{}, fmt.Errorf("project mirror journal seq %d: %w", row.Seq, err)
+		return undecodableFrameView(ctx, row, err)
 	}
-	return TranscriptFrameView{Seq: row.Seq, Method: method, Params: params, Createtime: row.Createtime}, nil
+	return TranscriptFrameView{Seq: row.Seq, Method: method, Params: params, Createtime: row.Createtime}
 }
 
-func stampNotificationSeq(notification *agentrewire.RpcNotification, seq int64) {
-	switch payload := notification.GetPayload().(type) {
-	case *agentrewire.RpcNotification_RuntimeEvent:
-		payload.RuntimeEvent.Seq = seq
-	case *agentrewire.RpcNotification_RunResultDone:
-		payload.RunResultDone.Seq = seq
-	case *agentrewire.RpcNotification_AutonomousTurnStarted:
-		payload.AutonomousTurnStarted.Seq = seq
-	case *agentrewire.RpcNotification_AutonomousTurnEvent:
-		payload.AutonomousTurnEvent.Seq = seq
-	case *agentrewire.RpcNotification_AutonomousTurnDone:
-		payload.AutonomousTurnDone.Seq = seq
+// undecodableFrameView 是读不懂那一行时交出的缺口帧。
+//
+// 记一条 Warn 而不是静默吞掉：一帧读不懂是数据问题，**整段**读不懂是这一侧的解码
+// 坏了，后者只有在日志里连成一片时才看得出来。
+func undecodableFrameView(
+	ctx context.Context, row *agent_session_entity.JournalFrame, cause error,
+) TranscriptFrameView {
+	logger.Ctx(ctx).Warn("mirror journal frame is undecodable",
+		zap.Int64("seq", row.Seq), zap.Error(cause))
+	params, err := json.Marshal(map[string]int64{"seq": row.Seq})
+	if err != nil {
+		params = []byte("{}")
+	}
+	return TranscriptFrameView{
+		Seq: row.Seq, Method: methodUndecodableFrame,
+		Params: params, Createtime: row.Createtime,
 	}
 }

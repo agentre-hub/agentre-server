@@ -2,7 +2,8 @@
 // params 正文。它是**跨层的横切件**（internal/pkg 的定位），因为两条互不相干的
 // 路径要的是同一份投影，而两份手抄的 27 分支事件表一定会漂开：
 //
-//   - 账号镜像的详情页（workspace_svc）：库里存的原始 journal 帧解出来发给浏览器；
+//   - 账号镜像（mirror_svc 写、workspace_svc 读）：对端发来的帧按这份形状落库，
+//     详情页读出来直接透传给浏览器（2026-09-07-journal-payload-json.md）；
 //   - 导入本地会话的预览（sessionimport_svc）：从那台机器上取回的转录轮次里的
 //     事件，按同一条形状投影，于是预览与真实转录走的是同一个渲染链。
 //
@@ -20,12 +21,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 	"github.com/agentre-hub/agentre/pkg/wire/eventkind"
 )
+
+// rawBytesEscapeKey 是「这一格是编码过的原始字节，不是它看起来的那个字符串」的标记。
+//
+// 取 `$` 前缀是因为它不会与 wire 的任何字段名相撞：那些名字由 protoreflect 的
+// JSONName() 产出，一律是 lowerCamelCase。
+const rawBytesEscapeKey = "$b64"
 
 // Notification 把一条 typed 通知投影成 (方法名, params)。认不出的通知报错而不是
 // 静默丢弃——丢掉一帧，页面上就是一段无声消失的转录。
@@ -172,10 +181,26 @@ func putRawJSON(out map[string]any, key string, data []byte) {
 		delete(out, key)
 		return
 	}
-	var value any
-	if json.Unmarshal(data, &value) == nil {
-		out[key] = value
+	// 合法 JSON 且是合法 UTF-8:**逐字节**原样嵌进视图,不解成 any 再重编。
+	//
+	// 重编那条路经 float64 中转:19 位的整数(纳秒时刻、雪花 ID、大文件偏移)会被改成
+	// 另一个值并写成科学计数法,`1.0` 会变成 `1`。这份视图就是镜像日志库里的那一行
+	// (2026-09-07-journal-payload-json.md),原件不再另存一份 —— 改掉的位再也找不
+	// 回来。transcript_projection.go 的 decodeEventKind 早就为同一件事开了 UseNumber。
+	//
+	// utf8.Valid 这一半守的是落库那一列:json 列只收 utf8mb4。encoding/json 的扫描器
+	// 不校验 UTF-8,合法 JSON 里照样能夹着非法字节;放行会让整批写入失败、这条对话的
+	// 镜像卡在原地重试,而解成 any 再重编则会把它静默改写成 U+FFFD。两条都不走,
+	// 交给下面的 $b64 —— 字节原样留着,列拿到的仍是合法 utf8mb4。
+	if utf8.Valid(data) && json.Unmarshal(data, new(any)) == nil {
+		out[key] = json.RawMessage(data)
+		return
 	}
+	// 解不动:装进 {"$b64": ...}。不这么做的话这一格保留的是 messageMap 按
+	// BytesKind 投射出的**裸 base64 字符串**,而载荷本来就是 JSON 字符串时投影出的
+	// 也是一个字符串 —— 两者在视图里一模一样,消费方分不出手里这串是原文还是编码。
+	// 包装消除的是这个歧义;字节两种走法都不丢。
+	out[key] = map[string]string{rawBytesEscapeKey: base64.StdEncoding.EncodeToString(data)}
 }
 
 func messageMap(message protoreflect.Message) map[string]any {
@@ -234,4 +259,68 @@ func singularValue(field protoreflect.FieldDescriptor, value protoreflect.Value)
 	default:
 		return value.Interface()
 	}
+}
+
+// ── 镜像日志的落库形态 ────────────────────────────────────────────────────
+//
+// 一行存一个 JSON 对象，形如 {"method": ..., "params": {...}}：库里那一行因此能被
+// 一条 SQL 直接读懂，检索走 JSON_EXTRACT 定位到具体路径
+// （规格 docs/specs/2026-09-07-journal-payload-json.md）。
+
+// storedFrameProtoKey 是整帧逃生路的键：这一侧投影不出来的帧，把原始 protobuf 字节
+// 原样存在这里。
+//
+// 它存在是因为「存的是原始帧」那条承诺（transcript_projection.go 包头记的决策 4）：
+// 缺口只许开在读侧，写入时削掉的就真的没了。投影不出来时拒绝这一帧会让该对话的镜像
+// 卡在原地反复重试，丢弃它则直接违反那条承诺 —— 逃生路两头都不占。
+const storedFrameProtoKey = "$proto"
+
+// storedFrame 是落库那一行的形状。两个键互斥：正常帧有 method/params，逃生路只有
+// $proto。
+type storedFrame struct {
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Proto  string          `json:"$proto,omitempty"`
+}
+
+// EncodeStoredFrame 把一条 typed 通知编成落库的那一行。
+//
+// 调用方**先把 seq 盖进通知**再调用它：seq 随视图一起进 params，读侧因此不必再盖
+// 一次；逃生路存的也是盖过 seq 的原件。
+func EncodeStoredFrame(notification *agentrewire.RpcNotification) ([]byte, error) {
+	method, params, err := Notification(notification)
+	if err != nil {
+		raw, marshalErr := proto.Marshal(notification)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("wireview: escape unprojectable frame: %w", marshalErr)
+		}
+		return json.Marshal(storedFrame{Proto: base64.StdEncoding.EncodeToString(raw)})
+	}
+	return json.Marshal(storedFrame{Method: method, Params: params})
+}
+
+// DecodeStoredFrame 是 EncodeStoredFrame 的逆运算：交回这一行的方法名与 params。
+//
+// 逃生路那一行在**读的时候**再投影一次：写入时投不出来的帧，换一个认得它的服务端
+// 版本读同一行仍然投得出来。
+func DecodeStoredFrame(data []byte) (string, json.RawMessage, error) {
+	var stored storedFrame
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return "", nil, fmt.Errorf("wireview: decode stored frame: %w", err)
+	}
+	if stored.Proto != "" {
+		raw, err := base64.StdEncoding.DecodeString(stored.Proto)
+		if err != nil {
+			return "", nil, fmt.Errorf("wireview: decode escaped frame: %w", err)
+		}
+		notification := &agentrewire.RpcNotification{}
+		if err := proto.Unmarshal(raw, notification); err != nil {
+			return "", nil, fmt.Errorf("wireview: decode escaped frame: %w", err)
+		}
+		return Notification(notification)
+	}
+	if stored.Method == "" {
+		return "", nil, errors.New("wireview: stored frame carries neither method nor " + storedFrameProtoKey)
+	}
+	return stored.Method, stored.Params, nil
 }

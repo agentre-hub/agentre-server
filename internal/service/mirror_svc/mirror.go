@@ -61,6 +61,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
+	"github.com/agentre-hub/agentre-server/internal/pkg/wireview"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 )
 
@@ -820,7 +821,10 @@ func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agen
 		}
 		payload := proto.Clone(n.GetPayload()).(*agentrewire.RpcNotification)
 		setNotificationSeq(payload, n.GetSeq())
-		encoded, err := proto.Marshal(payload)
+		// 落的是**视图**而不是 protobuf 字节：库里那一行要能被一条 SQL 读懂
+		// （规格 2026-09-07-journal-payload-json.md）。这一侧投影不出来的帧由
+		// EncodeStoredFrame 走 $proto 逃生路，原件一个字节不丢。
+		encoded, err := wireview.EncodeStoredFrame(payload)
 		if err != nil {
 			return fmt.Errorf("encode journal seq %d: %w", n.GetSeq(), err)
 		}

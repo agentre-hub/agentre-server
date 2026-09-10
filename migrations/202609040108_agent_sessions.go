@@ -63,9 +63,12 @@ import (
 // than frames — so the shape is "several tails being appended to", not random
 // writes.
 //
-// agent_session_notification_journal.params is a json column, not text: text's 64KB
-// ceiling would truncate a large frame (same reasoning as
-// sync_objects.payload in migration202609040106).
+// agent_session_notification_journal.payload is longblob, not text: text's 64KB
+// ceiling would truncate a large frame (same reasoning as sync_objects.payload
+// in migration202609040106). This table has no `params` column — an earlier
+// draft split the frame into method/params and the comment outlived it.
+// migration202609070101 later changes this column to json; the size reasoning
+// carries over unchanged, and json has no 64KB ceiling either.
 //
 // title is text, not varchar: it is whatever display string the peer reports,
 // and nothing on either side bounds its length — the desktop's rename path

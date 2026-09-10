@@ -2,6 +2,8 @@ package mirror_svc
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -22,6 +24,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
+	"github.com/agentre-hub/agentre-server/internal/pkg/wireview"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
 )
@@ -438,9 +441,7 @@ func TestApply_LiveNotifications_LandKeyedBySeq(t *testing.T) {
 		assert.Equal(t, testUserID, f.UserID)
 		assert.Equal(t, conv42, f.ConversationID)
 		assert.Equal(t, testMachine, f.PeerFingerprint)
-		stored := &agentrewire.RpcNotification{}
-		require.NoError(t, proto.Unmarshal(f.Payload, stored))
-		assert.True(t, proto.Equal(notification(conv42, f.Seq, fmt.Sprintf("t%d", f.Seq)), stored))
+		assertStoredFrameIs(t, notification(conv42, f.Seq, fmt.Sprintf("t%d", f.Seq)), f.Payload)
 		assert.Positive(t, f.Createtime)
 	}
 	// 摘要写入按窗口攒批(见 touchSummary),这一轮最终的游标由尾补带出去。
@@ -817,9 +818,7 @@ func TestSync_PeerJournalRewound_OldTranscriptPurgedBeforeReplay(t *testing.T) {
 	got := store.framesOf(conv42)
 	require.Len(t, got, 2, "旧的那一段必须先清掉:唯一键与新的一模一样,DO NOTHING 会让它们原地活下来")
 	for _, f := range got {
-		stored := &agentrewire.RpcNotification{}
-		require.NoError(t, proto.Unmarshal(f.Payload, stored))
-		assert.Contains(t, stored.GetRuntimeEvent().GetTextDelta().GetText(), "新对话", "留在库里的必须是重放回来的那一段")
+		assert.Contains(t, storedText(t, f.Payload), "新对话", "留在库里的必须是重放回来的那一段")
 	}
 }
 
@@ -867,9 +866,7 @@ func TestApply_TwoOriginsOnOneConnection_EachFrameLandsOnItsOwnConversation(t *t
 
 	byConversation := map[string]string{}
 	for _, f := range r.frames {
-		stored := &agentrewire.RpcNotification{}
-		require.NoError(t, proto.Unmarshal(f.Payload, stored))
-		byConversation[f.ConversationID] = stored.GetRuntimeEvent().GetTextDelta().GetText()
+		byConversation[f.ConversationID] = storedText(t, f.Payload)
 	}
 	assert.Equal(t, map[string]string{conv42: "本机这条", conv77: "浏览器那条"}, byConversation)
 	assert.Equal(t, testMachine, frameOwner(t, r.frames, conv42))
@@ -1429,4 +1426,95 @@ func TestApply_TurnFailed_ClearsWaitingForInput(t *testing.T) {
 	require.NoError(t, r.mirror.Apply(ctx, runResultFailed(conv42, 2, "boom")))
 	r.flush()
 	assert.False(t, r.lastWaiting(t))
+}
+
+// Given 对端发来一帧转录事件；When 镜像把它落库；Then payload 是 {method, params}
+// 的 JSON，而不是不透明的 protobuf 字节。
+//
+// 这是本轮改动的全部理由：库里那一行要能被一条 SQL 读懂
+// （规格 2026-09-07-journal-payload-json.md）。
+func TestWriteFrames_StoresTheViewAsJSON(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+	require.NoError(t, r.mirror.Apply(ctx, notification(conv42, 1, "你好")))
+	r.flush()
+
+	require.NotEmpty(t, r.frames)
+	var stored struct {
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
+	require.NoError(t, json.Unmarshal(r.frames[0].Payload, &stored),
+		"payload 必须是 JSON：%q", string(r.frames[0].Payload))
+	assert.Equal(t, "runtime.event", stored.Method)
+	assert.JSONEq(t,
+		`{"conversationId":"`+conv42+`","seq":1,"event":{"kind":"text_delta","text":"你好"}}`,
+		string(stored.Params))
+}
+
+// Given 一帧这一侧投影不出来；When 镜像把它落库；Then 它以 {"$proto": ...} 原样保留，
+// 且这一批里其余的帧照常落库。
+//
+// 写侧拒绝一帧会让这条对话的镜像卡在原地反复重试；丢弃它则违反「存的是原始帧」那条
+// 承诺（transcript_projection.go 包头记的决策 4）。逃生路两头都不占。
+func TestWriteFrames_UnprojectableFrameKeepsItsProtoBytes(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	ctx := context.Background()
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	// terminal_data 带的是真二进制，wireview 明确拒绝它 —— 拿它当「投影不出来」的样本。
+	opaque := &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_TerminalData{
+		TerminalData: &agentrewire.TerminalDataNotification{TerminalId: "t1", Data: []byte{0x00, 0x01}},
+	}}
+	r.relay.journal[conv42] = []*agentrewire.JournaledNotification{
+		{Seq: 1, Payload: opaque},
+		journalText(conv42, 2, "照常"),
+	}
+	r.frames = nil
+	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
+
+	require.Len(t, r.frames, 2, "投影不出来的那一帧不该让整批停下")
+	var escaped struct {
+		Proto string `json:"$proto"`
+	}
+	require.NoError(t, json.Unmarshal(r.frames[0].Payload, &escaped))
+	require.NotEmpty(t, escaped.Proto, "原件必须留在库里")
+	raw, err := base64.StdEncoding.DecodeString(escaped.Proto)
+	require.NoError(t, err)
+	round := &agentrewire.RpcNotification{}
+	require.NoError(t, proto.Unmarshal(raw, round))
+	assert.Equal(t, []byte{0x00, 0x01}, round.GetTerminalData().GetData())
+}
+
+// assertStoredFrameIs 断言这一行存的就是那条通知。
+//
+// 比的是**落库形态**（wireview 的视图），因为 payload 已经不是 protobuf 字节了
+// （2026-09-07-journal-payload-json.md）。两边都走生产那一侧的编解码：形状漂了这里
+// 会红，而不是靠测试自己抄一份形状。
+func assertStoredFrameIs(t *testing.T, want *agentrewire.RpcNotification, payload []byte) {
+	t.Helper()
+	wantMethod, wantParams, err := wireview.Notification(want)
+	require.NoError(t, err)
+	method, params, err := wireview.DecodeStoredFrame(payload)
+	require.NoError(t, err)
+	assert.Equal(t, wantMethod, method)
+	assert.JSONEq(t, string(wantParams), string(params))
+}
+
+// storedText 取出这一行存着的那条 text_delta 的正文。
+func storedText(t *testing.T, payload []byte) string {
+	t.Helper()
+	_, params, err := wireview.DecodeStoredFrame(payload)
+	require.NoError(t, err)
+	var view struct {
+		Event struct {
+			Text string `json:"text"`
+		} `json:"event"`
+	}
+	require.NoError(t, json.Unmarshal(params, &view))
+	return view.Event.Text
 }

@@ -108,9 +108,17 @@ type SessionSummary struct {
 
 func (*SessionSummary) TableName() string { return "agent_sessions" }
 
-// JournalFrame is one typed Protobuf RpcNotification replayed off the peer's
-// own notification log. Payload is an opaque Protobuf binary frame; readers
-// decode it with the local generated contract.
+// JournalFrame is one notification replayed off the peer's own notification log.
+//
+// Payload is a JSON object — {"method": ..., "params": {...}} — so that a row can
+// be read and searched with plain SQL (JSON_EXTRACT), which is the whole reason
+// this column is not the opaque Protobuf frame it used to be
+// (docs/specs/2026-09-07-journal-payload-json.md). A frame this side cannot
+// project is stored under a "$proto" key instead, carrying the original bytes
+// verbatim; wireview owns both directions of that shape.
+//
+// The wire is unaffected: peers still exchange Protobuf. Storage encoding is a
+// per-database decision (2026-09-05-transcript-storage-alignment.md 决策 7).
 //
 // 这三列既是身份也是主键（migrations/202609040108_agent_sessions.go）：
 // 帧按 (账号, 对话, seq) 聚簇存放，没有代理自增列。转录尾部因此是聚簇索引上的一段
@@ -122,7 +130,7 @@ type JournalFrame struct {
 	ConversationID  string `gorm:"column:conversation_id;type:char(36);not null;primaryKey"`
 	Seq             int64  `gorm:"column:seq;type:bigint;not null;primaryKey"`
 	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	Payload         []byte `gorm:"column:payload;type:longblob;not null"`
+	Payload         []byte `gorm:"column:payload;type:json;not null"`
 	// Createtime 记的是这一帧**发生**的时刻（Unix 毫秒），不是这台 server 存下它的
 	// 时刻。实时那一路两者只差一跳网络，补齐那一路差得很远——补齐成批到达，一条离线
 	// 两天的对话几百帧会落在同一毫秒里，拿收帧时刻当发生时刻，浏览器控制台上整段

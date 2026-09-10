@@ -8,11 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
-	"google.golang.org/protobuf/proto"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/wireview"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
@@ -131,7 +131,10 @@ func frame(seq int64, kind, text string) *agent_session_entity.JournalFrame {
 	default:
 		panic("unknown test event kind: " + kind)
 	}
-	payload, err := proto.Marshal(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{RuntimeEvent: event}})
+	// 走生产那一侧的编码器：夹具与 mirror_svc 落库用的是同一行代码，形状漂了这里
+	// 会跟着红，而不是自己造一份看起来对的载荷。
+	payload, err := wireview.EncodeStoredFrame(
+		&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{RuntimeEvent: event}})
 	if err != nil {
 		panic(err)
 	}
@@ -319,4 +322,52 @@ func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
 	require.Len(t, page.Frames, 2)
 	assert.EqualValues(t, 1_700_000_000_111, page.Frames[0].Createtime)
 	assert.EqualValues(t, 1_700_000_009_222, page.Frames[1].Createtime)
+}
+
+// Given 一页里夹着一条解不开的帧；When 翻这一页；Then 请求照常成功，解不开的那条
+// 以 journal.undecodable 出场，它前后的帧一条不少。
+//
+// 从前这里是 `return TranscriptPage{}, err`：一条坏帧把**整条对话的详情页**变成一次
+// 请求错误。坏的是一帧，不该由整页来赔。
+func TestTranscript_GivenAnUndecodableFrame_KeepsTheRestOfThePage(t *testing.T) {
+	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
+	broken := &agent_session_entity.JournalFrame{Seq: 7, Payload: []byte{0xff, 0xfe, 0xfd}}
+	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(5), defaultTranscriptLimit+1).
+		Return([]*agent_session_entity.JournalFrame{
+			frame(6, "text_delta", "前"),
+			broken,
+			frame(8, "text_delta", "后"),
+		}, nil)
+
+	page, err := svc.Transcript(ctx, TranscriptQuery{
+		UserID: 7, ConversationID: "conv-9", AfterSeq: 5,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Frames, 3)
+	assert.Equal(t, "runtime.event", page.Frames[0].Method)
+	assert.Equal(t, methodUndecodableFrame, page.Frames[1].Method)
+	assert.EqualValues(t, 7, page.Frames[1].Seq)
+	assert.Equal(t, "runtime.event", page.Frames[2].Method)
+	assert.EqualValues(t, 8, page.Cursor)
+}
+
+// 反向读那一路走的是另一个函数（transcriptTail 的 take），同样不该因为一帧塌掉。
+func TestTranscriptTail_GivenAnUndecodableFrame_KeepsTheTurn(t *testing.T) {
+	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
+	rows := newestFirst(turn(10))
+	rows[1] = &agent_session_entity.JournalFrame{Seq: rows[1].Seq, Payload: []byte{0x00, 0xff}}
+	// 一批就到头（3 行 < tailBatchRows），不会有第二次取。
+	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
+		Return(rows, nil)
+
+	page, err := svc.Transcript(ctx, TranscriptQuery{
+		UserID: 7, ConversationID: "conv-9", Backward: true,
+	})
+	require.NoError(t, err)
+	// 这一轮三条一条不少：坏的那条在原位出场为缺口帧，它前后两条照常投影。只数
+	// 缺口帧的话，「前后两条被一起吞掉」这个正是要防的情形照样绿。
+	assert.Equal(t, []int64{10, 11, 12}, seqsOf(page.Frames))
+	assert.Equal(t, methodUndecodableFrame, page.Frames[1].Method)
+	assert.Equal(t, methodRuntimeEvent, page.Frames[0].Method)
+	assert.Equal(t, methodRuntimeEvent, page.Frames[2].Method)
 }
