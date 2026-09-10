@@ -9,8 +9,8 @@ import (
 	"go.uber.org/zap"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
 
-	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 )
 
@@ -239,8 +239,8 @@ func (s *Sessions) replayMachineDeletes(ctx context.Context, m agent_session_rep
 }
 
 func isMethodNotFound(err error) bool {
-	var wireErr *relaywire.Error
-	return errors.As(err, &wireErr) && wireErr.Code == relaywire.CodeMethodNotFound
+	var wireErr *rpcerror.Error
+	return errors.As(err, &wireErr) && wireErr.Code == rpcerror.CodeMethodNotFound
 }
 
 // PurgeMachineDeleteTodos 清掉挂在一台机器上的全部删除待办。设备被撤销之后那些

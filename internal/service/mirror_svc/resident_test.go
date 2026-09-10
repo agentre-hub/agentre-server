@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
 
 	"github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
@@ -199,7 +200,7 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 			// 对端自己给出的错误码原样转回(老 daemon 对未知方法回 -32601);
 			// 一律折成 -32000 会让调用方分不出「这一次没删成」与「它这辈子都不认识
 			// 这个方法」。
-			var wireErr *relaywire.Error
+			var wireErr *rpcerror.Error
 			if errors.As(callErr, &wireErr) {
 				response.Body = &agentrewire.RpcFrame_Error{Error: &agentrewire.RpcError{
 					Code: wireErr.Code, Message: wireErr.Message, Details: wireErr.Details,
@@ -291,7 +292,7 @@ func (f *fakeDaemonNet) dispatch(
 		}
 		return f.peer.TranscriptImportExecute(ctx, request)
 	default:
-		return nil, &relaywire.Error{Code: relaywire.CodeMethodNotFound, Message: "Method not found"}
+		return nil, &rpcerror.Error{Code: rpcerror.CodeMethodNotFound, Message: "Method not found"}
 	}
 }
 

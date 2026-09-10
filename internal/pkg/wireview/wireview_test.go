@@ -137,18 +137,15 @@ func TestNotificationViewUsageObjectRetainsItsStableFields(t *testing.T) {
 	}}`, string(params))
 }
 
-// TestNotificationViewCoversEveryRuntimeEventCase 是这份手抄词表与 proto 之间的
-// 漂移守卫。
+// TestNotificationViewCoversEveryRuntimeEventCase 守的是「每条事件分支都投影得出来」。
 //
-// eventMessage 把 oneof 分支翻成 kind 判别值,是照着 .proto 手抄的第 N 份 —— 本仓
-// 不拥有 proto(只机械同步生成的 Go),所以这份副本删不掉,能做的是让它漂不了。
+// 手抄词表已经没有了:判别值写在 .proto 的 (agentre.wire.event_kind) 上,本包经
+// pkg/wire/eventkind 从 descriptor 读。但「读得到」不等于「投影得出来」—— 上游漏标
+// 一条新分支,eventkind.Of 就报不认识,于是 runtimeEventView 报错 → journalFrameView
+// 报错 → **整页转录取不出来**,而不是少一行。这条用例是本仓这一侧对那件事的兜底。
 //
-// 漏一个分支不是小事:eventMessage 返回 nil → runtimeEventView 报错 →
-// journalFrameView 报错 → **整页转录取不出来**。一条本仓没跟上的新事件,足以让
-// 那条会话的转录整个读不出来,而不是少一行。
-//
-// 所以这里不比对字符串清单(那只是把手抄再抄一遍),而是从生成的 descriptor 枚举
-// oneof,逐个真的走一遍投射。
+// 断言仍然从生成的 descriptor 枚举 oneof、逐个真的走一遍投射,不比对字符串清单 ——
+// 比对清单只是把手抄换个地方再写一遍。
 func TestNotificationViewCoversEveryRuntimeEventCase(t *testing.T) {
 	fields := (&agentrewire.RuntimeEventNotification{}).ProtoReflect().Descriptor().Oneofs().ByName("event").Fields()
 	require.Positive(t, fields.Len())

@@ -36,6 +36,22 @@ func notificationHead(notification *agentrewire.RpcNotification) (string, int64,
 	}
 }
 
+// isPreviewNotification 报这条通知是不是**预览帧**（协议 0.2.0）。
+//
+// 预览帧是逐片段增量与过场状态：不带 seq、不入对端日志、丢失即丢失，只用于即时呈现。
+// daemon 把它扇给这条会话的全部订阅者（portForLocked 返回 fanoutNotifier），镜像 attach
+// 之后也在其中 —— 所以镜像必须自己认出它并原样放过，而不是当成「没有号的持久帧」。
+func isPreviewNotification(notification *agentrewire.RpcNotification) bool {
+	switch payload := notification.GetPayload().(type) {
+	case *agentrewire.RpcNotification_RuntimeEvent:
+		return payload.RuntimeEvent.GetPreview()
+	case *agentrewire.RpcNotification_AutonomousTurnEvent:
+		return payload.AutonomousTurnEvent.GetPreview()
+	default:
+		return false
+	}
+}
+
 func setNotificationSeq(notification *agentrewire.RpcNotification, seq int64) bool {
 	if notification == nil {
 		return false

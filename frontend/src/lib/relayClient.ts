@@ -25,35 +25,8 @@ import {
   type AutonomousTurnStartedFrame,
   type TurnStartedFrame,
   type ProtobufRpcFrame,
-  type RuntimeEventNotificationFrame,
-  type EventKind,
-  EventAskUserQuestion,
-  EventAskUserQuestionAnswered,
-  EventCompactBoundary,
-  EventContextWindowUpdated,
-  EventDone,
-  EventError,
-  EventExecApprovalRequested,
-  EventExecApprovalResolved,
-  EventOutputActivity,
-  EventPermissionModeChanged,
-  EventPlanUpdated,
-  EventRetry,
-  EventRuntimeStatus,
-  EventSteerConsumed,
-  EventSubagentDone,
-  EventSubagentModel,
-  EventSubagentProgress,
-  EventSubagentStarted,
-  EventTextDelta,
-  EventThinkingDelta,
-  EventToolPermissionRequest,
-  EventToolPermissionResolved,
-  EventToolResult,
-  EventToolUseStart,
-  EventUsage,
-  EventUnrecognizedBlock,
-  EventUserMessage,
+  eventCaseOfKind,
+  eventKindOfCase,
   NotifyAutonomousTurnDone,
   NotifyAutonomousTurnEvent,
   NotifyAutonomousTurnStarted,
@@ -108,6 +81,16 @@ export interface NotificationHandlers {
    * 处理 —— 强制它们编一个数出来,编出来的只会是假的。
    */
   onEvent?: (frame: EventFrame, createtime?: number) => void;
+  /**
+   * **预览帧**里那条事件：逐 token 增量与过场状态，即时呈现用。
+   *
+   * 与 `onEvent` 分开一口，是因为两者说的不是同一件事，而消费方分得出来才不会把同一
+   * 段话渲染两遍：预览帧不带 seq、不入日志、丢失即丢失，只用于呈现；转录与游标的唯一
+   * 来源是持久帧（`onEvent`）。协议 0.2.0 的分工，与 Go 侧 remote.PreviewSink 同源。
+   *
+   * 不接这一口就等于丢弃预览帧 —— 那时转录仍然对，只是按**块**刷新而不是逐 token。
+   */
+  onPreviewEvent?: (frame: EventFrame, createtime?: number) => void;
   onRunResultDone?: (frame: RunResultDoneFrame, createtime?: number) => void;
   onAutonomousTurnStarted?: (
     frame: AutonomousTurnStartedFrame,
@@ -817,6 +800,19 @@ function decodeNotification(
       seq: body.seq,
       event: runtimeEventToViewEvent(body.event),
     };
+    // 预览帧走自己那一口。它**不带 seq**，因此也不该进 seq 闸门：闸门只对编了号的帧
+    // 成立，而这一路本来就不参与去重与游标推进（协议 0.2.0）。消费方拿它逐 token 呈现，
+    // 转录仍然只认持久帧。
+    if (body.preview) {
+      // seq 一并抹成 undefined，而不是把 proto3 的零值 0 透出去：预览帧**没有号**，
+      // 交给消费方一个 0 就是让它误以为这是「第 0 帧」。
+      const preview: EventFrame = { ...value, seq: undefined };
+      return {
+        conversationId: preview.conversationId,
+        seq: undefined,
+        deliver: (h, at) => h.onPreviewEvent?.(preview, at),
+      };
+    }
     return {
       conversationId: value.conversationId,
       seq: value.seq,
@@ -875,76 +871,6 @@ function decodeNotification(
   return null;
 }
 
-/** Protobuf `RuntimeEventNotification.event` oneof 的全部 case 名。 */
-type RuntimeEventCase = RuntimeEventNotificationFrame["event"]["case"];
-
-/**
- * oneof case 名 → `agentruntime.EventKind` 判别值。
- *
- * 两边**不是**同一套拼法，也没有可推导的规则：`toolCall` 对应的 kind 是
- * `tool_use_start`，`usageUpdate` 是 `usage`。所以这张表必须一条条对着
- * `event_wire.go` 里各 `MarshalJSON` 落的常量钉，不能靠 snake_case 转换糊过去。
- *
- * 类型标注是这张表唯一的机械保证，两头都吃紧：
- *
- *   - 键是 `RuntimeEventCase` —— Go 那边新增一个 oneof case，这里漏填就编译不过；
- *   - 值是 `EventKind` —— 写出一个词表外的字符串（曾经的 `"tool_call"`）同样
- *     编译不过。
- *
- * 少了后半截，错的判别值一路绿到线上：消费方的 `kindOf` 是断言不是校验，
- * `never` 穷尽检查够不着，最后在转录归约的 `default` 分支被当成未知事件铺成
- * 一坨 JSON —— 工具卡与提问卡就此从不渲染。
- */
-const EVENT_KINDS: Record<RuntimeEventCase, EventKind> = {
-  textDelta: EventTextDelta,
-  thinkingDelta: EventThinkingDelta,
-  outputActivity: EventOutputActivity,
-  permissionModeChanged: EventPermissionModeChanged,
-  retry: EventRetry,
-  contextWindowUpdated: EventContextWindowUpdated,
-  compactBoundary: EventCompactBoundary,
-  runtimeStatus: EventRuntimeStatus,
-  done: EventDone,
-  error: EventError,
-  userMessage: EventUserMessage,
-  toolCall: EventToolUseStart,
-  toolResult: EventToolResult,
-  steerConsumed: EventSteerConsumed,
-  userAskRequest: EventAskUserQuestion,
-  userAskResolved: EventAskUserQuestionAnswered,
-  toolPermissionRequest: EventToolPermissionRequest,
-  toolPermissionResolved: EventToolPermissionResolved,
-  execApprovalRequested: EventExecApprovalRequested,
-  execApprovalResolved: EventExecApprovalResolved,
-  subagentStarted: EventSubagentStarted,
-  subagentProgress: EventSubagentProgress,
-  subagentDone: EventSubagentDone,
-  subagentModel: EventSubagentModel,
-  usageUpdate: EventUsage,
-  planUpdated: EventPlanUpdated,
-  unrecognizedBlock: EventUnrecognizedBlock,
-};
-
-/**
- * 上面那张表的反向：判别值 → oneof case 名。回放路径（server 镜像的历史、中继
- * 补齐、往回续读）要把中间形状翻回 Protobuf 的 oneof 才能走同一条解帧路径。
- *
- * **就地反转生成，不手写第二份**。此前它是按 snake_case → camelCase 猜的，而
- * 上面那张表的注释写的正是「两边不是同一套拼法，也没有可推导的规则」：
- * `tool_use_start` 的 case 是 `toolCall`、`ask_user_question` 是 `userAskRequest`、
- * 它的答案是 `userAskResolved`。这三种因此在回放时翻成词表外的判别值，再翻回来
- * 就成了 `toolUseStart` 这种谁都不认得的东西 —— 归约器的 switch 落进 default，
- * 历史里的工具卡与提问卡铺成一坨 JSON，工具结果连挂靠的卡都没有、整块消失。
- * 实时帧不过这一跳，所以同一条对话「正在跑的那一轮好好的、翻上去全坏」。
- */
-const RUNTIME_EVENT_CASES: Readonly<Record<string, RuntimeEventCase>> =
-  Object.fromEntries(
-    Object.entries(EVENT_KINDS).map(([eventCase, kind]) => [
-      kind,
-      eventCase as RuntimeEventCase,
-    ]),
-  );
-
 /**
  * wire 上的 `bytes` 字段还原成载荷本身。
  *
@@ -972,13 +898,10 @@ function runtimeEventToViewEvent(
   for (const [key, value] of Object.entries(fields)) {
     if (value instanceof Uint8Array) fields[key] = decodeRawJSON(value);
   }
-  // 兜底成 case 名本身：运行期照样可能来一个比本仓新的 daemon，那时如实透出
-  // 一个词表外的判别值，比谎报成某个已知 kind 好 —— 消费方的 default 分支会
-  // 把它原样呈现。
-  return {
-    kind: EVENT_KINDS[eventCase as RuntimeEventCase] ?? eventCase,
-    ...fields,
-  };
+  // eventKindOfCase 认不出时兜底成 case 名本身：运行期照样可能来一个比本仓新的
+  // daemon，那时如实透出一个词表外的判别值，比谎报成某个已知 kind 好 —— 消费方的
+  // default 分支会把它原样呈现。
+  return { kind: eventKindOfCase(eventCase), ...fields };
 }
 
 /**
@@ -1114,6 +1037,8 @@ function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
             : "autonomousTurnEventNotification",
         conversationId,
         seq: n.seq,
+        // 日志里的每一条按定义都是持久帧:预览帧不带 seq、也从不入日志。
+        preview: false,
         event: viewEventToRuntimeEvent(
           value.event as Record<string, unknown>,
         ) as never,
@@ -1180,8 +1105,7 @@ function viewEventToRuntimeEvent(
   const { kind, ...fields } = event;
   // 词表外的判别值原样当 case 名交出去：运行期照样可能来一个比本仓新的 daemon，
   // 而 runtimeEventToViewEvent 的兜底也是原样透出 —— 两头都不改写，回放才是恒等的。
-  const eventCase =
-    typeof kind === "string" ? (RUNTIME_EVENT_CASES[kind] ?? kind) : "";
+  const eventCase = typeof kind === "string" ? eventCaseOfKind(kind) : "";
   return { case: eventCase, ...fields };
 }
 

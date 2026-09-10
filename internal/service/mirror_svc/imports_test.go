@@ -9,8 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
-
-	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
+	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
 )
 
 // ── 导入本地会话:够到那台机器的那条短连接 ───────────────────────────────────
@@ -72,8 +71,8 @@ func TestImports_MachineOffline_ReportsOffline(t *testing.T) {
 func TestImports_MethodNotFound_PreservesProtocolError(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
-	rig.peer.transcriptImportErr = &relaywire.Error{
-		Code: relaywire.CodeMethodNotFound, Message: "Method not found",
+	rig.peer.transcriptImportErr = &rpcerror.Error{
+		Code: rpcerror.CodeMethodNotFound, Message: "Method not found",
 	}
 	a := rig.replica(t, replicaA)
 
@@ -83,9 +82,9 @@ func TestImports_MethodNotFound_PreservesProtocolError(t *testing.T) {
 			return callErr
 		})
 
-	var wireErr *relaywire.Error
+	var wireErr *rpcerror.Error
 	require.ErrorAs(t, err, &wireErr)
-	assert.Equal(t, relaywire.CodeMethodNotFound, wireErr.Code)
+	assert.Equal(t, rpcerror.CodeMethodNotFound, wireErr.Code)
 }
 
 // Given 执行导入这一次真的写到了那台机器上;When 发 execute;

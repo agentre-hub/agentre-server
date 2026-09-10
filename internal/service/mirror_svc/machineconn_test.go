@@ -12,6 +12,8 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/protorpc"
+	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/pkg/wireversion"
@@ -70,11 +72,22 @@ func (d *recordingDialer) detachCount() int {
 	return d.detached
 }
 
+// newMachineConnForTest 装一条不经中继实际拨号的 machineConn：传输层是真的
+// relayFrameConn（帧照样经 dialer.ForwardClient 出去、经 WriteMessage 收回来），
+// 上面跑的是真的共享协议引擎。用例因此测的是本仓这条接缝，而不是引擎自己。
 func newMachineConnForTest(dialer RelayDialer, onNotify func(*agentrewire.RpcNotification)) *machineConn {
-	return &machineConn{
-		relay: dialer, channelID: "channel-1", timeout: time.Second, onNotify: onNotify,
-		pending: map[uint64]chan rpcResult{},
+	transport := newRelayFrameConn(context.Background(), dialer, relay_svc.Route{}, time.Second)
+	transport.channelID = "channel-1"
+	registry := protorpc.NewRegistry()
+	if onNotify != nil {
+		registry.RegisterNotification(func(_ context.Context, n *agentrewire.RpcNotification) { onNotify(n) })
 	}
+	conn := &machineConn{
+		transport: transport,
+		conn:      protorpc.NewConn(transport, registry, protorpc.WithCallTimeout(time.Second)),
+	}
+	go conn.conn.Serve(context.Background())
+	return conn
 }
 
 func decodeForwardedRequest(t *testing.T, forwarded forwardedFrame) *agentrewire.RpcFrame {
@@ -97,7 +110,7 @@ func writeResponse(t *testing.T, conn *machineConn, request *agentrewire.RpcFram
 		},
 	}})
 	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encoded))
+	require.NoError(t, conn.transport.WriteMessage(websocket.BinaryMessage, encoded))
 }
 
 func TestMachineConn_ConcurrentCallsCorrelateOutOfOrderBinaryResponses(t *testing.T) {
@@ -171,7 +184,7 @@ func TestMachineConn_ContextCancellationSendsTypedCancel(t *testing.T) {
 func TestMachineConn_CloseWakesPendingAndRejectsNewCalls(t *testing.T) {
 	dialer := newRecordingDialer()
 	conn := newMachineConnForTest(dialer, nil)
-	conn.detach = func() {
+	conn.transport.detach = func() {
 		dialer.mu.Lock()
 		defer dialer.mu.Unlock()
 		dialer.detached++
@@ -208,9 +221,9 @@ func TestMachineConn_TypedErrorsAndNotificationsRemainLossless(t *testing.T) {
 		Error: &agentrewire.RpcError{Code: 409, Message: "already gone", Details: details},
 	}})
 	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encodedError))
+	require.NoError(t, conn.transport.WriteMessage(websocket.BinaryMessage, encodedError))
 
-	var rpcErr *relaywire.Error
+	var rpcErr *rpcerror.Error
 	require.ErrorAs(t, <-errCh, &rpcErr)
 	assert.Equal(t, int32(409), rpcErr.Code)
 	assert.Equal(t, "already gone", rpcErr.Message)
@@ -221,7 +234,7 @@ func TestMachineConn_TypedErrorsAndNotificationsRemainLossless(t *testing.T) {
 		Notification: note,
 	}})
 	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encodedNote))
+	require.NoError(t, conn.transport.WriteMessage(websocket.BinaryMessage, encodedNote))
 	assert.True(t, proto.Equal(note, <-notifications))
 }
 
@@ -237,7 +250,7 @@ func TestMachineConn_MalformedFrameDoesNotPoisonTheNextResponse(t *testing.T) {
 	}()
 	request := decodeForwardedRequest(t, <-dialer.frames)
 
-	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, []byte{0xff, 0xff}))
+	require.NoError(t, conn.transport.WriteMessage(websocket.BinaryMessage, []byte{0xff, 0xff}))
 	writeResponse(t, conn, request,
 		&agentrewire.SessionListResponse{Sessions: []*agentrewire.SessionSummary{{ConversationId: conv202}}})
 
@@ -265,9 +278,9 @@ func TestMachineConn_ResponseMethodMustMatchRequest(t *testing.T) {
 		},
 	}})
 	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, encoded))
+	require.NoError(t, conn.transport.WriteMessage(websocket.BinaryMessage, encoded))
 
-	require.ErrorIs(t, <-errCh, relaywire.ErrResponseType)
+	require.ErrorIs(t, <-errCh, protorpc.ErrResponseType)
 }
 
 var _ RelayDialer = (*recordingDialer)(nil)

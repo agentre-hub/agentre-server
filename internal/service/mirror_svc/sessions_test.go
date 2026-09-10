@@ -11,9 +11,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 )
 
@@ -334,14 +334,14 @@ func TestDeleteOnMachine_MachineOffline_ReportsOffline(t *testing.T) {
 func TestDeleteOnMachine_MethodNotFound_PreservesProtocolError(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
-	rig.peer.deleteErr = &relaywire.Error{Code: relaywire.CodeMethodNotFound, Message: "Method not found"}
+	rig.peer.deleteErr = &rpcerror.Error{Code: rpcerror.CodeMethodNotFound, Message: "Method not found"}
 	a := rig.replica(t, replicaA)
 
 	err := NewSessions(a.sup).DeleteOnMachine(context.Background(), testUserID, testMachine, conv42)
 
-	var wireErr *relaywire.Error
+	var wireErr *rpcerror.Error
 	require.ErrorAs(t, err, &wireErr)
-	assert.Equal(t, relaywire.CodeMethodNotFound, wireErr.Code)
+	assert.Equal(t, rpcerror.CodeMethodNotFound, wireErr.Code)
 }
 
 // ── 设备被撤销:挂在它上面、永远执行不了的待办一并清掉 ────────────────────────
@@ -436,7 +436,7 @@ func TestReplayPendingDeletes_MachineStillOffline_KeepsTodos(t *testing.T) {
 func TestReplayPendingDeletes_MethodNotFound_DropsTodoAndReportsProtocolError(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
-	rig.peer.deleteErr = &relaywire.Error{Code: relaywire.CodeMethodNotFound, Message: "Method not found"}
+	rig.peer.deleteErr = &rpcerror.Error{Code: rpcerror.CodeMethodNotFound, Message: "Method not found"}
 	todos := newFakeTodos(todo(testUserID, testMachine, conv42))
 	agent_session_repo.RegisterDeleteTodo(todos)
 	a := rig.replica(t, replicaA)
@@ -452,7 +452,7 @@ func TestReplayPendingDeletes_MethodNotFound_DropsTodoAndReportsProtocolError(t 
 func TestReplayPendingDeletes_PeerFailedThisTime_KeepsTodoForTheNextPass(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves()
-	rig.peer.deleteErr = &relaywire.Error{Code: -32000, Message: "disk is gone"}
+	rig.peer.deleteErr = &rpcerror.Error{Code: -32000, Message: "disk is gone"}
 	todos := newFakeTodos(todo(testUserID, testMachine, conv42))
 	agent_session_repo.RegisterDeleteTodo(todos)
 	a := rig.replica(t, replicaA)

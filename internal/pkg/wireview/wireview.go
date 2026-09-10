@@ -8,6 +8,11 @@
 //
 // 投影的判据不在这里定：它是 frontend/src/lib/transcriptFrames.ts 那个归约器认得的
 // 事件词表，本包只负责把 typed 事件如实摊成那份词表里的 {kind, ...}。
+//
+// 判别值本身也不在这里定了：它写在 .proto 的 (agentre.wire.event_kind) 字段选项上，
+// 由 pkg/wire/eventkind 从 descriptor 读出来。本包从前有一份 27 分支的手抄 switch
+// —— 分支名与判别值没有可推导的规则（tool_call → tool_use_start），抄错编译器发现
+// 不了，页面上表现为那一类卡片整块不渲染。
 package wireview
 
 import (
@@ -16,10 +21,10 @@ import (
 	"errors"
 	"fmt"
 
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/eventkind"
 )
 
 // Notification 把一条 typed 通知投影成 (方法名, params)。认不出的通知报错而不是
@@ -84,8 +89,8 @@ func RuntimeEvent(frame *agentrewire.RuntimeEventNotification) (map[string]any, 
 	if frame == nil || frame.GetEvent() == nil {
 		return nil, errors.New("wireview: runtime event has no typed event")
 	}
-	kind, message := eventMessage(frame.GetEvent())
-	if message == nil {
+	kind, message, ok := eventkind.Of(frame)
+	if !ok {
 		return nil, fmt.Errorf("wireview: unsupported runtime event %T", frame.GetEvent())
 	}
 	event := messageMap(message.ProtoReflect())
@@ -159,67 +164,6 @@ func putNonzero[T comparable](out map[string]any, key string, value T) {
 	var zero T
 	if value != zero {
 		out[key] = value
-	}
-}
-
-func eventMessage(event any) (string, proto.Message) {
-	switch value := event.(type) {
-	case *agentrewire.RuntimeEventNotification_TextDelta:
-		return "text_delta", value.TextDelta
-	case *agentrewire.RuntimeEventNotification_ThinkingDelta:
-		return "thinking_delta", value.ThinkingDelta
-	case *agentrewire.RuntimeEventNotification_OutputActivity:
-		return "output_activity", value.OutputActivity
-	case *agentrewire.RuntimeEventNotification_PermissionModeChanged:
-		return "permission_mode_changed", value.PermissionModeChanged
-	case *agentrewire.RuntimeEventNotification_Retry:
-		return "retry", value.Retry
-	case *agentrewire.RuntimeEventNotification_ContextWindowUpdated:
-		return "context_window_updated", value.ContextWindowUpdated
-	case *agentrewire.RuntimeEventNotification_CompactBoundary:
-		return "compact_boundary", value.CompactBoundary
-	case *agentrewire.RuntimeEventNotification_RuntimeStatus:
-		return "runtime_status", value.RuntimeStatus
-	case *agentrewire.RuntimeEventNotification_Done:
-		return "done", value.Done
-	case *agentrewire.RuntimeEventNotification_Error:
-		return "error", value.Error
-	case *agentrewire.RuntimeEventNotification_UserMessage:
-		return "user_message", value.UserMessage
-	case *agentrewire.RuntimeEventNotification_ToolCall:
-		return "tool_use_start", value.ToolCall
-	case *agentrewire.RuntimeEventNotification_ToolResult:
-		return "tool_result", value.ToolResult
-	case *agentrewire.RuntimeEventNotification_SteerConsumed:
-		return "steer_consumed", value.SteerConsumed
-	case *agentrewire.RuntimeEventNotification_UserAskRequest:
-		return "ask_user_question", value.UserAskRequest
-	case *agentrewire.RuntimeEventNotification_UserAskResolved:
-		return "ask_user_question_answered", value.UserAskResolved
-	case *agentrewire.RuntimeEventNotification_ToolPermissionRequest:
-		return "tool_permission_request", value.ToolPermissionRequest
-	case *agentrewire.RuntimeEventNotification_ToolPermissionResolved:
-		return "tool_permission_resolved", value.ToolPermissionResolved
-	case *agentrewire.RuntimeEventNotification_ExecApprovalRequested:
-		return "exec_approval_requested", value.ExecApprovalRequested
-	case *agentrewire.RuntimeEventNotification_ExecApprovalResolved:
-		return "exec_approval_resolved", value.ExecApprovalResolved
-	case *agentrewire.RuntimeEventNotification_SubagentStarted:
-		return "subagent_started", value.SubagentStarted
-	case *agentrewire.RuntimeEventNotification_SubagentProgress:
-		return "subagent_progress", value.SubagentProgress
-	case *agentrewire.RuntimeEventNotification_SubagentDone:
-		return "subagent_done", value.SubagentDone
-	case *agentrewire.RuntimeEventNotification_SubagentModel:
-		return "subagent_model", value.SubagentModel
-	case *agentrewire.RuntimeEventNotification_UsageUpdate:
-		return "usage", value.UsageUpdate
-	case *agentrewire.RuntimeEventNotification_PlanUpdated:
-		return "plan_updated", value.PlanUpdated
-	case *agentrewire.RuntimeEventNotification_UnrecognizedBlock:
-		return "unrecognized_block", value.UnrecognizedBlock
-	default:
-		return "", nil
 	}
 }
 

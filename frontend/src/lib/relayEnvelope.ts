@@ -1,42 +1,14 @@
 /**
- * 中继通道信封：2 字节大端通道 ID 长度 + 通道 ID（UTF-8）+ 载荷。
+ * 中继信封在本宿主这一侧剩下的东西。
  *
- * 与服务端 `relay_svc.WrapEnvelope` / `UnwrapEnvelope` 同一个格式，两条链路共用。
- * 目标下沉到通道之后（决策 10），客户端那条连接上同时跑着多条通道，因此它也开始
- * 收发信封，而不再是裸载荷。
+ * 格式本身与它的校验归 `@agentre-hub/agentre-wire` 的 `relay-envelope` 所有:同一个
+ * 信封在 daemon、本仓服务端与浏览器三处跑,从前三份手写解析、三套校验互不相同,本侧
+ * 那份最松 —— 自报长度 0 照收(通道 ID 成空串、整段载荷当帧交出去),非法 UTF-8 被
+ * TextDecoder 静默换成 U+FFFD。中继上的每一帧都是别的设备发来的字节。
  *
- * 空载荷是合法的：它是「这条通道关了」的信号。
+ * 留在这里的只有 binaryPayload:那是浏览器 WebSocket 的平台细节,不是协议。
  */
-
-const CHANNEL_ID_MAX = (1 << 16) - 1;
-
-const encoder = new TextEncoder();
-const decoder = new TextDecoder();
-
-export function wrapEnvelope(channelId: string, frame: Uint8Array): Uint8Array {
-  const id = encoder.encode(channelId);
-  if (id.length === 0) throw new Error("relay: 通道 ID 不能为空");
-  if (id.length > CHANNEL_ID_MAX) throw new Error("relay: 通道 ID 过长");
-  const envelope = new Uint8Array(2 + id.length + frame.length);
-  envelope[0] = (id.length >> 8) & 0xff;
-  envelope[1] = id.length & 0xff;
-  envelope.set(id, 2);
-  envelope.set(frame, 2 + id.length);
-  return envelope;
-}
-
-export function unwrapEnvelope(envelope: Uint8Array): {
-  channelId: string;
-  frame: Uint8Array;
-} {
-  if (envelope.length < 2) throw new Error("relay: 信封比通道长度还短");
-  const length = (envelope[0] << 8) | envelope[1];
-  if (envelope.length < 2 + length) throw new Error("relay: 信封被截断");
-  return {
-    channelId: decoder.decode(envelope.subarray(2, 2 + length)),
-    frame: envelope.subarray(2 + length),
-  };
-}
+export { unwrapEnvelope, wrapEnvelope } from "@agentre-hub/agentre-wire";
 
 /** 把 WebSocket 收到的东西归一成字节。 */
 export function binaryPayload(data: unknown): Uint8Array {

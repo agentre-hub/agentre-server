@@ -1,33 +1,22 @@
 package sync_svc
 
-// 上行单条的处置结果。
+import "github.com/agentre-hub/agentre/pkg/syncwire"
+
+// 处置结果与拒绝原因的词表归共享契约 pkg/syncwire 所有 —— 它们是**线上取值**:
+// sync_ctr 把 PushItemResult.Reason 原样送给客户端,桌面端据它决定这一条是复活失败
+// 还是记进「没能同步的改动」。本包对它们做别名,调用点不用改。
+//
+// 判据本身写在契约里:凡是能拒掉一条的理由,都只拒那一条。整批拒是一个永久性的堵。
 const (
-	// PushStatusAccepted 基版本与该行当前版本相符（或该同步标识 server 从未见过）。
-	PushStatusAccepted = "accepted"
-	// PushStatusConflict 基版本与当前版本不符，或基版本为空但同步标识已存在。
-	// 本次上行照常生效（R4 后到者胜），但应答里回报被覆盖的版本与来源设备，
-	// 上行端据此落一条「被覆盖」记录（R5）。
-	PushStatusConflict = "conflict"
-	// PushStatusRejected 这一条没有生效，原因见 Reason。
-	PushStatusRejected = "rejected"
+	PushStatusAccepted = syncwire.PushStatusAccepted
+	PushStatusConflict = syncwire.PushStatusConflict
+	PushStatusRejected = syncwire.PushStatusRejected
 )
 
-// 单条拒绝的原因。
-//
-// **凡是能拒掉一条的理由，都只拒那一条。** 整批拒是一个永久性的堵：桌面端整批
-// 失败时一行都不出队，下一轮再发同一批、再被同一条拒掉，那台机器的上行队列从此
-// 不动——连 R6 的删除也传不出去。校验不通过的行以 rejected 回报，上行端据此把它
-// 移出队列并记进「没能同步的改动」（R5）。
 const (
-	// PushRejectReasonDeleted 该对象在 server 上已是墓碑。删除不会被复活（R6），
-	// 恢复动作因此明确失败（R5a），界面据此提供「按这份内容新建」——那是一个新的
-	// 同步标识，走正常上行。
-	PushRejectReasonDeleted = "deleted"
-	// PushRejectReasonKind 对象类型不属于同步组、与该同步标识已有行的类型不符，
-	// 或缺少该类型必需的自然键。
-	PushRejectReasonKind = "kind_invalid"
-	// PushRejectReasonPayload 载荷过不了 sync_entity.ValidatePayload 的守卫。
-	PushRejectReasonPayload = "payload_rejected"
+	PushRejectReasonDeleted = syncwire.PushRejectReasonDeleted
+	PushRejectReasonKind    = syncwire.PushRejectReasonKind
+	PushRejectReasonPayload = syncwire.PushRejectReasonPayload
 )
 
 // PushItem 是一次上行里的一条改动。

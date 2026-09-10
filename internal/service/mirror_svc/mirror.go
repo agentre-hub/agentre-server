@@ -411,6 +411,16 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		logger.Ctx(ctx).Warn("mirror typed notification unsupported")
 		return nil
 	}
+	// 预览帧就此打住,一个字节都不进镜像。
+	//
+	// 它必须挡在下面那条 seq 检查**之前**:那条 Warn 说的是「持久帧居然没有号」——
+	// 对持久帧是真异常,对预览帧是常态。协议 0.2.0 起 daemon 会把预览帧一并扇给订阅者,
+	// 不在这里认出它,一轮几千个 token 就是几千条 WARN,同一时间真正的告警全被淹掉。
+	//
+	// 内容不会因此丢:这一段正文随后由块定稿后的持久帧带来,那一条才是转录与游标的来源。
+	if isPreviewNotification(notification) {
+		return nil
+	}
 	ts, known := m.liveSession(conversationID)
 	if !known {
 		// 没保存过的对话:一个字都不落库。

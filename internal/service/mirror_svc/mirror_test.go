@@ -8,9 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/protobuf/proto"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
@@ -383,6 +387,38 @@ func runningSession(sid string, title string) *agentrewire.SessionSummary {
 }
 
 // ── 实时通知按 seq 落库 ─────────────────────────────────────────────────────
+
+// previewNotification 造一条**预览帧**：逐 token 的增量，按协议 0.2.0 不带 seq、不入日志。
+func previewNotification(sid, text string) *agentrewire.RpcNotification {
+	return &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{
+		RuntimeEvent: &agentrewire.RuntimeEventNotification{ConversationId: sid, Preview: true,
+			Event: &agentrewire.RuntimeEventNotification_TextDelta{TextDelta: &agentrewire.TextDelta{Text: text}}},
+	}}
+}
+
+// Given 协议 0.2.0 起 daemon 会把预览帧扇给这条会话的全部订阅者，镜像 attach 之后也在
+// 其中（daemon 的 portForLocked 返回 fanoutNotifier）；When 一轮里每个 token 都到达镜像；
+// Then 一行都不落库，**并且一条告警都不打**。
+//
+// 不落库这一半本来就成立（预览帧不带 seq，Apply 早就 return）。要守的是另一半：那条
+// return 前打的是 Warn「carries no seq, cannot be keyed」—— 对持久帧那是真异常，对预览帧
+// 是常态，于是一轮几千个 token 就是几千条 WARN。日志里淹掉的正是同一时间真正的告警。
+func TestApply_PreviewFrames_AreDroppedSilently(t *testing.T) {
+	r := newRig(t)
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	require.NoError(t, r.mirror.Sync(context.Background(), []SavedSession{{ConversationID: conv42}}))
+
+	// 观察窗口只罩住 Apply 那一段：装置在 Sync 里另有一条与本用例无关的告警
+	// （账号广播通道没配），把它算进来这条断言就说不清自己在守什么了。
+	core, logs := observer.New(zapcore.WarnLevel)
+	ctx := logger.WithContextLogger(context.Background(), zap.New(core))
+	for _, token := range []string{"你", "好", "呀"} {
+		require.NoError(t, r.mirror.Apply(ctx, previewNotification(conv42, token)))
+	}
+
+	require.Empty(t, r.seqs(), "预览帧一行都不该落库")
+	require.Zero(t, logs.Len(), "预览帧不带 seq 是常态，不是异常，不该打告警")
+}
 
 // Given 一条刚保存、对端日志还空着的对话;When 接入之后三条实时通知按序到达;
 // Then 它们按 seq 各落一行(账号 + 发起端指纹 + 会话标识齐全,typed payload 原样),

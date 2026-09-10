@@ -102,15 +102,14 @@ func (s *Supervisor) UpgradeMachine(
 	if s == nil {
 		return UpgradeResult{}, ErrMirrorUnavailable
 	}
-	conn, err := s.dial(ctx, machineKey{userID: userID, fingerprint: fingerprint}, nil)
+	// 这条连接是这次升级专用的短连接（上面那段），本方法是它唯一的使用者，所以预算直接
+	// 落在连接上：对端要先下载校验替换完才应答，沿用会话 RPC 的 15 秒就会把一次成功的
+	// 升级报成故障。常驻镜像上那些会话 RPC 仍旧按 Config.CallTimeout 走。
+	conn, err := s.dialWithTimeout(ctx, machineKey{userID: userID, fingerprint: fingerprint}, nil, upgradeCallTimeout)
 	if err != nil {
 		return UpgradeResult{}, err
 	}
 	defer conn.Close()
-	// 这条连接是这次升级专用的短连接（上面那段），本方法是它唯一的使用者，握手也已经
-	// 做完——此刻改它的调用预算不与任何人竞争。换掉的只是这一条，常驻镜像上那些会话
-	// RPC 仍旧按 Config.CallTimeout 走。
-	conn.timeout = upgradeCallTimeout
 	// Channel 有意不填：空串 = 「这台机器自己配着的那个通道」，控制台不必（也无从）
 	// 知道那台机器跟的是 stable 还是 beta。
 	resp, err := conn.AgentredSelfUpdate(ctx, &agentrewire.AgentredSelfUpdateRequest{Force: force})

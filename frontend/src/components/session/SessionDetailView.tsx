@@ -51,6 +51,7 @@ import {
   toTranscriptFrame,
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
+import { nextPreviewTail } from "@/components/session/previewTail";
 import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
 import {
@@ -323,6 +324,13 @@ export default function SessionDetailView({
     null,
   );
   const [events, setEvents] = useState<SessionEventFrame[]>([]);
+  /**
+   * 预览尾巴：这一刻还没定稿、只用于逐 token 呈现的那几帧（协议 0.2.0 的预览帧）。
+   *
+   * 它与 `events` 分开存，因为两者的寿命不同：`events` 是转录本身、只增不减；尾巴在
+   * 每个持久帧到达时清空。规则与理由都在 previewTail.ts。
+   */
+  const [previewTail, setPreviewTail] = useState<SessionEventFrame[]>([]);
   // 桌面端仍在场时写失败：表示该会话钉住的 agentred 当前不可用（历史可读、新写入停用）。
   const [pinnedAgentredUnavailable, setPinnedAgentredUnavailable] =
     useState(false);
@@ -415,6 +423,7 @@ export default function SessionDetailView({
     setSummary(null);
     setMirrorSummary(null);
     setEvents([]);
+    setPreviewTail([]);
     decisions.reset();
     turn.reset();
     liveTurn.reset();
@@ -469,6 +478,8 @@ export default function SessionDetailView({
       const kind = (f.event as { kind?: string } | undefined)?.kind;
       if (f.conversationId === sid) {
         setEvents((prev) => [...prev, toTranscriptFrame(f, at)]);
+        // 这一段正文定稿了：尾巴里攒着的预览此刻已经被它覆盖，留着就是渲染两遍。
+        setPreviewTail((prev) => nextPreviewTail(prev, false));
         // 计时也吃这条流:首字什么时候到、工具在跑的那几段不算生成,都只有帧说得清。
         liveTurn.noteFrame(kind);
         /*
@@ -508,6 +519,20 @@ export default function SessionDetailView({
       if (kind === "tool_permission_request" || kind === "ask_user_question") {
         decisions.requestWaitersRefresh();
       }
+    },
+    /**
+     * 预览帧：逐 token 呈现的那一路（协议 0.2.0）。
+     *
+     * 它不进 `events` —— 转录与游标的唯一来源是持久帧。它只进尾巴，随下一个持久帧
+     * 一起消失。计时也吃它：首字到底什么时候到，只有逐 token 这一路说得清；块边界
+     * 那一路量出来的「首字」是整块写完的时刻。轮末的权威数字仍由终态帧覆盖。
+     */
+    onPreviewEvent: (f, at) => {
+      if (f.conversationId !== sid) return;
+      setPreviewTail((prev) =>
+        nextPreviewTail(prev, true, toTranscriptFrame(f, at)),
+      );
+      liveTurn.noteFrame((f.event as { kind?: string } | undefined)?.kind);
     },
     onRunResultDone: (frame) => {
       turn.markTurnActive(false);
@@ -954,9 +979,20 @@ export default function SessionDetailView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sid],
   );
+  /**
+   * 喂给投影器的帧序列：定稿的转录 + 还没定稿的预览尾巴。
+   *
+   * 尾巴清空时数组会**变短**，投影器据此退回整段重算（见共享包 project 的 extended
+   * 判据）—— 正是要的：那一批预览帧不该留在增量状态里。逐 token 期间数组只增长，
+   * 仍走增量，所以每个 token 不会引发全表重算。
+   */
+  const framesForProjection = useMemo(
+    () => (previewTail.length === 0 ? events : [...events, ...previewTail]),
+    [events, previewTail],
+  );
   const projected = useMemo(
-    () => projector.project(events),
-    [projector, events],
+    () => projector.project(framesForProjection),
+    [projector, framesForProjection],
   );
   /**
    * 屏幕上那一份转录：一帧都还没有、而宿主交了草稿页刚发出去的那句话时，先摆它。

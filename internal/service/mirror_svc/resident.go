@@ -194,6 +194,18 @@ func (s *Supervisor) Follow(ctx context.Context, userID int64, fingerprint strin
 func (s *Supervisor) dial(
 	ctx context.Context, key machineKey, onNotify func(*agentrewire.RpcNotification),
 ) (*machineConn, error) {
+	return s.dialWithTimeout(ctx, key, onNotify, s.cfg.CallTimeout)
+}
+
+// dialWithTimeout 是 dial 的显式预算版本。会话 RPC 一律走 dial（Config.CallTimeout），
+// 只有本来就自己拨一条**专用短连接**的调用方才用得上它——目前只有一键升级：对端要先
+// 下载校验替换完才应答，沿用会话 RPC 的预算就会把一次成功的升级报成故障。
+//
+// 预算落在连接上而不是某一次调用的 ctx 上，是因为它同时是**转发**的预算：协议引擎的
+// FrameConn.WriteFrame 没有 ctx，中继那一跳的期限只能取自连接（见 relayframeconn.go）。
+func (s *Supervisor) dialWithTimeout(
+	ctx context.Context, key machineKey, onNotify func(*agentrewire.RpcNotification), timeout time.Duration,
+) (*machineConn, error) {
 	if s.protocolMismatchActive(ctx, key) {
 		return nil, ErrProtocolVersionMismatch
 	}
@@ -209,8 +221,7 @@ func (s *Supervisor) dial(
 	if onNotify == nil {
 		onNotify = func(*agentrewire.RpcNotification) {}
 	}
-	conn, response, err := dialMachine(ctx, s.relay, credential,
-		key, s.cfg.CallTimeout, onNotify)
+	conn, response, err := dialMachine(ctx, s.relay, credential, key, timeout, onNotify)
 	if err != nil {
 		if errors.Is(err, relay_svc.ErrDaemonOffline) {
 			return nil, ErrMachineOffline

@@ -1,5 +1,10 @@
-// Package relaywire encodes the typed Protobuf RPC frames carried as opaque
-// binary payloads by relay_svc. It owns no relay routing or WebSocket logic.
+// Package relaywire 编码 relay_svc 以不透明二进制载荷承载的 RPC 帧。它不拥有任何
+// 中继路由或 WebSocket 逻辑。
+//
+// 它**不再**定义错误类型与错误码:那些从前是桌面仓 rpcerror 的第二份声明,协议引擎
+// 搬进共享 module 之后由 pkg/wire/rpcerror 一份供两仓使用。请求/取消帧的编码同理,
+// 由 pkg/wire/protorpc 负责;这里只剩会话生命周期字面量与两个给中继自己用的帧编解码
+// 助手(relay_ctr 要在通道级失败时自己合成一帧错误)。
 package relaywire
 
 import (
@@ -12,8 +17,6 @@ import (
 )
 
 const (
-	CodeMethodNotFound int32 = -32601
-
 	SessionLifecycleRunning = "running"
 	SessionLifecycleIdle    = "idle"
 	// SessionLifecycleFailed 是「上一轮以故障收场」。它与 Interrupted 是两件事：
@@ -24,34 +27,6 @@ const (
 
 	DefaultSessionPullLimit = 200
 )
-
-var ErrResponseType = errors.New("relaywire: response type mismatch")
-
-// Error is a transport-neutral typed RPC failure. Details contains
-// method-specific Protobuf bytes when that method defines them.
-type Error struct {
-	Code    int32
-	Message string
-	Details []byte
-}
-
-func (e *Error) Error() string { return e.Message }
-
-func EncodeRequest(id uint64, method agentrewire.RpcMethod, payload proto.Message) ([]byte, error) {
-	encodedPayload, err := proto.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("relaywire: encode method %d payload: %w", method, err)
-	}
-	return EncodeFrame(&agentrewire.RpcFrame{Id: id, Body: &agentrewire.RpcFrame_Request{
-		Request: &agentrewire.Request{MethodId: uint32(method), EncodedPayload: encodedPayload},
-	}})
-}
-
-func EncodeCancel(requestID uint64) ([]byte, error) {
-	return EncodeFrame(&agentrewire.RpcFrame{Body: &agentrewire.RpcFrame_Cancel{
-		Cancel: &agentrewire.Cancel{RequestId: requestID},
-	}})
-}
 
 func EncodeFrame(frame *agentrewire.RpcFrame) ([]byte, error) {
 	if frame == nil || frame.GetBody() == nil {

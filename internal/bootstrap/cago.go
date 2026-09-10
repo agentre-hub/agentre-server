@@ -15,13 +15,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
+
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/database/redis"
 
 	"github.com/agentre-hub/agentre-server/internal/api/auth"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
-	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -469,8 +470,8 @@ func (m machineImports) WithPeer(
 }
 
 func isMethodNotFound(err error) bool {
-	var wireErr *relaywire.Error
-	return errors.As(err, &wireErr) && wireErr.Code == relaywire.CodeMethodNotFound
+	var wireErr *rpcerror.Error
+	return errors.As(err, &wireErr) && wireErr.Code == rpcerror.CodeMethodNotFound
 }
 
 type savedSessions struct {

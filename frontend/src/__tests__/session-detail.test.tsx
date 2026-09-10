@@ -246,6 +246,66 @@ describe("会话详情页", () => {
     expect(fakeClient.catchUp).toHaveBeenCalledWith("42", undefined);
   });
 
+  // Given 协议 0.2.0 把同一段正文发两次：逐 token 的预览帧（不带 seq），随后是块定稿
+  // 后带 seq 的持久帧，而持久文本块投影出来的判别值同样是 text_delta、载荷是**整段**；
+  // When 两级帧都到达这一屏；
+  // Then 用户先逐 token 看着它长出来，块定稿之后屏幕上仍然只有一份，不是两份。
+  //
+  // 两级都进转录就是 "你好你好"（桌面端实测过的 "onetwoonetwothreefourfive" 同源）。
+  // 断言落在**屏幕上的字**，不落在中间状态：中间状态对不对不重要，用户看见的对才重要。
+  it("streams preview tokens and hands them over to the durable frame without doubling", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return { frames: [], hasMore: false };
+      if (path === "/v1/agent-sessions") return { sessions: [] };
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+
+    renderPage();
+    await waitFor(() => expect(capturedOpts.onPreviewEvent).toBeTruthy());
+
+    // 逐 token：屏幕上要跟着长出来。
+    act(() => {
+      capturedOpts.onPreviewEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "你" },
+      });
+    });
+    expect(
+      await screen.findByText("你", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
+
+    act(() => {
+      capturedOpts.onPreviewEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "好" },
+      });
+    });
+    expect(
+      await screen.findByText("你好", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
+
+    // 块定稿：持久帧带来的是整段。屏幕上必须仍然只有一个「你好」。
+    act(() => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "你好" },
+        seq: 1,
+      });
+    });
+    expect(
+      await screen.findByText("你好", undefined, { timeout: 3_000 }),
+    ).toBeTruthy();
+    expect(screen.queryByText("你好你好")).toBeNull();
+  });
+
   // agentred 每次重启都会把非终态会话标成 interrupted（daemon.New 的
   // 「marked N non-terminal sessions interrupted after restart」），而 daemon 的
   // Attach 对 interrupted 一律回 ErrNoActiveTurn ——「那一轮的子进程随上一个 daemon

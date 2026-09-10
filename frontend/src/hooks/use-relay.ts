@@ -29,6 +29,8 @@ import type { RelayTicket } from "@/lib/relayTicket";
 export interface UseRelayChannelOptions {
   /** 第二个参数是这一帧发生的时刻，见 `NotificationHandlers.onEvent`。 */
   onEvent?: (frame: EventFrame, createtime?: number) => void;
+  /** 预览帧那一路（逐 token 呈现），见 `NotificationHandlers.onPreviewEvent`。 */
+  onPreviewEvent?: (frame: EventFrame, createtime?: number) => void;
   onRunResultDone?: (frame: RunResultDoneFrame, createtime?: number) => void;
   onAutonomousTurnStarted?: (
     frame: AutonomousTurnStartedFrame,
@@ -150,6 +152,8 @@ export function useRelayChannel(
           onStateChange: setRelayState,
           onHandshakeRejected: setHandshakeRejection,
           onEvent: (frame, at) => optsRef.current.onEvent?.(frame, at),
+          onPreviewEvent: (frame, at) =>
+            optsRef.current.onPreviewEvent?.(frame, at),
           onRunResultDone: (frame, at) =>
             optsRef.current.onRunResultDone?.(frame, at),
           onAutonomousTurnStarted: (frame, at) =>

@@ -7,17 +7,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
+
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
-
-	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 )
 
 // protocolVersionRejectionCode 复述 daemon 一侧 rpcerror.CodeProtocolVersion
 // (agentre/internal/pkg/rpcerror)：requireProtocolVersion 判定对端版本不合时,握手就是
 // 拿着这个 JSON-RPC 错误码被拒的。这里没有直接引用那个常量——它挂在 pkg/relaywire
 // 里,而这个包不在本次改动范围内(见 spec 决策 14 的落地边界),所以复述一份并注明来路,
-// 与 relaywire.CodeMethodNotFound 同样的做法(那个常量倒是已经在这一侧存在)。
+// 与 rpcerror.CodeMethodNotFound 同样的做法(那个常量倒是已经在这一侧存在)。
 const protocolVersionRejectionCode int32 = -32006
 
 // ErrProtocolVersionMismatch 是「daemon 判定这次握手的协议版本不合,拒绝了它」。
@@ -38,7 +38,7 @@ const protocolMismatchBackoff = 30 * time.Minute
 // 这次握手」（daemon 的 requireProtocolVersion / 桌面端 peer registry 的同名判定）——
 // 而不是网络故障、超时或别的 RPC 错误。
 func isProtocolVersionMismatch(err error) bool {
-	var wireErr *relaywire.Error
+	var wireErr *rpcerror.Error
 	return errors.As(err, &wireErr) && wireErr.Code == protocolVersionRejectionCode
 }
 

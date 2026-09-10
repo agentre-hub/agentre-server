@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
+	"github.com/agentre-hub/agentre/pkg/wire/wirelimits"
 )
 
 // ErrCredentialRevoked 由生命周期回调返回，表示这条连接背后的凭据已被撤销、服务端
@@ -35,27 +38,21 @@ type Hooks struct {
 	OnHeartbeat func() error
 }
 
-// MaxPayloadBytes 是一条 RPC 载荷的上限，**整条链路共用这一个数**：桌面端 ↔ agentred
-// 的直连（agentre 的 protorpc.MaxFrameBytes）、浏览器接入这一侧、以及 daemon 那条中继
-// 链路，三处必须同源。
+// MaxPayloadBytes / MaxEnvelopeBytes 取自 pkg/wire 的共享常量,本仓不再各写一份
+// 字面量。
 //
-// 三处曾经不同源：直连与 daemon 侧是 16 MiB，服务端这里是 10 MiB。后果不是「大一点的
-// 请求失败了」——超限时 gorilla 回 1009 并让读循环出错，于是**整条物理连接**被拆掉，
-// 而 daemon 那条链路上跑着那台机器的全部虚拟通道，所有会话一起断线重连。
+// 三处曾经不同源(桌面端直连与 daemon 侧 16 MiB,服务端这里 10 MiB)。后果不是
+// 「大一点的请求失败了」—— 超限时 gorilla 回 1009 并让读循环出错,于是**整条物理
+// 连接**被拆掉,而 daemon 那条链路上跑着那台机器的全部虚拟通道,所有会话一起断线
+// 重连。从前靠两仓各一条对着字面量的守卫盯着;如今取的是同一个常量,漂移不再可能。
 //
-// 取小的那个数（10 MiB）而不是大的：中继上跑的是别的设备发来的字节，不是本机可信输入。
-const MaxPayloadBytes int64 = 10 << 20
-
-// MaxEnvelopeBytes 是信封头的余量：2 字节长度 + 通道 ID（对侧 relaytransport 的
-// maxRelayChannelIDLength 是 128）。
-//
-// **两个端点都要加它。** 从前只有 daemon 那侧加：客户端那条收的是裸载荷，一条连接
-// 一条通道，信封由服务端替它套上。目标下沉到通道之后（决策 10），客户端那条连接上
-// 同时跑着多条通道，它自己也开始收发信封（relay_svc.WrapEnvelope / UnwrapEnvelope），
-// 因此两侧的读上限同为「载荷预算 + 一个信封头」——少给这一份余量，一份刚好 10 MiB
-// 的合法载荷会只因为带了信封就被 1009 打掉，而打掉的是整条连接，上面所有通道一起
-// 陪葬。
-const MaxEnvelopeBytes int64 = 2 + 128
+// **两个端点都要加信封那一份余量。** 目标下沉到通道之后(决策 10),客户端那条连接
+// 上同时跑着多条通道,它自己也开始收发信封 —— 少给这一份,一份刚好顶格的合法载荷会
+// 只因为带了信封就被 1009 打掉,而打掉的是整条连接,上面所有通道一起陪葬。
+const (
+	MaxPayloadBytes  = wirelimits.MaxPayloadBytes
+	MaxEnvelopeBytes = relayenvelope.MaxEnvelopeBytes
+)
 
 // DaemonReadLimit / ClientReadLimit 是两个端点各自的读上限，由上面两个数推出来，
 // 不另外写字面量。

@@ -296,6 +296,67 @@ describe("RelayClient Protobuf RPC boundary", () => {
     await expect(pending).resolves.toMatchObject({ sessions: [] });
   });
 
+  // Given 0.2.0 把帧分成两级：预览帧（逐 token 增量，不带 seq、不入日志）与持久帧
+  // （块级，带 seq）。持久文本块投影出来的还是 text_delta，载荷是**整段**文本，而
+  // 本站的归约器对 text_delta 一律追加。
+  // When 一条预览帧到达；
+  // Then 它不能进转录 —— 否则同一段话被追加两次（桌面端实测过的
+  // "onetwoonetwothreefourfive"）。本站暂时整条丢掉预览帧：正文因此按块刷新而不是
+  // 逐 token，但它是对的；逐 token 呈现要单开一条预览通道，那是另一轮。
+  it("routes preview frames to their own port so the transcript is not appended twice", async () => {
+    const events: unknown[] = [];
+    const previews: unknown[] = [];
+    const { client, socket } = setup({
+      onEvent: (event) => events.push(event),
+      onPreviewEvent: (event) => previews.push(event),
+    });
+    await authenticate(client, socket);
+    socket.receive(
+      ProtobufRpcCodec.encode({
+        id: 0n,
+        body: {
+          case: "runtimeEventNotification",
+          conversationId: CID,
+          seq: 0,
+          preview: true,
+          event: { case: "textDelta", text: "one" },
+        },
+      }),
+    );
+    socket.receive(
+      ProtobufRpcCodec.encode({
+        id: 0n,
+        body: {
+          case: "runtimeEventNotification",
+          conversationId: CID,
+          seq: 1,
+          preview: false,
+          event: { case: "textDelta", text: "one" },
+        },
+      }),
+    );
+
+    // 转录那一口只收到持久帧那一条 —— 两条都收就是同一段话渲染两遍。
+    await vi.waitFor(() =>
+      expect(events).toEqual([
+        {
+          conversationId: CID,
+          seq: 1,
+          event: { kind: "text_delta", text: "one" },
+        },
+      ]),
+    );
+    // 预览帧不是被丢掉，而是走了自己那一口：逐 token 呈现靠它。seq 留空 —— 它本来
+    // 就不带号，也不参与游标推进。
+    expect(previews).toEqual([
+      {
+        conversationId: CID,
+        seq: undefined,
+        event: { kind: "text_delta", text: "one" },
+      },
+    ]);
+  });
+
   it("delivers typed Protobuf notifications without exposing wire bytes", async () => {
     const events: unknown[] = [];
     const { client, socket } = setup({
@@ -309,6 +370,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
           case: "runtimeEventNotification",
           conversationId: CID,
           seq: 1,
+          preview: false,
           event: { case: "textDelta", text: "hello" },
         },
       }),
@@ -351,6 +413,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
           case: "runtimeEventNotification",
           conversationId: CID,
           seq: 2,
+          preview: false,
           event: { case: "textDelta", text: "第一句" },
         },
       }),

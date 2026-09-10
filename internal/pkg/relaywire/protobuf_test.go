@@ -4,29 +4,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
-
-	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 )
 
-func TestEncodeRequestUsesStableMethodIDAndBinaryPayload(t *testing.T) {
-	encoded, err := EncodeRequest(73, agentrewire.RpcMethod_RPC_METHOD_SESSION_PULL,
-		&agentrewire.SessionPullRequest{ConversationId: "conv-42", Cursor: 9, Limit: 200})
-	require.NoError(t, err)
-	require.NotEqual(t, byte('{'), encoded[0], "Protobuf frame must not be a JSON carrier")
-
-	frame, err := DecodeFrame(encoded)
-	require.NoError(t, err)
-	require.Equal(t, uint64(73), frame.GetId())
-	require.Equal(t, uint32(agentrewire.RpcMethod_RPC_METHOD_SESSION_PULL), frame.GetRequest().GetMethodId())
-
-	var request agentrewire.SessionPullRequest
-	require.NoError(t, proto.Unmarshal(frame.GetRequest().GetEncodedPayload(), &request))
-	require.Equal(t, "conv-42", request.GetConversationId())
-	require.Equal(t, int64(9), request.GetCursor())
-	require.Equal(t, int32(200), request.GetLimit())
-}
-
+// EncodeRequest 那条编码用例随实现一起搬走了：请求/取消帧现在由共享协议引擎
+// pkg/wire/protorpc 编,它在自己的 module 里有用例。「carrier 是二进制、method ID
+// 稳定」这条性质仍然被守着,位置在 mirror_svc 的 decodeForwardedRequest —— 那里断言
+// 的是真的经中继发出去的那一帧。
 func TestDecodeFrameRejectsMalformedBinary(t *testing.T) {
 	_, err := DecodeFrame([]byte{0xff, 0xff})
 	require.Error(t, err)

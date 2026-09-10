@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	goredis "github.com/redis/go-redis/v9"
@@ -19,6 +18,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
 )
 
 var (
@@ -430,42 +431,18 @@ func splitRouteValue(value string) (instanceID, connID string) {
 	return instanceID, connID
 }
 
-// WrapEnvelope 把一帧套上通道信封：2 字节通道 ID 长度 + 通道 ID + 载荷。
+// WrapEnvelope / UnwrapEnvelope 转发共享实现。格式与校验由 pkg/wire/relayenvelope
+// 拥有 —— 从前 daemon、本仓与浏览器各写一份解析,三套校验互不相同,而中继上跑的是
+// 别的设备发来的字节,最松的那一份决定了实际的下限。
 //
-// 两条链路共用这一个格式。目标下沉到通道之后（决策 10），客户端那条链路上一条
-// 物理连接同时跑多条通道，因此它也开始收发信封，而不再是裸载荷。
+// 名字留在本包:调用方说的是「中继的信封」,不必知道它住在哪个 module。
 func WrapEnvelope(channelID string, frame []byte) ([]byte, error) {
-	if channelID == "" {
-		return nil, errors.New("relay channel ID is required")
-	}
-	if len(channelID) > 1<<16-1 {
-		return nil, errors.New("relay channel ID exceeds envelope limit")
-	}
-	envelope := make([]byte, 2+len(channelID)+len(frame))
-	envelope[0] = byte(len(channelID) >> 8)
-	envelope[1] = byte(len(channelID))
-	copy(envelope[2:], channelID)
-	copy(envelope[2+len(channelID):], frame)
-	return envelope, nil
+	return relayenvelope.Wrap(channelID, frame)
 }
 
-// UnwrapEnvelope 拆开通道信封。空载荷是合法的：它是「这条通道关了」的信号。
+// UnwrapEnvelope 拆开通道信封。空载荷是合法的:它是「这条通道关了」的信号。
 func UnwrapEnvelope(envelope []byte) (string, []byte, error) {
-	if len(envelope) < 2 {
-		return "", nil, errors.New("relay envelope is shorter than channel length")
-	}
-	channelLength := int(envelope[0])<<8 | int(envelope[1])
-	if channelLength == 0 {
-		return "", nil, errors.New("relay envelope has no channel ID")
-	}
-	if len(envelope) < 2+channelLength {
-		return "", nil, errors.New("relay envelope is shorter than channel ID")
-	}
-	channelID := string(envelope[2 : 2+channelLength])
-	if !utf8.ValidString(channelID) {
-		return "", nil, errors.New("relay envelope channel ID is not UTF-8")
-	}
-	return channelID, envelope[2+channelLength:], nil
+	return relayenvelope.Unwrap(envelope)
 }
 
 func routeKey(accountID int64, fingerprint string) string {

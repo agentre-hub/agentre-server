@@ -150,6 +150,9 @@ async function relayEvents(
           case: "runtimeEventNotification",
           conversationId: CID,
           seq: index + 1,
+          // 这条穿透用例走的是转录那条路,所以喂的是**持久帧**:预览帧现在被
+          // decodeNotification 整条丢掉(见 relayClient 里的说明)。
+          preview: false,
           event,
         },
       }),

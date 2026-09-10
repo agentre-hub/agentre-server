@@ -55,6 +55,8 @@ const TICKET_RENEW_MARGIN_MS = 30_000;
 export interface RelayListener {
   /** 第二个参数是这一帧发生的时刻，见 `NotificationHandlers.onEvent`。 */
   onEvent?: (frame: EventFrame, createtime?: number) => void;
+  /** 预览帧那一路（逐 token 呈现），见 `NotificationHandlers.onPreviewEvent`。 */
+  onPreviewEvent?: (frame: EventFrame, createtime?: number) => void;
   onRunResultDone?: (frame: RunResultDoneFrame, createtime?: number) => void;
   onAutonomousTurnStarted?: (
     frame: AutonomousTurnStartedFrame,
@@ -438,6 +440,7 @@ export class RelayClientPool {
       // 现取而不是把手上这张记下来：这条通道的握手会一次次重做，而票只活两分钟。
       credential: () => this.freshTicket().then((t) => t.accessToken),
       onEvent: fanout<[EventFrame, number?]>((l) => l.onEvent),
+      onPreviewEvent: fanout<[EventFrame, number?]>((l) => l.onPreviewEvent),
       onRunResultDone: fanout<[RunResultDoneFrame, number?]>(
         (l) => l.onRunResultDone,
       ),
