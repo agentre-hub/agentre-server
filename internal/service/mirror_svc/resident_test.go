@@ -75,6 +75,8 @@ type fakeDaemonNet struct {
 	// rejectHandshake 为真时,握手一律以 -32006(协议版本不匹配)拒绝,不看实际协议
 	// 版本是否匹配 —— 用来在测试里复现「对端判定版本不合」而不必真的造两个不同构建。
 	rejectHandshake bool
+	// forwardBudget 是最近一帧转发到达中继时还剩多少期限,见 lastForwardBudget。
+	forwardBudget time.Duration
 }
 
 func newFakeDaemonNet(peer *fakeRelay) *fakeDaemonNet {
@@ -134,6 +136,9 @@ func (f *fakeDaemonNet) AttachClient(_ context.Context, _ relay_svc.Route, write
 func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, channelID string, _ int, frame []byte) error {
 	f.mu.Lock()
 	ch := f.channels[channelID]
+	if deadline, ok := ctx.Deadline(); ok {
+		f.forwardBudget = time.Until(deadline)
+	}
 	f.mu.Unlock()
 	if ch == nil {
 		return fmt.Errorf("%w: unknown channel %s", relay_svc.ErrForwardFailed, channelID)
@@ -346,6 +351,15 @@ func (f *fakeDaemonNet) rejectHandshakeForProtocolVersion() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.rejectHandshake = true
+}
+
+// lastForwardBudget 是最近一帧转发到达中继时还剩多少期限。这条期限取自**连接**
+// （relayFrameConn 拿它当 WriteFrame 的 ctx 预算），所以它就是「这条连接给了多少
+// 预算」的可观察面。
+func (f *fakeDaemonNet) lastForwardBudget() time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.forwardBudget
 }
 
 func (f *fakeDaemonNet) counts() (int, int, int) {

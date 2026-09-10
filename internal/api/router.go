@@ -8,6 +8,7 @@ import (
 	"github.com/cago-frame/cago/server/mux"
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/agentre-hub/agentre-server/internal/api/portforward"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/controller/accountchan_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/agent_session_ctr"
@@ -16,6 +17,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/engine_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/healthz_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/passkey_ctr"
+	"github.com/agentre-hub/agentre-server/internal/controller/portforward_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
 	"github.com/agentre-hub/agentre-server/internal/controller/release_ctr"
@@ -29,6 +31,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
@@ -44,6 +48,10 @@ type RouterDeps struct {
 	// MachineUpgrader 是控制台一键升级够到那台机器的实现。留给测试注入自己那份；
 	// 为空时控制器落到本进程那份常驻镜像（mirror_svc.Default()）。
 	MachineUpgrader device_ctr.MachineUpgrader
+	// PortForward 是这个副本手里那份端口转发连接池。留给测试注入自己那份；为空时
+	// 取 portforward_svc.Default()——它未装配时是 nil，意思是「这个部署没有端口
+	// 转发」，路由层据此答「此刻没有这条能力」，而不是去拨一个不存在的中继。
+	PortForward portforward_ctr.Forwarder
 	// Redis 是鉴权中间件要用的那台：jti 黑名单与中继票据的焚毁记号都从它派生。
 	// 留给测试注入自己那台；为空时取全局默认单例（与上面两项同一约定）。
 	Redis *goredis.Client
@@ -327,6 +335,34 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 这一条同时承载账号信号：普通通道跑 RPC，保留通道（relay_svc.SignalChannelID）
 	// 推 sync_version / mirror_changed / device_presence。/v1/account/channel 已删除。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)
+
+	// 设备端口转发（规格 2026-09-09-console-port-forward-host）：
+	// /fw/<device_id>/<port>/<被转发应用自己的路径>。
+	//
+	// **只挂 SessionAuth，不挂 CSRF**（决策 5）。本仓其余每一处 SessionAuth 后面都紧
+	// 跟着 CSRF，这是第一处不跟的，理由是被转发的应用自己的写请求不可能带控制台的
+	// CSRF token——挂上就等于禁掉转发下的一切 POST。这条选择把被转发应用放进了控制台
+	// 的同源里，射程（GET 全可达、CSRF 结构性失效、relay ticket 把射程扩到整个账号）
+	// 写在规格的「安全」一节，那里是它唯一的记录处。
+	//
+	// 裸 gin 而不是 mux.Bind：mux.Meta 是 struct tag，装不下通配尾段；而这条路径是裸
+	// 字节转发，本来就没有任何请求 / 响应结构体可声明（Hard invariant）。
+	//
+	// 通配收的是 /fw/ 之下的**全部**形状，形状对不对由控制器判。少收一点（比如
+	// /fw/:device/:port/*rest）的话，/fw/12 会落到 SPA 兜底上拿到 200 + index.html，
+	// 在浏览器里是一张白屏而状态码正常（决策 10）；而 gin 的路由树不允许同一段上既有
+	// :param 又有 *catchAll，想两条都挂是挂不上的。
+	var forwarder portforward_ctr.Forwarder
+	switch {
+	case r.PortForward != nil:
+		forwarder = r.PortForward
+	case portforward_svc.Default() != nil:
+		// 未装配时 Default() 是 nil。**不能**无条件赋给接口：那样得到的是一个非 nil
+		// 的接口装着一个 nil 指针，控制器里那句「没装配」的判据就永远不成立了。
+		forwarder = portforward_svc.Default()
+	}
+	portForwardCtr := portforward_ctr.New(device_svc.Default(), relaySvc, forwarder)
+	g.Group("/", middleware.SessionAuth()).Any(portforward.RoutePattern, portForwardCtr.Forward)
 
 	return nil
 }

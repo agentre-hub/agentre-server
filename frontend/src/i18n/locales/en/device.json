@@ -165,5 +165,21 @@
       "downloadFailedTitle": "Could not fetch the new version",
       "downloadFailedBody": "The download or its checksum failed. The current agentred was not touched."
     }
+  },
+  "portForward": {
+    "loadFailed": "Could not load port mappings. {{message}}",
+    "actionFailed": "That did not work. {{message}}",
+    "open": "Open in a new tab",
+    "copyDone": "Address copied",
+    "copyFailed": "Could not copy the address",
+    "add": {
+      "port": "Port",
+      "name": "Name",
+      "submit": "Add",
+      "cancel": "Cancel",
+      "invalidPort": "Enter a port number between 1 and 65535.",
+      "portTaken": "This port already has a mapping on this device.",
+      "failed": "Could not add the mapping. {{message}}"
+    }
   }
 }

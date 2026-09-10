@@ -165,5 +165,21 @@
       "downloadFailedTitle": "没能取到新版本",
       "downloadFailedBody": "下载或校验没过，当前这个 agentred 一个字节都没动。"
     }
+  },
+  "portForward": {
+    "loadFailed": "读不到这台设备的端口映射。{{message}}",
+    "actionFailed": "这次操作没成。{{message}}",
+    "open": "在新标签页打开",
+    "copyDone": "地址已复制",
+    "copyFailed": "复制地址失败",
+    "add": {
+      "port": "端口",
+      "name": "名称",
+      "submit": "新增",
+      "cancel": "取消",
+      "invalidPort": "端口号要填 1 到 65535 之间的整数。",
+      "portTaken": "这台设备上这个端口已经有映射了。",
+      "failed": "新增映射失败。{{message}}"
+    }
   }
 }

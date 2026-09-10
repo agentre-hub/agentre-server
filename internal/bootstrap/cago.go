@@ -32,6 +32,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/oauth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/passkey_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/release_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/saved_session_svc"
@@ -417,7 +418,18 @@ func registerSessionMirror(instanceID string, signer *jwt.Signer) {
 	// 工作区多端同步 R14 / R18 + 会话镜像决策 7：撤销一台设备时的三件连带清理分属
 	// 两个域，device_svc 只认那个窄接口，由这里拼齐。
 	device_svc.SetDeviceDataPurger(revokePurger{sync: sync_svc.Default(), mirror: sessions})
+	// 控制台的端口转发（规格 2026-09-09-console-port-forward-host）：连接池自成一个
+	// 域，只从这份常驻上借「拨一条专用连接」这一件事。它刻意不要 Redis 租约（决策 3），
+	// 与上面那份常驻的排他性不变量正相反，所以不住在 mirror_svc 里。
+	//
+	// 结构上满足窄接口即可，两个 service 谁都不 import 谁；这里是唯一同时认识两边的
+	// 地方，也就是组合根该干的活。
+	portforward_svc.SetDefault(portforward_svc.New(portforward_svc.Config{}, supervisor))
 }
+
+// 端口转发的拨号面由那份常驻提供：签凭据、走中继、握手，它全都已经会了。**结构上**
+// 满足，不靠任何一侧 import 另一侧——这条断言是它唯一的守卫。
+var _ portforward_svc.MachineDialer = (*mirror_svc.Supervisor)(nil)
 
 // sessionMirror / machineSessionDeleter 把 saved_session_svc 的保存 / 删除接到 mirror_svc 上。
 // 接口在消费侧（saved_session_svc）声明、实现在 mirror_svc，两个 service 谁都不 import 谁；

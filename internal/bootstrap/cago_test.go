@@ -17,6 +17,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/service/passkey_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/release_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
@@ -105,6 +106,21 @@ func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
 	}, signer)
 
 	assert.NotNil(t, passkey_svc.Default(), "RegisterDefaults 必须装配通行密钥服务")
+}
+
+// 端口转发的连接池与镜像那份常驻同一个失败模式：没人装配时 portforward_svc.Default()
+// 是 nil，而 /fw/ 那条路由第一次被打开就空指针 panic——只在生产上 panic，单测自己
+// 会 New 一个池，整套测试永远绿。
+func TestRegisterDefaults_InstallsPortForwardPool(t *testing.T) {
+	testutils.Redis(t)
+	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	assert.NoError(t, err)
+	portforward_svc.SetDefault(nil)
+	t.Cleanup(func() { portforward_svc.SetDefault(nil) })
+
+	RegisterDefaults(&ServerConfig{}, signer)
+
+	assert.NotNil(t, portforward_svc.Default(), "RegisterDefaults 必须装配端口转发连接池")
 }
 
 // RP ID 与允许的 origin 缺省由 public_url 推导：绝大多数部署前后端同域同端口，

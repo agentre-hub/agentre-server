@@ -27,6 +27,7 @@ import { Card } from "@/components/ui/card";
 import { StatusMark } from "@/components/console";
 import type { StatusTone } from "@/components/console";
 import { AddDeviceGuide } from "@/components/AddDeviceGuide";
+import { DevicePortForward } from "@/components/devices/DevicePortForward";
 import {
   DeviceUpgradePanel,
   DeviceVersionBadge,
@@ -416,6 +417,24 @@ function DeviceExpandDetail({
             </p>
           )}
         </div>
+      )}
+      {/*
+        端口转发（规格 2026-09-09 决策 11）：外框归本仓，与「对话」那一节同形
+        （同一条 border-t 分隔线）；标题与行的渲染归共享包。两类设备都答得出
+        portForward.*（wire 的 host contract 同时列进 desktop 与 agentred），
+        所以入口与「对话」同一条判定。
+      */}
+      {(isAgentred || isDesktop) && (
+        <DevicePortForward
+          deviceId={device.id}
+          fingerprint={device.fingerprint}
+          offline={!device.online}
+          offlineDetail={
+            device.last_seen_at > 0
+              ? formatRelativeTime(device.last_seen_at, locale)
+              : undefined
+          }
+        />
       )}
     </div>
   );

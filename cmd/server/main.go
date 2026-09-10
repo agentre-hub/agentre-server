@@ -147,6 +147,11 @@ func main() {
 		// 机器租约当场让出，接手的副本不必等一整个 TTL。注册在 mux 之前，于是
 		// 关闭时排在它之后——先不再收请求，再停镜像。
 		Registry(task.MirrorResident()).
+		// 端口转发连接池同理：它也不在 Start 里建（那份池在 internal/bootstrap 里
+		// 就建好了），这里只为拿到 CloseHandle。同样注册在 mux 之前，于是关闭时
+		// 排在它之后——先不再收新的转发请求，再关掉池里每一条连接，中继上那些
+		// 订阅当场摘掉，不必等进程被 SIGKILL。
+		Registry(task.PortForwardResident()).
 		Registry(cago.FuncComponent(web.MountSPA)).
 		RegistryCancel(mux.HTTP(deps.Router)).
 		// 中继排空**必须**注册在 mux 之后:cago 按注册逆序关组件,于是它排在 mux
