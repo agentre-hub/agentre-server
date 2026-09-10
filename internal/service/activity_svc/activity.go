@@ -169,14 +169,14 @@ type ProjectCount struct {
 // SettingsView 是设置页那一行开关。
 type SettingsView struct {
 	ActivityStatsEnabled bool `json:"activity_stats_enabled"`
-	// LastReportAt 是最近一次**成功拉取**的时刻（Unix 毫秒），0 = 从未拉过，取自
+	// LastPullAt 是最近一次**成功拉取**的时刻（Unix 毫秒），0 = 从未拉过，取自
 	// user_settings.activity_last_pull_at。
 	//
 	// 它刻意不取 activity_stats_enabled_at（最近一次开启）：一个半年前开了开关、上周
 	// 断掉的账号会因此显示「最近一次上报：半年前」。也不取 agent_activity_daily 的
 	// MAX(updatetime)：一台一周没干活的机器每轮都在正常上报空结果，那个值却停在一周前。
 	// 这个数字存在的全部理由是让用户看出管子断没断。
-	LastReportAt int64 `json:"last_report_at"`
+	LastPullAt int64 `json:"last_pull_at"`
 	// SavedConversations 是账号里**已保存的对话**条数——设置页上「已保存的对话」那一段。
 	//
 	// 它与活跃统计是两件事，摆在同一个面板里是因为它们是同一条隐私边界的两侧：一条

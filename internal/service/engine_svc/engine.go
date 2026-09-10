@@ -83,9 +83,9 @@ type BackendWriteInput struct {
 	OpenClawDefaultModel  *string
 	OpenClawSessionMode   *string
 	CLIPath               *string
-	// DeviceID 是这个后端的运行设备指纹（决策 5：必填）。它落在既有列
+	// DeviceFingerprint 是这个后端的运行设备指纹（决策 5：必填）。它落在既有列
 	// sync_objects.agentred_fingerprint 上，不是 agent_backend 载荷里的一个键。
-	DeviceID *string
+	DeviceFingerprint *string
 }
 
 type CLIByDevice struct {
@@ -112,10 +112,10 @@ type BackendView struct {
 	OpenClawSessionMode   string        `json:"openclaw_session_mode"`
 	RefCount              int           `json:"ref_count"`
 	CLIByDevice           []CLIByDevice `json:"cli_by_device"`
-	// DeviceID 读自 sync_objects.agentred_fingerprint。agent_backend 这一 kind 不在
+	// DeviceFingerprint 读自 sync_objects.agentred_fingerprint。agent_backend 这一 kind 不在
 	// 上行的指纹非空校验里（只有 project_location / agent_backend_cli 受约束），
 	// 所以没登记设备的行是合法的，读回来如实为空。
-	DeviceID string `json:"device_id"`
+	DeviceFingerprint string `json:"device_fingerprint"`
 }
 
 type CLIOverlayView struct {
@@ -278,7 +278,7 @@ func (s *engineSvc) ListBackends(ctx context.Context, userID int64) ([]BackendVi
 		case sync_entity.KindAgentBackend:
 			if b, ok := decodeBackend(row); ok {
 				view := backendView(row.SyncID, b)
-				view.DeviceID = row.AgentredFingerprint
+				view.DeviceFingerprint = row.AgentredFingerprint
 				out = append(out, view)
 			}
 		}
@@ -298,7 +298,7 @@ func (s *engineSvc) CreateBackend(ctx context.Context, in BackendWriteInput) (*B
 	if err := validateBackendWrite(ctx, b, in); err != nil {
 		return nil, err
 	}
-	fingerprint := strings.TrimSpace(*in.DeviceID)
+	fingerprint := strings.TrimSpace(*in.DeviceFingerprint)
 	out, err := s.saveBackend(ctx, in.UserID, newSyncID(s.now()), nil, b, fingerprint)
 	if err != nil {
 		return nil, err
@@ -321,7 +321,7 @@ func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*B
 	if err := validateBackendWrite(ctx, b, in); err != nil {
 		return nil, err
 	}
-	fingerprint := strings.TrimSpace(*in.DeviceID)
+	fingerprint := strings.TrimSpace(*in.DeviceFingerprint)
 	out, err := s.saveBackend(ctx, in.UserID, row.SyncID, row, b, fingerprint)
 	if err != nil {
 		return nil, err
@@ -352,7 +352,7 @@ func (s *engineSvc) saveBackend(ctx context.Context, userID int64, id string, ro
 	}
 	accountchan_svc.BroadcastBestEffort(ctx, userID, v)
 	out := backendView(id, b)
-	out.DeviceID = fingerprint
+	out.DeviceFingerprint = fingerprint
 	out.CLIByDevice = []CLIByDevice{}
 	return &out, nil
 }
@@ -567,7 +567,7 @@ func applyBackend(b *backendPayload, in BackendWriteInput) {
 }
 func validBackend(b backendPayload, in BackendWriteInput) bool {
 	return strings.TrimSpace(b.Name) != "" && strings.TrimSpace(b.Type) != "" &&
-		in.DeviceID != nil && strings.TrimSpace(*in.DeviceID) != ""
+		in.DeviceFingerprint != nil && strings.TrimSpace(*in.DeviceFingerprint) != ""
 }
 
 func validateBackendWrite(ctx context.Context, b backendPayload, in BackendWriteInput) error {
@@ -577,7 +577,7 @@ func validateBackendWrite(ctx context.Context, b backendPayload, in BackendWrite
 	if !validBackend(b, in) {
 		return i18n.NewError(ctx, code.InvalidParameter)
 	}
-	return requireActiveAccountDevice(ctx, in.UserID, strings.TrimSpace(*in.DeviceID))
+	return requireActiveAccountDevice(ctx, in.UserID, strings.TrimSpace(*in.DeviceFingerprint))
 }
 
 // requireActiveAccountDevice 判「所选设备在编辑期间被撤销」：指纹在这个账号下查不到，

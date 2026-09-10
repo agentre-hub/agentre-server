@@ -51,7 +51,7 @@ const SERVER_TODAY = "2026-08-28";
 function settingsResponse(over: Record<string, unknown> = {}) {
   return {
     activity_stats_enabled: true,
-    last_report_at: Date.now() - 12 * 60_000,
+    last_pull_at: Date.now() - 12 * 60_000,
     saved_conversations: 128,
     today: SERVER_TODAY,
     devices: [

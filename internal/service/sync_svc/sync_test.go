@@ -1385,13 +1385,12 @@ func TestGetAvatar_GivenStoredHash_ThenReturnsContent(t *testing.T) {
 // 语句(INSERT … ON DUPLICATE KEY UPDATE … LAST_INSERT_ID 再 SELECT LAST_INSERT_ID)。
 // api/sync 允许一批 500 条，于是一次 Push 在**同一个外层事务里**要发上千次往返。
 //
-// 更要命的是锁:那条 INSERT … ON DUPLICATE KEY UPDATE 跑在外层事务内,
-// sync_account_seqs 里该账号那一行的排他锁**从第一条 item 一直持有到整批提交**。
-// 同账号两台设备并发上行因此完全串行。
-//
 // NextVersion(ctx, userID, n) 的批量参数本来就是为这件事准备的(它返回这一批里最大
-// 的那个版本号),只是从没被用过。整批只取一次,并且取在外层事务**之前**——行锁于是
-// 只被持有一次往返的时间。
+// 的那个版本号),只是从没被用过。整批只取一次,往返于是只剩一次。
+//
+// 取号本身仍在外层事务里,那一条不能省(见
+// TestPush_ThenVersionsAreAllocatedInsideTheCommittingTransaction):行锁持到提交是
+// 「版本号顺序 == 提交顺序」的全部依据。省掉的是往返次数,不是锁。
 func TestPush_GivenManyItems_ThenTakesTheWholeVersionBlockAtOnce(t *testing.T) {
 	convey.Convey("一批多条只取一次版本号", t, func() {
 		ctx, m, svc := setupSyncTest(t)
@@ -1418,6 +1417,51 @@ func TestPush_GivenManyItems_ThenTakesTheWholeVersionBlockAtOnce(t *testing.T) {
 			[]int64{out.Results[0].Version, out.Results[1].Version, out.Results[2].Version},
 			"块里的版本号必须按 item 顺序递增发放")
 		assert.Len(t, saved, 3)
+		assert.NoError(t, m.sql.ExpectationsWereMet())
+	})
+}
+
+// 版本号必须在**提交这批写入的那个事务里**取。
+//
+// sync_account_seqs 上那一行的行锁持到事务提交，因此只要取号发生在事务内，「谁先
+// 取到号」与「谁先提交」就是同一个顺序。下行只认这一个顺序：ListSince 按
+// version > cursor 取，Pull 把游标推到本页见过的最高版本。取号挪到事务之前，两件事
+// 各自成序，于是有这个交错：
+//
+//	副本 A 取到 v100，开始一个 500 条的长事务；
+//	副本 B 取到 v101，先提交；
+//	设备拉到 v101，游标存 101；
+//	A 随后提交 v100 —— 这一行对这台设备永远不会再被投递。
+//
+// 这一层测不出那个交错本身：仓储是 mock，行锁与并发提交都不在场。能测、也必须测的
+// 是让交错不可能发生的那个机制——取号与写入同在一个事务里。
+func TestPush_ThenVersionsAreAllocatedInsideTheCommittingTransaction(t *testing.T) {
+	convey.Convey("取版本号取在提交这批写入的事务里", t, func() {
+		ctx, m, svc := setupSyncTest(t)
+		onlineDevice(m)
+		expectTx(m)
+		m.object.EXPECT().Find(gomock.Any(), testUserID, gomock.Any()).Return(nil, nil).Times(2)
+
+		var allocatedInTx []bool
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).DoAndReturn(
+			func(ctx context.Context, _, _ int64) (int64, error) {
+				allocatedInTx = append(allocatedInTx, hubtest.InTransaction(ctx))
+				return 5, nil
+			})
+		var savedInTx []bool
+		m.object.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, _ *sync_entity.SyncObject) error {
+				savedInTx = append(savedInTx, hubtest.InTransaction(ctx))
+				return nil
+			}).Times(2)
+
+		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{projectItem("sync-a", 0), projectItem("sync-b", 0)}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, []bool{true}, allocatedInTx,
+			"版本号取在事务外，取号顺序就不再是提交顺序，先取到号的那次提交晚了就漏投")
+		assert.Equal(t, []bool{true, true}, savedInTx)
 		assert.NoError(t, m.sql.ExpectationsWereMet())
 	})
 }

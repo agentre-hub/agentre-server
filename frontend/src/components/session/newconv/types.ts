@@ -22,7 +22,7 @@ export interface NewConvAgent {
     backend_type?: string;
     availability: string;
     current?: boolean;
-    is_local_reference?: boolean;
+    device_unspecified?: boolean;
   }[];
 }
 
@@ -64,7 +64,7 @@ export function targetSummary(
 ): string {
   if (agent.has_available_target) {
     const current = agent.exec_targets.find((x) => x.current);
-    const device = current?.is_local_reference
+    const device = current?.device_unspecified
       ? t("overview.thisDevice")
       : (current?.device_name ?? "");
     return t("overview.currentTarget", { device });
@@ -73,7 +73,7 @@ export function targetSummary(
   // 把它当理由等于每个 Agent 都写着「网页派活跳过」，什么都没说。
   const blocking =
     agent.exec_targets.find(
-      (x) => x.availability !== "available" && !x.is_local_reference,
+      (x) => x.availability !== "available" && !x.device_unspecified,
     ) ?? agent.exec_targets[0];
   if (!blocking) return t("overview.noAvailableTarget");
   const reason = availabilityReasonKey(blocking.availability);

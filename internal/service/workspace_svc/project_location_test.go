@@ -215,9 +215,9 @@ func TestSetProjectLocation_GivenNoExistingRow_ThenCreatesWithTheNaturalKeyOnCol
 	mObj.EXPECT().Find(ctx, int64(7), "proj-1").Return(
 		liveOrgRow(1, sync_entity.KindProject, "proj-1", `{"name":"后端"}`), nil)
 	mObj.EXPECT().FindLocationByNaturalKey(ctx, int64(7), "proj-1", "fp-1").Return(nil, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(401), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(401), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	got, err := svc.SetProjectLocation(ctx, SetProjectLocationInput{
@@ -250,9 +250,9 @@ func TestSetProjectLocation_GivenExistingRow_ThenUpdatesItInPlace(t *testing.T) 
 		liveOrgRow(1, sync_entity.KindProject, "proj-1", `{"name":"后端"}`), nil)
 	mObj.EXPECT().FindLocationByNaturalKey(ctx, int64(7), "proj-1", "fp-1").Return(existing, nil)
 	mObj.EXPECT().Find(ctx, int64(7), "pl-1").Return(existing, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(402), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(402), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	got, err := svc.SetProjectLocation(ctx, SetProjectLocationInput{
@@ -330,9 +330,9 @@ func TestDeleteOrgObject_GivenProjectLocation_ThenTombstoned(t *testing.T) {
 
 	mObj.EXPECT().Find(ctx, int64(7), "pl-1").Return(
 		locationRow(5, "pl-1", "proj-1", "fp-1", "/srv/x"), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(403), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(403), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
@@ -451,7 +451,7 @@ func TestAccountProjects_GivenNoAgentredAtAll_ThenEveryProjectIsUnconfigured(t *
 // ── 「未配置」角标与「网页真能不能派活」必须是同一个判据 ──────────────────────
 //
 // 决策 9 当初写的判据是「桌面端不参与，因为 web 派活时桌面端那一档本来就跳过」。
-// **那句依据是错的**：跳过的是 `IsLocalReference` 那一档（backend 行没写运行设备，
+// **那句依据是错的**：跳过的是 `DeviceUnspecified` 那一档（backend 行没写运行设备，
 // AvailabilityNoDevice），不是桌面端这一类设备。一台已配对、在线、上报过本机路径的
 // 桌面端，在 WebDispatchPlan 里拿到的是 AvailabilityAvailable，cwd 就取自上报组
 // （locationsFor）。

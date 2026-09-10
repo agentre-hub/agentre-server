@@ -66,7 +66,7 @@
     "agents": {
       "title": "Agent 使用排行",
       "all": "全部 Agent →",
-      "empty": "还没有 Agent。它们在桌面端建，登记设备后同步过来。"
+      "empty": "这段时间还没有 Agent 跑过对话。"
     },
     "backends": {
       "title": "后端与模型",

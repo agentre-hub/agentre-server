@@ -158,27 +158,37 @@ func TestSaveObject_GivenNoRow_ThenPlainInsertWithoutOnDuplicateKey(t *testing.T
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// UPDATE 没命中、INSERT 又撞上身份键 = 库里那一行的版本不比本次小，本次上行是 R4 的
-// 竞败方。这是预期内的正常路径（并发的另一次上行抢先落了更新的一版），吞掉。
-func TestSaveObject_GivenIdentityConflict_ThenSwallowedAsLostVersionRace(t *testing.T) {
+// UPDATE 没命中、INSERT 又撞上身份键 = 库里那一行的版本不比本次小。这**不是**一条
+// 正常路径，不能吞。
+//
+// 曾经的读法是「本次上行是 R4 的竞败方，并发的另一次上行抢先落了更新的一版」，据此
+// 返回 nil。取号收回写入事务之后（sync_svc.Push）这个局面在同一个账号里出现不了：
+// sync_account_seqs 那一行的排他锁持到提交，先取到号的一定先提交，落后的那次拿到的
+// 版本号更大、UPDATE 必然命中。因此走到这里只说明有个不变量真的坏了。
+//
+// 而吞掉它的代价是最坏的一种：这一行从来没落库，Save 却返回成功，Push 于是回给设备
+// 一句 Accepted 加一个库里根本不存在的版本号——上行内容就此消失，两端都以为写成功了。
+// 一个数据库错误不该被翻译成一次成功。
+func TestSaveObject_GivenIdentityConflict_ThenErrorIsLoud(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
+	identityConflict := &mysqldriver.MySQLError{
+		Number:  1062,
+		Message: "Duplicate entry '7-p1' for key 'sync_objects.uk_sync_objects_identity'",
+	}
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE `sync_objects` SET")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `sync_objects`")).
-		WillReturnError(&mysqldriver.MySQLError{
-			Number:  1062,
-			Message: "Duplicate entry '7-p1' for key 'sync_objects.uk_sync_objects_identity'",
-		})
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `sync_objects`")).WillReturnError(identityConflict)
 	mock.ExpectRollback()
 
-	assert.NoError(t, r.Save(ctx, &sync_entity.SyncObject{
+	err := r.Save(ctx, &sync_entity.SyncObject{
 		UserID: 7, Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{}`, Version: 9,
-	}))
+	})
+	assert.ErrorIs(t, err, identityConflict)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

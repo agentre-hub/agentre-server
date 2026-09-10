@@ -29,7 +29,7 @@
   },
   "machine": {
     "offline": "Offline",
-    "empty": "No conversations on this machine yet.",
+    "empty": "No conversations on this machine yet",
     "connecting": "Connecting",
     "unreachable": "Unreachable",
     "offlineSince": "Offline · {{time}}"
@@ -38,6 +38,11 @@
     "save": "Save",
     "delete": "Delete",
     "menu": "Conversation actions"
+  },
+  "saveFailed": {
+    "manual": "Couldn't save “{{title}}” to your account.",
+    "onStart": "“{{title}}” is running, but it couldn't be saved to your account — the list on the left can't show it yet.",
+    "retry": "Save again"
   },
   "save": {
     "title": "Save this conversation to your account?",

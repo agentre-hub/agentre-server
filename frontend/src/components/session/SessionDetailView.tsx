@@ -187,6 +187,22 @@ export interface SessionDetailViewProps {
    */
   initialUserText?: string;
   /**
+   * 这条对话属于哪个 Agent —— **宿主已经知道的那一份**（草稿页刚挑的那个）。
+   *
+   * 与 `initialTitle` / `initialUserText` 同一条路子：那一屏手里现成的东西，没有理由
+   * 让用户在这里再等一圈网络。名字要两条链式的异步才解得开（先由镜像行 / `session.list`
+   * 认出 agentSyncId，再拿它去账号清单换名字与头像），期间抬头一个字都说不出。
+   *
+   * 只是**种子**，不改判定：身份一落地就以实况为准（见下面 `agent` 那处的取舍）。
+   * 给不出时（点左栏一行、从 URL 直接进来）照旧自己解，不猜。
+   */
+  initialAgent?: {
+    sync_id: string;
+    name: string;
+    avatar_color?: string;
+    avatar_icon?: string;
+  };
+  /**
    * 宿主页面级的那簇控件，摆在详情头部的最右端（嵌入形态才有）。
    *
    * 桌面 Chat 把转录上方那两条带并成一条之后，壳不再画 52px 顶栏，连接态与
@@ -230,6 +246,7 @@ export default function SessionDetailView({
   initialTitle,
   initialTurnStartedAt,
   initialUserText,
+  initialAgent,
   initialRow,
   headerRight,
   onMarkedRead,
@@ -1256,7 +1273,18 @@ export default function SessionDetailView({
     />
   ) : null;
 
-  const modelControl = (
+  /**
+   * 底栏那颗模型 pill。**这条对话是谁还没解开时不摆**（`identity` 为 null）：
+   * 它认的是 identity 上的 providerKey / modelKey，而「两格皆空」在这套三态里是一个
+   * 有名字的态（跟随 Agent 绑定，脸上那枚 👤）—— 空窗里两格当然是空的，摆出去就是
+   * 拿「还不知道」冒充一次配置事实，等真钉的模型到了再换掉。
+   *
+   * 与头部的项目那一格同一条规矩（解不出就不摆这一维）。少的那一段里也没什么可做：
+   * 发送本来就要 `summary` 才走得动，而那一刻 identity 必然已经非空。还顺带堵掉一处
+   * 不只是好看不好看的事 —— 那一段里改模型写失败要回滚，回滚的落点正是这份假的
+   * 「跟随绑定」。
+   */
+  const modelControl = identity ? (
     <SessionModelControl
       backendType={summary?.backendType ?? ""}
       catalog={pickerCatalog}
@@ -1266,7 +1294,7 @@ export default function SessionDetailView({
       onChange={changeModelTarget}
       note={modelTargetNote}
     />
-  );
+  ) : null;
 
   /**
    * 这条对话叫什么。派生走 lib/sessionView 的 sessionTitle —— 索引与总览都走那一处，
@@ -1283,9 +1311,22 @@ export default function SessionDetailView({
     ? sessionTitle(identity, t)
     : (initialTitle?.trim() ?? "") || `#${sid.slice(0, 8)}`;
 
-  const agent = identity?.agentSyncId
+  /**
+   * 这条对话的 Agent。**实况优先、宿主那份种子垫底**（与 `identity` 同一条规矩）。
+   *
+   * 种子只在这条对话还没自己说出它属于谁、或说出来的正是同一个时才算数：身份落地
+   * 后若指向另一个 Agent（或明说没有），那是实况，种子让位 —— 它是为了填掉空窗，
+   * 不是为了盖住答案。
+   */
+  const resolvedAgent = identity?.agentSyncId
     ? (agents.find((a) => a.sync_id === identity.agentSyncId) ?? null)
     : null;
+  const seededAgent =
+    initialAgent &&
+    (!identity?.agentSyncId || identity.agentSyncId === initialAgent.sync_id)
+      ? initialAgent
+      : null;
+  const agent = resolvedAgent ?? seededAgent;
 
   /**
    * 这条对话归哪个项目。
@@ -1305,14 +1346,24 @@ export default function SessionDetailView({
     : null;
 
   /**
-   * 名字还在路上：**已知**这条对话有 Agent（agentSyncId 在手），只是账号的 Agent
-   * 清单还没落地。转录只要有消息就先铺出来，不等这个名字（内容比抬头重要），所以
+   * 名字还在路上。转录只要有消息就先铺出来，不等这个名字（内容比抬头重要），所以
    * 这段空窗真实存在 —— 期间摆中性抬头就会闪一下再换成真名。
    *
-   * 清单问过之后仍解不出（老会话、或那个 Agent 已不在账号里）不算空窗：那是终局，
-   * 照旧退回中性抬头。
+   * 两条异步各自到齐才解得开，因此空窗有两半：
+   *
+   *   - **已知**这条对话有 Agent（agentSyncId 在手），只是账号的 Agent 清单还没落地。
+   *   - 这条对话**是谁**还没解开（`identity` 为 null）：账号镜像那一行还没认领回来、
+   *     中继的 `session.list` 也还没回来。此刻 `agentSyncId` 取不出，不是因为这条
+   *     对话没有 Agent，而是因为什么都还不知道 —— 把这两件事当成一件，交接那一拍
+   *     （草稿页递过来 `initialUserText`、`seeded` 就地铺出用户那句话与三点）抬头
+   *     就顶着「Assistant」和一枚「A」方块，等身份解开再换成真名与真头像。
+   *
+   * 问过之后仍解不出不算空窗，那是终局，照旧退回中性抬头：老会话的镜像行上根本没有
+   * agentSyncId（identity 在手而那一格是空的），或清单落地后那个 Agent 已不在账号里。
    */
-  const agentPending = Boolean(identity?.agentSyncId) && !agentsSettled;
+  const agentPending = identity
+    ? Boolean(identity.agentSyncId) && !agentsSettled
+    : true;
 
   /**
    * 头部与转录共用同一枚头像，走共享包的 AgentAvatar（与桌面端 chat.tsx 同一枚
@@ -1367,6 +1418,7 @@ export default function SessionDetailView({
       sid={sid}
       identity={identity}
       agent={agent}
+      agentPending={agentPending}
       project={
         project && {
           name: project.name,

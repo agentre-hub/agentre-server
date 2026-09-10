@@ -28,6 +28,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
@@ -148,7 +149,7 @@ func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*Authoriz
 		Platform:          in.Platform,
 		Version:           in.Version,
 		IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
-		ExpiresAt:         now + s.cfg.UserCodeTTL.Milliseconds(),
+		ExpiresAt:         now + s.cfg.FlowTTL.Milliseconds(),
 		Createtime:        now,
 	}
 	if err := device_flow_repo.DeviceFlow().Create(ctx, code); err != nil {
@@ -165,7 +166,7 @@ func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*Authoriz
 		VerificationURI:         base,
 		VerificationURIComplete: base + "?user_code=" + uc,
 		Interval:                int(s.cfg.PollInterval / time.Second),
-		ExpiresIn:               int(s.cfg.UserCodeTTL / time.Second),
+		ExpiresIn:               int(s.cfg.FlowTTL / time.Second),
 	}, nil
 }
 
@@ -191,10 +192,24 @@ const (
 )
 
 // OAuthError 包装 OAuth 标准错误字面量。controller 转换为对应 HTTP 状态。
-type OAuthError struct{ Code, Description string }
+//
+// Code 是发到线上的那个词，必须留在 RFC 8628 的词表里——agentred 只按它分支
+// （cmd/agentred/login.go）。Biz 是给人看的那一层：invalid_grant 一个词底下压着
+// 六种互不相干的失败，光靠 Code 说不出到底哪里不对。为零表示「按 Code 取默认
+// 业务码」，映射在 device_ctr.oauthErrToHTTP。
+type OAuthError struct {
+	Code, Description string
+	Biz               int
+}
 
 func (e *OAuthError) Error() string       { return fmt.Sprintf("%s: %s", e.Code, e.Description) }
 func newOAuthErr(code, desc string) error { return &OAuthError{Code: code, Description: desc} }
+
+// newOAuthErrBiz 在标准字面量之外再钉一个业务码，用于线上必须回同一个词、
+// 但用户该看到不同说明的那些分支。
+func newOAuthErrBiz(code, desc string, biz int) error {
+	return &OAuthError{Code: code, Description: desc, Biz: biz}
+}
 
 func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput, error) {
 	if dc == "" {
@@ -278,6 +293,16 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		return nil, err
 	}
 	logger.Ctx(ctx).Info("device token exchanged", zap.Int64("userId", flow.AuthorizedUserID), zap.Int64("deviceId", out.DeviceID), zap.String("deviceKind", flow.DeviceKind), zap.String("platform", flow.Platform), zap.String("version", flow.Version), zap.String("jti", out.JTI))
+	// 设备行是**这一刻**才建出来的，不是用户点批准那一刻：Approve 只改 device_flow_codes，
+	// 行要等 daemon 下一次轮询（interval 默认 5 秒）走到这里。用户批准完立刻进设备页
+	// 正好落在那个窗口里，看到的是一份不含这台机器的列表。
+	//
+	// 从前只有 relay_svc.RegisterDaemon 那一声，而它发生在这之后、且发在账号通道
+	// 多半还在取票建连的那几秒里——信号不补发，连着之后兜底轮询又让路，于是那份空
+	// 列表会一直挂到用户自己刷新。这里补的就是那一条：行一存在就说一声。
+	//
+	// 事务外、best-effort：广播失败只记日志，token 已经发出去了，不能因为一条信号回滚。
+	accountchan_svc.BroadcastSignalBestEffort(ctx, flow.AuthorizedUserID, accountchan_svc.FrameTypeDevicePresence)
 	return out, nil
 }
 
@@ -335,7 +360,7 @@ func (s *deviceSvc) issueTokenPair(
 
 func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error) {
 	if refreshToken == "" {
-		return nil, newOAuthErr(ErrInvalidGrant, "missing refresh_token")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "missing refresh_token", code.RefreshTokenInvalid)
 	}
 	nowMs := s.now()
 	hash := sha256Hex(refreshToken)
@@ -345,24 +370,29 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 		return nil, err
 	}
 	if row == nil {
-		return nil, newOAuthErr(ErrInvalidGrant, "refresh_token not found")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh_token not found", code.RefreshTokenInvalid)
 	}
 
 	if row.IsRevoked() {
 		// 重放：整链 revoke
 		_ = device_token_repo.DeviceToken().RevokeChain(ctx, row.DeviceID, nowMs)
-		return nil, newOAuthErr(ErrInvalidGrant, "refresh token reuse detected")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh token reuse detected", code.RefreshTokenReplay)
 	}
 	if row.IsExpired(nowMs) {
-		return nil, newOAuthErr(ErrInvalidGrant, "refresh_token expired")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh_token expired", code.RefreshTokenExpired)
 	}
 
 	d, err := device_repo.Device().Find(ctx, row.DeviceID)
 	if err != nil {
 		return nil, err
 	}
-	if d == nil || !d.IsActive() {
-		return nil, newOAuthErr(ErrInvalidGrant, "device revoked")
+	// 行不见了和「行还在、但已撤销」不是同一件事：前者是数据不一致，后者是用户
+	// 自己在控制台点的。压成同一个码，排查时就分不出来了。
+	if d == nil {
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "device not found", code.DeviceNotFound)
+	}
+	if !d.IsActive() {
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "device revoked", code.DeviceRevoked)
 	}
 
 	out := &TokenOutput{}
@@ -382,7 +412,7 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			return err
 		}
 		if n != 1 {
-			return newOAuthErr(ErrInvalidGrant, "refresh_token already rotated")
+			return newOAuthErrBiz(ErrInvalidGrant, "refresh_token already rotated", code.RefreshTokenInvalid)
 		}
 
 		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs)

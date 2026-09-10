@@ -19,6 +19,7 @@ export default function SessionDetail() {
     title?: unknown;
     userText?: unknown;
     turnStartedAt?: unknown;
+    agent?: unknown;
   } | null;
   const modelNote =
     typeof navState?.modelNote === "string" ? navState.modelNote : undefined;
@@ -39,6 +40,30 @@ export default function SessionDetail() {
     typeof navState?.turnStartedAt === "number"
       ? navState.turnStartedAt
       : undefined;
+  // 这条对话属于哪个 Agent（见 SessionDetailView 的 initialAgent）。同一条来路：
+  // 草稿页那一屏是用户亲手挑的，下钻时顺手带过来，落地那一帧就说得出名字与头像。
+  //
+  // 逐格验形状再用：导航 state 是历史记录里的东西，刷新之后还在手上，也没人担保
+  // 它的形状——这两格缺一个都画不出一枚有身份的头像，那就当没给。
+  const agentSeed =
+    typeof navState?.agent === "object" && navState.agent !== null
+      ? (navState.agent as Record<string, unknown>)
+      : null;
+  const agent =
+    typeof agentSeed?.sync_id === "string" && typeof agentSeed.name === "string"
+      ? {
+          sync_id: agentSeed.sync_id,
+          name: agentSeed.name,
+          avatar_color:
+            typeof agentSeed.avatar_color === "string"
+              ? agentSeed.avatar_color
+              : undefined,
+          avatar_icon:
+            typeof agentSeed.avatar_icon === "string"
+              ? agentSeed.avatar_icon
+              : undefined,
+        }
+      : undefined;
   return (
     <SessionDetailView
       deviceId={Number(deviceId)}
@@ -46,6 +71,7 @@ export default function SessionDetail() {
       form="page"
       initialTitle={title}
       initialUserText={userText}
+      initialAgent={agent}
       initialModelNote={modelNote}
       initialEffortNote={effortNote}
       initialTurnStartedAt={turnStartedAt}

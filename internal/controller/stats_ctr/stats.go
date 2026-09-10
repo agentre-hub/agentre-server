@@ -91,7 +91,7 @@ func (s *Stats) settings(c *gin.Context) (*api.SettingsResponse, error) {
 	}
 	resp := &api.SettingsResponse{
 		ActivityStatsEnabled: view.ActivityStatsEnabled,
-		LastReportAt:         view.LastReportAt,
+		LastPullAt:           view.LastPullAt,
 		SavedConversations:   view.SavedConversations,
 		Today:                view.Today,
 	}

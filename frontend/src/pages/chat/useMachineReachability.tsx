@@ -283,15 +283,22 @@ export function useMachineReachability({
    * 每台在线机器此刻的连接档位，按**设备标识**说话（索引的组按设备标识分）。
    * `connected` 判的是「已经交出清单」而不只是中继连上了：连上了、清单还在路上的
    * 那一段里，这一组同样答不出「上面有什么」。
+   *
+   * **「连不上」压过「交出过清单」**：`resolved` 只增不减（只有离开机器轴时
+   * forgetResolved 才清），拿它当第一判据的话，一台答过一次的机器此后永远显示
+   * 「已连接」——agentred 之后挂了，那一组仍摆着一份陈旧清单，组头上连重试入口
+   * 都出不来（那颗按钮只在 unreachable 这一档渲染）。清单陈旧但仍读得，所以行
+   * 留着；说谎的是状态。
    */
   const machineStates = useMemo(() => {
     const states: Record<number, MachineState> = {};
     for (const device of onlineMachines) {
-      states[device.id] = resolved[device.fingerprint]
-        ? "connected"
-        : machineState[device.fingerprint] === "unreachable"
+      states[device.id] =
+        machineState[device.fingerprint] === "unreachable"
           ? "unreachable"
-          : "connecting";
+          : resolved[device.fingerprint]
+            ? "connected"
+            : "connecting";
     }
     return states;
   }, [onlineMachines, resolved, machineState]);

@@ -300,6 +300,11 @@ func oauthErrToHTTP(c *gin.Context, err error) error {
 	default:
 		status, biz = http.StatusBadRequest, code.OperationFailed
 	}
+	// 服务层钉死的业务码优先：线上字面量要按 RFC 留在词表里（agentred 只认它），
+	// 但 invalid_grant 底下压着六种失败，说明该由服务层给。
+	if oe.Biz != 0 {
+		biz = oe.Biz
+	}
 	c.Set("oauth_error", oe.Code)
 	c.Set("oauth_error_description", oe.Description)
 	return i18n.NewErrorWithStatus(c.Request.Context(), status, biz)

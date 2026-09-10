@@ -30,7 +30,7 @@ func (s *activitySvc) Settings(ctx context.Context, userID int64) (SettingsView,
 	_, loc := activitystats.ServerZone()
 	return SettingsView{
 		ActivityStatsEnabled: settings.ActivityStatsEnabled,
-		LastReportAt:         settings.ActivityLastPullAt,
+		LastPullAt:           settings.ActivityLastPullAt,
 		SavedConversations:   int64(len(saved)),
 		Today:                time.Now().In(loc).Format(dayLayout),
 	}, nil

@@ -43,7 +43,7 @@ type BackendDTO = {
   sync_id: string;
   name: string;
   type: string;
-  device_id: string;
+  device_fingerprint: string;
   provider_key: string;
   model_key: string;
   model_routes: string;
@@ -252,7 +252,7 @@ function backendBody(input: Record<string, unknown>): Record<string, unknown> {
   return compact({
     name: input.name,
     type: input.type,
-    device_id: input.deviceId,
+    device_fingerprint: input.deviceId,
     provider_key: input.llmProviderKey,
     model_key: input.llmModelKey,
     model_routes:
@@ -527,10 +527,10 @@ export function createBrowserEngineSettingsPorts(
       openClawAgentId: backend.openclaw_agent_id,
       openClawDefaultModel: backend.openclaw_default_model,
       agentCount: backend.ref_count,
-      deviceId: backend.device_id ?? "",
+      deviceId: backend.device_fingerprint ?? "",
       // 名字查不到就留空——共享包据此渲染「设备已撤销」；空 deviceId 才是
       // 决策 14 的「未指定设备」。两者是两条不同的如实说法，不能合并。
-      deviceName: deviceNames.get(backend.device_id ?? "") ?? "",
+      deviceName: deviceNames.get(backend.device_fingerprint ?? "") ?? "",
       cliByDevice: (backend.cli_by_device ?? []).map((item) => ({
         deviceId: item.fingerprint,
         status: cliStatus(item.status),
@@ -764,7 +764,7 @@ export function createBrowserEngineSettingsPorts(
       if (backend) {
         providerKey ||= backend.provider_key;
         modelKey ||= backend.model_key;
-        deviceID ||= backend.device_id ?? "";
+        deviceID ||= backend.device_fingerprint ?? "";
       }
       // 测的是这个后端将来真正跑的那台机器（决策 11），不是恰好第一台在线的节点：
       // 换一台机器答的「连得上」，对绑在别处的后端没有任何意义。
@@ -811,8 +811,8 @@ export function createBrowserEngineSettingsPorts(
       async get(backendSyncId) {
         const backends = await fetchBackends();
         const fingerprint =
-          backends.find((item) => item.sync_id === backendSyncId)?.device_id ??
-          "";
+          backends.find((item) => item.sync_id === backendSyncId)
+            ?.device_fingerprint ?? "";
         const overlays = await fetchCLIOverlays();
         const hit = overlays.find(
           (overlay) =>
@@ -829,7 +829,10 @@ export function createBrowserEngineSettingsPorts(
         await api(`/v1/engine/backends/${encodeURIComponent(backendSyncId)}`, {
           method: "PATCH",
           body: JSON.stringify(
-            compact({ cli_path: path, device_id: current?.device_id }),
+            compact({
+              cli_path: path,
+              device_fingerprint: current?.device_fingerprint,
+            }),
           ),
         });
       },
@@ -848,7 +851,7 @@ export function createBrowserEngineSettingsPorts(
           const current = existing.find(
             (backend) =>
               backend.type === item.backendType &&
-              backend.device_id === fingerprint,
+              backend.device_fingerprint === fingerprint,
           );
           if (!found) {
             return {

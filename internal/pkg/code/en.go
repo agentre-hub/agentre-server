@@ -35,6 +35,7 @@ var en = map[int]string{
 	DeviceRevoked:       "device revoked",
 	RefreshTokenReplay:  "refresh token reuse detected; all device tokens revoked",
 	RefreshTokenExpired: "refresh token expired, please re-authorize",
+	RefreshTokenInvalid: "invalid refresh token, please re-authorize",
 	JWTSignatureInvalid: "invalid access token signature",
 	JWTBlacklisted:      "access token revoked",
 	DeviceListFailed:    "failed to list devices",

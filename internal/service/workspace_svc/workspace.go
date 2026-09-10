@@ -16,10 +16,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/oklog/ulid/v2"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
@@ -55,12 +57,12 @@ type ExecTargetView struct {
 	Rank int
 	// BackendSyncID 是这一档跨机稳定且逐档唯一的标识，浏览器靠它表达排列：
 	// Rank 是位置性的（重排后就变了），DeviceID 也不唯一（一台机器可挂多个 backend）。
-	BackendSyncID    string
-	IsLocalReference bool
-	DeviceID         int64
-	DeviceName       string
-	BackendType      string
-	Availability     string
+	BackendSyncID     string
+	DeviceUnspecified bool
+	DeviceID          int64
+	DeviceName        string
+	BackendType       string
+	Availability      string
 	// Current 标记「按顺序取第一个可用的」会落到哪一档（没写运行设备的档不参与
 	// 这个挑选：它没指到任何一台机器）。至多一档为 true。
 	Current bool
@@ -193,7 +195,7 @@ type OrgExecTargetView struct {
 	// （device.ListDevicesItem.Fingerprint）与派发计划
 	// （workspace.DispatchChoiceItem.DeviceFingerprint）下行给同一个浏览器会话了。
 	DeviceFingerprint string
-	IsLocalReference  bool
+	DeviceUnspecified bool
 	// Availability 与总览页同一套取值：不可用的档留在列表里并给出原因，不隐藏。
 	Availability string
 	// Current 标记「按顺序取第一个可用的」会落到哪一档，至多一档为 true。
@@ -214,11 +216,11 @@ type OrgBackendView struct {
 	BackendType string
 	DeviceID    int64
 	DeviceName  string
-	// IsLocalReference 为真即这个后端行没写运行设备（agentred 指纹为空，决策 14 的
-	// 存量）：如实标出而不是从清单里抹掉，也不猜一台机器补上。字段名是旧的——
-	// 浏览器契约（`is_local_reference`）不在本轮的改动范围里，含义以这段注释为准。
-	IsLocalReference bool
-	Availability     string
+	// DeviceUnspecified 为真即这个后端行没写运行设备（agentred 指纹为空，决策 14 的
+	// 存量）：如实标出而不是从清单里抹掉，也不猜一台机器补上。判定就是
+	// `row.AgentredFingerprint == ""`，与 AvailabilityNoDevice 出自同一处。
+	DeviceUnspecified bool
+	Availability      string
 }
 
 // OrgChartView 是组织面一次读到的全部材料：部门（含空部门）与 Agent（含每档执行
@@ -630,10 +632,10 @@ type resolvedTarget struct {
 	BackendType   string
 	// SkillsJSON 是这一档的技能授权，详情里折在这一行内。
 	SkillsJSON string
-	// Fingerprint 为空有两种来路，靠 IsLocalReference 区分：backend 行还在但没写
-	// 运行设备（IsLocalReference 为真），或者 backend 行根本不在了（为假）。
-	Fingerprint      string
-	IsLocalReference bool
+	// Fingerprint 为空有两种来路，靠 DeviceUnspecified 区分：backend 行还在但没写
+	// 运行设备（DeviceUnspecified 为真），或者 backend 行根本不在了（为假）。
+	Fingerprint       string
+	DeviceUnspecified bool
 }
 
 type agentChain struct {
@@ -729,7 +731,7 @@ func buildAgentChains(rows []*sync_entity.SyncObject) []agentChain {
 			// 也不指向任何已知指纹，rt 上那几个字段保持零值，调用方把它当「未配对」处理。
 			if known {
 				if fp == "" {
-					rt.IsLocalReference = true
+					rt.DeviceUnspecified = true
 				} else {
 					rt.Fingerprint = fp
 				}
@@ -867,10 +869,10 @@ func (s *workspaceSvc) ListAccountAgents(ctx context.Context, userID int64) ([]A
 		}
 		currentAssigned := false
 		for _, t := range chain.Targets {
-			placed := placer.place(t.Fingerprint, t.IsLocalReference)
+			placed := placer.place(t.Fingerprint, t.DeviceUnspecified)
 			et := ExecTargetView{
 				Rank: t.Rank, BackendSyncID: t.BackendSyncID,
-				BackendType: t.BackendType, IsLocalReference: t.IsLocalReference,
+				BackendType: t.BackendType, DeviceUnspecified: t.DeviceUnspecified,
 				DeviceID: placed.DeviceID, DeviceName: placed.DeviceName,
 				Availability: placed.Availability,
 			}
@@ -904,33 +906,45 @@ func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetO
 	now := time.Now().UnixMilli()
 	written := 0
 	var lastVersion int64
-	for i, row := range ordered {
-		payload, changed, err := withSortOrder(row.Payload, i)
-		if err != nil {
-			return err
+	// 整份新次序是**一个**事务。
+	//
+	// N 行写成 N 次独立提交时，第 k 行失败会留下一个谁也没要过的中间态：前面几行已按
+	// 新次序落库、后面几行还是旧值，于是两档拿到同一个 sort_order。而 ListByKinds 没有
+	// ORDER BY，并列之后谁在前由数据库那次返回顺序决定（见 withExecTargetTailSlot），
+	// 用户排在第一位的那台机器会被挤掉「当前生效」；浏览器同时收到一个错误，用户以为
+	// 什么都没发生。版本号同理取在事务里，理由见 withTx。
+	if err := withTx(ctx, func(ctx context.Context) error {
+		for i, row := range ordered {
+			payload, changed, err := withSortOrder(row.Payload, i)
+			if err != nil {
+				return err
+			}
+			// 位置没变的行不写。每一次 Save 都要烧掉一个版本号并向每台桌面端下推一次，
+			// 为没变的行付这个代价是纯浪费，还会让下行增量里全是空转。
+			if !changed {
+				continue
+			}
+			version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
+			if err != nil {
+				return err
+			}
+			row.Payload = payload
+			row.Version = version
+			// 重排也是一次服务端直写：来源记空串（决策 21，表示不是任何一台机器推上来的）。
+			// 留着上一台推它的机器指纹，冲突应答里的 OverwrittenOriginFingerprint 会指着
+			// 那台无辜的机器。
+			row.OriginFingerprint = ServerOriginFingerprint
+			row.SyncUpdatedAt = now
+			row.Updatetime = now
+			if err := sync_repo.SyncObject().Save(ctx, row); err != nil {
+				return err
+			}
+			written++
+			lastVersion = version
 		}
-		// 位置没变的行不写。每一次 Save 都要烧掉一个版本号并向每台桌面端下推一次，
-		// 为没变的行付这个代价是纯浪费，还会让下行增量里全是空转。
-		if !changed {
-			continue
-		}
-		version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
-		if err != nil {
-			return err
-		}
-		row.Payload = payload
-		row.Version = version
-		// 重排也是一次服务端直写：来源记空串（决策 21，表示不是任何一台机器推上来的）。
-		// 留着上一台推它的机器指纹，冲突应答里的 OverwrittenOriginFingerprint 会指着
-		// 那台无辜的机器。
-		row.OriginFingerprint = ServerOriginFingerprint
-		row.SyncUpdatedAt = now
-		row.Updatetime = now
-		if err := sync_repo.SyncObject().Save(ctx, row); err != nil {
-			return err
-		}
-		written++
-		lastVersion = version
+		return nil
+	}); err != nil {
+		return err
 	}
 	logger.Ctx(ctx).Info("workspace_svc.SetExecTargetOrder: account exec target order updated",
 		zap.Int64("userId", in.UserID), zap.String("agentSyncId", in.AgentSyncID),
@@ -1113,7 +1127,7 @@ func (s *workspaceSvc) DeviceDetail(ctx context.Context, userID, deviceID int64)
 	if isAgentred {
 		for _, chain := range buildAgentChains(rows) {
 			for _, t := range chain.Targets {
-				if t.IsLocalReference || t.Fingerprint != dev.Fingerprint {
+				if t.DeviceUnspecified || t.Fingerprint != dev.Fingerprint {
 					continue
 				}
 				view.RunnableAgents = append(view.RunnableAgents,
@@ -1246,13 +1260,13 @@ func (s *workspaceSvc) OrgChart(ctx context.Context, userID int64) (*OrgChartVie
 		}
 		currentAssigned := false
 		for _, t := range chain.Targets {
-			placed := placer.place(t.Fingerprint, t.IsLocalReference)
+			placed := placer.place(t.Fingerprint, t.DeviceUnspecified)
 			target := OrgExecTargetView{
 				SyncID: t.SyncID, Rank: t.Rank, BackendSyncID: t.BackendSyncID,
 				BackendName: t.BackendName, BackendType: t.BackendType,
 				DeviceID: placed.DeviceID, DeviceName: placed.DeviceName,
 				DeviceFingerprint: t.Fingerprint,
-				IsLocalReference:  t.IsLocalReference, Availability: placed.Availability,
+				DeviceUnspecified: t.DeviceUnspecified, Availability: placed.Availability,
 				SkillsJSON: t.SkillsJSON,
 			}
 			if !currentAssigned && target.Availability == AvailabilityAvailable {
@@ -1295,7 +1309,7 @@ func (s *workspaceSvc) SelectableBackends(ctx context.Context, userID int64) ([]
 		out = append(out, OrgBackendView{
 			SyncID: row.SyncID, Name: bp.Name, BackendType: bp.Type,
 			DeviceID: placed.DeviceID, DeviceName: placed.DeviceName,
-			IsLocalReference: deviceUnspecified, Availability: placed.Availability,
+			DeviceUnspecified: deviceUnspecified, Availability: placed.Availability,
 		})
 	}
 	// 按机器、再按后端名排：挑后端时同一台机器上的档挨在一起，顺序也不随
@@ -1432,17 +1446,21 @@ func (s *workspaceSvc) CreateOrgObject(ctx context.Context, in OrgWriteInput) (*
 	if err != nil {
 		return nil, err
 	}
-	version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
-	if err != nil {
-		return nil, err
-	}
 	obj := &sync_entity.SyncObject{
 		UserID: in.UserID, Kind: in.Kind, SyncID: newOrgSyncID(now),
 		ProjectSyncID: in.ProjectSyncID, AgentredFingerprint: in.AgentredFingerprint,
-		Payload: string(payload), Version: version, SyncUpdatedAt: now,
+		Payload: string(payload), SyncUpdatedAt: now,
 		OriginFingerprint: ServerOriginFingerprint, Createtime: now, Updatetime: now,
 	}
-	if err := sync_repo.SyncObject().Save(ctx, obj); err != nil {
+	// 取号与落库同在一个事务里，否则版本号顺序不再是提交顺序（见 withTx）。
+	if err := withTx(ctx, func(ctx context.Context) error {
+		version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
+		if err != nil {
+			return err
+		}
+		obj.Version = version
+		return sync_repo.SyncObject().Save(ctx, obj)
+	}); err != nil {
 		return nil, err
 	}
 	logger.Ctx(ctx).Info("workspace_svc.CreateOrgObject: org object created from web",
@@ -1493,15 +1511,22 @@ func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*
 	if isSystemAgentRow(row) {
 		return nil, i18n.NewError(ctx, code.OrgSystemAgentImmutable)
 	}
-	// 子树先落，主行最后落：主行因此拿到这次操作推进到的最高版本，saveOrgRow 那一次
-	// 广播就把整批改动的信号一起带出去了。
-	if err := cascadeProjectDelete(ctx, in, row); err != nil {
+	// 子树与主行同在一个事务里：逐行各自提交时，中途失败会留下一棵删了一半的树
+	// （主行还活着而部分子项目已消失，或反过来子项目成了指向不存在父项目的孤儿行），
+	// 而那个中间态会照常同步到每一台机器上。
+	//
+	// 顺序仍是子树先落、主行最后落：主行因此拿到这次操作推进到的最高版本，提交之后
+	// 那一次广播就把整批改动的信号一起带出去了。
+	if err := withTx(ctx, func(ctx context.Context) error {
+		if err := cascadeProjectDelete(ctx, in, row); err != nil {
+			return err
+		}
+		row.DeletedAt = time.Now().UnixMilli()
+		return writeOrgRow(ctx, in.UserID, row)
+	}); err != nil {
 		return nil, err
 	}
-	row.DeletedAt = time.Now().UnixMilli()
-	if err := s.saveOrgRow(ctx, in, row); err != nil {
-		return nil, err
-	}
+	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, row.Version)
 	logger.Ctx(ctx).Info("workspace_svc.DeleteOrgObject: org object tombstoned from web",
 		zap.Int64("userId", in.UserID), zap.String("kind", in.Kind),
 		zap.String("syncId", row.SyncID), zap.Int64("version", row.Version))
@@ -1537,12 +1562,49 @@ func (s *workspaceSvc) findOrgRowForWrite(
 	return row, nil
 }
 
-// saveOrgRow 落这一行：新版本号 + 服务端来源。改与删只差 DeletedAt，其余完全一样，
-// 因此共用这一段——两处各写一遍就是两处各漏一个字段的机会。
+// withTx 把一段写入钉在一个事务里。**取版本号必须在其中**，这不是可选的。
+//
+// 版本号取自 sync_account_seqs 里该账号那一行，它的排他锁持到事务提交：取号在事务里，
+// 「谁先取到号」就等于「谁先提交」。下行只认这一个顺序——ListSince 按 version > cursor
+// 取，Pull 把游标推到本页见过的最高版本。取在事务外则两件事各自成序，两个副本各写一
+// 行时可以这样交错：先取到号（较小）的那个后提交，设备先拉到较大的那个、把游标推过去，
+// 较小的那一行对这台设备永远不会再被投递——而浏览器与设备都收到了成功。
+//
+// 多行的写入还多一层收益：N 行从「各自提交」变成一次全有或全无，中途失败不再留下半份
+// 新次序（SetExecTargetOrder）或删了一半的子树（DeleteOrgObject）。
+//
+// 广播一律留在外面：通道不是权威，写入的权威性在数据库。放进事务里既会让一次 redis
+// 抖动回滚一次已经算数的写入，又会在提交之前就把信号喊出去——另一端赶来拉取时还看不到
+// 这一版。
+func withTx(ctx context.Context, fn func(context.Context) error) error {
+	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		return fn(db.WithContextDB(ctx, tx))
+	})
+}
+
+// saveOrgRow 落这一行并广播：新版本号 + 服务端来源。改与删只差 DeletedAt，其余完全
+// 一样，因此共用这一段——两处各写一遍就是两处各漏一个字段的机会。
 func (s *workspaceSvc) saveOrgRow(
 	ctx context.Context, in OrgWriteInput, row *sync_entity.SyncObject,
 ) error {
-	version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
+	if err := withTx(ctx, func(ctx context.Context) error {
+		return writeOrgRow(ctx, in.UserID, row)
+	}); err != nil {
+		return err
+	}
+	// UpdateOrgObject 与 DeleteOrgObject 共用这一段（同上面的写入一样，两处各写一遍
+	// 就是两处各漏一次广播的机会）——两者都是「服务端直写（web 组织面）」这一类。
+	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, row.Version)
+	return nil
+}
+
+// writeOrgRow 是落库那一半：取一个新版本号、记下服务端来源、落库。
+//
+// **只能在事务里调用**（withTx）——取号与落库分开就不再有「版本号顺序 == 提交顺序」。
+// 单独拆出来是为了让「级联 + 主行墓碑」那种多行写入能与自己的级联同处一个事务，而广播
+// 仍然发生在提交之后（见 DeleteOrgObject）。
+func writeOrgRow(ctx context.Context, userID int64, row *sync_entity.SyncObject) error {
+	version, err := sync_repo.SyncState().NextVersion(ctx, userID, 1)
 	if err != nil {
 		return err
 	}
@@ -1551,13 +1613,7 @@ func (s *workspaceSvc) saveOrgRow(
 	row.SyncUpdatedAt = now
 	row.Updatetime = now
 	row.OriginFingerprint = ServerOriginFingerprint
-	if err := sync_repo.SyncObject().Save(ctx, row); err != nil {
-		return err
-	}
-	// UpdateOrgObject 与 DeleteOrgObject 共用这一段（同上面 Save 一样，两处各写一遍
-	// 就是两处各漏一次广播的机会）——两者都是「服务端直写（web 组织面）」这一类。
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, version)
-	return nil
+	return sync_repo.SyncObject().Save(ctx, row)
 }
 
 // checkExecTargetBackend 落实「执行目标只能引用**已有**后端」：浏览器建不出后端，

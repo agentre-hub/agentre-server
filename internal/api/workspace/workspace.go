@@ -19,11 +19,11 @@ type ExecTargetItem struct {
 	Rank int `json:"rank"`
 	// BackendSyncID 是这一档跨机稳定且逐档唯一的标识，浏览器靠它表达排列：rank 是
 	// 位置性的（重排后就变了），device_id 也不唯一（一台机器可挂多个 backend）。
-	BackendSyncID    string `json:"backend_sync_id,omitempty"`
-	IsLocalReference bool   `json:"is_local_reference"`
-	DeviceID         int64  `json:"device_id,omitempty"`
-	DeviceName       string `json:"device_name,omitempty"`
-	BackendType      string `json:"backend_type,omitempty"`
+	BackendSyncID     string `json:"backend_sync_id,omitempty"`
+	DeviceUnspecified bool   `json:"device_unspecified"`
+	DeviceID          int64  `json:"device_id,omitempty"`
+	DeviceName        string `json:"device_name,omitempty"`
+	BackendType       string `json:"backend_type,omitempty"`
 	// Availability 是 available / offline / unpaired / no_device 之一。
 	Availability string `json:"availability"`
 	Current      bool   `json:"current"`

@@ -173,9 +173,40 @@ export function ChatIndexPanel({
     </div>
   ) : null;
 
+  /**
+   * 上一次保存没写成（规格 2026-08-18 决策 2 的收尾动作失败时）。
+   *
+   * 与上面那条取数横幅同形、同一处落位，因为它们说的是同一类事实：**左栏这份列表
+   * 此刻不完整，原因在这里，出路在这里**。此前这两条路都是空 catch —— 手动保存的
+   * 行闪一下撤回、发起即保存干脆一声不吭，而后者的画面（右栏开着、左栏没有）与
+   * 「这条对话根本没开起来」无法区分。
+   *
+   * 它不吃掉列表：账号里已经有的那些照常列着，失败的只是新加进去这一条。
+   */
+  const saveFailure = sessionIndex.saveFailure;
+  const saveError = saveFailure ? (
+    <div
+      role="alert"
+      data-testid="index-save-error"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-destructive/35 bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
+    >
+      <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1">
+        {t(`sessionIndex.saveFailed.${saveFailure.kind}`, {
+          title: saveFailure.title,
+        })}
+      </span>
+      <Button variant="outline" size="sm" onClick={sessionIndex.retrySave}>
+        <RotateCw aria-hidden="true" className="size-3.5" />
+        {t("sessionIndex.saveFailed.retry")}
+      </Button>
+    </div>
+  ) : null;
+
   return (
     <div className="space-y-3">
       {indexError}
+      {saveError}
       <SessionIndex
         axis={axis}
         onAxisChange={onAxisChange}

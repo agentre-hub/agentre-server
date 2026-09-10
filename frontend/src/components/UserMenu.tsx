@@ -163,9 +163,11 @@ export function UserMenu({
                 {connectionLabel}
               </span>
             </div>
-            <p className="pt-1 text-3xs leading-snug text-muted-foreground">
-              {t(copy.hintKey)}
-            </p>
+            {copy.hintKey && (
+              <p className="pt-1 text-3xs leading-snug text-muted-foreground">
+                {t(copy.hintKey)}
+              </p>
+            )}
           </div>
           {/* 出路只给不会自愈的那一态。`connecting` 正在退避重拨，按一下只会打断
             它自己的节奏（见 relayConnection 的 handleClose）。 */}

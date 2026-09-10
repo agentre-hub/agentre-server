@@ -29,7 +29,7 @@
   },
   "machine": {
     "offline": "离线",
-    "empty": "这台机器上还没有对话。",
+    "empty": "这台机器上还没有对话",
     "connecting": "连接中",
     "unreachable": "连接失败",
     "offlineSince": "离线 · {{time}}"
@@ -38,6 +38,11 @@
     "save": "保存",
     "delete": "删除",
     "menu": "对话操作"
+  },
+  "saveFailed": {
+    "manual": "「{{title}}」没能存进账号。",
+    "onStart": "「{{title}}」已经开起来了，但没能存进账号 —— 左栏暂时列不出它。",
+    "retry": "重新保存"
   },
   "save": {
     "title": "把这条对话保存到账号？",

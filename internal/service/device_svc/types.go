@@ -8,7 +8,7 @@ import (
 
 // Config 装载从 cfg.Scan("server", ...) 得到的运行时参数。
 type Config struct {
-	UserCodeTTL     time.Duration
+	FlowTTL         time.Duration
 	PollInterval    time.Duration
 	AccessTTL       time.Duration
 	RefreshTTL      time.Duration

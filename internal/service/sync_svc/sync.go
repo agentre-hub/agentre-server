@@ -104,22 +104,6 @@ func (s *syncSvc) Push(ctx context.Context, in PushInput) (*PushOutput, error) {
 		}
 	}
 
-	// 整批的版本号一次取完,而且取在外层事务**之前**。
-	//
-	// 从前是每条 item 各取一次,而 NextVersion 自己是一个嵌套事务(SAVEPOINT)加两条
-	// 语句;api/sync 允许一批 500 条,于是一次 Push 在同一个外层事务里要发上千次往返。
-	// 更要命的是锁:那条 INSERT … ON DUPLICATE KEY UPDATE 跑在外层事务内,
-	// sync_account_seqs 里该账号那一行的排他锁从第一条 item 一直持有到整批提交,
-	// 同账号两台设备并发上行完全串行。取在事务之前,行锁只被持有一次往返的时间。
-	//
-	// 块里剩下没发完的号(某条 item 在 applyItem 里才被判出类型不符或撞墓碑)只是
-	// 序列上的空号。版本号是单调游标,下行按「version > cursor」取,空号对任何一端
-	// 都不可观察。
-	versions, err := newVersionBlock(ctx, in.UserID, needs)
-	if err != nil {
-		return nil, err
-	}
-
 	// 「最后修改来自哪台机器」落库的是**指纹**（决策 14）：数值设备主键是这个 server
 	// 的本地键，桌面端离线创建的行没有它，而工作区里其余跨机引用一律用指纹。凭据里
 	// 只有设备号，所以这里按号解一次指纹——整批一次，不是每条一次。
@@ -131,6 +115,29 @@ func (s *syncSvc) Push(ctx context.Context, in PushInput) (*PushOutput, error) {
 	out := &PushOutput{Results: make([]PushItemResult, 0, len(in.Items))}
 	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
+		// 整批的版本号一次取完,取在**外层事务里**、写入之前。
+		//
+		// 一次取完是为了往返次数:从前每条 item 各取一次,而 NextVersion 自己是一个
+		// 嵌套事务(SAVEPOINT)加两条语句;api/sync 允许一批 500 条,于是一次 Push 要
+		// 发上千次往返。整批一次之后只剩一次。
+		//
+		// 取在事务**里**则是为了顺序,这一条不能拿去换吞吐。sync_account_seqs 上该
+		// 账号那一行的排他锁持到本事务提交,所以「谁先取到号」与「谁先提交」是同一个
+		// 顺序。下行只认这一个顺序:ListSince 按 version > cursor 取,Pull 把游标推到
+		// 本页见过的最高版本。取在事务之前,两件事各自成序,于是有这个交错——副本 A
+		// 取到 v100 开始一个长事务,副本 B 取到 v101 先提交,设备把游标推到 101,A 随后
+		// 提交的 v100 对这台设备永远不会再被投递,而且服务端与设备都以为写成功了。
+		//
+		// 代价是同账号的上行按批串行(锁持有一次往返 + 本批的写入),这正是 R4「较大者
+		// 胜」赖以成立的那个串行序。
+		//
+		// 块里剩下没发完的号(某条 item 在 applyItem 里才被判出类型不符或撞墓碑)只是
+		// 序列上的空号。版本号是单调游标,下行按「version > cursor」取,空号对任何一端
+		// 都不可观察——空号是无害的,乱序不是。
+		versions, err := newVersionBlock(txCtx, in.UserID, needs)
+		if err != nil {
+			return err
+		}
 		out.Results = out.Results[:0]
 		for i, item := range in.Items {
 			if reasons[i] != "" {

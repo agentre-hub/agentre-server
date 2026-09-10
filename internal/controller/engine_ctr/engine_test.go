@@ -56,8 +56,8 @@ func (s *stubEngineSvc) ListBackends(context.Context, int64) ([]engine_svc.Backe
 func (s *stubEngineSvc) CreateBackend(_ context.Context, in engine_svc.BackendWriteInput) (*engine_svc.BackendView, error) {
 	s.backendIn = in
 	view := engine_svc.BackendView{SyncID: "backend-1"}
-	if in.DeviceID != nil {
-		view.DeviceID = *in.DeviceID
+	if in.DeviceFingerprint != nil {
+		view.DeviceFingerprint = *in.DeviceFingerprint
 	}
 	if in.EnvJSON != nil {
 		view.EnvJSON = *in.EnvJSON
@@ -127,22 +127,23 @@ func TestBrowserProviderCreate_DoesNotReturnAPIKey(t *testing.T) {
 	assert.Equal(t, int64(7), stub.providerIn.UserID)
 }
 
-// device_id 是新契约字段：请求体里的它必须原样落进 engine_svc.BackendWriteInput.DeviceID，
+// device_fingerprint 是新契约字段：请求体里的它必须原样落进
+// engine_svc.BackendWriteInput.DeviceFingerprint，
 // 且响应体把服务层回填的运行设备如实带回浏览器。
-func TestBrowserBackendCreate_CarriesDeviceIDThroughToServiceAndResponse(t *testing.T) {
+func TestBrowserBackendCreate_CarriesDeviceFingerprintThroughToServiceAndResponse(t *testing.T) {
 	stub := &stubEngineSvc{}
 	server, _ := newEngineServer(t, stub)
 	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
 	require.NoError(t, err)
-	resp := postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken, `{"name":"Claude Code","type":"claude","device_id":"sha256:aaaa"}`)
+	resp := postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken, `{"name":"Claude Code","type":"claude","device_fingerprint":"sha256:aaaa"}`)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	require.NotNil(t, stub.backendIn.DeviceID)
-	assert.Equal(t, "sha256:aaaa", *stub.backendIn.DeviceID)
+	require.NotNil(t, stub.backendIn.DeviceFingerprint)
+	assert.Equal(t, "sha256:aaaa", *stub.backendIn.DeviceFingerprint)
 	var envelope struct {
 		Data json.RawMessage `json:"data"`
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
-	assert.Contains(t, string(envelope.Data), `"device_id":"sha256:aaaa"`)
+	assert.Contains(t, string(envelope.Data), `"device_fingerprint":"sha256:aaaa"`)
 }
 
 func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
@@ -205,7 +206,7 @@ func TestBrowserBackendCreate_CarriesTheEnvTableBothWays(t *testing.T) {
 	require.NoError(t, err)
 
 	resp := postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken,
-		`{"name":"CC","type":"claudecode","device_id":"sha256:aaaa","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\"}"}`)
+		`{"name":"CC","type":"claudecode","device_fingerprint":"sha256:aaaa","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\"}"}`)
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	require.NotNil(t, stub.backendIn.EnvJSON)

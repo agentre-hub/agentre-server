@@ -43,8 +43,14 @@ func (s *Sessions) Begin(ctx context.Context, userID int64, machineFingerprint, 
 		return fmt.Errorf("start mirroring %s on %s: %w", conversationID, machineFingerprint, err)
 	}
 	if !claimed {
-		// 别的副本正跟着这台机器：它下一轮巡检会把这条新保存的对话一起同步。
-		// 正常路径，不是错误——同一台机器只该被一个副本跟着。
+		// 别的副本正跟着这台机器：当场告诉它，它会在自己那条连接上把这条新保存的
+		// 对话跟起来。正常路径，不是错误——同一台机器只该被一个副本跟着。
+		//
+		// 少了这一句，唯一会告诉它的就是每分钟一轮的对账，而那一轮每个周期只有一个
+		// 副本赢得下来：N 个副本下期望延迟约 N 分钟，用户看到的是存完之后转录空白
+		// 好几分钟（hint.go 开头写了完整的来龙去脉）。
+		s.sup.hintOwner(ctx, machineKey{userID: userID, fingerprint: machineFingerprint},
+			machineHint{Kind: hintSaved, ConversationID: conversationID})
 		logger.Ctx(ctx).Info("mirror_svc.Begin: machine is followed by another replica",
 			zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
 			zap.String("conversationId", conversationID))
@@ -55,22 +61,43 @@ func (s *Sessions) Begin(ctx context.Context, userID int64, machineFingerprint, 
 // Purge 停掉一条对话的镜像并清掉 server 上它的全部内容（摘要与转录帧）。
 // 已经没有的时候是 no-op 而不是错误——删除要幂等。
 //
-// 三步的次序是有意的：先摘、再清帧、最后清摘要。
-//   - 先摘再清：反过来的话，正跟着这台机器的那条连接会在两步之间把刚清掉的帧写回来。
-//   - 帧在摘要之前：清帧失败时摘要还在，这条对话仍列在索引里、调用方收到错误可以
-//     重试；反过来清则会留下一段读不到、也没人知道还在的转录——决策 2 的隐私边界
-//     正是破在这里。
+// 次序是有意的：先摘、再清。反过来的话，正跟着这台机器的那条连接会在两步之间把刚
+// 清掉的帧写回来。清那两步内部的先后见 purgeStoredCopy。
+//
+// **摘得到的只有本副本那条连接**。跟着这台机器的是别的副本时（N 个副本下这是常态），
+// 那边那个仍然活着的 follower 名单里还留着这条对话，下一帧照常落库——用户刚删掉的
+// 摘要与转录悄悄回来，决策 2 的隐私边界正是破在这里。所以本副本摘不到时，这件事要
+// 送到真正的属主那儿去（hint.go）。
 func (s *Sessions) Purge(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
-	s.sup.forgetSession(userID, machineFingerprint, conversationID)
+	if !s.sup.forgetSession(userID, machineFingerprint, conversationID) {
+		// 先说再清：属主那一侧摘掉之后会自己再清一次，把这次投递期间可能被写回去的
+		// 那一小段一并收掉（applyHint 的 hintDeleted 分支）。
+		s.sup.hintOwner(ctx, machineKey{userID: userID, fingerprint: machineFingerprint},
+			machineHint{Kind: hintDeleted, ConversationID: conversationID})
+	}
+	if err := purgeStoredCopy(ctx, userID, conversationID); err != nil {
+		return err
+	}
+	logger.Ctx(ctx).Info("mirror_svc.Purge: server copy removed",
+		zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
+		zap.String("conversationId", conversationID))
+	return nil
+}
+
+// purgeStoredCopy 清掉 server 上这条对话的全部内容。幂等——清一条早已不在的不是错误。
+//
+// 帧在摘要之前：清帧失败时摘要还在，这条对话仍列在索引里、调用方收到错误可以重试；
+// 反过来清则会留下一段读不到、也没人知道还在的转录——决策 2 的隐私边界正是破在这里。
+//
+// 两个调用方共用同一份实现：接住删除请求的那个副本（Sessions.Purge），以及属主副本
+// 在摘掉这条对话之后补的那一次（follower.applyHint）。
+func purgeStoredCopy(ctx context.Context, userID int64, conversationID string) error {
 	if err := agent_session_repo.JournalFrame().DeleteFrames(ctx, userID, conversationID); err != nil {
 		return fmt.Errorf("purge mirrored frames: %w", err)
 	}
 	if err := agent_session_repo.Summary().DeleteSummary(ctx, userID, conversationID); err != nil {
 		return fmt.Errorf("purge mirrored summary: %w", err)
 	}
-	logger.Ctx(ctx).Info("mirror_svc.Purge: server copy removed",
-		zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
-		zap.String("conversationId", conversationID))
 	return nil
 }
 

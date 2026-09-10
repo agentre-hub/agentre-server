@@ -47,7 +47,7 @@ export interface OrgExecTargetItem {
    * 哪台机器（Go 侧 `OrgExecTargetItem.DeviceFingerprint` 的注释是事实源）。
    */
   device_fingerprint?: string;
-  is_local_reference: boolean;
+  device_unspecified: boolean;
   availability: OrgExecTargetAvailability;
   current: boolean;
   skills_json?: string;
@@ -81,7 +81,7 @@ export interface OrgBackendItem {
   backend_type?: string;
   device_id?: number;
   device_name?: string;
-  is_local_reference: boolean;
+  device_unspecified: boolean;
   availability: OrgExecTargetAvailability;
 }
 

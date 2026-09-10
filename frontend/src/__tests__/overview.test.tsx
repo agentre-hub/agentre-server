@@ -69,7 +69,7 @@ const agents = [
     exec_targets: [
       {
         rank: 1,
-        is_local_reference: false,
+        device_unspecified: false,
         device_id: 1,
         device_name: "Home NUC",
         backend_type: "claudecode",
@@ -86,7 +86,7 @@ const agents = [
     exec_targets: [
       {
         rank: 1,
-        is_local_reference: false,
+        device_unspecified: false,
         backend_type: "codex",
         availability: "unpaired",
         current: false,
@@ -473,6 +473,19 @@ describe("overview: 分布卡", () => {
     const card = await screen.findByTestId("card-projects");
     expect(within(card).getByText("agentre-server")).toBeTruthy();
     expect(within(card).getByText("No project")).toBeTruthy();
+  });
+
+  // 这一格读的是**排行**（这段时间跑过对话的 Agent），不是账号里的 Agent 名单。
+  // 说成「还没有 Agent」在有 Agent、只是这段时间没跑的账号上就是一句假话，而且
+  // 它顺着假话把人送去登记设备——设备早就登记好了。
+  it("账号里有 Agent、只是这段时间没跑过：空态说的是没跑过对话", async () => {
+    serve({ "/v1/stats/overview": statsResponse({ agents: [] }) });
+    renderOverview();
+
+    const empty = await screen.findByTestId("empty-agents");
+    const text = empty.textContent ?? "";
+    expect(text).not.toMatch(/No agents yet/i);
+    expect(text).toMatch(/conversation/i);
   });
 
   it("三张分布都没有数据时用共享 EmptyState，不编样本数字", async () => {

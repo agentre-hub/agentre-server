@@ -30,7 +30,7 @@ func (w *Workspace) ListAgents(c *gin.Context, req *api.ListAgentsRequest) (*api
 		}
 		for _, t := range a.ExecTargets {
 			item.ExecTargets = append(item.ExecTargets, api.ExecTargetItem{
-				Rank: t.Rank, BackendSyncID: t.BackendSyncID, IsLocalReference: t.IsLocalReference,
+				Rank: t.Rank, BackendSyncID: t.BackendSyncID, DeviceUnspecified: t.DeviceUnspecified,
 				DeviceID: t.DeviceID, DeviceName: t.DeviceName, BackendType: t.BackendType,
 				Availability: t.Availability, Current: t.Current,
 			})

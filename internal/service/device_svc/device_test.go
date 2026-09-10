@@ -19,6 +19,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
@@ -28,6 +29,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo/mock_device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
@@ -55,7 +57,7 @@ func setupDeviceTest(t *testing.T) (
 	}
 
 	cfg := Config{
-		UserCodeTTL: 10 * time.Minute, PollInterval: 5 * time.Second,
+		FlowTTL: 10 * time.Minute, PollInterval: 5 * time.Second,
 		AccessTTL: time.Hour, RefreshTTL: 90 * 24 * time.Hour,
 		VerificationURI: "https://server/device",
 	}
@@ -880,4 +882,148 @@ func TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprin
 	claims, err := svc.signer.Verify(out.AccessToken)
 	require.NoError(t, err)
 	assert.Equal(t, fingerprint, claims.PFP)
+}
+
+// TestRefreshBizCode 钉住 refresh 失败的**诊断**：线上的 error 字面量按 RFC 8628
+// 恒为 invalid_grant（agentred 只认这个词，见 cmd/agentred/login.go 的 switch），
+// 但用户看到的那句话必须说清楚到底哪里不对。
+//
+// 在此之前六条失败路径共用一个 DeviceFlowInvalidGrant，文案是「device_code 无效」——
+// 而 refresh 这次请求里根本没有 device_code；同时 RefreshTokenReplay /
+// RefreshTokenExpired 这两个文案正确的码在整个代码库零引用。
+func TestRefreshBizCode(t *testing.T) {
+	// biz 取出 OAuthError 携带的业务码；顺带确认线上字面量没被改掉。
+	biz := func(t *testing.T, err error) int {
+		t.Helper()
+		var oe *OAuthError
+		require.ErrorAs(t, err, &oe)
+		assert.Equal(t, ErrInvalidGrant, oe.Code, "线上字面量必须仍是 invalid_grant")
+		return oe.Biz
+	}
+
+	t.Run("refresh_token 缺失 → RefreshTokenInvalid", func(t *testing.T) {
+		ctx, _, _, _, svc, _ := setupDeviceTest(t)
+		_, err := svc.Refresh(ctx, "")
+		assert.Equal(t, code.RefreshTokenInvalid, biz(t, err))
+	})
+
+	t.Run("refresh_token 查不到 → RefreshTokenInvalid", func(t *testing.T) {
+		ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(nil, nil)
+		_, err := svc.Refresh(ctx, "missing")
+		assert.Equal(t, code.RefreshTokenInvalid, biz(t, err))
+	})
+
+	t.Run("重放 → RefreshTokenReplay", func(t *testing.T) {
+		ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+			&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+		)
+		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
+		_, err := svc.Refresh(ctx, "stolen")
+		assert.Equal(t, code.RefreshTokenReplay, biz(t, err))
+	})
+
+	t.Run("已过期 → RefreshTokenExpired", func(t *testing.T) {
+		ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+			&device_token_entity.DeviceToken{
+				ID: 1, DeviceID: 42,
+				RefreshExpiresAt: time.Now().Add(-time.Hour).UnixMilli(),
+			}, nil,
+		)
+		_, err := svc.Refresh(ctx, "stale")
+		assert.Equal(t, code.RefreshTokenExpired, biz(t, err))
+	})
+
+	t.Run("设备已撤销 → DeviceRevoked", func(t *testing.T) {
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+			&device_token_entity.DeviceToken{
+				ID: 1, DeviceID: 42,
+				RefreshExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+			}, nil,
+		)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+			&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.DELETE}, nil,
+		)
+		_, err := svc.Refresh(ctx, "revoked-device")
+		assert.Equal(t, code.DeviceRevoked, biz(t, err))
+	})
+
+	// devices 行整个不见了，与「还在、但已撤销」不是同一件事：前者是数据不一致，
+	// 后者是用户自己在控制台点的。压成同一个码，排查时分不出来。
+	t.Run("设备行不存在 → DeviceNotFound", func(t *testing.T) {
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+			&device_token_entity.DeviceToken{
+				ID: 1, DeviceID: 42,
+				RefreshExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+			}, nil,
+		)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, nil)
+		_, err := svc.Refresh(ctx, "orphan")
+		assert.Equal(t, code.DeviceNotFound, biz(t, err))
+	})
+}
+
+// ── 换取 token 那一刻要出声 ────────────────────────────────────────────────
+
+// exchangeSignals 记下换取 token 时广播出去的每一帧。SetDefault 换掉包级入口。
+type exchangeSignals struct {
+	frames []accountchan_svc.Frame
+}
+
+func (s *exchangeSignals) Broadcast(_ context.Context, _ int64, frame accountchan_svc.Frame) error {
+	s.frames = append(s.frames, frame)
+	return nil
+}
+
+func (s *exchangeSignals) Subscribe(context.Context, int64) (accountchan_svc.Subscription, error) {
+	return nil, accountchan_svc.ErrChannelUnconfigured
+}
+
+func recordExchangeSignals(t *testing.T) *exchangeSignals {
+	t.Helper()
+	signals := &exchangeSignals{}
+	accountchan_svc.SetDefault(signals)
+	t.Cleanup(func() { accountchan_svc.SetDefault(nil) })
+	return signals
+}
+
+// Given 用户已经在控制台上批准了这台设备；When daemon 下一次轮询换到 token（devices
+// 行正是在这一刻才建出来）；Then 这个账号收到一条 device_presence。
+//
+// 少了这一声，控制台只剩 relay 的 RegisterDaemon 那一条可指望：批准只改
+// device_flow_codes，设备行要等 daemon 轮询（interval 默认 5 秒）才存在，而设备页只在
+// 挂载时取一次、之后只跟着 device_presence 重取。用户批准完立刻进设备页正好落在这个
+// 窗口里，看到的是空的；而账号通道此刻多半还在取票建连，RegisterDaemon 那一条发出来
+// 也接不着。信号不补发、连着时兜底轮询又让路（见前端 accountChannel 的 poll），页面
+// 于是一直停在空列表上直到手动刷新。
+func TestExchangeToken_SignalsThatTheDeviceRowNowExists(t *testing.T) {
+	ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+	signals := recordExchangeSignals(t)
+	mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+		&device_flow_entity.DeviceFlowCode{
+			DeviceCode: "dc-x", IntervalSeconds: 5,
+			ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+			AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+			DeviceKind: "agentred", ClientFingerprint: "fp-aaaaaaaa",
+		}, nil,
+	)
+	mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
+	)
+	mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	_, err := svc.ExchangeToken(ctx, "dc-x")
+
+	require.NoError(t, err)
+	require.Equal(t, []accountchan_svc.Frame{
+		{Type: accountchan_svc.FrameTypeDevicePresence},
+	}, signals.frames)
 }

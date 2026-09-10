@@ -96,7 +96,8 @@ export function useProjectManagement({
     () => createProjectSettingsPorts(fsPort),
     [fsPort],
   );
-  const createPorts = useMemo(() => createProjectCreatePorts(), []);
+  // 新建弹窗也要挑目录（在别的机器上配路径），与设置那边借同一条中继连接。
+  const createPorts = useMemo(() => createProjectCreatePorts(fsPort), [fsPort]);
   const deletePorts = useMemo(() => createProjectDeletePorts(), []);
 
   /** 父项目下拉的候选；包会把「它自己」剔掉。 */

@@ -10,6 +10,7 @@ import (
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/configs/memory"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
@@ -230,4 +231,37 @@ func TestLoadServerConfig_InsecureCookiesFollowPublicURLScheme(t *testing.T) {
 	// public_url 缺失或不是个 http(s) 地址时按安全的一侧兜底：宁可 cookie 带 Secure
 	// 让人当场看见登录不生效，也不要在一台不知道自己是谁的服务上悄悄发出裸 cookie。
 	assert.False(t, load(t, "  public_url: \"\"\n").InsecureCookies)
+}
+
+// device_flow_ttl 定的是整条设备流记录的寿命——user_code 与 device_code 共用同一个
+// expires_at（device_svc.Authorize 写、ExchangeToken 按它拒绝 device_code），
+// 也是回给客户端的 RFC 8628 expires_in。旧键名 user_code_ttl 只说了其中一半，
+// 调它的人会以为只在缩短用户码。
+//
+// 旧键必须继续认：它写在 configs/*.yaml、deploy/config.docker.yaml 和现存部署里，
+// 改名当天不该让谁的 TTL 悄悄跳回默认的 10 分钟。
+func TestLoadServerConfig_DeviceFlowTTL(t *testing.T) {
+	load := func(t *testing.T, deviceFlowYAML string) *ServerConfig {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		require.NoError(t, os.WriteFile(path, []byte(
+			"env: dev\ndebug: true\nsource: file\nserver:\n  device_flow:\n"+deviceFlowYAML), 0o600))
+		cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(path))
+		require.NoError(t, err)
+		return LoadServerConfig(context.Background(), cfg)
+	}
+
+	t.Run("新键 device_flow_ttl 生效", func(t *testing.T) {
+		assert.Equal(t, 3*time.Minute, load(t, "    device_flow_ttl: 3m\n").DeviceFlow.FlowTTL)
+	})
+	t.Run("旧键 user_code_ttl 仍然生效", func(t *testing.T) {
+		assert.Equal(t, 7*time.Minute, load(t, "    user_code_ttl: 7m\n").DeviceFlow.FlowTTL)
+	})
+	t.Run("两个都写时以新键为准", func(t *testing.T) {
+		assert.Equal(t, 3*time.Minute,
+			load(t, "    device_flow_ttl: 3m\n    user_code_ttl: 7m\n").DeviceFlow.FlowTTL)
+	})
+	t.Run("都不写落到 10 分钟", func(t *testing.T) {
+		assert.Equal(t, 10*time.Minute, load(t, "    poll_interval: 5s\n").DeviceFlow.FlowTTL)
+	})
 }

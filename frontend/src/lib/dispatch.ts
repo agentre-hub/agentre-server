@@ -157,6 +157,17 @@ export interface DispatchedSession {
    * 住的对话显示「默认」，而用户明明选过。
    */
   reasoningEffortPinned: boolean;
+  /**
+   * 这条对话存进账号了没有（R16 的发起即保存）。
+   *
+   * 真 = 账号里有它了，左栏下一轮取数就列得出。假只有一种含义：会话**已经在那台
+   * 机器上跑起来了**，但账号里没有它 —— 于是左栏列不出它，右栏却开着，看上去和
+   * 「派发根本没成功」一模一样。这句话必须传出去，否则用户手里只剩一个自己无法
+   * 证伪的矛盾画面（server 的 500 只落在服务端日志里，浏览器这头什么都没有）。
+   *
+   * 与上面两格钉住同构：都不参与派发的成败判定，都必须如实回报。
+   */
+  savedToAccount: boolean;
 }
 
 export interface DispatchInput {
@@ -346,6 +357,12 @@ export async function dispatchNewConversation(
     // 那句话对桌面端成立（会话在本机 daemon 上建，不带 origin），对 web 派发不
     // 成立。混作一谈的后果是这条对话在镜像里永远匹配不上，账号里明明保存了，
     // 左栏却一行都没有。
+    //
+    // 「不参与成败判定」不等于「不必说」：这一格与下面那两格钉住走同一条规矩 ——
+    // 不算派发失败，**但要如实回报**。此前这里是个空 catch，写失败之后界面一声不吭，
+    // 用户看到的是右栏开着这条对话、左栏一行都没有 —— 与「这条对话根本没开起来」
+    // 长得一模一样，而它其实开起来了，正在那台机器上跑。
+    let savedToAccount = true;
     try {
       await api("/v1/saved-sessions", {
         method: "POST",
@@ -356,7 +373,8 @@ export async function dispatchNewConversation(
         }),
       });
     } catch {
-      // 保存没写上:会话已经建起来了,交给调用方照常跳转。
+      // 保存没写上:会话已经建起来了,交给调用方照常跳转 —— 只是要带着这个事实。
+      savedToAccount = false;
     }
     // 钉住力度与钉住模型是同一件事的两半（都是「过线只管当轮，会话行得另写一次」），
     // 所以排在同一处、走同一条规矩：钉不住不算派发失败，但要如实回报。
@@ -374,6 +392,7 @@ export async function dispatchNewConversation(
         ? await pinModelTarget(client, ack.conversationId, pinTarget)
         : true,
       reasoningEffortPinned,
+      savedToAccount,
     };
   } finally {
     // 只还自己借的那份:复用进来的连接还归调用方用。还回去不是关掉 —— 池子里

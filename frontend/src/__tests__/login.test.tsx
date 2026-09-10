@@ -1,4 +1,10 @@
-import { cleanup, render, screen, fireEvent } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  fireEvent,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -29,6 +35,33 @@ function renderLogin(search: string = "") {
     </MemoryRouter>,
     { wrapper: ThemeProvider },
   );
+}
+
+const githubButton = () =>
+  screen.getByRole("button", {
+    name: /Sign in with GitHub/i,
+  }) as HTMLButtonElement;
+
+const passkeyButton = () =>
+  screen.getByRole("button", { name: /passkey/i }) as HTMLButtonElement;
+
+/**
+ * 勾上「我已阅读并同意」。
+ *
+ * 登录页上每一颗发起登录的按钮在勾选之前都是禁用的，所以凡是要点按钮的用例
+ * 都得先走这一步——漏掉它，fireEvent.click 打在禁用按钮上不会报错，只会静静地
+ * 什么都不发生。
+ */
+function tickConsent() {
+  fireEvent.click(screen.getByRole("checkbox"));
+}
+
+function markWebauthnSupported() {
+  Object.defineProperty(window, "PublicKeyCredential", {
+    value: function PublicKeyCredential() {},
+    configurable: true,
+    writable: true,
+  });
 }
 
 beforeEach(async () => {
@@ -72,11 +105,74 @@ describe("Login", () => {
       expect(card?.className).toContain("sm:p-9");
     });
 
-    it("shows a footer note about terms and privacy", () => {
+    // 条款与隐私不再由一句「继续即表示你同意」的旁白代劳——那句话把同意藏进
+    // 一次点击的副作用里，用户从没表示过什么。改成一个必须亲手勾的复选框，
+    // 两份文书各自列成点得开的链接。
+    //
+    // 只在同意块里找链接：AuthLayout 的页脚也有同名的两条，全局找会撞上它们。
+    it("lists terms and privacy as links the user can open", () => {
       renderLogin();
+      const consent = screen.getByTestId("login-consent");
       expect(
-        screen.getByText(/By continuing, you agree to AgentRe/i),
-      ).toBeTruthy();
+        within(consent)
+          .getByRole("link", { name: /Terms of Service/i })
+          .getAttribute("href"),
+      ).toBe("/terms");
+      expect(
+        within(consent)
+          .getByRole("link", { name: /Privacy Policy/i })
+          .getAttribute("href"),
+      ).toBe("/privacy");
+    });
+
+    // 勾选是**前置**的，不是事后追认：没勾之前两个登录入口都按不动。
+    it("keeps both sign-in buttons disabled until the box is ticked", () => {
+      markWebauthnSupported();
+      renderLogin();
+
+      expect(githubButton().disabled).toBe(true);
+      expect(passkeyButton().disabled).toBe(true);
+
+      tickConsent();
+
+      expect(githubButton().disabled).toBe(false);
+      expect(passkeyButton().disabled).toBe(false);
+    });
+
+    // 不记住上一次：同意是这一次登录的表示，不是账号上的一个设置。
+    it("starts unticked", () => {
+      renderLogin();
+      expect(screen.getByRole("checkbox", { checked: false })).toBeTruthy();
+    });
+
+    // 点文字也能勾：424 宽的卡片里那个 16px 的方框是全页最小的点击目标，
+    // 把整句话一起算进去是它唯一的补偿。
+    it("ticks the box when the user clicks the consent text", () => {
+      renderLogin();
+      const label = screen
+        .getByTestId("login-consent")
+        .querySelector("label") as HTMLLabelElement;
+
+      fireEvent.click(label);
+
+      expect(screen.getByRole("checkbox", { checked: true })).toBeTruthy();
+      expect(githubButton().disabled).toBe(false);
+    });
+
+    // 整行是一个 label（点文字也能勾），但点链接**只**是打开链接：HTML 规范把
+    // 落在交互内容后代上的点击排除在 label 激活行为之外。少了这一条，某天有人
+    // 把链接换成 `<span onClick>` 或给 label 补一个 onClick，用户点开《服务条款》
+    // 去读、回来就发现自己「已经同意」了——而同意必须是冲着那个框做的动作。
+    it("does not tick the box when the user opens the terms link", () => {
+      renderLogin();
+      const consent = screen.getByTestId("login-consent");
+
+      fireEvent.click(
+        within(consent).getByRole("link", { name: /Terms of Service/i }),
+      );
+
+      expect(screen.getByRole("checkbox", { checked: false })).toBeTruthy();
+      expect(githubButton().disabled).toBe(true);
     });
   });
 
@@ -212,12 +308,17 @@ describe("Login", () => {
   });
 
   describe("interaction", () => {
-    it("retry button is clickable when error is shown", () => {
+    // 重试也是一次登录，走同一道闸。勾选不落盘，上一次登录时勾过的不替这一次作数。
+    it("gates the retry button on the same consent box", () => {
       renderLogin("?err=access_denied");
-      const retryBtn = screen.getByRole("button", {
-        name: /Sign in again/i,
-      }) as HTMLButtonElement;
-      expect(retryBtn.disabled).toBe(false);
+      const retryBtn = () =>
+        screen.getByRole("button", {
+          name: /Sign in again/i,
+        }) as HTMLButtonElement;
+
+      expect(retryBtn().disabled).toBe(true);
+      tickConsent();
+      expect(retryBtn().disabled).toBe(false);
     });
   });
 
@@ -251,6 +352,7 @@ describe("Login", () => {
       );
 
       renderLogin();
+      tickConsent();
       const btn = screen.getByRole("button", { name: /passkey/i });
       fireEvent.click(btn);
 
@@ -278,22 +380,21 @@ describe("Login", () => {
     });
 
     // Given 本站用 http 提供（源不是安全上下文，PublicKeyCredential 与
-    // navigator.credentials 在那里整个不存在）/ When 打开登录页 / Then 不摆按钮，
-    // 但要说清为什么。
+    // navigator.credentials 在那里整个不存在）/ When 打开登录页 / Then 什么也不说。
     //
-    // 此前这一整块是**静默消失**的：注册过通行密钥的人在这个部署上找不到入口，
-    // 也读不到任何解释，只会以为功能没了。
-    it("explains the http origin instead of dropping the passkey block silently", () => {
+    // 这里曾经印一句「通行密钥只在 https 下可用，这个站点用的是 http」。它讲的是
+    // 部署方式，而站在登录页前的人改不了部署方式——一句读完无事可做的话只是噪音，
+    // 何况它还把本站怎么架的说给了每一个没登录的人听。
+    it("says nothing about the origin when passkeys are unavailable there", () => {
       Reflect.deleteProperty(window, "PublicKeyCredential");
       vi.spyOn(window, "isSecureContext", "get").mockReturnValue(false);
 
       renderLogin();
       expect(screen.queryByRole("button", { name: /passkey/i })).toBeNull();
-      expect(screen.getByText(/only available over HTTPS/i)).toBeTruthy();
+      expect(screen.queryByText(/HTTP/i)).toBeNull();
     });
 
-    // 浏览器是真的老时保持沉默：那不是本站能替他解决的事，界面上也没有可执行的
-    // 下一步——把「换成 https」摆给他看反而是句用不上的话。
+    // 浏览器是真的老时同样沉默：那不是本站能替他解决的事。
     it("stays silent when the browser itself is too old", () => {
       Reflect.deleteProperty(window, "PublicKeyCredential");
       vi.spyOn(window, "isSecureContext", "get").mockReturnValue(true);
@@ -404,6 +505,7 @@ describe("Login", () => {
       );
 
       renderLogin();
+      tickConsent();
       const passkeyBtn = screen.getByRole("button", { name: /passkey/i });
       fireEvent.click(passkeyBtn);
 
@@ -504,6 +606,7 @@ describe("Login", () => {
       );
 
       renderLogin();
+      tickConsent();
       const passkeyBtn = screen.getByRole("button", { name: /passkey/i });
       fireEvent.click(passkeyBtn);
 
@@ -608,6 +711,7 @@ describe("Login", () => {
         );
 
         renderLogin();
+        tickConsent();
         fireEvent.click(screen.getByRole("button", { name: /passkey/i }));
         await new Promise((resolve) => setTimeout(resolve, 100));
 

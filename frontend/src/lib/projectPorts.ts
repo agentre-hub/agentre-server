@@ -10,6 +10,7 @@
  * 是它必须在线。这条判定只由「那台机器是哪一类」决定，与界面无关，因此归这里。
  */
 import type {
+  PickerMachine,
   ProjectCreatePorts,
   ProjectDeletePorts,
   ProjectFieldValues,
@@ -36,6 +37,7 @@ import {
   clearLocalPathOnMachine,
   setLocalPathOnMachine,
 } from "@/lib/projectLocalPath";
+import { fetchDevices } from "@/lib/devices";
 import { errorMessage } from "@/lib/projectErrors";
 import type { DisposableProjectFsPort } from "@/lib/projectFsPort";
 
@@ -132,9 +134,7 @@ export function createProjectSettingsPorts(
     },
 
     setMachinePath: (projectId, machine, path) =>
-      machine.kind === "agentred"
-        ? rest(() => setProjectLocation(projectId, machine.id, path))
-        : relay(() => setLocalPathOnMachine(machine.id, projectId, path)),
+      writeMachinePath(projectId, machine, path),
 
     clearMachinePath: async (projectId, machine) => {
       if (machine.kind !== "agentred") {
@@ -154,7 +154,44 @@ export function createProjectSettingsPorts(
   };
 }
 
-export function createProjectCreatePorts(): ProjectCreatePorts {
+/**
+ * 把一条设备行翻成选择器认识的那四格。
+ *
+ * 与 `toMachineView` 分开是因为问的不是同一件事：那边问「这个项目在这台机器上配了
+ * 什么」（要 path / removable / 写要不要在线），新建时项目还不存在，只问「账号里有
+ * 哪些机器」。
+ */
+function toPickerMachine(d: {
+  name: string;
+  kind: string;
+  fingerprint: string;
+  online: boolean;
+}): PickerMachine {
+  return {
+    id: d.fingerprint,
+    name: d.name,
+    kind: d.kind === "agentred" ? "agentred" : "desktop",
+    online: d.online,
+  };
+}
+
+/**
+ * 写某台机器上的路径。**写往哪去只由那台机器是哪一类决定** —— 新建与设置两处问的
+ * 是同一件事，所以只写一份。
+ */
+function writeMachinePath(
+  projectId: string,
+  machine: { id: string; kind: "agentred" | "desktop" },
+  path: string,
+): Promise<ProjectWriteOutcome> {
+  return machine.kind === "agentred"
+    ? rest(() => setProjectLocation(projectId, machine.id, path))
+    : relay(() => setLocalPathOnMachine(machine.id, projectId, path));
+}
+
+export function createProjectCreatePorts(
+  fs: DisposableProjectFsPort,
+): ProjectCreatePorts {
   return {
     create: async (draft) => {
       // 指针语义：**只送这次真的填了的键**，没填的不翻成空串送下去。
@@ -172,6 +209,20 @@ export function createProjectCreatePorts(): ProjectCreatePorts {
     },
     // 本机路径与 git 探测都是「摸得到本机文件系统」才有的能力，浏览器上没有。
     // 路径不必填是两端共同的规则（决策 9），不是这一端的特例。
+    //
+    // 但**在别的机器上**配路径这一端做得到，所以挂上：不然在 web 上建的项目一律
+    // 得建完再去项目设置里补一趟，而那一趟是必走的（不配路径就开不出对话）。
+    machines: {
+      // 读不上来就回空，包据此把那一格整格收掉 —— 一个点开是空的入口比没有更糟。
+      list: () =>
+        fetchDevices().then(
+          (rows) => rows.map(toPickerMachine),
+          () => [],
+        ),
+      fs,
+      setPath: (projectId, machine, path) =>
+        writeMachinePath(projectId, machine, path),
+    },
   };
 }
 

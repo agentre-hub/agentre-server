@@ -18,7 +18,7 @@ import {
   SessionLifecycleRunning,
   type AnyRpcMethod,
 } from "@agentre-hub/agentre-wire";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -3321,6 +3321,219 @@ describe("会话详情：头部", () => {
       expect(
         screen.getByTestId("session-detail-transcript").textContent,
       ).toContain("后端 Agent"),
+    );
+  });
+
+  /**
+   * 从草稿页交接过来的那一拍，而这条对话**是谁**还没解开：账号镜像里还没有那一行
+   * （刚派发出去的对话就是这样），中继的 `session.list` 也还在路上。`initialUserText`
+   * 与 `seeded` 让转录、头部与底栏就地全都铺出来了 —— 这一屏是用户第一眼看到的。
+   *
+   * 交回一只闸：放开它身份就落地（agentSyncId = ag-1 → 「后端 Agent」）。
+   */
+  function renderHandoverWithPendingIdentity(
+    extra: Partial<ComponentProps<typeof SessionDetailView>> = {},
+  ) {
+    stubHeader();
+    let releaseList: () => void = () => {};
+    const listPending = new Promise<void>((r) => {
+      releaseList = () => r();
+    });
+    fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
+      if (method === rpcMethods.sessionList) {
+        await listPending;
+        return { sessions: [{ ...summary, lifecycleState: "running" }] };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + String(method));
+    });
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            form="embedded"
+            initialTitle="你好，看看"
+            initialUserText="你好，看看"
+            initialTurnStartedAt={Date.now()}
+            {...extra}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    return { releaseList: () => releaseList() };
+  }
+
+  /**
+   * 同一个「闪一下」的另一半空窗，而原先那条守不住它。
+   *
+   * 抬头要两条异步各自到齐才解得开：账号的 Agent 清单 + 这条对话的 agentSyncId。
+   * `agentPending` 只顾了前者 —— 判据是「**已知**有 Agent 而清单还没回来」，于是
+   * 身份本身还没解开（`identity` 为 null）那一段里它是**假**的，抬头照旧退回中性名。
+   */
+  it("交接那一拍身份还没解开：转录抬头不先摆「Assistant」再换成真名", async () => {
+    const { releaseList } = renderHandoverWithPendingIdentity();
+
+    // 交接那一拍：用户那句话与三点都在（running = seeded），而这条对话是谁还没解开。
+    const transcript = await screen.findByTestId("session-detail-transcript");
+    await vi.waitFor(() =>
+      expect(transcript.textContent).toContain("你好，看看"),
+    );
+    expect(transcript.textContent).not.toContain("Assistant");
+
+    // 身份解开后，真名补上。
+    releaseList();
+    await vi.waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-transcript").textContent,
+      ).toContain("后端 Agent"),
+    );
+  });
+
+  /**
+   * 同一段空窗的第二处：头部那一格。
+   *
+   * 它是 `agent?.name ?? sessionStatusLabel(...)` —— Agent 名认不出来时退回状态文字，
+   * 而「认不出来」同样把「还没解开」与「问过了就是没有」当成了一件事。于是这一格
+   * 先写「Running」，身份一到原地变成「后端 Agent」：同一处文字，一拍之内说了两件
+   * 不同维度的事。
+   *
+   * 状态点不受影响 —— 那一维此刻真的知道（`running`），要藏的只有那句注定要被换掉
+   * 的话。位置照留、一个字都不说，与转录那一档同一条处置。
+   */
+  it("交接那一拍身份还没解开：头部不先摆状态文字再换成 Agent 名", async () => {
+    const { releaseList } = renderHandoverWithPendingIdentity();
+
+    const status = await screen.findByTestId("session-detail-status");
+    // 状态点在（这一维知道），而名字那一格闭嘴。
+    expect(status.querySelector("[aria-label$='status']")).toBeTruthy();
+    expect(status.textContent).toBe("");
+
+    releaseList();
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("session-detail-status").textContent).toContain(
+        "后端 Agent",
+      ),
+    );
+  });
+
+  /**
+   * 空窗本身还能再窄一档：**宿主已经知道是哪个 Agent**。
+   *
+   * 草稿页那一屏是用户亲手挑的 Agent，页面手里有它的名字与头像；交接给详情时却只
+   * 递了标题与那句话，于是详情页要绕一整圈网络（先解身份、再取账号清单）把上一屏
+   * 已知的东西重新问回来。递下去就不必绕：第一帧直接是真名与真头像，一次都不换。
+   *
+   * 与 `initialTitle` / `initialUserText` 同一条路子（见 lib/dispatch 里那两格的
+   * 说明）——它只是**种子**，不改判定：身份落地后仍以实况为准。
+   */
+  it("宿主已经知道是哪个 Agent：第一帧就是真名与真头像，一次都不换", async () => {
+    renderHandoverWithPendingIdentity({
+      initialAgent: {
+        sync_id: "ag-1",
+        name: "后端 Agent",
+        avatar_color: "agent-3",
+        avatar_icon: "bot",
+      },
+    });
+
+    // 身份（session.list）与清单都还没落地，而抬头已经是真名了。
+    const transcript = await screen.findByTestId("session-detail-transcript");
+    await vi.waitFor(() =>
+      expect(transcript.textContent).toContain("你好，看看"),
+    );
+    expect(transcript.textContent).toContain("后端 Agent");
+    expect(transcript.textContent).not.toContain("Assistant");
+    // 头像也是真的那一枚（调色板色 + 图标），不是灰方块。
+    expect(
+      within(transcript)
+        .getAllByRole("img", { name: "后端 Agent" })[0]
+        .querySelector("svg")
+        ?.getAttribute("class"),
+    ).toContain("lucide-bot");
+    // 头部同样：不再先摆状态文字。
+    expect(screen.getByTestId("session-detail-status").textContent).toContain(
+      "后端 Agent",
+    );
+  });
+
+  /**
+   * 移动端那一半：草稿页在这里是**下钻**，种子只能随导航 state 走（与 title /
+   * userText / turnStartedAt 同一条来路）。递不过去的话，窄屏上那段空窗照旧。
+   *
+   * state 是历史记录里的东西——十分钟后刷新它还在手上、也可能被人改过，所以逐格
+   * 验形状再用，与那几格同一种处置。
+   */
+  it("移动端下钻：Agent 种子随导航 state 过来，落地那一屏第一帧就是真名", async () => {
+    stubHeader();
+    fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
+      // 中继答不出这条对话（机器上没有它），账号镜像那一行也没有：名字只可能来自
+      // 导航 state 带过来的那一份。
+      if (method === rpcMethods.sessionList) return { sessions: [] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + String(method));
+    });
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/devices/1/sessions/42",
+            state: {
+              title: "你好，看看",
+              userText: "你好，看看",
+              agent: {
+                sync_id: "ag-1",
+                name: "后端 Agent",
+                avatar_color: "agent-3",
+                avatar_icon: "bot",
+              },
+            },
+          },
+        ]}
+      >
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/devices/:deviceId/sessions/:conversationId"
+              element={<SessionDetail />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("session-detail-status").textContent).toContain(
+        "后端 Agent",
+      ),
+    );
+  });
+
+  /**
+   * 同一段空窗的第三处：底栏那颗模型 pill。
+   *
+   * 它认的是 `identity` 上的 providerKey / modelKey，而「两格皆空」在这套三态里是
+   * 一个**有名字的态**（跟随 Agent 绑定，脸上那枚 👤）。身份还没解开时两格当然是
+   * 空的 —— 于是 pill 先摆出「跟随绑定」，等这条对话真钉的模型到了再换掉。
+   *
+   * 顺带还有一处不只是好看不好看：那一段里点开它改模型，写失败要回滚，而回滚的
+   * 落点正是这份假的「跟随绑定」。
+   *
+   * 不知道就不摆这一维（与头部的项目那一格同一条），别拿一个空目标冒充一次选择。
+   */
+  it("交接那一拍身份还没解开：底栏不先摆一颗「跟随绑定」的模型 pill", async () => {
+    const { releaseList } = renderHandoverWithPendingIdentity();
+
+    // 输入框已经铺出来了（那一 chunk 是 lazy 的，等它落地再断言 pill 不在）。
+    await awaitComposer();
+    expect(screen.queryByTestId("composer-model-target")).toBeNull();
+
+    releaseList();
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("composer-model-target")).toBeTruthy(),
     );
   });
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // ── 浏览器直写项目一族（规格 2026-08-20「项目在 web 上成为一件可管理的事」）──────
@@ -31,9 +32,9 @@ func TestCreateOrgObject_GivenProjectKinds_ThenServerAllocatesIDVersionAndRecord
 	t.Run("项目", func(t *testing.T) {
 		ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 		mState := registerSyncStateMock(t)
-		mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(201), nil)
+		mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(201), nil)
 		var saved *sync_entity.SyncObject
-		mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+		mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 		got, err := svc.CreateOrgObject(ctx, OrgWriteInput{
@@ -63,9 +64,9 @@ func TestCreateOrgObject_GivenProjectKinds_ThenServerAllocatesIDVersionAndRecord
 				orgRow(t, sync_entity.KindProject, "proj-1", map[string]any{"name": "后端"}),
 				orgRow(t, sync_entity.KindAgent, "agent-1", map[string]any{"name": "小助手"}),
 			}, nil)
-		mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(202), nil)
+		mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(202), nil)
 		var saved *sync_entity.SyncObject
-		mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+		mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 		got, err := svc.CreateOrgObject(ctx, OrgWriteInput{
@@ -128,9 +129,9 @@ func TestUpdateOrgObject_GivenProjectRename_ThenUntouchedKeysSurvive(t *testing.
 	mObj.EXPECT().Find(ctx, int64(7), "proj-1").Return(liveOrgRow(1, sync_entity.KindProject, "proj-1",
 		`{"name":"后端","description":"原简介","icon":"🚀","color":"agent-3",`+
 			`"sort_order":3,"future_key_from_a_newer_desktop":"保留我"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(203), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(203), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -189,9 +190,9 @@ func TestUpdateOrgObject_GivenParentOutsideItsOwnSubtree_ThenAccepted(t *testing
 			orgRow(t, sync_entity.KindProject, "proj-b", map[string]any{"name": "B", "parent_sync_id": "proj-a"}),
 			orgRow(t, sync_entity.KindProject, "proj-c", map[string]any{"name": "C", "parent_sync_id": "proj-b"}),
 		}, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(204), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(204), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -209,9 +210,9 @@ func TestUpdateOrgObject_GivenParentClearedToRoot_ThenAccepted(t *testing.T) {
 
 	mObj.EXPECT().Find(ctx, int64(7), "proj-b").Return(
 		liveOrgRow(2, sync_entity.KindProject, "proj-b", `{"name":"B","parent_sync_id":"proj-a"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(205), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(205), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -293,7 +294,7 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenDescendantsMembersAndLocati
 	// proj-a → proj-b → proj-c，外加一个不在这棵子树里的 proj-x。
 	mObj.EXPECT().Find(ctx, int64(7), "proj-a").Return(
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
-	mObj.EXPECT().ListByKinds(ctx, int64(7), []string{
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
 	}).Return([]*sync_entity.SyncObject{
 		{ID: 1, Kind: sync_entity.KindProject, SyncID: "proj-a", Payload: mustJSON(t, map[string]any{"name": "A"})},
@@ -315,7 +316,7 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenDescendantsMembersAndLocati
 	// 级联的每一行各吃一个版本号（同 sync_svc.tombstoneExecTargetsOf 的做法），
 	// 主行最后落，因此它拿到的是最高的那一个。
 	var versions []int64
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).DoAndReturn(
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
 		func(context.Context, int64, int64) (int64, error) {
 			v := int64(300 + len(versions))
 			versions = append(versions, v)
@@ -323,13 +324,13 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenDescendantsMembersAndLocati
 		}).AnyTimes()
 
 	tombstoned := map[int64]int64{}
-	mObj.EXPECT().Tombstone(ctx, gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, id, version, _ int64) (int64, error) {
 			tombstoned[id] = version
 			return 1, nil
 		}).AnyTimes()
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	got, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
@@ -362,14 +363,14 @@ func TestDeleteOrgObject_GivenLeafProject_ThenOnlyItselfIsTombstoned(t *testing.
 
 	mObj.EXPECT().Find(ctx, int64(7), "proj-a").Return(
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
-	mObj.EXPECT().ListByKinds(ctx, int64(7), []string{
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
 	}).Return([]*sync_entity.SyncObject{
 		{ID: 1, Kind: sync_entity.KindProject, SyncID: "proj-a", Payload: `{"name":"A"}`},
 	}, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(310), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(310), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	got, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
@@ -388,9 +389,9 @@ func TestDeleteOrgObject_GivenProjectMember_ThenNoCascade(t *testing.T) {
 	mObj.EXPECT().Find(ctx, int64(7), "pa-1").Return(
 		liveOrgRow(5, sync_entity.KindProjectAgent, "pa-1",
 			`{"project_sync_id":"proj-1","agent_sync_id":"agent-1"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(320), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(320), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
@@ -502,8 +503,8 @@ func TestCreateOrgObject_GivenProjectAndBroadcastFails_ThenWriteStillSucceeds(t 
 	stub := registerAccountChanStub(t)
 	stub.err = errors.New("redis unreachable")
 
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(330), nil)
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(330), nil)
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
 	got, err := svc.CreateOrgObject(ctx, OrgWriteInput{
 		UserID: 7, Kind: sync_entity.KindProject, Fields: map[string]any{"name": "新项目"}})
@@ -518,4 +519,63 @@ func TestOrgWrite_GivenBackendKind_ThenStillNotWritable(t *testing.T) {
 	_, err := svc.CreateOrgObject(ctx, OrgWriteInput{
 		UserID: 7, Kind: sync_entity.KindAgentBackend, Fields: map[string]any{"name": "x"}})
 	assertWriteCode(t, err, code.OrgKindNotWritable)
+}
+
+// 删一棵项目子树是**一个**事务：子树的每一行墓碑、主行的墓碑，要么一起生效、要么
+// 一行都不动。
+//
+// 逐行各自提交时，中途失败会留下一棵删了一半的树：主行还活着而它的一部分子项目已经
+// 消失，或者反过来主行没了、子项目成了指向不存在父项目的孤儿行——而且这个中间态会照常
+// 同步到每一台机器上。浏览器那边同时收到一个错误，用户以为什么都没发生。
+//
+// 版本号同理必须取在这个事务里：sync_account_seqs 那一行的排他锁持到提交，取号顺序
+// 才是提交顺序，下行游标（version > cursor）才不会跳过一条已经提交得更晚的墓碑。
+func TestDeleteOrgObject_GivenProjectWithSubtree_ThenTheWholeCascadeIsOneTransaction(t *testing.T) {
+	ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	registerAccountChanStub(t)
+
+	mObj.EXPECT().Find(gomock.Any(), int64(7), "proj-a").Return(
+		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
+		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
+	}).Return([]*sync_entity.SyncObject{
+		{ID: 1, Kind: sync_entity.KindProject, SyncID: "proj-a", Payload: mustJSON(t, map[string]any{"name": "A"})},
+		{ID: 2, Kind: sync_entity.KindProject, SyncID: "proj-b", Payload: mustJSON(t, map[string]any{
+			"name": "B", "parent_sync_id": "proj-a"})},
+		{ID: 3, Kind: sync_entity.KindProjectAgent, SyncID: "pa-b", Payload: mustJSON(t, map[string]any{
+			"project_sync_id": "proj-b", "agent_sync_id": "agent-1"})},
+	}, nil)
+
+	var allocatedInTx []bool
+	var version int64 = 300
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+		func(ctx context.Context, _, _ int64) (int64, error) {
+			allocatedInTx = append(allocatedInTx, hubtest.InTransaction(ctx))
+			version++
+			return version, nil
+		}).AnyTimes()
+	var tombstonedInTx []bool
+	mObj.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _, _, _ int64) (int64, error) {
+			tombstonedInTx = append(tombstonedInTx, hubtest.InTransaction(ctx))
+			return 1, nil
+		}).AnyTimes()
+	savedInTx := false
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ *sync_entity.SyncObject) error {
+			savedInTx = hubtest.InTransaction(ctx)
+			return nil
+		})
+
+	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
+		UserID: 7, Kind: sync_entity.KindProject, SyncID: "proj-a"})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events(),
+		"子树与主行是一次删除，不是三次各自提交的写入")
+	assert.Len(t, tombstonedInTx, 2)
+	assert.NotContains(t, tombstonedInTx, false, "级联的每一行都要落在那个事务里")
+	assert.True(t, savedInTx, "主行的墓碑也在同一个事务里")
+	assert.NotContains(t, allocatedInTx, false, "版本号也要取在事务里")
 }

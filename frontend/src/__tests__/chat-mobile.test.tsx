@@ -78,7 +78,7 @@ const agents = [
         device_name: "书房小主机",
         availability: "available",
         current: true,
-        is_local_reference: false,
+        device_unspecified: false,
       },
     ],
   },
@@ -255,7 +255,7 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
 
     const box = await screen.findByTestId("group-device-1");
     expect(
-      await within(box).findByText("No conversations on this machine yet."),
+      await within(box).findByText("No conversations on this machine yet"),
     ).toBeTruthy();
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
   });

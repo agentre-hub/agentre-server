@@ -42,7 +42,7 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 			"DepartmentName", "ExecTargets", "HasAvailableTarget",
 		},
 		"ExecTargetItem": {
-			"Rank", "BackendSyncID", "IsLocalReference",
+			"Rank", "BackendSyncID", "DeviceUnspecified",
 			"DeviceID", "DeviceName", "BackendType", "Availability", "Current",
 		},
 		"DispatchTargetResponse": {"AgentSyncID", "Tiers", "Chosen", "Projects"},
@@ -123,11 +123,11 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 		// （device.ListDevicesItem.Fingerprint）与 DispatchChoiceItem 下行给同一个
 		// 浏览器会话——登记它不是新开口子，是把既有的暴露面写进白名单。
 		"OrgExecTargetItem": {"SyncID", "Rank", "BackendSyncID", "BackendName", "BackendType",
-			"DeviceID", "DeviceName", "DeviceFingerprint", "IsLocalReference",
+			"DeviceID", "DeviceName", "DeviceFingerprint", "DeviceUnspecified",
 			"Availability", "Current", "SkillsJSON"},
 		"OrgBackendsResponse": {"Backends"},
 		"OrgBackendItem": {"SyncID", "Name", "BackendType", "DeviceID", "DeviceName",
-			"IsLocalReference", "Availability"},
+			"DeviceUnspecified", "Availability"},
 		// 转录：原始帧本身（seq/method/params）不是「机器上的东西」，是对话内容
 		// 本身（决策 4）——渲染的保真度不留例外（决策 14），因此不受这份白名单约束
 		// 到 Params 内部；这里只守 TranscriptResponse/TranscriptFrameItem 自己的

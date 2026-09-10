@@ -225,7 +225,7 @@ function FilterChips({
           onClick={() => onFilterChange(option)}
         >
           {t(`sessionIndex.filter.${option}`)}
-          {/* 一条都不等你时不摆一个 0：空徽标比没有徽标更吵。 */}
+          {/* 一条未读都没有时不摆一个 0：空徽标比没有徽标更吵。 */}
           {option === "unread" && unreadCount > 0 && (
             <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-status-waiting px-1 text-3xs font-semibold text-status-waiting-foreground">
               {unreadCount}
@@ -881,7 +881,13 @@ export interface SessionIndexProps {
    */
   filter: SessionFilter;
   onFilterChange: (filter: SessionFilter) => void;
-  /** 「等你处理」chip 上那个数，同样来自服务端的完整集合。 */
+  /**
+   * 「未读」chip 上那个数，同样来自服务端的完整集合。
+   *
+   * 是「未读」不是「等你处理」——那是并排的另一个 chip，数的是另一件事。
+   * 两者混起来正是 lib/attentionCount.ts 记着的那个 bug（侧栏数 waiting_for_input、
+   * chip 数 unread），别再让一句注释把它接回去。
+   */
   unreadCount?: number;
   /**
    * 组键 → 这一组在当前范围下的真数（规格 2026-08-19 决策 6）。「查看全部 N」那个
@@ -1071,6 +1077,16 @@ export default function SessionIndex({
   }, [axis, rows, groupTotals, projects, agents, machines, t]);
 
   const hasRows = groups.some((g) => g.rows.length > 0);
+
+  /**
+   * 这一屏是不是被**收窄过**（搜索或筛选档）。
+   *
+   * 「这一组是空的」与「这次搜索/这一档不收」是两件事：收窄之后组里再说
+   * 「暂无会话」就是替用户否认那些还在的会话。收窄这一档只有页面级那一句说得出
+   * （它知道账号里还有多少条、也接得住「清除搜索」「回全部」），所以收窄时组闭嘴、
+   * 页面级说话；没收窄时反过来。
+   */
+  const scoped = narrowed || filter !== "all";
 
   /**
    * ↑↓ 走得到的行，按渲染顺序。两类行不在其中：
@@ -1307,12 +1323,16 @@ export default function SessionIndex({
           </button>
         ) : null}
       </div>
-      {/* 机器轴上一条行都没有不等于「你还没有对话」：那一轴的每个空组自己会说
-          「这台机器上还没有对话」，页面级再说一遍就是同一句话说两遍。收窄之后
-          才需要这一句——「没有匹配这次搜索」是组头说不出的。
-          但「组头自己会说」得真有组头才成立：一台能跑会话的机器都没有时这一轴
-          连一个组都出不来，不说话就是一块无言的空白。 */}
-      {!hasRows && (axis !== "machine" || narrowed || groups.length === 0) ? (
+      {/* 机器轴与项目轴上一条行都没有不等于「你还没有对话」：这两轴的空组自己会说
+          （「这台机器上还没有对话」/「暂无会话」），页面级再说一遍就是同一句话说
+          两遍。桌面端也是这么分的——项目树里有项目时它不出页面级空态。收窄之后
+          才需要这一句——「没有匹配这次搜索」「这一档不收」是组头说不出的。
+          但「组头自己会说」得真有组头才成立：一台能跑会话的机器 / 一个项目都没有
+          时这一轴连一个组都出不来，不说话就是一块无言的空白。 */}
+      {!hasRows &&
+      ((axis !== "machine" && axis !== "project") ||
+        scoped ||
+        groups.length === 0) ? (
         <IndexEmpty
           filter={filter}
           narrowed={narrowed}
@@ -1341,26 +1361,29 @@ export default function SessionIndex({
             空组要不要说一句（规格 2026-08-21「机器轴列什么」）：
 
             - 在线、清单为空 → 「这台机器上还没有对话」。孤零零一个组头读起来像坏了。
+            - 项目 / Agent 那些空组同样有话说，只是没有更准的说法，落到共享包的
+              兜底「暂无会话」——与桌面端逐字同源。
             - 离线 → 什么也不说：原因已经在组头上，这一组答不出「有什么」。
             - 收窄过 → 什么也不说：「还没有对话」在这里是假话，它们还在，只是这次
               搜索/筛选不收；页面级那一句负责说这件事。
             - 还没交出清单（连接中 / 连不上）→ 什么也不说：这一组现在答不出，
               「还没有对话」会是编的。
+
+            **画**由共享包的 `SessionGroup` 统一画（Inbox + 一行灰字），本站只决定
+            说不说、说哪一句：同一件事两端别各画一遍。
           */
             const machineDeviceId = Number(group.key.replace(/^device-/, ""));
             const machineState = machineStates?.[machineDeviceId];
             const answered =
               machineStates === undefined || machineState === "connected";
-            const emptyNote =
-              group.kind === "machine" &&
-              group.rows.length === 0 &&
-              !group.offline &&
-              !narrowed &&
-              answered ? (
-                <p className="px-1 py-0.5 text-xs text-muted-foreground">
-                  {t("sessionIndex.machine.empty")}
-                </p>
-              ) : null;
+            const silentWhenEmpty =
+              scoped ||
+              (group.kind === "machine" && (group.offline || !answered));
+            const emptyLabel = silentWhenEmpty
+              ? null
+              : group.kind === "machine"
+                ? t("sessionIndex.machine.empty")
+                : undefined;
             /*
               还没答上来的那一组（连接中）：摆骨架，不是一个孤零零的空组头
               （规格 2026-08-21-connection-failure-ux 决策 9）。它既说明「在动」，
@@ -1377,9 +1400,7 @@ export default function SessionIndex({
                   <div data-testid="group-skeleton">
                     <SessionListSkeleton rows={2} />
                   </div>
-                ) : (
-                  emptyNote
-                )}
+                ) : null}
               </div>
             );
             // 时间轴那一组没有组头，也就没有可收放的东西：它是单一平铺列表，
@@ -1482,7 +1503,17 @@ export default function SessionIndex({
                     openRow(row);
                   }
                 }}
-                renderAfterSessions={body}
+                /*
+                  这一组什么都没有时把插槽整个撤掉，包的空态才画得出来：它的判据是
+                  「没有 sessions、没有『查看全部』、也没有 renderAfterSessions」，
+                  而本站的行全部走这个插槽（见上面那段注释），插槽常驻就等于永远
+                  不空——那颗空态一次也画不出来。撤掉不丢东西：这一支里插槽装的
+                  本来就是一个空的 div。
+                */
+                renderAfterSessions={
+                  group.rows.length === 0 && !pending && !overflow ? null : body
+                }
+                emptyLabel={emptyLabel}
               />
             );
           })

@@ -194,6 +194,7 @@ const restMocks = vi.hoisted(() => ({
   deleteProject: vi.fn(),
   setLocalPathOnMachine: vi.fn(),
   clearLocalPathOnMachine: vi.fn(),
+  fetchDevices: vi.fn(),
 }));
 
 vi.mock("@/lib/projects", async (importOriginal) => ({
@@ -206,6 +207,11 @@ vi.mock("@/lib/projects", async (importOriginal) => ({
   deleteProjectLocation: restMocks.deleteProjectLocation,
   createProject: restMocks.createProject,
   deleteProject: restMocks.deleteProject,
+}));
+
+vi.mock("@/lib/devices", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  fetchDevices: restMocks.fetchDevices,
 }));
 
 vi.mock("@/lib/projectLocalPath", async (importOriginal) => ({
@@ -407,7 +413,7 @@ describe("本站的项目 ports", () => {
 
   it("新建：只送真的填了的键", async () => {
     restMocks.createProject.mockResolvedValue({ sync_id: "p9" });
-    const ports = createProjectCreatePorts();
+    const ports = createProjectCreatePorts(createProjectFsPort());
     // 这一端没有本机，所以挑本机目录与 git 探测两个 port 都不挂。
     expect(ports.pickLocalDirectory).toBeUndefined();
     expect(ports.probeGitRepo).toBeUndefined();
@@ -418,6 +424,107 @@ describe("本站的项目 ports", () => {
       parent_sync_id: "p1",
     });
     expect(outcome).toEqual({ ok: true, id: "p9" });
+  });
+
+  /**
+   * 新建时就把路径配上（web 这一端才有：桌面端有它自己的「本机上的路径」那一格）。
+   *
+   * 路径进不了建项目那次请求 —— 它按「项目 × 机器」另存一处，服务端 org.go 写死了
+   * 「这里没有 path，也不会有」。所以这里问的是同一件事的另一半：**第二次写往哪去**。
+   */
+  describe("新建时就配路径", () => {
+    function device(over: Record<string, unknown>) {
+      return {
+        id: 1,
+        name: "build-box",
+        kind: "agentred",
+        platform: "linux",
+        version: "0.1",
+        fingerprint: "fp-1",
+        last_seen_at: 0,
+        status: 1,
+        online: true,
+        is_this_device: false,
+        protocol_mismatch: false,
+        daemon_commit: "",
+        daemon_build_known: false,
+        ...over,
+      };
+    }
+
+    it("机器清单取的是账号下的设备，翻成包认识的那四格", async () => {
+      restMocks.fetchDevices.mockResolvedValue([
+        device({}),
+        device({
+          id: 2,
+          name: "laptop",
+          kind: "desktop",
+          fingerprint: "fp-2",
+          online: false,
+        }),
+      ]);
+      const ports = createProjectCreatePorts(createProjectFsPort());
+      expect(ports.machines).toBeDefined();
+      await expect(ports.machines!.list()).resolves.toEqual([
+        { id: "fp-1", name: "build-box", kind: "agentred", online: true },
+        { id: "fp-2", name: "laptop", kind: "desktop", online: false },
+      ]);
+    });
+
+    it("写往哪去只由那台机器是哪一类决定：agentred 走 REST（离线也配得了）", async () => {
+      restMocks.setProjectLocation.mockResolvedValue({});
+      const ports = createProjectCreatePorts(createProjectFsPort());
+      const outcome = await ports.machines!.setPath(
+        "p9",
+        { id: "fp-1", name: "build-box", kind: "agentred", online: false },
+        "/srv/atlas",
+      );
+      expect(restMocks.setProjectLocation).toHaveBeenCalledWith(
+        "p9",
+        "fp-1",
+        "/srv/atlas",
+      );
+      expect(restMocks.setLocalPathOnMachine).not.toHaveBeenCalled();
+      expect(outcome).toEqual({ ok: true });
+    });
+
+    it("桌面端那一类要经中继喊它自己写 —— 服务端写一行下次上报就被冲掉", async () => {
+      restMocks.setLocalPathOnMachine.mockResolvedValue({});
+      const ports = createProjectCreatePorts(createProjectFsPort());
+      await ports.machines!.setPath(
+        "p9",
+        { id: "fp-2", name: "laptop", kind: "desktop", online: true },
+        "/Users/w/atlas",
+      );
+      expect(restMocks.setLocalPathOnMachine).toHaveBeenCalledWith(
+        "fp-2",
+        "p9",
+        "/Users/w/atlas",
+      );
+      expect(restMocks.setProjectLocation).not.toHaveBeenCalled();
+    });
+
+    it("中继写失败按错误码分类，不把那台机器的 Go 原文透出去", async () => {
+      // -1 是 RelayClient 自己造的那一类（连接未就绪 / 已关闭 / 断线）。
+      restMocks.setLocalPathOnMachine.mockRejectedValue(
+        new RelayError(-1, "relay: peer offline", null),
+      );
+      const ports = createProjectCreatePorts(createProjectFsPort());
+      const outcome = await ports.machines!.setPath(
+        "p9",
+        { id: "fp-2", name: "laptop", kind: "desktop", online: true },
+        "/Users/w/atlas",
+      );
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) return;
+      expect(outcome.failure.kind).toBe("disconnected");
+    });
+
+    it("设备清单读不上来时回空 —— 包据此整格不出现，而不是留一个点开是空的入口", async () => {
+      restMocks.fetchDevices.mockRejectedValue(new ApiError(500, "boom", 500));
+      const ports = createProjectCreatePorts(createProjectFsPort());
+      await expect(ports.machines!.list()).resolves.toEqual([]);
+    });
   });
 
   it("删除：失败时业务文案原样透出", async () => {

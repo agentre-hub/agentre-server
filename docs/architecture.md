@@ -295,6 +295,20 @@ so unlocking after the TTL has already rolled over to another replica would dele
 replica's lock — TryLock-and-let-expire avoids that. A replica that loses the race returns
 `nil`, not an error, so the N-1 non-winning replicas don't log spurious `cron error` noise.
 
+**Reaching the replica that holds a resident connection.** A period lock answers "who runs
+this round"; it does not answer "who is holding the connection this request needs". The
+session mirror has both: one replica claims a machine under a renewable Redis lease
+(`mirror_svc.machineLease`) and keeps the relay connection resident, while the load balancer
+sends each save/delete to whichever replica it likes. The replica that takes the request can
+only reach its *own* followers, so a change made anywhere else has to be addressed to the
+lease holder — `mirror_svc` publishes a JSON hint on a Redis Pub/Sub channel derived from the
+lease key (`hint.go`), and the follower consumes it on its resident loop. Do not "fix" this
+by letting every replica follow the machine: the lease exists so one conversation is not
+mirrored twice. The reconcile cron stays as the backstop, so a lost hint costs latency, not
+correctness — but *only* latency-tolerant work may rely on the backstop alone. Deleting is
+not one of them: until the holder is told, its live frames write the conversation the account
+just deleted straight back in.
+
 **Startup one-shot work.** Work that must run exactly once across a concurrently-starting
 fleet — migrations are the current example — needs a distributed lock, not just an
 in-process guard. `migrations/migrations.go`'s `RunMigrations` takes a MySQL named

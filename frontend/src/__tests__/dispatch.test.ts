@@ -342,6 +342,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
       reasoningEffortPinned: true,
+      // 存进账号了：左栏这一轮取数就列得出它。
+      savedToAccount: true,
     });
     // 不关：连接归池子，派发只是把租约还回去。
     expect(client.close).not.toHaveBeenCalled();
@@ -412,6 +414,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
     // 不关：连接归池子，派发只是把租约还回去。
     expect(client.close).not.toHaveBeenCalled();
@@ -422,7 +425,12 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
   // 失败,界面会说「联系不上这台机器,请重试」——用户一重试就凭空又开一条真会话,
   // 而第一条还留在机器上跑。保存写不进去只是这条不会自动出现在「对话」页,不该
   // 把已经成功的派发说成失败。
-  it("保存写失败不把已经成功的派发报成失败(否则重试会开出第二条真会话)", async () => {
+  //
+  // 但「不算失败」不等于「不必说」：这一格与隔壁 modelPinned / reasoningEffortPinned
+  // 同一条规矩——钉不住不算派发失败,**但要如实回报**。此前这里是个空 catch,于是
+  // 用户看到的是右栏开着这条对话、左栏一行都没有,而界面一声不吭(2026-09-05 dev 库
+  // 漂移那次,server 连着三次 500,控制台完全无感)。
+  it("保存写失败不把已经成功的派发报成失败(否则重试会开出第二条真会话),但如实报回 savedToAccount:false", async () => {
     const client = fakeClient();
     MockRelayClient.mockImplementation(function () {
       return client;
@@ -448,6 +456,8 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
       // 跟随 Agent 绑定：没什么可钉，恒为真。力度同理（没选就没什么可钉）。
       modelPinned: true,
       reasoningEffortPinned: true,
+      // 这一格就是那句「如实回报」：会话真开起来了，但账号里没有它。
+      savedToAccount: false,
     });
     // 不关：连接归池子，派发只是把租约还回去。
     expect(client.close).not.toHaveBeenCalled();

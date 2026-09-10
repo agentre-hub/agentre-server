@@ -23,6 +23,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo/mock_sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // accountChanCall 是 stubAccountChan 记下的一次广播。
@@ -87,6 +88,22 @@ func setupWorkspaceTest(t *testing.T) (
 	context.Context, *mock_sync_repo.MockSyncObjectRepo, *mock_sync_repo.MockSyncLocalPathRepo,
 	*mock_device_repo.MockDeviceRepo, *workspaceSvc,
 ) {
+	t.Helper()
+	ctx, _, mObj, mPath, mDev, svc := setupWorkspaceTxTest(t)
+	return ctx, mObj, mPath, mDev, svc
+}
+
+// setupWorkspaceTxTest 与 setupWorkspaceTest 只差一件东西：它还交回事务事件记录。
+//
+// 写路径把「取版本号 + 落库」钉在同一个事务里（withTx），ctx 因此必须真的带着一个
+// 开得起事务的连接；hubtest.TxDatabase 提供的正是它——只认 BEGIN/COMMIT/ROLLBACK，
+// 任何一条真的 SQL 都会当场失败（这一层的数据访问一律走 mockgen 注入的仓储）。
+// 只有断言事务边界本身的用例需要那份记录，其余的走 setupWorkspaceTest。
+func setupWorkspaceTxTest(t *testing.T) (
+	context.Context, *hubtest.TxLog, *mock_sync_repo.MockSyncObjectRepo,
+	*mock_sync_repo.MockSyncLocalPathRepo, *mock_device_repo.MockDeviceRepo, *workspaceSvc,
+) {
+	t.Helper()
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 	mObj := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
@@ -96,7 +113,8 @@ func setupWorkspaceTest(t *testing.T) (
 	sync_repo.RegisterSyncLocalPath(mPath)
 	device_repo.RegisterDevice(mDev)
 	t.Cleanup(func() { SetOnlineChecker(nil) })
-	return context.Background(), mObj, mPath, mDev, New()
+	ctx, txLog := hubtest.TxDatabase(t)
+	return ctx, txLog, mObj, mPath, mDev, New()
 }
 
 func mustJSON(t *testing.T, v any) string {
@@ -143,7 +161,7 @@ func TestListAccountAgents_GivenOrderedTargets_ThenFirstAvailableWithADeviceIsCu
 	assert.Equal(t, "工程", agent.DepartmentName)
 	require.Len(t, agent.ExecTargets, 3)
 
-	assert.True(t, agent.ExecTargets[0].IsLocalReference)
+	assert.True(t, agent.ExecTargets[0].DeviceUnspecified)
 	assert.Equal(t, AvailabilityNoDevice, agent.ExecTargets[0].Availability)
 	assert.False(t, agent.ExecTargets[0].Current)
 
@@ -808,12 +826,12 @@ func TestSetExecTargetOrder_GivenPermutation_ThenOnlySortOrderChangesAndSkillsSu
 		}, nil)
 
 	var version int64 = 100
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).DoAndReturn(
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
 		func(context.Context, int64, int64) (int64, error) { version++; return version, nil },
 	).AnyTimes()
 
 	saved := map[string]*sync_entity.SyncObject{}
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error {
 			saved[o.SyncID] = o
 			return nil
@@ -857,10 +875,10 @@ func TestSetExecTargetOrder_ThenRecordsServerAsTheSource(t *testing.T) {
 	mObj.EXPECT().ListByKinds(ctx, int64(7), []string{sync_entity.KindAgentExecTarget}).
 		Return([]*sync_entity.SyncObject{pushedByADevice, other}, nil)
 
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
 
 	saved := map[string]*sync_entity.SyncObject{}
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error {
 			saved[o.SyncID] = o
 			return nil
@@ -888,10 +906,10 @@ func TestSetExecTargetOrder_GivenStaleBackendInPermutation_ThenItIsIgnored(t *te
 			execTargetRow(1, "t-a", "agent-1", "b-a", 0, `[]`),
 			execTargetRow(2, "t-b", "agent-1", "b-b", 1, `[]`),
 		}, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
 
 	saved := map[string]*sync_entity.SyncObject{}
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error {
 			saved[o.SyncID] = o
 			return nil
@@ -927,10 +945,10 @@ func TestSetExecTargetOrder_GivenTargetWithoutBackendSyncID_ThenItStaysAtItsInde
 			execTargetRow(2, "t-blank", "agent-1", "", 1, `[]`),
 			execTargetRow(3, "t-c", "agent-1", "b-c", 2, `[]`),
 		}, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
 
 	saved := map[string]*sync_entity.SyncObject{}
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error {
 			saved[o.SyncID] = o
 			return nil
@@ -958,10 +976,10 @@ func TestSetExecTargetOrder_GivenUncoveredTarget_ThenItGoesToTheTail(t *testing.
 			execTargetRow(2, "t-new", "agent-1", "b-new", 1, `[]`),
 			execTargetRow(3, "t-c", "agent-1", "b-c", 2, `[]`),
 		}, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(101), nil).AnyTimes()
 
 	saved := map[string]*sync_entity.SyncObject{}
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error {
 			saved[o.SyncID] = o
 			return nil
@@ -991,10 +1009,10 @@ func TestSetExecTargetOrder_GivenPermutation_ThenBroadcastsHighestVersion(t *tes
 			execTargetRow(2, "t-b", "agent-1", "b-b", 1, `[]`),
 		}, nil)
 	var version int64 = 300
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).DoAndReturn(
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
 		func(context.Context, int64, int64) (int64, error) { version++; return version, nil },
 	).AnyTimes()
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil).AnyTimes()
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	require.NoError(t, svc.SetExecTargetOrder(ctx, SetExecTargetOrderInput{
 		UserID: 7, AgentSyncID: "agent-1", BackendSyncIDs: []string{"b-b", "b-a"},
@@ -1036,8 +1054,8 @@ func TestSetExecTargetOrder_GivenBroadcastFails_ThenReorderStillSucceeds(t *test
 			execTargetRow(1, "t-a", "agent-1", "b-a", 0, `[]`),
 			execTargetRow(2, "t-b", "agent-1", "b-b", 1, `[]`),
 		}, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(401), nil).AnyTimes()
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil).AnyTimes()
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(401), nil).AnyTimes()
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 	require.NoError(t, svc.SetExecTargetOrder(ctx, SetExecTargetOrderInput{
 		UserID: 7, AgentSyncID: "agent-1", BackendSyncIDs: []string{"b-b", "b-a"},
@@ -1155,9 +1173,9 @@ func TestCreateOrgObject_GivenWritableKinds_ThenServerAllocatesIDVersionAndRecor
 				mObj.EXPECT().Find(ctx, int64(7), "b-1").Return(
 					liveOrgRow(9, sync_entity.KindAgentBackend, "b-1", `{"type":"claude_code"}`), nil)
 			}
-			mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(101), nil)
+			mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(101), nil)
 			var saved *sync_entity.SyncObject
-			mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+			mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 			got, err := svc.CreateOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: tc.kind, Fields: tc.fields})
@@ -1184,8 +1202,8 @@ func TestCreateOrgObject_GivenWritableKinds_ThenServerAllocatesIDVersionAndRecor
 func TestCreateOrgObject_GivenTwoCalls_ThenSyncIDsDiffer(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(101), nil).Times(2)
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil).Times(2)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(101), nil).Times(2)
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil).Times(2)
 
 	first, err := svc.CreateOrgObject(ctx, OrgWriteInput{
 		UserID: 7, Kind: sync_entity.KindDepartment, Fields: map[string]any{"name": "工程"}})
@@ -1209,9 +1227,9 @@ func TestUpdateOrgObject_GivenDepartmentRename_ThenUntouchedKeysSurvive(t *testi
 	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(liveOrgRow(1, sync_entity.KindDepartment, "dept-1",
 		`{"name":"工程","description":"原简介","icon":"🏢","accent_color":"#3B6896",`+
 			`"lead_agent_sync_id":"agent-1","sort_order":3,"future_key_from_a_newer_desktop":"保留我"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(102), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(102), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	got, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -1244,9 +1262,9 @@ func TestUpdateOrgObject_GivenAgentRename_ThenPromptToolsAndUndeclaredKeysSurviv
 	mObj.EXPECT().Find(ctx, int64(7), "agent-1").Return(liveOrgRow(2, sync_entity.KindAgent, "agent-1",
 		`{"name":"前端 Agent","prompt_json":"{\"text\":\"你是前端\"}","tools_json":"[\"read\",\"write\"]",`+
 			`"avatar_hash":"sha256:abc","pinned":true,"future_key_from_a_newer_desktop":"保留我"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(103), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(103), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -1272,9 +1290,9 @@ func TestUpdateOrgObject_GivenExecTargetSkills_ThenSortOrderAndUndeclaredKeysSur
 	mObj.EXPECT().Find(ctx, int64(7), "t-1").Return(liveOrgRow(3, sync_entity.KindAgentExecTarget, "t-1",
 		`{"agent_sync_id":"agent-1","backend_sync_id":"b-1","sort_order":2,"skills_json":"[]",`+
 			`"future_key_from_a_newer_desktop":"保留我"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(104), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(104), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -1303,9 +1321,9 @@ func TestDeleteOrgObject_GivenWritableKinds_ThenTombstonedWithNewVersionAndServe
 
 			mObj.EXPECT().Find(ctx, int64(7), "row-1").Return(
 				liveOrgRow(4, kind, "row-1", `{"name":"要删掉的"}`), nil)
-			mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(105), nil)
+			mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(105), nil)
 			var saved *sync_entity.SyncObject
-			mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+			mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 			got, err := svc.DeleteOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: kind, SyncID: "row-1"})
@@ -1328,8 +1346,8 @@ func TestCreateOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 	mState := registerSyncStateMock(t)
 	stub := registerAccountChanStub(t)
 
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(201), nil)
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(201), nil)
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
 	_, err := svc.CreateOrgObject(ctx, OrgWriteInput{
 		UserID: 7, Kind: sync_entity.KindDepartment, Fields: map[string]any{"name": "工程"}})
@@ -1345,8 +1363,8 @@ func TestUpdateOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 
 	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(202), nil)
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(202), nil)
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
 	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
 		UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
@@ -1363,8 +1381,8 @@ func TestDeleteOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 
 	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(203), nil)
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(203), nil)
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
 	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1"})
 	require.NoError(t, err)
@@ -1395,9 +1413,9 @@ func TestUpdateOrgObject_GivenBroadcastFails_ThenWriteStillSucceeds(t *testing.T
 
 	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(204), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(204), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	got, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -1725,7 +1743,7 @@ func TestSelectableBackends_GivenBackendsAcrossMachines_ThenEachCarriesMachineAn
 	assert.Equal(t, "书房小主机", byID["backend-offline"].DeviceName)
 	assert.Equal(t, AvailabilityUnpaired, byID["backend-gone"].Availability)
 	assert.Empty(t, byID["backend-gone"].DeviceName)
-	assert.True(t, byID["backend-local"].IsLocalReference)
+	assert.True(t, byID["backend-local"].DeviceUnspecified)
 	assert.Equal(t, AvailabilityNoDevice, byID["backend-local"].Availability)
 }
 
@@ -1981,8 +1999,8 @@ func TestUpdateOrgObject_GivenSystemAgentPlacement_ThenRefusedButRenameStillWork
 		ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 		mState := registerSyncStateMock(t)
 		mObj.EXPECT().Find(ctx, int64(7), "agent-system").Return(systemAgent(), nil)
-		mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(120), nil)
-		mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil)
+		mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(120), nil)
+		mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
 		_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
 			UserID: 7, Kind: sync_entity.KindAgent, SyncID: "agent-system",
@@ -1994,9 +2012,9 @@ func TestUpdateOrgObject_GivenSystemAgentPlacement_ThenRefusedButRenameStillWork
 		ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 		mState := registerSyncStateMock(t)
 		mObj.EXPECT().Find(ctx, int64(7), "agent-system").Return(systemAgent(), nil)
-		mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(121), nil)
+		mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(121), nil)
 		var saved *sync_entity.SyncObject
-		mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+		mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 		_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -2016,8 +2034,8 @@ func TestDeleteOrgObject_GivenOrdinaryAgent_ThenStillTombstoned(t *testing.T) {
 
 	mObj.EXPECT().Find(ctx, int64(7), "agent-1").Return(
 		liveOrgRow(4, sync_entity.KindAgent, "agent-1", `{"name":"张三","system_badge":""}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(130), nil)
-	mObj.EXPECT().Save(ctx, gomock.Any()).Return(nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(130), nil)
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
 	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
 		UserID: 7, Kind: sync_entity.KindAgent, SyncID: "agent-1"})
@@ -2046,9 +2064,9 @@ func TestCreateOrgObject_GivenExecTargetWithoutSortOrder_ThenItLandsAtTheTailOfT
 			liveOrgRow(3, sync_entity.KindAgentExecTarget, "t-3",
 				`{"agent_sync_id":"agent-9","backend_sync_id":"b-3","sort_order":7}`),
 		}, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(140), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(140), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.CreateOrgObject(ctx, OrgWriteInput{
@@ -2070,9 +2088,9 @@ func TestCreateOrgObject_GivenFirstExecTargetOfAnAgent_ThenSortOrderZero(t *test
 	mObj.EXPECT().Find(ctx, int64(7), "b-new").Return(
 		liveOrgRow(9, sync_entity.KindAgentBackend, "b-new", `{"type":"claude_code"}`), nil)
 	mObj.EXPECT().ListByKinds(ctx, int64(7), []string{sync_entity.KindAgentExecTarget}).Return(nil, nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(141), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(141), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.CreateOrgObject(ctx, OrgWriteInput{
@@ -2094,9 +2112,9 @@ func TestCreateOrgObject_GivenExplicitSortOrder_ThenItIsHonoured(t *testing.T) {
 
 	mObj.EXPECT().Find(ctx, int64(7), "b-new").Return(
 		liveOrgRow(9, sync_entity.KindAgentBackend, "b-new", `{"type":"claude_code"}`), nil)
-	mState.EXPECT().NextVersion(ctx, int64(7), int64(1)).Return(int64(142), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(142), nil)
 	var saved *sync_entity.SyncObject
-	mObj.EXPECT().Save(ctx, gomock.Any()).DoAndReturn(
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
 
 	_, err := svc.CreateOrgObject(ctx, OrgWriteInput{
@@ -2157,8 +2175,162 @@ func TestOrgChart_GivenExecTargets_ThenEachTierCarriesTheMachineFingerprintToDia
 	assert.Equal(t, "fp-offline", byID["t-offline"].DeviceFingerprint,
 		"离线只是此刻拨不通，指纹仍是这台机器的身份——不因为离线就抹掉")
 	assert.Empty(t, byID["t-local"].DeviceFingerprint, "没写运行设备的档指不到任何一台机器")
-	assert.True(t, byID["t-local"].IsLocalReference,
+	assert.True(t, byID["t-local"].DeviceUnspecified,
 		"后端行还在、只是没写设备：与「后端已不在」区分开，档上如实标「未指定设备」")
 	assert.Equal(t, AvailabilityNoDevice, byID["t-local"].Availability)
 	assert.Empty(t, byID["t-gone"].DeviceFingerprint, "后端已不在：不知道是哪台机器，不编一个")
+}
+
+// 一次重排是**一个**事务。
+//
+// 五档写成五次独立提交时，第 3 行失败会留下一个谁也没要过的中间态：0-2 已按新次序
+// 写下、3-4 还是旧值，于是两档拿到同一个 sort_order。而 ListByKinds 没有 ORDER BY，
+// 并列之后谁在前由数据库那次返回顺序决定——withExecTargetTailSlot 的注释把这种并列
+// 明写成不安全：用户排在第一位的那台机器会被挤掉「当前生效」。浏览器那边同时收到一个
+// 错误，用户以为什么都没发生。
+//
+// 一个事务把这两件事一起解决：要么整份新次序生效，要么一行都不动。
+func TestSetExecTargetOrder_ThenTheWholeReorderIsOneTransaction(t *testing.T) {
+	ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	registerAccountChanStub(t)
+
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentExecTarget}).
+		Return([]*sync_entity.SyncObject{
+			execTargetRow(1, "t-a", "agent-1", "b-a", 0, `[]`),
+			execTargetRow(2, "t-b", "agent-1", "b-b", 1, `[]`),
+			execTargetRow(3, "t-c", "agent-1", "b-c", 2, `[]`),
+			execTargetRow(4, "t-d", "agent-1", "b-d", 3, `[]`),
+			execTargetRow(5, "t-e", "agent-1", "b-e", 4, `[]`),
+		}, nil)
+
+	var version int64 = 100
+	var allocatedInTx []bool
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+		func(ctx context.Context, _, _ int64) (int64, error) {
+			allocatedInTx = append(allocatedInTx, hubtest.InTransaction(ctx))
+			version++
+			return version, nil
+		}).AnyTimes()
+	var savedInTx []bool
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ *sync_entity.SyncObject) error {
+			savedInTx = append(savedInTx, hubtest.InTransaction(ctx))
+			return nil
+		}).AnyTimes()
+
+	// 整体轮转一位：五档全都换了位置，五行全都要写（倒序会把正中那一档留在原位）。
+	require.NoError(t, svc.SetExecTargetOrder(ctx, SetExecTargetOrderInput{
+		UserID: 7, AgentSyncID: "agent-1",
+		BackendSyncIDs: []string{"b-e", "b-a", "b-b", "b-c", "b-d"},
+	}))
+
+	assert.Len(t, savedInTx, 5)
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events(),
+		"五行是一次重排，不是五次各自提交的写入")
+	assert.NotContains(t, savedInTx, false, "每一行都要落在那个事务里")
+	assert.NotContains(t, allocatedInTx, false,
+		"版本号也要取在事务里：行锁持到提交，取号顺序才是提交顺序")
+}
+
+// 中途失败时整份重排回滚，不留下重复的 sort_order。
+//
+// 断言落在事务事件上而不是「哪几行被写了」：仓储是 mock，写入是否被撤销由数据库
+// 决定，这一层能证、也只需证「服务端把这一批交给数据库时是一个会被整体回滚的事务」。
+func TestSetExecTargetOrder_GivenAWriteFailsMidway_ThenTheWholeReorderRollsBack(t *testing.T) {
+	ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	stub := registerAccountChanStub(t)
+
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentExecTarget}).
+		Return([]*sync_entity.SyncObject{
+			execTargetRow(1, "t-a", "agent-1", "b-a", 0, `[]`),
+			execTargetRow(2, "t-b", "agent-1", "b-b", 1, `[]`),
+			execTargetRow(3, "t-c", "agent-1", "b-c", 2, `[]`),
+			execTargetRow(4, "t-d", "agent-1", "b-d", 3, `[]`),
+			execTargetRow(5, "t-e", "agent-1", "b-e", 4, `[]`),
+		}, nil)
+	var version int64 = 200
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+		func(context.Context, int64, int64) (int64, error) { version++; return version, nil },
+	).AnyTimes()
+
+	written := 0
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(context.Context, *sync_entity.SyncObject) error {
+			written++
+			if written == 3 {
+				return assert.AnError
+			}
+			return nil
+		}).AnyTimes()
+
+	err := svc.SetExecTargetOrder(ctx, SetExecTargetOrderInput{
+		UserID: 7, AgentSyncID: "agent-1",
+		BackendSyncIDs: []string{"b-e", "b-a", "b-b", "b-c", "b-d"},
+	})
+
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events(),
+		"第 3 行失败必须把前两行一起撤销，否则 sort_order 上会留下并列")
+	assert.Empty(t, stub.recordedCalls(), "一行都没生效，没有版本可广播")
+}
+
+// web 组织面的每一次写也要把「取版本号 + 落库」钉在同一个事务里。
+//
+// 与设备上行同一个道理（sync_svc.Push）：sync_account_seqs 上那一行的排他锁持到提交，
+// 取号在事务里，「谁先取到号」才等于「谁先提交」。取在事务外则两件事各自成序——两个
+// 副本各写一行，先取到号的那个后提交，设备拉到较大的那个版本号就把游标推过去了，
+// 较小的那一行对它永远不会再被投递，而浏览器与设备都收到了成功。
+func TestOrgWrite_ThenVersionIsAllocatedInsideTheWriteTransaction(t *testing.T) {
+	cases := []struct {
+		name  string
+		write func(*testing.T, context.Context, *mock_sync_repo.MockSyncObjectRepo, *workspaceSvc) error
+	}{
+		{"新建", func(_ *testing.T, ctx context.Context, _ *mock_sync_repo.MockSyncObjectRepo, svc *workspaceSvc) error {
+			_, err := svc.CreateOrgObject(ctx, OrgWriteInput{
+				UserID: 7, Kind: sync_entity.KindDepartment, Fields: map[string]any{"name": "工程"}})
+			return err
+		}},
+		{"修改", func(_ *testing.T, ctx context.Context, mObj *mock_sync_repo.MockSyncObjectRepo, svc *workspaceSvc) error {
+			mObj.EXPECT().Find(gomock.Any(), int64(7), "dept-1").Return(
+				liveOrgRow(4, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
+			_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
+				UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
+				Fields: map[string]any{"name": "平台"}})
+			return err
+		}},
+		{"删除", func(_ *testing.T, ctx context.Context, mObj *mock_sync_repo.MockSyncObjectRepo, svc *workspaceSvc) error {
+			mObj.EXPECT().Find(gomock.Any(), int64(7), "dept-1").Return(
+				liveOrgRow(4, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
+			_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
+				UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1"})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+			mState := registerSyncStateMock(t)
+			registerAccountChanStub(t)
+
+			var allocatedInTx, savedInTx bool
+			mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+				func(ctx context.Context, _, _ int64) (int64, error) {
+					allocatedInTx = hubtest.InTransaction(ctx)
+					return 101, nil
+				})
+			mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(ctx context.Context, _ *sync_entity.SyncObject) error {
+					savedInTx = hubtest.InTransaction(ctx)
+					return nil
+				})
+
+			require.NoError(t, tc.write(t, ctx, mObj, svc))
+
+			assert.True(t, allocatedInTx, "版本号取在事务外，取号顺序就不再是提交顺序")
+			assert.True(t, savedInTx, "落库要与取号同在一个事务里，行锁才盖得住这次写入")
+			assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+		})
+	}
 }

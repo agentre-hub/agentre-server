@@ -307,7 +307,7 @@ func settingsStub() *stubActivity {
 	return &stubActivity{
 		settings: activity_svc.SettingsView{
 			ActivityStatsEnabled: true,
-			LastReportAt:         1756368000000,
+			LastPullAt:           1756368000000,
 			SavedConversations:   128,
 			Today:                "2026-08-28",
 		},
@@ -331,7 +331,7 @@ func TestSettings_DeviceReportedThroughOmittedWhenNeverReported(t *testing.T) {
 	assert.Contains(t, body, `{"device_id":3,"name":"MacBook-Pro","online":false}`)
 	assert.NotContains(t, body, `"reported_through":""`)
 	assert.Equal(t, []string{"fp-a", "fp-b"}, act.reportedFPs)
-	assert.Contains(t, body, `"last_report_at":1756368000000`)
+	assert.Contains(t, body, `"last_pull_at":1756368000000`)
 	assert.Contains(t, body, `"saved_conversations":128`)
 }
 

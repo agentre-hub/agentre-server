@@ -46,6 +46,9 @@ const (
 	JWTBlacklisted
 	DeviceListFailed
 	DeviceKindMismatch
+	// RefreshTokenInvalid：refresh_token 缺失、查不到，或已被并发的那一次轮换换掉。
+	// 与 RefreshTokenReplay 的区别是这里没有证据表明凭据泄露，因此不撤整条链。
+	RefreshTokenInvalid
 )
 
 // Relay 30400~30499

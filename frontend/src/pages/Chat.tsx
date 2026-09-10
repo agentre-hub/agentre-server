@@ -1,5 +1,5 @@
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { MessageCirclePlus, PenLine, Plus } from "lucide-react";
@@ -200,6 +200,11 @@ export default function Chat() {
      * 点左栏一行进来时留空 —— 那条对话的转录只有两条真来路。
      */
     userText?: string;
+    /**
+     * 刚从草稿页发起时，这条对话是哪个 Agent 的（见 SessionDetailView 的
+     * `initialAgent`）。点左栏一行进来时留空——那时这一屏没有比详情页更早的答案。
+     */
+    agent?: NewConvAgent;
     /** 刚从草稿页发起、而模型没能钉住时要说的那一句（见 initialModelNote）。 */
     modelNote?: string;
     /** 同上，思考力度没能钉住时的那一句（见 initialEffortNote）。 */
@@ -242,7 +247,13 @@ export default function Chat() {
   // 这两个（连同下面 reach 的 forgetResolved）单独拎出来：整个 hook 结果每次渲染都是
   // 新对象，把它整个钉进依赖数组会让下面几个 useCallback 每渲染换一次引用，索引里的
   // 行因此整片重造（见 sessionDetailPath 上那一段）。它们本身是 useCallback，稳定。
-  const { refetch, fetchGroupPage, markRead, mirrorRowOf } = sessionIndex;
+  const {
+    refetch,
+    fetchGroupPage,
+    markRead,
+    mirrorRowOf,
+    reportUnsavedOnStart,
+  } = sessionIndex;
   /**
    * 从别处进来的「新建一个会话」。目前唯一的来源是会话详情的「机器离线」横幅：
    * 那条对话钉在一台够不着的机器上、续轮不会改派，唯一走得通的路是另起一条。
@@ -280,15 +291,29 @@ export default function Chat() {
    * wire 请求上用得到。
    */
   const onDraftStarted = useCallback(
-    ({
-      deviceId,
-      conversationId,
-      peerFingerprint,
-      title,
-      userText,
-      modelPinned,
-      reasoningEffortPinned,
-    }: DispatchedSession) => {
+    (
+      {
+        deviceId,
+        deviceFingerprint,
+        conversationId,
+        peerFingerprint,
+        title,
+        userText,
+        modelPinned,
+        reasoningEffortPinned,
+        savedToAccount,
+      }: DispatchedSession,
+      /**
+       * 这条对话是**哪个 Agent** 的 —— 就是草稿页那一屏用户亲手挑的那个，调用点
+       * （`composeDraft`）手里现成。
+       *
+       * 递给落地那一屏当种子（`initialAgent`）：详情页自己解这件事要两条链式的异步
+       * （先由镜像行 / `session.list` 认出 agentSyncId，再拿它去账号清单换名字与头像），
+       * 而刚派发出去的这条账号里还没有那一行——整段空窗里抬头一个字都说不出。与
+       * `title` / `userText` 同一条路子：这一屏知道的，不让用户在下一屏重等一圈。
+       */
+      agent: NewConvAgent,
+    ) => {
       setCompose(null);
       // 钉不住不影响这条对话开起来（第一轮就是按所选模型跑的），但后续轮次会回到
       // 跟随 Agent 绑定 —— 详情页必须如实说出来，否则它会显示成「跟随绑定」而
@@ -310,6 +335,7 @@ export default function Chat() {
             title,
             userText,
             turnStartedAt,
+            agent,
             ...(modelNote ? { modelNote } : {}),
             ...(effortNote ? { effortNote } : {}),
           },
@@ -322,15 +348,29 @@ export default function Chat() {
         peerFingerprint,
         title,
         userText,
+        agent,
         modelNote,
         effortNote,
         turnStartedAt,
       });
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
       // 却列不出来，看上去就像它没进账号。重取一次让它落成一行。
-      refetch();
+      //
+      // 但它**真的**没进账号时，重取是取不出来的：那一刻左栏的空白不是「还没取」，
+      // 而是一个事实，且与「派发根本没成功」长得一模一样。此前这里只有 refetch，
+      // 于是用户面对的就是那个无法证伪的画面。如实说出来，并把重试挂上去。
+      if (savedToAccount) {
+        refetch();
+        return;
+      }
+      reportUnsavedOnStart({
+        conversationId,
+        title: title ?? "",
+        machineFingerprint: deviceFingerprint,
+        peerFingerprint,
+      });
     },
-    [refetch, isMobile, nav, t],
+    [refetch, reportUnsavedOnStart, isMobile, nav, t],
   );
   /**
    * 右栏「打开即已读」回来了：把左栏那一行就地改掉。
@@ -604,11 +644,35 @@ export default function Chat() {
   const { onlineMachines, resolved: resolvedMachines, loadMachinePage } = reach;
 
   /**
+   * 翻页时要读的那两份行，同样走 ref —— 与上面那条是同一件事，只是漏了。
+   *
+   * `sessionIndex.mirrorRows` 是一个 `useMemo`，`machineRowsByDevice` 是另一个，
+   * 而索引在**每一条** `mirror_changed` 上重取（一轮对话跑起来时约每秒一条），每次
+   * 取数都换成新数组。把它们列进依赖，`loadGroupPage` 就每秒换一次身份，弹层的首页
+   * effect 于是每秒重跑一遍第一页，把用户已经翻进来的行扔掉——「查看全部 N」在
+   * agent 说话期间根本翻不动。
+   *
+   * 走 ref 是安全的：这两份只在**点开弹层 / 点「加载更多」之后**才被读到，那时提交
+   * 早已结束，ref 里就是最新的一批（与 useSessionIndex 的 mirrorRowsRef 同一个理由）。
+   */
+  const groupPageRowsRef = useRef({
+    mirrorRows: sessionIndex.mirrorRows,
+    machineRowsByDevice,
+  });
+  useEffect(() => {
+    groupPageRowsRef.current = {
+      mirrorRows: sessionIndex.mirrorRows,
+      machineRowsByDevice,
+    };
+  });
+
+  /**
    * 翻某一组的下一页（「查看全部 N」那条路）。范围参数一并带上——弹层里翻的必须
    * 还是同一个搜索与筛选下的那一组，否则数说的是一件事、翻出来的是另一件。
    */
   const loadGroupPage = useCallback(
     async (scope: string, cursor: string | null) => {
+      const { mirrorRows, machineRowsByDevice } = groupPageRowsRef.current;
       // 机器那一档问的是机器自己,不该拿这个 scope 去问服务端(它只知道账号里保存
       // 过的那些)。翻页也走那台机器:它才知道自己上面还有什么。
       if (machineRowsByDevice) {
@@ -632,7 +696,7 @@ export default function Chat() {
               device: machine,
               sessions: page.sessions,
               localFingerprint: resolved?.localFingerprint,
-              mirrorRows: sessionIndex.mirrorRows,
+              mirrorRows,
               fromMirrorRow,
               fromMachineRow,
               filter,
@@ -654,11 +718,9 @@ export default function Chat() {
       fromMirrorRow,
       fromMachineRow,
       filter,
-      sessionIndex.mirrorRows,
       onlineMachines,
       resolvedMachines,
       loadMachinePage,
-      machineRowsByDevice,
     ],
   );
 
@@ -739,6 +801,7 @@ export default function Chat() {
       stacked={isMobile}
       onPick={(agent) => setCompose({ step: "draft", agent })}
       onBack={() => setCompose({ step: "pick" })}
+      onNewProject={projectManagement.openCreate}
       projectsSettled={projectsSettled}
       agentsSettled={agentsSettled}
     />
@@ -750,7 +813,7 @@ export default function Chat() {
         agents={agents}
         projects={newConvProjects}
         initialProjectSyncId={compose.projectSyncId}
-        onStarted={onDraftStarted}
+        onStarted={(session) => onDraftStarted(session, compose.agent)}
         onBack={isMobile ? () => setCompose({ step: "pick" }) : undefined}
         headerRight={pageChrome}
       />
@@ -954,6 +1017,7 @@ export default function Chat() {
                   form="embedded"
                   initialTitle={selected.title}
                   initialUserText={selected.userText}
+                  initialAgent={selected.agent}
                   initialRow={selected.row}
                   initialModelNote={selected.modelNote}
                   initialEffortNote={selected.effortNote}

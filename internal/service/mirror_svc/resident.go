@@ -227,15 +227,19 @@ func (s *Supervisor) dial(
 }
 
 // forgetSession 让本副本这条连接不再镜像某一条对话。删除路径在清库之前调它——
-// 只清库不摘，下一帧就把刚删掉的内容写回来了。本副本没跟着这台机器时什么都不做：
-// 跟着它的那个副本会在自己下一轮同步时按保存名单收敛。
-func (s *Supervisor) forgetSession(userID int64, fingerprint, conversationID string) {
+// 只清库不摘，下一帧就把刚删掉的内容写回来了。
+//
+// 返回 false 表示这台机器不归本副本跟：调用方必须把这件事告诉真正的属主
+// （Sessions.Purge 走 hintOwner），否则那条连接上这条对话还认着。
+func (s *Supervisor) forgetSession(userID int64, fingerprint, conversationID string) bool {
 	s.mu.Lock()
 	f := s.followers[machineKey{userID: userID, fingerprint: fingerprint}]
 	s.mu.Unlock()
-	if f != nil {
-		f.drop(SavedSession{ConversationID: conversationID})
+	if f == nil {
+		return false
 	}
+	f.drop(SavedSession{ConversationID: conversationID})
+	return true
 }
 
 // Unfollow 放开一台机器：摘掉连接并交还租约，让别的副本立刻接得上。巡检在这台机器
@@ -308,8 +312,12 @@ type follower struct {
 	// connID 是建这条通道时对端那条 daemon 链路的身份，keepalive 拿它比对，
 	// 只由 start 写一次。
 	connID string
+	// hintSub 是这台机器的跨副本提示订阅，与租约同生共死（见 hint.go）。
+	// 只由 start 与收尾碰，两者之间隔着 `go f.run`。
+	hintSub *goredis.PubSub
 
 	notes  chan liveNote
+	hints  chan machineHint
 	resync chan struct{}
 	stop   chan struct{}
 	done   chan struct{}
@@ -332,6 +340,7 @@ func newFollower(sup *Supervisor, key machineKey, saved []SavedSession) *followe
 		lease: newMachineLease(sup.redis, sup.cfg.InstanceID, key, sup.cfg.LeaseTTL),
 		saved: append([]SavedSession(nil), saved...),
 		notes: make(chan liveNote, liveNoteBuffer),
+		hints: make(chan machineHint, hintBuffer),
 		// resync 只有一个槽位：排队期间再来的重同步请求自然合并成一次。
 		resync: make(chan struct{}, 1),
 		stop:   make(chan struct{}),
@@ -351,13 +360,18 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 		// 别的副本正跟着它。正常路径，不打日志、不报错。
 		return false, nil
 	}
+	// 认领到手就订上提示通道，早于拨号与首次补齐——理由在 subscribeHints 上。
+	if err := f.subscribeHints(ctx); err != nil {
+		f.releaseLease(ctx)
+		return false, err
+	}
 	// 先读链路身份再拨号，顺序是有讲究的：反过来的话，「拨号与读之间对端刚好换了
 	// 链路」会记下**新**链路的身份，而通道建在旧链路上——比对永远相等，换代永远
 	// 发现不了。这个顺序下同一个race 最多让 keepalive 多放一次手，下一轮巡检就接
 	// 回来了。
 	connID, err := f.sup.relay.DaemonConnID(ctx, f.key.userID, f.key.fingerprint)
 	if err != nil {
-		f.releaseLease(ctx)
+		f.stopFollowing(ctx)
 		if errors.Is(err, relay_svc.ErrDaemonOffline) {
 			return false, ErrMachineOffline
 		}
@@ -365,7 +379,7 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 	}
 	conn, err := f.sup.dial(ctx, f.key, f.enqueue)
 	if err != nil {
-		f.releaseLease(ctx)
+		f.stopFollowing(ctx)
 		return false, err
 	}
 	f.conn, f.connID = conn, connID
@@ -380,7 +394,7 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 	f.mu.Unlock()
 	if err := mirror.Sync(ctx, f.savedNow()); err != nil {
 		conn.Close()
-		f.releaseLease(ctx)
+		f.stopFollowing(ctx)
 		return false, err
 	}
 
@@ -389,7 +403,7 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 		// 起来之前就被叫停了（进程正在退出）。
 		f.mu.Unlock()
 		conn.Close()
-		f.releaseLease(ctx)
+		f.stopFollowing(ctx)
 		return false, nil
 	}
 	f.running = true
@@ -410,7 +424,7 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 func (f *follower) run(ctx context.Context) {
 	defer func() {
 		f.conn.Close()
-		f.releaseLease(ctx)
+		f.stopFollowing(ctx)
 		f.sup.forget(f.key, f)
 		close(f.done)
 	}()
@@ -424,6 +438,11 @@ func (f *follower) run(ctx context.Context) {
 		select {
 		case <-f.stop:
 			return
+		case hint := <-f.hints:
+			// 提示与实时帧、重同步共用这一条 goroutine：兑现一条删除提示要与 Apply
+			// 严格不并发，否则摘掉与「摘完再清一次」之间夹进一帧，刚删掉的东西就
+			// 回来了。
+			f.applyHint(ctx, hint)
 		case note := <-f.notes:
 			if err := f.mirrorNow().Apply(ctx, note.payload); err != nil {
 				_, _, method := notificationHead(note.payload)
@@ -583,6 +602,16 @@ func (f *follower) shutdown(ctx context.Context) {
 	case <-f.done:
 	case <-ctx.Done():
 	}
+}
+
+// stopFollowing 交回本副本为这台机器占着的两样东西：提示订阅与租约。
+//
+// 两者必须一起收：留下一份没人消化的订阅是白占一条 Redis 连接，而留下租约会让这台
+// 机器在一整个 TTL 里没人跟。收尾路径不止一条（认领后的每一步失败、常驻循环退出），
+// 所以它们只在这里成对出现。
+func (f *follower) stopFollowing(ctx context.Context) {
+	f.closeHints()
+	f.releaseLease(ctx)
 }
 
 // releaseLease 交还租约。收尾常常发生在 ctx 已经取消之后（进程退出、请求结束），

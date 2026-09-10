@@ -14,6 +14,7 @@ import type { ChatComposerSubmit } from "@agentre-hub/agentre-ui";
 import type { ModelTarget } from "@agentre-hub/agentre-ui";
 
 import type { FailedSend } from "@/components/session/SendFailureBubble";
+import { useTargetGuard } from "@/hooks/use-target-guard";
 import { randomId } from "@/lib/randomId";
 import type { RelayClient } from "@/lib/relayClient";
 import { browserDisplayName, type RelayTicket } from "@/lib/relayTicket";
@@ -212,7 +213,18 @@ export function useSessionSend({
     // 失败气泡属于**那一条**会话：换一条不该还挂着上一条没发出去的字。
     setFailedSends([]);
     setPendingSend(null);
+    // 上一条那次发送还在飞，而它的结果从此不再写这里的任何状态（见下面的守卫）
+    // ——包括 finally 里那次 setSending(false)。不在这里放下，新会话的输入框会
+    // 顶着一个永远转不完的发送键。
+    setSending(false);
   }
+
+  /**
+   * 在途结果的目标守卫。见 useTargetGuard —— 这一族尤其需要它：右栏是同实例换
+   * props，`useTargetChanged` 清得掉已经落地的状态，却拦不住一次**已经 await
+   * 出去**的 `sendRouted`。
+   */
+  const guardTarget = useTargetGuard(`${did}|${sid}|${originProp ?? ""}`);
 
   /** 开新一轮（R9）。这一轮要落在**发起端**那条会话上，才续得上它的上下文、也才
    *  扇出给同一条会话的其余订阅者（R6 / R18）。 */
@@ -287,19 +299,32 @@ export function useSessionSend({
   async function sendRouted(
     c: import("@/lib/relayClient").RelayClient,
     message: ChatComposerSubmit,
+    stillHere: () => boolean,
   ): Promise<boolean> {
     const body = message.text;
     const running = turnActiveRef.current;
     if (running && message.images?.length) {
       throw new Error("image input cannot be steered into an active turn");
     }
-    try {
-      await (running ? steerTurn(c, body) : startTurn(c, message));
+    /**
+     * 这一轮跑起来了。
+     *
+     * 「跑起来的是**哪一条**会话」正是这里要守住的：`turnActiveRef` /
+     * `pendingAssistant` / 那条 meta 的计时都属于发起这次发送的那条对话，而请求
+     * 回来时右栏可能已经换成了另一条。不守的话，B 会凭空冒出三个点与一段从 A
+     * 那边算起的耗时。
+     */
+    const noteStarted = (openedTurn: boolean) => {
+      if (!stillHere()) return;
       markTurnActive(true);
-      if (!running) {
+      if (openedTurn) {
         setPendingAssistant(true);
         onOwnTurnStarted?.();
       }
+    };
+    try {
+      await (running ? steerTurn(c, body) : startTurn(c, message));
+      noteStarted(!running);
       return running;
     } catch (err) {
       // 只有对端真的收到并拒绝了，才值得换一条路重试。请求没走到对端（传输失败）
@@ -307,11 +332,7 @@ export function useSessionSend({
       if (classifySendFailure(err).kind !== "rejected") throw err;
       try {
         await (running ? startTurn(c, message) : steerTurn(c, body));
-        markTurnActive(true);
-        if (running) {
-          setPendingAssistant(true);
-          onOwnTurnStarted?.();
-        }
+        noteStarted(running);
         return !running;
       } catch {
         // 两条路都被拒 = 不是竞态。交出**第一条**（按选路本该走的那条）的说明：
@@ -370,7 +391,24 @@ export function useSessionSend({
       });
       return;
     }
-    if (!c || !summary || !relayTicket) return;
+    if (!c || !summary || !relayTicket) {
+      /*
+        发不出去，但**不是**什么都没发生：用户的那段字已经被输入框在提交那一刻
+        清空了（AIChatInput 的行为），这里裸 return 的话它就真的没了 —— 没有气泡、
+        没有提示，一句话凭空消失。而输入框只按连接状态启用
+        （SessionComposerBand），会话清单请求失败、或这条会话已经不在清单里时就会
+        走到这儿。
+
+        归 `notSent`：一次请求都没发出去，所以那颗「重发」是干净的。
+      */
+      queueFailedSend(body, "notSent");
+      return;
+    }
+    /*
+      从这里往下都要 await。请求发出去那一刻捕获目标，解析时先比对再写状态：
+      右栏是同实例换 props，A 的这一次发送很可能是在 B 打开着的时候才回来的。
+    */
+    const stillHere = guardTarget();
     setSending(true);
     setSendFeedback({ kind: "none" });
     try {
@@ -389,16 +427,21 @@ export function useSessionSend({
         !isNativeCompactBackend(summary.backendType)
       ) {
         await compactTurn(c);
+        if (!stillHere()) return;
         markTurnActive(true);
         setPinnedAgentredUnavailable(false);
         return;
       }
-      const queued = await sendRouted(c, message);
+      const queued = await sendRouted(c, message, stillHere);
+      if (!stillHere()) return;
       setPinnedAgentredUnavailable(false);
       // 重发成功：那条失败气泡的使命完成了，撤掉。
       if (replacing) dropFailedSend(replacing);
       if (queued) setSendFeedback({ kind: "queued" });
     } catch (err) {
+      // 这条消息属于**发起它的那条会话**。目标已经换了就一个字都不写：那条红气泡
+      // 挂到新会话下面，它的「重发」会拿着新的 sid 把 A 的话真的发进 B。
+      if (!stillHere()) return;
       const failure = classifySendFailure(err);
       if (failure.kind === "executionUnavailable") {
         // 对端明说了「执行目标不可用」：历史继续可读，但停用新写入并给专门说明。
@@ -416,7 +459,9 @@ export function useSessionSend({
         queueFailedSend(body, failure.kind, failure.detail, replacing);
       }
     } finally {
-      setSending(false);
+      // 目标换了的话这一格已经由那次重置放下了；这里再写就成了「用 A 的结果去关
+      // B 的发送中」——B 自己那次发送正转着的话会被当场关掉。
+      if (stillHere()) setSending(false);
     }
   }
 

@@ -46,13 +46,8 @@
   },
   "add": {
     "open": "Add device",
-    "collapse": "Collapse guide",
     "stepOf": "Step {{n}} of 3",
-    "copy": "Copy",
-    "copied": "Copied",
-    "terminalLabel": "Terminal on that machine",
-    "kindLabel": "Which kind of device are you adding?",
-    "kindHint": "Browsers are not managed devices — no need to add one",
+    "kindLabel": "Device type",
     "kindAgentred": "Compute node (agentred)",
     "kindDesktop": "Desktop (Agentre App)",
     "steps": {
@@ -63,55 +58,35 @@
       },
       "code": {
         "title": "Enter the device code",
-        "hint": "Six-character one-time code",
-        "done": "Authorized"
+        "hint": "One-time 6-character code",
+        "done": "Approved"
       },
       "service": {
         "title": "Keep it running",
-        "hint": "Only after it is approved",
-        "done": "Kept running"
+        "hint": "After approval",
+        "done": "Running"
       }
     },
     "install": {
-      "osLabel": "That machine's operating system",
-      "osHint": "The architecture is detected automatically",
-      "osLinux": "Linux",
-      "osMacos": "macOS",
-      "osWindows": "Windows",
-      "powershellLabel": "PowerShell",
-      "manual": "Download the installer manually",
       "downloadLabel": "Download",
       "downloadBody": "Download the installer for that platform from GitHub Releases (macOS .dmg / Windows .exe / Linux .deb).",
       "download": "Open the download page"
     },
     "login": {
-      "agentredTitle": "Install agentred on that machine and sign it in",
-      "agentredDesc": "Install the binary, then sign in straight away; registering the background service comes next — once the daemon is running, agentred login is refused outright. The server address is already this console's own address, so you can copy the command as is.",
-      "commandLabel": "Same terminal, once it is installed",
-      "agentredTip1": "The command prints a line reading User code: XXXXXX — that is the six-character device code.",
-      "agentredTip2": "It also tries to open a browser; servers usually have none, so bring that code back here instead.",
-      "agentredTip3": "The command keeps waiting until you approve it in step 2; only then does it exit and write the credentials on that machine.",
-      "agentredTip4": "The device code expires; run the command again if it does. The approval screen counts down the time left.",
-      "desktopTitle": "Install the Agentre desktop app on that computer and sign in to the same account",
-      "desktopDesc": "Install the desktop app from GitHub Releases, then go to Settings → Remote → Sign in, using this console as the server address.",
-      "desktopTip1": "The desktop app shows a six-character device code and tries to open a browser to authorize it.",
-      "desktopTip2": "If no browser opens, or you would rather approve it on this computer, bring that code to step 2.",
-      "desktopTip3": "The device code expires; start over from the desktop app if it does. The approval screen counts down the time left.",
+      "agentredTitle": "Install agentred and sign in",
+      "agentredDesc": "Signing in has to finish before the background service starts.",
+      "commandLabel": "Sign in",
+      "desktopTitle": "Install the desktop app and sign in",
+      "desktopDesc": "In the app, go to Settings → Remote → Sign in and enter the address below.",
       "serverLabel": "Server address",
       "next": "I have the device code"
     },
     "service": {
-      "agentredTitle": "Register agentred as a background service",
-      "agentredDesc": "Do this last, once the device is approved: the service starts on boot, so the machine stays connected after you close the terminal.",
-      "commandLabel": "That machine's terminal, once the device is approved",
-      "tip1": "This has to come last: agentred login writes state.json only when you approve it. A daemon started any earlier holds the old, logged-out state.json in memory, and its next write silently overwrites that — the device looks authorized but never connects.",
-      "tip2": "Running it again is harmless: the command is idempotent, it updates the configuration and makes sure the service is up.",
-      "desktopTitle": "Nothing else to register for the desktop app",
-      "desktopDesc": "The desktop app has agentred built in: it is online while the app is open, so there is no separate background service to register.",
-      "finish": "That is the last step"
-    },
-    "code": {
-      "handoff": "Submitting opens the approval screen, where you check the code against the device and approve it. Come back here for the last step once it is approved."
+      "agentredTitle": "Keep agentred running in the background",
+      "agentredDesc": "Do this only after the device is approved — a service that starts earlier overwrites this login.",
+      "desktopTitle": "No service to register",
+      "desktopDesc": "The desktop app has agentred built in; it is online whenever the app is open.",
+      "finish": "Done"
     }
   },
   "manage": {

@@ -75,9 +75,9 @@ type Backend struct {
 	OpenClawSessionMode   string        `json:"openclaw_session_mode"`
 	RefCount              int           `json:"ref_count"`
 	CLIByDevice           []CLIByDevice `json:"cli_by_device"`
-	// DeviceID 是这个后端的运行设备指纹（决策 5：必填）。它是 sync_objects 既有列
+	// DeviceFingerprint 是这个后端的运行设备指纹（决策 5：必填）。它是 sync_objects 既有列
 	// agentred_fingerprint 的镜像，不是 agent_backend 载荷里的一个键。
-	DeviceID string `json:"device_id"`
+	DeviceFingerprint string `json:"device_fingerprint"`
 }
 type backendFields struct {
 	Name        *string `json:"name" binding:"omitempty,max=255"`
@@ -98,9 +98,9 @@ type backendFields struct {
 	OpenClawDefaultModel  *string `json:"openclaw_default_model" binding:"omitempty,max=255"`
 	OpenClawSessionMode   *string `json:"openclaw_session_mode" binding:"omitempty,max=255"`
 	CLIPath               *string `json:"cli_path"`
-	// DeviceID 必填（决策 5）；required 校验落在服务层，好让 CLIPath / builtin 各自的
+	// DeviceFingerprint 必填（决策 5）；required 校验落在服务层，好让 CLIPath / builtin 各自的
 	// 专属错误码优先命中，就地留空只在这里过 max 长度。
-	DeviceID *string `json:"device_id" binding:"omitempty,max=128"`
+	DeviceFingerprint *string `json:"device_fingerprint" binding:"omitempty,max=128"`
 }
 type ListBackendsRequest struct {
 	mux.Meta `path:"/v1/engine/backends" method:"GET"`

@@ -452,10 +452,12 @@ describe("统一会话索引", () => {
    * 的一点体贴——组头是「机器与路径…」「成员…」「未配置」角标唯一的挂点，
    * 组头不在，刚建出来的项目就再也配不了路径，也就永远开不出对话。
    *
-   * 空态那句话照旧同时在：组头说的是「有这些项目」，那一句说的是「一条对话都
-   * 还没有」，两句话不冲突。
+   * 页面级那一句**不再**同时在（2026-09-05 改口，与桌面端对齐）：组头都在，每个
+   * 空组自己会说「暂无会话」，顶上再说一遍「还没有对话」就是同一句话说两遍。
+   * 本站那一句在这一支里也没带出路（filter 是「全部」、又没收窄，`IndexEmpty`
+   * 只剩一行字），去掉不丢任何动作。桌面端同理：项目树里有项目就不出页面级空态。
    */
-  it("项目轴：一条会话都没有时，账号里的项目照样出组头，空态那句话同时在", () => {
+  it("项目轴：一条会话都没有时，账号里的项目照样出组头，页面级那句让给组自己说", () => {
     renderIndex({ rows: [], axis: "project" });
 
     expect(
@@ -464,7 +466,7 @@ describe("统一会话索引", () => {
       expect.stringContaining("agentre-server"),
       expect.stringContaining("agentre-web"),
     ]);
-    expect(screen.getByTestId("session-index-empty")).toBeTruthy();
+    expect(screen.queryByTestId("session-index-empty")).toBeNull();
   });
 
   /**
@@ -852,6 +854,64 @@ describe("统一会话索引：筛选 chips", () => {
     expect(screen.getByTestId("session-index-empty").textContent).toContain(
       "No conversations match your search",
     );
+  });
+});
+/**
+ * 空组自己说一句（与桌面端同一颗空态）。
+ *
+ * 项目轴上名单里的项目空着也摆（组头是「机器与路径…」的唯一挂点）。可展开之后
+ * 组里**什么都没有**：一个孤零零的组头读起来像坏了，而桌面端这一档是有话说的
+ * ——`SessionGroup` 自带的 Inbox + 「暂无会话」。本站此前把行整个塞进
+ * `renderAfterSessions`，包的空态判据（`hasAfter`）因此永远为真，那一颗一次也
+ * 没画出来过。
+ *
+ * 页面级那一句同理：项目轴与机器轴一样，组头自己会说话，页面级再说一遍
+ * 「还没有对话」就是同一句话说两遍。
+ */
+describe("统一会话索引：空组自己说一句", () => {
+  it("项目轴上空项目展开后说「暂无会话」，画的是共享包那一颗", () => {
+    renderIndex({ axis: "project", rows: [] });
+
+    const group = screen.getByTestId("group-p-server");
+    expect(within(group).getByText("No sessions")).toBeTruthy();
+  });
+
+  it("组头已经说了的事，页面级不再说一遍「还没有对话」", () => {
+    renderIndex({ axis: "project", rows: [] });
+
+    expect(screen.queryByTestId("session-index-empty")).toBeNull();
+  });
+
+  it("一个项目都没有：这一轴连组头都没有，页面级那一句得留着", () => {
+    renderIndex({ axis: "project", rows: [], projects: [] });
+
+    expect(screen.getByTestId("session-index-empty").textContent).toContain(
+      "No conversations yet",
+    );
+  });
+
+  it("收窄之后空组闭嘴：会话还在，只是这次搜索不收", () => {
+    renderIndex({ axis: "project", rows: [], narrowed: true });
+
+    expect(screen.queryByText("No sessions")).toBeNull();
+    expect(screen.getByTestId("session-index-empty").textContent).toContain(
+      "No conversations match your search",
+    );
+  });
+
+  it("在线机器的空组说的是自己那一句，同样走包里那颗空态", () => {
+    renderIndex({
+      axis: "machine",
+      rows: [],
+      machineStates: { 20: "connected" },
+    });
+
+    const group = screen.getByTestId("group-device-20");
+    expect(
+      within(group).getByText("No conversations on this machine yet"),
+    ).toBeTruthy();
+    // 「暂无会话」是兜底那一句，机器组有更准的说法，不该两句都出。
+    expect(within(group).queryByText("No sessions")).toBeNull();
   });
 });
 
@@ -1763,11 +1823,11 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
 
     const online = screen.getByTestId("group-device-20");
     expect(
-      within(online).getByText("No conversations on this machine yet."),
+      within(online).getByText("No conversations on this machine yet"),
     ).toBeTruthy();
     const offline = screen.getByTestId("group-device-21");
     expect(
-      within(offline).queryByText("No conversations on this machine yet."),
+      within(offline).queryByText("No conversations on this machine yet"),
     ).toBeNull();
   });
 
@@ -1838,7 +1898,7 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
     expect(screen.getByTestId("group-device-20")).toBeTruthy();
     // 收窄之后「这台机器上还没有对话」是假话——它们还在，只是这次搜索不收。
     expect(
-      screen.queryByText("No conversations on this machine yet."),
+      screen.queryByText("No conversations on this machine yet"),
     ).toBeNull();
     expect(screen.getByTestId("session-index-empty").textContent).toContain(
       "No conversations match your search",
@@ -1978,7 +2038,7 @@ describe("会话索引：机器轴组头的三档", () => {
     expect(within(group).getByTestId("group-skeleton")).toBeTruthy();
     // 「这台机器上还没有对话」是个结论，而这一组还没答上来。
     expect(
-      within(group).queryByText("No conversations on this machine yet."),
+      within(group).queryByText("No conversations on this machine yet"),
     ).toBeNull();
   });
 

@@ -261,7 +261,7 @@ func TestListAgents_WorksForBrowserSession(t *testing.T) {
 			SyncID: "agent-1", Name: "前端 Agent", DepartmentName: "工程",
 			HasAvailableTarget: true,
 			ExecTargets: []workspace_svc.ExecTargetView{
-				{Rank: 1, IsLocalReference: true, Availability: workspace_svc.AvailabilityNoDevice},
+				{Rank: 1, DeviceUnspecified: true, Availability: workspace_svc.AvailabilityNoDevice},
 				{Rank: 2, DeviceID: 20, DeviceName: "书房小主机", BackendType: "claude_code",
 					Availability: workspace_svc.AvailabilityAvailable, Current: true},
 			},
@@ -281,11 +281,11 @@ func TestListAgents_WorksForBrowserSession(t *testing.T) {
 			DepartmentName     string `json:"department_name"`
 			HasAvailableTarget bool   `json:"has_available_target"`
 			ExecTargets        []struct {
-				Rank             int    `json:"rank"`
-				IsLocalReference bool   `json:"is_local_reference"`
-				DeviceName       string `json:"device_name"`
-				Availability     string `json:"availability"`
-				Current          bool   `json:"current"`
+				Rank              int    `json:"rank"`
+				DeviceUnspecified bool   `json:"device_unspecified"`
+				DeviceName        string `json:"device_name"`
+				Availability      string `json:"availability"`
+				Current           bool   `json:"current"`
 			} `json:"exec_targets"`
 		} `json:"agents"`
 	}
@@ -294,7 +294,7 @@ func TestListAgents_WorksForBrowserSession(t *testing.T) {
 	assert.Equal(t, "前端 Agent", got.Agents[0].Name)
 	assert.True(t, got.Agents[0].HasAvailableTarget)
 	require.Len(t, got.Agents[0].ExecTargets, 2)
-	assert.True(t, got.Agents[0].ExecTargets[0].IsLocalReference)
+	assert.True(t, got.Agents[0].ExecTargets[0].DeviceUnspecified)
 	assert.Equal(t, "no_device", got.Agents[0].ExecTargets[0].Availability)
 	assert.True(t, got.Agents[0].ExecTargets[1].Current)
 	assert.Equal(t, "书房小主机", got.Agents[0].ExecTargets[1].DeviceName)

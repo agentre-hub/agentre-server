@@ -44,7 +44,7 @@ function target(over: Partial<OrgExecTargetItem> = {}): OrgExecTargetItem {
     device_id: 21,
     device_name: "公司 Mac mini",
     device_fingerprint: "fp-online",
-    is_local_reference: false,
+    device_unspecified: false,
     availability: "available",
     current: true,
     ...over,

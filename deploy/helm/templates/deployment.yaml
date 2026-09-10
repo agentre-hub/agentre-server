@@ -72,13 +72,16 @@ spec:
               port: http
             periodSeconds: 10
             failureThreshold: 3
+          # 第 1 拍用 k8s 原生的 sleep 动作，由 kubelet 自己计时，不进容器执行任何东西。
+          # exec 形式在这里一定跑不起来：运行段是 distroless static，Dockerfile 只
+          # COPY 了那个静态二进制，镜像里既没有 shell 也没有 sleep，kubelet 会报一个
+          # FailedPreStopHook 然后立刻发 SIGTERM——第 1 拍等于没做。
+          # 需要 k8s >= 1.30（PodLifecycleSleepAction 从 1.30 起默认开启）；更老的
+          # API server 会把这个字段静默剪掉，退化成没有 preStop。
           lifecycle:
             preStop:
-              exec:
-                command:
-                  - /bin/sh
-                  - -c
-                  - sleep {{ .Values.preStopDrainDelaySeconds }}
+              sleep:
+                seconds: {{ .Values.preStopDrainDelaySeconds }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:

@@ -120,7 +120,7 @@ func (r *dispatchResolver) evaluateTier(
 ) (WebDispatchTier, string, error) {
 	tier := WebDispatchTier{Rank: t.Rank, BackendSyncID: t.BackendSyncID, BackendType: t.BackendType}
 	switch {
-	case t.IsLocalReference:
+	case t.DeviceUnspecified:
 		// 后端行没写运行设备：跳过，理由如实写在这一档上。
 		tier.Availability = AvailabilityNoDevice
 	case t.Fingerprint == "":

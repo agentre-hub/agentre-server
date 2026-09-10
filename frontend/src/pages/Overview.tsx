@@ -61,7 +61,7 @@ type Availability = "available" | "offline" | "unpaired" | "no_device";
  */
 interface ExecTargetItem {
   rank: number;
-  is_local_reference: boolean;
+  device_unspecified: boolean;
   device_id?: number;
   device_name?: string;
   backend_type?: string;
@@ -781,7 +781,7 @@ function AgentRankRow({
   const landing =
     agent?.has_available_target && current
       ? [
-          current.is_local_reference ? null : current.device_name,
+          current.device_unspecified ? null : current.device_name,
           current.backend_type
             ? orgBackendTypeLabel(current.backend_type)
             : null,

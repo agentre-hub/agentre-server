@@ -130,11 +130,11 @@ type DeviceReport struct {
 // SettingsResponse 是设置页那一节的全部材料，GET 与 PUT 共用同一份组装。
 type SettingsResponse struct {
 	ActivityStatsEnabled bool `json:"activity_stats_enabled"`
-	// LastReportAt 是最近一次成功拉取的时刻，**Unix 毫秒**（不是秒）。
+	// LastPullAt 是最近一次成功拉取的时刻，**Unix 毫秒**（不是秒）。
 	//
 	// omitempty：0 = 从未拉过 = 「还没有这个事实」，与「服务端给不出」是同一件事，
 	// 界面上都该少说一句而不是显示 1970 年。
-	LastReportAt int64 `json:"last_report_at,omitempty"`
+	LastPullAt int64 `json:"last_pull_at,omitempty"`
 	// SavedConversations 是账号里已保存的对话条数。
 	//
 	// **刻意没有 omitempty**：0 是一个要说出来的答案（「还没有保存过对话」），而

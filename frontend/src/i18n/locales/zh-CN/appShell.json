@@ -5,7 +5,6 @@
     "connecting": "正在连接…",
     "disconnected": "未连接",
     "degraded": "{{status}} · 每 30 秒刷新",
-    "connectedHint": "变更会立刻出现在这一页",
     "connectingHint": "正在重连，这期间改为每 30 秒刷新一次",
     "pollingHint": "实时信号不在，改为每 30 秒刷新一次",
     "retry": "重新连接实时更新"

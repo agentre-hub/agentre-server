@@ -66,7 +66,7 @@
     "agents": {
       "title": "Agent usage",
       "all": "All agents →",
-      "empty": "No Agents yet. They are created on the desktop app and sync here once a device is registered."
+      "empty": "No agent has run a conversation in this range."
     },
     "backends": {
       "title": "Backends & models",

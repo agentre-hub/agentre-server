@@ -3,11 +3,10 @@
   "github": "Sign in with GitHub",
   "or": "or",
   "passkey": "Sign in with a passkey",
-  "passkeyInsecureOrigin": "Passkeys are only available over HTTPS. This site is served over HTTP.",
   "userCodeLabel": "Continue to device authorization after signing in",
   "failureTitle": "Sign in unsuccessful",
   "retryLogin": "Sign in again",
-  "footer": "By continuing, you agree to AgentRe's Terms of Service and Privacy Policy.",
+  "consent": "I have read and agree to AgentRe's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
   "errors": {
     "oauth_state_invalid": "The OAuth state has expired. Please start the sign-in again.",
     "oauth_exchange_failed": "GitHub OAuth exchange failed. Retry later, or check the GitHub OAuth App settings.",

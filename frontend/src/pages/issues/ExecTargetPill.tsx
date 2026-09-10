@@ -36,7 +36,7 @@ export interface BoardExecTargetPillProps {
 }
 
 function MachineIcon({ backend }: { backend: OrgBackendItem }) {
-  if (backend.is_local_reference || !backend.device_id) {
+  if (backend.device_unspecified || !backend.device_id) {
     return <MapPin className="size-3 shrink-0" aria-hidden="true" />;
   }
   return backend.availability === "available" ? (

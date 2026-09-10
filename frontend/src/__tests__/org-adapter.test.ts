@@ -130,7 +130,7 @@ describe("buildOrgModels", () => {
             {
               sync_id: "et-1",
               rank: 1,
-              is_local_reference: false,
+              device_unspecified: false,
               availability: "available",
               current: true,
             },
@@ -159,7 +159,7 @@ describe("buildOrgModels：行尾徽标读第一档，「无目标」只在真�
       backend_sync_id: `backend-${index + 1}`,
       backend_name: it.name,
       backend_type: "claude_code",
-      is_local_reference: false,
+      device_unspecified: false,
       availability: it.availability as "available" | "offline",
       current: it.current,
     }));
@@ -249,7 +249,7 @@ describe("filterRowsByBackend", () => {
               sync_id: "et-1",
               rank: 1,
               backend_sync_id: "backend-1",
-              is_local_reference: false,
+              device_unspecified: false,
               availability: "available",
               current: true,
             },

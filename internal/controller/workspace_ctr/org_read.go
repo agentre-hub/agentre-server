@@ -43,7 +43,7 @@ func (w *Workspace) OrgChart(c *gin.Context, req *api.OrgChartRequest) (*api.Org
 				BackendName: t.BackendName, BackendType: t.BackendType,
 				DeviceID: t.DeviceID, DeviceName: t.DeviceName,
 				DeviceFingerprint: t.DeviceFingerprint,
-				IsLocalReference:  t.IsLocalReference, Availability: t.Availability,
+				DeviceUnspecified: t.DeviceUnspecified, Availability: t.Availability,
 				Current: t.Current, SkillsJSON: t.SkillsJSON,
 			})
 		}
@@ -65,7 +65,7 @@ func (w *Workspace) SelectableBackends(
 		resp.Backends = append(resp.Backends, api.OrgBackendItem{
 			SyncID: b.SyncID, Name: b.Name, BackendType: b.BackendType,
 			DeviceID: b.DeviceID, DeviceName: b.DeviceName,
-			IsLocalReference: b.IsLocalReference, Availability: b.Availability,
+			DeviceUnspecified: b.DeviceUnspecified, Availability: b.Availability,
 		})
 	}
 	return resp, nil

@@ -47,7 +47,7 @@ server:
   session:
     ttl: 336h
   device_flow:
-    user_code_ttl: 10m
+    device_flow_ttl: 10m
     poll_interval: 5s
   jwt:
     active_kid: "2026-08-a"

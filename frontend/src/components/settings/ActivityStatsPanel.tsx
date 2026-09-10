@@ -185,10 +185,10 @@ export function ActivityStatsPanel() {
         </p>
         <p className="text-xs text-muted-foreground">
           {enabled
-            ? settings.last_report_at
+            ? settings.last_pull_at
               ? t("settings.privacy.activity.statusOnAt", {
                   time: formatRelativeTime(
-                    settings.last_report_at,
+                    settings.last_pull_at,
                     i18n.resolvedLanguage ?? "en",
                   ),
                 })

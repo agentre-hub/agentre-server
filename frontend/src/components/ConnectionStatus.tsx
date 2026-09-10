@@ -21,12 +21,14 @@ import { cn, statusConfig, type AgentStatus } from "@agentre-hub/agentre-ui";
  */
 export const connectionCopy: Record<
   AccountChannelState,
-  { tone: AgentStatus; labelKey: string; hintKey: string }
+  { tone: AgentStatus; labelKey: string; hintKey?: string }
 > = {
+  // 连着的时候没有副文案：`hintKey` 缺席不是漏写。「实时更新中」已经把话说完了，
+  // 底下那行「变更会立刻出现在这一页」只是把同一句换个说法再讲一遍。降级两态则
+  // 各留一句 —— 「改为每 30 秒刷新一次」是用户从标签上看不出来的后果。
   connected: {
     tone: "running",
     labelKey: "appShell.connection.connected",
-    hintKey: "appShell.connection.connectedHint",
   },
   connecting: {
     tone: "waiting",

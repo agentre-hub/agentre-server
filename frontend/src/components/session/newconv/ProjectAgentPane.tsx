@@ -1,5 +1,6 @@
 import {
   AgentAvatar,
+  Button,
   ProjectGlyph,
   cn,
   iconNode,
@@ -32,6 +33,7 @@ export function ProjectAgentPane({
   agents,
   onPick,
   onBack,
+  onNewProject,
   stacked = false,
   projectsSettled = true,
   agentsSettled = true,
@@ -40,6 +42,10 @@ export function ProjectAgentPane({
   agents: NewConvAgent[];
   onPick: (agent: NewConvAgent) => void;
   onBack: () => void;
+  /**
+   * 建一个顶层项目。宿主给才有——不给就只留那句话，而不是摆一颗点了没反应的按钮。
+   */
+  onNewProject?: () => void;
   /**
    * 那两份清单**已经问回来了**吗。默认 true（不传 = 手上这份就是全部）。
    *
@@ -200,6 +206,16 @@ export function ProjectAgentPane({
                 icon={FolderTree}
                 title={t("chat.noProjectsYetTitle")}
                 body={t("chat.noProjectsYetHint")}
+                // 这一句此前是指路（「左栏的『项目』旁边」）——那颗按钮并不在项目
+                // 组头旁边，它在索引控件行的右端，而且只在「项目」轴上出现。指路
+                // 会随布局改错，把入口摆在读者手边不会。
+                action={
+                  onNewProject ? (
+                    <Button size="sm" onClick={onNewProject}>
+                      {t("project.create.title")}
+                    </Button>
+                  ) : undefined
+                }
               />
             ) : membersEmpty ? (
               <EmptyState

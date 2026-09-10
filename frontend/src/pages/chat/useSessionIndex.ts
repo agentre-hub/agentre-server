@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-api-query";
+import { useTargetGuard } from "@/hooks/use-target-guard";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
 import { attentionReasonOf } from "@/lib/attentionAdapter";
 import { api } from "@/lib/api";
@@ -38,6 +39,38 @@ export interface SessionIndexInput {
   /** 删掉一条之后：右栏正开着它的话要收起来——那是右栏的事，不是索引的事。 */
   onDeleted: (row: MirrorIndexRow) => void;
 }
+
+/**
+ * 一条对话没能存进账号这件事，连同把它重做一遍的那条路。
+ *
+ * 两条来路合流到同一格：行尾按下的「保存」（kind: "manual"），以及从这一端派发
+ * 新对话时的发起即保存（kind: "onStart"，R16）。两者的**后果**是同一个——账号里
+ * 没有它，于是左栏列不出它——所以只该有一处说明和一颗重试，而不是两套。
+ *
+ * 两者说的话仍要分开：手动保存那条路，用户知道自己刚点了什么；发起即保存那条路，
+ * 用户看到的是右栏正开着一条对话、左栏却一行都没有，得先告诉他会话**真的**跑起来了。
+ *
+ * 它只带**数据**，不带那颗重试的闭包：重试是 `retrySave`，由这只 hook 自己按
+ * `kind` 分派。装一个闭包进来的话，造它的地方（doSave 的 catch）就得反过来引用
+ * doSave 自己，那是个自引用的环。
+ */
+export type SaveFailure = {
+  conversationId: string;
+  /** 说给用户听的那个名字。 */
+  title: string;
+} & (
+  | {
+      kind: "manual";
+      /** 行尾那条路：重做就是拿这一行再走一遍 doSave。 */
+      row: MirrorIndexRow;
+    }
+  | {
+      kind: "onStart";
+      /** 发起即保存那条路：没有行可拿，重做就是原样再发一遍这份载荷。 */
+      machineFingerprint: string;
+      peerFingerprint: string;
+    }
+);
 
 /** 「对话」页与索引数据层之间的全部契约。 */
 export interface SessionIndexData {
@@ -93,6 +126,27 @@ export interface SessionIndexData {
     hasMore: boolean;
   }>;
 
+  /**
+   * 上一次保存没写成的那一条（两条来路合流，见 SaveFailure）。null = 没有。
+   * 下一次写成、或者用户把它关掉时清空。
+   */
+  saveFailure: SaveFailure | null;
+  dismissSaveFailure: () => void;
+  /** 把上一次没写成的那次保存重做一遍（两条来路各按自己的方式重做）。 */
+  retrySave: () => void;
+  /**
+   * 从这一端派发出去的新对话没能存进账号（dispatch 的 savedToAccount 为假）。
+   *
+   * 由页面报进来而不是由这只 hook 自己发现：那一次写是派发流程的收尾，发生在
+   * `dispatchNewConversation` 里，索引这一层看不见它。
+   */
+  reportUnsavedOnStart: (session: {
+    conversationId: string;
+    title: string;
+    machineFingerprint: string;
+    peerFingerprint: string;
+  }) => void;
+
   /** 行尾「保存」。第一次保存要先把说明弹层摆出来，因此不是直接写。 */
   onSave: (row: MirrorIndexRow) => void;
   /** 第一次保存的说明弹层挡着的那一条。 */
@@ -137,6 +191,8 @@ export function useSessionIndex({
   const [loadingMore, setLoadingMore] = useState(false);
   /** 取下一页失败：已列出的行留在原地，就地给一条可重试的提示（决策 16）。 */
   const [loadMoreFailed, setLoadMoreFailed] = useState(false);
+  /** 上一次保存没写成的那一条（两条来路合流，见 SaveFailure）。 */
+  const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   /**
    * 保存 / 删除的乐观覆盖层。行本身来自服务端的组骨架，因此这两个动作不能直接改
    * 那份数据——它下一次取数就会被覆盖。覆盖层活到下一次取数为止，行尾那个动作
@@ -226,6 +282,15 @@ export function useSessionIndex({
    * 空页的「加载更多」。
    */
   const pagedRef = useRef(false);
+  /**
+   * 在途翻页的范围守卫。
+   *
+   * 取数那一遍由 `useAliveEffect` 的 `alive()` 管着（换范围就是换依赖，那一轮当场
+   * 作废），而「加载更多」是用户点出来的，没有清理函数可挂：点完再点一颗筛选
+   * chip，过期的那一页会追加到新范围的列表下面，`nextCursor` 从此翻的也是错的
+   * 那一批。
+   */
+  const guardRange = useTargetGuard(rangeKey);
 
   useAliveEffect(
     (alive) => {
@@ -282,6 +347,10 @@ export function useSessionIndex({
           }
           setLoadMoreFailed(false);
           setLoaded(true);
+          // 这一遍成功了，上一次失败留下的那条红横幅就该收起来。不清的话，一次
+          // 网络抖动之后它会挂在一份**正确**的列表上方直到整页刷新
+          // （设备页的 applyList 早就是这么写的）。
+          setLoadError(null);
         })
         .catch((e: unknown) => {
           if (alive()) setLoadError(e);
@@ -296,19 +365,25 @@ export function useSessionIndex({
    */
   const loadMore = useCallback(() => {
     if (!nextCursor || loadingMore) return;
+    // 这一页是**当前这个范围**的下一页。范围变了它就整页作废：追加上去等于把上一
+    // 个筛选的行摆进新列表，而那个游标接着往下翻的也仍是旧范围。
+    const sameRange = guardRange();
     setLoadingMore(true);
     setLoadMoreFailed(false);
     api<IndexResponse>(
       `/v1/agent-sessions?${rangeParams({ scope: "time", cursor: nextCursor }).toString()}`,
     )
       .then((page) => {
+        if (!sameRange()) return;
         setAppended((prev) => [...prev, ...(page.items ?? [])]);
         setNextCursor(page.has_more ? (page.cursor ?? null) : null);
         pagedRef.current = true;
       })
-      .catch(() => setLoadMoreFailed(true))
+      .catch(() => sameRange() && setLoadMoreFailed(true))
+      // 「在飞」这一格**不**守：它是这只 hook 唯一的一份，而 loadMore 自己按它上
+      // 闩。守住的话换范围之后没人再放它下来，那颗「加载更多」就此按不动了。
       .finally(() => setLoadingMore(false));
-  }, [nextCursor, loadingMore, rangeParams]);
+  }, [nextCursor, loadingMore, rangeParams, guardRange]);
 
   /**
    * 翻某一组的下一页（「查看全部 N」那条路）。范围参数一并带上——弹层里翻的必须
@@ -460,15 +535,76 @@ export function useSessionIndex({
             conversation_id: row.conversationId,
           }),
         });
+        // 这一次写成了：上一次失败留下的那条横幅就该收起来，否则它会挂在一份
+        // **已经正确**的列表上方（与取数那一路的 setLoadError(null) 同一条规矩）。
+        setSaveFailure((prev) =>
+          prev?.conversationId === row.conversationId ? null : prev,
+        );
       } catch {
         setOptimisticSaved((prev) =>
           prev.filter((s) => s.conversation_id !== row.conversationId),
         );
         shiftTotals(row, -1);
+        // 回滚是对的（账号里确实没有它），但只回滚就成了一次无声的失败：行闪一下
+        // 消失，与「我大概没点中」长得一模一样。说出来，并把重试挂在同一条写上 ——
+        // 让用户回去重新找到那一行再点一次是纯粹的额外劳动。
+        setSaveFailure({
+          conversationId: row.conversationId,
+          title: row.title,
+          kind: "manual",
+          row,
+        });
       }
     },
     [devices, shiftTotals],
   );
+
+  const dismissSaveFailure = useCallback(() => setSaveFailure(null), []);
+
+  /**
+   * 发起即保存那一路没写成（R16）：只记下事实，重做交给 retrySave。
+   */
+  const reportUnsavedOnStart = useCallback(
+    (session: {
+      conversationId: string;
+      title: string;
+      machineFingerprint: string;
+      peerFingerprint: string;
+    }) => setSaveFailure({ ...session, kind: "onStart" }),
+    [],
+  );
+
+  /**
+   * 把上一次没写成的那一次保存重做一遍。
+   *
+   * 两条来路在这里才分岔，因为它们的**重做**不一样：手动保存那条有行，照原路再走
+   * 一遍 doSave（乐观行、计数、成功后收横幅全都跟着走）；发起即保存那条没有行可拿
+   * ——这条对话从来没进过任何一份列表——所以直接发那份载荷，写成之后 refetch 让它
+   * 作为一条真行落进左栏，而不是只把横幅收掉、留下一份仍然看不见它的列表。
+   */
+  const retrySave = useCallback(() => {
+    if (!saveFailure) return;
+    if (saveFailure.kind === "manual") {
+      void doSave(saveFailure.row);
+      return;
+    }
+    void (async () => {
+      try {
+        await api("/v1/saved-sessions", {
+          method: "POST",
+          body: JSON.stringify({
+            machine_fingerprint: saveFailure.machineFingerprint,
+            peer_fingerprint: saveFailure.peerFingerprint,
+            conversation_id: saveFailure.conversationId,
+          }),
+        });
+        setSaveFailure(null);
+        setIndexNonce((n) => n + 1);
+      } catch {
+        // 还是没写成：横幅留在原地，那颗重试照常按得动。
+      }
+    })();
+  }, [saveFailure, doSave]);
 
   const onSave = useCallback(
     (row: MirrorIndexRow) => {
@@ -541,6 +677,11 @@ export function useSessionIndex({
     loadMoreFailed,
     loadMore,
     fetchGroupPage,
+
+    saveFailure,
+    dismissSaveFailure,
+    retrySave,
+    reportUnsavedOnStart,
 
     onSave,
     pendingSave,

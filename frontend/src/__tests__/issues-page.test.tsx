@@ -100,7 +100,7 @@ const backends = [
     name: "Claude Code",
     backend_type: "claude_code",
     device_name: "MacBook",
-    is_local_reference: false,
+    device_unspecified: false,
     availability: "available",
   },
   {
@@ -108,7 +108,7 @@ const backends = [
     name: "Codex",
     backend_type: "codex",
     device_name: "builder",
-    is_local_reference: false,
+    device_unspecified: false,
     availability: "offline",
   },
 ];

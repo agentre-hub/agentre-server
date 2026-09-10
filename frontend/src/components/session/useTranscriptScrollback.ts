@@ -19,6 +19,7 @@ import {
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
 import { turnDoneFrames } from "@/components/session/turnDone";
+import { useTargetGuard } from "@/hooks/use-target-guard";
 import { applyJournalFrames, type RelayClient } from "@/lib/relayClient";
 
 /**
@@ -213,6 +214,12 @@ export function useTranscriptScrollback({
   const topupsRef = useRef(0);
   /** 往回取那一次在不在飞。见 loadEarlier 里为什么不能读 earlier.loading。 */
   const earlierInFlightRef = useRef(false);
+  /**
+   * 在途那一页的目标守卫。`earlierInFlightRef` 只答「有没有在飞」，答不了「飞的是
+   * 谁的」——右栏是同实例换 props，A 往回取的那一页很可能在 B 打开着的时候才回来，
+   * 而 `setEvents` 写的是**共用**的那条转录。
+   */
+  const guardTarget = useTargetGuard(`${did}|${sid}|${originProp ?? ""}`);
 
   /**
    * 往回取一页，前插进转录。
@@ -230,6 +237,9 @@ export function useTranscriptScrollback({
     if (earlierInFlightRef.current) return;
     if (!earlier.hasBefore || earlier.source === "none") return;
     earlierInFlightRef.current = true;
+    // 这一页属于**发起它的那条会话**：解析时先比对再写，否则 A 的旧消息会前插进
+    // B 的转录（两条会话共用同一份 events）。
+    const stillHere = guardTarget();
     const el = scrollRef.current;
     if (el) restoreRef.current = { height: el.scrollHeight, top: el.scrollTop };
     setEarlier((p) => ({ ...p, loading: true, failed: false }));
@@ -238,6 +248,7 @@ export function useTranscriptScrollback({
       oldest: number,
       hasBefore: boolean,
     ) => {
+      if (!stillHere()) return;
       setEvents((prev) => [...evs, ...prev]);
       setEarlier((p) => ({
         ...p,
@@ -255,7 +266,9 @@ export function useTranscriptScrollback({
       }
       const c = clientRef.current;
       if (!c) {
-        setEarlier((p) => ({ ...p, loading: false, failed: true }));
+        if (stillHere()) {
+          setEarlier((p) => ({ ...p, loading: false, failed: true }));
+        }
         return;
       }
       const res = await c.pullBefore(
@@ -274,14 +287,19 @@ export function useTranscriptScrollback({
       });
       append(evs, res.frames[0]?.seq ?? 0, res.hasBefore);
     } catch {
+      // 失败同样属于那一条：换目标之后再把「往回读失败了」写上去，说的是另一条
+      // 对话的事；那次重置也已经把前插补偿的存根清掉了。
+      if (!stillHere()) return;
       setEarlier((p) => ({ ...p, loading: false, failed: true }));
       restoreRef.current = null;
     } finally {
-      earlierInFlightRef.current = false;
+      // 门闩也是那一条的：切过去之后 B 可能已经自己开了一次，A 迟到的这一下会把
+      // B 的门闩打开，同一页读两遍。
+      if (stillHere()) earlierInFlightRef.current = false;
     }
     // 后四样都是稳定引用（ref 对象与 useState 的 setter），列进依赖只为如实交代
     // 读了什么，不会让 loadEarlier 多换一次身份。
-  }, [earlier, sid, setEvents, clientRef, originRef]);
+  }, [earlier, sid, setEvents, clientRef, originRef, guardTarget]);
 
   /**
    * 滚动那几个 ref 随目标一起重来。右栏换会话是同实例换 props，不清的话新的一条会

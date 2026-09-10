@@ -84,9 +84,23 @@ function values() {
   return boxes().map((b) => b.value);
 }
 
+/**
+ * 步骤条格子由共享步骤条渲染，序号进了可及名（`Step 2: …`），不再挂 testid ——
+ * 序号是这一格的身份，第 3 格因此不会和正文里的按钮同名。
+ */
+const STEP_CELL = [
+  "Step 1: Install and sign in",
+  "Step 2: Enter the device code",
+  "Step 3: Keep it running",
+] as const;
+
+function stepCell(n: 1 | 2 | 3): HTMLElement {
+  return screen.getByRole("button", { name: STEP_CELL[n - 1] });
+}
+
 /** 输码是第 2 步：批准必须发生在起 daemon 之前（见文件头的落盘时序）。 */
 function openCodeStep() {
-  fireEvent.click(screen.getByTestId("add-device-step-2"));
+  fireEvent.click(stepCell(2));
 }
 
 function submitCode() {
@@ -130,7 +144,7 @@ describe("add-device guide · steps and commands", () => {
     );
     expect(screen.queryByTestId("add-device-command-service")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("add-device-step-2"));
+    fireEvent.click(stepCell(2));
 
     // 第 2 步：批准。login 到这一步才退出并写 state.json，所以起 daemon 的命令
     // 不许出现在这里——出现了就等于请用户在 login 还挂着的时候把 daemon 拉起来。
@@ -138,7 +152,7 @@ describe("add-device guide · steps and commands", () => {
     expect(screen.queryByTestId("add-device-command-service")).toBeNull();
     expect(screen.queryByTestId("add-device-command-login")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("add-device-step-3"));
+    fireEvent.click(stepCell(3));
 
     // 第 3 步：state.json 已经落定，这时才起 daemon
     expect(screen.getByTestId("add-device-command-service").textContent).toBe(
@@ -177,12 +191,52 @@ describe("add-device guide · steps and commands", () => {
     );
 
     const body = screen.getByTestId("add-device-step-body").textContent ?? "";
-    // 命令会打印 6 位码（CLI 实际输出 `User code: XXXXXX`）、会尝试开浏览器、
-    // 没浏览器就把码带回来
-    expect(body).toMatch(/User code/);
-    expect(body).toMatch(/browser/i);
+    // 命令自己会印 `User code: XXXXXX` 与授权 URL，引导不复述（规格「引导只给
+    // 要执行的命令」）。这里守的是反面：不许把终端输出抄进界面。
+    expect(body).not.toMatch(/User code/);
     // 有效期可配置：这一屏不许写死任何时长
     expect(body).not.toMatch(/\d+\s*(minutes?|分钟)/);
+  });
+
+  /**
+   * 容器方式下登录必须挂上 daemon 的状态目录：批准之后写下的凭据要落在**下一步
+   * compose 起的那个容器读得到**的位置，否则设备看着授权成功却永远连不上。
+   */
+  it("第 1 步 · 计算节点 · Docker：拉镜像 + 挂状态目录的登录命令，服务器地址仍是本控制台", () => {
+    renderGuide();
+
+    fireEvent.click(screen.getByRole("button", { name: "Docker container" }));
+
+    expect(screen.getByTestId("add-device-command-install").textContent).toBe(
+      "docker pull ghcr.io/agentre-hub/agentred:latest",
+    );
+    // 容器方式下宿主系统不改变任何命令，那排按钮就不该在
+    expect(screen.queryByRole("button", { name: "Windows" })).toBeNull();
+
+    const login =
+      screen.getByTestId("add-device-command-login").textContent ?? "";
+    expect(login).toContain("-v ~/.config/agentred:/root/.config/agentred");
+    expect(login).toContain("login --server https://console.example.test");
+
+    // 挂载与 compose 的细节不进界面，由页脚这条链接送到部署说明
+    expect(
+      screen.getByTestId("add-device-manual-download").getAttribute("href"),
+    ).toBe("https://github.com/agentre-hub/agentre/blob/main/deploy/README.md");
+  });
+
+  it("第 3 步 · 计算节点 · Docker：常驻换成 compose，且没有「前台临时」这一档", () => {
+    renderGuide();
+
+    fireEvent.click(screen.getByRole("button", { name: "Docker container" }));
+    fireEvent.click(stepCell(3));
+
+    expect(screen.getByTestId("add-device-command-service").textContent).toBe(
+      "docker compose up -d",
+    );
+    // 控制台的设备要长期在线，一个会随终端关闭而消失的选项对它没有意义
+    expect(
+      screen.queryByRole("button", { name: /temporary foreground/i }),
+    ).toBeNull();
   });
 
   it("第 1 步 · 桌面端：换成下载入口 + 同一个控制台地址 + 应用内登录路径", () => {
@@ -210,15 +264,16 @@ describe("add-device guide · steps and commands", () => {
   it("第 3 步 · 计算节点：注册后台服务，并说明为什么必须排在批准之后", () => {
     renderGuide();
 
-    fireEvent.click(screen.getByTestId("add-device-step-3"));
+    fireEvent.click(stepCell(3));
 
     expect(screen.getByTestId("add-device-command-service").textContent).toBe(
       "agentred service install --start",
     );
     const body = screen.getByTestId("add-device-step-body").textContent ?? "";
-    // 理由要说到点子上：login 最后才写 state.json，daemon 起早了会把它覆盖掉
-    expect(body).toMatch(/agentred login/);
-    expect(body).toMatch(/state\.json/);
+    // 理由要说到点子上：起早了的服务会把这次登录覆盖掉。这句话没有任何命令会印，
+    // 是界面唯一的来源，所以压短可以、删掉不行。
+    expect(body).toMatch(/after the device is approved/i);
+    expect(body).toMatch(/overwrites this login/i);
     expect(body).not.toMatch(/\d+\s*(minutes?|分钟)/);
   });
 
@@ -228,7 +283,7 @@ describe("add-device guide · steps and commands", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Desktop (Agentre App)" }),
     );
-    fireEvent.click(screen.getByTestId("add-device-step-3"));
+    fireEvent.click(stepCell(3));
 
     expect(screen.queryByTestId("add-device-command-service")).toBeNull();
     const body = screen.getByTestId("add-device-step-body").textContent ?? "";
@@ -238,8 +293,8 @@ describe("add-device guide · steps and commands", () => {
   it("步骤条三格都可点：跳到第 3 步只换当前步骤，不伪造完成标记", () => {
     renderGuide();
 
-    const step1 = screen.getByTestId("add-device-step-1");
-    const step3 = screen.getByTestId("add-device-step-3");
+    const step1 = stepCell(1);
+    const step3 = stepCell(3);
     expect(step1.getAttribute("aria-current")).toBe("step");
 
     fireEvent.click(step3);
@@ -248,9 +303,7 @@ describe("add-device guide · steps and commands", () => {
     expect(step1.getAttribute("aria-current")).toBeNull();
     // 跳步过去的：第 1/2 步没有点过「下一步」，就不该显示完成
     expect(within(step1).queryByText("Signed in")).toBeNull();
-    expect(
-      within(screen.getByTestId("add-device-step-2")).queryByText("Authorized"),
-    ).toBeNull();
+    expect(within(stepCell(2)).queryByText("Authorized")).toBeNull();
   });
 
   it("点过某一步的「下一步」才出现完成标记，并前进到下一步", () => {
@@ -260,8 +313,8 @@ describe("add-device guide · steps and commands", () => {
       screen.getByRole("button", { name: "I have the device code" }),
     );
 
-    const step1 = screen.getByTestId("add-device-step-1");
-    const step2 = screen.getByTestId("add-device-step-2");
+    const step1 = stepCell(1);
+    const step2 = stepCell(2);
     expect(within(step1).getByText("Signed in")).toBeTruthy();
     expect(step2.getAttribute("aria-current")).toBe("step");
     expect(within(step2).queryByText("Authorized")).toBeNull();
@@ -270,13 +323,11 @@ describe("add-device guide · steps and commands", () => {
   it("最后一步的完成按钮只落一个勾：不把正文推进一个不存在的编号而渲染成空白", () => {
     renderGuide();
 
-    fireEvent.click(screen.getByTestId("add-device-step-3"));
-    fireEvent.click(
-      screen.getByRole("button", { name: "That is the last step" }),
-    );
+    fireEvent.click(stepCell(3));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
-    const step3 = screen.getByTestId("add-device-step-3");
-    expect(within(step3).getByText("Kept running")).toBeTruthy();
+    const step3 = stepCell(3);
+    expect(within(step3).getByText("Running")).toBeTruthy();
     expect(step3.getAttribute("aria-current")).toBe("step");
     // 正文还在（第 4 步不存在，推过去整块就空了）
     expect(screen.getByTestId("add-device-command-service")).toBeTruthy();

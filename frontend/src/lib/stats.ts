@@ -100,7 +100,7 @@ export interface StatsDeviceReport {
 export interface StatsSettings {
   activity_stats_enabled: boolean;
   /** 最近一次上报的毫秒级时间戳。 */
-  last_report_at?: number;
+  last_pull_at?: number;
   /**
    * 账号里已保存的对话条数。
    *

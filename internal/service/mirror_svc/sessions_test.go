@@ -482,3 +482,97 @@ func TestReplayPendingDeletes_ConversationSavedAgain_DoesNotDeleteIt(t *testing.
 		"用户已经把它重新保存了,这条删除不该再发出去")
 	assert.Empty(t, todos.pending(), "收回的删除意图也不该一直排在那儿")
 }
+
+// ── 变更落在非属主副本上 ────────────────────────────────────────────────────
+//
+// 多副本部署里,「跟着这台机器的副本」与「接住这次 HTTP 请求的副本」是两件独立的事:
+// 前者由租约决定(同一台机器只被一个副本跟),后者由负载均衡决定。于是每一次保存 /
+// 删除都有 (N-1)/N 的概率落在非属主副本上,而那个副本手里根本没有这台机器的连接。
+// 下面两条用例把这个交错本身钉住:属主必须**当场**被告知,而不是等某个副本碰巧赢下
+// 下一轮 cron 锁(reconcile_session_mirrors 每分钟只有一个副本跑得成,N 个副本下期望
+// 延迟约 N 分钟,还带几何分布的长尾)。
+
+// tracksConversation 报告这个副本此刻那条连接上还认不认这条对话。
+// 删除方向的判据只能是它:库里空着也可能只是因为下一帧还没到,而「摘掉了没有」
+// 决定的正是下一帧会不会把刚删掉的东西写回来。
+func (r *replica) tracksConversation(userID int64, fingerprint, conversationID string) bool {
+	r.sup.mu.Lock()
+	f := r.sup.followers[machineKey{userID: userID, fingerprint: fingerprint}]
+	r.sup.mu.Unlock()
+	if f == nil {
+		return false
+	}
+	mirror := f.mirrorNow()
+	if mirror == nil {
+		return false
+	}
+	_, tracked := mirror.liveSession(conversationID)
+	return tracked
+}
+
+// Given 副本 A 正跟着这台机器(租约在 A 手里),账号又在这台机器上保存了第二条对话,
+// 而这次保存请求落在副本 B 上;When B 让镜像开始;
+// Then 那条新对话在 **A 那条连接上**当场跟起来 —— 用户看到的是「存完就有转录」,
+// 而不是空白好几分钟。
+func TestBegin_SaveLandsOnAnotherReplica_OwnerPicksItUpAtOnce(t *testing.T) {
+	rig := newResidentRig(t)
+	saves := newFakeSaves(saved(testUserID, testMachine, conv42))
+	rig.peer.sessions = []*agentrewire.SessionSummary{
+		machineSession(conv42, "先保存的"), machineSession(conv77, "刚保存的"),
+	}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
+	rig.peer.journal[conv77] = []*agentrewire.JournaledNotification{journalRow(conv77, 1)}
+	a := rig.replica(t, replicaA)
+	b := rig.replica(t, replicaB)
+	ctx := context.Background()
+	require.NoError(t, NewSessions(a.sup).Begin(ctx, testUserID, testMachine, conv42))
+	require.True(t, a.sup.follows(testUserID, testMachine), "A 是属主")
+	require.Empty(t, rig.store.rowSeqs(conv77))
+
+	// saved_session_svc.Save 的次序:名单先落库,再让镜像开始。
+	row := saved(testUserID, testMachine, conv77)
+	require.NoError(t, saves.Save(ctx, &row))
+	require.NoError(t, NewSessions(b.sup).Begin(ctx, testUserID, testMachine, conv77))
+
+	require.Eventually(t, func() bool {
+		return len(rig.store.rowSeqs(conv77)) == 1
+	}, 2*time.Second, 5*time.Millisecond,
+		"保存落在非属主副本上时,属主必须当场被告知 —— 否则要等它碰巧赢下下一轮 cron 锁")
+	connects, attaches, _ := b.net.counts()
+	assert.Zero(t, connects, "非属主副本仍然不得自己连上这台机器:租约是唯一的属主判据")
+	assert.Zero(t, attaches)
+}
+
+// Given 副本 A 正跟着这台机器并已经把 conv42 镜像下来,而删除请求落在副本 B 上;
+// When B 清掉 server 上那一份,同时 A 那条连接上帧还在来;
+// Then A 摘掉这条对话,库里那一份也不会被**重新物化**出来 —— 摘要与转录都不许回来。
+//
+// 非属主副本只摘得到自己那条连接(Supervisor.forgetSession 在 B 上是个 no-op),而 A
+// 那个仍然活着的 follower 名单里还留着这条对话:下一帧照常落库,用户刚删掉的东西
+// 悄悄回来 —— 决策 2 的隐私边界正是破在这里。
+func TestPurge_DeleteLandsOnAnotherReplica_OwnerStopsMaterializingIt(t *testing.T) {
+	rig := newResidentRig(t)
+	newFakeSaves(saved(testUserID, testMachine, conv42))
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "要删掉的")}
+	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
+	a := rig.replica(t, replicaA)
+	b := rig.replica(t, replicaB)
+	ctx := context.Background()
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, []int64{1}, rig.store.rowSeqs(conv42))
+
+	require.NoError(t, NewSessions(b.sup).Purge(ctx, testUserID, testMachine, conv42))
+	// 帧与删除是并发的:这正是「复活」发生的那个窗口。
+	a.net.emit(t, notification(conv42, 2, "删完还在说"))
+
+	require.Eventually(t, func() bool {
+		return !a.tracksConversation(testUserID, testMachine, conv42) &&
+			len(rig.store.rowSeqs(conv42)) == 0 && len(rig.store.summaryOf(testUserID, conv42)) == 0
+	}, 2*time.Second, 5*time.Millisecond,
+		"删除落在非属主副本上时,属主那个还活着的 follower 会把刚删掉的摘要与帧重新物化出来")
+	a.net.emit(t, notification(conv42, 3, "还在说"))
+	assert.Never(t, func() bool { return len(rig.store.rowSeqs(conv42)) > 0 },
+		200*time.Millisecond, 5*time.Millisecond, "摘掉之后的实时帧一个字都不该再落库")
+}

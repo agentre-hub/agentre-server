@@ -76,7 +76,7 @@ func (e *Engine) ListBackends(c *gin.Context, _ *api.ListBackendsRequest) (*api.
 	return &api.ListBackendsResponse{Backends: out}, nil
 }
 func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*api.Backend, error) {
-	item, err := engine_svc.Default().CreateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), "", req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceID, req.EnvJSON))
+	item, err := engine_svc.Default().CreateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), "", req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceFingerprint, req.EnvJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,7 @@ func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*
 	return &out, nil
 }
 func (e *Engine) UpdateBackend(c *gin.Context, req *api.UpdateBackendRequest) (*api.Backend, error) {
-	item, err := engine_svc.Default().UpdateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), req.SyncID, req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceID, req.EnvJSON))
+	item, err := engine_svc.Default().UpdateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), req.SyncID, req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceFingerprint, req.EnvJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +97,8 @@ func (e *Engine) DeleteBackend(c *gin.Context, req *api.DeleteBackendRequest) (*
 	}
 	return &struct{}{}, nil
 }
-func backendInput(userID int64, id string, name, kind, providerKey, modelKey, modelRoutes, sandbox, approval, reasoning, permission, defaultModel, gateway, agentID, openClawModel, sessionMode, cliPath, deviceID, envJSON *string) engine_svc.BackendWriteInput {
-	return engine_svc.BackendWriteInput{UserID: userID, SyncID: id, Name: name, Type: kind, ProviderKey: providerKey, ModelKey: modelKey, ModelRoutes: modelRoutes, Sandbox: sandbox, Approval: approval, ReasoningEffort: reasoning, DefaultPermissionMode: permission, DefaultModel: defaultModel, OpenClawGatewayURL: gateway, OpenClawAgentID: agentID, OpenClawDefaultModel: openClawModel, OpenClawSessionMode: sessionMode, CLIPath: cliPath, DeviceID: deviceID, EnvJSON: envJSON}
+func backendInput(userID int64, id string, name, kind, providerKey, modelKey, modelRoutes, sandbox, approval, reasoning, permission, defaultModel, gateway, agentID, openClawModel, sessionMode, cliPath, deviceFingerprint, envJSON *string) engine_svc.BackendWriteInput {
+	return engine_svc.BackendWriteInput{UserID: userID, SyncID: id, Name: name, Type: kind, ProviderKey: providerKey, ModelKey: modelKey, ModelRoutes: modelRoutes, Sandbox: sandbox, Approval: approval, ReasoningEffort: reasoning, DefaultPermissionMode: permission, DefaultModel: defaultModel, OpenClawGatewayURL: gateway, OpenClawAgentID: agentID, OpenClawDefaultModel: openClawModel, OpenClawSessionMode: sessionMode, CLIPath: cliPath, DeviceFingerprint: deviceFingerprint, EnvJSON: envJSON}
 }
 func backend(b engine_svc.BackendView) api.Backend {
 	cli := make([]api.CLIByDevice, len(b.CLIByDevice))
@@ -112,7 +112,7 @@ func backend(b engine_svc.BackendView) api.Backend {
 		DefaultModel: b.DefaultModel, OpenClawGatewayURL: b.OpenClawGatewayURL,
 		OpenClawAgentID: b.OpenClawAgentID, OpenClawDefaultModel: b.OpenClawDefaultModel,
 		OpenClawSessionMode: b.OpenClawSessionMode, RefCount: b.RefCount, CLIByDevice: cli,
-		DeviceID: b.DeviceID,
+		DeviceFingerprint: b.DeviceFingerprint,
 	}
 }
 func (e *Engine) ListCLIOverlays(c *gin.Context, _ *api.ListCLIOverlaysRequest) (*api.ListCLIOverlaysResponse, error) {

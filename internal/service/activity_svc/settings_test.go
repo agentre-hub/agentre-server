@@ -15,7 +15,7 @@ import (
 // TestSettings_ReportsTheStoredSwitch 覆盖设置页那一行：开关的当下状态与最近一次上报。
 // 没有设置行是常态（默认关就不写行），那时交回的是零值而不是一次失败。
 //
-// LastReportAt 取的是 ActivityLastPullAt（最近一次成功拉取），**不是**
+// LastPullAt 取的是 ActivityLastPullAt（最近一次成功拉取），**不是**
 // ActivityStatsEnabledAt（最近一次开启）。用后者顶替的话，一个半年前开了开关、上周就
 // 断了的账号会显示「最近一次上报：半年前」——那句话的每一个字都不对。这里给两个不同
 // 的时刻，正是为了让顶替这件事测得出来。
@@ -33,7 +33,7 @@ func TestSettings_ReportsTheStoredSwitch(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, view.ActivityStatsEnabled)
-	assert.Equal(t, int64(1787900000000), view.LastReportAt)
+	assert.Equal(t, int64(1787900000000), view.LastPullAt)
 	assert.Equal(t, int64(3), view.SavedConversations)
 }
 
@@ -47,7 +47,7 @@ func TestSettings_NeverEnabledIsZeroNotAnError(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.False(t, view.ActivityStatsEnabled)
-	assert.Zero(t, view.LastReportAt)
+	assert.Zero(t, view.LastPullAt)
 }
 
 // TestSetActivityStats_EnableOnlyWritesTheSwitch 覆盖开启：只写开关。

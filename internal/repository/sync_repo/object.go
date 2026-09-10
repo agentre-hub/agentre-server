@@ -7,7 +7,6 @@ import (
 	"github.com/cago-frame/cago/database/db"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
 	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
@@ -100,11 +99,15 @@ func (r *objectRepo) findLiveByNaturalKey(
 //     version<?），所以 RowsAffected 一定是 1，不会因为「匹配到但没变化」而落到第 2 步。
 //     createtime 不在赋值列里：命中已有行时保留它首次落地的时间。
 //  2. UPDATE 没命中说明行还不存在（或已被并发插入抢先），走一条**不带**
-//     ON DUPLICATE 的 INSERT，让唯一键自己说话：
-//     撞 uk_sync_objects_identity = 行已存在且版本不比本次小，本次是 R4 的竞败方，
-//     这是预期内的正常路径，吞掉；
-//     撞 uk_sync_objects_natural = 自然键上另一行还活着，这是 R4b 的兜底，必须响，
-//     原样上抛。
+//     ON DUPLICATE 的 INSERT，让唯一键自己说话。两个唯一键撞上了都原样上抛：
+//     撞 uk_sync_objects_natural 是 R4b 的兜底（自然键上另一行还活着）；
+//     撞 uk_sync_objects_identity 则说明这一行在库里的版本不比本次小，而版本号是在
+//     写入事务里从账号序列取的（sync_svc.Push），那一行的排他锁持到提交——先取到号的
+//     一定先提交，落后的那次版本号更大、UPDATE 必然命中。所以它出现就是个坏掉的不变量。
+//
+// **一个都不能吞。** 吞掉等于「这一行从来没落库，调用方却拿到成功」：Push 会据此回
+// 给设备一句 Accepted 加一个库里根本不存在的版本号，这次上行就此消失，两端都以为写
+// 成功了。上抛最坏只是整批失败，客户端重推时会取到一个更大的版本号、走回 UPDATE。
 func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) error {
 	updated := db.Ctx(ctx).Model(&sync_entity.SyncObject{}).
 		Where("user_id=? AND sync_id=? AND version<?", obj.UserID, obj.SyncID, obj.Version).
@@ -126,11 +129,7 @@ func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) erro
 		return nil
 	}
 
-	err := db.Ctx(ctx).Create(obj).Error
-	if dberr.IsDuplicateKey(err, "uk_sync_objects_identity") {
-		return nil
-	}
-	return err
+	return db.Ctx(ctx).Create(obj).Error
 }
 
 func (r *objectRepo) Tombstone(ctx context.Context, id, version, nowMs int64) (int64, error) {

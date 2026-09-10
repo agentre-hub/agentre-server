@@ -231,11 +231,17 @@ export default function Org() {
   const initialFailed = error !== null && !chart;
 
   return (
-    <AppShell title={t("org.pageTitle")}>
+    /* 两栏要顶到主区的四条边，所以壳整块交出来（flush，与 Chat / Issues 同）。
+       此前是壳照常留 padding、这里再用 `-mx-4 -my-5` 去抵消：横向凑巧对得上，
+       纵向不行——`h-full` 量的是 main 的**内容盒**（已扣掉上下 padding），整块再
+       上移一个 padding，底边就停在内容区底部往上两个 padding 处，页面底部空出
+       一条与 padding 同色的白带（1440×900 实测 48px）。两列自己都在滚
+       （OrgIndexPanel / 两个详情），交出 overflow 是安全的。 */
+    <AppShell title={t("org.pageTitle")} flush>
       <div
         data-testid="org-layout"
         className={cn(
-          "-mx-4 -my-5 flex h-full md:-mx-8 md:-my-6",
+          "flex h-full min-h-0 min-w-0",
           // 窄屏没有并排的空间（mockup `11-mobile.png`）：320px 索引 + 详情挤在
           // 390px 里，详情只剩几十像素。移动端一次只摆一页：索引升整页，点一行
           // 下钻到详情，返回回索引。

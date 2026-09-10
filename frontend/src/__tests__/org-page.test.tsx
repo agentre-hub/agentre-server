@@ -63,7 +63,7 @@ const chart: OrgChartResponse = {
           backend_sync_id: "backend-1",
           backend_name: "Claude Code",
           backend_type: "claude_code",
-          is_local_reference: false,
+          device_unspecified: false,
           availability: "available",
           current: true,
           skills_json: JSON.stringify([{ id: "skill-1", enabled: true }]),
@@ -78,14 +78,14 @@ const backends = [
     sync_id: "backend-1",
     name: "Claude Code",
     backend_type: "claude_code",
-    is_local_reference: false,
+    device_unspecified: false,
     availability: "available" as const,
   },
   {
     sync_id: "backend-2",
     name: "Codex",
     backend_type: "codex",
-    is_local_reference: false,
+    device_unspecified: false,
     availability: "offline" as const,
   },
 ];
@@ -670,7 +670,7 @@ describe("执行目标一档一行：展开入口与离线档的可为", () => {
                   backend_sync_id: "backend-3",
                   backend_name: "Built-in",
                   backend_type: "builtin",
-                  is_local_reference: false,
+                  device_unspecified: false,
                   availability: "available",
                   current: true,
                 },
@@ -680,7 +680,7 @@ describe("执行目标一档一行：展开入口与离线档的可为", () => {
                   backend_sync_id: "backend-2",
                   backend_name: "Codex",
                   backend_type: "codex",
-                  is_local_reference: false,
+                  device_unspecified: false,
                   availability: "offline",
                   current: false,
                   skills_json: JSON.stringify([
@@ -693,7 +693,7 @@ describe("执行目标一档一行：展开入口与离线档的可为", () => {
                   backend_sync_id: "backend-4",
                   backend_name: "Pi Agent",
                   backend_type: "piagent",
-                  is_local_reference: false,
+                  device_unspecified: false,
                   availability: "available",
                   current: false,
                 },
@@ -1110,5 +1110,21 @@ describe("未选中时的详情区是带出路的空态（09-empty ①）", () =
     );
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("New department")).toBeTruthy();
+  });
+});
+
+describe("组织面铺满主区（两栏顶到底）", () => {
+  it("整块主区由壳交出（flush），页面不靠负 margin 抵消壳的 padding", async () => {
+    renderOrg();
+    await screen.findByText("Alice");
+
+    // 负 margin 那套写法在真实布局里是错的：`h-full` 量的是 main 的**内容盒**
+    // （已经扣掉了上下 padding），再用 `-my-*` 整块上移一个 padding，底边就落在
+    // 内容区底部往上两个 padding 处——线上 1440×900 量到底部空出 48px 白条。
+    // 唯一的正解与 Chat / Issues 相同：壳给 flush，页面自己铺满。
+    const main = screen.getByRole("main");
+    expect(main.className).toContain("overflow-hidden");
+    expect(main.className).not.toMatch(/(^|\s)(md:)?p[xy]-\d/);
+    expect(screen.getByTestId("org-layout").className).not.toMatch(/-m[xy]-/);
   });
 });

@@ -42,6 +42,16 @@ export interface SessionDetailHeaderProps {
   /** 解出来的 Agent。解不出（老会话、或它已不在账号里）时为 null。 */
   agent: { name: string } | null;
   /**
+   * 名字还在路上（`agent` 为 null，但两条来路里还有没答话的那一条）。派生规则在
+   * SessionDetailView 的 `agentPending`。
+   *
+   * 与转录那一档同一条处置：为 true 时下面那一格**不**退回状态文字。退回去的那句
+   * 话注定要被换掉 —— 同一格文字先说「运行中」、身份一到原地变成 Agent 名，一拍
+   * 之内说了两件不同维度的事。位置照留（状态点还在那一维此刻真知道），只是一个字
+   * 都不说，等解开了一次到位地填进去。
+   */
+  agentPending: boolean;
+  /**
    * 解出来的项目（名字 + 调色板色）。这条对话不属于任何项目、或名字还解不开时
    * 为 null —— 两种情形这一维都不摆，派生规则在 SessionDetailView 的 `project`。
    */
@@ -91,6 +101,7 @@ export default function SessionDetailHeader({
   sid,
   identity,
   agent,
+  agentPending,
   project,
   avatar,
   displayTitle,
@@ -185,9 +196,11 @@ export default function SessionDetailHeader({
           {(identity?.lifecycleState || running || decisionPending) && (
             <StatusDot status={toAgentStatus(statusNow)} size="xs" />
           )}
-          {/* 状态不只靠颜色：四个态都有可见文字（session.list.*）。Agent 名认不出来时
-              （老会话没有 agentSyncId）退回状态文字，不填占位名。 */}
-          {agent?.name ?? sessionStatusLabel(statusNow, t)}
+          {/* 状态不只靠颜色：四个态都有可见文字（session.list.*）。Agent 名**问过之后**
+              仍认不出来时（老会话没有 agentSyncId、或它已不在账号里）退回状态文字，
+              不填占位名；还没问出来（agentPending）则闭嘴等，见那个 prop 的说明。 */}
+          {agent?.name ??
+            (agentPending ? "" : sessionStatusLabel(statusNow, t))}
         </span>
       ),
     });

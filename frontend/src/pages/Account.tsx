@@ -88,13 +88,14 @@ function sessionTimesLine(t: Translate, s: SessionRow): string {
  * 用不了通行密钥时那句话。**说的必须是真正的原因**：源不是安全上下文（本站有时
  * 用 http 提供）与浏览器太老，补救办法相反 —— 前者换几个浏览器都一样。
  * 此前这里一律说「这个浏览器不支持」，对着一个完全支持的浏览器。
+ *
+ * 只有「浏览器太老」那一支还带补救说明。源那一支曾经跟一句「换成 https（或用
+ * localhost）访问即可添加」—— 看账号页的人改不了本站架在什么地址上，那句话读完
+ * 无事可做；真正省事的是「换个浏览器也一样」，它已经收进 insecureOrigin 那句里了。
  */
 function unavailableBannerText(t: Translate, why: PasskeySupport): string {
   return why === "insecure-origin"
-    ? [
-        t("account.passkeys.insecureOrigin"),
-        t("account.passkeys.insecureOriginHint"),
-      ].join(" · ")
+    ? t("account.passkeys.insecureOrigin")
     : [
         t("account.passkeys.unsupported"),
         t("account.passkeys.unsupportedHint"),

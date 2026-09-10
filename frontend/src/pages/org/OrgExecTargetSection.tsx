@@ -73,7 +73,7 @@ function toBackendModel(
     id: 0,
     type: target.backend_type ?? "",
     name: target.backend_name ?? "",
-    deviceId: target.is_local_reference
+    deviceId: target.device_unspecified
       ? undefined
       : target.device_id
         ? String(target.device_id)

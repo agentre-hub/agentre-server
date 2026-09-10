@@ -144,7 +144,7 @@ const agents = [
         device_name: "书房小主机",
         availability: "available",
         current: true,
-        is_local_reference: false,
+        device_unspecified: false,
       },
     ],
   },
@@ -768,6 +768,50 @@ describe("对话页:机器轴", () => {
   });
 
   /**
+   * 保存写失败此前是一个空 catch：乐观行撤回、界面一声不吭。用户按下「保存」，
+   * 行闪一下就没了 —— 与「我大概没点中」长得一模一样，而真相是 server 拒了这次写。
+   *
+   * 撤回本身是对的（账号里确实没有它）。缺的是把这件事说出来，并给一条重试的路：
+   * 失败的原因十有八九是一次抖动，而重新找到那一行再点一次是纯粹的额外劳动。
+   */
+  it("保存写失败：说出来并给重试，不再默默把行撤回", async () => {
+    let failNext = true;
+    const posted: unknown[] = [];
+    stubMachineScope({ mirror: [mirrored()] });
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/saved-sessions" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        if (failNext) throw new Error("boom");
+        return {};
+      }
+      return base(path, init);
+    });
+    renderChat("/chat?axis=machine");
+
+    await screen.findByText("临时跑一下 benchmark");
+    fireEvent.click(screen.getByTestId("row-save-77"));
+
+    // 说出来：那一条为什么没进账号。
+    const alert = await screen.findByTestId("index-save-error");
+    expect(alert.textContent).toContain("临时跑一下 benchmark");
+    // 行回到「还没保存」那一档 —— 账号里确实没有它，界面不装作有。
+    expect(screen.getByTestId("row-save-77")).toBeTruthy();
+
+    // 重试走的是同一条写，不必回去重新找那一行。
+    failNext = false;
+    fireEvent.click(within(alert).getByRole("button"));
+
+    await waitFor(() => expect(posted.length).toBe(2));
+    expect(posted[1]).toEqual(posted[0]);
+    // 成功之后横幅收起来，行也不再摆「保存」。
+    await waitFor(() =>
+      expect(screen.queryByTestId("index-save-error")).toBeNull(),
+    );
+    await waitFor(() => expect(screen.queryByTestId("row-save-77")).toBeNull());
+  });
+
+  /**
    * 那台机器上有一条**别人发起**的对话（从 web 控制台派出去的：执行端是这台机器，
    * 而 agentred 把它键在浏览器的中继标识下，session.list 照样报回来）。保存它时
    * 两个指纹必须分开报。
@@ -1081,7 +1125,7 @@ describe("对话页:机器轴", () => {
 
     expect(await screen.findByTestId("group-state-device-1")).toBeTruthy();
     expect(
-      screen.queryByText("No conversations on this machine yet."),
+      screen.queryByText("No conversations on this machine yet"),
     ).toBeNull();
   });
 
@@ -1694,6 +1738,54 @@ describe("索引：每组的真数与「查看全部 N」", () => {
     expect(await screen.findByText("翻出来的")).toBeTruthy();
     expect(lastIndexRequest().get("scope")).toBe("agent:ag-1");
     expect(lastIndexRequest().get("axis")).toBe("agent");
+  });
+
+  /*
+    索引在**每一条** mirror_changed 上重取（一轮对话跑起来时约每秒一条），而弹层
+    的首页 effect 认的是 `loadGroupPage` 的身份。那个回调此前把
+    `sessionIndex.mirrorRows` 列进了依赖 —— 它是一个 useMemo，每次取数都换成新
+    数组，于是弹层每秒把自己叫醒重跑一次第一页，用户已经翻进来的行跟着被扔掉。
+  */
+  it("索引重取不把「查看全部」弹层里已经翻进来的行扔掉", async () => {
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (params.get("scope") === "agent:ag-1") {
+          return params.get("cursor")
+            ? {
+                total: 9,
+                has_more: false,
+                items: [mirrored({ conversation_id: "45", title: "第二页的" })],
+              }
+            : {
+                total: 9,
+                has_more: true,
+                cursor: "c1",
+                items: [mirrored({ conversation_id: "44", title: "第一页的" })],
+              };
+        }
+        return {
+          total: 9,
+          groups: [{ scope: "agent:ag-1", total: 9, items: [mirrored()] }],
+        };
+      },
+    });
+    renderChat("/chat?axis=agent");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(await screen.findByText("View all 9 sessions"));
+    const overflow = await screen.findByTestId("group-overflow");
+    await within(overflow).findByText("第一页的");
+    fireEvent.click(within(overflow).getByTestId("index-load-more"));
+    await within(overflow).findByText("第二页的");
+
+    await act(async () => {
+      deliver(accountChannel.AccountChannelMirrorChanged);
+    });
+
+    // 翻进来的那一页留在原地：重取说的是「账号里那份变了」，不是「你翻到哪儿了作废」。
+    expect(within(overflow).getByText("第二页的")).toBeTruthy();
   });
 });
 

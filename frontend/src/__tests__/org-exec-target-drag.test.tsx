@@ -39,7 +39,7 @@ function target(
     backend_type: "claudecode",
     device_id: 7,
     device_name: `Machine ${backendSyncId}`,
-    is_local_reference: false,
+    device_unspecified: false,
     availability,
     current: rank === 0,
   };

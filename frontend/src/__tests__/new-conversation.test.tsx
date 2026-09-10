@@ -83,7 +83,7 @@ const agents = [
     project_sync_ids: ["proj-1"],
     has_available_target: true,
     exec_targets: [
-      { rank: 1, availability: "no_device", is_local_reference: true },
+      { rank: 1, availability: "no_device", device_unspecified: true },
       {
         rank: 2,
         device_name: "Study Mini",
@@ -99,7 +99,7 @@ const agents = [
     project_sync_ids: ["proj-root"],
     has_available_target: false,
     exec_targets: [
-      { rank: 1, availability: "no_device", is_local_reference: true },
+      { rank: 1, availability: "no_device", device_unspecified: true },
       { rank: 2, device_name: "Office Mac mini", availability: "offline" },
     ],
   },
@@ -451,7 +451,9 @@ describe("一条还没发第一句的对话", () => {
     // 的替身，量的就不再是这条用例要说的那件事。
     expect(screen.queryByTestId("draft-session")).toBeTruthy();
     expect(document.querySelectorAll("[data-nav-target]")).toHaveLength(0);
-    expect(screen.getByTestId("session-index-empty")).toBeTruthy();
+    // 「一条都还没有」这件事在项目轴上由每个空组自己说（2026-09-05 起页面级那一句
+    // 让位给组头，与桌面端一致），所以读的是组里那一句而不是页面级那一颗。
+    expect(screen.getAllByText("No sessions").length).toBeGreaterThan(0);
   });
 
   it("没打字时发不出去；打了字发出去 → 派发、记住这个 Agent、就地进入这条新会话", async () => {
@@ -467,6 +469,7 @@ describe("一条还没发第一句的对话", () => {
       userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
     renderChat();
     await openDraft();
@@ -489,6 +492,54 @@ describe("一条还没发第一句的对话", () => {
     expect(screen.getByTestId("chat-detail")).toBeTruthy();
     // 「最近用过」记在派发成功之后。
     expect(readRecentAgents()).toEqual(["agent-1"]);
+  });
+
+  /**
+   * 落地那一屏的**第一帧**就该写着这条对话是谁在跑。
+   *
+   * 上一屏是用户亲手挑的 Agent —— 名字、调色板色、图标全在这一页手里。可交接时只
+   * 递了标题与那句话，于是详情页要绕一整圈网络把已知的东西重新问回来：先由账号镜像
+   * 那一行 / `session.list` 认出 agentSyncId（刚派发出去的对话账号里还没有那一行），
+   * 再拿它去 `/v1/workspace/agents` 换名字。整段空窗里抬头一个字都说不出。
+   *
+   * 与 `initialTitle` / `initialUserText` 同一条路子：这一页知道的，就不该让用户在
+   * 下一屏重等一圈。
+   */
+  it("落地那一屏第一帧就写着 Agent 名：上一屏已经知道的，不必再问一圈", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+      savedToAccount: true,
+    });
+    renderChat();
+    await openDraft();
+
+    await awaitDraftComposer();
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    /*
+      这一屏的名字只可能来自交接带过来的那一份：中继没连上（`session.list` 无从谈起），
+      账号镜像里也还没有这条刚派发出去的对话（`/v1/agent-sessions?` 回的是空），
+      所以详情页自己那两条来路一条都答不出 agentSyncId。
+    */
+    const view = await screen.findByTestId("session-detail-view");
+    await waitFor(() =>
+      expect(
+        within(view).getByTestId("session-detail-status").textContent,
+      ).toContain("Backend Agent"),
+    );
   });
 
   /**
@@ -580,6 +631,7 @@ describe("一条还没发第一句的对话", () => {
         userText: "跑一下失败的测试",
         modelPinned: true,
         reasoningEffortPinned: true,
+        savedToAccount: true,
       };
     });
     renderChat();
@@ -591,6 +643,100 @@ describe("一条还没发第一句的对话", () => {
     fireEvent.click(send);
 
     await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    expect(
+      await screen.findByRole("link", { name: /跑一下失败的测试/ }),
+    ).toBeTruthy();
+  });
+
+  /**
+   * 上一条的反面，也是这一路唯一会让用户彻底看不懂的那个画面：会话**真的**在那台
+   * 机器上跑起来了（runtime.run 回了 ack），但发起即保存那一次写没成，于是右栏开着
+   * 它、左栏一行都没有 —— 与「派发根本没成功」长得一模一样。
+   *
+   * 此前 dispatch 里那一步是个空 catch，界面因此一个字都不说（2026-09-05 dev 库
+   * 漂移那次，server 连着三次 500，控制台完全无感）。现在它如实报回
+   * savedToAccount:false，页面据此说清楚并给一条重试的路。
+   */
+  it("派发成功但没能存进账号：说清楚会话已经跑起来了，并给重试", async () => {
+    const listed: unknown[] = [];
+    const posted: unknown[] = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/saved-sessions" && init?.method === "POST") {
+        posted.push(JSON.parse(String(init.body)));
+        // 重试这一次写成了：账号里从此有它。
+        listed.push({
+          ...mirroredSession,
+          conversation_id: "99",
+          title: "跑一下失败的测试",
+        });
+        return {};
+      }
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: listed.length,
+          groups: listed.length
+            ? [{ scope: "time", total: listed.length, items: listed }]
+            : [],
+        };
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 20,
+              name: "Study Mini",
+              kind: "agentred",
+              fingerprint: "fp-a",
+              online: true,
+              status: 1,
+            },
+          ],
+        };
+      if (path.startsWith("/v1/workspace/agents")) return { agents };
+      if (path.startsWith("/v1/workspace/projects")) return { projects };
+      throw new Error("unexpected: " + path);
+    });
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    // 派发成功，但那一步收尾的写没成：会话在机器上跑着，账号里没有它。
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+      savedToAccount: false,
+    });
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    // 左栏说得出「为什么这里没有它」，而不是一片空白。
+    const alert = await screen.findByTestId("index-save-error");
+    expect(alert.textContent).toContain("跑一下失败的测试");
+
+    // 重试原样再发一次那份载荷（两半指纹照旧分开报）。
+    fireEvent.click(within(alert).getByRole("button"));
+    await waitFor(() =>
+      expect(posted).toEqual([
+        {
+          machine_fingerprint: "fp-a",
+          peer_fingerprint: "fp-web",
+          conversation_id: "99",
+        },
+      ]),
+    );
+    // 写成之后横幅收起来，这一行真的落进左栏。
+    await waitFor(() =>
+      expect(screen.queryByTestId("index-save-error")).toBeNull(),
+    );
     expect(
       await screen.findByRole("link", { name: /跑一下失败的测试/ }),
     ).toBeTruthy();
@@ -931,14 +1077,16 @@ describe("挑一个 Agent：空的时候说什么", () => {
 
   function renderPane(agents: NewConvAgent[]) {
     return render(
-      <ThemeProvider>
-        <NewConversationPane
-          agents={agents}
-          recentIds={[]}
-          onPick={vi.fn()}
-          onFromProject={vi.fn()}
-        />
-      </ThemeProvider>,
+      <MemoryRouter>
+        <ThemeProvider>
+          <NewConversationPane
+            agents={agents}
+            recentIds={[]}
+            onPick={vi.fn()}
+            onFromProject={vi.fn()}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
     );
   }
 
@@ -950,6 +1098,16 @@ describe("挑一个 Agent：空的时候说什么", () => {
     expect(empty.textContent).not.toContain("chat.");
     // 只说「还没有 Agent」是半句：得说清楚它们从哪来，否则读者不知道下一步。
     expect(empty.textContent).toContain("desktop");
+  });
+
+  // 说清「Agent 从哪来」还只是半条：读者读完知道要去登记设备，却仍不知道在哪儿
+  // 登记。这一屏与设置页那条「先登记一台设备」是同一个死角，那边给的正是「去设备页」。
+  it("账号里一个 Agent 都没有：给一条去设备页的出口，不止是描述桌面端", () => {
+    renderPane([]);
+
+    const empty = screen.getByTestId("agent-pick-empty");
+    const exit = within(empty).getByRole("link", { name: "Go to devices" });
+    expect(exit.getAttribute("href")).toBe("/devices");
   });
 
   it("搜索搜空了：说的是这次搜索,并给一条清除搜索的回程", () => {
@@ -974,7 +1132,10 @@ describe("挑一个 Agent：空的时候说什么", () => {
  * 「新建对话」流里三种空态三种形，读者读到的分量不一样，可它们说的是同一级别的事。
  */
 describe("从项目里挑：空的时候用同一种形", () => {
-  function renderProjectPane(projects: NewConvProject[]) {
+  function renderProjectPane(
+    projects: NewConvProject[],
+    props: { onNewProject?: () => void } = {},
+  ) {
     return render(
       <ThemeProvider>
         <ProjectAgentPane
@@ -982,18 +1143,58 @@ describe("从项目里挑：空的时候用同一种形", () => {
           agents={[]}
           onPick={vi.fn()}
           onBack={vi.fn()}
+          {...props}
         />
       </ThemeProvider>,
     );
   }
 
-  it("一个项目都没有：走共享 EmptyState，且仍然说清去哪儿建", () => {
+  it("一个项目都没有：走共享 EmptyState，且说清建完还要做什么", () => {
     renderProjectPane([]);
 
     const empty = screen.getByTestId("project-none-yet");
     // 共享 EmptyState 的图标圈：证明这里不是第三种手搓形态。
     expect(within(empty).getByTestId("empty-icon")).toBeTruthy();
-    expect(empty.textContent).toContain("Projects");
+    // 建项目只是第一步：项目里没有成员时这一屏照样开不了对话。
+    expect(empty.textContent).toContain("add an agent");
+  });
+
+  // 这一句此前是「先在左栏的「项目」旁边新建一个项目」——那颗按钮并不在项目组头
+  // 旁边，它在索引控件行的右端，而且只在「项目」轴上出现。指路会随布局改错，
+  // 空态自己给一颗按钮不会。
+  it("一个项目都没有：空态自己给得出「新建项目」，不指路到别的栏", () => {
+    const onNewProject = vi.fn();
+    renderProjectPane([], { onNewProject });
+
+    const empty = screen.getByTestId("project-none-yet");
+    fireEvent.click(within(empty).getByRole("button", { name: "New project" }));
+
+    expect(onNewProject).toHaveBeenCalledTimes(1);
+  });
+
+  // 组件那颗按钮要真开得出弹窗，得页面把 `openCreate` 递下来——不递的话按钮连
+  // 渲染都不该渲染，而不是渲染出一颗点了没反应的。
+  it("Given 账号里一个项目都没有, When 在这一屏点「新建项目」, Then 新建项目弹窗开出来", async () => {
+    stubReads();
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) =>
+      path.startsWith("/v1/workspace/projects")
+        ? { projects: [] }
+        : base(path, init),
+    );
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+    fireEvent.click(await screen.findByTestId("new-conversation-from-project"));
+    const empty = await screen.findByTestId("project-none-yet");
+    fireEvent.click(within(empty).getByRole("button", { name: "New project" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("New project");
   });
 
   it("项目选过图标时左树与右侧标题画的是同一枚：字形只有一种", () => {
@@ -1245,6 +1446,7 @@ describe("移动端派发成功后的落地", () => {
       userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
     renderChat();
     await openDraft();
@@ -1391,6 +1593,7 @@ describe("草稿页的权限档位与模型控件", () => {
       userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
   });
 
@@ -1656,6 +1859,7 @@ describe("草稿页的权限档位与模型控件", () => {
       userText: "跑一下失败的测试",
       modelPinned: false,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
     // 左栏已经有一行了，空态那颗主动作不在：走 compose 那个入口进草稿。
     renderChat("/chat?compose=1");
@@ -1695,6 +1899,7 @@ describe("草稿页的权限档位与模型控件", () => {
       userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: false,
+      savedToAccount: true,
     });
     renderChat("/chat?compose=1");
     fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
@@ -1742,6 +1947,7 @@ describe("草稿页的权限档位与模型控件", () => {
       userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
     renderChat("/chat?compose=1");
     fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));
@@ -1802,6 +2008,7 @@ describe("交接那一拍：刚发出去的第一句不掉下去", () => {
       userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
   });
 
@@ -1907,6 +2114,7 @@ describe("草稿与详情共用同一条顶带", () => {
       userText: "跑一下失败的测试",
       modelPinned: true,
       reasoningEffortPinned: true,
+      savedToAccount: true,
     });
     renderChat();
     await openDraft();

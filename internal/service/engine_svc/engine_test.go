@@ -78,7 +78,7 @@ func TestCreateBackend_GivenNoRegisteredDevice_ThenPersistsTheAccountIdentity(t 
 	})
 
 	got, err := New().CreateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceID: stringPtr("fp-account"),
+		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceFingerprint: stringPtr("fp-account"),
 	})
 
 	require.NoError(t, err)
@@ -106,7 +106,7 @@ func TestCreateBackend_GivenFingerprintNotInAccount_ThenReturnsTheDedicatedDevic
 	devices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "sha256:unknown").Return(nil, nil)
 
 	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceID: stringPtr("sha256:unknown"),
+		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceFingerprint: stringPtr("sha256:unknown"),
 	})
 	require.Error(t, err)
 	got := engineErrorCode(t, err)
@@ -130,7 +130,7 @@ func TestUpdateBackend_GivenRevokedDeviceFingerprint_ThenReturnsTheDedicatedDevi
 		Return(&device_entity.Device{UserID: 7, Fingerprint: "sha256:aaaa", Status: consts.DELETE}, nil)
 
 	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:aaaa"),
+		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
 	require.Error(t, err)
 	assert.Equal(t, code.EngineBackendDeviceNotFound, engineErrorCode(t, err))
@@ -152,17 +152,18 @@ func TestCreateBackend_GivenDeviceID_ThenWritesTheFingerprintColumnNotThePayload
 	})
 
 	got, err := New().CreateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceID: stringPtr("sha256:aaaa"),
+		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, "sha256:aaaa", saved.AgentredFingerprint)
-	assert.NotContains(t, saved.Payload, "device_id")
-	assert.Equal(t, "sha256:aaaa", got.DeviceID)
+	// 指纹落在 sync_objects 的既有列上，不进 agent_backend 载荷。
+	assert.NotContains(t, saved.Payload, "device_fingerprint")
+	assert.Equal(t, "sha256:aaaa", got.DeviceFingerprint)
 }
 
 // 编辑既有后端换一台机器：指纹改写，其它字段不受影响。
-func TestUpdateBackend_GivenNewDeviceID_ThenRewritesFingerprintWithoutLosingOtherFields(t *testing.T) {
+func TestUpdateBackend_GivenNewDeviceFingerprint_ThenRewritesFingerprintWithoutLosingOtherFields(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
@@ -182,12 +183,12 @@ func TestUpdateBackend_GivenNewDeviceID_ThenRewritesFingerprintWithoutLosingOthe
 	})
 
 	got, err := New().UpdateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:bbbb"),
+		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:bbbb"),
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, "sha256:bbbb", saved.AgentredFingerprint)
-	assert.Equal(t, "sha256:bbbb", got.DeviceID)
+	assert.Equal(t, "sha256:bbbb", got.DeviceFingerprint)
 	assert.Equal(t, "Claude Code", got.Name)
 	assert.Equal(t, "claude", got.Type)
 }
@@ -209,7 +210,7 @@ func TestListBackends_GivenRowWithoutDevice_ThenReadsBackEmptyDeviceID(t *testin
 
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Empty(t, got[0].DeviceID)
+	assert.Empty(t, got[0].DeviceFingerprint)
 }
 
 func TestUpdateProvider_GivenEmptyAPIKey_ThenPreservesStoredCredential(t *testing.T) {
@@ -377,7 +378,7 @@ func TestUpdateBackend_GivenEnvJSON_ThenReplacesTheWholeTable(t *testing.T) {
 	})
 
 	got, err := New().UpdateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:aaaa"),
+		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:aaaa"),
 		EnvJSON: stringPtr(`{"HTTPS_PROXY":"http://127.0.0.1:7890","IS_SANDBOX":"1"}`),
 	})
 
@@ -408,7 +409,7 @@ func TestUpdateBackend_GivenNoEnvJSON_ThenKeepsTheStoredTable(t *testing.T) {
 	})
 
 	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:bbbb"),
+		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:bbbb"),
 	})
 
 	require.NoError(t, err)
@@ -442,7 +443,7 @@ func TestCreateBackend_GivenCLIPath_ThenWritesThePerDeviceOverlay(t *testing.T) 
 
 	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
 		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claudecode"),
-		DeviceID: stringPtr("sha256:aaaa"), CLIPath: stringPtr("/usr/local/bin/claude"),
+		DeviceFingerprint: stringPtr("sha256:aaaa"), CLIPath: stringPtr("/usr/local/bin/claude"),
 	})
 
 	require.NoError(t, err)
@@ -488,7 +489,7 @@ func TestUpdateBackend_GivenCLIPath_ThenRewritesOnlyTheBoundDeviceOverlay(t *tes
 	}).Times(2)
 
 	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, SyncID: "backend-1", DeviceID: stringPtr("sha256:aaaa"),
+		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:aaaa"),
 		CLIPath: stringPtr("/opt/homebrew/bin/claude"),
 	})
 
@@ -515,7 +516,7 @@ func TestUpdateBackend_GivenNoCLIPath_ThenLeavesTheOverlayAlone(t *testing.T) {
 	objects.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 
 	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
-		UserID: 7, SyncID: "backend-1", Name: stringPtr("CC 2"), DeviceID: stringPtr("sha256:aaaa"),
+		UserID: 7, SyncID: "backend-1", Name: stringPtr("CC 2"), DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
 
 	require.NoError(t, err)

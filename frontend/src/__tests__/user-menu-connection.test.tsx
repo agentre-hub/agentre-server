@@ -127,17 +127,31 @@ describe("账号块上的实时连接状态", () => {
     expect(announcer.textContent).toBe("Not connected");
   });
 
-  it("菜单里有那一段：状态 + 一句后果", () => {
+  it("连着的时候只说状态：「实时更新中」本身就是全部内容", () => {
     renderMenu();
     drive("connected");
 
     const menu = openMenu();
     expect(within(menu).getByText("Live")).toBeTruthy();
+    // 底下曾经还有一行「变更会立刻出现在这一页」。那是把标签换个说法再说一遍：
+    // 读完它，用户对这一屏有多新的了解和读之前一样多。
     expect(
-      within(menu).getByText("Changes show up here as they happen"),
-    ).toBeTruthy();
+      within(menu).queryByText("Changes show up here as they happen"),
+    ).toBeNull();
     // 状态是只读的一段，不是菜单项：不可聚焦、不可点。
     expect(within(menu).queryByRole("menuitem", { name: /Live/ })).toBeNull();
+  });
+
+  // 降级两态的副文案留着：「改为每 30 秒刷新一次」说的是用户从标签上看不出来的
+  // 后果，与上面那句被删掉的不是一回事。
+  it.each([
+    ["connecting", /Reconnecting/i],
+    ["disconnected", /No live signal/i],
+  ] as const)("降级态 %s 仍然说得出后果", (state, hint) => {
+    renderMenu();
+    drive(state);
+
+    expect(within(openMenu()).getByText(hint)).toBeTruthy();
   });
 
   it("不会自愈的那一态给得出出路，点它就地重开这条通道", () => {

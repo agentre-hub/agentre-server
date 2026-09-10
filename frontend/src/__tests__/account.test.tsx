@@ -462,11 +462,15 @@ describe("Account page: unsupported browsers disable add and change the empty-st
     );
   });
 
-  // Given 本站用 http 提供 / When 打开账号页 / Then 说的是这个源，不是浏览器。
+  // Given 本站用 http 提供 / When 打开账号页 / Then 指的是这个地址，不是浏览器
+  // ——但不解释 http 与 https。
   //
-  // 此前这里一律写「这个浏览器不支持通行密钥 · 换用较新的 Chrome、Safari 或 Edge
-  // 即可添加」——浏览器支持得好好的，用户照着换几个都一样。
-  it("blames the http origin, not the browser, when the page is not a secure context", async () => {
+  // 两句话各有各的去留理由。「不是你的浏览器」要留：省下的是用户挨个换浏览器
+  // 再试一遍的功夫，而此前这里一律写「这个浏览器不支持通行密钥 · 换用较新的
+  // Chrome、Safari 或 Edge 即可添加」，浏览器明明支持得好好的。「换成 https
+  // （或用 localhost）访问即可添加」要去：看账号页的人改不了本站怎么架，
+  // 那句话读完无事可做。
+  it("blames the address, not the browser, without lecturing about HTTP", async () => {
     vi.spyOn(window, "isSecureContext", "get").mockReturnValue(false);
     mockDefaultApi();
     renderAccount();
@@ -475,10 +479,10 @@ describe("Account page: unsupported browsers disable add and change the empty-st
       name: /Add a passkey/i,
     })) as HTMLButtonElement;
     expect(addButton.disabled).toBe(true);
-    expect(addButton.getAttribute("title")).toMatch(/HTTPS/i);
+    expect(addButton.getAttribute("title")).toMatch(/at this address/i);
     expect(addButton.getAttribute("title")).not.toMatch(/does not support/i);
-    expect(screen.getByText(/served over HTTP/i)).toBeTruthy();
     expect(screen.queryByText(/does not support passkeys/i)).toBeNull();
+    expect(screen.queryByText(/HTTP/i)).toBeNull();
   });
 
   it("enables Add a passkey when window.PublicKeyCredential is present", async () => {

@@ -8,6 +8,7 @@ import {
 import { Bot, ChevronRight, SearchX } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 /**
  * 组标题与计数之间的分隔符。是排版符号不是文案，因此不进 i18n——写成常量
@@ -111,6 +112,13 @@ export function AgentPickList({
         // 只说「还没有 Agent」是半句：得说清楚它们从哪来，否则读者不知道下一步。
         title={t("chat.noAgentsTitle")}
         body={t("chat.noAgentsBody")}
+        // 说完「从哪来」还差一条能走的路：登记设备在设备页，与设置页那条
+        // 「先登记一台设备」同一个出口。
+        action={
+          <Button asChild size="sm">
+            <Link to="/devices">{t("chat.noAgentsAction")}</Link>
+          </Button>
+        }
       />
     );
   }

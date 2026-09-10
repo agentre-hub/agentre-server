@@ -46,7 +46,7 @@ server:
   session:
     ttl: 336h
   device_flow:
-    user_code_ttl: 10m
+    device_flow_ttl: 10m
     poll_interval: 1s
   jwt:
     active_kid: "e2e-local"

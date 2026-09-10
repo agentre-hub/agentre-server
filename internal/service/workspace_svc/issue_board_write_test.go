@@ -49,7 +49,7 @@ func TestCreateIssue_ThenServerAllocatesIDVersionAndWritesTheWirePayload(t *test
 		withPayload(t, issueRow(t, "i-tail", "已有的卡", "todo", "p-a"),
 			map[string]any{"position": 65536}),
 	}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(301), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(301), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 
@@ -94,9 +94,9 @@ func TestCreateIssue_GivenLabels_ThenEachLinkIsItsOwnSyncObject(t *testing.T) {
 		labelRow(t, "l-bug", "bug", "red"),
 		labelRow(t, "l-docs", "docs", "gray"),
 	}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(310), nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(311), nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(312), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(310), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(311), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(312), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 
@@ -176,7 +176,7 @@ func TestUpdateIssue_ThenOnlyMentionedKeysAreOverwritten(t *testing.T) {
 	mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(existing, nil)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return(
 		[]*sync_entity.SyncObject{projectRow(t, "p-a", "甲", ""), existing}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(320), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(320), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 
@@ -209,10 +209,10 @@ func TestUpdateIssue_GivenLabelSet_ThenOnlyTheDifferenceIsWritten(t *testing.T) 
 		labelRow(t, "l-new", "feature", "green"),
 		existing, keep, drop,
 	}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(330), nil).Times(3)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(330), nil).Times(3)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
-	mObj.EXPECT().Tombstone(ctx, int64(42), int64(330), gomock.Any()).Return(int64(1), nil)
+	mObj.EXPECT().Tombstone(gomock.Any(), int64(42), int64(330), gomock.Any()).Return(int64(1), nil)
 
 	labels := []string{"l-keep", "l-new"}
 	_, err := IssueBoard().UpdateIssue(ctx, IssueWriteInput{
@@ -240,7 +240,7 @@ func TestUpdateIssue_GivenNoLabelKey_ThenLinksAreLeftAlone(t *testing.T) {
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
 		existing, linkRow(t, "k-1", "i-1", "l-bug"), labelRow(t, "l-bug", "bug", "red"),
 	}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(340), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(340), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 
@@ -268,7 +268,7 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 			withPayload(t, issueRow(t, "i-1", "一", "doing", ""), map[string]any{"position": 100}),
 			withPayload(t, issueRow(t, "i-2", "二", "doing", ""), map[string]any{"position": 300}),
 		}, nil)
-		mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(350), nil)
+		mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(350), nil)
 		var saved []*sync_entity.SyncObject
 		savedRows(mObj, &saved)
 
@@ -289,7 +289,7 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 		mObj.EXPECT().Find(ctx, boardUser, "i-move").Return(moving, nil)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
 			Return([]*sync_entity.SyncObject{moving}, nil)
-		mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(351), nil)
+		mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(351), nil)
 		var saved []*sync_entity.SyncObject
 		savedRows(mObj, &saved)
 
@@ -310,7 +310,7 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 		mObj.EXPECT().Find(ctx, boardUser, "i-move").Return(moving, nil)
 		mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
 			Return([]*sync_entity.SyncObject{moving}, nil)
-		mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(352), nil)
+		mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(352), nil)
 		var saved []*sync_entity.SyncObject
 		savedRows(mObj, &saved)
 
@@ -336,8 +336,8 @@ func TestDeleteIssue_ThenTheCardAndItsLabelLinksAreTombstoned(t *testing.T) {
 	mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(target, nil)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
 		Return([]*sync_entity.SyncObject{target, mine, others}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(360), nil).Times(2)
-	mObj.EXPECT().Tombstone(ctx, int64(12), int64(360), gomock.Any()).Return(int64(1), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(360), nil).Times(2)
+	mObj.EXPECT().Tombstone(gomock.Any(), int64(12), int64(360), gomock.Any()).Return(int64(1), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 
@@ -381,7 +381,7 @@ func TestCreateLabel_ThenNameToneAndLiveStatusAreWritten(t *testing.T) {
 	ctx, mObj, _, _, _ := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, []string{sync_entity.KindLabel}).Return(nil, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(370), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(370), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 
@@ -431,7 +431,7 @@ func TestUpdateLabel_ThenRenameAndRecolourKeepTheRestOfThePayload(t *testing.T) 
 	mObj.EXPECT().Find(ctx, boardUser, "l-bug").Return(existing, nil)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, []string{sync_entity.KindLabel}).
 		Return([]*sync_entity.SyncObject{existing}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(380), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(380), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 
@@ -461,9 +461,9 @@ func TestDeleteLabel_ThenTheLabelAndEveryLinkToItAreTombstoned(t *testing.T) {
 	mObj.EXPECT().Find(ctx, boardUser, "l-bug").Return(target, nil)
 	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
 		Return([]*sync_entity.SyncObject{target, link1, link2, other}, nil)
-	mState.EXPECT().NextVersion(ctx, boardUser, int64(1)).Return(int64(390), nil).Times(3)
-	mObj.EXPECT().Tombstone(ctx, int64(22), int64(390), gomock.Any()).Return(int64(1), nil)
-	mObj.EXPECT().Tombstone(ctx, int64(23), int64(390), gomock.Any()).Return(int64(1), nil)
+	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(390), nil).Times(3)
+	mObj.EXPECT().Tombstone(gomock.Any(), int64(22), int64(390), gomock.Any()).Return(int64(1), nil)
+	mObj.EXPECT().Tombstone(gomock.Any(), int64(23), int64(390), gomock.Any()).Return(int64(1), nil)
 	var saved []*sync_entity.SyncObject
 	savedRows(mObj, &saved)
 

@@ -7,13 +7,15 @@ import {
   Loader2,
 } from "lucide-react";
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import {
   Button,
   Alert,
   AlertTitle,
   AlertDescription,
+  Checkbox,
 } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
@@ -119,6 +121,15 @@ export default function Login() {
   /** 通行密钥仪式在途。整条链路只有这一处写操作，防的是连点。 */
   const [passkeyPending, setPasskeyPending] = useState(false);
 
+  /**
+   * 「我已阅读并同意」勾没勾。
+   *
+   * 不落盘、不预勾、不记上一次：同意是**这一次**登录时做出的表示，不是账号上的
+   * 一个设置。此前这里是一句「继续即表示你同意」的旁白，把同意藏进点登录这个
+   * 动作的副作用里 —— 用户没有表示过任何东西，我们却当他表示了。
+   */
+  const [consented, setConsented] = useState(false);
+
   // 首次登录与失败后重试走的是同一件事：带着 next / user_code 重新发起
   // authorize（err 不透传，它是上一次的结果）。所以只有一个处理函数。
   const onLogin = () => {
@@ -205,9 +216,57 @@ export default function Login() {
 
   // 通行密钥被取消不算错误，只是平和的重试提示
   const showError = !!err && !isPasskeyCancelled;
-  // 不能用时还要分清是哪一种：源不是安全上下文（本站有时用 http 提供）要说出来，
-  // 浏览器太老则保持沉默 —— 那不是本站能替他解决的事。
+  // 用不了就整块不出，一个字也不解释：站在登录页前的人既改不了自己的浏览器有多
+  // 老，也改不了本站架在什么地址上，读完那句解释无事可做。（账号页不同 —— 那里
+  // 有一颗按不动的「添加」按钮，欠用户一个理由。）
   const passkeys = passkeySupport();
+
+  /**
+   * 同意块。两条分支（首次登录、失败后重试）各自发起一次登录，因此两边都要摆，
+   * 而且都摆在按钮**上面** —— 一颗按不动的按钮必须让人在它上方就读到原因。
+   *
+   * 文字用原生 `<label>` 而不是共享包的 `Label`：后者是 `flex items-center` 的
+   * 表单项标签，句子里嵌着的两条链接会被排成三个并列的 flex 项，断不了行。
+   *
+   * 链接嵌在 label 里是安全的：HTML 规范把落在**交互内容后代**上的点击排除在
+   * label 激活行为之外，所以点《服务条款》只会打开它，不会顺手替用户勾上同意。
+   * login.test.tsx 里那条「点条款链接不勾选」守的就是这一点。
+   */
+  const consent = (
+    <div
+      data-testid="login-consent"
+      className="flex items-start gap-2.5 text-left"
+    >
+      <Checkbox
+        id="login-consent-box"
+        checked={consented}
+        onCheckedChange={(checked) => setConsented(checked === true)}
+        className="mt-0.5"
+      />
+      <label
+        htmlFor="login-consent-box"
+        className="text-xs leading-snug text-muted-foreground"
+      >
+        <Trans
+          i18nKey="login.consent"
+          components={{
+            terms: (
+              <Link
+                to="/terms"
+                className="text-foreground underline underline-offset-4"
+              />
+            ),
+            privacy: (
+              <Link
+                to="/privacy"
+                className="text-foreground underline underline-offset-4"
+              />
+            ),
+          }}
+        />
+      </label>
+    </div>
+  );
 
   return (
     <AuthLayout>
@@ -251,18 +310,20 @@ export default function Login() {
                 </AlertDescription>
               )}
             </Alert>
-            <Button className="w-full" onClick={onLogin}>
+            {consent}
+            <Button className="w-full" disabled={!consented} onClick={onLogin}>
               {t("login.retryLogin")}
             </Button>
           </>
         ) : (
           <>
-            <Button className="w-full" onClick={onLogin}>
+            {consent}
+            <Button className="w-full" disabled={!consented} onClick={onLogin}>
               <Github className="mr-2 h-4 w-4" />
               {t("login.github")}
             </Button>
 
-            {passkeys === "available" ? (
+            {passkeys === "available" && (
               <>
                 <div className="relative">
                   <div className="absolute inset-0 flex items-center">
@@ -278,7 +339,7 @@ export default function Login() {
                 <Button
                   variant="outline"
                   className="w-full"
-                  disabled={passkeyPending}
+                  disabled={passkeyPending || !consented}
                   aria-busy={passkeyPending || undefined}
                   onClick={onPasskeyLogin}
                 >
@@ -290,19 +351,9 @@ export default function Login() {
                   {t("login.passkey")}
                 </Button>
               </>
-            ) : passkeys === "insecure-origin" ? (
-              // 不摆一颗按不动的按钮：这里没有用户能执行的下一步，只有一句事实。
-              // 但整块静默消失也不行——注册过通行密钥的人会以为功能没了。
-              <p className="text-center text-xs text-muted-foreground">
-                {t("login.passkeyInsecureOrigin")}
-              </p>
-            ) : null}
+            )}
           </>
         )}
-
-        <p className="text-center text-xs text-muted-foreground">
-          {t("login.footer")}
-        </p>
       </div>
     </AuthLayout>
   );

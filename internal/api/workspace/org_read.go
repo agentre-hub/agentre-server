@@ -56,10 +56,10 @@ type OrgExecTargetItem struct {
 	// 没写运行设备的档与「后端已不在」的档留空：前者没指到任何一台机器 / 后者不知道
 	// 是哪台机器，都不编一个。离线的档照带——离线只是此刻拨不通。
 	DeviceFingerprint string `json:"device_fingerprint,omitempty"`
-	// IsLocalReference 为真即这一档指向的后端行没写运行设备（决策 14 的存量）：如实
-	// 标出而不是从列表里抹掉——不可用的档留在列表里并给出原因。字段名是旧的，含义
-	// 见 workspace_svc.OrgBackendView.IsLocalReference。
-	IsLocalReference bool `json:"is_local_reference"`
+	// DeviceUnspecified 为真即这一档指向的后端行没写运行设备（决策 14 的存量）：如实
+	// 标出而不是从列表里抹掉——不可用的档留在列表里并给出原因。与同结构里
+	// Availability 的 no_device 取值出自同一个判定。
+	DeviceUnspecified bool `json:"device_unspecified"`
 	// Availability 与总览页同一套取值：available / offline / unpaired / no_device。
 	Availability string `json:"availability"`
 	// Current 标记当前生效的那一档，至多一档为 true。
@@ -111,13 +111,13 @@ type OrgBackendsRequest struct {
 // 浏览器要能挑一个后端，却不该知道那台机器上的可执行文件在哪、更不该知道用户往里
 // 塞了什么环境变量——这个类型因此没有任何一个字段能装下 cli_path 或 env_json。
 type OrgBackendItem struct {
-	SyncID           string `json:"sync_id"`
-	Name             string `json:"name,omitempty"`
-	BackendType      string `json:"backend_type,omitempty"`
-	DeviceID         int64  `json:"device_id,omitempty"`
-	DeviceName       string `json:"device_name,omitempty"`
-	IsLocalReference bool   `json:"is_local_reference"`
-	Availability     string `json:"availability"`
+	SyncID            string `json:"sync_id"`
+	Name              string `json:"name,omitempty"`
+	BackendType       string `json:"backend_type,omitempty"`
+	DeviceID          int64  `json:"device_id,omitempty"`
+	DeviceName        string `json:"device_name,omitempty"`
+	DeviceUnspecified bool   `json:"device_unspecified"`
+	Availability      string `json:"availability"`
 }
 
 type OrgBackendsResponse struct {

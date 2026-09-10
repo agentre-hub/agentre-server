@@ -123,7 +123,7 @@ function backendDTO(fields: {
   sync_id: string;
   name: string;
   type: string;
-  device_id: string;
+  device_fingerprint: string;
   env_json?: string;
 }) {
   return {
@@ -495,7 +495,7 @@ describe("browser engine settings ports", () => {
           sync_id: "backend-new",
           name: String(body.name),
           type: String(body.type),
-          device_id: String(body.device_id),
+          device_fingerprint: String(body.device_fingerprint),
         });
       }
       if (path === "/v1/engine/backends") {
@@ -505,7 +505,7 @@ describe("browser engine settings ports", () => {
               sync_id: "backend-1",
               name: "Claude Code",
               type: "claudecode",
-              device_id: "desktop-a",
+              device_fingerprint: "desktop-a",
             }),
           ],
         };
@@ -526,7 +526,11 @@ describe("browser engine settings ports", () => {
     ]);
     expect(relayTargets()).toEqual(["agentred-b"]);
     expect(posted).toEqual([
-      { name: "Claude Code", type: "claudecode", device_id: "agentred-b" },
+      {
+        name: "Claude Code",
+        type: "claudecode",
+        device_fingerprint: "agentred-b",
+      },
     ]);
 
     // 目标离线时扫描明确失败，不退到别的机器上扫。
@@ -546,7 +550,7 @@ describe("browser engine settings ports", () => {
               sync_id: "backend-1",
               name: "Builder · Claude Code",
               type: "claudecode",
-              device_id: "agentred-b",
+              device_fingerprint: "agentred-b",
             }),
           ],
         };
@@ -592,7 +596,7 @@ describe("browser engine settings ports", () => {
           sync_id: "backend-1",
           name: "Builder · Claude Code",
           type: "claudecode",
-          device_id: "agentred-b",
+          device_fingerprint: "agentred-b",
         });
       }
       if (path === "/v1/engine/backends/backend-1") {
@@ -600,7 +604,7 @@ describe("browser engine settings ports", () => {
           sync_id: "backend-1",
           name: "Builder · Claude Code",
           type: "claudecode",
-          device_id: "desktop-a",
+          device_fingerprint: "desktop-a",
         });
       }
       if (path === "/v1/engine/backends") {
@@ -610,7 +614,7 @@ describe("browser engine settings ports", () => {
               sync_id: "backend-1",
               name: "Builder · Claude Code",
               type: "claudecode",
-              device_id: "agentred-b",
+              device_fingerprint: "agentred-b",
             }),
           ],
         };
@@ -630,7 +634,7 @@ describe("browser engine settings ports", () => {
       JSON.parse(
         String(calls.find((c) => c.init?.method === "POST")?.init?.body),
       ),
-    ).toMatchObject({ device_id: "agentred-b" });
+    ).toMatchObject({ device_fingerprint: "agentred-b" });
 
     const [listed] = await adapter.listBackends();
     await adapter.updateBackend(listed.id, {
@@ -642,7 +646,7 @@ describe("browser engine settings ports", () => {
       JSON.parse(
         String(calls.find((c) => c.init?.method === "PATCH")?.init?.body),
       ),
-    ).toMatchObject({ device_id: "desktop-a" });
+    ).toMatchObject({ device_fingerprint: "desktop-a" });
 
     const before = calls.length;
     await expect(
@@ -670,7 +674,7 @@ describe("browser engine settings ports", () => {
           sync_id: "backend-1",
           name: "CC",
           type: "claudecode",
-          device_id: "desktop-a",
+          device_fingerprint: "desktop-a",
           env_json: '{"HTTPS_PROXY":"http://127.0.0.1:7890"}',
         });
       }
@@ -683,7 +687,7 @@ describe("browser engine settings ports", () => {
             sync_id: "backend-1",
             name: "CC",
             type: "claudecode",
-            device_id: "desktop-a",
+            device_fingerprint: "desktop-a",
             env_json: '{"MY_TOKEN":"s3cret"}',
           }),
         ],
@@ -749,7 +753,7 @@ describe("browser engine settings ports", () => {
             sync_id: "backend-1",
             name: "CC",
             type: "claudecode",
-            device_id: "desktop-a",
+            device_fingerprint: "desktop-a",
           }),
         ],
       };
@@ -769,7 +773,7 @@ describe("browser engine settings ports", () => {
           sync_id: "backend-1",
           name: "CC",
           type: "claudecode",
-          device_id: "desktop-a",
+          device_fingerprint: "desktop-a",
         });
       }
       if (path === "/v1/devices") return devicesResponse();
@@ -781,7 +785,7 @@ describe("browser engine settings ports", () => {
             sync_id: "backend-1",
             name: "CC",
             type: "claudecode",
-            device_id: "desktop-a",
+            device_fingerprint: "desktop-a",
           }),
         ],
       };
@@ -798,7 +802,7 @@ describe("browser engine settings ports", () => {
 
     expect(bodies[0]).toMatchObject({
       cli_path: "/opt/homebrew/bin/claude",
-      device_id: "desktop-a",
+      device_fingerprint: "desktop-a",
     });
   });
 
@@ -813,7 +817,7 @@ describe("browser engine settings ports", () => {
           sync_id: "backend-1",
           name: "Gateway",
           type: "openclaw",
-          device_id: "agentred-b",
+          device_fingerprint: "agentred-b",
         });
       }
       if (path === "/v1/devices") return devicesResponse();
@@ -855,7 +859,7 @@ describe("browser engine settings ports", () => {
                 sync_id: "backend-1",
                 name: "Builder · Claude Code",
                 type: "claudecode",
-                device_id: "agentred-b",
+                device_fingerprint: "agentred-b",
               }),
               provider_key: "anthropic-main",
               model_key: "sonnet",
@@ -886,7 +890,7 @@ describe("browser engine settings ports", () => {
               sync_id: "backend-1",
               name: "Studio · Claude Code",
               type: "claudecode",
-              device_id: "desktop-a",
+              device_fingerprint: "desktop-a",
             }),
           ],
         };
@@ -935,19 +939,19 @@ describe("browser engine settings ports", () => {
               sync_id: "backend-1",
               name: "On Builder",
               type: "claudecode",
-              device_id: "agentred-b",
+              device_fingerprint: "agentred-b",
             }),
             backendDTO({
               sync_id: "backend-2",
               name: "On a revoked machine",
               type: "codex",
-              device_id: "gone-x",
+              device_fingerprint: "gone-x",
             }),
             backendDTO({
               sync_id: "backend-3",
               name: "Legacy",
               type: "codex",
-              device_id: "",
+              device_fingerprint: "",
             }),
           ],
         };

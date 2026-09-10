@@ -121,7 +121,7 @@ func TestSelectableBackends_ServesTheBackendPickerAndIsReadOnly(t *testing.T) {
 			DeviceID: 21, DeviceName: "公司 Mac mini",
 			Availability: workspace_svc.AvailabilityAvailable},
 		{SyncID: "backend-2", Name: "没写运行设备的那个", BackendType: "claude_code",
-			IsLocalReference: true, Availability: workspace_svc.AvailabilityNoDevice},
+			DeviceUnspecified: true, Availability: workspace_svc.AvailabilityNoDevice},
 	}}
 	server, _ := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
@@ -132,13 +132,13 @@ func TestSelectableBackends_ServesTheBackendPickerAndIsReadOnly(t *testing.T) {
 
 	var got struct {
 		Backends []struct {
-			SyncID           string `json:"sync_id"`
-			Name             string `json:"name"`
-			BackendType      string `json:"backend_type"`
-			DeviceID         int64  `json:"device_id"`
-			DeviceName       string `json:"device_name"`
-			IsLocalReference bool   `json:"is_local_reference"`
-			Availability     string `json:"availability"`
+			SyncID            string `json:"sync_id"`
+			Name              string `json:"name"`
+			BackendType       string `json:"backend_type"`
+			DeviceID          int64  `json:"device_id"`
+			DeviceName        string `json:"device_name"`
+			DeviceUnspecified bool   `json:"device_unspecified"`
+			Availability      string `json:"availability"`
 		} `json:"backends"`
 	}
 	decodeEnvelope(t, resp, &got)
@@ -148,7 +148,7 @@ func TestSelectableBackends_ServesTheBackendPickerAndIsReadOnly(t *testing.T) {
 	assert.Equal(t, int64(21), got.Backends[0].DeviceID)
 	assert.Equal(t, "公司 Mac mini", got.Backends[0].DeviceName)
 	assert.Equal(t, workspace_svc.AvailabilityAvailable, got.Backends[0].Availability)
-	assert.True(t, got.Backends[1].IsLocalReference)
+	assert.True(t, got.Backends[1].DeviceUnspecified)
 	assert.Equal(t, workspace_svc.AvailabilityNoDevice, got.Backends[1].Availability)
 }
 
