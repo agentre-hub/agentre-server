@@ -90,6 +90,56 @@ type frameStore interface {
 	DeleteFrames(ctx context.Context, userID int64, conversationID string) error
 }
 
+// deadlineSummaryStore / deadlineFrameStore 给每一次库调用各扣一个截止时间。
+//
+// 常驻镜像用它们（follower.start，db-perf-fixes 决策 14）：循环的 ctx 永不到期，没有这
+// 一层时一次网络黑洞式的慢库调用会一直悬着，占住循环那条 goroutine 与连接池里的一个
+// 连接。截止扣在库调用上而不是循环的一整轮上：一轮 Sync / Apply / Revive 里还夹着对端
+// 的 attach 与翻页 pull，每一次 RPC 已经各有自己的 CallTimeout，而翻页数不封顶——拿一个
+// 截止框住整轮，一次正常的长补齐会在中途被截断。
+type deadlineSummaryStore struct {
+	inner   summaryStore
+	timeout time.Duration
+}
+
+func (s deadlineSummaryStore) UpsertSummary(ctx context.Context, row *agent_session_entity.SessionSummary) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.UpsertSummary(ctx, row)
+}
+
+func (s deadlineSummaryStore) ListSummariesByUser(
+	ctx context.Context, userID int64,
+) ([]*agent_session_entity.SessionSummary, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.ListSummariesByUser(ctx, userID)
+}
+
+type deadlineFrameStore struct {
+	inner   frameStore
+	timeout time.Duration
+}
+
+func (s deadlineFrameStore) WriteFrames(ctx context.Context, frames []*agent_session_entity.DurableFrame) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.WriteFrames(ctx, frames)
+}
+
+func (s deadlineFrameStore) DeleteFrames(ctx context.Context, userID int64, conversationID string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.DeleteFrames(ctx, userID, conversationID)
+}
+
+// boundStoreCalls 让这个镜像此后的每一次库调用都带 timeout 截止。只能在镜像交给任何
+// 别的 goroutine 之前调用。
+func (m *Mirror) boundStoreCalls(timeout time.Duration) {
+	m.summaries = deadlineSummaryStore{inner: m.summaries, timeout: timeout}
+	m.frames = deadlineFrameStore{inner: m.frames, timeout: timeout}
+}
+
 // SavedSession identifies one conversation the account has saved: its
 // conversation_id, the one value that names it in all three databases and on
 // the wire (2026-08-31-conversation-centric-addressing.md 决策 1).

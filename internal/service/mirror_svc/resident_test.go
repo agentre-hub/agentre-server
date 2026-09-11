@@ -438,6 +438,10 @@ type fakeStore struct {
 	// 黑洞式的慢库调用——没有超时的话它会一直悬着占住常驻循环那条 goroutine。
 	blockNextWrite       bool
 	blockedWriteReturned bool
+
+	// deadlineFrameDeletes 数带着截止时间的 DeleteFrames 调用:请求路径上的清除不带,
+	// 常驻循环兑现删除提示时的那次清除必须带。
+	deadlineFrameDeletes int
 }
 
 func newFakeStore() *fakeStore {
@@ -667,9 +671,12 @@ func (s *fakeStore) blockedWriteHasReturned() bool {
 
 // DeleteFrames / DeleteSummary 照真表的样子清掉这条对话在这个身份键下的行:
 // 别的对话、别的账号一行都不碰。
-func (s *fakeStore) DeleteFrames(_ context.Context, userID int64, conversationID string) error {
+func (s *fakeStore) DeleteFrames(ctx context.Context, userID int64, conversationID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, ok := ctx.Deadline(); ok {
+		s.deadlineFrameDeletes++
+	}
 	for key, row := range s.rows {
 		if row.UserID == userID && row.ConversationID == conversationID {
 			delete(s.rows, key)
@@ -1364,8 +1371,9 @@ func TestFollower_InterruptedSessionCameBack_IsPickedUpByTheResidentLoop(t *test
 // 派生自 Follow 调用方,这里就是 context.Background()）转手交给 Mirror.Apply / Sync /
 // Revive,一路不带任何截止时间。网络黑洞式的慢库调用因此会一直悬着占住这条循环
 // 的 goroutine,直到 OS 的 TCP 重传超时(Linux 上约 15 分钟)——maxOpenConns 只有
-// 40,吃住一条就少一条。下面四个用例锚住 resident.go 补上的行为:每次从循环发起的
-// 库调用都必须带着 Config.CallTimeout 的截止时间,而不是无限期悬着。
+// 40,吃住一条就少一条。下面几个用例锚住 resident.go 补上的行为:每次从循环发起的
+// 库调用都必须带着 Config.CallTimeout 的截止时间,而不是无限期悬着;截止只扣在库调用
+// 上,对端的 attach / pull 仍按各自的 CallTimeout 走,不与整轮共用一个。
 
 // Given 已经跟着一台机器;When 常驻循环处理一条实时通知(触发 Mirror.Apply);
 // Then 落库那次调用带着的 ctx 有截止时间。
@@ -1482,4 +1490,47 @@ func TestFollower_LoopCallBlocksPastCallTimeout_LoopStillProceedsAfterward(t *te
 		"常驻循环在一次超时的库调用之后必须继续处理后续事件")
 	assert.Equal(t, []int64{1}, rig.store.rowSeqs(conv42),
 		"卡住的那一帧因超时没有落库；超时之后的下一次投递必须正常落库")
+}
+
+// Given 常驻循环触发一次重同步,要补的那条对话有好几页持久帧,对端每一页都要一会儿才
+// 答 —— 每一次 RPC 都在 CallTimeout 之内,整次补齐加起来却超过它;When 循环跑这次
+// 重同步;Then 每一页都落库。
+//
+// 截止扣在库调用上(决策 14「常驻镜像循环每次迭代的库调用带 Config.CallTimeout 截止」),
+// 不扣在整轮迭代上:一轮补齐夹着对端的 attach 与翻页 pull,每一次 RPC 本来就各有
+// CallTimeout,而页数不封顶。拿一个 CallTimeout 框住整轮,一条长对话的补齐会在中途被
+// 截断,而重同步失败不会自动再排一次,剩下的帧就一直补不回来。
+func TestFollower_ResyncCatchUpLongerThanOneCallTimeout_StillStoresEveryPage(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.callTimeout = 400 * time.Millisecond
+	rig.peer.sessions = []*agentrewire.SessionSummary{
+		machineSession(conv77, "占位,只为了先起循环"), machineSession(conv42, "很长的对话"),
+	}
+	const pages = 8
+	for seq := int64(1); seq <= pages; seq++ {
+		rig.peer.durable[conv42] = append(rig.peer.durable[conv42], durableRow(conv42, seq))
+	}
+	rig.peer.pageSize = 1
+	rig.peer.pullDelay = 100 * time.Millisecond
+	a := rig.replica(t, replicaA)
+	ctx := context.Background()
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv77))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	claimed, err = a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv77, conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.Eventually(t, func() bool {
+		return len(rig.store.framesOf(conv42)) == pages
+	}, 5*time.Second, 10*time.Millisecond,
+		"每一页都在 CallTimeout 之内答了,整次补齐却被一个 CallTimeout 截断:剩下的帧补不回来")
+}
+
+// frameDeletesWithDeadline 报带着截止时间的 DeleteFrames 调用有几次。
+func (s *fakeStore) frameDeletesWithDeadline() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deadlineFrameDeletes
 }

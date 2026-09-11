@@ -59,6 +59,9 @@ type fakeRelay struct {
 	durable map[string][]*agentrewire.DurableNotification
 	// pageSize>0 时 pull 每页最多这么多条,用来逼出 HasMore 翻页。
 	pageSize int
+	// pullDelay>0 时每一次 pull 都要等这么久才答(调用方 ctx 先到期就放手),用来逼出
+	// 「每一页都在期限之内、整次补齐加起来却超过它」的慢补齐。
+	pullDelay time.Duration
 	// attachErr 非 nil 时 attach 一律失败(中断态会话在真 daemon 上回 ErrNoActiveTurn)。
 	attachErr error
 	// pullErr 非 nil 时 pull 一律失败。
@@ -121,7 +124,18 @@ func (f *fakeRelay) SessionAttach(_ context.Context, request *agentrewire.Sessio
 	}, nil
 }
 
-func (f *fakeRelay) SessionPull(_ context.Context, request *agentrewire.SessionPullRequest) (*agentrewire.SessionPullResponse, error) {
+func (f *fakeRelay) SessionPull(ctx context.Context, request *agentrewire.SessionPullRequest) (*agentrewire.SessionPullResponse, error) {
+	f.mu.Lock()
+	delay := f.pullDelay
+	f.mu.Unlock()
+	if delay > 0 {
+		// 像真对端一样慢一点才答；调用方的 ctx 到期时照真 RPC 的样子放手。
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, recordedCall{method: agentrewire.RpcMethod_RPC_METHOD_SESSION_PULL, request: request})
