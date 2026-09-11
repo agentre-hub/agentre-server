@@ -2,17 +2,79 @@ package main
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+
 	serversession "github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
-func TestSeedCreatesOnlyUserAndProductionSession(t *testing.T) {
-	if got := seedTables(); len(got) != 1 || got[0] != "users" {
-		t.Fatalf("seed tables = %v, want only users", got)
-	}
+// The seeded account must be in the state production account creation leaves it in
+// (user_svc): the users row and its sync_account_seqs row, committed together. An
+// account without that row takes NextVersion's fallback on its first allocation, and
+// two concurrent runs' fresh accounts allocating in overlapping transactions can die
+// with ERROR 1213 — a state production no longer produces.
+func TestSeedAccountCreatesUserAndItsVersionSeqInOneTransaction(t *testing.T) {
+	ctx, gdb, mock := testutils.Database(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `users`")).
+		WillReturnResult(sqlmock.NewResult(42, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO sync_account_seqs")).
+		WithArgs(int64(42), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
+	id, err := seedAccount(ctx, gdb, "webe2e-run@e2e.invalid", "webe2e run", 1234)
+	if err != nil {
+		t.Fatalf("seedAccount: %v", err)
+	}
+	if id != 42 {
+		t.Fatalf("seedAccount id = %d, want 42", id)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// When the seq row cannot be written the account must not survive without it.
+func TestSeedAccountRollsBackUserWhenVersionSeqFails(t *testing.T) {
+	ctx, gdb, mock := testutils.Database(t)
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `users`")).
+		WillReturnResult(sqlmock.NewResult(42, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO sync_account_seqs")).
+		WillReturnError(errSeedBoom)
+	mock.ExpectRollback()
+
+	if _, err := seedAccount(ctx, gdb, "webe2e-run@e2e.invalid", "webe2e run", 1234); err == nil {
+		t.Fatal("seedAccount succeeded, want the seq insert error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A failed session seed removes the account again; the seq row goes with it, otherwise
+// cleanup (which finds the run by its user email) can never reach the orphan.
+func TestUnseedAccountRemovesVersionSeqAndUser(t *testing.T) {
+	ctx, gdb, mock := testutils.Database(t)
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM sync_account_seqs WHERE user_id = ?")).
+		WithArgs(int64(42)).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM users WHERE id = ?")).
+		WithArgs(int64(42)).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := unseedAccount(ctx, gdb, 42); err != nil {
+		t.Fatalf("unseedAccount: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSeedSessionUsesProductionSessionContract(t *testing.T) {
 	payload := newSessionPayload(42, "csrf", 1234)
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -103,6 +165,8 @@ func TestOracleReportsStateWithoutSecretColumns(t *testing.T) {
 		}
 	}
 }
+
+var errSeedBoom = sqlmock.ErrCancelled
 
 func findSQLStep(t *testing.T, steps []sqlStep, name string) sqlStep {
 	t.Helper()

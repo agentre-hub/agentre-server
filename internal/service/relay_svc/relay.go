@@ -285,7 +285,7 @@ func (s *relaySvc) IsDaemonOnline(ctx context.Context, accountID int64, fingerpr
 }
 
 // DaemonsOnline 是 IsDaemonOnline 的批量形态：一个账号下一批机器的在线态，一个
-// pipeline 读完，往返次数与台数无关（设备列表与统计设置页用它，db-perf-fixes 决策 9）。
+// pipeline 读完，往返次数与台数无关（设备列表用它，db-perf-fixes 决策 9）。
 //
 // 它刻意不进 RelaySvc 接口：只有真实实现能一次读一批，消费方按自己声明的窄接口取用。
 // 答案与入参逐格对应、判据与 IsDaemonOnline 相同。某一格读不出来时那一格答离线、

@@ -19,6 +19,12 @@ import (
 // 推进过，拨回 0 会让设备手里的游标越过序列头。条件本身就是幂等的：重跑一次什么都不插。
 // 这是 DML 不是 DDL，没有 ALGORITHM/LOCK 可声明；updatetime 用库端当前毫秒，与业务代码
 // 写入的 UnixMilli 同一口径。
+//
+// 重复键分支与 EnsureSeq 同一句空赋值，不能省：迁移跑的时候旧副本还在服务，它们的
+// NextVersion 会给缺行账号插行。READ-COMMITTED 下 SELECT 是不加锁的一致性读，看不见
+// 那条还没提交的插入，等它提交后这边的 INSERT 撞 uk_sync_account_seqs_identity 报
+// 1062，迁移失败、新副本起不来（MySQL 9.7 实测）。空赋值让那一行保持对方推进后的值。
+// 列名要带表名：SELECT 里 JOIN 了同一张表（别名 s），裸写 user_id 报 1052 列名歧义。
 func migration202609110104() *gormigrate.Migration {
 	return &gormigrate.Migration{
 		ID: "202609110104",
@@ -28,7 +34,8 @@ func migration202609110104() *gormigrate.Migration {
 				SELECT u.id, 0, CAST(UNIX_TIMESTAMP(NOW(3)) * 1000 AS SIGNED)
 				FROM users u
 				LEFT JOIN sync_account_seqs s ON s.user_id = u.id
-				WHERE s.user_id IS NULL;
+				WHERE s.user_id IS NULL
+				ON DUPLICATE KEY UPDATE sync_account_seqs.user_id = sync_account_seqs.user_id;
 			`).Error
 		},
 		// 回滚不删行：补进去的行与建号预建、NextVersion 首次取号建出的行无从区分，

@@ -46,7 +46,7 @@ func TestNextVersion_GivenExistingSeqRow_ThenPlainUpdateWithoutUpsert(t *testing
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 账号第一次取号时那一行还不存在，UPDATE 命中 0 行：这时才落回
+// 账号还没有序列行（没经过建号预建）时 UPDATE 命中 0 行：这时才落回
 // INSERT … ON DUPLICATE KEY UPDATE。不能是普通 INSERT——同一账号的两次首次取号并发时，
 // 两边的 UPDATE 都命中 0 行，后到的那条 INSERT 必须由 ON DUPLICATE 分支接住、在对方
 // 提交之后推进同一行，而不是撞唯一键失败。

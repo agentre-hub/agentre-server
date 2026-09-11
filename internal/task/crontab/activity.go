@@ -92,9 +92,9 @@ type activityRound struct {
 // mirror_svc.Reconciler.Reconcile）。离线**不算错误**——它回来时下一轮自然被拉到，
 // 而这段时间的历史一直躺在它自己机器上，不会因为这一轮没问到就丢。
 //
-// 设备清单按这一整批账号一次查询（要求 13）：批量之后「这个账号的名单单独读不出来，
-// 其他账号照跑」这件事不再成立——那是一条 SQL，失败就是这一批整体失败，因此清单
-// 查询本身出错时函数提前返回，不再进入拨号阶段。
+// 设备清单按这一整批账号一次批量读取（要求 13；仓储内按块分条发 IN）：批量之后「这个
+// 账号的名单单独读不出来，其他账号照跑」这件事不再成立——任一块失败，这一批就整体读
+// 不出来，因此清单读取本身出错时函数提前返回，不再进入拨号阶段。
 func (r activityRound) run(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, roundBudget)
 	defer cancel()
