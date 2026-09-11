@@ -3,6 +3,7 @@ package device_svc
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
+	"github.com/go-sql-driver/mysql"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -90,6 +92,68 @@ func TestAuthorize_ReturnsUserCode(t *testing.T) {
 	})
 }
 
+// user_code 生成器的码空间不大（32^6），且 pending_flag 部分唯一索引只能拦住
+// "还没结算" 的行，撞码不算罕见到可以直接 500 给用户。Authorize 撞见
+// uk_dfc_user_code_pending 的 1062 时必须原地重新生成再试，而不是把一次纯粹的
+// 随机数运气上抛成失败请求。
+func TestAuthorize_UserCodeCollision(t *testing.T) {
+	pendingDup := &mysql.MySQLError{
+		Number:  1062,
+		Message: "Duplicate entry 'ABC-DEF' for key 'device_flow_codes.uk_dfc_user_code_pending'",
+	}
+
+	convey.Convey("Authorize 撞 user_code", t, func() {
+		convey.Convey("与待授权码冲突一次后重试成功，返回第二次生成的新码", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			var seen []string
+			gomock.InOrder(
+				mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, c *device_flow_entity.DeviceFlowCode) error {
+						seen = append(seen, c.UserCode)
+						return pendingDup
+					},
+				),
+				mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, c *device_flow_entity.DeviceFlowCode) error {
+						seen = append(seen, c.UserCode)
+						return nil
+					},
+				),
+			)
+
+			out, err := svc.Authorize(ctx, AuthorizeInput{DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa"})
+
+			assert.NoError(t, err)
+			assert.Len(t, seen, 2)
+			assert.Equal(t, seen[1], out.UserCode)
+		})
+
+		convey.Convey("连续 5 次撞码后返回错误，不再重试", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().Create(gomock.Any(), gomock.Any()).Return(pendingDup).Times(5)
+
+			out, err := svc.Authorize(ctx, AuthorizeInput{DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa"})
+
+			assert.Nil(t, out)
+			assert.Error(t, err)
+		})
+
+		convey.Convey("其他唯一键（device_code）冲突不重试，直接上抛", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			identityDup := &mysql.MySQLError{
+				Number:  1062,
+				Message: "Duplicate entry 'dc-x' for key 'device_flow_codes.uk_device_flow_codes_identity'",
+			}
+			mF.EXPECT().Create(gomock.Any(), gomock.Any()).Return(identityDup).Times(1)
+
+			out, err := svc.Authorize(ctx, AuthorizeInput{DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa"})
+
+			assert.Nil(t, out)
+			assert.ErrorIs(t, err, identityDup)
+		})
+	})
+}
+
 func TestExchangeToken(t *testing.T) {
 	convey.Convey("ExchangeToken", t, func() {
 		convey.Convey("device_code 不存在 → invalid_grant", func() {
@@ -123,9 +187,30 @@ func TestExchangeToken(t *testing.T) {
 					ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			_, err := svc.ExchangeToken(ctx, "dc-x")
 			assert.Contains(t, err.Error(), "authorization_pending")
+		})
+		// 限速判定曾经是「先读 last_polled_at 判间隔、再无条件 UPDATE」的 check-then-act：
+		// 两个并发或重复的轮询都能读到「还没到点」为假、都往下走。条件 UPDATE 把
+		// 判定收进数据库自己的一条语句，0 行受影响就是这次没抢到，必须 slow_down，
+		// 且不能再往下判 IsAuthorized（没有轮到它决定）。
+		convey.Convey("并发/重复轮询在限速间隔内只有一个通过，另一个 slow_down", func() {
+			ctx, mD, mT, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{
+					DeviceCode: "dc-x", IntervalSeconds: 5,
+					ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+					AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+				}, nil,
+			)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), int64(5000)).Return(int64(0), nil)
+			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).Times(0)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Times(0)
+			mF.EXPECT().MarkConsumed(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+			_, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.Contains(t, err.Error(), ErrSlowDown)
 		})
 		convey.Convey("已授权 → 颁发 token + 标 consumed + upsert device", func() {
 			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
@@ -138,7 +223,7 @@ func TestExchangeToken(t *testing.T) {
 					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
 					assert.Equal(t, "agentred", d.Kind)
@@ -179,7 +264,7 @@ func TestExchangeToken(t *testing.T) {
 					ClientName:        reported,
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			var name string
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
@@ -213,7 +298,7 @@ func TestExchangeToken(t *testing.T) {
 					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			// 赢家已经把这一行标为 consumed，竞败方的 UPDATE 一行也改不到
 			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(0), nil)
 			// 消费判定必须排在写 devices / device_tokens 之前：竞败方在这里出局，
@@ -780,6 +865,134 @@ func TestListUserDevices_MirrorNotConfigured(t *testing.T) {
 	})
 }
 
+// redisTrips 数一条 Redis 客户端上发出去的往返：单发一条命令算一次 command，一整个
+// pipeline 算一次 pipeline。
+type redisTrips struct {
+	mu        sync.Mutex
+	commands  int
+	pipelines int
+}
+
+func (h *redisTrips) DialHook(next goredis.DialHook) goredis.DialHook { return next }
+
+func (h *redisTrips) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		h.mu.Lock()
+		h.commands++
+		h.mu.Unlock()
+		return next(ctx, cmd)
+	}
+}
+
+func (h *redisTrips) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []goredis.Cmder) error {
+		h.mu.Lock()
+		h.pipelines++
+		h.mu.Unlock()
+		return next(ctx, cmds)
+	}
+}
+
+func (h *redisTrips) reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.commands, h.pipelines = 0, 0
+}
+
+func (h *redisTrips) counts() (commands, pipelines int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.commands, h.pipelines
+}
+
+// presenceWorld 按 bootstrap 的形状装配设备在线态的两个来源：真实的 relay_svc 与
+// mirror_svc.Supervisor 共用同一个 Redis 客户端（生产上都是 redis.Default()），
+// 客户端上挂着往返计数。RESP2 且不发 CLIENT SETINFO，连接建立时不夹带握手命令。
+func presenceWorld(t *testing.T) (*miniredis.Miniredis, relay_svc.RelaySvc, *mirror_svc.Supervisor, *redisTrips) {
+	t.Helper()
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr(), Protocol: 2, DisableIdentity: true})
+	t.Cleanup(func() { _ = client.Close() })
+	trips := &redisTrips{}
+	client.AddHook(trips)
+
+	relay := relay_svc.New(
+		relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Minute},
+		nil, nil, client, stubForwarder{},
+	)
+	relay_svc.SetDefault(relay)
+	t.Cleanup(func() { relay_svc.SetDefault(nil) })
+	sup := mirror_svc.NewSupervisor(mirror_svc.Config{InstanceID: "server-a"}, nil, nil, client)
+	mirror_svc.SetDefault(sup)
+	t.Cleanup(func() { mirror_svc.SetDefault(nil) })
+	return mini, relay, sup, trips
+}
+
+// Given 账号下 5 台机器，在线登记、协议不匹配、握手自报的 commit 各有几台有记录；
+// When 列出设备；
+// Then 每一行的在线态 / 协议不匹配 / 构建与逐台读取时相同，而 Redis 上没有一条单发命令：
+// 中继在线态、镜像握手状态各一次 pipeline 读完，往返次数与设备台数无关（要求 10）。
+func TestListUserDevices_GivenManyDevices_ThenPresenceIsReadInBatchesNotPerDevice(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	userID := int64(7)
+	_, relay, sup, trips := presenceWorld(t)
+
+	for _, fp := range []string{"fp-b", "fp-d"} {
+		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: userID, Fingerprint: fp, InstanceID: "server-a"}))
+	}
+	sup.RecordProtocolMismatch(ctx, userID, "fp-a")
+	sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
+	sup.RecordDaemonBuild(ctx, userID, "fp-d", "")
+	mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+		{ID: 41, UserID: 7, Name: "a", Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+		{ID: 42, UserID: 7, Name: "b", Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+		{ID: 43, UserID: 7, Name: "c", Kind: "desktop", Fingerprint: "fp-c", Status: 1},
+		{ID: 44, UserID: 7, Name: "d", Kind: "agentred", Fingerprint: "fp-d", Status: 1},
+		{ID: 45, UserID: 7, Name: "e", Kind: "agentred", Fingerprint: "fp-e", Status: 1},
+	}, nil)
+	trips.reset()
+
+	items, err := svc.ListUserDevices(ctx, userID, 43)
+
+	require.NoError(t, err)
+	commands, pipelines := trips.counts()
+	assert.Zero(t, commands, "no per-device Redis command")
+	assert.Equal(t, 2, pipelines, "one pipeline for relay presence, one for mirror handshake state")
+	assert.Equal(t, []DeviceView{
+		{ID: 41, Name: "a", Kind: "agentred", Fingerprint: "fp-a", Status: 1,
+			ProtocolMismatch: true, DaemonCommit: "a1b2c3d", DaemonBuildKnown: true},
+		{ID: 42, Name: "b", Kind: "agentred", Fingerprint: "fp-b", Status: 1, Online: true},
+		{ID: 43, Name: "c", Kind: "desktop", Fingerprint: "fp-c", Status: 1, IsThisDevice: true},
+		{ID: 44, Name: "d", Kind: "agentred", Fingerprint: "fp-d", Status: 1, Online: true, DaemonBuildKnown: true},
+		{ID: 45, Name: "e", Kind: "agentred", Fingerprint: "fp-e", Status: 1},
+	}, items)
+}
+
+// Given Redis 整个读不出来；When 列出设备；Then 列表照常返回，每台机器离线、无协议不匹配、
+// 构建未知——在线态是增强列，读不到按 fail-open 处理，不拖垮整个列表。
+func TestListUserDevices_GivenRedisFailing_ThenEveryDeviceFailsOpenAndTheListReturns(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	userID := int64(7)
+	mini, relay, sup, _ := presenceWorld(t)
+
+	require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: userID, Fingerprint: "fp-a", InstanceID: "server-a"}))
+	sup.RecordProtocolMismatch(ctx, userID, "fp-a")
+	sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
+	mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+		{ID: 41, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+		{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+	}, nil)
+	mini.SetError("ERR redis is down")
+
+	items, err := svc.ListUserDevices(ctx, userID, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, []DeviceView{
+		{ID: 41, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+		{ID: 42, Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+	}, items)
+}
+
 func TestApprove(t *testing.T) {
 	convey.Convey("Approve", t, func() {
 		convey.Convey("不存在 → user_code_invalid", func() {
@@ -879,7 +1092,7 @@ func TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprin
 			DeviceKind: "agentred", ClientFingerprint: fingerprint,
 		}, nil,
 	)
-	mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
 	)
@@ -1023,7 +1236,7 @@ func TestExchangeToken_SignalsThatTheDeviceRowNowExists(t *testing.T) {
 			DeviceKind: "agentred", ClientFingerprint: "fp-aaaaaaaa",
 		}, nil,
 	)
-	mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },

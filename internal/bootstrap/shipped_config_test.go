@@ -3,10 +3,14 @@ package bootstrap
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -109,5 +113,86 @@ func TestShippedConfigsDropRetiredKeys(t *testing.T) {
 				"回调路径是常量 auth.GithubCallbackPath，与注册的路由同源")
 			require.Nil(t, s.InsecureCookies, "Secure 由 public_url 的 scheme 推出")
 		})
+	}
+}
+
+// shippedDSNTemplates 是随仓库发出去的、字面写着一条 DSN 的每一份模板：三份
+// bootstrap 配置模板之外，compose 的默认值、.env 示例与 README 里 docker run 的
+// 示例同属一类，缺一个都会有人原样抄进生产。新增模板时一并加进来。
+var shippedDSNTemplates = append(append([]string{}, shippedConfigs...),
+	"deploy/docker-compose.yml", "deploy/.env.example", "deploy/README.md")
+
+// go-sql-driver/mysql v1.10 对 timeout / readTimeout / writeTimeout 的零值是「不设」——
+// 网络黑洞时它只在 ctx 取消才放手（connection.go 的 watchCancel）。maxOpenConns 是
+// 40，一条连接被网络黑洞吃住就少一条可用连接，直到 OS 的 TCP 重传超时（Linux 上约
+// 15 分钟）才收得回来。要求 14：所有随仓库发布的 DSN 模板都要带三个超时参数。
+func TestShippedDSNTemplatesCarryTimeouts(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+
+	for _, rel := range shippedDSNTemplates {
+		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
+			raw, err := os.ReadFile(filepath.Join(root, rel))
+			require.NoError(t, err)
+			dsn := extractShippedDSN(t, rel, raw)
+			cfg, err := mysql.ParseDSN(dsn)
+			require.NoError(t, err, "%s: DSN 解析失败: %q", rel, dsn)
+			assert.Positive(t, cfg.Timeout, "%s: 缺 timeout，网络黑洞时连接会一直悬到 TCP 重传超时", rel)
+			assert.Positive(t, cfg.ReadTimeout, "%s: 缺 readTimeout", rel)
+			assert.Positive(t, cfg.WriteTimeout, "%s: 缺 writeTimeout", rel)
+		})
+	}
+}
+
+// extractShippedDSN 从每份模板里把那一条 DSN 抠出来 —— 四种模板各自的格式不同：
+// 三份 bootstrap 配置模板是 YAML 的 db.dsn；compose 是环境变量的默认值，还嵌着
+// DB_USER / DB_PASSWORD / DB_NAME 三层 shell 变量替换；.env 示例是被注释掉的
+// DB_DSN=...；README 是 docker run 示例里的 -e 参数。
+func extractShippedDSN(t *testing.T, rel string, raw []byte) string {
+	t.Helper()
+	switch rel {
+	case "deploy/docker-compose.yml":
+		match := regexp.MustCompile(`AGENTRE_SERVER_DB_DSN:\s*"([^\n]+)"`).FindSubmatch(raw)
+		require.NotNil(t, match, "%s: 找不到 AGENTRE_SERVER_DB_DSN", rel)
+		return resolveComposeDefaultEnvVar(string(match[1]))
+	case "deploy/.env.example":
+		match := regexp.MustCompile(`(?m)^#?DB_DSN=(.+)$`).FindSubmatch(raw)
+		require.NotNil(t, match, "%s: 找不到 DB_DSN 示例", rel)
+		return string(match[1])
+	case "deploy/README.md":
+		match := regexp.MustCompile(`AGENTRE_SERVER_DB_DSN="([^"]+)"`).FindSubmatch(raw)
+		require.NotNil(t, match, "%s: 找不到 docker run 示例里的 AGENTRE_SERVER_DB_DSN", rel)
+		return string(match[1])
+	default:
+		var doc struct {
+			DB struct {
+				DSN string `yaml:"dsn"`
+			} `yaml:"db"`
+		}
+		require.NoError(t, yaml.Unmarshal(raw, &doc))
+		require.NotEmpty(t, doc.DB.DSN, "%s: db.dsn 是空的", rel)
+		return doc.DB.DSN
+	}
+}
+
+// resolveComposeDefaultEnvVar 展开形如 ${VAR:-default} 的 shell 变量替换，环境视为
+// 全部未设置（未设置时才会走 default 分支），支持任意深度嵌套 —— compose 里 DB_DSN
+// 的默认值本身还嵌着 DB_USER / DB_PASSWORD / DB_NAME 三层。每轮只处理最内层（最后
+// 一个 "${"，它的第一个 "}" 必然是自己的收口，因为内部不可能再嵌一层）。
+func resolveComposeDefaultEnvVar(s string) string {
+	for {
+		start := strings.LastIndex(s, "${")
+		if start == -1 {
+			return s
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			return s
+		}
+		end += start
+		inner := s[start+2 : end]
+		_, def, _ := strings.Cut(inner, ":-")
+		s = s[:start] + def + s[end+1:]
 	}
 }

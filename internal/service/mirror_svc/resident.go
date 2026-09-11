@@ -399,6 +399,9 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 	// 省略，而这条连接的合成指纹撞不上任何真设备），所以那条回落实际上不会触发——
 	// 镜像的身份因此总是对端明说的发起端，正是决策 17 要的。
 	mirror := New(f.key.userID, f.key.fingerprint, conn)
+	// 常驻循环的 ctx 永不到期，镜像的每一次库调用各自带 Config.CallTimeout 截止
+	// （db-perf-fixes 决策 14）；对端 RPC 仍按连接上各自的 CallTimeout 走。
+	mirror.boundStoreCalls(f.sup.cfg.CallTimeout)
 	// 挂在锁下：删除路径要在这条连接上摘掉一条对话（drop），它跑在别的 goroutine 上。
 	f.mu.Lock()
 	f.mirror = mirror

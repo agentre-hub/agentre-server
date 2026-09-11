@@ -284,6 +284,34 @@ func (s *relaySvc) IsDaemonOnline(ctx context.Context, accountID int64, fingerpr
 	return n > 0, nil
 }
 
+// DaemonsOnline 是 IsDaemonOnline 的批量形态：一个账号下一批机器的在线态，一个
+// pipeline 读完，往返次数与台数无关（设备列表与统计设置页用它，db-perf-fixes 决策 9）。
+//
+// 它刻意不进 RelaySvc 接口：只有真实实现能一次读一批，消费方按自己声明的窄接口取用。
+// 答案与入参逐格对应、判据与 IsDaemonOnline 相同。某一格读不出来时那一格答离线、
+// 其余格照常作答，并交出第一个错误——与逐台读取时的 (false, err) 同一出口，要不要
+// fail-open 由调用方决定。
+func (s *relaySvc) DaemonsOnline(ctx context.Context, accountID int64, fingerprints []string) ([]bool, error) {
+	online := make([]bool, len(fingerprints))
+	if len(fingerprints) == 0 {
+		return online, nil
+	}
+	pipe := s.redis.Pipeline()
+	cmds := make([]*goredis.IntCmd, len(fingerprints))
+	for i, fp := range fingerprints {
+		cmds[i] = pipe.Exists(ctx, routeKey(accountID, fp))
+	}
+	// Exec 只交出第一个失败命令的错；每一格的答案落在各自的 cmd 上，逐格判。
+	_, execErr := pipe.Exec(ctx)
+	for i, cmd := range cmds {
+		online[i] = cmd.Err() == nil && cmd.Val() > 0
+	}
+	if execErr != nil {
+		return online, fmt.Errorf("check relay daemon presence: %w", execErr)
+	}
+	return online, nil
+}
+
 func (s *relaySvc) DaemonConnID(ctx context.Context, accountID int64, fingerprint string) (string, error) {
 	value, err := s.redis.Get(ctx, routeKey(accountID, fingerprint)).Result()
 	if errors.Is(err, goredis.Nil) {

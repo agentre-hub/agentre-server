@@ -42,6 +42,21 @@ func (m *MockSaveRepo) EXPECT() *MockSaveRepoMockRecorder {
 	return m.recorder
 }
 
+// CountByUser mocks base method.
+func (m *MockSaveRepo) CountByUser(ctx context.Context, userID int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountByUser", ctx, userID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountByUser indicates an expected call of CountByUser.
+func (mr *MockSaveRepoMockRecorder) CountByUser(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountByUser", reflect.TypeOf((*MockSaveRepo)(nil).CountByUser), ctx, userID)
+}
+
 // Delete mocks base method.
 func (m *MockSaveRepo) Delete(ctx context.Context, userID int64, conversationID string) error {
 	m.ctrl.T.Helper()
@@ -84,6 +99,21 @@ func (m *MockSaveRepo) ListByUser(ctx context.Context, userID int64) ([]*agent_s
 func (mr *MockSaveRepoMockRecorder) ListByUser(ctx, userID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListByUser", reflect.TypeOf((*MockSaveRepo)(nil).ListByUser), ctx, userID)
+}
+
+// ListConversationIDsByMachine mocks base method.
+func (m *MockSaveRepo) ListConversationIDsByMachine(ctx context.Context, userID int64, deviceFingerprint string) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListConversationIDsByMachine", ctx, userID, deviceFingerprint)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListConversationIDsByMachine indicates an expected call of ListConversationIDsByMachine.
+func (mr *MockSaveRepoMockRecorder) ListConversationIDsByMachine(ctx, userID, deviceFingerprint any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListConversationIDsByMachine", reflect.TypeOf((*MockSaveRepo)(nil).ListConversationIDsByMachine), ctx, userID, deviceFingerprint)
 }
 
 // ListMachines mocks base method.

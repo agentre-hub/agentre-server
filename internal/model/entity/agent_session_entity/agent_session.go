@@ -39,13 +39,13 @@ package agent_session_entity
 type SessionSummary struct {
 	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
 	// UserID + ConversationID 是这一行的身份键（uk_agent_sessions_identity）。
-	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
+	UserID int64 `gorm:"column:user_id"`
 	// ConversationID 是这条对话的全局标识，由发起端铸 UUIDv7，桌面端、agentred
 	// 与本库因此指的是同一个值。
-	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
+	ConversationID string `gorm:"column:conversation_id"`
 	// PeerFingerprint 是**发起**这条对话那一端。它已退出身份键（决策 7 / 8），
 	// 留下来承担来源标注（索引里按对端分组的那一轴）与授权。
-	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
+	PeerFingerprint string `gorm:"column:peer_fingerprint"`
 	// MachineFingerprint 是索引读取时从 agent_session_saves 投影出的承载机器指纹。
 	// 它不是摘要表的一列，也不是会话身份的一半；只读标签防止摘要 upsert 写它。
 	MachineFingerprint string `gorm:"column:machine_fingerprint;->"`
@@ -54,10 +54,10 @@ type SessionSummary struct {
 	// idempotently, so they stay blank until it has reported one — a session that
 	// has not run its first turn has no title yet, because the title is derived
 	// from the first message. Kept as-is: never guessed, never a placeholder.
-	Title             string `gorm:"column:title;type:text;not null;default:''"`
-	AgentSyncID       string `gorm:"column:agent_sync_id;type:varchar(255);not null;default:''"`
-	ProviderSessionID string `gorm:"column:provider_session_id;type:varchar(255);not null;default:''"`
-	Cwd               string `gorm:"column:cwd;type:text;not null;default:''"`
+	Title             string `gorm:"column:title;default:''"`
+	AgentSyncID       string `gorm:"column:agent_sync_id;default:''"`
+	ProviderSessionID string `gorm:"column:provider_session_id;default:''"`
+	Cwd               string `gorm:"column:cwd;default:''"`
 	// ProjectSyncID is the project the peer named for itself. Only the desktop
 	// reports it — it has no per-session cwd to report, so the (fingerprint,
 	// cwd) comparison decision 12 uses for agentred can never resolve one of
@@ -68,11 +68,11 @@ type SessionSummary struct {
 	// Unlike Cwd this one is not a path and does leave the server — it is the
 	// same opaque sync id the index already returns as
 	// SavedSessionSummaryView.ProjectSyncID, so R19 is untouched.
-	ProjectSyncID   string `gorm:"column:project_sync_id;type:varchar(255);not null;default:''"`
-	BackendType     string `gorm:"column:backend_type;type:varchar(64);not null;default:''"`
-	LifecycleState  string `gorm:"column:lifecycle_state;type:varchar(32);not null;default:''"`
-	WaitingForInput bool   `gorm:"column:waiting_for_input;type:boolean;not null;default:false"`
-	LatestSeq       int64  `gorm:"column:latest_seq;type:bigint;not null;default:0"`
+	ProjectSyncID   string `gorm:"column:project_sync_id;default:''"`
+	BackendType     string `gorm:"column:backend_type;default:''"`
+	LifecycleState  string `gorm:"column:lifecycle_state;default:''"`
+	WaitingForInput bool   `gorm:"column:waiting_for_input;default:false"`
+	LatestSeq       int64  `gorm:"column:latest_seq;default:0"`
 	// LastMessageAt mirrors wire.SessionSummary.LastMessageAt: the peer's own
 	// record of this session's last activity (Unix ms), 0 when the peer never
 	// reported one. It is the sort key of the paging index, half of the paging
@@ -84,7 +84,7 @@ type SessionSummary struct {
 	// 是由列名招来的这件事随之消失（2026-08-27-schema-overhaul.md 决策 10），标签
 	// 也就撤掉了。守卫见 agent_session_repo 的
 	// TestSessionSummaryEntity_PlainUpdatesNeverRewritesLastMessageAt。
-	LastMessageAt int64 `gorm:"column:last_message_at;type:bigint;not null;default:0"`
+	LastMessageAt int64 `gorm:"column:last_message_at;default:0"`
 	// LastReadAt is when this account last opened the conversation (Unix ms), 0
 	// when it never has. "Unread" is exactly LastMessageAt > LastReadAt — the same
 	// predicate the desktop's attention-store uses (lastMessageAt > lastReadAt).
@@ -99,11 +99,11 @@ type SessionSummary struct {
 	//
 	// 存的是**发起端**那一份：同一条对话可以在桌面端与 agentred 上各有一份，两台
 	// 值不一致时以发起端为准，而这张表的身份键本来就是 (账号, 发起端指纹, 会话 id)。
-	ProviderKey string `gorm:"column:provider_key;type:varchar(255);not null;default:''"`
-	ModelKey    string `gorm:"column:model_key;type:varchar(255);not null;default:''"`
-	LastReadAt  int64  `gorm:"column:last_read_at;type:bigint;not null;default:0"`
-	Createtime  int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
-	Updatetime  int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	ProviderKey string `gorm:"column:provider_key;default:''"`
+	ModelKey    string `gorm:"column:model_key;default:''"`
+	LastReadAt  int64  `gorm:"column:last_read_at;default:0"`
+	Createtime  int64  `gorm:"column:createtime;default:0"`
+	Updatetime  int64  `gorm:"column:updatetime;default:0"`
 }
 
 func (*SessionSummary) TableName() string { return "agent_sessions" }
@@ -128,17 +128,17 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 type DurableFrame struct {
 	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
 	// (user_id, conversation_id, seq) 是自然键，落在唯一索引上；行身份由 ID 承担。
-	UserID          int64  `gorm:"column:user_id;type:bigint;not null"`
-	ConversationID  string `gorm:"column:conversation_id;type:char(36);not null"`
-	Seq             int64  `gorm:"column:seq;type:bigint;not null"`
-	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
+	UserID          int64  `gorm:"column:user_id"`
+	ConversationID  string `gorm:"column:conversation_id"`
+	Seq             int64  `gorm:"column:seq"`
+	PeerFingerprint string `gorm:"column:peer_fingerprint"`
 	// Payload 是 string 而不是 []byte，这一条是**必需的**而不是风格：开了
 	// interpolateParams（本仓的 compose / docker 配置 / config.example 与 CI 的 e2e
 	// 都开着）之后，驱动把 []byte 插值成 `_binary'…'`，MySQL 对 json 列拒收二进制
 	// 字符集，每一帧都会以 `Error 3144 (22032): Cannot create a JSON value from a
 	// string with CHARACTER SET 'binary'` 落库失败。参数是 string 则两种模式都成。
 	// 由 agent_session_repo 的 TestWriteFrames_PassesThePayloadAsStringNotBinary 钉住。
-	Payload string `gorm:"column:payload;type:json;not null"`
+	Payload string `gorm:"column:payload"`
 	// Createtime 记的是这一帧**发生**的时刻（Unix 毫秒），不是这台 server 存下它的
 	// 时刻。实时那一路两者只差一跳网络，补齐那一路差得很远——补齐成批到达，一条离线
 	// 两天的对话几百帧会落在同一毫秒里，拿收帧时刻当发生时刻，浏览器控制台上整段
@@ -148,7 +148,7 @@ type DurableFrame struct {
 	//
 	// 0 = 那一端没报过（还没升级的对端）。0 一路保持「不知道」下行，渲染成不显示
 	// 时间——不在任何一跳上补一个当下。
-	Createtime int64 `gorm:"column:createtime;type:bigint;not null;default:0"`
+	Createtime int64 `gorm:"column:createtime;default:0"`
 }
 
 func (*DurableFrame) TableName() string { return "agent_session_durable_frames" }
@@ -162,16 +162,16 @@ func (*DurableFrame) TableName() string { return "agent_session_durable_frames" 
 // anything on this account's behalf again.
 type DeleteTodo struct {
 	ID     int64 `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
+	UserID int64 `gorm:"column:user_id"`
 	// ConversationID 与 UserID 一起是这条待办的身份键：同一条对话只欠一条删除。
-	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
+	ConversationID string `gorm:"column:conversation_id"`
 	// DeviceFingerprint 是**要拨给谁**（补删时拨的那台机器），不是身份的一半——
 	// 见 ListPendingMachines 与 saved_session_svc.Delete。它曾经叫
 	// peer_fingerprint，而那个名字说的是发起端：两个角色的取值范围重叠（本机开的
 	// 对话两者同值），拿错了列不会有任何一处报错，只会把待办拨给一台从来没跑过这
 	// 条对话的机器。这个名字的理由见 migrations/202609040108_agent_sessions.go。
-	DeviceFingerprint string `gorm:"column:device_fingerprint;type:varchar(255);not null"`
-	Createtime        int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	DeviceFingerprint string `gorm:"column:device_fingerprint"`
+	Createtime        int64  `gorm:"column:createtime;default:0"`
 }
 
 func (*DeleteTodo) TableName() string { return "agent_session_delete_todos" }

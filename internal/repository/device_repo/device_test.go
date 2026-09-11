@@ -1,10 +1,13 @@
 package device_repo
 
 import (
+	"errors"
+	"fmt"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
@@ -50,5 +53,83 @@ func TestUpdateVersion_WritesVersionAndUpdatetime(t *testing.T) {
 	mock.ExpectCommit()
 
 	assert.NoError(t, r.UpdateVersion(ctx, 100, "0.4.2", 5000))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ListActiveByUsers 是设备清单的批量入口（activity 定时任务规格「要求 13」）：一批
+// 账号一次查询，而不是每个账号各发一条 SELECT——过滤与排序要跟原来逐账号查询
+// （ListByUser：user_id=? AND status=? ORDER BY last_seen_at DESC）保持同一个含义，
+// 只是把 user_id 从等值换成 IN。
+func TestListActiveByUsers_OneQueryFiltersActiveAndOrdersByLastSeen(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectQuery(
+		regexp.QuoteMeta("SELECT * FROM `devices` WHERE user_id IN (?,?) AND status=?")+
+			".*last_seen_at DESC",
+	).
+		WithArgs(int64(7), int64(9), consts.ACTIVE).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "fingerprint", "status"}).
+			AddRow(int64(1), int64(7), "fp-a", consts.ACTIVE).
+			AddRow(int64(2), int64(9), "fp-b", consts.ACTIVE))
+
+	out, err := r.ListActiveByUsers(ctx, []int64{7, 9})
+	assert.NoError(t, err)
+	assert.Equal(t, []*device_entity.Device{{ID: 1, UserID: 7, Fingerprint: "fp-a", Status: consts.ACTIVE}}, out[7])
+	assert.Equal(t, []*device_entity.Device{{ID: 2, UserID: 9, Fingerprint: "fp-b", Status: consts.ACTIVE}}, out[9])
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 查询本身失败要原样上抛，不能吞成「这批账号都没有设备」——调用方（crontab）会把
+// 空清单当成「没人开着这个开关」处理，那会让一整批账号的机器悄悄不被拉取。
+func TestListActiveByUsers_QueryError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	broken := errors.New("库读不出来")
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `devices` WHERE user_id IN")).
+		WillReturnError(broken)
+
+	out, err := r.ListActiveByUsers(ctx, []int64{7})
+	assert.ErrorIs(t, err, broken)
+	assert.Nil(t, out)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 账号清单来自 ListEnabledUserIDs，没有上限：一条 IN 的占位符数量要封顶（DSN 没开
+// interpolateParams 时服务端预处理语句最多 65535 个占位符，超了整轮都读不出清单），
+// 超过一块就分块查、按账号合并。同一账号只落在一块里，块内的 last_seen_at 排序因此
+// 就是它的完整排序。
+func TestListActiveByUsers_GivenMoreThanOneBatch_ThenQueriesInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	const chunk = 500
+	ids := make([]int64, chunk+1)
+	for i := range ids {
+		ids[i] = int64(i + 1)
+	}
+	mock.ExpectQuery(fmt.Sprintf(`user_id IN \((\?,){%d}\?\) AND status=\?`, chunk-1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "fingerprint", "status"}).
+			AddRow(int64(1), int64(1), "fp-a", consts.ACTIVE))
+	mock.ExpectQuery(`user_id IN \(\?\) AND status=\?`).
+		WithArgs(ids[chunk], consts.ACTIVE).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "fingerprint", "status"}).
+			AddRow(int64(2), ids[chunk], "fp-b", consts.ACTIVE))
+
+	out, err := r.ListActiveByUsers(ctx, ids)
+	assert.NoError(t, err)
+	assert.Equal(t, []*device_entity.Device{{ID: 1, UserID: 1, Fingerprint: "fp-a", Status: consts.ACTIVE}}, out[1])
+	assert.Equal(t, []*device_entity.Device{{ID: 2, UserID: ids[chunk], Fingerprint: "fp-b", Status: consts.ACTIVE}}, out[ids[chunk]])
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestListActiveByUsers_GivenNoAccounts_ThenNoQuery(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	out, err := r.ListActiveByUsers(ctx, nil)
+	assert.NoError(t, err)
+	assert.Empty(t, out)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

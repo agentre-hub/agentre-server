@@ -130,7 +130,7 @@ docker volume create agentre-keys
 
 docker run -d --name agentre-server -p 8443:8443 \
   -v agentre-keys:/keys \
-  -e AGENTRE_SERVER_DB_DSN="user:pass@tcp(192.168.1.10:3306)/agentre?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true" \
+  -e AGENTRE_SERVER_DB_DSN="user:pass@tcp(192.168.1.10:3306)/agentre?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true&timeout=5s&readTimeout=60s&writeTimeout=60s" \
   -e AGENTRE_SERVER_REDIS_ADDR="192.168.1.10:6379" \
   -e AGENTRE_SERVER_PUBLIC_URL="http://192.168.1.10:8443" \
   -e AGENTRE_SERVER_JWT_AUTO_GENERATE=1 \

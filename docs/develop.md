@@ -115,6 +115,15 @@ the **end**, and existing entries are never edited — someone's database has al
 run them. To correct an earlier migration, add a patch migration. Prefer native SQL
 for DDL.
 
+A patch migration's DDL always states `ALGORITHM` and `LOCK` explicitly, so an operation
+MySQL cannot do online fails loudly instead of silently falling back to `ALGORITHM=COPY` —
+a full table copy that blocks writes for the migration's duration. Adding a generated
+column to a live table is the case that bites: `STORED` only supports `ALGORITHM=COPY`
+(`ALGORITHM=INPLACE`/`INSTANT` both error asking to try `COPY`), and `COPY` itself refuses
+`LOCK=NONE` (it needs at least `LOCK=SHARED`). Prefer `VIRTUAL` instead — adding it is
+`ALGORITHM=INSTANT`, and a secondary index on it is a separate `ALGORITHM=INPLACE,
+LOCK=NONE` statement — both succeed without copying the table.
+
 `internal/model/entity/schema_test.go` compares the entity structs against the baseline
 DDL (every writable field must have a column, every table must be claimed by an entity),
 but nothing proves that MySQL accepts the DDL or that upgrades preserve representative

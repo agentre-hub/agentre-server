@@ -105,11 +105,31 @@ func (r *durableFrameRepo) ListFramesBefore(
 	return out, nil
 }
 
-// DeleteFrames 是一条 DELETE，WHERE 带齐身份键两列：少了 user_id 是跨账号删。
+// cleanupBatchSize 是分批删除每一批的行数上限，与 sync_repo、device_token_repo
+// 既有的分批清理常量保持一致（决策 7）。
+//
+// 一条不分批的 DELETE 会把 next-key 锁铺满它扫过的整个范围：真库实测 30000 行
+// 一次删掉锁了 36404 行、写出 34MB 的 binlog 事务；同样的数据换成 LIMIT 1000
+// 一批，一批只经唯一键锁 2005 行。这张表的一条对话可能攒下几万帧，删除一条
+// 对话或对端帧编号倒退时的整段清空都会撞上这条路径。
+const cleanupBatchSize = 1000
+
+// DeleteFrames 按批删除，WHERE 带齐身份键两列：少了 user_id 是跨账号删。
+// 循环直到某一批没删满——没删满就说明够到底了；删满一批说明后面大概率还有，
+// 必须继续。某一批中途出错时把已删的部分留在库里、把错误原样传回去：删除与
+// 复位都是幂等的，调用方可以整体重试，不需要靠这里悄悄兜底。
 func (r *durableFrameRepo) DeleteFrames(
 	ctx context.Context, userID int64, conversationID string,
 ) error {
-	return db.Ctx(ctx).Where(
-		"user_id=? AND conversation_id=?", userID, conversationID,
-	).Delete(&agent_session_entity.DurableFrame{}).Error
+	for {
+		res := db.Ctx(ctx).Where(
+			"user_id=? AND conversation_id=?", userID, conversationID,
+		).Limit(cleanupBatchSize).Delete(&agent_session_entity.DurableFrame{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected < cleanupBatchSize {
+			return nil
+		}
+	}
 }

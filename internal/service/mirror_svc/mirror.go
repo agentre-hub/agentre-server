@@ -90,6 +90,56 @@ type frameStore interface {
 	DeleteFrames(ctx context.Context, userID int64, conversationID string) error
 }
 
+// deadlineSummaryStore / deadlineFrameStore 给每一次库调用各扣一个截止时间。
+//
+// 常驻镜像用它们（follower.start，db-perf-fixes 决策 14）：循环的 ctx 永不到期，没有这
+// 一层时一次网络黑洞式的慢库调用会一直悬着，占住循环那条 goroutine 与连接池里的一个
+// 连接。截止扣在库调用上而不是循环的一整轮上：一轮 Sync / Apply / Revive 里还夹着对端
+// 的 attach 与翻页 pull，每一次 RPC 已经各有自己的 CallTimeout，而翻页数不封顶——拿一个
+// 截止框住整轮，一次正常的长补齐会在中途被截断。
+type deadlineSummaryStore struct {
+	inner   summaryStore
+	timeout time.Duration
+}
+
+func (s deadlineSummaryStore) UpsertSummary(ctx context.Context, row *agent_session_entity.SessionSummary) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.UpsertSummary(ctx, row)
+}
+
+func (s deadlineSummaryStore) ListSummariesByUser(
+	ctx context.Context, userID int64,
+) ([]*agent_session_entity.SessionSummary, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.ListSummariesByUser(ctx, userID)
+}
+
+type deadlineFrameStore struct {
+	inner   frameStore
+	timeout time.Duration
+}
+
+func (s deadlineFrameStore) WriteFrames(ctx context.Context, frames []*agent_session_entity.DurableFrame) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.WriteFrames(ctx, frames)
+}
+
+func (s deadlineFrameStore) DeleteFrames(ctx context.Context, userID int64, conversationID string) error {
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	return s.inner.DeleteFrames(ctx, userID, conversationID)
+}
+
+// boundStoreCalls 让这个镜像此后的每一次库调用都带 timeout 截止。只能在镜像交给任何
+// 别的 goroutine 之前调用。
+func (m *Mirror) boundStoreCalls(timeout time.Duration) {
+	m.summaries = deadlineSummaryStore{inner: m.summaries, timeout: timeout}
+	m.frames = deadlineFrameStore{inner: m.frames, timeout: timeout}
+}
+
 // SavedSession identifies one conversation the account has saved: its
 // conversation_id, the one value that names it in all three databases and on
 // the wire (2026-08-31-conversation-centric-addressing.md 决策 1).
@@ -279,6 +329,10 @@ func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
 	if err != nil {
 		return fmt.Errorf("list mirrored summaries: %w", err)
 	}
+	// 按 conversation id 建一次 map:这一账号可能有成百上千条已保存对话,下面
+	// 每条 sessions 都要查一次自己的游标,建成 map 让这条查找是常数时间,而不是
+	// 对 stored 整个再扫一遍——O(sessions × summaries) 否则随两边行数一起涨。
+	storedCursors := buildStoredCursors(stored, m.userID)
 	wanted := make(map[string]bool, len(saved))
 	for _, s := range saved {
 		wanted[s.ConversationID] = true
@@ -295,7 +349,7 @@ func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
 			// 没保存过的对话一个字都不落库(决策 2)。
 			continue
 		}
-		if err := m.catchUp(ctx, m.track(s, stored)); err != nil {
+		if err := m.catchUp(ctx, m.track(s, storedCursors)); err != nil {
 			errs = append(errs, fmt.Errorf("conversation %s: %w", s.GetConversationId(), err))
 		}
 	}
@@ -404,7 +458,7 @@ func (m *Mirror) unattached() map[string]*trackedSession {
 // Frames are written one row each, immediately — what a reader sees is never
 // delayed. The cursor that rides along in the summary row is debounced instead
 // (see touchSummary): on this path the summary's only changing field *is* the
-// cursor, its only reader is storedCursor, and falling behind costs exactly
+// cursor, its only reader is Sync's stored-cursor lookup, and falling behind costs exactly
 // what it always cost — one idempotent re-pull, nothing more.
 func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotification) error {
 	conversationID, seq, method := notificationHead(notification)
@@ -634,7 +688,7 @@ func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification
 //     「等你处理」（followWaiter）三格。窗口里被压住的那些次写的是同一行的同一个
 //     值，而这三格最终都由**窗口结束时那次尾补**带出去 —— 用户看到的因此最多晚
 //     一个窗口，且从不是一个中间态。其余元数据只由 Sync 经 setSummary 改。
-//   - latest_seq 只有一个读者：storedCursor，也就是重启后从哪儿接着拉。没有任何
+//   - latest_seq 只有一个读者：Sync 里那份按 conversation id 建的游标 map，也就是重启后从哪儿接着拉。没有任何
 //     用户可见的东西读它。它落后一点的代价 Apply 的注释自己写着 —— 「one idempotent
 //     re-pull, nothing more」（帧表是 OnConflict DoNothing）。
 //   - **帧不受影响**：writeFrames 照旧一帧一行立刻落库，页面看到的内容一点不打折。
@@ -904,7 +958,7 @@ func (m *Mirror) ownerOf(s *agentrewire.SessionSummary) string {
 }
 
 func (m *Mirror) track(
-	s *agentrewire.SessionSummary, stored []*agent_session_entity.SessionSummary,
+	s *agentrewire.SessionSummary, storedCursors map[string]int64,
 ) *trackedSession {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -921,7 +975,7 @@ func (m *Mirror) track(
 	ts.setSummary(s)
 	// 库里那份与内存里的取较大者:本进程已经消费到更远是常事,拿旧值去拉会把
 	// 已经镜像过的那一段再走一遍(结果幂等,但白跑一趟)。
-	if seq, found := storedCursor(stored, m.userID, conversationID); found {
+	if seq, found := storedCursors[conversationID]; found {
 		ts.advanceTo(seq)
 	}
 	return ts
@@ -972,13 +1026,26 @@ func (m *Mirror) liveSession(conversationID string) (*trackedSession, bool) {
 	return ts, known
 }
 
-func storedCursor(
-	stored []*agent_session_entity.SessionSummary, userID int64, conversationID string,
-) (int64, bool) {
+// buildStoredCursors 把 ListSummariesByUser 一次读回的整批摘要,按 conversation
+// id 建成一张 map,好让 Sync 里对每条会话的游标查找是常数时间——原先的线性扫描
+// 让整个 Sync 是 O(sessions × summaries),两边行数都会随账号使用量涨。
+//
+// 与原来的线性扫描保持同一条语义:同一 conversation id 出现多行时先到先得（扫描
+// 遇到第一行匹配就返回,这里遇到第一行匹配就写进 map、后面的不再覆盖）;userID
+// 不匹配的行照样被跳过,尽管 ListSummariesByUser 本身已经按账号作用域读,这一层
+// 校验只是不改变原有的防御姿态。
+func buildStoredCursors(
+	stored []*agent_session_entity.SessionSummary, userID int64,
+) map[string]int64 {
+	cursors := make(map[string]int64, len(stored))
 	for _, row := range stored {
-		if row.UserID == userID && row.ConversationID == conversationID {
-			return row.LatestSeq, true
+		if row.UserID != userID {
+			continue
 		}
+		if _, exists := cursors[row.ConversationID]; exists {
+			continue
+		}
+		cursors[row.ConversationID] = row.LatestSeq
 	}
-	return 0, false
+	return cursors
 }

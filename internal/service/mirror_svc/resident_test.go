@@ -425,6 +425,23 @@ type fakeStore struct {
 	// writes 是每一次**写入尝试**,不是落库的行:接手方要是从 0 重拉,唯一键会把它
 	// 折成无操作、库里看不出异样,只有这里数得出来。
 	writes []frameWrite
+
+	// 下面三个记的是「最近一次这个方法被调用时,ctx 有没有截止时间」——常驻循环
+	// (resident.go 的 follower.run)每轮从 select 分支调 Mirror.Apply / Sync /
+	// Revive,这条 ctx 一路直传到这里,补上 Config.CallTimeout 之后这里就该看得见
+	// 一个未来的截止时间;今天没有,也就在这里看不出来。
+	lastWriteFramesHadDeadline   bool
+	lastUpsertSummaryHadDeadline bool
+	lastListSummariesHadDeadline bool
+
+	// blockNextWrite 让下一次 WriteFrames 卡住直到 ctx 结束才返回,模拟一次网络
+	// 黑洞式的慢库调用——没有超时的话它会一直悬着占住常驻循环那条 goroutine。
+	blockNextWrite       bool
+	blockedWriteReturned bool
+
+	// deadlineFrameDeletes 数带着截止时间的 DeleteFrames 调用:请求路径上的清除不带,
+	// 常驻循环兑现删除提示时的那次清除必须带。
+	deadlineFrameDeletes int
 }
 
 func newFakeStore() *fakeStore {
@@ -438,9 +455,10 @@ func identityOfRow(userID int64, conversationID string) string {
 	return fmt.Sprintf("%d|%s", userID, conversationID)
 }
 
-func (s *fakeStore) UpsertSummary(_ context.Context, row *agent_session_entity.SessionSummary) error {
+func (s *fakeStore) UpsertSummary(ctx context.Context, row *agent_session_entity.SessionSummary) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_, s.lastUpsertSummaryHadDeadline = ctx.Deadline()
 	s.summaries[identityOfRow(row.UserID, row.ConversationID)] = *row
 	return nil
 }
@@ -453,9 +471,10 @@ func (s *fakeStore) lifecycleOf(userID int64, conversationID string) string {
 	return s.summaries[identityOfRow(userID, conversationID)].LifecycleState
 }
 
-func (s *fakeStore) ListSummariesByUser(_ context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {
+func (s *fakeStore) ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_, s.lastListSummariesHadDeadline = ctx.Deadline()
 	out := make([]*agent_session_entity.SessionSummary, 0, len(s.summaries))
 	for _, row := range s.summaries {
 		if row.UserID != userID {
@@ -529,7 +548,23 @@ func (s *fakeStore) MarkSummaryRead(
 	return nil
 }
 
-func (s *fakeStore) WriteFrames(_ context.Context, frames []*agent_session_entity.DurableFrame) error {
+func (s *fakeStore) WriteFrames(ctx context.Context, frames []*agent_session_entity.DurableFrame) error {
+	s.mu.Lock()
+	_, s.lastWriteFramesHadDeadline = ctx.Deadline()
+	shouldBlock := s.blockNextWrite
+	if shouldBlock {
+		s.blockNextWrite = false // 一次性:只卡住紧接着的那一次调用
+	}
+	s.mu.Unlock()
+	if shouldBlock {
+		// 模拟一次网络黑洞式的慢库调用:没有超时的话,这里会一直悬着——正是
+		// resident.go 常驻循环那条 goroutine 今天会被卡住的方式。
+		<-ctx.Done()
+		s.mu.Lock()
+		s.blockedWriteReturned = true
+		s.mu.Unlock()
+		return ctx.Err()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range frames {
@@ -599,11 +634,49 @@ func (s *fakeStore) writtenSeqs() []int64 {
 	return out
 }
 
-// DeleteFrames / DeleteSummary 照真表的样子清掉这条对话在这个身份键下的行:
-// 别的对话、别的账号一行都不碰。
-func (s *fakeStore) DeleteFrames(_ context.Context, userID int64, conversationID string) error {
+// writeFramesHadDeadline / upsertSummaryHadDeadline / listSummariesHadDeadline
+// 报最近一次那个方法被调用时,ctx 是不是带着截止时间。
+func (s *fakeStore) writeFramesHadDeadline() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.lastWriteFramesHadDeadline
+}
+
+func (s *fakeStore) upsertSummaryHadDeadline() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastUpsertSummaryHadDeadline
+}
+
+func (s *fakeStore) listSummariesHadDeadline() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastListSummariesHadDeadline
+}
+
+// blockNextWriteUntilContextDone 让下一次 WriteFrames 卡住直到它的 ctx 结束才返回。
+func (s *fakeStore) blockNextWriteUntilContextDone() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.blockNextWrite = true
+	s.blockedWriteReturned = false
+}
+
+// blockedWriteHasReturned 报那次被卡住的调用有没有已经放行。
+func (s *fakeStore) blockedWriteHasReturned() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.blockedWriteReturned
+}
+
+// DeleteFrames / DeleteSummary 照真表的样子清掉这条对话在这个身份键下的行:
+// 别的对话、别的账号一行都不碰。
+func (s *fakeStore) DeleteFrames(ctx context.Context, userID int64, conversationID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := ctx.Deadline(); ok {
+		s.deadlineFrameDeletes++
+	}
 	for key, row := range s.rows {
 		if row.UserID == userID && row.ConversationID == conversationID {
 			delete(s.rows, key)
@@ -696,6 +769,9 @@ type residentRig struct {
 	// reviveEvery 默认长到在一次用例里不会响：Revive 会为接不上的会话补发
 	// list / attach / pull，而好几条用例数的正是那些请求。要它的用例自己调快。
 	reviveEvery time.Duration
+	// callTimeout 默认零值,走 Config.withDefaults 的 15s 缺省;要卡住的库调用在
+	// 用例的等待窗口内放行,用例自己调短它。
+	callTimeout time.Duration
 }
 
 type replica struct {
@@ -724,6 +800,7 @@ func (r *residentRig) replica(t *testing.T, instanceID string) *replica {
 		LeaseTTL:    time.Minute,
 		RenewEvery:  5 * time.Millisecond,
 		ReviveEvery: r.reviveEvery,
+		CallTimeout: r.callTimeout,
 	}, net, signer, r.rdb)
 	t.Cleanup(func() { sup.Stop(context.Background()) })
 	return &replica{sup: sup, net: net, signer: signer}
@@ -887,21 +964,21 @@ func TestFollow_HandshakeReportsAShortCommit_RecordsItAsSharedBuildState(t *test
 	a.net.setDaemonCommit("a1b2c3d")
 	ctx := context.Background()
 
-	_, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
-	require.False(t, known, "还没握过手就「知道」的话,后面那条断言证明不了任何事")
+	before := a.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	require.False(t, before.DaemonBuildKnown, "还没握过手就「知道」的话,后面那条断言证明不了任何事")
 
 	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	commit, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
-	assert.True(t, known)
-	assert.Equal(t, "a1b2c3d", commit)
+	onA := a.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	assert.True(t, onA.DaemonBuildKnown)
+	assert.Equal(t, "a1b2c3d", onA.DaemonCommit)
 
 	b := rig.replica(t, replicaB)
-	commitOnB, knownOnB := b.sup.DaemonBuild(ctx, testUserID, testMachine)
-	assert.True(t, knownOnB, "这台机器跑的是不是发布构建,是账号 + 机器这一级的事实")
-	assert.Equal(t, "a1b2c3d", commitOnB)
+	onB := b.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	assert.True(t, onB.DaemonBuildKnown, "这台机器跑的是不是发布构建,是账号 + 机器这一级的事实")
+	assert.Equal(t, "a1b2c3d", onB.DaemonCommit)
 }
 
 // Given 这台机器是未注入构建变量的本地构建,握手自报的短 commit 是空串;
@@ -919,9 +996,9 @@ func TestFollow_HandshakeReportsAnEmptyCommit_StillRecordsThatItIsKnown(t *testi
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	commit, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
-	assert.True(t, known, "握过手就是知道了:空 commit 是 daemon 给的答案,不是没有答案")
-	assert.Empty(t, commit)
+	state := a.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	assert.True(t, state.DaemonBuildKnown, "握过手就是知道了:空 commit 是 daemon 给的答案,不是没有答案")
+	assert.Empty(t, state.DaemonCommit)
 }
 
 // ── 握手被协议拒绝时记成按 (账号, 机器) 的共享状态,并拉长退避 ─────────────────
@@ -939,10 +1016,10 @@ func TestFollow_HandshakeRejectedForProtocolVersion_RecordsSharedMismatchState(t
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrProtocolVersionMismatch)
 	assert.False(t, claimed)
-	assert.True(t, a.sup.ProtocolMismatch(context.Background(), testUserID, testMachine))
+	assert.True(t, a.sup.HandshakeStates(context.Background(), testUserID, []string{testMachine})[0].ProtocolMismatch)
 
 	b := rig.replica(t, replicaB)
-	assert.True(t, b.sup.ProtocolMismatch(context.Background(), testUserID, testMachine),
+	assert.True(t, b.sup.HandshakeStates(context.Background(), testUserID, []string{testMachine})[0].ProtocolMismatch,
 		"协议不匹配是账号 + 机器这一级的事实,不该只留在发现它的那个副本进程里")
 }
 
@@ -1286,4 +1363,174 @@ func TestFollower_InterruptedSessionCameBack_IsPickedUpByTheResidentLoop(t *test
 		return rig.store.lifecycleOf(testUserID, conv42) == relaywire.SessionLifecycleRunning
 	}, 2*time.Second, 5*time.Millisecond, "复活的会话没有被常驻循环接回来")
 	assert.NotEmpty(t, rig.peer.callsOf(agentrewire.RpcMethod_RPC_METHOD_SESSION_ATTACH))
+}
+
+// ── 常驻循环里对库的每一次调用都带 Config.CallTimeout 截止（要求 14）────────────
+//
+// follower.run 的 select 分支直接把循环的 ctx（go f.run(context.WithoutCancel(ctx))
+// 派生自 Follow 调用方,这里就是 context.Background()）转手交给 Mirror.Apply / Sync /
+// Revive,一路不带任何截止时间。网络黑洞式的慢库调用因此会一直悬着占住这条循环
+// 的 goroutine,直到 OS 的 TCP 重传超时(Linux 上约 15 分钟)——maxOpenConns 只有
+// 40,吃住一条就少一条。下面几个用例锚住 resident.go 补上的行为:每次从循环发起的
+// 库调用都必须带着 Config.CallTimeout 的截止时间,而不是无限期悬着;截止只扣在库调用
+// 上,对端的 attach / pull 仍按各自的 CallTimeout 走,不与整轮共用一个。
+
+// Given 已经跟着一台机器;When 常驻循环处理一条实时通知(触发 Mirror.Apply);
+// Then 落库那次调用带着的 ctx 有截止时间。
+func TestFollower_LiveNotificationFromTheLoop_UsesADeadlineBoundContext(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	a := rig.replica(t, replicaA)
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	a.net.emit(t, notification(conv42, 1, "接着说"))
+
+	require.Eventually(t, func() bool {
+		return len(rig.store.rowSeqs(conv42)) == 1
+	}, time.Second, 5*time.Millisecond, "接入期间的实时通知没落库")
+	assert.True(t, rig.store.writeFramesHadDeadline(),
+		"常驻循环里的 Apply 落库调用必须带 Config.CallTimeout 截止，否则一次网络黑洞会占住连接池里的一个连接直到 TCP 重传超时")
+}
+
+// Given 已经跟着一台机器,账号里又保存了它上面的第二条对话;When 常驻循环处理由此
+// 触发的重同步(触发 Mirror.Sync);Then 那次调用带着的 ctx 有截止时间。
+func TestFollower_ResyncFromTheLoop_UsesADeadlineBoundContext(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{
+		machineSession(conv42, "写个爬虫"), machineSession(conv77, "刚保存的"),
+	}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv77] = []*agentrewire.DurableNotification{durableRow(conv77, 1)}
+	a := rig.replica(t, replicaA)
+	ctx := context.Background()
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Empty(t, rig.store.rowSeqs(conv77))
+
+	claimed, err = a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42, conv77))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.Eventually(t, func() bool {
+		return len(rig.store.rowSeqs(conv77)) == 1
+	}, time.Second, 5*time.Millisecond, "新保存的对话要在同一条连接上跟起来")
+	assert.True(t, rig.store.listSummariesHadDeadline(),
+		"常驻循环触发的重同步必须带 Config.CallTimeout 截止，否则一次网络黑洞会占住连接池里的一个连接直到 TCP 重传超时")
+}
+
+// Given 唯一那条已保存对话是 interrupted 的,复活由常驻循环的 Revive 定期发现;
+// When 它被接回来;Then 补写摘要那次调用带着的 ctx 有截止时间。
+func TestFollower_ReviveFromTheLoop_UsesADeadlineBoundContext(t *testing.T) {
+	rig := newResidentRig(t)
+	stuck := machineSession(conv42, "上次没跑完的")
+	stuck.LifecycleState = relaywire.SessionLifecycleInterrupted
+	rig.peer.sessions = []*agentrewire.SessionSummary{stuck}
+	rig.peer.setAttachErr(errors.New("no active turn"))
+	rig.reviveEvery = 5 * time.Millisecond
+
+	a := rig.replica(t, replicaA)
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Equal(t, relaywire.SessionLifecycleInterrupted, rig.store.lifecycleOf(testUserID, conv42))
+
+	rig.peer.setSessions([]*agentrewire.SessionSummary{machineSession(conv42, "上次没跑完的")})
+	rig.peer.setAttachErr(nil)
+
+	require.Eventually(t, func() bool {
+		return rig.store.lifecycleOf(testUserID, conv42) == relaywire.SessionLifecycleRunning
+	}, 2*time.Second, 5*time.Millisecond, "复活的会话没有被常驻循环接回来")
+	assert.True(t, rig.store.upsertSummaryHadDeadline(),
+		"常驻循环里的 Revive 补写调用必须带 Config.CallTimeout 截止，否则一次网络黑洞会占住连接池里的一个连接直到 TCP 重传超时")
+}
+
+// Given 常驻循环里下一次落库调用会像网络黑洞一样卡住不返回;When 它被 CallTimeout
+// 卡到期;Then 这次调用必须自己放行（收到 ctx 取消）,而不是无限期悬着——常驻循环
+// 因此能继续消化后续事件,而不是被这一条对话的一次慢调用拖死。
+//
+// conv42 的持久帧从一开始就静态摆着(fakeRelay 没有并发安全的「运行期再改」入口,
+// 常驻循环起来之后直接改 peer 状态会撞上竞态检测器)：它先不进第一次 Follow 的保存
+// 名单,直到 blockNextWrite 已经架好,才通过保存名单变更把它带进来触发一次会卡住的
+// resync 补齐；resync 出错时不会像 Apply 出错那样自动排下一次重同步(见 run 里两个
+// 分支的差别),所以这次超时之后不会再有第二次目标不明的重试来跟测试里紧接着发的
+// 那条实时通知抢跑,附带验证了 dropCursorAboveHighWater 不会被一次网络黑洞误伤。
+func TestFollower_LoopCallBlocksPastCallTimeout_LoopStillProceedsAfterward(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.callTimeout = 50 * time.Millisecond
+	rig.peer.sessions = []*agentrewire.SessionSummary{
+		machineSession(conv77, "占位,只为了先起循环"), machineSession(conv42, "写个爬虫"),
+	}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
+	a := rig.replica(t, replicaA)
+	claimed, err := a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv77))
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.Empty(t, rig.store.rowSeqs(conv42), "conv42 还没进保存名单,不该被镜像")
+
+	rig.store.blockNextWriteUntilContextDone()
+	claimed, err = a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv77, conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.Eventually(t, func() bool {
+		return rig.store.blockedWriteHasReturned()
+	}, 2*time.Second, 5*time.Millisecond,
+		"卡住的库调用应该在 CallTimeout 到期时收到 ctx 取消，而不是无限期悬着")
+	require.Empty(t, rig.store.rowSeqs(conv42), "超时的那次补齐没有把这一帧写进去,游标因此没有前进")
+
+	// 游标停在 0：接下来这条实时通知落在 cursor+1 这个直写分支上,而且它的 seq 与
+	// 对端的静态高水位（durable 只有这一行）完全对齐,不会触发 dropCursorAboveHighWater。
+	a.net.emit(t, notification(conv42, 1, "卡住之后还能继续"))
+	require.Eventually(t, func() bool {
+		return len(rig.store.rowSeqs(conv42)) == 1
+	}, 2*time.Second, 5*time.Millisecond,
+		"常驻循环在一次超时的库调用之后必须继续处理后续事件")
+	assert.Equal(t, []int64{1}, rig.store.rowSeqs(conv42),
+		"卡住的那一帧因超时没有落库；超时之后的下一次投递必须正常落库")
+}
+
+// Given 常驻循环触发一次重同步,要补的那条对话有好几页持久帧,对端每一页都要一会儿才
+// 答 —— 每一次 RPC 都在 CallTimeout 之内,整次补齐加起来却超过它;When 循环跑这次
+// 重同步;Then 每一页都落库。
+//
+// 截止扣在库调用上(决策 14「常驻镜像循环每次迭代的库调用带 Config.CallTimeout 截止」),
+// 不扣在整轮迭代上:一轮补齐夹着对端的 attach 与翻页 pull,每一次 RPC 本来就各有
+// CallTimeout,而页数不封顶。拿一个 CallTimeout 框住整轮,一条长对话的补齐会在中途被
+// 截断,而重同步失败不会自动再排一次,剩下的帧就一直补不回来。
+func TestFollower_ResyncCatchUpLongerThanOneCallTimeout_StillStoresEveryPage(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.callTimeout = 400 * time.Millisecond
+	rig.peer.sessions = []*agentrewire.SessionSummary{
+		machineSession(conv77, "占位,只为了先起循环"), machineSession(conv42, "很长的对话"),
+	}
+	const pages = 8
+	for seq := int64(1); seq <= pages; seq++ {
+		rig.peer.durable[conv42] = append(rig.peer.durable[conv42], durableRow(conv42, seq))
+	}
+	rig.peer.pageSize = 1
+	rig.peer.pullDelay = 100 * time.Millisecond
+	a := rig.replica(t, replicaA)
+	ctx := context.Background()
+	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv77))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	claimed, err = a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv77, conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.Eventually(t, func() bool {
+		return len(rig.store.framesOf(conv42)) == pages
+	}, 5*time.Second, 10*time.Millisecond,
+		"每一页都在 CallTimeout 之内答了,整次补齐却被一个 CallTimeout 截断:剩下的帧补不回来")
+}
+
+// frameDeletesWithDeadline 报带着截止时间的 DeleteFrames 调用有几次。
+func (s *fakeStore) frameDeletesWithDeadline() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deadlineFrameDeletes
 }

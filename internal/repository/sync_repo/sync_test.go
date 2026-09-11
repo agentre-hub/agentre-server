@@ -1,6 +1,7 @@
 package sync_repo
 
 import (
+	"fmt"
 	"regexp"
 	"testing"
 
@@ -12,43 +13,28 @@ import (
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
-// 推进序列必须是一条语句：多副本并发上行时，先读后写会双双读到同一个值，
-// 两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
+// 账号已经分配过版本（稳态的每一次取号）：推进走一条只按 user_id 定位的普通 UPDATE，
+// 不发 INSERT … ON DUPLICATE KEY UPDATE。
 //
-// 取回分配到的值走的是同一事务里的一条 SELECT，而**不是** LAST_INSERT_ID()。
-// sync_account_seqs 有了 AUTO_INCREMENT 的 id 之后那条路就断了：一次真的插入了行的
-// INSERT 会把自增值写进同一个连接级变量，把 LAST_INSERT_ID(expr) 存进去的版本号顶掉，
-// 于是每个账号**第一次**分配拿回的是 id 而不是版本号（在 MySQL 9.7 上实测：期望 5、
-// 实得 1）。落库的 version_seq 一直是对的，错的只有交回调用方的那个数——所以它不会
-// 在库里留下痕迹，只会让那一批对象带着一个偏小的版本号发出去。
-func TestNextVersion_GivenConcurrentReplicas_ThenSingleAtomicStatement(t *testing.T) {
+// 两者在「推进是一条语句、由数据库原子完成」上等价，差别在锁的范围。MySQL 9.7 实测
+// （.dev-kit/artifacts/db-perf-fixes/nextversion-lock/）：upsert 命中已有行时还会在
+// 主键的 supremum 伪记录上持一把 X 锁到提交，别的账号的取号于是排在它后面等到超时——
+// 一个账号的长 Push 事务串行化了全站。普通 UPDATE 只锁这一行，同账号仍然串行，
+// 他账号不受影响。
+//
+// 取回分配到的值走的是同一事务里的一条 SELECT，而**不是** LAST_INSERT_ID()：
+// sync_account_seqs 有 AUTO_INCREMENT 的 id，一次真的插入了行的 INSERT 会把自增值写进
+// 同一个连接级变量，把 LAST_INSERT_ID(expr) 存进去的版本号顶掉（MySQL 9.7 实测：期望 5、
+// 实得 1）。
+func TestNextVersion_GivenExistingSeqRow_ThenPlainUpdateWithoutUpsert(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs`)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
-		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(42)))
-	mock.ExpectCommit()
-
-	v, err := r.NextVersion(ctx, 7, 1)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(42), v)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// 取号不得再经过 LAST_INSERT_ID：那是个连接级变量，任何一次生成自增值的写都会顶掉它。
-// 这里钉的是「读回走的是 version_seq 列本身」，而不只是「拿到了一个数」——两者在断言
-// 措辞上分不出来，但只有前者在新账号第一次分配时也是对的。
-func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
-	ctx, _, mock := hubtest.Database(t)
-	r := NewSyncState()
-
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).
-		WithArgs(int64(7), int64(3), sqlmock.AnyArg(), int64(3), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(regexp.QuoteMeta(
+		`UPDATE sync_account_seqs SET version_seq = version_seq + ?, updatetime = ? WHERE user_id = ?`)).
+		WithArgs(int64(3), sqlmock.AnyArg(), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(45)))
@@ -57,6 +43,48 @@ func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
 	v, err := r.NextVersion(ctx, 7, 3)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(45), v)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 账号第一次取号时那一行还不存在，UPDATE 命中 0 行：这时才落回
+// INSERT … ON DUPLICATE KEY UPDATE。不能是普通 INSERT——同一账号的两次首次取号并发时，
+// 两边的 UPDATE 都命中 0 行，后到的那条 INSERT 必须由 ON DUPLICATE 分支接住、在对方
+// 提交之后推进同一行，而不是撞唯一键失败。
+func TestNextVersion_GivenFirstAllocation_ThenFallsBackToUpsertAndReadsTheColumnBack(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE sync_account_seqs SET`)).
+		WithArgs(int64(3), sqlmock.AnyArg(), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime)`)+
+		`.*`+regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE version_seq = version_seq + ?, updatetime = ?`)).
+		WithArgs(int64(7), int64(3), sqlmock.AnyArg(), int64(3), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(3)))
+	mock.ExpectCommit()
+
+	v, err := r.NextVersion(ctx, 7, 3)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), v, "首次分配交回的是 version_seq 本身，不是自增 id")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 推进本身失败要如实上抛，不能当成「命中 0 行」掉进 INSERT 分支——那会把一次数据库
+// 错误变成一次多余的写入尝试。
+func TestNextVersion_GivenUpdateFails_ThenRollsBackWithoutInsert(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE sync_account_seqs SET`)).WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	_, err := r.NextVersion(ctx, 7, 1)
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -264,24 +292,6 @@ func TestFindLocationByNaturalKey_GivenTombstones_ThenOnlyLiveRowMatches(t *test
 }
 
 // 打墓碑是条件更新，返回受影响行数：已经是墓碑时为 0，由 service 决定这意味着什么。
-// CLI 覆盖与项目路径一样，按（账号、backend sync id、设备指纹）天然去重；后端
-// sync id 落在 scope_sync_id 列上——那一列装什么本就取决于 kind，这个查询与那条
-// 部分唯一键因此走同一套列。
-func TestFindCLIOverlayByNaturalKey_GivenLiveOverlay_ThenFindsOnlyThatNaturalKey(t *testing.T) {
-	ctx, _, mock := hubtest.Database(t)
-	r := NewSyncObject()
-
-	mock.ExpectQuery(regexp.QuoteMeta(`deleted_at=0`)).
-		WithArgs(int64(7), sync_entity.KindAgentBackendCLI, "backend-1", "fp-a", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "scope_sync_id", "agentred_fingerprint"}).
-			AddRow(int64(55), sync_entity.KindAgentBackendCLI, "backend-1", "fp-a"))
-
-	got, err := r.FindCLIOverlayByNaturalKey(ctx, 7, "backend-1", "fp-a")
-	assert.NoError(t, err)
-	assert.Equal(t, int64(55), got.ID)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestTombstone_GivenAlreadyTombstoned_ThenZeroRowsAffected(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
@@ -552,5 +562,207 @@ func TestFindAvatar_GivenNoRow_ThenNilNil(t *testing.T) {
 	got, err := r.Find(ctx, 7, "h1")
 	assert.NoError(t, err)
 	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Push 在持锁事务里读已有行：整批一条 `sync_id IN`，不是每条 item 一条 SELECT。
+// 结果按同步标识归档——sync_id 是 utf8mb4_0900_bin，库里的相等就是 Go 里的字符串相等。
+func TestFindMany_GivenSyncIDs_ThenOneInQueryKeyedBySyncID(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects` WHERE user_id=? AND sync_id IN (?,?)")).
+		WithArgs(int64(7), "p1", "p2").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "sync_id", "version"}).
+			AddRow(int64(11), int64(7), "p2", int64(4)))
+
+	got, err := r.FindMany(ctx, 7, []string{"p1", "p2"})
+	assert.NoError(t, err)
+	assert.Len(t, got, 1)
+	assert.Equal(t, int64(11), got["p2"].ID)
+	assert.Nil(t, got["p1"], "库里没有的同步标识不在结果里")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 占位符数量要有上限：一条 IN 超过一块就分块查，结果合并。
+func TestFindMany_GivenMoreThanOneBatch_ThenQueriesInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	ids := make([]string, syncObjectBatchSize+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("s%d", i)
+	}
+	mock.ExpectQuery(fmt.Sprintf(`sync_id IN \((\?,){%d}\?\)$`, syncObjectBatchSize-1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "sync_id"}).AddRow(int64(1), "s0"))
+	mock.ExpectQuery(`sync_id IN \(\?\)$`).
+		WithArgs(int64(7), ids[syncObjectBatchSize]).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "sync_id"}).AddRow(int64(2), ids[syncObjectBatchSize]))
+
+	got, err := r.FindMany(ctx, 7, ids)
+	assert.NoError(t, err)
+	assert.Len(t, got, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindMany_GivenNoSyncIDs_ThenNoQuery(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	got, err := r.FindMany(ctx, 7, nil)
+	assert.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindMany_GivenQueryFails_ThenErrorPropagates(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects`")).WillReturnError(assert.AnError)
+
+	got, err := r.FindMany(ctx, 7, []string{"p1"})
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 自然键批量查重只看存活行。谓词直接写在 uk_sync_objects_natural 的列上：
+// live_natural_key 是生成列，存活且属于带自然键的 kind 时等于 kind，否则为 NULL——
+// 与 FindLocationByNaturalKey 的「kind=? AND deleted_at=0」同义，而行构造器 IN 整个
+// 落在那条唯一键上。
+func TestFindLiveByNaturalKeys_GivenKeys_ThenOneRowConstructorQueryKeyedByNaturalKey(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects` WHERE user_id=? AND "+
+		"(scope_sync_id, agentred_fingerprint, live_natural_key) IN ((?,?,?),(?,?,?))")).
+		WithArgs(int64(7), "proj-1", "fp-a", sync_entity.KindProjectLocation,
+			"backend-1", "fp-a", sync_entity.KindAgentBackendCLI).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "sync_id", "scope_sync_id", "agentred_fingerprint"}).
+			AddRow(int64(55), sync_entity.KindAgentBackendCLI, "cli-1", "backend-1", "fp-a"))
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, []NaturalKey{
+		{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a"},
+		{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-a"},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, got, 1)
+	assert.Equal(t, int64(55), got[NaturalKey{
+		Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-a",
+	}].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindLiveByNaturalKeys_GivenMoreThanOneBatch_ThenQueriesInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	keys := make([]NaturalKey, syncObjectBatchSize+1)
+	for i := range keys {
+		keys[i] = NaturalKey{Kind: sync_entity.KindProjectLocation, ScopeSyncID: fmt.Sprintf("p%d", i), AgentredFingerprint: "fp-a"}
+	}
+	mock.ExpectQuery(fmt.Sprintf(`IN \((\(\?,\?,\?\),){%d}\(\?,\?,\?\)\)$`, syncObjectBatchSize-1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`IN \(\(\?,\?,\?\)\)$`).
+		WithArgs(int64(7), keys[syncObjectBatchSize].ScopeSyncID, "fp-a", sync_entity.KindProjectLocation).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, keys)
+	assert.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindLiveByNaturalKeys_GivenNoKeys_ThenNoQuery(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, nil)
+	assert.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindLiveByNaturalKeys_GivenQueryFails_ThenErrorPropagates(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects`")).WillReturnError(assert.AnError)
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, []NaturalKey{{Kind: sync_entity.KindProjectLocation}})
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 新对象一块一条多行 INSERT，而且是**普通** INSERT：sync_objects 有两条唯一键，
+// ON DUPLICATE KEY UPDATE 会把撞上的那条悄悄改成别人的行（见 Save 的注释）。
+// 正则锚到语句末尾——VALUES 之后多出任何子句都不匹配。
+func TestCreateBatch_GivenObjects_ThenOnePlainMultiRowInsert(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`^INSERT INTO ` + "`sync_objects`" + ` \([^)]*\) VALUES \([^)]*\),\([^)]*\)$`).
+		WillReturnResult(sqlmock.NewResult(41, 2))
+	mock.ExpectCommit()
+
+	err := r.CreateBatch(ctx, []*sync_entity.SyncObject{
+		{UserID: 7, Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{}`, Version: 8},
+		{UserID: 7, Kind: sync_entity.KindProject, SyncID: "p2", Payload: `{}`, Version: 9},
+	})
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateBatch_GivenMoreThanOneBatch_ThenInsertsInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	objs := make([]*sync_entity.SyncObject, syncObjectBatchSize+1)
+	for i := range objs {
+		objs[i] = &sync_entity.SyncObject{UserID: 7, Kind: sync_entity.KindProject, SyncID: fmt.Sprintf("s%d", i), Payload: `{}`, Version: int64(i + 1)}
+	}
+	mock.ExpectBegin()
+	mock.ExpectExec(fmt.Sprintf(`VALUES (\([^)]*\),){%d}\([^)]*\)$`, syncObjectBatchSize-1)).
+		WillReturnResult(sqlmock.NewResult(1, syncObjectBatchSize))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec(`VALUES \([^)]*\)$`).
+		WillReturnResult(sqlmock.NewResult(syncObjectBatchSize+1, 1))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.CreateBatch(ctx, objs))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateBatch_GivenNoObjects_ThenNoStatement(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	assert.NoError(t, r.CreateBatch(ctx, nil))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 撞唯一键原样上抛，后面的块不再发——调用方（Push）据此整批回滚。
+func TestCreateBatch_GivenUniqueKeyConflict_ThenErrorIsLoudAndLaterChunksAreNotSent(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	identityConflict := &mysqldriver.MySQLError{
+		Number:  1062,
+		Message: "Duplicate entry '7-s0' for key 'sync_objects.uk_sync_objects_identity'",
+	}
+	objs := make([]*sync_entity.SyncObject, syncObjectBatchSize+1)
+	for i := range objs {
+		objs[i] = &sync_entity.SyncObject{UserID: 7, Kind: sync_entity.KindProject, SyncID: fmt.Sprintf("s%d", i), Payload: `{}`, Version: int64(i + 1)}
+	}
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `sync_objects`")).WillReturnError(identityConflict)
+	mock.ExpectRollback()
+
+	err := r.CreateBatch(ctx, objs)
+	assert.ErrorIs(t, err, identityConflict)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

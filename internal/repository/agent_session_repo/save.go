@@ -31,7 +31,20 @@ type SaveRepo interface {
 	) (*agent_session_entity.SessionSave, error)
 	// ListByUser 返回账号里保存的全部对话。只按账号过滤、不按在线态过滤：机器离线时
 	// 该条仍在名单里（R13）。
+	//
+	// 不承诺顺序：调用方要么按机器分组（savedByMachine），要么当集合比较
+	// （sameSavedSet），没有谁读它排出来的序（决策 8）。只要账号里保存的对话数不小，
+	// 一次全表扫描 + ORDER BY 就是一次 filesort；真要读某台机器上的名单用
+	// ListConversationIDsByMachine，真要数条数用 CountByUser。
 	ListByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSave, error)
+	// CountByUser 数出账号保存名单的条数，不读整张名单——设置页「已保存对话数」只
+	// 要这一个数字（要求 9）。
+	CountByUser(ctx context.Context, userID int64) (int64, error)
+	// ListConversationIDsByMachine 交出账号在**一台机器**上保存的对话 id，走
+	// idx_agent_session_saves_machine(user_id, device_fingerprint)。供镜像巡检按
+	// 机器取范围用：巡检要连的是一台机器，不该为此读回整个账号的保存名单
+	// （要求 9）。
+	ListConversationIDsByMachine(ctx context.Context, userID int64, deviceFingerprint string) ([]string, error)
 	// ListMachines 交出全库范围内「有账号保存过对话」的机器，按
 	// (user_id, device_fingerprint) 去重。
 	//
@@ -83,8 +96,28 @@ func (r *saveRepo) FindByIdentity(
 
 func (r *saveRepo) ListByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSave, error) {
 	var out []*agent_session_entity.SessionSave
-	if err := db.Ctx(ctx).Where("user_id=?", userID).
-		Order("followed_at DESC, id DESC").Find(&out).Error; err != nil {
+	if err := db.Ctx(ctx).Where("user_id=?", userID).Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *saveRepo) CountByUser(ctx context.Context, userID int64) (int64, error) {
+	var n int64
+	if err := db.Ctx(ctx).Model(&agent_session_entity.SessionSave{}).
+		Where("user_id=?", userID).Count(&n).Error; err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func (r *saveRepo) ListConversationIDsByMachine(
+	ctx context.Context, userID int64, deviceFingerprint string,
+) ([]string, error) {
+	var out []string
+	if err := db.Ctx(ctx).Model(&agent_session_entity.SessionSave{}).
+		Where("user_id=? AND device_fingerprint=?", userID, deviceFingerprint).
+		Pluck("conversation_id", &out).Error; err != nil {
 		return nil, err
 	}
 	return out, nil

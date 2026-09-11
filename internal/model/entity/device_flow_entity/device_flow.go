@@ -4,23 +4,23 @@ package device_flow_entity
 type DeviceFlowCode struct {
 	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
 	// DeviceCode 是自然键，落在唯一索引上；行身份由 ID 承担。
-	DeviceCode        string `gorm:"column:device_code;type:text"`
-	UserCode          string `gorm:"column:user_code;type:text;not null"`
-	DeviceKind        string `gorm:"column:device_kind;type:text;not null"`
-	ClientFingerprint string `gorm:"column:client_fingerprint;type:text;not null"`
+	DeviceCode        string `gorm:"column:device_code"`
+	UserCode          string `gorm:"column:user_code"`
+	DeviceKind        string `gorm:"column:device_kind"`
+	ClientFingerprint string `gorm:"column:client_fingerprint"`
 	// ClientName 是客户端自报的显示名（通常是主机名），可空；换取 token 时决定
 	// devices.name，缺省则回退到指纹缩写。
-	ClientName       string `gorm:"column:client_name;type:text;not null;default:''"`
-	Platform         string `gorm:"column:platform;type:text;not null;default:''"`
-	Version          string `gorm:"column:version;type:text;not null;default:''"`
-	AuthorizedUserID int64  `gorm:"column:authorized_user_id;type:bigint;not null;default:0"`
-	ApprovedAt       int64  `gorm:"column:approved_at;type:bigint;not null;default:0"`
-	ConsumedAt       int64  `gorm:"column:consumed_at;type:bigint;not null;default:0"`
-	DeniedAt         int64  `gorm:"column:denied_at;type:bigint;not null;default:0"`
-	IntervalSeconds  int    `gorm:"column:interval_seconds;type:smallint;not null;default:5"`
-	LastPolledAt     int64  `gorm:"column:last_polled_at;type:bigint;not null;default:0"`
-	ExpiresAt        int64  `gorm:"column:expires_at;type:bigint;not null;default:0"`
-	Createtime       int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	ClientName       string `gorm:"column:client_name;default:''"`
+	Platform         string `gorm:"column:platform;default:''"`
+	Version          string `gorm:"column:version;default:''"`
+	AuthorizedUserID int64  `gorm:"column:authorized_user_id;default:0"`
+	ApprovedAt       int64  `gorm:"column:approved_at;default:0"`
+	ConsumedAt       int64  `gorm:"column:consumed_at;default:0"`
+	DeniedAt         int64  `gorm:"column:denied_at;default:0"`
+	IntervalSeconds  int    `gorm:"column:interval_seconds;default:5"`
+	LastPolledAt     int64  `gorm:"column:last_polled_at;default:0"`
+	ExpiresAt        int64  `gorm:"column:expires_at;default:0"`
+	Createtime       int64  `gorm:"column:createtime;default:0"`
 }
 
 func (*DeviceFlowCode) TableName() string { return "device_flow_codes" }
@@ -32,13 +32,4 @@ func (c *DeviceFlowCode) IsConsumed() bool { return c != nil && c.ConsumedAt > 0
 func (c *DeviceFlowCode) IsDenied() bool   { return c != nil && c.DeniedAt > 0 }
 func (c *DeviceFlowCode) IsExpired(nowMs int64) bool {
 	return c != nil && c.ExpiresAt > 0 && c.ExpiresAt < nowMs
-}
-
-// NextPollAllowed 返回 nowMs 是否满足 interval 间隔（ms）。
-func (c *DeviceFlowCode) NextPollAllowed(nowMs int64) bool {
-	if c == nil {
-		return false
-	}
-	minGap := int64(c.IntervalSeconds) * 1000
-	return nowMs-c.LastPolledAt >= minGap
 }
