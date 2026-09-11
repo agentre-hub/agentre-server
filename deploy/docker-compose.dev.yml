@@ -5,7 +5,7 @@
 #   docker-compose.dev.yml   流水线覆盖
 #   Dockerfile.dev           流水线覆盖
 #   bin/server               流水线覆盖，同时是 docker build 的上下文
-#   config.yaml keys/        机器本地
+#   config.yaml              机器本地
 #
 # 手动起停：
 #   cd /srv/agentre-dev
@@ -22,5 +22,4 @@ services:
     ports: ["8443:8443"]
     volumes:
       - ./config.yaml:/app/configs/config.yaml:ro
-      - ./keys:/keys:ro
     # 不设 healthcheck：distroless 里没有 shell，任何 test 指令都恒定 unhealthy

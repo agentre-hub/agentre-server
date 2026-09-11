@@ -48,7 +48,7 @@ type ServerConfig struct {
 	InsecureCookies bool
 	Session         SessionConfig     `yaml:"session"`
 	DeviceFlow      DFConfig          `yaml:"device_flow"`
-	JWT             JWTConfig         `yaml:"jwt"`
+	Token           TokenConfig       `yaml:"token"`
 	OAuth           OAuthConfig       `yaml:"oauth"`
 	RateLimit       RLConfig          `yaml:"rate_limit"`
 	AccountGate     AccountGateConfig `yaml:"account_gate"`
@@ -104,7 +104,11 @@ type DFConfig struct {
 	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
-type JWTConfig struct {
+// TokenConfig 是不透明设备令牌的有效期配置（server.token；不透明凭据不靠密钥验签，
+// 见规格 2026-09-11-opaque-credentials-auto-direct）。键名之前是 server.jwt，随密钥
+// 一并删除的那次改名（task 13）：残留的旧 server.jwt 段会被 mapstructure.Decode 当成
+// 未知字段静默忽略，不会顶替这里的缺省值，也不会让启动失败。
+type TokenConfig struct {
 	AccessTTL  time.Duration `yaml:"access_ttl"`
 	RefreshTTL time.Duration `yaml:"refresh_ttl"`
 }
@@ -150,16 +154,16 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	if out.DeviceFlow.PollInterval == 0 {
 		out.DeviceFlow.PollInterval = 5 * time.Second
 	}
-	if out.JWT.AccessTTL == 0 {
+	if out.Token.AccessTTL == 0 {
 		// 这个值同时决定 refresh token 的**轮换频率**：客户端在过期前
 		// defaultRefreshMargin 续期，而每次续期都轮换一次 refresh token。取 15m 时
 		// 是每 13 分钟换一次身份，任何快照 / 还原 / 并发实例都会踩到「盘上那一份已
 		// 经作废」；取 2h 后降到每 118 分钟一次。代价是被盗 access token 的存活窗口
 		// 变长，由设备撤销即时生效兜底。
-		out.JWT.AccessTTL = 2 * time.Hour
+		out.Token.AccessTTL = 2 * time.Hour
 	}
-	if out.JWT.RefreshTTL == 0 {
-		out.JWT.RefreshTTL = 30 * 24 * time.Hour
+	if out.Token.RefreshTTL == 0 {
+		out.Token.RefreshTTL = 30 * 24 * time.Hour
 	}
 	if out.RateLimit.AuthorizePerIPPerMin == 0 {
 		out.RateLimit.AuthorizePerIPPerMin = 3
@@ -258,8 +262,8 @@ func RegisterDefaults(cfg *ServerConfig) {
 	device_svc.SetDefault(device_svc.New(device_svc.Config{
 		FlowTTL:         cfg.DeviceFlow.FlowTTL,
 		PollInterval:    cfg.DeviceFlow.PollInterval,
-		AccessTTL:       cfg.JWT.AccessTTL,
-		RefreshTTL:      cfg.JWT.RefreshTTL,
+		AccessTTL:       cfg.Token.AccessTTL,
+		RefreshTTL:      cfg.Token.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}))
 

@@ -78,19 +78,19 @@ file — and print `[no test files]`, which reads exactly like "this package has
 The suite stays green while the tests do not run, and nothing distinguishes a tagged-out
 package from one that was never tested.
 
-If you have a test-only asset that genuinely must not ship (a fixture private key, say),
-put it in its own package and import it **only from `_test.go` files**. The Go linker
-then keeps it out of the binary, because nothing reachable from `main` references it.
-Assert that rather than trusting it:
+If you have a test-only asset that genuinely must not ship (a bearer resolver that accepts
+any self-issued token, say), put it in its own package and import it **only from
+`_test.go` files**. The Go linker then keeps it out of the binary, because nothing
+reachable from `main` references it. Assert that rather than trusting it:
 
 ```go
-// internal/pkg/jwt/testkeys/isolation_test.go
-out, _ := exec.Command("go", "list", "-deps", "github.com/agentre-hub/agentre-server/cmd/server").Output()
-// ...fail if the testkeys package appears in the dependency graph
+// internal/middleware/bearertest/isolation_test.go
+out, err := exec.Command("go", "list", "-deps", target).Output()
+// ...fail if the bearertest package appears in the dependency graph
 ```
 
 That is strictly stronger than a build tag: it also catches production code importing
-the package, which is the path by which a key would actually leak.
+the package, which is the path by which a self-issued token would actually leak.
 
 ### There are zero build tags
 
@@ -169,7 +169,7 @@ They live next to what they guard.
 
 | Guard | Asserts |
 | --- | --- |
-| `internal/pkg/jwt/testkeys/isolation_test.go` | Test keys are not in `cmd/server`'s dependency graph |
+| `internal/middleware/bearertest/isolation_test.go` | The test-only bearer resolver is not in `cmd/server`'s dependency graph |
 | `internal/model/entity/schema_test.go` | Every writable entity field has a column in the baseline DDL, and every baseline table is claimed by an entity |
 | `internal/api/http_golden_test.go` | The committed `/v1/sync/*` and `/v1/engine/*` response samples still match what the real server emits |
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token, native-control, secure-context, Alert-slot and i18n rules fire, at error severity, over `src/` |

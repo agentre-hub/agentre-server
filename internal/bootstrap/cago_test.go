@@ -30,10 +30,42 @@ func TestLoadServerConfig_AccessTTLDefaultIsWithinBound(t *testing.T) {
 
 	got := LoadServerConfig(context.Background(), cfg)
 
-	assert.Equal(t, 2*time.Hour, got.JWT.AccessTTL)
-	assert.LessOrEqual(t, got.JWT.AccessTTL, 2*time.Hour,
+	assert.Equal(t, 2*time.Hour, got.Token.AccessTTL)
+	assert.LessOrEqual(t, got.Token.AccessTTL, 2*time.Hour,
 		"access token 的有效期就是被盗凭据的存活窗口，上限 2h")
-	assert.Equal(t, 30*24*time.Hour, got.JWT.RefreshTTL)
+	assert.Equal(t, 30*24*time.Hour, got.Token.RefreshTTL)
+}
+
+// 不透明凭据不再靠密钥验签，令牌有效期从 server.jwt.{access_ttl,refresh_ttl} 搬到
+// server.token.{access_ttl,refresh_ttl}（task 13）。升级后的配置中心/配置文件仍可能
+// 残留旧的 server.jwt 段（含已经没有读者的 active_kid / keys）——mapstructure.Decode
+// 对不认识的键本就不报错，但这里钉住这一点：残留旧段不应让启动失败，也不应该悄悄
+// 顶替新位置的缺省值。
+func TestLoadServerConfig_LeftoverServerJWTBlockDoesNotBreakLoading(t *testing.T) {
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{
+			"jwt": map[string]interface{}{
+				"active_kid": "2026-08-a",
+				"keys": []interface{}{
+					map[string]interface{}{
+						"kid":                  "2026-08-a",
+						"private_key_pem_path": "/etc/agentre-server/keys/2026-08-a.key",
+						"public_key_pem_path":  "/etc/agentre-server/keys/2026-08-a.pub",
+					},
+				},
+				"access_ttl":  "999999h",
+				"refresh_ttl": "999999h",
+			},
+		},
+	})))
+	require.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.Equal(t, 2*time.Hour, got.Token.AccessTTL,
+		"残留的 server.jwt.access_ttl 不应顶替 server.token 的缺省值")
+	assert.Equal(t, 30*24*time.Hour, got.Token.RefreshTTL,
+		"残留的 server.jwt.refresh_ttl 不应顶替 server.token 的缺省值")
 }
 
 func TestLoadServerConfig_DoesNotReadRemovedHubRoot(t *testing.T) {

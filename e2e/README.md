@@ -35,16 +35,12 @@ for desktop Chromium and once for mobile Chromium.
 
 ## Explicit E2E configuration
 
-Copy the tracked placeholder template, generate local keys, and edit only the
-gitignored copy:
+Copy the tracked placeholder template and edit only the gitignored copy:
 
 ```bash
 cp configs/config.e2e.example.yaml configs/config.e2e.yaml
-mkdir -p runtime/keys
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out runtime/keys/e2e-jwt.key
-openssl pkey -in runtime/keys/e2e-jwt.key -pubout -out runtime/keys/e2e-jwt.pub
-# Set the absolute key paths and your dedicated E2E MySQL/Redis addresses in
-# configs/config.e2e.yaml, then run from the repository root:
+# Set your dedicated E2E MySQL/Redis addresses in configs/config.e2e.yaml, then
+# run from the repository root:
 make e2e
 ```
 
@@ -174,9 +170,8 @@ not appear in filenames, reports, screenshots, traces, or committed fixtures.
 ## CI
 
 The CI E2E job starts job-local MySQL 9.7.2 and Redis 7 containers, waits for
-them, generates a temporary RSA key pair and `configs/config.e2e.yaml`, then
-calls only `make e2e`. It uses no developer config, remote E2E environment, or
-internal-network secret.
+them, generates `configs/config.e2e.yaml`, then calls only `make e2e`. It uses
+no developer config, remote E2E environment, or internal-network secret.
 
 Failure artifacts are copied to a separate redacted directory before upload.
 Only screenshots/videos and sanitized per-run server logs are retained; traces,

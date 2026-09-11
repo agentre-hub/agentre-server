@@ -52,7 +52,7 @@ cd e2e && pnpm install
 cd .. && cp configs/config.e2e.example.yaml configs/config.e2e.yaml
 ```
 
-Point that copy at dedicated E2E MySQL/Redis and local JWT keys; see
+Point that copy at dedicated E2E MySQL/Redis; see
 [`../e2e/README.md`](../e2e/README.md).
 
 ## Layout
@@ -67,7 +67,7 @@ Every rule below fails a build.
 | Rule | Enforced by |
 | --- | --- |
 | No `fmt.Print*` / `log.Print*` | `forbidigo` (`.golangci.yml`) |
-| Test keys never link into `bin/server` | `internal/pkg/jwt/testkeys/isolation_test.go` |
+| Test-only bearer resolver never links into `bin/server` | `internal/middleware/bearertest/isolation_test.go` |
 | No literal colours in ts/tsx | `no-restricted-syntax` (`frontend/eslint.config.js`) |
 | No literal UI copy | `i18next/no-literal-string` |
 | No direct `crypto.randomUUID` | `no-restricted-syntax` (`frontend/eslint-rules/secure-context.js`) |
@@ -94,10 +94,10 @@ review, and reflowing it makes those diffs unreadable.
 There is no `//nolint` culture here. Every exemption is declared in one place,
 with its reason next to it:
 
-- **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go`,
-  `internal/bootstrap/cago.go` and `internal/bootstrap/jwtkeys.go` (which `main` runs
-  before `cago.New`) may use stdlib `log`, because cago's logger does not exist until
-  `component.Core()` has run. That is the only window.
+- **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go` and
+  `internal/bootstrap/cago.go` (which `main` runs before `cago.New`) may use stdlib `log`,
+  because cago's logger does not exist until `component.Core()` has run. That is the only
+  window.
 - **`frontend/eslint.config.js`** — `eslint-rules/` may contain literal colours
   (it lists the banned colour names). Test files may contain literals of both
   kinds, because they construct the violating samples.

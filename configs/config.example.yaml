@@ -49,12 +49,7 @@ server:
   device_flow:
     device_flow_ttl: 10m
     poll_interval: 5s
-  jwt:
-    active_kid: "2026-08-a"
-    keys:
-      - kid: "2026-08-a"
-        private_key_pem_path: "/etc/agentre-server/keys/2026-08-a.key"
-        public_key_pem_path: "/etc/agentre-server/keys/2026-08-a.pub"
+  token:
     access_ttl: 2h
     refresh_ttl: 720h
   oauth:

@@ -119,9 +119,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p runtime/e2e-ci configs
-          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out runtime/e2e-ci/jwt.key
-          openssl pkey -in runtime/e2e-ci/jwt.key -pubout -out runtime/e2e-ci/jwt.pub
+          mkdir -p configs
           cat > configs/config.e2e.yaml <<'YAML'
           env: test
           debug: false
@@ -157,14 +155,7 @@ jobs:
             device_flow:
               device_flow_ttl: 10m
               poll_interval: 1s
-            jwt:
-              active_kid: "e2e-ci"
-              keys:
-                - kid: "e2e-ci"
-                  private_key_pem_path: "runtime/e2e-ci/jwt.key"
-                  public_key_pem_path: "runtime/e2e-ci/jwt.pub"
-              issuer: "agentre-server"
-              audience: "agentre"
+            token:
               access_ttl: 15m
               refresh_ttl: 2160h
             oauth:

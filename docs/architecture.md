@@ -175,7 +175,7 @@ middleware groups are the authorization model:
 
 | Group | Middleware | Used by |
 | --- | --- | --- |
-| Public | — (some endpoints add per-IP rate limits) | healthz, GitHub OAuth authorize/callback, passkey login, `/v1/keys` |
+| Public | — (some endpoints add per-IP rate limits) | healthz, GitHub OAuth authorize/callback, passkey login |
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
 | Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*` |
 | Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |

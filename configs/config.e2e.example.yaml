@@ -48,14 +48,7 @@ server:
   device_flow:
     device_flow_ttl: 10m
     poll_interval: 1s
-  jwt:
-    active_kid: "e2e-local"
-    keys:
-      - kid: "e2e-local"
-        # Generate test keys outside tracked files (e.g. runtime/keys/) and use
-        # absolute paths here.
-        private_key_pem_path: "/absolute/path/to/local/e2e-jwt.key"
-        public_key_pem_path: "/absolute/path/to/local/e2e-jwt.pub"
+  token:
     access_ttl: 2h
     refresh_ttl: 720h
   oauth:

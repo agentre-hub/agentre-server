@@ -50,20 +50,20 @@ func TestShippedConfigsKeepTokenTTLWithinBound(t *testing.T) {
 
 			var doc struct {
 				Server struct {
-					JWT struct {
+					Token struct {
 						AccessTTL  time.Duration `yaml:"access_ttl"`
 						RefreshTTL time.Duration `yaml:"refresh_ttl"`
-					} `yaml:"jwt"`
+					} `yaml:"token"`
 				} `yaml:"server"`
 			}
 			require.NoError(t, yaml.Unmarshal(raw, &doc))
 
 			// 没写就是走代码缺省值，那一条另有守卫
-			if ttl := doc.Server.JWT.AccessTTL; ttl != 0 {
+			if ttl := doc.Server.Token.AccessTTL; ttl != 0 {
 				require.LessOrEqual(t, ttl, 2*time.Hour,
 					"访问凭据有效期上限 2h，模板里不该写一个更大的数字")
 			}
-			if ttl := doc.Server.JWT.RefreshTTL; ttl != 0 {
+			if ttl := doc.Server.Token.RefreshTTL; ttl != 0 {
 				require.LessOrEqual(t, ttl, 30*24*time.Hour,
 					"刷新凭据有效期上限 30d，模板里不该写一个更大的数字")
 			}
@@ -71,8 +71,35 @@ func TestShippedConfigsKeepTokenTTLWithinBound(t *testing.T) {
 	}
 }
 
-// 这几个键已经收成常量（会话 cookie 名、JWT 的 iss/aud、OAuth 回调路径）。留在模板里
+// 不透明凭据不靠密钥验签（规格 2026-09-11-opaque-credentials-auto-direct 决策 S6）：
+// 每一份随仓库发布的模板都不该再带 server.jwt 段——active_kid、keys 连同它们的
+// PEM 路径都已经没有读者，留着就是在教运维往一个不存在的地方塞私钥路径。
+func TestShippedConfigsHaveNoJWTKeySection(t *testing.T) {
+	t.Parallel()
+
+	root := repoRoot(t)
+	for _, rel := range shippedConfigs {
+		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
+
+			raw, err := os.ReadFile(filepath.Join(root, rel))
+			require.NoError(t, err)
+
+			var doc struct {
+				Server map[string]interface{} `yaml:"server"`
+			}
+			require.NoError(t, yaml.Unmarshal(raw, &doc))
+
+			_, hasJWT := doc.Server["jwt"]
+			require.False(t, hasJWT,
+				"%s: server.jwt 段已废弃，令牌有效期搬到 server.token，密钥不再存在", rel)
+		})
+	}
+}
+
+// 这几个键已经收成常量（会话 cookie 名、OAuth 回调路径）。留在模板里
 // 不会报错，只会被静默忽略——而一个看得见、改了却没反应的键比没有这个键更糟。
+// server.jwt 段整段废弃，由 TestShippedConfigsHaveNoJWTKeySection 单独钉住。
 func TestShippedConfigsDropRetiredKeys(t *testing.T) {
 	t.Parallel()
 
@@ -91,10 +118,6 @@ func TestShippedConfigsDropRetiredKeys(t *testing.T) {
 						CookieName *string `yaml:"cookie_name"`
 						Secret     *string `yaml:"secret"`
 					} `yaml:"session"`
-					JWT struct {
-						Issuer   *string `yaml:"issuer"`
-						Audience *string `yaml:"audience"`
-					} `yaml:"jwt"`
 					OAuth struct {
 						Github struct {
 							CallbackPath *string `yaml:"callback_path"`
@@ -107,8 +130,6 @@ func TestShippedConfigsDropRetiredKeys(t *testing.T) {
 			s := doc.Server
 			require.Nil(t, s.Session.CookieName, "cookie 名是常量 session.CookieName")
 			require.Nil(t, s.Session.Secret, "session.secret 没有任何读者，已删除")
-			require.Nil(t, s.JWT.Issuer, "iss 是常量 bootstrap.JWTIssuer")
-			require.Nil(t, s.JWT.Audience, "aud 是常量 bootstrap.JWTAudience")
 			require.Nil(t, s.OAuth.Github.CallbackPath,
 				"回调路径是常量 auth.GithubCallbackPath，与注册的路由同源")
 			require.Nil(t, s.InsecureCookies, "Secure 由 public_url 的 scheme 推出")
