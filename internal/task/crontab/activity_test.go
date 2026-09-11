@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,12 @@ type fakeMachines struct {
 	dialed []string
 	// dialErr 按指纹给出这次拨号的结果（离线、拨不通）。
 	dialErr map[string]error
+	// block 里的指纹会在拨通之后一直卡住，直到调用方的 ctx 到期——用来扮演「预算
+	// 耗尽时还没问完」的那台机器。
+	block map[string]bool
+	// barrier 非空时，每次拨号先在这里等——用来证明拨号真的是并发的：串行实现永远
+	// 凑不齐两个同时在途的调用，会一直卡到测试自己的超时。
+	barrier *concurrencyBarrier
 }
 
 func newFakeMachines() *fakeMachines {
@@ -38,14 +45,25 @@ func newFakeMachines() *fakeMachines {
 }
 
 func (f *fakeMachines) WithMachine(
-	_ context.Context, _ int64, fingerprint string, fn func(mirror_svc.ActivityRollupClient) error,
+	ctx context.Context, _ int64, fingerprint string, fn func(mirror_svc.ActivityRollupClient) error,
 ) error {
 	f.mu.Lock()
 	f.dialed = append(f.dialed, fingerprint)
 	err := f.dialErr[fingerprint]
+	blocked := f.block[fingerprint]
+	barrier := f.barrier
 	f.mu.Unlock()
+	if blocked {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if err != nil {
 		return err
+	}
+	if barrier != nil {
+		if err := barrier.wait(ctx); err != nil {
+			return err
+		}
 	}
 	return fn(stubRollupClient{fingerprint: fingerprint})
 }
@@ -54,6 +72,34 @@ func (f *fakeMachines) dialedMachines() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.dialed...)
+}
+
+// concurrencyBarrier 卡住每个调用方，直到凑齐 n 个同时在里面等，再把它们一起放行。
+type concurrencyBarrier struct {
+	mu      sync.Mutex
+	waiting int
+	n       int
+	release chan struct{}
+}
+
+func newConcurrencyBarrier(n int) *concurrencyBarrier {
+	return &concurrencyBarrier{n: n, release: make(chan struct{})}
+}
+
+func (b *concurrencyBarrier) wait(ctx context.Context) error {
+	b.mu.Lock()
+	b.waiting++
+	reached := b.waiting >= b.n
+	b.mu.Unlock()
+	if reached {
+		close(b.release)
+	}
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // stubRollupClient 是交给 fn 的那个对端。这一层不发请求，只关心**哪台机器**那条连接
@@ -177,8 +223,8 @@ func TestPullActivityRollups_NobodyOptedIn_DialsNothing(t *testing.T) {
 func TestPullActivityRollups_OfflineMachineIsSkipped(t *testing.T) {
 	rig := newActivityRig(t)
 	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7}, nil)
-	rig.devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
-		machine(7, "fp-online"), machine(7, "fp-offline"),
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7}).Return(map[int64][]*device_entity.Device{
+		7: {machine(7, "fp-online"), machine(7, "fp-offline")},
 	}, nil)
 	rig.presence.offline["fp-offline"] = true
 
@@ -197,7 +243,9 @@ func TestPullActivityRollups_RevokedMachineIsNotDialed(t *testing.T) {
 	revoked := machine(7, "fp-revoked")
 	revoked.Status = consts.DELETE
 	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7}, nil)
-	rig.devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{revoked}, nil)
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7}).Return(map[int64][]*device_entity.Device{
+		7: {revoked},
+	}, nil)
 
 	require.NoError(t, rig.run(context.Background()))
 	assert.Empty(t, rig.machines.dialedMachines())
@@ -209,8 +257,8 @@ func TestPullActivityRollups_RevokedMachineIsNotDialed(t *testing.T) {
 func TestPullActivityRollups_OneMachineFails_TheOthersStillRun(t *testing.T) {
 	rig := newActivityRig(t)
 	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7}, nil)
-	rig.devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
-		machine(7, "fp-bad"), machine(7, "fp-good"),
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7}).Return(map[int64][]*device_entity.Device{
+		7: {machine(7, "fp-bad"), machine(7, "fp-good")},
 	}, nil)
 	broken := errors.New("这台机器答不上来")
 	rig.puller.pullErr["fp-bad"] = broken
@@ -218,26 +266,93 @@ func TestPullActivityRollups_OneMachineFails_TheOthersStillRun(t *testing.T) {
 	err := rig.run(context.Background())
 
 	require.ErrorIs(t, err, broken, "失败要上交，不能被吞成一轮成功")
-	assert.Equal(t, []pulledFrom{
+	// 两台机器现在并发拨出，谁先落进 pulls 不再有固定顺序——断言集合而不是顺序。
+	assert.ElementsMatch(t, []pulledFrom{
 		{userID: 7, fingerprint: "fp-bad"}, {userID: 7, fingerprint: "fp-good"},
 	}, rig.puller.pulled())
 }
 
-// Given 一个账号的机器名单读不出来；When 这一轮到点；
-// Then 另一个账号照样跑完，那次失败一并上交。
-func TestPullActivityRollups_OneAccountFails_TheOthersStillRun(t *testing.T) {
+// Given 设备清单现在是按这一整批账号一次查询；When 那一条查询本身失败；
+// Then 整轮直接失败、一台机器都不拨——批量之后不再有「这个账号的名单单独读不出来，
+// 其他账号照跑」这件事：查询是原子的一条 SQL，失败就是这一批整体失败。
+func TestPullActivityRollups_DeviceBatchQueryFails_RoundFailsAndDialsNothing(t *testing.T) {
 	rig := newActivityRig(t)
 	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7, 8}, nil)
 	broken := errors.New("库读不出来")
-	rig.devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return(nil, broken)
-	rig.devices.EXPECT().ListByUser(gomock.Any(), int64(8)).Return([]*device_entity.Device{
-		machine(8, "fp-8"),
-	}, nil)
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7, 8}).Return(nil, broken)
 
 	err := rig.run(context.Background())
 
 	require.ErrorIs(t, err, broken)
-	assert.Equal(t, []pulledFrom{{userID: 8, fingerprint: "fp-8"}}, rig.puller.pulled())
+	assert.Empty(t, rig.machines.dialedMachines())
+	assert.Empty(t, rig.puller.pulled())
+}
+
+// Given 多个账号都开着这个开关；When 这一轮到点；
+// Then 设备清单只发一条批量查询（带着这一轮全部账号），而不是每个账号各发一条——
+// 两个账号的机器依旧都被拉到，只是「谁的名单」这件事现在只问库一次。
+func TestPullActivityRollups_MultipleAccounts_DevicesFetchedInOneBatchQuery(t *testing.T) {
+	rig := newActivityRig(t)
+	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7, 8}, nil)
+	// mockgen 的 EXPECT 不带 Times 默认只许被调一次：写两次 EXPECT（各自对应一个账号
+	// 的旧 ListByUser 用法）在这里根本装配不上，本身就是「必须只查一次」的表征。
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7, 8}).Return(map[int64][]*device_entity.Device{
+		7: {machine(7, "fp-7")},
+		8: {machine(8, "fp-8")},
+	}, nil)
+
+	require.NoError(t, rig.run(context.Background()))
+
+	assert.ElementsMatch(t, []pulledFrom{
+		{userID: 7, fingerprint: "fp-7"}, {userID: 8, fingerprint: "fp-8"},
+	}, rig.puller.pulled())
+}
+
+// Given 默认并发度（8）足够放下两台机器；When 这一轮到点，两台机器都得先卡在同一个
+// 栅栏上才放行；Then 这一轮必须在两秒内跑完——串行实现一次只会有一台机器在途，永远
+// 凑不齐两个，会一直卡到这里的 ctx 到期，从而在预算内收到一个非 nil 的错误。
+func TestPullActivityRollups_MachinesRunConcurrently(t *testing.T) {
+	rig := newActivityRig(t)
+	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7}, nil)
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7}).Return(map[int64][]*device_entity.Device{
+		7: {machine(7, "fp-a"), machine(7, "fp-b")},
+	}, nil)
+	rig.machines.barrier = newConcurrencyBarrier(2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	start := time.Now()
+	err := rig.run(ctx)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "两台机器应当同时在途、一起被栅栏放行")
+	assert.Less(t, elapsed, 2*time.Second, "串行实现会一直卡到 ctx 超时才返回")
+	assert.ElementsMatch(t, []string{"fp-a", "fp-b"}, rig.machines.dialedMachines())
+}
+
+// Given 整轮预算被压到极小、并发度压到 1；When 第一台机器卡住不放（拨通了但一直不
+// 应答，直到 ctx 到期）；Then 这一轮必须在预算内返回，而排在它后面、还没轮到的那台
+// 机器一次都不该被拨——预算耗尽之后不再替它拨号。
+func TestPullActivityRollups_RoundBudgetExpires_LaterMachinesNeverDialed(t *testing.T) {
+	origBudget, origConcurrency := roundBudget, machineConcurrency
+	roundBudget = 50 * time.Millisecond
+	machineConcurrency = 1
+	t.Cleanup(func() { roundBudget, machineConcurrency = origBudget, origConcurrency })
+
+	rig := newActivityRig(t)
+	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7}, nil)
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7}).Return(map[int64][]*device_entity.Device{
+		7: {machine(7, "fp-stuck"), machine(7, "fp-never")},
+	}, nil)
+	rig.machines.block = map[string]bool{"fp-stuck": true}
+
+	start := time.Now()
+	_ = rig.run(context.Background())
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 1*time.Second, "整轮预算到期就该返回，不该等到 machineBudget（30s）")
+	assert.NotContains(t, rig.machines.dialedMachines(), "fp-never", "预算耗尽后不该再拨剩下的机器")
 }
 
 // Given 一台机器在「问过在线」与「真拨过去」之间下线了；When 这一轮到点；
@@ -246,8 +361,8 @@ func TestPullActivityRollups_OneAccountFails_TheOthersStillRun(t *testing.T) {
 func TestPullActivityRollups_MachineGoesOfflineWhileDialing_IsSkipped(t *testing.T) {
 	rig := newActivityRig(t)
 	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7}, nil)
-	rig.devices.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
-		machine(7, "fp-vanished"),
+	rig.devices.EXPECT().ListActiveByUsers(gomock.Any(), []int64{7}).Return(map[int64][]*device_entity.Device{
+		7: {machine(7, "fp-vanished")},
 	}, nil)
 	rig.machines.dialErr["fp-vanished"] = mirror_svc.ErrMachineOffline
 

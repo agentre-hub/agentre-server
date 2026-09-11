@@ -24,6 +24,11 @@ type DeviceRepo interface {
 	UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error
 	Revoke(ctx context.Context, id, nowMs int64) error
 	ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error)
+	// ListActiveByUsers 一次查一批账号的在用设备，含义与逐个调用 ListByUser 相同
+	// （同样的 status=ACTIVE 过滤、同样按 last_seen_at DESC 排序），只是把发往数据库
+	// 的往返次数从「账号数」摊平成 1 次——activity 定时任务按批读取账号名单时用它，
+	// 不再为每个账号各发一条 SELECT。
+	ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int64][]*device_entity.Device, error)
 }
 
 var defaultRepo DeviceRepo
@@ -96,6 +101,19 @@ func (r *repo) ListByUser(ctx context.Context, userID int64) ([]*device_entity.D
 	if err := db.Ctx(ctx).Where("user_id=? AND status=?", userID, consts.ACTIVE).
 		Order("last_seen_at DESC").Find(&out).Error; err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+func (r *repo) ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int64][]*device_entity.Device, error) {
+	var rows []*device_entity.Device
+	if err := db.Ctx(ctx).Where("user_id IN ? AND status=?", userIDs, consts.ACTIVE).
+		Order("last_seen_at DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[int64][]*device_entity.Device, len(userIDs))
+	for _, d := range rows {
+		out[d.UserID] = append(out[d.UserID], d)
 	}
 	return out, nil
 }
