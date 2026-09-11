@@ -333,9 +333,8 @@ func payloadString(t *testing.T, payload, key string) string {
 
 // ── env_json 整表读写（控制台与桌面端对齐）──────────────────────────────────
 //
-// 这张表此前不下发浏览器：控制台看不到用户在桌面端填过的透传环境变量，也就改不了，
-// 只能通过一个只收 sync_id 的专用接口补一个固定键（已随本轮删除）。
-// 本轮按「两个入口一份能力」放开整表。
+// 这张表下发浏览器：不下发的话，控制台看不到用户在桌面端填过的透传环境变量，也就
+// 改不了。按「两个入口一份能力」整表放开。
 
 // 读侧：存量后端里填过的表原样读回，控制台据此渲染编辑器。
 func TestListBackends_GivenEnvJSON_ThenReturnsTheTableForBrowserEdits(t *testing.T) {
@@ -420,8 +419,8 @@ func TestUpdateBackend_GivenNoEnvJSON_ThenKeepsTheStoredTable(t *testing.T) {
 //
 // cli_path 不在 backend 载荷里，它是一条独立的 agent_backend_cli 同步对象，身份是
 // (backend 同步标识, 机器指纹)——同一条后端在不同机器上各有一个可执行文件路径。
-// 控制台此前连提交都被拒（EngineCLIPathForbidden），于是网页上建的后端永远配不出
-// 路径。放开之后落在**这条后端绑定的那台设备**上（决策 5 已要求运行设备必填）。
+// 网页上建的后端要配得出路径，所以控制台写得进它：落在**这条后端绑定的那台设备**上
+// （决策 5 已要求运行设备必填）。
 
 // 新建：后端行之外再落一条覆盖行，身份是 (backend, 绑定设备)。
 func TestCreateBackend_GivenCLIPath_ThenWritesThePerDeviceOverlay(t *testing.T) {

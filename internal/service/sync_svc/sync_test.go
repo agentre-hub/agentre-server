@@ -475,9 +475,8 @@ func TestPush_GivenDeletedLocation_ThenNoNaturalKeyLookup(t *testing.T) {
 }
 
 // 墓碑没有自然键可言：桌面端的 buildPushItem 删除分支不读本地行（行可能已经软删），
-// 因此路径记录的墓碑上行**不带** project_sync_id。把「缺自然键」的守卫套到它头上会整批
-// 拒（30501/SyncKindInvalid），而整批失败时桌面端一行都不出队——删一个带路径记录的项目
-// 就把那台机器的出站队列永久堵死（R6 的删除传不出去，连带 R3/R7 的一切上行）。
+// 因此路径记录的墓碑上行**不带** project_sync_id。把「缺自然键」的守卫套到它头上，
+// 这条墓碑就会被单独拒掉——删一个带路径记录的项目，那条删除永远传不到别的设备（R6）。
 func TestPush_GivenDeletedLocationWithoutProjectSyncID_ThenAccepted(t *testing.T) {
 	convey.Convey("路径记录的墓碑不带项目同步标识", t, func() {
 		ctx, m, svc := setupSyncTest(t)

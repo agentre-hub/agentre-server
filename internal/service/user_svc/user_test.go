@@ -91,9 +91,8 @@ func TestFindOrCreateFromGithub(t *testing.T) {
 	})
 }
 
-// GithubLogin 把「这个账号绑的是哪个 GitHub 账号」从 auth_ctr 挪进服务层：控制器
-// 原先直接调 user_identity_repo，越过了 service（依赖方向是
-// controller → service → repository）。
+// GithubLogin 回答「这个账号绑的是哪个 GitHub 账号」：它在服务层，控制器不越过
+// service 直接调 user_identity_repo（依赖方向是 controller → service → repository）。
 func TestGithubLogin(t *testing.T) {
 	t.Run("绑过就回它的登录名", func(t *testing.T) {
 		ctx, _, mI, _ := setupUserTest(t)

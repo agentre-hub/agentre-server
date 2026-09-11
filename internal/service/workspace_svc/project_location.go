@@ -216,9 +216,8 @@ func checkLocationNaturalKey(ctx context.Context, in OrgWriteInput) error {
 //     一台存活的 agentred——指向一台已经撤销 / 从未配对的机器的路径记录谁也用不上，
 //     算它配好了等于把角标撤掉却仍然开不出对话。
 //   - **桌面端**：本机路径不流动，只在上报组 `device_local_paths`，按上报设备分
-//     命名空间。**它算数**：决策 9 原先写的依据「web 派活时桌面端那一档本来就跳过」
-//     是错的——跳过的是 backend 行没写运行设备的那一档（AvailabilityNoDevice，
-//     `case t.DeviceUnspecified`），不是桌面端这一类设备。一台已配对、在线、上报过
+//     命名空间。**它算数**：web 派活时跳过的是 backend 行没写运行设备的那一档
+//     （AvailabilityNoDevice，`case t.DeviceUnspecified`），不是桌面端这一类设备。一台已配对、在线、上报过
 //     本机路径的桌面端在派发计划里拿到的是 AvailabilityAvailable，cwd 就取自上报组
 //     （`locationsFor`）。
 //   - **路径为空的行不算**：一行解不出路径的记录与没有这一行是同一件事。两类设备

@@ -63,7 +63,7 @@ func syncedRig(t *testing.T) (*rig, *fakeFlushClock) {
 //
 //	而摘要不再每帧写一次 —— 那是纯粹的重复写。
 //
-// 为什么这里可以攒批,而 Apply 的注释原本说「没有一个诚实的攒批点」:摘要那一行在
+// 为什么这里可以攒批:摘要那一行在
 // **Apply 这条路上唯一会变的字段就是游标**(元数据只由 Sync 经 setSummary 改)。
 // 而 latest_seq 只有一个读者 —— storedCursor,也就是重启后从哪儿接着拉;它落后一点的
 // 代价,Apply 的注释自己写着:「one idempotent re-pull, nothing more」(帧表是

@@ -23,8 +23,7 @@ func TestRedis_StoresWhatWasWrittenWithoutDeclaringCommands(t *testing.T) {
 }
 
 // 每个用例拿到的是自己的实例：上一个用例写下的键不会漏到下一个。
-// 旧的 cago testutils.Redis() 是进程级单例，用例之间会互相看见对方的数据，
-// mirror_svc 因此要在每次 setup 里 FlushAll。
+// 同包用例不必靠 FlushAll 互相让路。
 func TestRedis_IsIsolatedPerTest(t *testing.T) {
 	ctx := context.Background()
 

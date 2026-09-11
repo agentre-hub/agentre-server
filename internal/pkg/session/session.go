@@ -161,7 +161,7 @@ func (s *Store) Get(ctx context.Context, sid string) (*Session, error) {
 	// 笔记本的人按的正是那个按钮。这样每被用到一次就自愈一条，索引与实际登录逐渐收敛。
 	//
 	// 三条写并成一次 pipeline：这是每个已登录请求都要走的路，多一个往返就是全站的
-	// 常态开销。写失败一律忽略（与原先的 EXPIRE 同向）——滑不动 TTL 顶多让这次登录
+	// 常态开销。写失败一律忽略——滑不动 TTL 顶多让这次登录
 	// 早一点到期，不该反过来把人从当前请求里踢出去。
 	sess.LastActiveAt = time.Now().UnixMilli()
 	body, _ := json.Marshal(sess)

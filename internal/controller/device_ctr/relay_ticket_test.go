@@ -93,7 +93,7 @@ func TestRelayTicket_GivenTheSameAccountOnAnotherBrowser_ThenCarriesTheSamePeerF
 	require.Equal(t, firstClaims.PFP, secondClaims.PFP)
 	// 浏览器拿到的对端指纹就是票里那个身份，两者不能各说各的。字段名也必须是
 	// peer_fingerprint：同一个值在 /v1/agent-sessions、/v1/session-import 和
-	// dispatch 的上行里一律叫这个名字，只有这里曾经叫 client_id——而 client_id
+	// dispatch 的上行里一律叫这个名字；不能叫 client_id——client_id
 	// 在同一个服务的 /v1/oauth/* 底下是 RFC 6749 的注册客户端，不是指纹。
 	require.Equal(t, firstClaims.PFP, firstPFP)
 	require.Equal(t, firstPFP, secondPFP)

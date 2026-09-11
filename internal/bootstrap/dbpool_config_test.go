@@ -11,9 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// 连接池曾经由本仓自己兜底：LoadServerConfig 给 server.db_pool 填 40/20/30m/5m，
-// 再由 ApplyDBPool 写进 database/sql。cago 支持连接池之后那一段没了——框架每项零值
-// 表示不调 setter，谁都不再替配置文件补缺省值。
+// 连接池参数全靠配置文件：cago 的 db.Config 每项零值表示不调 setter，没有任何一层
+// 替配置文件补缺省值。
 //
 // 于是「配置文件里到底写没写、键名对不对」成了唯一判据，而写漏或拼错都不会报错，
 // 只会静默退回 database/sql 的默认值：空闲上限 2（并发下不停重建连接）、连接数无

@@ -415,7 +415,7 @@ func splitRouteValue(value string) (instanceID, connID string) {
 }
 
 // WrapEnvelope / UnwrapEnvelope 转发共享实现。格式与校验由 pkg/wire/relayenvelope
-// 拥有 —— 从前 daemon、本仓与浏览器各写一份解析,三套校验互不相同,而中继上跑的是
+// 拥有 —— daemon、本仓与浏览器要是各写一份解析,三套校验必然互不相同,而中继上跑的是
 // 别的设备发来的字节,最松的那一份决定了实际的下限。
 //
 // 名字留在本包:调用方说的是「中继的信封」,不必知道它住在哪个 module。

@@ -296,9 +296,9 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 	// 行要等 daemon 下一次轮询（interval 默认 5 秒）走到这里。用户批准完立刻进设备页
 	// 正好落在那个窗口里，看到的是一份不含这台机器的列表。
 	//
-	// 从前只有 relay_svc.RegisterDaemon 那一声，而它发生在这之后、且发在账号通道
+	// 只靠 relay_svc.RegisterDaemon 那一声不够：它发生在这之后、且发在账号通道
 	// 多半还在取票建连的那几秒里——信号不补发，连着之后兜底轮询又让路，于是那份空
-	// 列表会一直挂到用户自己刷新。这里补的就是那一条：行一存在就说一声。
+	// 列表会一直挂到用户自己刷新。所以行一存在就说一声。
 	//
 	// 事务外、best-effort：广播失败只记日志，token 已经发出去了，不能因为一条信号回滚。
 	accountchan_svc.BroadcastSignalBestEffort(ctx, flow.AuthorizedUserID, accountchan_svc.FrameTypeDevicePresence)

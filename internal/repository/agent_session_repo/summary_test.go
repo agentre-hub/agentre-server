@@ -410,10 +410,9 @@ func TestCountSummariesByProjectKey_GroupsByReportedProjectAndLocation(t *testin
 
 // ── 已读状态（2026-08-20 对话页 UI/UX 改版）─────────────────────────────────
 //
-// 「未读」此前不是一件真事：那一档筛选叫过「未读」，但判据一直是
-// waiting_for_input，规格 2026-08-17 决策 3 因此把名字改成了「等你处理」。现在它
-// 有了自己的列 last_read_at，判据与桌面端 attention-store 逐字一致：
-// unread = lastMessageAt > lastReadAt。
+// 「未读」有自己的列 last_read_at，判据与桌面端 attention-store 逐字一致：
+// unread = lastMessageAt > lastReadAt。它与判据为 waiting_for_input 的「等你处理」
+// 是两档（规格 2026-08-17 决策 3）。
 
 // 标记已读只碰 last_read_at 一列，WHERE 与 upsert 的冲突判定同一组身份键，外加一条
 // `last_read_at<?` —— 已读时刻**只往前走**：同一条对话在两个标签页里打开时，后到的

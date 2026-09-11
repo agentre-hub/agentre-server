@@ -74,8 +74,7 @@ func (s *relaySvc) ResolveTarget(ctx context.Context, accountID int64, target st
 //
 // **这一段与桌面仓的 runtime.* 段逐个撞号，而且是有意留着的。**
 // 下面的 -32010…-32016 与共享包 rpcerror 的 CodeRuntimeNoActiveTurn…
-// CodeRuntimePeerExecutionUnavailable（-32010…-32015）首尾完全重叠。这里曾经写着
-// 「另开 -3201x 一段，因此与既有码不相撞」——那句话不成立，别再照它推理。
+// CodeRuntimePeerExecutionUnavailable（-32010…-32015）首尾完全重叠。
 //
 // 不相撞的真正理由是**两套码在客户端根本不流进同一格**，这是结构性的，不是运气：
 //

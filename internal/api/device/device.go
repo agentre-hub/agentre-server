@@ -86,7 +86,7 @@ type RelayTicketResponse struct {
 	// 站点数据就换人，此前从网页发起的对话在镜像里当场成为孤儿。
 	//
 	// 名字与 JWT 里的 pfp、与 /v1/agent-sessions、/v1/session-import、dispatch 上行
-	// 里的 peer_fingerprint 是同一个值同一个名字。它一度叫 client_id，而 client_id
+	// 里的 peer_fingerprint 是同一个值同一个名字。别叫它 client_id：client_id
 	// 在同一个服务的 /v1/oauth/* 底下是 RFC 6749 的注册客户端 —— 两回事。
 	PeerFingerprint string `json:"peer_fingerprint"`
 }

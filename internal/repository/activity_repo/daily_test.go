@@ -254,8 +254,7 @@ func TestDailyQuery_DayRangeIsInclusiveOnBothEnds(t *testing.T) {
 }
 
 // 热力图这一维直接读 day：库里就是 char(10) 的 "2006-01-02"，没有任何格式化。
-// 见 TestLatestDay_ReadsTheStoredDayVerbatim 上那段说明——曾经这里必须在 SQL 里
-// 格式化，那是 day 还是 date 列的年代留下的。
+// 理由见 TestLatestDay_ReadsTheStoredDayVerbatim 上那段说明。
 func TestSumByDims_Day_ReadsTheStoredDayVerbatim(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDaily()

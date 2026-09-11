@@ -449,8 +449,7 @@ func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
 		"client delivery failure closed the shared daemon websocket before a later response")
 }
 
-// 转发失败发生在通道开通**之后**：它同样只判死那一条通道。从前它关掉整条客户端
-// 连接，那时一条连接只有一条通道，两者是同一件事；现在连接上还跑着别人的通道。
+// 转发失败发生在通道开通**之后**：它同样只判死那一条通道——连接上还跑着别人的通道。
 func TestRelayClientForwardingErrorFailsOnlyThatChannel(t *testing.T) {
 	stub := newForwardingRelayStub()
 	stub.clientForwardErrs = make(chan error, 1)
@@ -512,9 +511,8 @@ func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
 	}
 }
 
-// 通道开通失败的三种理由必须互相区分得开。从前它们是三个 HTTP 状态码，那时目标在
-// 连接级、判定在 upgrade 之前；目标下沉到通道之后判定在 upgrade 之后，于是同一组
-// 区分改由通道级错误码承担——每个码仍对应 upgrade 前那一版的业务码与文案。
+// 通道开通失败的三种理由必须互相区分得开。判定发生在 upgrade 之后，没有 HTTP 状态码
+// 可用，区分由通道级错误码承担——每个码对应一个业务码与文案。
 func TestRelayClientChannelFailureCodesAreDistinct(t *testing.T) {
 	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")

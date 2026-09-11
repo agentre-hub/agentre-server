@@ -11,11 +11,11 @@ package sync_entity
 import "github.com/agentre-hub/agentre/pkg/syncwire"
 
 // 同步组承载的对象类型归共享契约 pkg/syncwire 所有——桌面端与本仓消费同一份词表
-// （syncwire.Kinds / syncwire.KindValid），成员资格只有一份枚举。取值域从前由两个
-// 宿主各自枚举，任何一边漏掉一个新 kind，那一类对象就在那一端整类静默不同步。
+// （syncwire.Kinds / syncwire.KindValid），成员资格只有一份枚举。两个宿主要是各自
+// 枚举，任何一边漏掉一个新 kind，那一类对象就在那一端整类静默不同步。
 //
 // 这里只做**别名再导出**：本仓有几十处 sync_entity.Kind* 的调用点，别名让它们一行
-// 不用改。判成员资格请直接用 syncwire.KindValid，本包刻意不再留第二份枚举。
+// 不用改。判成员资格请直接用 syncwire.KindValid，本包刻意不留第二份枚举。
 //
 // 桌面端的本地自增主键不过机，跨机引用一律用同步标识（字符串）或 agentred 指纹表达。
 const (

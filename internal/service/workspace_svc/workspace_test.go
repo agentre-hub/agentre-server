@@ -224,7 +224,7 @@ func TestListAccountAgents_NeverCarriesCLIPathOrEnvJSON(t *testing.T) {
 
 // 「从项目里挑一个 Agent」要的两样在 AgentView 上：Agent 自己的图标，以及它**直接
 // 加入**了哪些项目。成员关系存在同步组的 project_agent 里（桌面端 adapter_project 的
-// syncwire.ProjectAgentPayload），此前这一档 kind 压根没被拉过——不拉它，浏览器就答不出
+// syncwire.ProjectAgentPayload），这一档 kind 必须拉——不拉它，浏览器就答不出
 // 「这个项目里有哪些 Agent」，只能退回按机器列。
 //
 // 继承（子项目看得见父项目的成员）**不在这一层算**：项目树已经整份发给浏览器了
@@ -964,8 +964,8 @@ func TestSetExecTargetOrder_GivenTargetWithoutBackendSyncID_ThenItStaysAtItsInde
 	assert.NotContains(t, keysOf(saved), "t-blank", "钉住的档 sort_order 没变，不该被写")
 }
 
-// 集合里有、排列里没有的档补到队尾，且相互顺序按原 sort_order 保持 —— 与读路径
-// 此前的收敛规则同源，只是现在收敛发生在写入的那一刻。
+// 集合里有、排列里没有的档补到队尾，且相互顺序按原 sort_order 保持 —— 收敛发生在
+// 写入的那一刻。
 func TestSetExecTargetOrder_GivenUncoveredTarget_ThenItGoesToTheTail(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
@@ -1069,7 +1069,7 @@ func TestSetExecTargetOrder_GivenBroadcastFails_ThenReorderStillSucceeds(t *test
 // 「未归项目」）。R19 守卫：回给浏览器的东西里一条路径都没有——判定是在这一层
 // 用路径做的，路径本身到此为止。
 // 项目轴要把项目递归成树，因此除了名字还要父标识、颜色与排序——这几个键同步载荷
-// 本来就带（agentre 侧 adapter_project.go），只是这一侧此前只解出了 name。
+// 本来就带（agentre 侧 adapter_project.go），这一侧要把它们都解出来，不能只解 name。
 func TestAccountProjects_GivenNestedProjects_ThenCarriesParentColorAndOrder(t *testing.T) {
 	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
 
@@ -1749,9 +1749,8 @@ func TestSelectableBackends_GivenBackendsAcrossMachines_ThenEachCarriesMachineAn
 
 // 判据这一侧的守卫（规格 2026-08-21「同步与身份」）：一个后端在哪台机器上、此刻
 // 能不能用，全部由它那一列 agentred_fingerprint 决定——在账号里且活跃且在线为可用，
-// 在账号里但不在线为离线，指纹在账号下找不到设备为「已撤销」（沿用 unpaired，
-// 组织面文案不变），**空指纹为「未指定设备」**：它只可能是决策 14 的存量，
-// 不再复用 skipped_for_web 那条「跳过桌面端本机档」的语义。
+// 在账号里但不在线为离线，指纹在账号下找不到设备为「已撤销」（unpaired），
+// **空指纹为「未指定设备」**（AvailabilityNoDevice）。
 //
 // 这里断言的是**线上取值本身**而不是常量：浏览器按这几个字符串分支，改掉任何一个
 // 都是改契约，得让它在这里红一次。

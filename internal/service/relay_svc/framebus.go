@@ -22,8 +22,8 @@ const (
 	// 循环顶端去看 ctx」,不影响回执的到达延迟——有回执时 BLPOP 立刻返回。
 	ackDispatchBlock = time.Second
 	// consumerBlock 是消费循环每次 XREADGROUP 的阻塞窗口。它只决定「空闲时多久
-	// 醒一次」,不影响任何一帧的到达延迟——有帧时 XREADGROUP 立刻返回。从前这里
-	// 是 100ms,于是每条 stream 空闲状态下也要恒定烧掉 10 次 XREADGROUP/秒。
+	// 醒一次」,不影响任何一帧的到达延迟——有帧时 XREADGROUP 立刻返回。取短了只会让
+	// 每条 stream 空闲时也恒定烧 XREADGROUP(100ms 就是 10 次/秒)。
 	consumerBlock = 5 * time.Second
 )
 
@@ -394,7 +394,7 @@ func (f *redisForwarder) dispatchAcks(ctx context.Context, key string) {
 }
 
 // waitForAck 等一帧的投递回执。正常路径是回执分发协程把 waiter 关掉——一次往返、
-// 零轮询。从前这里是 10ms 一跳的 ticker,一帧最坏空转 500 次 GET。
+// 零轮询。
 func (f *redisForwarder) waitForAck(ctx context.Context, budget time.Duration, acked <-chan struct{}) error {
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
@@ -416,9 +416,9 @@ func (f *redisForwarder) startConsumerLocked(stream string) {
 	go f.renewStream(ctx, stream)
 }
 
-// renewStream 按固定节奏给 stream 续期。从前这件事挂在消费循环的每一轮上,于是
-// 「续期」的频率被「阻塞窗口」绑死了:窗口一拉长,TTL 就会断。拆开之后两者各按
-// 各自的道理取值——续期看 TTL,阻塞窗口看空闲开销。
+// renewStream 按固定节奏给 stream 续期,不挂在消费循环的每一轮上:那样「续期」的
+// 频率会被「阻塞窗口」绑死,窗口一拉长,TTL 就会断。两者各按各自的道理取值——续期
+// 看 TTL,阻塞窗口看空闲开销。
 //
 // 与 renewClientPresence 同一形状,只是下限更低:那一处是 1 秒,而这里的 stream
 // 在用例里常配 1 秒 TTL,取半再封 1 秒会正好卡在过期边界上。
@@ -452,7 +452,7 @@ func (f *redisForwarder) consume(ctx context.Context, stream string) {
 		if err == nil {
 			return
 		}
-		// 退避时长按**本次失败之前**的计数取，与从前逐字一致：第一次失败等
+		// 退避时长按**本次失败之前**的计数取：第一次失败等
 		// 50ms，之后翻倍。interrupted 随后才把计数推进一格。
 		retryIn := consumerRetryDelay(outage.attempts)
 		outage.interrupted(ctx, err, retryIn)
@@ -500,9 +500,8 @@ func (o *consumerOutage) interrupted(ctx context.Context, err error, retryIn tim
 
 // recovered 由消费循环在每一次成功的读之后调用；没有正在进行的故障时它什么也不做。
 //
-// 顺带把退避阶梯归零。从前那句 `failures = 0` 挂在 consumeOnce 返回 true 上，而
-// 它只在 ctx 结束时才返回 true——也就是说阶梯从来没有真正重置过，一次抖动之后
-// 半小时才发生的第二次抖动会直接从封顶的 1s 起步。
+// 顺带把退避阶梯归零。归零必须挂在每一次成功的读上：只在消费循环结束时归零的话，
+// 阶梯从来不会真正重置，一次抖动之后半小时才发生的第二次抖动会直接从封顶的 1s 起步。
 func (o *consumerOutage) recovered(ctx context.Context) {
 	if o.attempts == 0 {
 		return
@@ -666,9 +665,9 @@ func (f *redisForwarder) detach(stream string, peer Peer, attachment *attachedPe
 	if len(attachments) == 0 {
 		delete(f.attachments[stream], peer)
 	}
-	// 组内消费者的注销必须与消费 goroutine 的停止同条件。曾经用的是「这一**类**
+	// 组内消费者的注销必须与消费 goroutine 的停止同条件。不能用「这一**类**
 	// 对端没了」:实例上 daemon 与客户端算出的是同一条 stream,最后一个客户端走时
-	// 它就为真,于是 XGroupDelConsumer 把一个还在跑的消费者连同它的 PEL 一起删掉
+	// 它就为真,XGroupDelConsumer 会把一个还在跑的消费者连同它的 PEL 一起删掉
 	// —— 已读未确认的帧就此永久丢失,发布方只能等满 deliveryWaitTimeout。
 	lastForStream := len(f.attachments[stream]) == 0
 	if lastForStream {

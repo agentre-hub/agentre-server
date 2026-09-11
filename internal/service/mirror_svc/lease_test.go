@@ -23,8 +23,8 @@ const (
 	replicaB = "replica-b"
 )
 
-// leaseRedis 起 miniredis(prior art: internal/task/lock_test.go:20)。
-// internal/testutils.Redis(t) 每个用例一个实例,不再需要 FlushAll 互相让路。
+// leaseRedis 起 miniredis(prior art: internal/task/lock_test.go)。
+// internal/testutils.Redis(t) 每个用例一个实例,用例之间不共享数据。
 func leaseRedis(t *testing.T) *goredis.Client {
 	t.Helper()
 	testutils.Redis(t)

@@ -19,9 +19,8 @@ import (
 // 跑完之后按字面量查 mini.Exists / mini.TTL 即可，见 internal/task/lock_test.go。
 // 这比声明命令期望更耐改——它断言的是最终状态，不是达成状态的路径。
 //
-// 与 cago 的 testutils.Redis 有两处不同：一是那边现在返回严格的命令 mock，
-// 二是那边曾经的 miniredis 版本是进程级单例，同包用例共用一个实例、必须靠
-// FlushAll 互相让路；这里每个用例一个实例，t.Cleanup 里还原上一个全局实例。
+// 与 cago 的 testutils.Redis 不同：那边返回严格的命令 mock；这里每个用例一个
+// 真实实例，t.Cleanup 里还原上一个全局实例。
 func Redis(t *testing.T) *miniredis.Miniredis {
 	t.Helper()
 	mini := miniredis.RunT(t)

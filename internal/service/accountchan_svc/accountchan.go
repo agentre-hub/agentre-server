@@ -68,8 +68,8 @@ func Broadcast(ctx context.Context, accountID int64, frame Frame) error {
 // 30 秒轮询。
 //
 // version<=0 什么都不发：没有新版本号就没有变化可广播，发一条空信号只会让在线的
-// 连接白拉一页。这条规矩落实在这里而不是各写入方各记一遍（此前 sync_svc 与
-// workspace_svc 各抄了一份逐字相同的实现，那是两处各漏一条规矩的机会）。
+// 连接白拉一页。这条规矩落实在这里而不是各写入方各记一遍：各抄一份实现，就是各漏
+// 一条规矩的机会。
 func BroadcastBestEffort(ctx context.Context, accountID, version int64) {
 	if version <= 0 {
 		return

@@ -287,7 +287,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		savedSessionCtr.Save,
 		savedSessionCtr.Delete,
 		// 账号里 agent 会话的两个只读端点（/v1/agent-sessions*）：索引读会话摘要
-		// （项目归属就地判定，决策 12，浏览器不再上送 (机器指纹, cwd) 探针），
+		// （项目归属就地判定，决策 12），
 		// 详情页按游标翻转录。cwd 不出现在任一响应里（R19，见 workspace 包守卫）。
 		agentSessionCtr.SavedSessions,
 		agentSessionCtr.Transcript,

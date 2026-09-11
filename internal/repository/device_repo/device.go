@@ -39,7 +39,6 @@ func (r *repo) Find(ctx context.Context, id int64) (*device_entity.Device, error
 }
 
 // FindByFingerprint 按 (user_id, fingerprint) 查一台设备，查不到返回 (nil, nil)。
-// Upsert 已不再用它（改走数据库原子 upsert），relay_svc 解析中继目标时用。
 func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (*device_entity.Device, error) {
 	return dbutil.FindOne[device_entity.Device](db.Ctx(ctx).Where("user_id=? AND fingerprint=?", userID, fp))
 }
