@@ -20,7 +20,7 @@ model/entity/*_entity/   rich entities: Check(ctx), IsActive(), state transition
 
 Dependencies flow **downward only**. Two consequences that get violated first:
 
-- `internal/pkg/*` is a cross-cutting layer (jwt, session, usercode, wireversion, code).
+- `internal/pkg/*` is a cross-cutting layer (credstore, session, usercode, wireversion, code).
   It may be imported by anything above it and must **never import service or repository**.
   If a `pkg` package needs business data, the dependency is backwards — pass the data in.
 - Service depends on the repository **interface**, never the struct. That is what makes
@@ -180,7 +180,7 @@ middleware groups are the authorization model:
 | Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*` |
 | Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
 | Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot`, `/v1/credentials/introspect` (+ per-account rate limit) |
-| Relay client | `RelayClientJWT(bearer, signer, …)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (still JWTs) |
+| Relay client | `RelayClientJWT(credentials, tickets)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (opaque, recorded in Redis by `credstore`, one connection per ticket) |
 | Port forward | `SessionAuth()` only — **no** `CSRF()` | `/fw/*` |
 
 Device access tokens are opaque random strings. The server stores only their sha256 digest
