@@ -221,6 +221,20 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	assert.Equal(t, int64(9), got.RateLimit.CredentialsIntrospectPerAccountPerMin)
 }
 
+// /v1/credentials/introspect 按调用方账号限速的缺省值（规格 2026-09-11，决策 17）：
+// 429 在接收方那侧被判「账号服务不可达」而不缓存，配额太紧会让正常握手在高并发下
+// 频繁把有效凭据误判成不可达。默认从 30/分钟提到 300/分钟。
+func TestLoadServerConfig_CredentialsIntrospectPerAccountPerMinDefaultsToThreeHundred(t *testing.T) {
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{},
+	})))
+	assert.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.Equal(t, int64(300), got.RateLimit.CredentialsIntrospectPerAccountPerMin)
+}
+
 // release.cache_ttl 缺省时必须落到 release_svc.DefaultCacheTTL,而不是 0——0 会让
 // Redis 里的缓存值永不过期,一次拉取失败之后端点也就再也不会自然退回「不知道」。
 // enabled 缺省时必须是 false：cago 的 Scan 分不出「配置没写这个键」与「显式写了

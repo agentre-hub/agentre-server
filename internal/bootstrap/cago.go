@@ -189,7 +189,7 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 		out.RateLimit.PasskeyLoginBeginPerIPPerMin = 10
 	}
 	if out.RateLimit.CredentialsIntrospectPerAccountPerMin == 0 {
-		out.RateLimit.CredentialsIntrospectPerAccountPerMin = 30
+		out.RateLimit.CredentialsIntrospectPerAccountPerMin = 300
 	}
 	if out.AccountGate.CacheTTL <= 0 {
 		out.AccountGate.CacheTTL = user_svc.DefaultGateCacheTTL

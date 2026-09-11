@@ -62,7 +62,7 @@ server:
     passkey_register_begin_per_ip_per_min: 100
     passkey_register_begin_per_account_per_min: 100
     passkey_login_begin_per_ip_per_min: 100
-    credentials_introspect_per_account_per_min: 100
+    credentials_introspect_per_account_per_min: 300
   # How long a verdict stays cached per user_id — the observable upper bound for a
   # ban applied straight in the database.
   account_gate:
