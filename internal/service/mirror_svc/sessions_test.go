@@ -22,6 +22,11 @@ import (
 type fakeSaves struct {
 	mu   sync.Mutex
 	rows []agent_session_entity.SessionSave
+
+	// listByUserCalls 数的是「读整个账号名单」被调用了几次——按机器取范围的路径
+	// (Begin、releaseEmptyMachines 等) 改用 ListConversationIDsByMachine 之后,
+	// 这个数字不该再随它们的调用次数往上走(要求 9)。
+	listByUserCalls int
 }
 
 // newFakeSaves 造一份保存名单并当场装配进去:名单是镜像范围的唯一来源。
@@ -89,6 +94,7 @@ func (f *fakeSaves) FindByIdentity(
 func (f *fakeSaves) ListByUser(_ context.Context, userID int64) ([]*agent_session_entity.SessionSave, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.listByUserCalls++
 	var out []*agent_session_entity.SessionSave
 	for _, row := range f.rows {
 		if row.UserID != userID {
@@ -96,6 +102,51 @@ func (f *fakeSaves) ListByUser(_ context.Context, userID int64) ([]*agent_sessio
 		}
 		copied := row
 		out = append(out, &copied)
+	}
+	return out, nil
+}
+
+// listByUserCallCount 交出「读整个账号名单」被调用的次数，供按机器取范围的路径
+// 断言它没有再触发这条全账号扫描。
+func (f *fakeSaves) listByUserCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.listByUserCalls
+}
+
+// resetListByUserCalls 清零那个计数器，供只想看「接下来这一步」触发了几次的用例用
+// ——Reconcile 主循环那次账号级读取是有意保留的（决策见 reconcile.go），不该混进
+// releaseEmptyMachines 那一段的计数里。
+func (f *fakeSaves) resetListByUserCalls() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listByUserCalls = 0
+}
+
+func (f *fakeSaves) CountByUser(_ context.Context, userID int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var n int64
+	for _, row := range f.rows {
+		if row.UserID == userID {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// ListConversationIDsByMachine 是真实索引 idx_agent_session_saves_machine
+// (user_id, device_fingerprint) 的假实现：只扫这台机器上的行，不碰账号里别的机器。
+func (f *fakeSaves) ListConversationIDsByMachine(
+	_ context.Context, userID int64, fingerprint string,
+) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, row := range f.rows {
+		if row.UserID == userID && row.DeviceFingerprint == fingerprint {
+			out = append(out, row.ConversationID)
+		}
 	}
 	return out, nil
 }
@@ -246,6 +297,28 @@ func TestBegin_WebDispatchedConversation_MirroredUnderItsInitiator(t *testing.T)
 	assert.True(t, a.sup.follows(testUserID, testMachine), "连的仍然是承载它的那台机器")
 	assert.Equal(t, []int64{1, 2}, rig.store.rowSeqs(conv42),
 		"转录该落在发起端那把键上 —— 镜像内容与执行端解会话用的是同一把")
+}
+
+// Given 账号在很多台机器上存了对话,这次保存只涉及其中一台;When 保存路径要求镜像
+// 开始;Then 它按机器取这台机器上的名单(ListConversationIDsByMachine),一次都不
+// 读整个账号的保存名单——请求路径上每一次保存都不该为了一台机器把全账号名单扫一遍
+// （要求 9）。
+func TestBegin_DoesNotListTheWholeAccount(t *testing.T) {
+	rig := newResidentRig(t)
+	saves := newFakeSaves(
+		saved(testUserID, testMachine, conv42),
+		saved(testUserID, "fp-other-machine-1", conv7),
+		saved(testUserID, "fp-other-machine-2", conv43),
+	)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
+	a := rig.replica(t, replicaA)
+
+	require.NoError(t, NewSessions(a.sup).Begin(context.Background(), testUserID, testMachine, conv42))
+
+	assert.True(t, a.sup.follows(testUserID, testMachine))
+	assert.Zero(t, saves.listByUserCallCount(),
+		"按机器取范围的路径不该触发一次全账号名单扫描")
 }
 
 // Given 这台机器现在联系不上;When 保存路径要求镜像开始;
