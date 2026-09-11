@@ -88,6 +88,46 @@ func TestNextVersion_GivenUpdateFails_ThenRollsBackWithoutInsert(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+// 建号时预建账号的 seq 行（决策 20）：version_seq 从 0 起，一条语句、不自开事务——它跟着
+// 调用方 ctx 里的建号事务走，建号回滚它也回滚。重复键分支是一句空赋值：那一行若已存在，
+// version_seq 与 updatetime 一个字都不动，已分配出去的版本号不会被拨回 0。
+func TestEnsureSeq_GivenNewAccount_ThenInsertsZeroSeqRow(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectExec(regexp.QuoteMeta(
+		`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime) VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE user_id = user_id`)).
+		WithArgs(int64(7), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	assert.NoError(t, r.EnsureSeq(ctx, 7))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 行已存在时空赋值不改任何列，MySQL 报受影响 0 行：那是「已经有了」，不是失败。
+func TestEnsureSeq_GivenRowAlreadyExists_ThenNoError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs`)).
+		WithArgs(int64(7), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	assert.NoError(t, r.EnsureSeq(ctx, 7))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 写入失败如实上抛：建号事务要靠这个错误回滚，吞掉它就会建出一个没有 seq 行的账号。
+func TestEnsureSeq_GivenInsertFails_ThenReturnsError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs`)).WillReturnError(assert.AnError)
+
+	assert.ErrorIs(t, r.EnsureSeq(ctx, 7), assert.AnError)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 // 只读序列的头，一个字都不推进：它回答的是「这个账号的历史到哪为止」，
 // 设备送来的游标大于它就说明那段历史不是本账号发出的。
 func TestCurrentVersion_GivenExistingSeq_ThenReadsHeadWithoutAdvancingIt(t *testing.T) {

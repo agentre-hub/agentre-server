@@ -12,6 +12,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_identity_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
 )
@@ -107,7 +108,8 @@ func (s *userSvc) findOrCreateFromGithubOnce(ctx context.Context, p GithubProfil
 		return existing, nil
 	}
 
-	// 路径 3：全新 user + identity（一个事务）
+	// 路径 3：全新 user + 序列行 + identity（一个事务）。序列行紧随 user 行预建：
+	// 缺行的两个新账号并发首次取号会在 NextVersion 的回落分支上死锁（决策 20）。
 	now := time.Now().UnixMilli()
 	display := p.DisplayName
 	if display == "" {
@@ -124,6 +126,9 @@ func (s *userSvc) findOrCreateFromGithubOnce(ctx context.Context, p GithubProfil
 	err = db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
 		if err := user_repo.User().Create(txCtx, newUser); err != nil {
+			return err
+		}
+		if err := sync_repo.SyncState().EnsureSeq(txCtx, newUser.ID); err != nil {
 			return err
 		}
 		return s.createIdentity(txCtx, newUser.ID, p)

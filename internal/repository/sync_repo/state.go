@@ -18,6 +18,9 @@ type SyncStateRepo interface {
 	// NextVersion 从账号级序列原子取走 n 个版本号，返回其中最大的那个（即本次
 	// 分配到的最后一个版本）。多副本并发下由数据库裁决，进程内计数器不行。
 	NextVersion(ctx context.Context, userID int64, n int64) (int64, error)
+	// EnsureSeq 为账号建好它的序列行（version_seq 从 0 起）；那一行已存在时不改写。
+	// 建号时在同一个事务里调用。
+	EnsureSeq(ctx context.Context, userID int64) error
 	// CurrentVersion 取账号级序列**当前的头**（最近一次分配出去的版本号），
 	// 不推进它；账号还没分配过任何版本时返回 0。
 	//
@@ -84,6 +87,24 @@ ON DUPLICATE KEY UPDATE version_seq = version_seq + ?, updatetime = ?`,
 		return 0, err
 	}
 	return version, nil
+}
+
+// EnsureSeq 让账号一建好就有序列行（决策 20）。缺行时首次取号走的是 NextVersion 的
+// 回落分支：两个都没有行的新账号在重叠事务里各自取号，空 UPDATE 各持一把间隙锁，随后的
+// INSERT 互等插入意向锁，其中一个 ERROR 1213（MySQL 9.7 实测）。行预先建好，首次取号
+// 就走只锁本行的普通 UPDATE。
+//
+// 重复键分支是一句空赋值 user_id = user_id：那一行若已存在（被 NextVersion 推进过），
+// version_seq 与 updatetime 都不动，已分配出去的版本号绝不会被拨回 0。不用 INSERT IGNORE：
+// 它把**所有**可降级的错误（截断、NOT NULL 等）都降成警告吞掉，这里只该容忍撞唯一键这一种；
+// 表只有 uk_sync_account_seqs_identity 一个唯一键（id 自增不由这里给），ON DUPLICATE
+// 因此只会在「这个账号已有行」时触发。
+//
+// 不自开事务，跟着 ctx 里的事务走：建号回滚，这一行随之回滚。
+func (r *stateRepo) EnsureSeq(ctx context.Context, userID int64) error {
+	return db.Ctx(ctx).Exec(
+		`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime) VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE user_id = user_id`,
+		userID, time.Now().UnixMilli()).Error
 }
 
 // CurrentVersion 只读序列的当前值，绝不推进它——推进要么由 NextVersion 一次做完，
