@@ -121,3 +121,42 @@ func (s *Supervisor) DaemonBuild(ctx context.Context, userID int64, fingerprint 
 	}
 	return commit, true
 }
+
+// HandshakeState 是镜像握手为一台机器记下的两份共享状态：协议不匹配（语义见
+// ProtocolMismatch）与自报的短 commit（语义见 DaemonBuild，Known 分开「空串」与「不知道」）。
+type HandshakeState struct {
+	ProtocolMismatch bool
+	DaemonCommit     string
+	DaemonBuildKnown bool
+}
+
+// HandshakeStates 是 ProtocolMismatch + DaemonBuild 的批量形态：一个账号下一批机器，
+// 一个 pipeline 读完，往返次数与台数无关（device_svc.ListUserDevices，db-perf-fixes 决策 9）。
+//
+// 答案与入参逐格对应、判据与逐台读取相同：未装配镜像或没有 Redis 时每格零值；某一条
+// 读不出来只让它那一格退回「没有不匹配 / 不知道构建」，不牵连同批的其余机器。
+func (s *Supervisor) HandshakeStates(ctx context.Context, userID int64, fingerprints []string) []HandshakeState {
+	states := make([]HandshakeState, len(fingerprints))
+	if s == nil || s.redis == nil || len(fingerprints) == 0 {
+		return states
+	}
+	pipe := s.redis.Pipeline()
+	settle := make([]func(), len(fingerprints))
+	for i, fp := range fingerprints {
+		key := machineKey{userID: userID, fingerprint: fp}
+		mismatch := pipe.Exists(ctx, protocolMismatchKey(key))
+		build := pipe.Get(ctx, daemonBuildKey(key))
+		settle[i] = func() {
+			states[i].ProtocolMismatch = mismatch.Err() == nil && mismatch.Val() > 0
+			if commit, err := build.Result(); err == nil {
+				states[i].DaemonCommit, states[i].DaemonBuildKnown = commit, true
+			}
+		}
+	}
+	// Exec 的错只是第一个失败命令的错（从没握过手的 GET 未命中也算一个）：逐格看各自的 cmd。
+	_, _ = pipe.Exec(ctx)
+	for _, fn := range settle {
+		fn()
+	}
+	return states
+}

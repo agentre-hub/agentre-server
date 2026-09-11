@@ -3,6 +3,7 @@ package device_svc
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -862,6 +863,134 @@ func TestListUserDevices_MirrorNotConfigured(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(items[0].ProtocolMismatch, convey.ShouldBeFalse)
 	})
+}
+
+// redisTrips 数一条 Redis 客户端上发出去的往返：单发一条命令算一次 command，一整个
+// pipeline 算一次 pipeline。
+type redisTrips struct {
+	mu        sync.Mutex
+	commands  int
+	pipelines int
+}
+
+func (h *redisTrips) DialHook(next goredis.DialHook) goredis.DialHook { return next }
+
+func (h *redisTrips) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		h.mu.Lock()
+		h.commands++
+		h.mu.Unlock()
+		return next(ctx, cmd)
+	}
+}
+
+func (h *redisTrips) ProcessPipelineHook(next goredis.ProcessPipelineHook) goredis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []goredis.Cmder) error {
+		h.mu.Lock()
+		h.pipelines++
+		h.mu.Unlock()
+		return next(ctx, cmds)
+	}
+}
+
+func (h *redisTrips) reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.commands, h.pipelines = 0, 0
+}
+
+func (h *redisTrips) counts() (commands, pipelines int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.commands, h.pipelines
+}
+
+// presenceWorld 按 bootstrap 的形状装配设备在线态的两个来源：真实的 relay_svc 与
+// mirror_svc.Supervisor 共用同一个 Redis 客户端（生产上都是 redis.Default()），
+// 客户端上挂着往返计数。RESP2 且不发 CLIENT SETINFO，连接建立时不夹带握手命令。
+func presenceWorld(t *testing.T) (*miniredis.Miniredis, relay_svc.RelaySvc, *mirror_svc.Supervisor, *redisTrips) {
+	t.Helper()
+	mini := miniredis.RunT(t)
+	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr(), Protocol: 2, DisableIdentity: true})
+	t.Cleanup(func() { _ = client.Close() })
+	trips := &redisTrips{}
+	client.AddHook(trips)
+
+	relay := relay_svc.New(
+		relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Minute},
+		nil, nil, client, stubForwarder{},
+	)
+	relay_svc.SetDefault(relay)
+	t.Cleanup(func() { relay_svc.SetDefault(nil) })
+	sup := mirror_svc.NewSupervisor(mirror_svc.Config{InstanceID: "server-a"}, nil, nil, client)
+	mirror_svc.SetDefault(sup)
+	t.Cleanup(func() { mirror_svc.SetDefault(nil) })
+	return mini, relay, sup, trips
+}
+
+// Given 账号下 5 台机器，在线登记、协议不匹配、握手自报的 commit 各有几台有记录；
+// When 列出设备；
+// Then 每一行的在线态 / 协议不匹配 / 构建与逐台读取时相同，而 Redis 上没有一条单发命令：
+// 中继在线态、镜像握手状态各一次 pipeline 读完，往返次数与设备台数无关（要求 10）。
+func TestListUserDevices_GivenManyDevices_ThenPresenceIsReadInBatchesNotPerDevice(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	userID := int64(7)
+	_, relay, sup, trips := presenceWorld(t)
+
+	for _, fp := range []string{"fp-b", "fp-d"} {
+		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: userID, Fingerprint: fp, InstanceID: "server-a"}))
+	}
+	sup.RecordProtocolMismatch(ctx, userID, "fp-a")
+	sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
+	sup.RecordDaemonBuild(ctx, userID, "fp-d", "")
+	mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+		{ID: 41, UserID: 7, Name: "a", Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+		{ID: 42, UserID: 7, Name: "b", Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+		{ID: 43, UserID: 7, Name: "c", Kind: "desktop", Fingerprint: "fp-c", Status: 1},
+		{ID: 44, UserID: 7, Name: "d", Kind: "agentred", Fingerprint: "fp-d", Status: 1},
+		{ID: 45, UserID: 7, Name: "e", Kind: "agentred", Fingerprint: "fp-e", Status: 1},
+	}, nil)
+	trips.reset()
+
+	items, err := svc.ListUserDevices(ctx, userID, 43)
+
+	require.NoError(t, err)
+	commands, pipelines := trips.counts()
+	assert.Zero(t, commands, "no per-device Redis command")
+	assert.Equal(t, 2, pipelines, "one pipeline for relay presence, one for mirror handshake state")
+	assert.Equal(t, []DeviceView{
+		{ID: 41, Name: "a", Kind: "agentred", Fingerprint: "fp-a", Status: 1,
+			ProtocolMismatch: true, DaemonCommit: "a1b2c3d", DaemonBuildKnown: true},
+		{ID: 42, Name: "b", Kind: "agentred", Fingerprint: "fp-b", Status: 1, Online: true},
+		{ID: 43, Name: "c", Kind: "desktop", Fingerprint: "fp-c", Status: 1, IsThisDevice: true},
+		{ID: 44, Name: "d", Kind: "agentred", Fingerprint: "fp-d", Status: 1, Online: true, DaemonBuildKnown: true},
+		{ID: 45, Name: "e", Kind: "agentred", Fingerprint: "fp-e", Status: 1},
+	}, items)
+}
+
+// Given Redis 整个读不出来；When 列出设备；Then 列表照常返回，每台机器离线、无协议不匹配、
+// 构建未知——在线态是增强列，读不到按 fail-open 处理，不拖垮整个列表。
+func TestListUserDevices_GivenRedisFailing_ThenEveryDeviceFailsOpenAndTheListReturns(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	userID := int64(7)
+	mini, relay, sup, _ := presenceWorld(t)
+
+	require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: userID, Fingerprint: "fp-a", InstanceID: "server-a"}))
+	sup.RecordProtocolMismatch(ctx, userID, "fp-a")
+	sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
+	mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+		{ID: 41, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+		{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+	}, nil)
+	mini.SetError("ERR redis is down")
+
+	items, err := svc.ListUserDevices(ctx, userID, 0)
+
+	require.NoError(t, err)
+	assert.Equal(t, []DeviceView{
+		{ID: 41, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
+		{ID: 42, Kind: "agentred", Fingerprint: "fp-b", Status: 1},
+	}, items)
 }
 
 func TestApprove(t *testing.T) {

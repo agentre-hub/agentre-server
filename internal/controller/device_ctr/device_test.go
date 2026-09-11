@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/database/redis"
+	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -23,6 +24,7 @@ import (
 	api_device "github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
@@ -40,7 +42,15 @@ type stubDeviceSvc struct {
 	revoked         []int64
 	revokedJTI      []string
 	authorizeInputs []device_svc.AuthorizeInput
+	// listCalls 数设备列表被调了几次：列表每台机器都要读一遍在线态，归属判定不该走它。
+	listCalls int
+	// ownedCalls 记下每次归属判定问的是（哪个账号, 哪台设备）。
+	ownedCalls []ownedCall
+	// dbErr 顶替查库失败：两个读方法各按真实实现的出口把它交出去。
+	dbErr error
 }
+
+type ownedCall struct{ userID, deviceID int64 }
 
 func (s *stubDeviceSvc) Authorize(_ context.Context, in device_svc.AuthorizeInput) (*device_svc.AuthorizeOutput, error) {
 	s.authorizeInputs = append(s.authorizeInputs, in)
@@ -69,11 +79,21 @@ func (s *stubDeviceSvc) Revoke(_ context.Context, deviceID int64) error {
 
 // ListUserDevices 必须真的用上 callerDeviceID：这是「把自己标记出来」的唯一入口，
 // 丢掉它的桩会让 controller 停止转发 device_id 也照样测绿。
-func (s *stubDeviceSvc) ListUserDevices(_ context.Context, _ int64, callerDeviceID int64) ([]device_svc.DeviceView, error) {
-	out := make([]device_svc.DeviceView, len(s.userDevices))
-	copy(out, s.userDevices)
-	for i := range out {
-		out[i].IsThisDevice = out[i].ID == callerDeviceID
+//
+// 与真实实现一样只列在用的设备（device_repo.ListByUser 按 status 过滤），查库失败
+// 交出的是服务层包好的 DeviceListFailed。
+func (s *stubDeviceSvc) ListUserDevices(ctx context.Context, _ int64, callerDeviceID int64) ([]device_svc.DeviceView, error) {
+	s.listCalls++
+	if s.dbErr != nil {
+		return nil, i18n.NewInternalError(ctx, code.DeviceListFailed)
+	}
+	out := make([]device_svc.DeviceView, 0, len(s.userDevices))
+	for _, v := range s.userDevices {
+		if v.Status != 1 {
+			continue
+		}
+		v.IsThisDevice = v.ID == callerDeviceID
+		out = append(out, v)
 	}
 	return out, nil
 }
@@ -81,8 +101,22 @@ func (s *stubDeviceSvc) ListRevokedJTI(context.Context, int64) ([]string, error)
 	return s.revokedJTI, nil
 }
 
-func (s *stubDeviceSvc) OwnedDevice(context.Context, int64, int64) (*device_entity.Device, error) {
-	return nil, nil
+// OwnedDevice 按 userDevices 回答：清单里在用的那台就是本账号的；不在清单里（别的
+// 账号）或已撤销，回与真实实现同一个出口 DeviceNotFound。查库失败原样交出 repo 的错。
+func (s *stubDeviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*device_entity.Device, error) {
+	s.ownedCalls = append(s.ownedCalls, ownedCall{userID: userID, deviceID: deviceID})
+	if s.dbErr != nil {
+		return nil, s.dbErr
+	}
+	for _, v := range s.userDevices {
+		if v.ID == deviceID && v.Status == 1 {
+			return &device_entity.Device{
+				ID: v.ID, UserID: userID, Name: v.Name, Kind: v.Kind, Platform: v.Platform,
+				Version: v.Version, Fingerprint: v.Fingerprint, Status: v.Status,
+			}, nil
+		}
+	}
+	return nil, i18n.NewNotFoundError(ctx, code.DeviceNotFound)
 }
 
 var _ device_svc.DeviceSvc = (*stubDeviceSvc)(nil)
@@ -560,5 +594,139 @@ func TestDeviceUpgrade_RejectsMissingCSRFToken(t *testing.T) {
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/devices/upgrade",
 		cookie.Value, "", `{"device_id":1}`)
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Empty(t, upgrader.calls)
+}
+
+// ── 撤销 / 升级的归属判定（要求 11，决策 10）────────────────────────────────
+//
+// 判定一台设备归不归调用方，只需要按 id 取那一行；设备列表每台机器都要读一遍在线态，
+// 拿它来找一台设备是白读。非本账号、已撤销的设备仍回与从前逐字节相同的 403。
+
+// forbiddenBody 是归属判定失败时的响应体（code.Forbidden，默认语言），逐字节钉住。
+const forbiddenBody = `{"code":30005,"msg":"无权访问"}`
+
+// ownershipDeviceList 在升级用例那份清单之外，再放一台本账号已撤销的 agentred。
+func ownershipDeviceList() []device_svc.DeviceView {
+	return append(upgradeDeviceList(), device_svc.DeviceView{
+		ID: 3, Name: "old-nuc", Kind: device_entity.KindAgentred, Platform: "linux",
+		Version: "0.5.0", Fingerprint: "fp-old-nuc", Status: 0,
+	})
+}
+
+func readBody(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(raw)
+}
+
+func decodeErrorCode(t *testing.T, resp *http.Response) int {
+	t.Helper()
+	var envelope struct {
+		Code int `json:"code"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	return envelope.Code
+}
+
+// Given 浏览器会话撤销自己账号下的一台设备；Then 撤销成功，归属按（账号, 设备 id）判定一次，
+// 设备列表一次也不读。
+func TestRevoke_ForBrowserSession_ChecksOwnershipWithoutListingDevices(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: ownershipDeviceList()}
+	server, _ := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
+		cookie.Value, "", `{"device_id":1}`, csrf)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, []int64{1}, stub.revoked)
+	assert.Zero(t, stub.listCalls, "revoke must not read the device list")
+	assert.Equal(t, []ownedCall{{userID: 7, deviceID: 1}}, stub.ownedCalls)
+}
+
+// Given 目标是别的账号的设备，或本账号已撤销的设备；Then 403，响应体与从前逐字节相同，
+// 什么都不撤。
+func TestRevoke_ForBrowserSession_ForeignOrRevokedDeviceIsForbiddenAsBefore(t *testing.T) {
+	for name, deviceID := range map[string]string{"foreign": "99", "revoked": "3"} {
+		t.Run(name, func(t *testing.T) {
+			stub := &stubDeviceSvc{userDevices: ownershipDeviceList()}
+			server, _ := newDeviceTestServer(t, stub)
+			cookie, csrf := newSessionCookie(t, 7)
+
+			resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
+				cookie.Value, "", `{"device_id":`+deviceID+`}`, csrf)
+
+			require.Equal(t, http.StatusForbidden, resp.StatusCode)
+			assert.Equal(t, forbiddenBody, readBody(t, resp))
+			assert.Empty(t, stub.revoked)
+		})
+	}
+}
+
+// Given 判定归属时查库失败；Then 与从前一样回 500 + DeviceListFailed，什么都不撤。
+func TestRevoke_ForBrowserSession_OwnershipLookupFailureAnswersAsBefore(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: ownershipDeviceList(), dbErr: errors.New("db down")}
+	server, _ := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
+		cookie.Value, "", `{"device_id":1}`, csrf)
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Equal(t, code.DeviceListFailed, decodeErrorCode(t, resp))
+	assert.Empty(t, stub.revoked)
+}
+
+// Given 控制台升级自己账号下的一台 agentred；Then 调用送到那台机器的指纹，归属按
+// （账号, 设备 id）判定一次，设备列表一次也不读。
+func TestDeviceUpgrade_ChecksOwnershipWithoutListingDevices(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: ownershipDeviceList()}
+	upgrader := &stubUpgrader{result: mirror_svc.UpgradeResult{Accepted: true}}
+	server := newUpgradeTestServer(t, stub, upgrader)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/devices/upgrade",
+		cookie.Value, "", `{"device_id":1}`, csrf)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Len(t, upgrader.calls, 1)
+	assert.Equal(t, stubUpgradeCall{userID: 7, fingerprint: "fp-nuc-01"}, upgrader.calls[0])
+	assert.Zero(t, stub.listCalls, "upgrade must not read the device list")
+	assert.Equal(t, []ownedCall{{userID: 7, deviceID: 1}}, stub.ownedCalls)
+}
+
+// Given 目标是别的账号的设备、本账号已撤销的设备，或者不是 agentred；Then 403，响应体与
+// 从前逐字节相同，一次升级调用都不发。
+func TestDeviceUpgrade_ForeignRevokedOrNonAgentredDeviceIsForbiddenAsBefore(t *testing.T) {
+	for name, deviceID := range map[string]string{"foreign": "99", "revoked": "3", "desktop": "2"} {
+		t.Run(name, func(t *testing.T) {
+			stub := &stubDeviceSvc{userDevices: ownershipDeviceList()}
+			upgrader := &stubUpgrader{}
+			server := newUpgradeTestServer(t, stub, upgrader)
+			cookie, csrf := newSessionCookie(t, 7)
+
+			resp := doRequest(t, http.MethodPost, server.URL+"/v1/devices/upgrade",
+				cookie.Value, "", `{"device_id":`+deviceID+`}`, csrf)
+
+			require.Equal(t, http.StatusForbidden, resp.StatusCode)
+			assert.Equal(t, forbiddenBody, readBody(t, resp))
+			assert.Empty(t, upgrader.calls)
+		})
+	}
+}
+
+// Given 判定归属时查库失败；Then 与从前一样回 500 + DeviceListFailed，一次升级调用都不发。
+func TestDeviceUpgrade_OwnershipLookupFailureAnswersAsBefore(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: ownershipDeviceList(), dbErr: errors.New("db down")}
+	upgrader := &stubUpgrader{}
+	server := newUpgradeTestServer(t, stub, upgrader)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPost, server.URL+"/v1/devices/upgrade",
+		cookie.Value, "", `{"device_id":1}`, csrf)
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.Equal(t, code.DeviceListFailed, decodeErrorCode(t, resp))
 	assert.Empty(t, upgrader.calls)
 }

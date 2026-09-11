@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/pkg/i18n"
+	"github.com/cago-frame/cago/pkg/utils/httputils"
 	"github.com/gin-gonic/gin"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/device"
@@ -167,8 +168,8 @@ func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.Re
 // Revoke 撤销一台设备的凭据。
 //
 // 设备 JWT 调用方（device_id 非 0）只能撤销自己；浏览器 session 调用方
-// （device_id 为 0）只能撤销属于自己账号的设备——凭据所属关系以
-// ListUserDevices 为准，防止跨账号撤销。
+// （device_id 为 0）只能撤销属于自己账号、且仍在用的设备——凭据所属关系以
+// device_svc.OwnedDevice 为准，防止跨账号撤销。
 func (d *Device) Revoke(c *gin.Context, req *api.TokenRevokeRequest) (*api.TokenRevokeResponse, error) {
 	userID := ginctx.UserID(c)
 	callerID := ginctx.DeviceID(c)
@@ -183,26 +184,31 @@ func (d *Device) Revoke(c *gin.Context, req *api.TokenRevokeRequest) (*api.Token
 		if target != callerID {
 			return nil, i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
 		}
-	} else {
-		owned, err := device_svc.Default().ListUserDevices(c.Request.Context(), userID, 0)
-		if err != nil {
-			return nil, err
-		}
-		isOwned := false
-		for _, it := range owned {
-			if it.ID == target {
-				isOwned = true
-				break
-			}
-		}
-		if !isOwned {
-			return nil, i18n.NewForbiddenError(c.Request.Context(), code.Forbidden)
-		}
+	} else if _, err := ownedDevice(c.Request.Context(), userID, target); err != nil {
+		return nil, err
 	}
 	if err := device_svc.Default().Revoke(c.Request.Context(), target); err != nil {
 		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
 	}
 	return &api.TokenRevokeResponse{}, nil
+}
+
+// ownedDevice 取调用方账号下一台在用的设备，供撤销与升级判归属：按 id 取那一行，
+// 不读整份设备列表（列表要为每台机器读一遍在线态，判归属用不上）。
+//
+// 答复沿用改用它之前的两个出口，API 形状不变（db-perf-fixes 决策 10）：不归他 /
+// 已撤销 / 查不到（服务层同一个 DeviceNotFound）回 403 Forbidden；查库失败回 500
+// DeviceListFailed。
+func ownedDevice(ctx context.Context, userID, deviceID int64) (*device_entity.Device, error) {
+	device, err := device_svc.Default().OwnedDevice(ctx, userID, deviceID)
+	if err == nil {
+		return device, nil
+	}
+	var he *httputils.Error
+	if errors.As(err, &he) && he.Code == code.DeviceNotFound {
+		return nil, i18n.NewForbiddenError(ctx, code.Forbidden)
+	}
+	return nil, i18n.NewInternalError(ctx, code.DeviceListFailed)
 }
 
 func (d *Device) List(c *gin.Context, _ *api.ListDevicesRequest) (*api.ListDevicesResponse, error) {
@@ -256,20 +262,13 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 	if userID == 0 {
 		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
 	}
-	owned, err := device_svc.Default().ListUserDevices(ctx, userID, 0)
+	// 不是本账号在用的设备、或者根本不是一台 agentred：一次调用都不发。自更新方法只有
+	// agentred 认，对着桌面端发等于拿一个必然的协议错误当业务答复。
+	target, err := ownedDevice(ctx, userID, req.DeviceID)
 	if err != nil {
 		return nil, err
 	}
-	target := device_svc.DeviceView{}
-	for _, it := range owned {
-		if it.ID == req.DeviceID {
-			target = it
-			break
-		}
-	}
-	// 不是本账号的设备、或者根本不是一台 agentred：一次调用都不发。自更新方法只有
-	// agentred 认，对着桌面端发等于拿一个必然的协议错误当业务答复。
-	if target.ID == 0 || target.Kind != device_entity.KindAgentred {
+	if target.Kind != device_entity.KindAgentred {
 		return nil, i18n.NewForbiddenError(ctx, code.Forbidden)
 	}
 	result, err := d.machineUpgrader().UpgradeMachine(ctx, userID, target.Fingerprint, req.Force)
