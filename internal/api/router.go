@@ -329,7 +329,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
 	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(r.Signer, blacklist, relayTickets))
 	// 这一条同时承载账号信号：普通通道跑 RPC，保留通道（relay_svc.SignalChannelID）
-	// 推 sync_version / mirror_changed / device_presence。/v1/account/channel 已删除。
+	// 推 sync_version / mirror_changed / device_presence。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)
 
 	// 设备端口转发（规格 2026-09-09-console-port-forward-host）：

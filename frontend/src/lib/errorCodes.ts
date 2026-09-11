@@ -5,7 +5,7 @@
  * 守卫测试 src/__tests__/error-code-contract.test.ts 就是拿这些名字去 code.go 里取
  * 显式写出的编号比对的，改名即断链、测试即红。
  *
- * 不要就地裸写数字：编号在 code.go 里虽然已经显式写出（不再用 iota），但改一个数字
+ * 不要就地裸写数字：编号在 code.go 里虽然是显式写出的，但改一个数字
  * 仍然不会让前端编译不过——它只会把某个失败认成另一个，而这条断言是唯一会红的地方。
  */
 export const DEVICE_FLOW_CODES = {

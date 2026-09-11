@@ -37,8 +37,7 @@ import (
 // 写入侧被强制要求 scope_sync_id 与 agentred_fingerprint 非空（sync_svc 的
 // rejectReason、workspace_svc 的 checkLocationNaturalKey）。其余七种这两列恒为空串，
 // 放进名单会让该 kind 下所有存活行退化成同一个键 (user_id, ”, ”, kind) 而互相顶掉
-// ——用户建第二个 Agent 就撞唯一索引。守卫见
-// sync_object_natural_key_test.go 的 NaturalKeyKindListStaysMinimal。
+// ——用户建第二个 Agent 就撞唯一索引。
 //
 // 键里放的是三个真列而不是把它们拼成一个字符串：拼接需要一个分隔符，而在
 // utf8mb4_0900_ai_ci 下 CHAR(0) 这类控制字符的排序权重为空、会被直接忽略，

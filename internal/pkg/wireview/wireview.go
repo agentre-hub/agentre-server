@@ -7,13 +7,13 @@
 //   - 导入本地会话的预览（sessionimport_svc）：从那台机器上取回的转录轮次里的
 //     事件，按同一条形状投影，于是预览与真实转录走的是同一个渲染链。
 //
-// 投影的判据不在这里定：它是 frontend/src/lib/transcriptFrames.ts 那个归约器认得的
-// 事件词表，本包只负责把 typed 事件如实摊成那份词表里的 {kind, ...}。
+// 投影的判据不在这里定：它是共享包 @agentre-hub/agentre-ui 的 transcript/frames.ts
+// 那个归约器认得的事件词表，本包只负责把 typed 事件如实摊成那份词表里的 {kind, ...}。
 //
-// 判别值本身也不在这里定了：它写在 .proto 的 (agentre.wire.event_kind) 字段选项上，
-// 由 pkg/wire/eventkind 从 descriptor 读出来。本包从前有一份 27 分支的手抄 switch
-// —— 分支名与判别值没有可推导的规则（tool_call → tool_use_start），抄错编译器发现
-// 不了，页面上表现为那一类卡片整块不渲染。
+// 判别值本身也不在这里定：它写在 .proto 的 (agentre.wire.event_kind) 字段选项上，
+// 由 pkg/wire/eventkind 从 descriptor 读出来。分支名与判别值之间没有可推导的规则
+// （tool_call → tool_use_start），手抄一份抄错了编译器发现不了，页面上表现为那一类
+// 卡片整块不渲染。
 package wireview
 
 import (
@@ -289,7 +289,7 @@ type storedFrame struct {
 // 一次；逃生路存的也是盖过 seq 的原件。
 // 交回的是 string 而不是 []byte：落库那一列是 json，而驱动开了 interpolateParams
 // 时会把 []byte 插值成 `_binary'…'`，MySQL 对 json 列拒收二进制字符集。类型在这里
-// 就定成文本，调用方便无从传错（见 agent_session_entity.JournalFrame.Payload）。
+// 就定成文本，调用方便无从传错（见 agent_session_entity.DurableFrame.Payload）。
 func EncodeStoredFrame(notification *agentrewire.RpcNotification) (string, error) {
 	method, params, err := Notification(notification)
 	if err != nil {
