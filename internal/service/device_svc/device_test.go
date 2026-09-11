@@ -10,6 +10,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
+	"github.com/go-sql-driver/mysql"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -90,6 +91,68 @@ func TestAuthorize_ReturnsUserCode(t *testing.T) {
 	})
 }
 
+// user_code 生成器的码空间不大（32^6），且 pending_flag 部分唯一索引只能拦住
+// "还没结算" 的行，撞码不算罕见到可以直接 500 给用户。Authorize 撞见
+// uk_dfc_user_code_pending 的 1062 时必须原地重新生成再试，而不是把一次纯粹的
+// 随机数运气上抛成失败请求。
+func TestAuthorize_UserCodeCollision(t *testing.T) {
+	pendingDup := &mysql.MySQLError{
+		Number:  1062,
+		Message: "Duplicate entry 'ABC-DEF' for key 'device_flow_codes.uk_dfc_user_code_pending'",
+	}
+
+	convey.Convey("Authorize 撞 user_code", t, func() {
+		convey.Convey("与待授权码冲突一次后重试成功，返回第二次生成的新码", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			var seen []string
+			gomock.InOrder(
+				mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, c *device_flow_entity.DeviceFlowCode) error {
+						seen = append(seen, c.UserCode)
+						return pendingDup
+					},
+				),
+				mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(_ context.Context, c *device_flow_entity.DeviceFlowCode) error {
+						seen = append(seen, c.UserCode)
+						return nil
+					},
+				),
+			)
+
+			out, err := svc.Authorize(ctx, AuthorizeInput{DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa"})
+
+			assert.NoError(t, err)
+			assert.Len(t, seen, 2)
+			assert.Equal(t, seen[1], out.UserCode)
+		})
+
+		convey.Convey("连续 5 次撞码后返回错误，不再重试", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().Create(gomock.Any(), gomock.Any()).Return(pendingDup).Times(5)
+
+			out, err := svc.Authorize(ctx, AuthorizeInput{DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa"})
+
+			assert.Nil(t, out)
+			assert.Error(t, err)
+		})
+
+		convey.Convey("其他唯一键（device_code）冲突不重试，直接上抛", func() {
+			ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+			identityDup := &mysql.MySQLError{
+				Number:  1062,
+				Message: "Duplicate entry 'dc-x' for key 'device_flow_codes.uk_device_flow_codes_identity'",
+			}
+			mF.EXPECT().Create(gomock.Any(), gomock.Any()).Return(identityDup).Times(1)
+
+			out, err := svc.Authorize(ctx, AuthorizeInput{DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa"})
+
+			assert.Nil(t, out)
+			assert.ErrorIs(t, err, identityDup)
+		})
+	})
+}
+
 func TestExchangeToken(t *testing.T) {
 	convey.Convey("ExchangeToken", t, func() {
 		convey.Convey("device_code 不存在 → invalid_grant", func() {
@@ -123,9 +186,30 @@ func TestExchangeToken(t *testing.T) {
 					ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			_, err := svc.ExchangeToken(ctx, "dc-x")
 			assert.Contains(t, err.Error(), "authorization_pending")
+		})
+		// 限速判定曾经是「读 NextPollAllowed 再无条件 UPDATE」的 check-then-act：
+		// 两个并发或重复的轮询都能读到「还没到点」为假、都往下走。条件 UPDATE 把
+		// 判定收进数据库自己的一条语句，0 行受影响就是这次没抢到，必须 slow_down，
+		// 且不能再往下判 IsAuthorized（没有轮到它决定）。
+		convey.Convey("并发/重复轮询在限速间隔内只有一个通过，另一个 slow_down", func() {
+			ctx, mD, mT, mF, svc, _ := setupDeviceTest(t)
+			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+				&device_flow_entity.DeviceFlowCode{
+					DeviceCode: "dc-x", IntervalSeconds: 5,
+					ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+					AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+				}, nil,
+			)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), int64(5000)).Return(int64(0), nil)
+			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).Times(0)
+			mT.EXPECT().Create(gomock.Any(), gomock.Any()).Times(0)
+			mF.EXPECT().MarkConsumed(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+			_, err := svc.ExchangeToken(ctx, "dc-x")
+			assert.Contains(t, err.Error(), ErrSlowDown)
 		})
 		convey.Convey("已授权 → 颁发 token + 标 consumed + upsert device", func() {
 			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
@@ -138,7 +222,7 @@ func TestExchangeToken(t *testing.T) {
 					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
 					assert.Equal(t, "agentred", d.Kind)
@@ -179,7 +263,7 @@ func TestExchangeToken(t *testing.T) {
 					ClientName:        reported,
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			var name string
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
@@ -213,7 +297,7 @@ func TestExchangeToken(t *testing.T) {
 					DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
 				}, nil,
 			)
-			mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			// 赢家已经把这一行标为 consumed，竞败方的 UPDATE 一行也改不到
 			mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(0), nil)
 			// 消费判定必须排在写 devices / device_tokens 之前：竞败方在这里出局，
@@ -879,7 +963,7 @@ func TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprin
 			DeviceKind: "agentred", ClientFingerprint: fingerprint,
 		}, nil,
 	)
-	mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
 	)
@@ -1023,7 +1107,7 @@ func TestExchangeToken_SignalsThatTheDeviceRowNowExists(t *testing.T) {
 			DeviceKind: "agentred", ClientFingerprint: "fp-aaaaaaaa",
 		}, nil,
 	)
-	mF.EXPECT().UpdateLastPolled(gomock.Any(), "dc-x", gomock.Any()).Return(nil)
+	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },

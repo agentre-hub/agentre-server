@@ -21,6 +21,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/usercode"
@@ -131,28 +132,51 @@ func (s *deviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*d
 	return d, nil
 }
 
+// uniqueKeyUserCodePending 是 user_code 唯一键的名字（migrations/202609040105_device_flow_codes.go）。
+// pending_flag 是 MySQL 表达「部分唯一索引」的写法：生成列不能带表达式排除已过期、
+// 未结算的行（会撞 ERROR 3763），所以过期但还没被清理/结算的行仍会占着 user_code，
+// 重新生成的码撞见它是预期内的常规碰撞，不是异常。
+const uniqueKeyUserCodePending = "uk_dfc_user_code_pending"
+
+// maxUserCodeCollisions 是同一次 Authorize 请求重新生成 user_code 的次数上限。
+const maxUserCodeCollisions = 5
+
 func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*AuthorizeOutput, error) {
 	now := s.now()
 	dc, err := randomBase32(32)
 	if err != nil {
 		return nil, err
 	}
-	uc := usercode.Generate()
 
-	code := &device_flow_entity.DeviceFlowCode{
-		DeviceCode:        dc,
-		UserCode:          uc,
-		DeviceKind:        in.DeviceKind,
-		ClientFingerprint: in.Fingerprint,
-		ClientName:        in.Name,
-		Platform:          in.Platform,
-		Version:           in.Version,
-		IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
-		ExpiresAt:         now + s.cfg.FlowTTL.Milliseconds(),
-		Createtime:        now,
-	}
-	if err := device_flow_repo.DeviceFlow().Create(ctx, code); err != nil {
-		return nil, err
+	var uc string
+	for attempt := 1; ; attempt++ {
+		uc = usercode.Generate()
+		flow := &device_flow_entity.DeviceFlowCode{
+			DeviceCode:        dc,
+			UserCode:          uc,
+			DeviceKind:        in.DeviceKind,
+			ClientFingerprint: in.Fingerprint,
+			ClientName:        in.Name,
+			Platform:          in.Platform,
+			Version:           in.Version,
+			IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
+			ExpiresAt:         now + s.cfg.FlowTTL.Milliseconds(),
+			Createtime:        now,
+		}
+		err := device_flow_repo.DeviceFlow().Create(ctx, flow)
+		if err == nil {
+			break
+		}
+		// 只重试撞在待授权 user_code 上的碰撞；其余唯一键冲突（如 device_code）
+		// 是真正的异常，照常上抛，不掩盖成一次「正常」的重试。
+		if !dberr.IsDuplicateKey(err, uniqueKeyUserCodePending) {
+			return nil, err
+		}
+		if attempt >= maxUserCodeCollisions {
+			logger.Ctx(ctx).Error("device flow user_code collided too many times",
+				zap.Int("attempts", attempt), zap.Error(err))
+			return nil, err
+		}
 	}
 	logger.Ctx(ctx).Info("device flow authorized", zap.String("userCode", uc),
 		zap.String("deviceKind", in.DeviceKind), zap.String("platform", in.Platform),
@@ -235,11 +259,17 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		return nil, newOAuthErr(ErrExpiredToken, "device flow expired")
 	}
 
-	if !flow.NextPollAllowed(nowMs) {
-		return nil, newOAuthErr(ErrSlowDown, "polling too fast")
-	}
-	if err := device_flow_repo.DeviceFlow().UpdateLastPolled(ctx, dc, nowMs); err != nil {
+	// 限速判定是一条条件 UPDATE，不是「读 NextPollAllowed 再无条件写」：两个并发或
+	// 重复的轮询打到同一行时，WHERE 里的 last_polled_at <= now-minGap 只让数据库
+	// 认定的那一个改到行，另一个凭 RowsAffected==0 判 slow_down——不给它机会把
+	// 「还没到点」的判断建立在自己读到的、可能已经过时的那一份状态上。
+	minGapMs := int64(flow.IntervalSeconds) * 1000
+	n, err := device_flow_repo.DeviceFlow().UpdateLastPolledIfDue(ctx, dc, nowMs, minGapMs)
+	if err != nil {
 		return nil, err
+	}
+	if n != 1 {
+		return nil, newOAuthErr(ErrSlowDown, "polling too fast")
 	}
 
 	if !flow.IsAuthorized() {

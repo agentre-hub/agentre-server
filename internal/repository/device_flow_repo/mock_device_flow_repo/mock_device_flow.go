@@ -144,16 +144,17 @@ func (mr *MockDeviceFlowRepoMockRecorder) MarkConsumed(ctx, deviceCode, nowMs an
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkConsumed", reflect.TypeOf((*MockDeviceFlowRepo)(nil).MarkConsumed), ctx, deviceCode, nowMs)
 }
 
-// UpdateLastPolled mocks base method.
-func (m *MockDeviceFlowRepo) UpdateLastPolled(ctx context.Context, deviceCode string, nowMs int64) error {
+// UpdateLastPolledIfDue mocks base method.
+func (m *MockDeviceFlowRepo) UpdateLastPolledIfDue(ctx context.Context, deviceCode string, nowMs, minGapMs int64) (int64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "UpdateLastPolled", ctx, deviceCode, nowMs)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret := m.ctrl.Call(m, "UpdateLastPolledIfDue", ctx, deviceCode, nowMs, minGapMs)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// UpdateLastPolled indicates an expected call of UpdateLastPolled.
-func (mr *MockDeviceFlowRepoMockRecorder) UpdateLastPolled(ctx, deviceCode, nowMs any) *gomock.Call {
+// UpdateLastPolledIfDue indicates an expected call of UpdateLastPolledIfDue.
+func (mr *MockDeviceFlowRepoMockRecorder) UpdateLastPolledIfDue(ctx, deviceCode, nowMs, minGapMs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateLastPolled", reflect.TypeOf((*MockDeviceFlowRepo)(nil).UpdateLastPolled), ctx, deviceCode, nowMs)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateLastPolledIfDue", reflect.TypeOf((*MockDeviceFlowRepo)(nil).UpdateLastPolledIfDue), ctx, deviceCode, nowMs, minGapMs)
 }
