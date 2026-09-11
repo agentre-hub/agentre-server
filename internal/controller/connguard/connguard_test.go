@@ -5,11 +5,15 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
@@ -55,19 +59,52 @@ func TestNew_ReadsGateOnEveryCheck(t *testing.T) {
 	user_svc.SetGate(nil)
 	t.Cleanup(func() { auth_svc.SetDefault(nil); user_svc.SetGate(nil) })
 
-	guard := New(context.Background(), 7, "jti-1")
+	guard := New(context.Background(), 7, 0, "jti-1")
 	require.NoError(t, guard(), "闸门未装配时放行")
 
 	user_svc.SetGate(stubGate{err: errors.New("banned")})
 	assert.ErrorIs(t, guard(), relayws.ErrCredentialRevoked, "装配后同一条连接必须开始受管辖")
 }
 
-// auth_svc 未装配、或这条连接没带 jti 时，取不到撤销判定，按不撤销处理。
-func TestNew_NoCredentialWatchWithoutAuthSvcOrJTI(t *testing.T) {
+// 取不到撤销判定时按不撤销处理：票据连接缺 auth_svc 或凭据句柄，设备连接缺 device_svc。
+func TestNew_NoCredentialWatchWhenUnwired(t *testing.T) {
 	auth_svc.SetDefault(nil)
+	device_svc.SetDefault(nil)
 	user_svc.SetGate(nil)
-	t.Cleanup(func() { auth_svc.SetDefault(nil); user_svc.SetGate(nil) })
+	t.Cleanup(func() { auth_svc.SetDefault(nil); device_svc.SetDefault(nil); user_svc.SetGate(nil) })
 
-	assert.Nil(t, watch(context.Background(), "jti-1"), "auth_svc 未装配")
-	assert.Nil(t, watch(context.Background(), ""), "连接没带 jti")
+	assert.Nil(t, watch(context.Background(), 7, 0, "jti-1"), "auth_svc 未装配")
+	assert.Nil(t, watch(context.Background(), 7, 0, ""), "票据连接没带凭据句柄")
+	assert.Nil(t, watch(context.Background(), 7, 42, "11"), "device_svc 未装配")
+}
+
+// ownedDevices 只回答归属判定：err 为 nil 表示设备仍归这个账号在用。
+type ownedDevices struct {
+	device_svc.DeviceSvc
+	err error
+}
+
+func (d ownedDevices) OwnedDevice(context.Context, int64, int64) (*device_entity.Device, error) {
+	if d.err != nil {
+		return nil, d.err
+	}
+	return &device_entity.Device{}, nil
+}
+
+// S4：设备凭据背后的连接跟着设备走。设备 access token 不在 Redis 里留任何痕迹，撤销的
+// 事实只落在库里的设备状态上，所以复查问的是「这台设备还归这个账号在用吗」：不再可用
+// （撤销、删号）就断开；库判不出来就不断开——那只是一次早已生效的撤销的收尾。
+func TestWatch_DeviceCredentialFollowsTheDevice(t *testing.T) {
+	auth_svc.SetDefault(nil)
+	t.Cleanup(func() { device_svc.SetDefault(nil) })
+	ctx := context.Background()
+
+	device_svc.SetDefault(ownedDevices{})
+	assert.False(t, watch(ctx, 7, 42, "11")(ctx), "设备仍在用")
+
+	device_svc.SetDefault(ownedDevices{err: i18n.NewNotFoundError(ctx, code.DeviceNotFound)})
+	assert.True(t, watch(ctx, 7, 42, "11")(ctx), "设备已撤销或不再归这个账号")
+
+	device_svc.SetDefault(ownedDevices{err: errors.New("database unavailable")})
+	assert.False(t, watch(ctx, 7, 42, "11")(ctx), "判不出来不断开")
 }

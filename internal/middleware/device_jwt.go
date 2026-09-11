@@ -13,21 +13,20 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 )
 
-func DeviceJWT(signer *jwt.Signer, blacklist *jwtblacklist.Blacklist) gin.HandlerFunc {
+// DeviceJWT 只放行设备 access token：按摘要解析出一台仍在用的设备，再过账号闸门。
+// 浏览器的中继票据进不来。判定只读 MySQL，Redis 不可用不影响它。
+func DeviceJWT(tokens BearerResolver) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, biz, ok := verifiedJWT(c, signer, blacklist)
+		token, _ := bearerToken(c)
+		p, status, businessCode, ok := devicePrincipal(c, tokens, token)
 		if !ok {
-			apierr.Abort(c, http.StatusUnauthorized, biz)
+			apierr.Abort(c, status, businessCode)
 			return
 		}
-		if !isDeviceCredential(claims) {
-			apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+		if accountBlocked(c, p.AccountID) {
 			return
 		}
-		if accountBlocked(c, claims.UID) {
-			return
-		}
-		setJWTClaims(c, claims)
+		setDevicePrincipal(c, p)
 		c.Next()
 	}
 }
@@ -48,29 +47,45 @@ func consumeBrowserTicket(c *gin.Context, jti string, tickets *relayticket.Ticke
 	return true
 }
 
-// RelayClientJWT accepts ordinary device JWTs for native clients and the browser's
+// RelayClientJWT accepts native clients' device access tokens and the browser's
 // short-lived relay_client ticket. The latter is deliberately rejected by DeviceJWT.
-func RelayClientJWT(signer *jwt.Signer, blacklist *jwtblacklist.Blacklist,
+//
+// 票据仍是 JWT：验得过签就只按票据判（形状、黑名单、用后即焚）。设备 access token 是不透明
+// 随机串，验签必然不过，落到与 DeviceJWT 同一条摘要解析上——判据与那边逐条相同。
+func RelayClientJWT(tokens BearerResolver, signer *jwt.Signer, blacklist *jwtblacklist.Blacklist,
 	tickets *relayticket.Tickets) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		claims, biz, ok := verifiedJWT(c, signer, blacklist)
+		token, _ := bearerToken(c)
+		if claims, err := signer.Verify(token); err == nil {
+			if !isRelayTicket(claims) {
+				apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+				return
+			}
+			if blacklist.Has(c.Request.Context(), claims.JTI) {
+				apierr.Abort(c, http.StatusUnauthorized, code.JWTBlacklisted)
+				return
+			}
+			// 浏览器票据用后即焚，见 auth_svc.ConsumeRelayTicket。原生端的设备 access token
+			// 不在此列：它是长期凭据，本来就要反复使用。
+			if !consumeBrowserTicket(c, claims.JTI, tickets) {
+				return
+			}
+			if accountBlocked(c, claims.UID) {
+				return
+			}
+			setTicketPrincipal(c, claims)
+			c.Next()
+			return
+		}
+		p, status, businessCode, ok := devicePrincipal(c, tokens, token)
 		if !ok {
-			apierr.Abort(c, http.StatusUnauthorized, biz)
+			apierr.Abort(c, status, businessCode)
 			return
 		}
-		if !isRelayClientCredential(claims) {
-			apierr.Abort(c, http.StatusUnauthorized, code.Unauthorized)
+		if accountBlocked(c, p.AccountID) {
 			return
 		}
-		// 浏览器票据用后即焚，见 auth_svc.ConsumeRelayTicket。原生端的设备 JWT
-		// (DID != 0) 不在此列:它是长期凭据,本来就要反复使用。
-		if claims.Kind == "relay_client" && !consumeBrowserTicket(c, claims.JTI, tickets) {
-			return
-		}
-		if accountBlocked(c, claims.UID) {
-			return
-		}
-		setJWTClaims(c, claims)
+		setDevicePrincipal(c, p)
 		c.Next()
 	}
 }

@@ -72,8 +72,7 @@ func (h *channelHarness) machine(t *testing.T, id int64, fingerprint, kind strin
 	device := &device_entity.Device{ID: id, UserID: 7, Kind: kind, Fingerprint: fingerprint, Status: 1}
 	h.devices.EXPECT().Find(gomock.Any(), id).Return(device, nil).AnyTimes()
 	h.devices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), fingerprint).Return(device, nil).AnyTimes()
-	token, _, err := h.signer.Sign(jwt.Claims{UID: 7, DID: id, Kind: kind}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, id, kind)
 	conn, _, err := protobufRelayDialer.Dial(wsURL(h.server.URL, "/v1/relay/daemon"),
 		http.Header{"Authorization": {"Bearer " + token}})
 	require.NoError(t, err)
@@ -93,8 +92,7 @@ func (h *channelHarness) offlineMachine(t *testing.T, id int64, fingerprint stri
 // client 开一条**账号级**中继连接：URL 上没有目标，目标由每条通道各自声明。
 func (h *channelHarness) client(t *testing.T) *clientLink {
 	t.Helper()
-	token, _, err := h.signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 4, device_entity.KindDesktop)
 	conn, response, err := protobufRelayDialer.Dial(wsURL(h.server.URL, "/v1/relay/client"),
 		http.Header{"Authorization": {"Bearer " + token}})
 	if response != nil {

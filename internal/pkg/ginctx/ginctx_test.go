@@ -20,13 +20,13 @@ func TestSetThenGet_RoundTrips(t *testing.T) {
 
 	SetUserID(c, 42)
 	SetDevice(c, 7, "desktop")
-	SetJTI(c, "jti-1")
+	SetCredentialHandle(c, "handle-1")
 	SetCSRFToken(c, "csrf-1")
 
 	assert.Equal(t, int64(42), UserID(c))
 	assert.Equal(t, int64(7), DeviceID(c))
 	assert.Equal(t, "desktop", DeviceKind(c))
-	assert.Equal(t, "jti-1", JTI(c))
+	assert.Equal(t, "handle-1", CredentialHandle(c))
 	assert.Equal(t, "csrf-1", CSRFToken(c))
 }
 
@@ -38,7 +38,7 @@ func TestMissingKeys_AreZeroValues(t *testing.T) {
 	assert.Zero(t, UserID(c))
 	assert.Zero(t, DeviceID(c))
 	assert.Empty(t, DeviceKind(c))
-	assert.Empty(t, JTI(c))
+	assert.Empty(t, CredentialHandle(c))
 	assert.Empty(t, CSRFToken(c))
 }
 
@@ -48,11 +48,11 @@ func TestWrongTypes_FallBackToZero(t *testing.T) {
 	c := newCtx()
 	c.Set(KeyUserID, "not-an-int64")
 	c.Set(KeyDeviceID, 7) // int，不是 int64
-	c.Set(KeyJTI, 123)
+	c.Set(KeyCredentialHandle, 123)
 
 	assert.Zero(t, UserID(c))
 	assert.Zero(t, DeviceID(c))
-	assert.Empty(t, JTI(c))
+	assert.Empty(t, CredentialHandle(c))
 }
 
 // CSRF() 中间件按「有没有出示与会话匹配的 token」判定，空串是它的失败判据之一，

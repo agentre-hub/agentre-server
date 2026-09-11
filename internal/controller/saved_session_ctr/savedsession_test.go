@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/server/mux/muxtest"
@@ -18,11 +17,13 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/saved_session_svc"
 )
 
@@ -78,7 +79,7 @@ func (s *stubSavedSessionSvc) Delete(
 func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) (*httptest.Server, *jwt.Signer) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	testutils.Redis(t) // miniredis → session 存储 + jwt 黑名单
+	testutils.Redis(t) // miniredis → session 存储 + 中继票据黑名单
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 	saved_session_svc.SetDefault(stub)
@@ -86,6 +87,7 @@ func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) (*httpte
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
+		Bearer: bearertest.Resolver{},
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
 		Signer: signer,
 	}).Router(context.Background(), testMux.Router))
@@ -203,9 +205,8 @@ func TestDelete_RejectsMissingCSRF(t *testing.T) {
 // 设备 JWT 调用方不带 cookie，结构上不受 CSRF 威胁：保存照常成功。
 func TestSave_DeviceJWT_NoCSRFNeeded(t *testing.T) {
 	stub := newStubSavedSessionSvc()
-	server, signer := newSavedSessionTestServer(t, stub)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 1, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	server, _ := newSavedSessionTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 1, Kind: device_entity.KindAgentred})
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
 		"", token, `{"device_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`)

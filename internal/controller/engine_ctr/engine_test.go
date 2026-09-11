@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
@@ -94,7 +94,8 @@ func newEngineServer(t *testing.T, stub *stubEngineSvc) (*httptest.Server, *jwt.
 	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil, jwtblacklist.New(redis.Default())))
 	t.Cleanup(func() { device_svc.SetDefault(nil) })
 	tm := muxtest.NewTestMux()
-	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}}, Signer: signer}).Router(context.Background(), tm.Router))
+	require.NoError(t, (&api.RouterDeps{
+		Bearer: bearertest.Resolver{}, Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}}, Signer: signer}).Router(context.Background(), tm.Router))
 	server := httptest.NewServer(tm.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
 	return server, signer
@@ -148,13 +149,12 @@ func TestBrowserBackendCreate_CarriesDeviceFingerprintThroughToServiceAndRespons
 
 func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
 	stub := &stubEngineSvc{}
-	server, signer := newEngineServer(t, stub)
+	server, _ := newEngineServer(t, stub)
 	ctrl := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
 	device_repo.RegisterDevice(devices)
 	devices.EXPECT().Find(gomock.Any(), int64(2)).Return(&device_entity.Device{ID: 2, UserID: 7, Fingerprint: "fp-1", Status: consts.ACTIVE}, nil)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindAgentred})
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/engine/snapshot", nil)
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -175,15 +175,14 @@ func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
 // relay_svc 与 workspace_svc 的同一条判定都判了（device_entity.UsableBy）。
 func TestDeviceSnapshot_RevokedDeviceIsRejected(t *testing.T) {
 	stub := &stubEngineSvc{}
-	server, signer := newEngineServer(t, stub)
+	server, _ := newEngineServer(t, stub)
 	ctrl := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
 	device_repo.RegisterDevice(devices)
 	devices.EXPECT().Find(gomock.Any(), int64(2)).
 		Return(&device_entity.Device{ID: 2, UserID: 7, Fingerprint: "fp-1", Status: consts.DELETE}, nil)
 
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindAgentred})
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/engine/snapshot", nil)
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+token)

@@ -178,10 +178,20 @@ middleware groups are the authorization model:
 | Public | — (some endpoints add per-IP rate limits) | healthz, GitHub OAuth authorize/callback, passkey login, `/v1/keys` |
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
 | Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*` |
-| Either credential | `SessionOrDeviceAuth(signer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
-| Device JWT | `DeviceJWT(signer)` | `/v1/devices/revocations`, `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot` |
-| Relay client | `RelayClientJWT(signer)` | `/v1/relay/client`; accepts native Device JWTs and browser session-derived short-lived relay tickets |
+| Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
+| Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot` |
+| Relay client | `RelayClientJWT(bearer, signer, …)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (still JWTs) |
 | Port forward | `SessionAuth()` only — **no** `CSRF()` | `/fw/*` |
+
+Device access tokens are opaque random strings. The server stores only their sha256 digest
+(`device_tokens.access_token_hash`), and every Bearer in the three groups that accept one goes
+through the same `middleware.BearerResolver` — in production `device_svc.ResolveBearer`, which
+reads MySQL only. A token is valid while its digest exists, `createtime + AccessTTL` is still in
+the future and its device is active; the row's `revoked_at` is not consulted, so a token rotated
+out by a refresh keeps working until it expires. Revoking the device therefore invalidates all of
+its tokens at once, and `connguard` closes already-open relay connections on the next heartbeat by
+re-checking the device. Unknown, expired and revoked tokens all answer 401; a failure to resolve
+answers 500, and Redis being down changes neither verdict.
 
 Cookie-authenticated writes clear CSRF in every group except `/fw/`: a Bearer caller
 carries no cookie and is exempt, a session caller is not. `/fw/` is the one deliberate

@@ -22,7 +22,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/usercode"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
@@ -42,7 +41,8 @@ type DeviceSvc interface {
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]DeviceView, error)
-	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
+	// ResolveBearer 把一枚设备 access token 解析成调用方身份，见实现处说明。
+	ResolveBearer(ctx context.Context, token string) (*Principal, error)
 	// OwnedDevice 取一台属于该账号、且仍可用的设备。
 	//
 	// 查不到、不归他、已撤销三种情形一律回同一个 DeviceNotFound：对调用方是同
@@ -95,15 +95,10 @@ func (noopDeviceDataPurger) PurgeDeviceDeleteTodos(context.Context, int64, strin
 }
 
 type deviceSvc struct {
-	cfg    Config
-	signer Signer
-	// blacklist 是吊销时要写的那份 jti 黑名单。注入而不是够 jwtblacklist 的包级
-	// 函数：那两个函数背后是 redis.Default() 全局单例，撤销这条链路因此没法在不
-	// 改全局状态的前提下被测。
-	blacklist *jwtblacklist.Blacklist
+	cfg Config
 	// now 是这个服务的时钟。注入而不是就地 time.Now()，与 sync_svc / engine_svc /
 	// relay_svc.framebus 同一形状：这里的判定全是「距今多久」的边界（授权码过期、
-	// 刷新窗口、吊销列表窗口），用真实时钟只断言得了区间，而区间往往恰好盖得住
+	// 刷新窗口、access token 过期），用真实时钟只断言得了区间，而区间往往恰好盖得住
 	// 差一个常量的错法。
 	now func() int64
 }
@@ -113,12 +108,13 @@ var defaultSvc DeviceSvc
 func Default() DeviceSvc     { return defaultSvc }
 func SetDefault(s DeviceSvc) { defaultSvc = s }
 
-func New(cfg Config, signer Signer, blacklist *jwtblacklist.Blacklist) DeviceSvc {
-	return newDeviceSvc(cfg, signer, blacklist)
+// New 构造设备服务。access token 已是不透明随机串、撤销也不再写 jti 黑名单，签名器与
+// 黑名单这两个入参因此不再被使用；它们只为组合根现有的装配调用保留，随 JWT 退役一起删。
+func New(cfg Config, _ Signer, _ *jwtblacklist.Blacklist) DeviceSvc {
+	return newDeviceSvc(cfg)
 }
-func newDeviceSvc(cfg Config, signer Signer, blacklist *jwtblacklist.Blacklist) *deviceSvc {
-	return &deviceSvc{cfg: cfg, signer: signer, blacklist: blacklist,
-		now: func() int64 { return time.Now().UnixMilli() }}
+func newDeviceSvc(cfg Config) *deviceSvc {
+	return &deviceSvc{cfg: cfg, now: func() int64 { return time.Now().UnixMilli() }}
 }
 
 func (s *deviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*device_entity.Device, error) {
@@ -321,7 +317,7 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 	if err != nil {
 		return nil, err
 	}
-	logger.Ctx(ctx).Info("device token exchanged", zap.Int64("userId", flow.AuthorizedUserID), zap.Int64("deviceId", out.DeviceID), zap.String("deviceKind", flow.DeviceKind), zap.String("platform", flow.Platform), zap.String("version", flow.Version), zap.String("jti", out.JTI))
+	logger.Ctx(ctx).Info("device token exchanged", zap.Int64("userId", flow.AuthorizedUserID), zap.Int64("deviceId", out.DeviceID), zap.String("deviceKind", flow.DeviceKind), zap.String("platform", flow.Platform), zap.String("version", flow.Version))
 	// 设备行是**这一刻**才建出来的，不是用户点批准那一刻：Approve 只改 device_flow_codes，
 	// 行要等 daemon 下一次轮询（interval 默认 5 秒）走到这里。用户批准完立刻进设备页
 	// 正好落在那个窗口里，看到的是一份不含这台机器的列表。
@@ -340,21 +336,15 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
-// issueTokenPair 在事务内为设备签发一对令牌并落库：access token 由 signer 签出，
-// refresh token 仅保存哈希，明文只在本次响应中返回。
+// issueTokenPair 在事务内为设备签发一对令牌并落库：两枚都是不含任何可解析内容的
+// 随机串，库里只存各自的 sha256 摘要，明文只在本次响应中返回。调用方身份（账号、
+// 设备、对端指纹）由 ResolveBearer 按摘要从库里查出，不再写进令牌。
 //
 // txCtx 用于落库，必须是事务里的那个；IP / UA 仍从外层 ctx 取，与抽出前一致。
 func (s *deviceSvc) issueTokenPair(
 	txCtx, ctx context.Context, d *device_entity.Device, nowMs int64,
 ) (*TokenOutput, error) {
-	access, jti, err := s.signer.Sign(jwt.Claims{
-		UID: d.UserID,
-		DID: d.ID,
-		// 对端身份签进凭据（决策 8）：agentred 的 auth.account 从这里取，不再采信
-		// 请求体里的自报指纹。设备这一侧填的就是它自己那条 devices.fingerprint。
-		PFP:  d.Fingerprint,
-		Kind: d.Kind,
-	}, s.cfg.AccessTTL)
+	access, err := randomBase32(32)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +357,7 @@ func (s *deviceSvc) issueTokenPair(
 	token := &device_token_entity.DeviceToken{
 		DeviceID:         d.ID,
 		RefreshTokenHash: sha256Hex(refreshPlain),
-		AccessJTI:        jti,
+		AccessTokenHash:  sha256Hex(access),
 		RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
 		UserAgent:        ua,
 		IP:               ip,
@@ -383,7 +373,6 @@ func (s *deviceSvc) issueTokenPair(
 		ExpiresIn:        int(s.cfg.AccessTTL / time.Second),
 		RefreshExpiresIn: int(s.cfg.RefreshTTL / time.Second),
 		DeviceID:         d.ID,
-		JTI:              jti,
 	}, nil
 }
 
@@ -458,7 +447,7 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 	if err != nil {
 		return nil, err
 	}
-	logger.Ctx(ctx).Info("device token refreshed", zap.Int64("userId", d.UserID), zap.Int64("deviceId", out.DeviceID), zap.String("deviceKind", d.Kind), zap.String("jti", out.JTI), zap.Int64("rotatedFromId", row.ID))
+	logger.Ctx(ctx).Info("device token refreshed", zap.Int64("userId", d.UserID), zap.Int64("deviceId", out.DeviceID), zap.String("deviceKind", d.Kind), zap.Int64("rotatedFromId", row.ID))
 	return out, nil
 }
 
@@ -534,21 +523,9 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 
 func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	nowMs := s.now()
-	jtis, err := device_token_repo.DeviceToken().ListAccessJTIByDevice(ctx, deviceID)
-	if err != nil {
-		return err
-	}
-	// 把该设备已签发（含刷新轮换出的旧 access token）的 jti 全部拉黑，
-	// 让在线设备撤销后立即失效（middleware.DeviceJWT 逐请求校验黑名单）。
-	// TTL 取 AccessTTL+jwt.Leeway：黑名单从**撤销那一刻**起算，而 token 是从
-	// **签发那一刻**起算、且 Verify 还多接受 Leeway 的时钟偏移。只取 AccessTTL
-	// 时，一个刚签发就被撤销的 token（12:00 签发、12:00:05 撤销）会在
-	// 12:15:05 掉出黑名单，却一直验签通过到 12:16:00——中间那段它又活了。
-	// Redis 不可用时不让 DB 侧吊销失败——黑名单本身 fail-open（spec §6.5）。
-	ttlSec := int((s.cfg.AccessTTL + jwt.Leeway) / time.Second)
-	for _, jti := range jtis {
-		_ = s.blacklist.Add(ctx, jti, ttlSec)
-	}
+	// 撤销立即生效靠的是这里落库的设备状态：ResolveBearer 逐请求查它，该设备名下全部
+	// access token（含刷新轮换出的旧令牌）当场解析不出身份，已建好的中继连接由 connguard
+	// 的心跳复查断开。判据全在 MySQL，不写也不读 Redis。
 	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
 		return err
 	}
@@ -556,7 +533,7 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 		return err
 	}
 	// 以下两步都是撤销的**从属后果**，不是撤销本身：取不到 purger、查不到设备行、
-	// 或落库失败，都不该让「设备已撤销、token 已拉黑」这个已经生效的结果回滚，
+	// 或落库失败，都不该让「设备与刷新链已撤销」这个已经生效的结果回滚，
 	// 一律只记日志（与既有的 PurgeDeviceLocalPaths 同一失效方向）。
 	//
 	// 工作区多端同步 R18：该设备上报的本机路径清单跟着一并消失。
@@ -597,18 +574,6 @@ func (s *deviceSvc) purgeDeviceScopedData(ctx context.Context, deviceID int64) {
 		logger.Ctx(ctx).Warn("device_svc.Revoke: purge pending session deletes failed",
 			zap.Int64("deviceId", deviceID), zap.Int64("userId", d.UserID), zap.Error(err))
 	}
-}
-
-// ListRevokedJTI 返回调用方账号（userID，跨其名下全部设备）已吊销、且签发
-// 时间距今仍可能验签通过的 access token jti 全集，供 daemon 定期拉取后本地
-// 生效（R4）。超出窗口的旧吊销记录交给过期兜底、这里直接不取。
-//
-// 窗口长度是 AccessTTL+jwt.Leeway 而不是 AccessTTL：Verify 接受 Leeway 的时钟
-// 偏移，token 直到 exp+Leeway 都还验得过。只减 AccessTTL 会让每个 jti 在最后
-// Leeway 秒里既已掉出这份列表、又仍被任何拉取方接受。
-func (s *deviceSvc) ListRevokedJTI(ctx context.Context, userID int64) ([]string, error) {
-	windowStart := s.now() - (s.cfg.AccessTTL + jwt.Leeway).Milliseconds()
-	return device_token_repo.DeviceToken().ListRevokedJTIByUser(ctx, userID, windowStart)
 }
 
 // DeviceView 是设备列表里的一行，**服务层自己的形状**。

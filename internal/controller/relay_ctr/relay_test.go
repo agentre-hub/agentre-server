@@ -28,18 +28,22 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo/mock_device_token_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo/mock_user_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
@@ -205,6 +209,7 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) 
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
+		Bearer: bearertest.Resolver{},
 		Cfg:    &bootstrap.ServerConfig{},
 		Signer: signer,
 		Relay:  stub,
@@ -219,8 +224,7 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) 
 	require.Equal(t, http.StatusUnauthorized, response.StatusCode)
 	require.NoError(t, response.Body.Close())
 
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 9, device_entity.KindAgentred)
 	noUpgrade, err := http.NewRequest(http.MethodGet, server.URL+"/v1/relay/daemon", nil)
 	require.NoError(t, err)
 	noUpgrade.Header.Set("Authorization", "Bearer "+token)
@@ -319,14 +323,8 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 	server := newRelayServer(t, signer, relay_svc.New(
 		config, devices, nil, redisClient, relay_svc.NewRedisForwarder(config, redisClient),
 	))
-	targetToken, _, err := signer.Sign(jwt.Claims{
-		UID: desktop.UserID, DID: desktop.ID, Kind: device_entity.KindDesktop,
-	}, time.Hour)
-	require.NoError(t, err)
-	clientToken, _, err := signer.Sign(jwt.Claims{
-		UID: desktop.UserID, DID: 4, Kind: device_entity.KindAgentred,
-	}, time.Hour)
-	require.NoError(t, err)
+	targetToken := deviceToken(desktop.UserID, desktop.ID, device_entity.KindDesktop)
+	clientToken := deviceToken(desktop.UserID, 4, device_entity.KindAgentred)
 
 	targetConn, _, err := protobufRelayDialer.Dial(
 		wsURL(server.URL, "/v1/relay/daemon"),
@@ -391,8 +389,7 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 				daemonDetached: make(chan struct{}, 1), clientDetached: make(chan struct{}, 1),
 			}
 			server := newRelayServer(t, signer, stub)
-			token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: tc.kind}, time.Hour)
-			require.NoError(t, err)
+			token := deviceToken(7, 9, tc.kind)
 			conn, _, err := protobufRelayDialer.Dial(
 				wsURL(server.URL, tc.path), http.Header{"Authorization": {"Bearer " + token}},
 			)
@@ -480,8 +477,7 @@ func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
 	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindWeb}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 4, device_entity.KindWeb)
 
 	stub := &relayStub{
 		daemonErr: relay_svc.ErrDaemonForbidden, registered: make(chan struct{}, 1),
@@ -490,7 +486,8 @@ func TestRelayDaemonForbiddenAnswers403BeforeUpgrading(t *testing.T) {
 	}
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
-		Cfg: &bootstrap.ServerConfig{}, Signer: signer, Relay: stub,
+		Bearer: bearertest.Resolver{},
+		Cfg:    &bootstrap.ServerConfig{}, Signer: signer, Relay: stub,
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
@@ -517,8 +514,7 @@ func TestRelayClientChannelFailureCodesAreDistinct(t *testing.T) {
 	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 4, device_entity.KindDesktop)
 
 	for _, tc := range []struct {
 		name string
@@ -575,10 +571,8 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 		configB, daemonDevices, nil, redisB, relay_svc.NewRedisForwarder(configB, redisB),
 	))
 
-	daemonToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
-	clientToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
-	require.NoError(t, err)
+	daemonToken := deviceToken(7, 9, device_entity.KindAgentred)
+	clientToken := deviceToken(7, 4, device_entity.KindDesktop)
 
 	daemonConn, _, err := protobufRelayDialer.Dial(
 		wsURL(serverB.URL, "/v1/relay/daemon"),
@@ -665,36 +659,59 @@ func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
 }
 
 // 撤销必须能掐到「连接挂在另一个 server 副本上」的情形：撤销请求落在哪个实例上无关
-// 紧要，判据是共享 Redis 里的 jti 黑名单（device_svc.Revoke 已经在写它），持有那条
-// 连接的实例自己读得到，不需要任何实例间寻址。
-func TestRelayDaemonClosesWhenDeviceCredentialRevokedOnAnotherInstance(t *testing.T) {
+// 紧要，判据是共享 MySQL 里的设备状态（device_svc.Revoke 落库），持有那条连接的实例在
+// 心跳复查时自己读得到，不需要任何实例间寻址，也不经 Redis。
+//
+// 两个副本共用的「库」由 repo mock 表示：设备行的状态随 Revoke 翻转。撤销走的是生产那个
+// device_svc.Revoke，复查走的是生产那个 device_svc.OwnedDevice。
+func TestRelayDaemonClosesWhenDeviceRevokedOnAnotherInstance(t *testing.T) {
 	testutils.Redis(t)
-	// 这条用例自己装配 auth_svc：connguard.watch 判不出撤销时按「不撤销」处理
-	// （auth_svc 未装配是它的合法分支），所以少了这一行，用例会在**什么都没复查**
-	// 的情况下走完，断言反而靠同文件里前一条用例遗留的全局单例才碰巧成立。
-	auth_svc.SetDefault(auth_svc.New(redis.Default(),
-		session.New(redis.Default(), "server_session", 86400)))
 	ctx := context.Background()
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
 
+	var revoked atomic.Bool
+	controller := gomock.NewController(t)
+	devices := mock_device_repo.NewMockDeviceRepo(controller)
+	tokens := mock_device_token_repo.NewMockDeviceTokenRepo(controller)
+	devices.EXPECT().Find(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, id int64) (*device_entity.Device, error) {
+			status := consts.ACTIVE
+			if id == 10 && revoked.Load() {
+				status = consts.DELETE
+			}
+			return &device_entity.Device{
+				ID: id, UserID: 7, Kind: device_entity.KindAgentred,
+				Fingerprint: "fp-" + strconv.FormatInt(id, 10), Status: status,
+			}, nil
+		}).AnyTimes()
+	tokens.EXPECT().RevokeChain(gomock.Any(), int64(10), gomock.Any()).Return(nil)
+	devices.EXPECT().Revoke(gomock.Any(), int64(10), gomock.Any()).DoAndReturn(
+		func(context.Context, int64, int64) error { revoked.Store(true); return nil })
+	device_repo.RegisterDevice(devices)
+	device_token_repo.RegisterDeviceToken(tokens)
+	device_svc.SetDefault(device_svc.New(device_svc.Config{AccessTTL: time.Hour}, nil, nil))
+	t.Cleanup(func() {
+		device_svc.SetDefault(nil)
+		device_repo.RegisterDevice(nil)
+		device_token_repo.RegisterDeviceToken(nil)
+	})
+
 	serverA := newRelayServer(t, signer, newForwardingRelayStub())
 	serverB := newRelayServer(t, signer, newForwardingRelayStub())
+	kept := dialRelayDaemon(t, serverA, deviceToken(7, 9, device_entity.KindAgentred))  // 账号下另一台 daemon，挂在实例 A
+	gone := dialRelayDaemon(t, serverB, deviceToken(7, 10, device_entity.KindAgentred)) // 被撤销的那台，挂在实例 B
 
-	keptToken, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
-	revokedToken, revokedJTI, err := signer.Sign(
-		jwt.Claims{UID: 7, DID: 10, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	require.NoError(t, device_svc.Default().Revoke(ctx, 10))
 
-	kept := dialRelayDaemon(t, serverA, keptToken)       // 账号下另一台 daemon，挂在实例 A
-	revoked := dialRelayDaemon(t, serverB, revokedToken) // 被撤销的那台，挂在实例 B
-
-	// device_svc.Revoke 的既有动作：把该设备已签发的 access token jti 全部拉黑。
-	require.NoError(t, jwtblacklist.New(redis.Default()).Add(ctx, revokedJTI, int(15*time.Minute/time.Second)))
-
-	requireRelayPeerClosed(t, revoked, "设备撤销后它已经建好的 daemon 连接必须被断开")
+	requireRelayPeerClosed(t, gone, "设备撤销后它已经建好的 daemon 连接必须被断开")
 	requireRelayPeerAlive(t, kept, "撤销一台设备不能踢掉同账号另一台设备的 daemon 连接")
+}
+
+// deviceToken 发一枚代表这台设备的 access token。本包的路由装配都注入 bearertest 的
+// 解析方，它只认自己发出的令牌。
+func deviceToken(accountID, deviceID int64, kind string) string {
+	return bearertest.Issue(device_svc.Principal{AccountID: accountID, DeviceID: deviceID, Kind: kind})
 }
 
 func dialRelayClient(t *testing.T, server *httptest.Server, ticket string) *websocket.Conn {
@@ -812,6 +829,7 @@ func newRelayServerDeps(
 	t.Helper()
 	testMux := muxtest.NewTestMux()
 	deps := &api.RouterDeps{
+		Bearer:      bearertest.Resolver{},
 		Cfg:         &bootstrap.ServerConfig{},
 		Signer:      signer,
 		Relay:       svc,
@@ -854,8 +872,7 @@ func newAuthenticatedRelayServer(
 	if path == "/v1/relay/daemon" {
 		kind = device_entity.KindAgentred
 	}
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: kind}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 9, kind)
 	return server, http.Header{"Authorization": {"Bearer " + token}}
 }
 
@@ -897,12 +914,8 @@ func TestRelayDaemonClosesWhenAccountBannedAfterConnect(t *testing.T) {
 	require.NoError(t, err)
 
 	server := newRelayServer(t, signer, newForwardingRelayStub())
-	bannedToken, _, err := signer.Sign(
-		jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
-	keptToken, _, err := signer.Sign(
-		jwt.Claims{UID: 8, DID: 10, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	bannedToken := deviceToken(7, 9, device_entity.KindAgentred)
+	keptToken := deviceToken(8, 10, device_entity.KindAgentred)
 	// client 那条连接的票要挂在一次**真实存在**的登录会话上：否则归属会话查无此 key，
 	// 既有的凭据复查自己就会断开它，用例便测不出账号闸门有没有生效。
 	ctx := context.Background()
@@ -985,6 +998,7 @@ func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
+		Bearer: bearertest.Resolver{},
 		Cfg:    &bootstrap.ServerConfig{},
 		Signer: signer,
 		Relay:  stub,
@@ -992,8 +1006,7 @@ func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
 
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 9, device_entity.KindAgentred)
 	conn, _, err := protobufRelayDialer.Dial(wsURL(server.URL, "/v1/relay/daemon"),
 		http.Header{"Authorization": {"Bearer " + token}})
 	require.NoError(t, err)
@@ -1040,9 +1053,7 @@ func TestRelayDrainTellsPeersAndReleasesHandlers(t *testing.T) {
 		clientDetached: make(chan struct{}, 1),
 	}
 	server, deps := newRelayServerWithDeps(t, signer, stub)
-	token, _, err := signer.Sign(
-		jwt.Claims{UID: 7, DID: 9, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 9, device_entity.KindAgentred)
 	conn, _, err := protobufRelayDialer.Dial(
 		wsURL(server.URL, "/v1/relay/daemon"), http.Header{"Authorization": {"Bearer " + token}})
 	require.NoError(t, err)

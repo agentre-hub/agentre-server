@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 )
@@ -69,8 +68,7 @@ func newLoggedRelayServer(
 	testutils.Redis(t)
 	signer := newSignalSigner(t)
 	server := newRelayServer(t, signer, svc)
-	token, _, err := signer.Sign(jwt.Claims{UID: accountID, DID: 9, Kind: kind}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(accountID, 9, kind)
 	return server, http.Header{"Authorization": {"Bearer " + token}}
 }
 

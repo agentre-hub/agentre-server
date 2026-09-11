@@ -64,7 +64,7 @@ func (r *Relay) Drain() int {
 func (r *Relay) Daemon(c *gin.Context) {
 	// ctx 在这里取一次：心跳回调跑在另一个 goroutine 上，不能在那里碰 gin.Context。
 	ctx := c.Request.Context()
-	accountID, deviceID, kind, jti := deviceClaims(c)
+	accountID, deviceID, kind, handle := deviceClaims(c)
 	route, err := r.svc.PrepareDaemon(ctx, accountID, deviceID, kind)
 	if err != nil {
 		relayError(c, err)
@@ -80,7 +80,7 @@ func (r *Relay) Daemon(c *gin.Context) {
 	if stopSignals != nil {
 		defer stopSignals()
 	}
-	guard := connguard.New(ctx, accountID, jti)
+	guard := connguard.New(ctx, accountID, deviceID, handle)
 	// 这条连接的每一行日志都带同一组身份字段：出问题时是按机器还是按账号捞，
 	// 取决于报障的人手里有什么,两个都得能捞。
 	peer := func(extra ...zap.Field) []zap.Field {
@@ -232,7 +232,7 @@ func (t *renewThrottle) due(now time.Time) bool {
 // 同连接其它通道照常收发；只有鉴权失效（连接守卫）才关掉整条连接。
 func (r *Relay) Client(c *gin.Context) {
 	ctx := c.Request.Context()
-	accountID, _, _, jti := deviceClaims(c)
+	accountID, deviceID, _, handle := deviceClaims(c)
 	// 账号信号的订阅排在 upgrade **之前**（决策 13 + Hard invariant 5）：合并之后
 	// 它跑在这条 socket 的保留通道上，但「先订阅再握手」这条不变量原样成立。
 	//
@@ -243,7 +243,7 @@ func (r *Relay) Client(c *gin.Context) {
 	if stopSignals != nil {
 		defer stopSignals()
 	}
-	guard := connguard.New(ctx, accountID, jti)
+	guard := connguard.New(ctx, accountID, deviceID, handle)
 	// 客户端连接没有机器身份可记（目标是逐通道声明的），账号就是它的全部身份。
 	peer := func(extra ...zap.Field) []zap.Field {
 		return append([]zap.Field{zap.Int64("accountId", accountID)}, extra...)
@@ -319,7 +319,7 @@ func (r *Relay) subscribeSignals(
 }
 
 func deviceClaims(c *gin.Context) (int64, int64, string, string) {
-	return ginctx.UserID(c), ginctx.DeviceID(c), ginctx.DeviceKind(c), ginctx.JTI(c)
+	return ginctx.UserID(c), ginctx.DeviceID(c), ginctx.DeviceKind(c), ginctx.CredentialHandle(c)
 }
 
 func relayError(c *gin.Context, err error) {

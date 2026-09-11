@@ -193,9 +193,7 @@ func newSignalSigner(t *testing.T) *jwt.Signer {
 
 func signalToken(t *testing.T, signer *jwt.Signer, accountID, deviceID int64) string {
 	t.Helper()
-	token, _, err := signer.Sign(
-		jwt.Claims{UID: accountID, DID: deviceID, Kind: device_entity.KindDesktop}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(accountID, deviceID, device_entity.KindDesktop)
 	return token
 }
 

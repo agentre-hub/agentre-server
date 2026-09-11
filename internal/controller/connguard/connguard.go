@@ -11,35 +11,61 @@ package connguard
 
 import (
 	"context"
+	"errors"
+
+	"github.com/cago-frame/cago/pkg/utils/httputils"
 
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
 // New 为一条刚建好的连接组装逐次复查：调用方把返回的函数挂到传输层的心跳上，
 // 返回非 nil 即断开。撤销判定在建连时取一次（它自己内部会反复查），账号闸门则
 // 每次复查现取——一条长连接可能跨过装配完成的那一刻。
-func New(ctx context.Context, accountID int64, jti string) func() error {
-	revoked := watch(ctx, jti)
+//
+// deviceID 非 0 表示连接背后是设备 access token，否则是中继票据，handle 即票的 jti。
+func New(ctx context.Context, accountID, deviceID int64, handle string) func() error {
+	revoked := watch(ctx, accountID, deviceID, handle)
 	return func() error { return check(ctx, accountID, revoked, user_svc.Gate()) }
 }
 
-// watch 取「这条连接背后的凭据是否已被撤销」的判定。auth_svc 未装配（只装了 device
-// flow、没跑完整 bootstrap 的装配）或连接没带 jti 时判不出来，返回 nil 按不撤销处理。
-func watch(ctx context.Context, jti string) auth_svc.RelayCredentialWatch {
+// watch 取「这条连接背后的凭据是否已被撤销」的判定。判不出来（对应的 service 未装配，
+// 或票据连接没带句柄）时返回 nil，按不撤销处理。
+func watch(ctx context.Context, accountID, deviceID int64, handle string) auth_svc.RelayCredentialWatch {
+	if deviceID != 0 {
+		return watchDevice(accountID, deviceID)
+	}
 	svc := auth_svc.Default()
-	if svc == nil || jti == "" {
+	if svc == nil || handle == "" {
 		return nil
 	}
-	return svc.WatchRelayCredential(ctx, jti)
+	return svc.WatchRelayCredential(ctx, handle)
+}
+
+// watchDevice 是设备凭据那一侧的撤销判定。设备 access token 在 Redis 里不留痕迹，撤销的
+// 事实只落在库里的设备状态上，所以复查问的是「这台设备还归这个账号在用吗」：
+// device_svc.OwnedDevice 答 DeviceNotFound（已撤销、已删、不归他）就断开；查库失败判不
+// 出来，不断开。判据在共享 MySQL 里，撤销请求落在哪个副本上无关紧要。
+func watchDevice(accountID, deviceID int64) auth_svc.RelayCredentialWatch {
+	devices := device_svc.Default()
+	if devices == nil {
+		return nil
+	}
+	return func(ctx context.Context) bool {
+		_, err := devices.OwnedDevice(ctx, accountID, deviceID)
+		var he *httputils.Error
+		return errors.As(err, &he) && he.Code == code.DeviceNotFound
+	}
 }
 
 // check 把「这条连接还能继续吗」翻译成传输层认得的终止信号。
 //
 // 两条判据的失败方向刻意相反，别顺手统一掉：凭据撤销判不出来时不断开
-// （auth_svc.WatchRelayCredential 的 fail-open，那只是一次早已生效的撤销的收尾），
-// 账号闸门判不出来时断开（user_svc.AccountGate 的 fail-closed，那是授权判定本身）。
+// （auth_svc.WatchRelayCredential 与 watchDevice 的 fail-open，那只是一次早已生效的撤销的
+// 收尾），账号闸门判不出来时断开（user_svc.AccountGate 的 fail-closed，那是授权判定本身）。
 // 闸门未装配时判不出来，与 watch 同向按不断开处理：装配不全不该让连接建不起来。
 func check(ctx context.Context, accountID int64, revoked auth_svc.RelayCredentialWatch, gate user_svc.AccountGate) error {
 	if revoked != nil && revoked(ctx) {

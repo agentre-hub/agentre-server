@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cago-frame/cago/server/mux/muxtest"
 	"github.com/gin-gonic/gin"
@@ -17,9 +16,11 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
 )
 
@@ -54,7 +55,7 @@ var _ sync_svc.SyncSvc = (*stubSyncSvc)(nil)
 func newSyncTestServer(t *testing.T, stub *stubSyncSvc) (*httptest.Server, *jwt.Signer) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	// DeviceJWT 中间件要查吊销黑名单，那条链路直接读 redis.Default()。
+	// 路由装配从 redis.Default() 派生中继票据的黑名单与焚毁记号。
 	testutils.Redis(t)
 	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
 	require.NoError(t, err)
@@ -62,6 +63,7 @@ func newSyncTestServer(t *testing.T, stub *stubSyncSvc) (*httptest.Server, *jwt.
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
+		Bearer: bearertest.Resolver{},
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
 		Signer: signer,
 	}).Router(context.Background(), testMux.Router))
@@ -100,9 +102,8 @@ func TestPush_TakesIdentityFromJWTClaims(t *testing.T) {
 		SyncID: "p1", Kind: "project", Version: 8, Status: sync_svc.PushStatusConflict,
 		OverwrittenVersion: 7, OverwrittenOriginFingerprint: "fp-desktop-02",
 	}}}}
-	server, signer := newSyncTestServer(t, stub)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindDesktop}, time.Hour)
-	require.NoError(t, err)
+	server, _ := newSyncTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindDesktop})
 
 	resp := post(t, server.URL+"/v1/sync/push", token,
 		`{"items":[{"kind":"project","sync_id":"p1","base_version":5,"payload":{"name":"a"}}]}`)

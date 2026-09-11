@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/gin-gonic/gin"
@@ -13,25 +12,20 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/middleware"
-	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 )
 
 func TestSessionOrDeviceAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
-	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	makeHandler := func() *gin.Engine {
 		r := gin.New()
-		r.GET("/me", middleware.SessionOrDeviceAuth(signer, jwtblacklist.New(redis.Default())), func(c *gin.Context) {
+		r.GET("/me", middleware.SessionOrDeviceAuth(bearertest.Resolver{}), func(c *gin.Context) {
 			uid, _ := c.Get("user_id")
 			did, _ := c.Get("device_id")
 			c.JSON(http.StatusOK, gin.H{"uid": uid, "did": did})
@@ -40,9 +34,8 @@ func TestSessionOrDeviceAuth(t *testing.T) {
 	}
 
 	Convey("SessionOrDeviceAuth", t, func() {
-		Convey("device JWT in Authorization header → user+device populated", func() {
-			tok, _, signErr := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "desktop"}, time.Hour)
-			So(signErr, ShouldBeNil)
+		Convey("device access token in Authorization header → user+device populated", func() {
+			tok := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 42, Kind: "desktop"})
 			req := httptest.NewRequest(http.MethodGet, "/me", nil)
 			req.Header.Set("Authorization", "Bearer "+tok)
 			w := httptest.NewRecorder()
@@ -60,7 +53,7 @@ func TestSessionOrDeviceAuth(t *testing.T) {
 			So(w.Code, ShouldEqual, http.StatusUnauthorized)
 		})
 
-		Convey("malformed Bearer token → 401", func() {
+		Convey("unknown Bearer token → 401", func() {
 			req := httptest.NewRequest(http.MethodGet, "/me", nil)
 			req.Header.Set("Authorization", "Bearer garbage")
 			w := httptest.NewRecorder()

@@ -93,7 +93,7 @@ func issueRelayTicket(t *testing.T, server *httptest.Server, sid, csrf string) s
 func relayGuardStatus(t *testing.T, signer *jwt.Signer, token string) int {
 	t.Helper()
 	router := gin.New()
-	router.GET("/relay", middleware.RelayClientJWT(signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default())), func(c *gin.Context) {
+	router.GET("/relay", middleware.RelayClientJWT(nil, signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default())), func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
 	req := httptest.NewRequest(http.MethodGet, "/relay", nil)

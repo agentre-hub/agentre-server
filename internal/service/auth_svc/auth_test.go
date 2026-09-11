@@ -126,7 +126,7 @@ func TestWatchRelayCredential_SurvivesTicketRegistrationExpiry(t *testing.T) {
 	assert.True(t, revoked(ctx), "登出必须能撤掉一条比票活得久的连接")
 }
 
-// 撤销判据逐凭据独立：登出只撤这次会话签发的票，撤设备只撤那台设备的 jti。
+// 撤销判据逐凭据独立：登出只撤这次会话签发的票，拉黑一张票只撤那一张。
 func TestWatchRelayCredential_IsScopedToOneCredential(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
@@ -141,18 +141,17 @@ func TestWatchRelayCredential_IsScopedToOneCredential(t *testing.T) {
 
 	browserA := s.WatchRelayCredential(ctx, "jti-a")
 	browserB := s.WatchRelayCredential(ctx, "jti-b")
-	// 原生端用的是设备 JWT，没有归属会话，只看 jti 黑名单。
-	deviceOne := s.WatchRelayCredential(ctx, "jti-device-1")
-	deviceTwo := s.WatchRelayCredential(ctx, "jti-device-2")
+	// 没有归属会话的票（镜像凭据）只看 jti 黑名单。
+	unregisteredOne := s.WatchRelayCredential(ctx, "jti-unregistered-1")
+	unregisteredTwo := s.WatchRelayCredential(ctx, "jti-unregistered-2")
 
 	require.NoError(t, s.EndSession(ctx, sidA))
-	// device_svc.Revoke 的既有动作：把该设备已签发的 jti 拉黑。
-	require.NoError(t, jwtblacklist.New(redis.Default()).Add(ctx, "jti-device-1", 900))
+	require.NoError(t, jwtblacklist.New(redis.Default()).Add(ctx, "jti-unregistered-1", 900))
 
 	assert.True(t, browserA(ctx))
 	assert.False(t, browserB(ctx), "登出一个浏览器不能撤掉同账号另一个浏览器的连接")
-	assert.True(t, deviceOne(ctx))
-	assert.False(t, deviceTwo(ctx), "撤销一台设备不能撤掉同账号另一台设备的连接")
+	assert.True(t, unregisteredOne(ctx))
+	assert.False(t, unregisteredTwo(ctx), "拉黑一张票不能撤掉另一张票的连接")
 }
 
 // 判不出来就不断连：撤销本身早已生效（session 已删、jti 已拉黑），这里只是收尾；

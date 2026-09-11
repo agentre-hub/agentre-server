@@ -39,7 +39,6 @@ type TokenOutput struct {
 	ExpiresIn        int
 	RefreshExpiresIn int
 	DeviceID         int64
-	JTI              string
 }
 
 type PendingInfo struct {

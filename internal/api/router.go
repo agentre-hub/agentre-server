@@ -55,6 +55,9 @@ type RouterDeps struct {
 	// Redis 是鉴权中间件要用的那台：jti 黑名单与中继票据的焚毁记号都从它派生。
 	// 留给测试注入自己那台；为空时取全局默认单例（与上面两项同一约定）。
 	Redis *goredis.Client
+	// Bearer 是鉴权中间件解析设备 access token 的那一个解析方。留给测试注入自己那份；
+	// 为空时取 device_svc.Default()（按摘要查 MySQL），与上面几项同一约定。
+	Bearer middleware.BearerResolver
 
 	// drainers 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
 	// 长连接逐条礼貌关掉(见 DrainRelays)。
@@ -104,7 +107,14 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if accountChan == nil {
 		accountChan = accountchan_svc.Default()
 	}
-	// 黑名单与票据记号在这里各造一份，交给下面三个鉴权中间件。它们是本层唯一
+	// 设备 access token 的解析方只在这里取一次，交给下面三个接受 Bearer 的中间件。
+	// device_svc 未装配时 Default() 是 nil 接口，转成 BearerResolver 仍是 nil，中间件
+	// 据此一律 401。
+	bearer := r.Bearer
+	if bearer == nil {
+		bearer = device_svc.Default()
+	}
+	// 中继票据的黑名单与焚毁记号在这里各造一份，交给中继客户端入口。它们是本层唯一
 	// 认识「Redis 是哪一台」的地方——中间件自己只认拿到的那两个对象。
 	redisClient := r.Redis
 	if redisClient == nil {
@@ -209,8 +219,8 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	).Bind(passkeyCtr.BeginLogin)
 	g.Group("/").Bind(passkeyCtr.FinishLogin)
 
-	// session 或 device JWT 都可以
-	g.Group("/", middleware.SessionOrDeviceAuth(r.Signer, blacklist)).Bind(
+	// session 或设备 access token 都可以
+	g.Group("/", middleware.SessionOrDeviceAuth(bearer)).Bind(
 		authCtr.Me,
 		deviceCtr.Revoke,
 		deviceCtr.List,
@@ -311,10 +321,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		sessionImportCtr.Run,
 	)
 
-	// device JWT
-	deviceJWT := g.Group("/", middleware.DeviceJWT(r.Signer, blacklist))
-	deviceJWT.Bind(deviceCtr.Revocations)
-	// 工作区多端同步：账号与设备一律取自 JWT claims，不接受参数里的身份。
+	// 设备 access token
+	deviceJWT := g.Group("/", middleware.DeviceJWT(bearer))
+	// 工作区多端同步：账号与设备一律取自令牌解析出的身份，不接受参数里的身份。
 	deviceJWT.Bind(
 		syncCtr.Push,
 		syncCtr.Pull,
@@ -323,11 +332,11 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.GetAvatar,
 		engineCtr.Snapshot,
 	)
-	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受真实
-	// Device JWT；client 同时接受原生端 Device JWT 与浏览器短效 relay ticket。
+	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受设备
+	// access token；client 同时接受原生端设备 access token 与浏览器短效 relay ticket。
 	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
-	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(r.Signer, blacklist, relayTickets))
+	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(bearer, r.Signer, blacklist, relayTickets))
 	// 这一条同时承载账号信号：普通通道跑 RPC，保留通道（relay_svc.SignalChannelID）
 	// 推 sync_version / mirror_changed / device_presence。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)

@@ -211,10 +211,11 @@ func (s *authSvc) TrackRelayTicket(ctx context.Context, sid, jti string, ttl tim
 // 中间件；没有这个复查，登出与设备撤销就只挡得住新连接，一条撤销前建好的连接会继续
 // 读写该账号名下的全部会话。
 //
-// 判据全部是**撤销方本来就会写**的共享 Redis 状态，因此天然跨实例：撤销请求落在哪个
-// 副本上无关紧要，持有那条连接的副本自己读得到，不需要实例间寻址或广播。
-//   - 设备撤销：device_svc.Revoke 把该设备已签发的 jti 全部拉黑。jti 逐设备互不相同，
-//     撤一台不会牵连同账号的其它设备。
+// 这里只管中继票据（设备 access token 背后的连接由 connguard 按设备状态复查）。判据全部
+// 是**撤销方本来就会写**的共享 Redis 状态，因此天然跨实例：撤销请求落在哪个副本上无关
+// 紧要，持有那条连接的副本自己读得到，不需要实例间寻址或广播。
+//   - 票被拉黑：登出时 revokeRelayTickets 把这次会话签发的票全部拉黑。jti 逐票互不相同，
+//     拉黑一张不会牵连其它票。
 //   - 浏览器登出：EndSession 删掉 session。sid 逐浏览器互不相同，登出一个不会牵连
 //     同账号的其它浏览器。
 //
@@ -228,7 +229,7 @@ func (s *authSvc) WatchRelayCredential(ctx context.Context, jti string) RelayCre
 		case err == nil:
 			sid = resolved
 		case errors.Is(err, goredis.Nil):
-			// 没有登记：原生端用的是设备 JWT（本来就没有归属会话），或票的登记已过期。
+			// 没有登记：镜像凭据本来就没有归属会话，或票的登记已过期。
 		default:
 			logger.Ctx(ctx).Warn("auth_svc.WatchRelayCredential: 解析 relay ticket 归属会话失败，"+
 				"该连接登出时将撤不掉，只能靠 jti 黑名单", zap.Error(err))
