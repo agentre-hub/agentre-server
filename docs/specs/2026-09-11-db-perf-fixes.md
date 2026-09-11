@@ -52,7 +52,7 @@
 | 6 | 轮询限速改为条件 UPDATE：`last_polled_at <= now - interval` 才更新，受影响 0 行即 slow_down；不引入 Redis | 用户决定 |
 | 7 | 分批删除统一 1000 行一批 | 与 `sync_repo`、`device_token_repo` 既有常量一致 |
 | 8 | 删除 `save_test.go` 钉住的 `ListByUser` 顺序承诺并去掉 ORDER BY；新增 `CountByUser`、按机器取 conversation id 的窄方法 | 用户决定 |
-| 9 | 设备在线态（relay 在线、协议不匹配、daemon build）以一次 Redis pipeline 批量读取，供设备列表与 stats 设置页共用；**逐指纹 `LatestDay` 不合并** | 真库：逐指纹覆盖索引读 1 行，合并读 300 行 |
+| 9 | 设备在线态（relay 在线、协议不匹配、daemon build）按归属服务各以一次 Redis pipeline 批量读取（relay_svc 一次、mirror_svc 一次），往返次数固定、与设备数无关，供设备列表与 stats 设置页共用；**逐指纹 `LatestDay` 不合并** | 真库：逐指纹覆盖索引读 1 行，合并读 300 行。执行中修订（用户决定）：两个服务各自注入 Redis client，合并成单次 pipeline 需假设同一实例或让一个服务读另一个服务的 key，破坏服务边界 |
 | 10 | Revoke / Upgrade 改用 `OwnedDevice`，非本账号 / 已撤销**维持 403** | 用户决定，不改 API 形状 |
 | 11 | 实体删除 `type:` 与 `not null` 标签，**保留 `default:`**；守卫全部实体不得声明 `type:` | 用户决定 |
 | 12 | `device_tokens` 加 `(device_id, createtime)`、`user_settings` 加 `(activity_stats_enabled, user_id)`、`agent_session_delete_todos` 加 `(user_id, device_fingerprint)`；不加 `user_id` 列 | 用户决定；三者真库均证实改善 |
@@ -80,7 +80,7 @@
 
 **请求放大**
 9. 设置页取「已保存对话数」为一次计数查询；镜像按机器取已保存对话不读取全账号名单。
-10. 设备列表与 stats 设置页的设备在线态为一次 Redis 批量读取，与设备数无关。
+10. 设备列表与 stats 设置页的设备在线态读取为固定次数的 Redis pipeline（每个归属服务一次），与设备数无关。
 11. Revoke / Upgrade 设备不再读取设备列表；非本账号或已撤销设备返回 403。
 12. `Mirror.Sync` 查找每条会话游标为常数时间。
 13. activity 定时拉取最多 8 台机器并发、整轮在 8 分钟预算内返回，预算耗尽后不再拨号剩余机器；设备清单按一批账号一次查询。
