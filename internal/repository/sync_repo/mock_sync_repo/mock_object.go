@@ -11,9 +11,10 @@ package mock_sync_repo
 
 import (
 	context "context"
-	sync_entity "github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	reflect "reflect"
 
+	sync_entity "github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	sync_repo "github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -39,6 +40,20 @@ func NewMockSyncObjectRepo(ctrl *gomock.Controller) *MockSyncObjectRepo {
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockSyncObjectRepo) EXPECT() *MockSyncObjectRepoMockRecorder {
 	return m.recorder
+}
+
+// CreateBatch mocks base method.
+func (m *MockSyncObjectRepo) CreateBatch(ctx context.Context, objs []*sync_entity.SyncObject) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreateBatch", ctx, objs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreateBatch indicates an expected call of CreateBatch.
+func (mr *MockSyncObjectRepoMockRecorder) CreateBatch(ctx, objs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateBatch", reflect.TypeOf((*MockSyncObjectRepo)(nil).CreateBatch), ctx, objs)
 }
 
 // DeleteTombstonesBefore mocks base method.
@@ -86,6 +101,21 @@ func (mr *MockSyncObjectRepoMockRecorder) FindCLIOverlayByNaturalKey(ctx, userID
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCLIOverlayByNaturalKey", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindCLIOverlayByNaturalKey), ctx, userID, backendSyncID, fingerprint)
 }
 
+// FindLiveByNaturalKeys mocks base method.
+func (m *MockSyncObjectRepo) FindLiveByNaturalKeys(ctx context.Context, userID int64, keys []sync_repo.NaturalKey) (map[sync_repo.NaturalKey]*sync_entity.SyncObject, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindLiveByNaturalKeys", ctx, userID, keys)
+	ret0, _ := ret[0].(map[sync_repo.NaturalKey]*sync_entity.SyncObject)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindLiveByNaturalKeys indicates an expected call of FindLiveByNaturalKeys.
+func (mr *MockSyncObjectRepoMockRecorder) FindLiveByNaturalKeys(ctx, userID, keys any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindLiveByNaturalKeys", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindLiveByNaturalKeys), ctx, userID, keys)
+}
+
 // FindLocationByNaturalKey mocks base method.
 func (m *MockSyncObjectRepo) FindLocationByNaturalKey(ctx context.Context, userID int64, projectSyncID, fingerprint string) (*sync_entity.SyncObject, error) {
 	m.ctrl.T.Helper()
@@ -99,6 +129,21 @@ func (m *MockSyncObjectRepo) FindLocationByNaturalKey(ctx context.Context, userI
 func (mr *MockSyncObjectRepoMockRecorder) FindLocationByNaturalKey(ctx, userID, projectSyncID, fingerprint any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindLocationByNaturalKey", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindLocationByNaturalKey), ctx, userID, projectSyncID, fingerprint)
+}
+
+// FindMany mocks base method.
+func (m *MockSyncObjectRepo) FindMany(ctx context.Context, userID int64, syncIDs []string) (map[string]*sync_entity.SyncObject, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindMany", ctx, userID, syncIDs)
+	ret0, _ := ret[0].(map[string]*sync_entity.SyncObject)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindMany indicates an expected call of FindMany.
+func (mr *MockSyncObjectRepoMockRecorder) FindMany(ctx, userID, syncIDs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindMany", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindMany), ctx, userID, syncIDs)
 }
 
 // ListByKinds mocks base method.

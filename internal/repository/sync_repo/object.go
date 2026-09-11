@@ -21,8 +21,17 @@ type SyncObjectRepo interface {
 	FindLocationByNaturalKey(ctx context.Context, userID int64, projectSyncID, fingerprint string) (*sync_entity.SyncObject, error)
 	// FindCLIOverlayByNaturalKey 按（账号, backend 同步标识, 指纹）取存活的 CLI 覆盖。
 	FindCLIOverlayByNaturalKey(ctx context.Context, userID int64, backendSyncID, fingerprint string) (*sync_entity.SyncObject, error)
+	// FindMany 按（账号, 同步标识）一次取回多行，按同步标识归档；库里没有的不在结果里。
+	// 墓碑同样会被取到。
+	FindMany(ctx context.Context, userID int64, syncIDs []string) (map[string]*sync_entity.SyncObject, error)
+	// FindLiveByNaturalKeys 一次取回这些自然键上存活的那一行（至多一行，唯一键保证），
+	// 按自然键归档；没有存活行的键不在结果里。
+	FindLiveByNaturalKeys(ctx context.Context, userID int64, keys []NaturalKey) (map[NaturalKey]*sync_entity.SyncObject, error)
 	// Save 按（账号, 同步标识）落库，且只在版本号更大时才覆盖已有行。
 	Save(ctx context.Context, obj *sync_entity.SyncObject) error
+	// CreateBatch 按块把一批新对象普通 INSERT 进去（不带 ON DUPLICATE KEY UPDATE），
+	// 撞上任一唯一键都原样上抛。
+	CreateBatch(ctx context.Context, objs []*sync_entity.SyncObject) error
 	// Tombstone 把一行标成墓碑并给它一个新版本，让删除本身也能被下行游标带走。
 	// 返回受影响行数：已经是墓碑时为 0，由 service 决定这意味着什么。
 	Tombstone(ctx context.Context, id, version, nowMs int64) (int64, error)
@@ -45,6 +54,18 @@ type SyncObjectRepo interface {
 	// 它是尚未拉取的设备赖以知道「这行被删了」的唯一凭据。
 	DeleteTombstonesBefore(ctx context.Context, cutoff int64) (int64, error)
 }
+
+// NaturalKey 是带自然键的对象（路径记录、CLI 覆盖）在账号内的自然键，与
+// uk_sync_objects_natural 同列：scope_sync_id 装什么取决于 kind。
+type NaturalKey struct {
+	Kind                string
+	ScopeSyncID         string
+	AgentredFingerprint string
+}
+
+// syncObjectBatchSize 是批量读写一条语句里的行数上限，与 api/sync 一批的上限同值：
+// 满载的一次 Push 读与新建各是一条语句。
+const syncObjectBatchSize = 500
 
 var defaultObject SyncObjectRepo
 
@@ -130,6 +151,62 @@ func (r *objectRepo) Save(ctx context.Context, obj *sync_entity.SyncObject) erro
 	}
 
 	return db.Ctx(ctx).Create(obj).Error
+}
+
+// FindMany 按块发 `sync_id IN`。sync_id 是 utf8mb4_0900_bin，库里的相等就是 Go 里的
+// 字符串相等，所以可以直接按它归档。
+func (r *objectRepo) FindMany(ctx context.Context, userID int64, syncIDs []string) (map[string]*sync_entity.SyncObject, error) {
+	out := make(map[string]*sync_entity.SyncObject, len(syncIDs))
+	for start := 0; start < len(syncIDs); start += syncObjectBatchSize {
+		var rows []*sync_entity.SyncObject
+		if err := db.Ctx(ctx).Where("user_id=? AND sync_id IN ?", userID,
+			syncIDs[start:min(start+syncObjectBatchSize, len(syncIDs))]).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out[row.SyncID] = row
+		}
+	}
+	return out, nil
+}
+
+// FindLiveByNaturalKeys 的谓词写在 uk_sync_objects_natural 的列上。live_natural_key 是
+// 生成列：存活且属于带自然键的 kind 时等于 kind，否则为 NULL——与 findLiveByNaturalKey
+// 的「kind=? AND deleted_at=0」同义，而行构造器 IN 整个落在那条唯一键上。三列都是
+// utf8mb4_0900_bin，按 Go 字符串归档与库里的相等一致。
+func (r *objectRepo) FindLiveByNaturalKeys(
+	ctx context.Context, userID int64, keys []NaturalKey,
+) (map[NaturalKey]*sync_entity.SyncObject, error) {
+	out := make(map[NaturalKey]*sync_entity.SyncObject, len(keys))
+	for start := 0; start < len(keys); start += syncObjectBatchSize {
+		chunk := keys[start:min(start+syncObjectBatchSize, len(keys))]
+		tuples := make([][]interface{}, 0, len(chunk))
+		for _, k := range chunk {
+			tuples = append(tuples, []interface{}{k.ScopeSyncID, k.AgentredFingerprint, k.Kind})
+		}
+		var rows []*sync_entity.SyncObject
+		if err := db.Ctx(ctx).Where(
+			"user_id=? AND (scope_sync_id, agentred_fingerprint, live_natural_key) IN ?", userID, tuples,
+		).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			out[NaturalKey{Kind: row.Kind, ScopeSyncID: row.ScopeSyncID, AgentredFingerprint: row.AgentredFingerprint}] = row
+		}
+	}
+	return out, nil
+}
+
+// CreateBatch 每块一条多行 INSERT，**不带** ON DUPLICATE KEY UPDATE，理由同 Save：
+// 两条唯一键撞上哪条都原样上抛。某一块失败就停下，调用方的事务据此整批回滚。
+func (r *objectRepo) CreateBatch(ctx context.Context, objs []*sync_entity.SyncObject) error {
+	for start := 0; start < len(objs); start += syncObjectBatchSize {
+		chunk := objs[start:min(start+syncObjectBatchSize, len(objs))]
+		if err := db.Ctx(ctx).Create(&chunk).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *objectRepo) Tombstone(ctx context.Context, id, version, nowMs int64) (int64, error) {

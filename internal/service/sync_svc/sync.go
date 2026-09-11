@@ -140,6 +140,12 @@ func (s *syncSvc) Push(ctx context.Context, in PushInput) (*PushOutput, error) {
 		if err != nil {
 			return err
 		}
+		// 锁已在手，同一个理由再压一次往返：已有行与自然键各一次批量读回，新对象攒到
+		// 最后一条多行 INSERT，锁的持有时间因此不随 item 数线性增长。见 pushView。
+		view, err := loadPushView(txCtx, in.UserID, in.Items, reasons)
+		if err != nil {
+			return err
+		}
 		out.Results = out.Results[:0]
 		for i, item := range in.Items {
 			if reasons[i] != "" {
@@ -149,13 +155,13 @@ func (s *syncSvc) Push(ctx context.Context, in PushInput) (*PushOutput, error) {
 				})
 				continue
 			}
-			res, err := s.applyItem(txCtx, in.UserID, originFingerprint, now, item, versions)
+			res, err := s.applyItem(txCtx, in.UserID, originFingerprint, now, item, versions, view)
 			if err != nil {
 				return err
 			}
 			out.Results = append(out.Results, *res)
 		}
-		return nil
+		return view.flush(txCtx)
 	})
 	if err != nil {
 		return nil, err
@@ -198,7 +204,7 @@ func (b *versionBlock) take(ctx context.Context, userID int64) (int64, error) {
 // highestWrittenVersion 从一批 Push 结果里挑出这一次操作实际烧到的最高版本号。
 // PushStatusRejected 要么在拿到新版本号之前就返回（校验不通过、类型不符、撞墓碑），
 // 要么只是回声 server 上早已存在的版本——两种情况都没有新写入，因此被排除；
-// Accepted 与 Conflict 都在 applyItem 里走过 NextVersion + Save，Version 是新的。
+// Accepted 与 Conflict 都在 applyItem 里走过 NextVersion 与落库，Version 是新的。
 func highestWrittenVersion(results []PushItemResult) int64 {
 	var version int64
 	for _, res := range results {
@@ -272,14 +278,183 @@ func (s *syncSvc) originFingerprintOf(ctx context.Context, deviceID int64) (stri
 	return row.Fingerprint, nil
 }
 
-func (s *syncSvc) applyItem(
-	ctx context.Context, userID int64, originFingerprint string, now int64,
-	item PushItem, versions *versionBlock,
-) (*PushItemResult, error) {
-	existing, err := sync_repo.SyncObject().Find(ctx, userID, item.SyncID)
+// pushView 是一次 Push 在持锁事务里看到的 sync_objects。
+//
+// 从前每条 item 各发一次 Find、一次 Save（新行时是 UPDATE 落空再 INSERT），带自然键
+// 的再加一次查重——一批 500 条新对象约 1500 条语句，全压在 sync_account_seqs 那一行的
+// 锁里。现在批首各一次批量读回（已有行、自然键上的存活行），之后本批的每一次写入都先
+// 落到这份视图上，后面的 item 读到的就是前面 item 写过之后的样子，与逐条读库时一致：
+// 同批同 sync_id 的第二条面对的是第一条落下的那一版（照旧判冲突），前一条合并出的墓碑
+// 挡得住后一条的复活。
+//
+// 写入的去向分两种。库里已有的行仍逐行走 Save（带版本条件的 UPDATE）；本批新建的行
+// 攒到最后一条 CreateBatch——普通 INSERT，不带 ON DUPLICATE KEY UPDATE（sync_objects 有
+// 两条唯一键，见 sync_repo.Save），撞上任一条都让整批失败，与逐条 Save 时一样。
+//
+// 自然键合并要打墓碑的若是本批新建、还没插入的行，它没有主键可给 Tombstone，就在视图
+// 里按同一个墓碑版本号标删：插进库里的那一行与「先插入再 Tombstone」落下的完全相同。
+// 墓碑因此总在会撞 uk_sync_objects_natural 的那条 INSERT 之前生效——库里的行被
+// Tombstone 就地改掉，本批的行在插入之前就已是墓碑。
+type pushView struct {
+	bySyncID map[string]*viewRow
+	byKey    map[sync_repo.NaturalKey]*viewRow
+	// pending 是本批新建的行，按首次出现的 item 顺序插入。
+	pending []*viewRow
+}
+
+// viewRow 是视图里的一行：obj 是它此刻的样子。stored = 库里已有这一行（id 是它的主键）；
+// 否则是本批新建、还没插入的。
+type viewRow struct {
+	id     int64
+	stored bool
+	obj    *sync_entity.SyncObject
+}
+
+// hasNaturalKey 报告这个 kind 是否受 R4b 的账号内自然键约束。
+func hasNaturalKey(kind string) bool {
+	return kind == sync_entity.KindProjectLocation || kind == sync_entity.KindAgentBackendCLI
+}
+
+func naturalKeyOf(obj *sync_entity.SyncObject) sync_repo.NaturalKey {
+	return sync_repo.NaturalKey{Kind: obj.Kind, ScopeSyncID: obj.ScopeSyncID, AgentredFingerprint: obj.AgentredFingerprint}
+}
+
+// loadPushView 为通过校验的 item 一次读回已有行，并为可能参与自然键合并的 item 一次读回
+// 自然键上的存活行。两次读回里同一个 sync_id 共用一份视图行。
+func loadPushView(ctx context.Context, userID int64, items []PushItem, reasons []string) (*pushView, error) {
+	v := &pushView{bySyncID: map[string]*viewRow{}, byKey: map[sync_repo.NaturalKey]*viewRow{}}
+	var syncIDs []string
+	var keys []sync_repo.NaturalKey
+	seenSyncID := map[string]bool{}
+	seenKey := map[sync_repo.NaturalKey]bool{}
+	for i, item := range items {
+		if reasons[i] != "" {
+			continue
+		}
+		if !seenSyncID[item.SyncID] {
+			seenSyncID[item.SyncID] = true
+			syncIDs = append(syncIDs, item.SyncID)
+		}
+		// 与 applyItem 同一个判据：clampTombstoneInstant 只把 <= 0 夹成 0，这样的才不是
+		// 墓碑、才参与合并。
+		if !hasNaturalKey(item.Kind) || item.DeletedAt > 0 {
+			continue
+		}
+		key := sync_repo.NaturalKey{Kind: item.Kind, ScopeSyncID: item.ScopeSyncID, AgentredFingerprint: item.AgentredFingerprint}
+		if !seenKey[key] {
+			seenKey[key] = true
+			keys = append(keys, key)
+		}
+	}
+	if len(syncIDs) == 0 {
+		return v, nil
+	}
+
+	rows, err := sync_repo.SyncObject().FindMany(ctx, userID, syncIDs)
 	if err != nil {
 		return nil, err
 	}
+	for syncID, row := range rows {
+		v.bySyncID[syncID] = &viewRow{id: row.ID, stored: true, obj: row}
+	}
+	if len(keys) == 0 {
+		return v, nil
+	}
+	live, err := sync_repo.SyncObject().FindLiveByNaturalKeys(ctx, userID, keys)
+	if err != nil {
+		return nil, err
+	}
+	for key, row := range live {
+		vr, ok := v.bySyncID[row.SyncID]
+		if !ok {
+			vr = &viewRow{id: row.ID, stored: true, obj: row}
+			v.bySyncID[row.SyncID] = vr
+		}
+		v.byKey[key] = vr
+	}
+	return v, nil
+}
+
+// find 取这个同步标识此刻的样子，没有返回 nil。墓碑也会被取到——R6 靠它挡住复活。
+func (v *pushView) find(syncID string) *sync_entity.SyncObject {
+	if row := v.bySyncID[syncID]; row != nil {
+		return row.obj
+	}
+	return nil
+}
+
+// liveOn 取这个自然键上此刻存活的那一行。byKey 记的是最后一个落到这个键上的行，
+// 它之后可能已被打成墓碑，所以取出来还要再核一次。
+func (v *pushView) liveOn(key sync_repo.NaturalKey) *viewRow {
+	row := v.byKey[key]
+	if row == nil || row.obj.IsDeleted() || naturalKeyOf(row.obj) != key {
+		return nil
+	}
+	return row
+}
+
+// write 把 obj 记成这个同步标识的最新一版：库里已有的行当场带版本条件 UPDATE，
+// 本批新建的行留到 flush。
+func (v *pushView) write(ctx context.Context, obj *sync_entity.SyncObject) error {
+	row := v.bySyncID[obj.SyncID]
+	switch {
+	case row == nil:
+		row = &viewRow{obj: obj}
+		v.bySyncID[obj.SyncID] = row
+		v.pending = append(v.pending, row)
+	case !row.stored:
+		row.obj = obj
+	default:
+		if err := sync_repo.SyncObject().Save(ctx, obj); err != nil {
+			return err
+		}
+		row.obj = obj
+	}
+	if hasNaturalKey(obj.Kind) && !obj.IsDeleted() {
+		v.byKey[naturalKeyOf(obj)] = row
+	}
+	return nil
+}
+
+// tombstone 把 row 标成墓碑并给它 version，返回受影响行数（语义同 Tombstone）。
+func (v *pushView) tombstone(ctx context.Context, row *viewRow, version, now int64) (int64, error) {
+	stone := *row.obj
+	if !row.stored {
+		stone.DeletedAt, stone.Version, stone.Updatetime = now, version, now
+		row.obj = &stone
+		return 1, nil
+	}
+	n, err := sync_repo.SyncObject().Tombstone(ctx, row.id, version, now)
+	if err != nil {
+		return 0, err
+	}
+	// n == 0：库里那行已经不是存活行了（并发的另一次写入先把它落了墓碑）。它真正的版本
+	// 这里不知道，但它已不存活这件事是确定的——后面的 item 照样不能复活它、不能再合并它。
+	stone.DeletedAt = now
+	if n == 1 {
+		stone.Version, stone.Updatetime = version, now
+	}
+	row.obj = &stone
+	return n, nil
+}
+
+// flush 把本批新建的行按块插入。
+func (v *pushView) flush(ctx context.Context) error {
+	if len(v.pending) == 0 {
+		return nil
+	}
+	objs := make([]*sync_entity.SyncObject, len(v.pending))
+	for i, row := range v.pending {
+		objs[i] = row.obj
+	}
+	return sync_repo.SyncObject().CreateBatch(ctx, objs)
+}
+
+func (s *syncSvc) applyItem(
+	ctx context.Context, userID int64, originFingerprint string, now int64,
+	item PushItem, versions *versionBlock, view *pushView,
+) (*PushItemResult, error) {
+	existing := view.find(item.SyncID)
 	res := &PushItemResult{SyncID: item.SyncID, Kind: item.Kind, Status: PushStatusAccepted}
 	if existing != nil {
 		if existing.Kind != item.Kind {
@@ -332,10 +507,10 @@ func (s *syncSvc) applyItem(
 	}
 	obj.Version = version
 
-	if err := s.mergeLocationNaturalKey(ctx, userID, now, obj, res, versions); err != nil {
+	if err := s.mergeLocationNaturalKey(ctx, userID, now, obj, res, versions, view); err != nil {
 		return nil, err
 	}
-	if err := sync_repo.SyncObject().Save(ctx, obj); err != nil {
+	if err := view.write(ctx, obj); err != nil {
 		return nil, err
 	}
 	res.Version = obj.Version
@@ -350,26 +525,16 @@ func (s *syncSvc) applyItem(
 // 墓碑必须先落：uk_sync_objects_natural 这个部分唯一索引只允许自然键上有一行存活。
 func (s *syncSvc) mergeLocationNaturalKey(
 	ctx context.Context, userID, now int64, obj *sync_entity.SyncObject, res *PushItemResult,
-	versions *versionBlock,
+	versions *versionBlock, view *pushView,
 ) error {
-	if (obj.Kind != sync_entity.KindProjectLocation && obj.Kind != sync_entity.KindAgentBackendCLI) || obj.IsDeleted() {
+	if !hasNaturalKey(obj.Kind) || obj.IsDeleted() {
 		return nil
 	}
-	var dup *sync_entity.SyncObject
-	var err error
-	if obj.Kind == sync_entity.KindProjectLocation {
-		dup, err = sync_repo.SyncObject().FindLocationByNaturalKey(
-			ctx, userID, obj.ScopeSyncID, obj.AgentredFingerprint)
-	} else {
-		dup, err = sync_repo.SyncObject().FindCLIOverlayByNaturalKey(
-			ctx, userID, obj.ScopeSyncID, obj.AgentredFingerprint)
-	}
-	if err != nil {
-		return err
-	}
-	if dup == nil || dup.SyncID == obj.SyncID {
+	dupRow := view.liveOn(naturalKeyOf(obj))
+	if dupRow == nil || dupRow.obj.SyncID == obj.SyncID {
 		return nil
 	}
+	dup := dupRow.obj
 
 	if !obj.Wins(dup) {
 		// 兜底分支：本次上行的版本刚从单调序列取出，正常情况下必然更大，走不到这里。
@@ -392,7 +557,7 @@ func (s *syncSvc) mergeLocationNaturalKey(
 		return err
 	}
 	obj.Version = winnerVersion
-	n, err := sync_repo.SyncObject().Tombstone(ctx, dup.ID, tombstoneVersion, now)
+	n, err := view.tombstone(ctx, dupRow, tombstoneVersion, now)
 	if err != nil {
 		return err
 	}

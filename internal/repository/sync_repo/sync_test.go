@@ -1,6 +1,7 @@
 package sync_repo
 
 import (
+	"fmt"
 	"regexp"
 	"testing"
 
@@ -579,5 +580,207 @@ func TestFindAvatar_GivenNoRow_ThenNilNil(t *testing.T) {
 	got, err := r.Find(ctx, 7, "h1")
 	assert.NoError(t, err)
 	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// Push 在持锁事务里读已有行：整批一条 `sync_id IN`，不是每条 item 一条 SELECT。
+// 结果按同步标识归档——sync_id 是 utf8mb4_0900_bin，库里的相等就是 Go 里的字符串相等。
+func TestFindMany_GivenSyncIDs_ThenOneInQueryKeyedBySyncID(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects` WHERE user_id=? AND sync_id IN (?,?)")).
+		WithArgs(int64(7), "p1", "p2").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "sync_id", "version"}).
+			AddRow(int64(11), int64(7), "p2", int64(4)))
+
+	got, err := r.FindMany(ctx, 7, []string{"p1", "p2"})
+	assert.NoError(t, err)
+	assert.Len(t, got, 1)
+	assert.Equal(t, int64(11), got["p2"].ID)
+	assert.Nil(t, got["p1"], "库里没有的同步标识不在结果里")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 占位符数量要有上限：一条 IN 超过一块就分块查，结果合并。
+func TestFindMany_GivenMoreThanOneBatch_ThenQueriesInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	ids := make([]string, syncObjectBatchSize+1)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("s%d", i)
+	}
+	mock.ExpectQuery(fmt.Sprintf(`sync_id IN \((\?,){%d}\?\)$`, syncObjectBatchSize-1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "sync_id"}).AddRow(int64(1), "s0"))
+	mock.ExpectQuery(`sync_id IN \(\?\)$`).
+		WithArgs(int64(7), ids[syncObjectBatchSize]).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "sync_id"}).AddRow(int64(2), ids[syncObjectBatchSize]))
+
+	got, err := r.FindMany(ctx, 7, ids)
+	assert.NoError(t, err)
+	assert.Len(t, got, 2)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindMany_GivenNoSyncIDs_ThenNoQuery(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	got, err := r.FindMany(ctx, 7, nil)
+	assert.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindMany_GivenQueryFails_ThenErrorPropagates(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects`")).WillReturnError(assert.AnError)
+
+	got, err := r.FindMany(ctx, 7, []string{"p1"})
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 自然键批量查重只看存活行。谓词直接写在 uk_sync_objects_natural 的列上：
+// live_natural_key 是生成列，存活且属于带自然键的 kind 时等于 kind，否则为 NULL——
+// 与 FindLocationByNaturalKey 的「kind=? AND deleted_at=0」同义，而行构造器 IN 整个
+// 落在那条唯一键上。
+func TestFindLiveByNaturalKeys_GivenKeys_ThenOneRowConstructorQueryKeyedByNaturalKey(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects` WHERE user_id=? AND "+
+		"(scope_sync_id, agentred_fingerprint, live_natural_key) IN ((?,?,?),(?,?,?))")).
+		WithArgs(int64(7), "proj-1", "fp-a", sync_entity.KindProjectLocation,
+			"backend-1", "fp-a", sync_entity.KindAgentBackendCLI).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "sync_id", "scope_sync_id", "agentred_fingerprint"}).
+			AddRow(int64(55), sync_entity.KindAgentBackendCLI, "cli-1", "backend-1", "fp-a"))
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, []NaturalKey{
+		{Kind: sync_entity.KindProjectLocation, ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a"},
+		{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-a"},
+	})
+	assert.NoError(t, err)
+	assert.Len(t, got, 1)
+	assert.Equal(t, int64(55), got[NaturalKey{
+		Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-a",
+	}].ID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindLiveByNaturalKeys_GivenMoreThanOneBatch_ThenQueriesInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	keys := make([]NaturalKey, syncObjectBatchSize+1)
+	for i := range keys {
+		keys[i] = NaturalKey{Kind: sync_entity.KindProjectLocation, ScopeSyncID: fmt.Sprintf("p%d", i), AgentredFingerprint: "fp-a"}
+	}
+	mock.ExpectQuery(fmt.Sprintf(`IN \((\(\?,\?,\?\),){%d}\(\?,\?,\?\)\)$`, syncObjectBatchSize-1)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`IN \(\(\?,\?,\?\)\)$`).
+		WithArgs(int64(7), keys[syncObjectBatchSize].ScopeSyncID, "fp-a", sync_entity.KindProjectLocation).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, keys)
+	assert.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindLiveByNaturalKeys_GivenNoKeys_ThenNoQuery(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, nil)
+	assert.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindLiveByNaturalKeys_GivenQueryFails_ThenErrorPropagates(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `sync_objects`")).WillReturnError(assert.AnError)
+
+	got, err := r.FindLiveByNaturalKeys(ctx, 7, []NaturalKey{{Kind: sync_entity.KindProjectLocation}})
+	assert.ErrorIs(t, err, assert.AnError)
+	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 新对象一块一条多行 INSERT，而且是**普通** INSERT：sync_objects 有两条唯一键，
+// ON DUPLICATE KEY UPDATE 会把撞上的那条悄悄改成别人的行（见 Save 的注释）。
+// 正则锚到语句末尾——VALUES 之后多出任何子句都不匹配。
+func TestCreateBatch_GivenObjects_ThenOnePlainMultiRowInsert(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`^INSERT INTO ` + "`sync_objects`" + ` \([^)]*\) VALUES \([^)]*\),\([^)]*\)$`).
+		WillReturnResult(sqlmock.NewResult(41, 2))
+	mock.ExpectCommit()
+
+	err := r.CreateBatch(ctx, []*sync_entity.SyncObject{
+		{UserID: 7, Kind: sync_entity.KindProject, SyncID: "p1", Payload: `{}`, Version: 8},
+		{UserID: 7, Kind: sync_entity.KindProject, SyncID: "p2", Payload: `{}`, Version: 9},
+	})
+	assert.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateBatch_GivenMoreThanOneBatch_ThenInsertsInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	objs := make([]*sync_entity.SyncObject, syncObjectBatchSize+1)
+	for i := range objs {
+		objs[i] = &sync_entity.SyncObject{UserID: 7, Kind: sync_entity.KindProject, SyncID: fmt.Sprintf("s%d", i), Payload: `{}`, Version: int64(i + 1)}
+	}
+	mock.ExpectBegin()
+	mock.ExpectExec(fmt.Sprintf(`VALUES (\([^)]*\),){%d}\([^)]*\)$`, syncObjectBatchSize-1)).
+		WillReturnResult(sqlmock.NewResult(1, syncObjectBatchSize))
+	mock.ExpectCommit()
+	mock.ExpectBegin()
+	mock.ExpectExec(`VALUES \([^)]*\)$`).
+		WillReturnResult(sqlmock.NewResult(syncObjectBatchSize+1, 1))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.CreateBatch(ctx, objs))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestCreateBatch_GivenNoObjects_ThenNoStatement(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	assert.NoError(t, r.CreateBatch(ctx, nil))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 撞唯一键原样上抛，后面的块不再发——调用方（Push）据此整批回滚。
+func TestCreateBatch_GivenUniqueKeyConflict_ThenErrorIsLoudAndLaterChunksAreNotSent(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	identityConflict := &mysqldriver.MySQLError{
+		Number:  1062,
+		Message: "Duplicate entry '7-s0' for key 'sync_objects.uk_sync_objects_identity'",
+	}
+	objs := make([]*sync_entity.SyncObject, syncObjectBatchSize+1)
+	for i := range objs {
+		objs[i] = &sync_entity.SyncObject{UserID: 7, Kind: sync_entity.KindProject, SyncID: fmt.Sprintf("s%d", i), Payload: `{}`, Version: int64(i + 1)}
+	}
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO `sync_objects`")).WillReturnError(identityConflict)
+	mock.ExpectRollback()
+
+	err := r.CreateBatch(ctx, objs)
+	assert.ErrorIs(t, err, identityConflict)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
