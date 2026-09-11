@@ -55,7 +55,7 @@ const (
 	//
 	// 帧的原件不在这里交出去 —— 它留在库里那一行。这个视图只回答「第几帧读不懂」，
 	// 好让页面显示得出一个缺口而不是整页塌掉。
-	methodUndecodableFrame = "journal.undecodable"
+	methodUndecodableFrame = "durable.undecodable"
 )
 
 // Transcript 翻一页镜像里的原始帧。多请求 1 条（limit+1）用来判定 HasMore，而不是
@@ -71,7 +71,7 @@ func (s *sessionReadSvc) Transcript(ctx context.Context, in TranscriptQuery) (Tr
 	if limit > maxTranscriptLimit {
 		limit = maxTranscriptLimit
 	}
-	rows, err := agent_session_repo.JournalFrame().ListFramesBySeq(
+	rows, err := agent_session_repo.DurableFrame().ListFramesBySeq(
 		ctx, in.UserID, in.ConversationID, in.AfterSeq, limit+1)
 	if err != nil {
 		return TranscriptPage{}, err
@@ -88,7 +88,7 @@ func (s *sessionReadSvc) Transcript(ctx context.Context, in TranscriptQuery) (Tr
 		HasMore: hasMore,
 	}
 	for _, r := range rows {
-		page.Frames = append(page.Frames, journalFrameView(ctx, r))
+		page.Frames = append(page.Frames, durableFrameView(ctx, r))
 		page.Cursor = r.Seq
 	}
 	return page, nil
@@ -137,7 +137,7 @@ func (s *sessionReadSvc) transcriptTail(ctx context.Context, in TranscriptQuery)
 
 	full := false
 	for !full {
-		batch, err := agent_session_repo.JournalFrame().ListFramesBefore(
+		batch, err := agent_session_repo.DurableFrame().ListFramesBefore(
 			ctx, in.UserID, in.ConversationID, before, tailBatchRows)
 		if err != nil {
 			return TranscriptPage{}, err
@@ -149,7 +149,7 @@ func (s *sessionReadSvc) transcriptTail(ctx context.Context, in TranscriptQuery)
 			if newestSeq == 0 {
 				newestSeq = row.Seq
 			}
-			view := journalFrameView(ctx, row)
+			view := durableFrameView(ctx, row)
 			pending = append(pending, view)
 			rows++
 			if isTurnStart(view) {
@@ -202,7 +202,7 @@ func isTurnStart(view TranscriptFrameView) bool {
 	return ok && kind == eventKindUserMessage
 }
 
-// journalFrameView 把库里的一行投影成下行视图。**它不会失败**：读不懂的那一行交出
+// durableFrameView 把库里的一行投影成下行视图。**它不会失败**：读不懂的那一行交出
 // 一个 methodUndecodableFrame 的缺口帧。
 //
 // 从前它把错误一路交回给调用方，而三个调用方都是 `return TranscriptPage{}, err` ——
@@ -211,7 +211,7 @@ func isTurnStart(view TranscriptFrameView) bool {
 //
 // 解不开的原件仍在库里那一行，没有任何东西被丢弃；能不能读懂它是**这一侧**的事，
 // 换个版本的服务端再读同一行仍可能读得懂。
-func journalFrameView(ctx context.Context, row *agent_session_entity.JournalFrame) TranscriptFrameView {
+func durableFrameView(ctx context.Context, row *agent_session_entity.DurableFrame) TranscriptFrameView {
 	method, params, err := wireview.DecodeStoredFrame(row.Payload)
 	if err != nil {
 		return undecodableFrameView(ctx, row, err)
@@ -224,9 +224,9 @@ func journalFrameView(ctx context.Context, row *agent_session_entity.JournalFram
 // 记一条 Warn 而不是静默吞掉：一帧读不懂是数据问题，**整段**读不懂是这一侧的解码
 // 坏了，后者只有在日志里连成一片时才看得出来。
 func undecodableFrameView(
-	ctx context.Context, row *agent_session_entity.JournalFrame, cause error,
+	ctx context.Context, row *agent_session_entity.DurableFrame, cause error,
 ) TranscriptFrameView {
-	logger.Ctx(ctx).Warn("mirror journal frame is undecodable",
+	logger.Ctx(ctx).Warn("mirror durable frame is undecodable",
 		zap.Int64("seq", row.Seq), zap.Error(cause))
 	params, err := json.Marshal(map[string]int64{"seq": row.Seq})
 	if err != nil {

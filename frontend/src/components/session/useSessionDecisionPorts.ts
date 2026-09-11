@@ -339,7 +339,7 @@ export function useSessionDecisionPorts({
  * 转录里的审批卡与提问卡现在是能点的（归约器产出 canonical 之后），所以两边
  * 都显示同一条待决 = 同一个审批在屏幕上出现两次。但 DecisionPanel 不能删：
  * 两份清单来源不同 —— 卡来自事件流（浏览器手上有那一帧才画得出来），waiters
- * 来自一次 RPC（那台机器此刻真正阻塞着的是哪些）。镜像日志被裁剪、或浏览器
+ * 来自一次 RPC（那台机器此刻真正阻塞着的是哪些）。镜像帧被裁剪、或浏览器
  * 从中途接进来时会有「waiters 里有、事件流里没有」的待决，那种只有它兜得住。
  */
 export function selectPanelWaiters(

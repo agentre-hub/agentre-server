@@ -11,7 +11,7 @@ import {
   TranscriptSessionId,
   toTranscriptFrame,
 } from "@/components/session/transcriptFrame";
-import { applyJournalFrames } from "@/lib/relayClient";
+import { applyDurableFrames } from "@/lib/relayClient";
 
 const CID = "11111111-1111-7111-8111-111111111111";
 
@@ -75,7 +75,7 @@ describe("doneEventFrame", () => {
     expect(event).not.toHaveProperty("usage");
   });
 
-  /** seq 留空是有意的：这条标记是宿主合成的，不占中继日志的序号。 */
+  /** seq 留空是有意的：这条标记是宿主合成的，不占持久帧的序号。 */
   it("给定终态帧，当转成事件，则不占 seq", () => {
     expect(doneEventFrame(CID, { conversationId: CID }).seq).toBeUndefined();
   });
@@ -83,13 +83,13 @@ describe("doneEventFrame", () => {
 
 /**
  * 镜像回放这条路径多绕一道：server 把 typed 帧投影成 JSON（`wireview`，零值省略），
- * 浏览器再由 `journaledToFrame` 拼回帧形状。绕的这一道是逐字段手写的，漏一个的
+ * 浏览器再由 `durableToFrame` 拼回帧形状。绕的这一道是逐字段手写的，漏一个的
  * 表现不是报错而是**静默变空** —— 历史会话的 meta 没了，实时那一轮却有。
  */
 describe("镜像回放的终态帧", () => {
   it("给定镜像投影出的一页，当应用，则本轮计时一路带到事件上", () => {
     const seen: { event: Record<string, unknown> }[] = [];
-    applyJournalFrames(
+    applyDurableFrames(
       [
         {
           seq: 7,
@@ -180,7 +180,7 @@ describe("turnDoneFrames：出错收场的那一轮", () => {
     expect(frames[0].event).toMatchObject({ kind: "done" });
   });
 
-  /** 合成帧不占中继日志的序号，两条都一样。 */
+  /** 合成帧不占持久帧的序号，两条都一样。 */
   it("给定出错的终态帧，当转成事件，则两条都不占 seq", () => {
     const frames = turnDoneFrames(CID, {
       conversationId: CID,

@@ -22,16 +22,16 @@ import (
 // setupMirrorReadTest 装配 SessionIndex / Transcript 需要的三个仓储 mock，
 // 与 setupWorkspaceTest 分开：那批既有测试不关心镜像，混进去徒增无关的 mock 期望。
 func setupMirrorReadTest(t *testing.T) (
-	context.Context, *mock_agent_session_repo.MockSummaryRepo, *mock_agent_session_repo.MockJournalFrameRepo,
+	context.Context, *mock_agent_session_repo.MockSummaryRepo, *mock_agent_session_repo.MockDurableFrameRepo,
 	*mock_sync_repo.MockSyncObjectRepo, *sessionReadSvc,
 ) {
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 	mSummary := mock_agent_session_repo.NewMockSummaryRepo(ctrl)
-	mFrame := mock_agent_session_repo.NewMockJournalFrameRepo(ctrl)
+	mFrame := mock_agent_session_repo.NewMockDurableFrameRepo(ctrl)
 	mObj := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	agent_session_repo.RegisterSummary(mSummary)
-	agent_session_repo.RegisterJournalFrame(mFrame)
+	agent_session_repo.RegisterDurableFrame(mFrame)
 	sync_repo.RegisterSyncObject(mObj)
 	return context.Background(), mSummary, mFrame, mObj, New()
 }
@@ -40,7 +40,7 @@ func setupMirrorReadTest(t *testing.T) (
 func TestTranscript_GivenFramesAfterCursor_ReturnsInOrderAndAdvancesCursor(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
 	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(5), defaultTranscriptLimit+1).
-		Return([]*agent_session_entity.JournalFrame{
+		Return([]*agent_session_entity.DurableFrame{
 			frame(6, "text_delta", "hi"),
 			frame(7, "text_delta", "there"),
 		}, nil)
@@ -79,7 +79,7 @@ func TestTranscript_GivenNoNewFrames_ThenCursorUnchanged(t *testing.T) {
 func TestTranscript_GivenMoreRowsThanLimit_ThenHasMoreTrueAndExtraRowTrimmed(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
 	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(0), 3).
-		Return([]*agent_session_entity.JournalFrame{
+		Return([]*agent_session_entity.DurableFrame{
 			frame(1, "text_delta", "a"), frame(2, "text_delta", "b"), frame(3, "text_delta", "c"),
 		}, nil)
 
@@ -117,7 +117,7 @@ func TestTranscript_GivenLimitAboveMax_ThenClamped(t *testing.T) {
 // ─── 反向读：一页的量按预算定（规格 2026-08-21-transcript-tail-loading 决策 7）──
 
 // frame 造一条镜像行。
-func frame(seq int64, kind, text string) *agent_session_entity.JournalFrame {
+func frame(seq int64, kind, text string) *agent_session_entity.DurableFrame {
 	event := &agentrewire.RuntimeEventNotification{ConversationId: "conv-9", Seq: seq}
 	switch kind {
 	case "user_message":
@@ -138,12 +138,12 @@ func frame(seq int64, kind, text string) *agent_session_entity.JournalFrame {
 	if err != nil {
 		panic(err)
 	}
-	return &agent_session_entity.JournalFrame{Seq: seq, Payload: payload}
+	return &agent_session_entity.DurableFrame{Seq: seq, Payload: payload}
 }
 
 // turn 造一轮：user_message 起头，后面两条 text_delta。交回的是**升序**。
-func turn(start int64) []*agent_session_entity.JournalFrame {
-	return []*agent_session_entity.JournalFrame{
+func turn(start int64) []*agent_session_entity.DurableFrame {
+	return []*agent_session_entity.DurableFrame{
 		frame(start, "user_message", "问"),
 		frame(start+1, "text_delta", "答"),
 		frame(start+2, "text_delta", "完"),
@@ -151,12 +151,12 @@ func turn(start int64) []*agent_session_entity.JournalFrame {
 }
 
 // newestFirst 把若干轮拍平成仓储那一侧的顺序（seq 降序）。
-func newestFirst(turns ...[]*agent_session_entity.JournalFrame) []*agent_session_entity.JournalFrame {
-	var asc []*agent_session_entity.JournalFrame
+func newestFirst(turns ...[]*agent_session_entity.DurableFrame) []*agent_session_entity.DurableFrame {
+	var asc []*agent_session_entity.DurableFrame
 	for _, t := range turns {
 		asc = append(asc, t...)
 	}
-	out := make([]*agent_session_entity.JournalFrame, 0, len(asc))
+	out := make([]*agent_session_entity.DurableFrame, 0, len(asc))
 	for i := len(asc) - 1; i >= 0; i-- {
 		out = append(out, asc[i])
 	}
@@ -192,7 +192,7 @@ func TestTranscriptTail_StopsAtTurnBudget(t *testing.T) {
 func TestTranscriptTail_NeverSplitsATurnAtTheByteBudget(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
 	huge := frame(11, "text_delta", strings.Repeat("x", tailBytes+1))
-	rows := append([]*agent_session_entity.JournalFrame{huge, frame(10, "user_message", "问")},
+	rows := append([]*agent_session_entity.DurableFrame{huge, frame(10, "user_message", "问")},
 		newestFirst(turn(1), turn(4), turn(7))...)
 	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(rows, nil)
@@ -229,7 +229,7 @@ func TestTranscriptTail_WholeConversationFitsInOnePage(t *testing.T) {
 func TestTranscriptTail_CursorCountsRawRowsNotProjectedOnes(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
 	rows := append(
-		[]*agent_session_entity.JournalFrame{frame(20, "runtime_status", "")},
+		[]*agent_session_entity.DurableFrame{frame(20, "runtime_status", "")},
 		newestFirst(turn(1))...,
 	)
 	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
@@ -247,14 +247,14 @@ func TestTranscriptTail_CursorCountsRawRowsNotProjectedOnes(t *testing.T) {
 // 一条轮次边界都没有时由行硬顶收住，不会一路读到对话开头。
 func TestTranscriptTail_RowCapStopsAConversationWithoutTurnBoundaries(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	all := make([]*agent_session_entity.JournalFrame, 0, tailRowCap+tailBatchRows)
+	all := make([]*agent_session_entity.DurableFrame, 0, tailRowCap+tailBatchRows)
 	for i := tailRowCap + tailBatchRows; i >= 1; i-- {
 		all = append(all, frame(int64(i), "tool_use_start", ""))
 	}
 	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", gomock.Any(), tailBatchRows).
 		DoAndReturn(func(_ context.Context, _ int64, _ string, before int64, limit int,
-		) ([]*agent_session_entity.JournalFrame, error) {
-			out := make([]*agent_session_entity.JournalFrame, 0, limit)
+		) ([]*agent_session_entity.DurableFrame, error) {
+			out := make([]*agent_session_entity.DurableFrame, 0, limit)
 			for _, r := range all {
 				if before > 0 && r.Seq >= before {
 					continue
@@ -313,7 +313,7 @@ func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
 	second := frame(7, "tool_use_start", "Read")
 	second.Createtime = 1_700_000_009_222
 	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(5), defaultTranscriptLimit+1).
-		Return([]*agent_session_entity.JournalFrame{first, second}, nil)
+		Return([]*agent_session_entity.DurableFrame{first, second}, nil)
 
 	page, err := svc.Transcript(ctx, TranscriptQuery{
 		UserID: 7, ConversationID: "conv-9", AfterSeq: 5,
@@ -325,15 +325,15 @@ func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
 }
 
 // Given 一页里夹着一条解不开的帧；When 翻这一页；Then 请求照常成功，解不开的那条
-// 以 journal.undecodable 出场，它前后的帧一条不少。
+// 以 durable.undecodable 出场，它前后的帧一条不少。
 //
 // 从前这里是 `return TranscriptPage{}, err`：一条坏帧把**整条对话的详情页**变成一次
 // 请求错误。坏的是一帧，不该由整页来赔。
 func TestTranscript_GivenAnUndecodableFrame_KeepsTheRestOfThePage(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
-	broken := &agent_session_entity.JournalFrame{Seq: 7, Payload: "\xff\xfe\xfd"}
+	broken := &agent_session_entity.DurableFrame{Seq: 7, Payload: "\xff\xfe\xfd"}
 	mFrame.EXPECT().ListFramesBySeq(ctx, int64(7), "conv-9", int64(5), defaultTranscriptLimit+1).
-		Return([]*agent_session_entity.JournalFrame{
+		Return([]*agent_session_entity.DurableFrame{
 			frame(6, "text_delta", "前"),
 			broken,
 			frame(8, "text_delta", "后"),
@@ -355,7 +355,7 @@ func TestTranscript_GivenAnUndecodableFrame_KeepsTheRestOfThePage(t *testing.T) 
 func TestTranscriptTail_GivenAnUndecodableFrame_KeepsTheTurn(t *testing.T) {
 	ctx, _, mFrame, _, svc := setupMirrorReadTest(t)
 	rows := newestFirst(turn(10))
-	rows[1] = &agent_session_entity.JournalFrame{Seq: rows[1].Seq, Payload: "\x00\xff"}
+	rows[1] = &agent_session_entity.DurableFrame{Seq: rows[1].Seq, Payload: "\x00\xff"}
 	// 一批就到头（3 行 < tailBatchRows），不会有第二次取。
 	mFrame.EXPECT().ListFramesBefore(ctx, int64(7), "conv-9", int64(0), tailBatchRows).
 		Return(rows, nil)

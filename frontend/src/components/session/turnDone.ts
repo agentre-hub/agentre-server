@@ -27,10 +27,10 @@ import {
  * `durationMs: 0` 会画出一条「0.0s」——那是在替对端撒谎，而老 agentred 真实的
  * 意思是「我还答不出这个数」。判据取真值而不是 `!== undefined`：这条链路上
  * 「零值 = 没有」是既定约定（Protobuf 的缺省字段解出 0，镜像投影按
- * `wireview.putNonzero` 省略零值、`journaledToFrame` 又把它补回 0），
+ * `wireview.putNonzero` 省略零值、`durableToFrame` 又把它补回 0），
  * 两头都到不了 undefined。归约（落到哪条消息、用量怎么合并）归共享包。
  *
- * `seq` 留空：这条标记是宿主合成的，不占中继日志的序号。
+ * `seq` 留空：这条标记是宿主合成的，不占持久帧的序号。
  */
 export function doneEventFrame(
   conversationId: string,

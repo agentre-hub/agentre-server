@@ -24,7 +24,7 @@ import (
 // # 收进账号是第二步，不是可选项
 //
 // 镜像的范围**就是**账号保存过的那些对话（隐私边界）。不保存的话，会话在机器上真的
-// 建起来了、轮次也真的落进了它的通知日志，而账号这一侧一行都没有——用户点完「导入」
+// 建起来了、轮次也真的落进了它的转录，而账号这一侧一行都没有——用户点完「导入」
 // 之后什么也不会出现。
 func (s *sessionImportSvc) Import(ctx context.Context, in ImportInput) (*ImportResultView, error) {
 	if in.Backend == "" || in.Locator == "" || in.ConversationID == "" {

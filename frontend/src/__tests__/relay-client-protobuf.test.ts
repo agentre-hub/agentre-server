@@ -9,7 +9,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  applyJournalFrames,
+  applyDurableFrames,
   RelayClient,
   RequestTimeoutMs,
   type RelayClientOptions,
@@ -297,7 +297,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
     await expect(pending).resolves.toMatchObject({ sessions: [] });
   });
 
-  // Given 0.2.0 把帧分成两级：预览帧（逐 token 增量，不带 seq、不入日志）与持久帧
+  // Given 0.2.0 把帧分成两级：预览帧（逐 token 增量，不带 seq、不入转录）与持久帧
   // （块级，带 seq）。持久文本块投影出来的还是 text_delta，载荷是**整段**文本，而
   // 本站的归约器对 text_delta 一律追加。
   // When 一条预览帧到达；
@@ -433,7 +433,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
     expect(socket.sent).toHaveLength(0);
   });
 
-  // Given 日志里除了 runtime.event 还有轮次结束帧（`RpcNotification.run_result_done`，
+  // Given 补齐页里除了 runtime.event 还有轮次结束帧（`RpcNotification.run_result_done`，
   // 每跑完一轮就落一条）；When 打开一条已经跑完的对话、按游标补齐这一页；Then 整页
   // 必须照常交付 —— 事件进转录、结束帧进 onRunResultDone。
   //
@@ -592,7 +592,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
   it("replays a mirror page whose frames include a run-result-done marker", () => {
     const events: unknown[] = [];
     const done: unknown[] = [];
-    const last = applyJournalFrames(
+    const last = applyDurableFrames(
       [
         {
           seq: 12,
@@ -639,14 +639,14 @@ describe("RelayClient Protobuf RPC boundary", () => {
       },
     ]);
   });
-  // Given 日志里可以出现 RpcNotification 的**任意**一种形态（普通轮次的起/事件/
+  // Given 补齐页里可以出现 RpcNotification 的**任意**一种形态（普通轮次的起/事件/
   // 结束、自主续轮的起/事件/止）；When 补齐把这一页翻成中间形状再投递；Then 六种
   // 都要落到各自那一口。
   //
   // 这一条是「按形态穷举」的守卫，不是又一条用例：上面那条 run-result-done 的红
   // 之所以能长期存在，正是因为补齐路径此前只被 textDelta 一种形态测过。少了这条，
   // 另外三种自主续轮的形态仍然是同一个坑，只是还没有人踩到。
-  it("catches up every RpcNotification shape the journal can hold", async () => {
+  it("catches up every RpcNotification shape a durable frame can hold", async () => {
     const events: unknown[] = [];
     const done: unknown[] = [];
     const started: unknown[] = [];
@@ -725,14 +725,14 @@ describe("RelayClient Protobuf RPC boundary", () => {
 /**
  * 补齐这条路上的终态帧要把本轮统计带全。
  *
- * `journaledFromProtobuf` 是这三份终态帧投影里的第三份（另两份是实时的
+ * `durableFromProtobuf` 是这三份终态帧投影里的第三份（另两份是实时的
  * `decodeNotification` 与 server 镜像的 `wireview.doneView`），一样是逐字段手写的。
  * 漏一格的表现只在**刷新之后**看得见：实时那一轮 meta 是全的，页面一刷、同一条
  * 消息从补齐路径重建出来，耗时就掉回 0.0s、首字与速率整行消失。2026-08-31 在
  * coding.local 上就是这么撞出来的。
  */
 describe("catch-up 的终态帧", () => {
-  it("给定日志里的终态帧带本轮统计，当补齐，则一格都不丢", async () => {
+  it("给定补齐页里的终态帧带本轮统计，当补齐，则一格都不丢", async () => {
     const done: unknown[] = [];
     const { client, socket } = setup({
       onRunResultDone: (frame) => done.push(frame),
@@ -1024,7 +1024,7 @@ describe("RelayConnection 的重连退让", () => {
 describe("帧的发生时刻", () => {
   it("补齐的一页把每一帧报的 createtime 交给 handler", () => {
     const seen: Array<[string, number]> = [];
-    applyJournalFrames(
+    applyDurableFrames(
       [
         {
           seq: 12,

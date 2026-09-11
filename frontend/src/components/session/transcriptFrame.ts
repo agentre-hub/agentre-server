@@ -53,7 +53,7 @@ export function toTranscriptFrame(
  *
  * 所以去重放在**写进转录**这一处，而不是让每条投递路径各自小心：闸门只有一道，才
  * 说得清「同一号只画一次」。没有 seq 的帧（轮次结束标记那些宿主合成的）照单收下——
- * 它们不占中继日志的号，也无从判断是不是同一条。
+ * 它们不占持久帧的号，也无从判断是不是同一条。
  */
 export function appendFrames(
   prev: SessionEventFrame[],

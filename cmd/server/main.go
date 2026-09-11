@@ -91,7 +91,7 @@ func main() {
 	sync_repo.RegisterSyncLocalPath(sync_repo.NewSyncLocalPath())
 	agent_session_repo.RegisterSave(agent_session_repo.NewSave())
 	agent_session_repo.RegisterSummary(agent_session_repo.NewSummary())
-	agent_session_repo.RegisterJournalFrame(agent_session_repo.NewJournalFrame())
+	agent_session_repo.RegisterDurableFrame(agent_session_repo.NewDurableFrame())
 	agent_session_repo.RegisterDeleteTodo(agent_session_repo.NewDeleteTodo())
 	webauthn_credential_repo.RegisterWebAuthnCredential(webauthn_credential_repo.NewWebAuthnCredential())
 	activity_repo.RegisterDaily(activity_repo.NewDaily())

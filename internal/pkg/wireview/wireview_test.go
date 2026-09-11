@@ -146,7 +146,7 @@ func TestNotificationViewUsageObjectRetainsItsStableFields(t *testing.T) {
 //
 // 手抄词表已经没有了:判别值写在 .proto 的 (agentre.wire.event_kind) 上,本包经
 // pkg/wire/eventkind 从 descriptor 读。但「读得到」不等于「投影得出来」—— 上游漏标
-// 一条新分支,eventkind.Of 就报不认识,于是 runtimeEventView 报错 → journalFrameView
+// 一条新分支,eventkind.Of 就报不认识,于是 runtimeEventView 报错 → durableFrameView
 // 报错 → **整页转录取不出来**,而不是少一行。这条用例是本仓这一侧对那件事的兜底。
 //
 // 断言仍然从生成的 descriptor 枚举 oneof、逐个真的走一遍投射,不比对字符串清单 ——
@@ -202,7 +202,7 @@ func TestNotificationViewKeepsUnrecognizedBlockPayloadAsJSON(t *testing.T) {
 
 // 终态帧的本轮计时必须一起过投影。
 //
-// 这条路径是**账号镜像**：库里存着的原始 journal 帧解出来发给浏览器，转录里那一
+// 这条路径是**账号镜像**：库里存着的原始持久帧解出来发给浏览器，转录里那一
 // 行 meta（模型 · 耗时 · 首字 · 速率）就靠它。doneView 是逐字段手写的，漏一个的
 // 表现不是报错而是**静默变空**——历史会话上那三个数没了，实时那一轮却有，两边
 // 对不上还查不出来路。
@@ -216,7 +216,7 @@ func TestNotificationViewCarriesTurnStats(t *testing.T) {
 	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","durationMs":9640,"firstTokenMs":8010,"tokensPerSec":14.2}`, string(params))
 }
 
-// 零值按本包的约定省略（putNonzero）：浏览器那侧 journaledToFrame 会把它补回 0，
+// 零值按本包的约定省略（putNonzero）：浏览器那侧 durableToFrame 会把它补回 0，
 // 而 0 在转录里读作「这台机器答不出这个数」，不是「这一轮零耗时」。
 func TestNotificationViewOmitsZeroTurnStats(t *testing.T) {
 	_, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RunResultDone{
@@ -275,7 +275,7 @@ var rawJSONByteFields = map[string]bool{
 	"agentre.wire.UnrecognizedBlock.data":      true,
 }
 
-// acceptedBinaryFields 是**明知是真二进制、仍然放它进镜像日志**的那几个字段。
+// acceptedBinaryFields 是**明知是真二进制、仍然放它进镜像帧**的那几个字段。
 //
 // 它与 rawJSONByteFields 刻意分开：那张表说的是「这不是二进制，是 JSON」，而这张表
 // 说的是「这确实是二进制，我们认了」。合成一张会让前一句变成假话 —— 而那张表的读者
@@ -341,7 +341,7 @@ func TestNotificationRejectsTheBranchesThatCarryRealBinary(t *testing.T) {
 				return
 			}
 			require.Error(t, err,
-				"%s 必须继续被拒 —— 它不该进镜像日志那条通道", field.Name())
+				"%s 必须继续被拒 —— 它不该进镜像帧那条通道", field.Name())
 		})
 	}
 }
@@ -349,7 +349,7 @@ func TestNotificationRejectsTheBranchesThatCarryRealBinary(t *testing.T) {
 // Given 可投射的那些通知的整棵消息树；When 找出其中所有 bytes 字段；Then 每一个
 // 都在 rawJSONByteFields 白名单里。
 //
-// 这是「镜像日志里没有真二进制」这条性质的守卫。载荷以 JSON 落库之后，一个真二进制
+// 这是「镜像帧里没有真二进制」这条性质的守卫。载荷以 JSON 落库之后，一个真二进制
 // 字段会变成一大段 base64：既搜不到，又把那张唯一的无界表撑大，而且不会有任何报错。
 func TestProjectableNotificationsCarryNoUnknownBinaryField(t *testing.T) {
 	fields := (&agentrewire.RpcNotification{}).ProtoReflect().Descriptor().Oneofs().ByName("payload").Fields()
@@ -385,7 +385,7 @@ func TestProjectableNotificationsCarryNoUnknownBinaryField(t *testing.T) {
 	}
 
 	require.Empty(t, found,
-		"这些 bytes 字段能进镜像日志：装 JSON 就补进 rawJSONByteFields 并在 RuntimeEvent 里 putRawJSON，"+
+		"这些 bytes 字段能进镜像帧：装 JSON 就补进 rawJSONByteFields 并在 RuntimeEvent 里 putRawJSON，"+
 			"是真二进制就不该走这条通道 —— 除非它是一条**明确认下代价**的例外，那就补进 acceptedBinaryFields 并在那里写清为什么")
 }
 

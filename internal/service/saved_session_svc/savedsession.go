@@ -95,7 +95,7 @@ type SessionMirror interface {
 
 // MachineSessionDeleter 把删除传播到执行那条对话的机器上：中继 wire 的
 // runtime.session.delete（params {conversationId, peerFingerprint?}，result 带 deleted）。
-// agentred 上删的是会话行与它的整段通知日志，桌面端上删的是那台电脑自己那条对话
+// agentred 上删的是会话行与它的全部转录，桌面端上删的是那台电脑自己那条对话
 // 本体，两种端一视同仁（决策 16）。
 //
 // 把 Protobuf RPC method-not-found 翻成 ErrMachineProtocolViolation

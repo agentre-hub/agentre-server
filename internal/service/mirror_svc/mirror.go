@@ -86,7 +86,7 @@ type summaryStore interface {
 }
 
 type frameStore interface {
-	WriteFrames(ctx context.Context, frames []*agent_session_entity.JournalFrame) error
+	WriteFrames(ctx context.Context, frames []*agent_session_entity.DurableFrame) error
 	DeleteFrames(ctx context.Context, userID int64, conversationID string) error
 }
 
@@ -240,7 +240,7 @@ func New(userID int64, machineFingerprint string, peer RelaySession) *Mirror {
 		fingerprint: machineFingerprint,
 		peer:        peer,
 		summaries:   agent_session_repo.Summary(),
-		frames:      agent_session_repo.JournalFrame(),
+		frames:      agent_session_repo.DurableFrame(),
 		tracked:     make(map[string]*trackedSession),
 		signals:     mirrorChanges,
 
@@ -399,7 +399,7 @@ func (m *Mirror) unattached() map[string]*trackedSession {
 //   - seq <= cursor     → already mirrored, drop;
 //   - seq >  cursor + 1 → a hole; pull from the cursor instead, which brings
 //     back both the hole and this frame (storing this one first would write
-//     the same row twice for no gain — it is in the peer's journal already).
+//     the same row twice for no gain — the peer has it already).
 //
 // Frames are written one row each, immediately — what a reader sees is never
 // delayed. The cursor that rides along in the summary row is debounced instead
@@ -691,7 +691,7 @@ func (m *Mirror) summaryWindowElapsed(ctx context.Context, ts *trackedSession) {
 //  0. pin the cursor — **before** attach. The peer starts pushing live frames
 //     the moment it accepts the attach, and those advance the cursor
 //     concurrently; the high-water guard below must compare the value as of
-//     the attach, or it reads a perfectly normal live advance as a journal
+//     the attach, or it reads a perfectly normal live advance as frame numbering
 //     that went backwards.
 //  1. attach, unless the conversation is already interrupted (that turn's
 //     subprocess died with the previous daemon process, so the daemon answers
@@ -723,7 +723,7 @@ func (m *Mirror) catchUp(ctx context.Context, ts *trackedSession) error {
 		return err
 	}
 	// 摘要每轮补齐落一次:对端报的元数据(标题 / 生命周期 / 等待标志)与本 server
-	// 的游标一起更新,一条日志都没有的新对话也因此在索引里立得住。
+	// 的游标一起更新,一帧都没有的新对话也因此在索引里立得住。
 	return m.saveSummary(ctx, ts)
 }
 
@@ -734,7 +734,7 @@ func (m *Mirror) catchUp(ctx context.Context, ts *trackedSession) error {
 // exceeds the peer's high water. When it does, that peer's notification log
 // went backwards: a whole-session delete on the execution end wipes its seq
 // high-water mark, and session ids are locally assigned and get reused, so
-// the journal restarts at 1 under an id this server already has a cursor for.
+// the frame numbering restarts at 1 under an id this server already has a cursor for.
 //
 // Not resetting does not lose a few frames — it loses all of them. Every
 // later live notification satisfies seq <= cursor and is dropped as a
@@ -764,12 +764,12 @@ func (m *Mirror) dropCursorAboveHighWater(ctx context.Context, ts *trackedSessio
 		zap.String("conversationId", ts.conversationID), zap.Int64("cursor", pinned),
 		zap.Int64("latestSeq", highWater))
 	if err := m.frames.DeleteFrames(ctx, m.userID, ts.conversationID); err != nil {
-		return fmt.Errorf("purge frames of the rewound journal: %w", err)
+		return fmt.Errorf("purge frames of the rewound conversation: %w", err)
 	}
 	return m.saveSummary(ctx, ts)
 }
 
-// pullUntilCaughtUp pages the peer's journal from this server's cursor and
+// pullUntilCaughtUp pages the peer's durable frames from this server's cursor and
 // stores every page as-is.
 //
 // A pulled page needs no seq gate: it is the peer's own answer to "what comes
@@ -817,22 +817,22 @@ func (m *Mirror) attach(ctx context.Context, ts *trackedSession) (int64, error) 
 }
 
 // writeFrames stores canonical typed notifications, keyed by
-// (account, conversation, seq). The journal row's seq is the
+// (account, conversation, seq). The pulled frame's seq is the
 // metadata source of truth, so it is stamped into the serialized notification
 // for both live delivery and pull replay before persistence.
 //
 // Createtime 原样取自载体,这一层一个时刻都不编。
 //
 // 它是**发生**时刻,不是这台 server 的收帧时刻:实时那一路由 Apply 就地盖当下
-// (差一跳网络),补齐那一路由对端的日志行报出来。两者不能互换 —— 补齐是成批到达
+// (差一跳网络),补齐那一路由对端的转录行报出来。两者不能互换 —— 补齐是成批到达
 // 的,拿收帧时刻当发生时刻会把一条离线两天的对话整段盖成同一毫秒。对端报不出来时
 // 是 0,0 照样原样落库:「不知道」在下游读作「不显示时间」,补一个当下则是显示一个
 // 假的。
 func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agentrewire.JournaledNotification) error {
-	rows := make([]*agent_session_entity.JournalFrame, 0, len(ns))
+	rows := make([]*agent_session_entity.DurableFrame, 0, len(ns))
 	for _, n := range ns {
 		if n.GetPayload() == nil {
-			return fmt.Errorf("journal seq %d has no typed payload", n.GetSeq())
+			return fmt.Errorf("durable frame seq %d has no typed payload", n.GetSeq())
 		}
 		payload := proto.Clone(n.GetPayload()).(*agentrewire.RpcNotification)
 		setNotificationSeq(payload, n.GetSeq())
@@ -841,9 +841,9 @@ func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agen
 		// EncodeStoredFrame 走 $proto 逃生路，原件一个字节不丢。
 		encoded, err := wireview.EncodeStoredFrame(payload)
 		if err != nil {
-			return fmt.Errorf("encode journal seq %d: %w", n.GetSeq(), err)
+			return fmt.Errorf("encode durable frame seq %d: %w", n.GetSeq(), err)
 		}
-		rows = append(rows, &agent_session_entity.JournalFrame{
+		rows = append(rows, &agent_session_entity.DurableFrame{
 			UserID:          m.userID,
 			ConversationID:  ts.conversationID,
 			PeerFingerprint: ts.owner,

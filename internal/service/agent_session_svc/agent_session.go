@@ -70,8 +70,8 @@ type TranscriptQuery struct {
 
 // TranscriptFrameView 是给 Web HTTP API 的 JSON 投影视图。
 //
-// 它与镜像日志库里那一行**同形**：2026-09-07-journal-payload-json.md 之后
-// agent_session_notification_journal.payload 存的就是 {method, params} 的 JSON，
+// 它与镜像帧表里那一行**同形**：2026-09-07-journal-payload-json.md 之后
+// agent_session_durable_frames.payload 存的就是 {method, params} 的 JSON，
 // 读取边界只是把它取出来（wireview.DecodeStoredFrame），不再解一次 Protobuf。
 // 这一侧读不懂的那一行在这里出场为 methodUndecodableFrame 的缺口帧。
 type TranscriptFrameView struct {
@@ -102,7 +102,7 @@ type TranscriptPage struct {
 	//
 	// 单开两列而不是按方向改写 Cursor 的含义：一个字段两种意思，读的人分不清。
 	//
-	// 三个数（Cursor / OldestSeq / HasBefore）一律按**原始日志行**算，与投影后
+	// 三个数（Cursor / OldestSeq / HasBefore）一律按**原始帧行**算，与投影后
 	// 交出了几条无关——投影丢掉窗口末尾那帧时若跟着把 Cursor 往回挪，调用方预置的
 	// 游标就会停在它前面，此后每条实时帧都被判成跳号丢光。
 	OldestSeq int64

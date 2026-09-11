@@ -53,7 +53,7 @@ type fakeChannel struct {
 
 type fakeDaemonNet struct {
 	mu       sync.Mutex
-	peer     *fakeRelay // 会话清单 / 通知日志 / 高水位,复用镜像逻辑那一层的假中继
+	peer     *fakeRelay // 会话清单 / 持久帧 / 高水位,复用镜像逻辑那一层的假中继
 	online   bool
 	broken   map[string]bool // 这些机器在线,但连接建不起来
 	channels map[string]*fakeChannel
@@ -421,7 +421,7 @@ type frameWrite struct {
 type fakeStore struct {
 	mu        sync.Mutex
 	summaries map[string]agent_session_entity.SessionSummary
-	rows      map[string]agent_session_entity.JournalFrame
+	rows      map[string]agent_session_entity.DurableFrame
 	// writes 是每一次**写入尝试**,不是落库的行:接手方要是从 0 重拉,唯一键会把它
 	// 折成无操作、库里看不出异样,只有这里数得出来。
 	writes []frameWrite
@@ -430,7 +430,7 @@ type fakeStore struct {
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		summaries: map[string]agent_session_entity.SessionSummary{},
-		rows:      map[string]agent_session_entity.JournalFrame{},
+		rows:      map[string]agent_session_entity.DurableFrame{},
 	}
 }
 
@@ -529,7 +529,7 @@ func (s *fakeStore) MarkSummaryRead(
 	return nil
 }
 
-func (s *fakeStore) WriteFrames(_ context.Context, frames []*agent_session_entity.JournalFrame) error {
+func (s *fakeStore) WriteFrames(_ context.Context, frames []*agent_session_entity.DurableFrame) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range frames {
@@ -545,10 +545,10 @@ func (s *fakeStore) WriteFrames(_ context.Context, frames []*agent_session_entit
 
 func (s *fakeStore) ListFramesBySeq(
 	_ context.Context, userID int64, conversationID string, fromSeq int64, limit int,
-) ([]*agent_session_entity.JournalFrame, error) {
+) ([]*agent_session_entity.DurableFrame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*agent_session_entity.JournalFrame, 0, len(s.rows))
+	out := make([]*agent_session_entity.DurableFrame, 0, len(s.rows))
 	for _, row := range s.rows {
 		if row.UserID != userID || row.ConversationID != conversationID || row.Seq <= fromSeq {
 			continue
@@ -567,10 +567,10 @@ func (s *fakeStore) ListFramesBySeq(
 // limit 条。本包不读它（镜像写入侧只正向补齐），但桩要实现全接口才注册得进去。
 func (s *fakeStore) ListFramesBefore(
 	_ context.Context, userID int64, conversationID string, beforeSeq int64, limit int,
-) ([]*agent_session_entity.JournalFrame, error) {
+) ([]*agent_session_entity.DurableFrame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]*agent_session_entity.JournalFrame, 0, len(s.rows))
+	out := make([]*agent_session_entity.DurableFrame, 0, len(s.rows))
 	for _, row := range s.rows {
 		if row.UserID != userID || row.ConversationID != conversationID {
 			continue
@@ -621,10 +621,10 @@ func (s *fakeStore) DeleteSummary(_ context.Context, userID int64, conversationI
 
 // framesOf 是某条会话此刻真正躺在库里的帧,按 seq 升序 —— 内容一并交出,
 // 「库里剩下的是哪条对话」只有看 params 才答得出来。
-func (s *fakeStore) framesOf(conversationID string) []agent_session_entity.JournalFrame {
+func (s *fakeStore) framesOf(conversationID string) []agent_session_entity.DurableFrame {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var out []agent_session_entity.JournalFrame
+	var out []agent_session_entity.DurableFrame
 	for _, row := range s.rows {
 		if row.ConversationID == conversationID {
 			out = append(out, row)
@@ -709,7 +709,7 @@ func newResidentRig(t *testing.T) *residentRig {
 	rdb := leaseRedis(t)
 	store := newFakeStore()
 	agent_session_repo.RegisterSummary(store)
-	agent_session_repo.RegisterJournalFrame(store)
+	agent_session_repo.RegisterDurableFrame(store)
 	return &residentRig{rdb: rdb, peer: newFakeRelay(), store: store, reviveEvery: time.Hour}
 }
 
@@ -761,7 +761,7 @@ func lastPullCursor(t *testing.T, peer *fakeRelay) int64 {
 func TestFollow_OnlineMachineWithSavedSessions_KeepsExactlyOneConnection(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1), journalRow(conv42, 2)}
+	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 
@@ -1065,7 +1065,7 @@ func TestFollow_MachineOffline_LeavesNoClaimBehind(t *testing.T) {
 func TestFollow_MachineAlreadyFollowedByAnotherReplica_DoesNotConnect(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	b := rig.replica(t, replicaB)
 	ctx := context.Background()
@@ -1170,8 +1170,8 @@ func TestFollower_DaemonRelinked_ReleasesTheClaimSoTheNextPassCanHandshakeAgain(
 func TestFollow_TakeoverAfterReplicaStops_ResumesFromStoredCursor(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{
-		journalRow(conv42, 1), journalRow(conv42, 2), journalRow(conv42, 3),
+	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{
+		durableRow(conv42, 1), durableRow(conv42, 2), durableRow(conv42, 3),
 	}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
@@ -1181,7 +1181,7 @@ func TestFollow_TakeoverAfterReplicaStops_ResumesFromStoredCursor(t *testing.T) 
 	require.Equal(t, []int64{1, 2, 3}, rig.store.writtenSeqs())
 
 	a.sup.Stop(ctx)
-	rig.peer.journal[conv42] = append(rig.peer.journal[conv42], journalRow(conv42, 4), journalRow(conv42, 5))
+	rig.peer.durable[conv42] = append(rig.peer.durable[conv42], durableRow(conv42, 4), durableRow(conv42, 5))
 	b := rig.replica(t, replicaB)
 	claimedByB, err := b.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 
@@ -1222,8 +1222,8 @@ func TestFollow_SavedSetGrows_ResyncsOnTheSameConnection(t *testing.T) {
 	rig.peer.sessions = []*agentrewire.SessionSummary{
 		machineSession(conv42, "写个爬虫"), machineSession(conv77, "刚保存的"),
 	}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
-	rig.peer.journal[conv77] = []*agentrewire.JournaledNotification{journalRow(conv77, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv77] = []*agentrewire.JournaledNotification{durableRow(conv77, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))

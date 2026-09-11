@@ -3868,7 +3868,7 @@ describe("会话详情：头部", () => {
    * 桌面端却有（那边读的是自己库里的 chat_messages.createtime）。
    *
    * 走的是**镜像**这条路：一页 JournaledNotification 上的 createtime 要一路穿过
-   * applyJournalFrames → toTranscriptFrame → 共享归约器，落到消息上。
+   * applyDurableFrames → toTranscriptFrame → 共享归约器，落到消息上。
    */
   it("镜像的一页带 createtime：转录里每条消息头上出 HH:mm", async () => {
     const at = new Date(2026, 8, 1, 9, 41, 7).getTime();
@@ -5727,7 +5727,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
 
   /**
    * 未保存的对话内容只有中继给得出。按 attach 交回的高水位反推游标，只补最后
-   * 那一段——不再从游标 0 把整份 journal 拉回来。
+   * 那一段——不再从游标 0 把整份转录拉回来。
    */
   it("镜像里没有：按 attach 的高水位反推游标，只拉尾巴", async () => {
     mockedApi.mockImplementation(async (path: string) => {

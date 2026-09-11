@@ -26,7 +26,7 @@ func allEntities() []any {
 	return []any{
 		&activity_entity.DailyBucket{},
 		&agent_session_entity.DeleteTodo{},
-		&agent_session_entity.JournalFrame{},
+		&agent_session_entity.DurableFrame{},
 		&agent_session_entity.SessionSave{},
 		&agent_session_entity.SessionSummary{},
 		&device_entity.Device{},

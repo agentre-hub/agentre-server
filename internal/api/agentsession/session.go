@@ -181,7 +181,7 @@ type TranscriptResponse struct {
 	// 单开两列而不是按方向改写 cursor 的含义 —— cursor 在两个方向上同义（这一页
 	// 最新那条的 seq），调用方拿它预置中继游标那条路因此不必分方向。
 	//
-	// 三个数一律按**原始日志行**算，与服务端的帧投影削掉了多少无关。
+	// 三个数一律按**原始帧行**算，与服务端的帧投影削掉了多少无关。
 	OldestSeq int64 `json:"oldest_seq,omitempty"`
 	HasBefore bool  `json:"has_before,omitempty"`
 }

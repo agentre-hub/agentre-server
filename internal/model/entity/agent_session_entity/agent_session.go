@@ -1,6 +1,6 @@
 // Package agent_session_entity holds the account-scoped copy of the
 // conversations the user has explicitly saved (2026-08-18-server-session-mirror.md
-// decision 1): their summaries, the raw journal frames replayed off the peer
+// decision 1): their summaries, the raw durable frames replayed off the peer
 // that originated them, the delete todos left behind when the peer that must
 // also purge its own copy was offline at delete time (decision 6), and the
 // saves list that decides which conversations are copied here at all.
@@ -108,7 +108,7 @@ type SessionSummary struct {
 
 func (*SessionSummary) TableName() string { return "agent_sessions" }
 
-// JournalFrame is one notification replayed off the peer's own notification log.
+// DurableFrame is one notification replayed off the peer's own notification log.
 //
 // Payload is a JSON object — {"method": ..., "params": {...}} — so that a row can
 // be read and searched with plain SQL (JSON_EXTRACT), which is the whole reason
@@ -125,7 +125,7 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 // 连续范围，而不是二级索引扫一段再逐行随机回表取 longblob。
 //
 // PeerFingerprint 留在表上作来源标注，但**不再是主键的一部分**。
-type JournalFrame struct {
+type DurableFrame struct {
 	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
 	// (user_id, conversation_id, seq) 是自然键，落在唯一索引上；行身份由 ID 承担。
 	UserID          int64  `gorm:"column:user_id;type:bigint;not null"`
@@ -151,11 +151,11 @@ type JournalFrame struct {
 	Createtime int64 `gorm:"column:createtime;type:bigint;not null;default:0"`
 }
 
-func (*JournalFrame) TableName() string { return "agent_session_notification_journal" }
+func (*DurableFrame) TableName() string { return "agent_session_durable_frames" }
 
 // DeleteTodo is a pending delete: the server's own copy of a conversation is
 // already gone, but the peer that must also delete its local copy (desktop
-// chat_sessions row, or agentred's session + journal) was offline at delete
+// chat_sessions row, or agentred's session + transcript) was offline at delete
 // time (decision 6). It is consumed — and this row removed — the next time
 // that peer comes online and receives the delete; a device revocation clears
 // it outright instead (decision 7), since a revoked peer never executes

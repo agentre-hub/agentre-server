@@ -184,7 +184,7 @@ func putRawJSON(out map[string]any, key string, data []byte) {
 	// 合法 JSON 且是合法 UTF-8:**逐字节**原样嵌进视图,不解成 any 再重编。
 	//
 	// 重编那条路经 float64 中转:19 位的整数(纳秒时刻、雪花 ID、大文件偏移)会被改成
-	// 另一个值并写成科学计数法,`1.0` 会变成 `1`。这份视图就是镜像日志库里的那一行
+	// 另一个值并写成科学计数法,`1.0` 会变成 `1`。这份视图就是镜像帧表里的那一行
 	// (2026-09-07-journal-payload-json.md),原件不再另存一份 —— 改掉的位再也找不
 	// 回来。transcript_projection.go 的 decodeEventKind 早就为同一件事开了 UseNumber。
 	//
@@ -261,7 +261,7 @@ func singularValue(field protoreflect.FieldDescriptor, value protoreflect.Value)
 	}
 }
 
-// ── 镜像日志的落库形态 ────────────────────────────────────────────────────
+// ── 镜像帧的落库形态 ────────────────────────────────────────────────────
 //
 // 一行存一个 JSON 对象，形如 {"method": ..., "params": {...}}：库里那一行因此能被
 // 一条 SQL 直接读懂，检索走 JSON_EXTRACT 定位到具体路径
