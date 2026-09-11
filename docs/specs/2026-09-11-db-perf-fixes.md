@@ -44,7 +44,7 @@
 
 | # | Decision | Basis and rejected option |
 |---|---|---|
-| 1 | `NextVersion` 先 `UPDATE sync_account_seqs SET version_seq = version_seq + ?, updatetime = ? WHERE user_id = ?`，受影响 0 行（账号首次取号）才走 `INSERT … ON DUPLICATE KEY UPDATE`，再 `SELECT version_seq`；签名不变 | 真库 data_locks 证明 UPSERT 锁 supremum 串行化全站、普通 UPDATE 只锁本行。同账号仍由本行 X 锁串行，「取号顺序 == 提交顺序」不变。纳入本轮待用户确认（核实新发现） |
+| 1 | `NextVersion` 先 `UPDATE sync_account_seqs SET version_seq = version_seq + ?, updatetime = ? WHERE user_id = ?`，受影响 0 行（账号首次取号）才走 `INSERT … ON DUPLICATE KEY UPDATE`，再 `SELECT version_seq`；签名不变 | 真库 data_locks 证明 UPSERT 锁 supremum 串行化全站、普通 UPDATE 只锁本行。同账号仍由本行 X 锁串行，「取号顺序 == 提交顺序」不变。用户已确认纳入本轮 |
 | 2 | engine_svc 四条写路径与 `PurgeDeviceSyncObjects` 包进事务（与 `WithOrgWriteTx` 同形），广播在提交后；Purge 一次取 N 个版本号 | 用户决定。正确性缺陷 |
 | 3 | Push 批量化：锁内一次 `sync_id IN` 预读、自然键批量预读、新对象按块普通 INSERT（不加 ON DUP），已有行仍逐行带版本条件 UPDATE；本批内维护覆盖视图，同批同 sync_id 第二条仍判冲突 | 用户决定，排在决策 1、2 之后。Rejected: `ON DUPLICATE KEY UPDATE`——会吞掉今天上抛的身份键冲突，且 sync_objects 有两个唯一键 |
 | 4 | `architecture.md` 那段按代码实际行为（上抛）改写 | 代码与测试是既定契约 |
@@ -63,6 +63,8 @@
 | 17 | 首次登录撞 email / identity 唯一键时，从查找路径重查**一次** | 核实员推荐 |
 | 18 | 新迁移追加到 `migrationList()` 末尾，ID 取 `20260911xxxx`，每个迁移只做一件事，DDL 显式写 `ALGORITHM=INPLACE, LOCK=NONE` | AGENTS.md 第 7 条；决策 19 |
 | 19 | `develop.md` 迁移小节写明：新增生成列优先 VIRTUAL（INSTANT）+ 二级索引（INPLACE, LOCK=NONE），STORED 会整表复制并阻塞写；补丁迁移 DDL 一律显式写 `ALGORITHM` / `LOCK`，使不支持时直接报错 | 真库报错原文 |
+| 20 | 建号事务内同时插入该账号的 `sync_account_seqs` 行（`version_seq = 0`，已存在则不改），另加一条回填迁移为所有缺行的存量账号补行；`NextVersion` 保留 0 行时的 upsert 回退作为安全网 | 执行中修订（用户决定，code 复审发现）：两个无 seq 行的新账号在重叠事务中首次取号时，空 UPDATE 各持间隙锁、INSERT 互等，真库 ERROR 1213。Rejected: 调用方事务前预建行——每个写事务多一次往返；1213 整事务重试——把死锁当常态 |
+| 21 | 回填迁移不写先红单测，证据为真库上「建原形态 → 灌有行与缺行的账号 → 跑迁移 → 核对每个账号恰一行且已有行的 version_seq 未被改写」留档，外加迁移链跑通 | 与决策 13 同一豁免理由（迁移无单测约定），数据迁移必须过真库 |
 
 ## 可观察的要求
 
@@ -90,6 +92,7 @@
 15. 实体上不再声明 `type:`；`schema_test.go` 在任一实体声明 `type:` 时失败。
 16. 迁移后 `agent_session_delete_todos`、`device_tokens`、`user_settings` 的对应查询走新索引（真库 EXPLAIN 留档）。
 17. `docs/develop.md` 迁移小节包含决策 19 的规则。
+18. 新建账号完成后，其 `sync_account_seqs` 行已存在；迁移后每个存量账号都恰有一行 seq 且已有行的值不变；两个新账号并发首次取号不因缺行产生 1213 死锁。
 
 ## Non-goals
 
@@ -109,6 +112,7 @@
 | `bootstrap/shipped_config_test.go` | 解析每个 DSN 模板三个超时 > 0 |
 | `schema_test.go` / 实体守卫 | 实体不得声明 `type:` |
 | 迁移 | 迁移链跑通；真库前后 EXPLAIN 留档于 `.dev-kit/artifacts/db-perf-fixes/`（决策 13） |
+| 回填迁移 | 真库前后行数与值核对留档（决策 21） |
 
 ## Out of scope
 
