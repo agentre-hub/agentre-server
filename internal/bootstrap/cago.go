@@ -134,6 +134,11 @@ type RLConfig struct {
 	// 标识）。计数前缀与注册那道分开——共用一个计数器的话，一次登录洪水会把注册
 	// 一起锁死。
 	PasskeyLoginBeginPerIPPerMin int64 `yaml:"passkey_login_begin_per_ip_per_min"`
+	// CredentialsIntrospectPerAccountPerMin：/v1/credentials/introspect 按**调用方
+	// 账号**限流（规格 2026-09-11，S5）。调用方已经出示了自己的设备 access token，
+	// 按 IP 挡不住同账号从多个出口打；这道必须排在 DeviceJWT 之后，用的是它放进
+	// 上下文的账号。
+	CredentialsIntrospectPerAccountPerMin int64 `yaml:"credentials_introspect_per_account_per_min"`
 }
 
 // LoadServerConfig 从 cfg 取 server.* + env 覆盖，返回最终配置。
@@ -182,6 +187,9 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	}
 	if out.RateLimit.PasskeyLoginBeginPerIPPerMin == 0 {
 		out.RateLimit.PasskeyLoginBeginPerIPPerMin = 10
+	}
+	if out.RateLimit.CredentialsIntrospectPerAccountPerMin == 0 {
+		out.RateLimit.CredentialsIntrospectPerAccountPerMin = 30
 	}
 	if out.AccountGate.CacheTTL <= 0 {
 		out.AccountGate.CacheTTL = user_svc.DefaultGateCacheTTL

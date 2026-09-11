@@ -191,6 +191,7 @@ func TestLoadServerConfig_WebAuthnDefaultsDeriveFromPublicURL(t *testing.T) {
 	assert.Positive(t, got.WebAuthn.MaxPerAccount)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerAccountPerMin)
+	assert.Positive(t, got.RateLimit.CredentialsIntrospectPerAccountPerMin)
 }
 
 // 走真实 YAML 文件源，把键名钉住：开发态前端在 5174、后端在 8443，e2e 又是另一组
@@ -204,7 +205,8 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 			"    origins:\n      - \"http://localhost:5174\"\n      - \"http://localhost:8443\"\n"+
 			"    max_per_account: 3\n"+
 			"  rate_limit:\n    passkey_register_begin_per_ip_per_min: 7\n"+
-			"    passkey_register_begin_per_account_per_min: 5\n"), 0o600))
+			"    passkey_register_begin_per_account_per_min: 5\n"+
+			"    credentials_introspect_per_account_per_min: 9\n"), 0o600))
 	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(path))
 	assert.NoError(t, err)
 
@@ -216,6 +218,7 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	assert.Equal(t, 3, got.WebAuthn.MaxPerAccount)
 	assert.Equal(t, int64(7), got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
 	assert.Equal(t, int64(5), got.RateLimit.PasskeyRegisterBeginPerAccountPerMin)
+	assert.Equal(t, int64(9), got.RateLimit.CredentialsIntrospectPerAccountPerMin)
 }
 
 // release.cache_ttl 缺省时必须落到 release_svc.DefaultCacheTTL,而不是 0——0 会让

@@ -179,7 +179,7 @@ middleware groups are the authorization model:
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
 | Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*` |
 | Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
-| Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot` |
+| Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot`, `/v1/credentials/introspect` (+ per-account rate limit) |
 | Relay client | `RelayClientJWT(bearer, signer, …)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (still JWTs) |
 | Port forward | `SessionAuth()` only — **no** `CSRF()` | `/fw/*` |
 
@@ -192,6 +192,19 @@ out by a refresh keeps working until it expires. Revoking the device therefore i
 its tokens at once, and `connguard` closes already-open relay connections on the next heartbeat by
 re-checking the device. Unknown, expired and revoked tokens all answer 401; a failure to resolve
 answers 500, and Redis being down changes neither verdict.
+
+`POST /v1/credentials/introspect` lets a caller that already holds its own device access
+token ask the server about a **different** token it was just handed (by the peer it is
+authenticating inbound) — device access token, relay ticket or server-own credential, any
+of the three. It resolves through `auth_svc.CredentialResolver` (the same resolver
+`/v1/relay/client` uses) and answers with account/device/kind/peer-fingerprint/remaining-TTL
+only when that token belongs to the caller's own account; unknown, expired, revoked and
+cross-account answers are all the one `code.CredentialInvalid` (HTTP 400) — deliberately not
+401, so a client can tell "my own credential is bad" from "the token I was asked to vouch
+for is bad". When the credential store itself cannot be read (Redis down), the answer is 503
+(`code.ServerError`), which callers treat as "account server unreachable" rather than as an
+invalid-token verdict. Introspecting a relay ticket does not consume its one-time connect
+claim.
 
 Cookie-authenticated writes clear CSRF in every group except `/fw/`: a Bearer caller
 carries no cookie and is exempt, a session caller is not. `/fw/` is the one deliberate

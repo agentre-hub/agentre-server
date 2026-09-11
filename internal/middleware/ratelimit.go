@@ -119,3 +119,9 @@ func PasskeyRegisterBeginPerAccountLimit(quota int64) gin.HandlerFunc {
 func PasskeyLoginBeginPerIPLimit(quota int64) gin.HandlerFunc {
 	return perKeyLimit("rl:passkey_login_begin_ip", quota, byIP)
 }
+
+// CredentialsIntrospectPerAccountLimit：/v1/credentials/introspect 按调用方账号限流。
+// 必须排在 DeviceJWT 之后——byAccount 读的是它放进上下文的账号。
+func CredentialsIntrospectPerAccountLimit(quota int64) gin.HandlerFunc {
+	return perKeyLimit("rl:credentials_introspect", quota, byAccount)
+}

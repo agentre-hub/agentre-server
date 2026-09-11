@@ -63,6 +63,9 @@ server:
     passkey_register_begin_per_account_per_min: 10
     # 登录时还没有账号可按，只能按 IP；计数前缀与注册分开。
     passkey_login_begin_per_ip_per_min: 10
+    # 核验一枚别人出示的凭据（/v1/credentials/introspect）：调用方已经出示了自己的
+    # 设备 access token，按账号限流才挡得住同账号换出口接着刷。
+    credentials_introspect_per_account_per_min: 30
   # 判定结论按 user_id 缓存的时长，即「改库封禁后多久在所有入口失效」的上界。
   account_gate:
     cache_ttl: 60s

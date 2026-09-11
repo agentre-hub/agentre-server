@@ -12,6 +12,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/accountchan_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/agent_session_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/auth_ctr"
+	"github.com/agentre-hub/agentre-server/internal/controller/credentials_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/device_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/engine_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/healthz_ctr"
@@ -117,6 +118,10 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	}
 	relayBearer := auth_svc.NewCredentialResolver(bearer, auth_svc.Default())
 	relayTickets := credstore.New(redisClient)
+	// 核验端点认得 server 签发的全部 Bearer 凭据——待核验的那一枚可能是设备 access
+	// token、中继票据或 server 自用凭据，与 /v1/relay/client 用的是同一个解析方
+	// （规格 2026-09-11-opaque-credentials-auto-direct，S5）。
+	credentialsCtr := credentials_ctr.New(relayBearer)
 	// 账号信号没有自己的端点了（决策 13）：它跑在中继客户端连接的保留通道上，
 	// 因此在这里装配进 relay_ctr，而不是另挂一条路由。
 	relayCtr := relay_ctr.New(relaySvc, accountchan_ctr.New(accountChan))
@@ -326,6 +331,12 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.GetAvatar,
 		engineCtr.Snapshot,
 	)
+	// 核验一枚别人出示的凭据（S5）：调用方必须先出示自己的设备 access token
+	// （DeviceJWT 那组已经做到），再按调用方账号限流——挂在 DeviceJWT 之后，
+	// 这样限流键才能取到它放进上下文的账号。
+	deviceJWT.Group("/",
+		middleware.CredentialsIntrospectPerAccountLimit(r.Cfg.RateLimit.CredentialsIntrospectPerAccountPerMin),
+	).Bind(credentialsCtr.Introspect)
 	// websocket 不经过 mux 的 JSON 绑定，直接挂到 gin 路由。daemon 只接受设备
 	// access token；client 同时接受原生端设备 access token 与浏览器短效 relay ticket。
 	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议搬入头部。

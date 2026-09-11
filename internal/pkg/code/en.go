@@ -64,6 +64,8 @@ var en = map[int]string{
 	SessionImportMachineOffline: "this machine is offline, its local sessions cannot be read",
 	SessionImportFailed:         "importing the local session failed",
 
+	CredentialInvalid: "invalid token",
+
 	EngineProviderNotFound:      "provider not found",
 	EngineBackendNotFound:       "agent backend not found",
 	EngineBuiltinForbidden:      "builtin backends cannot be created from the browser",

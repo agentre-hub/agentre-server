@@ -71,6 +71,8 @@ var zhCN = map[int]string{
 	SessionImportMachineOffline: "这台机器当前不在线，无法读取它上面的本地会话",
 	SessionImportFailed:         "导入本地会话失败",
 
+	CredentialInvalid: "该令牌无效",
+
 	EngineProviderNotFound:      "供应商不存在",
 	EngineBackendNotFound:       "Agent 后端不存在",
 	EngineBuiltinForbidden:      "浏览器不能创建内置后端",

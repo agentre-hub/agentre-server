@@ -170,3 +170,11 @@ const (
 	// 那台机器给的原因随日志留下，浏览器据此让用户重试或换一条。
 	SessionImportFailed = 31001
 )
+
+// 凭据核验 31100~31199（规格 2026-09-11-opaque-credentials-auto-direct，S5）
+const (
+	// CredentialInvalid 待核验令牌未知、已过期、已撤销，或核验出的账号与调用方不同。
+	// 四种情形刻意不区分：分开就等于告诉持有者这串东西曾经有效过，或告诉调用方它
+	// 到底对应哪个账号。
+	CredentialInvalid = 31100
+)
