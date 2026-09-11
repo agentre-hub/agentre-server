@@ -1117,9 +1117,8 @@ describe("会话详情页", () => {
   // 会话没钉目标 = 跟随 Agent 绑定，而且这句话要**写在脸上**。此前这里静默回落到
   // 后端绑定值，界面上与「用户显式选了那个模型」一模一样。
   //
-  // 脸上跟的是模型**标识符**而不是人读名：推导归共享包之后两端同一份，而包里
-  // 触发器的注释写明「解析出模型就写模型 ID（标识符走等宽）」——人读名与标识符
-  // 混排正是那句话在避免的事。
+  // 脸上跟的是模型**展示名**（没填展示名才回落模型 ID）：推导归共享包之后两端同一份，
+  // 包里触发器写的就是展示名。
   it("没钉目标时脸上写「跟随 Agent 绑定」，并跟上解析到的模型", async () => {
     mockModelTarget({});
 
@@ -1128,7 +1127,8 @@ describe("会话详情页", () => {
     await waitFor(() => {
       const pill = screen.getByRole("button", { name: /Provider and model/ });
       expect(pill.textContent).toContain("Follow agent binding");
-      expect(pill.textContent).toContain("claude-sonnet-4-6");
+      expect(pill.textContent).toContain("Sonnet");
+      expect(pill.textContent).not.toContain("claude-sonnet-4-6");
     });
   });
 
@@ -1141,9 +1141,37 @@ describe("会话详情页", () => {
     renderPage();
     await waitFor(() => {
       const pill = screen.getByRole("button", { name: /Provider and model/ });
-      expect(pill.textContent).toContain("claude-opus-4-6");
+      expect(pill.textContent).toContain("Opus");
+      expect(pill.textContent).not.toContain("claude-opus-4-6");
       expect(pill.textContent).not.toContain("Follow agent binding");
     });
+  });
+
+  // 一轮还没收到终态帧时，meta 栏的模型退到会话此刻钉的那一个。终态帧带来的是运行时
+  // 上报的模型 ID，所以这里也写模型 ID —— 写成 pill 上的展示名，终态帧一到就跳字。
+  it("还没收到终态帧时，meta 栏退到钉住模型的模型 ID 而不是展示名", async () => {
+    mockModelTarget({
+      sessionProviderKey: "anthropic",
+      sessionModelKey: "opus",
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "在写了" },
+        seq: 1,
+      });
+    });
+
+    renderPage();
+    await waitFor(() => {
+      const pill = screen.getByRole("button", { name: /Provider and model/ });
+      expect(pill.textContent).toContain("Opus");
+    });
+    const meta = await screen.findByRole("button", {
+      name: "Token usage details",
+    });
+    expect(meta.textContent).toContain("claude-opus-4-6");
+    expect(meta.textContent).not.toContain("Opus");
   });
 
   // 「最近使用」只记落了库的目标（共享 recents 的约定：由消费方在保存成功后记录）。

@@ -1921,11 +1921,10 @@ describe("草稿页的权限档位与模型控件", () => {
     const pill = await screen.findByRole("button", {
       name: /Provider and model/,
     });
-    // 同上：元素先在，字后到。标识符是这两句里最晚落定的那一样，等它。
-    // 脸上写的是标识符而不是人读名 —— 与桌面端、与包里触发器的注释同一条口径。
-    await waitFor(() =>
-      expect(pill.textContent).toContain("claude-sonnet-4-6"),
-    );
+    // 同上：元素先在，字后到。模型名是这两句里最晚落定的那一样，等它。
+    // 脸上写的是展示名而不是模型 ID —— 与桌面端、与包里触发器同一条口径。
+    await waitFor(() => expect(pill.textContent).toContain("Sonnet"));
+    expect(pill.textContent).not.toContain("claude-sonnet-4-6");
     expect(pill.textContent).toContain("Follow agent binding");
   });
 
@@ -1947,10 +1946,8 @@ describe("草稿页的权限档位与模型控件", () => {
     fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
     // 点中不等于选中：挑的那一档要先落进控件自己的状态，才谈得上随第一句过线。
     // 判据取控件脸上的字——这是它对外唯一说得出「我此刻带着什么」的地方。脸上
-    // 写的是**标识符**而不是菜单里那个人读名（与上一条用例同一条口径）。
-    await waitFor(() =>
-      expect(modelPill.textContent).toContain("claude-opus-4-6"),
-    );
+    // 写的是展示名，与菜单里那一项同名（与上一条用例同一条口径）。
+    await waitFor(() => expect(modelPill.textContent).toContain("Opus"));
 
     await typeInDraft("跑一下失败的测试");
     const send = screen.getByTestId("session-detail-send");
@@ -1979,9 +1976,7 @@ describe("草稿页的权限档位与模型控件", () => {
     });
     fireEvent.click(modelPill);
     fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
-    await waitFor(() =>
-      expect(modelPill.textContent).toContain("claude-opus-4-6"),
-    );
+    await waitFor(() => expect(modelPill.textContent).toContain("Opus"));
     // 只是挑中还没落库：不进最近使用。
     expect(
       localStorage.getItem("agentre.modelTargetPicker.recent.v1.chat.local"),
@@ -2015,9 +2010,7 @@ describe("草稿页的权限档位与模型控件", () => {
     });
     fireEvent.click(modelPill);
     fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
-    await waitFor(() =>
-      expect(modelPill.textContent).toContain("claude-opus-4-6"),
-    );
+    await waitFor(() => expect(modelPill.textContent).toContain("Opus"));
 
     await typeInDraft("跑一下失败的测试");
     const send = screen.getByTestId("session-detail-send");
