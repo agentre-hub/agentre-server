@@ -78,7 +78,7 @@ internal/
   repository/*_repo/        data access; interface + Register/accessor + db.Ctx(ctx)
   model/entity/*_entity/    rich entities — Check(ctx) / IsActive() live here, not in service
   middleware/               session auth, device JWT, CSRF, rate limit, RFC 8628 error fields
-  pkg/                      cross-cutting: jwt, session, ratelimit, usercode, code (i18n errors)
+  pkg/                      cross-cutting: jwt, session, usercode, wireversion, code (i18n errors)
   task/crontab/             scheduled cleanup
   web/                      embed.FS SPA mount, /v1 passthrough
 migrations/                 gormigrate; append-only
