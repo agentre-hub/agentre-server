@@ -574,7 +574,7 @@ describe("Account page: registering a passkey performs the WebAuthn ceremony cor
     const CLIENT_DATA_B64URL = "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIn0"; // {"type":"webauthn.create"}
 
     const beginOptions = {
-      rp: { id: "agentre.example", name: "AgentRe" },
+      rp: { id: "agentre.example", name: "Agentre" },
       user: {
         id: USER_ID_B64URL,
         name: "lin.wei@example.com",
@@ -671,7 +671,7 @@ describe("Account page: registering a passkey performs the WebAuthn ceremony cor
     // pubKeyCredParams 直接 TypeError。
     expect(passedOptions.rp).toEqual({
       id: "agentre.example",
-      name: "AgentRe",
+      name: "Agentre",
     });
     expect(passedOptions.pubKeyCredParams).toEqual([
       { type: "public-key", alg: -7 },

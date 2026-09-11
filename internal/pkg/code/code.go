@@ -1,4 +1,4 @@
-// Package code 集中维护 AgentRe Server 的业务错误码与 i18n 提示。
+// Package code 集中维护 Agentre Server 的业务错误码与 i18n 提示。
 //
 // 段位：30000+ 给 server（避开 agentre 桌面端 10000~20000 段）。
 //

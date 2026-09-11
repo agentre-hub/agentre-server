@@ -1314,7 +1314,7 @@ describe("对话页:第一次保存时的说明", () => {
         name: "Save this conversation to your account?",
       }),
     ).toBeTruthy();
-    expect(dialog.textContent).toContain("stored on AgentRe's server");
+    expect(dialog.textContent).toContain("stored on Agentre's server");
     // 说明弹出来的那一刻还没有写任何东西。
     expect(posted).toEqual([]);
 

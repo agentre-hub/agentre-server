@@ -13,8 +13,8 @@
     }
   },
   "approve": {
-    "title": "Allow this device to access your AgentRe account?",
-    "risk": "Once you approve it, this device gets full access to your AgentRe account as you, including running arbitrary code and commands. Only approve devices you trust.",
+    "title": "Allow this device to access your Agentre account?",
+    "risk": "Once you approve it, this device gets full access to your Agentre account as you, including running arbitrary code and commands. Only approve devices you trust.",
     "verify": "Check that this code matches exactly what the device shows",
     "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
     "expirySeconds": "This authorization request expires in {{seconds}}s",

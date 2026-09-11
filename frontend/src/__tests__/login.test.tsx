@@ -83,7 +83,7 @@ describe("Login", () => {
     it("shows the title", () => {
       renderLogin();
       expect(
-        screen.getByRole("heading", { level: 1, name: /Sign in to AgentRe/i }),
+        screen.getByRole("heading", { level: 1, name: /Sign in to Agentre/i }),
       ).toBeTruthy();
     });
 
@@ -287,7 +287,7 @@ describe("Login", () => {
     it("shows Chinese title", () => {
       renderLogin();
       expect(
-        screen.getByRole("heading", { level: 1, name: /登录 AgentRe/ }),
+        screen.getByRole("heading", { level: 1, name: /登录 Agentre/ }),
       ).toBeTruthy();
     });
 

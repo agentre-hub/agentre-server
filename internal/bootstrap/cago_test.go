@@ -102,7 +102,7 @@ func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
 	t.Cleanup(func() { passkey_svc.SetDefault(nil) })
 
 	RegisterDefaults(&ServerConfig{
-		WebAuthn: WebAuthnConfig{RPID: "localhost", RPName: "AgentRe", Origins: []string{"http://localhost"}},
+		WebAuthn: WebAuthnConfig{RPID: "localhost", RPName: "Agentre", Origins: []string{"http://localhost"}},
 	}, signer)
 
 	assert.NotNil(t, passkey_svc.Default(), "RegisterDefaults 必须装配通行密钥服务")
@@ -138,7 +138,7 @@ func TestLoadServerConfig_WebAuthnDefaultsDeriveFromPublicURL(t *testing.T) {
 
 	assert.Equal(t, "server.agentre.dev", got.WebAuthn.RPID, "RP ID 是主机名，不带 scheme 和端口")
 	assert.Equal(t, []string{"https://server.agentre.dev"}, got.WebAuthn.Origins)
-	assert.NotEmpty(t, got.WebAuthn.RPName)
+	assert.Equal(t, "Agentre", got.WebAuthn.RPName, "没配 rp_name 时，通行密钥弹窗里显示的是产品名")
 	assert.Positive(t, got.WebAuthn.MaxPerAccount)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerAccountPerMin)
@@ -151,7 +151,7 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	assert.NoError(t, os.WriteFile(path, []byte(
 		"env: dev\ndebug: true\nsource: file\nserver:\n  public_url: \"https://server.agentre.dev\"\n"+
-			"  webauthn:\n    rp_id: \"localhost\"\n    rp_name: \"AgentRe Dev\"\n"+
+			"  webauthn:\n    rp_id: \"localhost\"\n    rp_name: \"Agentre Dev\"\n"+
 			"    origins:\n      - \"http://localhost:5174\"\n      - \"http://localhost:8443\"\n"+
 			"    max_per_account: 3\n"+
 			"  rate_limit:\n    passkey_register_begin_per_ip_per_min: 7\n"+
@@ -162,7 +162,7 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	got := LoadServerConfig(context.Background(), cfg)
 
 	assert.Equal(t, "localhost", got.WebAuthn.RPID)
-	assert.Equal(t, "AgentRe Dev", got.WebAuthn.RPName)
+	assert.Equal(t, "Agentre Dev", got.WebAuthn.RPName)
 	assert.Equal(t, []string{"http://localhost:5174", "http://localhost:8443"}, got.WebAuthn.Origins)
 	assert.Equal(t, 3, got.WebAuthn.MaxPerAccount)
 	assert.Equal(t, int64(7), got.RateLimit.PasskeyRegisterBeginPerIPPerMin)

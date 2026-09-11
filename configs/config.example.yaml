@@ -78,7 +78,7 @@ server:
   # 有效域名，不带 scheme、不带端口。
   webauthn:
     rp_id: "server.agentre.dev"
-    rp_name: "AgentRe"
+    rp_name: "Agentre"
     origins:
       - "https://server.agentre.dev"
     # 每账号能注册多少把。超出时注册端点明确拒绝，不是静默忽略。

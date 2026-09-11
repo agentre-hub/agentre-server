@@ -1,6 +1,6 @@
-# AgentRe Server
+# Agentre Server
 
-SaaS backend for the AgentRe project — accounts, devices, and RFC 8628 Device Flow.
+SaaS backend for the Agentre project — accounts, devices, and RFC 8628 Device Flow.
 
 ## Quick start (Docker)
 

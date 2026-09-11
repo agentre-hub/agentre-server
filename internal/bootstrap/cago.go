@@ -242,7 +242,7 @@ func applyWebAuthnDefaults(out *ServerConfig) {
 		out.WebAuthn.RPID = public.Hostname()
 	}
 	if out.WebAuthn.RPName == "" {
-		out.WebAuthn.RPName = "AgentRe"
+		out.WebAuthn.RPName = "Agentre"
 	}
 	if len(out.WebAuthn.Origins) == 0 && public.Scheme != "" && public.Host != "" {
 		out.WebAuthn.Origins = []string{public.Scheme + "://" + public.Host}

@@ -72,7 +72,7 @@ var (
 	// （后者不经过共享代理，见 portforward.go 的 failureOffline）。
 	offlinePage = failurePage{
 		heading: "设备离线",
-		detail: "这台设备此刻没有连着 AgentRe，转发到它 127.0.0.1:%d 的请求送不过去。" +
+		detail: "这台设备此刻没有连着 Agentre，转发到它 127.0.0.1:%d 的请求送不过去。" +
 			"等它重新上线之后刷新这一页。",
 	}
 )

@@ -1,12 +1,12 @@
 {
-  "title": "登录 AgentRe",
+  "title": "登录 Agentre",
   "github": "使用 GitHub 登录",
   "or": "或",
   "passkey": "用通行密钥登录",
   "userCodeLabel": "登录后继续授权设备",
   "failureTitle": "登录未完成",
   "retryLogin": "重新登录",
-  "consent": "我已阅读并同意 AgentRe 的<terms>服务条款</terms>与<privacy>隐私政策</privacy>",
+  "consent": "我已阅读并同意 Agentre 的<terms>服务条款</terms>与<privacy>隐私政策</privacy>",
   "errors": {
     "oauth_state_invalid": "OAuth state 已过期，请重新发起登录。",
     "oauth_exchange_failed": "GitHub OAuth 兑换失败，请稍后重试或检查 GitHub OAuth App 配置。",

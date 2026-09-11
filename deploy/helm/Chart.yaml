@@ -1,6 +1,6 @@
 apiVersion: v2
 name: agentre-server
-description: AgentRe Server —— 账号体系与 RFC 8628 Device Flow，单二进制内嵌 SPA
+description: Agentre Server —— 账号体系与 RFC 8628 Device Flow，单二进制内嵌 SPA
 type: application
 
 # chart 自身的版本，改模板就要动它

@@ -176,7 +176,7 @@ jobs:
               authorize_per_ip_per_min: 100
             webauthn:
               rp_id: "localhost"
-              rp_name: "AgentRe E2E"
+              rp_name: "Agentre E2E"
               origins:
                 - "http://localhost:5199"
                 - "http://127.0.0.1:5199"

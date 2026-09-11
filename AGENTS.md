@@ -4,7 +4,7 @@ Agent guidance for `agentre-server`.
 
 ## What this is
 
-AgentRe Server — SaaS backend. Accounts + RFC 8628 Device Flow.
+Agentre Server — SaaS backend. Accounts + RFC 8628 Device Flow.
 
 Go 1.26 on the [cago](https://github.com/cago-frame/cago) framework, MySQL 9.7 + Redis 7,
 with a React 19 + Vite + Tailwind + shadcn frontend embedded into the binary via `//go:embed`.

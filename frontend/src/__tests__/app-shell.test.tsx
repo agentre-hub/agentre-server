@@ -1,6 +1,6 @@
 /**
  * 控制台外壳（任务 2，正式节点 R969Y/ZC7pI；任务 9 把组织面加进主导航）：
- *   - 桌面 SideNav：Brand（logo + AgentRe + 「控制台」副标）+ 非交互搜索外观 +
+ *   - 桌面 SideNav：Brand（logo + Agentre + 「控制台」副标）+ 非交互搜索外观 +
  *     5 个导航项（经由共享 ConsoleNavItem 渲染，第 4 项「组织」去 /org、
  *     第 5 项「设置」去 /settings）+ 底部账号区；移动 TabBar 4 项，不含设置。
  *     不包含审计：无后端，空壳页已下线。
@@ -82,9 +82,9 @@ beforeEach(async () => {
 });
 
 describe("桌面 SideNav（任务 2 外壳，R969Y）", () => {
-  it("Brand：logo + AgentRe + 控制台副标", async () => {
+  it("Brand：logo + Agentre + 控制台副标", async () => {
     renderShell();
-    expect(screen.getByText("AgentRe")).toBeTruthy();
+    expect(screen.getByText("Agentre")).toBeTruthy();
     expect(screen.getByText("Console")).toBeTruthy();
   });
 

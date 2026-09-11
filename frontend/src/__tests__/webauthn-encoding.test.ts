@@ -94,7 +94,7 @@ describe("base64url ⇄ ArrayBuffer", () => {
 describe("注册选项 / 回应的编解码", () => {
   it("decodeCreationOptions 把 challenge、user.id、excludeCredentials[].id 都换成 ArrayBuffer", () => {
     const options = decodeCreationOptions({
-      rp: { id: "agentre.example", name: "AgentRe" },
+      rp: { id: "agentre.example", name: "Agentre" },
       user: { id: "CQkJCQ", name: "lin.wei@example.com", displayName: "林薇" },
       challenge: "AQIDBAX6-w",
       pubKeyCredParams: [{ type: "public-key", alg: -7 }],
@@ -117,7 +117,7 @@ describe("注册选项 / 回应的编解码", () => {
     );
     expect(excluded?.transports).toEqual(["internal"]);
     // 其余字段原样带过，rp / pubKeyCredParams 不是 buffer，别动它们
-    expect(options.rp).toEqual({ id: "agentre.example", name: "AgentRe" });
+    expect(options.rp).toEqual({ id: "agentre.example", name: "Agentre" });
     expect(options.user.name).toBe("lin.wei@example.com");
   });
 

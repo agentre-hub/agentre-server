@@ -74,5 +74,5 @@ server:
   # rp_id 与 origins 留空，由 public_url 推导；换域名只改 SERVER_PUBLIC_URL。
   # 要列多个 origin（前后端分端口之类）才显式写回来。
   webauthn:
-    rp_name: "AgentRe"
+    rp_name: "Agentre"
     max_per_account: 10

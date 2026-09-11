@@ -80,7 +80,7 @@ export function readHandoff(): Handoff {
 }
 
 export async function assertIsAppUnderTest(page: Page) {
-  await expect(page).toHaveTitle(/AgentRe Server/i);
+  await expect(page).toHaveTitle(/Agentre Server/i);
   await expect(page.getByRole("button", { name: /Theme|主题/i })).toBeVisible();
 }
 

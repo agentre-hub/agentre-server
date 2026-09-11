@@ -47,7 +47,7 @@
   "save": {
     "title": "Save this conversation to your account?",
     "body": "Once saved it shows up in your conversation list, and you can still read it after this machine is shut down — or even removed.",
-    "point1": "Its title and full record are stored on AgentRe's server",
+    "point1": "Its title and full record are stored on Agentre's server",
     "point2": "Conversations you never save are not uploaded at all",
     "point3": "You can delete it at any time — the server's copy and the executing machine's copy go together",
     "confirm": "Save"
