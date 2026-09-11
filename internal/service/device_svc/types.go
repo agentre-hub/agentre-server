@@ -2,8 +2,6 @@ package device_svc
 
 import (
 	"time"
-
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 )
 
 // Config 装载从 cfg.Scan("server", ...) 得到的运行时参数。
@@ -46,10 +44,4 @@ type PendingInfo struct {
 	Platform   string
 	Version    string
 	ExpiresIn  int
-}
-
-// Signer 抽出 jwt.Signer 的最小接口，方便 mock。
-type Signer interface {
-	Sign(c jwt.Claims, ttl time.Duration) (string, string, error)
-	Verify(token string) (*jwt.Claims, error)
 }

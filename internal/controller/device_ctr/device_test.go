@@ -25,8 +25,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
@@ -119,12 +117,10 @@ func (s *stubDeviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64)
 
 var _ device_svc.DeviceSvc = (*stubDeviceSvc)(nil)
 
-func newDeviceTestServer(t *testing.T, stub *stubDeviceSvc) (*httptest.Server, *jwt.Signer) {
+func newDeviceTestServer(t *testing.T, stub *stubDeviceSvc) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	device_svc.SetDefault(stub)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
@@ -133,12 +129,11 @@ func newDeviceTestServer(t *testing.T, stub *stubDeviceSvc) (*httptest.Server, *
 		// 限流额度必须显式给：零值等于「每分钟 0 次」，/v1/oauth/device/authorize
 		// 上的 AuthorizePerIPLimit 会把每一个请求都挡成 429。
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
 		Bearer: bearertest.Resolver{},
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server, signer
+	return server
 }
 
 // newSessionCookie 返回会话 cookie 及其配套的 CSRF token —— 浏览器 session 的
@@ -189,7 +184,7 @@ func deviceListBody() []device_svc.DeviceView {
 // 浏览器 session 登录的 web 端必须能列出账号下的设备。
 func TestListDevices_WorksForBrowserSession(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	cookie, _ := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices", cookie.Value, "", "")
@@ -210,7 +205,7 @@ func TestListDevices_WorksForBrowserSession(t *testing.T) {
 // 浏览器 session 可以撤销自己账号下的一台设备。
 func TestRevoke_WorksForBrowserSession_OwnedDevice(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
@@ -222,7 +217,7 @@ func TestRevoke_WorksForBrowserSession_OwnedDevice(t *testing.T) {
 // 浏览器 session 不能撤销不属于自己账号的设备。
 func TestRevoke_ForBrowserSession_RejectsForeignDevice(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
@@ -237,7 +232,7 @@ func TestRevoke_ForBrowserSession_RejectsForeignDevice(t *testing.T) {
 // 用用户挂着的会话把他的设备踢下线。
 func TestRevoke_ForBrowserSession_RejectsMissingCSRFToken(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	cookie, _ := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
@@ -249,7 +244,7 @@ func TestRevoke_ForBrowserSession_RejectsMissingCSRFToken(t *testing.T) {
 // 设备 JWT 调用方仍然只能撤销自己（既有行为不变）。
 func TestRevoke_DeviceJWT_StillSelfOnly(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 1, Kind: device_entity.KindAgentred})
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
@@ -267,7 +262,7 @@ func TestRevoke_DeviceJWT_StillSelfOnly(t *testing.T) {
 // 设备 JWT 仍然能列出设备，并把自己标记出来。
 func TestListDevices_DeviceJWT_StillWorks(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: deviceListBody()}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindDesktop})
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices", "", token, "")
@@ -290,7 +285,7 @@ func TestListDevices_DeviceJWT_StillWorks(t *testing.T) {
 // 吊销列表端点已删除：撤销改由 server 逐请求按库里的设备状态判定，没有要分发给 daemon
 // 的 jti 了。带着有效的设备令牌请求它，得到的必须是「没有这条路由」，而不是任何一份列表。
 func TestRevocationsEndpointIsGone(t *testing.T) {
-	server, _ := newDeviceTestServer(t, &stubDeviceSvc{})
+	server := newDeviceTestServer(t, &stubDeviceSvc{})
 	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindAgentred})
 
 	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices/revocations", "", token, "")
@@ -304,7 +299,7 @@ func TestRevocationsEndpointIsGone(t *testing.T) {
 // 多出来的值摆出来，而不是默默放过一个没接上的入参。
 func TestAuthorize_PassesEveryInputField(t *testing.T) {
 	stub := &stubDeviceSvc{}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 
 	body := `{"device_kind":"desktop","fingerprint":"fp-desktop-client","platform":"darwin/arm64",` +
 		`"version":"v0.4.1","name":"studio"}`
@@ -333,7 +328,7 @@ func TestAuthorize_PassesEveryInputField(t *testing.T) {
 // 它，缺了这一段，设备列表里每台机器都只能叫指纹缩写。
 func TestAuthorize_PassesReportedName(t *testing.T) {
 	stub := &stubDeviceSvc{}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 
 	body := `{"device_kind":"agentred","fingerprint":"fp-named-client","platform":"linux/amd64",` +
 		`"version":"v0.5.0","name":"coding"}`
@@ -348,7 +343,7 @@ func TestAuthorize_PassesReportedName(t *testing.T) {
 // 成立：名字回退到指纹缩写，由 service 决定。
 func TestAuthorize_NameIsOptional(t *testing.T) {
 	stub := &stubDeviceSvc{}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 
 	body := `{"device_kind":"agentred","fingerprint":"fp-unnamed-client","platform":"linux/amd64","version":"v0.5.0"}`
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/device/authorize", "", "", body)
@@ -362,7 +357,7 @@ func TestAuthorize_NameIsOptional(t *testing.T) {
 // version 只是展示信息，且存储列可容纳 64 个字符，授权入口不能提前拒绝它。
 func TestAuthorize_AcceptsLongNightlyVersion(t *testing.T) {
 	stub := &stubDeviceSvc{}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	version := "v0.4.1-nightly.20260814+abcdef1234567890"
 
 	body := `{"device_kind":"agentred","fingerprint":"fp-nightly-client","platform":"linux/amd64",` +
@@ -403,15 +398,12 @@ func newUpgradeTestServer(
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	device_svc.SetDefault(stub)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
 		Cfg:             &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer:          signer,
 		Bearer:          bearertest.Resolver{},
 		MachineUpgrader: upgrader,
 	}).Router(context.Background(), testMux.Router))
@@ -590,7 +582,7 @@ func decodeErrorCode(t *testing.T, resp *http.Response) int {
 // 设备列表一次也不读。
 func TestRevoke_ForBrowserSession_ChecksOwnershipWithoutListingDevices(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: ownershipDeviceList()}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
@@ -608,7 +600,7 @@ func TestRevoke_ForBrowserSession_ForeignOrRevokedDeviceIsForbiddenAsBefore(t *t
 	for name, deviceID := range map[string]string{"foreign": "99", "revoked": "3"} {
 		t.Run(name, func(t *testing.T) {
 			stub := &stubDeviceSvc{userDevices: ownershipDeviceList()}
-			server, _ := newDeviceTestServer(t, stub)
+			server := newDeviceTestServer(t, stub)
 			cookie, csrf := newSessionCookie(t, 7)
 
 			resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
@@ -624,7 +616,7 @@ func TestRevoke_ForBrowserSession_ForeignOrRevokedDeviceIsForbiddenAsBefore(t *t
 // Given 判定归属时查库失败；Then 与从前一样回 500 + DeviceListFailed，什么都不撤。
 func TestRevoke_ForBrowserSession_OwnershipLookupFailureAnswersAsBefore(t *testing.T) {
 	stub := &stubDeviceSvc{userDevices: ownershipDeviceList(), dbErr: errors.New("db down")}
-	server, _ := newDeviceTestServer(t, stub)
+	server := newDeviceTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",

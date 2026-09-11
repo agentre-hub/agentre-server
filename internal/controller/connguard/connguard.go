@@ -26,7 +26,7 @@ import (
 // 返回非 nil 即断开。撤销判定在建连时取一次（它自己内部会反复查），账号闸门则
 // 每次复查现取——一条长连接可能跨过装配完成的那一刻。
 //
-// deviceID 非 0 表示连接背后是设备 access token，否则是中继票据，handle 即票的 jti。
+// deviceID 非 0 表示连接背后是设备 access token，否则是中继票据，handle 是票据的句柄。
 func New(ctx context.Context, accountID, deviceID int64, handle string) func() error {
 	revoked := watch(ctx, accountID, deviceID, handle)
 	return func() error { return check(ctx, accountID, revoked, user_svc.Gate()) }

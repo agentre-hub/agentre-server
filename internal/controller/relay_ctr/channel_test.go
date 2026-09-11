@@ -16,8 +16,6 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -30,7 +28,6 @@ import (
 // 仓库那一层。
 type channelHarness struct {
 	server      *httptest.Server
-	signer      *jwt.Signer
 	devices     *mock_device_repo.MockDeviceRepo
 	saves       *mock_agent_session_repo.MockSaveRepo
 	accountChan accountchan_svc.AccountChanSvc
@@ -48,8 +45,6 @@ func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanS
 	t.Helper()
 	testutils.Redis(t)
 	mini := miniredis.RunT(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 
 	controller := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(controller)
@@ -58,8 +53,7 @@ func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanS
 	redisClient := newRelayRedisClient(t, mini)
 	svc := relay_svc.New(config, devices, saves, redisClient, relay_svc.NewRedisForwarder(config, redisClient))
 	return &channelHarness{
-		server:      newRelayServerWithAccountChan(t, signer, svc, accountChan),
-		signer:      signer,
+		server:      newRelayServerWithAccountChan(t, svc, accountChan),
 		devices:     devices,
 		saves:       saves,
 		accountChan: accountChan,

@@ -66,8 +66,7 @@ func newLoggedRelayServer(
 ) (*httptest.Server, http.Header) {
 	t.Helper()
 	testutils.Redis(t)
-	signer := newSignalSigner(t)
-	server := newRelayServer(t, signer, svc)
+	server := newRelayServer(t, svc)
 	token := deviceToken(accountID, 9, kind)
 	return server, http.Header{"Authorization": {"Bearer " + token}}
 }

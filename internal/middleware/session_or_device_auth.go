@@ -27,7 +27,7 @@ func SessionOrDeviceAuth(tokens BearerResolver) gin.HandlerFunc {
 			if accountBlocked(c, p.AccountID) {
 				return
 			}
-			setDevicePrincipal(c, p)
+			setBearerPrincipal(c, p)
 			c.Next()
 			return
 		}

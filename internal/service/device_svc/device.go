@@ -22,7 +22,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/usercode"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -108,9 +107,8 @@ var defaultSvc DeviceSvc
 func Default() DeviceSvc     { return defaultSvc }
 func SetDefault(s DeviceSvc) { defaultSvc = s }
 
-// New 构造设备服务。access token 已是不透明随机串、撤销也不再写 jti 黑名单，签名器与
-// 黑名单这两个入参因此不再被使用；它们只为组合根现有的装配调用保留，随 JWT 退役一起删。
-func New(cfg Config, _ Signer, _ *jwtblacklist.Blacklist) DeviceSvc {
+// New 构造设备服务。
+func New(cfg Config) DeviceSvc {
 	return newDeviceSvc(cfg)
 }
 func newDeviceSvc(cfg Config) *deviceSvc {

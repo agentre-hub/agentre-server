@@ -18,8 +18,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
 )
@@ -52,24 +50,21 @@ func (s *stubSyncSvc) ReclaimExpired(context.Context) (*sync_svc.ReclaimOutput, 
 
 var _ sync_svc.SyncSvc = (*stubSyncSvc)(nil)
 
-func newSyncTestServer(t *testing.T, stub *stubSyncSvc) (*httptest.Server, *jwt.Signer) {
+func newSyncTestServer(t *testing.T, stub *stubSyncSvc) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	// 路由装配从 redis.Default() 派生中继票据的黑名单与焚毁记号。
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	sync_svc.SetDefault(stub)
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
 		Bearer: bearertest.Resolver{},
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server, signer
+	return server
 }
 
 func post(t *testing.T, url, bearer, body string) *http.Response {
@@ -89,7 +84,7 @@ func post(t *testing.T, url, bearer, body string) *http.Response {
 // 同步端点只认 device JWT：没有 Bearer 拿到的是 401，而不是 404
 // ——404 会让「路由压根没挂上」看起来和「没授权」一样。
 func TestSyncEndpoints_RequireDeviceJWT(t *testing.T) {
-	server, _ := newSyncTestServer(t, &stubSyncSvc{})
+	server := newSyncTestServer(t, &stubSyncSvc{})
 	for _, path := range []string{"/v1/sync/push", "/v1/sync/local-paths", "/v1/sync/avatars"} {
 		resp := post(t, server.URL+path, "", `{"items":[]}`)
 		require.Equal(t, http.StatusUnauthorized, resp.StatusCode, path)
@@ -102,7 +97,7 @@ func TestPush_TakesIdentityFromJWTClaims(t *testing.T) {
 		SyncID: "p1", Kind: "project", Version: 8, Status: sync_svc.PushStatusConflict,
 		OverwrittenVersion: 7, OverwrittenOriginFingerprint: "fp-desktop-02",
 	}}}}
-	server, _ := newSyncTestServer(t, stub)
+	server := newSyncTestServer(t, stub)
 	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindDesktop})
 
 	resp := post(t, server.URL+"/v1/sync/push", token,

@@ -8,20 +8,17 @@ import (
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 	"github.com/agentre-hub/agentre/pkg/wire/protorpc"
 
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/pkg/wireversion"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 
 	"github.com/agentre-hub/agentre/pkg/wire/wirecall"
 )
 
-const (
-	relayClientKind = "relay_client"
-	credentialTTL   = 2 * time.Minute
-)
-
-type CredentialSigner interface {
-	Sign(c jwt.Claims, ttl time.Duration) (string, string, error)
+// CredentialIssuer 为 server 自己连向某账号机器的一条连接签发短效凭据。类型由签发入口
+// 定死为 server_mirror：它与浏览器换的中继票据分开，连不了 /v1/relay/client。
+type CredentialIssuer interface {
+	IssueServerMirror(ctx context.Context, accountID int64, peerFingerprint string) (string, error)
 }
 
 // RelayDialer 只负责定位通道并透传 opaque binary payload,不理解 RpcFrame。
@@ -45,9 +42,9 @@ type machineConn struct {
 	transport *relayFrameConn
 }
 
-// dialMachine 不收「本副本的对端指纹」:身份不在请求体里(决策 8),它由对端从
-// 已验签凭据的 pfp claim 取,所以本副本出示什么身份完全取决于 Supervisor.dial 往
-// 凭据里签了什么(见下面 AuthAccount 处的注释)。
+// dialMachine 不收「本副本的对端指纹」:身份不在请求体里(决策 8),它由对端核验
+// 凭据时从 server 的记录里取,所以本副本出示什么身份完全取决于 Supervisor.dial 为
+// 凭据记下了什么(见下面 AuthAccount 处的注释)。
 // dialMachine 的第二个返回值是握手应答本身：调用方（Supervisor.dial）据此把这台机器
 // 自报的构建版本刷回 devices.version（spec「控制台呈现与 latest 来源」一节，决策 14）。
 func dialMachine(
@@ -79,9 +76,9 @@ func dialMachine(
 	// auth.account 上被拒 = 一条会话都镜像不下来。
 	// MinSupportedProtocolVersion 与 ProtocolVersion 相等,不产生宽限窗口;带上它,
 	// daemon 收到的握手里这个字段就不是空串(spec「协议：版本窗口与自报版本」一节，决策 3)。
-	// 对端身份**不在请求体里**：它由对端从已验签凭据的 pfp claim 取
+	// 对端身份**不在请求体里**：它由对端核验凭据时从 server 的记录里取
 	// （2026-08-31-conversation-centric-addressing.md 决策 8）。本副本出示什么身份，因此
-	// 完全取决于 Supervisor.dial 往凭据里签了什么。
+	// 完全取决于 Supervisor.dial 为凭据记下了什么。
 	response, err := c.AuthAccount(ctx, &agentrewire.AuthAccountRequest{
 		Credential: credential, ProtocolVersion: wireversion.Protocol,
 		MinSupportedProtocolVersion: wireversion.MinSupported,
@@ -171,5 +168,5 @@ func (c *machineConn) Close() {
 var (
 	_ RelaySession     = (*machineConn)(nil)
 	_ RelayDialer      = (relay_svc.RelaySvc)(nil)
-	_ CredentialSigner = (*jwt.Signer)(nil)
+	_ CredentialIssuer = (*credstore.Store)(nil)
 )

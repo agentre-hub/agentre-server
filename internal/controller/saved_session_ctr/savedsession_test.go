@@ -19,8 +19,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
@@ -76,12 +74,10 @@ func (s *stubSavedSessionSvc) Delete(
 	return s.peerOutcome, nil // 幂等：从未保存过也照样成功
 }
 
-func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) (*httptest.Server, *jwt.Signer) {
+func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t) // miniredis → session 存储 + 中继票据黑名单
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	saved_session_svc.SetDefault(stub)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
@@ -89,11 +85,10 @@ func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) (*httpte
 	require.NoError(t, (&api.RouterDeps{
 		Bearer: bearertest.Resolver{},
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server, signer
+	return server
 }
 
 func newSessionCookie(t *testing.T, userID int64) (*http.Cookie, string) {
@@ -140,7 +135,7 @@ func peerStatus(t *testing.T, resp *http.Response) string {
 // 删除：只删这一条；机器在线时应答如实说执行端那一份也删掉了。
 func TestDelete_RemovesOnlyThatEntry(t *testing.T) {
 	stub := newStubSavedSessionSvc()
-	server, _ := newSavedSessionTestServer(t, stub)
+	server := newSavedSessionTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
@@ -163,7 +158,7 @@ func TestDelete_RemovesOnlyThatEntry(t *testing.T) {
 func TestDelete_PeerOffline_ReportsPending(t *testing.T) {
 	stub := newStubSavedSessionSvc()
 	stub.peerOutcome = saved_session_svc.MachineDeletePending
-	server, _ := newSavedSessionTestServer(t, stub)
+	server := newSavedSessionTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
@@ -178,7 +173,7 @@ func TestDelete_PeerOffline_ReportsPending(t *testing.T) {
 // 浏览器 session 的写操作必须出示 CSRF，否则 403（与 revoke / logout 同组约定）。
 func TestSave_RejectsMissingCSRF(t *testing.T) {
 	stub := newStubSavedSessionSvc()
-	server, _ := newSavedSessionTestServer(t, stub)
+	server := newSavedSessionTestServer(t, stub)
 	cookie, _ := newSessionCookie(t, 7)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
@@ -190,7 +185,7 @@ func TestSave_RejectsMissingCSRF(t *testing.T) {
 // 删除是破坏性的，同样必须出示 CSRF：一个跨站表单不能替用户清掉两台机器上的对话。
 func TestDelete_RejectsMissingCSRF(t *testing.T) {
 	stub := newStubSavedSessionSvc()
-	server, _ := newSavedSessionTestServer(t, stub)
+	server := newSavedSessionTestServer(t, stub)
 	cookie, csrf := newSessionCookie(t, 7)
 
 	doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
@@ -205,7 +200,7 @@ func TestDelete_RejectsMissingCSRF(t *testing.T) {
 // 设备 JWT 调用方不带 cookie，结构上不受 CSRF 威胁：保存照常成功。
 func TestSave_DeviceJWT_NoCSRFNeeded(t *testing.T) {
 	stub := newStubSavedSessionSvc()
-	server, _ := newSavedSessionTestServer(t, stub)
+	server := newSavedSessionTestServer(t, stub)
 	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 1, Kind: device_entity.KindAgentred})
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
@@ -217,7 +212,7 @@ func TestSave_DeviceJWT_NoCSRFNeeded(t *testing.T) {
 // 未登录请求（无 cookie、无 Bearer）被 SessionOrDeviceAuth 拒绝（401）。
 func TestSave_UnauthenticatedRejected(t *testing.T) {
 	stub := newStubSavedSessionSvc()
-	server, _ := newSavedSessionTestServer(t, stub)
+	server := newSavedSessionTestServer(t, stub)
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/saved-sessions",
 		"", "", `{"device_fingerprint":"fp-daemon-1","conversation_id":"`+conversationNine+`"}`)

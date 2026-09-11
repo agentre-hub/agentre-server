@@ -37,8 +37,6 @@ var zhCN = map[int]string{
 	RefreshTokenReplay:  "检测到 refresh token 重放，已撤销该设备所有凭证",
 	RefreshTokenExpired: "refresh token 已过期，请重新授权",
 	RefreshTokenInvalid: "refresh token 无效，请重新授权",
-	JWTSignatureInvalid: "访问令牌签名无效",
-	JWTBlacklisted:      "访问令牌已被撤销",
 	DeviceListFailed:    "拉取设备列表失败",
 
 	RelayDaemonNotFound: "该账号未登记此 daemon",

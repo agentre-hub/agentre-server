@@ -123,7 +123,7 @@ func (s *Store) Create(ctx context.Context, userID int64, client Client) (string
 	if err := s.rc.Set(ctx, sessionKey(sid), body, s.ttl).Err(); err != nil {
 		return "", nil, err
 	}
-	// 归集失败就让整次登录失败（fail-closed，与 TrackRelayTicket 同向）：进不了索引的
+	// 归集失败就让整次登录失败（fail-closed，与 auth_svc.IssueRelayTicket 同向）：进不了索引的
 	// 会话既不会出现在清单里，也永远不会被「登出其它全部」撤掉——那是一次用户自己
 	// 看不见、也关不掉的登录。宁可让他重登一次。
 	if err := s.index(ctx, userID, sid); err != nil {

@@ -96,7 +96,7 @@ func (s *stubIssueBoardSvc) DeleteLabel(
 func newBoardTestServer(t *testing.T) (string, *stubIssueBoardSvc, *http.Cookie, string) {
 	t.Helper()
 	stub := &stubIssueBoardSvc{}
-	server, _ := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
+	server := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
 	issue_svc.SetIssueBoard(stub)
 	t.Cleanup(func() { issue_svc.SetIssueBoard(issue_svc.New()) })
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)

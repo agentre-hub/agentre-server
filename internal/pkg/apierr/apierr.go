@@ -15,8 +15,8 @@ import (
 
 // Abort 以 status 作为 HTTP 状态码、biz 作为业务码终止这次请求。
 //
-// 两者刻意分开传：同一个 401 下有 Unauthorized / JWTBlacklisted /
-// JWTSignatureInvalid 等多种业务码，daemon 靠业务码区分该重签还是该重新配对。
+// 两者刻意分开传：同一个 401 下有 Unauthorized / UserBanned 等多种业务码，
+// 客户端靠业务码区分该重新登录还是该告知账号不可用。
 func Abort(c *gin.Context, status int, biz int) {
 	c.AbortWithStatusJSON(status, gin.H{
 		"code": biz,

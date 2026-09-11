@@ -14,8 +14,8 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/passkey_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/release_svc"
@@ -79,14 +79,35 @@ func TestLoadServerConfig_AccountGateCacheTTLIsConfigurable(t *testing.T) {
 // 装配」这件事必须由这里钉住：漏了它，四条鉴权路径会安静地退回封禁前的行为。
 func TestRegisterDefaults_InstallsAccountGate(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	user_svc.SetGate(nil)
 	t.Cleanup(func() { user_svc.SetGate(nil) })
 
-	RegisterDefaults(&ServerConfig{AccountGate: AccountGateConfig{CacheTTL: time.Minute}}, signer)
+	RegisterDefaults(&ServerConfig{AccountGate: AccountGateConfig{CacheTTL: time.Minute}})
 
 	assert.NotNil(t, user_svc.Gate(), "RegisterDefaults 必须装配账号闸门")
+}
+
+// S6：服务启动不再需要任何密钥文件。配置里没有任何签名密钥，默认实例照常装配，
+// 浏览器票据照常签发、照常由 server 的记录核验。
+func TestRegisterDefaults_NeedsNoKeyMaterial(t *testing.T) {
+	testutils.Redis(t)
+	ctx := context.Background()
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{},
+	})))
+	require.NoError(t, err)
+
+	RegisterDefaults(LoadServerConfig(ctx, cfg))
+
+	auth := auth_svc.Default()
+	require.NotNil(t, auth)
+	sid, _, err := auth.StartSession(ctx, 7)
+	require.NoError(t, err)
+	ticket, err := auth.IssueRelayTicket(ctx, sid, 7)
+	require.NoError(t, err)
+	p, err := auth.ResolveCredential(ctx, ticket.Token)
+	require.NoError(t, err)
+	assert.Equal(t, credstore.KindRelayClient, p.Kind)
 }
 
 // 与闸门同一个失败模式，只是这次是 service 单例：passkey_svc.Default() 在没人
@@ -96,14 +117,12 @@ func TestRegisterDefaults_InstallsAccountGate(t *testing.T) {
 // service 单例目前还是一条一条钉。
 func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	passkey_svc.SetDefault(nil)
 	t.Cleanup(func() { passkey_svc.SetDefault(nil) })
 
 	RegisterDefaults(&ServerConfig{
 		WebAuthn: WebAuthnConfig{RPID: "localhost", RPName: "Agentre", Origins: []string{"http://localhost"}},
-	}, signer)
+	})
 
 	assert.NotNil(t, passkey_svc.Default(), "RegisterDefaults 必须装配通行密钥服务")
 }
@@ -113,12 +132,10 @@ func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
 // 会 New 一个池，整套测试永远绿。
 func TestRegisterDefaults_InstallsPortForwardPool(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	portforward_svc.SetDefault(nil)
 	t.Cleanup(func() { portforward_svc.SetDefault(nil) })
 
-	RegisterDefaults(&ServerConfig{}, signer)
+	RegisterDefaults(&ServerConfig{})
 
 	assert.NotNil(t, portforward_svc.Default(), "RegisterDefaults 必须装配端口转发连接池")
 }
@@ -208,12 +225,10 @@ func TestLoadServerConfig_ReleaseIsConfigurable(t *testing.T) {
 // 控制器眼下会把它当「不知道」处理而不炸,但那样这条链路就从来没有真的跑起来过。
 func TestRegisterDefaults_InstallsReleaseService(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	release_svc.SetDefault(nil)
 	t.Cleanup(func() { release_svc.SetDefault(nil) })
 
-	RegisterDefaults(&ServerConfig{Release: ReleaseConfig{CacheTTL: time.Hour}}, signer)
+	RegisterDefaults(&ServerConfig{Release: ReleaseConfig{CacheTTL: time.Hour}})
 
 	assert.NotNil(t, release_svc.Release(), "RegisterDefaults 必须装配 release 服务")
 }

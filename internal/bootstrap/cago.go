@@ -1,6 +1,5 @@
 // Package bootstrap 集中处理 agentre-server 的启动期组装：
 //   - 从 env 注入敏感字段（cago 配置源不支持 env override）
-//   - 加载 JWT 密钥
 //   - 注册 GitHub OAuth client
 //   - 初始化 auth_svc / device_svc 默认实例
 package bootstrap
@@ -22,8 +21,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api/auth"
 	"github.com/agentre-hub/agentre-server/internal/controller/portforward_ctr"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -95,16 +93,6 @@ type AccountGateConfig struct {
 	CacheTTL time.Duration `yaml:"cache_ttl"`
 }
 
-// JWTIssuer / JWTAudience 是本服务签发令牌时写进 iss / aud 的值。
-//
-// 它们不是配置项：签名与验签都发生在本进程（internal/pkg/jwt.Signer 用同一对值
-// 生成和校验），桌面端拿走 /v1/keys 的公钥后离线验签时并不检查这两个 claim。
-// 也就是说改它们没有任何可观察效果，只会让所有在途令牌一次性失效。
-const (
-	JWTIssuer   = "agentre-server"
-	JWTAudience = "agentre"
-)
-
 type SessionConfig struct {
 	TTL time.Duration `yaml:"ttl"`
 }
@@ -117,21 +105,8 @@ type DFConfig struct {
 }
 
 type JWTConfig struct {
-	ActiveKID  string         `yaml:"active_kid"`
-	Keys       []JWTKeyConfig `yaml:"keys"`
-	AccessTTL  time.Duration  `yaml:"access_ttl"`
-	RefreshTTL time.Duration  `yaml:"refresh_ttl"`
-}
-
-type JWTKeyConfig struct {
-	KID               string `yaml:"kid"`
-	PrivateKeyPEMPath string `yaml:"private_key_pem_path"`
-	PublicKeyPEMPath  string `yaml:"public_key_pem_path"`
-}
-
-type JWTPublicKeySet struct {
-	CurrentKID string
-	Keys       map[string]string
+	AccessTTL  time.Duration `yaml:"access_ttl"`
+	RefreshTTL time.Duration `yaml:"refresh_ttl"`
 }
 
 type OAuthConfig struct {
@@ -180,7 +155,7 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 		// defaultRefreshMargin 续期，而每次续期都轮换一次 refresh token。取 15m 时
 		// 是每 13 分钟换一次身份，任何快照 / 还原 / 并发实例都会踩到「盘上那一份已
 		// 经作废」；取 2h 后降到每 118 分钟一次。代价是被盗 access token 的存活窗口
-		// 变长，由 jti 黑名单与撤销列表兜底——它们的窗口都跟着 AccessTTL 走。
+		// 变长，由设备撤销即时生效兜底。
 		out.JWT.AccessTTL = 2 * time.Hour
 	}
 	if out.JWT.RefreshTTL == 0 {
@@ -258,73 +233,8 @@ func setIfPresent(env string, dst *string) {
 	}
 }
 
-// LoadJWTSigner 从 cfg.JWT 配置的路径读取 PEM 并构造 Signer。
-func LoadJWTSigner(cfg *ServerConfig) *jwt.Signer {
-	keys, activeKID := cfg.JWT.keyRing()
-	jwtKeys := make([]jwt.Key, 0, len(keys))
-	for _, key := range keys {
-		var privatePEM []byte
-		if key.PrivateKeyPEMPath != "" {
-			privatePEM = loadPEM(key.PrivateKeyPEMPath)
-		}
-		jwtKeys = append(jwtKeys, jwt.Key{ID: key.KID, PrivatePEM: privatePEM,
-			PublicPEM: loadPEM(key.PublicKeyPEMPath)})
-	}
-	s, err := jwt.NewKeyRing(activeKID, jwtKeys, JWTIssuer, JWTAudience, cfg.JWT.AccessTTL)
-	if err != nil {
-		log.Fatalf("init jwt signer: %v", err)
-	}
-	return s
-}
-
-// PublicKeyPEMContent 返回验签公钥 PEM 的内容，解析规则与 LoadJWTSigner 完全一致。
-// /v1/keys 分发的必须是签名者验签用的那一把：daemon 在 login 时取走它、此后离线
-// 验签（R3）。
-//
-// 读不到时返回空串而不是退出：真正缺 key 的部署在 LoadJWTSigner 里就已经 Fatal 了
-// （它跑在路由构建之前），这里再 Fatal 一次只会让测试里不配 JWT 的路由构造崩掉。
-func (c JWTConfig) PublicKeyPEMContent() string {
-	set := c.PublicKeySet()
-	return set.Keys[set.CurrentKID]
-}
-
-func (c JWTConfig) PublicKeySet() JWTPublicKeySet {
-	keys, activeKID := c.keyRing()
-	out := JWTPublicKeySet{CurrentKID: activeKID, Keys: make(map[string]string, len(keys))}
-	for _, key := range keys {
-		publicPEM, err := readPEM(key.PublicKeyPEMPath)
-		if err == nil {
-			out.Keys[key.KID] = string(publicPEM)
-		}
-	}
-	return out
-}
-
-func (c JWTConfig) keyRing() ([]JWTKeyConfig, string) {
-	return c.Keys, c.ActiveKID
-}
-
-func loadPEM(path string) []byte {
-	b, err := readPEM(path)
-	if err != nil {
-		log.Fatalf("%v", err)
-	}
-	return b
-}
-
-func readPEM(path string) ([]byte, error) {
-	if path != "" {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read pem %s: %w", path, err)
-		}
-		return b, nil
-	}
-	return nil, errors.New("missing JWT key file path")
-}
-
 // RegisterDefaults 初始化 service 默认单例（OAuth、auth、device）。
-func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
+func RegisterDefaults(cfg *ServerConfig) {
 	oauth_svc.SetDefaultGithub(oauth_svc.NewGithub(oauth_svc.GithubConfig{
 		ClientID: cfg.OAuth.Github.ClientID, ClientSecret: cfg.OAuth.Github.ClientSecret,
 		CallbackPath: auth.GithubCallbackPath, PublicURL: cfg.PublicURL,
@@ -351,7 +261,7 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 		AccessTTL:       cfg.JWT.AccessTTL,
 		RefreshTTL:      cfg.JWT.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
-	}, signer, jwtblacklist.New(redis.Default())))
+	}))
 
 	// 控制台的 latest 来源（决策 12）：Enabled=false 时 Pull 与 Latest 都恒回
 	// 「不关心/不知道」，装配与否不影响这一点——这里始终装配，只是配置决定它会不会
@@ -382,20 +292,20 @@ func RegisterDefaults(cfg *ServerConfig, signer *jwt.Signer) {
 	// 因此不像中继那样要一个进程内唯一的 InstanceID。
 	accountchan_svc.SetDefault(accountchan_svc.New(redis.Default()))
 
-	registerSessionMirror(relayConfig.InstanceID, signer)
+	registerSessionMirror(relayConfig.InstanceID)
 }
 
 // registerSessionMirror 把账号会话镜像的三根线接上（规格
 // 2026-08-18-server-session-mirror）：本进程那份常驻、保存 / 删除这一侧的两个消费侧
 // 接口，以及撤销设备时的连带清理。
 //
-// 常驻的三个依赖都从这里注入（DIP）：中继取 relay_svc.Default()、签名器就是
-// device_svc / device_ctr 在用的那把、Redis 取 redis.Default()。InstanceID 与
+// 常驻的三个依赖都从这里注入（DIP）：中继取 relay_svc.Default()、凭据取短效凭据存储
+// （与浏览器中继票据同一份，类型各自定死）、Redis 取 redis.Default()。InstanceID 与
 // relay_svc 共用同一个「一进程一份」的值——它是租约里的持有者标识，两个副本共用一个
 // 值会让彼此的续期都成功，同一台机器因此被跟两遍。
-func registerSessionMirror(instanceID string, signer *jwt.Signer) {
+func registerSessionMirror(instanceID string) {
 	supervisor := mirror_svc.NewSupervisor(
-		mirror_svc.Config{InstanceID: instanceID}, relay_svc.Default(), signer, redis.Default())
+		mirror_svc.Config{InstanceID: instanceID}, relay_svc.Default(), credstore.New(redis.Default()), redis.Default())
 	mirror_svc.SetDefault(supervisor)
 	sessions := mirror_svc.NewSessions(supervisor)
 	saved_session_svc.SetSessionMirror(sessionMirror{sessions: sessions})

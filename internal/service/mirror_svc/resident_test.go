@@ -25,7 +25,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/pkg/wireversion"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
@@ -733,31 +733,31 @@ func (s *fakeStore) rowSeqs(conversationID string) []int64 {
 	return out
 }
 
-// ── 假签名器:凭据由本进程当场签,不缓存 ─────────────────────────────────────
+// ── 假签发器:凭据由本进程当场发,不缓存 ─────────────────────────────────────
 
-type signedCredential struct {
-	claims jwt.Claims
-	ttl    time.Duration
-	token  string
+type issuedCredential struct {
+	accountID       int64
+	peerFingerprint string
+	token           string
 }
 
-type fakeSigner struct {
+type fakeIssuer struct {
 	mu     sync.Mutex
-	signed []signedCredential
+	issues []issuedCredential
 }
 
-func (f *fakeSigner) Sign(c jwt.Claims, ttl time.Duration) (string, string, error) {
+func (f *fakeIssuer) IssueServerMirror(_ context.Context, accountID int64, peerFingerprint string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	token := fmt.Sprintf("credential-%d-%d", c.UID, len(f.signed)+1)
-	f.signed = append(f.signed, signedCredential{claims: c, ttl: ttl, token: token})
-	return token, fmt.Sprintf("jti-%d", len(f.signed)), nil
+	token := fmt.Sprintf("credential-%d-%d", accountID, len(f.issues)+1)
+	f.issues = append(f.issues, issuedCredential{accountID: accountID, peerFingerprint: peerFingerprint, token: token})
+	return token, nil
 }
 
-func (f *fakeSigner) issued() []signedCredential {
+func (f *fakeIssuer) issued() []issuedCredential {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return append([]signedCredential(nil), f.signed...)
+	return append([]issuedCredential(nil), f.issues...)
 }
 
 // ── rig ────────────────────────────────────────────────────────────────────
@@ -777,7 +777,7 @@ type residentRig struct {
 type replica struct {
 	sup    *Supervisor
 	net    *fakeDaemonNet
-	signer *fakeSigner
+	issuer *fakeIssuer
 }
 
 func newResidentRig(t *testing.T) *residentRig {
@@ -789,21 +789,28 @@ func newResidentRig(t *testing.T) *residentRig {
 	return &residentRig{rdb: rdb, peer: newFakeRelay(), store: store, reviveEvery: time.Hour}
 }
 
-// replica 造一个「server 副本」:自己的 InstanceID、自己的中继与签名器,
+// replica 造一个「server 副本」:自己的 InstanceID、自己的中继与凭据签发器,
 // 共用同一台 daemon 与同一份库 —— 多副本部署就是这个形状。
 func (r *residentRig) replica(t *testing.T, instanceID string) *replica {
 	t.Helper()
+	issuer := &fakeIssuer{}
+	sup, net := r.supervisor(t, instanceID, issuer)
+	return &replica{sup: sup, net: net, issuer: issuer}
+}
+
+// supervisor 按本 rig 的配置造一个副本的常驻镜像,凭据由 credentials 发。
+func (r *residentRig) supervisor(t *testing.T, instanceID string, credentials CredentialIssuer) (*Supervisor, *fakeDaemonNet) {
+	t.Helper()
 	net := newFakeDaemonNet(r.peer)
-	signer := &fakeSigner{}
 	sup := NewSupervisor(Config{
 		InstanceID:  instanceID,
 		LeaseTTL:    time.Minute,
 		RenewEvery:  5 * time.Millisecond,
 		ReviveEvery: r.reviveEvery,
 		CallTimeout: r.callTimeout,
-	}, net, signer, r.rdb)
+	}, net, credentials, r.rdb)
 	t.Cleanup(func() { sup.Stop(context.Background()) })
-	return &replica{sup: sup, net: net, signer: signer}
+	return sup, net
 }
 
 // machineSession 造一条这台机器上的会话。真 daemon 在账号鉴权的连接上会给**每一行**
@@ -858,7 +865,7 @@ func TestFollow_OnlineMachineWithSavedSessions_KeepsExactlyOneConnection(t *test
 
 // Given daemon 对每条虚拟通道各自鉴权(非 auth.* 一律 requireAuth);
 // When 跟住一台机器;Then 这条通道上的第一个方法是 auth.account,出示的是本进程当场
-// 签的短效账号凭据与合成指纹 —— 少了这一步,补齐族全被 Unauthorized 拒掉。
+// 取的短效账号凭据与合成指纹 —— 少了这一步,补齐族全被 Unauthorized 拒掉。
 func TestFollow_AuthenticatesTheChannelBeforeAnySessionCall(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
@@ -872,19 +879,36 @@ func TestFollow_AuthenticatesTheChannelBeforeAnySessionCall(t *testing.T) {
 	require.NotEmpty(t, ch.methods)
 	assert.Equal(t, agentrewire.RpcMethod_RPC_METHOD_AUTH_ACCOUNT, ch.methods[0], "握手必须排在 session.* 之前")
 	assert.Contains(t, ch.methods, agentrewire.RpcMethod_RPC_METHOD_SESSION_LIST)
-	issued := a.signer.issued()
-	require.Len(t, issued, 1, "一条连接签一张票,不缓存")
+	issued := a.issuer.issued()
+	require.Len(t, issued, 1, "一条连接发一张凭据,不缓存")
 	assert.Equal(t, issued[0].token, ch.credential)
-	assert.Equal(t, testUserID, issued[0].claims.UID)
-	assert.Equal(t, "relay_client", issued[0].claims.Kind, "与浏览器换的那张中继票同一种身份")
-	assert.Zero(t, issued[0].claims.DID, "镜像不是一台设备,不占 devices 行")
-	assert.Positive(t, issued[0].ttl)
-	assert.LessOrEqual(t, issued[0].ttl, 2*time.Minute, "票短命是它唯一的边界:jti 没人跟踪")
-	// pfp 是这枚凭据说了算的对端身份(决策 8)。新版 agentred 在 HandleAccount 里
-	// 缺它就以 ErrUnauthorized 拒掉整条连接 —— 不签它,服务端的常驻镜像一台机器
-	// 都连不上,而这件事在假对端上看不出来:凭据对它是不透明的。所以断言签的是什么。
-	assert.Equal(t, a.sup.clientFingerprint(), issued[0].claims.PFP,
-		"凭据必须签上本副本的对端身份,否则新版 agentred 拒掉整条镜像连接")
+	assert.Equal(t, testUserID, issued[0].accountID)
+	// pfp 是这枚凭据说了算的对端身份(决策 8)。agentred 在 HandleAccount 里缺它就以
+	// ErrUnauthorized 拒掉整条连接 —— 不记它,服务端的常驻镜像一台机器都连不上,而这件事
+	// 在假对端上看不出来:凭据对它是不透明的。所以断言记下的是什么。
+	assert.Equal(t, a.sup.clientFingerprint(), issued[0].peerFingerprint,
+		"凭据必须记下本副本的对端身份,否则 agentred 拒掉整条镜像连接")
+}
+
+// 镜像与端口转发共用 Supervisor 的拨号:凭据取自短效凭据存储,类型是 server_mirror ——
+// 与浏览器换的中继票据分开,两者都认不成对方的入口;有效期与记录由存储负责。
+func TestFollow_PresentsAServerMirrorCredentialFromTheStore(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
+	store := credstore.New(rig.rdb)
+	sup, net := rig.supervisor(t, replicaA, store)
+	ctx := context.Background()
+
+	claimed, err := sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	got, err := store.Resolve(ctx, net.firstChannel(t).credential)
+	require.NoError(t, err, "出示给对端的凭据必须是存储里记着的那一张")
+	assert.Equal(t, credstore.KindServerMirror, got.Kind)
+	assert.Equal(t, testUserID, got.AccountID)
+	assert.Equal(t, sup.clientFingerprint(), got.PeerFingerprint)
+	assert.Empty(t, got.SessionID, "server 自用凭据不挂在任何浏览器会话上")
 }
 
 // Given 对端在 auth.account 上按精确匹配校验 wire 协议版本,空版本一律判成「对端太旧」
@@ -1059,7 +1083,7 @@ func TestFollow_EachConnectionSignsAFreshCredential(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	issued := a.signer.issued()
+	issued := a.issuer.issued()
 	require.Len(t, issued, 2)
 	assert.NotEqual(t, issued[0].token, issued[1].token)
 	connects, _, detaches := a.net.counts()

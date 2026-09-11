@@ -7,17 +7,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"strconv"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 )
 
 type OAuthStatePayload struct {
@@ -40,22 +39,35 @@ type AuthSvc interface {
 	ListSessions(ctx context.Context, userID int64) ([]session.Info, error)
 	// EndOtherSessions 结束该账号除 currentSID 之外的全部会话，返回实际撤销的条数。
 	EndOtherSessions(ctx context.Context, userID int64, currentSID string) (int, error)
-	// TrackRelayTicket 登记「这次会话签发了这张 relay ticket」，EndSession 据此把
-	// 仍在有效期内的票拉黑。不登记的票登出后撤不掉，只能等自然过期。
-	TrackRelayTicket(ctx context.Context, sid, jti string, ttl time.Duration) error
+	// IssueRelayTicket 用这次浏览器登录会话换一张中继票据，见实现处说明。
+	IssueRelayTicket(ctx context.Context, sid string, userID int64) (*RelayTicket, error)
+	// ResolveCredential 解析一张 server 签发的短效凭据（中继票据或 server 自用凭据），
+	// 见实现处说明。设备 access token 不在此列，它由 device_svc 解析。
+	ResolveCredential(ctx context.Context, token string) (*device_svc.Principal, error)
 	// WatchRelayCredential 取一条**已经建好**的中继连接的撤销判定，见实现处说明。
-	WatchRelayCredential(ctx context.Context, jti string) RelayCredentialWatch
+	WatchRelayCredential(ctx context.Context, handle string) RelayCredentialWatch
 	CookieName() string
 }
+
+// RelayTicket 是换给浏览器的中继票据：凭据本身、它代表的网页对端身份与有效期。
+type RelayTicket struct {
+	Token           string
+	PeerFingerprint string
+	ExpiresIn       time.Duration
+}
+
+// ErrCredentialUnverifiable 表示短效凭据此刻判不出真假（存储不可用）。它不是「凭据无效」，
+// 由调用方决定怎么 fail-closed。
+var ErrCredentialUnverifiable = errors.New("short-lived credential cannot be verified")
 
 // RelayCredentialWatch 是一条已经建好的中继连接的撤销判定：连接的心跳反复调用它，
 // 返回 true 表示背后的凭据已被撤销、这条连接必须断开。
 type RelayCredentialWatch func(ctx context.Context) bool
 
 type authSvc struct {
-	redis     *goredis.Client
-	blacklist *jwtblacklist.Blacklist
-	store     *session.Store
+	redis       *goredis.Client
+	credentials *credstore.Store
+	store       *session.Store
 }
 
 // New 接收这个 service 要用的 Redis 客户端，不去够 redis.Default()。
@@ -63,7 +75,7 @@ type authSvc struct {
 // 与 session.Store / passkey_svc / user_svc.Gate 同一形状：全局单例只在组合根
 // （bootstrap.RegisterDefaults）出现一次，其余各层拿到的都是构造时注入的那一个。
 func New(rc *goredis.Client, store *session.Store) AuthSvc {
-	return &authSvc{redis: rc, blacklist: jwtblacklist.New(rc), store: store}
+	return &authSvc{redis: rc, credentials: credstore.New(rc), store: store}
 }
 
 var defaultSvc AuthSvc
@@ -124,10 +136,9 @@ func (s *authSvc) GetSession(ctx context.Context, sid string) (*session.Session,
 	return s.store.Get(ctx, sid)
 }
 
+// EndSession 结束一次登录。这次会话换出的中继票据随之失效：票据的解析与已建连接的复查
+// 都以签发它的会话仍然存在为前提，删掉会话就是撤票，不需要另写一份撤销记录。
 func (s *authSvc) EndSession(ctx context.Context, sid string) error {
-	// 先撤票再删 session：反过来的话，中途失败会留下「会话已没了、票还能用」的
-	// 状态，正是这里要根治的那段越权窗口。
-	s.revokeRelayTickets(ctx, sid)
 	if err := s.store.Delete(ctx, sid); err != nil {
 		return err
 	}
@@ -141,7 +152,7 @@ func (s *authSvc) ListSessions(ctx context.Context, userID int64) ([]session.Inf
 
 // EndOtherSessions 结束该账号除当前会话外的全部登录，返回实际撤销的条数。
 //
-// 逐条走的顺序与 EndSession 完全一致（先撤票、再删 session），差别只在这里是尽力而为：
+// 逐条与 EndSession 同一个结论（会话没了，它换出的票也就失效了），差别只在这里是尽力而为：
 // 单条失败记 warn 并继续，不把整次操作报成失败。用户点了「登出其它全部」就该尽量做成，
 // 一条删不掉不该让已经登出的那几条显得没生效；他可以再点一次，清单会如实反映还剩几条。
 func (s *authSvc) EndOtherSessions(ctx context.Context, userID int64, currentSID string) (int, error) {
@@ -156,7 +167,6 @@ func (s *authSvc) EndOtherSessions(ctx context.Context, userID int64, currentSID
 		if info.SID == currentSID {
 			continue
 		}
-		s.revokeRelayTickets(ctx, info.SID)
 		if err := s.store.Delete(ctx, info.SID); err != nil {
 			logger.Ctx(ctx).Warn("auth_svc.EndOtherSessions: 删除会话失败，其余继续",
 				zap.Int64("userId", userID), zap.Error(err))
@@ -169,144 +179,89 @@ func (s *authSvc) EndOtherSessions(ctx context.Context, userID int64, currentSID
 	return revoked, nil
 }
 
-// relayTicketKey 是「这次会话签发过哪些 relay ticket」的归集键。
+// IssueRelayTicket 用浏览器登录会话换取只可连接 relay client 的短效票据。
 //
-// 按 sid 而不是 user_id 归集：登出只该作废这一个浏览器的票，同账号的其它浏览器
-// 各自持有的票不受牵连。
-func relayTicketKey(sid string) string { return "session_relay_ticket:" + sid }
-
-// relayTicketSessionKey 是「这张票由哪次会话签发」的反向索引，由中继连接在
-// upgrade 时读一次，用来把自己认到一次登录名下。
-//
-// 它与票同寿（几分钟）就够：票只在这段窗口里连得上，连上之后归属会话就留在连接
-// 自己手里了。真正长命的是连接，不是这条索引。
-func relayTicketSessionKey(jti string) string { return "relay_ticket_session:" + jti }
-
-func (s *authSvc) TrackRelayTicket(ctx context.Context, sid, jti string, ttl time.Duration) error {
-	if sid == "" || jti == "" {
-		return errors.New("empty sid or jti")
+// 票据记在短效凭据存储里，挂在签发它的这次会话名下：会话一结束，新连接的解析与已建连接的
+// 复查都认不下它。取不到会话（sid 为空）就不发，否则就是一张登出撤不掉的票——票在手就能连
+// /v1/relay/client 读写该账号全部机器上的会话。记不下来同样不发（fail-closed）。
+func (s *authSvc) IssueRelayTicket(ctx context.Context, sid string, userID int64) (*RelayTicket, error) {
+	token, err := s.credentials.IssueRelayClient(ctx, userID, sid)
+	if err != nil {
+		return nil, err
 	}
-	// 成员里带上「最后一刻仍可验签的时间」：Verify 接受 jwt.Leeway 的时钟偏移，
-	// 票直到 exp+Leeway 都还验得过。登出时按它算黑名单 TTL，正好盖满整个窗口，
-	// 不会留下「已掉出黑名单、却仍验得过」的缝（device_svc.Revoke 同一套算法）。
-	lifetime := ttl + jwt.Leeway
-	member := strconv.FormatInt(time.Now().Add(lifetime).UnixMilli(), 10) + ":" + jti
-	key := relayTicketKey(sid)
-	if err := s.redis.SAdd(ctx, key, member).Err(); err != nil {
-		return err
-	}
-	// 整个集合与最后签发的那张票同寿（票只有 2 分钟），到点自然回收：
-	// 长命的浏览器 session 不会在 Redis 里堆一辈子的 jti。
-	if err := s.redis.Expire(ctx, key, lifetime).Err(); err != nil {
-		return err
-	}
-	// 反向索引同样 fail-closed：写不上就等于发一张「连上之后再也踢不掉」的票。
-	return s.redis.Set(ctx, relayTicketSessionKey(jti), sid, lifetime).Err()
+	return &RelayTicket{
+		Token: token, PeerFingerprint: credstore.AccountPeerFingerprint(userID), ExpiresIn: credstore.TTL,
+	}, nil
 }
 
-// WatchRelayCredential 解析一条**已经建好**的中继连接背后的撤销判据，返回一个可被
-// 连接心跳反复调用的判定函数。
+// ResolveCredential 解析一张短效凭据的身份。有效 = 记录存在（未过期）且签发它的登录会话
+// 仍在；server 自用凭据不挂会话。连过一次中继不影响解析：有效期内它可以被反复核验。
 //
-// 中继的两个 websocket 端点只在 upgrade 那一刻过一次鉴权中间件，之后不再经过任何
-// 中间件；没有这个复查，登出与设备撤销就只挡得住新连接，一条撤销前建好的连接会继续
-// 读写该账号名下的全部会话。
-//
-// 这里只管中继票据（设备 access token 背后的连接由 connguard 按设备状态复查）。判据全部
-// 是**撤销方本来就会写**的共享 Redis 状态，因此天然跨实例：撤销请求落在哪个副本上无关
-// 紧要，持有那条连接的副本自己读得到，不需要实例间寻址或广播。
-//   - 票被拉黑：登出时 revokeRelayTickets 把这次会话签发的票全部拉黑。jti 逐票互不相同，
-//     拉黑一张不会牵连其它票。
-//   - 浏览器登出：EndSession 删掉 session。sid 逐浏览器互不相同，登出一个不会牵连
-//     同账号的其它浏览器。
-//
-// 归属会话只在这里解析一次、之后留在闭包里：反向索引与票同寿，而连接活得比票久得多，
-// 每次判定都去查索引的话，票一过期就再也认不出这条连接属于谁。
-func (s *authSvc) WatchRelayCredential(ctx context.Context, jti string) RelayCredentialWatch {
-	sid := ""
-	if jti != "" {
-		resolved, err := s.redis.Get(ctx, relayTicketSessionKey(jti)).Result()
-		switch {
-		case err == nil:
-			sid = resolved
-		case errors.Is(err, goredis.Nil):
-			// 没有登记：镜像凭据本来就没有归属会话，或票的登记已过期。
-		default:
-			logger.Ctx(ctx).Warn("auth_svc.WatchRelayCredential: 解析 relay ticket 归属会话失败，"+
-				"该连接登出时将撤不掉，只能靠 jti 黑名单", zap.Error(err))
+// 未知、过期、会话已结束一律 device_svc.ErrBearerInvalid；存储读不到判不出来，交
+// ErrCredentialUnverifiable。凭据本身从不进日志。
+func (s *authSvc) ResolveCredential(ctx context.Context, token string) (*device_svc.Principal, error) {
+	cred, err := s.credentials.Resolve(ctx, token)
+	if errors.Is(err, credstore.ErrNotFound) {
+		return nil, device_svc.ErrBearerInvalid
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrCredentialUnverifiable, err)
+	}
+	if cred.SessionID != "" {
+		alive, err := s.store.Exists(ctx, cred.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrCredentialUnverifiable, err)
+		}
+		if !alive {
+			return nil, device_svc.ErrBearerInvalid
 		}
 	}
+	return &device_svc.Principal{
+		AccountID:       cred.AccountID,
+		Kind:            cred.Kind,
+		PeerFingerprint: cred.PeerFingerprint,
+		ExpiresAt:       cred.ExpiresAt,
+		Handle:          cred.Handle,
+	}, nil
+}
+
+// WatchRelayCredential 解析一条**已经建好**的中继票据连接背后的撤销判据，返回一个可被
+// 连接心跳反复调用的判定函数。handle 是票据的句柄（中间件放行时交给下游的那一个）。
+//
+// 中继的两个 websocket 端点只在 upgrade 那一刻过一次鉴权中间件，之后不再经过任何
+// 中间件；没有这个复查，登出就只挡得住新连接，一条登出前建好的连接会继续读写该账号名下
+// 的全部会话。
+//
+// 这里只管中继票据（设备 access token 背后的连接由 connguard 按设备状态复查）。判据是
+// 签发它的登录会话是否还在——撤销方（登出）本来就会删它，而它在共享 Redis 里，天然跨实例：
+// 登出请求落在哪个副本上无关紧要。sid 逐浏览器互不相同，登出一个不会牵连同账号的其它浏览器。
+//
+// 归属会话只在这里解析一次、之后留在闭包里：票据记录只活 2 分钟，而连接活得比票久得多。
+// upgrade 时就查不到记录的连接没有任何可复查的依据，按已撤销处理。
+func (s *authSvc) WatchRelayCredential(ctx context.Context, handle string) RelayCredentialWatch {
+	cred, err := s.credentials.Lookup(ctx, handle)
+	switch {
+	case errors.Is(err, credstore.ErrNotFound):
+		return func(context.Context) bool { return true }
+	case err != nil:
+		logger.Ctx(ctx).Warn("auth_svc.WatchRelayCredential: 解析中继票据归属会话失败，"+
+			"该连接登出时将撤不掉，只靠账号闸门复查", zap.Error(err))
+		return func(context.Context) bool { return false }
+	case cred.SessionID == "":
+		return func(context.Context) bool { return false }
+	}
+	sid := cred.SessionID
 	return func(ctx context.Context) bool {
-		if jti != "" && s.blacklist.Has(ctx, jti) {
-			return true
-		}
-		if sid == "" {
-			return false
-		}
 		alive, err := s.store.Exists(ctx, sid)
 		if err != nil {
-			// 判不出来就不断开（与 jwtblacklist.Has 同向 fail-open）：撤销本身早已生效
-			// （session 已删、jti 已拉黑），这里只是收尾。一次 Redis 抖动把全部中继连接
-			// 一起踢下线，比晚一个心跳才踢差得多。
+			// 判不出来就不断开：撤销本身早已生效（session 已删、新连接已认不下这张票），
+			// 这里只是收尾。一次 Redis 抖动把全部中继连接一起踢下线，比晚一个心跳才踢差得多。
 			logger.Ctx(ctx).Warn("auth_svc.WatchRelayCredential: 判定登录会话存活失败，暂不断开中继连接",
 				zap.Error(err))
 			return false
 		}
 		return !alive
 	}
-}
-
-// revokeRelayTickets 把这次会话签发、仍在有效期内的 relay ticket 全部拉黑，
-// 让登出立刻切断 /v1/relay/client（middleware.RelayClientJWT 逐请求查黑名单）。
-// EndSession 与 EndOtherSessions 共用它，两条路径因此撤得一样干净。
-//
-// 刻意不返回错误：用户点了登出就必须登出成功，不能因为黑名单写失败把登出也一起
-// 拒掉——何况 session 本身就存在同一个 Redis 里，那种时候删 session 也会失败，
-// 报错方向应由 store.Delete 决定。Redis 抖动时退化成「票最多再活 ttl」的原状，
-// 不比现在更差，但要留 warn 日志，免得这段静默失败没人看见。
-func (s *authSvc) revokeRelayTickets(ctx context.Context, sid string) {
-	if sid == "" {
-		return
-	}
-	key := relayTicketKey(sid)
-	members, err := s.redis.SMembers(ctx, key).Result()
-	if err != nil {
-		logger.Ctx(ctx).Warn("auth_svc.revokeRelayTickets: 读取会话 relay ticket 失败，票据只能等自然过期",
-			zap.Error(err))
-		return
-	}
-	nowMs := time.Now().UnixMilli()
-	for _, member := range members {
-		deadlineMs, jti, ok := parseRelayTicketMember(member)
-		if !ok {
-			continue
-		}
-		// 已过窗口的票验签本来就过不了，再拉黑只是给 Redis 添垃圾。
-		remainMs := deadlineMs - nowMs
-		if remainMs <= 0 {
-			continue
-		}
-		ttlSec := int((remainMs + 999) / 1000) // 向上取整，别让黑名单比票先过期
-		if err := s.blacklist.Add(ctx, jti, ttlSec); err != nil {
-			logger.Ctx(ctx).Warn("auth_svc.revokeRelayTickets: relay ticket 拉黑失败",
-				zap.String("jti", jti), zap.Error(err))
-		}
-	}
-	if err := s.redis.Del(ctx, key).Err(); err != nil {
-		logger.Ctx(ctx).Warn("auth_svc.revokeRelayTickets: 清理会话 relay ticket 集合失败", zap.Error(err))
-	}
-}
-
-// parseRelayTicketMember 拆 "<deadlineUnixMilli>:<jti>"。jti 是 ULID，不含冒号。
-func parseRelayTicketMember(member string) (int64, string, bool) {
-	deadline, jti, found := strings.Cut(member, ":")
-	if !found || jti == "" {
-		return 0, "", false
-	}
-	deadlineMs, err := strconv.ParseInt(deadline, 10, 64)
-	if err != nil {
-		return 0, "", false
-	}
-	return deadlineMs, jti, true
 }
 
 func (s *authSvc) CookieName() string { return s.store.CookieName() }

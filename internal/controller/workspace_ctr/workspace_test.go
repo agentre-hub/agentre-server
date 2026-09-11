@@ -23,8 +23,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
@@ -156,24 +154,21 @@ func (s *stubWorkspaceSvc) recordOrgWrite(
 
 var _ workspace_svc.WorkspaceSvc = (*stubWorkspaceSvc)(nil)
 
-func newWorkspaceTestServer(t *testing.T, stub *stubWorkspaceSvc) (*httptest.Server, *jwt.Signer) {
+func newWorkspaceTestServer(t *testing.T, stub *stubWorkspaceSvc) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	workspace_svc.SetDefault(stub)
 	t.Cleanup(func() { workspace_svc.SetDefault(workspace_svc.New()) })
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
+		Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server, signer
+	return server
 }
 
 func newSessionCookie(t *testing.T, userID int64) *http.Cookie {
@@ -249,7 +244,7 @@ func TestListAgents_WorksForBrowserSession(t *testing.T) {
 			},
 		},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/agents", cookie.Value)
@@ -291,7 +286,7 @@ func TestListAgents_CarriesAvatarIconAndDirectProjects(t *testing.T) {
 			ProjectSyncIDs: []string{"proj-a", "proj-b"}, HasAvailableTarget: true},
 		{SyncID: "agent-2", Name: "文档 Agent", AvatarColor: "agent-11"},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/agents", cookie.Value)
@@ -314,7 +309,7 @@ func TestListAgents_CarriesAvatarIconAndDirectProjects(t *testing.T) {
 
 // 未登录（无 cookie、无 device JWT）必须被拒绝——这条端点不是公开的。
 func TestListAgents_RejectsUnauthenticated(t *testing.T) {
-	server, _ := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
+	server := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
 	resp := get(t, server.URL+"/v1/workspace/agents", "")
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
@@ -327,7 +322,7 @@ func TestDeviceDetail_WorksForBrowserSession_WithDeviceIDQuery(t *testing.T) {
 		RunnableAgents: []workspace_svc.RunnableAgentView{{SyncID: "agent-1", Name: "前端 Agent", Rank: 2}},
 		Projects:       []workspace_svc.ProjectView{{SyncID: "proj-1", Name: "agentre-server", Configured: true}},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/device-detail?device_id=20", cookie.Value)
@@ -357,7 +352,7 @@ func TestDeviceDetail_WorksForBrowserSession_WithDeviceIDQuery(t *testing.T) {
 // 不会报错，只会静默回落成「按序第一个可用」——用户挑了 B 机，活派到了 A 机上。
 func TestDispatchTarget_ForwardsTargetBackendSyncID(t *testing.T) {
 	stub := &stubWorkspaceSvc{dispatchPlan: &workspace_svc.WebDispatchPlan{AgentSyncID: "agent-1"}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+
@@ -376,7 +371,7 @@ func TestDispatchTarget_ForwardsTargetBackendSyncID(t *testing.T) {
 // 由它按「第一个可用」挑。
 func TestDispatchTarget_WithoutTargetBackend_LeavesItEmpty(t *testing.T) {
 	stub := &stubWorkspaceSvc{dispatchPlan: &workspace_svc.WebDispatchPlan{AgentSyncID: "agent-1"}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1", cookie.Value)
@@ -401,7 +396,7 @@ func TestDispatchTarget_WorksForBrowserSession_WithAgentAndProject(t *testing.T)
 		},
 		Projects: []workspace_svc.ProjectView{{SyncID: "proj-1", Name: "agentre-server", Configured: true}},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1&project_sync_id=proj-1", cookie.Value)
@@ -440,7 +435,7 @@ func TestDispatchTarget_WorksForBrowserSession_WithAgentAndProject(t *testing.T)
 
 // 未登录（无 cookie、无 device JWT）必须被拒绝——派发计划不是公开端点。
 func TestDispatchTarget_RejectsUnauthenticated(t *testing.T) {
-	server, _ := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
+	server := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
 	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1", "")
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
@@ -454,7 +449,7 @@ func TestDeviceDetail_PropagatesNotFoundFromService(t *testing.T) {
 	stub := &stubWorkspaceSvc{
 		detailErr: i18n.NewNotFoundError(context.Background(), code.DeviceNotFound),
 	}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/device-detail?device_id=99", cookie.Value)
@@ -485,7 +480,7 @@ func TestDispatchTarget_CarriesBackendSyncIDPerTier(t *testing.T) {
 				Availability: workspace_svc.AvailabilityOffline},
 		},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1", cookie.Value)
@@ -514,7 +509,7 @@ func TestListAgents_CarriesBackendSyncIDPerTier(t *testing.T) {
 				Availability: workspace_svc.AvailabilityAvailable, Current: true},
 		},
 	}}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/agents", cookie.Value)
@@ -536,7 +531,7 @@ func TestListAgents_CarriesBackendSyncIDPerTier(t *testing.T) {
 // 写端点：账号取自鉴权上下文，Agent 与排列取自请求体，原样转给 service。
 func TestSetExecTargetOrder_PassesAgentAndPermutation(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", cookie.Value, csrf,
@@ -554,7 +549,7 @@ func TestSetExecTargetOrder_PassesAgentAndPermutation(t *testing.T) {
 // 只断言「状态码不是 200」时，controller 把错误直接扔掉返回空成功一样能过。
 func TestSetExecTargetOrder_PropagatesServiceFailureInsteadOfEmptySuccess(t *testing.T) {
 	stub := &stubWorkspaceSvc{orderErr: errors.New("save exec target order failed")}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", cookie.Value, csrf,
@@ -576,7 +571,7 @@ func TestSetExecTargetOrder_PropagatesServiceFailureInsteadOfEmptySuccess(t *tes
 // 未登录（无 cookie、无 device JWT）不得写任何人的顺序。
 func TestSetExecTargetOrder_RejectsUnauthenticated(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/exec-target-order", "", "",
 		`{"agent_sync_id":"agent-1","backend_sync_ids":["b-c"]}`)
@@ -591,7 +586,7 @@ func TestSetExecTargetOrder_RejectsUnauthenticated(t *testing.T) {
 // 写在 dive 之后（于是它变成「每个元素最长 64」）也照样绿。
 func TestSetExecTargetOrder_RejectsOversizedPermutation(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	ids := make([]string, 65)
@@ -616,7 +611,7 @@ func TestListProjects_CarriesTreeShapeWithoutPaths(t *testing.T) {
 		{SyncID: "proj-child", Name: "agentre-server", Color: "#10B981",
 			ParentSyncID: "proj-parent", SortOrder: 2},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/projects", cookie.Value)
@@ -645,7 +640,7 @@ func TestListProjects_CarriesIconAndOmitsItWhenAbsent(t *testing.T) {
 		{SyncID: "proj-with-icon", Name: "后端", Icon: "🚀", Color: "#3B82F6"},
 		{SyncID: "proj-no-icon", Name: "前端", Color: "#10B981"},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/projects", cookie.Value)

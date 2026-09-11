@@ -1,4 +1,4 @@
-package jwt
+package credstore
 
 import (
 	"crypto/sha256"

@@ -18,12 +18,14 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo/mock_device_token_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo/mock_user_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
@@ -39,7 +41,7 @@ func digestOf(token string) string {
 func TestBearerBranches_DecideDeviceTokensWithoutRedis(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mini := testutils.Redis(t) // 这一台是全局默认，下面把它整个停掉
-	signer := gatedAuthTestSigner(t)
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
 
 	ctrl := gomock.NewController(t)
 	tokens := mock_device_token_repo.NewMockDeviceTokenRepo(ctrl)
@@ -71,7 +73,7 @@ func TestBearerBranches_DecideDeviceTokensWithoutRedis(t *testing.T) {
 	users.EXPECT().FindIgnoreStatus(gomock.Any(), int64(7)).
 		Return(&user_entity.User{ID: 7, Status: consts.ACTIVE}, nil).MinTimes(1)
 
-	middlewares := bearerMiddlewares(signer, device_svc.New(device_svc.Config{AccessTTL: time.Hour}, nil, nil))
+	middlewares := bearerMiddlewares(device_svc.New(device_svc.Config{AccessTTL: time.Hour}))
 	mini.Close()
 
 	for name, mw := range middlewares {

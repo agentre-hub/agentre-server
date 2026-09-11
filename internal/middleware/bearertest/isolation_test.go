@@ -17,7 +17,7 @@ var productionBinaries = []string{
 
 // TestBearertestNotLinkedIntoProductionBinary 断言 bearertest 不在任何生产二进制的依赖图里。
 //
-// 与 jwt/testkeys 同一个手段、同一个理由：不用 build tag，因为 tag 拦不住生产代码
+// 不用 build tag，因为 tag 拦不住生产代码
 // import 本包——而那正是这道后门真正进入二进制的路径。
 func TestBearertestNotLinkedIntoProductionBinary(t *testing.T) {
 	for _, target := range productionBinaries {

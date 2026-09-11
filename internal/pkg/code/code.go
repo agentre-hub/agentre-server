@@ -40,8 +40,6 @@ const (
 	DeviceRevoked       = 30301
 	RefreshTokenReplay  = 30302
 	RefreshTokenExpired = 30303
-	JWTSignatureInvalid = 30304
-	JWTBlacklisted      = 30305
 	DeviceListFailed    = 30306
 	// RefreshTokenInvalid：refresh_token 缺失、查不到，或已被并发的那一次轮换换掉。
 	// 与 RefreshTokenReplay 的区别是这里没有证据表明凭据泄露，因此不撤整条链。

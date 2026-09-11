@@ -20,8 +20,6 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/agent_session_svc"
@@ -93,24 +91,21 @@ func (s *stubWorkspaceSvc) AttentionCounts(
 
 var _ agent_session_svc.SessionReadSvc = (*stubWorkspaceSvc)(nil)
 
-func newMirrorTestServer(t *testing.T, stub *stubWorkspaceSvc) (*httptest.Server, *jwt.Signer) {
+func newMirrorTestServer(t *testing.T, stub *stubWorkspaceSvc) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	agent_session_svc.SetSessionRead(stub)
 	t.Cleanup(func() { agent_session_svc.SetSessionRead(agent_session_svc.New()) })
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
+		Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server, signer
+	return server
 }
 
 func newSessionCookie(t *testing.T, userID int64) *http.Cookie {
@@ -171,7 +166,7 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 			}},
 		}},
 	}}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/agent-sessions?axis=agent", cookie.Value)
@@ -226,7 +221,7 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 // 任何一样（夹取与合法性都在 service），因此这里盯的就是「一个都不能丢」。
 func TestSavedSessions_PassesEveryQueryParamThrough(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+
@@ -251,7 +246,7 @@ func TestSavedSessions_ScopedReadReturnsRowsAtTopLevel(t *testing.T) {
 			{PeerFingerprint: "fp-a", ConversationID: testConversationID},
 		},
 	}}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/agent-sessions?axis=machine&scope=machine%3Afp-a", cookie.Value)
@@ -277,7 +272,7 @@ func TestSavedSessions_ScopedReadReturnsRowsAtTopLevel(t *testing.T) {
 // 认不出来的轴 / 筛选值在绑定这一层就被拒，不会带着一个空轴走到 service。
 func TestSavedSessions_RejectsUnknownAxisAndFilter(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	for _, query := range []string{"?axis=banana", "?filter=banana"} {
@@ -289,7 +284,7 @@ func TestSavedSessions_RejectsUnknownAxisAndFilter(t *testing.T) {
 // 未登录请求（无 cookie、无 Bearer）被 SessionOrDeviceAuth 拒绝。
 func TestSavedSessions_UnauthenticatedRejected(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 
 	resp := get(t, server.URL+"/v1/agent-sessions", "")
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
@@ -304,7 +299,7 @@ func TestTranscript_PagesByCursor(t *testing.T) {
 		},
 		Cursor: 6, HasMore: true,
 	}}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+"&cursor=5&limit=1",
@@ -345,7 +340,7 @@ func TestTranscript_BackwardReadsTheTail(t *testing.T) {
 		},
 		Cursor: 12, OldestSeq: 10, HasBefore: true,
 	}}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+
@@ -373,7 +368,7 @@ func TestTranscript_BackwardReadsTheTail(t *testing.T) {
 // 一起把「没传 direction 的老调用方行为不变」钉住）。
 func TestTranscript_DefaultDirectionStaysForward(t *testing.T) {
 	stub := &stubWorkspaceSvc{page: agent_session_svc.TranscriptPage{Cursor: 5}}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+"&cursor=5",
@@ -388,7 +383,7 @@ func TestTranscript_DefaultDirectionStaysForward(t *testing.T) {
 // 是尾巴，其实拿的是开头。
 func TestTranscript_RejectsUnknownDirection(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID+
@@ -402,7 +397,7 @@ func TestTranscript_RejectsUnknownDirection(t *testing.T) {
 // 比一个 400 难查得多。
 func TestTranscript_RequiresACanonicalConversationID(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	for _, query := range []string{"", "?conversation_id=42", "?conversation_id=sess-9"} {
@@ -418,7 +413,7 @@ func TestTranscript_RequiresACanonicalConversationID(t *testing.T) {
 // 供客户端就地覆盖那一行（刚打开的那条当场就该不再是未读）。
 func TestMarkSessionRead_PassesIdentityThroughAndReturnsTheStampedTime(t *testing.T) {
 	stub := &stubWorkspaceSvc{markReadAt: 1_700_000_000_123}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/agent-sessions/read", cookie.Value, csrf,
@@ -437,7 +432,7 @@ func TestMarkSessionRead_PassesIdentityThroughAndReturnsTheStampedTime(t *testin
 // updated_at 相比。多传一个 last_read_at 也不会被采信。
 func TestMarkSessionRead_IgnoresAnyClientSuppliedTime(t *testing.T) {
 	stub := &stubWorkspaceSvc{markReadAt: 42}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/agent-sessions/read", cookie.Value, csrf,
@@ -455,7 +450,7 @@ func TestMarkSessionRead_IgnoresAnyClientSuppliedTime(t *testing.T) {
 // 「已读」不该静默成功。
 func TestMarkSessionRead_RejectsAnythingThatIsNotAConversationID(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	for _, body := range []string{
@@ -491,7 +486,7 @@ func TestAttentionCount_CountsForTheAuthenticatedAccountOnly(t *testing.T) {
 	stub := &stubWorkspaceSvc{
 		attentionCounts: agent_session_repo.AttentionCounts{NeedsAttention: 3, Unread: 5},
 	}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/agent-sessions/attention-count", nil)
 	require.NoError(t, err)
@@ -515,7 +510,7 @@ func TestAttentionCount_CountsForTheAuthenticatedAccountOnly(t *testing.T) {
 // 情形该做的事不同。
 func TestAttentionCount_ZeroIsAnAnswerNotAnOmission(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/agent-sessions/attention-count", nil)
 	require.NoError(t, err)
@@ -543,7 +538,7 @@ func TestTranscript_CarriesEachFramesCreatetime(t *testing.T) {
 		},
 		Cursor: 7,
 	}}
-	server, _ := newMirrorTestServer(t, stub)
+	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/agent-sessions/transcript?conversation_id="+testConversationID,

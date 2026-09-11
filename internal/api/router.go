@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"time"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/server/mux"
@@ -27,10 +26,9 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/sync_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/workspace_ctr"
 	"github.com/agentre-hub/agentre-server/internal/middleware"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
-	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
@@ -38,9 +36,8 @@ import (
 
 // RouterDeps 由 main.go 注入。
 type RouterDeps struct {
-	Cfg    *bootstrap.ServerConfig
-	Signer *jwt.Signer
-	Relay  relay_svc.RelaySvc
+	Cfg   *bootstrap.ServerConfig
+	Relay relay_svc.RelaySvc
 	// AccountChan 留给测试注入自己那份实时通道实现：两个副本要各带一份，
 	// 而 accountchan_svc.Default() 一个进程只有一个。为空时取默认单例。
 	// 它没有自己的端点，账号信号走中继客户端连接的保留通道（决策 13）。
@@ -52,7 +49,7 @@ type RouterDeps struct {
 	// 取 portforward_svc.Default()——它未装配时是 nil，意思是「这个部署没有端口
 	// 转发」，路由层据此答「此刻没有这条能力」，而不是去拨一个不存在的中继。
 	PortForward portforward_ctr.Forwarder
-	// Redis 是鉴权中间件要用的那台：jti 黑名单与中继票据的焚毁记号都从它派生。
+	// Redis 是鉴权中间件要用的那台：中继票据「只连一次」的认领记号从它派生。
 	// 留给测试注入自己那台；为空时取全局默认单例（与上面两项同一约定）。
 	Redis *goredis.Client
 	// Bearer 是鉴权中间件解析设备 access token 的那一个解析方。留给测试注入自己那份；
@@ -92,10 +89,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 
 	healthzCtr := healthz_ctr.NewHealthz()
 	authCtr := auth_ctr.NewAuth(r.Cfg.InsecureCookies)
-	publicKeys := r.Cfg.JWT.PublicKeySet()
-	deviceCtr := device_ctr.NewDeviceWithPublicKeys(publicKeys.CurrentKID, publicKeys.Keys,
-		int64(r.Cfg.JWT.AccessTTL/time.Second))
-	deviceCtr.SetSigner(r.Signer)
+	deviceCtr := device_ctr.NewDevice()
 	if r.MachineUpgrader != nil {
 		deviceCtr.SetMachineUpgrader(r.MachineUpgrader)
 	}
@@ -114,14 +108,15 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if bearer == nil {
 		bearer = device_svc.Default()
 	}
-	// 中继票据的黑名单与焚毁记号在这里各造一份，交给中继客户端入口。它们是本层唯一
-	// 认识「Redis 是哪一台」的地方——中间件自己只认拿到的那两个对象。
+	// 中继客户端入口认两种凭据：设备 access token 仍交给上面那个解析方，浏览器票据由
+	// auth_svc 从短效凭据存储解析。票据「只连一次」的认领记号在这里造一份——这是本层唯一
+	// 认识「Redis 是哪一台」的地方，中间件自己只认拿到的对象。
 	redisClient := r.Redis
 	if redisClient == nil {
 		redisClient = redis.Default()
 	}
-	blacklist := jwtblacklist.New(redisClient)
-	relayTickets := relayticket.New(redisClient)
+	relayBearer := auth_svc.NewCredentialResolver(bearer, auth_svc.Default())
+	relayTickets := credstore.New(redisClient)
 	// 账号信号没有自己的端点了（决策 13）：它跑在中继客户端连接的保留通道上，
 	// 因此在这里装配进 relay_ctr，而不是另挂一条路由。
 	relayCtr := relay_ctr.New(relaySvc, accountchan_ctr.New(accountChan))
@@ -139,7 +134,6 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 公开
 	g.Group("/").Bind(
 		healthzCtr.Healthz,
-		deviceCtr.PublicKey,
 	)
 
 	// GitHub OAuth 端点（各自按 IP 限流）
@@ -336,7 +330,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// access token；client 同时接受原生端设备 access token 与浏览器短效 relay ticket。
 	// 浏览器原生 WebSocket 无法设头，ticket 经 relayTokenBridge 从子协议搬入头部。
 	deviceJWT.GET("/v1/relay/daemon", relayCtr.Daemon)
-	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(bearer, r.Signer, blacklist, relayTickets))
+	tokenBridged := g.Group("/", relayTokenBridge(), middleware.RelayClientJWT(relayBearer, relayTickets))
 	// 这一条同时承载账号信号：普通通道跑 RPC，保留通道（relay_svc.SignalChannelID）
 	// 推 sync_version / mirror_changed / device_presence。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)

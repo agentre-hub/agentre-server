@@ -24,9 +24,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -175,7 +172,7 @@ func newHarness(t *testing.T, withPool bool) *harness {
 	auth_svc.SetDefault(auth_svc.New(redis.Default(),
 		session.New(redis.Default(), fwCookieName, 86400)))
 	// OwnedDevice 只走 device_repo，签名器与配置都用不上（与 http_golden_test 同）。
-	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil, jwtblacklist.New(redis.Default())))
+	device_svc.SetDefault(device_svc.New(device_svc.Config{}))
 
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
@@ -190,13 +187,10 @@ func newHarness(t *testing.T, withPool bool) *harness {
 		app:       app,
 	}
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	deps := &api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
-		Relay:  h.presence,
-		Redis:  redis.Default(),
+		Cfg:   &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
+		Relay: h.presence,
+		Redis: redis.Default(),
 	}
 	if withPool {
 		deps.PortForward = h.forwarder

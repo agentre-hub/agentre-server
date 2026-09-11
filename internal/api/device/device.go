@@ -2,17 +2,6 @@ package device
 
 import "github.com/cago-frame/cago/server/mux"
 
-type PublicKeyRequest struct {
-	mux.Meta `path:"/v1/keys" method:"GET"`
-}
-
-type PublicKeyResponse struct {
-	Version                 int               `json:"version"`
-	CurrentKID              string            `json:"current_kid"`
-	Keys                    map[string]string `json:"keys"`
-	MaxTokenLifetimeSeconds int64             `json:"max_token_lifetime_seconds"`
-}
-
 type DeviceAuthorizeRequest struct {
 	mux.Meta    `path:"/v1/oauth/device/authorize" method:"POST"`
 	DeviceKind  string `json:"device_kind"  binding:"required,oneof=desktop agentred mobile"`

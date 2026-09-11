@@ -16,7 +16,6 @@ import (
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
@@ -93,10 +92,10 @@ func (c Config) withDefaults() Config {
 // 在租约易主 / 机器下线 / 进程退出时干净地让位。**决定跟哪些机器不在这里**——扫出
 // 没人跟的机器是周期任务的事。
 type Supervisor struct {
-	cfg    Config
-	relay  RelayDialer
-	signer CredentialSigner
-	redis  *goredis.Client
+	cfg         Config
+	relay       RelayDialer
+	credentials CredentialIssuer
+	redis       *goredis.Client
 	// fingerprint 是本副本作为中继客户端的对端身份，一个进程一个，见 newClientFingerprint。
 	fingerprint string
 
@@ -112,11 +111,10 @@ type machineKey struct {
 }
 
 // NewSupervisor 造一个副本的常驻镜像。三个依赖都由装配处注入（DIP）：中继取
-// relay_svc.Default()、签名器取 bootstrap 里那把 jwt.Signer（它已经在给 device_svc
-// 与 device_ctr 用）、Redis 取 redis.Default()。
-func NewSupervisor(cfg Config, relay RelayDialer, signer CredentialSigner, rdb *goredis.Client) *Supervisor {
+// relay_svc.Default()、凭据取短效凭据存储（credstore.Store）、Redis 取 redis.Default()。
+func NewSupervisor(cfg Config, relay RelayDialer, credentials CredentialIssuer, rdb *goredis.Client) *Supervisor {
 	return &Supervisor{
-		cfg: cfg.withDefaults(), relay: relay, signer: signer, redis: rdb,
+		cfg: cfg.withDefaults(), relay: relay, credentials: credentials, redis: rdb,
 		fingerprint: newClientFingerprint(cfg.InstanceID),
 		followers:   map[machineKey]*follower{},
 	}
@@ -181,7 +179,7 @@ func (s *Supervisor) Follow(ctx context.Context, userID int64, fingerprint strin
 	return true, nil
 }
 
-// dial 建一条通往这台机器的中继客户端连接并完成账号握手：签一张短效凭据、出示本副本
+// dial 建一条通往这台机器的中继客户端连接并完成账号握手：取一张短效凭据、出示本副本
 // 的合成指纹。onNotify 收这条连接上的实时通知；只发一次请求的短连接传 nil。
 //
 // 机器不在线时交出 ErrMachineOffline：调用方（常驻的认领、一次性的删除传播）对这件事
@@ -209,14 +207,12 @@ func (s *Supervisor) dialWithTimeout(
 	if s.protocolMismatchActive(ctx, key) {
 		return nil, ErrProtocolVersionMismatch
 	}
-	// pfp 是这枚凭据说了算的**对端身份**（决策 8）：对端从已验签凭据里取它，
-	// AuthAccountRequest 已经没有可以自报身份的字段了。不签它，新版 agentred 会以
+	// 凭据记下的 pfp 是它说了算的**对端身份**（决策 8）：对端核验凭据时取它，
+	// AuthAccountRequest 已经没有可以自报身份的字段了。缺了它，agentred 会以
 	// ErrUnauthorized 拒掉这条常驻镜像连接——整条镜像链路当场断掉。
-	credential, _, err := s.signer.Sign(
-		jwt.Claims{UID: key.userID, Kind: relayClientKind, PFP: s.clientFingerprint()},
-		credentialTTL)
+	credential, err := s.credentials.IssueServerMirror(ctx, key.userID, s.clientFingerprint())
 	if err != nil {
-		return nil, fmt.Errorf("sign mirror relay credential: %w", err)
+		return nil, fmt.Errorf("issue mirror relay credential: %w", err)
 	}
 	if onNotify == nil {
 		onNotify = func(*agentrewire.RpcNotification) {}

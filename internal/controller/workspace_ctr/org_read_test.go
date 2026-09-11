@@ -37,7 +37,7 @@ func TestOrgChart_ServesDepartmentsAndAgentsForBrowserSession(t *testing.T) {
 			}},
 		}},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/org", cookie.Value)
@@ -123,7 +123,7 @@ func TestSelectableBackends_ServesTheBackendPickerAndIsReadOnly(t *testing.T) {
 		{SyncID: "backend-2", Name: "没写运行设备的那个", BackendType: "claude_code",
 			DeviceUnspecified: true, Availability: workspace_svc.AvailabilityNoDevice},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/org/backends", cookie.Value)
@@ -155,7 +155,7 @@ func TestSelectableBackends_ServesTheBackendPickerAndIsReadOnly(t *testing.T) {
 // 未登录读不到任何人的组织架构：读的范围与写的一样，只由鉴权上下文里的账号圈定。
 func TestOrgReads_RejectUnauthenticated(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 
 	for _, path := range []string{"/v1/workspace/org", "/v1/workspace/org/backends"} {
 		t.Run(path, func(t *testing.T) {

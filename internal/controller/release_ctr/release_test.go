@@ -16,8 +16,6 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/release_svc"
@@ -43,8 +41,6 @@ func serve(t *testing.T, svc release_svc.ReleaseSvc) (*httptest.Server, string, 
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 
 	release_svc.SetDefault(svc)
 	t.Cleanup(func() { release_svc.SetDefault(nil) })
@@ -52,8 +48,7 @@ func serve(t *testing.T, svc release_svc.ReleaseSvc) (*httptest.Server, string, 
 
 	tm := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
+		Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
 	}).Router(context.Background(), tm.Router))
 	server := httptest.NewServer(tm.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
