@@ -289,6 +289,19 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			return newOAuthErr(ErrInvalidGrant, "device_code already consumed")
 		}
 
+		// 撤销后原机重新配对：下面的 Upsert 会把同一行设备改回 active。撤销前签发的令牌行若还
+		// 留着，旧 access token 会随设备复活重新解析出身份，旧 refresh token 会被当成重放把新链
+		// 一起撤掉——先删掉它们，撤销才真正落在令牌上。
+		previous, err := device_repo.Device().FindByFingerprint(txCtx, flow.AuthorizedUserID, flow.ClientFingerprint)
+		if err != nil {
+			return err
+		}
+		if previous != nil && !previous.IsActive() {
+			if err := device_token_repo.DeviceToken().DeleteByDevice(txCtx, previous.ID); err != nil {
+				return err
+			}
+		}
+
 		d := &device_entity.Device{
 			UserID:      flow.AuthorizedUserID,
 			Name:        device_entity.DisplayName(flow.ClientName, flow.ClientFingerprint),

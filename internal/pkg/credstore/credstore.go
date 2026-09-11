@@ -105,7 +105,15 @@ func (s *Store) Resolve(ctx context.Context, token string) (*Credential, error) 
 	if token == "" {
 		return nil, ErrNotFound
 	}
-	return s.Lookup(ctx, digest(token))
+	c, err := s.Lookup(ctx, digest(token))
+	if err != nil {
+		return nil, err
+	}
+	// Redis 键比 ExpiresAt 多活一个写入往返：键还在、有效期已过同样是过期。
+	if c.ExpiresAt <= time.Now().UnixMilli() {
+		return nil, ErrNotFound
+	}
+	return c, nil
 }
 
 // Lookup 按句柄取凭据记录，供已经建好的长连接复查自己背后的那张凭据。

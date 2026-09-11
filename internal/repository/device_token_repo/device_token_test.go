@@ -25,6 +25,20 @@ func TestRevokeChain(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDeleteByDevice(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDeviceToken()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `device_tokens` WHERE device_id=?")).
+		WithArgs(int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.DeleteByDevice(ctx, 42))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestRevoke_RequiresUnrevokedRow(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceToken()

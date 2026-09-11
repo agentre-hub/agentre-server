@@ -215,6 +215,7 @@ func TestExchangeToken(t *testing.T) {
 				}, nil,
 			)
 			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
+			mD.EXPECT().FindByFingerprint(gomock.Any(), int64(42), "fp-xxxxxxx").Return(nil, nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
 					assert.Equal(t, "agentred", d.Kind)
@@ -257,6 +258,7 @@ func TestExchangeToken(t *testing.T) {
 			)
 			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			var name string
+			mD.EXPECT().FindByFingerprint(gomock.Any(), int64(42), gomock.Any()).Return(nil, nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
 					name = d.Name
@@ -306,6 +308,50 @@ func TestExchangeToken(t *testing.T) {
 			assert.Contains(t, err.Error(), ErrInvalidGrant)
 			// 回滚落到数据库上：设备行与 token 行都不留下
 			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	})
+}
+
+// 撤销后原机重新配对：ON DUPLICATE KEY 把同一行设备改回 active。撤销前签发的令牌行若还留着，
+// 旧 access token 会随设备复活重新解析出身份，旧 refresh token 会被当成重放把新链一起撤掉——
+// 所以重新激活一台已撤销的设备时，先删掉它名下撤销前的令牌行。
+func TestExchangeToken_ReactivatingARevokedDevice_DropsItsPreRevocationTokens(t *testing.T) {
+	authorizedFlow := func() *device_flow_entity.DeviceFlowCode {
+		return &device_flow_entity.DeviceFlowCode{
+			DeviceCode: "dc-x", IntervalSeconds: 5,
+			ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+			AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+			DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
+		}
+	}
+	exchange := func(t *testing.T, previous *device_entity.Device, deletes int) {
+		ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+		mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(authorizedFlow(), nil)
+		mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
+		mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+		find := mD.EXPECT().FindByFingerprint(gomock.Any(), int64(42), "fp-xxxxxxx").Return(previous, nil)
+		deleted := mT.EXPECT().DeleteByDevice(gomock.Any(), int64(7)).Return(nil).Times(deletes)
+		upsert := mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil })
+		gomock.InOrder(find, deleted, upsert)
+		mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		mock.ExpectBegin()
+		mock.ExpectCommit()
+
+		out, err := svc.ExchangeToken(ctx, "dc-x")
+		require.NoError(t, err)
+		assert.Equal(t, int64(7), out.DeviceID)
+	}
+
+	convey.Convey("ExchangeToken for a fingerprint", t, func() {
+		convey.Convey("whose device row was revoked: its token rows are deleted before the device is reactivated", func() {
+			exchange(t, &device_entity.Device{ID: 7, UserID: 42, Fingerprint: "fp-xxxxxxx", Status: consts.DELETE}, 1)
+		})
+		convey.Convey("whose device is still active: its token rows are kept", func() {
+			exchange(t, &device_entity.Device{ID: 7, UserID: 42, Fingerprint: "fp-xxxxxxx", Status: consts.ACTIVE}, 0)
+		})
+		convey.Convey("seen for the first time: nothing to delete", func() {
+			exchange(t, nil, 0)
 		})
 	})
 }
@@ -377,6 +423,7 @@ func TestExchangeToken_IssuesOpaqueAccessTokenStoredOnlyAsDigest(t *testing.T) {
 	)
 	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+	mD.EXPECT().FindByFingerprint(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 42; return nil })
 	var stored *device_token_entity.DeviceToken
@@ -1055,6 +1102,7 @@ func TestExchangeToken_GivenADevice_ThenTheAccessTokenResolvesToTheDeviceFingerp
 	)
 	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	var upserted device_entity.Device
+	mD.EXPECT().FindByFingerprint(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; upserted = *d; return nil },
 	)
@@ -1229,6 +1277,7 @@ func TestExchangeToken_SignalsThatTheDeviceRowNowExists(t *testing.T) {
 	)
 	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+	mD.EXPECT().FindByFingerprint(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
 	)

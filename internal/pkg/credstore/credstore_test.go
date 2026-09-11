@@ -1,6 +1,7 @@
 package credstore_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,36 @@ func TestResolve_RepeatableUntilExpiry(t *testing.T) {
 	_, err = store.Lookup(ctx, first.Handle)
 	assert.ErrorIs(t, err, credstore.ErrNotFound)
 	assert.Empty(t, mini.Keys(), "凭据过期后 Redis 里什么都不剩")
+}
+
+// Redis 键比记录里的 ExpiresAt 多活一个写入往返：键还在、有效期已过的凭据同样是过期，
+// 否则核验会把它当有效答出去（剩余 0 秒）。
+func TestResolve_RecordPastItsExpiryIsNotFound(t *testing.T) {
+	store, mini := newStore(t)
+	ctx := t.Context()
+
+	token, err := store.IssueRelayClient(ctx, 7, "sid-a")
+	require.NoError(t, err)
+	var recordKey string
+	for _, key := range mini.Keys() {
+		if strings.HasPrefix(key, "credential:") {
+			recordKey = key
+		}
+	}
+	require.NotEmpty(t, recordKey)
+	raw, err := mini.Get(recordKey)
+	require.NoError(t, err)
+	var record map[string]any
+	require.NoError(t, json.Unmarshal([]byte(raw), &record))
+	record["expires_at"] = time.Now().Add(-time.Millisecond).UnixMilli()
+	patched, err := json.Marshal(record)
+	require.NoError(t, err)
+	ttl := mini.TTL(recordKey)
+	require.NoError(t, mini.Set(recordKey, string(patched)))
+	mini.SetTTL(recordKey, ttl)
+
+	_, err = store.Resolve(ctx, token)
+	assert.ErrorIs(t, err, credstore.ErrNotFound)
 }
 
 // S3：连接中继的认领只成功一次，逐凭据独立。

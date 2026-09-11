@@ -131,6 +131,21 @@ func TestIntrospect_DeviceToken_SameAccount_ReturnsIdentity(t *testing.T) {
 	assert.InDelta(t, 3600, envelope.Data.ExpiresIn, 5)
 }
 
+// 剩余不足一秒的有效令牌答 expires_in=1 而不是 0：接收方把 0 读作「没说剩多久」，会按
+// 整 60 秒缓存这次核验，让一枚马上过期的凭据多活一分钟。
+func TestIntrospect_ValidTokenWithUnderASecondLeft_ReportsOneSecondNotZero(t *testing.T) {
+	server := newIntrospectServer(t, 100)
+	caller := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 1, Kind: "desktop", PeerFingerprint: "caller-pfp", Handle: "1"})
+	target := bearertest.Issue(device_svc.Principal{
+		AccountID: 7, DeviceID: 2, Kind: "agentred", PeerFingerprint: "peer-pfp",
+		ExpiresAt: time.Now().Add(800 * time.Millisecond).UnixMilli(), Handle: "2",
+	})
+
+	resp := introspect(t, server, caller, target)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, int64(1), decodeIntrospect(t, resp).Data.ExpiresIn)
+}
+
 // S5 同账号：中继票据（浏览器 relay_client）核验出 device_id=0、kind=relay_client。
 func TestIntrospect_RelayTicket_SameAccount_ReturnsIdentity(t *testing.T) {
 	server := newIntrospectServer(t, 100)

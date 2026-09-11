@@ -64,13 +64,13 @@ func (h *Credentials) Introspect(c *gin.Context, req *api.IntrospectRequest) (*a
 	}
 }
 
-// remainingSeconds 把毫秒时间戳折成「从现在起还有多少整秒」，钳在 0 以下不出现负数
-// ——resolver 已经把过期的令牌判成 ErrBearerInvalid，这里的负值只可能来自极小的
-// 计算窗口本身。
+// remainingSeconds 把毫秒时间戳折成「从现在起还剩多少秒」，不足一秒向上取整：有效期内的
+// 凭据至少答 1——接收方把 0 读作「没说剩多久」而按整段缓存。resolver 已经把到期的凭据判成
+// ErrBearerInvalid，钳在 0 只防计算窗口本身。
 func remainingSeconds(expiresAtMs int64) int64 {
-	remaining := (expiresAtMs - time.Now().UnixMilli()) / 1000
-	if remaining < 0 {
+	remaining := expiresAtMs - time.Now().UnixMilli()
+	if remaining <= 0 {
 		return 0
 	}
-	return remaining
+	return (remaining + 999) / 1000
 }

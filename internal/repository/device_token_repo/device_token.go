@@ -20,6 +20,8 @@ type DeviceTokenRepo interface {
 	// Revoke 返回受影响行数，由 service 判读竞态结果。
 	Revoke(ctx context.Context, id, nowMs int64) (int64, error)
 	RevokeChain(ctx context.Context, deviceID, nowMs int64) error
+	// DeleteByDevice 删掉一台设备名下的全部令牌行。
+	DeleteByDevice(ctx context.Context, deviceID int64) error
 	DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error
 }
 
@@ -59,6 +61,12 @@ func (r *repo) RevokeChain(ctx context.Context, deviceID, nowMs int64) error {
 	return db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).
 		Where("device_id=? AND revoked_at=0", deviceID).
 		Update("revoked_at", nowMs).Error
+}
+
+// DeleteByDevice 删掉一台设备名下的全部令牌行：重新激活一台已撤销的设备时，撤销前签发的
+// access / refresh token 不得随设备复活。一台设备的行数只是它自己的轮换链，不必分批。
+func (r *repo) DeleteByDevice(ctx context.Context, deviceID int64) error {
+	return db.Ctx(ctx).Where("device_id=?", deviceID).Delete(&device_token_entity.DeviceToken{}).Error
 }
 
 // cleanupBatchSize 是清理 DELETE 每一批的行数上限。这张表增长很快——access TTL
