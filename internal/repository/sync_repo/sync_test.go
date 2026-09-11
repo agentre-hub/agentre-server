@@ -12,43 +12,28 @@ import (
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
-// 推进序列必须是一条语句：多副本并发上行时，先读后写会双双读到同一个值，
-// 两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
+// 账号已经分配过版本（稳态的每一次取号）：推进走一条只按 user_id 定位的普通 UPDATE，
+// 不发 INSERT … ON DUPLICATE KEY UPDATE。
 //
-// 取回分配到的值走的是同一事务里的一条 SELECT，而**不是** LAST_INSERT_ID()。
-// sync_account_seqs 有了 AUTO_INCREMENT 的 id 之后那条路就断了：一次真的插入了行的
-// INSERT 会把自增值写进同一个连接级变量，把 LAST_INSERT_ID(expr) 存进去的版本号顶掉，
-// 于是每个账号**第一次**分配拿回的是 id 而不是版本号（在 MySQL 9.7 上实测：期望 5、
-// 实得 1）。落库的 version_seq 一直是对的，错的只有交回调用方的那个数——所以它不会
-// 在库里留下痕迹，只会让那一批对象带着一个偏小的版本号发出去。
-func TestNextVersion_GivenConcurrentReplicas_ThenSingleAtomicStatement(t *testing.T) {
+// 两者在「推进是一条语句、由数据库原子完成」上等价，差别在锁的范围。MySQL 9.7 实测
+// （.dev-kit/artifacts/db-perf-fixes/nextversion-lock/）：upsert 命中已有行时还会在
+// 主键的 supremum 伪记录上持一把 X 锁到提交，别的账号的取号于是排在它后面等到超时——
+// 一个账号的长 Push 事务串行化了全站。普通 UPDATE 只锁这一行，同账号仍然串行，
+// 他账号不受影响。
+//
+// 取回分配到的值走的是同一事务里的一条 SELECT，而**不是** LAST_INSERT_ID()：
+// sync_account_seqs 有 AUTO_INCREMENT 的 id，一次真的插入了行的 INSERT 会把自增值写进
+// 同一个连接级变量，把 LAST_INSERT_ID(expr) 存进去的版本号顶掉（MySQL 9.7 实测：期望 5、
+// 实得 1）。
+func TestNextVersion_GivenExistingSeqRow_ThenPlainUpdateWithoutUpsert(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncState()
 
 	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs`)).WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
-		WithArgs(int64(7)).
-		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(42)))
-	mock.ExpectCommit()
-
-	v, err := r.NextVersion(ctx, 7, 1)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(42), v)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-// 取号不得再经过 LAST_INSERT_ID：那是个连接级变量，任何一次生成自增值的写都会顶掉它。
-// 这里钉的是「读回走的是 version_seq 列本身」，而不只是「拿到了一个数」——两者在断言
-// 措辞上分不出来，但只有前者在新账号第一次分配时也是对的。
-func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
-	ctx, _, mock := hubtest.Database(t)
-	r := NewSyncState()
-
-	mock.ExpectBegin()
-	mock.ExpectExec(regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE`)).
-		WithArgs(int64(7), int64(3), sqlmock.AnyArg(), int64(3), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 2))
+	mock.ExpectExec(regexp.QuoteMeta(
+		`UPDATE sync_account_seqs SET version_seq = version_seq + ?, updatetime = ? WHERE user_id = ?`)).
+		WithArgs(int64(3), sqlmock.AnyArg(), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
 		WithArgs(int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(45)))
@@ -57,6 +42,48 @@ func TestNextVersion_GivenBatch_ThenTakesNAtOnce(t *testing.T) {
 	v, err := r.NextVersion(ctx, 7, 3)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(45), v)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 账号第一次取号时那一行还不存在，UPDATE 命中 0 行：这时才落回
+// INSERT … ON DUPLICATE KEY UPDATE。不能是普通 INSERT——同一账号的两次首次取号并发时，
+// 两边的 UPDATE 都命中 0 行，后到的那条 INSERT 必须由 ON DUPLICATE 分支接住、在对方
+// 提交之后推进同一行，而不是撞唯一键失败。
+func TestNextVersion_GivenFirstAllocation_ThenFallsBackToUpsertAndReadsTheColumnBack(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE sync_account_seqs SET`)).
+		WithArgs(int64(3), sqlmock.AnyArg(), int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime)`)+
+		`.*`+regexp.QuoteMeta(`ON DUPLICATE KEY UPDATE version_seq = version_seq + ?, updatetime = ?`)).
+		WithArgs(int64(7), int64(3), sqlmock.AnyArg(), int64(3), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT version_seq FROM sync_account_seqs WHERE user_id = ?`)).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(3)))
+	mock.ExpectCommit()
+
+	v, err := r.NextVersion(ctx, 7, 3)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), v, "首次分配交回的是 version_seq 本身，不是自增 id")
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 推进本身失败要如实上抛，不能当成「命中 0 行」掉进 INSERT 分支——那会把一次数据库
+// 错误变成一次多余的写入尝试。
+func TestNextVersion_GivenUpdateFails_ThenRollsBackWithoutInsert(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE sync_account_seqs SET`)).WillReturnError(assert.AnError)
+	mock.ExpectRollback()
+
+	_, err := r.NextVersion(ctx, 7, 1)
+	assert.ErrorIs(t, err, assert.AnError)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

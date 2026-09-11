@@ -555,33 +555,56 @@ func (s *syncSvc) PurgeDeviceSyncObjects(ctx context.Context, userID int64, fing
 	if fingerprint == "" {
 		return nil
 	}
-	rows, err := sync_repo.SyncObject().ListLiveByFingerprint(ctx, userID, fingerprint, deviceScopedKinds)
+	now := s.now()
+	candidates, tombstoned := 0, 0
+	var lastVersion int64
+	// 整批墓碑在一个事务里落库，版本号在事务里一次取完——与 Push 同一个理由。
+	//
+	// 取号在事务**里**是为了顺序：sync_account_seqs 上该账号那一行的排他锁持到提交，
+	// 「取号顺序 == 提交顺序」才成立。逐行取号而不开事务时，锁在落墓碑之前就放掉了，
+	// 并发的一次 Push 可以在两块墓碑之间取到更大的号并先提交，设备把游标推过去，这块
+	// 墓碑随后提交的较小版本对它永远不再投递。一个事务同时保证任一步失败都不留下半批
+	// 墓碑。一次取完则是为了往返次数：N 行只取一次号，而不是 N 个嵌套事务。
+	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := db.WithContextDB(ctx, tx)
+		rows, err := sync_repo.SyncObject().ListLiveByFingerprint(txCtx, userID, fingerprint, deviceScopedKinds)
+		if err != nil {
+			return err
+		}
+		candidates = len(rows)
+		if len(rows) == 0 {
+			return nil
+		}
+		// 墓碑要像一次普通的写入那样各占一个版本号，下行才按序到达：[last-n+1, last]
+		// 按行序发放。
+		versions, err := newVersionBlock(txCtx, userID, int64(len(rows)))
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			version, err := versions.take(txCtx, userID)
+			if err != nil {
+				return err
+			}
+			n, err := sync_repo.SyncObject().Tombstone(txCtx, row.ID, version, now)
+			if err != nil {
+				return err
+			}
+			// n == 0：并发的一次上行已经把它删掉了，这一行没什么可做的，它的号只是空号。
+			tombstoned += int(n)
+		}
+		lastVersion = versions.last
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if len(rows) == 0 {
+	if candidates == 0 {
 		return nil
-	}
-	now := s.now()
-	tombstoned := 0
-	var lastVersion int64
-	for _, row := range rows {
-		// 逐行取版本：墓碑要像一次普通的写入那样各占一个版本号，下行才按序到达。
-		version, err := sync_repo.SyncState().NextVersion(ctx, userID, 1)
-		if err != nil {
-			return err
-		}
-		lastVersion = version
-		n, err := sync_repo.SyncObject().Tombstone(ctx, row.ID, version, now)
-		if err != nil {
-			return err
-		}
-		// n == 0：并发的一次上行已经把它删掉了，这一行没什么可做的。
-		tombstoned += int(n)
 	}
 
 	logger.Ctx(ctx).Info("sync_svc.PurgeDeviceSyncObjects: tombstoned rows scoped to a departing device",
-		zap.Int64("userId", userID), zap.Int("candidateCount", len(rows)),
+		zap.Int64("userId", userID), zap.Int("candidateCount", candidates),
 		zap.Int("tombstoneCount", tombstoned))
 	accountchan_svc.BroadcastBestEffort(ctx, userID, lastVersion)
 	return nil

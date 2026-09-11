@@ -41,9 +41,15 @@ type stubAccountChan struct {
 	mu    sync.Mutex
 	err   error
 	calls []accountChanCall
+	// onBroadcast（可空）在每次广播发出的那一刻被调用：自己开事务的写路径据此记下
+	// 广播时的事务时序，断言「广播发生在提交之后」。
+	onBroadcast func()
 }
 
 func (s *stubAccountChan) Broadcast(_ context.Context, accountID int64, frame accountchan_svc.Frame) error {
+	if s.onBroadcast != nil {
+		s.onBroadcast()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, accountChanCall{accountID: accountID, version: frame.Version})
@@ -122,6 +128,17 @@ func setupSyncTest(t *testing.T) (context.Context, *syncMocks, *syncSvc) {
 	svc := newSyncSvc()
 	svc.now = func() int64 { return testNow }
 	return ctx, m, svc
+}
+
+// setupSyncTxTest 与 setupSyncTest 是同一套仓储 mock，只把 ctx 换成 hubtest.TxDatabase，
+// 并交回事务事件记录。PurgeDeviceSyncObjects 自己开事务，它要断言的正是事务边界本身
+// ——「取号与落墓碑在同一个 BEGIN…COMMIT 里」「失败时整批回滚」——那是 TxLog 这份
+// 时序才说得清的事。
+func setupSyncTxTest(t *testing.T) (context.Context, *hubtest.TxLog, *syncMocks, *syncSvc) {
+	t.Helper()
+	_, m, svc := setupSyncTest(t)
+	ctx, txLog := hubtest.TxDatabase(t)
+	return ctx, txLog, m, svc
 }
 
 // expectTx 给 Push 外层的事务备好 Begin/Commit。
@@ -1135,14 +1152,12 @@ func expectListByKinds(m *syncMocks, rows []*sync_entity.SyncObject) {
 // 一旦编辑它，就会被当成新对象重新推上来复活，直接违反 R6。
 func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenTombstonesOnlyThatDevicesCLIOverlaysAndLocations(t *testing.T) {
 	convey.Convey("设备离开账号时，该指纹的 CLI 覆盖与项目路径落墓碑", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 		expectListByKinds(m, deviceScopedFixture())
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 
 		type stone struct{ id, version int64 }
 		var stones []stone
@@ -1165,15 +1180,13 @@ func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenTombstonesOnlyThatDevicesCL
 // 才知道该设备的 CLI 覆盖与项目路径已删除。
 func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenBroadcastsHighestVersion(t *testing.T) {
 	convey.Convey("落墓碑后广播这一次操作烧到的最高版本", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 		expectListByKinds(m, deviceScopedFixture())
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
@@ -1198,7 +1211,7 @@ func TestPurgeDeviceSyncObjects_GivenEmptyFingerprint_ThenTouchesNothing(t *test
 // （序列同时是下行游标，白白跳号会让每一台桌面端多拉一个空页）。
 func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoVersionIsBurned(t *testing.T) {
 	convey.Convey("没有属于这台设备的行时不分配版本号", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, "sha256:never-seen"))
@@ -1221,14 +1234,12 @@ func accountIdentityFixture() []*sync_entity.SyncObject {
 // 设备撤销仍只能删除该设备的 CLI 覆盖与项目路径，不能级联到账号身份。
 func TestPurgeDeviceSyncObjects_GivenAccountBackendAndExecTarget_ThenLeavesThemAlive(t *testing.T) {
 	convey.Convey("账号级 backend 身份与执行目标不随设备撤销而落墓碑", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		expectListLiveByFingerprint(m, accountIdentityFixture())
 		// ListByKinds 没有 EXPECT：设备撤销不扫描账号级 backend 或执行目标。
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 
 		type stone struct{ id, version int64 }
 		var stones []stone
@@ -1250,15 +1261,13 @@ func TestPurgeDeviceSyncObjects_GivenAccountBackendAndExecTarget_ThenLeavesThemA
 // 落墓碑是「谁发信号」三处之一：广播必须取这批设备局部对象烧到的最高版本。
 func TestPurgeDeviceSyncObjects_GivenAccountBackendsAndExecTargets_ThenBroadcastsDeviceScopedHighestVersion(t *testing.T) {
 	convey.Convey("只为设备局部对象的墓碑广播最高版本", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		expectListLiveByFingerprint(m, accountIdentityFixture())
 		// ListByKinds 没有 EXPECT：广播只覆盖本次设备局部对象的版本。
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
@@ -1282,7 +1291,7 @@ func TestPurgeDeviceSyncObjects_GivenEmptyFingerprint_ThenNoBroadcast(t *testing
 // 这台设备名下没有账号级对象时不烧版本号，也就没有信号可发。
 func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoBroadcast(t *testing.T) {
 	convey.Convey("没有属于这台设备的行时不广播", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 
@@ -1294,16 +1303,14 @@ func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoBroadcast(t 
 // 广播失败只记录、不回滚已经落库的墓碑——写入的权威性在数据库，不在通道。
 func TestPurgeDeviceSyncObjects_GivenBroadcastFails_ThenPurgeStillSucceeds(t *testing.T) {
 	convey.Convey("广播失败不影响已经落库的墓碑", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		stub.err = errors.New("redis unreachable")
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 		expectListByKinds(m, deviceScopedFixture())
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
@@ -1314,7 +1321,7 @@ func TestPurgeDeviceSyncObjects_GivenBroadcastFails_ThenPurgeStillSucceeds(t *te
 // CLI 覆盖的墓碑会把整个账号的执行目标列表误删。
 func TestPurgeDeviceSyncObjects_GivenExecTargetsReferencingLiveBackends_ThenNoneAreSweptAlong(t *testing.T) {
 	convey.Convey("执行目标引用的是别的、仍然活着的 backend 时不许被带走", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		rows := append(deviceScopedFixture(),
 			execTargetRow(9, "t2", "a1", "b2"),
 			execTargetRow(10, "t3", "a1", "b3"),
@@ -1324,10 +1331,8 @@ func TestPurgeDeviceSyncObjects_GivenExecTargetsReferencingLiveBackends_ThenNone
 		expectListLiveByFingerprint(m, rows)
 		expectListByKinds(m, rows)
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 
 		type stone struct{ id, version int64 }
 		var stones []stone
@@ -1348,7 +1353,7 @@ func TestPurgeDeviceSyncObjects_GivenExecTargetsReferencingLiveBackends_ThenNone
 // 全账号对象的读取与连带删除。
 func TestPurgeDeviceSyncObjects_GivenOnlyLocationsScoped_ThenNoExecTargetLookupHappens(t *testing.T) {
 	convey.Convey("只有项目路径落墓碑时不查执行目标", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		rows := []*sync_entity.SyncObject{
 			{ID: 4, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "l1",
 				AgentredFingerprint: testFingerprint, Version: 11},
@@ -1361,6 +1366,79 @@ func TestPurgeDeviceSyncObjects_GivenOnlyLocationsScoped_ThenNoExecTargetLookupH
 		m.object.EXPECT().Tombstone(gomock.Any(), int64(4), int64(101), testNow).Return(int64(1), nil)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+	})
+}
+
+// 要求 2：撤销一台设备时，所有墓碑在**一个**事务里落库，版本号一次取完、连续递增，
+// 账号广播在提交之后发出。
+//
+// 逐行「取一个号、落一块墓碑」而不开事务时，每次取号的行锁在落墓碑之前就放掉了：并发
+// 的一次 Push 可以在两块墓碑之间取到更大的号并先提交，设备把游标推过去，这块墓碑随后
+// 提交的较小版本对它永远不再投递——被撤销机器的路径就留在别的桌面端上。取号收进落墓碑
+// 的事务里，「取号顺序 == 提交顺序」才成立；一次取 N 个则把 N 次取号（每次一个嵌套事务
+// 加两条语句）压成一次。
+func TestPurgeDeviceSyncObjects_GivenThreeScopedRows_ThenOneAllocationAndAllTombstonesInOneTransaction(t *testing.T) {
+	convey.Convey("三行落墓碑：一次取三个号、同一个事务、提交后广播最高版本", t, func() {
+		ctx, txLog, m, svc := setupSyncTxTest(t)
+		stub := registerAccountChanStub(t)
+		rows := append(deviceScopedFixture(), &sync_entity.SyncObject{
+			ID: 8, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "l2",
+			AgentredFingerprint: testFingerprint, Version: 15,
+		})
+		expectListLiveByFingerprint(m, rows)
+
+		var steps []string
+		record := func(ctx context.Context, step string) {
+			steps = append(steps, fmt.Sprintf("%s inTx=%t %v", step, hubtest.InTransaction(ctx), txLog.Events()))
+		}
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(3)).DoAndReturn(
+			func(ctx context.Context, _, _ int64) (int64, error) {
+				record(ctx, "NextVersion")
+				return 102, nil
+			})
+		type stone struct{ id, version int64 }
+		var stones []stone
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).DoAndReturn(
+			func(ctx context.Context, id, version, _ int64) (int64, error) {
+				record(ctx, "Tombstone")
+				stones = append(stones, stone{id, version})
+				return 1, nil
+			}).Times(3)
+		stub.onBroadcast = func() { steps = append(steps, fmt.Sprintf("Broadcast %v", txLog.Events())) }
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+
+		// 三个号是 [100, 102]，按行序发放。
+		assert.Equal(t, []stone{{4, 100}, {7, 101}, {8, 102}}, stones)
+		assert.Equal(t, []string{
+			"NextVersion inTx=true [BEGIN]",
+			"Tombstone inTx=true [BEGIN]",
+			"Tombstone inTx=true [BEGIN]",
+			"Tombstone inTx=true [BEGIN]",
+			"Broadcast [BEGIN COMMIT]",
+		}, steps)
+		assert.Equal(t, []accountChanCall{{accountID: testUserID, version: 102}}, stub.recordedCalls())
+	})
+}
+
+// 要求 2 的另一半：任一步失败都不留下部分墓碑——已经落下的那几块随事务一起回滚，
+// 错误如实上抛，也不广播（没有提交就没有可拉的变更）。
+func TestPurgeDeviceSyncObjects_GivenTombstoneFails_ThenWholeBatchRollsBackWithoutBroadcast(t *testing.T) {
+	convey.Convey("第二块墓碑落库失败时整批回滚、不广播", t, func() {
+		ctx, txLog, m, svc := setupSyncTxTest(t)
+		stub := registerAccountChanStub(t)
+		expectListLiveByFingerprint(m, deviceScopedFixture())
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
+		gomock.InOrder(
+			m.object.EXPECT().Tombstone(gomock.Any(), int64(4), int64(101), testNow).Return(int64(1), nil),
+			m.object.EXPECT().Tombstone(gomock.Any(), int64(7), int64(102), testNow).Return(int64(0), assert.AnError),
+		)
+
+		err := svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint)
+
+		assert.ErrorIs(t, err, assert.AnError)
+		assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
+		assert.Empty(t, stub.recordedCalls())
 	})
 }
 

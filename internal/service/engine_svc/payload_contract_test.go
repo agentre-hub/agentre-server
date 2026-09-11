@@ -13,6 +13,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo/mock_sync_repo"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // 这一组把「控制台写出去的字节 == 共享契约自己的编码」钉住。
@@ -48,7 +49,8 @@ func TestCreateBackend_ThenWritesExactlyTheSharedContractEncoding(t *testing.T) 
 		return nil
 	})
 
-	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().CreateBackend(ctx, BackendWriteInput{
 		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claudecode"),
 		DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
@@ -93,7 +95,8 @@ func TestUpdateBackend_GivenDesktopWrittenPayload_ThenEveryContractKeySurvivesTh
 		return nil
 	})
 
-	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateBackend(ctx, BackendWriteInput{
 		UserID: 7, SyncID: "backend-1", Name: stringPtr("Claude Code 2"),
 		DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
@@ -133,7 +136,8 @@ func TestUpdateProvider_ThenWritesExactlyTheSharedContractEncoding(t *testing.T)
 		return nil
 	})
 
-	got, err := New().UpdateProvider(context.Background(), ProviderWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().UpdateProvider(ctx, ProviderWriteInput{
 		UserID: 7, ProviderKey: "anthropic-main", Name: stringPtr("Anthropic 主号"),
 	})
 
@@ -168,7 +172,8 @@ func TestCreateProvider_GivenModelsFromBrowser_ThenCarriesTheLimitsIntoTheContra
 		return nil
 	})
 
-	_, err := New().CreateProvider(context.Background(), ProviderWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().CreateProvider(ctx, ProviderWriteInput{
 		UserID: 7, Name: stringPtr("Anthropic"), Type: stringPtr("anthropic"),
 		BaseURL: stringPtr("https://api.anthropic.com"), APIKey: stringPtr("sk-secret"),
 		Models: &[]Model{
@@ -207,7 +212,8 @@ func TestCreateBackend_GivenCLIPath_ThenTheOverlayIsTheSharedContractEncoding(t 
 		return nil
 	}).Times(2)
 
-	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().CreateBackend(ctx, BackendWriteInput{
 		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claudecode"),
 		DeviceFingerprint: stringPtr("sha256:aaaa"), CLIPath: stringPtr("/usr/local/bin/claude"),
 	})

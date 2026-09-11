@@ -280,10 +280,13 @@ MySQL fires it on whichever unique key the row collided with, and does not tell 
 single unique key, so the clause means what it reads like. `sync_objects` has two
 (`uk_sync_objects_identity` and `uk_sync_objects_natural`), and there the clause would quietly rewrite *another account
 row's* content under its own `sync_id`. `sync_repo.Save`
-therefore splits into a version-guarded `UPDATE` plus a plain `INSERT`, and discriminates the
-resulting `1062` by index name via `internal/pkg/dberr.IsDuplicateKey` — an identity
-collision is a lost version race and is swallowed, a location collision is the R4b backstop
-and must surface. Before adding an upsert, count the table's unique keys.
+therefore splits into a version-guarded `UPDATE` plus a plain `INSERT` with no
+`ON DUPLICATE KEY UPDATE`, and returns whatever `1062` that `INSERT` raises instead of
+swallowing it. A location collision (`uk_sync_objects_natural`) is the R4b backstop. An
+identity collision (`uk_sync_objects_identity`) means the stored row's version is not below
+this write's, which cannot happen while version allocation and the write share one
+transaction — so it signals a broken invariant, and swallowing it would report success for a
+row that never landed. Before adding an upsert, count the table's unique keys.
 
 Inside a transaction, put the conditional `UPDATE` **first**, before any write that depends
 on winning: `ExchangeToken` marks the flow consumed before it touches `devices`, and
