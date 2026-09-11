@@ -272,9 +272,9 @@ func TestPullActivityRollups_OneMachineFails_TheOthersStillRun(t *testing.T) {
 	}, rig.puller.pulled())
 }
 
-// Given 设备清单现在是按这一整批账号一次查询；When 那一条查询本身失败；
+// Given 设备清单现在是按这一整批账号一次批量读取；When 那次读取本身失败；
 // Then 整轮直接失败、一台机器都不拨——批量之后不再有「这个账号的名单单独读不出来，
-// 其他账号照跑」这件事：查询是原子的一条 SQL，失败就是这一批整体失败。
+// 其他账号照跑」这件事：任一块查询失败，这一批就整体读不出来。
 func TestPullActivityRollups_DeviceBatchQueryFails_RoundFailsAndDialsNothing(t *testing.T) {
 	rig := newActivityRig(t)
 	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7, 8}, nil)
@@ -289,8 +289,8 @@ func TestPullActivityRollups_DeviceBatchQueryFails_RoundFailsAndDialsNothing(t *
 }
 
 // Given 多个账号都开着这个开关；When 这一轮到点；
-// Then 设备清单只发一条批量查询（带着这一轮全部账号），而不是每个账号各发一条——
-// 两个账号的机器依旧都被拉到，只是「谁的名单」这件事现在只问库一次。
+// Then 设备清单只做一次批量读取（带着这一轮全部账号），而不是每个账号各读一次——
+// 两个账号的机器依旧都被拉到，只是「谁的名单」这件事现在只问仓储一次。
 func TestPullActivityRollups_MultipleAccounts_DevicesFetchedInOneBatchQuery(t *testing.T) {
 	rig := newActivityRig(t)
 	rig.settings.EXPECT().ListEnabledUserIDs(gomock.Any()).Return([]int64{7, 8}, nil)

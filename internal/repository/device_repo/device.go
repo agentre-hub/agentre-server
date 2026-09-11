@@ -26,8 +26,9 @@ type DeviceRepo interface {
 	ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error)
 	// ListActiveByUsers 一次查一批账号的在用设备，含义与逐个调用 ListByUser 相同
 	// （同样的 status=ACTIVE 过滤、同样按 last_seen_at DESC 排序），只是把发往数据库
-	// 的往返次数从「账号数」摊平成 1 次——activity 定时任务按批读取账号名单时用它，
-	// 不再为每个账号各发一条 SELECT。
+	// 的往返次数从「账号数」摊平成「每 listByUsersBatchSize 个账号一条 SELECT」——
+	// activity 定时任务按批读取账号名单时用它，不再为每个账号各发一条 SELECT。任一块
+	// 失败整批返回错误。
 	ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int64][]*device_entity.Device, error)
 }
 

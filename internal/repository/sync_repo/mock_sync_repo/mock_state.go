@@ -56,6 +56,20 @@ func (mr *MockSyncStateRepoMockRecorder) CurrentVersion(ctx, userID any) *gomock
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CurrentVersion", reflect.TypeOf((*MockSyncStateRepo)(nil).CurrentVersion), ctx, userID)
 }
 
+// EnsureSeq mocks base method.
+func (m *MockSyncStateRepo) EnsureSeq(ctx context.Context, userID int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "EnsureSeq", ctx, userID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// EnsureSeq indicates an expected call of EnsureSeq.
+func (mr *MockSyncStateRepoMockRecorder) EnsureSeq(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "EnsureSeq", reflect.TypeOf((*MockSyncStateRepo)(nil).EnsureSeq), ctx, userID)
+}
+
 // FindDeviceState mocks base method.
 func (m *MockSyncStateRepo) FindDeviceState(ctx context.Context, userID, deviceID int64) (*sync_entity.DeviceSyncState, error) {
 	m.ctrl.T.Helper()

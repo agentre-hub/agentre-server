@@ -18,6 +18,9 @@ type SyncStateRepo interface {
 	// NextVersion 从账号级序列原子取走 n 个版本号，返回其中最大的那个（即本次
 	// 分配到的最后一个版本）。多副本并发下由数据库裁决，进程内计数器不行。
 	NextVersion(ctx context.Context, userID int64, n int64) (int64, error)
+	// EnsureSeq 为账号建好它的序列行（version_seq 从 0 起）；那一行已存在时不改写。
+	// 建号时在同一个事务里调用。
+	EnsureSeq(ctx context.Context, userID int64) error
 	// CurrentVersion 取账号级序列**当前的头**（最近一次分配出去的版本号），
 	// 不推进它；账号还没分配过任何版本时返回 0。
 	//
@@ -42,8 +45,10 @@ type stateRepo struct{}
 // NextVersion 的递增必须由数据库一条语句做完。先读后写在多副本并发上行时会双双读到
 // 同一个值、两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
 //
-// 推进先走一条只按 user_id 定位的普通 UPDATE，命中 0 行（账号第一次取号，那一行还
-// 不存在）才落回 INSERT … ON DUPLICATE KEY UPDATE。不是一上来就 upsert，是因为锁的
+// 推进先走一条只按 user_id 定位的普通 UPDATE，命中 0 行（这个账号还没有序列行）才落回
+// INSERT … ON DUPLICATE KEY UPDATE。建号会预建那一行、存量账号由迁移 202609110104 补齐
+// （见 EnsureSeq），缺行只剩绕过建号直接写 users 的来源，以及滚动发布时旧副本建出的号；
+// 两个这样的账号在重叠事务里各走一次回落仍会 ERROR 1213。不是一上来就 upsert，是因为锁的
 // 范围：MySQL 9.7 实测（.dev-kit/artifacts/db-perf-fixes/nextversion-lock/），upsert
 // 命中已有行时除了那一行，还在主键的 supremum 伪记录上持一把 X 锁到提交，别的账号的
 // 取号都要等它——Push 把取号放在整批写入的事务里，一个账号的长事务于是串行化全站。
@@ -84,6 +89,24 @@ ON DUPLICATE KEY UPDATE version_seq = version_seq + ?, updatetime = ?`,
 		return 0, err
 	}
 	return version, nil
+}
+
+// EnsureSeq 让账号一建好就有序列行（决策 20）。缺行时首次取号走的是 NextVersion 的
+// 回落分支：两个都没有行的新账号在重叠事务里各自取号，空 UPDATE 各持一把间隙锁，随后的
+// INSERT 互等插入意向锁，其中一个 ERROR 1213（MySQL 9.7 实测）。行预先建好，首次取号
+// 就走只锁本行的普通 UPDATE。
+//
+// 重复键分支是一句空赋值 user_id = user_id：那一行若已存在（被 NextVersion 推进过），
+// version_seq 与 updatetime 都不动，已分配出去的版本号绝不会被拨回 0。不用 INSERT IGNORE：
+// 它把**所有**可降级的错误（截断、NOT NULL 等）都降成警告吞掉，这里只该容忍撞唯一键这一种；
+// 表只有 uk_sync_account_seqs_identity 一个唯一键（id 自增不由这里给），ON DUPLICATE
+// 因此只会在「这个账号已有行」时触发。
+//
+// 不自开事务，跟着 ctx 里的事务走：建号回滚，这一行随之回滚。
+func (r *stateRepo) EnsureSeq(ctx context.Context, userID int64) error {
+	return db.Ctx(ctx).Exec(
+		`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime) VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE user_id = user_id`,
+		userID, time.Now().UnixMilli()).Error
 }
 
 // CurrentVersion 只读序列的当前值，绝不推进它——推进要么由 NextVersion 一次做完，

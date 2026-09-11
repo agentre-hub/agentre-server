@@ -15,6 +15,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_identity_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo/mock_sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo/mock_user_identity_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
@@ -40,6 +42,36 @@ func setupUserTest(t *testing.T) (context.Context, *mock_user_repo.MockUserRepo,
 	user_identity_repo.RegisterUserIdentity(mI)
 	ctx, _, mock := hubtest.Database(t)
 	return ctx, mU, mI, mock
+}
+
+// registerSyncStateMock 注册 seq 仓储替身：全新建号在事务里要预建账号的 seq 行。
+func registerSyncStateMock(t *testing.T) *mock_sync_repo.MockSyncStateRepo {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	m := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncState(m)
+	t.Cleanup(func() { sync_repo.RegisterSyncState(nil) })
+	return m
+}
+
+// setupUserTxTest 与 setupUserTest 装配同样的账号仓储替身，另加 seq 仓储替身，并换成
+// hubtest.TxDatabase 交回事务事件记录：「user 行与 seq 行落在同一个建号事务里」只有
+// 那份时序说得清。
+func setupUserTxTest(t *testing.T) (
+	context.Context, *hubtest.TxLog,
+	*mock_user_repo.MockUserRepo, *mock_user_identity_repo.MockUserIdentityRepo, *mock_sync_repo.MockSyncStateRepo,
+) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	mU := mock_user_repo.NewMockUserRepo(ctrl)
+	mI := mock_user_identity_repo.NewMockUserIdentityRepo(ctrl)
+	user_repo.RegisterUser(mU)
+	user_identity_repo.RegisterUserIdentity(mI)
+	mS := registerSyncStateMock(t)
+	ctx, txLog := hubtest.TxDatabase(t)
+	return ctx, txLog, mU, mI, mS
 }
 
 func TestFindOrCreateFromGithub(t *testing.T) {
@@ -84,10 +116,12 @@ func TestFindOrCreateFromGithub(t *testing.T) {
 
 		convey.Convey("全新用户 → 新建 user + identity", func() {
 			ctx, mU, mI, mock := setupUserTest(t)
+			mS := registerSyncStateMock(t)
 			mI.EXPECT().FindByProviderUID(gomock.Any(), "github", "12345").Return(nil, nil)
 			mU.EXPECT().FindByEmail(gomock.Any(), "a@b.com").Return(nil, nil)
 			mU.EXPECT().Create(gomock.Any(), gomock.Any()).
 				DoAndReturn(func(_ context.Context, u *user_entity.User) error { u.ID = 100; return nil })
+			mS.EXPECT().EnsureSeq(gomock.Any(), int64(100)).Return(nil)
 			mI.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
 			mock.ExpectBegin()
 			mock.ExpectCommit()
@@ -98,6 +132,51 @@ func TestFindOrCreateFromGithub(t *testing.T) {
 			assert.Equal(t, int64(100), u.ID)
 			assert.Equal(t, "Alice", u.DisplayName)
 			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		// 要求 18：新账号建好时它的 sync_account_seqs 行已经在了。两个都还没有 seq 行的
+		// 新账号在重叠事务里首次取号，NextVersion 的空 UPDATE 各持一把间隙锁、随后的
+		// INSERT 互等，其中一个 ERROR 1213（真库复现）。行由建号预建，首次取号就走命中
+		// 本行的普通 UPDATE。它必须落在建号的**同一个**事务里：否则建号回滚会留下孤儿
+		// seq 行，预建失败又会留下一个没有 seq 行的账号。
+		convey.Convey("全新用户 → seq 行紧随 user 行在同一个建号事务里预建", func() {
+			ctx, txLog, mU, mI, mS := setupUserTxTest(t)
+			mI.EXPECT().FindByProviderUID(gomock.Any(), "github", "12345").Return(nil, nil)
+			mU.EXPECT().FindByEmail(gomock.Any(), "a@b.com").Return(nil, nil)
+			gomock.InOrder(
+				mU.EXPECT().Create(gomock.Any(), gomock.Any()).
+					DoAndReturn(func(_ context.Context, u *user_entity.User) error { u.ID = 100; return nil }),
+				mS.EXPECT().EnsureSeq(gomock.Any(), int64(100)).
+					DoAndReturn(func(ctx context.Context, _ int64) error {
+						assert.True(t, hubtest.InTransaction(ctx), "seq 行必须随建号事务提交或回滚")
+						return nil
+					}),
+			)
+			mI.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+
+			u, err := User().FindOrCreateFromGithub(ctx, GithubProfile{GithubID: "12345", Email: "a@b.com"})
+
+			assert.NoError(t, err)
+			assert.Equal(t, int64(100), u.ID)
+			assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+		})
+
+		// 边界：预建失败就不能留下一个没有 seq 行的账号——整个建号回滚、错误原样上抛
+		// （不是那两个可重查的唯一键，不重查），identity 也不再去建。
+		convey.Convey("预建 seq 行失败 → 建号整体回滚并报错", func() {
+			ctx, txLog, mU, mI, mS := setupUserTxTest(t)
+			mI.EXPECT().FindByProviderUID(gomock.Any(), "github", "12345").Return(nil, nil)
+			mU.EXPECT().FindByEmail(gomock.Any(), "a@b.com").Return(nil, nil)
+			mU.EXPECT().Create(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, u *user_entity.User) error { u.ID = 100; return nil })
+			boom := errors.New("connection refused")
+			mS.EXPECT().EnsureSeq(gomock.Any(), int64(100)).Return(boom)
+
+			u, err := User().FindOrCreateFromGithub(ctx, GithubProfile{GithubID: "12345", Email: "a@b.com"})
+
+			assert.ErrorIs(t, err, boom)
+			assert.Nil(t, u)
+			assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
 		})
 
 		// 要求 6：两个并发的同邮箱首次登录都成功，库中只有一个账号。两边都走到路径 3
@@ -128,6 +207,7 @@ func TestFindOrCreateFromGithub(t *testing.T) {
 		// 命中对方刚建好的 identity，直接按它登录。
 		convey.Convey("identity 唯一键冲突（并发同 GitHub identity 首次登录）→ 重查一次后命中对方的 identity", func() {
 			ctx, mU, mI, mock := setupUserTest(t)
+			mS := registerSyncStateMock(t)
 			gomock.InOrder(
 				mI.EXPECT().FindByProviderUID(gomock.Any(), "github", "12345").Return(nil, nil),
 				mI.EXPECT().FindByProviderUID(gomock.Any(), "github", "12345").
@@ -137,6 +217,7 @@ func TestFindOrCreateFromGithub(t *testing.T) {
 			mock.ExpectBegin()
 			mU.EXPECT().Create(gomock.Any(), gomock.Any()).
 				DoAndReturn(func(_ context.Context, u *user_entity.User) error { u.ID = 100; return nil })
+			mS.EXPECT().EnsureSeq(gomock.Any(), int64(100)).Return(nil)
 			mI.EXPECT().Create(gomock.Any(), gomock.Any()).
 				Return(dupKeyErr("user_identities", "uk_user_identities_provider_uid"))
 			mock.ExpectRollback()
