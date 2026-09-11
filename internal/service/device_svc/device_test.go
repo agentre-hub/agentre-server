@@ -318,10 +318,13 @@ func TestRefresh(t *testing.T) {
 			_, err := svc.Refresh(ctx, "missing")
 			assert.Contains(t, err.Error(), "invalid_grant")
 		})
-		convey.Convey("token 已 revoked → 重放 → RevokeChain", func() {
-			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		convey.Convey("token 已 revoked、设备仍 active → 重放 → RevokeChain", func() {
+			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 				&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+			)
+			mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+				&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.ACTIVE}, nil,
 			)
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 			_, err := svc.Refresh(ctx, "stolen")
@@ -1106,22 +1109,44 @@ func TestRefreshBizCode(t *testing.T) {
 	})
 
 	t.Run("重放 → RefreshTokenReplay", func(t *testing.T) {
-		ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 			&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+		)
+		// 设备仍然 active：这才是一次真正的重放，不是撤销的连带效果。
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+			&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.ACTIVE}, nil,
 		)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		_, err := svc.Refresh(ctx, "stolen")
 		assert.Equal(t, code.RefreshTokenReplay, biz(t, err))
 	})
 
+	// 整条链已经被 Revoke 标过 revoked_at 的这枚 token 不算「重放」证据——它只是
+	// 撤销留下的既有状态。设备撤销是终态判定，优先于这枚具体 token 的 revoked_at：
+	// 答案必须是 DeviceRevoked，且不能再触发一次 RevokeChain（没有 EXPECT 就不允许调用）。
+	t.Run("设备整链已撤销后刷新（token 行本身也已被标 revoked）→ DeviceRevoked，不判重放", func(t *testing.T) {
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+			&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+		)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+			&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.DELETE}, nil,
+		)
+		_, err := svc.Refresh(ctx, "revoked-chain-token")
+		assert.Equal(t, code.DeviceRevoked, biz(t, err))
+	})
+
 	t.Run("已过期 → RefreshTokenExpired", func(t *testing.T) {
-		ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 			&device_token_entity.DeviceToken{
 				ID: 1, DeviceID: 42,
 				RefreshExpiresAt: time.Now().Add(-time.Hour).UnixMilli(),
 			}, nil,
+		)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+			&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.ACTIVE}, nil,
 		)
 		_, err := svc.Refresh(ctx, "stale")
 		assert.Equal(t, code.RefreshTokenExpired, biz(t, err))

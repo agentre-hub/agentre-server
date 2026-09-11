@@ -389,15 +389,6 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh_token not found", code.RefreshTokenInvalid)
 	}
 
-	if row.IsRevoked() {
-		// 重放：整链 revoke
-		_ = device_token_repo.DeviceToken().RevokeChain(ctx, row.DeviceID, nowMs)
-		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh token reuse detected", code.RefreshTokenReplay)
-	}
-	if row.IsExpired(nowMs) {
-		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh_token expired", code.RefreshTokenExpired)
-	}
-
 	d, err := device_repo.Device().Find(ctx, row.DeviceID)
 	if err != nil {
 		return nil, err
@@ -407,8 +398,22 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 	if d == nil {
 		return nil, newOAuthErrBiz(ErrInvalidGrant, "device not found", code.DeviceNotFound)
 	}
+	// 设备撤销是终态判定，排在这枚具体 refresh token 的状态之前：Revoke → RevokeChain
+	// 会把整条链的每一行都标 revoked_at，此后无论拿链上哪一枚（当前的、还是早先轮换
+	// 出去的旧的）来刷新，答案都必须是同一个 DeviceRevoked——而不是被 RevokeChain
+	// 自己留下的 revoked_at 误判成「重放」。真正的重放检测只在设备仍然 active 时才
+	// 有意义：那时一枚已被标 revoked 的 token 不是撤销的连带效果，而是凭据泄露的证据。
 	if !d.IsActive() {
 		return nil, newOAuthErrBiz(ErrInvalidGrant, "device revoked", code.DeviceRevoked)
+	}
+
+	if row.IsRevoked() {
+		// 重放：整链 revoke
+		_ = device_token_repo.DeviceToken().RevokeChain(ctx, row.DeviceID, nowMs)
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh token reuse detected", code.RefreshTokenReplay)
+	}
+	if row.IsExpired(nowMs) {
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh_token expired", code.RefreshTokenExpired)
 	}
 
 	out := &TokenOutput{}
