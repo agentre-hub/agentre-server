@@ -4,8 +4,7 @@
 //
 // 编号一律**显式写出**，不用 iota：这些数字会随响应发给客户端（客户端按数值映射到
 // 自己的文案），而 iota 让「删掉一个没人用的码」变成一个会静默挪动后面所有码的操作
-// —— 前端照样编译，只是从此把一种失败认成另一种。退役的编号留空、不复用，客户端的
-// 映射表因此永远对得上。
+// —— 前端照样编译，只是从此把一种失败认成另一种。
 package code
 
 // 通用 30000~30099
@@ -20,11 +19,9 @@ const (
 
 // 账号 / OAuth 30100~30199
 const (
-	UserNotFound = 30100
-	UserBanned   = 30101
-	// 退役：30102(OAuthStateInvalid) 已停用，编号留空不复用。
+	UserNotFound        = 30100
+	UserBanned          = 30101
 	OAuthExchangeFailed = 30103
-	// 退役：30104(OAuthProfileFailed)、30105(GithubEmailMissing)、30106(SessionExpired)、30107(SessionInvalid) 已停用，编号留空不复用。
 )
 
 // Device Flow 30200~30299（与 RFC 8628 error 字段对齐）
@@ -35,7 +32,6 @@ const (
 	DeviceFlowAccessDenied         = 30203
 	DeviceFlowInvalidGrant         = 30204
 	DeviceFlowUserCodeInvalid      = 30205
-	// 退役：30206(DeviceFlowAlreadyConsumed) 已停用，编号留空不复用。
 )
 
 // Device / Token 30300~30399
@@ -47,7 +43,6 @@ const (
 	JWTSignatureInvalid = 30304
 	JWTBlacklisted      = 30305
 	DeviceListFailed    = 30306
-	// 退役：30307(DeviceKindMismatch) 已停用，编号留空不复用。
 	// RefreshTokenInvalid：refresh_token 缺失、查不到，或已被并发的那一次轮换换掉。
 	// 与 RefreshTokenReplay 的区别是这里没有证据表明凭据泄露，因此不撤整条链。
 	RefreshTokenInvalid = 30308
@@ -65,7 +60,6 @@ const (
 	// SyncResyncRequired 设备距上次成功同步已超过墓碑保留窗口，上行一律被拒，
 	// 必须先拉一份全量快照（R6a）。
 	SyncResyncRequired = 30500
-	// 退役：30501(SyncPayloadRejected)、30502(SyncKindInvalid) 已停用，编号留空不复用。
 	// SyncAvatarHashMismatch 头像正文的哈希与声明的不符。
 	SyncAvatarHashMismatch = 30503
 	// SyncAvatarNotFound 账号下没有这个哈希的头像。
@@ -161,7 +155,6 @@ const (
 	EngineProviderNotFound = 30900
 	// EngineBackendNotFound 当前账号下没有这个后端身份（或它已删除）。
 	EngineBackendNotFound = 30901
-	// 退役：30902(EngineCLIPathForbidden) 已停用，编号留空不复用。
 	// EngineBuiltinForbidden builtin 只有本机桌面端可创建，浏览器没有执行落点。
 	EngineBuiltinForbidden = 30903
 	// EngineBackendDeviceNotFound 写入的运行设备指纹在当前账号下不是一台活跃设备

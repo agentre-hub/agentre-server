@@ -1,11 +1,10 @@
 /**
  * 控制台外壳（任务 2，正式节点 R969Y/ZC7pI；任务 9 把组织面加进主导航）：
- *   - 桌面 SideNav：Brand（logo + Agentre + 「控制台」副标）+ 非交互搜索外观 +
- *     5 个导航项（经由共享 ConsoleNavItem 渲染，第 4 项「组织」去 /org、
- *     第 5 项「设置」去 /settings）+ 底部账号区；移动 TabBar 4 项，不含设置。
- *     不包含审计：无后端，空壳页已下线。
- *   - 搜索无真实能力：外观不可聚焦（不是 button/input，无 tabindex）、
- *     不暗示可用快捷键（无 ⌘K）。
+ *   - 桌面 SideNav：Brand（logo + Agentre + 「控制台」副标）+
+ *     6 个导航项（经由共享 ConsoleNavItem 渲染，第 5 项「组织」去 /org、
+ *     第 6 项「设置」去 /settings）+ 底部账号区；移动 TabBar 5 项，不含设置。
+ *     不包含审计：无后端。
+ *   - 没有搜索框。
  *   - TopBar：title 槽（可选）+ right 槽（可选）+ AppControls；不传 title 时左侧空。
  *   - 锦上添花数据：/v1/devices、/v1/auth/me 取不到就隐藏对应元素，
  *     不阻塞整体渲染（无数据态）。对话导航不摆已保存总数，避免误读成未读数。
