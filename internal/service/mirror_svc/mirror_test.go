@@ -1126,8 +1126,8 @@ func TestWriteFrames_StampsTheInjectedClock(t *testing.T) {
 // 补齐回来的帧,时刻取**对端报的**那个,不是这台 server 收到它的时刻。
 //
 // 两者在补齐这条路上差得很远:补齐是成批的,一条离线两天的对话几百帧会在同一毫秒里
-// 落库,拿收帧时刻当发生时刻,浏览器控制台上整段转录就显示成同一分钟。对端的日志行
-// 自己记着每一帧发生在什么时候(agentred 的 daemon_notification_journal.createtime),
+// 落库,拿收帧时刻当发生时刻,浏览器控制台上整段转录就显示成同一分钟。对端的转录行
+// 自己记着每一帧发生在什么时候(agentred 转录行的 createtime),
 // 那才是唯一说得通的来源。
 func TestPullFrames_TakeThePeersReportedCreatetime(t *testing.T) {
 	r := newRig(t)

@@ -1054,7 +1054,7 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
   };
   const seq = Number(entry.seq);
   // 这一帧在**原点**发生的时刻。这条路是客户端自己回那台机器补的一页,行上这一格
-  // 正是 agentred 的 daemon_notification_journal.createtime —— 转录里那个 HH:mm 的
+  // 正是 agentred 转录行的 createtime —— 转录里那个 HH:mm 的
   // 来源。报不出来的对端交出 0,读作「不知道」。
   const createtime = Number(entry.createtime ?? 0);
   const payload = entry.payload?.payload;

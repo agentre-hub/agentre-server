@@ -143,7 +143,7 @@ type JournalFrame struct {
 	// 时刻。实时那一路两者只差一跳网络，补齐那一路差得很远——补齐成批到达，一条离线
 	// 两天的对话几百帧会落在同一毫秒里，拿收帧时刻当发生时刻，浏览器控制台上整段
 	// 转录就显示成同一分钟。所以它由产生这一帧的那一端报出（agentred 的
-	// daemon_notification_journal.createtime、桌面端消息自己的 createtime），
+	// 转录行的 createtime、桌面端消息自己的 createtime），
 	// mirror_svc 原样落库。
 	//
 	// 0 = 那一端没报过（还没升级的对端）。0 一路保持「不知道」下行，渲染成不显示
