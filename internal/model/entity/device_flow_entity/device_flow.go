@@ -33,12 +33,3 @@ func (c *DeviceFlowCode) IsDenied() bool   { return c != nil && c.DeniedAt > 0 }
 func (c *DeviceFlowCode) IsExpired(nowMs int64) bool {
 	return c != nil && c.ExpiresAt > 0 && c.ExpiresAt < nowMs
 }
-
-// NextPollAllowed 返回 nowMs 是否满足 interval 间隔（ms）。
-func (c *DeviceFlowCode) NextPollAllowed(nowMs int64) bool {
-	if c == nil {
-		return false
-	}
-	minGap := int64(c.IntervalSeconds) * 1000
-	return nowMs-c.LastPolledAt >= minGap
-}

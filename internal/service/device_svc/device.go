@@ -259,7 +259,7 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		return nil, newOAuthErr(ErrExpiredToken, "device flow expired")
 	}
 
-	// 限速判定是一条条件 UPDATE，不是「读 NextPollAllowed 再无条件写」：两个并发或
+	// 限速判定是一条条件 UPDATE，不是「先读 last_polled_at 判间隔再无条件写」：两个并发或
 	// 重复的轮询打到同一行时，WHERE 里的 last_polled_at <= now-minGap 只让数据库
 	// 认定的那一个改到行，另一个凭 RowsAffected==0 判 slow_down——不给它机会把
 	// 「还没到点」的判断建立在自己读到的、可能已经过时的那一份状态上。

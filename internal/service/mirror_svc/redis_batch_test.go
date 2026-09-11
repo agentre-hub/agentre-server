@@ -63,24 +63,10 @@ func batchRedis(t *testing.T) (*miniredis.Miniredis, *goredis.Client, *redisTrip
 	return mini, client, trips
 }
 
-// singleReads 是逐台读取时的答案（ProtocolMismatch + DaemonBuild），批量读取必须与它逐格相同。
-func singleReads(ctx context.Context, s *Supervisor, userID int64, fingerprints []string) []HandshakeState {
-	out := make([]HandshakeState, 0, len(fingerprints))
-	for _, fp := range fingerprints {
-		commit, known := s.DaemonBuild(ctx, userID, fp)
-		out = append(out, HandshakeState{
-			ProtocolMismatch: s.ProtocolMismatch(ctx, userID, fp),
-			DaemonCommit:     commit,
-			DaemonBuildKnown: known,
-		})
-	}
-	return out
-}
-
 // Given 三台机器：一台协议不合且握手报了 commit，一台握手报的是空 commit，一台从没握过手；
 // When 一次批量读取它们的握手状态；
-// Then 一个 pipeline 读完、没有单发命令，每台的答案与逐台读取时逐格相同、顺序与入参一致。
-func TestHandshakeStates_GivenSeveralMachines_ThenOnePipelineAnswersAsTheSingleReadsDo(t *testing.T) {
+// Then 一个 pipeline 读完、没有单发命令，每台的答案逐格对应、顺序与入参一致。
+func TestHandshakeStates_GivenSeveralMachines_ThenOnePipelineAnswersEachMachineInOrder(t *testing.T) {
 	ctx := context.Background()
 	_, client, trips := batchRedis(t)
 	sup := NewSupervisor(Config{InstanceID: "server-a"}, nil, nil, client)
@@ -102,12 +88,10 @@ func TestHandshakeStates_GivenSeveralMachines_ThenOnePipelineAnswersAsTheSingleR
 		{DaemonCommit: "", DaemonBuildKnown: true},
 		{},
 	}, got)
-	assert.Equal(t, singleReads(ctx, sup, 7, fingerprints), got)
 }
 
 // Given 只有一台机器的 commit 记录读不出来（键被写成了别的类型，GET 回 WRONGTYPE）；
-// Then 只有那一台退回「不知道」，同一批里的其余机器照常作答——与逐台读取时一台失败
-// 不牵连别台的行为相同。
+// Then 只有那一台退回「不知道」，同一批里的其余机器照常作答——一台失败不牵连别台。
 func TestHandshakeStates_GivenOneMachinesRecordUnreadable_ThenOnlyThatMachineIsUnknown(t *testing.T) {
 	ctx := context.Background()
 	mini, client, _ := batchRedis(t)
@@ -124,11 +108,10 @@ func TestHandshakeStates_GivenOneMachinesRecordUnreadable_ThenOnlyThatMachineIsU
 		{},
 		{DaemonCommit: "c3c3c3c", DaemonBuildKnown: true},
 	}, got)
-	assert.Equal(t, singleReads(ctx, sup, 7, fingerprints), got)
 }
 
 // Given Redis 整个读不出来；Then 每台机器都是「没有不匹配、不知道构建」，而不是报错
-// ——握手状态是设备列表的增强列，fail-open 与逐台读取时相同。
+// ——握手状态是设备列表的增强列，fail-open。
 func TestHandshakeStates_GivenRedisFailing_ThenEveryMachineReadsAsNothingKnown(t *testing.T) {
 	ctx := context.Background()
 	mini, client, _ := batchRedis(t)
@@ -141,7 +124,6 @@ func TestHandshakeStates_GivenRedisFailing_ThenEveryMachineReadsAsNothingKnown(t
 	got := sup.HandshakeStates(ctx, 7, fingerprints)
 
 	assert.Equal(t, []HandshakeState{{}, {}}, got)
-	assert.Equal(t, singleReads(ctx, sup, 7, fingerprints), got)
 }
 
 // Given 没装配镜像（nil 接收者）或镜像没有 Redis；Then 每台机器照样有一格零值答案、不 panic。

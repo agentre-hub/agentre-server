@@ -86,21 +86,6 @@ func (mr *MockSyncObjectRepoMockRecorder) Find(ctx, userID, syncID any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Find", reflect.TypeOf((*MockSyncObjectRepo)(nil).Find), ctx, userID, syncID)
 }
 
-// FindCLIOverlayByNaturalKey mocks base method.
-func (m *MockSyncObjectRepo) FindCLIOverlayByNaturalKey(ctx context.Context, userID int64, backendSyncID, fingerprint string) (*sync_entity.SyncObject, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FindCLIOverlayByNaturalKey", ctx, userID, backendSyncID, fingerprint)
-	ret0, _ := ret[0].(*sync_entity.SyncObject)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// FindCLIOverlayByNaturalKey indicates an expected call of FindCLIOverlayByNaturalKey.
-func (mr *MockSyncObjectRepoMockRecorder) FindCLIOverlayByNaturalKey(ctx, userID, backendSyncID, fingerprint any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindCLIOverlayByNaturalKey", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindCLIOverlayByNaturalKey), ctx, userID, backendSyncID, fingerprint)
-}
-
 // FindLiveByNaturalKeys mocks base method.
 func (m *MockSyncObjectRepo) FindLiveByNaturalKeys(ctx context.Context, userID int64, keys []sync_repo.NaturalKey) (map[sync_repo.NaturalKey]*sync_entity.SyncObject, error) {
 	m.ctrl.T.Helper()

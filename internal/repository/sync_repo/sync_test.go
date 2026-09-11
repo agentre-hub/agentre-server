@@ -292,24 +292,6 @@ func TestFindLocationByNaturalKey_GivenTombstones_ThenOnlyLiveRowMatches(t *test
 }
 
 // 打墓碑是条件更新，返回受影响行数：已经是墓碑时为 0，由 service 决定这意味着什么。
-// CLI 覆盖与项目路径一样，按（账号、backend sync id、设备指纹）天然去重；后端
-// sync id 落在 scope_sync_id 列上——那一列装什么本就取决于 kind，这个查询与那条
-// 部分唯一键因此走同一套列。
-func TestFindCLIOverlayByNaturalKey_GivenLiveOverlay_ThenFindsOnlyThatNaturalKey(t *testing.T) {
-	ctx, _, mock := hubtest.Database(t)
-	r := NewSyncObject()
-
-	mock.ExpectQuery(regexp.QuoteMeta(`deleted_at=0`)).
-		WithArgs(int64(7), sync_entity.KindAgentBackendCLI, "backend-1", "fp-a", sqlmock.AnyArg()).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "scope_sync_id", "agentred_fingerprint"}).
-			AddRow(int64(55), sync_entity.KindAgentBackendCLI, "backend-1", "fp-a"))
-
-	got, err := r.FindCLIOverlayByNaturalKey(ctx, 7, "backend-1", "fp-a")
-	assert.NoError(t, err)
-	assert.Equal(t, int64(55), got.ID)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
 func TestTombstone_GivenAlreadyTombstoned_ThenZeroRowsAffected(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()

@@ -107,7 +107,7 @@ func TestFindByDeviceCode_Found(t *testing.T) {
 	assert.Equal(t, "A4F-7Q2", got.UserCode)
 }
 
-// 轮询限速从「读 NextPollAllowed 再无条件 UPDATE」改成一条条件 UPDATE：
+// 轮询限速从「先读 last_polled_at 判间隔、再无条件 UPDATE」改成一条条件 UPDATE：
 // WHERE 里带 last_polled_at <= now-minGap，两个并发/重复的轮询请求打到同一行时，
 // 数据库只让其中一条改到行，另一条凭 RowsAffected==0 判定该 slow_down——不再是
 // service 先读一次再决定写不写的 check-then-act。

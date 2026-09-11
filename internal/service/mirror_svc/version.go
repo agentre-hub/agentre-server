@@ -95,8 +95,8 @@ func (s *Supervisor) recordDaemonBuild(ctx context.Context, key machineKey, comm
 	}
 }
 
-// RecordDaemonBuild 是 recordDaemonBuild 面向包外的公开入口，与 DaemonBuild 成对
-// （对照 RecordProtocolMismatch / ProtocolMismatch）：dial() 走包内那个私有版本，
+// RecordDaemonBuild 是 recordDaemonBuild 面向包外的公开入口，与读侧 HandshakeStates
+// 成对（对照 RecordProtocolMismatch）：dial() 走包内那个私有版本，
 // 这一个供需要补记这份共享状态的调用方使用（例如设备读端点的测试要在不真的握一次手
 // 的前提下断言读侧接线）。
 func (s *Supervisor) RecordDaemonBuild(ctx context.Context, userID int64, fingerprint, commit string) {
@@ -106,35 +106,21 @@ func (s *Supervisor) RecordDaemonBuild(ctx context.Context, userID int64, finger
 	s.recordDaemonBuild(ctx, machineKey{userID: userID, fingerprint: fingerprint}, commit)
 }
 
-// DaemonBuild 回答「这台机器最近一次握手自报的短 commit 是什么」，第二个返回值是
-// 「server 到底知不知道」。
-//
-// 供设备读端点消费（device_svc.ListUserDevices）。未装配镜像、Redis 读不出来、以及
-// 从没握过手，都回 known=false —— 三者的可观察结果相同：不知道，因此不下判断。
-func (s *Supervisor) DaemonBuild(ctx context.Context, userID int64, fingerprint string) (string, bool) {
-	if s == nil || s.redis == nil {
-		return "", false
-	}
-	commit, err := s.redis.Get(ctx, daemonBuildKey(machineKey{userID: userID, fingerprint: fingerprint})).Result()
-	if err != nil {
-		return "", false
-	}
-	return commit, true
-}
-
-// HandshakeState 是镜像握手为一台机器记下的两份共享状态：协议不匹配（语义见
-// ProtocolMismatch）与自报的短 commit（语义见 DaemonBuild，Known 分开「空串」与「不知道」）。
+// HandshakeState 是镜像握手为一台机器记下的两份共享状态：这台机器最近一次握手是不是
+// 被判定协议不合而拒绝（语义见 protocolMismatchActive），以及它自报的短 commit——
+// DaemonBuildKnown 分开「空串」与「不知道」：未装配镜像、Redis 读不出来、从没握过手，
+// 都是不知道，因此不下判断。
 type HandshakeState struct {
 	ProtocolMismatch bool
 	DaemonCommit     string
 	DaemonBuildKnown bool
 }
 
-// HandshakeStates 是 ProtocolMismatch + DaemonBuild 的批量形态：一个账号下一批机器，
-// 一个 pipeline 读完，往返次数与台数无关（device_svc.ListUserDevices，db-perf-fixes 决策 9）。
+// HandshakeStates 是设备读端点读握手状态的唯一入口：一个账号下一批机器，一个 pipeline
+// 读完，往返次数与台数无关（device_svc.ListUserDevices，db-perf-fixes 决策 9）。
 //
-// 答案与入参逐格对应、判据与逐台读取相同：未装配镜像或没有 Redis 时每格零值；某一条
-// 读不出来只让它那一格退回「没有不匹配 / 不知道构建」，不牵连同批的其余机器。
+// 答案与入参逐格对应：未装配镜像或没有 Redis 时每格零值；某一条读不出来只让它那一格
+// 退回「没有不匹配 / 不知道构建」，不牵连同批的其余机器。
 func (s *Supervisor) HandshakeStates(ctx context.Context, userID int64, fingerprints []string) []HandshakeState {
 	states := make([]HandshakeState, len(fingerprints))
 	if s == nil || s.redis == nil || len(fingerprints) == 0 {

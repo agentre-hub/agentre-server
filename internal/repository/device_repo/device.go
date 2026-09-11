@@ -105,15 +105,24 @@ func (r *repo) ListByUser(ctx context.Context, userID int64) ([]*device_entity.D
 	return out, nil
 }
 
+// listByUsersBatchSize 是 ListActiveByUsers 一条 IN 里的账号数上限。账号清单没有上限，
+// 占位符数量要封顶；与 sync_repo 批量读写同一个块大小。
+const listByUsersBatchSize = 500
+
+// ListActiveByUsers 按块发 `user_id IN`。同一个账号只落在一块里，块内按 last_seen_at
+// 排序因此就是它的完整排序。
 func (r *repo) ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int64][]*device_entity.Device, error) {
-	var rows []*device_entity.Device
-	if err := db.Ctx(ctx).Where("user_id IN ? AND status=?", userIDs, consts.ACTIVE).
-		Order("last_seen_at DESC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
 	out := make(map[int64][]*device_entity.Device, len(userIDs))
-	for _, d := range rows {
-		out[d.UserID] = append(out[d.UserID], d)
+	for start := 0; start < len(userIDs); start += listByUsersBatchSize {
+		var rows []*device_entity.Device
+		if err := db.Ctx(ctx).Where("user_id IN ? AND status=?",
+			userIDs[start:min(start+listByUsersBatchSize, len(userIDs))], consts.ACTIVE).
+			Order("last_seen_at DESC").Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, d := range rows {
+			out[d.UserID] = append(out[d.UserID], d)
+		}
 	}
 	return out, nil
 }

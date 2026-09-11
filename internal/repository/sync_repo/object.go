@@ -19,8 +19,6 @@ type SyncObjectRepo interface {
 	// FindLocationByNaturalKey 按（账号, 项目同步标识, agentred 指纹）取存活的那条
 	// 路径记录，查不到返回 (nil, nil)。
 	FindLocationByNaturalKey(ctx context.Context, userID int64, projectSyncID, fingerprint string) (*sync_entity.SyncObject, error)
-	// FindCLIOverlayByNaturalKey 按（账号, backend 同步标识, 指纹）取存活的 CLI 覆盖。
-	FindCLIOverlayByNaturalKey(ctx context.Context, userID int64, backendSyncID, fingerprint string) (*sync_entity.SyncObject, error)
 	// FindMany 按（账号, 同步标识）一次取回多行，按同步标识归档；库里没有的不在结果里。
 	// 墓碑同样会被取到。
 	FindMany(ctx context.Context, userID int64, syncIDs []string) (map[string]*sync_entity.SyncObject, error)
@@ -84,21 +82,9 @@ func (r *objectRepo) Find(ctx context.Context, userID int64, syncID string) (*sy
 func (r *objectRepo) FindLocationByNaturalKey(
 	ctx context.Context, userID int64, projectSyncID, fingerprint string,
 ) (*sync_entity.SyncObject, error) {
-	return r.findLiveByNaturalKey(ctx, userID, sync_entity.KindProjectLocation, projectSyncID, fingerprint)
-}
-
-func (r *objectRepo) FindCLIOverlayByNaturalKey(
-	ctx context.Context, userID int64, backendSyncID, fingerprint string,
-) (*sync_entity.SyncObject, error) {
-	return r.findLiveByNaturalKey(ctx, userID, sync_entity.KindAgentBackendCLI, backendSyncID, fingerprint)
-}
-
-func (r *objectRepo) findLiveByNaturalKey(
-	ctx context.Context, userID int64, kind, projectSyncID, fingerprint string,
-) (*sync_entity.SyncObject, error) {
 	return dbutil.FindOne[sync_entity.SyncObject](db.Ctx(ctx).Where(
 		"user_id=? AND kind=? AND scope_sync_id=? AND agentred_fingerprint=? AND deleted_at=0",
-		userID, kind, projectSyncID, fingerprint,
+		userID, sync_entity.KindProjectLocation, projectSyncID, fingerprint,
 	))
 }
 
@@ -171,7 +157,7 @@ func (r *objectRepo) FindMany(ctx context.Context, userID int64, syncIDs []strin
 }
 
 // FindLiveByNaturalKeys 的谓词写在 uk_sync_objects_natural 的列上。live_natural_key 是
-// 生成列：存活且属于带自然键的 kind 时等于 kind，否则为 NULL——与 findLiveByNaturalKey
+// 生成列：存活且属于带自然键的 kind 时等于 kind，否则为 NULL——与 FindLocationByNaturalKey
 // 的「kind=? AND deleted_at=0」同义，而行构造器 IN 整个落在那条唯一键上。三列都是
 // utf8mb4_0900_bin，按 Go 字符串归档与库里的相等一致。
 func (r *objectRepo) FindLiveByNaturalKeys(

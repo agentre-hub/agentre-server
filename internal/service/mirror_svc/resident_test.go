@@ -964,21 +964,21 @@ func TestFollow_HandshakeReportsAShortCommit_RecordsItAsSharedBuildState(t *test
 	a.net.setDaemonCommit("a1b2c3d")
 	ctx := context.Background()
 
-	_, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
-	require.False(t, known, "还没握过手就「知道」的话,后面那条断言证明不了任何事")
+	before := a.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	require.False(t, before.DaemonBuildKnown, "还没握过手就「知道」的话,后面那条断言证明不了任何事")
 
 	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	commit, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
-	assert.True(t, known)
-	assert.Equal(t, "a1b2c3d", commit)
+	onA := a.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	assert.True(t, onA.DaemonBuildKnown)
+	assert.Equal(t, "a1b2c3d", onA.DaemonCommit)
 
 	b := rig.replica(t, replicaB)
-	commitOnB, knownOnB := b.sup.DaemonBuild(ctx, testUserID, testMachine)
-	assert.True(t, knownOnB, "这台机器跑的是不是发布构建,是账号 + 机器这一级的事实")
-	assert.Equal(t, "a1b2c3d", commitOnB)
+	onB := b.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	assert.True(t, onB.DaemonBuildKnown, "这台机器跑的是不是发布构建,是账号 + 机器这一级的事实")
+	assert.Equal(t, "a1b2c3d", onB.DaemonCommit)
 }
 
 // Given 这台机器是未注入构建变量的本地构建,握手自报的短 commit 是空串;
@@ -996,9 +996,9 @@ func TestFollow_HandshakeReportsAnEmptyCommit_StillRecordsThatItIsKnown(t *testi
 	require.NoError(t, err)
 	require.True(t, claimed)
 
-	commit, known := a.sup.DaemonBuild(ctx, testUserID, testMachine)
-	assert.True(t, known, "握过手就是知道了:空 commit 是 daemon 给的答案,不是没有答案")
-	assert.Empty(t, commit)
+	state := a.sup.HandshakeStates(ctx, testUserID, []string{testMachine})[0]
+	assert.True(t, state.DaemonBuildKnown, "握过手就是知道了:空 commit 是 daemon 给的答案,不是没有答案")
+	assert.Empty(t, state.DaemonCommit)
 }
 
 // ── 握手被协议拒绝时记成按 (账号, 机器) 的共享状态,并拉长退避 ─────────────────
@@ -1016,10 +1016,10 @@ func TestFollow_HandshakeRejectedForProtocolVersion_RecordsSharedMismatchState(t
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrProtocolVersionMismatch)
 	assert.False(t, claimed)
-	assert.True(t, a.sup.ProtocolMismatch(context.Background(), testUserID, testMachine))
+	assert.True(t, a.sup.HandshakeStates(context.Background(), testUserID, []string{testMachine})[0].ProtocolMismatch)
 
 	b := rig.replica(t, replicaB)
-	assert.True(t, b.sup.ProtocolMismatch(context.Background(), testUserID, testMachine),
+	assert.True(t, b.sup.HandshakeStates(context.Background(), testUserID, []string{testMachine})[0].ProtocolMismatch,
 		"协议不匹配是账号 + 机器这一级的事实,不该只留在发现它的那个副本进程里")
 }
 

@@ -1704,12 +1704,6 @@ func (r *memObjectRepo) FindLocationByNaturalKey(
 	return r.liveByKey(userID, sync_entity.KindProjectLocation, projectSyncID, fingerprint), nil
 }
 
-func (r *memObjectRepo) FindCLIOverlayByNaturalKey(
-	_ context.Context, userID int64, backendSyncID, fingerprint string,
-) (*sync_entity.SyncObject, error) {
-	return r.liveByKey(userID, sync_entity.KindAgentBackendCLI, backendSyncID, fingerprint), nil
-}
-
 // Save 与 sync_repo.Save 同义：带版本条件的 UPDATE，没命中才普通 INSERT。
 func (r *memObjectRepo) Save(_ context.Context, obj *sync_entity.SyncObject) error {
 	if row := r.visible(obj.UserID, obj.SyncID); row != nil && row.Version < obj.Version {

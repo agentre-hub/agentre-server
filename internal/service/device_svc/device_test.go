@@ -191,7 +191,7 @@ func TestExchangeToken(t *testing.T) {
 			_, err := svc.ExchangeToken(ctx, "dc-x")
 			assert.Contains(t, err.Error(), "authorization_pending")
 		})
-		// 限速判定曾经是「读 NextPollAllowed 再无条件 UPDATE」的 check-then-act：
+		// 限速判定曾经是「先读 last_polled_at 判间隔、再无条件 UPDATE」的 check-then-act：
 		// 两个并发或重复的轮询都能读到「还没到点」为假、都往下走。条件 UPDATE 把
 		// 判定收进数据库自己的一条语句，0 行受影响就是这次没抢到，必须 slow_down，
 		// 且不能再往下判 IsAuthorized（没有轮到它决定）。
