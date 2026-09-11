@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { reduceFrames } from "@agentre-hub/agentre-ui";
 import type {
   EventFrame,
-  JournaledNotification,
+  DurableNotification,
 } from "@agentre-hub/agentre-wire";
 
 import { doneEventFrame, turnDoneFrames } from "@/components/session/turnDone";
@@ -101,7 +101,7 @@ describe("镜像回放的终态帧", () => {
             firstTokenMs: 8010,
             tokensPerSec: 14.2,
           },
-        } as unknown as JournaledNotification,
+        } as unknown as DurableNotification,
       ],
       {
         onRunResultDone: (frame) =>

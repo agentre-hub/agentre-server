@@ -2773,7 +2773,7 @@ describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态"
 });
 
 describe("会话详情：历史来自 server 镜像", () => {
-  /** 一页镜像转录：frames 是 wire.JournaledNotification 原样。 */
+  /** 一页镜像转录：frames 是 wire.DurableNotification 原样。 */
   function framePage(frames: { seq: number; text: string }[], hasMore = false) {
     return {
       frames: frames.map((f) => ({
@@ -3867,7 +3867,7 @@ describe("会话详情：头部", () => {
    * 共享包的 `formatHHmm(0)` 返回空串 —— 控制台上每条消息都没有时间，同一条对话在
    * 桌面端却有（那边读的是自己库里的 chat_messages.createtime）。
    *
-   * 走的是**镜像**这条路：一页 JournaledNotification 上的 createtime 要一路穿过
+   * 走的是**镜像**这条路：一页 DurableNotification 上的 createtime 要一路穿过
    * applyDurableFrames → toTranscriptFrame → 共享归约器，落到消息上。
    */
   it("镜像的一页带 createtime：转录里每条消息头上出 HH:mm", async () => {

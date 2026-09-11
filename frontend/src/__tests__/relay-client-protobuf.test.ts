@@ -4,7 +4,7 @@ import {
   ProtobufRpcCodec,
   encodeRpcCancel,
   rpcMethods,
-  type JournaledNotification,
+  type DurableNotification,
 } from "@agentre-hub/agentre-wire";
 import { describe, expect, it, vi } from "vitest";
 
@@ -616,7 +616,7 @@ describe("RelayClient Protobuf RPC boundary", () => {
             usage: { promptTokens: 13694, completionTokens: 41 },
           },
         },
-      ] as unknown as JournaledNotification[],
+      ] as unknown as DurableNotification[],
       {
         onEvent: (frame) => events.push(frame),
         onRunResultDone: (frame) => done.push(frame),
@@ -1045,7 +1045,7 @@ describe("帧的发生时刻", () => {
             event: { kind: "text_delta", text: "there" },
           },
         },
-      ] as unknown as JournaledNotification[],
+      ] as unknown as DurableNotification[],
       {
         onEvent: (frame, createtime) => {
           seen.push([

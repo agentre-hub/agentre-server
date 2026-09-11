@@ -469,7 +469,7 @@ func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotific
 		// 补洞是罕见路径，而且刚跨过一段：游标立刻钉住，不进攒批。
 		return m.saveSummary(ctx, ts)
 	default:
-		if err := m.writeFrames(ctx, ts, []*agentrewire.JournaledNotification{
+		if err := m.writeFrames(ctx, ts, []*agentrewire.DurableNotification{
 			// 实时这一路的发生时刻就是此刻:这一帧刚从中继上过来,唯一的误差是一跳
 			// 网络。补齐那一路正相反 —— 见 writeFrames 上的说明。
 			{Seq: seq, Payload: notification, Createtime: m.now()},
@@ -828,7 +828,7 @@ func (m *Mirror) attach(ctx context.Context, ts *trackedSession) (int64, error) 
 // 的,拿收帧时刻当发生时刻会把一条离线两天的对话整段盖成同一毫秒。对端报不出来时
 // 是 0,0 照样原样落库:「不知道」在下游读作「不显示时间」,补一个当下则是显示一个
 // 假的。
-func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agentrewire.JournaledNotification) error {
+func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agentrewire.DurableNotification) error {
 	rows := make([]*agent_session_entity.DurableFrame, 0, len(ns))
 	for _, n := range ns {
 		if n.GetPayload() == nil {

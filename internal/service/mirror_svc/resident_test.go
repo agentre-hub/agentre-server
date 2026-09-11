@@ -761,7 +761,7 @@ func lastPullCursor(t *testing.T, peer *fakeRelay) int64 {
 func TestFollow_OnlineMachineWithSavedSessions_KeepsExactlyOneConnection(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 
@@ -1065,7 +1065,7 @@ func TestFollow_MachineOffline_LeavesNoClaimBehind(t *testing.T) {
 func TestFollow_MachineAlreadyFollowedByAnotherReplica_DoesNotConnect(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	b := rig.replica(t, replicaB)
 	ctx := context.Background()
@@ -1170,7 +1170,7 @@ func TestFollower_DaemonRelinked_ReleasesTheClaimSoTheNextPassCanHandshakeAgain(
 func TestFollow_TakeoverAfterReplicaStops_ResumesFromStoredCursor(t *testing.T) {
 	rig := newResidentRig(t)
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{
 		durableRow(conv42, 1), durableRow(conv42, 2), durableRow(conv42, 3),
 	}
 	a := rig.replica(t, replicaA)
@@ -1222,8 +1222,8 @@ func TestFollow_SavedSetGrows_ResyncsOnTheSameConnection(t *testing.T) {
 	rig.peer.sessions = []*agentrewire.SessionSummary{
 		machineSession(conv42, "写个爬虫"), machineSession(conv77, "刚保存的"),
 	}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
-	rig.peer.durable[conv77] = []*agentrewire.JournaledNotification{durableRow(conv77, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv77] = []*agentrewire.DurableNotification{durableRow(conv77, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))

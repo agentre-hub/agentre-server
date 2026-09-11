@@ -20,7 +20,7 @@ import {
   PROTOCOL_VERSION,
   type AnyRpcMethod,
   type EventFrame,
-  type JournaledNotification,
+  type DurableNotification,
   type RunResultDoneFrame,
   type SessionAttachResult,
   type AutonomousTurnStartedFrame,
@@ -487,7 +487,7 @@ export class RelayClient {
     beforeSeq: number,
     limit: number,
     peerFingerprint?: string,
-  ): Promise<{ frames: JournaledNotification[]; hasBefore: boolean }> {
+  ): Promise<{ frames: DurableNotification[]; hasBefore: boolean }> {
     const origin = peerFingerprint?.trim() ?? "";
     const res = await this.request(rpcMethods.sessionPull, {
       conversationId,
@@ -849,7 +849,7 @@ export class RelayClient {
   }
 
   /** 补齐页里的一条通知:按 method 解成帧、把那一条上的 seq 盖上去,再走同一套去重投递。 */
-  private applyDurableNotification(st: SessionState, n: JournaledNotification): void {
+  private applyDurableNotification(st: SessionState, n: DurableNotification): void {
     const frame = durableToFrame(n);
     // 时刻取那一条报的那个,**不**退回当下:这一页可能是一段离线期间的成批补齐,
     // 拿此刻去盖会让整段转录显示成同一分钟。报不出来时是 0,读作「不知道」。
@@ -1039,14 +1039,14 @@ const DURABLE_METHODS: Record<string, string> = {
 };
 
 /**
- * 一行 wire.JournaledNotification(typed Protobuf)→ 与 server 镜像同形的中间帧。
+ * 一行 wire.DurableNotification(typed Protobuf)→ 与 server 镜像同形的中间帧。
  *
  * 认不出的通知形态交回一条**空 params 的行**而不是抛:这一页是 `map` 一次性投影的,
  * 其中一行抛出会让整页连同 catchUp() 一起被拒 —— 详情页于是停在「没能从这台机器读到
  * 这条对话的内容」,而机器在线、内容也确实在那里。空 params 那行交付不出去,但它照样
  * 占掉自己那一格游标(见 applyDedup 的注释),后面的帧不会被判成跳号。
  */
-function durableFromProtobuf(input: unknown): JournaledNotification {
+function durableFromProtobuf(input: unknown): DurableNotification {
   const entry = input as {
     seq: bigint;
     createtime?: bigint | number;
@@ -1138,7 +1138,7 @@ function durableFromProtobuf(input: unknown): JournaledNotification {
  * 认不出的 method / 解不动的载荷交回 null:调用方按「交付不出去也占掉这一格游标」
  * 处理(applyDurableNotification / applyDurableFrames),不报错、不跳号。
  */
-function durableToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
+function durableToFrame(n: DurableNotification): ProtobufRpcFrame | null {
   if (!n.params || typeof n.params !== "object") return null;
   const value = n.params as Record<string, unknown>;
   if (typeof value.conversationId !== "string" || value.conversationId === "")
@@ -1232,7 +1232,7 @@ function isNotification(frame: ProtobufRpcFrame): boolean {
 }
 
 /**
- * 应用 server 镜像交出的一页历史帧(wire.JournaledNotification 原样),投给与实时流
+ * 应用 server 镜像交出的一页历史帧(wire.DurableNotification 原样),投给与实时流
  * 同一批 handler;返回这一页里最大的 seq。
  *
  * 调用方拿这个 seq 预置中继客户端的游标(setCursor),实时流便从它之后接上 —— server
@@ -1244,7 +1244,7 @@ function isNotification(frame: ProtobufRpcFrame): boolean {
  * 随后每一条实时帧都被判成跳号。
  */
 export function applyDurableFrames(
-  frames: readonly JournaledNotification[],
+  frames: readonly DurableNotification[],
   handlers: NotificationHandlers,
 ): number {
   let last = 0;

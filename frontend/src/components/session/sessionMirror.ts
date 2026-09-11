@@ -1,6 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import type {
-  JournaledNotification,
+  DurableNotification,
   SessionSummary,
 } from "@agentre-hub/agentre-wire";
 
@@ -50,14 +50,14 @@ export interface MirrorSessionItem {
 }
 
 /**
- * GET /v1/agent-sessions/transcript 的一页。frames 是 wire.JournaledNotification 原样，
+ * GET /v1/agent-sessions/transcript 的一页。frames 是 wire.DurableNotification 原样，
  * 因此解得动它的是与实时流同一条路径（applyDurableFrames）。
  *
  * cursor 是**这一次读到哪**，不是这条对话的最新 seq —— 机器在线时实时流还在往前跑，
  * 拿它当「到此为止都读完了」会把后面的实时帧全判成重复。这里只用它翻下一页。
  */
 export interface MirrorTranscriptPage {
-  frames?: JournaledNotification[];
+  frames?: DurableNotification[];
   cursor: number;
   has_more: boolean;
   /** 反向读那一页里最老那条的 seq —— 往上翻的下一次入参。 */

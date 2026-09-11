@@ -56,7 +56,7 @@ type fakeRelay struct {
 	// sessions 是 session.list 交出的清单。
 	sessions []*agentrewire.SessionSummary
 	// durable 是各条会话的持久帧(seq 升序),pull 从这里翻页。
-	durable map[string][]*agentrewire.JournaledNotification
+	durable map[string][]*agentrewire.DurableNotification
 	// pageSize>0 时 pull 每页最多这么多条,用来逼出 HasMore 翻页。
 	pageSize int
 	// attachErr 非 nil 时 attach 一律失败(中断态会话在真 daemon 上回 ErrNoActiveTurn)。
@@ -80,7 +80,7 @@ type fakeRelay struct {
 }
 
 func newFakeRelay() *fakeRelay {
-	return &fakeRelay{durable: map[string][]*agentrewire.JournaledNotification{}}
+	return &fakeRelay{durable: map[string][]*agentrewire.DurableNotification{}}
 }
 
 func (f *fakeRelay) latestSeq(sid string) int64 {
@@ -372,13 +372,13 @@ func autonomousTurnDone(sid string, seq int64) *agentrewire.RpcNotification {
 	}}
 }
 
-func durableRow(sid string, seq int64) *agentrewire.JournaledNotification {
-	return &agentrewire.JournaledNotification{Seq: seq, Payload: notification(sid, seq, fmt.Sprintf("j%d", seq))}
+func durableRow(sid string, seq int64) *agentrewire.DurableNotification {
+	return &agentrewire.DurableNotification{Seq: seq, Payload: notification(sid, seq, fmt.Sprintf("j%d", seq))}
 }
 
 // durableText 造一条内容可辨认的持久帧:「库里剩下的是哪条对话」只有内容答得出来。
-func durableText(sid string, seq int64, text string) *agentrewire.JournaledNotification {
-	return &agentrewire.JournaledNotification{Seq: seq, Payload: notification(sid, seq, text)}
+func durableText(sid string, seq int64, text string) *agentrewire.DurableNotification {
+	return &agentrewire.DurableNotification{Seq: seq, Payload: notification(sid, seq, text)}
 }
 
 func storedSummary(fingerprint, conversationID string, cursor int64) *agent_session_entity.SessionSummary {
@@ -635,7 +635,7 @@ func TestApply_AutonomousTurn_MovesLifecycleBothWays(t *testing.T) {
 func TestApply_DuplicateNotification_Dropped(t *testing.T) {
 	r := newRig(t)
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	ctx := context.Background()
 	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
 	require.Equal(t, []int64{1, 2}, r.seqs())
@@ -650,7 +650,7 @@ func TestApply_DuplicateNotification_Dropped(t *testing.T) {
 func TestApply_SeqGap_PullsTheHole(t *testing.T) {
 	r := newRig(t)
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	ctx := context.Background()
 	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
 	r.relay.durable[conv42] = append(r.relay.durable[conv42], durableRow(conv42, 3), durableRow(conv42, 4), durableRow(conv42, 5))
@@ -671,7 +671,7 @@ func TestApply_UnsavedSession_WritesNothing(t *testing.T) {
 	r.relay.sessions = []*agentrewire.SessionSummary{
 		runningSession(conv42, "保存过的"), runningSession(conv77, "没保存的"), other,
 	}
-	r.relay.durable[conv77] = []*agentrewire.JournaledNotification{durableRow(conv77, 1)}
+	r.relay.durable[conv77] = []*agentrewire.DurableNotification{durableRow(conv77, 1)}
 	ctx := context.Background()
 
 	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
@@ -697,7 +697,7 @@ func TestApply_UnsavedSession_WritesNothing(t *testing.T) {
 func TestSync_Reconnect_PullsFromOwnStoredCursor(t *testing.T) {
 	r := newRig(t, storedSummary(testMachine, conv42, 2))
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{
 		durableRow(conv42, 1), durableRow(conv42, 2), durableRow(conv42, 3), durableRow(conv42, 4), durableRow(conv42, 5),
 	}
 	r.relay.pageSize = 2 // 逼出翻页
@@ -795,7 +795,7 @@ func TestSync_InterruptedSession_PulledNeverAttached(t *testing.T) {
 	s.LifecycleState = relaywire.SessionLifecycleInterrupted
 	s.LatestSeq = 3
 	r.relay.sessions = []*agentrewire.SessionSummary{s}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{
 		durableRow(conv42, 1), durableRow(conv42, 2), durableRow(conv42, 3),
 	}
 	// attach 一旦发出就会失败 —— 断言里也就分得清「没发」和「发了但被吞了」。
@@ -814,7 +814,7 @@ func TestSync_InterruptedSession_PulledNeverAttached(t *testing.T) {
 func TestSync_AttachFails_StillMirrorsHistory(t *testing.T) {
 	r := newRig(t)
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "刚断的")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	r.relay.attachErr = errors.New("no active turn")
 
 	require.NoError(t, r.mirror.Sync(context.Background(),
@@ -836,7 +836,7 @@ func TestSync_AttachFails_StillMirrorsHistory(t *testing.T) {
 func TestSync_PeerHighWaterBelowStoredCursor_ResetsInsteadOfFreezing(t *testing.T) {
 	r := newRig(t, storedSummary(testMachine, conv42, 100))
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "帧编号倒退之后的这一段")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{
 		durableRow(conv42, 1), durableRow(conv42, 2), durableRow(conv42, 3),
 	}
 	ctx := context.Background()
@@ -890,7 +890,7 @@ func TestSync_PeerFramesRewound_OldTranscriptPurgedBeforeReplay(t *testing.T) {
 
 	relay := newFakeRelay()
 	relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "帧编号倒退之后的这一段")}
-	relay.durable[conv42] = []*agentrewire.JournaledNotification{
+	relay.durable[conv42] = []*agentrewire.DurableNotification{
 		durableText(conv42, 1, "新对话第一句"), durableText(conv42, 2, "新对话第二句"),
 	}
 
@@ -909,7 +909,7 @@ func TestSync_PeerFramesRewound_OldTranscriptPurgedBeforeReplay(t *testing.T) {
 func TestSync_PeerHighWaterAboveCursor_KeepsCursor(t *testing.T) {
 	r := newRig(t, storedSummary(testMachine, conv42, 2))
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{
 		durableRow(conv42, 1), durableRow(conv42, 2), durableRow(conv42, 3),
 	}
 
@@ -1037,7 +1037,7 @@ func TestApply_LandedNotification_SignalsTheAccount(t *testing.T) {
 func TestApply_DuplicateNotification_SaysNothing(t *testing.T) {
 	r := newRig(t)
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	ctx := context.Background()
 	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
 	signals := &recordingSignals{}
@@ -1053,7 +1053,7 @@ func TestApply_DuplicateNotification_SaysNothing(t *testing.T) {
 func TestSync_CatchUp_SignalsTheAccount(t *testing.T) {
 	r := newRig(t)
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
 	signals := &recordingSignals{}
 	r.mirror.signals = signals
 
@@ -1137,7 +1137,7 @@ func TestPullFrames_TakeThePeersReportedCreatetime(t *testing.T) {
 	first.Createtime = 1_700_000_000_111
 	second := durableText(conv42, 2, "第二句")
 	second.Createtime = 1_700_000_009_222
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{first, second}
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{first, second}
 	ctx := context.Background()
 
 	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
@@ -1153,7 +1153,7 @@ func TestPullFrames_UnreportedCreatetimeStaysZero(t *testing.T) {
 	r := newRig(t)
 	r.mirror.now = func() int64 { return 1_800_000_000_000 }
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{durableText(conv42, 1, "第一句")}
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{durableText(conv42, 1, "第一句")}
 	ctx := context.Background()
 
 	require.NoError(t, r.mirror.Sync(ctx, []SavedSession{{ConversationID: conv42}}))
@@ -1244,7 +1244,7 @@ func TestRevive_StillInterrupted_ListsButDoesNotAttach(t *testing.T) {
 func TestApply_TurnDoneArrivesThroughAGap_StillLandsIdle(t *testing.T) {
 	r := newRig(t)
 	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{
 		durableRow(conv42, 1), durableRow(conv42, 2),
 	}
 	ctx := context.Background()
@@ -1552,7 +1552,7 @@ func TestWriteFrames_UnprojectableFrameKeepsItsProtoBytes(t *testing.T) {
 	opaque := &agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_TerminalData{
 		TerminalData: &agentrewire.TerminalDataNotification{TerminalId: "t1", Data: []byte{0x00, 0x01}},
 	}}
-	r.relay.durable[conv42] = []*agentrewire.JournaledNotification{
+	r.relay.durable[conv42] = []*agentrewire.DurableNotification{
 		{Seq: 1, Payload: opaque},
 		durableText(conv42, 2, "照常"),
 	}

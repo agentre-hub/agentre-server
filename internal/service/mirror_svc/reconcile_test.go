@@ -23,7 +23,7 @@ func TestReconcile_SavedButNeverMirrored_MachineIsPickedUp(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves(saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "还没镜像过的")}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	a := rig.replica(t, replicaA)
 	require.Empty(t, rig.store.rowSeqs(conv42), "起点:库里一行都没有")
 
@@ -75,7 +75,7 @@ func TestReconcile_FollowerLetGo_MachineIsPickedUpAgain(t *testing.T) {
 	rig := newResidentRig(t)
 	newFakeSaves(saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 	require.NoError(t, NewReconciler(a.sup).Reconcile(ctx))
@@ -97,7 +97,7 @@ func TestReconcile_OneMachineFails_TheRestStillGetFollowed(t *testing.T) {
 	const broken = "fp-broken-0"
 	newFakeSaves(saved(testUserID, broken, conv7), saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	a.net.failConnect(broken)
 
@@ -120,7 +120,7 @@ func TestReconcile_MachineNoLongerCarriesAnySavedConversation_IsLetGo(t *testing
 	rig := newResidentRig(t)
 	follows := newFakeSaves(saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.durable[conv42] = []*agentrewire.JournaledNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 	require.NoError(t, NewReconciler(a.sup).Reconcile(ctx))
