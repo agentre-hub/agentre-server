@@ -43,17 +43,17 @@ const (
 // （项目同步标识, 指纹）也建在它上面，R4b 的重复由数据库唯一约束一次性挡住。
 type SyncObject struct {
 	ID     int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID int64  `gorm:"column:user_id;type:bigint;not null"`
-	Kind   string `gorm:"column:kind;type:text;not null"`
-	SyncID string `gorm:"column:sync_id;type:text;not null"`
+	UserID int64  `gorm:"column:user_id"`
+	Kind   string `gorm:"column:kind"`
+	SyncID string `gorm:"column:sync_id"`
 	// ScopeSyncID 是这一行自然键的第二段：它装什么取决于 kind。
 	// project_location 装项目的 sync_id, agent_backend_cli 装**后端**的 sync_id;
 	// 其余七种 kind 恒为空串。叫 project_sync_id 时它对后者是句假话。
-	ScopeSyncID         string `gorm:"column:scope_sync_id;type:text;not null;default:''"`
-	AgentredFingerprint string `gorm:"column:agentred_fingerprint;type:text;not null;default:''"`
-	Payload             string `gorm:"column:payload;type:json;not null"`
+	ScopeSyncID         string `gorm:"column:scope_sync_id;default:''"`
+	AgentredFingerprint string `gorm:"column:agentred_fingerprint;default:''"`
+	Payload             string `gorm:"column:payload"`
 	// Version 由账号级单调序列分配，是 R4 唯一的胜负依据。
-	Version int64 `gorm:"column:version;type:bigint;not null"`
+	Version int64 `gorm:"column:version"`
 	// SyncUpdatedAt 是客户端提交的最后修改时间，只用于展示与 30 天窗口计算，
 	// 不参与任何胜负比较。
 	//
@@ -61,13 +61,13 @@ type SyncObject struct {
 	// 2026-08-27-schema-overhaul.md 决策 13），字段却**刻意**不叫 UpdatedAt：
 	// GORM 按字段名认自己的自动时间戳列，取名 UpdatedAt 会让任何一条普通 Updates
 	// 都把客户端报的时刻改写成服务端的当下——正是决策 10 在会话表上刚拆掉的那个陷阱。
-	SyncUpdatedAt int64 `gorm:"column:updated_at;type:bigint;not null;default:0"`
+	SyncUpdatedAt int64 `gorm:"column:updated_at;default:0"`
 	// OriginFingerprint 是最后一次修改来自哪台机器（决策 14：跨机引用一律用指纹）。
 	// 空串 = 不是任何一台设备推上来的（server 自己落的墓碑）。
-	OriginFingerprint string `gorm:"column:origin_fingerprint;type:varchar(128);not null;default:''"`
-	DeletedAt         int64  `gorm:"column:deleted_at;type:bigint;not null;default:0"`
-	Createtime        int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
-	Updatetime        int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	OriginFingerprint string `gorm:"column:origin_fingerprint;default:''"`
+	DeletedAt         int64  `gorm:"column:deleted_at;default:0"`
+	Createtime        int64  `gorm:"column:createtime;default:0"`
+	Updatetime        int64  `gorm:"column:updatetime;default:0"`
 }
 
 func (*SyncObject) TableName() string { return "sync_objects" }
@@ -89,8 +89,8 @@ type DeviceSyncState struct {
 	// (user_id, device_id) 是自然键，落在唯一索引上；行身份由 ID 承担。
 	UserID     int64 `gorm:"column:user_id"`
 	DeviceID   int64 `gorm:"column:device_id"`
-	LastSyncAt int64 `gorm:"column:last_sync_at;type:bigint;not null;default:0"`
-	Updatetime int64 `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	LastSyncAt int64 `gorm:"column:last_sync_at;default:0"`
+	Updatetime int64 `gorm:"column:updatetime;default:0"`
 }
 
 func (*DeviceSyncState) TableName() string { return "sync_device_states" }
@@ -101,9 +101,9 @@ type SyncAvatar struct {
 	// (user_id, content_hash) 是自然键，落在唯一索引上；行身份由 ID 承担。
 	UserID      int64  `gorm:"column:user_id"`
 	ContentHash string `gorm:"column:content_hash"`
-	ContentType string `gorm:"column:content_type;type:text;not null;default:''"`
-	Content     string `gorm:"column:content;type:text;not null"`
-	Createtime  int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
+	ContentType string `gorm:"column:content_type;default:''"`
+	Content     string `gorm:"column:content"`
+	Createtime  int64  `gorm:"column:createtime;default:0"`
 }
 
 func (*SyncAvatar) TableName() string { return "sync_avatars" }
@@ -115,8 +115,8 @@ type DeviceLocalPath struct {
 	UserID        int64  `gorm:"column:user_id"`
 	DeviceID      int64  `gorm:"column:device_id"`
 	ProjectSyncID string `gorm:"column:project_sync_id"`
-	Path          string `gorm:"column:path;type:text;not null"`
-	Updatetime    int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	Path          string `gorm:"column:path"`
+	Updatetime    int64  `gorm:"column:updatetime;default:0"`
 }
 
 func (*DeviceLocalPath) TableName() string { return "device_local_paths" }
