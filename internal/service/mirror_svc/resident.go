@@ -455,7 +455,7 @@ func (f *follower) run(ctx context.Context) {
 			// 回来了。
 			f.applyHint(ctx, hint)
 		case note := <-f.notes:
-			if err := f.mirrorNow().Apply(ctx, note.payload); err != nil {
+			if err := f.applyWithDeadline(ctx, note.payload); err != nil {
 				_, _, method := notificationHead(note.payload)
 				logger.Ctx(ctx).Warn("mirror live notification not stored, resyncing",
 					zap.Int64("userId", f.key.userID), zap.String("machineFingerprint", f.key.fingerprint),
@@ -463,7 +463,7 @@ func (f *follower) run(ctx context.Context) {
 				f.requestResync()
 			}
 		case <-f.resync:
-			if err := f.mirrorNow().Sync(ctx, f.savedNow()); err != nil {
+			if err := f.syncWithDeadline(ctx); err != nil {
 				logger.Ctx(ctx).Warn("mirror resync failed",
 					zap.Int64("userId", f.key.userID), zap.String("machineFingerprint", f.key.fingerprint),
 					zap.Error(err))
@@ -471,7 +471,7 @@ func (f *follower) run(ctx context.Context) {
 		case <-revive.C:
 			// 接不上的那些在这里拿到第二次机会。它跑在同一条 goroutine 上，因此
 			// 与 Apply / Sync 天然不并发（这只循环的既定前提）。
-			if err := f.mirrorNow().Revive(ctx); err != nil {
+			if err := f.reviveWithDeadline(ctx); err != nil {
 				logger.Ctx(ctx).Warn("mirror revive failed",
 					zap.Int64("userId", f.key.userID), zap.String("machineFingerprint", f.key.fingerprint),
 					zap.Error(err))
@@ -485,6 +485,33 @@ func (f *follower) run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// applyWithDeadline / syncWithDeadline / reviveWithDeadline 给常驻循环这一轮发起的
+// 库调用扣上 Config.CallTimeout 的截止时间。
+//
+// 循环的 ctx（go f.run(context.WithoutCancel(ctx))）派生自 Follow 调用方，永不取消、
+// 永不到期——网络黑洞式的慢调用（比如 MySQL 那一端半死不活）今天会一直悬着占住这条
+// 循环的 goroutine，直到 OS 的 TCP 重传超时（Linux 上约 15 分钟）才收得回来，而
+// maxOpenConns 只有 40，吃住一条就少一条可用连接。这里补的截止只覆盖单次迭代：
+// 超时后这次调用像任何别的错误一样被上面的 select 分支记日志、按原有节奏重试或排一次
+// 重同步，循环本身的语义一点不变。
+func (f *follower) applyWithDeadline(ctx context.Context, notification *agentrewire.RpcNotification) error {
+	callCtx, cancel := context.WithTimeout(ctx, f.sup.cfg.CallTimeout)
+	defer cancel()
+	return f.mirrorNow().Apply(callCtx, notification)
+}
+
+func (f *follower) syncWithDeadline(ctx context.Context) error {
+	callCtx, cancel := context.WithTimeout(ctx, f.sup.cfg.CallTimeout)
+	defer cancel()
+	return f.mirrorNow().Sync(callCtx, f.savedNow())
+}
+
+func (f *follower) reviveWithDeadline(ctx context.Context) error {
+	callCtx, cancel := context.WithTimeout(ctx, f.sup.cfg.CallTimeout)
+	defer cancel()
+	return f.mirrorNow().Revive(callCtx)
 }
 
 // keepalive 每轮回答同一个问题：这台机器现在还该由我跟吗。

@@ -13,7 +13,7 @@ db:
   driver: mysql
   # Placeholder credentials. The database name must carry an e2e marker; the runner
   # never creates, drops, renames, or truncates this database.
-  dsn: "e2e_user:e2e_password@tcp(127.0.0.1:3306)/agentre_e2e?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
+  dsn: "e2e_user:e2e_password@tcp(127.0.0.1:3306)/agentre_e2e?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true&timeout=5s&readTimeout=60s&writeTimeout=60s"
   debug: false
   prepareStmt: false
   # Pool settings must be explicit: a zero in cago means "don't set", which leaves the
