@@ -1,6 +1,7 @@
 package agent_session_repo
 
 import (
+	"errors"
 	"regexp"
 	"testing"
 
@@ -99,17 +100,61 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 // 不清就会让旧帧原地胜出，页面上显示的是另一条对话的转录。
 // 两列缺一不可：少了 user_id 是跨账号删，少了 conversation_id 会连累别的
 // 那条同号会话。
+//
+// 一批之内（受影响行数 < 1000）应该只发一条语句：分批循环见到没删满就该停,
+// 不能多打一轮空的 DELETE。
 func TestDeleteFrames_ScopedToTheWholeIdentity(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDurableFrame()
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=?",
-	)).WithArgs(int64(7), "conv-42").WillReturnResult(sqlmock.NewResult(0, 5))
+		"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? LIMIT ?",
+	)).WithArgs(int64(7), "conv-42", int64(cleanupBatchSize)).WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
 	require.NoError(t, r.DeleteFrames(ctx, 7, "conv-42"))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 一条对话攒了超过一批的帧（真库实测：30000 行不分批一次性锁 36404 行、写出
+// 34MB 的 binlog 事务；LIMIT 1000 一批只经唯一键锁 2005 行）：删满一批说明可能
+// 还没到底,必须再打一条,直到某一批没删满为止——这里钉住恰好两批那个边界。每一批
+// 各自一个事务(与 sync_repo.DeleteTombstonesBefore、device_token_repo.deleteBatched
+// 同一形状),锁的持有时间因此被切成一小段一小段,而不是整段攒在一次提交里。
+func TestDeleteFrames_GivenMoreThanOneBatch_ThenDeletesInBoundedChunks(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDurableFrame()
+
+	for _, affected := range []int64{cleanupBatchSize, 7} {
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta(
+			"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? LIMIT ?",
+		)).WithArgs(int64(7), "conv-42", int64(cleanupBatchSize)).WillReturnResult(sqlmock.NewResult(0, affected))
+		mock.ExpectCommit()
+	}
+
+	require.NoError(t, r.DeleteFrames(ctx, 7, "conv-42"))
+	require.NoError(t, mock.ExpectationsWereMet(), "删满一批之后没有继续删下一批")
+}
+
+// 某一批中途报错：循环必须原样把错误传回去,而不是吞掉继续删下一批——已经删掉
+// 的那部分留在库里是可接受的部分删除(幂等重试可以补齐),但绝不能把错误吃掉
+// 让调用方以为删干净了。
+func TestDeleteFrames_GivenBatchError_ThenReturnsError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDurableFrame()
+
+	wantErr := errors.New("boom")
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? LIMIT ?",
+	)).WithArgs(int64(7), "conv-42", int64(cleanupBatchSize)).WillReturnError(wantErr)
+	mock.ExpectRollback()
+
+	err := r.DeleteFrames(ctx, 7, "conv-42")
+	require.Error(t, err)
+	require.ErrorIs(t, err, wantErr)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
