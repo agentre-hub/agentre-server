@@ -227,8 +227,7 @@ runner 负责 pnpm install、前端构建和 Go 编译，能够复用 Go 与 pnp
 `deploy.yaml` 那条链路（main / release/* / test/*）。
 
 推送 `dev` 时流水线会自己建 `bin/`、覆盖编排与 `Dockerfile.dev` 并重建容器；每次部署
-复用固定的 `agentre-server:dev` tag，并删除上一个同名镜像。机器上残留的旧
-`dev.<短 commit>` 镜像可按需用 `docker image rm` 清理。
+复用固定的 `agentre-server:dev` tag，并删除上一个同名镜像。
 
 和上面的「Docker 单机部署」不是一回事，别混用：那份会额外拉起 MySQL 和 Redis 并把
 数据落在仓库根的 `data/`；dev 的 MySQL、Redis、etcd 都是外部既有服务，套用那份等于
@@ -252,8 +251,7 @@ dev 的配置和 k8s 一样放在 etcd 里，`/config/dev/agentre-server/` 下�
   keys/jwt.key jwt.pub     机器本地 JWT 密钥对
 ```
 
-`.env` 已经没用了：流水线不写也不读它，`SERVER_IMAGE` 那一项（如果还留着）没有任何
-东西会去解析。构建上下文只给 `bin/`，不是整个部署目录——`config.yaml` 和 `keys/`
+构建上下文只给 `bin/`，不是整个部署目录——`config.yaml` 和 `keys/`
 一个字节都不该进构建上下文。
 
 手动起停：
@@ -271,30 +269,20 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
 这里不需要 registry 凭据：二进制和镜像都不经过 registry，只有基础镜像
 `gcr.io/distroless/static-debian12` 需要能拉到（`coding.local` 已确认可达）。
 
-### 第一次切换要做的（只做一次）
+### 新搭一台 dev 目标机
 
-流水线只负责「拉新镜像 + compose up」。下面这些是一次性且不可逆的动作，没放进流水线
-——放进去也只有第一次有用，之后永远是死代码。按顺序做：
+流水线只负责「编二进制 + 覆盖编排 + 重建容器」。下面这些是每台目标机只做一次的准备，
+没放进流水线。按顺序做：
 
-1. **停掉现在的裸进程，把 8443 让出来。** dev 以前是从 tmux 窗口跑
-   `/root/code/agentre/agentre-server/bin/server`：
-
-   ```bash
-   pkill -f '^\./bin/server$' || true
-   tmux kill-window -t 0:agentre-server 2>/dev/null || true
-   ss -ltnp | grep 8443 || echo "8443 已空出"
-   ```
-
-2. **建部署目录，放引导配置和密钥。** 引导配置直接沿用机器上现成的那份：
+1. **建部署目录，放引导配置和密钥。** `config.yaml` 是 `env: dev, source: etcd` 的引导
+   配置，`keys/` 放这套 dev 的 JWT 密钥对：
 
    ```bash
    mkdir -p /srv/agentre-dev/keys
-   cp /root/code/agentre/agentre-server/configs/config.yaml /srv/agentre-dev/config.yaml
-   cp /root/code/agentre/agentre-server/runtime/keys/jwt.key /srv/agentre-dev/keys/
-   cp /root/code/agentre/agentre-server/runtime/keys/jwt.pub /srv/agentre-dev/keys/
+   # 引导配置放到 /srv/agentre-dev/config.yaml,密钥对放到 /srv/agentre-dev/keys/jwt.key、jwt.pub
    chmod 600 /srv/agentre-dev/keys/jwt.key
-   # 镜像里跑的是 uid 65532(Dockerfile 的 USER 65532:65532),不是 root。上面几个
-   # 文件从源处继承的是 600 root,不交出去容器一个都读不到,启动就挂。
+   # 镜像里跑的是 uid 65532(Dockerfile 的 USER 65532:65532),不是 root。文件属 root
+   # 的话容器一个都读不到,启动就挂。
    chown 65532:65532 /srv/agentre-dev/config.yaml /srv/agentre-dev/keys \
                      /srv/agentre-dev/keys/jwt.key /srv/agentre-dev/keys/jwt.pub
    ```
@@ -307,19 +295,16 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
    done
    ```
 
-3. **把 etcd 里的 JWT 路径改成容器路径。** 现在 `/config/dev/agentre-server/server`
-   里写的是宿主绝对路径 `/root/code/agentre/agentre-server/runtime/keys/jwt.key`，
-   容器里没有这个路径，不改就是启动即挂（`read pem ...: no such file or directory`）。
-   把那两条路径改成 `/keys/jwt.key` 和 `/keys/jwt.pub`，该键的其余内容原样保留，
-   改法见上面「配置放在 etcd 里」。
+2. **etcd 里的 JWT 路径写容器路径。** `/config/dev/agentre-server/server` 里那两条路径
+   必须是 `/keys/jwt.key` 和 `/keys/jwt.pub`；写成宿主路径的话容器里没有，启动即挂
+   （`read pem ...: no such file or directory`）。改法见下面「配置放在 etcd 里」。
 
-4. **把 etcd 里 dev 的 `logFile.enable` 关掉。** `/config/dev/agentre-server/logger` 现在是
-   `enable: true`，写 `./runtime/logs/cago.log`。容器的 WORKDIR 是 `/app` 且属 root，
-   uid 65532 建不出 `runtime/logs`。这和上面 k8s 那节写的是同一条约束——容器里
-   `logFile.enable` 必须是 `false`，只是 dev 一样绕不过去。日志照样从
+3. **etcd 里 dev 的 `logFile.enable` 必须是 `false`。** `/config/dev/agentre-server/logger`
+   开着文件日志会写 `./runtime/logs/cago.log`，而容器的 WORKDIR 是 `/app` 且属 root，
+   uid 65532 建不出 `runtime/logs`。这和下面 k8s 那节写的是同一条约束。日志从
    `docker compose logs` 看，`disableConsole` 保持 `false` 就行。
 
-5. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
+4. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
    对应的私钥就是下面要配的 `DEV_SSH_KEY`。没有现成密钥就在目标机上现生一对，
    私钥不必落到第三处：
 
@@ -329,12 +314,11 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
    cat /root/.ssh/gitea_dev_deploy      # 这一份贴进 Gitea 的 DEV_SSH_KEY
    ```
 
-6. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
+5. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
 
-7. **建 dev 分支并推上去**，这一推就会跑第一次部署：
+6. **推 `dev` 分支**，这一推就会跑第一次部署：
 
    ```bash
-   git checkout -b dev
    git push gitea dev
    ```
 

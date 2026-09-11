@@ -12,7 +12,7 @@ make build             # frontend build → copy into internal/web/dist → go b
 
 make test              # THE default gate: test-backend + test-frontend
 make test-backend      # go test -race ./...   (there are no build tags — see below)
-make test-frontend     # cd frontend && pnpm test  (vitest)
+make test-frontend     # cd frontend && pnpm typecheck && pnpm test  (vitest)
 make e2e               # formal server + real MySQL/Redis + desktop/mobile Chromium
 make test-cover        # coverage.html
 
@@ -94,9 +94,10 @@ review, and reflowing it makes those diffs unreadable.
 There is no `//nolint` culture here. Every exemption is declared in one place,
 with its reason next to it:
 
-- **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go` and
-  `internal/bootstrap/cago.go` may use stdlib `log`, because cago's logger does
-  not exist until `component.Core()` has run. That is the only window.
+- **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go`,
+  `internal/bootstrap/cago.go` and `internal/bootstrap/jwtkeys.go` (which `main` runs
+  before `cago.New`) may use stdlib `log`, because cago's logger does not exist until
+  `component.Core()` has run. That is the only window.
 - **`frontend/eslint.config.js`** — `eslint-rules/` may contain literal colours
   (it lists the banned colour names). Test files may contain literals of both
   kinds, because they construct the violating samples.
@@ -112,9 +113,7 @@ If you cannot write a reason, the code is what needs changing.
 Append-only. `migrations/migrations.go` holds `migrationList()`; new entries go at
 the **end**, and existing entries are never edited — someone's database has already
 run them. To correct an earlier migration, add a patch migration. Prefer native SQL
-for DDL. The one exception is a pre-release squash, where the product has not shipped
-yet and every database can be rebuilt; those retire the folded-in IDs forever, see the
-retired-ID block in `migrations/migrations.go`.
+for DDL.
 
 `internal/model/entity/schema_test.go` compares the entity structs against the baseline
 DDL (every writable field must have a column, every table must be claimed by an entity),

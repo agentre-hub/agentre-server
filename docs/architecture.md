@@ -20,7 +20,7 @@ model/entity/*_entity/   rich entities: Check(ctx), IsActive(), state transition
 
 Dependencies flow **downward only**. Two consequences that get violated first:
 
-- `internal/pkg/*` is a cross-cutting layer (jwt, session, ratelimit, usercode, code).
+- `internal/pkg/*` is a cross-cutting layer (jwt, session, usercode, wireversion, code).
   It may be imported by anything above it and must **never import service or repository**.
   If a `pkg` package needs business data, the dependency is backwards — pass the data in.
 - Service depends on the repository **interface**, never the struct. That is what makes
@@ -181,9 +181,13 @@ middleware groups are the authorization model:
 | Either credential | `SessionOrDeviceAuth(signer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
 | Device JWT | `DeviceJWT(signer)` | `/v1/devices/revocations`, `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot` |
 | Relay client | `RelayClientJWT(signer)` | `/v1/relay/client`; accepts native Device JWTs and browser session-derived short-lived relay tickets |
+| Port forward | `SessionAuth()` only — **no** `CSRF()` | `/fw/*` |
 
-Cookie-authenticated writes always clear CSRF, whichever group they sit in: a
-Bearer caller carries no cookie and is exempt, a session caller is not.
+Cookie-authenticated writes clear CSRF in every group except `/fw/`: a Bearer caller
+carries no cookie and is exempt, a session caller is not. `/fw/` is the one deliberate
+exception — a forwarded app's own writes cannot carry the console's token — and the
+same-origin exposure it opens is recorded in the "安全" section of
+[the port-forward spec](specs/2026-09-09-console-port-forward-host.md).
 
 Endpoints are declared as structs with `mux.Meta`, which carries path and method:
 
@@ -225,6 +229,7 @@ cron.Cron()
 RunMigrations
 task.Task
 task.MirrorResident
+task.PortForwardResident → before mux, so shutdown stops accepting /fw/ before closing the pool
 web.MountSPA
 mux.HTTP(router)      → collects middleware registered above; must stay after those components
 task.RelayDrain       → registered after mux deliberately, so reverse-order shutdown drains relay before mux
