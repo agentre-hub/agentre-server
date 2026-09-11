@@ -27,6 +27,7 @@ import {
   indicatorHostMessageId,
   normalizePermissionMode,
   opensAssistantMessage,
+  recordRecentTarget,
   reduceSessionState,
   resolveProviderPillState,
   type ChatComposerHandle,
@@ -1423,6 +1424,9 @@ export default function SessionDetailView({
         );
         return;
       }
+      // 至少写成了一台，这次选择就生效了 —— 与「只成一台仍算成功」同一判据。本站
+      // 选择器不分执行位置（空串）。
+      recordRecentTarget("chat", "", next);
       setModelTargetNote(
         ok < results.length
           ? t("session.composerControls.modelPartiallySynced")

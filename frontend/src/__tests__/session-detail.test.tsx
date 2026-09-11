@@ -1146,6 +1146,28 @@ describe("会话详情页", () => {
     });
   });
 
+  // 「最近使用」只记落了库的目标（共享 recents 的约定：由消费方在保存成功后记录）。
+  it("写到执行端成功后，这一目标进入最近使用", async () => {
+    localStorage.clear();
+    mockModelTarget({});
+
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Provider and model/ }),
+    );
+    fireEvent.click(screen.getByRole("option", { name: /Opus/ }));
+
+    await waitFor(() =>
+      expect(
+        JSON.parse(
+          localStorage.getItem(
+            "agentre.modelTargetPicker.recent.v1.chat.local",
+          ) ?? "null",
+        ),
+      ).toEqual([{ providerKey: "anthropic", modelKey: "opus" }]),
+    );
+  });
+
   it("选中之后写到执行端", async () => {
     mockModelTarget({});
 
@@ -1169,6 +1191,7 @@ describe("会话详情页", () => {
 
   // 写不进去就回滚，不做「看起来成功了」的乐观留存——用户会以为下一轮用的是新模型。
   it("写不进去时回滚控件并如实说明", async () => {
+    localStorage.clear();
     mockModelTarget({
       setModelTarget: () => {
         throw new Error("machine says no");
@@ -1188,6 +1211,10 @@ describe("会话详情页", () => {
     expect(
       screen.getByRole("button", { name: /Provider and model/ }).textContent,
     ).toContain("Follow agent binding");
+    // 没写成的那一次不算用过。
+    expect(
+      localStorage.getItem("agentre.modelTargetPicker.recent.v1.chat.local"),
+    ).toBeNull();
   });
 
   it("实时收到 tool_permission_request 事件后刷新待决策并出现审批卡", async () => {

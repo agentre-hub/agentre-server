@@ -7,6 +7,7 @@ import {
   PopoverTrigger,
   type ChatComposerHandle,
   type ChatImageAttachment,
+  recordRecentTarget,
   type ModelTarget,
   type TranscriptMessage,
   Alert,
@@ -328,6 +329,8 @@ export function DraftSession({
         });
         // 记在派发**成功之后**：开不起来的那次不算「用过」。
         rememberAgent(agent.sync_id);
+        // 挑的模型同一条规则：它此刻才随会话落库。本站选择器不分执行位置（空串）。
+        recordRecentTarget("chat", "", effectiveTarget);
         onStarted(out);
       } catch (e: unknown) {
         setStartError(e);

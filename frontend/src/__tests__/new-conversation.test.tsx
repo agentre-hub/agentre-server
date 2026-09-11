@@ -1966,6 +1966,74 @@ describe("草稿页的权限档位与模型控件", () => {
     });
   });
 
+  // 草稿里挑的模型在派发成功那一刻才随会话落库；「最近使用」只记落了库的目标，与
+  // 桌面端同一条规则（共享 recents 的约定：由消费方在保存成功后记录）。
+  it("Given 用户挑了模型, When 第一句派发成功, Then 这一目标进入最近使用", async () => {
+    stubMachine(fourModes);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const modelPill = await screen.findByRole("button", {
+      name: /Provider and model/,
+    });
+    fireEvent.click(modelPill);
+    fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
+    await waitFor(() =>
+      expect(modelPill.textContent).toContain("claude-opus-4-6"),
+    );
+    // 只是挑中还没落库：不进最近使用。
+    expect(
+      localStorage.getItem("agentre.modelTargetPicker.recent.v1.chat.local"),
+    ).toBeNull();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() =>
+      expect(
+        JSON.parse(
+          localStorage.getItem(
+            "agentre.modelTargetPicker.recent.v1.chat.local",
+          ) ?? "null",
+        ),
+      ).toEqual([{ providerKey: "pk-1", modelKey: "mk-2" }]),
+    );
+  });
+
+  it("Given 用户挑了模型, When 第一句派发失败, Then 不进最近使用", async () => {
+    stubMachine(fourModes);
+    mockDispatch.mockRejectedValue(new Error("relay down"));
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const modelPill = await screen.findByRole("button", {
+      name: /Provider and model/,
+    });
+    fireEvent.click(modelPill);
+    fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
+    await waitFor(() =>
+      expect(modelPill.textContent).toContain("claude-opus-4-6"),
+    );
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    // 失败会把这句话还回输入框 —— 等它落定，确认失败分支已经走完。
+    await waitFor(() =>
+      expect(draftEditable().textContent).toContain("跑一下失败的测试"),
+    );
+    expect(
+      localStorage.getItem("agentre.modelTargetPicker.recent.v1.chat.local"),
+    ).toBeNull();
+  });
+
   /**
    * 草稿页的第三颗控件：会话级思考力度（规格 2026-09-01）。草稿态还没有会话行，
    * 所选档位是纯瞬态的，随第一句一并过线（并由派发在 ack 之后补钉）。
