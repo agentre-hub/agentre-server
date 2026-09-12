@@ -120,7 +120,7 @@ func (*SessionSummary) TableName() string { return "agent_sessions" }
 // The wire is unaffected: peers still exchange Protobuf. Storage encoding is a
 // per-database decision (2026-09-05-transcript-storage-alignment.md 决策 7).
 //
-// 这三列既是身份也是主键（migrations/202609040108_agent_sessions.go）：
+// 这三列既是身份也是主键（migrations/202609120101_initial_schema.go）：
 // 帧按 (账号, 对话, seq) 聚簇存放，没有代理自增列。转录尾部因此是聚簇索引上的一段
 // 连续范围，而不是二级索引扫一段再逐行随机回表取 longblob。
 //
@@ -169,7 +169,7 @@ type DeleteTodo struct {
 	// 见 ListPendingMachines 与 saved_session_svc.Delete。它曾经叫
 	// peer_fingerprint，而那个名字说的是发起端：两个角色的取值范围重叠（本机开的
 	// 对话两者同值），拿错了列不会有任何一处报错，只会把待办拨给一台从来没跑过这
-	// 条对话的机器。这个名字的理由见 migrations/202609040108_agent_sessions.go。
+	// 条对话的机器。这个名字的理由见 migrations/202609120101_initial_schema.go。
 	DeviceFingerprint string `gorm:"column:device_fingerprint"`
 	Createtime        int64  `gorm:"column:createtime;default:0"`
 }
