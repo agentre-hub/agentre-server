@@ -80,8 +80,7 @@ func TestCreate(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta(
 		"INSERT INTO `device_tokens` (`device_id`,`refresh_token_hash`,`access_jti`")).
 		WithArgs(int64(42), "h", "jti-1", sqlmock.AnyArg(),
-			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
-			sqlmock.AnyArg()).
+			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(99, 1))
 	mock.ExpectCommit()
 	e := &device_token_entity.DeviceToken{DeviceID: 42, RefreshTokenHash: "h", RefreshExpiresAt: 1000, AccessJTI: "jti-1"}

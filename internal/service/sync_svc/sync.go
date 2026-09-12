@@ -119,9 +119,8 @@ func (s *syncSvc) Push(ctx context.Context, in PushInput) (*PushOutput, error) {
 		txCtx := db.WithContextDB(ctx, tx)
 		// 整批的版本号一次取完,取在**外层事务里**、写入之前。
 		//
-		// 一次取完是为了往返次数:从前每条 item 各取一次,而 NextVersion 自己是一个
-		// 嵌套事务(SAVEPOINT)加两条语句;api/sync 允许一批 500 条,于是一次 Push 要
-		// 发上千次往返。整批一次之后只剩一次。
+		// 一次取完是为了往返次数:NextVersion 自己是一个嵌套事务(SAVEPOINT)加两条语句,
+		// 而 api/sync 允许一批 500 条,逐条取的话一次 Push 要发上千次往返。
 		//
 		// 取在事务**里**则是为了顺序,这一条不能拿去换吞吐。sync_account_seqs 上该
 		// 账号那一行的排他锁持到本事务提交,所以「谁先取到号」与「谁先提交」是同一个

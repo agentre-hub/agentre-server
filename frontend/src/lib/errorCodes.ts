@@ -2,11 +2,11 @@
  * 后端业务错误码里前端需要分支的那些。
  *
  * 键名刻意与 internal/pkg/code/code.go 的 Go 常量名逐字相同：
- * 守卫测试 src/__tests__/error-code-contract.test.ts 就是拿这个键去 code.go
- * 里重算 iota 比对的，改名即断链、测试即红。
+ * 守卫测试 src/__tests__/error-code-contract.test.ts 就是拿这些名字去 code.go 里取
+ * 显式写出的编号比对的，改名即断链、测试即红。
  *
- * 不要就地裸写数字：code.go 的 Device Flow 段位是一串 iota，后端在中间插一个
- * 常量，后面每个码都会平移一位，而前端不会报错——它只会把某个失败认成另一个。
+ * 不要就地裸写数字：编号在 code.go 里虽然是显式写出的，但改一个数字
+ * 仍然不会让前端编译不过——它只会把某个失败认成另一个，而这条断言是唯一会红的地方。
  */
 export const DEVICE_FLOW_CODES = {
   /** 授权请求已过期。落到 /device/expired（design decision 9）。 */

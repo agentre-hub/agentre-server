@@ -102,7 +102,7 @@ func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
 	t.Cleanup(func() { passkey_svc.SetDefault(nil) })
 
 	RegisterDefaults(&ServerConfig{
-		WebAuthn: WebAuthnConfig{RPID: "localhost", RPName: "AgentRe", Origins: []string{"http://localhost"}},
+		WebAuthn: WebAuthnConfig{RPID: "localhost", RPName: "Agentre", Origins: []string{"http://localhost"}},
 	}, signer)
 
 	assert.NotNil(t, passkey_svc.Default(), "RegisterDefaults 必须装配通行密钥服务")
@@ -138,7 +138,7 @@ func TestLoadServerConfig_WebAuthnDefaultsDeriveFromPublicURL(t *testing.T) {
 
 	assert.Equal(t, "server.agentre.dev", got.WebAuthn.RPID, "RP ID 是主机名，不带 scheme 和端口")
 	assert.Equal(t, []string{"https://server.agentre.dev"}, got.WebAuthn.Origins)
-	assert.NotEmpty(t, got.WebAuthn.RPName)
+	assert.Equal(t, "Agentre", got.WebAuthn.RPName, "没配 rp_name 时，通行密钥弹窗里显示的是产品名")
 	assert.Positive(t, got.WebAuthn.MaxPerAccount)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerAccountPerMin)
@@ -151,7 +151,7 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	assert.NoError(t, os.WriteFile(path, []byte(
 		"env: dev\ndebug: true\nsource: file\nserver:\n  public_url: \"https://server.agentre.dev\"\n"+
-			"  webauthn:\n    rp_id: \"localhost\"\n    rp_name: \"AgentRe Dev\"\n"+
+			"  webauthn:\n    rp_id: \"localhost\"\n    rp_name: \"Agentre Dev\"\n"+
 			"    origins:\n      - \"http://localhost:5174\"\n      - \"http://localhost:8443\"\n"+
 			"    max_per_account: 3\n"+
 			"  rate_limit:\n    passkey_register_begin_per_ip_per_min: 7\n"+
@@ -162,7 +162,7 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	got := LoadServerConfig(context.Background(), cfg)
 
 	assert.Equal(t, "localhost", got.WebAuthn.RPID)
-	assert.Equal(t, "AgentRe Dev", got.WebAuthn.RPName)
+	assert.Equal(t, "Agentre Dev", got.WebAuthn.RPName)
 	assert.Equal(t, []string{"http://localhost:5174", "http://localhost:8443"}, got.WebAuthn.Origins)
 	assert.Equal(t, 3, got.WebAuthn.MaxPerAccount)
 	assert.Equal(t, int64(7), got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
@@ -253,10 +253,7 @@ func TestLoadServerConfig_InsecureCookiesFollowPublicURLScheme(t *testing.T) {
 // device_flow_ttl 定的是整条设备流记录的寿命——user_code 与 device_code 共用同一个
 // expires_at（device_svc.Authorize 写、ExchangeToken 按它拒绝 device_code），
 // 也是回给客户端的 RFC 8628 expires_in。旧键名 user_code_ttl 只说了其中一半，
-// 调它的人会以为只在缩短用户码。
-//
-// 旧键必须继续认：它写在 configs/*.yaml、deploy/config.docker.yaml 和现存部署里，
-// 改名当天不该让谁的 TTL 悄悄跳回默认的 10 分钟。
+// 调它的人会以为只在缩短用户码，因此已作废。
 func TestLoadServerConfig_DeviceFlowTTL(t *testing.T) {
 	load := func(t *testing.T, deviceFlowYAML string) *ServerConfig {
 		t.Helper()
@@ -270,13 +267,6 @@ func TestLoadServerConfig_DeviceFlowTTL(t *testing.T) {
 
 	t.Run("新键 device_flow_ttl 生效", func(t *testing.T) {
 		assert.Equal(t, 3*time.Minute, load(t, "    device_flow_ttl: 3m\n").DeviceFlow.FlowTTL)
-	})
-	t.Run("旧键 user_code_ttl 仍然生效", func(t *testing.T) {
-		assert.Equal(t, 7*time.Minute, load(t, "    user_code_ttl: 7m\n").DeviceFlow.FlowTTL)
-	})
-	t.Run("两个都写时以新键为准", func(t *testing.T) {
-		assert.Equal(t, 3*time.Minute,
-			load(t, "    device_flow_ttl: 3m\n    user_code_ttl: 7m\n").DeviceFlow.FlowTTL)
 	})
 	t.Run("都不写落到 10 分钟", func(t *testing.T) {
 		assert.Equal(t, 10*time.Minute, load(t, "    poll_interval: 5s\n").DeviceFlow.FlowTTL)

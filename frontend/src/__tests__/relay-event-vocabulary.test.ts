@@ -60,7 +60,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import {
-  applyJournalFrames,
+  applyDurableFrames,
   RelayClient,
   type RelayClientOptions,
 } from "@/lib/relayClient";
@@ -438,7 +438,7 @@ describe("relay 事件词表", () => {
   });
   // Given 这些事件已经落进日志，被当作历史回放（server 镜像的
   // `/v1/agent-sessions/transcript`、中继的 `session.pull` 与往回续读三条路都
-  // 汇到同一个 `{method, params}` 中间形状）；When 这一页经 applyJournalFrames
+  // 汇到同一个 `{method, params}` 中间形状）；When 这一页经 applyDurableFrames
   // 回放；Then 每一帧必须与它当初实时穿过来时**一模一样**。
   //
   // 回放要把中间形状翻回 oneof case 名，那是 EVENT_KINDS 的反向。它此前是按
@@ -453,12 +453,12 @@ describe("relay 事件词表", () => {
     const live = await relayEvents(cases.map((name) => SAMPLES[name]));
 
     const replayed: TranscriptFrame[] = [];
-    applyJournalFrames(
+    applyDurableFrames(
       live.map((frame, index) => ({
         seq: index + 1,
         method: "runtime.event",
         params: { conversationId: CID, seq: index + 1, event: frame.event },
-      })) as unknown as Parameters<typeof applyJournalFrames>[0],
+      })) as unknown as Parameters<typeof applyDurableFrames>[0],
       {
         onEvent: (frame) =>
           replayed.push({ ...frame, sessionId: 1 } as TranscriptFrame),

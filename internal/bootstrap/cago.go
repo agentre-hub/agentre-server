@@ -112,13 +112,8 @@ type SessionConfig struct {
 type DFConfig struct {
 	// FlowTTL 是整条设备流记录的寿命：user_code 与 device_code 共用同一个
 	// expires_at，它同时就是回给客户端的 RFC 8628 expires_in。
-	FlowTTL time.Duration `yaml:"device_flow_ttl"`
-	// LegacyUserCodeTTL 是 FlowTTL 的旧键名。它只说了这个 TTL 的一半，留着仅为
-	// 让现存配置文件继续生效；两个键都写时以 FlowTTL 为准。新配置不要再用它。
-	//
-	// Deprecated: 用 device_flow_ttl。
-	LegacyUserCodeTTL time.Duration `yaml:"user_code_ttl"`
-	PollInterval      time.Duration `yaml:"poll_interval"`
+	FlowTTL      time.Duration `yaml:"device_flow_ttl"`
+	PollInterval time.Duration `yaml:"poll_interval"`
 }
 
 type JWTConfig struct {
@@ -173,10 +168,6 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET", &out.OAuth.Github.ClientSecret)
 	if out.Session.TTL == 0 {
 		out.Session.TTL = 14 * 24 * time.Hour
-	}
-	// 旧键只在新键没写时兜底：改名当天不该让谁的 TTL 悄悄跳回默认值。
-	if out.DeviceFlow.FlowTTL == 0 {
-		out.DeviceFlow.FlowTTL = out.DeviceFlow.LegacyUserCodeTTL
 	}
 	if out.DeviceFlow.FlowTTL == 0 {
 		out.DeviceFlow.FlowTTL = 10 * time.Minute
@@ -251,7 +242,7 @@ func applyWebAuthnDefaults(out *ServerConfig) {
 		out.WebAuthn.RPID = public.Hostname()
 	}
 	if out.WebAuthn.RPName == "" {
-		out.WebAuthn.RPName = "AgentRe"
+		out.WebAuthn.RPName = "Agentre"
 	}
 	if len(out.WebAuthn.Origins) == 0 && public.Scheme != "" && public.Host != "" {
 		out.WebAuthn.Origins = []string{public.Scheme + "://" + public.Host}

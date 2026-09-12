@@ -92,7 +92,7 @@ func (s *Sessions) Purge(ctx context.Context, userID int64, machineFingerprint, 
 // 两个调用方共用同一份实现：接住删除请求的那个副本（Sessions.Purge），以及属主副本
 // 在摘掉这条对话之后补的那一次（follower.applyHint）。
 func purgeStoredCopy(ctx context.Context, userID int64, conversationID string) error {
-	if err := agent_session_repo.JournalFrame().DeleteFrames(ctx, userID, conversationID); err != nil {
+	if err := agent_session_repo.DurableFrame().DeleteFrames(ctx, userID, conversationID); err != nil {
 		return fmt.Errorf("purge mirrored frames: %w", err)
 	}
 	if err := agent_session_repo.Summary().DeleteSummary(ctx, userID, conversationID); err != nil {

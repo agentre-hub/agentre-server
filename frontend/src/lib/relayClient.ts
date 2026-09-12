@@ -20,7 +20,7 @@ import {
   PROTOCOL_VERSION,
   type AnyRpcMethod,
   type EventFrame,
-  type JournaledNotification,
+  type DurableNotification,
   type RunResultDoneFrame,
   type SessionAttachResult,
   type AutonomousTurnStartedFrame,
@@ -65,7 +65,7 @@ export class RelayError extends Error {
 
 /**
  * 通知的三个投递口。RelayClientOptions 自己就是它的一个实现 —— 因此 server 镜像交出
- * 的历史帧走的是**与实时同一条**解帧与投递路径(applyJournalFrames),而不是另写一份。
+ * 的历史帧走的是**与实时同一条**解帧与投递路径(applyDurableFrames),而不是另写一份。
  */
 export interface NotificationHandlers {
   /**
@@ -87,7 +87,7 @@ export interface NotificationHandlers {
    * **预览帧**里那条事件：逐 token 增量与过场状态，即时呈现用。
    *
    * 与 `onEvent` 分开一口，是因为两者说的不是同一件事，而消费方分得出来才不会把同一
-   * 段话渲染两遍：预览帧不带 seq、不入日志、丢失即丢失，只用于呈现；转录与游标的唯一
+   * 段话渲染两遍：预览帧不带 seq、不入转录、丢失即丢失，只用于呈现；转录与游标的唯一
    * 来源是持久帧（`onEvent`）。协议 0.2.0 的分工，与 Go 侧 remote.PreviewSink 同源。
    *
    * 不接这一口就等于丢弃预览帧 —— 那时转录仍然对，只是按**块**刷新而不是逐 token。
@@ -455,7 +455,7 @@ export class RelayClient {
       // 这一串期间又出现过跳号:那一段还没补上,再补一轮。
       //
       // 但只在这一串**真的推动了游标**时才补:一条也没消费掉(daemon 读不出留存下界
-      // → OldestSeq 报 0,而日志老前缀已被回收,拉回来的这一页第一条就比 游标+1 大)
+      // → OldestSeq 报 0,而转录老前缀已被回收,拉回来的这一页第一条就比 游标+1 大)
       // 时,下一轮拉回来的还是同一页、还是一条也消费不掉 —— 不看进展就会一轮接一轮
       // 重发同一条 pull,补齐原地打转、把 daemon 与中继一起打满。补不动就停在这里,
       // 等下一条实时帧 / 下次重连再试(Go 侧 scheduleGapFill 的 filling 闸门同一纪律)。
@@ -474,7 +474,7 @@ export class RelayClient {
    *
    * 与 catchUp 是两件事,因此这里**不动游标、不投递、不补洞**:
    *   - 动游标 = 宣称这一段之后的都读过了,此后每条实时帧都被判成重复丢光;
-   *   - 走投递 = 那套 seq 闸门会把整段判成跳号,反手从游标往后再拉一遍整条日志,
+   *   - 走投递 = 那套 seq 闸门会把整段判成跳号,反手从游标往后再拉一遍整段转录,
    *     正好是「只拉尾巴」要避免的事。
    * 帧原样交回,由调用方自己前插(详情页往上滚续读)。
    *
@@ -487,7 +487,7 @@ export class RelayClient {
     beforeSeq: number,
     limit: number,
     peerFingerprint?: string,
-  ): Promise<{ frames: JournaledNotification[]; hasBefore: boolean }> {
+  ): Promise<{ frames: DurableNotification[]; hasBefore: boolean }> {
     const origin = peerFingerprint?.trim() ?? "";
     const res = await this.request(rpcMethods.sessionPull, {
       conversationId,
@@ -496,7 +496,7 @@ export class RelayClient {
       limit,
     });
     const frames = res.notifications
-      .map(journaledFromProtobuf)
+      .map(durableFromProtobuf)
       .filter((n) => n.seq < beforeSeq);
     if (frames.length === 0) return { frames, hasBefore: false };
     // 对端报的留存下界(报不出时按 1 算):最老那条就是它了,说明再往前真的没有了。
@@ -531,7 +531,7 @@ export class RelayClient {
         limit: DefaultSessionPullLimit,
       });
       const res = {
-        notifications: response.notifications.map(journaledFromProtobuf),
+        notifications: response.notifications.map(durableFromProtobuf),
         cursor: Number(response.cursor),
         hasMore: response.hasMore,
         oldestSeq: Number(response.oldestSeq),
@@ -543,7 +543,7 @@ export class RelayClient {
         st.cursor = res.oldestSeq - 1;
       }
       for (const n of res.notifications) {
-        this.applyJournaled(st, n);
+        this.applyDurableNotification(st, n);
       }
       // 游标只由「应用了哪些行」推进(复位除外):照 res.cursor 盖上去会把这一页里
       // 交付不出去的行也算成已消费。
@@ -806,7 +806,7 @@ export class RelayClient {
     }
     const st = target ?? this.stateOf(decoded.conversationId);
     // 实时帧没有可带的时刻:它刚从中继上过来,唯一的误差是一跳网络,所以此刻就是它
-    // 的时刻。补齐那一路由调用方把原点报的值传进来(见 applyJournaled)。
+    // 的时刻。补齐那一路由调用方把原点报的值传进来(见 applyDurableNotification)。
     const at = createtime ?? Date.now();
     this.applyDedup(st, decoded.seq, () => decoded.deliver(this.opts, at));
   }
@@ -848,10 +848,10 @@ export class RelayClient {
     deliver();
   }
 
-  /** 补齐页里的一条通知:按 method 解成帧、把日志行上的 seq 盖上去,再走同一套去重投递。 */
-  private applyJournaled(st: SessionState, n: JournaledNotification): void {
-    const frame = journaledToFrame(n);
-    // 时刻取日志行报的那个,**不**退回当下:这一页可能是一段离线期间的成批补齐,
+  /** 补齐页里的一条通知:按 method 解成帧、把那一条上的 seq 盖上去,再走同一套去重投递。 */
+  private applyDurableNotification(st: SessionState, n: DurableNotification): void {
+    const frame = durableToFrame(n);
+    // 时刻取那一条报的那个,**不**退回当下:这一页可能是一段离线期间的成批补齐,
     // 拿此刻去盖会让整段转录显示成同一分钟。报不出来时是 0,读作「不知道」。
     if (frame) this.dispatchNotification(frame, st, n.createtime ?? 0);
   }
@@ -1023,13 +1023,13 @@ function runtimeEventToViewEvent(
 }
 
 /**
- * 日志行的 RpcNotification oneof ↔ 中间形状的方法名。
+ * 持久帧的 RpcNotification oneof ↔ 中间形状的方法名。
  *
- * 日志里**不只有** runtime.event:每跑完一轮就落一条轮次结束帧,自主续轮另有起止两条。
+ * 持久帧**不只有** runtime.event:每跑完一轮就落一条轮次结束帧,自主续轮另有起止两条。
  * 两条补齐路径最终汇到同一个 (method, params) 中间形状 —— server 镜像那条由 Go 侧
  * internal/pkg/wireview 投影,中继这条由这里投影 —— 所以两边必须是同一张表。
  */
-const JOURNALED_METHODS: Record<string, string> = {
+const DURABLE_METHODS: Record<string, string> = {
   runtimeEvent: NotifyEvent,
   autonomousTurnEvent: NotifyAutonomousTurnEvent,
   runResultDone: NotifyRunResultDone,
@@ -1039,14 +1039,14 @@ const JOURNALED_METHODS: Record<string, string> = {
 };
 
 /**
- * 一行 wire.JournaledNotification(typed Protobuf)→ 与 server 镜像同形的中间帧。
+ * 一行 wire.DurableNotification(typed Protobuf)→ 与 server 镜像同形的中间帧。
  *
  * 认不出的通知形态交回一条**空 params 的行**而不是抛:这一页是 `map` 一次性投影的,
  * 其中一行抛出会让整页连同 catchUp() 一起被拒 —— 详情页于是停在「没能从这台机器读到
  * 这条对话的内容」,而机器在线、内容也确实在那里。空 params 那行交付不出去,但它照样
  * 占掉自己那一格游标(见 applyDedup 的注释),后面的帧不会被判成跳号。
  */
-function journaledFromProtobuf(input: unknown): JournaledNotification {
+function durableFromProtobuf(input: unknown): DurableNotification {
   const entry = input as {
     seq: bigint;
     createtime?: bigint | number;
@@ -1054,12 +1054,12 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
   };
   const seq = Number(entry.seq);
   // 这一帧在**原点**发生的时刻。这条路是客户端自己回那台机器补的一页,行上这一格
-  // 正是 agentred 的 daemon_notification_journal.createtime —— 转录里那个 HH:mm 的
+  // 正是 agentred 转录行的 createtime —— 转录里那个 HH:mm 的
   // 来源。报不出来的对端交出 0,读作「不知道」。
   const createtime = Number(entry.createtime ?? 0);
   const payload = entry.payload?.payload;
   const method =
-    payload?.case === undefined ? "" : (JOURNALED_METHODS[payload.case] ?? "");
+    payload?.case === undefined ? "" : (DURABLE_METHODS[payload.case] ?? "");
   const value = payload?.value;
   if (method === "" || value === undefined) {
     return { seq, method, createtime, params: {} };
@@ -1132,13 +1132,13 @@ function journaledFromProtobuf(input: unknown): JournaledNotification {
 }
 
 /**
- * 中间形状的一行 → 与实时流同一套解帧/投递路径认得的帧。日志行上的 seq 盖在帧上
+ * 中间形状的一行 → 与实时流同一套解帧/投递路径认得的帧。那一条上的 seq 盖在帧上
  * (params 里那份是投影时补的,不是权威)。
  *
  * 认不出的 method / 解不动的载荷交回 null:调用方按「交付不出去也占掉这一格游标」
- * 处理(applyJournaled / applyJournalFrames),不报错、不跳号。
+ * 处理(applyDurableNotification / applyDurableFrames),不报错、不跳号。
  */
-function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
+function durableToFrame(n: DurableNotification): ProtobufRpcFrame | null {
   if (!n.params || typeof n.params !== "object") return null;
   const value = n.params as Record<string, unknown>;
   if (typeof value.conversationId !== "string" || value.conversationId === "")
@@ -1155,7 +1155,7 @@ function journaledToFrame(n: JournaledNotification): ProtobufRpcFrame | null {
             : "autonomousTurnEventNotification",
         conversationId,
         seq: n.seq,
-        // 日志里的每一条按定义都是持久帧:预览帧不带 seq、也从不入日志。
+        // 补齐页里的每一条按定义都是持久帧:预览帧不带 seq、也从不入转录。
         preview: false,
         event: viewEventToRuntimeEvent(
           value.event as Record<string, unknown>,
@@ -1232,7 +1232,7 @@ function isNotification(frame: ProtobufRpcFrame): boolean {
 }
 
 /**
- * 应用 server 镜像交出的一页历史帧(wire.JournaledNotification 原样),投给与实时流
+ * 应用 server 镜像交出的一页历史帧(wire.DurableNotification 原样),投给与实时流
  * 同一批 handler;返回这一页里最大的 seq。
  *
  * 调用方拿这个 seq 预置中继客户端的游标(setCursor),实时流便从它之后接上 —— server
@@ -1243,14 +1243,14 @@ function isNotification(frame: ProtobufRpcFrame): boolean {
  * 载荷解不动)照样计入返回值 —— 它那一格是真用掉了,漏算的话预置的游标停在它前面,
  * 随后每一条实时帧都被判成跳号。
  */
-export function applyJournalFrames(
-  frames: readonly JournaledNotification[],
+export function applyDurableFrames(
+  frames: readonly DurableNotification[],
   handlers: NotificationHandlers,
 ): number {
   let last = 0;
   for (const n of frames) {
     if (typeof n.seq === "number" && n.seq > last) last = n.seq;
-    const frame = journaledToFrame(n);
+    const frame = durableToFrame(n);
     if (frame) decodeNotification(frame)?.deliver(handlers, n.createtime ?? 0);
   }
   return last;

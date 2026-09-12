@@ -9,9 +9,6 @@ export function setCsrfToken(t: string | null) {
 export function loadCsrfToken() {
   csrfToken = sessionStorage.getItem("csrf");
 }
-export function getCsrfToken() {
-  return csrfToken;
-}
 
 export class ApiError extends Error {
   constructor(

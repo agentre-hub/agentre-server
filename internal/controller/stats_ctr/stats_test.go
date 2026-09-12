@@ -18,7 +18,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
-	deviceapi "github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
@@ -83,13 +82,13 @@ func (s *stubActivity) ReportedThrough(
 type stubDevices struct {
 	device_svc.DeviceSvc
 
-	items    []deviceapi.ListDevicesItem
+	items    []device_svc.DeviceView
 	callerID int64
 }
 
 func (s *stubDevices) ListUserDevices(
 	_ context.Context, _, callerDeviceID int64,
-) ([]deviceapi.ListDevicesItem, error) {
+) ([]device_svc.DeviceView, error) {
 	s.callerID = callerDeviceID
 	return s.items, nil
 }
@@ -177,8 +176,8 @@ func requireRejected(t *testing.T, resp *http.Response) {
 	}
 }
 
-func device(id int64, name, fingerprint string, online bool) deviceapi.ListDevicesItem {
-	return deviceapi.ListDevicesItem{ID: id, Name: name, Fingerprint: fingerprint, Online: online, Status: 1}
+func device(id int64, name, fingerprint string, online bool) device_svc.DeviceView {
+	return device_svc.DeviceView{ID: id, Name: name, Fingerprint: fingerprint, Online: online, Status: 1}
 }
 
 // 在线台数与总台数是**设备域**的事实，服务层刻意不给；控制器从设备清单上数出来。
@@ -198,7 +197,7 @@ func TestOverview_DeviceCountsComeFromTheDeviceList(t *testing.T) {
 		Models:   []activity_svc.ModelCount{},
 		Projects: []activity_svc.ProjectCount{},
 	}}
-	dev := &stubDevices{items: []deviceapi.ListDevicesItem{
+	dev := &stubDevices{items: []device_svc.DeviceView{
 		device(1, "mac-mini", "fp-a", true),
 		device(2, "MacBook-Pro", "fp-b", false),
 		device(3, "linux-box", "fp-c", true),
@@ -319,7 +318,7 @@ func settingsStub() *stubActivity {
 // **缺席**，而不是一个空串——空串在前端是一个画得出来的「已上报到 ”」。
 func TestSettings_DeviceReportedThroughOmittedWhenNeverReported(t *testing.T) {
 	act := settingsStub()
-	dev := &stubDevices{items: []deviceapi.ListDevicesItem{
+	dev := &stubDevices{items: []device_svc.DeviceView{
 		device(2, "mac-mini", "fp-a", true),
 		device(3, "MacBook-Pro", "fp-b", false),
 	}}
@@ -348,7 +347,7 @@ func TestSettings_OmitsDevicesSectionWhenThereAreNone(t *testing.T) {
 // pending_backfill_days 服务端眼下没有真实进度可交，因此这个字段一个字都不写。
 func TestSettings_NeverInventsPendingBackfillDays(t *testing.T) {
 	act := settingsStub()
-	dev := &stubDevices{items: []deviceapi.ListDevicesItem{device(2, "mac-mini", "fp-a", true)}}
+	dev := &stubDevices{items: []device_svc.DeviceView{device(2, "mac-mini", "fp-a", true)}}
 	server, sid, csrf := serve(t, act, dev)
 
 	body := data(t, do(t, http.MethodGet, server.URL+"/v1/stats/settings", sid, csrf, ""))

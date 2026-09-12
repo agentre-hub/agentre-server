@@ -6,7 +6,7 @@ import type { SessionEventFrame } from "@/components/session/transcriptFrame";
  * ## 为什么需要它
  *
  * 协议 0.2.0 把帧分成两级。**预览帧**是逐片段增量（`text_delta` / `thinking_delta`）
- * 与过场状态，不带 seq、不入日志、丢失即丢失；**持久帧**是块级的，带 seq，参与补齐
+ * 与过场状态，不带 seq、不入转录、丢失即丢失；**持久帧**是块级的，带 seq，参与补齐
  * 与镜像。同一段正文因此到达两次 —— 而持久文本块投影出来的判别值同样是 `text_delta`、
  * 载荷是**整段**文本，共享包的归约器对它一律追加。两级都喂进去就是把同一段话渲染
  * 两遍（桌面端实测出的 `"onetwoonetwothreefourfive"`）。

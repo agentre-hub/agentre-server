@@ -39,7 +39,7 @@ Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 M
 升级路径检查目标版本是否支持直接读取当前数据目录；不要让不兼容的大版本
 直接复用 `data/mysql`。
 
-**`max_allowed_packet` 不能低于 8 MiB。** 镜像日志的一帧可以很大：转录里的图片
+**`max_allowed_packet` 不能低于 8 MiB。** 镜像的一帧可以很大：转录里的图片
 附件以 base64 内联在 JSON 里，桌面端把单张图卡在 5 MiB（超限降级成路径引用），
 编码后单帧上界约 6.7 MiB。低于这个数，超大帧会在插入时以
 `ER_NET_PACKET_TOO_LARGE` 失败，而那条对话的镜像会卡在原地反复重试——报错里既
@@ -227,8 +227,7 @@ runner 负责 pnpm install、前端构建和 Go 编译，能够复用 Go 与 pnp
 `deploy.yaml` 那条链路（main / release/* / test/*）。
 
 推送 `dev` 时流水线会自己建 `bin/`、覆盖编排与 `Dockerfile.dev` 并重建容器；每次部署
-复用固定的 `agentre-server:dev` tag，并删除上一个同名镜像。机器上残留的旧
-`dev.<短 commit>` 镜像可按需用 `docker image rm` 清理。
+复用固定的 `agentre-server:dev` tag，并删除上一个同名镜像。
 
 和上面的「Docker 单机部署」不是一回事，别混用：那份会额外拉起 MySQL 和 Redis 并把
 数据落在仓库根的 `data/`；dev 的 MySQL、Redis、etcd 都是外部既有服务，套用那份等于
@@ -252,8 +251,7 @@ dev 的配置和 k8s 一样放在 etcd 里，`/config/dev/agentre-server/` 下�
   keys/jwt.key jwt.pub     机器本地 JWT 密钥对
 ```
 
-`.env` 已经没用了：流水线不写也不读它，`SERVER_IMAGE` 那一项（如果还留着）没有任何
-东西会去解析。构建上下文只给 `bin/`，不是整个部署目录——`config.yaml` 和 `keys/`
+构建上下文只给 `bin/`，不是整个部署目录——`config.yaml` 和 `keys/`
 一个字节都不该进构建上下文。
 
 手动起停：
@@ -271,30 +269,20 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
 这里不需要 registry 凭据：二进制和镜像都不经过 registry，只有基础镜像
 `gcr.io/distroless/static-debian12` 需要能拉到（`coding.local` 已确认可达）。
 
-### 第一次切换要做的（只做一次）
+### 新搭一台 dev 目标机
 
-流水线只负责「拉新镜像 + compose up」。下面这些是一次性且不可逆的动作，没放进流水线
-——放进去也只有第一次有用，之后永远是死代码。按顺序做：
+流水线只负责「编二进制 + 覆盖编排 + 重建容器」。下面这些是每台目标机只做一次的准备，
+没放进流水线。按顺序做：
 
-1. **停掉现在的裸进程，把 8443 让出来。** dev 以前是从 tmux 窗口跑
-   `/root/code/agentre/agentre-server/bin/server`：
-
-   ```bash
-   pkill -f '^\./bin/server$' || true
-   tmux kill-window -t 0:agentre-server 2>/dev/null || true
-   ss -ltnp | grep 8443 || echo "8443 已空出"
-   ```
-
-2. **建部署目录，放引导配置和密钥。** 引导配置直接沿用机器上现成的那份：
+1. **建部署目录，放引导配置和密钥。** `config.yaml` 是 `env: dev, source: etcd` 的引导
+   配置，`keys/` 放这套 dev 的 JWT 密钥对：
 
    ```bash
    mkdir -p /srv/agentre-dev/keys
-   cp /root/code/agentre/agentre-server/configs/config.yaml /srv/agentre-dev/config.yaml
-   cp /root/code/agentre/agentre-server/runtime/keys/jwt.key /srv/agentre-dev/keys/
-   cp /root/code/agentre/agentre-server/runtime/keys/jwt.pub /srv/agentre-dev/keys/
+   # 引导配置放到 /srv/agentre-dev/config.yaml,密钥对放到 /srv/agentre-dev/keys/jwt.key、jwt.pub
    chmod 600 /srv/agentre-dev/keys/jwt.key
-   # 镜像里跑的是 uid 65532(Dockerfile 的 USER 65532:65532),不是 root。上面几个
-   # 文件从源处继承的是 600 root,不交出去容器一个都读不到,启动就挂。
+   # 镜像里跑的是 uid 65532(Dockerfile 的 USER 65532:65532),不是 root。文件属 root
+   # 的话容器一个都读不到,启动就挂。
    chown 65532:65532 /srv/agentre-dev/config.yaml /srv/agentre-dev/keys \
                      /srv/agentre-dev/keys/jwt.key /srv/agentre-dev/keys/jwt.pub
    ```
@@ -307,19 +295,16 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
    done
    ```
 
-3. **把 etcd 里的 JWT 路径改成容器路径。** 现在 `/config/dev/agentre-server/server`
-   里写的是宿主绝对路径 `/root/code/agentre/agentre-server/runtime/keys/jwt.key`，
-   容器里没有这个路径，不改就是启动即挂（`read pem ...: no such file or directory`）。
-   把那两条路径改成 `/keys/jwt.key` 和 `/keys/jwt.pub`，该键的其余内容原样保留，
-   改法见上面「配置放在 etcd 里」。
+2. **etcd 里的 JWT 路径写容器路径。** `/config/dev/agentre-server/server` 里那两条路径
+   必须是 `/keys/jwt.key` 和 `/keys/jwt.pub`；写成宿主路径的话容器里没有，启动即挂
+   （`read pem ...: no such file or directory`）。改法见下面「配置放在 etcd 里」。
 
-4. **把 etcd 里 dev 的 `logFile.enable` 关掉。** `/config/dev/agentre-server/logger` 现在是
-   `enable: true`，写 `./runtime/logs/cago.log`。容器的 WORKDIR 是 `/app` 且属 root，
-   uid 65532 建不出 `runtime/logs`。这和上面 k8s 那节写的是同一条约束——容器里
-   `logFile.enable` 必须是 `false`，只是 dev 一样绕不过去。日志照样从
+3. **etcd 里 dev 的 `logFile.enable` 必须是 `false`。** `/config/dev/agentre-server/logger`
+   开着文件日志会写 `./runtime/logs/cago.log`，而容器的 WORKDIR 是 `/app` 且属 root，
+   uid 65532 建不出 `runtime/logs`。这和下面 k8s 那节写的是同一条约束。日志从
    `docker compose logs` 看，`disableConsole` 保持 `false` 就行。
 
-5. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
+4. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
    对应的私钥就是下面要配的 `DEV_SSH_KEY`。没有现成密钥就在目标机上现生一对，
    私钥不必落到第三处：
 
@@ -329,12 +314,11 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
    cat /root/.ssh/gitea_dev_deploy      # 这一份贴进 Gitea 的 DEV_SSH_KEY
    ```
 
-6. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
+5. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
 
-7. **建 dev 分支并推上去**，这一推就会跑第一次部署：
+6. **推 `dev` 分支**，这一推就会跑第一次部署：
 
    ```bash
-   git checkout -b dev
    git push gitea dev
    ```
 
@@ -464,12 +448,14 @@ etcdctl --endpoints=<etcd> --user root:<password> \
   动作镜像集是定制的，仓库里也没有 ssh-action 的先例，赌一个可能不存在的镜像不如
   用原生命令。主机密钥是首连信任（`StrictHostKeyChecking=accept-new`）。
 
-### GitHub 侧：只出镜像，不部署
+### GitHub 侧：只出镜像与 Release，不部署
 
 GitHub 上另有两条流水线，它们只把镜像推到 GHCR，不碰任何环境——部署始终是 Gitea
 那边的事：
 
-- `release.yml`：推 `v*` tag 触发，打 `<tag>` 与 `sha-<短 commit>`，正式版另加 `latest`。
+- `release.yml`：推 `v*` tag 触发，打 `<tag>` 与 `sha-<短 commit>`，正式版另加
+  `latest`；镜像推成功后由 `release` job 建一个 GitHub Release（beta / rc 标成
+  prerelease，重跑同一个 tag 会先删后建）。
 - `nightly.yml`：每天 UTC 18:00（北京时间凌晨 2 点）把 `main` 合进 `nightly` 分支再构建，
   打 `nightly`、`nightly-<日期>`、`sha-<短 commit>`。这个 commit 已经出过镜像就跳过——
   判据是 registry 上 `sha-<短 commit>` 这个 tag 在不在，不另存状态，所以上一次构建
@@ -479,7 +465,8 @@ GitHub 上另有两条流水线，它们只把镜像推到 GHCR，不碰任何�
 推上去，最后用 `docker buildx imagetools create` 合成一个 manifest list。不走 QEMU：
 镜像里那段 pnpm build 在模拟环境下要慢十几分钟，而公开仓库的 arm64 runner 是免费的。
 
-凭据只用内置的 `GITHUB_TOKEN`（job 上给 `packages: write`），不需要额外 secret。
+凭据只用内置的 `GITHUB_TOKEN`：镜像 job 给 `packages: write`，`release.yml` 建 Release
+的 `release` job 给 `contents: write`，都不需要额外 secret。
 有两件一次性的事要做：
 
 1. **`nightly` 分支要先建出来**：`git push origin main:nightly`。定时任务读的是默认分支

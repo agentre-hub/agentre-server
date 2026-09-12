@@ -1,4 +1,4 @@
-// transcript_projection.go 是转录**读侧**的一层投影：把镜像里原样存着的 journal
+// transcript_projection.go 是转录**读侧**的一层投影：把镜像里原样存着的持久
 // 帧削成浏览器真正会用到的那些，再交出去（规格 2026-08-21-transcript-tail-loading
 // 决策 4/5/6）。
 //
@@ -8,7 +8,7 @@
 // 解得出来」（决策 4，见 agent_session_entity 的注释）。这层投影要求服务端**读得懂
 // 载荷**，那条承诺因此有了一个缺口。
 //
-// 缺口只开在读侧是有意的：`agent_session_notification_journal` 里存的仍是整帧。
+// 缺口只开在读侧是有意的：`agent_session_durable_frames` 里存的仍是整帧。
 // 2026-09-07-journal-payload-json.md 之后那一行是 wireview 的全字段 JSON 视图而不再是
 // protobuf 字节，但一个字段都没削（投不出来的字节走 $b64 / $proto 逃生路），所以投影
 // 没了或改了之后，老数据照样解得出来。写入时就削的话，丢掉的就真的没了。

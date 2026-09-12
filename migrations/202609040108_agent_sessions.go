@@ -7,7 +7,7 @@ import (
 
 // migration202609040108 creates the three account-scoped agent-session tables
 // (2026-08-18-server-session-mirror.md "存什么" / decision 17): a summary per
-// conversation, its raw journal frames, and pending cross-peer deletes.
+// conversation, its raw durable frames, and pending cross-peer deletes.
 //
 // The tables are named for the rows, not for the mechanism that fills them
 // (2026-08-27-schema-overhaul.md 决策 19): "mirror" and "followed" were two
@@ -16,7 +16,7 @@ import (
 // as a verb on mirror_svc.
 //
 // Identity across all three tables is (user_id, conversation_id) —
-// agent_session_notification_journal adds seq
+// agent_session_durable_frames adds seq
 // (2026-08-31-conversation-centric-addressing.md「会话身份」). conversation_id is
 // one and the same identity for a conversation across the desktop, agentred and
 // server databases and on the wire (决策 1); the originating peer mints it as a
@@ -25,7 +25,7 @@ import (
 //
 // conversation_id is char(36) rather than varchar(36): a canonical uuid is
 // always 36 characters, so a fixed width drops one length prefix per row — and
-// agent_session_notification_journal is the only unbounded table here (frames go
+// agent_session_durable_frames is the only unbounded table here (frames go
 // away only when the conversation does), where this column is part of the
 // primary key and therefore copied into every secondary index.
 // COLLATE utf8mb4_0900_bin for the same reason as its neighbours: it is an
@@ -48,27 +48,21 @@ import (
 // replay is unambiguous about which row it collided with
 // (docs/architecture.md's "one unique key" rule).
 //
-// agent_session_notification_journal makes that key its **primary** key rather than adding
-// a surrogate auto-increment alongside it. This table is the only one here
-// that grows without bound — frames are removed only when the conversation
-// is deleted — so its clustering is a storage decision, not bookkeeping. An
-// auto-increment id would scatter one conversation's frames across the whole
-// clustered index, and the detail page reads a conversation's *tail* (seq
-// DESC LIMIT n, ListFramesBefore): a secondary-index range scan followed by
-// one random primary-key lookup per row to fetch the longblob. Clustering on
-// the identity makes that one contiguous range, removes the duplicate copy of
-// the identity that a separate unique index would hold, and turns DeleteFrames
-// into a range delete. Inserts stop being globally monotonic, but within a
-// conversation they still append by seq, and there are far fewer conversations
-// than frames — so the shape is "several tails being appended to", not random
-// writes.
+// agent_session_durable_frames 原本把身份键当**主键**、而不是另加一根自增列，
+// 理由是这个表在这里是唯一一张无界增长的表（帧只在对话被删时才回收），聚簇因此是存储
+// 决定而不是记账：一根自增 id 会把一条对话的帧打散在整个聚簇索引上，而详情页读的是
+// 一条对话的**尾部**（seq DESC LIMIT n，ListFramesBefore）。
 //
-// agent_session_notification_journal.payload is longblob, not text: text's 64KB
-// ceiling would truncate a large frame (same reasoning as sync_objects.payload
-// in migration202609040106). This table has no `params` column — an earlier
-// draft split the frame into method/params and the comment outlived it.
-// migration202609070101 later changes this column to json; the size reasoning
-// carries over unchanged, and json has no 64KB ceiling either.
+// 后来库级约定统一成「每一张表的行身份都是一个与业务取值无关的数字」（见
+// internal/model/entity 的 TestEveryEntityHasAutoIncrementIDPrimaryKey），这张表也补了
+// id 主键，那笔开销因此是真的付了：尾部读取现在是二级唯一索引扫一段、再逐行回表取
+// payload。记在这里，免得下次有人重新推导一遍这个代价。
+//
+// agent_session_durable_frames.payload 是 json（早期是 longblob，存的是 protobuf
+// 字节）：text 的 64KB 上限会把大帧截断（与 migration202609040106 里 sync_objects.payload
+// 同一个理由），而 json 没有 64KB 上限。
+//
+// 这张表没有 `params` 列——早期草稿把帧拆成 method/params，注释比列活得久。
 //
 // title is text, not varchar: it is whatever display string the peer reports,
 // and nothing on either side bounds its length — the desktop's rename path
@@ -112,14 +106,15 @@ func migration202609040108() *gormigrate.Migration {
 				  KEY idx_agent_sessions_project_recent
 				    (user_id, project_sync_id, last_message_at, id)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
-				CREATE TABLE agent_session_notification_journal (
+				CREATE TABLE agent_session_durable_frames (
+				  id                   bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id              bigint NOT NULL,
 				  conversation_id      char(36) COLLATE utf8mb4_0900_bin NOT NULL DEFAULT '',
 				  peer_fingerprint     varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  seq                  bigint NOT NULL,
-				  payload              longblob NOT NULL,
+				  payload              json NOT NULL,
 				  createtime           bigint NOT NULL DEFAULT 0,
-				  PRIMARY KEY (user_id, conversation_id, seq)
+				  UNIQUE KEY uk_agent_session_durable_frames_identity (user_id, conversation_id, seq)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE agent_session_delete_todos (
 				  id                   bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
@@ -139,7 +134,7 @@ func migration202609040108() *gormigrate.Migration {
 		},
 		Rollback: func(tx *gorm.DB) error {
 			for _, table := range []string{
-				"agent_session_delete_todos", "agent_session_notification_journal", "agent_sessions",
+				"agent_session_delete_todos", "agent_session_durable_frames", "agent_sessions",
 			} {
 				if err := tx.Exec("DROP TABLE IF EXISTS " + table).Error; err != nil {
 					return err

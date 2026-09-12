@@ -9,10 +9,10 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 )
 
-//go:generate mockgen -source journal_frame.go -destination mock_agent_session_repo/mock_journal_frame.go
+//go:generate mockgen -source durable_frame.go -destination mock_agent_session_repo/mock_durable_frame.go
 
-// JournalFrameRepo is the data access seam for agent_session_notification_journal.
-type JournalFrameRepo interface {
+// DurableFrameRepo is the data access seam for agent_session_durable_frames.
+type DurableFrameRepo interface {
 	// WriteFrames batch-writes frames replayed off a peer's own notification
 	// log, keyed by (user_id, conversation_id, seq) — this table's one unique
 	// key. A frame that was already written lands on that
@@ -21,7 +21,7 @@ type JournalFrameRepo interface {
 	// their windows overlap by construction, so the same frame arriving twice
 	// must settle once (写入路径「按序重放补齐缺口」的幂等前提). Writing zero
 	// frames never touches the database.
-	WriteFrames(ctx context.Context, frames []*agent_session_entity.JournalFrame) error
+	WriteFrames(ctx context.Context, frames []*agent_session_entity.DurableFrame) error
 	// ListFramesBySeq returns one session's frames with seq strictly greater
 	// than fromSeq (the caller's own cursor, exclusive — mirrors
 	// wire.SessionPullParams.Cursor), ordered seq ascending and capped at
@@ -30,7 +30,7 @@ type JournalFrameRepo interface {
 	// transcript.
 	ListFramesBySeq(
 		ctx context.Context, userID int64, conversationID string, fromSeq int64, limit int,
-	) ([]*agent_session_entity.JournalFrame, error)
+	) ([]*agent_session_entity.DurableFrame, error)
 	// ListFramesBefore reads the same session **backwards**: up to limit rows
 	// with seq strictly less than beforeSeq, newest first. beforeSeq 0 means
 	// "from the newest row". Scoped by the same two identity columns.
@@ -42,39 +42,39 @@ type JournalFrameRepo interface {
 	// conversation instead — the exact opposite of what was asked for.
 	ListFramesBefore(
 		ctx context.Context, userID int64, conversationID string, beforeSeq int64, limit int,
-	) ([]*agent_session_entity.JournalFrame, error)
+	) ([]*agent_session_entity.DurableFrame, error)
 	// DeleteFrames 清掉一条对话在这个身份键下的全部帧。两条路都用它：账号里删掉
-	// 这条对话时清 server 那一份（决策 6），以及对端的通知日志倒退回去时把旧的
+	// 这条对话时清 server 那一份（决策 6），以及对端的帧编号倒退回去时把旧的
 	// 整段先清干净——WriteFrames 是 DO NOTHING，不清就是旧帧原地胜出。
 	// 一条都没有时是 no-op 而不是错误：删除与复位都要幂等。
 	DeleteFrames(ctx context.Context, userID int64, conversationID string) error
 }
 
-var defaultJournalFrame JournalFrameRepo
+var defaultDurableFrame DurableFrameRepo
 
-func JournalFrame() JournalFrameRepo          { return defaultJournalFrame }
-func RegisterJournalFrame(i JournalFrameRepo) { defaultJournalFrame = i }
-func NewJournalFrame() JournalFrameRepo       { return &journalFrameRepo{} }
+func DurableFrame() DurableFrameRepo          { return defaultDurableFrame }
+func RegisterDurableFrame(i DurableFrameRepo) { defaultDurableFrame = i }
+func NewDurableFrame() DurableFrameRepo       { return &durableFrameRepo{} }
 
-type journalFrameRepo struct{}
+type durableFrameRepo struct{}
 
 // WriteFrames 是一条批量 INSERT ... ON DUPLICATE KEY UPDATE `user_id`=`user_id`
 // （clause.OnConflict{DoNothing:true}，与 sync_repo.avatarRepo.Save 同一写法）：
 // 赋值右边就是被赋的那一列，命中已有行时一个字节都不改，于是重放同一批帧时已经落库
 // 的那些行原样保留，不产生第二行也不报错。
-// agent_session_notification_journal 上只有主键 (user_id, conversation_id, seq)
+// agent_session_durable_frames 上只有主键 (user_id, conversation_id, seq)
 // 这一个键，DoNothing 因此收敛到它。
-func (r *journalFrameRepo) WriteFrames(ctx context.Context, frames []*agent_session_entity.JournalFrame) error {
+func (r *durableFrameRepo) WriteFrames(ctx context.Context, frames []*agent_session_entity.DurableFrame) error {
 	if len(frames) == 0 {
 		return nil
 	}
 	return db.Ctx(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&frames).Error
 }
 
-func (r *journalFrameRepo) ListFramesBySeq(
+func (r *durableFrameRepo) ListFramesBySeq(
 	ctx context.Context, userID int64, conversationID string, fromSeq int64, limit int,
-) ([]*agent_session_entity.JournalFrame, error) {
-	var out []*agent_session_entity.JournalFrame
+) ([]*agent_session_entity.DurableFrame, error) {
+	var out []*agent_session_entity.DurableFrame
 	if err := db.Ctx(ctx).Where(
 		"user_id=? AND conversation_id=? AND seq>?",
 		userID, conversationID, fromSeq,
@@ -86,10 +86,10 @@ func (r *journalFrameRepo) ListFramesBySeq(
 
 // ListFramesBefore 与 ListFramesBySeq 是同一张表的两个方向。上界为 0 时**不发**
 // seq<0 那一段条件——发出去会一行都取不到，详情页于是把一条有内容的对话显示成空的。
-func (r *journalFrameRepo) ListFramesBefore(
+func (r *durableFrameRepo) ListFramesBefore(
 	ctx context.Context, userID int64, conversationID string, beforeSeq int64, limit int,
-) ([]*agent_session_entity.JournalFrame, error) {
-	var out []*agent_session_entity.JournalFrame
+) ([]*agent_session_entity.DurableFrame, error) {
+	var out []*agent_session_entity.DurableFrame
 	// 条件拼成**一条** Where 而不是链式两条：链式会生成 `WHERE (a AND b) AND c`，
 	// 与同一张表上 ListFramesBySeq 的形状不一样，两条读语句的 SQL 从此对不上眼。
 	cond := "user_id=? AND conversation_id=?"
@@ -106,10 +106,10 @@ func (r *journalFrameRepo) ListFramesBefore(
 }
 
 // DeleteFrames 是一条 DELETE，WHERE 带齐身份键两列：少了 user_id 是跨账号删。
-func (r *journalFrameRepo) DeleteFrames(
+func (r *durableFrameRepo) DeleteFrames(
 	ctx context.Context, userID int64, conversationID string,
 ) error {
 	return db.Ctx(ctx).Where(
 		"user_id=? AND conversation_id=?", userID, conversationID,
-	).Delete(&agent_session_entity.JournalFrame{}).Error
+	).Delete(&agent_session_entity.DurableFrame{}).Error
 }

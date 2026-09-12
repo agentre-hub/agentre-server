@@ -213,7 +213,7 @@ func TestBegin_SavedConversationOnOnlineMachine_StartsMirroringIt(t *testing.T) 
 	rig := newResidentRig(t)
 	newFakeSaves(saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "写个爬虫")}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1), journalRow(conv42, 2)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	a := rig.replica(t, replicaA)
 
 	require.NoError(t, NewSessions(a.sup).Begin(context.Background(), testUserID, testMachine, conv42))
@@ -238,7 +238,7 @@ func TestBegin_WebDispatchedConversation_MirroredUnderItsInitiator(t *testing.T)
 	session := machineSession(conv42, "跑一下失败的测试")
 	session.PeerFingerprint = browser
 	rig.peer.sessions = []*agentrewire.SessionSummary{session}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1), journalRow(conv42, 2)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	a := rig.replica(t, replicaA)
 
 	require.NoError(t, NewSessions(a.sup).Begin(context.Background(), testUserID, testMachine, conv42))
@@ -271,7 +271,7 @@ func TestPurge_ClearsStoredContentAndStopsMirroringThatConversation(t *testing.T
 	rig := newResidentRig(t)
 	newFakeSaves(saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "要删掉的")}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	ctx := context.Background()
 	claimed, err := a.sup.Follow(ctx, testUserID, testMachine, savedOn(conv42))
@@ -355,7 +355,7 @@ func TestPurgeMachineDeleteTodos_ClearsTodosOfThatMachineAndKeepsItsConversation
 	rig := newResidentRig(t)
 	newFakeSaves(saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "退役机器上的老对话")}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1), journalRow(conv42, 2)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1), durableRow(conv42, 2)}
 	todos := newFakeTodos(
 		todo(testUserID, testMachine, conv43),
 		todo(testUserID, testMachine, conv44),
@@ -520,8 +520,8 @@ func TestBegin_SaveLandsOnAnotherReplica_OwnerPicksItUpAtOnce(t *testing.T) {
 	rig.peer.sessions = []*agentrewire.SessionSummary{
 		machineSession(conv42, "先保存的"), machineSession(conv77, "刚保存的"),
 	}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
-	rig.peer.journal[conv77] = []*agentrewire.JournaledNotification{journalRow(conv77, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv77] = []*agentrewire.DurableNotification{durableRow(conv77, 1)}
 	a := rig.replica(t, replicaA)
 	b := rig.replica(t, replicaB)
 	ctx := context.Background()
@@ -554,7 +554,7 @@ func TestPurge_DeleteLandsOnAnotherReplica_OwnerStopsMaterializingIt(t *testing.
 	rig := newResidentRig(t)
 	newFakeSaves(saved(testUserID, testMachine, conv42))
 	rig.peer.sessions = []*agentrewire.SessionSummary{machineSession(conv42, "要删掉的")}
-	rig.peer.journal[conv42] = []*agentrewire.JournaledNotification{journalRow(conv42, 1)}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
 	a := rig.replica(t, replicaA)
 	b := rig.replica(t, replicaB)
 	ctx := context.Background()

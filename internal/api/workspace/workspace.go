@@ -148,9 +148,8 @@ type SetExecTargetOrderResponse struct{}
 // ---------- web 统一会话索引：项目轴的两块材料 ----------
 
 // AccountProjectsRequest 取账号的项目树。与会话无关，因此取一次就能用很久；
-// 会话摘要与它们的项目归属现在从镜像来（见 internal/api/agentsession），归属判定整个
-// 在服务端就地完成，浏览器不再上送 (机器指纹, cwd) 探针——POST
-// /v1/workspace/session-projects 与它的探针协议已经退役（决策 12）。
+// 会话摘要与它们的项目归属从镜像来（见 internal/api/agentsession），归属判定整个
+// 在服务端就地完成，浏览器不上送 (机器指纹, cwd) 探针（决策 12）。
 type AccountProjectsRequest struct {
 	mux.Meta `path:"/v1/workspace/projects" method:"GET"`
 }

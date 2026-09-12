@@ -115,20 +115,6 @@ func (mr *MockUserRepoMockRecorder) SetWebAuthnHandleIfEmpty(ctx, id, handle any
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetWebAuthnHandleIfEmpty", reflect.TypeOf((*MockUserRepo)(nil).SetWebAuthnHandleIfEmpty), ctx, id, handle)
 }
 
-// Update mocks base method.
-func (m *MockUserRepo) Update(ctx context.Context, u *user_entity.User) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Update", ctx, u)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// Update indicates an expected call of Update.
-func (mr *MockUserRepoMockRecorder) Update(ctx, u any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Update", reflect.TypeOf((*MockUserRepo)(nil).Update), ctx, u)
-}
-
 // WebAuthnHandle mocks base method.
 func (m *MockUserRepo) WebAuthnHandle(ctx context.Context, id int64) ([]byte, error) {
 	m.ctrl.T.Helper()

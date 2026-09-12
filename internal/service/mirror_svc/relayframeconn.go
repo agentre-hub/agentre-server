@@ -22,10 +22,8 @@ import (
 // 侧是**推**过来的 —— 帧由 relay_svc 调 WriteMessage 交进来。所以读侧是一个信箱
 // 通道，写侧是一次 ForwardClient。
 //
-// 从前本仓在这一层之上还自己实现了一整套请求 ID 关联、cancel、超时与通知派发
-// （machineconn.go 的 register/forget/deliver/call/sendCancel），与桌面仓的
-// protorpc 是同一件事的第二份写法，而且是减配的：没有 per-call 超时豁免、错误类型
-// 与错误码各自重声明了一遍。引擎搬进共享 module 之后那一份整个删掉，只留这个适配器。
+// 请求 ID 关联、cancel、超时与通知派发都归共享引擎（pkg/wire/protorpc），本仓不在
+// 这一层之上另写一份。
 type relayFrameConn struct {
 	ctx       context.Context
 	relay     RelayDialer
@@ -90,8 +88,7 @@ func (c *relayFrameConn) Done() <-chan struct{} { return c.done }
 
 // WriteMessage 实现 relay_svc.FrameWriter：中继把这条通道上收到的帧交进来。
 //
-// 空载荷原样忽略，与本层从前的行为一致（中继侧用它表示「这条通道关了」，但本站此前
-// 从不据它收连接，改这一点是另一轮的事，不在搬家的范围里）。
+// 空载荷原样忽略（中继侧用它表示「这条通道关了」，本站不据它收连接）。
 func (c *relayFrameConn) WriteMessage(_ int, data []byte) error {
 	if len(data) == 0 {
 		return nil

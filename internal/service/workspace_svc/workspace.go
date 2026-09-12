@@ -1180,10 +1180,9 @@ func sortByOrderThenName[T any](items []T, key func(T) (int, string)) {
 // ServerOriginFingerprint 是服务端直写这些行时记的来源标识（决策 21）：**空串**，
 // 因为这些行不来自任何一台机器。
 //
-// 空串空得出来，是因为它此前没有含义：这一列建表时是 DEFAULT 0 / DEFAULT ” 且没有
-// 回填（migrations/202609040106_workspace_sync.go），而唯一读它的分支——
-// SyncObject.Wins 的平局判定——只在两行版本号相等时才看它，账号级单调序列保证了那
-// 永远不会发生。
+// 空串空得出来：这一列建表时的缺省值就是空串，建表注释写明「空串 = 服务端直写」
+// （migrations/202609040106_workspace_sync.go），而唯一读它的分支——SyncObject.Wins
+// 的平局判定——只在两行版本号相等时才看它，账号级单调序列保证了那永远不会发生。
 //
 // 它会经冲突应答回到桌面端（PushItemResult.OverwrittenOriginFingerprint /
 // MergedOriginFingerprint），桌面端据此向用户交代「你的改动被谁覆盖了」，那一侧必须
@@ -1405,7 +1404,7 @@ func (s *workspaceSvc) findOrgRowForWrite(
 // 行时可以这样交错：先取到号（较小）的那个后提交，设备先拉到较大的那个、把游标推过去，
 // 较小的那一行对这台设备永远不会再被投递——而浏览器与设备都收到了成功。
 //
-// 多行的写入还多一层收益：N 行从「各自提交」变成一次全有或全无，中途失败不再留下半份
+// 多行的写入还多一层收益：N 行一次全有或全无，中途失败不会留下半份
 // 新次序（SetExecTargetOrder）或删了一半的子树（DeleteOrgObject）。
 //
 // 广播一律留在外面：通道不是权威，写入的权威性在数据库。放进事务里既会让一次 redis
@@ -1593,7 +1592,7 @@ func WithOrgFields(payload string, fields map[string]any) (string, error) {
 }
 
 // OrgFieldsOrEmpty 保证新建的载荷是一个 JSON 对象：nil map marshal 出来是 null，
-// 而 sync_objects.payload 存的是对象（sync_entity.ValidatePayload 也只认对象）。
+// 而 sync_objects.payload 存的是对象（syncwire.GuardPayload 也只认对象）。
 func OrgFieldsOrEmpty(fields map[string]any) map[string]any {
 	if fields == nil {
 		return map[string]any{}

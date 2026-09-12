@@ -10,11 +10,8 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
-	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
-	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
-	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 )
 
 // stubMirror 是镜像那一侧的假实现：记下每一次调用的次序与目标，并可以让开始 /
@@ -27,11 +24,10 @@ type stubMirror struct {
 	purgeErr error
 }
 
-// 三条对话的 conversation_id（决策 1 的规范形式）。
+// 两条对话的 conversation_id（决策 1 的规范形式）。
 const (
 	conversationA = "3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88"
 	conversationB = "5b8c9d2e-1f30-7c55-b214-9d7e3a6b0c11"
-	conversationC = "7d1e4f60-2a55-7e01-83c9-4b2f5d8a6e33"
 )
 
 func (s *stubMirror) Begin(_ context.Context, ref SessionRef) error {
@@ -72,7 +68,6 @@ func (s *stubPeer) DeleteOnMachine(_ context.Context, ref SessionRef) error {
 type savedFixture struct {
 	calls  []string
 	follow *mock_agent_session_repo.MockSaveRepo
-	device *mock_device_repo.MockDeviceRepo
 	todo   *mock_agent_session_repo.MockDeleteTodoRepo
 	mirror *stubMirror
 	peer   *stubPeer
@@ -85,7 +80,6 @@ func setupSavedSessionTest(t *testing.T) *savedFixture {
 	t.Cleanup(ctrl.Finish)
 	f := &savedFixture{
 		follow: mock_agent_session_repo.NewMockSaveRepo(ctrl),
-		device: mock_device_repo.NewMockDeviceRepo(ctrl),
 		todo:   mock_agent_session_repo.NewMockDeleteTodoRepo(ctrl),
 	}
 	f.mirror = &stubMirror{calls: &f.calls}
@@ -101,7 +95,6 @@ func setupSavedSessionTest(t *testing.T) *savedFixture {
 		}, nil).
 		AnyTimes()
 	agent_session_repo.RegisterSave(f.follow)
-	device_repo.RegisterDevice(f.device)
 	agent_session_repo.RegisterDeleteTodo(f.todo)
 	SetSessionMirror(f.mirror)
 	SetMachineSessionDeleter(f.peer)
@@ -298,30 +291,4 @@ func TestDelete_ServerCopyNotPurged_StopsAndReports(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []string{"mirror:purge"}, f.calls)
 	assert.Empty(t, f.peer.deleted)
-}
-
-// R14 + R13：名单按账号取（任一端读到同一份）；目标设备仍在账号活跃设备里时
-// 该条在名单里且不标失效（机器离线不影响——服务端不按在线态过滤），目标已不存
-// 在（设备被撤销 / 从未存在）时标失效。
-func TestList_AccountScopedAndInvalidFlag(t *testing.T) {
-	f := setupSavedSessionTest(t)
-	f.follow.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*agent_session_entity.SessionSave{
-		{UserID: 7, DeviceFingerprint: "fp-agentred-1", ConversationID: conversationA, FollowedAt: 3000},
-		{UserID: 7, DeviceFingerprint: "fp-revoked", ConversationID: conversationB, FollowedAt: 2000},
-		{UserID: 7, DeviceFingerprint: "fp-agentred-1", ConversationID: conversationC, FollowedAt: 1000},
-	}, nil)
-	// fp-revoked 不在账号的活跃设备里：它已被撤销 / 不存在，目标已不存在。
-	f.device.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
-		{UserID: 7, Fingerprint: "fp-agentred-1", Kind: device_entity.KindAgentred, Status: 1},
-	}, nil)
-
-	items, err := f.svc.List(context.Background(), 7)
-	require.NoError(t, err)
-	require.Len(t, items, 3)
-	assert.False(t, items[0].Invalid)
-	assert.True(t, items[1].Invalid)
-	assert.False(t, items[2].Invalid)
-	assert.Equal(t, conversationA, items[0].ConversationID)
-	assert.Equal(t, "fp-agentred-1", items[0].DeviceFingerprint)
-	assert.Equal(t, int64(3000), items[0].FollowedAt)
 }

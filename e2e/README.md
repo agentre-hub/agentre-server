@@ -94,7 +94,7 @@ seeds only the account/session state needed by the smoke or hand-driven run. API
 calls go directly to the formal server; there are no route mocks.
 
 Cleanup is run-scoped and follows foreign-key order. It deletes only the current
-run's device tokens, device flows, synchronization data, follows, devices,
+run's device tokens, device flows, synchronization data, saved sessions, passkeys, devices,
 identity, user, Redis session, and the authorize rate-limit key created with the
 run's reserved fixture IP. It never issues `DROP
 DATABASE`, `TRUNCATE`, `FLUSHDB`, or `FLUSHALL`, and concurrent runs do not delete

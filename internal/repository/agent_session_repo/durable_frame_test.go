@@ -17,18 +17,18 @@ import (
 // pull 补齐窗口会有重叠，同一条帧落两次不能变成两行,也不能报错。
 func TestWriteFrames_BatchSingleStatement(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"INSERT INTO `agent_session_notification_journal`",
+		"INSERT INTO `agent_session_durable_frames`",
 	)).WithArgs(
 		int64(7), "conv-9", int64(101), "fp-daemon-1", `{"method":"a"}`, int64(1000),
 		int64(7), "conv-9", int64(102), "fp-daemon-1", `{"method":"b"}`, int64(1001),
 	).WillReturnResult(sqlmock.NewResult(1, 2))
 	mock.ExpectCommit()
 
-	frames := []*agent_session_entity.JournalFrame{
+	frames := []*agent_session_entity.DurableFrame{
 		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: `{"method":"a"}`, Createtime: 1000},
 		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 102, Payload: `{"method":"b"}`, Createtime: 1001},
 	}
@@ -40,7 +40,7 @@ func TestWriteFrames_BatchSingleStatement(t *testing.T) {
 // 调用方仍然成功——这是「replayed frame must not duplicate or error」的核心断言。
 func TestWriteFrames_GivenReplayedFrame_ThenNoDuplicateNoError(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	mock.ExpectBegin()
 	// 钉住**自赋值**这个形状，而不是只看见 "ON DUPLICATE KEY UPDATE" 就算数：
@@ -50,7 +50,7 @@ func TestWriteFrames_GivenReplayedFrame_ThenNoDuplicateNoError(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
-	frames := []*agent_session_entity.JournalFrame{
+	frames := []*agent_session_entity.DurableFrame{
 		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: `{"method":"a"}`, Createtime: 1000},
 	}
 	require.NoError(t, r.WriteFrames(ctx, frames))
@@ -61,7 +61,7 @@ func TestWriteFrames_GivenReplayedFrame_ThenNoDuplicateNoError(t *testing.T) {
 // 不应该拿一个空切片去撞 gorm 的「empty slice found」。
 func TestWriteFrames_GivenEmptySlice_ThenNoStatement(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	require.NoError(t, r.WriteFrames(ctx, nil))
 	require.NoError(t, mock.ExpectationsWereMet()) // 没有设任何期望：一发语句这里就会报错
@@ -72,7 +72,7 @@ func TestWriteFrames_GivenEmptySlice_ThenNoStatement(t *testing.T) {
 // 用 limit 分页——断连重连时按自己存的游标补齐缺口靠的就是这个形状。
 func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
@@ -80,7 +80,7 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 		AddRow(7, "conv-9", "fp-daemon-1", 101, `{"method":"a"}`, 1000).
 		AddRow(7, "conv-9", "fp-daemon-1", 102, `{"method":"b"}`, 1001)
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
+		"FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? AND seq>? ORDER BY seq ASC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", int64(100), 50).WillReturnRows(rows)
 
 	out, err := r.ListFramesBySeq(ctx, 7, "conv-9", 100, 50)
@@ -101,11 +101,11 @@ func TestListFramesBySeq_ScopedAndOrderedBySeqAscending(t *testing.T) {
 // 那条同号会话。
 func TestDeleteFrames_ScopedToTheWholeIdentity(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"DELETE FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=?",
+		"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=?",
 	)).WithArgs(int64(7), "conv-42").WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
@@ -126,7 +126,7 @@ func TestDeleteFrames_ScopedToTheWholeIdentity(t *testing.T) {
 // 还得再翻一次。
 func TestListFramesBefore_NewestFirstAndExclusiveUpperBound(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
@@ -134,7 +134,7 @@ func TestListFramesBefore_NewestFirstAndExclusiveUpperBound(t *testing.T) {
 		AddRow(7, "conv-9", "fp-daemon-1", 102, `{"method":"b"}`, 1001).
 		AddRow(7, "conv-9", "fp-daemon-1", 101, `{"method":"a"}`, 1000)
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
+		"FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? AND seq<? ORDER BY seq DESC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", int64(103), 50).WillReturnRows(rows)
 
 	out, err := r.ListFramesBefore(ctx, 7, "conv-9", 103, 50)
@@ -151,13 +151,13 @@ func TestListFramesBefore_NewestFirstAndExclusiveUpperBound(t *testing.T) {
 // 于是把一条有内容的对话显示成空的。
 func TestListFramesBefore_ZeroUpperBoundReadsFromNewest(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	rows := sqlmock.NewRows([]string{
 		"user_id", "conversation_id", "peer_fingerprint", "seq", "payload", "createtime",
 	}).AddRow(7, "conv-9", "fp-daemon-1", 300, `{"method":"a"}`, 1009)
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_notification_journal` WHERE user_id=? AND conversation_id=? ORDER BY seq DESC LIMIT ?",
+		"FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? ORDER BY seq DESC LIMIT ?",
 	)).WithArgs(int64(7), "conv-9", 50).WillReturnRows(rows)
 
 	out, err := r.ListFramesBefore(ctx, 7, "conv-9", 0, 50)
@@ -180,18 +180,18 @@ func TestListFramesBefore_ZeroUpperBoundReadsFromNewest(t *testing.T) {
 // sqlmock 逐字比较参数值，string 与 []byte 不相等，所以这条断言真的钉得住类型。
 func TestWriteFrames_PassesThePayloadAsStringNotBinary(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
-	r := NewJournalFrame()
+	r := NewDurableFrame()
 
 	const payload = `{"method":"runtime.event","params":{"event":{"kind":"text_delta","text":"你好"}}}`
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
-		"INSERT INTO `agent_session_notification_journal`",
+		"INSERT INTO `agent_session_durable_frames`",
 	)).WithArgs(
 		int64(7), "conv-9", int64(101), "fp-daemon-1", payload, int64(1000),
 	).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
-	require.NoError(t, r.WriteFrames(ctx, []*agent_session_entity.JournalFrame{
+	require.NoError(t, r.WriteFrames(ctx, []*agent_session_entity.DurableFrame{
 		{UserID: 7, ConversationID: "conv-9", PeerFingerprint: "fp-daemon-1", Seq: 101, Payload: payload, Createtime: 1000},
 	}))
 	require.NoError(t, mock.ExpectationsWereMet())

@@ -20,7 +20,6 @@ type DeviceTokenRepo interface {
 	// Revoke 返回受影响行数，由 service 判读竞态结果。
 	Revoke(ctx context.Context, id, nowMs int64) (int64, error)
 	RevokeChain(ctx context.Context, deviceID, nowMs int64) error
-	TouchLastUsed(ctx context.Context, id, nowMs int64) error
 	DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error
 }
 
@@ -87,24 +86,19 @@ func (r *repo) RevokeChain(ctx context.Context, deviceID, nowMs int64) error {
 		Update("revoked_at", nowMs).Error
 }
 
-func (r *repo) TouchLastUsed(ctx context.Context, id, nowMs int64) error {
-	return db.Ctx(ctx).Model(&device_token_entity.DeviceToken{}).Where("id=?", id).
-		Update("last_used_at", nowMs).Error
-}
-
 // cleanupBatchSize 是清理 DELETE 每一批的行数上限。这张表增长很快——access TTL
 // 15 分钟、refresh 每次轮换插一行,90 天窗口下稳态几百万行——一条不分批的 DELETE
 // 会把 next-key 锁铺满它扫过的范围,期间落在同一范围上的令牌刷新全被挡住。
 const cleanupBatchSize = 1000
 
-// DeleteRevokedBefore 把从前那条
+// DeleteRevokedBefore 删掉满足
 //
 //	(revoked_at != 0 AND revoked_at < ?) OR refresh_expires_at < ?
 //
-// 拆成两条各自带索引的语句。OR 只要有一侧定位不了,整条就退化成全表扫;拆开之后
+// 的行,但拆成两条各自带索引的语句:OR 只要有一侧定位不了,整条就退化成全表扫;拆开之后
 // 每一侧都是自己那条索引上的范围扫描(idx_dtokens_revoked 与 idx_dtokens_refresh_expiry)。
 //
-// 行集合与拆之前完全相同:同时满足两侧的行由第一条删走,第二条自然就找不到它了。
+// 行集合与单条 OR 语句完全相同:同时满足两侧的行由第一条删走,第二条自然就找不到它了。
 func (r *repo) DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error {
 	if err := r.deleteBatched(ctx, "revoked_at != 0 AND revoked_at < ?", cutoffMs); err != nil {
 		return err

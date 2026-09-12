@@ -70,7 +70,7 @@ func (s *sessionImportSvc) Preview(ctx context.Context, in PreviewInput) (*Previ
 		view.PreviewedTurns++
 	}
 	for i := range view.Frames {
-		// seq 是这一页里的位置，不是那台机器上的日志行号（预览根本没有日志行）。
+		// seq 是这一页里的位置，不是那台机器上的帧编号（预览根本没有编号）。
 		// 渲染链按它排序，因此必须严格递增。
 		view.Frames[i].Seq = int64(i + 1)
 	}
@@ -109,8 +109,8 @@ func metaView(meta *agentrewire.TranscriptImportMeta) MetaView {
 //
 //	用户那一行 → 这一轮的事件 → 用量 / 错误 → done
 //
-// 形状照的是执行侧回放时落进通知日志的那一串（agentre 的
-// daemon/transcriptimport.journalTurn），预览与导入后的真实转录因此长得一模一样，
+// 形状照的是执行侧回放时落进转录的那一串（agentre 的
+// daemon/transcriptimport.durableTurn），预览与导入后的真实转录因此长得一模一样，
 // 也因此能喂进浏览器**同一个**归约器。
 //
 // 少了每轮末尾那条 done，没有用户那一行的下一轮会接着上一轮那条助手消息往下写：

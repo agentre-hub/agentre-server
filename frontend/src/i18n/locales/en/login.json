@@ -1,12 +1,12 @@
 {
-  "title": "Sign in to AgentRe",
+  "title": "Sign in to Agentre",
   "github": "Sign in with GitHub",
   "or": "or",
   "passkey": "Sign in with a passkey",
   "userCodeLabel": "Continue to device authorization after signing in",
   "failureTitle": "Sign in unsuccessful",
   "retryLogin": "Sign in again",
-  "consent": "I have read and agree to AgentRe's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+  "consent": "I have read and agree to Agentre's <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
   "errors": {
     "oauth_state_invalid": "The OAuth state has expired. Please start the sign-in again.",
     "oauth_exchange_failed": "GitHub OAuth exchange failed. Retry later, or check the GitHub OAuth App settings.",

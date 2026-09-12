@@ -1,6 +1,6 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import type {
-  JournaledNotification,
+  DurableNotification,
   SessionSummary,
 } from "@agentre-hub/agentre-wire";
 
@@ -10,7 +10,7 @@ import {
 } from "@/components/session/transcriptFrame";
 import { turnDoneFrames } from "@/components/session/turnDone";
 import { api } from "@/lib/api";
-import { applyJournalFrames } from "@/lib/relayClient";
+import { applyDurableFrames } from "@/lib/relayClient";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
 
@@ -50,14 +50,14 @@ export interface MirrorSessionItem {
 }
 
 /**
- * GET /v1/agent-sessions/transcript 的一页。frames 是 wire.JournaledNotification 原样，
- * 因此解得动它的是与实时流同一条路径（applyJournalFrames）。
+ * GET /v1/agent-sessions/transcript 的一页。frames 是 wire.DurableNotification 原样，
+ * 因此解得动它的是与实时流同一条路径（applyDurableFrames）。
  *
  * cursor 是**这一次读到哪**，不是这条对话的最新 seq —— 机器在线时实时流还在往前跑，
  * 拿它当「到此为止都读完了」会把后面的实时帧全判成重复。这里只用它翻下一页。
  */
 export interface MirrorTranscriptPage {
-  frames?: JournaledNotification[];
+  frames?: DurableNotification[];
   cursor: number;
   has_more: boolean;
   /** 反向读那一页里最老那条的 seq —— 往上翻的下一次入参。 */
@@ -199,7 +199,7 @@ export async function loadMirrorTail(
   const page = await api<MirrorTranscriptPage>(
     `/v1/agent-sessions/transcript?${query.toString()}`,
   );
-  applyJournalFrames(page.frames ?? [], {
+  applyDurableFrames(page.frames ?? [], {
     onEvent: (f, at) => events.push(toTranscriptFrame(f, at)),
     // 轮次结束在转录里是一条分隔标记，同时是这一轮 meta（模型 / 耗时 / 首字 /
     // 速率）的唯一来路 —— 见 doneEventFrame。实时那条还兼着翻「这一轮在不在跑」
@@ -209,7 +209,7 @@ export async function loadMirrorTail(
   });
   return {
     events,
-    // 用服务端交回的 cursor 而不是 applyJournalFrames 的返回值：后者是**投影后**
+    // 用服务端交回的 cursor 而不是 applyDurableFrames 的返回值：后者是**投影后**
     // 那些帧里的最大 seq，而窗口最末那帧可能正好被投影丢掉了。差这一格，随后每条
     // 实时帧都会被判成跳号。
     lastSeq: page.cursor ?? 0,

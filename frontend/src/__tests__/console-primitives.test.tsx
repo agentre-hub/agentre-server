@@ -1,20 +1,20 @@
 /**
- * 共享控制台基础组件（task 1，正式 Pencil 组件 ZC7pI/A6Z3k/zF5jv/rNQXR/
+ * 共享控制台基础组件（task 1，正式 Pencil 组件 ZC7pI/A6Z3k/zF5jv/
  * IhldU 统计卡提炼）。
  *
  * 这些组件是全轮共享视觉基础：后续页面只消费其 API，不允许复制其尺寸、
  * 状态颜色、字阶或交互语义。本测试固定：
- *   - 尺寸：NavItem h-[34px]、TabBar h-[74px]、FilterChip h-[22px]、
- *     StatusMark 圆角胶囊、Metric value text-[23px]、EmptyState 62px 图标圈；
- *   - 状态：active/inactive、tone（StatusMark）、active/disabled（FilterChip）；
- *   - 真实动作边界：FilterChip disabled 不可交互；行级菜单已归共享包，
+ *   - 尺寸：NavItem h-[34px]、TabBar h-[74px]、StatusMark 圆角胶囊、
+ *     Metric value text-[23px]、EmptyState 62px 图标圈；
+ *   - 状态：active/inactive、tone（StatusMark）；
+ *   - 真实动作边界：行级菜单已归共享包，
  *     它的语义钉在 `row-actions-menu.test.tsx`（规格 2026-08-22 E 段）；
  *   - 旁白不得成为组件：渲染任意共享组件都不应带出设计旁白文案。
  */
 import { statusConfig } from "@agentre-hub/agentre-ui";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   Gauge,
   Laptop,
@@ -26,7 +26,6 @@ import {
 import {
   ConsoleNavItem,
   EmptyState,
-  FilterChip,
   InlineEmpty,
   Metric,
   MobileTabBar,
@@ -156,45 +155,6 @@ describe("Metric（IhldU 统计卡）", () => {
       '[data-testid="metric-value"]',
     ) as HTMLElement;
     expect(value.className).toContain("text-destructive");
-  });
-});
-
-describe("FilterChip（rNQXR）", () => {
-  it("默认是按钮：渲染文案，点击触发 onClick", () => {
-    const onClick = vi.fn();
-    render(<FilterChip label="All" onClick={onClick} />);
-    const chip = screen.getByRole("button", { name: "All" });
-    expect(chip).toBeTruthy();
-    fireEvent.click(chip);
-    expect(onClick).toHaveBeenCalledTimes(1);
-    assertNoNarration(document.body, "FilterChip");
-  });
-
-  it("active 态：primary-soft 面 + primary-text，aria-pressed=true", () => {
-    render(<FilterChip label="All" active />);
-    const chip = screen.getByRole("button", { name: "All" });
-    expect(chip.getAttribute("aria-pressed")).toBe("true");
-    expect(chip.className).toContain("bg-primary-soft");
-    expect(chip.className).toContain("text-primary-text");
-  });
-
-  it("尺寸固定 h-[22px] rounded-full；inactive 用 secondary 面", () => {
-    render(<FilterChip label="All" />);
-    const chip = screen.getByRole("button", { name: "All" });
-    expect(chip.className).toContain("h-[22px]");
-    expect(chip.className).toContain("rounded-full");
-    expect(chip.className).toContain("bg-secondary");
-  });
-
-  it("disabled：不是按钮、不可点、aria-disabled、不在焦点序里", () => {
-    const onClick = vi.fn();
-    render(<FilterChip label="All" disabled onClick={onClick} />);
-    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
-    const chip = screen.getByText("All") as HTMLElement;
-    expect(chip.closest("[aria-disabled=true]")).toBeTruthy();
-    expect(chip.getAttribute("tabindex")).toBeNull();
-    fireEvent.click(chip);
-    expect(onClick).not.toHaveBeenCalled();
   });
 });
 

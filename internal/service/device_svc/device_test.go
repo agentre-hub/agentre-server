@@ -619,6 +619,18 @@ func TestListRevokedJTI(t *testing.T) {
 	})
 }
 
+// stubForwarder 站在 relay_svc.Forwarder 的位置：本用例只关心 Redis 里的在线态
+// 登记，帧总线一次也不会被走到。
+type stubForwarder struct{}
+
+func (stubForwarder) Check(context.Context, relay_svc.Route) error { return nil }
+
+func (stubForwarder) Forward(
+	context.Context, relay_svc.Route, relay_svc.Peer, string, int, []byte,
+) error {
+	return nil
+}
+
 func TestListUserDevices(t *testing.T) {
 	convey.Convey("ListUserDevices marks caller and reports real relay presence", t, func() {
 		ctx, mD, _, _, svc, _ := setupDeviceTest(t)
@@ -631,7 +643,7 @@ func TestListUserDevices(t *testing.T) {
 		t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
 		relay := relay_svc.New(
 			relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second},
-			nil, nil, redisClient, relay_svc.NewUnavailableForwarder(),
+			nil, nil, redisClient, stubForwarder{},
 		)
 		relay_svc.SetDefault(relay)
 		t.Cleanup(func() { relay_svc.SetDefault(nil) })

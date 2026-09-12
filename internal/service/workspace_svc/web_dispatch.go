@@ -115,7 +115,6 @@ func (r *dispatchResolver) locationsFor(dev *device_entity.Device) (map[string]s
 //
 // 第二个返回值是**这一档**所选项目在那台机器上的绝对路径，按档算出、不跨档留存：
 // 两台机器上同一个项目的路径不同，留着上一轮的值会把 A 机的路径派到 B 机上去。
-// 原先靠循环体里每轮把 chosenCwd 重置成空来保证，抽成返回值之后由函数边界保证。
 func (r *dispatchResolver) evaluateTier(
 	t resolvedTarget, projectSyncID string,
 ) (WebDispatchTier, string, error) {

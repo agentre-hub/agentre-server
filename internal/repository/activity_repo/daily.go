@@ -190,10 +190,10 @@ func (r *dailyRepo) DeleteByUser(ctx context.Context, userID int64) (int64, erro
 
 // LatestDay 原样读出存着的那一天，SQL 里没有任何日期格式化。
 //
-// 它曾经有过：早先 day 是 date 列，而本仓所有 DSN 都带 parseTime=True，驱动把它解成
-// time.Time、GORM 再塞进 string 字段时用 RFC3339Nano，于是一条朴素的 `SELECT day`
+// day 必须是 char(10) 而不是 date 列：本仓所有 DSN 都带 parseTime=True，date 列会被驱动
+// 解成 time.Time、GORM 再塞进 string 字段时用 RFC3339Nano，于是一条朴素的 `SELECT day`
 // 拿回 "2026-08-28T00:00:00+08:00"——而这个值会原样变成下一次增量拉取的 since_day 发给
-// 机器。列改成 char(10) 之后没有时区语义可供重新解释，格式化也就无处可加。
+// 机器。char(10) 没有时区语义可供重新解释，格式化也就无处可加。
 //
 // 排序压在 day 列上，走 idx_agent_activity_daily_machine
 // (user_id, peer_fingerprint, day) 的反向扫描取一行；投影列因此另起别名，免得

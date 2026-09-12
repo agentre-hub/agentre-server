@@ -7,13 +7,13 @@
 //   - 导入本地会话的预览（sessionimport_svc）：从那台机器上取回的转录轮次里的
 //     事件，按同一条形状投影，于是预览与真实转录走的是同一个渲染链。
 //
-// 投影的判据不在这里定：它是 frontend/src/lib/transcriptFrames.ts 那个归约器认得的
-// 事件词表，本包只负责把 typed 事件如实摊成那份词表里的 {kind, ...}。
+// 投影的判据不在这里定：它是共享包 @agentre-hub/agentre-ui 的 transcript/frames.ts
+// 那个归约器认得的事件词表，本包只负责把 typed 事件如实摊成那份词表里的 {kind, ...}。
 //
-// 判别值本身也不在这里定了：它写在 .proto 的 (agentre.wire.event_kind) 字段选项上，
-// 由 pkg/wire/eventkind 从 descriptor 读出来。本包从前有一份 27 分支的手抄 switch
-// —— 分支名与判别值没有可推导的规则（tool_call → tool_use_start），抄错编译器发现
-// 不了，页面上表现为那一类卡片整块不渲染。
+// 判别值本身也不在这里定：它写在 .proto 的 (agentre.wire.event_kind) 字段选项上，
+// 由 pkg/wire/eventkind 从 descriptor 读出来。分支名与判别值之间没有可推导的规则
+// （tool_call → tool_use_start），手抄一份抄错了编译器发现不了，页面上表现为那一类
+// 卡片整块不渲染。
 package wireview
 
 import (
@@ -184,7 +184,7 @@ func putRawJSON(out map[string]any, key string, data []byte) {
 	// 合法 JSON 且是合法 UTF-8:**逐字节**原样嵌进视图,不解成 any 再重编。
 	//
 	// 重编那条路经 float64 中转:19 位的整数(纳秒时刻、雪花 ID、大文件偏移)会被改成
-	// 另一个值并写成科学计数法,`1.0` 会变成 `1`。这份视图就是镜像日志库里的那一行
+	// 另一个值并写成科学计数法,`1.0` 会变成 `1`。这份视图就是镜像帧表里的那一行
 	// (2026-09-07-journal-payload-json.md),原件不再另存一份 —— 改掉的位再也找不
 	// 回来。transcript_projection.go 的 decodeEventKind 早就为同一件事开了 UseNumber。
 	//
@@ -261,7 +261,7 @@ func singularValue(field protoreflect.FieldDescriptor, value protoreflect.Value)
 	}
 }
 
-// ── 镜像日志的落库形态 ────────────────────────────────────────────────────
+// ── 镜像帧的落库形态 ────────────────────────────────────────────────────
 //
 // 一行存一个 JSON 对象，形如 {"method": ..., "params": {...}}：库里那一行因此能被
 // 一条 SQL 直接读懂，检索走 JSON_EXTRACT 定位到具体路径
@@ -289,7 +289,7 @@ type storedFrame struct {
 // 一次；逃生路存的也是盖过 seq 的原件。
 // 交回的是 string 而不是 []byte：落库那一列是 json，而驱动开了 interpolateParams
 // 时会把 []byte 插值成 `_binary'…'`，MySQL 对 json 列拒收二进制字符集。类型在这里
-// 就定成文本，调用方便无从传错（见 agent_session_entity.JournalFrame.Payload）。
+// 就定成文本，调用方便无从传错（见 agent_session_entity.DurableFrame.Payload）。
 func EncodeStoredFrame(notification *agentrewire.RpcNotification) (string, error) {
 	method, params, err := Notification(notification)
 	if err != nil {

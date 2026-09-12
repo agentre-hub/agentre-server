@@ -17,7 +17,6 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	api "github.com/agentre-hub/agentre-server/internal/api/device"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
@@ -41,7 +40,7 @@ type DeviceSvc interface {
 	ExchangeToken(ctx context.Context, deviceCode string) (*TokenOutput, error)
 	Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error)
 	Revoke(ctx context.Context, deviceID int64) error
-	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
+	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]DeviceView, error)
 	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
 	// OwnedDevice 取一台属于该账号、且仍可用的设备。
 	//
@@ -297,9 +296,9 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 	// 行要等 daemon 下一次轮询（interval 默认 5 秒）走到这里。用户批准完立刻进设备页
 	// 正好落在那个窗口里，看到的是一份不含这台机器的列表。
 	//
-	// 从前只有 relay_svc.RegisterDaemon 那一声，而它发生在这之后、且发在账号通道
+	// 只靠 relay_svc.RegisterDaemon 那一声不够：它发生在这之后、且发在账号通道
 	// 多半还在取票建连的那几秒里——信号不补发，连着之后兜底轮询又让路，于是那份空
-	// 列表会一直挂到用户自己刷新。这里补的就是那一条：行一存在就说一声。
+	// 列表会一直挂到用户自己刷新。所以行一存在就说一声。
 	//
 	// 事务外、best-effort：广播失败只记日志，token 已经发出去了，不能因为一条信号回滚。
 	accountchan_svc.BroadcastSignalBestEffort(ctx, flow.AuthorizedUserID, accountchan_svc.FrameTypeDevicePresence)
@@ -582,14 +581,38 @@ func (s *deviceSvc) ListRevokedJTI(ctx context.Context, userID int64) ([]string,
 	return device_token_repo.DeviceToken().ListRevokedJTIByUser(ctx, userID, windowStart)
 }
 
+// DeviceView 是设备列表里的一行，**服务层自己的形状**。
+//
+// 刻意不用 internal/api/device 的响应 DTO：那个类型带着 json tag，是某个端点的传输
+// 形状，把它当服务层返回值等于让「改一个 tag」变成「改服务层签名」。wire 形状归 api
+// 层，由 controller 做这层映射（见 device_ctr 的 toListDevicesItem）。
+//
+// DaemonCommit / DaemonBuildKnown 的语义（空串不等于开发构建，见决策 19）在 wire 那一
+// 侧解释，这里只是搬运。
+type DeviceView struct {
+	ID               int64
+	Name             string
+	Kind             string
+	Platform         string
+	Version          string
+	Fingerprint      string
+	LastSeenAt       int64
+	Status           int
+	Online           bool
+	IsThisDevice     bool
+	ProtocolMismatch bool
+	DaemonCommit     string
+	DaemonBuildKnown bool
+}
+
 // ListUserDevices returns all devices for a user, marking the caller's row and
 // reporting the real relay presence (R20) as the online state.
-func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error) {
+func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]DeviceView, error) {
 	rows, err := device_repo.Device().ListByUser(ctx, userID)
 	if err != nil {
 		return nil, i18n.NewInternalError(ctx, code.DeviceListFailed)
 	}
-	out := make([]api.ListDevicesItem, 0, len(rows))
+	out := make([]DeviceView, 0, len(rows))
 	for _, d := range rows {
 		// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。
 		// Redis 抖动时按离线对待（fail-open）：在线态只是列表的增强列，
@@ -606,7 +629,7 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 		// 开发构建、永不劝升）。第二个返回值是「知不知道」——没握过手时不能把「没有
 		// 答案」读成「commit 为空」，那会把一台正式版机器说成开发构建。
 		daemonCommit, daemonBuildKnown := mirror_svc.Default().DaemonBuild(ctx, userID, d.Fingerprint)
-		out = append(out, api.ListDevicesItem{
+		out = append(out, DeviceView{
 			ID:               d.ID,
 			Name:             d.Name,
 			Kind:             d.Kind,

@@ -57,7 +57,7 @@ func TestUnsavedConversation_LeavesNoContentInDatabase_Guard(t *testing.T) {
 		// 保存的是哪条」——删除时清不掉，保存范围也圈不住它。
 		requireFields(t, agent_session_entity.SessionSummary{}, "SessionSummary",
 			"UserID", "ConversationID")
-		requireFields(t, agent_session_entity.JournalFrame{}, "JournalFrame",
+		requireFields(t, agent_session_entity.DurableFrame{}, "DurableFrame",
 			"UserID", "ConversationID")
 	})
 

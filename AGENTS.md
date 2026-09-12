@@ -4,18 +4,19 @@ Agent guidance for `agentre-server`.
 
 ## What this is
 
-AgentRe Server — SaaS backend. Accounts + RFC 8628 Device Flow.
+Agentre Server — SaaS backend. Accounts + RFC 8628 Device Flow.
 
 Go 1.26 on the [cago](https://github.com/cago-frame/cago) framework, MySQL 9.7 + Redis 7,
 with a React 19 + Vite + Tailwind + shadcn frontend embedded into the binary via `//go:embed`.
 Module path is `github.com/agentre-hub/agentre-server`. It is a standalone backend
 module and is not imported by the sibling repositories.
 
-Part of the `/Users/codfrm/Code/agentre` Go workspace. The sibling desktop app's Go module
-is **not** a backend dependency: server Go code must never import it. The frontend does
+Part of a multi-repository checkout: it is developed alongside the sibling desktop app and the
+community hub, and each repository commits independently. The sibling desktop app's Go
+module is **not** a backend dependency: server Go code must never import it. The frontend does
 consume the host-neutral `@agentre-hub/agentre-ui` and `@agentre-hub/agentre-wire` packages
 owned there, pinned to immutable Git commits; those packages must never import either host.
-Workspace-wide facts live in [`../AGENTS.md`](../AGENTS.md).
+Cross-repository facts live in [`../AGENTS.md`](../AGENTS.md).
 
 ## Read this before you touch anything
 
@@ -77,7 +78,7 @@ internal/
   repository/*_repo/        data access; interface + Register/accessor + db.Ctx(ctx)
   model/entity/*_entity/    rich entities — Check(ctx) / IsActive() live here, not in service
   middleware/               session auth, device JWT, CSRF, rate limit, RFC 8628 error fields
-  pkg/                      cross-cutting: jwt, session, ratelimit, usercode, code (i18n errors)
+  pkg/                      cross-cutting: jwt, session, usercode, wireversion, code (i18n errors)
   task/crontab/             scheduled cleanup
   web/                      embed.FS SPA mount, /v1 passthrough
 migrations/                 gormigrate; append-only

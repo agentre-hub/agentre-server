@@ -82,10 +82,9 @@ func newNoRouteHandlerFS(sub fs.FS) (gin.HandlerFunc, error) {
 // immutableCacheControl 给 /assets/ 下的产物。vite 把内容 hash 写进文件名，内容一变
 // 文件名就变，所以这些 URL 的内容永不改写 —— 正是 immutable 的定义。
 //
-// 此前一个缓存头都没有，而且不是「忘了配」那么简单：embed.FS 的 ModTime 是零值，
-// http.ServeContent 因此连 Last-Modified 都不发，net/http 也不会自动生成 ETag。
-// 于是每次打开页面都要把整份 bundle（真实产物 2.2MB js + 107KB css）重新下一遍，
-// 连一次 304 都省不下。
+// 不能靠 net/http 的默认行为：embed.FS 的 ModTime 是零值，http.ServeContent 因此连
+// Last-Modified 都不发，net/http 也不会自动生成 ETag。不显式给缓存头，每次打开页面
+// 都要把整份 bundle（真实产物 2.2MB js + 107KB css）重新下一遍，连一次 304 都省不下。
 const immutableCacheControl = "public, max-age=31536000, immutable"
 
 // revalidateCacheControl 给 index.html。它是那张指向当前一组 hash 的名片，**绝不能**

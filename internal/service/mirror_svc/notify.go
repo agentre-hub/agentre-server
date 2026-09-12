@@ -103,9 +103,8 @@ type changeSignaller interface {
 }
 
 // summaryFlushWindow 是摘要写入的攒批窗口。它攒的是**落库次数**，收件人是数据库
-// 而不是浏览器，与 mirrorChangeWindow 攒的那条信号不是一回事：两个数互相独立，曾经
-// 都取一秒是巧合，不是耦合。
+// 而不是浏览器，与 mirrorChangeWindow 攒的那条信号不是一回事：两个数互相独立。
 //
-// 所以 mirrorChangeWindow 放宽到三秒时这一个留在一秒，没有跟着一起放宽：摘要行要是
-// 落后于信号，各端被信号叫醒去读，读回来的却还是旧摘要。
+// 这一个不能比 mirrorChangeWindow 长：摘要行要是落后于信号，各端被信号叫醒去读，
+// 读回来的却还是旧摘要。
 const summaryFlushWindow = time.Second

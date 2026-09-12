@@ -1,10 +1,9 @@
 // Package relaywire 编码 relay_svc 以不透明二进制载荷承载的 RPC 帧。它不拥有任何
 // 中继路由或 WebSocket 逻辑。
 //
-// 它**不再**定义错误类型与错误码:那些从前是桌面仓 rpcerror 的第二份声明,协议引擎
-// 搬进共享 module 之后由 pkg/wire/rpcerror 一份供两仓使用。请求/取消帧的编码同理,
-// 由 pkg/wire/protorpc 负责;这里只剩会话生命周期字面量与两个给中继自己用的帧编解码
-// 助手(relay_ctr 要在通道级失败时自己合成一帧错误)。
+// 错误类型与错误码不在这里定义:它们由共享 module 的 pkg/wire/rpcerror 一份供两仓
+// 使用。请求/取消帧的编码同理,由 pkg/wire/protorpc 负责;这里只有会话生命周期字面量
+// 与两个给中继自己用的帧编解码助手(relay_ctr 要在通道级失败时自己合成一帧错误)。
 package relaywire
 
 import (

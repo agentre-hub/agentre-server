@@ -242,7 +242,7 @@ func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) 
 		{
 			name: "够不着设备", kind: portforwardhost.FailureDeviceUnreachable,
 			status: http.StatusBadGateway, page: true,
-			contains: []string{"设备离线", "等它重新上线"},
+			contains: []string{"设备离线", "没有连着 Agentre", "等它重新上线"},
 		},
 		{
 			name: "上游把请求断了", kind: portforwardhost.FailureUpstreamGone,

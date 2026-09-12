@@ -6,7 +6,6 @@
   "startFirst": "开始第一个对话",
   "startFirstBody": "挑一个 Agent 开始。",
   "noMachine": "未知机器",
-  "remove": "移除",
   "pickAgentHint": "选一个 Agent 直接开始聊。",
   "noProjectsOnMachine": "这台机器上没有已配置的项目。",
   "projectPathMissing": "这台机器上未配置远端路径",

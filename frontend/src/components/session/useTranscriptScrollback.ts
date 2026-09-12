@@ -20,14 +20,14 @@ import {
 } from "@/components/session/transcriptFrame";
 import { turnDoneFrames } from "@/components/session/turnDone";
 import { useTargetGuard } from "@/hooks/use-target-guard";
-import { applyJournalFrames, type RelayClient } from "@/lib/relayClient";
+import { applyDurableFrames, type RelayClient } from "@/lib/relayClient";
 
 /**
  * 未保存的对话向中继补齐时，只补最后这么多**帧**。
  *
  * 这里只能用帧数：对端的 pull 只有 cursor + limit 两个入参，没有服务端那套按轮次与
  * 字节算的预算（协议在 sibling 的 agentre 仓）。而帧数是个很差的刻度——一帧可以是
- * 一个 token 的 delta，也可以是几百 KB 的工具结果。所以它只负责「别把整份 journal
+ * 一个 token 的 delta，也可以是几百 KB 的工具结果。所以它只负责「别把整份转录
  * 拉回来」，「够不够一屏」由下面那条顶补兜底。
  */
 export const RELAY_TAIL_FRAMES = 400;
@@ -279,8 +279,8 @@ export function useTranscriptScrollback({
       );
       const evs: SessionEventFrame[] = [];
       // 与首屏同一条解帧路径。**不**走客户端的去重投递：那套 seq 闸门会把这一段
-      // 判成跳号，反手从游标往后把整条日志再拉一遍。
-      applyJournalFrames(res.frames, {
+      // 判成跳号，反手从游标往后把整段转录再拉一遍。
+      applyDurableFrames(res.frames, {
         onEvent: (f, at) => evs.push(toTranscriptFrame(f, at)),
         onRunResultDone: (frame, at) =>
           evs.push(...turnDoneFrames(sid, frame, at)),

@@ -1,9 +1,9 @@
 // Package accountchan_ctr 把账号级实时信号编成线上帧，交给中继客户端连接上的
 // 保留通道运送（决策 13）。
 //
-// 它**不再是一个 websocket 端点**：`/v1/account/channel` 已经删除，账号信号与 RPC
-// 共用同一条多路复用连接。合并的是传输，不是总线——每副本一份 Redis Pub/Sub 订阅
-// 的 accountchan_svc 原样保留，这里只负责「一份订阅 → 一条已编码的帧流」。
+// 它不是一个 websocket 端点：账号信号与 RPC 共用同一条多路复用连接。合并的是传输，
+// 不是总线——每副本一份 Redis Pub/Sub 订阅的 accountchan_svc 照常存在，这里只负责
+// 「一份订阅 → 一条已编码的帧流」。
 package accountchan_ctr
 
 import (

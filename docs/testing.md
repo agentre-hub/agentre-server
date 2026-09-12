@@ -35,8 +35,7 @@ MySQL, the expectation is wrong.
 There is no cross-layer tier. A test that stands up its own `gin.New()` and hand-writes
 the `code`/`msg`/`data` envelope is not testing the wiring — it is testing a second
 implementation of it, one that stays green while the real `internal/api/router.go` breaks.
-`internal/integration/` was exactly that and has been removed. Test each layer at its own
-seam, use `muxtest.TestMux` when you need the real route tree, and leave genuine
+Test each layer at its own seam, use `muxtest.TestMux` when you need the real route tree, and leave genuine
 end-to-end wiring to `make e2e`, which runs the formal server against real MySQL
 and Redis without API route mocks. Repository unit tests still use sqlmock and
 service unit tests still use mockgen; see [`../e2e/README.md`](../e2e/README.md).
@@ -49,6 +48,12 @@ repeat facts already written there. In particular, do not duplicate migration ta
 columns, types, defaults, indexes, collations, migration IDs or migration counts in a test.
 Those assertions do not exercise MySQL or user-visible behaviour; they only create a second
 copy of the implementation that must be edited in lockstep with the first.
+
+One guard reads source on purpose: `internal/model/entity/schema_test.go` parses the
+baseline DDL out of `migrations/*.go` and compares it with the entity structs. It restates
+no column of its own — both sides are the implementation, and what it asserts is that they
+agree (every writable field has a column, every table is claimed by an entity). That drift
+would otherwise surface only as a SQL error at runtime.
 
 This rule is about the **subject under test**, not a blanket ban on comparing strings.
 Exact string assertions remain appropriate when the string is itself an observable contract,
@@ -102,9 +107,10 @@ executes startup migrations on a real dedicated E2E database, but that baseline 
 upgrade-compatibility coverage.
 
 Per [Assert behaviour, not implementation text](#assert-behaviour-not-implementation-text),
-there are deliberately no unit tests that parse migration DDL or duplicate schema details
-as string assertions. `migrations/migrations_test.go` covers only the named-lock runner.
-It does not make MySQL parse the DDL or exercise upgrades from representative historical
+no unit test duplicates schema details as string assertions; the one test that parses
+migration DDL, `internal/model/entity/schema_test.go`, only checks that entities and the
+baseline agree. `migrations/migrations_test.go` covers only the named-lock runner.
+Neither makes MySQL parse the DDL or exercise upgrades from representative historical
 rows. A green baseline E2E database therefore does not prove upgrade safety.
 
 So when you touch `migrations/`, verify it by hand before merging:
@@ -134,7 +140,7 @@ instead of `ThemeProvider` + `useTheme` — the wiring the test is nominally abo
 being covered, in every file, silently. A shim in the setup file leaves the component
 under test untouched.
 
-Four shims live there today, all installed only when the runtime lacks them:
+Six shims live there today, all installed only when the runtime lacks them:
 
 - **`localStorage` / `sessionStorage`.** Node ≥ 22 puts a built-in `localStorage` getter
   on `globalThis` that resolves to `undefined` without `--localstorage-file`, *and* it
@@ -145,6 +151,12 @@ Four shims live there today, all installed only when the runtime lacks them:
   selected item into view when the menu opens.
 - **`ResizeObserver`.** jsdom does not implement it; the transcript virtualizer uses it
   to measure the viewport and row heights.
+- **`isSecureContext`.** jsdom does not define it. It is computed once from the origin at
+  install time, so a test that replaces `window.location` with a literal does not turn the
+  page insecure.
+- **`Range.getClientRects` / `getBoundingClientRect`.** Without them ProseMirror throws in
+  TipTap's `scrollToSelection` after every transaction — outside any awaited stack, so every
+  test passes and the vitest run still exits non-zero.
 
 Anything that needs real layout — a card overflowing a phone viewport, a flex row that
 will not shrink — cannot be tested here at all. jsdom computes no layout. That belongs
@@ -158,9 +170,10 @@ They live next to what they guard.
 | Guard | Asserts |
 | --- | --- |
 | `internal/pkg/jwt/testkeys/isolation_test.go` | Test keys are not in `cmd/server`'s dependency graph |
+| `internal/model/entity/schema_test.go` | Every writable entity field has a column in the baseline DDL, and every baseline table is claimed by an entity |
 | `internal/api/http_golden_test.go` | The committed `/v1/sync/*` and `/v1/engine/*` response samples still match what the real server emits |
 | `frontend/src/__tests__/eslint-guardrails.test.ts` | Colour-token, native-control, secure-context, Alert-slot and i18n rules fire, at error severity, over `src/` |
-| `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the Device Flow `iota` block in `internal/pkg/code/code.go` |
+| `frontend/src/__tests__/error-code-contract.test.ts` | `lib/errorCodes.ts` still matches the explicitly numbered Device Flow, passkey and account codes in `internal/pkg/code/code.go` |
 | `frontend/src/__tests__/user-code-contract.test.ts` | `lib/userCode.ts`'s alphabet and length still match `internal/pkg/usercode` |
 | `frontend/src/__tests__/login-error-contract.test.ts` | `Login.tsx`'s `KNOWN_ERRORS` still matches the `/login?err=` values `auth_ctr` redirects with, and each has copy in both locales |
 | `frontend/src/__tests__/desktop-answered-methods.test.ts` | Every `rpcMethods.X` call site that can reach a desktop machine uses a method the desktop host answers; the one declared agentred-only path is still restricted; channel targets still come only from `machineTarget`/`conversationTarget` |

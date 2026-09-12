@@ -1,6 +1,6 @@
 // Package agent_session_repo is the data access layer for the account-scoped
 // agent sessions (2026-08-18-server-session-mirror.md "存什么"): a summary per
-// conversation, its raw journal frames, the delete todos left behind when a
+// conversation, its raw durable frames, the delete todos left behind when a
 // peer was offline at delete time, and the saves list that decides which
 // conversations are carried here at all.
 //

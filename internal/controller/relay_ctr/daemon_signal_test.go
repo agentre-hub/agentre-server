@@ -11,9 +11,9 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
-// 账号信号并入 daemon 那条连接（决策 13）：agentred 不再单开一条信号连接
-// （旧的 /v1/account/channel 已删），保留通道 relay_svc.SignalChannelID 改由服务端
-// 在它的 /v1/relay/daemon 连接上主动推送——与 Client() 已经在跑的那一路对称。
+// 账号信号走 daemon 那条连接（决策 13）：agentred 不单开信号连接，保留通道
+// relay_svc.SignalChannelID 由服务端在它的 /v1/relay/daemon 连接上主动推送——与
+// Client() 那一路对称。
 //
 // 这是补上的回归（T9 note）：Daemon() 从前只订阅设备归属，从不订阅账号信号，一台
 // 在线 agentred 因此只能靠下一次中继重连才刷新引擎快照。

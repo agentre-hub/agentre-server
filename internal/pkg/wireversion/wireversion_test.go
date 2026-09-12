@@ -70,8 +70,7 @@ func TestProtocol_GivenTheGoAndNpmPinsOfTheWireProtocol_WhenCompared_ThenBothDec
 // 所以它是本包唯一还留着的字面量；When 与本次握手自报的 Protocol 对比；Then 两者逐字
 // 相等 —— 本轮窗口是一个点，不产生宽限（spec「协议：版本窗口与自报版本」决策 3）。
 //
-// 它此前比的是锁文件里钉住的包版本，那只是绕道说同一件事；现在 Protocol 自己就是那个
-// 值，直接比即可。这条守卫不能删：本仓没有桌面仓 methodset_test.go 那条无条件断言
+// 这条守卫不能删：本仓没有桌面仓 methodset_test.go 那条无条件断言
 // MinSupported == Protocol 的守恒律，删掉之后这个下限就无人看管，可以悄悄落后于
 // Protocol 而没人发难。要真的张开宽限窗口，请连同这条守卫一起有意改写。
 func TestMinSupported_GivenThisBuildsOwnFloor_WhenComparedToProtocol_ThenTheWindowIsASinglePoint(t *testing.T) {

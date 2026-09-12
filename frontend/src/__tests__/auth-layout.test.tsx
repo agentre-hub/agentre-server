@@ -26,7 +26,7 @@ describe("AuthLayout", () => {
   it("puts the brand mark and both controls in a document-flow top bar, not a fixed overlay", () => {
     renderLayout();
     const banner = screen.getByRole("banner");
-    expect(within(banner).getByText("AgentRe")).toBeTruthy();
+    expect(within(banner).getByText("Agentre")).toBeTruthy();
     expect(
       within(banner).getByRole("button", { name: /Language/i }),
     ).toBeTruthy();
@@ -43,7 +43,7 @@ describe("AuthLayout", () => {
   it("renders a footer with copyright and links to /terms, /privacy, /status", () => {
     renderLayout();
     const footer = screen.getByRole("contentinfo");
-    expect(within(footer).getByText(/AgentRe/)).toBeTruthy();
+    expect(within(footer).getByText(/Agentre/)).toBeTruthy();
     expect(
       within(footer)
         .getByRole("link", { name: "Terms of Service" })

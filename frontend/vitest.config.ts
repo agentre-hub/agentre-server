@@ -25,10 +25,11 @@ export default defineConfig({
       deps: {
         // 两个共享包都必须走打包器，不能被 externalize 成裸 Node ESM。
         //
-        // agentre-ui 的 dist 里有 `import en from "./locales/en.json"` 与目录
-        // 说明符（`from "./i18n"`）；agentre-wire 的 dist 里是无扩展名的相对
-        // 说明符（`from "./runtime"`）。它们在 Vite / Rollup 下都能解析，但
-        // Node 的 ESM 解析器要求完整文件说明符，会直接报
+        // 两个包发布的都是 TypeScript 源码（agentre-ui 的 package.json exports
+        // 指向 ./src/index.ts、files 只有 src/styles；node_modules 下没有 dist），
+        // agentre-wire 同理。它们内部又有目录说明符（`from "./i18n"`）和无扩展名
+        // 的相对说明符（`from "./runtime"`）。Vite / Rollup 下都能解析，但 Node
+        // 的 ESM 解析器既不认识 TS 语法，也要求完整文件说明符，会直接报
         // `Directory import ... is not supported` / `ERR_MODULE_NOT_FOUND`。
         //
         // vitest 默认把 node_modules 里的依赖 externalize 掉交给 Node，于是

@@ -18,8 +18,9 @@ import (
 //
 // 两者的长度按生成器实际产出来定，不留无意义的余量——
 // device_code 是 randomBase32(32)（32 字节 base32、无填充，恒为 52 位小写），
-// user_code 是 usercode.Generate() 的 "XXX-XXX"（7 位大写）。device_code 还是主键，
-// InnoDB 会把主键塞进每一条二级索引，所以它的宽度是真实成本，不能随手写 varchar(255)。
+// user_code 是 usercode.Generate() 的 "XXX-XXX"（7 位大写）。device_code 既是这张表的唯一键，
+// 又被 InnoDB 塞进每一条二级索引（唯一键的列同样会被复制进去），所以它的宽度是真实成本，
+// 不能随手写 varchar(255)。
 //
 // pending_flag 是 MySQL 表达「部分唯一索引」的写法，等价于 PG 的
 // `... ON device_flow_codes(user_code) WHERE consumed_at = 0 AND denied_at = 0`：
@@ -34,7 +35,8 @@ func migration202609040105() *gormigrate.Migration {
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`
 				CREATE TABLE device_flow_codes (
-				  device_code         varchar(64) COLLATE utf8mb4_0900_bin PRIMARY KEY,
+				  id                  bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
+				  device_code         varchar(64) COLLATE utf8mb4_0900_bin NOT NULL,
 				  user_code           varchar(16) COLLATE utf8mb4_0900_as_ci NOT NULL,
 				  device_kind         varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
 				  client_fingerprint  varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
@@ -51,6 +53,7 @@ func migration202609040105() *gormigrate.Migration {
 				  createtime          bigint NOT NULL DEFAULT 0,
 				  pending_flag        tinyint GENERATED ALWAYS AS
 				    (IF(consumed_at = 0 AND denied_at = 0, 1, NULL)) STORED,
+				  UNIQUE KEY uk_device_flow_codes_identity (device_code),
 				  UNIQUE KEY uk_dfc_user_code_pending (user_code, pending_flag),
 				  KEY idx_dfc_expires (expires_at)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;

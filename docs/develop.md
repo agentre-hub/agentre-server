@@ -12,7 +12,7 @@ make build             # frontend build → copy into internal/web/dist → go b
 
 make test              # THE default gate: test-backend + test-frontend
 make test-backend      # go test -race ./...   (there are no build tags — see below)
-make test-frontend     # cd frontend && pnpm test  (vitest)
+make test-frontend     # cd frontend && pnpm typecheck && pnpm test  (vitest)
 make e2e               # formal server + real MySQL/Redis + desktop/mobile Chromium
 make test-cover        # coverage.html
 
@@ -40,7 +40,8 @@ The repo has **no build tags at all**, so `make test` runs everything there is. 
 ```bash
 cp configs/config.example.yaml configs/config.yaml   # gitignored runtime config
 # point db.dsn / redis.addr in configs/config.yaml at your own MySQL + Redis
-# export any required AGENTRE_SERVER_* variables in the shell; names are listed in .env.example
+# export any required AGENTRE_SERVER_* variables in the shell; the names are in
+# deploy/README.md (they only take effect under source: file)
 make dev
 ```
 
@@ -93,9 +94,10 @@ review, and reflowing it makes those diffs unreadable.
 There is no `//nolint` culture here. Every exemption is declared in one place,
 with its reason next to it:
 
-- **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go` and
-  `internal/bootstrap/cago.go` may use stdlib `log`, because cago's logger does
-  not exist until `component.Core()` has run. That is the only window.
+- **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go`,
+  `internal/bootstrap/cago.go` and `internal/bootstrap/jwtkeys.go` (which `main` runs
+  before `cago.New`) may use stdlib `log`, because cago's logger does not exist until
+  `component.Core()` has run. That is the only window.
 - **`frontend/eslint.config.js`** — `eslint-rules/` may contain literal colours
   (it lists the banned colour names). Test files may contain literals of both
   kinds, because they construct the violating samples.
@@ -113,9 +115,10 @@ the **end**, and existing entries are never edited — someone's database has al
 run them. To correct an earlier migration, add a patch migration. Prefer native SQL
 for DDL.
 
-Sqlmock guard tests execute the migration functions and check DDL policy, but they do not
-prove that MySQL accepts the DDL or that upgrades preserve representative historical data.
-Verify migrations by hand before merging; see
+`internal/model/entity/schema_test.go` compares the entity structs against the baseline
+DDL (every writable field must have a column, every table must be claimed by an entity),
+but nothing proves that MySQL accepts the DDL or that upgrades preserve representative
+historical data. Verify migrations by hand before merging; see
 [testing.md](testing.md#migration-compatibility-is-not-automated).
 
 ## Configuration
@@ -127,7 +130,9 @@ Verify migrations by hand before merging; see
   `configs/config.e2e.yaml` is gitignored.
 - Secrets come from environment variables, injected by `bootstrap.LoadServerConfig`
   (cago's config source has no env override, so this is done by hand there).
-  `.env.example` lists them.
+  The `AGENTRE_SERVER_*` override names are listed in
+  [`../deploy/README.md`](../deploy/README.md); `deploy/.env.example` lists the
+  compose-level names that map onto them.
 
 Never commit a real key, and never read config from disk anywhere but bootstrap.
 

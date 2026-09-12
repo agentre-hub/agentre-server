@@ -37,8 +37,7 @@ import (
 // 写入侧被强制要求 scope_sync_id 与 agentred_fingerprint 非空（sync_svc 的
 // rejectReason、workspace_svc 的 checkLocationNaturalKey）。其余七种这两列恒为空串，
 // 放进名单会让该 kind 下所有存活行退化成同一个键 (user_id, ”, ”, kind) 而互相顶掉
-// ——用户建第二个 Agent 就撞唯一索引。守卫见
-// sync_object_natural_key_test.go 的 NaturalKeyKindListStaysMinimal。
+// ——用户建第二个 Agent 就撞唯一索引。
 //
 // 键里放的是三个真列而不是把它们拼成一个字符串：拼接需要一个分隔符，而在
 // utf8mb4_0900_ai_ci 下 CHAR(0) 这类控制字符的排序权重为空、会被直接忽略，
@@ -115,34 +114,39 @@ func migration202609040106() *gormigrate.Migration {
 				  KEY idx_sync_objects_avatar (user_id, kind, deleted_at, avatar_hash)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE sync_account_seqs (
-				  user_id     bigint PRIMARY KEY,
+				  id          bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
+				  user_id     bigint NOT NULL,
 				  version_seq bigint NOT NULL DEFAULT 0,
-				  updatetime  bigint NOT NULL DEFAULT 0
+				  updatetime  bigint NOT NULL DEFAULT 0,
+				  UNIQUE KEY uk_sync_account_seqs_identity (user_id)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE sync_device_states (
+				  id           bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id      bigint NOT NULL,
 				  device_id    bigint NOT NULL,
 				  last_sync_at bigint NOT NULL DEFAULT 0,
 				  updatetime   bigint NOT NULL DEFAULT 0,
-				  PRIMARY KEY (user_id, device_id)
+				  UNIQUE KEY uk_sync_device_states_identity (user_id, device_id)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE sync_avatars (
+				  id           bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id      bigint NOT NULL,
 				  content_hash varchar(64) COLLATE utf8mb4_0900_bin NOT NULL,
 				  content_type varchar(255) NOT NULL DEFAULT '',
 				  content      mediumtext NOT NULL,
 				  createtime   bigint NOT NULL DEFAULT 0,
-				  PRIMARY KEY (user_id, content_hash),
+				  UNIQUE KEY uk_sync_avatars_identity (user_id, content_hash),
 				  KEY idx_sync_avatars_createtime (createtime)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`, `
 				CREATE TABLE device_local_paths (
+				  id              bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 				  user_id         bigint NOT NULL,
 				  device_id       bigint NOT NULL,
 				  project_sync_id varchar(255) COLLATE utf8mb4_0900_bin NOT NULL,
 				  path            text NOT NULL,
 				  updatetime      bigint NOT NULL DEFAULT 0,
-				  PRIMARY KEY (user_id, device_id, project_sync_id),
-				  -- 撤销设备时按 device_id 单列清这台机器的清单，而主键以 user_id 打头，
+				  UNIQUE KEY uk_device_local_paths_identity (user_id, device_id, project_sync_id),
+				  -- 撤销设备时按 device_id 单列清这台机器的清单，而唯一键以 user_id 打头，
 				  -- device_id 不是它的最左前缀（见 sync_repo 的 DeleteByDevice）。
 				  KEY idx_dlp_device (device_id)
 				) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,

@@ -52,17 +52,16 @@ interface NavItem {
 }
 
 /**
- * 账号级控制台的外壳：桌面 224px SideNav（R969Y：Brand / 5 导航项 /
+ * 账号级控制台的外壳：桌面 224px SideNav（R969Y：Brand / 6 导航项 /
  * 账号区）+ 52px TopBar（title 槽 + right 槽 + AppControls）+ 主区；移动（≤767px）
- * 主导航改为 4 项的 A6Z3k 底部 TabBar，设置从账号菜单进入。
+ * 主导航改为 5 项的 A6Z3k 底部 TabBar，设置从账号菜单进入。
  *
  * 侧栏可以收成 56px 的图标栏，选择记在这台机器上（navCollapsed）。收起的是
  * **文字**不是导航：六个目的地一个不少，可访问名、等你处理的角标都还在，
  * 设备的在线/全部换到悬浮说明里（见 ConsoleNavItem 的 collapsed）。整条藏掉是
  * 另一回事——那会让「换个目的地」先要想起有个按钮，而这块屏最常见的动作正是换页。
  *
- * 搜索无真实能力：外观保留但不可聚焦（div + aria-hidden，无 button/input/tabindex），
- * 也不显示 ⌘K 快捷键暗示。审计无后端，不进主导航。
+ * 审计无后端，不进主导航。
  *
  * title / right 可选（向后兼容）：不传时 TopBar 左侧空、右侧仍渲染 AppControls。
  * 导航项尾部数据（设备在线/全部 Meta、账号区）都是锦上添花：
@@ -307,11 +306,11 @@ export default function AppShell({
   // 移动端账号进 TopBar：抽屉已移除，账号仍需可达，用紧凑形态（只有头像）。
   const mobileAccount = me ? <UserMenu me={me} compact /> : null;
 
-  // 桌面 SideNav 第 5 项是设置，移动 TabBar 不要它：窄屏留给高频目的地，
+  // 桌面 SideNav 最后一项是设置，移动 TabBar 不要它：窄屏留给高频目的地，
   // 设置从 TopBar 的用户菜单进入。
   //
-  // 角标跟着一起过去：这里此前只搬 key/to/label/Icon，于是「有多少条在等你」在窄屏
-  // 上完全看不到——而底部这条栏正是移动端的主导航。设备那格 meta 仍不搬：一行 mono
+  // 角标跟着一起过去：不搬的话「有多少条在等你」在窄屏上完全看不到——而底部这条栏
+  // 正是移动端的主导航。设备那格 meta 仍不搬：一行 mono
   // 数字在 tab 底下排不下，那一维在移动端本来就由设备页自己说。
   const mobileTabs: MobileTab[] = NAV_ITEMS.filter(
     (item) => item.to !== "/settings",
@@ -325,10 +324,9 @@ export default function AppShell({
   }));
 
   /*
-    整页不滚：滚动落在 main 里。此前根是 min-h-screen，页面高于视口时整份文档往下
-    滚——于是「把输入框钉在底上」在壳被约束住之前根本无从谈起（侧栏、顶栏、会话列
-    表会一起被卷走）。改成 h-screen + overflow-hidden，非 flush 的页由 main 自己
-    overflow-y-auto，观感与此前一致。
+    整页不滚：滚动落在 main 里。根若是 min-h-screen，页面高于视口时整份文档往下
+    滚——「把输入框钉在底上」就无从谈起（侧栏、顶栏、会话列表会一起被卷走）。所以
+    根是 h-screen + overflow-hidden，非 flush 的页由 main 自己 overflow-y-auto。
   */
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background md:flex-row">

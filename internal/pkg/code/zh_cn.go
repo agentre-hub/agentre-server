@@ -23,12 +23,7 @@ var zhCN = map[int]string{
 
 	UserNotFound:        "用户不存在",
 	UserBanned:          "用户已被封禁",
-	OAuthStateInvalid:   "OAuth state 无效或已过期",
 	OAuthExchangeFailed: "GitHub OAuth 兑换失败",
-	OAuthProfileFailed:  "无法获取 GitHub 用户信息",
-	GithubEmailMissing:  "GitHub 主邮箱不可访问，请在 GitHub 设置中将主邮箱设为已验证",
-	SessionExpired:      "会话已过期，请重新登录",
-	SessionInvalid:      "会话无效",
 
 	DeviceFlowAuthorizationPending: "等待用户在浏览器中确认授权",
 	DeviceFlowSlowDown:             "轮询过于频繁，请降低频率",
@@ -36,7 +31,6 @@ var zhCN = map[int]string{
 	DeviceFlowAccessDenied:         "用户拒绝授权",
 	DeviceFlowInvalidGrant:         "device_code 无效",
 	DeviceFlowUserCodeInvalid:      "user_code 格式不正确或不存在",
-	DeviceFlowAlreadyConsumed:      "该 user_code 已被处理",
 
 	DeviceNotFound:      "设备不存在",
 	DeviceRevoked:       "设备授权已被撤销",
@@ -46,15 +40,12 @@ var zhCN = map[int]string{
 	JWTSignatureInvalid: "访问令牌签名无效",
 	JWTBlacklisted:      "访问令牌已被撤销",
 	DeviceListFailed:    "拉取设备列表失败",
-	DeviceKindMismatch:  "该指纹已属于另一台非浏览器设备",
 
 	RelayDaemonNotFound: "该账号未登记此 daemon",
 	RelayDaemonOffline:  "daemon 当前离线",
 	RelayForwardFailed:  "daemon 在线但中转转发失败",
 
 	SyncResyncRequired:     "设备离线过久，请先拉取全量快照再同步",
-	SyncPayloadRejected:    "同步载荷包含不允许跨机传输的字段",
-	SyncKindInvalid:        "同步对象类型无效",
 	SyncAvatarHashMismatch: "头像内容与声明的哈希不符",
 	SyncAvatarNotFound:     "头像不存在",
 	SyncCursorUnknown:      "服务端不认识该同步游标，请先拉取全量快照",
@@ -84,7 +75,6 @@ var zhCN = map[int]string{
 
 	EngineProviderNotFound:      "供应商不存在",
 	EngineBackendNotFound:       "Agent 后端不存在",
-	EngineCLIPathForbidden:      "浏览器不能提交 CLI 路径",
 	EngineBuiltinForbidden:      "浏览器不能创建内置后端",
 	EngineBackendDeviceNotFound: "所选设备已不在账号内",
 }

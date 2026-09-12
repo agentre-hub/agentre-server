@@ -198,14 +198,14 @@ func isOrderlyClose(err error) bool {
 
 // renewThrottle 把 daemon 读循环里的在线态续期压到每 interval 至多一次。
 //
-// 从前是每收一帧续一次。在线态 TTL 是 30 秒,而心跳的 pong 每 HeartbeatInterval
-// 就会走一次 OnPeerActivity 续期,于是逐帧那一次是纯冗余——代价却是每帧多两次
-// **串行** Redis 往返(RenewDaemon 是 GET + EXPIRE),而转发就跑在这条读循环上,
-// 这两次往返原样计入每一帧的转发延迟。
+// 不逐帧续期。在线态 TTL 是 30 秒,而心跳的 pong 每 HeartbeatInterval 就会走一次
+// OnPeerActivity 续期,逐帧续是纯冗余——代价却是每帧多两次**串行** Redis 往返
+// (RenewDaemon 是 GET + EXPIRE),而转发就跑在这条读循环上,这两次往返会原样计入
+// 每一帧的转发延迟。
 //
-// 保留这一路而不是完全删掉:一条只顾发数据、pong 迟迟不来的连接,读超时是 45 秒
-// 而 TTL 只有 30 秒,中间那段它会被当成离线。节流后仍然保证「在发帧的连接每
-// HeartbeatInterval 至少续一次」,不变量没变,只是不再逐帧重复。
+// 也不完全靠心跳:一条只顾发数据、pong 迟迟不来的连接,读超时是 45 秒而 TTL 只有
+// 30 秒,中间那段它会被当成离线。节流保证「在发帧的连接每 HeartbeatInterval 至少
+// 续一次」。
 //
 // 单条连接的读循环独占一个实例,因此不需要加锁。
 type renewThrottle struct {

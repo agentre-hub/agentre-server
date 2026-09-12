@@ -429,7 +429,7 @@ func TestAccountProjects_GivenDescriptionInPayload_ThenItIsCarried(t *testing.T)
 	assert.Empty(t, byID["proj-2"].Description)
 }
 
-// 成员在服务端此前连读侧都没有。组头的 ＋ 只列这个项目的成员（决策 10），因此项目树
+// 组头的 ＋ 只列这个项目的成员（决策 10），因此项目树
 // 这一份材料要逐项目带上成员：每条成员关系带**它自己的同步标识**，删成员按它定位。
 func TestAccountProjects_GivenMemberships_ThenEachProjectCarriesItsOwnMembers(t *testing.T) {
 	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)

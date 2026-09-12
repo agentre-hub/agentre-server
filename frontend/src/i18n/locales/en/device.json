@@ -13,8 +13,8 @@
     }
   },
   "approve": {
-    "title": "Allow this device to access your AgentRe account?",
-    "risk": "Once you approve it, this device gets full access to your AgentRe account as you, including running arbitrary code and commands. Only approve devices you trust.",
+    "title": "Allow this device to access your Agentre account?",
+    "risk": "Once you approve it, this device gets full access to your Agentre account as you, including running arbitrary code and commands. Only approve devices you trust.",
     "verify": "Check that this code matches exactly what the device shows",
     "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
     "expirySeconds": "This authorization request expires in {{seconds}}s",
@@ -96,7 +96,6 @@
     "statusOnline": "Online",
     "statusOffline": "Offline",
     "statusRevoked": "Revoked",
-    "revokeConfirmTitle": "Revoke this device?",
     "revokeConfirmBody": "This device can no longer refresh its credentials after you confirm. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation is not instant.",
     "revokeCancel": "Cancel",
     "revokeConfirm": "Revoke",
@@ -150,8 +149,7 @@
       "upgradingBody": "Restarting once — usually under a minute.",
       "successTitle": "Upgrade complete",
       "timeoutTitle": "It didn't come back",
-      "timeoutBody": "Waited 5 minutes. If it isn't running as a service or container, it won't restart on its own after the upgrade.",
-      "failedTitle": "The upgrade didn't start"
+      "timeoutBody": "Waited 5 minutes. If it isn't running as a service or container, it won't restart on its own after the upgrade."
     },
     "devBuild": "Development build",
     "devBuildTitle": "This is a development build",

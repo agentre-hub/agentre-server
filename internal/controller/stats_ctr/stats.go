@@ -7,7 +7,6 @@ package stats_ctr
 import (
 	"github.com/gin-gonic/gin"
 
-	deviceapi "github.com/agentre-hub/agentre-server/internal/api/device"
 	api "github.com/agentre-hub/agentre-server/internal/api/stats"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/service/activity_svc"
@@ -125,7 +124,9 @@ func (s *Stats) settings(c *gin.Context) (*api.SettingsResponse, error) {
 	return resp, nil
 }
 
-func (s *Stats) listDevices(c *gin.Context) ([]deviceapi.ListDevicesItem, error) {
+// 返回服务层的 view 而不是 api 的 DTO：设备是设备域的事实，这里只读它需要的几列
+// （ID / Name / Online / Fingerprint），wire 形状由各自的响应类型自己声明。
+func (s *Stats) listDevices(c *gin.Context) ([]device_svc.DeviceView, error) {
 	return device_svc.Default().ListUserDevices(
 		c.Request.Context(), ginctx.UserID(c), ginctx.DeviceID(c),
 	)

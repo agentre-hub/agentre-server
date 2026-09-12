@@ -1,6 +1,6 @@
 # 控制台按失败的真实种类出页
 
-> Status: Draft
+> Status: Approved
 > Owner: agentre-server（控制台）
 > Last updated: 2026-09-09
 

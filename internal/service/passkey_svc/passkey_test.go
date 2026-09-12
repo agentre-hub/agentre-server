@@ -36,7 +36,7 @@ const (
 func testConfig() Config {
 	return Config{
 		RPID:          testRPID,
-		RPDisplayName: "AgentRe",
+		RPDisplayName: "Agentre",
 		// 允许列表刻意有两项：开发态前端在 5174、后端在 8443，只按 PublicURL 推一个
 		// origin 的话本地与 e2e 全部验不过（决策 15）。
 		Origins:       []string{testOrigin, "http://127.0.0.1:5174"},
@@ -139,7 +139,7 @@ func TestBeginRegistration_DiscoverableAndExcludesExistingCredentials(t *testing
 	assert.True(t, opts.AuthenticatorSelection.RequireResidentKey)
 	assert.Equal(t, "preferred", opts.AuthenticatorSelection.UserVerification)
 	assert.Equal(t, testRPID, opts.RP.ID)
-	assert.Equal(t, "AgentRe", opts.RP.Name)
+	assert.Equal(t, "Agentre", opts.RP.Name)
 	require.Len(t, opts.ExcludeCredentials, 1)
 	assert.Equal(t, b64("cred-a"), opts.ExcludeCredentials[0].ID)
 	assert.Equal(t, "public-key", opts.ExcludeCredentials[0].Type)

@@ -84,7 +84,7 @@ func (r *objectRepo) findLiveByNaturalKey(
 // Save 按（账号, 同步标识）落库，且只在版本号更大时才覆盖已有行。
 //
 // **为什么不是一条 INSERT … ON DUPLICATE KEY UPDATE。** MySQL 的 ON DUPLICATE KEY
-// 命中的是**任意**唯一键，而 sync_objects 上有三个：uk_sync_objects_identity、
+// 命中的是**任意**唯一键，而 sync_objects 上有两个：uk_sync_objects_identity、
 // uk_sync_objects_natural。自然键被另一个 sync_id
 // 占着时（R4b 竞态的兜底），那条
 // 语句不会报错，而是去 UPDATE 别人那一行——身份键留旧的、内容换成新的，本次上行的

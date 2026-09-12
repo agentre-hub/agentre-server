@@ -22,10 +22,9 @@ export interface OrgDepartmentItem {
 /**
  * 服务端 workspace_svc 的取值（AvailabilityAvailable 等常量）。
  *
- * `no_device` 是空指纹那一档「未指定设备」：空指纹不再被读成「本机」，也不再复用
- * 已删除的 skipped_for_web（规格 2026-08-21 决策 14）。org 面的形态与文案本轮不变，
- * 映射不到的取值沿用 OrgExecTargetSection 既有的 statusOf 兜底；`lib/execOrder.ts`
- * 的 isMovableTier 也已经改按 `no_device` 把这一档钉在原位。
+ * `no_device` 是空指纹那一档「未指定设备」：空指纹不读成「本机」（规格 2026-08-21
+ * 决策 14）。映射不到的取值沿用 OrgExecTargetSection 的 statusOf 兜底；`lib/execOrder.ts`
+ * 的 isMovableTier 按 `no_device` 把这一档钉在原位。
  */
 export type OrgExecTargetAvailability =
   "available" | "offline" | "unpaired" | "no_device";

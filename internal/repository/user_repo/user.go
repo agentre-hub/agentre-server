@@ -20,7 +20,6 @@ type UserRepo interface {
 	// 取回，交给 user_entity.Check 判定，而不是被 Find 的 status=ACTIVE 过滤成 (nil, nil)。
 	FindIgnoreStatus(ctx context.Context, id int64) (*user_entity.User, error)
 	FindByEmail(ctx context.Context, email string) (*user_entity.User, error)
-	Update(ctx context.Context, u *user_entity.User) error
 	// WebAuthnHandle 取该账号的 WebAuthn user handle；从未生成过时返回空。
 	//
 	// handle 不在 user_entity.User 上：那个结构体是 Save 的写入面，多一个字段就意味着
@@ -54,10 +53,6 @@ func (u *userRepo) FindIgnoreStatus(ctx context.Context, id int64) (*user_entity
 
 func (u *userRepo) FindByEmail(ctx context.Context, email string) (*user_entity.User, error) {
 	return dbutil.FindOne[user_entity.User](db.Ctx(ctx).Where("email=? AND status=?", email, consts.ACTIVE))
-}
-
-func (u *userRepo) Update(ctx context.Context, e *user_entity.User) error {
-	return db.Ctx(ctx).Save(e).Error
 }
 
 func (u *userRepo) WebAuthnHandle(ctx context.Context, id int64) ([]byte, error) {

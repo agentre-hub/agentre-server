@@ -117,7 +117,7 @@ describe("授权确认：完整权限说明", () => {
 
       await waitForApproval();
       expect(
-        screen.getByText(/full access to your AgentRe account/i),
+        screen.getByText(/full access to your Agentre account/i),
       ).toBeTruthy();
       expect(screen.getByText(/arbitrary code and commands/i)).toBeTruthy();
     },
@@ -128,7 +128,7 @@ describe("授权确认：完整权限说明", () => {
     const { unmount } = renderDevice();
     await waitForApproval();
     const desktopCopy = screen.getByText(
-      /full access to your AgentRe account/i,
+      /full access to your Agentre account/i,
     ).textContent;
     unmount();
 
@@ -137,7 +137,7 @@ describe("授权确认：完整权限说明", () => {
     renderDevice();
     await waitForApproval();
     expect(
-      screen.getByText(/full access to your AgentRe account/i).textContent,
+      screen.getByText(/full access to your Agentre account/i).textContent,
     ).toBe(desktopCopy);
   });
 });
@@ -333,7 +333,7 @@ describe("授权确认：中文界面能力摘要", () => {
 
     await screen.findByRole("heading", {
       level: 1,
-      name: "允许这台设备访问你的 AgentRe 账户？",
+      name: "允许这台设备访问你的 Agentre 账户？",
     });
     expect(screen.queryByText(/这台设备将获得能力：/)).toBeNull();
   });

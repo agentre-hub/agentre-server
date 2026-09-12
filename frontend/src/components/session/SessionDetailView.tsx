@@ -931,7 +931,7 @@ export default function SessionDetailView({
             }
           }
           // 会话标识是各端本地自增、会被复用的：那条会话在执行端被删掉重排之后，它的
-          // 日志高水位比镜像里这一段低。游标停在高水位上面的话，此后每一条实时帧都
+          // 帧高水位比镜像里这一段低。游标停在高水位上面的话，此后每一条实时帧都
           // 「不大于游标」被当成重复丢光——会话没有报错、也没有跳号地冻住。attach 交回
           // 来的 latestSeq 就是执行端此刻的高水位，据它复位（桌面端 reconnect.go 的
           // dropCursorAboveHighWater 同一条规则）。
@@ -939,7 +939,7 @@ export default function SessionDetailView({
             client.setCursor(sid, latestSeq, origin);
           }
           // 账号里没有这一份（未保存的对话，机器轴上的大多数）：内容只有中继给得出，
-          // 而从游标 0 补齐就是把整份 journal 拉回来。按对端交回的高水位反推起点，
+          // 而从游标 0 补齐就是把整份转录拉回来。按对端交回的高水位反推起点，
           // 只补最后那一段；更早的等用户往上滚时再要（pullBefore）。
           //
           // 这里只能用**帧数**当刻度：对端的 pull 只有 cursor + limit，没有服务端那套

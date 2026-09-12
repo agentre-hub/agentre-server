@@ -79,7 +79,7 @@ server:
   # domain: no scheme, no port.
   webauthn:
     rp_id: "localhost"
-    rp_name: "AgentRe E2E"
+    rp_name: "Agentre E2E"
     origins:
       - "http://localhost:18443"
       - "http://127.0.0.1:18443"

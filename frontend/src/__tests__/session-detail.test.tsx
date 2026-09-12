@@ -1498,7 +1498,10 @@ describe("会话详情页:发送失败", () => {
     await sendInComposer("继续");
 
     expect(await screen.findByText(/New messages cannot be sent/)).toBeTruthy();
-    expect(composerDisabled()).toBe(true);
+    // 等而不是同步取:禁用是这次失败的**另一半渲染**,与那句提示不在同一帧 —— 提示已在、
+    // composer 还没禁用是真见过的样子(整套并发下在此红过一次:expected false to be
+    // true,而单跑与整套串行都绿)。禁用的判据是状态落定,等它不改变判据。
+    await waitFor(() => expect(composerDisabled()).toBe(true));
     expect(screen.queryByTestId("send-failure")).toBeNull();
   });
 
@@ -2276,7 +2279,10 @@ describe("会话详情页:发送失败的三类诊断(缺口二)", () => {
     await renderAndSend("继续");
 
     expect(await screen.findByText(/New messages cannot be sent/)).toBeTruthy();
-    expect(composerDisabled()).toBe(true);
+    // 等而不是同步取:禁用是这次失败的**另一半渲染**,与那句提示不在同一帧 —— 提示已在、
+    // composer 还没禁用是真见过的样子(整套并发下在此红过一次:expected false to be
+    // true,而单跑与整套串行都绿)。禁用的判据是状态落定,等它不改变判据。
+    await waitFor(() => expect(composerDisabled()).toBe(true));
     // 执行目标不可用不是竞态，不该再回落一次 steer。
     expect(
       fakeClient.request.mock.calls.some(
@@ -2767,7 +2773,7 @@ describe("会话详情：切到另一台机器那一瞬不摆旧机器的状态"
 });
 
 describe("会话详情：历史来自 server 镜像", () => {
-  /** 一页镜像转录：frames 是 wire.JournaledNotification 原样。 */
+  /** 一页镜像转录：frames 是 wire.DurableNotification 原样。 */
   function framePage(frames: { seq: number; text: string }[], hasMore = false) {
     return {
       frames: frames.map((f) => ({
@@ -3861,8 +3867,8 @@ describe("会话详情：头部", () => {
    * 共享包的 `formatHHmm(0)` 返回空串 —— 控制台上每条消息都没有时间，同一条对话在
    * 桌面端却有（那边读的是自己库里的 chat_messages.createtime）。
    *
-   * 走的是**镜像**这条路：一页 JournaledNotification 上的 createtime 要一路穿过
-   * applyJournalFrames → toTranscriptFrame → 共享归约器，落到消息上。
+   * 走的是**镜像**这条路：一页 DurableNotification 上的 createtime 要一路穿过
+   * applyDurableFrames → toTranscriptFrame → 共享归约器，落到消息上。
    */
   it("镜像的一页带 createtime：转录里每条消息头上出 HH:mm", async () => {
     const at = new Date(2026, 8, 1, 9, 41, 7).getTime();
@@ -5721,7 +5727,7 @@ describe("会话详情：转录只取尾巴，往上滚才续读", () => {
 
   /**
    * 未保存的对话内容只有中继给得出。按 attach 交回的高水位反推游标，只补最后
-   * 那一段——不再从游标 0 把整份 journal 拉回来。
+   * 那一段——不再从游标 0 把整份转录拉回来。
    */
   it("镜像里没有：按 attach 的高水位反推游标，只拉尾巴", async () => {
     mockedApi.mockImplementation(async (path: string) => {

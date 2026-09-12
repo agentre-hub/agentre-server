@@ -13,9 +13,9 @@ import (
 
 // 一条 daemon 链路上的转发**不能**跑在读循环上。
 //
-// 读循环此前是「读一帧 → 同步转发 → 才读下一帧」（relay_ctr 的 Relay.Daemon）。而
-// 转发在跨副本时要等一次 Redis 投递回执，于是一台机器上**所有会话的每一个 token**
-// 都排在同一条队里：A 会话慢一下，B 会话跟着停。这就是它按虚拟通道分派的全部理由。
+// 读循环（relay_ctr 的 Relay.Daemon）要是「读一帧 → 同步转发 → 才读下一帧」，而转发在
+// 跨副本时要等一次 Redis 投递回执，一台机器上**所有会话的每一个 token**就都排在同一
+// 条队里：A 会话慢一下，B 会话跟着停。这就是它按虚拟通道分派的全部理由。
 //
 // 通道**之内**仍然是单 goroutine，所以保序 —— 分派解的是通道之间的队头阻塞，不是
 // 把一条会话的帧打乱。客户端的 seq 闸门依赖这一点。
@@ -125,9 +125,7 @@ func (f *daemonFanout) serve(ctx context.Context, channelID string, queue *chann
 			idle.Reset(channelIdleTimeout)
 			if err := f.forward(ctx, channelID, frame); err != nil {
 				// 转发失败**不**拆掉这条链路：daemon 的 websocket 由所有通道共享，
-				// 一个客户端断开或写失败不该连坐其它会话。这一条与从前控制器里那句
-				// `if errors.Is(err, ErrForwardFailed) { continue }` 是同一个判断，
-				// 只是搬到了它该在的地方。
+				// 一个客户端断开或写失败不该连坐其它会话。
 				logger.Ctx(ctx).Debug("relay fanout: frame dropped",
 					zap.String("channel", channelID), zap.Error(err))
 			}
