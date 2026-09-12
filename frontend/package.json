@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@agentre-hub/agentre-ui": "github:agentre-hub/agentre#6cf2d34d4b4ef867020f59dcdf085b4577757aef&path:/frontend/packages/agentre-ui",
-    "@agentre-hub/agentre-wire": "github:agentre-hub/agentre#ac57b5b4516810d06e9208e10505c020d097a560&path:/frontend/packages/agentre-wire",
+    "@agentre-hub/agentre-wire": "github:agentre-hub/agentre#d26324f870b8b23ed9b9655245165110a8f75ded&path:/frontend/packages/agentre-wire",
     "@bufbuild/protobuf": "^2.14.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",

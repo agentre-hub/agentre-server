@@ -136,7 +136,8 @@ describe("useRelayChannel 的连接状态", () => {
    * 清掉：上一台机器版本对不上，不代表下一台也对不上。
    */
   it("对端按协议版本拒了握手时把原话交出来,换目标时清掉", async () => {
-    const detail = "peer speaks protocol version 0.3.0, this build accepts …";
+    const detail =
+      'peer speaks wire protocol version "0.3.0", this build speaks "0.1.0"; both ends must run the same release';
     mockedEnsureRelayTicket.mockResolvedValue(TICKET);
     const { result, rerender } = renderHook(
       ({ target }: { target: string }) => useRelayChannel(target),

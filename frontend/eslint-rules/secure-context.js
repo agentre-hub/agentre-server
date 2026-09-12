@@ -1,7 +1,7 @@
 /**
  * 安全上下文守卫的规则数据。
  *
- * 本站是用 http 部署的（如 `http://coding.local:8443`），那是**非安全上下文**。
+ * 本站是用 http 部署的（如 `http://<内网主机>:8443`），那是**非安全上下文**。
  * `crypto.randomUUID` 在规范里带 `[SecureContext]`，在那里根本不存在：调用不是返回
  * 空值，而是直接 `TypeError: crypto.randomUUID is not a function`。
  *

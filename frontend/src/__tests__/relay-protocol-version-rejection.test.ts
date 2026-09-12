@@ -109,11 +109,11 @@ function encodeRpcErrorFrame(
 }
 
 /**
- * daemon 那句话的原文：`wireversion.Reject` 把两边的窗口都写进去了，对端版本走 `%q`
- * 所以带引号——照抄线上样子，别让下一个人从这里抄走一个不存在的输入。
+ * daemon 那句话的原文：`wireversion.Reject` 把两端各自讲的协议版本都写进去了，两个都走
+ * `%q` 所以都带引号——照抄线上样子，别让下一个人从这里抄走一个不存在的输入。
  */
 const REJECTION =
-  'peer speaks protocol version "0.3.0", this build accepts protocol versions 0.1.0 to 0.1.0';
+  'peer speaks wire protocol version "0.3.0", this build speaks "0.1.0"; both ends must run the same release';
 
 /** 用一帧 -32006 拒掉还没应答的那一次 auth.account。 */
 function rejectHandshake(connection: FakeConnection, code = -32006): void {

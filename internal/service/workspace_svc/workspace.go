@@ -1181,7 +1181,7 @@ func sortByOrderThenName[T any](items []T, key func(T) (int, string)) {
 // 因为这些行不来自任何一台机器。
 //
 // 空串空得出来：这一列建表时的缺省值就是空串，建表注释写明「空串 = 服务端直写」
-// （migrations/202609040106_workspace_sync.go），而唯一读它的分支——SyncObject.Wins
+// （migrations/202609120101_initial_schema.go），而唯一读它的分支——SyncObject.Wins
 // 的平局判定——只在两行版本号相等时才看它，账号级单调序列保证了那永远不会发生。
 //
 // 它会经冲突应答回到桌面端（PushItemResult.OverwrittenOriginFingerprint /

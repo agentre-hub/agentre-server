@@ -126,7 +126,7 @@ func (s *deviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*d
 	return d, nil
 }
 
-// uniqueKeyUserCodePending 是 user_code 唯一键的名字（migrations/202609040105_device_flow_codes.go）。
+// uniqueKeyUserCodePending 是 user_code 唯一键的名字（migrations/202609120101_initial_schema.go）。
 // pending_flag 是 MySQL 表达「部分唯一索引」的写法：生成列不能带表达式排除已过期、
 // 未结算的行（会撞 ERROR 3763），所以过期但还没被清理/结算的行仍会占着 user_code，
 // 重新生成的码撞见它是预期内的常规碰撞，不是异常。

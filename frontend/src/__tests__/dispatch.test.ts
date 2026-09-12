@@ -566,7 +566,7 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     expect(mockedApi).toHaveBeenCalledTimes(1);
   });
 
-  // Given 本站用 http 部署（`http://coding.local:8443` = 非安全上下文，那里
+  // Given 本站用 http 部署（`http://<内网主机>:8443` = 非安全上下文，那里
   // `crypto.randomUUID` 带 [SecureContext] 门槛、根本不存在）/ When 往 agentred 上的
   // Pi 派发 / Then 三步照常走完。
   //

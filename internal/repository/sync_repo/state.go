@@ -46,8 +46,8 @@ type stateRepo struct{}
 // 同一个值、两次上行拿到同一个版本号，R4 的「较大者胜」立刻失去可比性。
 //
 // 推进先走一条只按 user_id 定位的普通 UPDATE，命中 0 行（这个账号还没有序列行）才落回
-// INSERT … ON DUPLICATE KEY UPDATE。建号会预建那一行、存量账号由迁移 202609110104 补齐
-// （见 EnsureSeq），缺行只剩绕过建号直接写 users 的来源，以及滚动发布时旧副本建出的号；
+// INSERT … ON DUPLICATE KEY UPDATE。建号会在同一个事务里预建那一行（见 EnsureSeq），
+// 缺行只剩绕过建号直接写 users 的来源，以及滚动发布时旧副本建出的号；
 // 两个这样的账号在重叠事务里各走一次回落仍会 ERROR 1213。不是一上来就 upsert，是因为锁的
 // 范围：MySQL 9.7 实测（.dev-kit/artifacts/db-perf-fixes/nextversion-lock/），upsert
 // 命中已有行时除了那一行，还在主键的 supremum 伪记录上持一把 X 锁到提交，别的账号的

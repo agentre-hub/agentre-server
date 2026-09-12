@@ -40,3 +40,8 @@ scratch 工作流见 [`e2e/README.md`](e2e/README.md)。
 改代码前先读 [`AGENTS.md`](AGENTS.md) 和 [`docs/`](docs/README.md)。
 
 基础设计 spec：[`../agentre-hub/docs/superpowers/specs/2026-06-16-hub-foundation-design.md`](../agentre-hub/docs/superpowers/specs/2026-06-16-hub-foundation-design.md)
+
+## License
+
+GPL-3.0 —— 见 [`LICENSE`](LICENSE)。仓库里 `agentre/frontend/packages/` 下被本仓消费的
+共享前端包同为 GPL-3.0。

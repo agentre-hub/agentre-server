@@ -489,7 +489,7 @@ describe("状态横幅:三档形态", () => {
   });
 
   /**
-   * daemon 回的那句话（`wireversion.Reject`）里写着**两边各自的版本窗口**，它是这一屏
+   * daemon 回的那句话（`wireversion.Reject`）里写着**两端各自讲的协议版本**，它是这一屏
    * 唯一说得出「该去更新哪一头」的东西——吞掉它，用户看到的就只剩一句「版本不一致」，
    * 然后无从下手。
    *
@@ -498,13 +498,15 @@ describe("状态横幅:三档形态", () => {
    */
   it("协议版本横幅自己说人话:两个版本号都在,英文原话不在", () => {
     const detail =
-      'peer speaks protocol version "0.5.0", this build accepts protocol versions 0.4.0 to 0.4.0';
+      'peer speaks wire protocol version "0.5.0", this build speaks "0.4.0"; both ends must run the same release';
     renderStatus("protocolMismatch", { protocolMismatchDetail: detail });
     const text =
       (bannerOf("protocolMismatch") as HTMLElement).textContent ?? "";
     expect(text).toContain("0.5.0");
     expect(text).toContain("0.4.0");
-    expect(text).not.toContain("peer speaks protocol version");
+    // 否定整句 detail,而不是某个固定前缀:前缀一改,这条断言就成了一句空话——
+    // 上一代正好这么失手过(横幅退回原样贴英文,而断言照样绿)。
+    expect(text).not.toContain(detail);
   });
 
   /**
@@ -515,7 +517,7 @@ describe("状态横幅:三档形态", () => {
   it("机器旧才给设备页出口;页面旧时不摆一颗按不动的按钮", () => {
     renderStatus("protocolMismatch", {
       protocolMismatchDetail:
-        'peer speaks protocol version "0.5.0", this build accepts protocol versions 0.4.0 to 0.4.0',
+        'peer speaks wire protocol version "0.5.0", this build speaks "0.4.0"; both ends must run the same release',
     });
     expect(
       within(bannerOf("protocolMismatch") as HTMLElement).queryByRole("link"),
@@ -524,7 +526,7 @@ describe("状态横幅:三档形态", () => {
     document.body.innerHTML = "";
     renderStatus("protocolMismatch", {
       protocolMismatchDetail:
-        'peer speaks protocol version "0.3.0", this build accepts protocol versions 0.4.0 to 0.4.0',
+        'peer speaks wire protocol version "0.3.0", this build speaks "0.4.0"; both ends must run the same release',
     });
     expect(
       within(bannerOf("protocolMismatch") as HTMLElement).queryByRole("link"),
