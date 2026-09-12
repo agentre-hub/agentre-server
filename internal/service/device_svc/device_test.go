@@ -3,6 +3,7 @@ package device_svc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -1019,6 +1020,58 @@ func TestListUserDevices_GivenRedisFailing_ThenEveryDeviceFailsOpenAndTheListRet
 		{ID: 41, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
 		{ID: 42, Kind: "agentred", Fingerprint: "fp-b", Status: 1},
 	}, items)
+}
+
+// 设备流的 user_code 是**凭据**：谁手里有一个还没结算的 pending 码，就能用自己的
+// 账号批准它，把受害者那台机器并进自己账号（批准端点认的就是「登录态 + 这个码」）。
+// 日志是给排障看的，它进不了浏览器、却进日志文件、日志采集和任何有读权限的人手里，
+// 所以它一行都不该带明文 —— docs/observability.md 的 data policy 已经写明「不记凭据」。
+//
+// 三处都要盯：签发（authorized）、批准（approved）、拒绝（denied）。批准与拒绝那两条
+// 更要命：走到那里说明这个码此刻正是**有效的 pending 码**。
+func TestDeviceFlow_UserCodeNeverReachesTheLog(t *testing.T) {
+	logs := hubtest.Logs(t)
+	ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+
+	var issued string
+	mF.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, flow *device_flow_entity.DeviceFlowCode) error {
+			issued = flow.UserCode
+			return nil
+		},
+	)
+	out, err := svc.Authorize(ctx, AuthorizeInput{
+		DeviceKind: "agentred", Fingerprint: "fp-aaaaaaaa", Platform: "linux/amd64", Version: "0.5.0",
+		Name: "coding",
+	})
+	require.NoError(t, err)
+	require.Equal(t, issued, out.UserCode)
+
+	const approved = "A4F-7Q2"
+	mF.EXPECT().FindPendingByUserCode(gomock.Any(), approved).Return(
+		&device_flow_entity.DeviceFlowCode{
+			UserCode: approved, DeviceKind: "agentred",
+			ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+		}, nil,
+	)
+	mF.EXPECT().Approve(gomock.Any(), approved, int64(42), gomock.Any()).Return(int64(1), nil)
+	_, err = svc.Approve(ctx, approved, 42)
+	require.NoError(t, err)
+
+	const denied = "B5G-8R3"
+	mF.EXPECT().Deny(gomock.Any(), denied, gomock.Any()).Return(int64(1), nil)
+	require.NoError(t, svc.Deny(ctx, denied))
+
+	for _, entry := range logs.All() {
+		for _, secret := range []string{out.UserCode, approved, denied} {
+			assert.NotContains(t, entry.Message, secret,
+				"日志消息里出现了 user_code 明文：%s", entry.Message)
+			for key, value := range entry.ContextMap() {
+				assert.NotContains(t, fmt.Sprint(value), secret,
+					"日志字段 %s 里出现了 user_code 明文（%s）", key, entry.Message)
+			}
+		}
+	}
 }
 
 func TestApprove(t *testing.T) {

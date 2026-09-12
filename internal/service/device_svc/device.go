@@ -172,7 +172,11 @@ func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*Authoriz
 			return nil, err
 		}
 	}
-	logger.Ctx(ctx).Info("device flow authorized", zap.String("userCode", uc),
+	// user_code **不进日志**：它就是这条流程的凭据，拿到一个还没结算的 pending 码就能
+	// 用自己的账号去批准它，把对方那台机器并进自己账号。摘要也不行 —— 码空间只有
+	// 32^6，任何不可逆摘要都能离线穷举回来。要串起同一条流程就用 fingerprint（设备
+	// 的公开身份，下面批准那条也带着它）。
+	logger.Ctx(ctx).Info("device flow authorized",
 		zap.String("deviceKind", in.DeviceKind), zap.String("platform", in.Platform),
 		zap.String("version", in.Version), zap.String("fingerprint", in.Fingerprint),
 		zap.String("clientName", in.Name))
@@ -515,7 +519,11 @@ func (s *deviceSvc) Approve(ctx context.Context, userCode string, userID int64) 
 	if n != 1 {
 		return "", newOAuthErr(ErrUserCodeInvalid, "user_code no longer approvable")
 	}
-	logger.Ctx(ctx).Info("device flow approved", zap.Int64("userId", userID), zap.String("userCode", norm), zap.String("deviceKind", flow.DeviceKind), zap.String("platform", flow.Platform), zap.String("version", flow.Version))
+	// 不带 user_code（理由在 Authorize 那条日志上）。批准这条尤其不能带：走到这里说明
+	// 它此刻正是一个有效的 pending 码。fingerprint 顶上它的位置，与签发那条同名。
+	logger.Ctx(ctx).Info("device flow approved", zap.Int64("userId", userID),
+		zap.String("fingerprint", flow.ClientFingerprint), zap.String("deviceKind", flow.DeviceKind),
+		zap.String("platform", flow.Platform), zap.String("version", flow.Version))
 	return flow.DeviceKind, nil
 }
 
@@ -533,7 +541,9 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 	if n != 1 {
 		return newOAuthErr(ErrUserCodeInvalid, "user_code not found or already settled")
 	}
-	logger.Ctx(ctx).Info("device flow denied", zap.String("userCode", norm))
+	// 同样不带 user_code（理由在 Authorize 那条日志上）。这一路手里只有码本身，所以
+	// 这条日志只说「有一个码被拒了」——比在日志里留一枚可用凭据划算。
+	logger.Ctx(ctx).Info("device flow denied")
 	return nil
 }
 
