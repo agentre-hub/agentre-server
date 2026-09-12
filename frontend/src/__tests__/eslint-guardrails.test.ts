@@ -161,7 +161,7 @@ describe("native control guardrail", () => {
 });
 
 describe("secure context guardrail", () => {
-  // 本站用 http 部署（`http://coding.local:8443`），那是非安全上下文：
+  // 本站用 http 部署（`http://<内网主机>:8443`），那是非安全上下文：
   // `crypto.randomUUID` 在规范里带 [SecureContext]，在那里根本不存在，调用直接抛
   // TypeError。2026-08-30 它就抛在派发逻辑里，被草稿页译成了「连不上 coding」。
   // 随机标识只有 `@/lib/randomId` 一处实现，它退到没有这层门槛的 getRandomValues。

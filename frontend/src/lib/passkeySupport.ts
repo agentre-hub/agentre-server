@@ -8,7 +8,7 @@
  *
  * `PublicKeyCredential` 与 `navigator.credentials` 在规范里都带 `[SecureContext]`：
  * 非安全上下文里它们不是「存在但报错」，而是整个不存在，于是特性探测把「源信不过」
- * 误读成「浏览器太老」。本站有时用 http 提供（如 `http://coding.local:8443`），
+ * 误读成「浏览器太老」。本站有时用 http 提供（如 `http://<内网主机>:8443`），
  * 那正是非安全上下文。同源同浏览器的对照实测：
  *   `http://<lan-ip>:7391/`  → isSecureContext=false，PublicKeyCredential 不存在
  *   `http://127.0.0.1:7391/` → isSecureContext=true，PublicKeyCredential 存在

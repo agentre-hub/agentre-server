@@ -728,8 +728,8 @@ describe("RelayClient Protobuf RPC boundary", () => {
  * `durableFromProtobuf` 是这三份终态帧投影里的第三份（另两份是实时的
  * `decodeNotification` 与 server 镜像的 `wireview.doneView`），一样是逐字段手写的。
  * 漏一格的表现只在**刷新之后**看得见：实时那一轮 meta 是全的，页面一刷、同一条
- * 消息从补齐路径重建出来，耗时就掉回 0.0s、首字与速率整行消失。2026-08-31 在
- * coding.local 上就是这么撞出来的。
+ * 消息从补齐路径重建出来，耗时就掉回 0.0s、首字与速率整行消失。2026-08-31 在一台
+ * 内网 http 部署上就是这么撞出来的。
  */
 describe("catch-up 的终态帧", () => {
   it("给定补齐页里的终态帧带本轮统计，当补齐，则一格都不丢", async () => {
