@@ -137,6 +137,36 @@ func TestShippedConfigsDropRetiredKeys(t *testing.T) {
 	}
 }
 
+// 可信代理名单决定所有按 IP 归集的限流按谁算（middleware.byIP 读 c.ClientIP()）。
+// 名单里出现 0.0.0.0/0 或 ::/0 就等于回到 gin 那个缺省：X-Forwarded-For 说谁就是谁，
+// 每一道按 IP 的配额换个请求头就能重开一桶。这种「改回去」在代码测试里一律绿 ——
+// 判据只存在于随仓库发出去的模板里，所以钉在这儿。
+func TestShippedConfigsTrustNoProxyWildcard(t *testing.T) {
+	t.Parallel()
+
+	root := repoRoot(t)
+	for _, rel := range shippedConfigs {
+		t.Run(rel, func(t *testing.T) {
+			t.Parallel()
+
+			raw, err := os.ReadFile(filepath.Join(root, rel))
+			require.NoError(t, err)
+
+			var doc struct {
+				Server struct {
+					TrustedProxies []string `yaml:"trusted_proxies"`
+				} `yaml:"server"`
+			}
+			require.NoError(t, yaml.Unmarshal(raw, &doc))
+
+			for _, proxy := range doc.Server.TrustedProxies {
+				assert.NotContains(t, []string{"0.0.0.0/0", "::/0"}, proxy,
+					"%s: 信任全世界等于没有可信代理这个概念，按 IP 的限流会全部失效", rel)
+			}
+		})
+	}
+}
+
 // shippedDSNTemplates 是随仓库发出去的、字面写着一条 DSN 的每一份模板：三份
 // bootstrap 配置模板之外，compose 的默认值、.env 示例与 README 里 docker run 的
 // 示例同属一类，缺一个都会有人原样抄进生产。新增模板时一并加进来。

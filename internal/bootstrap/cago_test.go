@@ -270,6 +270,50 @@ func TestLoadServerConfig_ReleaseIsConfigurable(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, got.Release.CacheTTL)
 }
 
+// 缺省不信任任何代理：来源 IP 取实际连上来的那一端。gin 自己的缺省是反面（信任
+// 全部代理，于是 X-Forwarded-For 说谁就是谁），所以这个「空」必须是本仓明确要的，
+// 而不是「碰巧没配」——它是所有按 IP 限流的判据。
+func TestLoadServerConfig_TrustsNoProxyByDefault(t *testing.T) {
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{},
+	})))
+	assert.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.Empty(t, got.TrustedProxies, "没有一个放之四海的可信代理，缺省只能是谁都不信")
+}
+
+// 走真实的 YAML 文件源：configs/*.yaml 里写的是 server.trusted_proxies，键名对不上的话
+// 运维填了反代那一跳也不生效——症状是所有按 IP 的限流都把整个世界归到反代那一个 IP 上。
+func TestLoadServerConfig_TrustedProxiesAreConfigurable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	assert.NoError(t, os.WriteFile(path, []byte(
+		"env: dev\ndebug: true\nsource: file\nserver:\n  trusted_proxies:\n"+
+			"    - \"10.42.0.0/16\"\n    - \"127.0.0.1\"\n"), 0o600))
+	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(path))
+	assert.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.Equal(t, []string{"10.42.0.0/16", "127.0.0.1"}, got.TrustedProxies)
+}
+
+// compose 那条部署路径只有 AGENTRE_SERVER_* 这一层旋钮可用（配置文件是仓库里挂进去
+// 的），所以「前面加了一层反代」必须能从环境变量说得出来。逗号分隔，顺手容忍空格。
+func TestLoadServerConfig_TrustedProxiesFromEnv(t *testing.T) {
+	t.Setenv("AGENTRE_SERVER_TRUSTED_PROXIES", " 10.42.0.0/16 , 172.18.0.1 ")
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{"trusted_proxies": []interface{}{"127.0.0.1"}},
+	})))
+	assert.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.Equal(t, []string{"10.42.0.0/16", "172.18.0.1"}, got.TrustedProxies,
+		"环境变量覆盖整份名单，而不是追加")
+}
+
 // 生产上一定装配:漏了它,/v1/release/latest 会在 release_svc.Release() 上拿到 nil,
 // 控制器眼下会把它当「不知道」处理而不炸,但那样这条链路就从来没有真的跑起来过。
 func TestRegisterDefaults_InstallsReleaseService(t *testing.T) {

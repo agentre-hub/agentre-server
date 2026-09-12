@@ -90,6 +90,10 @@ curl http://localhost:8443/v1/healthz
 
 - **`AGENTRE_SERVER_PUBLIC_URL` 要填浏览器真正访问到的地址**：Cookie 上的 `Secure`
   与通行密钥的 `rp_id` / `origins` 都由它推出来，填错的症状是登录不生效。
+- **前面有反代就要填 `AGENTRE_SERVER_TRUSTED_PROXIES`**：不填时来源 IP 取实际连上来
+  的那一端，于是所有按 IP 的限流会把反代后面的全部用户归到反代那一个 IP 上（症状是
+  正常用户互相挤掉配额）。这份 compose 的缺省拓扑是 8443 直接映到宿主、前面没有反代，
+  那时不填才对——填上反而等于让请求方自己用 `X-Forwarded-For` 声明自己的 IP。
 
 能覆盖的就下面这些，其余仍要靠配置文件（`-v /你的/config.yaml:/app/configs/config.yaml:ro`）：
 
@@ -99,6 +103,7 @@ curl http://localhost:8443/v1/healthz
 | `AGENTRE_SERVER_REDIS_ADDR` / `AGENTRE_SERVER_REDIS_PASSWORD` | `redis.addr` / `redis.password` |
 | `AGENTRE_SERVER_PUBLIC_URL` | `server.public_url` |
 | `AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID` / `_SECRET` | `server.oauth.github.*` |
+| `AGENTRE_SERVER_TRUSTED_PROXIES` | `server.trusted_proxies`（逗号分隔，覆盖整份名单） |
 
 > 覆盖只在 `source: file` 下生效：配置源是 etcd 时（k8s 那条链路）cago 会换掉整个
 > 配置源，这一层就不在链路上了。
@@ -153,9 +158,10 @@ docker run --rm -p 8443:8443 \
 默认路径。E2E 专库配置和 CI 临时服务不属于部署配置，见
 [`../e2e/README.md`](../e2e/README.md)。
 
-## dev 环境（coding.local）
+## dev 环境
 
-dev 跑在 `coding.local`（192.168.8.188）上，一个容器，编排是 `docker-compose.dev.yml`。
+dev 跑在一台内网单机上，一个容器，编排是 `docker-compose.dev.yml`。目标机是哪一台由
+Gitea secret `DEV_SSH_HOST` 决定，仓库里不写死。
 
 **dev 的镜像不在 CI 里构建，也不过 registry。** 流水线在 runner 上 `make build` 出
 静态二进制，`scp` 到 `/srv/agentre-dev/bin/server`，再在目标机上用 `Dockerfile.dev`
@@ -210,7 +216,7 @@ docker compose -f docker-compose.dev.yml logs -f server
 commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreate` 只是保险。
 
 这里不需要 registry 凭据：二进制和镜像都不经过 registry，只有基础镜像
-`gcr.io/distroless/static-debian12` 需要能拉到（`coding.local` 已确认可达）。
+`gcr.io/distroless/static-debian12` 需要目标机能拉到。
 
 ### 新搭一台 dev 目标机
 
@@ -259,7 +265,7 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
 跑完确认一下：
 
 ```bash
-curl -s http://coding.local:8443/v1/healthz
+curl -s http://<目标机>:8443/v1/healthz
 docker compose -f /srv/agentre-dev/docker-compose.dev.yml ps
 ```
 
@@ -306,7 +312,12 @@ k8s 上只有四个引导键从 ConfigMap 进容器（`env`、`debug`、`source`
 | `db` | MySQL 连接串 |
 | `redis` | Redis 地址 |
 | `http` | 监听地址，端口要和 chart 的 `containerPort` 一致 |
-| `server` | 域名、会话、令牌有效期（`token.access_ttl` / `refresh_ttl`）、GitHub OAuth（含 client secret）、限流、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
+| `server` | 域名、会话、令牌有效期（`token.access_ttl` / `refresh_ttl`）、GitHub OAuth（含 client secret）、限流、可信代理（`trusted_proxies`，见下）、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
+
+**k8s 这条链路上 `server.trusted_proxies` 必须填。** Pod 前面是 ingress，请求都从它
+转发进来，所以不填的话每一道按 IP 的限流都会把所有用户归到 ingress 那一个地址上；
+填成 `0.0.0.0/0` 则是另一头——`X-Forwarded-For` 由请求方自己填，等于那些限流全部失效。
+填 ingress controller 实际出口的地址或网段（Pod 网段 / Service 网段），一行一个。
 
 `trace` 可选，不写就是不开链路追踪。每个键的内容照着仓库根的
 `configs/config.example.yaml` 填——**那份模板是 `server` 这个键的唯一权威清单**。
@@ -340,13 +351,13 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 | `main` | prod | `app.agentrehub.com` |
 | `release/*` | pre | `pre.app.agentrehub.com` |
 | `test/*` | test | `test.app.agentrehub.com` |
-| `dev` | dev | `coding.local:8443`（内网单机，不上 k8s） |
+| `dev` | dev | 内网单机的 8443（目标机见 `DEV_SSH_HOST`，不上 k8s） |
 
 前三行走 `deploy.yaml`：跑 lint + test，构建镜像后 helm 上 k8s，生产的资源配额高一些
 并开自动扩缩，其余环境单副本。镜像 tag 一律是 `<环境>.<短 commit>`。
 
 `dev` 走的是另一条 `dev.yaml`，刻意跟上面不一样：**不跑 lint / test，镜像也不在 CI
-里构建**——在 runner 上 `make build` 出二进制，`scp` 到 `coding.local`，在目标机上
+里构建**——在 runner 上 `make build` 出二进制，`scp` 到目标机，在目标机上
 用 `Dockerfile.dev` 打成本地镜像再 `docker compose`，不经过 registry。理由见上面
 「dev 环境」那节。两个 workflow 的分支集合不相交，同一次推送只会触发一条。
 
@@ -363,7 +374,7 @@ etcdctl --endpoints=<etcd> --user root:<password> \
 | `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE` | 否（dev 不用） | 上游地址 |
 | `TLS_SECRET_NAME` | 否 | `agentrehub-com-tls` |
 | `DEV_SSH_KEY` | dev 必填 | — |
-| `DEV_SSH_HOST` | 否 | `coding.local` |
+| `DEV_SSH_HOST` | dev 必填 | — |
 | `DEV_SSH_USER` | 否 | `root` |
 | `DEV_SSH_PORT` | 否 | `22` |
 | `DEV_DEPLOY_DIR` | 否 | `/srv/agentre-dev` |
@@ -413,7 +424,7 @@ GitHub 上另有两条流水线，它们只把镜像推到 GHCR，不碰任何�
 ```bash
 # docker（单机）
 docker compose -f deploy/docker-compose.yml logs -f server
-# docker（dev，在 coding.local 上跑）
+# docker（dev，在目标机上跑）
 docker compose -f /srv/agentre-dev/docker-compose.dev.yml logs -f server
 # k8s
 kubectl -n app logs -l app.kubernetes.io/instance=agentre-server --tail=50

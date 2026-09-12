@@ -3,6 +3,7 @@ package auth_ctr
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/i18n"
@@ -24,15 +25,44 @@ type Auth struct {
 
 func NewAuth(insecureCookies bool) *Auth { return &Auth{insecureCookies: insecureCookies} }
 
-// safeNext 仅允许相对路径或同源；其它视作不合法返回 "/".
+// safeNext 仅允许本站的相对路径；其它一律收敛成 "/"。
+//
+// 判据不是「以 / 开头、且不以 // 开头」那么简单，因为浏览器解析 URL 的规则比这条宽：
+//
+//   - **反斜杠等于斜杠。** 按 WHATWG URL 规范，特殊 scheme（http/https）下 \ 与 /
+//     等价，所以 /\evil.com 在浏览器里就是 //evil.com —— 一个跳出本站的
+//     protocol-relative URL，而上面那条判据放它过去。
+//   - **控制字符会先被删掉。** 浏览器在解析前剥掉 URL 里的 tab / CR / LF，于是
+//     "/<TAB>/evil.com" 也变成 //evil.com。
+//
+// 所以这里反过来做：必须以 / 开头，第二个字符不能是 / 或 \，并且整串不含反斜杠与
+// 控制字符。本站真实的路径不需要这两类字符（要带就得是百分号编码），因此这条收紧
+// 不会挡掉任何正常的落点。
 func safeNext(in string) string {
-	if in == "" {
+	if !strings.HasPrefix(in, "/") || strings.HasPrefix(in, "//") {
 		return "/"
 	}
-	if strings.HasPrefix(in, "/") && !strings.HasPrefix(in, "//") {
-		return in
+	if strings.ContainsFunc(in, func(r rune) bool { return r == '\\' || r < 0x20 || r == 0x7f }) {
+		return "/"
 	}
-	return "/"
+	return in
+}
+
+// nextWithUserCode 是登录后的落点：先按 safeNext 收敛，再把设备流的 user_code 带回去
+// （用户是从「输码」那一页被送去登录的，回来要接着那一步）。
+func nextWithUserCode(next, userCode string) string {
+	target := safeNext(next)
+	if userCode == "" {
+		return target
+	}
+	sep := "?"
+	if strings.Contains(target, "?") {
+		sep = "&"
+	}
+	// user_code 来自请求方（GithubAuthorizeRequest.UserCode 没有 binding 约束），
+	// 拼进 query 前必须转义：不转义的话一个 & 就能往落点上再挂一个参数，一个 #
+	// 就能把 query 整段截断。
+	return target + sep + "user_code=" + url.QueryEscape(userCode)
 }
 
 func (a *Auth) GithubAuthorize(c *gin.Context, req *api.GithubAuthorizeRequest) error {
@@ -95,15 +125,7 @@ func (a *Auth) GithubCallback(c *gin.Context, req *api.GithubCallbackRequest) er
 	}
 	session.SetCookie(c, auth_svc.Default().CookieName(), sid, a.insecureCookies)
 
-	target := safeNext(payload.Next)
-	if payload.UserCode != "" {
-		sep := "?"
-		if strings.Contains(target, "?") {
-			sep = "&"
-		}
-		target += sep + "user_code=" + payload.UserCode
-	}
-	c.Redirect(http.StatusFound, target)
+	c.Redirect(http.StatusFound, nextWithUserCode(payload.Next, payload.UserCode))
 	return nil
 }
 

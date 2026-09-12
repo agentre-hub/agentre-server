@@ -99,6 +99,16 @@ func (s *stubPasskeySvc) Delete(ctx context.Context, userID, id int64) error {
 
 func newServer(t *testing.T, stub *stubPasskeySvc, rl bootstrap.RLConfig) *httptest.Server {
 	t.Helper()
+	return newServerTrusting(t, stub, rl, nil)
+}
+
+// newServerTrusting 是 newServer 的「声明了可信代理」版本：trustedProxies 原样进
+// server.trusted_proxies，也就是决定 c.ClientIP() 采不采信 X-Forwarded-For 的那一格。
+// 缺省（newServer）是谁都不信。
+func newServerTrusting(
+	t *testing.T, stub *stubPasskeySvc, rl bootstrap.RLConfig, trustedProxies []string,
+) *httptest.Server {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 	passkey_svc.SetDefault(stub)
@@ -106,7 +116,7 @@ func newServer(t *testing.T, stub *stubPasskeySvc, rl bootstrap.RLConfig) *httpt
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
-		Cfg: &bootstrap.ServerConfig{RateLimit: rl},
+		Cfg: &bootstrap.ServerConfig{RateLimit: rl, TrustedProxies: trustedProxies},
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
@@ -369,6 +379,10 @@ func TestPasskeyLoginEndpoints_ArePublic(t *testing.T) {
 // finish 通过后当场建立会话并下发 cookie，会话属于**服务端反查出来的那个账号**
 // （请求体里没有任何身份字段）；UA 与 IP 与 GitHub 登录一样记下来，否则这次登录
 // 在 /account 的会话清单里是一条无从辨认的空行。
+//
+// 记下的 IP 是**实际连上来的那一端**：没有声明可信代理时，请求自带的
+// X-Forwarded-For 只是请求方自己的一句话（见 internal/api/trustedproxy_test.go），
+// 采信它等于让任何人往别人的会话清单里写一个假的登录地点。
 func TestFinishLogin_EstablishesASessionForTheLookedUpAccount(t *testing.T) {
 	stub := newStubPasskeySvc()
 	stub.loginUserID = 88
@@ -398,6 +412,31 @@ func TestFinishLogin_EstablishesASessionForTheLookedUpAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, list, 1)
 	assert.Equal(t, "Mozilla/5.0 (Macintosh)", list[0].UserAgent)
+	assert.Equal(t, "127.0.0.1", list[0].IP,
+		"没声明可信代理时，登录 IP 取实际连上来的那一端，不取请求头")
+	assert.NotEqual(t, "192.0.2.88", list[0].IP, "伪造的 X-Forwarded-For 不许进会话记录")
+}
+
+// Given 部署方声明了自己那一跳反代（这里就是本机发起的那一端）；When 通行密钥登录
+// 成功；Then 会话记录下的是反代转发过来的客户端 IP。
+//
+// 这一条与上一条成对：反代后面 RemoteAddr 恒为反代自己，不采信它转发的头，整份会话
+// 清单会显示同一个地址。
+func TestFinishLogin_BehindATrustedProxy_RecordsTheForwardedClientIP(t *testing.T) {
+	stub := newStubPasskeySvc()
+	stub.loginUserID = 87
+	server := newServerTrusting(t, stub, generousLimits(), []string{"127.0.0.1", "::1"})
+
+	resp := do(t, server, request{
+		method: http.MethodPost, path: "/v1/passkeys/login/finish",
+		body: `{"credential":{"id":"abc","type":"public-key"}}`,
+		ip:   "192.0.2.88", ua: "Mozilla/5.0 (Macintosh)",
+	})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	list, err := auth_svc.Default().ListSessions(context.Background(), 87)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
 	assert.Equal(t, "192.0.2.88", list[0].IP)
 }
 

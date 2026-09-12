@@ -201,6 +201,12 @@ func (s *Supervisor) dial(
 //
 // 预算落在连接上而不是某一次调用的 ctx 上，是因为它同时是**转发**的预算：协议引擎的
 // FrameConn.WriteFrame 没有 ctx，中继那一跳的期限只能取自连接（见 relayframeconn.go）。
+//
+// 拨号**沿用调用方的 ctx**：它就是这条连接的基座，所以「连接活多久」这件事由调用方
+// 决定，这里不替它剥离。发一次请求就 Close 的那几位（活跃统计、导入、删除传播、
+// 一键升级）正需要请求一走就把在飞的转发带走；而连接比请求活得久的两位——常驻的
+// follower.start 与端口转发那条池（portforward_svc/pool.go 的 dial）——各自在自己的
+// 拨号处 context.WithoutCancel，理由写在那两处。
 func (s *Supervisor) dialWithTimeout(
 	ctx context.Context, key machineKey, onNotify func(*agentrewire.RpcNotification), timeout time.Duration,
 ) (*machineConn, error) {
@@ -384,7 +390,15 @@ func (f *follower) start(ctx context.Context) (bool, error) {
 		}
 		return false, fmt.Errorf("read machine relay connection: %w", err)
 	}
-	conn, err := f.sup.dial(ctx, f.key, f.enqueue)
+	// **拨号 ctx 必须脱开这次请求。** 认领常常就发生在一次 HTTP 请求里（用户点保存
+	// → savedsession 当场 Follow），而这条连接是**常驻**的：它是协议引擎读循环的基座，
+	// 也是中继那一跳 WriteFrame 的父 ctx（relayframeconn.go）。递请求 ctx 进去，响应
+	// 一写完 gin 就取消它，此后这条连接上每一帧转发都拿一个已取消的父 ctx、当场失败，
+	// 而 keepalive 只碰租约与链路身份、一帧都不发 —— 租约照续、日志全绿、别的副本也
+	// 接不走。同一条纪律在 portforward_svc/pool.go 的 dial 上（那条池化连接同样比
+	// 单次请求活得久）。WithoutCancel 留下日志上下文，去掉取消与期限；这次拨号仍有
+	// 预算：它落在连接上（Config.CallTimeout，见 dialWithTimeout）。
+	conn, err := f.sup.dial(context.WithoutCancel(ctx), f.key, f.enqueue)
 	if err != nil {
 		f.stopFollowing(ctx)
 		return false, err

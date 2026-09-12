@@ -172,7 +172,18 @@ func (p *PortForward) Forward(c *gin.Context) {
 	//
 	// c.Writer 原样交出去：代理要拿 Hijacker（101 升级）与 Flusher（流式），而且中间
 	// 少一层就少一处会误伤被转发应用自己那份响应的地方。
-	http.StripPrefix(addr.Prefix, handler).ServeHTTP(c.Writer, c.Request)
+	//
+	// 请求则**不**原样交出去：控制台的凭据在这一跳终止。会话 cookie 是 Path=/ 的，
+	// 浏览器把它一并发到 /fw/… 上，而共享代理逐格拷贝请求头、逐跳头清单里没有 Cookie
+	// 与 Authorization —— 不剥的话，被转发设备上那个本机服务（以及它的 access log）
+	// 直接拿到一张有效期 14 天的会话票明文，HttpOnly 在这条路上等于不存在。认得
+	// 「这是控制台凭据」的只有 server 自己，所以剥在这里，而不是指望下游懂事。
+	// Clone 而不是就地删：控制台这条请求本身的 cookie 要留着，剥只作用在交给代理的
+	// 那一份上。
+	forwarded := c.Request.Clone(ctx)
+	forwarded.Header.Del("Cookie")
+	forwarded.Header.Del("Authorization")
+	http.StripPrefix(addr.Prefix, handler).ServeHTTP(c.Writer, forwarded)
 }
 
 // acquire 借一次转发入口，ErrConnectionGone 重试一次。

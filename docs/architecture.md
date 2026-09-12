@@ -208,9 +208,44 @@ claim.
 
 Cookie-authenticated writes clear CSRF in every group except `/fw/`: a Bearer caller
 carries no cookie and is exempt, a session caller is not. `/fw/` is the one deliberate
-exception — a forwarded app's own writes cannot carry the console's token — and the
-same-origin exposure it opens is recorded in the "安全" section of
-[the port-forward spec](specs/2026-09-09-console-port-forward-host.md).
+exception — a forwarded app's own writes cannot carry the console's token — which is why
+the same-origin exposure it opens is part of the trust boundary described next.
+
+### Who the client IP is
+
+Per-IP rate limits (`middleware.byIP`) and the login IP shown in `/account` both read
+`c.ClientIP()`, so "which IP is this request from" is an authorization-relevant fact.
+gin's default answer is unsafe — it trusts every proxy, which makes the leftmost
+`X-Forwarded-For` entry, a **request-controlled value**, the client IP. `Router` therefore
+configures it explicitly from `server.trusted_proxies`: empty (the default) trusts no
+proxy and uses the peer address, and a non-empty list makes `X-Forwarded-For` count only
+for requests arriving from those addresses. A malformed entry fails startup rather than
+falling back. Only the deployment topology knows the right value — see
+[deploy/README.md](../deploy/README.md), and note that an ingress or reverse proxy in
+front makes the list mandatory, because otherwise every user collapses into the proxy's
+one address.
+
+### The port-forward trust boundary
+
+`/fw/<device>/<port>/...` proxies a browser request into a service listening on the
+loopback interface of one of the account's own devices, so it joins two parties that do
+**not** share a credential domain: the console session authenticates the browser to the
+server, and nothing past the server is entitled to see it.
+
+The console session cookie is `Path=/` (`internal/pkg/session/cookie.go`), so the browser
+attaches it to every `/fw/` request, and the shared proxy
+(`agentre/pkg/wire/portforwardhost`) copies request headers through cell by cell — its
+hop-by-hop list does not include `Cookie` or `Authorization`. **The console's credentials
+therefore terminate at `portforward_ctr.Forward`**: it clones the request and deletes both
+headers before handing it to the proxy, because the server is the only party on this path
+that knows those values are console credentials. Without that step the forwarded app — and
+its access log, and anything the developer running it has installed — holds a plaintext
+session ticket valid for 14 days, and the cookie's `HttpOnly` protects nothing here.
+`internal/controller/portforward_ctr/credentials_test.go` pins it.
+
+What still crosses the boundary is deliberate and bounded: the rest of the request
+(method, path, body, remaining headers), the device's own response, and the fact that a
+forwarded page runs on the console's origin — the CSRF exemption above.
 
 Endpoints are declared as structs with `mux.Meta`, which carries path and method:
 

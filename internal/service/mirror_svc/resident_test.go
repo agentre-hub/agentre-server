@@ -134,6 +134,12 @@ func (f *fakeDaemonNet) AttachClient(_ context.Context, _ relay_svc.Route, write
 }
 
 func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, channelID string, _ int, frame []byte) error {
+	// 真中继这一跳吃 ctx：跨副本投递是 XAdd + Expire + 等回执（relay_svc/framebus.go
+	// 的 publishAndWait），ctx 一取消这三步全部当场失败。假中继照这条办，否则「连接
+	// 的基座 ctx 已经取消」在这里永远是绿的。
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%w: %v", relay_svc.ErrForwardFailed, err)
+	}
 	f.mu.Lock()
 	ch := f.channels[channelID]
 	if deadline, ok := ctx.Deadline(); ok {
@@ -1341,6 +1347,41 @@ func TestFollow_SavedSetGrows_ResyncsOnTheSameConnection(t *testing.T) {
 	}, time.Second, 5*time.Millisecond, "新保存的对话要在同一条连接上跟起来")
 	connects, _, _ := a.net.counts()
 	assert.Equal(t, 1, connects, "保存集变了不该重连")
+}
+
+// Given 认领这台机器发生在一次 HTTP 请求里（保存对话的那次），所以传进 Follow 的是
+// gin 的 request ctx；When 响应写完、gin 取消了那个 ctx，之后账号又保存了这台机器上
+// 的第二条对话；Then 补同步照样走得通 —— 常驻连接的寿命比那次请求长。
+//
+// 这是「常驻连接不能挂在单次请求的 ctx 上」那条纪律（portforward_svc/pool.go 的
+// dial 已经为同一个拨号写明过）：连接的基座 ctx 一旦随请求取消，relayFrameConn.WriteFrame
+// 每一帧都拿一个已取消的父 ctx，中继那一跳当场失败，而 keepalive 只碰租约与链路身份、
+// 一帧都不发，于是租约照续、日志全绿、别的副本也接不走。
+func TestFollow_RequestContextCanceled_ResidentConnectionKeepsWriting(t *testing.T) {
+	rig := newResidentRig(t)
+	rig.peer.sessions = []*agentrewire.SessionSummary{
+		machineSession(conv42, "写个爬虫"), machineSession(conv77, "刚保存的"),
+	}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv77] = []*agentrewire.DurableNotification{durableRow(conv77, 1)}
+	a := rig.replica(t, replicaA)
+	requestCtx, endRequest := context.WithCancel(context.Background())
+	claimed, err := a.sup.Follow(requestCtx, testUserID, testMachine, savedOn(conv42))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	endRequest() // gin 写完响应就取消 request ctx
+
+	claimed, err = a.sup.Follow(context.Background(), testUserID, testMachine, savedOn(conv42, conv77))
+	require.NoError(t, err)
+	require.True(t, claimed)
+
+	require.Eventually(t, func() bool {
+		return len(rig.store.rowSeqs(conv77)) == 1
+	}, time.Second, 5*time.Millisecond,
+		"发起认领的那次请求结束之后，常驻连接必须还能往那台机器发帧")
+	connects, _, _ := a.net.counts()
+	assert.Equal(t, 1, connects, "补同步走的是原来那条连接，不重连")
 }
 
 // claims 数这台机器此刻有几份租约(0 或 1)。读不出来时报错但不中止 —— 它也跑在
