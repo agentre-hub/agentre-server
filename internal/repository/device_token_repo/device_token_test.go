@@ -25,6 +25,20 @@ func TestRevokeChain(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestDeleteByDevice(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDeviceToken()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `device_tokens` WHERE device_id=?")).
+		WithArgs(int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.DeleteByDevice(ctx, 42))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestRevoke_RequiresUnrevokedRow(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceToken()
@@ -74,57 +88,45 @@ func TestCreate(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceToken()
 	mock.ExpectBegin()
-	// R4 整条链路都挂在 access_jti 真的被写进去上（Revoke 拉黑它、吊销列表分发它）。
-	// 一串 AnyArg 的期望连列名都不看，删掉 AccessJTI 字段照样绿，所以这里把列名和
-	// 那一列的值都钉死。
+	// Bearer 校验整条链路都挂在 access token 的摘要真的被写进去上。一串 AnyArg 的期望
+	// 连列名都不看，删掉 AccessTokenHash 字段照样绿，所以这里把列名和那一列的值都钉死。
 	mock.ExpectExec(regexp.QuoteMeta(
-		"INSERT INTO `device_tokens` (`device_id`,`refresh_token_hash`,`access_jti`")).
-		WithArgs(int64(42), "h", "jti-1", sqlmock.AnyArg(),
+		"INSERT INTO `device_tokens` (`device_id`,`refresh_token_hash`,`access_token_hash`")).
+		WithArgs(int64(42), "h", "digest-1", sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(99, 1))
 	mock.ExpectCommit()
-	e := &device_token_entity.DeviceToken{DeviceID: 42, RefreshTokenHash: "h", RefreshExpiresAt: 1000, AccessJTI: "jti-1"}
+	e := &device_token_entity.DeviceToken{DeviceID: 42, RefreshTokenHash: "h", RefreshExpiresAt: 1000, AccessTokenHash: "digest-1"}
 	assert.NoError(t, r.Create(ctx, e))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestListAccessJTIByDevice(t *testing.T) {
+// Bearer 校验按摘要取行，走 uk_dtokens_access_hash 的等值查找。
+func TestFindByAccessHash_Found(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceToken()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT `access_jti` FROM `device_tokens` WHERE device_id=? AND access_jti != ''")).
-		WithArgs(int64(42)).
-		WillReturnRows(sqlmock.NewRows([]string{"access_jti"}).AddRow("jti-aaa").AddRow("jti-bbb"))
-	got, err := r.ListAccessJTIByDevice(ctx, 42)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `device_tokens` WHERE access_token_hash=? ORDER BY `device_tokens`.`id` LIMIT ?")).
+		WithArgs("digest-1", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "device_id", "createtime"}).AddRow(int64(11), int64(42), int64(1000)))
+	got, err := r.FindByAccessHash(ctx, "digest-1")
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"jti-aaa", "jti-bbb"}, got)
+	if assert.NotNil(t, got) {
+		assert.Equal(t, int64(11), got.ID)
+		assert.Equal(t, int64(42), got.DeviceID)
+		assert.Equal(t, int64(1000), got.Createtime)
+	}
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestListRevokedJTIByUser(t *testing.T) {
+func TestFindByAccessHash_NotFound(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceToken()
-	mock.ExpectQuery(regexp.QuoteMeta(
-		"SELECT `device_tokens`.`access_jti` FROM `device_tokens` JOIN devices ON devices.id = device_tokens.device_id WHERE devices.user_id = ? AND device_tokens.revoked_at != 0 AND device_tokens.access_jti != '' AND device_tokens.createtime >= ?")).
-		WithArgs(int64(7), int64(1000)).
-		WillReturnRows(sqlmock.NewRows([]string{"access_jti"}).AddRow("jti-revoked-1").AddRow("jti-revoked-2"))
-	got, err := r.ListRevokedJTIByUser(ctx, 7, 1000)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `device_tokens` WHERE access_token_hash=? ORDER BY `device_tokens`.`id` LIMIT ?")).
+		WithArgs("digest-unknown", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	got, err := r.FindByAccessHash(ctx, "digest-unknown")
 	assert.NoError(t, err)
-	assert.Equal(t, []string{"jti-revoked-1", "jti-revoked-2"}, got)
-	assert.NoError(t, mock.ExpectationsWereMet())
-}
-
-func TestListRevokedJTIByUser_ExcludesOutsideAccessTTLWindow(t *testing.T) {
-	ctx, _, mock := hubtest.Database(t)
-	r := NewDeviceToken()
-	// windowStartMs 之前签发的行已被数据库端的 createtime >= ? 条件排除，
-	// mock 只按预期 SQL 返回窗口内的一行——验证调用方传入的 windowStartMs 确实被当成查询条件。
-	mock.ExpectQuery(regexp.QuoteMeta(
-		"SELECT `device_tokens`.`access_jti` FROM `device_tokens` JOIN devices ON devices.id = device_tokens.device_id WHERE devices.user_id = ? AND device_tokens.revoked_at != 0 AND device_tokens.access_jti != '' AND device_tokens.createtime >= ?")).
-		WithArgs(int64(7), int64(5000)).
-		WillReturnRows(sqlmock.NewRows([]string{"access_jti"}).AddRow("jti-in-window"))
-	got, err := r.ListRevokedJTIByUser(ctx, 7, 5000)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"jti-in-window"}, got)
+	assert.Nil(t, got)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

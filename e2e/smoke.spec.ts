@@ -182,7 +182,7 @@ test("设备经授权、同步、刷新和撤销走完真实 HTTP 与 MySQL 生�
   );
   expect(rejectedRefresh.response.status()).toBe(400);
   expect(rejectedRefresh.body).toMatchObject({
-    code: 30204,
+    code: 30301,
     error: "invalid_grant",
   });
   const revokedOracle = readOracle();
@@ -223,6 +223,9 @@ test("Chromium 虚拟认证器注册通行密钥，再用它重新登录", async
   // 后面「登录 → /account → 登出」那条用例还要用它。
   await context.clearCookies();
   await page.goto(`${origin}/login`);
+  // 通行密钥登录按钮在同意框勾选之前一直是 disabled（Login.tsx 的 consented
+  // 门槛），先勾同意框、再点通行密钥登录。
+  await page.getByRole("checkbox").click();
   await page
     .getByRole("button", { name: /用通行密钥登录|Sign in with a passkey/i })
     .click();

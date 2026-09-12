@@ -14,8 +14,8 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
+	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/passkey_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/release_svc"
@@ -30,10 +30,42 @@ func TestLoadServerConfig_AccessTTLDefaultIsWithinBound(t *testing.T) {
 
 	got := LoadServerConfig(context.Background(), cfg)
 
-	assert.Equal(t, 2*time.Hour, got.JWT.AccessTTL)
-	assert.LessOrEqual(t, got.JWT.AccessTTL, 2*time.Hour,
+	assert.Equal(t, 2*time.Hour, got.Token.AccessTTL)
+	assert.LessOrEqual(t, got.Token.AccessTTL, 2*time.Hour,
 		"access token 的有效期就是被盗凭据的存活窗口，上限 2h")
-	assert.Equal(t, 30*24*time.Hour, got.JWT.RefreshTTL)
+	assert.Equal(t, 30*24*time.Hour, got.Token.RefreshTTL)
+}
+
+// 不透明凭据不再靠密钥验签，令牌有效期从 server.jwt.{access_ttl,refresh_ttl} 搬到
+// server.token.{access_ttl,refresh_ttl}（task 13）。升级后的配置中心/配置文件仍可能
+// 残留旧的 server.jwt 段（含已经没有读者的 active_kid / keys）——mapstructure.Decode
+// 对不认识的键本就不报错，但这里钉住这一点：残留旧段不应让启动失败，也不应该悄悄
+// 顶替新位置的缺省值。
+func TestLoadServerConfig_LeftoverServerJWTBlockDoesNotBreakLoading(t *testing.T) {
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{
+			"jwt": map[string]interface{}{
+				"active_kid": "2026-08-a",
+				"keys": []interface{}{
+					map[string]interface{}{
+						"kid":                  "2026-08-a",
+						"private_key_pem_path": "/etc/agentre-server/keys/2026-08-a.key",
+						"public_key_pem_path":  "/etc/agentre-server/keys/2026-08-a.pub",
+					},
+				},
+				"access_ttl":  "999999h",
+				"refresh_ttl": "999999h",
+			},
+		},
+	})))
+	require.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.Equal(t, 2*time.Hour, got.Token.AccessTTL,
+		"残留的 server.jwt.access_ttl 不应顶替 server.token 的缺省值")
+	assert.Equal(t, 30*24*time.Hour, got.Token.RefreshTTL,
+		"残留的 server.jwt.refresh_ttl 不应顶替 server.token 的缺省值")
 }
 
 func TestLoadServerConfig_DoesNotReadRemovedHubRoot(t *testing.T) {
@@ -79,14 +111,35 @@ func TestLoadServerConfig_AccountGateCacheTTLIsConfigurable(t *testing.T) {
 // 装配」这件事必须由这里钉住：漏了它，四条鉴权路径会安静地退回封禁前的行为。
 func TestRegisterDefaults_InstallsAccountGate(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	user_svc.SetGate(nil)
 	t.Cleanup(func() { user_svc.SetGate(nil) })
 
-	RegisterDefaults(&ServerConfig{AccountGate: AccountGateConfig{CacheTTL: time.Minute}}, signer)
+	RegisterDefaults(&ServerConfig{AccountGate: AccountGateConfig{CacheTTL: time.Minute}})
 
 	assert.NotNil(t, user_svc.Gate(), "RegisterDefaults 必须装配账号闸门")
+}
+
+// S6：服务启动不再需要任何密钥文件。配置里没有任何签名密钥，默认实例照常装配，
+// 浏览器票据照常签发、照常由 server 的记录核验。
+func TestRegisterDefaults_NeedsNoKeyMaterial(t *testing.T) {
+	testutils.Redis(t)
+	ctx := context.Background()
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{},
+	})))
+	require.NoError(t, err)
+
+	RegisterDefaults(LoadServerConfig(ctx, cfg))
+
+	auth := auth_svc.Default()
+	require.NotNil(t, auth)
+	sid, _, err := auth.StartSession(ctx, 7)
+	require.NoError(t, err)
+	ticket, err := auth.IssueRelayTicket(ctx, sid, 7)
+	require.NoError(t, err)
+	p, err := auth.ResolveCredential(ctx, ticket.Token)
+	require.NoError(t, err)
+	assert.Equal(t, credstore.KindRelayClient, p.Kind)
 }
 
 // 与闸门同一个失败模式，只是这次是 service 单例：passkey_svc.Default() 在没人
@@ -96,14 +149,12 @@ func TestRegisterDefaults_InstallsAccountGate(t *testing.T) {
 // service 单例目前还是一条一条钉。
 func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	passkey_svc.SetDefault(nil)
 	t.Cleanup(func() { passkey_svc.SetDefault(nil) })
 
 	RegisterDefaults(&ServerConfig{
 		WebAuthn: WebAuthnConfig{RPID: "localhost", RPName: "Agentre", Origins: []string{"http://localhost"}},
-	}, signer)
+	})
 
 	assert.NotNil(t, passkey_svc.Default(), "RegisterDefaults 必须装配通行密钥服务")
 }
@@ -113,12 +164,10 @@ func TestRegisterDefaults_InstallsPasskeyService(t *testing.T) {
 // 会 New 一个池，整套测试永远绿。
 func TestRegisterDefaults_InstallsPortForwardPool(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	portforward_svc.SetDefault(nil)
 	t.Cleanup(func() { portforward_svc.SetDefault(nil) })
 
-	RegisterDefaults(&ServerConfig{}, signer)
+	RegisterDefaults(&ServerConfig{})
 
 	assert.NotNil(t, portforward_svc.Default(), "RegisterDefaults 必须装配端口转发连接池")
 }
@@ -142,6 +191,7 @@ func TestLoadServerConfig_WebAuthnDefaultsDeriveFromPublicURL(t *testing.T) {
 	assert.Positive(t, got.WebAuthn.MaxPerAccount)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
 	assert.Positive(t, got.RateLimit.PasskeyRegisterBeginPerAccountPerMin)
+	assert.Positive(t, got.RateLimit.CredentialsIntrospectPerAccountPerMin)
 }
 
 // 走真实 YAML 文件源，把键名钉住：开发态前端在 5174、后端在 8443，e2e 又是另一组
@@ -155,7 +205,8 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 			"    origins:\n      - \"http://localhost:5174\"\n      - \"http://localhost:8443\"\n"+
 			"    max_per_account: 3\n"+
 			"  rate_limit:\n    passkey_register_begin_per_ip_per_min: 7\n"+
-			"    passkey_register_begin_per_account_per_min: 5\n"), 0o600))
+			"    passkey_register_begin_per_account_per_min: 5\n"+
+			"    credentials_introspect_per_account_per_min: 9\n"), 0o600))
 	cfg, err := configs.NewConfig("agentre-server", configs.WithConfigFile(path))
 	assert.NoError(t, err)
 
@@ -167,6 +218,21 @@ func TestLoadServerConfig_WebAuthnIsConfigurable(t *testing.T) {
 	assert.Equal(t, 3, got.WebAuthn.MaxPerAccount)
 	assert.Equal(t, int64(7), got.RateLimit.PasskeyRegisterBeginPerIPPerMin)
 	assert.Equal(t, int64(5), got.RateLimit.PasskeyRegisterBeginPerAccountPerMin)
+	assert.Equal(t, int64(9), got.RateLimit.CredentialsIntrospectPerAccountPerMin)
+}
+
+// /v1/credentials/introspect 按调用方账号限速的缺省值（规格 2026-09-11，决策 17）：
+// 429 在接收方那侧被判「账号服务不可达」而不缓存，配额太紧会让正常握手在高并发下
+// 频繁把有效凭据误判成不可达。默认从 30/分钟提到 300/分钟。
+func TestLoadServerConfig_CredentialsIntrospectPerAccountPerMinDefaultsToThreeHundred(t *testing.T) {
+	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(memory.NewSource(map[string]interface{}{
+		"server": map[string]interface{}{},
+	})))
+	assert.NoError(t, err)
+
+	got := LoadServerConfig(context.Background(), cfg)
+
+	assert.Equal(t, int64(300), got.RateLimit.CredentialsIntrospectPerAccountPerMin)
 }
 
 // release.cache_ttl 缺省时必须落到 release_svc.DefaultCacheTTL,而不是 0——0 会让
@@ -208,12 +274,10 @@ func TestLoadServerConfig_ReleaseIsConfigurable(t *testing.T) {
 // 控制器眼下会把它当「不知道」处理而不炸,但那样这条链路就从来没有真的跑起来过。
 func TestRegisterDefaults_InstallsReleaseService(t *testing.T) {
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	assert.NoError(t, err)
 	release_svc.SetDefault(nil)
 	t.Cleanup(func() { release_svc.SetDefault(nil) })
 
-	RegisterDefaults(&ServerConfig{Release: ReleaseConfig{CacheTTL: time.Hour}}, signer)
+	RegisterDefaults(&ServerConfig{Release: ReleaseConfig{CacheTTL: time.Hour}})
 
 	assert.NotNil(t, release_svc.Release(), "RegisterDefaults 必须装配 release 服务")
 }

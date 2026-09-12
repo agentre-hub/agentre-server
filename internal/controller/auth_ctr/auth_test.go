@@ -23,10 +23,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/middleware"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_identity_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
-	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
+	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo/mock_user_identity_repo"
@@ -37,20 +34,18 @@ import (
 
 const testCookieName = "server_session"
 
-func newAuthTestServer(t *testing.T) (*httptest.Server, *jwt.Signer) {
+func newAuthTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
-	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}, Signer: signer}).
+	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).
 		Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server, signer
+	return server
 }
 
 // startSession 模拟一次浏览器登录，返回该 session 的 cookie 与配套 CSRF token。
@@ -90,10 +85,10 @@ func issueRelayTicket(t *testing.T, server *httptest.Server, sid, csrf string) s
 
 // relayGuardStatus 把票据喂给真正守着 /v1/relay/client 的中间件，返回它的裁决。
 // 这是「这张票还能不能读写全部 agentred 会话」的唯一判据。
-func relayGuardStatus(t *testing.T, signer *jwt.Signer, token string) int {
+func relayGuardStatus(t *testing.T, token string) int {
 	t.Helper()
 	router := gin.New()
-	router.GET("/relay", middleware.RelayClientJWT(signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default())), func(c *gin.Context) {
+	router.GET("/relay", middleware.RelayClientJWT(auth_svc.NewCredentialResolver(nil, auth_svc.Default()), credstore.New(redis.Default())), func(c *gin.Context) {
 		c.Status(http.StatusOK)
 	})
 	req := httptest.NewRequest(http.MethodGet, "/relay", nil)
@@ -105,22 +100,26 @@ func relayGuardStatus(t *testing.T, signer *jwt.Signer, token string) int {
 
 // 登出必须立刻掐死这次会话签发过的 relay ticket：票本身还有最长 2 分钟寿命，
 // 期间它能连 /v1/relay/client 读写该账号下全部 agentred 的会话。
+//
+// 登出后出示的是一张**从没用过**的票：用过的票本来就连不了第二次，拿它断言
+// 测不出登出有没有生效。
 func TestLogoutRevokesRelayTicketsIssuedByThatSession(t *testing.T) {
-	server, signer := newAuthTestServer(t)
+	server := newAuthTestServer(t)
 	sid, csrf := startSession(t, 7)
-	ticket := issueRelayTicket(t, server, sid, csrf)
-	require.Equal(t, http.StatusOK, relayGuardStatus(t, signer, ticket), "登出前这张票本来就该可用")
+	used := issueRelayTicket(t, server, sid, csrf)
+	unused := issueRelayTicket(t, server, sid, csrf)
+	require.Equal(t, http.StatusOK, relayGuardStatus(t, used), "登出前这次会话的票本来就该可用")
 
 	resp := postJSON(t, server.URL+"/v1/auth/logout", sid, csrf)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	require.Equal(t, http.StatusUnauthorized, relayGuardStatus(t, signer, ticket),
+	require.Equal(t, http.StatusUnauthorized, relayGuardStatus(t, unused),
 		"登出后仍在有效期内的 relay ticket 必须立即失效")
 }
 
 // 登出只作废这一次会话签发的票：同账号的另一个浏览器不受影响。
 func TestLogoutKeepsRelayTicketsOfOtherSessions(t *testing.T) {
-	server, signer := newAuthTestServer(t)
+	server := newAuthTestServer(t)
 	sidA, csrfA := startSession(t, 7)
 	sidB, csrfB := startSession(t, 7)
 	ticketA := issueRelayTicket(t, server, sidA, csrfA)
@@ -129,8 +128,8 @@ func TestLogoutKeepsRelayTicketsOfOtherSessions(t *testing.T) {
 	resp := postJSON(t, server.URL+"/v1/auth/logout", sidA, csrfA)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-	require.Equal(t, http.StatusUnauthorized, relayGuardStatus(t, signer, ticketA))
-	require.Equal(t, http.StatusOK, relayGuardStatus(t, signer, ticketB),
+	require.Equal(t, http.StatusUnauthorized, relayGuardStatus(t, ticketA))
+	require.Equal(t, http.StatusOK, relayGuardStatus(t, ticketB),
 		"另一个浏览器的会话没有登出，它的票不该被牵连")
 }
 
@@ -177,7 +176,7 @@ func listSessions(t *testing.T, server *httptest.Server, sid string) (*http.Resp
 // 清单要把这个账号的每一次登录都列出来，并明确标出「你现在用的是哪一条」——
 // 没有这个标记，用户没法安全地决定撤销谁。
 func TestListSessions_ListsEveryLoginAndMarksTheCurrentOne(t *testing.T) {
-	server, _ := newAuthTestServer(t)
+	server := newAuthTestServer(t)
 	// 本包共用一个 miniredis，别的用例也在给 7 号建会话：各用例用自己的账号，
 	// 免得清单里混进别人的登录。
 	const uid = 7101
@@ -207,14 +206,14 @@ func TestListSessions_ListsEveryLoginAndMarksTheCurrentOne(t *testing.T) {
 }
 
 func TestListSessions_RequiresALogin(t *testing.T) {
-	server, _ := newAuthTestServer(t)
+	server := newAuthTestServer(t)
 	resp, _, _ := listSessions(t, server, "")
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 // 「登出其它全部」结束其余会话、留下当前这一条，并如实报告撤销了几条。
 func TestRevokeOtherSessions_EndsTheOthersAndKeepsTheCurrentOne(t *testing.T) {
-	server, _ := newAuthTestServer(t)
+	server := newAuthTestServer(t)
 	const uid = 7102 // 同上：本用例独占一个账号
 	sid, csrf := startSessionWithClient(t, uid, session.Client{UserAgent: "chrome", IP: "203.0.113.9"})
 	other, _ := startSessionWithClient(t, uid, session.Client{UserAgent: "curl/8.4.0", IP: "198.51.100.7"})
@@ -285,12 +284,10 @@ func TestMe_FillsGithubLogin(t *testing.T) {
 		user_identity_repo.RegisterUserIdentity(nil)
 	})
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
-	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}, Signer: signer}).
+	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).
 		Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
@@ -356,12 +353,10 @@ func TestMe_ReturnsEmptyGithubLoginWithoutGithubIdentity(t *testing.T) {
 		user_identity_repo.RegisterUserIdentity(nil)
 	})
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
 
 	testMux := muxtest.NewTestMux()
-	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}, Signer: signer}).
+	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).
 		Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
@@ -390,14 +385,10 @@ func TestGithubAuthorize_RateLimitByIP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
-
 	testMux := muxtest.NewTestMux()
 	const limit = 1 // 只允许 1 次，这样第二次直接超限
 	require.NoError(t, (&api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{GithubAuthorizePerIPPerMin: limit}},
-		Signer: signer,
+		Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{GithubAuthorizePerIPPerMin: limit}},
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
@@ -429,14 +420,10 @@ func TestGithubCallback_RateLimitByIP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
-
 	testMux := muxtest.NewTestMux()
 	const limit = 1 // 只允许 1 次，这样第二次直接超限
 	require.NoError(t, (&api.RouterDeps{
-		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{GithubCallbackPerIPPerMin: limit}},
-		Signer: signer,
+		Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{GithubCallbackPerIPPerMin: limit}},
 	}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)

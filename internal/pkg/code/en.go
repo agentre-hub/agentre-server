@@ -30,8 +30,6 @@ var en = map[int]string{
 	RefreshTokenReplay:  "refresh token reuse detected; all device tokens revoked",
 	RefreshTokenExpired: "refresh token expired, please re-authorize",
 	RefreshTokenInvalid: "invalid refresh token, please re-authorize",
-	JWTSignatureInvalid: "invalid access token signature",
-	JWTBlacklisted:      "access token revoked",
 	DeviceListFailed:    "failed to list devices",
 
 	RelayDaemonNotFound: "daemon is not registered to this account",
@@ -65,6 +63,8 @@ var en = map[int]string{
 
 	SessionImportMachineOffline: "this machine is offline, its local sessions cannot be read",
 	SessionImportFailed:         "importing the local session failed",
+
+	CredentialInvalid: "invalid token",
 
 	EngineProviderNotFound:      "provider not found",
 	EngineBackendNotFound:       "agent backend not found",

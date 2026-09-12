@@ -151,7 +151,7 @@ func TestOracleReportsStateWithoutSecretColumns(t *testing.T) {
 	for _, name := range []string{"device_flow_codes", "devices", "device_tokens", "sync_objects"} {
 		step := findSQLStep(t, steps, name)
 		lower := strings.ToLower(step.SQL)
-		for _, secret := range []string{"device_code", "user_code", "access_jti", "refresh_token_hash"} {
+		for _, secret := range []string{"device_code", "user_code", "access_token_hash", "refresh_token_hash"} {
 			if strings.Contains(lower, secret) {
 				t.Fatalf("oracle %s exposes secret column %s: %s", name, secret, step.SQL)
 			}

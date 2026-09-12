@@ -9,7 +9,6 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
 	"github.com/go-sql-driver/mysql"
 	goredis "github.com/redis/go-redis/v9"
@@ -22,9 +21,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo/mock_device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -53,18 +49,13 @@ func setupDeviceTest(t *testing.T) (
 	device_token_repo.RegisterDeviceToken(mT)
 	device_flow_repo.RegisterDeviceFlow(mF)
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	cfg := Config{
 		FlowTTL: 10 * time.Minute, PollInterval: 5 * time.Second,
 		AccessTTL: time.Hour, RefreshTTL: 90 * 24 * time.Hour,
 		VerificationURI: "https://server/device",
 	}
 	ctx, _, mock := hubtest.Database(t)
-	return ctx, mD, mT, mF, newDeviceSvc(cfg, signer, jwtblacklist.New(redis.Default())), mock
+	return ctx, mD, mT, mF, newDeviceSvc(cfg), mock
 }
 
 func TestAuthorize_ReturnsUserCode(t *testing.T) {
@@ -214,7 +205,7 @@ func TestExchangeToken(t *testing.T) {
 		})
 		convey.Convey("已授权 → 颁发 token + 标 consumed + upsert device", func() {
 			ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
-			var capturedJTI string
+			var capturedHash string
 			mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
 				&device_flow_entity.DeviceFlowCode{
 					DeviceCode: "dc-x", IntervalSeconds: 5,
@@ -224,6 +215,7 @@ func TestExchangeToken(t *testing.T) {
 				}, nil,
 			)
 			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
+			mD.EXPECT().FindByFingerprint(gomock.Any(), int64(42), "fp-xxxxxxx").Return(nil, nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
 					assert.Equal(t, "agentred", d.Kind)
@@ -233,7 +225,7 @@ func TestExchangeToken(t *testing.T) {
 			)
 			mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, tok *device_token_entity.DeviceToken) error {
-					capturedJTI = tok.AccessJTI
+					capturedHash = tok.AccessTokenHash
 					return nil
 				},
 			)
@@ -247,7 +239,7 @@ func TestExchangeToken(t *testing.T) {
 			assert.NotEmpty(t, out.AccessToken)
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(7), out.DeviceID)
-			assert.Equal(t, out.JTI, capturedJTI)
+			assert.Equal(t, sha256Hex(out.AccessToken), capturedHash)
 		})
 		// 设备流的显示名：客户端自报优先，缺省回退到指纹缩写。回退**必须**剥掉
 		// sha256: 前缀 —— 直接截前 8 个字符得到的是 "sha256:" 加一个十六进制字符，
@@ -266,6 +258,7 @@ func TestExchangeToken(t *testing.T) {
 			)
 			mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 			var name string
+			mD.EXPECT().FindByFingerprint(gomock.Any(), int64(42), gomock.Any()).Return(nil, nil)
 			mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, d *device_entity.Device) error {
 					name = d.Name
@@ -319,6 +312,50 @@ func TestExchangeToken(t *testing.T) {
 	})
 }
 
+// 撤销后原机重新配对：ON DUPLICATE KEY 把同一行设备改回 active。撤销前签发的令牌行若还留着，
+// 旧 access token 会随设备复活重新解析出身份，旧 refresh token 会被当成重放把新链一起撤掉——
+// 所以重新激活一台已撤销的设备时，先删掉它名下撤销前的令牌行。
+func TestExchangeToken_ReactivatingARevokedDevice_DropsItsPreRevocationTokens(t *testing.T) {
+	authorizedFlow := func() *device_flow_entity.DeviceFlowCode {
+		return &device_flow_entity.DeviceFlowCode{
+			DeviceCode: "dc-x", IntervalSeconds: 5,
+			ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+			AuthorizedUserID: 42, ApprovedAt: time.Now().UnixMilli(),
+			DeviceKind: "agentred", ClientFingerprint: "fp-xxxxxxx",
+		}
+	}
+	exchange := func(t *testing.T, previous *device_entity.Device, deletes int) {
+		ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+		mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(authorizedFlow(), nil)
+		mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
+		mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+		find := mD.EXPECT().FindByFingerprint(gomock.Any(), int64(42), "fp-xxxxxxx").Return(previous, nil)
+		deleted := mT.EXPECT().DeleteByDevice(gomock.Any(), int64(7)).Return(nil).Times(deletes)
+		upsert := mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil })
+		gomock.InOrder(find, deleted, upsert)
+		mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		mock.ExpectBegin()
+		mock.ExpectCommit()
+
+		out, err := svc.ExchangeToken(ctx, "dc-x")
+		require.NoError(t, err)
+		assert.Equal(t, int64(7), out.DeviceID)
+	}
+
+	convey.Convey("ExchangeToken for a fingerprint", t, func() {
+		convey.Convey("whose device row was revoked: its token rows are deleted before the device is reactivated", func() {
+			exchange(t, &device_entity.Device{ID: 7, UserID: 42, Fingerprint: "fp-xxxxxxx", Status: consts.DELETE}, 1)
+		})
+		convey.Convey("whose device is still active: its token rows are kept", func() {
+			exchange(t, &device_entity.Device{ID: 7, UserID: 42, Fingerprint: "fp-xxxxxxx", Status: consts.ACTIVE}, 0)
+		})
+		convey.Convey("seen for the first time: nothing to delete", func() {
+			exchange(t, nil, 0)
+		})
+	})
+}
+
 func TestRefresh(t *testing.T) {
 	convey.Convey("Refresh", t, func() {
 		convey.Convey("token 不存在 → invalid_grant", func() {
@@ -327,10 +364,13 @@ func TestRefresh(t *testing.T) {
 			_, err := svc.Refresh(ctx, "missing")
 			assert.Contains(t, err.Error(), "invalid_grant")
 		})
-		convey.Convey("token 已 revoked → 重放 → RevokeChain", func() {
-			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		convey.Convey("token 已 revoked、设备仍 active → 重放 → RevokeChain", func() {
+			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 				&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+			)
+			mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+				&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.ACTIVE}, nil,
 			)
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 			_, err := svc.Refresh(ctx, "stolen")
@@ -338,7 +378,7 @@ func TestRefresh(t *testing.T) {
 		})
 		convey.Convey("正常轮换 → 新 refresh + 旧 revoke + touch device", func() {
 			ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
-			var capturedJTI string
+			var capturedHash string
 			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 				&device_token_entity.DeviceToken{
 					ID: 1, DeviceID: 42, RefreshExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
@@ -349,7 +389,7 @@ func TestRefresh(t *testing.T) {
 			)
 			mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, tok *device_token_entity.DeviceToken) error {
-					capturedJTI = tok.AccessJTI
+					capturedHash = tok.AccessTokenHash
 					return nil
 				},
 			)
@@ -364,49 +404,78 @@ func TestRefresh(t *testing.T) {
 			assert.NotEmpty(t, out.AccessToken)
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(42), out.DeviceID)
-			assert.Equal(t, out.JTI, capturedJTI)
+			assert.Equal(t, sha256Hex(out.AccessToken), capturedHash)
 		})
 	})
 }
 
+// S1：access token 是不含任何可解析内容的随机串，server 只存它的摘要。
+// 反例是一枚 JWT —— 三段、带签名、载荷可解码；以及把明文原样写进库。
+func TestExchangeToken_IssuesOpaqueAccessTokenStoredOnlyAsDigest(t *testing.T) {
+	ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
+	mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
+		&device_flow_entity.DeviceFlowCode{
+			DeviceCode: "dc-x", IntervalSeconds: 5,
+			ExpiresAt:        time.Now().Add(time.Hour).UnixMilli(),
+			AuthorizedUserID: 7, ApprovedAt: time.Now().UnixMilli(),
+			DeviceKind: device_entity.KindAgentred, ClientFingerprint: "sha256:aaaa",
+		}, nil,
+	)
+	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
+	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+	mD.EXPECT().FindByFingerprint(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
+	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, d *device_entity.Device) error { d.ID = 42; return nil })
+	var stored *device_token_entity.DeviceToken
+	mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, tok *device_token_entity.DeviceToken) error { stored = tok; return nil })
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	out, err := svc.ExchangeToken(ctx, "dc-x")
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+
+	assert.NotContains(t, out.AccessToken, ".", "access token 不能是 JWT 那种可解析的分段结构")
+	assert.GreaterOrEqual(t, len(out.AccessToken), 32, "随机串要有足够熵")
+	assert.Equal(t, sha256Hex(out.AccessToken), stored.AccessTokenHash, "库里只存摘要")
+	assert.NotEqual(t, out.AccessToken, stored.AccessTokenHash, "明文不能落库")
+	assert.Equal(t, int(svc.cfg.AccessTTL/time.Second), out.ExpiresIn, "有效期与今天一致")
+}
+
 func TestRevoke(t *testing.T) {
 	convey.Convey("Revoke", t, func() {
-		convey.Convey("把被撤设备已签发的 access jti 全部写入黑名单（在线设备立即失效）", func() {
-			hubtest.Redis(t)
+		// S4：撤销立即生效——该设备名下的 access token（含刷新轮换出的旧令牌）当场解析
+		// 不出身份。判据是库里的设备状态，撤销既不写、也不读 Redis。
+		convey.Convey("撤销后该设备名下的 access token 立即失效，且不经 Redis", func() {
+			mini := hubtest.Redis(t)
 			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return([]string{"jti-aaa", "jti-bbb"}, nil)
-			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
-			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
-			expectRevokedDeviceLookup(mD)
-
-			err := svc.Revoke(ctx, 42)
-			convey.So(err, convey.ShouldBeNil)
-
-			for _, jti := range []string{"jti-aaa", "jti-bbb"} {
-				v, gerr := redis.Default().Get(ctx, "jwt_blacklist:"+jti).Result()
-				convey.So(gerr, convey.ShouldBeNil)
-				convey.So(v, convey.ShouldEqual, "1")
+			dev := &device_entity.Device{
+				ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Fingerprint: "sha256:aaaa", Status: consts.ACTIVE,
 			}
-		})
-
-		// 黑名单条目必须活得比 access token 还久一点。Verify 带 jwt.Leeway 的时钟
-		// 偏移,一个 12:00 签发的 token 到 12:00+AccessTTL+Leeway 都还验得过;而
-		// TTL 只取 AccessTTL 时,它从吊销那一刻起算,12:00:05 撤销的话黑名单
-		// 12:00:05+AccessTTL 就到期 —— 中间那 55s 里被撤销的设备又能用了。
-		convey.Convey("黑名单 TTL 覆盖到 token 真正失效为止（含验签时钟偏移）", func() {
-			hubtest.Redis(t)
-			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return([]string{"jti-aaa"}, nil)
+			mD.EXPECT().Find(gomock.Any(), int64(42)).DoAndReturn(
+				func(context.Context, int64) (*device_entity.Device, error) { snapshot := *dev; return &snapshot, nil },
+			).AnyTimes()
+			nowMs := time.Now().UnixMilli()
+			current := &device_token_entity.DeviceToken{ID: 2, DeviceID: 42, Createtime: nowMs}
+			rotated := &device_token_entity.DeviceToken{ID: 1, DeviceID: 42, Createtime: nowMs - 1000, RevokedAt: nowMs}
+			mT.EXPECT().FindByAccessHash(gomock.Any(), sha256Hex("current")).Return(current, nil).Times(2)
+			mT.EXPECT().FindByAccessHash(gomock.Any(), sha256Hex("rotated")).Return(rotated, nil).Times(2)
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
-			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
-			expectRevokedDeviceLookup(mD)
+			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).DoAndReturn(
+				func(context.Context, int64, int64) error { dev.Status = consts.DELETE; return nil },
+			)
 
+			for _, token := range []string{"current", "rotated"} {
+				_, err := svc.ResolveBearer(ctx, token)
+				convey.So(err, convey.ShouldBeNil)
+			}
 			convey.So(svc.Revoke(ctx, 42), convey.ShouldBeNil)
-
-			ttl, gerr := redis.Default().TTL(ctx, "jwt_blacklist:jti-aaa").Result()
-			convey.So(gerr, convey.ShouldBeNil)
-			convey.So(ttl, convey.ShouldBeGreaterThan, svc.cfg.AccessTTL)
-			convey.So(ttl, convey.ShouldBeLessThanOrEqualTo, svc.cfg.AccessTTL+jwt.Leeway)
+			for _, token := range []string{"current", "rotated"} {
+				_, err := svc.ResolveBearer(ctx, token)
+				convey.So(errors.Is(err, ErrBearerInvalid), convey.ShouldBeTrue)
+			}
+			convey.So(mini.Keys(), convey.ShouldBeEmpty)
 		})
 
 		// R19「解除授权」的可观察后果：撤销后该设备无法再刷新。黑名单只覆盖已签发
@@ -417,7 +486,6 @@ func TestRevoke(t *testing.T) {
 			ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 			dev := &device_entity.Device{ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Status: consts.ACTIVE}
 
-			mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).DoAndReturn(
 				func(_ context.Context, _, _ int64) error {
@@ -490,7 +558,6 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	convey.Convey("撤销设备时清掉挂在它上面、永远执行不了的删除待办（决策 7）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -508,7 +575,6 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	convey.Convey("清待办失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -527,7 +593,6 @@ func TestRevoke_ClearsImpossibleSessionDeleteTodos(t *testing.T) {
 	convey.Convey("设备行查不到时跳过待办清理，撤销照常成功", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, nil)
@@ -547,7 +612,6 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 	convey.Convey("撤销设备时清掉它上报的本机路径清单（R18）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -563,7 +627,6 @@ func TestRevoke_PurgesReportedLocalPaths(t *testing.T) {
 	convey.Convey("purger 落库失败不回滚已经生效的撤销（fail-open，只记日志）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -587,7 +650,6 @@ func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 	convey.Convey("撤销设备时把只属于它的账号级同步对象落墓碑", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -607,7 +669,6 @@ func TestRevoke_TombstonesDeviceScopedSyncObjects(t *testing.T) {
 	convey.Convey("设备行查不到时跳过账号级清理，撤销照常成功", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, nil)
@@ -630,7 +691,6 @@ func TestRevoke_GivenNoPurgerConfigured_DoesNotPanic(t *testing.T) {
 	convey.Convey("未装配 purger 时 Revoke 不 panic（默认空操作）", t, func() {
 		hubtest.Redis(t)
 		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
-		mT.EXPECT().ListAccessJTIByDevice(gomock.Any(), int64(42)).Return(nil, nil)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		expectRevokedDeviceLookup(mD)
@@ -639,40 +699,8 @@ func TestRevoke_GivenNoPurgerConfigured_DoesNotPanic(t *testing.T) {
 	})
 }
 
-func TestListRevokedJTI(t *testing.T) {
-	convey.Convey("ListRevokedJTI", t, func() {
-		convey.Convey("按账号（非调用设备）取吊销列表，窗口起点=now-AccessTTL", func() {
-			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
-			var capturedWindowStart int64
-			mT.EXPECT().ListRevokedJTIByUser(gomock.Any(), int64(7), gomock.Any()).DoAndReturn(
-				func(_ context.Context, userID, windowStartMs int64) ([]string, error) {
-					capturedWindowStart = windowStartMs
-					return []string{"jti-revoked-1", "jti-revoked-2"}, nil
-				},
-			)
-
-			// 窗口必须覆盖到 token 真正不再验签为止 —— Verify 带 jwt.Leeway 的时钟
-			// 偏移,exp 之后还会接受 Leeway 那么久。只减 AccessTTL 会让 jti 在最后
-			// Leeway 秒里既不在吊销列表上、又仍然验得过。
-			window := svc.cfg.AccessTTL + jwt.Leeway
-			before := time.Now().Add(-window).UnixMilli()
-			got, err := svc.ListRevokedJTI(ctx, 7)
-			after := time.Now().Add(-window).UnixMilli()
-
-			assert.NoError(t, err)
-			assert.Equal(t, []string{"jti-revoked-1", "jti-revoked-2"}, got)
-			assert.GreaterOrEqual(t, capturedWindowStart, before)
-			assert.LessOrEqual(t, capturedWindowStart, after)
-		})
-
-		convey.Convey("repo 报错时原样返回", func() {
-			ctx, _, mT, _, svc, _ := setupDeviceTest(t)
-			wantErr := errors.New("boom")
-			mT.EXPECT().ListRevokedJTIByUser(gomock.Any(), int64(7), gomock.Any()).Return(nil, wantErr)
-
-			_, err := svc.ListRevokedJTI(ctx, 7)
-			assert.ErrorIs(t, err, wantErr)
-		})
+func TestRefresh_LostRace(t *testing.T) {
+	convey.Convey("Refresh", t, func() {
 		convey.Convey("并发竞败（Revoke 命中 0 行）→ invalid_grant、回滚、且不整链撤销", func() {
 			ctx, mD, mT, _, svc, mock := setupDeviceTest(t)
 			mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
@@ -1057,31 +1085,11 @@ func TestDeny(t *testing.T) {
 	})
 }
 
-// 吊销列表的窗口起点必须正好是 now-(AccessTTL+Leeway)，不是 now-AccessTTL：
-// Verify 接受 Leeway 的时钟偏移，token 直到 exp+Leeway 都还验得过。少减这一段，
-// 每个 jti 都会有 Leeway 秒既已掉出这份列表、又仍被任何拉取方接受。
-//
-// 这是个精确到毫秒的边界，只有把时钟做成可注入的才断言得了——用真实 time.Now()
-// 只能断言一个区间，而区间恰好盖得住上面那个错法。
-func TestListRevokedJTI_WindowStartsOneLeewayBeforeAccessTTL(t *testing.T) {
-	ctx, _, mT, _, svc, _ := setupDeviceTest(t)
-	const frozen int64 = 1_700_000_000_000
-	svc.now = func() int64 { return frozen }
-
-	want := frozen - (time.Hour + jwt.Leeway).Milliseconds() // cfg.AccessTTL 是 1h
-	mT.EXPECT().ListRevokedJTIByUser(gomock.Any(), int64(7), want).Return([]string{"jti-1"}, nil)
-
-	got, err := svc.ListRevokedJTI(ctx, 7)
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{"jti-1"}, got)
-}
-
-// TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprint
-// 决策 8：agentred 的 auth.account 从**已验签的凭据**取对端身份，不再看请求体。
-// 桌面端与 agentred 出示的正是这枚设备 JWT，所以它必须把该设备的 fingerprint 签进
-// pfp —— 少了它，这条路上的账号握手会被对端以 ErrUnauthorized 全数拒绝。
-func TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprint(t *testing.T) {
+// TestExchangeToken_GivenADevice_ThenTheAccessTokenResolvesToTheDeviceFingerprint
+// 决策 8：对端身份取自 server 对凭据的解析，不再看请求体。设备 access token 解析出的
+// 对端指纹必须是该设备自己那条 devices.fingerprint —— 少了它，这条路上的账号握手会被
+// 对端全数拒绝。
+func TestExchangeToken_GivenADevice_ThenTheAccessTokenResolvesToTheDeviceFingerprint(t *testing.T) {
 	const fingerprint = "sha256:475776c61078781c9fda7b3345d232e32d5f176a7220ce2d129c5e39ac2db3de"
 	ctx, mD, mT, mF, svc, mock := setupDeviceTest(t)
 	mF.EXPECT().FindByDeviceCode(gomock.Any(), "dc-x").Return(
@@ -1093,20 +1101,29 @@ func TestExchangeToken_GivenADevice_ThenTheAccessTokenCarriesTheDeviceFingerprin
 		}, nil,
 	)
 	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
+	var upserted device_entity.Device
+	mD.EXPECT().FindByFingerprint(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
+		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; upserted = *d; return nil },
 	)
-	mT.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+	var stored *device_token_entity.DeviceToken
+	mT.EXPECT().Create(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, tok *device_token_entity.DeviceToken) error { stored = tok; return nil },
+	)
 	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
 	out, err := svc.ExchangeToken(ctx, "dc-x")
+	require.NoError(t, err)
 
+	mT.EXPECT().FindByAccessHash(gomock.Any(), sha256Hex(out.AccessToken)).Return(stored, nil)
+	mD.EXPECT().Find(gomock.Any(), int64(7)).Return(&upserted, nil)
+	principal, err := svc.ResolveBearer(ctx, out.AccessToken)
 	require.NoError(t, err)
-	claims, err := svc.signer.Verify(out.AccessToken)
-	require.NoError(t, err)
-	assert.Equal(t, fingerprint, claims.PFP)
+	assert.Equal(t, fingerprint, principal.PeerFingerprint)
+	assert.Equal(t, int64(42), principal.AccountID)
+	assert.Equal(t, int64(7), principal.DeviceID)
 }
 
 // TestRefreshBizCode 钉住 refresh 失败的**诊断**：线上的 error 字面量按 RFC 8628
@@ -1140,22 +1157,44 @@ func TestRefreshBizCode(t *testing.T) {
 	})
 
 	t.Run("重放 → RefreshTokenReplay", func(t *testing.T) {
-		ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 			&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+		)
+		// 设备仍然 active：这才是一次真正的重放，不是撤销的连带效果。
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+			&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.ACTIVE}, nil,
 		)
 		mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 		_, err := svc.Refresh(ctx, "stolen")
 		assert.Equal(t, code.RefreshTokenReplay, biz(t, err))
 	})
 
+	// 整条链已经被 Revoke 标过 revoked_at 的这枚 token 不算「重放」证据——它只是
+	// 撤销留下的既有状态。设备撤销是终态判定，优先于这枚具体 token 的 revoked_at：
+	// 答案必须是 DeviceRevoked，且不能再触发一次 RevokeChain（没有 EXPECT 就不允许调用）。
+	t.Run("设备整链已撤销后刷新（token 行本身也已被标 revoked）→ DeviceRevoked，不判重放", func(t *testing.T) {
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
+			&device_token_entity.DeviceToken{ID: 1, DeviceID: 42, RevokedAt: 5000}, nil,
+		)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+			&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.DELETE}, nil,
+		)
+		_, err := svc.Refresh(ctx, "revoked-chain-token")
+		assert.Equal(t, code.DeviceRevoked, biz(t, err))
+	})
+
 	t.Run("已过期 → RefreshTokenExpired", func(t *testing.T) {
-		ctx, _, mT, _, svc, _ := setupDeviceTest(t)
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
 		mT.EXPECT().FindByHash(gomock.Any(), gomock.Any()).Return(
 			&device_token_entity.DeviceToken{
 				ID: 1, DeviceID: 42,
 				RefreshExpiresAt: time.Now().Add(-time.Hour).UnixMilli(),
 			}, nil,
+		)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+			&device_entity.Device{ID: 42, UserID: 7, Kind: "agentred", Status: consts.ACTIVE}, nil,
 		)
 		_, err := svc.Refresh(ctx, "stale")
 		assert.Equal(t, code.RefreshTokenExpired, biz(t, err))
@@ -1238,6 +1277,7 @@ func TestExchangeToken_SignalsThatTheDeviceRowNowExists(t *testing.T) {
 	)
 	mF.EXPECT().UpdateLastPolledIfDue(gomock.Any(), "dc-x", gomock.Any(), gomock.Any()).Return(int64(1), nil)
 	mF.EXPECT().MarkConsumed(gomock.Any(), "dc-x", gomock.Any()).Return(int64(1), nil)
+	mD.EXPECT().FindByFingerprint(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, nil)
 	mD.EXPECT().Upsert(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, d *device_entity.Device) error { d.ID = 7; return nil },
 	)
@@ -1251,4 +1291,113 @@ func TestExchangeToken_SignalsThatTheDeviceRowNowExists(t *testing.T) {
 	require.Equal(t, []accountchan_svc.Frame{
 		{Type: accountchan_svc.FrameTypeDevicePresence},
 	}, signals.frames)
+}
+
+// S2：Bearer 按摘要查到它的账号、设备、类型与对端指纹。未知、已过期、所属设备已撤销
+// 一律答同一种无效；查库失败是另一回事，不能冒充成「令牌无效」。
+func TestResolveBearer(t *testing.T) {
+	const frozen int64 = 1_700_000_000_000
+	const token = "opaque-access-token"
+	digest := sha256Hex(token)
+	activeDevice := func() *device_entity.Device {
+		return &device_entity.Device{
+			ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Fingerprint: "sha256:aaaa", Status: consts.ACTIVE,
+		}
+	}
+	setup := func(t *testing.T) (
+		context.Context, *mock_device_repo.MockDeviceRepo, *mock_device_token_repo.MockDeviceTokenRepo, *deviceSvc,
+	) {
+		ctx, mD, mT, _, svc, _ := setupDeviceTest(t)
+		svc.now = func() int64 { return frozen }
+		return ctx, mD, mT, svc
+	}
+
+	t.Run("有效令牌交出账号、设备、类型、对端指纹、过期时刻与凭据句柄", func(t *testing.T) {
+		ctx, mD, mT, svc := setup(t)
+		mT.EXPECT().FindByAccessHash(gomock.Any(), digest).Return(
+			&device_token_entity.DeviceToken{ID: 11, DeviceID: 42, AccessTokenHash: digest, Createtime: frozen - 1000}, nil)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(activeDevice(), nil)
+
+		got, err := svc.ResolveBearer(ctx, token)
+
+		require.NoError(t, err)
+		assert.Equal(t, &Principal{
+			AccountID: 7, DeviceID: 42, Kind: device_entity.KindAgentred, PeerFingerprint: "sha256:aaaa",
+			ExpiresAt: frozen - 1000 + time.Hour.Milliseconds(), Handle: "11",
+		}, got)
+	})
+
+	t.Run("刷新轮换出的旧令牌在过期前仍有效：行上的 revoked_at 不参与判定", func(t *testing.T) {
+		ctx, mD, mT, svc := setup(t)
+		mT.EXPECT().FindByAccessHash(gomock.Any(), digest).Return(&device_token_entity.DeviceToken{
+			ID: 11, DeviceID: 42, Createtime: frozen - time.Hour.Milliseconds() + 1, RevokedAt: frozen - 500,
+		}, nil)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(activeDevice(), nil)
+
+		_, err := svc.ResolveBearer(ctx, token)
+
+		assert.NoError(t, err)
+	})
+
+	t.Run("未知令牌无效", func(t *testing.T) {
+		ctx, _, mT, svc := setup(t)
+		mT.EXPECT().FindByAccessHash(gomock.Any(), digest).Return(nil, nil)
+
+		_, err := svc.ResolveBearer(ctx, token)
+
+		assert.ErrorIs(t, err, ErrBearerInvalid)
+	})
+
+	t.Run("到点即过期", func(t *testing.T) {
+		ctx, _, mT, svc := setup(t)
+		mT.EXPECT().FindByAccessHash(gomock.Any(), digest).Return(
+			&device_token_entity.DeviceToken{ID: 11, DeviceID: 42, Createtime: frozen - time.Hour.Milliseconds()}, nil)
+
+		_, err := svc.ResolveBearer(ctx, token)
+
+		assert.ErrorIs(t, err, ErrBearerInvalid)
+	})
+
+	t.Run("所属设备已撤销", func(t *testing.T) {
+		ctx, mD, mT, svc := setup(t)
+		mT.EXPECT().FindByAccessHash(gomock.Any(), digest).Return(
+			&device_token_entity.DeviceToken{ID: 11, DeviceID: 42, Createtime: frozen}, nil)
+		revoked := activeDevice()
+		revoked.Status = consts.DELETE
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(revoked, nil)
+
+		_, err := svc.ResolveBearer(ctx, token)
+
+		assert.ErrorIs(t, err, ErrBearerInvalid)
+	})
+
+	t.Run("设备行已不存在", func(t *testing.T) {
+		ctx, mD, mT, svc := setup(t)
+		mT.EXPECT().FindByAccessHash(gomock.Any(), digest).Return(
+			&device_token_entity.DeviceToken{ID: 11, DeviceID: 42, Createtime: frozen}, nil)
+		mD.EXPECT().Find(gomock.Any(), int64(42)).Return(nil, nil)
+
+		_, err := svc.ResolveBearer(ctx, token)
+
+		assert.ErrorIs(t, err, ErrBearerInvalid)
+	})
+
+	t.Run("空令牌不查库", func(t *testing.T) {
+		ctx, _, _, svc := setup(t)
+
+		_, err := svc.ResolveBearer(ctx, "")
+
+		assert.ErrorIs(t, err, ErrBearerInvalid)
+	})
+
+	t.Run("查库失败原样上抛，不冒充成令牌无效", func(t *testing.T) {
+		ctx, _, mT, svc := setup(t)
+		boom := errors.New("boom")
+		mT.EXPECT().FindByAccessHash(gomock.Any(), digest).Return(nil, boom)
+
+		_, err := svc.ResolveBearer(ctx, token)
+
+		assert.ErrorIs(t, err, boom)
+		assert.NotErrorIs(t, err, ErrBearerInvalid)
+	})
 }

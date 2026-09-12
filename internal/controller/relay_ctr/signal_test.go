@@ -18,8 +18,6 @@ import (
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
@@ -48,15 +46,14 @@ func TestRelayClient_GivenAnAccountBroadcast_ThenItArrivesOnTheReservedChannel(t
 func TestRelayClient_GivenTwoReplicas_ThenOneBroadcastReachesBothAndOnlyThatAccount(t *testing.T) {
 	testutils.Redis(t)
 	mini := miniredis.RunT(t)
-	signer := newSignalSigner(t)
 	replicaA := accountchan_svc.New(newRelayRedisClient(t, mini))
 	replicaB := accountchan_svc.New(newRelayRedisClient(t, mini))
-	serverA := newRelayServerWithAccountChan(t, signer, newForwardingRelayStub(), replicaA)
-	serverB := newRelayServerWithAccountChan(t, signer, newForwardingRelayStub(), replicaB)
+	serverA := newRelayServerWithAccountChan(t, newForwardingRelayStub(), replicaA)
+	serverB := newRelayServerWithAccountChan(t, newForwardingRelayStub(), replicaB)
 
-	onA := dialSignalClient(t, serverA, signalToken(t, signer, 7, 9))
-	onB := dialSignalClient(t, serverB, signalToken(t, signer, 7, 10))
-	otherAccount := dialSignalClient(t, serverB, signalToken(t, signer, 8, 11))
+	onA := dialSignalClient(t, serverA, signalToken(t, 7, 9))
+	onB := dialSignalClient(t, serverB, signalToken(t, 7, 10))
+	otherAccount := dialSignalClient(t, serverB, signalToken(t, 8, 11))
 
 	require.NoError(t, replicaA.Broadcast(context.Background(), 7,
 		accountchan_svc.Frame{Type: accountchan_svc.FrameTypeSyncVersion, Version: 42}))
@@ -119,12 +116,11 @@ func TestRelayClient_GivenTheClientWritesToTheReservedChannel_ThenItIsAProtocolE
 func TestRelayClient_GivenTheSubscriptionIsSlow_ThenTheUpgradeWaitsForIt(t *testing.T) {
 	gate := make(chan struct{})
 	harness := newSignalHarnessWith(t, &gatedAccountChan{gate: gate})
-	signer := harness.signer
 
 	dialed := make(chan error, 1)
 	go func() {
 		conn, response, err := protobufRelayDialer.Dial(wsURL(harness.server.URL, "/v1/relay/client"),
-			http.Header{"Authorization": {"Bearer " + signalToken(t, signer, 7, 9)}})
+			http.Header{"Authorization": {"Bearer " + signalToken(t, 7, 9)}})
 		if response != nil {
 			_ = response.Body.Close()
 		}
@@ -169,7 +165,7 @@ func TestAccountChannelEndpointIsGone(t *testing.T) {
 	harness := newSignalHarness(t)
 	request, err := http.NewRequest(http.MethodGet, harness.server.URL+"/v1/account/channel", nil)
 	require.NoError(t, err)
-	request.Header.Set("Authorization", "Bearer "+signalToken(t, harness.signer, 7, 9))
+	request.Header.Set("Authorization", "Bearer "+signalToken(t, 7, 9))
 	response, err := http.DefaultClient.Do(request)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, response.Body.Close()) })
@@ -184,18 +180,9 @@ func newSignalHarness(t *testing.T) *channelHarness {
 	return newSignalHarnessWith(t, accountchan_svc.New(newRelayRedisClient(t, miniredis.RunT(t))))
 }
 
-func newSignalSigner(t *testing.T) *jwt.Signer {
+func signalToken(t *testing.T, accountID, deviceID int64) string {
 	t.Helper()
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
-	return signer
-}
-
-func signalToken(t *testing.T, signer *jwt.Signer, accountID, deviceID int64) string {
-	t.Helper()
-	token, _, err := signer.Sign(
-		jwt.Claims{UID: accountID, DID: deviceID, Kind: device_entity.KindDesktop}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(accountID, deviceID, device_entity.KindDesktop)
 	return token
 }
 

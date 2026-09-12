@@ -16,8 +16,6 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -30,7 +28,6 @@ import (
 // 仓库那一层。
 type channelHarness struct {
 	server      *httptest.Server
-	signer      *jwt.Signer
 	devices     *mock_device_repo.MockDeviceRepo
 	saves       *mock_agent_session_repo.MockSaveRepo
 	accountChan accountchan_svc.AccountChanSvc
@@ -48,8 +45,6 @@ func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanS
 	t.Helper()
 	testutils.Redis(t)
 	mini := miniredis.RunT(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 
 	controller := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(controller)
@@ -58,8 +53,7 @@ func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanS
 	redisClient := newRelayRedisClient(t, mini)
 	svc := relay_svc.New(config, devices, saves, redisClient, relay_svc.NewRedisForwarder(config, redisClient))
 	return &channelHarness{
-		server:      newRelayServerWithAccountChan(t, signer, svc, accountChan),
-		signer:      signer,
+		server:      newRelayServerWithAccountChan(t, svc, accountChan),
 		devices:     devices,
 		saves:       saves,
 		accountChan: accountChan,
@@ -72,8 +66,7 @@ func (h *channelHarness) machine(t *testing.T, id int64, fingerprint, kind strin
 	device := &device_entity.Device{ID: id, UserID: 7, Kind: kind, Fingerprint: fingerprint, Status: 1}
 	h.devices.EXPECT().Find(gomock.Any(), id).Return(device, nil).AnyTimes()
 	h.devices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), fingerprint).Return(device, nil).AnyTimes()
-	token, _, err := h.signer.Sign(jwt.Claims{UID: 7, DID: id, Kind: kind}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, id, kind)
 	conn, _, err := protobufRelayDialer.Dial(wsURL(h.server.URL, "/v1/relay/daemon"),
 		http.Header{"Authorization": {"Bearer " + token}})
 	require.NoError(t, err)
@@ -93,8 +86,7 @@ func (h *channelHarness) offlineMachine(t *testing.T, id int64, fingerprint stri
 // client 开一条**账号级**中继连接：URL 上没有目标，目标由每条通道各自声明。
 func (h *channelHarness) client(t *testing.T) *clientLink {
 	t.Helper()
-	token, _, err := h.signer.Sign(jwt.Claims{UID: 7, DID: 4, Kind: device_entity.KindDesktop}, time.Hour)
-	require.NoError(t, err)
+	token := deviceToken(7, 4, device_entity.KindDesktop)
 	conn, response, err := protobufRelayDialer.Dial(wsURL(h.server.URL, "/v1/relay/client"),
 		http.Header{"Authorization": {"Bearer " + token}})
 	if response != nil {

@@ -48,14 +48,7 @@ server:
   device_flow:
     device_flow_ttl: 10m
     poll_interval: 1s
-  jwt:
-    active_kid: "e2e-local"
-    keys:
-      - kid: "e2e-local"
-        # Generate test keys outside tracked files (e.g. runtime/keys/) and use
-        # absolute paths here.
-        private_key_pem_path: "/absolute/path/to/local/e2e-jwt.key"
-        public_key_pem_path: "/absolute/path/to/local/e2e-jwt.pub"
+  token:
     access_ttl: 2h
     refresh_ttl: 720h
   oauth:
@@ -69,6 +62,7 @@ server:
     passkey_register_begin_per_ip_per_min: 100
     passkey_register_begin_per_account_per_min: 100
     passkey_login_begin_per_ip_per_min: 100
+    credentials_introspect_per_account_per_min: 300
   # How long a verdict stays cached per user_id — the observable upper bound for a
   # ban applied straight in the database.
   account_gate:

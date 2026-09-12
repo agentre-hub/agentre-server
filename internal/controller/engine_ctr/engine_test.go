@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/pkg/consts"
@@ -22,10 +21,8 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -80,24 +77,23 @@ func (s *stubEngineSvc) Snapshot(_ context.Context, _ int64, fingerprint string)
 
 var _ engine_svc.EngineSvc = (*stubEngineSvc)(nil)
 
-func newEngineServer(t *testing.T, stub *stubEngineSvc) (*httptest.Server, *jwt.Signer) {
+func newEngineServer(t *testing.T, stub *stubEngineSvc) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	engine_svc.SetDefault(stub)
 	t.Cleanup(func() { engine_svc.SetDefault(engine_svc.New()) })
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
 	// 快照端点要先确认「这台设备归调用方且还能用」，判定归 device_svc.OwnedDevice；
 	// 它只走 device_repo（下面用 mock 装配），配置与签名器都用不上。
-	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil, jwtblacklist.New(redis.Default())))
+	device_svc.SetDefault(device_svc.New(device_svc.Config{}))
 	t.Cleanup(func() { device_svc.SetDefault(nil) })
 	tm := muxtest.NewTestMux()
-	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}}, Signer: signer}).Router(context.Background(), tm.Router))
+	require.NoError(t, (&api.RouterDeps{
+		Bearer: bearertest.Resolver{}, Cfg: &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}}}).Router(context.Background(), tm.Router))
 	server := httptest.NewServer(tm.IRouter.(*gin.Engine))
 	t.Cleanup(server.Close)
-	return server, signer
+	return server
 }
 func postEngine(t *testing.T, url, sessionID, csrf, body string) *http.Response {
 	t.Helper()
@@ -114,7 +110,7 @@ func postEngine(t *testing.T, url, sessionID, csrf, body string) *http.Response 
 
 func TestBrowserProviderCreate_DoesNotReturnAPIKey(t *testing.T) {
 	stub := &stubEngineSvc{}
-	server, _ := newEngineServer(t, stub)
+	server := newEngineServer(t, stub)
 	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
 	require.NoError(t, err)
 	resp := postEngine(t, server.URL+"/v1/engine/providers", sid, sess.CSRFToken, `{"name":"Anthropic","type":"anthropic","base_url":"https://api.anthropic.com","api_key":"sk-secret"}`)
@@ -132,7 +128,7 @@ func TestBrowserProviderCreate_DoesNotReturnAPIKey(t *testing.T) {
 // 且响应体把服务层回填的运行设备如实带回浏览器。
 func TestBrowserBackendCreate_CarriesDeviceFingerprintThroughToServiceAndResponse(t *testing.T) {
 	stub := &stubEngineSvc{}
-	server, _ := newEngineServer(t, stub)
+	server := newEngineServer(t, stub)
 	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
 	require.NoError(t, err)
 	resp := postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken, `{"name":"Claude Code","type":"claude","device_fingerprint":"sha256:aaaa"}`)
@@ -148,13 +144,12 @@ func TestBrowserBackendCreate_CarriesDeviceFingerprintThroughToServiceAndRespons
 
 func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
 	stub := &stubEngineSvc{}
-	server, signer := newEngineServer(t, stub)
+	server := newEngineServer(t, stub)
 	ctrl := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
 	device_repo.RegisterDevice(devices)
 	devices.EXPECT().Find(gomock.Any(), int64(2)).Return(&device_entity.Device{ID: 2, UserID: 7, Fingerprint: "fp-1", Status: consts.ACTIVE}, nil)
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindAgentred})
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/engine/snapshot", nil)
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -175,15 +170,14 @@ func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
 // relay_svc 与 workspace_svc 的同一条判定都判了（device_entity.UsableBy）。
 func TestDeviceSnapshot_RevokedDeviceIsRejected(t *testing.T) {
 	stub := &stubEngineSvc{}
-	server, signer := newEngineServer(t, stub)
+	server := newEngineServer(t, stub)
 	ctrl := gomock.NewController(t)
 	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
 	device_repo.RegisterDevice(devices)
 	devices.EXPECT().Find(gomock.Any(), int64(2)).
 		Return(&device_entity.Device{ID: 2, UserID: 7, Fingerprint: "fp-1", Status: consts.DELETE}, nil)
 
-	token, _, err := signer.Sign(jwt.Claims{UID: 7, DID: 2, Kind: device_entity.KindAgentred}, time.Hour)
-	require.NoError(t, err)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindAgentred})
 	req, err := http.NewRequest(http.MethodGet, server.URL+"/v1/engine/snapshot", nil)
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -201,7 +195,7 @@ func TestDeviceSnapshot_RevokedDeviceIsRejected(t *testing.T) {
 // 服务层回的那张表也如实带回浏览器——控制台的编辑器全靠这一条往返才编辑得动。
 func TestBrowserBackendCreate_CarriesTheEnvTableBothWays(t *testing.T) {
 	stub := &stubEngineSvc{}
-	server, _ := newEngineServer(t, stub)
+	server := newEngineServer(t, stub)
 	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
 	require.NoError(t, err)
 

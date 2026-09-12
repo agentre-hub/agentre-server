@@ -14,7 +14,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
@@ -30,21 +29,12 @@ type MachineUpgrader interface {
 }
 
 type Device struct {
-	publicKeys *api.PublicKeyResponse
-	signer     *jwt.Signer
 	// upgrader 由装配处注入（router.go）。为空时落到本进程那份常驻镜像——它同样
 	// 可能没装配，UpgradeMachine 的 nil 接收者会如实说「这个部署够不着那台机器」。
 	upgrader MachineUpgrader
 }
 
-func NewDeviceWithPublicKeys(currentKID string, keys map[string]string, maxTokenLifetimeSeconds int64) *Device {
-	return &Device{publicKeys: &api.PublicKeyResponse{
-		Version: 1, CurrentKID: currentKID, Keys: keys,
-		MaxTokenLifetimeSeconds: maxTokenLifetimeSeconds,
-	}}
-}
-
-func (d *Device) SetSigner(signer *jwt.Signer) { d.signer = signer }
+func NewDevice() *Device { return &Device{} }
 
 // SetMachineUpgrader 注入「够到那台机器」的实现（组合根 / 测试各注一份）。
 func (d *Device) SetMachineUpgrader(u MachineUpgrader) { d.upgrader = u }
@@ -54,11 +44,6 @@ func (d *Device) machineUpgrader() MachineUpgrader {
 		return d.upgrader
 	}
 	return mirror_svc.Default()
-}
-
-// PublicKey 返回供 agentred 离线验签的 RS256 公钥。
-func (d *Device) PublicKey(c *gin.Context, _ *api.PublicKeyRequest) {
-	c.JSON(http.StatusOK, d.publicKeys)
 }
 
 // ---- Device Flow ----
@@ -133,35 +118,28 @@ func (d *Device) Refresh(c *gin.Context, req *api.TokenRefreshRequest) (*api.Tok
 	}, nil
 }
 
-const relayTicketTTL = 2 * time.Minute
-
 // RelayTicket 用浏览器登录 session 换取只可连接 relay client 的短效凭据。
+//
+// 票据是 server 记下账号、类型与对端身份的随机串（auth_svc.IssueRelayTicket），挂在这次
+// 会话名下：登出之后新连接认不下它，已建连接在下一次心跳复查时断开。对端身份由账号派生
+// （决策 8/9）：agentred 的 auth.account 从凭据的记录取身份，浏览器在请求体里报不了自己是谁。
 func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.RelayTicketResponse, error) {
 	ctx := c.Request.Context()
 	userID := ginctx.UserID(c)
-	if userID == 0 || d.signer == nil {
+	auth := auth_svc.Default()
+	if userID == 0 || auth == nil {
 		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
 	}
-	// 对端身份由账号派生并签进票里（决策 8/9）：agentred 的 auth.account 从凭据取
-	// 身份，浏览器在请求体里已经报不了自己是谁。
-	peerFingerprint := jwt.AccountPeerFingerprint(userID)
-	token, jti, err := d.signer.Sign(jwt.Claims{UID: userID, Kind: "relay_client", PFP: peerFingerprint}, relayTicketTTL)
+	// 本路由挂在 SessionAuth 之后，Redis 不可用时请求根本走不到这儿；记不下来就不发
+	// （fail-closed），代价只是同一次抖动里换票失败——比留下一张撤不掉的票便宜。
+	sid, _ := c.Cookie(auth.CookieName())
+	ticket, err := auth.IssueRelayTicket(ctx, sid, userID)
 	if err != nil {
 		return nil, i18n.NewInternalError(ctx, code.ServerError)
 	}
-	// 把 jti 记到签发它的这次会话名下，登出才能立刻把它拉黑；否则票在手就还能连
-	// /v1/relay/client 读写该账号全部 agentred 的会话，最长 relayTicketTTL。
-	//
-	// 这里 fail-closed：登记不上就等于发一张撤不掉的票，宁可不发。本路由挂在
-	// SessionAuth 之后，Redis 不可用时请求根本走不到这儿，代价只是同一次抖动里
-	// 换票失败——比留下一张不可撤销的票便宜。
-	sid, _ := c.Cookie(auth_svc.Default().CookieName())
-	if err := auth_svc.Default().TrackRelayTicket(ctx, sid, jti, relayTicketTTL); err != nil {
-		return nil, i18n.NewInternalError(ctx, code.ServerError)
-	}
 	return &api.RelayTicketResponse{
-		AccessToken: token, ExpiresIn: int(relayTicketTTL / time.Second),
-		PeerFingerprint: peerFingerprint,
+		AccessToken: ticket.Token, ExpiresIn: int(ticket.ExpiresIn / time.Second),
+		PeerFingerprint: ticket.PeerFingerprint,
 	}, nil
 }
 
@@ -287,17 +265,6 @@ func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.De
 		ActiveTurns:   result.ActiveTurns,
 		TargetVersion: result.TargetVersion,
 	}, nil
-}
-
-// Revocations 供 daemon 定期拉取吊销列表（R4 producer）。设备 JWT 鉴权，
-// 已吊销设备自身拉取时被既有 DeviceJWT 中间件的黑名单校验拒绝在前面，
-// 这里只需从 JWT 里取账号并转发给 service。
-func (d *Device) Revocations(c *gin.Context, _ *api.RevocationsRequest) (*api.RevocationsResponse, error) {
-	jtis, err := device_svc.Default().ListRevokedJTI(c.Request.Context(), ginctx.UserID(c))
-	if err != nil {
-		return nil, i18n.NewInternalError(c.Request.Context(), code.ServerError)
-	}
-	return &api.RevocationsResponse{RevokedJTI: jtis, AsOf: time.Now().UnixMilli()}, nil
 }
 
 // oauthErrToHTTP 把 device_svc.OAuthError 映射成 HTTP 状态 + 业务 code，并在 body 里附 RFC 8628 字段。

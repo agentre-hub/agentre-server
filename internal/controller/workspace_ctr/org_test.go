@@ -17,7 +17,7 @@ import (
 // 落到 service 的账号只能是会话里的那个。
 func TestCreateAgent_TakesAccountFromAuthContextAndIgnoresBodyIdentity(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/agents", cookie.Value, csrf,
@@ -46,7 +46,7 @@ func TestCreateAgent_TakesAccountFromAuthContextAndIgnoresBodyIdentity(t *testin
 // 而「不提」在这条通道上的含义是「别动它」。
 func TestUpdateDepartment_SendsOnlyTheKeysTheRequestMentioned(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/departments/update", cookie.Value, csrf,
@@ -68,7 +68,7 @@ func TestUpdateDepartment_SendsOnlyTheKeysTheRequestMentioned(t *testing.T) {
 // 一次 curl 悄悄打乱另一端读到的次序。
 func TestUpdateDepartmentAndAgent_CannotExpressSortOrder(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/departments/update", cookie.Value, csrf,
@@ -89,7 +89,7 @@ func TestUpdateDepartmentAndAgent_CannotExpressSortOrder(t *testing.T) {
 // 混为一谈，用户就再也取消不掉一个部门归属。
 func TestUpdateAgent_ExplicitEmptyStringIsSentThrough(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/agents/update", cookie.Value, csrf,
@@ -103,7 +103,7 @@ func TestUpdateAgent_ExplicitEmptyStringIsSentThrough(t *testing.T) {
 // 删只带标识：不带任何键，服务端因此不会顺手改动正文。
 func TestDeleteExecTarget_PassesKindAndSyncIDOnly(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/exec-targets/delete", cookie.Value, csrf,
@@ -121,7 +121,7 @@ func TestDeleteExecTarget_PassesKindAndSyncIDOnly(t *testing.T) {
 // 吞掉错误返回一个空回执与成功在正文上不可分辨。
 func TestOrgWrite_PropagatesServiceFailureInsteadOfEmptySuccess(t *testing.T) {
 	stub := &stubWorkspaceSvc{orgErr: errors.New("create org object failed")}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/departments", cookie.Value, csrf,
@@ -144,7 +144,7 @@ func TestOrgWrite_RejectsUnauthenticatedAndCSRFLess(t *testing.T) {
 		"/v1/workspace/org/exec-targets/delete",
 	}
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, _ := newSessionCookieWithCSRF(t, 7)
 
 	for _, path := range paths {
@@ -164,7 +164,7 @@ func TestOrgWrite_RejectsUnauthenticatedAndCSRFLess(t *testing.T) {
 // 新加一条路由就能悄悄把它绕过去。
 func TestOrgWrite_HasNoBackendEndpoint(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	for _, path := range []string{

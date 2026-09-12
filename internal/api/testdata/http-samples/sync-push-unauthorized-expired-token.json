@@ -15,9 +15,9 @@
   "response": {
     "status": 401,
     "body": {
-      "code": 30304,
+      "code": 30004,
       "data": null,
-      "msg": "访问令牌签名无效"
+      "msg": "未登录或会话已失效"
     }
   }
 }

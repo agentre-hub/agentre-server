@@ -20,16 +20,14 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/middleware"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
-	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
-	"github.com/agentre-hub/agentre-server/internal/pkg/relayticket"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo/mock_user_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
@@ -54,13 +52,6 @@ func installAccountGate(t *testing.T, status int) {
 		user_repo.RegisterUser(nil)
 		_ = client.Close()
 	})
-}
-
-func gatedAuthTestSigner(t *testing.T) *hubjwt.Signer {
-	t.Helper()
-	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
-	return signer
 }
 
 func gatedRoute(handler gin.HandlerFunc) *gin.Engine {
@@ -117,7 +108,7 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnSessionBranch(t *testing.T) 
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.AddCookie(cookie)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.SessionOrDeviceAuth(gatedAuthTestSigner(t), jwtblacklist.New(redis.Default()))).ServeHTTP(w, req)
+	gatedRoute(middleware.SessionOrDeviceAuth(bearertest.Resolver{})).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
@@ -127,14 +118,12 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnBearerBranch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 	installAccountGate(t, consts.BAN)
-	signer := gatedAuthTestSigner(t)
-	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "desktop"}, time.Hour)
-	require.NoError(t, err)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 42, Kind: "desktop"})
 
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.SessionOrDeviceAuth(signer, jwtblacklist.New(redis.Default()))).ServeHTTP(w, req)
+	gatedRoute(middleware.SessionOrDeviceAuth(bearertest.Resolver{})).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
@@ -144,14 +133,12 @@ func TestDeviceJWT_BannedAccountRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 	installAccountGate(t, consts.BAN)
-	signer := gatedAuthTestSigner(t)
-	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "desktop"}, time.Hour)
-	require.NoError(t, err)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 42, Kind: "desktop"})
 
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.DeviceJWT(signer, jwtblacklist.New(redis.Default()))).ServeHTTP(w, req)
+	gatedRoute(middleware.DeviceJWT(bearertest.Resolver{})).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
@@ -159,17 +146,29 @@ func TestDeviceJWT_BannedAccountRejected(t *testing.T) {
 
 // relay ticket 走的是另一个中间件（DeviceJWT 刻意拒绝它），闸门必须一样挡得住。
 func TestRelayClientJWT_BannedAccountRejected(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	testutils.Redis(t)
+	auth := shortLivedCredentials(t)
 	installAccountGate(t, consts.BAN)
-	signer := gatedAuthTestSigner(t)
-	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, Kind: "relay_client"}, 2*time.Minute)
-	require.NoError(t, err)
+	token, _ := issueTicket(t, auth, 7)
 
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.RelayClientJWT(signer, jwtblacklist.New(redis.Default()), relayticket.New(redis.Default()))).ServeHTTP(w, req)
+	gatedRoute(relayClientGuard(auth)).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.Contains(t, w.Body.String(), bannedCode())
+}
+
+// 原生端的设备 access token 走同一个中继入口，闸门同样挡得住。
+func TestRelayClientJWT_BannedAccountRejectedOnDeviceToken(t *testing.T) {
+	auth := shortLivedCredentials(t)
+	installAccountGate(t, consts.BAN)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 42, Kind: "desktop"})
+
+	req := httptest.NewRequest(http.MethodGet, "/me", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	gatedRoute(relayClientGuard(auth)).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())

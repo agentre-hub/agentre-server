@@ -27,6 +27,7 @@ import {
   indicatorHostMessageId,
   normalizePermissionMode,
   opensAssistantMessage,
+  recordRecentTarget,
   reduceSessionState,
   resolveProviderPillState,
   type ChatComposerHandle,
@@ -1423,6 +1424,9 @@ export default function SessionDetailView({
         );
         return;
       }
+      // 至少写成了一台，这次选择就生效了 —— 与「只成一台仍算成功」同一判据。本站
+      // 选择器不分执行位置（空串）。
+      recordRecentTarget("chat", "", next);
       setModelTargetNote(
         ok < results.length
           ? t("session.composerControls.modelPartiallySynced")
@@ -1491,12 +1495,14 @@ export default function SessionDetailView({
   }
 
   /**
-   * 一轮还没跑完时，meta 栏的模型退到这一个 —— 就是底栏那颗 pill 此刻显示的名字。
+   * 一轮还没跑完时，meta 栏的模型退到这一个 —— 底栏那颗 pill 此刻解析到的模型的 ID。
    *
    * 消息自己的 `model` 只有终态帧一条来路（wire 上的 usage 帧没有这个字段），
    * 而那一帧要等一轮跑完才来。四态推导仍归共享包的 `resolveProviderPillState`
    * （pill 自己也调它），这里只取它算出来的那一格；失效（invalid）时留空：那时
    * pill 显示的就不是一个能用的模型，把它当成「这一轮用的是它」是在撒谎。
+   * 取模型 ID 而不是 pill 上的展示名：终态帧带来的是运行时上报的模型 ID，写展示名
+   * 的话终态帧一到就跳字。
    */
   const modelPill = resolveProviderPillState({
     boundProviderKey: engineBackend?.provider_key,
@@ -1504,8 +1510,7 @@ export default function SessionDetailView({
     catalog: pickerCatalog,
     target: effectiveTarget,
   });
-  const fallbackModel =
-    modelPill.mode === "invalid" ? "" : modelPill.modelLabel;
+  const fallbackModel = modelPill.mode === "invalid" ? "" : modelPill.modelId;
 
   const reasoningEffortControl = supportsReasoningEffort ? (
     <SessionReasoningEffortControl

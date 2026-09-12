@@ -18,7 +18,7 @@ import (
 // 写入范围只由鉴权上下文圈定：请求体里那两个身份字段是伪造的，端点一个都不认。
 func TestCreateProject_TakesAccountFromAuthContextAndIgnoresBodyIdentity(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/projects", cookie.Value, csrf,
@@ -40,7 +40,7 @@ func TestCreateProject_TakesAccountFromAuthContextAndIgnoresBodyIdentity(t *test
 // 父项目不传即挂在根上。两者都不该被翻成一个空值送下去。
 func TestCreateProject_GivenOnlyAName_ThenNothingElseIsSentDown(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/projects", cookie.Value, csrf,
@@ -56,7 +56,7 @@ func TestCreateProject_GivenOnlyAName_ThenNothingElseIsSentDown(t *testing.T) {
 // 每次 blur 只提交改动的那一个字段，这条判据因此比别处更吃紧。
 func TestUpdateProject_SendsOnlyTheKeysTheRequestMentioned(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/projects/update", cookie.Value, csrf,
@@ -74,7 +74,7 @@ func TestUpdateProject_SendsOnlyTheKeysTheRequestMentioned(t *testing.T) {
 // 显式传空串是「挂回根上」这个有意的值，与「没提到」不是同一件事，必须原样送下去。
 func TestUpdateProject_ExplicitEmptyParentIsSentThrough(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/projects/update", cookie.Value, csrf,
@@ -87,7 +87,7 @@ func TestUpdateProject_ExplicitEmptyParentIsSentThrough(t *testing.T) {
 
 func TestDeleteProject_PassesKindAndSyncIDOnly(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/projects/delete", cookie.Value, csrf,
@@ -104,7 +104,7 @@ func TestDeleteProject_PassesKindAndSyncIDOnly(t *testing.T) {
 // 加成员：两端都送下去，账号仍然只来自会话。
 func TestCreateProjectMember_SendsBothEndsAndTakesAccountFromAuthContext(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/project-members", cookie.Value, csrf,
@@ -128,7 +128,7 @@ func TestCreateProjectMember_GivenAMissingEnd_ThenRejectedBeforeService(t *testi
 	} {
 		t.Run(name, func(t *testing.T) {
 			stub := &stubWorkspaceSvc{}
-			server, _ := newWorkspaceTestServer(t, stub)
+			server := newWorkspaceTestServer(t, stub)
 			cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 			resp := postJSON(t, server.URL+"/v1/workspace/org/project-members", cookie.Value, csrf, body)
@@ -142,7 +142,7 @@ func TestCreateProjectMember_GivenAMissingEnd_ThenRejectedBeforeService(t *testi
 // 项目的成员，按 Agent 删说不清删的是哪一个项目里的。
 func TestDeleteProjectMember_PassesTheMembershipSyncIDOnly(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/project-members/delete", cookie.Value, csrf,
@@ -166,7 +166,7 @@ func TestProjectWrite_RejectsUnauthenticatedAndCSRFLess(t *testing.T) {
 		"/v1/workspace/org/project-members/delete",
 	}
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, _ := newSessionCookieWithCSRF(t, 7)
 
 	for _, path := range paths {
@@ -195,7 +195,7 @@ func TestListProjects_CarriesDescriptionAndMembers(t *testing.T) {
 		},
 		{SyncID: "proj-2", Name: "前端"},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, _ := newSessionCookieWithCSRF(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/projects", cookie.Value)
@@ -237,7 +237,7 @@ func TestListProjectMachines_CarriesPathsForBothKindsButOnlyAgentredCanBeDeleted
 			Online: true, Configured: true, Path: "/Users/me/code/agentre",
 		},
 	}}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, _ := newSessionCookieWithCSRF(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/projects/machines?project_sync_id=proj-1", cookie.Value)
@@ -278,7 +278,7 @@ func TestListProjectMachines_CarriesPathsForBothKindsButOnlyAgentredCanBeDeleted
 // 不带项目就问不出东西：这一节永远是「某个项目」的材料。
 func TestListProjectMachines_GivenNoProject_ThenRejectedBeforeService(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, _ := newSessionCookieWithCSRF(t, 7)
 
 	resp := get(t, server.URL+"/v1/workspace/projects/machines", cookie.Value)
@@ -289,7 +289,7 @@ func TestListProjectMachines_GivenNoProject_ThenRejectedBeforeService(t *testing
 // 写路径：请求带的是**目标机器的指纹**而不是 device_id，账号仍然只来自会话。
 func TestSetProjectLocation_PassesFingerprintAndPathAndTakesAccountFromAuthContext(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/project-locations", cookie.Value, csrf,
@@ -312,7 +312,7 @@ func TestSetProjectLocation_GivenAMissingPiece_ThenRejectedBeforeService(t *test
 	} {
 		t.Run(name, func(t *testing.T) {
 			stub := &stubWorkspaceSvc{}
-			server, _ := newWorkspaceTestServer(t, stub)
+			server := newWorkspaceTestServer(t, stub)
 			cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 			resp := postJSON(t, server.URL+"/v1/workspace/org/project-locations", cookie.Value, csrf, body)
@@ -325,7 +325,7 @@ func TestSetProjectLocation_GivenAMissingPiece_ThenRejectedBeforeService(t *test
 // 移除一条路径走的是通用删除通道，只带这一行的同步标识。
 func TestDeleteProjectLocation_PassesKindAndSyncIDOnly(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, csrf := newSessionCookieWithCSRF(t, 7)
 
 	resp := postJSON(t, server.URL+"/v1/workspace/org/project-locations/delete", cookie.Value, csrf,
@@ -342,7 +342,7 @@ func TestDeleteProjectLocation_PassesKindAndSyncIDOnly(t *testing.T) {
 // 未登录不得配任何人的路径；凭 cookie 鉴权的写还必须出示 CSRF 令牌。
 func TestProjectLocationWrite_RejectsUnauthenticatedAndCSRFLess(t *testing.T) {
 	stub := &stubWorkspaceSvc{}
-	server, _ := newWorkspaceTestServer(t, stub)
+	server := newWorkspaceTestServer(t, stub)
 	cookie, _ := newSessionCookieWithCSRF(t, 7)
 
 	for _, path := range []string{

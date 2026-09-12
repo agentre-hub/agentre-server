@@ -9,8 +9,6 @@ services:
     ports: ["${SERVER_PORT:-8443}:8443"]
     volumes:
       - ./config.docker.yaml:/app/configs/config.yaml:ro
-      # 具名卷而不是 bind：容器以 65532 跑，宿主目录挂进来是 root 属主，写不进密钥
-      - keys:/keys
     environment:
       AGENTRE_SERVER_PUBLIC_URL: "${SERVER_PUBLIC_URL:-http://localhost:8443}"
       AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID: "${GH_CLIENT_ID:-}"
@@ -18,7 +16,6 @@ services:
       AGENTRE_SERVER_DB_DSN: "${DB_DSN:-${DB_USER:-server}:${DB_PASSWORD:-server}@tcp(mysql:3306)/${DB_NAME:-server}?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true&timeout=5s&readTimeout=60s&writeTimeout=60s}"
       AGENTRE_SERVER_REDIS_ADDR: "${REDIS_ADDR:-redis:6379}"
       AGENTRE_SERVER_REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
-      AGENTRE_SERVER_JWT_AUTO_GENERATE: "${JWT_AUTO_GENERATE:-1}"
     depends_on:
       mysql: { condition: service_healthy }
       redis: { condition: service_started }
@@ -41,6 +38,3 @@ services:
     # :+ 而不是 :-：口令留空时这个参数整个不能出现，--requirepass "" 会真的要求 AUTH
     command: redis-server ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}
     volumes: ["../data/redis:/data"]
-
-volumes:
-  keys:

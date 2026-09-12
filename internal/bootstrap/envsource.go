@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"os"
-	"strings"
 
 	"github.com/cago-frame/cago/configs/file"
 	"github.com/cago-frame/cago/configs/source"
@@ -80,10 +79,4 @@ func (s *envOverlaySource) Has(ctx context.Context, key string) (bool, error) {
 
 func (s *envOverlaySource) Watch(ctx context.Context, key string, callback func(event source.Event)) error {
 	return s.inner.Watch(ctx, key, callback)
-}
-
-// envTruthy 只认显式的开关值，空串与未设置一律当关。
-func envTruthy(name string) bool {
-	v := os.Getenv(name)
-	return v == "1" || strings.EqualFold(v, "true")
 }

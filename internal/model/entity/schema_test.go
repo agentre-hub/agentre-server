@@ -1,10 +1,14 @@
 package entity_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -14,9 +18,9 @@ import (
 	"gorm.io/gorm/schema"
 )
 
-// 0.1.0 首发之后，基线建表语句**就是**这套 schema 的全部——没有更早的迁移会再补列。
-// 于是「实体上加了一个字段、建表语句里没加对应列」不再是"下一次迁移会补上"，而是直接
-// 在第一次 INSERT 上炸。这条守卫把两边对上：实体的每个列都要在建表语句里存在，建表语句
+// 0.1.0 首发之后，基线建表语句加上补丁迁移里的改列名**就是**这套 schema 的全部。
+// 于是「实体上加了一个字段、迁移里没有对应列」不再是"下一次迁移会补上"，而是直接
+// 在第一次 INSERT 上炸。这条守卫把两边对上：实体的每个列都要在 schema 里存在，建表语句
 // 的每张表也都要有实体认领（有实体才谈得上漂移）。
 
 // createTableBlock 匹配一条建表语句。基线里的写法统一是 `CREATE TABLE <name> (` 开头、
@@ -29,10 +33,14 @@ var createTableBlock = regexp.MustCompile(`(?s)CREATE TABLE (?:\x60(\w+)\x60|(\w
 // 它的第一个 token 以逗号结尾，靠这一点与真正的列定义区分开。
 var columnDefinition = regexp.MustCompile(`^\s*\x60?(\w+)\x60?[ \t]+\S`)
 
+// renameColumn 认一条补丁迁移里的改列名语句。
+var renameColumn = regexp.MustCompile(`(?is)ALTER TABLE\s+\x60?(\w+)\x60?\s+RENAME COLUMN\s+\x60?(\w+)\x60?\s+TO\s+\x60?(\w+)\x60?`)
+
 // ddlKeyPrefixes 是建表语句里不是列的那些行。
 var ddlKeyPrefixes = []string{"PRIMARY ", "UNIQUE ", "KEY ", "INDEX ", "CONSTRAINT ", "FOREIGN ", "CHECK ", "--"}
 
-// parseBaselineDDL 从 migrations 目录的 Go 源码里把每张表的列名读出来。
+// parseBaselineDDL 从 migrations 目录的 Go 源码里把每张表的列名读出来：先取建表语句，
+// 再按迁移编号顺序跟上补丁迁移里的 RENAME COLUMN。
 //
 // 建表语句写在函数体里的 raw string 中，所以这里读的是**源码文本**而不是运行结果：
 // 迁移函数没法"跑一下看看"（那需要真库），而源码文本已经足够回答"这一列建了没有"。
@@ -71,9 +79,51 @@ func parseBaselineDDL(t *testing.T) map[string]map[string]bool {
 			require.NotEmptyf(t, columns, "%s 的建表语句一列都没解析出来，守卫会静默不生效", name)
 			tables[name] = columns
 		}
+
+		// 文件名以迁移编号开头，Glob 按字典序交回，于是改名按它们真正执行的先后生效。
+		for _, sql := range migrateSQL(t, path, source) {
+			for _, match := range renameColumn.FindAllStringSubmatch(sql, -1) {
+				table, from, to := match[1], match[2], match[3]
+				columns := tables[table]
+				require.Truef(t, columns[from], "%s 把 %s.%s 改名，但此前的 schema 里没有这一列，守卫会静默不生效",
+					filepath.Base(path), table, from)
+				delete(columns, from)
+				columns[to] = true
+			}
+		}
 	}
 
 	return tables
+}
+
+// migrateSQL 交出一份迁移源码里 Migrate 函数体中的全部字符串字面量。
+//
+// 只看 Migrate：Rollback 里那条反向改名描述的是撤回之后的 schema，不是现状。
+func migrateSQL(t *testing.T, path string, source []byte) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	require.NoError(t, err)
+
+	var out []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		field, ok := node.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		if key, ok := field.Key.(*ast.Ident); !ok || key.Name != "Migrate" {
+			return true
+		}
+		ast.Inspect(field.Value, func(inner ast.Node) bool {
+			if lit, ok := inner.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if value, err := strconv.Unquote(lit.Value); err == nil {
+					out = append(out, value)
+				}
+			}
+			return true
+		})
+		return false
+	})
+	return out
 }
 
 func hasAnyPrefix(line string, prefixes []string) bool {
@@ -85,7 +135,7 @@ func hasAnyPrefix(line string, prefixes []string) bool {
 	return false
 }
 
-// TestEntityColumnsExistInBaselineDDL 守住实体与建表语句一一对得上。
+// TestEntityColumnsExistInBaselineDDL 守住实体与迁移给出的 schema 一一对得上。
 //
 // 只查会被**写入**的字段：`gorm:"…;->"` 的那两个是查询时 join 出来的投影
 // （activity 的 dims_hash、session 的 machine_fingerprint），基线里本就不该有它们
@@ -113,8 +163,8 @@ func TestEntityColumnsExistInBaselineDDL(t *testing.T) {
 				continue
 			}
 			assert.Truef(t, columns[field.DBName],
-				"实体 %T 的字段 %s 映射到列 %q，但表 %q 的建表语句里没有这一列；"+
-					"基线就是 schema 本身，没有更晚的迁移会把它补上",
+				"实体 %T 的字段 %s 映射到列 %q，但表 %q 的建表语句与补丁迁移的改列名里都没有这一列；"+
+					"迁移就是 schema 本身，没有别处会把它补上",
 				model, field.Name, field.DBName, sch.Table)
 		}
 	}

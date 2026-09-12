@@ -20,7 +20,7 @@ compose 仍把它挂到同一位置，好处是改配置不用重打镜像；hel
 ## Docker 单机部署
 
 一条命令起全套（server + MySQL + Redis），镜像拉 GHCR 上流水线推的那份，
-不用本地构建，也不用先生成密钥：
+不用本地构建：
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d
@@ -32,8 +32,7 @@ curl http://localhost:8443/v1/healthz
 <http://localhost:8443> 能看到界面。什么都不改也能起，要换端口 / 域名 / 数据库 /
 镜像版本见[要改配置](#要改配置)。
 
-数据落在仓库根的 `data/mysql` 和 `data/redis`，删掉等于重置；JWT 密钥落在具名卷
-`deploy_keys` 里。
+数据落在仓库根的 `data/mysql` 和 `data/redis`，删掉等于重置。
 
 Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 MySQL 官方
 升级路径检查目标版本是否支持直接读取当前数据目录；不要让不兼容的大版本
@@ -45,54 +44,6 @@ Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 M
 `ER_NET_PACKET_TOO_LARGE` 失败，而那条对话的镜像会卡在原地反复重试——报错里既
 不会提到这一列，也不会提到是哪条对话。MySQL 8 以上默认 64 MiB 足够，用外部数据库
 时要确认它没有被调小。
-
-### JWT 密钥
-
-签发设备令牌用的，没有它起不来。compose 默认 `JWT_AUTO_GENERATE=1`：首次启动时
-`/keys` 里没有私钥就自己补一把 RSA-2048（kid `local-1`），启动日志里有一行说明；
-已存在的不会被覆盖。
-
-- **别删 `deploy_keys` 卷**，密钥没了等于所有设备和浏览器重新登录。备份它：
-
-  ```bash
-  docker run --rm -v deploy_keys:/keys -v "$PWD:/out" alpine \
-    tar -czf /out/agentre-keys.tgz -C /keys .
-  ```
-
-- **多副本必须关掉**（改成 0 并自备密钥）：每个副本各生成一把，令牌换个副本就验
-  不过，而且是静默的。
-
-自备密钥就设 `JWT_AUTO_GENERATE=0`，并把 compose 里的 `- keys:/keys` 换成
-`- ../runtime/keys:/keys:ro`，格式与自动生成的一致：
-
-```bash
-mkdir -p runtime/keys
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out runtime/keys/jwt.key
-openssl rsa -in runtime/keys/jwt.key -pubout -out runtime/keys/jwt.pub
-```
-
-`deploy/config.docker.yaml` 把这把密钥登记为 `local-1`。生产环境用 `server.jwt.keys`
-维护验签 key ring，`active_kid` 指向唯一用于签发的项；旧项只保留
-`public_key_pem_path`，用于不打断仍在 15 分钟有效期内的访问令牌：
-
-```yaml
-server:
-  jwt:
-    active_kid: "2026-09-b"
-    keys:
-      - kid: "2026-08-a"
-        public_key_pem_path: "/keys/2026-08-a.pub"
-      - kid: "2026-09-b"
-        private_key_pem_path: "/keys/2026-09-b.key"
-        public_key_pem_path: "/keys/2026-09-b.pub"
-```
-
-正常轮换先部署含新旧公钥、以新 key 签发的配置；等待至少
-`access_ttl + 60s` 后再删除旧项。若旧私钥泄漏，不等待：立刻从 `keys` 删除旧项、
-切换 `active_kid` 并滚动部署。服务端随即拒绝旧 `kid`，已登录 agentred 每分钟刷新
-一次 `/v1/keys`，在刷新成功后也会删除本地旧公钥；刷新失败时保留最后一份有效集合。
-完全离线的 agentred 无法获知服务端状态变化，仍会保留旧公钥；私钥泄漏时必须把这些
-节点视为尚未完成处置，待其重新连上并成功刷新 key set 后才算废弃生效。
 
 ### 要改配置
 
@@ -126,22 +77,17 @@ GitHub 登录要在 <https://github.com/settings/developers> 建一个 OAuth App
 连接信息全走环境变量：
 
 ```bash
-docker volume create agentre-keys
-
 docker run -d --name agentre-server -p 8443:8443 \
-  -v agentre-keys:/keys \
   -e AGENTRE_SERVER_DB_DSN="user:pass@tcp(192.168.1.10:3306)/agentre?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true&timeout=5s&readTimeout=60s&writeTimeout=60s" \
   -e AGENTRE_SERVER_REDIS_ADDR="192.168.1.10:6379" \
   -e AGENTRE_SERVER_PUBLIC_URL="http://192.168.1.10:8443" \
-  -e AGENTRE_SERVER_JWT_AUTO_GENERATE=1 \
   ghcr.io/agentre-hub/agentre-server:latest
 
 curl http://localhost:8443/v1/healthz
 ```
 
-库要先建好（服务自己跑迁移，但不会替你 `CREATE DATABASE`）。两个容易踩的：
+库要先建好（服务自己跑迁移，但不会替你 `CREATE DATABASE`）。一个容易踩的：
 
-- **`/keys` 一定要挂卷**，否则密钥随容器消失，`docker rm` 重建就是所有设备重新登录。
 - **`AGENTRE_SERVER_PUBLIC_URL` 要填浏览器真正访问到的地址**：Cookie 上的 `Secure`
   与通行密钥的 `rp_id` / `origins` 都由它推出来，填错的症状是登录不生效。
 
@@ -152,7 +98,6 @@ curl http://localhost:8443/v1/healthz
 | `AGENTRE_SERVER_DB_DSN` | `db.dsn` |
 | `AGENTRE_SERVER_REDIS_ADDR` / `AGENTRE_SERVER_REDIS_PASSWORD` | `redis.addr` / `redis.password` |
 | `AGENTRE_SERVER_PUBLIC_URL` | `server.public_url` |
-| `AGENTRE_SERVER_JWT_AUTO_GENERATE` | 私钥不存在时生成一把（`1` / `true` 才算开） |
 | `AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID` / `_SECRET` | `server.oauth.github.*` |
 
 > 覆盖只在 `source: file` 下生效：配置源是 etcd 时（k8s 那条链路）cago 会换掉整个
@@ -201,7 +146,6 @@ docker build -f deploy/Dockerfile -t agentre-server:local \
 ```bash
 docker run --rm -p 8443:8443 \
   -v "$PWD/my-config.yaml:/app/configs/config.yaml:ro" \
-  -v "$PWD/runtime/keys:/keys:ro" \
   agentre-server:local
 ```
 
@@ -248,10 +192,9 @@ dev 的配置和 k8s 一样放在 etcd 里，`/config/dev/agentre-server/` 下�
   bin/server               流水线每次部署覆盖，runner 上编出来的静态二进制，
                            同时是 docker build 的整个上下文
   config.yaml              机器本地引导配置（env: dev, source: etcd）
-  keys/jwt.key jwt.pub     机器本地 JWT 密钥对
 ```
 
-构建上下文只给 `bin/`，不是整个部署目录——`config.yaml` 和 `keys/`
+构建上下文只给 `bin/`，不是整个部署目录——`config.yaml`
 一个字节都不该进构建上下文。
 
 手动起停：
@@ -274,37 +217,28 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
 流水线只负责「编二进制 + 覆盖编排 + 重建容器」。下面这些是每台目标机只做一次的准备，
 没放进流水线。按顺序做：
 
-1. **建部署目录，放引导配置和密钥。** `config.yaml` 是 `env: dev, source: etcd` 的引导
-   配置，`keys/` 放这套 dev 的 JWT 密钥对：
+1. **建部署目录，放引导配置。** `config.yaml` 是 `env: dev, source: etcd` 的引导配置：
 
    ```bash
-   mkdir -p /srv/agentre-dev/keys
-   # 引导配置放到 /srv/agentre-dev/config.yaml,密钥对放到 /srv/agentre-dev/keys/jwt.key、jwt.pub
-   chmod 600 /srv/agentre-dev/keys/jwt.key
+   mkdir -p /srv/agentre-dev
+   # 引导配置放到 /srv/agentre-dev/config.yaml
    # 镜像里跑的是 uid 65532(Dockerfile 的 USER 65532:65532),不是 root。文件属 root
-   # 的话容器一个都读不到,启动就挂。
-   chown 65532:65532 /srv/agentre-dev/config.yaml /srv/agentre-dev/keys \
-                     /srv/agentre-dev/keys/jwt.key /srv/agentre-dev/keys/jwt.pub
+   # 的话容器读不到,启动就挂。
+   chown 65532:65532 /srv/agentre-dev/config.yaml
    ```
 
-   验一下容器那个 uid 真的读得到（三个都要是 0）：
+   验一下容器那个 uid 真的读得到：
 
    ```bash
-   for f in /srv/agentre-dev/config.yaml /srv/agentre-dev/keys/jwt.key /srv/agentre-dev/keys/jwt.pub; do
-     setpriv --reuid=65532 --regid=65532 --clear-groups cat "$f" >/dev/null; echo "$? $f"
-   done
+   setpriv --reuid=65532 --regid=65532 --clear-groups cat /srv/agentre-dev/config.yaml >/dev/null; echo $?
    ```
 
-2. **etcd 里的 JWT 路径写容器路径。** `/config/dev/agentre-server/server` 里那两条路径
-   必须是 `/keys/jwt.key` 和 `/keys/jwt.pub`；写成宿主路径的话容器里没有，启动即挂
-   （`read pem ...: no such file or directory`）。改法见下面「配置放在 etcd 里」。
-
-3. **etcd 里 dev 的 `logFile.enable` 必须是 `false`。** `/config/dev/agentre-server/logger`
+2. **etcd 里 dev 的 `logFile.enable` 必须是 `false`。** `/config/dev/agentre-server/logger`
    开着文件日志会写 `./runtime/logs/cago.log`，而容器的 WORKDIR 是 `/app` 且属 root，
    uid 65532 建不出 `runtime/logs`。这和下面 k8s 那节写的是同一条约束。日志从
    `docker compose logs` 看，`disableConsole` 保持 `false` 就行。
 
-4. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
+3. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
    对应的私钥就是下面要配的 `DEV_SSH_KEY`。没有现成密钥就在目标机上现生一对，
    私钥不必落到第三处：
 
@@ -314,9 +248,9 @@ commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreat
    cat /root/.ssh/gitea_dev_deploy      # 这一份贴进 Gitea 的 DEV_SSH_KEY
    ```
 
-5. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
+4. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
 
-6. **推 `dev` 分支**，这一推就会跑第一次部署：
+5. **推 `dev` 分支**，这一推就会跑第一次部署：
 
    ```bash
    git push gitea dev
@@ -372,7 +306,7 @@ k8s 上只有四个引导键从 ConfigMap 进容器（`env`、`debug`、`source`
 | `db` | MySQL 连接串 |
 | `redis` | Redis 地址 |
 | `http` | 监听地址，端口要和 chart 的 `containerPort` 一致 |
-| `server` | 域名、会话、JWT 密钥、GitHub OAuth、限流、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
+| `server` | 域名、会话、令牌有效期（`token.access_ttl` / `refresh_ttl`）、GitHub OAuth（含 client secret）、限流、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
 
 `trace` 可选，不写就是不开链路追踪。每个键的内容照着仓库根的
 `configs/config.example.yaml` 填——**那份模板是 `server` 这个键的唯一权威清单**。
@@ -495,4 +429,3 @@ kubectl -n app logs -l app.kubernetes.io/instance=agentre-server --tail=50
 | `load config: context deadline exceeded` | 连不上 etcd |
 | `file config key not found: <key>` | ConfigMap 里缺这个键 |
 | `etcd ... not found: <key>` | etcd 里还没写这个键 |
-| `read pem ...: no such file or directory` | JWT 密钥没生成或者没挂进去 |

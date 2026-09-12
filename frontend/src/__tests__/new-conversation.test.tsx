@@ -1921,11 +1921,10 @@ describe("草稿页的权限档位与模型控件", () => {
     const pill = await screen.findByRole("button", {
       name: /Provider and model/,
     });
-    // 同上：元素先在，字后到。标识符是这两句里最晚落定的那一样，等它。
-    // 脸上写的是标识符而不是人读名 —— 与桌面端、与包里触发器的注释同一条口径。
-    await waitFor(() =>
-      expect(pill.textContent).toContain("claude-sonnet-4-6"),
-    );
+    // 同上：元素先在，字后到。模型名是这两句里最晚落定的那一样，等它。
+    // 脸上写的是展示名而不是模型 ID —— 与桌面端、与包里触发器同一条口径。
+    await waitFor(() => expect(pill.textContent).toContain("Sonnet"));
+    expect(pill.textContent).not.toContain("claude-sonnet-4-6");
     expect(pill.textContent).toContain("Follow agent binding");
   });
 
@@ -1947,10 +1946,8 @@ describe("草稿页的权限档位与模型控件", () => {
     fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
     // 点中不等于选中：挑的那一档要先落进控件自己的状态，才谈得上随第一句过线。
     // 判据取控件脸上的字——这是它对外唯一说得出「我此刻带着什么」的地方。脸上
-    // 写的是**标识符**而不是菜单里那个人读名（与上一条用例同一条口径）。
-    await waitFor(() =>
-      expect(modelPill.textContent).toContain("claude-opus-4-6"),
-    );
+    // 写的是展示名，与菜单里那一项同名（与上一条用例同一条口径）。
+    await waitFor(() => expect(modelPill.textContent).toContain("Opus"));
 
     await typeInDraft("跑一下失败的测试");
     const send = screen.getByTestId("session-detail-send");
@@ -1964,6 +1961,70 @@ describe("草稿页的权限档位与模型控件", () => {
       providerKey: "pk-1",
       modelKey: "mk-2",
     });
+  });
+
+  // 草稿里挑的模型在派发成功那一刻才随会话落库；「最近使用」只记落了库的目标，与
+  // 桌面端同一条规则（共享 recents 的约定：由消费方在保存成功后记录）。
+  it("Given 用户挑了模型, When 第一句派发成功, Then 这一目标进入最近使用", async () => {
+    stubMachine(fourModes);
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const modelPill = await screen.findByRole("button", {
+      name: /Provider and model/,
+    });
+    fireEvent.click(modelPill);
+    fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
+    await waitFor(() => expect(modelPill.textContent).toContain("Opus"));
+    // 只是挑中还没落库：不进最近使用。
+    expect(
+      localStorage.getItem("agentre.modelTargetPicker.recent.v1.chat.local"),
+    ).toBeNull();
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() =>
+      expect(
+        JSON.parse(
+          localStorage.getItem(
+            "agentre.modelTargetPicker.recent.v1.chat.local",
+          ) ?? "null",
+        ),
+      ).toEqual([{ providerKey: "pk-1", modelKey: "mk-2" }]),
+    );
+  });
+
+  it("Given 用户挑了模型, When 第一句派发失败, Then 不进最近使用", async () => {
+    stubMachine(fourModes);
+    mockDispatch.mockRejectedValue(new Error("relay down"));
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+
+    const modelPill = await screen.findByRole("button", {
+      name: /Provider and model/,
+    });
+    fireEvent.click(modelPill);
+    fireEvent.click(await screen.findByRole("option", { name: /Opus/ }));
+    await waitFor(() => expect(modelPill.textContent).toContain("Opus"));
+
+    await typeInDraft("跑一下失败的测试");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    // 失败会把这句话还回输入框 —— 等它落定，确认失败分支已经走完。
+    await waitFor(() =>
+      expect(draftEditable().textContent).toContain("跑一下失败的测试"),
+    );
+    expect(
+      localStorage.getItem("agentre.modelTargetPicker.recent.v1.chat.local"),
+    ).toBeNull();
   });
 
   /**

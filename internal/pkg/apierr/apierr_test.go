@@ -50,10 +50,10 @@ func TestAbort_KeepsTheDataKeyExplicitlyNull(t *testing.T) {
 	assert.False(t, hasRequestID, "本信封没有 request_id，加进去就是换了一种形状")
 }
 
-// 状态码与业务码是两个独立的入参：同一个 401 下有 Unauthorized / JWTBlacklisted /
-// JWTSignatureInvalid 三种业务码，daemon 靠业务码区分该重签还是该重新配对。
+// 状态码与业务码是两个独立的入参：同一个 401 下有 Unauthorized / UserBanned 等多种
+// 业务码，客户端靠业务码区分该重新登录还是该告知账号不可用。
 func TestAbort_StatusAndBusinessCodeAreIndependent(t *testing.T) {
-	_, body, _ := abortOnce(t, http.StatusUnauthorized, code.JWTBlacklisted)
+	_, body, _ := abortOnce(t, http.StatusUnauthorized, code.UserBanned)
 
-	assert.Equal(t, float64(code.JWTBlacklisted), body["code"])
+	assert.Equal(t, float64(code.UserBanned), body["code"])
 }

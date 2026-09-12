@@ -76,7 +76,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/database/redis"
@@ -88,12 +87,10 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
+	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
-	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
@@ -151,7 +148,7 @@ type syncMocks struct {
 type authKind int
 
 const (
-	// authExpired 一份已过期的 device JWT：桌面端 access token 到期时真实会碰到的那条路。
+	// authExpired 一枚已过期的设备 access token：桌面端 access token 到期时真实会碰到的那条路。
 	authExpired authKind = iota + 1
 	// authBrowser 用 SessionAuth + CSRF 跑浏览器专属的引擎读取契约。
 	authBrowser
@@ -490,7 +487,7 @@ func goldenExchanges() []exchange {
 			body:       `{"items":[{"kind":"project","sync_id":"` + projectSyncID + `","base_version":0}]}`,
 			auth:       authExpired,
 			wantStatus: http.StatusUnauthorized,
-			wantCode:   code.JWTSignatureInvalid,
+			wantCode:   code.Unauthorized,
 		},
 
 		// 浏览器仅得到掩码后的供应商视图；API Key 即使存储在同步载荷中，也不能出现在
@@ -565,7 +562,7 @@ func staleSyncDevice(m *syncMocks) {
 func record(t *testing.T, ex exchange) []byte {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	// DeviceJWT 中间件要查吊销黑名单，那条链路直接读 redis.Default()。
+	// 会话存储与中继票据的黑名单读 redis.Default()。
 	hubtest.Redis(t)
 
 	ctrl := gomock.NewController(t)
@@ -586,7 +583,7 @@ func record(t *testing.T, ex exchange) []byte {
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
 	// 快照端点要先确认「这台设备归调用方且还能用」，判定归 device_svc.OwnedDevice；
 	// 它只走上面装好的 device_repo mock，配置与签名器都用不上。
-	device_svc.SetDefault(device_svc.New(device_svc.Config{}, nil, jwtblacklist.New(redis.Default())))
+	device_svc.SetDefault(device_svc.New(device_svc.Config{}))
 	// 没有 EXPECT 的调用会被 gomock 判失败：这些样本都不该碰到浏览器的执行目标排列。
 
 	// Push 外层有一个事务。gin 造出来的请求 ctx 里没有数据库实例，db.Ctx 会回落到默认
@@ -605,22 +602,19 @@ func record(t *testing.T, ex exchange) []byte {
 		ex.arrange(m)
 	}
 
-	signer, err := jwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
-	require.NoError(t, err)
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
+		Bearer: bearertest.Resolver{},
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Signer: signer,
 	}).Router(context.Background(), testMux.Router))
 
-	ttl := time.Hour
+	token := bearertest.Issue(device_svc.Principal{
+		AccountID: goldenUserID, DeviceID: goldenDeviceID, Kind: device_entity.KindDesktop,
+	})
 	if ex.auth == authExpired {
-		// 早已过期，且远超 Verify 的 60s 时钟容差。
-		ttl = -2 * time.Hour
+		// 过期的令牌对解析方就是一枚认不出的令牌：与未知、设备已撤销答同一种无效。
+		token = "expired-" + token
 	}
-	token, _, err := signer.Sign(
-		jwt.Claims{UID: goldenUserID, DID: goldenDeviceID, Kind: device_entity.KindDesktop}, ttl)
-	require.NoError(t, err)
 
 	var reqBody io.Reader
 	if ex.body != "" {

@@ -30,8 +30,8 @@ That line is from `internal/task/crontab/cleanup.go` — the shape to copy.
 no level, no structure, and never reach the log file, so in production they are equivalent
 to not logging.
 
-The single exemption is startup: `cmd/server/main.go`, `internal/bootstrap/cago.go` and
-`internal/bootstrap/jwtkeys.go` run before `component.Core()` has built the logger, so stdlib `log` is all they have. That
+The single exemption is startup: `cmd/server/main.go` and `internal/bootstrap/cago.go`
+run before `component.Core()` has built the logger, so stdlib `log` is all they have. That
 window is declared in `.golangci.yml` under `linters.exclusions.rules`.
 
 ### Levels

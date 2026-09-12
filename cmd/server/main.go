@@ -74,11 +74,6 @@ func main() {
 	}
 
 	serverCfg := bootstrap.LoadServerConfig(ctx, cfg)
-	// 必须在 LoadJWTSigner 之前：后者读不到 pem 直接 Fatal
-	if err := bootstrap.EnsureJWTKeys(serverCfg); err != nil {
-		log.Fatalf("%v", err)
-	}
-	signer := bootstrap.LoadJWTSigner(serverCfg)
 
 	user_repo.RegisterUser(user_repo.NewUser())
 	user_identity_repo.RegisterUserIdentity(user_identity_repo.NewUserIdentity())
@@ -98,7 +93,7 @@ func main() {
 	user_repo.RegisterSettings(user_repo.NewSettings())
 	engine_svc.SetDefault(engine_svc.New())
 
-	deps := &api.RouterDeps{Cfg: serverCfg, Signer: signer}
+	deps := &api.RouterDeps{Cfg: serverCfg}
 
 	err = cago.New(ctx, cfg).
 		Registry(component.Core()).
@@ -134,7 +129,7 @@ func main() {
 		Registry(component.Database()).
 		Registry(component.Redis()).
 		Registry(cago.FuncComponent(func(_ context.Context, _ *configs.Config) error {
-			bootstrap.RegisterDefaults(serverCfg, signer)
+			bootstrap.RegisterDefaults(serverCfg)
 			return nil
 		})).
 		Registry(cron.Cron()).
