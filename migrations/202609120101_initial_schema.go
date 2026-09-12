@@ -189,12 +189,6 @@ var initialSchemaStatements = []string{
 	// idx_dtokens_revoked 与 idx_dtokens_refresh_expiry 各服务 DeleteRevokedBefore
 	// 拆开的那两条清理语句。
 	//
-	// idx_dtokens_device_created 当下**没有查询用到**：它是压缩前那条补丁迁移
-	// （202609110102）为 ListRevokedJTIByUser 加的——按设备 + 签发时间取 JTI 撤销清单，
-	// 而 access token 改成不透明摘要之后那条查询连同它的方法一起没了
-	// （device_token_repo 现在只有等值查找、按设备撤销与两条清理）。压缩刻意与压缩前
-	// 逐索引等价，所以这里照原样建出来，没有顺手删；要删它得是独立一条补丁迁移。
-	//
 	// **没有 rotated_from_id 列**：那一列记「这条 token 是轮换掉哪一条得来的」，而
 	// 轮换链从来没有被消费——撤销按 device_id 整批走（RevokeByDevice），清理按时间窗
 	// 走（CleanupDeviceTokens），没有任何一条路径顺着它往回走。真要做轮换链审计时，
@@ -215,8 +209,7 @@ var initialSchemaStatements = []string{
 		  UNIQUE KEY uk_dtokens_access_hash (access_token_hash),
 		  KEY idx_dtokens_device_active (device_id, revoked_at),
 		  KEY idx_dtokens_revoked (revoked_at),
-		  KEY idx_dtokens_refresh_expiry (refresh_expires_at),
-		  KEY idx_dtokens_device_created (device_id, createtime)
+		  KEY idx_dtokens_refresh_expiry (refresh_expires_at)
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci`,
 
 	// ── device_flow_codes（RFC 8628 的 device_code / user_code 状态机）──
