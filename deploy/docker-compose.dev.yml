@@ -1,0 +1,26 @@
+# dev 环境：只有 server，MySQL/Redis/etcd 用外部现成的，配置从 etcd 读。
+# 镜像由流水线在目标机上用 Dockerfile.dev 现打，不过 registry。
+#
+# /srv/agentre-dev/
+#   docker-compose.dev.yml   流水线覆盖
+#   Dockerfile.dev           流水线覆盖
+#   bin/server               流水线覆盖，同时是 docker build 的上下文
+#   config.yaml keys/        机器本地
+#
+# 手动起停：
+#   cd /srv/agentre-dev
+#   docker build -f Dockerfile.dev -t agentre-server:dev bin
+#   docker compose -f docker-compose.dev.yml up -d --force-recreate
+name: agentre-dev
+
+services:
+  server:
+    image: agentre-server:dev
+    # 这个 tag 只存在于目标机本地，不写 never 会去 docker.io 找不存在的镜像
+    pull_policy: never
+    restart: unless-stopped
+    ports: ["8443:8443"]
+    volumes:
+      - ./config.yaml:/app/configs/config.yaml:ro
+      - ./keys:/keys:ro
+    # 不设 healthcheck：distroless 里没有 shell，任何 test 指令都恒定 unhealthy

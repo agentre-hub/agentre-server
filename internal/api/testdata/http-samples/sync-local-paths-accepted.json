@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/sync/local-paths",
+    "body": {
+      "items": [
+        {
+          "project_sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+          "path": "/Users/someone/code/alpha"
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "msg": "success",
+      "data": {}
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "filter": {
+    "title": "筛选",
+    "all": "全部",
+    "running": "运行中",
+    "waiting": "等你处理",
+    "unread": "未读",
+    "seeAll": "看全部 {{count}} 条",
+    "emptyTitle": "「{{label}}」里没有对话",
+    "emptyBodyWithTotal": "账号里还有 {{count}} 条对话。",
+    "emptyBody": "换一个筛选，或者回到「全部」。",
+    "seeAllPlain": "看全部对话"
+  },
+  "loadMore": {
+    "label": "加载更多",
+    "loading": "加载中…",
+    "retry": "重试",
+    "failed": "这一页没能取回来。"
+  },
+  "search": {
+    "clear": "清除搜索",
+    "emptyTitle": "没有匹配的对话",
+    "emptyBody": "换个词试试，或者清除搜索。"
+  },
+  "group": {
+    "unassignedProject": "随手对话",
+    "unnamedAgent": "未命名",
+    "overflowEmpty": "这一组现在一条都没有。"
+  },
+  "machine": {
+    "offline": "离线",
+    "empty": "这台机器上还没有对话",
+    "connecting": "连接中",
+    "unreachable": "连接失败",
+    "offlineSince": "离线 · {{time}}"
+  },
+  "row": {
+    "save": "保存",
+    "delete": "删除",
+    "menu": "对话操作"
+  },
+  "saveFailed": {
+    "manual": "「{{title}}」没能存进账号。",
+    "onStart": "「{{title}}」已经开起来了，但没能存进账号 —— 左栏暂时列不出它。",
+    "retry": "重新保存"
+  },
+  "save": {
+    "title": "把这条对话保存到账号？",
+    "body": "保存之后它会出现在你的对话列表里，这台机器关掉、甚至被移除之后，你仍然读得到它。",
+    "point1": "它的标题与完整记录会存在 AgentRe 的服务器上",
+    "point2": "没有保存过的对话，一个字都不会上传",
+    "point3": "随时可以删除——服务器和执行端上的那份会一起清掉",
+    "confirm": "保存"
+  },
+  "delete": {
+    "title": "删除这条对话？",
+    "online": "它会从你的账号里删除，同时从「{{machine}}」上删除。此操作无法撤销。",
+    "onlineDesktop": "它会从你的账号里删除，同时从「{{machine}}」上删除——那台电脑上被清掉的是这条对话本身，不是一份执行记录。此操作无法撤销。",
+    "offline": "它会立即从你的账号里删除。「{{machine}}」当前不在线，它下次上线时那一份会一并清掉。此操作无法撤销。",
+    "offlineDesktop": "它会立即从你的账号里删除。「{{machine}}」当前不在线，它下次上线时会把那台电脑上这条对话本身一并清掉——不是一份执行记录。此操作无法撤销。",
+    "unknownPeer": "它会立即从你的账号里删除。执行它的那台机器下次连上时，会把自己那一份一并清掉。此操作无法撤销。",
+    "confirm": "删除"
+  }
+}

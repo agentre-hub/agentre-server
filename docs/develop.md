@@ -2,9 +2,9 @@
 
 ## Commands
 
-Everything routes through the `Makefile` at the repo root. **The same command
-runs locally and in CI** — CI calls these targets rather than spelling the tools
-out again, so "green locally, red in CI" has one less way to happen.
+The root `Makefile` owns local commands and aggregate gates. GitHub CI uses the
+corresponding targets where practical; its backend lint action and the Gitea deploy
+workflow keep their tool versions and arguments aligned with those targets.
 
 ```bash
 make dev               # vite (:5174, proxies /v1 → :8443) + go run ./cmd/server, in parallel
@@ -23,7 +23,7 @@ make lint-e2e          # cd e2e && pnpm lint  (prettier --check)
 make fmt               # prettier --write across frontend/ and e2e/
 
 make mock              # go generate ./... (mockgen)
-make docker            # docker build -t agentre/server:0.1
+make docker            # docker build -t agentre/server:0.1.0
 ```
 
 The split exists because there are two package managers: Go via the Makefile,
@@ -39,8 +39,8 @@ The repo has **no build tags at all**, so `make test` runs everything there is. 
 
 ```bash
 cp configs/config.example.yaml configs/config.yaml   # gitignored runtime config
-cp .env.example .env                                 # secrets
 # point db.dsn / redis.addr in configs/config.yaml at your own MySQL + Redis
+# export any required AGENTRE_SERVER_* variables in the shell; names are listed in .env.example
 make dev
 ```
 
@@ -69,6 +69,7 @@ Every rule below fails a build.
 | Test keys never link into `bin/server` | `internal/pkg/jwt/testkeys/isolation_test.go` |
 | No literal colours in ts/tsx | `no-restricted-syntax` (`frontend/eslint.config.js`) |
 | No literal UI copy | `i18next/no-literal-string` |
+| No direct `crypto.randomUUID` | `no-restricted-syntax` (`frontend/eslint-rules/secure-context.js`) |
 | Locale files have identical keys | `frontend/src/i18n/__tests__/locale-parity.test.ts` |
 | Language switching really switches | `frontend/src/i18n/__tests__/language-switch.test.ts` |
 | Formatting | `prettier` — via `eslint-plugin-prettier` in `frontend/`, standalone in `e2e/` |
@@ -98,6 +99,9 @@ with its reason next to it:
 - **`frontend/eslint.config.js`** — `eslint-rules/` may contain literal colours
   (it lists the banned colour names). Test files may contain literals of both
   kinds, because they construct the violating samples.
+  `src/lib/randomId.ts` may call `crypto.randomUUID`, because it owns the
+  fallback for it: the deployment is served over plain http, which is not a
+  secure context, and `crypto.randomUUID` does not exist there.
 
 Adding an exemption means editing one of those two files and writing why.
 If you cannot write a reason, the code is what needs changing.
@@ -109,10 +113,10 @@ the **end**, and existing entries are never edited — someone's database has al
 run them. To correct an earlier migration, add a patch migration. Prefer native SQL
 for DDL.
 
-**Nothing tests migrations automatically.** They execute at server startup, so a bad one
-means the service will not boot — and no test in this repo will tell you first. Verify by
-hand before merging anything under `migrations/`; see
-[testing.md](testing.md#migrations-are-deliberately-untested).
+Sqlmock guard tests execute the migration functions and check DDL policy, but they do not
+prove that MySQL accepts the DDL or that upgrades preserve representative historical data.
+Verify migrations by hand before merging; see
+[testing.md](testing.md#migration-compatibility-is-not-automated).
 
 ## Configuration
 

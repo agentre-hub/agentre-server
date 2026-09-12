@@ -6,7 +6,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
-	"agentre-server/internal/service/sync_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/sync_svc"
 )
 
 // ReclaimSyncGarbage 周期性回收同步组的超期墓碑与无人引用的头像正文

@@ -7,8 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	"agentre-server/internal/model/entity/user_identity_entity"
-	hubtest "agentre-server/internal/testutils"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/user_identity_entity"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 func TestFindByProviderUID_Found(t *testing.T) {
@@ -24,6 +24,39 @@ func TestFindByProviderUID_Found(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, got)
 	assert.Equal(t, int64(99), got.UserID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindByUserAndProvider_Found(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewUserIdentity()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT * FROM `user_identities` WHERE user_id=? AND provider=? ORDER BY `user_identities`.`id` LIMIT ?",
+	)).WithArgs(int64(99), "github", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "provider", "provider_login"}).
+			AddRow(int64(7), int64(99), "github", "testuser"))
+
+	got, err := r.FindByUserAndProvider(ctx, 99, "github")
+	assert.NoError(t, err)
+	assert.NotNil(t, got)
+	assert.Equal(t, int64(99), got.UserID)
+	assert.Equal(t, "testuser", got.ProviderLogin)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindByUserAndProvider_NotFound(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewUserIdentity()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT * FROM `user_identities` WHERE user_id=? AND provider=? ORDER BY `user_identities`.`id` LIMIT ?",
+	)).WithArgs(int64(99), "github", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "provider", "provider_login"}))
+
+	got, err := r.FindByUserAndProvider(ctx, 99, "github")
+	assert.NoError(t, err)
+	assert.Nil(t, got)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

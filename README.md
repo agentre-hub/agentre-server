@@ -9,8 +9,7 @@ mkdir -p runtime/keys
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out runtime/keys/jwt.key
 openssl rsa -in runtime/keys/jwt.key -pubout -out runtime/keys/jwt.pub
 
-cp .env.example .env                                 # 填 GitHub OAuth App 凭据
-echo "SESSION_SECRET=$(openssl rand -base64 32)" >> .env
+cp deploy/.env.example deploy/.env                   # 填 GitHub OAuth App 凭据
 
 docker compose -f deploy/docker-compose.yml up -d
 curl http://localhost:8443/v1/healthz
@@ -29,15 +28,15 @@ make dev
 `make dev` 同时跑 server（:8443）+ vite（:5174 proxy /v1）。服务也支持
 `--config <path>`；显式路径失败时不回退，未传参数仍使用 `configs/config.yaml`。
 
-真实 MySQL/Redis 浏览器冒烟的唯一自动入口是 `make e2e`；本地人工验证使用
-`pnpm serve + pnpm drive` 或 gitignored scratch。详见 [`e2e/README.md`](e2e/README.md)。
+真实 MySQL/Redis 浏览器冒烟的唯一自动入口是 `make e2e`；本地人工验证和
+scratch 工作流见 [`e2e/README.md`](e2e/README.md)。
 
 ## GitHub OAuth App
 
 1. GitHub Settings → Developer settings → OAuth Apps → New OAuth App
 2. Homepage URL：`https://<your-server>`
 3. Callback URL：`https://<your-server>/v1/auth/oauth/github/callback`
-4. 复制 Client ID / Secret 到 `.env`
+4. 复制 Client ID / Secret 到 `deploy/.env`
 
 ## Architecture
 

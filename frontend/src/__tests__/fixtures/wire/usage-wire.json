@@ -1,8 +1,0 @@
-{
-  "promptTokens": 100,
-  "completionTokens": 50,
-  "reasoningTokens": 10,
-  "cachedTokens": 5,
-  "cacheCreationTokens": 2,
-  "totalTokens": 155
-}

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
 
-	"agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 )
 
 // ── 单条隔离：一条坏行不再把整批拒掉 ────────────────────────────────────────
@@ -21,15 +21,14 @@ func TestPush_GivenOnePoisonItem_ThenOnlyThatOneIsRejected(t *testing.T) {
 			onlineDevice(m)
 			expectTx(m)
 			m.object.EXPECT().Find(gomock.Any(), testUserID, gomock.Any()).Return(nil, nil).Times(2)
-			gomock.InOrder(
-				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(4), nil),
-				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(5), nil),
-			)
+			// 坏行在 rejectReason 阶段就被剔掉,所以块只按**通过校验的 2 条**取,
+			// 拒掉的那条一个号都不烧。返回其中最大的那个 → 依次发放 4、5。
+			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
 			var saved []*sync_entity.SyncObject
 			captureSave(m, &saved).Times(2)
 
 			bad := projectItem("sync-bad", 0)
-			bad.Kind = "llm_provider"
+			bad.Kind = "unknown_kind"
 			out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 				Items: []PushItem{projectItem("sync-a", 0), bad, projectItem("sync-b", 0)}})
 
@@ -69,6 +68,10 @@ func TestPush_GivenOnePoisonItem_ThenOnlyThatOneIsRejected(t *testing.T) {
 			expectTx(m)
 			m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-a").Return(
 				&sync_entity.SyncObject{Kind: sync_entity.KindAgent, SyncID: "sync-a", Version: 3}, nil)
+			// 类型不符要读过库才判得出来,而这一批的号在事务之前就一次取完了
+			// (为的是不让 sync_account_seqs 的行锁横跨整批)。于是留下一个空号
+			// ——单调游标上的空号对任何一端都不可观察,同 TestPush_GivenTombstonedRow。
+			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(9), nil)
 
 			out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 				Items: []PushItem{projectItem("sync-a", 3)}})
@@ -90,7 +93,7 @@ func TestPush_GivenConflict_ThenCarriesTheOverwrittenPayload(t *testing.T) {
 		expectTx(m)
 		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-a").Return(&sync_entity.SyncObject{
 			Kind: sync_entity.KindProject, SyncID: "sync-a", Version: 7,
-			SourceDeviceID: 9, Payload: `{"name":"peer"}`,
+			OriginFingerprint: "fp-9", Payload: `{"name":"peer"}`,
 		}, nil)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject

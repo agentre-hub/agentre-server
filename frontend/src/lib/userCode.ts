@@ -14,13 +14,15 @@ export const ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 export const CODE_LENGTH = 6;
 
 /**
- * 严格归一化：去空格与连字符、转大写、逐字符校验字母表，
- * 通过则返回后端要的 `ABC-DEF` 形态，否则返回 null。
+ * 把一串输入**解析**成一个设备码：去空格与连字符、转大写，长度与字母表逐字符
+ * 校验，通过才返回后端要的 `ABC-DEF` 形态，不通过返回 null。
  *
- * 「返回 null」覆盖两种情况——长度不对、含字母表外字符。二者都按
- * 就地校验处理（spec「失败路径」），不发请求。
+ * 名字里是「解析」而不是「归一化」：它同时是一道闸和一个格式化器。归一化听着
+ * 像总能给出一个结果，而它的主业之一是**拒绝**——长度不对、含字母表外字符都
+ * 返回 null，二者都按就地校验处理（spec「失败路径」），不发请求；通过的那些
+ * 还会被重排成 `ABC-DEF`，入参 `ABCDEF` 与出参并不是同一个串。
  */
-export function normalize(input: string): string | null {
+export function parseUserCode(input: string): string | null {
   const cleaned = input.toUpperCase().replace(/[\s-]/g, "").split("");
   if (cleaned.length !== CODE_LENGTH) return null;
   for (const c of cleaned) if (!ALPHABET.includes(c)) return null;
@@ -31,7 +33,7 @@ export function normalize(input: string): string | null {
  * 宽松清洗：转大写后只留字母表内的字符。
  *
  * 用在「还没成形」的输入上：逐格键入、半截粘贴、URL 里带来的 user_code。
- * 与 normalize 的区别是它不拒绝，只过滤——码格里不该出现一个我们明知
+ * 与 parseUserCode 的区别是它不拒绝，只过滤——码格里不该出现一个我们明知
  * 非法的字符，用户却要等到点提交才知道。
  */
 export function sanitize(input: string): string {

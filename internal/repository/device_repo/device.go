@@ -8,7 +8,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
-	"agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 )
 
 //go:generate mockgen -source device.go -destination mock_device_repo/mock_device.go
@@ -18,6 +19,9 @@ type DeviceRepo interface {
 	FindByFingerprint(ctx context.Context, userID int64, fingerprint string) (*device_entity.Device, error)
 	Upsert(ctx context.Context, d *device_entity.Device) error
 	Touch(ctx context.Context, id, nowMs int64) error
+	// UpdateVersion 按新值刷新这台设备的 version。调用方（mirror_svc，镜像握手成功后）
+	// 自己先比过当前值才决定要不要调它——这条方法本身不做条件判断，直接写。
+	UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error
 	Revoke(ctx context.Context, id, nowMs int64) error
 	ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error)
 }
@@ -31,29 +35,13 @@ func NewDevice() DeviceRepo       { return &repo{} }
 type repo struct{}
 
 func (r *repo) Find(ctx context.Context, id int64) (*device_entity.Device, error) {
-	ret := &device_entity.Device{}
-	err := db.Ctx(ctx).Where("id=?", id).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[device_entity.Device](db.Ctx(ctx).Where("id=?", id))
 }
 
 // FindByFingerprint 按 (user_id, fingerprint) 查一台设备，查不到返回 (nil, nil)。
 // Upsert 已不再用它（改走数据库原子 upsert），relay_svc 解析中继目标时用。
 func (r *repo) FindByFingerprint(ctx context.Context, userID int64, fp string) (*device_entity.Device, error) {
-	ret := &device_entity.Device{}
-	err := db.Ctx(ctx).Where("user_id=? AND fingerprint=?", userID, fp).First(ret).Error
-	if err != nil {
-		if db.RecordNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return ret, nil
+	return dbutil.FindOne[device_entity.Device](db.Ctx(ctx).Where("user_id=? AND fingerprint=?", userID, fp))
 }
 
 // Upsert 按 (user_id, fingerprint) 落库：走 uk_devices_user_fingerprint 的
@@ -91,6 +79,11 @@ func (r *repo) Upsert(ctx context.Context, d *device_entity.Device) error {
 func (r *repo) Touch(ctx context.Context, id, nowMs int64) error {
 	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=?", id).
 		Updates(map[string]interface{}{"last_seen_at": nowMs, "updatetime": nowMs}).Error
+}
+
+func (r *repo) UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error {
+	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=?", id).
+		Updates(map[string]interface{}{"version": version, "updatetime": nowMs}).Error
 }
 
 func (r *repo) Revoke(ctx context.Context, id, nowMs int64) error {

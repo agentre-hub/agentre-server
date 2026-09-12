@@ -1,19 +1,9 @@
-import { Languages, Monitor, Moon, Sun } from "lucide-react";
+import { Languages } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { Button } from "@/components/ui/button";
+import { Button, ThemeToggle } from "@agentre-hub/agentre-ui";
 import { LANGUAGE_LABELS, SUPPORTED_LANGUAGES } from "@/i18n";
 import type { SupportedLanguage } from "@/i18n";
-import { useTheme } from "@/lib/theme";
-import type { Theme } from "@/lib/theme";
-
-const THEME_CYCLE: Theme[] = ["system", "light", "dark"];
-
-const THEME_ICON: Record<Theme, typeof Sun> = {
-  system: Monitor,
-  light: Sun,
-  dark: Moon,
-};
 
 /**
  * 主题 / 语言切换。挂在 AuthLayout 的顶栏里，随文档流走，不再 fixed 悬浮——
@@ -25,11 +15,6 @@ const THEME_ICON: Record<Theme, typeof Sun> = {
  */
 export default function AppControls() {
   const { t, i18n } = useTranslation();
-  const { theme, setTheme } = useTheme();
-
-  const ThemeIcon = THEME_ICON[theme];
-  const nextTheme =
-    THEME_CYCLE[(THEME_CYCLE.indexOf(theme) + 1) % THEME_CYCLE.length];
 
   const currentLang = (SUPPORTED_LANGUAGES as readonly string[]).includes(
     i18n.resolvedLanguage ?? "",
@@ -54,16 +39,9 @@ export default function AppControls() {
       >
         <Languages />
       </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="size-[34px]"
-        onClick={() => setTheme(nextTheme)}
-        aria-label={`${t("common.theme.label")}: ${t(`common.theme.${theme}`)}`}
-        title={t(`common.theme.${nextTheme}`)}
-      >
-        <ThemeIcon />
-      </Button>
+      {/* 主题按钮整件（图标、三态顺序、无障碍文案）来自共享包；这里只把外壳
+          尺寸传进去 —— 稿子的 IconButton 是 34×34，包里那份默认 36。 */}
+      <ThemeToggle className="size-[34px]" />
     </div>
   );
 }

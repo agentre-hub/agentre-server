@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/sync/avatars",
+    "body": {
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "content_type": "image/png",
+      "content": "data:image/png;base64,iVBORw0KGgo="
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "code": 30503,
+      "msg": "头像内容与声明的哈希不符"
+    }
+  }
+}

@@ -1,0 +1,647 @@
+// Package agent_session_repo is the data access layer for the account-scoped
+// agent sessions (2026-08-18-server-session-mirror.md "存什么"): a summary per
+// conversation, its raw journal frames, the delete todos left behind when a
+// peer was offline at delete time, and the saves list that decides which
+// conversations are carried here at all.
+//
+// The package is named for the rows, not for the mechanism that fills them
+// (2026-08-27-schema-overhaul.md 决策 19); mirroring is a verb and lives on
+// mirror_svc.
+package agent_session_repo
+
+import (
+	"context"
+	"strings"
+
+	"github.com/cago-frame/cago/database/db"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+)
+
+//go:generate mockgen -source summary.go -destination mock_agent_session_repo/mock_summary.go
+
+// SummaryRepo is the data access seam for agent_sessions.
+type SummaryRepo interface {
+	// UpsertSummary writes the peer's latest reported state for one
+	// conversation, keyed by (user_id, conversation_id) — agent_sessions' one
+	// unique key (migrations/202609040108_agent_sessions.go). A
+	// later summary for the same identity overwrites the earlier one in a
+	// single statement; createtime is preserved.
+	UpsertSummary(ctx context.Context, s *agent_session_entity.SessionSummary) error
+	// ListSummariesByUser returns every summary mirrored for that account —
+	// the full set the unified session index reads (镜像的范围是账号里已保存的
+	// 对话). Account-scoped and nothing more: a read that drops user_id is a
+	// cross-account leak.
+	ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error)
+	// ListImportedProviderSessions 交回「这台机器名下、已经镜像着的那些 provider
+	// 会话」→ 它们的 conversation_id。
+	//
+	// 判重只关心这两列，因此它是一次带条件的点查，而不是把账号里的全部摘要读回来
+	// 再在内存里筛掉其余的——导入对话框每开一次就读一遍全份，那是这条路上最没有
+	// 必要的一次全表读。
+	ListImportedProviderSessions(ctx context.Context, userID int64, fingerprint string) (map[string]string, error)
+	// ListSummaryStats 交回统计要的那几列：最后活动时刻 + 五个维度键。
+	//
+	// 它与 ListSummariesByUser 的区别只在**读多少东西**：统计不看标题、cwd、
+	// 转录游标这些列，而它们恰好是这张表上最占字节的几列。热力图问的是整段历史
+	// （连续天数只有全量答得出），行数省不掉，那就至少别把用不上的文本搬一遍。
+	ListSummaryStats(ctx context.Context, userID int64) ([]SummaryStatsRow, error)
+	// ListSummariesPage 按游标读一页摘要，判据全在 SummaryPageQuery 里
+	// （2026-08-19-session-index-pagination.md 决策 1 / 7）。Limit ≤ 0 时不限条数
+	// ——那是「按会话号精确查」那条路径要的形状，它要的不是一页。
+	ListSummariesPage(ctx context.Context, q SummaryPageQuery) ([]*agent_session_entity.SessionSummary, error)
+	// CountSummaries 数出同一组判据下的条数——顶栏那个「这个账号有几条」（决策 10）。
+	// 它必须是 COUNT：把行拉回来再 len() 等于绕过分页又读一次全份。
+	CountSummaries(ctx context.Context, q SummaryQuery) (int64, error)
+	// CountAttention 一次数出「等你处理」与「未读」两档——侧栏那颗角标底下的两件事。
+	// 一条 SQL 两个 SUM，判据与 CountSummaries 共用 attentionExpr。
+	CountAttention(ctx context.Context, q SummaryQuery) (AttentionCounts, error)
+	// CountSummariesByAgent / CountSummariesByMachine 返回各组的会话数。
+	CountSummariesByAgent(ctx context.Context, q SummaryQuery) (map[string]int64, error)
+	CountSummariesByMachine(ctx context.Context, q SummaryQuery) (map[string]int64, error)
+	// CountSummariesByProjectKey 按「据以判定项目归属的那一组值」聚合：对端自己报的
+	// project_sync_id，加上 (承载机器指纹, cwd) 这个位置。
+	//
+	// 折算成项目仍然是**服务层**的事，SQL 一步都不做：报上来的标识可能指着一个已经
+	// 被删掉的项目（决策 13：那样的对话落回未归项目），而位置要拿去跟账号项目树比
+	// （决策 12）。两件事都要账号里的项目名单才判得了，仓储不认识项目。
+	CountSummariesByProjectKey(ctx context.Context, q SummaryQuery) ([]SummaryProjectKeyCount, error)
+	// MarkSummaryRead 记下「这个账号此刻读到这条对话为止」。身份键与 UpsertSummary
+	// 的冲突判定同一组，碰的只有 last_read_at 一列 —— 发起端上报的是活动，它并不
+	// 知道这个账号读到哪了，所以这一列不在 upsert 的赋值列里。
+	//
+	// 时刻**只往前走**：同一条对话在两个标签页里打开时，后到的那次请求可能带着
+	// 更早的时刻（网络乱序），允许它往回退等于把刚读过的那条重新标成未读。
+	// 一行都没命中仍然成功——没镜像过的对话没有「读到哪」这回事。
+	MarkSummaryRead(ctx context.Context, userID int64, conversationID string, at int64) error
+	// DeleteSummary 撤掉一条对话的摘要，按同一个身份键 (user_id, conversation_id)。
+	// 账号里删掉这条对话时它与转录一起消失，索引里当场就没了（决策 6：不留
+	// 「已删除但还在」的中间态）。
+	// 从来没镜像过的对话删不到行，仍然成功——删除幂等。
+	DeleteSummary(ctx context.Context, userID int64, conversationID string) error
+}
+
+// SummaryCursor 是「上一页读到哪」：(last_message_at, id) 这个**复合**位置。只比
+// last_message_at 会让同一毫秒里的行在两页之间重复出现或整批跳过——这张表的 last_message_at
+// 是发起端自己记的活动时刻，同毫秒撞车是常态而不是边角。零值表示从头翻。
+type SummaryCursor struct {
+	LastMessageAt int64
+	ID            int64
+}
+
+// IsZero 表示「从头翻」。last_message_at 为 0 的老会话（发起端从没记过活动时间）排在最后，
+// 它们的游标 ID 不为 0，因此不会被误判成起点。
+func (c SummaryCursor) IsZero() bool { return c.LastMessageAt == 0 && c.ID == 0 }
+
+// SummaryLocation 是一条对话的落地位置：(承载机器指纹, cwd)。项目归属就是拿它跟账号
+// 项目树上的位置比出来的——**指纹是这个键的一半**：同一个路径在两台机器上是两个
+// 不同的地方。
+//
+// 指纹这一半是**承载**这条对话的那台机器（agent_session_saves 记的
+// device_fingerprint），不是发起端：目录长在承载机器上，账号项目树上的位置也是按
+// agentred 指纹配的。两者只在对话由那台机器自己发起时才相等；浏览器从控制台派活时
+// 发起端是浏览器的中继标识，拿它去比，选着项目发起的对话一条都配不上位置。
+type SummaryLocation struct {
+	MachineFingerprint string
+	Cwd                string
+}
+
+// SummaryProjectKey 是一条对话据以判定项目归属的那一组值。它有两半，因为两种对端
+// 交出来的事实不一样：
+//
+//   - ProjectSyncID：桌面端自己点的名。它没有「这条会话的 cwd」这种东西（工作目录
+//     是每轮按项目本机路径现算的），项目同步标识才是它手里真实存在的那一维。
+//   - MachineFingerprint + Cwd：agentred 的落地位置，拿去跟账号项目树上的路径比
+//     （决策 12）。**指纹是这个键的一半**，而且是承载机器那一半，理由见 SummaryLocation。
+//
+// 一条对话上只会有一半非空。非空的那一半就是它的判据，两者不相加也不互相覆盖。
+type SummaryProjectKey struct {
+	ProjectSyncID      string
+	MachineFingerprint string
+	Cwd                string
+}
+
+// SummaryProjectKeyCount 是同一组判据下有多少条对话。
+type SummaryProjectKeyCount struct {
+	SummaryProjectKey
+	Total int64
+}
+
+// ProjectMode 说明项目轴这一组要的是什么。它把「报上来的标识」与「位置名单」这两半
+// 合成一条判据，而不是两个各自独立的过滤器：同一个项目下两种对端的对话都在，用两个
+// **与**关系的判据表达就一条都取不到。
+type ProjectMode uint8
+
+const (
+	// ProjectAny 不按项目过滤。
+	ProjectAny ProjectMode = iota
+	// ProjectIs 是某个项目那一组：报了这个标识的，**或**没报标识、但位置落在
+	// Locations 里的。ProjectSyncID 与 Locations 都空时一条都不要——一个位置都没配、
+	// 也没有任何对端点过名的项目里本来就没有对话，当成「不过滤」会让这一组列出整个账号。
+	ProjectIs
+	// ProjectUnassigned 是未归项目那一组：既没报标识，位置也配不上任何已知位置。
+	// cwd 为空、又没报标识的自然在其中。
+	ProjectUnassigned
+)
+
+// AttentionFilter 是「这条对话此刻需不需要你，以及为什么」在 SQL 这一侧的表达。
+//
+// 取值与共享包 `@agentre-hub/agentre-ui` 的 `session-index/attention` 那族
+// `AttentionReason` **逐字对应**（决策 9 的三个 chip 是它的一个子集）。它从前叫
+// `LifecycleFilter`，但这个筛选问的从来不是生命周期：`waiting_for_input` 不在生命
+// 周期那条链上，而「未读」两列相比更与它无关。名字对不上判据的代价 2026-09-04 兑现
+// 了一次——「未读」当时只写了 `last_message_at>last_read_at`，把在跑的、等你按的行
+// 一起数了进去，chip 上的数与列表里带「未读」记号的行对不上。
+//
+// **判据只有 attentionExpr 一处**：分页、三种分组计数、以及侧栏那两个数全从它出发。
+type AttentionFilter uint8
+
+const (
+	// AttentionAny = 「全部」：不按 attention 过滤。它不是一档理由。
+	AttentionAny AttentionFilter = iota
+	// AttentionNeedsAttention = 「等你处理」：有待决的审批 / 提问挡在那里。
+	AttentionNeedsAttention
+	// AttentionRunning = 「运行中」：running **且不在等输入**。等你处理优先，
+	// 两个 chip 不能同时命中同一条。
+	AttentionRunning
+	// AttentionError = 「上一轮跑挂了、而且你还没看过」。已经看过的那次失败不再拦你。
+	//
+	// 它没有自己的 chip（索引上摆的是全部 / 运行中 / 未读），存在是因为**它把这些
+	// 行从「未读」里排除掉了**：一条 failed 且有新消息的对话在行上写的是「出错」，
+	// 不是「未读」，未读那个数因此也不能把它算进去。
+	AttentionError
+	// AttentionUnread = 「未读」：最后一次活动晚于我最后一次读它，**且没有更强的
+	// 理由**——不在跑、不等你按、上一轮也没跑挂。
+	//
+	// 它与「等你处理」是**两件事**，不是同一件事的两个名字：一条你已经看过、
+	// 只是停在那儿等输入的对话不是未读；一条跑出了新结果但不等输入的是。
+	AttentionUnread
+)
+
+// AttentionCounts 是侧栏那颗角标要的那两个数。
+//
+// 两个而不是一个：角标只有一个数字位，但它底下是两件事，`title` 要把它们分开说
+// （「N 条等你处理 · M 条未读」，与桌面端状态栏那颗胶囊同构）。合成一个数交出来的话，
+// 那句话就再也拆不回来了。
+type AttentionCounts struct {
+	NeedsAttention int64
+	Unread         int64
+}
+
+// SummaryQuery 是一次索引读取的全部判据。它只谈这张表自己的列：project_sync_id 在
+// 这里只是一个不透明的值，「这个标识还指着一个活着的项目吗」「这些位置属于哪个项目」
+// 都要账号的项目名单才答得出，那是服务层的事（决策 12 / 13），仓储不认识项目。
+type SummaryQuery struct {
+	UserID int64
+	// TitleLike 是搜索词的原文（决策 8：只按标题）。LIKE 的元字符在这里转义，
+	// 调用方传的是用户敲的那几个字符，不是一段模式。
+	TitleLike string
+	Attention AttentionFilter
+	// ConversationID 非空时按对话标识精确匹配（决策 13，详情页认领用）。
+	ConversationID string
+	// 指针区分“不按该字段过滤”和“过滤为空字符串”。机器指纹指向承载机器。
+	AgentSyncID        *string
+	MachineFingerprint *string
+	// ProjectSyncID / Locations 一起构成项目轴那一组的判据，怎么用由 ProjectMode 说了算。
+	ProjectSyncID string
+	Locations     []SummaryLocation
+	ProjectMode   ProjectMode
+	// LiveProjectSyncIDs 是账号里**还活着**的项目标识，只有 ProjectUnassigned 读它：
+	// 报了名单外标识的那些对话也算未归项目（决策 13）。这份名单在账号项目树里，
+	// SQL 自己答不出，因此由服务层传进来；顺序由调用方定死（进语句文本）。
+	LiveProjectSyncIDs []string
+}
+
+// SummaryPageQuery 在判据之上加位置与大小。
+type SummaryPageQuery struct {
+	SummaryQuery
+	Cursor SummaryCursor
+	// Limit ≤ 0 表示不限条数（精确查那条路径）。夹默认值与上限是服务层的事。
+	Limit int
+}
+
+var defaultSummary SummaryRepo
+
+func Summary() SummaryRepo          { return defaultSummary }
+func RegisterSummary(i SummaryRepo) { defaultSummary = i }
+func NewSummary() SummaryRepo       { return &summaryRepo{} }
+
+type summaryRepo struct{}
+
+// UpsertSummary 的赋值列里没有 user_id / conversation_id（它们是冲突判定的身份键，
+// 改它们就等于改成另一条记录的身份）也没有 createtime（命中已有行时保留它首次落地
+// 的时间）。agent_sessions 上只有 uk_agent_sessions_identity 这一个唯一键
+// （migrations/202609040108_agent_sessions.go），因此 ON DUPLICATE KEY
+// UPDATE 命中的必然是它——docs/architecture.md「只在表恰好一个唯一键时安全」。
+//
+// peer_fingerprint **在**赋值列里：它已经不是身份，而是对端每轮重报的来源标注，
+// 跟着标题与生命周期一起被覆盖。
+func (r *summaryRepo) UpsertSummary(ctx context.Context, s *agent_session_entity.SessionSummary) error {
+	return db.Ctx(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}, {Name: "conversation_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"peer_fingerprint",
+			"title", "agent_sync_id", "provider_session_id", "cwd", "project_sync_id",
+			"backend_type", "lifecycle_state", "waiting_for_input", "latest_seq",
+			"last_message_at", "provider_key", "model_key", "updatetime",
+		}),
+	}).Create(s).Error
+}
+
+// SummaryStatsRow 是统计用得上的那几列。刻意不是 SessionSummary：那一份带着标题与
+// cwd，而统计一个字都不看它们。
+type SummaryStatsRow struct {
+	LastMessageAt int64
+	AgentSyncID   string
+	BackendType   string
+	ProviderKey   string
+	ModelKey      string
+	ProjectSyncID string
+}
+
+func (r *summaryRepo) ListSummaryStats(ctx context.Context, userID int64) ([]SummaryStatsRow, error) {
+	var rows []SummaryStatsRow
+	// last_message_at = 0 是「对端从没报过一轮」，统计一律不计它（见 overview 的
+	// 注释）——那一档在这里就筛掉，不必读回去再丢。
+	if err := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).
+		Select("last_message_at", "agent_sync_id", "backend_type", "provider_key", "model_key", "project_sync_id").
+		Where("user_id = ? AND last_message_at > 0", userID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r *summaryRepo) ListImportedProviderSessions(ctx context.Context, userID int64, fingerprint string) (map[string]string, error) {
+	var rows []struct {
+		ProviderSessionID string
+		ConversationID    string
+	}
+	if err := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).
+		Select("provider_session_id", "conversation_id").
+		Where("user_id = ? AND peer_fingerprint = ? AND provider_session_id <> ''", userID, fingerprint).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		out[row.ProviderSessionID] = row.ConversationID
+	}
+	return out, nil
+}
+
+func (r *summaryRepo) ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error) {
+	var out []*agent_session_entity.SessionSummary
+	tx := joinSaves(db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}))
+	if err := withMachineFingerprint(tx).Where("agent_sessions.user_id=?", userID).
+		Order("last_message_at DESC, agent_sessions.id DESC").Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// machineFingerprintExpr 是「承载这条对话的那台机器」的取值式：保存名单里记的
+// device_fingerprint，由 joinSaves 那条 LEFT JOIN 带进来。它既投影进读模型，也参与
+// 项目位置的判据，所以只有这一份 —— 两处各写一遍就会在下一次演化里分家，而分家的
+// 那一天索引会安静地把对话分错组。
+//
+// 它曾经是一条相关子查询。子查询进 WHERE / GROUP BY 意味着 MySQL 要对
+// agent_sessions 的**每一行**各跑一次，而且没有任何一条 agent_sessions 上的索引能
+// 先把候选集收窄；换成 JOIN 之后优化器可以反过来以 agent_session_saves 当驱动表。
+//
+// 外面套 COALESCE 是因为这个式子也进 WHERE：名单里没有这条对话时 LEFT JOIN 给
+// NULL，而 `(NULL, cwd) NOT IN (…)` 判出的是 NULL 而不是真——那条对话会同时掉出
+// 「某个项目」与「未归项目」两组，从项目轴上整个消失。空串配不上任何位置，于是它
+// 老老实实落进「未归项目」。
+//
+// **等值过滤不走这个式子**（见 scoped 里的 MachineFingerprint 分支）：COALESCE 是
+// 函数谓词，优化器在它上面定位不到索引，那样 JOIN 也白换。
+const machineFingerprintExpr = "COALESCE(agent_session_saves.device_fingerprint, '')"
+
+// joinSaves 把保存名单接上来。至多一行：agent_session_saves 的唯一键正是
+// (user_id, conversation_id)，所以这条 LEFT JOIN 不会让任何一条对话变成多行——
+// CountSummaries 的 count(*) 因此仍然是对话数。
+//
+// 全部读路径都从 scoped 拿到它，只接一次；ListSummariesByUser 不走 scoped，自己接。
+func joinSaves(tx *gorm.DB) *gorm.DB {
+	return tx.Joins("LEFT JOIN agent_session_saves" +
+		" ON agent_session_saves.user_id=agent_sessions.user_id" +
+		" AND agent_session_saves.conversation_id=agent_sessions.conversation_id")
+}
+
+// withMachineFingerprint 把保存名单里记录的承载机器投影到摘要读模型。会话身份是
+// (账号, conversation_id)；浏览器发起的会话不能拿发起端指纹冒充承载机器。
+func withMachineFingerprint(tx *gorm.DB) *gorm.DB {
+	return tx.Select("agent_sessions.*, " + machineFingerprintExpr + " AS machine_fingerprint")
+}
+
+// DeleteSummary 的 WHERE 与 UpsertSummary 的冲突判定同一组列：删的必须正好是那条
+// upsert 认作「同一条」的记录，少一列就删多了。
+func (r *summaryRepo) DeleteSummary(ctx context.Context, userID int64, conversationID string) error {
+	return db.Ctx(ctx).Where(
+		"user_id=? AND conversation_id=?", userID, conversationID,
+	).Delete(&agent_session_entity.SessionSummary{}).Error
+}
+
+func (r *summaryRepo) MarkSummaryRead(
+	ctx context.Context, userID int64, conversationID string, at int64,
+) error {
+	return db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{}).
+		Where(
+			"user_id=? AND conversation_id=? AND last_read_at<?",
+			userID, conversationID, at,
+		).
+		// UpdateColumns 而不是 Updates：这里的 updatetime 是本行自己算好的值（就是
+		// at），Updates 会在它之上再叠一次 GORM 的自动时间戳与钩子。
+		//
+		UpdateColumns(map[string]any{"last_read_at": at, "updatetime": at}).Error
+}
+
+// likeEscape 把用户敲的字符转成 LIKE 的字面量：`\` `%` `_` 都是 LIKE 的元字符，
+// 不转义就等于让搜索词自带通配符——搜「50%」会变成「50 开头的任何标题」，命中集合
+// 由用户输入悄悄放大。反斜杠必须先转，否则会把后面两步刚加上的转义符再转一遍。
+func likeEscape(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
+// locationPairs 把位置名单摊成 SQL 的行构造器实参：(peer_fingerprint, cwd) IN ((?,?),…)。
+func locationPairs(locations []SummaryLocation) [][]any {
+	pairs := make([][]any, 0, len(locations))
+	for _, l := range locations {
+		pairs = append(pairs, []any{l.MachineFingerprint, l.Cwd})
+	}
+	return pairs
+}
+
+// attentionExpr 交出某一档 attention 的 WHERE 片段与它的参数。ok 为 false 表示
+// 「不过滤」（AttentionAny，以及任何不认识的取值）。
+//
+// **这是全仓唯一一处 attention 判据**：WHERE（scoped）与侧栏那两个 SUM
+// （CountAttention）都从它出发，因此「筛出来的那一批」与「数出来的那个数」不可能
+// 分家——分页说 5 条、角标说 3 条正是判据写在两处才会有的事。
+//
+// 每一档都带着**比它强的那几档的否定**，顺序与共享包 `computeAttention` 的 if 链
+// 逐字一致（needs_attention > running > error > unread）。因此任意一行至多命中一档，
+// 几档相加不会重复计数。
+//
+// 两列相比（last_message_at>last_read_at）没有索引帮得上——索引只排得了单列的值。
+// 它跟在 user_id 那段扫描之后，与其余判据同一条路径。
+func attentionExpr(f AttentionFilter) (string, []any, bool) {
+	switch f {
+	case AttentionNeedsAttention:
+		return "waiting_for_input=?", []any{true}, true
+	case AttentionRunning:
+		return "waiting_for_input=? AND lifecycle_state=?", []any{false, "running"}, true
+	case AttentionError:
+		return "waiting_for_input=? AND lifecycle_state=? AND last_message_at>last_read_at",
+			[]any{false, "failed"}, true
+	case AttentionUnread:
+		return "waiting_for_input=? AND lifecycle_state NOT IN (?,?) AND last_message_at>last_read_at",
+			[]any{false, "running", "failed"}, true
+	case AttentionAny:
+		return "", nil, false
+	}
+	return "", nil, false
+}
+
+// scoped 把 SummaryQuery 翻成 WHERE。全部读路径共用它——判据只有一处，分页与三种
+// 计数因此不可能对不上（「这一组显示 N 条，翻出来却是别的集合」正是这么来的）。
+func (r *summaryRepo) scoped(ctx context.Context, q SummaryQuery) *gorm.DB {
+	return r.scopedFor(ctx, q, q.needsSaves())
+}
+
+// needsSaves 回答「这份判据用不用得上保存名单」。**只在用得上时才接那条 LEFT
+// JOIN**：CountSummaries / CountAttention / CountSummariesByAgent 压根不问承载机器，
+// 而 CountAttention 每进一次页面就跑一遍。MySQL 不做 LEFT JOIN 消除，无条件接等于
+// 让最热的三条路各自多付一次索引查找，去换一条冷路径的收益。
+//
+// 宁可多接不可少接：少接了那条 SQL 直接报 unknown column，多接只是慢一点。
+func (q SummaryQuery) needsSaves() bool {
+	return q.MachineFingerprint != nil || (q.ProjectMode != ProjectAny && len(q.Locations) > 0)
+}
+
+// scopedFor 是 scoped 的本体；withSaves 由调用方决定——投影承载机器的两条列表路径
+// 无论判据如何都要接（machine_fingerprint 那一列从名单来）。
+func (r *summaryRepo) scopedFor(ctx context.Context, q SummaryQuery, withSaves bool) *gorm.DB {
+	// user_id / conversation_id / id 三个列名在 agent_session_saves 上也有，接上
+	// JOIN 之后不限定归属就是 ambiguous column。为了让带不带 JOIN 两档拼出的
+	// WHERE 完全一致，这里一律限定归属，不按 withSaves 分叉。
+	tx := db.Ctx(ctx).Model(&agent_session_entity.SessionSummary{})
+	if withSaves {
+		tx = joinSaves(tx)
+	}
+	tx = tx.Where("agent_sessions.user_id=?", q.UserID)
+	if q.ConversationID != "" {
+		tx = tx.Where("agent_sessions.conversation_id=?", q.ConversationID)
+	}
+	if q.TitleLike != "" {
+		tx = tx.Where("title LIKE ?", "%"+likeEscape(q.TitleLike)+"%")
+	}
+	if expr, args, ok := attentionExpr(q.Attention); ok {
+		tx = tx.Where(expr, args...)
+	}
+	if q.AgentSyncID != nil {
+		tx = tx.Where("agent_sync_id=?", *q.AgentSyncID)
+	}
+	if q.MachineFingerprint != nil {
+		// 刻意不复用 machineFingerprintExpr：COALESCE 包着列名是函数谓词，优化器
+		// 定位不到 idx_agent_session_saves_machine (user_id, device_fingerprint)。
+		// 拆开之后两支各自等价——非空时 COALESCE 与裸列判出的是同一批行（NULL 本来
+		// 就不等于任何非空值），空串那一支则是「名单里没有这条对话」。
+		if *q.MachineFingerprint == "" {
+			tx = tx.Where("(agent_session_saves.device_fingerprint IS NULL" +
+				" OR agent_session_saves.device_fingerprint='')")
+		} else {
+			tx = tx.Where("agent_session_saves.device_fingerprint=?", *q.MachineFingerprint)
+		}
+	}
+	switch q.ProjectMode {
+	case ProjectIs:
+		// 报了这个项目的，**或**没报项目、但位置落在这个项目名下的。两半是或的关系：
+		// 同一个项目下桌面端与 agentred 的对话都在这一组里。
+		switch {
+		case q.ProjectSyncID != "" && len(q.Locations) > 0:
+			tx = tx.Where(
+				"(project_sync_id=? OR (project_sync_id='' AND ("+
+					machineFingerprintExpr+", cwd) IN ?))",
+				q.ProjectSyncID, locationPairs(q.Locations))
+		case q.ProjectSyncID != "":
+			tx = tx.Where("project_sync_id=?", q.ProjectSyncID)
+		case len(q.Locations) > 0:
+			tx = tx.Where("project_sync_id='' AND ("+machineFingerprintExpr+", cwd) IN ?",
+				locationPairs(q.Locations))
+		default:
+			// 一个位置都没配、也没有任何对端点过名的项目里一条对话都没有。这里必须
+			// 显式落成「取不到」，空判据被当成「不过滤」会让这一组列出整个账号。
+			tx = tx.Where("1=0")
+		}
+	case ProjectUnassigned:
+		// 未归项目有**两拨**（决策 12 / 13），它们是或的关系：没报项目、位置也配不上
+		// 任何已知位置的；以及报了项目、但那个标识在账号项目名单里已经不在的（删了 /
+		// 还没同步过来）。第二拨少了的话，服务层把它们数进这一组、这里又取不出来，
+		// 那些对话在项目轴上哪一组都进不去。
+		unreported := "project_sync_id=''"
+		args := []any{}
+		// 名单为空时「不落在任何已知位置」对每一条都成立，因此不加位置条件。
+		if len(q.Locations) > 0 {
+			unreported += " AND (" + machineFingerprintExpr + ", cwd) NOT IN ?"
+			args = append(args, locationPairs(q.Locations))
+		}
+		// 一个项目都没有的账号里，报了项目的每一条报的都是一个不存在的项目。
+		stale := "project_sync_id<>''"
+		if len(q.LiveProjectSyncIDs) > 0 {
+			stale += " AND project_sync_id NOT IN ?"
+			args = append(args, q.LiveProjectSyncIDs)
+		}
+		tx = tx.Where("(("+unreported+") OR ("+stale+"))", args...)
+	case ProjectAny:
+	}
+	return tx
+}
+
+func (r *summaryRepo) ListSummariesPage(
+	ctx context.Context, q SummaryPageQuery,
+) ([]*agent_session_entity.SessionSummary, error) {
+	tx := withMachineFingerprint(r.scopedFor(ctx, q.SummaryQuery, true))
+	if !q.Cursor.IsZero() {
+		// 严格排在游标之后：先比活动时刻，同一刻内再比 id。两者缺一，同毫秒的那几条
+		// 要么重复发一遍、要么整批被跳过。
+		tx = tx.Where("(last_message_at < ? OR (last_message_at = ? AND agent_sessions.id < ?))",
+			q.Cursor.LastMessageAt, q.Cursor.LastMessageAt, q.Cursor.ID)
+	}
+	tx = tx.Order("last_message_at DESC, agent_sessions.id DESC")
+	if q.Limit > 0 {
+		tx = tx.Limit(q.Limit)
+	}
+	var out []*agent_session_entity.SessionSummary
+	if err := tx.Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (r *summaryRepo) CountSummaries(ctx context.Context, q SummaryQuery) (int64, error) {
+	var total int64
+	if err := r.scoped(ctx, q).Count(&total).Error; err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// CountAttention 一条 SQL 数出两档。
+//
+// 不是两次 CountSummaries：这条路在**每一次进入任何页面**时都会跑一遍，两个数说的
+// 又必须是同一时刻的同一批行。判据仍走 attentionExpr，只是从 WHERE 换到了
+// SUM(CASE WHEN …)——它带的 q 本身可以照常收窄（搜索、项目轴），角标因此天然跟着
+// 当前范围走。
+func (r *summaryRepo) CountAttention(
+	ctx context.Context, q SummaryQuery,
+) (AttentionCounts, error) {
+	// 这一次问的是「各档各有多少」，所以基底必须是不按 attention 收窄的那一份：
+	// 带着某一档的 WHERE 去数另一档，第二个数恒为 0。
+	base := q
+	base.Attention = AttentionAny
+
+	var (
+		sel  []string
+		args []any
+	)
+	for _, f := range []AttentionFilter{AttentionNeedsAttention, AttentionUnread} {
+		expr, exprArgs, ok := attentionExpr(f)
+		if !ok {
+			continue
+		}
+		// COALESCE 不是保险，是**必需**：SUM 在空集合上返回 NULL 而不是 0，而 NULL
+		// 扫进 int64 直接报错。一条对话都没有的新账号第一次进站走的正是这条路。
+		sel = append(sel,
+			"COALESCE(SUM(CASE WHEN "+expr+" THEN 1 ELSE 0 END), 0) AS "+attentionColumn(f))
+		args = append(args, exprArgs...)
+	}
+
+	var out AttentionCounts
+	if err := r.scoped(ctx, base).
+		Select(strings.Join(sel, ", "), args...).
+		Scan(&out).Error; err != nil {
+		return AttentionCounts{}, err
+	}
+	return out, nil
+}
+
+// attentionColumn 是某一档在 CountAttention 那行结果里的列名，与 AttentionCounts
+// 的字段一一对应（GORM 按 snake_case 回填）。
+func attentionColumn(f AttentionFilter) string {
+	switch f {
+	case AttentionNeedsAttention:
+		return "needs_attention"
+	case AttentionUnread:
+		return "unread"
+	case AttentionAny, AttentionRunning, AttentionError:
+		return ""
+	}
+	return ""
+}
+
+// countByColumn 是两个单列分组计数的共同实现：同一份判据 + 一列 GROUP BY。
+func (r *summaryRepo) countByColumn(
+	ctx context.Context, q SummaryQuery, column string,
+) (map[string]int64, error) {
+	var rows []struct {
+		GroupKey string
+		Total    int64
+	}
+	if err := r.scoped(ctx, q).
+		Select(column + " AS group_key, count(*) AS total").
+		Group(column).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.GroupKey] = row.Total
+	}
+	return out, nil
+}
+
+func (r *summaryRepo) CountSummariesByAgent(
+	ctx context.Context, q SummaryQuery,
+) (map[string]int64, error) {
+	return r.countByColumn(ctx, q, "agent_sync_id")
+}
+
+// CountSummariesByMachine 按承载机器指纹聚合。
+func (r *summaryRepo) CountSummariesByMachine(
+	ctx context.Context, q SummaryQuery,
+) (map[string]int64, error) {
+	var rows []struct {
+		MachineFingerprint string
+		Total              int64
+	}
+	// 分组键就取自名单，判据里有没有机器条件都必须接（scoped 的按需判断不够）。
+	if err := r.scopedFor(ctx, q, true).
+		Select(machineFingerprintExpr + " AS machine_fingerprint, count(*) AS total").
+		Group("machine_fingerprint").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		out[row.MachineFingerprint] = row.Total
+	}
+	return out, nil
+}
+
+func (r *summaryRepo) CountSummariesByProjectKey(
+	ctx context.Context, q SummaryQuery,
+) ([]SummaryProjectKeyCount, error) {
+	var out []SummaryProjectKeyCount
+	// 同 CountSummariesByMachine：分组键取自名单，必须接。
+	if err := r.scopedFor(ctx, q, true).
+		Select("project_sync_id, " + machineFingerprintExpr + " AS machine_fingerprint, " +
+			"cwd, count(*) AS total").
+		Group("project_sync_id").Group("machine_fingerprint").Group("cwd").
+		Scan(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}

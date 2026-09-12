@@ -1,16 +1,18 @@
 /**
- * 这个浏览器自己的派发顺序（决策 7 / 9 / 10 / 11）。
+ * 执行目标的派发顺序（决策 10 / 11 / 14）。
  *
- * 顺序的持有者是浏览器 client ID，被排序的是 backend：排列以 backend
- * sync_id 数组表达，因为 rank 是位置性的（重排即变）、device_id 也不唯一
- * （一台机器可以挂多个 backend）。同一账号换一个浏览器就是另一台设备、另一份顺序。
+ * **浏览器排的就是账号默认顺序**：没有「这个浏览器自己那一份」，改的是同步组里
+ * agent_exec_target 的 sort_order。浏览器之间没有任何物理差异能证成不同的顺序 ——
+ * 桌面端每台排序不同是在表达「我这台机器上有本机档」这个硬事实，而浏览器永远跳过
+ * 本机相对引用，任何浏览器面对的都是同一个候选集。
  *
- * 排列交给服务端解析，浏览器不自行挑档：服务端按调用方设备的排列重排执行目标链
- * 后再走既有的「跳过本机相对引用、取第一个可用」循环，因此「当前」标记与真实
- * 派发目标始终是同一档。
+ * 被排序的是 backend，排列以 backend sync_id 数组表达：rank 是位置性的（重排即变）、
+ * device_id 也不唯一（一台机器可以挂多个 backend）。
+ *
+ * 排列交给服务端落库，浏览器不自行挑档：服务端改完 sort_order 后照旧走「跳过本机
+ * 相对引用、取第一个可用」的循环，因此「当前」标记与真实派发目标始终是同一档。
  */
 import { api } from "@/lib/api";
-import { browserClientId, storedBrowserClientId } from "@/lib/relayTicket";
 
 /** 排序只需要一档上的这两个字段（ISP：不依赖整个 ExecTargetItem）。 */
 export interface OrderableTier {
@@ -22,13 +24,14 @@ export interface OrderableTier {
 /**
  * 这一档能不能被这台浏览器排序。
  *
- * skipped_for_web 是 device_id 为空的「本机」相对引用：在浏览器语境下它永远没有
- * 指代对象、永远不可派发，给它一个可排的位置纯是噪音（决策 11）——它照常显示，
- * 只是不可移动。没有 backend sync_id 的档同理：排列以 sync_id 表达，无从指代的
- * 一档说不出「排第几」（服务端也只收非空标识）。
+ * no_device 是后端行没写运行设备（agentred_fingerprint 为空）的「未指定设备」档
+ * （规格 2026-08-21 决策 14）：在浏览器语境下它永远没有指代对象、永远不可派发，
+ * 给它一个可排的位置纯是噪音（决策 11）——它照常显示，只是不可移动。没有
+ * backend sync_id 的档同理：排列以 sync_id 表达，无从指代的一档说不出「排第几」
+ * （服务端也只收非空标识，并把它钉在原位）。
  */
 export function isMovableTier(tier: OrderableTier): boolean {
-  return tier.availability !== "skipped_for_web" && !!tier.backend_sync_id;
+  return tier.availability !== "no_device" && !!tier.backend_sync_id;
 }
 
 /**
@@ -58,44 +61,24 @@ export function reorderTargets(
     .filter((syncID) => syncID !== "");
 }
 
-/**
- * 这台浏览器已有的 client ID；尚未创建时是 null。
- *
- * 这是一次纯本地读，不发请求、更不注册：读一份偏好不该有建出一台设备行的副作用。
- * 总览页是纯读页，打开它就在账号的设备列表里多一台机器，是用户没要求过的后果
- * （e2e 的「真实空态」正是守这条）。注册留给写路径 —— 用户真排了一次序，这台
- * 浏览器才需要成为一台有身份的设备。
- *
- * 读的是 localStorage 里的指纹而不是 sessionStorage 里的设备 JWT：token 随标签页
- * 会话失效，设备身份和它排的顺序不随之消失，重开标签页仍按自己的顺序读。
- *
- * 读路径（取链、取派发计划）取不到就回落账号顺序、不报错 —— 派发不该因为一个偏好
- * 读不到就失败。指纹在服务端解析不到活跃设备时同样回落（决策 9 的读侧）。
- */
-export function callerClientId(): string | null {
-  return storedBrowserClientId();
-}
-
 export interface SaveExecTargetOrderInput {
   agentSyncId: string;
   backendSyncIds: string[];
 }
 
 /**
- * 保存「这台浏览器把某个 Agent 的执行目标排成这个次序」，返回偏好的 client ID。
- * client ID 只在写路径按需创建，不是设备身份，也不会在 devices 表注册记录。
+ * 把某个 Agent 的执行目标排成这个次序 —— 写的是账号默认顺序，因此从未调整过的
+ * 桌面端会跟着变（那是账号默认的定义，不是副作用），已经拖过一次的桌面端有本端
+ * 覆盖、不受影响。
  */
 export async function saveExecTargetOrder(
   input: SaveExecTargetOrderInput,
-): Promise<string> {
-  const fingerprint = browserClientId();
+): Promise<void> {
   await api("/v1/workspace/exec-target-order", {
     method: "POST",
     body: JSON.stringify({
-      client_id: fingerprint,
       agent_sync_id: input.agentSyncId,
       backend_sync_ids: input.backendSyncIds,
     }),
   });
-  return fingerprint;
 }

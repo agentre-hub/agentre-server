@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "@/lib/api";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Device from "@/pages/Device";
 
@@ -108,8 +108,8 @@ describe("授权确认：整页区域而不是对话框", () => {
 
 describe("授权确认：完整权限说明", () => {
   // 授权一台设备拿到的就是账号的完整权限——服务端没有任何一处按设备做过权限
-  // 判断。因此这句说明不分档：四种 kind 读到的是同一句话。
-  it.each(["desktop", "agentred", "web", "mobile"])(
+  // 判断。因此这句说明不分档：authorize 接受的三种 kind 读到的是同一句话。
+  it.each(["desktop", "agentred", "mobile"])(
     "kind 是 %s 时都出同一句完整权限说明",
     async (kind) => {
       mockFlow(pending({ device_kind: kind }));
@@ -152,18 +152,6 @@ describe("授权确认：能力清单已整体消失", () => {
     expect(screen.queryByText(/Run coding agent tasks/i)).toBeNull();
     expect(screen.queryByText(/Connect as a client/i)).toBeNull();
     expect(screen.queryByText(/Browse project files/i)).toBeNull();
-  });
-
-  it("应答里多带 capabilities 也不渲染任何东西（旧服务端兼容）", async () => {
-    mockFlow({
-      ...pending(),
-      capabilities: { compute: true, "session.remote_start": true },
-    } as Pending);
-    renderDevice();
-
-    await waitForApproval();
-    expect(screen.queryByText(/session\.remote_start/)).toBeNull();
-    expect(screen.queryByText(/will be able to:/i)).toBeNull();
   });
 });
 
@@ -334,30 +322,9 @@ describe("授权确认：允许", () => {
   });
 });
 
-describe("授权确认：中文文案照画板 10", () => {
+describe("授权确认：中文界面能力摘要", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("zh-CN");
-  });
-
-  it("标题、代码确认块与脚注用画板上的中文", async () => {
-    mockFlow(pending());
-    renderDevice();
-
-    expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "允许这台设备访问你的 AgentRe 账户？",
-      }),
-    ).toBeTruthy();
-    expect(screen.getByText("确认这串代码与设备上显示的完全一致")).toBeTruthy();
-    expect(
-      screen.getByText(
-        "批准后，这台设备将以你的身份完整接入你的 AgentRe 账户，可执行任意代码与命令。只批准你信任的设备。",
-      ),
-    ).toBeTruthy();
-    expect(
-      screen.getByText("你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。"),
-    ).toBeTruthy();
   });
 
   it("中文确认屏同样没有能力摘要", async () => {

@@ -1,0 +1,158 @@
+# dev 只覆盖 dev 分支：不跑 lint / test，二进制在 runner 上编好后送到目标机，
+# 目标机上用 Dockerfile.dev 打成镜像再 compose。
+#
+# 这条流水线没有门禁，dev 分支上也没有别的门禁接着：.github/workflows/ci.yml 只在
+# push main 和 pull_request 上触发，而 dev 只推 gitea、不推 GitHub。lint / test 靠
+# 本地 make lint / make test，以及 dev 合入 main 时那个 PR 上的 ci.yml。
+
+name: Deploy dev
+
+on:
+  push:
+    branches:
+      - dev
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
+  DEPLOY_HOST: ${{ secrets.DEV_SSH_HOST && secrets.DEV_SSH_HOST || 'coding.local' }}
+  DEPLOY_USER: ${{ secrets.DEV_SSH_USER && secrets.DEV_SSH_USER || 'root' }}
+  DEPLOY_PORT: ${{ secrets.DEV_SSH_PORT && secrets.DEV_SSH_PORT || '22' }}
+  DEPLOY_DIR: ${{ secrets.DEV_DEPLOY_DIR && secrets.DEV_DEPLOY_DIR || '/srv/agentre-dev' }}
+  npm_config_registry: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
+  npm_config_store_dir: ${{ github.workspace }}/.pnpm-store
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: go.sum
+
+      - name: Set up pnpm
+        run: |
+          set -euo pipefail
+          command -v node >/dev/null || { echo "runner 上没有 node,前端编不出来" >&2; exit 1; }
+          corepack enable
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Set outputs
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: make build VERSION=dev.${{ steps.vars.outputs.sha_short }} COMMIT=${{ steps.vars.outputs.sha_short }}
+
+      - name: Set up SSH
+        env:
+          SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY" || { echo "缺少 secret DEV_SSH_KEY" >&2; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/dev_deploy
+          chmod 600 ~/.ssh/dev_deploy
+          printf '%s\n' \
+            'Host dev-deploy' \
+            "  HostName $DEPLOY_HOST" \
+            "  User $DEPLOY_USER" \
+            "  Port $DEPLOY_PORT" \
+            '  IdentityFile ~/.ssh/dev_deploy' \
+            '  IdentitiesOnly yes' \
+            '  StrictHostKeyChecking accept-new' \
+            '  BatchMode yes' > ~/.ssh/dev_deploy.conf
+          chmod 600 ~/.ssh/dev_deploy.conf
+
+      - name: Deploy to ${{ env.DEPLOY_HOST }}
+        run: |
+          set -euo pipefail
+
+          ssh -F ~/.ssh/dev_deploy.conf dev-deploy "mkdir -p '$DEPLOY_DIR/bin'"
+
+          scp -F ~/.ssh/dev_deploy.conf deploy/docker-compose.dev.yml deploy/Dockerfile.dev \
+            "dev-deploy:$DEPLOY_DIR/"
+          scp -F ~/.ssh/dev_deploy.conf bin/server "dev-deploy:$DEPLOY_DIR/bin/server.next"
+
+          # 远端脚本用引号 heredoc，runner 侧不插值；要带过去的值先 %q 转义
+          {
+          printf 'DEPLOY_DIR=%q\n' "$DEPLOY_DIR"
+          cat <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_DIR"
+
+          test -s bin/server.next || { echo "bin/server.next 没传上来或者是空的" >&2; exit 1; }
+          chmod 755 bin/server.next
+          mv -f bin/server.next bin/server
+
+          # 上下文只给 bin/：部署目录里的 config.yaml 和 keys/ 不该进构建上下文
+          prev=$(docker image inspect -f '{{.Id}}' agentre-server:dev 2>/dev/null || true)
+          docker build -f Dockerfile.dev -t agentre-server:dev bin
+
+          docker compose -f docker-compose.dev.yml config -q
+          docker compose -f docker-compose.dev.yml up -d --force-recreate
+
+          # tag 每次复用，上一个镜像会变成 dangling 攒在机器上。容器已经换到新镜像了才删得掉；
+          # 不用 image prune -f，那会连这台机器上别的 dangling 镜像一起收走
+          now=$(docker image inspect -f '{{.Id}}' agentre-server:dev)
+          if [ -n "$prev" ] && [ "$prev" != "$now" ]; then
+            docker image rm "$prev" >/dev/null 2>&1 || true
+          fi
+          REMOTE
+          } | ssh -F ~/.ssh/dev_deploy.conf dev-deploy bash -s
+
+      # status 是硬编码的 "ok"，三项都要为真才算起来了
+      - name: Wait for healthz
+        run: |
+          set -euo pipefail
+          {
+          printf 'DEPLOY_DIR=%q\n' "$DEPLOY_DIR"
+          cat <<'REMOTE'
+          set -uo pipefail
+          cd "$DEPLOY_DIR" || exit 1
+          command -v python3 >/dev/null || { echo "目标机上没有 python3,healthz 轮询跑不了" >&2; exit 1; }
+          for i in $(seq 1 60); do
+            if python3 - <<'PY'
+          import json, sys, urllib.request
+          try:
+              body = urllib.request.urlopen("http://127.0.0.1:8443/v1/healthz", timeout=3).read()
+              payload = json.loads(body)
+              data = payload.get("data") or payload
+          except Exception:
+              sys.exit(1)
+          sys.exit(0 if data.get("status") == "ok" and data.get("db_ping") is True and data.get("redis") is True else 1)
+          PY
+            then
+              echo "healthz 通过(第 ${i} 次尝试)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "healthz 连试 60 次都没通过,dev 环境停留在坏状态(不自动回滚)" >&2
+          docker compose -f docker-compose.dev.yml logs --tail=80 server >&2 || true
+          exit 1
+          REMOTE
+          } | ssh -F ~/.ssh/dev_deploy.conf dev-deploy bash -s
+
+      - name: Remove SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/dev_deploy ~/.ssh/dev_deploy.conf

@@ -7,8 +7,8 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	"agentre-server/internal/model/entity/device_entity"
-	hubtest "agentre-server/internal/testutils"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // Upsert 必须是一条语句。先 SELECT 再 INSERT/UPDATE 的写法在并发下会双双走到
@@ -34,5 +34,21 @@ func TestUpsert_AtomicWriteThenReadsFinalRow(t *testing.T) {
 	// 事务内读回最终行：命中已有设备时拿到的是它原来的 id 和 createtime。
 	assert.Equal(t, int64(100), d.ID)
 	assert.Equal(t, int64(1000), d.Createtime)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// UpdateVersion 是镜像握手成功后按新值刷新 devices.version 的写入侧（spec「控制台呈现
+// 与 latest 来源」一节：值不同才写）。调用方（mirror_svc）自己先比过版本才落到这里，
+// 因此这条 UPDATE 本身不必再带条件——它只管把这一次决定要写的值写进去。
+func TestUpdateVersion_WritesVersionAndUpdatetime(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `devices` SET")).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.UpdateVersion(ctx, 100, "0.4.2", 5000))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

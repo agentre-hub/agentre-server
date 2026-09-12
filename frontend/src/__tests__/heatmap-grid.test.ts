@@ -1,0 +1,171 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  HEATMAP_DESKTOP_WEEKS,
+  heatmapColumnsFor,
+  HEATMAP_MOBILE_WEEKS,
+  MOBILE_CARD_CONTENT_PX,
+  heatmapWidthPx,
+} from "@/components/stats/Heatmap";
+import { buildHeatGrid, type HeatDay } from "@/lib/heatmap";
+
+/**
+ * 热力网格的纯计算。
+ *
+ * 抽成纯函数的理由不是「好测」，是这一块的错法全都不出声：多画一列、把周三画到
+ * 周二那一行、把「今天之后」的空格子涂成 heat-0（= 对着未来说「那天没干活」），
+ * 在 jsdom 里全是绿的，只有肉眼在真页面上才看得出来。
+ */
+describe("buildHeatGrid", () => {
+  const days: HeatDay[] = [
+    { day: "2026-08-28", count: 11 },
+    { day: "2026-08-24", count: 3 },
+    { day: "2026-08-10", count: 1 },
+  ];
+
+  it("按周分列、行 0 是周日，最后一列含 to 那天", () => {
+    // 2026-08-28 是周五。
+    const grid = buildHeatGrid({ to: "2026-08-28", weeks: 5, days });
+    expect(grid.weeks.length).toBe(5);
+    for (const col of grid.weeks) expect(col.length).toBe(7);
+
+    const last = grid.weeks[4];
+    // 那一周的周日是 08-23，周五是 08-28。
+    expect(last[0].day).toBe("2026-08-23");
+    expect(last[5].day).toBe("2026-08-28");
+    expect(last[5].count).toBe(11);
+    expect(last[1].day).toBe("2026-08-24");
+    expect(last[1].count).toBe(3);
+  });
+
+  it("to 之后的格子不画：day 为 null，而不是一个 count=0 的格", () => {
+    // 画成 heat-0 的空格子等于说「那天没有活动」，而那天还没到。
+    const grid = buildHeatGrid({ to: "2026-08-28", weeks: 5, days });
+    const last = grid.weeks[4];
+    expect(last[6].day).toBeNull();
+    expect(last[6].level).toBe(0);
+    // to 那天本身照常画。
+    expect(last[5].day).toBe("2026-08-28");
+  });
+
+  it("没上榜的那天是真实的 0 条，level 0", () => {
+    const grid = buildHeatGrid({ to: "2026-08-28", weeks: 5, days });
+    const cell = grid.weeks[4][2];
+    expect(cell.day).toBe("2026-08-25");
+    expect(cell.count).toBe(0);
+    expect(cell.level).toBe(0);
+  });
+
+  it("色阶按网格里的最大值分四档，最大的那天落在 4", () => {
+    const grid = buildHeatGrid({
+      to: "2026-08-28",
+      weeks: 5,
+      days: [
+        { day: "2026-08-28", count: 12 },
+        { day: "2026-08-27", count: 9 },
+        { day: "2026-08-26", count: 6 },
+        { day: "2026-08-25", count: 3 },
+        { day: "2026-08-24", count: 1 },
+      ],
+    });
+    const byDay = new Map(
+      grid.weeks.flat().map((c) => [c.day, c.level] as const),
+    );
+    expect(grid.max).toBe(12);
+    expect(byDay.get("2026-08-28")).toBe(4);
+    expect(byDay.get("2026-08-27")).toBe(3);
+    expect(byDay.get("2026-08-26")).toBe(2);
+    expect(byDay.get("2026-08-25")).toBe(1);
+    // 1 条也是有活动的一天：绝不能因为凑不满一档而退回 heat-0。
+    expect(byDay.get("2026-08-24")).toBe(1);
+  });
+
+  it("一条数据都没有时仍然铺满整张网格（骨架就靠它）", () => {
+    const grid = buildHeatGrid({ to: "2026-08-28", weeks: 19 });
+    expect(grid.weeks.length).toBe(19);
+    expect(grid.max).toBe(0);
+    expect(grid.weeks.flat().every((c) => c.level === 0)).toBe(true);
+    // 铺满 ≠ 把未来涂上：最后一列仍有不画的格。
+    expect(grid.weeks[18][6].day).toBeNull();
+  });
+
+  it("月份标签只在换月那一列出现，且给出的是那一列的年月", () => {
+    const grid = buildHeatGrid({ to: "2026-08-28", weeks: 10 });
+    expect(grid.months.length).toBeGreaterThanOrEqual(2);
+    // 第一列永远带一个标签，否则最左边那一段没有月份可读。
+    expect(grid.months[0].column).toBe(0);
+    for (let i = 1; i < grid.months.length; i++) {
+      expect(grid.months[i].column).toBeGreaterThan(grid.months[i - 1].column);
+      expect(grid.months[i].month).not.toBe(grid.months[i - 1].month);
+    }
+    expect(grid.months.at(-1)?.month).toBe(7); // 8 月 = 索引 7
+    expect(grid.months.at(-1)?.year).toBe(2026);
+  });
+
+  it("跨年不塌：12 月与次年 1 月各自成段", () => {
+    const grid = buildHeatGrid({ to: "2026-01-15", weeks: 8 });
+    const labels = grid.months.map((m) => `${m.year}-${m.month}`);
+    expect(labels).toContain("2025-11");
+    expect(labels).toContain("2026-0");
+  });
+});
+
+/**
+ * 窄屏列数的宽度预算。
+ *
+ * 「19 周」这个数当初是拿视口宽算的，漏了网格左边那条星期栏（`w-6` + `mr-1.5`
+ * + 一个行缝隙 = 33px）：390 宽的手机上卡片内容区只有 324px，而 19 列连星期栏
+ * 要 334px —— 最后那一列（今天）压在卡片边上。e2e 的 mobile-chromium 是
+ * Pixel 7（412 宽），那里 334px 刚好放得下，所以它一直是绿的。
+ *
+ * 这条守卫按两个方向断言：当前列数放得下，多一列就放不下 —— 只断言前者的话，
+ * 一个「1 列」的答案也能过。
+ */
+describe("热力图窄屏的宽度预算", () => {
+  it("整张网格（含星期栏）放得进最窄那张卡，多一列就放不下", () => {
+    expect(heatmapWidthPx(HEATMAP_MOBILE_WEEKS)).toBeLessThanOrEqual(
+      MOBILE_CARD_CONTENT_PX,
+    );
+    expect(heatmapWidthPx(HEATMAP_MOBILE_WEEKS + 1)).toBeGreaterThan(
+      MOBILE_CARD_CONTENT_PX,
+    );
+  });
+
+  // 桌面端那一档没有这个问题（卡片宽得多），但 845px 的网格是文档里写死的数字，
+  // 一并钉住：改了格子尺寸而没改文档时这里会响（878 = 845 网格 + 33 星期栏）。
+  it("桌面端 53 列仍是文档里那张 845px 的网格", () => {
+    expect(heatmapWidthPx(HEATMAP_DESKTOP_WEEKS)).toBe(878);
+  });
+});
+
+/**
+ * 列数按**量到的可用宽度**定，不按视口断点。
+ *
+ * 断点那一版的账是错的：左列拿到的宽度还要减掉侧栏（224 / 收起 56）、页面
+ * `md:px-8`、卡片 `px-4` 与右侧那一栏的 240 + 分隔线，容器又被 `max-w-[1200px]`
+ * 封顶——53 列的 878px 要到视口 ~1512 才够。2026-09-03 在真浏览器上量到：1280 的
+ * 屏上左列只有 702px，最后一列的右缘落在 1151，而右列从 991 起，160px 的格子直接
+ * 画在分割线和「最活跃的一天」上；<1024 时更是冲出卡片被外壳裁掉。
+ */
+describe("heatmapColumnsFor", () => {
+  it("给出放得下的最大列数，且再多一列就放不下", () => {
+    // 324 = 390 手机上的卡片内容区；702 / 862 = 1280 / 1440 上量到的左列宽。
+    for (const available of [324, 446, 578, 702, 788, 862]) {
+      const cols = heatmapColumnsFor(available);
+      expect(heatmapWidthPx(cols)).toBeLessThanOrEqual(available);
+      expect(heatmapWidthPx(cols + 1)).toBeGreaterThan(available);
+    }
+  });
+
+  it("宽到放得下一整年就停在 53 列，不往外长", () => {
+    expect(heatmapColumnsFor(878)).toBe(HEATMAP_DESKTOP_WEEKS);
+    expect(heatmapColumnsFor(4000)).toBe(HEATMAP_DESKTOP_WEEKS);
+  });
+
+  it("还没量到（0）退回窄屏那一档，而不是 0 列", () => {
+    // 提交阶段之前、以及 jsdom 里 clientWidth 恒为 0：那是「不知道」，不是
+    // 「一列都放不下」。18 列在文档点名支持的最窄一档（390）上也放得下。
+    expect(heatmapColumnsFor(0)).toBe(HEATMAP_MOBILE_WEEKS);
+    expect(heatmapColumnsFor(-1)).toBe(HEATMAP_MOBILE_WEEKS);
+  });
+});

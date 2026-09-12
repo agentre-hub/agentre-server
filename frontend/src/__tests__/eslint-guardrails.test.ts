@@ -21,13 +21,24 @@ const FRONTEND_ROOT = path.resolve(
  */
 let eslint: ESLint;
 
-beforeAll(() => {
+/**
+ * 预热要给足时间：**第一次** lintText 才会去解析整份 eslint.config.js（连同
+ * typescript-eslint、插件、tsconfig），冷跑要好几秒；之后每次都在 1 秒以内。
+ *
+ * 这一步单独摆在 beforeAll 里，就是为了别把这笔一次性开销记到第一条用例的
+ * 5 秒默认预算上 —— 记上去的话，这条守卫会随着整个套件的并发压力时红时绿，
+ * 而它红起来跟它守的那条规则毫无关系。
+ */
+beforeAll(async () => {
   eslint = new ESLint({
     cwd: FRONTEND_ROOT,
     // 不传 overrideConfigFile → 走项目自身的 eslint.config.js
     errorOnUnmatchedPattern: false,
   });
-});
+  await eslint.lintText("export const warmup = 1;\n", {
+    filePath: path.join(FRONTEND_ROOT, "src/warmup.ts"),
+  });
+}, 60_000);
 
 /** 按 src/ 下的真实路径去 lint，这样文件才会命中 src 的配置段。 */
 async function lintAs(filePath: string, code: string) {
@@ -63,6 +74,14 @@ describe("design token guardrail", () => {
       "inside template literal",
       'export const c = `border ${"x"} bg-zinc-800`;',
     ],
+    [
+      "arbitrary font size with token",
+      `export const a = <div className="text-[13px]" />;`,
+    ],
+    [
+      "responsive arbitrary font size",
+      `export const a = <div className="sm:text-[15px]" />;`,
+    ],
   ])("rejects %s", async (_name, code) => {
     const messages = await lintAs("src/fixture.tsx", code);
     expect(ruleIds(messages)).toContain("no-restricted-syntax");
@@ -87,6 +106,10 @@ describe("design token guardrail", () => {
       "word that merely contains a colour name",
       `export const a = <div className="bg-background" />;`,
     ],
+    [
+      "arbitrary font size without token",
+      `export const a = <div className="text-[9px]" />;`,
+    ],
   ])("accepts %s", async (_name, code) => {
     const messages = await lintAs("src/fixture.tsx", code);
     expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
@@ -101,6 +124,154 @@ describe("design token guardrail", () => {
       `export default { define: { c: "#0891b2" } };`,
     );
     expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+});
+
+describe("native control guardrail", () => {
+  // 本仓的基础组件全部来自共享包，但包里一度没有 Select / Checkbox / 搜索框，
+  // 于是组织面就地退回了系统控件（系统控件走浏览器自己的配色，与 tokens.css 无关，
+  // 深色下最先露馅）。这条守卫拦的是「再退让一次」。
+  it.each([
+    ["native select", `export const a = () => <select><option /></select>;`],
+    ["native textarea", `export const a = () => <textarea value="" />;`],
+    ["native checkbox", `export const a = () => <input type="checkbox" />;`],
+    ["native radio", `export const a = () => <input type="radio" />;`],
+    ["native search field", `export const a = () => <input type="search" />;`],
+  ])("rejects %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    [
+      "shared package control",
+      `export const a = ({ S }) => <S.Select value="" />;`,
+    ],
+    // 文件选择器没有可替代的原语形态，它总是藏起来由一颗按钮触发。
+    [
+      "hidden file input",
+      `export const a = () => <input type="file" className="hidden" />;`,
+    ],
+    // 验证码那六个格子是自绘控件，不是能被 Input 顶替的普通字段。
+    ["plain text input", `export const a = () => <input type="text" />;`],
+  ])("accepts %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+  });
+});
+
+describe("secure context guardrail", () => {
+  // 本站用 http 部署（`http://coding.local:8443`），那是非安全上下文：
+  // `crypto.randomUUID` 在规范里带 [SecureContext]，在那里根本不存在，调用直接抛
+  // TypeError。2026-08-30 它就抛在派发逻辑里，被草稿页译成了「连不上 coding」。
+  // 随机标识只有 `@/lib/randomId` 一处实现，它退到没有这层门槛的 getRandomValues。
+  it.each([
+    ["direct call", `export const a = crypto.randomUUID();`],
+    ["window-qualified call", `export const a = window.crypto.randomUUID();`],
+    [
+      "inside a template literal",
+      "export const a = `web-pi-generation-${crypto.randomUUID()}`;",
+    ],
+  ])("rejects %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.ts", code);
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    [
+      "the shared helper",
+      `import { randomId } from "@/lib/randomId";
+export const a = randomId();`,
+    ],
+    // getRandomValues 没有安全上下文门槛，http 上照常可用。
+    [
+      "getRandomValues",
+      `export const a = crypto.getRandomValues(new Uint8Array(16));`,
+    ],
+  ])("accepts %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.ts", code);
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+  });
+
+  // 实现本身必须调得动它 —— 豁免只此一处，靠文件名表达。
+  it("exempts the helper that owns the fallback", async () => {
+    const messages = await lintAs(
+      "src/lib/randomId.ts",
+      `export const a = crypto.randomUUID();`,
+    );
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+  });
+});
+
+describe("alert slot guardrail", () => {
+  // Alert 是两列 grid：第一列留给图标，没有图标时宽度是 0，只有 AlertTitle /
+  // AlertDescription 带 col-start-2。文案直接摆进 <Alert> 就落在那条 0 宽的列里，
+  // 2026-08-30 在真实控制台上量到「补齐失败」那句被压成 28px 宽、457px 高的竖排字。
+  // jsdom 算不出布局，所以这一档只能由 lint 在源码形态上拦。
+  it.each([
+    [
+      "bare expression child",
+      `export const a = ({ Alert, msg }) => <Alert>{msg}</Alert>;`,
+    ],
+    [
+      "bare expression next to an icon",
+      `export const a = ({ Alert, Info, msg }) => <Alert><Info />{msg}</Alert>;`,
+    ],
+    [
+      "plain element child",
+      `export const a = ({ Alert, msg }) => <Alert><span>{msg}</span></Alert>;`,
+    ],
+  ])("rejects %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    [
+      "description slot",
+      `export const a = ({ Alert, AlertDescription, msg }) => (
+  <Alert>
+    <AlertDescription>{msg}</AlertDescription>
+  </Alert>
+);`,
+    ],
+    [
+      "icon plus title and description",
+      `export const a = ({ Alert, AlertTitle, AlertDescription, Info, msg }) => (
+  <Alert>
+    <Info />
+    <AlertTitle>{msg}</AlertTitle>
+    <AlertDescription>{msg}</AlertDescription>
+  </Alert>
+);`,
+    ],
+    // 条件渲染的槽还是槽：门控写在外面还是里面不改变文案落在哪一列。
+    [
+      "conditionally rendered slot",
+      `export const a = ({ Alert, AlertDescription, msg }) => (
+  <Alert>
+    {msg && <AlertDescription>{msg}</AlertDescription>}
+  </Alert>
+);`,
+    ],
+    // JSX 注释也是 JSXExpressionContainer，但它不渲染任何东西。
+    [
+      "jsx comment",
+      `export const a = ({ Alert, AlertDescription, msg }) => (
+  <Alert>
+    {/* 说明这条横幅为什么在这里 */}
+    <AlertDescription>{msg}</AlertDescription>
+  </Alert>
+);`,
+    ],
+    // 别的组件照旧随便塞：这条规则只认 Alert。
+    [
+      "bare child of some other component",
+      `export const a = ({ Card, msg }) => <Card>{msg}</Card>;`,
+    ],
+  ])("accepts %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
   });
 });
 

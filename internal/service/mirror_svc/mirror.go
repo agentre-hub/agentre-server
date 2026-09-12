@@ -1,0 +1,984 @@
+// Package mirror_svc keeps the server's own copy of the conversations an
+// account has saved correct: given one established relay connection to one
+// machine, it speaks the catch-up family (session.list / session.attach /
+// session.pull, see internal/pkg/relaywire) and writes what it learns through
+// agent_session_repo.
+//
+// Mirror itself is the mirror's logic only: it is handed a RelaySession and
+// the account's saved list, and never learns how either was obtained. The
+// residency around it lives in resident.go — Supervisor owns the relay
+// connection and its account handshake, holds the per-(account, machine)
+// lease that keeps one machine followed by exactly one replica, and lets both
+// go again. *Which* machines are worth following is still nobody's business
+// here: the caller decides and calls Supervisor.Follow
+// (2026-08-18-server-session-mirror.md 「镜像的范围与写入路径」).
+//
+// # What it guarantees
+//
+//   - Live notifications received while attached land keyed by seq, in order.
+//   - After a disconnect the next Sync pulls from **this server's own stored
+//     cursor** and replays the increment — no gap, no duplicate.
+//   - A conversation whose lifecycle is `interrupted` is never attached, only
+//     pulled: the daemon answers attach on such a session with ErrNoActiveTurn
+//     (that turn's subprocess died with the previous daemon process) while its
+//     history stays pullable.
+//   - Nothing the account has not saved produces a single mirrored row
+//     (decision 2's privacy boundary).
+//
+// # Where the cursor lives
+//
+// agent_sessions.latest_seq is this server's own cursor: the newest
+// seq it has mirrored for that conversation, not the peer's high water mark.
+// The two are equal the moment a catch-up finishes; while disconnected the
+// stored value is what this server actually holds, which is also the most any
+// reader can be shown. Keeping it in the same row as the summary means the
+// identity key (account + originating peer + that peer's session id) that
+// scopes the cursor is the same one that scopes the frames, and one account
+// -scoped list read (ListSummariesByUser) recovers every cursor at once.
+//
+// # Identity
+//
+// Rows are keyed by the **originating** peer's fingerprint plus that peer's
+// own session id (decision 17), never by the machine currently carrying the
+// connection. On the wire the origin is echoed verbatim, empty included:
+// wire's empty origin means "the caller's own peer" (agentre's
+// handlers.ResolveSessionPeer), and naming a peer that the connection could
+// have left implicit is rejected on pairing-authenticated connections.
+package mirror_svc
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
+
+	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+
+	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
+	"github.com/agentre-hub/agentre-server/internal/pkg/wireview"
+	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
+)
+
+// RelaySession is one established relay connection to one machine, narrowed
+// to the typed catch-up methods the mirror needs. Who dials, reconnects and
+// correlates request IDs is deliberately invisible here.
+type RelaySession interface {
+	SessionList(context.Context, *agentrewire.SessionListRequest) (*agentrewire.SessionListResponse, error)
+	SessionAttach(context.Context, *agentrewire.SessionAttachRequest) (*agentrewire.SessionAttachResponse, error)
+	SessionPull(context.Context, *agentrewire.SessionPullRequest) (*agentrewire.SessionPullResponse, error)
+	SessionDelete(context.Context, *agentrewire.SessionDeleteRequest) (*agentrewire.SessionDeleteResponse, error)
+}
+
+// summaryStore / frameStore are the consumer-side halves of agent_session_repo:
+// exactly the methods this service calls, so a change elsewhere in the
+// repository interface cannot silently widen what the mirror may touch.
+// agent_session_repo's own interfaces satisfy them, and its generated mocks with
+// them (Go interfaces are structural), so tests inject mock_agent_session_repo.
+type summaryStore interface {
+	UpsertSummary(ctx context.Context, s *agent_session_entity.SessionSummary) error
+	ListSummariesByUser(ctx context.Context, userID int64) ([]*agent_session_entity.SessionSummary, error)
+}
+
+type frameStore interface {
+	WriteFrames(ctx context.Context, frames []*agent_session_entity.JournalFrame) error
+	DeleteFrames(ctx context.Context, userID int64, conversationID string) error
+}
+
+// SavedSession identifies one conversation the account has saved: its
+// conversation_id, the one value that names it in all three databases and on
+// the wire (2026-08-31-conversation-centric-addressing.md 决策 1).
+//
+// It used to be a pair (originating peer + that peer's local session id),
+// because those ids were locally assigned and the same number turned up under
+// several origins on one connection. A conversation_id is globally unique by
+// construction, so that whole failure mode is gone — not defended against
+// better, gone.
+type SavedSession struct {
+	ConversationID string
+}
+
+// Mirror mirrors one account's saved conversations over one relay connection.
+// It is safe for concurrent use, but the caller is expected to feed one
+// conversation's live notifications in wire order (Apply may issue a pull, so
+// it must not run inside the connection's read loop).
+type Mirror struct {
+	userID int64
+	// fingerprint is the machine this connection reaches. It is the owner of
+	// every session the peer lists without an origin.
+	fingerprint string
+	peer        RelaySession
+	summaries   summaryStore
+	frames      frameStore
+	// signals 是「这个账号的镜像变了」的出口。它攒批（见 notify.go），所以这里
+	// 每写一次就喊一次，不必自己判断喊得频不频。
+	signals changeSignaller
+	// now 是这个镜像的时钟。可注入，与下面的 schedule 同一理由：帧的 Createtime
+	// 与摘要的落库时刻必须是同一个判据（未读判定两端各取一次钟就会互相错位），
+	// 冻住钟才断言得了这件事（生产是 time.Now().UnixMilli）。
+	now func() int64
+	// summaryWindow / schedule 是摘要写入的攒批窗口与它的定时器，见 touchSummary。
+	// schedule 可注入，让用例的窗口边界完全确定（生产是 time.AfterFunc）。
+	summaryWindow time.Duration
+	schedule      func(time.Duration, func())
+
+	mu sync.Mutex
+	// tracked holds one entry per mirrored conversation, keyed by the same
+	// conversation_id the rows are keyed by and the same one a live
+	// notification carries in its payload. One map, because routing a live
+	// frame and finding the storage identity are now the same lookup.
+	tracked map[string]*trackedSession
+}
+
+// trackedSession is one mirrored conversation's state on this connection.
+type trackedSession struct {
+	// conversationID is the storage identity, whole.
+	conversationID string
+	// owner is what lands in the peer_fingerprint column: the peer that
+	// originated this conversation. It no longer carries identity — it is
+	// provenance and authorization (决策 8), and the machine-axis grouping.
+	owner string
+	// origin is the wire value, echoed verbatim — empty means "this
+	// connection's own peer", which is not the same statement as naming it.
+	// The daemon authorizes attach/pull against it (handlers.ResolveSessionPeer).
+	origin string
+
+	mu      sync.Mutex
+	cursor  int64
+	summary *agentrewire.SessionSummary
+	// attached 记这条对话此刻在不在对端的订阅者集合里（一次成功的 session.attach）。
+	//
+	// 它是 Revive 的判据。接不上不是一次可以耸肩略过的失败：daemon 的实时扇出按
+	// **每条会话**的订阅者集合投递（agentre 的 connRegistry.addSubLocked），没接上
+	// 就是这条对话此后一帧都收不到，而 interrupted 恰恰是「接不上」的常态来源。
+	attached bool
+
+	// waiters 是从实时帧上看见、此刻还没落定的待决（审批 / 提问）请求标识。
+	//
+	// nil 的语义是「帧还没就这一列说过话」，这时清单快照仍然是权威 —— 见
+	// followWaiter。空但非 nil 表示帧说过话，而此刻一个待决都没有。
+	waiters map[string]struct{}
+
+	// 摘要攒批的窗口状态，形状与 notify.go 的「首发 + 尾补」一致，见 touchSummary。
+	flushMu        sync.Mutex
+	flushOpen      bool
+	flushDirty     bool
+	flushForgotten bool
+}
+
+// abandonSummaryFlush 让这条对话上还欠着的那次尾补作废。
+//
+// 少了它，攒批就会把 Forget 的注释里写明的那条窗口重新打开：账号删掉这条对话之后，
+// 一次迟到的摘要写入把它原样写回去，「刚删掉的东西悄悄回来了」。删除路径先 Forget
+// 再清行，那一步之后就不该再有任何人替这条对话写字。
+func (ts *trackedSession) abandonSummaryFlush() {
+	ts.flushMu.Lock()
+	defer ts.flushMu.Unlock()
+	ts.flushForgotten = true
+	ts.flushDirty = false
+}
+
+func (ts *trackedSession) markAttached(v bool) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.attached = v
+}
+
+func (ts *trackedSession) isAttached() bool {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.attached
+}
+
+func (ts *trackedSession) cursorNow() int64 {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.cursor
+}
+
+func (ts *trackedSession) advanceTo(seq int64) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if seq > ts.cursor {
+		ts.cursor = seq
+	}
+}
+
+func (ts *trackedSession) reset() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.cursor = 0
+}
+
+func (ts *trackedSession) peerSummary() *agentrewire.SessionSummary {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.summary
+}
+
+func (ts *trackedSession) setSummary(s *agentrewire.SessionSummary) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.summary = proto.Clone(s).(*agentrewire.SessionSummary)
+	// 新快照是对端此刻的原话，比本地从帧上攒出来的那份新：待决集合就此作废，
+	// 这一列重新由快照说了算（followWaiter 的 nil 语义）。
+	ts.waiters = nil
+}
+
+// New builds a mirror for one account over one machine's connection. The
+// repositories are taken once, at construction: this object outlives a single
+// request, and re-reading the accessor per call would let a mid-flight
+// re-registration swap the store underneath a running catch-up.
+func New(userID int64, machineFingerprint string, peer RelaySession) *Mirror {
+	return &Mirror{
+		userID:      userID,
+		fingerprint: machineFingerprint,
+		peer:        peer,
+		summaries:   agent_session_repo.Summary(),
+		frames:      agent_session_repo.JournalFrame(),
+		tracked:     make(map[string]*trackedSession),
+		signals:     mirrorChanges,
+
+		now:           func() int64 { return time.Now().UnixMilli() },
+		summaryWindow: summaryFlushWindow,
+		// 定时器一次性用完即弃（每个窗口重新排一次），句柄没人需要。
+		schedule: func(d time.Duration, f func()) { _ = time.AfterFunc(d, f) },
+	}
+}
+
+// Sync brings every saved conversation this peer carries up to date, and
+// starts tracking them so their live notifications can be applied. Call it
+// once per connection and again on reconnect.
+//
+// One conversation failing does not abandon the others on the same machine:
+// every failure is joined and returned, so the caller logs once and decides
+// whether to back off (this layer never logs an error it also returns).
+func (m *Mirror) Sync(ctx context.Context, saved []SavedSession) error {
+	if len(saved) == 0 {
+		return nil
+	}
+	// 点名要保存过的那几条,而不是把整台机器的清单拉回来再筛掉其余的:机器上可能有
+	// 几千条对话,而这一侧只会为名单里的那些落库(决策 2),其余的全是白搬。
+	wantedIDs := make([]string, 0, len(saved))
+	for _, s := range saved {
+		if s.ConversationID != "" {
+			wantedIDs = append(wantedIDs, s.ConversationID)
+		}
+	}
+	sessions, err := m.listByConversationIDs(ctx, wantedIDs)
+	if err != nil {
+		return fmt.Errorf("session list: %w", err)
+	}
+	// 本 server 自己的游标一次读齐:身份键的账号维度就是这一次读的作用域。
+	stored, err := m.summaries.ListSummariesByUser(ctx, m.userID)
+	if err != nil {
+		return fmt.Errorf("list mirrored summaries: %w", err)
+	}
+	wanted := make(map[string]bool, len(saved))
+	for _, s := range saved {
+		wanted[s.ConversationID] = true
+	}
+	// 名单是这一刻的权威：不在名单里的对话此刻就摘掉，不等到这轮补齐结束。
+	m.pruneUnwanted(wanted)
+	var errs []error
+	for _, s := range sessions {
+		if s.GetConversationId() == "" {
+			// 对端没给身份的会话镜不下来:它落进哪一行说不出来。
+			continue
+		}
+		if !wanted[s.GetConversationId()] {
+			// 没保存过的对话一个字都不落库(决策 2)。
+			continue
+		}
+		if err := m.catchUp(ctx, m.track(s, stored)); err != nil {
+			errs = append(errs, fmt.Errorf("conversation %s: %w", s.GetConversationId(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Revive 给「接不上」的会话第二次机会,是 interrupted 这个自锁状态唯一的出口。
+//
+// daemon 的实时扇出按**每条会话**的订阅者集合投递,而进入那个集合的唯一动作是一次
+// 成功的 session.attach(agentre 的 registerProtobufAttach → connRegistry.claimFor)。
+// 对 interrupted 的会话 attach 一律回 ErrNoActiveTurn(那一轮的子进程随上个 daemon
+// 进程消亡了),于是:
+//
+//	接不上 → 收不到实时帧 → followTurn 没有输入 → 那一行永远停在 interrupted
+//
+// 而 Sync 只在出错 / 积压 / 保存名单变动 / 换连接时才跑,补不上这个洞。agentred 每次
+// 重启都把非终态会话整批标成 interrupted,所以这不是边角情形:不管它,左栏那一列状态
+// 点会**全部**永久红着,「最近活动」也永久停在最后一次同步的时刻。
+//
+// 复活的时机只有对端知道(用户在别处对它发了一条消息),而问对端就是问清单——它一次
+// 把这台机器上所有会话的生命周期都带回来。所以这里发的是**一个**请求,不是每条会话
+// 一个;而且没有接不上的会话时一个请求都不发,常驻循环上的定期动作在稳态必须是零开销。
+//
+// 仍然中断着的不试接入:那是一个注定回 ErrNoActiveTurn 的请求。
+func (m *Mirror) Revive(ctx context.Context) error {
+	stale := m.unattached()
+	if len(stale) == 0 {
+		return nil
+	}
+	// 同 Sync:点名要「接不上的那几条」,不必把整台机器的清单要回来。
+	staleIDs := make([]string, 0, len(stale))
+	for id := range stale {
+		staleIDs = append(staleIDs, id)
+	}
+	sessions, err := m.listByConversationIDs(ctx, staleIDs)
+	if err != nil {
+		return fmt.Errorf("session list: %w", err)
+	}
+	var errs []error
+	for _, s := range sessions {
+		ts, waiting := stale[s.GetConversationId()]
+		if !waiting || s.GetLifecycleState() == relaywire.SessionLifecycleInterrupted {
+			continue
+		}
+		// 元数据一并跟上:这一份清单比这条对话上一次同步时那份新,而 saveSummary
+		// 写的正是它(标题 / 生命周期 / 最近活动都在里面)。
+		ts.setSummary(s)
+		if err := m.catchUp(ctx, ts); err != nil {
+			errs = append(errs, fmt.Errorf("conversation %s: %w", s.GetConversationId(), err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// sessionListMaxIDs 是一次点名最多带几条。与协议里那一格同值(wire 的
+// SessionListMaxIDs):对端超了会报错,而不是悄悄少给几条 —— 少给的那条在这一侧
+// 读起来是「这条对话已经不在那台机器上了」,于是它的镜像会停在旧状态。
+const sessionListMaxIDs = 200
+
+// listByConversationIDs 点名取这几条对话的摘要,按上限分批。
+//
+// 名单为空时**一个请求都不发**:没有要问的东西就不该占用那台机器的一次往返 ——
+// 常驻循环上的定期动作在稳态必须是零开销。
+func (m *Mirror) listByConversationIDs(ctx context.Context, ids []string) ([]*agentrewire.SessionSummary, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	out := make([]*agentrewire.SessionSummary, 0, len(ids))
+	for start := 0; start < len(ids); start += sessionListMaxIDs {
+		end := min(start+sessionListMaxIDs, len(ids))
+		list, err := m.peer.SessionList(ctx, &agentrewire.SessionListRequest{
+			ConversationIds: ids[start:end],
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, list.GetSessions()...)
+	}
+	return out, nil
+}
+
+// unattached 是此刻还没进对端订阅者集合的那些对话,按会话标识索引。
+func (m *Mirror) unattached() map[string]*trackedSession {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]*trackedSession{}
+	for id, ts := range m.tracked {
+		if !ts.isAttached() {
+			out[id] = ts
+		}
+	}
+	return out
+}
+
+// Apply stores one live notification received on this connection.
+//
+// It is the same three-rule seq gate the desktop runs on its own stream
+// (agentre/internal/pkg/agentruntime/runtimes/remote/reconnect.go):
+//
+//   - seq == cursor + 1 → store it and advance;
+//   - seq <= cursor     → already mirrored, drop;
+//   - seq >  cursor + 1 → a hole; pull from the cursor instead, which brings
+//     back both the hole and this frame (storing this one first would write
+//     the same row twice for no gain — it is in the peer's journal already).
+//
+// Frames are written one row each, immediately — what a reader sees is never
+// delayed. The cursor that rides along in the summary row is debounced instead
+// (see touchSummary): on this path the summary's only changing field *is* the
+// cursor, its only reader is storedCursor, and falling behind costs exactly
+// what it always cost — one idempotent re-pull, nothing more.
+func (m *Mirror) Apply(ctx context.Context, notification *agentrewire.RpcNotification) error {
+	conversationID, seq, method := notificationHead(notification)
+	if conversationID == "" || method == "" {
+		logger.Ctx(ctx).Warn("mirror typed notification unsupported")
+		return nil
+	}
+	// 预览帧就此打住,一个字节都不进镜像。
+	//
+	// 它必须挡在下面那条 seq 检查**之前**:那条 Warn 说的是「持久帧居然没有号」——
+	// 对持久帧是真异常,对预览帧是常态。协议 0.2.0 起 daemon 会把预览帧一并扇给订阅者,
+	// 不在这里认出它,一轮几千个 token 就是几千条 WARN,同一时间真正的告警全被淹掉。
+	//
+	// 内容不会因此丢:这一段正文随后由块定稿后的持久帧带来,那一条才是转录与游标的来源。
+	if isPreviewNotification(notification) {
+		return nil
+	}
+	ts, known := m.liveSession(conversationID)
+	if !known {
+		// 没保存过的对话:一个字都不落库。
+		return nil
+	}
+	cursor := ts.cursorNow()
+	if seq != 0 && seq <= cursor {
+		// 重复投递。这一帧带的事实**全部**应用过了 —— 连跟随都不必再跑一次,重放
+		// 一条早已落定的审批请求会把它重新算成「还等着」。
+		logger.Ctx(ctx).Debug("mirror duplicate notification dropped",
+			zap.String("conversationId", conversationID), zap.Int64("seq", seq),
+			zap.Int64("cursor", cursor), zap.String("method", method))
+		return nil
+	}
+	// 会话元数据的跟随排在编号之前,而且不看编号 —— 两件事正交,见 follow 的说明。
+	followed := ts.follow(notification, method, m.now())
+	switch {
+	case seq == 0:
+		// 轮次边界帧**线上就是不带号的**,这是协议定死的,不是异常。
+		//
+		// daemon 的 sessionEmitter 已经「不再落库」:取号只发生在 turnTranscript
+		// .publishDurable 那一路的块级帧上,而 turnStarted / runResultDone /
+		// autonomousTurn.{started,done} 是 em.emit 直接推出去的。从前这道闸门一律
+		// 当成「持久帧居然没有号」挡掉,恰好挡在跟随之前,于是唯一能把行推回 idle
+		// 的信号被整条吞掉:一条早就结束的对话在左栏长期是绿的,直到别的事情碰巧
+		// 踢起一次 Sync（新建一条对话就够——保存名单一变就重同步）。
+		//
+		// 没有号 = 没有落库的位置,所以这一档只落摘要、不进转录、不推游标。
+		if !followed {
+			// 这才是真异常:一条本该带号的帧没有号,而它也没说出任何元数据。
+			logger.Ctx(ctx).Warn("mirror notification carries no seq, cannot be keyed",
+				zap.Int64("userId", m.userID), zap.String("conversationId", conversationID),
+				zap.String("method", method))
+			return nil
+		}
+		// 与补洞同一条处置:这一档不推游标,进不了攒批那趟车,只能自己钉住。
+		return m.saveSummary(ctx, ts)
+	case seq > cursor+1:
+		logger.Ctx(ctx).Warn("mirror notification seq gap, pulling",
+			zap.String("conversationId", conversationID), zap.Int64("seq", seq),
+			zap.Int64("cursor", cursor), zap.String("method", method))
+		if err := m.pullUntilCaughtUp(ctx, ts); err != nil {
+			return err
+		}
+		// 补洞是罕见路径，而且刚跨过一段：游标立刻钉住，不进攒批。
+		return m.saveSummary(ctx, ts)
+	default:
+		if err := m.writeFrames(ctx, ts, []*agentrewire.JournaledNotification{
+			// 实时这一路的发生时刻就是此刻:这一帧刚从中继上过来,唯一的误差是一跳
+			// 网络。补齐那一路正相反 —— 见 writeFrames 上的说明。
+			{Seq: seq, Payload: notification, Createtime: m.now()},
+		}); err != nil {
+			return err
+		}
+		ts.advanceTo(seq)
+		return m.touchSummary(ctx, ts)
+	}
+}
+
+// follow 让镜像里这条会话的**元数据**跟着这一帧走,回答「这一帧说出了元数据吗」。
+//
+// 它与上面那条 seq 闸门是**正交**的两件事,分开是这一轮重构的全部内容:
+//
+//   - **帧的编号路径** —— 落转录、去重、补洞、推游标。它要号,没有号就无从谈起。
+//   - **元数据的跟随** —— 生命周期与「正在等你处理」。它一个号都不需要:帧本身
+//     就是事实,daemon 的次序保证（先落行、再发帧）让收到的这一刻就是对端此刻的值。
+//
+// 从前两者挤在同一条 switch 里,于是前者的前置条件（必须有号）顺带成了后者的前置
+// 条件,而线上的轮次边界帧恰恰不带号 —— followTurn 那两个终态分支因此从未在生产
+// 上执行过一次,它自己注释里担心的「一条早就结束的对话长期显示成运行中」原样发生了。
+func (ts *trackedSession) follow(
+	notification *agentrewire.RpcNotification, method string, now int64,
+) bool {
+	turn := ts.followTurn(notification, method, now)
+	waiter := ts.followWaiter(notification)
+	return turn || waiter
+}
+
+// followTurn 让镜像里的生命周期跟着轮次的两个边界走。
+//
+// 元数据的另一条来路是 Sync 的清单快照，而一轮跑完之后没有任何东西让镜像重新问一次
+// 清单：那一行会一直停在 running，左栏于是把一条早就结束的对话长期显示成「运行中」，
+// 直到别的事情碰巧触发了一次 Sync（实测能挂十几分钟以上）。
+//
+// 拿这四个方法当判据不是猜，而是对端自己的次序保证：daemon **先**把行落回 idle /
+// 推回 running，**再**发这一帧（handlers.RuntimeHandlers.Run / fanout 与
+// forwardAutonomousTurn，理由正是「客户端收到终态帧后立刻查清单必须已经看到 idle」）。
+// 所以收到帧的这一刻，对端那边就是这个值。
+//
+// 客户端自己发起的那一轮此前没有开始通知（协议上就没有），所以「我刚发了一条消息」
+// 在左栏看不出来：整轮里那条对话都是灰的，跑完了被推回 idle，还是灰的。turnStarted
+// （wire 2026-09-02 新增）补的正是这一半。
+//
+// 轮次**怎么收的场**同样只有帧说得出来：agentred 已经把自己那一行落成 failed 了
+// （handlers.settleSession），但清单快照要等下一次 Sync 才来，而这里紧接着的一次
+// 写入会拿快照里那个过期的生命周期把它盖掉 —— 所以终态帧要分两档翻译，不能一律
+// 翻成 idle。判据与 agentred 落行时用的是同一句话（turnstate.IsFailure）。
+//
+// 只动生命周期与「最后活动时刻」两列：标题之类仍然只由清单说了算，帧里没有它们的答案。
+//
+// 回报的是「这一帧是不是一个轮次边界」,而不是「这一列变了没有」:调用方据此决定
+// 要不要落一次摘要,而一条把 running 重申成 running 的边界帧同样值得落 —— 行上
+// 可能正带着一个来自旧快照的过期值。
+func (ts *trackedSession) followTurn(
+	notification *agentrewire.RpcNotification, method string, now int64,
+) bool {
+	var state string
+	switch method {
+	case notifyRunResultDone, notifyAutonomousTurnDone:
+		state = relaywire.SessionLifecycleIdle
+		if turnFailed(notification) {
+			state = relaywire.SessionLifecycleFailed
+		}
+	case notifyAutonomousTurnStarted, notifyTurnStarted:
+		state = relaywire.SessionLifecycleRunning
+	default:
+		return false
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.summary == nil {
+		return false
+	}
+	// 换指针而不是就地改：peerSummary 把这个指针交出去之后，读方在锁外逐字段读它
+	// （saveSummary 就是这么用的）。就地改会和那些读撞上；setSummary 一直是换指针，
+	// 这里跟着同一条纪律。
+	next := proto.Clone(ts.summary).(*agentrewire.SessionSummary)
+	next.LifecycleState = state
+	// 「最后活动时刻」跟着同两个边界走：一轮开起来 = 刚落了一条用户消息，一轮跑完
+	// = 刚落了一段回复。它与生命周期是同一条来路上的同一件事，此前只跟了一半 ——
+	// 而左栏是按这一格排序的（共享包 byRecent），不动它就等于「发了消息也不置顶、
+	// 时间戳停在上一次 Sync」（联调机 2026-09-08 实测：状态点亮了又灭，时间一动
+	// 没动，直到 server 重启踢起一次 Sync）。
+	//
+	// 取的是**本 server 的钟**：轮次边界帧上没有对端时刻（TurnStartedFrame 只有
+	// conversationId）。它是个近似值，下一次 Sync 的快照会拿对端的真值盖回来；与
+	// 「停在几十分钟前」相比，一跳网络的误差不值一提。
+	//
+	// 只前移不倒退：两台机器的钟不必一致，对端报的时刻可能比这台 server 的钟还新，
+	// 往回写就是把一条刚说过话的对话在左栏里往下踢一截。
+	if now > next.LastMessageAt {
+		next.LastMessageAt = now
+	}
+	// 轮次一结束，那一轮的待决就不可能还有人能回答：waiter 是**进程内、按轮**的
+	// （daemon 的 R11：落库的等待标志会活过重启，变成一个没人能回答的问题）。终态帧
+	// 因此是这一列的兜底出口 —— 少了它，一次没有落定帧的收场（用户中断、后端自己
+	// 断掉）会把那一行永久钉在「等你处理」。
+	if state == relaywire.SessionLifecycleIdle || state == relaywire.SessionLifecycleFailed {
+		ts.waiters = map[string]struct{}{}
+		next.WaitingForInput = false
+	}
+	ts.summary = next
+	return true
+}
+
+// followWaiter 让镜像里的「正在等你处理」跟着审批 / 提问的两个边界走，理由与
+// followTurn 同一条：这一列的另一条来路是 Sync 的清单快照，而常驻循环上没有任何
+// 定期的清单请求（Sync 只在出错 / 积压 / 保存名单变动 / 换连接时才跑）。不管它，
+// 一条卡在审批上的对话在控制台列表里始终是「运行中」，而快照恰好在等待时拍过的
+// 那些又会始终停在「等你处理」——两个方向都错，而且都是长期错。
+//
+// 按**请求标识**记一个集合而不是翻一个布尔：同一条会话上可以先后有多次待决，只按
+// 「来过请求」置真、「来过落定」置假的话，两次交错就会把还在等的那一次抹掉。
+//
+// nil 与空集合是两件事：nil = 帧还没就这一列说过话，快照仍是权威（对端在我们接上
+// 之前就已经等在那儿了，那件事只有快照知道）；空集合 = 帧说过话，此刻没有待决。
+// 因此**落定帧也建集合**——它清掉的可能正是快照带来的那一次等待。
+//
+// 与 followTurn 同一条回报口径:true = 这一帧是一个待决边界,不是「这一列变了」。
+func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification) bool {
+	kind, requestID := waiterSignal(notification)
+	if kind == waiterNone {
+		return false
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.summary == nil {
+		return false
+	}
+	if ts.waiters == nil {
+		ts.waiters = map[string]struct{}{}
+	}
+	switch kind {
+	case waiterOpened:
+		ts.waiters[requestID] = struct{}{}
+	case waiterClosed:
+		delete(ts.waiters, requestID)
+	case waiterNone:
+		return false
+	}
+	waiting := len(ts.waiters) > 0
+	if ts.summary.GetWaitingForInput() == waiting {
+		return true
+	}
+	next := proto.Clone(ts.summary).(*agentrewire.SessionSummary)
+	next.WaitingForInput = waiting
+	ts.summary = next
+	return true
+}
+
+// touchSummary 记下「这条对话的游标又往前了」。可以随便调，限速在这里面。
+//
+// 形状与 notify.go 的信号攒批一样是**首发 + 尾补**：窗口外的第一次立刻写（攒批是
+// 降噪，不是给每次变更加一个窗口的延迟），窗口内的压住，窗口结束时补一次把这一轮
+// 最终的游标带出去。
+//
+// 为什么这里可以攒批 —— Apply 的注释原本说「没有一个诚实的攒批点」：
+//
+//   - 摘要那一行在 Apply 这条路上会变的字段只有游标、生命周期（followTurn）与
+//     「等你处理」（followWaiter）三格。窗口里被压住的那些次写的是同一行的同一个
+//     值，而这三格最终都由**窗口结束时那次尾补**带出去 —— 用户看到的因此最多晚
+//     一个窗口，且从不是一个中间态。其余元数据只由 Sync 经 setSummary 改。
+//   - latest_seq 只有一个读者：storedCursor，也就是重启后从哪儿接着拉。没有任何
+//     用户可见的东西读它。它落后一点的代价 Apply 的注释自己写着 —— 「one idempotent
+//     re-pull, nothing more」（帧表是 OnConflict DoNothing）。
+//   - **帧不受影响**：writeFrames 照旧一帧一行立刻落库，页面看到的内容一点不打折。
+//
+// 攒批点因此是诚实的：让各端去读的是 signals 那条信号，而它本来就限速到一秒一条。
+// 写得比信号还勤，多出来的那些次没有任何人看得见。
+func (m *Mirror) touchSummary(ctx context.Context, ts *trackedSession) error {
+	ts.flushMu.Lock()
+	if ts.flushForgotten {
+		ts.flushMu.Unlock()
+		return nil
+	}
+	if ts.flushOpen {
+		ts.flushDirty = true
+		ts.flushMu.Unlock()
+		return nil
+	}
+	ts.flushOpen = true
+	ts.flushMu.Unlock()
+
+	err := m.saveSummary(ctx, ts)
+	// 尾补跑在定时器上，那时触发它的这次 Apply 早就返回了。带走一份不会被取消的
+	// 副本：ctx 上的 trace / logger 字段还留着，而取消不再牵连这一条 —— 与 notify.go
+	// 的同款理由。
+	tail := context.WithoutCancel(ctx)
+	m.schedule(m.summaryWindow, func() { m.summaryWindowElapsed(tail, ts) })
+	return err
+}
+
+// summaryWindowElapsed 收尾一个窗口：压住过就补写一次并再开一个窗口（对话还在跑的话
+// 下一帧照样先被压住），没压住过就把窗口关掉，下一帧重新走首发。
+func (m *Mirror) summaryWindowElapsed(ctx context.Context, ts *trackedSession) {
+	ts.flushMu.Lock()
+	if ts.flushForgotten || !ts.flushDirty {
+		ts.flushOpen = false
+		ts.flushMu.Unlock()
+		return
+	}
+	ts.flushDirty = false
+	ts.flushMu.Unlock()
+
+	if err := m.saveSummary(ctx, ts); err != nil {
+		// 补写失败不重试：下一帧会重新走首发，把更新的游标一并带上。真正的代价
+		// 只是重连时多拉一段，而那一段是幂等的。
+		logger.Ctx(ctx).Warn("mirror trailing summary write failed",
+			zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
+			zap.String("conversationId", ts.conversationID), zap.Error(err))
+	}
+	m.schedule(m.summaryWindow, func() { m.summaryWindowElapsed(ctx, ts) })
+}
+
+// catchUp is the three-step, and the order is hard:
+//
+//  0. pin the cursor — **before** attach. The peer starts pushing live frames
+//     the moment it accepts the attach, and those advance the cursor
+//     concurrently; the high-water guard below must compare the value as of
+//     the attach, or it reads a perfectly normal live advance as a journal
+//     that went backwards.
+//  1. attach, unless the conversation is already interrupted (that turn's
+//     subprocess died with the previous daemon process, so the daemon answers
+//     attach with ErrNoActiveTurn) — its history is still pullable.
+//  2. pull from the cursor and store, page by page.
+func (m *Mirror) catchUp(ctx context.Context, ts *trackedSession) error {
+	pinned := ts.cursorNow()
+	summary := ts.peerSummary()
+	highWater := summary.LatestSeq
+	// 接得上没有就此定下来:接不上的那些由 Revive 定期再试一次(见它的说明)。
+	ts.markAttached(false)
+	if summary.LifecycleState != relaywire.SessionLifecycleInterrupted {
+		hw, err := m.attach(ctx, ts)
+		if err != nil {
+			// 清单与接入之间它刚被中断,或这条会话已经不在这台机器上:历史照拉,
+			// 不因为接不上就整条丢掉。真正断掉的连接会让紧接着的 pull 一并失败。
+			logger.Ctx(ctx).Warn("mirror attach failed, mirroring history only",
+				zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
+				zap.String("conversationId", ts.conversationID), zap.Error(err))
+		} else {
+			highWater = hw
+			ts.markAttached(true)
+		}
+	}
+	if err := m.dropCursorAboveHighWater(ctx, ts, pinned, highWater); err != nil {
+		return err
+	}
+	if err := m.pullUntilCaughtUp(ctx, ts); err != nil {
+		return err
+	}
+	// 摘要每轮补齐落一次:对端报的元数据(标题 / 生命周期 / 等待标志)与本 server
+	// 的游标一起更新,一条日志都没有的新对话也因此在索引里立得住。
+	return m.saveSummary(ctx, ts)
+}
+
+// dropCursorAboveHighWater resets a cursor that has overtaken the peer's
+// high-water mark, and is the single defence against a silent freeze.
+//
+// A cursor can only ever come from a seq the peer sent, so it never legally
+// exceeds the peer's high water. When it does, that peer's notification log
+// went backwards: a whole-session delete on the execution end wipes its seq
+// high-water mark, and session ids are locally assigned and get reused, so
+// the journal restarts at 1 under an id this server already has a cursor for.
+//
+// Not resetting does not lose a few frames — it loses all of them. Every
+// later live notification satisfies seq <= cursor and is dropped as a
+// duplicate by Apply's first rule: no gap, no error, the conversation simply
+// stops producing text. That is the incident the desktop's identical rule
+// (agentre .../runtimes/remote/reconnect.go dropCursorAboveHighWater) was
+// written for.
+//
+// The stored copy is invalidated in the same breath. Leaving it would let the
+// next process start read the out-of-range value straight back and replay the
+// same freeze.
+//
+// The frames already stored under this identity go with it, and that deletion
+// is not housekeeping — it is the whole point. Session ids are locally
+// assigned on the execution end and get reused after a delete, so the new
+// conversation's frames land on **the same** unique key (account, origin,
+// session, seq) as the old one's, and the batch write is ON CONFLICT DO
+// NOTHING: the old rows win. Re-pulling from 0 then changes nothing that a
+// reader can see, and the page shows a different conversation's transcript.
+func (m *Mirror) dropCursorAboveHighWater(ctx context.Context, ts *trackedSession, pinned, highWater int64) error {
+	if pinned <= highWater {
+		return nil
+	}
+	ts.reset()
+	logger.Ctx(ctx).Warn("mirror cursor beyond peer high-water, restarting catch-up from scratch",
+		zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
+		zap.String("conversationId", ts.conversationID), zap.Int64("cursor", pinned),
+		zap.Int64("latestSeq", highWater))
+	if err := m.frames.DeleteFrames(ctx, m.userID, ts.conversationID); err != nil {
+		return fmt.Errorf("purge frames of the rewound journal: %w", err)
+	}
+	return m.saveSummary(ctx, ts)
+}
+
+// pullUntilCaughtUp pages the peer's journal from this server's cursor and
+// stores every page as-is.
+//
+// A pulled page needs no seq gate: it is the peer's own answer to "what comes
+// after this cursor", so its first row is the next thing to mirror whether or
+// not it is cursor+1 (an older peer that reclaimed a prefix leaves a hole that
+// no longer exists at the source, and rejecting the page for it would freeze
+// the conversation instead of recovering it). Duplicates settle on the
+// frames' unique key, so a page that overlaps what is already stored costs a
+// no-op write, never a second row.
+func (m *Mirror) pullUntilCaughtUp(ctx context.Context, ts *trackedSession) error {
+	for {
+		before := ts.cursorNow()
+		res, err := m.peer.SessionPull(ctx, &agentrewire.SessionPullRequest{
+			ConversationId:  ts.conversationID,
+			PeerFingerprint: ts.origin,
+			Cursor:          before,
+			Limit:           int32(relaywire.DefaultSessionPullLimit),
+		})
+		if err != nil {
+			return fmt.Errorf("session pull: %w", err)
+		}
+		if len(res.GetNotifications()) == 0 {
+			return nil
+		}
+		if err := m.writeFrames(ctx, ts, res.GetNotifications()); err != nil {
+			return err
+		}
+		ts.advanceTo(res.GetNotifications()[len(res.GetNotifications())-1].GetSeq())
+		// 停在对端说没有更多的时候;游标没被推前也停 —— 那是载荷坏了或对端一直
+		// 交同一页,再转一圈只会是死循环。
+		if !res.GetHasMore() || ts.cursorNow() <= before {
+			return nil
+		}
+	}
+}
+
+func (m *Mirror) attach(ctx context.Context, ts *trackedSession) (int64, error) {
+	res, err := m.peer.SessionAttach(ctx, &agentrewire.SessionAttachRequest{
+		ConversationId: ts.conversationID, PeerFingerprint: ts.origin,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return res.GetLatestSeq(), nil
+}
+
+// writeFrames stores canonical typed notifications, keyed by
+// (account, conversation, seq). The journal row's seq is the
+// metadata source of truth, so it is stamped into the serialized notification
+// for both live delivery and pull replay before persistence.
+//
+// Createtime 原样取自载体,这一层一个时刻都不编。
+//
+// 它是**发生**时刻,不是这台 server 的收帧时刻:实时那一路由 Apply 就地盖当下
+// (差一跳网络),补齐那一路由对端的日志行报出来。两者不能互换 —— 补齐是成批到达
+// 的,拿收帧时刻当发生时刻会把一条离线两天的对话整段盖成同一毫秒。对端报不出来时
+// 是 0,0 照样原样落库:「不知道」在下游读作「不显示时间」,补一个当下则是显示一个
+// 假的。
+func (m *Mirror) writeFrames(ctx context.Context, ts *trackedSession, ns []*agentrewire.JournaledNotification) error {
+	rows := make([]*agent_session_entity.JournalFrame, 0, len(ns))
+	for _, n := range ns {
+		if n.GetPayload() == nil {
+			return fmt.Errorf("journal seq %d has no typed payload", n.GetSeq())
+		}
+		payload := proto.Clone(n.GetPayload()).(*agentrewire.RpcNotification)
+		setNotificationSeq(payload, n.GetSeq())
+		// 落的是**视图**而不是 protobuf 字节：库里那一行要能被一条 SQL 读懂
+		// （规格 2026-09-07-journal-payload-json.md）。这一侧投影不出来的帧由
+		// EncodeStoredFrame 走 $proto 逃生路，原件一个字节不丢。
+		encoded, err := wireview.EncodeStoredFrame(payload)
+		if err != nil {
+			return fmt.Errorf("encode journal seq %d: %w", n.GetSeq(), err)
+		}
+		rows = append(rows, &agent_session_entity.JournalFrame{
+			UserID:          m.userID,
+			ConversationID:  ts.conversationID,
+			PeerFingerprint: ts.owner,
+			Seq:             n.GetSeq(),
+			Payload:         encoded,
+			Createtime:      n.GetCreatetime(),
+		})
+	}
+	if err := m.frames.WriteFrames(ctx, rows); err != nil {
+		return fmt.Errorf("write mirror frames: %w", err)
+	}
+	return nil
+}
+
+// saveSummary writes the peer's reported metadata together with this server's
+// own cursor (see the package doc on where the cursor lives). Fields an
+// unupgraded peer never reported stay blank — as-is, never guessed.
+func (m *Mirror) saveSummary(ctx context.Context, ts *trackedSession) error {
+	s := ts.peerSummary()
+	now := m.now()
+	if err := m.summaries.UpsertSummary(ctx, &agent_session_entity.SessionSummary{
+		UserID:            m.userID,
+		ConversationID:    ts.conversationID,
+		PeerFingerprint:   ts.owner,
+		Title:             s.Title,
+		AgentSyncID:       s.AgentSyncId,
+		ProviderSessionID: s.ProviderSessionId,
+		Cwd:               s.Cwd,
+		ProjectSyncID:     s.ProjectSyncId,
+		BackendType:       s.BackendType,
+		LifecycleState:    s.LifecycleState,
+		WaitingForInput:   s.WaitingForInput,
+		LatestSeq:         ts.cursorNow(),
+		LastMessageAt:     s.LastMessageAt,
+		// 会话级 ModelTarget 原样镜像。空是有含义的值（跟随 Agent 绑定），不补默认。
+		ProviderKey: s.ProviderKey,
+		ModelKey:    s.ModelKey,
+		Createtime:  now,
+		Updatetime:  now,
+	}); err != nil {
+		return fmt.Errorf("upsert mirror summary: %w", err)
+	}
+	// 落库之后才出声：信号说的是「库里变了，该拉了」，写失败时喊一声只会让所有在线
+	// 连接拉回一模一样的一页。
+	m.signals.changed(ctx, m.userID)
+	return nil
+}
+
+// ownerOf resolves the provenance column of one listed session: an omitted
+// origin means the conversation started on the machine this connection
+// reaches (agentre's handlers.ResolveSessionPeer), and that machine is then
+// what the row's peer_fingerprint records.
+func (m *Mirror) ownerOf(s *agentrewire.SessionSummary) string {
+	if owner := s.GetPeerFingerprint(); owner != "" {
+		return owner
+	}
+	return m.fingerprint
+}
+
+func (m *Mirror) track(
+	s *agentrewire.SessionSummary, stored []*agent_session_entity.SessionSummary,
+) *trackedSession {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	conversationID := s.GetConversationId()
+	ts, ok := m.tracked[conversationID]
+	if !ok {
+		ts = &trackedSession{
+			conversationID: conversationID,
+			owner:          m.ownerOf(s),
+			origin:         s.GetPeerFingerprint(),
+		}
+		m.tracked[conversationID] = ts
+	}
+	ts.setSummary(s)
+	// 库里那份与内存里的取较大者:本进程已经消费到更远是常事,拿旧值去拉会把
+	// 已经镜像过的那一段再走一遍(结果幂等,但白跑一趟)。
+	if seq, found := storedCursor(stored, m.userID, conversationID); found {
+		ts.advanceTo(seq)
+	}
+	return ts
+}
+
+// Forget stops mirroring one conversation on this connection: neither its live
+// notifications nor a later catch-up touch it again.
+//
+// The delete path calls this **before** clearing the stored rows. The other
+// order leaves a window in which a live frame writes the conversation straight
+// back in, and what the account just deleted quietly returns.
+func (m *Mirror) Forget(ref SavedSession) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forgetLocked(ref.ConversationID)
+}
+
+// pruneUnwanted drops every tracked conversation the account no longer has
+// saved. It is how a delete performed on **another replica** converges here:
+// that replica cleared the rows, and this connection would otherwise keep
+// writing the conversation back from its live stream. The saved list handed to
+// Sync is the authority; anything outside it is out of scope (decision 2).
+func (m *Mirror) pruneUnwanted(wanted map[string]bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for conversationID := range m.tracked {
+		if wanted[conversationID] {
+			continue
+		}
+		m.forgetLocked(conversationID)
+	}
+}
+
+// forgetLocked drops one conversation.
+func (m *Mirror) forgetLocked(conversationID string) {
+	ts, tracked := m.tracked[conversationID]
+	if !tracked {
+		return
+	}
+	delete(m.tracked, conversationID)
+	ts.abandonSummaryFlush()
+}
+
+func (m *Mirror) liveSession(conversationID string) (*trackedSession, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ts, known := m.tracked[conversationID]
+	return ts, known
+}
+
+func storedCursor(
+	stored []*agent_session_entity.SessionSummary, userID int64, conversationID string,
+) (int64, bool) {
+	for _, row := range stored {
+		if row.UserID == userID && row.ConversationID == conversationID {
+			return row.LatestSeq, true
+		}
+	}
+	return 0, false
+}

@@ -53,7 +53,7 @@ func resolveExecTargets(objects map[string]*peerObject, agentSyncID string, pair
 	out := &execTargetResolution{AgentSyncID: agentSyncID, Paired: paired, Targets: []*execTargetView{}}
 
 	for _, obj := range objects {
-		if obj == nil || obj.Kind != "agent_exec_target" || obj.Deleted {
+		if obj == nil || obj.Kind != "agent_exec_target" || obj.DeletedAt > 0 {
 			continue
 		}
 		var p execTargetPayload
@@ -65,7 +65,7 @@ func resolveExecTargets(objects map[string]*peerObject, agentSyncID string, pair
 		switch {
 		case backend == nil:
 			view.Reason = reasonBackendMissing
-		case backend.Deleted:
+		case backend.DeletedAt > 0:
 			view.Reason = reasonBackendDeleted
 		default:
 			view.Fingerprint = backend.AgentredFingerprint

@@ -1,0 +1,187 @@
+{
+  "eyebrow": "设备授权",
+  "entry": {
+    "title": "输入设备码",
+    "description": "桌面应用或终端上会显示一串 6 位代码，把它填在这里。",
+    "groupLabel": "设备码",
+    "boxLabel": "第 {{position}} 位，共 6 位",
+    "submit": "继续",
+    "footnote": "没有看到代码？回到设备上重新发起授权。",
+    "errors": {
+      "incomplete": "请填满 6 位代码。",
+      "invalid": "这个代码不存在或已被使用。请核对设备上显示的 6 位代码。"
+    }
+  },
+  "approve": {
+    "title": "允许这台设备访问你的 AgentRe 账户？",
+    "risk": "批准后，这台设备将以你的身份完整接入你的 AgentRe 账户，可执行任意代码与命令。只批准你信任的设备。",
+    "verify": "确认这串代码与设备上显示的完全一致",
+    "expiry": "此授权请求将在 {{minutes}} 分 {{seconds}} 秒后过期",
+    "expirySeconds": "此授权请求将在 {{seconds}} 秒后过期",
+    "expiryAnnounce": "此授权请求将在约 {{minutes}} 分钟后过期",
+    "expiryAnnounceSoon": "此授权请求将在 1 分钟内过期",
+    "allow": "允许授权",
+    "deny": "拒绝",
+    "fineprint": "你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。",
+    "actionError": "操作没有完成，请重试。"
+  },
+  "kind": {
+    "desktop": "桌面端",
+    "agentred": "计算节点",
+    "mobile": "移动端"
+  },
+  "success": {
+    "title": "设备已授权",
+    "body": "可以关闭这个页面，回到设备上继续。",
+    "manageDevices": "前往控制台管理设备"
+  },
+  "deniedScreen": {
+    "title": "已拒绝授权",
+    "close": "关闭页面"
+  },
+  "expiredScreen": {
+    "title": "授权请求已过期",
+    "body": "回到设备上重新发起授权，然后输入新的代码。",
+    "retry": "重新输入代码"
+  },
+  "add": {
+    "open": "添加设备",
+    "copy": "复制",
+    "copied": "已复制",
+    "stepOf": "步骤 {{n}} / 3",
+    "kindLabel": "设备类型",
+    "kindAgentred": "计算节点（agentred）",
+    "kindDesktop": "桌面端（Agentre App）",
+    "steps": {
+      "login": {
+        "title": "安装并登录",
+        "hint": "会打印设备码",
+        "done": "已登录"
+      },
+      "code": {
+        "title": "输入设备码",
+        "hint": "6 位一次性码",
+        "done": "已授权"
+      },
+      "service": {
+        "title": "常驻后台",
+        "hint": "批准之后再做",
+        "done": "已常驻"
+      }
+    },
+    "install": {
+      "downloadLabel": "下载",
+      "downloadBody": "从 GitHub Releases 下载对应平台的安装包（macOS .dmg / Windows .exe / Linux .deb）。",
+      "download": "打开下载页"
+    },
+    "login": {
+      "agentredTitle": "安装 agentred 并登录",
+      "agentredDesc": "登录必须在后台服务启动之前完成。",
+      "commandLabel": "登录",
+      "desktopTitle": "安装桌面端并登录",
+      "desktopDesc": "在应用里 设置 → 远端 → 登录，填下面这个地址。",
+      "serverLabel": "服务器地址",
+      "next": "已拿到设备码"
+    },
+    "service": {
+      "agentredTitle": "让 agentred 常驻后台",
+      "agentredDesc": "必须等设备批准之后再做，否则这次登录会被覆盖掉。",
+      "desktopTitle": "无需注册服务",
+      "desktopDesc": "桌面端自带 agentred，应用开着它就在线。",
+      "finish": "完成"
+    }
+  },
+  "manage": {
+    "loadError": "无法加载你的设备列表，请重试。",
+    "statusOnline": "在线",
+    "statusOffline": "离线",
+    "statusRevoked": "已撤销",
+    "revokeConfirmTitle": "解除这台设备的授权？",
+    "revokeConfirmBody": "确认后该设备将无法再刷新凭据。若它此刻离线，已发出的访问凭据在其短有效期内仍可能被接受——撤销并非即时生效。",
+    "revokeCancel": "取消",
+    "revokeConfirm": "解除授权",
+    "revokeError": "解除授权失败，请稍后重试。",
+    "expand": "展开详情",
+    "collapse": "收起详情",
+    "runnableAgents": "能跑的 Agent",
+    "rankLabel": "第 {{rank}} 档",
+    "projects": "项目",
+    "configured": "已配置",
+    "notConfigured": "未配置",
+    "noProjectsReported": "这台设备还没有上报任何项目。",
+    "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
+    "detailLoadError": "无法加载这台设备的详情。",
+    "sessions": "对话",
+    "sessionCount": "{{count}} 条对话",
+    "sessionWaiting": "{{count}} 条等你处理",
+    "viewSessions": "查看这台机器的对话",
+    "viewDesktopSessions": "查看这个桌面端的对话",
+    "offlineNotEnterable": "已离线——对话不可用。",
+    "desktopAppNotRunningShort": "Agentre 未运行",
+    "desktopAppNotRunningDetail": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可查看它的对话。",
+    "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑",
+    "revokeConfirmTitleNamed": "解除「{{name}}」的授权？"
+  },
+  "upgrade": {
+    "badge": "可升级 {{version}}",
+    "blockedBadge": "版本太旧",
+    "blockedTitle": "版本太旧，连不上",
+    "blockedBody": "机器还在线，但升级之前看不到它的对话。",
+    "availableTitle": "有新版本 {{version}}",
+    "availableBody": "升级会重启 agentred：正在跑的对话会中断，已产生的内容保留。",
+    "commandLabel": "到那台机器上执行",
+    "action": {
+      "default": "升级 agentred",
+      "upgrading": "正在升级…",
+      "requesting": "正在准备…",
+      "forceLabel": "仍要升级",
+      "upToDate": "已是最新（{{version}}）"
+    },
+    "confirm": {
+      "title": "还有 {{count}} 条对话在跑",
+      "body": "升级会重启 agentred，这些轮次会中断，已产生的内容保留。",
+      "cancel": "稍后再说",
+      "confirm": "仍然升级"
+    },
+    "status": {
+      "requestingTitle": "正在准备升级",
+      "requestingBody": "那台机器正在取新版本并校验，可能要几分钟。这段时间不用再点。",
+      "upgradingTitle": "正在升级到 {{version}}",
+      "upgradingBody": "重启一次，通常不到 1 分钟。",
+      "successTitle": "升级完成",
+      "timeoutTitle": "没等到它回来",
+      "timeoutBody": "等了 5 分钟。如果它不是以服务或容器方式运行，升级后不会自动启动。",
+      "failedTitle": "升级没能开始"
+    },
+    "devBuild": "开发构建",
+    "devBuildTitle": "这是开发构建",
+    "devBuildBody": "它自报的版本号无法与发布版本比较，因此不劝升。",
+    "failed": {
+      "unknownTitle": "升级没能开始",
+      "inProgressTitle": "这台机器上已经有一次升级在跑",
+      "inProgressBody": "等它跑完再来。",
+      "notWritableTitle": "没有权限替换 agentred",
+      "notWritableBody": "装它的那个目录当前用户写不了。用下面这条命令，在那台机器上以足够的权限重跑一次。",
+      "alreadyLatestTitle": "已经是最新的了",
+      "alreadyLatestBody": "没有可装的新版本。",
+      "downloadFailedTitle": "没能取到新版本",
+      "downloadFailedBody": "下载或校验没过，当前这个 agentred 一个字节都没动。"
+    }
+  },
+  "portForward": {
+    "loadFailed": "读不到这台设备的端口映射。{{message}}",
+    "actionFailed": "这次操作没成。{{message}}",
+    "open": "在新标签页打开",
+    "copyDone": "地址已复制",
+    "copyFailed": "复制地址失败",
+    "add": {
+      "port": "端口",
+      "name": "名称",
+      "submit": "新增",
+      "cancel": "取消",
+      "invalidPort": "端口号要填 1 到 65535 之间的整数。",
+      "portTaken": "这台设备上这个端口已经有映射了。",
+      "failed": "新增映射失败。{{message}}"
+    }
+  }
+}

@@ -12,8 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 )
 
 type fakeForwarder struct{ err error }
@@ -24,12 +25,8 @@ func (f fakeForwarder) Forward(context.Context, Route, Peer, string, int, []byte
 
 func newRelayForTest(t *testing.T, forwarder Forwarder) (RelaySvc, *miniredis.Miniredis, *mock_device_repo.MockDeviceRepo) {
 	t.Helper()
-	mini := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
-	controller := gomock.NewController(t)
-	devices := mock_device_repo.NewMockDeviceRepo(controller)
-	return New(Config{InstanceID: "server-a", OnlineTTL: time.Second}, devices, client, forwarder), mini, devices
+	svc, mini, devices, _ := newRelayWithSaves(t, forwarder)
+	return svc, mini, devices
 }
 
 func activeDaemon() *device_entity.Device {
@@ -137,7 +134,7 @@ func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
 	config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	forwarder := NewRedisForwarder(config, client)
 	controller := gomock.NewController(t)
-	svc := New(config, mock_device_repo.NewMockDeviceRepo(controller), client, forwarder)
+	svc := New(config, mock_device_repo.NewMockDeviceRepo(controller), nil, client, forwarder)
 
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
 	daemonWriter := &recordingFrameWriter{frames: make(chan recordedFrame, 4)}
@@ -153,7 +150,7 @@ func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
 
 	select {
 	case received := <-daemonWriter.frames:
-		gotChannel, payload, err := unwrapEnvelope(received.frame)
+		gotChannel, payload, err := UnwrapEnvelope(received.frame)
 		require.NoError(t, err)
 		require.Equal(t, channelID, gotChannel)
 		require.Empty(t, payload, "通道关闭以空载荷信封表示")
@@ -172,8 +169,10 @@ func TestDesktopCanRegisterAndBeResolvedWithinAccount(t *testing.T) {
 	route, err := svc.PrepareDaemon(ctx, desktop.UserID, desktop.ID, device_entity.KindDesktop)
 	require.NoError(t, err)
 	require.Equal(t, Route{
-		AccountID: desktop.UserID, Fingerprint: desktop.Fingerprint, InstanceID: "server-a",
+		AccountID: desktop.UserID, Fingerprint: desktop.Fingerprint,
+		InstanceID: "server-a", ConnID: route.ConnID,
 	}, route)
+	require.NotEmpty(t, route.ConnID, "每条 daemon 连接都要有自己的身份,见 Route.ConnID")
 	require.NoError(t, svc.RegisterDaemon(ctx, route))
 
 	resolved, err := svc.ConnectClient(ctx, desktop.UserID, desktop.Fingerprint)
@@ -214,12 +213,14 @@ func TestPrepareDaemonAcceptsOnlyThisAccountsActiveAddressableDevices(t *testing
 		devices.EXPECT().Find(gomock.Any(), int64(9)).Return(activeDaemon(), nil)
 		route, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
 		require.NoError(t, err)
-		require.Equal(t, Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}, route)
+		require.Equal(t, Route{
+			AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a", ConnID: route.ConnID,
+		}, route)
 	})
 }
 
 func TestUnwrapEnvelopeRejectsNonUTF8ChannelID(t *testing.T) {
-	_, _, err := unwrapEnvelope([]byte{0, 1, 0xff})
+	_, _, err := UnwrapEnvelope([]byte{0, 1, 0xff})
 	require.Error(t, err)
 }
 
@@ -389,7 +390,6 @@ func TestRedisForwarderRemoteMissingClientTargetReturnsForwardingErrorWithoutDel
 	configB := Config{InstanceID: "server-b", OnlineTTL: time.Second}
 	forwarderA := NewRedisForwarder(configA, clientA)
 	forwarderB := NewRedisForwarder(configB, clientB)
-	svc := New(configA, nil, clientA, forwarderA)
 	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: configA.InstanceID}
 
 	writer := &recordingFrameWriter{frames: make(chan recordedFrame, 1)}
@@ -402,17 +402,19 @@ func TestRedisForwarderRemoteMissingClientTargetReturnsForwardingErrorWithoutDel
 	require.NoError(t, clientB.Set(
 		context.Background(), clientChannelKey(route, staleChannel), configB.InstanceID, time.Second,
 	).Err())
-	envelope, err := wrapEnvelope(staleChannel, []byte("late-response"))
-	require.NoError(t, err)
+	// 这条用例钉的是**帧总线**的契约（投不出去要如实报失败、且不写回执），所以直接
+	// 调它。svc.ForwardDaemon 现在只把帧排给那条虚拟通道就返回 —— 转发的成败发生在
+	// worker 里，不再同步回到读循环（见 fanout.go）。服务层那一侧的契约由
+	// framebus_fanout_test.go 覆盖。
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
+	forwardErr := forwarderA.Forward(ctx, route, PeerDaemon, staleChannel, 2, []byte("late-response"))
 	stream := streamKey(Route{
 		AccountID: route.AccountID, Fingerprint: route.Fingerprint, InstanceID: configB.InstanceID,
 	})
 	requireRelayStreamDrained(t, clientB, stream)
 	requireNoDeliveryAck(t, clientB, stream)
-	require.ErrorIs(t, forwardErr, ErrForwardFailed)
+	require.Error(t, forwardErr)
 }
 
 func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStream(t *testing.T) {
@@ -427,7 +429,6 @@ func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStrea
 			t.Cleanup(func() { require.NoError(t, client.Close()) })
 			config := Config{InstanceID: "server-a", OnlineTTL: time.Second}
 			forwarder := NewRedisForwarder(config, client)
-			svc := New(config, nil, client, forwarder)
 			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: config.InstanceID}
 			channelID := "stale-local-channel"
 
@@ -436,9 +437,9 @@ func TestRedisForwarderLocalMissingClientTargetDropsObsoleteResponseWithoutStrea
 					context.Background(), clientChannelKey(route, channelID), config.InstanceID, time.Second,
 				).Err())
 			}
-			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
-			require.NoError(t, err)
-			require.NoError(t, svc.ForwardDaemon(context.Background(), route, 2, envelope))
+			// 同上：这里钉的是帧总线在「本机根本没有这条通道」时的行为。
+			require.NoError(t, forwarder.Forward(
+				context.Background(), route, PeerDaemon, channelID, 2, []byte("late-response")))
 			length, err := client.XLen(context.Background(), streamKey(route)).Result()
 			require.NoError(t, err)
 			require.Zero(t, length)
@@ -472,7 +473,6 @@ func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliver
 			if remote {
 				clientForwarder = NewRedisForwarder(clientConfig, clientRedis)
 			}
-			svc := New(daemonConfig, nil, daemonRedis, daemonForwarder)
 			route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: daemonConfig.InstanceID}
 			channelID := "closing-client"
 			writer := &failingFrameWriter{writes: make(chan recordedFrame, 1)}
@@ -481,11 +481,11 @@ func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliver
 			require.NoError(t, err)
 			t.Cleanup(detach)
 
-			envelope, err := wrapEnvelope(channelID, []byte("late-response"))
-			require.NoError(t, err)
+			// 同上：写失败要如实回到帧总线的调用方（现在那是 fanout 的 worker）。
 			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 			defer cancel()
-			forwardErr := svc.ForwardDaemon(ctx, route, 2, envelope)
+			forwardErr := daemonForwarder.Forward(
+				ctx, route, PeerDaemon, channelID, 2, []byte("late-response"))
 			received := receiveRecordedFrame(t, writer.writes)
 			require.Equal(t, []byte("late-response"), received.frame)
 			if remote {
@@ -496,7 +496,7 @@ func TestRelayDaemonClientWriteFailuresReturnForwardingErrorWithoutRemoteDeliver
 				requireRelayStreamDrained(t, clientRedis, stream)
 				requireNoDeliveryAck(t, clientRedis, stream)
 			}
-			require.ErrorIs(t, forwardErr, ErrForwardFailed)
+			require.Error(t, forwardErr)
 		})
 	}
 }
@@ -683,7 +683,9 @@ func (h *failFirstFrameAckTxHook) ProcessPipelineHook(next goredis.ProcessPipeli
 				hasDelete = true
 			case "xack":
 				hasGroupAck = true
-			case "set":
+			// 投递回执有两种形状:推进发布方那条回执队列(同版本),或者写回执键
+			// (对面是升级前的副本)。两种都算,这个钩子关心的是「回执事务」本身。
+			case "rpush", "set":
 				hasDeliveryAck = true
 			}
 		}
@@ -884,4 +886,106 @@ func TestRelayClientFailuresAreDistinguishable(t *testing.T) {
 		_, err = svc.ConnectClient(ctx, 7, "fp-daemon")
 		require.ErrorIs(t, err, ErrForwardFailed)
 	})
+}
+
+// ── 上线要出声 ─────────────────────────────────────────────────────────────
+
+// presenceSignals 记下广播出去的每一帧。SetDefault 换掉包级入口，所以这里看得见
+// relay 到底往账号级通道上发了什么。
+type presenceSignals struct {
+	mu     sync.Mutex
+	frames []accountchan_svc.Frame
+}
+
+func (s *presenceSignals) Broadcast(_ context.Context, _ int64, frame accountchan_svc.Frame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.frames = append(s.frames, frame)
+	return nil
+}
+
+func (s *presenceSignals) Subscribe(context.Context, int64) (accountchan_svc.Subscription, error) {
+	return nil, accountchan_svc.ErrChannelUnconfigured
+}
+
+func (s *presenceSignals) recorded() []accountchan_svc.Frame {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]accountchan_svc.Frame(nil), s.frames...)
+}
+
+func recordPresenceSignals(t *testing.T) *presenceSignals {
+	t.Helper()
+	signals := &presenceSignals{}
+	accountchan_svc.SetDefault(signals)
+	t.Cleanup(func() { accountchan_svc.SetDefault(nil) })
+	return signals
+}
+
+// Given 一台 daemon 连上来;When 它登记在线;Then 这个账号收到一条 device_presence
+// —— 否则控制台的设备列表与侧栏在线数要等兜底轮询才看得到它上线。
+func TestRegisterDaemon_SignalsThatPresenceChanged(t *testing.T) {
+	svc, _, _ := newRelayForTest(t, fakeForwarder{})
+	signals := recordPresenceSignals(t)
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}
+
+	require.NoError(t, svc.RegisterDaemon(context.Background(), route))
+
+	require.Equal(t, []accountchan_svc.Frame{
+		{Type: accountchan_svc.FrameTypeDevicePresence},
+	}, signals.recorded())
+}
+
+// Given 一台已经在线的 daemon;When 心跳续期;Then 一声不出。续期不是状态变化,
+// 每 15 秒喊一次会让这个账号所有在线连接跟着白拉一页设备列表。
+// Given 一台 daemon 在线;When 它断开重连(handler 把 PrepareDaemon + RegisterDaemon
+// 重跑一遍);Then 在线态答得出「换了一条链路」—— DaemonConnID 的值必须变。
+//
+// 只答「在不在线」答不出这件事:容器重启比 OnlineTTL(30 秒)快得多,在线态键从头到尾
+// 没断过。而 daemon 侧的虚拟通道连同鉴权状态都活在那条链路上,换代之后旧通道在它那侧
+// 已经不存在 —— 拿着旧值的常驻镜像正是靠这个差别发现自己手里那条通道作废了,
+// 见 mirror_svc.follower.keepalive。
+func TestDaemonConnID_ChangesWhenTheDaemonRelinks(t *testing.T) {
+	svc, _, devices := newRelayForTest(t, fakeForwarder{})
+	devices.EXPECT().Find(gomock.Any(), int64(9)).Return(activeDaemon(), nil).Times(2)
+	ctx := context.Background()
+
+	first, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+	require.NoError(t, err)
+	require.NoError(t, svc.RegisterDaemon(ctx, first))
+	before, err := svc.DaemonConnID(ctx, 7, "fp-daemon")
+	require.NoError(t, err)
+	require.NotEmpty(t, before, "在线的机器必须报得出自己那条链路")
+
+	second, err := svc.PrepareDaemon(ctx, 7, 9, device_entity.KindAgentred)
+	require.NoError(t, err)
+	require.NoError(t, svc.RegisterDaemon(ctx, second))
+	after, err := svc.DaemonConnID(ctx, 7, "fp-daemon")
+
+	require.NoError(t, err)
+	require.NotEqual(t, before, after, "换了一条链路,在线态必须答得出来")
+	online, err := svc.IsDaemonOnline(ctx, 7, "fp-daemon")
+	require.NoError(t, err)
+	require.True(t, online, "换链路期间在线态一秒都没断 —— 这正是只看在线态发现不了换代的原因")
+}
+
+// Given 机器不在线;When 问它那条链路;Then ErrDaemonOffline —— 调用方要把「联系不上」
+// 与「在线但换了链路」分开处理。
+func TestDaemonConnID_OfflineMachineIsNotARelink(t *testing.T) {
+	svc, _, _ := newRelayForTest(t, fakeForwarder{})
+
+	_, err := svc.DaemonConnID(context.Background(), 7, "fp-daemon")
+
+	require.ErrorIs(t, err, ErrDaemonOffline)
+}
+
+func TestRenewDaemon_SaysNothing(t *testing.T) {
+	svc, _, _ := newRelayForTest(t, fakeForwarder{})
+	route := Route{AccountID: 7, Fingerprint: "fp-daemon", InstanceID: "server-a"}
+	require.NoError(t, svc.RegisterDaemon(context.Background(), route))
+	signals := recordPresenceSignals(t)
+
+	require.NoError(t, svc.RenewDaemon(context.Background(), route))
+
+	require.Empty(t, signals.recorded())
 }

@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/v1/engine/snapshot"
+  },
+  "response": {
+    "status": 200,
+    "body": {
+      "code": 0,
+      "msg": "success",
+      "data": {
+        "providers": [
+          {
+            "provider_key": "anthropic-main",
+            "name": "Anthropic",
+            "type": "anthropic",
+            "base_url": "https://api.anthropic.com",
+            "api_key": "sk-engine-secret",
+            "default_model_key": "",
+            "models": []
+          }
+        ],
+        "cli_overlays": [
+          {
+            "backend_sync_id": "backend-1",
+            "cli_path": "/usr/local/bin/claude"
+          }
+        ]
+      }
+    }
+  }
+}

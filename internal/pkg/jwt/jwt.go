@@ -13,10 +13,15 @@ import (
 )
 
 // Claims 是 access token 内嵌的业务字段。
+//
+// PFP 是这枚凭据说了算的**对端身份**：设备 JWT 填该设备的 devices.fingerprint，
+// 中继票填账号级的网页对端标识（AccountPeerFingerprint）。agentred 的 auth.account
+// 从这里取对端身份，不再采信请求体里的自报值；缺了它握手会被拒。
 type Claims struct {
 	UID  int64  `json:"uid"`
 	DID  int64  `json:"did"`
 	Kind string `json:"kind"`
+	PFP  string `json:"pfp,omitempty"`
 	JTI  string `json:"-"`
 }
 
@@ -24,6 +29,7 @@ type registered struct {
 	UID  int64  `json:"uid"`
 	DID  int64  `json:"did"`
 	Kind string `json:"kind"`
+	PFP  string `json:"pfp,omitempty"`
 	jwtv5.RegisteredClaims
 }
 
@@ -35,7 +41,6 @@ type Signer struct {
 	issuer      string
 	aud         string
 	maxLifetime time.Duration
-	allowNoKID  bool
 }
 
 // Key 是一把 JWT RSA 密钥。当前签发 key 同时提供私钥和公钥；轮换窗口内只用于
@@ -46,25 +51,9 @@ type Key struct {
 	PublicPEM  []byte
 }
 
-const legacyKID = "legacy"
-
 // NewSigner 从 PEM 解析公私钥。
 func NewSigner(privPEM, pubPEM []byte, issuer, audience string) (*Signer, error) {
-	return NewSignerWithMaxLifetime(privPEM, pubPEM, issuer, audience, 0)
-}
-
-// NewSignerWithMaxLifetime 保留单 key 配置的迁移兼容：新 token 带 legacy kid，
-// 部署升级前签发、没有 kid 的旧 token 在其剩余短有效期内仍可验签。
-func NewSignerWithMaxLifetime(privPEM, pubPEM []byte, issuer, audience string,
-	maxLifetime time.Duration) (*Signer, error) {
-	signer, err := NewKeyRing(legacyKID, []Key{{
-		ID: legacyKID, PrivatePEM: privPEM, PublicPEM: pubPEM,
-	}}, issuer, audience, maxLifetime)
-	if err != nil {
-		return nil, err
-	}
-	signer.allowNoKID = true
-	return signer, nil
+	return NewKeyRing("current", []Key{{ID: "current", PrivatePEM: privPEM, PublicPEM: pubPEM}}, issuer, audience, 0)
 }
 
 // NewKeyRing 构造支持轮换的签发/验签器。activeKID 对应的 key 必须包含私钥；
@@ -115,7 +104,7 @@ func (s *Signer) Sign(c Claims, ttl time.Duration) (string, string, error) {
 	now := time.Now()
 	jti := ulid.MustNew(ulid.Timestamp(now), rand.Reader).String()
 	reg := registered{
-		UID: c.UID, DID: c.DID, Kind: c.Kind,
+		UID: c.UID, DID: c.DID, Kind: c.Kind, PFP: c.PFP,
 		RegisteredClaims: jwtv5.RegisteredClaims{
 			Issuer:    s.issuer,
 			Subject:   fmt.Sprintf("device:%d", c.DID),
@@ -141,9 +130,6 @@ func (s *Signer) Verify(token string) (*Claims, error) {
 			return nil, errors.New("unexpected signing method")
 		}
 		kid, _ := t.Header["kid"].(string)
-		if kid == "" && s.allowNoKID {
-			kid = s.activeKID
-		}
 		pub, ok := s.publicKeys[kid]
 		if !ok {
 			return nil, errors.New("unknown or retired kid")
@@ -166,6 +152,6 @@ func (s *Signer) Verify(token string) (*Claims, error) {
 		}
 	}
 	return &Claims{
-		UID: reg.UID, DID: reg.DID, Kind: reg.Kind, JTI: reg.ID,
+		UID: reg.UID, DID: reg.DID, Kind: reg.Kind, PFP: reg.PFP, JTI: reg.ID,
 	}, nil
 }

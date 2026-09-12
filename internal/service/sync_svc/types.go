@@ -1,39 +1,28 @@
 package sync_svc
 
-// 上行单条的处置结果。
+import "github.com/agentre-hub/agentre/pkg/syncwire"
+
+// 处置结果与拒绝原因的词表归共享契约 pkg/syncwire 所有 —— 它们是**线上取值**:
+// sync_ctr 把 PushItemResult.Reason 原样送给客户端,桌面端据它决定这一条是复活失败
+// 还是记进「没能同步的改动」。本包对它们做别名,调用点不用改。
+//
+// 判据本身写在契约里:凡是能拒掉一条的理由,都只拒那一条。整批拒是一个永久性的堵。
 const (
-	// PushStatusAccepted 基版本与该行当前版本相符（或该同步标识 server 从未见过）。
-	PushStatusAccepted = "accepted"
-	// PushStatusConflict 基版本与当前版本不符，或基版本为空但同步标识已存在。
-	// 本次上行照常生效（R4 后到者胜），但应答里回报被覆盖的版本与来源设备，
-	// 上行端据此落一条「被覆盖」记录（R5）。
-	PushStatusConflict = "conflict"
-	// PushStatusRejected 这一条没有生效，原因见 Reason。
-	PushStatusRejected = "rejected"
+	PushStatusAccepted = syncwire.PushStatusAccepted
+	PushStatusConflict = syncwire.PushStatusConflict
+	PushStatusRejected = syncwire.PushStatusRejected
 )
 
-// 单条拒绝的原因。
-//
-// **凡是能拒掉一条的理由，都只拒那一条。** 整批拒是一个永久性的堵：桌面端整批
-// 失败时一行都不出队，下一轮再发同一批、再被同一条拒掉，那台机器的上行队列从此
-// 不动——连 R6 的删除也传不出去。校验不通过的行以 rejected 回报，上行端据此把它
-// 移出队列并记进「没能同步的改动」（R5）。
 const (
-	// PushRejectReasonDeleted 该对象在 server 上已是墓碑。删除不会被复活（R6），
-	// 恢复动作因此明确失败（R5a），界面据此提供「按这份内容新建」——那是一个新的
-	// 同步标识，走正常上行。
-	PushRejectReasonDeleted = "deleted"
-	// PushRejectReasonKind 对象类型不属于同步组、与该同步标识已有行的类型不符，
-	// 或缺少该类型必需的自然键。
-	PushRejectReasonKind = "kind_invalid"
-	// PushRejectReasonPayload 载荷过不了 sync_entity.ValidatePayload 的守卫。
-	PushRejectReasonPayload = "payload_rejected"
+	PushRejectReasonDeleted = syncwire.PushRejectReasonDeleted
+	PushRejectReasonKind    = syncwire.PushRejectReasonKind
+	PushRejectReasonPayload = syncwire.PushRejectReasonPayload
 )
 
 // PushItem 是一次上行里的一条改动。
 //
 // 这里没有、也不该有任何桌面端的本地自增 ID：跨机引用一律走同步标识
-// （字符串）、agentred 指纹或 provider_key，载荷本身还要过 ValidatePayload。
+// （字符串）、agentred 指纹或 provider_key，载荷本身还要过共享守卫 syncwire.GuardPayload。
 type PushItem struct {
 	Kind   string
 	SyncID string
@@ -42,11 +31,15 @@ type PushItem struct {
 	BaseVersion int64
 	// UpdatedAt 是客户端的最后修改时间。只落库供展示与 30 天窗口计算，
 	// 一律不参与胜负比较。
-	UpdatedAt           int64
-	Deleted             bool
+	UpdatedAt int64
+	// DeletedAt 非零表示这是一条墓碑，值是**发起端记下的删除时刻**（Unix 毫秒）。
+	// 它不是布尔：时刻在桌面端库、线格式与 server 库三处本来就是时刻，压成布尔
+	// 之后落地只能另行编造一个删除时间（2026-08-27-schema-overhaul.md 决策 20）。
+	DeletedAt           int64
 	AgentredFingerprint string
-	ProjectSyncID       string
-	Payload             []byte
+	// ScopeSyncID 见 sync_entity.SyncObject.ScopeSyncID：装什么取决于 kind。
+	ScopeSyncID string
+	Payload     []byte
 }
 
 type PushInput struct {
@@ -65,19 +58,19 @@ type PushItemResult struct {
 	Status  string
 	// Reason 只在 Status 为 rejected 时有值。
 	Reason string
-	// OverwrittenVersion / OverwrittenDeviceID / OverwrittenPayload 只在 Status 为
-	// conflict 时有值：被这次上行覆盖掉的是哪一版、来自哪台设备、正文是什么。
+	// OverwrittenVersion / OverwrittenOriginFingerprint / OverwrittenPayload 只在
+	// Status 为 conflict 时有值：被这次上行覆盖掉的是哪一版、来自哪台机器、正文是什么。
 	//
 	// 正文必须由 server 带回去：上行端手上那一份是**覆盖别人的**那一份，它不持有
 	// 被覆盖掉的内容。R5 承诺的「追回被覆盖的那一版」只有这一条路。
-	OverwrittenVersion  int64
-	OverwrittenDeviceID int64
-	OverwrittenPayload  string
-	// MergedSyncID / MergedVersion / MergedDeviceID 只在 R4b 的自然键合并发生时
-	// 有值：落败的那一份的同步标识、版本与来源设备，它已在 server 落墓碑。
-	MergedSyncID   string
-	MergedVersion  int64
-	MergedDeviceID int64
+	OverwrittenVersion           int64
+	OverwrittenOriginFingerprint string
+	OverwrittenPayload           string
+	// MergedSyncID / MergedVersion / MergedOriginFingerprint 只在 R4b 的自然键合并
+	// 发生时有值：落败的那一份的同步标识、版本与来源机器，它已在 server 落墓碑。
+	MergedSyncID            string
+	MergedVersion           int64
+	MergedOriginFingerprint string
 }
 
 type PushOutput struct {
@@ -91,17 +84,19 @@ type PullInput struct {
 	Limit    int
 }
 
-// PullItem 是下行的一行，墓碑也在其中（Deleted = true），删除靠它到达各端。
+// PullItem 是下行的一行，墓碑也在其中（DeletedAt > 0），删除靠它到达各端。
 type PullItem struct {
 	Kind                string
 	SyncID              string
-	ProjectSyncID       string
+	ScopeSyncID         string
 	AgentredFingerprint string
 	Payload             []byte
 	Version             int64
 	UpdatedAt           int64
-	SourceDeviceID      int64
-	Deleted             bool
+	// OriginFingerprint 是最后一次修改来自哪台机器（决策 14）；空串 = 服务端直写。
+	OriginFingerprint string
+	// DeletedAt 非零 = 墓碑，值是删除时刻（Unix 毫秒，决策 20）。
+	DeletedAt int64
 }
 
 type PullOutput struct {

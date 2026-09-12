@@ -1,0 +1,187 @@
+{
+  "eyebrow": "Device authorization",
+  "entry": {
+    "title": "Enter the device code",
+    "description": "Your desktop app or terminal shows a 6-character code. Enter it here.",
+    "groupLabel": "Device code",
+    "boxLabel": "Character {{position}} of 6",
+    "submit": "Continue",
+    "footnote": "No code on screen? Go back to the device and start authorization again.",
+    "errors": {
+      "incomplete": "Enter all six characters.",
+      "invalid": "That code does not exist or has already been used. Check the 6-character code shown on the device."
+    }
+  },
+  "approve": {
+    "title": "Allow this device to access your AgentRe account?",
+    "risk": "Once you approve it, this device gets full access to your AgentRe account as you, including running arbitrary code and commands. Only approve devices you trust.",
+    "verify": "Check that this code matches exactly what the device shows",
+    "expiry": "This authorization request expires in {{minutes}}m {{seconds}}s",
+    "expirySeconds": "This authorization request expires in {{seconds}}s",
+    "expiryAnnounce": "This authorization request expires in about {{minutes}} minutes",
+    "expiryAnnounceSoon": "This authorization request expires in less than a minute",
+    "allow": "Allow access",
+    "deny": "Deny",
+    "fineprint": "You can revoke this device's access at any time under Console → Devices.",
+    "actionError": "That did not go through. Please try again."
+  },
+  "kind": {
+    "desktop": "Desktop",
+    "agentred": "Compute node",
+    "mobile": "Mobile"
+  },
+  "success": {
+    "title": "Device authorized",
+    "body": "You can close this page now and continue on the device.",
+    "manageDevices": "Go to the console to manage devices"
+  },
+  "deniedScreen": {
+    "title": "Authorization denied",
+    "close": "Close page"
+  },
+  "expiredScreen": {
+    "title": "Authorization request expired",
+    "body": "Go back to the device, start authorization again, then enter the new code.",
+    "retry": "Enter a new code"
+  },
+  "add": {
+    "open": "Add device",
+    "copy": "Copy",
+    "copied": "Copied",
+    "stepOf": "Step {{n}} of 3",
+    "kindLabel": "Device type",
+    "kindAgentred": "Compute node (agentred)",
+    "kindDesktop": "Desktop (Agentre App)",
+    "steps": {
+      "login": {
+        "title": "Install and sign in",
+        "hint": "Prints a device code",
+        "done": "Signed in"
+      },
+      "code": {
+        "title": "Enter the device code",
+        "hint": "One-time 6-character code",
+        "done": "Approved"
+      },
+      "service": {
+        "title": "Keep it running",
+        "hint": "After approval",
+        "done": "Running"
+      }
+    },
+    "install": {
+      "downloadLabel": "Download",
+      "downloadBody": "Download the installer for that platform from GitHub Releases (macOS .dmg / Windows .exe / Linux .deb).",
+      "download": "Open the download page"
+    },
+    "login": {
+      "agentredTitle": "Install agentred and sign in",
+      "agentredDesc": "Signing in has to finish before the background service starts.",
+      "commandLabel": "Sign in",
+      "desktopTitle": "Install the desktop app and sign in",
+      "desktopDesc": "In the app, go to Settings → Remote → Sign in and enter the address below.",
+      "serverLabel": "Server address",
+      "next": "I have the device code"
+    },
+    "service": {
+      "agentredTitle": "Keep agentred running in the background",
+      "agentredDesc": "Do this only after the device is approved — a service that starts earlier overwrites this login.",
+      "desktopTitle": "No service to register",
+      "desktopDesc": "The desktop app has agentred built in; it is online whenever the app is open.",
+      "finish": "Done"
+    }
+  },
+  "manage": {
+    "loadError": "Could not load your devices. Please try again.",
+    "statusOnline": "Online",
+    "statusOffline": "Offline",
+    "statusRevoked": "Revoked",
+    "revokeConfirmTitle": "Revoke this device?",
+    "revokeConfirmBody": "This device can no longer refresh its credentials after you confirm. If it is offline right now, credentials already issued may still be accepted for their short validity window — revocation is not instant.",
+    "revokeCancel": "Cancel",
+    "revokeConfirm": "Revoke",
+    "revokeError": "Could not revoke this device. Please try again.",
+    "expand": "Show details",
+    "collapse": "Hide details",
+    "runnableAgents": "Agents that can run here",
+    "rankLabel": "Rank {{rank}}",
+    "projects": "Projects",
+    "configured": "Configured",
+    "notConfigured": "Not configured",
+    "noProjectsReported": "No projects reported from this device yet.",
+    "noRunnableAgents": "No agents can run on this device yet.",
+    "detailLoadError": "Could not load this device's details.",
+    "sessions": "Conversations",
+    "sessionCount": "{{count}} conversations",
+    "sessionWaiting": "{{count}} waiting for you",
+    "viewSessions": "View this machine's conversations",
+    "viewDesktopSessions": "View this desktop's conversations",
+    "offlineNotEnterable": "Offline — conversations are unavailable.",
+    "desktopAppNotRunningShort": "Agentre is not running",
+    "desktopAppNotRunningDetail": "Agentre is not running on this computer. Open Agentre to view its conversations.",
+    "cardSummary": "{{projects}} projects · {{m}} conversations running",
+    "revokeConfirmTitleNamed": "Revoke {{name}}?"
+  },
+  "upgrade": {
+    "badge": "Upgradable to {{version}}",
+    "blockedBadge": "Too old",
+    "blockedTitle": "Too old to connect",
+    "blockedBody": "This machine is online, but its conversations stay out of reach until agentred is upgraded there.",
+    "availableTitle": "New version {{version}}",
+    "availableBody": "Upgrading restarts agentred: conversations running on it are interrupted, and what they already produced is kept.",
+    "commandLabel": "Run on that machine",
+    "action": {
+      "default": "Upgrade agentred",
+      "upgrading": "Upgrading…",
+      "requesting": "Preparing…",
+      "forceLabel": "Upgrade anyway",
+      "upToDate": "Up to date ({{version}})"
+    },
+    "confirm": {
+      "title": "{{count}} conversation(s) still running",
+      "body": "Upgrading restarts agentred, so those turns are interrupted. What they already produced is kept.",
+      "cancel": "Not now",
+      "confirm": "Upgrade anyway"
+    },
+    "status": {
+      "requestingTitle": "Preparing the upgrade",
+      "requestingBody": "That machine is fetching and verifying the new version — this can take a few minutes. Leave this open.",
+      "upgradingTitle": "Upgrading to {{version}}",
+      "upgradingBody": "Restarting once — usually under a minute.",
+      "successTitle": "Upgrade complete",
+      "timeoutTitle": "It didn't come back",
+      "timeoutBody": "Waited 5 minutes. If it isn't running as a service or container, it won't restart on its own after the upgrade.",
+      "failedTitle": "The upgrade didn't start"
+    },
+    "devBuild": "Development build",
+    "devBuildTitle": "This is a development build",
+    "devBuildBody": "Its version cannot be compared with a release, so it is never nudged to upgrade.",
+    "failed": {
+      "unknownTitle": "The upgrade did not start",
+      "inProgressTitle": "An upgrade is already running on this machine",
+      "inProgressBody": "Wait for it to finish, then try again.",
+      "notWritableTitle": "No permission to replace agentred",
+      "notWritableBody": "The current user cannot write to the directory it lives in. Run the command below on that machine with enough privileges.",
+      "alreadyLatestTitle": "Already up to date",
+      "alreadyLatestBody": "There is no newer version to install.",
+      "downloadFailedTitle": "Could not fetch the new version",
+      "downloadFailedBody": "The download or its checksum failed. The current agentred was not touched."
+    }
+  },
+  "portForward": {
+    "loadFailed": "Could not load port mappings. {{message}}",
+    "actionFailed": "That did not work. {{message}}",
+    "open": "Open in a new tab",
+    "copyDone": "Address copied",
+    "copyFailed": "Could not copy the address",
+    "add": {
+      "port": "Port",
+      "name": "Name",
+      "submit": "Add",
+      "cancel": "Cancel",
+      "invalidPort": "Enter a port number between 1 and 65535.",
+      "portTaken": "This port already has a mapping on this device.",
+      "failed": "Could not add the mapping. {{message}}"
+    }
+  }
+}

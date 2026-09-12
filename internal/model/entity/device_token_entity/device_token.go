@@ -8,7 +8,6 @@ type DeviceToken struct {
 	AccessJTI        string  `gorm:"column:access_jti;type:text;not null;default:''"`
 	RefreshExpiresAt int64   `gorm:"column:refresh_expires_at;type:bigint;not null;default:0"`
 	LastUsedAt       int64   `gorm:"column:last_used_at;type:bigint;not null;default:0"`
-	RotatedFromID    int64   `gorm:"column:rotated_from_id;type:bigint;not null;default:0"`
 	RevokedAt        int64   `gorm:"column:revoked_at;type:bigint;not null;default:0"`
 	UserAgent        string  `gorm:"column:user_agent;type:text;not null;default:''"`
 	IP               *string `gorm:"column:ip;type:varchar(45)"`

@@ -1,13 +1,17 @@
+import {
+  AGENTRE_UI_NAMESPACE,
+  agentreUiResources,
+} from "@agentre-hub/agentre-ui/i18n";
 import i18n from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
 
-import en from "./locales/en.json";
-import zhCN from "./locales/zh-CN.json";
+import en from "./locales/en";
+import zhCN from "./locales/zh-CN";
 
 /**
  * 支持的语言。新增语言时：
- *   1. 在 locales/ 下加一个与 en.json 键集合完全一致的文件
+ *   1. 在 locales/ 下加一个目录，模块文件与 en/ 一一对应、键集合完全一致
  *   2. 加进这里的 resources
  * 键集合一致性由 src/i18n/__tests__/locale-parity.test.ts 守卫。
  */
@@ -19,9 +23,23 @@ export const LANGUAGE_LABELS: Record<SupportedLanguage, string> = {
   "zh-CN": "简体中文",
 };
 
+/**
+ * 共享 UI 包 `@agentre-hub/agentre-ui` 的文案挂在它自己的 namespace 下，
+ * 与本站的 `translation` 互不覆盖 —— 包里的组件只经 `useUiTranslation()`
+ * （= `useTranslation("agentreUi")`）取文案，取不到就整片显示原始 key。
+ *
+ * 从**窄入口** `/i18n` 导入而不是包主入口：主入口会把整棵组件树拖进来，
+ * 而这里只要语言包。
+ */
 export const resources = {
-  en: { translation: en },
-  "zh-CN": { translation: zhCN },
+  en: {
+    translation: en,
+    [AGENTRE_UI_NAMESPACE]: agentreUiResources.en,
+  },
+  "zh-CN": {
+    translation: zhCN,
+    [AGENTRE_UI_NAMESPACE]: agentreUiResources["zh-CN"],
+  },
 } as const;
 
 void i18n

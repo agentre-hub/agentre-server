@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { cn } from "@agentre-hub/agentre-ui";
 
 /**
  * 统计项（Pencil 总览 IhldU 统计卡提炼）。
@@ -40,7 +40,7 @@ export function Metric({
       <div
         className={cn(
           "flex items-center gap-1.5",
-          danger ? "text-destructive" : "text-subtle-foreground",
+          danger ? "text-destructive" : "text-muted-foreground",
         )}
       >
         {Icon ? (
@@ -61,7 +61,7 @@ export function Metric({
         {unit ? (
           <span
             data-testid="metric-unit"
-            className="text-xs text-subtle-foreground"
+            className="text-xs text-muted-foreground"
           >
             {unit}
           </span>
@@ -72,7 +72,7 @@ export function Metric({
           data-testid="metric-sub"
           className={cn(
             "truncate text-[10.5px]",
-            danger ? "text-destructive" : "text-subtle-foreground",
+            danger ? "text-destructive" : "text-muted-foreground",
           )}
         >
           {sub}

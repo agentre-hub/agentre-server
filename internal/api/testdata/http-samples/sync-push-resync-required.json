@@ -1,0 +1,22 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/v1/sync/push",
+    "body": {
+      "items": [
+        {
+          "kind": "project",
+          "sync_id": "01JZ7W2A8KZ4R5T6Y7U8I9O0P1",
+          "base_version": 0
+        }
+      ]
+    }
+  },
+  "response": {
+    "status": 400,
+    "body": {
+      "code": 30500,
+      "msg": "设备离线过久，请先拉取全量快照再同步"
+    }
+  }
+}

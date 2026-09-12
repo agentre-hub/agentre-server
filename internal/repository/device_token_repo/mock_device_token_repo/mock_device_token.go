@@ -10,10 +10,10 @@
 package mock_device_token_repo
 
 import (
-	device_token_entity "agentre-server/internal/model/entity/device_token_entity"
 	context "context"
 	reflect "reflect"
 
+	device_token_entity "github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	gomock "go.uber.org/mock/gomock"
 )
 

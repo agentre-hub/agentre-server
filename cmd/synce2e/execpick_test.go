@@ -54,9 +54,9 @@ func TestResolveExecTargets_GivenNoTargetAvailable_ThenPickedIsNil(t *testing.T)
 
 func TestResolveExecTargets_GivenTombstonedRows_ThenTheyDoNotCount(t *testing.T) {
 	deletedTarget := target("t0", "agent-1", "backend-local", 0)
-	deletedTarget.Deleted = true
+	deletedTarget.DeletedAt = 1700
 	deletedBackend := backend("backend-gone", "")
-	deletedBackend.Deleted = true
+	deletedBackend.DeletedAt = 1700
 	objects := map[string]*peerObject{
 		"t0":            deletedTarget,
 		"backend-local": backend("backend-local", ""),

@@ -3,10 +3,11 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
-	"agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/apierr"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 )
 
 // csrfOK 判定一次请求是否清过 CSRF：安全方法直接放行，写方法必须出示与会话
@@ -21,14 +22,12 @@ func csrfOK(c *gin.Context, expected string) bool {
 		return false
 	}
 	got := c.GetHeader("X-CSRF-Token")
-	return got != "" && got == expected
+	return got == expected
 }
 
 func CSRF() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		expected, _ := c.Get("csrf_token")
-		exp, _ := expected.(string)
-		if !csrfOK(c, exp) {
+		if !csrfOK(c, ginctx.CSRFToken(c)) {
 			abortForbidden(c)
 			return
 		}
@@ -37,9 +36,5 @@ func CSRF() gin.HandlerFunc {
 }
 
 func abortForbidden(c *gin.Context) {
-	c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-		"code": code.Forbidden,
-		"msg":  i18n.T(c.Request.Context(), code.Forbidden),
-		"data": nil,
-	})
+	apierr.Abort(c, http.StatusForbidden, code.Forbidden)
 }

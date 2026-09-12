@@ -2,7 +2,9 @@
 package device_flow_entity
 
 type DeviceFlowCode struct {
-	DeviceCode        string `gorm:"column:device_code;type:text;primaryKey"`
+	ID int64 `gorm:"column:id;primaryKey;autoIncrement"`
+	// DeviceCode 是自然键，落在唯一索引上；行身份由 ID 承担。
+	DeviceCode        string `gorm:"column:device_code;type:text"`
 	UserCode          string `gorm:"column:user_code;type:text;not null"`
 	DeviceKind        string `gorm:"column:device_kind;type:text;not null"`
 	ClientFingerprint string `gorm:"column:client_fingerprint;type:text;not null"`
@@ -30,9 +32,6 @@ func (c *DeviceFlowCode) IsConsumed() bool { return c != nil && c.ConsumedAt > 0
 func (c *DeviceFlowCode) IsDenied() bool   { return c != nil && c.DeniedAt > 0 }
 func (c *DeviceFlowCode) IsExpired(nowMs int64) bool {
 	return c != nil && c.ExpiresAt > 0 && c.ExpiresAt < nowMs
-}
-func (c *DeviceFlowCode) IsPending() bool {
-	return c != nil && !c.IsAuthorized() && !c.IsDenied() && !c.IsConsumed()
 }
 
 // NextPollAllowed 返回 nowMs 是否满足 interval 间隔（ms）。

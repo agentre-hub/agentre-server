@@ -1,0 +1,16 @@
+{
+  "title": "Board",
+  "labelsTitle": "Labels",
+  "summary": {
+    "counts": "{{total}} tasks · {{doing}} in progress"
+  },
+  "actions": {
+    "newTask": "New task"
+  },
+  "exec": {
+    "machineAria": "Pick the machine to run on",
+    "modelAria": "Pick the model",
+    "pickerTitle": "Where it runs",
+    "followAgent": "Follow the agent's binding"
+  }
+}

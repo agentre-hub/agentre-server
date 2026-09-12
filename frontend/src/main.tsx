@@ -5,8 +5,8 @@ import { I18nextProvider } from "react-i18next";
 import i18n from "./i18n";
 import App from "./App";
 import "./styles/globals.css";
+import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import { loadCsrfToken } from "./lib/api";
-import { ThemeProvider } from "./lib/theme";
 
 loadCsrfToken();
 createRoot(document.getElementById("root")!).render(

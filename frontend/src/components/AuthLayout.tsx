@@ -26,7 +26,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
               aria-hidden="true"
             />
           </div>
-          <span className="text-[15px] font-semibold text-foreground">
+          <span className="text-prose font-semibold text-foreground">
             {t("authLayout.brand")}
           </span>
         </div>
@@ -38,7 +38,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
         {children}
       </main>
 
-      <footer className="flex flex-wrap items-center justify-center gap-[18px] px-8 py-5 text-xs text-subtle-foreground">
+      <footer className="flex flex-wrap items-center justify-center gap-[18px] px-8 py-5 text-xs text-muted-foreground">
         <span>{t("authLayout.footer.copyright", { year })}</span>
         <Link
           to="/terms"

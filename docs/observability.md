@@ -1,8 +1,8 @@
 # Observability
 
-Three signals, wired through cago. This is a long-running service heading for SaaS, so all
-three are on: logs answer "what happened", metrics answer "how much and how often", traces
-answer "where did this request spend its time".
+Three signals are wired through cago: logs answer "what happened", metrics answer "how
+much and how often", and traces answer "where did this request spend its time". Logs and
+metrics are registered at startup; trace export depends on `trace` configuration.
 
 ## Logging
 
@@ -46,6 +46,16 @@ window is declared in `.golangci.yml` under `linters.exclusions.rules`.
 Do not log an error and also return it — the caller will log it too and you get the same
 failure three times at three layers. Log where it is handled, return everywhere else.
 
+### Data policy
+
+Sensitive server fields are not log fields. Do not log credentials, authorization or
+cookie values, tokens, secrets, complete DSNs, OAuth payloads, raw third-party responses,
+or personal data; omit them at the source instead of relying on a generic masking layer.
+`zap.Error(err)` is subject to the same rule because an error string can contain the
+underlying request or secret. Raw protocol diagnostic frames may be emitted at `Debug`
+only when that diagnostic visibility is an explicit feature contract and the frame does
+not cross the server-sensitive-field boundary.
+
 ## Metrics
 
 `metric.Metrics` is registered in `cmd/server/main.go`. It installs a gin middleware and
@@ -63,9 +73,9 @@ is directly exposed. Restrict it at the ingress before going public.
 
 ## Traces
 
-`trace.Trace` is registered **before** the other components in `cmd/server/main.go`. Order
-matters: later components and the mux middleware check `trace.Default()` to decide whether
-to wire tracing in, so registering it late means no spans and no error.
+After `component.Core()`, `trace.Trace` is registered before database, Redis, business
+components and the mux in `cmd/server/main.go`. Order matters: later components and the
+mux middleware check `trace.Default()` when wiring tracing.
 
 Configured under `trace:` in `configs/config.yaml`:
 

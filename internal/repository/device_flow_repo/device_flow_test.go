@@ -7,7 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
-	hubtest "agentre-server/internal/testutils"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 func TestApprove(t *testing.T) {
@@ -98,7 +98,7 @@ func TestMarkConsumed_ReturnsZeroRowsWhenAlreadySettled(t *testing.T) {
 func TestFindByDeviceCode_Found(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `device_flow_codes` WHERE device_code=? ORDER BY `device_flow_codes`.`device_code` LIMIT ?")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT * FROM `device_flow_codes` WHERE device_code=? ORDER BY `device_flow_codes`.`id` LIMIT ?")).
 		WithArgs("dc-x", 1).
 		WillReturnRows(sqlmock.NewRows([]string{"device_code", "user_code"}).AddRow("dc-x", "A4F-7Q2"))
 	got, err := r.FindByDeviceCode(ctx, "dc-x")

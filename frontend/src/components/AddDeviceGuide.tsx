@@ -1,34 +1,48 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
-import type { ReactNode } from "react";
+import { useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
+import { ArrowRight, Check, CircleAlert, Download } from "lucide-react";
+
 import {
-  ArrowRight,
-  Check,
-  CircleAlert,
-  Copy,
-  Download,
-  X,
-} from "lucide-react";
+  AGENTRED_RELEASES_URL,
+  AgentredInstallDocsLink,
+  AgentredInstallSection,
+  AgentredServiceSection,
+  Button,
+  CommandCard,
+  GuideStepRail,
+  agentredLoginCommand,
+  type AgentredInstallMethod,
+  type AgentredTargetOS,
+  type GuideStep,
+} from "@agentre-hub/agentre-ui";
 
 import CodeInput from "@/components/CodeInput";
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { normalize, toChars } from "@/lib/userCode";
-import { cn } from "@/lib/utils";
+import { parseUserCode, toChars } from "@/lib/userCode";
 
-/** 能被「加进来」的设备类型。浏览器不用加（用户正开着的这个已经在列表里），移动端没有可装的客户端。 */
+/** 能被「加进来」的设备类型。浏览器不是可管理设备；移动端没有可装的客户端。 */
 type AddKind = "agentred" | "desktop";
-type TargetOS = "linux" | "macos" | "windows";
 
-const RELEASES_URL = "https://github.com/agentre-ai/agentre/releases/latest";
-
-/** 与桌面端引导给的是同一条命令；改这里之前先确认那边也改了。 */
-const INSTALL_UNIX = `curl -fsSL ${RELEASES_URL}/download/install.sh | sh`;
-const INSTALL_WINDOWS = `irm ${RELEASES_URL}/download/install.ps1 | iex`;
-const SERVICE_INSTALL = "agentred service install --start";
-
-const STEP_KEYS = ["install", "login", "code"] as const;
+/**
+ * 顺序是被 agentred 的落盘时序钉死的，不是排版偏好。
+ *
+ * `agentred login` 会一直阻塞轮询，直到用户批准才退出、并把这次认领写进
+ * `state.json`；而 daemon 一旦跑起来就会把 `state.json` 读进内存并持有它
+ * （`cmd/agentred/login.go` 的 `requireNoRunningDaemon` 因此在 daemon 运行时
+ * 直接拒绝登录）。于是：
+ *
+ *   1. 登录必须排在 `agentred service install --start` 之前 —— 否则闸门当场
+ *      拒绝，而 macOS 的 LaunchAgent 是 KeepAlive=true，pkill 也停不下来；
+ *   2. **批准也必须排在它之前** —— 闸门拦不住「先 login 再起服务」这条：login
+ *      过闸时 daemon 还没起来。daemon 抢在 login 退出前起来，就会拿着旧的
+ *      （未登录的）state，它之后任何一次写盘都把刚落定的登录覆盖掉，症状是
+ *      设备看着授权成功却永远连不上。
+ *
+ * 所以三步是：装 + 登录 → 输码批准 → 注册后台服务。二进制安装命令留在第 1 步：
+ * 没有二进制就没有 `agentred login` 可运行，它是这一步的前置。
+ */
+const STEP_KEYS = ["login", "code", "service"] as const;
 
 /**
  * 登录命令里的服务器地址 = **这个控制台自己的地址**。
@@ -40,72 +54,7 @@ function consoleOrigin(): string {
   return window.location.origin;
 }
 
-/** 一条可复制的命令。剪贴板不可用（非安全上下文）时不渲染复制按钮——没有能力就不给控件。 */
-function CommandCard({
-  label,
-  command,
-  testId,
-  copyTestId,
-}: {
-  label: string;
-  command: string;
-  testId: string;
-  copyTestId: string;
-}) {
-  const { t } = useTranslation();
-  // 记的是「复制走的是哪一条命令」而不是「复制过没有」：切换系统会把同一张卡
-  // 换成另一条命令，只记一个布尔值的话，按钮就会对着一条从没进过剪贴板的命令
-  // 说「已复制」。
-  const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
-  const copied = copiedCommand === command;
-
-  // 计时从点击那一刻起算，与卡片此刻显示哪条命令无关。
-  useEffect(() => {
-    if (copiedCommand === null) return;
-    const timer = window.setTimeout(() => setCopiedCommand(null), 2000);
-    return () => window.clearTimeout(timer);
-  }, [copiedCommand]);
-
-  const clipboard =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard;
-
-  return (
-    <div className="overflow-hidden rounded-md border border-border">
-      <div className="flex items-center gap-2 border-b border-border bg-muted px-3 py-1.5">
-        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          {label}
-        </span>
-        {clipboard && (
-          <Button
-            variant="ghost"
-            size="xs"
-            data-testid={copyTestId}
-            onClick={() => {
-              clipboard
-                .writeText(command)
-                .then(() => setCopiedCommand(command))
-                .catch(() => {
-                  // 复制被浏览器拒了就保持原样：命令本身仍然可以选中手抄，
-                  // 不谎报「已复制」。
-                });
-            }}
-          >
-            {copied ? <Check /> : <Copy />}
-            {copied ? t("device.add.copied") : t("device.add.copy")}
-          </Button>
-        )}
-      </div>
-      <pre
-        data-testid={testId}
-        className="overflow-x-auto bg-code-surface px-3 py-2.5 font-mono text-xs text-code-foreground"
-      >
-        {command}
-      </pre>
-    </div>
-  );
-}
-
-/** 选项按钮（设备类型 / 系统）：当前选中态由 aria-pressed 表达，不靠颜色。 */
+/** 选项按钮（设备类型）：当前选中态由 aria-pressed 表达，不靠颜色。 */
 function ChoiceButton({
   selected,
   onSelect,
@@ -113,7 +62,7 @@ function ChoiceButton({
 }: {
   selected: boolean;
   onSelect: () => void;
-  children: ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <Button
@@ -124,15 +73,6 @@ function ChoiceButton({
     >
       {children}
     </Button>
-  );
-}
-
-function FieldLabel({ label, hint }: { label: string; hint?: string }) {
-  return (
-    <div className="flex flex-wrap items-baseline justify-between gap-2">
-      <span className="text-[13px] font-medium text-foreground">{label}</span>
-      {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
-    </div>
   );
 }
 
@@ -148,41 +88,26 @@ function StepHead({
   const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1.5">
-      <span className="font-mono text-[10px] font-medium text-subtle-foreground">
+      <span className="font-mono text-3xs font-medium text-muted-foreground">
         {t("device.add.stepOf", { n: step })}
       </span>
       <h2 className="text-base font-semibold text-foreground">{title}</h2>
-      <p className="text-[13px] leading-relaxed text-muted-foreground">
+      <p className="text-aux leading-relaxed text-muted-foreground">
         {description}
       </p>
     </div>
   );
 }
 
-/** 步骤正文下面的说明清单（会打印什么、会不会自己开浏览器、过期怎么办）。 */
-function TipList({ tips }: { tips: string[] }) {
-  return (
-    <ol className="flex flex-col gap-2">
-      {tips.map((tip, i) => (
-        <li
-          key={tip}
-          className="flex gap-2.5 text-[13px] text-muted-foreground"
-        >
-          <span className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-muted font-mono text-[10px] text-subtle-foreground">
-            {i + 1}
-          </span>
-          <span className="min-w-0 flex-1 leading-relaxed">{tip}</span>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
 /**
- * 「怎么加一台设备」的页内引导：装上 agentred → 让它登录账号 → 输入设备码。
+ * 「怎么加一台设备」的页内引导：装好并登录 → 输入设备码批准 → 让它常驻后台。
  *
  * 只在设备页由唯一的「添加设备」入口召唤（空态默认展开），不是常驻区块。
  * 传了 onClose 才渲染收起控件——空态没有别的东西可看，收起等于把页面清空。
+ *
+ * 安装与常驻两段、步骤条与命令卡都来自 `@agentre-hub/agentre-ui`：桌面端的接入
+ * 引导渲染的是同一份，命令也只有那一份。控制台独有的部分——自己的 origin、
+ * 设备码输入、跳授权确认屏、设备类型选择——留在这里。
  *
  * 完成标记只跟「用户点过那一步的下一步」走：从步骤条直接跳到第 3 步不会给
  * 前两步补上勾，否则那个勾就是我们替用户编的。
@@ -192,19 +117,22 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
   const nav = useNavigate();
   const [step, setStep] = useState(1);
   const [kind, setKind] = useState<AddKind>("agentred");
-  const [os, setOS] = useState<TargetOS>("linux");
-  const [done, setDone] = useState<Set<number>>(new Set());
+  const [method, setMethod] = useState<AgentredInstallMethod>("native");
+  const [os, setOS] = useState<AgentredTargetOS>("linux");
+  const [done, setDone] = useState<number[]>([]);
   const [chars, setChars] = useState<string[]>(() => toChars(""));
   const [incomplete, setIncomplete] = useState(false);
   const codeErrorId = useId();
 
   function finishStep(n: number) {
-    setDone((prev) => new Set(prev).add(n));
-    setStep(n + 1);
+    setDone((prev) => (prev.includes(n) ? prev : [...prev, n]));
+    // 最后一步没有「下一步」可去：只落一个勾，不要把 step 推到一个不存在的
+    // 编号上（那会把整块正文渲染成空白）。
+    if (n < STEP_KEYS.length) setStep(n + 1);
   }
 
   /**
-   * 第 3 步只做本地归一化，然后把设备码交给既有的授权确认屏。
+   * 第 2 步只做本地解析，然后把设备码交给既有的授权确认屏。
    *
    * 「这个代码存不存在 / 是不是已经用过」不在这里问：那一屏拿到 user_code
    * 就会自己查 pending，查不到时用同一套 device.entry.errors 就地标红且
@@ -213,7 +141,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
    */
   function submitCode(e: FormEvent) {
     e.preventDefault();
-    const norm = normalize(chars.join(""));
+    const norm = parseUserCode(chars.join(""));
     // 不足六位（码格本身已挡下字母表外的字符）：一个请求都不发，停在原地。
     if (!norm) {
       setIncomplete(true);
@@ -225,12 +153,18 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
   const server = consoleOrigin();
   const isAgentred = kind === "agentred";
 
+  const steps: readonly GuideStep[] = STEP_KEYS.map((key) => ({
+    key,
+    title: t(`device.add.steps.${key}.title`),
+    hint: t(`device.add.steps.${key}.hint`),
+    doneLabel: t(`device.add.steps.${key}.done`),
+  }));
+
   const kindChoice = (
     <div className="flex flex-col gap-2">
-      <FieldLabel
-        label={t("device.add.kindLabel")}
-        hint={t("device.add.kindHint")}
-      />
+      <span className="text-aux font-medium text-foreground">
+        {t("device.add.kindLabel")}
+      </span>
       <div className="flex flex-wrap gap-2">
         <ChoiceButton
           selected={isAgentred}
@@ -253,66 +187,13 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
       data-testid="add-device-guide"
       className="gap-0 overflow-hidden rounded-lg border-border bg-card py-0 shadow-none"
     >
-      {/* 步骤条：三格都是按钮，可 Tab 可点，当前步骤对辅助技术可识别（aria-current） */}
-      <div className="flex items-stretch border-b border-border">
-        <ol className="grid min-w-0 flex-1 grid-cols-1 md:grid-cols-3">
-          {STEP_KEYS.map((key, i) => {
-            const n = i + 1;
-            const isDone = done.has(n);
-            const active = step === n;
-            return (
-              <li key={key} className="min-w-0">
-                <button
-                  type="button"
-                  data-testid={`add-device-step-${n}`}
-                  aria-current={active ? "step" : undefined}
-                  onClick={() => setStep(n)}
-                  className={cn(
-                    "flex w-full cursor-pointer items-center gap-2.5 border-b border-border px-3.5 py-3 text-left transition-colors outline-none last:border-b-0 hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 md:border-r md:border-b-0 md:last:border-r-0",
-                    active && "bg-primary-soft",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "flex size-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px]",
-                      isDone
-                        ? "bg-status-running-bg text-status-running"
-                        : active
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {isDone ? <Check className="size-3" /> : n}
-                  </span>
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate text-[13px] font-medium text-foreground">
-                      {t(`device.add.steps.${key}.title`)}
-                    </span>
-                    <span className="truncate text-xs text-muted-foreground">
-                      {isDone
-                        ? t(`device.add.steps.${key}.done`)
-                        : t(`device.add.steps.${key}.hint`)}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
-        {onClose && (
-          <div className="flex shrink-0 items-center border-l border-border px-2">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              data-testid="add-device-collapse"
-              aria-label={t("device.add.collapse")}
-              onClick={onClose}
-            >
-              <X />
-            </Button>
-          </div>
-        )}
-      </div>
+      <GuideStepRail
+        steps={steps}
+        current={step}
+        done={done}
+        onSelect={setStep}
+        onDismiss={onClose}
+      />
 
       <div
         data-testid="add-device-step-body"
@@ -324,72 +205,39 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               step={1}
               title={t(
                 isAgentred
-                  ? "device.add.install.agentredTitle"
-                  : "device.add.install.desktopTitle",
+                  ? "device.add.login.agentredTitle"
+                  : "device.add.login.desktopTitle",
               )}
               description={t(
                 isAgentred
-                  ? "device.add.install.agentredDesc"
-                  : "device.add.install.desktopDesc",
+                  ? "device.add.login.agentredDesc"
+                  : "device.add.login.desktopDesc",
               )}
             />
             {kindChoice}
             {isAgentred ? (
               <>
-                <div className="flex flex-col gap-2">
-                  <FieldLabel
-                    label={t("device.add.install.osLabel")}
-                    hint={t("device.add.install.osHint")}
-                  />
-                  <div className="flex flex-wrap gap-2">
-                    <ChoiceButton
-                      selected={os === "linux"}
-                      onSelect={() => setOS("linux")}
-                    >
-                      {t("device.add.install.osLinux")}
-                    </ChoiceButton>
-                    <ChoiceButton
-                      selected={os === "macos"}
-                      onSelect={() => setOS("macos")}
-                    >
-                      {t("device.add.install.osMacos")}
-                    </ChoiceButton>
-                    <ChoiceButton
-                      selected={os === "windows"}
-                      onSelect={() => setOS("windows")}
-                    >
-                      {t("device.add.install.osWindows")}
-                    </ChoiceButton>
-                  </div>
-                </div>
-                <CommandCard
-                  label={t(
-                    os === "windows"
-                      ? "device.add.install.powershellLabel"
-                      : "device.add.terminalLabel",
-                  )}
-                  command={os === "windows" ? INSTALL_WINDOWS : INSTALL_UNIX}
-                  testId="add-device-command-install"
-                  copyTestId="add-device-copy-install"
+                <AgentredInstallSection
+                  method={method}
+                  onMethodChange={setMethod}
+                  os={os}
+                  onOsChange={setOS}
+                  installTestId="add-device-command-install"
+                  installCopyTestId="add-device-copy-install"
                 />
                 <CommandCard
-                  label={t("device.add.install.serviceLabel")}
-                  command={SERVICE_INSTALL}
-                  testId="add-device-command-service"
-                  copyTestId="add-device-copy-service"
+                  label={t("device.add.login.commandLabel")}
+                  command={agentredLoginCommand(method, server)}
+                  testId="add-device-command-login"
+                  copyTestId="add-device-copy-login"
                 />
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                  <a
-                    href={RELEASES_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                    data-testid="add-device-manual-download"
-                    className="text-xs font-medium text-primary-text hover:underline"
-                  >
-                    {t("device.add.install.manual")}
-                  </a>
+                  <AgentredInstallDocsLink
+                    method={method}
+                    testId="add-device-manual-download"
+                  />
                   <Button onClick={() => finishStep(1)}>
-                    {t("device.add.install.next")}
+                    {t("device.add.login.next")}
                     <ArrowRight />
                   </Button>
                 </div>
@@ -397,18 +245,20 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
             ) : (
               <>
                 <div className="flex flex-col gap-2">
-                  <FieldLabel label={t("device.add.install.downloadLabel")} />
+                  <span className="text-aux font-medium text-foreground">
+                    {t("device.add.install.downloadLabel")}
+                  </span>
                   <div className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2.5">
                     <Download
                       aria-hidden="true"
                       className="size-4 shrink-0 text-muted-foreground"
                     />
-                    <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-muted-foreground">
+                    <span className="min-w-0 flex-1 text-aux leading-relaxed text-muted-foreground">
                       {t("device.add.install.downloadBody")}
                     </span>
                     <Button variant="outline" size="sm" asChild>
                       <a
-                        href={RELEASES_URL}
+                        href={AGENTRED_RELEASES_URL}
                         target="_blank"
                         rel="noreferrer"
                         data-testid="add-device-download"
@@ -419,9 +269,15 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                     </Button>
                   </div>
                 </div>
+                <CommandCard
+                  label={t("device.add.login.serverLabel")}
+                  command={server}
+                  testId="add-device-server-address"
+                  copyTestId="add-device-copy-server"
+                />
                 <div className="flex justify-end border-t border-border pt-4">
                   <Button onClick={() => finishStep(1)}>
-                    {t("device.add.install.next")}
+                    {t("device.add.login.next")}
                     <ArrowRight />
                   </Button>
                 </div>
@@ -431,63 +287,9 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
         )}
 
         {step === 2 && (
-          <>
-            <StepHead
-              step={2}
-              title={t(
-                isAgentred
-                  ? "device.add.login.agentredTitle"
-                  : "device.add.login.desktopTitle",
-              )}
-              description={t(
-                isAgentred
-                  ? "device.add.login.agentredDesc"
-                  : "device.add.login.desktopDesc",
-              )}
-            />
-            {isAgentred ? (
-              <CommandCard
-                label={t("device.add.terminalLabel")}
-                command={`agentred login --server ${server}`}
-                testId="add-device-command-login"
-                copyTestId="add-device-copy-login"
-              />
-            ) : (
-              <CommandCard
-                label={t("device.add.login.serverLabel")}
-                command={server}
-                testId="add-device-server-address"
-                copyTestId="add-device-copy-server"
-              />
-            )}
-            <TipList
-              tips={
-                isAgentred
-                  ? [
-                      t("device.add.login.agentredTip1"),
-                      t("device.add.login.agentredTip2"),
-                      t("device.add.login.agentredTip3"),
-                    ]
-                  : [
-                      t("device.add.login.desktopTip1"),
-                      t("device.add.login.desktopTip2"),
-                      t("device.add.login.desktopTip3"),
-                    ]
-              }
-            />
-            <div className="flex justify-end border-t border-border pt-4">
-              <Button onClick={() => finishStep(2)}>
-                {t("device.add.login.next")}
-                <ArrowRight />
-              </Button>
-            </div>
-          </>
-        )}
-
-        {step === 3 && (
           <form onSubmit={submitCode} className="flex flex-col gap-4">
             <StepHead
-              step={3}
+              step={2}
               // 文案沿用既有输码屏：同一件事换个说法只会让人以为是两件事。
               title={t("device.entry.title")}
               description={t("device.entry.description")}
@@ -506,7 +308,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               {incomplete && (
                 <p
                   id={codeErrorId}
-                  className="flex items-start gap-2 text-[13px] text-destructive"
+                  className="flex items-start gap-2 text-aux text-destructive"
                 >
                   <CircleAlert
                     className="mt-0.5 size-3.5 shrink-0"
@@ -516,9 +318,6 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                 </p>
               )}
             </div>
-            <p className="text-[13px] leading-relaxed text-muted-foreground">
-              {t("device.add.code.handoff")}
-            </p>
             <div className="flex justify-end border-t border-border pt-4">
               <Button type="submit">
                 {t("device.entry.submit")}
@@ -526,6 +325,40 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
               </Button>
             </div>
           </form>
+        )}
+
+        {step === 3 && (
+          <>
+            <StepHead
+              step={3}
+              title={t(
+                isAgentred
+                  ? "device.add.service.agentredTitle"
+                  : "device.add.service.desktopTitle",
+              )}
+              description={t(
+                isAgentred
+                  ? "device.add.service.agentredDesc"
+                  : "device.add.service.desktopDesc",
+              )}
+            />
+            {/* 桌面端自带 agentred，没有第二个服务要注册——这一步就只剩那句说明。 */}
+            {isAgentred && (
+              // 不给 onRunModeChange：控制台的设备要长期在线，一个会随终端关闭
+              // 而消失的「前台临时」对它没有意义。
+              <AgentredServiceSection
+                method={method}
+                serviceTestId="add-device-command-service"
+                serviceCopyTestId="add-device-copy-service"
+              />
+            )}
+            <div className="flex justify-end border-t border-border pt-4">
+              <Button onClick={() => finishStep(3)}>
+                {t("device.add.service.finish")}
+                <Check />
+              </Button>
+            </div>
+          </>
         )}
       </div>
     </Card>

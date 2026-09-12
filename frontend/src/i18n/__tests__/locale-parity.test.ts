@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import en from "../locales/en.json";
-import zhCN from "../locales/zh-CN.json";
+import en from "../locales/en";
+import zhCN from "../locales/zh-CN";
 import { LANGUAGE_LABELS, SUPPORTED_LANGUAGES, resources } from "../index";
 
 type Json = { [k: string]: string | Json };
@@ -58,7 +58,7 @@ describe("locale parity", () => {
       ).toEqual([]);
       expect(
         extra,
-        `多出 key（${REFERENCE}.json 里没有，属于死翻译）：${extra.join(", ")}`,
+        `多出 key（locales/${REFERENCE}/ 里没有，属于死翻译）：${extra.join(", ")}`,
       ).toEqual([]);
     },
   );
@@ -85,43 +85,17 @@ describe("locale parity", () => {
     }
   });
 
-  it("audit 区段键在两种语言中齐全且文案符合设计稿", () => {
-    // task 7 审计页用到的 14 个产品键：缺一个就会在界面上静默 fallback 回英文。
-    const expected: Record<string, [string, string]> = {
-      "audit.filters.all": ["All", "全部"],
-      "audit.filters.deviceAuth": ["Device authorization", "授权接入"],
-      "audit.filters.token": ["Tokens", "令牌"],
-      "audit.filters.revoke": ["Revocation", "撤销"],
-      "audit.table.time": ["Time", "时间"],
-      "audit.table.event": ["Event", "事件"],
-      "audit.table.object": ["Object", "对象"],
-      "audit.table.source": ["Source", "来源"],
-      "audit.table.result": ["Result", "结果"],
-      "audit.events.emptyTitle": ["No audit events yet", "暂无审计事件"],
-      "audit.events.emptyBody": [
-        "Audit records are not available yet.",
-        "审计记录暂未开放。",
-      ],
-      "audit.credentials.title": ["Active credentials", "活跃凭证"],
-      "audit.credentials.emptyTitle": ["No active credentials", "暂无活跃凭证"],
-      "audit.credentials.emptyBody": [
-        "Nothing here yet — credentials appear once devices sign in.",
-        "暂无可显示内容——设备登录后凭证会出现在这里。",
-      ],
-    };
-
-    const resolve = (bundle: Json, key: string): string =>
-      key
-        .split(".")
-        .reduce<unknown>(
-          (acc, part) => (acc as Json)?.[part],
-          bundle,
-        ) as string;
-
-    for (const [key, [enValue, zhValue]] of Object.entries(expected)) {
-      expect(resolve(en as Json, key), `en 缺 ${key}`).toBe(enValue);
-      expect(resolve(zhCN as Json, key), `zh-CN 缺 ${key}`).toBe(zhValue);
-    }
+  it("审计页已下线：bundle 不含 audit 区段或 nav.audit", () => {
+    expect(en, "en 仍有 audit 区段").not.toHaveProperty("audit");
+    expect(zhCN, "zh-CN 仍有 audit 区段").not.toHaveProperty("audit");
+    const leftover = flatten(en as Json).filter(
+      (k) =>
+        k === "nav.audit" ||
+        k.startsWith("audit.") ||
+        k === "overview.recentAuth.all" ||
+        k === "overview.security.all",
+    );
+    expect(leftover, `en 仍有审计键：${leftover.join(", ")}`).toEqual([]);
   });
 
   it("locale 值不含设计旁白文案", () => {

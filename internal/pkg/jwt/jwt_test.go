@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	hubjwt "agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwt/testkeys"
+	hubjwt "github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt/testkeys"
 )
 
 func TestKeyRing_GivenActiveAndRetiredKeys_WhenSigningAndVerifying_ThenUsesTokenKID(t *testing.T) {
@@ -175,10 +175,7 @@ func TestSign_ConcurrentCallsProducesUniqueJTI(t *testing.T) {
 	assert.Equal(t, numGoroutines, len(jtis), "expected all jti values to be unique")
 }
 
-// TestVerify_LegacyTokenCarryingCapsClaim 锁住兼容承诺：能力概念移除之前签发的
-// access token 里多带一个 caps 字段，在它自己的有效期内必须照常验签通过。这里的
-// token 不能用 Sign 造——Claims 已经没有那个字段了——所以直接按旧形状手搓一枚。
-func TestVerify_LegacyTokenCarryingCapsClaim(t *testing.T) {
+func TestVerify_RejectsTokenWithoutKID(t *testing.T) {
 	s := newSigner(t)
 	priv, err := jwtv5.ParseRSAPrivateKeyFromPEM(testkeys.PrivatePEM)
 	require.NoError(t, err)
@@ -199,12 +196,8 @@ func TestVerify_LegacyTokenCarryingCapsClaim(t *testing.T) {
 	tok, err := jwtv5.NewWithClaims(jwtv5.SigningMethodRS256, legacy).SignedString(priv)
 	require.NoError(t, err)
 
-	got, err := s.Verify(tok)
-	require.NoError(t, err)
-	assert.Equal(t, int64(5678), got.UID)
-	assert.Equal(t, int64(1234), got.DID)
-	assert.Equal(t, "agentred", got.Kind)
-	assert.Equal(t, "01LEGACYTOKENJTI0000000000", got.JTI)
+	_, err = s.Verify(tok)
+	require.ErrorContains(t, err, "unknown or retired kid")
 }
 
 // TestSign_EmitsNoCapsClaim 断言：新签发的 token 载荷里不再有 caps 字段。能力概念
@@ -224,4 +217,30 @@ func TestSign_EmitsNoCapsClaim(t *testing.T) {
 	require.NoError(t, json.Unmarshal(payload, &claims))
 	_, present := claims["caps"]
 	assert.False(t, present, "signed payload must not carry a caps claim, got: %s", payload)
+}
+
+// TestSignVerify_GivenPeerFingerprintClaim_ThenItSurvivesTheRoundTrip
+// pfp 是凭据里说了算的对端身份（agentred 的 Mode C 握手从它取，不再看请求体）。
+// 它必须原样签进去、原样验出来 —— 少一环，握手侧就只能退回去采信自报值。
+func TestSignVerify_GivenPeerFingerprintClaim_ThenItSurvivesTheRoundTrip(t *testing.T) {
+	signer, err := hubjwt.NewSigner(testkeys.PrivatePEM, testkeys.PublicPEM, "agentre-server", "agentre")
+	require.NoError(t, err)
+
+	token, _, err := signer.Sign(hubjwt.Claims{UID: 7, DID: 42, Kind: "agentred", PFP: "sha256:device-42"}, time.Hour)
+	require.NoError(t, err)
+	claims, err := signer.Verify(token)
+
+	require.NoError(t, err)
+	assert.Equal(t, "sha256:device-42", claims.PFP)
+}
+
+// TestAccountPeerFingerprint_GivenTheSameAccount_ThenIsStableAndAccountScoped
+// 决策 9：网页对端身份由账号派生 —— 同一账号在任意浏览器、清过站点数据之后拿到的
+// 都是同一个值，不同账号之间不相等。它是「清一次缓存就换人」那条毛病的修法。
+func TestAccountPeerFingerprint_GivenTheSameAccount_ThenIsStableAndAccountScoped(t *testing.T) {
+	first := hubjwt.AccountPeerFingerprint(7)
+
+	assert.Equal(t, first, hubjwt.AccountPeerFingerprint(7))
+	assert.NotEqual(t, first, hubjwt.AccountPeerFingerprint(8))
+	assert.True(t, strings.HasPrefix(first, "sha256:"), "与设备指纹同一形态，daemon 侧不必分两种解析")
 }

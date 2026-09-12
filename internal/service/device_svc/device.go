@@ -17,18 +17,20 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	api "agentre-server/internal/api/device"
-	"agentre-server/internal/model/entity/device_entity"
-	"agentre-server/internal/model/entity/device_flow_entity"
-	"agentre-server/internal/model/entity/device_token_entity"
-	"agentre-server/internal/pkg/code"
-	"agentre-server/internal/pkg/jwt"
-	"agentre-server/internal/pkg/jwtblacklist"
-	"agentre-server/internal/pkg/usercode"
-	"agentre-server/internal/repository/device_flow_repo"
-	"agentre-server/internal/repository/device_repo"
-	"agentre-server/internal/repository/device_token_repo"
-	"agentre-server/internal/service/relay_svc"
+	api "github.com/agentre-hub/agentre-server/internal/api/device"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
+	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
+	"github.com/agentre-hub/agentre-server/internal/pkg/usercode"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
 )
 
 type DeviceSvc interface {
@@ -41,35 +43,69 @@ type DeviceSvc interface {
 	Revoke(ctx context.Context, deviceID int64) error
 	ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]api.ListDevicesItem, error)
 	ListRevokedJTI(ctx context.Context, userID int64) ([]string, error)
+	// OwnedDevice 取一台属于该账号、且仍可用的设备。
+	//
+	// 查不到、不归他、已撤销三种情形一律回同一个 DeviceNotFound：对调用方是同
+	// 一件事，区分它们等于告诉调用方「这台设备存在，只是不是你的」。
+	OwnedDevice(ctx context.Context, userID, deviceID int64) (*device_entity.Device, error)
 }
 
-// LocalPathPurger 是 Revoke 撤销一台设备时需要用到的窄接口（ISP）：只清掉该设备
-// 上报的本机路径清单（工作区多端同步 R18），不需要认得 sync_svc 的其余方法。
+// DeviceDataPurger 是 Revoke 撤销一台设备时需要用到的窄接口（ISP）：只清掉「这台
+// 设备不在了就没有意义」的那些数据，不需要认得 sync_svc 的其余方法。
 // device_svc 不 import sync_svc——由 bootstrap 用 sync_svc.Default() 满足这个接口。
-type LocalPathPurger interface {
+//
+// 两件事的归属维度不同，因此是两个方法而不是一个：上报组按 device_id 分命名空间
+// （R18），账号级同步对象按（账号, agentred 指纹）圈定（R14）。
+type DeviceDataPurger interface {
+	// PurgeDeviceLocalPaths 清掉该设备上报的本机路径清单（R18）。
 	PurgeDeviceLocalPaths(ctx context.Context, deviceID int64) error
+	// PurgeDeviceSyncObjects 把只属于这台机器的账号级同步对象（指向它的 agent
+	// backend、它上面的项目路径）落墓碑。
+	PurgeDeviceSyncObjects(ctx context.Context, userID int64, fingerprint string) error
+	// PurgeDeviceDeleteTodos 清掉挂在这台机器上、永远执行不了的会话删除待办
+	// （会话镜像决策 7）。删除一条对话时机器要是离线，server 那份当场清掉、给那台
+	// 机器留一条待办等它回来补删；设备被撤销之后它再也不会替这个账号执行任何东西，
+	// 那条指令因此没有意义。账号里那些对话本身不动——留着、读得到、此后只读。
+	PurgeDeviceDeleteTodos(ctx context.Context, userID int64, fingerprint string) error
 }
 
-// localPathPurger 默认是空操作：未装配时（例如只跑 device flow、没有整套 bootstrap
-// 的测试或调用方）Revoke 照常成功，只是不去清上报组——与 relay_svc.Default() 的
+// deviceDataPurger 默认是空操作：未装配时（例如只跑 device flow、没有整套 bootstrap
+// 的测试或调用方）Revoke 照常成功，只是不去清——与 relay_svc.Default() 的
 // 安全占位同一模式，不让调用方在 nil 接口上 panic。
-var localPathPurger LocalPathPurger = noopLocalPathPurger{}
+var deviceDataPurger DeviceDataPurger = noopDeviceDataPurger{}
 
-// SetLocalPathPurger 由 bootstrap 注入真实实现；传 nil 时恢复成空操作。
-func SetLocalPathPurger(p LocalPathPurger) {
+// SetDeviceDataPurger 由 bootstrap 注入真实实现；传 nil 时恢复成空操作。
+func SetDeviceDataPurger(p DeviceDataPurger) {
 	if p == nil {
-		p = noopLocalPathPurger{}
+		p = noopDeviceDataPurger{}
 	}
-	localPathPurger = p
+	deviceDataPurger = p
 }
 
-type noopLocalPathPurger struct{}
+type noopDeviceDataPurger struct{}
 
-func (noopLocalPathPurger) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
+func (noopDeviceDataPurger) PurgeDeviceLocalPaths(context.Context, int64) error { return nil }
+
+func (noopDeviceDataPurger) PurgeDeviceSyncObjects(context.Context, int64, string) error {
+	return nil
+}
+
+func (noopDeviceDataPurger) PurgeDeviceDeleteTodos(context.Context, int64, string) error {
+	return nil
+}
 
 type deviceSvc struct {
 	cfg    Config
 	signer Signer
+	// blacklist 是吊销时要写的那份 jti 黑名单。注入而不是够 jwtblacklist 的包级
+	// 函数：那两个函数背后是 redis.Default() 全局单例，撤销这条链路因此没法在不
+	// 改全局状态的前提下被测。
+	blacklist *jwtblacklist.Blacklist
+	// now 是这个服务的时钟。注入而不是就地 time.Now()，与 sync_svc / engine_svc /
+	// relay_svc.framebus 同一形状：这里的判定全是「距今多久」的边界（授权码过期、
+	// 刷新窗口、吊销列表窗口），用真实时钟只断言得了区间，而区间往往恰好盖得住
+	// 差一个常量的错法。
+	now func() int64
 }
 
 var defaultSvc DeviceSvc
@@ -77,11 +113,27 @@ var defaultSvc DeviceSvc
 func Default() DeviceSvc     { return defaultSvc }
 func SetDefault(s DeviceSvc) { defaultSvc = s }
 
-func New(cfg Config, signer Signer) DeviceSvc           { return newDeviceSvc(cfg, signer) }
-func newDeviceSvc(cfg Config, signer Signer) *deviceSvc { return &deviceSvc{cfg: cfg, signer: signer} }
+func New(cfg Config, signer Signer, blacklist *jwtblacklist.Blacklist) DeviceSvc {
+	return newDeviceSvc(cfg, signer, blacklist)
+}
+func newDeviceSvc(cfg Config, signer Signer, blacklist *jwtblacklist.Blacklist) *deviceSvc {
+	return &deviceSvc{cfg: cfg, signer: signer, blacklist: blacklist,
+		now: func() int64 { return time.Now().UnixMilli() }}
+}
+
+func (s *deviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*device_entity.Device, error) {
+	d, err := device_repo.Device().Find(ctx, deviceID)
+	if err != nil {
+		return nil, err
+	}
+	if !d.UsableBy(userID) {
+		return nil, i18n.NewNotFoundError(ctx, code.DeviceNotFound)
+	}
+	return d, nil
+}
 
 func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*AuthorizeOutput, error) {
-	now := time.Now().UnixMilli()
+	now := s.now()
 	dc, err := randomBase32(32)
 	if err != nil {
 		return nil, err
@@ -97,12 +149,16 @@ func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*Authoriz
 		Platform:          in.Platform,
 		Version:           in.Version,
 		IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
-		ExpiresAt:         now + s.cfg.UserCodeTTL.Milliseconds(),
+		ExpiresAt:         now + s.cfg.FlowTTL.Milliseconds(),
 		Createtime:        now,
 	}
 	if err := device_flow_repo.DeviceFlow().Create(ctx, code); err != nil {
 		return nil, err
 	}
+	logger.Ctx(ctx).Info("device flow authorized", zap.String("userCode", uc),
+		zap.String("deviceKind", in.DeviceKind), zap.String("platform", in.Platform),
+		zap.String("version", in.Version), zap.String("fingerprint", in.Fingerprint),
+		zap.String("clientName", in.Name))
 	base := strings.TrimRight(s.cfg.VerificationURI, "/")
 	return &AuthorizeOutput{
 		DeviceCode:              dc,
@@ -110,7 +166,7 @@ func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*Authoriz
 		VerificationURI:         base,
 		VerificationURIComplete: base + "?user_code=" + uc,
 		Interval:                int(s.cfg.PollInterval / time.Second),
-		ExpiresIn:               int(s.cfg.UserCodeTTL / time.Second),
+		ExpiresIn:               int(s.cfg.FlowTTL / time.Second),
 	}, nil
 }
 
@@ -136,10 +192,24 @@ const (
 )
 
 // OAuthError 包装 OAuth 标准错误字面量。controller 转换为对应 HTTP 状态。
-type OAuthError struct{ Code, Description string }
+//
+// Code 是发到线上的那个词，必须留在 RFC 8628 的词表里——agentred 只按它分支
+// （cmd/agentred/login.go）。Biz 是给人看的那一层：invalid_grant 一个词底下压着
+// 六种互不相干的失败，光靠 Code 说不出到底哪里不对。为零表示「按 Code 取默认
+// 业务码」，映射在 device_ctr.oauthErrToHTTP。
+type OAuthError struct {
+	Code, Description string
+	Biz               int
+}
 
 func (e *OAuthError) Error() string       { return fmt.Sprintf("%s: %s", e.Code, e.Description) }
 func newOAuthErr(code, desc string) error { return &OAuthError{Code: code, Description: desc} }
+
+// newOAuthErrBiz 在标准字面量之外再钉一个业务码，用于线上必须回同一个词、
+// 但用户该看到不同说明的那些分支。
+func newOAuthErrBiz(code, desc string, biz int) error {
+	return &OAuthError{Code: code, Description: desc, Biz: biz}
+}
 
 func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput, error) {
 	if dc == "" {
@@ -154,7 +224,7 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		return nil, newOAuthErr(ErrInvalidGrant, "device_code not found")
 	}
 
-	nowMs := time.Now().UnixMilli()
+	nowMs := s.now()
 
 	if flow.IsConsumed() {
 		return nil, newOAuthErr(ErrInvalidGrant, "device_code already consumed")
@@ -212,47 +282,27 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 			return err
 		}
 
-		access, jti, err := s.signer.Sign(jwt.Claims{
-			UID:  flow.AuthorizedUserID,
-			DID:  d.ID,
-			Kind: d.Kind,
-		}, s.cfg.AccessTTL)
+		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs)
 		if err != nil {
 			return err
 		}
-
-		refreshPlain, err := randomBase32(32)
-		if err != nil {
-			return err
-		}
-		hash := sha256Hex(refreshPlain)
-		ip, ua := clientInfoFromCtx(ctx)
-		token := &device_token_entity.DeviceToken{
-			DeviceID:         d.ID,
-			RefreshTokenHash: hash,
-			AccessJTI:        jti,
-			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
-			UserAgent:        ua,
-			IP:               ip,
-			Createtime:       nowMs,
-		}
-		if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
-			return err
-		}
-
-		*out = TokenOutput{
-			AccessToken:      access,
-			RefreshToken:     refreshPlain,
-			ExpiresIn:        int(s.cfg.AccessTTL / time.Second),
-			RefreshExpiresIn: int(s.cfg.RefreshTTL / time.Second),
-			DeviceID:         d.ID,
-			JTI:              jti,
-		}
+		*out = *pair
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	logger.Ctx(ctx).Info("device token exchanged", zap.Int64("userId", flow.AuthorizedUserID), zap.Int64("deviceId", out.DeviceID), zap.String("deviceKind", flow.DeviceKind), zap.String("platform", flow.Platform), zap.String("version", flow.Version), zap.String("jti", out.JTI))
+	// 设备行是**这一刻**才建出来的，不是用户点批准那一刻：Approve 只改 device_flow_codes，
+	// 行要等 daemon 下一次轮询（interval 默认 5 秒）走到这里。用户批准完立刻进设备页
+	// 正好落在那个窗口里，看到的是一份不含这台机器的列表。
+	//
+	// 从前只有 relay_svc.RegisterDaemon 那一声，而它发生在这之后、且发在账号通道
+	// 多半还在取票建连的那几秒里——信号不补发，连着之后兜底轮询又让路，于是那份空
+	// 列表会一直挂到用户自己刷新。这里补的就是那一条：行一存在就说一声。
+	//
+	// 事务外、best-effort：广播失败只记日志，token 已经发出去了，不能因为一条信号回滚。
+	accountchan_svc.BroadcastSignalBestEffort(ctx, flow.AuthorizedUserID, accountchan_svc.FrameTypeDevicePresence)
 	return out, nil
 }
 
@@ -261,11 +311,58 @@ func sha256Hex(s string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// issueTokenPair 在事务内为设备签发一对令牌并落库：access token 由 signer 签出，
+// refresh token 仅保存哈希，明文只在本次响应中返回。
+//
+// txCtx 用于落库，必须是事务里的那个；IP / UA 仍从外层 ctx 取，与抽出前一致。
+func (s *deviceSvc) issueTokenPair(
+	txCtx, ctx context.Context, d *device_entity.Device, nowMs int64,
+) (*TokenOutput, error) {
+	access, jti, err := s.signer.Sign(jwt.Claims{
+		UID: d.UserID,
+		DID: d.ID,
+		// 对端身份签进凭据（决策 8）：agentred 的 auth.account 从这里取，不再采信
+		// 请求体里的自报指纹。设备这一侧填的就是它自己那条 devices.fingerprint。
+		PFP:  d.Fingerprint,
+		Kind: d.Kind,
+	}, s.cfg.AccessTTL)
+	if err != nil {
+		return nil, err
+	}
+
+	refreshPlain, err := randomBase32(32)
+	if err != nil {
+		return nil, err
+	}
+	ip, ua := clientInfoFromCtx(ctx)
+	token := &device_token_entity.DeviceToken{
+		DeviceID:         d.ID,
+		RefreshTokenHash: sha256Hex(refreshPlain),
+		AccessJTI:        jti,
+		RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
+		UserAgent:        ua,
+		IP:               ip,
+		Createtime:       nowMs,
+	}
+	if err := device_token_repo.DeviceToken().Create(txCtx, token); err != nil {
+		return nil, err
+	}
+
+	return &TokenOutput{
+		AccessToken:      access,
+		RefreshToken:     refreshPlain,
+		ExpiresIn:        int(s.cfg.AccessTTL / time.Second),
+		RefreshExpiresIn: int(s.cfg.RefreshTTL / time.Second),
+		DeviceID:         d.ID,
+		JTI:              jti,
+	}, nil
+}
+
 func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOutput, error) {
 	if refreshToken == "" {
-		return nil, newOAuthErr(ErrInvalidGrant, "missing refresh_token")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "missing refresh_token", code.RefreshTokenInvalid)
 	}
-	nowMs := time.Now().UnixMilli()
+	nowMs := s.now()
 	hash := sha256Hex(refreshToken)
 
 	row, err := device_token_repo.DeviceToken().FindByHash(ctx, hash)
@@ -273,24 +370,29 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 		return nil, err
 	}
 	if row == nil {
-		return nil, newOAuthErr(ErrInvalidGrant, "refresh_token not found")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh_token not found", code.RefreshTokenInvalid)
 	}
 
 	if row.IsRevoked() {
 		// 重放：整链 revoke
 		_ = device_token_repo.DeviceToken().RevokeChain(ctx, row.DeviceID, nowMs)
-		return nil, newOAuthErr(ErrInvalidGrant, "refresh token reuse detected")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh token reuse detected", code.RefreshTokenReplay)
 	}
 	if row.IsExpired(nowMs) {
-		return nil, newOAuthErr(ErrInvalidGrant, "refresh_token expired")
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "refresh_token expired", code.RefreshTokenExpired)
 	}
 
 	d, err := device_repo.Device().Find(ctx, row.DeviceID)
 	if err != nil {
 		return nil, err
 	}
-	if d == nil || !d.IsActive() {
-		return nil, newOAuthErr(ErrInvalidGrant, "device revoked")
+	// 行不见了和「行还在、但已撤销」不是同一件事：前者是数据不一致，后者是用户
+	// 自己在控制台点的。压成同一个码，排查时就分不出来了。
+	if d == nil {
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "device not found", code.DeviceNotFound)
+	}
+	if !d.IsActive() {
+		return nil, newOAuthErrBiz(ErrInvalidGrant, "device revoked", code.DeviceRevoked)
 	}
 
 	out := &TokenOutput{}
@@ -310,52 +412,24 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 			return err
 		}
 		if n != 1 {
-			return newOAuthErr(ErrInvalidGrant, "refresh_token already rotated")
+			return newOAuthErrBiz(ErrInvalidGrant, "refresh_token already rotated", code.RefreshTokenInvalid)
 		}
 
-		newPlain, err := randomBase32(32)
+		pair, err := s.issueTokenPair(txCtx, ctx, d, nowMs)
 		if err != nil {
-			return err
-		}
-		ip, ua := clientInfoFromCtx(ctx)
-		access, jti, err := s.signer.Sign(jwt.Claims{
-			UID:  d.UserID,
-			DID:  d.ID,
-			Kind: d.Kind,
-		}, s.cfg.AccessTTL)
-		if err != nil {
-			return err
-		}
-		newToken := &device_token_entity.DeviceToken{
-			DeviceID:         d.ID,
-			RefreshTokenHash: sha256Hex(newPlain),
-			AccessJTI:        jti,
-			RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
-			RotatedFromID:    row.ID,
-			UserAgent:        ua,
-			IP:               ip,
-			Createtime:       nowMs,
-		}
-		if err := device_token_repo.DeviceToken().Create(txCtx, newToken); err != nil {
 			return err
 		}
 		if err := device_repo.Device().Touch(txCtx, d.ID, nowMs); err != nil {
 			return err
 		}
 
-		*out = TokenOutput{
-			AccessToken:      access,
-			RefreshToken:     newPlain,
-			ExpiresIn:        int(s.cfg.AccessTTL / time.Second),
-			RefreshExpiresIn: int(s.cfg.RefreshTTL / time.Second),
-			DeviceID:         d.ID,
-			JTI:              jti,
-		}
+		*out = *pair
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	logger.Ctx(ctx).Info("device token refreshed", zap.Int64("userId", d.UserID), zap.Int64("deviceId", out.DeviceID), zap.String("deviceKind", d.Kind), zap.String("jti", out.JTI), zap.Int64("rotatedFromId", row.ID))
 	return out, nil
 }
 
@@ -371,7 +445,7 @@ func (s *deviceSvc) Pending(ctx context.Context, userCode string) (*PendingInfo,
 	if flow == nil {
 		return nil, newOAuthErr(ErrUserCodeInvalid, "user_code not found")
 	}
-	nowMs := time.Now().UnixMilli()
+	nowMs := s.now()
 	if flow.IsExpired(nowMs) {
 		return nil, newOAuthErr(ErrExpiredToken, "user_code expired")
 	}
@@ -395,7 +469,7 @@ func (s *deviceSvc) Approve(ctx context.Context, userCode string, userID int64) 
 	if flow == nil {
 		return "", newOAuthErr(ErrUserCodeInvalid, "user_code not found")
 	}
-	nowMs := time.Now().UnixMilli()
+	nowMs := s.now()
 	if flow.IsExpired(nowMs) {
 		return "", newOAuthErr(ErrExpiredToken, "user_code expired")
 	}
@@ -407,6 +481,7 @@ func (s *deviceSvc) Approve(ctx context.Context, userCode string, userID int64) 
 	if n != 1 {
 		return "", newOAuthErr(ErrUserCodeInvalid, "user_code no longer approvable")
 	}
+	logger.Ctx(ctx).Info("device flow approved", zap.Int64("userId", userID), zap.String("userCode", norm), zap.String("deviceKind", flow.DeviceKind), zap.String("platform", flow.Platform), zap.String("version", flow.Version))
 	return flow.DeviceKind, nil
 }
 
@@ -415,7 +490,7 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 	if !ok {
 		return newOAuthErr(ErrUserCodeInvalid, "malformed user_code")
 	}
-	n, err := device_flow_repo.DeviceFlow().Deny(ctx, norm, time.Now().UnixMilli())
+	n, err := device_flow_repo.DeviceFlow().Deny(ctx, norm, s.now())
 	if err != nil {
 		return err
 	}
@@ -424,11 +499,12 @@ func (s *deviceSvc) Deny(ctx context.Context, userCode string) error {
 	if n != 1 {
 		return newOAuthErr(ErrUserCodeInvalid, "user_code not found or already settled")
 	}
+	logger.Ctx(ctx).Info("device flow denied", zap.String("userCode", norm))
 	return nil
 }
 
 func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
-	nowMs := time.Now().UnixMilli()
+	nowMs := s.now()
 	jtis, err := device_token_repo.DeviceToken().ListAccessJTIByDevice(ctx, deviceID)
 	if err != nil {
 		return err
@@ -442,7 +518,7 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	// Redis 不可用时不让 DB 侧吊销失败——黑名单本身 fail-open（spec §6.5）。
 	ttlSec := int((s.cfg.AccessTTL + jwt.Leeway) / time.Second)
 	for _, jti := range jtis {
-		_ = jwtblacklist.Add(ctx, jti, ttlSec)
+		_ = s.blacklist.Add(ctx, jti, ttlSec)
 	}
 	if err := device_token_repo.DeviceToken().RevokeChain(ctx, deviceID, nowMs); err != nil {
 		return err
@@ -450,14 +526,48 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 	if err := device_repo.Device().Revoke(ctx, deviceID, nowMs); err != nil {
 		return err
 	}
-	// 工作区多端同步 R18：该设备上报的本机路径清单跟着一并消失。这是撤销的
-	// 一个从属后果，不是撤销本身——取不到 purger 或它落库失败都不该让「设备已
-	// 撤销、token 已拉黑」这个已经生效的结果回滚,只记日志。
-	if err := localPathPurger.PurgeDeviceLocalPaths(ctx, deviceID); err != nil {
+	// 以下两步都是撤销的**从属后果**，不是撤销本身：取不到 purger、查不到设备行、
+	// 或落库失败，都不该让「设备已撤销、token 已拉黑」这个已经生效的结果回滚，
+	// 一律只记日志（与既有的 PurgeDeviceLocalPaths 同一失效方向）。
+	//
+	// 工作区多端同步 R18：该设备上报的本机路径清单跟着一并消失。
+	if err := deviceDataPurger.PurgeDeviceLocalPaths(ctx, deviceID); err != nil {
 		logger.Ctx(ctx).Warn("device_svc.Revoke: purge reported local paths failed",
 			zap.Int64("deviceId", deviceID), zap.Error(err))
 	}
+	s.purgeDeviceScopedData(ctx, deviceID)
 	return nil
+}
+
+// purgeDeviceScopedData 让「只属于这台设备」的东西跟着它一起离开账号：它的 CLI 路径
+// 覆盖与它上面的项目路径（落墓碑，取值见 sync_svc.deviceScopedKinds），以及挂在它上面、
+// 此后永远执行不了的会话删除待办（直接清掉，会话镜像决策 7）。工作区不动——projects /
+// agents / departments 一行也不碰，它们属于账号而不属于某台机器；账号里那些已保存的
+// 对话同样留着，只是变成只读。
+//
+// **指向它的 agent backend 也不在此列**，尽管后端现在明确带着自己的运行设备：那是一份
+// 可以改指到另一台机器的配置，撤销之后它在控制台里如实标成「设备已撤销」等着用户改指
+// （规格 2026-08-21 决策 8），替用户删掉才是丢东西。
+//
+// 这里要多读一次 devices：这两件事都按（账号, agentred 指纹）圈定，而 Revoke 的入参
+// 只有 deviceID，回答不了「哪个账号、哪台机器」。读不到就跳过——绝不能拿一个空指纹
+// 去清，那会命中账号下每一行没写机器的同类对象。
+func (s *deviceSvc) purgeDeviceScopedData(ctx context.Context, deviceID int64) {
+	d, err := device_repo.Device().Find(ctx, deviceID)
+	if err != nil || d == nil {
+		logger.Ctx(ctx).Warn("device_svc.Revoke: cannot resolve the revoked device, skipping account-level purge",
+			zap.Int64("deviceId", deviceID), zap.Error(err))
+		return
+	}
+	if err := deviceDataPurger.PurgeDeviceSyncObjects(ctx, d.UserID, d.Fingerprint); err != nil {
+		logger.Ctx(ctx).Warn("device_svc.Revoke: purge device-scoped sync objects failed",
+			zap.Int64("deviceId", deviceID), zap.Int64("userId", d.UserID), zap.Error(err))
+	}
+	// 两件清理互不牵连：上一件失败了，这一件照样要发生。
+	if err := deviceDataPurger.PurgeDeviceDeleteTodos(ctx, d.UserID, d.Fingerprint); err != nil {
+		logger.Ctx(ctx).Warn("device_svc.Revoke: purge pending session deletes failed",
+			zap.Int64("deviceId", deviceID), zap.Int64("userId", d.UserID), zap.Error(err))
+	}
 }
 
 // ListRevokedJTI 返回调用方账号（userID，跨其名下全部设备）已吊销、且签发
@@ -468,7 +578,7 @@ func (s *deviceSvc) Revoke(ctx context.Context, deviceID int64) error {
 // 偏移，token 直到 exp+Leeway 都还验得过。只减 AccessTTL 会让每个 jti 在最后
 // Leeway 秒里既已掉出这份列表、又仍被任何拉取方接受。
 func (s *deviceSvc) ListRevokedJTI(ctx context.Context, userID int64) ([]string, error) {
-	windowStart := time.Now().Add(-(s.cfg.AccessTTL + jwt.Leeway)).UnixMilli()
+	windowStart := s.now() - (s.cfg.AccessTTL + jwt.Leeway).Milliseconds()
 	return device_token_repo.DeviceToken().ListRevokedJTIByUser(ctx, userID, windowStart)
 }
 
@@ -481,11 +591,6 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 	}
 	out := make([]api.ListDevicesItem, 0, len(rows))
 	for _, d := range rows {
-		// 浏览器是 relay 的短效调用方，不是可管理设备。旧版本遗留的 web 行也不再
-		// 泄漏到设备列表。
-		if d.Kind == device_entity.KindWeb {
-			continue
-		}
 		// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。
 		// Redis 抖动时按离线对待（fail-open）：在线态只是列表的增强列，
 		// 不应拖垮整个设备列表或 Revoke 前的归属校验（该流程也走本方法）。
@@ -493,17 +598,28 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 		if err != nil {
 			online = false
 		}
+		// 协议不匹配是镜像握手记下的共享状态（mirror_svc 决策 14），未装配镜像时
+		// mirror_svc.Default() 为 nil——ProtocolMismatch 自己对 nil 接收者兜底，
+		// 与在线态同一 fail-open 习惯，这里不需要重复判 nil。
+		protocolMismatch := mirror_svc.Default().ProtocolMismatch(ctx, userID, d.Fingerprint)
+		// 短 commit 同样来自镜像握手记下的共享状态（决策 5：commit 为空的机器显示为
+		// 开发构建、永不劝升）。第二个返回值是「知不知道」——没握过手时不能把「没有
+		// 答案」读成「commit 为空」，那会把一台正式版机器说成开发构建。
+		daemonCommit, daemonBuildKnown := mirror_svc.Default().DaemonBuild(ctx, userID, d.Fingerprint)
 		out = append(out, api.ListDevicesItem{
-			ID:           d.ID,
-			Name:         d.Name,
-			Kind:         d.Kind,
-			Platform:     d.Platform,
-			Version:      d.Version,
-			Fingerprint:  d.Fingerprint,
-			LastSeenAt:   d.LastSeenAt,
-			Status:       d.Status,
-			Online:       online,
-			IsThisDevice: d.ID == callerDeviceID,
+			ID:               d.ID,
+			Name:             d.Name,
+			Kind:             d.Kind,
+			Platform:         d.Platform,
+			Version:          d.Version,
+			Fingerprint:      d.Fingerprint,
+			LastSeenAt:       d.LastSeenAt,
+			Status:           d.Status,
+			Online:           online,
+			IsThisDevice:     d.ID == callerDeviceID,
+			ProtocolMismatch: protocolMismatch,
+			DaemonCommit:     daemonCommit,
+			DaemonBuildKnown: daemonBuildKnown,
 		})
 	}
 	return out, nil
