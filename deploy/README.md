@@ -90,6 +90,10 @@ curl http://localhost:8443/v1/healthz
 
 - **`AGENTRE_SERVER_PUBLIC_URL` 要填浏览器真正访问到的地址**：Cookie 上的 `Secure`
   与通行密钥的 `rp_id` / `origins` 都由它推出来，填错的症状是登录不生效。
+- **前面有反代就要填 `AGENTRE_SERVER_TRUSTED_PROXIES`**：不填时来源 IP 取实际连上来
+  的那一端，于是所有按 IP 的限流会把反代后面的全部用户归到反代那一个 IP 上（症状是
+  正常用户互相挤掉配额）。这份 compose 的缺省拓扑是 8443 直接映到宿主、前面没有反代，
+  那时不填才对——填上反而等于让请求方自己用 `X-Forwarded-For` 声明自己的 IP。
 
 能覆盖的就下面这些，其余仍要靠配置文件（`-v /你的/config.yaml:/app/configs/config.yaml:ro`）：
 
@@ -99,6 +103,7 @@ curl http://localhost:8443/v1/healthz
 | `AGENTRE_SERVER_REDIS_ADDR` / `AGENTRE_SERVER_REDIS_PASSWORD` | `redis.addr` / `redis.password` |
 | `AGENTRE_SERVER_PUBLIC_URL` | `server.public_url` |
 | `AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID` / `_SECRET` | `server.oauth.github.*` |
+| `AGENTRE_SERVER_TRUSTED_PROXIES` | `server.trusted_proxies`（逗号分隔，覆盖整份名单） |
 
 > 覆盖只在 `source: file` 下生效：配置源是 etcd 时（k8s 那条链路）cago 会换掉整个
 > 配置源，这一层就不在链路上了。
@@ -307,7 +312,12 @@ k8s 上只有四个引导键从 ConfigMap 进容器（`env`、`debug`、`source`
 | `db` | MySQL 连接串 |
 | `redis` | Redis 地址 |
 | `http` | 监听地址，端口要和 chart 的 `containerPort` 一致 |
-| `server` | 域名、会话、令牌有效期（`token.access_ttl` / `refresh_ttl`）、GitHub OAuth（含 client secret）、限流、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
+| `server` | 域名、会话、令牌有效期（`token.access_ttl` / `refresh_ttl`）、GitHub OAuth（含 client secret）、限流、可信代理（`trusted_proxies`，见下）、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
+
+**k8s 这条链路上 `server.trusted_proxies` 必须填。** Pod 前面是 ingress，请求都从它
+转发进来，所以不填的话每一道按 IP 的限流都会把所有用户归到 ingress 那一个地址上；
+填成 `0.0.0.0/0` 则是另一头——`X-Forwarded-For` 由请求方自己填，等于那些限流全部失效。
+填 ingress controller 实际出口的地址或网段（Pod 网段 / Service 网段），一行一个。
 
 `trace` 可选，不写就是不开链路追踪。每个键的内容照着仓库根的
 `configs/config.example.yaml` 填——**那份模板是 `server` 这个键的唯一权威清单**。

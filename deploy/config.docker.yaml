@@ -41,6 +41,13 @@ server:
   # 走 http，所以 Cookie 不带 Secure、通行密钥的 rp_id 是 localhost——两者都由这一行
   # 推出来，换域名只改它（或 SERVER_PUBLIC_URL）。
   public_url: "http://localhost:8443"
+  # 可信代理：只有这些地址转发来的 X-Forwarded-For 才算来源 IP，取 IP 或 CIDR。
+  # **空 = 谁都不信**，来源 IP 一律取实际连上来的那一端。所有按 IP 的限流（设备流
+  # authorize、GitHub OAuth 两端、通行密钥登录）和 /account 展示的登录 IP 都按这个
+  # 值算，所以它只能由部署拓扑决定：直接对外就空着；反代 / ingress 后面必须填那一跳
+  # 的地址或网段，否则整个世界会被归到反代那一个 IP 上。永远不要写 0.0.0.0/0——那就是
+  # gin 的缺省，等于让请求方自己声明自己的 IP。
+  trusted_proxies: []
   session:
     ttl: 336h
   device_flow:

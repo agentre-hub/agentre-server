@@ -54,6 +54,16 @@ type ServerConfig struct {
 	AccountGate     AccountGateConfig `yaml:"account_gate"`
 	WebAuthn        WebAuthnConfig    `yaml:"webauthn"`
 	Release         ReleaseConfig     `yaml:"release"`
+	// TrustedProxies 是「这些地址转发过来的 X-Forwarded-For 才算数」的名单，取 IP
+	// 或 CIDR。**缺省空 = 谁都不信**，来源 IP 一律取实际连上来的那一端
+	// （RemoteAddr）。
+	//
+	// 它没有一个放之四海的正确值，只有部署拓扑知道：直接对外（compose 把 8443 映到
+	// 宿主）时空着才对；反代 / ingress 后面则必须填那一跳，否则所有按 IP 的限流会把
+	// 整个世界归到反代那一个 IP 上。而 gin 的缺省正好是反面 —— 它信任全部代理，于是
+	// 请求方自己填的 XFF 就成了来源 IP，按 IP 的配额换个头就能重开一桶
+	// （internal/api/trustedproxy_test.go）。
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 // ReleaseConfig 是控制台「最新发布是多少」这条链路的配置（规格
@@ -150,6 +160,7 @@ func LoadServerConfig(ctx context.Context, cfg *configs.Config) *ServerConfig {
 	setIfPresent("AGENTRE_SERVER_PUBLIC_URL", &out.PublicURL)
 	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID", &out.OAuth.Github.ClientID)
 	setIfPresent("AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_SECRET", &out.OAuth.Github.ClientSecret)
+	setListIfPresent("AGENTRE_SERVER_TRUSTED_PROXIES", &out.TrustedProxies)
 	if out.Session.TTL == 0 {
 		out.Session.TTL = 14 * 24 * time.Hour
 	}
@@ -243,6 +254,25 @@ func setIfPresent(env string, dst *string) {
 	if v := os.Getenv(env); v != "" {
 		*dst = v
 	}
+}
+
+// setListIfPresent 是 setIfPresent 的名单版：逗号分隔，覆盖整份而不是追加。
+//
+// compose 那条部署路径上配置文件是仓库里挂进去的，能按部署改的只有 AGENTRE_SERVER_*
+// 这一层，所以名单型的配置项也得有一格。空项丢掉：末尾一个逗号不该变成一个空字符串
+// 条目，那会让 gin 的 SetTrustedProxies 报错、进而让启动失败。
+func setListIfPresent(env string, dst *[]string) {
+	v := os.Getenv(env)
+	if v == "" {
+		return
+	}
+	out := make([]string, 0, strings.Count(v, ",")+1)
+	for _, item := range strings.Split(v, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	*dst = out
 }
 
 // RegisterDefaults 初始化 service 默认单例（OAuth、auth、device）。

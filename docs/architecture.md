@@ -211,6 +211,20 @@ carries no cookie and is exempt, a session caller is not. `/fw/` is the one deli
 exception — a forwarded app's own writes cannot carry the console's token — which is why
 the same-origin exposure it opens is part of the trust boundary described next.
 
+### Who the client IP is
+
+Per-IP rate limits (`middleware.byIP`) and the login IP shown in `/account` both read
+`c.ClientIP()`, so "which IP is this request from" is an authorization-relevant fact.
+gin's default answer is unsafe — it trusts every proxy, which makes the leftmost
+`X-Forwarded-For` entry, a **request-controlled value**, the client IP. `Router` therefore
+configures it explicitly from `server.trusted_proxies`: empty (the default) trusts no
+proxy and uses the peer address, and a non-empty list makes `X-Forwarded-For` count only
+for requests arriving from those addresses. A malformed entry fails startup rather than
+falling back. Only the deployment topology knows the right value — see
+[deploy/README.md](../deploy/README.md), and note that an ingress or reverse proxy in
+front makes the list mandatory, because otherwise every user collapses into the proxy's
+one address.
+
 ### The port-forward trust boundary
 
 `/fw/<device>/<port>/...` proxies a browser request into a service listening on the

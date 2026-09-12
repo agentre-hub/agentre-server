@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/server/mux"
+	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/agentre-hub/agentre-server/internal/api/portforward"
@@ -84,8 +86,39 @@ func (r *RouterDeps) DrainRelays() int {
 	return total
 }
 
+// trustProxies 决定 c.ClientIP() 相信谁 —— 也就是所有按 IP 归集的限流
+// （middleware.byIP：设备流 authorize、GitHub OAuth 的两端、通行密钥登录）和
+// /account 里展示的登录 IP，按谁算。
+//
+// **必须显式配**：gin 的缺省是信任全部代理（trustedProxies = 0.0.0.0/0 + ::/0，
+// ForwardedByClientIP 为真），于是来源 IP 取的是 X-Forwarded-For 最左边那一格 ——
+// 一个请求方自己填的值。那样每一道按 IP 的配额都只要换个头就能重开一桶，而
+// compose 那条部署路径上 8443 直接映射到宿主、前面没有反代，攻击者就是直连的那一端。
+//
+// 名单空 = 谁都不信，来源 IP 一律取实际连上来的那一端（ServerConfig.TrustedProxies
+// 上写了为什么这个默认值只能由部署方改）。反过来，只要声明了一跳，XFF 才重新作数，
+// 并且只对来自那一跳的请求作数。
+//
+// 名单写错时上交错误、让启动失败：安静退回缺省就等于「配了跟没配一样」，而运维会
+// 以为限流已经按真实客户端 IP 归集了。
+func trustProxies(root *mux.Router, trusted []string) error {
+	// cago 把引擎藏在 gin.IRouter 后面，而「信谁」是引擎上的一格设置，不是一个中间件。
+	engine, ok := root.IRouter.(*gin.Engine)
+	if !ok {
+		return fmt.Errorf("configure trusted proxies: router is %T, not *gin.Engine", root.IRouter)
+	}
+	engine.ForwardedByClientIP = len(trusted) > 0
+	if err := engine.SetTrustedProxies(trusted); err != nil {
+		return fmt.Errorf("configure trusted proxies: %w", err)
+	}
+	return nil
+}
+
 // Router 构造完整路由树。
 func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
+	if err := trustProxies(root, r.Cfg.TrustedProxies); err != nil {
+		return err
+	}
 	g := root.Group("/")
 
 	healthzCtr := healthz_ctr.NewHealthz()
