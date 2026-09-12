@@ -113,20 +113,6 @@ func releaseMigrationLock(ctx context.Context, conn *sql.Conn) {
 // migrationList 按时间升序列出全部迁移。新增迁移取当天日期编号，追加在末尾。
 func migrationList() []*gormigrate.Migration {
 	return []*gormigrate.Migration{
-		migration202609040101(),
-		migration202609040102(),
-		migration202609040103(),
-		migration202609040104(),
-		migration202609040105(),
-		migration202609040106(),
-		migration202609040107(),
-		migration202609040108(),
-		migration202609040109(),
-		migration202609040110(),
-		migration202609110101(),
-		migration202609110102(),
-		migration202609110103(),
-		migration202609110104(),
-		migration202609110105(),
+		migration202609120101(),
 	}
 }
