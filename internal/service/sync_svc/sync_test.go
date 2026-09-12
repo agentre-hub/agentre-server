@@ -13,6 +13,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/cago-frame/cago/pkg/utils/httputils"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/mock/gomock"
@@ -41,9 +42,15 @@ type stubAccountChan struct {
 	mu    sync.Mutex
 	err   error
 	calls []accountChanCall
+	// onBroadcast（可空）在每次广播发出的那一刻被调用：自己开事务的写路径据此记下
+	// 广播时的事务时序，断言「广播发生在提交之后」。
+	onBroadcast func()
 }
 
 func (s *stubAccountChan) Broadcast(_ context.Context, accountID int64, frame accountchan_svc.Frame) error {
+	if s.onBroadcast != nil {
+		s.onBroadcast()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, accountChanCall{accountID: accountID, version: frame.Version})
@@ -124,6 +131,17 @@ func setupSyncTest(t *testing.T) (context.Context, *syncMocks, *syncSvc) {
 	return ctx, m, svc
 }
 
+// setupSyncTxTest 与 setupSyncTest 是同一套仓储 mock，只把 ctx 换成 hubtest.TxDatabase，
+// 并交回事务事件记录。PurgeDeviceSyncObjects 自己开事务，它要断言的正是事务边界本身
+// ——「取号与落墓碑在同一个 BEGIN…COMMIT 里」「失败时整批回滚」——那是 TxLog 这份
+// 时序才说得清的事。
+func setupSyncTxTest(t *testing.T) (context.Context, *hubtest.TxLog, *syncMocks, *syncSvc) {
+	t.Helper()
+	_, m, svc := setupSyncTest(t)
+	ctx, txLog := hubtest.TxDatabase(t)
+	return ctx, txLog, m, svc
+}
+
 // expectTx 给 Push 外层的事务备好 Begin/Commit。
 func expectTx(m *syncMocks) {
 	m.sql.ExpectBegin()
@@ -144,6 +162,52 @@ func captureSave(m *syncMocks, saved *[]*sync_entity.SyncObject) *gomock.Call {
 			return nil
 		},
 	)
+}
+
+// expectFindMany 装好 Push 的整批读回：rows 里被请求到的按同步标识归档，其余同步标识
+// 库里没有。只交回被请求的那些，服务漏传了哪个同步标识，断言里就会现形。
+func expectFindMany(m *syncMocks, rows ...*sync_entity.SyncObject) *gomock.Call {
+	return m.object.EXPECT().FindMany(gomock.Any(), testUserID, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ int64, syncIDs []string) (map[string]*sync_entity.SyncObject, error) {
+			out := map[string]*sync_entity.SyncObject{}
+			for _, syncID := range syncIDs {
+				for _, row := range rows {
+					if row.SyncID == syncID {
+						out[syncID] = row
+					}
+				}
+			}
+			return out, nil
+		})
+}
+
+// expectFindLiveByNaturalKeys 装好 Push 的自然键批量查重，语义同 expectFindMany。
+func expectFindLiveByNaturalKeys(m *syncMocks, rows ...*sync_entity.SyncObject) *gomock.Call {
+	return m.object.EXPECT().FindLiveByNaturalKeys(gomock.Any(), testUserID, gomock.Any()).DoAndReturn(
+		func(_ context.Context, _ int64, keys []sync_repo.NaturalKey) (map[sync_repo.NaturalKey]*sync_entity.SyncObject, error) {
+			out := map[sync_repo.NaturalKey]*sync_entity.SyncObject{}
+			for _, key := range keys {
+				for _, row := range rows {
+					if key == (sync_repo.NaturalKey{Kind: row.Kind, ScopeSyncID: row.ScopeSyncID,
+						AgentredFingerprint: row.AgentredFingerprint}) {
+						out[key] = row
+					}
+				}
+			}
+			return out, nil
+		})
+}
+
+// captureCreateBatch 记下 Push 最后一次整批插入的新对象（按插入顺序）。
+func captureCreateBatch(m *syncMocks, saved *[]*sync_entity.SyncObject) *gomock.Call {
+	return m.object.EXPECT().CreateBatch(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, objs []*sync_entity.SyncObject) error {
+			for _, obj := range objs {
+				cp := *obj
+				*saved = append(*saved, &cp)
+			}
+			return nil
+		})
 }
 
 func errCode(t *testing.T, err error) int {
@@ -171,10 +235,10 @@ func TestPush_GivenBaseVersionMatchesCurrent_ThenAccepted(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
 			Version: 7, OriginFingerprint: "fp-9",
-		}, nil)
+		})
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -202,10 +266,10 @@ func TestPush_GivenStaleBaseVersion_ThenAcceptedAndReportsOverwritten(t *testing
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
 			Version: 7, OriginFingerprint: "fp-9",
-		}, nil)
+		})
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -230,10 +294,10 @@ func TestPush_GivenEmptyBaseVersionOnExistingSyncID_ThenTreatedAsConflict(t *tes
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
 			Version: 7, OriginFingerprint: "fp-9",
-		}, nil)
+		})
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -253,10 +317,10 @@ func TestPush_GivenBrandNewSyncID_ThenAcceptedWithoutConflict(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-new").Return(nil, nil)
+		expectFindMany(m)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-new", 0)}})
@@ -274,10 +338,10 @@ func TestPush_GivenTombstonedRow_ThenNonDeletePushIsRejected(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
 			Version: 9, OriginFingerprint: "fp-9", DeletedAt: testNow - 1000,
-		}, nil)
+		})
 		// 不该落库：Save 没有 EXPECT，调用即失败。
 		//
 		// 版本号则会被取走一个。这一批的号在**事务之前**一次取完（那是为了不让
@@ -304,10 +368,10 @@ func TestPush_GivenTombstonedRow_ThenRepeatedDeleteIsAccepted(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
 			Version: 9, OriginFingerprint: "fp-9", DeletedAt: testNow - 1000,
-		}, nil)
+		})
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(10), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -343,10 +407,10 @@ func TestPush_GivenTombstoneInstantOutsideRetentionWindow_ThenClampedToServerClo
 				ctx, m, svc := setupSyncTest(t)
 				onlineDevice(m)
 				expectTx(m)
-				m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(nil, nil)
+				expectFindMany(m)
 				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(10), nil)
 				var saved []*sync_entity.SyncObject
-				captureSave(m, &saved)
+				captureCreateBatch(m, &saved)
 
 				item := projectItem("sync-p1", 0)
 				item.DeletedAt = tc.deletedAt
@@ -367,20 +431,19 @@ func TestPush_GivenSameProjectFingerprintFromBothEnds_ThenMergedIntoOneRow(t *te
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "loc-B").Return(nil, nil)
-		m.object.EXPECT().FindLocationByNaturalKey(gomock.Any(), testUserID, "proj-1", "fp-a").
-			Return(&sync_entity.SyncObject{
-				ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
-				ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 4, OriginFingerprint: "fp-9",
-			}, nil)
+		expectFindMany(m)
+		expectFindLiveByNaturalKeys(m, &sync_entity.SyncObject{
+			ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
+			ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 4, OriginFingerprint: "fp-9",
+		})
 		gomock.InOrder(
 			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil),
 			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(9), nil),
 		)
 		// 墓碑要先落，否则自然键上的唯一约束会挡住胜者入库。
-		m.object.EXPECT().Tombstone(gomock.Any(), int64(55), int64(8), testNow).Return(int64(1), nil)
+		tombstone := m.object.EXPECT().Tombstone(gomock.Any(), int64(55), int64(8), testNow).Return(int64(1), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved)
+		captureCreateBatch(m, &saved).After(tombstone)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", BaseVersion: 0, UpdatedAt: testNow,
@@ -406,15 +469,14 @@ func TestPush_GivenIncomingLosesNaturalKeyMerge_ThenItIsTheOneTombstoned(t *test
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "loc-B").Return(nil, nil)
+		expectFindMany(m)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(3), nil)
-		m.object.EXPECT().FindLocationByNaturalKey(gomock.Any(), testUserID, "proj-1", "fp-a").
-			Return(&sync_entity.SyncObject{
-				ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
-				ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 10, OriginFingerprint: "fp-9",
-			}, nil)
+		expectFindLiveByNaturalKeys(m, &sync_entity.SyncObject{
+			ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-A",
+			ScopeSyncID: "proj-1", AgentredFingerprint: "fp-a", Version: 10, OriginFingerprint: "fp-9",
+		})
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", UpdatedAt: testNow,
@@ -434,11 +496,11 @@ func TestPush_GivenLocationWithFreeNaturalKey_ThenNoMerge(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "loc-B").Return(nil, nil)
-		m.object.EXPECT().FindLocationByNaturalKey(gomock.Any(), testUserID, "proj-1", "fp-a").Return(nil, nil)
+		expectFindMany(m)
+		expectFindLiveByNaturalKeys(m)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: []PushItem{{
 			Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", UpdatedAt: testNow,
@@ -457,9 +519,9 @@ func TestPush_GivenDeletedLocation_ThenNoNaturalKeyLookup(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "loc-B").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", Version: 4,
-		}, nil)
+		})
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -482,9 +544,9 @@ func TestPush_GivenDeletedLocationWithoutProjectSyncID_ThenAccepted(t *testing.T
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "loc-B").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 55, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "loc-B", Version: 4,
-		}, nil)
+		})
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -526,10 +588,10 @@ func TestPush_GivenFirstLoginDeviceWithoutLastSyncAt_ThenNotOverWindow(t *testin
 		ctx, m, svc := setupSyncTest(t)
 		m.state.EXPECT().FindDeviceState(gomock.Any(), testUserID, testDeviceID).Return(nil, nil)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-new").Return(nil, nil)
+		expectFindMany(m)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-new", 0)}})
@@ -547,10 +609,10 @@ func TestPush_GivenClientTimestamps_ThenVersionComesOnlyFromAccountSequence(t *t
 		onlineDevice(m)
 		expectTx(m)
 		// 库里那一行的客户端时间戳远在未来，本次上行的时间戳古老得多。
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(&sync_entity.SyncObject{
+		expectFindMany(m, &sync_entity.SyncObject{
 			ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-p1",
 			Version: 7, OriginFingerprint: "fp-9", SyncUpdatedAt: testNow + (10 * 365 * 24 * time.Hour).Milliseconds(),
-		}, nil)
+		})
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
 		captureSave(m, &saved)
@@ -578,16 +640,20 @@ func TestPush_GivenBothArrivalOrders_ThenLastArrivalWins(t *testing.T) {
 			expectTx(m)
 			expectTx(m)
 			var saved []*sync_entity.SyncObject
-			m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(nil, nil)
-			m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").DoAndReturn(
-				func(_ context.Context, _ int64, _ string) (*sync_entity.SyncObject, error) {
-					return saved[0], nil
-				})
+			gomock.InOrder(
+				m.object.EXPECT().FindMany(gomock.Any(), testUserID, []string{"sync-p1"}).
+					Return(map[string]*sync_entity.SyncObject{}, nil),
+				m.object.EXPECT().FindMany(gomock.Any(), testUserID, []string{"sync-p1"}).DoAndReturn(
+					func(_ context.Context, _ int64, _ []string) (map[string]*sync_entity.SyncObject, error) {
+						return map[string]*sync_entity.SyncObject{"sync-p1": saved[0]}, nil
+					}),
+			)
 			gomock.InOrder(
 				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil),
 				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(2), nil),
 			)
-			captureSave(m, &saved).Times(2)
+			// 先到的那次是新建（整批插入），后到的那次覆盖已有行（带版本条件的 UPDATE）。
+			gomock.InOrder(captureCreateBatch(m, &saved), captureSave(m, &saved))
 
 			first := projectItem("sync-p1", 0)
 			first.Payload = []byte(firstPayload)
@@ -662,10 +728,10 @@ func TestPush_GivenPayloadWithCredential_ThenRejected(t *testing.T) {
 			ctx, m, svc := setupSyncTest(t)
 			onlineDevice(m)
 			expectTx(m)
-			m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-b1").Return(nil, nil)
+			expectFindMany(m)
 			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(1), nil)
 			var saved []*sync_entity.SyncObject
-			captureSave(m, &saved)
+			captureCreateBatch(m, &saved)
 
 			item := projectItem("sync-b1", 0)
 			item.Kind = sync_entity.KindAgentBackend
@@ -710,11 +776,11 @@ func TestPush_GivenMultipleItems_ThenVersionsStrictlyIncrease(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, gomock.Any()).Return(nil, nil).Times(2)
+		expectFindMany(m)
 		// 整批一次取走 2 个,返回其中最大的那个 → 依次发放 4、5(与逐条取号时同值)。
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved).Times(2)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-a", 0), projectItem("sync-b", 0)}})
@@ -733,10 +799,10 @@ func TestPush_GivenAcceptedItem_ThenBroadcastsAccountVersion(t *testing.T) {
 		stub := registerAccountChanStub(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(nil, nil)
+		expectFindMany(m)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-p1", 0)}})
@@ -755,11 +821,11 @@ func TestPush_GivenMultipleAcceptedItems_ThenBroadcastsOnlyTheHighestVersion(t *
 		stub := registerAccountChanStub(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, gomock.Any()).Return(nil, nil).Times(2)
+		expectFindMany(m)
 		// 整批一次取走 2 个,返回其中最大的那个 → 依次发放 4、5(与逐条取号时同值)。
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved).Times(2)
+		captureCreateBatch(m, &saved)
 
 		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-a", 0), projectItem("sync-b", 0)}})
@@ -797,10 +863,10 @@ func TestPush_GivenAccountChannelBroadcastFails_ThenPushStillSucceeds(t *testing
 		stub.err = errors.New("redis unreachable")
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, "sync-p1").Return(nil, nil)
+		expectFindMany(m)
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-p1", 0)}})
@@ -1134,14 +1200,12 @@ func expectListByKinds(m *syncMocks, rows []*sync_entity.SyncObject) {
 // 一旦编辑它，就会被当成新对象重新推上来复活，直接违反 R6。
 func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenTombstonesOnlyThatDevicesCLIOverlaysAndLocations(t *testing.T) {
 	convey.Convey("设备离开账号时，该指纹的 CLI 覆盖与项目路径落墓碑", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 		expectListByKinds(m, deviceScopedFixture())
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 
 		type stone struct{ id, version int64 }
 		var stones []stone
@@ -1164,15 +1228,13 @@ func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenTombstonesOnlyThatDevicesCL
 // 才知道该设备的 CLI 覆盖与项目路径已删除。
 func TestPurgeDeviceSyncObjects_GivenFingerprint_ThenBroadcastsHighestVersion(t *testing.T) {
 	convey.Convey("落墓碑后广播这一次操作烧到的最高版本", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 		expectListByKinds(m, deviceScopedFixture())
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
@@ -1197,7 +1259,7 @@ func TestPurgeDeviceSyncObjects_GivenEmptyFingerprint_ThenTouchesNothing(t *test
 // （序列同时是下行游标，白白跳号会让每一台桌面端多拉一个空页）。
 func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoVersionIsBurned(t *testing.T) {
 	convey.Convey("没有属于这台设备的行时不分配版本号", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, "sha256:never-seen"))
@@ -1220,14 +1282,12 @@ func accountIdentityFixture() []*sync_entity.SyncObject {
 // 设备撤销仍只能删除该设备的 CLI 覆盖与项目路径，不能级联到账号身份。
 func TestPurgeDeviceSyncObjects_GivenAccountBackendAndExecTarget_ThenLeavesThemAlive(t *testing.T) {
 	convey.Convey("账号级 backend 身份与执行目标不随设备撤销而落墓碑", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		expectListLiveByFingerprint(m, accountIdentityFixture())
 		// ListByKinds 没有 EXPECT：设备撤销不扫描账号级 backend 或执行目标。
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 
 		type stone struct{ id, version int64 }
 		var stones []stone
@@ -1249,15 +1309,13 @@ func TestPurgeDeviceSyncObjects_GivenAccountBackendAndExecTarget_ThenLeavesThemA
 // 落墓碑是「谁发信号」三处之一：广播必须取这批设备局部对象烧到的最高版本。
 func TestPurgeDeviceSyncObjects_GivenAccountBackendsAndExecTargets_ThenBroadcastsDeviceScopedHighestVersion(t *testing.T) {
 	convey.Convey("只为设备局部对象的墓碑广播最高版本", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		expectListLiveByFingerprint(m, accountIdentityFixture())
 		// ListByKinds 没有 EXPECT：广播只覆盖本次设备局部对象的版本。
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
@@ -1281,7 +1339,7 @@ func TestPurgeDeviceSyncObjects_GivenEmptyFingerprint_ThenNoBroadcast(t *testing
 // 这台设备名下没有账号级对象时不烧版本号，也就没有信号可发。
 func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoBroadcast(t *testing.T) {
 	convey.Convey("没有属于这台设备的行时不广播", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 
@@ -1293,16 +1351,14 @@ func TestPurgeDeviceSyncObjects_GivenNothingScopedToTheDevice_ThenNoBroadcast(t 
 // 广播失败只记录、不回滚已经落库的墓碑——写入的权威性在数据库，不在通道。
 func TestPurgeDeviceSyncObjects_GivenBroadcastFails_ThenPurgeStillSucceeds(t *testing.T) {
 	convey.Convey("广播失败不影响已经落库的墓碑", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		stub := registerAccountChanStub(t)
 		stub.err = errors.New("redis unreachable")
 		expectListLiveByFingerprint(m, deviceScopedFixture())
 		expectListByKinds(m, deviceScopedFixture())
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).Return(int64(1), nil).Times(2)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
@@ -1313,7 +1369,7 @@ func TestPurgeDeviceSyncObjects_GivenBroadcastFails_ThenPurgeStillSucceeds(t *te
 // CLI 覆盖的墓碑会把整个账号的执行目标列表误删。
 func TestPurgeDeviceSyncObjects_GivenExecTargetsReferencingLiveBackends_ThenNoneAreSweptAlong(t *testing.T) {
 	convey.Convey("执行目标引用的是别的、仍然活着的 backend 时不许被带走", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		rows := append(deviceScopedFixture(),
 			execTargetRow(9, "t2", "a1", "b2"),
 			execTargetRow(10, "t3", "a1", "b3"),
@@ -1323,10 +1379,8 @@ func TestPurgeDeviceSyncObjects_GivenExecTargetsReferencingLiveBackends_ThenNone
 		expectListLiveByFingerprint(m, rows)
 		expectListByKinds(m, rows)
 
-		next := int64(100)
-		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).DoAndReturn(
-			func(context.Context, int64, int64) (int64, error) { next++; return next, nil },
-		).Times(2)
+		// 两行落墓碑一次取走两个号：[101, 102]。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
 
 		type stone struct{ id, version int64 }
 		var stones []stone
@@ -1347,7 +1401,7 @@ func TestPurgeDeviceSyncObjects_GivenExecTargetsReferencingLiveBackends_ThenNone
 // 全账号对象的读取与连带删除。
 func TestPurgeDeviceSyncObjects_GivenOnlyLocationsScoped_ThenNoExecTargetLookupHappens(t *testing.T) {
 	convey.Convey("只有项目路径落墓碑时不查执行目标", t, func() {
-		ctx, m, svc := setupSyncTest(t)
+		ctx, _, m, svc := setupSyncTxTest(t)
 		rows := []*sync_entity.SyncObject{
 			{ID: 4, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "l1",
 				AgentredFingerprint: testFingerprint, Version: 11},
@@ -1360,6 +1414,79 @@ func TestPurgeDeviceSyncObjects_GivenOnlyLocationsScoped_ThenNoExecTargetLookupH
 		m.object.EXPECT().Tombstone(gomock.Any(), int64(4), int64(101), testNow).Return(int64(1), nil)
 
 		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+	})
+}
+
+// 要求 2：撤销一台设备时，所有墓碑在**一个**事务里落库，版本号一次取完、连续递增，
+// 账号广播在提交之后发出。
+//
+// 逐行「取一个号、落一块墓碑」而不开事务时，每次取号的行锁在落墓碑之前就放掉了：并发
+// 的一次 Push 可以在两块墓碑之间取到更大的号并先提交，设备把游标推过去，这块墓碑随后
+// 提交的较小版本对它永远不再投递——被撤销机器的路径就留在别的桌面端上。取号收进落墓碑
+// 的事务里，「取号顺序 == 提交顺序」才成立；一次取 N 个则把 N 次取号（每次一个嵌套事务
+// 加两条语句）压成一次。
+func TestPurgeDeviceSyncObjects_GivenThreeScopedRows_ThenOneAllocationAndAllTombstonesInOneTransaction(t *testing.T) {
+	convey.Convey("三行落墓碑：一次取三个号、同一个事务、提交后广播最高版本", t, func() {
+		ctx, txLog, m, svc := setupSyncTxTest(t)
+		stub := registerAccountChanStub(t)
+		rows := append(deviceScopedFixture(), &sync_entity.SyncObject{
+			ID: 8, UserID: testUserID, Kind: sync_entity.KindProjectLocation, SyncID: "l2",
+			AgentredFingerprint: testFingerprint, Version: 15,
+		})
+		expectListLiveByFingerprint(m, rows)
+
+		var steps []string
+		record := func(ctx context.Context, step string) {
+			steps = append(steps, fmt.Sprintf("%s inTx=%t %v", step, hubtest.InTransaction(ctx), txLog.Events()))
+		}
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(3)).DoAndReturn(
+			func(ctx context.Context, _, _ int64) (int64, error) {
+				record(ctx, "NextVersion")
+				return 102, nil
+			})
+		type stone struct{ id, version int64 }
+		var stones []stone
+		m.object.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), testNow).DoAndReturn(
+			func(ctx context.Context, id, version, _ int64) (int64, error) {
+				record(ctx, "Tombstone")
+				stones = append(stones, stone{id, version})
+				return 1, nil
+			}).Times(3)
+		stub.onBroadcast = func() { steps = append(steps, fmt.Sprintf("Broadcast %v", txLog.Events())) }
+
+		assert.NoError(t, svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint))
+
+		// 三个号是 [100, 102]，按行序发放。
+		assert.Equal(t, []stone{{4, 100}, {7, 101}, {8, 102}}, stones)
+		assert.Equal(t, []string{
+			"NextVersion inTx=true [BEGIN]",
+			"Tombstone inTx=true [BEGIN]",
+			"Tombstone inTx=true [BEGIN]",
+			"Tombstone inTx=true [BEGIN]",
+			"Broadcast [BEGIN COMMIT]",
+		}, steps)
+		assert.Equal(t, []accountChanCall{{accountID: testUserID, version: 102}}, stub.recordedCalls())
+	})
+}
+
+// 要求 2 的另一半：任一步失败都不留下部分墓碑——已经落下的那几块随事务一起回滚，
+// 错误如实上抛，也不广播（没有提交就没有可拉的变更）。
+func TestPurgeDeviceSyncObjects_GivenTombstoneFails_ThenWholeBatchRollsBackWithoutBroadcast(t *testing.T) {
+	convey.Convey("第二块墓碑落库失败时整批回滚、不广播", t, func() {
+		ctx, txLog, m, svc := setupSyncTxTest(t)
+		stub := registerAccountChanStub(t)
+		expectListLiveByFingerprint(m, deviceScopedFixture())
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(102), nil)
+		gomock.InOrder(
+			m.object.EXPECT().Tombstone(gomock.Any(), int64(4), int64(101), testNow).Return(int64(1), nil),
+			m.object.EXPECT().Tombstone(gomock.Any(), int64(7), int64(102), testNow).Return(int64(0), assert.AnError),
+		)
+
+		err := svc.PurgeDeviceSyncObjects(ctx, testUserID, testFingerprint)
+
+		assert.ErrorIs(t, err, assert.AnError)
+		assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
+		assert.Empty(t, stub.recordedCalls())
 	})
 }
 
@@ -1395,13 +1522,12 @@ func TestPush_GivenManyItems_ThenTakesTheWholeVersionBlockAtOnce(t *testing.T) {
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		for _, syncID := range []string{"sync-p1", "sync-p2", "sync-p3"} {
-			m.object.EXPECT().Find(gomock.Any(), testUserID, syncID).Return(nil, nil)
-		}
+		m.object.EXPECT().FindMany(gomock.Any(), testUserID, []string{"sync-p1", "sync-p2", "sync-p3"}).
+			Return(map[string]*sync_entity.SyncObject{}, nil)
 		// 一次取走 3 个,返回的是这一批里最大的那个 → 本批依次拿到 8、9、10。
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(3)).Return(int64(10), nil)
 		var saved []*sync_entity.SyncObject
-		captureSave(m, &saved).Times(3)
+		captureCreateBatch(m, &saved)
 
 		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{
@@ -1439,7 +1565,7 @@ func TestPush_ThenVersionsAreAllocatedInsideTheCommittingTransaction(t *testing.
 		ctx, m, svc := setupSyncTest(t)
 		onlineDevice(m)
 		expectTx(m)
-		m.object.EXPECT().Find(gomock.Any(), testUserID, gomock.Any()).Return(nil, nil).Times(2)
+		expectFindMany(m)
 
 		var allocatedInTx []bool
 		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).DoAndReturn(
@@ -1448,11 +1574,13 @@ func TestPush_ThenVersionsAreAllocatedInsideTheCommittingTransaction(t *testing.
 				return 5, nil
 			})
 		var savedInTx []bool
-		m.object.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(ctx context.Context, _ *sync_entity.SyncObject) error {
-				savedInTx = append(savedInTx, hubtest.InTransaction(ctx))
+		m.object.EXPECT().CreateBatch(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, objs []*sync_entity.SyncObject) error {
+				for range objs {
+					savedInTx = append(savedInTx, hubtest.InTransaction(ctx))
+				}
 				return nil
-			}).Times(2)
+			})
 
 		_, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
 			Items: []PushItem{projectItem("sync-a", 0), projectItem("sync-b", 0)}})
@@ -1462,5 +1590,499 @@ func TestPush_ThenVersionsAreAllocatedInsideTheCommittingTransaction(t *testing.
 			"版本号取在事务外，取号顺序就不再是提交顺序，先取到号的那次提交晚了就漏投")
 		assert.Equal(t, []bool{true, true}, savedInTx)
 		assert.NoError(t, m.sql.ExpectationsWereMet())
+	})
+}
+
+// ── Push 的库内结果：同一组断言在逐条读写与批量读写两种实现下都必须成立 ─────────
+
+// memObjectRepo 是 sync_objects 在服务层测试里的内存替身。它按库的真实语义裁决
+// 带版本条件的覆盖、墓碑与**两条**唯一键（uk_sync_objects_identity、
+// uk_sync_objects_natural），所以下面这几条用例断言的是「这一次 Push 之后库里是什么、
+// 应答里是什么」，而不是「仓储被怎样调用」——Push 的读写方式换掉之后它们照样要绿。
+type memObjectRepo struct {
+	// 没被 Push 用到的方法一调就 nil panic：这里只替身写路径。
+	sync_repo.SyncObjectRepo
+
+	rows []*sync_entity.SyncObject
+	// hidden 里的行读不到、改不动，只参与唯一键裁决：用来造出「不变量坏掉」的局面
+	// ——库里明明有，Push 却没读到。
+	hidden []*sync_entity.SyncObject
+	nextID int64
+
+	identityErr *mysqldriver.MySQLError
+	naturalErr  *mysqldriver.MySQLError
+}
+
+func newMemObjectRepo(rows ...*sync_entity.SyncObject) *memObjectRepo {
+	r := &memObjectRepo{
+		nextID: 100,
+		identityErr: &mysqldriver.MySQLError{Number: 1062,
+			Message: "Duplicate entry for key 'sync_objects.uk_sync_objects_identity'"},
+		naturalErr: &mysqldriver.MySQLError{Number: 1062,
+			Message: "Duplicate entry for key 'sync_objects.uk_sync_objects_natural'"},
+	}
+	for _, row := range rows {
+		cp := *row
+		r.rows = append(r.rows, &cp)
+	}
+	return r
+}
+
+func isNaturalKind(kind string) bool {
+	return kind == sync_entity.KindProjectLocation || kind == sync_entity.KindAgentBackendCLI
+}
+
+func (r *memObjectRepo) visible(userID int64, syncID string) *sync_entity.SyncObject {
+	for _, row := range r.rows {
+		if row.UserID == userID && row.SyncID == syncID {
+			return row
+		}
+	}
+	return nil
+}
+
+func (r *memObjectRepo) liveByKey(userID int64, kind, scope, fingerprint string) *sync_entity.SyncObject {
+	for _, row := range r.rows {
+		if row.UserID == userID && row.Kind == kind && row.ScopeSyncID == scope &&
+			row.AgentredFingerprint == fingerprint && !row.IsDeleted() {
+			cp := *row
+			return &cp
+		}
+	}
+	return nil
+}
+
+// checkNatural 是 uk_sync_objects_natural：存活、带自然键的 kind 在同一
+// （账号, scope, 指纹, kind）上只允许一行。
+func (r *memObjectRepo) checkNatural(obj, self *sync_entity.SyncObject) error {
+	if !isNaturalKind(obj.Kind) || obj.IsDeleted() {
+		return nil
+	}
+	for _, set := range [][]*sync_entity.SyncObject{r.rows, r.hidden} {
+		for _, row := range set {
+			if row != self && row.UserID == obj.UserID && row.Kind == obj.Kind &&
+				row.ScopeSyncID == obj.ScopeSyncID && row.AgentredFingerprint == obj.AgentredFingerprint &&
+				!row.IsDeleted() {
+				return r.naturalErr
+			}
+		}
+	}
+	return nil
+}
+
+func (r *memObjectRepo) insert(obj *sync_entity.SyncObject) error {
+	for _, set := range [][]*sync_entity.SyncObject{r.rows, r.hidden} {
+		for _, row := range set {
+			if row.UserID == obj.UserID && row.SyncID == obj.SyncID {
+				return r.identityErr
+			}
+		}
+	}
+	if err := r.checkNatural(obj, nil); err != nil {
+		return err
+	}
+	r.nextID++
+	obj.ID = r.nextID
+	cp := *obj
+	r.rows = append(r.rows, &cp)
+	return nil
+}
+
+func (r *memObjectRepo) Find(_ context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error) {
+	row := r.visible(userID, syncID)
+	if row == nil {
+		return nil, nil
+	}
+	cp := *row
+	return &cp, nil
+}
+
+func (r *memObjectRepo) FindLocationByNaturalKey(
+	_ context.Context, userID int64, projectSyncID, fingerprint string,
+) (*sync_entity.SyncObject, error) {
+	return r.liveByKey(userID, sync_entity.KindProjectLocation, projectSyncID, fingerprint), nil
+}
+
+// Save 与 sync_repo.Save 同义：带版本条件的 UPDATE，没命中才普通 INSERT。
+func (r *memObjectRepo) Save(_ context.Context, obj *sync_entity.SyncObject) error {
+	if row := r.visible(obj.UserID, obj.SyncID); row != nil && row.Version < obj.Version {
+		if err := r.checkNatural(obj, row); err != nil {
+			return err
+		}
+		id, createtime := row.ID, row.Createtime
+		*row = *obj
+		row.ID, row.Createtime = id, createtime
+		return nil
+	}
+	return r.insert(obj)
+}
+
+func (r *memObjectRepo) Tombstone(_ context.Context, id, version, nowMs int64) (int64, error) {
+	for _, row := range r.rows {
+		if row.ID == id && !row.IsDeleted() {
+			row.DeletedAt, row.Version, row.Updatetime = nowMs, version, nowMs
+			return 1, nil
+		}
+	}
+	return 0, nil
+}
+
+func (r *memObjectRepo) FindMany(
+	_ context.Context, userID int64, syncIDs []string,
+) (map[string]*sync_entity.SyncObject, error) {
+	out := map[string]*sync_entity.SyncObject{}
+	for _, syncID := range syncIDs {
+		if row := r.visible(userID, syncID); row != nil {
+			cp := *row
+			out[syncID] = &cp
+		}
+	}
+	return out, nil
+}
+
+func (r *memObjectRepo) FindLiveByNaturalKeys(
+	_ context.Context, userID int64, keys []sync_repo.NaturalKey,
+) (map[sync_repo.NaturalKey]*sync_entity.SyncObject, error) {
+	out := map[sync_repo.NaturalKey]*sync_entity.SyncObject{}
+	for _, key := range keys {
+		if row := r.liveByKey(userID, key.Kind, key.ScopeSyncID, key.AgentredFingerprint); row != nil {
+			out[key] = row
+		}
+	}
+	return out, nil
+}
+
+// CreateBatch 与 sync_repo.CreateBatch 同义：逐行普通 INSERT，撞键即停。
+func (r *memObjectRepo) CreateBatch(_ context.Context, objs []*sync_entity.SyncObject) error {
+	for _, obj := range objs {
+		if err := r.insert(obj); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *memObjectRepo) snapshot() []sync_entity.SyncObject {
+	out := make([]sync_entity.SyncObject, 0, len(r.rows))
+	for _, row := range r.rows {
+		out = append(out, *row)
+	}
+	return out
+}
+
+// setupPushStoreTest 在 setupSyncTxTest 之上把 sync_objects 换成 memObjectRepo。
+func setupPushStoreTest(t *testing.T, rows ...*sync_entity.SyncObject) (
+	context.Context, *hubtest.TxLog, *syncMocks, *syncSvc, *memObjectRepo,
+) {
+	t.Helper()
+	ctx, txLog, m, svc := setupSyncTxTest(t)
+	store := newMemObjectRepo(rows...)
+	sync_repo.RegisterSyncObject(store)
+	onlineDevice(m)
+	return ctx, txLog, m, svc, store
+}
+
+func locationItem(kind, syncID string, base int64) PushItem {
+	return PushItem{
+		Kind: kind, SyncID: syncID, BaseVersion: base, UpdatedAt: testNow,
+		ScopeSyncID: "scope-1", AgentredFingerprint: "fp-a",
+		Payload: []byte(fmt.Sprintf(`{"from":%q}`, syncID)),
+	}
+}
+
+// 同一批里同一个同步标识出现两次：第二条面对的是第一条刚落下的那一版，基版本对不上
+// 就是冲突——与分两次 Push 推上来完全同形。库里最后是第二条的内容与版本，一行。
+func TestPush_GivenSameSyncIDTwiceInOneBatch_ThenSecondIsConflictAgainstTheFirst(t *testing.T) {
+	convey.Convey("同批同 sync_id", t, func() {
+		convey.Convey("server 从未见过这个同步标识", func() {
+			ctx, txLog, m, svc, store := setupPushStoreTest(t)
+			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
+			first, second := projectItem("sync-dup", 0), projectItem("sync-dup", 0)
+			first.Payload, second.Payload = []byte(`{"name":"first"}`), []byte(`{"name":"second"}`)
+
+			out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+				Items: []PushItem{first, second}})
+
+			assert.NoError(t, err)
+			assert.Equal(t, []PushItemResult{
+				{SyncID: "sync-dup", Kind: sync_entity.KindProject, Status: PushStatusAccepted, Version: 4},
+				{SyncID: "sync-dup", Kind: sync_entity.KindProject, Status: PushStatusConflict, Version: 5,
+					OverwrittenVersion: 4, OverwrittenOriginFingerprint: pushingFingerprint,
+					OverwrittenPayload: `{"name":"first"}`},
+			}, out.Results)
+			assert.Equal(t, []sync_entity.SyncObject{{
+				ID: 101, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-dup",
+				Payload: `{"name":"second"}`, Version: 5, SyncUpdatedAt: testNow,
+				OriginFingerprint: pushingFingerprint, Createtime: testNow, Updatetime: testNow,
+			}}, store.snapshot())
+			assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+		})
+
+		convey.Convey("库里已有这一行", func() {
+			ctx, _, m, svc, store := setupPushStoreTest(t, &sync_entity.SyncObject{
+				ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-dup",
+				Payload: `{"name":"stored"}`, Version: 3, OriginFingerprint: "fp-9", Createtime: 111, Updatetime: 111,
+			})
+			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
+			first, second := projectItem("sync-dup", 3), projectItem("sync-dup", 3)
+			first.Payload, second.Payload = []byte(`{"name":"first"}`), []byte(`{"name":"second"}`)
+
+			out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+				Items: []PushItem{first, second}})
+
+			assert.NoError(t, err)
+			assert.Equal(t, PushStatusAccepted, out.Results[0].Status)
+			assert.Equal(t, int64(4), out.Results[0].Version)
+			assert.Equal(t, PushStatusConflict, out.Results[1].Status)
+			assert.Equal(t, int64(5), out.Results[1].Version)
+			assert.Equal(t, int64(4), out.Results[1].OverwrittenVersion)
+			assert.Equal(t, `{"name":"first"}`, out.Results[1].OverwrittenPayload)
+			assert.Equal(t, []sync_entity.SyncObject{{
+				ID: 11, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-dup",
+				Payload: `{"name":"second"}`, Version: 5, SyncUpdatedAt: testNow,
+				OriginFingerprint: pushingFingerprint, Createtime: 111, Updatetime: testNow,
+			}}, store.snapshot())
+		})
+	})
+}
+
+// R4b 合并在库里的结果：自然键上原来那行落墓碑（拿较小的号），本次上行以更大的号存活。
+// 两种带自然键的 kind 同一套规则。
+func TestPush_GivenNaturalKeyTakenByStoredRow_ThenStoredRowTombstonedAndIncomingLives(t *testing.T) {
+	for _, kind := range []string{sync_entity.KindProjectLocation, sync_entity.KindAgentBackendCLI} {
+		convey.Convey("自然键被库里另一行占着: "+kind, t, func() {
+			ctx, _, m, svc, store := setupPushStoreTest(t, &sync_entity.SyncObject{
+				ID: 55, UserID: testUserID, Kind: kind, SyncID: "old", ScopeSyncID: "scope-1",
+				AgentredFingerprint: "fp-a", Payload: `{"from":"old"}`, Version: 4, OriginFingerprint: "fp-9",
+			})
+			gomock.InOrder(
+				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(8), nil),
+				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(9), nil),
+			)
+
+			out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+				Items: []PushItem{locationItem(kind, "new", 0)}})
+
+			assert.NoError(t, err)
+			assert.Equal(t, []PushItemResult{{
+				SyncID: "new", Kind: kind, Status: PushStatusAccepted, Version: 9,
+				MergedSyncID: "old", MergedVersion: 4, MergedOriginFingerprint: "fp-9",
+			}}, out.Results)
+			assert.Equal(t, []sync_entity.SyncObject{
+				{ID: 55, UserID: testUserID, Kind: kind, SyncID: "old", ScopeSyncID: "scope-1",
+					AgentredFingerprint: "fp-a", Payload: `{"from":"old"}`, Version: 8, OriginFingerprint: "fp-9",
+					DeletedAt: testNow, Updatetime: testNow},
+				{ID: 101, UserID: testUserID, Kind: kind, SyncID: "new", ScopeSyncID: "scope-1",
+					AgentredFingerprint: "fp-a", Payload: `{"from":"new"}`, Version: 9, SyncUpdatedAt: testNow,
+					OriginFingerprint: pushingFingerprint, Createtime: testNow, Updatetime: testNow},
+			}, store.snapshot())
+		})
+	}
+}
+
+// 同一批里两条新行落在同一个自然键上：后一条合并掉的是前一条**刚落下**的那行。
+// 前一条最终是一块墓碑——内容是它自己的，版本是后一条先取到的那个较小的号——后一条
+// 以补领的更大号存活。
+func TestPush_GivenTwoNewRowsOnOneNaturalKeyInOneBatch_ThenFirstIsTombstonedBySecond(t *testing.T) {
+	convey.Convey("同批两条新行撞同一自然键", t, func() {
+		ctx, txLog, m, svc, store := setupPushStoreTest(t)
+		gomock.InOrder(
+			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(2), nil),
+			m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(1)).Return(int64(3), nil),
+		)
+		kind := sync_entity.KindProjectLocation
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{locationItem(kind, "loc-B", 0), locationItem(kind, "loc-C", 0)}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, []PushItemResult{
+			{SyncID: "loc-B", Kind: kind, Status: PushStatusAccepted, Version: 1},
+			{SyncID: "loc-C", Kind: kind, Status: PushStatusAccepted, Version: 3,
+				MergedSyncID: "loc-B", MergedVersion: 1, MergedOriginFingerprint: pushingFingerprint},
+		}, out.Results)
+		assert.Equal(t, []sync_entity.SyncObject{
+			{ID: 101, UserID: testUserID, Kind: kind, SyncID: "loc-B", ScopeSyncID: "scope-1",
+				AgentredFingerprint: "fp-a", Payload: `{"from":"loc-B"}`, Version: 2, SyncUpdatedAt: testNow,
+				OriginFingerprint: pushingFingerprint, DeletedAt: testNow, Createtime: testNow, Updatetime: testNow},
+			{ID: 102, UserID: testUserID, Kind: kind, SyncID: "loc-C", ScopeSyncID: "scope-1",
+				AgentredFingerprint: "fp-a", Payload: `{"from":"loc-C"}`, Version: 3, SyncUpdatedAt: testNow,
+				OriginFingerprint: pushingFingerprint, Createtime: testNow, Updatetime: testNow},
+		}, store.snapshot())
+		assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+	})
+}
+
+// 同一批里前一条把库里那行合并成墓碑，后一条又拿着那行的旧副本推非删除：R6 的复活
+// 守卫看到的必须是这一批里刚落下的墓碑，照拒，并回报墓碑的版本。
+func TestPush_GivenRowTombstonedEarlierInTheBatch_ThenLaterRevivalIsRejected(t *testing.T) {
+	convey.Convey("同批先合并成墓碑、后复活", t, func() {
+		kind := sync_entity.KindProjectLocation
+		ctx, _, m, svc, store := setupPushStoreTest(t, &sync_entity.SyncObject{
+			ID: 55, UserID: testUserID, Kind: kind, SyncID: "loc-A", ScopeSyncID: "scope-1",
+			AgentredFingerprint: "fp-a", Payload: `{"from":"loc-A"}`, Version: 4, OriginFingerprint: "fp-9",
+		})
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(11), nil)
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{locationItem(kind, "loc-B", 0), locationItem(kind, "loc-A", 4)}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, []PushItemResult{
+			{SyncID: "loc-B", Kind: kind, Status: PushStatusAccepted, Version: 11,
+				MergedSyncID: "loc-A", MergedVersion: 4, MergedOriginFingerprint: "fp-9"},
+			{SyncID: "loc-A", Kind: kind, Status: PushStatusRejected, Reason: PushRejectReasonDeleted, Version: 10},
+		}, out.Results)
+		assert.Equal(t, []sync_entity.SyncObject{
+			{ID: 55, UserID: testUserID, Kind: kind, SyncID: "loc-A", ScopeSyncID: "scope-1",
+				AgentredFingerprint: "fp-a", Payload: `{"from":"loc-A"}`, Version: 10, OriginFingerprint: "fp-9",
+				DeletedAt: testNow, Updatetime: testNow},
+			{ID: 101, UserID: testUserID, Kind: kind, SyncID: "loc-B", ScopeSyncID: "scope-1",
+				AgentredFingerprint: "fp-a", Payload: `{"from":"loc-B"}`, Version: 11, SyncUpdatedAt: testNow,
+				OriginFingerprint: pushingFingerprint, Createtime: testNow, Updatetime: testNow},
+		}, store.snapshot())
+	})
+}
+
+// 落库撞上唯一键（库里有、Push 却没读到——不变量坏了）时，整批以那个数据库错误原样
+// 失败：事务回滚、不广播。吞掉它等于给设备回一个库里不存在的版本号。
+func TestPush_GivenInsertHitsUniqueKey_ThenWholePushFailsWithThatError(t *testing.T) {
+	convey.Convey("落库撞唯一键", t, func() {
+		kind := sync_entity.KindProjectLocation
+		for _, tc := range []struct {
+			name   string
+			hidden *sync_entity.SyncObject
+			item   PushItem
+			want   func(*memObjectRepo) error
+		}{
+			{"撞身份键",
+				&sync_entity.SyncObject{ID: 9, UserID: testUserID, Kind: sync_entity.KindProject, SyncID: "sync-ghost", Version: 3},
+				projectItem("sync-ghost", 0),
+				func(r *memObjectRepo) error { return r.identityErr }},
+			{"撞自然键",
+				&sync_entity.SyncObject{ID: 9, UserID: testUserID, Kind: kind, SyncID: "loc-ghost",
+					ScopeSyncID: "scope-1", AgentredFingerprint: "fp-a", Version: 3},
+				locationItem(kind, "loc-B", 0),
+				func(r *memObjectRepo) error { return r.naturalErr }},
+		} {
+			convey.Convey(tc.name, func() {
+				ctx, txLog, m, svc, store := setupPushStoreTest(t)
+				stub := registerAccountChanStub(t)
+				store.hidden = append(store.hidden, tc.hidden)
+				m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(5), nil)
+
+				out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+					Items: []PushItem{projectItem("sync-ok", 0), tc.item}})
+
+				assert.Nil(t, out)
+				assert.ErrorIs(t, err, tc.want(store))
+				assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
+				assert.Empty(t, stub.recordedCalls())
+			})
+		}
+	})
+}
+
+// 要求 7：一次 Push 在持锁事务里的往返次数不随 item 数线性增长。取号之后，已有行一条
+// `sync_id IN` 读回、自然键一条批量查重、新对象一条多行 INSERT——整批满载（api/sync
+// 允许 500 条）时也是这几条。逐条的 Find / FindLocationByNaturalKey / Save 没有
+// EXPECT，调用一次 gomock 就判失败。
+func TestPush_GivenFullBatchOfNewItems_ThenReadsAndInsertsInConstantBatchedStatementsInsideTheLock(t *testing.T) {
+	convey.Convey("满载一批新对象：读与新建各一次批量语句，都在取号的事务里", t, func() {
+		ctx, txLog, m, svc := setupSyncTxTest(t)
+		onlineDevice(m)
+		const n = 500
+		items := make([]PushItem, 0, n)
+		for i := 0; i < n; i++ {
+			if i%2 == 0 {
+				items = append(items, projectItem(fmt.Sprintf("p-%d", i), 0))
+				continue
+			}
+			items = append(items, PushItem{
+				Kind: sync_entity.KindProjectLocation, SyncID: fmt.Sprintf("loc-%d", i), UpdatedAt: testNow,
+				ScopeSyncID: fmt.Sprintf("proj-%d", i), AgentredFingerprint: "fp-a", Payload: []byte(`{}`),
+			})
+		}
+
+		var steps []string
+		record := func(ctx context.Context, step string) {
+			steps = append(steps, fmt.Sprintf("%s inTx=%t %v", step, hubtest.InTransaction(ctx), txLog.Events()))
+		}
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(n)).DoAndReturn(
+			func(ctx context.Context, _, _ int64) (int64, error) {
+				record(ctx, "NextVersion")
+				return n, nil
+			})
+		m.object.EXPECT().FindMany(gomock.Any(), testUserID, gomock.Len(n)).DoAndReturn(
+			func(ctx context.Context, _ int64, _ []string) (map[string]*sync_entity.SyncObject, error) {
+				record(ctx, "FindMany")
+				return map[string]*sync_entity.SyncObject{}, nil
+			})
+		m.object.EXPECT().FindLiveByNaturalKeys(gomock.Any(), testUserID, gomock.Len(n/2)).DoAndReturn(
+			func(ctx context.Context, _ int64, _ []sync_repo.NaturalKey) (map[sync_repo.NaturalKey]*sync_entity.SyncObject, error) {
+				record(ctx, "FindLiveByNaturalKeys")
+				return map[sync_repo.NaturalKey]*sync_entity.SyncObject{}, nil
+			})
+		var inserted []int64
+		m.object.EXPECT().CreateBatch(gomock.Any(), gomock.Len(n)).DoAndReturn(
+			func(ctx context.Context, objs []*sync_entity.SyncObject) error {
+				record(ctx, "CreateBatch")
+				for _, obj := range objs {
+					inserted = append(inserted, obj.Version)
+				}
+				return nil
+			})
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID, Items: items})
+
+		assert.NoError(t, err)
+		assert.Equal(t, []string{
+			"NextVersion inTx=true [BEGIN]",
+			"FindMany inTx=true [BEGIN]",
+			"FindLiveByNaturalKeys inTx=true [BEGIN]",
+			"CreateBatch inTx=true [BEGIN]",
+		}, steps)
+		assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+		// 版本号照旧按 item 顺序发放 [1, n]，插入顺序也是 item 顺序。
+		want := make([]int64, n)
+		for i := range want {
+			want[i] = int64(i + 1)
+			assert.Equal(t, PushStatusAccepted, out.Results[i].Status)
+			assert.Equal(t, want[i], out.Results[i].Version)
+		}
+		assert.Equal(t, want, inserted)
+	})
+}
+
+// 同一批里先删掉自然键上那行、再在同一个键上新建：删除之后键已空出来，新建的那条不合并
+// 任何东西，也不多取版本号——与分两次 Push 推上来同形。
+func TestPush_GivenDeleteThenRecreateOnOneNaturalKeyInOneBatch_ThenNoMerge(t *testing.T) {
+	convey.Convey("同批先删后建同一自然键", t, func() {
+		kind := sync_entity.KindProjectLocation
+		ctx, _, m, svc, store := setupPushStoreTest(t, &sync_entity.SyncObject{
+			ID: 55, UserID: testUserID, Kind: kind, SyncID: "loc-A", ScopeSyncID: "scope-1",
+			AgentredFingerprint: "fp-a", Payload: `{"from":"loc-A"}`, Version: 4, OriginFingerprint: "fp-9",
+		})
+		// 只有整批这一次取号：新建那条若误判成合并，会多补领一个号，gomock 当场判失败。
+		m.state.EXPECT().NextVersion(gomock.Any(), testUserID, int64(2)).Return(int64(6), nil)
+		deletion := locationItem(kind, "loc-A", 4)
+		deletion.DeletedAt = testNow
+
+		out, err := svc.Push(ctx, PushInput{UserID: testUserID, DeviceID: testDeviceID,
+			Items: []PushItem{deletion, locationItem(kind, "loc-C", 0)}})
+
+		assert.NoError(t, err)
+		assert.Equal(t, []PushItemResult{
+			{SyncID: "loc-A", Kind: kind, Status: PushStatusAccepted, Version: 5},
+			{SyncID: "loc-C", Kind: kind, Status: PushStatusAccepted, Version: 6},
+		}, out.Results)
+		assert.Equal(t, []sync_entity.SyncObject{
+			{ID: 55, UserID: testUserID, Kind: kind, SyncID: "loc-A", ScopeSyncID: "scope-1",
+				AgentredFingerprint: "fp-a", Payload: `{"from":"loc-A"}`, Version: 5, SyncUpdatedAt: testNow,
+				OriginFingerprint: pushingFingerprint, DeletedAt: testNow, Updatetime: testNow},
+			{ID: 101, UserID: testUserID, Kind: kind, SyncID: "loc-C", ScopeSyncID: "scope-1",
+				AgentredFingerprint: "fp-a", Payload: `{"from":"loc-C"}`, Version: 6, SyncUpdatedAt: testNow,
+				OriginFingerprint: pushingFingerprint, Createtime: testNow, Updatetime: testNow},
+		}, store.snapshot())
 	})
 }

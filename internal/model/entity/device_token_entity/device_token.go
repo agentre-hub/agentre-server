@@ -3,14 +3,14 @@ package device_token_entity
 
 type DeviceToken struct {
 	ID               int64   `gorm:"column:id;primaryKey;autoIncrement"`
-	DeviceID         int64   `gorm:"column:device_id;type:bigint;not null"`
-	RefreshTokenHash string  `gorm:"column:refresh_token_hash;type:text;not null"`
-	AccessJTI        string  `gorm:"column:access_jti;type:text;not null;default:''"`
-	RefreshExpiresAt int64   `gorm:"column:refresh_expires_at;type:bigint;not null;default:0"`
-	RevokedAt        int64   `gorm:"column:revoked_at;type:bigint;not null;default:0"`
-	UserAgent        string  `gorm:"column:user_agent;type:text;not null;default:''"`
-	IP               *string `gorm:"column:ip;type:varchar(45)"`
-	Createtime       int64   `gorm:"column:createtime;type:bigint;not null;default:0"`
+	DeviceID         int64   `gorm:"column:device_id"`
+	RefreshTokenHash string  `gorm:"column:refresh_token_hash"`
+	AccessJTI        string  `gorm:"column:access_jti;default:''"`
+	RefreshExpiresAt int64   `gorm:"column:refresh_expires_at;default:0"`
+	RevokedAt        int64   `gorm:"column:revoked_at;default:0"`
+	UserAgent        string  `gorm:"column:user_agent;default:''"`
+	IP               *string `gorm:"column:ip"`
+	Createtime       int64   `gorm:"column:createtime;default:0"`
 }
 
 func (*DeviceToken) TableName() string { return "device_tokens" }

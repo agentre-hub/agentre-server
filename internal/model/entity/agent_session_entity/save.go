@@ -10,13 +10,13 @@ package agent_session_entity
 // 对话一个字都不落库。这条边界由 internal/api/savedsession/guard_test.go 守。
 type SessionSave struct {
 	ID     int64 `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID int64 `gorm:"column:user_id;type:bigint;not null"`
+	UserID int64 `gorm:"column:user_id"`
 	// ConversationID 与 UserID 一起是这一条的身份键
 	// （uk_agent_session_saves_identity）：一条对话在一个账号里只保存一次。
-	ConversationID string `gorm:"column:conversation_id;type:char(36);not null"`
+	ConversationID string `gorm:"column:conversation_id"`
 	// DeviceFingerprint 是**承载**这条对话的那台机器（对得上 devices.fingerprint），
 	// 也就是镜像该去连哪一台。
-	DeviceFingerprint string `gorm:"column:device_fingerprint;type:varchar(255);not null"`
+	DeviceFingerprint string `gorm:"column:device_fingerprint"`
 	// PeerFingerprint 是**发起**这条对话的那一端。它已退出身份键
 	// （2026-08-31-conversation-centric-addressing.md「会话身份」），留作来源标注。
 	//
@@ -24,10 +24,10 @@ type SessionSave struct {
 	// 这一列就等于 DeviceFingerprint，写进去而不是留空，按身份查才写得成一条等值
 	// 条件。web 控制台派发出去的那些两者不同——发起端是浏览器，承载它的是 agentred
 	// 那台机器。
-	PeerFingerprint string `gorm:"column:peer_fingerprint;type:varchar(255);not null"`
-	FollowedAt      int64  `gorm:"column:followed_at;type:bigint;not null;default:0"`
-	Createtime      int64  `gorm:"column:createtime;type:bigint;not null;default:0"`
-	Updatetime      int64  `gorm:"column:updatetime;type:bigint;not null;default:0"`
+	PeerFingerprint string `gorm:"column:peer_fingerprint"`
+	FollowedAt      int64  `gorm:"column:followed_at;default:0"`
+	Createtime      int64  `gorm:"column:createtime;default:0"`
+	Updatetime      int64  `gorm:"column:updatetime;default:0"`
 }
 
 func (*SessionSave) TableName() string { return "agent_session_saves" }

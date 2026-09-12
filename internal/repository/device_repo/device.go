@@ -24,6 +24,12 @@ type DeviceRepo interface {
 	UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error
 	Revoke(ctx context.Context, id, nowMs int64) error
 	ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error)
+	// ListActiveByUsers 一次查一批账号的在用设备，含义与逐个调用 ListByUser 相同
+	// （同样的 status=ACTIVE 过滤、同样按 last_seen_at DESC 排序），只是把发往数据库
+	// 的往返次数从「账号数」摊平成「每 listByUsersBatchSize 个账号一条 SELECT」——
+	// activity 定时任务按批读取账号名单时用它，不再为每个账号各发一条 SELECT。任一块
+	// 失败整批返回错误。
+	ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int64][]*device_entity.Device, error)
 }
 
 var defaultRepo DeviceRepo
@@ -95,6 +101,28 @@ func (r *repo) ListByUser(ctx context.Context, userID int64) ([]*device_entity.D
 	if err := db.Ctx(ctx).Where("user_id=? AND status=?", userID, consts.ACTIVE).
 		Order("last_seen_at DESC").Find(&out).Error; err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// listByUsersBatchSize 是 ListActiveByUsers 一条 IN 里的账号数上限。账号清单没有上限，
+// 占位符数量要封顶；与 sync_repo 批量读写同一个块大小。
+const listByUsersBatchSize = 500
+
+// ListActiveByUsers 按块发 `user_id IN`。同一个账号只落在一块里，块内按 last_seen_at
+// 排序因此就是它的完整排序。
+func (r *repo) ListActiveByUsers(ctx context.Context, userIDs []int64) (map[int64][]*device_entity.Device, error) {
+	out := make(map[int64][]*device_entity.Device, len(userIDs))
+	for start := 0; start < len(userIDs); start += listByUsersBatchSize {
+		var rows []*device_entity.Device
+		if err := db.Ctx(ctx).Where("user_id IN ? AND status=?",
+			userIDs[start:min(start+listByUsersBatchSize, len(userIDs))], consts.ACTIVE).
+			Order("last_seen_at DESC").Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, d := range rows {
+			out[d.UserID] = append(out[d.UserID], d)
+		}
 	}
 	return out, nil
 }

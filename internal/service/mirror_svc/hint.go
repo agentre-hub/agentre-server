@@ -174,11 +174,16 @@ func (f *follower) closeHints() {
 // applyHint 兑现一条提示。它跑在常驻循环那条 goroutine 上，因此与 Apply / Sync
 // 天然不并发——两个分支都依赖这一点。
 func (f *follower) applyHint(ctx context.Context, hint machineHint) {
+	// 循环的 ctx 永不到期，兑现提示时的库调用要自己带截止（db-perf-fixes 要求 14），否则
+	// 一次网络黑洞式的慢库调用会占住这条循环与连接池里的一个连接。提示只读写库、不碰
+	// 对端，所以整条提示共用一个 Config.CallTimeout 就是给它的库调用扣的截止。
+	dbCtx, cancel := context.WithTimeout(ctx, f.sup.cfg.CallTimeout)
+	defer cancel()
 	switch hint.Kind {
 	case hintSaved:
 		// 名单是范围的唯一权威，所以重读它、而不是把提示里那条对话拼进去：这一读
 		// 顺带把这台机器上任何别的变化一起收敛掉。
-		saved, err := savedOnMachine(ctx, f.key.userID, f.key.fingerprint)
+		saved, err := savedOnMachine(dbCtx, f.key.userID, f.key.fingerprint)
 		if err != nil {
 			logger.Ctx(ctx).Warn("mirror machine hint: saved list unreadable, leaving it to the next pass",
 				zap.Int64("userId", f.key.userID), zap.String("machineFingerprint", f.key.fingerprint),
@@ -191,7 +196,7 @@ func (f *follower) applyHint(ctx context.Context, hint machineHint) {
 		// 摘掉之前那一瞬可能刚有一帧把它写回来了：发起那个副本清库与本副本摘掉之间
 		// 隔着一次 Redis 投递。再清一次——清除是幂等的，而这一次跑在摘掉**之后**，
 		// 此后这条连接不会再提到这条对话。
-		if err := purgeStoredCopy(ctx, f.key.userID, hint.ConversationID); err != nil {
+		if err := purgeStoredCopy(dbCtx, f.key.userID, hint.ConversationID); err != nil {
 			logger.Ctx(ctx).Warn("mirror machine hint: stored copy not cleared",
 				zap.Int64("userId", f.key.userID), zap.String("machineFingerprint", f.key.fingerprint),
 				zap.String("conversationId", hint.ConversationID), zap.Error(err))

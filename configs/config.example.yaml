@@ -8,7 +8,7 @@ http:
 
 db:
   driver: mysql
-  dsn: "server:server@tcp(127.0.0.1:3306)/server?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true"
+  dsn: "server:server@tcp(127.0.0.1:3306)/server?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true&timeout=5s&readTimeout=60s&writeTimeout=60s"
   debug: false
   prepareStmt: false
   # 连接池必须显式配：cago 的零值表示不设置，会退回 database/sql 的默认值——空闲

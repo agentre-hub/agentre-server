@@ -147,3 +147,47 @@ func TestReconcile_MachineNoLongerCarriesAnySavedConversation_IsLetGo(t *testing
 			len(rig.store.summaryOf(testUserID, conv42)) > 0
 	}, 200*time.Millisecond, 10*time.Millisecond, "已经删掉的对话又被实时帧写回了账号里")
 }
+
+// Given 本副本正跟着同一个账号名下的三台机器,账号在别的副本上把这三台机器承载的
+// 最后一条对话都删掉了(保存名单里一条都不剩);When 本副本下一轮巡检;
+// Then 三台机器都被放开,而 releaseEmptyMachines 逐台核实「是否还承载着什么」时
+// 走的是按机器取范围（ListConversationIDsByMachine），一次都不读整个账号的保存
+// 名单——巡检对一个账号里已跟住的每一台空机器都要问一遍这件事，读整份名单只为了
+// 挑出其中一台机器那一份是一次没人要求的全账号扫描（要求 9）。
+func TestReconcile_ThreeEmptyMachinesOfOneAccount_DoesNotListTheWholeAccount(t *testing.T) {
+	rig := newResidentRig(t)
+	const (
+		m1 = "fp-empty-1"
+		m2 = "fp-empty-2"
+		m3 = "fp-empty-3"
+	)
+	saves := newFakeSaves(saved(testUserID, m1, conv42), saved(testUserID, m2, conv43), saved(testUserID, m3, conv7))
+	rig.peer.sessions = []*agentrewire.SessionSummary{
+		machineSession(conv42, "m1"), machineSession(conv43, "m2"), machineSession(conv7, "m3"),
+	}
+	rig.peer.durable[conv42] = []*agentrewire.DurableNotification{durableRow(conv42, 1)}
+	rig.peer.durable[conv43] = []*agentrewire.DurableNotification{durableRow(conv43, 1)}
+	rig.peer.durable[conv7] = []*agentrewire.DurableNotification{durableRow(conv7, 1)}
+	a := rig.replica(t, replicaA)
+	ctx := context.Background()
+	require.NoError(t, NewReconciler(a.sup).Reconcile(ctx))
+	require.True(t, a.sup.follows(testUserID, m1))
+	require.True(t, a.sup.follows(testUserID, m2))
+	require.True(t, a.sup.follows(testUserID, m3))
+
+	// 另一个副本上的删除：三台机器各自最后一条对话都没了，账号保存名单因此空着。
+	require.NoError(t, saves.Delete(ctx, testUserID, conv42))
+	require.NoError(t, saves.Delete(ctx, testUserID, conv43))
+	require.NoError(t, saves.Delete(ctx, testUserID, conv7))
+	// 只看接下来这一轮：上一轮认领时主循环那次账号级读取是有意保留的
+	// （reconcile.go 的按账号缓存），不该混进这里的计数。
+	saves.resetListByUserCalls()
+
+	require.NoError(t, NewReconciler(a.sup).Reconcile(ctx))
+
+	assert.False(t, a.sup.follows(testUserID, m1))
+	assert.False(t, a.sup.follows(testUserID, m2))
+	assert.False(t, a.sup.follows(testUserID, m3))
+	assert.Zero(t, saves.listByUserCallCount(),
+		"逐台核实一台已跟住的空机器不该读整个账号的保存名单")
+}

@@ -260,12 +260,24 @@ func (s *Sessions) PurgeMachineDeleteTodos(ctx context.Context, userID int64, pe
 //
 // fingerprint 是**承载**这条对话的那台机器（要连的就是它）；交回去的是每条对话的
 // conversation_id，Mirror.Sync 拿它跟执行端报的清单逐条比对。
+//
+// 直接按机器查（ListConversationIDsByMachine，走
+// idx_agent_session_saves_machine），不经 savedByMachine 读整个账号的名单再挑一台
+// 出来：这条路径的调用方（Begin、hint.go 的 hintSaved、
+// releaseEmptyMachines）每次都只关心一台机器，而它们各自被调用的频率与账号里的
+// 机器数无关——按账号取全量名单只为了挑出一台会随账号规模变成一次没人要求的全表
+// 扫描（要求 9）。savedByMachine 仍然保留给 Reconcile 的主循环：那里本来就要按
+// 账号把全部机器分组，一次账号级读取换来的是「不必对每台机器各查一次」。
 func savedOnMachine(ctx context.Context, userID int64, fingerprint string) ([]SavedSession, error) {
-	byMachine, err := savedByMachine(ctx, userID)
+	ids, err := agent_session_repo.Save().ListConversationIDsByMachine(ctx, userID, fingerprint)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list saved conversations: %w", err)
 	}
-	return byMachine[fingerprint], nil
+	out := make([]SavedSession, len(ids))
+	for i, id := range ids {
+		out[i] = SavedSession{ConversationID: id}
+	}
+	return out, nil
 }
 
 // savedByMachine 把账号的保存名单按机器分好组：巡检一个账号只读一次名单，而不是

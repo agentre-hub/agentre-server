@@ -106,3 +106,61 @@ func TestFindByDeviceCode_Found(t *testing.T) {
 	assert.NotNil(t, got)
 	assert.Equal(t, "A4F-7Q2", got.UserCode)
 }
+
+// 轮询限速从「先读 last_polled_at 判间隔、再无条件 UPDATE」改成一条条件 UPDATE：
+// WHERE 里带 last_polled_at <= now-minGap，两个并发/重复的轮询请求打到同一行时，
+// 数据库只让其中一条改到行，另一条凭 RowsAffected==0 判定该 slow_down——不再是
+// service 先读一次再决定写不写的 check-then-act。
+func TestUpdateLastPolledIfDue_UpdatesWhenDue(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDeviceFlow()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"UPDATE `device_flow_codes` SET `last_polled_at`=? WHERE device_code=? AND last_polled_at <= ?",
+	)).WithArgs(int64(15000), "dc-x", int64(10000)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	n, err := r.UpdateLastPolledIfDue(ctx, "dc-x", 15000, 5000)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 另一个并发/重复请求撞上同一行时命中 0 行——它必须能从返回的行数上看出来，
+// 而不是回头再读一次 last_polled_at。
+func TestUpdateLastPolledIfDue_ReturnsZeroRowsWhenNotYetDue(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDeviceFlow()
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"UPDATE `device_flow_codes` SET `last_polled_at`=? WHERE device_code=? AND last_polled_at <= ?",
+	)).WithArgs(int64(15000), "dc-x", int64(10000)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	n, err := r.UpdateLastPolledIfDue(ctx, "dc-x", 15000, 5000)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 过期 device flow 码可能积到很大：不分批的一条 DELETE 会把 next-key 锁铺满它
+// 扫过的范围。按 1000 行一批删，直到某一批没删满为止，与 device_token_repo.deleteBatched
+// 是同一个理由、同一个常量。
+func TestDeleteExpiredBefore_BatchesUntilUnderLimit(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDeviceFlow()
+
+	for _, affected := range []int64{cleanupBatchSize, 3} {
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta(
+			"DELETE FROM `device_flow_codes` WHERE expires_at < ?")).
+			WithArgs(int64(1700), int64(cleanupBatchSize)).
+			WillReturnResult(sqlmock.NewResult(0, affected))
+		mock.ExpectCommit()
+	}
+
+	assert.NoError(t, r.DeleteExpiredBefore(ctx, 1700))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

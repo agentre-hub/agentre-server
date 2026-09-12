@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/cago-frame/cago/pkg/consts"
@@ -19,6 +21,8 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo/mock_sync_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
 // registerActiveDevice 让 (userID, fingerprint) 在 device_repo 里解出一台账号内的活跃设备，
@@ -28,6 +32,157 @@ func registerActiveDevice(ctrl *gomock.Controller, userID int64, fingerprint str
 	device_repo.RegisterDevice(devices)
 	devices.EXPECT().FindByFingerprint(gomock.Any(), userID, fingerprint).
 		Return(&device_entity.Device{UserID: userID, Fingerprint: fingerprint, Status: consts.ACTIVE}, nil)
+}
+
+// engineTxTrace 记下一次写操作里取号、落库与广播各自发生那一刻的事务状态：是否在事务
+// 里、以及此前发生过的事务事件。它同时顶替账号级实时通道，于是广播也进同一份时序。
+//
+// 「取号与落库在同一个事务里」由两条合起来钉住：两步都 inTx=true，且两步看到的事件
+// 序列相同（中间没有 COMMIT）。「广播在提交之后」由广播那一刻已经出现 COMMIT 钉住。
+type engineTxTrace struct {
+	mu    sync.Mutex
+	txLog *hubtest.TxLog
+	steps []string
+}
+
+func (tr *engineTxTrace) record(ctx context.Context, step string) {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	tr.steps = append(tr.steps, fmt.Sprintf("%s inTx=%t %v", step, hubtest.InTransaction(ctx), tr.txLog.Events()))
+}
+
+func (tr *engineTxTrace) recorded() []string {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	return append([]string(nil), tr.steps...)
+}
+
+func (tr *engineTxTrace) Broadcast(ctx context.Context, _ int64, _ accountchan_svc.Frame) error {
+	tr.record(ctx, "Broadcast")
+	return nil
+}
+
+func (tr *engineTxTrace) Subscribe(context.Context, int64) (accountchan_svc.Subscription, error) {
+	return nil, errors.New("engineTxTrace: Subscribe not used by write-path tests")
+}
+
+// setupEngineTxTest 装好仓储 mock、只做事务控制的 ctx 与记时序的广播替身。
+func setupEngineTxTest(t *testing.T) (
+	context.Context, *engineTxTrace, *gomock.Controller,
+	*mock_sync_repo.MockSyncObjectRepo, *mock_sync_repo.MockSyncStateRepo,
+) {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	ctx, txLog := hubtest.TxDatabase(t)
+	trace := &engineTxTrace{txLog: txLog}
+	accountchan_svc.SetDefault(trace)
+	t.Cleanup(func() { accountchan_svc.SetDefault(nil) })
+	return ctx, trace, ctrl, objects, states
+}
+
+// expectTracedWrite 让一次写入的取号与落库都进时序；saveErr 非空时落库失败。
+func expectTracedWrite(trace *engineTxTrace, objects *mock_sync_repo.MockSyncObjectRepo,
+	states *mock_sync_repo.MockSyncStateRepo, version int64, saveErr error,
+) {
+	gomock.InOrder(
+		states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+			func(ctx context.Context, _, _ int64) (int64, error) {
+				trace.record(ctx, "NextVersion")
+				return version, nil
+			}),
+		objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, _ *sync_entity.SyncObject) error {
+				trace.record(ctx, "Save")
+				return saveErr
+			}),
+	)
+}
+
+// 要求 3：控制台对账号级引擎对象的每一条写路径，取号与落库在同一个事务里提交，账号
+// 广播在提交之后发出。
+//
+// 取号与落库分开时，sync_account_seqs 那一行的锁在落库之前就放掉了：并发的一次 Push
+// 可以取到更大的号并先提交，在线设备把游标推过去，这一次编辑随后提交的较小版本对它们
+// 永远不再投递——服务端与浏览器都以为改成功了。广播先于提交则会让设备去拉一份还看不见
+// 的变更。与 workspace_svc.WithOrgWriteTx 是同一条不变量。
+var committedWriteTrace = []string{
+	"NextVersion inTx=true [BEGIN]",
+	"Save inTx=true [BEGIN]",
+	"Broadcast inTx=false [BEGIN COMMIT]",
+}
+
+// saveProvider 这一路（新建供应商）。
+func TestCreateProvider_ThenAllocatesAndSavesInOneTransactionAndBroadcastsAfterCommit(t *testing.T) {
+	ctx, trace, _, objects, states := setupEngineTxTest(t)
+	expectTracedWrite(trace, objects, states, 3, nil)
+
+	_, err := New().CreateProvider(ctx, ProviderWriteInput{
+		UserID: 7, Name: stringPtr("Anthropic"), Type: stringPtr("anthropic"),
+		BaseURL: stringPtr("https://api.anthropic.com"), APIKey: stringPtr("sk-secret"),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, committedWriteTrace, trace.recorded())
+}
+
+// saveBackend 与 saveCLIOverlay 两路：后端行与覆盖行各是一次完整的写，各自一个事务、
+// 各自在提交后广播。
+func TestCreateBackend_GivenCLIPath_ThenBackendAndOverlayEachCommitBeforeTheirBroadcast(t *testing.T) {
+	ctx, trace, ctrl, objects, states := setupEngineTxTest(t)
+	registerActiveDevice(ctrl, 7, "sha256:aaaa")
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
+		Return([]*sync_entity.SyncObject{}, nil)
+	expectTracedWrite(trace, objects, states, 3, nil)
+	expectTracedWrite(trace, objects, states, 4, nil)
+
+	_, err := New().CreateBackend(ctx, BackendWriteInput{
+		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claudecode"),
+		DeviceFingerprint: stringPtr("sha256:aaaa"), CLIPath: stringPtr("/usr/local/bin/claude"),
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"NextVersion inTx=true [BEGIN]",
+		"Save inTx=true [BEGIN]",
+		"Broadcast inTx=false [BEGIN COMMIT]",
+		"NextVersion inTx=true [BEGIN COMMIT BEGIN]",
+		"Save inTx=true [BEGIN COMMIT BEGIN]",
+		"Broadcast inTx=false [BEGIN COMMIT BEGIN COMMIT]",
+	}, trace.recorded())
+}
+
+// delete 这一路（落墓碑）。
+func TestDeleteProvider_ThenAllocatesAndTombstonesInOneTransactionAndBroadcastsAfterCommit(t *testing.T) {
+	ctx, trace, _, objects, states := setupEngineTxTest(t)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main", Payload: `{}`,
+	}, nil)
+	expectTracedWrite(trace, objects, states, 5, nil)
+
+	require.NoError(t, New().DeleteProvider(ctx, 7, "anthropic-main"))
+	assert.Equal(t, committedWriteTrace, trace.recorded())
+}
+
+// 落库失败时事务回滚，取走的号随之作废，也不广播——没有提交就没有可拉的变更。
+func TestDeleteBackend_GivenSaveFails_ThenRollsBackWithoutBroadcast(t *testing.T) {
+	ctx, trace, _, objects, states := setupEngineTxTest(t)
+	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1", Payload: `{}`,
+	}, nil)
+	expectTracedWrite(trace, objects, states, 5, assert.AnError)
+
+	err := New().DeleteBackend(ctx, 7, "backend-1")
+
+	require.ErrorIs(t, err, assert.AnError)
+	assert.Equal(t, []string{
+		"NextVersion inTx=true [BEGIN]",
+		"Save inTx=true [BEGIN]",
+	}, trace.recorded())
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, trace.txLog.Events())
 }
 
 func TestCreateProvider_GivenNoAPIKey_ThenRejectsTheIncompleteProvider(t *testing.T) {
@@ -52,7 +207,8 @@ func TestCreateProvider_GivenNoRegisteredDevice_ThenPersistsTheAccountObject(t *
 		return nil
 	})
 
-	got, err := New().CreateProvider(context.Background(), ProviderWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().CreateProvider(ctx, ProviderWriteInput{
 		UserID: 7, Name: stringPtr("Anthropic"), Type: stringPtr("anthropic"),
 		BaseURL: stringPtr("https://api.anthropic.com"), APIKey: stringPtr("sk-secret"),
 	})
@@ -77,7 +233,8 @@ func TestCreateBackend_GivenNoRegisteredDevice_ThenPersistsTheAccountIdentity(t 
 		return nil
 	})
 
-	got, err := New().CreateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().CreateBackend(ctx, BackendWriteInput{
 		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceFingerprint: stringPtr("fp-account"),
 	})
 
@@ -151,7 +308,8 @@ func TestCreateBackend_GivenDeviceID_ThenWritesTheFingerprintColumnNotThePayload
 		return nil
 	})
 
-	got, err := New().CreateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().CreateBackend(ctx, BackendWriteInput{
 		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claude"), DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
 
@@ -182,7 +340,8 @@ func TestUpdateBackend_GivenNewDeviceFingerprint_ThenRewritesFingerprintWithoutL
 		return nil
 	})
 
-	got, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().UpdateBackend(ctx, BackendWriteInput{
 		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:bbbb"),
 	})
 
@@ -231,7 +390,8 @@ func TestUpdateProvider_GivenEmptyAPIKey_ThenPreservesStoredCredential(t *testin
 		return nil
 	})
 
-	got, err := New().UpdateProvider(context.Background(), ProviderWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().UpdateProvider(ctx, ProviderWriteInput{
 		UserID: 7, ProviderKey: "anthropic-main", Name: stringPtr("Anthropic 2"), APIKey: stringPtr(""),
 	})
 	require.NoError(t, err)
@@ -376,7 +536,8 @@ func TestUpdateBackend_GivenEnvJSON_ThenReplacesTheWholeTable(t *testing.T) {
 		return nil
 	})
 
-	got, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().UpdateBackend(ctx, BackendWriteInput{
 		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:aaaa"),
 		EnvJSON: stringPtr(`{"HTTPS_PROXY":"http://127.0.0.1:7890","IS_SANDBOX":"1"}`),
 	})
@@ -407,7 +568,8 @@ func TestUpdateBackend_GivenNoEnvJSON_ThenKeepsTheStoredTable(t *testing.T) {
 		return nil
 	})
 
-	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateBackend(ctx, BackendWriteInput{
 		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:bbbb"),
 	})
 
@@ -440,7 +602,8 @@ func TestCreateBackend_GivenCLIPath_ThenWritesThePerDeviceOverlay(t *testing.T) 
 		return nil
 	}).Times(2)
 
-	_, err := New().CreateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().CreateBackend(ctx, BackendWriteInput{
 		UserID: 7, Name: stringPtr("Claude Code"), Type: stringPtr("claudecode"),
 		DeviceFingerprint: stringPtr("sha256:aaaa"), CLIPath: stringPtr("/usr/local/bin/claude"),
 	})
@@ -487,7 +650,8 @@ func TestUpdateBackend_GivenCLIPath_ThenRewritesOnlyTheBoundDeviceOverlay(t *tes
 		return nil
 	}).Times(2)
 
-	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateBackend(ctx, BackendWriteInput{
 		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:aaaa"),
 		CLIPath: stringPtr("/opt/homebrew/bin/claude"),
 	})
@@ -514,7 +678,8 @@ func TestUpdateBackend_GivenNoCLIPath_ThenLeavesTheOverlayAlone(t *testing.T) {
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
 	objects.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 
-	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateBackend(ctx, BackendWriteInput{
 		UserID: 7, SyncID: "backend-1", Name: stringPtr("CC 2"), DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
 

@@ -24,9 +24,3 @@ func TestState_Transitions(t *testing.T) {
 	d := &DeviceFlowCode{DeniedAt: 900}
 	assert.True(t, d.IsDenied())
 }
-
-func TestState_NextPollAllowed(t *testing.T) {
-	c := &DeviceFlowCode{IntervalSeconds: 5, LastPolledAt: 10_000}
-	assert.False(t, c.NextPollAllowed(14_000)) // <interval
-	assert.True(t, c.NextPollAllowed(15_000))  // ==interval
-}

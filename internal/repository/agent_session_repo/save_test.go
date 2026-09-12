@@ -1,6 +1,7 @@
 package agent_session_repo
 
 import (
+	"errors"
 	"regexp"
 	"testing"
 
@@ -55,6 +56,10 @@ func TestUnfollow_DeleteIsIdempotent(t *testing.T) {
 
 // ListByUser 只按账号过滤：名单属于账号，不属于某一台设备或某一个浏览器（R14）。
 // 不按在线态过滤——机器离线时该条仍在名单里（R13）。
+//
+// 不再钉排序：调用方要么按机器分组（savedByMachine）、要么当集合比较
+// （sameSavedSet），没有谁依赖返回顺序（决策 8）。SQL 里也不该再有 ORDER BY——
+// 那是一次全账号扫描后的 filesort，真库上 4750 行要 5.51ms，而没人读它排出来的序。
 func TestListByUser_AccountScoped(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSave()
@@ -64,17 +69,94 @@ func TestListByUser_AccountScoped(t *testing.T) {
 	}).
 		AddRow(1, 7, "conv-9", "fp-daemon-1", 2000, 2000, 2000).
 		AddRow(2, 7, "conv-8", "fp-daemon-1", 1000, 1000, 1000)
-	// 排序也钉在 SQL 上：sqlmock 按给定顺序回行，光比第一行的内容，把 ORDER BY
-	// 整句删掉这个用例照样绿。「最近关注的排在前面」是 R13 列表的顺序承诺。
 	mock.ExpectQuery(regexp.QuoteMeta(
-		"FROM `agent_session_saves` WHERE user_id=? ORDER BY followed_at DESC, id DESC",
+		"SELECT * FROM `agent_session_saves` WHERE user_id=?",
 	)).WithArgs(int64(7)).WillReturnRows(rows)
 
 	out, err := r.ListByUser(ctx, 7)
 	require.NoError(t, err)
 	require.Len(t, out, 2)
-	assert.Equal(t, "conv-9", out[0].ConversationID)
-	assert.Equal(t, "fp-daemon-1", out[0].DeviceFingerprint)
+	ids := []string{out[0].ConversationID, out[1].ConversationID}
+	assert.ElementsMatch(t, []string{"conv-9", "conv-8"}, ids)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// CountByUser 数出账号保存名单的条数，供设置页「已保存对话数」那一个数字用——
+// 不该为了数数把整张名单读回来（要求 9）。
+func TestCountByUser_CountsOnly(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSave()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT count(*) FROM `agent_session_saves` WHERE user_id=?",
+	)).WithArgs(int64(7)).WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(3))
+
+	n, err := r.CountByUser(ctx, 7)
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), n)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// CountByUser 把底层错误如实上抛，不吞掉。
+func TestCountByUser_PropagatesError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSave()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT count(*) FROM `agent_session_saves` WHERE user_id=?",
+	)).WithArgs(int64(7)).WillReturnError(errors.New("boom"))
+
+	_, err := r.CountByUser(ctx, 7)
+	require.Error(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ListConversationIDsByMachine 只取一台机器上的对话 id，走
+// idx_agent_session_saves_machine(user_id, device_fingerprint)——镜像巡检按机器
+// 取范围时不该读整个账号的保存名单（要求 9）。
+func TestListConversationIDsByMachine_ScopedToOneMachine(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSave()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT `conversation_id` FROM `agent_session_saves` WHERE user_id=? AND device_fingerprint=?",
+	)).WithArgs(int64(7), "fp-daemon-1").
+		WillReturnRows(sqlmock.NewRows([]string{"conversation_id"}).AddRow("conv-9").AddRow("conv-8"))
+
+	out, err := r.ListConversationIDsByMachine(ctx, 7, "fp-daemon-1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"conv-9", "conv-8"}, out)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 机器上没有保存过任何对话时交回空清单而不是错误：巡检与保存路径都会常态性地
+// 问到这种机器。
+func TestListConversationIDsByMachine_NothingSaved_IsEmpty(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSave()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT `conversation_id` FROM `agent_session_saves` WHERE user_id=? AND device_fingerprint=?",
+	)).WithArgs(int64(7), "fp-daemon-1").
+		WillReturnRows(sqlmock.NewRows([]string{"conversation_id"}))
+
+	out, err := r.ListConversationIDsByMachine(ctx, 7, "fp-daemon-1")
+	require.NoError(t, err)
+	assert.Empty(t, out)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// ListConversationIDsByMachine 把底层错误如实上抛，不吞掉。
+func TestListConversationIDsByMachine_PropagatesError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSave()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT `conversation_id` FROM `agent_session_saves` WHERE user_id=? AND device_fingerprint=?",
+	)).WithArgs(int64(7), "fp-daemon-1").WillReturnError(errors.New("boom"))
+
+	_, err := r.ListConversationIDsByMachine(ctx, 7, "fp-daemon-1")
+	require.Error(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

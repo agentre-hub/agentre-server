@@ -15,12 +15,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cago-frame/cago/database/db"
 	goredis "github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
 	serversession "github.com/agentre-hub/agentre-server/internal/pkg/session"
+	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 )
 
 func accountEmail(runID string) string { return "webe2e-" + runID + "@e2e.invalid" }
@@ -60,8 +62,6 @@ type sqlStep struct {
 	Name string
 	SQL  string
 }
-
-func seedTables() []string { return []string{"users"} }
 
 func flowSelection(userFound bool) sqlStep {
 	if !userFound {
@@ -200,19 +200,11 @@ func runSeed(args []string) error {
 
 	now := time.Now().UnixMilli()
 	out := &seedResult{RunID: *runID, Email: accountEmail(*runID), FlowFingerprint: flowFingerprint(*runID)}
-	user := struct {
-		ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
-		Email       string `gorm:"column:email"`
-		DisplayName string `gorm:"column:display_name"`
-		AvatarURL   string `gorm:"column:avatar_url"`
-		Status      int    `gorm:"column:status"`
-		Createtime  int64  `gorm:"column:createtime"`
-		Updatetime  int64  `gorm:"column:updatetime"`
-	}{Email: out.Email, DisplayName: "webe2e " + *runID, Status: 1, Createtime: now, Updatetime: now}
-	if err := gdb.Table("users").Create(&user).Error; err != nil {
-		return fmt.Errorf("insert user: %w", err)
+	userID, err := seedAccount(context.Background(), gdb, out.Email, "webe2e "+*runID, now)
+	if err != nil {
+		return err
 	}
-	out.UserID = user.ID
+	out.UserID = userID
 
 	csrf, err := randomToken()
 	if err != nil {
@@ -225,10 +217,48 @@ func runSeed(args []string) error {
 	}
 	const sessionTTL = 14 * 24 * time.Hour
 	if err := rc.Set(context.Background(), redisKeys(*runID)[0], body, sessionTTL).Err(); err != nil {
-		_ = gdb.Exec(`DELETE FROM users WHERE id = ?`, out.UserID).Error
+		_ = unseedAccount(context.Background(), gdb, out.UserID)
 		return fmt.Errorf("seed browser session: %w", err)
 	}
 	return emit(out)
+}
+
+// seedAccount creates the run's account the way production account creation
+// (user_svc) leaves it: the users row plus its sync_account_seqs row, in one
+// transaction, through the same EnsureSeq. It returns the account id.
+func seedAccount(ctx context.Context, gdb *gorm.DB, email, displayName string, now int64) (int64, error) {
+	user := struct {
+		ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
+		Email       string `gorm:"column:email"`
+		DisplayName string `gorm:"column:display_name"`
+		AvatarURL   string `gorm:"column:avatar_url"`
+		Status      int    `gorm:"column:status"`
+		Createtime  int64  `gorm:"column:createtime"`
+		Updatetime  int64  `gorm:"column:updatetime"`
+	}{Email: email, DisplayName: displayName, Status: 1, Createtime: now, Updatetime: now}
+	err := gdb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Table("users").Create(&user).Error; err != nil {
+			return fmt.Errorf("insert user: %w", err)
+		}
+		if err := sync_repo.NewSyncState().EnsureSeq(db.WithContextDB(ctx, tx), user.ID); err != nil {
+			return fmt.Errorf("insert account version seq: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return user.ID, nil
+}
+
+// unseedAccount removes what seedAccount created when a later seed step fails.
+// The seq row goes first and explicitly: cleanup finds a run through its users
+// row, so a seq row left behind here could never be reached again.
+func unseedAccount(ctx context.Context, gdb *gorm.DB, userID int64) error {
+	if err := gdb.WithContext(ctx).Exec(`DELETE FROM sync_account_seqs WHERE user_id = ?`, userID).Error; err != nil {
+		return err
+	}
+	return gdb.WithContext(ctx).Exec(`DELETE FROM users WHERE id = ?`, userID).Error
 }
 
 func randomToken() (string, error) {

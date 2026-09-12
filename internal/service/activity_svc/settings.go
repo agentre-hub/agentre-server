@@ -18,12 +18,15 @@ import (
 // 已保存的对话条数取自保存名单本身（agent_session_saves），不是镜像下来的摘要
 // （agent_sessions）：一条保存在离线机器上、还没来得及镜像的对话仍然是「已保存的」，
 // 按摘要数它会凭空少掉一条，而那一条正是用户此刻最想确认还在不在的。
+//
+// 这里只要一个数字，因此是一次计数查询（CountByUser），不是读回整张名单再 len()——
+// 后者是一次没人要求的全表扫描（要求 9）。
 func (s *activitySvc) Settings(ctx context.Context, userID int64) (SettingsView, error) {
 	settings, err := user_repo.Settings().Get(ctx, userID)
 	if err != nil {
 		return SettingsView{}, err
 	}
-	saved, err := agent_session_repo.Save().ListByUser(ctx, userID)
+	savedCount, err := agent_session_repo.Save().CountByUser(ctx, userID)
 	if err != nil {
 		return SettingsView{}, err
 	}
@@ -31,7 +34,7 @@ func (s *activitySvc) Settings(ctx context.Context, userID int64) (SettingsView,
 	return SettingsView{
 		ActivityStatsEnabled: settings.ActivityStatsEnabled,
 		LastPullAt:           settings.ActivityLastPullAt,
-		SavedConversations:   int64(len(saved)),
+		SavedConversations:   savedCount,
 		Today:                time.Now().In(loc).Format(dayLayout),
 	}, nil
 }

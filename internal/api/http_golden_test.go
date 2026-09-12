@@ -217,9 +217,10 @@ func goldenExchanges() []exchange {
 				`"base_version":0,"updated_at":1700000000000,"payload":{"name":"Alpha"}}]}`,
 			arrange: func(m *syncMocks) {
 				firstSyncDevice(m)
-				m.object.EXPECT().Find(gomock.Any(), goldenUserID, projectSyncID).Return(nil, nil)
+				m.object.EXPECT().FindMany(gomock.Any(), goldenUserID, []string{projectSyncID}).
+					Return(map[string]*sync_entity.SyncObject{}, nil)
 				m.state.EXPECT().NextVersion(gomock.Any(), goldenUserID, int64(1)).Return(int64(12), nil)
-				m.object.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
+				m.object.EXPECT().CreateBatch(gomock.Any(), gomock.Any()).Return(nil)
 			},
 			wantStatus: http.StatusOK,
 			wantCode:   0,
@@ -235,10 +236,11 @@ func goldenExchanges() []exchange {
 				`"base_version":8,"updated_at":1700000000000,"payload":{"name":"Alpha (本机改名)"}}]}`,
 			arrange: func(m *syncMocks) {
 				firstSyncDevice(m)
-				m.object.EXPECT().Find(gomock.Any(), goldenUserID, projectSyncID).Return(&sync_entity.SyncObject{
-					ID: 31, UserID: goldenUserID, Kind: sync_entity.KindProject, SyncID: projectSyncID,
-					Payload: `{"name":"Alpha (另一端改名)"}`, Version: 11, OriginFingerprint: otherFingerprint,
-				}, nil)
+				m.object.EXPECT().FindMany(gomock.Any(), goldenUserID, []string{projectSyncID}).
+					Return(map[string]*sync_entity.SyncObject{projectSyncID: {
+						ID: 31, UserID: goldenUserID, Kind: sync_entity.KindProject, SyncID: projectSyncID,
+						Payload: `{"name":"Alpha (另一端改名)"}`, Version: 11, OriginFingerprint: otherFingerprint,
+					}}, nil)
 				m.state.EXPECT().NextVersion(gomock.Any(), goldenUserID, int64(1)).Return(int64(12), nil)
 				m.object.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 			},
@@ -282,20 +284,24 @@ func goldenExchanges() []exchange {
 				`"agentred_fingerprint":"` + agentFingerpr + `","payload":{"configured":true}}]}`,
 			arrange: func(m *syncMocks) {
 				firstSyncDevice(m)
-				m.object.EXPECT().Find(gomock.Any(), goldenUserID, locationSyncID).Return(nil, nil)
+				m.object.EXPECT().FindMany(gomock.Any(), goldenUserID, []string{locationSyncID}).
+					Return(map[string]*sync_entity.SyncObject{}, nil)
 				// 两次取号：先给墓碑（较小的那个），胜者再取一个更大的——下行按版本升序，
 				// 接收端先看到墓碑，自然键上不会有一瞬间两行存活。
 				m.state.EXPECT().NextVersion(gomock.Any(), goldenUserID, int64(1)).Return(int64(20), nil)
-				m.object.EXPECT().FindLocationByNaturalKey(
-					gomock.Any(), goldenUserID, projectSyncID, agentFingerpr,
-				).Return(&sync_entity.SyncObject{
+				naturalKey := sync_repo.NaturalKey{
+					Kind: sync_entity.KindProjectLocation, ScopeSyncID: projectSyncID, AgentredFingerprint: agentFingerpr,
+				}
+				m.object.EXPECT().FindLiveByNaturalKeys(
+					gomock.Any(), goldenUserID, []sync_repo.NaturalKey{naturalKey},
+				).Return(map[sync_repo.NaturalKey]*sync_entity.SyncObject{naturalKey: {
 					ID: 33, UserID: goldenUserID, Kind: sync_entity.KindProjectLocation,
 					SyncID: losingSyncID, ScopeSyncID: projectSyncID, AgentredFingerprint: agentFingerpr,
 					Payload: `{"configured":true}`, Version: 9, OriginFingerprint: otherFingerprint,
-				}, nil)
+				}}, nil)
 				m.state.EXPECT().NextVersion(gomock.Any(), goldenUserID, int64(1)).Return(int64(21), nil)
 				m.object.EXPECT().Tombstone(gomock.Any(), int64(33), int64(20), gomock.Any()).Return(int64(1), nil)
-				m.object.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
+				m.object.EXPECT().CreateBatch(gomock.Any(), gomock.Any()).Return(nil)
 			},
 			wantStatus: http.StatusOK,
 			wantCode:   0,

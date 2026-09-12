@@ -21,6 +21,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwt"
 	"github.com/agentre-hub/agentre-server/internal/pkg/jwtblacklist"
 	"github.com/agentre-hub/agentre-server/internal/pkg/usercode"
@@ -131,28 +132,51 @@ func (s *deviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*d
 	return d, nil
 }
 
+// uniqueKeyUserCodePending 是 user_code 唯一键的名字（migrations/202609040105_device_flow_codes.go）。
+// pending_flag 是 MySQL 表达「部分唯一索引」的写法：生成列不能带表达式排除已过期、
+// 未结算的行（会撞 ERROR 3763），所以过期但还没被清理/结算的行仍会占着 user_code，
+// 重新生成的码撞见它是预期内的常规碰撞，不是异常。
+const uniqueKeyUserCodePending = "uk_dfc_user_code_pending"
+
+// maxUserCodeCollisions 是同一次 Authorize 请求重新生成 user_code 的次数上限。
+const maxUserCodeCollisions = 5
+
 func (s *deviceSvc) Authorize(ctx context.Context, in AuthorizeInput) (*AuthorizeOutput, error) {
 	now := s.now()
 	dc, err := randomBase32(32)
 	if err != nil {
 		return nil, err
 	}
-	uc := usercode.Generate()
 
-	code := &device_flow_entity.DeviceFlowCode{
-		DeviceCode:        dc,
-		UserCode:          uc,
-		DeviceKind:        in.DeviceKind,
-		ClientFingerprint: in.Fingerprint,
-		ClientName:        in.Name,
-		Platform:          in.Platform,
-		Version:           in.Version,
-		IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
-		ExpiresAt:         now + s.cfg.FlowTTL.Milliseconds(),
-		Createtime:        now,
-	}
-	if err := device_flow_repo.DeviceFlow().Create(ctx, code); err != nil {
-		return nil, err
+	var uc string
+	for attempt := 1; ; attempt++ {
+		uc = usercode.Generate()
+		flow := &device_flow_entity.DeviceFlowCode{
+			DeviceCode:        dc,
+			UserCode:          uc,
+			DeviceKind:        in.DeviceKind,
+			ClientFingerprint: in.Fingerprint,
+			ClientName:        in.Name,
+			Platform:          in.Platform,
+			Version:           in.Version,
+			IntervalSeconds:   int(s.cfg.PollInterval / time.Second),
+			ExpiresAt:         now + s.cfg.FlowTTL.Milliseconds(),
+			Createtime:        now,
+		}
+		err := device_flow_repo.DeviceFlow().Create(ctx, flow)
+		if err == nil {
+			break
+		}
+		// 只重试撞在待授权 user_code 上的碰撞；其余唯一键冲突（如 device_code）
+		// 是真正的异常，照常上抛，不掩盖成一次「正常」的重试。
+		if !dberr.IsDuplicateKey(err, uniqueKeyUserCodePending) {
+			return nil, err
+		}
+		if attempt >= maxUserCodeCollisions {
+			logger.Ctx(ctx).Error("device flow user_code collided too many times",
+				zap.Int("attempts", attempt), zap.Error(err))
+			return nil, err
+		}
 	}
 	logger.Ctx(ctx).Info("device flow authorized", zap.String("userCode", uc),
 		zap.String("deviceKind", in.DeviceKind), zap.String("platform", in.Platform),
@@ -235,11 +259,17 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 		return nil, newOAuthErr(ErrExpiredToken, "device flow expired")
 	}
 
-	if !flow.NextPollAllowed(nowMs) {
-		return nil, newOAuthErr(ErrSlowDown, "polling too fast")
-	}
-	if err := device_flow_repo.DeviceFlow().UpdateLastPolled(ctx, dc, nowMs); err != nil {
+	// 限速判定是一条条件 UPDATE，不是「先读 last_polled_at 判间隔再无条件写」：两个并发或
+	// 重复的轮询打到同一行时，WHERE 里的 last_polled_at <= now-minGap 只让数据库
+	// 认定的那一个改到行，另一个凭 RowsAffected==0 判 slow_down——不给它机会把
+	// 「还没到点」的判断建立在自己读到的、可能已经过时的那一份状态上。
+	minGapMs := int64(flow.IntervalSeconds) * 1000
+	n, err := device_flow_repo.DeviceFlow().UpdateLastPolledIfDue(ctx, dc, nowMs, minGapMs)
+	if err != nil {
 		return nil, err
+	}
+	if n != 1 {
+		return nil, newOAuthErr(ErrSlowDown, "polling too fast")
 	}
 
 	if !flow.IsAuthorized() {
@@ -605,30 +635,43 @@ type DeviceView struct {
 	DaemonBuildKnown bool
 }
 
+// daemonPresenceBatch 是设备列表对中继在线态的全部需要（ISP/DIP）：一批机器一次读完。
+// relay_svc 的真实实现结构性满足它；它刻意不进 relay_svc.RelaySvc——那个接口的占位
+// 实现与其余消费方只认逐台的 IsDaemonOnline。
+type daemonPresenceBatch interface {
+	DaemonsOnline(ctx context.Context, accountID int64, fingerprints []string) ([]bool, error)
+}
+
+// handshakeStateBatch 是设备列表对镜像握手状态（协议不匹配、自报的短 commit）的全部
+// 需要：一批机器一次读完。mirror_svc.Supervisor 满足它，nil 接收者同样作答。
+type handshakeStateBatch interface {
+	HandshakeStates(ctx context.Context, userID int64, fingerprints []string) []mirror_svc.HandshakeState
+}
+
 // ListUserDevices returns all devices for a user, marking the caller's row and
 // reporting the real relay presence (R20) as the online state.
+//
+// 每台机器的在线态与握手状态各由一次批量读取答完，Redis 往返次数与设备台数无关
+// （db-perf-fixes 决策 9）。
 func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID int64) ([]DeviceView, error) {
 	rows, err := device_repo.Device().ListByUser(ctx, userID)
 	if err != nil {
 		return nil, i18n.NewInternalError(ctx, code.DeviceListFailed)
 	}
+	fingerprints := make([]string, len(rows))
+	for i, d := range rows {
+		fingerprints[i] = d.Fingerprint
+	}
+	online := daemonsOnline(ctx, userID, fingerprints)
+	// 协议不匹配是镜像握手记下的共享状态（mirror_svc 决策 14）；短 commit 同样来自
+	// 握手（决策 5：commit 为空的机器显示为开发构建、永不劝升），Known 是「知不知道」
+	// ——没握过手时不能把「没有答案」读成「commit 为空」。未装配镜像时
+	// mirror_svc.Default() 为 nil，HandshakeStates 自己对 nil 接收者兜底，与在线态同一
+	// fail-open 习惯。
+	var handshakes handshakeStateBatch = mirror_svc.Default()
+	states := handshakes.HandshakeStates(ctx, userID, fingerprints)
 	out := make([]DeviceView, 0, len(rows))
-	for _, d := range rows {
-		// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。
-		// Redis 抖动时按离线对待（fail-open）：在线态只是列表的增强列，
-		// 不应拖垮整个设备列表或 Revoke 前的归属校验（该流程也走本方法）。
-		online, err := relay_svc.Default().IsDaemonOnline(ctx, userID, d.Fingerprint)
-		if err != nil {
-			online = false
-		}
-		// 协议不匹配是镜像握手记下的共享状态（mirror_svc 决策 14），未装配镜像时
-		// mirror_svc.Default() 为 nil——ProtocolMismatch 自己对 nil 接收者兜底，
-		// 与在线态同一 fail-open 习惯，这里不需要重复判 nil。
-		protocolMismatch := mirror_svc.Default().ProtocolMismatch(ctx, userID, d.Fingerprint)
-		// 短 commit 同样来自镜像握手记下的共享状态（决策 5：commit 为空的机器显示为
-		// 开发构建、永不劝升）。第二个返回值是「知不知道」——没握过手时不能把「没有
-		// 答案」读成「commit 为空」，那会把一台正式版机器说成开发构建。
-		daemonCommit, daemonBuildKnown := mirror_svc.Default().DaemonBuild(ctx, userID, d.Fingerprint)
+	for i, d := range rows {
 		out = append(out, DeviceView{
 			ID:               d.ID,
 			Name:             d.Name,
@@ -638,12 +681,27 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 			Fingerprint:      d.Fingerprint,
 			LastSeenAt:       d.LastSeenAt,
 			Status:           d.Status,
-			Online:           online,
+			Online:           online[i],
 			IsThisDevice:     d.ID == callerDeviceID,
-			ProtocolMismatch: protocolMismatch,
-			DaemonCommit:     daemonCommit,
-			DaemonBuildKnown: daemonBuildKnown,
+			ProtocolMismatch: states[i].ProtocolMismatch,
+			DaemonCommit:     states[i].DaemonCommit,
+			DaemonBuildKnown: states[i].DaemonBuildKnown,
 		})
 	}
 	return out, nil
+}
+
+// daemonsOnline 读一批机器的中继在线态，与 fingerprints 逐格对应。
+//
+// 在线态来自 daemon 的 Redis 中继登记（R20），不是 devices.status。Redis 抖动时按离线
+// 对待（fail-open）：在线态只是列表的增强列，不应拖垮整个设备列表——读不出来的那几格
+// 已经答离线，错误本身在这里丢弃。未装配中继时 relay_svc.Default() 是占位实现、
+// 答不了批量，同样一律离线。
+func daemonsOnline(ctx context.Context, userID int64, fingerprints []string) []bool {
+	batch, ok := relay_svc.Default().(daemonPresenceBatch)
+	if !ok {
+		return make([]bool, len(fingerprints))
+	}
+	online, _ := batch.DaemonsOnline(ctx, userID, fingerprints)
+	return online
 }

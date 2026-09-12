@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
-	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 )
 
@@ -19,6 +18,9 @@ import (
 // ActivityStatsEnabledAt（最近一次开启）。用后者顶替的话，一个半年前开了开关、上周就
 // 断了的账号会显示「最近一次上报：半年前」——那句话的每一个字都不对。这里给两个不同
 // 的时刻，正是为了让顶替这件事测得出来。
+//
+// 「已保存对话数」走 CountByUser 而不是 ListByUser：设置页要的只是一个数字
+// （要求 9），读整张名单只为了 len() 是一次没人要求的全表扫描。
 func TestSettings_ReportsTheStoredSwitch(t *testing.T) {
 	f := setup(t)
 	f.settings.EXPECT().Get(gomock.Any(), testUserID).Return(user_entity.Settings{
@@ -26,8 +28,7 @@ func TestSettings_ReportsTheStoredSwitch(t *testing.T) {
 		ActivityStatsEnabledAt: 1756300000000,
 		ActivityLastPullAt:     1787900000000,
 	}, nil)
-	f.save.EXPECT().ListByUser(gomock.Any(), testUserID).
-		Return(make([]*agent_session_entity.SessionSave, 3), nil)
+	f.save.EXPECT().CountByUser(gomock.Any(), testUserID).Return(int64(3), nil)
 
 	view, err := Activity().Settings(f.ctx, testUserID)
 
@@ -41,7 +42,7 @@ func TestSettings_NeverEnabledIsZeroNotAnError(t *testing.T) {
 	f := setup(t)
 	f.settings.EXPECT().Get(gomock.Any(), testUserID).
 		Return(user_entity.Settings{UserID: testUserID}, nil)
-	f.save.EXPECT().ListByUser(gomock.Any(), testUserID).Return(nil, nil)
+	f.save.EXPECT().CountByUser(gomock.Any(), testUserID).Return(int64(0), nil)
 
 	view, err := Activity().Settings(f.ctx, testUserID)
 
