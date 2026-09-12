@@ -155,11 +155,17 @@ var initialSchemaStatements = []string{
 	// `WHERE status = 1`，MySQL 没有部分索引，但把 status 放进键里同样能服务
 	// `WHERE user_id=? AND status=?`，只是索引会连非活跃行一起收——设备表很小，
 	// 不值得为此再加一个生成列。
+	// display_name 是用户自己给这台设备起的备注名，空串表示没设过、读取时回落到 name
+	// （device_entity.EffectiveName）。不复用 name 的原因：那一列是设备 claim 时自报的
+	// 主机名，device_repo.Upsert 的 ON DUPLICATE KEY UPDATE 赋值列里就有它，那台机器每次
+	// 重新配对都会把用户改的名字原样覆盖回去——同一台电脑上的多个桌面端因此在账号里是
+	// 一串一模一样的主机名，用户想撤销其中一台时分不清该点哪个。
 	`
 		CREATE TABLE devices (
 		  id              bigint NOT NULL AUTO_INCREMENT PRIMARY KEY,
 		  user_id         bigint NOT NULL,
 		  name            varchar(255) NOT NULL,
+		  display_name    varchar(255) NOT NULL DEFAULT '',
 		  kind            varchar(32) COLLATE utf8mb4_0900_bin NOT NULL,
 		  platform        varchar(64) NOT NULL DEFAULT '',
 		  version         varchar(64) NOT NULL DEFAULT '',

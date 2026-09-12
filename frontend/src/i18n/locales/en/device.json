@@ -119,7 +119,14 @@
     "desktopAppNotRunningShort": "Agentre is not running",
     "desktopAppNotRunningDetail": "Agentre is not running on this computer. Open Agentre to view its conversations.",
     "cardSummary": "{{projects}} projects · {{m}} conversations running",
-    "revokeConfirmTitleNamed": "Revoke {{name}}?"
+    "revokeConfirmTitleNamed": "Revoke {{name}}?",
+    "rename": "Rename",
+    "renameTitleNamed": "Rename {{name}}",
+    "renameHint": "This name is stored on your account and shows up on every device signed in to it. Leave it empty to use the name the device reports.",
+    "renameLabel": "Device name",
+    "renameSave": "Save",
+    "renameCancel": "Cancel",
+    "renameError": "Could not rename this device. Please try again."
   },
   "upgrade": {
     "badge": "Upgradable to {{version}}",

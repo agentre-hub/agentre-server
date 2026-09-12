@@ -2,7 +2,7 @@ import {
   rpcMethods,
   sessionCountsFromProtobuf,
 } from "@agentre-hub/agentre-wire";
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, Cpu, MoreVertical, Plus } from "lucide-react";
@@ -20,6 +20,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  Input,
   Skeleton,
   cn,
 } from "@agentre-hub/agentre-ui";
@@ -44,7 +45,12 @@ import { machineTarget } from "@/lib/relayTarget";
 import { AccountChannelDevicePresence } from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import {
+  deviceDisplayName,
+  fetchDevices,
+  renameDevice,
+  type DeviceItem,
+} from "@/lib/devices";
 import { loadErrorText } from "@/lib/loadError";
 import { formatRelativeTime } from "@/lib/sessionView";
 
@@ -176,10 +182,12 @@ function useSessionCounts(
 function DeviceRowMenu({
   id,
   name,
+  onRename,
   onRevoke,
 }: {
   id: number;
   name: string;
+  onRename: () => void;
   onRevoke: () => void;
 }) {
   const { t } = useTranslation();
@@ -196,6 +204,12 @@ function DeviceRowMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[160px]">
+        {/*
+          改名排在撤销前面：它是这一行上唯一一个日常会用到的动作，而撤销是终局操作。
+        */}
+        <DropdownMenuItem onSelect={onRename}>
+          {t("device.manage.rename")}
+        </DropdownMenuItem>
         <DropdownMenuItem variant="destructive" onSelect={onRevoke}>
           {t("device.manage.revokeConfirm")}
         </DropdownMenuItem>
@@ -464,6 +478,7 @@ function DeviceRow({
   isMobile,
   isExpanded,
   onToggle,
+  onRename,
   onRevoke,
   detailState,
   onRetryDetail,
@@ -476,6 +491,7 @@ function DeviceRow({
   isMobile: boolean;
   isExpanded: boolean;
   onToggle: () => void;
+  onRename: () => void;
   onRevoke: () => void;
   detailState: { loading: boolean; error: unknown; data: DeviceDetail | null };
   onRetryDetail: () => void;
@@ -516,14 +532,22 @@ function DeviceRow({
   const versionText = isAgentred
     ? deviceVersionText(versionState, t)
     : d.version;
-  const meta = [
-    d.platform,
-    versionText,
-    formatLastActive(d.last_seen_at, locale),
-  ]
+  // 这一行到底叫什么：账号级备注名优先，没设过才是设备自报的主机名。
+  const name = deviceDisplayName(d);
+  // 在线的行不说时间。在线徽标来自中继的 Redis 在线登记（30 秒 TTL），而
+  // `last_seen_at` 是中继保持连接期间根本不刷新的库字段——两个事实无条件并排拼在
+  // 一起，实测就成了「在线 · linux · 0.1.0 · 1小时前」这种自相矛盾的副行。在线这件事
+  // 状态点和徽标已经说完了；「上次活跃」只在它不在线、那个时刻真的是最后一次见到它
+  // 的时候才有意义。
+  //
+  // 修的是呈现而不是刷新策略：让中继每 30 秒回写一次 last_seen_at，等于给每台设备
+  // 加一条恒定写入，换来一个此刻没人需要的精确值。
+  const lastActive = d.online ? "" : formatLastActive(d.last_seen_at, locale);
+  const meta = [d.platform, versionText, lastActive]
     .filter(Boolean)
     .join(" · ");
-  const metaTitle = lastActiveTitle(d.last_seen_at);
+  // title 上挂的是同一个时刻的绝对形态，在线时同样不挂——否则悬停一下矛盾照旧。
+  const metaTitle = d.online ? undefined : lastActiveTitle(d.last_seen_at);
 
   const revocable = isRevocable(d);
 
@@ -552,7 +576,7 @@ function DeviceRow({
                 )}
               />
               <span className="truncate text-sm font-medium text-foreground">
-                {d.name}
+                {name}
               </span>
               <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
                 {deviceKindLabel(d.kind, t)}
@@ -593,7 +617,12 @@ function DeviceRow({
               {isExpanded ? <ChevronUp /> : <ChevronDown />}
             </Button>
             {revocable && (
-              <DeviceRowMenu id={d.id} name={d.name} onRevoke={onRevoke} />
+              <DeviceRowMenu
+                id={d.id}
+                name={name}
+                onRename={onRename}
+                onRevoke={onRevoke}
+              />
             )}
           </div>
         </div>
@@ -637,7 +666,7 @@ function DeviceRow({
           className="size-[18px] shrink-0 text-muted-foreground"
         />
         <span className="min-w-0 flex-1 truncate text-prose font-semibold">
-          {d.name}
+          {name}
         </span>
         <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
           {deviceKindLabel(d.kind, t)}
@@ -660,7 +689,12 @@ function DeviceRow({
           {isExpanded ? <ChevronUp /> : <ChevronDown />}
         </Button>
         {revocable && (
-          <DeviceRowMenu id={d.id} name={d.name} onRevoke={onRevoke} />
+          <DeviceRowMenu
+            id={d.id}
+            name={name}
+            onRename={onRename}
+            onRevoke={onRevoke}
+          />
         )}
       </div>
       {/* 副行（Q6qgs4 R2）：Meta · 项目/对话在跑（有数据才显示） */}
@@ -716,6 +750,11 @@ export default function Devices() {
   const [loadError, setLoadError] = useState<unknown>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<DeviceItem | null>(null);
+  // 改名对话框：哪一台、输入框里此刻是什么、这一次失败没有。
+  const [renaming, setRenaming] = useState<DeviceItem | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [renameSubmitting, setRenameSubmitting] = useState(false);
   /**
    * 撤销确认里那一行事实：种类 · 平台 · 版本 · 最后在线。
    *
@@ -822,6 +861,34 @@ export default function Devices() {
       });
   }
 
+  /**
+   * 提交改名。
+   *
+   * 成功之后重新拉一次清单而不是就地改那一行：备注名是账号级的，这一改在别处也生效，
+   * 重取到的那份才是此刻真正的状态。失败时对话框、输入内容都留着——重试不必重打一遍。
+   */
+  async function onRenameSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (!renaming) return;
+    setRenameSubmitting(true);
+    setRenameError(null);
+    try {
+      await renameDevice(renaming.id, renameValue);
+    } catch {
+      setRenameError(t("device.manage.renameError"));
+      setRenameSubmitting(false);
+      return;
+    }
+    setRenaming(null);
+    try {
+      applyList(await fetchDevices());
+    } catch (err: unknown) {
+      setLoadError(err ?? new Error("device list load failed"));
+    } finally {
+      setRenameSubmitting(false);
+    }
+  }
+
   async function onRevoke() {
     if (!revoking) return;
     setSubmitting(true);
@@ -904,6 +971,11 @@ export default function Devices() {
                 isMobile={isMobile}
                 isExpanded={expanded.has(d.id)}
                 onToggle={() => toggleExpand(d)}
+                onRename={() => {
+                  setRenameError(null);
+                  setRenameValue(d.display_name);
+                  setRenaming(d);
+                }}
                 onRevoke={() => {
                   setRevokeError(null);
                   setRevoking(d);
@@ -926,6 +998,57 @@ export default function Devices() {
         </div>
       </div>
 
+      {/*
+        改名：账号级备注名。输入框空着就是「用设备自报的那个名字」，自报名因此退到
+        占位符上——这样「没设过」和「设成了和主机名一样」始终分得开。
+      */}
+      <DialogShell
+        open={!!renaming}
+        onOpenChange={(o) => {
+          if (!o && !renameSubmitting) {
+            setRenameError(null);
+            setRenaming(null);
+          }
+        }}
+        size="sm"
+        busy={renameSubmitting}
+      >
+        <form onSubmit={onRenameSubmit} className="contents">
+          <DialogShellHeader
+            title={t("device.manage.renameTitleNamed", {
+              name: renaming ? deviceDisplayName(renaming) : "",
+            })}
+            subtitle={t("device.manage.renameHint")}
+            busy={renameSubmitting}
+            onClose={() => setRenaming(null)}
+          />
+          <DialogShellBody>
+            <Input
+              autoFocus
+              maxLength={128}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              placeholder={renaming?.name ?? ""}
+              disabled={renameSubmitting}
+              aria-label={t("device.manage.renameLabel")}
+            />
+          </DialogShellBody>
+          <DialogShellFooter error={renameError}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={renameSubmitting}
+              onClick={() => setRenaming(null)}
+            >
+              {t("device.manage.renameCancel")}
+            </Button>
+            <DialogShellSubmit type="submit" busy={renameSubmitting}>
+              {t("device.manage.renameSave")}
+            </DialogShellSubmit>
+          </DialogShellFooter>
+        </form>
+      </DialogShell>
+
       {/* 撤销确认：由行级菜单进入；失败保留上下文显示真实错误，成功刷新真实状态 */}
       <DialogShell
         open={!!revoking}
@@ -946,7 +1069,7 @@ export default function Devices() {
         */}
         <DialogShellHeader
           title={t("device.manage.revokeConfirmTitleNamed", {
-            name: revoking?.name ?? "",
+            name: revoking ? deviceDisplayName(revoking) : "",
           })}
           danger
           busy={submitting}

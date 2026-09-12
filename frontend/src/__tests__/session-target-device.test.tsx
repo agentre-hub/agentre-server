@@ -19,6 +19,7 @@ function machine(over: Partial<DeviceItem> = {}): DeviceItem {
   return {
     id: 7,
     name: "nuc-01",
+    display_name: "",
     kind: "agentred",
     platform: "linux",
     version: "0.4.0",

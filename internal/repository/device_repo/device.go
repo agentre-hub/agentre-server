@@ -22,6 +22,9 @@ type DeviceRepo interface {
 	// UpdateVersion 按新值刷新这台设备的 version。调用方（mirror_svc，镜像握手成功后）
 	// 自己先比过当前值才决定要不要调它——这条方法本身不做条件判断，直接写。
 	UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error
+	// UpdateDisplayName 写这台设备的账号级备注名（空串 = 清空，回落到设备自报名）。
+	// 归属由调用方（device_svc.Rename）判过才落到这里；这条 UPDATE 只按 id 写。
+	UpdateDisplayName(ctx context.Context, id int64, displayName string, nowMs int64) error
 	Revoke(ctx context.Context, id, nowMs int64) error
 	ListByUser(ctx context.Context, userID int64) ([]*device_entity.Device, error)
 	// ListActiveByUsers 一次查一批账号的在用设备，含义与逐个调用 ListByUser 相同
@@ -89,6 +92,13 @@ func (r *repo) Touch(ctx context.Context, id, nowMs int64) error {
 func (r *repo) UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error {
 	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=?", id).
 		Updates(map[string]interface{}{"version": version, "updatetime": nowMs}).Error
+}
+
+// UpdateDisplayName 只动 display_name 与 updatetime：name 是那台机器下一次 claim 要
+// 覆盖的自报名，改备注名不能碰它；last_seen_at 同理——改个名字不是一次「它刚刚还在」。
+func (r *repo) UpdateDisplayName(ctx context.Context, id int64, displayName string, nowMs int64) error {
+	return db.Ctx(ctx).Model(&device_entity.Device{}).Where("id=?", id).
+		Updates(map[string]interface{}{"display_name": displayName, "updatetime": nowMs}).Error
 }
 
 func (r *repo) Revoke(ctx context.Context, id, nowMs int64) error {

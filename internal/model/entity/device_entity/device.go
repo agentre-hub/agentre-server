@@ -15,9 +15,16 @@ const (
 )
 
 type Device struct {
-	ID          int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	UserID      int64  `gorm:"column:user_id"`
-	Name        string `gorm:"column:name"`
+	ID     int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID int64  `gorm:"column:user_id"`
+	Name   string `gorm:"column:name"`
+	// DisplayName 是**用户**给这台设备起的账号级备注名，空串 = 没起过。
+	//
+	// 它不能与 Name 共用一列：Name 是设备 claim 时自报的主机名，那台机器每次重新配对
+	// 都会再报一次并覆盖掉这一格（见 Upsert 的赋值列）。同一台 Mac 上的三个 checkout
+	// 在账号里就是三行同名设备，撤销其中一台时分不出该点哪个——分不出这件事只能靠一个
+	// 设备自己覆盖不到的列解决。
+	DisplayName string `gorm:"column:display_name;default:''"`
 	Kind        string `gorm:"column:kind"`
 	Platform    string `gorm:"column:platform;default:''"`
 	Version     string `gorm:"column:version;default:''"`
@@ -70,4 +77,42 @@ func DisplayName(reported, fingerprint string) string {
 		return string(runes)
 	}
 	return string(runes[:displayNameFallbackRunes])
+}
+
+// MaxDisplayNameRunes 是账号级备注名的长度上限，按**符文**数。
+//
+// 取 128 与设备自报名同一个数（api/device.DeviceAuthorizeRequest.Name 的
+// binding `max=128`）：两者进的是同一个显示位，一个能放下另一个就该放得下。列本身是
+// varchar(255)，符文上限因此永远先于列宽生效，不会出现「校验过了、落库被截断」。
+const MaxDisplayNameRunes = 128
+
+// NormalizeDisplayName 把用户输入的备注名规范成可落库的形态，并判定它收不收。
+//
+// 去首尾空白，清空合法（空串 = 回落到设备自报名），长度按符文数判——与 DisplayName
+// 的回退同一个理由：按字节判会让一个合法的中文名字莫名其妙地「太长」。
+//
+// 判定放在实体上而不是 controller 的 binding tag 上：binding 数的是**修剪前**的长度，
+// 于是「恰好到上限 + 首尾各一个空格」会被拒，而它修剪之后明明合法。一条规则只能有
+// 一个判据。
+func NormalizeDisplayName(s string) (string, bool) {
+	name := strings.TrimSpace(s)
+	if len([]rune(name)) > MaxDisplayNameRunes {
+		return "", false
+	}
+	return name, true
+}
+
+// EffectiveName 是这台设备在界面上到底叫什么：用户设过备注名就用它，没设就回落到设备
+// 自报名，两个都没有时回落到指纹缩写。
+//
+// 回落规则只写在这里一处。控制台、桌面端与将来任何一个消费端都从设备列表里拿到
+// display_name 与 name 两格，按同一条规则渲染。
+func (d *Device) EffectiveName() string {
+	if d == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(d.DisplayName); name != "" {
+		return name
+	}
+	return DisplayName(d.Name, d.Fingerprint)
 }

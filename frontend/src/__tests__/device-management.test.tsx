@@ -262,8 +262,38 @@ describe("设备页:撤销要点名是哪一台", () => {
    * 那一套（会话索引、状态横幅、总览、组织面详情头都是 formatRelativeTime +
    * title）。此前这一页是裸的 `toLocaleString()`，一串机器格式的年月日时分秒挤在
    * 一行 mono 小字里，读起来比「3 分钟前」慢得多，也和别处对不上。
+   *
+   * 断言挑的是**离线**那一行：在线的行副行里根本没有时间（见下面两条）。
    */
   it("最后在线是相对时刻,绝对时刻退到 title 上", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+    const row = (await screen.findByText("laptop")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+
+    const meta = within(row).getByTestId("device-meta");
+    expect(meta.textContent).not.toMatch(/\d{4}/); // 不再出现年份
+    expect(meta.getAttribute("title")).toContain(
+      new Date(1753990000000).toLocaleString(),
+    );
+  });
+
+  /**
+   * 在线的行不显示时间。
+   *
+   * 在线徽标来自 Redis 的在线登记（30 秒 TTL），`last_seen_at` 却是中继保持连接期间
+   * 根本不刷新的库字段 —— 两者无条件并排拼在一起，实测就出现了「在线 · linux ·
+   * 0.1.0 · 1小时前」这种自己打自己脸的副行。在线这件事已经由徽标和状态点说完了，
+   * 「上次活跃」只在它不在线、也就是那个时刻真的是最后一次见到它的时候才有意义。
+   *
+   * 修的是呈现，不是 `last_seen_at` 的刷新策略：让中继每 30 秒回写一次库，等于给
+   * 每台设备加一条恒定写入，换来的只是一个此刻没人需要的精确值。
+   */
+  it("在线的设备副行不说时间，也不在 title 上挂一个过期的绝对时刻", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return listResponse;
       throw new Error("unexpected call: " + path);
@@ -273,10 +303,30 @@ describe("设备页:撤销要点名是哪一台", () => {
       '[data-slot="card"]',
     ) as HTMLElement;
 
+    // 在线徽标仍在（在线这件事没被删掉，只是不再由一个陈旧的时刻重复一遍）。
+    expect(within(row).getByText(/Online/)).toBeTruthy();
     const meta = within(row).getByTestId("device-meta");
-    expect(meta.textContent).not.toMatch(/\d{4}/); // 不再出现年份
+    // 副行只剩平台与版本，一个字的时间都没有。
+    expect(meta.textContent).toBe("linux · 0.4.0");
+    // title 也不挂：那上面是同一个陈旧时刻的绝对形态，悬停一样会读到矛盾。
+    expect(meta.getAttribute("title")).toBeNull();
+  });
+
+  it("离线的设备副行才说上次活跃", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return listResponse;
+      throw new Error("unexpected call: " + path);
+    });
+    renderDevices();
+    const row = (await screen.findByText("laptop")).closest(
+      '[data-slot="card"]',
+    ) as HTMLElement;
+
+    const meta = within(row).getByTestId("device-meta");
+    // 平台 · 版本之后还有一段，那一段就是「上次活跃」；它的绝对形态挂在 title 上。
+    expect(meta.textContent).toMatch(/^darwin · 0\.3\.0 · .+/);
     expect(meta.getAttribute("title")).toContain(
-      new Date(1754000000000).toLocaleString(),
+      new Date(1753990000000).toLocaleString(),
     );
   });
 

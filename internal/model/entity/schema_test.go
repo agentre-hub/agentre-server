@@ -1,10 +1,14 @@
 package entity_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -31,6 +35,9 @@ var createTableBlock = regexp.MustCompile(`(?s)CREATE TABLE (?:\x60(\w+)\x60|(\w
 // 生成列表达式会跨行，续行形如 `peer_fingerprint, agent_sync_id, backend_type,` ——
 // 它的第一个 token 以逗号结尾，靠这一点与真正的列定义区分开。
 var columnDefinition = regexp.MustCompile(`^\s*\x60?(\w+)\x60?[ \t]+\S`)
+
+// addColumn 认一条补丁迁移里的加列语句（devices.display_name 就是这么加的）。
+var addColumn = regexp.MustCompile(`(?is)ALTER TABLE\s+\x60?(\w+)\x60?\s+ADD COLUMN\s+\x60?(\w+)\x60?`)
 
 // ddlKeyPrefixes 是建表语句里不是列的那些行。
 var ddlKeyPrefixes = []string{"PRIMARY ", "UNIQUE ", "KEY ", "INDEX ", "CONSTRAINT ", "FOREIGN ", "CHECK ", "--"}
@@ -74,9 +81,55 @@ func parseBaselineDDL(t *testing.T) map[string]map[string]bool {
 			require.NotEmptyf(t, columns, "%s 的建表语句一列都没解析出来，守卫会静默不生效", name)
 			tables[name] = columns
 		}
+
+		// 文件名以迁移编号开头，Glob 按字典序交回，于是加列/改名按它们真正执行的先后生效。
+		// 同一条语句里先加后改：一次迁移若既加了一列又改了它的名字，最终留下的是改后的名字。
+		for _, sql := range migrateSQL(t, path, source) {
+			for _, match := range addColumn.FindAllStringSubmatch(sql, -1) {
+				table, column := match[1], match[2]
+				columns := tables[table]
+				require.NotNilf(t, columns, "%s 给 %s 加列，但此前的 schema 里没有这张表，守卫会静默不生效",
+					filepath.Base(path), table)
+				require.Falsef(t, columns[column], "%s 加的 %s.%s 此前已经存在，守卫会静默不生效",
+					filepath.Base(path), table, column)
+				columns[column] = true
+			}
+		}
 	}
 
 	return tables
+}
+
+// migrateSQL 交出一条迁移 Migrate 闭包里的 SQL 字面量（只取 Migrate，不取 Rollback：
+// 回滚里的 DDL 描述的是撤销动作，拿它更新 schema 视图会把守卫带偏）。
+//
+// 压缩成初始 schema 时它随 RENAME COLUMN 的重放一起被删掉；ADD COLUMN 的重放同样需要它，
+// 所以在这里恢复。
+func migrateSQL(t *testing.T, path string, source []byte) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), path, source, 0)
+	require.NoError(t, err)
+
+	var out []string
+	ast.Inspect(file, func(node ast.Node) bool {
+		field, ok := node.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		if key, ok := field.Key.(*ast.Ident); !ok || key.Name != "Migrate" {
+			return true
+		}
+		ast.Inspect(field.Value, func(inner ast.Node) bool {
+			if lit, ok := inner.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if value, err := strconv.Unquote(lit.Value); err == nil {
+					out = append(out, value)
+				}
+			}
+			return true
+		})
+		return false
+	})
+	return out
 }
 
 func hasAnyPrefix(line string, prefixes []string) bool {

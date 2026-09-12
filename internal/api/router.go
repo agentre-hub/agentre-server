@@ -256,6 +256,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		authCtr.Me,
 		deviceCtr.Revoke,
 		deviceCtr.List,
+		// 账号级备注名：设备名是那台机器自报的主机名，同一台电脑上的几个 checkout
+		// 在账号里就是几行同名设备。能读到这份清单的调用方就能给清单里的行起名字。
+		deviceCtr.Rename,
 		// web 控制台两屏的只读端点（决策 13）：账号级 Agent 清单、设备展开详情。
 		workspaceCtr.ListAgents,
 		workspaceCtr.DeviceDetail,

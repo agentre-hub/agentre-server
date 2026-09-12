@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/pkg/consts"
+	"github.com/cago-frame/cago/pkg/utils/httputils"
 	"github.com/go-sql-driver/mysql"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/smartystreets/goconvey/convey"
@@ -1453,4 +1455,120 @@ func TestResolveBearer(t *testing.T) {
 		assert.ErrorIs(t, err, boom)
 		assert.NotErrorIs(t, err, ErrBearerInvalid)
 	})
+}
+
+// bizCode 取一个服务层错误上钉着的业务码。
+func bizCode(t *testing.T, err error) int {
+	t.Helper()
+	var he *httputils.Error
+	require.True(t, errors.As(err, &he), "服务层的拒绝必须是成形的 httputils.Error，实际 %T: %v", err, err)
+	return he.Code
+}
+
+// Rename 是账号级备注名的写入口（设备列表里三行同名 MacBook 时唯一分得清谁是谁的
+// 办法）。它写的是 display_name 那一列，不是设备自报的 name——后者会被那台机器下一次
+// claim 覆盖回去。
+func TestRename_WritesTheNormalizedDisplayName(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	svc.now = func() int64 { return 5000 }
+
+	mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+		&device_entity.Device{ID: 42, UserID: 7, Name: "wangyizhideMacBook-Pro.local", Status: consts.ACTIVE}, nil)
+	// 首尾空白在落库之前就被去掉：存进去的空格此后每一处显示都带着。
+	mD.EXPECT().UpdateDisplayName(gomock.Any(), int64(42), "办公室那台", int64(5000)).Return(nil)
+
+	name, err := svc.Rename(ctx, 7, 42, "  办公室那台  ")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "办公室那台", name, "交回的是这一改之后生效的显示名")
+}
+
+// 清空备注名是合法操作：写空串，生效的显示名回落到设备自报名。
+func TestRename_ClearingFallsBackToTheReportedName(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	svc.now = func() int64 { return 5000 }
+
+	mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+		&device_entity.Device{ID: 42, UserID: 7, Name: "wangyizhideMacBook-Pro.local", Status: consts.ACTIVE}, nil)
+	mD.EXPECT().UpdateDisplayName(gomock.Any(), int64(42), "", int64(5000)).Return(nil)
+
+	name, err := svc.Rename(ctx, 7, 42, "   ")
+
+	assert.NoError(t, err)
+	assert.Equal(t, "wangyizhideMacBook-Pro.local", name)
+}
+
+// 别人账号下的设备改不了。没有 UpdateDisplayName 的 EXPECT —— 真写下去就会在这里红。
+func TestRename_RejectsADeviceFromAnotherAccount(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+
+	mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+		&device_entity.Device{ID: 42, UserID: 8, Name: "someone-else", Status: consts.ACTIVE}, nil)
+
+	_, err := svc.Rename(ctx, 7, 42, "我的")
+
+	assert.Error(t, err)
+	assert.Equal(t, code.DeviceNotFound, bizCode(t, err),
+		"查不到 / 不归他 / 已撤销一律同一个出口：区分它们等于告诉调用方这台设备存在")
+}
+
+// 已撤销的设备同样改不了（与撤销、升级同一条归属判定 OwnedDevice）。
+func TestRename_RejectsARevokedDevice(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+
+	mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+		&device_entity.Device{ID: 42, UserID: 7, Status: consts.DELETE}, nil)
+
+	_, err := svc.Rename(ctx, 7, 42, "我的")
+
+	assert.Error(t, err)
+	assert.Equal(t, code.DeviceNotFound, bizCode(t, err))
+}
+
+// 超长的名字在写库之前就被挡下，且判的是**修剪之后**的长度。
+func TestRename_RejectsAnOverlongName(t *testing.T) {
+	ctx, _, _, _, svc, _ := setupDeviceTest(t)
+
+	_, err := svc.Rename(ctx, 7, 42, strings.Repeat("名", device_entity.MaxDisplayNameRunes+1))
+
+	assert.Error(t, err)
+	assert.Equal(t, code.InvalidParameter, bizCode(t, err))
+	// 连归属都不必查：这条请求本身就不成立。没有 Find 的 EXPECT，查了就红。
+}
+
+// 恰好到上限、且首尾带空白的名字要收下：修剪掉的空格不占额度。
+func TestRename_AcceptsALimitLengthNameWithSurroundingSpace(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	svc.now = func() int64 { return 5000 }
+	name := strings.Repeat("名", device_entity.MaxDisplayNameRunes)
+
+	mD.EXPECT().Find(gomock.Any(), int64(42)).Return(
+		&device_entity.Device{ID: 42, UserID: 7, Status: consts.ACTIVE}, nil)
+	mD.EXPECT().UpdateDisplayName(gomock.Any(), int64(42), name, int64(5000)).Return(nil)
+
+	got, err := svc.Rename(ctx, 7, 42, " "+name+" ")
+
+	assert.NoError(t, err)
+	assert.Equal(t, name, got)
+}
+
+// 设备列表要把账号级备注名带出去，控制台与桌面端才都看得见（这就是「账号级」的全部
+// 意思）。原始的自报名同时保留：改名对话框要拿它当占位符，清空之后也要回落到它。
+func TestListUserDevices_CarriesTheAccountLevelDisplayName(t *testing.T) {
+	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
+	relay_svc.SetDefault(nil)
+	t.Cleanup(func() { relay_svc.SetDefault(nil) })
+
+	mD.EXPECT().ListByUser(gomock.Any(), int64(7)).Return([]*device_entity.Device{
+		{ID: 42, UserID: 7, Name: "wangyizhideMacBook-Pro.local", DisplayName: "办公室那台", Fingerprint: "fp-a", Status: 1},
+		{ID: 43, UserID: 7, Name: "wangyizhideMacBook-Pro.local", Fingerprint: "fp-b", Status: 1},
+	}, nil)
+
+	items, err := svc.ListUserDevices(ctx, 7, 0)
+
+	require.NoError(t, err)
+	require.Len(t, items, 2)
+	assert.Equal(t, "办公室那台", items[0].DisplayName)
+	assert.Equal(t, "wangyizhideMacBook-Pro.local", items[0].Name, "自报名不被备注名顶掉")
+	assert.Equal(t, "", items[1].DisplayName, "没设过备注名就是空串，消费端据此回落到 name")
 }

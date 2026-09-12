@@ -119,7 +119,14 @@
     "desktopAppNotRunningShort": "Agentre 未运行",
     "desktopAppNotRunningDetail": "这台电脑上的 Agentre 没有运行。打开 Agentre 后即可查看它的对话。",
     "cardSummary": "{{projects}} 个项目 · {{m}} 个对话在跑",
-    "revokeConfirmTitleNamed": "解除「{{name}}」的授权？"
+    "revokeConfirmTitleNamed": "解除「{{name}}」的授权？",
+    "rename": "重命名",
+    "renameTitleNamed": "重命名 {{name}}",
+    "renameHint": "这个名字存在账号上，登录同一账号的每一端都看得见。留空就用设备自己上报的名字。",
+    "renameLabel": "设备名称",
+    "renameSave": "保存",
+    "renameCancel": "取消",
+    "renameError": "重命名失败，请重试。"
   },
   "upgrade": {
     "badge": "可升级 {{version}}",
