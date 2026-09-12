@@ -129,6 +129,20 @@ func (mr *MockDeviceRepoMockRecorder) Touch(ctx, id, nowMs any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Touch", reflect.TypeOf((*MockDeviceRepo)(nil).Touch), ctx, id, nowMs)
 }
 
+// UpdateDisplayName mocks base method.
+func (m *MockDeviceRepo) UpdateDisplayName(ctx context.Context, id int64, displayName string, nowMs int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateDisplayName", ctx, id, displayName, nowMs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// UpdateDisplayName indicates an expected call of UpdateDisplayName.
+func (mr *MockDeviceRepoMockRecorder) UpdateDisplayName(ctx, id, displayName, nowMs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateDisplayName", reflect.TypeOf((*MockDeviceRepo)(nil).UpdateDisplayName), ctx, id, displayName, nowMs)
+}
+
 // UpdateVersion mocks base method.
 func (m *MockDeviceRepo) UpdateVersion(ctx context.Context, id int64, version string, nowMs int64) error {
 	m.ctrl.T.Helper()

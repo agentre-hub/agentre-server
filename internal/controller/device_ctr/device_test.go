@@ -44,9 +44,17 @@ type stubDeviceSvc struct {
 	ownedCalls []ownedCall
 	// dbErr 顶替查库失败：两个读方法各按真实实现的出口把它交出去。
 	dbErr error
+	// renameCalls 记下每次改名的入参——端点必须把账号、设备、名字原样转发下去。
+	renameCalls []renameCall
 }
 
 type ownedCall struct{ userID, deviceID int64 }
+
+// renameCall 记下每次改名问的是（哪个账号, 哪台设备, 改成什么）。
+type renameCall struct {
+	userID, deviceID int64
+	displayName      string
+}
 
 func (s *stubDeviceSvc) Authorize(_ context.Context, in device_svc.AuthorizeInput) (*device_svc.AuthorizeOutput, error) {
 	s.authorizeInputs = append(s.authorizeInputs, in)
@@ -113,6 +121,25 @@ func (s *stubDeviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64)
 		}
 	}
 	return nil, i18n.NewNotFoundError(ctx, code.DeviceNotFound)
+}
+
+// Rename 与真实实现同一批出口：名字太长回 InvalidParameter（400），归属不成立回
+// DeviceNotFound（404），成功交回生效的显示名（空串回落到设备自报名）。
+func (s *stubDeviceSvc) Rename(ctx context.Context, userID, deviceID int64, displayName string) (string, error) {
+	s.renameCalls = append(s.renameCalls, renameCall{userID: userID, deviceID: deviceID, displayName: displayName})
+	name := strings.TrimSpace(displayName)
+	if len([]rune(name)) > device_entity.MaxDisplayNameRunes {
+		return "", i18n.NewError(ctx, code.InvalidParameter)
+	}
+	for _, v := range s.userDevices {
+		if v.ID == deviceID && v.Status == 1 {
+			if name != "" {
+				return name, nil
+			}
+			return v.Name, nil
+		}
+	}
+	return "", i18n.NewNotFoundError(ctx, code.DeviceNotFound)
 }
 
 var _ device_svc.DeviceSvc = (*stubDeviceSvc)(nil)
@@ -678,4 +705,158 @@ func TestDeviceUpgrade_OwnershipLookupFailureAnswersAsBefore(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Equal(t, code.DeviceListFailed, decodeErrorCode(t, resp))
 	assert.Empty(t, upgrader.calls)
+}
+
+// renameBody 解出改名端点的应答：生效的显示名。
+func renameBody(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	require.Equal(t, 0, envelope.Code)
+	return envelope.Data.DisplayName
+}
+
+// 账号级备注名：浏览器会话可以给自己账号下的设备改名。
+//
+// 同一台 Mac 上的三个 checkout 在设备页上是三行同名设备，除了「darwin/arm64 · dev ·
+// N 分钟前」没有任何可区分信息；要撤销其中一台时用户根本不知道该点哪一个。改名必须
+// 落在服务端，桌面端那份只写本地表的重命名控制台和别的桌面端都看不见。
+func TestRename_WorksForBrowserSession_OwnedDevice(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/1",
+		cookie.Value, "", `{"display_name":"办公室那台"}`, csrf)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "办公室那台", renameBody(t, resp))
+	assert.Equal(t, []renameCall{{userID: 7, deviceID: 1, displayName: "办公室那台"}}, stub.renameCalls,
+		"账号、设备、名字三样都必须原样转发给服务层")
+}
+
+// 清空备注名：生效的显示名回落到设备自报名。
+func TestRename_ClearingFallsBackToTheReportedName(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/1",
+		cookie.Value, "", `{"display_name":""}`, csrf)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "nuc-01", renameBody(t, resp), "清空不是拒绝，而是回落到设备自报名")
+}
+
+// 不属于本账号的设备改不了。
+func TestRename_ForBrowserSession_RejectsForeignDevice(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/99",
+		cookie.Value, "", `{"display_name":"别人的"}`, csrf)
+
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Equal(t, code.DeviceNotFound, decodeErrorCode(t, resp))
+}
+
+// 改名是写操作：浏览器会话这一分支必须过 CSRF，否则任意站点都能借用户挂着的会话
+// 把他账号里的设备名改成任意字符串。
+func TestRename_ForBrowserSession_RejectsMissingCSRFToken(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	cookie, _ := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/1",
+		cookie.Value, "", `{"display_name":"办公室那台"}`)
+
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Empty(t, stub.renameCalls, "没过 CSRF 就一个字都不该写")
+}
+
+// 没有凭据一律进不来。
+func TestRename_RejectsAnonymousCaller(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/1", "", "", `{"display_name":"x"}`)
+
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Empty(t, stub.renameCalls)
+}
+
+// 超长的名字回 400 InvalidParameter（判定在服务层，controller 原样交出去）。
+func TestRename_RejectsAnOverlongName(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+	long := strings.Repeat("名", device_entity.MaxDisplayNameRunes+1)
+
+	body, err := json.Marshal(map[string]string{"display_name": long})
+	require.NoError(t, err)
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/1", cookie.Value, "", string(body), csrf)
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, code.InvalidParameter, decodeErrorCode(t, resp))
+}
+
+// 设备 JWT 也能改名，而且能改本账号下**别的**设备：桌面端的设备清单就是账号清单，
+// 「给那台 agentred 起个名」是它要做的事。这与撤销不同——撤销的是凭据，设备 JWT
+// 只许撤自己；备注名只是个标签，范围与它读得到的清单一致。
+func TestRename_DeviceJWT_CanRenameAnotherDeviceInItsOwnAccount(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	token := bearertest.Issue(device_svc.Principal{AccountID: 7, DeviceID: 2, Kind: device_entity.KindDesktop})
+
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/1", "", token, `{"display_name":"机房那台"}`)
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "机房那台", renameBody(t, resp))
+	assert.Equal(t, []renameCall{{userID: 7, deviceID: 1, displayName: "机房那台"}}, stub.renameCalls)
+}
+
+// 设备列表必须把账号级备注名带出去，控制台与桌面端才都看得见——这就是「账号级」的
+// 全部意思。自报名同时保留：改名界面拿它当占位符，清空之后也回落到它。
+func TestListDevices_CarriesTheAccountLevelDisplayName(t *testing.T) {
+	devices := deviceListBody()
+	devices[0].DisplayName = "办公室那台"
+	stub := &stubDeviceSvc{userDevices: devices}
+	server := newDeviceTestServer(t, stub)
+	cookie, _ := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodGet, server.URL+"/v1/devices", cookie.Value, "", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var envelope struct {
+		Data struct {
+			Devices []struct {
+				Name        string `json:"name"`
+				DisplayName string `json:"display_name"`
+			} `json:"devices"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	require.Len(t, envelope.Data.Devices, 2)
+	assert.Equal(t, "办公室那台", envelope.Data.Devices[0].DisplayName)
+	assert.Equal(t, "nuc-01", envelope.Data.Devices[0].Name, "自报名不被备注名顶掉")
+	assert.Equal(t, "", envelope.Data.Devices[1].DisplayName, "没设过就是空串，消费端据此回落到 name")
+}
+
+// 请求体里**没有** display_name 不是「清空」：一个漏了字段、或者 body 整个丢了的请求，
+// 不该把用户设的备注名悄悄抹掉。清空必须显式写成 "display_name": ""。
+func TestRename_RejectsARequestThatOmitsTheField(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodPatch, server.URL+"/v1/devices/1", cookie.Value, "", `{}`, csrf)
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Empty(t, stub.renameCalls, "字段都没给，一个字都不该写")
 }

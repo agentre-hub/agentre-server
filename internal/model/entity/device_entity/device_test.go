@@ -1,6 +1,7 @@
 package device_entity
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cago-frame/cago/pkg/consts"
@@ -57,4 +58,66 @@ func TestUsableBy(t *testing.T) {
 
 	revoked := &Device{UserID: 7, Status: consts.DELETE}
 	assert.False(t, revoked.UsableBy(7), "已撤销的设备不算")
+}
+
+// 账号级备注名（display_name）是用户自己设的那个名字，和设备 claim 时自报的主机名
+// （name）分开存：同一台 Mac 上的三个 checkout 在账号里就是三行同名设备，要撤销其中
+// 一台时根本分不出该点哪个，而把用户改的名字写进 name 会被这台机器下一次 claim 原样
+// 覆盖掉。
+//
+// NormalizeDisplayName 是收进这一列之前的唯一一道判定：去首尾空白、允许清空（清空 =
+// 回落到设备自报名）、按符文判长度上限。
+func TestNormalizeDisplayName(t *testing.T) {
+	t.Run("去掉首尾空白", func(t *testing.T) {
+		got, ok := NormalizeDisplayName("  办公室那台  ")
+		assert.True(t, ok)
+		assert.Equal(t, "办公室那台", got)
+	})
+	t.Run("只有空白等于清空", func(t *testing.T) {
+		got, ok := NormalizeDisplayName("   \t\n ")
+		assert.True(t, ok, "清空是合法操作，不是参数错误")
+		assert.Equal(t, "", got)
+	})
+	t.Run("空串等于清空", func(t *testing.T) {
+		got, ok := NormalizeDisplayName("")
+		assert.True(t, ok)
+		assert.Equal(t, "", got)
+	})
+	t.Run("长度按符文数判，恰好到上限仍然收", func(t *testing.T) {
+		name := strings.Repeat("名", MaxDisplayNameRunes)
+		got, ok := NormalizeDisplayName(name)
+		assert.True(t, ok)
+		assert.Equal(t, name, got)
+	})
+	t.Run("超过上限不收", func(t *testing.T) {
+		_, ok := NormalizeDisplayName(strings.Repeat("名", MaxDisplayNameRunes+1))
+		assert.False(t, ok)
+	})
+	t.Run("上限判的是去掉空白之后的长度", func(t *testing.T) {
+		// 首尾空白不占额度：用户在输入框里多敲一个空格不该变成「太长了」。
+		got, ok := NormalizeDisplayName("  " + strings.Repeat("名", MaxDisplayNameRunes) + "  ")
+		assert.True(t, ok)
+		assert.Equal(t, strings.Repeat("名", MaxDisplayNameRunes), got)
+	})
+}
+
+// EffectiveName 是「这一行到底叫什么」的唯一判据：用户设过备注名就用它，没设就回落到
+// 设备自报名。两个消费端（控制台、桌面端）都按这条规则渲染。
+func TestEffectiveName(t *testing.T) {
+	t.Run("设过备注名就用备注名", func(t *testing.T) {
+		d := &Device{Name: "wangyizhideMacBook-Pro.local", DisplayName: "办公室那台"}
+		assert.Equal(t, "办公室那台", d.EffectiveName())
+	})
+	t.Run("没设备注名回落到自报名", func(t *testing.T) {
+		d := &Device{Name: "wangyizhideMacBook-Pro.local"}
+		assert.Equal(t, "wangyizhideMacBook-Pro.local", d.EffectiveName())
+	})
+	t.Run("两个都没有时回落到指纹缩写", func(t *testing.T) {
+		d := &Device{Fingerprint: "sha256:b363ed8b7fdd0175e6d08ea8"}
+		assert.Equal(t, "b363ed8b", d.EffectiveName())
+	})
+	t.Run("nil 设备不 panic", func(t *testing.T) {
+		var missing *Device
+		assert.Equal(t, "", missing.EffectiveName())
+	})
 }

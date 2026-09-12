@@ -102,8 +102,17 @@ type ListDevicesRequest struct {
 }
 
 type ListDevicesItem struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
+	ID int64 `json:"id"`
+	// Name 是设备 claim 时自报的名字（通常是主机名）。它归设备所有：那台机器每次重新
+	// 配对都会再报一次并覆盖这一格。
+	Name string `json:"name"`
+	// DisplayName 是**用户**给这台设备起的账号级备注名，空串 = 没起过。
+	//
+	// 消费端按「有 display_name 用它，没有回落 name」渲染——同一台 Mac 上三个 checkout
+	// 在账号里就是三行同名设备，这一格是唯一分得清谁是谁的东西。两格都给而不是在服务端
+	// 合成一格：改名界面要拿 name 当占位符、拿 display_name 当输入框里的当前值，合成之后
+	// 就再也分不出「没设过」和「设成了和主机名一样」。
+	DisplayName  string `json:"display_name"`
 	Kind         string `json:"kind"`
 	Platform     string `json:"platform"`
 	Version      string `json:"version"`
@@ -161,4 +170,29 @@ type DeviceUpgradeResponse struct {
 
 type ListDevicesResponse struct {
 	Devices []ListDevicesItem `json:"devices"`
+}
+
+// RenameDeviceRequest 给一台设备设/改/清账号级备注名。
+//
+// 走 PATCH /v1/devices/:id 而不是 POST /v1/devices/:id/rename：本仓既有的「改一个已有
+// 资源的一个字段」都是这个形状（engine 的 providers/:provider_key、backends/:sync_id）。
+//
+// DisplayName 上**不挂** binding max：长度判定在实体层（device_entity.NormalizeDisplayName），
+// 判的是修剪之后的长度。挂在这里会让「恰好到上限 + 首尾各一个空格」被拒，而它修剪之后
+// 明明合法——同一条规则有两个判据就一定会漂。
+type RenameDeviceRequest struct {
+	mux.Meta `path:"/v1/devices/:id" method:"PATCH"`
+	DeviceID int64 `uri:"id" binding:"required"`
+	// DisplayName 空串（或只有空白）= 清空备注名，生效的显示名回落到设备自报的 name。
+	//
+	// 指针 + required：字段**缺席**与字段是空串是两件事。少了这一层，一个漏写字段、
+	// 或者干脆没带 body 的请求会被读成「清空」，用户设的名字就这么悄悄没了；
+	// 清空必须是显式写出来的 "display_name": ""。
+	DisplayName *string `json:"display_name" binding:"required"`
+}
+
+type RenameDeviceResponse struct {
+	// DisplayName 是这一改之后**生效**的显示名：设了备注名就是它，清空之后是设备自报名。
+	// 调用方可以直接拿它刷新那一行，不必自己再算一遍回落。
+	DisplayName string `json:"display_name"`
 }

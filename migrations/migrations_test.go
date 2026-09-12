@@ -7,6 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
@@ -123,4 +124,26 @@ func TestWithMigrationLock_TreatsNullAsNotAcquired(t *testing.T) {
 	assert.Contains(t, err.Error(), "timed out", "NULL 要走等锁超时那条路，而不是驱动的扫描错误")
 	assert.Contains(t, err.Error(), "migration lock")
 	assert.False(t, ran, "NULL 不是「拿到锁」，迁移绝不能在这种情况下开跑")
+}
+
+// 迁移清单只许**追加**：已经跑过的迁移改一个字，线上那套库就再也不会重跑它，两边的
+// DDL 从此分叉且没有任何东西会报错。这条守卫盯住清单本身的形状——编号唯一、严格
+// 递增，于是「往中间插一条」和「改一条已有的编号」都会在这里变红。
+func TestMigrationList_IDsAreUniqueAndStrictlyAscending(t *testing.T) {
+	list := migrationList()
+	seen := make(map[string]bool, len(list))
+	prev := ""
+	for _, m := range list {
+		assert.False(t, seen[m.ID], "迁移编号重复: %s", m.ID)
+		seen[m.ID] = true
+		assert.Greater(t, m.ID, prev, "迁移必须按编号升序追加在末尾，%s 排在 %s 后面", m.ID, prev)
+		prev = m.ID
+	}
+}
+
+// devices.display_name（账号级备注名）是这一轮新增的列，必须是清单里的**最后**一条。
+func TestMigrationList_EndsWithTheDeviceDisplayNameColumn(t *testing.T) {
+	list := migrationList()
+	require.NotEmpty(t, list)
+	assert.Equal(t, "202609120101", list[len(list)-1].ID)
 }

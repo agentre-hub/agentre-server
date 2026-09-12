@@ -133,3 +133,62 @@ func TestListActiveByUsers_GivenNoAccounts_ThenNoQuery(t *testing.T) {
 	assert.Empty(t, out)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// UpdateDisplayName 写的是账号级备注名那一列，只动 display_name 与 updatetime：
+// 设备自报的 name 不能被这次改名碰到（它是那台机器下一次 claim 要覆盖的格子），
+// last_seen_at 更不能——改个名字不是一次「它刚刚还在」。
+func TestUpdateDisplayName_WritesOnlyDisplayNameAndUpdatetime(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"UPDATE `devices` SET `display_name`=?,`updatetime`=? WHERE id=?")+"$").
+		WithArgs("办公室那台", int64(5000), int64(100)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.UpdateDisplayName(ctx, 100, "办公室那台", 5000))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 清空备注名走同一条语句、写空串：清空是合法操作（回落到设备自报名），不是「不写」。
+func TestUpdateDisplayName_ClearingWritesTheEmptyString(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE `devices` SET `display_name`=?")).
+		WithArgs("", int64(5000), int64(100)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	assert.NoError(t, r.UpdateDisplayName(ctx, 100, "", 5000))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 设备重新 claim 不能把用户设的备注名擦掉——那正是「不复用 devices.name」的全部理由。
+// 判据是 ON DUPLICATE KEY UPDATE 的赋值列表里没有 display_name；正则钉住整段赋值
+// 子句并锚到语句末尾，多赋一列就在这里变红。
+func TestUpsert_DoesNotReassignTheAccountLevelDisplayName(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewDevice()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta(
+		"ON DUPLICATE KEY UPDATE `name`=VALUES(`name`),`kind`=VALUES(`kind`),"+
+			"`platform`=VALUES(`platform`),`version`=VALUES(`version`),"+
+			"`last_seen_at`=VALUES(`last_seen_at`),`status`=VALUES(`status`),"+
+			"`updatetime`=VALUES(`updatetime`)") + "$").
+		WillReturnResult(sqlmock.NewResult(100, 2))
+	mock.ExpectQuery("SELECT \\* FROM `devices` WHERE user_id=\\? AND fingerprint=\\?").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "display_name"}).
+			AddRow(int64(100), "办公室那台"))
+	mock.ExpectCommit()
+
+	d := &device_entity.Device{UserID: 7, Fingerprint: "fp-new", Kind: "agentred", Status: 1}
+	assert.NoError(t, r.Upsert(ctx, d))
+	// 事务内读回最终行，备注名因此原样还在实体上。
+	assert.Equal(t, "办公室那台", d.DisplayName)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

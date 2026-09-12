@@ -47,6 +47,11 @@ type DeviceSvc interface {
 	// 查不到、不归他、已撤销三种情形一律回同一个 DeviceNotFound：对调用方是同
 	// 一件事，区分它们等于告诉调用方「这台设备存在，只是不是你的」。
 	OwnedDevice(ctx context.Context, userID, deviceID int64) (*device_entity.Device, error)
+	// Rename 改一台设备的**账号级**备注名，交回这一改之后生效的显示名。
+	//
+	// 空串（或只有空白）= 清空，生效的显示名回落到设备自报的那个。归属判定与撤销、
+	// 升级同一条（OwnedDevice）：只能改自己账号下、仍在用的设备。
+	Rename(ctx context.Context, userID, deviceID int64, displayName string) (string, error)
 }
 
 // DeviceDataPurger 是 Revoke 撤销一台设备时需要用到的窄接口（ISP）：只清掉「这台
@@ -124,6 +129,32 @@ func (s *deviceSvc) OwnedDevice(ctx context.Context, userID, deviceID int64) (*d
 		return nil, i18n.NewNotFoundError(ctx, code.DeviceNotFound)
 	}
 	return d, nil
+}
+
+// Rename 写账号级备注名。
+//
+// 写的是 display_name 而不是 name：name 是设备 claim 时自报的主机名，那台机器下一次
+// 重新配对会把它原样覆盖回去（device_repo.Upsert 的赋值列里就有它），用户改的名字
+// 因此活不过一次重连。两列分开之后，改名对任何一端都不再是一条会被冲掉的本地标签。
+//
+// 长度与空白的判定在实体上（NormalizeDisplayName），且排在归属判定之前：请求本身
+// 不成立时连库都不必查。
+func (s *deviceSvc) Rename(ctx context.Context, userID, deviceID int64, displayName string) (string, error) {
+	name, ok := device_entity.NormalizeDisplayName(displayName)
+	if !ok {
+		return "", i18n.NewError(ctx, code.InvalidParameter)
+	}
+	d, err := s.OwnedDevice(ctx, userID, deviceID)
+	if err != nil {
+		return "", err
+	}
+	if err := device_repo.Device().UpdateDisplayName(ctx, deviceID, name, s.now()); err != nil {
+		logger.Ctx(ctx).Error("device_svc.Rename: update display name failed",
+			zap.Int64("deviceId", deviceID), zap.Int64("userId", userID), zap.Error(err))
+		return "", i18n.NewInternalError(ctx, code.ServerError)
+	}
+	d.DisplayName = name
+	return d.EffectiveName(), nil
 }
 
 // uniqueKeyUserCodePending 是 user_code 唯一键的名字（migrations/202609120101_initial_schema.go）。
@@ -611,8 +642,12 @@ func (s *deviceSvc) purgeDeviceScopedData(ctx context.Context, deviceID int64) {
 // DaemonCommit / DaemonBuildKnown 的语义（空串不等于开发构建，见决策 19）在 wire 那一
 // 侧解释，这里只是搬运。
 type DeviceView struct {
-	ID               int64
+	ID int64
+	// Name 是设备自报的名字（通常是主机名），DisplayName 是用户设的账号级备注名，
+	// 空串 = 没设过。两格都交出去：消费端按「有备注名用备注名，没有回落 Name」渲染，
+	// 而改名界面要拿 Name 当占位符、拿 DisplayName 当输入框的当前值。
 	Name             string
+	DisplayName      string
 	Kind             string
 	Platform         string
 	Version          string
@@ -666,6 +701,7 @@ func (s *deviceSvc) ListUserDevices(ctx context.Context, userID, callerDeviceID 
 		out = append(out, DeviceView{
 			ID:               d.ID,
 			Name:             d.Name,
+			DisplayName:      d.DisplayName,
 			Kind:             d.Kind,
 			Platform:         d.Platform,
 			Version:          d.Version,

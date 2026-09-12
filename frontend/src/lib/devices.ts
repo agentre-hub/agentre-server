@@ -8,11 +8,20 @@ import { api } from "@/lib/api";
  * 少写的字段不会报错，只会在那个页面上安静地缺一段。device-item-contract.test.ts
  * 逐字段盯着它与 Go 那份对齐，也盯着不许有第二份。
  *
- * 字段全是必填：后端结构体里没有 omitempty，一条设备行永远带齐这十三个键。
+ * 字段全是必填：后端结构体里没有 omitempty，一条设备行永远带齐这十四个键。
  */
 export interface DeviceItem {
   id: number;
+  /** 设备 claim 时自报的名字（通常是主机名）。它归设备所有，每次重新配对会被覆盖。 */
   name: string;
+  /**
+   * 用户给这台设备起的**账号级**备注名，空串 = 没起过。
+   *
+   * 同一台电脑上的几个 checkout 在账号里就是几行同名设备；这一格是唯一分得清谁是谁
+   * 的东西，而且它是账号级的——控制台、桌面端、任何一端看到的都是同一个名字。
+   * 显示用 deviceDisplayName()，不要直接读这一格。
+   */
+  display_name: string;
   kind: string;
   platform: string;
   version: string;
@@ -51,4 +60,35 @@ export interface DeviceItem {
 export async function fetchDevices(): Promise<DeviceItem[]> {
   const res = await api<{ devices?: DeviceItem[] }>("/v1/devices");
   return res.devices ?? [];
+}
+
+/**
+ * 这一行到底叫什么：用户设过备注名就用它，没设就回落到设备自报名。
+ *
+ * 回落规则在服务端也写了一遍（device_entity.EffectiveName），两边是同一条：服务端拿它
+ * 答改名端点「这一改之后生效的显示名」，前端拿它渲染。之所以不由服务端直接合成一格
+ * 发过来，是因为改名对话框要同时拿到两者——自报名当占位符、备注名当输入框的当前值，
+ * 合成之后就再也分不出「没设过」和「设成了和主机名一样」。
+ */
+export function deviceDisplayName(d: {
+  name: string;
+  display_name?: string;
+}): string {
+  return d.display_name?.trim() || d.name;
+}
+
+/**
+ * 设/改/清一台设备的账号级备注名，交回这一改之后**生效**的显示名。
+ *
+ * 空串（或只有空白）= 清空，生效的显示名回落到设备自报名。
+ */
+export async function renameDevice(
+  id: number,
+  displayName: string,
+): Promise<string> {
+  const res = await api<{ display_name: string }>(`/v1/devices/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  return res.display_name;
 }

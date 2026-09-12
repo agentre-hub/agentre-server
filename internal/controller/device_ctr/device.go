@@ -212,6 +212,7 @@ func toListDevicesItem(view device_svc.DeviceView) api.ListDevicesItem {
 	return api.ListDevicesItem{
 		ID:               view.ID,
 		Name:             view.Name,
+		DisplayName:      view.DisplayName,
 		Kind:             view.Kind,
 		Platform:         view.Platform,
 		Version:          view.Version,
@@ -224,6 +225,35 @@ func toListDevicesItem(view device_svc.DeviceView) api.ListDevicesItem {
 		DaemonCommit:     view.DaemonCommit,
 		DaemonBuildKnown: view.DaemonBuildKnown,
 	}
+}
+
+// Rename 给一台设备设/改/清账号级备注名。
+//
+// 这个端点存在的理由：设备名是 claim 时那台机器自报的主机名，同一台 Mac 上的三个
+// checkout 在账号里就是三行一模一样的名字，要撤销其中一台时用户分不出该点哪一个。
+// 桌面端此前那个「重命名」只写它自己的本地表，控制台和别的桌面端都看不见——所以这件
+// 事只能在服务端解决，写在账号上。
+//
+// 归属与长度判定都在服务层（Rename → OwnedDevice + NormalizeDisplayName）：这里既不
+// 提前查一遍设备，也不重写它的出口。改别人账号下的设备、改一台已撤销的设备，与「根本
+// 没有这台设备」同一个答复 404 DeviceNotFound —— 区分它们等于告诉调用方这台设备存在、
+// 只是不归他。它与撤销 / 升级的 403 形状不同：那两个端点的 403 是改用 OwnedDevice 之前
+// 就有的出口，沿用是为了不动既有 API；这是条新路由，没有要沿用的历史。
+//
+// 鉴权面与设备列表同一组（会话 + CSRF，或设备 access token）：能读到这份清单的调用方
+// 就能给清单里的行起名字。这与撤销不同——撤销动的是凭据，设备 JWT 只许撤自己；备注名
+// 只是一个标签。
+func (d *Device) Rename(c *gin.Context, req *api.RenameDeviceRequest) (*api.RenameDeviceResponse, error) {
+	ctx := c.Request.Context()
+	userID := ginctx.UserID(c)
+	if userID == 0 {
+		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
+	}
+	name, err := device_svc.Default().Rename(ctx, userID, req.DeviceID, *req.DisplayName)
+	if err != nil {
+		return nil, err
+	}
+	return &api.RenameDeviceResponse{DisplayName: name}, nil
 }
 
 // Upgrade 让控制台点名的那台 agentred 把自己升上去（规格 2026-09-03

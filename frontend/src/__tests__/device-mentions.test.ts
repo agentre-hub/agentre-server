@@ -18,6 +18,7 @@ const mockedApi = api as unknown as ReturnType<typeof vi.fn>;
 const device = (over: Partial<DeviceItem> = {}): DeviceItem => ({
   id: 1,
   name: "linux-srv",
+  display_name: "",
   kind: "agentred",
   platform: "linux",
   version: "0.3.0",
