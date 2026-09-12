@@ -849,7 +849,10 @@ export class RelayClient {
   }
 
   /** 补齐页里的一条通知:按 method 解成帧、把那一条上的 seq 盖上去,再走同一套去重投递。 */
-  private applyDurableNotification(st: SessionState, n: DurableNotification): void {
+  private applyDurableNotification(
+    st: SessionState,
+    n: DurableNotification,
+  ): void {
     const frame = durableToFrame(n);
     // 时刻取那一条报的那个,**不**退回当下:这一页可能是一段离线期间的成批补齐,
     // 拿此刻去盖会让整段转录显示成同一分钟。报不出来时是 0,读作「不知道」。
