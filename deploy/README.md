@@ -176,8 +176,9 @@ runner 负责 pnpm install、前端构建和 Go 编译，能够复用 Go 与 pnp
 `dev.<短 commit>`（启动首行日志能看到）和目标机上的本地镜像 ID。要 digest 就走
 `deploy.yaml` 那条链路（main / release/* / test/*）。
 
-推送 `dev` 时流水线会自己建 `bin/`、覆盖编排与 `Dockerfile.dev` 并重建容器；每次部署
-复用固定的 `agentre-server:dev` tag，并删除上一个同名镜像。
+推送 `dev` 时流水线用 `actions/scp-action` 把编排、`Dockerfile.dev` 和 `bin/server.next` 覆盖
+上去（目标目录由动作自己 `mkdir -p`），再由 `actions/ssh-action` 在目标机上把 `.next` 原子换名
+成 `bin/server` 并重建容器；每次部署复用固定的 `agentre-server:dev` tag，并删除上一个同名镜像。
 
 和上面的「Docker 单机部署」不是一回事，别混用：那份会额外拉起 MySQL 和 Redis 并把
 数据落在仓库根的 `data/`；dev 的 MySQL、Redis、etcd 都是外部既有服务，套用那份等于
@@ -389,9 +390,16 @@ etcdctl --endpoints=<etcd> --user root:<password> \
   所以 GitHub 上的 `ci.yml` 只在 GitHub 生效，Gitea 这边只跑发布流水线里的门禁。
 - 流水线里的 `uses:` 都写成了 `actions/*`，这是当前这台 Gitea 实例的动作镜像位置。
   **换一台实例可能要改回 `docker/*` 之类的上游名字。**
-- dev 的部署步骤用的是 runner 自带的 `ssh`/`scp`，没走任何 ssh-action。这台实例的
-  动作镜像集是定制的，仓库里也没有 ssh-action 的先例，赌一个可能不存在的镜像不如
-  用原生命令。主机密钥是首连信任（`StrictHostKeyChecking=accept-new`）。
+- 部署走 Gitea 实例的动作镜像：`actions/scp-action` 传文件、`actions/ssh-action` 跑远端脚本
+  （就是 appleboy 那两个的镜像）。私钥以 secret 字符串交给动作，runner 上不再落密钥文件、
+  也不再写 `ssh_config`。
+- **主机校验靠动作的 `fingerprint`**：它只收一个 SHA256 指纹，不传就是完全不校验，所以部署前
+  先 `ssh-keyscan` 目标机、按客户端会协商的那把钉住（首连信任）。动作背后是 Go 的 SSH 客户端
+  （x/crypto），偏好顺序是 `ecdsa-256 > ecdsa-384 > ecdsa-521 > rsa > ed25519`——ed25519 排
+  **最后**，服务端按 RFC 取客户端列表里它有的第一个；钉错类型会以 `host key fingerprint
+  mismatch` 收场，那看着像网络问题、其实不是。
+- Registry 口令走文件 + `--password-stdin`，不改走 `envs`：`ssh-action` 的 `envs` 是把值拼进
+  远端命令行，目标机上 `ps` 看得到。
 
 ### GitHub 侧：只出镜像与 Release，不部署
 

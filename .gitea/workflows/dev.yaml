@@ -4,6 +4,10 @@
 # 这条流水线没有门禁，dev 分支上也没有别的门禁接着：.github/workflows/ci.yml 只在
 # push main 和 pull_request 上触发，而 dev 只推 gitea、不推 GitHub。lint / test 靠
 # 本地 make lint / make test，以及 dev 合入 main 时那个 PR 上的 ci.yml。
+#
+# 送文件与跑远端脚本都走本实例的动作镜像 gitea.icodef.com/actions/{scp-action,ssh-action}
+# （appleboy 那两个的镜像）。runner 上不再自己写密钥文件和 ssh_config：私钥以字符串
+# 交给动作，主机指纹由下面那步现扫现钉。
 
 name: Deploy dev
 
@@ -63,97 +67,142 @@ jobs:
           CGO_ENABLED: '0'
         run: make build VERSION=dev.${{ steps.vars.outputs.sha_short }} COMMIT=${{ steps.vars.outputs.sha_short }}
 
-      - name: Set up SSH
+      # scp-action 不给文件改名（只把源路径原样打进 tar），而 bin/ 既是上传源目录、
+      # 又是 Dockerfile.dev 的整个构建上下文、里面那份必须正好叫 server：先在 runner 上
+      # 改成 .next，到目标机上再原子换掉正在跑的那份（直接覆盖正在运行的二进制会 ETXTBSY）
+      - name: Rename artifact to server.next
+        run: mv bin/server bin/server.next
+
+      - name: Check deploy credentials
         env:
           SSH_KEY: ${{ secrets.DEV_SSH_KEY }}
         run: |
           set -euo pipefail
           test -n "$DEPLOY_HOST" || { echo "缺少 secret DEV_SSH_HOST" >&2; exit 1; }
           test -n "$SSH_KEY" || { echo "缺少 secret DEV_SSH_KEY" >&2; exit 1; }
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$SSH_KEY" > ~/.ssh/dev_deploy
-          chmod 600 ~/.ssh/dev_deploy
-          printf '%s\n' \
-            'Host dev-deploy' \
-            "  HostName $DEPLOY_HOST" \
-            "  User $DEPLOY_USER" \
-            "  Port $DEPLOY_PORT" \
-            '  IdentityFile ~/.ssh/dev_deploy' \
-            '  IdentitiesOnly yes' \
-            '  StrictHostKeyChecking accept-new' \
-            '  BatchMode yes' > ~/.ssh/dev_deploy.conf
-          chmod 600 ~/.ssh/dev_deploy.conf
+
+      # 不传 fingerprint 时 drone-ssh 是直接不校验主机（源码里退化成 InsecureIgnoreHostKey），
+      # 所以这里先扫一把再钉住，等价于原来 ssh_config 里的 StrictHostKeyChecking=accept-new：
+      # 首连信任，同一条流水线内不再接受换 key
+      - name: Pin target host key
+        id: hostkey
+        run: |
+          set -euo pipefail
+          tmp="${RUNNER_TEMP:-$(mktemp -d)}"
+          ssh-keyscan -T 10 -p "$DEPLOY_PORT" "$DEPLOY_HOST" > "$tmp/host_keys" 2>/dev/null || true
+          fingerprint=""
+          # 挑哪一把不能想当然：Go 客户端（x/crypto）自己有偏好顺序，服务端按 RFC 取
+          # 「客户端列表里它有的第一个」。这个顺序是 ecdsa-256 > ecdsa-384 > ecdsa-521 >
+          # rsa > ed25519（ed25519 排最后），实测两台 Debian 机器上协商到的都是 ECDSA；
+          # 挑错类型会直接以 host key fingerprint mismatch 收场
+          fingerprint="$(ssh-keygen -lf "$tmp/host_keys" 2>/dev/null | awk '
+            /\(ECDSA\)/ && $1 == 256 { print "1", $2 }
+            /\(ECDSA\)/ && $1 == 384 { print "2", $2 }
+            /\(ECDSA\)/ && $1 == 521 { print "3", $2 }
+            /\(RSA\)/                 { print "4", $2 }
+            /\(ED25519\)/             { print "5", $2 }
+          ' | sort -n | head -1 | awk '{print $2}')"
+          test -n "$fingerprint" || { echo "扫不到 $DEPLOY_HOST 的主机密钥：宁可失败也不退回不校验" >&2; exit 1; }
+          echo "已钉住 $DEPLOY_HOST 的主机指纹: $fingerprint"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      # 目标目录由 drone-scp 自己 mkdir -p，不需要原来那句 ssh mkdir。
+      # deploy/ 这一层用 strip_components 去掉，落点与 `scp deploy/* dev-deploy:$DEPLOY_DIR/` 一致
+      - name: Upload compose files
+        uses: actions/scp-action@v1.0.0
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          port: ${{ env.DEPLOY_PORT }}
+          key: ${{ secrets.DEV_SSH_KEY }}
+          fingerprint: ${{ steps.hostkey.outputs.fingerprint }}
+          source: 'deploy/docker-compose.dev.yml,deploy/Dockerfile.dev'
+          target: ${{ env.DEPLOY_DIR }}
+          strip_components: 1
+
+      - name: Upload server binary
+        uses: actions/scp-action@v1.0.0
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          port: ${{ env.DEPLOY_PORT }}
+          key: ${{ secrets.DEV_SSH_KEY }}
+          fingerprint: ${{ steps.hostkey.outputs.fingerprint }}
+          source: 'bin/server.next'
+          target: ${{ env.DEPLOY_DIR }}/bin
+          strip_components: 1
 
       - name: Deploy to ${{ env.DEPLOY_HOST }}
-        run: |
-          set -euo pipefail
+        uses: actions/ssh-action@v1.2.5
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          port: ${{ env.DEPLOY_PORT }}
+          key: ${{ secrets.DEV_SSH_KEY }}
+          fingerprint: ${{ steps.hostkey.outputs.fingerprint }}
+          # envs 只写变量名：drone-ssh 从 runner 环境按名字取值，再用单引号转义拼进远端脚本
+          envs: DEPLOY_DIR
+          command_timeout: 15m
+          script: |
+            # 动作是把脚本当远端命令交给登录 shell 跑（不再是 `ssh bash -s` 喂 stdin），
+            # 目标机 root 的登录 shell 是 bash，pipefail 才有意义
+            set -euo pipefail
+            cd "$DEPLOY_DIR"
 
-          ssh -F ~/.ssh/dev_deploy.conf dev-deploy "mkdir -p '$DEPLOY_DIR/bin'"
+            test -s bin/server.next || { echo "bin/server.next 没传上来或者是空的" >&2; exit 1; }
+            chmod 755 bin/server.next
+            mv -f bin/server.next bin/server
 
-          scp -F ~/.ssh/dev_deploy.conf deploy/docker-compose.dev.yml deploy/Dockerfile.dev \
-            "dev-deploy:$DEPLOY_DIR/"
-          scp -F ~/.ssh/dev_deploy.conf bin/server "dev-deploy:$DEPLOY_DIR/bin/server.next"
+            # 上下文只给 bin/：部署目录里的 config.yaml 和 keys/ 不该进构建上下文
+            prev=$(docker image inspect -f '{{.Id}}' agentre-server:dev 2>/dev/null || true)
+            docker build -f Dockerfile.dev -t agentre-server:dev bin
 
-          # 远端脚本用引号 heredoc，runner 侧不插值；要带过去的值先 %q 转义
-          {
-          printf 'DEPLOY_DIR=%q\n' "$DEPLOY_DIR"
-          cat <<'REMOTE'
-          set -euo pipefail
-          cd "$DEPLOY_DIR"
+            docker compose -f docker-compose.dev.yml config -q
+            docker compose -f docker-compose.dev.yml up -d --force-recreate
 
-          test -s bin/server.next || { echo "bin/server.next 没传上来或者是空的" >&2; exit 1; }
-          chmod 755 bin/server.next
-          mv -f bin/server.next bin/server
-
-          # 上下文只给 bin/：部署目录里的 config.yaml 和 keys/ 不该进构建上下文
-          prev=$(docker image inspect -f '{{.Id}}' agentre-server:dev 2>/dev/null || true)
-          docker build -f Dockerfile.dev -t agentre-server:dev bin
-
-          docker compose -f docker-compose.dev.yml config -q
-          docker compose -f docker-compose.dev.yml up -d --force-recreate
-
-          # tag 每次复用，上一个镜像会变成 dangling 攒在机器上。容器已经换到新镜像了才删得掉；
-          # 不用 image prune -f，那会连这台机器上别的 dangling 镜像一起收走
-          now=$(docker image inspect -f '{{.Id}}' agentre-server:dev)
-          if [ -n "$prev" ] && [ "$prev" != "$now" ]; then
-            docker image rm "$prev" >/dev/null 2>&1 || true
-          fi
-          REMOTE
-          } | ssh -F ~/.ssh/dev_deploy.conf dev-deploy bash -s
-
-      # status 是硬编码的 "ok"，三项都要为真才算起来了
-      - name: Wait for healthz
-        run: |
-          set -euo pipefail
-          {
-          printf 'DEPLOY_DIR=%q\n' "$DEPLOY_DIR"
-          cat <<'REMOTE'
-          set -uo pipefail
-          cd "$DEPLOY_DIR" || exit 1
-          command -v python3 >/dev/null || { echo "目标机上没有 python3,healthz 轮询跑不了" >&2; exit 1; }
-          for i in $(seq 1 60); do
-            if python3 - <<'PY'
-          import json, sys, urllib.request
-          try:
-              body = urllib.request.urlopen("http://127.0.0.1:8443/v1/healthz", timeout=3).read()
-              payload = json.loads(body)
-              data = payload.get("data") or payload
-          except Exception:
-              sys.exit(1)
-          sys.exit(0 if data.get("status") == "ok" and data.get("db_ping") is True and data.get("redis") is True else 1)
-          PY
-            then
-              echo "healthz 通过(第 ${i} 次尝试)"
-              exit 0
+            # tag 每次复用，上一个镜像会变成 dangling 攒在机器上。容器已经换到新镜像了才删得掉；
+            # 不用 image prune -f，那会连这台机器上别的 dangling 镜像一起收走
+            now=$(docker image inspect -f '{{.Id}}' agentre-server:dev)
+            if [ -n "$prev" ] && [ "$prev" != "$now" ]; then
+              docker image rm "$prev" >/dev/null 2>&1 || true
             fi
-            sleep 2
-          done
-          echo "healthz 连试 60 次都没通过,dev 环境停留在坏状态(不自动回滚)" >&2
-          docker compose -f docker-compose.dev.yml logs --tail=80 server >&2 || true
-          exit 1
-          REMOTE
-          } | ssh -F ~/.ssh/dev_deploy.conf dev-deploy bash -s
 
-      - name: Remove SSH credentials
-        if: always()
-        run: rm -f ~/.ssh/dev_deploy ~/.ssh/dev_deploy.conf
+      # status 是硬编码的 "ok"，三项都要为真才算起来了。
+      # 下面那段 python 的 heredoc 结束符必须顶格（YAML 会把这段整体的缩进剥掉）
+      - name: Wait for healthz
+        uses: actions/ssh-action@v1.2.5
+        with:
+          host: ${{ env.DEPLOY_HOST }}
+          username: ${{ env.DEPLOY_USER }}
+          port: ${{ env.DEPLOY_PORT }}
+          key: ${{ secrets.DEV_SSH_KEY }}
+          fingerprint: ${{ steps.hostkey.outputs.fingerprint }}
+          envs: DEPLOY_DIR
+          command_timeout: 8m
+          script: |
+            set -uo pipefail
+            cd "$DEPLOY_DIR" || exit 1
+            command -v python3 >/dev/null || { echo "目标机上没有 python3,healthz 轮询跑不了" >&2; exit 1; }
+            for i in $(seq 1 60); do
+              if python3 - <<'PY'
+            import json, sys, urllib.request
+            try:
+                body = urllib.request.urlopen("http://127.0.0.1:8443/v1/healthz", timeout=3).read()
+                payload = json.loads(body)
+                data = payload.get("data") or payload
+            except Exception:
+                sys.exit(1)
+            sys.exit(0 if data.get("status") == "ok" and data.get("db_ping") is True and data.get("redis") is True else 1)
+            PY
+              then
+                echo "healthz 通过(第 ${i} 次尝试)"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "healthz 连试 60 次都没通过,dev 环境停留在坏状态(不自动回滚)" >&2
+            docker compose -f docker-compose.dev.yml logs --tail=80 server >&2 || true
+            exit 1
+
+      # 私钥只在动作内部解析成 signer（easyssh 直接 ParsePrivateKey，不落盘），
+      # 所以原来那步 Remove SSH credentials 没有要删的东西了
