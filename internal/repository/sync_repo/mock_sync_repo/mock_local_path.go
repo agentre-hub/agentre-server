@@ -11,9 +11,9 @@ package mock_sync_repo
 
 import (
 	context "context"
-	sync_entity "github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	reflect "reflect"
 
+	sync_entity "github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	gomock "go.uber.org/mock/gomock"
 )
 

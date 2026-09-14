@@ -11,9 +11,9 @@ package mock_webauthn_credential_repo
 
 import (
 	context "context"
-	webauthn_credential_entity "github.com/agentre-hub/agentre-server/internal/model/entity/webauthn_credential_entity"
 	reflect "reflect"
 
+	webauthn_credential_entity "github.com/agentre-hub/agentre-server/internal/model/entity/webauthn_credential_entity"
 	gomock "go.uber.org/mock/gomock"
 )
 

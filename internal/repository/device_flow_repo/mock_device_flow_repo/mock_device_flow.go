@@ -11,9 +11,9 @@ package mock_device_flow_repo
 
 import (
 	context "context"
-	device_flow_entity "github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	reflect "reflect"
 
+	device_flow_entity "github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	gomock "go.uber.org/mock/gomock"
 )
 

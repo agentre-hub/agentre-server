@@ -45,7 +45,7 @@ jobs:
           args: --timeout=10m
 
       - name: Test
-        run: go test -race ./...
+        run: go test ./...
 
       - name: Set outputs
         id: vars

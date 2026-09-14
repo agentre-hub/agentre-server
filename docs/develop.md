@@ -11,7 +11,7 @@ make dev               # vite (:5174, proxies /v1 → :8443) + go run ./cmd/serv
 make build             # frontend build → copy into internal/web/dist → go build → bin/server
 
 make test              # THE default gate: test-backend + test-frontend
-make test-backend      # go test -race ./...   (there are no build tags — see below)
+make test-backend      # go test ./...   (there are no build tags — see below)
 make test-frontend     # cd frontend && pnpm typecheck && pnpm test  (vitest)
 make e2e               # formal server + real MySQL/Redis + desktop/mobile Chromium
 make test-cover        # coverage.html

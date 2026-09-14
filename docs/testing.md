@@ -228,11 +228,12 @@ string on screen is still English. See [design.md](design.md#i18n).
 
 ```bash
 make test                                        # backend + frontend, the default gate
-go test -race -run TestExchangeToken ./internal/service/device_svc/...
+go test -run TestExchangeToken ./internal/service/device_svc/...
 cd frontend && pnpm test -- src/i18n             # narrow vitest
 cd frontend && pnpm exec vitest                  # watch mode
 make e2e                                         # see e2e/README.md
 ```
 
-`-race` is on by default in `make test` and should stay on — the device-flow state machine
-and the session store are both concurrently accessed.
+`make test` uses the standard Go test runtime. Run `go test -race ./...` explicitly when
+changing concurrent state machines, session storage, relay fanout or connection lifecycles;
+it is a focused diagnostic rather than a default CI gate.

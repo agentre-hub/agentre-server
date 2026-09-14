@@ -40,7 +40,7 @@ curl http://localhost:8443/v1/healthz
 
 ## Dev 目标机
 
-Gitea 的 `dev` 流水线在 runner 执行 `make build`，通过 SSH 将二进制和编排文件放到 `/srv/agentre-dev/`，目标机用 `Dockerfile.dev` 构建固定镜像 `agentre-server:dev`。该链路不经过 registry，也不创建 MySQL/Redis/etcd。
+Gitea 的 `dev` 流水线在 runner 执行 `make build`，通过 runner 自带的 OpenSSH 将二进制和编排文件放到 `/srv/agentre-dev/`，目标机用 `Dockerfile.dev` 构建固定镜像 `agentre-server:dev`。该链路不经过 registry，也不创建 MySQL/Redis/etcd；dev 流水线不校验目标机 host key，严格环境应改为由管理员预置 `known_hosts`，不要在流水线里动态扫描后立即信任。
 
 一次性准备：创建 `/srv/agentre-dev/config.yaml`（`env: dev`、`source: etcd`），确保容器用户 `65532` 可读；将 etcd 的 `/config/dev/agentre-server/logger` 中 `logFile.enable` 设为 `false`；配置 Gitea secret `DEV_SSH_KEY`。
 

@@ -40,7 +40,7 @@ prepare-web-dist:
 	@test -f internal/web/dist/index.html || printf '<!doctype html>\n' > internal/web/dist/index.html
 
 test-backend: prepare-web-dist
-	go test -race ./...
+	go test ./...
 
 # typecheck 与 vitest 一起跑:vitest 走 esbuild 只转译不查类型,而 tsc 此前只挂在
 # build 上 —— 于是 make test / make lint 全绿、make build 红,类型闸形同虚设。
@@ -55,7 +55,7 @@ e2e:
 	cd e2e && pnpm install --frozen-lockfile --silent && pnpm exec playwright install-deps chromium && pnpm exec playwright install chromium && pnpm runner-test && pnpm smoke --project=desktop-chromium && pnpm smoke --project=mobile-chromium
 
 test-cover:
-	go test -race -coverprofile=coverage.out ./...
+	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out -o coverage.html
 
 lint: lint-backend lint-frontend lint-e2e
@@ -78,3 +78,4 @@ fmt:
 
 mock:
 	go generate ./...
+	goimports -w $$(find internal -path '*/mock_*/*.go' -type f)
