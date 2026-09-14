@@ -31,6 +31,7 @@ type channelHarness struct {
 	devices     *mock_device_repo.MockDeviceRepo
 	saves       *mock_agent_session_repo.MockSaveRepo
 	accountChan accountchan_svc.AccountChanSvc
+	registered  *daemonRegistrations
 }
 
 func newChannelHarness(t *testing.T) *channelHarness {
@@ -51,12 +52,14 @@ func newSignalHarnessWith(t *testing.T, accountChan accountchan_svc.AccountChanS
 	saves := mock_agent_session_repo.NewMockSaveRepo(controller)
 	config := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Minute}
 	redisClient := newRelayRedisClient(t, mini)
-	svc := relay_svc.New(config, devices, saves, redisClient, relay_svc.NewRedisForwarder(config, redisClient))
+	svc := newDaemonRegistrations(
+		relay_svc.New(config, devices, saves, redisClient, relay_svc.NewRedisForwarder(config, redisClient)))
 	return &channelHarness{
 		server:      newRelayServerWithAccountChan(t, svc, accountChan),
 		devices:     devices,
 		saves:       saves,
 		accountChan: accountChan,
+		registered:  svc,
 	}
 }
 
@@ -71,6 +74,8 @@ func (h *channelHarness) machine(t *testing.T, id int64, fingerprint, kind strin
 		http.Header{"Authorization": {"Bearer " + token}})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
+	// 握上手不等于可寻址：要等服务端那一侧登记完，见 daemonRegistrations。
+	h.registered.await(t, fingerprint)
 	return conn
 }
 
@@ -153,7 +158,7 @@ func (l *clientLink) send(t *testing.T, channelID string, frame []byte) {
 
 func (l *clientLink) next(t *testing.T, channelID, failure string) []byte {
 	t.Helper()
-	return receiveWithin(t, l.channel(channelID), 2*time.Second, failure)
+	return receiveWithin(t, l.channel(channelID), relayWait, failure)
 }
 
 func (l *clientLink) requireQuiet(t *testing.T, channelID, failure string) {
@@ -178,7 +183,7 @@ func requireChannelError(t *testing.T, frame []byte) int32 {
 // readDaemonEnvelope 读一帧 daemon 侧的信封。
 func readDaemonEnvelope(t *testing.T, conn *websocket.Conn, failure string) (string, []byte) {
 	t.Helper()
-	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(relayWait)))
 	messageType, payload, err := conn.ReadMessage()
 	require.NoError(t, err, failure)
 	require.Equal(t, websocket.BinaryMessage, messageType)

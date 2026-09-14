@@ -36,16 +36,38 @@ describe("侧栏收起偏好", () => {
     // 先真的存过一次「收着」：不这么做的话，「返回 false」既可能是接住了异常，
     // 也可能只是因为存储本来就是空的——用例会在没有 try/catch 时照样绿。
     writeNavCollapsed(true);
-    // 直接换掉这个实例上的方法：测试环境里的 localStorage 是 setup.ts 装的
-    // 内存实现，不继承 Storage.prototype，往原型上打桩打不着。
-    vi.spyOn(globalThis.localStorage, "getItem").mockImplementation(() => {
-      throw new Error("private mode");
-    });
-    vi.spyOn(globalThis.localStorage, "setItem").mockImplementation(() => {
-      throw new Error("private mode");
+    // 整个换掉 globalThis 上的 localStorage，而不是往实例上打桩。实例是什么随
+    // 环境变：node 26 下是 setup.ts 装的内存实现，打得着；node 22 下 jsdom 自己
+    // 那个实现还在，它是带具名属性代理的 Storage，往实例上 defineProperty 会被
+    // 代理当成「存一个 key」吞掉，桩装不上、getItem 仍然解析到 Storage.prototype
+    // ——这条用例因此只在新 node 上绿，CI(node 22)红。
+    const original = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "localStorage",
+    );
+    const unusable = {
+      getItem() {
+        throw new Error("private mode");
+      },
+      setItem() {
+        throw new Error("private mode");
+      },
+    } as unknown as Storage;
+    Object.defineProperty(globalThis, "localStorage", {
+      value: unusable,
+      configurable: true,
+      writable: true,
     });
 
-    expect(readNavCollapsed()).toBe(false);
-    expect(() => writeNavCollapsed(false)).not.toThrow();
+    try {
+      expect(readNavCollapsed()).toBe(false);
+      expect(() => writeNavCollapsed(false)).not.toThrow();
+    } finally {
+      if (original) {
+        Object.defineProperty(globalThis, "localStorage", original);
+      } else {
+        delete (globalThis as { localStorage?: Storage }).localStorage;
+      }
+    }
   });
 });

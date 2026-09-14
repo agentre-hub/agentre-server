@@ -136,7 +136,7 @@ func TestRelayClient_GivenTheSubscriptionIsSlow_ThenTheUpgradeWaitsForIt(t *test
 	case <-time.After(300 * time.Millisecond):
 	}
 	close(gate)
-	require.NoError(t, receiveWithin(t, dialed, 2*time.Second, "订阅返回之后 upgrade 没有完成"))
+	require.NoError(t, receiveWithin(t, dialed, relayWait, "订阅返回之后 upgrade 没有完成"))
 }
 
 // 信号源没了（Redis 订阅彻底断掉）：关掉的是那一条保留通道，不是整条连接——

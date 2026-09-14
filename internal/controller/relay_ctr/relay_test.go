@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,9 +133,9 @@ func TestRelayClientAcceptsSessionTicketFromSubprotocol(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
 		relayEnvelope("c1", []byte("machine:fp-daemon"))))
-	require.Equal(t, int64(7), receiveWithin(t, stub.clientAccounts, time.Second,
+	require.Equal(t, int64(7), receiveWithin(t, stub.clientAccounts, relayWait,
 		"relay ticket user id did not reach the channel target resolver"))
-	require.Equal(t, "machine:fp-daemon", receiveWithin(t, stub.clientTargets, time.Second,
+	require.Equal(t, "machine:fp-daemon", receiveWithin(t, stub.clientTargets, relayWait,
 		"relay channel target did not reach the resolver"))
 }
 
@@ -244,8 +245,8 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) 
 	})
 	go drainRelayConnection(conn)
 	require.NoError(t, conn.WriteControl(websocket.PingMessage, []byte("route"), time.Now().Add(time.Second)))
-	receiveWithin(t, stub.renewed, time.Second, "daemon ping did not renew its route")
-	receiveWithin(t, daemonPongs, time.Second, "daemon ping did not receive a pong")
+	receiveWithin(t, stub.renewed, relayWait, "daemon ping did not renew its route")
+	receiveWithin(t, daemonPongs, relayWait, "daemon ping did not receive a pong")
 
 	// ForwardDaemon 只拆 relay 的 channel 路由信封；内层 Protobuf RpcFrame 是 opaque
 	// bytes，服务端不解析，也不要求它是 UTF-8/JSON。
@@ -279,7 +280,7 @@ func TestRelayEndpointsRequireDeviceJWTAndDaemonRenewsOnHeartbeat(t *testing.T) 
 	})
 	go drainRelayConnection(clientConn)
 	require.NoError(t, clientConn.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)))
-	receiveWithin(t, clientPongs, time.Second, "client ping did not receive a pong")
+	receiveWithin(t, clientPongs, relayWait, "client ping did not receive a pong")
 	select {
 	case <-stub.renewed:
 		t.Fatal("client ping renewed a daemon route")
@@ -310,9 +311,10 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 
 	config := relay_svc.Config{InstanceID: "server-a", OnlineTTL: time.Second}
 	redisClient := newRelayRedisClient(t, mini)
-	server := newRelayServer(t, relay_svc.New(
+	svc := newDaemonRegistrations(relay_svc.New(
 		config, devices, nil, redisClient, relay_svc.NewRedisForwarder(config, redisClient),
 	))
+	server := newRelayServer(t, svc)
 	targetToken := deviceToken(desktop.UserID, desktop.ID, device_entity.KindDesktop)
 	clientToken := deviceToken(desktop.UserID, 4, device_entity.KindAgentred)
 
@@ -322,6 +324,8 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, targetConn.Close()) })
+	// 握上手不等于可寻址，见 daemonRegistrations。
+	svc.await(t, desktop.Fingerprint)
 
 	clientConn, response, err := protobufRelayDialer.Dial(
 		wsURL(server.URL, "/v1/relay/client"),
@@ -339,7 +343,7 @@ func TestDesktopRelayTargetCanBeAddressedThroughEndpoints(t *testing.T) {
 	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage,
 		relayEnvelope("c1", []byte("machine:"+desktop.Fingerprint))))
 	require.NoError(t, clientConn.WriteMessage(websocket.BinaryMessage, relayEnvelope("c1", request)))
-	require.NoError(t, targetConn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	require.NoError(t, targetConn.SetReadDeadline(time.Now().Add(relayWait)))
 	messageType, frame, err := targetConn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, websocket.BinaryMessage, messageType)
@@ -384,7 +388,7 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = conn.Close() })
 
-			require.NoError(t, conn.SetWriteDeadline(time.Now().Add(2*time.Second)))
+			require.NoError(t, conn.SetWriteDeadline(time.Now().Add(relayWait)))
 			if tc.path == "/v1/relay/client" {
 				// 客户端那条链路上通道要先声明目标，之后的帧才是载荷。
 				require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
@@ -426,11 +430,11 @@ func TestRelayDaemonContinuesAfterClientDeliveryForwardingError(t *testing.T) {
 	require.NoError(t, conn.WriteMessage(
 		websocket.BinaryMessage, relayEnvelope("stale-channel", []byte("late-response")),
 	))
-	receiveWithin(t, stub.daemonFrames, time.Second, "failed daemon response did not reach forwarding")
+	receiveWithin(t, stub.daemonFrames, relayWait, "failed daemon response did not reach forwarding")
 	require.NoError(t, conn.WriteMessage(
 		websocket.BinaryMessage, relayEnvelope("live-channel", []byte("later-response")),
 	))
-	receiveWithin(t, stub.daemonFrames, time.Second,
+	receiveWithin(t, stub.daemonFrames, relayWait,
 		"client delivery failure closed the shared daemon websocket before a later response")
 }
 
@@ -447,7 +451,7 @@ func TestRelayClientForwardingErrorFailsOnlyThatChannel(t *testing.T) {
 
 	link.open(t, "c-broken", "machine:fp-daemon")
 	link.send(t, "c-broken", []byte("request"))
-	receiveWithin(t, stub.clientFrames, time.Second, "failed client request did not reach forwarding")
+	receiveWithin(t, stub.clientFrames, relayWait, "failed client request did not reach forwarding")
 	require.Equal(t, relay_svc.ChannelCodeForwardFailed,
 		requireChannelError(t, link.next(t, "c-broken", "转发失败没有给出通道级错误")))
 	require.Empty(t, link.next(t, "c-broken", "失败的通道必须随即关闭"))
@@ -455,7 +459,7 @@ func TestRelayClientForwardingErrorFailsOnlyThatChannel(t *testing.T) {
 	// 连接还在：还能开新通道、还能转发。
 	link.open(t, "c-live", "machine:fp-daemon")
 	link.send(t, "c-live", []byte("request"))
-	receiveWithin(t, stub.clientFrames, time.Second, "一条通道转发失败连坐了整条连接")
+	receiveWithin(t, stub.clientFrames, relayWait, "一条通道转发失败连坐了整条连接")
 }
 
 // PrepareDaemon 的准入判据（本账号名下、活跃且可寻址的设备）被拒时必须走 403，
@@ -549,9 +553,10 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	))
 	configB := relay_svc.Config{InstanceID: "server-b", OnlineTTL: time.Second}
 	redisB := newRelayRedisClient(t, mini)
-	serverB := newRelayServer(t, relay_svc.New(
+	svcB := newDaemonRegistrations(relay_svc.New(
 		configB, daemonDevices, nil, redisB, relay_svc.NewRedisForwarder(configB, redisB),
 	))
+	serverB := newRelayServer(t, svcB)
 
 	daemonToken := deviceToken(7, 9, device_entity.KindAgentred)
 	clientToken := deviceToken(7, 4, device_entity.KindDesktop)
@@ -562,6 +567,8 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, daemonConn.Close()) })
+	// 跨实例更要等：客户端在 server-a 上解析这台机器，靠的是 server-b 登记的那份在线态。
+	svcB.await(t, daemon.Fingerprint)
 
 	clientConn, response, err := protobufRelayDialer.Dial(
 		wsURL(serverA.URL, "/v1/relay/client"),
@@ -587,7 +594,7 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 
 	requestFrame := []byte{0x08, 0x01, 0x12, 0x03, 0x00, 0xff, 0x80}
 	link.send(t, "c1", requestFrame)
-	daemonConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	daemonConn.SetReadDeadline(time.Now().Add(relayWait))
 	messageType, frame, err := daemonConn.ReadMessage()
 	require.NoError(t, err)
 	require.Equal(t, websocket.BinaryMessage, messageType)
@@ -869,6 +876,77 @@ func newAuthenticatedRelayServer(
 	return server, http.Header{"Authorization": {"Bearer " + token}}
 }
 
+// daemonRegistrations 把「服务端登记完这台 daemon」变成一件等得到的事。
+//
+// 为什么需要它：/v1/relay/daemon 的处理顺序是 upgrade → AttachDaemon →
+// RegisterDaemon，而 websocket.Dial 在 upgrade 一完成就返回。于是拨号方手里已经
+// 有连接了，服务端却可能还没把这台机器登记成在线——实测 dial 返回的那一刻有
+// 10% 还没登记。这段窗口里客户端开到它的通道会被判 target offline，那一帧**永远**
+// 不会到达 daemon 这一侧，所以「把读超时调长」治不了：等多久都没有。
+//
+// 包住真的 relay_svc 而不是去轮询 Redis：等的就是生产路径上那一步本身，登记成功
+// 返回即放行，不引入新的时间假设。
+type daemonRegistrations struct {
+	relay_svc.RelaySvc
+
+	mu    sync.Mutex
+	waits map[string]chan struct{}
+}
+
+func newDaemonRegistrations(svc relay_svc.RelaySvc) *daemonRegistrations {
+	return &daemonRegistrations{RelaySvc: svc, waits: map[string]chan struct{}{}}
+}
+
+func (d *daemonRegistrations) RegisterDaemon(ctx context.Context, route relay_svc.Route) error {
+	if err := d.RelaySvc.RegisterDaemon(ctx, route); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	select {
+	case <-d.waiterLocked(route.Fingerprint):
+		// 同一个指纹重连过，已经放行过一次。
+	default:
+		close(d.waiterLocked(route.Fingerprint))
+	}
+	return nil
+}
+
+func (d *daemonRegistrations) waiterLocked(fingerprint string) chan struct{} {
+	wait, ok := d.waits[fingerprint]
+	if !ok {
+		wait = make(chan struct{})
+		d.waits[fingerprint] = wait
+	}
+	return wait
+}
+
+// await 挡到服务端登记完这台机器为止。
+func (d *daemonRegistrations) await(t *testing.T, fingerprint string) {
+	t.Helper()
+	d.mu.Lock()
+	wait := d.waiterLocked(fingerprint)
+	d.mu.Unlock()
+	select {
+	case <-wait:
+	case <-time.After(relayWait):
+		t.Fatalf("服务端始终没有登记 %s：这条连接还不可寻址", fingerprint)
+	}
+}
+
+// relayWait 是这个包里「等一件本该立刻到达的事」的统一死线：一帧转发、一条登记、
+// 一行日志。它只是上限，不是任何用例的正常耗时。
+//
+// 取 10s 而不是原先散落各处的 2s：这些都是 wall-clock，CI 的双核 runner 上
+// goroutine 被挤开就会超时。但要说清楚，间歇红的**根因不是它**——真正的原因是
+// daemon 握手完成与服务端登记完之间那段窗口，现在由 daemonRegistrations 挡住
+// (见 channel_test.go)。放宽只是给慢机器留余量，不指望它治竞态：一条等不到的
+// 帧，等 2 秒和等 10 秒一样红。
+//
+// 代价：真卡住的用例要 10 秒才报出来。刻意不动的是那些「断言某件事不该发生」的
+// 短窗口(200ms)：等久一点只会让它更慢，不会让它更准。
+const relayWait = 10 * time.Second
+
 func receiveWithin[T any](t *testing.T, values <-chan T, timeout time.Duration, failure string) T {
 	t.Helper()
 	select {
@@ -993,7 +1071,7 @@ func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	go drainRelayConnection(conn)
-	receiveWithin(t, stub.registered, time.Second, "daemon was never registered")
+	receiveWithin(t, stub.registered, relayWait, "daemon was never registered")
 
 	// 连续发帧,不发 ping —— 唯一可能触发续期的就是读循环自己。
 	for range frames {
@@ -1001,7 +1079,7 @@ func TestRelayDaemonThrottlesOnlineRenewalAcrossFrames(t *testing.T) {
 			relayEnvelope("channel-id", []byte{0x08, 0x01})))
 	}
 	for i := range frames {
-		receiveWithin(t, stub.daemonFrames, time.Second,
+		receiveWithin(t, stub.daemonFrames, relayWait,
 			"daemon frame "+strconv.Itoa(i)+" did not reach the forwarding seam")
 	}
 
@@ -1037,7 +1115,7 @@ func TestRelayDrainTellsPeersAndReleasesHandlers(t *testing.T) {
 		wsURL(server.URL, "/v1/relay/daemon"), http.Header{"Authorization": {"Bearer " + token}})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	receiveWithin(t, stub.registered, time.Second, "daemon did not register")
+	receiveWithin(t, stub.registered, relayWait, "daemon did not register")
 
 	require.Positive(t, deps.DrainRelays(), "排空必须数到这条 daemon 连接")
 
@@ -1045,6 +1123,6 @@ func TestRelayDrainTellsPeersAndReleasesHandlers(t *testing.T) {
 	_, _, err = conn.ReadMessage()
 	require.True(t, websocket.IsCloseError(err, websocket.CloseGoingAway),
 		"daemon 必须收到 1001 而不是 1006: %v", err)
-	receiveWithin(t, stub.daemonDetached, time.Second,
+	receiveWithin(t, stub.daemonDetached, relayWait,
 		"排空之后 handler 没有返回:它的 detach 一直没跑,mux 的 Shutdown 会一直等它")
 }

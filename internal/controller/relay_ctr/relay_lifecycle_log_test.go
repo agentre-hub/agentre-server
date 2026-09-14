@@ -95,9 +95,9 @@ func TestRelayDaemonLogsConnectAndOrderlyDisconnect(t *testing.T) {
 	logs := testutils.Logs(t)
 	stub := daemonStub(t)
 	conn := dialDaemon(t, stub)
-	receiveWithin(t, stub.registered, time.Second, "daemon 没有登记在线")
+	receiveWithin(t, stub.registered, relayWait, "daemon 没有登记在线")
 
-	connected := awaitRelayLog(t, logs, "relay daemon connected", byFingerprint(t.Name()), 2*time.Second)
+	connected := awaitRelayLog(t, logs, "relay daemon connected", byFingerprint(t.Name()), relayWait)
 	fields := connected.ContextMap()
 	require.Equal(t, zapcore.InfoLevel, connected.Level)
 	require.Equal(t, int64(7), fields["accountId"])
@@ -108,7 +108,7 @@ func TestRelayDaemonLogsConnectAndOrderlyDisconnect(t *testing.T) {
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)))
 	require.NoError(t, conn.Close())
 
-	disconnected := awaitRelayLog(t, logs, "relay daemon disconnected", byFingerprint(t.Name()), 2*time.Second)
+	disconnected := awaitRelayLog(t, logs, "relay daemon disconnected", byFingerprint(t.Name()), relayWait)
 	require.Equal(t, zapcore.InfoLevel, disconnected.Level, "对端好好地关掉是 Info")
 	require.Empty(t, relayLogLines(logs, "relay daemon disconnected unexpectedly", byFingerprint(t.Name())))
 }
@@ -119,12 +119,12 @@ func TestRelayDaemonLogsAnAbruptDisconnectAsAWarning(t *testing.T) {
 	logs := testutils.Logs(t)
 	stub := daemonStub(t)
 	conn := dialDaemon(t, stub)
-	receiveWithin(t, stub.registered, time.Second, "daemon 没有登记在线")
+	receiveWithin(t, stub.registered, relayWait, "daemon 没有登记在线")
 
 	require.NoError(t, conn.UnderlyingConn().Close())
 
 	disconnected := awaitRelayLog(t, logs,
-		"relay daemon disconnected unexpectedly", byFingerprint(t.Name()), 2*time.Second)
+		"relay daemon disconnected unexpectedly", byFingerprint(t.Name()), relayWait)
 	require.Equal(t, zapcore.WarnLevel, disconnected.Level)
 	require.NotEmpty(t, disconnected.ContextMap()["error"], "断开原因必须留下来")
 	require.Empty(t, relayLogLines(logs, "relay daemon disconnected", byFingerprint(t.Name())))
@@ -142,7 +142,7 @@ func TestRelayDaemonRegistrationFailureIsLoggedAsAnError(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	failed := awaitRelayLog(t, logs,
-		"relay daemon registration failed", byFingerprint(t.Name()), 2*time.Second)
+		"relay daemon registration failed", byFingerprint(t.Name()), relayWait)
 	require.Equal(t, zapcore.ErrorLevel, failed.Level)
 	require.Contains(t, failed.ContextMap()["error"], "connection refused")
 	require.Empty(t, relayLogLines(logs, "relay daemon connected", byFingerprint(t.Name())),
@@ -159,7 +159,7 @@ func TestRelayDaemonAttachFailureIsLoggedAsAnError(t *testing.T) {
 	conn := dialDaemon(t, stub)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	failed := awaitRelayLog(t, logs, "relay daemon attach failed", byFingerprint(t.Name()), 2*time.Second)
+	failed := awaitRelayLog(t, logs, "relay daemon attach failed", byFingerprint(t.Name()), relayWait)
 	require.Equal(t, zapcore.ErrorLevel, failed.Level)
 	require.Contains(t, failed.ContextMap()["error"], "unreachable")
 }
@@ -180,7 +180,7 @@ func TestRelayWebsocketUpgradeFailureIsLoggedAsAWarning(t *testing.T) {
 	require.NoError(t, response.Body.Close())
 
 	failed := awaitRelayLog(t, logs,
-		"relay daemon websocket upgrade failed", byFingerprint(t.Name()), 2*time.Second)
+		"relay daemon websocket upgrade failed", byFingerprint(t.Name()), relayWait)
 	require.Equal(t, zapcore.WarnLevel, failed.Level)
 	require.Equal(t, int64(7), failed.ContextMap()["accountId"])
 	require.NotEmpty(t, failed.ContextMap()["error"])
@@ -196,14 +196,14 @@ func TestRelayClientLogsConnectAndDisconnect(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, response.Body.Close())
 
-	connected := awaitRelayLog(t, logs, "relay client connected", byAccount(account), 2*time.Second)
+	connected := awaitRelayLog(t, logs, "relay client connected", byAccount(account), relayWait)
 	require.Equal(t, zapcore.InfoLevel, connected.Level)
 
 	require.NoError(t, conn.WriteControl(websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""), time.Now().Add(time.Second)))
 	require.NoError(t, conn.Close())
 
-	disconnected := awaitRelayLog(t, logs, "relay client disconnected", byAccount(account), 2*time.Second)
+	disconnected := awaitRelayLog(t, logs, "relay client disconnected", byAccount(account), relayWait)
 	require.Equal(t, zapcore.InfoLevel, disconnected.Level)
 }
 
@@ -241,7 +241,7 @@ func TestRelayClientProtocolViolationClosesTheConnectionWithAReason(t *testing.T
 			require.NoError(t, tc.write(conn))
 
 			closed := awaitRelayLog(t, logs,
-				"relay client disconnected unexpectedly", byAccount(tc.account), 2*time.Second)
+				"relay client disconnected unexpectedly", byAccount(tc.account), relayWait)
 			require.Equal(t, zapcore.WarnLevel, closed.Level)
 			require.Contains(t, closed.ContextMap()["error"], tc.why,
 				"断开原因得说清是协议违例，别只留一个网络错误")
@@ -257,7 +257,7 @@ func TestRelaySignalSubscriptionFailureIsLoggedAsAWarning(t *testing.T) {
 	harness.machine(t, 9, "fp-alpha", device_entity.KindAgentred)
 
 	unavailable := awaitRelayLog(t, logs, "relay account signals unavailable",
-		func(fields map[string]any) bool { return fields["peer"] == "daemon" }, 2*time.Second)
+		func(fields map[string]any) bool { return fields["peer"] == "daemon" }, relayWait)
 	require.Equal(t, zapcore.WarnLevel, unavailable.Level)
 	require.Equal(t, int64(7), unavailable.ContextMap()["accountId"])
 	require.NotEmpty(t, unavailable.ContextMap()["error"])
