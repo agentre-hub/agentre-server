@@ -1,442 +1,81 @@
 # 部署
 
-```
-deploy/
-  Dockerfile              镜像：前端和后端都在里面构建，产物是单个静态二进制
-  docker-compose.yml      单机部署：server + MySQL + Redis
-  .env.example            单机部署的变量（镜像版本 / 端口 / 域名 / 数据库），抄成 .env
-  Dockerfile.dev          dev 专用：只把编好的二进制装进运行时镜像，不在镜像里构建
-  docker-compose.dev.yml  dev 环境：只有 server，MySQL/Redis/etcd 用外部现成的
-  config.docker.yaml      compose 用的配置
-  helm/                   Kubernetes 部署
-```
+`agentre-server` 将前端嵌入单个静态二进制，默认监听 `8443`，运行时不需要 Nginx。
 
-`config.docker.yaml` 同时是镜像里 bake 的默认配置（落在 `/app/configs/config.yaml`）：
-compose 仍把它挂到同一位置，好处是改配置不用重打镜像；helm 用自己的 configmap。
+| 文件 | 用途 |
+| --- | --- |
+| `docker-compose.yml`、`.env.example` | 单机 Compose（server、MySQL、Redis） |
+| `Dockerfile`、`config.docker.yaml` | 生产镜像及默认配置 |
+| `docker-compose.dev.yml`、`Dockerfile.dev` | dev 目标机（外部 MySQL/Redis/etcd） |
+| `helm/` | Kubernetes chart（外部 MySQL/Redis/etcd） |
 
-服务是一个二进制，前端 SPA 用 `go:embed` 打进去了，所以运行时不需要 nginx，
-也不需要挂静态文件目录。默认监听 8443。
-
-## Docker 单机部署
-
-一条命令起全套（server + MySQL + Redis），镜像拉 GHCR 上流水线推的那份，
-不用本地构建：
+## Compose 单机
 
 ```bash
+cp deploy/.env.example deploy/.env
 docker compose -f deploy/docker-compose.yml up -d
 curl http://localhost:8443/v1/healthz
 ```
 
-响应里的 `data` 同时满足
-`{"status":"ok","db_ping":true,"redis":true}` 就是好了，浏览器打开
-<http://localhost:8443> 能看到界面。什么都不改也能起，要换端口 / 域名 / 数据库 /
-镜像版本见[要改配置](#要改配置)。
+健康检查应返回 `data.status=ok`、`data.db_ping=true`、`data.redis=true`。数据位于仓库根的 `data/mysql`、`data/redis`，删除即清空。Compose 使用 MySQL `9.7.2`；升级前备份并确认官方升级路径。MySQL `max_allowed_packet` 不要低于 `8 MiB`。
 
-数据落在仓库根的 `data/mysql` 和 `data/redis`，删掉等于重置。
+配置文件放在 `deploy/`：`.env` 负责镜像、端口、公开 URL、数据库、Redis、OAuth 等变量；`config.docker.yaml` 负责其余配置并挂载到 `/app/configs/config.yaml`。变量模板见 [`.env.example`](.env.example)。常用变量：`SERVER_IMAGE`、`SERVER_PUBLIC_URL`、`DB_DSN`、`REDIS_ADDR`、`REDIS_PASSWORD`、`GH_CLIENT_ID`、`GH_CLIENT_SECRET`、`TRUSTED_PROXIES`。公开 URL 必须是浏览器实际访问地址；仅在前置反代时设置 `TRUSTED_PROXIES`。
 
-Compose 固定使用 MySQL 9.7.2。升级 MySQL 前先做逻辑备份，并按 MySQL 官方
-升级路径检查目标版本是否支持直接读取当前数据目录；不要让不兼容的大版本
-直接复用 `data/mysql`。
+GitHub OAuth 回调地址：`<SERVER_PUBLIC_URL>/v1/auth/oauth/github/callback`。
 
-**`max_allowed_packet` 不能低于 8 MiB。** 镜像的一帧可以很大：转录里的图片
-附件以 base64 内联在 JSON 里，桌面端把单张图卡在 5 MiB（超限降级成路径引用），
-编码后单帧上界约 6.7 MiB。低于这个数，超大帧会在插入时以
-`ER_NET_PACKET_TOO_LARGE` 失败，而那条对话的镜像会卡在原地反复重试——报错里既
-不会提到这一列，也不会提到是哪条对话。MySQL 8 以上默认 64 MiB 足够，用外部数据库
-时要确认它没有被调小。
+## 单容器
 
-### 要改配置
-
-- **`deploy/.env`** —— 随环境变的（镜像、端口、域名、数据库、OAuth）：
-  `cp deploy/.env.example deploy/.env`，每项都有缺省值。**别放仓库根** —— compose 的
-  项目目录是编排文件所在的目录，放错不会报错，只是所有变量静默用了缺省值。
-- **`deploy/config.docker.yaml`** —— 其余配置，bind mount 进容器。
-
-```bash
-docker compose -f deploy/docker-compose.yml up -d            # 改了 .env
-docker compose -f deploy/docker-compose.yml restart server   # 只改了 config.docker.yaml
-```
-
-`.env` 各项见 `.env.example`。几处不那么直白的：
-
-| 想做什么 | 改哪里 |
-| --- | --- |
-| 连外部数据库 | `.env` 的 `DB_DSN`（整条覆盖，`DB_USER` 那几项对 server 不再起作用） |
-| 换域名 | 只改 `.env` 的 `SERVER_PUBLIC_URL`，通行密钥的 `rp_id` / `origins` 跟着推导 |
-| 连外部 Redis | `.env` 的 `REDIS_ADDR` |
-| 给内置 Redis 设口令 | `.env` 的 `REDIS_PASSWORD`（同时喂给 redis 服务的 `--requirepass` 和 server） |
-| 上了 HTTPS | 把 `.env` 的 `SERVER_PUBLIC_URL` 改成 `https://...`；Cookie 的 `Secure` 会按 URL scheme 自动启用 |
-| 日志详细一点 | `config.docker.yaml` 的 `logger.level` 改成 `debug` |
-
-GitHub 登录要在 <https://github.com/settings/developers> 建一个 OAuth App，回调地址填
-`<你的域名>/v1/auth/oauth/github/callback`，id 和 secret 写进 `deploy/.env`。
-
-### 不用 compose，只跑一个容器
-
-已经有 MySQL 和 Redis 的话，`docker run` 就够——镜像里那份配置已经是照容器写的，
-连接信息全走环境变量：
+已有数据库和 Redis 时可直接运行（数据库需预先创建，服务会执行迁移）：
 
 ```bash
 docker run -d --name agentre-server -p 8443:8443 \
-  -e AGENTRE_SERVER_DB_DSN="user:pass@tcp(192.168.1.10:3306)/agentre?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true&timeout=5s&readTimeout=60s&writeTimeout=60s" \
-  -e AGENTRE_SERVER_REDIS_ADDR="192.168.1.10:6379" \
-  -e AGENTRE_SERVER_PUBLIC_URL="http://192.168.1.10:8443" \
+  -e AGENTRE_SERVER_DB_DSN="user:pass@tcp(db:3306)/agentre?charset=utf8mb4&parseTime=True&loc=Local&interpolateParams=true&timeout=5s&readTimeout=60s&writeTimeout=60s" \
+  -e AGENTRE_SERVER_REDIS_ADDR='redis:6379' \
+  -e AGENTRE_SERVER_PUBLIC_URL='http://host:8443' \
   ghcr.io/agentre-hub/agentre-server:latest
-
 curl http://localhost:8443/v1/healthz
 ```
 
-库要先建好（服务自己跑迁移，但不会替你 `CREATE DATABASE`）。一个容易踩的：
+镜像默认读取 `/app/configs/config.yaml`；可用环境变量覆盖 `db.dsn`、`redis.*`、`server.public_url`、`server.oauth.github.*`、`server.trusted_proxies`。整份替换配置可挂载到该路径，或追加 `--config /path/to/config.yaml`。本地构建：`make docker`。
 
-- **`AGENTRE_SERVER_PUBLIC_URL` 要填浏览器真正访问到的地址**：Cookie 上的 `Secure`
-  与通行密钥的 `rp_id` / `origins` 都由它推出来，填错的症状是登录不生效。
-- **前面有反代就要填 `AGENTRE_SERVER_TRUSTED_PROXIES`**：不填时来源 IP 取实际连上来
-  的那一端，于是所有按 IP 的限流会把反代后面的全部用户归到反代那一个 IP 上（症状是
-  正常用户互相挤掉配额）。这份 compose 的缺省拓扑是 8443 直接映到宿主、前面没有反代，
-  那时不填才对——填上反而等于让请求方自己用 `X-Forwarded-For` 声明自己的 IP。
+## Dev 目标机
 
-能覆盖的就下面这些，其余仍要靠配置文件（`-v /你的/config.yaml:/app/configs/config.yaml:ro`）：
+Gitea 的 `dev` 流水线在 runner 执行 `make build`，通过 SSH 将二进制和编排文件放到 `/srv/agentre-dev/`，目标机用 `Dockerfile.dev` 构建固定镜像 `agentre-server:dev`。该链路不经过 registry，也不创建 MySQL/Redis/etcd。
 
-| 环境变量 | 覆盖的配置项 |
-| --- | --- |
-| `AGENTRE_SERVER_DB_DSN` | `db.dsn` |
-| `AGENTRE_SERVER_REDIS_ADDR` / `AGENTRE_SERVER_REDIS_PASSWORD` | `redis.addr` / `redis.password` |
-| `AGENTRE_SERVER_PUBLIC_URL` | `server.public_url` |
-| `AGENTRE_SERVER_OAUTH_GITHUB_CLIENT_ID` / `_SECRET` | `server.oauth.github.*` |
-| `AGENTRE_SERVER_TRUSTED_PROXIES` | `server.trusted_proxies`（逗号分隔，覆盖整份名单） |
-
-> 覆盖只在 `source: file` 下生效：配置源是 etcd 时（k8s 那条链路）cago 会换掉整个
-> 配置源，这一层就不在链路上了。
-
-### 只要个镜像
-
-GHCR 上有现成的，两条流水线推的，`linux/amd64` 与 `linux/arm64` 都有，
-`docker pull` 自己选架构：
-
-```bash
-docker pull ghcr.io/agentre-hub/agentre-server:latest    # 最近一个正式版
-docker pull ghcr.io/agentre-hub/agentre-server:nightly   # 每天从 nightly 分支构建
-```
-
-| tag | 来自 | 是什么 |
-| --- | --- | --- |
-| `latest` | `release.yml`（推 `v*` tag） | 最新正式版；beta / rc 不动它 |
-| `v1.2.0` | 同上 | 与 git tag 同名，要钉版本用这个 |
-| `nightly` | `nightly.yml`（每天 UTC 18:00） | 最新一次 nightly 构建 |
-| `nightly-20260904` | 同上 | 当天那一版，用于回退 |
-| `sha-abc1234` | 两条都打 | 精确到 commit |
-
-自己打：
-
-```bash
-make docker          # 打成 agentre/server:0.1.0，带上当前 commit 号
-```
-
-镜像里的地址都能换，内网环境下可以指到自己的镜像源：
-
-```bash
-docker build -f deploy/Dockerfile -t agentre-server:local \
-  --build-arg GO_IMAGE=my-mirror/golang:1.26-alpine \
-  --build-arg GOPROXY=https://goproxy.cn,direct \
-  --build-arg NPM_REGISTRY=https://registry.npmmirror.com .
-```
-
-可以换的有 `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE`、`GOPROXY`、`NPM_REGISTRY`、
-`VERSION`、`COMMIT`，不传就用上游默认值。
-
-容器默认读取 `/app/configs/config.yaml`，镜像里那份来自
-`deploy/config.docker.yaml`（连接信息走环境变量，见
-[不用 compose，只跑一个容器](#不用-compose只跑一个容器)）。想整份换掉就盖住它：
-
-```bash
-docker run --rm -p 8443:8443 \
-  -v "$PWD/my-config.yaml:/app/configs/config.yaml:ro" \
-  agentre-server:local
-```
-
-服务也接受 `--config <path>`。显式路径无效时直接失败且不回退；不传时保持上述
-默认路径。E2E 专库配置和 CI 临时服务不属于部署配置，见
-[`../e2e/README.md`](../e2e/README.md)。
-
-## dev 环境
-
-dev 跑在一台内网单机上，一个容器，编排是 `docker-compose.dev.yml`。目标机是哪一台由
-Gitea secret `DEV_SSH_HOST` 决定，仓库里不写死。
-
-**dev 的镜像不在 CI 里构建，也不过 registry。** 流水线在 runner 上 `make build` 出
-静态二进制，`scp` 到 `/srv/agentre-dev/bin/server`，再在目标机上用 `Dockerfile.dev`
-做一次只有一层 `COPY` 的 build（实测 3.6 秒），打成固定 tag `agentre-server:dev`。
-runner 负责 pnpm install、前端构建和 Go 编译，能够复用 Go 与 pnpm 缓存，也省掉了
-镜像在网络中传输的构建层。dev 的流水线同样不跑 lint 和 test——而且推到 dev 之后没有任何
-别的门禁接着：`ci.yml` 在 GitHub 上，只在 push `main` 和 pull_request 时触发，`dev`
-不推 GitHub。这些改动第一次被 `ci.yml` 看到，是它合入 `main` 的那个 PR。在那之前只有
-本地 `make lint` / `make test`。
-
-代价是 dev 跑的东西没有 registry 里可追溯的 digest，只有二进制里 ldflags 钉的
-`dev.<短 commit>`（启动首行日志能看到）和目标机上的本地镜像 ID。要 digest 就走
-`deploy.yaml` 那条链路（main / release/* / test/*）。
-
-推送 `dev` 时流水线会自己建 `bin/`、覆盖编排与 `Dockerfile.dev` 并重建容器；每次部署
-复用固定的 `agentre-server:dev` tag，并删除上一个同名镜像。
-
-和上面的「Docker 单机部署」不是一回事，别混用：那份会额外拉起 MySQL 和 Redis 并把
-数据落在仓库根的 `data/`；dev 的 MySQL、Redis、etcd 都是外部既有服务，套用那份等于
-把现有的 `agentre_server_dev` 数据旁路掉。
-
-dev 的配置和 k8s 一样放在 etcd 里，`/config/dev/agentre-server/` 下那几个键。改配置
-改 etcd，不用重新部署。
-
-### 部署目录
-
-部署目录在机器上，不在仓库里——引导配置含内网端点，而且 `.gitignore` 本来就把
-`configs/config.yaml` 排除在外：引导配置属于机器，不属于代码。
-
-```text
-/srv/agentre-dev/
-  docker-compose.dev.yml   流水线每次部署覆盖
-  Dockerfile.dev           流水线每次部署覆盖
-  bin/server               流水线每次部署覆盖，runner 上编出来的静态二进制，
-                           同时是 docker build 的整个上下文
-  config.yaml              机器本地引导配置（env: dev, source: etcd）
-```
-
-构建上下文只给 `bin/`，不是整个部署目录——`config.yaml`
-一个字节都不该进构建上下文。
-
-手动起停：
+一次性准备：创建 `/srv/agentre-dev/config.yaml`（`env: dev`、`source: etcd`），确保容器用户 `65532` 可读；将 etcd 的 `/config/dev/agentre-server/logger` 中 `logFile.enable` 设为 `false`；配置 Gitea secret `DEV_SSH_KEY`。
 
 ```bash
 cd /srv/agentre-dev
 docker build -f Dockerfile.dev -t agentre-server:dev bin
 docker compose -f docker-compose.dev.yml up -d --force-recreate
 docker compose -f docker-compose.dev.yml logs -f server
+curl http://<目标机>:8443/v1/healthz
 ```
 
-换了 `bin/server` 就要连 `docker build` 一起跑，否则镜像还是上一版。tag 固定不带
-commit，build 完镜像 ID 变了 compose 本来就会重建，`--force-recreate` 只是保险。
+替换 `bin/server` 后必须重新构建。业务配置在 etcd，修改后无需重新部署。
 
-这里不需要 registry 凭据：二进制和镜像都不经过 registry，只有基础镜像
-`gcr.io/distroless/static-debian12` 需要目标机能拉到。
-
-### 新搭一台 dev 目标机
-
-流水线只负责「编二进制 + 覆盖编排 + 重建容器」。下面这些是每台目标机只做一次的准备，
-没放进流水线。按顺序做：
-
-1. **建部署目录，放引导配置。** `config.yaml` 是 `env: dev, source: etcd` 的引导配置：
-
-   ```bash
-   mkdir -p /srv/agentre-dev
-   # 引导配置放到 /srv/agentre-dev/config.yaml
-   # 镜像里跑的是 uid 65532(Dockerfile 的 USER 65532:65532),不是 root。文件属 root
-   # 的话容器读不到,启动就挂。
-   chown 65532:65532 /srv/agentre-dev/config.yaml
-   ```
-
-   验一下容器那个 uid 真的读得到：
-
-   ```bash
-   setpriv --reuid=65532 --regid=65532 --clear-groups cat /srv/agentre-dev/config.yaml >/dev/null; echo $?
-   ```
-
-2. **etcd 里 dev 的 `logFile.enable` 必须是 `false`。** `/config/dev/agentre-server/logger`
-   开着文件日志会写 `./runtime/logs/cago.log`，而容器的 WORKDIR 是 `/app` 且属 root，
-   uid 65532 建不出 `runtime/logs`。这和下面 k8s 那节写的是同一条约束。日志从
-   `docker compose logs` 看，`disableConsole` 保持 `false` 就行。
-
-3. **把 runner 的 SSH 公钥加进目标机的 `/root/.ssh/authorized_keys`。**
-   对应的私钥就是下面要配的 `DEV_SSH_KEY`。没有现成密钥就在目标机上现生一对，
-   私钥不必落到第三处：
-
-   ```bash
-   ssh-keygen -t ed25519 -N '' -C 'gitea-dev-deploy' -f /root/.ssh/gitea_dev_deploy
-   cat /root/.ssh/gitea_dev_deploy.pub >> /root/.ssh/authorized_keys
-   cat /root/.ssh/gitea_dev_deploy      # 这一份贴进 Gitea 的 DEV_SSH_KEY
-   ```
-
-4. **在 Gitea 配 secret**，见下面「自动发布」的表，dev 这条链路至少要有 `DEV_SSH_KEY`。
-
-5. **推 `dev` 分支**，这一推就会跑第一次部署：
-
-   ```bash
-   git push gitea dev
-   ```
-
-跑完确认一下：
-
-```bash
-curl -s http://<目标机>:8443/v1/healthz
-docker compose -f /srv/agentre-dev/docker-compose.dev.yml ps
-```
-
-`data` 里 `status`、`db_ping`、`redis` 三项都为真才算成功。**只看 `status` 没用**——
-它在代码里是写死的 `"ok"`，数据库挂了它照样是 `ok`。
-
-## Kubernetes 部署
-
-`helm/` 下是 chart，只部署服务本身——MySQL、Redis、etcd 都用集群里现成的。
+## Kubernetes / Helm
 
 ```bash
 helm upgrade --install agentre-server ./deploy/helm \
-  --namespace app --create-namespace \
-  --set-string image.repository=your-registry/agentre-server \
-  --set-string image.tag=prod.abc1234 \
-  --set-string ingress.host=app.example.com \
-  --set-string etcdConfig.password=xxx
+  --set image.repository=your-registry/agentre-server --set image.tag=latest \
+  --set appConfig.env=prod --set-string etcdConfig.endpoints[0]=etcd.example:2379 \
+  --set-string etcdConfig.password='***'
 ```
 
-常用的 values：
+Chart 只部署 server。除 ConfigMap 中的 etcd 引导信息外，其余配置必须预先写入 `/config/<env>/agentre-server/`；缺键不会回退默认值。用 `helm status`、`kubectl get pods` 和 `/v1/healthz` 验证。模板见 [`helm/values.yaml`](helm/values.yaml)。
 
-| key | 作用 |
-| --- | --- |
-| `image.repository` / `image.tag` | 镜像 |
-| `ingress.host` | 对外域名 |
-| `ingress.tlsSecretName` | 证书 Secret 的名字，置空则不开 TLS |
-| `ingress.className` | ingress controller，默认 `k3s-main-nginx` |
-| `ingress.annotations` | NGINX 入口注解；WebSocket 的 `proxy-read-timeout` 和 `proxy-send-timeout` 默认均为 3600 秒 |
-| `appConfig.env` | `prod` / `pre` / `test`，同时决定读 etcd 的哪一份配置 |
-| `etcdConfig.endpoints` / `password` | 配置中心 |
-| `autoscaling.enabled` | 自动扩缩 |
+## 镜像与流水线
 
-### 配置放在 etcd 里
+官方镜像：`ghcr.io/agentre-hub/agentre-server`。`latest`、`vX.Y.Z`、`sha-<commit>` 来自 release workflow；`nightly`、`nightly-YYYYMMDD` 来自 nightly workflow。Kubernetes 发布使用 deploy workflow，dev 使用 Gitea workflow；触发条件和 secrets 以对应 workflow 为准。
 
-k8s 上只有四个引导键从 ConfigMap 进容器（`env`、`debug`、`source`、`etcd`），
-其余全部从 etcd 的 `/config/<env>/agentre-server/` 读。改配置不用重新发版。
-
-**第一次部署前必须先把配置写进 etcd。** 读不到的键不会回落到默认值——服务会直接起不来，
-表现为 Pod 反复重启，而且不会自己好。要写的有这些：
-
-| key | 内容 |
-| --- | --- |
-| `logger` | 日志级别。**`logFile.enable` 必须是 `false`**，容器是只读根文件系统，写不了文件 |
-| `db` | MySQL 连接串 |
-| `redis` | Redis 地址 |
-| `http` | 监听地址，端口要和 chart 的 `containerPort` 一致 |
-| `server` | 域名、会话、令牌有效期（`token.access_ttl` / `refresh_ttl`）、GitHub OAuth（含 client secret）、限流、可信代理（`trusted_proxies`，见下）、账号闸门（`account_gate.cache_ttl`）、通行密钥（`webauthn.rp_id` / `rp_name` / `origins` / `max_per_account`）。密钥类的都在这里面 |
-
-**k8s 这条链路上 `server.trusted_proxies` 必须填。** Pod 前面是 ingress，请求都从它
-转发进来，所以不填的话每一道按 IP 的限流都会把所有用户归到 ingress 那一个地址上；
-填成 `0.0.0.0/0` 则是另一头——`X-Forwarded-For` 由请求方自己填，等于那些限流全部失效。
-填 ingress controller 实际出口的地址或网段（Pod 网段 / Service 网段），一行一个。
-
-`trace` 可选，不写就是不开链路追踪。每个键的内容照着仓库根的
-`configs/config.example.yaml` 填——**那份模板是 `server` 这个键的唯一权威清单**。
-chart 的 values 里没有、也不会有 `server.*`：ConfigMap 只渲染上面那四个引导键，
-往 values 里加业务配置只会渲染不出来，改了却不生效比没得改更糟。新增一项业务配置
-（比如通行密钥的 `webauthn`）时要做的是重新 `put` 一遍 `server` 这个键。
-
-写一个键长这样：
+## 排障
 
 ```bash
-etcdctl --endpoints=<etcd> --user root:<password> \
-  put /config/prod/agentre-server/logger 'level: info
-disableConsole: false
-logFile:
-  enable: false'
-```
-
-看看已经写了哪些：
-
-```bash
-etcdctl --endpoints=<etcd> --user root:<password> \
-  get --prefix --keys-only /config/prod/agentre-server/
-```
-
-## 自动发布
-
-推分支到 Gitea 会自动发布，规则：
-
-| 分支 | 环境 | 域名 |
-| --- | --- | --- |
-| `main` | prod | `app.agentrehub.com` |
-| `release/*` | pre | `pre.app.agentrehub.com` |
-| `test/*` | test | `test.app.agentrehub.com` |
-| `dev` | dev | 内网单机的 8443（目标机见 `DEV_SSH_HOST`，不上 k8s） |
-
-前三行走 `deploy.yaml`：跑 lint + test，构建镜像后 helm 上 k8s，生产的资源配额高一些
-并开自动扩缩，其余环境单副本。镜像 tag 一律是 `<环境>.<短 commit>`。
-
-`dev` 走的是另一条 `dev.yaml`，刻意跟上面不一样：**不跑 lint / test，镜像也不在 CI
-里构建**——在 runner 上 `make build` 出二进制，`scp` 到目标机，在目标机上
-用 `Dockerfile.dev` 打成本地镜像再 `docker compose`，不经过 registry。理由见上面
-「dev 环境」那节。两个 workflow 的分支集合不相交，同一次推送只会触发一条。
-
-需要在 Gitea 里配好这些 secret：
-
-| secret | 必填 | 不填时 |
-| --- | --- | --- |
-| `DOCKER_USERNAME`、`DOCKER_TOKEN` | 是（dev 不用） | — |
-| `KUBE_CONFIG` | 是 | — |
-| `ETCD_CONFIG_PASSWORD` | 是 | — |
-| `DOCKER_REGISTRY` | 否 | `docker.io` |
-| `GOPROXY` | 否 | `https://goproxy.cn,direct` |
-| `NPM_REGISTRY` | 否 | `https://registry.npmmirror.com` |
-| `NODE_IMAGE`、`GO_IMAGE`、`RUNTIME_IMAGE` | 否（dev 不用） | 上游地址 |
-| `TLS_SECRET_NAME` | 否 | `agentrehub-com-tls` |
-| `DEV_SSH_KEY` | dev 必填 | — |
-| `DEV_SSH_HOST` | dev 必填 | — |
-| `DEV_SSH_USER` | 否 | `root` |
-| `DEV_SSH_PORT` | 否 | `22` |
-| `DEV_DEPLOY_DIR` | 否 | `/srv/agentre-dev` |
-
-`KUBE_CONFIG`、`ETCD_CONFIG_PASSWORD`、`DOCKER_*` 和几个 `*_IMAGE` 只有 k8s 那条
-链路用得到——dev 既不推镜像也不构建镜像。dev 只用 `DEV_*` 加可选的
-`GOPROXY` / `NPM_REGISTRY`。
-
-三个容易踩的：
-
-- **加了 `.gitea/workflows/` 之后，Gitea 就不看 `.github/workflows/` 了**，两边不合并。
-  所以 GitHub 上的 `ci.yml` 只在 GitHub 生效，Gitea 这边只跑发布流水线里的门禁。
-- 流水线里的 `uses:` 都写成了 `actions/*`，这是当前这台 Gitea 实例的动作镜像位置。
-  **换一台实例可能要改回 `docker/*` 之类的上游名字。**
-- dev 的部署步骤用的是 runner 自带的 `ssh`/`scp`，没走任何 ssh-action。这台实例的
-  动作镜像集是定制的，仓库里也没有 ssh-action 的先例，赌一个可能不存在的镜像不如
-  用原生命令。主机密钥是首连信任（`StrictHostKeyChecking=accept-new`）。
-
-### GitHub 侧：只出镜像与 Release，不部署
-
-GitHub 上另有两条流水线，它们只把镜像推到 GHCR，不碰任何环境——部署始终是 Gitea
-那边的事：
-
-- `release.yml`：推 `v*` tag 触发，打 `<tag>` 与 `sha-<短 commit>`，正式版另加
-  `latest`；镜像推成功后由 `release` job 建一个 GitHub Release（beta / rc 标成
-  prerelease，重跑同一个 tag 会先删后建）。
-- `nightly.yml`：每天 UTC 18:00（北京时间凌晨 2 点）把 `main` 合进 `nightly` 分支再构建，
-  打 `nightly`、`nightly-<日期>`、`sha-<短 commit>`。这个 commit 已经出过镜像就跳过——
-  判据是 registry 上 `sha-<短 commit>` 这个 tag 在不在，不另存状态，所以上一次构建
-  失败时下一次不会误判成「没有新提交」。
-
-两条都是两个原生 runner（`ubuntu-latest` + `ubuntu-24.04-arm`）各打一个架构、按 digest
-推上去，最后用 `docker buildx imagetools create` 合成一个 manifest list。不走 QEMU：
-镜像里那段 pnpm build 在模拟环境下要慢十几分钟，而公开仓库的 arm64 runner 是免费的。
-
-凭据只用内置的 `GITHUB_TOKEN`：镜像 job 给 `packages: write`，`release.yml` 建 Release
-的 `release` job 给 `contents: write`，都不需要额外 secret。
-有两件一次性的事要做：
-
-1. **`nightly` 分支要先建出来**：`git push origin main:nightly`。定时任务读的是默认分支
-   上的 workflow 文件，但 checkout 的是 `nightly` 分支——分支不存在则 sync 那步直接红。
-2. **第一次推完要把 package 改成 public**：GHCR 上新建的 package 默认 private，不改
-   就匿名 `docker pull` 不到。
-
-## 起不来的时候
-
-```bash
-# docker（单机）
+docker compose -f deploy/docker-compose.yml ps
 docker compose -f deploy/docker-compose.yml logs -f server
-# docker（dev，在目标机上跑）
-docker compose -f /srv/agentre-dev/docker-compose.dev.yml logs -f server
-# k8s
-kubectl -n app logs -l app.kubernetes.io/instance=agentre-server --tail=50
+kubectl describe pod <pod>
+kubectl logs <pod>
 ```
 
-第一行日志会打印版本号，`agentre-server prod.abc1234 (abc1234) starting`。
-如果是 `dev (unknown)`，说明构建时没传版本号，对不回是哪个 commit。
-
-| 日志 | 原因 |
-| --- | --- |
-| `load config: ... no such file or directory` | 配置文件没挂上，或者挂错了位置 |
-| `load config: ... read-only file system` 或 `permission denied` | 引导配置缺键。服务想把默认值写回配置文件，但那是只读的 |
-| `load config: context deadline exceeded` | 连不上 etcd |
-| `file config key not found: <key>` | ConfigMap 里缺这个键 |
-| `etcd ... not found: <key>` | etcd 里还没写这个键 |
+`healthz` 不通过时检查 MySQL/Redis 地址、凭据及日志；`load config: context deadline exceeded` 检查 etcd 网络、端点和密码；`etcd ... not found` 检查配置键；登录失效时检查公开 URL、反代和 `TRUSTED_PROXIES`。E2E 见 [`../e2e/README.md`](../e2e/README.md)。

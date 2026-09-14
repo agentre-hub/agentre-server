@@ -2,8 +2,7 @@
 
 ## One fact, one owner
 
-Every fact lives in exactly one document. Everything else links to it. Two copies drift,
-and the reader hits the stale one without knowing it is stale.
+Every fact has one owner; other documents link to it.
 
 | Fact | Owner |
 | --- | --- |
@@ -18,38 +17,30 @@ and the reader hits the stale one without knowing it is stale.
 | Deployment: Docker, Kubernetes, chart values, etcd seeding, release pipeline | [`../deploy/README.md`](../deploy/README.md) |
 | Quick start, Docker, GitHub OAuth setup | [`../README.md`](../README.md) |
 
-`README.md` is for a **human setting the project up**. `AGENTS.md` and `docs/` are for
-**someone changing the code**. When they overlap, README links to docs.
+`README.md` serves setup; `AGENTS.md` and `docs/` serve code changes. README links to docs
+instead of duplicating them.
 
-`CLAUDE.md` is a single `@AGENTS.md` line and holds nothing of its own. Do not add content
-to it — anything written there is invisible to every other agent harness.
+Keep `CLAUDE.md` as its single `@AGENTS.md` line.
 
 ## Rules
 
-**Every symbol, path and command must exist on this branch.** Verify with `git grep` and
-`git ls-files`, not `rg` or `ls` — the latter match untracked files, so your uncommitted
-experiment looks like the project's current state.
+**Every symbol, path and command must exist on this branch.** Verify tracked content with
+`git grep` and `git ls-files`; `rg` and `ls` also include untracked experiments.
 
 ```bash
 git grep -n "LoadServerConfig" -- '*.go'
 git ls-files 'docs/*'
 ```
 
-Beware `\b` in `git grep` patterns — it does not behave the way PCRE does here and will
-silently match nothing, so a search for violations comes back clean when there are plenty.
-Prefer explicit character classes, and sanity-check any pattern that reports zero by
-re-running a simpler version of it first.
+Avoid `\b` in `git grep` patterns; use explicit character classes. Sanity-check a zero-result
+pattern with a simpler search.
 
-**Lift examples from real code.** Find an existing call that exercises the convention,
-simplify what is irrelevant, and change **not one character** of the call shape. An invented
-example in an authoritative voice is worse than none — later agents copy it.
+**Lift examples from real code.** Remove irrelevant context without changing the call shape.
 
 **Write the project's wrapper, not the underlying library.** `logger.Ctx(ctx)` not `zap.L()`;
 `cn()` not `clsx`. The wrapper's existence is itself the convention being documented.
 
-**Do not leave TODO skeletons.** If a section cannot be filled in truthfully, delete the
-section. A hollow document promises a standard and delivers nothing, and after that nobody
-reads the docs at all.
+**Do not leave TODO skeletons.** Delete sections that cannot be filled truthfully.
 
 ## When you change code
 
@@ -66,8 +57,7 @@ reads the docs at all.
 
 ## Fact-checking a document
 
-Docs rot silently — nothing fails when a doc goes stale. Periodically, and whenever a
-document feels off:
+Periodically, and whenever a document feels stale:
 
 ```bash
 # Do the commands still exist?
@@ -78,6 +68,5 @@ git grep -n -E '^[a-z][a-z0-9_-]*:' -- Makefile
 git grep -n -E '\]\([^)h][^)]*\)' -- 'docs/*.md' AGENTS.md
 ```
 
-Broken links and vanished symbols are the two failure modes worth checking for, along with
-a third the commands above will not catch: a convention the docs describe that has **zero
-implementations in the code**. All three stay invisible until someone tries to follow them.
+Also check that documented conventions still have implementations; the commands above do not
+detect that failure.

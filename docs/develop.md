@@ -26,11 +26,9 @@ make mock              # go generate ./... (mockgen)
 make docker            # docker build -t agentre/server:0.1.0
 ```
 
-The split exists because there are two package managers: Go via the Makefile,
-frontend via pnpm. `make test` and `make lint` are the aggregates — **use those**,
-and only reach for a sub-target when iterating. `make e2e` is the sole automated
-browser route; CI calls that same target. Harness details live in
-[`../e2e/README.md`](../e2e/README.md).
+Use the aggregate `make test` and `make lint` targets for the final gate; use their
+sub-targets while iterating. `make e2e` is the sole automated browser route. Harness details
+live in [`../e2e/README.md`](../e2e/README.md).
 
 The repo has **no build tags at all**, so `make test` runs everything there is. See
 [testing.md](testing.md#build-tags) for why that is load-bearing, and keep it that way.
@@ -77,22 +75,17 @@ Every rule below fails a build.
 
 ### Formatting
 
-**Prettier defaults, with no config file** — deliberately matching the sibling `agentre`
-repo, so moving between repos in this workspace does not mean changing formatting habits.
-That means double quotes and an 80-column width. Do not add a `.prettierrc` here without
-changing it there too.
+Prettier uses its defaults, with no config file: double quotes and an 80-column width.
+Keep this aligned with the sibling `agentre` repository.
 
-In `frontend/`, prettier runs *through* ESLint (`eslint-plugin-prettier`, registered last so
-it wins conflicts), so `make lint-frontend` covers both. `e2e/` has no ESLint, so it runs
-prettier directly. `make fmt` fixes both in one go.
+In `frontend/`, Prettier runs through ESLint; `e2e/` runs it directly. `make fmt` fixes both.
 
 `.prettierignore` excludes `src/i18n/locales` — the locale JSON is diffed key-by-key in
 review, and reflowing it makes those diffs unreadable.
 
 ### Exemptions
 
-There is no `//nolint` culture here. Every exemption is declared in one place,
-with its reason next to it:
+Every exemption is declared in one place with its reason:
 
 - **`.golangci.yml` → `linters.exclusions.rules`** — `cmd/server/main.go` and
   `internal/bootstrap/cago.go` (which `main` runs before `cago.New`) may use stdlib `log`,
@@ -105,8 +98,7 @@ with its reason next to it:
   fallback for it: the deployment is served over plain http, which is not a
   secure context, and `crypto.randomUUID` does not exist there.
 
-Adding an exemption means editing one of those two files and writing why.
-If you cannot write a reason, the code is what needs changing.
+Add exemptions only in those files, with a reason.
 
 ## Migrations
 
@@ -115,14 +107,10 @@ the **end**, and existing entries are never edited — someone's database has al
 run them. To correct an earlier migration, add a patch migration. Prefer native SQL
 for DDL.
 
-A patch migration's DDL always states `ALGORITHM` and `LOCK` explicitly, so an operation
-MySQL cannot do online fails loudly instead of silently falling back to `ALGORITHM=COPY` —
-a full table copy that blocks writes for the migration's duration. Adding a generated
-column to a live table is the case that bites: `STORED` only supports `ALGORITHM=COPY`
-(`ALGORITHM=INPLACE`/`INSTANT` both error asking to try `COPY`), and `COPY` itself refuses
-`LOCK=NONE` (it needs at least `LOCK=SHARED`). Prefer `VIRTUAL` instead — adding it is
-`ALGORITHM=INSTANT`, and a secondary index on it is a separate `ALGORITHM=INPLACE,
-LOCK=NONE` statement — both succeed without copying the table.
+A patch migration's DDL states `ALGORITHM` and `LOCK` explicitly so MySQL cannot silently
+fall back to a blocking table copy. For generated columns, prefer `VIRTUAL`: adding it can
+use `ALGORITHM=INSTANT`, and its index can be added separately with
+`ALGORITHM=INPLACE, LOCK=NONE`. `STORED` requires a copying operation.
 
 `internal/model/entity/schema_test.go` compares the entity structs against the baseline
 DDL (every writable field must have a column, every table must be claimed by an entity),
