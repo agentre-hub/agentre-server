@@ -1,7 +1,8 @@
 import { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { SquareTerminal } from "lucide-react";
 import { useTranslation } from "react-i18next";
+
+import { agentreLogoUrl } from "@agentre-hub/agentre-ui";
 
 import AppControls from "@/components/AppControls";
 
@@ -20,12 +21,16 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen flex-col bg-background">
       <header className="flex items-center px-8 py-5">
         <div className="flex items-center gap-[9px]">
-          <div className="flex size-7 items-center justify-center rounded-sm bg-primary">
-            <SquareTerminal
-              className="size-4 text-primary-foreground"
-              aria-hidden="true"
-            />
-          </div>
+          {/* 跟侧边栏 Brand 带同一份共享 mark，不套底板：登录页是没登录的人第一眼
+              看到的界面，摆个通用终端图标等于第一眼就不是这个产品；而那块实心底色
+              在这一页会成为仅次于主按钮的第二亮元素，跟 CTA 抢。 */}
+          <img
+            src={agentreLogoUrl}
+            alt=""
+            aria-hidden="true"
+            className="size-7 shrink-0 object-contain"
+            draggable={false}
+          />
           <span className="text-prose font-semibold text-foreground">
             {t("authLayout.brand")}
           </span>

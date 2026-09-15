@@ -9,7 +9,6 @@ import {
   MessagesSquare,
   Monitor,
   Settings as SettingsIcon,
-  SquareTerminal,
 } from "lucide-react";
 
 import AppControls from "@/components/AppControls";
@@ -31,7 +30,7 @@ import {
   fetchAttentionCounts,
   type AttentionCounts,
 } from "@/lib/attentionCount";
-import { cn } from "@agentre-hub/agentre-ui";
+import { agentreLogoUrl, cn } from "@agentre-hub/agentre-ui";
 
 /** /v1/devices 只取算设备 Meta 需要的字段。 */
 interface DeviceMeta {
@@ -210,9 +209,13 @@ export default function AppShell({
   ];
 
   /*
-    Brand 与收放开关同一带。收起时它们改成上下排：56px 里并排放不下两个 28px 的
-    方块，而开关必须一直在——把它挪去顶栏的话，一条只在某些页出现的顶栏就成了
-    「侧栏能不能回来」的前提。
+    Brand 带只剩标和字（开关钉去了右边框，见下方 navToggle）。收起时只留标并居中：
+    56px 减去 p-2 还有 40px，32px 的标放得下。
+
+    标用共享包的 Agentre 裸 mark，跟桌面端顶栏同一份，不套底板：mark 自带品牌蓝，
+    再垫一层实心块会在深色侧栏里变成「盒中盒」，而且那块底色会比选中的导航行还亮，
+    把注意力从「我在哪一页」上抢走。同目录的 logo-tile.svg 带底板，是给标签页、Dock
+    这些本身没有背景的位置用的。
   */
   const brand = (
     <div
@@ -221,12 +224,13 @@ export default function AppShell({
         navCollapsed && "justify-center",
       )}
     >
-      <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary">
-        <SquareTerminal
-          className="size-4 text-primary-foreground"
-          aria-hidden="true"
-        />
-      </div>
+      <img
+        src={agentreLogoUrl}
+        alt=""
+        aria-hidden="true"
+        className="size-8 shrink-0 object-contain"
+        draggable={false}
+      />
       {!navCollapsed && (
         <div className="flex min-w-0 flex-col leading-tight">
           <span className="text-prose font-semibold text-foreground">

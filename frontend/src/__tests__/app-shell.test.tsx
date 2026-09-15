@@ -24,7 +24,7 @@ import AppShell from "@/components/AppShell";
 import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import i18n from "@/i18n";
-import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { agentreLogoUrl, ThemeProvider } from "@agentre-hub/agentre-ui";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -564,6 +564,31 @@ describe("桌面 SideNav 收起", () => {
     renderShell();
     expect(screen.getByRole("navigation").className).toContain("w-[56px]");
     expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeTruthy();
+  });
+});
+
+/**
+ * Brand 带里的那枚标。
+ *
+ * 此前是 lucide 的 SquareTerminal 摆在 bg-primary 方块上——一个通用终端图标在替品牌
+ * 干活，而且那块浅蓝底是整条栏里最亮的元素，比选中的导航行还抢眼。换成共享包持有的
+ * Agentre 裸 mark，跟桌面端顶栏同一份（chrome.tsx 也是 agentreLogoUrl 裸图无底板）。
+ *
+ * 不给它套底板：mark 自带品牌蓝，再垫一层只会在深色侧栏里变成「盒中盒」，而且会把
+ * 亮度重新抢回来。同目录的 logo-tile.svg 是给标签页、Dock 这些**没有**背景的位置用的。
+ */
+describe("桌面 SideNav Brand 标", () => {
+  it("用共享包的 Agentre 裸 mark，而不是通用图标垫一块底板", () => {
+    renderShell();
+
+    const brand = screen.getByRole("navigation")
+      .firstElementChild as HTMLElement;
+    const mark = within(brand).getByRole("presentation", { hidden: true });
+
+    expect(mark.tagName).toBe("IMG");
+    expect(mark.getAttribute("src")).toBe(agentreLogoUrl);
+    // 不许再有实心底板把亮度抢回去。
+    expect(brand.innerHTML).not.toContain("bg-primary");
   });
 });
 

@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import AuthLayout from "@/components/AuthLayout";
-import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { agentreLogoUrl, ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 
 function renderLayout(children: ReactNode = <p>content</p>) {
@@ -32,6 +32,18 @@ describe("AuthLayout", () => {
     ).toBeTruthy();
     expect(within(banner).getByRole("button", { name: /Theme/i })).toBeTruthy();
     expect(banner.className).not.toMatch(/\bfixed\b/);
+  });
+
+  // 顶栏这枚标跟侧边栏 Brand 带是同一份共享 mark，不是通用图标垫一块底板：
+  // 登录页是没登录的人第一眼看到的界面，摆个终端图标等于第一眼就不是这个产品。
+  it("brands the top bar with the shared Agentre mark rather than a generic glyph on a plate", () => {
+    renderLayout();
+    const banner = screen.getByRole("banner");
+    const mark = within(banner).getByRole("presentation", { hidden: true });
+
+    expect(mark.tagName).toBe("IMG");
+    expect(mark.getAttribute("src")).toBe(agentreLogoUrl);
+    expect(banner.innerHTML).not.toContain("bg-primary");
   });
 
   it("renders the given content inside a centred main region", () => {

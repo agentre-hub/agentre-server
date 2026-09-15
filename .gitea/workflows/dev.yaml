@@ -25,8 +25,6 @@ env:
   DEPLOY_USER: ${{ secrets.DEV_SSH_USER && secrets.DEV_SSH_USER || 'root' }}
   DEPLOY_PORT: ${{ secrets.DEV_SSH_PORT && secrets.DEV_SSH_PORT || '22' }}
   DEPLOY_DIR: ${{ secrets.DEV_DEPLOY_DIR && secrets.DEV_DEPLOY_DIR || '/srv/agentre-dev' }}
-  npm_config_registry: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
-  npm_config_store_dir: ${{ github.workspace }}/.pnpm-store
 
 jobs:
   deploy:
@@ -45,14 +43,6 @@ jobs:
           set -euo pipefail
           command -v node >/dev/null || { echo "runner 上没有 node,前端编不出来" >&2; exit 1; }
           corepack enable
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
-        continue-on-error: true
-        with:
-          path: ${{ github.workspace }}/.pnpm-store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
-          restore-keys: pnpm-${{ runner.os }}-
 
       - name: Set outputs
         id: vars

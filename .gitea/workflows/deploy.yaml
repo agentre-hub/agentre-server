@@ -20,8 +20,6 @@ env:
   GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
   RUNTIME_IMAGE: ${{ secrets.RUNTIME_IMAGE && secrets.RUNTIME_IMAGE || 'gcr.io/distroless/static-debian12' }}
   TLS_SECRET: ${{ secrets.TLS_SECRET_NAME && secrets.TLS_SECRET_NAME || 'agentrehub-com-tls' }}
-  npm_config_registry: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
-  npm_config_store_dir: ${{ github.workspace }}/.pnpm-store
 
 jobs:
   deploy:
@@ -40,14 +38,6 @@ jobs:
           set -euo pipefail
           command -v node >/dev/null || { echo "runner 上没有 node,前端编不出来" >&2; exit 1; }
           corepack enable
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
-        continue-on-error: true
-        with:
-          path: ${{ github.workspace }}/.pnpm-store
-          key: pnpm-${{ runner.os }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
-          restore-keys: pnpm-${{ runner.os }}-
 
       # 门禁先跑，此时还没有前端产物，给 //go:embed 一个占位
       - name: Prepare embedded frontend placeholder
