@@ -1,3 +1,6 @@
+# 前端和 Go 在 runner 上编，镜像只做一层 COPY，为的是命中 runner 上的 Go 与 pnpm 缓存。
+# 多架构镜像仍由 GitHub 的 release.yml / nightly.yml 用 deploy/Dockerfile 出。
+
 name: Deploy
 
 on:
@@ -15,11 +18,10 @@ env:
   DOMAIN: app.agentrehub.com
   ENV: ${{ startsWith(github.ref, 'refs/heads/release/') && 'pre' || startsWith(github.ref, 'refs/heads/test/') && 'test' || github.ref=='refs/heads/main' && 'prod' }}
   GOPROXY: ${{ secrets.GOPROXY && secrets.GOPROXY || 'https://goproxy.cn,direct' }}
-  NPM_REGISTRY: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
-  NODE_IMAGE: ${{ secrets.NODE_IMAGE && secrets.NODE_IMAGE || 'node:22-alpine' }}
-  GO_IMAGE: ${{ secrets.GO_IMAGE && secrets.GO_IMAGE || 'golang:1.26-alpine' }}
   RUNTIME_IMAGE: ${{ secrets.RUNTIME_IMAGE && secrets.RUNTIME_IMAGE || 'gcr.io/distroless/static-debian12' }}
   TLS_SECRET: ${{ secrets.TLS_SECRET_NAME && secrets.TLS_SECRET_NAME || 'agentrehub-com-tls' }}
+  npm_config_registry: ${{ secrets.NPM_REGISTRY && secrets.NPM_REGISTRY || 'https://registry.npmmirror.com' }}
+  npm_config_store_dir: ${{ github.workspace }}/.pnpm-store
 
 jobs:
   deploy:
@@ -31,7 +33,23 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
+          cache-dependency-path: go.sum
 
+      - name: Set up pnpm
+        run: |
+          set -euo pipefail
+          command -v node >/dev/null || { echo "runner 上没有 node,前端编不出来" >&2; exit 1; }
+          corepack enable
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: ${{ github.workspace }}/.pnpm-store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('frontend/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      # 门禁先跑，此时还没有前端产物，给 //go:embed 一个占位
       - name: Prepare embedded frontend placeholder
         run: |
           mkdir -p internal/web/dist
@@ -52,8 +70,11 @@ jobs:
         run: |
           echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      - name: Set up QEMU
-        uses: actions/setup-qemu-action@v3
+      # 不钉 GOOS/GOARCH：原生架构与下面拉到的基础镜像一致
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+        run: make build VERSION=${{ env.ENV }}.${{ steps.vars.outputs.sha_short }} COMMIT=${{ steps.vars.outputs.sha_short }}
 
       - name: Set up Docker Buildx
         uses: actions/setup-buildx-action@v3
@@ -65,23 +86,16 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
+      # 上下文只给 bin/，里面正好一个 server
       - name: Docker build and push
         uses: actions/build-push-action@v6
         with:
           push: true
-          file: deploy/Dockerfile
-          context: .
+          file: deploy/Dockerfile.bin
+          context: bin
           tags: ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:${{ env.ENV }}.${{ steps.vars.outputs.sha_short }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
           build-args: |
-            NODE_IMAGE=${{ env.NODE_IMAGE }}
-            GO_IMAGE=${{ env.GO_IMAGE }}
             RUNTIME_IMAGE=${{ env.RUNTIME_IMAGE }}
-            GOPROXY=${{ env.GOPROXY }}
-            NPM_REGISTRY=${{ env.NPM_REGISTRY }}
-            VERSION=${{ env.ENV }}.${{ steps.vars.outputs.sha_short }}
-            COMMIT=${{ steps.vars.outputs.sha_short }}
 
       - name: Set up kubeconfig
         uses: actions/k8s-set-context@v4

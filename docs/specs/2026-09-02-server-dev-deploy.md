@@ -6,7 +6,7 @@
 
 **Objective:** 向 Gitea 推送 `dev` 分支后，`coding.local` 上的 dev server 在无人介入的情况下被替换为该 commit 的构建产物，并以健康检查通过作为部署成功的判据。
 
-> **Amendment 2026-09-02（本文件已按此修订）：以速度换严格。** 用户决定 dev 链路不再跑 lint / test，镜像也不再在 CI 里构建：改为在 runner 上 `make build` 出静态二进制、`scp` 到目标机，再在目标机上用 `deploy/Dockerfile.dev` 做一次只有一层 `COPY` 的 build（实测 3.6 秒），打成固定的本地 tag。原方案里每次部署都是一个全新的完整 `docker build`，Go build cache 与 pnpm store 一次都复用不上，一次推送要等几分钟；dev 的价值是「推上去看看效果」，这个等待比它挡下的问题更贵。受影响的是 user story 2、decision 2 与 decision 6 的后半段，下文相应各节已改写。原始取舍保留在本说明里，没有另起一份 spec。代价明说：dev 跑的东西不再有 registry 里可追溯的 digest（只剩二进制里 ldflags 钉的版本号与本地镜像 ID），且 lint / test 只在 GitHub 侧 `ci.yml` 与本地 `make test` 上把关。
+> **Amendment 2026-09-02（本文件已按此修订）：以速度换严格。** 用户决定 dev 链路不再跑 lint / test，镜像也不再在 CI 里构建：改为在 runner 上 `make build` 出静态二进制、`scp` 到目标机，再在目标机上用 `deploy/Dockerfile.bin` 做一次只有一层 `COPY` 的 build（实测 3.6 秒），打成固定的本地 tag。原方案里每次部署都是一个全新的完整 `docker build`，Go build cache 与 pnpm store 一次都复用不上，一次推送要等几分钟；dev 的价值是「推上去看看效果」，这个等待比它挡下的问题更贵。受影响的是 user story 2、decision 2 与 decision 6 的后半段，下文相应各节已改写。原始取舍保留在本说明里，没有另起一份 spec。代价明说：dev 跑的东西不再有 registry 里可追溯的 digest（只剩二进制里 ldflags 钉的版本号与本地镜像 ID），且 lint / test 只在 GitHub 侧 `ci.yml` 与本地 `make test` 上把关。
 
 **Hard invariant:** `main` / `release/*` / `test/*` 的现有 k8s 发布链路行为不变；dev 环境沿用现有的外部 etcd / MySQL / Redis，既有 `agentre_server_dev` 数据不迁移、不重建。
 
@@ -29,7 +29,7 @@
 | # | Decision | Basis and rejected option |
 |---|---|---|
 | 1 | 新建 `.gitea/workflows/dev.yaml`，不改动 `deploy.yaml` | dev 与 k8s 链路的差异面很大（不需要 QEMU / 多架构、不需要 kubeconfig / helm / TLS secret），且现有 `deploy.yaml` 是正在服务 prod 的链路。隔离成独立文件后，dev 的任何改动都不可能影响 prod 发布。Rejected: 在 `deploy.yaml` 里加分支条件与两个 conditional deploy job——省掉约 40 行重复，但把 prod 发布置于 dev 迭代的风险之下 |
-| 2 | dev 的镜像在目标机上现打：runner 只出静态二进制，目标机用 `deploy/Dockerfile.dev` 做一层 `COPY` | 用户决定。完整 `docker build` 每次都在新容器里从零跑 pnpm install + go build，两个缓存都用不上；放回 runner 后 setup-go 的 module/build cache 与 pnpm store 都能命中，目标机那一层 COPY 是秒级的，也不用 push/pull。Rejected: 复用 `deploy/Dockerfile` 构建并推 `dev.<short-sha>`（本轮原方案）——产物有 digest，但每次部署分钟级。Rejected: 二进制 bind mount 进固定镜像——连那 3.6 秒也省了，但单文件挂载绑 inode、目录挂载又让「镜像里是什么」不再自洽 |
+| 2 | dev 的镜像在目标机上现打：runner 只出静态二进制，目标机用 `deploy/Dockerfile.bin` 做一层 `COPY` | 用户决定。完整 `docker build` 每次都在新容器里从零跑 pnpm install + go build，两个缓存都用不上；放回 runner 后 setup-go 的 module/build cache 与 pnpm store 都能命中，目标机那一层 COPY 是秒级的，也不用 push/pull。Rejected: 复用 `deploy/Dockerfile` 构建并推 `dev.<short-sha>`（本轮原方案）——产物有 digest，但每次部署分钟级。Rejected: 二进制 bind mount 进固定镜像——连那 3.6 秒也省了，但单文件挂载绑 inode、目录挂载又让「镜像里是什么」不再自洽 |
 | 2a | dev 镜像用固定 tag `agentre-server:dev`，不带 short-sha | 带 sha 就得把 tag 写进 `.env` 再让 compose 去读，多一处要同步的状态；跑的是哪个 commit 看启动首行日志。目标机是 containerd snapshotter（已核实），重打同名 tag 不留悬空镜像，不需要 prune |
 | 3 | dev compose 只声明 server 一个服务，配置仍 `source: etcd` | 用户决定。既有 dev 数据在 141 那台机上且已持久化，配置改动不需要发版，与 k8s 链路的配置读取方式保持同构。Rejected: compose 自带 MySQL + Redis——dev 环境自包含，但要先迁移 `agentre_server_dev` 的既有数据，且 dev 与 prod 的配置来源分叉 |
 | 4 | 引导配置、JWT 密钥、compose 的 `.env` 都是机器本地文件，不进仓库 | 仓库已经把 `configs/config.yaml` 列入 `.gitignore`（第 21 行），即「引导配置属于机器不属于代码」是既定约定；且引导配置含内网 etcd 端点。Rejected: 提交 `deploy/config.dev.yaml`——违反既有约定并把内网拓扑写进公开仓库 |
@@ -47,7 +47,7 @@ dev 链路不设门禁：不跑 lint，也不跑测试。唯一挡在部署前�
 
 在 runner 上跑与本地同一条 `make build`：`pnpm install --frozen-lockfile && pnpm build` → 拷进 `internal/web/dist` → `go build`，产物是单个静态二进制（`CGO_ENABLED=0`）。`VERSION` 与 `COMMIT` 在命令行覆盖，取 `dev.<short-sha>` 与 short sha，使服务启动首行日志能对回具体 commit。`GOOS` / `GOARCH` 显式钉成 `linux/amd64`（目标机已核实为 x86_64），不跟随 runner 架构。
 
-镜像在目标机上打：`deploy/Dockerfile.dev` 只有 `COPY server /app/server`，其余（基础镜像、`WORKDIR /app`、`USER 65532:65532`、`ENTRYPOINT`）与 `deploy/Dockerfile` 的运行时 stage 一致，唯一刻意的差异是不带占位配置——dev 一定挂着机器本地的引导配置。构建上下文只给部署目录下的 `bin/`，因为同目录还有 `config.yaml` 与 `keys/jwt.key`。
+镜像在目标机上打：`deploy/Dockerfile.bin` 只有 `COPY server /app/server`，其余（基础镜像、`WORKDIR /app`、`USER 65532:65532`、`ENTRYPOINT`）与 `deploy/Dockerfile` 的运行时 stage 一致，唯一刻意的差异是不带占位配置——dev 一定挂着机器本地的引导配置。构建上下文只给部署目录下的 `bin/`，因为同目录还有 `config.yaml` 与 `keys/jwt.key`。
 
 两处缓存是这条链路快起来的前提：`setup-go` 按 `go.sum` 恢复 module cache 与 `~/.cache/go-build`；pnpm 的 store 落在工作区内、由 `actions/cache` 按 `pnpm-lock.yaml` 缓存。缓存未命中只是慢一点，不使流水线失败。
 
@@ -58,7 +58,7 @@ dev 链路不设门禁：不跑 lint，也不跑测试。唯一挡在部署前�
 目标机上存在一个部署目录，其中 compose 文件与二进制由流水线从 runner 同步覆盖，其余文件是机器本地资产、流水线只读不写：
 
 - **compose 文件** —— 每次部署由流水线覆盖，保证机器上跑的就是这个 commit 声明的编排。
-- **二进制与 `Dockerfile.dev`** —— 每次部署由流水线覆盖；`bin/` 同时是 `docker build` 的整个上下文。
+- **二进制与 `Dockerfile.bin`** —— 每次部署由流水线覆盖；`bin/` 同时是 `docker build` 的整个上下文。
 - **`.env`** —— 流水线不再读写它，dev 不再需要这个文件。
 - **引导配置** —— `env: dev`、`source: etcd`、指向 `192.168.8.141:2379`，只读挂载到容器的配置路径。
 - **JWT 密钥对** —— 只读挂载到容器的 `/keys`。

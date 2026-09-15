@@ -6,7 +6,8 @@
 | --- | --- |
 | `docker-compose.yml`、`.env.example` | 单机 Compose（server、MySQL、Redis） |
 | `Dockerfile`、`config.docker.yaml` | 生产镜像及默认配置 |
-| `docker-compose.dev.yml`、`Dockerfile.dev` | dev 目标机（外部 MySQL/Redis/etcd） |
+| `docker-compose.dev.yml` | dev 目标机（外部 MySQL/Redis/etcd） |
+| `Dockerfile.bin` | 装载流水线编好的二进制，两条 Gitea 流水线共用 |
 | `helm/` | Kubernetes chart（外部 MySQL/Redis/etcd） |
 
 ## Compose 单机
@@ -40,13 +41,13 @@ curl http://localhost:8443/v1/healthz
 
 ## Dev 目标机
 
-Gitea 的 `dev` 流水线在 runner 执行 `make build`，通过 runner 自带的 OpenSSH 将二进制和编排文件放到 `/srv/agentre-dev/`，目标机用 `Dockerfile.dev` 构建固定镜像 `agentre-server:dev`。该链路不经过 registry，也不创建 MySQL/Redis/etcd；dev 流水线不校验目标机 host key，严格环境应改为由管理员预置 `known_hosts`，不要在流水线里动态扫描后立即信任。
+Gitea 的 `dev` 流水线在 runner 执行 `make build`，通过 runner 自带的 OpenSSH 将二进制和编排文件放到 `/srv/agentre-dev/`，目标机用 `Dockerfile.bin` 构建固定镜像 `agentre-server:dev`。该链路不经过 registry，也不创建 MySQL/Redis/etcd；dev 流水线不校验目标机 host key，严格环境应改为由管理员预置 `known_hosts`，不要在流水线里动态扫描后立即信任。
 
 一次性准备：创建 `/srv/agentre-dev/config.yaml`（`env: dev`、`source: etcd`），确保容器用户 `65532` 可读；将 etcd 的 `/config/dev/agentre-server/logger` 中 `logFile.enable` 设为 `false`；配置 Gitea secret `DEV_SSH_KEY`。
 
 ```bash
 cd /srv/agentre-dev
-docker build -f Dockerfile.dev -t agentre-server:dev bin
+docker build -f Dockerfile.bin -t agentre-server:dev bin
 docker compose -f docker-compose.dev.yml up -d --force-recreate
 docker compose -f docker-compose.dev.yml logs -f server
 curl http://<目标机>:8443/v1/healthz
@@ -67,7 +68,7 @@ Chart 只部署 server。除 ConfigMap 中的 etcd 引导信息外，其余配�
 
 ## 镜像与流水线
 
-官方镜像：`ghcr.io/agentre-hub/agentre-server`。`latest`、`vX.Y.Z`、`sha-<commit>` 来自 release workflow；`nightly`、`nightly-YYYYMMDD` 来自 nightly workflow。Kubernetes 发布使用 deploy workflow，dev 使用 Gitea workflow；触发条件和 secrets 以对应 workflow 为准。
+官方镜像：`ghcr.io/agentre-hub/agentre-server`。`latest`、`vX.Y.Z`、`sha-<commit>` 来自 release workflow；`nightly`、`nightly-YYYYMMDD` 来自 nightly workflow。Gitea 的 `Deploy`（k8s）与 `Deploy dev` 都在 runner 上 `make build`，镜像用 `Dockerfile.bin` 只做一层 COPY；前者架构跟随 runner，后者钉 `linux/amd64`。触发条件和 secrets 以对应 workflow 为准。
 
 ## 排障
 

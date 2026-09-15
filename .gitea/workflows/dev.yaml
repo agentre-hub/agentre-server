@@ -1,5 +1,5 @@
 # dev 只覆盖 dev 分支：不跑 lint / test，二进制在 runner 上编好后送到目标机，
-# 目标机上用 Dockerfile.dev 打成镜像再 compose。
+# 目标机上用 Dockerfile.bin 打成镜像再 compose。
 #
 # 这条流水线没有门禁，dev 分支上也没有别的门禁接着：.github/workflows/ci.yml 只在
 # push main 和 pull_request 上触发，而 dev 只推 gitea、不推 GitHub。lint / test 靠
@@ -66,7 +66,7 @@ jobs:
           CGO_ENABLED: '0'
         run: make build VERSION=dev.${{ steps.vars.outputs.sha_short }} COMMIT=${{ steps.vars.outputs.sha_short }}
 
-      # bin/ 既是上传源目录、又是 Dockerfile.dev 的整个构建上下文，里面那份必须正好
+      # bin/ 既是上传源目录、又是 Dockerfile.bin 的整个构建上下文，里面那份必须正好
       # 叫 server：先在 runner 上改成 .next，到目标机上再原子换掉正在跑的那份
       # （直接覆盖正在运行的二进制会 ETXTBSY）。
       - name: Rename artifact to server.next
@@ -99,7 +99,7 @@ jobs:
 
           ssh "${ssh_opts[@]}" "$remote" mkdir -p -- "$DEPLOY_DIR/bin"
           scp "${scp_opts[@]}" \
-            deploy/docker-compose.dev.yml deploy/Dockerfile.dev \
+            deploy/docker-compose.dev.yml deploy/Dockerfile.bin \
             "$remote:$DEPLOY_DIR/"
           scp "${scp_opts[@]}" bin/server.next "$remote:$DEPLOY_DIR/bin/server.next"
 
@@ -114,7 +114,7 @@ jobs:
 
           # 上下文只给 bin/：部署目录里的 config.yaml 和 keys/ 不该进构建上下文
           prev=$(docker image inspect -f '{{.Id}}' agentre-server:dev 2>/dev/null || true)
-          docker build -f Dockerfile.dev -t agentre-server:dev bin
+          docker build -f Dockerfile.bin -t agentre-server:dev bin
 
           docker compose -f docker-compose.dev.yml config -q
           docker compose -f docker-compose.dev.yml up -d --force-recreate

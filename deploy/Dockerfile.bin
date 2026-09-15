@@ -1,0 +1,10 @@
+# 装载流水线编好的二进制，上下文就是装着 server 的那个目录：
+#   docker build -f Dockerfile.bin -t <tag> bin
+# 与 Dockerfile 运行时 stage 的唯一差异是不带默认配置：dev 目标机挂本地那份，helm 挂 ConfigMap。
+ARG RUNTIME_IMAGE=gcr.io/distroless/static-debian12
+FROM ${RUNTIME_IMAGE}
+WORKDIR /app
+COPY server /app/server
+EXPOSE 8443
+USER 65532:65532
+ENTRYPOINT ["/app/server"]

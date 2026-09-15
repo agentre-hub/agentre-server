@@ -1,15 +1,15 @@
 # dev 环境：只有 server，MySQL/Redis/etcd 用外部现成的，配置从 etcd 读。
-# 镜像由流水线在目标机上用 Dockerfile.dev 现打，不过 registry。
+# 镜像由流水线在目标机上用 Dockerfile.bin 现打，不过 registry。
 #
 # /srv/agentre-dev/
 #   docker-compose.dev.yml   流水线覆盖
-#   Dockerfile.dev           流水线覆盖
+#   Dockerfile.bin           流水线覆盖
 #   bin/server               流水线覆盖，同时是 docker build 的上下文
 #   config.yaml              机器本地
 #
 # 手动起停：
 #   cd /srv/agentre-dev
-#   docker build -f Dockerfile.dev -t agentre-server:dev bin
+#   docker build -f Dockerfile.bin -t agentre-server:dev bin
 #   docker compose -f docker-compose.dev.yml up -d --force-recreate
 name: agentre-dev
 
