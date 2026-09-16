@@ -1694,7 +1694,6 @@ export default function SessionDetailView({
   /** 滚的只有这一带。转录、状态横幅与审批卡都在里面，头部与 Composer 都不在。 */
   const scrollBody = (
     <SessionScrollBody
-      sid={sid}
       cwd={summary?.cwd}
       scrollRef={scrollRef}
       contentRef={scrollback.contentRef}

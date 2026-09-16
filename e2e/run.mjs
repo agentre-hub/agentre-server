@@ -25,11 +25,7 @@ export function parseRunnerArgs(argv) {
   let mode = "spec";
   for (const arg of argv) {
     if (arg === "--serve") mode = "serve";
-    else if (arg === "--dual" || arg === "--web") {
-      throw new Error(
-        `unknown runner option ${arg}: agentred/Wails tracks were removed`,
-      );
-    } else playwrightArgs.push(arg);
+    else playwrightArgs.push(arg);
   }
   return { mode, playwrightArgs };
 }
@@ -329,25 +325,6 @@ export function serveEnvPayload(values) {
     userID: values.userID,
     serverLog: values.serverLog,
   };
-}
-
-export async function handoffIsLive(path, probe = probeHealth) {
-  if (!existsSync(path)) return false;
-  try {
-    const handoff = JSON.parse(readFileSync(path, "utf8"));
-    return Boolean(handoff.serverURL && (await probe(handoff.serverURL)));
-  } catch {
-    return false;
-  }
-}
-
-export function prepareHandoff(path, live) {
-  if (live) throw new Error("another E2E serve environment is still live");
-  rmSync(path, { force: true });
-}
-
-export function removeOwnedHandoff(path, owned) {
-  if (owned) rmSync(path, { force: true });
 }
 
 export async function cleanupThenRemoveHandoff(path, owned, cleanup) {

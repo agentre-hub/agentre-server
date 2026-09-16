@@ -11,7 +11,6 @@
  * 变化），而是按 sync_id 持有，展示前才经 `agentSyncOf`/`agentIdOf` 转换一次。
  */
 import {
-  isOrgSystemAgent,
   type OrgAgentModel,
   type OrgDepartmentModel,
   type OrgIndexRow,
@@ -147,8 +146,6 @@ export function buildOrgModels(chart: OrgChartResponse): OrgModels {
   return { maps, departments, agents, agentBySync, departmentBySync };
 }
 
-export { isOrgSystemAgent };
-
 /**
  * 索引工具条的「按后端」筛选留在宿主（包的 `ui/` 里没有 DropdownMenu），语义也因此
  * 不走共享包的单值 `OrgIndexFilters.backendId`——一个 Agent 现在可能挂着多档执行
@@ -214,8 +211,4 @@ export function parseToolsJSON(json: string | undefined): OrgAgentToolLike[] {
   } catch {
     return [];
   }
-}
-
-export function stringifyToolsJSON(tools: OrgAgentToolLike[]): string {
-  return JSON.stringify(tools);
 }

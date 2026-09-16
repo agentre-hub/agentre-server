@@ -30,7 +30,6 @@ import type { EarlierState } from "@/components/session/useTranscriptScrollback"
 import type { SessionViewStatus } from "@/lib/sessionView";
 
 export interface SessionScrollBodyProps {
-  sid: string;
   /** 这条滚动带本身。滚动位置、前插补偿与续读触发都由 useTranscriptScrollback 量。 */
   scrollRef: RefObject<HTMLDivElement | null>;
   /** 滚动带里面那一层内容。跟随期间它一长高就得跟着钉底，见 useTranscriptScrollback。 */

@@ -59,6 +59,16 @@ async function flush(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve();
 }
 
+/** 此刻还开着的物理 socket 数（池子持有的那 0/1 条）。 */
+function openSockets(sockets: FakeConnection[]): number {
+  return sockets.filter((s) => s.closed === 0).length;
+}
+
+/** 此刻活着的虚拟通道数（每条通道一个 client；释放宽限到点或登出时被关掉）。 */
+function openChannels(clients: FakeClient[]): number {
+  return clients.filter((c) => c.closed === 0).length;
+}
+
 function setup(idleGraceMs = 30_000) {
   const sockets: FakeConnection[] = [];
   const clients: FakeClient[] = [];
@@ -95,36 +105,36 @@ describe("一个账号一条 WebSocket", () => {
     );
 
     expect(sockets).toHaveLength(1);
-    expect(pool.size).toBe(1);
+    expect(openSockets(sockets)).toBe(1);
     // 四个目标 = 同一条连接上的四条虚拟通道（决策 10 的入口分流）。
-    expect(pool.channelCount).toBe(4);
+    expect(openChannels(clients)).toBe(4);
     expect(clients).toHaveLength(4);
   });
 
   it("零台机器在线时仍然是 1：信号通道是永不释放的使用方", async () => {
-    const { pool, sockets } = setup(30_000);
+    const { pool, sockets, clients } = setup(30_000);
     const stop = pool.subscribeSignals(() => {});
     await flush();
-    expect(pool.size).toBe(1);
+    expect(openSockets(sockets)).toBe(1);
 
     // 借了又还的普通通道走完空闲宽限之后连接照旧在：宽限只管普通通道的关闭时机。
     const lease = await pool.acquire(machineTarget("fp-1"));
     lease.release();
     vi.advanceTimersByTime(60_000);
-    expect(pool.channelCount).toBe(0);
-    expect(pool.size).toBe(1);
+    expect(openChannels(clients)).toBe(0);
+    expect(openSockets(sockets)).toBe(1);
     expect(sockets[0].closed).toBe(0);
 
     stop();
     // 只有登出（closeAll）才收掉这一条。
-    expect(pool.size).toBe(1);
+    expect(openSockets(sockets)).toBe(1);
     pool.closeAll();
-    expect(pool.size).toBe(0);
+    expect(openSockets(sockets)).toBe(0);
     expect(sockets[0].closed).toBe(1);
   });
 
   it("同一台机器的两个使用方共用一条通道，不同目标各占一条", async () => {
-    const { pool, clients } = setup();
+    const { pool, clients, sockets } = setup();
     const a = await pool.acquire(machineTarget("fp-1"));
     const b = await pool.acquire(machineTarget("fp-1"));
     expect(a.client).toBe(b.client);
@@ -132,7 +142,7 @@ describe("一个账号一条 WebSocket", () => {
 
     await pool.acquire(machineTarget("fp-2"));
     expect(clients).toHaveLength(2);
-    expect(pool.size).toBe(1);
+    expect(openSockets(sockets)).toBe(1);
   });
 
   it("重连换的是那一条 socket，不是每台机器各自重来", async () => {

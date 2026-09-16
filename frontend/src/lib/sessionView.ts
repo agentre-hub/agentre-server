@@ -14,7 +14,7 @@
  * 账号没了其余全无意义；设备撤销时会话永久只读；目标不可达时
  * 中继必然连不上；钉住的 agentred 状态只在桌面中继仍连接时成立。
  */
-import { SessionLifecycle, statusConfig } from "@agentre-hub/agentre-ui";
+import { SessionLifecycle } from "@agentre-hub/agentre-ui";
 import {
   ErrCodePeerExecutionUnavailable,
   type SessionSummary,
@@ -234,20 +234,6 @@ export function matchesSessionFilter(
   return s.lifecycleState === "running" && !s.waitingForInput;
 }
 
-/**
- * 会话行搜索（任务 6）：把一行会话的可搜字段（标题 / cwd / 后端 / 设备名 / 所在
- * Agent 名）交给 matchesRowSearch，判断是否命中。空查询恒为 true（不过滤）。
- * 大小写不敏感。桌面列表的搜索框只做这件真实的事——匹配本页会话行，不伪造搜索。
- */
-export function matchesRowSearch(
-  fields: Array<string | undefined>,
-  query: string,
-): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return fields.some((f) => !!f && f.toLowerCase().includes(q));
-}
-
 /** i18n 的取词函数。这一层只用得上这一个形状，不引整个 react-i18next 的类型。 */
 type Translate = (key: string, opts?: Record<string, unknown>) => string;
 
@@ -275,7 +261,7 @@ function lifecycleLabel(state: string, t: Translate): string {
  * 移动端行尾靠它兜底：共享包 `StatusDot` 的可访问名是 `waiting status` 这类固定
  * 英文状态码（包的既定约定），所以行上必须另有一处本地化的、看得见的状态文字——
  * 状态不能只剩一个颜色（规格 2026-08-17「已知的可见变化」3）。
- * 「正在等输入」盖过生命周期，与 statusDotClass / toAgentStatus 同一条判定。
+ * 「正在等输入」盖过生命周期，与 toAgentStatus 同一条判定。
  */
 export function sessionStatusLabel(
   s: { lifecycleState: string; waitingForInput?: boolean },
@@ -318,20 +304,6 @@ export function sessionTitle(
  * 与「空闲」是两句话），点只回答「要不要紧」。
  */
 export { toAgentStatus };
-
-/**
- * 行首状态点的颜色。判定走上面那一处，类名走共享包的 `statusConfig`。
- *
- * 此前这里是一份独立的 switch，与 `toAgentStatus` 是同一套判定的两个投影，
- * 靠「并排放着，改一处时另一处就在眼前」维持一致 —— 那是纪律，不是机械保证。
- * 色值同理：本站抄一份类名，桌面端改了色流不过来。现在两样都只有一处。
- */
-export function statusDotClass(s: {
-  lifecycleState: string;
-  waitingForInput?: boolean;
-}): string {
-  return statusConfig[toAgentStatus(s)].dotClassName;
-}
 
 /**
  * token 计数的显示格式。实现来自共享包 `@agentre-hub/agentre-ui`，本站不再留一份

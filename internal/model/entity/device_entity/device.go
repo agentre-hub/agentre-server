@@ -11,7 +11,6 @@ const (
 	KindDesktop  = "desktop"
 	KindAgentred = "agentred"
 	KindWeb      = "web"
-	KindMobile   = "mobile"
 )
 
 type Device struct {

@@ -1,12 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { EventEmitter } from "node:events";
-import {
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,13 +12,10 @@ import {
   installServerErrorCapture,
   decodeToolResult,
   execCleanupInvocation,
-  handoffIsLive,
   installSignalHandlers,
   parseRunnerArgs,
-  prepareHandoff,
   prepareStaleHandoff,
   rateLimitClientIP,
-  removeOwnedHandoff,
   runtimePaths,
   playwrightInvocation,
   seedInvocation,
@@ -43,7 +34,6 @@ test("默认跑 spec，--serve 只切换模式且不漏给 Playwright", () => {
     mode: "spec",
     playwrightArgs: ["-g", "device flow"],
   });
-  expect(() => parseRunnerArgs(["--dual"])).toThrow(/unknown runner option/);
 });
 
 test("每个 run 使用独立保留 IP，让 authorize 限流键可精确清理", () => {
@@ -172,32 +162,6 @@ test("缺 sid 或 csrf 的 handoff 当场失败", () => {
   };
   expect(() => serveEnvPayload({ ...base, csrfToken: "csrf" })).toThrow(/sid/);
   expect(() => serveEnvPayload({ ...base, sid: "sid" })).toThrow(/csrf/i);
-});
-
-test("失效 handoff 不会被后续 drive 当作可用环境", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "e2e-handoff-"));
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, "serve-env.json");
-  writeFileSync(
-    path,
-    JSON.stringify({ serverURL: "http://127.0.0.1:1", sid: "old" }),
-  );
-  await expect(handoffIsLive(path, async () => false)).resolves.toBe(false);
-});
-
-test("健康 handoff 仍属于正在运行的 serve，后续启动不得覆盖", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "e2e-handoff-live-"));
-  const path = join(dir, "serve-env.json");
-  writeFileSync(
-    path,
-    JSON.stringify({ serverURL: "http://127.0.0.1:41234", runID: "run-live" }),
-  );
-  await expect(handoffIsLive(path, async () => true)).resolves.toBe(true);
-  expect(() => prepareHandoff(path, true)).toThrow(/still live/i);
-  removeOwnedHandoff(path, false);
-  expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({
-    runID: "run-live",
-  });
 });
 
 test("失效 handoff 只有在孤儿 cleanup 成功后才删除", async () => {

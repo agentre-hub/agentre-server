@@ -27,7 +27,7 @@ export function deviceKindLabel(
  * DEVICE_KIND_ICONS 是模块级常量：页面用 `<DEVICE_KIND_ICONS[kind] ?? Cpu>`
  * 的成员表达式取图标，避免在渲染期“创建”组件（react-hooks/static-components）。
  */
-import { Cpu, Laptop, Server, Smartphone } from "lucide-react";
+import { Laptop, Server, Smartphone } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export const DEVICE_KIND_ICONS: Record<string, LucideIcon> = {
@@ -35,7 +35,3 @@ export const DEVICE_KIND_ICONS: Record<string, LucideIcon> = {
   desktop: Laptop,
   mobile: Smartphone,
 };
-
-export function deviceKindIcon(kind: string): LucideIcon {
-  return DEVICE_KIND_ICONS[kind] ?? Cpu;
-}

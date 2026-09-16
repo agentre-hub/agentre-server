@@ -152,8 +152,8 @@ func (f *fakeDaemonNet) ForwardClient(ctx context.Context, _ relay_svc.Route, ch
 	if len(frame) == 0 {
 		return nil // 通道关闭信号
 	}
-	frameEnvelope, err := relaywire.DecodeFrame(frame)
-	if err != nil || frameEnvelope.GetRequest() == nil {
+	frameEnvelope := &agentrewire.RpcFrame{}
+	if err := proto.Unmarshal(frame, frameEnvelope); err != nil || frameEnvelope.GetRequest() == nil {
 		return nil
 	}
 	request := frameEnvelope.GetRequest()

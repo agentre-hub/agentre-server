@@ -95,11 +95,6 @@ export async function fetchDispatchPlan(
   return api<DispatchPlan>(`/v1/workspace/dispatch-target?${qs.toString()}`);
 }
 
-/** R15d 守卫：跳过 device_id 为空的档，取按序第一档可用的 agentred。 */
-export function pickFirstAvailable(tiers: DispatchTier[]): DispatchTier | null {
-  return tiers.find((t) => t.availability === "available") ?? null;
-}
-
 /** 标题派生：首行 + 视觉截断（镜像桌面端 sessionTitleFromFirstMessage）。 */
 export function deriveTitle(text: string): string {
   const first = text.trim().split("\n")[0]?.trim() ?? "";

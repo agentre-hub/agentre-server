@@ -330,8 +330,6 @@ describe("RelayClientPool", () => {
     expect(built[0].closed).toBe(1);
     expect(built[1].closed).toBe(1);
     expect(sockets[0].closed).toBe(1);
-    expect(pool.size).toBe(0);
-    expect(pool.channelCount).toBe(0);
   });
 
   /*

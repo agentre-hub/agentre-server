@@ -64,7 +64,6 @@ export interface UseBoardResult {
   /** 取数在途；旧结果留在原地，只有输入框右端那枚转圈在动。 */
   searching: boolean;
   error: string | null;
-  reload: () => Promise<void>;
   /** 落库走 lib/issues 的 moveIssue：wire 那层是 issue,这一层对外一律 task。 */
   moveTask: (id: number, stage: BoardStage, afterId: number) => Promise<void>;
   saveTask: (value: TaskFormValue) => Promise<void>;
@@ -239,7 +238,6 @@ export function useBoard(
     taskOf,
     searching: refreshing || loadedKey !== queryKey,
     error,
-    reload,
     moveTask,
     saveTask,
     deleteTask,

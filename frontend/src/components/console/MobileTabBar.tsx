@@ -12,7 +12,6 @@ import { cn } from "@agentre-hub/agentre-ui";
  * active = primary-text + 600，idle = subtle + 500。
  */
 export interface MobileTab {
-  key: string;
   to: string;
   label: string;
   Icon: LucideIcon;
@@ -42,7 +41,7 @@ export function MobileTabBar({
     >
       {items.map((item) => (
         <NavLink
-          key={item.key}
+          key={item.to}
           to={item.to}
           className={({ isActive }) =>
             cn(

@@ -37,14 +37,3 @@ func EncodeFrame(frame *agentrewire.RpcFrame) ([]byte, error) {
 	}
 	return encoded, nil
 }
-
-func DecodeFrame(data []byte) (*agentrewire.RpcFrame, error) {
-	frame := &agentrewire.RpcFrame{}
-	if err := proto.Unmarshal(data, frame); err != nil {
-		return nil, fmt.Errorf("relaywire: decode frame: %w", err)
-	}
-	if frame.GetBody() == nil {
-		return nil, errors.New("relaywire: frame has no body")
-	}
-	return frame, nil
-}

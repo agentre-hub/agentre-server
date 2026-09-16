@@ -10,7 +10,6 @@
  * 仍然钉住此前那两条不变量：每个状态的文案互不相同（不折叠成同一个错误），
  * 状态不只靠颜色（每一档都有可见文字 + 图标）。
  */
-import { statusConfig, type AgentStatus } from "@agentre-hub/agentre-ui";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,11 +26,9 @@ import {
   deriveSessionViewStatus,
   formatRelativeTime,
   formatTokens,
-  matchesRowSearch,
   matchesSessionFilter,
   sessionStatusLabel,
   sessionTitle,
-  statusDotClass,
   toAgentStatus,
 } from "@/lib/sessionView";
 import { RelayError, type RelayState } from "@/lib/relayClient";
@@ -734,17 +731,6 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
     expect(matchesSessionFilter(idle, "waiting")).toBe(false);
   });
 
-  it("matchesRowSearch:空查询恒真;命中任一字段(标题/设备/后端/Agent),大小写不敏感", () => {
-    const fields = ["重构登录页", "书房小主机", "claudecode", "后端 Agent"];
-    expect(matchesRowSearch(fields, "")).toBe(true);
-    expect(matchesRowSearch(fields, "   ")).toBe(true);
-    expect(matchesRowSearch(fields, "登录")).toBe(true);
-    expect(matchesRowSearch(fields, "claude")).toBe(true);
-    expect(matchesRowSearch(fields, "后端")).toBe(true);
-    expect(matchesRowSearch(fields, "不存在")).toBe(false);
-    expect(matchesRowSearch(fields, "CLAUDE")).toBe(true);
-  });
-
   it("sessionTitle:有标题就用标题;还没有标题的会话退化为「工作目录 · 后端 · 状态」", () => {
     const t = i18n.t.bind(i18n);
     expect(
@@ -779,27 +765,20 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
   });
 
   /**
-   * 点的类名取自包的 `statusConfig`，本站不留第二份映射。
+   * 状态归哪一档只判一次（`toAgentStatus`），类名由包的 `statusConfig` 从那一档给出。
    *
-   * 此前 `statusDotClass` 与 `toAgentStatus` 是同一套判定的两个投影，靠「并排
-   * 放着，改一处时另一处就在眼前」维持一致 —— 这不是机械保证，是纪律。现在
-   * 判定只剩 `toAgentStatus` 一处，类名由包给。断言读包的值而不是写字面量：
-   * 包改一次色，本站跟着走，这条不用动。
+   * 此前 `statusDotClass` 是同一套判定的第二个投影（判定 + 取色），靠「并排放着」
+   * 维持一致 —— 那不是机械保证。收掉它之后判定只剩 `toAgentStatus` 一处：等待/运行/
+   * 其余各自归位，「正在等输入」盖过生命周期。
    */
-  it("statusDotClass:等待/运行/中断/其余，类名都来自包的 statusConfig", () => {
-    const dot = (status: AgentStatus) => statusConfig[status].dotClassName;
-
+  it("toAgentStatus:等待/运行/其余各自归位", () => {
     expect(
-      statusDotClass({ lifecycleState: "running", waitingForInput: true }),
-    ).toBe(dot("waiting"));
-    expect(statusDotClass({ lifecycleState: "running" })).toBe(dot("running"));
-    // 中断归中性：那是 daemon 重启后的常态，不是故障（见下面那条用例）。
-    expect(statusDotClass({ lifecycleState: "interrupted" })).toBe(dot("idle"));
-    // failed 是 wire 上「上一轮跑挂了」那一档，也是**唯一**上错误色的一档。
-    expect(statusDotClass({ lifecycleState: "failed" })).toBe(dot("error"));
-    expect(statusDotClass({ lifecycleState: "idle" })).toBe(dot("idle"));
+      toAgentStatus({ lifecycleState: "running", waitingForInput: true }),
+    ).toBe("waiting");
+    expect(toAgentStatus({ lifecycleState: "running" })).toBe("running");
+    expect(toAgentStatus({ lifecycleState: "idle" })).toBe("idle");
     // 不认识的旧状态如实归灰,不猜。
-    expect(statusDotClass({ lifecycleState: "weird" })).toBe(dot("idle"));
+    expect(toAgentStatus({ lifecycleState: "weird" })).toBe("idle");
   });
 
   /**

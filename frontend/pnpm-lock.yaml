@@ -23,9 +23,6 @@ importers:
       '@dnd-kit/sortable':
         specifier: ^10.0.0
         version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6))(react@19.2.6)
-      '@iconify/react':
-        specifier: ^6.0.0
-        version: 6.0.2(react@19.2.6)
       '@tanstack/react-virtual':
         specifier: ^3.14.10
         version: 3.14.10(react-dom@19.2.6(react@19.2.6))(react@19.2.6)

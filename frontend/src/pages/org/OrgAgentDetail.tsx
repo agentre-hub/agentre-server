@@ -40,7 +40,6 @@ import {
   parsePromptJSON,
   parseToolsJSON,
   stringifyPromptJSON,
-  stringifyToolsJSON,
   type OrgIdMaps,
 } from "./adapter";
 import {
@@ -135,7 +134,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
       enabled:
         k === key ? !(current.get(k) ?? false) : (current.get(k) ?? false),
     }));
-    saveIfChanged({ tools_json: stringifyToolsJSON(next) });
+    saveIfChanged({ tools_json: JSON.stringify(next) });
   };
 
   const savePrompt = (text: string) => {

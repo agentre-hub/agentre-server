@@ -137,11 +137,6 @@ export function classifyRemoteFsError(err: unknown): RemoteFsFailure {
   }
 }
 
-/** 当前目录是不是一个 Git 仓库：**判据只看这一次 listDir 的条目**，不额外发请求。 */
-export function isGitRepo(entries: RemoteFsEntry[]): boolean {
-  return entries.some((e) => e.name === ".git");
-}
-
 export function joinPath(parent: string, name: string): string {
   if (parent === "/") return `/${name}`;
   return `${parent.replace(/\/+$/, "")}/${name}`;

@@ -214,8 +214,6 @@ export interface MachineReachability {
   resolved: Record<string, ResolvedMachine>;
   /** 离线机器组头上的「最后在线」。 */
   machineNotes: Record<number, { lastSeenAt?: number }>;
-  /** 有没有在线的 agentred：顶栏那句「桌面端已连接」认它。 */
-  hasOnlineDesktop: boolean;
   /** 「重新问一次这台机器」：把那一台的解析器整个重挂。 */
   retryMachine: (deviceId: number) => void;
   /** 忘掉已经答上来的那些清单：离开机器轴时用。 */
@@ -397,11 +395,6 @@ export function useMachineReachability({
     return notes;
   }, [devices]);
 
-  // Fresh「桌面端已连接」只在有在线 agentred 时渲染；未知/离线都不显示。
-  const hasOnlineDesktop = devices.some(
-    (d) => d.kind === "agentred" && d.online,
-  );
-
   /* 机器轴上对**每台在线机器**各连一条中继：只有机器自己答得出「它上面
      有什么」。离开这个轴（或离开页面）时它们一并卸载、连接随之关闭。 */
   const resolvers = onlineMachines.map((device) => (
@@ -422,7 +415,6 @@ export function useMachineReachability({
     machineStates,
     resolved,
     machineNotes,
-    hasOnlineDesktop,
     retryMachine,
     forgetResolved,
     loadMachinePage,

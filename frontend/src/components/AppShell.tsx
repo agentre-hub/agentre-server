@@ -319,7 +319,6 @@ export default function AppShell({
   const mobileTabs: MobileTab[] = NAV_ITEMS.filter(
     (item) => item.to !== "/settings",
   ).map((item) => ({
-    key: item.to,
     to: item.to,
     label: t(item.labelKey),
     Icon: item.Icon,

@@ -28,7 +28,7 @@ const VALUE_FLAGS = new Set([
   "timeout",
   "viewport",
 ]);
-const BOOL_FLAGS = new Set(["headed", "full", "fresh", "json"]);
+const BOOL_FLAGS = new Set(["headed", "full", "fresh"]);
 
 /**
  * 拼错的开关**当场失败**,不被当成布尔悄悄吞掉 —— `--headles` 什么都不做而命令

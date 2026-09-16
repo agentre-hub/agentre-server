@@ -84,10 +84,6 @@ export interface OrgBackendItem {
   availability: OrgExecTargetAvailability;
 }
 
-export interface OrgBackendsResponse {
-  backends: OrgBackendItem[];
-}
-
 // ---------- 写：九个 POST 共用的回执 ----------
 
 export interface OrgWriteResponse {
