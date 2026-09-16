@@ -75,7 +75,7 @@ func TestUnseedAccountRemovesVersionSeqAndUser(t *testing.T) {
 }
 
 func TestSeedSessionUsesProductionSessionContract(t *testing.T) {
-	payload := newSessionPayload(42, "csrf", 1234)
+	payload := serversession.Session{UserID: 42, CSRFToken: "csrf", CreatedAt: 1234}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		t.Fatalf("marshal session payload: %v", err)
@@ -143,11 +143,16 @@ func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 }
 
 func TestOracleReportsStateWithoutSecretColumns(t *testing.T) {
-	if got := oracleIdentitySQL(); !strings.Contains(got, "id = ?") || !strings.Contains(got, "email = ?") {
+	if got := oracleIdentityQuery; !strings.Contains(got, "id = ?") || !strings.Contains(got, "email = ?") {
 		t.Fatalf("oracle identity query is not scoped by run and user: %s", got)
 	}
 
-	steps := oracleSQL()
+	steps := []sqlStep{
+		{"device_flow_codes", oracleFlowsQuery},
+		{"devices", oracleDevicesQuery},
+		{"device_tokens", oracleTokensQuery},
+		{"sync_objects", oracleSyncObjectsQuery},
+	}
 	for _, name := range []string{"device_flow_codes", "devices", "device_tokens", "sync_objects"} {
 		step := findSQLStep(t, steps, name)
 		lower := strings.ToLower(step.SQL)

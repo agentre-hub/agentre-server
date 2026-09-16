@@ -97,7 +97,7 @@ func newMirrorTestServer(t *testing.T, stub *stubWorkspaceSvc) *httptest.Server 
 	testutils.Redis(t)
 	agent_session_svc.SetSessionRead(stub)
 	t.Cleanup(func() { agent_session_svc.SetSessionRead(agent_session_svc.New()) })
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

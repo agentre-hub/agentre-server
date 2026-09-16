@@ -27,11 +27,6 @@ etcdConfig:
   # 由流水线从 secrets 传入
   password: ""
 
-serviceAccount:
-  create: false
-  annotations: {}
-  name: ""
-
 podAnnotations: {}
 
 podSecurityContext: {}

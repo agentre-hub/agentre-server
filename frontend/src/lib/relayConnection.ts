@@ -16,12 +16,17 @@
  */
 import { RedialTimer } from "@/lib/redialTimer";
 import { backoffDelay } from "@/lib/relayBackoff";
-import {
-  binaryPayload,
-  unwrapEnvelope,
-  wrapEnvelope,
-} from "@/lib/relayEnvelope";
+import { unwrapEnvelope, wrapEnvelope } from "@agentre-hub/agentre-wire";
 import { bearerSubprotocol } from "@/lib/relayUrl";
+
+/** 把 WebSocket 收到的东西归一成字节。信封本身归 wire 包，只有这条平台细节留在这里。 */
+function binaryPayload(data: unknown): Uint8Array {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new TypeError("relay: 中继帧必须是二进制");
+}
 
 export type RelayState =
   "connecting" | "connected" | "disconnected" | "reconnecting";

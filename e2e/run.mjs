@@ -259,24 +259,6 @@ export function runtimePaths(e2eDir, runID) {
   };
 }
 
-export function serverInvocation(serverBin, configPath) {
-  return { command: serverBin, args: ["--config", configPath] };
-}
-
-export function playwrightInvocation(args) {
-  return {
-    command: "pnpm",
-    args: [
-      "exec",
-      "playwright",
-      "test",
-      "--config",
-      "playwright.e2e.config.ts",
-      ...args,
-    ],
-  };
-}
-
 export function rateLimitClientIP(id) {
   const bytes = createHash("sha256").update(id).digest();
   return `198.18.${bytes[0]}.${bytes[1]}`;
@@ -314,17 +296,7 @@ export function serveEnvPayload(values) {
       throw new Error(`serve handoff is missing ${key}`);
     }
   }
-  return {
-    serverURL: values.serverURL,
-    cookieName: values.cookieName,
-    sid: values.sid,
-    csrfToken: values.csrfToken,
-    dsn: values.dsn,
-    redis: values.redis,
-    runID: values.runID,
-    userID: values.userID,
-    serverLog: values.serverLog,
-  };
+  return values;
 }
 
 export async function cleanupThenRemoveHandoff(path, owned, cleanup) {
@@ -364,10 +336,6 @@ export async function prepareStaleHandoff(
   rmSync(path, { force: true });
 }
 
-export function cleanupRunID(activeRunID, seedResult) {
-  return seedResult?.run_id ?? activeRunID ?? null;
-}
-
 export function cleanupHasResidue(residue) {
   return Object.values(residue ?? {}).some((count) => Number(count) > 0);
 }
@@ -392,10 +360,6 @@ export function installChildCompletion(child, finish) {
   };
   child.once("error", () => complete(1));
   child.once("exit", (code) => complete(code ?? 1));
-}
-
-export function installServerErrorCapture(child, capture) {
-  child.once("error", capture);
 }
 
 export async function stopManagedChild(child, timeout = 5000) {
@@ -435,15 +399,18 @@ function build(pathsForRun) {
   });
 }
 
-function toolInvocation(command, id) {
-  if (command === "seed") return seedInvocation(paths.tool, config, id);
+function toolInvocation(command, id, overrides = {}) {
+  const tool = overrides.tool ?? paths.tool;
+  const dsn = overrides.dsn ?? config.dsn;
+  const redis = overrides.redis ?? config.redis;
+  if (command === "seed") return seedInvocation(tool, { dsn, redis }, id);
   return {
-    command: paths.tool,
-    args: [command, "--redis-db", String(config.redis.db), "--run-id", id],
+    command: tool,
+    args: [command, "--redis-db", String(redis.db), "--run-id", id],
     env: {
-      WEBE2E_DSN: config.dsn,
-      WEBE2E_REDIS_ADDR: config.redis.addr,
-      WEBE2E_REDIS_PASSWORD: config.redis.password,
+      WEBE2E_DSN: dsn,
+      WEBE2E_REDIS_ADDR: redis.addr,
+      WEBE2E_REDIS_PASSWORD: redis.password,
     },
   };
 }
@@ -454,13 +421,12 @@ export function decodeToolResult(output, error = null) {
   throw new Error("fixture tool produced no JSON output");
 }
 
-export function execCleanupInvocation(tool, handoff, execute = execFileSync) {
-  const invocation = seedInvocation(
-    tool,
-    { dsn: handoff.dsn, redis: handoff.redis },
-    handoff.runID,
-  );
-  invocation.args[0] = "cleanup";
+/**
+ * 跑一次 fixture CLI。overrides 用来替掉那轮 run 的 tool / dsn / redis（孤儿 cleanup
+ * 用的是旧 handoff 里的依赖，不是本轮的 config）；execute 是测试的注入缝。
+ */
+export function runTool(command, id, overrides = {}, execute = execFileSync) {
+  const invocation = toolInvocation(command, id, overrides);
   try {
     const output = execute(invocation.command, invocation.args, {
       encoding: "utf8",
@@ -473,23 +439,9 @@ export function execCleanupInvocation(tool, handoff, execute = execFileSync) {
   }
 }
 
-function runTool(command, id) {
-  const invocation = toolInvocation(command, id);
-  try {
-    const output = execFileSync(invocation.command, invocation.args, {
-      encoding: "utf8",
-      env: { ...process.env, ...invocation.env },
-      timeout: 120_000,
-    });
-    return decodeToolResult(output);
-  } catch (error) {
-    return decodeToolResult(error.stdout, error);
-  }
-}
-
 async function cleanStaleHandoff() {
   await prepareStaleHandoff(serveEnvPath, probeHealth, (old) =>
-    execCleanupInvocation(paths.tool, old),
+    runTool("cleanup", old.runID, { dsn: old.dsn, redis: old.redis }),
   );
 }
 
@@ -555,7 +507,7 @@ async function finish(code) {
   if (finishing) return;
   finishing = true;
   await stopManagedChild(playwrightProc);
-  const id = cleanupRunID(activeRunID, seeded);
+  const id = seeded?.run_id ?? activeRunID ?? null;
   if (toolReady && id) {
     try {
       const cleanup = await cleanupThenRemoveHandoff(
@@ -607,16 +559,16 @@ async function main() {
       `E2E port ${config.http.port} is already in use; refusing to reuse another server`,
     );
   }
-  const invocation = serverInvocation(
-    join(root, "bin", "server"),
-    config.configPath,
-  );
   const logFD = openSync(paths.serverLog, "a", 0o600);
-  serverProc = spawn(invocation.command, invocation.args, {
-    cwd: root,
-    stdio: ["ignore", logFD, logFD],
-  });
-  installServerErrorCapture(serverProc, (error) => {
+  serverProc = spawn(
+    join(root, "bin", "server"),
+    ["--config", config.configPath],
+    {
+      cwd: root,
+      stdio: ["ignore", logFD, logFD],
+    },
+  );
+  serverProc.once("error", (error) => {
     serverStartError = error;
   });
 
@@ -665,12 +617,22 @@ async function main() {
     return;
   }
 
-  const playwright = playwrightInvocation(playwrightArgs);
-  playwrightProc = spawn(playwright.command, playwright.args, {
-    cwd: here,
-    env: process.env,
-    stdio: "inherit",
-  });
+  playwrightProc = spawn(
+    "pnpm",
+    [
+      "exec",
+      "playwright",
+      "test",
+      "--config",
+      "playwright.e2e.config.ts",
+      ...playwrightArgs,
+    ],
+    {
+      cwd: here,
+      env: process.env,
+      stdio: "inherit",
+    },
+  );
   installChildCompletion(playwrightProc, finish);
 }
 

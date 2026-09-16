@@ -22,6 +22,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo/mock_sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
@@ -216,7 +217,7 @@ func TestCreateProvider_GivenNoRegisteredDevice_ThenPersistsTheAccountObject(t *
 	require.NoError(t, err)
 	assert.NotEmpty(t, got.ProviderKey)
 	assert.Equal(t, sync_entity.KindLLMProvider, saved.Kind)
-	assert.Equal(t, ServerOriginFingerprint, saved.OriginFingerprint)
+	assert.Equal(t, workspace_svc.ServerOriginFingerprint, saved.OriginFingerprint)
 }
 
 func TestCreateBackend_GivenNoRegisteredDevice_ThenPersistsTheAccountIdentity(t *testing.T) {
@@ -241,7 +242,7 @@ func TestCreateBackend_GivenNoRegisteredDevice_ThenPersistsTheAccountIdentity(t 
 	require.NoError(t, err)
 	assert.NotEmpty(t, got.SyncID)
 	assert.Equal(t, sync_entity.KindAgentBackend, saved.Kind)
-	assert.Equal(t, ServerOriginFingerprint, saved.OriginFingerprint)
+	assert.Equal(t, workspace_svc.ServerOriginFingerprint, saved.OriginFingerprint)
 }
 
 // 决策 5：运行设备必填，没有机器就没有这一套安装——服务端拒绝缺设备的写入。

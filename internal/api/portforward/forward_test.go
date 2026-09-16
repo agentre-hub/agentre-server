@@ -170,7 +170,7 @@ func newHarness(t *testing.T, withPool bool) *harness {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 	auth_svc.SetDefault(auth_svc.New(redis.Default(),
-		session.New(redis.Default(), fwCookieName, 86400)))
+		session.New(redis.Default(), 86400)))
 	// OwnedDevice 只走 device_repo，签名器与配置都用不上（与 http_golden_test 同）。
 	device_svc.SetDefault(device_svc.New(device_svc.Config{}))
 

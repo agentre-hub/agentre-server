@@ -24,6 +24,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/hashutil"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo/mock_device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -242,7 +243,7 @@ func TestExchangeToken(t *testing.T) {
 			assert.NotEmpty(t, out.AccessToken)
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(7), out.DeviceID)
-			assert.Equal(t, sha256Hex(out.AccessToken), capturedHash)
+			assert.Equal(t, hashutil.SHA256Hex(out.AccessToken), capturedHash)
 		})
 		// 设备流的显示名：客户端自报优先，缺省回退到指纹缩写。回退**必须**剥掉
 		// sha256: 前缀 —— 直接截前 8 个字符得到的是 "sha256:" 加一个十六进制字符，
@@ -407,7 +408,7 @@ func TestRefresh(t *testing.T) {
 			assert.NotEmpty(t, out.AccessToken)
 			assert.NotEmpty(t, out.RefreshToken)
 			assert.Equal(t, int64(42), out.DeviceID)
-			assert.Equal(t, sha256Hex(out.AccessToken), capturedHash)
+			assert.Equal(t, hashutil.SHA256Hex(out.AccessToken), capturedHash)
 		})
 	})
 }
@@ -441,7 +442,7 @@ func TestExchangeToken_IssuesOpaqueAccessTokenStoredOnlyAsDigest(t *testing.T) {
 
 	assert.NotContains(t, out.AccessToken, ".", "access token 不能是 JWT 那种可解析的分段结构")
 	assert.GreaterOrEqual(t, len(out.AccessToken), 32, "随机串要有足够熵")
-	assert.Equal(t, sha256Hex(out.AccessToken), stored.AccessTokenHash, "库里只存摘要")
+	assert.Equal(t, hashutil.SHA256Hex(out.AccessToken), stored.AccessTokenHash, "库里只存摘要")
 	assert.NotEqual(t, out.AccessToken, stored.AccessTokenHash, "明文不能落库")
 	assert.Equal(t, int(svc.cfg.AccessTTL/time.Second), out.ExpiresIn, "有效期与今天一致")
 }
@@ -462,8 +463,8 @@ func TestRevoke(t *testing.T) {
 			nowMs := time.Now().UnixMilli()
 			current := &device_token_entity.DeviceToken{ID: 2, DeviceID: 42, Createtime: nowMs}
 			rotated := &device_token_entity.DeviceToken{ID: 1, DeviceID: 42, Createtime: nowMs - 1000, RevokedAt: nowMs}
-			mT.EXPECT().FindByAccessHash(gomock.Any(), sha256Hex("current")).Return(current, nil).Times(2)
-			mT.EXPECT().FindByAccessHash(gomock.Any(), sha256Hex("rotated")).Return(rotated, nil).Times(2)
+			mT.EXPECT().FindByAccessHash(gomock.Any(), hashutil.SHA256Hex("current")).Return(current, nil).Times(2)
+			mT.EXPECT().FindByAccessHash(gomock.Any(), hashutil.SHA256Hex("rotated")).Return(rotated, nil).Times(2)
 			mT.EXPECT().RevokeChain(gomock.Any(), int64(42), gomock.Any()).Return(nil)
 			mD.EXPECT().Revoke(gomock.Any(), int64(42), gomock.Any()).DoAndReturn(
 				func(context.Context, int64, int64) error { dev.Status = consts.DELETE; return nil },
@@ -1172,7 +1173,7 @@ func TestExchangeToken_GivenADevice_ThenTheAccessTokenResolvesToTheDeviceFingerp
 	out, err := svc.ExchangeToken(ctx, "dc-x")
 	require.NoError(t, err)
 
-	mT.EXPECT().FindByAccessHash(gomock.Any(), sha256Hex(out.AccessToken)).Return(stored, nil)
+	mT.EXPECT().FindByAccessHash(gomock.Any(), hashutil.SHA256Hex(out.AccessToken)).Return(stored, nil)
 	mD.EXPECT().Find(gomock.Any(), int64(7)).Return(&upserted, nil)
 	principal, err := svc.ResolveBearer(ctx, out.AccessToken)
 	require.NoError(t, err)
@@ -1353,7 +1354,7 @@ func TestExchangeToken_SignalsThatTheDeviceRowNowExists(t *testing.T) {
 func TestResolveBearer(t *testing.T) {
 	const frozen int64 = 1_700_000_000_000
 	const token = "opaque-access-token"
-	digest := sha256Hex(token)
+	digest := hashutil.SHA256Hex(token)
 	activeDevice := func() *device_entity.Device {
 		return &device_entity.Device{
 			ID: 42, UserID: 7, Kind: device_entity.KindAgentred, Fingerprint: "sha256:aaaa", Status: consts.ACTIVE,

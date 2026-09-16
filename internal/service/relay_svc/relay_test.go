@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
+
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
@@ -150,7 +152,7 @@ func TestAttachClientDetachSignalsChannelCloseToDaemon(t *testing.T) {
 
 	select {
 	case received := <-daemonWriter.frames:
-		gotChannel, payload, err := UnwrapEnvelope(received.frame)
+		gotChannel, payload, err := relayenvelope.Unwrap(received.frame)
 		require.NoError(t, err)
 		require.Equal(t, channelID, gotChannel)
 		require.Empty(t, payload, "通道关闭以空载荷信封表示")
@@ -220,7 +222,7 @@ func TestPrepareDaemonAcceptsOnlyThisAccountsActiveAddressableDevices(t *testing
 }
 
 func TestUnwrapEnvelopeRejectsNonUTF8ChannelID(t *testing.T) {
-	_, _, err := UnwrapEnvelope([]byte{0, 1, 0xff})
+	_, _, err := relayenvelope.Unwrap([]byte{0, 1, 0xff})
 	require.Error(t, err)
 }
 

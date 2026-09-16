@@ -39,7 +39,7 @@ import {
   AccountChannelDevicePresence,
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
-import { api } from "@/lib/api";
+import { fetchAgents } from "@/lib/agents";
 import { useLiveTurns } from "@/lib/liveSessions";
 import { fetchProjects, type ProjectNode as ApiProject } from "@/lib/projects";
 import {
@@ -64,11 +64,7 @@ import { ProjectDialogs } from "@/pages/chat/ProjectDialogs";
 import { useMachineReachability } from "@/pages/chat/useMachineReachability";
 import { useProjectManagement } from "@/pages/chat/useProjectManagement";
 import { useSessionIndex } from "@/pages/chat/useSessionIndex";
-import {
-  INDEX_AXES,
-  type IndexAxis,
-  type ProjectNode,
-} from "@/lib/sessionAxes";
+import { INDEX_AXES, type IndexAxis } from "@/lib/sessionAxes";
 import { type SessionFilter } from "@/lib/sessionView";
 
 /**
@@ -393,24 +389,16 @@ export default function Chat() {
    *
    * 此前这里是 refetch()——为了一个服务端刚刚告诉过我们的时刻，重取一遍当前范围的
    * 索引外加一次完整集合上的未读数探测。这条路每点开一条对话就走一遍。
+   * 直接把 markRead 挂上去：它本就是 useCallback 的稳定引用。
    */
-  const onMarkedRead = useCallback(
-    (conversationId: string, lastReadAt: number) => {
-      markRead(conversationId, lastReadAt);
-    },
-    [markRead],
-  );
 
   /** 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。 */
   useAliveEffect((alive) => {
-    Promise.all([
-      fetchDevices(),
-      api<{ agents: NewConvAgent[] }>("/v1/workspace/agents"),
-    ])
+    Promise.all([fetchDevices(), fetchAgents()])
       .then(([d, a]) => {
         if (!alive()) return;
         setDevices(d);
-        setAgents(a.agents);
+        setAgents(a);
       })
       .catch((e: unknown) => {
         if (alive()) sessionIndex.setLoadError(e);
@@ -444,8 +432,8 @@ export default function Chat() {
   // 同步版本推进：行上的 Agent 名与项目轴的组头都来自 sync_objects。放在这里而不是
   // 跟另外两条信号挤在一起，只因为它要用到上面这个 reloadProjects。
   useAccountChannel([AccountChannelSyncVersion], () => {
-    api<{ agents: NewConvAgent[] }>("/v1/workspace/agents")
-      .then((a) => setAgents(a.agents))
+    fetchAgents()
+      .then(setAgents)
       .catch(() => {});
     reloadProjects();
   });
@@ -462,19 +450,6 @@ export default function Chat() {
     keyword: sessionIndex.debouncedSearch,
   });
   const { forgetResolved } = reach;
-
-  const projectNodes = useMemo<ProjectNode[]>(
-    () =>
-      projects.map((p) => ({
-        syncId: p.syncId,
-        name: p.name,
-        color: p.color,
-        icon: p.icon,
-        parentSyncId: p.parentSyncId,
-        sortOrder: p.sortOrder,
-      })),
-    [projects],
-  );
 
   /**
    * 「新对话」那一族要的是**线上载荷的形状**（下划线键），项目面读的是这一页的
@@ -869,7 +844,7 @@ export default function Chat() {
       view={view}
       selectedKey={selectedKey}
       onSelect={isMobile ? undefined : onSelect}
-      projects={projectNodes}
+      projects={projects}
       agents={agentInfos}
       groupTotals={groupTotals}
       loadGroupPage={loadGroupPage}
@@ -1058,7 +1033,7 @@ export default function Chat() {
                   initialEffortNote={selected.effortNote}
                   initialTurnStartedAt={selected.turnStartedAt}
                   headerRight={pageChrome}
-                  onMarkedRead={onMarkedRead}
+                  onMarkedRead={markRead}
                 />
               </div>
             ) : (

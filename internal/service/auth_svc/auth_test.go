@@ -17,7 +17,7 @@ import (
 )
 
 func newSvc() AuthSvc {
-	return New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
+	return New(redis.Default(), session.New(redis.Default(), 86400))
 }
 
 func TestOAuthState_Roundtrip(t *testing.T) {

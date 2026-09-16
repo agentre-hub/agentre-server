@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
@@ -146,11 +147,11 @@ func TestDeleteRevokedBefore_ThenEachSideIsItsOwnBoundedRangeScan(t *testing.T) 
 	r := NewDeviceToken()
 
 	// 已撤销的那一侧:第一批删满,于是必须再来一批。
-	for _, affected := range []int64{cleanupBatchSize, 2} {
+	for _, affected := range []int64{dbutil.CleanupBatchSize, 2} {
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta(
 			"DELETE FROM `device_tokens` WHERE revoked_at != 0 AND revoked_at < ?")).
-			WithArgs(int64(1700), int64(cleanupBatchSize)).
+			WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 			WillReturnResult(sqlmock.NewResult(0, affected))
 		mock.ExpectCommit()
 	}
@@ -158,7 +159,7 @@ func TestDeleteRevokedBefore_ThenEachSideIsItsOwnBoundedRangeScan(t *testing.T) 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
 		"DELETE FROM `device_tokens` WHERE refresh_expires_at < ?")).
-		WithArgs(int64(1700), int64(cleanupBatchSize)).
+		WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 

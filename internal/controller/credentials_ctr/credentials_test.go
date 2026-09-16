@@ -37,7 +37,7 @@ func newIntrospectServer(t *testing.T, quota int64) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{CredentialsIntrospectPerAccountPerMin: quota}},
@@ -268,7 +268,7 @@ func TestIntrospect_TicketAfterItsRelayConnect_StillIntrospects(t *testing.T) {
 func TestIntrospect_RedisDown_TicketAnswers503_DeviceTokenStillSucceeds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mini := testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
 		Cfg:    &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{CredentialsIntrospectPerAccountPerMin: 100}},

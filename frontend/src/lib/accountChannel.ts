@@ -51,16 +51,16 @@ export {
  * 每一种都只说「这一类东西变了，该拉了」。不认识的种类**忽略但不断连**（见
  * decodeSignal），所以 server 新加一种可以先发后收。
  */
-export const AccountChannelKnownTypes = [
+const AccountChannelKnownTypes = [
   AccountChannelSyncVersion,
   AccountChannelMirrorChanged,
   AccountChannelDevicePresence,
 ] as const;
 
-export type AccountChannelFrame = AccountChannelSignal;
+type AccountChannelFrame = AccountChannelSignal;
 
 /** 兜底轮询周期。与桌面端的 sync_svc.PollInterval 同一个 30 秒。 */
-export const AccountChannelPollMs = 30_000;
+const AccountChannelPollMs = 30_000;
 
 /**
  * 按种类分发的信号在收件侧的攒批窗口。

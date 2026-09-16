@@ -282,7 +282,7 @@ func RegisterDefaults(cfg *ServerConfig) {
 		CallbackPath: auth.GithubCallbackPath, PublicURL: cfg.PublicURL,
 	}))
 
-	store := session.New(redis.Default(), session.CookieName, int(cfg.Session.TTL/time.Second))
+	store := session.New(redis.Default(), int(cfg.Session.TTL/time.Second))
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), store))
 
 	// 账号闸门：session / device JWT / relay 三条鉴权路径与中继心跳共用的那一处判定。

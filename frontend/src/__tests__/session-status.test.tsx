@@ -25,14 +25,13 @@ import {
   computeContextUsage,
   deriveSessionViewStatus,
   formatRelativeTime,
-  formatTokens,
   matchesSessionFilter,
   sessionStatusLabel,
   sessionTitle,
   toAgentStatus,
 } from "@/lib/sessionView";
 import { RelayError, type RelayState } from "@/lib/relayClient";
-import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { ThemeProvider, formatTokens } from "@agentre-hub/agentre-ui";
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");

@@ -3,8 +3,6 @@ package sync_svc
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"time"
 
@@ -18,6 +16,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/hashutil"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
@@ -664,7 +663,7 @@ func (s *syncSvc) PutAvatar(ctx context.Context, in AvatarInput) error {
 		return i18n.NewError(ctx, code.InvalidParameter)
 	}
 	hash := strings.ToLower(strings.TrimSpace(in.ContentHash))
-	if hash != sha256Hex(in.Content) {
+	if hash != hashutil.SHA256Hex(in.Content) {
 		return i18n.NewError(ctx, code.SyncAvatarHashMismatch)
 	}
 	return sync_repo.SyncAvatar().Save(ctx, &sync_entity.SyncAvatar{
@@ -829,10 +828,4 @@ func payloadOrEmptyObject(payload []byte) string {
 		return "{}"
 	}
 	return string(payload)
-}
-
-// sha256Hex 是头像的内容哈希算法：正文的 sha256，小写十六进制。
-func sha256Hex(content string) string {
-	sum := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(sum[:])
 }

@@ -306,12 +306,6 @@ export function sessionTitle(
 export { toAgentStatus };
 
 /**
- * token 计数的显示格式。实现来自共享包 `@agentre-hub/agentre-ui`，本站不再留一份
- * —— 此前这里与桌面端 `chat.tsx` 是**逐字节相同**的两段代码。
- */
-export { formatTokens } from "@agentre-hub/agentre-ui";
-
-/**
  * Composer 底栏那条「上下文用量」。判据在共享包里（本站与桌面端 `chat-panel-
  * context-usage.ts` 此前是逐条对照写出来的两份），本站只是把它按原名转出来：
  *

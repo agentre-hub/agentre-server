@@ -149,7 +149,7 @@ func newDeviceTestServer(t *testing.T, stub *stubDeviceSvc) *httptest.Server {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 	device_svc.SetDefault(stub)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{
@@ -426,7 +426,7 @@ func newUpgradeTestServer(
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
 	device_svc.SetDefault(stub)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

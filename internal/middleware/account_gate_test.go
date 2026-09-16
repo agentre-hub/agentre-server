@@ -64,7 +64,7 @@ func gatedRoute(handler gin.HandlerFunc) *gin.Engine {
 func sessionCookieFor(t *testing.T, userID int64) *http.Cookie {
 	t.Helper()
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 14*24*3600)))
 	sid, _, err := auth_svc.Default().StartSession(context.Background(), userID)
 	require.NoError(t, err)
 	return &http.Cookie{Name: "server_session", Value: sid}

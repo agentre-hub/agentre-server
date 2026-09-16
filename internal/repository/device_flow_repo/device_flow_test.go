@@ -7,6 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
@@ -152,11 +153,11 @@ func TestDeleteExpiredBefore_BatchesUntilUnderLimit(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDeviceFlow()
 
-	for _, affected := range []int64{cleanupBatchSize, 3} {
+	for _, affected := range []int64{dbutil.CleanupBatchSize, 3} {
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta(
 			"DELETE FROM `device_flow_codes` WHERE expires_at < ?")).
-			WithArgs(int64(1700), int64(cleanupBatchSize)).
+			WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 			WillReturnResult(sqlmock.NewResult(0, affected))
 		mock.ExpectCommit()
 	}

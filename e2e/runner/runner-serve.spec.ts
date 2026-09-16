@@ -6,20 +6,16 @@ import { join } from "node:path";
 
 import {
   cleanupHasResidue,
-  cleanupRunID,
   cleanupThenRemoveHandoff,
   installChildCompletion,
-  installServerErrorCapture,
   decodeToolResult,
-  execCleanupInvocation,
   installSignalHandlers,
   parseRunnerArgs,
   prepareStaleHandoff,
   rateLimitClientIP,
   runtimePaths,
-  playwrightInvocation,
+  runTool,
   seedInvocation,
-  serverInvocation,
   serveEnvPayload,
   stopManagedChild,
 } from "../run.mjs";
@@ -65,10 +61,11 @@ test("fixture CLI 从环境接收 DSN 与 Redis 口令，秘密不进入进程 a
 
 test("孤儿 cleanup 使用旧 handoff 的依赖且非零退出仍解码 residue", () => {
   let captured: unknown;
-  const result = execCleanupInvocation(
-    "/tmp/webe2e",
+  const result = runTool(
+    "cleanup",
+    "run-stale",
     {
-      runID: "run-stale",
+      tool: "/tmp/webe2e",
       dsn: "old:secret@tcp(127.0.0.1:3306)/old_e2e",
       redis: { addr: "127.0.0.1:6380", password: "old-secret", db: 8 },
     },
@@ -91,30 +88,6 @@ test("孤儿 cleanup 使用旧 handoff 的依赖且非零退出仍解码 residue
         WEBE2E_REDIS_PASSWORD: "old-secret",
       }),
     },
-  });
-});
-
-test("spec 模式使用 task 4 的真实浏览器配置，而不是旧 mock smoke 配置", () => {
-  expect(playwrightInvocation(["-g", "device flow"])).toEqual({
-    command: "pnpm",
-    args: [
-      "exec",
-      "playwright",
-      "test",
-      "--config",
-      "playwright.e2e.config.ts",
-      "-g",
-      "device flow",
-    ],
-  });
-});
-
-test("正式 server 使用显式 E2E 配置启动", () => {
-  expect(
-    serverInvocation("/repo/bin/server", "/repo/configs/config.e2e.yaml"),
-  ).toEqual({
-    command: "/repo/bin/server",
-    args: ["--config", "/repo/configs/config.e2e.yaml"],
   });
 });
 
@@ -225,13 +198,6 @@ test("malformed handoff 不可归属，保留文件并要求人工处理", async
   rmSync(path, { force: true });
 });
 
-test("seed 输出尚未交回时仍用本轮 run ID cleanup", () => {
-  expect(cleanupRunID("run-active", null)).toBe("run-active");
-  expect(cleanupRunID("run-active", { run_id: "run-seeded" })).toBe(
-    "run-seeded",
-  );
-});
-
 test("cleanup 即使命令因 residue 返回非零，也保留结构化结果供收尾判定", () => {
   const result = decodeToolResult(
     '{"run_id":"run-123","residue":{"users":1}}',
@@ -239,18 +205,6 @@ test("cleanup 即使命令因 residue 返回非零，也保留结构化结果供
   );
   expect(result).toEqual({ run_id: "run-123", residue: { users: 1 } });
   expect(cleanupHasResidue(result.residue)).toBe(true);
-});
-
-test("正式 server 进程启动错误可被健康等待路径观察", () => {
-  const target = new EventEmitter();
-  let captured: Error | null = null;
-  installServerErrorCapture(target, (error) => {
-    captured = error;
-  });
-
-  target.emit("error", new Error("spawn bin/server EACCES"));
-
-  expect(captured?.message).toContain("EACCES");
 });
 
 test("Playwright 子进程启动失败或退出都只触发一次收尾", async () => {

@@ -183,16 +183,7 @@ export default function SessionComposer({
 
   const devices = useDeviceMentions();
   const mentionSources = useMemo(
-    () =>
-      buildMentionSources(
-        agents.map((a) => ({
-          id: a.id,
-          name: a.name,
-          avatarColor: a.avatarColor,
-        })),
-        [],
-        devices,
-      ),
+    () => buildMentionSources(agents, [], devices),
     [agents, devices],
   );
 

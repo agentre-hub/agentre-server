@@ -58,6 +58,9 @@ import {
   type NewConvProject,
 } from "./types";
 
+/** 两格皆空 = 跟随 Agent 绑定。模块级常量：稳定的引用，不让 start 回调每次渲染换身份。 */
+const EMPTY_MODEL_TARGET: ModelTarget = { providerKey: "", modelKey: "" };
+
 /**
  * 一条还没发第一句的对话。
  *
@@ -283,10 +286,7 @@ export function DraftSession({
   const backendReasoningEffort = engineBackend?.reasoning_effort ?? "";
 
   /** 两格皆空 = 跟随 Agent 绑定。 */
-  const effectiveTarget = useMemo<ModelTarget>(
-    () => modelTarget ?? { providerKey: "", modelKey: "" },
-    [modelTarget],
-  );
+  const effectiveTarget = modelTarget ?? EMPTY_MODEL_TARGET;
 
   const projectName = useMemo(
     () => projects.find((p) => p.sync_id === projectSyncId)?.name ?? null,

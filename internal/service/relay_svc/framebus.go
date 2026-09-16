@@ -556,7 +556,7 @@ func sleepContext(ctx context.Context, delay time.Duration) bool {
 // 全部痕迹就只剩「每一帧都等满 deliveryWaitTimeout」。onHealthy 在每一次 Redis 正常
 // 应答之后调用,是「这段故障结束了」的唯一判据——建组成功不算数,那时读还没发生。
 func (f *redisForwarder) consumeOnce(ctx context.Context, stream string, onHealthy func()) error {
-	if err := f.redis.XGroupCreateMkStream(ctx, stream, frameBusGroup, "0").Err(); err != nil && !isBusyGroup(err) {
+	if err := f.redis.XGroupCreateMkStream(ctx, stream, frameBusGroup, "0").Err(); err != nil && !goredis.HasErrorPrefix(err, "BUSYGROUP") {
 		return fmt.Errorf("create relay frame bus group: %w", err)
 	}
 	_ = f.redis.Expire(ctx, stream, f.ttl).Err()
@@ -874,10 +874,6 @@ func deliveryAckKey(stream string) (string, error) {
 		return "", fmt.Errorf("generate relay acknowledgement: %w", err)
 	}
 	return stream + ":ack:" + base64.RawURLEncoding.EncodeToString(random), nil
-}
-
-func isBusyGroup(err error) bool {
-	return err != nil && len(err.Error()) >= len("BUSYGROUP") && err.Error()[:len("BUSYGROUP")] == "BUSYGROUP"
 }
 
 var _ Forwarder = (*redisForwarder)(nil)

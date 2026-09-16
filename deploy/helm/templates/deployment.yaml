@@ -27,7 +27,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "agentre-server.serviceAccountName" . }}
+      serviceAccountName: default
       # 中继是长连接，硬断和优雅让位对客户端完全不是一回事，所以停机分两拍：
       #
       #   1. preStop 先睡一会儿。SIGTERM 与「把 Pod 从 Service endpoints 里摘掉」

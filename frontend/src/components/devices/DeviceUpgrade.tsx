@@ -1,14 +1,12 @@
-import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Check, Copy } from "lucide-react";
 
 import {
   Button,
+  CommandCard,
   DialogShell,
   DialogShellBody,
   DialogShellFooter,
   DialogShellHeader,
-  copyTextToClipboard,
   cn,
 } from "@agentre-hub/agentre-ui";
 
@@ -98,48 +96,6 @@ export function DeviceVersionBadge({
 }
 
 /** 可复制的 `agentred update`：一键升级够不着时它是唯一出口，因此始终在场。 */
-function UpdateCommandCard({ deviceID }: { deviceID: number }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-
-  useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 2000);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  return (
-    <div className="overflow-hidden rounded-md border border-border">
-      <div className="flex items-center gap-2 border-b border-border bg-muted px-3 py-1.5">
-        <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-          {t("device.upgrade.commandLabel")}
-        </span>
-        <Button
-          variant="ghost"
-          size="xs"
-          data-testid={`device-upgrade-copy-${deviceID}`}
-          onClick={() => {
-            copyTextToClipboard(UPDATE_COMMAND)
-              .then((ok) => {
-                // 没复制成就保持原样：命令本身仍然可以选中手抄，不谎报「已复制」。
-                if (ok) setCopied(true);
-              })
-              .catch(() => {});
-          }}
-        >
-          {copied ? <Check /> : <Copy />}
-          {copied ? t("device.add.copied") : t("device.add.copy")}
-        </Button>
-      </div>
-      <pre
-        data-testid={`device-upgrade-command-${deviceID}`}
-        className="overflow-x-auto bg-code-surface px-3 py-2.5 font-mono text-xs text-code-foreground"
-      >
-        {UPDATE_COMMAND}
-      </pre>
-    </div>
-  );
-}
 
 /** 主动作的文案与可用性。 */
 function actionLabel(
@@ -426,7 +382,12 @@ export function DeviceUpgradePanel({
           </Button>
         </div>
       )}
-      <UpdateCommandCard deviceID={device.id} />
+      <CommandCard
+        label={t("device.upgrade.commandLabel")}
+        command={UPDATE_COMMAND}
+        testId={`device-upgrade-command-${device.id}`}
+        copyTestId={`device-upgrade-copy-${device.id}`}
+      />
 
       {/* 二次确认（决策 8/21）：只有在这里点了「仍然升级」，force=true 才真的出现
           在请求里 —— 点主动作那一下只打开这个框。 */}

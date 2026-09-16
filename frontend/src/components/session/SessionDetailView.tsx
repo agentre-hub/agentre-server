@@ -1378,60 +1378,84 @@ export default function SessionDetailView({
   }
 
   /**
-   * 改这条对话钉的模型。
+   * 双写一条会话级设置：承载者（此刻这条连接）+ 发起端（另一台时另借一条）。
    *
-   * **两台都写**：同一条对话可以在桌面端与 agentred 上各有一份，而承载连接的那台
-   * 未必是发起它的那台。只写承载者，用户在桌面端打开会看到另一个值；只写发起端，
+   * 为什么**两台都写**：同一条对话可以在桌面端与 agentred 上各有一份，而承载连接的
+   * 那台未必是发起它的那台。只写承载者，用户在发起端打开会看到另一个值；只写发起端，
    * 承载者下一轮解析不到它。
    *
-   * 只写成一台**仍算成功**——那一次选择确实生效了，下一轮就用它——但要如实说出
-   * 另一台没跟上。两台都没写成才回滚控件并说明原因。
+   * 只写成一台**仍算成功**——那一次选择确实生效了，下一轮就用它——但要如实说出另一台
+   * 没跟上。两台都没写成才回滚控件并说明原因。模型目标与思考力度只有方法名、载荷与
+   * 提示文案不同，因此收成这一份。
    */
+  function writeSessionSetting({
+    writeCarrier,
+    writeOrigin,
+    rollback,
+    onFailure,
+    onSuccess,
+  }: {
+    writeCarrier: (
+      client: import("@/lib/relayClient").RelayClient,
+      peerFingerprint: string | null,
+    ) => Promise<unknown>;
+    writeOrigin: ((origin: string) => Promise<void>) | null;
+    rollback: () => void;
+    onFailure: (reason: string) => void;
+    onSuccess: (partial: boolean) => void;
+  }): void {
+    const c = clientRef.current;
+    if (!c) return;
+    const origin = originRef.current;
+    // 承载者：就是此刻这条连接。带上 origin 让它解出是哪条会话。
+    const writes: Promise<unknown>[] = [writeCarrier(c, origin ?? null)];
+    // 发起端是另一台时再拨一条过去。够不着（离线 / 太老）就落在下面的「只成一台」。
+    if (writeOrigin && origin && origin !== device?.fingerprint) {
+      writes.push(writeOrigin(origin));
+    }
+    void Promise.allSettled(writes).then((results) => {
+      const ok = results.filter((r) => r.status === "fulfilled").length;
+      if (ok === 0) {
+        rollback();
+        const reason = results.find((r) => r.status === "rejected")?.reason;
+        onFailure(reason instanceof Error ? reason.message : String(reason));
+        return;
+      }
+      onSuccess(ok < results.length);
+    });
+  }
+
+  /** 改这条对话钉的模型（双写见 writeSessionSetting）。 */
   function changeModelTarget(next: ModelTarget) {
     const previous = effectiveTarget;
     setModelTarget(next);
     setModelTargetNote(null);
 
-    const c = clientRef.current;
-    if (!c) return;
-    const origin = originRef.current;
     const params = {
       conversationId: sid,
       providerKey: next.providerKey,
       modelKey: next.modelKey,
     };
-    // 承载者：就是此刻这条连接。带上 origin 让它解出是哪条会话。
-    const writes: Promise<unknown>[] = [
-      c.request(rpcMethods.setModelTarget, {
-        ...params,
-        conversationId: params.conversationId,
-        ...(origin ? { peerFingerprint: origin } : {}),
-      }),
-    ];
-    // 发起端是另一台时再拨一条过去。够不着（离线 / 太老）就落在下面的「只成一台」。
-    if (origin && origin !== device?.fingerprint) {
-      writes.push(writeModelTargetToOrigin(origin, params));
-    }
-    void Promise.allSettled(writes).then((results) => {
-      const ok = results.filter((r) => r.status === "fulfilled").length;
-      if (ok === 0) {
-        setModelTarget(previous);
-        const reason = results.find((r) => r.status === "rejected")?.reason;
+    writeSessionSetting({
+      writeCarrier: (c, peer) =>
+        c.request(rpcMethods.setModelTarget, {
+          ...params,
+          ...(peer ? { peerFingerprint: peer } : {}),
+        }),
+      writeOrigin: (origin) => writeModelTargetToOrigin(origin, params),
+      rollback: () => setModelTarget(previous),
+      onFailure: (reason) =>
         setModelTargetNote(
-          t("session.composerControls.modelSetFailed", {
-            reason: reason instanceof Error ? reason.message : String(reason),
-          }),
+          t("session.composerControls.modelSetFailed", { reason }),
+        ),
+      onSuccess: (partial) => {
+        // 至少写成了一台，这次选择就生效了 —— 与「只成一台仍算成功」同一判据。本站
+        // 选择器不分执行位置（空串）。
+        recordRecentTarget("chat", "", next);
+        setModelTargetNote(
+          partial ? t("session.composerControls.modelPartiallySynced") : null,
         );
-        return;
-      }
-      // 至少写成了一台，这次选择就生效了 —— 与「只成一台仍算成功」同一判据。本站
-      // 选择器不分执行位置（空串）。
-      recordRecentTarget("chat", "", next);
-      setModelTargetNote(
-        ok < results.length
-          ? t("session.composerControls.modelPartiallySynced")
-          : null,
-      );
+      },
     });
   }
 
@@ -1448,49 +1472,30 @@ export default function SessionDetailView({
   /** 后端配置的那一档，会话行为空时由控件用它兜底显示（空 = 后端也没配）。 */
   const backendReasoningEffort = engineBackend?.reasoning_effort ?? "";
 
-  /**
-   * 改这条会话的思考力度（规格 2026-09-01「agentre-server 宿主」）。
-   *
-   * 与改模型逐条同构：**两台都写**（承载者是此刻这条连接，发起端另借一条），
-   * 只写成一台仍算成功但要如实说出另一台没跟上，两台都没写成才回滚控件。
-   * 不回滚的理由不是省事：那一次写入在承载者上真真切切生效了，下一轮就按它跑。
-   */
+  /** 改这条会话的思考力度（双写见 writeSessionSetting）。 */
   function changeReasoningEffort(next: ReasoningEffortValue) {
     const previous = sessionReasoningEffort;
     setReasoningEffort(next);
     setReasoningEffortNote(null);
     setReasoningEffortError(null);
 
-    const c = clientRef.current;
-    if (!c) return;
-    const origin = originRef.current;
     const params = { conversationId: sid, reasoningEffort: next };
-    const writes: Promise<unknown>[] = [
-      c.request(rpcMethods.setSessionReasoningEffort, {
-        ...params,
-        ...(origin ? { peerFingerprint: origin } : {}),
-      }),
-    ];
-    if (origin && origin !== device?.fingerprint) {
-      writes.push(writeReasoningEffortToOrigin(origin, params));
-    }
-    void Promise.allSettled(writes).then((results) => {
-      const ok = results.filter((r) => r.status === "fulfilled").length;
-      if (ok === 0) {
-        setReasoningEffort(previous);
-        const reason = results.find((r) => r.status === "rejected")?.reason;
+    writeSessionSetting({
+      writeCarrier: (c, peer) =>
+        c.request(rpcMethods.setSessionReasoningEffort, {
+          ...params,
+          ...(peer ? { peerFingerprint: peer } : {}),
+        }),
+      writeOrigin: (origin) => writeReasoningEffortToOrigin(origin, params),
+      rollback: () => setReasoningEffort(previous),
+      onFailure: (reason) =>
         setReasoningEffortError(
-          t("session.composerControls.effortSetFailed", {
-            reason: reason instanceof Error ? reason.message : String(reason),
-          }),
-        );
-        return;
-      }
-      setReasoningEffortNote(
-        ok < results.length
-          ? t("session.composerControls.effortPartiallySynced")
-          : null,
-      );
+          t("session.composerControls.effortSetFailed", { reason }),
+        ),
+      onSuccess: (partial) =>
+        setReasoningEffortNote(
+          partial ? t("session.composerControls.effortPartiallySynced") : null,
+        ),
     });
   }
 

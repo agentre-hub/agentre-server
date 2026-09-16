@@ -26,7 +26,7 @@ func TestAuthSvc_WritesOnlyToTheInjectedRedis(t *testing.T) {
 	client := goredis.NewClient(&goredis.Options{Addr: own.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
 
-	s := New(client, session.New(client, "server_session", 86400))
+	s := New(client, session.New(client, 86400))
 	ctx := context.Background()
 
 	state, err := s.CreateOAuthState(ctx, OAuthStatePayload{Next: "/device", IP: "1.2.3.4"})

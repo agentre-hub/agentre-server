@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
@@ -128,7 +129,7 @@ func (l *clientLink) read() {
 		if messageType != websocket.BinaryMessage {
 			continue
 		}
-		channelID, frame, decodeErr := relay_svc.UnwrapEnvelope(payload)
+		channelID, frame, decodeErr := relayenvelope.Unwrap(payload)
 		if decodeErr != nil {
 			continue
 		}
@@ -153,7 +154,7 @@ func (l *clientLink) open(t *testing.T, channelID, target string) {
 
 func (l *clientLink) send(t *testing.T, channelID string, frame []byte) {
 	t.Helper()
-	envelope, err := relay_svc.WrapEnvelope(channelID, frame)
+	envelope, err := relayenvelope.Wrap(channelID, frame)
 	require.NoError(t, err)
 	require.NoError(t, l.conn.WriteMessage(websocket.BinaryMessage, envelope))
 }

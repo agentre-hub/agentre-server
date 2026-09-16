@@ -24,7 +24,7 @@ import (
 func TestRelayTicket_FromSessionWithoutCreatingDevice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
@@ -52,7 +52,7 @@ func TestRelayTicket_FromSessionWithoutCreatingDevice(t *testing.T) {
 func TestRelayTicket_IsAnOpaqueRandomString(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
@@ -80,7 +80,7 @@ func TestRelayTicket_IsAnOpaqueRandomString(t *testing.T) {
 func TestRelayTicket_GivenTheSameAccountOnAnotherBrowser_ThenCarriesTheSamePeerFingerprint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).Router(context.Background(), testMux.Router))
 	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))

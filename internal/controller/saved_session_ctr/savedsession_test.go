@@ -79,7 +79,7 @@ func newSavedSessionTestServer(t *testing.T, stub *stubSavedSessionSvc) *httptes
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t) // miniredis → session 存储 + 中继票据黑名单
 	saved_session_svc.SetDefault(stub)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{

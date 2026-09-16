@@ -4,9 +4,7 @@ package device_svc
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base32"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -22,6 +20,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/dberr"
+	"github.com/agentre-hub/agentre-server/internal/pkg/hashutil"
 	"github.com/agentre-hub/agentre-server/internal/pkg/usercode"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
@@ -377,11 +376,6 @@ func (s *deviceSvc) ExchangeToken(ctx context.Context, dc string) (*TokenOutput,
 	return out, nil
 }
 
-func sha256Hex(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])
-}
-
 // issueTokenPair 在事务内为设备签发一对令牌并落库：两枚都是不含任何可解析内容的
 // 随机串，库里只存各自的 sha256 摘要，明文只在本次响应中返回。调用方身份（账号、
 // 设备、对端指纹）由 ResolveBearer 按摘要从库里查出，不再写进令牌。
@@ -402,8 +396,8 @@ func (s *deviceSvc) issueTokenPair(
 	ip, ua := clientInfoFromCtx(ctx)
 	token := &device_token_entity.DeviceToken{
 		DeviceID:         d.ID,
-		RefreshTokenHash: sha256Hex(refreshPlain),
-		AccessTokenHash:  sha256Hex(access),
+		RefreshTokenHash: hashutil.SHA256Hex(refreshPlain),
+		AccessTokenHash:  hashutil.SHA256Hex(access),
 		RefreshExpiresAt: nowMs + s.cfg.RefreshTTL.Milliseconds(),
 		UserAgent:        ua,
 		IP:               ip,
@@ -427,7 +421,7 @@ func (s *deviceSvc) Refresh(ctx context.Context, refreshToken string) (*TokenOut
 		return nil, newOAuthErrBiz(ErrInvalidGrant, "missing refresh_token", code.RefreshTokenInvalid)
 	}
 	nowMs := s.now()
-	hash := sha256Hex(refreshToken)
+	hash := hashutil.SHA256Hex(refreshToken)
 
 	row, err := device_token_repo.DeviceToken().FindByHash(ctx, hash)
 	if err != nil {

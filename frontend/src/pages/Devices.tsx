@@ -25,7 +25,7 @@ import {
   cn,
 } from "@agentre-hub/agentre-ui";
 import { Card } from "@/components/ui/card";
-import { StatusMark } from "@/components/console";
+import { CardLoadError, StatusMark } from "@/components/console";
 import type { StatusTone } from "@/components/console";
 import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import { DevicePortForward } from "@/components/devices/DevicePortForward";
@@ -302,23 +302,14 @@ function DeviceExpandDetail({
     return <DeviceDetailSkeleton />;
   }
   if (state.error) {
-    const message = loadErrorText(
-      state.error,
-      t,
-      "device.manage.detailLoadError",
-    );
     return (
       // 「收起再展开」确实会重试（不缓存失败是刻意的），但那条出路界面上一个字都
       // 没提过，用户只会去刷新整页。
-      <Alert variant="destructive">
-        <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-          <span className="min-w-0">{message}</span>
-          <span className="flex-1" />
-          <Button size="xs" variant="outline" onClick={onRetry}>
-            {t("common.retry")}
-          </Button>
-        </AlertDescription>
-      </Alert>
+      <CardLoadError
+        error={state.error}
+        fallback={t("device.manage.detailLoadError")}
+        onRetry={onRetry}
+      />
     );
   }
   const detail = state.data;

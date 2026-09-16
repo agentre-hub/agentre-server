@@ -137,7 +137,7 @@ export function classifyRemoteFsError(err: unknown): RemoteFsFailure {
   }
 }
 
-export function joinPath(parent: string, name: string): string {
+function joinPath(parent: string, name: string): string {
   if (parent === "/") return `/${name}`;
   return `${parent.replace(/\/+$/, "")}/${name}`;
 }

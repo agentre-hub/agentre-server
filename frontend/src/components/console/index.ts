@@ -9,6 +9,7 @@
  * 行级菜单已归共享包的 DropdownMenu（规格 2026-08-22 E 段）。
  */
 export { ConsoleNavItem } from "./ConsoleNavItem";
+export { CardLoadError } from "./CardLoadError";
 export { EmptyState } from "./EmptyState";
 export { InlineEmpty } from "./InlineEmpty";
 export { Metric } from "./Metric";

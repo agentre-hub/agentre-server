@@ -619,7 +619,7 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 // 网络中断区分开：daemon 会退避重连，重连在 upgrade 处被拒才是正确结局。
 func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
 	testutils.Redis(t)
-	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), 86400))
 	auth_svc.SetDefault(auth)
 	ctx := context.Background()
 
@@ -695,7 +695,7 @@ func TestRelayDaemonClosesWhenDeviceRevokedOnAnotherInstance(t *testing.T) {
 // 浏览器票据，所以要在 newRelayServer 之前调用。
 func installRelayAuth(t *testing.T) auth_svc.AuthSvc {
 	t.Helper()
-	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), 86400))
 	auth_svc.SetDefault(auth)
 	return auth
 }

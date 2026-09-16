@@ -75,20 +75,16 @@ type Info struct {
 	LastActiveAt int64
 }
 
-// Store 封装 Redis session 读写。
+// Store 封装 Redis session 读写。cookie 名不是配置项，直接取包常量 CookieName。
 type Store struct {
-	rc         *goredis.Client
-	cookieName string
-	ttl        time.Duration
+	rc  *goredis.Client
+	ttl time.Duration
 }
 
 // New 构造 store。ttlSeconds 是 session 滑动 TTL 秒数。
-func New(rc *goredis.Client, cookieName string, ttlSeconds int) *Store {
-	return &Store{rc: rc, cookieName: cookieName, ttl: time.Duration(ttlSeconds) * time.Second}
+func New(rc *goredis.Client, ttlSeconds int) *Store {
+	return &Store{rc: rc, ttl: time.Duration(ttlSeconds) * time.Second}
 }
-
-// CookieName 返回配置的 cookie 名。
-func (s *Store) CookieName() string { return s.cookieName }
 
 func sessionKey(sid string) string { return "session:" + sid }
 

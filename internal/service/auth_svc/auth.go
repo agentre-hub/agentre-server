@@ -264,4 +264,4 @@ func (s *authSvc) WatchRelayCredential(ctx context.Context, handle string) Relay
 	}
 }
 
-func (s *authSvc) CookieName() string { return s.store.CookieName() }
+func (s *authSvc) CookieName() string { return session.CookieName }

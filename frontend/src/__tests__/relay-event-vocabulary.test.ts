@@ -65,7 +65,7 @@ import {
   type RelayClientOptions,
 } from "@/lib/relayClient";
 import { RelayConnection } from "@/lib/relayConnection";
-import { unwrapEnvelope, wrapEnvelope } from "@/lib/relayEnvelope";
+import { unwrapEnvelope, wrapEnvelope } from "@agentre-hub/agentre-wire";
 import { machineTarget } from "@/lib/relayTarget";
 
 const CID = "11111111-1111-7111-8111-111111111111";

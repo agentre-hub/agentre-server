@@ -11,10 +11,6 @@ import (
 
 //go:generate mockgen -source device_flow.go -destination mock_device_flow_repo/mock_device_flow.go
 
-// cleanupBatchSize 与 device_token_repo 的清理常量一致：过期码可能积到很大，
-// 不分批的一条 DELETE 会把 next-key 锁铺满它扫过的整个范围。
-const cleanupBatchSize = 1000
-
 type DeviceFlowRepo interface {
 	Create(ctx context.Context, e *device_flow_entity.DeviceFlowCode) error
 	FindByDeviceCode(ctx context.Context, deviceCode string) (*device_flow_entity.DeviceFlowCode, error)
@@ -84,18 +80,9 @@ func (r *repo) UpdateLastPolledIfDue(ctx context.Context, dc string, nowMs, minG
 	return res.RowsAffected, res.Error
 }
 
-// DeleteExpiredBefore 按 cleanupBatchSize 行一批删，直到某一批没删满——没删满
-// 就说明够到底了。与 device_token_repo.deleteBatched 是同一个理由、同一个常量。
+// DeleteExpiredBefore 按 dbutil.CleanupBatchSize 行一批删，直到某一批没删满——没删满
+// 就说明够到底了。
 func (r *repo) DeleteExpiredBefore(ctx context.Context, cutoffMs int64) error {
-	for {
-		res := db.Ctx(ctx).Where("expires_at < ?", cutoffMs).
-			Limit(cleanupBatchSize).
-			Delete(&device_flow_entity.DeviceFlowCode{})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected < cleanupBatchSize {
-			return nil
-		}
-	}
+	_, err := dbutil.DeleteBatched(ctx, &device_flow_entity.DeviceFlowCode{}, "expires_at < ?", cutoffMs)
+	return err
 }

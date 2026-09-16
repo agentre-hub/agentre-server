@@ -72,7 +72,7 @@ func bearerTestSetup(t *testing.T) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 14*24*3600)))
 }
 
 // 放行时三处必须落下同一组身份——含凭据句柄。句柄是「这条请求用的是哪一份凭据」，

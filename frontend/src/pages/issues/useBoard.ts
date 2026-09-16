@@ -29,6 +29,7 @@ import {
   type BoardCardProjectResolver,
   type SyncIdRegistry,
 } from "@/lib/boardWire";
+import { errorText } from "@/lib/errorText";
 import {
   createIssue,
   createIssueLabel,
@@ -69,10 +70,6 @@ export interface UseBoardResult {
   saveTask: (value: TaskFormValue) => Promise<void>;
   deleteTask: (id: number) => Promise<void>;
   mutateLabel: (mutation: LabelMutation) => Promise<void>;
-}
-
-function reasonOf(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }
 
 export function useBoard(
@@ -116,7 +113,7 @@ export function useBoard(
       })
       .catch((cause: unknown) => {
         if (request !== requestRef.current) return;
-        setError(reasonOf(cause));
+        setError(errorText(cause, String(cause)));
         // 失败也要放行那枚转圈，否则它会一直转到下一次输入为止。
         setLoadedKey(key);
       });

@@ -11,10 +11,8 @@ import {
   Monitor,
 } from "lucide-react";
 
-import { EmptyState, Metric } from "@/components/console";
+import { CardLoadError, EmptyState, Metric } from "@/components/console";
 import {
-  Alert,
-  AlertDescription,
   Button,
   Skeleton,
   cn,
@@ -35,9 +33,8 @@ import {
   AccountChannelMirrorChanged,
   AccountChannelSyncVersion,
 } from "@/lib/accountChannel";
-import { api } from "@/lib/api";
+import { fetchAgents } from "@/lib/agents";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
-import { loadErrorText } from "@/lib/loadError";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
 import {
   fetchStatsOverview,
@@ -277,8 +274,8 @@ export default function Overview() {
   );
 
   const loadWorkspace = useCallback(() => {
-    api<{ agents?: AgentItem[] }>("/v1/workspace/agents")
-      .then((got) => setAgents(got.agents ?? []))
+    fetchAgents<AgentItem>()
+      .then(setAgents)
       .catch(() => {});
     fetchProjects()
       .then(setProjects)
@@ -333,11 +330,6 @@ export default function Overview() {
     const at = (day: string) => fmt.format(new Date(`${day}T00:00:00Z`));
     return `${at(stats.heatmap.from)} — ${at(stats.heatmap.to)}`;
   }, [stats, i18n.resolvedLanguage]);
-
-  const statsErrorMessage =
-    statsError !== null
-      ? loadErrorText(statsError, t, "overview.stats.error.alert")
-      : null;
 
   const summary = stats?.summary;
   /** 这个账号还什么都没发生过：0 设备 0 对话。 */
@@ -411,24 +403,15 @@ export default function Overview() {
 
         {statsError !== null ? (
           <>
-            <Alert variant="destructive">
-              {/* 一行摆开：文案 + 弹簧 + 重试。AlertDescription 自身是 grid，
-                  这里把它换成同一行的 flex（display 由 className 定，最后一个赢）。 */}
-              <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-                <span className="min-w-0">{statsErrorMessage}</span>
-                <span className="flex-1" />
-                <Button
-                  size="xs"
-                  variant="outline"
-                  // 按下去要有反应：第二次也失败的话界面一个像素都不会变，
-                  // 用户无从判断自己是不是点空了，只会连点。
-                  disabled={fetching}
-                  onClick={() => setReloadKey((k) => k + 1)}
-                >
-                  {t("overview.stats.error.retry")}
-                </Button>
-              </AlertDescription>
-            </Alert>
+            <CardLoadError
+              error={statsError}
+              fallback={t("overview.stats.error.alert")}
+              // 按下去要有反应：第二次也失败的话界面一个像素都不会变，
+              // 用户无从判断自己是不是点空了，只会连点。
+              retryDisabled={fetching}
+              retryLabel={t("overview.stats.error.retry")}
+              onRetry={() => setReloadKey((k) => k + 1)}
+            />
             {/* 统计取不到就说取不到，绝不退回一张全是 0 的摘要——那是一句用户
                 无法证伪的假话。同时说清什么**不**受影响，并给一条走得通的路。 */}
             <div className="rounded-lg border border-border bg-card">

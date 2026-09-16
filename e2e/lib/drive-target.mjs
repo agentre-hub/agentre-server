@@ -123,7 +123,7 @@ export function assertSanctionedURL(session, url) {
   return parsed.toString();
 }
 
-/** 一个场景一个目录。报告、日志、截图、资源各归各位。 */
+/** 一个场景一个目录。报告、日志、截图各归各位。 */
 export function scenarioPaths(scratchRoot, slug) {
   const root = join(scratchRoot, slug);
   return {
@@ -131,7 +131,6 @@ export function scenarioPaths(scratchRoot, slug) {
     root,
     logs: join(root, "logs"),
     screenshots: join(root, "screenshots"),
-    resources: join(root, "resources"),
   };
 }
 

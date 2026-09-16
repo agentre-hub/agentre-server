@@ -20,25 +20,14 @@ import type { IndexAxis, MachineInfo } from "@/lib/sessionAxes";
 /** 一台机器的解析状态。连不上与「还没连上」是两回事，不能共用一个转圈。 */
 export type MachineState = "connecting" | "connected" | "unreachable";
 
-export interface ResolvedMachine {
-  sessions: SessionSummary[];
-  /**
-   * **这条连接**在 daemon 眼里的对端指纹（中继 ticket 的 peerFingerprint）。
-   *
-   * 清单里省略 `peerFingerprint` 的那些会话，说的就是「发起端是这一端」——不记下它，
-   * 调用方只能拿机器指纹去顶，而那是另一个身份（见 chatRows.machineRowOrigin）。
-   */
+/**
+ * 解析出来的一台机器 = 机器交回来的一页会话，外加一条连接级身份：**这条连接**在
+ * daemon 眼里的对端指纹（中继 ticket 的 peerFingerprint）。清单里省略
+ * `peerFingerprint` 的那些会话，说的就是「发起端是这一端」——不记下它，调用方只能
+ * 拿机器指纹去顶，而那是另一个身份（见 chatRows.machineRowOrigin）。
+ */
+export interface ResolvedMachine extends MachineSessionPage {
   localFingerprint: string;
-  /**
-   * 这台机器上匹配当前关键词的**总数**。组头的「查看全部 N」写它，而不是写
-   * `sessions.length`——手上这份只是第一页。
-   *
-   * 不认得分页的老机器不报这一格，那时它交出来的就是整份，条数即总数。
-   */
-  total: number;
-  /** 接着往下翻的游标；空 = 没有下一页（老机器整份交出，同样是空）。 */
-  cursor: string;
-  hasMore: boolean;
 }
 
 /**
@@ -55,6 +44,11 @@ export interface MachineSessionPage {
   sessions: SessionSummary[];
   cursor: string;
   hasMore: boolean;
+  /**
+   * 这台机器上匹配当前关键词的**总数**。组头的「查看全部 N」写它，而不是写
+   * `sessions.length`——手上这份只是第一页。不认得分页的老机器不报这一格，那时
+   * 它交出来的就是整份，条数即总数。
+   */
   total: number;
 }
 

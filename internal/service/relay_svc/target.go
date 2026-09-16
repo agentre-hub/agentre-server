@@ -17,7 +17,7 @@ const (
 )
 
 // ReservedChannelPrefix 是保留通道号的前缀（决策 14）。通道 id 两端各自生成，
-// 服务端取 base64url（newChannelID）、daemon 侧取 hex，两套字母表都不含它，
+// 服务端取 base64url（randomID）、daemon 侧取 hex，两套字母表都不含它，
 // 所以保留号由构造不可能与随机分配的通道相撞，不需要重试或注册表。
 //
 // 保留通道不指向任何一台机器，因此它**不经过 AttachClient**——那条路径在客户端
