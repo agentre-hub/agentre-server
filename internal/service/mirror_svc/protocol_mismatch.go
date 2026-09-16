@@ -62,18 +62,6 @@ func (s *Supervisor) recordProtocolMismatch(ctx context.Context, key machineKey)
 	}
 }
 
-// RecordProtocolMismatch 是 recordProtocolMismatch 面向包外的公开入口，与读侧
-// HandshakeStates 成对——写侧一样按 (账号, 机器) 定位、一样落 Redis。dial() 走的是
-// 包内那个私有版本（它手里现成一个 machineKey），这一个供其余需要模拟或补记这份共享
-// 状态的调用方使用（例如 device_svc 的测试要在不真的跑一次被拒握手的前提下断言读侧
-// 接线），不重新导出 Redis key 的具体形状。
-func (s *Supervisor) RecordProtocolMismatch(ctx context.Context, userID int64, fingerprint string) {
-	if s == nil {
-		return
-	}
-	s.recordProtocolMismatch(ctx, machineKey{userID: userID, fingerprint: fingerprint})
-}
-
 // protocolMismatchActive 回答「这台机器此刻还在协议不匹配的退避窗口里吗」。
 //
 // Redis 读不出来时 fail-open(视为不在退避里)：这一步只是为了不在快速路径上重试,

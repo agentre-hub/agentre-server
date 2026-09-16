@@ -15,7 +15,6 @@ import {
   rateLimitClientIP,
   runtimePaths,
   runTool,
-  seedInvocation,
   serveEnvPayload,
   stopManagedChild,
 } from "../run.mjs";
@@ -38,25 +37,39 @@ test("每个 run 使用独立保留 IP，让 authorize 限流键可精确清理"
 });
 
 test("fixture CLI 从环境接收 DSN 与 Redis 口令，秘密不进入进程 argv", () => {
-  const invocation = seedInvocation(
-    "/tmp/webe2e",
+  let captured:
+    | {
+        command: string;
+        args: string[];
+        options: { env: Record<string, string> };
+      }
+    | undefined;
+  runTool(
+    "seed",
+    "run-123",
     {
+      tool: "/tmp/webe2e",
       dsn: "u:p@tcp(127.0.0.1:3306)/agentre_e2e",
       redis: { addr: "127.0.0.1:6379", password: "secret", db: 9 },
     },
-    "run-123",
+    (command, args, options) => {
+      captured = { command, args, options };
+      return '{"run_id":"run-123","residue":{"users":0}}';
+    },
   );
-  expect(invocation).toEqual({
+  expect(captured).toMatchObject({
     command: "/tmp/webe2e",
     args: ["seed", "--redis-db", "9", "--run-id", "run-123"],
-    env: {
-      WEBE2E_DSN: "u:p@tcp(127.0.0.1:3306)/agentre_e2e",
-      WEBE2E_REDIS_ADDR: "127.0.0.1:6379",
-      WEBE2E_REDIS_PASSWORD: "secret",
+    options: {
+      env: expect.objectContaining({
+        WEBE2E_DSN: "u:p@tcp(127.0.0.1:3306)/agentre_e2e",
+        WEBE2E_REDIS_ADDR: "127.0.0.1:6379",
+        WEBE2E_REDIS_PASSWORD: "secret",
+      }),
     },
   });
-  expect(invocation.args.join(" ")).not.toContain("u:p");
-  expect(invocation.args.join(" ")).not.toContain("secret");
+  expect(captured!.args.join(" ")).not.toContain("u:p");
+  expect(captured!.args.join(" ")).not.toContain("secret");
 });
 
 test("孤儿 cleanup 使用旧 handoff 的依赖且非零退出仍解码 residue", () => {

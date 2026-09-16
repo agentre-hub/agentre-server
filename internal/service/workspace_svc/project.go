@@ -3,6 +3,7 @@ package workspace_svc
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"sort"
 	"time"
 
@@ -160,10 +161,7 @@ func withProjectMemberJoinedAt(kind string, fields map[string]any, nowMs int64) 
 		return fields
 	}
 	// 原 map 不就地改：调用方拼出来的那一份不该因为走了一趟 service 就多出一个键。
-	next := make(map[string]any, len(fields)+1)
-	for k, v := range fields {
-		next[k] = v
-	}
+	next := maps.Clone(fields)
 	next["joined_at"] = nowMs
 	return next
 }

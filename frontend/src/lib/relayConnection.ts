@@ -92,8 +92,6 @@ export interface RelayConnectionOptions {
   reconnect?: boolean;
   /** 首次重连的等待，之后指数退让（默认 1000）。 */
   reconnectDelayMs?: number;
-  /** 退让的封顶（默认 30 秒）。 */
-  maxReconnectDelayMs?: number;
   /**
    * 连上之后活满多久才算「这次是成功的」，退让计数据此归零（默认 10 秒）。
    *
@@ -349,7 +347,7 @@ export class RelayConnection {
     // 服务端每秒拨一次，直到标签页关掉。形状（含抖动）见 relayBackoff。
     const delay = backoffDelay(this.failures, {
       baseMs: this.opts.reconnectDelayMs ?? 1000,
-      capMs: this.opts.maxReconnectDelayMs ?? 30_000,
+      capMs: 30_000,
       random: this.opts.random,
     });
     this.failures += 1;

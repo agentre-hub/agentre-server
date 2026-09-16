@@ -78,14 +78,9 @@ func (r *repo) DeleteByDevice(ctx context.Context, deviceID int64) error {
 //
 // 行集合与单条 OR 语句完全相同:同时满足两侧的行由第一条删走,第二条自然就找不到它了。
 func (r *repo) DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error {
-	if err := r.deleteBatched(ctx, "revoked_at != 0 AND revoked_at < ?", cutoffMs); err != nil {
+	if _, err := dbutil.DeleteBatched(ctx, &device_token_entity.DeviceToken{}, "revoked_at != 0 AND revoked_at < ?", cutoffMs); err != nil {
 		return err
 	}
-	return r.deleteBatched(ctx, "refresh_expires_at < ?", cutoffMs)
-}
-
-// deleteBatched 按 dbutil.CleanupBatchSize 批删,直到某一批没删满——没删满就说明够到底了。
-func (r *repo) deleteBatched(ctx context.Context, where string, cutoffMs int64) error {
-	_, err := dbutil.DeleteBatched(ctx, &device_token_entity.DeviceToken{}, where, cutoffMs)
+	_, err := dbutil.DeleteBatched(ctx, &device_token_entity.DeviceToken{}, "refresh_expires_at < ?", cutoffMs)
 	return err
 }

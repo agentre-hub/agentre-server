@@ -17,15 +17,11 @@ import type { TranscriptMessage } from "@agentre-hub/agentre-ui";
 import type { DecisionPanelPorts } from "@/components/session/DecisionPanel";
 import type {
   PendingAskQuestionShape,
+  PendingWaiters as Waiters,
   PendingToolPermissionShape,
 } from "@/lib/waiterBlocks";
 import type { RelayClient } from "@/lib/relayClient";
 import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
-
-export interface Waiters {
-  toolPermissions: PendingToolPermissionShape[];
-  askUserQuestions: PendingAskQuestionShape[];
-}
 
 export interface SessionDecisionPortsParams {
   sid: string;

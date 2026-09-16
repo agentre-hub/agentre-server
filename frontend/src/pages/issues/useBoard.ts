@@ -57,7 +57,6 @@ export interface UseBoardResult {
   projectCountOf: (projectSyncId: string) => number;
   /** 「未归属」那一项的计数；0 = 该入口不出现。 */
   unassignedCount: number;
-  /** 当前范围覆盖到的项目；「范围里是否不止一个项目」的判据。 */
   /** 搜索框右侧那个命中数。 */
   matchedCount: number;
   /** 这一条任务摊回表单要编辑的那些字段；不在当前结果里就是 `null`。 */

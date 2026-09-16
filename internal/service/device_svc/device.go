@@ -112,10 +112,7 @@ func Default() DeviceSvc     { return defaultSvc }
 func SetDefault(s DeviceSvc) { defaultSvc = s }
 
 // New 构造设备服务。
-func New(cfg Config) DeviceSvc {
-	return newDeviceSvc(cfg)
-}
-func newDeviceSvc(cfg Config) *deviceSvc {
+func New(cfg Config) *deviceSvc {
 	return &deviceSvc{cfg: cfg, now: func() int64 { return time.Now().UnixMilli() }}
 }
 

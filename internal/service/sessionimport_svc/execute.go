@@ -10,6 +10,7 @@ import (
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/service/saved_session_svc"
 )
 
 // Import 让握着那份转录的机器执行一次导入，然后把导出来的会话收进账号。
@@ -53,7 +54,7 @@ func (s *sessionImportSvc) Import(ctx context.Context, in ImportInput) (*ImportR
 	// 对话标识取应答里那个：已经导过时它是**库里那条**，未必等于这次铸的号
 	// （transcriptimport 的幂等语义，wire.proto 契约明写允许交回不同的 id）。
 	conversationID := executed.GetConversationId()
-	if err := s.saved.Save(ctx, SessionRef{
+	if err := s.saved.Save(ctx, saved_session_svc.SessionRef{
 		UserID: in.UserID, MachineFingerprint: device.Fingerprint,
 		PeerFingerprint: device.Fingerprint, ConversationID: conversationID,
 	}); err != nil {

@@ -2,6 +2,7 @@ package device_svc
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -59,7 +60,7 @@ func setupDeviceTest(t *testing.T) (
 		VerificationURI: "https://server/device",
 	}
 	ctx, _, mock := hubtest.Database(t)
-	return ctx, mD, mT, mF, newDeviceSvc(cfg), mock
+	return ctx, mD, mT, mF, New(cfg), mock
 }
 
 func TestAuthorize_ReturnsUserCode(t *testing.T) {
@@ -809,6 +810,21 @@ func TestListUserDevices_RelayNotConfigured(t *testing.T) {
 	})
 }
 
+// seedMirrorHandshake 直接按镜像握手的共享状态键形状往 Redis 写一份记录。镜像是
+// 另一个包，它那侧只在包里记这份状态；跨包的设备读侧用例要造前置状态，只能照同一
+// 把 key 写（形状见 mirror_svc 的 protocolMismatchKey / daemonBuildKey）。
+func seedMirrorHandshakeKey(userID int64, fingerprint string) string {
+	return fmt.Sprintf("%d:%s", userID, base64.RawURLEncoding.EncodeToString([]byte(fingerprint)))
+}
+
+func seedProtocolMismatch(mini *miniredis.Miniredis, userID int64, fingerprint string) {
+	mini.Set("mirror:protocol-mismatch:"+seedMirrorHandshakeKey(userID, fingerprint), "1")
+}
+
+func seedDaemonBuild(mini *miniredis.Miniredis, userID int64, fingerprint, commit string) {
+	mini.Set("mirror:daemon-build:"+seedMirrorHandshakeKey(userID, fingerprint), commit)
+}
+
 // Given 镜像握手记下了「这台机器上一次握手被协议拒绝」的共享状态(mirror_svc 决策 14 /
 // spec「控制台呈现与 latest 来源」一节最后一段);When 列出设备;
 // Then 那台机器的这一行透出这件事,没被记录的机器不受影响 —— 这是设备读端点让协议
@@ -824,7 +840,7 @@ func TestListUserDevices_ReportsProtocolMismatch(t *testing.T) {
 		sup := mirror_svc.NewSupervisor(mirror_svc.Config{InstanceID: "server-a"}, nil, nil, redisClient)
 		mirror_svc.SetDefault(sup)
 		t.Cleanup(func() { mirror_svc.SetDefault(nil) })
-		sup.RecordProtocolMismatch(ctx, userID, "fp-a")
+		seedProtocolMismatch(mini, userID, "fp-a")
 
 		mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
 			{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
@@ -855,10 +871,10 @@ func TestListUserDevices_ReportsTheDaemonBuildTheHandshakeRecorded(t *testing.T)
 		sup := mirror_svc.NewSupervisor(mirror_svc.Config{InstanceID: "server-a"}, nil, nil, redisClient)
 		mirror_svc.SetDefault(sup)
 		t.Cleanup(func() { mirror_svc.SetDefault(nil) })
-		sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
+		seedDaemonBuild(mini, userID, "fp-a", "a1b2c3d")
 		// 本地构建：握过手、报的 commit 就是空串。它与「没握过手」在库里长得一样,
 		// 只有 known 分得开。
-		sup.RecordDaemonBuild(ctx, userID, "fp-b", "")
+		seedDaemonBuild(mini, userID, "fp-b", "")
 
 		mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
 			{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
@@ -967,14 +983,14 @@ func presenceWorld(t *testing.T) (*miniredis.Miniredis, relay_svc.RelaySvc, *mir
 func TestListUserDevices_GivenManyDevices_ThenPresenceIsReadInBatchesNotPerDevice(t *testing.T) {
 	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
 	userID := int64(7)
-	_, relay, sup, trips := presenceWorld(t)
+	mini, relay, _, trips := presenceWorld(t)
 
 	for _, fp := range []string{"fp-b", "fp-d"} {
 		require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: userID, Fingerprint: fp, InstanceID: "server-a"}))
 	}
-	sup.RecordProtocolMismatch(ctx, userID, "fp-a")
-	sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
-	sup.RecordDaemonBuild(ctx, userID, "fp-d", "")
+	seedProtocolMismatch(mini, userID, "fp-a")
+	seedDaemonBuild(mini, userID, "fp-a", "a1b2c3d")
+	seedDaemonBuild(mini, userID, "fp-d", "")
 	mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
 		{ID: 41, UserID: 7, Name: "a", Kind: "agentred", Fingerprint: "fp-a", Status: 1},
 		{ID: 42, UserID: 7, Name: "b", Kind: "agentred", Fingerprint: "fp-b", Status: 1},
@@ -1005,11 +1021,11 @@ func TestListUserDevices_GivenManyDevices_ThenPresenceIsReadInBatchesNotPerDevic
 func TestListUserDevices_GivenRedisFailing_ThenEveryDeviceFailsOpenAndTheListReturns(t *testing.T) {
 	ctx, mD, _, _, svc, _ := setupDeviceTest(t)
 	userID := int64(7)
-	mini, relay, sup, _ := presenceWorld(t)
+	mini, relay, _, _ := presenceWorld(t)
 
 	require.NoError(t, relay.RegisterDaemon(ctx, relay_svc.Route{AccountID: userID, Fingerprint: "fp-a", InstanceID: "server-a"}))
-	sup.RecordProtocolMismatch(ctx, userID, "fp-a")
-	sup.RecordDaemonBuild(ctx, userID, "fp-a", "a1b2c3d")
+	seedProtocolMismatch(mini, userID, "fp-a")
+	seedDaemonBuild(mini, userID, "fp-a", "a1b2c3d")
 	mD.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
 		{ID: 41, UserID: 7, Kind: "agentred", Fingerprint: "fp-a", Status: 1},
 		{ID: 42, UserID: 7, Kind: "agentred", Fingerprint: "fp-b", Status: 1},

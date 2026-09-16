@@ -96,10 +96,6 @@ import {
   useTranscriptScrollback,
 } from "@/components/session/useTranscriptScrollback";
 
-// 补齐的帧数上限与「更早的」续读是同一件事，常量随那一族一起搬走；这里再导出一次，
-// 因为它本来就是从这个模块公开出去的。
-export { RELAY_TAIL_FRAMES };
-
 /** GET /v1/workspace/agents 里头部要的四列：身份、名字、调色板色、图标键。 */
 interface WorkspaceAgent {
   sync_id: string;

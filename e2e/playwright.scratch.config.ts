@@ -33,8 +33,6 @@ if (
  */
 export default defineConfig({
   testDir: "./scratch",
-  fullyParallel: false,
-  retries: 0,
   workers: 1,
   reporter: [["list"]],
   // 一次性验证经常要等真实依赖，放宽超时
@@ -55,5 +53,4 @@ export default defineConfig({
   ],
 
   // 不自动起 Vite 或复用开发 server；默认读取 `pnpm serve` 的本轮 handoff。
-  webServer: undefined,
 });

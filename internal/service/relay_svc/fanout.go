@@ -23,8 +23,6 @@ import (
 // 同一条纪律在这个产品里已经有两处实现：daemon 侧 connRegistry 的 asyncNotifier
 // （每订阅者一条队列），以及桌面端 chat_svc 的 deliverPeerPending。这是第三处。
 
-var errFanoutClosed = errors.New("relay daemon fanout is closed")
-
 const (
 	// channelQueueDepth 是每条虚拟通道的投递缓冲深度。
 	//
@@ -78,7 +76,7 @@ func (f *daemonFanout) enqueue(ctx context.Context, channelID string, frame []by
 	f.mu.Lock()
 	if f.closed {
 		f.mu.Unlock()
-		return errFanoutClosed
+		return errors.New("relay daemon fanout is closed")
 	}
 	queue, ok := f.queues[channelID]
 	if !ok {

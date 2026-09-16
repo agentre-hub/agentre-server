@@ -175,10 +175,10 @@ func (f *redisForwarder) Attach(ctx context.Context, target Route, peer Peer, ch
 		// controller 随即关闭浏览器 websocket。直接换成只含新 attachment 的集合；
 		// 旧 handler 迟到的 detach 按指针删除自己，不会误删新连接。
 		f.attachments[stream][peer] = map[*attachedPeer]struct{}{attachment: {}}
-	} else if f.attachments[stream][peer] == nil {
-		f.attachments[stream][peer] = make(map[*attachedPeer]struct{})
-		f.attachments[stream][peer][attachment] = struct{}{}
 	} else {
+		if f.attachments[stream][peer] == nil {
+			f.attachments[stream][peer] = make(map[*attachedPeer]struct{})
+		}
 		f.attachments[stream][peer][attachment] = struct{}{}
 	}
 	f.startConsumerLocked(stream)
@@ -416,16 +416,15 @@ func (f *redisForwarder) startConsumerLocked(stream string) {
 	go f.renewStream(ctx, stream)
 }
 
-// renewStream 按固定节奏给 stream 续期,不挂在消费循环的每一轮上:那样「续期」的
-// 频率会被「阻塞窗口」绑死,窗口一拉长,TTL 就会断。两者各按各自的道理取值——续期
-// 看 TTL,阻塞窗口看空闲开销。
-//
-// 与 renewClientPresence 同一形状,只是下限更低:那一处是 1 秒,而这里的 stream
-// 在用例里常配 1 秒 TTL,取半再封 1 秒会正好卡在过期边界上。
-func (f *redisForwarder) renewStream(ctx context.Context, stream string) {
-	interval := f.ttl / 2
-	if interval < 200*time.Millisecond {
-		interval = 200 * time.Millisecond
+// renewKey 按固定节奏给一个 Redis 键续期，不挂在消费循环的每一轮上:那样「续期」的
+// 频率会被「阻塞窗口」绑死,窗口一拉长,TTL 就会断。节奏取 TTL 的一半、不低于
+// minInterval——两个使用者的下限不同（见各自的注释），键与 TTL 都现算。
+func (f *redisForwarder) renewKey(
+	ctx context.Context, key func() string, ttl func() time.Duration, minInterval time.Duration,
+) {
+	interval := ttl() / 2
+	if interval < minInterval {
+		interval = minInterval
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -434,9 +433,16 @@ func (f *redisForwarder) renewStream(ctx context.Context, stream string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = f.redis.Expire(ctx, stream, f.ttl).Err()
+			_ = f.redis.Expire(ctx, key(), ttl()).Err()
 		}
 	}
+}
+
+// renewStream 按固定节奏给 stream 续期。
+//
+// 下限取 200ms:stream 在用例里常配 1 秒 TTL,取半再封 1 秒会正好卡在过期边界上。
+func (f *redisForwarder) renewStream(ctx context.Context, stream string) {
+	f.renewKey(ctx, func() string { return stream }, func() time.Duration { return f.ttl }, 200*time.Millisecond)
 }
 
 // consume 的生命周期由 startConsumerLocked / detach 的 cancel 界定,**不是**由
@@ -715,20 +721,7 @@ func (f *redisForwarder) registerClient(ctx context.Context, target Route, chann
 }
 
 func (f *redisForwarder) renewClientPresence(ctx context.Context, target Route, channelID string) {
-	interval := f.clientTTL() / 2
-	if interval < time.Second {
-		interval = time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			_ = f.redis.Expire(ctx, clientChannelKey(target, channelID), f.clientTTL()).Err()
-		}
-	}
+	f.renewKey(ctx, func() string { return clientChannelKey(target, channelID) }, f.clientTTL, time.Second)
 }
 
 func (f *redisForwarder) unregisterClient(target Route, channelID string) {

@@ -64,13 +64,7 @@ func (s *sessionReadSvc) Transcript(ctx context.Context, in TranscriptQuery) (Tr
 	if in.Backward {
 		return s.transcriptTail(ctx, in)
 	}
-	limit := in.Limit
-	if limit <= 0 {
-		limit = defaultTranscriptLimit
-	}
-	if limit > maxTranscriptLimit {
-		limit = maxTranscriptLimit
-	}
+	limit := clamp(in.Limit, defaultTranscriptLimit, maxTranscriptLimit)
 	rows, err := agent_session_repo.DurableFrame().ListFramesBySeq(
 		ctx, in.UserID, in.ConversationID, in.AfterSeq, limit+1)
 	if err != nil {

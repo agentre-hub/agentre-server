@@ -17,6 +17,8 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1552,10 +1554,7 @@ func (s *workspaceSvc) withExecTargetTailSlot(
 	}
 	// 原 map 不就地改：调用方（controller）拼出来的那一份不该因为走了一趟 service
 	// 就多出一个它没写的键。
-	next := make(map[string]any, len(in.Fields)+1)
-	for k, v := range in.Fields {
-		next[k] = v
-	}
+	next := maps.Clone(in.Fields)
 	next["sort_order"] = tail + 1
 	return next, nil
 }
@@ -1603,12 +1602,7 @@ func OrgFieldsOrEmpty(fields map[string]any) map[string]any {
 // KeysOfOrgFields 只把**键名**排序后交给日志。载荷正文一律不进日志（里面有系统
 // 提示词与简介），日志要回答的只是「这次改了哪几个键」。
 func KeysOfOrgFields(fields map[string]any) []string {
-	out := make([]string, 0, len(fields))
-	for k := range fields {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(fields))
 }
 
 // NewOrgSyncID 给服务端直写的新行分配同步标识：与桌面端同一种形状（ULID，

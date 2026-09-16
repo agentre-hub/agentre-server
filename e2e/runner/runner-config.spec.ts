@@ -37,7 +37,10 @@ test("MySQL 目标只暴露 host、port 与 E2E 数据库名", () => {
 });
 
 test("配置摘要不泄露数据库或 Redis 凭据", () => {
-  const summary = redactedConfigSummary(CONFIG);
+  const summary = redactedConfigSummary({
+    mysql: parseMySQLTarget(parseDSN(CONFIG)),
+    redis: parseRedis(CONFIG),
+  });
   expect(summary).toEqual({
     mysql: "db.e2e.invalid:3307/agentre_e2e",
     redis: "cache.e2e.invalid:6380/4",

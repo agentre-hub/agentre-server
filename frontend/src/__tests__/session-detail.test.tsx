@@ -33,9 +33,8 @@ import { toast } from "sonner";
 
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
-import SessionDetailView, {
-  RELAY_TAIL_FRAMES,
-} from "@/components/session/SessionDetailView";
+import SessionDetailView from "@/components/session/SessionDetailView";
+import { RELAY_TAIL_FRAMES } from "@/components/session/useTranscriptScrollback";
 import SessionDetail from "@/pages/SessionDetail";
 import { writeReasoningEffortToOrigin } from "@/components/session/sessionMirror";
 import { resetLiveTurns, useLiveTurns } from "@/lib/liveSessions";

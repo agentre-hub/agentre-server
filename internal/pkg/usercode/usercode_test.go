@@ -16,7 +16,7 @@ func TestGenerate_Format(t *testing.T) {
 			if r == '-' {
 				continue
 			}
-			assert.Contains(t, Alphabet, string(r), "%q has forbidden char %q", c, r)
+			assert.Contains(t, alphabet, string(r), "%q has forbidden char %q", c, r)
 		}
 	}
 }

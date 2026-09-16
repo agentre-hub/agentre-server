@@ -34,12 +34,8 @@ type ActivityRollupClient interface {
 func (s *Supervisor) WithMachine(
 	ctx context.Context, userID int64, fingerprint string, fn func(ActivityRollupClient) error,
 ) error {
-	conn, err := s.dial(ctx, machineKey{userID: userID, fingerprint: fingerprint}, nil)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	return fn(conn)
+	return s.withShortConn(ctx, machineKey{userID: userID, fingerprint: fingerprint}, s.cfg.CallTimeout,
+		func(conn *machineConn) error { return fn(conn) })
 }
 
 var _ ActivityRollupClient = (*machineConn)(nil)

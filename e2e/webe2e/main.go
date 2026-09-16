@@ -49,7 +49,7 @@ type browserSession struct {
 // fixtureTable 是清理与复点共用的一份表清单：同一张表的 DELETE 与
 // SELECT count(*) 只差那一句动词，写两份平行清单就是两份会漂的机会（漏掉一张表
 // = 残留清不掉，或者清了不复点）。device_tokens 与 device_flow_codes 的取行方式
-// 各自特殊，两句也各自给出。
+// 各自特殊，在 runCleanup 里各自分支，这两张表的 del / cnt 因而留空。
 type fixtureTable struct {
 	name string
 	del  string
@@ -58,16 +58,8 @@ type fixtureTable struct {
 
 func fixtureTables() []fixtureTable {
 	return []fixtureTable{
-		{
-			"device_tokens",
-			`DELETE FROM device_tokens WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)`,
-			`SELECT count(*) FROM device_tokens WHERE device_id IN (?)`,
-		},
-		{
-			"device_flow_codes",
-			`DELETE FROM ` + flowSelection(true).SQL,
-			`SELECT count(*) FROM ` + flowSelection(true).SQL,
-		},
+		{"device_tokens", `DELETE FROM device_tokens WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)`, `SELECT count(*) FROM device_tokens WHERE device_id IN (?)`},
+		{"device_flow_codes", "", ""},
 		{"device_local_paths", `DELETE FROM device_local_paths WHERE user_id = ?`, `SELECT count(*) FROM device_local_paths WHERE user_id = ?`},
 		{"sync_device_states", `DELETE FROM sync_device_states WHERE user_id = ?`, `SELECT count(*) FROM sync_device_states WHERE user_id = ?`},
 		{"sync_avatars", `DELETE FROM sync_avatars WHERE user_id = ?`, `SELECT count(*) FROM sync_avatars WHERE user_id = ?`},
@@ -82,22 +74,6 @@ func fixtureTables() []fixtureTable {
 		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`, `SELECT count(*) FROM user_identities WHERE user_id = ?`},
 		{"users", `DELETE FROM users WHERE id = ?`, `SELECT count(*) FROM users WHERE id = ?`},
 	}
-}
-
-func cleanupSQL() []sqlStep {
-	steps := make([]sqlStep, 0, len(fixtureTables()))
-	for _, t := range fixtureTables() {
-		steps = append(steps, sqlStep{Name: t.name, SQL: t.del})
-	}
-	return steps
-}
-
-func residueSQL() []sqlStep {
-	steps := make([]sqlStep, 0, len(fixtureTables()))
-	for _, t := range fixtureTables() {
-		steps = append(steps, sqlStep{Name: t.name, SQL: t.cnt})
-	}
-	return steps
 }
 
 // Oracle queries deliberately select state only. Bearer codes, token hashes,
@@ -124,11 +100,13 @@ type sqlStep struct {
 	SQL  string
 }
 
-func flowSelection(userFound bool) sqlStep {
+// flowSelection 是 device_flow_codes 那一张表的「哪几行属于本轮 run」的片段：
+// 账号找到了就按授权账号或指纹，否则只能按指纹（连 flow 都没批准过）。
+func flowSelection(userFound bool) string {
 	if !userFound {
-		return sqlStep{"device_flow_codes", `device_flow_codes WHERE client_fingerprint = ?`}
+		return `device_flow_codes WHERE client_fingerprint = ?`
 	}
-	return sqlStep{"device_flow_codes", `device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`}
+	return `device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`
 }
 
 func main() {
@@ -161,13 +139,6 @@ func usage() {
   webe2e cleanup --dsn DSN --redis-addr HOST:PORT [--redis-password PW --redis-db N] --run-id ID
   webe2e oracle  --dsn DSN --run-id ID --user-id ID
 `)
-}
-
-func registerRedisFlags(fs *flag.FlagSet) (*string, *string, *int) {
-	addr := fs.String("redis-addr", os.Getenv("WEBE2E_REDIS_ADDR"), "Redis host:port")
-	password := fs.String("redis-password", os.Getenv("WEBE2E_REDIS_PASSWORD"), "Redis password")
-	db := fs.Int("redis-db", 0, "Redis db number")
-	return addr, password, db
 }
 
 func openDB(dsn string) (*gorm.DB, error) {
@@ -203,7 +174,9 @@ func openStores(name, runIDUsage string, args []string) (*stores, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "MySQL DSN")
 	runID := fs.String("run-id", "", runIDUsage)
-	redisAddr, redisPassword, redisDB := registerRedisFlags(fs)
+	redisAddr := fs.String("redis-addr", os.Getenv("WEBE2E_REDIS_ADDR"), "Redis host:port")
+	redisPassword := fs.String("redis-password", os.Getenv("WEBE2E_REDIS_PASSWORD"), "Redis password")
+	redisDB := fs.Int("redis-db", 0, "Redis db number")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -333,59 +306,59 @@ func runCleanup(args []string) error {
 		}
 	}
 
-	for _, step := range cleanupSQL() {
+	for _, t := range fixtureTables() {
 		var res *gorm.DB
-		switch step.Name {
+		switch t.name {
 		case "device_flow_codes":
 			selection := flowSelection(out.Found)
 			if out.Found {
-				res = gdb.Exec("DELETE FROM "+selection.SQL, out.UserID, flowFingerprint(runID))
+				res = gdb.Exec("DELETE FROM "+selection, out.UserID, flowFingerprint(runID))
 			} else {
-				res = gdb.Exec("DELETE FROM "+selection.SQL, flowFingerprint(runID))
+				res = gdb.Exec("DELETE FROM "+selection, flowFingerprint(runID))
 			}
 		default:
 			if !out.Found {
 				continue
 			}
-			res = gdb.Exec(step.SQL, out.UserID)
+			res = gdb.Exec(t.del, out.UserID)
 		}
 		if res.Error != nil {
-			return fmt.Errorf("delete %s: %w", step.Name, res.Error)
+			return fmt.Errorf("delete %s: %w", t.name, res.Error)
 		}
-		out.Deleted[step.Name] = res.RowsAffected
+		out.Deleted[t.name] = res.RowsAffected
 	}
 	if err := rc.Del(context.Background(), redisKeys(runID)...).Err(); err != nil {
 		return fmt.Errorf("delete run redis keys: %w", err)
 	}
 
-	for _, step := range residueSQL() {
+	for _, t := range fixtureTables() {
 		var n int64
 		var query *gorm.DB
-		switch step.Name {
+		switch t.name {
 		case "device_tokens":
 			if len(deviceIDs) == 0 {
-				out.Residue[step.Name] = 0
+				out.Residue[t.name] = 0
 				continue
 			}
-			query = gdb.Raw(step.SQL, deviceIDs)
+			query = gdb.Raw(t.cnt, deviceIDs)
 		case "device_flow_codes":
 			selection := flowSelection(out.Found)
 			if out.Found {
-				query = gdb.Raw("SELECT count(*) FROM "+selection.SQL, out.UserID, flowFingerprint(runID))
+				query = gdb.Raw("SELECT count(*) FROM "+selection, out.UserID, flowFingerprint(runID))
 			} else {
-				query = gdb.Raw("SELECT count(*) FROM "+selection.SQL, flowFingerprint(runID))
+				query = gdb.Raw("SELECT count(*) FROM "+selection, flowFingerprint(runID))
 			}
 		default:
 			if !out.Found {
-				out.Residue[step.Name] = 0
+				out.Residue[t.name] = 0
 				continue
 			}
-			query = gdb.Raw(step.SQL, out.UserID)
+			query = gdb.Raw(t.cnt, out.UserID)
 		}
 		if err := query.Scan(&n).Error; err != nil {
-			return fmt.Errorf("recount %s: %w", step.Name, err)
+			return fmt.Errorf("recount %s: %w", t.name, err)
 		}
-		out.Residue[step.Name] = n
+		out.Residue[t.name] = n
 	}
 	keys := redisKeys(runID)
 	for i, name := range []string{"session", "rate_limit"} {

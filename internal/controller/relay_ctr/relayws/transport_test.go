@@ -12,6 +12,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newWithTiming 是测试注入的构造缝：生产只从 New 进来，它用固定那套 timing；
+// 用例要控制窗口边界与读上限，所以直接建一个 transport。
+func newWithTiming(cfg timing, readLimit int64) Transport {
+	return &transport{
+		timing:    cfg,
+		readLimit: readLimit,
+		upgrader:  websocket.Upgrader{Subprotocols: []string{ProtobufSubprotocol}},
+		live:      map[*connection]struct{}{},
+	}
+}
+
+// defaultTiming 交出生产那套生命周期值，供「默认值有没有变」的用例比对。
+func defaultTiming() timing {
+	return timing{
+		heartbeatInterval: HeartbeatInterval,
+		readTimeout:       readTimeout,
+		writeTimeout:      writeTimeout,
+	}
+}
+
 type receivedFrame struct {
 	messageType int
 	data        []byte
@@ -229,7 +249,7 @@ func newTransportHarness(
 		frames:     make(chan receivedFrame, 16),
 		readErrors: make(chan error, 1),
 	}
-	transport := newWithTiming(cfg, ClientReadLimit)
+	transport := newWithTiming(cfg, ReadLimit)
 	harness.transport = transport
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		peer, err := transport.Upgrade(w, r, hooks)

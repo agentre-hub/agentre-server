@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/i18n"
@@ -103,7 +104,14 @@ func (a *Auth) GithubCallback(c *gin.Context, req *api.GithubCallbackRequest) er
 		c.Redirect(http.StatusFound, "/login?err=github_email_missing")
 		return nil
 	}
-	u, err := user_svc.User().FindOrCreateFromGithub(ctx, oauth_svc.ToGithubProfile(profile))
+	u, err := user_svc.User().FindOrCreateFromGithub(ctx, user_svc.GithubProfile{
+		GithubID:    strconv.FormatInt(profile.ID, 10),
+		Login:       profile.Login,
+		DisplayName: profile.Name,
+		Email:       profile.Email,
+		AvatarURL:   profile.AvatarURL,
+		RawProfile:  profile.RawProfile,
+	})
 	if err != nil {
 		// identity 存在但账号不可用（被封禁）是这条路径的常态，不是基础设施故障：
 		// user_svc 在这种情形下返回 user_entity.Check 产出的成形错误，这里把它变成一次
@@ -141,7 +149,7 @@ func (a *Auth) Logout(c *gin.Context, _ *api.LogoutRequest) (*api.LogoutResponse
 // ListSessions 列出当前账号的全部登录会话，并标出请求自己所在的那一条。
 func (a *Auth) ListSessions(c *gin.Context, _ *api.ListSessionsRequest) (*api.ListSessionsResponse, error) {
 	ctx := c.Request.Context()
-	userID, err := a.sessionUserID(c)
+	userID, err := ginctx.RequireUserID(c)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +175,7 @@ func (a *Auth) ListSessions(c *gin.Context, _ *api.ListSessionsRequest) (*api.Li
 func (a *Auth) RevokeOtherSessions(c *gin.Context, _ *api.RevokeOtherSessionsRequest) (
 	*api.RevokeOtherSessionsResponse, error) {
 	ctx := c.Request.Context()
-	userID, err := a.sessionUserID(c)
+	userID, err := ginctx.RequireUserID(c)
 	if err != nil {
 		return nil, err
 	}
@@ -179,21 +187,11 @@ func (a *Auth) RevokeOtherSessions(c *gin.Context, _ *api.RevokeOtherSessionsReq
 	return &api.RevokeOtherSessionsResponse{Revoked: revoked}, nil
 }
 
-// sessionUserID 取中间件放进上下文的账号 id。SessionAuth 已经保证它在，这里只是
-// 不让一个装配错误静默地变成「操作别人的会话」。
-func (a *Auth) sessionUserID(c *gin.Context) (int64, error) {
-	userID := ginctx.UserID(c)
-	if userID == 0 {
-		return 0, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
-	}
-	return userID, nil
-}
-
 func (a *Auth) Me(c *gin.Context, _ *api.MeRequest) (*api.MeResponse, error) {
 	ctx := c.Request.Context()
-	userID := ginctx.UserID(c)
-	if userID == 0 {
-		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
 	}
 	u, err := user_svc.User().Find(ctx, userID)
 	if err != nil {

@@ -37,8 +37,7 @@ type AccountSignals interface {
 type Relay struct {
 	svc     relay_svc.RelaySvc
 	signals AccountSignals
-	// 两个端点收的都是信封，读上限同值（relayws.DaemonReadLimit 与
-	// ClientReadLimit），因此共用一份 transport：连接登记表也只有一份，Drain
+	// 两个端点收的都是信封，读上限同值（relayws.ReadLimit），因此共用一份 transport：连接登记表也只有一份，Drain
 	// 一次就关掉本进程手里所有的中继 websocket。
 	transport relayws.Transport
 }
@@ -47,7 +46,7 @@ func New(svc relay_svc.RelaySvc, signals AccountSignals) *Relay {
 	return &Relay{
 		svc:       svc,
 		signals:   signals,
-		transport: relayws.New(relayws.DaemonReadLimit),
+		transport: relayws.New(relayws.ReadLimit),
 	}
 }
 
@@ -300,14 +299,6 @@ func (r *Relay) Client(c *gin.Context) {
 	}
 }
 
-// connectionGuard 把「这条连接还能继续吗」翻译成传输层认得的终止信号。
-//
-// 中继 websocket 只在 upgrade 那一刻过一次鉴权中间件，登出、设备撤销与账号封禁因此
-// 都只挡得住**新**连接；只有这里的逐次复查，才能把它们落到一条已经建好的连接上。
-//
-// 两条判据的失败方向刻意相反，别顺手统一掉：凭据撤销判不出来时不断开
-// （auth_svc.WatchRelayCredential 的 fail-open，那只是一次早已生效的撤销的收尾），
-// 账号闸门判不出来时断开（user_svc.AccountGate 的 fail-closed，那是授权判定本身）。
 // subscribeSignals 建立账号信号订阅。没有配置信号源时按「订阅建不起来」处理——
 // 那与 Redis 连不上对客户端是同一件事：信号那一路不可用，退回轮询。
 func (r *Relay) subscribeSignals(

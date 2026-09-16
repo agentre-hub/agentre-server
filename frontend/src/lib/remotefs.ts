@@ -27,7 +27,7 @@ import {
   ErrCodeRemoteFSPermDenied,
   rpcMethods,
 } from "@agentre-hub/agentre-wire";
-import { RelayClient, RelayError } from "@/lib/relayClient";
+import { RelayError, disconnected, type RelayCaller } from "@/lib/relayClient";
 
 export interface RemoteFsEntry {
   name: string;
@@ -66,12 +66,8 @@ export interface RemoteFsFailure {
 }
 
 /** 有 client 才发得出请求：没有连接时如实给「掉线」，不抛一个说不清的 TypeError。 */
-interface RemoteFsCaller {
-  request: RelayClient["request"];
-}
-
 export async function listDir(
-  client: RemoteFsCaller | null,
+  client: RelayCaller | null,
   path: string,
 ): Promise<ListDirResult> {
   if (!client) throw disconnected();
@@ -93,17 +89,13 @@ export async function listDir(
 }
 
 export async function mkdir(
-  client: RemoteFsCaller | null,
+  client: RelayCaller | null,
   parent: string,
   name: string,
 ): Promise<{ path: string }> {
   if (!client) throw disconnected();
   const raw = await client.request(rpcMethods.remoteFsMkdir, { parent, name });
   return { path: raw?.path ?? joinPath(parent, name) };
-}
-
-function disconnected(): RelayError {
-  return new RelayError(-1, "relay: 连接未就绪", null);
 }
 
 /**

@@ -199,13 +199,10 @@ export function readRunnerConfig(configPath = defaultConfigPath) {
   };
 }
 
-export function redactedConfigSummary(text) {
-  const config = configMapping(text, "E2E config");
-  const mysql = parseMySQLTarget(dsnFromConfig(config));
-  const redis = redisFromConfig(config);
+export function redactedConfigSummary(config) {
   return {
-    mysql: `${mysql.host}:${mysql.port}/${mysql.database}`,
-    redis: `${redis.addr}/${redis.db}`,
+    mysql: `${config.mysql.host}:${config.mysql.port}/${config.mysql.database}`,
+    redis: `${config.redis.addr}/${config.redis.db}`,
   };
 }
 
@@ -252,18 +249,6 @@ export function rateLimitClientIP(id) {
   return `198.18.${bytes[0]}.${bytes[1]}`;
 }
 
-export function seedInvocation(tool, runnerConfig, id) {
-  return {
-    command: tool,
-    args: ["seed", "--redis-db", String(runnerConfig.redis.db), "--run-id", id],
-    env: {
-      WEBE2E_DSN: runnerConfig.dsn,
-      WEBE2E_REDIS_ADDR: runnerConfig.redis.addr,
-      WEBE2E_REDIS_PASSWORD: runnerConfig.redis.password,
-    },
-  };
-}
-
 export function serveEnvPayload(values) {
   for (const key of [
     "serverURL",
@@ -295,11 +280,7 @@ export async function cleanupThenRemoveHandoff(path, owned, cleanup) {
   return result;
 }
 
-export async function prepareStaleHandoff(
-  path,
-  probe = probeHealth,
-  cleanup = (id) => runTool("cleanup", id),
-) {
+export async function prepareStaleHandoff(path, probe, cleanup) {
   if (!existsSync(path)) return;
   let old;
   try {
@@ -336,7 +317,6 @@ export function installSignalHandlers(target, mode, finish) {
     void finish(mode === "serve" ? 0 : 1);
   };
   for (const signal of ["SIGINT", "SIGTERM"]) target.on(signal, handler);
-  return handler;
 }
 
 export function installChildCompletion(child, finish) {
@@ -391,7 +371,6 @@ function toolInvocation(command, id, overrides = {}) {
   const tool = overrides.tool ?? paths.tool;
   const dsn = overrides.dsn ?? config.dsn;
   const redis = overrides.redis ?? config.redis;
-  if (command === "seed") return seedInvocation(tool, { dsn, redis }, id);
   return {
     command: tool,
     args: [command, "--redis-db", String(redis.db), "--run-id", id],
@@ -425,12 +404,6 @@ export function runTool(command, id, overrides = {}, execute = execFileSync) {
   } catch (error) {
     return decodeToolResult(error.stdout, error);
   }
-}
-
-async function cleanStaleHandoff() {
-  await prepareStaleHandoff(serveEnvPath, probeHealth, (old) =>
-    runTool("cleanup", old.runID, { dsn: old.dsn, redis: old.redis }),
-  );
 }
 
 async function probeHealth(baseURL) {
@@ -534,12 +507,14 @@ async function main() {
   mkdirSync(paths.root, { recursive: true, mode: 0o700 });
   mkdirSync(dirname(paths.handoff), { recursive: true, mode: 0o700 });
 
-  const summary = redactedConfigSummary(config.text);
+  const summary = redactedConfigSummary(config);
   console.log(`[e2e] target MySQL ${summary.mysql}; Redis ${summary.redis}`);
   console.log("[e2e] building frontend, formal server, and fixture tool …");
   build(paths);
   toolReady = true;
-  await cleanStaleHandoff();
+  await prepareStaleHandoff(serveEnvPath, probeHealth, (old) =>
+    runTool("cleanup", old.runID, { dsn: old.dsn, redis: old.redis }),
+  );
 
   const baseURL = `http://${config.http.host}:${config.http.port}`;
   if (await portIsBusy(config.http.port)) {

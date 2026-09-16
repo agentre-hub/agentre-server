@@ -3,6 +3,8 @@ package issue_svc
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -587,12 +589,7 @@ func (s *issueBoardSvc) checkLabelNameFree(
 }
 
 func knownIssueTone(tone string) bool {
-	for _, known := range issueTones {
-		if tone == known {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(issueTones, tone)
 }
 
 // closedAtFor 关闭时刻完全由阶段推导：进 done 记下时刻（已经记过的不重记，否则
@@ -673,11 +670,7 @@ func stageCards(issues []*sync_entity.SyncObject, stage, skipSyncID string) []Is
 // copyOrgFields 不改调用方那张 map：这一族要往里补 stage / closed_at / position，
 // 就地改会让控制器传进来的那份跟着变。
 func copyOrgFields(fields map[string]any) map[string]any {
-	out := make(map[string]any, len(fields)+3)
-	for k, v := range fields {
-		out[k] = v
-	}
-	return out
+	return maps.Clone(fields)
 }
 
 func stringField(fields map[string]any, key string) string {

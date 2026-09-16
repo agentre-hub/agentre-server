@@ -1,6 +1,11 @@
-import type { APIResponse, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
-import { expect, readHandoff, readOracle } from "./app";
+import {
+  expect,
+  expectSuccessfulEnvelope,
+  readHandoff,
+  readOracle,
+} from "./app";
 
 interface WriteReceipt {
   sync_id: string;
@@ -15,21 +20,12 @@ interface WorkspaceJourney {
   issue: WriteReceipt;
 }
 
-function successfulData<T>(response: APIResponse, body: unknown): T {
-  expect(
-    response.ok(),
-    `HTTP ${response.status()}: ${JSON.stringify(body)}`,
-  ).toBe(true);
-  expect(body).toMatchObject({ code: 0 });
-  return (body as { data: T }).data;
-}
-
 async function post<T>(page: Page, path: string, data: unknown): Promise<T> {
   const response = await page.request.post(path, {
     headers: { "X-CSRF-Token": readHandoff().csrfToken },
     data,
   });
-  return successfulData<T>(response, await response.json());
+  return expectSuccessfulEnvelope<T>(response, await response.json());
 }
 
 export async function driveWorkspaceJourney(page: Page) {

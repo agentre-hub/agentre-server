@@ -95,8 +95,6 @@ export function DeviceVersionBadge({
   );
 }
 
-/** 可复制的 `agentred update`：一键升级够不着时它是唯一出口，因此始终在场。 */
-
 /** 主动作的文案与可用性。 */
 function actionLabel(
   state: AgentredVersionState,

@@ -88,9 +88,9 @@ func (d *Device) Pending(c *gin.Context, req *api.DevicePendingRequest) (*api.De
 }
 
 func (d *Device) Approve(c *gin.Context, req *api.DeviceApproveRequest) (*api.DeviceApproveResponse, error) {
-	userID := ginctx.UserID(c)
-	if userID == 0 {
-		return nil, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
 	}
 	kind, err := device_svc.Default().Approve(c.Request.Context(), req.UserCode, userID)
 	if err != nil {
@@ -125,9 +125,12 @@ func (d *Device) Refresh(c *gin.Context, req *api.TokenRefreshRequest) (*api.Tok
 // （决策 8/9）：agentred 的 auth.account 从凭据的记录取身份，浏览器在请求体里报不了自己是谁。
 func (d *Device) RelayTicket(c *gin.Context, _ *api.RelayTicketRequest) (*api.RelayTicketResponse, error) {
 	ctx := c.Request.Context()
-	userID := ginctx.UserID(c)
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
+	}
 	auth := auth_svc.Default()
-	if userID == 0 || auth == nil {
+	if auth == nil {
 		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
 	}
 	// 本路由挂在 SessionAuth 之后，Redis 不可用时请求根本走不到这儿；记不下来就不发
@@ -245,9 +248,9 @@ func toListDevicesItem(view device_svc.DeviceView) api.ListDevicesItem {
 // 只是一个标签。
 func (d *Device) Rename(c *gin.Context, req *api.RenameDeviceRequest) (*api.RenameDeviceResponse, error) {
 	ctx := c.Request.Context()
-	userID := ginctx.UserID(c)
-	if userID == 0 {
-		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
 	}
 	name, err := device_svc.Default().Rename(ctx, userID, req.DeviceID, *req.DisplayName)
 	if err != nil {
@@ -266,9 +269,9 @@ func (d *Device) Rename(c *gin.Context, req *api.RenameDeviceRequest) (*api.Rena
 // （决策 22）——两端与命令行对同一件事只说一句话，前提是中间这几层谁都不改口。
 func (d *Device) Upgrade(c *gin.Context, req *api.DeviceUpgradeRequest) (*api.DeviceUpgradeResponse, error) {
 	ctx := c.Request.Context()
-	userID := ginctx.UserID(c)
-	if userID == 0 {
-		return nil, i18n.NewErrorWithStatus(ctx, http.StatusUnauthorized, code.Unauthorized)
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
 	}
 	// 不是本账号在用的设备、或者根本不是一台 agentred：一次调用都不发。自更新方法只有
 	// agentred 认，对着桌面端发等于拿一个必然的协议错误当业务答复。

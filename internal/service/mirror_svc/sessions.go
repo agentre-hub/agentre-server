@@ -108,25 +108,23 @@ func purgeStoredCopy(ctx context.Context, userID int64, conversationID string) e
 // 手点出来的、极少发生，而复用常驻连接要把那条连接的生命周期暴露给请求路径，换来
 // 的只是省下一次握手。
 func (s *Sessions) DeleteOnMachine(ctx context.Context, userID int64, machineFingerprint, conversationID string) error {
-	conn, err := s.sup.dial(ctx, machineKey{userID: userID, fingerprint: machineFingerprint}, nil)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	// peerFingerprint 有意不填：这条连接通到的就是那台机器，而在账号鉴权的连接上
-	// 点名一个本可以省略的对端会被拒（省略即「调用方自己那一端」）。
-	// 应答里的 deleted 有意不看：契约是**后置条件**——「那一端已经没有这条会话了」，
-	// 而不是「这一次删掉了几行」。对面回 deleted:false（它那儿早就没有了）与
-	// deleted:true 对调用方是同一件事，重复删除因此照样成功。
-	if _, err := conn.SessionDelete(ctx, &agentrewire.SessionDeleteRequest{
-		ConversationId: conversationID,
-	}); err != nil {
-		return fmt.Errorf("delete session on peer: %w", err)
-	}
-	logger.Ctx(ctx).Info("mirror_svc.DeleteOnMachine: machine deleted its own copy",
-		zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
-		zap.String("conversationId", conversationID))
-	return nil
+	return s.sup.withShortConn(ctx, machineKey{userID: userID, fingerprint: machineFingerprint}, s.sup.cfg.CallTimeout,
+		func(conn *machineConn) error {
+			// peerFingerprint 有意不填：这条连接通到的就是那台机器，而在账号鉴权的连接上
+			// 点名一个本可以省略的对端会被拒（省略即「调用方自己那一端」）。
+			// 应答里的 deleted 有意不看：契约是**后置条件**——「那一端已经没有这条会话了」，
+			// 而不是「这一次删掉了几行」。对面回 deleted:false（它那儿早就没有了）与
+			// deleted:true 对调用方是同一件事，重复删除因此照样成功。
+			if _, err := conn.SessionDelete(ctx, &agentrewire.SessionDeleteRequest{
+				ConversationId: conversationID,
+			}); err != nil {
+				return fmt.Errorf("delete session on peer: %w", err)
+			}
+			logger.Ctx(ctx).Info("mirror_svc.DeleteOnMachine: machine deleted its own copy",
+				zap.Int64("userId", userID), zap.String("machineFingerprint", machineFingerprint),
+				zap.String("conversationId", conversationID))
+			return nil
+		})
 }
 
 // ReplayPendingDeletes 把攒下的删除待办补做掉：删除在机器离线时照样生效，server

@@ -59,13 +59,13 @@ type RouterDeps struct {
 	// 为空时取 device_svc.Default()（按摘要查 MySQL），与上面几项同一约定。
 	Bearer middleware.BearerResolver
 
-	// drainers 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
+	// drainer 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
 	// 长连接逐条礼貌关掉(见 DrainRelays)。
 	//
 	// 控制器是在 Router 里现造的,main 拿不到它们;而 RouterDeps 本来就是 main
 	// 持有的那个指针,把把手挂回它身上比给 Router 加一个返回值省事,也不必让
 	// main 去认识 relay_ctr。
-	drainers []relayws.Drainer
+	drainer relayws.Drainer
 }
 
 // DrainRelays 优雅下线:把这个副本手里的中继 websocket 逐条礼貌关掉
@@ -79,11 +79,10 @@ type RouterDeps struct {
 //
 // 幂等:排空过的连接已经从登记表里摘掉,重复调用交回 0。
 func (r *RouterDeps) DrainRelays() int {
-	total := 0
-	for _, d := range r.drainers {
-		total += d.Drain()
+	if r.drainer == nil {
+		return 0
 	}
-	return total
+	return r.drainer.Drain()
 }
 
 // trustProxies 决定 c.ClientIP() 相信谁 —— 也就是所有按 IP 归集的限流
@@ -158,7 +157,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 账号信号没有自己的端点了（决策 13）：它跑在中继客户端连接的保留通道上，
 	// 因此在这里装配进 relay_ctr，而不是另挂一条路由。
 	relayCtr := relay_ctr.New(relaySvc, accountchan_ctr.New(accountChan))
-	r.drainers = []relayws.Drainer{relayCtr}
+	r.drainer = relayCtr
 	syncCtr := sync_ctr.New()
 	workspaceCtr := workspace_ctr.New()
 	engineCtr := engine_ctr.New()

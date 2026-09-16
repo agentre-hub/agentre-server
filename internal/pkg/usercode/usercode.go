@@ -10,20 +10,20 @@ import (
 	"strings"
 )
 
-const Alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+const alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 const codeLen = 6
 
 // Generate 返回如 "A4F-7Q2" 的随机码。
 func Generate() string {
 	buf := make([]byte, codeLen)
-	n := big.NewInt(int64(len(Alphabet)))
+	n := big.NewInt(int64(len(alphabet)))
 	for i := range buf {
 		v, err := rand.Int(rand.Reader, n)
 		if err != nil {
 			panic(err)
 		}
-		buf[i] = Alphabet[v.Int64()]
+		buf[i] = alphabet[v.Int64()]
 	}
 	return string(buf[:3]) + "-" + string(buf[3:])
 }
@@ -37,7 +37,7 @@ func Normalize(in string) (string, bool) {
 		if ch == '-' || ch == ' ' {
 			continue
 		}
-		if !strings.ContainsRune(Alphabet, rune(ch)) {
+		if !strings.ContainsRune(alphabet, rune(ch)) {
 			return "", false
 		}
 		cleaned = append(cleaned, ch)

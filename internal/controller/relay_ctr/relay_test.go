@@ -24,6 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
+	"github.com/agentre-hub/agentre/pkg/wire/wirelimits"
+
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
@@ -394,13 +397,13 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 				require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
 					relayEnvelope("channel-id", []byte("machine:fp-daemon"))))
 			}
-			// 上限是**载荷**的上限，三个仓同一个数（relayws.MaxPayloadBytes）。
+			// 上限是**载荷**的上限，三个仓同一个数（wirelimits.MaxPayloadBytes）。
 			// 两条链路上跑的都是信封（2 字节长度 + 通道 ID），所以读上限都要比载荷
 			// 预算高出一个信封头 —— 否则一份刚好 10 MiB 的合法载荷，只因为带了信封
 			// 就被 1009 打掉，而且打掉的是**整条**物理连接，上面所有虚拟通道一起陪葬。
-			limit := int(relayws.MaxPayloadBytes)
+			limit := int(wirelimits.MaxPayloadBytes)
 			if tc.daemonWire {
-				limit += int(relayws.MaxEnvelopeBytes)
+				limit += int(relayenvelope.MaxEnvelopeBytes)
 			}
 			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize(limit, tc.daemonWire)))
 			receiveWithin(t, tc.framesOf(stub), time.Second, "maximum relay message was not accepted")

@@ -11,7 +11,6 @@ if (!appBaseUrl) {
 export default defineConfig({
   testDir: ".",
   testMatch: "smoke.spec.ts",
-  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,

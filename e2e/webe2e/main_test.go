@@ -90,7 +90,12 @@ func TestSeedSessionUsesProductionSessionContract(t *testing.T) {
 }
 
 func TestCleanupPlanIsRunScopedAndHasNoDangerousOperations(t *testing.T) {
-	steps := cleanupSQL()
+	steps := make([]sqlStep, 0, len(fixtureTables()))
+	for _, table := range fixtureTables() {
+		if table.del != "" {
+			steps = append(steps, sqlStep{Name: table.name, SQL: table.del})
+		}
+	}
 	if len(steps) == 0 {
 		t.Fatal("cleanup plan is empty")
 	}
@@ -106,18 +111,26 @@ func TestCleanupPlanIsRunScopedAndHasNoDangerousOperations(t *testing.T) {
 		}
 	}
 
-	flow := findSQLStep(t, steps, "device_flow_codes")
-	if !strings.Contains(flow.SQL, "authorized_user_id = ?") || !strings.Contains(flow.SQL, "client_fingerprint = ?") {
-		t.Fatalf("flow cleanup must cover approved and pending rows for this run: %s", flow.SQL)
+	// device_flow_codes 的删除在 runCleanup 里按「账号找没找到」现拼，不在这张表清单里。
+	flow := flowSelection(true)
+	if !strings.Contains(flow, "authorized_user_id = ?") || !strings.Contains(flow, "client_fingerprint = ?") {
+		t.Fatalf("flow cleanup must cover approved and pending rows for this run: %s", flow)
 	}
 	missingUserFlow := flowSelection(false)
-	if strings.Contains(missingUserFlow.SQL, "authorized_user_id") || !strings.Contains(missingUserFlow.SQL, "client_fingerprint = ?") {
-		t.Fatalf("missing-user cleanup could select another run's pending flows: %s", missingUserFlow.SQL)
+	if strings.Contains(missingUserFlow, "authorized_user_id") || !strings.Contains(missingUserFlow, "client_fingerprint = ?") {
+		t.Fatalf("missing-user cleanup could select another run's pending flows: %s", missingUserFlow)
 	}
 }
 
 func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
-	counts := residueSQL()
+	counts := make([]sqlStep, 0, len(fixtureTables())+1)
+	for _, table := range fixtureTables() {
+		if table.cnt != "" {
+			counts = append(counts, sqlStep{Name: table.name, SQL: table.cnt})
+		}
+	}
+	// device_flow_codes 的复点在 runCleanup 里按账号找没找到现拼，这里补上同一句。
+	counts = append(counts, sqlStep{Name: "device_flow_codes", SQL: "SELECT count(*) FROM " + flowSelection(true)})
 	for _, name := range []string{
 		"users", "device_flow_codes", "devices", "device_tokens",
 		"sync_objects", "sync_account_seqs", "sync_device_states", "sync_avatars", "device_local_paths",

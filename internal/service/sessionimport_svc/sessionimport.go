@@ -37,6 +37,8 @@ import (
 	"errors"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+
+	"github.com/agentre-hub/agentre-server/internal/service/saved_session_svc"
 )
 
 // 一档答不出的判别值（与共享包 ImportScanStatus 同值）。
@@ -203,16 +205,7 @@ type MachineImports interface {
 // 在机器上真的建起来了，账号里却一行都没有。
 type SavedSessions interface {
 	// Save 收下一条对话并让镜像对它开始，幂等。
-	Save(ctx context.Context, ref SessionRef) error
-}
-
-// SessionRef 指向一条对话：它的 conversation_id，加上承载它的机器与发起它的那一端。
-// 导入这条路上两个指纹是同一个值 —— 导入由那台机器自己执行，会话也归它。
-type SessionRef struct {
-	UserID             int64
-	MachineFingerprint string
-	PeerFingerprint    string
-	ConversationID     string
+	Save(ctx context.Context, ref saved_session_svc.SessionRef) error
 }
 
 type SessionImportSvc interface {
