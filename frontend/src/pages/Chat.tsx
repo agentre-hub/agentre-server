@@ -25,7 +25,7 @@ import type {
   NewConvAgent,
   NewConvProject,
 } from "@/components/session/newconv/types";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";

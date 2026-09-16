@@ -46,7 +46,7 @@ import {
 } from "lucide-react";
 
 import { InlineEmpty } from "@/components/console";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { api } from "@/lib/api";
 import { createBrowserSessionImportPorts } from "@/lib/importPorts";
 import type {

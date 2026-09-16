@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { createServer as createTcpServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
@@ -30,76 +31,68 @@ export function parseRunnerArgs(argv) {
   return { mode, playwrightArgs };
 }
 
-function unquote(raw) {
-  const value = String(raw ?? "").trim();
+/**
+ * e2e 配置只走 `source: file` 这一条路，且只认少量已知标量块。用真 YAML 解析器
+ * 替掉手写子集，是为了不再维护一遍缩进与引号规则；校验层保持原来的白名单与逐值
+ * 断言，解析器多出来的 YAML 特性不会顺带放宽 runner 接受什么。
+ */
+function configMapping(text, label) {
+  let doc;
+  try {
+    doc = parseYaml(text);
+  } catch (error) {
+    throw new Error(`cannot parse ${label} as YAML: ${error.message}`);
+  }
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+    throw new Error(`${label} must be a YAML mapping`);
+  }
+  return doc;
+}
+
+function scalar(value, fallback = "") {
+  if (value === undefined || value === null) return fallback;
+  return String(value).trim();
+}
+
+function scalarList(value) {
+  return Array.isArray(value) ? value.map((item) => scalar(item)) : [];
+}
+
+function dsnFromConfig(config) {
+  return scalar(config.db?.dsn) || null;
+}
+
+function redisFromConfig(config) {
+  return {
+    addr: scalar(config.redis?.addr, "127.0.0.1:6379"),
+    password: scalar(config.redis?.password),
+    db: Number(scalar(config.redis?.db, "0")),
+  };
+}
+
+function assertKnownKeys(config, block, allowed) {
+  const value = config[block];
   if (
-    value.length >= 2 &&
-    ((value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'")))
+    value === undefined ||
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value)
   ) {
-    return value.slice(1, -1);
+    throw new Error(`config has no ${block} block`);
   }
-  return value;
-}
-
-function yamlBlock(text, name) {
-  const lines = text.split(/\r?\n/);
-  const start = lines.findIndex((line) =>
-    new RegExp(`^${name}:[ \\t]*$`).test(line),
-  );
-  if (start < 0) return null;
-  const body = [];
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (lines[i].trim() && !/^[ \t]/.test(lines[i])) break;
-    body.push(lines[i]);
-  }
-  return body.join("\n");
-}
-
-function blockScalar(text, block, key, fallback = "") {
-  const body = yamlBlock(text, block);
-  if (body === null) return fallback;
-  const match = new RegExp(`^[ \\t]*${key}:[ \\t]*(.*)$`, "m").exec(body);
-  return match ? unquote(match[1]) : fallback;
-}
-
-function nestedBlock(text, parent, name) {
-  const body = yamlBlock(text, parent);
-  if (body === null) return null;
-  const lines = body.split(/\r?\n/);
-  const start = lines.findIndex((line) =>
-    new RegExp(`^  ${name}:[ \\t]*$`).test(line),
-  );
-  if (start < 0) return null;
-  const nested = [];
-  for (let i = start + 1; i < lines.length; i += 1) {
-    if (lines[i].trim() && !/^ {4}/.test(lines[i])) break;
-    nested.push(lines[i]);
-  }
-  return nested.join("\n");
-}
-
-function assertKnownKeys(text, block, allowed) {
-  const body = yamlBlock(text, block);
-  if (body === null) throw new Error(`config has no ${block} block`);
-  for (const line of body.split("\n")) {
-    const match = /^  ([a-zA-Z_][a-zA-Z0-9_]*):/.exec(line);
-    if (match && !allowed.has(match[1])) {
-      throw new Error(`unsupported ${block}.${match[1]} config key`);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw new Error(`unsupported ${block}.${key} config key`);
     }
   }
 }
 
 export function parseDSN(text) {
-  return blockScalar(text, "db", "dsn") || null;
+  return dsnFromConfig(configMapping(text, "E2E config"));
 }
 
 export function parseRedis(text) {
-  return {
-    addr: blockScalar(text, "redis", "addr", "127.0.0.1:6379"),
-    password: blockScalar(text, "redis", "password"),
-    db: Number(blockScalar(text, "redis", "db", "0")),
-  };
+  return redisFromConfig(configMapping(text, "E2E config"));
 }
 
 export function parseMySQLTarget(dsn) {
@@ -116,11 +109,8 @@ export function parseMySQLTarget(dsn) {
   };
 }
 
-function parseHTTPAddress(text) {
-  const body = yamlBlock(text, "http");
-  const addresses = [...(body ?? "").matchAll(/^[ \t]*-[ \t]*(.*)$/gm)].map(
-    (match) => unquote(match[1]),
-  );
+function parseHTTPAddress(config) {
+  const addresses = scalarList(config.http?.address);
   if (addresses.length !== 1) {
     throw new Error(
       "http.address must contain exactly one loopback E2E address",
@@ -133,31 +123,26 @@ function parseHTTPAddress(text) {
   return { host: "127.0.0.1", port: Number(parsed[2]) };
 }
 
-function sourceIsFile(text) {
-  const match = /^source:[ \t]*(.*)$/m.exec(text);
-  return match && unquote(match[1]) === "file";
+function sourceIsFile(config) {
+  return scalar(config.source) === "file";
 }
 
-function validateBrowserConfig(text, http) {
-  const publicURL = blockScalar(text, "server", "public_url");
+function validateBrowserConfig(config, http) {
+  const publicURL = scalar(config.server?.public_url);
   const expectedOrigin = `http://${http.host}:${http.port}`;
   if (publicURL !== expectedOrigin) {
     throw new Error(`server.public_url must equal ${expectedOrigin} for E2E`);
   }
-  const insecureCookies = blockScalar(text, "server", "insecure_cookies");
+  const insecureCookies = scalar(config.server?.insecure_cookies);
   if (insecureCookies !== "true") {
     throw new Error("server.insecure_cookies must be true for loopback E2E");
   }
-  const webauthn = nestedBlock(text, "server", "webauthn");
-  const rpID = /^[ \t]*rp_id:[ \t]*(.*)$/m.exec(webauthn ?? "");
-  if (!rpID || unquote(rpID[1]) !== "localhost") {
+  const rpID = scalar(config.server?.webauthn?.rp_id);
+  if (rpID !== "localhost") {
     throw new Error("server.webauthn.rp_id must equal localhost for E2E");
   }
   const passkeyOrigin = `http://localhost:${http.port}`;
-  const origins = [...(webauthn ?? "").matchAll(/^[ \t]*-[ \t]*(.*)$/gm)].map(
-    (match) => unquote(match[1]),
-  );
-  if (!origins.includes(passkeyOrigin)) {
+  if (!scalarList(config.server?.webauthn?.origins).includes(passkeyOrigin)) {
     throw new Error(
       `server.webauthn.origins must include ${passkeyOrigin} for E2E`,
     );
@@ -178,10 +163,11 @@ export function readRunnerConfig(configPath = defaultConfigPath) {
       `cannot read explicit E2E config ${path}: ${error.message}`,
     );
   }
-  if (!sourceIsFile(text)) {
+  const config = configMapping(text, path);
+  if (!sourceIsFile(config)) {
     throw new Error(`${path} must declare source: file`);
   }
-  const dsn = parseDSN(text);
+  const dsn = dsnFromConfig(config);
   if (!dsn) throw new Error(`${path} has no db.dsn`);
   const mysql = parseMySQLTarget(dsn);
   if (!isE2EDatabase(mysql.database)) {
@@ -190,17 +176,17 @@ export function readRunnerConfig(configPath = defaultConfigPath) {
     );
   }
   assertKnownKeys(
-    text,
+    config,
     "db",
     new Set(["driver", "dsn", "debug", "prepareStmt"]),
   );
-  assertKnownKeys(text, "redis", new Set(["addr", "password", "db"]));
-  const redis = parseRedis(text);
+  assertKnownKeys(config, "redis", new Set(["addr", "password", "db"]));
+  const redis = redisFromConfig(config);
   if (!redis.addr || !Number.isInteger(redis.db)) {
     throw new Error(`${path} has invalid redis configuration`);
   }
-  const http = parseHTTPAddress(text);
-  validateBrowserConfig(text, http);
+  const http = parseHTTPAddress(config);
+  validateBrowserConfig(config, http);
   return {
     configPath: path,
     text,
@@ -209,12 +195,14 @@ export function readRunnerConfig(configPath = defaultConfigPath) {
     database: mysql.database,
     redis,
     http,
+    cookieName: scalar(config.cookie_name) || "server_session",
   };
 }
 
 export function redactedConfigSummary(text) {
-  const mysql = parseMySQLTarget(parseDSN(text));
-  const redis = parseRedis(text);
+  const config = configMapping(text, "E2E config");
+  const mysql = parseMySQLTarget(dsnFromConfig(config));
+  const redis = redisFromConfig(config);
   return {
     mysql: `${mysql.host}:${mysql.port}/${mysql.database}`,
     redis: `${redis.addr}/${redis.db}`,
@@ -580,9 +568,7 @@ async function main() {
 
   seeded = runTool("seed", activeRunID);
   writePrivateJSON(paths.seed, seeded);
-  const configuredCookieName =
-    unquote(/^[ \t]*cookie_name:[ \t]*(.*)$/m.exec(config.text)?.[1]) ||
-    "server_session";
+  const configuredCookieName = config.cookieName;
   const handoff = serveEnvPayload({
     serverURL: baseURL,
     cookieName: configuredCookieName,

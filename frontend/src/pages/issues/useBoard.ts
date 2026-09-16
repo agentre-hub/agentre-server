@@ -17,7 +17,7 @@ import type {
   TaskFormValue,
 } from "@agentre-hub/agentre-ui";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import {
   isFiltering,
   matchedTotal,

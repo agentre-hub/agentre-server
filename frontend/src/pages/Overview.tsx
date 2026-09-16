@@ -27,7 +27,7 @@ import {
 } from "@/components/stats/Heatmap";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import {
   AccountChannelDevicePresence,
   AccountChannelMirrorChanged,

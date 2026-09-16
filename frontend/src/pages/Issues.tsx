@@ -38,7 +38,7 @@ import {
 import AppShell from "@/components/AppShell";
 import { orderProjectTree } from "@/components/session/newconv/ProjectAgentPane";
 import type { NewConvAgent } from "@/components/session/newconv/types";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";

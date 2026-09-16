@@ -49,7 +49,7 @@ import {
   useReconnectProbe,
   useSessionTargetDevice,
 } from "@/components/session/useSessionTargetDevice";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useRelayChannel } from "@/hooks/use-relay";
 import {
   TranscriptSessionId,

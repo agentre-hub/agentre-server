@@ -18,7 +18,7 @@ import { MobileTabBar, type MobileTab } from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { UserMenu } from "@/components/UserMenu";
 import { useAccountChannel } from "@/hooks/use-account-channel";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useMe } from "@/hooks/use-me";
 import {
   AccountChannelDevicePresence,

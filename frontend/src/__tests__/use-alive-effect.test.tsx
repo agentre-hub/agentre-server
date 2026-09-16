@@ -1,7 +1,7 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 
 /** 挂起不 resolve 的请求：用来制造「组件先卸载、响应后到」这一幕。 */
 function pending<T>(): { promise: Promise<T>; resolve: (v: T) => void } {

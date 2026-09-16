@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { api, ApiError, setCsrfToken } from "@/lib/api";
 
 export interface Me {

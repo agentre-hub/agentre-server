@@ -6,7 +6,7 @@ import type {
 } from "@agentre-hub/agentre-wire";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import type { RelayClient, RelayState } from "@/lib/relayClient";
 import {
   acquireRelayClient,

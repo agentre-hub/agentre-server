@@ -15,7 +15,7 @@ import {
   Skeleton,
   cn,
 } from "@agentre-hub/agentre-ui";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useMe } from "@/hooks/use-me";
 import { api, ApiError } from "@/lib/api";
 import { PASSKEY_CODES } from "@/lib/errorCodes";

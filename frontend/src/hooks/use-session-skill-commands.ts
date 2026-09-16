@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { SkillCommandSource } from "@agentre-hub/agentre-ui";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { api } from "@/lib/api";
 import {
   fetchSkillCommands,

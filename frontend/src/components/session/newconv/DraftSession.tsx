@@ -29,7 +29,7 @@ import SessionReasoningEffortControl from "@/components/session/SessionReasoning
 import Transcript from "@/components/session/Transcript";
 import { pendingUserMessage } from "@/components/session/transcriptFrame";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { ApiError } from "@/lib/api";

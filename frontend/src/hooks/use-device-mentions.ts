@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 
 /** 交给共享包 `buildMentionSources` 第三个入参的形状。 */

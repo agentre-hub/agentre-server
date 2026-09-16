@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 
 type SessionComposerModule =
   typeof import("@/components/session/SessionComposer");

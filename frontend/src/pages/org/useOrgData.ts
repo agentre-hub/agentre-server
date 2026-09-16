@@ -11,7 +11,7 @@
 import * as React from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { AccountChannelSyncVersion } from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 
