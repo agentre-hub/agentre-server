@@ -869,6 +869,18 @@ describe("统一会话索引：筛选 chips", () => {
  * 「还没有对话」就是同一句话说两遍。
  */
 describe("统一会话索引：空组自己说一句", () => {
+  it("多个空项目组共用紧凑列表容器，不把控制区的 12px 间距重复加到每个组", () => {
+    renderIndex({ axis: "project", rows: [] });
+
+    const nav = screen.getByTestId("session-index-nav");
+    const groups = screen.getByTestId("session-index-groups");
+    expect(groups.parentElement).toBe(nav);
+    expect(groups.contains(screen.getByTestId("group-p-server"))).toBe(true);
+    expect(groups.contains(screen.getByTestId("group-p-web"))).toBe(true);
+    expect(nav.className).toContain("space-y-3");
+    expect(groups.className).not.toContain("space-y-3");
+  });
+
   it("项目轴上空项目展开后说「暂无会话」，画的是共享包那一颗", () => {
     renderIndex({ axis: "project", rows: [] });
 

@@ -1347,8 +1347,9 @@ export default function SessionIndex({
           组头不在，刚建出来的项目就再也配不了路径——而没配路径的项目开不出
           对话，于是它永远长不出行、永远回不来（规格 2026-08-21-root-project-entry
           决策 6）。这两轴的「有哪些组」都不是从会话推出来的，是宿主直接给的名单。 */}
-      {hasRows || axis === "machine" || axis === "project"
-        ? groups.map((group) => {
+      {hasRows || axis === "machine" || axis === "project" ? (
+        <div data-testid="session-index-groups">
+          {groups.map((group) => {
             const scope = scopeOfGroup(group);
             const overflow =
               scope &&
@@ -1516,8 +1517,9 @@ export default function SessionIndex({
                 emptyLabel={emptyLabel}
               />
             );
-          })
-        : null}
+          })}
+        </div>
+      ) : null}
       {(hasMore || loadMoreFailed) && onLoadMore && (
         <LoadMore
           loading={loadingMore}
