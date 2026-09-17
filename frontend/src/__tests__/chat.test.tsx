@@ -293,9 +293,23 @@ function isWaitingProbe(params: URLSearchParams): boolean {
   );
 }
 
-/** 最后一次索引请求的参数（不含「等你处理」那次探测）。 */
+/** 收窄范围下单独补的账号总数探测；当前范围请求从不长成这个形状。 */
+function isAccountTotalProbe(params: URLSearchParams): boolean {
+  return (
+    params.get("axis") === "time" &&
+    params.get("per_group") === "1" &&
+    !params.has("filter") &&
+    !params.has("q") &&
+    !params.has("scope") &&
+    !params.has("cursor")
+  );
+}
+
+/** 最后一次当前范围索引请求的参数（不含独立计数探测）。 */
 function lastIndexRequest(): URLSearchParams {
-  const real = indexRequests.filter((p) => !isWaitingProbe(p));
+  const real = indexRequests.filter(
+    (p) => !isWaitingProbe(p) && !isAccountTotalProbe(p),
+  );
   const last = real[real.length - 1];
   if (!last) throw new Error("索引一次都没有请求过");
   return last;
@@ -327,6 +341,16 @@ function renderChat(entry = "/chat") {
   );
 }
 
+async function waitForSlot(name: string): Promise<HTMLElement> {
+  return waitFor(() => {
+    const element = document.querySelector<HTMLElement>(
+      `[data-slot="${name}"]`,
+    );
+    expect(element).not.toBeNull();
+    return element as HTMLElement;
+  });
+}
+
 describe("对话页 = 统一会话索引", () => {
   it("空态:桌面 320px 左列 + 居中详情空态,TopBar 只注入连接态,主动作开新对话", async () => {
     stubApi();
@@ -340,8 +364,8 @@ describe("对话页 = 统一会话索引", () => {
     const listCol = screen.getByTestId("chat-list-col");
     expect(listCol.style.width).toBe("320px");
     expect(screen.getByTestId("chat-detail")).toBeTruthy();
-    // 决策 10：一条会话都没有时索引就是空的，不再拿账号下的 Agent 摆一列空组头。
-    expect(await screen.findByTestId("session-index-empty")).toBeTruthy();
+    // 时间轴没有任何行时由共享页面空态承接；右侧负责账号级开始动作。
+    expect(await waitForSlot("session-index-empty")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: /后端 Agent/ })).toBeNull();
     // 空态正文只留可执行的那一句，不再附带解释性的后半段。
     expect(screen.getByText("Pick an agent to get started.")).toBeTruthy();
@@ -551,7 +575,7 @@ describe("对话页 = 统一会话索引", () => {
     renderChat();
 
     expect(await screen.findByText("agentre-server")).toBeTruthy();
-    expect(screen.queryByText("Quick chats")).toBeNull();
+    expect(screen.getByText("Quick chats")).toBeTruthy();
     expect(
       mockedApi.mock.calls.some(
         (c) => c[0] === "/v1/workspace/session-projects",
@@ -654,12 +678,14 @@ describe("对话页 = 统一会话索引", () => {
 
     fireEvent.change(search, { target: { value: "后端 Agent" } });
     await waitFor(() =>
-      expect(screen.getByTestId("session-index-empty")).toBeTruthy(),
+      expect(
+        document.querySelector('[data-slot="session-index-empty"]'),
+      ).toBeTruthy(),
     );
     // 空态说的是「这次搜索没有匹配」，不是「你还没有对话」。
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search",
-    );
+    expect(
+      document.querySelector('[data-slot="session-index-empty"]')?.textContent,
+    ).toContain("No matching sessions");
 
     fireEvent.change(search, { target: { value: "重构" } });
     await waitFor(() => expect(screen.getByText("重构登录页")).toBeTruthy());
@@ -928,7 +954,9 @@ describe("对话页:机器轴", () => {
     expect(screen.getByTestId("group-offline-device-2")).toBeTruthy();
     expect(screen.queryByText("离线那条")).toBeNull();
     // 「你还没有对话」在这里是假话：账号里那些还在，只是这台机器答不出。
-    expect(screen.queryByTestId("session-index-empty")).toBeNull();
+    expect(
+      document.querySelector('[data-slot="session-index-empty"]'),
+    ).toBeNull();
     expect(fakeClient.request).not.toHaveBeenCalled();
   });
 
@@ -965,6 +993,39 @@ describe("对话页:机器轴", () => {
     expect(screen.getByText("临时跑一下 benchmark")).toBeTruthy();
   });
 
+  it("机器搜索命中 daemon 新标题时，仍从不带搜索的账号镜像识别已保存", async () => {
+    stubApi({
+      mirror: [mirrored({ title: "镜像旧标题" })],
+      devices: [agentred],
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) => ({
+        sessions:
+          (params as { keyword?: string }).keyword === "fresh"
+            ? [{ ...summary, title: "fresh daemon title" }]
+            : [{ ...summary, title: "镜像旧标题" }],
+      }),
+    );
+    renderChat("/chat?axis=machine");
+    await screen.findByText("镜像旧标题");
+    const requestsBeforeSearch = indexRequests.length;
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search conversations" }),
+      { target: { value: "fresh" } },
+    );
+
+    expect(await screen.findByText("fresh daemon title")).toBeTruthy();
+    expect(screen.queryByTestId("row-save-42")).toBeNull();
+    expect(lastIndexRequest().get("q")).toBeNull();
+    expect(
+      indexRequests
+        .slice(requestsBeforeSearch)
+        .every((params) => params.get("q") === null),
+    ).toBe(true);
+  });
+
   it("机器那一档的 chips 也就地过滤这份清单(规格 2026-08-19 决策 12)", async () => {
     const running = {
       ...summary,
@@ -985,6 +1046,236 @@ describe("对话页:机器轴", () => {
     // 判据与镜像那几档逐字一致：「运行中」= running 且不等输入。
     await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
     expect(screen.getByText("正在跑")).toBeTruthy();
+  });
+
+  it("机器筛选会翻完 daemon 各页：首屏零命中时仍列后页命中，并用筛后真数控制溢出", async () => {
+    const laterRunning = Array.from({ length: 6 }, (_, index) => ({
+      ...summary,
+      conversationId: String(200 + index),
+      title: `后页运行中 ${index}`,
+      lifecycleState: "running",
+    }));
+    stubApi({ mirror: [], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) => {
+        const cursor = (params as { cursor?: string })?.cursor ?? "";
+        return cursor === "later"
+          ? {
+              sessions: laterRunning,
+              cursor: "",
+              hasMore: false,
+              total: 7,
+            }
+          : {
+              sessions: [summary],
+              cursor: "later",
+              hasMore: true,
+              total: 7,
+            };
+      },
+    );
+    renderChat("/chat?axis=machine");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    expect(await screen.findByText("后页运行中 0")).toBeTruthy();
+    expect(screen.queryByText("后页运行中 5")).toBeNull();
+    const trigger = screen.getByText("View all 6 sessions");
+    expect(screen.queryByText("View all 7 sessions")).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(await screen.findByText("后页运行中 5")).toBeTruthy();
+    expect(
+      fakeClient.request.mock.calls.some(
+        ([, params]) => (params as { cursor?: string }).cursor === "later",
+      ),
+    ).toBe(true);
+  });
+
+  it("机器筛选遇到不前进的游标会转为不可达，不把部分结果冒充完整结果", async () => {
+    const laterRunning = {
+      ...summary,
+      conversationId: "299",
+      title: "重复游标页里的命中",
+      lifecycleState: "running",
+    };
+    stubApi({ mirror: [], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) => {
+        const cursor = (params as { cursor?: string })?.cursor ?? "";
+        return cursor === "same"
+          ? {
+              sessions: [laterRunning],
+              cursor: "same",
+              hasMore: true,
+              total: 2,
+            }
+          : {
+              sessions: [summary],
+              cursor: "same",
+              hasMore: true,
+              total: 2,
+            };
+      },
+    );
+    renderChat("/chat?axis=machine");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("group-state-device-1").textContent).toBe(
+        "Unreachable",
+      ),
+    );
+    expect(screen.queryByText("重复游标页里的命中")).toBeNull();
+    const repeated = fakeClient.request.mock.calls.filter(
+      ([, params]) => (params as { cursor?: string }).cursor === "same",
+    );
+    expect(repeated).toHaveLength(1);
+  });
+
+  it("机器筛选的旧翻页结果不会盖掉新的筛选范围", async () => {
+    const staleRunning = {
+      ...summary,
+      conversationId: "399",
+      title: "迟到的运行中",
+      lifecycleState: "running",
+    };
+    let resolveStale!: (page: {
+      sessions: (typeof summary)[];
+      cursor: string;
+      hasMore: boolean;
+      total: number;
+    }) => void;
+    const stalePage = new Promise<{
+      sessions: (typeof summary)[];
+      cursor: string;
+      hasMore: boolean;
+      total: number;
+    }>((resolve) => {
+      resolveStale = resolve;
+    });
+    let firstPageRequests = 0;
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) => {
+        const cursor = (params as { cursor?: string })?.cursor ?? "";
+        if (cursor === "slow") return stalePage;
+        firstPageRequests += 1;
+        return firstPageRequests === 2
+          ? {
+              sessions: [summary],
+              cursor: "slow",
+              hasMore: true,
+              total: 2,
+            }
+          : {
+              sessions: [summary],
+              cursor: "",
+              hasMore: false,
+              total: 1,
+            };
+      },
+    );
+    renderChat("/chat?axis=machine");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+    await waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          ([, params]) => (params as { cursor?: string }).cursor === "slow",
+        ),
+      ).toBe(true),
+    );
+    fireEvent.click(screen.getByTestId("filter-chip-unread"));
+    expect(await screen.findByText("重构登录页")).toBeTruthy();
+
+    await act(async () => {
+      resolveStale({
+        sessions: [staleRunning],
+        cursor: "",
+        hasMore: false,
+        total: 2,
+      });
+    });
+    await waitFor(() => expect(screen.queryByText("迟到的运行中")).toBeNull());
+    expect(screen.getByText("重构登录页")).toBeTruthy();
+  });
+
+  // 筛选认 daemon 的实时生命周期；镜像只提供 saved、last_read_at 与项目归属。
+  it("镜像还写 idle、daemon 已 running：仍列为运行中且保持已保存", async () => {
+    stubApi({
+      mirror: [mirrored({ lifecycle_state: "idle" })],
+      devices: [agentred],
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockResolvedValue({
+      sessions: [{ ...summary, lifecycleState: "running" }],
+    });
+    renderChat("/chat?axis=machine");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    expect(await screen.findByText("重构登录页")).toBeTruthy();
+    expect(screen.queryByTestId("row-save-42")).toBeNull();
+    expect(lastIndexRequest().get("filter")).toBeNull();
+  });
+
+  it("镜像还写 running、daemon 已 idle：不再留在运行中筛选", async () => {
+    stubApi({
+      mirror: [mirrored({ lifecycle_state: "running" })],
+      devices: [agentred],
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockResolvedValue({ sessions: [summary] });
+    renderChat("/chat?axis=machine");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
+  });
+
+  it("切换机器筛选后完整页仍在加载时显示连接中骨架，不先宣告筛选为空", async () => {
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    let requests = 0;
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(() => {
+      requests += 1;
+      return requests === 1
+        ? Promise.resolve({
+            sessions: [{ ...summary, lifecycleState: "running" }],
+          })
+        : pending;
+    });
+    renderChat("/chat?axis=machine");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("group-state-device-1").textContent).toBe(
+        "Connecting",
+      ),
+    );
+    const group = screen.getByTestId("group-device-1");
+    expect(
+      group.querySelector('[data-slot="session-row-skeleton"]'),
+    ).not.toBeNull();
+    expect(group.textContent).not.toContain("No sessions match this filter");
+
+    release({ sessions: [] });
   });
 
   // 「未读」在这一档有一条额外的判据：还没保存进账号的那些不算未读——它们压根
@@ -1009,6 +1300,23 @@ describe("对话页:机器轴", () => {
     await waitFor(() => expect(screen.queryByText("机器上才有的")).toBeNull());
     // 账号里那条从没打开过（last_read_at 缺省 0），所以它是未读的。
     expect(screen.getByText("重构登录页")).toBeTruthy();
+  });
+
+  it("daemon 已报告活动时间时不让更晚的镜像时间制造未读", async () => {
+    stubApi({
+      mirror: [mirrored({ last_message_at: 200, last_read_at: 150 })],
+      devices: [agentred],
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockResolvedValue({
+      sessions: [{ ...summary, lastMessageAt: 100 }],
+    });
+    renderChat("/chat?axis=machine");
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-unread"));
+
+    await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
   });
 
   // 已读那一半：账号里那条如果读过了（last_read_at 晚于最后活动），这一档也不该收。
@@ -1089,10 +1397,13 @@ describe("对话页:机器轴", () => {
     expect(await screen.findByText("机器上第 4 条")).toBeTruthy();
     expect(screen.queryByText("机器上第 7 条")).toBeNull();
 
+    const overflow = await screen.findByTestId("session-group-overflow-list");
+    const content = overflow.parentElement;
+    expect(content).not.toBeNull();
     fireEvent.click(
-      within(screen.getByTestId("group-overflow")).getByTestId(
-        "index-load-more",
-      ),
+      within(content as HTMLElement).getByRole("button", {
+        name: "Load more",
+      }),
     );
 
     expect(await screen.findByText("机器上第 7 条")).toBeTruthy();
@@ -1100,6 +1411,144 @@ describe("对话页:机器轴", () => {
       ([, params]) => (params as { cursor?: string })?.cursor ?? "",
     );
     expect(cursors).toContain("5");
+  });
+
+  it("新搜索的 daemon 先返回而镜像仍在途时，不用上一范围镜像发布机器行", async () => {
+    const pendingMirror = new Promise<never>(() => {});
+    let holdFreshMirror = false;
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (isAccountTotalProbe(params)) return { total: 1 };
+        if (holdFreshMirror) return pendingMirror;
+        return {
+          total: 1,
+          groups: [
+            {
+              scope: "machine:fp-1",
+              total: 1,
+              items: [mirrored({ title: "旧范围镜像" })],
+            },
+          ],
+        };
+      },
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) =>
+        (params as { keyword?: string }).keyword === "fresh"
+          ? { sessions: [{ ...summary, title: "新范围机器行" }] }
+          : { sessions: [{ ...summary, title: "旧范围机器行" }] },
+    );
+    renderChat("/chat?axis=machine");
+    await screen.findByText("旧范围机器行");
+    holdFreshMirror = true;
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search conversations" }),
+      {
+        target: { value: "fresh" },
+      },
+    );
+    await waitFor(() =>
+      expect(fakeClient.request).toHaveBeenCalledWith(
+        rpcMethods.sessionList,
+        expect.objectContaining({ keyword: "fresh" }),
+      ),
+    );
+
+    const group = screen.getByTestId("group-device-1");
+    expect(
+      group.querySelector('[data-slot="session-row-skeleton"]'),
+    ).toBeTruthy();
+    expect(screen.queryByText("旧范围机器行")).toBeNull();
+    expect(screen.queryByText("新范围机器行")).toBeNull();
+  });
+
+  it("普通机器 overflow 遇到不前进的游标时保留已列行并给出重试", async () => {
+    const head = Array.from({ length: 5 }, (_, index) => ({
+      ...summary,
+      conversationId: `head-${index}`,
+      title: `首页 ${index}`,
+    }));
+    stubApi({ mirror: [], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockResolvedValue({
+      sessions: head,
+      cursor: "same",
+      hasMore: true,
+      total: 8,
+    });
+    renderChat("/chat?axis=machine");
+
+    fireEvent.click(await screen.findByText("View all 8 sessions"));
+    const overflow = await screen.findByTestId("session-group-overflow-list");
+    fireEvent.click(
+      within(overflow.parentElement as HTMLElement).getByRole("button", {
+        name: "Load more",
+      }),
+    );
+
+    expect(
+      await within(overflow.parentElement as HTMLElement).findByRole("button", {
+        name: "Retry",
+      }),
+    ).toBeTruthy();
+    expect(within(overflow).getByText("首页 0")).toBeTruthy();
+  });
+
+  it("普通机器 overflow 遇到多步游标环时保留已列行并给出重试", async () => {
+    const page = (id: string, title: string) => ({
+      ...summary,
+      conversationId: id,
+      title,
+    });
+    stubApi({ mirror: [], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) => {
+        const cursor = (params as { cursor?: string }).cursor;
+        if (cursor === "c1") {
+          return {
+            sessions: [page("page-2", "第二页")],
+            cursor: "c2",
+            hasMore: true,
+            total: 7,
+          };
+        }
+        if (cursor === "c2") {
+          return {
+            sessions: [page("page-3", "循环页")],
+            cursor: "c1",
+            hasMore: true,
+            total: 7,
+          };
+        }
+        return {
+          sessions: Array.from({ length: 5 }, (_, index) =>
+            page(`head-${index}`, `首页 ${index}`),
+          ),
+          cursor: "c1",
+          hasMore: true,
+          total: 7,
+        };
+      },
+    );
+    renderChat("/chat?axis=machine");
+
+    fireEvent.click(await screen.findByText("View all 7 sessions"));
+    const overflow = await screen.findByTestId("session-group-overflow-list");
+    const dialog = overflow.parentElement as HTMLElement;
+    fireEvent.click(within(dialog).getByRole("button", { name: "Load more" }));
+    expect(await within(overflow).findByText("第二页")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Load more" }));
+
+    expect(
+      await within(dialog).findByRole("button", { name: "Retry" }),
+    ).toBeTruthy();
+    expect(within(overflow).getByText("第二页")).toBeTruthy();
+    expect(within(overflow).queryByText("循环页")).toBeNull();
   });
 
   /**
@@ -1112,6 +1561,144 @@ describe("对话页:机器轴", () => {
 
     await screen.findByText("临时跑一下 benchmark");
     expect(lastIndexRequest().get("per_group")).toBe("50");
+  });
+
+  it("机器未读筛选会翻完账号镜像，超过每组 50 条的已保存会话仍不显示保存", async () => {
+    const firstPage = Array.from({ length: 50 }, (_, index) =>
+      mirrored({
+        conversation_id: `saved-${index}`,
+        title: `前页已保存 ${index}`,
+        last_message_at: 2000 + index,
+      }),
+    );
+    const tail = mirrored({
+      conversation_id: "saved-tail",
+      title: "第 51 条已保存未读",
+      last_message_at: 3000,
+    });
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 51 };
+        if (isAccountTotalProbe(params)) return { total: 51 };
+        if (params.get("scope") === "machine:fp-1") {
+          return { total: 51, items: [tail], has_more: false };
+        }
+        return {
+          total: 51,
+          groups: [
+            {
+              scope: "machine:fp-1",
+              total: 51,
+              items: firstPage,
+              cursor: "after-50",
+              has_more: true,
+            },
+          ],
+        };
+      },
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockResolvedValue({
+      sessions: [
+        {
+          ...summary,
+          conversationId: "saved-tail",
+          title: "第 51 条已保存未读",
+          lastMessageAt: 3000,
+        },
+      ],
+    });
+    renderChat("/chat?axis=machine");
+
+    await screen.findByText("第 51 条已保存未读");
+    fireEvent.click(screen.getByTestId("filter-chip-unread"));
+
+    expect(await screen.findByText("第 51 条已保存未读")).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.queryByTestId("row-save-saved-tail")).toBeNull(),
+    );
+    expect(
+      indexRequests.some(
+        (params) =>
+          params.get("scope") === "machine:fp-1" &&
+          params.get("cursor") === "after-50" &&
+          params.get("filter") === null,
+      ),
+    ).toBe(true);
+  });
+
+  it("机器默认筛选翻到后页时，第 51 条账号镜像仍保持已保存", async () => {
+    const mirrorHead = Array.from({ length: 50 }, (_, index) =>
+      mirrored({
+        conversation_id: `saved-${index}`,
+        title: `前页已保存 ${index}`,
+      }),
+    );
+    const tail = mirrored({
+      conversation_id: "saved-tail",
+      title: "后页已保存",
+      last_message_at: 1000,
+    });
+    const daemonHead = Array.from({ length: 20 }, (_, index) => ({
+      ...summary,
+      conversationId: `daemon-${index}`,
+      title: `机器首页 ${index}`,
+    }));
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 51 };
+        if (isAccountTotalProbe(params)) return { total: 51 };
+        if (params.get("scope") === "machine:fp-1") {
+          return { total: 51, items: [tail], has_more: false };
+        }
+        return {
+          total: 51,
+          groups: [
+            {
+              scope: "machine:fp-1",
+              total: 51,
+              items: mirrorHead,
+              cursor: "after-50",
+              has_more: true,
+            },
+          ],
+        };
+      },
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(
+      async (_method: unknown, params: unknown) =>
+        (params as { cursor?: string }).cursor === "daemon-next"
+          ? {
+              sessions: [
+                {
+                  ...summary,
+                  conversationId: "saved-tail",
+                  title: "后页已保存",
+                },
+              ],
+            }
+          : {
+              sessions: daemonHead,
+              cursor: "daemon-next",
+              hasMore: true,
+              total: 21,
+            },
+    );
+    renderChat("/chat?axis=machine");
+
+    fireEvent.click(await screen.findByText("View all 21 sessions"));
+    const overflow = await screen.findByTestId("session-group-overflow-list");
+    fireEvent.click(
+      within(overflow.parentElement as HTMLElement).getByRole("button", {
+        name: "Load more",
+      }),
+    );
+
+    expect(await screen.findByText("后页已保存")).toBeTruthy();
+    expect(screen.queryByTestId("row-save-saved-tail")).toBeNull();
   });
 
   it("机器在线、清单还没回来:组头标「连接中」,不先编一句「还没有对话」", async () => {
@@ -1129,9 +1716,7 @@ describe("对话页:机器轴", () => {
     renderChat("/chat?axis=machine");
 
     expect(await screen.findByTestId("group-state-device-1")).toBeTruthy();
-    expect(
-      screen.queryByText("No conversations on this machine yet"),
-    ).toBeNull();
+    expect(screen.queryByText("No sessions")).toBeNull();
   });
 
   /**
@@ -1546,6 +2131,74 @@ describe("索引按轴分页", () => {
     expect(screen.getByRole("link", { name: "Chat" }).textContent).toBe("Chat");
   });
 
+  it("筛选后的镜像远端变化时仍刷新账号总数，桌面账号级 CTA 不把已有对话当真空", async () => {
+    let accountTotal = 0;
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (params.get("q")) return { total: 0, groups: [] };
+        return { total: accountTotal, groups: [] };
+      },
+    });
+    renderChat();
+
+    const detail = screen.getByTestId("chat-detail");
+    expect(
+      await within(detail).findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    ).toBeTruthy();
+
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "没有命中的标题" },
+    });
+    await waitFor(() =>
+      expect(lastIndexRequest().get("q")).toBe("没有命中的标题"),
+    );
+
+    accountTotal = 1;
+    await act(async () => {
+      deliver(accountChannel.AccountChannelMirrorChanged);
+    });
+
+    expect(await within(detail).findByText("Pick a conversation")).toBeTruthy();
+    expect(
+      within(detail).getByRole("button", { name: "New conversation" }),
+    ).toBeTruthy();
+    expect(
+      within(detail).queryByRole("button", {
+        name: "Start your first conversation",
+      }),
+    ).toBeNull();
+  });
+
+  it("时间轴继续只用平铺加载更多：__all__ 真数超过首屏也不长出分组弹层入口", async () => {
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        return {
+          total: 9,
+          groups: [
+            {
+              scope: "time",
+              total: 9,
+              cursor: "next",
+              has_more: true,
+              items: [mirrored()],
+            },
+          ],
+        };
+      },
+    });
+    renderChat("/chat?axis=time");
+
+    await screen.findByText("重构登录页");
+    expect(screen.queryByText("View all 9 sessions")).toBeNull();
+    expect(screen.getByRole("button", { name: "Load more" })).toBeTruthy();
+  });
+
   it("搜索走服务端且只按标题：请求带 q，本地不再过滤", async () => {
     stubApi({ devices: [agentred], mirror: [mirrored()] });
     renderChat();
@@ -1570,6 +2223,41 @@ describe("索引按轴分页", () => {
     await waitFor(() =>
       expect(lastIndexRequest().get("filter")).toBe("running"),
     );
+  });
+
+  it("非机器轴切换筛选时隐藏上一范围行，直到新范围完成", async () => {
+    let release!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      release = resolve;
+    });
+    stubApi({
+      devices: [agentred],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (isAccountTotalProbe(params)) return { total: 1 };
+        if (params.get("filter") === "running") return pending;
+        return {
+          total: 1,
+          groups: [
+            { scope: "time", total: 1, items: [mirrored({ title: "旧范围" })] },
+          ],
+        };
+      },
+    });
+    renderChat("/chat?axis=time");
+    await screen.findByText("旧范围");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+    await waitFor(() =>
+      expect(lastIndexRequest().get("filter")).toBe("running"),
+    );
+
+    const list = screen.getByTestId("chat-list-col");
+    expect(within(list).queryByText("旧范围")).toBeNull();
+    expect(
+      list.querySelector('[data-slot="session-row-skeleton"]'),
+    ).toBeTruthy();
+    release({ total: 0, groups: [] });
   });
 
   it("时间轴滚到底取下一页并追加，不重复已有的行", async () => {
@@ -1803,9 +2491,15 @@ describe("索引：每组的真数与「查看全部 N」", () => {
     await screen.findByText("重构登录页");
 
     fireEvent.click(await screen.findByText("View all 9 sessions"));
-    const overflow = await screen.findByTestId("group-overflow");
+    const overflow = await screen.findByTestId("session-group-overflow-list");
     await within(overflow).findByText("第一页的");
-    fireEvent.click(within(overflow).getByTestId("index-load-more"));
+    const content = overflow.parentElement;
+    expect(content).not.toBeNull();
+    fireEvent.click(
+      within(content as HTMLElement).getByRole("button", {
+        name: "Load more",
+      }),
+    );
     await within(overflow).findByText("第二页的");
 
     await act(async () => {
@@ -2211,9 +2905,9 @@ describe("对话页：Agent 组头的 ＋", () => {
     fireEvent.pointerDown(screen.getByTestId("axis-picker"), { button: 0 });
     fireEvent.click(screen.getByTestId("axis-option-agent"));
 
-    const header = screen
-      .getAllByTestId("group-header")
-      .find((el) => el.textContent?.includes("后端 Agent"));
+    const header = (await screen.findAllByTestId("group-header")).find((el) =>
+      el.textContent?.includes("后端 Agent"),
+    );
     if (!header) throw new Error("Agent 轴上没有这个 Agent 的组头");
     fireEvent.click(within(header).getByTestId("group-header-plus"));
 
@@ -2259,7 +2953,29 @@ describe("对话页：索引取数失败", () => {
     renderChat();
 
     expect(await screen.findByTestId("index-load-error")).toBeTruthy();
-    expect(screen.getByTestId("index-filter-chips")).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Filter sessions" })).toBeTruthy();
+  });
+
+  it("新筛选请求失败时不把上一范围的行摆在错误横幅下面", async () => {
+    stubApi({
+      mirror: [mirrored()],
+      index: (params) => {
+        if (isWaitingProbe(params)) return { total: 0 };
+        if (isAccountTotalProbe(params)) return { total: 1 };
+        if (params.get("filter") === "running") throw new Error("boom");
+        return {
+          total: 1,
+          groups: [{ scope: "time", total: 1, items: [mirrored()] }],
+        };
+      },
+    });
+    renderChat();
+    await screen.findByText("重构登录页");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    expect(await screen.findByTestId("index-load-error")).toBeTruthy();
+    expect(screen.queryByText("重构登录页")).toBeNull();
   });
 
   it("带一个重试,按下去真的重新取一次", async () => {
@@ -2306,7 +3022,13 @@ describe("对话页：首屏", () => {
 
     renderChat();
 
-    const skeleton = await screen.findByTestId("session-list-skeleton");
+    const skeleton = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>(
+        '[data-slot="session-row-skeleton"]',
+      );
+      expect(element).not.toBeNull();
+      return element as HTMLElement;
+    });
     // 纯装饰：正在取这件事由 aria-busy 说，几条灰条不必再念一遍。
     expect(skeleton.getAttribute("aria-hidden")).toBe("true");
     expect(screen.queryByText("Loading…")).toBeNull();
@@ -2316,7 +3038,9 @@ describe("对话页：首屏", () => {
       await held;
     });
     await waitFor(() => {
-      expect(screen.queryByTestId("session-list-skeleton")).toBeNull();
+      expect(
+        document.querySelector('[data-slot="session-row-skeleton"]'),
+      ).toBeNull();
     });
   });
 });
@@ -2366,7 +3090,7 @@ describe("对话页跟着通道走", () => {
   it("镜像变更的信号一到，索引当场重取", async () => {
     stubApi({ devices: [agentred] });
     renderChat();
-    await screen.findByTestId("session-index-empty");
+    await waitForSlot("session-index-empty");
     const before = indexRequests.length;
 
     stubApi({ devices: [agentred], mirror: [listed] });
@@ -2380,7 +3104,7 @@ describe("对话页跟着通道走", () => {
   it("设备上线与同步版本推进各自重取自己那一份名单", async () => {
     stubApi({ devices: [] });
     renderChat();
-    await screen.findByTestId("session-index-empty");
+    await waitForSlot("session-index-empty");
     mockedApi.mockClear();
     stubApi({ devices: [agentred] });
 
@@ -2530,7 +3254,9 @@ describe("对话页：名单还没回来时不摆结论", () => {
     });
     expect(screen.queryByText(new RegExp(ULID))).toBeNull();
     expect(screen.queryByText("Quick chats")).toBeNull();
-    expect(screen.getByTestId("session-list-skeleton")).toBeTruthy();
+    expect(
+      document.querySelector('[data-slot="session-row-skeleton"]'),
+    ).toBeTruthy();
 
     await act(async () => {
       release?.();
@@ -2570,10 +3296,12 @@ describe("对话页：名单还没回来时不摆结论", () => {
       await Promise.resolve();
     });
     // 设备名单未完成时不展示机器分组。
-    expect(screen.queryByText("No conversations yet.")).toBeNull();
+    expect(screen.queryByText("No conversations yet")).toBeNull();
     expect(screen.queryByText("Unknown machine")).toBeNull();
     expect(screen.queryByText("Offline")).toBeNull();
-    expect(screen.getByTestId("session-list-skeleton")).toBeTruthy();
+    expect(
+      document.querySelector('[data-slot="session-row-skeleton"]'),
+    ).toBeTruthy();
 
     await act(async () => {
       release?.();

@@ -194,6 +194,11 @@ describe("会话索引的呈现件用包里那一份", () => {
   const PRESENTATIONAL = [
     "SessionRow",
     "SessionGroup",
+    "SessionGroupOverflow",
+    "SessionGroupList",
+    "SessionFilterChips",
+    "SessionIndexEmpty",
+    "SessionRowSkeleton",
     "AxisPicker",
     "ProjectGlyph",
     "RowLeadingSlot",
@@ -243,6 +248,11 @@ describe("会话索引的呈现件用包里那一份", () => {
     for (const file of [
       "session-row",
       "session-group",
+      "session-group-overflow",
+      "session-group-list",
+      "session-filter-chips",
+      "session-index-empty",
+      "session-row-skeleton",
       "axis-picker",
       "project-glyph",
       "row-leading-slot",
@@ -270,13 +280,32 @@ describe("会话索引的呈现件用包里那一份", () => {
     ).toBe(true);
   });
 
-  it("本站不再自己声明这几件的同名实现（同名副本比不接更难发现）", () => {
-    for (const name of ["Glyph", "ProjectGlyph", "AxisPicker"]) {
+  it("本站不再自己声明共享呈现与投影补丁", () => {
+    for (const name of [
+      "Glyph",
+      "ProjectGlyph",
+      "AxisPicker",
+      "FilterChips",
+      "IndexEmpty",
+      "GroupOverflow",
+      "GroupOverflowBody",
+      "withEveryMachine",
+      "RowContextMenu",
+    ]) {
       expect(
         new RegExp(`function ${name}\\b`).test(SOURCE),
         `SessionIndex 里又出现了本地的 function ${name}`,
       ).toBe(false);
     }
+    expect(
+      fs.existsSync(
+        path.join(
+          FRONTEND_ROOT,
+          "src/components/session/SessionListSkeleton.tsx",
+        ),
+      ),
+      "SessionListSkeleton.tsx 还在：会话行骨架已经由共享包拥有",
+    ).toBe(false);
   });
 });
 
@@ -495,7 +524,6 @@ describe("骨架那条占位只剩包里那一份", () => {
     "src/pages/Devices.tsx",
     "src/pages/Org.tsx",
     "src/components/settings/ActivityStatsPanel.tsx",
-    "src/components/session/SessionListSkeleton.tsx",
   ];
 
   it("本站不再自建占位条：既没有各自的常量，也没有内联那串类", () => {

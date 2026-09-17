@@ -194,8 +194,8 @@ export { formatIntlRelativeTime as formatRelativeTime } from "@agentre-hub/agent
  */
 
 /**
- * 筛选的取值。all = 不过滤；running = 运行中且不等待输入；waiting = 正在等你处理；
- * unread = 最后一次活动晚于这个账号最后一次读它。
+ * 筛选的取值。all = 不过滤；running = 生命周期仍在运行（包含等待输入）；
+ * unread = 最后一次活动晚于这个账号最后一次读它，且没有更强的注意力理由。
  *
  * `unread` 曾经是个假名字：那一档叫过「未读」，判据却是 `waitingForInput`，规格
  * 2026-08-17 决策 3 因此把名字改成了「等你处理」——当时 web 侧没有已读状态。现在
@@ -211,27 +211,25 @@ export { formatIntlRelativeTime as formatRelativeTime } from "@agentre-hub/agent
  * `computeAttention`。三个数互不相等，而且没有任何地方会报错。现在只有一条判据
  * （服务端 `attentionExpr`，前端一律经由 `attentionReasonOf`）。
  */
-export type SessionFilter = "all" | "running" | "waiting" | "unread";
+export type SessionFilter = "all" | "running" | "unread";
 
 /**
  * 一条会话是否落在某个筛选下。判据与服务端 `agent_session_repo` 的 `scoped` 逐字一致：
  * 只有机器轴那一档在本地筛（那份清单是机器实时报的，没经过服务端）。
  *
- * 「正在等输入」是运行之上的实时叠加：它不进「运行中」（等你处理优先），
- * 只进「等你处理」；其余按生命周期是否 running 判定。
+ * 「正在等输入」是运行期的一种状态，因此仍落在「运行中」。
  */
 export function matchesSessionFilter(
   s: AttentionRowInput,
   filter: SessionFilter,
 ): boolean {
   if (filter === "all") return true;
-  if (filter === "waiting") return !!s.waitingForInput;
   // 「未读」不在这里判：它是共享包 computeAttention 最弱的那一档，判据带着比它强的
   // 那几档的否定（在跑的、等你按的、跑挂的都不算）。本地另写一遍 `updatedAt >
   // lastReadAt` 是此前的做法，代价是同一批行在机器轴与其余三个轴上筛出来的结果不同，
   // 而 chip 上那个数又是第三处判据数出来的。
   if (filter === "unread") return attentionReasonOf(s) === "unread";
-  return s.lifecycleState === "running" && !s.waitingForInput;
+  return s.lifecycleState === "running";
 }
 
 /**

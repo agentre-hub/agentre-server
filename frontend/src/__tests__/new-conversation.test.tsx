@@ -255,11 +255,11 @@ function renderChat(entry = "/chat") {
   );
 }
 
-/** 走到「一条还没发第一句的对话」：点空态主动作 → 挑第一个 Agent。 */
+/** 走到「一条还没发第一句的对话」：点当前形态的新建入口 → 挑第一个 Agent。 */
 async function openDraft() {
   fireEvent.click(
     await screen.findByRole("button", {
-      name: "Start your first conversation",
+      name: /^(Start your first conversation|New conversation)$/,
     }),
   );
   fireEvent.click(await screen.findByTestId("agent-pick-agent-1"));

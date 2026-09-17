@@ -36,21 +36,28 @@ export function indexSettled(sessionIndex: SessionIndexData): boolean {
 // 主空态说的是「你还没有对话」，判据因此是**账号里**一条都没有，而不是这次
 // 搜索/筛选下一条都不剩——后者由索引自己那句「没有匹配这次搜索」承接。
 //
-// 机器轴上「账号里一条都没有」说明不了这一轴有没有东西：它列的是**机器上**的
-// 清单，而**组头本身就是答案的一部分**（哪台机器在、它此刻离线/连接中/连不上，
-// 规格 2026-08-21「机器轴列什么」）。判据因此不能是「这一刻有没有行」——离线、
-// 还在连、清单交出来是空的这三档都没有行，窄屏会把那些组头连同它们的状态整块
-// 藏进主空态，屏幕上只剩一句说的是账号的「你还没有对话」。账号下有能跑会话的
-// 机器时这一轴归索引自己说；一台都没有时它什么也列不出，才轮到主空态。
+// 分组轴的权威名单本身也是答案：机器 / 项目 / Agent 任一名单非空时，空组及其组头
+// 仍要展示。项目轴的随手对话组是常驻兜底，不算一个已知项目；项目数为 0 且没有会话
+// 时仍走页面真空态。时间轴没有权威空组，零会话始终走页面真空态。
 export function isAccountEmpty(input: {
   accountTotal: number | null;
   axis: IndexAxis;
   machineCount: number;
+  projectCount: number;
+  agentCount: number;
 }): boolean {
-  return (
-    input.accountTotal === 0 &&
-    (input.axis !== "machine" || input.machineCount === 0)
-  );
+  if (input.accountTotal !== 0) return false;
+
+  switch (input.axis) {
+    case "machine":
+      return input.machineCount === 0;
+    case "project":
+      return input.projectCount === 0;
+    case "agent":
+      return input.agentCount === 0;
+    case "time":
+      return true;
+  }
 }
 
 /* 真实搜索：判据在服务端（决策 8，只按标题）。两处形态共用一份，只差尺寸。 */
@@ -114,6 +121,8 @@ export interface ChatIndexPanelProps {
   projectManagement: ProjectManagement;
   /** Agent 组头上那颗 ＋ 的去处：直接开这个 Agent 的草稿。 */
   onAgentNewSession: (agentSyncId: string) => void;
+  /** 当前机器范围镜像尚未完成时，所有在线组保持 pending，不消费上一范围快照。 */
+  machineRangePending: boolean;
   /** 「已知的可见变化」3：移动端行尾保留本地化的状态文字徽标。 */
   rowStatusLabel: boolean;
 }
@@ -134,9 +143,16 @@ export function ChatIndexPanel({
   loadGroupPage,
   projectManagement,
   onAgentNewSession,
+  machineRangePending,
   rowStatusLabel,
 }: ChatIndexPanelProps) {
   const { t } = useTranslation();
+  const machineStates: SessionIndexProps["machineStates"] =
+    machineRangePending && axis === "machine"
+      ? Object.fromEntries(
+          reach.onlineMachines.map((machine) => [machine.id, "connecting"]),
+        )
+      : reach.machineStates;
 
   /** 索引取数失败给用户看的那一句：服务端带了文案就用它，没有才落到兜底键。 */
   const indexErrorMessage = sessionIndex.loadError
@@ -214,7 +230,7 @@ export function ChatIndexPanel({
         projects={projects}
         agents={agents}
         machines={reach.machines}
-        machineStates={reach.machineStates}
+        machineStates={machineStates}
         onSave={sessionIndex.onSave}
         onDelete={sessionIndex.askDelete}
         // 「已知的可见变化」3：移动端行尾保留本地化的状态文字徽标。
@@ -230,6 +246,7 @@ export function ChatIndexPanel({
         onClearSearch={() => sessionIndex.setSearchQuery("")}
         groupTotals={groupTotals}
         loadGroupPage={loadGroupPage}
+        overflowRangeKey={`${axis}|${sessionIndex.debouncedSearch}|${filter}`}
         hasMore={sessionIndex.hasMore}
         loadingMore={sessionIndex.loadingMore}
         loadMoreFailed={sessionIndex.loadMoreFailed}
