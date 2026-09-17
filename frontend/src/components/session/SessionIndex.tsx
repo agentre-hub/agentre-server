@@ -455,6 +455,13 @@ function attentionModel(row: MirrorIndexGroupRow, href?: string) {
  */
 export type MachineConnectionState = "connecting" | "connected" | "unreachable";
 
+/** 编一条会话地址要的那几格：机器、身份、在不在账号里。 */
+export interface SessionPathTarget {
+  deviceId: number;
+  conversationId: string;
+  saved?: boolean;
+}
+
 export interface SessionIndexProps {
   axis: IndexAxis;
   onAxisChange: (axis: IndexAxis) => void;
@@ -481,7 +488,11 @@ export interface SessionIndexProps {
    * （`connecting` 自己会走完，`离线` 等的是那台机器而不是这一次请求）。
    */
   onRetryMachine?: (deviceId: number) => void;
-  sessionPath: (deviceId: number, conversationId: string) => string;
+  /**
+   * 一条会话的地址。宿主拿整行来编：未保存的行要带上它所在的机器，地址还要继承
+   * 宿主此刻的索引范围——这两样都不是索引认识的东西。
+   */
+  sessionPath: (target: SessionPathTarget) => string;
   /**
    * 保存一条还没进账号的对话（决策 11）。不传即不摆保存动作；已经在账号里的行
    * 无论传不传都不摆——那一列不会变的图标是纯噪声。
@@ -669,7 +680,9 @@ export default function SessionIndex({
         })),
         agents: importAgents,
         openSession: (deviceId, conversationId) =>
-          navigate(sessionPath(deviceId, conversationId)),
+          // 刚导进来的这条账号里有没有还说不准：带上机器兜底。账号里有它时详情按
+          // 账号那一行认承载机器，这一格用不上。
+          navigate(sessionPath({ deviceId, conversationId, saved: false })),
       }),
     [machines, importAgents, navigate, sessionPath],
   );
@@ -727,8 +740,8 @@ export default function SessionIndex({
   /**
    * ↑↓ 走得到的行，按渲染顺序。两类行不在其中：
    *
-   *  - 认不出机器的行——详情页的地址是 `/devices/:deviceId/...`，没有机器就没有
-   *    可去的地方，光标停在那里会卡住；
+   *  - 认不出机器的行——打开一条会话要知道连哪台机器（未保存的地址还要带上它），
+   *    没有机器就打不开，光标停在那里会卡住；
    *  - **收起的组里的行**（规格 2026-08-19「组怎么收怎么放」可达性）——共享包收起
    *    时把内容留在 DOM 里、只标 `aria-hidden`，因此不排掉的话 ↓ 会把真焦点送进一
    *    片看不见的区域：屏幕上光标凭空消失，读屏也念不出当前这条。
@@ -757,7 +770,7 @@ export default function SessionIndex({
       const deviceId = row.deviceId;
       if (deviceId === undefined) return;
       if (onSelect) onSelect(row);
-      else navigate(sessionPath(deviceId, row.conversationId));
+      else navigate(sessionPath({ ...row, deviceId }));
     },
     [onSelect, navigate, sessionPath],
   );
@@ -801,7 +814,7 @@ export default function SessionIndex({
         href:
           row.deviceId === undefined
             ? undefined
-            : sessionPath(row.deviceId, row.conversationId),
+            : sessionPath({ ...row, deviceId: row.deviceId }),
         leading: (
           <RowLeadingSlot axis={axis} agent={row.agent} project={row.project} />
         ),
@@ -1136,7 +1149,7 @@ export default function SessionIndex({
                       row,
                       row.deviceId === undefined
                         ? undefined
-                        : sessionPath(row.deviceId, row.conversationId),
+                        : sessionPath({ ...row, deviceId: row.deviceId }),
                     ),
                   )}
                 renderLink={renderSessionLink}

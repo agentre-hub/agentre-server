@@ -114,11 +114,10 @@ const DEVICE_ACTIVE = 1;
 
 /**
  * 会话详情视图的导航形态（任务 5 重构边界）：
- *   - "page"：路由页形态。包 AppShell（TopBar 标题 + SideNav），带面包屑/移动返回
- *     （决策 16）。
- *   - "embedded"：桌面 Chat 右栏嵌入形态。不包 AppShell、无面包屑；只渲染真实详情
- *     （标题/状态/转录/审批/Composer），由外层容器给尺寸。移动路由流程仍走 page
- *     形态。保存 / 删除两端都不在这里——它们的入口在索引的行上（决策 5 / 11）。
+ *   - "page"：整屏形态（移动端 `/chat/:conversationId`）。包 AppShell（TopBar 标题 +
+ *     SideNav），带返回行（返回列表 + 机器名与在线状态）。
+ *   - "embedded"：桌面 Chat 右栏嵌入形态。不包 AppShell、无返回行；只渲染真实详情
+ *     （标题/状态/转录/审批/Composer），由外层容器给尺寸。保存 / 删除两端都不在这里——它们的入口在索引的行上（决策 5 / 11）。
  */
 export type SessionDetailViewForm = "page" | "embedded";
 
@@ -134,6 +133,8 @@ export interface SessionDetailViewProps {
    */
   peerFingerprint?: string;
   form?: SessionDetailViewForm;
+  /** 整屏形态返回行回到哪（宿主的会话列表地址，带着进来时的范围）。 */
+  backTo?: string;
   /**
    * 打开这条对话时就该摆在模型控件旁边的一句话。
    *
@@ -253,6 +254,7 @@ export default function SessionDetailView({
   conversationId,
   peerFingerprint,
   form = "page",
+  backTo,
   initialModelNote,
   initialEffortNote,
   initialTitle,
@@ -1664,7 +1666,7 @@ export default function SessionDetailView({
   const header = (
     <SessionDetailHeader
       isPage={isPage}
-      did={did}
+      backTo={backTo}
       sid={sid}
       identity={identity}
       agent={agent}

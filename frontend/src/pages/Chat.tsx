@@ -1,6 +1,12 @@
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { MessageCirclePlus, PenLine, Plus } from "lucide-react";
 
@@ -30,7 +36,9 @@ import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";
-import SessionDetailView from "@/components/session/SessionDetailView";
+import ResolvedSessionDetail, {
+  type SessionDetailSeed,
+} from "@/components/session/ResolvedSessionDetail";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { UserMenu } from "@/components/UserMenu";
 import { useMe } from "@/hooks/use-me";
@@ -64,7 +72,13 @@ import { ProjectDialogs } from "@/pages/chat/ProjectDialogs";
 import { useMachineReachability } from "@/pages/chat/useMachineReachability";
 import { useProjectManagement } from "@/pages/chat/useProjectManagement";
 import { useSessionIndex } from "@/pages/chat/useSessionIndex";
+import type { SessionPathTarget } from "@/components/session/SessionIndex";
 import { INDEX_AXES, type IndexAxis } from "@/lib/sessionAxes";
+import {
+  chatIndexAddress,
+  readDeviceParam,
+  sessionAddress,
+} from "@/lib/sessionAddress";
 import { type SessionFilter } from "@/lib/sessionView";
 
 /**
@@ -88,6 +102,25 @@ import { type SessionFilter } from "@/lib/sessionView";
 /** 轴与范围都在 URL 上：设备下钻靠它重定向，链接也因此可分享。 */
 function readAxis(raw: string | null): IndexAxis {
   return INDEX_AXES.includes(raw as IndexAxis) ? (raw as IndexAxis) : "project";
+}
+
+/**
+ * 刚从草稿页派发出去那一刻这一屏知道得比详情早的那几样（规格 2026-09-17-chat-session-url
+ * 「Desktop」：这些种子不进地址，刷新后按正常路径重新获取）。
+ *
+ * 标题、刚说的那句话、挑的 Agent、没钉住的模型 / 力度说明、轮次开始的时刻，以及承载
+ * 它的机器——那条对话此刻还不在索引里，不带机器的话右栏要先绕一趟认领才连得上。
+ */
+interface DraftSeed {
+  conversationId: string;
+  deviceId: number;
+  peerFingerprint?: string;
+  title?: string;
+  userText?: string;
+  agent: NewConvAgent;
+  modelNote?: string;
+  effortNote?: string;
+  turnStartedAt: number;
 }
 
 /**
@@ -160,6 +193,33 @@ export default function Chat() {
   // 移动端账号进页面自己的顶栏：壳那一条已经让位（ownHeader）。
   const { me } = useMe();
   const [searchParams, setSearchParams] = useSearchParams();
+  /**
+   * 右栏（移动端是整屏）开着哪一条，真源是**地址**（规格 2026-09-17-chat-session-url
+   * 决策 5）：`/chat/:conversationId`，未保存的会话再带 `?device=`。刷新、新标签、
+   * 后退前进因此都回到同一条，而不必另记一份组件状态再去和地址对齐。
+   */
+  const { conversationId: routeConversationId } = useParams<{
+    conversationId?: string;
+  }>();
+  const openConversationId = routeConversationId ?? null;
+  const location = useLocation();
+  const deviceParam = readDeviceParam(searchParams);
+  /**
+   * 异步回调里要的是**此刻**的地址，不是回调造出来那一刻的：保存 / 删除的应答回来时
+   * 用户可能已经点去了别的会话，拿闭包里那份旧地址会把人拽回去。提交之后同步。
+   */
+  const locationRef = useRef({
+    conversationId: openConversationId,
+    search: location.search,
+    deviceParam,
+  });
+  useEffect(() => {
+    locationRef.current = {
+      conversationId: openConversationId,
+      search: location.search,
+      deviceParam,
+    };
+  });
 
   const axis = readAxis(searchParams.get("axis"));
   const machineScope = readMachineScope(searchParams.get("machine"));
@@ -190,62 +250,80 @@ export default function Chat() {
     // projectSyncId 只有从项目组头进来时才有：那颗 ＋ 问的是「在这个项目里开对话」。
     | { step: "draft"; agent: NewConvAgent; projectSyncId?: string }
   >(null);
-  // 桌面右栏：当前选中的真实会话（未选中 = kpP7A 空态）。身份就是 conversation_id
-  // 一个值（决策 1）；发起端指纹一起记着，它是某些 wire 请求要点名的那一格。
-  const [selected, setSelected] = useState<{
-    deviceId: number;
-    conversationId: string;
-    peerFingerprint: string;
-    /**
-     * 右栏冷启动那一段先摆的标题（见 SessionDetailView 的 initialTitle）。两个
-     * 入口都拿得到：点行时是那一行的标题，草稿派发时是刚发出去那一句。
-     */
-    title?: string;
-    /**
-     * 账号镜像里的那一行（见 SessionDetailView 的 initialRow）。点左栏一行进来时
-     * 就是索引取回来的那一行，递下去详情就不必回头再认领一次。草稿刚派发出来的
-     * 那条账号里还没有这一行，那时留空。
-     */
-    row?: MirroredSession;
-    /**
-     * 刚从草稿页发出去的**那一句**（见 SessionDetailView 的 initialUserText）。
-     * 点左栏一行进来时留空 —— 那条对话的转录只有两条真来路。
-     */
-    userText?: string;
-    /**
-     * 刚从草稿页发起时，这条对话是哪个 Agent 的（见 SessionDetailView 的
-     * `initialAgent`）。点左栏一行进来时留空——那时这一屏没有比详情页更早的答案。
-     */
-    agent?: NewConvAgent;
-    /** 刚从草稿页发起、而模型没能钉住时要说的那一句（见 initialModelNote）。 */
-    modelNote?: string;
-    /** 同上，思考力度没能钉住时的那一句（见 initialEffortNote）。 */
-    effortNote?: string;
-    /**
-     * 刚从草稿页发起时，那一轮是什么时候派发出去的（见 initialTurnStartedAt）。
-     * 点左栏一行进来时留空 —— 那时这一轮什么时候开的谁都不知道。
-     */
-    turnStartedAt?: number;
-  } | null>(null);
+  /**
+   * 派发种子留在这一页的内存里、不进历史记录：浏览器刷新会保留 history.state，放在那里
+   * 的话刷新之后还拿着派发那一刻的机器去连，绕过按地址认领（规格决策 4）。
+   */
+  const [draftSeed, setDraftSeed] = useState<DraftSeed | null>(null);
+  /**
+   * 地址换到另一条会话（点行、后退前进、派发落地）：右栏归地址说了算（规格决策 5）。
+   * 开着的「新对话」一并收掉，否则前进到一条会话时右栏还摆着挑 Agent 那一屏；别的
+   * 会话的派发种子也不再作数。离开到不开会话的 `/chat` 不收——进「新对话」正是这样
+   * 离开的。
+   */
+  const [lastOpenId, setLastOpenId] = useState(openConversationId);
+  if (lastOpenId !== openConversationId) {
+    setLastOpenId(openConversationId);
+    if (openConversationId !== null) setCompose(null);
+    if (draftSeed && draftSeed.conversationId !== openConversationId) {
+      setDraftSeed(null);
+    }
+  }
   // 「最近用过」只在打开这一路时读一次：读它是为了排个序，不值得每次渲染都碰
   // 一次 localStorage。
   const [recentIds, setRecentIds] = useState<string[]>([]);
-  const openCompose = useCallback(() => {
+  /**
+   * 离开当前开着的会话，回到不开任何会话的 `/chat`（范围参数留着）。
+   *
+   * 用 replace：这是系统替用户离开，不是用户想退回去的一格——后退回一条已删除的
+   * 会话、或刚被「新对话」接管的那一条都没有意义（规格决策 7）。
+   */
+  const leaveSession = useCallback(() => {
+    const current = locationRef.current;
+    if (!current.conversationId) return;
+    void nav(chatIndexAddress(current.search), { replace: true });
+  }, [nav]);
+  const beginCompose = useCallback(() => {
     setRecentIds(readRecentAgents());
     setCompose({ step: "pick" });
-    // 右栏从此归「新对话」这一路，没有任何一条对话开着了：选中一并松开，否则
+  }, []);
+  const openCompose = useCallback(() => {
+    beginCompose();
+    // 右栏从此归「新对话」这一路，没有任何一条对话开着了：地址一并离开那条，否则
     // 左栏还标着上一条，看上去像是正往那条对话里写。见 onProjectNewChat 那处
     // 同一句。
-    setSelected(null);
-  }, []);
+    leaveSession();
+  }, [beginCompose, leaveSession]);
   /** 删掉一条之后：右栏归这一页管，因此这一步借给索引数据层。 */
-  const onSessionDeleted = useCallback((row: MirrorIndexRow) => {
-    // 右栏正开着这一条时一并收起：它已经不存在了，留在那里等于让用户对着一份
-    // 已经删掉的转录继续读。身份就是 conversation_id，与行的键同一个值。
-    setSelected((prev) =>
-      prev && prev.conversationId === row.conversationId ? null : prev,
-    );
-  }, []);
+  const onSessionDeleted = useCallback(
+    (row: MirrorIndexRow) => {
+      // 右栏正开着这一条时一并收起：它已经不存在了，留在那里等于让用户对着一份
+      // 已经删掉的转录继续读。身份就是 conversation_id，与行的键同一个值。
+      if (locationRef.current.conversationId === row.conversationId) {
+        leaveSession();
+      }
+    },
+    [leaveSession],
+  );
+  /**
+   * 右栏正开着的那条写进了账号：`?device=` 只是未保存会话的寻址兜底，从此由账号那一行
+   * 认承载机器，地址原地去掉它（replace，右栏不重挂）。
+   */
+  const onSessionSaved = useCallback(
+    (conversationId: string) => {
+      const current = locationRef.current;
+      if (
+        current.conversationId !== conversationId ||
+        current.deviceParam === null
+      ) {
+        return;
+      }
+      void nav(sessionAddress(conversationId, {}, current.search), {
+        replace: true,
+      });
+    },
+    [nav],
+  );
   /**
    * 索引的数据层整族住在 useSessionIndex 里：取数、分页、计数，以及保存 / 删除那两个
    * 乐观动作。轴与筛选是**范围**、因此借给它；删掉之后右栏怎么收由这一页说了算。
@@ -255,23 +333,18 @@ export default function Chat() {
     devices,
     filter,
     onDeleted: onSessionDeleted,
+    onSaved: onSessionSaved,
   });
   // 这两个（连同下面 reach 的 forgetResolved）单独拎出来：整个 hook 结果每次渲染都是
   // 新对象，把它整个钉进依赖数组会让下面几个 useCallback 每渲染换一次引用，索引里的
-  // 行因此整片重造（见 sessionDetailPath 上那一段）。它们本身是 useCallback，稳定。
-  const {
-    refetch,
-    fetchGroupPage,
-    markRead,
-    mirrorRowOf,
-    reportUnsavedOnStart,
-  } = sessionIndex;
+  // 行因此整片重造（见 ChatIndexPanel 的 sessionPath 那一段）。它们本身是 useCallback，稳定。
+  const { refetch, fetchGroupPage, markRead, reportUnsavedOnStart } =
+    sessionIndex;
   /**
    * 从别处进来的「新建一个会话」。目前唯一的来源是会话详情的「机器离线」横幅：
    * 那条对话钉在一台够不着的机器上、续轮不会改派，唯一走得通的路是另起一条。
    *
-   * 走 URL 而不是回调，因为详情在路由页形态下压根不在这一页里（移动端下钻、
-   * `/devices/:did/sessions/:sid` 都是），没有回调递得过来。
+   * 走 URL 而不是回调，因为详情里那颗按钮离这一页隔着好几层，没有回调递得过来。
    *
    * 参数进来就消掉：它说的是「刚才要新建」这件一次性的事，不是页面此刻的范围。
    * 留着的话，之后每一次刷新与前进后退都会把人重新丢回挑 Agent 那一屏。
@@ -281,21 +354,17 @@ export default function Chat() {
     // 状态更新推到 effect 之后：`react-hooks/set-state-in-effect` 禁止在 effect 体里
     // 裸调 setState（同一条规矩在 SessionDetailView 的 pendingSend 那处也绕过一次）。
     void Promise.resolve().then(() => {
-      openCompose();
-      const params = new URLSearchParams(searchParams);
-      params.delete("compose");
-      setSearchParams(params, { replace: true });
+      beginCompose();
+      // 一并离开开着的那条会话：compose 与会话地址都不该留在地址上。
+      void nav(chatIndexAddress(searchParams), { replace: true });
     });
-  }, [searchParams, setSearchParams, openCompose]);
+  }, [searchParams, nav, beginCompose]);
   /**
    * 派发成功：这条对话已经进账号，直接去读它的实时流；compose 到此结束。
    *
-   * 桌面端**不换页**。挑 Agent / 选项目 / 草稿这三步本来就都在右栏里走完，最后
-   * 一步跳去 `/devices/:did/sessions/:sid` 会把两栏连同左栏那份上下文一起掀掉；
-   * 而这条新对话从此与左栏里点开的任何一条没有分别，落地形态因此与 `onSelect`
-   * 同一套：右栏就地嵌入它的真实详情。
-   *
-   * 移动端仍旧下钻：单列没有第二栏可落，而下钻正是它读一条已有对话的形态。
+   * 这条新对话从此与左栏里点开的任何一条没有分别，落地形态因此与 `onSelect` 同一
+   * 套：push 到它的会话地址。桌面端右栏就地嵌入它的真实详情，左栏那份上下文不动；
+   * 移动端单列没有第二栏可落，整屏换成它的详情。
    *
    * `peerFingerprint` 记的是**发起端**——从控制台派发出去的对话发起端是这个浏览器，
    * 承载它的才是那台 agentred，两者不是同一个值（dispatch 那一步的保存也正是这么
@@ -341,30 +410,27 @@ export default function Chat() {
       // 跑」，而那种轮次它一律不计时（什么时候开的它不知道）——交出去，第一轮的耗时
       // 才不必等它跑完才出数。
       const turnStartedAt = Date.now();
-      if (isMobile) {
-        nav(`/devices/${deviceId}/sessions/${conversationId}`, {
-          state: {
-            title,
-            userText,
-            turnStartedAt,
-            agent,
-            ...(modelNote ? { modelNote } : {}),
-            ...(effortNote ? { effortNote } : {}),
-          },
-        });
-        return;
-      }
-      setSelected({
-        deviceId,
+      // 桌面与移动同一步：push 到这条会话的地址；种子留在这一页里（不进地址，也不进
+      // 历史记录）。承载机器也在种子里——这条对话此刻还不在索引里，不带的话右栏要先
+      // 绕一趟认领。
+      setDraftSeed({
         conversationId,
+        deviceId,
         peerFingerprint,
         title,
         userText,
+        turnStartedAt,
         agent,
         modelNote,
         effortNote,
-        turnStartedAt,
       });
+      void nav(
+        sessionAddress(
+          conversationId,
+          savedToAccount ? {} : { device: deviceId },
+          locationRef.current.search,
+        ),
+      );
       // 左栏还是派发之前那一份，里面没有这条刚写进账号的对话：右栏开着它、左栏
       // 却列不出来，看上去就像它没进账号。重取一次让它落成一行。
       //
@@ -382,7 +448,7 @@ export default function Chat() {
         peerFingerprint,
       });
     },
-    [refetch, reportUnsavedOnStart, isMobile, nav, t],
+    [refetch, reportUnsavedOnStart, nav, t],
   );
   /**
    * 右栏「打开即已读」回来了：把左栏那一行就地改掉。
@@ -478,9 +544,9 @@ export default function Chat() {
     (agent: NewConvAgent, projectSyncId: string) => {
       setCompose({ step: "draft", agent, projectSyncId });
       // 同 openCompose：草稿接管右栏之后没有对话开着，左栏的高亮跟着松开。
-      setSelected(null);
+      leaveSession();
     },
-    [],
+    [leaveSession],
   );
   /**
    * Agent 轴的组头上那颗 ＋。索引报回来的是组键，而 Agent 轴的组键就是
@@ -495,9 +561,9 @@ export default function Chat() {
       if (!agent) return;
       setCompose({ step: "draft", agent });
       // 同 openCompose：草稿接管右栏之后没有对话开着，左栏的高亮跟着松开。
-      setSelected(null);
+      leaveSession();
     },
-    [agents],
+    [agents, leaveSession],
   );
   const projectManagement = useProjectManagement({
     projects,
@@ -530,7 +596,22 @@ export default function Chat() {
     [axis, searchParams, setSearchParams, forgetResolved],
   );
 
-  // 桌面点行 / 选中一条真实会话 → 右栏嵌入真实详情视图。
+  /**
+   * 一条会话的地址：继承此刻的索引范围，未保存的行带上它所在的机器。
+   *
+   * 只随查询串变：索引的行渲染与 openRow 都把它列在依赖里（见 ChatIndexPanel）。
+   */
+  const sessionPath = useCallback(
+    (target: SessionPathTarget) =>
+      sessionAddress(
+        target.conversationId,
+        target.saved === false ? { device: target.deviceId } : {},
+        location.search,
+      ),
+    [location.search],
+  );
+
+  // 桌面点行 → push 到这条会话的地址，右栏跟着地址嵌入真实详情视图。
   const onSelect = useCallback(
     (row: MirrorIndexRow) => {
       if (row.deviceId === undefined) return;
@@ -538,18 +619,23 @@ export default function Chat() {
       // 那一条——不在这里收掉 compose，人会被困在挑 Agent 那一屏，除了真开一条
       // 对话没有别的出路。草稿本来就没落任何东西，收掉不会丢下什么。
       setCompose(null);
-      setSelected({
-        deviceId: row.deviceId,
-        conversationId: row.conversationId,
-        peerFingerprint: row.fingerprint,
-        // 这一行的标题就在手上：右栏没有理由为了同一个名字再等一次往返。
-        title: row.title,
-        // 整行也在手上（机器轴那一档列的是机器实时报的，账号里未必有对应的一行，
-        // 取不到就留空，详情照旧自己认）。
-        row: mirrorRowOf(row.conversationId),
-      });
+      const target = sessionPath({ ...row, deviceId: row.deviceId });
+      // 再点一次正开着的那条不多记一格历史：否则后退要按两下才离得开它。
+      const current = locationRef.current;
+      if (
+        current.conversationId !== null &&
+        target ===
+          sessionAddress(
+            current.conversationId,
+            current.deviceParam === null ? {} : { device: current.deviceParam },
+            current.search,
+          )
+      ) {
+        return;
+      }
+      void nav(target);
     },
-    [mirrorRowOf],
+    [nav, sessionPath],
   );
 
   /**
@@ -774,10 +860,82 @@ export default function Chat() {
     ],
   );
 
+  /**
+   * 右栏这条会话该连哪台机器：与 ResolvedSessionDetail 同一条「承载者优先」——账号那一行
+   * 记着承载机器，`?device=` 只是未保存会话的兜底。机器轴上同一条对话常被发起端与承载
+   * 机器各报一行，已保存的地址又不带 `?device=`，不先认承载者的话会按分组先后认到
+   * 发起端那一行，右栏连错机器、高亮落错行。
+   */
+  const preferredDeviceId = useMemo(() => {
+    if (openConversationId === null) return null;
+    const row = sessionIndex.mirrorRows.find(
+      (r) => r.conversation_id === openConversationId,
+    );
+    const host = row
+      ? reach.devicesByFp.get(row.device_fingerprint)
+      : undefined;
+    return host?.id ?? deviceParam;
+  }, [
+    openConversationId,
+    sessionIndex.mirrorRows,
+    reach.devicesByFp,
+    deviceParam,
+  ]);
   const selectedKey = useMemo(
-    () => findSelectedKey(view.rows, selected),
-    [selected, view.rows],
+    () => findSelectedKey(view.rows, openConversationId, preferredDeviceId),
+    [openConversationId, preferredDeviceId, view.rows],
   );
+  /**
+   * 右栏那条会话手上现成的种子：索引里列着它时就是那一行（机器、发起端、账号那一行
+   * 都在上面），否则是刚派发出来时这一页记下的机器。都没有才让详情按地址去认。
+   *
+   * 记住最近一次给过的种子（同一条会话内）：搜索、筛选、换轴会让那一行暂时列不出来，
+   * 种子一撤右栏就要回头认领一遍——整个详情卸掉重挂，正在读的转录闪成空白。
+   */
+  const selectedRow = selectedKey
+    ? view.rows.find((r) => r.key === selectedKey)
+    : undefined;
+  const openSeed =
+    draftSeed && draftSeed.conversationId === openConversationId
+      ? draftSeed
+      : undefined;
+  const liveSeed: SessionDetailSeed | undefined =
+    openConversationId === null
+      ? undefined
+      : selectedRow?.deviceId !== undefined
+        ? {
+            deviceId: selectedRow.deviceId,
+            peerFingerprint: selectedRow.fingerprint,
+            row: sessionIndex.mirrorRows.find(
+              (r) => r.conversation_id === openConversationId,
+            ),
+          }
+        : openSeed
+          ? {
+              deviceId: openSeed.deviceId,
+              peerFingerprint: openSeed.peerFingerprint,
+            }
+          : undefined;
+  const [stickySeed, setStickySeed] = useState<{
+    conversationId: string;
+    seed: SessionDetailSeed;
+  } | null>(null);
+  if (
+    openConversationId !== null &&
+    liveSeed &&
+    (stickySeed?.conversationId !== openConversationId ||
+      stickySeed.seed.deviceId !== liveSeed.deviceId ||
+      stickySeed.seed.peerFingerprint !== liveSeed.peerFingerprint ||
+      stickySeed.seed.row !== liveSeed.row)
+  ) {
+    setStickySeed({ conversationId: openConversationId, seed: liveSeed });
+  }
+  const detailSeed =
+    liveSeed ??
+    (stickySeed && stickySeed.conversationId === openConversationId
+      ? stickySeed.seed
+      : undefined);
+  const detailTitle = openSeed?.title ?? selectedRow?.title;
 
   /** 删除确认要说清楚清的是哪台机器上那一份，以及它是不是一台电脑（决策 16）。 */
   const deleteTargetMachine = useMemo(() => {
@@ -886,6 +1044,7 @@ export default function Chat() {
       onAgentNewSession={onAgentNewSession}
       rowStatusLabel={isMobile}
       machineRangePending={sessionIndex.rangePending}
+      sessionPath={sessionPath}
     />
   );
 
@@ -902,6 +1061,26 @@ export default function Chat() {
   // `renderSearchField("sm")` 当成一段裸文案报出来。
   const searchFieldSm = renderSearchField("sm");
   const searchFieldMd = renderSearchField("md");
+
+  // 移动端单列：地址上开着一条会话时整屏就是它的详情，索引留在后退的那一格里。
+  if (isMobile && openConversationId) {
+    return (
+      <ResolvedSessionDetail
+        conversationId={openConversationId}
+        deviceParam={deviceParam}
+        seed={detailSeed}
+        form="page"
+        backTo={chatIndexAddress(location.search)}
+        initialTitle={detailTitle}
+        initialUserText={openSeed?.userText}
+        initialAgent={openSeed?.agent}
+        initialModelNote={openSeed?.modelNote}
+        initialEffortNote={openSeed?.effortNote}
+        initialTurnStartedAt={openSeed?.turnStartedAt}
+        onMarkedRead={markRead}
+      />
+    );
+  }
 
   return (
     <AppShell flush ownHeader>
@@ -1038,7 +1217,7 @@ export default function Chat() {
                 草稿那条顶带同样是（它与详情共用同一副外壳，见 DraftSession）。
                 其余几档没有那样一条带，才由 chromeBand 顶上。三者同高，控件
                 因此不会随着选中与否、发没发出第一句上下跳。 */}
-            {!selected && compose?.step !== "draft" && chromeBand}
+            {!openConversationId && compose?.step !== "draft" && chromeBand}
             {/* 右栏这一格不是列表，摆骨架行会像是在等**某一条对话**的内容，而此刻
                 还没有任何目标被选中。留空：左列的骨架已经说了「在取」。 */}
             {!sessionIndex.loaded ? (
@@ -1051,22 +1230,21 @@ export default function Chat() {
               <div className="min-h-0 flex-1">{composeProject}</div>
             ) : compose ? (
               <div className="min-h-0 flex-1">{composePick}</div>
-            ) : selected ? (
-              /* 选中真实会话：右栏直接嵌入 SessionDetailView（embedded 形态：
-                 无外壳/面包屑，只渲染真实详情，由外层给尺寸）。 */
+            ) : openConversationId ? (
+              /* 地址上开着一条会话：右栏嵌入它的真实详情（embedded 形态：无外壳/
+                 面包屑，由外层给尺寸）。先认出承载机器，再交给 SessionDetailView。 */
               <div className="min-h-0 flex-1">
-                <SessionDetailView
-                  deviceId={selected.deviceId}
-                  conversationId={selected.conversationId}
-                  peerFingerprint={selected.peerFingerprint}
+                <ResolvedSessionDetail
+                  conversationId={openConversationId}
+                  deviceParam={deviceParam}
+                  seed={detailSeed}
                   form="embedded"
-                  initialTitle={selected.title}
-                  initialUserText={selected.userText}
-                  initialAgent={selected.agent}
-                  initialRow={selected.row}
-                  initialModelNote={selected.modelNote}
-                  initialEffortNote={selected.effortNote}
-                  initialTurnStartedAt={selected.turnStartedAt}
+                  initialTitle={detailTitle}
+                  initialUserText={openSeed?.userText}
+                  initialAgent={openSeed?.agent}
+                  initialModelNote={openSeed?.modelNote}
+                  initialEffortNote={openSeed?.effortNote}
+                  initialTurnStartedAt={openSeed?.turnStartedAt}
                   headerRight={pageChrome}
                   onMarkedRead={markRead}
                 />

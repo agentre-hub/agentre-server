@@ -235,7 +235,20 @@ function stubReads(
 /** MemoryRouter 不碰 `window.location`，要读地址就得在 router 里问。 */
 function LocationProbe() {
   const location = useLocation();
-  return <p data-testid="location-search">{location.search}</p>;
+  return (
+    <>
+      <p data-testid="location-path">{location.pathname}</p>
+      <p data-testid="location-search">{location.search}</p>
+    </>
+  );
+}
+
+function currentPath(): string {
+  return screen.getByTestId("location-path").textContent ?? "";
+}
+
+function currentSearch(): string {
+  return screen.getByTestId("location-search").textContent ?? "";
 }
 
 function renderChat(entry = "/chat") {
@@ -244,11 +257,7 @@ function renderChat(entry = "/chat") {
       <ThemeProvider>
         <LocationProbe />
         <Routes>
-          <Route path="/chat" element={<Chat />} />
-          <Route
-            path="/devices/:deviceId/sessions/:conversationId"
-            element={<p>session page</p>}
-          />
+          <Route path="/chat/:conversationId?" element={<Chat />} />
         </Routes>
       </ThemeProvider>
     </MemoryRouter>,
@@ -344,8 +353,8 @@ beforeEach(async () => {
  * 「新建一个会话」这个出口从别处进来时的落点。
  *
  * 会话详情的「机器离线」横幅给的就是这一个出口（两端统一）：那条对话钉在一台
- * 够不着的机器上，续轮不会改派，唯一走得通的路是另起一条。详情在路由页形态下
- * 不在 `/chat` 里，所以它靠 URL 说这件事，而不是靠一个跨页面的回调。
+ * 够不着的机器上，续轮不会改派，唯一走得通的路是另起一条。详情离 Chat 隔着好几层，
+ * 所以它靠 URL 说这件事，而不是靠一个层层往下递的回调。
  */
 describe("从别处进来的「新建一个会话」", () => {
   it("Given /chat?compose=1, When 进页面, Then 直接停在挑 Agent 那一屏", async () => {
@@ -363,7 +372,7 @@ describe("从别处进来的「新建一个会话」", () => {
 
     await screen.findByTestId("agent-pick-agent-1");
     await waitFor(() => {
-      const search = screen.getByTestId("location-search").textContent ?? "";
+      const search = currentSearch();
       expect(search).not.toContain("compose");
       // 别把同一屏别的范围一起冲掉：轴是页面此刻的范围，不是一次性的意图。
       expect(search).toContain("axis=project");
@@ -519,8 +528,10 @@ describe("一条还没发第一句的对话", () => {
     // 却把整个两栏掀掉的话，左栏那份上下文凭空没了。落地形态与「点左栏一条已有
     // 对话」同一套：右栏就地换成这条新会话的真实详情。
     expect(await screen.findByTestId("session-detail-view")).toBeTruthy();
-    expect(screen.queryByText("session page")).toBeNull();
     expect(screen.getByTestId("chat-detail")).toBeTruthy();
+    // 地址跟着到这条新会话：已进账号的不带机器。刷新、新标签都回到它。
+    expect(currentPath()).toBe("/chat/99");
+    expect(currentSearch()).toBe("");
     // 「最近用过」记在派发成功之后。
     expect(readRecentAgents()).toEqual(["agent-1"]);
   });
@@ -827,6 +838,9 @@ describe("一条还没发第一句的对话", () => {
     fireEvent.click(send);
 
     await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    // 账号里没有它：地址带上承载它的机器，刷新之后才认得回来。
+    await waitFor(() => expect(currentPath()).toBe("/chat/99"));
+    expect(currentSearch()).toBe("?device=20");
     // 左栏说得出「为什么这里没有它」，而不是一片空白。
     const alert = await screen.findByTestId("index-save-error");
     expect(alert.textContent).toContain("跑一下失败的测试");
@@ -842,10 +856,12 @@ describe("一条还没发第一句的对话", () => {
         },
       ]),
     );
-    // 写成之后横幅收起来，这一行真的落进左栏。
+    // 写成之后横幅收起来，这一行真的落进左栏；地址不再需要那台机器。
     await waitFor(() =>
       expect(screen.queryByTestId("index-save-error")).toBeNull(),
     );
+    await waitFor(() => expect(currentSearch()).toBe(""));
+    expect(currentPath()).toBe("/chat/99");
     expect(
       await screen.findByRole("link", { name: /跑一下失败的测试/ }),
     ).toBeTruthy();
@@ -1606,7 +1622,9 @@ describe("移动端派发成功后的落地", () => {
     fireEvent.click(send);
 
     await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText("session page")).toBeTruthy();
+    // 单列没有第二栏：整屏换成这条会话的详情，地址是它自己的。
+    await waitFor(() => expect(currentPath()).toBe("/chat/99"));
+    expect(await screen.findByTestId("session-detail-view")).toBeTruthy();
   });
 });
 

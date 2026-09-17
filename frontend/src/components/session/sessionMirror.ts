@@ -88,13 +88,26 @@ export async function fetchMirrorRow(
   conversationId: string,
 ): Promise<MirrorSessionItem | undefined> {
   try {
-    const res = await api<{ items?: MirrorSessionItem[] }>(
-      `/v1/agent-sessions?conversation_id=${encodeURIComponent(conversationId)}`,
-    );
-    return (res.items ?? []).find((r) => r.conversation_id === conversationId);
+    return await readMirrorRow(conversationId);
   } catch {
     return undefined;
   }
+}
+
+/**
+ * 同一次精确认领，但**失败照抛**：undefined 只表示「账号里没有这一行」。
+ *
+ * 按地址打开会话时要靠这一行认出承载机器（规格 2026-09-17-chat-session-url），
+ * 那里「没有这一行」会落到 `?device=` 或「找不到」，而端点抖了一下只该让人重试——
+ * 两者混成一个 undefined，一次网络失败就会被说成这条对话不存在。
+ */
+export async function readMirrorRow(
+  conversationId: string,
+): Promise<MirrorSessionItem | undefined> {
+  const res = await api<{ items?: MirrorSessionItem[] }>(
+    `/v1/agent-sessions?conversation_id=${encodeURIComponent(conversationId)}`,
+  );
+  return (res.items ?? []).find((r) => r.conversation_id === conversationId);
 }
 
 /**
