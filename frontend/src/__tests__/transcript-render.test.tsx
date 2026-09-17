@@ -25,7 +25,7 @@ import "@/i18n";
 
 let seq = 0;
 function f(event: Record<string, unknown>): TranscriptFrame {
-  return { sessionId: 1, event, seq: ++seq };
+  return { event, seq: ++seq };
 }
 
 function renderFrames(...frames: TranscriptFrame[]) {
@@ -531,7 +531,6 @@ describe("Transcript 的时间戳", () => {
         messages={reduceFrames(
           [
             {
-              sessionId: 1,
               seq: 1,
               createtime: at,
               event: { kind: "user_message", text: "在吗" },

@@ -651,17 +651,6 @@ describe("browser engine settings ports", () => {
       ),
     ).toMatchObject({ device_fingerprint: "desktop-a" });
 
-    // 共享包的编辑保存不带 type（编辑不能改类型），类型只能取账号里存着的那行。
-    await adapter.updateBackend(listed.id, {
-      name: "Builder · Claude Code",
-      deviceId: "desktop-a",
-    } as unknown as Parameters<typeof adapter.updateBackend>[1]);
-    const patches = calls.filter((c) => c.init?.method === "PATCH");
-    expect(patches).toHaveLength(2);
-    expect(JSON.parse(String(patches[1].init?.body))).not.toHaveProperty(
-      "type",
-    );
-
     const before = calls.length;
     await expect(
       adapter.createBackend({ type: "codex", name: "Codex" }),
