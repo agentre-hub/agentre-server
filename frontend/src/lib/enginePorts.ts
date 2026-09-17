@@ -714,9 +714,13 @@ export function createBrowserEngineSettingsPorts(
     },
 
     async updateBackend(id, input) {
-      assertSupportedBackendType(input.type, messages.unsupportedBackendReason);
-      requireDevice(input);
       const key = backendIDs.key(id);
+      // 共享包的编辑保存不带 type（编辑不能改类型），缺省时按存着的那行判。
+      assertSupportedBackendType(
+        stringValue(input.type) || backendDTOs.get(key)?.type || "",
+        messages.unsupportedBackendReason,
+      );
+      requireDevice(input);
       const updated = await api<BackendDTO>(
         `/v1/engine/backends/${encodeURIComponent(key)}`,
         {
