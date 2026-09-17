@@ -106,23 +106,26 @@ const runningMirrored = {
 };
 
 /** 索引的四条数据源；账号镜像里有哪几条由调用方给。 */
-function stubApi(saved: unknown[], devices: unknown[] = [agentred]) {
+function stubApi(
+  saved: unknown[],
+  devices: unknown[] = [agentred],
+  roster: { agents?: unknown[]; projects?: unknown[] } = {},
+) {
   mockedApi.mockImplementation(async (path) => {
     if (path.startsWith("/v1/agent-sessions?")) {
       // 端点现在按轴给组骨架（规格 2026-08-19）：不带 scope 时一组一组地给。
       // 「等你处理」那个数由页面单独探一次，探测请求不该把行也发回去。
       const params = new URLSearchParams(path.split("?")[1] ?? "");
       // 搜索与筛选现在都在服务端做（规格 2026-08-19 决策 8 / 9），替身照做：
-      // 搜索只按标题，「未读」看 last_message_at > last_read_at，「运行中」是 running
-      // 且不等待。
+      // 搜索只按标题，「未读」看 last_message_at > last_read_at，「运行中」收完整
+      // running 生命周期集合（包含 waiting_for_input）。
       const q = params.get("q") ?? "";
       const filter = params.get("filter") ?? "";
       const rows = (saved as Record<string, unknown>[]).filter((row) => {
         if (q && !String(row.title ?? "").includes(q)) return false;
         if (filter === "unread")
           return Number(row.updated_at ?? 0) > Number(row.last_read_at ?? 0);
-        if (filter === "running")
-          return row.lifecycle_state === "running" && !row.waiting_for_input;
+        if (filter === "running") return row.lifecycle_state === "running";
         return true;
       });
       if (params.get("per_group") === "1") return { total: rows.length };
@@ -134,8 +137,10 @@ function stubApi(saved: unknown[], devices: unknown[] = [agentred]) {
       };
     }
     if (path === "/v1/devices") return { devices };
-    if (path === "/v1/workspace/agents") return { agents };
-    if (path === "/v1/workspace/projects") return { projects: [] };
+    if (path === "/v1/workspace/agents")
+      return { agents: roster.agents ?? agents };
+    if (path === "/v1/workspace/projects")
+      return { projects: roster.projects ?? [] };
     throw new Error("unexpected: " + path);
   });
 }
@@ -234,9 +239,9 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
   });
 
   /**
-   * 在线、清单交出来了、里面是空的：规格要「空组保留组头，组里给一句『这台机器上
-   * 还没有对话』」。账号也空的时候这一句同样不能被主空态换成「你还没有对话」——
-   * 后者说的是账号，而这一轴问的是机器。
+   * 在线、清单交出来了、里面是空的：共享组保留组头，并使用统一空组文案。
+   * 账号也空的时候这一句同样不能被主空态换成「你还没有对话」——后者说的是账号，
+   * 而这一轴问的是机器。
    */
   it("机器轴:账号空、机器交出的清单也是空的,组头与那句说明都还在", async () => {
     stubApi([], [agentred]);
@@ -257,6 +262,38 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(
       await within(box).findByText("No conversations on this machine yet"),
     ).toBeTruthy();
+    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
+  });
+
+  it("项目轴:账号空但项目名单有项目时保留项目组、随手对话与新建入口", async () => {
+    stubApi([], [agentred], {
+      projects: [
+        {
+          sync_id: "p-known",
+          name: "Known project",
+          sort_order: 0,
+          members: [],
+        },
+      ],
+    });
+    renderChat("/chat?axis=project");
+
+    const group = await screen.findByTestId("group-p-known");
+    expect(within(group).getByText("Known project")).toBeTruthy();
+    expect(within(group).getByText("No sessions")).toBeTruthy();
+    expect(screen.getByText("Quick chats")).toBeTruthy();
+    expect(screen.getByTestId("index-new-project")).toBeTruthy();
+    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
+  });
+
+  it("Agent 轴:账号空但 Agent 名单有 Agent 时保留空组与组头新建入口", async () => {
+    stubApi([], [agentred]);
+    renderChat("/chat?axis=agent");
+
+    const group = await screen.findByTestId("group-ag-1");
+    expect(within(group).getByText("后端 Agent")).toBeTruthy();
+    expect(within(group).getByText("No sessions")).toBeTruthy();
+    expect(within(group).getByTestId("group-header-plus")).toBeTruthy();
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
   });
 
@@ -286,7 +323,13 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(screen.getByText("跑着呢")).toBeTruthy();
 
     fireEvent.click(screen.getByTestId("filter-chip-running"));
-    await waitFor(() => expect(screen.queryByText("等你批")).toBeNull());
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("filter-chip-running").getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    // waiting_for_input 是运行期叠加事实，不把会话移出 running 生命周期。
+    expect(screen.getByText("等你批")).toBeTruthy();
     expect(screen.getByText("跑着呢")).toBeTruthy();
   });
 
@@ -342,7 +385,7 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
   });
 
-  it("空态时也显示同一个真实搜索框（加载完成后不再因空隐藏），且不制造结果、不隐藏主空态", async () => {
+  it("真空账号开始搜索后挂共享搜索空态，并可清除搜索回到主空态", async () => {
     stubApi([], []);
     renderChat();
 
@@ -355,17 +398,48 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     const search = screen.getByRole("searchbox", {
       name: i18n.t("chat.searchSessions"),
     });
-
-    // 输入不制造结果：没有任何会话行出现。
     fireEvent.change(search, { target: { value: "跑着呢" } });
-    expect(screen.queryByText("跑着呢")).toBeNull();
 
-    // 主空态不被隐藏，主按钮仍可用。
-    expect(screen.getByTestId("chat-empty-state")).toBeTruthy();
+    const empty = await waitFor(() => {
+      const target = document.querySelector<HTMLElement>(
+        '[data-slot="session-index-empty"]',
+      );
+      expect(target).not.toBeNull();
+      return target as HTMLElement;
+    });
+    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
+    expect(empty.textContent).toContain("No matching sessions");
+
+    fireEvent.click(
+      within(empty).getByRole("button", { name: "Clear search" }),
+    );
+    expect(await screen.findByTestId("chat-empty-state")).toBeTruthy();
+  });
+
+  it("筛选清空移动列表时挂共享筛选空态，且筛选优先于账号真空态", async () => {
+    stubApi([
+      {
+        ...waitingMirrored,
+        lifecycle_state: "idle",
+        last_read_at: 1754800001000,
+      },
+    ]);
+    renderChat();
+    await screen.findByText("等你批");
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    const empty = await waitFor(() => {
+      const target = document.querySelector<HTMLElement>(
+        '[data-slot="session-index-empty"]',
+      );
+      expect(target).not.toBeNull();
+      return target as HTMLElement;
+    });
+    expect(screen.queryByTestId("chat-empty-state")).toBeNull();
+    expect(empty.textContent).toContain("No running sessions");
     expect(
-      screen.getByRole("button", {
-        name: "Start your first conversation",
-      }),
+      within(empty).getByRole("button", { name: "View all sessions" }),
     ).toBeTruthy();
   });
 
@@ -394,11 +468,15 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     });
     fireEvent.change(search, { target: { value: "查无此条" } });
 
-    await waitFor(() => expect(screen.queryByText("等你批")).toBeNull());
+    const empty = await waitFor(() => {
+      const target = document.querySelector<HTMLElement>(
+        '[data-slot="session-index-empty"]',
+      );
+      expect(target).not.toBeNull();
+      return target as HTMLElement;
+    });
     expect(screen.queryByTestId("chat-empty-state")).toBeNull();
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search",
-    );
+    expect(empty.textContent).toContain("No matching sessions");
   });
 
   it("移动端也有可触达的真实搜索（屏 20 头部搜索）：输入词过滤索引里的行", async () => {
@@ -412,7 +490,7 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     });
     fireEvent.change(search, { target: { value: "跑着呢" } });
     await waitFor(() => expect(screen.queryByText("等你批")).toBeNull());
-    expect(screen.getByText("跑着呢")).toBeTruthy();
+    expect(await screen.findByText("跑着呢")).toBeTruthy();
   });
 });
 

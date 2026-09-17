@@ -16,6 +16,7 @@ import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import type { DeviceItem } from "@/lib/devices";
 import type { IndexAxis, MachineInfo } from "@/lib/sessionAxes";
+import type { SessionFilter } from "@/lib/sessionView";
 
 /** 一台机器的解析状态。连不上与「还没连上」是两回事，不能共用一个转圈。 */
 export type MachineState = "connecting" | "connected" | "unreachable";
@@ -71,12 +72,14 @@ export type MachinePageLoader = (cursor: string) => Promise<MachineSessionPage>;
 function MachineSessionResolver({
   fingerprint,
   keyword,
+  filter,
   onResolved,
   onState,
   onLoader,
 }: {
   fingerprint: string;
   keyword: string;
+  filter: SessionFilter;
   onResolved: (fp: string, resolved: ResolvedMachine) => void;
   onState: (fp: string, state: MachineState) => void;
   /** 交出「向这台机器再要一页」的入口；断开时交 null。 */
@@ -88,9 +91,14 @@ function MachineSessionResolver({
   const { client, relayState, relayTicket } = useRelayChannel(
     machineTarget(fingerprint),
   );
-  // 记的是「已经按哪个关键词解析过」而不是一个布尔：关键词一变就得重问一次，
+  const localFingerprint = relayTicket?.peerFingerprint ?? "";
+  // 记的是「已经按哪个关键词与筛选解析过」而不是一个布尔：任一范围变化都得重问，
   // 而连接本身没有断，不该整个重挂。null = 本次连接还没解析过。
   const resolvedForRef = useRef<string | null>(null);
+  // 范围字符串会重复（running → unread → running）。单看字符串时，第一轮 running
+  // 的迟到响应会被第三轮重新认成当前结果；每次真正发请求都要有不可复用的身份。
+  const requestGenerationRef = useRef(0);
+  const requestKey = `${keyword}\u0000${filter}`;
 
   useEffect(() => {
     const state: MachineState =
@@ -109,42 +117,90 @@ function MachineSessionResolver({
       // 的状态。标记记的是「解析过没有」而不是状态字符串本身 —— 拿状态跟它自己比
       // 恒成立（这个 effect 只在 connected 时走到这里），重连后一次也不会再解析。
       resolvedForRef.current = null;
+      requestGenerationRef.current += 1;
       return;
     }
-    if (resolvedForRef.current === keyword) return;
-    resolvedForRef.current = keyword;
-    client
-      .request(rpcMethods.sessionList, {
+    if (resolvedForRef.current === requestKey) return;
+    resolvedForRef.current = requestKey;
+    const generation = requestGenerationRef.current + 1;
+    requestGenerationRef.current = generation;
+    const isCurrent = () => requestGenerationRef.current === generation;
+    // 已交出的清单只属于上一范围；新范围完整答完前不能把它显示成 connected，
+    // 否则本地筛选会先发布一个确定性的空态。
+    onState(fingerprint, "connecting");
+    void (async () => {
+      const raw = await client.request(rpcMethods.sessionList, {
         keyword,
         limit: MACHINE_LIST_PAGE_SIZE,
-      })
-      .then((raw) => {
-        // 打字期间两次请求可能乱序回来。只认「此刻要的那个关键词」那一份，
-        // 否则慢一步的旧结果会把新结果盖回去。
-        if (resolvedForRef.current !== keyword) return;
-        const res = sessionListFromProtobuf(raw);
-        onResolved(fingerprint, {
-          sessions: res.sessions,
-          localFingerprint: relayTicket?.peerFingerprint ?? "",
-          // 老机器不报总数：它交出来的就是整份，条数即总数。
-          total: res.total ?? res.sessions.length,
-          cursor: res.cursor ?? "",
-          hasMore: res.hasMore ?? false,
-        });
-        onState(fingerprint, "connected");
-      })
-      .catch(() => {
-        if (resolvedForRef.current !== keyword) return;
-        // 这一次没答上来：清掉标记，关键词再变或重连时还会再问。
-        resolvedForRef.current = null;
-        onState(fingerprint, "unreachable");
       });
+      if (!isCurrent()) return;
+
+      const first = sessionListFromProtobuf(raw);
+      const sessionsById = new Map(
+        first.sessions.map((session) => [session.conversationId, session]),
+      );
+      let cursor = first.cursor ?? "";
+      let hasMore = first.hasMore ?? false;
+
+      // `all` 保留首屏 + 按需翻页。运行中/未读必须先拿齐 daemon 的候选集，再由
+      // 宿主按与镜像相同的口径过滤，否则首屏零命中会被误判成整台机器零命中。
+      if (filter !== "all") {
+        const requestedCursors = new Set<string>();
+        while (hasMore) {
+          if (!cursor || requestedCursors.has(cursor)) {
+            throw new Error("invalid machine session cursor");
+          }
+          const requestedCursor = cursor;
+          requestedCursors.add(requestedCursor);
+          const pageRaw = await client.request(rpcMethods.sessionList, {
+            keyword,
+            limit: MACHINE_LIST_PAGE_SIZE,
+            cursor: requestedCursor,
+          });
+          if (!isCurrent()) return;
+
+          const page = sessionListFromProtobuf(pageRaw);
+          for (const session of page.sessions) {
+            sessionsById.set(session.conversationId, session);
+          }
+          cursor = page.cursor ?? "";
+          hasMore = page.hasMore ?? false;
+        }
+        cursor = "";
+        hasMore = false;
+      }
+
+      if (!isCurrent()) return;
+      const sessions = [...sessionsById.values()];
+      onResolved(fingerprint, {
+        sessions,
+        localFingerprint,
+        // 老机器不报总数：它交出来的就是整份，条数即总数。
+        total: first.total ?? sessions.length,
+        cursor,
+        hasMore,
+      });
+      onState(fingerprint, "connected");
+    })().catch(() => {
+      if (!isCurrent()) return;
+      // 这一次没答上来：清掉标记，关键词、筛选再变或重连时还会再问。
+      resolvedForRef.current = null;
+      onState(fingerprint, "unreachable");
+    });
+    return () => {
+      if (requestGenerationRef.current === generation) {
+        requestGenerationRef.current += 1;
+        resolvedForRef.current = null;
+      }
+    };
   }, [
     relayState,
     client,
     fingerprint,
     keyword,
-    relayTicket,
+    filter,
+    requestKey,
+    localFingerprint,
     onResolved,
     onState,
   ]);
@@ -163,10 +219,17 @@ function MachineSessionResolver({
         cursor,
       });
       const res = sessionListFromProtobuf(raw);
+      const nextCursor = res.cursor ?? "";
+      const hasMore = res.hasMore ?? false;
+      // 普通 all 模式由弹层按需翻页，也必须遵守与完整扫描相同的进度合同。
+      // daemon 若声称还有下一页却不给新游标，继续请求只会重复这一页。
+      if (hasMore && (!nextCursor || nextCursor === cursor)) {
+        throw new Error("invalid machine session cursor");
+      }
       return {
         sessions: res.sessions,
-        cursor: res.cursor ?? "",
-        hasMore: res.hasMore ?? false,
+        cursor: nextCursor,
+        hasMore,
         total: res.total ?? res.sessions.length,
       };
     };
@@ -192,6 +255,8 @@ export interface MachineReachabilityInput {
   machineScope?: number | null;
   /** 已去抖的搜索词。随 session.list 下推给机器，由机器自己筛。 */
   keyword: string;
+  /** 运行中 / 未读由宿主过滤，因此这两档必须先取尽 daemon 的候选页。 */
+  filter: SessionFilter;
 }
 
 /** 「对话」页与机器可达性那一族之间的全部契约。 */
@@ -236,6 +301,7 @@ export function useMachineReachability({
   axis,
   machineScope = null,
   keyword,
+  filter,
 }: MachineReachabilityInput): MachineReachability {
   /**
    * 「重新问一次这台机器」的计数器，按指纹。加一下让那一台的 resolver 整个重挂
@@ -307,9 +373,11 @@ export function useMachineReachability({
       states[device.id] =
         machineState[device.fingerprint] === "unreachable"
           ? "unreachable"
-          : resolved[device.fingerprint]
-            ? "connected"
-            : "connecting";
+          : machineState[device.fingerprint] === "connecting"
+            ? "connecting"
+            : resolved[device.fingerprint]
+              ? "connected"
+              : "connecting";
     }
     return states;
   }, [onlineMachines, resolved, machineState]);
@@ -322,6 +390,16 @@ export function useMachineReachability({
     setMachineState((prev) =>
       prev[fp] === state ? prev : { ...prev, [fp]: state },
     );
+    if (state === "connecting") {
+      // 清单只属于交出它时的搜索/筛选范围。新范围开始后先撤下旧清单；否则
+      // running -> unread 等待期间仍会把上一范围的行画在新 chip 下。
+      setResolved((prev) => {
+        if (!prev[fp]) return prev;
+        const next = { ...prev };
+        delete next[fp];
+        return next;
+      });
+    }
   }, []);
 
   /**
@@ -396,6 +474,7 @@ export function useMachineReachability({
       key={`${device.fingerprint}:${machineNonce[device.fingerprint] ?? 0}`}
       fingerprint={device.fingerprint}
       keyword={keyword}
+      filter={filter}
       onResolved={onResolved}
       onState={onState}
       onLoader={onLoader}

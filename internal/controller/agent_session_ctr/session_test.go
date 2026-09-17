@@ -226,7 +226,7 @@ func TestSavedSessions_PassesEveryQueryParamThrough(t *testing.T) {
 
 	resp := get(t, server.URL+
 		"/v1/agent-sessions?axis=project&scope=project%3Aproj-1&cursor=1700.42"+
-		"&limit=20&per_group=3&q=%E7%99%BB%E5%BD%95&filter=waiting", cookie.Value)
+		"&limit=20&per_group=3&q=%E7%99%BB%E5%BD%95&filter=running", cookie.Value)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	assert.Equal(t, agent_session_svc.AxisProject, stub.indexInput.Axis)
@@ -235,7 +235,7 @@ func TestSavedSessions_PassesEveryQueryParamThrough(t *testing.T) {
 	assert.Equal(t, 20, stub.indexInput.Limit)
 	assert.Equal(t, 3, stub.indexInput.PerGroup)
 	assert.Equal(t, "登录", stub.indexInput.Search)
-	assert.Equal(t, agent_session_svc.SessionFilterWaiting, stub.indexInput.Filter)
+	assert.Equal(t, agent_session_svc.SessionFilterRunning, stub.indexInput.Filter)
 }
 
 // 带 scope 时给的是这一组的行（不是组骨架），游标与 has_more 在顶层。
@@ -275,7 +275,7 @@ func TestSavedSessions_RejectsUnknownAxisAndFilter(t *testing.T) {
 	server := newMirrorTestServer(t, stub)
 	cookie := newSessionCookie(t, 7)
 
-	for _, query := range []string{"?axis=banana", "?filter=banana"} {
+	for _, query := range []string{"?axis=banana", "?filter=banana", "?filter=waiting"} {
 		resp := get(t, server.URL+"/v1/agent-sessions"+query, cookie.Value)
 		assert.NotEqual(t, http.StatusOK, resp.StatusCode, "query %s 该被拒", query)
 	}

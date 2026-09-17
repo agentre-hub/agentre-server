@@ -41,7 +41,7 @@ type SavedSessionsRequest struct {
 	// Q 只按标题匹配（决策 8）：机器名 / Agent 名 / 项目名不参与，按它们找对话走
 	// 轴和组头那条正路。
 	Q      string `form:"q" binding:"omitempty,max=200"`
-	Filter string `form:"filter" binding:"omitempty,oneof=all running waiting unread"`
+	Filter string `form:"filter" binding:"omitempty,oneof=all running unread"`
 	// ConversationID 非空时走精确认领：不分组、不分页。conversation_id 全局唯一，
 	// 这条路至多命中一行（详情页按对话直取，决策 13）。
 	ConversationID string `form:"conversation_id" binding:"omitempty,uuid"`

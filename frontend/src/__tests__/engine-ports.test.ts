@@ -50,6 +50,7 @@ function ports() {
   return createBrowserEngineSettingsPorts({
     noOnlineAgentredReason: "No online agentred is available.",
     builtinUnsupportedReason: "Built-in backends cannot be created here.",
+    unsupportedBackendReason: "This backend type is unavailable here.",
     deviceRequiredReason: "Pick the device this backend runs on.",
     deviceOfflineReason: "That device is offline, so nothing was probed.",
     deviceUnknownReason: "That device is no longer in this account.",
@@ -516,6 +517,8 @@ describe("browser engine settings ports", () => {
       items: [
         { backendType: "claudecode", status: "recognized" },
         { backendType: "codex", status: "unchecked" },
+        // daemon 可以比 browser host 新；未声明的类型必须在任何写入前被忽略。
+        { backendType: "hermes", status: "recognized" },
       ],
     });
 
@@ -656,6 +659,60 @@ describe("browser engine settings ports", () => {
       adapter.updateBackend(listed.id, { type: "claudecode", name: "x" }),
     ).rejects.toThrow("Pick the device this backend runs on.");
     expect(calls.length).toBe(before);
+  });
+
+  it("declares supported backend types and rejects Hermes writes before transport", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      if (path === "/v1/engine/backends") {
+        return {
+          backends: [
+            backendDTO({
+              sync_id: "backend-hermes",
+              name: "Hermes",
+              type: "hermes",
+              device_fingerprint: "desktop-a",
+            }),
+          ],
+        };
+      }
+      return backendDTO({
+        sync_id: "backend-hermes",
+        name: "Hermes",
+        type: "hermes",
+        device_fingerprint: "desktop-a",
+      });
+    });
+
+    const adapter = ports();
+    expect(adapter.supportedBackendTypes).toEqual([
+      "claudecode",
+      "codex",
+      "piagent",
+      "openclaw",
+    ]);
+    const [hermes] = await adapter.listBackends();
+    const unsupported = "This backend type is unavailable here.";
+
+    await expect(
+      adapter.createBackend({
+        type: "hermes",
+        name: "Hermes",
+        deviceId: "desktop-a",
+      }),
+    ).rejects.toThrow(unsupported);
+    await expect(
+      adapter.updateBackend(hermes.id, {
+        type: "hermes",
+        name: "Hermes",
+        deviceId: "desktop-a",
+      }),
+    ).rejects.toThrow(unsupported);
+    await expect(
+      adapter.testBackend!({ id: hermes.id, type: "", name: "" }),
+    ).rejects.toThrow(unsupported);
   });
 
   /**

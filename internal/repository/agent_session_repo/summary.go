@@ -147,12 +147,12 @@ const (
 	ProjectUnassigned
 )
 
-// AttentionFilter 是「这条对话此刻需不需要你，以及为什么」在 SQL 这一侧的表达。
-//
-// 取值与共享包 `@agentre-hub/agentre-ui` 的 `session-index/attention` 那族
-// `AttentionReason` **逐字对应**（决策 9 的三个 chip 是它的一个子集）。它从前叫
-// `LifecycleFilter`，但这个筛选问的从来不是生命周期：`waiting_for_input` 不在生命
-// 周期那条链上，而「未读」两列相比更与它无关。名字对不上判据的代价 2026-09-04 兑现
+// AttentionFilter 是索引筛选与 attention 判据在 SQL 侧共用的词汇。needs_attention /
+// error / unread 与共享包 `@agentre-hub/agentre-ui` 的 `session-index/attention` 那族
+// `AttentionReason` **逐字对应**；running 是公开索引的生命周期筛选，会与
+// needs_attention 重叠（waiting_for_input=true 的 running 会话仍属于运行中）。它从前叫
+// `LifecycleFilter`，但其余几档问的从来不是生命周期：`waiting_for_input` 不在生命周期
+// 那条链上，而「未读」两列相比更与它无关。名字对不上判据的代价 2026-09-04 兑现
 // 了一次——「未读」当时只写了 `last_message_at>last_read_at`，把在跑的、等你按的行
 // 一起数了进去，chip 上的数与列表里带「未读」记号的行对不上。
 //
@@ -164,8 +164,8 @@ const (
 	AttentionAny AttentionFilter = iota
 	// AttentionNeedsAttention = 「等你处理」：有待决的审批 / 提问挡在那里。
 	AttentionNeedsAttention
-	// AttentionRunning = 「运行中」：running **且不在等输入**。等你处理优先，
-	// 两个 chip 不能同时命中同一条。
+	// AttentionRunning = 「运行中」：完整的 running 生命周期集合。waiting_for_input
+	// 是独立的 attention 事实，不会把会话移出 running 生命周期。
 	AttentionRunning
 	// AttentionError = 「上一轮跑挂了、而且你还没看过」。已经看过的那次失败不再拦你。
 	//
@@ -384,9 +384,10 @@ func locationPairs(locations []SummaryLocation) [][]any {
 // （CountAttention）都从它出发，因此「筛出来的那一批」与「数出来的那个数」不可能
 // 分家——分页说 5 条、角标说 3 条正是判据写在两处才会有的事。
 //
-// 每一档都带着**比它强的那几档的否定**，顺序与共享包 `computeAttention` 的 if 链
-// 逐字一致（needs_attention > running > error > unread）。因此任意一行至多命中一档，
-// 几档相加不会重复计数。
+// needs_attention / error / unread 带着比它强的 attention 档位的否定，顺序与共享包
+// `computeAttention` 的 if 链逐字一致。running 是例外：它是公开索引的生命周期集合，
+// 可与 needs_attention 重叠。CountAttention 只统计 needs_attention + unread，因此这项
+// 重叠不会改变侧栏计数或制造重复相加。
 //
 // 两列相比（last_message_at>last_read_at）没有索引帮得上——索引只排得了单列的值。
 // 它跟在 user_id 那段扫描之后，与其余判据同一条路径。
@@ -395,7 +396,7 @@ func attentionExpr(f AttentionFilter) (string, []any, bool) {
 	case AttentionNeedsAttention:
 		return "waiting_for_input=?", []any{true}, true
 	case AttentionRunning:
-		return "waiting_for_input=? AND lifecycle_state=?", []any{false, relaywire.SessionLifecycleRunning}, true
+		return "lifecycle_state=?", []any{relaywire.SessionLifecycleRunning}, true
 	case AttentionError:
 		return "waiting_for_input=? AND lifecycle_state=? AND last_message_at>last_read_at",
 			[]any{false, relaywire.SessionLifecycleFailed}, true

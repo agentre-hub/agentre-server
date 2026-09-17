@@ -148,8 +148,6 @@ const DYNAMIC_KEY_PREFIXES = [
   // components/session/SendFailureBubble.tsx:
   //   t(`session.sendFailure.${failure.kind}.title`) / `.titleUnknown` / `.body`
   "session.sendFailure.",
-  // components/session/SessionIndex.tsx: t(`sessionIndex.filter.${option}`)
-  "sessionIndex.filter.",
   // pages/chat/ChatIndexPanel.tsx: t(`sessionIndex.saveFailed.${saveFailure.kind}`)
   "sessionIndex.saveFailed.",
   // pages/Settings.tsx: t(`settings.sections.${section}`) / t(`settings.tabs.${key}`)

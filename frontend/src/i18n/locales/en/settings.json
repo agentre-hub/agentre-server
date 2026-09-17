@@ -20,6 +20,7 @@
   "errors": {
     "noOnlineAgentred": "No online compute node is available. Start or reconnect one of your devices and try again.",
     "builtinUnsupported": "Built-in backends cannot be created in the browser console.",
+    "unsupportedBackend": "This backend type is not available in the browser console.",
     "deviceRequired": "Pick the device this backend runs on before saving.",
     "deviceOffline": "That device is offline right now, so nothing could be probed on it.",
     "deviceUnknown": "That device is no longer in this account. Pick another one."

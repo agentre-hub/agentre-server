@@ -17,8 +17,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/cago-frame/cago/pkg/i18n"
+
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
@@ -46,14 +49,14 @@ const (
 	AxisMachine SessionIndexAxis = "machine"
 )
 
-// SessionFilter 是索引上那几个筛选 chip。判据与前端 matchesSessionFilter 逐字一致：
-// 「等你处理」优先于「运行中」，两者不会同时命中同一条。
+// SessionFilter 是索引公开的三档筛选：全部 / 运行中 / 未读。运行中按完整
+// lifecycle_state=running 集合筛选；waiting_for_input 只影响 attention 呈现，不把
+// 会话移出运行生命周期。
 type SessionFilter string
 
 const (
 	SessionFilterAll     SessionFilter = ""
 	SessionFilterRunning SessionFilter = "running"
-	SessionFilterWaiting SessionFilter = "waiting"
 	// SessionFilterUnread = 「未读」：最后一次活动晚于这个账号最后一次读它。
 	// 与桌面端 attention-store 的 lastMessageAt > lastReadAt 同一条判据。
 	//
@@ -142,6 +145,11 @@ func parseIndexCursor(raw string) (agent_session_repo.SummaryCursor, error) {
 	if err != nil {
 		return agent_session_repo.SummaryCursor{}, fmt.Errorf("session index: malformed cursor %q: %w", raw, err)
 	}
+	// 非空游标一定来自一条真实行：旧数据允许最后活动时间为 0，但主键必须为正，
+	// 时间也不可能为负。接受 0.0 会把“坏游标”静默解释成第一页起点。
+	if u < 0 || i <= 0 {
+		return agent_session_repo.SummaryCursor{}, fmt.Errorf("session index: malformed cursor %q", raw)
+	}
 	return agent_session_repo.SummaryCursor{LastMessageAt: u, ID: i}, nil
 }
 
@@ -166,8 +174,6 @@ func baseQuery(in SessionIndexQuery) agent_session_repo.SummaryQuery {
 	switch in.Filter {
 	case SessionFilterRunning:
 		q.Attention = agent_session_repo.AttentionRunning
-	case SessionFilterWaiting:
-		q.Attention = agent_session_repo.AttentionNeedsAttention
 	case SessionFilterUnread:
 		q.Attention = agent_session_repo.AttentionUnread
 	case SessionFilterAll:
@@ -413,6 +419,12 @@ func (s *sessionReadSvc) SessionIndex(ctx context.Context, in SessionIndexQuery)
 	// 这一次读取里的每一处项目归属都从这一份名单来，它最多被查一遍。
 	locations := &projectLocationCache{svc: s, userID: in.UserID}
 
+	// 游标只有与 scope 一起才有意义；不带 scope 的请求是组骨架，没有一条连续页可接。
+	// 静默忽略会把调用方的坏分页请求伪装成一次成功的第一页读取。
+	if in.Cursor != "" && in.Scope == "" {
+		return SessionIndexPage{}, i18n.NewError(ctx, code.InvalidParameter)
+	}
+
 	// 按对话标识精确认领（决策 13）：要的不是一页，因此不分组、不排序也不限条数。
 	if in.ConversationID != "" {
 		rows, err := agent_session_repo.Summary().ListSummariesPage(
@@ -445,7 +457,7 @@ func (s *sessionReadSvc) scopedPage(
 	}
 	cursor, err := parseIndexCursor(in.Cursor)
 	if err != nil {
-		return SessionIndexPage{}, err
+		return SessionIndexPage{}, i18n.NewError(ctx, code.InvalidParameter)
 	}
 	total, err := agent_session_repo.Summary().CountSummaries(ctx, q)
 	if err != nil {

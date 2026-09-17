@@ -2,14 +2,17 @@ package agent_session_svc
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/cago-frame/cago/pkg/utils/httputils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 )
 
@@ -167,7 +170,7 @@ func TestSessionIndex_SearchAndFilterReachBothCountAndPage(t *testing.T) {
 	ctx, mSummary, _, _, svc := setupMirrorReadTest(t)
 
 	want := agent_session_repo.SummaryQuery{
-		UserID: 7, TitleLike: "登录", Attention: agent_session_repo.AttentionNeedsAttention,
+		UserID: 7, TitleLike: "登录", Attention: agent_session_repo.AttentionRunning,
 	}
 	mSummary.EXPECT().CountSummaries(ctx, want).Return(int64(2), nil)
 	mSummary.EXPECT().ListSummariesPage(ctx, agent_session_repo.SummaryPageQuery{
@@ -175,10 +178,18 @@ func TestSessionIndex_SearchAndFilterReachBothCountAndPage(t *testing.T) {
 	}).Return(nil, nil)
 
 	page, err := svc.SessionIndex(ctx, SessionIndexQuery{
-		UserID: 7, Axis: AxisTime, Search: "登录", Filter: SessionFilterWaiting,
+		UserID: 7, Axis: AxisTime, Search: "登录", Filter: SessionFilterRunning,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), page.Total)
+}
+
+// waiting 已不在公开三档筛选词汇里；即使内部调用方绕过 API 直接构造这个旧字面量，
+// 也不能悄悄把它继续解释成 needs_attention。
+func TestSessionIndex_DeprecatedWaitingFilterDoesNotMapToAttention(t *testing.T) {
+	got := baseQuery(SessionIndexQuery{UserID: 7, Filter: SessionFilter("waiting")})
+
+	assert.Equal(t, agent_session_repo.AttentionAny, got.Attention)
 }
 
 // 按对话标识精确认领（决策 13）：它要的不是一页，因此不分组、不限条数。
@@ -239,8 +250,23 @@ func TestSessionIndex_RejectsUnknownScopeAndMalformedCursor(t *testing.T) {
 	_, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisAgent, Scope: "banana:1"})
 	require.Error(t, err)
 
-	_, err = svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time", Cursor: "不是游标"})
+	_, err = svc.SessionIndex(ctx, SessionIndexQuery{
+		UserID: 7, Axis: AxisTime, Cursor: "1.1",
+	})
 	require.Error(t, err)
+	var noScopeErr *httputils.Error
+	require.True(t, errors.As(err, &noScopeErr))
+	assert.Equal(t, code.InvalidParameter, noScopeErr.Code)
+
+	for _, cursor := range []string{"不是游标", "-1.2", "0.0", "1.0"} {
+		_, err = svc.SessionIndex(ctx, SessionIndexQuery{
+			UserID: 7, Axis: AxisTime, Scope: "time", Cursor: cursor,
+		})
+		require.Error(t, err, "cursor %q must be rejected", cursor)
+		var httpErr *httputils.Error
+		require.True(t, errors.As(err, &httpErr))
+		assert.Equal(t, code.InvalidParameter, httpErr.Code)
+	}
 }
 
 // scope 必须属于当前的轴：machine 的组配 agent 轴是调用方拼错了 URL，如实报错，

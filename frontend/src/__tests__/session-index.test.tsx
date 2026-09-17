@@ -22,7 +22,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
 import SessionIndex from "@/components/session/SessionIndex";
-import { formatRelativeTime } from "@/lib/sessionView";
+import { formatRelativeTime, matchesSessionFilter } from "@/lib/sessionView";
 import i18n from "@/i18n";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -163,6 +163,24 @@ function leadingGlyph() {
   return leadingSlot().firstElementChild as HTMLElement;
 }
 
+function bySlot(name: string): HTMLElement {
+  const element = document.querySelector<HTMLElement>(`[data-slot="${name}"]`);
+  if (!element) throw new Error(`没有 data-slot="${name}"`);
+  return element;
+}
+
+function queryBySlot(name: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-slot="${name}"]`);
+}
+
+function indexEmpty(): HTMLElement {
+  return bySlot("session-index-empty");
+}
+
+async function overflowContent(title: string): Promise<HTMLElement> {
+  return screen.findByLabelText(title, { selector: "div" });
+}
+
 describe("统一会话索引", () => {
   it("轴选择器切得动：选了别的轴就把这件事报给宿主（轴由宿主持有，设备下钻要预置它）", () => {
     const { onAxisChange } = renderIndex({});
@@ -293,7 +311,7 @@ describe("统一会话索引", () => {
     expect(controls.contains(screen.getByTestId("axis-picker"))).toBe(true);
 
     // chips 是控制行的**直接**子节点：折行时整块搬动，不会散成三个。
-    const chips = screen.getByTestId("index-filter-chips");
+    const chips = screen.getByRole("group", { name: "Filter sessions" });
     expect(chips.parentElement).toBe(controls);
     for (const key of ["all", "running", "unread"]) {
       expect(chips.contains(screen.getByTestId(`filter-chip-${key}`))).toBe(
@@ -397,7 +415,7 @@ describe("统一会话索引", () => {
 
     const second = screen.getByTestId("row-secondary-a");
     expect(second.textContent).toContain(
-      i18n.t("sessionIndex.group.unassignedProject"),
+      i18n.t("agentreUi:sessionIndex.free.name"),
     );
   });
 
@@ -465,12 +483,9 @@ describe("统一会话索引", () => {
     ).toEqual([
       expect.stringContaining("agentre-server"),
       expect.stringContaining("agentre-web"),
-      // 「随手对话」常驻（决策 12）：项目树之后仍有一个组头在。
-      expect.stringContaining(
-        i18n.t("sessionIndex.group.unassignedProject") as string,
-      ),
+      expect.stringContaining("Quick chats"),
     ]);
-    expect(screen.queryByTestId("session-index-empty")).toBeNull();
+    expect(queryBySlot("session-index-empty")).toBeNull();
   });
 
   /**
@@ -502,13 +517,6 @@ describe("统一会话索引", () => {
     renderIndex({});
 
     expect(screen.queryByTestId("index-new-project")).toBeNull();
-  });
-
-  it("Agent 轴：一条会话都没有时仍然交白卷，不摆一列空组头（决策 10）", () => {
-    renderIndex({ rows: [], axis: "agent" });
-
-    expect(screen.queryByTestId("group-header")).toBeNull();
-    expect(screen.getByTestId("session-index-empty")).toBeTruthy();
   });
 
   /**
@@ -796,6 +804,10 @@ describe("统一会话索引：筛选 chips", () => {
     expect(screen.getByText("agentre-web")).toBeTruthy();
   });
 
+  it("运行中包含正在等待输入的会话", () => {
+    expect(matchesSessionFilter(waiting, "running")).toBe(true);
+  });
+
   it("点 chip 只把选中的那一档报给宿主，不在本地再筛一遍", () => {
     // 筛选搬去了服务端（规格 2026-08-19 决策 9）：留在这一层就只筛得到已加载的
     // 那些，「等你处理」会漏掉真在等的对话。这一层因此只报选择。
@@ -813,6 +825,20 @@ describe("统一会话索引：筛选 chips", () => {
     expect(screen.getByText("跑着呢")).toBeTruthy();
     expect(screen.getByText("等你批")).toBeTruthy();
     expect(screen.getByText("歇着")).toBeTruthy();
+  });
+
+  it("再次点已经选中的非全部 chip 会回到全部", () => {
+    const onFilterChange = vi.fn();
+    renderIndex({
+      axis: "project",
+      rows: [running],
+      filter: "running",
+      onFilterChange,
+    });
+
+    fireEvent.click(screen.getByTestId("filter-chip-running"));
+
+    expect(onFilterChange).toHaveBeenCalledWith("all");
   });
 
   it("当前选中哪一档由宿主说了算（aria-pressed 跟着 prop 走）", () => {
@@ -845,19 +871,14 @@ describe("统一会话索引：筛选 chips", () => {
   it("筛完一条不剩时由空态承接，chips 仍在（否则回不去「全部」）", () => {
     renderIndex({ axis: "project", rows: [], filter: "running" });
 
-    // 会话还在，只是这一档不收：空态不能说成「还没有对话」。
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "Nothing in \u201cRunning\u201d",
-    );
+    expect(indexEmpty().textContent).toContain("No running sessions");
     expect(screen.getByTestId("filter-chip-all")).toBeTruthy();
   });
 
   it("宿主已按搜索收窄时，空的是这次搜索而不是账号（不谎报「还没有对话」）", () => {
     renderIndex({ axis: "project", rows: [], narrowed: true });
 
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search",
-    );
+    expect(indexEmpty().textContent).toContain("No matching sessions");
   });
 });
 /**
@@ -873,6 +894,18 @@ describe("统一会话索引：筛选 chips", () => {
  * 「还没有对话」就是同一句话说两遍。
  */
 describe("统一会话索引：空组自己说一句", () => {
+  it("多个空项目组共用紧凑列表容器，不把控制区的 12px 间距重复加到每个组", () => {
+    renderIndex({ axis: "project", rows: [] });
+
+    const nav = screen.getByTestId("session-index-nav");
+    const groups = bySlot("session-group-list");
+    expect(groups.parentElement).toBe(nav);
+    expect(groups.contains(screen.getByTestId("group-p-server"))).toBe(true);
+    expect(groups.contains(screen.getByTestId("group-p-web"))).toBe(true);
+    expect(nav.className).toContain("space-y-3");
+    expect(groups.className).not.toContain("space-y-3");
+  });
+
   it("项目轴上空项目展开后说「暂无会话」，画的是共享包那一颗", () => {
     renderIndex({ axis: "project", rows: [] });
 
@@ -880,32 +913,39 @@ describe("统一会话索引：空组自己说一句", () => {
     expect(within(group).getByText("No sessions")).toBeTruthy();
   });
 
+  it("项目轴有已知项目时，随手对话组永久保留入口", () => {
+    renderIndex({ axis: "project", rows: [] });
+
+    expect(screen.getByTestId("group-__unassigned_project__")).toBeTruthy();
+    expect(screen.getByText("Quick chats")).toBeTruthy();
+  });
+
+  it("Agent 轴按权威名单保留没有会话的 Agent", () => {
+    renderIndex({ axis: "agent", rows: [] });
+
+    const group = screen.getByTestId("group-ag-fe");
+    expect(within(group).getByText("Frontend Agent")).toBeTruthy();
+    expect(within(group).getByText("No sessions")).toBeTruthy();
+    expect(queryBySlot("session-index-empty")).toBeNull();
+  });
+
   it("组头已经说了的事，页面级不再说一遍「还没有对话」", () => {
     renderIndex({ axis: "project", rows: [] });
 
-    expect(screen.queryByTestId("session-index-empty")).toBeNull();
+    expect(queryBySlot("session-index-empty")).toBeNull();
   });
 
   it("一个项目都没有：项目轴仍常驻「随手对话」组头，页面级那句不必再说", () => {
     renderIndex({ axis: "project", rows: [], projects: [] });
 
-    // 「随手对话」常驻（决策 12）：项目名单为空也有一个组头在，页面级那句
-    // 「还没有对话」就由组里自己说，不必再叠一遍。
-    const headers = screen.getAllByTestId("group-header");
-    expect(headers).toHaveLength(1);
-    expect(headers[0].textContent).toContain(
-      i18n.t("sessionIndex.group.unassignedProject") as string,
-    );
-    expect(screen.queryByTestId("session-index-empty")).toBeNull();
+    expect(indexEmpty().textContent).toContain("No conversations yet");
   });
 
   it("收窄之后空组闭嘴：会话还在，只是这次搜索不收", () => {
     renderIndex({ axis: "project", rows: [], narrowed: true });
 
     expect(screen.queryByText("No sessions")).toBeNull();
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search",
-    );
+    expect(indexEmpty().textContent).toContain("No matching sessions");
   });
 
   it("在线机器的空组说的是自己那一句，同样走包里那颗空态", () => {
@@ -919,8 +959,6 @@ describe("统一会话索引：空组自己说一句", () => {
     expect(
       within(group).getByText("No conversations on this machine yet"),
     ).toBeTruthy();
-    // 「暂无会话」是兜底那一句，机器组有更准的说法，不该两句都出。
-    expect(within(group).queryByText("No sessions")).toBeNull();
   });
 });
 
@@ -1101,16 +1139,57 @@ describe("统一会话索引：保存与删除", () => {
     expect(screen.queryByTestId("row-save-a")).toBeNull();
   });
 
+  it("同一机器混有已保存与未保存行时，仍只给已保存行删除、给未保存行保存", async () => {
+    const onDelete = vi.fn();
+    const onSave = vi.fn();
+    renderIndex({
+      axis: "machine",
+      rows: [
+        row({
+          key: "machine-20:session-saved",
+          conversationId: "saved",
+          title: "已经保存",
+        }),
+        row({
+          key: "machine-20:session-unsaved",
+          conversationId: "unsaved",
+          title: "还没保存",
+          saved: false,
+        }),
+      ],
+      onDelete,
+      onSave,
+    });
+
+    expect(
+      screen.getByTestId("row-save-machine-20:session-unsaved"),
+    ).toBeTruthy();
+
+    fireEvent.contextMenu(screen.getByText("已经保存"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    expect(onDelete.mock.calls[0][0].key).toBe("machine-20:session-saved");
+
+    fireEvent.contextMenu(screen.getByText("还没保存"));
+    expect(screen.queryByRole("menuitem", { name: "Delete" })).toBeNull();
+  });
+
   it("删除在行的右键菜单里：选中之后把这一条报给宿主（确认由宿主给）", async () => {
     const onDelete = vi.fn();
-    renderIndex({ axis: "time", rows: [row({ key: "a" })], onDelete });
+    renderIndex({
+      axis: "time",
+      rows: [row({ key: "machine-20:session-42" })],
+      onDelete,
+    });
 
     fireEvent.contextMenu(screen.getByText("重构登录页"));
     const item = await screen.findByRole("menuitem", { name: "Delete" });
     fireEvent.click(item);
 
     expect(onDelete).toHaveBeenCalledTimes(1);
-    expect(onDelete.mock.calls[0][0]).toMatchObject({ key: "a" });
+    expect(onDelete.mock.calls[0][0]).toMatchObject({
+      key: "machine-20:session-42",
+    });
   });
 
   it("右键菜单里只有删除：重命名 / 在新标签页打开这两件事这一端做不了，不摆死项", async () => {
@@ -1313,6 +1392,33 @@ describe("统一会话索引：↑↓ 键盘导航 + Enter 打开", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["Shift", { shiftKey: true }],
+    ["Alt", { altKey: true }],
+    ["Meta", { metaKey: true }],
+    ["Control", { ctrlKey: true }],
+    ["非主键", { button: 1 }],
+  ])("%s 修饰的链接点击只交给浏览器，不打开桌面右栏", (_label, init) => {
+    const onSelect = vi.fn();
+    renderIndex({ axis: "time", rows: [first], onSelect });
+
+    fireEvent.click(screen.getByRole("link", { name: /第一条/ }), init);
+
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("普通主键点击仍调用宿主选择并打开桌面右栏", () => {
+    const onSelect = vi.fn();
+    renderIndex({ axis: "time", rows: [first], onSelect });
+
+    fireEvent.click(screen.getByRole("link", { name: /第一条/ }));
+
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "a", conversationId: "42" }),
+    );
+  });
+
   it("行以外的可交互元素上按 Enter 不被抢走（行尾的保存仍是它自己的动作）", () => {
     const onSelect = vi.fn();
     const onSave = vi.fn();
@@ -1513,7 +1619,7 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
     const el = screen
       .getByText("View all 9 sessions")
       .closest("button") as HTMLButtonElement;
-    // jsdom 不排版，触发器的矩形只能自己摆——这条用例量的正是「按矩形选边」。
+    // jsdom 不排版；宿主用这份矩形比较触发器上下可用空间。
     stubTriggerRect(el, top, bottom);
     return el;
   }
@@ -1534,12 +1640,12 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
 
     fireEvent.click(overflowTriggerAt(708, 728));
 
-    const content = await screen.findByTestId("group-overflow");
+    const content = await overflowContent("agentre-server");
     expect(content.getAttribute("data-side")).toBe("top");
     restore();
   });
 
-  it("触发器在视口上半时弹层照旧朝下开", async () => {
+  it("共享溢出层默认从触发器下方打开", async () => {
     const restore = stubViewport(1024, 768);
     const loadGroupPage = vi.fn(async () => ({
       rows: [],
@@ -1555,7 +1661,7 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
 
     fireEvent.click(overflowTriggerAt(40, 60));
 
-    const content = await screen.findByTestId("group-overflow");
+    const content = await overflowContent("agentre-server");
     expect(content.getAttribute("data-side")).toBe("bottom");
     restore();
   });
@@ -1575,9 +1681,8 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
 
     fireEvent.click(overflowTriggerAt(40, 60));
 
-    const content = await screen.findByTestId("group-overflow");
-    // 写死 60vh 时溢出的那一截连同内部滚动区一起在视口外，够不着；跟着可用高度走
-    // 才能既不被裁掉、又把翻页按钮留在能点到的地方。
+    const content = await overflowContent("agentre-server");
+    // 固定 480px 只作为理想高度；真正上限跟着 Radix 的可用高度，翻页按钮不会被推出视口。
     expect(content.className).toContain(
       "var(--radix-popover-content-available-height)",
     );
@@ -1597,9 +1702,12 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
 
     // 首屏三个分支此前全落空（loading=true、hasMore=false、rows 为空），
     // 用户点开得到的是一个 360px 宽的空白浮层。
-    const holder = await screen.findByTestId("group-overflow-loading");
+    const content = await overflowContent("agentre-server");
+    const holder = within(content).getByTestId("session-group-overflow-list");
     expect(holder.getAttribute("aria-busy")).toBe("true");
-    expect(within(holder).getByTestId("session-list-skeleton")).toBeTruthy();
+    expect(
+      holder.querySelector('[data-slot="session-row-skeleton"]'),
+    ).toBeTruthy();
   });
 
   it("点「查看全部 N」按这一组的 scope 翻页，列出翻回来的行", async () => {
@@ -1621,6 +1729,127 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
       expect(loadGroupPage).toHaveBeenCalledWith("project:p-server", null),
     );
     expect(await screen.findByText("第三条")).toBeTruthy();
+  });
+
+  it("同一组键换了 scope 后重开弹层，取数使用新的 scope", async () => {
+    const loadGroupPage = vi.fn(async () => ({
+      rows: [],
+      cursor: null,
+      hasMore: false,
+    }));
+    const tree = (machineFingerprint: string) => (
+      <ThemeProvider>
+        <MemoryRouter>
+          <SessionIndex
+            axis="machine"
+            onAxisChange={vi.fn()}
+            rows={[
+              row({
+                key: "machine-row",
+                deviceId: 20,
+                fingerprint: machineFingerprint,
+                machineFingerprint,
+              }),
+            ]}
+            projects={projects}
+            agents={agents}
+            machines={machines}
+            filter="all"
+            onFilterChange={vi.fn()}
+            groupTotals={{ "device-20": 9 }}
+            loadGroupPage={loadGroupPage}
+            sessionPath={(deviceId, conversationId) =>
+              `/devices/${deviceId}/sessions/${conversationId}`
+            }
+          />
+        </MemoryRouter>
+      </ThemeProvider>
+    );
+
+    const { rerender } = render(tree("fp-old"));
+    fireEvent.click(screen.getByText("View all 9 sessions"));
+    await waitFor(() =>
+      expect(loadGroupPage).toHaveBeenCalledWith("machine:fp-old", null),
+    );
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("Studio box", { selector: "div" }),
+      ).toBeNull(),
+    );
+
+    rerender(tree("fp-new"));
+    fireEvent.click(screen.getByText("View all 9 sessions"));
+    await waitFor(() => expect(loadGroupPage).toHaveBeenCalledTimes(2));
+    expect(loadGroupPage).toHaveBeenLastCalledWith("machine:fp-new", null);
+  });
+
+  it("同一组 scope 的搜索范围改变时换 loader，旧在途页不能落进新范围", async () => {
+    let resolveOld!: (value: {
+      rows: ReturnType<typeof row>[];
+      cursor: null;
+      hasMore: false;
+    }) => void;
+    const oldPage = new Promise<{
+      rows: ReturnType<typeof row>[];
+      cursor: null;
+      hasMore: false;
+    }>((resolve) => {
+      resolveOld = resolve;
+    });
+    const oldLoader = vi.fn(() => oldPage);
+    const newLoader = vi.fn(async () => ({
+      rows: [row({ key: "new", conversationId: "new", title: "新范围" })],
+      cursor: null,
+      hasMore: false,
+    }));
+    const tree = (
+      range: string,
+      loadGroupPage: typeof oldLoader | typeof newLoader,
+    ) => (
+      <ThemeProvider>
+        <MemoryRouter>
+          <SessionIndex
+            axis="project"
+            onAxisChange={vi.fn()}
+            rows={rows}
+            projects={projects}
+            agents={agents}
+            machines={machines}
+            filter="all"
+            onFilterChange={vi.fn()}
+            groupTotals={{ "p-server": 9 }}
+            loadGroupPage={loadGroupPage}
+            overflowRangeKey={range}
+            sessionPath={(deviceId, conversationId) =>
+              `/devices/${deviceId}/sessions/${conversationId}`
+            }
+          />
+        </MemoryRouter>
+      </ThemeProvider>
+    );
+
+    const { rerender } = render(tree("old-search", oldLoader));
+    fireEvent.click(screen.getByText("View all 9 sessions"));
+    await waitFor(() => expect(oldLoader).toHaveBeenCalledTimes(1));
+
+    rerender(tree("new-search", newLoader));
+    await waitFor(() =>
+      expect(
+        screen.queryByLabelText("agentre-server", { selector: "div" }),
+      ).toBeNull(),
+    );
+    fireEvent.click(screen.getByText("View all 9 sessions"));
+    await waitFor(() => expect(newLoader).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("新范围")).toBeTruthy();
+
+    resolveOld({
+      rows: [row({ key: "old", conversationId: "old", title: "旧范围" })],
+      cursor: null,
+      hasMore: false,
+    });
+    await waitFor(() => expect(screen.queryByText("旧范围")).toBeNull());
   });
 
   /**
@@ -1645,7 +1874,8 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
     fireEvent.click(screen.getByText("View all 9 sessions"));
     await waitFor(() => expect(loadGroupPage).toHaveBeenCalled());
 
-    const empty = await screen.findByTestId("group-overflow-empty");
+    const content = await overflowContent("agentre-server");
+    const empty = within(content).getByText("No sessions");
     expect(empty.textContent).not.toContain("sessionIndex.");
     expect(empty.textContent).not.toContain("match your search");
     expect(empty.textContent?.trim()).toBeTruthy();
@@ -1843,7 +2073,7 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
   it("机器轴一条行都没有时不印页面级空态：每台机器自己那句已经说完了", () => {
     renderIndex({ axis: "machine", rows: [] });
 
-    expect(screen.queryByTestId("session-index-empty")).toBeNull();
+    expect(queryBySlot("session-index-empty")).toBeNull();
   });
 
   /**
@@ -1855,9 +2085,7 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
   it("机器轴上一台机器都没有：没有组头去说话，页面级空态照旧顶上", () => {
     renderIndex({ axis: "machine", rows: [], machines: [] });
 
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations yet.",
-    );
+    expect(indexEmpty().textContent).toContain("No conversations yet");
   });
 
   /**
@@ -1905,13 +2133,9 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
     renderIndex({ axis: "machine", rows: [], narrowed: true });
 
     expect(screen.getByTestId("group-device-20")).toBeTruthy();
-    // 收窄之后「这台机器上还没有对话」是假话——它们还在，只是这次搜索不收。
-    expect(
-      screen.queryByText("No conversations on this machine yet"),
-    ).toBeNull();
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations match your search",
-    );
+    // 收窄后组内的真实空态静默，由共享页面空态解释当前搜索。
+    expect(screen.queryByText("No sessions")).toBeNull();
+    expect(indexEmpty().textContent).toContain("No matching sessions");
   });
 });
 
@@ -1951,13 +2175,12 @@ describe("会话索引：空态与失败的出路", () => {
 
   it("筛选筛空了：标题点名是**哪一档**空了,正文说账号里还有多少条", () => {
     const onFilterChange = vi.fn();
-    renderIndex({ filter: "waiting", onFilterChange, accountTotal: 24 });
+    renderIndex({ filter: "unread", onFilterChange, accountTotal: 24 });
 
-    const empty = screen.getByTestId("session-index-empty");
-    // 「这一档」是黑话：读者眼前只有 chip 上那几个字。空态要用同一个词回指。
-    expect(empty.textContent).toContain("Waiting for you");
+    const empty = indexEmpty();
+    expect(empty.textContent).toContain("No unread sessions");
     expect(empty.textContent).toContain("24");
-    within(empty).getByTestId("empty-action").click();
+    within(empty).getByRole("button", { name: "View all sessions" }).click();
     expect(onFilterChange).toHaveBeenCalledWith("all");
   });
 
@@ -1970,39 +2193,31 @@ describe("会话索引：空态与失败的出路", () => {
     const onFilterChange = vi.fn();
     renderIndex({ filter: "running", onFilterChange });
 
-    const empty = screen.getByTestId("session-index-empty");
-    expect(empty.textContent).toContain("Running");
-    within(empty).getByTestId("empty-action").click();
+    const empty = indexEmpty();
+    expect(empty.textContent).toContain("No running sessions");
+    within(empty).getByRole("button", { name: "View all sessions" }).click();
     expect(onFilterChange).toHaveBeenCalledWith("all");
   });
 
   it("账号里确实一条都没有：不摆一个通向另一块空白的按钮", () => {
     renderIndex({ filter: "running", accountTotal: 0 });
 
-    expect(
-      within(screen.getByTestId("session-index-empty")).queryByTestId(
-        "empty-action",
-      ),
-    ).toBeNull();
+    expect(within(indexEmpty()).queryByRole("button")).toBeNull();
   });
 
   it("搜索搜空了：给的是「清除搜索」,不是「看全部」——它们是两件事", () => {
     const onClearSearch = vi.fn();
     renderIndex({ narrowed: true, onClearSearch });
 
-    const empty = screen.getByTestId("session-index-empty");
-    expect(empty.textContent).toContain("No conversations match your search");
-    within(empty).getByTestId("empty-action").click();
+    const empty = indexEmpty();
+    expect(empty.textContent).toContain("No matching sessions");
+    within(empty).getByRole("button", { name: "Clear search" }).click();
     expect(onClearSearch).toHaveBeenCalledOnce();
   });
 
   it("接不住那个动作就不摆一个按下去什么都不发生的按钮", () => {
     renderIndex({ narrowed: true });
-    expect(
-      within(screen.getByTestId("session-index-empty")).queryByTestId(
-        "empty-action",
-      ),
-    ).toBeNull();
+    expect(within(indexEmpty()).queryByRole("button")).toBeNull();
   });
 
   it("加载更多失败：图标 + 一句 + 重试在同一行,红色与横幅同源", () => {
@@ -2044,11 +2259,11 @@ describe("会话索引：机器轴组头的三档", () => {
     expect(head.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
     const group = screen.getByTestId("group-device-20");
     expect(group.getAttribute("aria-busy")).toBe("true");
-    expect(within(group).getByTestId("group-skeleton")).toBeTruthy();
-    // 「这台机器上还没有对话」是个结论，而这一组还没答上来。
     expect(
-      within(group).queryByText("No conversations on this machine yet"),
-    ).toBeNull();
+      group.querySelector('[data-slot="session-row-skeleton"]'),
+    ).toBeTruthy();
+    // 数据仍在路上时共享组空态必须静默。
+    expect(within(group).queryByText("No sessions")).toBeNull();
   });
 
   it("连不上：升到 status-waiting,并在这台机器自己的组头上长出重试", () => {

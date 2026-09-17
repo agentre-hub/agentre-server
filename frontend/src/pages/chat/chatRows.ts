@@ -320,10 +320,28 @@ export function toMachineRows(input: {
     // 空 origin = 「这条连接的这一端」，也就是本浏览器（见 machineRowOrigin）。
     const origin = machineRowOrigin(s, input.device, input.localFingerprint);
     const mirroredRow = savedByKey.get(rowKey(s.conversationId));
-    // 账号里已经有的那条：标出来，并把只有服务端判得出的项目归属带上（决策 12）。
-    const row = mirroredRow
-      ? { ...input.fromMirrorRow(mirroredRow), deviceId: input.device.id }
-      : input.fromMachineRow(input.device, s, input.localFingerprint);
+    const machineRow = input.fromMachineRow(
+      input.device,
+      s,
+      input.localFingerprint,
+    );
+    // 机器轴问的是「这台机器此刻有什么」，所以生命周期、等待状态、标题与活动时间
+    // 都以 daemon 的实时快照为准。账号镜像只补它独有的能力和归属；否则两边同步
+    // 窗口里会把 daemon 已 running 的行按镜像 idle 丢掉，或反过来误留旧 running。
+    const mirrorRow = mirroredRow
+      ? input.fromMirrorRow(mirroredRow)
+      : undefined;
+    const row = mirrorRow
+      ? {
+          ...machineRow,
+          projectSyncId: mirrorRow.projectSyncId,
+          // 老 daemon 的摘要可能不带最后活动时间；只有它没报告时才退回镜像。
+          // 非零值属于 daemon 权威快照，不能被同步窗口里的镜像时间覆盖。
+          updatedAt: machineRow.updatedAt || mirrorRow.updatedAt,
+          lastReadAt: mirrorRow.lastReadAt,
+          saved: true,
+        }
+      : machineRow;
     // 账号身份仍是 origin + session；但机器轴会让多台机器各自报告同一条
     // 会话。渲染/键盘导航的行身份还必须包含报告机器，否则两行会共用一个
     // React key 和 data-nav-target，ArrowDown 永远把焦点送回第一行。

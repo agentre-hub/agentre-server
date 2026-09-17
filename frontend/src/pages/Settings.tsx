@@ -63,6 +63,7 @@ export default function Settings() {
       createBrowserEngineSettingsPorts({
         noOnlineAgentredReason: t("settings.errors.noOnlineAgentred"),
         builtinUnsupportedReason: t("settings.errors.builtinUnsupported"),
+        unsupportedBackendReason: t("settings.errors.unsupportedBackend"),
         deviceRequiredReason: t("settings.errors.deviceRequired"),
         deviceOfflineReason: t("settings.errors.deviceOffline"),
         deviceUnknownReason: t("settings.errors.deviceUnknown"),

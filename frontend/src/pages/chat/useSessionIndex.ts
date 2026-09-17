@@ -84,6 +84,8 @@ export interface SessionIndexData {
   unreadTotal: number;
   /** 这一次取数成功过没有。 */
   loaded: boolean;
+  /** 当前范围的账号镜像尚未完成；旧范围不能参与机器快照 reconciliation。 */
+  rangePending: boolean;
   /** 这一次取数的错。设备名单那一路取数失败也落在同一条横幅上，因此可写。 */
   loadError: unknown;
   setLoadError: (err: unknown) => void;
@@ -215,6 +217,9 @@ export function useSessionIndex({
   const [accountTotal, setAccountTotal] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<unknown>(null);
+  const [loadErrorRangeKey, setLoadErrorRangeKey] = useState<string | null>(
+    null,
+  );
   /** 第一次保存的说明弹层挡着的那一条（确认之后才真的写）。 */
   const [pendingSave, setPendingSave] = useState<MirrorIndexRow | null>(null);
   /** 删除确认挡着的那一条。 */
@@ -252,8 +257,14 @@ export function useSessionIndex({
     (extra?: Record<string, string>) => {
       const params = new URLSearchParams({ axis });
       if (axis === "machine") params.set("per_group", MIRROR_MAX_PER_GROUP);
-      if (debouncedSearch) params.set("q", debouncedSearch);
-      if (filter !== "all") params.set("filter", filter);
+      if (debouncedSearch && axis !== "machine") {
+        params.set("q", debouncedSearch);
+      }
+      // 机器轴的生命周期来自 daemon 实时快照；账号镜像只补 saved、last_read_at
+      // 与项目归属。按镜像生命周期先筛会让两侧短暂不同步时漏行或误列。
+      if (axis !== "machine" && filter !== "all") {
+        params.set("filter", filter);
+      }
       for (const [k, v] of Object.entries(extra ?? {})) params.set(k, v);
       return params;
     },
@@ -274,7 +285,12 @@ export function useSessionIndex({
    * 一次、位置跟着弹回顶上 —— 正是「等回复的时候界面自己在重搭」。
    */
   const appliedRangeRef = useRef<string | null>(null);
+  const [appliedRangeKey, setAppliedRangeKey] = useState<string | null>(null);
   const rangeKey = `${axis}|${debouncedSearch}|${filter}`;
+  // pending 必须与这一次 render 的范围同步，不能等 passive effect 再补一拍；否则
+  // 新控件会短暂配上旧行，A→B→A 也可能被 B 留下的布尔状态永久卡住。
+  const rangePending = appliedRangeKey !== rangeKey;
+  const visibleLoadError = loadErrorRangeKey === rangeKey ? loadError : null;
   /**
    * 在这一范围里往下翻过没有。只有翻过的才需要护住游标 —— 没翻过时「还有没有
    * 下一页」本来就该以这一遍第一页的说法为准，护着一个旧游标只会留下一颗翻出
@@ -300,17 +316,68 @@ export function useSessionIndex({
         filter: "unread",
         per_group: "1",
       });
-      if (debouncedSearch) unreadParams.set("q", debouncedSearch);
+      if (debouncedSearch && axis !== "machine") {
+        unreadParams.set("q", debouncedSearch);
+      }
+      const pagePromise = api<IndexResponse>(
+        `/v1/agent-sessions?${rangeParams().toString()}`,
+      ).then(async (page) => {
+        if (axis !== "machine") return page;
+
+        // 机器清单与账号镜像的排序和生命周期来自不同快照。无论选了哪个 chip，
+        // 都要补齐服务端返回的镜像组，保证 daemon 后页也能正确识别 saved/read/project。
+        // 设备名单不能参与这条请求的身份：presence 更新只该重取设备本身。
+        const groups = await Promise.all(
+          (page.groups ?? []).map(async (group) => {
+            const items = [...(group.items ?? [])];
+            let cursor = group.cursor ?? "";
+            let hasMore = !!group.has_more;
+            const requestedCursors = new Set<string>();
+            while (hasMore) {
+              if (!cursor || requestedCursors.has(cursor)) {
+                throw new Error(`invalid mirror cursor for ${group.scope}`);
+              }
+              if (!alive()) return group;
+              const requestedCursor = cursor;
+              requestedCursors.add(requestedCursor);
+              const params = rangeParams({
+                scope: group.scope,
+                cursor: requestedCursor,
+              });
+              const next = await api<IndexResponse>(
+                `/v1/agent-sessions?${params.toString()}`,
+              );
+              if (!alive()) return group;
+              items.push(...(next.items ?? []));
+              hasMore = !!next.has_more;
+              cursor = next.cursor ?? "";
+            }
+            return {
+              ...group,
+              items,
+              cursor: undefined,
+              has_more: false,
+            };
+          }),
+        );
+        return { ...page, groups };
+      });
+      const accountTotalPromise =
+        !debouncedSearch && filter === "all"
+          ? pagePromise
+          : api<IndexResponse>("/v1/agent-sessions?axis=time&per_group=1");
       Promise.all([
-        api<IndexResponse>(`/v1/agent-sessions?${rangeParams().toString()}`),
+        pagePromise,
         api<IndexResponse>(`/v1/agent-sessions?${unreadParams.toString()}`),
+        accountTotalPromise,
       ])
-        .then(([page, unread]) => {
+        .then(([page, unread, account]) => {
           if (!alive()) return;
           const groups = page.groups ?? [];
           setIndexGroups(groups);
           const rangeChanged = appliedRangeRef.current !== rangeKey;
           appliedRangeRef.current = rangeKey;
+          setAppliedRangeKey(rangeKey);
           if (rangeChanged) {
             // 换范围：翻页那一套整份作废，位置回到起点。
             setAppended([]);
@@ -328,8 +395,7 @@ export function useSessionIndex({
               prev.filter((row) => !fresh.has(rowKey(row.conversation_id))),
             );
           }
-          if (!debouncedSearch && filter === "all")
-            setAccountTotal(page.total ?? 0);
+          setAccountTotal(account.total ?? 0);
           setOptimisticSaved([]);
           setOptimisticRemoved([]);
           setOptimisticRead(new Map());
@@ -350,9 +416,24 @@ export function useSessionIndex({
           // 网络抖动之后它会挂在一份**正确**的列表上方直到整页刷新
           // （设备页的 applyList 早就是这么写的）。
           setLoadError(null);
+          setLoadErrorRangeKey(null);
         })
         .catch((e: unknown) => {
-          if (alive()) setLoadError(e);
+          if (!alive()) return;
+          if (appliedRangeRef.current !== rangeKey) {
+            // 新范围没能成为已应用范围：旧组、旧追加页和旧游标都不能挂在新控件下。
+            // 同范围的后台刷新失败不走这里，用户正在看的稳定结果仍然保留。
+            setIndexGroups([]);
+            setAppended([]);
+            setNextCursor(null);
+            setLoadMoreFailed(false);
+            pagedRef.current = false;
+            setOptimisticSaved([]);
+            setOptimisticRemoved([]);
+            setOptimisticRead(new Map());
+          }
+          setLoadErrorRangeKey(rangeKey);
+          setLoadError(e);
         });
     },
     [rangeParams, debouncedSearch, filter, axis, indexNonce, rangeKey],
@@ -659,7 +740,8 @@ export function useSessionIndex({
     accountTotal,
     unreadTotal,
     loaded,
-    loadError,
+    rangePending,
+    loadError: visibleLoadError,
     setLoadError,
     refetch,
     markRead,

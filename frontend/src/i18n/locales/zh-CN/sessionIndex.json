@@ -1,43 +1,21 @@
 {
-  "filter": {
-    "title": "筛选",
-    "all": "全部",
-    "running": "运行中",
-    "waiting": "等你处理",
-    "unread": "未读",
-    "seeAll": "看全部 {{count}} 条",
-    "emptyTitle": "「{{label}}」里没有对话",
-    "emptyBodyWithTotal": "账号里还有 {{count}} 条对话。",
-    "emptyBody": "换一个筛选，或者回到「全部」。",
-    "seeAllPlain": "看全部对话"
-  },
   "loadMore": {
     "label": "加载更多",
     "loading": "加载中…",
     "retry": "重试",
     "failed": "这一页没能取回来。"
   },
-  "search": {
-    "clear": "清除搜索",
-    "emptyTitle": "没有匹配的对话",
-    "emptyBody": "换个词试试，或者清除搜索。"
-  },
   "group": {
-    "unassignedProject": "随手对话",
-    "unnamedAgent": "未命名",
-    "overflowEmpty": "这一组现在一条都没有。"
+    "unnamedAgent": "未命名"
   },
   "machine": {
     "offline": "离线",
-    "empty": "这台机器上还没有对话",
     "connecting": "连接中",
     "unreachable": "连接失败",
     "offlineSince": "离线 · {{time}}"
   },
   "row": {
-    "save": "保存",
-    "delete": "删除",
-    "menu": "对话操作"
+    "save": "保存"
   },
   "saveFailed": {
     "manual": "「{{title}}」没能存进账号。",

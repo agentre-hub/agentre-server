@@ -713,21 +713,16 @@ describe("sessionView 纯函数(筛选 / 搜索 / 标题 / 状态点)", () => {
     ).toBe(true);
   });
 
-  it("matchesSessionFilter:all 不过滤,running=运行中且不等待,waiting=等你处理", () => {
+  it("matchesSessionFilter:all 不过滤,running 包含所有运行期会话", () => {
     const running = { lifecycleState: "running", waitingForInput: false };
     const waiting = { lifecycleState: "running", waitingForInput: true };
     const idle = { lifecycleState: "idle", waitingForInput: false };
     expect(matchesSessionFilter(running, "all")).toBe(true);
     expect(matchesSessionFilter(waiting, "all")).toBe(true);
     expect(matchesSessionFilter(idle, "all")).toBe(true);
-    // 正在等输入的不算「运行中」(等你处理优先)。
     expect(matchesSessionFilter(running, "running")).toBe(true);
-    expect(matchesSessionFilter(waiting, "running")).toBe(false);
+    expect(matchesSessionFilter(waiting, "running")).toBe(true);
     expect(matchesSessionFilter(idle, "running")).toBe(false);
-    // 决策 3:「等你处理」判的仍是 waitingForInput,不是已读状态。
-    expect(matchesSessionFilter(running, "waiting")).toBe(false);
-    expect(matchesSessionFilter(waiting, "waiting")).toBe(true);
-    expect(matchesSessionFilter(idle, "waiting")).toBe(false);
   });
 
   it("sessionTitle:有标题就用标题;还没有标题的会话退化为「工作目录 · 后端 · 状态」", () => {
