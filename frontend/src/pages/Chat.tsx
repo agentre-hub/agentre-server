@@ -14,6 +14,7 @@ import {
   DialogShellHeader,
   DialogShellSubmit,
   ResizableSidebar,
+  SessionRowSkeleton,
 } from "@agentre-hub/agentre-ui";
 import AppShell from "@/components/AppShell";
 import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
@@ -30,7 +31,6 @@ import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";
 import SessionDetailView from "@/components/session/SessionDetailView";
-import SessionListSkeleton from "@/components/session/SessionListSkeleton";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { UserMenu } from "@/components/UserMenu";
 import { useMe } from "@/hooks/use-me";
@@ -460,6 +460,7 @@ export default function Chat() {
     axis,
     machineScope,
     keyword: sessionIndex.debouncedSearch,
+    filter,
   });
   const { forgetResolved } = reach;
 
@@ -616,20 +617,23 @@ export default function Chat() {
   const machineRowsByDevice = useMemo<Map<number, MirrorIndexRow[]> | null>(
     () =>
       axis === "machine"
-        ? buildMachineRows({
-            onlineMachines: reach.onlineMachines,
-            resolved: reach.resolved,
-            mirrorRows: sessionIndex.mirrorRows,
-            fromMirrorRow,
-            fromMachineRow,
-            filter,
-          })
+        ? sessionIndex.rangePending
+          ? new Map()
+          : buildMachineRows({
+              onlineMachines: reach.onlineMachines,
+              resolved: reach.resolved,
+              mirrorRows: sessionIndex.mirrorRows,
+              fromMirrorRow,
+              fromMachineRow,
+              filter,
+            })
         : null,
     [
       axis,
       reach.onlineMachines,
       reach.resolved,
       sessionIndex.mirrorRows,
+      sessionIndex.rangePending,
       fromMirrorRow,
       fromMachineRow,
       filter,
@@ -694,6 +698,9 @@ export default function Chat() {
     mirrorRows: sessionIndex.mirrorRows,
     machineRowsByDevice,
   });
+  // 每次打开机器 overflow（cursor=null）都重建这一组游标轨迹；同一次展开里若 daemon
+  // 给出 A -> B -> A 这样的环，第三页不能继续当作有效进度。
+  const machinePageCursorsRef = useRef(new Map<string, Set<string>>());
   useEffect(() => {
     groupPageRowsRef.current = {
       mirrorRows: sessionIndex.mirrorRows,
@@ -719,13 +726,28 @@ export default function Chat() {
           if (cursor === null) {
             // 第一页就是索引手上那一份 —— 弹层一打开就为已经拿到的东西再跑一次
             // 往返,只会让它先空着。
+            const firstCursor = resolved?.hasMore ? resolved.cursor : "";
+            machinePageCursorsRef.current.set(
+              machine.fingerprint,
+              new Set(firstCursor ? [firstCursor] : []),
+            );
             return {
               rows: machineRowsByDevice.get(machine.id) ?? [],
-              cursor: resolved?.hasMore ? resolved.cursor : null,
+              cursor: firstCursor || null,
               hasMore: !!resolved?.hasMore,
             };
           }
+          const seen =
+            machinePageCursorsRef.current.get(machine.fingerprint) ??
+            new Set<string>();
+          seen.add(cursor);
+          machinePageCursorsRef.current.set(machine.fingerprint, seen);
           const page = await loadMachinePage(machine.fingerprint, cursor);
+          if (page.hasMore && (!page.cursor || seen.has(page.cursor))) {
+            throw new Error("invalid machine session cursor");
+          }
+          if (page.hasMore) seen.add(page.cursor);
+          else machinePageCursorsRef.current.delete(machine.fingerprint);
           return {
             rows: toMachineRows({
               device: machine,
@@ -794,7 +816,14 @@ export default function Chat() {
     accountTotal: sessionIndex.accountTotal,
     axis,
     machineCount: reach.machines.length,
+    projectCount: projectNodes.length,
+    agentCount: agentInfos.length,
   });
+  // `empty` also accounts for authoritative empty groups so mobile does not hide
+  // them. The desktop detail copy answers the narrower account-level question.
+  const accountEmpty = sessionIndex.accountTotal === 0;
+  const mobileTrueEmpty =
+    empty && sessionIndex.debouncedSearch === "" && filter === "all";
   /*
     页面级的那簇控件：连接态 + 语言/主题。
 
@@ -856,7 +885,12 @@ export default function Chat() {
 
   // 只有索引及项目、Agent、设备名单都完成后，分组结果才可靠。
   const settled =
-    indexSettled(sessionIndex) && projectsSettled && agentsSettled;
+    indexSettled(sessionIndex) &&
+    (axis === "machine" ||
+      !sessionIndex.rangePending ||
+      !!sessionIndex.loadError) &&
+    projectsSettled &&
+    agentsSettled;
 
   const index = (
     <ChatIndexPanel
@@ -876,6 +910,7 @@ export default function Chat() {
       projectManagement={projectManagement}
       onAgentNewSession={onAgentNewSession}
       rowStatusLabel={isMobile}
+      machineRangePending={sessionIndex.rangePending}
     />
   );
 
@@ -938,8 +973,8 @@ export default function Chat() {
             aria-busy={!settled || undefined}
             className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5"
           >
-            {!settled ? <SessionListSkeleton /> : null}
-            {settled && empty ? (
+            {!settled ? <SessionRowSkeleton /> : null}
+            {settled && mobileTrueEmpty ? (
               /* 空态沿用屏 32（共享 EmptyState）：标题/正文/主按钮文案与桌面一致。 */
               <EmptyState
                 icon={MessageCirclePlus}
@@ -963,11 +998,11 @@ export default function Chat() {
             ) : null}
             {/* 一条会话都没有时由上面那个空态独自承接：移动端只有一列，索引再印一遍
               「还没有对话」就是同一句话说两遍。桌面端两列各说各的，不受这一条管。 */}
-            {settled && !empty && index}
+            {settled && !mobileTrueEmpty && index}
             {/* 移动有会话时：新建入口（IC5sH 的 pen-line FAB），在底栏之上。它只在
               有会话时出现，所以可访问名是「新对话」——「开始第一个对话」在这里
               与事实相反，而屏幕阅读器上这个名字就是它的全部。 */}
-            {settled && !empty && (
+            {settled && !mobileTrueEmpty && (
               <button
                 type="button"
                 aria-label={t("chat.startNew")}
@@ -1017,7 +1052,7 @@ export default function Chat() {
               aria-busy={!settled || undefined}
               className="min-h-0 flex-1 overflow-auto p-2.5"
             >
-              {!settled ? <SessionListSkeleton rows={6} /> : index}
+              {!settled ? <SessionRowSkeleton rows={6} /> : index}
             </div>
           </ResizableSidebar>
           <div
@@ -1068,14 +1103,18 @@ export default function Chat() {
               <div className="flex flex-1 items-center justify-center p-4">
                 <EmptyState
                   icon={MessageCirclePlus}
-                  title={t(empty ? "chat.noSessions" : "chat.pickSession")}
-                  body={empty ? t("chat.startFirstBody") : undefined}
-                  testId={empty ? "chat-empty-state" : "chat-unselected-state"}
+                  title={t(
+                    accountEmpty ? "chat.noSessions" : "chat.pickSession",
+                  )}
+                  body={accountEmpty ? t("chat.startFirstBody") : undefined}
+                  testId={
+                    accountEmpty ? "chat-empty-state" : "chat-unselected-state"
+                  }
                   action={
                     <>
                       {/* R15 的主动作：打开新对话弹层（屏 23/24/25）。 */}
                       <Button size="lg" onClick={openCompose}>
-                        {t(empty ? "chat.startFirst" : "chat.startNew")}
+                        {t(accountEmpty ? "chat.startFirst" : "chat.startNew")}
                       </Button>
                       <Link
                         to="/devices"
@@ -1128,7 +1167,7 @@ export default function Chat() {
         onConfirm={() => void sessionIndex.confirmDelete()}
       />
 
-      {sessionIndex.loaded && reach.resolvers}
+      {reach.resolvers}
     </AppShell>
   );
 }

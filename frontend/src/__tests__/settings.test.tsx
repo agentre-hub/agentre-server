@@ -110,6 +110,75 @@ describe("Settings", () => {
     expect(document.querySelector('[data-backend-type="builtin"]')).toBeNull();
   });
 
+  it("does not expose Hermes until the browser host can persist and authenticate it", async () => {
+    renderSettings();
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent backends" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Add First Backend" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("radio", { name: /^Hermes/ })).toBeNull(),
+    );
+
+    const pi = document.querySelector<HTMLButtonElement>(
+      '[data-backend-type="piagent"]',
+    );
+    expect(pi).not.toBeNull();
+    fireEvent.click(pi!);
+    fireEvent.keyDown(pi!, { key: "ArrowRight" });
+
+    await waitFor(() =>
+      expect(
+        document
+          .querySelector('[data-backend-type="openclaw"]')
+          ?.getAttribute("aria-checked"),
+      ).toBe("true"),
+    );
+    expect(screen.queryByTestId("hermes-fields")).toBeNull();
+  });
+
+  it("does not offer an existing Hermes row for editing through incomplete browser ports", async () => {
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/engine/backends") {
+        return {
+          backends: [
+            {
+              sync_id: "backend-hermes",
+              name: "Hidden Hermes backend",
+              type: "hermes",
+              device_fingerprint: "agentred-b",
+              provider_key: "",
+              model_key: "",
+              model_routes: "{}",
+              sandbox: "",
+              approval: "",
+              env_json: "{}",
+              reasoning_effort: "",
+              default_permission_mode: "",
+              default_model: "",
+              openclaw_gateway_url: "",
+              openclaw_agent_id: "",
+              openclaw_default_model: "",
+              openclaw_session_mode: "",
+              ref_count: 0,
+              cli_by_device: [],
+            },
+          ],
+        };
+      }
+      return base(path, init);
+    });
+    renderSettings();
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent backends" }));
+
+    expect(await screen.findByText("Add First Backend")).toBeTruthy();
+    expect(screen.queryByText("Hidden Hermes backend")).toBeNull();
+  });
+
   // CLI 路径配得了，Gateway token 仍然不给——两者此前一起被挡着，但它们不是一回事。
   //
   // 路径是**用户要填的配置**：不给这个框，网页上建的后端就只能靠 $PATH 撞运气，撞不上

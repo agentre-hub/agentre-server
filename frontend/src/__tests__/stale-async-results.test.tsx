@@ -31,7 +31,11 @@ import {
   useMachineReachability,
   type MachineReachability,
 } from "@/pages/chat/useMachineReachability";
-import type { IndexResponse, MirroredSession } from "@/pages/chat/chatRows";
+import type {
+  IndexResponse,
+  MirroredSession,
+  MirrorIndexRow,
+} from "@/pages/chat/chatRows";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -374,6 +378,193 @@ describe("索引：在途翻页与陈旧的错误横幅", () => {
     ).toBe(false);
   });
 
+  it("Given A 的后台刷新已失败, When B 仍在加载, Then A 的错误与行不冒充 B", async () => {
+    const waitingForB = deferred<IndexResponse>();
+    let mode: "ready" | "fail-a" | "wait-b" = "ready";
+    mockedApi.mockImplementation(async (path: string) => {
+      const params = new URLSearchParams(path.split("?")[1] ?? "");
+      if (params.get("per_group") === "1") return { total: 1 };
+      if (mode === "fail-a") throw new Error("A failed");
+      if (mode === "wait-b" && params.get("filter") === "unread") {
+        return waitingForB.promise;
+      }
+      return {
+        total: 1,
+        groups: [{ scope: "time", total: 1, items: [mirrored()] }],
+      };
+    });
+
+    const { result, rerender } = renderHook(({ f }) => useIndex(f), {
+      initialProps: { f: "all" as "all" | "unread" },
+    });
+    await waitFor(() => expect(result.current.mirrorRows).toHaveLength(1));
+
+    mode = "fail-a";
+    act(() => result.current.refetch());
+    await waitFor(() => expect(result.current.loadError).toBeTruthy());
+
+    mode = "wait-b";
+    rerender({ f: "unread" });
+
+    expect(result.current.rangePending).toBe(true);
+    expect(result.current.loadError).toBeNull();
+  });
+
+  it("Given A 的下一页失败过, When B 的替换读取也失败, Then 不留下无游标的死重试", async () => {
+    let failReplacement = false;
+    mockedApi.mockImplementation(async (path: string) => {
+      const params = new URLSearchParams(path.split("?")[1] ?? "");
+      if (params.get("per_group") === "1") return { total: 1 };
+      if (params.get("cursor")) throw new Error("next page failed");
+      if (failReplacement && params.get("filter") === "unread") {
+        throw new Error("replacement failed");
+      }
+      return {
+        total: 2,
+        groups: [
+          {
+            scope: "time",
+            total: 2,
+            items: [mirrored()],
+            cursor: "c1",
+            has_more: true,
+          },
+        ],
+      };
+    });
+
+    const { result, rerender } = renderHook(({ f }) => useIndex(f), {
+      initialProps: { f: "all" as "all" | "unread" },
+    });
+    await waitFor(() => expect(result.current.hasMore).toBe(true));
+    act(() => result.current.loadMore());
+    await waitFor(() => expect(result.current.loadMoreFailed).toBe(true));
+
+    failReplacement = true;
+    rerender({ f: "unread" });
+    await waitFor(() => expect(result.current.loadError).toBeTruthy());
+
+    expect(result.current.hasMore).toBe(false);
+    expect(result.current.loadMoreFailed).toBe(false);
+  });
+
+  it("Given A→B→A 且回到 A 的刷新失败, Then 已应用的 A 不会卡在 pending", async () => {
+    const waitingForB = deferred<IndexResponse>();
+    let mode: "ready" | "wait-b" | "fail-a" = "ready";
+    mockedApi.mockImplementation(async (path: string) => {
+      const params = new URLSearchParams(path.split("?")[1] ?? "");
+      if (params.get("per_group") === "1") return { total: 1 };
+      if (mode === "wait-b" && params.get("axis") === "agent") {
+        return waitingForB.promise;
+      }
+      if (mode === "fail-a" && params.get("axis") === "time") {
+        throw new Error("refresh failed");
+      }
+      return {
+        total: 1,
+        groups: [{ scope: "time", total: 1, items: [mirrored()] }],
+      };
+    });
+
+    const { result, rerender } = renderHook(
+      ({ axis }) =>
+        useSessionIndex({
+          axis,
+          devices: [],
+          filter: "all",
+          onDeleted: () => {},
+        }),
+      { initialProps: { axis: "time" as "time" | "agent" } },
+    );
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    mode = "wait-b";
+    rerender({ axis: "agent" });
+    await waitFor(() => expect(result.current.rangePending).toBe(true));
+
+    mode = "fail-a";
+    rerender({ axis: "time" });
+    await waitFor(() => expect(result.current.loadError).toBeTruthy());
+
+    expect(result.current.rangePending).toBe(false);
+    expect(result.current.mirrorRows[0]?.conversation_id).toBe("42");
+  });
+
+  it("Given 替换范围失败, Then 不把上一范围尚未吸收的乐观保存行带过去", async () => {
+    let failReplacement = false;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/saved-sessions") return {};
+      const params = new URLSearchParams(path.split("?")[1] ?? "");
+      if (params.get("per_group") === "1") return { total: 1 };
+      if (failReplacement && params.get("filter") === "unread") {
+        throw new Error("replacement failed");
+      }
+      return { total: 1, groups: [{ scope: "time", total: 1, items: [] }] };
+    });
+
+    const { result, rerender } = renderHook(({ f }) => useIndex(f), {
+      initialProps: { f: "all" as "all" | "unread" },
+    });
+    await waitFor(() => expect(result.current.accountTotal).toBe(1));
+
+    const optimistic = {
+      key: "saved-later",
+      sessionId: 0,
+      conversationId: "saved-later",
+      fingerprint: "fp-1",
+      machineFingerprint: "fp-1",
+      deviceId: 0,
+      title: "刚保存的会话",
+      agentSyncId: "",
+      projectSyncId: "",
+      lifecycleState: "idle",
+      waitingForInput: false,
+      updatedAt: 1,
+      saved: false,
+    } as MirrorIndexRow;
+    act(() => result.current.onSave(optimistic));
+    await waitFor(() =>
+      expect(
+        result.current.mirrorRows.some(
+          (row) => row.conversation_id === "saved-later",
+        ),
+      ).toBe(true),
+    );
+
+    failReplacement = true;
+    rerender({ f: "unread" });
+    await waitFor(() => expect(result.current.loadError).toBeTruthy());
+
+    expect(
+      result.current.mirrorRows.some(
+        (row) => row.conversation_id === "saved-later",
+      ),
+    ).toBe(false);
+  });
+
+  it("Given 同范围后台刷新失败, Then 保留稳定行并结束 pending", async () => {
+    let failRefresh = false;
+    mockedApi.mockImplementation(async (path: string) => {
+      const params = new URLSearchParams(path.split("?")[1] ?? "");
+      if (params.get("per_group") === "1") return { total: 1 };
+      if (failRefresh) throw new Error("background refresh failed");
+      return {
+        total: 1,
+        groups: [{ scope: "time", total: 1, items: [mirrored()] }],
+      };
+    });
+
+    const { result } = renderHook(() => useIndex("all"));
+    await waitFor(() => expect(result.current.mirrorRows).toHaveLength(1));
+
+    failRefresh = true;
+    act(() => result.current.refetch());
+    await waitFor(() => expect(result.current.loadError).toBeTruthy());
+
+    expect(result.current.rangePending).toBe(false);
+    expect(result.current.mirrorRows[0]?.conversation_id).toBe("42");
+  });
+
   it("Given 一次取数失败过, When 下一次成功, Then 那条红横幅收起来", async () => {
     let fail = true;
     mockedApi.mockImplementation(async (path: string) => {
@@ -408,11 +599,18 @@ const machineClient = { request: vi.fn(), close: vi.fn() };
 
 let reachOut: MachineReachability | null = null;
 
-function ReachProbe({ devices }: { devices: DeviceItem[] }) {
+function ReachProbe({
+  devices,
+  filter = "all",
+}: {
+  devices: DeviceItem[];
+  filter?: "all" | "running" | "unread";
+}) {
   const reach = useMachineReachability({
     devices,
     axis: "machine",
     keyword: "",
+    filter,
   });
   // 渲染期改外部变量被 react-hooks/globals 禁掉（那是副作用）；这里只是把每次提交
   // 之后的那一份交出去给断言读，放 effect 里正合适。
@@ -457,5 +655,50 @@ describe("机器可达性：答过一次之后仍要认得出掉线", () => {
     rerender(<ReachProbe devices={[machine]} />);
 
     await waitFor(() => expect(reachOut?.machineStates[1]).toBe("unreachable"));
+  });
+
+  it("Given running 的旧请求在飞, When 范围经过 unread 又回到 running, Then 第一轮迟到结果不能覆盖第三轮", async () => {
+    const firstRunning = deferred<unknown>();
+    const unread = deferred<unknown>();
+    const currentRunning = deferred<unknown>();
+    machineClient.request
+      .mockReturnValueOnce(firstRunning.promise)
+      .mockReturnValueOnce(unread.promise)
+      .mockReturnValueOnce(currentRunning.promise);
+
+    const { rerender } = render(
+      <ReachProbe devices={[machine]} filter="running" />,
+    );
+    await waitFor(() => expect(machineClient.request).toHaveBeenCalledTimes(1));
+
+    rerender(<ReachProbe devices={[machine]} filter="unread" />);
+    await waitFor(() => expect(machineClient.request).toHaveBeenCalledTimes(2));
+
+    rerender(<ReachProbe devices={[machine]} filter="running" />);
+    await waitFor(() => expect(machineClient.request).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      currentRunning.resolve({
+        sessions: [{ ...summary, latestSeq: 1, title: "第三轮 running" }],
+      });
+      await currentRunning.promise;
+    });
+    await waitFor(() =>
+      expect(reachOut?.resolved["fp-1"]?.sessions[0]?.title).toBe(
+        "第三轮 running",
+      ),
+    );
+
+    await act(async () => {
+      firstRunning.resolve({
+        sessions: [{ ...summary, latestSeq: 1, title: "第一轮迟到 running" }],
+      });
+      await firstRunning.promise;
+    });
+
+    expect(reachOut?.resolved["fp-1"]?.sessions[0]?.title).toBe(
+      "第三轮 running",
+    );
+    unread.resolve({ sessions: [] });
   });
 });

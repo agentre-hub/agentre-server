@@ -2,51 +2,39 @@ import {
   AgentGroupHeader,
   AxisPicker,
   buildAxisGroups,
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
   FreeGroupHeader,
   ImportLocalSessionMenu,
   ImportSessionDialog,
   MachineGroupHeader,
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
   ProjectGroupHeader,
   ProjectHeaderActions,
   ProjectHeaderContextMenu,
   reasonToDisplayStatus,
   RowLeadingSlot,
   RowSecondaryLine,
+  SessionFilterChips,
   SessionGroup,
+  SessionGroupList,
+  SessionGroupOverflow,
+  SessionIndexEmpty,
   SessionRow,
-  UNKNOWN_MACHINE_KEY,
+  SessionRowSkeleton,
+  useUiTranslation,
   type AgentInfo,
   type ImportDialogPrefill,
   type ImportOutcome,
   type MachineInfo,
   type ProjectHeaderActionsProps,
   type ProjectNode,
+  type SessionRowLinkRenderer,
+  type SessionRowModel,
   Button,
-  cn,
 } from "@agentre-hub/agentre-ui";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import {
-  ArrowRight,
-  CircleAlert,
-  FolderPlus,
-  ListX,
-  LoaderCircle,
-  MessagesSquare,
-  SearchX,
-  Trash2,
-} from "lucide-react";
+import { CircleAlert, FolderPlus, LoaderCircle } from "lucide-react";
 
-import { InlineEmpty } from "@/components/console";
-import { useAliveEffect } from "@/hooks/use-api-query";
 import { api } from "@/lib/api";
 import { createBrowserSessionImportPorts } from "@/lib/importPorts";
 import type {
@@ -56,11 +44,7 @@ import type {
 } from "@/pages/chat/chatRows";
 import type { NewConvAgent } from "@/components/session/newconv/types";
 import { INDEX_AXES, type IndexAxis } from "@/lib/sessionAxes";
-import {
-  deviceIdOfGroupKey,
-  machineGroupKey,
-  scopeOfGroup,
-} from "@/lib/sessionScope";
+import { deviceIdOfGroupKey, scopeOfGroup } from "@/lib/sessionScope";
 import {
   formatRelativeTime,
   sessionStatusLabel,
@@ -68,7 +52,6 @@ import {
   type SessionFilter,
 } from "@/lib/sessionView";
 import { attentionPillText, attentionReasonOf } from "@/lib/attentionAdapter";
-import SessionListSkeleton from "@/components/session/SessionListSkeleton";
 
 /**
  * 统一会话索引（规格 2026-08-17，数据源改镜像 2026-08-18）：一个列表、四个轴
@@ -89,8 +72,8 @@ import SessionListSkeleton from "@/components/session/SessionListSkeleton";
  * `MachineGroupHeader` / `FreeGroupHeader`。此前本站手画了一份，于是同一格字形在
  * 桌面端是 24px、在这里是 16px，Agent 那一档干脆退化成一枚 8px 色点。
  *
- * 宿主这边还留着的只有「包不认识的东西」：组头上那些角标与动作（机器的连接档位 /
- * 离线 / 条数、项目动作）、筛选 chips、「查看全部 N」溢出层、保存与删除。
+ * 宿主这边只保留「包不认识的东西」：组头上那些角标与动作（机器的连接档位 /
+ * 离线 / 条数、项目动作）、保存与删除，以及数据、路由和副作用适配。
  *
  * **轴由宿主持有**，不是这个组件的内部状态：设备下钻重定向过来时要预置「机器轴 +
  * 选中该机器」，那件事只有路由那一层知道。
@@ -98,20 +81,6 @@ import SessionListSkeleton from "@/components/session/SessionListSkeleton";
  * 行上的两个动作（保存 / 删除）也只**报给宿主**：写请求、乐观更新与删除确认的
  * 文案都要知道账号与机器的状态，那些在宿主手里。
  */
-
-/**
- * 筛选 chips 的顺序（规格「索引的组成」筛选与搜索）。跨四个轴同一套，因此摆在
- * 索引这一层而不是某个轴里。判据在服务端（规格 2026-08-19 决策 9），这一层只摆
- * chip 并把选中的那一档报给宿主。
- */
-// 第三档是「未读」而不是「等你处理」：它有了自己的判据（migration 202608200001
-// 的 last_read_at），与共享包 `computeAttention` 的 `unread` 那一档逐字同源 ——
-// 最后一次活动晚于我最后一次读它，**且没有更强的理由**（不在跑、不等你按、上一轮
-// 也没跑挂）。chip 上那个数与筛出来的行因此是同一批。
-//
-// 「等你处理」不在这排 chip 上，但它没有消失：它与未读一起进了侧栏那颗角标
-// （AppShell 的 badge / badgeLabel）——两件事在那里分开说。
-const FILTER_CHIPS: SessionFilter[] = ["all", "running", "unread"];
 
 /**
  * 行尾的最后活动时间。只在 daemon 报了 updatedAt 时渲染——老会话缺这一列时什么都
@@ -140,100 +109,6 @@ function LastActive({ ms, locale }: { ms: number; locale: string }) {
     >
       {formatted.label}
     </time>
-  );
-}
-
-/**
- * 机器轴上每台机器都要有自己的组头（规格 2026-08-21 决策 3）。
- *
- * 共享包的投影只给**有行的**机器出组（`axis-groups.js` 的「有会话的机器才出现」），
- * 而这一轴上「离线」与「这台机器上还没有对话」都得有一个组头去承载——机器整台从
- * 索引上消失的话，读者会把「机器不在了」读成「上面没有对话」。补出来的空组与包里
- * 那些同形，排序也照它那条：在线在前、离线沉底，同一档按名字。
- */
-function withEveryMachine(
-  groups: MirrorIndexGroup[],
-  machines: MachineInfo[],
-): MirrorIndexGroup[] {
-  const present = new Set(groups.map((g) => g.key));
-  const filled: MirrorIndexGroup[] = [
-    ...groups,
-    ...machines
-      .filter((m) => !present.has(machineGroupKey(m.deviceId)))
-      .map((m) => ({
-        key: machineGroupKey(m.deviceId),
-        kind: "machine" as const,
-        label: m.name,
-        depth: 0,
-        offline: !m.online,
-        rows: [],
-      })),
-  ];
-  // 认不出机器的那一组不是一台机器，它永远排最后（包里也是这么摆的）。
-  const rank = (g: MirrorIndexGroup) => (g.key === UNKNOWN_MACHINE_KEY ? 1 : 0);
-  // 同名的两台机器按设备标识收尾，**比的是数**：包里那条是 `a.deviceId - b.deviceId`，
-  // 这里拿组键的字符串比的话 `device-10` 会排到 `device-9` 前面——同一件事两个次序。
-  const deviceId = (g: MirrorIndexGroup) => deviceIdOfGroupKey(g.key) ?? 0;
-  return filled.sort(
-    (a, b) =>
-      rank(a) - rank(b) ||
-      Number(a.offline) - Number(b.offline) ||
-      a.label.localeCompare(b.label) ||
-      deviceId(a) - deviceId(b),
-  );
-}
-
-/**
- * 筛选 chips：全部 / 运行中 / 未读 N。跨四个轴一致，收窄的是**行**——一条都不
- * 剩的组头随之消失，因为分组是在收窄之后才做的（决策 10 的同一条规则）。
- *
- * 「未读」上那个数与当前选中哪一档无关：它说的是「还有几条你没看过」，切到别的档
- * 不该让这句话变。它与筛出来的行、与行上那枚「未读」记号是**同一条判据**（服务端
- * 的 attentionExpr / 共享包的 computeAttention），三者因此不可能对不上。
- */
-function FilterChips({
-  filter,
-  unreadCount,
-  onFilterChange,
-}: {
-  filter: SessionFilter;
-  unreadCount: number;
-  onFilterChange: (filter: SessionFilter) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div
-      role="group"
-      data-testid="index-filter-chips"
-      aria-label={t("sessionIndex.filter.title")}
-      // shrink-0：与选择器同处一行时，宁可整块折到第二行，也不要被压窄到
-      // 三个 chip 的文字各自截断。
-      className="flex shrink-0 items-center gap-1"
-    >
-      {FILTER_CHIPS.map((option) => (
-        <button
-          key={option}
-          type="button"
-          data-testid={`filter-chip-${option}`}
-          aria-pressed={filter === option}
-          className={cn(
-            "flex h-6 items-center gap-1.5 rounded-md px-2 text-[11.5px] font-medium transition-colors",
-            filter === option
-              ? "bg-primary-soft text-primary-text"
-              : "text-muted-foreground hover:bg-accent",
-          )}
-          onClick={() => onFilterChange(option)}
-        >
-          {t(`sessionIndex.filter.${option}`)}
-          {/* 一条未读都没有时不摆一个 0：空徽标比没有徽标更吵。 */}
-          {option === "unread" && unreadCount > 0 && (
-            <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-status-waiting px-1 text-3xs font-semibold text-status-waiting-foreground">
-              {unreadCount}
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -271,38 +146,6 @@ function SaveButton({
     >
       {label}
     </Button>
-  );
-}
-
-/**
- * 行的右键菜单：删除（决策 6）。只有已保存的行才有——没保存过的对话账号里根本
- * 没有它，「删除」无从谈起。
- *
- * 用的是共享包的 ContextMenu 原语，但**不用** `SessionRow` 自带的那套菜单：那套
- * 固定摆三项（重命名 / 在新标签页打开 / 删除），前两件事这一端做不了，摆出来就是
- * 两个按了没反应的死项。
- */
-function RowContextMenu({
-  children,
-  onDelete,
-}: {
-  children: React.ReactNode;
-  onDelete?: () => void;
-}) {
-  const { t } = useTranslation();
-  if (!onDelete) return children;
-  return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>
-        <div className="contents">{children}</div>
-      </ContextMenuTrigger>
-      <ContextMenuContent aria-label={t("sessionIndex.row.menu")}>
-        <ContextMenuItem variant="destructive" onSelect={onDelete}>
-          <Trash2 className="size-4" aria-hidden="true" />
-          <span>{t("sessionIndex.row.delete")}</span>
-        </ContextMenuItem>
-      </ContextMenuContent>
-    </ContextMenu>
   );
 }
 
@@ -607,220 +450,6 @@ function attentionModel(row: MirrorIndexGroupRow, href?: string) {
 }
 
 /**
- * 「查看全部 N 个会话」的触发器 + 弹层。
- *
- * 与共享包 `SessionGroup` 的 `totalSessions` 内建那一颗**同形同文案**（连
- * `sessionGroup.viewAll` 这条文案都取包的 `agentreUi` namespace，不另写一份），
- * 只是由宿主画，因此位置由宿主定——摆在这一组的行**之后**。为什么不能用包的那颗，
- * 见渲染处的说明。
- *
- * 收起来时触发器 `disabled`：包收起时把内容留在 DOM 里、只标 `aria-hidden`，
- * 不禁用的话 Tab 会走进一片看不见的区域。
- */
-function GroupOverflowTrigger({
-  total,
-  scope,
-  label,
-  expanded,
-  loadGroupPage,
-  renderRow,
-}: {
-  total: number;
-  scope: string;
-  label: string;
-  expanded: boolean;
-  loadGroupPage: (
-    scope: string,
-    cursor: string | null,
-  ) => Promise<{
-    rows: MirrorIndexRow[];
-    cursor: string | null;
-    hasMore: boolean;
-  }>;
-  renderRow: (row: MirrorIndexGroupRow) => React.ReactNode;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [side, setSide] = useState<"top" | "bottom">("bottom");
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        // 朝向在**打开的那一拍**按触发器所在的位置定，不能交给 Radix 的碰撞规避
-        // 一家：弹层还收着可用高度（见 GroupOverflow），于是它总能把自己缩到
-        // 「往下也放得下」，flip 就永远不翻——触发器贴着视口下沿时得到的是一条
-        // 只剩两三行高的窄条。两边谁宽就朝谁开，缩高度只用来兜住剩下的溢出。
-        if (next) {
-          const rect = triggerRef.current?.getBoundingClientRect();
-          if (rect) {
-            setSide(
-              window.innerHeight - rect.bottom < rect.top ? "top" : "bottom",
-            );
-          }
-        }
-        setOpen(next);
-      }}
-    >
-      <PopoverTrigger asChild>
-        <button
-          ref={triggerRef}
-          type="button"
-          disabled={!expanded}
-          className="flex cursor-pointer items-center gap-1 px-2 py-1.5 text-left text-2xs font-medium text-primary-text outline-none transition-colors hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-default"
-        >
-          {t("sessionGroup.viewAll", { count: total, ns: "agentreUi" })}
-          <ArrowRight className="size-3" aria-hidden="true" />
-        </button>
-      </PopoverTrigger>
-      <GroupOverflow
-        scope={scope}
-        label={label}
-        side={side}
-        loadGroupPage={loadGroupPage}
-        renderRow={renderRow}
-      />
-    </Popover>
-  );
-}
-
-/**
- * 「查看全部 N 个会话」弹层：按这一组的 scope 从头翻到尾。
- *
- * 行用的是索引同一个渲染器（宿主传进来的 renderRow），所以两处只有一种行。取数在
- * 宿主——它才知道当前的搜索与筛选，弹层不该自己再拼一次判据。
- */
-function GroupOverflow({
-  scope,
-  label,
-  side,
-  loadGroupPage,
-  renderRow,
-}: {
-  scope: string;
-  label: string;
-  side: "top" | "bottom";
-  loadGroupPage: (
-    scope: string,
-    cursor: string | null,
-  ) => Promise<{
-    rows: MirrorIndexRow[];
-    cursor: string | null;
-    hasMore: boolean;
-  }>;
-  renderRow: (row: MirrorIndexGroupRow) => React.ReactNode;
-}) {
-  return (
-    <PopoverContent
-      align="start"
-      side={side}
-      collisionPadding={12}
-      // 高度跟着 Radix 量出来的可用高度走。写死 60vh 的时候，触发器落在视口中段
-      // 那一段两边都放不下，超出的那一截连同**内部滚动区**一起被推到视口外：
-      // 里面还能滚，可最后几行与「加载更多」永远够不着。宽度同理让它别顶出窄屏。
-      className="max-h-[min(60vh,var(--radix-popover-content-available-height))] w-[360px] max-w-[calc(100vw-1.5rem)] overflow-y-auto p-2"
-      aria-label={label}
-      data-testid="group-overflow"
-    >
-      {/* 取数放在 PopoverContent **之内**：Radix 在关着的时候不渲染它的孩子，
-          因此这一组的行只在真的打开时才去翻。放在外面的话每个有溢出入口的组
-          都会在首屏各发一次请求，而用户一个都没点开。 */}
-      <GroupOverflowBody
-        scope={scope}
-        loadGroupPage={loadGroupPage}
-        renderRow={renderRow}
-      />
-    </PopoverContent>
-  );
-}
-
-function GroupOverflowBody({
-  scope,
-  loadGroupPage,
-  renderRow,
-}: {
-  scope: string;
-  loadGroupPage: (
-    scope: string,
-    cursor: string | null,
-  ) => Promise<{
-    rows: MirrorIndexRow[];
-    cursor: string | null;
-    hasMore: boolean;
-  }>;
-  renderRow: (row: MirrorIndexGroupRow) => React.ReactNode;
-}) {
-  const { t } = useTranslation();
-  const [rows, setRows] = useState<MirrorIndexRow[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
-  // 一挂上就在取第一页，因此初值就是「取着呢」——effect 里再同步置一次 state 会多
-  // 触发一轮渲染。
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
-
-  // 弹层每次打开都从头翻：中间这一组可能已经变了，接着上次的游标翻会拼出一份
-  // 半新半旧的列表。
-  useAliveEffect(
-    (alive) => {
-      loadGroupPage(scope, null)
-        .then((page) => {
-          if (!alive()) return;
-          setRows(page.rows);
-          setCursor(page.cursor);
-          setHasMore(page.hasMore);
-        })
-        .catch(() => alive() && setFailed(true))
-        .finally(() => alive() && setLoading(false));
-    },
-    [loadGroupPage, scope],
-  );
-
-  /** 接着往下翻。失败时已经翻出来的那些留在原地，只把失败说出来。 */
-  const loadNext = useCallback(() => {
-    setLoading(true);
-    setFailed(false);
-    loadGroupPage(scope, cursor)
-      .then((page) => {
-        setRows((prev) => [...prev, ...page.rows]);
-        setCursor(page.cursor);
-        setHasMore(page.hasMore);
-      })
-      .catch(() => setFailed(true))
-      .finally(() => setLoading(false));
-  }, [loadGroupPage, scope, cursor]);
-
-  if (loading && rows.length === 0 && !failed) {
-    // 首屏此前三个分支全落空：点开「查看全部 N」得到的是一个 360px 宽的空白浮层，
-    // 第一页回来才突然填满。骨架用组内空态那同一件。
-    return (
-      <div data-testid="group-overflow-loading" aria-busy="true">
-        <SessionListSkeleton rows={3} />
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <div className="space-y-0.5">{rows.map(renderRow)}</div>
-      {(hasMore || failed) && (
-        <LoadMore loading={loading} failed={failed} onLoadMore={loadNext} />
-      )}
-      {/* 借页面级空态那句「没有匹配这次搜索的对话」是错的：弹层未必开在搜索里。
-          这一句归它自己。 */}
-      {!loading && !failed && rows.length === 0 && (
-        <p
-          data-testid="group-overflow-empty"
-          className="px-2 py-3 text-xs text-muted-foreground"
-        >
-          {t("sessionIndex.group.overflowEmpty")}
-        </p>
-      )}
-    </>
-  );
-}
-
-/**
  * 一台在线机器此刻的连接档位。`connected` 说的是**它已经交出清单**，不只是中继
  * 连上了——中间那一段（连上了、清单还在路上）与还没连上对读者是同一件事：这一组
  * 现在答不出。
@@ -906,6 +535,8 @@ export interface SessionIndexProps {
     cursor: string | null;
     hasMore: boolean;
   }>;
+  /** 搜索/筛选范围身份；同 scope 换范围时使在途 overflow loader 作废。 */
+  overflowRangeKey?: string;
   /** 还有下一页时摆「加载更多」。分页的位置与取数都在宿主手里。 */
   hasMore?: boolean;
   loadingMore?: boolean;
@@ -967,6 +598,7 @@ export default function SessionIndex({
   unreadCount = 0,
   groupTotals,
   loadGroupPage,
+  overflowRangeKey = "",
   hasMore = false,
   loadingMore = false,
   loadMoreFailed = false,
@@ -980,6 +612,8 @@ export default function SessionIndex({
   onAgentNewSession,
 }: SessionIndexProps) {
   const { t, i18n } = useTranslation();
+  const { t: uiT } = useUiTranslation();
+  const machineEmptyLabel = uiT("sessionIndex.machine.empty");
   const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   /** 键盘光标停在哪一行。与宿主的选中分开：移光标不等于开右栏。 */
@@ -1065,16 +699,14 @@ export default function SessionIndex({
       agents,
       machines,
       labels: {
-        unassignedProject: t("sessionIndex.group.unassignedProject"),
+        unassignedProject: uiT("sessionIndex.free.name"),
         unnamedAgent: t("sessionIndex.group.unnamedAgent"),
         unknownMachine: t("chat.noMachine"),
       },
     });
-    // 共享包用 `...row` 原样摊行，宿主那两维（conversationId / lastReadAt）因此
-    // 照样在，只是包的类型说不出来。见 chatRows 的 MirrorIndexGroupRow。
-    const groups = built as MirrorIndexGroup[];
-    return axis === "machine" ? withEveryMachine(groups, machines) : groups;
-  }, [axis, rows, groupTotals, projects, agents, machines, t]);
+    // 共享包用 `...row` 原样摊行，宿主那三维因此照样在，只是包的类型说不出来。
+    return built as MirrorIndexGroup[];
+  }, [axis, rows, groupTotals, projects, agents, machines, t, uiT]);
 
   const hasRows = groups.some((g) => g.rows.length > 0);
 
@@ -1087,6 +719,11 @@ export default function SessionIndex({
    * 页面级说话；没收窄时反过来。
    */
   const scoped = narrowed || filter !== "all";
+  const projectAccountEmpty =
+    axis === "project" && !scoped && !hasRows && projects.length === 0;
+  const showIndexEmpty =
+    !hasRows && (scoped || groups.length === 0 || projectAccountEmpty);
+  const showGroups = groups.length > 0 && !projectAccountEmpty;
 
   /**
    * ↑↓ 走得到的行，按渲染顺序。两类行不在其中：
@@ -1126,112 +763,178 @@ export default function SessionIndex({
     [onSelect, navigate, sessionPath],
   );
 
-  /**
-   * 索引里的一行。抽出来是因为它有**两个**渲染处：组里先列的那几条，以及「查看
-   * 全部 N」弹层里翻出来的那些。两处各写一遍就会长成两种行。
-   */
-  const renderRow = useCallback(
-    (row: MirrorIndexGroupRow) => {
-      // 判定每行只算一次：状态点、移动端行尾与桌面端那段记号读的必须是同一个答案，
-      // 分头各算一遍迟早长出「点说等你、字说闲着」。
+  const renderSessionLink = useCallback<SessionRowLinkRenderer>(
+    ({ sessionId, href, children, onClick, ...rest }) => (
+      <Link
+        to={href}
+        data-nav-target={sessionId}
+        onClick={(event) => {
+          const opensElsewhere =
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey;
+          if (opensElsewhere) return;
+          if (onSelect) event.preventDefault();
+          onClick?.(event);
+        }}
+        {...rest}
+      >
+        {children}
+      </Link>
+    ),
+    [onSelect],
+  );
+
+  /** 宿主事实到共享行合同的唯一投影；组内列表和溢出弹层复用同一份。 */
+  const sessionModel = useCallback(
+    (row: MirrorIndexGroupRow): SessionRowModel => {
       const reason = attentionReasonOf(row);
       const pill = attentionPillText(reason);
+      return {
+        id: row.key,
+        status: reasonToDisplayStatus(reason, toAgentStatus(row)),
+        title: row.title,
+        trailingLabel: rowStatusLabel
+          ? (pill ?? sessionStatusLabel(row, t))
+          : undefined,
+        href:
+          row.deviceId === undefined
+            ? undefined
+            : sessionPath(row.deviceId, row.conversationId),
+        leading: (
+          <RowLeadingSlot axis={axis} agent={row.agent} project={row.project} />
+        ),
+        secondaryLabel: (
+          <RowSecondaryLine
+            axis={axis}
+            agent={row.agent}
+            project={row.project}
+            machine={row.machine}
+            freeLabel={uiT("sessionIndex.free.name")}
+            testId={`row-secondary-${row.key}`}
+          />
+        ),
+        trailing: (
+          <>
+            <LastActive ms={row.updatedAt} locale={i18n.language} />
+            {!rowStatusLabel && pill !== null ? (
+              <AttentionPill testId={`row-attention-${row.key}`} text={pill} />
+            ) : null}
+          </>
+        ),
+        rowActions:
+          onSave && row.saved === false ? (
+            <SaveButton
+              testId={`row-save-${row.key}`}
+              onSave={() => onSave(row)}
+            />
+          ) : undefined,
+      };
+    },
+    [axis, i18n.language, onSave, rowStatusLabel, sessionPath, t, uiT],
+  );
+
+  const renderOverflowRow = useCallback(
+    (row: MirrorIndexGroupRow, close: () => void) => {
+      const model = sessionModel(row);
       return (
-        <RowContextMenu
-          key={row.key}
-          // 删除只对已保存的行成立：没保存过的对话账号里没有它。
-          onDelete={
+        <SessionRow
+          key={model.id}
+          {...model}
+          sessionId={model.id}
+          renderLink={renderSessionLink}
+          selected={selectedKey === row.key}
+          onClick={
+            onSelect
+              ? (event) => {
+                  const opensElsewhere =
+                    event.button !== 0 ||
+                    event.metaKey ||
+                    event.ctrlKey ||
+                    event.shiftKey ||
+                    event.altKey;
+                  if (opensElsewhere) return;
+                  event.preventDefault();
+                  setCursorKey(row.key);
+                  openRow(row);
+                  close();
+                }
+              : undefined
+          }
+          onDeleteSession={
             onDelete && row.saved !== false ? () => onDelete(row) : undefined
           }
-        >
-          <SessionRow
-            // 点的档位由 attention 判定投影而来，不是原始生命周期：一条闲着但有新东西
-            // 没看过的会话画的是「等你」那一档 —— 与桌面端同一条（共享包
-            // `reasonToDisplayStatus`）。
-            status={reasonToDisplayStatus(reason, toAgentStatus(row))}
-            title={row.title}
-            // 移动端的本地化状态兜底（规格「已知的可见变化」3）。行尾那段记号在移动端
-            // 不另摆一份：有理由时它就是理由本身，没有才退回生命周期的说法——否则
-            // 「未读」与「闲置」会在同一行里同时出现，自相矛盾。
-            trailingLabel={
-              rowStatusLabel ? (pill ?? sessionStatusLabel(row, t)) : undefined
-            }
-            selected={selectedKey === row.key}
-            href={
-              row.deviceId === undefined
-                ? undefined
-                : sessionPath(row.deviceId, row.conversationId)
-            }
-            renderLink={({ href, children, ...rest }) => (
-              <Link to={href} data-nav-target={row.key} {...rest}>
-                {children}
-              </Link>
-            )}
-            onClick={
-              onSelect
-                ? (e) => {
-                    e.preventDefault();
-                    // 点行 = 把键盘光标也挪过来：↑↓ 接着从这一条走。
-                    setCursorKey(row.key);
-                    openRow(row);
-                  }
-                : undefined
-            }
-            leading={
-              <RowLeadingSlot
-                axis={axis}
-                agent={row.agent}
-                project={row.project}
-              />
-            }
-            secondaryLabel={
-              <RowSecondaryLine
-                axis={axis}
-                agent={row.agent}
-                project={row.project}
-                machine={row.machine}
-                // 项目那一维缺席时如实写「随手对话」并把字形置灰（决策 7）：
-                // 与它在项目轴上的兜底组头同一句文案，也与桌面端同源。
-                freeLabel={t("sessionIndex.group.unassignedProject")}
-                testId={`row-secondary-${row.key}`}
-              />
-            }
-            trailing={
-              <>
-                <LastActive ms={row.updatedAt} locale={i18n.language} />
-                {/* 移动端行尾已经有一份（trailingLabel），这里不再摆第二份。 */}
-                {!rowStatusLabel && pill !== null && (
-                  <AttentionPill
-                    testId={`row-attention-${row.key}`}
-                    text={pill}
-                  />
-                )}
-              </>
-            }
-            rowActions={
-              onSave && row.saved === false ? (
-                <SaveButton
-                  testId={`row-save-${row.key}`}
-                  onSave={() => onSave(row)}
-                />
-              ) : undefined
-            }
-          />
-        </RowContextMenu>
+        />
       );
     },
-    [
-      axis,
-      selectedKey,
-      i18n.language,
-      onDelete,
-      onSave,
-      onSelect,
-      openRow,
-      rowStatusLabel,
-      sessionPath,
-      t,
-    ],
+    [onDelete, onSelect, openRow, renderSessionLink, selectedKey, sessionModel],
+  );
+
+  const overflowContextRef = useRef({
+    loadGroupPage,
+    groupTotals,
+    projects,
+    agents,
+    machines,
+  });
+  useEffect(() => {
+    overflowContextRef.current = {
+      loadGroupPage,
+      groupTotals,
+      projects,
+      agents,
+      machines,
+    };
+  }, [agents, groupTotals, loadGroupPage, machines, projects]);
+  const overflowLoadersRef = useRef(
+    new Map<
+      string,
+      {
+        scope: string;
+        rangeKey: string;
+        loadPage: (cursor: string | null) => Promise<{
+          rows: MirrorIndexGroupRow[];
+          total: number;
+          nextCursor: string | null;
+        }>;
+      }
+    >(),
+  );
+  const overflowLoader = useCallback(
+    (groupKey: string, scope: string, rangeKey: string) => {
+      const cached = overflowLoadersRef.current.get(groupKey);
+      if (cached?.scope === scope && cached.rangeKey === rangeKey) {
+        return cached.loadPage;
+      }
+
+      const loader = async (cursor: string | null) => {
+        const current = overflowContextRef.current;
+        if (!current.loadGroupPage) {
+          return { rows: [], total: 0, nextCursor: null };
+        }
+        const page = await current.loadGroupPage(scope, cursor);
+        const enriched = buildAxisGroups("time", {
+          rows: page.rows,
+          projects: current.projects,
+          agents: current.agents,
+          machines: current.machines,
+        }).flatMap((pageGroup) => pageGroup.rows) as MirrorIndexGroupRow[];
+        return {
+          rows: enriched,
+          total: current.groupTotals?.[groupKey] ?? enriched.length,
+          nextCursor: page.hasMore ? page.cursor : null,
+        };
+      };
+      overflowLoadersRef.current.set(groupKey, {
+        scope,
+        rangeKey,
+        loadPage: loader,
+      });
+      return loader;
+    },
+    [],
   );
 
   /**
@@ -1294,10 +997,11 @@ export default function SessionIndex({
         {/* 可选轴清单由宿主给（共享包决策 17）：本站四档全给，桌面端只 offer 三档。 */}
         <AxisPicker value={axis} axes={INDEX_AXES} onChange={onAxisChange} />
         {/* 筛完一条不剩时 chips 仍在：否则回不到「全部」，索引看着就像坏了。 */}
-        <FilterChips
-          filter={filter}
+        <SessionFilterChips
+          value={filter}
           unreadCount={unreadCount}
-          onFilterChange={onFilterChange}
+          onChange={onFilterChange}
+          className="shrink-0"
         />
         {/*
           建顶层项目的入口（规格 2026-08-21-root-project-entry 决策 1）。摆在控件行
@@ -1323,55 +1027,38 @@ export default function SessionIndex({
           </button>
         ) : null}
       </div>
-      {/* 机器轴与项目轴上一条行都没有不等于「你还没有对话」：这两轴的空组自己会说
-          （「这台机器上还没有对话」/「暂无会话」），页面级再说一遍就是同一句话说
-          两遍。桌面端也是这么分的——项目树里有项目时它不出页面级空态。收窄之后
-          才需要这一句——「没有匹配这次搜索」「这一档不收」是组头说不出的。
+      {/* 机器轴、项目轴与 Agent 轴上一条行都没有不等于「你还没有对话」：
+          权威名单里的空组会用共享组内空态如实说明，页面级再说一遍就是重复。收窄之后
+          才需要页面级这一句——「没有匹配这次搜索」「这一档不收」是组头说不出的。
           但「组头自己会说」得真有组头才成立：一台能跑会话的机器 / 一个项目都没有
           时这一轴连一个组都出不来，不说话就是一块无言的空白。 */}
-      {!hasRows &&
-      ((axis !== "machine" && axis !== "project") ||
-        scoped ||
-        groups.length === 0) ? (
-        <IndexEmpty
+      {showIndexEmpty ? (
+        <SessionIndexEmpty
           filter={filter}
-          narrowed={narrowed}
-          accountTotal={accountTotal}
-          onFilterChange={onFilterChange}
+          searching={narrowed}
+          total={accountTotal}
+          onShowAll={() => onFilterChange("all")}
           onClearSearch={onClearSearch}
         />
       ) : null}
       {/* 机器轴的组头本身就是答案的一部分（哪台机器在、它此刻什么状态），
-          因此一行都没有时组照样列。项目轴同理，而且更硬：组头是「机器与路径…」
-          「成员…」「未配置」角标唯一的挂点（规格 2026-08-20 决策 1 / 9），
+          因此一行都没有时组照样列。项目轴与 Agent 轴也由宿主权威名单建空组；
+          项目组头还是「机器与路径…」「成员…」「未配置」角标唯一的挂点，
           组头不在，刚建出来的项目就再也配不了路径——而没配路径的项目开不出
           对话，于是它永远长不出行、永远回不来（规格 2026-08-21-root-project-entry
           决策 6）。这两轴的「有哪些组」都不是从会话推出来的，是宿主直接给的名单。 */}
-      {hasRows || axis === "machine" || axis === "project"
-        ? groups.map((group) => {
+      {showGroups ? (
+        <SessionGroupList>
+          {groups.map((group) => {
             const scope = scopeOfGroup(group);
             const overflow =
+              group.kind !== "all" &&
               scope &&
               loadGroupPage &&
               group.total !== undefined &&
               group.total > group.rows.length
                 ? group.total
                 : undefined;
-            /*
-            空组要不要说一句（规格 2026-08-21「机器轴列什么」）：
-
-            - 在线、清单为空 → 「这台机器上还没有对话」。孤零零一个组头读起来像坏了。
-            - 项目 / Agent 那些空组同样有话说，只是没有更准的说法，落到共享包的
-              兜底「暂无会话」——与桌面端逐字同源。
-            - 离线 → 什么也不说：原因已经在组头上，这一组答不出「有什么」。
-            - 收窄过 → 什么也不说：「还没有对话」在这里是假话，它们还在，只是这次
-              搜索/筛选不收；页面级那一句负责说这件事。
-            - 还没交出清单（连接中 / 连不上）→ 什么也不说：这一组现在答不出，
-              「还没有对话」会是编的。
-
-            **画**由共享包的 `SessionGroup` 统一画（Inbox + 一行灰字），本站只决定
-            说不说、说哪一句：同一件事两端别各画一遍。
-          */
             const machineDeviceId = Number(group.key.replace(/^device-/, ""));
             const machineState = machineStates?.[machineDeviceId];
             const answered =
@@ -1382,142 +1069,131 @@ export default function SessionIndex({
             const emptyLabel = silentWhenEmpty
               ? null
               : group.kind === "machine"
-                ? t("sessionIndex.machine.empty")
+                ? machineEmptyLabel
                 : undefined;
-            /*
-              还没答上来的那一组（连接中）：摆骨架，不是一个孤零零的空组头
-              （规格 2026-08-21-connection-failure-ux 决策 9）。它既说明「在动」，
-              又把行的位置先占住，清单回来时这一组不会把下面几组顶开。
-            */
             const pending =
               group.kind === "machine" &&
               group.rows.length === 0 &&
               machineState === "connecting";
-            const rowsBody = (
-              <div className="space-y-0.5">
-                {group.rows.map(renderRow)}
-                {pending ? (
-                  <div data-testid="group-skeleton">
-                    <SessionListSkeleton rows={2} />
-                  </div>
-                ) : null}
-              </div>
-            );
-            // 时间轴那一组没有组头，也就没有可收放的东西：它是单一平铺列表，
-            // 继续往下翻由列表末尾的「加载更多」承担。
-            if (group.kind === "all") {
-              return (
-                <section key={group.key} data-testid={`group-${group.key}`}>
-                  {rowsBody}
-                </section>
-              );
-            }
-            /*
-            「查看全部 N」由**宿主**画在行之后，不再走共享包的 `totalSessions`。
-            包的渲染次序是 `sessions` → 触发器 → `renderAfterSessions`，而本站的行
-            全部走 `renderAfterSessions`（它们带着右键菜单与行尾「保存」，塞不进包的
-            `SessionRowModel`）——于是触发器落在了这一组所有行的**前面**，读起来像
-            组的开头而不是它的末尾。桌面端不撞这个：它的行走 `sessions`，
-            `renderAfterSessions` 里装的是子项目子树，次序天然是对的。
+            const sessions = group.rows.map(sessionModel);
 
-            更干净的落法是把行也搬进 `sessions`，但包在 `onDeleteSession` 上
-            `Number(session.id)`，而本站的行键是 `<指纹>:<会话号>` 这种字符串
-            （同号会话可能来自两台机器），搬过去删除就会拿到 NaN。那是一处跨仓改动。
-          */
-            const body = (
-              <>
-                {rowsBody}
-                {overflow && scope && loadGroupPage ? (
-                  <GroupOverflowTrigger
-                    total={overflow}
-                    scope={scope}
-                    label={group.label}
-                    expanded={!collapsed[group.key]}
-                    loadGroupPage={loadGroupPage}
-                    renderRow={renderRow}
-                  />
-                ) : null}
-              </>
-            );
             return (
               <SessionGroup
-                key={group.key}
+                key={`${group.key}:${overflowRangeKey}`}
                 data-testid={`group-${group.key}`}
                 aria-busy={pending || undefined}
                 aria-label={group.label || undefined}
-                // 收放状态按「轴 + 组」记在本地：换个轴看的是另一套组，两套不该互相
-                // 覆盖。共享包自己会加 agentre.agentExpanded. 前缀。
-                persistenceKey={`server.index.${axis}.${group.key}`}
+                persistenceKey={
+                  group.kind === "all"
+                    ? undefined
+                    : `server.index.${axis}.${group.key}`
+                }
                 defaultExpanded
-                renderHeader={({ expanded, toggle }) => (
-                  <GroupHeader
-                    group={group}
-                    state={machineState}
-                    note={machineNotes?.[machineDeviceId]}
-                    // 计数只给**已经答上来**的机器：没答上来时「这一组有几条」
-                    // 这件事本身不成立，摆一个 0 是在编。
-                    count={
-                      group.kind === "machine" && machineState === "connected"
-                        ? (group.total ?? group.rows.length)
-                        : undefined
-                    }
-                    onRetry={
-                      onRetryMachine
-                        ? () => onRetryMachine(machineDeviceId)
-                        : undefined
-                    }
-                    expanded={expanded}
-                    toggle={toggle}
-                    onExpandedChange={onGroupExpandedChange}
-                    projectHandlers={projectHandlers}
-                    onAgentNewSession={onAgentNewSession}
-                    onImport={setImportPrefill}
-                  />
-                )}
-                // 收起来时组头上仍露出这一组里**需要你**的那些：收起的是列表，
-                // 不是提醒。展开时气泡为空——那几条已经在下面的列表里了，再冒一遍
-                // 就是同一条会话在同一个组里出现两次。
-                //
-                // 判据是 attention 判定而不是「等你按」一件事：一条上一轮跑挂的
-                // 对话此前在收起的组里彻底消失，而它恰恰是最该冒出来的那种。
+                renderHeader={
+                  group.kind === "all"
+                    ? () => null
+                    : ({ expanded, toggle }) => (
+                        <GroupHeader
+                          group={group}
+                          state={machineState}
+                          note={machineNotes?.[machineDeviceId]}
+                          count={
+                            group.kind === "machine" &&
+                            machineState === "connected"
+                              ? (group.total ?? group.rows.length)
+                              : undefined
+                          }
+                          onRetry={
+                            onRetryMachine
+                              ? () => onRetryMachine(machineDeviceId)
+                              : undefined
+                          }
+                          expanded={expanded}
+                          toggle={toggle}
+                          onExpandedChange={onGroupExpandedChange}
+                          projectHandlers={projectHandlers}
+                          onAgentNewSession={onAgentNewSession}
+                          onImport={setImportPrefill}
+                        />
+                      )
+                }
+                sessions={sessions}
+                selectedSessionId={selectedKey ?? undefined}
                 attentionSessions={[]}
                 collapsedAttentionSessions={group.rows
-                  .filter((r) => attentionReasonOf(r) !== null)
-                  .map((r) =>
+                  .filter((row) => attentionReasonOf(row) !== null)
+                  .map((row) =>
                     attentionModel(
-                      r,
-                      r.deviceId === undefined
+                      row,
+                      row.deviceId === undefined
                         ? undefined
-                        : sessionPath(r.deviceId, r.conversationId),
+                        : sessionPath(row.deviceId, row.conversationId),
                     ),
                   )}
-                renderLink={({ href, children, ...rest }) => (
-                  <Link to={href} {...rest}>
-                    {children}
-                  </Link>
-                )}
-                onSessionSelect={(id) => {
-                  const row = group.rows.find((r) => r.key === id);
-                  if (row) {
-                    setCursorKey(row.key);
-                    openRow(row);
-                  }
-                }}
-                /*
-                  这一组什么都没有时把插槽整个撤掉，包的空态才画得出来：它的判据是
-                  「没有 sessions、没有『查看全部』、也没有 renderAfterSessions」，
-                  而本站的行全部走这个插槽（见上面那段注释），插槽常驻就等于永远
-                  不空——那颗空态一次也画不出来。撤掉不丢东西：这一支里插槽装的
-                  本来就是一个空的 div。
-                */
-                renderAfterSessions={
-                  group.rows.length === 0 && !pending && !overflow ? null : body
+                renderLink={renderSessionLink}
+                onSessionSelect={
+                  onSelect
+                    ? (id, options) => {
+                        if (options?.newTab) return;
+                        const row = group.rows.find((item) => item.key === id);
+                        if (row) {
+                          setCursorKey(row.key);
+                          openRow(row);
+                        }
+                      }
+                    : undefined
                 }
+                onDeleteSession={
+                  onDelete
+                    ? (id) => {
+                        const row = group.rows.find((item) => item.key === id);
+                        if (row) onDelete(row);
+                      }
+                    : undefined
+                }
+                canDeleteSession={
+                  onDelete
+                    ? (id) =>
+                        group.rows.some(
+                          (row) => row.key === id && row.saved !== false,
+                        )
+                    : undefined
+                }
+                totalSessions={overflow}
+                renderSessionsPopover={
+                  overflow && scope && loadGroupPage
+                    ? (close, trigger) => {
+                        const rect = trigger?.getBoundingClientRect();
+                        const side =
+                          rect && window.innerHeight - rect.bottom < rect.top
+                            ? "top"
+                            : "bottom";
+                        return (
+                          <SessionGroupOverflow
+                            key={overflowRangeKey}
+                            title={group.label}
+                            side={side}
+                            align="start"
+                            onClose={close}
+                            loadPage={overflowLoader(
+                              group.key,
+                              scope,
+                              overflowRangeKey,
+                            )}
+                            getRowKey={(row) => row.key}
+                            renderRow={renderOverflowRow}
+                          />
+                        );
+                      }
+                    : undefined
+                }
+                pending={pending ? <SessionRowSkeleton rows={2} /> : undefined}
                 emptyLabel={emptyLabel}
               />
             );
-          })
-        : null}
+          })}
+        </SessionGroupList>
+      ) : null}
       {(hasMore || loadMoreFailed) && onLoadMore && (
         <LoadMore
           loading={loadingMore}
@@ -1621,96 +1297,5 @@ function LoadMore({
 
   return (
     <div className="flex flex-col items-center gap-1.5 py-3">{trigger}</div>
-  );
-}
-
-/**
- * 三种空态，各带一条回程（决策 12），形取共享的 `InlineEmpty`。
- *
- * 此前三种共用一行 14px 灰字，靠左，没有任何出路：chips 还在，但没人说该按哪个。
- * 而它们说的不是一回事——筛空了要回「全部」，搜空了要清搜索词，真空要开第一条。
- *
- * 后来补上了出路，但那句话还是含糊的：「这一档里一条都没有」——「档」是这份代码
- * 里的说法，读者眼前只有 chip 上的「运行中」「等你处理」。标题现在**逐字回指**
- * 那个 chip，正文才说账号里还有多少条：读者据此立刻知道东西还在。
- *
- * `accountTotal` 是可选的，undefined ≠ 0：宿主没算出来只是少说一句正文，不该把
- * 回「全部」的路也一起吞掉（此前 `?? 0` 把两者揉成一个，筛进空档就出不来了）。
- * 真的一条都没有时才不摆按钮——那条路通向的是另一块空白。
- *
- * 接不住那个动作（宿主没给回调）就不摆按钮：一个按下去什么都不发生的按钮比没有
- * 按钮更坏。
- */
-function IndexEmpty({
-  filter,
-  narrowed,
-  accountTotal,
-  onFilterChange,
-  onClearSearch,
-}: {
-  filter: SessionFilter;
-  narrowed: boolean;
-  accountTotal?: number;
-  onFilterChange: (filter: SessionFilter) => void;
-  onClearSearch?: () => void;
-}) {
-  const { t } = useTranslation();
-  const filtered = filter !== "all";
-  // 账号里确实一条都没有（0）与「宿主没算」（undefined）是两回事。
-  const emptyAccount = accountTotal === 0;
-
-  let icon = MessagesSquare;
-  let title = t("chat.noSessions");
-  let body: string | undefined;
-  let action: { label: string; run: () => void } | undefined;
-
-  if (filtered) {
-    icon = ListX;
-    title = t("sessionIndex.filter.emptyTitle", {
-      label: t(`sessionIndex.filter.${filter}`),
-    });
-    if (accountTotal !== undefined && accountTotal > 0) {
-      body = t("sessionIndex.filter.emptyBodyWithTotal", {
-        count: accountTotal,
-      });
-      action = {
-        label: t("sessionIndex.filter.seeAll", { count: accountTotal }),
-        run: () => onFilterChange("all"),
-      };
-    } else if (!emptyAccount) {
-      body = t("sessionIndex.filter.emptyBody");
-      action = {
-        label: t("sessionIndex.filter.seeAllPlain"),
-        run: () => onFilterChange("all"),
-      };
-    }
-  } else if (narrowed) {
-    icon = SearchX;
-    title = t("sessionIndex.search.emptyTitle");
-    body = t("sessionIndex.search.emptyBody");
-    if (onClearSearch)
-      action = { label: t("sessionIndex.search.clear"), run: onClearSearch };
-  }
-
-  return (
-    <InlineEmpty
-      testId="session-index-empty"
-      icon={icon}
-      title={title}
-      body={body}
-      action={
-        action && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 px-2.5 text-2xs"
-            data-testid="empty-action"
-            onClick={action.run}
-          >
-            {action.label}
-          </Button>
-        )
-      }
-    />
   );
 }

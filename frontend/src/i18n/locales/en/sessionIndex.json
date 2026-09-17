@@ -1,43 +1,21 @@
 {
-  "filter": {
-    "title": "Filter",
-    "all": "All",
-    "running": "Running",
-    "waiting": "Waiting for you",
-    "unread": "Unread",
-    "seeAll": "See all {{count}}",
-    "emptyTitle": "Nothing in “{{label}}”",
-    "emptyBodyWithTotal": "{{count}} conversations in your account.",
-    "emptyBody": "Try another filter, or go back to All.",
-    "seeAllPlain": "See all conversations"
-  },
   "loadMore": {
     "label": "Load more",
     "loading": "Loading…",
     "retry": "Retry",
     "failed": "Couldn't load that page."
   },
-  "search": {
-    "clear": "Clear search",
-    "emptyTitle": "No conversations match your search",
-    "emptyBody": "Try a different term, or clear the search."
-  },
   "group": {
-    "unassignedProject": "Quick chats",
-    "unnamedAgent": "Unnamed",
-    "overflowEmpty": "Nothing in this group right now."
+    "unnamedAgent": "Unnamed"
   },
   "machine": {
     "offline": "Offline",
-    "empty": "No conversations on this machine yet",
     "connecting": "Connecting",
     "unreachable": "Unreachable",
     "offlineSince": "Offline · {{time}}"
   },
   "row": {
-    "save": "Save",
-    "delete": "Delete",
-    "menu": "Conversation actions"
+    "save": "Save"
   },
   "saveFailed": {
     "manual": "Couldn't save “{{title}}” to your account.",

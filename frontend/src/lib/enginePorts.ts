@@ -1,6 +1,7 @@
 import { rpcMethods, type AnyRpcMethod } from "@agentre-hub/agentre-wire";
 import type {
   BackendView,
+  BackendType,
   EngineID,
   EngineSettingsPorts,
   ModelView,
@@ -74,6 +75,19 @@ type DeviceDTO = DeviceItem;
  * 与端口给出的清单必须是同一个集合，而空态在包外面。包内那道筛选面向的是所有宿主。
  */
 const EXECUTION_DEVICE_KINDS = new Set(["desktop", "agentred"]);
+const BROWSER_BACKEND_TYPES = [
+  "claudecode",
+  "codex",
+  "piagent",
+  "openclaw",
+] as const satisfies readonly BackendType[];
+const BROWSER_BACKEND_TYPE_SET = new Set<string>(BROWSER_BACKEND_TYPES);
+
+function assertSupportedBackendType(type: string, reason: string): void {
+  if (!BROWSER_BACKEND_TYPE_SET.has(type)) {
+    throw new Error(reason);
+  }
+}
 
 export function isExecutionDevice(kind: string): boolean {
   return EXECUTION_DEVICE_KINDS.has(kind);
@@ -99,6 +113,7 @@ type EngineScanResult = {
 export interface BrowserEngineSettingsMessages {
   noOnlineAgentredReason: string;
   builtinUnsupportedReason: string;
+  unsupportedBackendReason: string;
   /** 运行设备必填（决策 5）：没选就地拦下，不发请求。 */
   deviceRequiredReason: string;
   /** 目标机离线：探测与扫描明确失败，绝不退化成「没装」。 */
@@ -544,6 +559,7 @@ export function createBrowserEngineSettingsPorts(
     // entries」那条路——与桌面端同一套交互，点完就能在展开的表里看见结果。
     canEditEnvJSON: true,
     canCreateBuiltin: false,
+    supportedBackendTypes: BROWSER_BACKEND_TYPES,
     async listProviders() {
       return (await fetchProviders()).map(providerView);
     },
@@ -684,6 +700,7 @@ export function createBrowserEngineSettingsPorts(
       if (input.type === "builtin") {
         throw new Error(messages.builtinUnsupportedReason);
       }
+      assertSupportedBackendType(input.type, messages.unsupportedBackendReason);
       // 服务端仍是必填校验的权威（code 30904 判指纹是否还在账号内）；这里先拦一道，
       // 是为了「没选设备」这件当场就知道的事不必先发一个注定被拒的请求。
       requireDevice(input);
@@ -697,6 +714,7 @@ export function createBrowserEngineSettingsPorts(
     },
 
     async updateBackend(id, input) {
+      assertSupportedBackendType(input.type, messages.unsupportedBackendReason);
       requireDevice(input);
       const key = backendIDs.key(id);
       const updated = await api<BackendDTO>(
@@ -761,6 +779,10 @@ export function createBrowserEngineSettingsPorts(
       const key =
         input.id === undefined ? undefined : backendIDs.find(input.id);
       const backend = key === undefined ? undefined : backendDTOs.get(key);
+      assertSupportedBackendType(
+        stringValue(input.type) || backend?.type || "",
+        messages.unsupportedBackendReason,
+      );
       if (backend) {
         providerKey ||= backend.provider_key;
         modelKey ||= backend.model_key;
@@ -844,43 +866,47 @@ export function createBrowserEngineSettingsPorts(
       const result = await scanDevice(fingerprint);
       const existing = await fetchBackends();
       return Promise.all(
-        (result.items ?? []).map(async (item) => {
-          const found = item.status === "recognized";
-          // 「已经有了」按 (设备, 类型) 判：同一类型在别的机器上已有后端，
-          // 不构成在这台机器上跳过的理由（决策 13）。
-          const current = existing.find(
-            (backend) =>
-              backend.type === item.backendType &&
-              backend.device_fingerprint === fingerprint,
-          );
-          if (!found) {
-            return {
+        (result.items ?? [])
+          // daemon 可能比 browser host 更新；capability 之外的类型在任何写入前忽略，
+          // 避免 Promise.all 已创建一半支持项后才被 Hermes 拒绝成整次扫描失败。
+          .filter((item) => BROWSER_BACKEND_TYPE_SET.has(item.backendType))
+          .map(async (item) => {
+            const found = item.status === "recognized";
+            // 「已经有了」按 (设备, 类型) 判：同一类型在别的机器上已有后端，
+            // 不构成在这台机器上跳过的理由（决策 13）。
+            const current = existing.find(
+              (backend) =>
+                backend.type === item.backendType &&
+                backend.device_fingerprint === fingerprint,
+            );
+            if (!found) {
+              return {
+                name: backendName(item.backendType),
+                found: false,
+                created: false,
+                skipped: false,
+              };
+            }
+            if (current) {
+              return {
+                name: current.name,
+                found: true,
+                created: false,
+                skipped: true,
+              };
+            }
+            const created = await ports.createBackend({
+              type: item.backendType,
               name: backendName(item.backendType),
-              found: false,
-              created: false,
+              deviceId: fingerprint,
+            });
+            return {
+              name: created.name,
+              found: true,
+              created: true,
               skipped: false,
             };
-          }
-          if (current) {
-            return {
-              name: current.name,
-              found: true,
-              created: false,
-              skipped: true,
-            };
-          }
-          const created = await ports.createBackend({
-            type: item.backendType,
-            name: backendName(item.backendType),
-            deviceId: fingerprint,
-          });
-          return {
-            name: created.name,
-            found: true,
-            created: true,
-            skipped: false,
-          };
-        }),
+          }),
       );
     },
   };

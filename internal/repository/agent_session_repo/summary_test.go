@@ -193,14 +193,14 @@ func TestListSummariesPage_TitleSearchAndWaitingFilterCompose(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 「运行中」是 running **且不在等输入**：等你处理优先，两个 chip 不能同时命中同一条
-// （判据与前端 matchesSessionFilter 逐字一致）。
-func TestListSummariesPage_RunningExcludesWaiting(t *testing.T) {
+// 「运行中」收的是每一条 lifecycle_state=running 的会话；waiting_for_input 是独立的
+// attention 事实，不能把仍在 running 生命周期里的会话排除掉。
+func TestListSummariesPage_RunningIncludesWaitingForInput(t *testing.T) {
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSummary()
 
-	mock.ExpectQuery(regexp.QuoteMeta("waiting_for_input=? AND lifecycle_state=?")).
-		WithArgs(int64(7), false, "running", 50).
+	mock.ExpectQuery(regexp.QuoteMeta("lifecycle_state=?")).
+		WithArgs(int64(7), "running", 50).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id"}))
 
 	_, err := r.ListSummariesPage(ctx, SummaryPageQuery{
@@ -514,10 +514,9 @@ func TestCountAttention_EmptyAccountIsZeroNotAnError(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 五档 attention 的 SQL 判据与共享包 `computeAttention` 的 if 链**同一个顺序**：
-// 每一档都带着比它强的那几档的否定，因此任意一行至多命中一档，几档相加不会重复计数。
-//
-// 这条守的是那个顺序本身。共享包那一侧改了优先级而这里没跟上时，它红。
+// 五档 attention 的 SQL 判据与共享包 `computeAttention` 使用同一组事实。运行筛选
+// 是生命周期集合，因此可与 needs_attention 重叠；error / unread 仍按共享 attention
+// 优先级排除更强理由，避免侧栏 attention 计数重复。
 func TestAttentionExpr_MirrorsTheSharedPackagePriority(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -530,9 +529,9 @@ func TestAttentionExpr_MirrorsTheSharedPackagePriority(t *testing.T) {
 			wantSQL: "waiting_for_input=?",
 		},
 		{
-			name:    "running 让位给 needs_attention",
+			name:    "running 收完整生命周期集合，包括 waiting_for_input",
 			filter:  AttentionRunning,
-			wantSQL: "waiting_for_input=? AND lifecycle_state=?",
+			wantSQL: "lifecycle_state=?",
 		},
 		{
 			name:    "error 要未读才算，且让位给上面两档",

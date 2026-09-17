@@ -20,6 +20,7 @@
   "errors": {
     "noOnlineAgentred": "当前没有在线的计算节点。请启动或重新连接自己的设备后再试。",
     "builtinUnsupported": "浏览器控制台不能新建内置后端。",
+    "unsupportedBackend": "浏览器控制台不支持此后端类型。",
     "deviceRequired": "保存前先选定这个后端在哪台设备上运行。",
     "deviceOffline": "那台设备当前离线，什么都没探到。",
     "deviceUnknown": "那台设备已不在账号内，请改选一台。"
