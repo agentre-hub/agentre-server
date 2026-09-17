@@ -257,6 +257,7 @@ describe("会话索引的轴投影", () => {
       labels: { unknownMachine: "未知机器" },
     });
 
+    // 名单里那台（21）即使没有行也照摆（决策 10），unknown 永远最后。
     expect(groups.map((g) => g.key)).toEqual([
       "device-20",
       "device-21",

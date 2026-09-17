@@ -21,7 +21,6 @@ import {
   deriveTitle,
   dispatchNewConversation,
   fetchDispatchPlan,
-  pickFirstAvailable,
   type DispatchPlan,
 } from "@/lib/dispatch";
 
@@ -196,32 +195,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-});
-
-describe("pickFirstAvailable（R15d 守卫）", () => {
-  it("跳过 device_id 为空的档，只在 agentred 里按顺序取第一档可用的", () => {
-    const got = pickFirstAvailable(availablePlan.tiers);
-    expect(got?.device_name).toBe("公司 Mac mini");
-    expect(got?.availability).toBe("available");
-  });
-
-  it("全部不可用时返回 null（逐档原因交给界面渲染，不静默失败）", () => {
-    expect(pickFirstAvailable(allUnavailablePlan.tiers)).toBeNull();
-  });
-
-  it("本机档排在最前也不参与挑选（守卫断言：锁住块 1 R15d 在浏览器语境下的行为）", () => {
-    const got = pickFirstAvailable([
-      { rank: 1, availability: "no_device", current: false },
-      {
-        rank: 2,
-        device_id: 5,
-        device_name: "书房 Mac mini",
-        availability: "available",
-        current: true,
-      },
-    ]);
-    expect(got?.device_id).toBe(5);
-  });
 });
 
 describe("标题", () => {

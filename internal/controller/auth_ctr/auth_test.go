@@ -38,7 +38,7 @@ func newAuthTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).
@@ -284,7 +284,7 @@ func TestMe_FillsGithubLogin(t *testing.T) {
 		user_identity_repo.RegisterUserIdentity(nil)
 	})
 
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).
@@ -353,7 +353,7 @@ func TestMe_ReturnsEmptyGithubLoginWithoutGithubIdentity(t *testing.T) {
 		user_identity_repo.RegisterUserIdentity(nil)
 	})
 
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), testCookieName, 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	testMux := muxtest.NewTestMux()
 	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).

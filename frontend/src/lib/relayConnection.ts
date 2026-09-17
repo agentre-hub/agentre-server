@@ -16,12 +16,17 @@
  */
 import { RedialTimer } from "@/lib/redialTimer";
 import { backoffDelay } from "@/lib/relayBackoff";
-import {
-  binaryPayload,
-  unwrapEnvelope,
-  wrapEnvelope,
-} from "@/lib/relayEnvelope";
+import { unwrapEnvelope, wrapEnvelope } from "@agentre-hub/agentre-wire";
 import { bearerSubprotocol } from "@/lib/relayUrl";
+
+/** 把 WebSocket 收到的东西归一成字节。信封本身归 wire 包，只有这条平台细节留在这里。 */
+function binaryPayload(data: unknown): Uint8Array {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  }
+  throw new TypeError("relay: 中继帧必须是二进制");
+}
 
 export type RelayState =
   "connecting" | "connected" | "disconnected" | "reconnecting";
@@ -87,8 +92,6 @@ export interface RelayConnectionOptions {
   reconnect?: boolean;
   /** 首次重连的等待，之后指数退让（默认 1000）。 */
   reconnectDelayMs?: number;
-  /** 退让的封顶（默认 30 秒）。 */
-  maxReconnectDelayMs?: number;
   /**
    * 连上之后活满多久才算「这次是成功的」，退让计数据此归零（默认 10 秒）。
    *
@@ -344,7 +347,7 @@ export class RelayConnection {
     // 服务端每秒拨一次，直到标签页关掉。形状（含抖动）见 relayBackoff。
     const delay = backoffDelay(this.failures, {
       baseMs: this.opts.reconnectDelayMs ?? 1000,
-      capMs: this.opts.maxReconnectDelayMs ?? 30_000,
+      capMs: 30_000,
       random: this.opts.random,
     });
     this.failures += 1;

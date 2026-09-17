@@ -35,10 +35,6 @@ function stringArray(value: unknown): string[] {
   return value.filter((v): v is string => typeof v === "string");
 }
 
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
 /**
  * 解 `runtime.capabilities` 的应答。
  *
@@ -66,7 +62,7 @@ export function decodePermissionModeMeta(
   const order = stringArray(m.order);
   return {
     allowedModes,
-    defaultMode: stringValue(m.defaultMode),
+    defaultMode: typeof m.defaultMode === "string" ? m.defaultMode : "",
     // order 为空时退回 allowedModes 的顺序，与桌面端 nextPermissionMode 的约定一致。
     order: order.length > 0 ? order : allowedModes,
     switchableDuringTurn: m.switchableDuringTurn === true,

@@ -32,7 +32,7 @@ import {
   ErrCodeProjectPathNotFound,
   rpcMethods,
 } from "@agentre-hub/agentre-wire";
-import { RelayClient, RelayError } from "@/lib/relayClient";
+import { RelayError, disconnected, type RelayCaller } from "@/lib/relayClient";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
 
@@ -58,11 +58,6 @@ export interface ProjectLocalPathFailure {
   message: string;
 }
 
-/** 有 client 才发得出请求：没有连接时如实给「掉线」，不抛一个说不清的 TypeError。 */
-interface ProjectLocalPathCaller {
-  request: RelayClient["request"];
-}
-
 function decode(raw: unknown): ProjectLocalPathResult {
   const value = raw as Partial<ProjectLocalPathResult> | null | undefined;
   return {
@@ -74,7 +69,7 @@ function decode(raw: unknown): ProjectLocalPathResult {
 }
 
 export async function setDesktopLocalPath(
-  client: ProjectLocalPathCaller | null,
+  client: RelayCaller | null,
   projectSyncId: string,
   path: string,
 ): Promise<ProjectLocalPathResult> {
@@ -92,17 +87,13 @@ export async function setDesktopLocalPath(
  * 要么真的写进去一个空路径，两种都不是用户要的「这台机器上先别管这个项目」。
  */
 export async function clearDesktopLocalPath(
-  client: ProjectLocalPathCaller | null,
+  client: RelayCaller | null,
   projectSyncId: string,
 ): Promise<ProjectLocalPathResult> {
   if (!client) throw disconnected();
   return decode(
     await client.request(rpcMethods.projectClearLocalPath, { projectSyncId }),
   );
-}
-
-function disconnected(): RelayError {
-  return new RelayError(-1, "relay: 连接未就绪", null);
 }
 
 /**
@@ -159,7 +150,7 @@ export async function clearLocalPathOnMachine(
 
 async function callOnMachine<T>(
   fingerprint: string,
-  call: (client: ProjectLocalPathCaller) => Promise<T>,
+  call: (client: RelayCaller) => Promise<T>,
 ): Promise<T> {
   if (!fingerprint) throw disconnected();
   return withRelayClient(machineTarget(fingerprint), (client) => call(client));

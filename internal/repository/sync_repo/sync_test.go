@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
@@ -500,7 +501,7 @@ func TestDeleteTombstonesBefore_GivenCutoff_ThenOnlyExpiredTombstonesAreDeleted(
 
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `sync_objects` WHERE deleted_at>0 AND deleted_at<")).
-		WithArgs(int64(1700), int64(cleanupBatchSize)).
+		WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	mock.ExpectCommit()
 
@@ -519,17 +520,17 @@ func TestDeleteTombstonesBefore_GivenMoreThanOneBatch_ThenDeletesInBoundedChunks
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncObject()
 
-	for _, affected := range []int64{cleanupBatchSize, 7} {
+	for _, affected := range []int64{dbutil.CleanupBatchSize, 7} {
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM `sync_objects` WHERE deleted_at>0 AND deleted_at<")).
-			WithArgs(int64(1700), int64(cleanupBatchSize)).
+			WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 			WillReturnResult(sqlmock.NewResult(0, affected))
 		mock.ExpectCommit()
 	}
 
 	n, err := r.DeleteTombstonesBefore(ctx, 1700)
 	assert.NoError(t, err)
-	assert.Equal(t, cleanupBatchSize+int64(7), n, "分批之后总数必须仍然是删掉的行数之和")
+	assert.Equal(t, dbutil.CleanupBatchSize+int64(7), n, "分批之后总数必须仍然是删掉的行数之和")
 	assert.NoError(t, mock.ExpectationsWereMet(), "删满一批之后没有继续删下一批")
 }
 
@@ -543,7 +544,7 @@ func TestDeleteUnreferencedAvatarsBefore_GivenAccounts_ThenReferenceCheckIsPerAc
 	r := NewSyncAvatar()
 
 	mock.ExpectExec(`(?s)DELETE FROM sync_avatars.*NOT EXISTS.*o\.user_id = a\.user_id.*o\.kind = 'agent'.*o\.deleted_at = 0`).
-		WithArgs(int64(1700), int64(cleanupBatchSize)).
+		WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 
 	n, err := r.DeleteUnreferencedBefore(ctx, 1700)
@@ -564,7 +565,7 @@ func TestDeleteUnreferencedAvatarsBefore_ComparesTheIndexedColumnNotAJSONExpress
 	r := NewSyncAvatar()
 
 	mock.ExpectExec(`(?s)DELETE FROM sync_avatars.*o\.avatar_hash = a\.content_hash`).
-		WithArgs(int64(1700), int64(cleanupBatchSize)).
+		WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	_, err := r.DeleteUnreferencedBefore(ctx, 1700)
@@ -580,15 +581,15 @@ func TestDeleteUnreferencedAvatarsBefore_GivenMoreThanOneBatch_ThenDeletesInBoun
 	ctx, _, mock := hubtest.Database(t)
 	r := NewSyncAvatar()
 
-	for _, affected := range []int64{cleanupBatchSize, 4} {
+	for _, affected := range []int64{dbutil.CleanupBatchSize, 4} {
 		mock.ExpectExec(`(?s)DELETE FROM sync_avatars.*LIMIT`).
-			WithArgs(int64(1700), int64(cleanupBatchSize)).
+			WithArgs(int64(1700), int64(dbutil.CleanupBatchSize)).
 			WillReturnResult(sqlmock.NewResult(0, affected))
 	}
 
 	n, err := r.DeleteUnreferencedBefore(ctx, 1700)
 	assert.NoError(t, err)
-	assert.Equal(t, cleanupBatchSize+int64(4), n)
+	assert.Equal(t, dbutil.CleanupBatchSize+int64(4), n)
 	assert.NoError(t, mock.ExpectationsWereMet(), "删满一批之后没有继续删下一批")
 }
 

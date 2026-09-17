@@ -69,11 +69,6 @@ func (r *repo) DeleteByDevice(ctx context.Context, deviceID int64) error {
 	return db.Ctx(ctx).Where("device_id=?", deviceID).Delete(&device_token_entity.DeviceToken{}).Error
 }
 
-// cleanupBatchSize 是清理 DELETE 每一批的行数上限。这张表增长很快——access TTL
-// 15 分钟、refresh 每次轮换插一行,90 天窗口下稳态几百万行——一条不分批的 DELETE
-// 会把 next-key 锁铺满它扫过的范围,期间落在同一范围上的令牌刷新全被挡住。
-const cleanupBatchSize = 1000
-
 // DeleteRevokedBefore 删掉满足
 //
 //	(revoked_at != 0 AND revoked_at < ?) OR refresh_expires_at < ?
@@ -83,23 +78,9 @@ const cleanupBatchSize = 1000
 //
 // 行集合与单条 OR 语句完全相同:同时满足两侧的行由第一条删走,第二条自然就找不到它了。
 func (r *repo) DeleteRevokedBefore(ctx context.Context, cutoffMs int64) error {
-	if err := r.deleteBatched(ctx, "revoked_at != 0 AND revoked_at < ?", cutoffMs); err != nil {
+	if _, err := dbutil.DeleteBatched(ctx, &device_token_entity.DeviceToken{}, "revoked_at != 0 AND revoked_at < ?", cutoffMs); err != nil {
 		return err
 	}
-	return r.deleteBatched(ctx, "refresh_expires_at < ?", cutoffMs)
-}
-
-// deleteBatched 按批删,直到某一批没删满——没删满就说明够到底了。
-func (r *repo) deleteBatched(ctx context.Context, where string, cutoffMs int64) error {
-	for {
-		res := db.Ctx(ctx).Where(where, cutoffMs).
-			Limit(cleanupBatchSize).
-			Delete(&device_token_entity.DeviceToken{})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected < cleanupBatchSize {
-			return nil
-		}
-	}
+	_, err := dbutil.DeleteBatched(ctx, &device_token_entity.DeviceToken{}, "refresh_expires_at < ?", cutoffMs)
+	return err
 }

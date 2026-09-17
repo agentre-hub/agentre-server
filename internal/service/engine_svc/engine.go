@@ -3,25 +3,19 @@ package engine_svc
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/agentre-hub/agentre/pkg/syncwire"
-	"github.com/cago-frame/cago/database/db"
 	"github.com/cago-frame/cago/pkg/i18n"
-	"github.com/oklog/ulid/v2"
-	"gorm.io/gorm"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
-	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
-
-const ServerOriginFingerprint = ""
 
 type Model struct {
 	ModelKey      string `json:"model_key"`
@@ -195,7 +189,7 @@ func (s *engineSvc) CreateProvider(ctx context.Context, in ProviderWriteInput) (
 	if !validProvider(p) || strings.TrimSpace(p.APIKey) == "" {
 		return nil, i18n.NewError(ctx, code.InvalidParameter)
 	}
-	return s.saveProvider(ctx, in.UserID, newSyncID(s.now()), nil, p)
+	return s.saveProvider(ctx, in.UserID, workspace_svc.NewOrgSyncID(s.now()), nil, p)
 }
 func (s *engineSvc) UpdateProvider(ctx context.Context, in ProviderWriteInput) (*ProviderView, error) {
 	row, err := findLive(ctx, in.UserID, in.ProviderKey, sync_entity.KindLLMProvider)
@@ -224,38 +218,14 @@ func (s *engineSvc) saveProvider(ctx context.Context, userID int64, key string, 
 	if row == nil {
 		row = &sync_entity.SyncObject{UserID: userID, Kind: sync_entity.KindLLMProvider, SyncID: key, Createtime: now}
 	}
-	row.Payload, row.SyncUpdatedAt, row.OriginFingerprint, row.Updatetime = string(payload), now, ServerOriginFingerprint, now
-	if err := commitRow(ctx, userID, row); err != nil {
+	row.Payload = string(payload)
+	if err := workspace_svc.SaveOrgRow(ctx, userID, row); err != nil {
 		return nil, err
 	}
 	out := browserProvider(key, p)
 	return &out, nil
 }
 
-// commitRow 是引擎对象每一条写路径共用的那一段：取一个新版本号盖到行上、落库，两步在
-// 同一个事务里提交；账号广播在提交之后发出。
-//
-// 取号与落库**必须**同事务（与 workspace_svc.WithOrgWriteTx 同一条不变量）：
-// sync_account_seqs 那一行的排他锁持到提交，「取号顺序 == 提交顺序」才成立。分开时锁在
-// 落库之前就放掉了，并发的一次 Push 可以取到更大的号并先提交，设备把游标推过去，这一次
-// 写入随后提交的较小版本对它永远不再投递——服务端与浏览器却都以为改成功了。广播放在
-// 提交之后，设备收到信号去拉时才看得见这一行。
-func commitRow(ctx context.Context, userID int64, row *sync_entity.SyncObject) error {
-	err := db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := db.WithContextDB(ctx, tx)
-		version, err := sync_repo.SyncState().NextVersion(txCtx, userID, 1)
-		if err != nil {
-			return err
-		}
-		row.Version = version
-		return sync_repo.SyncObject().Save(txCtx, row)
-	})
-	if err != nil {
-		return err
-	}
-	accountchan_svc.BroadcastBestEffort(ctx, userID, row.Version)
-	return nil
-}
 func (s *engineSvc) DeleteProvider(ctx context.Context, userID int64, key string) error {
 	return s.delete(ctx, userID, key, sync_entity.KindLLMProvider, code.EngineProviderNotFound)
 }
@@ -302,7 +272,7 @@ func (s *engineSvc) CreateBackend(ctx context.Context, in BackendWriteInput) (*B
 		return nil, err
 	}
 	fingerprint := strings.TrimSpace(*in.DeviceFingerprint)
-	out, err := s.saveBackend(ctx, in.UserID, newSyncID(s.now()), nil, b, fingerprint)
+	out, err := s.saveBackend(ctx, in.UserID, workspace_svc.NewOrgSyncID(s.now()), nil, b, fingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -344,9 +314,9 @@ func (s *engineSvc) saveBackend(ctx context.Context, userID int64, id string, ro
 	if row == nil {
 		row = &sync_entity.SyncObject{UserID: userID, Kind: sync_entity.KindAgentBackend, SyncID: id, Createtime: now}
 	}
-	row.Payload, row.SyncUpdatedAt, row.OriginFingerprint, row.Updatetime = string(payload), now, ServerOriginFingerprint, now
+	row.Payload = string(payload)
 	row.AgentredFingerprint = fingerprint
-	if err := commitRow(ctx, userID, row); err != nil {
+	if err := workspace_svc.SaveOrgRow(ctx, userID, row); err != nil {
 		return nil, err
 	}
 	out := backendView(id, b)
@@ -388,12 +358,12 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 	now := s.now()
 	if row == nil {
 		row = &sync_entity.SyncObject{
-			UserID: in.UserID, Kind: sync_entity.KindAgentBackendCLI, SyncID: newSyncID(now),
+			UserID: in.UserID, Kind: sync_entity.KindAgentBackendCLI, SyncID: workspace_svc.NewOrgSyncID(now),
 			ScopeSyncID: backendSyncID, AgentredFingerprint: fingerprint, Createtime: now,
 		}
 	}
-	row.Payload, row.SyncUpdatedAt, row.OriginFingerprint, row.Updatetime = string(payload), now, ServerOriginFingerprint, now
-	return commitRow(ctx, in.UserID, row)
+	row.Payload = string(payload)
+	return workspace_svc.SaveOrgRow(ctx, in.UserID, row)
 }
 
 func backendView(syncID string, b syncwire.AgentBackendPayload) BackendView {
@@ -456,8 +426,8 @@ func (s *engineSvc) delete(ctx context.Context, userID int64, id, kind string, n
 		return i18n.NewNotFoundError(ctx, notFoundCode)
 	}
 	now := s.now()
-	row.DeletedAt, row.SyncUpdatedAt, row.OriginFingerprint, row.Updatetime = now, now, ServerOriginFingerprint, now
-	return commitRow(ctx, userID, row)
+	row.DeletedAt = now
+	return workspace_svc.SaveOrgRow(ctx, userID, row)
 }
 func findLive(ctx context.Context, userID int64, id, kind string) (*sync_entity.SyncObject, error) {
 	row, err := sync_repo.SyncObject().Find(ctx, userID, id)
@@ -646,7 +616,4 @@ func overlayStatus(path string) string {
 		return "path"
 	}
 	return "recognized"
-}
-func newSyncID(now int64) string {
-	return ulid.MustNew(ulid.Timestamp(time.UnixMilli(now)), rand.Reader).String()
 }

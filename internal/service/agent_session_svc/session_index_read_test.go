@@ -743,7 +743,8 @@ func TestSessionIndex_ProjectAxis_LocationOfAGoneProject_CountsAsUnassigned(t *t
 		SummaryQuery: agent_session_repo.SummaryQuery{
 			UserID: 7, ProjectMode: agent_session_repo.ProjectUnassigned,
 			// 两份名单都空着：那条位置不算数，账号里也没有活着的项目。
-			Locations: []agent_session_repo.SummaryLocation{}, LiveProjectSyncIDs: []string{},
+			// liveProjectSyncIDs 走 slices.Sorted，没有活项目时是 nil 而不是空切片。
+			Locations: []agent_session_repo.SummaryLocation{}, LiveProjectSyncIDs: nil,
 		},
 		Limit: defaultPerGroup + 1,
 	}).Return(nil, nil)

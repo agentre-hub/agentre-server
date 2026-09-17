@@ -17,7 +17,7 @@ import type {
   TaskFormValue,
 } from "@agentre-hub/agentre-ui";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import {
   isFiltering,
   matchedTotal,
@@ -29,6 +29,7 @@ import {
   type BoardCardProjectResolver,
   type SyncIdRegistry,
 } from "@/lib/boardWire";
+import { errorText } from "@/lib/errorText";
 import {
   createIssue,
   createIssueLabel,
@@ -56,7 +57,6 @@ export interface UseBoardResult {
   projectCountOf: (projectSyncId: string) => number;
   /** 「未归属」那一项的计数；0 = 该入口不出现。 */
   unassignedCount: number;
-  /** 当前范围覆盖到的项目；「范围里是否不止一个项目」的判据。 */
   /** 搜索框右侧那个命中数。 */
   matchedCount: number;
   /** 这一条任务摊回表单要编辑的那些字段；不在当前结果里就是 `null`。 */
@@ -64,16 +64,11 @@ export interface UseBoardResult {
   /** 取数在途；旧结果留在原地，只有输入框右端那枚转圈在动。 */
   searching: boolean;
   error: string | null;
-  reload: () => Promise<void>;
   /** 落库走 lib/issues 的 moveIssue：wire 那层是 issue,这一层对外一律 task。 */
   moveTask: (id: number, stage: BoardStage, afterId: number) => Promise<void>;
   saveTask: (value: TaskFormValue) => Promise<void>;
   deleteTask: (id: number) => Promise<void>;
   mutateLabel: (mutation: LabelMutation) => Promise<void>;
-}
-
-function reasonOf(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }
 
 export function useBoard(
@@ -117,7 +112,7 @@ export function useBoard(
       })
       .catch((cause: unknown) => {
         if (request !== requestRef.current) return;
-        setError(reasonOf(cause));
+        setError(errorText(cause, String(cause)));
         // 失败也要放行那枚转圈，否则它会一直转到下一次输入为止。
         setLoadedKey(key);
       });
@@ -239,7 +234,6 @@ export function useBoard(
     taskOf,
     searching: refreshing || loadedKey !== queryKey,
     error,
-    reload,
     moveTask,
     saveTask,
     deleteTask,

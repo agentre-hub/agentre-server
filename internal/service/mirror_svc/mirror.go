@@ -214,11 +214,9 @@ type trackedSession struct {
 	// followWaiter。空但非 nil 表示帧说过话，而此刻一个待决都没有。
 	waiters map[string]struct{}
 
-	// 摘要攒批的窗口状态，形状与 notify.go 的「首发 + 尾补」一致，见 touchSummary。
-	flushMu        sync.Mutex
-	flushOpen      bool
-	flushDirty     bool
-	flushForgotten bool
+	// 摘要攒批的窗口（首发 + 尾补），形状与 notify.go 共用同一台 debounceWindow，
+	// 见 touchSummary。
+	flush debounceWindow
 }
 
 // abandonSummaryFlush 让这条对话上还欠着的那次尾补作废。
@@ -227,10 +225,7 @@ type trackedSession struct {
 // 一次迟到的摘要写入把它原样写回去，「刚删掉的东西悄悄回来了」。删除路径先 Forget
 // 再清行，那一步之后就不该再有任何人替这条对话写字。
 func (ts *trackedSession) abandonSummaryFlush() {
-	ts.flushMu.Lock()
-	defer ts.flushMu.Unlock()
-	ts.flushForgotten = true
-	ts.flushDirty = false
+	ts.flush.forget()
 }
 
 func (ts *trackedSession) markAttached(v bool) {
@@ -663,8 +658,6 @@ func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification
 		ts.waiters[requestID] = struct{}{}
 	case waiterClosed:
 		delete(ts.waiters, requestID)
-	case waiterNone:
-		return false
 	}
 	waiting := len(ts.waiters) > 0
 	if ts.summary.GetWaitingForInput() == waiting {
@@ -696,48 +689,7 @@ func (ts *trackedSession) followWaiter(notification *agentrewire.RpcNotification
 // 攒批点因此是诚实的：让各端去读的是 signals 那条信号，而它本来就限速到一秒一条。
 // 写得比信号还勤，多出来的那些次没有任何人看得见。
 func (m *Mirror) touchSummary(ctx context.Context, ts *trackedSession) error {
-	ts.flushMu.Lock()
-	if ts.flushForgotten {
-		ts.flushMu.Unlock()
-		return nil
-	}
-	if ts.flushOpen {
-		ts.flushDirty = true
-		ts.flushMu.Unlock()
-		return nil
-	}
-	ts.flushOpen = true
-	ts.flushMu.Unlock()
-
-	err := m.saveSummary(ctx, ts)
-	// 尾补跑在定时器上，那时触发它的这次 Apply 早就返回了。带走一份不会被取消的
-	// 副本：ctx 上的 trace / logger 字段还留着，而取消不再牵连这一条 —— 与 notify.go
-	// 的同款理由。
-	tail := context.WithoutCancel(ctx)
-	m.schedule(m.summaryWindow, func() { m.summaryWindowElapsed(tail, ts) })
-	return err
-}
-
-// summaryWindowElapsed 收尾一个窗口：压住过就补写一次并再开一个窗口（对话还在跑的话
-// 下一帧照样先被压住），没压住过就把窗口关掉，下一帧重新走首发。
-func (m *Mirror) summaryWindowElapsed(ctx context.Context, ts *trackedSession) {
-	ts.flushMu.Lock()
-	if ts.flushForgotten || !ts.flushDirty {
-		ts.flushOpen = false
-		ts.flushMu.Unlock()
-		return
-	}
-	ts.flushDirty = false
-	ts.flushMu.Unlock()
-
-	if err := m.saveSummary(ctx, ts); err != nil {
-		// 补写失败不重试：下一帧会重新走首发，把更新的游标一并带上。真正的代价
-		// 只是重连时多拉一段，而那一段是幂等的。
-		logger.Ctx(ctx).Warn("mirror trailing summary write failed",
-			zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
-			zap.String("conversationId", ts.conversationID), zap.Error(err))
-	}
-	m.schedule(m.summaryWindow, func() { m.summaryWindowElapsed(ctx, ts) })
+	return ts.flush.touch(ctx)
 }
 
 // catchUp is the three-step, and the order is hard:
@@ -969,6 +921,16 @@ func (m *Mirror) track(
 			conversationID: conversationID,
 			owner:          m.ownerOf(s),
 			origin:         s.GetPeerFingerprint(),
+			flush: debounceWindow{
+				window:   m.summaryWindow,
+				schedule: m.schedule,
+				fire:     func(ctx context.Context) error { return m.saveSummary(ctx, ts) },
+				onTailError: func(ctx context.Context, err error) {
+					logger.Ctx(ctx).Warn("mirror trailing summary write failed",
+						zap.Int64("userId", m.userID), zap.String("peerFingerprint", ts.owner),
+						zap.String("conversationId", ts.conversationID), zap.Error(err))
+				},
+			},
 		}
 		m.tracked[conversationID] = ts
 	}

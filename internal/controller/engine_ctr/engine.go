@@ -25,7 +25,17 @@ func (e *Engine) ListProviders(c *gin.Context, _ *api.ListProvidersRequest) (*ap
 	return &api.ListProvidersResponse{Providers: out}, nil
 }
 func (e *Engine) CreateProvider(c *gin.Context, req *api.CreateProviderRequest) (*api.Provider, error) {
-	item, err := engine_svc.Default().CreateProvider(c.Request.Context(), providerInput(ginctx.UserID(c), "", req.Name, req.Type, req.BaseURL, req.APIKey, req.DefaultModelKey, req.Models, req.Enabled))
+	item, err := engine_svc.Default().CreateProvider(c.Request.Context(), engine_svc.ProviderWriteInput{
+		UserID:          ginctx.UserID(c),
+		ProviderKey:     "",
+		Name:            req.Name,
+		Type:            req.Type,
+		BaseURL:         req.BaseURL,
+		APIKey:          req.APIKey,
+		DefaultModelKey: req.DefaultModelKey,
+		Models:          providerModels(req.Models),
+		Enabled:         req.Enabled,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +43,17 @@ func (e *Engine) CreateProvider(c *gin.Context, req *api.CreateProviderRequest) 
 	return &out, nil
 }
 func (e *Engine) UpdateProvider(c *gin.Context, req *api.UpdateProviderRequest) (*api.Provider, error) {
-	item, err := engine_svc.Default().UpdateProvider(c.Request.Context(), providerInput(ginctx.UserID(c), req.ProviderKey, req.Name, req.Type, req.BaseURL, req.APIKey, req.DefaultModelKey, req.Models, req.Enabled))
+	item, err := engine_svc.Default().UpdateProvider(c.Request.Context(), engine_svc.ProviderWriteInput{
+		UserID:          ginctx.UserID(c),
+		ProviderKey:     req.ProviderKey,
+		Name:            req.Name,
+		Type:            req.Type,
+		BaseURL:         req.BaseURL,
+		APIKey:          req.APIKey,
+		DefaultModelKey: req.DefaultModelKey,
+		Models:          providerModels(req.Models),
+		Enabled:         req.Enabled,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -46,16 +66,17 @@ func (e *Engine) DeleteProvider(c *gin.Context, req *api.DeleteProviderRequest) 
 	}
 	return &struct{}{}, nil
 }
-func providerInput(userID int64, key string, name, kind, baseURL, apiKey, defaultModel *string, models *[]api.Model, enabled *bool) engine_svc.ProviderWriteInput {
-	out := engine_svc.ProviderWriteInput{UserID: userID, ProviderKey: key, Name: name, Type: kind, BaseURL: baseURL, APIKey: apiKey, DefaultModelKey: defaultModel, Enabled: enabled}
-	if models != nil {
-		mapped := make([]engine_svc.Model, len(*models))
-		for i, m := range *models {
-			mapped[i] = engine_svc.Model{ModelKey: m.ModelKey, ModelID: m.ModelID, Name: m.Name, Enabled: m.Enabled, ContextWindow: m.ContextWindow, MaxOutput: m.MaxOutput}
-		}
-		out.Models = &mapped
+
+// providerModels 把请求里的模型档搬成服务层入参；nil 原样保持 nil（「不改这一列」）。
+func providerModels(models *[]api.Model) *[]engine_svc.Model {
+	if models == nil {
+		return nil
 	}
-	return out
+	mapped := make([]engine_svc.Model, len(*models))
+	for i, m := range *models {
+		mapped[i] = engine_svc.Model{ModelKey: m.ModelKey, ModelID: m.ModelID, Name: m.Name, Enabled: m.Enabled, ContextWindow: m.ContextWindow, MaxOutput: m.MaxOutput}
+	}
+	return &mapped
 }
 func provider(p engine_svc.ProviderView) api.Provider {
 	models := make([]api.Model, len(p.Models))
@@ -76,7 +97,15 @@ func (e *Engine) ListBackends(c *gin.Context, _ *api.ListBackendsRequest) (*api.
 	return &api.ListBackendsResponse{Backends: out}, nil
 }
 func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*api.Backend, error) {
-	item, err := engine_svc.Default().CreateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), "", req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceFingerprint, req.EnvJSON))
+	item, err := engine_svc.Default().CreateBackend(c.Request.Context(), engine_svc.BackendWriteInput{
+		UserID: ginctx.UserID(c), SyncID: "", Name: req.Name, Type: req.Type,
+		ProviderKey: req.ProviderKey, ModelKey: req.ModelKey, ModelRoutes: req.ModelRoutes,
+		Sandbox: req.Sandbox, Approval: req.Approval, ReasoningEffort: req.ReasoningEffort,
+		DefaultPermissionMode: req.DefaultPermissionMode, DefaultModel: req.DefaultModel,
+		OpenClawGatewayURL: req.OpenClawGatewayURL, OpenClawAgentID: req.OpenClawAgentID,
+		OpenClawDefaultModel: req.OpenClawDefaultModel, OpenClawSessionMode: req.OpenClawSessionMode,
+		CLIPath: req.CLIPath, DeviceFingerprint: req.DeviceFingerprint, EnvJSON: req.EnvJSON,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +113,15 @@ func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*
 	return &out, nil
 }
 func (e *Engine) UpdateBackend(c *gin.Context, req *api.UpdateBackendRequest) (*api.Backend, error) {
-	item, err := engine_svc.Default().UpdateBackend(c.Request.Context(), backendInput(ginctx.UserID(c), req.SyncID, req.Name, req.Type, req.ProviderKey, req.ModelKey, req.ModelRoutes, req.Sandbox, req.Approval, req.ReasoningEffort, req.DefaultPermissionMode, req.DefaultModel, req.OpenClawGatewayURL, req.OpenClawAgentID, req.OpenClawDefaultModel, req.OpenClawSessionMode, req.CLIPath, req.DeviceFingerprint, req.EnvJSON))
+	item, err := engine_svc.Default().UpdateBackend(c.Request.Context(), engine_svc.BackendWriteInput{
+		UserID: ginctx.UserID(c), SyncID: req.SyncID, Name: req.Name, Type: req.Type,
+		ProviderKey: req.ProviderKey, ModelKey: req.ModelKey, ModelRoutes: req.ModelRoutes,
+		Sandbox: req.Sandbox, Approval: req.Approval, ReasoningEffort: req.ReasoningEffort,
+		DefaultPermissionMode: req.DefaultPermissionMode, DefaultModel: req.DefaultModel,
+		OpenClawGatewayURL: req.OpenClawGatewayURL, OpenClawAgentID: req.OpenClawAgentID,
+		OpenClawDefaultModel: req.OpenClawDefaultModel, OpenClawSessionMode: req.OpenClawSessionMode,
+		CLIPath: req.CLIPath, DeviceFingerprint: req.DeviceFingerprint, EnvJSON: req.EnvJSON,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -96,9 +133,6 @@ func (e *Engine) DeleteBackend(c *gin.Context, req *api.DeleteBackendRequest) (*
 		return nil, err
 	}
 	return &struct{}{}, nil
-}
-func backendInput(userID int64, id string, name, kind, providerKey, modelKey, modelRoutes, sandbox, approval, reasoning, permission, defaultModel, gateway, agentID, openClawModel, sessionMode, cliPath, deviceFingerprint, envJSON *string) engine_svc.BackendWriteInput {
-	return engine_svc.BackendWriteInput{UserID: userID, SyncID: id, Name: name, Type: kind, ProviderKey: providerKey, ModelKey: modelKey, ModelRoutes: modelRoutes, Sandbox: sandbox, Approval: approval, ReasoningEffort: reasoning, DefaultPermissionMode: permission, DefaultModel: defaultModel, OpenClawGatewayURL: gateway, OpenClawAgentID: agentID, OpenClawDefaultModel: openClawModel, OpenClawSessionMode: sessionMode, CLIPath: cliPath, DeviceFingerprint: deviceFingerprint, EnvJSON: envJSON}
 }
 func backend(b engine_svc.BackendView) api.Backend {
 	cli := make([]api.CLIByDevice, len(b.CLIByDevice))

@@ -78,12 +78,12 @@ LIMIT ?`
 func (r *avatarRepo) DeleteUnreferencedBefore(ctx context.Context, cutoff int64) (int64, error) {
 	var total int64
 	for {
-		res := db.Ctx(ctx).Exec(deleteUnreferencedAvatarsSQL, cutoff, cleanupBatchSize)
+		res := db.Ctx(ctx).Exec(deleteUnreferencedAvatarsSQL, cutoff, dbutil.CleanupBatchSize)
 		if res.Error != nil {
 			return total, res.Error
 		}
 		total += res.RowsAffected
-		if res.RowsAffected < cleanupBatchSize {
+		if res.RowsAffected < dbutil.CleanupBatchSize {
 			return total, nil
 		}
 	}

@@ -74,7 +74,6 @@ export default function SessionComposer({
   contextUsage,
   feedback,
   queueSlot,
-  handleRef,
   permissionMode,
   permissionModeMeta,
   permissionRuntimeKey,
@@ -156,24 +155,19 @@ export default function SessionComposer({
    */
   reasoningEffortControl?: ReactNode;
   /**
-   * 想从外面往输入框里塞字时给（草稿态的「快捷开头」按钮）。不给就用内部这只 ——
-   * 富文本的内容住在编辑器里而不是 React state，外面拼字符串是够不着的。
-   */
-  handleRef?: RefObject<AIChatInputHandle | null>;
-  /**
    * 想把**整条草稿**（那句话 + 贴的图）放回输入框时给。
    *
-   * 与 `handleRef` 是两只不同的句柄,不是一件事说两遍:`AIChatInputHandle` 是富文本
-   * 编辑器的句柄,只认文本 —— 附件不住在编辑器里,而住在包的 `ChatComposer` 自己的
-   * state 里。发送失败要把用户刚写的东西原样还回去时,只有这一只够得着图
-   * （`restoreDraft(text, images)`）。
+   * `ChatComposerHandle` 与编辑器那只 `AIChatInputHandle` 不是一件事说两遍：
+   * 后者是富文本编辑器的句柄，只认文本 —— 附件不住在编辑器里，而住在包的
+   * `ChatComposer` 自己的 state 里。发送失败要把用户刚写的东西原样还回去时，
+   * 只有这一只够得着图（`restoreDraft(text, images)`）。
    */
   composerHandleRef?: RefObject<ChatComposerHandle | null>;
 }) {
   const { t } = useTranslation();
   // 发送按钮走输入框自己的 submit：只有它知道富文本里的提及要序列化成什么。
   const ownRef = useRef<AIChatInputHandle>(null);
-  const inputRef = handleRef ?? ownRef;
+  const inputRef = ownRef;
   /** 刚刚有一行以 `!` 开头被挡下来了（见 onCommandSubmit）。 */
   const [localCommandRejected, setLocalCommandRejected] = useState(false);
 
@@ -189,16 +183,7 @@ export default function SessionComposer({
 
   const devices = useDeviceMentions();
   const mentionSources = useMemo(
-    () =>
-      buildMentionSources(
-        agents.map((a) => ({
-          id: a.id,
-          name: a.name,
-          avatarColor: a.avatarColor,
-        })),
-        [],
-        devices,
-      ),
+    () => buildMentionSources(agents, [], devices),
     [agents, devices],
   );
 

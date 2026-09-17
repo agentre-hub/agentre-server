@@ -18,29 +18,21 @@ import type {
   GitFileContentResult,
   ReadFileResult,
 } from "@agentre-hub/agentre-ui";
+import { base64Encode } from "@bufbuild/protobuf/wire";
 import {
   ErrCodeWorkspaceFSNotFound,
   rpcMethods,
 } from "@agentre-hub/agentre-wire";
 
-import { RelayError, type RelayClient } from "@/lib/relayClient";
-
-/** 有 client 才发得出请求：没有连接时如实给「掉线」，不抛一个说不清的 TypeError。 */
-interface PreviewCaller {
-  request: RelayClient["request"];
-}
+import { RelayError, disconnected, type RelayCaller } from "@/lib/relayClient";
 
 export interface FilePreviewPortDeps {
-  client: PreviewCaller | null;
+  client: RelayCaller | null;
   /**
    * 这条会话此刻在那台机器上的工作目录。空串表示还不知道 —— 这一格空着时端口
    * 一次请求都不发，如实交出「够不着」（见 noWorkRoot）。
    */
   cwd: string;
-}
-
-function disconnected(): RelayError {
-  return new RelayError(-1, "relay: 连接未就绪", null);
 }
 
 /**
@@ -96,21 +88,8 @@ function decodeContent(raw: unknown, contentType: string): string {
       ? new TextEncoder().encode(raw)
       : new Uint8Array();
   if (bytes.length === 0) return "";
-  if (contentType.startsWith("image/")) return base64Of(bytes);
+  if (contentType.startsWith("image/")) return base64Encode(bytes);
   return new TextDecoder().decode(bytes);
-}
-
-/**
- * 分块编码，不用 `btoa(String.fromCharCode(...bytes))`：后者对一张几 MB 的图会
- * 把参数铺成几百万个实参，直接爆栈（与 relayClient 里那处同一个理由）。
- */
-function base64Of(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
 }
 
 export function createFilePreviewPorts(

@@ -40,11 +40,3 @@ app.kubernetes.io/part-of: agentre
 app.kubernetes.io/name: {{ include "agentre-server.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
-
-{{- define "agentre-server.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}
-{{- default (include "agentre-server.fullname" .) .Values.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.serviceAccount.name }}
-{{- end }}
-{{- end }}

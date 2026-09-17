@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
+
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
@@ -106,7 +108,7 @@ func (s *daemonForwardingRelayStub) ForwardClient(
 	if writer == nil {
 		return errors.New("daemon is not attached")
 	}
-	envelope, err := relay_svc.WrapEnvelope(channelID, frame)
+	envelope, err := relayenvelope.Wrap(channelID, frame)
 	if err != nil {
 		return err
 	}

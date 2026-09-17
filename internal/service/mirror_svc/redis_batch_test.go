@@ -70,11 +70,11 @@ func TestHandshakeStates_GivenSeveralMachines_ThenOnePipelineAnswersEachMachineI
 	ctx := context.Background()
 	_, client, trips := batchRedis(t)
 	sup := NewSupervisor(Config{InstanceID: "server-a"}, nil, nil, client)
-	sup.RecordProtocolMismatch(ctx, 7, "fp-a")
-	sup.RecordDaemonBuild(ctx, 7, "fp-a", "a1b2c3d")
-	sup.RecordDaemonBuild(ctx, 7, "fp-b", "")
+	sup.recordProtocolMismatch(ctx, machineKey{userID: 7, fingerprint: "fp-a"})
+	sup.recordDaemonBuild(ctx, machineKey{userID: 7, fingerprint: "fp-a"}, "a1b2c3d")
+	sup.recordDaemonBuild(ctx, machineKey{userID: 7, fingerprint: "fp-b"}, "")
 	// 别的账号下同一个指纹的记录不能串到这个账号上。
-	sup.RecordProtocolMismatch(ctx, 8, "fp-c")
+	sup.recordProtocolMismatch(ctx, machineKey{userID: 8, fingerprint: "fp-c"})
 	fingerprints := []string{"fp-a", "fp-b", "fp-c"}
 	trips.reset()
 
@@ -96,8 +96,8 @@ func TestHandshakeStates_GivenOneMachinesRecordUnreadable_ThenOnlyThatMachineIsU
 	ctx := context.Background()
 	mini, client, _ := batchRedis(t)
 	sup := NewSupervisor(Config{InstanceID: "server-a"}, nil, nil, client)
-	sup.RecordDaemonBuild(ctx, 7, "fp-a", "a1b2c3d")
-	sup.RecordDaemonBuild(ctx, 7, "fp-c", "c3c3c3c")
+	sup.recordDaemonBuild(ctx, machineKey{userID: 7, fingerprint: "fp-a"}, "a1b2c3d")
+	sup.recordDaemonBuild(ctx, machineKey{userID: 7, fingerprint: "fp-c"}, "c3c3c3c")
 	mini.HSet(daemonBuildKey(machineKey{userID: 7, fingerprint: "fp-b"}), "field", "value")
 	fingerprints := []string{"fp-a", "fp-b", "fp-c"}
 
@@ -116,8 +116,8 @@ func TestHandshakeStates_GivenRedisFailing_ThenEveryMachineReadsAsNothingKnown(t
 	ctx := context.Background()
 	mini, client, _ := batchRedis(t)
 	sup := NewSupervisor(Config{InstanceID: "server-a"}, nil, nil, client)
-	sup.RecordProtocolMismatch(ctx, 7, "fp-a")
-	sup.RecordDaemonBuild(ctx, 7, "fp-a", "a1b2c3d")
+	sup.recordProtocolMismatch(ctx, machineKey{userID: 7, fingerprint: "fp-a"})
+	sup.recordDaemonBuild(ctx, machineKey{userID: 7, fingerprint: "fp-a"}, "a1b2c3d")
 	mini.SetError("ERR redis is down")
 	fingerprints := []string{"fp-a", "fp-b"}
 

@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	agentreWire "github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
 
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
@@ -258,7 +259,7 @@ type channelWriter struct {
 }
 
 func (w *channelWriter) WriteMessage(messageType int, frame []byte) error {
-	envelope, err := relay_svc.WrapEnvelope(w.channelID, frame)
+	envelope, err := agentreWire.Wrap(w.channelID, frame)
 	if err != nil {
 		return err
 	}

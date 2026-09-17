@@ -3,7 +3,8 @@ package workspace_svc
 import (
 	"context"
 	"encoding/json"
-	"sort"
+	"maps"
+	"slices"
 
 	"github.com/agentre-hub/agentre/pkg/syncwire"
 	"github.com/cago-frame/cago/pkg/i18n"
@@ -50,14 +51,13 @@ func indexProjectRows(
 // 问到的两件事缓存住：设备在线态，以及桌面端配了哪些项目的路径。同一次计划里同一
 // 台机器会在多档上出现，不缓存就是同一个问题问好几遍。
 type dispatchResolver struct {
-	ctx        context.Context
-	userID     int64
-	deviceByFP map[string]*device_entity.Device
+	// targetPlacer 提供 ctx / userID / deviceByFP 与缓存的 isOnline：三处判定阶梯
+	// 与总览页同源，不在这里重写一遍。
+	*targetPlacer
 	// locationsByFP 是 agentred 那一侧的「指纹 → 项目 sync_id → 路径」查表，
 	// 建索引时已经一次算完，这里只读。
 	locationsByFP map[string]map[string]string
 
-	online           map[string]bool
 	desktopLocations map[int64]map[string]string
 }
 
@@ -66,24 +66,10 @@ func newDispatchResolver(
 	devices []*device_entity.Device, locationsByFP map[string]map[string]string,
 ) *dispatchResolver {
 	return &dispatchResolver{
-		ctx: ctx, userID: userID,
-		deviceByFP:       deviceFingerprintMap(devices),
+		targetPlacer:     newTargetPlacer(ctx, userID, devices),
 		locationsByFP:    locationsByFP,
-		online:           map[string]bool{},
 		desktopLocations: map[int64]map[string]string{},
 	}
-}
-
-func (r *dispatchResolver) isOnline(fingerprint string) bool {
-	if v, ok := r.online[fingerprint]; ok {
-		return v
-	}
-	v, err := onlineChecker.IsDaemonOnline(r.ctx, r.userID, fingerprint)
-	if err != nil {
-		v = false
-	}
-	r.online[fingerprint] = v
-	return v
 }
 
 // locationsFor 取每个设备「配了哪些项目的路径」：agentred 的路径在同步组
@@ -162,11 +148,7 @@ func (r *dispatchResolver) projectPicker(
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(configured))
-	for id := range configured {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
+	ids := slices.Sorted(maps.Keys(configured))
 	var out []ProjectView
 	for _, id := range ids {
 		if name := projectName[id]; name != "" {

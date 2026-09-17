@@ -38,7 +38,7 @@ type Hooks struct {
 	OnHeartbeat func() error
 }
 
-// MaxPayloadBytes / MaxEnvelopeBytes 取自 pkg/wire 的共享常量,本仓不另写字面量。
+// ReadLimit 是两个端点共用的读上限：载荷上限加上信封那一份余量。
 //
 // 各端的上限必须同源。不同源的后果不是「大一点的请求失败了」—— 超限时 gorilla 回
 // 1009 并让读循环出错,于是**整条物理连接**被拆掉,而 daemon 那条链路上跑着那台
@@ -47,17 +47,7 @@ type Hooks struct {
 // **两个端点都要加信封那一份余量。** 目标下沉到通道之后(决策 10),客户端那条连接
 // 上同时跑着多条通道,它自己也开始收发信封 —— 少给这一份,一份刚好顶格的合法载荷会
 // 只因为带了信封就被 1009 打掉,而打掉的是整条连接,上面所有通道一起陪葬。
-const (
-	MaxPayloadBytes  = wirelimits.MaxPayloadBytes
-	MaxEnvelopeBytes = relayenvelope.MaxEnvelopeBytes
-)
-
-// DaemonReadLimit / ClientReadLimit 是两个端点各自的读上限，由上面两个数推出来，
-// 不另外写字面量。
-const (
-	DaemonReadLimit = MaxPayloadBytes + MaxEnvelopeBytes
-	ClientReadLimit = MaxPayloadBytes + MaxEnvelopeBytes
-)
+const ReadLimit = wirelimits.MaxPayloadBytes + relayenvelope.MaxEnvelopeBytes
 
 const (
 	// HeartbeatInterval 是服务端发 ping 的周期,也是对端 pong 触发 OnPeerActivity
@@ -123,30 +113,17 @@ type connection struct {
 
 // New 创建采用固定生产生命周期策略的 WebSocket 传输组件。
 //
-// readLimit 由端点决定。两个端点如今收的都是信封，两个上限也因此同值；保留两个
-// 名字是因为它们各自表达一个端点的预算，都从 MaxPayloadBytes 推出来，调用方不该
-// 另写一个数。
+// readLimit 由端点决定；两个端点收的都是信封，上限同值（ReadLimit）。
 func New(readLimit int64) Transport {
-	return newWithTiming(defaultTiming(), readLimit)
-}
-
-func newWithTiming(cfg timing, readLimit int64) Transport {
-	if readLimit <= 0 {
-		readLimit = ClientReadLimit
-	}
 	return &transport{
-		timing:    cfg,
+		timing: timing{
+			heartbeatInterval: HeartbeatInterval,
+			readTimeout:       readTimeout,
+			writeTimeout:      writeTimeout,
+		},
 		readLimit: readLimit,
 		upgrader:  websocket.Upgrader{Subprotocols: []string{ProtobufSubprotocol}},
 		live:      map[*connection]struct{}{},
-	}
-}
-
-func defaultTiming() timing {
-	return timing{
-		heartbeatInterval: HeartbeatInterval,
-		readTimeout:       readTimeout,
-		writeTimeout:      writeTimeout,
 	}
 }
 
@@ -248,9 +225,7 @@ func (p *connection) WriteMessage(messageType int, data []byte) error {
 func (p *connection) Close() error {
 	p.closeOnce.Do(func() {
 		close(p.done)
-		if p.owner != nil {
-			p.owner.forget(p)
-		}
+		p.owner.forget(p)
 	})
 	return p.conn.Close()
 }

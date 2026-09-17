@@ -14,7 +14,7 @@ import AppShell from "@/components/AppShell";
 import { ActivityStatsPanel } from "@/components/settings/ActivityStatsPanel";
 import PageTitle from "@/components/PageTitle";
 import { EmptyState } from "@/components/console";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import {
   createBrowserEngineSettingsPorts,

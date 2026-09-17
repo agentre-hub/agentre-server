@@ -9,6 +9,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
 )
 
 /*
@@ -195,7 +197,7 @@ func TestForwardDaemon_MalformedEnvelopeStillFailsSynchronously(t *testing.T) {
 }
 
 func daemonEnvelope(channelID string, frame []byte) []byte {
-	envelope, err := WrapEnvelope(channelID, frame)
+	envelope, err := relayenvelope.Wrap(channelID, frame)
 	if err != nil {
 		panic(err)
 	}

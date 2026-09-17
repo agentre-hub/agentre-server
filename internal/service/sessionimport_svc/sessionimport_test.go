@@ -21,6 +21,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/service/saved_session_svc"
 )
 
 const (
@@ -97,11 +98,11 @@ func (m *fakeMachines) WithPeer(
 }
 
 type fakeSaved struct {
-	refs []SessionRef
+	refs []saved_session_svc.SessionRef
 	err  error
 }
 
-func (s *fakeSaved) Save(_ context.Context, ref SessionRef) error {
+func (s *fakeSaved) Save(_ context.Context, ref saved_session_svc.SessionRef) error {
 	s.refs = append(s.refs, ref)
 	return s.err
 }
@@ -390,7 +391,7 @@ func TestImport_RunsOnTheMachineAndSavesTheSessionIntoTheAccount(t *testing.T) {
 	assert.Equal(t, testFingerprint, r.peer.executed[0].GetPeerFingerprint(),
 		"点名发起端:不点名的话这条会话会落在 server 那个合成指纹名下")
 	require.Len(t, r.saved.refs, 1)
-	assert.Equal(t, SessionRef{
+	assert.Equal(t, saved_session_svc.SessionRef{
 		UserID: testUserID, MachineFingerprint: testFingerprint,
 		PeerFingerprint: testFingerprint, ConversationID: mintedConversation,
 	}, r.saved.refs[0])

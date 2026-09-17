@@ -200,7 +200,7 @@ func (s *relaySvc) PrepareDaemon(ctx context.Context, accountID, deviceID int64,
 		return Route{}, ErrDaemonForbidden
 	}
 	// 一条 websocket 一个 ConnID：PrepareDaemon 在 handler 里只跑一次，见 Route.ConnID。
-	connID, err := newDaemonConnID()
+	connID, err := randomID()
 	if err != nil {
 		return Route{}, err
 	}
@@ -342,7 +342,7 @@ func (s *relaySvc) AttachDaemon(ctx context.Context, target Route, writer FrameW
 }
 
 func (s *relaySvc) AttachClient(ctx context.Context, target Route, writer FrameWriter) (string, func(), error) {
-	channelID, err := newChannelID()
+	channelID, err := randomID()
 	if err != nil {
 		return "", nil, err
 	}
@@ -381,7 +381,7 @@ func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType 
 	if messageType != websocket.BinaryMessage {
 		return errors.New("relay daemon envelope must be a binary websocket message")
 	}
-	channelID, innerFrame, err := UnwrapEnvelope(frame)
+	channelID, innerFrame, err := relayenvelope.Unwrap(frame)
 	if err != nil {
 		return fmt.Errorf("decode relay daemon envelope: %w", err)
 	}
@@ -393,7 +393,7 @@ func (s *relaySvc) ForwardDaemon(ctx context.Context, target Route, messageType 
 }
 
 func (s *relaySvc) ForwardClient(ctx context.Context, target Route, channelID string, messageType int, frame []byte) error {
-	envelope, err := WrapEnvelope(channelID, frame)
+	envelope, err := relayenvelope.Wrap(channelID, frame)
 	if err != nil {
 		return fmt.Errorf("encode relay client envelope: %w", err)
 	}
@@ -407,18 +407,10 @@ func (s *relaySvc) forward(ctx context.Context, target Route, source Peer, chann
 	return nil
 }
 
-func newChannelID() (string, error) {
+func randomID() (string, error) {
 	value := make([]byte, 16)
 	if _, err := rand.Read(value); err != nil {
-		return "", fmt.Errorf("generate relay channel ID: %w", err)
-	}
-	return base64.RawURLEncoding.EncodeToString(value), nil
-}
-
-func newDaemonConnID() (string, error) {
-	value := make([]byte, 16)
-	if _, err := rand.Read(value); err != nil {
-		return "", fmt.Errorf("generate relay daemon connection ID: %w", err)
+		return "", fmt.Errorf("generate relay ID: %w", err)
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
@@ -440,20 +432,6 @@ func routeValue(route Route) string {
 func splitRouteValue(value string) (instanceID, connID string) {
 	instanceID, connID, _ = strings.Cut(value, routeValueSeparator)
 	return instanceID, connID
-}
-
-// WrapEnvelope / UnwrapEnvelope 转发共享实现。格式与校验由 pkg/wire/relayenvelope
-// 拥有 —— daemon、本仓与浏览器要是各写一份解析,三套校验必然互不相同,而中继上跑的是
-// 别的设备发来的字节,最松的那一份决定了实际的下限。
-//
-// 名字留在本包:调用方说的是「中继的信封」,不必知道它住在哪个 module。
-func WrapEnvelope(channelID string, frame []byte) ([]byte, error) {
-	return relayenvelope.Wrap(channelID, frame)
-}
-
-// UnwrapEnvelope 拆开通道信封。空载荷是合法的:它是「这条通道关了」的信号。
-func UnwrapEnvelope(envelope []byte) (string, []byte, error) {
-	return relayenvelope.Unwrap(envelope)
 }
 
 func routeKey(accountID int64, fingerprint string) string {

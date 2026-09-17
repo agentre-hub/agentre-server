@@ -10,9 +10,7 @@ package credstore
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base32"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +18,8 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/agentre-hub/agentre-server/internal/pkg/hashutil"
 )
 
 // TTL 是每一张短效凭据的有效期，也是它在 Redis 里的全部寿命。
@@ -93,7 +93,7 @@ func (s *Store) issue(ctx context.Context, c Credential) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := s.redis.Set(ctx, recordKeyPrefix+digest(token), body, TTL).Err(); err != nil {
+	if err := s.redis.Set(ctx, recordKeyPrefix+hashutil.SHA256Hex(token), body, TTL).Err(); err != nil {
 		return "", fmt.Errorf("credstore: record credential: %w", err)
 	}
 	return token, nil
@@ -105,7 +105,7 @@ func (s *Store) Resolve(ctx context.Context, token string) (*Credential, error) 
 	if token == "" {
 		return nil, ErrNotFound
 	}
-	c, err := s.Lookup(ctx, digest(token))
+	c, err := s.Lookup(ctx, hashutil.SHA256Hex(token))
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +145,4 @@ func (s *Store) ClaimRelayConnect(ctx context.Context, handle string) (bool, err
 		return false, errors.New("credstore: empty credential handle")
 	}
 	return s.redis.SetNX(ctx, connectKeyPrefix+handle, "1", TTL).Result()
-}
-
-func digest(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }

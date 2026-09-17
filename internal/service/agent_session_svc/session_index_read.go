@@ -11,6 +11,8 @@ package agent_session_svc
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -291,12 +293,7 @@ func splitLocationKey(key string) agent_session_repo.SummaryLocation {
 // （报了名单外标识的那些也是未归，决策 13）。排序固定：这份名单进 SQL 语句文本，
 // map 的遍历序会让同一次查询每次拼出不一样的语句（查询缓存、日志与测试断言都跟着抖）。
 func (a projectAffinity) liveProjectSyncIDs() []string {
-	out := make([]string, 0, len(a.liveProjects))
-	for syncID := range a.liveProjects {
-		out = append(out, syncID)
-	}
-	sort.Strings(out)
-	return out
+	return slices.Sorted(maps.Keys(a.liveProjects))
 }
 
 // unassignedQuery / projectQuery 是项目轴那两种组各自的判据。组骨架数它、「查看全部

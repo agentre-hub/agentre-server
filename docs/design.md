@@ -1055,12 +1055,11 @@ real device.
 
 **There is no shared query layer.** Each page or feature hook owns its own `loading` /
 `error` state and calls `api()` directly. The one shared piece is `useAliveEffect`
-(`frontend/src/hooks/use-api-query.ts`): it stops a round's
-callbacks from writing state once that round no longer counts. Its own doc comment owns
-why, including the fetch race it prevents. `useApiQuery` in the same file folds
-mount-guard + loading + error together for a plain read, but only `use-me.ts` needs that
-shape — `Promise.all`, relay calls and post-success work do not fit one hook, and forcing
-them through it only adds a shell.
+(`frontend/src/hooks/use-alive-effect.ts`): it stops a round's callbacks from writing state
+once that round no longer counts. Its own doc comment owns why, including the fetch race
+it prevents. Mount-guard + loading + error are deliberately *not* folded into a shared
+read hook: `Promise.all`, relay calls and post-success work each need a different shape,
+and forcing them through one only adds a shell.
 
 **Pending → empty → data, at the container that changed.** `ProjectAgentPane`:
 

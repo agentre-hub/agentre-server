@@ -46,9 +46,46 @@ type browserSession struct {
 	CSRFToken string `json:"csrf_token"`
 }
 
-func newSessionPayload(userID int64, csrf string, createdAt int64) serversession.Session {
-	return serversession.Session{UserID: userID, CSRFToken: csrf, CreatedAt: createdAt}
+// fixtureTable 是清理与复点共用的一份表清单：同一张表的 DELETE 与
+// SELECT count(*) 只差那一句动词，写两份平行清单就是两份会漂的机会（漏掉一张表
+// = 残留清不掉，或者清了不复点）。device_tokens 与 device_flow_codes 的取行方式
+// 各自特殊，在 runCleanup 里各自分支，这两张表的 del / cnt 因而留空。
+type fixtureTable struct {
+	name string
+	del  string
+	cnt  string
 }
+
+func fixtureTables() []fixtureTable {
+	return []fixtureTable{
+		{"device_tokens", `DELETE FROM device_tokens WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)`, `SELECT count(*) FROM device_tokens WHERE device_id IN (?)`},
+		{"device_flow_codes", "", ""},
+		{"device_local_paths", `DELETE FROM device_local_paths WHERE user_id = ?`, `SELECT count(*) FROM device_local_paths WHERE user_id = ?`},
+		{"sync_device_states", `DELETE FROM sync_device_states WHERE user_id = ?`, `SELECT count(*) FROM sync_device_states WHERE user_id = ?`},
+		{"sync_avatars", `DELETE FROM sync_avatars WHERE user_id = ?`, `SELECT count(*) FROM sync_avatars WHERE user_id = ?`},
+		{"sync_objects", `DELETE FROM sync_objects WHERE user_id = ?`, `SELECT count(*) FROM sync_objects WHERE user_id = ?`},
+		{"sync_account_seqs", `DELETE FROM sync_account_seqs WHERE user_id = ?`, `SELECT count(*) FROM sync_account_seqs WHERE user_id = ?`},
+		{"agent_session_saves", `DELETE FROM agent_session_saves WHERE user_id = ?`, `SELECT count(*) FROM agent_session_saves WHERE user_id = ?`},
+		// 通行密钥：webauthn_credentials 没有指向 users 的外键（迁移
+		// 202608180002 刻意不建），删账号不会带走它。不在这里删一次，凭证行就永久
+		// 留在专库里，账号却已经不存在了。
+		{"webauthn_credentials", `DELETE FROM webauthn_credentials WHERE user_id = ?`, `SELECT count(*) FROM webauthn_credentials WHERE user_id = ?`},
+		{"devices", `DELETE FROM devices WHERE user_id = ?`, `SELECT count(*) FROM devices WHERE user_id = ?`},
+		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`, `SELECT count(*) FROM user_identities WHERE user_id = ?`},
+		{"users", `DELETE FROM users WHERE id = ?`, `SELECT count(*) FROM users WHERE id = ?`},
+	}
+}
+
+// Oracle queries deliberately select state only. Bearer codes, token hashes,
+// JTIs, cookies, and CSRF values cannot enter its JSON output.
+const oracleIdentityQuery = `SELECT count(*) FROM users WHERE id = ? AND email = ?`
+
+const (
+	oracleFlowsQuery       = `SELECT device_kind, authorized_user_id, approved_at, consumed_at, denied_at, expires_at FROM device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`
+	oracleDevicesQuery     = `SELECT id, kind, status FROM devices WHERE user_id = ?`
+	oracleTokensQuery      = `SELECT dt.device_id, dt.refresh_expires_at, dt.last_used_at, dt.revoked_at FROM device_tokens dt JOIN devices d ON d.id = dt.device_id WHERE d.user_id = ?`
+	oracleSyncObjectsQuery = `SELECT sync_id, kind, version, deleted_at FROM sync_objects WHERE user_id = ? ORDER BY kind, sync_id`
+)
 
 type seedResult struct {
 	RunID           string         `json:"run_id"`
@@ -63,61 +100,13 @@ type sqlStep struct {
 	SQL  string
 }
 
-func flowSelection(userFound bool) sqlStep {
+// flowSelection 是 device_flow_codes 那一张表的「哪几行属于本轮 run」的片段：
+// 账号找到了就按授权账号或指纹，否则只能按指纹（连 flow 都没批准过）。
+func flowSelection(userFound bool) string {
 	if !userFound {
-		return sqlStep{"device_flow_codes", `device_flow_codes WHERE client_fingerprint = ?`}
+		return `device_flow_codes WHERE client_fingerprint = ?`
 	}
-	return sqlStep{"device_flow_codes", `device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`}
-}
-
-func cleanupSQL() []sqlStep {
-	return []sqlStep{
-		{"device_tokens", `DELETE FROM device_tokens WHERE device_id IN (SELECT id FROM devices WHERE user_id = ?)`},
-		{"device_flow_codes", `DELETE FROM ` + flowSelection(true).SQL},
-		{"device_local_paths", `DELETE FROM device_local_paths WHERE user_id = ?`},
-		{"sync_device_states", `DELETE FROM sync_device_states WHERE user_id = ?`},
-		{"sync_avatars", `DELETE FROM sync_avatars WHERE user_id = ?`},
-		{"sync_objects", `DELETE FROM sync_objects WHERE user_id = ?`},
-		{"sync_account_seqs", `DELETE FROM sync_account_seqs WHERE user_id = ?`},
-		{"agent_session_saves", `DELETE FROM agent_session_saves WHERE user_id = ?`},
-		// 通行密钥：webauthn_credentials 没有指向 users 的外键（迁移
-		// 202608180002 刻意不建），删账号不会带走它。不在这里删一次，凭证行就永久
-		// 留在专库里，账号却已经不存在了。
-		{"webauthn_credentials", `DELETE FROM webauthn_credentials WHERE user_id = ?`},
-		{"devices", `DELETE FROM devices WHERE user_id = ?`},
-		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`},
-		{"users", `DELETE FROM users WHERE id = ?`},
-	}
-}
-
-func residueSQL() []sqlStep {
-	return []sqlStep{
-		{"device_tokens", `SELECT count(*) FROM device_tokens WHERE device_id IN (?)`},
-		{"device_flow_codes", `SELECT count(*) FROM ` + flowSelection(true).SQL},
-		{"device_local_paths", `SELECT count(*) FROM device_local_paths WHERE user_id = ?`},
-		{"sync_device_states", `SELECT count(*) FROM sync_device_states WHERE user_id = ?`},
-		{"sync_avatars", `SELECT count(*) FROM sync_avatars WHERE user_id = ?`},
-		{"sync_objects", `SELECT count(*) FROM sync_objects WHERE user_id = ?`},
-		{"sync_account_seqs", `SELECT count(*) FROM sync_account_seqs WHERE user_id = ?`},
-		{"agent_session_saves", `SELECT count(*) FROM agent_session_saves WHERE user_id = ?`},
-		{"webauthn_credentials", `SELECT count(*) FROM webauthn_credentials WHERE user_id = ?`},
-		{"devices", `SELECT count(*) FROM devices WHERE user_id = ?`},
-		{"user_identities", `SELECT count(*) FROM user_identities WHERE user_id = ?`},
-		{"users", `SELECT count(*) FROM users WHERE id = ?`},
-	}
-}
-
-// Oracle queries deliberately select state only. Bearer codes, token hashes,
-// JTIs, cookies, and CSRF values cannot enter its JSON output.
-func oracleIdentitySQL() string { return `SELECT count(*) FROM users WHERE id = ? AND email = ?` }
-
-func oracleSQL() []sqlStep {
-	return []sqlStep{
-		{"device_flow_codes", `SELECT device_kind, authorized_user_id, approved_at, consumed_at, denied_at, expires_at FROM device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`},
-		{"devices", `SELECT id, kind, status FROM devices WHERE user_id = ?`},
-		{"device_tokens", `SELECT dt.device_id, dt.refresh_expires_at, dt.last_used_at, dt.revoked_at FROM device_tokens dt JOIN devices d ON d.id = dt.device_id WHERE d.user_id = ?`},
-		{"sync_objects", `SELECT sync_id, kind, version, deleted_at FROM sync_objects WHERE user_id = ? ORDER BY kind, sync_id`},
-	}
+	return `device_flow_codes WHERE authorized_user_id = ? OR client_fingerprint = ?`
 }
 
 func main() {
@@ -152,13 +141,6 @@ func usage() {
 `)
 }
 
-func registerRedisFlags(fs *flag.FlagSet) (*string, *string, *int) {
-	addr := fs.String("redis-addr", os.Getenv("WEBE2E_REDIS_ADDR"), "Redis host:port")
-	password := fs.String("redis-password", os.Getenv("WEBE2E_REDIS_PASSWORD"), "Redis password")
-	db := fs.Int("redis-db", 0, "Redis db number")
-	return addr, password, db
-}
-
 func openDB(dsn string) (*gorm.DB, error) {
 	if strings.TrimSpace(dsn) == "" {
 		return nil, fmt.Errorf("--dsn is required")
@@ -177,30 +159,53 @@ func openDB(dsn string) (*gorm.DB, error) {
 	return gdb, nil
 }
 
-func runSeed(args []string) error {
-	fs := flag.NewFlagSet("seed", flag.ContinueOnError)
+// stores 是 seed / cleanup 共用的前奏产物：一条 MySQL 连接、一条 Redis 连接，与
+// 本轮 run id。
+type stores struct {
+	gdb   *gorm.DB
+	rc    *goredis.Client
+	runID string
+}
+
+// openStores 解析 seed / cleanup 共用的三件套（--dsn / --run-id / redis），连上
+// MySQL 与 Redis 并各 ping 一次。两处前奏此前逐字重复，漏掉一次 ping 的后果是
+// 后面每个查询各报一次「连不上」。
+func openStores(name, runIDUsage string, args []string) (*stores, error) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "MySQL DSN")
-	runID := fs.String("run-id", "", "unique id for this run")
-	redisAddr, redisPassword, redisDB := registerRedisFlags(fs)
+	runID := fs.String("run-id", "", runIDUsage)
+	redisAddr := fs.String("redis-addr", os.Getenv("WEBE2E_REDIS_ADDR"), "Redis host:port")
+	redisPassword := fs.String("redis-password", os.Getenv("WEBE2E_REDIS_PASSWORD"), "Redis password")
+	redisDB := fs.Int("redis-db", 0, "Redis db number")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return nil, err
 	}
 	if strings.TrimSpace(*runID) == "" {
-		return fmt.Errorf("--run-id is required")
+		return nil, fmt.Errorf("--run-id is required")
 	}
 	gdb, err := openDB(*dsn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	rc := goredis.NewClient(&goredis.Options{Addr: *redisAddr, Password: *redisPassword, DB: *redisDB})
-	defer func() { _ = rc.Close() }()
 	if err := rc.Ping(context.Background()).Err(); err != nil {
-		return fmt.Errorf("ping redis: %w", err)
+		_ = rc.Close()
+		return nil, fmt.Errorf("ping redis: %w", err)
 	}
+	return &stores{gdb: gdb, rc: rc, runID: *runID}, nil
+}
+
+func runSeed(args []string) error {
+	st, err := openStores("seed", "unique id for this run", args)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.rc.Close() }()
+	gdb, rc, runID := st.gdb, st.rc, st.runID
 
 	now := time.Now().UnixMilli()
-	out := &seedResult{RunID: *runID, Email: accountEmail(*runID), FlowFingerprint: flowFingerprint(*runID)}
-	userID, err := seedAccount(context.Background(), gdb, out.Email, "webe2e "+*runID, now)
+	out := &seedResult{RunID: runID, Email: accountEmail(runID), FlowFingerprint: flowFingerprint(runID)}
+	userID, err := seedAccount(context.Background(), gdb, out.Email, "webe2e "+runID, now)
 	if err != nil {
 		return err
 	}
@@ -210,13 +215,13 @@ func runSeed(args []string) error {
 	if err != nil {
 		return err
 	}
-	out.BrowserSession = browserSession{SID: sessionSID(*runID), CSRFToken: csrf}
-	body, err := json.Marshal(newSessionPayload(out.UserID, csrf, now))
+	out.BrowserSession = browserSession{SID: sessionSID(runID), CSRFToken: csrf}
+	body, err := json.Marshal(serversession.Session{UserID: out.UserID, CSRFToken: csrf, CreatedAt: now})
 	if err != nil {
 		return err
 	}
 	const sessionTTL = 14 * 24 * time.Hour
-	if err := rc.Set(context.Background(), redisKeys(*runID)[0], body, sessionTTL).Err(); err != nil {
+	if err := rc.Set(context.Background(), redisKeys(runID)[0], body, sessionTTL).Err(); err != nil {
 		_ = unseedAccount(context.Background(), gdb, out.UserID)
 		return fmt.Errorf("seed browser session: %w", err)
 	}
@@ -278,29 +283,16 @@ type cleanupResult struct {
 }
 
 func runCleanup(args []string) error {
-	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
-	dsn := fs.String("dsn", os.Getenv("WEBE2E_DSN"), "MySQL DSN")
-	runID := fs.String("run-id", "", "run id used at seed time")
-	redisAddr, redisPassword, redisDB := registerRedisFlags(fs)
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*runID) == "" {
-		return fmt.Errorf("--run-id is required")
-	}
-	gdb, err := openDB(*dsn)
+	st, err := openStores("cleanup", "run id used at seed time", args)
 	if err != nil {
 		return err
 	}
-	rc := goredis.NewClient(&goredis.Options{Addr: *redisAddr, Password: *redisPassword, DB: *redisDB})
-	defer func() { _ = rc.Close() }()
-	if err := rc.Ping(context.Background()).Err(); err != nil {
-		return fmt.Errorf("ping redis: %w", err)
-	}
+	defer func() { _ = st.rc.Close() }()
+	gdb, rc, runID := st.gdb, st.rc, st.runID
 
-	out := &cleanupResult{RunID: *runID, Deleted: map[string]int64{}, Residue: map[string]int64{}}
+	out := &cleanupResult{RunID: runID, Deleted: map[string]int64{}, Residue: map[string]int64{}}
 	var ids []int64
-	if err := gdb.Raw(`SELECT id FROM users WHERE email = ?`, accountEmail(*runID)).Scan(&ids).Error; err != nil {
+	if err := gdb.Raw(`SELECT id FROM users WHERE email = ?`, accountEmail(runID)).Scan(&ids).Error; err != nil {
 		return fmt.Errorf("find run user: %w", err)
 	}
 	if len(ids) > 1 {
@@ -314,61 +306,61 @@ func runCleanup(args []string) error {
 		}
 	}
 
-	for _, step := range cleanupSQL() {
+	for _, t := range fixtureTables() {
 		var res *gorm.DB
-		switch step.Name {
+		switch t.name {
 		case "device_flow_codes":
 			selection := flowSelection(out.Found)
 			if out.Found {
-				res = gdb.Exec("DELETE FROM "+selection.SQL, out.UserID, flowFingerprint(*runID))
+				res = gdb.Exec("DELETE FROM "+selection, out.UserID, flowFingerprint(runID))
 			} else {
-				res = gdb.Exec("DELETE FROM "+selection.SQL, flowFingerprint(*runID))
+				res = gdb.Exec("DELETE FROM "+selection, flowFingerprint(runID))
 			}
 		default:
 			if !out.Found {
 				continue
 			}
-			res = gdb.Exec(step.SQL, out.UserID)
+			res = gdb.Exec(t.del, out.UserID)
 		}
 		if res.Error != nil {
-			return fmt.Errorf("delete %s: %w", step.Name, res.Error)
+			return fmt.Errorf("delete %s: %w", t.name, res.Error)
 		}
-		out.Deleted[step.Name] = res.RowsAffected
+		out.Deleted[t.name] = res.RowsAffected
 	}
-	if err := rc.Del(context.Background(), redisKeys(*runID)...).Err(); err != nil {
+	if err := rc.Del(context.Background(), redisKeys(runID)...).Err(); err != nil {
 		return fmt.Errorf("delete run redis keys: %w", err)
 	}
 
-	for _, step := range residueSQL() {
+	for _, t := range fixtureTables() {
 		var n int64
 		var query *gorm.DB
-		switch step.Name {
+		switch t.name {
 		case "device_tokens":
 			if len(deviceIDs) == 0 {
-				out.Residue[step.Name] = 0
+				out.Residue[t.name] = 0
 				continue
 			}
-			query = gdb.Raw(step.SQL, deviceIDs)
+			query = gdb.Raw(t.cnt, deviceIDs)
 		case "device_flow_codes":
 			selection := flowSelection(out.Found)
 			if out.Found {
-				query = gdb.Raw("SELECT count(*) FROM "+selection.SQL, out.UserID, flowFingerprint(*runID))
+				query = gdb.Raw("SELECT count(*) FROM "+selection, out.UserID, flowFingerprint(runID))
 			} else {
-				query = gdb.Raw("SELECT count(*) FROM "+selection.SQL, flowFingerprint(*runID))
+				query = gdb.Raw("SELECT count(*) FROM "+selection, flowFingerprint(runID))
 			}
 		default:
 			if !out.Found {
-				out.Residue[step.Name] = 0
+				out.Residue[t.name] = 0
 				continue
 			}
-			query = gdb.Raw(step.SQL, out.UserID)
+			query = gdb.Raw(t.cnt, out.UserID)
 		}
 		if err := query.Scan(&n).Error; err != nil {
-			return fmt.Errorf("recount %s: %w", step.Name, err)
+			return fmt.Errorf("recount %s: %w", t.name, err)
 		}
-		out.Residue[step.Name] = n
+		out.Residue[t.name] = n
 	}
-	keys := redisKeys(*runID)
+	keys := redisKeys(runID)
 	for i, name := range []string{"session", "rate_limit"} {
 		exists, err := rc.Exists(context.Background(), keys[i]).Result()
 		if err != nil {
@@ -450,24 +442,23 @@ func runOracle(args []string) error {
 		return err
 	}
 	var users int64
-	if err := gdb.Raw(oracleIdentitySQL(), *userID, accountEmail(*runID)).Scan(&users).Error; err != nil {
+	if err := gdb.Raw(oracleIdentityQuery, *userID, accountEmail(*runID)).Scan(&users).Error; err != nil {
 		return fmt.Errorf("verify oracle run user: %w", err)
 	}
 	if users != 1 {
 		return fmt.Errorf("run user not found")
 	}
 	out := oracleResult{RunID: *runID, UserID: *userID, Flows: []flowState{}, Devices: []deviceState{}, Tokens: []tokenState{}, SyncObjects: []syncObjectState{}}
-	steps := oracleSQL()
-	if err := gdb.Raw(steps[0].SQL, *userID, flowFingerprint(*runID)).Scan(&out.Flows).Error; err != nil {
+	if err := gdb.Raw(oracleFlowsQuery, *userID, flowFingerprint(*runID)).Scan(&out.Flows).Error; err != nil {
 		return fmt.Errorf("query device flow state: %w", err)
 	}
-	if err := gdb.Raw(steps[1].SQL, *userID).Scan(&out.Devices).Error; err != nil {
+	if err := gdb.Raw(oracleDevicesQuery, *userID).Scan(&out.Devices).Error; err != nil {
 		return fmt.Errorf("query device state: %w", err)
 	}
-	if err := gdb.Raw(steps[2].SQL, *userID).Scan(&out.Tokens).Error; err != nil {
+	if err := gdb.Raw(oracleTokensQuery, *userID).Scan(&out.Tokens).Error; err != nil {
 		return fmt.Errorf("query token state: %w", err)
 	}
-	if err := gdb.Raw(steps[3].SQL, *userID).Scan(&out.SyncObjects).Error; err != nil {
+	if err := gdb.Raw(oracleSyncObjectsQuery, *userID).Scan(&out.SyncObjects).Error; err != nil {
 		return fmt.Errorf("query sync object state: %w", err)
 	}
 	return emit(out)

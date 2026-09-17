@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/agentre-hub/agentre-server/internal/pkg/hashutil"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
 )
@@ -46,7 +47,7 @@ func (s *deviceSvc) ResolveBearer(ctx context.Context, token string) (*Principal
 	if token == "" {
 		return nil, ErrBearerInvalid
 	}
-	row, err := device_token_repo.DeviceToken().FindByAccessHash(ctx, sha256Hex(token))
+	row, err := device_token_repo.DeviceToken().FindByAccessHash(ctx, hashutil.SHA256Hex(token))
 	if err != nil {
 		return nil, err
 	}

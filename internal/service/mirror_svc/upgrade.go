@@ -78,15 +78,6 @@ type UpgradeResult struct {
 	TargetVersion string
 }
 
-// SelfUpdatePeer 是一条已经建好的连接上、自更新这一个方法。与 ActivityRollupClient
-// 同一条理由的窄接口：这条调用问的是「把你自己换成新版本」，与镜像那几个够得着转录
-// 内容的方法不是同一件事，不该并进 RelaySession。
-type SelfUpdatePeer interface {
-	AgentredSelfUpdate(
-		ctx context.Context, req *agentrewire.AgentredSelfUpdateRequest,
-	) (*agentrewire.AgentredSelfUpdateResponse, error)
-}
-
 // UpgradeMachine 让那台机器把自己升上去，交回 daemon 的受理判定。
 //
 // 与 Imports.WithPeer / Sessions.DeleteOnMachine / WithMachine 同一条路子：每次自己拨一条
@@ -105,24 +96,26 @@ func (s *Supervisor) UpgradeMachine(
 	// 这条连接是这次升级专用的短连接（上面那段），本方法是它唯一的使用者，所以预算直接
 	// 落在连接上：对端要先下载校验替换完才应答，沿用会话 RPC 的 15 秒就会把一次成功的
 	// 升级报成故障。常驻镜像上那些会话 RPC 仍旧按 Config.CallTimeout 走。
-	conn, err := s.dialWithTimeout(ctx, machineKey{userID: userID, fingerprint: fingerprint}, nil, upgradeCallTimeout)
+	var result UpgradeResult
+	err := s.withShortConn(ctx, machineKey{userID: userID, fingerprint: fingerprint}, upgradeCallTimeout,
+		func(conn *machineConn) error {
+			// Channel 有意不填：空串 = 「这台机器自己配着的那个通道」，控制台不必（也无从）
+			// 知道那台机器跟的是 stable 还是 beta。
+			resp, err := conn.AgentredSelfUpdate(ctx, &agentrewire.AgentredSelfUpdateRequest{Force: force})
+			if err != nil {
+				return fmt.Errorf("agentred self update on peer: %w", err)
+			}
+			result = UpgradeResult{
+				Accepted:      resp.GetAccepted(),
+				RejectReason:  upgradeRejectReasons[resp.GetRejectReason()],
+				Message:       resp.GetMessage(),
+				ActiveTurns:   resp.GetActiveTurns(),
+				TargetVersion: resp.GetTargetVersion(),
+			}
+			return nil
+		})
 	if err != nil {
 		return UpgradeResult{}, err
 	}
-	defer conn.Close()
-	// Channel 有意不填：空串 = 「这台机器自己配着的那个通道」，控制台不必（也无从）
-	// 知道那台机器跟的是 stable 还是 beta。
-	resp, err := conn.AgentredSelfUpdate(ctx, &agentrewire.AgentredSelfUpdateRequest{Force: force})
-	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("agentred self update on peer: %w", err)
-	}
-	return UpgradeResult{
-		Accepted:      resp.GetAccepted(),
-		RejectReason:  upgradeRejectReasons[resp.GetRejectReason()],
-		Message:       resp.GetMessage(),
-		ActiveTurns:   resp.GetActiveTurns(),
-		TargetVersion: resp.GetTargetVersion(),
-	}, nil
+	return result, nil
 }
-
-var _ SelfUpdatePeer = (*machineConn)(nil)

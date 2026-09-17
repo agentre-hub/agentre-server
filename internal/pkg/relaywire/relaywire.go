@@ -3,7 +3,7 @@
 //
 // 错误类型与错误码不在这里定义:它们由共享 module 的 pkg/wire/rpcerror 一份供两仓
 // 使用。请求/取消帧的编码同理,由 pkg/wire/protorpc 负责;这里只有会话生命周期字面量
-// 与两个给中继自己用的帧编解码助手(relay_ctr 要在通道级失败时自己合成一帧错误)。
+// 与一个给中继自己用的帧编码助手(relay_ctr 要在通道级失败时自己合成一帧错误)。
 package relaywire
 
 import (
@@ -36,15 +36,4 @@ func EncodeFrame(frame *agentrewire.RpcFrame) ([]byte, error) {
 		return nil, fmt.Errorf("relaywire: encode frame: %w", err)
 	}
 	return encoded, nil
-}
-
-func DecodeFrame(data []byte) (*agentrewire.RpcFrame, error) {
-	frame := &agentrewire.RpcFrame{}
-	if err := proto.Unmarshal(data, frame); err != nil {
-		return nil, fmt.Errorf("relaywire: decode frame: %w", err)
-	}
-	if frame.GetBody() == nil {
-		return nil, errors.New("relaywire: frame has no body")
-	}
-	return frame, nil
 }

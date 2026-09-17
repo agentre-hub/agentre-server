@@ -239,6 +239,23 @@ func (s *Supervisor) dialWithTimeout(
 	return conn, nil
 }
 
+// withShortConn 拨一条通往这台机器的短连接，交给 fn，**无论成败都收掉**。
+//
+// 四位使用者（活跃统计、导入、删除传播、一键升级）都是「拨一次、用完就收」的一次性
+// 动作：常驻那条连接是为镜像建的，它的租约、重同步与实时通知都围着转录转，把这些
+// 动作借上去等于让它们牵动镜像的生命周期。这里收掉「拨号、defer Close、跑 fn」那段
+// 逐字重复的样板；fn 里各自的差异（请求、预算、错误翻译）留在原处。
+func (s *Supervisor) withShortConn(
+	ctx context.Context, key machineKey, timeout time.Duration, fn func(*machineConn) error,
+) error {
+	conn, err := s.dialWithTimeout(ctx, key, nil, timeout)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	return fn(conn)
+}
+
 // forgetSession 让本副本这条连接不再镜像某一条对话。删除路径在清库之前调它——
 // 只清库不摘，下一帧就把刚删掉的内容写回来了。
 //

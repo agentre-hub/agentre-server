@@ -14,6 +14,8 @@ import (
 	"github.com/gorilla/websocket"
 	"go.uber.org/zap"
 
+	agentreWire "github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
+
 	"github.com/agentre-hub/agentre-server/internal/controller/connguard"
 	"github.com/agentre-hub/agentre-server/internal/controller/relay_ctr/relayws"
 	"github.com/agentre-hub/agentre-server/internal/pkg/apierr"
@@ -35,28 +37,26 @@ type AccountSignals interface {
 type Relay struct {
 	svc     relay_svc.RelaySvc
 	signals AccountSignals
-	// 两个端点的读上限不同,所以是两个 transport:daemon 那条收的是信封(载荷 +
-	// 通道 ID 头),客户端那条收的是裸载荷。见 relayws.MaxPayloadBytes。
-	daemonTransport relayws.Transport
-	clientTransport relayws.Transport
+	// 两个端点收的都是信封，读上限同值（relayws.ReadLimit），因此共用一份 transport：连接登记表也只有一份，Drain
+	// 一次就关掉本进程手里所有的中继 websocket。
+	transport relayws.Transport
 }
 
 func New(svc relay_svc.RelaySvc, signals AccountSignals) *Relay {
 	return &Relay{
-		svc:             svc,
-		signals:         signals,
-		daemonTransport: relayws.New(relayws.DaemonReadLimit),
-		clientTransport: relayws.New(relayws.ClientReadLimit),
+		svc:       svc,
+		signals:   signals,
+		transport: relayws.New(relayws.ReadLimit),
 	}
 }
 
-// Drain 优雅下线:把这个进程手里两个端点上还活着的中继 websocket 逐条礼貌关掉
+// Drain 优雅下线:把这个进程手里还活着的中继 websocket 逐条礼貌关掉
 // (1001 Going Away),让对端立刻重连到别的副本,而不是当成网络抖动慢慢退避。
 //
 // 关掉之后每个 handler 的读循环随即出错返回,它的 detach 才跑得到 —— 那是把连接
 // 从帧总线上摘下来的唯一一步,也是 mux 的 Shutdown 等的那件事。
 func (r *Relay) Drain() int {
-	return r.daemonTransport.Drain() + r.clientTransport.Drain()
+	return r.transport.Drain()
 }
 
 // Daemon 接收 agentred 的出站连接。在线态只由 Redis TTL 表示；连接断开时
@@ -90,7 +90,7 @@ func (r *Relay) Daemon(c *gin.Context) {
 			zap.String("instanceId", route.InstanceID),
 		}, extra...)
 	}
-	conn, err := r.daemonTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
+	conn, err := r.transport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: func() error {
 			if err := guard(); err != nil {
 				return err
@@ -248,7 +248,7 @@ func (r *Relay) Client(c *gin.Context) {
 	peer := func(extra ...zap.Field) []zap.Field {
 		return append([]zap.Field{zap.Int64("accountId", accountID)}, extra...)
 	}
-	conn, err := r.clientTransport.Upgrade(c.Writer, c.Request, relayws.Hooks{
+	conn, err := r.transport.Upgrade(c.Writer, c.Request, relayws.Hooks{
 		OnPeerActivity: guard, OnHeartbeat: guard,
 	})
 	if err != nil {
@@ -289,7 +289,7 @@ func (r *Relay) Client(c *gin.Context) {
 			exit = fmt.Errorf("relay client protocol violation: non-binary frame type %d", messageType)
 			return
 		}
-		channelID, payload, err := relay_svc.UnwrapEnvelope(frame)
+		channelID, payload, err := agentreWire.Unwrap(frame)
 		if err != nil {
 			// 信封拆不开就归不到任何一条通道头上，只能按整条连接的协议违例处理。
 			exit = fmt.Errorf("relay client protocol violation: undecodable envelope: %w", err)
@@ -299,14 +299,6 @@ func (r *Relay) Client(c *gin.Context) {
 	}
 }
 
-// connectionGuard 把「这条连接还能继续吗」翻译成传输层认得的终止信号。
-//
-// 中继 websocket 只在 upgrade 那一刻过一次鉴权中间件，登出、设备撤销与账号封禁因此
-// 都只挡得住**新**连接；只有这里的逐次复查，才能把它们落到一条已经建好的连接上。
-//
-// 两条判据的失败方向刻意相反，别顺手统一掉：凭据撤销判不出来时不断开
-// （auth_svc.WatchRelayCredential 的 fail-open，那只是一次早已生效的撤销的收尾），
-// 账号闸门判不出来时断开（user_svc.AccountGate 的 fail-closed，那是授权判定本身）。
 // subscribeSignals 建立账号信号订阅。没有配置信号源时按「订阅建不起来」处理——
 // 那与 Redis 连不上对客户端是同一件事：信号那一路不可用，退回轮询。
 func (r *Relay) subscribeSignals(

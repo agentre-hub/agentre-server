@@ -18,7 +18,7 @@ import (
 func TestCreate_ReturnsSidAndCsrf(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 
 	sid, sess, err := store.Create(ctx, 42, Client{})
 	assert.NoError(t, err)
@@ -30,7 +30,7 @@ func TestCreate_ReturnsSidAndCsrf(t *testing.T) {
 func TestGet_RoundTrip(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 
 	sid, created, err := store.Create(ctx, 7, Client{})
 	assert.NoError(t, err)
@@ -44,7 +44,7 @@ func TestGet_RoundTrip(t *testing.T) {
 func TestGet_Missing(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 	got, err := store.Get(ctx, "no-such-sid")
 	assert.NoError(t, err)
 	assert.Nil(t, got)
@@ -53,7 +53,7 @@ func TestGet_Missing(t *testing.T) {
 func TestDelete(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 
 	sid, _, err := store.Create(ctx, 1, Client{})
 	// 不吞这个错：吞掉的话 sid 是空串，Delete("") 返回 nil、Get("") 返回 nil，
@@ -70,7 +70,7 @@ func TestDelete(t *testing.T) {
 func TestExists_DoesNotSlideTTL(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 
 	sid, _, err := store.Create(ctx, 7, Client{})
 	assert.NoError(t, err)
@@ -99,7 +99,7 @@ func TestExists_DoesNotSlideTTL(t *testing.T) {
 func TestListByUser_ReportsClientOfEachLoginSession(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 	const uid = 4101
 	const ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/140.0.0.0"
 
@@ -128,7 +128,7 @@ func TestListByUser_ReportsClientOfEachLoginSession(t *testing.T) {
 func TestCreate_TruncatesIPToStorageWidth(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 	const uid = 4102
 
 	long := strings.Repeat("f", 60)
@@ -145,7 +145,7 @@ func TestCreate_TruncatesIPToStorageWidth(t *testing.T) {
 func TestCreate_TruncatesAnOversizedUserAgent(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 
 	long := strings.Repeat("A", 4096)
 	_, sess, err := store.Create(ctx, 4109, Client{UserAgent: long})
@@ -159,7 +159,7 @@ func TestCreate_TruncatesAnOversizedUserAgent(t *testing.T) {
 func TestCreate_TruncatedUserAgentStaysValidUTF8(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 
 	// 「中」是 3 字节，uaMaxLen 不是 3 的倍数时，按字节切必然切在半个字符上。
 	long := strings.Repeat("中", uaMaxLen)
@@ -175,7 +175,7 @@ func TestCreate_TruncatedUserAgentStaysValidUTF8(t *testing.T) {
 func TestListByUser_DropsDeadMembersWithoutSlidingTTL(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 	const uid = 4103
 
 	live, _, err := store.Create(ctx, uid, Client{UserAgent: "live", IP: "203.0.113.1"})
@@ -204,7 +204,7 @@ func TestListByUser_DropsDeadMembersWithoutSlidingTTL(t *testing.T) {
 func TestGet_RefreshesIndexTTLSoALongLivedSessionStaysListed(t *testing.T) {
 	mini := testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 3600)
+	store := New(redis.Default(), 3600)
 	const uid = 4104
 
 	sid, _, err := store.Create(ctx, uid, Client{UserAgent: "chrome", IP: "203.0.113.3"})
@@ -228,7 +228,7 @@ func TestGet_RefreshesIndexTTLSoALongLivedSessionStaysListed(t *testing.T) {
 func TestGet_RecordsLastActivity(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 	const uid = 4105
 
 	sid, created, err := store.Create(ctx, uid, Client{UserAgent: "chrome", IP: "203.0.113.4"})
@@ -251,7 +251,7 @@ func TestGet_RecordsLastActivity(t *testing.T) {
 func TestDelete_RemovesSessionFromUserIndex(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 	const uid = 4106
 
 	sid, _, err := store.Create(ctx, uid, Client{UserAgent: "chrome", IP: "203.0.113.5"})
@@ -272,7 +272,7 @@ func TestDelete_RemovesSessionFromUserIndex(t *testing.T) {
 func TestGet_BackfillsIndexForSessionsCreatedBeforeTheIndexExisted(t *testing.T) {
 	testutils.Redis(t)
 	ctx := context.Background()
-	store := New(redis.Default(), "server_session", 14*24*3600)
+	store := New(redis.Default(), 14*24*3600)
 	const uid = 4107
 
 	sid, _, err := store.Create(ctx, uid, Client{UserAgent: "chrome", IP: "203.0.113.6"})
@@ -327,7 +327,7 @@ func TestGet_DoesNotResurrectASessionDeletedMidRequest(t *testing.T) {
 	t.Cleanup(func() { _ = killer.Close() })
 	hooked := goredis.NewClient(&goredis.Options{Addr: mini.Addr()})
 	t.Cleanup(func() { _ = hooked.Close() })
-	store := New(hooked, "server_session", 14*24*3600)
+	store := New(hooked, 14*24*3600)
 
 	sid, _, err := store.Create(ctx, uid, Client{UserAgent: "chrome", IP: "203.0.113.7"})
 	assert.NoError(t, err)

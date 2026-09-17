@@ -83,7 +83,7 @@ func newEngineServer(t *testing.T, stub *stubEngineSvc) *httptest.Server {
 	testutils.Redis(t)
 	engine_svc.SetDefault(stub)
 	t.Cleanup(func() { engine_svc.SetDefault(engine_svc.New()) })
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 	// 快照端点要先确认「这台设备归调用方且还能用」，判定归 device_svc.OwnedDevice；
 	// 它只走 device_repo（下面用 mock 装配），配置与签名器都用不上。
 	device_svc.SetDefault(device_svc.New(device_svc.Config{}))

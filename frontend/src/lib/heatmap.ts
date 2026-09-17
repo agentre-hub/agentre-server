@@ -62,7 +62,7 @@ function formatDay(ts: number): string {
  * `count > 0` 一律至少落到 1：活动了一次的那天必须与「什么都没干」在视觉上分得开，
  * 否则一个低活跃的账号整张图是灰的，看上去像坏了。
  */
-export function heatLevel(count: number, max: number): HeatLevel {
+function heatLevel(count: number, max: number): HeatLevel {
   if (count <= 0 || max <= 0) return 0;
   const step = Math.ceil((count / max) * 4);
   return Math.min(4, Math.max(1, step)) as HeatLevel;

@@ -38,12 +38,8 @@ func (i *Imports) WithPeer(
 	ctx context.Context, userID int64, fingerprint string,
 	fn func(context.Context, TranscriptImportPeer) error,
 ) error {
-	conn, err := i.sup.dial(ctx, machineKey{userID: userID, fingerprint: fingerprint}, nil)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	return fn(ctx, conn)
+	return i.sup.withShortConn(ctx, machineKey{userID: userID, fingerprint: fingerprint}, i.sup.cfg.CallTimeout,
+		func(conn *machineConn) error { return fn(ctx, conn) })
 }
 
 var _ TranscriptImportPeer = (*machineConn)(nil)

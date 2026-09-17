@@ -144,7 +144,7 @@ func TestResolveTarget_GivenAnUnknownForm_ThenInvalid(t *testing.T) {
 // 不需要重试或注册表。
 func TestNewChannelID_NeverCollidesWithTheReservedPrefix(t *testing.T) {
 	for range 256 {
-		id, err := newChannelID()
+		id, err := randomID()
 		require.NoError(t, err)
 		require.NotEmpty(t, id)
 		require.NotContains(t, id, ReservedChannelPrefix)

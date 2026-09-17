@@ -31,16 +31,11 @@ const mirrorChangeWindow = 3 * time.Second
 // 为此引一套跨副本的协调不值得。
 type changeSignals struct {
 	window    time.Duration
+	schedule  func(time.Duration, func())
 	broadcast func(ctx context.Context, userID int64)
 
 	mu   sync.Mutex
-	open map[int64]*changeWindow
-}
-
-// changeWindow 是一个账号此刻开着的那个窗口。它存在本身就表示「窗口开着」。
-type changeWindow struct {
-	// suppressed 记这个窗口里有没有压住过变更，也就是结束时该不该补一条。
-	suppressed bool
+	open map[int64]*debounceWindow
 }
 
 // mirrorChanges 是本副本共用的那一份。跨连接共享：一个账号的多台机器各有一个
@@ -60,39 +55,43 @@ func (s *changeSignals) changed(ctx context.Context, userID int64) {
 
 	s.mu.Lock()
 	if s.open == nil {
-		s.open = make(map[int64]*changeWindow)
+		s.open = make(map[int64]*debounceWindow)
 	}
-	if window, ok := s.open[userID]; ok {
-		window.suppressed = true
-		s.mu.Unlock()
-		return
-	}
-	s.open[userID] = &changeWindow{}
-	s.mu.Unlock()
-
-	s.broadcast(ctx, userID)
-	time.AfterFunc(s.window, func() { s.windowElapsed(ctx, userID) })
-}
-
-// windowElapsed 收尾一个窗口：压住过就补一条并再开一个窗口（对话还在跑的话下一条
-// 变更照样先被压住），没压住过就把窗口关掉，下一条变更重新走首发。
-func (s *changeSignals) windowElapsed(ctx context.Context, userID int64) {
-	s.mu.Lock()
 	window, ok := s.open[userID]
 	if !ok {
-		s.mu.Unlock()
-		return
+		window = &debounceWindow{
+			window:   s.window,
+			schedule: s.timer(),
+			fire: func(ctx context.Context) error {
+				s.broadcast(ctx, userID)
+				return nil
+			},
+		}
+		// 窗口空转收尾时把条目删掉，下一条变更重新建一个。若恰好与一次新变更擦肩
+		// （空转判定与 touch 之间），至多多发一条幂等的「该拉了」——这条信号本来
+		// 就可以重复，两个副本各发一条也是同一个意思。
+		window.onIdle = func() { s.forgetIfIdle(userID, window) }
+		s.open[userID] = window
 	}
-	if !window.suppressed {
-		delete(s.open, userID)
-		s.mu.Unlock()
-		return
-	}
-	window.suppressed = false
 	s.mu.Unlock()
 
-	s.broadcast(ctx, userID)
-	time.AfterFunc(s.window, func() { s.windowElapsed(ctx, userID) })
+	_ = window.touch(ctx)
+}
+
+// timer 交出定时器：生产是 time.AfterFunc，用例可以注入。
+func (s *changeSignals) timer() func(time.Duration, func()) {
+	if s.schedule != nil {
+		return s.schedule
+	}
+	return func(d time.Duration, f func()) { _ = time.AfterFunc(d, f) }
+}
+
+func (s *changeSignals) forgetIfIdle(userID int64, window *debounceWindow) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.open[userID] == window {
+		delete(s.open, userID)
+	}
 }
 
 // changeSignaller 是 Mirror 看到的那一小片出口。留成接口是为了让 Mirror 的用例

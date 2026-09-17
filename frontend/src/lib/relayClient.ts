@@ -64,6 +64,17 @@ export class RelayError extends Error {
 }
 
 /**
+ * 只用到「发一次请求」这一步的宿主端口。远端目录浏览、文件预览、桌面端本机路径
+ * 三个 adapter 的入参都是这个形状——一份声明，三处复用。
+ */
+export type RelayCaller = { request: RelayClient["request"] };
+
+/** 没有 client 时如实给「连接未就绪」的一档，不抛一个说不清的 TypeError。 */
+export function disconnected(): RelayError {
+  return new RelayError(-1, "relay: 连接未就绪", null);
+}
+
+/**
  * 通知的三个投递口。RelayClientOptions 自己就是它的一个实现 —— 因此 server 镜像交出
  * 的历史帧走的是**与实时同一条**解帧与投递路径(applyDurableFrames),而不是另写一份。
  */

@@ -39,8 +39,8 @@ function goConst(name: string): string | null {
 describe("设备码契约（前端 ↔ internal/pkg/usercode）", () => {
   it("字母表逐字相同", () => {
     expect(
-      goConst("Alphabet"),
-      "internal/pkg/usercode 的 Alphabet 变了，lib/userCode.ts 的 ALPHABET 要跟着改；" +
+      goConst("alphabet"),
+      "internal/pkg/usercode 的 alphabet 变了，lib/userCode.ts 的 ALPHABET 要跟着改；" +
         "两边不一致时，用户会拿到一个后端发得出、前端却不肯收的设备码",
     ).toBe(ALPHABET);
   });

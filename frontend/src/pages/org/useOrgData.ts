@@ -11,11 +11,12 @@
 import * as React from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { AccountChannelSyncVersion } from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 
 import type { OrgBackendItem, OrgChartResponse } from "./types";
+import { errorText } from "@/lib/errorText";
 
 export interface UseOrgDataResult {
   chart: OrgChartResponse | null;
@@ -23,12 +24,6 @@ export interface UseOrgDataResult {
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
-}
-
-function messageOf(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  return "unknown error";
 }
 
 export function useOrgData(): UseOrgDataResult {
@@ -47,32 +42,16 @@ export function useOrgData(): UseOrgDataResult {
       setBackends(backendsRes.backends ?? []);
       setError(null);
     } catch (err) {
-      setError(messageOf(err));
+      setError(errorText(err));
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // 首次加载：直接落 api() 的 promise 链，不经 reload 这个本地闭包——与 AppShell.tsx
-  // 同一种形状（订阅 fetch 这个外部系统，在它的 .then()/.catch() 回调里 setState），
-  // 而不是在 effect 体的同步部分直接调用一个「已知会 setState」的本地函数。
-  useAliveEffect((alive) => {
-    Promise.all([
-      api<OrgChartResponse>("/v1/workspace/org"),
-      api<{ backends: OrgBackendItem[] }>("/v1/workspace/org/backends"),
-    ])
-      .then(([chartRes, backendsRes]) => {
-        if (!alive()) return;
-        setChart(chartRes);
-        setBackends(backendsRes.backends ?? []);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (alive()) setError(messageOf(err));
-      })
-      .finally(() => {
-        if (alive()) setLoading(false);
-      });
+  // 首次加载走 reload：它的同步前缀不 setState（setState 都在 await 之后），
+  // 因此与上面那条「不在 effect 体的同步部分调会 setState 的本地函数」不冲突。
+  useAliveEffect(() => {
+    void reload();
   }, []);
 
   // 只订同步版本：组织架构、Agent、执行目标都是 sync_objects 上的东西。别人发了

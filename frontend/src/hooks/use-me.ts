@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { api, ApiError, setCsrfToken } from "@/lib/api";
 
 export interface Me {
@@ -15,8 +15,7 @@ export interface Me {
 /**
  * 当前登录的人，外加这条会话的 CSRF token。
  *
- * 不走 `useApiQuery`，是因为 token 的**发布时刻**在这里是有意义的：它必须在 `me`
- * 变成真值**之前**就位。`RequireAuth` 拿 `me` 当闸门，放行的那一次提交里整棵子树
+ * token 的**发布时刻**在这里是有意义的：它必须在 `me` 变成真值**之前**就位。`RequireAuth` 拿 `me` 当闸门，放行的那一次提交里整棵子树
  * 会一起挂上来，而 React 的 passive effect 自下而上跑——子树里那些「一挂上就发写
  * 请求」的（账号通道的取票 POST 是现成的一个）会跑在父组件的 effect 前面。把
  * `setCsrfToken` 放进 effect，等于保证首次登录的那一发写请求不带 token，被 CSRF
@@ -44,7 +43,7 @@ export function useMe() {
       })
       .catch((e: unknown) => {
         if (!alive()) return;
-        // 一律存真值，理由同 useApiQuery：调用方按 `error ? 错误态 : 骨架` 渲染。
+        // 一律存真值：调用方按 `error ? 错误态 : 骨架` 渲染。
         setError(
           e instanceof ApiError
             ? e

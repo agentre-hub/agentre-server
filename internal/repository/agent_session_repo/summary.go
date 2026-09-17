@@ -18,6 +18,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 )
 
 //go:generate mockgen -source summary.go -destination mock_agent_session_repo/mock_summary.go
@@ -395,13 +396,13 @@ func attentionExpr(f AttentionFilter) (string, []any, bool) {
 	case AttentionNeedsAttention:
 		return "waiting_for_input=?", []any{true}, true
 	case AttentionRunning:
-		return "lifecycle_state=?", []any{"running"}, true
+		return "lifecycle_state=?", []any{relaywire.SessionLifecycleRunning}, true
 	case AttentionError:
 		return "waiting_for_input=? AND lifecycle_state=? AND last_message_at>last_read_at",
-			[]any{false, "failed"}, true
+			[]any{false, relaywire.SessionLifecycleFailed}, true
 	case AttentionUnread:
 		return "waiting_for_input=? AND lifecycle_state NOT IN (?,?) AND last_message_at>last_read_at",
-			[]any{false, "running", "failed"}, true
+			[]any{false, relaywire.SessionLifecycleRunning, relaywire.SessionLifecycleFailed}, true
 	case AttentionAny:
 		return "", nil, false
 	}

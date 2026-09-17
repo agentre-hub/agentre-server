@@ -2,7 +2,14 @@
 // 本包只搬运已验证的值，不执行鉴权判定，也不依赖业务层。
 package ginctx
 
-import "github.com/gin-gonic/gin"
+import (
+	"net/http"
+
+	"github.com/cago-frame/cago/pkg/i18n"
+	"github.com/gin-gonic/gin"
+
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+)
 
 const (
 	KeyUserID           = "user_id"
@@ -30,6 +37,17 @@ func SetCSRFToken(c *gin.Context, token string) { c.Set(KeyCSRFToken, token) }
 
 // UserID 取调用方账号；键不存在或类型不符一律 0，由调用方按各自的 401 判据处理。
 func UserID(c *gin.Context) int64 { return valueOf[int64](c, KeyUserID) }
+
+// RequireUserID 取调用方账号；键不在（0）时交出 401 而非继续往下跑。
+//
+// 中间件已经保证它在，这里只是不让一次装配错误静默地变成「操作别人的账号」。
+func RequireUserID(c *gin.Context) (int64, error) {
+	userID := UserID(c)
+	if userID == 0 {
+		return 0, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
+	}
+	return userID, nil
+}
 
 // DeviceID 取调用方设备；会话分支没有这个键，读出来是 0。
 func DeviceID(c *gin.Context) int64 { return valueOf[int64](c, KeyDeviceID) }

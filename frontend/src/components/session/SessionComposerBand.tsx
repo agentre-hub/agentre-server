@@ -1,4 +1,4 @@
-import { useState, type ReactNode, type RefObject } from "react";
+import { type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { CircleAlert, Lock } from "lucide-react";
 
@@ -12,8 +12,8 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import { computeContextUsage } from "@/lib/sessionView";
+import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
 import type { SessionViewStatus } from "@/lib/sessionView";
 
@@ -33,24 +33,6 @@ import type { SessionViewStatus } from "@/lib/sessionView";
   代价是打开一条对话时输入框比其余部分晚一步出现，所以未到位时摆一个**等高**的
   占位条：不占位的话那一带会先塌下去再弹回来。
 */
-type SessionComposerModule =
-  typeof import("@/components/session/SessionComposer");
-
-/**
- * 存的是**模块**而不是组件本身：组件从 hook 里出来会被
- * `react-hooks/static-components` 拦下（它看不出这个身份一旦加载就不再变），
- * 而 `<mod.default>` 是成员访问，规则不会误判。
- */
-function useSessionComposerModule(): SessionComposerModule | null {
-  const [mod, setMod] = useState<SessionComposerModule | null>(null);
-  useAliveEffect((alive) => {
-    void import("@/components/session/SessionComposer").then((m) => {
-      if (alive()) setMod(m);
-    });
-  }, []);
-  return mod;
-}
-
 export interface SessionComposerBandProps {
   did: number;
   sid: string;

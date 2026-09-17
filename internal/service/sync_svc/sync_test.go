@@ -21,6 +21,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
+	"github.com/agentre-hub/agentre-server/internal/pkg/hashutil"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
@@ -1019,7 +1020,7 @@ func TestPutAvatar_GivenContent_ThenStoredUnderItsContentHash(t *testing.T) {
 	convey.Convey("头像按内容哈希落库", t, func() {
 		ctx, m, svc := setupSyncTest(t)
 		content := "data:image/png;base64,AAAA"
-		hash := sha256Hex(content)
+		hash := hashutil.SHA256Hex(content)
 		var saved *sync_entity.SyncAvatar
 		m.avatar.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
 			func(_ context.Context, a *sync_entity.SyncAvatar) error {
@@ -1053,7 +1054,7 @@ func TestPutAvatar_GivenAvatarAtTheDesktopLimit_ThenAccepted(t *testing.T) {
 			base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x7f}, desktopMaxDecodedAvatarBytes))
 		m.avatar.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
-		err := svc.PutAvatar(ctx, AvatarInput{UserID: testUserID, ContentHash: sha256Hex(content),
+		err := svc.PutAvatar(ctx, AvatarInput{UserID: testUserID, ContentHash: hashutil.SHA256Hex(content),
 			ContentType: "image/png", Content: content})
 
 		assert.NoError(t, err)
@@ -1066,7 +1067,7 @@ func TestPutAvatar_GivenContentOverTheCap_ThenRejected(t *testing.T) {
 		ctx, _, svc := setupSyncTest(t)
 		content := strings.Repeat("a", MaxAvatarBytes+1)
 
-		err := svc.PutAvatar(ctx, AvatarInput{UserID: testUserID, ContentHash: sha256Hex(content), Content: content})
+		err := svc.PutAvatar(ctx, AvatarInput{UserID: testUserID, ContentHash: hashutil.SHA256Hex(content), Content: content})
 
 		assert.Equal(t, code.InvalidParameter, errCode(t, err))
 	})

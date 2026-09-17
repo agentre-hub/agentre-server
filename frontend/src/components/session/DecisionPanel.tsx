@@ -43,14 +43,6 @@ import { waiterBlocks } from "@/lib/waiterBlocks";
  * 挂在卡上等于挂在一个正要消失的东西上，用户什么都看不到。这句话必须活得比卡长。
  */
 
-// 形状的家在 lib/waiterBlocks.ts；这里再导出一次，是因为 `pages/Overview.tsx`
-// 早就从本模块取它们了。搬家不该顺手改一个与本次改动无关的文件。
-export type {
-  AskQuestionShape,
-  PendingAskQuestionShape,
-  PendingToolPermissionShape,
-} from "@/lib/waiterBlocks";
-
 /**
  * 宿主要接的两个动作。形状就是包的端口形状 —— 这一层不做转换，`SessionDetailView`
  * 那边本来就要把它们映射成自己的 relay 请求。

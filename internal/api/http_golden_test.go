@@ -580,7 +580,7 @@ func record(t *testing.T, ex exchange) []byte {
 	sync_repo.RegisterSyncLocalPath(m.localPath)
 	device_repo.RegisterDevice(m.device)
 	engine_svc.SetDefault(engine_svc.New())
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 	// 快照端点要先确认「这台设备归调用方且还能用」，判定归 device_svc.OwnedDevice；
 	// 它只走上面装好的 device_repo mock，配置与签名器都用不上。
 	device_svc.SetDefault(device_svc.New(device_svc.Config{}))

@@ -7,7 +7,7 @@ import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Devices from "@/pages/Devices";
-import { deviceKindIcon } from "@/lib/deviceKind";
+import { DEVICE_KIND_ICONS } from "@/lib/deviceKind";
 import { Laptop, Server } from "lucide-react";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -363,9 +363,9 @@ describe("device page design alignment", () => {
     }
   });
 
-  it("deviceKindIcon 把每种 kind 映射到稳定 lucide 图标", () => {
-    expect(deviceKindIcon("agentred")).toBe(Server);
-    expect(deviceKindIcon("desktop")).toBe(Laptop);
+  it("DEVICE_KIND_ICONS 把每种 kind 映射到稳定 lucide 图标", () => {
+    expect(DEVICE_KIND_ICONS["agentred"]).toBe(Server);
+    expect(DEVICE_KIND_ICONS["desktop"]).toBe(Laptop);
   });
 });
 

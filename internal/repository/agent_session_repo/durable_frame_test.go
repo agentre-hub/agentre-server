@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
+	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
@@ -110,7 +111,7 @@ func TestDeleteFrames_ScopedToTheWholeIdentity(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
 		"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? LIMIT ?",
-	)).WithArgs(int64(7), "conv-42", int64(cleanupBatchSize)).WillReturnResult(sqlmock.NewResult(0, 5))
+	)).WithArgs(int64(7), "conv-42", int64(dbutil.CleanupBatchSize)).WillReturnResult(sqlmock.NewResult(0, 5))
 	mock.ExpectCommit()
 
 	require.NoError(t, r.DeleteFrames(ctx, 7, "conv-42"))
@@ -126,11 +127,11 @@ func TestDeleteFrames_GivenMoreThanOneBatch_ThenDeletesInBoundedChunks(t *testin
 	ctx, _, mock := hubtest.Database(t)
 	r := NewDurableFrame()
 
-	for _, affected := range []int64{cleanupBatchSize, 7} {
+	for _, affected := range []int64{dbutil.CleanupBatchSize, 7} {
 		mock.ExpectBegin()
 		mock.ExpectExec(regexp.QuoteMeta(
 			"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? LIMIT ?",
-		)).WithArgs(int64(7), "conv-42", int64(cleanupBatchSize)).WillReturnResult(sqlmock.NewResult(0, affected))
+		)).WithArgs(int64(7), "conv-42", int64(dbutil.CleanupBatchSize)).WillReturnResult(sqlmock.NewResult(0, affected))
 		mock.ExpectCommit()
 	}
 
@@ -149,7 +150,7 @@ func TestDeleteFrames_GivenBatchError_ThenReturnsError(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(regexp.QuoteMeta(
 		"DELETE FROM `agent_session_durable_frames` WHERE user_id=? AND conversation_id=? LIMIT ?",
-	)).WithArgs(int64(7), "conv-42", int64(cleanupBatchSize)).WillReturnError(wantErr)
+	)).WithArgs(int64(7), "conv-42", int64(dbutil.CleanupBatchSize)).WillReturnError(wantErr)
 	mock.ExpectRollback()
 
 	err := r.DeleteFrames(ctx, 7, "conv-42")

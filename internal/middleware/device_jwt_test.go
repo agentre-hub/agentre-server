@@ -30,7 +30,7 @@ func shortLivedCredentials(t *testing.T) auth_svc.AuthSvc {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), 14*24*3600))
 	auth_svc.SetDefault(auth)
 	return auth
 }
@@ -211,7 +211,7 @@ func TestRelayClientJWT_BrowserTicketIsSingleUse(t *testing.T) {
 // Redis 不可用时票据既解析不了也认领不了，一律拒绝（fail-closed），不放行也不答 500。
 func TestRelayClientJWT_TicketFailsClosedWhenRedisIsUnavailable(t *testing.T) {
 	mini := testutils.Redis(t)
-	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), 86400))
 	auth_svc.SetDefault(auth)
 	ticket, _ := issueTicket(t, auth, 7)
 	guard := relayClientGuard(auth)

@@ -282,7 +282,7 @@ func RegisterDefaults(cfg *ServerConfig) {
 		CallbackPath: auth.GithubCallbackPath, PublicURL: cfg.PublicURL,
 	}))
 
-	store := session.New(redis.Default(), session.CookieName, int(cfg.Session.TTL/time.Second))
+	store := session.New(redis.Default(), int(cfg.Session.TTL/time.Second))
 	auth_svc.SetDefault(auth_svc.New(redis.Default(), store))
 
 	// 账号闸门：session / device JWT / relay 三条鉴权路径与中继心跳共用的那一处判定。
@@ -357,7 +357,7 @@ func registerSessionMirror(instanceID string) {
 	// saved_session_svc（它才是保存名单的主人）；sessionimport_svc 两边都不 import。
 	sessionimport_svc.SetDefault(sessionimport_svc.New(
 		machineImports{imports: mirror_svc.NewImports(supervisor)},
-		savedSessions{follows: saved_session_svc.Default()},
+		saved_session_svc.Default(),
 	))
 	// 工作区多端同步 R14 / R18 + 会话镜像决策 7：撤销一台设备时的三件连带清理分属
 	// 两个域，device_svc 只认那个窄接口，由这里拼齐。
@@ -413,9 +413,8 @@ func (d machineSessionDeleter) DeleteOnMachine(ctx context.Context, ref saved_se
 	}
 }
 
-// machineImports / savedSessions 把 sessionimport_svc 的两个消费侧接口接到实现上。
-// 与上面那两位同理：接口在消费侧声明、实现各在自己的域里，这里是唯一同时认识
-// 三边的地方。
+// machineImports 把 sessionimport_svc 的消费侧接口接到 mirror_svc 的实现上。
+// 接口在消费侧声明、实现在自己的域里，这里是唯一同时认识两边的地方。
 type machineImports struct{ imports *mirror_svc.Imports }
 
 // WithPeer 只翻译机器离线；协议方法缺失作为普通协议错误原样上交。
@@ -438,21 +437,6 @@ func (m machineImports) WithPeer(
 func isMethodNotFound(err error) bool {
 	var wireErr *rpcerror.Error
 	return errors.As(err, &wireErr) && wireErr.Code == rpcerror.CodeMethodNotFound
-}
-
-type savedSessions struct {
-	follows saved_session_svc.SavedSessionSvc
-}
-
-// Save 把导出来的那条会话收进账号，于是镜像对它开始。两个指纹同值：导入由那台
-// 机器自己执行，会话也归它（见 sessionimport_svc.Import 的说明）。
-func (s savedSessions) Save(ctx context.Context, ref sessionimport_svc.SessionRef) error {
-	return s.follows.Save(ctx, saved_session_svc.SessionRef{
-		UserID:             ref.UserID,
-		MachineFingerprint: ref.MachineFingerprint,
-		PeerFingerprint:    ref.PeerFingerprint,
-		ConversationID:     ref.ConversationID,
-	})
 }
 
 // revokePurger 是撤销一台设备时那几件连带清理的合体：本机路径清单与账号级同步对象

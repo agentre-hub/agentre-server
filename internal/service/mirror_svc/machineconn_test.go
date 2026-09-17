@@ -94,8 +94,8 @@ func decodeForwardedRequest(t *testing.T, forwarded forwardedFrame) *agentrewire
 	t.Helper()
 	assert.Equal(t, websocket.BinaryMessage, forwarded.messageType)
 	assert.NotEqual(t, byte('{'), forwarded.data[0], "内部 RPC carrier 不应退回 JSON object")
-	frame, err := relaywire.DecodeFrame(forwarded.data)
-	require.NoError(t, err)
+	frame := &agentrewire.RpcFrame{}
+	require.NoError(t, proto.Unmarshal(forwarded.data, frame))
 	require.NotNil(t, frame.GetRequest())
 	return frame
 }
@@ -175,8 +175,8 @@ func TestMachineConn_ContextCancellationSendsTypedCancel(t *testing.T) {
 	request := decodeForwardedRequest(t, <-dialer.frames)
 	cancel()
 	require.ErrorIs(t, <-errCh, context.Canceled)
-	cancelFrame, err := relaywire.DecodeFrame((<-dialer.frames).data)
-	require.NoError(t, err)
+	cancelFrame := &agentrewire.RpcFrame{}
+	require.NoError(t, proto.Unmarshal((<-dialer.frames).data, cancelFrame))
 	require.NotNil(t, cancelFrame.GetCancel())
 	assert.Equal(t, request.GetId(), cancelFrame.GetCancel().GetRequestId())
 }

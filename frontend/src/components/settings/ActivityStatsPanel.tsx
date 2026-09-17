@@ -17,7 +17,7 @@ import {
   cn,
 } from "@agentre-hub/agentre-ui";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { loadErrorText } from "@/lib/loadError";
 // 包里同名的那个 formatRelativeTime 收的是 t()，这里要的是按 locale 的 Intl 版本。
 import { formatRelativeTime } from "@/lib/sessionView";

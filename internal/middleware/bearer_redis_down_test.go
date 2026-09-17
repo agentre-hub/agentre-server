@@ -41,7 +41,7 @@ func digestOf(token string) string {
 func TestBearerBranches_DecideDeviceTokensWithoutRedis(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mini := testutils.Redis(t) // 这一台是全局默认，下面把它整个停掉
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 86400)))
 
 	ctrl := gomock.NewController(t)
 	tokens := mock_device_token_repo.NewMockDeviceTokenRepo(ctrl)

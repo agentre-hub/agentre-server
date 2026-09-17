@@ -1,8 +1,10 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import type {
+  AnyRpcMethod,
   DurableNotification,
   SessionSummary,
 } from "@agentre-hub/agentre-wire";
+import type { MessageInitShape } from "@bufbuild/protobuf";
 
 import {
   toTranscriptFrame,
@@ -138,11 +140,9 @@ export async function writeModelTargetToOrigin(
   origin: string,
   params: { conversationId: string; providerKey: string; modelKey: string },
 ): Promise<void> {
-  await withRelayClient(machineTarget(origin), async (client) => {
-    await client.request(rpcMethods.setModelTarget, {
-      ...params,
-      peerFingerprint: origin,
-    });
+  await writeToOriginMachine(origin, rpcMethods.setModelTarget, {
+    ...params,
+    peerFingerprint: origin,
   });
 }
 
@@ -160,11 +160,24 @@ export async function writeReasoningEffortToOrigin(
   origin: string,
   params: { conversationId: string; reasoningEffort: string },
 ): Promise<void> {
+  await writeToOriginMachine(origin, rpcMethods.setSessionReasoningEffort, {
+    ...params,
+    peerFingerprint: origin,
+  });
+}
+
+/**
+ * writeToOriginMachine 是上面两跳共用的那一段：向池子借一条到发起端**机器**的通道
+ * 写一次，写完还回去。走 `machine:` 而不是 `conversation:`：目标就是「那一台」，而
+ * 服务端按对话解析出的是**承载**机器，正是这里要绕开的那一台。
+ */
+async function writeToOriginMachine<M extends AnyRpcMethod>(
+  origin: string,
+  method: M,
+  params: MessageInitShape<M["request"]>,
+): Promise<void> {
   await withRelayClient(machineTarget(origin), async (client) => {
-    await client.request(rpcMethods.setSessionReasoningEffort, {
-      ...params,
-      peerFingerprint: origin,
-    });
+    await client.request(method, params);
   });
 }
 

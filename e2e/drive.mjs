@@ -498,21 +498,21 @@ const COMMANDS = {
   /** 正式 server 日志。浏览器没了也照样能看 —— 写报告时要用。 */
   async logs({ session, rest, flags }) {
     const lines = Number(rest[0]) || Number(flags.limit) || 40;
-    const files = [session.serverLog].filter(Boolean);
-    if (!files.length) {
+    const file = session.serverLog;
+    if (!file) {
       throw new Error(
         "this session has no logs — it was started with --base, not by `pnpm serve`",
       );
     }
-    for (const file of files) {
-      if (!existsSync(file) || !statSync(file).isFile()) continue;
-      const tail = readFileSync(file, "utf8")
-        .split("\n")
-        .slice(-lines)
-        .join("\n");
-      console.log(`--- ${file}\n${tail}`);
+    if (!existsSync(file) || !statSync(file).isFile()) {
+      throw new Error(`server log is missing: ${file}`);
     }
-    return `tailed ${files.length} files`;
+    const tail = readFileSync(file, "utf8")
+      .split("\n")
+      .slice(-lines)
+      .join("\n");
+    console.log(`--- ${file}\n${tail}`);
+    return `tailed ${file}`;
   },
 };
 

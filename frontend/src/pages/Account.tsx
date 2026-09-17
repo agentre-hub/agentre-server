@@ -3,10 +3,8 @@ import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import AppShell from "@/components/AppShell";
-import { EmptyState, StatusMark } from "@/components/console";
+import { CardLoadError, EmptyState, StatusMark } from "@/components/console";
 import {
-  Alert,
-  AlertDescription,
   Button,
   DialogShell,
   DialogShellBody,
@@ -17,7 +15,7 @@ import {
   Skeleton,
   cn,
 } from "@agentre-hub/agentre-ui";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useMe } from "@/hooks/use-me";
 import { api, ApiError } from "@/lib/api";
 import { PASSKEY_CODES } from "@/lib/errorCodes";
@@ -201,36 +199,6 @@ function CardListSkeleton({ rows }: { rows: number }) {
         ))}
       </ul>
     </div>
-  );
-}
-
-/**
- * 卡片读取失败：说出原因，并给一条回程。
- *
- * 没有这颗按钮的话，用户唯一的出路是刷新整页——而这一页另外两张卡此刻可能好好的。
- */
-function CardLoadError({
-  error,
-  fallback,
-  onRetry,
-}: {
-  error: unknown;
-  fallback: string;
-  onRetry: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <Alert variant="destructive" className="m-4 w-auto">
-      <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-        <span className="min-w-0">
-          {error instanceof ApiError ? error.message : fallback}
-        </span>
-        <span className="flex-1" />
-        <Button size="xs" variant="outline" onClick={onRetry}>
-          {t("common.retry")}
-        </Button>
-      </AlertDescription>
-    </Alert>
   );
 }
 
@@ -463,6 +431,7 @@ export default function Account() {
               <CardLoadError
                 error={passkeysError}
                 fallback={t("account.passkeys.loadError")}
+                className="m-4 w-auto"
                 onRetry={() => {
                   setPasskeysError(null);
                   setPasskeysReload((k) => k + 1);
@@ -545,6 +514,7 @@ export default function Account() {
               <CardLoadError
                 error={sessionsError}
                 fallback={t("account.signins.loadError")}
+                className="m-4 w-auto"
                 onRetry={() => {
                   setSessionsError(null);
                   setSessionsReload((k) => k + 1);

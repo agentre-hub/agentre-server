@@ -8,14 +8,15 @@ import (
 	"github.com/gin-gonic/gin"
 
 	api "github.com/agentre-hub/agentre-server/internal/api/stats"
+	"github.com/agentre-hub/agentre-server/internal/pkg/activitystats"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/service/activity_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 )
 
 // defaultRange 是不带 range 时的那一档。绑定层只认三个值，因此这里补的一定是
-// 服务层认得出的键。
-const defaultRange = "30d"
+// 服务层认得出的键；取值直接引用那份词表，不另抄一个字面量。
+const defaultRange = activitystats.Range30Days
 
 type Stats struct{}
 

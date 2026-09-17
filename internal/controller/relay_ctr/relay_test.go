@@ -24,6 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
+	"github.com/agentre-hub/agentre/pkg/wire/wirelimits"
+
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/api"
@@ -394,13 +397,13 @@ func TestRelayLifecycleRejectsOversizedMessagesAndDetaches(t *testing.T) {
 				require.NoError(t, conn.WriteMessage(websocket.BinaryMessage,
 					relayEnvelope("channel-id", []byte("machine:fp-daemon"))))
 			}
-			// 上限是**载荷**的上限，三个仓同一个数（relayws.MaxPayloadBytes）。
+			// 上限是**载荷**的上限，三个仓同一个数（wirelimits.MaxPayloadBytes）。
 			// 两条链路上跑的都是信封（2 字节长度 + 通道 ID），所以读上限都要比载荷
 			// 预算高出一个信封头 —— 否则一份刚好 10 MiB 的合法载荷，只因为带了信封
 			// 就被 1009 打掉，而且打掉的是**整条**物理连接，上面所有虚拟通道一起陪葬。
-			limit := int(relayws.MaxPayloadBytes)
+			limit := int(wirelimits.MaxPayloadBytes)
 			if tc.daemonWire {
-				limit += int(relayws.MaxEnvelopeBytes)
+				limit += int(relayenvelope.MaxEnvelopeBytes)
 			}
 			require.NoError(t, conn.WriteMessage(websocket.BinaryMessage, relayPayloadOfSize(limit, tc.daemonWire)))
 			receiveWithin(t, tc.framesOf(stub), time.Second, "maximum relay message was not accepted")
@@ -619,7 +622,7 @@ func TestRelayFramesCrossServerInstances(t *testing.T) {
 // 网络中断区分开：daemon 会退避重连，重连在 upgrade 处被拒才是正确结局。
 func TestRelayClientClosesWhenIssuingSessionEnds(t *testing.T) {
 	testutils.Redis(t)
-	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), 86400))
 	auth_svc.SetDefault(auth)
 	ctx := context.Background()
 
@@ -695,7 +698,7 @@ func TestRelayDaemonClosesWhenDeviceRevokedOnAnotherInstance(t *testing.T) {
 // 浏览器票据，所以要在 newRelayServer 之前调用。
 func installRelayAuth(t *testing.T) auth_svc.AuthSvc {
 	t.Helper()
-	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 86400))
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), 86400))
 	auth_svc.SetDefault(auth)
 	return auth
 }

@@ -217,29 +217,8 @@ func (r *objectRepo) ListSince(ctx context.Context, userID, cursor int64, limit 
 //
 // 一条语句扫全表、不分账号：每一行都只按它自己的 user_id 归属被删，一个账号的
 // 回收不可能碰到另一个账号的行。
-// cleanupBatchSize 是清理类 DELETE 每一批的行数上限。
-//
-// 不分批的一条 DELETE 在 InnoDB 上会把 next-key 锁铺满它扫过的范围。这两张表都是
-// 稳态几十万到几百万行、每天/每小时回收一次的形状,一次回收可能删掉其中一大片,
-// 期间落在同一范围上的写全被挡在那把锁后面。分批之后每批各自提交,锁的持有时间被
-// 切成一小段一小段。
-const cleanupBatchSize = 1000
-
 func (r *objectRepo) DeleteTombstonesBefore(ctx context.Context, cutoff int64) (int64, error) {
-	var total int64
-	for {
-		res := db.Ctx(ctx).Where("deleted_at>0 AND deleted_at<?", cutoff).
-			Limit(cleanupBatchSize).
-			Delete(&sync_entity.SyncObject{})
-		if res.Error != nil {
-			return total, res.Error
-		}
-		total += res.RowsAffected
-		// 没删满说明够到底了。删满就得再来一批——剩下的行数无从得知。
-		if res.RowsAffected < cleanupBatchSize {
-			return total, nil
-		}
-	}
+	return dbutil.DeleteBatched(ctx, &sync_entity.SyncObject{}, "deleted_at>0 AND deleted_at<?", cutoff)
 }
 
 func (r *objectRepo) ListByKinds(ctx context.Context, userID int64, kinds []string) ([]*sync_entity.SyncObject, error) {

@@ -15,10 +15,6 @@ import {
   type BoardStage,
 } from "@agentre-hub/agentre-ui";
 
-export interface UseBoardDragResult {
-  bindings: BoardDragBindings;
-}
-
 /** 落点在这一列的哪两张卡之间：返回它上面那张卡的 id（0 = 落在列顶）。 */
 function afterIdAt(column: HTMLElement, clientY: number, dragged: number) {
   const cards = [...column.querySelectorAll("[data-card-id]")]
@@ -37,7 +33,7 @@ function afterIdAt(column: HTMLElement, clientY: number, dragged: number) {
 
 export function useBoardDrag(
   onMove: (id: number, stage: BoardStage, afterId: number) => void,
-): UseBoardDragResult {
+): BoardDragBindings {
   const [dragging, setDragging] = React.useState<number | null>(null);
   const [over, setOver] = React.useState<BoardStage | null>(null);
   // 落点计算发生在原生事件回调里（不是 React 的 onDrop），闭包里必须读到最新的
@@ -126,5 +122,5 @@ export function useBoardDrag(
     [columnRefs, dragging, over],
   );
 
-  return { bindings };
+  return bindings;
 }

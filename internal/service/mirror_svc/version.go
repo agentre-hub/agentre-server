@@ -95,17 +95,6 @@ func (s *Supervisor) recordDaemonBuild(ctx context.Context, key machineKey, comm
 	}
 }
 
-// RecordDaemonBuild 是 recordDaemonBuild 面向包外的公开入口，与读侧 HandshakeStates
-// 成对（对照 RecordProtocolMismatch）：dial() 走包内那个私有版本，
-// 这一个供需要补记这份共享状态的调用方使用（例如设备读端点的测试要在不真的握一次手
-// 的前提下断言读侧接线）。
-func (s *Supervisor) RecordDaemonBuild(ctx context.Context, userID int64, fingerprint, commit string) {
-	if s == nil {
-		return
-	}
-	s.recordDaemonBuild(ctx, machineKey{userID: userID, fingerprint: fingerprint}, commit)
-}
-
 // HandshakeState 是镜像握手为一台机器记下的两份共享状态：这台机器最近一次握手是不是
 // 被判定协议不合而拒绝（语义见 protocolMismatchActive），以及它自报的短 commit——
 // DaemonBuildKnown 分开「空串」与「不知道」：未装配镜像、Redis 读不出来、从没握过手，

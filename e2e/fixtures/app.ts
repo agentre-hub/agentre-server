@@ -170,7 +170,10 @@ export async function signOutViaUserMenu(page: Page) {
   await page.waitForURL(/\/login/);
 }
 
-function expectSuccessfulEnvelope<T>(response: APIResponse, body: unknown): T {
+export function expectSuccessfulEnvelope<T>(
+  response: APIResponse,
+  body: unknown,
+): T {
   expect(
     response.ok(),
     `HTTP ${response.status()}: ${JSON.stringify(body)}`,

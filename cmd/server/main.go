@@ -46,20 +46,17 @@ func loadConfig(args []string) (*configs.Config, error) {
 		return nil, err
 	}
 	// 自己装配配置源，为的是套上 bootstrap 的环境变量覆盖层。
-	if *configPath == "" {
-		src, err := bootstrap.NewConfigSource(defaultConfigPath)
-		if err != nil {
-			return nil, err
-		}
-		return configs.NewConfig("agentre-server", configs.WithSource(src))
+	path := *configPath
+	if path == "" {
+		path = defaultConfigPath
 	}
-	src, err := bootstrap.NewConfigSource(*configPath)
+	src, err := bootstrap.NewConfigSource(path)
 	if err != nil {
-		return nil, fmt.Errorf("load config %q: %w", *configPath, err)
+		return nil, fmt.Errorf("load config %q: %w", path, err)
 	}
 	cfg, err := configs.NewConfig("agentre-server", configs.WithSource(src))
 	if err != nil {
-		return nil, fmt.Errorf("load config %q: %w", *configPath, err)
+		return nil, fmt.Errorf("load config %q: %w", path, err)
 	}
 	return cfg, nil
 }

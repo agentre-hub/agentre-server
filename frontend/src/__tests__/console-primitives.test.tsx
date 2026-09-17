@@ -141,20 +141,11 @@ describe("Metric（IhldU 统计卡）", () => {
     expect(container.querySelector('[data-testid="metric-sub"]')).toBeNull();
   });
 
-  it("默认 tone 用 card 面；danger tone 换 destructive 语义 token", () => {
-    const { container, rerender } = render(<Metric label="A" value="1" />);
-    let tile = container.firstElementChild as HTMLElement;
+  it("默认用 card 面与语义 token", () => {
+    const { container } = render(<Metric label="A" value="1" />);
+    const tile = container.firstElementChild as HTMLElement;
     expect(tile.className).toContain("bg-card");
     expect(tile.className).toContain("border-border");
-
-    rerender(<Metric tone="danger" label="A" value="1" sub="boom" />);
-    tile = container.firstElementChild as HTMLElement;
-    expect(tile.className).toContain("bg-destructive-soft");
-    expect(tile.className).toContain("border-destructive");
-    const value = container.querySelector(
-      '[data-testid="metric-value"]',
-    ) as HTMLElement;
-    expect(value.className).toContain("text-destructive");
   });
 });
 
@@ -248,8 +239,8 @@ describe("ConsoleNavItem（ZC7pI）", () => {
     expect(link.className).toContain("text-muted-foreground");
   });
 
-  it("badge 只在 >0 时渲染；meta 与 dot 按需出现", () => {
-    const { container, rerender } = renderNav({ route: "/chat", badge: 3 });
+  it("badge 只在 >0 时渲染；meta 按需出现", () => {
+    const { rerender } = renderNav({ route: "/chat", badge: 3 });
     expect(screen.getByText("3")).toBeTruthy();
 
     rerender(
@@ -266,12 +257,10 @@ describe("ConsoleNavItem（ZC7pI）", () => {
           label="Overview"
           Icon={LayoutDashboard}
           meta="2/3"
-          dot
         />
       </MemoryRouter>,
     );
     expect(screen.getByText("2/3")).toBeTruthy();
-    expect(container.querySelector('span[aria-hidden="true"]')).toBeTruthy();
   });
 
   /*
@@ -311,12 +300,11 @@ describe("ConsoleNavItem（ZC7pI）", () => {
 describe("MobileTabBar（A6Z3k）", () => {
   const items = [
     {
-      key: "overview",
       to: "/overview",
       label: "Overview",
       Icon: LayoutDashboard,
     },
-    { key: "chat", to: "/chat", label: "Chat", Icon: MessagesSquare },
+    { to: "/chat", label: "Chat", Icon: MessagesSquare },
   ];
 
   it("渲染每个目的地为链接，整体是带 aria-label 的导航", () => {

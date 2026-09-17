@@ -5,8 +5,6 @@
 package saved_session_ctr
 
 import (
-	"net/http"
-
 	"github.com/cago-frame/cago/pkg/i18n"
 	"github.com/gin-gonic/gin"
 
@@ -22,9 +20,9 @@ func New() *Follow { return &Follow{} }
 
 // Save 把一条对话收进账号（幂等）；镜像随即开始。账号取自上下文。
 func (f *Follow) Save(c *gin.Context, req *api.SaveSessionRequest) (*api.SaveSessionResponse, error) {
-	userID := ginctx.UserID(c)
-	if userID == 0 {
-		return nil, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
 	}
 	if err := saved_session_svc.Default().Save(c.Request.Context(), saved_session_svc.SessionRef{
 		UserID:             userID,
@@ -40,9 +38,9 @@ func (f *Follow) Save(c *gin.Context, req *api.SaveSessionRequest) (*api.SaveSes
 // Delete 删掉账号里的这条对话，并让执行端也删（幂等）。应答如实交代执行端那一份的
 // 去向——server 那一份在成功返回时一定已经没了。
 func (f *Follow) Delete(c *gin.Context, req *api.DeleteSessionRequest) (*api.DeleteSessionResponse, error) {
-	userID := ginctx.UserID(c)
-	if userID == 0 {
-		return nil, i18n.NewErrorWithStatus(c.Request.Context(), http.StatusUnauthorized, code.Unauthorized)
+	userID, err := ginctx.RequireUserID(c)
+	if err != nil {
+		return nil, err
 	}
 	// 承载它的机器不由请求体提供：service 按身份从账号里查出来。
 	outcome, err := saved_session_svc.Default().Delete(c.Request.Context(), saved_session_svc.SessionRef{

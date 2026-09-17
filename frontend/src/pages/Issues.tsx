@@ -38,7 +38,8 @@ import {
 import AppShell from "@/components/AppShell";
 import { orderProjectTree } from "@/components/session/newconv/ProjectAgentPane";
 import type { NewConvAgent } from "@/components/session/newconv/types";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
 import { useEngineCatalog } from "@/lib/engineCatalog";
@@ -73,13 +74,13 @@ export default function Issues() {
   useAliveEffect((alive) => {
     Promise.all([
       fetchProjects(),
-      api<{ agents?: NewConvAgent[] }>("/v1/workspace/agents"),
+      fetchAgents(),
       api<{ backends?: OrgBackendItem[] }>("/v1/workspace/org/backends"),
     ])
-      .then(([projectList, agentResult, backendResult]) => {
+      .then(([projectList, agentList, backendResult]) => {
         if (!alive()) return;
         setProjects(projectList);
-        setAgents(agentResult.agents ?? []);
+        setAgents(agentList);
         setBackends(backendResult.backends ?? []);
         setBackendsLoaded(true);
       })
@@ -157,7 +158,7 @@ export default function Issues() {
     [agents, ids],
   );
 
-  const { bindings } = useBoardDrag(
+  const bindings = useBoardDrag(
     React.useCallback(
       (id: number, stage: BoardStage, afterId: number) => {
         void board.moveTask(id, stage, afterId);

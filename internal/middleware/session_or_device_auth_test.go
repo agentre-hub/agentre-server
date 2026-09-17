@@ -21,7 +21,7 @@ import (
 func TestSessionOrDeviceAuth(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), "server_session", 14*24*3600)))
+	auth_svc.SetDefault(auth_svc.New(redis.Default(), session.New(redis.Default(), 14*24*3600)))
 
 	makeHandler := func() *gin.Engine {
 		r := gin.New()

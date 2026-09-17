@@ -147,20 +147,6 @@ export class RelayClientPool {
   }
 
   /**
-   * 此刻持有的**物理 WebSocket** 数：0 或 1。
-   *
-   * 这就是本轮那个数字（决策 10 + 13）。观测用，也被用例直接钉住。
-   */
-  get size(): number {
-    return this.connection === null ? 0 : 1;
-  }
-
-  /** 那条连接上此刻活着的虚拟通道数。 */
-  get channelCount(): number {
-    return this.entries.size;
-  }
-
-  /**
    * 借一条到某个目标的通道。`target` 是 `conversation:<uuid>` 或
    * `machine:<fingerprint>`（见 relayTarget 的入口分流）。
    */

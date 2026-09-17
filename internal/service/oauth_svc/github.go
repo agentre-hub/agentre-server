@@ -10,8 +10,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 )
 
 type githubClient struct {
@@ -108,31 +106,17 @@ func (c *githubClient) FetchProfile(ctx context.Context, accessToken string) (*P
 	}
 
 	email := user.Email
-	verified := email != ""
 	if email == "" {
 		var emails []githubEmail
 		if _, err := getJSON("https://api.github.com/user/emails", &emails); err != nil {
 			return nil, err
 		}
 		email = pickPrimaryVerifiedEmail(emails)
-		verified = email != ""
 	}
 	return &Profile{
 		ID: user.ID, Login: user.Login, Name: user.Name, AvatarURL: user.AvatarURL,
-		Email: email, Verified: verified, RawProfile: raw,
+		Email: email, RawProfile: raw,
 	}, nil
-}
-
-// ToGithubProfile 把 oauth_svc.Profile 转 user_svc.GithubProfile。
-func ToGithubProfile(p *Profile) user_svc.GithubProfile {
-	return user_svc.GithubProfile{
-		GithubID:    fmt.Sprintf("%d", p.ID),
-		Login:       p.Login,
-		DisplayName: p.Name,
-		Email:       p.Email,
-		AvatarURL:   p.AvatarURL,
-		RawProfile:  p.RawProfile,
-	}
 }
 
 var defaultGithub GithubClient

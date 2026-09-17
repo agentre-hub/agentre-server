@@ -1,6 +1,6 @@
 import { useRef, useState, type Dispatch, type SetStateAction } from "react";
 
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { ApiError } from "@/lib/api";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 

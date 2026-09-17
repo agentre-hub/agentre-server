@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAccountChannel } from "@/hooks/use-account-channel";
-import { useAliveEffect } from "@/hooks/use-api-query";
+import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useTargetGuard } from "@/hooks/use-target-guard";
 import { AccountChannelMirrorChanged } from "@/lib/accountChannel";
 import { attentionReasonOf } from "@/lib/attentionAdapter";
@@ -133,7 +133,6 @@ export interface SessionIndexData {
    * 下一次写成、或者用户把它关掉时清空。
    */
   saveFailure: SaveFailure | null;
-  dismissSaveFailure: () => void;
   /** 把上一次没写成的那次保存重做一遍（两条来路各按自己的方式重做）。 */
   retrySave: () => void;
   /**
@@ -640,8 +639,6 @@ export function useSessionIndex({
     [devices, shiftTotals],
   );
 
-  const dismissSaveFailure = useCallback(() => setSaveFailure(null), []);
-
   /**
    * 发起即保存那一路没写成（R16）：只记下事实，重做交给 retrySave。
    */
@@ -761,7 +758,6 @@ export function useSessionIndex({
     fetchGroupPage,
 
     saveFailure,
-    dismissSaveFailure,
     retrySave,
     reportUnsavedOnStart,
 

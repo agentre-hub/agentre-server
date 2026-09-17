@@ -23,6 +23,5 @@ type Profile struct {
 	Name       string
 	AvatarURL  string
 	Email      string
-	Verified   bool
 	RawProfile []byte
 }

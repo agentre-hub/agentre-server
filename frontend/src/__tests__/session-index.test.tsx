@@ -935,7 +935,7 @@ describe("统一会话索引：空组自己说一句", () => {
     expect(queryBySlot("session-index-empty")).toBeNull();
   });
 
-  it("一个项目都没有：这一轴连组头都没有，页面级那一句得留着", () => {
+  it("一个项目都没有：项目轴仍常驻「随手对话」组头，页面级那句不必再说", () => {
     renderIndex({ axis: "project", rows: [], projects: [] });
 
     expect(indexEmpty().textContent).toContain("No conversations yet");

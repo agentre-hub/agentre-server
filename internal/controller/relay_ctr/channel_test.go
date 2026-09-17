@@ -11,12 +11,15 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+	"google.golang.org/protobuf/proto"
+
+	agentrewire "github.com/agentre-hub/agentre/pkg/wire/agentrewire"
+	"github.com/agentre-hub/agentre/pkg/wire/relayenvelope"
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/agent_session_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/relaywire"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo/mock_agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
@@ -126,7 +129,7 @@ func (l *clientLink) read() {
 		if messageType != websocket.BinaryMessage {
 			continue
 		}
-		channelID, frame, decodeErr := relay_svc.UnwrapEnvelope(payload)
+		channelID, frame, decodeErr := relayenvelope.Unwrap(payload)
 		if decodeErr != nil {
 			continue
 		}
@@ -151,7 +154,7 @@ func (l *clientLink) open(t *testing.T, channelID, target string) {
 
 func (l *clientLink) send(t *testing.T, channelID string, frame []byte) {
 	t.Helper()
-	envelope, err := relay_svc.WrapEnvelope(channelID, frame)
+	envelope, err := relayenvelope.Wrap(channelID, frame)
 	require.NoError(t, err)
 	require.NoError(t, l.conn.WriteMessage(websocket.BinaryMessage, envelope))
 }
@@ -173,8 +176,8 @@ func (l *clientLink) requireQuiet(t *testing.T, channelID, failure string) {
 // requireChannelError 断言这条通道拿到的是一个通道级 RPC 错误，并交回错误码。
 func requireChannelError(t *testing.T, frame []byte) int32 {
 	t.Helper()
-	decoded, err := relaywire.DecodeFrame(frame)
-	require.NoError(t, err, "通道级失败必须是客户端 RPC 层认得的一帧")
+	decoded := &agentrewire.RpcFrame{}
+	require.NoError(t, proto.Unmarshal(frame, decoded), "通道级失败必须是客户端 RPC 层认得的一帧")
 	require.NotNil(t, decoded.GetError(), "通道级失败必须走 RpcFrame.error")
 	require.NotEmpty(t, decoded.GetError().GetMessage(), "错误码必须带文案")
 	return decoded.GetError().GetCode()
