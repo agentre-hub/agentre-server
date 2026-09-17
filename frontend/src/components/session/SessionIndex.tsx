@@ -6,6 +6,7 @@ import {
   ImportLocalSessionMenu,
   ImportSessionDialog,
   MachineGroupHeader,
+  nestProjectGroups,
   ProjectGroupHeader,
   ProjectHeaderActions,
   ProjectHeaderContextMenu,
@@ -13,7 +14,7 @@ import {
   RowLeadingSlot,
   RowSecondaryLine,
   SessionFilterChips,
-  SessionGroup,
+  ProjectSessionGroup,
   SessionGroupList,
   SessionGroupOverflow,
   SessionIndexEmpty,
@@ -22,6 +23,7 @@ import {
   useUiTranslation,
   type AgentInfo,
   type ImportDialogPrefill,
+  type IndexGroupNode,
   type ImportOutcome,
   type MachineInfo,
   type ProjectHeaderActionsProps,
@@ -367,9 +369,6 @@ function GroupHeader({
         // 只给颜色的话，同一个项目在组头上是首字、在行首是图标。
         project={{ name: group.label, color: group.color, icon: group.icon }}
         depth={group.depth}
-        // 层级在本站是**平铺一列**，所以除了包给的那条尺码阶梯还要缩进；桌面端把
-        // 子项目嵌在父组的容器里，那边因此不需要这一行。
-        style={{ marginLeft: group.depth * 12 }}
       />
     ) : group.kind === "machine" ? (
       <MachineGroupHeader
@@ -1049,7 +1048,16 @@ export default function SessionIndex({
           决策 6）。这两轴的「有哪些组」都不是从会话推出来的，是宿主直接给的名单。 */}
       {showGroups ? (
         <SessionGroupList>
-          {groups.map((group) => {
+          {/* 项目轴按树渲染（与桌面端同一份 nestProjectGroups）：收起父项目要真的把
+              子项目一起收起来，父项目自己的会话也只有知道它有子项目才下沉进「会话」
+              子分组。其余轴 depth 恒为 0，每组都是没有子节点的根。 */}
+          {nestProjectGroups(groups).map(function renderNode(
+            node: IndexGroupNode<MirrorIndexGroup>,
+          ): React.ReactNode {
+            const group = node.group;
+            // 包的树节点只认得 IndexGroupRow；行是本站摊进去的 MirrorIndexGroupRow，
+            // 与上面 buildAxisGroups 的那一处同一个理由。
+            const subtreeRows = node.subtreeRows as MirrorIndexGroupRow[];
             const scope = scopeOfGroup(group);
             const overflow =
               group.kind !== "all" &&
@@ -1078,7 +1086,7 @@ export default function SessionIndex({
             const sessions = group.rows.map(sessionModel);
 
             return (
-              <SessionGroup
+              <ProjectSessionGroup
                 key={`${group.key}:${overflowRangeKey}`}
                 data-testid={`group-${group.key}`}
                 aria-busy={pending || undefined}
@@ -1120,7 +1128,8 @@ export default function SessionIndex({
                 sessions={sessions}
                 selectedSessionId={selectedKey ?? undefined}
                 attentionSessions={[]}
-                collapsedAttentionSessions={group.rows
+                // 折叠态气泡冒整棵子树：收起父项目时子项目也不在屏幕上了。
+                collapsedAttentionSessions={subtreeRows
                   .filter((row) => attentionReasonOf(row) !== null)
                   .map((row) =>
                     attentionModel(
@@ -1189,6 +1198,13 @@ export default function SessionIndex({
                 }
                 pending={pending ? <SessionRowSkeleton rows={2} /> : undefined}
                 emptyLabel={emptyLabel}
+                subprojects={
+                  node.children.length > 0
+                    ? node.children.map(renderNode)
+                    : undefined
+                }
+                ownSessionsName={group.label}
+                ownSessionsCount={group.total}
               />
             );
           })}

@@ -619,14 +619,15 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
    *
    * 首字母的取法在 2026-08-21 那一轮随字形归一改成桌面端那套（规格决策 6）：
    * 拉丁多词名取前两词首字母（`Frontend Agent` → `FA`），其余取首字。
+   * 2026-09-17 起 20px 以下的 xs 档只放一个字：两个字母在 14px 里撑满甚至撑出方块。
    */
-  it("Agent 字形是 14px 圆角方块 + 首字母，不是 8px 色点", () => {
+  it("Agent 字形是 14px 圆角方块 + 一个首字母，不是 8px 色点", () => {
     renderIndex({ axis: "project" });
 
-    expect(leadingGlyph().textContent).toBe("FA");
+    expect(leadingGlyph().textContent).toBe("F");
     // 14px 在槽位上（包里那一份把尺寸锁在槽上，字形填满它）。
     expect(leadingSlot().className).toContain("size-3.5");
-    expect(leadingGlyph().className).toContain("rounded-sm");
+    expect(leadingGlyph().className).toContain("rounded-[3.5px]");
     expect(leadingGlyph().className).not.toContain("rounded-full");
   });
 
@@ -641,7 +642,7 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
     const projectGlyph = leadingGlyph().className;
 
     expect(agentSlot).toBe(projectSlot);
-    for (const cls of ["rounded-sm"]) {
+    for (const cls of ["rounded-[3.5px]", "text-[9px]"]) {
       expect(agentGlyph).toContain(cls);
       expect(projectGlyph).toContain(cls);
     }
@@ -700,7 +701,7 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
 
     const glyph = leadingGlyph();
     expect(glyph.tagName).toBe("SPAN");
-    expect(glyph.className).toContain("rounded-sm");
+    expect(glyph.className).toContain("rounded-[3.5px]");
     expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
       "lucide-code-xml",
     );
@@ -2385,5 +2386,80 @@ describe("统一会话索引：高亮说的是宿主开着的那一条", () => {
 
     expect(document.activeElement?.getAttribute("data-nav-target")).toBe("a");
     expect(rowLink("a").getAttribute("aria-current")).toBeNull();
+  });
+});
+
+/**
+ * 项目树与父项目自己的会话子分组（与桌面端对齐）：共享包 `nestProjectGroups` 把
+ * 平铺的深度列表还原成树，`ProjectSessionGroup` 决定父项目自己的会话要不要下沉。
+ */
+describe("统一会话索引：项目树", () => {
+  const tree = [
+    { syncId: "p-root", name: "agentre", color: "agent-1", sortOrder: 0 },
+    {
+      syncId: "p-child",
+      name: "agentre-server",
+      color: "agent-11",
+      parentSyncId: "p-root",
+      sortOrder: 0,
+    },
+  ];
+
+  it("父项目同时有会话和子项目时，自己的会话收进可单独折叠的「会话」子分组，子项目不跟着收", () => {
+    renderIndex({
+      axis: "project",
+      projects: tree,
+      rows: [
+        row({ key: "own", projectSyncId: "p-root", title: "父项目的对话" }),
+        row({
+          key: "kid",
+          conversationId: "43",
+          projectSyncId: "p-child",
+          title: "子项目的对话",
+        }),
+      ],
+    });
+
+    const toggle = screen.getByRole("button", {
+      name: "Toggle agentre sessions",
+    });
+    expect(toggle.textContent).toContain("1");
+
+    fireEvent.click(toggle);
+
+    // 收起的行留在 DOM 里（包的折叠动画），被 aria-hidden 的容器盖住。
+    expect(
+      screen.getByText("父项目的对话").closest("[aria-hidden='true']"),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("子项目的对话").closest("[aria-hidden='true']"),
+    ).toBeNull();
+  });
+
+  it("子项目嵌在父项目组里：收起父项目，子项目一起收起", () => {
+    renderIndex({
+      axis: "project",
+      projects: tree,
+      rows: [row({ key: "kid", projectSyncId: "p-child" })],
+    });
+
+    const parent = screen.getByTestId("group-p-root");
+    expect(parent.contains(screen.getByTestId("group-p-child"))).toBe(true);
+
+    fireEvent.click(groupToggleFor("agentre"));
+
+    expect(
+      within(parent)
+        .getByTestId("group-p-child")
+        .closest("[aria-hidden='true']"),
+    ).not.toBeNull();
+  });
+
+  it("没有子项目的项目不多出一行「会话」组头", () => {
+    renderIndex({ axis: "project" });
+
+    expect(
+      screen.queryByRole("button", { name: /^Toggle .* sessions$/ }),
+    ).toBeNull();
   });
 });
