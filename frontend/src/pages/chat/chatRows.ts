@@ -473,17 +473,18 @@ export function buildView(input: {
   return { rows: input.mirrorRows.map(input.fromMirrorRow), narrowed };
 }
 
-/** 右栏正开着的那一条在这一份行里的键（列不出来时 null）。 */
+/**
+ * 右栏正开着的那一条在这一份行里的键（列不出来时 null）。
+ *
+ * 身份是 conversation_id；机器轴上同一条对话可能被两台机器同时报上来，那时优先认
+ * `deviceId` 那一台（宿主按「承载者优先、`?device=` 兜底」给出）。
+ */
 export function findSelectedKey(
   rows: MirrorIndexRow[],
-  selected: { deviceId: number; conversationId: string } | null,
+  conversationId: string | null,
+  deviceId?: number | null,
 ): string | null {
-  if (!selected) return null;
-  return (
-    rows.find(
-      (r) =>
-        r.deviceId === selected.deviceId &&
-        r.conversationId === selected.conversationId,
-    )?.key ?? null
-  );
+  if (!conversationId) return null;
+  const same = rows.filter((r) => r.conversationId === conversationId);
+  return (same.find((r) => r.deviceId === deviceId) ?? same[0])?.key ?? null;
 }

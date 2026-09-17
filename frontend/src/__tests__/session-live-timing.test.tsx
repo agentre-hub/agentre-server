@@ -11,7 +11,7 @@
  */
 import { act, render, screen } from "@testing-library/react";
 import { rpcMethods, SessionLifecycleRunning } from "@agentre-hub/agentre-wire";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
@@ -21,7 +21,7 @@ import {
 } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
-import SessionDetail from "@/pages/SessionDetail";
+import SessionDetailView from "@/components/session/SessionDetailView";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -107,7 +107,7 @@ function stubSession(lifecycleState: string) {
   });
 }
 
-function renderPage(navState?: Record<string, unknown>) {
+function renderPage(seed: { turnStartedAt?: number } = {}) {
   mockUseRelay.mockImplementation((_target, opts) => {
     capturedOpts = opts ?? {};
     return {
@@ -125,18 +125,13 @@ function renderPage(navState?: Record<string, unknown>) {
     };
   });
   return render(
-    <MemoryRouter
-      initialEntries={[
-        { pathname: "/devices/1/sessions/42", state: navState ?? null },
-      ]}
-    >
+    <MemoryRouter initialEntries={["/chat/42"]}>
       <ThemeProvider>
-        <Routes>
-          <Route
-            path="/devices/:deviceId/sessions/:conversationId"
-            element={<SessionDetail />}
-          />
-        </Routes>
+        <SessionDetailView
+          deviceId={1}
+          conversationId="42"
+          initialTurnStartedAt={seed.turnStartedAt}
+        />
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -247,8 +242,8 @@ describe("一轮在跑时的计时", () => {
   });
   /**
    * 从草稿页下钻过来的那一条：`runtime.run` 是**这个浏览器**几百毫秒前派发的，
-   * 接进来时对端当然已经在跑。这一轮什么时候开的这里知道 —— 派发那一刻随导航
-   * 交过来了，不必因为「接进来时已经在跑」就把它一起判成不可知。
+   * 接进来时对端当然已经在跑。这一轮什么时候开的这里知道 —— 派发那一刻由宿主
+   * 递过来了，不必因为「接进来时已经在跑」就把它一起判成不可知。
    */
   it("给定刚从草稿页派发过来，当接进来时对端在跑，则耗时从派发那一刻起算", async () => {
     stubSession(SessionLifecycleRunning);
@@ -263,8 +258,8 @@ describe("一轮在跑时的计时", () => {
   });
 
   /**
-   * 同一份导航 state 会跟着那条历史记录一直留着：十分钟后刷新页面，它还在手上，
-   * 而此刻在跑的多半已经是后面某一轮了。隔了这么久才装载，这个时刻只能是过期的
+   * 宿主递来的派发时刻不一定新鲜：派发种子留在对话页内存里，离开到 `/chat` 待上十分钟
+   * 再回到这条会话时它还在手上，而此刻在跑的多半已经是后面某一轮了。隔了这么久才装载，这个时刻只能是过期的
    * —— 拿它开表会画出一个「已经跑了 10 分钟」，比不画更糟。
    */
   it("给定派发时刻已经过期，当装载，则不拿它开表", async () => {

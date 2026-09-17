@@ -19,8 +19,14 @@ import {
   within,
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import type { ReactNode } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { useEffect, type ReactNode } from "react";
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
@@ -329,12 +335,34 @@ beforeEach(async () => {
   });
 });
 
+/**
+ * 地址探针：会话选中的真源是地址（规格 2026-09-17-chat-session-url 决策 5），
+ * 断言要读得到 pathname + search，也要按得动浏览器的后退 / 前进。
+ */
+let historyGo: (delta: number) => void = () => {};
+
+function LocationProbe() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    historyGo = (delta) => void navigate(delta);
+  }, [navigate]);
+  return (
+    <p data-testid="chat-location">{location.pathname + location.search}</p>
+  );
+}
+
+function currentLocation(): string {
+  return screen.getByTestId("chat-location").textContent ?? "";
+}
+
 function renderChat(entry = "/chat") {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <ThemeProvider>
+        <LocationProbe />
         <Routes>
-          <Route path="/chat" element={<Chat />} />
+          <Route path="/chat/:conversationId?" element={<Chat />} />
         </Routes>
       </ThemeProvider>
     </MemoryRouter>,
@@ -462,7 +490,7 @@ describe("对话页 = 统一会话索引", () => {
     renderChat();
 
     const link = await screen.findByRole("link", { name: /重构登录页/ });
-    expect(link.getAttribute("href")).toBe("/devices/1/sessions/42");
+    expect(link.getAttribute("href")).toBe("/chat/42");
     const paths = mockedApi.mock.calls.map((c) => c[0]);
     expect(paths.some((p) => p.startsWith("/v1/agent-sessions?"))).toBe(true);
     expect(paths).not.toContain("/v1/saved-sessions");
@@ -553,7 +581,7 @@ describe("对话页 = 统一会话索引", () => {
     expect(second.textContent).toContain("Offline");
     // 行是可点的真链接（不是灰行）。
     const link = screen.getByRole("link", { name: /接口迁移的第二批/ });
-    expect(link.getAttribute("href")).toBe("/devices/2/sessions/7");
+    expect(link.getAttribute("href")).toBe("/chat/7");
     expect(link.getAttribute("aria-disabled")).toBeNull();
     // 离线机器不去连中继。
     expect(mockUseRelay).not.toHaveBeenCalled();
@@ -3144,6 +3172,268 @@ describe("对话页跟着通道走", () => {
  * 上一条的话，人会以为自己在往那条对话里写。派发之后右栏换成刚开的那一条，
  * 高亮也该跟着落到它身上。
  */
+/**
+ * 会话的地址（规格 2026-09-17-chat-session-url）：右栏开着哪一条由地址决定。
+ * 用户主动打开 push，系统性离开（删除当前这条、进新对话、保存后去掉 device）replace。
+ */
+describe("对话页：会话地址", () => {
+  const CID = "01a0ae6a-4e9e-7d68-92ee-0ec6937b6db8";
+  const stranger = {
+    ...summary,
+    conversationId: "77",
+    title: "临时跑一下 benchmark",
+  };
+
+  function stubMachineWithStranger() {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [summary, stranger] };
+      throw new Error("unexpected method: " + method);
+    });
+  }
+
+  it("点一行 push 到 /chat/:id 并打开右栏；后退回空态，前进再打开", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat();
+
+    fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42"));
+    const detail = await screen.findByTestId("embedded-session-detail");
+    expect(detail.getAttribute("data-device-id")).toBe("1");
+    expect(detail.getAttribute("data-initial-row")).toBe("42");
+
+    act(() => historyGo(-1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat"));
+    expect(screen.queryByTestId("embedded-session-detail")).toBeNull();
+    expect(await screen.findByText("Pick a conversation")).toBeTruthy();
+
+    act(() => historyGo(1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42"));
+    expect(await screen.findByTestId("embedded-session-detail")).toBeTruthy();
+  });
+
+  it("再点一次正开着的那条不多记一格历史：后退一次就离开它", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat();
+
+    fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42"));
+    fireEvent.click(screen.getByRole("link", { name: /重构登录页/ }));
+
+    act(() => historyGo(-1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat"));
+  });
+
+  it("打开会话时保留左栏的范围参数", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat("/chat?axis=agent");
+
+    const link = await screen.findByRole("link", { name: /重构登录页/ });
+    expect(link.getAttribute("href")).toBe("/chat/42?axis=agent");
+    fireEvent.click(link);
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42?axis=agent"));
+  });
+
+  it("没保存进账号的行带 device；打开后右栏连的就是那台机器", async () => {
+    stubMachineWithStranger();
+    renderChat("/chat?axis=machine");
+
+    const link = await screen.findByRole("link", {
+      name: /临时跑一下 benchmark/,
+    });
+    expect(link.getAttribute("href")).toBe("/chat/77?axis=machine&device=1");
+    fireEvent.click(link);
+    await waitFor(() =>
+      expect(currentLocation()).toBe("/chat/77?axis=machine&device=1"),
+    );
+    const detail = await screen.findByTestId("embedded-session-detail");
+    expect(detail.getAttribute("data-device-id")).toBe("1");
+    expect(detail.getAttribute("data-session-id")).toBe("77");
+  });
+
+  it("直接打开会话地址：索引里有这一行就直接用它，不再单独认领", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat("/chat/42");
+
+    const detail = await screen.findByTestId("embedded-session-detail");
+    expect(detail.getAttribute("data-device-id")).toBe("1");
+    expect(detail.getAttribute("data-session-id")).toBe("42");
+    const claims = mockedApi.mock.calls
+      .map((c) => c[0])
+      .filter((p) => p.includes("conversation_id="));
+    expect(claims).toEqual([]);
+  });
+
+  it("直接打开索引里没有的会话：按地址认出机器后打开右栏", async () => {
+    stubApi({ mirror: [], devices: [agentred] });
+    renderChat(`/chat/${CID}?device=1`);
+
+    const detail = await screen.findByTestId("embedded-session-detail");
+    expect(detail.getAttribute("data-device-id")).toBe("1");
+    expect(detail.getAttribute("data-session-id")).toBe(CID);
+  });
+
+  it("删掉右栏正开着的那条：replace 回 /chat，后退不会回到已删除的会话", async () => {
+    stubDelete({});
+    renderChat();
+
+    fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42"));
+    fireEvent.contextMenu(screen.getByRole("link", { name: /重构登录页/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    fireEvent.click(await screen.findByTestId("delete-session-confirm"));
+
+    await waitFor(() => expect(currentLocation()).toBe("/chat"));
+    expect(screen.queryByTestId("embedded-session-detail")).toBeNull();
+    // replace 掉的是 /chat/42 那一格：再退一步落在进页面时那一格，不是被删的会话。
+    act(() => historyGo(-1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat"));
+    expect(screen.queryByTestId("embedded-session-detail")).toBeNull();
+  });
+
+  it("开着一条时进「新对话」：replace 回 /chat", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat("/chat?axis=agent");
+
+    fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42?axis=agent"));
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+
+    await screen.findByTestId("new-conversation-pane");
+    await waitFor(() => expect(currentLocation()).toBe("/chat?axis=agent"));
+    act(() => historyGo(-1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat?axis=agent"));
+  });
+
+  it("地址带着 compose=1 进来时同样离开当前会话", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat("/chat/42?compose=1");
+
+    await screen.findByTestId("new-conversation-pane");
+    await waitFor(() => expect(currentLocation()).toBe("/chat"));
+  });
+
+  it("保存右栏正开着的那条：写成之后 replace 去掉 device，右栏不重挂", async () => {
+    stubMachineWithStranger();
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/saved-sessions" && init?.method === "POST") return {};
+      return base(path, init);
+    });
+    renderChat("/chat?axis=machine");
+
+    fireEvent.click(
+      await screen.findByRole("link", { name: /临时跑一下 benchmark/ }),
+    );
+    await waitFor(() =>
+      expect(currentLocation()).toBe("/chat/77?axis=machine&device=1"),
+    );
+    const before = await screen.findByTestId("embedded-session-detail");
+
+    fireEvent.click(screen.getByTestId("row-save-77"));
+
+    await waitFor(() =>
+      expect(currentLocation()).toBe("/chat/77?axis=machine"),
+    );
+    expect(screen.getByTestId("embedded-session-detail")).toBe(before);
+    act(() => historyGo(-1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat?axis=machine"));
+  });
+
+  it("开着「新对话」时前进到一条会话的地址：右栏跟着地址打开那一条", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat();
+
+    fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42"));
+    act(() => historyGo(-1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat"));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "New conversation" })[0],
+    );
+    await screen.findByTestId("new-conversation-pane");
+
+    act(() => historyGo(1));
+    await waitFor(() => expect(currentLocation()).toBe("/chat/42"));
+    expect(await screen.findByTestId("embedded-session-detail")).toBeTruthy();
+    expect(screen.queryByTestId("new-conversation-pane")).toBeNull();
+  });
+
+  /**
+   * 已保存的会话地址不带 `?device=`，而机器轴上同一条对话常被发起端与承载机器各报
+   * 一行。认哪一行不能看分组先后：账号那一行记着承载机器，右栏连的、左栏标的都该是它。
+   */
+  it("机器轴上两台都报同一条已保存会话：右栏连承载机器，高亮落在承载机器那一行", async () => {
+    stubApi({
+      mirror: [
+        mirrored({
+          conversation_id: "88",
+          peer_fingerprint: "fp-desktop",
+          device_fingerprint: "fp-1",
+          title: "两台都在报的",
+        }),
+      ],
+      // 发起端排在前面：按先后认的话会认到它身上。
+      devices: [desktop, agentred],
+    });
+    const reported = {
+      ...summary,
+      conversationId: "88",
+      peerFingerprint: "fp-desktop",
+      title: "两台都在报的",
+    };
+    relayByMachine({ "fp-desktop": [reported], "fp-1": [reported] });
+    renderChat("/chat?axis=machine");
+
+    const hostRow = await within(
+      await screen.findByTestId("group-device-1"),
+    ).findByRole("link", { name: /两台都在报的/ });
+    const originRow = await within(
+      screen.getByTestId("group-device-3"),
+    ).findByRole("link", { name: /两台都在报的/ });
+    fireEvent.click(hostRow);
+
+    await waitFor(() =>
+      expect(currentLocation()).toBe("/chat/88?axis=machine"),
+    );
+    const detail = await screen.findByTestId("embedded-session-detail");
+    expect(detail.getAttribute("data-device-id")).toBe("1");
+    expect(hostRow.getAttribute("aria-current")).toBe("true");
+    expect(originRow.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("刷新时历史记录里残留的派发种子不参与寻址：按地址重新认领", async () => {
+    stubApi({ mirror: [], devices: [agentred] });
+    // 浏览器刷新会保留 history.state：模拟派发时写进去的那份种子还在。
+    render(
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: `/chat/${CID}`,
+            state: { deviceId: 1, title: "派发时的标题" },
+          },
+        ]}
+      >
+        <ThemeProvider>
+          <LocationProbe />
+          <Routes>
+            <Route path="/chat/:conversationId?" element={<Chat />} />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 镜像里没有、地址也没带 device：只能是「找不到」，不拿残留的机器顶上。
+    await waitFor(() =>
+      expect(screen.queryByTestId("embedded-session-detail")).toBeNull(),
+    );
+    expect(await screen.findByTestId("session-not-found")).toBeTruthy();
+    expect(screen.queryByTestId("embedded-session-detail")).toBeNull();
+  });
+});
+
 describe("对话页：左栏高亮跟着右栏走", () => {
   it("开「新对话」：上一条不再标成正开着的那一条", async () => {
     stubApi({ mirror: [mirrored()], devices: [agentred] });

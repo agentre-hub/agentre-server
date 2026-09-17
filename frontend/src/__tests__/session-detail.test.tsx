@@ -35,7 +35,6 @@ import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
 import { RELAY_TAIL_FRAMES } from "@/components/session/useTranscriptScrollback";
-import SessionDetail from "@/pages/SessionDetail";
 import { writeReasoningEffortToOrigin } from "@/components/session/sessionMirror";
 import { resetLiveTurns, useLiveTurns } from "@/lib/liveSessions";
 
@@ -183,12 +182,12 @@ function renderPage() {
     };
   });
   return render(
-    <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+    <MemoryRouter initialEntries={["/chat/42"]}>
       <ThemeProvider>
         <Routes>
           <Route
-            path="/devices/:deviceId/sessions/:conversationId"
-            element={<SessionDetail />}
+            path="/chat/42"
+            element={<SessionDetailView deviceId={1} conversationId="42" />}
           />
         </Routes>
       </ThemeProvider>
@@ -2857,12 +2856,12 @@ describe("会话详情：历史来自 server 镜像", () => {
       };
     });
     return render(
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
             {/* 「新建一个会话」的落点。真页面在这一组里跑不起来（它自己要取
                 agents / projects），桩到这里就够了：本组要断的是**去了哪、带了
@@ -3023,7 +3022,7 @@ describe("会话详情：历史来自 server 镜像", () => {
    * 续轮不会改派，所以横幅给的是「另起一条」，而不是「查看设备」——后者不把人
    * 往前推，横幅刚说完「离线 · 最后在线 3 小时前」，点进去看到的还是那句话。
    *
-   * 路由页形态不在 `/chat` 里，所以它靠 URL 把这件事说给那一页听。
+   * 详情离 Chat 隔着好几层，所以它靠 URL 把这件事说给那一页听。
    */
   it("机器离线：出口是「新建一个会话」，落到 /chat 的挑 Agent 那一屏", async () => {
     mockedApi.mockImplementation(async (path: string) => {
@@ -4191,47 +4190,34 @@ describe("会话详情：头部", () => {
   });
 
   /**
-   * 移动端那一半：草稿页在这里是**下钻**，种子只能随导航 state 走（与 title /
-   * userText / turnStartedAt 同一条来路）。递不过去的话，窄屏上那段空窗照旧。
-   *
-   * state 是历史记录里的东西——十分钟后刷新它还在手上、也可能被人改过，所以逐格
-   * 验形状再用，与那几格同一种处置。
+   * 整屏那一半（移动端 `/chat/:conversationId`）：种子由 Chat 在派发那一刻记在页面里
+   * 再递下来。递不过去的话，窄屏上那段空窗照旧。
    */
-  it("移动端下钻：Agent 种子随导航 state 过来，落地那一屏第一帧就是真名", async () => {
+  it("整屏形态：宿主递来的 Agent 种子让落地那一屏第一帧就是真名", async () => {
     stubHeader();
     fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
       // 中继答不出这条对话（机器上没有它），账号镜像那一行也没有：名字只可能来自
-      // 导航 state 带过来的那一份。
+      // 宿主递下来的那一份。
       if (method === rpcMethods.sessionList) return { sessions: [] };
       if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + String(method));
     });
     render(
-      <MemoryRouter
-        initialEntries={[
-          {
-            pathname: "/devices/1/sessions/42",
-            state: {
-              title: "你好，看看",
-              userText: "你好，看看",
-              agent: {
-                sync_id: "ag-1",
-                name: "后端 Agent",
-                avatar_color: "agent-3",
-                avatar_icon: "bot",
-              },
-            },
-          },
-        ]}
-      >
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
-          <Routes>
-            <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
-            />
-          </Routes>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            initialTitle="你好，看看"
+            initialUserText="你好，看看"
+            initialAgent={{
+              sync_id: "ag-1",
+              name: "后端 Agent",
+              avatar_color: "agent-3",
+              avatar_icon: "bot",
+            }}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -5844,12 +5830,12 @@ describe("会话详情：输入框那一带的三种形态", () => {
       throw new Error("unexpected: " + path);
     });
     return render(
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
           </Routes>
         </ThemeProvider>
@@ -6548,12 +6534,12 @@ describe("会话详情页:连接彻底断掉之后的出路", () => {
       throw new Error("unexpected: " + path);
     });
     render(
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
           </Routes>
         </ThemeProvider>
@@ -6617,12 +6603,12 @@ describe("会话详情：重连期间的发送", () => {
     // 每次都新造一个元素：把**同一个**元素引用交回给 rerender，React 会走
     // 「引用没变」的快路直接跳过，这棵树根本不会重渲染。
     const tree = () => (
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
           </Routes>
         </ThemeProvider>

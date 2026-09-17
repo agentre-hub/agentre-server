@@ -103,7 +103,7 @@ export default function Org() {
   const params = useParams<{ kind?: string; syncId?: string }>();
 
   // 选中态的真源是**地址**，不是页面内的一个 state。移动端下钻靠它才让手机的返回键
-  // 有用（本仓会话详情走的也是这条：Chat 的行是 /devices/:did/sessions/:sid），
+  // 有用（本仓会话详情走的也是这条：Chat 的行是 /chat/:conversationId），
   // 顺带把深链接白拿到手。sync_id 跨刷新稳定，所以放进地址是安全的——数字 id 不行，
   // 那是每份响应快照现分的（见 adapter.ts 顶部）。
   // useMemo 不是为了省这一次三元运算，而是为了让引用稳定：下游几个 useMemo 都把
