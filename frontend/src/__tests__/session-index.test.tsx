@@ -465,6 +465,10 @@ describe("统一会话索引", () => {
     ).toEqual([
       expect.stringContaining("agentre-server"),
       expect.stringContaining("agentre-web"),
+      // 「随手对话」常驻（决策 12）：项目树之后仍有一个组头在。
+      expect.stringContaining(
+        i18n.t("sessionIndex.group.unassignedProject") as string,
+      ),
     ]);
     expect(screen.queryByTestId("session-index-empty")).toBeNull();
   });
@@ -882,12 +886,17 @@ describe("统一会话索引：空组自己说一句", () => {
     expect(screen.queryByTestId("session-index-empty")).toBeNull();
   });
 
-  it("一个项目都没有：这一轴连组头都没有，页面级那一句得留着", () => {
+  it("一个项目都没有：项目轴仍常驻「随手对话」组头，页面级那句不必再说", () => {
     renderIndex({ axis: "project", rows: [], projects: [] });
 
-    expect(screen.getByTestId("session-index-empty").textContent).toContain(
-      "No conversations yet",
+    // 「随手对话」常驻（决策 12）：项目名单为空也有一个组头在，页面级那句
+    // 「还没有对话」就由组里自己说，不必再叠一遍。
+    const headers = screen.getAllByTestId("group-header");
+    expect(headers).toHaveLength(1);
+    expect(headers[0].textContent).toContain(
+      i18n.t("sessionIndex.group.unassignedProject") as string,
     );
+    expect(screen.queryByTestId("session-index-empty")).toBeNull();
   });
 
   it("收窄之后空组闭嘴：会话还在，只是这次搜索不收", () => {

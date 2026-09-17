@@ -340,8 +340,10 @@ describe("对话页 = 统一会话索引", () => {
     const listCol = screen.getByTestId("chat-list-col");
     expect(listCol.style.width).toBe("320px");
     expect(screen.getByTestId("chat-detail")).toBeTruthy();
-    // 决策 10：一条会话都没有时索引就是空的，不再拿账号下的 Agent 摆一列空组头。
-    expect(await screen.findByTestId("session-index-empty")).toBeTruthy();
+    // 项目轴常驻「随手对话」组（决策 12）：一条会话都没有时组头仍在，一句
+    // 「暂无会话」由组里自己说，页面级那句让给组。项目轴上 Agent 名单不摆组头。
+    expect(await screen.findByText("Quick chats")).toBeTruthy();
+    expect(screen.queryByTestId("session-index-empty")).toBeNull();
     expect(screen.queryByRole("heading", { name: /后端 Agent/ })).toBeNull();
     // 空态正文只留可执行的那一句，不再附带解释性的后半段。
     expect(screen.getByText("Pick an agent to get started.")).toBeTruthy();
@@ -551,7 +553,9 @@ describe("对话页 = 统一会话索引", () => {
     renderChat();
 
     expect(await screen.findByText("agentre-server")).toBeTruthy();
-    expect(screen.queryByText("Quick chats")).toBeNull();
+    // 「随手对话」常驻（决策 12），但这条行归的是 p-1：兜底组里没有它。
+    const fallback = screen.getByTestId("group-__unassigned_project__");
+    expect(within(fallback).queryByText("重构登录页")).toBeNull();
     expect(
       mockedApi.mock.calls.some(
         (c) => c[0] === "/v1/workspace/session-projects",
@@ -2366,7 +2370,7 @@ describe("对话页跟着通道走", () => {
   it("镜像变更的信号一到，索引当场重取", async () => {
     stubApi({ devices: [agentred] });
     renderChat();
-    await screen.findByTestId("session-index-empty");
+    await screen.findByText("Quick chats");
     const before = indexRequests.length;
 
     stubApi({ devices: [agentred], mirror: [listed] });
@@ -2380,7 +2384,7 @@ describe("对话页跟着通道走", () => {
   it("设备上线与同步版本推进各自重取自己那一份名单", async () => {
     stubApi({ devices: [] });
     renderChat();
-    await screen.findByTestId("session-index-empty");
+    await screen.findByText("Quick chats");
     mockedApi.mockClear();
     stubApi({ devices: [agentred] });
 
