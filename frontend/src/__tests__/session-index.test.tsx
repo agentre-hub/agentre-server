@@ -2387,3 +2387,78 @@ describe("统一会话索引：高亮说的是宿主开着的那一条", () => {
     expect(rowLink("a").getAttribute("aria-current")).toBeNull();
   });
 });
+
+/**
+ * 项目树与父项目自己的会话子分组（与桌面端对齐）：共享包 `nestProjectGroups` 把
+ * 平铺的深度列表还原成树，`ProjectSessionGroup` 决定父项目自己的会话要不要下沉。
+ */
+describe("统一会话索引：项目树", () => {
+  const tree = [
+    { syncId: "p-root", name: "agentre", color: "agent-1", sortOrder: 0 },
+    {
+      syncId: "p-child",
+      name: "agentre-server",
+      color: "agent-11",
+      parentSyncId: "p-root",
+      sortOrder: 0,
+    },
+  ];
+
+  it("父项目同时有会话和子项目时，自己的会话收进可单独折叠的「会话」子分组，子项目不跟着收", () => {
+    renderIndex({
+      axis: "project",
+      projects: tree,
+      rows: [
+        row({ key: "own", projectSyncId: "p-root", title: "父项目的对话" }),
+        row({
+          key: "kid",
+          conversationId: "43",
+          projectSyncId: "p-child",
+          title: "子项目的对话",
+        }),
+      ],
+    });
+
+    const toggle = screen.getByRole("button", {
+      name: "Toggle agentre sessions",
+    });
+    expect(toggle.textContent).toContain("1");
+
+    fireEvent.click(toggle);
+
+    // 收起的行留在 DOM 里（包的折叠动画），被 aria-hidden 的容器盖住。
+    expect(
+      screen.getByText("父项目的对话").closest("[aria-hidden='true']"),
+    ).not.toBeNull();
+    expect(
+      screen.getByText("子项目的对话").closest("[aria-hidden='true']"),
+    ).toBeNull();
+  });
+
+  it("子项目嵌在父项目组里：收起父项目，子项目一起收起", () => {
+    renderIndex({
+      axis: "project",
+      projects: tree,
+      rows: [row({ key: "kid", projectSyncId: "p-child" })],
+    });
+
+    const parent = screen.getByTestId("group-p-root");
+    expect(parent.contains(screen.getByTestId("group-p-child"))).toBe(true);
+
+    fireEvent.click(groupToggleFor("agentre"));
+
+    expect(
+      within(parent)
+        .getByTestId("group-p-child")
+        .closest("[aria-hidden='true']"),
+    ).not.toBeNull();
+  });
+
+  it("没有子项目的项目不多出一行「会话」组头", () => {
+    renderIndex({ axis: "project" });
+
+    expect(
+      screen.queryByRole("button", { name: /^Toggle .* sessions$/ }),
+    ).toBeNull();
+  });
+});

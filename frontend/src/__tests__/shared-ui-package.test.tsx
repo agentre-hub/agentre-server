@@ -194,6 +194,7 @@ describe("会话索引的呈现件用包里那一份", () => {
   const PRESENTATIONAL = [
     "SessionRow",
     "SessionGroup",
+    "ProjectSessionGroup",
     "SessionGroupOverflow",
     "SessionGroupList",
     "SessionFilterChips",
@@ -213,10 +214,6 @@ describe("会话索引的呈现件用包里那一份", () => {
   /**
    * 本站暂时用不上的那几件，连同理由。
    *
-   * 这一件卡在**组怎么分**上，不是「长什么样」：共享投影 `buildAxisGroups` 不切
-   * 「父项目自己的会话」这个子分组，本站的项目轴因此没有它的挂点。要用它得先动
-   * 投影，而投影是两端共用的，属于跨仓改动。
-   *
    * `FreeGroupHeader` 曾经也在这份名单里，理由是「共享投影只在有 orphan 行时才摆
    * 这一组，桌面端那个是常驻组头」——那说的是**组什么时候存在**，不是**组头长什么
    * 样**。组存在的那些时候，画它的就该是同一件（2026-08-22「组头归一」）。
@@ -228,9 +225,14 @@ describe("会话索引的呈现件用包里那一份", () => {
         "同一枚字形，只是尺寸档不同）；本站再直接引一次就是第二个调用点。",
     ],
     [
+      "SessionGroup",
+      "每一组都经包里的 ProjectSessionGroup 画，它在内部就是 SessionGroup；" +
+        "本站再直接引一次就是第二个调用点。",
+    ],
+    [
       "OwnSessionsHeader",
-      "共享投影不切「父项目自己的会话」这个子分组，本站的项目轴因此没有它的挂点；" +
-        "要接它得先动投影，那是两端共用的改动。",
+      "「父项目自己的会话」子分组由包里的 ProjectSessionGroup 在内部画出，" +
+        "判定与组头都在那一件里。",
     ],
   ];
 
@@ -248,6 +250,7 @@ describe("会话索引的呈现件用包里那一份", () => {
     for (const file of [
       "session-row",
       "session-group",
+      "project-session-group",
       "session-group-overflow",
       "session-group-list",
       "session-filter-chips",
