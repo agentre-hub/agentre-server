@@ -619,14 +619,15 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
    *
    * 首字母的取法在 2026-08-21 那一轮随字形归一改成桌面端那套（规格决策 6）：
    * 拉丁多词名取前两词首字母（`Frontend Agent` → `FA`），其余取首字。
+   * 2026-09-17 起 20px 以下的 xs 档只放一个字：两个字母在 14px 里撑满甚至撑出方块。
    */
-  it("Agent 字形是 14px 圆角方块 + 首字母，不是 8px 色点", () => {
+  it("Agent 字形是 14px 圆角方块 + 一个首字母，不是 8px 色点", () => {
     renderIndex({ axis: "project" });
 
-    expect(leadingGlyph().textContent).toBe("FA");
+    expect(leadingGlyph().textContent).toBe("F");
     // 14px 在槽位上（包里那一份把尺寸锁在槽上，字形填满它）。
     expect(leadingSlot().className).toContain("size-3.5");
-    expect(leadingGlyph().className).toContain("rounded-sm");
+    expect(leadingGlyph().className).toContain("rounded-[3.5px]");
     expect(leadingGlyph().className).not.toContain("rounded-full");
   });
 
@@ -641,7 +642,7 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
     const projectGlyph = leadingGlyph().className;
 
     expect(agentSlot).toBe(projectSlot);
-    for (const cls of ["rounded-sm"]) {
+    for (const cls of ["rounded-[3.5px]", "text-[9px]"]) {
       expect(agentGlyph).toContain(cls);
       expect(projectGlyph).toContain(cls);
     }
@@ -700,7 +701,7 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
 
     const glyph = leadingGlyph();
     expect(glyph.tagName).toBe("SPAN");
-    expect(glyph.className).toContain("rounded-sm");
+    expect(glyph.className).toContain("rounded-[3.5px]");
     expect(glyph.querySelector("svg")?.getAttribute("class")).toContain(
       "lucide-code-xml",
     );
