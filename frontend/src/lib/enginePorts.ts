@@ -110,6 +110,42 @@ type EngineScanResult = {
   }>;
 };
 
+// 设备本地后端凭据的中继应答形状（wire 的 agentre.wire.* 消息，protobuf-es 小驼峰）。
+// 只声明这一侧用得到的字段，不透传整份 generated message。
+type HermesAuthProvidersRPCResult = {
+  providers: Array<{
+    name: string;
+    displayName: string;
+    supportsPassword: boolean;
+  }>;
+  code: string;
+};
+
+type HermesLoginRPCResult = {
+  provider: string;
+  userId: string;
+  code: string;
+};
+
+type BackendCredentialStatusRPCResult = {
+  openclawTokenSaved: boolean;
+  hermesLoggedIn: boolean;
+  hermesProvider: string;
+  hermesUserId: string;
+};
+
+type BackendConnectionTestRPCResult = {
+  ok: boolean;
+  code: string;
+  message: string;
+  latencyMs: bigint;
+  gatewayVersion: string;
+  protocol: number;
+  grantedScopes: string[];
+  openclawAgents: Array<{ id: string; name: string; isDefault: boolean }>;
+  openclawModels: Array<{ id: string; name: string; available: boolean }>;
+};
+
 export interface BrowserEngineSettingsMessages {
   noOnlineAgentredReason: string;
   builtinUnsupportedReason: string;
@@ -120,6 +156,15 @@ export interface BrowserEngineSettingsMessages {
   deviceOfflineReason: string;
   /** 指纹不在账号内：那台机器已撤销，请改选一台。 */
   deviceUnknownReason: string;
+  /**
+   * 把设备本地凭据操作（Hermes 登录/登出/列提供方、OpenClaw 存/清 token）的失败
+   * 解析成一句可读的话，从不把协议原文（wire 的结构化 code，或中继/传输层的
+   * 异常文本）直接递给用户（spec「所有凭据相关错误按界面文案规范解析成中英文
+   * 可读句子，不直接显示协议原文」）。`code` 是设备答出的结构化原因（如
+   * HERMES_INVALID_CREDENTIALS）；未知或空串——中继/传输层失败，或 OpenClaw
+   * token 写入这类完全没有 code 字段的失败——统一落到同一句兜底文案。
+   */
+  credentialErrorReason(code: string): string;
 }
 
 class IdentityMap {
@@ -487,6 +532,23 @@ export function createBrowserEngineSettingsPorts(
     return deviceID;
   }
 
+  // 设备本地后端凭据操作共用的中继调用：绑定设备未选择 / 离线 / 不在账号内的三种
+  // 拒绝已经在 executionDevice 里给出可读文案（这颗封装不重复它们，只包给
+  // client.request 本身）——这里只管把「中继/传输层炸了」（连接断、鉴权被拒等）
+  // 折成同一句兜底可读文案，绝不把那份异常原文递给用户（spec「所有凭据相关错误…
+  // 不直接显示协议原文」）。
+  async function credentialCall<T>(
+    fingerprint: string,
+    method: AnyRpcMethod,
+    params: object,
+  ): Promise<T> {
+    try {
+      return await relayCall<T>(fingerprint, method, params);
+    } catch {
+      throw new Error(messages.credentialErrorReason(""));
+    }
+  }
+
   async function fetchBackends(): Promise<BackendDTO[]> {
     const response = await api<{ backends: BackendDTO[] }>(
       "/v1/engine/backends",
@@ -551,6 +613,114 @@ export function createBrowserEngineSettingsPorts(
         status: cliStatus(item.status),
       })),
     };
+  }
+
+  // createBackend/createOpenClawBackend 共用的落库步骤：OpenClaw 的版本在这之上再
+  // 落一次设备本地 token（saveOpenClawToken），失败时把这一行删掉（deleteBackendRow）
+  // ——两条路径都不该单独维护一份「建行 → 取 providers/devices → 转视图」。
+  async function createBackendRow(
+    input: Record<string, unknown>,
+  ): Promise<BackendView> {
+    if (input.type === "builtin") {
+      throw new Error(messages.builtinUnsupportedReason);
+    }
+    assertSupportedBackendType(
+      stringValue(input.type),
+      messages.unsupportedBackendReason,
+    );
+    // 服务端仍是必填校验的权威（code 30904 判指纹是否还在账号内）；这里先拦一道，
+    // 是为了「没选设备」这件当场就知道的事不必先发一个注定被拒的请求。
+    requireDevice(input);
+    const created = await api<BackendDTO>("/v1/engine/backends", {
+      method: "POST",
+      body: JSON.stringify(backendBody(input)),
+    });
+    backendDTOs.set(created.sync_id, created);
+    const [providers] = await Promise.all([fetchProviders(), loadDevices()]);
+    return backendView(created, providers);
+  }
+
+  async function deleteBackendRow(key: string): Promise<void> {
+    await api(`/v1/engine/backends/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    });
+    backendDTOs.delete(key);
+  }
+
+  // updateBackend/updateOpenClawBackend 共用的落库步骤。回传 previous（PATCH 前
+  // 缓存的那一行）专给 OpenClaw 版本在写 token 失败时回滚用；非 OpenClaw 调用方
+  // 不看这一格。
+  async function updateBackendRow(
+    id: EngineID,
+    input: Record<string, unknown>,
+  ): Promise<{ view: BackendView; previous: BackendDTO | undefined }> {
+    assertSupportedBackendType(
+      stringValue(input.type),
+      messages.unsupportedBackendReason,
+    );
+    requireDevice(input);
+    const key = backendIDs.key(id);
+    const previous = backendDTOs.get(key);
+    const updated = await api<BackendDTO>(
+      `/v1/engine/backends/${encodeURIComponent(key)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(backendBody(input)),
+      },
+    );
+    backendDTOs.set(key, updated);
+    const [providers] = await Promise.all([fetchProviders(), loadDevices()]);
+    return { view: backendView(updated, providers), previous };
+  }
+
+  // 把 update 前的那一行原样递回服务端，撤销刚刚那次 PATCH——保存 OpenClaw 后端时
+  // 写 token 失败，后端配置要回滚成保存前的样子（沿用桌面端语义，
+  // agent_backend.go:461-481）。只回填 backendBody() 会发的那些字段：
+  // sync_id/ref_count/cli_by_device 是只读派生字段，从不是可写输入。
+  async function revertBackendRow(previous: BackendDTO): Promise<void> {
+    const reverted = await api<BackendDTO>(
+      `/v1/engine/backends/${encodeURIComponent(previous.sync_id)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: previous.name,
+          type: previous.type,
+          device_fingerprint: previous.device_fingerprint,
+          provider_key: previous.provider_key,
+          model_key: previous.model_key,
+          model_routes: previous.model_routes,
+          sandbox: previous.sandbox,
+          approval: previous.approval,
+          env_json: previous.env_json,
+          reasoning_effort: previous.reasoning_effort,
+          default_permission_mode: previous.default_permission_mode,
+          default_model: previous.default_model,
+          openclaw_gateway_url: previous.openclaw_gateway_url,
+          openclaw_agent_id: previous.openclaw_agent_id,
+          openclaw_default_model: previous.openclaw_default_model,
+          openclaw_session_mode: previous.openclaw_session_mode,
+        }),
+      },
+    );
+    backendDTOs.set(previous.sync_id, reverted);
+  }
+
+  // 把 OpenClaw Gateway token 写到后端绑定的设备上：非空即保存，clear 时清除，
+  // 两者都不占（编辑一个已经登录过的后端、这次没碰 token 字段）就什么都不发——
+  // 凭据只经设备本地登记，从不落服务器（决策 2/5）。
+  async function saveOpenClawToken(
+    view: BackendView,
+    token: string,
+    clear: boolean,
+  ): Promise<void> {
+    const trimmed = token.trim();
+    if (trimmed === "" && !clear) return;
+    const device = await executionDevice(view.deviceId ?? "");
+    await credentialCall(device.fingerprint, rpcMethods.openClawTokenSet, {
+      syncId: view.syncId,
+      token: clear ? "" : trimmed,
+      clear,
+    });
   }
 
   const ports: EngineSettingsPorts = {
@@ -697,44 +867,157 @@ export function createBrowserEngineSettingsPorts(
     },
 
     async createBackend(input) {
-      if (input.type === "builtin") {
-        throw new Error(messages.builtinUnsupportedReason);
-      }
-      assertSupportedBackendType(input.type, messages.unsupportedBackendReason);
-      // 服务端仍是必填校验的权威（code 30904 判指纹是否还在账号内）；这里先拦一道，
-      // 是为了「没选设备」这件当场就知道的事不必先发一个注定被拒的请求。
-      requireDevice(input);
-      const created = await api<BackendDTO>("/v1/engine/backends", {
-        method: "POST",
-        body: JSON.stringify(backendBody(input)),
-      });
-      backendDTOs.set(created.sync_id, created);
-      const [providers] = await Promise.all([fetchProviders(), loadDevices()]);
-      return backendView(created, providers);
+      return createBackendRow(input);
     },
 
     async updateBackend(id, input) {
-      assertSupportedBackendType(input.type, messages.unsupportedBackendReason);
-      requireDevice(input);
-      const key = backendIDs.key(id);
-      const updated = await api<BackendDTO>(
-        `/v1/engine/backends/${encodeURIComponent(key)}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify(backendBody(input)),
-        },
-      );
-      backendDTOs.set(key, updated);
-      const [providers] = await Promise.all([fetchProviders(), loadDevices()]);
-      return backendView(updated, providers);
+      return (await updateBackendRow(id, input)).view;
     },
 
     async deleteBackend(id) {
-      const key = backendIDs.key(id);
-      await api(`/v1/engine/backends/${encodeURIComponent(key)}`, {
-        method: "DELETE",
+      await deleteBackendRow(backendIDs.key(id));
+    },
+
+    // OpenClaw 的 token 只经设备本地登记（决策 2/5）：建/改行照旧走 REST，token 另外
+    // relay 到绑定设备；那一步失败就把行回滚成保存前的样子（沿用桌面端语义,
+    // agent_backend.go:461-481），错误经 credentialErrorReason 折成可读句子，
+    // 从不把中继/传输层原文递给用户。
+    async createOpenClawBackend(input, token) {
+      const view = await createBackendRow(input);
+      try {
+        await saveOpenClawToken(view, token, false);
+      } catch (err) {
+        await deleteBackendRow(view.syncId).catch(() => {});
+        throw err;
+      }
+      return view;
+    },
+
+    async updateOpenClawBackend(id, input, token, clearToken) {
+      const { view, previous } = await updateBackendRow(id, input);
+      try {
+        await saveOpenClawToken(view, token, clearToken);
+      } catch (err) {
+        if (previous) await revertBackendRow(previous).catch(() => {});
+        throw err;
+      }
+      return view;
+    },
+
+    // 未保存草稿的一次性 token 只用于这次连接，不写入存储（spec「一次性 token 与
+    // 密码只用于本次请求，不写入存储」）；结构化失败经 code/message 原样带回，
+    // 由共享编辑器自己按 openClawProbeErrorMessage 本地化——这条路不是「读不出可读
+    // 文案就抛错」的那一类操作，与登录/列提供方不同。
+    async testOpenClawBackend(input, token) {
+      const key =
+        input.id === undefined ? undefined : backendIDs.find(input.id);
+      const backend = key === undefined ? undefined : backendDTOs.get(key);
+      const deviceID =
+        stringValue(input.deviceId) || backend?.device_fingerprint || "";
+      const device = await executionDevice(deviceID);
+      const response = await credentialCall<BackendConnectionTestRPCResult>(
+        device.fingerprint,
+        rpcMethods.backendConnectionTest,
+        {
+          backendType: "openclaw",
+          syncId: backend?.sync_id ?? stringValue(input.syncId),
+          openclawGatewayUrl:
+            stringValue(input.openClawGatewayUrl) ||
+            backend?.openclaw_gateway_url ||
+            "",
+          openclawAgentId:
+            stringValue(input.openClawAgentId) ||
+            backend?.openclaw_agent_id ||
+            "",
+          openclawDefaultModel:
+            stringValue(input.openClawDefaultModel) ||
+            backend?.openclaw_default_model ||
+            "",
+          openclawToken: token,
+        },
+      );
+      return {
+        ok: response.ok,
+        message: response.message,
+        code: response.code,
+        latencyMs: Number(response.latencyMs ?? 0n),
+        openClawAgents: (response.openclawAgents ?? []).map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          default: agent.isDefault,
+        })),
+        openClawModels: (response.openclawModels ?? []).map((model) => ({
+          id: model.id,
+          name: model.name,
+          available: model.available,
+        })),
+        grantedScopes: response.grantedScopes ?? [],
+        gatewayVersion: response.gatewayVersion,
+        protocol: response.protocol,
+      };
+    },
+
+    // 下四个是设备本地后端凭据端口（Hermes 登录/登出/列提供方、凭据状态查询）：
+    // 统一经 executionDevice 路由到绑定设备（未选择/离线/不在账号内三种拒绝复用
+    // 既有 messages.device*Reason，不是新开一份——共享编辑器自己在发起前用
+    // agentBackends.credential.* 三条提示挡住这三种情形，这里是第二道防线，不是
+    // 主渠道）；结构化失败（response.code 非空）与中继/传输层失败都经
+    // credentialErrorReason 折成可读句子。
+    async listHermesAuthProviders(url, deviceId) {
+      const device = await executionDevice(stringValue(deviceId));
+      const response = await credentialCall<HermesAuthProvidersRPCResult>(
+        device.fingerprint,
+        rpcMethods.hermesAuthProviders,
+        { hermesUrl: url },
+      );
+      if (response.code) {
+        throw new Error(messages.credentialErrorReason(response.code));
+      }
+      return response.providers ?? [];
+    },
+
+    async loginHermesBackend(input) {
+      const device = await executionDevice(stringValue(input.deviceId));
+      const response = await credentialCall<HermesLoginRPCResult>(
+        device.fingerprint,
+        rpcMethods.hermesLogin,
+        {
+          hermesUrl: input.url,
+          provider: input.provider,
+          username: input.username,
+          password: input.password,
+        },
+      );
+      if (response.code) {
+        throw new Error(messages.credentialErrorReason(response.code));
+      }
+      return { provider: response.provider, userId: response.userId };
+    },
+
+    async logoutHermesBackend(input) {
+      const device = await executionDevice(stringValue(input.deviceId));
+      await credentialCall(device.fingerprint, rpcMethods.hermesLogout, {
+        hermesUrl: input.url ?? "",
       });
-      backendDTOs.delete(key);
+    },
+
+    async backendCredentialStatus(input) {
+      const device = await executionDevice(stringValue(input.deviceId));
+      const response = await credentialCall<BackendCredentialStatusRPCResult>(
+        device.fingerprint,
+        rpcMethods.backendCredentialStatus,
+        {
+          backendType: input.type,
+          syncId: input.syncId ?? "",
+          hermesUrl: input.hermesUrl ?? "",
+        },
+      );
+      return {
+        openClawTokenSaved: response.openclawTokenSaved,
+        hermesLoggedIn: response.hermesLoggedIn,
+        hermesProvider: response.hermesProvider,
+        hermesUserId: response.hermesUserId,
+      };
     },
 
     // addIsSandbox 这个 port 本站不实现：env 表整表下发之后，一键补 IS_SANDBOX 走的是

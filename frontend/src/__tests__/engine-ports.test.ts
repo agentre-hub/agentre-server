@@ -54,6 +54,10 @@ function ports() {
     deviceRequiredReason: "Pick the device this backend runs on.",
     deviceOfflineReason: "That device is offline, so nothing was probed.",
     deviceUnknownReason: "That device is no longer in this account.",
+    credentialErrorReason: (code) =>
+      code
+        ? `readable reason for ${code}`
+        : "That action failed on the bound device.",
   });
 }
 
@@ -1023,5 +1027,356 @@ describe("browser engine settings ports", () => {
       ["gone-x", ""],
       ["", ""],
     ]);
+  });
+});
+
+describe("device-local backend credentials", () => {
+  beforeEach(() => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return devicesResponse();
+      throw new Error(`unexpected api call: ${path}`);
+    });
+  });
+
+  it("lists the Hermes auth providers reported by the bound device", async () => {
+    relay.request.mockResolvedValue({
+      providers: [
+        { name: "local", displayName: "Local account", supportsPassword: true },
+      ],
+    });
+
+    const result = await ports().listHermesAuthProviders!(
+      "http://127.0.0.1:9119",
+      "agentred-b",
+    );
+
+    expect(result).toEqual([
+      { name: "local", displayName: "Local account", supportsPassword: true },
+    ]);
+    expect(relayTargets()).toEqual(["agentred-b"]);
+    expect(relay.request).toHaveBeenCalledWith(rpcMethods.hermesAuthProviders, {
+      hermesUrl: "http://127.0.0.1:9119",
+    });
+  });
+
+  it("turns a Hermes provider-listing failure into a readable reason, not the raw code", async () => {
+    relay.request.mockResolvedValue({
+      providers: [],
+      code: "HERMES_UNREACHABLE",
+    });
+
+    await expect(
+      ports().listHermesAuthProviders!("http://127.0.0.1:9119", "agentred-b"),
+    ).rejects.toThrow("readable reason for HERMES_UNREACHABLE");
+  });
+
+  it("logs into Hermes on the bound device and returns only the display identity", async () => {
+    relay.request.mockResolvedValue({
+      provider: "local",
+      userId: "u1",
+      code: "",
+    });
+
+    const result = await ports().loginHermesBackend!({
+      url: "http://127.0.0.1:9119",
+      provider: "local",
+      username: "ada",
+      password: "secret",
+      deviceId: "agentred-b",
+    });
+
+    expect(result).toEqual({ provider: "local", userId: "u1" });
+    expect(relay.request).toHaveBeenCalledWith(rpcMethods.hermesLogin, {
+      hermesUrl: "http://127.0.0.1:9119",
+      provider: "local",
+      username: "ada",
+      password: "secret",
+    });
+  });
+
+  it("turns a Hermes login failure into a readable reason, not the raw code", async () => {
+    relay.request.mockResolvedValue({
+      provider: "",
+      userId: "",
+      code: "HERMES_INVALID_CREDENTIALS",
+    });
+
+    const attempt = ports().loginHermesBackend!({
+      url: "http://127.0.0.1:9119",
+      provider: "local",
+      username: "ada",
+      password: "wrong",
+      deviceId: "agentred-b",
+    });
+
+    await expect(attempt).rejects.toThrow(
+      "readable reason for HERMES_INVALID_CREDENTIALS",
+    );
+    await expect(attempt.catch((err: Error) => err.message)).resolves.not.toBe(
+      "HERMES_INVALID_CREDENTIALS",
+    );
+  });
+
+  it("turns a relay failure while logging in into the generic readable reason", async () => {
+    relay.request.mockRejectedValue(
+      new Error("agentre.wire: -32001 unauthenticated"),
+    );
+
+    await expect(
+      ports().loginHermesBackend!({
+        url: "http://127.0.0.1:9119",
+        provider: "local",
+        username: "ada",
+        password: "secret",
+        deviceId: "agentred-b",
+      }),
+    ).rejects.toThrow("That action failed on the bound device.");
+  });
+
+  it("logs out of Hermes on the bound device", async () => {
+    relay.request.mockResolvedValue({});
+
+    await ports().logoutHermesBackend!({
+      url: "http://127.0.0.1:9119",
+      deviceId: "agentred-b",
+    });
+
+    expect(relay.request).toHaveBeenCalledWith(rpcMethods.hermesLogout, {
+      hermesUrl: "http://127.0.0.1:9119",
+    });
+  });
+
+  it("queries backend credential status on the bound device", async () => {
+    relay.request.mockResolvedValue({
+      openclawTokenSaved: true,
+      hermesLoggedIn: false,
+      hermesProvider: "",
+      hermesUserId: "",
+    });
+
+    const result = await ports().backendCredentialStatus!({
+      type: "openclaw",
+      syncId: "backend-1",
+      deviceId: "agentred-b",
+    });
+
+    expect(result).toEqual({
+      openClawTokenSaved: true,
+      hermesLoggedIn: false,
+      hermesProvider: "",
+      hermesUserId: "",
+    });
+    expect(relay.request).toHaveBeenCalledWith(
+      rpcMethods.backendCredentialStatus,
+      { backendType: "openclaw", syncId: "backend-1", hermesUrl: "" },
+    );
+  });
+
+  it("creates an OpenClaw backend and saves its token on the bound device", async () => {
+    const bodies: unknown[] = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/backends" && init?.method === "POST") {
+        bodies.push(JSON.parse(String(init.body)));
+        return backendDTO({
+          sync_id: "backend-new",
+          name: "Gateway",
+          type: "openclaw",
+          device_fingerprint: "agentred-b",
+        });
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+    relay.request.mockResolvedValue({ tokenSaved: true });
+
+    const created = await ports().createOpenClawBackend!(
+      { type: "openclaw", name: "Gateway", deviceId: "agentred-b" },
+      "gw-token",
+    );
+
+    expect(created.syncId).toBe("backend-new");
+    expect(relayTargets()).toEqual(["agentred-b"]);
+    expect(relay.request).toHaveBeenCalledWith(rpcMethods.openClawTokenSet, {
+      syncId: "backend-new",
+      token: "gw-token",
+      clear: false,
+    });
+  });
+
+  it("rolls back backend creation when saving the OpenClaw token fails", async () => {
+    const deleted: string[] = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (
+        path === "/v1/engine/backends" &&
+        (!init || init.method === undefined)
+      )
+        return { backends: [] };
+      if (path === "/v1/engine/backends" && init?.method === "POST") {
+        return backendDTO({
+          sync_id: "backend-new",
+          name: "Gateway",
+          type: "openclaw",
+          device_fingerprint: "agentred-b",
+        });
+      }
+      if (
+        path === "/v1/engine/backends/backend-new" &&
+        init?.method === "DELETE"
+      ) {
+        deleted.push(path);
+        return {};
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+    relay.request.mockRejectedValue(new Error("relay dropped"));
+
+    await expect(
+      ports().createOpenClawBackend!(
+        { type: "openclaw", name: "Gateway", deviceId: "agentred-b" },
+        "gw-token",
+      ),
+    ).rejects.toThrow("That action failed on the bound device.");
+
+    expect(deleted).toEqual(["/v1/engine/backends/backend-new"]);
+  });
+
+  it("updates an OpenClaw backend and clears its token on the bound device", async () => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            backendDTO({
+              sync_id: "backend-1",
+              name: "Gateway",
+              type: "openclaw",
+              device_fingerprint: "agentred-b",
+            }),
+          ],
+        };
+      if (
+        path === "/v1/engine/backends/backend-1" &&
+        init?.method === "PATCH"
+      ) {
+        return backendDTO({
+          sync_id: "backend-1",
+          name: "Gateway",
+          type: "openclaw",
+          device_fingerprint: "agentred-b",
+        });
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+    relay.request.mockResolvedValue({ tokenSaved: false });
+
+    const adapter = ports();
+    const [listed] = await adapter.listBackends();
+    await adapter.updateOpenClawBackend!(
+      listed.id,
+      { type: "openclaw", name: "Gateway", deviceId: "agentred-b" },
+      "",
+      true,
+    );
+
+    expect(relay.request).toHaveBeenCalledWith(rpcMethods.openClawTokenSet, {
+      syncId: "backend-1",
+      token: "",
+      clear: true,
+    });
+  });
+
+  it("rolls back the backend update when saving the OpenClaw token fails", async () => {
+    const patchBodies: unknown[] = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            backendDTO({
+              sync_id: "backend-1",
+              name: "Gateway before",
+              type: "openclaw",
+              device_fingerprint: "agentred-b",
+            }),
+          ],
+        };
+      if (
+        path === "/v1/engine/backends/backend-1" &&
+        init?.method === "PATCH"
+      ) {
+        const body = JSON.parse(String(init.body)) as { name?: string };
+        patchBodies.push(body);
+        return backendDTO({
+          sync_id: "backend-1",
+          name: body.name ?? "Gateway before",
+          type: "openclaw",
+          device_fingerprint: "agentred-b",
+        });
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+    relay.request.mockRejectedValue(new Error("relay dropped"));
+
+    const adapter = ports();
+    const [listed] = await adapter.listBackends();
+    await expect(
+      adapter.updateOpenClawBackend!(
+        listed.id,
+        { type: "openclaw", name: "Gateway after", deviceId: "agentred-b" },
+        "new-token",
+        false,
+      ),
+    ).rejects.toThrow("That action failed on the bound device.");
+
+    // First PATCH applies the edit, second PATCH reverts it after the token
+    // write fails — the backend row must not end up half-saved.
+    expect(patchBodies.map((b) => (b as { name?: string }).name)).toEqual([
+      "Gateway after",
+      "Gateway before",
+    ]);
+  });
+
+  it("tests an OpenClaw backend with a draft token, without saving it", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return devicesResponse();
+      throw new Error(`unexpected api call: ${path}`);
+    });
+    relay.request.mockResolvedValue({
+      ok: true,
+      latencyMs: 42n,
+      gatewayVersion: "1.2.3",
+      grantedScopes: ["chat"],
+      openclawAgents: [],
+      openclawModels: [],
+    });
+
+    const result = await ports().testOpenClawBackend!(
+      {
+        id: 0,
+        type: "openclaw",
+        name: "Draft",
+        deviceId: "agentred-b",
+        openClawGatewayUrl: "https://gw.example.com",
+      },
+      "draft-token",
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.latencyMs).toBe(42);
+    expect(relay.request).toHaveBeenCalledWith(
+      rpcMethods.backendConnectionTest,
+      expect.objectContaining({
+        backendType: "openclaw",
+        openclawGatewayUrl: "https://gw.example.com",
+        openclawToken: "draft-token",
+      }),
+    );
   });
 });
