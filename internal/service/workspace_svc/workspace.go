@@ -276,7 +276,12 @@ type WebDispatchChoice struct {
 	DeviceFingerprint string
 	DeviceID          int64
 	DeviceName        string
-	BackendType       string
+	// BackendSyncID 是选中后端的**非敏感身份**（与档位行上的同源）。浏览器只把它
+	// 带在 runtime.run 的 backend 上，daemon 持设备 JWT 按它从 /v1/engine/snapshot
+	// 取整份 config。ACP 启动身份（acpCommand / acpArgs）是一段任意 argv，可能夹带
+	// 凭据，绝不经过浏览器。
+	BackendSyncID string
+	BackendType   string
 	// Kind 是选中目标设备种类（device_entity.KindDesktop / KindAgentred），R17
 	// 发起前据此说明三个内置工具是否可用。
 	Kind string
@@ -429,12 +434,14 @@ type agentPayload struct {
 	ToolsJSON  string `json:"tools_json"`
 }
 
-// agentBackendPayload 是这个包认识的**全部**后端键：类型与名字。
+// agentBackendPayload 是这个包从后端载荷里认识的键：类型与名字。
 //
-// **这里没有、也不会有 CLIPath 与 EnvJSON。** 同步载荷里它们就摆在旁边（agentre 侧
-// adapter_org.go），而 json.Unmarshal 对没有 tag 对应的键直接丢弃——它们因此在
-// service 边界之前就已经出局，不靠下游记得别填。浏览器要能**挑**一个后端，这两个
-// 键却是那台机器的私事：给它加一个字段，就是给这条红线开一个口子。
+// **这里没有、也不会有 CLIPath、EnvJSON 或 config。** 前两者在同步载荷里就摆在
+// 旁边（agentre 侧 adapter_org.go），而 json.Unmarshal 对没有 tag 对应的键直接丢弃
+// ——它们因此在 service 边界之前就已经出局，不靠下游记得别填。config 里的
+// acpCommand / acpArgs 是一段任意 argv，可能夹带凭据，浏览器不需要它：选中的后端
+// 只带 backend_sync_id，daemon 持设备 JWT 从 /v1/engine/snapshot 按 sync_id 取整份
+// config。给它加一个 Config 字段，就是给这条红线开一个口子。
 type agentBackendPayload struct {
 	Type string `json:"type"`
 	Name string `json:"name"`

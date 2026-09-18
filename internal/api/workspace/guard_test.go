@@ -29,7 +29,10 @@ import (
 // 登记就会红——白名单因此不会随着载荷长大而悄悄过期。
 func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 	// 字段名里出现这些词 = 载荷在往「机器上的东西」而不是「指向」的方向长。
-	forbidden := []string{"path", "cli", "env", "token", "secret", "credential", "prompt"}
+	// command / args / acp 是后加的：后端的启动命令与附加 argv（acpCommand /
+	// acpArgs）是一段任意字符串，可能夹带凭据，浏览器只需要拿它的 sync_id，
+	// 正文由 daemon 走设备 JWT 快照取。
+	forbidden := []string{"path", "cli", "env", "token", "secret", "credential", "prompt", "command", "args", "acp"}
 
 	allowed := map[string][]string{
 		"ListAgentsResponse": {"Agents"},
@@ -50,9 +53,12 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 			"Rank", "BackendSyncID", "DeviceID", "DeviceName",
 			"BackendType", "Kind", "Availability", "Current",
 		},
-		// Cwd 是 R19 红线在主动派活场景下**唯一**的显式例外。
+		// Cwd 是 R19 红线在主动派活场景下的唯一显式例外：选中那台机器上的项目路径，
+		// 没有它 runtime.run 无处落脚。BackendSyncID 是选中后端的**非敏感身份**，
+		// 与档位行上的 BackendSyncID 同源；浏览器只把它带在 runtime.run 的 backend
+		// 上，ACP 启动身份与 config 正文一个字都不下发。
 		"DispatchChoiceItem": {
-			"DeviceFingerprint", "DeviceID", "DeviceName", "BackendType", "Kind", "Cwd",
+			"DeviceFingerprint", "DeviceID", "DeviceName", "BackendSyncID", "BackendType", "Kind", "Cwd",
 		},
 		"DeviceDetailResponse":       {"DeviceID", "Kind", "RunnableAgents", "Projects"},
 		"RunnableAgentItem":          {"SyncID", "Name", "Rank"},
@@ -197,6 +203,23 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 	for name := range allowed {
 		if !seen[name] {
 			t.Errorf("%s 在白名单里但从任何响应根都不可达：白名单已过期", name)
+		}
+	}
+}
+
+// 派发计划选中的那一档只带非敏感身份 backend_sync_id；ACP 启动身份（一段任意
+// argv）与后端 config 正文永不下发浏览器。这不是能靠调用方自觉的约定：字段一旦
+// 长在响应类型上，controllers 早晚会把存储载荷整体拷贝出来。
+func TestDispatchChoice_CarriesSyncIDButNoACPLaunchIdentity_Guard(t *testing.T) {
+	typ := reflect.TypeOf(api.DispatchChoiceItem{})
+	field, ok := typ.FieldByName("BackendSyncID")
+	if !ok || !strings.HasPrefix(field.Tag.Get("json"), "backend_sync_id") {
+		t.Fatal("派发选中的那一档必须带 backend_sync_id，浏览器据此带 runtime.run 的 syncId")
+	}
+	for _, name := range []string{"ACPCommand", "ACPArgs", "Config", "AcpCommand", "AcpArgs"} {
+		if _, ok := typ.FieldByName(name); ok {
+			t.Errorf("DispatchChoiceItem.%s 会把 ACP 启动身份/任意 argv 漏给浏览器："+
+				"它只能走带鉴权的设备 JWT 快照", name)
 		}
 	}
 }

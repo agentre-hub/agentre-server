@@ -433,6 +433,37 @@ func TestDispatchTarget_WorksForBrowserSession_WithAgentAndProject(t *testing.T)
 	assert.Equal(t, "proj-1", got.Projects[0].SyncID)
 }
 
+// 选中那一档的非敏感身份 backend_sync_id 必须原样透传：浏览器据此在 runtime.run 的
+// backend 上带 syncId，daemon 再持设备 JWT 按它从 /v1/engine/snapshot 取整份 config。
+// controller 漏掉这一格映射，acp 后端就在 agentred 上报「backend has no acpCommand
+// configured」，而 service 那一侧看起来一切正常。
+func TestDispatchTarget_CarriesChosenBackendSyncID(t *testing.T) {
+	stub := &stubWorkspaceSvc{dispatchPlan: &workspace_svc.WebDispatchPlan{
+		AgentSyncID: "agent-1",
+		Chosen: &workspace_svc.WebDispatchChoice{
+			DeviceFingerprint: "fp-acp", DeviceID: 41, DeviceName: "ACP 主机",
+			BackendSyncID: "b-acp",
+			BackendType:   "acp", Kind: "agentred", Cwd: "/srv/acp-project",
+		},
+	}}
+	server := newWorkspaceTestServer(t, stub)
+	cookie := newSessionCookie(t, 7)
+
+	resp := get(t, server.URL+"/v1/workspace/dispatch-target?agent_sync_id=agent-1", cookie.Value)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got struct {
+		Chosen *struct {
+			BackendType   string `json:"backend_type"`
+			BackendSyncID string `json:"backend_sync_id"`
+		} `json:"chosen"`
+	}
+	decodeEnvelope(t, resp, &got)
+	require.NotNil(t, got.Chosen)
+	assert.Equal(t, "acp", got.Chosen.BackendType)
+	assert.Equal(t, "b-acp", got.Chosen.BackendSyncID)
+}
+
 // 未登录（无 cookie、无 device JWT）必须被拒绝——派发计划不是公开端点。
 func TestDispatchTarget_RejectsUnauthenticated(t *testing.T) {
 	server := newWorkspaceTestServer(t, &stubWorkspaceSvc{})
