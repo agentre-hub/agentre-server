@@ -1502,14 +1502,23 @@ export default function SessionDetailView({
   }
 
   /**
-   * 一轮还没跑完时，meta 栏的模型退到这一个 —— 底栏那颗 pill 此刻解析到的模型的 ID。
+   * 一轮还没跑完时，meta 栏的模型退到这一个。
    *
    * 消息自己的 `model` 只有终态帧一条来路（wire 上的 usage 帧没有这个字段），
-   * 而那一帧要等一轮跑完才来。四态推导仍归共享包的 `resolveProviderPillState`
-   * （pill 自己也调它），这里只取它算出来的那一格；失效（invalid）时留空：那时
-   * pill 显示的就不是一个能用的模型，把它当成「这一轮用的是它」是在撒谎。
-   * 取模型 ID 而不是 pill 上的展示名：终态帧带来的是运行时上报的模型 ID，写展示名
-   * 的话终态帧一到就跳字。
+   * 而那一帧要等一轮跑完才来。两级兜底，都是这条会话的事实，不是猜的：
+   *
+   *   1. **底栏那颗 pill 此刻解析到的模型 ID** —— 它就是下一轮（也就是正跑着这一
+   *      轮）配置上会用的那个，与桌面端 `chat-panel` 交给转录的
+   *      `providerPill.resolvedModelId` 同一格。四态推导仍归共享包的
+   *      `resolveProviderPillState`（pill 自己也调它），这里只取它算出来的那一格；
+   *      失效（invalid）时跳过：那时 pill 显示的就不是一个能用的模型。
+   *   2. **这条会话上一次真的用过的模型** —— 模型走「跟随 Agent 绑定」时第 1 级
+   *      解不出具体模型 id（`boundModelKey` 缺席就是空串），而控制台这条路上它经常
+   *      是空的，于是轮次跑着时 meta 上只有 token 与耗时、没有模型名，要等落定才
+   *      冒出来。已经发生过的事实比什么都不写诚实得多。
+   *
+   * 两级都答不出仍是空串，不编一个出来。取模型 ID 而不是 pill 上的展示名：终态帧
+   * 带来的是运行时上报的模型 ID，写展示名的话终态帧一到就跳字。
    */
   const modelPill = resolveProviderPillState({
     boundProviderKey: engineBackend?.provider_key,
@@ -1517,10 +1526,10 @@ export default function SessionDetailView({
     catalog: pickerCatalog,
     target: effectiveTarget,
   });
-  const fallbackModel = modelPill.mode === "invalid" ? "" : modelPill.modelId;
-
   /** 这条会话上一次真的用过的模型（见 sessionModel）。一轮都没跑完时是空串。 */
   const lastUsedModel = lastUsedModelId(messages);
+  const pinnedModel = modelPill.mode === "invalid" ? "" : modelPill.modelId;
+  const fallbackModel = pinnedModel || lastUsedModel;
   /**
    * 底栏那条上下文进度条的分母。
    *
@@ -1533,7 +1542,7 @@ export default function SessionDetailView({
     runtimeWindow: sessionRuntime.contextWindow,
     catalog: pickerCatalog,
     lastUsedModelId: lastUsedModel,
-    pinnedModelId: fallbackModel,
+    pinnedModelId: pinnedModel,
   });
 
   const reasoningEffortControl = supportsReasoningEffort ? (

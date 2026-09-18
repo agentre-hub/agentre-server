@@ -424,6 +424,70 @@ describe("会话详情页", () => {
     );
   });
 
+  /**
+   * Given 模型在 wire 上只挂在**终态帧**上（`usage` 帧没有这个字段），而这条会话
+   *   走「跟随 Agent 绑定」、底栏那颗 pill 解不出具体模型 id（fallbackModel 是空串）；
+   * When 新的一轮正跑着、它自己那条助手消息还没有模型；
+   * Then meta 上写的是这条会话**上一次真的用过**的模型，而不是什么都不写。
+   *
+   * 共享包的行渲染器取 `m.model || liveTurn?.model || fallbackModel`，所以轮次跑着
+   * 的时候屏幕上是「↑4,423 ↓~33 · 6m 49s …」—— 有 token、有耗时、没有模型名，
+   * 要等这一轮落定才冒出来。
+   */
+  it("轮次跑着时 meta 退到这条会话上一次用过的模型，不是留空", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      // 上一轮：终态帧报了它用的模型。
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "第一轮" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done", model: "glm-5.2", durationMs: 1000 },
+      });
+      // 新的一轮：正文与 token 都有了，模型要等终态帧才来。
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "再来一次" },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "第二轮" },
+        seq: 3,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "usage",
+          totalInputTokens: 4423,
+          usage: { promptTokens: 4423, completionTokens: 33 },
+        },
+        seq: 4,
+      });
+    });
+
+    renderPage();
+
+    await screen.findByText("第二轮", undefined, { timeout: 3_000 });
+    await waitFor(() => {
+      const rows = document.querySelectorAll("[data-message-id]");
+      const last = rows[rows.length - 1];
+      expect(last?.textContent).toContain("glm-5.2");
+    });
+  });
+
   // agentred 每次重启都会把非终态会话标成 interrupted（daemon.New 的
   // 「marked N non-terminal sessions interrupted after restart」），而 daemon 的
   // Attach 对 interrupted 一律回 ErrNoActiveTurn ——「那一轮的子进程随上一个 daemon
