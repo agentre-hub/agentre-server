@@ -276,7 +276,7 @@ export function DraftSession({
         permissionMode,
         permissionModeMeta.allowedModes,
         permissionModeMeta.defaultMode,
-        engineBackend?.default_permission_mode,
+        engineBackend?.config?.defaultPermissionMode,
       )
     : permissionMode;
 

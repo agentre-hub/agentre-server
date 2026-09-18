@@ -1648,7 +1648,7 @@ describe("草稿页的权限档位与模型控件", () => {
           model_key: "mk-1",
           // 空 = 管理员没在 Agent 后端上预设档位。这一格非空的用例各自就地覆盖，
           // 免得「账号侧压过执行端」那条口径悄悄渗进本来无关的几条里。
-          default_permission_mode: "",
+          config: { defaultPermissionMode: "" },
         },
       ],
     },
@@ -1798,7 +1798,7 @@ describe("草稿页的权限档位与模型控件", () => {
             sync_id: "b-a",
             provider_key: "pk-1",
             model_key: "mk-1",
-            default_permission_mode: "bypassPermissions",
+            config: { defaultPermissionMode: "bypassPermissions" },
           },
         ],
       },
@@ -1838,7 +1838,7 @@ describe("草稿页的权限档位与模型控件", () => {
             sync_id: "b-a",
             provider_key: "pk-1",
             model_key: "mk-1",
-            default_permission_mode: "bypassPermissions",
+            config: { defaultPermissionMode: "bypassPermissions" },
           },
         ],
       },

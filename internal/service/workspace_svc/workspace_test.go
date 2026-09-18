@@ -113,6 +113,13 @@ func setupWorkspaceTxTest(t *testing.T) (
 	sync_repo.RegisterSyncLocalPath(mPath)
 	device_repo.RegisterDevice(mDev)
 	t.Cleanup(func() { SetOnlineChecker(nil) })
+	// 写入事务开头要锁账号序列（WithOrgWriteTx 的加锁次序），所以每个用例都得有一份
+	// 自己的序列仓储替身：不装的话拿到的是上一个用例留下、控制器早已收尾的陈旧 mock。
+	// 需要断言取号的用例另外调 registerSyncStateMock 换一份带期望的。
+	mState := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncState(mState)
+	mState.EXPECT().LockAccountSeq(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	t.Cleanup(func() { sync_repo.RegisterSyncState(nil) })
 	ctx, txLog := hubtest.TxDatabase(t)
 	return ctx, txLog, mObj, mPath, mDev, New()
 }
@@ -771,6 +778,9 @@ func registerSyncStateMock(t *testing.T) *mock_sync_repo.MockSyncStateRepo {
 	t.Cleanup(ctrl.Finish)
 	m := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncState(m)
+	// 写入事务开头的那次账号序列加锁（workspace_svc.WithOrgWriteTx 的加锁次序）：
+	// 它只是次序，不是这些用例被测的行为，一律放行。
+	m.EXPECT().LockAccountSeq(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	t.Cleanup(func() { sync_repo.RegisterSyncState(nil) })
 	return m
 }
@@ -1224,7 +1234,7 @@ func TestUpdateOrgObject_GivenDepartmentRename_ThenUntouchedKeysSurvive(t *testi
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(liveOrgRow(1, sync_entity.KindDepartment, "dept-1",
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(liveOrgRow(1, sync_entity.KindDepartment, "dept-1",
 		`{"name":"工程","description":"原简介","icon":"🏢","accent_color":"#3B6896",`+
 			`"lead_agent_sync_id":"agent-1","sort_order":3,"future_key_from_a_newer_desktop":"保留我"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(102), nil)
@@ -1259,7 +1269,7 @@ func TestUpdateOrgObject_GivenAgentRename_ThenPromptToolsAndUndeclaredKeysSurviv
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "agent-1").Return(liveOrgRow(2, sync_entity.KindAgent, "agent-1",
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-1").Return(liveOrgRow(2, sync_entity.KindAgent, "agent-1",
 		`{"name":"前端 Agent","prompt_json":"{\"text\":\"你是前端\"}","tools_json":"[\"read\",\"write\"]",`+
 			`"avatar_hash":"sha256:abc","pinned":true,"future_key_from_a_newer_desktop":"保留我"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(103), nil)
@@ -1287,7 +1297,7 @@ func TestUpdateOrgObject_GivenExecTargetSkills_ThenSortOrderAndUndeclaredKeysSur
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "t-1").Return(liveOrgRow(3, sync_entity.KindAgentExecTarget, "t-1",
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "t-1").Return(liveOrgRow(3, sync_entity.KindAgentExecTarget, "t-1",
 		`{"agent_sync_id":"agent-1","backend_sync_id":"b-1","sort_order":2,"skills_json":"[]",`+
 			`"future_key_from_a_newer_desktop":"保留我"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(104), nil)
@@ -1319,7 +1329,7 @@ func TestDeleteOrgObject_GivenWritableKinds_ThenTombstonedWithNewVersionAndServe
 			ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 			mState := registerSyncStateMock(t)
 
-			mObj.EXPECT().Find(ctx, int64(7), "row-1").Return(
+			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "row-1").Return(
 				liveOrgRow(4, kind, "row-1", `{"name":"要删掉的"}`), nil)
 			mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(105), nil)
 			var saved *sync_entity.SyncObject
@@ -1361,7 +1371,7 @@ func TestUpdateOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 	mState := registerSyncStateMock(t)
 	stub := registerAccountChanStub(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(202), nil)
 	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
@@ -1379,7 +1389,7 @@ func TestDeleteOrgObject_ThenBroadcastsAccountVersion(t *testing.T) {
 	mState := registerSyncStateMock(t)
 	stub := registerAccountChanStub(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(203), nil)
 	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
@@ -1411,7 +1421,7 @@ func TestUpdateOrgObject_GivenBroadcastFails_ThenWriteStillSucceeds(t *testing.T
 	stub := registerAccountChanStub(t)
 	stub.err = errors.New("redis unreachable")
 
-	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(204), nil)
 	var saved *sync_entity.SyncObject
@@ -1459,7 +1469,7 @@ func TestOrgWrite_GivenObjectOfAnotherAccount_ThenNotFoundAndNothingWritten(t *t
 		t.Run(op, func(t *testing.T) {
 			ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 			// 严格 mock：没有 NextVersion / Save 的期望，写一次就红。
-			mObj.EXPECT().Find(ctx, int64(7), "dept-of-account-8").Return(nil, nil)
+			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-of-account-8").Return(nil, nil)
 
 			in := OrgWriteInput{UserID: 7, Kind: sync_entity.KindDepartment,
 				SyncID: "dept-of-account-8", Fields: map[string]any{"name": "偷改"}}
@@ -1478,7 +1488,7 @@ func TestOrgWrite_GivenObjectOfAnotherAccount_ThenNotFoundAndNothingWritten(t *t
 // 不告诉调用方那个标识其实是什么——写通道不该成为一个探测器。
 func TestUpdateOrgObject_GivenKindMismatch_ThenNotFound(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
-	mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
 
 	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
@@ -1494,7 +1504,7 @@ func TestOrgWrite_GivenTombstonedObject_ThenRefusedAsDeleted(t *testing.T) {
 			ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 			row := liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`)
 			row.DeletedAt = 1700000000000
-			mObj.EXPECT().Find(ctx, int64(7), "dept-1").Return(row, nil)
+			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(row, nil)
 
 			in := OrgWriteInput{UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
 				Fields: map[string]any{"name": "复活"}}
@@ -1960,7 +1970,7 @@ func TestOrgReads_GivenAnotherAccount_ThenNothingIsReadable(t *testing.T) {
 func TestDeleteOrgObject_GivenSystemAgent_ThenRefusedBeforeWriting(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "agent-system").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-system").Return(
 		liveOrgRow(4, sync_entity.KindAgent, "agent-system",
 			`{"name":"CEO 助手","system_badge":"DEFAULT"}`), nil)
 	// NextVersion / Save 一次都不该发生：拒绝要在烧掉版本号之前。
@@ -1986,7 +1996,7 @@ func TestUpdateOrgObject_GivenSystemAgentPlacement_ThenRefusedButRenameStillWork
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx, mObj, _, _, svc := setupWorkspaceTest(t)
-			mObj.EXPECT().Find(ctx, int64(7), "agent-system").Return(systemAgent(), nil)
+			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-system").Return(systemAgent(), nil)
 
 			_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
 				UserID: 7, Kind: sync_entity.KindAgent, SyncID: "agent-system", Fields: fields})
@@ -1997,7 +2007,7 @@ func TestUpdateOrgObject_GivenSystemAgentPlacement_ThenRefusedButRenameStillWork
 	t.Run("显式清空归属照常放行", func(t *testing.T) {
 		ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 		mState := registerSyncStateMock(t)
-		mObj.EXPECT().Find(ctx, int64(7), "agent-system").Return(systemAgent(), nil)
+		mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-system").Return(systemAgent(), nil)
 		mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(120), nil)
 		mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
 
@@ -2010,7 +2020,7 @@ func TestUpdateOrgObject_GivenSystemAgentPlacement_ThenRefusedButRenameStillWork
 	t.Run("改名照常放行", func(t *testing.T) {
 		ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 		mState := registerSyncStateMock(t)
-		mObj.EXPECT().Find(ctx, int64(7), "agent-system").Return(systemAgent(), nil)
+		mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-system").Return(systemAgent(), nil)
 		mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(121), nil)
 		var saved *sync_entity.SyncObject
 		mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -2031,7 +2041,7 @@ func TestDeleteOrgObject_GivenOrdinaryAgent_ThenStillTombstoned(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "agent-1").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "agent-1").Return(
 		liveOrgRow(4, sync_entity.KindAgent, "agent-1", `{"name":"张三","system_badge":""}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(130), nil)
 	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
@@ -2292,7 +2302,7 @@ func TestOrgWrite_ThenVersionIsAllocatedInsideTheWriteTransaction(t *testing.T) 
 			return err
 		}},
 		{"修改", func(_ *testing.T, ctx context.Context, mObj *mock_sync_repo.MockSyncObjectRepo, svc *workspaceSvc) error {
-			mObj.EXPECT().Find(gomock.Any(), int64(7), "dept-1").Return(
+			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 				liveOrgRow(4, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
 			_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
 				UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
@@ -2300,7 +2310,7 @@ func TestOrgWrite_ThenVersionIsAllocatedInsideTheWriteTransaction(t *testing.T) 
 			return err
 		}},
 		{"删除", func(_ *testing.T, ctx context.Context, mObj *mock_sync_repo.MockSyncObjectRepo, svc *workspaceSvc) error {
-			mObj.EXPECT().Find(gomock.Any(), int64(7), "dept-1").Return(
+			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
 				liveOrgRow(4, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil)
 			_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{
 				UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1"})
@@ -2332,4 +2342,133 @@ func TestOrgWrite_ThenVersionIsAllocatedInsideTheWriteTransaction(t *testing.T) 
 			assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
 		})
 	}
+}
+
+// web 改一行时，「读 → 合并 → 写」必须落在同一个事务里、并且读要带行锁（问题 7）。
+//
+// 读在事务外时，设备在读与写之间推上来的那一版会被整行覆盖：合并是在旧副本上做的，
+// 而 WriteOrgRow 取到的新版本号更大，Save 的版本条件照样成立。替身因此给两份行：
+// 不加锁的 Find（如果还有人调）交回旧副本，加锁读交回设备刚推上来的那一版——合并
+// 只能建在后者之上，且加锁读必须发生在事务里。
+func TestUpdateOrgObject_GivenDevicePushBeforeTheWrite_ThenMergeBuildsOnTheLockedRow(t *testing.T) {
+	ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	stub := registerAccountChanStub(t)
+
+	stale := liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程","description":"旧简介"}`)
+	fresh := liveOrgRow(1, sync_entity.KindDepartment, "dept-1",
+		`{"name":"工程","description":"设备刚改的简介","future_key_from_a_newer_desktop":"保留我"}`)
+	fresh.Version = 11
+	mObj.EXPECT().Find(gomock.Any(), int64(7), "dept-1").Return(stale, nil).AnyTimes()
+	var lockedInTx bool
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").DoAndReturn(
+		func(ctx context.Context, _ int64, _ string) (*sync_entity.SyncObject, error) {
+			lockedInTx = hubtest.InTransaction(ctx)
+			return fresh, nil
+		})
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(120), nil)
+	var saved *sync_entity.SyncObject
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
+
+	got, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
+		UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
+		Fields: map[string]any{"name": "平台工程"}})
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+
+	assert.True(t, lockedInTx, "加锁读要落在写入的事务里，锁才持到提交")
+	assert.Equal(t, "平台工程", payloadKey(t, saved.Payload, "name"))
+	assert.Equal(t, "设备刚改的简介", payloadKey(t, saved.Payload, "description"),
+		"设备在读与写之间推上来的改动不能被旧副本覆盖")
+	assert.Equal(t, "保留我", payloadKey(t, saved.Payload, "future_key_from_a_newer_desktop"))
+	assert.Equal(t, int64(120), got.Version)
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+	assert.Equal(t, []accountChanCall{{accountID: 7, frameType: accountchan_svc.FrameTypeSyncVersion, version: 120}},
+		stub.recordedCalls(), "广播留在提交之后")
+}
+
+// 删同理：墓碑建在加锁读到的那一行上（正文原样留着的是最新正文）。
+func TestDeleteOrgObject_GivenDevicePushBeforeTheWrite_ThenTombstoneBuildsOnTheLockedRow(t *testing.T) {
+	ctx, _, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	mState := registerSyncStateMock(t)
+	registerAccountChanStub(t)
+
+	stale := liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"旧名"}`)
+	fresh := liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"设备刚改的名"}`)
+	mObj.EXPECT().Find(gomock.Any(), int64(7), "dept-1").Return(stale, nil).AnyTimes()
+	var lockedInTx bool
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").DoAndReturn(
+		func(ctx context.Context, _ int64, _ string) (*sync_entity.SyncObject, error) {
+			lockedInTx = hubtest.InTransaction(ctx)
+			return fresh, nil
+		})
+	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(121), nil)
+	var saved *sync_entity.SyncObject
+	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
+
+	_, err := svc.DeleteOrgObject(ctx, OrgWriteInput{UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1"})
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+
+	assert.True(t, lockedInTx)
+	assert.Positive(t, saved.DeletedAt)
+	assert.Equal(t, `{"name":"设备刚改的名"}`, saved.Payload)
+}
+
+// 加锁读才是裁决：锁等到的那一刻行已被设备删掉（或压根没有）时，照常拒绝、一个版本
+// 号都不烧、事务回滚、不广播。
+func TestOrgWrite_GivenRowGoneOrTombstonedUnderTheLock_ThenRefusedAndRolledBack(t *testing.T) {
+	tombstoned := liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`)
+	tombstoned.DeletedAt = 1700000000000
+	cases := []struct {
+		name string
+		row  *sync_entity.SyncObject
+		want int
+	}{
+		{"已是墓碑", tombstoned, code.OrgObjectDeleted},
+		{"不存在", nil, code.OrgObjectNotFound},
+	}
+	for _, tc := range cases {
+		for _, op := range []string{"update", "delete"} {
+			t.Run(tc.name+"/"+op, func(t *testing.T) {
+				ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+				stub := registerAccountChanStub(t)
+				mObj.EXPECT().Find(gomock.Any(), int64(7), "dept-1").Return(
+					liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{"name":"工程"}`), nil).AnyTimes()
+				// 严格 mock：没有 NextVersion / Save 的期望，写一次就红。
+				mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(tc.row, nil)
+
+				in := OrgWriteInput{UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
+					Fields: map[string]any{"name": "改"}}
+				var err error
+				if op == "update" {
+					_, err = svc.UpdateOrgObject(ctx, in)
+				} else {
+					_, err = svc.DeleteOrgObject(ctx, in)
+				}
+				assertWriteCode(t, err, tc.want)
+				assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
+				assert.Empty(t, stub.recordedCalls())
+			})
+		}
+	}
+}
+
+// 合并失败（加锁读到的载荷解不开）时整体回滚：不烧版本号、不落库、不广播。
+func TestUpdateOrgObject_GivenLockedPayloadUnmergeable_ThenRolledBackWithoutWriting(t *testing.T) {
+	ctx, txLog, mObj, _, _, svc := setupWorkspaceTxTest(t)
+	stub := registerAccountChanStub(t)
+	// 严格 mock：没有 NextVersion / Save 的期望，写一次就红。
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "dept-1").Return(
+		liveOrgRow(1, sync_entity.KindDepartment, "dept-1", `{not json`), nil)
+
+	_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
+		UserID: 7, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
+		Fields: map[string]any{"name": "平台工程"}})
+
+	require.Error(t, err)
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
+	assert.Empty(t, stub.recordedCalls())
 }

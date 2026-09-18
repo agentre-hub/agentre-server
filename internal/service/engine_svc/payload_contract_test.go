@@ -16,15 +16,14 @@ import (
 	hubtest "github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
-// 这一组把「控制台写出去的字节 == 共享契约自己的编码」钉住。
+// 这一组钉住控制台写出去的载荷与共享契约 syncwire 的关系。
 //
-// 三条写路径（saveProvider / saveBackend / saveCLIOverlay）都是**解进结构体再整体
-// re-marshal**：这个结构体没声明的键，每一次控制台编辑都会被静默抹掉。断言写成整串
-// 字节相等而不是逐键比对，正是因为要拦的就是「少了一个键」——逐键比对只看得见自己
-// 列出来的那几个键，漏掉的那个恰恰是它看不见的。
-//
-// 用 syncwire 自己 marshal 出来的字节当期望值，而不是手写字面量：契约加一个字段时
-// 这几条当场红，而不是等到某个账号在某一端静默变空。
+// 后端（agent_backend）与供应商（llm_provider，规格 backend-config-sync 问题 6，S3）
+// 都改为**按 JSON 键合并**：只改请求涉及的键，存着的其它键——含本仓 pin 的契约还
+// 不认识的键——原样保留；供应商的 models 数组同理，不带 Models 的写入连那个键都不碰，
+// 数组里每个模型元素服务端不认识的键因此也原样活下来。这两组因此比的是 JSON 语义
+// （键集与取值，assert.JSONEq），不是结构体重编码后的字节序——map 编码的键序本就
+// 与 syncwire 结构体的字段声明顺序不同。
 
 func contractJSON(t *testing.T, v any) string {
 	t.Helper()
@@ -33,14 +32,15 @@ func contractJSON(t *testing.T, v any) string {
 	return string(b)
 }
 
-// 只填了名字与类型的新建：其余十三个键在契约里**照样写出来**（空串），
-// 而不是按 omitempty 缺席。桌面端写的就是这一种编码，控制台从此与它一致。
-func TestCreateBackend_ThenWritesExactlyTheSharedContractEncoding(t *testing.T) {
+// 只填了名字与类型的新建：契约的每个顶层键照样写出来（空串、config 为 {}），
+// 与桌面端写的那一种载荷键集一致。
+func TestCreateBackend_ThenWritesTheSharedContractKeys(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 	registerActiveDevice(ctrl, 7, "sha256:aaaa")
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
 	var saved *sync_entity.SyncObject
@@ -56,36 +56,40 @@ func TestCreateBackend_ThenWritesExactlyTheSharedContractEncoding(t *testing.T) 
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, contractJSON(t, syncwire.AgentBackendPayload{
+	assert.JSONEq(t, contractJSON(t, syncwire.AgentBackendPayload{
 		Name: "Claude Code", Type: "claudecode",
 	}), saved.Payload)
 }
 
-// 桌面端写下的满值载荷，控制台只改一个名字：其余十四个键一个不少、一个不变，
-// 而且写回去的仍然是契约那一种编码。
-func TestUpdateBackend_GivenDesktopWrittenPayload_ThenEveryContractKeySurvivesTheRewrite(t *testing.T) {
+// 桌面端写下的满值载荷（外加一个契约还不认识的键），控制台只改一个名字：
+// 其余每个键一个不少、一个不变，未知键原样留下。
+func TestUpdateBackend_GivenDesktopWrittenPayload_ThenOnlyTheTouchedKeyChanges(t *testing.T) {
 	stored := syncwire.AgentBackendPayload{
 		Type: "claudecode", Name: "Claude Code", ProviderKey: "anthropic-main", ModelKey: "sonnet",
-		ModelRoutes: `{"plan":{"provider_key":"anthropic-main","model_key":"opus"}}`,
-		Sandbox:     "workspace-write", Approval: "on-request",
-		EnvJSON:               `{"HTTPS_PROXY":"http://127.0.0.1:7890"}`,
-		ReasoningEffort:       "high",
-		DefaultPermissionMode: "acceptEdits",
-		DefaultModel:          "sonnet",
-		OpenClawGatewayURL:    "https://gw.example.com",
-		OpenClawAgentID:       "agent-9",
-		OpenClawDefaultModel:  "gpt-5",
-		OpenClawSessionMode:   "resume",
+		EnvJSON:         `{"HTTPS_PROXY":"http://127.0.0.1:7890"}`,
+		ReasoningEffort: "high",
+		Config: syncwire.AgentBackendConfig{
+			ModelRoutes:           json.RawMessage(`{"plan":{"providerKey":"anthropic-main","modelKey":"opus"}}`),
+			Sandbox:               "workspace-write",
+			Approval:              "on-request",
+			DefaultPermissionMode: "acceptEdits",
+			DefaultModel:          "sonnet",
+			OpenClawGatewayURL:    "https://gw.example.com",
+		},
 	}
+	var storedDoc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(contractJSON(t, stored)), &storedDoc))
+	storedDoc["future_key"] = map[string]any{"added": "by a newer desktop"}
 
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
-		AgentredFingerprint: "sha256:aaaa", Payload: contractJSON(t, stored),
+		AgentredFingerprint: "sha256:aaaa", Payload: contractJSON(t, storedDoc),
 	}, nil)
 	registerActiveDevice(ctrl, 7, "sha256:aaaa")
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
@@ -102,9 +106,8 @@ func TestUpdateBackend_GivenDesktopWrittenPayload_ThenEveryContractKeySurvivesTh
 	})
 
 	require.NoError(t, err)
-	want := stored
-	want.Name = "Claude Code 2"
-	assert.Equal(t, contractJSON(t, want), saved.Payload)
+	storedDoc["name"] = "Claude Code 2"
+	assert.JSONEq(t, contractJSON(t, storedDoc), saved.Payload)
 }
 
 // 供应商同理：内嵌的模型行也归契约（LLMProviderModel），控制台写出去的
@@ -125,7 +128,8 @@ func TestUpdateProvider_ThenWritesExactlyTheSharedContractEncoding(t *testing.T)
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main",
 		Payload: contractJSON(t, stored),
 	}, nil)
@@ -144,7 +148,7 @@ func TestUpdateProvider_ThenWritesExactlyTheSharedContractEncoding(t *testing.T)
 	require.NoError(t, err)
 	want := stored
 	want.Name = "Anthropic 主号"
-	assert.Equal(t, contractJSON(t, want), saved.Payload)
+	assert.JSONEq(t, contractJSON(t, want), saved.Payload)
 
 	// 读侧照旧走 engine_svc 自己的 view 类型：上限「未填」在 REST 那一层仍然是
 	// 缺席（*int64 为 nil），填了的那一行如实带出来。
@@ -165,6 +169,7 @@ func TestCreateProvider_GivenModelsFromBrowser_ThenCarriesTheLimitsIntoTheContra
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
 	var saved *sync_entity.SyncObject
 	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
@@ -184,7 +189,7 @@ func TestCreateProvider_GivenModelsFromBrowser_ThenCarriesTheLimitsIntoTheContra
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, contractJSON(t, syncwire.LLMProviderPayload{
+	assert.JSONEq(t, contractJSON(t, syncwire.LLMProviderPayload{
 		Name: "Anthropic", Type: "anthropic", BaseURL: "https://api.anthropic.com",
 		APIKey: "sk-secret", Enabled: true,
 		Models: []syncwire.LLMProviderModel{
@@ -192,6 +197,53 @@ func TestCreateProvider_GivenModelsFromBrowser_ThenCarriesTheLimitsIntoTheContra
 			{ModelKey: "haiku", ModelID: "claude-haiku-4", Name: "Haiku"},
 		},
 	}), saved.Payload)
+}
+
+// 供应商同样改为按 JSON 键合并（问题 6，S3）：控制台不认识的顶层键与模型内部键
+// 原样保留，不因为 re-marshal 消失——数组里没被点名的模型更是原封不动地连同它
+// 未知的键一起搬运（与 TestUpdateBackend_GivenDesktopWrittenPayload... 同一套断言）。
+func TestUpdateProvider_GivenPayloadWithUnknownKeys_ThenOnlyTheTouchedKeyChanges(t *testing.T) {
+	stored := syncwire.LLMProviderPayload{
+		Name: "Anthropic", Type: "anthropic", BaseURL: "https://api.anthropic.com",
+		APIKey: "sk-secret", DefaultModelKey: "sonnet", Enabled: true,
+		Models: []syncwire.LLMProviderModel{
+			{ModelKey: "sonnet", ModelID: "claude-sonnet-4", Name: "Sonnet", Enabled: true},
+		},
+	}
+	var storedDoc map[string]any
+	require.NoError(t, json.Unmarshal([]byte(contractJSON(t, stored)), &storedDoc))
+	storedDoc["future_key"] = "added by a newer desktop"
+	models, ok := storedDoc["models"].([]any)
+	require.True(t, ok)
+	firstModel, ok := models[0].(map[string]any)
+	require.True(t, ok)
+	firstModel["future_model_key"] = "unknown per-model field"
+
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main",
+		Payload: contractJSON(t, storedDoc),
+	}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateProvider(ctx, ProviderWriteInput{
+		UserID: 7, ProviderKey: "anthropic-main", Name: stringPtr("Anthropic 2"),
+	})
+
+	require.NoError(t, err)
+	storedDoc["name"] = "Anthropic 2"
+	assert.JSONEq(t, contractJSON(t, storedDoc), saved.Payload)
 }
 
 // 覆盖行的形状同样归契约（agent_backend_cli 只带 cli_path），编码不变，
@@ -202,6 +254,7 @@ func TestCreateBackend_GivenCLIPath_ThenTheOverlayIsTheSharedContractEncoding(t 
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 	registerActiveDevice(ctrl, 7, "sha256:aaaa")
 	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
 		Return([]*sync_entity.SyncObject{}, nil)

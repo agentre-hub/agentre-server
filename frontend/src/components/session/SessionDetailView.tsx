@@ -1243,7 +1243,7 @@ export default function SessionDetailView({
         rawPermissionMode,
         permissionModeMeta.allowedModes,
         permissionModeMeta.defaultMode,
-        engineBackend?.default_permission_mode,
+        engineBackend?.config?.defaultPermissionMode,
       )
     : rawPermissionMode;
 

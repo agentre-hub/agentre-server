@@ -249,7 +249,7 @@ func TestSetProjectLocation_GivenExistingRow_ThenUpdatesItInPlace(t *testing.T) 
 	mObj.EXPECT().Find(ctx, int64(7), "proj-1").Return(
 		liveOrgRow(1, sync_entity.KindProject, "proj-1", `{"name":"后端"}`), nil)
 	mObj.EXPECT().FindLocationByNaturalKey(ctx, int64(7), "proj-1", "fp-1").Return(existing, nil)
-	mObj.EXPECT().Find(ctx, int64(7), "pl-1").Return(existing, nil)
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "pl-1").Return(existing, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(402), nil)
 	var saved *sync_entity.SyncObject
 	mObj.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
@@ -328,7 +328,7 @@ func TestDeleteOrgObject_GivenProjectLocation_ThenTombstoned(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "pl-1").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "pl-1").Return(
 		locationRow(5, "pl-1", "proj-1", "fp-1", "/srv/x"), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(403), nil)
 	var saved *sync_entity.SyncObject

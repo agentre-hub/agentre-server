@@ -174,8 +174,8 @@ func TestUpdateIssue_ThenOnlyMentionedKeysAreOverwritten(t *testing.T) {
 	existing := withPayload(t, issueRow(t, "i-1", "老标题", "todo", "p-a"),
 		map[string]any{"llm_model_key": "anthropic-opus-01", "position": 65536})
 	existing.Version = 5
-	mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(existing, nil)
-	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(existing, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).Return(
 		[]*sync_entity.SyncObject{projectRow(t, "p-a", "甲", ""), existing}, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(320), nil)
 	var saved []*sync_entity.SyncObject
@@ -203,8 +203,8 @@ func TestUpdateIssue_GivenLabelSet_ThenOnlyTheDifferenceIsWritten(t *testing.T) 
 	keep := linkRow(t, "k-keep", "i-1", "l-keep")
 	drop := linkRow(t, "k-drop", "i-1", "l-drop")
 	drop.ID = 42
-	mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(existing, nil)
-	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(existing, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
 		labelRow(t, "l-keep", "bug", "red"),
 		labelRow(t, "l-drop", "docs", "gray"),
 		labelRow(t, "l-new", "feature", "green"),
@@ -237,8 +237,8 @@ func TestUpdateIssue_GivenNoLabelKey_ThenLinksAreLeftAlone(t *testing.T) {
 	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	existing := issueRow(t, "i-1", "卡", "todo", "")
-	mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(existing, nil)
-	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(existing, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
 		existing, linkRow(t, "k-1", "i-1", "l-bug"), labelRow(t, "l-bug", "bug", "red"),
 	}, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(340), nil)
@@ -263,8 +263,8 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 		freezeBoardNow(t, now)
 		mState := registerSyncStateMock(t)
 		moving := issueRow(t, "i-move", "被拖的", "todo", "")
-		mObj.EXPECT().Find(ctx, boardUser, "i-move").Return(moving, nil)
-		mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
+		mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-move").Return(moving, nil)
+		mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).Return([]*sync_entity.SyncObject{
 			moving,
 			withPayload(t, issueRow(t, "i-1", "一", "doing", ""), map[string]any{"position": 100}),
 			withPayload(t, issueRow(t, "i-2", "二", "doing", ""), map[string]any{"position": 300}),
@@ -287,8 +287,8 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 		freezeBoardNow(t, now)
 		mState := registerSyncStateMock(t)
 		moving := issueRow(t, "i-move", "被拖的", "todo", "")
-		mObj.EXPECT().Find(ctx, boardUser, "i-move").Return(moving, nil)
-		mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
+		mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-move").Return(moving, nil)
+		mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
 			Return([]*sync_entity.SyncObject{moving}, nil)
 		mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(351), nil)
 		var saved []*sync_entity.SyncObject
@@ -308,8 +308,8 @@ func TestMoveIssue_ThenStageAndPositionAreWrittenAndClosedAtFollowsTheStage(t *t
 		mState := registerSyncStateMock(t)
 		moving := withPayload(t, issueRow(t, "i-move", "被拖的", "done", ""),
 			map[string]any{"closed_at": now - 1000})
-		mObj.EXPECT().Find(ctx, boardUser, "i-move").Return(moving, nil)
-		mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
+		mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-move").Return(moving, nil)
+		mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
 			Return([]*sync_entity.SyncObject{moving}, nil)
 		mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(352), nil)
 		var saved []*sync_entity.SyncObject
@@ -334,8 +334,8 @@ func TestDeleteIssue_ThenTheCardAndItsLabelLinksAreTombstoned(t *testing.T) {
 	mine.ID = 12
 	others := linkRow(t, "k-2", "i-2", "l-bug")
 	others.ID = 13
-	mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(target, nil)
-	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(target, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
 		Return([]*sync_entity.SyncObject{target, mine, others}, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(360), nil).Times(2)
 	mObj.EXPECT().Tombstone(gomock.Any(), int64(12), int64(360), gomock.Any()).Return(int64(1), nil)
@@ -354,14 +354,14 @@ func TestDeleteIssue_ThenTheCardAndItsLabelLinksAreTombstoned(t *testing.T) {
 func TestIssueWrites_GivenMissingDeletedOrForeignRow_ThenRefused(t *testing.T) {
 	t.Run("不存在或不属于本账号", func(t *testing.T) {
 		ctx, mObj := setupBoardTest(t)
-		mObj.EXPECT().Find(ctx, boardUser, "i-x").Return(nil, nil)
+		mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-x").Return(nil, nil)
 		_, err := IssueBoard().DeleteIssue(ctx, boardUser, "i-x")
 		assertWriteCode(t, err, code.OrgObjectNotFound)
 	})
 
 	t.Run("类型不符", func(t *testing.T) {
 		ctx, mObj := setupBoardTest(t)
-		mObj.EXPECT().Find(ctx, boardUser, "p-a").Return(projectRow(t, "p-a", "甲", ""), nil)
+		mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "p-a").Return(projectRow(t, "p-a", "甲", ""), nil)
 		_, err := IssueBoard().DeleteIssue(ctx, boardUser, "p-a")
 		assertWriteCode(t, err, code.OrgObjectNotFound)
 	})
@@ -370,7 +370,7 @@ func TestIssueWrites_GivenMissingDeletedOrForeignRow_ThenRefused(t *testing.T) {
 		ctx, mObj := setupBoardTest(t)
 		row := issueRow(t, "i-1", "卡", "todo", "")
 		row.DeletedAt = 1
-		mObj.EXPECT().Find(ctx, boardUser, "i-1").Return(row, nil)
+		mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(row, nil)
 		_, err := IssueBoard().DeleteIssue(ctx, boardUser, "i-1")
 		assertWriteCode(t, err, code.OrgObjectDeleted)
 	})
@@ -429,8 +429,8 @@ func TestUpdateLabel_ThenRenameAndRecolourKeepTheRestOfThePayload(t *testing.T) 
 	ctx, mObj := setupBoardTest(t)
 	mState := registerSyncStateMock(t)
 	existing := labelRow(t, "l-bug", "bug", "red")
-	mObj.EXPECT().Find(ctx, boardUser, "l-bug").Return(existing, nil)
-	mObj.EXPECT().ListByKinds(ctx, boardUser, []string{sync_entity.KindLabel}).
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "l-bug").Return(existing, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, []string{sync_entity.KindLabel}).
 		Return([]*sync_entity.SyncObject{existing}, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(380), nil)
 	var saved []*sync_entity.SyncObject
@@ -459,8 +459,8 @@ func TestDeleteLabel_ThenTheLabelAndEveryLinkToItAreTombstoned(t *testing.T) {
 	link2.ID = 23
 	other := linkRow(t, "k-3", "i-1", "l-docs")
 	other.ID = 24
-	mObj.EXPECT().Find(ctx, boardUser, "l-bug").Return(target, nil)
-	mObj.EXPECT().ListByKinds(ctx, boardUser, boardWriteKinds).
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "l-bug").Return(target, nil)
+	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
 		Return([]*sync_entity.SyncObject{target, link1, link2, other}, nil)
 	mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(390), nil).Times(3)
 	mObj.EXPECT().Tombstone(gomock.Any(), int64(22), int64(390), gomock.Any()).Return(int64(1), nil)
@@ -538,7 +538,7 @@ func TestUpdateIssue_ThenTheWholeLabelDiffIsOneTransaction(t *testing.T) {
 	keep := linkRow(t, "k-keep", "i-1", "l-keep")
 	drop := linkRow(t, "k-drop", "i-1", "l-drop")
 	drop.ID = 42
-	mObj.EXPECT().Find(gomock.Any(), boardUser, "i-1").Return(existing, nil)
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(existing, nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
 		Return([]*sync_entity.SyncObject{
 			labelRow(t, "l-keep", "bug", "red"),
@@ -593,7 +593,7 @@ func TestUpdateIssue_GivenALabelLinkFailsMidway_ThenTheWholeDiffRollsBack(t *tes
 	existing.ID = 11
 	drop := linkRow(t, "k-drop", "i-1", "l-drop")
 	drop.ID = 42
-	mObj.EXPECT().Find(gomock.Any(), boardUser, "i-1").Return(existing, nil)
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(existing, nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
 		Return([]*sync_entity.SyncObject{
 			labelRow(t, "l-drop", "docs", "gray"),
@@ -635,7 +635,7 @@ func TestDeleteIssue_ThenTheWholeCascadeIsOneTransaction(t *testing.T) {
 	target.ID = 11
 	mine := linkRow(t, "k-1", "i-1", "l-bug")
 	mine.ID = 12
-	mObj.EXPECT().Find(gomock.Any(), boardUser, "i-1").Return(target, nil)
+	mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, "i-1").Return(target, nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, boardWriteKinds).
 		Return([]*sync_entity.SyncObject{target, mine}, nil)
 
@@ -669,4 +669,113 @@ func TestDeleteIssue_ThenTheWholeCascadeIsOneTransaction(t *testing.T) {
 	assert.NotContains(t, tombstonedInTx, false, "级联的每一行都要落在那个事务里")
 	assert.True(t, savedInTx, "卡自己的墓碑也在同一个事务里")
 	assert.NotContains(t, allocatedInTx, false, "版本号也要取在事务里")
+}
+
+// ── 看板写入与设备上行的并发（问题 7）────────────────────────────────────────
+//
+// 与 workspace_svc.UpdateOrgObject 同一条理由：「读 → 合并 → 写」必须同在写入的那个事务里、
+// 读带行锁。读在事务外时，设备在读与写之间推上来的那一版会被旧副本整行覆盖。替身因此
+// 给两份行：不加锁的 Find（如果还有人调）交回旧副本，加锁读交回设备刚推上来的那一版。
+
+type boardLockedWrite struct {
+	name  string
+	kind  string
+	id    string
+	write func(ctx context.Context) error
+}
+
+func boardLockedWrites() []boardLockedWrite {
+	return []boardLockedWrite{
+		{"UpdateIssue", sync_entity.KindIssue, "i-1", func(ctx context.Context) error {
+			_, err := IssueBoard().UpdateIssue(ctx, IssueWriteInput{
+				UserID: boardUser, SyncID: "i-1", Fields: map[string]any{"title": "新标题"}})
+			return err
+		}},
+		{"MoveIssue", sync_entity.KindIssue, "i-1", func(ctx context.Context) error {
+			_, err := IssueBoard().MoveIssue(ctx, IssueMoveInput{UserID: boardUser, SyncID: "i-1", Stage: "done"})
+			return err
+		}},
+		{"UpdateLabel", sync_entity.KindLabel, "l-1", func(ctx context.Context) error {
+			_, err := IssueBoard().UpdateLabel(ctx, LabelWriteInput{
+				UserID: boardUser, SyncID: "l-1", Fields: map[string]any{"tone": "steel"}})
+			return err
+		}},
+		{"DeleteIssue", sync_entity.KindIssue, "i-1", func(ctx context.Context) error {
+			_, err := IssueBoard().DeleteIssue(ctx, boardUser, "i-1")
+			return err
+		}},
+		{"DeleteLabel", sync_entity.KindLabel, "l-1", func(ctx context.Context) error {
+			_, err := IssueBoard().DeleteLabel(ctx, boardUser, "l-1")
+			return err
+		}},
+	}
+}
+
+// staleAndFreshBoardRow 造同一行的两份：旧副本，与设备刚推上来、多了一个设备改动键的那一版。
+// 任务那一版还被设备关闭过（closed_at），拖进已完成时关闭时刻要沿用它而不是重记。
+func staleAndFreshBoardRow(t *testing.T, kind, id string) (stale, fresh *sync_entity.SyncObject) {
+	t.Helper()
+	if kind == sync_entity.KindIssue {
+		stale = issueRow(t, id, "老标题", "todo", "")
+		fresh = withPayload(t, issueRow(t, id, "老标题", "todo", ""),
+			map[string]any{"description": "设备刚改的描述", "closed_at": 5000})
+	} else {
+		stale = labelRow(t, id, "bug", "red")
+		fresh = withPayload(t, labelRow(t, id, "bug", "red"), map[string]any{"description": "设备刚改的描述"})
+	}
+	return stale, fresh
+}
+
+func TestBoardWrites_GivenDevicePushBeforeTheWrite_ThenWriteBuildsOnTheLockedRow(t *testing.T) {
+	for _, tc := range boardLockedWrites() {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, txLog, mObj := setupBoardTxTest(t)
+			mState := registerSyncStateMock(t)
+			stale, fresh := staleAndFreshBoardRow(t, tc.kind, tc.id)
+			mObj.EXPECT().Find(gomock.Any(), boardUser, tc.id).Return(stale, nil).AnyTimes()
+			mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, gomock.Any()).
+				Return([]*sync_entity.SyncObject{stale}, nil).AnyTimes()
+			var lockedInTx bool
+			mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, tc.id).DoAndReturn(
+				func(ctx context.Context, _ int64, _ string) (*sync_entity.SyncObject, error) {
+					lockedInTx = hubtest.InTransaction(ctx)
+					return fresh, nil
+				})
+			mState.EXPECT().NextVersion(gomock.Any(), boardUser, int64(1)).Return(int64(900), nil).AnyTimes()
+			var saved []*sync_entity.SyncObject
+			savedRows(mObj, &saved)
+
+			require.NoError(t, tc.write(ctx))
+
+			assert.True(t, lockedInTx, "加锁读要落在写入的事务里，锁才持到提交")
+			row := rowOfKind(saved, tc.kind)
+			require.NotNil(t, row)
+			assert.Equal(t, "设备刚改的描述", payloadKey(t, row.Payload, "description"),
+				"设备在读与写之间推上来的改动不能被旧副本覆盖")
+			if tc.name == "MoveIssue" {
+				assert.EqualValues(t, 5000, payloadKey(t, row.Payload, "closed_at"),
+					"关闭时刻按加锁读到的那一版推导")
+			}
+			assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, txLog.Events())
+		})
+	}
+}
+
+// 加锁读才是裁决：锁等到的那一刻行已被设备删掉时照常拒绝，一个版本号都不烧，事务回滚。
+func TestBoardWrites_GivenRowTombstonedUnderTheLock_ThenRefusedAndRolledBack(t *testing.T) {
+	for _, tc := range boardLockedWrites() {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, txLog, mObj := setupBoardTxTest(t)
+			stale, fresh := staleAndFreshBoardRow(t, tc.kind, tc.id)
+			fresh.DeletedAt = 1
+			mObj.EXPECT().Find(gomock.Any(), boardUser, tc.id).Return(stale, nil).AnyTimes()
+			mObj.EXPECT().ListByKinds(gomock.Any(), boardUser, gomock.Any()).
+				Return([]*sync_entity.SyncObject{stale}, nil).AnyTimes()
+			// 严格 mock：没有 NextVersion / Save / Tombstone 的期望，写一次就红。
+			mObj.EXPECT().FindForUpdate(gomock.Any(), boardUser, tc.id).Return(fresh, nil)
+
+			assertWriteCode(t, tc.write(ctx), code.OrgObjectDeleted)
+			assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, txLog.Events())
+		})
+	}
 }

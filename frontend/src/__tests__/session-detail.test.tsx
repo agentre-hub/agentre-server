@@ -976,7 +976,7 @@ describe("会话详情页", () => {
               sync_id: "backend-1",
               provider_key: "anthropic",
               model_key: "sonnet",
-              default_permission_mode: "default",
+              config: { defaultPermissionMode: "default" },
             },
           ],
         };
@@ -1130,7 +1130,7 @@ describe("会话详情页", () => {
               provider_key: "anthropic",
               model_key: "sonnet",
               // 当前执行目标是 claudecode，管理员在它上面配了 bypass。
-              default_permission_mode: "bypassPermissions",
+              config: { defaultPermissionMode: "bypassPermissions" },
             },
           ],
         };
@@ -1232,7 +1232,7 @@ describe("会话详情页", () => {
               sync_id: "backend-1",
               provider_key: "anthropic",
               model_key: "sonnet",
-              default_permission_mode: "default",
+              config: { defaultPermissionMode: "default" },
             },
           ],
         };
@@ -7571,7 +7571,7 @@ describe("会话详情页 · 会话级思考力度", () => {
               sync_id: "backend-1",
               provider_key: "anthropic",
               model_key: "sonnet",
-              default_permission_mode: "default",
+              config: { defaultPermissionMode: "default" },
               reasoning_effort: opts.backendEffort ?? "",
             },
           ],

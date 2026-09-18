@@ -126,7 +126,7 @@ func TestUpdateOrgObject_GivenProjectRename_ThenUntouchedKeysSurvive(t *testing.
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "proj-1").Return(liveOrgRow(1, sync_entity.KindProject, "proj-1",
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-1").Return(liveOrgRow(1, sync_entity.KindProject, "proj-1",
 		`{"name":"后端","description":"原简介","icon":"🚀","color":"agent-3",`+
 			`"sort_order":3,"future_key_from_a_newer_desktop":"保留我"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(203), nil)
@@ -165,9 +165,9 @@ func TestUpdateOrgObject_GivenParentPointingAtItselfOrADescendant_ThenRejectedBe
 	for name, parent := range cases {
 		t.Run(name, func(t *testing.T) {
 			ctx, mObj, _, _, svc := setupWorkspaceTest(t)
-			mObj.EXPECT().Find(ctx, int64(7), "proj-a").Return(
+			mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-a").Return(
 				liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
-			mObj.EXPECT().ListByKinds(ctx, int64(7), []string{sync_entity.KindProject}).Return(tree, nil)
+			mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindProject}).Return(tree, nil)
 
 			_, err := svc.UpdateOrgObject(ctx, OrgWriteInput{
 				UserID: 7, Kind: sync_entity.KindProject, SyncID: "proj-a",
@@ -182,9 +182,9 @@ func TestUpdateOrgObject_GivenParentOutsideItsOwnSubtree_ThenAccepted(t *testing
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "proj-c").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-c").Return(
 		liveOrgRow(3, sync_entity.KindProject, "proj-c", `{"name":"C","parent_sync_id":"proj-b"}`), nil)
-	mObj.EXPECT().ListByKinds(ctx, int64(7), []string{sync_entity.KindProject}).Return(
+	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindProject}).Return(
 		[]*sync_entity.SyncObject{
 			orgRow(t, sync_entity.KindProject, "proj-a", map[string]any{"name": "A"}),
 			orgRow(t, sync_entity.KindProject, "proj-b", map[string]any{"name": "B", "parent_sync_id": "proj-a"}),
@@ -208,7 +208,7 @@ func TestUpdateOrgObject_GivenParentClearedToRoot_ThenAccepted(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "proj-b").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-b").Return(
 		liveOrgRow(2, sync_entity.KindProject, "proj-b", `{"name":"B","parent_sync_id":"proj-a"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(205), nil)
 	var saved *sync_entity.SyncObject
@@ -292,7 +292,7 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenDescendantsMembersAndLocati
 	chanStub := registerAccountChanStub(t)
 
 	// proj-a → proj-b → proj-c，外加一个不在这棵子树里的 proj-x。
-	mObj.EXPECT().Find(ctx, int64(7), "proj-a").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-a").Return(
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
@@ -361,7 +361,7 @@ func TestDeleteOrgObject_GivenLeafProject_ThenOnlyItselfIsTombstoned(t *testing.
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "proj-a").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-a").Return(
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,
@@ -386,7 +386,7 @@ func TestDeleteOrgObject_GivenProjectMember_ThenNoCascade(t *testing.T) {
 	ctx, mObj, _, _, svc := setupWorkspaceTest(t)
 	mState := registerSyncStateMock(t)
 
-	mObj.EXPECT().Find(ctx, int64(7), "pa-1").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "pa-1").Return(
 		liveOrgRow(5, sync_entity.KindProjectAgent, "pa-1",
 			`{"project_sync_id":"proj-1","agent_sync_id":"agent-1"}`), nil)
 	mState.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(320), nil)
@@ -535,7 +535,7 @@ func TestDeleteOrgObject_GivenProjectWithSubtree_ThenTheWholeCascadeIsOneTransac
 	mState := registerSyncStateMock(t)
 	registerAccountChanStub(t)
 
-	mObj.EXPECT().Find(gomock.Any(), int64(7), "proj-a").Return(
+	mObj.EXPECT().FindForUpdate(gomock.Any(), int64(7), "proj-a").Return(
 		liveOrgRow(1, sync_entity.KindProject, "proj-a", `{"name":"A"}`), nil)
 	mObj.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
 		sync_entity.KindProject, sync_entity.KindProjectAgent, sync_entity.KindProjectLocation,

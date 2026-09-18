@@ -27,6 +27,13 @@ import (
 )
 
 // registerActiveDevice 让 (userID, fingerprint) 在 device_repo 里解出一台账号内的活跃设备，
+// allowSeqLock 放行写入事务开头的那次账号序列加锁（workspace_svc.WithOrgWriteTx）。
+// 它只是加锁次序，不是被测行为；断言那一步真的排在行锁之前的是
+// TestUpdateBackend_ThenLocksTheAccountSeqBeforeTheObjectRow 与 committedWriteTrace。
+func allowSeqLock(states *mock_sync_repo.MockSyncStateRepo) {
+	states.EXPECT().LockAccountSeq(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+}
+
 // 给后端写入路径的运行设备校验用。
 func registerActiveDevice(ctrl *gomock.Controller, userID int64, fingerprint string) {
 	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
@@ -80,6 +87,13 @@ func setupEngineTxTest(t *testing.T) (
 	sync_repo.RegisterSyncState(states)
 	ctx, txLog := hubtest.TxDatabase(t)
 	trace := &engineTxTrace{txLog: txLog}
+	// 账号序列的加锁是每个写入事务的第一步（workspace_svc.WithOrgWriteTx），进同一份
+	// 时序；次数不限（一次用户操作可以开好几个写入事务，如后端行 + 覆盖行）。
+	states.EXPECT().LockAccountSeq(gomock.Any(), int64(7)).DoAndReturn(
+		func(ctx context.Context, _ int64) error {
+			trace.record(ctx, "LockAccountSeq")
+			return nil
+		}).AnyTimes()
 	accountchan_svc.SetDefault(trace)
 	t.Cleanup(func() { accountchan_svc.SetDefault(nil) })
 	return ctx, trace, ctrl, objects, states
@@ -111,6 +125,7 @@ func expectTracedWrite(trace *engineTxTrace, objects *mock_sync_repo.MockSyncObj
 // 永远不再投递——服务端与浏览器都以为改成功了。广播先于提交则会让设备去拉一份还看不见
 // 的变更。与 workspace_svc.WithOrgWriteTx 是同一条不变量。
 var committedWriteTrace = []string{
+	"LockAccountSeq inTx=true [BEGIN]",
 	"NextVersion inTx=true [BEGIN]",
 	"Save inTx=true [BEGIN]",
 	"Broadcast inTx=false [BEGIN COMMIT]",
@@ -147,9 +162,11 @@ func TestCreateBackend_GivenCLIPath_ThenBackendAndOverlayEachCommitBeforeTheirBr
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{
+		"LockAccountSeq inTx=true [BEGIN]",
 		"NextVersion inTx=true [BEGIN]",
 		"Save inTx=true [BEGIN]",
 		"Broadcast inTx=false [BEGIN COMMIT]",
+		"LockAccountSeq inTx=true [BEGIN COMMIT BEGIN]",
 		"NextVersion inTx=true [BEGIN COMMIT BEGIN]",
 		"Save inTx=true [BEGIN COMMIT BEGIN]",
 		"Broadcast inTx=false [BEGIN COMMIT BEGIN COMMIT]",
@@ -159,7 +176,7 @@ func TestCreateBackend_GivenCLIPath_ThenBackendAndOverlayEachCommitBeforeTheirBr
 // delete 这一路（落墓碑）。
 func TestDeleteProvider_ThenAllocatesAndTombstonesInOneTransactionAndBroadcastsAfterCommit(t *testing.T) {
 	ctx, trace, _, objects, states := setupEngineTxTest(t)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main", Payload: `{}`,
 	}, nil)
 	expectTracedWrite(trace, objects, states, 5, nil)
@@ -171,7 +188,7 @@ func TestDeleteProvider_ThenAllocatesAndTombstonesInOneTransactionAndBroadcastsA
 // 落库失败时事务回滚，取走的号随之作废，也不广播——没有提交就没有可拉的变更。
 func TestDeleteBackend_GivenSaveFails_ThenRollsBackWithoutBroadcast(t *testing.T) {
 	ctx, trace, _, objects, states := setupEngineTxTest(t)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1", Payload: `{}`,
 	}, nil)
 	expectTracedWrite(trace, objects, states, 5, assert.AnError)
@@ -180,6 +197,7 @@ func TestDeleteBackend_GivenSaveFails_ThenRollsBackWithoutBroadcast(t *testing.T
 
 	require.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, []string{
+		"LockAccountSeq inTx=true [BEGIN]",
 		"NextVersion inTx=true [BEGIN]",
 		"Save inTx=true [BEGIN]",
 	}, trace.recorded())
@@ -201,6 +219,7 @@ func TestCreateProvider_GivenNoRegisteredDevice_ThenPersistsTheAccountObject(t *
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
 	var saved *sync_entity.SyncObject
 	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
@@ -226,6 +245,7 @@ func TestCreateBackend_GivenNoRegisteredDevice_ThenPersistsTheAccountIdentity(t 
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 	registerActiveDevice(ctrl, 7, "fp-account")
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
 	var saved *sync_entity.SyncObject
@@ -277,7 +297,7 @@ func TestUpdateBackend_GivenRevokedDeviceFingerprint_ThenReturnsTheDedicatedDevi
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
 		AgentredFingerprint: "sha256:aaaa",
 		Payload:             `{"name":"Claude Code","type":"claude"}`,
@@ -287,7 +307,8 @@ func TestUpdateBackend_GivenRevokedDeviceFingerprint_ThenReturnsTheDedicatedDevi
 	devices.EXPECT().FindByFingerprint(gomock.Any(), int64(7), "sha256:aaaa").
 		Return(&device_entity.Device{UserID: 7, Fingerprint: "sha256:aaaa", Status: consts.DELETE}, nil)
 
-	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateBackend(ctx, BackendWriteInput{
 		UserID: 7, SyncID: "backend-1", DeviceFingerprint: stringPtr("sha256:aaaa"),
 	})
 	require.Error(t, err)
@@ -301,6 +322,7 @@ func TestCreateBackend_GivenDeviceID_ThenWritesTheFingerprintColumnNotThePayload
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 	registerActiveDevice(ctrl, 7, "sha256:aaaa")
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
 	var saved *sync_entity.SyncObject
@@ -328,7 +350,8 @@ func TestUpdateBackend_GivenNewDeviceFingerprint_ThenRewritesFingerprintWithoutL
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
 		AgentredFingerprint: "sha256:aaaa",
 		Payload:             `{"name":"Claude Code","type":"claude"}`,
@@ -379,8 +402,9 @@ func TestUpdateProvider_GivenEmptyAPIKey_ThenPreservesStoredCredential(t *testin
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 
-	objects.EXPECT().Find(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main",
 		Payload: `{"name":"Anthropic","type":"anthropic","base_url":"https://api.anthropic.com","api_key":"sk-old"}`,
 	}, nil)
@@ -401,6 +425,36 @@ func TestUpdateProvider_GivenEmptyAPIKey_ThenPreservesStoredCredential(t *testin
 	assert.Equal(t, "-old", got.MaskedTail)
 }
 
+// 供应商 API Key：回填的是控制台自己拼的掩码占位符（"••••"+尾四位）而不是空串时，
+// 同样不该被当成新密钥落库——那正是编辑器打开时回显的取值，不是用户真正改动过的。
+func TestUpdateProvider_GivenMaskedAPIKeyPlaceholder_ThenPreservesStoredCredential(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
+
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main",
+		Payload: `{"name":"Anthropic","type":"anthropic","base_url":"https://api.anthropic.com","api_key":"sk-old"}`,
+	}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().UpdateProvider(ctx, ProviderWriteInput{
+		UserID: 7, ProviderKey: "anthropic-main", Name: stringPtr("Anthropic 2"), APIKey: stringPtr("••••-old"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "sk-old", payloadString(t, saved.Payload, "api_key"))
+	assert.Equal(t, "Anthropic 2", got.Name)
+}
+
 func TestListBackends_GivenAdvancedAccountSettings_ThenReturnsThemForBrowserEdits(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
@@ -409,19 +463,15 @@ func TestListBackends_GivenAdvancedAccountSettings_ThenReturnsThemForBrowserEdit
 		sync_entity.KindAgentBackend, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentExecTarget,
 	}).Return([]*sync_entity.SyncObject{{
 		Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
-		Payload: `{"name":"Codex","type":"codex","model_routes":"{\"OPUS\":{\"providerKey\":\"openai-main\",\"modelKey\":\"gpt-5\"}}","sandbox":"workspace-write","approval":"on-request","reasoning_effort":"high","default_permission_mode":"acceptEdits","default_model":"gpt-5"}`,
+		Payload: `{"name":"Codex","type":"codex","reasoning_effort":"high","config":{"modelRoutes":{"OPUS":{"providerKey":"openai-main","modelKey":"gpt-5"}},"sandbox":"workspace-write","approval":"on-request","defaultPermissionMode":"acceptEdits","defaultModel":"gpt-5"}}`,
 	}}, nil)
 
 	got, err := New().ListBackends(context.Background(), 7)
 
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, "{\"OPUS\":{\"providerKey\":\"openai-main\",\"modelKey\":\"gpt-5\"}}", got[0].ModelRoutes)
-	assert.Equal(t, "workspace-write", got[0].Sandbox)
-	assert.Equal(t, "on-request", got[0].Approval)
 	assert.Equal(t, "high", got[0].ReasoningEffort)
-	assert.Equal(t, "acceptEdits", got[0].DefaultPermissionMode)
-	assert.Equal(t, "gpt-5", got[0].DefaultModel)
+	assert.JSONEq(t, `{"modelRoutes":{"OPUS":{"providerKey":"openai-main","modelKey":"gpt-5"}},"sandbox":"workspace-write","approval":"on-request","defaultPermissionMode":"acceptEdits","defaultModel":"gpt-5"}`, string(got[0].Config))
 }
 
 func TestSnapshot_GivenTwoDeviceOverlays_ThenReturnsOnlyCallersPathAndProviderKey(t *testing.T) {
@@ -450,9 +500,10 @@ func TestUpdateProvider_GivenUnknownKey_ThenReturnsTheDedicatedProviderNotFoundC
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "missing").Return(nil, nil)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "missing").Return(nil, nil)
 
-	_, err := New().UpdateProvider(context.Background(), ProviderWriteInput{UserID: 7, ProviderKey: "missing"})
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateProvider(ctx, ProviderWriteInput{UserID: 7, ProviderKey: "missing"})
 	assert.Equal(t, 30900, engineErrorCode(t, err))
 }
 
@@ -460,9 +511,10 @@ func TestUpdateBackend_GivenUnknownID_ThenReturnsTheDedicatedBackendNotFoundCode
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "missing").Return(nil, nil)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "missing").Return(nil, nil)
 
-	_, err := New().UpdateBackend(context.Background(), BackendWriteInput{UserID: 7, SyncID: "missing"})
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateBackend(ctx, BackendWriteInput{UserID: 7, SyncID: "missing"})
 	assert.Equal(t, 30901, engineErrorCode(t, err))
 }
 
@@ -524,7 +576,8 @@ func TestUpdateBackend_GivenEnvJSON_ThenReplacesTheWholeTable(t *testing.T) {
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
 		AgentredFingerprint: "sha256:aaaa",
 		Payload:             `{"name":"CC","type":"claudecode","env_json":"{\"HTTPS_PROXY\":\"http://127.0.0.1:7890\",\"STALE\":\"1\"}"}`,
@@ -556,7 +609,8 @@ func TestUpdateBackend_GivenNoEnvJSON_ThenKeepsTheStoredTable(t *testing.T) {
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
 		AgentredFingerprint: "sha256:aaaa",
 		Payload:             `{"name":"CC","type":"claudecode","env_json":"{\"MY_TOKEN\":\"s3cret\"}"}`,
@@ -592,6 +646,7 @@ func TestCreateBackend_GivenCLIPath_ThenWritesThePerDeviceOverlay(t *testing.T) 
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
 	registerActiveDevice(ctrl, 7, "sha256:aaaa")
 	// 覆盖行要先看这台机器上有没有既存的一条
 	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentBackendCLI}).
@@ -631,7 +686,8 @@ func TestUpdateBackend_GivenCLIPath_ThenRewritesOnlyTheBoundDeviceOverlay(t *tes
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
 		AgentredFingerprint: "sha256:aaaa",
 		Payload:             `{"name":"CC","type":"claudecode"}`,
@@ -644,6 +700,11 @@ func TestUpdateBackend_GivenCLIPath_ThenRewritesOnlyTheBoundDeviceOverlay(t *tes
 			{ID: 10, UserID: 7, Kind: sync_entity.KindAgentBackendCLI, SyncID: "overlay-b",
 				ScopeSyncID: "backend-1", AgentredFingerprint: "sha256:bbbb", Payload: `{"cli_path":"/other/machine/claude"}`},
 		}, nil)
+	// 只加锁重读绑定设备上那一条；另一台机器上的覆盖行连读都不读
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "overlay-a").Return(&sync_entity.SyncObject{
+		ID: 9, UserID: 7, Kind: sync_entity.KindAgentBackendCLI, SyncID: "overlay-a",
+		ScopeSyncID: "backend-1", AgentredFingerprint: "sha256:aaaa", Payload: `{"cli_path":"/old/claude"}`,
+	}, nil)
 	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(4), nil).Times(2)
 	var saved []*sync_entity.SyncObject
 	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
@@ -671,7 +732,8 @@ func TestUpdateBackend_GivenNoCLIPath_ThenLeavesTheOverlayAlone(t *testing.T) {
 	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	sync_repo.RegisterSyncState(states)
-	objects.EXPECT().Find(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+	allowSeqLock(states)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
 		AgentredFingerprint: "sha256:aaaa", Payload: `{"name":"CC","type":"claudecode"}`,
 	}, nil)
