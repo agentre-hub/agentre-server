@@ -2438,6 +2438,236 @@ describe("会话详情页:插话之后的排队队列", () => {
       screen.queryByText("1 message(s) were not sent when the turn ended"),
     ).toBeNull();
   });
+
+  /*
+    轮末的插话归谁处置 —— 这一族钉的是「控制台与执行端说的是同一件事」。
+
+    此前控制台在终态帧那一刻就把残留挪进丢弃横幅，**却从没告诉执行端**。而
+    agentred 的插话信箱只在 CLI 会话被逐出时才 Forget(claudecode 的
+    claudeActive.Close)，于是那段字仍然攥在它手里：下一轮一开，第一个
+    PostToolUse 钩子就把它捞出来凭空插进去 —— 用户眼里是一段自己明明看到
+    「没发出去」的字，几分钟后自己长了腿跑进另一轮。
+
+    桌面端没有这个病:chat_svc 在轮末 DrainPending(turn_run.go)，取到就合并成
+    一条 user msg 自动接续下一轮(persistAutoContinueTurn)。控制台走同一条:
+    终态帧之后问一次执行端，取到就自动开新一轮，取不到才是真的没人要了。
+  */
+  /** 执行端对 `runtime.drainPending` 的回答。 */
+  function drainReturning(steers: { queuedId: string; text: string }[]) {
+    return (m: AnyRpcMethod) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeDrainPending) return { steers };
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    };
+  }
+
+  // Given 轮末还排着一条 / When 一轮正常收场 / Then 必定问一次执行端还攥着什么。
+  //
+  // 不问就是幽灵注入的全部成因,所以这一条单独钉:就算这一屏自己的队列是空的也要问
+  // —— 排进去的那一屏可能已经关掉了,而信箱是按会话的,不是按浏览器窗口的。
+  it("Given 一轮正常收场 When 本地队列是空的 Then 照样问一次执行端", async () => {
+    mountWith(drainReturning([]));
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeDrainPending)[0]?.[1]).toMatchObject({
+        conversationId: "42",
+      }),
+    );
+  });
+
+  // Given 轮末还排着一条 / When 执行端交回它 / Then 自动接续成新一轮,不摆丢弃横幅。
+  it("Given 轮末仍有残留 When 执行端交回 Then 自动接续成新一轮", async () => {
+    mountWith(
+      drainReturning([{ queuedId: "q-remote-1", text: "先别动数据库" }]),
+    );
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    // 新一轮由 runtime.run 开起来,正文就是那段被取回来的字。
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeRun)[0]?.[1]).toMatchObject({
+        conversationId: "42",
+        userText: "先别动数据库",
+      }),
+    );
+    // chip 清掉(它已经被执行端取走了),而丢弃横幅一次都不该出现。
+    await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+    expect(
+      screen.queryByText("1 message(s) were not sent when the turn ended"),
+    ).toBeNull();
+  });
+
+  // Given 轮末排着两条 / When 执行端交回两条 / Then 合成一条,空行分隔。
+  //
+  // 口径与桌面端 joinSteerTexts 同一份:两条分别开两轮会让第二条在第一条还没跑完时
+  // 撞上 acquireTurnGate。
+  it("Given 轮末排着两条 When 执行端交回 Then 合并成一条新一轮", async () => {
+    mountWith(
+      drainReturning([
+        { queuedId: "q-remote-1", text: "先别动数据库" },
+        { queuedId: "q-remote-2", text: "顺便把标题也改了" },
+      ]),
+    );
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeRun)[0]?.[1]).toMatchObject({
+        userText: "先别动数据库\n\n顺便把标题也改了",
+      }),
+    );
+  });
+
+  // Given 轮末还排着一条 / When 执行端说手上没有 / Then 这才是真的没人要了:
+  // 摆丢弃横幅,不凭空开一轮。
+  it("Given 轮末仍有残留 When 执行端说没有 Then 摆丢弃横幅且不开新一轮", async () => {
+    mountWith(drainReturning([]));
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+    expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(0);
+  });
+
+  // Given 这一轮是出错 / 被中断收场 / When 收尾 / Then 不问、也不接续。
+  //
+  // 与桌面端同一条纪律(turn_run.go 的 `stopErr == nil && !aborted`):出错的一轮
+  // 自动再跑一遍多半是再错一次;而用户自己按的停止,daemon 的 Abort 已经把信箱
+  // 清空了(claudecode Runtime.Abort),接续等于把刚叫停的事又捡起来。
+  it("Given 一轮出错收场 When 收尾 Then 不问执行端也不接续", async () => {
+    mountWith(
+      drainReturning([{ queuedId: "q-remote-1", text: "先别动数据库" }]),
+    );
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({ stopErrMsg: "boom" } as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+    expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(0);
+    expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(0);
+  });
+
+  // Given 承载机是桌面端 / When 一轮收场 / Then 不问、照旧摆丢弃横幅。
+  //
+  // 这一问只对 agentred 成立,而且是两头的理由都成立:
+  //   - 桌面端**根本不注册** runtime.drainPending(共享包的 desktopAnsweredMethods
+  //     里没有它),问过去只会被拒;
+  //   - 更要紧的是它**不该被问** —— 桌面端托管的那条对话由它自己的 chat_svc 在轮末
+  //     DrainPending 并自动接续(turn_run.go),控制台再去取一次就是从它手里抢。
+  it("Given 承载机是桌面端 When 一轮收场 Then 不问执行端", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, kind: "desktop" }] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...runningSummary, peerFingerprint: "fp-x" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return drainReturning([{ queuedId: "q-remote-1", text: "先别动数据库" }])(
+        method,
+      );
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+    expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(0);
+  });
+
+  // Given 已经问过一次 / When 右栏切到另一条对话 / Then 不拿上一条的计数再问一次。
+  //
+  // 右栏换对话是**同实例换 props**(没有 key 强制重挂),而「又收场了一轮」是一个只增
+  // 不减的计数 —— 不认这一条的话,切过去的那一瞬就会对一条根本没跑过的对话问一次
+  // 信箱,取到东西还会凭空给它开一轮。
+  it("Given 问过一次 When 切到另一条对话 Then 不再问一次", async () => {
+    mountWith(drainReturning([]));
+
+    const { rerender } = renderPage();
+    await screen.findByText(/重构登录页/);
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(1),
+    );
+
+    rerender(
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="43" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+
+    expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(1);
+  });
+
+  // Given 问执行端这一问本身失败了 / When 收尾 / Then 退回丢弃横幅,不把字吞掉。
+  it("Given 问执行端失败 When 收尾 Then 退回丢弃横幅", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeDrainPending)
+        throw new RelayError(-32603, "boom", { code: -32603, message: "boom" });
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+  });
 });
 
 // 缺口二：sendMessage 的 catch 把**任何**失败都当成「这条会话钉住的 agentred

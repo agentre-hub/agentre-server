@@ -45,6 +45,7 @@ import { useFilePreviewTabs } from "@/components/session/useFilePreviewTabs";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import { turnDoneFrames } from "@/components/session/turnDone";
+import { useSteerAutoContinue } from "@/components/session/useSteerAutoContinue";
 import {
   useReconnectProbe,
   useSessionTargetDevice,
@@ -369,6 +370,15 @@ export default function SessionDetailView({
    * （回调里没有地方拿 alive()）。
    */
   const [turnEpoch, setTurnEpoch] = useState(0);
+  /**
+   * 「又有一轮**正常**收场了」的计数。轮末那几条插话的去向由它点火，消费在
+   * `useSteerAutoContinue` —— 那只 hook 排在发送那一族之后（它要 `sendMessage`），
+   * 而中继的回调排在最前面，计数是这两头唯一能握手的东西。
+   *
+   * 与 `turnEpoch` 分开数：那一份连出错的轮次也数（摘要照样要重取），这一份只数
+   * 正常收场的 —— 出错与中断不接续，判据与桌面端 `turn_run.go` 同一条。
+   */
+  const [settledTurnEpoch, setSettledTurnEpoch] = useState(0);
 
   const clientRef = useRef<import("@/lib/relayClient").RelayClient | null>(
     null,
@@ -652,10 +662,19 @@ export default function SessionDetailView({
       liveTurn.endTurn();
       turn.setPendingAssistant(false);
       setEvents((prev) => [...prev, ...turnDoneFrames(sid, frame)]);
-      // 这一轮结束时还排着的那几条:不静默清掉。它们要么被 drain 成下一轮(那时
-      // steer_consumed 会把 chip 清掉),要么就是真的没被任何人取走 —— 后一种把
-      // 用户刚敲的字悄悄抹掉、且无从补救(规格决策 4)。
-      steerQueue.endTurn();
+      /*
+        这一轮结束时还排着的那几条:去向由 `useSteerAutoContinue` 决定 —— 先问执行端
+        信箱里还剩什么,取回来就自动接续成新一轮(桌面端 chat_svc 的老规矩),取不回来
+        才是真的没人要了,那时才摆丢弃横幅。不问的话那段字仍攥在 agentred 手里
+        (信箱只在 CLI 会话被逐出时才清),下一轮的第一个 PostToolUse 钩子会把它捞出来
+        凭空插进去。
+
+        出错 / 被中断收场不问也不接续(判据同桌面端 turn_run.go 的
+        `stopErr == nil && !aborted`),那两档照旧当场交还给用户。补齐回放的终态帧同样
+        不点火:那几轮早就结束了,拿它们去问执行端等于打开一条老对话就凭空开一轮。
+      */
+      if (ready && !frame.stopErrMsg) setSettledTurnEpoch((n) => n + 1);
+      else steerQueue.endTurn();
       decisions.requestWaitersRefresh();
       // 这一轮落定了 → 摘要重取 + 已读补记（见下面那只 effect 的说明）。
       //
@@ -1363,6 +1382,20 @@ export default function SessionDetailView({
     steerQueue,
     // 自己开的这一轮，起点就是此刻 —— 那条 meta 的耗时从这里开始走。
     onOwnTurnStarted: () => liveTurn.beginTurn(Date.now()),
+  });
+
+  /*
+    轮末插话的去向。它要 `send.sendMessage`，所以只能排在这里（发送那一族之后）；
+    与终态帧那一处之间隔着 `settledTurnEpoch` 那个计数。
+  */
+  useSteerAutoContinue({
+    epoch: settledTurnEpoch,
+    conversationId: sid,
+    carrier: device,
+    clientRef,
+    originRef,
+    steerQueue,
+    sendMessage: send.sendMessage,
   });
 
   if (deviceError) {
