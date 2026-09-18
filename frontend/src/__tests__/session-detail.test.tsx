@@ -488,6 +488,63 @@ describe("会话详情页", () => {
     });
   });
 
+  /**
+   * Given 一轮正跑着，转录末尾是一个活动块（思考 + 工具各一步）；
+   * When 控制台没有「已落库 / 未落库」这条分界，liveBlocks 恒为 undefined、
+   *   正文此刻也不在流（liveTail 是空）；
+   * Then 活动块仍然自动展开 —— 运行态由宿主如实告知，不再从 live* 入参反推。
+   *
+   * 共享包原本用 `liveBlocks !== undefined || liveTail.length > 0` 代表「这一轮在跑」。
+   * 桌面端恰好恒真（store 的 LiveStream 永远带 liveBlocks 数组），控制台两个条件同时
+   * 为假，于是「运行中自动展开 + 超 8 步只留 6 行」在这一端一次都没生效过。
+   */
+  it("一轮跑着时活动块自动展开（运行态由宿主给，不从 liveBlocks 反推）", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, lifecycleState: SessionLifecycleRunning }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "写个 go.mod" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "thinking_delta", text: "先想一下" },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "tool_use_start",
+          id: "call_1",
+          name: "Write",
+          input: { file_path: "/go.mod", content: "module x" },
+        },
+        seq: 3,
+      });
+    });
+
+    renderPage();
+
+    const header = await screen.findByTestId("activity-header", undefined, {
+      timeout: 3_000,
+    });
+    await waitFor(() =>
+      expect(header.getAttribute("aria-expanded")).toBe("true"),
+    );
+  });
+
   // agentred 每次重启都会把非终态会话标成 interrupted（daemon.New 的
   // 「marked N non-terminal sessions interrupted after restart」），而 daemon 的
   // Attach 对 interrupted 一律回 ErrNoActiveTurn ——「那一轮的子进程随上一个 daemon
