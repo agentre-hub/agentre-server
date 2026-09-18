@@ -4819,6 +4819,112 @@ describe("会话详情：输入框", () => {
     expect(meter.textContent).toContain("82%");
   });
 
+  /**
+   * Given dev 环境的持久帧里 `context_window_updated` / `usage.contextWindow`
+   *   一条都没有（agentred 确实探到了窗口，却 emit 成 wire 上并不存在的
+   *   `session_status` kind，共享包认不出）；
+   * When 这条会话已经跑完过一轮、终态帧报了它用的模型；
+   * Then 计量器照样摆出来 —— 窗口按那个模型从引擎目录里查。
+   *
+   * 桌面端不受影响是因为它的窗口有四级兜底（chat_svc 的
+   * resolveContextWindowWithRuntime），根本不看事件流；控制台此前只有事件流一条
+   * 来路，于是这枚计量器**一次都没渲染过**。
+   *
+   * 钉的模型（sonnet，100 万）与用过的模型（glm-5.2，20 万）刻意不同：断言落在
+   * 20 万上，才证得出「用过的那个」排在「钉着的那个」前面。
+   */
+  it("事件流给不出窗口时：按这条会话用过的模型查引擎目录", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/engine/backends") return { backends: [] };
+      if (path === "/v1/engine/providers")
+        return {
+          providers: [
+            {
+              provider_key: "zhipu",
+              name: "智谱",
+              type: "anthropic",
+              default_model_key: "glm",
+              enabled: true,
+              models: [
+                {
+                  model_key: "glm",
+                  model_id: "glm-5.2",
+                  name: "GLM 5.2",
+                  enabled: true,
+                  context_window: 200000,
+                },
+                {
+                  model_key: "sonnet",
+                  model_id: "claude-sonnet-4",
+                  name: "Sonnet 4",
+                  enabled: true,
+                  context_window: 1000000,
+                },
+              ],
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, providerKey: "zhipu", modelKey: "sonnet" }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    // 刻意不发 context_window_updated，也不在 usage 上带 contextWindow：
+    // dev 环境真实的持久帧里就是这两样都没有。
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "usage", totalInputTokens: 41200 },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done", model: "glm-5.2" },
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    renderComposer();
+
+    await screen.findByText("开场白");
+    const meter = await screen.findByTestId(
+      "composer-context-meter",
+      undefined,
+      { timeout: 3_000 },
+    );
+    expect(meter.getAttribute("aria-label")).toBe(
+      "Context usage 41.2k / 200k, 21% used",
+    );
+  });
+
   it("窗口还没探到时整块不摆：不拿一个编出来的分母画进度条", async () => {
     stubComposer();
     renderComposer();

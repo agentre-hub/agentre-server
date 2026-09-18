@@ -59,6 +59,10 @@ import {
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
 import { nextPreviewTail } from "@/components/session/previewTail";
+import {
+  lastUsedModelId,
+  resolveContextWindow,
+} from "@/components/session/sessionModel";
 import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
 import {
@@ -1515,6 +1519,23 @@ export default function SessionDetailView({
   });
   const fallbackModel = modelPill.mode === "invalid" ? "" : modelPill.modelId;
 
+  /** 这条会话上一次真的用过的模型（见 sessionModel）。一轮都没跑完时是空串。 */
+  const lastUsedModel = lastUsedModelId(messages);
+  /**
+   * 底栏那条上下文进度条的分母。
+   *
+   * 事件流不是唯一来路：dev 环境的持久帧里 `context_window_updated` /
+   * `usage.contextWindow` 一条都没有（agentred 探到了窗口却 emit 成 wire 上并不
+   * 存在的 kind），于是这枚计量器在控制台上一次都没渲染过。兜底链与桌面端
+   * `resolveContextWindowWithRuntime` 同序，理由写在 `sessionModel` 里。
+   */
+  const contextWindow = resolveContextWindow({
+    runtimeWindow: sessionRuntime.contextWindow,
+    catalog: pickerCatalog,
+    lastUsedModelId: lastUsedModel,
+    pinnedModelId: fallbackModel,
+  });
+
   const reasoningEffortControl = supportsReasoningEffort ? (
     <SessionReasoningEffortControl
       value={sessionReasoningEffort}
@@ -1748,7 +1769,7 @@ export default function SessionDetailView({
       backendType={summary?.backendType}
       agents={agents}
       messages={messages}
-      contextWindow={sessionRuntime.contextWindow}
+      contextWindow={contextWindow}
       sending={send.sending}
       // 自己按下的发送把视口带回底部：他要看的东西（排队气泡、这条消息本身、
       // 助手的三个点）全落在最底下。往回翻着看时不被**对端**拽走那条规矩不受
