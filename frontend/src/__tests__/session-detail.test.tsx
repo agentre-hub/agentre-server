@@ -372,6 +372,58 @@ describe("会话详情页", () => {
     expect(screen.queryByText("你好你好")).toBeNull();
   });
 
+  // Given agentred 对**块级**事件也发两份：带 seq 的持久帧，以及紧随其后（dev 环境
+  // 抓包实测相隔 1ms）的一份预览副本；
+  // When 这一轮就停在那条审批上 —— 再没有持久帧来清预览尾巴；
+  // Then 转录里仍然只有一张审批卡，不是两张。
+  //
+  // 预览尾巴原本靠「任何持久帧到达就清空」收口，而那条规则的前提（下一块的第一个
+  // token 不会早于上一块的持久帧）对块级预览帧不成立：它落在自己的持久帧**之后**。
+  it("同一条审批的预览副本落在持久帧之后：转录里仍然只有一张卡", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    const permission = {
+      kind: "tool_permission_request",
+      requestId: "f3ed49e3",
+      toolName: "Edit",
+      input: { file_path: "/a.ts", content: "x" },
+    };
+
+    renderPage();
+    await waitFor(() => expect(capturedOpts.onPreviewEvent).toBeTruthy());
+
+    act(() => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: permission,
+        seq: 4,
+      });
+      capturedOpts.onPreviewEvent?.({
+        conversationId: "42",
+        event: permission,
+      });
+    });
+
+    const transcript = await screen.findByTestId(
+      "session-detail-transcript",
+      undefined,
+      { timeout: 3_000 },
+    );
+    await waitFor(() =>
+      expect(
+        within(transcript).getAllByTestId("tool-permission-card"),
+      ).toHaveLength(1),
+    );
+  });
+
   // agentred 每次重启都会把非终态会话标成 interrupted（daemon.New 的
   // 「marked N non-terminal sessions interrupted after restart」），而 daemon 的
   // Attach 对 interrupted 一律回 ErrNoActiveTurn ——「那一轮的子进程随上一个 daemon
