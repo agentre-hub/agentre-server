@@ -67,6 +67,7 @@ func (w *Workspace) DispatchTarget(c *gin.Context, req *api.DispatchTargetReques
 			DeviceFingerprint: plan.Chosen.DeviceFingerprint,
 			DeviceID:          plan.Chosen.DeviceID,
 			DeviceName:        plan.Chosen.DeviceName,
+			BackendSyncID:     plan.Chosen.BackendSyncID,
 			BackendType:       plan.Chosen.BackendType,
 			Kind:              plan.Chosen.Kind,
 			Cwd:               plan.Chosen.Cwd,

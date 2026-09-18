@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/agentre-hub/agentre/pkg/syncwire"
 )
 
 type forbiddenBrowserDTO struct {
@@ -33,11 +35,26 @@ func browserDTOCarriesForbiddenField(typ reflect.Type) bool {
 		field := typ.Field(i)
 		name := strings.ToLower(field.Name + " " + field.Tag.Get("json"))
 		if strings.Contains(name, "apikey") || strings.Contains(name, "api_key") ||
-			strings.Contains(name, "clipath") || strings.Contains(name, "cli_path") {
+			strings.Contains(name, "clipath") || strings.Contains(name, "cli_path") ||
+			strings.Contains(name, "acp") || strings.Contains(name, "command") || strings.Contains(name, "args") {
 			return true
 		}
 	}
 	return false
+}
+
+// ACP 启动身份（acpCommand / acpArgs）是一段任意 argv，可能夹带凭据，因此与
+// api_key / cli_path 同级：浏览器 DTO 的类型层不能有装得下它的字段。唯一的下发
+// 通路是带鉴权的设备 JWT 快照（见 TestSnapshotBackend_DeliberatelyCarriesTheConfig）。
+func TestBrowserBackendDTO_CannotCarryACPLaunchIdentity(t *testing.T) {
+	for _, typ := range []reflect.Type{reflect.TypeOf(Backend{}), reflect.TypeOf(backendFields{})} {
+		for i := 0; i < typ.NumField(); i++ {
+			name := strings.ToLower(typ.Field(i).Name + " " + typ.Field(i).Tag.Get("json"))
+			if strings.Contains(name, "acp") || strings.Contains(name, "command") || strings.Contains(name, "args") {
+				t.Errorf("%s.%s 会把 ACP 启动身份漏给浏览器", typ.Name(), typ.Field(i).Name)
+			}
+		}
+	}
 }
 
 func TestSnapshotResponse_ExplicitlyCarriesTheDeviceOnlyFields(t *testing.T) {
@@ -48,6 +65,27 @@ func TestSnapshotResponse_ExplicitlyCarriesTheDeviceOnlyFields(t *testing.T) {
 	overlay, ok := reflect.TypeOf(SnapshotCLIOverlay{}).FieldByName("CLIPath")
 	if !ok || overlay.Tag.Get("json") != "cli_path" {
 		t.Fatal("device snapshot must contain the authenticated device's CLI overlay")
+	}
+}
+
+// 后端 config 快照是整个服务端唯一允许把 ACP 启动身份下行的地方，且只给持设备
+// JWT 的调用方、只给分给这台机器的后端。形状按 sync_id 寻址、正文是共享契约的
+// 整份 AgentBackendConfig —— 不在这里再抄一份键表。
+func TestSnapshotBackend_DeliberatelyCarriesTheConfig(t *testing.T) {
+	config, ok := reflect.TypeOf(SnapshotBackend{}).FieldByName("Config")
+	if !ok || config.Tag.Get("json") != "config" {
+		t.Fatal("device snapshot must carry the full backend config by sync id")
+	}
+	if config.Type != reflect.TypeOf(syncwire.AgentBackendConfig{}) {
+		t.Fatalf("snapshot backend config must be the shared syncwire type, got %s", config.Type)
+	}
+	key, ok := reflect.TypeOf(SnapshotBackend{}).FieldByName("BackendSyncID")
+	if !ok || key.Tag.Get("json") != "backend_sync_id" {
+		t.Fatal("device snapshot backend entry must be addressed by backend_sync_id")
+	}
+	backends, ok := reflect.TypeOf(SnapshotResponse{}).FieldByName("Backends")
+	if !ok || backends.Tag.Get("json") != "backends" {
+		t.Fatal("device snapshot response must expose the backends array")
 	}
 }
 

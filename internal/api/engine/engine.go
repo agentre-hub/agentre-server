@@ -1,7 +1,10 @@
 // Package engine 定义账号级引擎设置的浏览器与设备快照 REST 契约。
 package engine
 
-import "github.com/cago-frame/cago/server/mux"
+import (
+	"github.com/agentre-hub/agentre/pkg/syncwire"
+	"github.com/cago-frame/cago/server/mux"
+)
 
 type Model struct {
 	ModelKey      string `json:"model_key"`
@@ -149,10 +152,20 @@ type SnapshotCLIOverlay struct {
 	BackendSyncID string `json:"backend_sync_id"`
 	CLIPath       string `json:"cli_path"`
 }
+
+// SnapshotBackend 是设备 JWT 快照里的一条后端 config：按 sync_id 寻址，正文是共享
+// 契约的整份 syncwire.AgentBackendConfig（不在这一层再抄一份键表）。ACP 启动身份
+// （acpCommand / acpArgs）只经这条带鉴权的通路下行，且只给后端分配到的机器。
+type SnapshotBackend struct {
+	BackendSyncID string                      `json:"backend_sync_id"`
+	Config        syncwire.AgentBackendConfig `json:"config"`
+}
+
 type SnapshotRequest struct {
 	mux.Meta `path:"/v1/engine/snapshot" method:"GET"`
 }
 type SnapshotResponse struct {
 	Providers   []SnapshotProvider   `json:"providers"`
 	CLIOverlays []SnapshotCLIOverlay `json:"cli_overlays"`
+	Backends    []SnapshotBackend    `json:"backends"`
 }

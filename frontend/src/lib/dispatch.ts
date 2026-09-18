@@ -51,6 +51,13 @@ export interface DispatchChoice {
   device_fingerprint: string;
   device_id: number;
   device_name: string;
+  /**
+   * 选中后端的**非敏感身份**（与档位行上的同源）。浏览器只把它带在 runtime.run
+   * 的 backend 上；daemon 持设备 JWT 从 /v1/engine/snapshot 按它取整份 config。
+   * ACP 启动身份（acpCommand / acpArgs）是一段任意 argv，可能夹带凭据，绝不经过
+   * 浏览器。
+   */
+  backend_sync_id?: string;
   backend_type: string;
   /** 目标设备种类：desktop → org/subagent/hook 可用（R17），agentred → 不可用。 */
   kind?: string;
@@ -253,7 +260,16 @@ export async function dispatchNewConversation(
     // （与下面档位 / 模型键那几行同一条规矩）。
     ...(userBlocks ? { userBlocks } : {}),
     // daemon 端按 {"type": ...} 解 backend（integration_test 的既有契约）。
-    backend: { type: choice.backend_type },
+    // 云端（agentred）派发只多带一个**非敏感身份** syncId：daemon 持设备 JWT 从
+    // /v1/engine/snapshot 按它取整份后端 config（含 ACP 启动身份）。ACP 启动身份
+    // 是一段任意 argv，可能夹带凭据，绝不随浏览器数据过线。桌面端不走这条 config
+    // 快照通路，因此不多带这一格。
+    backend: {
+      type: choice.backend_type,
+      ...(choice.kind === "agentred" && choice.backend_sync_id
+        ? { syncId: choice.backend_sync_id }
+        : {}),
+    },
     sourceDevice: input.sourceClient.peerFingerprint,
     sourceDeviceName: browserDisplayName(),
     // 档位与模型只在**用户真的定了**时才带：空串与省略在 daemon 上解出的值相同,

@@ -19,6 +19,8 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
+
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
@@ -72,7 +74,17 @@ func (s *stubEngineSvc) Snapshot(_ context.Context, _ int64, fingerprint string)
 	if fingerprint != "fp-1" {
 		return nil, assert.AnError
 	}
-	return &engine_svc.SnapshotView{Providers: []engine_svc.ProviderSnapshot{{ProviderKey: "anthropic-main", APIKey: "sk-secret", Models: []engine_svc.Model{}}}, CLIOverlays: []engine_svc.CLIOverlaySnapshot{{BackendSyncID: "backend-1", CLIPath: "/usr/local/bin/claude"}}}, nil
+	return &engine_svc.SnapshotView{
+		Providers:   []engine_svc.ProviderSnapshot{{ProviderKey: "anthropic-main", APIKey: "sk-secret", Models: []engine_svc.Model{}}},
+		CLIOverlays: []engine_svc.CLIOverlaySnapshot{{BackendSyncID: "backend-1", CLIPath: "/usr/local/bin/claude"}},
+		Backends: []engine_svc.BackendSnapshot{{
+			BackendSyncID: "b-acp",
+			Config: syncwire.AgentBackendConfig{
+				ACPCommand: "/opt/acp/agent",
+				ACPArgs:    []string{"serve", "--stdio"},
+			},
+		}},
+	}, nil
 }
 
 var _ engine_svc.EngineSvc = (*stubEngineSvc)(nil)
@@ -163,6 +175,10 @@ func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
 	assert.Contains(t, string(envelope.Data), "sk-secret")
 	assert.Contains(t, string(envelope.Data), "/usr/local/bin/claude")
+	// 后端 config 快照走同一个带鉴权的设备 JWT；按 sync_id 寻址、整份嵌套 config。
+	assert.Contains(t, string(envelope.Data), `"backend_sync_id":"b-acp"`)
+	assert.Contains(t, string(envelope.Data), `"acpCommand":"/opt/acp/agent"`)
+	assert.Contains(t, string(envelope.Data), `"acpArgs":["serve","--stdio"]`)
 }
 
 // 已撤销的设备不该再拉得到引擎快照——快照里带着明文 API key。这条判定曾在

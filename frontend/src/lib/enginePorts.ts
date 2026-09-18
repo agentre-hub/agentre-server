@@ -828,33 +828,25 @@ export function createBrowserEngineSettingsPorts(
     },
 
     cliPath: {
-      // 按 (后端, **绑定设备**) 取回配过的路径。同一条后端在别的机器上另有一条
-      // 覆盖，挑错就会把那台机器的路径显示成这一台的。
-      async get(backendSyncId) {
-        const backends = await fetchBackends();
-        const fingerprint =
-          backends.find((item) => item.sync_id === backendSyncId)
-            ?.device_fingerprint ?? "";
+      // 按 (后端, **编辑器所选设备**) 取回配过的路径。共享编辑器把设备一起交进来
+      // （切换设备读到的是另一行）；同一条后端在别的机器上另有一条覆盖，挑错就会
+      // 把那台机器的路径显示成这一台的。
+      async get(backendSyncId, deviceId) {
         const overlays = await fetchCLIOverlays();
         const hit = overlays.find(
           (overlay) =>
             overlay.backend_sync_id === backendSyncId &&
-            overlay.fingerprint === fingerprint,
+            overlay.fingerprint === deviceId,
         );
         return hit ? hit.cli_path : null;
       },
       // 面板保存走的是 updateBackend（路径在 BackendInput 里一起发），这个 set 是
       // 端口契约的另一半：单独改路径时同样要带上设备，服务端才知道落在哪台机器上。
-      async set(backendSyncId, path) {
-        const backends = await fetchBackends();
-        const current = backends.find((item) => item.sync_id === backendSyncId);
+      async set(backendSyncId, deviceId, path) {
         await api(`/v1/engine/backends/${encodeURIComponent(backendSyncId)}`, {
           method: "PATCH",
           body: JSON.stringify(
-            compact({
-              cli_path: path,
-              device_fingerprint: current?.device_fingerprint,
-            }),
+            compact({ cli_path: path, device_fingerprint: deviceId }),
           ),
         });
       },

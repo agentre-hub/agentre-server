@@ -409,14 +409,16 @@ func TestListBackends_GivenAdvancedAccountSettings_ThenReturnsThemForBrowserEdit
 		sync_entity.KindAgentBackend, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentExecTarget,
 	}).Return([]*sync_entity.SyncObject{{
 		Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
-		Payload: `{"name":"Codex","type":"codex","model_routes":"{\"OPUS\":{\"providerKey\":\"openai-main\",\"modelKey\":\"gpt-5\"}}","sandbox":"workspace-write","approval":"on-request","reasoning_effort":"high","default_permission_mode":"acceptEdits","default_model":"gpt-5"}`,
+		// 单类型独占设置落在契约的嵌套 config 对象里，modelRoutes 是嵌套 JSON 对象
+		// 而不是字符串（键名 camelCase，与桌面端 config_json 同一份形状）。
+		Payload: `{"name":"Codex","type":"codex","reasoning_effort":"high","config":{"modelRoutes":{"OPUS":{"providerKey":"openai-main","modelKey":"gpt-5"}},"sandbox":"workspace-write","approval":"on-request","defaultPermissionMode":"acceptEdits","defaultModel":"gpt-5"}}`,
 	}}, nil)
 
 	got, err := New().ListBackends(context.Background(), 7)
 
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	assert.Equal(t, "{\"OPUS\":{\"providerKey\":\"openai-main\",\"modelKey\":\"gpt-5\"}}", got[0].ModelRoutes)
+	assert.Equal(t, `{"OPUS":{"providerKey":"openai-main","modelKey":"gpt-5"}}`, got[0].ModelRoutes)
 	assert.Equal(t, "workspace-write", got[0].Sandbox)
 	assert.Equal(t, "on-request", got[0].Approval)
 	assert.Equal(t, "high", got[0].ReasoningEffort)
@@ -424,16 +426,31 @@ func TestListBackends_GivenAdvancedAccountSettings_ThenReturnsThemForBrowserEdit
 	assert.Equal(t, "gpt-5", got[0].DefaultModel)
 }
 
-func TestSnapshot_GivenTwoDeviceOverlays_ThenReturnsOnlyCallersPathAndProviderKey(t *testing.T) {
+func TestSnapshot_GivenBackends_ThenCarriesOnlyCallersFullNestedConfig(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{
-		sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI,
+		sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentBackend,
 	}).Return([]*sync_entity.SyncObject{
 		{Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main", Payload: `{"name":"Anthropic","api_key":"sk-secret"}`},
 		{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-1", Payload: `{"cli_path":"/usr/local/bin/claude"}`},
 		{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "fp-2", Payload: `{"cli_path":"/opt/claude"}`},
+		// 调用方这台机器上的 acp 后端：整份 config 必须原样到达，包括任意 argv 与
+		// hermes 字段——snapshot 是按 sync_id 寻址的唯一 config 通路。
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-acp", AgentredFingerprint: "fp-1",
+			Payload: `{"type":"acp","name":"ACP","config":{"modelRoutes":{"OPUS":{"providerKey":"p","modelKey":"m"}},"sandbox":"workspace-write","acpCommand":"/opt/acp/agent","acpArgs":["serve","--stdio"],"hermesUrl":"https://hermes.example.com"}}`},
+		// 另一台机器的后端：绝不出现在这台设备的快照里（最小权限）。
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-other", AgentredFingerprint: "fp-2",
+			Payload: `{"type":"acp","config":{"acpCommand":"/opt/other"}}`},
+		// 没写运行设备（存量 / 未配对）与坏载荷：不泄也不 panic。
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-unassigned",
+			Payload: `{"type":"codex","config":{"acpCommand":"/opt/unassigned"}}`},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-malformed", AgentredFingerprint: "fp-1", Payload: `{not json`},
+		// 墓碑行（已删后端）即使仓储把 deleted_at 过滤掉了，这里也不得把它的 config
+		// 发出去。
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-deleted", AgentredFingerprint: "fp-1", DeletedAt: 1700000000000,
+			Payload: `{"type":"acp","config":{"acpCommand":"/opt/deleted"}}`},
 	}, nil)
 
 	got, err := New().Snapshot(context.Background(), 7, "fp-1")
@@ -442,6 +459,14 @@ func TestSnapshot_GivenTwoDeviceOverlays_ThenReturnsOnlyCallersPathAndProviderKe
 	assert.Equal(t, "sk-secret", got.Providers[0].APIKey)
 	require.Len(t, got.CLIOverlays, 1)
 	assert.Equal(t, "/usr/local/bin/claude", got.CLIOverlays[0].CLIPath)
+
+	require.Len(t, got.Backends, 1)
+	assert.Equal(t, "b-acp", got.Backends[0].BackendSyncID)
+	assert.Equal(t, "/opt/acp/agent", got.Backends[0].Config.ACPCommand)
+	assert.Equal(t, []string{"serve", "--stdio"}, got.Backends[0].Config.ACPArgs)
+	assert.Equal(t, "workspace-write", got.Backends[0].Config.Sandbox)
+	assert.Equal(t, `{"OPUS":{"providerKey":"p","modelKey":"m"}}`, string(got.Backends[0].Config.ModelRoutes))
+	assert.Equal(t, "https://hermes.example.com", got.Backends[0].Config.HermesURL)
 }
 
 // 引擎拒绝原因要有稳定业务码：控制台据此既不把本机路径误报成普通表单错误，

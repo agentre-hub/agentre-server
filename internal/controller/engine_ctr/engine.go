@@ -170,7 +170,11 @@ func (e *Engine) Snapshot(c *gin.Context, _ *api.SnapshotRequest) (*api.Snapshot
 	if err != nil {
 		return nil, err
 	}
-	out := &api.SnapshotResponse{Providers: make([]api.SnapshotProvider, 0, len(snap.Providers)), CLIOverlays: make([]api.SnapshotCLIOverlay, 0, len(snap.CLIOverlays))}
+	out := &api.SnapshotResponse{
+		Providers:   make([]api.SnapshotProvider, 0, len(snap.Providers)),
+		CLIOverlays: make([]api.SnapshotCLIOverlay, 0, len(snap.CLIOverlays)),
+		Backends:    make([]api.SnapshotBackend, 0, len(snap.Backends)),
+	}
 	for _, p := range snap.Providers {
 		models := make([]api.Model, len(p.Models))
 		for i, m := range p.Models {
@@ -180,6 +184,9 @@ func (e *Engine) Snapshot(c *gin.Context, _ *api.SnapshotRequest) (*api.Snapshot
 	}
 	for _, o := range snap.CLIOverlays {
 		out.CLIOverlays = append(out.CLIOverlays, api.SnapshotCLIOverlay{BackendSyncID: o.BackendSyncID, CLIPath: o.CLIPath})
+	}
+	for _, b := range snap.Backends {
+		out.Backends = append(out.Backends, api.SnapshotBackend{BackendSyncID: b.BackendSyncID, Config: b.Config})
 	}
 	return out, nil
 }

@@ -508,8 +508,9 @@ func goldenExchanges() []exchange {
 			wantCode:   0,
 		},
 
-		// 引擎快照是唯一允许明文凭据与本机 CLI 路径下行的 HTTP 契约。样本同时钉住
-		// 指纹过滤：另一台设备的覆盖绝不能随本次响应泄漏。
+		// 引擎快照是唯一允许明文凭据、本机 CLI 路径与后端 config（含 ACP 启动身份）
+		// 下行的 HTTP 契约。样本同时钉住指纹过滤：另一台设备的覆盖与后端 config 绝不能
+		// 随本次响应泄漏。
 		{
 			name:   "engine-snapshot-device",
 			method: http.MethodGet,
@@ -520,11 +521,16 @@ func goldenExchanges() []exchange {
 					Status: consts.ACTIVE,
 				}, nil)
 				m.object.EXPECT().ListByKinds(gomock.Any(), goldenUserID, []string{
-					sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI,
+					sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentBackend,
 				}).Return([]*sync_entity.SyncObject{
 					{Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main", Payload: `{"name":"Anthropic","type":"anthropic","base_url":"https://api.anthropic.com","api_key":"sk-engine-secret","models":[]}`},
 					{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: agentFingerpr, Payload: `{"cli_path":"/usr/local/bin/claude"}`},
 					{Kind: sync_entity.KindAgentBackendCLI, ScopeSyncID: "backend-1", AgentredFingerprint: "other-fingerprint", Payload: `{"cli_path":"/opt/claude"}`},
+					// 后端 config 快照只给这台机器：按 sync_id 寻址、正文是整份
+					// syncwire.AgentBackendConfig（这里带 ACP 启动身份）。另一台
+					// 机器的条目不能出现在同一份响应里。
+					{Kind: sync_entity.KindAgentBackend, SyncID: "backend-1", AgentredFingerprint: agentFingerpr, Payload: `{"type":"acp","name":"ACP","config":{"acpCommand":"/opt/acp/agent","acpArgs":["serve","--stdio"]}}`},
+					{Kind: sync_entity.KindAgentBackend, SyncID: "backend-other", AgentredFingerprint: "other-fingerprint", Payload: `{"type":"acp","name":"Other","config":{"acpCommand":"/opt/other"}}`},
 				}, nil)
 			},
 			wantStatus: http.StatusOK,

@@ -25,6 +25,18 @@
             "backend_sync_id": "backend-1",
             "cli_path": "/usr/local/bin/claude"
           }
+        ],
+        "backends": [
+          {
+            "backend_sync_id": "backend-1",
+            "config": {
+              "acpCommand": "/opt/acp/agent",
+              "acpArgs": [
+                "serve",
+                "--stdio"
+              ]
+            }
+          }
         ]
       }
     }

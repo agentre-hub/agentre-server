@@ -816,7 +816,7 @@ describe("browser engine settings ports", () => {
       };
     });
 
-    await expect(ports().cliPath!.get("backend-1")).resolves.toBe(
+    await expect(ports().cliPath!.get("backend-1", "desktop-a")).resolves.toBe(
       "/usr/local/bin/claude",
     );
   });
@@ -856,6 +856,40 @@ describe("browser engine settings ports", () => {
       deviceId: "desktop-a",
       cliPath: "/opt/homebrew/bin/claude",
     });
+
+    expect(bodies[0]).toMatchObject({
+      cli_path: "/opt/homebrew/bin/claude",
+      device_fingerprint: "desktop-a",
+    });
+  });
+
+  // 端口契约的另一半：单独改路径时也要带上设备。共享编辑器现在把**设备**作为第二个
+  // 参数交进来（切设备写的是另一行）；实现若还按旧的 (backendSyncId, path) 两个参数
+  // 收，设备标识会被当成路径写进 cli_path——而少参数的函数签名在 TS 里仍可赋给多参数
+  // 的端口方法，类型检查不会红。这条用例看的是实际发出的请求。
+  it("writes the CLI path against the device the editor passes", async () => {
+    const bodies: unknown[] = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        bodies.push(JSON.parse(String(init.body)));
+        return backendDTO({
+          sync_id: "backend-1",
+          name: "CC",
+          type: "claudecode",
+          device_fingerprint: "desktop-a",
+        });
+      }
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      return { backends: [] };
+    });
+
+    await ports().cliPath!.set(
+      "backend-1",
+      "desktop-a",
+      "/opt/homebrew/bin/claude",
+    );
 
     expect(bodies[0]).toMatchObject({
       cli_path: "/opt/homebrew/bin/claude",

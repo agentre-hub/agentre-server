@@ -1,3 +1,4 @@
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 /**
  * R15 / R16 的派发逻辑单测（测试接缝 8 的 web 侧）：
@@ -100,6 +101,7 @@ const desktopPlan: DispatchPlan = {
     device_fingerprint: "fp-desk",
     device_id: 30,
     device_name: "家里 Mac mini",
+    backend_sync_id: "be-desk",
     backend_type: "claudecode",
     kind: "desktop",
     cwd: "/Users/wyz/agentre-server",
@@ -126,6 +128,37 @@ const agentredPiPlan: DispatchPlan = {
     backend_type: "piagent",
     kind: "agentred",
     cwd: "/srv/pi-project",
+  },
+};
+
+// 云端（agentred）派发只带后端的**非敏感身份**：type 与 backend sync_id。
+//
+// ACP 启动身份（acpCommand / acpArgs）是后端 config 里的一段任意 argv，可能夹带
+// 凭据，因此**绝不**下发浏览器：浏览器只把 sync_id 带在 runtime.run 的 backend 上，
+// 由 daemon 持设备 JWT 拉 /v1/engine/snapshot 后按 sync_id 取整份 config。少了
+// sync_id，acp runtime 会在开轮前直接报「backend has no acpCommand configured」。
+const agentredSyncPlan: DispatchPlan = {
+  ...availablePlan,
+  tiers: [
+    {
+      rank: 1,
+      device_id: 41,
+      device_name: "ACP 主机",
+      backend_type: "acp",
+      kind: "agentred",
+      availability: "available",
+      current: true,
+      backend_sync_id: "be-acp",
+    },
+  ],
+  chosen: {
+    device_fingerprint: "fp-acp",
+    device_id: 41,
+    device_name: "ACP 主机",
+    backend_type: "acp",
+    kind: "agentred",
+    cwd: "/srv/acp-project",
+    backend_sync_id: "be-acp",
   },
 };
 
@@ -320,6 +353,48 @@ describe("dispatchNewConversation（R15 派发 + R16 发起即保存）", () => 
     });
     // 不关：连接归池子，派发只是把租约还回去。
     expect(client.close).not.toHaveBeenCalled();
+  });
+
+  it("云端派发只把 type 与 syncId 编进 runtime.run，浏览器数据里没有 ACP 启动身份", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: agentredSyncPlan,
+      message: "用 ACP 跑一轮",
+      sourceClient,
+    });
+
+    const [method, params] = client.request.mock.calls[0];
+    expect(method).toBe(rpcMethods.runtimeRun);
+    const p = params as Record<string, unknown>;
+    // 服务端派发计划里只有 sync_id，浏览器自己拼不出任何启动命令。
+    expect(p.backend).toEqual({ type: "acp", syncId: "be-acp" });
+    const choice = agentredSyncPlan.chosen!;
+    expect(choice).not.toHaveProperty("acp_command");
+    expect(choice).not.toHaveProperty("acp_args");
+
+    // 真正过线的是这份 JS 对象编出来的 protobuf。确认 sync_id 确实落在 AgentBackend
+    // 的 sync_id 上，而不是在编码那一跳被静默丢掉——那会把这条用例变成只测了一个
+    // 没人看的对象。ACP 启动身份必须一个字都没有。
+    const encoded = toBinary(
+      rpcMethods.runtimeRun.request,
+      create(rpcMethods.runtimeRun.request, p as never),
+    );
+    const decoded = fromBinary(rpcMethods.runtimeRun.request, encoded);
+    expect(decoded.backend?.syncId).toBe("be-acp");
+    expect(decoded.backend?.type).toBe("acp");
+    // 过线的 backend 只有身份：type + syncId。整份 config 正文一个键都没有过线，
+    // 包括 ACP 启动身份本身。
+    expect(decoded.backend?.name).toBe("");
+    expect(decoded.backend?.cliPath).toBe("");
+    expect(decoded.backend?.modelRoutes).toBe("");
+    expect(decoded.backend?.sandbox).toBe("");
+    expect(decoded.backend?.envJson).toBe("");
+    expect(decoded.backend?.acpCommand).toBe("");
+    expect(decoded.backend?.acpArgs).toEqual([]);
   });
 
   it("全部档不可用时直接抛错，不发任何中继帧", async () => {

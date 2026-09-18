@@ -130,9 +130,22 @@ type CLIOverlaySnapshot struct {
 	CLIPath       string `json:"cli_path"`
 }
 
+// BackendSnapshot 是设备 JWT 快照里的一条后端 config：按后端同步标识寻址，正文是
+// 共享契约的整份 AgentBackendConfig。
+//
+// ACP 启动身份（acpCommand / acpArgs）只在这里下行，且只给「这条后端分配到的
+// 机器」。它是整个服务端唯一携带这段任意 argv 的下行载荷，因此不经过浏览器形状的
+// DTO（见 internal/api/engine 的 guard_test.go）。形状对应 agentre daemon 那份
+// snapshotBackendConfig：字段名逐字一致，两端共用一个 config 键表。
+type BackendSnapshot struct {
+	BackendSyncID string                      `json:"backend_sync_id"`
+	Config        syncwire.AgentBackendConfig `json:"config"`
+}
+
 type SnapshotView struct {
 	Providers   []ProviderSnapshot   `json:"providers"`
 	CLIOverlays []CLIOverlaySnapshot `json:"cli_overlays"`
+	Backends    []BackendSnapshot    `json:"backends"`
 }
 
 type EngineSvc interface {
@@ -369,11 +382,11 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 func backendView(syncID string, b syncwire.AgentBackendPayload) BackendView {
 	return BackendView{
 		SyncID: syncID, Name: b.Name, Type: b.Type, ProviderKey: b.ProviderKey, ModelKey: b.ModelKey,
-		ModelRoutes: b.ModelRoutes, Sandbox: b.Sandbox, Approval: b.Approval,
-		EnvJSON: b.EnvJSON, ReasoningEffort: b.ReasoningEffort, DefaultPermissionMode: b.DefaultPermissionMode,
-		DefaultModel: b.DefaultModel, OpenClawGatewayURL: b.OpenClawGatewayURL,
-		OpenClawAgentID: b.OpenClawAgentID, OpenClawDefaultModel: b.OpenClawDefaultModel,
-		OpenClawSessionMode: b.OpenClawSessionMode,
+		ModelRoutes: string(b.Config.ModelRoutes), Sandbox: b.Config.Sandbox, Approval: b.Config.Approval,
+		EnvJSON: b.EnvJSON, ReasoningEffort: b.ReasoningEffort, DefaultPermissionMode: b.Config.DefaultPermissionMode,
+		DefaultModel: b.Config.DefaultModel, OpenClawGatewayURL: b.Config.OpenClawGatewayURL,
+		OpenClawAgentID: b.Config.OpenClawAgentID, OpenClawDefaultModel: b.Config.OpenClawDefaultModel,
+		OpenClawSessionMode: b.Config.OpenClawSessionMode,
 	}
 }
 
@@ -395,11 +408,17 @@ func (s *engineSvc) ListCLIOverlays(ctx context.Context, userID int64) ([]CLIOve
 	return out, nil
 }
 func (s *engineSvc) Snapshot(ctx context.Context, userID int64, fingerprint string) (*SnapshotView, error) {
-	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI})
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{
+		sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentBackend,
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := &SnapshotView{Providers: []ProviderSnapshot{}, CLIOverlays: []CLIOverlaySnapshot{}}
+	out := &SnapshotView{
+		Providers:   []ProviderSnapshot{},
+		CLIOverlays: []CLIOverlaySnapshot{},
+		Backends:    []BackendSnapshot{},
+	}
 	for _, row := range rows {
 		switch row.Kind {
 		case sync_entity.KindLLMProvider:
@@ -410,6 +429,20 @@ func (s *engineSvc) Snapshot(ctx context.Context, userID int64, fingerprint stri
 			if row.AgentredFingerprint == fingerprint {
 				if o, ok := decodeOverlay(row); ok {
 					out.CLIOverlays = append(out.CLIOverlays, CLIOverlaySnapshot{BackendSyncID: row.ScopeSyncID, CLIPath: o.CLIPath})
+				}
+			}
+		case sync_entity.KindAgentBackend:
+			// 最小权限：只回这条后端**分配到的这台机器**，别的机器一条都不带。
+			// 坏载荷（解不动）、没写运行设备的存量行与墓碑行直接跳过，不泄也不
+			// panic。ListByKinds 已在 SQL 里排除墓碑，这里再判一次 IsDeleted 是
+			// 防御性的——将来这条读路若换了仓储，也不至于把一条已删后端连 config
+			// 一起发给设备。
+			if row.IsDeleted() {
+				continue
+			}
+			if row.AgentredFingerprint == fingerprint {
+				if b, ok := decodeBackend(row); ok {
+					out.Backends = append(out.Backends, BackendSnapshot{BackendSyncID: row.SyncID, Config: b.Config})
 				}
 			}
 		}
@@ -483,14 +516,17 @@ func applyBackend(b *syncwire.AgentBackendPayload, in BackendWriteInput) {
 	if in.ModelKey != nil {
 		b.ModelKey = *in.ModelKey
 	}
+	// 单类型独占设置落在契约的 config 对象里（AgentBackendConfig），不是载荷的顶层：
+	// 这里逐键覆写**解出来的那一份**，没提到的键（ACPCommand / ACPArgs / hermes_* /
+	// 以后新增的）原样留着，不会被一次改名之类的 PATCH 抹掉。
 	if in.ModelRoutes != nil {
-		b.ModelRoutes = *in.ModelRoutes
+		b.Config.ModelRoutes = contractModelRoutes(*in.ModelRoutes)
 	}
 	if in.Sandbox != nil {
-		b.Sandbox = *in.Sandbox
+		b.Config.Sandbox = *in.Sandbox
 	}
 	if in.Approval != nil {
-		b.Approval = *in.Approval
+		b.Config.Approval = *in.Approval
 	}
 	if in.EnvJSON != nil {
 		b.EnvJSON = *in.EnvJSON
@@ -499,23 +535,38 @@ func applyBackend(b *syncwire.AgentBackendPayload, in BackendWriteInput) {
 		b.ReasoningEffort = *in.ReasoningEffort
 	}
 	if in.DefaultPermissionMode != nil {
-		b.DefaultPermissionMode = *in.DefaultPermissionMode
+		b.Config.DefaultPermissionMode = *in.DefaultPermissionMode
 	}
 	if in.DefaultModel != nil {
-		b.DefaultModel = *in.DefaultModel
+		b.Config.DefaultModel = *in.DefaultModel
 	}
 	if in.OpenClawGatewayURL != nil {
-		b.OpenClawGatewayURL = *in.OpenClawGatewayURL
+		b.Config.OpenClawGatewayURL = *in.OpenClawGatewayURL
 	}
 	if in.OpenClawAgentID != nil {
-		b.OpenClawAgentID = *in.OpenClawAgentID
+		b.Config.OpenClawAgentID = *in.OpenClawAgentID
 	}
 	if in.OpenClawDefaultModel != nil {
-		b.OpenClawDefaultModel = *in.OpenClawDefaultModel
+		b.Config.OpenClawDefaultModel = *in.OpenClawDefaultModel
 	}
 	if in.OpenClawSessionMode != nil {
-		b.OpenClawSessionMode = *in.OpenClawSessionMode
+		b.Config.OpenClawSessionMode = *in.OpenClawSessionMode
 	}
+}
+
+// contractModelRoutes 把浏览器/桌面端传来的 model_routes JSON 文本，收成契约那一种
+// 「嵌套 JSON 对象」表达。
+//
+// 「没配」在契约里是**键缺席**（omitempty），所以空串与空对象都落成 nil：空对象留成
+// 一个非 nil 的空 RawMessage 会让 json.Marshal 直接报 invalid character，整条 PATCH
+// 变成 500。坏 JSON 则原样交给 json.Marshal 去拒——契约那一侧（MarshalConfig）也是
+// 报错而不是静默落库。
+func contractModelRoutes(v string) json.RawMessage {
+	trimmed := strings.TrimSpace(v)
+	if trimmed == "" || trimmed == "{}" {
+		return nil
+	}
+	return json.RawMessage(trimmed)
 }
 func validBackend(b syncwire.AgentBackendPayload, in BackendWriteInput) bool {
 	return strings.TrimSpace(b.Name) != "" && strings.TrimSpace(b.Type) != "" &&
