@@ -647,6 +647,29 @@ export function createBrowserEngineSettingsPorts(
     backendDTOs.delete(key);
   }
 
+  // 删除后端时在绑定设备上清掉它的凭据，**尽力而为**：设备离线、清不掉、已经不在
+  // 账号内，删除照样成立（spec「删除后端：尽力在绑定设备上清除凭据…设备离线时删除
+  // 仍然成功，残留凭据不处理」）。不清的话，那份 Gateway token 会以一个再也没有后端
+  // 引用得到的 sync_id 留在设备上。
+  //
+  // Hermes 这一侧还进不了控制台（后端类型白名单加入 hermes 在 spec B），所以按决策 8
+  // 判「同设备是否还有别的后端指向同一 URL」的那条路在这里没有对象，暂不铺。
+  async function clearBoundDeviceCredential(
+    backend: BackendDTO | undefined,
+  ): Promise<void> {
+    if (!backend || backend.type !== "openclaw") return;
+    try {
+      const device = await executionDevice(backend.device_fingerprint ?? "");
+      await credentialCall(device.fingerprint, rpcMethods.openClawTokenSet, {
+        syncId: backend.sync_id,
+        token: "",
+        clear: true,
+      });
+    } catch {
+      // 删除已经成立，清不掉只是留下一份无主凭据——不回头把删除报成失败。
+    }
+  }
+
   // updateBackend/updateOpenClawBackend 共用的落库步骤。回传 previous（PATCH 前
   // 缓存的那一行）专给 OpenClaw 版本在写 token 失败时回滚用；非 OpenClaw 调用方
   // 不看这一格。
@@ -875,7 +898,10 @@ export function createBrowserEngineSettingsPorts(
     },
 
     async deleteBackend(id) {
-      await deleteBackendRow(backendIDs.key(id));
+      const key = backendIDs.key(id);
+      const backend = backendDTOs.get(key);
+      await deleteBackendRow(key);
+      await clearBoundDeviceCredential(backend);
     },
 
     // OpenClaw 的 token 只经设备本地登记（决策 2/5）：建/改行照旧走 REST，token 另外

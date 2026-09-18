@@ -1343,6 +1343,67 @@ describe("device-local backend credentials", () => {
     ]);
   });
 
+  // 删除后端时尽力在绑定设备上清掉它的凭据（spec「删除后端」）：留在设备上的
+  // Gateway token 已经没有任何后端引用得到，删库成功却不清它就是无主残留。
+  // Hermes 这一侧还进不了控制台（后端类型白名单在 spec B 才加 hermes），所以这里
+  // 只有 OpenClaw 一条。
+  function deletableOpenClawBackend() {
+    const calls: string[] = [];
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === "/v1/engine/providers") return { providers: [] };
+      if (path === "/v1/engine/cli-overlays") return { overlays: [] };
+      if (path === "/v1/engine/backends" && !init?.method)
+        return {
+          backends: [
+            backendDTO({
+              sync_id: "backend-gw",
+              name: "Gateway",
+              type: "openclaw",
+              device_fingerprint: "agentred-b",
+            }),
+          ],
+        };
+      if (
+        path === "/v1/engine/backends/backend-gw" &&
+        init?.method === "DELETE"
+      ) {
+        calls.push(path);
+        return {};
+      }
+      throw new Error(`unexpected api call: ${path}`);
+    });
+    return calls;
+  }
+
+  it("clears the OpenClaw token on the bound device when the backend is deleted", async () => {
+    const deleted = deletableOpenClawBackend();
+    relay.request.mockResolvedValue({ tokenSaved: false });
+    const p = ports();
+    const [backend] = await p.listBackends();
+
+    await p.deleteBackend(backend.id);
+
+    expect(deleted).toEqual(["/v1/engine/backends/backend-gw"]);
+    expect(relayTargets()).toEqual(["agentred-b"]);
+    expect(relay.request).toHaveBeenCalledWith(rpcMethods.openClawTokenSet, {
+      syncId: "backend-gw",
+      token: "",
+      clear: true,
+    });
+  });
+
+  it("still deletes the backend when the bound device cannot be reached", async () => {
+    const deleted = deletableOpenClawBackend();
+    relay.request.mockRejectedValue(new Error("relay dropped"));
+    const p = ports();
+    const [backend] = await p.listBackends();
+
+    await expect(p.deleteBackend(backend.id)).resolves.toBeUndefined();
+
+    expect(deleted).toEqual(["/v1/engine/backends/backend-gw"]);
+  });
+
   it("tests an OpenClaw backend with a draft token, without saving it", async () => {
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/devices") return devicesResponse();
