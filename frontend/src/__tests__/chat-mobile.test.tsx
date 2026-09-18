@@ -14,7 +14,7 @@ import {
   within,
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
@@ -28,6 +28,24 @@ vi.mock("@/lib/api", async (importOriginal) => {
   return { ...actual, api: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
+// 会话详情本身由 session-detail*.test.tsx 守；这里只认 Chat 在移动端把哪一条、以什么
+// 形态、带着哪条返回地址交给它。
+vi.mock("@/components/session/SessionDetailView", () => ({
+  default: (props: {
+    deviceId: number;
+    conversationId: string;
+    form?: string;
+    backTo?: string;
+  }) => (
+    <div
+      data-testid="mobile-session-detail"
+      data-device-id={props.deviceId}
+      data-session-id={props.conversationId}
+      data-form={props.form ?? "page"}
+      data-back-to={props.backTo ?? ""}
+    />
+  ),
+}));
 
 const mockedApi = vi.mocked(api);
 const mockUseRelay = vi.mocked(useRelayChannel);
@@ -193,12 +211,20 @@ afterAll(() => {
   window.matchMedia = originalMatchMedia;
 });
 
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <p data-testid="chat-location">{location.pathname + location.search}</p>
+  );
+}
+
 function renderChat(entry = "/chat") {
   return render(
     <MemoryRouter initialEntries={[entry]}>
       <ThemeProvider>
+        <LocationProbe />
         <Routes>
-          <Route path="/chat" element={<Chat />} />
+          <Route path="/chat/:conversationId?" element={<Chat />} />
         </Routes>
       </ThemeProvider>
     </MemoryRouter>,
@@ -527,5 +553,37 @@ describe("移动端对话页：顶部", () => {
     ).toBe(true);
     // 语言/主题这一组全局控件也在这一带里（它们此前住在壳的顶栏）。
     expect(head.querySelectorAll("button").length).toBeGreaterThan(1);
+  });
+});
+
+/**
+ * 移动端的会话地址（规格 2026-09-17-chat-session-url「Mobile」）：会话号在地址上时
+ * 整屏是那条会话的详情，返回回到进来时那份范围的列表。
+ */
+describe("移动端对话页：会话地址", () => {
+  it("点一行进 /chat/:id，整屏换成详情，返回键回到带着原范围的 /chat", async () => {
+    stubApi([waitingMirrored]);
+    renderChat("/chat?axis=agent");
+
+    fireEvent.click(await screen.findByRole("link", { name: /等你批/ }));
+
+    const detail = await screen.findByTestId("mobile-session-detail");
+    expect(screen.getByTestId("chat-location").textContent).toBe(
+      "/chat/42?axis=agent",
+    );
+    expect(detail.getAttribute("data-form")).toBe("page");
+    expect(detail.getAttribute("data-device-id")).toBe("1");
+    expect(detail.getAttribute("data-back-to")).toBe("/chat?axis=agent");
+    // 单列：索引此刻不在屏上。
+    expect(screen.queryByTestId("chat-mobile-header")).toBeNull();
+  });
+
+  it("未保存的会话从外部链接直接打开：返回键回到 /chat，不带 device", async () => {
+    stubApi([]);
+    renderChat("/chat/11111111-1111-7111-8111-111111111111?device=1");
+
+    const detail = await screen.findByTestId("mobile-session-detail");
+    expect(detail.getAttribute("data-device-id")).toBe("1");
+    expect(detail.getAttribute("data-back-to")).toBe("/chat");
   });
 });

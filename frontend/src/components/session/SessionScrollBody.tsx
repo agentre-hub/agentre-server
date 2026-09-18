@@ -242,9 +242,9 @@ export default function SessionScrollBody({
            * 「机器离线」那一档的出口（两端统一）：那台机器够不着、续轮又不会
            * 改派，唯一走得通的路是另起一条。
            *
-           * 走 URL 而不是回调：本视图有两种形态，路由页那一种压根不在 `/chat`
-           * 里（移动端下钻、`/devices/:did/sessions/:sid` 都是），没有回调递得
-           * 过来。嵌入形态下 Chat 本来就挂着，参数一变它就开挑 Agent 那一屏。
+           * 走 URL 而不是回调：两种形态都挂在 `/chat/:conversationId` 下，但离
+           * Chat 隔着好几层，没有回调递得过来。参数一变 Chat 就离开这条会话、
+           * 开挑 Agent 那一屏。
            */
           onStartNew={() => nav("/chat?compose=1")}
         />

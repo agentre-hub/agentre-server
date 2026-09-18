@@ -152,8 +152,9 @@ export default function SessionComposerBand({
   }));
 
   /**
-   * 上下文用量。窗口从中转事件流里的 context_window_updated / usage 归约而来
-   * （reduceSessionState），用量取最后一条报得出 totalInputTokens 的助手消息。
+   * 上下文用量。窗口由详情视图解好交进来（事件流的
+   * context_window_updated / usage，答不出时按模型查引擎目录，见 sessionModel），
+   * 用量取最后一条报得出 totalInputTokens 的助手消息。
    */
   const contextUsage = computeContextUsage(messages, contextWindow);
 

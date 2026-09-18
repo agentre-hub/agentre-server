@@ -807,3 +807,67 @@ func TestCreateBatch_GivenUniqueKeyConflict_ThenErrorIsLoudAndLaterChunksAreNotS
 	assert.ErrorIs(t, err, identityConflict)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// web 写入「读 → 合并 → 写」要与设备上行串行：读必须带行锁、落在写入的那个事务里。
+// 不带锁的读只是把「设备上行落在读与写之间」的窗口缩小，那次上行照样被整行覆盖掉。
+// 墓碑同样取回（与 Find 同口径），由 service 判「删除不复活」。
+func TestFindForUpdate_GivenRow_ThenLockingReadByAccountAndSyncID(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT * FROM `sync_objects` WHERE user_id=? AND sync_id=? ORDER BY `sync_objects`.`id` LIMIT ? FOR UPDATE")).
+		WithArgs(int64(7), "dept-1", 1).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "user_id", "sync_id", "payload", "deleted_at"}).
+			AddRow(int64(3), int64(7), "dept-1", `{"name":"工程"}`, int64(1700)))
+
+	got, err := r.FindForUpdate(ctx, 7, "dept-1")
+	assert.NoError(t, err)
+	if assert.NotNil(t, got) {
+		assert.Equal(t, `{"name":"工程"}`, got.Payload)
+		assert.Equal(t, int64(1700), got.DeletedAt, "墓碑也取回，由 service 判")
+	}
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestFindForUpdate_GivenNoRow_ThenNilNil(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncObject()
+
+	mock.ExpectQuery(regexp.QuoteMeta("FOR UPDATE")).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+
+	got, err := r.FindForUpdate(ctx, 7, "gone")
+	assert.NoError(t, err)
+	assert.Nil(t, got)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// LockAccountSeq 只为拿锁，不推进序列：加锁的次序是一条全局约束（见
+// workspace_svc.WithOrgWriteTx），服务端直写要先排到账号序列那一行上，再去锁
+// sync_objects 的行——与设备上行（先取整批版本号、再写行）同序。
+func TestLockAccountSeq_ThenLockingSelectOnTheAccountSeqRow(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectQuery(regexp.QuoteMeta(
+		"SELECT version_seq FROM sync_account_seqs WHERE user_id = ? FOR UPDATE")).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}).AddRow(int64(42)))
+
+	assert.NoError(t, r.LockAccountSeq(ctx, 7))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 账号还没有序列行（绕过建号直接写 users 的历史账号）不是错误：那一行由
+// NextVersion 的回落分支建出来，这里只是没有可锁的东西。
+func TestLockAccountSeq_GivenNoSeqRow_ThenNoError(t *testing.T) {
+	ctx, _, mock := hubtest.Database(t)
+	r := NewSyncState()
+
+	mock.ExpectQuery(regexp.QuoteMeta("FOR UPDATE")).
+		WillReturnRows(sqlmock.NewRows([]string{"version_seq"}))
+
+	assert.NoError(t, r.LockAccountSeq(ctx, 7))
+	assert.NoError(t, mock.ExpectationsWereMet())
+}

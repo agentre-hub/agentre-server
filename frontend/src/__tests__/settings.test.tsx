@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
+import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
@@ -11,8 +12,25 @@ vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return { ...actual, api: vi.fn() };
 });
+vi.mock("@/lib/accountChannel", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/accountChannel")>();
+  return { ...actual, startAccountChannel: vi.fn(() => ({ stop: () => {} })) };
+});
 
 const mockedApi = vi.mocked(api);
+const mockedStartChannel = vi.mocked(accountChannel.startAccountChannel);
+
+/** 把一条信号送进这个标签页共用的那条账号通道（同 overview.test.tsx 的写法）。 */
+function deliver(signalType: string): void {
+  const call = mockedStartChannel.mock.calls.at(-1);
+  expect(call).toBeDefined();
+  call![0].onRefresh(signalType);
+}
+
+/** 这一轮里 api() 被打了哪些路径。 */
+function pathsCalled(): string[] {
+  return mockedApi.mock.calls.map(([path]) => String(path));
+}
 
 // 一台真实登记的执行端设备：Agent 后端页要有它才提供新建入口（规格决策 10）。
 const session = {
@@ -152,17 +170,10 @@ describe("Settings", () => {
               device_fingerprint: "agentred-b",
               provider_key: "",
               model_key: "",
-              model_routes: "{}",
-              sandbox: "",
-              approval: "",
               env_json: "{}",
               reasoning_effort: "",
-              default_permission_mode: "",
-              default_model: "",
-              openclaw_gateway_url: "",
-              openclaw_agent_id: "",
-              openclaw_default_model: "",
-              openclaw_session_mode: "",
+              // 九个平铺字段已删（S2）：单类型独占设置整体收在 config 里。
+              config: {},
               ref_count: 0,
               cli_by_device: [],
             },
@@ -305,5 +316,43 @@ describe("Settings", () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByText(/connection succeeded/i)).toBeNull();
+  });
+});
+
+// ── 跟着账号通道走（S5：Problem 9「陈旧页面整表覆盖」的另一半）──────────────
+//
+// 供应商/后端面板本身只在 refreshSignal 变化时重拉（共享包 D5 已经测过「重拉不
+// 打断正在编辑的弹窗」）；这里只验证控制台把哪类信号接到了 refreshSignal 上。
+describe("Settings: 跟着账号通道走", () => {
+  it("同步版本信号让供应商面板重拉列表；设备上下线那一类不会", async () => {
+    renderSettings();
+    await screen.findByText("Add First Provider");
+    mockedApi.mockClear();
+
+    // 不认识的那一类（这里是设备上下线）不该让供应商列表重拉一遍。
+    deliver(accountChannel.AccountChannelDevicePresence);
+    await waitFor(() => expect(pathsCalled().length).toBeGreaterThan(0));
+    expect(pathsCalled()).not.toContain("/v1/engine/providers");
+    mockedApi.mockClear();
+
+    deliver(accountChannel.AccountChannelSyncVersion);
+    await waitFor(() =>
+      expect(pathsCalled()).toContain("/v1/engine/providers"),
+    );
+  });
+
+  it("同步版本信号让后端面板重拉列表；设备上下线那一类不会", async () => {
+    renderSettings();
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent backends" }));
+    await screen.findByText("Add First Backend");
+    mockedApi.mockClear();
+
+    deliver(accountChannel.AccountChannelDevicePresence);
+    await waitFor(() => expect(pathsCalled().length).toBeGreaterThan(0));
+    expect(pathsCalled()).not.toContain("/v1/engine/backends");
+    mockedApi.mockClear();
+
+    deliver(accountChannel.AccountChannelSyncVersion);
+    await waitFor(() => expect(pathsCalled()).toContain("/v1/engine/backends"));
   });
 });

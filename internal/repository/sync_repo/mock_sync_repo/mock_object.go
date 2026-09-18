@@ -86,6 +86,21 @@ func (mr *MockSyncObjectRepoMockRecorder) Find(ctx, userID, syncID any) *gomock.
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Find", reflect.TypeOf((*MockSyncObjectRepo)(nil).Find), ctx, userID, syncID)
 }
 
+// FindForUpdate mocks base method.
+func (m *MockSyncObjectRepo) FindForUpdate(ctx context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindForUpdate", ctx, userID, syncID)
+	ret0, _ := ret[0].(*sync_entity.SyncObject)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindForUpdate indicates an expected call of FindForUpdate.
+func (mr *MockSyncObjectRepoMockRecorder) FindForUpdate(ctx, userID, syncID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindForUpdate", reflect.TypeOf((*MockSyncObjectRepo)(nil).FindForUpdate), ctx, userID, syncID)
+}
+
 // FindLiveByNaturalKeys mocks base method.
 func (m *MockSyncObjectRepo) FindLiveByNaturalKeys(ctx context.Context, userID int64, keys []sync_repo.NaturalKey) (map[sync_repo.NaturalKey]*sync_entity.SyncObject, error) {
 	m.ctrl.T.Helper()

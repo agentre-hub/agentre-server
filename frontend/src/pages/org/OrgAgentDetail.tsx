@@ -126,14 +126,16 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
   };
 
   const toggleTool = (key: string) => {
-    // 与桌面端同形（org-detail-agent.tsx）：稠密表示——已知的每个 key 都在数组里
-    // 带一个 enabled 位，不是「只列已授权的」那种稀疏数组。
-    const current = new Map(tools.map((tl) => [tl.key, tl.enabled]));
-    const next = ORG_TOOL_KEYS.map((k) => ({
-      key: k,
-      enabled:
-        k === key ? !(current.get(k) ?? false) : (current.get(k) ?? false),
-    }));
+    // 只改被点的那一项，其它条目原样保留（含桌面端设过、这一版 web 不认识的
+    // key，以及它们的额外字段与次序）——不能像旧版那样按 ORG_TOOL_KEYS 重建整份
+    // 列表，那会把「web 不认识」的条目在下一次保存时悄悄丢掉。命中就翻转，没有
+    // 就在末尾追加一条新的（不补全其余已知 key，只把被点的这个变成已知）。
+    const found = tools.some((tl) => tl.key === key);
+    const next = found
+      ? tools.map((tl) =>
+          tl.key === key ? { ...tl, enabled: !tl.enabled } : tl,
+        )
+      : [...tools, { key, enabled: true }];
     saveIfChanged({ tools_json: JSON.stringify(next) });
   };
 

@@ -86,8 +86,6 @@
   },
   "historyUnavailableOffline": "账号里没有这条对话的历史，所以它所在的机器不在线时读不到它。",
   "breadcrumb": {
-    "devices": "设备",
-    "switchMachine": "换机器",
     "online": "在线",
     "offline": "离线",
     "back": "返回"
@@ -120,5 +118,12 @@
     "copySessionId": "复制对话号",
     "sessionIdCopied": "已复制对话号",
     "copySessionIdFailed": "复制对话号失败"
+  },
+  "address": {
+    "notFound": {
+      "title": "找不到这条对话",
+      "body": "它可能已经被删除，或者不在这个账号里。"
+    },
+    "loadError": "这条对话没加载出来，请重试。"
   }
 }

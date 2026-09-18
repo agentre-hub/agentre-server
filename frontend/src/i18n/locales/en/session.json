@@ -86,8 +86,6 @@
   },
   "historyUnavailableOffline": "This conversation's history is not in your account, so it cannot be read while its machine is offline.",
   "breadcrumb": {
-    "devices": "Devices",
-    "switchMachine": "Switch machine",
     "online": "Online",
     "offline": "Offline",
     "back": "Back"
@@ -120,5 +118,12 @@
     "copySessionId": "Copy conversation ID",
     "sessionIdCopied": "Conversation ID copied",
     "copySessionIdFailed": "Could not copy the conversation ID"
+  },
+  "address": {
+    "notFound": {
+      "title": "Conversation not found",
+      "body": "It may have been deleted, or it isn't in this account."
+    },
+    "loadError": "Couldn't load this conversation. Try again."
   }
 }

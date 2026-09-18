@@ -80,6 +80,12 @@ const AGENTRED_ONLY_CALLERS: readonly {
     via: "onlineAgentred",
     why: "供应商级的连通性检测 / 模型发现不绑机器，随便挑一台在线 agentred 问即可；桌面端不注册 engineDiscover。",
   },
+  {
+    file: "src/components/session/useSteerAutoContinue.ts",
+    callee: "drainPendingSteers",
+    via: "agentredCarrier",
+    why: "轮末取回没被消费的插话，只对 agentred 托管的对话成立：桌面端托管的那条由它自己的 chat_svc 在轮末 DrainPending 并自动接续（turn_run.go），控制台去取就是从它手里抢；桌面端也因此不注册 runtimeDrainPending。",
+  },
 ];
 
 /** 取一条通道的三个入口。目标就是它们的第一个实参。 */

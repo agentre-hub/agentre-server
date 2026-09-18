@@ -121,30 +121,32 @@ func (s *issueBoardSvc) CreateIssue(ctx context.Context, in IssueWriteInput) (*w
 }
 
 func (s *issueBoardSvc) UpdateIssue(ctx context.Context, in IssueWriteInput) (*workspace_svc.OrgWriteResult, error) {
-	row, err := findBoardRow(ctx, in.UserID, sync_entity.KindIssue, in.SyncID)
-	if err != nil {
-		return nil, err
-	}
 	fields := copyOrgFields(in.Fields)
-	if err := checkIssueFields(ctx, fields); err != nil {
-		return nil, err
-	}
-	if _, ok := fields["title"]; ok && strings.TrimSpace(stringField(fields, "title")) == "" {
-		return nil, i18n.NewError(ctx, code.InvalidParameter)
-	}
-	data, err := s.loadBoardWriteData(ctx, in.UserID)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkIssueReferences(ctx, data, fields, in.LabelSyncIDs); err != nil {
-		return nil, err
-	}
-	if stage, ok := fields["stage"]; ok {
-		normalized := normalizeStage(toString(stage))
-		fields["stage"] = normalized
-		fields["closed_at"] = closedAtFor(normalized, payloadClosedAt(row))
-	}
+	var row *sync_entity.SyncObject
 	if err := boardWrite(ctx, in.UserID, func(ctx context.Context) (int64, error) {
+		locked, err := lockBoardRow(ctx, in.UserID, sync_entity.KindIssue, in.SyncID)
+		if err != nil {
+			return 0, err
+		}
+		row = locked
+		if err := checkIssueFields(ctx, fields); err != nil {
+			return 0, err
+		}
+		if _, ok := fields["title"]; ok && strings.TrimSpace(stringField(fields, "title")) == "" {
+			return 0, i18n.NewError(ctx, code.InvalidParameter)
+		}
+		data, err := s.loadBoardWriteData(ctx, in.UserID)
+		if err != nil {
+			return 0, err
+		}
+		if err := checkIssueReferences(ctx, data, fields, in.LabelSyncIDs); err != nil {
+			return 0, err
+		}
+		if stage, ok := fields["stage"]; ok {
+			normalized := normalizeStage(toString(stage))
+			fields["stage"] = normalized
+			fields["closed_at"] = closedAtFor(normalized, payloadClosedAt(row))
+		}
 		if err := s.saveIssuePayload(ctx, in.UserID, row, fields); err != nil {
 			return 0, err
 		}
@@ -167,21 +169,23 @@ func (s *issueBoardSvc) MoveIssue(ctx context.Context, in IssueMoveInput) (*work
 	if in.Stage != "" && stage != in.Stage {
 		return nil, i18n.NewError(ctx, code.InvalidParameter)
 	}
-	row, err := findBoardRow(ctx, in.UserID, sync_entity.KindIssue, in.SyncID)
-	if err != nil {
-		return nil, err
-	}
-	data, err := s.loadBoardWriteData(ctx, in.UserID)
-	if err != nil {
-		return nil, err
-	}
-	fields := map[string]any{
-		"stage":     stage,
-		"position":  positionAfter(data.issues, stage, in.SyncID, in.AfterSyncID),
-		"closed_at": closedAtFor(stage, payloadClosedAt(row)),
-	}
+	var row *sync_entity.SyncObject
 	if err := boardWrite(ctx, in.UserID, func(ctx context.Context) (int64, error) {
-		err := s.saveIssuePayload(ctx, in.UserID, row, fields)
+		locked, err := lockBoardRow(ctx, in.UserID, sync_entity.KindIssue, in.SyncID)
+		if err != nil {
+			return 0, err
+		}
+		row = locked
+		data, err := s.loadBoardWriteData(ctx, in.UserID)
+		if err != nil {
+			return 0, err
+		}
+		fields := map[string]any{
+			"stage":     stage,
+			"position":  positionAfter(data.issues, stage, in.SyncID, in.AfterSyncID),
+			"closed_at": closedAtFor(stage, payloadClosedAt(row)),
+		}
+		err = s.saveIssuePayload(ctx, in.UserID, row, fields)
 		return row.Version, err
 	}); err != nil {
 		return nil, err
@@ -197,15 +201,7 @@ func (s *issueBoardSvc) MoveIssue(ctx context.Context, in IssueMoveInput) (*work
 func (s *issueBoardSvc) DeleteIssue(
 	ctx context.Context, userID int64, syncID string,
 ) (*workspace_svc.OrgWriteResult, error) {
-	row, err := findBoardRow(ctx, userID, sync_entity.KindIssue, syncID)
-	if err != nil {
-		return nil, err
-	}
-	data, err := s.loadBoardWriteData(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	return s.deleteBoardRow(ctx, userID, row, data, "issue_svc.DeleteIssue",
+	return s.deleteBoardRow(ctx, userID, sync_entity.KindIssue, syncID, "issue_svc.DeleteIssue",
 		func(p syncwire.IssueLabelPayload) bool { return p.IssueSyncID == syncID })
 }
 
@@ -236,31 +232,33 @@ func (s *issueBoardSvc) CreateLabel(ctx context.Context, in LabelWriteInput) (*w
 }
 
 func (s *issueBoardSvc) UpdateLabel(ctx context.Context, in LabelWriteInput) (*workspace_svc.OrgWriteResult, error) {
-	row, err := findBoardRow(ctx, in.UserID, sync_entity.KindLabel, in.SyncID)
-	if err != nil {
-		return nil, err
-	}
 	fields := copyOrgFields(in.Fields)
-	if tone, ok := fields["tone"]; ok && !knownIssueTone(toString(tone)) {
-		return nil, i18n.NewError(ctx, code.InvalidParameter)
-	}
-	if raw, ok := fields["name"]; ok {
-		name := strings.TrimSpace(toString(raw))
-		if name == "" {
-			return nil, i18n.NewError(ctx, code.InvalidParameter)
-		}
-		fields["name"] = name
-		if err := s.checkLabelNameFree(ctx, in.UserID, name, row.SyncID); err != nil {
-			return nil, err
-		}
-	}
-	payload, err := workspace_svc.WithOrgFields(row.Payload, fields)
-	if err != nil {
-		return nil, err
-	}
-	row.Payload = payload
+	var row *sync_entity.SyncObject
 	if err := boardWrite(ctx, in.UserID, func(ctx context.Context) (int64, error) {
-		err := workspace_svc.WriteOrgRow(ctx, in.UserID, row)
+		locked, err := lockBoardRow(ctx, in.UserID, sync_entity.KindLabel, in.SyncID)
+		if err != nil {
+			return 0, err
+		}
+		row = locked
+		if tone, ok := fields["tone"]; ok && !knownIssueTone(toString(tone)) {
+			return 0, i18n.NewError(ctx, code.InvalidParameter)
+		}
+		if raw, ok := fields["name"]; ok {
+			name := strings.TrimSpace(toString(raw))
+			if name == "" {
+				return 0, i18n.NewError(ctx, code.InvalidParameter)
+			}
+			fields["name"] = name
+			if err := s.checkLabelNameFree(ctx, in.UserID, name, row.SyncID); err != nil {
+				return 0, err
+			}
+		}
+		payload, err := workspace_svc.WithOrgFields(row.Payload, fields)
+		if err != nil {
+			return 0, err
+		}
+		row.Payload = payload
+		err = workspace_svc.WriteOrgRow(ctx, in.UserID, row)
 		return row.Version, err
 	}); err != nil {
 		return nil, err
@@ -276,15 +274,7 @@ func (s *issueBoardSvc) UpdateLabel(ctx context.Context, in LabelWriteInput) (*w
 func (s *issueBoardSvc) DeleteLabel(
 	ctx context.Context, userID int64, syncID string,
 ) (*workspace_svc.OrgWriteResult, error) {
-	row, err := findBoardRow(ctx, userID, sync_entity.KindLabel, syncID)
-	if err != nil {
-		return nil, err
-	}
-	data, err := s.loadBoardWriteData(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	return s.deleteBoardRow(ctx, userID, row, data, "issue_svc.DeleteLabel",
+	return s.deleteBoardRow(ctx, userID, sync_entity.KindLabel, syncID, "issue_svc.DeleteLabel",
 		func(p syncwire.IssueLabelPayload) bool { return p.LabelSyncID == syncID })
 }
 
@@ -298,17 +288,21 @@ func (s *issueBoardSvc) loadBoardWriteData(ctx context.Context, userID int64) (*
 	return loadBoardData(rows), nil
 }
 
-// findBoardRow 把三条拒绝判在写入之前，与组织面的 findOrgRowForWrite 逐条同口径：
-// 行在**当前账号**下不存在（跨账号的那一行正落在这里，Find 按（账号, 同步标识）取）、
-// 类型与端点不符（与「不存在」共用一个码，分开就等于给出一个跨账号的存在性探测器）、
-// 行已是墓碑（删除不复活，R6）。
-func findBoardRow(
+// lockBoardRow 在写入事务里**带行锁**取出要写的那一行，并把三条拒绝判在写入之前，
+// 与组织面的 lockOrgRowForWrite 逐条同口径：行在**当前账号**下不存在（跨账号的那一行
+// 正落在这里，按（账号, 同步标识）取）、类型与端点不符（与「不存在」共用一个码，分开
+// 就等于给出一个跨账号的存在性探测器）、行已是墓碑（删除不复活，R6）。
+//
+// **只能在事务里调用**（boardWrite）：锁持到提交，「读 → 合并 → 写」才与设备上行串行。
+// 读在事务外时，设备在读与写之间推上来的那一版会被旧副本整行覆盖——WriteOrgRow 取到的
+// 版本号更大，Save 的版本条件照样成立。
+func lockBoardRow(
 	ctx context.Context, userID int64, kind, syncID string,
 ) (*sync_entity.SyncObject, error) {
 	if syncID == "" {
 		return nil, i18n.NewNotFoundError(ctx, code.OrgObjectNotFound)
 	}
-	row, err := sync_repo.SyncObject().Find(ctx, userID, syncID)
+	row, err := sync_repo.SyncObject().FindForUpdate(ctx, userID, syncID)
 	if err != nil {
 		return nil, err
 	}
@@ -367,7 +361,7 @@ func (s *issueBoardSvc) createBoardRow(
 // 抖动不该回滚一次已经算数的写入；提交之前喊出去，赶来拉取的一端还看不到这一版）。
 func boardWrite(ctx context.Context, userID int64, fn func(context.Context) (int64, error)) error {
 	var version int64
-	if err := workspace_svc.WithOrgWriteTx(ctx, func(ctx context.Context) error {
+	if err := workspace_svc.WithOrgWriteTx(ctx, userID, func(ctx context.Context) error {
 		v, err := fn(ctx)
 		version = v
 		return err
@@ -383,12 +377,21 @@ func boardWrite(ctx context.Context, userID int64, fn func(context.Context) (int
 // 两步同在一个事务里（同 workspace_svc.DeleteOrgObject 的级联）：分开提交时中途失败
 // 会留下一串指向已消失对象的悬空引用，或者反过来——主行没了而关联还在。顺序仍是关联
 // 先、主行后，主行因此拿到这次操作推进到的最高版本，提交之后那一次广播就把整批带出去。
+// 主行在同一个事务里加锁读（lockBoardRow），墓碑留下的是库里此刻的最新正文。
 func (s *issueBoardSvc) deleteBoardRow(
-	ctx context.Context, userID int64, row *sync_entity.SyncObject, data *boardData,
+	ctx context.Context, userID int64, kind, syncID string,
 	from string, pick func(syncwire.IssueLabelPayload) bool,
 ) (*workspace_svc.OrgWriteResult, error) {
 	var res *workspace_svc.OrgWriteResult
 	if err := boardWrite(ctx, userID, func(ctx context.Context) (int64, error) {
+		row, err := lockBoardRow(ctx, userID, kind, syncID)
+		if err != nil {
+			return 0, err
+		}
+		data, err := s.loadBoardWriteData(ctx, userID)
+		if err != nil {
+			return 0, err
+		}
 		if _, err := s.tombstoneLinks(ctx, userID, data, pick); err != nil {
 			return 0, err
 		}

@@ -8,9 +8,9 @@
  * 把「内容会存在服务器上」说清楚（决策 2）——一个顶栏书签图标表达不了这件事，
  * 它调的那两个写端点（POST /v1/follows、POST /v1/follows/unfollow）也已经不在了。
  */
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import {
   afterAll,
   afterEach,
@@ -26,7 +26,6 @@ import { useRelayChannel } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
-import SessionDetail from "@/pages/SessionDetail";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -105,7 +104,7 @@ afterAll(() => {
   window.matchMedia = originalMatchMedia;
 });
 
-function renderPage() {
+function renderPage(props: { backTo?: string } = {}) {
   mockUseRelay.mockImplementation(() => ({
     client: fakeClient as never,
     relayState: "connected",
@@ -120,14 +119,14 @@ function renderPage() {
     reconnect: vi.fn(),
   }));
   return render(
-    <MemoryRouter initialEntries={[`/devices/1/sessions/${CID}`]}>
+    <MemoryRouter initialEntries={[`/chat/${CID}`]}>
       <ThemeProvider>
-        <Routes>
-          <Route
-            path="/devices/:deviceId/sessions/:conversationId"
-            element={<SessionDetail />}
-          />
-        </Routes>
+        <SessionDetailView
+          deviceId={1}
+          conversationId={CID}
+          form="page"
+          backTo={props.backTo}
+        />
       </ThemeProvider>
     </MemoryRouter>,
   );
@@ -169,6 +168,32 @@ describe("移动端会话详情:「关注」已经作废(决策 5)", () => {
       String(c[0]).startsWith("/v1/saved-sessions"),
     );
     expect(savedSessionCalls).toEqual([]);
+  });
+});
+
+describe("移动端会话详情：返回", () => {
+  it("返回键回到宿主给的列表地址，旁边是机器名与在线状态", async () => {
+    mockMobileViewport();
+    stubApi();
+    renderPage({ backTo: "/chat?axis=agent" });
+
+    const back = await screen.findByRole("link", { name: "Back" });
+    expect(back.getAttribute("href")).toBe("/chat?axis=agent");
+    const row = screen.getByRole("navigation", { name: "Back" });
+    expect(await within(row).findByText("书房小主机")).toBeTruthy();
+    expect(within(row).getByText("Online")).toBeTruthy();
+    // 桌面独立详情页那一套面包屑随独立页一起没了：返回行里不再有「设备」。
+    // （壳的侧栏导航里本来就有「设备」，这里只看返回行自己。）
+    expect(within(row).queryByRole("link", { name: "Devices" })).toBeNull();
+  });
+
+  it("宿主没给返回地址时回到 /chat", async () => {
+    mockMobileViewport();
+    stubApi();
+    renderPage();
+
+    const back = await screen.findByRole("link", { name: "Back" });
+    expect(back.getAttribute("href")).toBe("/chat");
   });
 });
 
@@ -218,5 +243,15 @@ describe("桌面端会话详情(非移动)", () => {
     expect(await screen.findByText("重构登录页")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Follow" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Unfollow" })).toBeNull();
+  });
+
+  it("整屏形态的返回行回到宿主给的列表地址", async () => {
+    stubApi();
+    renderPage({ backTo: "/chat" });
+
+    expect(await screen.findByText("重构登录页")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Back" }).getAttribute("href"),
+    ).toBe("/chat");
   });
 });

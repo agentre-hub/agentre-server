@@ -16,16 +16,6 @@ import type { SessionIndexData } from "@/pages/chat/useSessionIndex";
 type SessionIndexProps = ComponentProps<typeof SessionIndex>;
 
 /**
- * 会话详情的路由地址。放在模块级而不是内联箭头:SessionIndex 的 renderRow 把它列在
- * 依赖数组里(openRow 也是),内联写法会让它每次 Chat 渲染都变成新引用,于是索引里
- * 所有行的 JSX 全部重造。而 Chat 有 30+ 个 state——搜索框每敲一个字符(250ms 防抖
- * 只挡住网络请求、挡不住渲染)、每 30 秒的兜底轮询、每条 mirror_changed 信号,都会
- * 走一遍。它不依赖任何 props 或 state,本来就没有留在组件里的理由。
- */
-const sessionDetailPath = (deviceId: number, conversationId: string) =>
-  `/devices/${deviceId}/sessions/${conversationId}`;
-
-/**
  * 这一次取数**有结论了**——成功或失败都算。索引的外壳（轴选择器、筛选 chips、
  * 搜索框）据此渲染：它们回答的是各自的问题，不该陪着行一起消失（决策 14）。
  */
@@ -125,6 +115,13 @@ export interface ChatIndexPanelProps {
   machineRangePending: boolean;
   /** 「已知的可见变化」3：移动端行尾保留本地化的状态文字徽标。 */
   rowStatusLabel: boolean;
+  /**
+   * 一条会话的地址（`/chat/:conversationId`，见 lib/sessionAddress）。它继承页面此刻
+   * 的索引范围，因此由页面给。**引用要稳**：SessionIndex 的 renderRow 与 openRow 都
+   * 把它列在依赖里，每次渲染换一个引用会让索引里所有行的 JSX 整片重造，而 Chat 的
+   * 渲染很密（搜索框每敲一个字、每条 mirror_changed 信号）。
+   */
+  sessionPath: SessionIndexProps["sessionPath"];
 }
 
 export function ChatIndexPanel({
@@ -145,6 +142,7 @@ export function ChatIndexPanel({
   onAgentNewSession,
   machineRangePending,
   rowStatusLabel,
+  sessionPath,
 }: ChatIndexPanelProps) {
   const { t } = useTranslation();
   const machineStates: SessionIndexProps["machineStates"] =
@@ -262,7 +260,7 @@ export function ChatIndexPanel({
         // Agent 轴上「在这一组里开一条」：项目组头的 ＋ 还要先挑成员，这里那一维
         // 本来就定了，因此直接落到草稿。
         onAgentNewSession={onAgentNewSession}
-        sessionPath={sessionDetailPath}
+        sessionPath={sessionPath}
       />
     </div>
   );

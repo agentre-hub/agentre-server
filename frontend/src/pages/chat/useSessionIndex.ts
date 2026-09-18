@@ -38,6 +38,12 @@ export interface SessionIndexInput {
   filter: SessionFilter;
   /** 删掉一条之后：右栏正开着它的话要收起来——那是右栏的事，不是索引的事。 */
   onDeleted: (row: MirrorIndexRow) => void;
+  /**
+   * 一条对话真的写进账号之后（应答回来，不是乐观那一刻）：右栏正开着它的话，地址上
+   * 那个只给未保存会话用的 `?device=` 该去掉了——同样是右栏的事。行尾保存与发起即
+   * 保存的重试两条路都报，因此只交身份。
+   */
+  onSaved?: (conversationId: string) => void;
 }
 
 /**
@@ -175,6 +181,7 @@ export function useSessionIndex({
   devices,
   filter,
   onDeleted,
+  onSaved,
 }: SessionIndexInput): SessionIndexData {
   /** 服务端按当前轴给的组骨架（不带 scope 那一次的应答）。 */
   const [indexGroups, setIndexGroups] = useState<IndexGroupPayload[]>([]);
@@ -620,6 +627,7 @@ export function useSessionIndex({
         setSaveFailure((prev) =>
           prev?.conversationId === row.conversationId ? null : prev,
         );
+        onSaved?.(row.conversationId);
       } catch {
         setOptimisticSaved((prev) =>
           prev.filter((s) => s.conversation_id !== row.conversationId),
@@ -636,7 +644,7 @@ export function useSessionIndex({
         });
       }
     },
-    [devices, shiftTotals],
+    [devices, shiftTotals, onSaved],
   );
 
   /**
@@ -678,11 +686,12 @@ export function useSessionIndex({
         });
         setSaveFailure(null);
         setIndexNonce((n) => n + 1);
+        onSaved?.(saveFailure.conversationId);
       } catch {
         // 还是没写成：横幅留在原地，那颗重试照常按得动。
       }
     })();
-  }, [saveFailure, doSave]);
+  }, [saveFailure, doSave, onSaved]);
 
   const onSave = useCallback(
     (row: MirrorIndexRow) => {

@@ -85,6 +85,20 @@ func (mr *MockSyncStateRepoMockRecorder) FindDeviceState(ctx, userID, deviceID a
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindDeviceState", reflect.TypeOf((*MockSyncStateRepo)(nil).FindDeviceState), ctx, userID, deviceID)
 }
 
+// LockAccountSeq mocks base method.
+func (m *MockSyncStateRepo) LockAccountSeq(ctx context.Context, userID int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LockAccountSeq", ctx, userID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// LockAccountSeq indicates an expected call of LockAccountSeq.
+func (mr *MockSyncStateRepoMockRecorder) LockAccountSeq(ctx, userID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockAccountSeq", reflect.TypeOf((*MockSyncStateRepo)(nil).LockAccountSeq), ctx, userID)
+}
+
 // NextVersion mocks base method.
 func (m *MockSyncStateRepo) NextVersion(ctx context.Context, userID, n int64) (int64, error) {
 	m.ctrl.T.Helper()

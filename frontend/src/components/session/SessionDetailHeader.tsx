@@ -1,7 +1,7 @@
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import type { SessionSummary } from "@agentre-hub/agentre-wire";
 import { useState, type ReactNode, type RefObject } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Monitor, MoreHorizontal, Square } from "lucide-react";
 import {
@@ -20,7 +20,6 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
-import { useIsMobile } from "@/components/use-is-mobile";
 import type { RelayClient } from "@/lib/relayClient";
 import {
   formatRelativeTime,
@@ -30,9 +29,13 @@ import {
 } from "@/lib/sessionView";
 
 export interface SessionDetailHeaderProps {
-  /** 路由页形态才有面包屑 / 移动返回（决策 16）。 */
+  /**
+   * 整屏形态（移动端 `/chat/:conversationId`）才有返回行。嵌入形态是桌面右栏，左栏
+   * 就在旁边，没有可返回的地方。
+   */
   isPage: boolean;
-  did: number;
+  /** 返回行回到哪：宿主的会话列表地址（带着进来时的范围）。不给就回 `/chat`。 */
+  backTo?: string;
   sid: string;
   /**
    * 头部认这条对话用的摘要：中继的实况优先，没有时退到账号镜像那一行。
@@ -89,7 +92,7 @@ export interface SessionDetailHeaderProps {
 }
 
 /**
- * 详情头部：面包屑（页面形态）+ 身份行（头像 / 标题 / mono meta 行）+ 连接指示
+ * 详情头部：返回行（整屏形态）+ 身份行（头像 / 标题 / mono meta 行）+ 连接指示
  * + 停止。
  *
  * 「这一轮停不停得下来」整片归它：`aborting` 与 `abortTurn` 除了这颗按钮没有第二
@@ -97,7 +100,7 @@ export interface SessionDetailHeaderProps {
  */
 export default function SessionDetailHeader({
   isPage,
-  did,
+  backTo,
   sid,
   identity,
   agent,
@@ -115,8 +118,6 @@ export default function SessionDetailHeader({
   originRef,
 }: SessionDetailHeaderProps) {
   const { t, i18n } = useTranslation();
-  const nav = useNavigate();
-  const isMobile = useIsMobile();
   /** 正在发停止请求（按下去到应答之间不重复发）。 */
   const [aborting, setAborting] = useState(false);
 
@@ -243,7 +244,7 @@ export default function SessionDetailHeader({
   if (machineName) {
     metaParts.push({
       key: "machine",
-      // 最先收：机器名在面包屑与设备页里都还在，这一行不是它唯一的出处。
+      // 最先收：机器名在返回行与设备页里都还在，这一行不是它唯一的出处。
       hideAt: "@max-[560px]/header:hidden",
       node: (
         <span className="inline-flex shrink-0 items-center gap-1">
@@ -270,8 +271,8 @@ export default function SessionDetailHeader({
       data-testid="session-detail-header"
       // relative：连接指示器的那条进度条按头部定位，铺满它的底边（决策 2）。
       //
-      // 两种形态的外层不同高：路由页形态要在身份行之上再摆一行面包屑，所以是
-      // 「面包屑 + 身份行」两段加一圈内边距；嵌入形态没有面包屑，外层就**是**那条
+      // 两种形态的外层不同高：整屏形态要在身份行之上再摆一行返回行，所以是
+      // 「返回行 + 身份行」两段加一圈内边距；嵌入形态没有返回行，外层就**是**那条
       // 68px 顶带 —— 此前它照样带着那圈 `py-2.5`，把 68 撑成 89，什么都没多装。
       className={cn(
         "relative flex shrink-0 flex-col border-b border-border bg-card px-5",
@@ -279,68 +280,37 @@ export default function SessionDetailHeader({
       )}
     >
       {isPage && (
-        /* 路由页导航（决策 16，屏 22）：移动返回 + 设备名；桌面面包屑。 */
+        /* 整屏形态的返回行（屏 22）：返回列表 + 机器名与在线状态。 */
         <nav
-          aria-label={t("session.breadcrumb.devices")}
+          aria-label={t("session.breadcrumb.back")}
           className="flex flex-wrap items-center gap-2 text-sm"
         >
-          {isMobile ? (
-            <>
-              {/* 下钻三联的返回：设备 → 这台机器的对话 → 对话详情（决策 16，屏 22）。 */}
-              <Link
-                to={`/devices/${did}/sessions`}
-                aria-label={t("session.breadcrumb.back")}
-                className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              >
-                <ArrowLeft className="size-5" aria-hidden="true" />
-              </Link>
-              <span className="truncate font-semibold text-foreground">
-                {machineName ?? ""}
-              </span>
-              <span
-                className={
-                  machineOnline === false
-                    ? "text-destructive"
-                    : "text-status-waiting"
-                }
-              >
-                {machineOnline === false
-                  ? t("session.breadcrumb.offline")
-                  : t("session.breadcrumb.online")}
-              </span>
-              <span className="flex-1" />
-              {/* 这里曾经是「关注 / 取消关注」那个书签开关。它随决策 5 一起作废：
-                  收进账号现在叫**保存**，入口在索引的机器轴那一档（决策 11），
-                  而且第一次保存要先说清楚内容会被存到服务器上（决策 2）——一个
-                  顶栏图标表达不了这件事。 */}
-            </>
-          ) : (
-            <>
-              <Link
-                to="/devices"
-                className="font-medium text-muted-foreground hover:text-foreground"
-              >
-                {t("session.breadcrumb.devices")}
-              </Link>
-              <span aria-hidden="true" className="text-decorative-foreground">
-                /
-              </span>
-              <Link
-                to={`/devices/${did}/sessions`}
-                className="font-medium text-muted-foreground hover:text-foreground"
-              >
-                {machineName ?? ""}
-              </Link>
-              <span className="flex-1" />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => nav("/devices")}
-              >
-                {t("session.breadcrumb.switchMachine")}
-              </Button>
-            </>
-          )}
+          <Link
+            to={backTo ?? "/chat"}
+            aria-label={t("session.breadcrumb.back")}
+            className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ArrowLeft className="size-5" aria-hidden="true" />
+          </Link>
+          <span className="truncate font-semibold text-foreground">
+            {machineName ?? ""}
+          </span>
+          <span
+            className={
+              machineOnline === false
+                ? "text-destructive"
+                : "text-status-waiting"
+            }
+          >
+            {machineOnline === false
+              ? t("session.breadcrumb.offline")
+              : t("session.breadcrumb.online")}
+          </span>
+          <span className="flex-1" />
+          {/* 这里曾经是「关注 / 取消关注」那个书签开关。它随决策 5 一起作废：
+              收进账号现在叫**保存**，入口在索引的机器轴那一档（决策 11），
+              而且第一次保存要先说清楚内容会被存到服务器上（决策 2）——一个
+              顶栏图标表达不了这件事。 */}
         </nav>
       )}
 

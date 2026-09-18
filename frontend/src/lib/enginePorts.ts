@@ -40,6 +40,26 @@ type CLIOverlayDTO = {
   cli_path: string;
 };
 
+/**
+ * 后端的单类型独占设置对象。键表归 syncwire.AgentBackendConfig：camelCase，但
+ * openclaw 四个键在契约里是全小写前缀 `openclaw*`（不是共享包 BackendView /
+ * BackendInput 上的 `openClaw*`），映射两侧时这一处大小写必须显式换。
+ */
+type BackendConfigDTO = {
+  modelRoutes?: Record<string, { providerKey: string; modelKey: string }>;
+  sandbox?: string;
+  approval?: string;
+  defaultPermissionMode?: string;
+  defaultModel?: string;
+  openclawGatewayUrl?: string;
+  openclawAgentId?: string;
+  openclawDefaultModel?: string;
+  openclawSessionMode?: string;
+  hermesUrl?: string;
+  hermesAuthProvider?: string;
+  hermesUserId?: string;
+};
+
 type BackendDTO = {
   sync_id: string;
   name: string;
@@ -47,17 +67,11 @@ type BackendDTO = {
   device_fingerprint: string;
   provider_key: string;
   model_key: string;
-  model_routes: string;
-  sandbox: string;
-  approval: string;
   env_json: string;
   reasoning_effort: string;
-  default_permission_mode: string;
-  default_model: string;
-  openclaw_gateway_url: string;
-  openclaw_agent_id: string;
-  openclaw_default_model: string;
-  openclaw_session_mode: string;
+  // 九个平铺字段已删（S2）：单类型独占设置现在整体收在这一个 JSON 对象里，
+  // 旧平铺格式的行服务端读作 {}。
+  config: BackendConfigDTO | null;
   ref_count: number;
   cli_by_device: Array<{
     fingerprint: string;
@@ -211,39 +225,36 @@ function modelBody(input: Record<string, unknown>): ModelDTO {
   };
 }
 
-function updateModelBody(
-  current: ModelDTO,
+/**
+ * 单模型 PATCH（S3 端点）只带调用方实际给了的那几个字段——服务端按「带则替换、
+ * 缺省保留」处理，其它模型与这一个模型未提的字段都不受影响。不再像旧
+ * `updateModelBody` 那样拿当前值补全整条：那是给「发一整条 ModelDTO」这件事
+ * 准备的，单模型端点不需要。
+ */
+function modelPatchBody(
   input: Record<string, unknown>,
-): ModelDTO {
-  return {
-    model_key: current.model_key,
+): Record<string, unknown> {
+  return compact({
     model_id:
-      input.modelId === undefined
-        ? current.model_id
-        : stringValue(input.modelId),
-    name: input.name === undefined ? current.name : stringValue(input.name),
-    enabled:
-      typeof input.enabled === "boolean" ? input.enabled : current.enabled,
+      input.modelId === undefined ? undefined : stringValue(input.modelId),
+    name: input.name === undefined ? undefined : stringValue(input.name),
+    enabled: typeof input.enabled === "boolean" ? input.enabled : undefined,
     context_window:
       input.contextWindow === undefined
-        ? current.context_window
+        ? undefined
         : numberValue(input.contextWindow),
     max_output:
-      input.maxOutput === undefined
-        ? current.max_output
-        : numberValue(input.maxOutput),
-  };
+      input.maxOutput === undefined ? undefined : numberValue(input.maxOutput),
+  });
 }
 
 function parseModelRoutes(
-  value: string,
+  value: unknown,
 ): Record<string, { providerKey: string; modelKey: string }> {
-  try {
-    const parsed: unknown = JSON.parse(value || "{}");
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-      return {};
-    return Object.fromEntries(
-      Object.entries(parsed).flatMap(([tier, target]) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).flatMap(
+      ([tier, target]) => {
         if (!target || typeof target !== "object" || Array.isArray(target))
           return [];
         const record = target as Record<string, unknown>;
@@ -252,48 +263,116 @@ function parseModelRoutes(
         return [
           [tier, { providerKey, modelKey: stringValue(record.modelKey) }],
         ];
-      }),
-    );
-  } catch {
-    return {};
-  }
+      },
+    ),
+  );
 }
 
 function cliStatus(value: unknown): "recognized" | "path" | "unchecked" {
   return value === "recognized" || value === "path" ? value : "unchecked";
 }
 
-function backendBody(input: Record<string, unknown>): Record<string, unknown> {
+/**
+ * 编辑器草稿的 config.* 字段 → syncwire.AgentBackendConfig 那张键表。整个对象
+ * 一起发：config 是「带则整体替换」，缺一个键就是把它悄悄清空，所以哪怕只改了
+ * 其中一格,也要把这个类型用得上的全部格子重新收一遍——buildBackendDraft 已经把
+ * 用不上的格子清成 ""，不会有跨类型串值。空值键按契约省略，全空即 {}。
+ */
+function configBody(input: Record<string, unknown>): Record<string, unknown> {
+  const rawRoutes = input.modelRoutes;
+  const routes =
+    typeof rawRoutes === "string"
+      ? (JSON.parse(rawRoutes || "{}") as unknown)
+      : rawRoutes;
+  const modelRoutes =
+    routes && typeof routes === "object" && !Array.isArray(routes)
+      ? (routes as Record<string, unknown>)
+      : undefined;
+  const config: Record<string, unknown> = {
+    ...(modelRoutes && Object.keys(modelRoutes).length > 0
+      ? { modelRoutes }
+      : {}),
+    sandbox: stringValue(input.sandbox),
+    approval: stringValue(input.approval),
+    defaultPermissionMode: stringValue(input.defaultPermissionMode),
+    defaultModel: stringValue(input.defaultModel),
+    openclawGatewayUrl: stringValue(input.openClawGatewayUrl),
+    openclawAgentId: stringValue(input.openClawAgentId),
+    openclawDefaultModel: stringValue(input.openClawDefaultModel),
+    // 会话映射是桌面端 entity 的硬校验：不是 per-agentre-session 就整条判非法。
+    // 漏发它等于在账号里存下一条同步下去必被拒的后端。
+    openclawSessionMode: stringValue(input.openClawSessionMode),
+  };
+  return Object.fromEntries(
+    Object.entries(config).filter(([, value]) => value !== ""),
+  );
+}
+
+/**
+ * 新建：整份草稿已填好的字段照实发（规格「create 发全部已填字段」）；config
+ * 只在这个类型确有独占设置时才带——扫描创建那条路只给 type/name/deviceId，
+ * config 全空，服务端新建行本来就以 {} 起手（newBackendDoc），带一个全空对象
+ * 上去不改变落库结果，纯属噪音。
+ */
+function createBackendBody(
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const config = configBody(input);
   return compact({
     name: input.name,
     type: input.type,
     device_fingerprint: input.deviceId,
     provider_key: input.llmProviderKey,
     model_key: input.llmModelKey,
-    model_routes:
-      typeof input.modelRoutes === "string"
-        ? input.modelRoutes
-        : input.modelRoutes
-          ? JSON.stringify(input.modelRoutes)
-          : undefined,
-    sandbox: input.sandbox,
-    approval: input.approval,
-    // 可执行文件路径。它落在按 (后端, 绑定设备) 的覆盖上，不进 backend 载荷——
-    // 服务端拆的，这一侧只管如实带上。
-    cli_path: input.cliPath,
     // 编辑器序列化回来的整张表原样发回。缺省（compact 会剔掉 undefined）即不改，
     // 服务端据此保留存着的表——只换设备之类的保存不会顺手把它抹掉。
     env_json: input.envJson,
     reasoning_effort: input.reasoningEffort,
-    default_permission_mode: input.defaultPermissionMode,
-    default_model: input.defaultModel,
-    openclaw_gateway_url: input.openClawGatewayUrl,
-    openclaw_agent_id: input.openClawAgentId,
-    openclaw_default_model: input.openClawDefaultModel,
-    // 会话映射是桌面端 entity 的硬校验：不是 per-agentre-session 就整条判非法。
-    // 漏发它等于在账号里存下一条同步下去必被拒的后端。
-    openclaw_session_mode: input.openClawSessionMode,
+    config: Object.keys(config).length === 0 ? undefined : config,
+    // cli_path **不进这里**：可执行文件路径走独立的 per-device cliPath 端口
+    // （见 ports.cliPath.set），与桌面端 agent_backend_svc.create 同一分工——
+    // 那一侧的 entity 在创建时压根不认 CLIPath 字段。
   });
+}
+
+/**
+ * 编辑：只发 changedFields 点名的字段——共享编辑器把「用户这次真改过什么」算好
+ * 放在 input.changedFields 里（BackendChangedField[]），顶层键逐个发，任一
+ * `config.*` 命中就把 config 整个带上；device_fingerprint 是服务端每次写入的
+ * 强制字段（validateBackendWrite 无条件解引用，desktop 自己的 UpdateAgentBackend
+ * 同理无条件重写 DeviceFingerprint），不是「用户本次改没改」的产物,因此不看
+ * changedFields、每次都带。cli_path 同 create：只走独立的 cliPath 端口，这里
+ * 不发——即使 "cliPath" 出现在 changedFields 里也不理会,避免同一条覆盖被两条
+ * 请求各写一次、落在不同设备上时互相打架。
+ */
+const TOP_LEVEL_FIELD_TO_BODY_KEY: Record<string, string> = {
+  type: "type",
+  name: "name",
+  llmProviderKey: "provider_key",
+  llmModelKey: "model_key",
+  envJson: "env_json",
+  reasoningEffort: "reasoning_effort",
+};
+
+function updateBackendBody(
+  input: Record<string, unknown>,
+): Record<string, unknown> {
+  const changedFields = Array.isArray(input.changedFields)
+    ? (input.changedFields as unknown[])
+    : [];
+  const body: Record<string, unknown> = { device_fingerprint: input.deviceId };
+  let touchesConfig = false;
+  for (const field of changedFields) {
+    if (typeof field !== "string") continue;
+    if (field.startsWith("config.")) {
+      touchesConfig = true;
+      continue;
+    }
+    const key = TOP_LEVEL_FIELD_TO_BODY_KEY[field];
+    if (key) body[key] = input[field];
+  }
+  if (touchesConfig) body.config = configBody(input);
+  return body;
 }
 
 function compact(input: Record<string, unknown>): Record<string, unknown> {
@@ -398,17 +477,47 @@ export function createBrowserEngineSettingsPorts(
     return updated;
   }
 
-  async function mutateModels(
-    providerID: EngineID,
-    mutate: (models: ModelDTO[], provider: ProviderDTO) => ModelDTO[],
-    extra: Record<string, unknown> = {},
+  /**
+   * 单模型写入端点（S3）。每一个都返回整个供应商，调用方据此刷新缓存——但请求体
+   * 只带这一个模型的字段，绝不带同供应商其它模型的数组（规格「模型开关」：启停/
+   * 编辑单个模型只影响该模型，其它模型，含页面打开后其它设备新增或改动的，保持
+   * 服务端当前值）。
+   */
+  async function createProviderModel(
+    providerKey: string,
+    fields: Record<string, unknown>,
   ): Promise<ProviderDTO> {
-    const provider = await providerForID(providerID);
-    const models = mutate(
-      provider.models.map((model) => ({ ...model })),
-      provider,
+    const updated = await api<ProviderDTO>(
+      `/v1/engine/providers/${encodeURIComponent(providerKey)}/models`,
+      { method: "POST", body: JSON.stringify(fields) },
     );
-    return patchProvider(provider, { ...extra, models });
+    providerView(updated);
+    return updated;
+  }
+
+  async function patchProviderModel(
+    providerKey: string,
+    modelKey: string,
+    fields: Record<string, unknown>,
+  ): Promise<ProviderDTO> {
+    const updated = await api<ProviderDTO>(
+      `/v1/engine/providers/${encodeURIComponent(providerKey)}/models/${encodeURIComponent(modelKey)}`,
+      { method: "PATCH", body: JSON.stringify(fields) },
+    );
+    providerView(updated);
+    return updated;
+  }
+
+  async function deleteProviderModel(
+    providerKey: string,
+    modelKey: string,
+  ): Promise<ProviderDTO> {
+    const updated = await api<ProviderDTO>(
+      `/v1/engine/providers/${encodeURIComponent(providerKey)}/models/${encodeURIComponent(modelKey)}`,
+      { method: "DELETE" },
+    );
+    providerView(updated);
+    return updated;
   }
 
   async function loadDevices(): Promise<DeviceDTO[]> {
@@ -515,6 +624,9 @@ export function createBrowserEngineSettingsPorts(
     const model = provider?.models.find(
       (item) => item.model_key === backend.model_key,
     );
+    // 旧平铺格式的行服务端读作 {}；config 本身也可能是 JSON null（未写过）。
+    // 两种情况都当「没配」，不当错误。
+    const config = backend.config ?? {};
     return {
       id: backendIDs.id(backend.sync_id),
       syncId: backend.sync_id,
@@ -531,16 +643,16 @@ export function createBrowserEngineSettingsPorts(
           : Boolean(
               provider?.enabled && (backend.model_key === "" || model?.enabled),
             ),
-      modelRoutes: parseModelRoutes(backend.model_routes),
-      sandbox: backend.sandbox,
-      approval: backend.approval,
+      modelRoutes: parseModelRoutes(config.modelRoutes),
+      sandbox: config.sandbox ?? "",
+      approval: config.approval ?? "",
       envJson: backend.env_json,
       reasoningEffort: backend.reasoning_effort,
-      defaultPermissionMode: backend.default_permission_mode,
-      defaultModel: backend.default_model,
-      openClawGatewayUrl: backend.openclaw_gateway_url,
-      openClawAgentId: backend.openclaw_agent_id,
-      openClawDefaultModel: backend.openclaw_default_model,
+      defaultPermissionMode: config.defaultPermissionMode ?? "",
+      defaultModel: config.defaultModel ?? "",
+      openClawGatewayUrl: config.openclawGatewayUrl ?? "",
+      openClawAgentId: config.openclawAgentId ?? "",
+      openClawDefaultModel: config.openclawDefaultModel ?? "",
       agentCount: backend.ref_count,
       deviceId: backend.device_fingerprint ?? "",
       // 名字查不到就留空——共享包据此渲染「设备已撤销」；空 deviceId 才是
@@ -601,11 +713,10 @@ export function createBrowserEngineSettingsPorts(
     async setModelEnabled(id, enabled) {
       const location = modelLocation.get(id);
       if (!location) throw new Error(`Unknown model: ${id}`);
-      const providerID = providerIDs.id(location.providerKey);
-      const updated = await mutateModels(providerID, (models) =>
-        models.map((model) =>
-          model.model_key === location.modelKey ? { ...model, enabled } : model,
-        ),
+      const updated = await patchProviderModel(
+        location.providerKey,
+        location.modelKey,
+        { enabled },
       );
       const model = updated.models.find(
         (item) => item.model_key === location.modelKey,
@@ -615,14 +726,16 @@ export function createBrowserEngineSettingsPorts(
     },
 
     async createModels(providerID, inputs) {
-      const created = inputs.map((input) =>
-        modelBody(input as Record<string, unknown>),
-      );
-      const createdKeys = new Set(created.map((model) => model.model_key));
-      const updated = await mutateModels(providerID, (models) => [
-        ...models,
-        ...created,
-      ]);
+      const provider = await providerForID(providerID);
+      const createdKeys = new Set<string>();
+      let updated = provider;
+      // 一次只经单模型端点新增一个：批量导入发现的模型时，同供应商其它模型
+      // （含页面打开后其它设备并发加的）不该被任何一次写入带着重编一遍。
+      for (const input of inputs) {
+        const fields = modelBody(input as Record<string, unknown>);
+        createdKeys.add(fields.model_key);
+        updated = await createProviderModel(provider.provider_key, fields);
+      }
       return updated.models
         .filter((model) => createdKeys.has(model.model_key))
         .map((model) => modelView(updated, model));
@@ -631,13 +744,10 @@ export function createBrowserEngineSettingsPorts(
     async updateModel(id, input) {
       const location = modelLocation.get(id);
       if (!location) throw new Error(`Unknown model: ${id}`);
-      const providerID = providerIDs.id(location.providerKey);
-      const updated = await mutateModels(providerID, (models) =>
-        models.map((model) =>
-          model.model_key === location.modelKey
-            ? updateModelBody(model, input as Record<string, unknown>)
-            : model,
-        ),
+      const updated = await patchProviderModel(
+        location.providerKey,
+        location.modelKey,
+        modelPatchBody(input as Record<string, unknown>),
       );
       const model = updated.models.find(
         (item) => item.model_key === location.modelKey,
@@ -649,9 +759,7 @@ export function createBrowserEngineSettingsPorts(
     async deleteModel(id) {
       const location = modelLocation.get(id);
       if (!location) throw new Error(`Unknown model: ${id}`);
-      await mutateModels(providerIDs.id(location.providerKey), (models) =>
-        models.filter((model) => model.model_key !== location.modelKey),
-      );
+      await deleteProviderModel(location.providerKey, location.modelKey);
       modelLocation.delete(id);
     },
 
@@ -706,7 +814,7 @@ export function createBrowserEngineSettingsPorts(
       requireDevice(input);
       const created = await api<BackendDTO>("/v1/engine/backends", {
         method: "POST",
-        body: JSON.stringify(backendBody(input)),
+        body: JSON.stringify(createBackendBody(input)),
       });
       backendDTOs.set(created.sync_id, created);
       const [providers] = await Promise.all([fetchProviders(), loadDevices()]);
@@ -721,7 +829,7 @@ export function createBrowserEngineSettingsPorts(
         `/v1/engine/backends/${encodeURIComponent(key)}`,
         {
           method: "PATCH",
-          body: JSON.stringify(backendBody(input)),
+          body: JSON.stringify(updateBackendBody(input)),
         },
       );
       backendDTOs.set(key, updated);
@@ -828,9 +936,10 @@ export function createBrowserEngineSettingsPorts(
     },
 
     cliPath: {
-      // 按 (后端, **编辑器所选设备**) 取回配过的路径。共享编辑器把设备一起交进来
-      // （切换设备读到的是另一行）；同一条后端在别的机器上另有一条覆盖，挑错就会
-      // 把那台机器的路径显示成这一台的。
+      // 按 (后端, **调用方点名的设备**) 取回配过的路径——不是这条后端当前绑定
+      // 的设备。编辑器换了设备但还没保存时，这里要能立刻答出新设备已存的值；
+      // 判定权在调用方给的 deviceId，挑错（比如仍按 backend.device_fingerprint
+      // 找）就会把旧设备的路径显示成新设备的。
       async get(backendSyncId, deviceId) {
         const overlays = await fetchCLIOverlays();
         const hit = overlays.find(
@@ -840,14 +949,18 @@ export function createBrowserEngineSettingsPorts(
         );
         return hit ? hit.cli_path : null;
       },
-      // 面板保存走的是 updateBackend（路径在 BackendInput 里一起发），这个 set 是
-      // 端口契约的另一半：单独改路径时同样要带上设备，服务端才知道落在哪台机器上。
+      // 面板保存走的是 updateBackend，但那条路径**不带** cli_path（见
+      // updateBackendBody 的注释）：可执行文件路径专走这个端口。device_fingerprint
+      // 与 cli_path 必须在同一次 PATCH 里一起发——服务端 saveCLIOverlay 认的是
+      // 这一次请求里的 device_fingerprint，不是这条后端存着的那个；调用方传什么
+      // 设备，覆盖就落在哪台机器上。
       async set(backendSyncId, deviceId, path) {
         await api(`/v1/engine/backends/${encodeURIComponent(backendSyncId)}`, {
           method: "PATCH",
-          body: JSON.stringify(
-            compact({ cli_path: path, device_fingerprint: deviceId }),
-          ),
+          body: JSON.stringify({
+            cli_path: path,
+            device_fingerprint: deviceId,
+          }),
         });
       },
     },

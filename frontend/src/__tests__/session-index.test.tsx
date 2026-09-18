@@ -17,7 +17,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
@@ -26,6 +26,29 @@ import { formatRelativeTime, matchesSessionFilter } from "@/lib/sessionView";
 import i18n from "@/i18n";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
+
+/**
+ * 导入对话框整个是共享包的（候选扫描、预览都要真机器）；这里只替掉它，好让「导完了」
+ * 这一步能直接按出来——守的是宿主拿到结果之后把人带去哪。其余组件照用真的。
+ */
+vi.mock("@agentre-hub/agentre-ui", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@agentre-hub/agentre-ui")>();
+  return {
+    ...actual,
+    ImportSessionDialog: ({
+      onImported,
+    }: {
+      onImported: (outcome: { sessionId: string }) => void;
+    }) => (
+      <button
+        type="button"
+        data-testid="fake-import-done"
+        onClick={() => onImported({ sessionId: "imported-1" })}
+      />
+    ),
+  };
+});
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");
@@ -112,6 +135,20 @@ function groupToggleFor(label: string): HTMLElement {
   return toggle;
 }
 
+/**
+ * 宿主编会话地址的那一格（本站的真实实现在 Chat：lib/sessionAddress）。索引只管把
+ * 整行交出去，未保存的行要带上机器——替身照这个形状编，断言才看得出交出来的是什么。
+ */
+function fakeSessionPath(target: {
+  deviceId: number;
+  conversationId: string;
+  saved?: boolean;
+}): string {
+  return target.saved === false
+    ? `/chat/${target.conversationId}?device=${target.deviceId}`
+    : `/chat/${target.conversationId}`;
+}
+
 function renderIndex(
   props: Partial<React.ComponentProps<typeof SessionIndex>>,
 ) {
@@ -128,9 +165,7 @@ function renderIndex(
           machines={machines}
           filter="all"
           onFilterChange={vi.fn()}
-          sessionPath={(deviceId, conversationId) =>
-            `/devices/${deviceId}/sessions/${conversationId}`
-          }
+          sessionPath={fakeSessionPath}
           {...props}
         />
       </MemoryRouter>
@@ -442,7 +477,7 @@ describe("统一会话索引", () => {
     expect(second.textContent).toContain("Offline");
     // 行仍是可点的真链接，不是灰行。
     const link = screen.getByRole("link", { name: /重构登录页/ });
-    expect(link.getAttribute("href")).toBe("/devices/21/sessions/42");
+    expect(link.getAttribute("href")).toBe("/chat/42");
     expect(link.getAttribute("aria-disabled")).toBeNull();
   });
 
@@ -459,7 +494,15 @@ describe("统一会话索引", () => {
 
     expect(
       screen.getByRole("link", { name: /重构登录页/ }).getAttribute("href"),
-    ).toBe("/devices/20/sessions/42");
+    ).toBe("/chat/42");
+  });
+
+  it("还没保存进账号的行：交给宿主编地址时如实说它未保存，地址因此带上机器", () => {
+    renderIndex({ axis: "project", rows: [row({ key: "a", saved: false })] });
+
+    expect(
+      screen.getByRole("link", { name: /重构登录页/ }).getAttribute("href"),
+    ).toBe("/chat/42?device=20");
   });
 
   /**
@@ -1360,13 +1403,11 @@ describe("统一会话索引：↑↓ 键盘导航 + Enter 打开", () => {
                   machines={machines}
                   filter="all"
                   onFilterChange={vi.fn()}
-                  sessionPath={(deviceId, conversationId) =>
-                    `/devices/${deviceId}/sessions/${conversationId}`
-                  }
+                  sessionPath={fakeSessionPath}
                 />
               }
             />
-            <Route path="/devices/20/sessions/42" element={<p>detail-42</p>} />
+            <Route path="/chat/42" element={<p>detail-42</p>} />
           </Routes>
         </MemoryRouter>
       </ThemeProvider>,
@@ -1759,9 +1800,7 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
             onFilterChange={vi.fn()}
             groupTotals={{ "device-20": 9 }}
             loadGroupPage={loadGroupPage}
-            sessionPath={(deviceId, conversationId) =>
-              `/devices/${deviceId}/sessions/${conversationId}`
-            }
+            sessionPath={fakeSessionPath}
           />
         </MemoryRouter>
       </ThemeProvider>
@@ -1823,9 +1862,7 @@ describe("统一会话索引：组的收放与「查看全部 N」", () => {
             groupTotals={{ "p-server": 9 }}
             loadGroupPage={loadGroupPage}
             overflowRangeKey={range}
-            sessionPath={(deviceId, conversationId) =>
-              `/devices/${deviceId}/sessions/${conversationId}`
-            }
+            sessionPath={fakeSessionPath}
           />
         </MemoryRouter>
       </ThemeProvider>
@@ -1972,6 +2009,54 @@ describe("统一会话索引：与桌面端对齐的组头与溢出入口", () =
     expect(
       (await screen.findByTestId("import-menu-device-20-item")).textContent,
     ).toContain("Import local session");
+  });
+
+  it("导入完成：push 到被导入会话的地址（带上导入它的那台机器兜底），停在 /chat 之内", async () => {
+    function Probe() {
+      const location = useLocation();
+      return <p data-testid="probe">{location.pathname + location.search}</p>;
+    }
+    render(
+      <ThemeProvider>
+        <MemoryRouter initialEntries={["/chat?axis=machine"]}>
+          <Routes>
+            <Route
+              path="/chat/:conversationId?"
+              element={
+                <>
+                  <Probe />
+                  <SessionIndex
+                    axis="machine"
+                    onAxisChange={vi.fn()}
+                    rows={[row({ key: "m", deviceId: 20 })]}
+                    projects={projects}
+                    agents={agents}
+                    machines={machines}
+                    filter="all"
+                    onFilterChange={vi.fn()}
+                    sessionPath={fakeSessionPath}
+                  />
+                </>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </ThemeProvider>,
+    );
+
+    openMenu(
+      within(groupHeaderFor("Studio box")).getByTestId(
+        "import-menu-device-20-trigger",
+      ),
+    );
+    fireEvent.click(await screen.findByTestId("import-menu-device-20-item"));
+    fireEvent.click(await screen.findByTestId("fake-import-done"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("probe").textContent).toBe(
+        "/chat/imported-1?device=20",
+      ),
+    );
   });
 
   it("兜底组叫「随手对话」，字形是「对话」而不是一个项目字形（它是正当去处，不是分类失败的残留）", () => {
@@ -2166,7 +2251,7 @@ describe("会话索引：空态与失败的出路", () => {
             filter="all"
             onFilterChange={noop}
             unreadCount={0}
-            sessionPath={(d, s) => `/devices/${d}/sessions/${s}`}
+            sessionPath={fakeSessionPath}
             {...props}
           />
         </ThemeProvider>
@@ -2337,9 +2422,7 @@ describe("统一会话索引：高亮说的是宿主开着的那一条", () => {
             onFilterChange={vi.fn()}
             selectedKey={selectedKey}
             onSelect={vi.fn()}
-            sessionPath={(deviceId, conversationId) =>
-              `/devices/${deviceId}/sessions/${conversationId}`
-            }
+            sessionPath={fakeSessionPath}
           />
         </MemoryRouter>
       </ThemeProvider>
