@@ -53,17 +53,24 @@ func newNoRouteHandlerFS(sub fs.FS) (gin.HandlerFunc, error) {
 		if f, ferr := sub.Open(strings.TrimPrefix(path, "/")); ferr == nil {
 			_ = f.Close()
 			setCacheHeaders(c, path)
+			// 显式给出类型再交给 FileServer：http.ServeContent 尊重 writer 上
+			// 已经设好的 Content-Type，不再自己嗅探。mime.TypeByExtension 认不出
+			// .webmanifest（本机返回空串），不先设就会被嗅探成 text/plain。
+			if ctype := contentTypeFor(path); ctype != "" {
+				c.Writer.Header().Set("Content-Type", ctype)
+			}
 			if serveGzipped(c, gzipped, path) {
 				return
 			}
 			fileSrv.ServeHTTP(c.Writer, c.Request)
 			return
 		}
-		// /assets/ 下是 vite 带 hash 的构建产物，未命中只可能是滚动更新期间浏览器
-		// 拿着新副本的 index.html 向旧副本要新文件。回落 index.html 会返回
-		// 200 + text/html，浏览器把 HTML 当 JS 解析报错，而 200 不会被任何监控
-		// 计成失败；直接 404 才让这次缺失可见、刷新即可自愈。
-		if strings.HasPrefix(path, "/assets/") {
+		// /assets/ 与 /icons/ 下是构建/静态产物，未命中只可能是滚动更新期间浏览器
+		// 拿着新副本的 index.html 向旧副本要新文件，或者浏览器试探性地要一枚并不
+		// 存在的图标。回落 index.html 会返回 200 + text/html：浏览器把 HTML 当 JS
+		// 解析报错，或者把 HTML 当图片静默丢弃，而 200 不会被任何监控计成失败；
+		// 直接 404 才让这次缺失可见、刷新即可自愈。
+		if strings.HasPrefix(path, "/assets/") || strings.HasPrefix(path, "/icons/") {
 			c.AbortWithStatus(http.StatusNotFound)
 			return
 		}
@@ -90,6 +97,20 @@ const immutableCacheControl = "public, max-age=31536000, immutable"
 // revalidateCacheControl 给 index.html。它是那张指向当前一组 hash 的名片，**绝不能**
 // 跟着一起被永久缓存 —— 否则滚动更新之后浏览器永远拿旧名片，新版本再也上不去。
 const revalidateCacheControl = "no-cache"
+
+// contentTypeFor 决定静态产物的 Content-Type。
+//
+// 绝大多数扩展名交给 mime.TypeByExtension；.webmanifest 是个例外：Go 的类型表里
+// 没有它（本机 mime.TypeByExtension(".webmanifest") == ""），而浏览器要求 PWA
+// manifest 必须带 application/manifest+json，否则整份 manifest 被拒收、安装入口消失。
+func contentTypeFor(path string) string {
+	switch pathpkg.Ext(path) {
+	case ".webmanifest":
+		return "application/manifest+json; charset=utf-8"
+	default:
+		return mime.TypeByExtension(pathpkg.Ext(path))
+	}
+}
 
 func setCacheHeaders(c *gin.Context, path string) {
 	// 无论压没压，凡是可能有两种编码的响应都要声明 Vary，否则共享缓存会把 gzip 的
@@ -148,7 +169,7 @@ func precompress(sub fs.FS) (map[string][]byte, error) {
 // 只是白烧 CPU 和常驻内存，通常还压不小。
 func compressibleExt(ext string) bool {
 	switch ext {
-	case ".js", ".mjs", ".css", ".html", ".json", ".svg", ".map", ".txt", ".xml":
+	case ".js", ".mjs", ".css", ".html", ".json", ".webmanifest", ".svg", ".map", ".txt", ".xml":
 		return true
 	default:
 		return false
@@ -164,7 +185,7 @@ func serveGzipped(c *gin.Context, gzipped map[string][]byte, path string) bool {
 	header := c.Writer.Header()
 	// 自己写字节就没有 http.FileServer 的类型嗅探了，Content-Type 必须自己给 ——
 	// 少了它浏览器会把 js 当成别的东西拒掉。
-	if ctype := mime.TypeByExtension(pathpkg.Ext(path)); ctype != "" {
+	if ctype := contentTypeFor(path); ctype != "" {
 		header.Set("Content-Type", ctype)
 	}
 	header.Set("Content-Encoding", "gzip")

@@ -3,8 +3,42 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" type="image/svg+xml" href="/node_modules/@agentre-hub/agentre-ui/src/engine/assets/images/logo-tile.svg" />
+    <!-- viewport-fit=cover 打开安全区，安全区底下的 env(safe-area-inset-*) 才有值。
+         interactive-widget=resizes-content 让软键盘把内容区顶起来，输入框不会被
+         键盘盖住。刻意不禁止缩放：这一层不写任何锁死缩放比例的项（见
+         docs/design.md 的 PWA 小节）。 -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="/node_modules/@agentre-hub/agentre-ui/src/engine/assets/images/logo-tile.svg"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/icons/apple-touch-icon-180.png"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Agentre" />
+    <meta
+      name="apple-mobile-web-app-status-bar-style"
+      content="black-translucent"
+    />
+    <!-- 两条 theme-color 分开给深浅两色：一条到底会在另一种配色下露出错误的系统栏。 -->
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="#fafafa"
+    />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#18191b"
+    />
     <title>Agentre Server</title>
   </head>
   <body>
