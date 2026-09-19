@@ -25,7 +25,7 @@ describe("console browser tab", () => {
     );
     const href =
       html.match(
-        /<link rel="icon" type="image\/svg\+xml" href="([^"]+)"/,
+        /<link\s+rel="icon"\s+type="image\/svg\+xml"\s+href="([^"]+)"/,
       )?.[1] ?? "";
 
     expect(href).toBe(

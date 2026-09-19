@@ -329,10 +329,14 @@ export default function AppShell({
   /*
     整页不滚：滚动落在 main 里。根若是 min-h-screen，页面高于视口时整份文档往下
     滚——「把输入框钉在底上」就无从谈起（侧栏、顶栏、会话列表会一起被卷走）。所以
-    根是 h-screen + overflow-hidden，非 flush 的页由 main 自己 overflow-y-auto。
+    根是 h-dvh + overflow-hidden，非 flush 的页由 main 自己 overflow-y-auto。
+
+    h-dvh（dynamic viewport height）而不是 h-screen：移动浏览器里 100vh 是**最大**
+    视口（地址栏收起来时的高度），页面渲染在地址栏还开着的那一帧，底部 TabBar 就
+    被浏览器自己的底栏盖住。100dvh 跟着当前可视高度变，TabBar 始终在可视区内。
   */
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background md:flex-row">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background md:flex-row">
       {!isMobile && (
         <nav
           aria-label={t("common.appName")}
@@ -357,7 +361,10 @@ export default function AppShell({
         {!ownHeader && (
           <header
             data-testid="app-topbar"
-            className="flex h-[52px] shrink-0 items-center gap-3 border-b border-border bg-card px-4"
+            /* 高度按内容 52px 算，多出来的 env(safe-area-inset-top) 只是把整条往下
+               推开（box-sizing: border-box，pt 与 +inset 的高度同步）。无刘海设备
+               env() 为 0，这条与改动前逐像素相同。 */
+            className="flex h-[calc(52px_+_env(safe-area-inset-top,0px))] shrink-0 items-center gap-3 border-b border-border bg-card px-4 pt-[env(safe-area-inset-top,0px)]"
           >
             {title ? (
               <span className="truncate text-prose font-bold text-foreground">

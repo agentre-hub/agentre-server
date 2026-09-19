@@ -874,6 +874,35 @@ under the mobile project, that is the assertion that catches a card sitting edge
 or a flex row that refuses to shrink. A desktop-only pass tells you nothing about mobile,
 and a jsdom unit test tells you nothing at all here: it computes no layout.
 
+### PWA and the offline shell
+
+The console is installable. The whole surface is:
+
+| File | What it is |
+| --- | --- |
+| `public/manifest.webmanifest` | `name`/`short_name` `Agentre`, `start_url`/`scope` `/`, `standalone`, brand-navy `theme_color`/`background_color`, `any` + `maskable` 192/512 icons |
+| `public/icons/*.png` | `any` icons keep the plate's transparent margin; `maskable`/apple-touch are full-bleed and opaque. Rasterization commands live in `public/icons/README.md` |
+| `public/sw.js` | Classic (non-module) service worker — see below |
+| `public/offline.html` | Self-contained fallback page; no dependency on the bundle |
+| `src/lib/service-worker.ts` | Registration seam; `main.tsx` calls it with `import.meta.env.PROD` |
+
+Three decisions are deliberate. **The manifest is static**: nothing generates it at
+runtime, so it ships in the embedded `dist` like any other asset and the Go handler must
+send it as `application/manifest+json` (the extension is not in Go's MIME table).
+**There is no offline data**: `sw.js` precaches only `/offline.html`, navigates
+network-first so a rolling deploy still reaches users instead of pinning a cached shell,
+caches only the content-hashed `/assets/**` files, and never touches API/JSON or the
+`/v1/` relay. **Zoom is never disabled**: `user-scalable=no` and `maximum-scale` are
+absent from the viewport. iOS's focus auto-zoom is a separate thing and is avoided by
+keeping every focusable control at 16px on small screens; that floor belongs to the shared
+package (`agentre-ui` primitive `Input`/`Textarea`/`SearchInput` and the composer editor),
+because a host cannot reach into a shared component's DOM contract — this host inherits it
+when its pinned revision moves up.
+
+iOS install behaviour — the "Add to Home Screen" surface and the safe-area treatment on a
+notched device — still needs a real device. No jsdom test can stand in for it: there is
+no layout engine, no safe-area inset and no service-worker runtime there.
+
 ## The mono font
 
 `font-mono` resolves to JetBrains Mono, self-hosted from

@@ -4,7 +4,7 @@
  *
  * 这些组件是全轮共享视觉基础：后续页面只消费其 API，不允许复制其尺寸、
  * 状态颜色、字阶或交互语义。本测试固定：
- *   - 尺寸：NavItem h-[34px]、TabBar h-[74px]、StatusMark 圆角胶囊、
+ *   - 尺寸：NavItem h-[34px]、TabBar 内容 52px + 安全区、StatusMark 圆角胶囊、
  *     Metric value text-[23px]、EmptyState 62px 图标圈；
  *   - 状态：active/inactive、tone（StatusMark）；
  *   - 真实动作边界：行级菜单已归共享包，
@@ -316,7 +316,13 @@ describe("MobileTabBar（A6Z3k）", () => {
     const nav = screen.getByRole("navigation", { name: "Primary" });
     expect(screen.getByRole("link", { name: "Overview" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Chat" })).toBeTruthy();
-    expect(nav.className).toContain("h-[74px]");
+    // 高度是「内容 52px + 上下内边距 + 安全区」：无刘海设备 env() 为 0。
+    expect(nav.className).toContain(
+      "h-[calc(74px_+_env(safe-area-inset-bottom,0px))]",
+    );
+    expect(nav.className).toContain(
+      "pb-[calc(14px_+_env(safe-area-inset-bottom,0px))]",
+    );
   });
 
   it("当前 tab 高亮（primary-text + 600），其余用 subtle", () => {
