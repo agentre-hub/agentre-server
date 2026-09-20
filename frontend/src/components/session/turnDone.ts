@@ -30,7 +30,13 @@ import {
  * `wireview.putNonzero` 省略零值、`durableToFrame` 又把它补回 0），
  * 两头都到不了 undefined。归约（落到哪条消息、用量怎么合并）归共享包。
  *
- * `seq` 留空：这条标记是宿主合成的，不占持久帧的序号。
+ * `seq` 带的是**来源通知**（终态帧）的号，不是这条合成帧自己的号。
+ * 同一份终态要被三条路各交付一遍（实时推送、重连补齐、账号镜像回放），而合成出来
+ * 的 error / done / context_window_updated 并不占持久帧的号；认得出「这几帧同出一源」
+ * 的只有终态通知自己那一格 seq。带上它，`appendFrames` 那道按 seq 的闸门才管得住
+ * 合成帧：同一批整批留下，重放那一批整批丢掉（见 transcriptFrame.appendFrames）。
+ * 终态帧报不出 seq（0 / 缺省，老 agentred 或不完整上游）时照旧留空 —— 无从判断归属
+ * 就一律收下，不误吞。
  */
 export function doneEventFrame(
   conversationId: string,
@@ -47,7 +53,7 @@ export function doneEventFrame(
     {
       conversationId,
       event,
-      seq: undefined,
+      seq: sourceSeq(frame),
     } as EventFrame,
     // 这条标记合成自终态帧，时刻因此就是那一帧的。它落在**已经开着**的那条助手消息
     // 上（归约器的 done 分支不新建消息），所以这个值实际上不会成为谁的 createtime——
@@ -113,7 +119,7 @@ export function turnDoneFrames(
             kind: "context_window_updated",
             tokens: frame.contextWindow,
           },
-          seq: undefined,
+          seq: sourceSeq(frame),
         } as EventFrame,
         createtime,
       ),
@@ -125,7 +131,7 @@ export function turnDoneFrames(
         {
           conversationId,
           event: { kind: "error", message: frame.stopErrMsg },
-          seq: undefined,
+          seq: sourceSeq(frame),
         } as EventFrame,
         createtime,
       ),
@@ -149,4 +155,15 @@ export function turnDoneFrames(
 function isTurnFailure(frame: RunResultDoneFrame): boolean {
   if (!frame.stopErrMsg) return false;
   return frame.stopErrCode !== ErrCodeAborted;
+}
+
+/**
+ * 终态通知自己的持久 seq，作为派生帧的**来源 seq**。
+ *
+ * 0 / 缺省读作「这一份通知说不上自己是谁」（老 agentred 不上报 seq，或不完整上游
+ * 拼出来的测试帧）：留空而不是补 0 —— 0 在 `appendFrames` 里也是「无号」，但留空
+ * 更明确地表达「无从判断归属」，下游照单收下、不误吞。
+ */
+function sourceSeq(frame: RunResultDoneFrame): number | undefined {
+  return frame.seq ? frame.seq : undefined;
 }

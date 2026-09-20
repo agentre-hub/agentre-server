@@ -1874,6 +1874,146 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
     });
   });
 
+  /*
+    Given 右栏点开 A（42）再点开 B（43）；When A 那条迟到的实时帧在切换之后才到；
+    Then 它不能进入 B 的转录 —— onEvent 认的是**这条会话**，不是「刚从这条通道上
+    过来的」。A 与 B 共用同一只中继客户端，客户端那一层按 conversation_id 分派，
+    页面这一层再按 sid 挡一道；少任何一道，A 的一段字就会在 B 的对话框里冒出来。
+  */
+  it("切换会话后，旧会话迟到的实时帧不进入新会话", async () => {
+    const summaryB = { ...summary, conversationId: "43", title: "重构列表页" };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "A 的转录" },
+        seq: 1,
+      });
+    });
+
+    const { rerender } = renderEmbedded();
+    expect(await screen.findByText("A 的转录")).toBeTruthy();
+
+    // 切到 43：摘要与补齐都换成 B 的。
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summaryB] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "43",
+        event: { kind: "text_delta", text: "B 的转录" },
+        seq: 1,
+      });
+    });
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="43" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("B 的转录")).toBeTruthy();
+
+    // A 的帧此刻才从同一只客户端上过来（共享客户端仍在关注 A）：不得落进 B。
+    act(() => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "A 迟到的帧" },
+        seq: 2,
+      });
+    });
+
+    expect(screen.queryByText("A 迟到的帧")).toBeNull();
+    expect(screen.queryByText("A 的转录")).toBeNull();
+    const said = (text: string) =>
+      (screen.getByTestId("session-detail-transcript").textContent ?? "").split(
+        text,
+      ).length - 1;
+    expect(said("B 的转录")).toBe(1);
+  });
+
+  /*
+    Given 右栏从 A（42）切到 B（43）；When A 那条迟到的终态通知在切换之后才到；
+    Then 它不得在 B 的转录里合成收场 —— onEvent / onPreviewEvent 都按
+    conversation_id 挡了一道，终态那一路同样要挡。合成帧用的是当前 sid，落进去就是
+    一条属于 A 的错误卡挂在 B 的对话里（正常收场则是把 A 的 meta 盖到 B 头上）。
+  */
+  it("切换会话后，旧会话迟到的终态通知不进入新会话", async () => {
+    const summaryB = { ...summary, conversationId: "43", title: "重构列表页" };
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "A 的转录" },
+        seq: 1,
+      });
+    });
+
+    const { rerender } = renderEmbedded();
+    expect(await screen.findByText("A 的转录")).toBeTruthy();
+
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summaryB] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "43",
+        event: { kind: "text_delta", text: "B 的转录" },
+        seq: 1,
+      });
+    });
+    rerender(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="43" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("B 的转录")).toBeTruthy();
+
+    // A 的终态此刻才到：不得在 B 的转录里长出一张错误卡。
+    act(() => {
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 9,
+        stopErrMsg: "boom",
+        stopErrCode: 0,
+        durationMs: 83,
+      } as never);
+    });
+
+    expect(screen.queryByText(/Agent call failed: boom/)).toBeNull();
+    const said = (text: string) =>
+      (screen.getByTestId("session-detail-transcript").textContent ?? "").split(
+        text,
+      ).length - 1;
+    expect(said("B 的转录")).toBe(1);
+  });
+
   /**
    * 会话标识是**各端本地自增**的（见 relayClient 记游标那段注释：一台机器上同号
    * 的两条对话都是常态），所以 (did=A, sid=42) 与 (did=B, sid=42) 是两台不同机器
@@ -3917,6 +4057,602 @@ describe("会话详情：历史来自 server 镜像", () => {
       expect(said("第一句")).toBe(1);
       expect(said("离开期间的一句")).toBe(1);
     });
+  });
+
+  /*
+    Given 刚新建的对话：账号镜像那一趟还没落库（0 帧），而共享的中继客户端在这之前
+    已经替这一页把 seq 1..4 消费完了（草稿页那 0.6 秒里没有任何监听者）。
+    When 首次进入详情页；Then 它必须把游标对回自己画出来的起点 0，补齐才从 1 开始，
+    首屏就能看见快回复 —— 从前预置只在镜像末尾大于 0 时才对齐，0 被读成「没有历史、
+    别动游标」，而补齐只拉游标之后：屏幕上一条回复都没有，刷新（新客户端游标从 0 起）
+    才回来。
+
+    这是「切走再切回」那条洞的 0 一格：镜像空是**起点为零**，不是「游标未知」。
+  */
+  it("首次进入详情、镜像 0 帧而共享游标已超前：对回 0 从头发起补齐，快回复不回丢", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        // 落库慢一拍：新建即进入时这里就是 0 帧，正是实测里那 0.63 秒的形态。
+        return framePage([]);
+      }
+      return {};
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    // 草稿页跑完那 0.6 秒里，共享客户端（池子里那一只）已经把 seq 1..4 消费完了。
+    let cursor = 4;
+    fakeClient.getCursor.mockImplementation(() => cursor);
+    fakeClient.setCursor.mockImplementation((_c: unknown, seq: number) => {
+      cursor = seq;
+    });
+    fakeClient.attach.mockResolvedValue({
+      conversationId: "42",
+      lifecycleState: "idle",
+      latestSeq: 4,
+    } as never);
+    // 补齐只交付游标之后的那一段 —— 真实客户端的契约就是这个。
+    const texts = ["收到了", "第二句", "第三句", "第四句"];
+    fakeClient.catchUp.mockImplementation(async () => {
+      for (let seq = cursor + 1; seq <= 4; seq += 1) {
+        capturedOpts.onEvent?.({
+          conversationId: "42",
+          event: { kind: "text_delta", text: texts[seq - 1] },
+          seq,
+        } as never);
+      }
+      cursor = 4;
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 游标对回 0（这一趟画出来的转录起点），补齐才有得拉。
+    await waitFor(() =>
+      expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 0, undefined),
+    );
+    // 首屏就有快回复，不必刷新。
+    expect(await screen.findByText(/收到了/)).toBeTruthy();
+    // 补拉与（可能重叠的）实时流合起来，每段文字只出现一次。
+    const said = (text: string) =>
+      (screen.getByTestId("session-detail-transcript").textContent ?? "").split(
+        text,
+      ).length - 1;
+    expect(said("收到了")).toBe(1);
+    expect(said("第四句")).toBe(1);
+  });
+
+  /*
+    Given 共享客户端在本页订阅之前已经把 seq 1..3 消费完（草稿页那 0.6 秒里没有
+    监听者），本页订阅之后只实时赶上这一轮的终态帧 seq 4；
+    When 账号镜像落库慢一拍回了 0 帧，修复把游标从 4 压回 0，补齐从头发起重放同一批
+    持久通知（含同一条 seq 4 的终态通知）；
+    Then 用户可见的转录里那份终态只贡献**一次**收场：正文、错误卡、本轮 meta 都只有
+    一份，不因重放多出一条空助手消息、多出一张错误卡。
+
+    这是「游标回退后重放 runResultDone」最险的一档：重放的 `runResultDone` 会把
+    seq 1..3 的事件（本页此前没收到，不会被 appendFrames 按 seq 挡掉）补在**已经**
+    实时落下的终态帧**之后**，于是合成出来的 error/done 前后各落一次。done 只往
+    `st.turn` 补数（空轮次是空操作），但 error 在 `st.turn` 为空时会新起一条助手
+    消息 —— 前半段那次重放若落在新一轮用户消息之前，就会留下一条只有错误卡的
+    孤儿助手消息。
+  */
+  it("游标回退重放终态通知：出错的一轮不生成孤儿助手消息与双错误卡", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
+        };
+      // 落库慢一拍：本轮还没镜出来。
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([]);
+      return {};
+    });
+    // 客户端在本页订阅之前已经把 seq 1..3 消费掉了（游标是 4）；本页订阅之后，
+    // 终态通知 seq 4 才在 session.list 往返期间实时到达。
+    let cursor = 4;
+    fakeClient.getCursor.mockImplementation(() => cursor);
+    fakeClient.setCursor.mockImplementation((_c: unknown, seq: number) => {
+      cursor = seq;
+    });
+    fakeClient.attach.mockResolvedValue({
+      conversationId: "42",
+      lifecycleState: "idle",
+      latestSeq: 4,
+    } as never);
+    const terminal = {
+      conversationId: "42",
+      seq: 4,
+      stopErrMsg: "boom",
+      stopErrCode: 0,
+      // 用别的用例不会撞上的数，好按屏幕上的耗时串数「本轮 meta 画了几遍」。
+      durationMs: 8300,
+      model: "replay-model",
+    };
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) {
+        // 实时终态：只赶上这最后一帧。
+        capturedOpts.onRunResultDone?.(terminal as never);
+        return { sessions: [summary] };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    // 补齐只交付游标之后的那一段。压回 0 之后，seq 1..3 与终态都被重放一遍。
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "看看目录" },
+        seq: 1,
+      } as never);
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "我先看一下" },
+        seq: 2,
+      } as never);
+      capturedOpts.onRunResultDone?.(terminal as never);
+      cursor = 4;
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/看看目录/);
+    await waitFor(() =>
+      expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 0, undefined),
+    );
+    await screen.findByText(/我先看一下/);
+
+    const transcript = screen.getByTestId("session-detail-transcript");
+    const said = (text: string) =>
+      (transcript.textContent ?? "").split(text).length - 1;
+    // 正文只有一份。
+    expect(said("看看目录")).toBe(1);
+    expect(said("我先看一下")).toBe(1);
+    // 收场只有一份：一张错误卡，一轮 meta。重放不得把 error 落成第二条助手消息
+    // （落上去就会多一张卡），也不得把本轮耗时再盖到另一条消息上（8.3s 会出现两遍）。
+    expect(said("Agent call failed: boom")).toBe(1);
+    expect(said("8.3s")).toBe(1);
+  });
+
+  /*
+    Given 详情页镜像请求还在飞，本轮已实时送达并显示（正文、错误卡、meta 都在屏上）；
+    When 账号镜像落库慢一拍回了 0 帧，游标从 4 被压回 0，catchUp 把同一批持久通知
+    （含同一条 seq 4 的终态通知）重放一遍；
+    Then 正文、错误卡、本轮 meta 都只有一份 —— 这是「游标回退后重放 runResultDone」
+    的常规形态，重放的事件帧因 seq 已在 `events` 里被 appendFrames 挡掉，只有不带
+    seq 的合成帧需要按通知自己的 seq 去重。
+  */
+  it("游标回退重放终态通知：实时已显示的那一轮不因重放出第二份正文/错误卡/meta", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript"))
+        return framePage([]);
+      return {};
+    });
+    let cursor = 0;
+    fakeClient.getCursor.mockImplementation(() => cursor);
+    fakeClient.setCursor.mockImplementation((_c: unknown, seq: number) => {
+      cursor = seq;
+    });
+    fakeClient.attach.mockResolvedValue({
+      conversationId: "42",
+      lifecycleState: "idle",
+      latestSeq: 4,
+    } as never);
+    const batch = (deliver: (f: unknown, at?: number) => void) => {
+      deliver({
+        conversationId: "42",
+        event: { kind: "user_message", text: "看看目录" },
+        seq: 1,
+      });
+      deliver({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "我先看一下" },
+        seq: 2,
+      });
+    };
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) {
+        // 实时先走一遍：正文 + 终态都已显示在屏上（游标因此推进到 4）。
+        batch((f) => capturedOpts.onEvent?.(f as never));
+        capturedOpts.onRunResultDone?.({
+          conversationId: "42",
+          seq: 4,
+          stopErrMsg: "boom",
+          stopErrCode: 0,
+          durationMs: 8300,
+          model: "replay-model",
+        } as never);
+        cursor = 4;
+        return { sessions: [summary] };
+      }
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    // 压回 0 之后，同一批通知被原样重放。
+    fakeClient.catchUp.mockImplementation(async () => {
+      batch((f) => capturedOpts.onEvent?.(f as never));
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 4,
+        stopErrMsg: "boom",
+        stopErrCode: 0,
+        durationMs: 8300,
+        model: "replay-model",
+      } as never);
+      cursor = 4;
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/看看目录/);
+    await waitFor(() =>
+      expect(fakeClient.setCursor).toHaveBeenCalledWith("42", 0, undefined),
+    );
+    await screen.findByText(/我先看一下/);
+
+    const transcript = screen.getByTestId("session-detail-transcript");
+    const said = (text: string) =>
+      (transcript.textContent ?? "").split(text).length - 1;
+    expect(said("看看目录")).toBe(1);
+    expect(said("我先看一下")).toBe(1);
+    expect(said("Agent call failed: boom")).toBe(1);
+    // 本轮 meta 也只画一遍：8.3s 正是那一轮终态帧带来的耗时。
+    expect(said("8.3s")).toBe(1);
+  });
+
+  /*
+    Given 本轮终态已实时送达（同一时刻镜像那一趟 HTTP 还在飞）；
+    When 镜像页随后落地，而它覆盖的正是同一份终态（seq 4），且比实时多走了半轮
+    （终态之后还有一条用户提问）；
+    Then 用户可见的转录里那份终态只收场一次 —— 一张错误卡。
+
+    这是「镜像与实时重叠」的缺口：镜像投影出来的 error / done 是宿主合成的，从前
+    不带 seq，页面按 `seq > lastSeq` 让位给镜像时认不出它们与实时那一批是同一份
+    终态，两份都留在 `events` 里。归约器对**相邻**的两批是幂等的（error 与 done 都
+    落 `st.turn`，中间没有用户消息就不新起消息），所以要让用户真的看见，必须让两批
+    之间隔一条用户消息 —— 镜像正因为多走了半轮才把实时那批留到了页尾，第二遍 error
+    于是长在新一轮上，多出一张错误卡/孤儿助手消息。
+  */
+  it("镜像与实时重叠：镜像页含同一终态时，不因无 seq 的合成帧多出一张错误卡", async () => {
+    let releaseTail: (page: unknown) => void = () => {};
+    const tailPage = new Promise((resolve) => {
+      releaseTail = resolve;
+    });
+    let tailRequested = false;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        tailRequested = true;
+        return tailPage;
+      }
+      return {};
+    });
+    // 客户端在本页订阅之前已把 seq 1..3 消费完；实时只赶得上这条终态 seq 4。
+    let cursor = 3;
+    fakeClient.getCursor.mockImplementation(() => cursor);
+    fakeClient.setCursor.mockImplementation((_c: unknown, seq: number) => {
+      cursor = seq;
+    });
+    fakeClient.attach.mockResolvedValue({
+      conversationId: "42",
+      lifecycleState: "idle",
+      latestSeq: 6,
+    } as never);
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    fakeClient.catchUp.mockImplementation(async () => {});
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // 镜像那一趟还在飞，同一份终态先经实时口送到。
+    await waitFor(() => expect(tailRequested).toBe(true));
+    act(() => {
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 4,
+        stopErrMsg: "boom",
+        stopErrCode: 0,
+        durationMs: 8300,
+        model: "mirror-model",
+      } as never);
+    });
+
+    // 镜像随后落地：覆盖 seq 1..6，其中 seq 4 正是上面那条终态通知，seq 5/6 是它
+    // 之后又开始的半轮 —— 正是这条用户消息把两批合成帧隔开。
+    await act(async () => {
+      releaseTail({
+        frames: [
+          {
+            seq: 1,
+            method: "runtime.event",
+            params: {
+              conversationId: "42",
+              event: { kind: "user_message", text: "看看目录" },
+            },
+          },
+          {
+            seq: 2,
+            method: "runtime.event",
+            params: {
+              conversationId: "42",
+              event: { kind: "text_delta", text: "我先看一下" },
+            },
+          },
+          {
+            seq: 4,
+            method: "runtime.runResultDone",
+            params: {
+              conversationId: "42",
+              stopErrMsg: "boom",
+              durationMs: 8300,
+              model: "mirror-model",
+            },
+          },
+          {
+            seq: 5,
+            method: "runtime.event",
+            params: {
+              conversationId: "42",
+              event: { kind: "user_message", text: "再问一句" },
+            },
+          },
+          {
+            seq: 6,
+            method: "runtime.event",
+            params: {
+              conversationId: "42",
+              event: { kind: "text_delta", text: "这就来" },
+            },
+          },
+        ],
+        cursor: 6,
+        has_more: false,
+      });
+    });
+
+    await screen.findByText(/再问一句/);
+    const transcript = screen.getByTestId("session-detail-transcript");
+    const said = (text: string) =>
+      (transcript.textContent ?? "").split(text).length - 1;
+    // 正文只有一份。
+    expect(said("看看目录")).toBe(1);
+    expect(said("我先看一下")).toBe(1);
+    expect(said("再问一句")).toBe(1);
+    // 终态只收场一次：一张错误卡。多出来那张就是实时那批合成帧被镜像让位规则漏掉。
+    expect(said("Agent call failed: boom")).toBe(1);
+  });
+
+  /*
+    Given 实时终态到达时，镜像那一趟覆盖的 seq 还没走到它（镜像只到 seq 3）；
+    When 镜像随后落地；
+    Then 实时那批合成帧按来源 seq（4 > 3）留在页尾，错误卡与 meta 都还在。
+
+    这是上一条的对侧：中央 seq 方案让镜像那一趟有权按 `seq > lastSeq` 丢掉与它重叠
+    的实时批次，那就必须一道守住「镜像还没覆盖到的终态不被误吞」—— 误吞的表现是整轮
+    静默消失，比多画一张卡严重得多。
+  */
+  it("镜像与实时重叠：镜像还没覆盖到终态时，实时那批仍要留下", async () => {
+    let releaseTail: (page: unknown) => void = () => {};
+    const tailPage = new Promise((resolve) => {
+      releaseTail = resolve;
+    });
+    let tailRequested = false;
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path.startsWith("/v1/agent-sessions?"))
+        return {
+          total: 1,
+          items: [{ peer_fingerprint: "fp-1", conversation_id: "42" }],
+        };
+      if (path.startsWith("/v1/agent-sessions/transcript")) {
+        tailRequested = true;
+        return tailPage;
+      }
+      return {};
+    });
+    let cursor = 3;
+    fakeClient.getCursor.mockImplementation(() => cursor);
+    fakeClient.setCursor.mockImplementation((_c: unknown, seq: number) => {
+      cursor = seq;
+    });
+    fakeClient.attach.mockResolvedValue({
+      conversationId: "42",
+      lifecycleState: "idle",
+      latestSeq: 4,
+    } as never);
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    fakeClient.catchUp.mockImplementation(async () => {});
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(tailRequested).toBe(true));
+    act(() => {
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 4,
+        stopErrMsg: "boom",
+        stopErrCode: 0,
+        durationMs: 8300,
+        model: "mirror-model",
+      } as never);
+    });
+
+    // 镜像只覆盖到 seq 3（终态还没镜出来）：不能让位规则把 seq 4 的合成帧一起吞掉。
+    await act(async () => {
+      releaseTail({
+        frames: [
+          {
+            seq: 1,
+            method: "runtime.event",
+            params: {
+              conversationId: "42",
+              event: { kind: "user_message", text: "看看目录" },
+            },
+          },
+          {
+            seq: 2,
+            method: "runtime.event",
+            params: {
+              conversationId: "42",
+              event: { kind: "text_delta", text: "我先看一下" },
+            },
+          },
+        ],
+        cursor: 3,
+        has_more: false,
+      });
+    });
+
+    await screen.findByText(/我先看一下/);
+    const transcript = screen.getByTestId("session-detail-transcript");
+    const said = (text: string) =>
+      (transcript.textContent ?? "").split(text).length - 1;
+    expect(said("看看目录")).toBe(1);
+    expect(said("我先看一下")).toBe(1);
+    expect(said("Agent call failed: boom")).toBe(1);
+    expect(said("8.3s")).toBe(1);
   });
 });
 

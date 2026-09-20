@@ -9,6 +9,7 @@ import type {
 import { doneEventFrame, turnDoneFrames } from "@/components/session/turnDone";
 import {
   TranscriptSessionId,
+  appendFrames,
   toTranscriptFrame,
 } from "@/components/session/transcriptFrame";
 import { applyDurableFrames } from "@/lib/relayClient";
@@ -75,9 +76,14 @@ describe("doneEventFrame", () => {
     expect(event).not.toHaveProperty("usage");
   });
 
-  /** seq 留空是有意的：这条标记是宿主合成的，不占持久帧的序号。 */
-  it("给定终态帧，当转成事件，则不占 seq", () => {
-    expect(doneEventFrame(CID, { conversationId: CID }).seq).toBeUndefined();
+  /**
+   * 派生帧带的是**来源通知**的 seq，不是它自己的号。宿主合成的 error / done /
+   * context_window_updated 不占持久帧的号，但同一份终态要被三条路各交付一遍
+   * （实时推送、重连补齐、账号镜像回放）；带上来源 seq，`appendFrames` 才认得出
+   * 「这几帧同出一源」，重放时整批丢掉。
+   */
+  it("给定带 seq 的终态帧，当转成事件，则派生帧带来源通知的 seq", () => {
+    expect(doneEventFrame(CID, { conversationId: CID, seq: 7 }).seq).toBe(7);
   });
 });
 
@@ -180,14 +186,39 @@ describe("turnDoneFrames：出错收场的那一轮", () => {
     expect(frames[0].event).toMatchObject({ kind: "done" });
   });
 
-  /** 合成帧不占持久帧的序号，两条都一样。 */
-  it("给定出错的终态帧，当转成事件，则两条都不占 seq", () => {
-    const frames = turnDoneFrames(CID, {
+  /**
+   * 无号可判的一档：终态通知报不出自己的 seq（老 agentred / 不完整上游）。
+   *
+   * 派生帧的 seq 留空，交给 `appendFrames` 当「无从判断归属」照单收下 —— 补一个 0
+   * 或拿别的号顶上去都会误吞，而那一整轮在屏幕上会静默消失。
+   */
+  it("给定报不出 seq 的终态帧，当转成事件，则派生帧都不带 seq", () => {
+    const normal = turnDoneFrames(CID, { conversationId: CID, model: "m" });
+    const failed = turnDoneFrames(CID, {
       conversationId: CID,
       stopErrMsg: "boom",
     });
+    const zero = turnDoneFrames(CID, {
+      conversationId: CID,
+      seq: 0,
+      stopErrMsg: "boom",
+    });
 
-    expect(frames.map((f) => f.seq)).toEqual([undefined, undefined]);
+    expect(normal.map((f) => f.seq)).toEqual([undefined]);
+    expect(failed.map((f) => f.seq)).toEqual([undefined, undefined]);
+    // seq 0 是 proto3 的零值，与缺省同义；补一个 0 进事件里没有意义。
+    expect(zero.map((f) => f.seq)).toEqual([undefined, undefined]);
+  });
+
+  /** 派生帧共享的是**来源通知**的 seq：同一份终态，整批都带着同一个号。 */
+  it("给定带 seq 的出错终态帧，当转成事件，则两条共享来源 seq", () => {
+    const frames = turnDoneFrames(CID, {
+      conversationId: CID,
+      seq: 7,
+      stopErrMsg: "boom",
+    });
+
+    expect(frames.map((f) => f.seq)).toEqual([7, 7]);
   });
 
   /** 时刻取终态帧那一刻：错误卡与它补的 meta 属于同一轮，不该差出一个时间。 */
@@ -363,5 +394,151 @@ describe("终态帧带来的上下文窗口", () => {
     } as never);
 
     expect(reduceSessionState(frames).contextWindow).toBe(400000);
+  });
+});
+
+/**
+ * 归约器对「同一终态批次紧接着来两遍」是幂等的：`done` 只往当前轮的助手消息上补数
+ * （空轮次是空操作），`error` 落 `st.turn` 而不是新起一条（见共享包 frames.ts）。
+ *
+ * 但这幂等有个前提 —— 两遍之间没有 `user_message`：它会把 `st.turn` 清空，第二遍的
+ * `error` 于是会在新轮次开头另起一条只有错误卡的助手消息。所以归约器兜不住宿主那
+ * 一层的重放（游标压回后补齐把事件帧与终态一起重放），那道闸门是 `appendFrames`：
+ * 同一份终态派生的多帧带着来源通知的 seq（见 turnDone），同一批整批留下、重放整批
+ * 丢掉。这一条钉的是前提成立那一半，免得日后有人把宿主那道闸门当成可删的冗余。
+ */
+describe("同一终态批次重复归约", () => {
+  it("给定同一批终态帧、中间没有用户消息，当归约，则仍只有一条助手消息", () => {
+    const batch = turnDoneFrames(CID, {
+      conversationId: CID,
+      stopErrMsg: "boom",
+      durationMs: 83,
+    });
+
+    const msgs = reduceFrames(
+      [
+        toTranscriptFrame(
+          {
+            conversationId: CID,
+            event: { kind: "text_delta", text: "先看一下" },
+          } as unknown as EventFrame,
+          1,
+        ),
+        ...batch,
+        ...batch,
+      ],
+      TranscriptSessionId,
+    );
+
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].errorText).toBe("boom");
+    expect(msgs[0].durationMs).toBe(83);
+  });
+
+  it("给定两批之间夹一条用户消息，当归约，则出错的那批会另起一条助手消息", () => {
+    // 这是前提不成立的那一档，也是宿主必须自己挡重放的原因：两批之间一夹用户消息，
+    // 第二遍的 error 就落到新轮次上 —— 屏幕上两张错误卡。
+    const batch = turnDoneFrames(CID, {
+      conversationId: CID,
+      stopErrMsg: "boom",
+    });
+
+    const msgs = reduceFrames(
+      [
+        toTranscriptFrame(
+          {
+            conversationId: CID,
+            event: { kind: "text_delta", text: "第一轮" },
+          } as unknown as EventFrame,
+          1,
+        ),
+        ...batch,
+        toTranscriptFrame(
+          {
+            conversationId: CID,
+            event: { kind: "user_message", text: "第二轮" },
+          } as unknown as EventFrame,
+          2,
+        ),
+        ...batch,
+      ],
+      TranscriptSessionId,
+    );
+
+    expect(msgs.map((m) => m.role)).toEqual(["assistant", "user", "assistant"]);
+    // 两条都带 errorText：这正是用户可见的「双错误卡」，宿主的 seq 闸门就是为了
+    // 在重放时不让第二遍发生。
+    expect(msgs[0].errorText).toBe("boom");
+    expect(msgs[2].errorText).toBe("boom");
+  });
+});
+
+/**
+ * 派生帧带来源 seq 之后，`appendFrames` 就是终态去重的唯一一道闸门。
+ *
+ * 同一个终态派生的多帧**共享同一个号**，而 `appendFrames` 只用 prev 的 seen 集合
+ * 过滤 incoming —— 因此同一批一起来时 context / error / done 整批通过，下一次相同
+ * 批次再一起来时整批被拦。这一条同时钉住「共享 seq 不会被逐帧去重截成半批」：那
+ * 正是把 error 或 context_window_updated 单独吞掉的错法（前者是错误卡凭空消失，
+ * 后者是底栏进度条永远没有分母）。
+ */
+describe("appendFrames：同一终态派生的共享 seq 批次", () => {
+  /** context → error → done 三条，共用来源终态的 seq。 */
+  const failedBatch = (seq: number) =>
+    turnDoneFrames(CID, {
+      conversationId: CID,
+      seq,
+      contextWindow: 400000,
+      stopErrMsg: "boom",
+    });
+
+  it("给定一批共享 seq 的派生帧，当首次追加，则整批留下", () => {
+    const batch = failedBatch(7);
+
+    expect(batch.map((f) => f.seq)).toEqual([7, 7, 7]);
+    expect(appendFrames([], batch)).toHaveLength(3);
+  });
+
+  it("给定同一批共享 seq 的派生帧，当重放，则整批丢掉", () => {
+    const batch = failedBatch(7);
+    const first = appendFrames([], batch);
+
+    const replay = appendFrames(first, batch);
+
+    // 一帧都不多画：appendFrames 原样交回上一步的数组。
+    expect(replay).toBe(first);
+    expect(replay).toHaveLength(3);
+  });
+
+  it("给定报不出 seq 的派生帧，当重复追加，则每次都照单收下", () => {
+    const batch = turnDoneFrames(CID, {
+      conversationId: CID,
+      contextWindow: 400000,
+      stopErrMsg: "boom",
+    });
+    const first = appendFrames([], batch);
+
+    const replay = appendFrames(first, batch);
+
+    // 无号可判时不当成重放：误吞整轮收场比多画一张卡更严重。
+    expect(replay).toHaveLength(6);
+  });
+
+  it("给定共享 seq 的一批与后续事件帧，当追加，则批次与后续都留下", () => {
+    const first = appendFrames([], failedBatch(7));
+
+    const next = appendFrames(first, [
+      toTranscriptFrame(
+        {
+          conversationId: CID,
+          event: { kind: "user_message", text: "再来一轮" },
+          seq: 8,
+        } as unknown as EventFrame,
+        2,
+      ),
+    ]);
+
+    expect(next).toHaveLength(4);
+    expect(next[3].seq).toBe(8);
   });
 });

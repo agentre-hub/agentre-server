@@ -656,12 +656,24 @@ export default function SessionDetailView({
       noteFrameArrived(frame);
     },
     onRunResultDone: (frame) => {
+      // 与 onEvent / onPreviewEvent 同一道闸：只认**这条会话**的终态。右栏是同实例
+      // 换 props，旧会话迟到的通知照样会派到这里；不挡的话，它的 error / done 会被
+      // 合成进新会话的转录（合成时用的正是当前的 sid），在 B 的对话里长出一张属于
+      // A 的错误卡，或把 A 的 meta 盖到 B 头上。
+      //
+      // 只在通知**明说了别的会话**时挡：wire 上终态帧的 conversation_id 恒有值，
+      // 而已知会话就是这一条 —— 空值只可能来自不完整的上游/测试替身，按原样收下
+      // 而不是凭一个缺字段把它当成别人的。
+      if (frame.conversationId && frame.conversationId !== sid) return;
       turn.markTurnActive(false);
       // 收表:终态帧自带的那几个数是 agentred 就着自己扇出的事件流量的,比浏览器
       // 这边隔着一条中继数出来的准,接下来画的是它们。
       liveTurn.endTurn();
       turn.setPendingAssistant(false);
-      setEvents((prev) => [...prev, ...turnDoneFrames(sid, frame)]);
+      // 同一份终态派生出的多帧带着**来源通知的 seq**（见 turnDone），所以整批一起
+      // 交给 appendFrames：第一次见到这个 seq 时整批留下，重放时整批丢掉。合成帧
+      // 自己带号，镜像与实时共用 appendFrames 这一道闸门与同一本 seq 账。
+      setEvents((prev) => appendFrames(prev, turnDoneFrames(sid, frame)));
       /*
         这一轮结束时还排着的那几条:去向由 `useSteerAutoContinue` 决定 —— 先问执行端
         信箱里还剩什么,取回来就自动接续成新一轮(桌面端 chat_svc 的老规矩),取不回来
@@ -928,10 +940,12 @@ export default function SessionDetailView({
           //
           // 所以这一趟画的转录起点是哪儿，游标就该在哪儿：高了是洞，低了是重复，
           // 而重复由 `appendFrames` 按 seq 挡掉，洞没有任何东西补得上。
-          if (
-            mirrorSeqRef.current > 0 &&
-            client.getCursor(sid, origin) !== mirrorSeqRef.current
-          ) {
+          //
+          // 起点 0 与「游标未知」是两回事，不能拿真值把它跳过：镜像 0 帧（刚新建、
+          // 落库慢一拍，草稿页那 0.6 秒就是这一档）而共享客户端早已把 seq 1..4 消费完
+          // 时，游标停在 4、屏幕上一条都没有 —— 补齐只拉游标之后，首屏缺回复，刷新
+          // （新客户端游标从 0 起）才回来。0 是个合法的起点，对齐照做。
+          if (client.getCursor(sid, origin) !== mirrorSeqRef.current) {
             client.setCursor(sid, mirrorSeqRef.current, origin);
           }
           // attach（接回实时流）与补齐（读历史）是两件事，**接不回不等于读不到**。
