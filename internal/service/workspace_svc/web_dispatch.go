@@ -222,8 +222,11 @@ func (r *dispatchResolver) planTiers(
 				DeviceFingerprint: t.Fingerprint,
 				DeviceID:          tier.DeviceID,
 				DeviceName:        tier.DeviceName,
-				BackendType:       tier.BackendType,
-				Kind:              tier.Kind,
+				// 选中档的非敏感身份：浏览器把它带在 runtime.run 的 backend 上，
+				// daemon 再持设备 JWT 按它从 /v1/engine/snapshot 取整份 config。
+				BackendSyncID: t.BackendSyncID,
+				BackendType:   tier.BackendType,
+				Kind:          tier.Kind,
 				// 选中档的 cwd：所选项目在这台机器上的绝对路径（见 WebDispatchChoice.Cwd
 				// 注释，这是 R19 在主动派活场景下的唯一例外）。未选项目时留空。
 				Cwd: chosenCwd,

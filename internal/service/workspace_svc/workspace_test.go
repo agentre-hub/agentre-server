@@ -408,6 +408,61 @@ func TestWebDispatchPlan_GivenTargetBackend_ThenChosenIsThatTierNotTheFirstAvail
 	assert.True(t, plan.Tiers[1].Current, "生效档 = 用户挑的那一档")
 }
 
+// 选中那一档的 backend sync_id 随 Chosen 带出去：它是云端派发能安全下发的唯一
+// 身份。ACP 启动身份（acpCommand / acpArgs）藏在后端 config 里、绝不经过浏览器；
+// daemon 持设备 JWT 从 /v1/engine/snapshot 按这个 sync_id 取整份 config。这里
+// 同时确认带 config 的后端行照常解析，Chosen 仍指得准。
+func TestWebDispatchPlan_GivenACPBackend_ThenChosenCarriesTheSyncID(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-acp": true}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "ACP Agent"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-acp", AgentredFingerprint: "fp-acp",
+			Payload: mustJSON(t, map[string]any{
+				"type": "acp",
+				"config": map[string]any{
+					"acpCommand": "/opt/acp/agent",
+					"acpArgs":    []string{"serve", "--stdio"},
+				},
+			})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-acp", "sort_order": 0})},
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 41, UserID: 7, Name: "ACP 主机", Kind: device_entity.KindAgentred, Fingerprint: "fp-acp", Status: 1},
+	}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, WebDispatchPlanInput{UserID: 7, AgentSyncID: "agent-1"})
+	require.NoError(t, err)
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "acp", plan.Chosen.BackendType)
+	assert.Equal(t, "b-acp", plan.Chosen.BackendSyncID)
+}
+
+// config 整个缺席（存量行 / 非 ACP 后端）要当成空，不能 panic、也不能让 Chosen 消失。
+// 解载荷时把 config 解成一个零值结构体即可，不需要任何特殊分支。
+func TestWebDispatchPlan_GivenBackendWithoutConfig_ThenChosenStillCarriesTheSyncID(t *testing.T) {
+	ctx, mObj, _, mDev, svc := setupWorkspaceTest(t)
+	SetOnlineChecker(fakeOnlineChecker{online: map[string]bool{"fp-plain": true}})
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), gomock.Any()).Return([]*sync_entity.SyncObject{
+		{Kind: sync_entity.KindAgent, SyncID: "agent-1", Payload: mustJSON(t, map[string]any{"name": "普通 Agent"})},
+		{Kind: sync_entity.KindAgentBackend, SyncID: "b-plain", AgentredFingerprint: "fp-plain",
+			Payload: mustJSON(t, map[string]any{"type": "codex"})},
+		{Kind: sync_entity.KindAgentExecTarget, SyncID: "t1",
+			Payload: mustJSON(t, map[string]any{"agent_sync_id": "agent-1", "backend_sync_id": "b-plain", "sort_order": 0})},
+	}, nil)
+	mDev.EXPECT().ListByUser(ctx, int64(7)).Return([]*device_entity.Device{
+		{ID: 42, UserID: 7, Name: "普通主机", Kind: device_entity.KindAgentred, Fingerprint: "fp-plain", Status: 1},
+	}, nil)
+
+	plan, err := svc.WebDispatchPlan(ctx, WebDispatchPlanInput{UserID: 7, AgentSyncID: "agent-1"})
+	require.NoError(t, err)
+	require.NotNil(t, plan.Chosen)
+	assert.Equal(t, "b-plain", plan.Chosen.BackendSyncID)
+}
+
 // 指定的那一档跑不了时**不静默回落**到自动挑的那一档：用户挑的是这台机器，
 // 悄悄换一台去跑是这里最糟的失败——会话的上下文、文件、shell 历史全在另一台上。
 // Chosen 留空，逐档原因照常给，由界面说出来。

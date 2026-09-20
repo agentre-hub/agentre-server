@@ -61,8 +61,10 @@ func TestCreateBackend_ThenWritesTheSharedContractKeys(t *testing.T) {
 	}), saved.Payload)
 }
 
-// 桌面端写下的满值载荷（外加一个契约还不认识的键），控制台只改一个名字：
-// 其余每个键一个不少、一个不变，未知键原样留下。
+// 桌面端写下的满值载荷（含 ACP 启动身份、hermes 字段，外加一个契约还不认识的键），
+// 控制台只改一个名字：其余每个键一个不少、一个不变，未知键原样留下。config 里刻意
+// 混入 acpCommand / acpArgs 与 hermes_*：控制台既不认识它们也没有对应的写入键，
+// 这正是要守的场景——按 JSON 键合并时没被点名的键必须原样活下来。
 func TestUpdateBackend_GivenDesktopWrittenPayload_ThenOnlyTheTouchedKeyChanges(t *testing.T) {
 	stored := syncwire.AgentBackendPayload{
 		Type: "claudecode", Name: "Claude Code", ProviderKey: "anthropic-main", ModelKey: "sonnet",
@@ -75,6 +77,14 @@ func TestUpdateBackend_GivenDesktopWrittenPayload_ThenOnlyTheTouchedKeyChanges(t
 			DefaultPermissionMode: "acceptEdits",
 			DefaultModel:          "sonnet",
 			OpenClawGatewayURL:    "https://gw.example.com",
+			OpenClawAgentID:       "agent-9",
+			OpenClawDefaultModel:  "gpt-5",
+			OpenClawSessionMode:   "resume",
+			HermesURL:             "https://hermes.example.com",
+			HermesAuthProvider:    "basic",
+			HermesUserID:          "user-7",
+			ACPCommand:            "/opt/acp/agent",
+			ACPArgs:               []string{"serve", "--stdio"},
 		},
 	}
 	var storedDoc map[string]any

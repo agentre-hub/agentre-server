@@ -118,9 +118,22 @@ type CLIOverlaySnapshot struct {
 	CLIPath       string `json:"cli_path"`
 }
 
+// BackendSnapshot 是设备 JWT 快照里的一条后端 config：按后端同步标识寻址，正文是
+// 共享契约的整份 AgentBackendConfig。
+//
+// ACP 启动身份（acpCommand / acpArgs）只在这里下行，且只给「这条后端分配到的
+// 机器」。它是整个服务端唯一携带这段任意 argv 的下行载荷，因此不经过浏览器形状的
+// DTO（见 internal/api/engine 的 guard_test.go）。形状对应 agentre daemon 那份
+// snapshotBackendConfig：字段名逐字一致，两端共用一个 config 键表。
+type BackendSnapshot struct {
+	BackendSyncID string                      `json:"backend_sync_id"`
+	Config        syncwire.AgentBackendConfig `json:"config"`
+}
+
 type SnapshotView struct {
 	Providers   []ProviderSnapshot   `json:"providers"`
 	CLIOverlays []CLIOverlaySnapshot `json:"cli_overlays"`
+	Backends    []BackendSnapshot    `json:"backends"`
 }
 
 type EngineSvc interface {
@@ -483,11 +496,17 @@ func (s *engineSvc) ListCLIOverlays(ctx context.Context, userID int64) ([]CLIOve
 	return out, nil
 }
 func (s *engineSvc) Snapshot(ctx context.Context, userID int64, fingerprint string) (*SnapshotView, error) {
-	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI})
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{
+		sync_entity.KindLLMProvider, sync_entity.KindAgentBackendCLI, sync_entity.KindAgentBackend,
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := &SnapshotView{Providers: []ProviderSnapshot{}, CLIOverlays: []CLIOverlaySnapshot{}}
+	out := &SnapshotView{
+		Providers:   []ProviderSnapshot{},
+		CLIOverlays: []CLIOverlaySnapshot{},
+		Backends:    []BackendSnapshot{},
+	}
 	for _, row := range rows {
 		switch row.Kind {
 		case sync_entity.KindLLMProvider:
@@ -499,6 +518,26 @@ func (s *engineSvc) Snapshot(ctx context.Context, userID int64, fingerprint stri
 				if o, ok := decodeOverlay(row); ok {
 					out.CLIOverlays = append(out.CLIOverlays, CLIOverlaySnapshot{BackendSyncID: row.ScopeSyncID, CLIPath: o.CLIPath})
 				}
+			}
+		case sync_entity.KindAgentBackend:
+			// 最小权限：只回这条后端**分配到的这台机器**，别的机器一条都不带。
+			// 坏载荷（解不动）、没写运行设备的存量行与墓碑行直接跳过，不泄也不
+			// panic。ListByKinds 已在 SQL 里排除墓碑，这里再判一次 IsDeleted 是
+			// 防御性的——将来这条读路若换了仓储，也不至于把一条已删后端连 config
+			// 一起发给设备。
+			if row.IsDeleted() {
+				continue
+			}
+			if row.AgentredFingerprint == fingerprint {
+				doc, ok := parseBackendDoc(row.Payload)
+				if !ok {
+					continue
+				}
+				var config syncwire.AgentBackendConfig
+				if err := json.Unmarshal(doc.config(), &config); err != nil {
+					continue
+				}
+				out.Backends = append(out.Backends, BackendSnapshot{BackendSyncID: row.SyncID, Config: config})
 			}
 		}
 	}
