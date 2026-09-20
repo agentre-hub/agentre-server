@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>需要网络连接 · Network required</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: #fafafa;
+        color: #18191b;
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          sans-serif;
+        text-align: center;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #18191b;
+          color: #fafafa;
+        }
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      p {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.6;
+        opacity: 0.75;
+      }
+      button {
+        margin-top: 20px;
+        padding: 8px 16px;
+        border: 0;
+        border-radius: 6px;
+        background: #0f2c4c;
+        color: #fafafa;
+        font-size: 14px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>控制台需要网络连接</h1>
+      <p>The console needs a network connection.</p>
+      <button type="button" onclick="location.reload()">重试 · Retry</button>
+    </main>
+  </body>
+</html>

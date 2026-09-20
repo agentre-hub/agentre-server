@@ -1105,7 +1105,10 @@ export default function Chat() {
           */}
           <header
             data-testid="chat-mobile-header"
-            className="shrink-0 border-b border-border bg-card"
+            /* 这一条顶栏由页面自己排（壳走 ownHeader，够不着它），所以安全区也得
+               自己让：viewport-fit=cover 之后内容会伸到状态栏底下，无刘海设备
+               env() 为 0、与改动前逐像素相同。 */
+            className="shrink-0 border-b border-border bg-card pt-[env(safe-area-inset-top,0px)]"
           >
             <div className="flex h-[52px] items-center gap-2 px-3">
               <span className="shrink-0 text-prose font-bold text-foreground">

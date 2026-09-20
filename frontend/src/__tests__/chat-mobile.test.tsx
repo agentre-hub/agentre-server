@@ -553,6 +553,8 @@ describe("移动端对话页：顶部", () => {
     ).toBe(true);
     // 语言/主题这一组全局控件也在这一带里（它们此前住在壳的顶栏）。
     expect(head.querySelectorAll("button").length).toBeGreaterThan(1);
+    // 这一条顶栏不走壳，安全区得自己让：少了它，刘海机上内容会伸到状态栏底下。
+    expect(head.className).toContain("pt-[env(safe-area-inset-top,0px)]");
   });
 });
 
