@@ -24,6 +24,9 @@ func testDist() fstest.MapFS {
 		"assets/index-abc123.js":   &fstest.MapFile{Data: bundleJS},
 		"assets/index-abc123.css":  &fstest.MapFile{Data: []byte(strings.Repeat(".a{color:red}\n", 200))},
 		"assets/font-abc123.woff2": &fstest.MapFile{Data: bytes.Repeat([]byte{0x77, 0x4f, 0x46, 0x32}, 200)},
+		// 真实尺寸的 manifest：足够大到 gzip 之后更小，好让压缩分支也被覆盖。
+		"manifest.webmanifest": &fstest.MapFile{Data: []byte(strings.Repeat(
+			`{"name":"Agentre","short_name":"Agentre","icons":[]}`, 20))},
 	}
 }
 
@@ -121,5 +124,38 @@ func TestAssets_MissingAssetStill404s(t *testing.T) {
 		w := serve(t, "/assets/does-not-exist.js", nil)
 		convey.So(w.Code, convey.ShouldEqual, http.StatusNotFound)
 		convey.So(w.Header().Get("Cache-Control"), convey.ShouldNotContainSubstring, "immutable")
+	})
+}
+
+// TestAssets_ManifestServedAsManifestJSON PWA 安装要求 manifest 的 Content-Type
+// 是 application/manifest+json。这台机器上 mime.TypeByExtension(".webmanifest")
+// 返回空串,落到 http.ServeContent 会被嗅探成 text/plain,浏览器因此拒收整份
+// manifest —— 安装入口会凭空消失,而页面本身看起来一切正常。
+func TestAssets_ManifestServedAsManifestJSON(t *testing.T) {
+	convey.Convey("manifest 必须以 application/manifest+json 发出", t, func() {
+		// 压缩与非压缩两条路都要给出正确的类型:客户端 Accept-Encoding 不同而已,
+		// 资源本身没有两种类型。
+		for _, header := range []http.Header{
+			nil,
+			{"Accept-Encoding": []string{"gzip"}},
+		} {
+			w := serve(t, "/manifest.webmanifest", header)
+			convey.So(w.Code, convey.ShouldEqual, http.StatusOK)
+			convey.So(w.Header().Get("Content-Type"), convey.ShouldContainSubstring, "application/manifest+json")
+			// manifest 是那张指向当前构建的名片,不能跟着 /assets/ 一起被永久缓存。
+			convey.So(w.Header().Get("Cache-Control"), convey.ShouldContainSubstring, "no-cache")
+		}
+	})
+}
+
+// TestAssets_MissingIconDoesNotFallBackToHTML /icons/ 与 /assets/ 同类:它们不是
+// SPA 的前端路由,未命中就是缺文件。回落 index.html 会返回 200 + text/html,
+// 浏览器把 HTML 当图片解析、静默失败——图标没了却没有任何可观测的失败。
+func TestAssets_MissingIconDoesNotFallBackToHTML(t *testing.T) {
+	convey.Convey("缺失的 /icons/ 不回落 index.html", t, func() {
+		w := serve(t, "/icons/does-not-exist-192.png", nil)
+		convey.So(w.Code, convey.ShouldEqual, http.StatusNotFound)
+		convey.So(w.Header().Get("Content-Type"), convey.ShouldNotContainSubstring, "text/html")
+		convey.So(w.Body.String(), convey.ShouldBeEmpty)
 	})
 }

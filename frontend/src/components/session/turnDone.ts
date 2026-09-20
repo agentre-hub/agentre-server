@@ -62,7 +62,9 @@ export function doneEventFrame(
  * 三条读取路径（实时推送、重连补齐与向前翻页、账号镜像回放）都收这个，而不是各自
  * 调 `doneEventFrame` —— 「出错的一轮要画错误卡」这件事只写在这里一处。
  *
- * 正常收场只有一条 `done`。**出错**收场在它前面多一条 `error`：
+ * 正常收场只有一条 `done`；执行端报得出上下文窗口时，前面还有一条
+ * `context_window_updated`（见函数体里的说明）。**出错**收场在 `done` 前面多一条
+ * `error`：
  *
  * 停止原因在 wire 上只挂在终态帧的 `stopErrMsg` / `stopErrCode` 上，事件流里没有
  * 对应的 kind（`agentruntime.Done` 那四格里没有错误位，桌面端那一侧另发 `ErrorEvent`）。
@@ -84,19 +86,53 @@ export function turnDoneFrames(
   frame: RunResultDoneFrame,
   createtime = 0,
 ): SessionEventFrame[] {
-  const done = doneEventFrame(conversationId, frame, createtime);
-  if (!isTurnFailure(frame)) return [done];
-  return [
-    toTranscriptFrame(
-      {
-        conversationId,
-        event: { kind: "error", message: frame.stopErrMsg },
-        seq: undefined,
-      } as EventFrame,
-      createtime,
-    ),
-    done,
-  ];
+  const out: SessionEventFrame[] = [];
+  /*
+    上下文窗口：这一帧是它在**持久**这条路上的唯一载体。
+
+    agentred 做宿主时，fanout 把每条 runtime 事件都当预览帧扇出（`Preview: true`）
+    —— 不带 seq、不入库、不参与补齐。于是 `context_window_updated` 只在「恰好开着
+    并且恰好收到过那一帧」的窗口里存在，页面一刷新底栏那条进度条就没了分母。
+    终态帧本来就有这一格（wire 的 `RunResultDoneFrame.ContextWindow`），此前只是
+    没人读。
+
+    翻成一条独立的 `context_window_updated`，而不是往 `done` 上加一格：共享包的
+    `reduceSessionState` 只认 `context_window_updated` 与 `usage.contextWindow`，
+    给 `done` 加一格等于改共享包、两端都要跟着动。这条事件在转录里是 silent 的，
+    多出来的一帧一个像素都不画。零值不出现，理由同上面 meta 那几格。
+
+    排在最前：它说的是**会话**的属性，不是这一轮收场序列的一环，而下面 error →
+    done 的先后是有讲究的（见下），别插进那两条中间。
+  */
+  if (frame.contextWindow) {
+    out.push(
+      toTranscriptFrame(
+        {
+          conversationId,
+          event: {
+            kind: "context_window_updated",
+            tokens: frame.contextWindow,
+          },
+          seq: undefined,
+        } as EventFrame,
+        createtime,
+      ),
+    );
+  }
+  if (isTurnFailure(frame)) {
+    out.push(
+      toTranscriptFrame(
+        {
+          conversationId,
+          event: { kind: "error", message: frame.stopErrMsg },
+          seq: undefined,
+        } as EventFrame,
+        createtime,
+      ),
+    );
+  }
+  out.push(doneEventFrame(conversationId, frame, createtime));
+  return out;
 }
 
 /**

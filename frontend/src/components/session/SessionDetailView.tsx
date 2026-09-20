@@ -45,6 +45,7 @@ import { useFilePreviewTabs } from "@/components/session/useFilePreviewTabs";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import { turnDoneFrames } from "@/components/session/turnDone";
+import { useSteerAutoContinue } from "@/components/session/useSteerAutoContinue";
 import {
   useReconnectProbe,
   useSessionTargetDevice,
@@ -59,6 +60,10 @@ import {
   type SessionEventFrame,
 } from "@/components/session/transcriptFrame";
 import { nextPreviewTail } from "@/components/session/previewTail";
+import {
+  lastUsedModelId,
+  resolveContextWindow,
+} from "@/components/session/sessionModel";
 import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
 import {
@@ -114,11 +119,10 @@ const DEVICE_ACTIVE = 1;
 
 /**
  * 会话详情视图的导航形态（任务 5 重构边界）：
- *   - "page"：路由页形态。包 AppShell（TopBar 标题 + SideNav），带面包屑/移动返回
- *     （决策 16）。
- *   - "embedded"：桌面 Chat 右栏嵌入形态。不包 AppShell、无面包屑；只渲染真实详情
- *     （标题/状态/转录/审批/Composer），由外层容器给尺寸。移动路由流程仍走 page
- *     形态。保存 / 删除两端都不在这里——它们的入口在索引的行上（决策 5 / 11）。
+ *   - "page"：整屏形态（移动端 `/chat/:conversationId`）。包 AppShell（TopBar 标题 +
+ *     SideNav），带返回行（返回列表 + 机器名与在线状态）。
+ *   - "embedded"：桌面 Chat 右栏嵌入形态。不包 AppShell、无返回行；只渲染真实详情
+ *     （标题/状态/转录/审批/Composer），由外层容器给尺寸。保存 / 删除两端都不在这里——它们的入口在索引的行上（决策 5 / 11）。
  */
 export type SessionDetailViewForm = "page" | "embedded";
 
@@ -134,6 +138,8 @@ export interface SessionDetailViewProps {
    */
   peerFingerprint?: string;
   form?: SessionDetailViewForm;
+  /** 整屏形态返回行回到哪（宿主的会话列表地址，带着进来时的范围）。 */
+  backTo?: string;
   /**
    * 打开这条对话时就该摆在模型控件旁边的一句话。
    *
@@ -253,6 +259,7 @@ export default function SessionDetailView({
   conversationId,
   peerFingerprint,
   form = "page",
+  backTo,
   initialModelNote,
   initialEffortNote,
   initialTitle,
@@ -363,6 +370,15 @@ export default function SessionDetailView({
    * （回调里没有地方拿 alive()）。
    */
   const [turnEpoch, setTurnEpoch] = useState(0);
+  /**
+   * 「又有一轮**正常**收场了」的计数。轮末那几条插话的去向由它点火，消费在
+   * `useSteerAutoContinue` —— 那只 hook 排在发送那一族之后（它要 `sendMessage`），
+   * 而中继的回调排在最前面，计数是这两头唯一能握手的东西。
+   *
+   * 与 `turnEpoch` 分开数：那一份连出错的轮次也数（摘要照样要重取），这一份只数
+   * 正常收场的 —— 出错与中断不接续，判据与桌面端 `turn_run.go` 同一条。
+   */
+  const [settledTurnEpoch, setSettledTurnEpoch] = useState(0);
 
   const clientRef = useRef<import("@/lib/relayClient").RelayClient | null>(
     null,
@@ -646,10 +662,19 @@ export default function SessionDetailView({
       liveTurn.endTurn();
       turn.setPendingAssistant(false);
       setEvents((prev) => [...prev, ...turnDoneFrames(sid, frame)]);
-      // 这一轮结束时还排着的那几条:不静默清掉。它们要么被 drain 成下一轮(那时
-      // steer_consumed 会把 chip 清掉),要么就是真的没被任何人取走 —— 后一种把
-      // 用户刚敲的字悄悄抹掉、且无从补救(规格决策 4)。
-      steerQueue.endTurn();
+      /*
+        这一轮结束时还排着的那几条:去向由 `useSteerAutoContinue` 决定 —— 先问执行端
+        信箱里还剩什么,取回来就自动接续成新一轮(桌面端 chat_svc 的老规矩),取不回来
+        才是真的没人要了,那时才摆丢弃横幅。不问的话那段字仍攥在 agentred 手里
+        (信箱只在 CLI 会话被逐出时才清),下一轮的第一个 PostToolUse 钩子会把它捞出来
+        凭空插进去。
+
+        出错 / 被中断收场不问也不接续(判据同桌面端 turn_run.go 的
+        `stopErr == nil && !aborted`),那两档照旧当场交还给用户。补齐回放的终态帧同样
+        不点火:那几轮早就结束了,拿它们去问执行端等于打开一条老对话就凭空开一轮。
+      */
+      if (ready && !frame.stopErrMsg) setSettledTurnEpoch((n) => n + 1);
+      else steerQueue.endTurn();
       decisions.requestWaitersRefresh();
       // 这一轮落定了 → 摘要重取 + 已读补记（见下面那只 effect 的说明）。
       //
@@ -1237,7 +1262,7 @@ export default function SessionDetailView({
         rawPermissionMode,
         permissionModeMeta.allowedModes,
         permissionModeMeta.defaultMode,
-        engineBackend?.default_permission_mode,
+        engineBackend?.config?.defaultPermissionMode,
       )
     : rawPermissionMode;
 
@@ -1357,6 +1382,20 @@ export default function SessionDetailView({
     steerQueue,
     // 自己开的这一轮，起点就是此刻 —— 那条 meta 的耗时从这里开始走。
     onOwnTurnStarted: () => liveTurn.beginTurn(Date.now()),
+  });
+
+  /*
+    轮末插话的去向。它要 `send.sendMessage`，所以只能排在这里（发送那一族之后）；
+    与终态帧那一处之间隔着 `settledTurnEpoch` 那个计数。
+  */
+  useSteerAutoContinue({
+    epoch: settledTurnEpoch,
+    conversationId: sid,
+    carrier: device,
+    clientRef,
+    originRef,
+    steerQueue,
+    sendMessage: send.sendMessage,
   });
 
   if (deviceError) {
@@ -1496,14 +1535,23 @@ export default function SessionDetailView({
   }
 
   /**
-   * 一轮还没跑完时，meta 栏的模型退到这一个 —— 底栏那颗 pill 此刻解析到的模型的 ID。
+   * 一轮还没跑完时，meta 栏的模型退到这一个。
    *
    * 消息自己的 `model` 只有终态帧一条来路（wire 上的 usage 帧没有这个字段），
-   * 而那一帧要等一轮跑完才来。四态推导仍归共享包的 `resolveProviderPillState`
-   * （pill 自己也调它），这里只取它算出来的那一格；失效（invalid）时留空：那时
-   * pill 显示的就不是一个能用的模型，把它当成「这一轮用的是它」是在撒谎。
-   * 取模型 ID 而不是 pill 上的展示名：终态帧带来的是运行时上报的模型 ID，写展示名
-   * 的话终态帧一到就跳字。
+   * 而那一帧要等一轮跑完才来。两级兜底，都是这条会话的事实，不是猜的：
+   *
+   *   1. **底栏那颗 pill 此刻解析到的模型 ID** —— 它就是下一轮（也就是正跑着这一
+   *      轮）配置上会用的那个，与桌面端 `chat-panel` 交给转录的
+   *      `providerPill.resolvedModelId` 同一格。四态推导仍归共享包的
+   *      `resolveProviderPillState`（pill 自己也调它），这里只取它算出来的那一格；
+   *      失效（invalid）时跳过：那时 pill 显示的就不是一个能用的模型。
+   *   2. **这条会话上一次真的用过的模型** —— 模型走「跟随 Agent 绑定」时第 1 级
+   *      解不出具体模型 id（`boundModelKey` 缺席就是空串），而控制台这条路上它经常
+   *      是空的，于是轮次跑着时 meta 上只有 token 与耗时、没有模型名，要等落定才
+   *      冒出来。已经发生过的事实比什么都不写诚实得多。
+   *
+   * 两级都答不出仍是空串，不编一个出来。取模型 ID 而不是 pill 上的展示名：终态帧
+   * 带来的是运行时上报的模型 ID，写展示名的话终态帧一到就跳字。
    */
   const modelPill = resolveProviderPillState({
     boundProviderKey: engineBackend?.provider_key,
@@ -1511,7 +1559,24 @@ export default function SessionDetailView({
     catalog: pickerCatalog,
     target: effectiveTarget,
   });
-  const fallbackModel = modelPill.mode === "invalid" ? "" : modelPill.modelId;
+  /** 这条会话上一次真的用过的模型（见 sessionModel）。一轮都没跑完时是空串。 */
+  const lastUsedModel = lastUsedModelId(messages);
+  const pinnedModel = modelPill.mode === "invalid" ? "" : modelPill.modelId;
+  const fallbackModel = pinnedModel || lastUsedModel;
+  /**
+   * 底栏那条上下文进度条的分母。
+   *
+   * 事件流不是唯一来路：dev 环境的持久帧里 `context_window_updated` /
+   * `usage.contextWindow` 一条都没有（agentred 探到了窗口却 emit 成 wire 上并不
+   * 存在的 kind），于是这枚计量器在控制台上一次都没渲染过。兜底链与桌面端
+   * `resolveContextWindowWithRuntime` 同序，理由写在 `sessionModel` 里。
+   */
+  const contextWindow = resolveContextWindow({
+    runtimeWindow: sessionRuntime.contextWindow,
+    catalog: pickerCatalog,
+    lastUsedModelId: lastUsedModel,
+    pinnedModelId: pinnedModel,
+  });
 
   const reasoningEffortControl = supportsReasoningEffort ? (
     <SessionReasoningEffortControl
@@ -1664,7 +1729,7 @@ export default function SessionDetailView({
   const header = (
     <SessionDetailHeader
       isPage={isPage}
-      did={did}
+      backTo={backTo}
       sid={sid}
       identity={identity}
       agent={agent}
@@ -1746,7 +1811,7 @@ export default function SessionDetailView({
       backendType={summary?.backendType}
       agents={agents}
       messages={messages}
-      contextWindow={sessionRuntime.contextWindow}
+      contextWindow={contextWindow}
       sending={send.sending}
       // 自己按下的发送把视口带回底部：他要看的东西（排队气泡、这条消息本身、
       // 助手的三个点）全落在最底下。往回翻着看时不被**对端**拽走那条规矩不受

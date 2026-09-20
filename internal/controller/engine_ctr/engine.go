@@ -66,6 +66,38 @@ func (e *Engine) DeleteProvider(c *gin.Context, req *api.DeleteProviderRequest) 
 	}
 	return &struct{}{}, nil
 }
+func (e *Engine) CreateProviderModel(c *gin.Context, req *api.CreateProviderModelRequest) (*api.Provider, error) {
+	item, err := engine_svc.Default().CreateProviderModel(c.Request.Context(), engine_svc.ModelWriteInput{
+		UserID: ginctx.UserID(c), ProviderKey: req.ProviderKey, ModelKey: req.ModelKey,
+		ModelID: req.ModelID, Name: req.Name, Enabled: req.Enabled,
+		ContextWindow: req.ContextWindow, MaxOutput: req.MaxOutput,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := provider(*item)
+	return &out, nil
+}
+func (e *Engine) UpdateProviderModel(c *gin.Context, req *api.UpdateProviderModelRequest) (*api.Provider, error) {
+	item, err := engine_svc.Default().UpdateProviderModel(c.Request.Context(), engine_svc.ModelWriteInput{
+		UserID: ginctx.UserID(c), ProviderKey: req.ProviderKey, ModelKey: req.ModelKey,
+		ModelID: req.ModelID, Name: req.Name, Enabled: req.Enabled,
+		ContextWindow: req.ContextWindow, MaxOutput: req.MaxOutput,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := provider(*item)
+	return &out, nil
+}
+func (e *Engine) DeleteProviderModel(c *gin.Context, req *api.DeleteProviderModelRequest) (*api.Provider, error) {
+	item, err := engine_svc.Default().DeleteProviderModel(c.Request.Context(), ginctx.UserID(c), req.ProviderKey, req.ModelKey)
+	if err != nil {
+		return nil, err
+	}
+	out := provider(*item)
+	return &out, nil
+}
 
 // providerModels 把请求里的模型档搬成服务层入参；nil 原样保持 nil（「不改这一列」）。
 func providerModels(models *[]api.Model) *[]engine_svc.Model {
@@ -99,12 +131,9 @@ func (e *Engine) ListBackends(c *gin.Context, _ *api.ListBackendsRequest) (*api.
 func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*api.Backend, error) {
 	item, err := engine_svc.Default().CreateBackend(c.Request.Context(), engine_svc.BackendWriteInput{
 		UserID: ginctx.UserID(c), SyncID: "", Name: req.Name, Type: req.Type,
-		ProviderKey: req.ProviderKey, ModelKey: req.ModelKey, ModelRoutes: req.ModelRoutes,
-		Sandbox: req.Sandbox, Approval: req.Approval, ReasoningEffort: req.ReasoningEffort,
-		DefaultPermissionMode: req.DefaultPermissionMode, DefaultModel: req.DefaultModel,
-		OpenClawGatewayURL: req.OpenClawGatewayURL, OpenClawAgentID: req.OpenClawAgentID,
-		OpenClawDefaultModel: req.OpenClawDefaultModel, OpenClawSessionMode: req.OpenClawSessionMode,
-		CLIPath: req.CLIPath, DeviceFingerprint: req.DeviceFingerprint, EnvJSON: req.EnvJSON,
+		ProviderKey: req.ProviderKey, ModelKey: req.ModelKey, Config: req.Config,
+		ReasoningEffort: req.ReasoningEffort, EnvJSON: req.EnvJSON,
+		CLIPath: req.CLIPath, DeviceFingerprint: req.DeviceFingerprint,
 	})
 	if err != nil {
 		return nil, err
@@ -115,12 +144,9 @@ func (e *Engine) CreateBackend(c *gin.Context, req *api.CreateBackendRequest) (*
 func (e *Engine) UpdateBackend(c *gin.Context, req *api.UpdateBackendRequest) (*api.Backend, error) {
 	item, err := engine_svc.Default().UpdateBackend(c.Request.Context(), engine_svc.BackendWriteInput{
 		UserID: ginctx.UserID(c), SyncID: req.SyncID, Name: req.Name, Type: req.Type,
-		ProviderKey: req.ProviderKey, ModelKey: req.ModelKey, ModelRoutes: req.ModelRoutes,
-		Sandbox: req.Sandbox, Approval: req.Approval, ReasoningEffort: req.ReasoningEffort,
-		DefaultPermissionMode: req.DefaultPermissionMode, DefaultModel: req.DefaultModel,
-		OpenClawGatewayURL: req.OpenClawGatewayURL, OpenClawAgentID: req.OpenClawAgentID,
-		OpenClawDefaultModel: req.OpenClawDefaultModel, OpenClawSessionMode: req.OpenClawSessionMode,
-		CLIPath: req.CLIPath, DeviceFingerprint: req.DeviceFingerprint, EnvJSON: req.EnvJSON,
+		ProviderKey: req.ProviderKey, ModelKey: req.ModelKey, Config: req.Config,
+		ReasoningEffort: req.ReasoningEffort, EnvJSON: req.EnvJSON,
+		CLIPath: req.CLIPath, DeviceFingerprint: req.DeviceFingerprint,
 	})
 	if err != nil {
 		return nil, err
@@ -141,11 +167,8 @@ func backend(b engine_svc.BackendView) api.Backend {
 	}
 	return api.Backend{
 		SyncID: b.SyncID, Name: b.Name, Type: b.Type, ProviderKey: b.ProviderKey, ModelKey: b.ModelKey,
-		ModelRoutes: b.ModelRoutes, Sandbox: b.Sandbox, Approval: b.Approval,
-		EnvJSON: b.EnvJSON, ReasoningEffort: b.ReasoningEffort, DefaultPermissionMode: b.DefaultPermissionMode,
-		DefaultModel: b.DefaultModel, OpenClawGatewayURL: b.OpenClawGatewayURL,
-		OpenClawAgentID: b.OpenClawAgentID, OpenClawDefaultModel: b.OpenClawDefaultModel,
-		OpenClawSessionMode: b.OpenClawSessionMode, RefCount: b.RefCount, CLIByDevice: cli,
+		EnvJSON: b.EnvJSON, ReasoningEffort: b.ReasoningEffort, Config: b.Config,
+		RefCount: b.RefCount, CLIByDevice: cli,
 		DeviceFingerprint: b.DeviceFingerprint,
 	}
 }
@@ -170,7 +193,11 @@ func (e *Engine) Snapshot(c *gin.Context, _ *api.SnapshotRequest) (*api.Snapshot
 	if err != nil {
 		return nil, err
 	}
-	out := &api.SnapshotResponse{Providers: make([]api.SnapshotProvider, 0, len(snap.Providers)), CLIOverlays: make([]api.SnapshotCLIOverlay, 0, len(snap.CLIOverlays))}
+	out := &api.SnapshotResponse{
+		Providers:   make([]api.SnapshotProvider, 0, len(snap.Providers)),
+		CLIOverlays: make([]api.SnapshotCLIOverlay, 0, len(snap.CLIOverlays)),
+		Backends:    make([]api.SnapshotBackend, 0, len(snap.Backends)),
+	}
 	for _, p := range snap.Providers {
 		models := make([]api.Model, len(p.Models))
 		for i, m := range p.Models {
@@ -180,6 +207,9 @@ func (e *Engine) Snapshot(c *gin.Context, _ *api.SnapshotRequest) (*api.Snapshot
 	}
 	for _, o := range snap.CLIOverlays {
 		out.CLIOverlays = append(out.CLIOverlays, api.SnapshotCLIOverlay{BackendSyncID: o.BackendSyncID, CLIPath: o.CLIPath})
+	}
+	for _, b := range snap.Backends {
+		out.Backends = append(out.Backends, api.SnapshotBackend{BackendSyncID: b.BackendSyncID, Config: b.Config})
 	}
 	return out, nil
 }

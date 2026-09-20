@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 
-import App, { ChatPage, SessionDetailPage } from "@/App";
+import App, { ChatPage } from "@/App";
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
@@ -76,13 +76,12 @@ describe("App shell wiring", () => {
     );
   });
 
-  it("挂载后趁空闲预热对话两页：首次从别处切过去不再空屏一下", async () => {
+  it("挂载后趁空闲预热对话页：首次从别处切过去不再空屏一下", async () => {
     await i18n.changeLanguage("en");
     mockSignedIn();
     // 真去 import 会把 xterm / highlight.js 那一堆拉进这个用例；这里只认「有没有
     // 按空闲预热」这条接线，模块本身的契约在 lazy-page.test.tsx。
     const chat = vi.spyOn(ChatPage, "preload").mockResolvedValue();
-    const detail = vi.spyOn(SessionDetailPage, "preload").mockResolvedValue();
     onTestFinished(() => {
       vi.restoreAllMocks();
     });
@@ -91,7 +90,6 @@ describe("App shell wiring", () => {
     await screen.findByRole("group", { name: "Stats range" });
 
     await waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
-    expect(detail).toHaveBeenCalledTimes(1);
   });
 
   it.each(["/terms", "/privacy", "/status"])(
@@ -118,6 +116,27 @@ describe("App shell wiring", () => {
         await screen.findByRole("group", { name: "Stats range" }),
       ).toBeTruthy();
       expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
+    });
+
+    it("serves /chat/:conversationId as the chat page with that conversation open", async () => {
+      await i18n.changeLanguage("en");
+      mockSignedIn();
+      renderAt("/chat/01a0ae6a-4e9e-7d68-92ee-0ec6937b6db8");
+      // 账号里没有这一行、地址也没带机器：Chat 页照常挂着索引，右栏如实说找不到。
+      expect(await screen.findByTestId("session-not-found")).toBeTruthy();
+      expect(screen.getByTestId("chat-layout")).toBeTruthy();
+    });
+
+    it("does not serve the old /devices/:id/sessions/:id detail page: it is a 404 now", async () => {
+      await i18n.changeLanguage("en");
+      mockSignedIn();
+      renderAt("/devices/1/sessions/01a0ae6a-4e9e-7d68-92ee-0ec6937b6db8");
+      expect(
+        await screen.findByRole("heading", {
+          level: 1,
+          name: /page not found/i,
+        }),
+      ).toBeTruthy();
     });
 
     it("does not serve /audit: the unused empty page is gone, so the catch-all 404 renders", async () => {

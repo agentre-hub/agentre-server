@@ -118,8 +118,8 @@ export interface SessionImportDeps {
   /** `/v1/workspace/agents` 的清单，用来给「导完接着跑」挑目标。 */
   agents: NewConvAgent[];
   /**
-   * 打开一条会话。**两个参数**：本站的会话详情路由是 `/devices/:did/sessions/:sid`，
-   * 光有会话号到不了那儿。
+   * 打开一条会话。**两个参数**：刚导进来的这条账号里有没有还说不准，会话地址
+   * （`/chat/:conversationId`）要带上机器兜底，光有会话号认不出它在哪台机器上。
    */
   openSession(deviceId: number, sessionId: string): void;
 }

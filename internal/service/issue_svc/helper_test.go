@@ -44,6 +44,13 @@ func setupBoardTxTest(t *testing.T) (
 	t.Cleanup(ctrl.Finish)
 	mObj := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	sync_repo.RegisterSyncObject(mObj)
+	// 写入事务开头要锁账号序列（workspace_svc.WithOrgWriteTx 的加锁次序），所以每个
+	// 用例都得有一份自己的序列仓储替身：不装的话拿到的是上一个用例留下、控制器早已
+	// 收尾的陈旧 mock。需要断言取号的用例另外调 registerSyncStateMock 换一份带期望的。
+	mState := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncState(mState)
+	mState.EXPECT().LockAccountSeq(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	t.Cleanup(func() { sync_repo.RegisterSyncState(nil) })
 	ctx, txLog := hubtest.TxDatabase(t)
 	return ctx, txLog, mObj
 }
@@ -54,6 +61,9 @@ func registerSyncStateMock(t *testing.T) *mock_sync_repo.MockSyncStateRepo {
 	t.Cleanup(ctrl.Finish)
 	m := mock_sync_repo.NewMockSyncStateRepo(ctrl)
 	sync_repo.RegisterSyncState(m)
+	// 写入事务开头的那次账号序列加锁（workspace_svc.WithOrgWriteTx 的加锁次序）：
+	// 它只是次序，不是这些用例被测的行为，一律放行。
+	m.EXPECT().LockAccountSeq(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	t.Cleanup(func() { sync_repo.RegisterSyncState(nil) })
 	return m
 }

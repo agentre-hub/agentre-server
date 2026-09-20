@@ -81,10 +81,16 @@ type DispatchTierItem struct {
 // DispatchChoiceItem 是派发最终落到的那一档（第一档可用的 agentred）。Cwd 只在
 // project_sync_id 非空（确认派发阶段）时带出，供屏幕 25 呈现与派发 runtime.run；
 // 这是 R19 红线在主动派活场景下的唯一例外（见 workspace_svc.WebDispatchChoice 注释）。
+//
+// BackendSyncID 是选中后端的**非敏感身份**（与档位行上的同源）：浏览器只把它带在
+// runtime.run 的 backend 上，daemon 持设备 JWT 按它从 /v1/engine/snapshot 取整份
+// config。ACP 启动身份（acpCommand / acpArgs）是一段任意 argv，可能夹带凭据，
+// 这里的类型上没有装得下它的字段（guard_test.go 钉着）。
 type DispatchChoiceItem struct {
 	DeviceFingerprint string `json:"device_fingerprint"`
 	DeviceID          int64  `json:"device_id"`
 	DeviceName        string `json:"device_name"`
+	BackendSyncID     string `json:"backend_sync_id,omitempty"`
 	BackendType       string `json:"backend_type"`
 	// Kind 是选中目标设备种类（desktop / agentred），R17 发起前据此说明工具可用性。
 	Kind string `json:"kind"`

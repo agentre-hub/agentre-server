@@ -473,6 +473,13 @@ export default function Transcript({
                         ? liveTurn
                         : null
                     }
+                    // 「这一轮此刻在不在跑」如实交给包（共享包 0db63218 起的入参）。
+                    // 包原本从 `liveBlocks !== undefined || liveTail 非空` 反推运行态,
+                    // 那说的是「宿主有没有喂还没落库的内容」—— 桌面端恰好恒真,本站
+                    // 没有这条分界（liveBlocks 恒 undefined）、活动块当末行时正文又
+                    // 不在流,两个条件同时为假,于是活动块在这一端永远不自动展开。
+                    // 这一格给的是**轮次级**事实,「是不是这一轮的末行」仍归行模型。
+                    turnRunning={row.messageId === liveMessageId}
                     showIndicator={
                       row.isLastOfMessage &&
                       streaming &&

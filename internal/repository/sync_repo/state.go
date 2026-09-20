@@ -21,6 +21,13 @@ type SyncStateRepo interface {
 	// EnsureSeq 为账号建好它的序列行（version_seq 从 0 起）；那一行已存在时不改写。
 	// 建号时在同一个事务里调用。
 	EnsureSeq(ctx context.Context, userID int64) error
+	// LockAccountSeq 只锁账号序列那一行，不推进它。**只能在事务里调用**，锁持到提交。
+	//
+	// 它存在的唯一理由是**加锁次序**（详见 workspace_svc.WithOrgWriteTx）：设备上行
+	// 先取版本号（这一行的 X 锁）再写 sync_objects 的各行；服务端直写要在同一个次序上
+	// 排队，可它的「读 → 合并 → 写」必须先加锁读那一行才知道要写什么。先调它，这次
+	// 写入就在拿到任何 sync_objects 行锁之前已经排在序列这一行上，两条路径不构成环。
+	LockAccountSeq(ctx context.Context, userID int64) error
 	// CurrentVersion 取账号级序列**当前的头**（最近一次分配出去的版本号），
 	// 不推进它；账号还没分配过任何版本时返回 0。
 	//
@@ -107,6 +114,22 @@ func (r *stateRepo) EnsureSeq(ctx context.Context, userID int64) error {
 	return db.Ctx(ctx).Exec(
 		`INSERT INTO sync_account_seqs (user_id, version_seq, updatetime) VALUES (?, 0, ?) ON DUPLICATE KEY UPDATE user_id = user_id`,
 		userID, time.Now().UnixMilli()).Error
+}
+
+// LockAccountSeq 借一条 SELECT … FOR UPDATE 拿那一行的排他锁，什么都不改。
+//
+// 不借 NextVersion 来拿锁：那会在每一次浏览器写入上白白烧掉一个版本号，而且它的
+// 回落分支（序列行还不存在时的 INSERT … ON DUPLICATE）会连带在主键的 supremum 上
+// 持一把 X 锁到提交，把别的账号的取号一起挡住（见 NextVersion 的实测注释）。
+//
+// 账号还没有序列行时取不到行，也就没有锁可拿——不是错误：建号会预建那一行
+// （EnsureSeq），剩下的历史账号由 NextVersion 的回落分支接住。这一刻少一把锁只是
+// 少一次排队，不会写坏任何东西。
+func (r *stateRepo) LockAccountSeq(ctx context.Context, userID int64) error {
+	var version int64
+	return db.Ctx(ctx).
+		Raw("SELECT version_seq FROM sync_account_seqs WHERE user_id = ? FOR UPDATE", userID).
+		Scan(&version).Error
 }
 
 // CurrentVersion 只读序列的当前值，绝不推进它——推进要么由 NextVersion 一次做完，

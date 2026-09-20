@@ -276,7 +276,12 @@ type WebDispatchChoice struct {
 	DeviceFingerprint string
 	DeviceID          int64
 	DeviceName        string
-	BackendType       string
+	// BackendSyncID 是选中后端的**非敏感身份**（与档位行上的同源）。浏览器只把它
+	// 带在 runtime.run 的 backend 上，daemon 持设备 JWT 按它从 /v1/engine/snapshot
+	// 取整份 config。ACP 启动身份（acpCommand / acpArgs）是一段任意 argv，可能夹带
+	// 凭据，绝不经过浏览器。
+	BackendSyncID string
+	BackendType   string
 	// Kind 是选中目标设备种类（device_entity.KindDesktop / KindAgentred），R17
 	// 发起前据此说明三个内置工具是否可用。
 	Kind string
@@ -429,12 +434,14 @@ type agentPayload struct {
 	ToolsJSON  string `json:"tools_json"`
 }
 
-// agentBackendPayload 是这个包认识的**全部**后端键：类型与名字。
+// agentBackendPayload 是这个包从后端载荷里认识的键：类型与名字。
 //
-// **这里没有、也不会有 CLIPath 与 EnvJSON。** 同步载荷里它们就摆在旁边（agentre 侧
-// adapter_org.go），而 json.Unmarshal 对没有 tag 对应的键直接丢弃——它们因此在
-// service 边界之前就已经出局，不靠下游记得别填。浏览器要能**挑**一个后端，这两个
-// 键却是那台机器的私事：给它加一个字段，就是给这条红线开一个口子。
+// **这里没有、也不会有 CLIPath、EnvJSON 或 config。** 前两者在同步载荷里就摆在
+// 旁边（agentre 侧 adapter_org.go），而 json.Unmarshal 对没有 tag 对应的键直接丢弃
+// ——它们因此在 service 边界之前就已经出局，不靠下游记得别填。config 里的
+// acpCommand / acpArgs 是一段任意 argv，可能夹带凭据，浏览器不需要它：选中的后端
+// 只带 backend_sync_id，daemon 持设备 JWT 从 /v1/engine/snapshot 按 sync_id 取整份
+// config。给它加一个 Config 字段，就是给这条红线开一个口子。
 type agentBackendPayload struct {
 	Type string `json:"type"`
 	Name string `json:"name"`
@@ -750,7 +757,7 @@ func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetO
 	// ORDER BY，并列之后谁在前由数据库那次返回顺序决定（见 withExecTargetTailSlot），
 	// 用户排在第一位的那台机器会被挤掉「当前生效」；浏览器同时收到一个错误，用户以为
 	// 什么都没发生。版本号同理取在事务里，理由见 WithOrgWriteTx。
-	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
+	if err := WithOrgWriteTx(ctx, in.UserID, func(ctx context.Context) error {
 		for i, row := range ordered {
 			payload, changed, err := withSortOrder(row.Payload, i)
 			if err != nil {
@@ -1289,7 +1296,7 @@ func (s *workspaceSvc) CreateOrgObject(ctx context.Context, in OrgWriteInput) (*
 		OriginFingerprint: ServerOriginFingerprint, Createtime: now, Updatetime: now,
 	}
 	// 取号与落库同在一个事务里，否则版本号顺序不再是提交顺序（见 WithOrgWriteTx）。
-	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
+	if err := WithOrgWriteTx(ctx, in.UserID, func(ctx context.Context) error {
 		version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
 		if err != nil {
 			return err
@@ -1308,25 +1315,24 @@ func (s *workspaceSvc) CreateOrgObject(ctx context.Context, in OrgWriteInput) (*
 
 // UpdateOrgObject 改一行：**只覆盖请求明确涉及的键**，载荷里其余的原值保留。
 func (s *workspaceSvc) UpdateOrgObject(ctx context.Context, in OrgWriteInput) (*OrgWriteResult, error) {
-	row, err := s.findOrgRowForWrite(ctx, in)
+	row, err := writeLockedOrgRow(ctx, in, func(ctx context.Context, row *sync_entity.SyncObject) error {
+		if err := s.checkExecTargetBackend(ctx, in); err != nil {
+			return err
+		}
+		if err := checkSystemAgentPlacement(ctx, row, in); err != nil {
+			return err
+		}
+		if err := checkProjectWrite(ctx, in, row.SyncID); err != nil {
+			return err
+		}
+		payload, err := WithOrgFields(row.Payload, in.Fields)
+		if err != nil {
+			return err
+		}
+		row.Payload = payload
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := s.checkExecTargetBackend(ctx, in); err != nil {
-		return nil, err
-	}
-	if err := checkSystemAgentPlacement(ctx, row, in); err != nil {
-		return nil, err
-	}
-	if err := checkProjectWrite(ctx, in, row.SyncID); err != nil {
-		return nil, err
-	}
-	payload, err := WithOrgFields(row.Payload, in.Fields)
-	if err != nil {
-		return nil, err
-	}
-	row.Payload = payload
-	if err := SaveOrgRow(ctx, in.UserID, row); err != nil {
 		return nil, err
 	}
 	logger.Ctx(ctx).Info("workspace_svc.UpdateOrgObject: org object updated from web",
@@ -1338,53 +1344,88 @@ func (s *workspaceSvc) UpdateOrgObject(ctx context.Context, in OrgWriteInput) (*
 
 // DeleteOrgObject 删一行：落墓碑而不是物理删除——删除本身要能被下行游标带到每一台
 // 机器上，物理删除只会让还没拉取的设备把它当成「从未存在」而重新推上来（R6）。
-// 正文原样留着，与设备离开账号那条路径（sync_repo.Tombstone）一致。
+// 正文原样留着（加锁读到的最新正文），与设备离开账号那条路径（sync_repo.Tombstone）一致。
 func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*OrgWriteResult, error) {
-	row, err := s.findOrgRowForWrite(ctx, in)
-	if err != nil {
-		return nil, err
-	}
-	if isSystemAgentRow(row) {
-		return nil, i18n.NewError(ctx, code.OrgSystemAgentImmutable)
-	}
 	// 子树与主行同在一个事务里：逐行各自提交时，中途失败会留下一棵删了一半的树
 	// （主行还活着而部分子项目已消失，或反过来子项目成了指向不存在父项目的孤儿行），
 	// 而那个中间态会照常同步到每一台机器上。
 	//
 	// 顺序仍是子树先落、主行最后落：主行因此拿到这次操作推进到的最高版本，提交之后
 	// 那一次广播就把整批改动的信号一起带出去了。
-	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
+	row, err := writeLockedOrgRow(ctx, in, func(ctx context.Context, row *sync_entity.SyncObject) error {
+		if isSystemAgentRow(row) {
+			return i18n.NewError(ctx, code.OrgSystemAgentImmutable)
+		}
 		if err := cascadeProjectDelete(ctx, in, row); err != nil {
 			return err
 		}
 		row.DeletedAt = time.Now().UnixMilli()
-		return WriteOrgRow(ctx, in.UserID, row)
-	}); err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, row.Version)
 	logger.Ctx(ctx).Info("workspace_svc.DeleteOrgObject: org object tombstoned from web",
 		zap.Int64("userId", in.UserID), zap.String("kind", in.Kind),
 		zap.String("syncId", row.SyncID), zap.Int64("version", row.Version))
 	return &OrgWriteResult{SyncID: row.SyncID, Version: row.Version}, nil
 }
 
-// findOrgRowForWrite 取出要写的那一行，并把三条拒绝判在写入之前：
+// writeLockedOrgRow 是改与删共用的那一段：读、改、写同在一个事务里，读带行锁
+// （lockOrgRowForWrite），提交之后广播。
 //
-//   - 类型不在写通道里（后端在 web 上只读）；
-//   - 行在**当前账号**下不存在，或类型与端点不符——跨账号的那一行正落在这里，
-//     Find 按（账号, 同步标识）取，别的账号的行根本取不到，因此不需要额外的归属校验；
-//   - 行已是墓碑：删除不复活（R6），界面据此提供「按这份内容新建」。
-func (s *workspaceSvc) findOrgRowForWrite(
+// 设备上行与这次写入因此串行，mutate 拿到的是库里此刻的最新行。读在事务外时，设备在
+// 读与写之间推上来的那一版会被旧副本整行覆盖——WriteOrgRow 取到的版本号更大，Save 的
+// 版本条件照样成立（规格 backend-config-sync 问题 7）。mutate 返回错误即整体回滚、
+// 不烧版本号、不广播。
+func writeLockedOrgRow(
 	ctx context.Context, in OrgWriteInput,
+	mutate func(ctx context.Context, row *sync_entity.SyncObject) error,
 ) (*sync_entity.SyncObject, error) {
-	if err := checkOrgWritableKind(ctx, in.Kind); err != nil {
+	if err := checkOrgWriteTarget(ctx, in); err != nil {
 		return nil, err
 	}
-	if in.SyncID == "" {
-		return nil, i18n.NewNotFoundError(ctx, code.OrgObjectNotFound)
+	var row *sync_entity.SyncObject
+	if err := WithOrgWriteTx(ctx, in.UserID, func(ctx context.Context) error {
+		locked, err := lockOrgRowForWrite(ctx, in)
+		if err != nil {
+			return err
+		}
+		if err := mutate(ctx, locked); err != nil {
+			return err
+		}
+		row = locked
+		return WriteOrgRow(ctx, in.UserID, locked)
+	}); err != nil {
+		return nil, err
 	}
-	row, err := sync_repo.SyncObject().Find(ctx, in.UserID, in.SyncID)
+	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, row.Version)
+	return row, nil
+}
+
+// checkOrgWriteTarget 把不必开事务就能判的两条拒绝放在事务之前：类型不在写通道里
+// （后端在 web 上只读）、请求没有指明要写哪一行。
+func checkOrgWriteTarget(ctx context.Context, in OrgWriteInput) error {
+	if err := checkOrgWritableKind(ctx, in.Kind); err != nil {
+		return err
+	}
+	if in.SyncID == "" {
+		return i18n.NewNotFoundError(ctx, code.OrgObjectNotFound)
+	}
+	return nil
+}
+
+// lockOrgRowForWrite 在写入事务里**带行锁**取出要写的那一行，并判两条拒绝：
+//
+//   - 行在**当前账号**下不存在，或类型与端点不符——跨账号的那一行正落在这里，
+//     按（账号, 同步标识）取，别的账号的行根本取不到，因此不需要额外的归属校验；
+//   - 行已是墓碑：删除不复活（R6），界面据此提供「按这份内容新建」。
+//
+// **只能在 WithOrgWriteTx 里调用**：锁持到提交，这次写入与设备上行才串行。
+func lockOrgRowForWrite(
+	ctx context.Context, in OrgWriteInput,
+) (*sync_entity.SyncObject, error) {
+	row, err := sync_repo.SyncObject().FindForUpdate(ctx, in.UserID, in.SyncID)
 	if err != nil {
 		return nil, err
 	}
@@ -1413,29 +1454,49 @@ func (s *workspaceSvc) findOrgRowForWrite(
 // 抖动回滚一次已经算数的写入，又会在提交之前就把信号喊出去——另一端赶来拉取时还看不到
 // 这一版。
 //
+// ── 加锁次序 ────────────────────────────────────────────────────────────────
+//
+// 事务一开头先锁住 sync_account_seqs 上这个账号那一行（LockAccountSeq），userID 因此
+// 是必填参数而不是 fn 自己的事。
+//
+// 这条通道里有一类写入要「读 → 合并 → 写」：先加锁读出存着的载荷（FindForUpdate），
+// 按键合并，再落库。它天然是「先拿 sync_objects 的行锁、再取版本号（sync_account_seqs
+// 的行锁）」。而设备上行（sync_svc.Push）是反过来的：整批的号一次取完（那一行的 X 锁
+// 持到提交），然后才写 sync_objects 的各行。两个次序相反的事务撞在一起就是一个环——
+// 各持一把、各等一把，InnoDB 判环回滚其中一条（ERROR 1213）。那不是数据损坏，但一次
+// 正常的浏览器保存与一次正常的设备上行撞上就会失败，而这条通道存在的意义正是让这两件
+// 事能同时发生。
+//
+// 所以次序在这里被钉死成与上行同向：**先序列、后行**。锁排在最前面还顺带让整段写入
+// 对同一个账号串行，「读到的就是写入时库里的最新值」因此不依赖各条写路径自己记得加锁。
+// 代价是同账号的服务端直写按事务串行——与上行本来就付的是同一份代价。
+//
 // 导出是因为这条规矩管的是「服务端直写 sync_objects」这条写通道，不是 workspace 这
 // 一个域：看板（issue_svc）走的是完全同一条通道，同一个账号级序列，同一个下行游标。
 // 它与 WriteOrgRow / SaveOrgRow / ServerOriginFingerprint 一起构成这条通道对外的那
 // 几格，住在一处，规矩才和它管的东西挨着（依赖方向不变：issue_svc → workspace_svc）。
-func WithOrgWriteTx(ctx context.Context, fn func(context.Context) error) error {
+func WithOrgWriteTx(ctx context.Context, userID int64, fn func(context.Context) error) error {
 	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
-		return fn(db.WithContextDB(ctx, tx))
+		txCtx := db.WithContextDB(ctx, tx)
+		// 锁住账号序列那一行，**在 fn 拿到任何 sync_objects 行锁之前**（见下面
+		// 「加锁次序」那一段）。取不到序列行时不是错误，见 LockAccountSeq。
+		if err := sync_repo.SyncState().LockAccountSeq(txCtx, userID); err != nil {
+			return err
+		}
+		return fn(txCtx)
 	})
 }
 
-// SaveOrgRow 落这一行并广播：新版本号 + 服务端来源。改与删只差 DeletedAt，其余完全
-// 一样，因此共用这一段——两处各写一遍就是两处各漏一个字段的机会。
-//
-// 它是这条「服务端直写 sync_objects」通道对外的那一格：看板（issue_svc）走的是与
-// 组织面完全同一条通道，因此调它而不是自己再抄一遍取号 / 落库 / 广播。
+// SaveOrgRow 落这一行并广播：新版本号 + 服务端来源。它不读行：要在原载荷上合并的
+// 写入必须在同一个事务里加锁读（组织面见 writeLockedOrgRow），否则读与写之间推上来
+// 的设备改动会被整行覆盖。
 func SaveOrgRow(ctx context.Context, userID int64, row *sync_entity.SyncObject) error {
-	if err := WithOrgWriteTx(ctx, func(ctx context.Context) error {
+	if err := WithOrgWriteTx(ctx, userID, func(ctx context.Context) error {
 		return WriteOrgRow(ctx, userID, row)
 	}); err != nil {
 		return err
 	}
-	// UpdateOrgObject 与 DeleteOrgObject 共用这一段（同上面的写入一样，两处各写一遍
-	// 就是两处各漏一次广播的机会）——两者都是「服务端直写（web 组织面）」这一类。
+	// 广播留在提交之后（理由见 WithOrgWriteTx）。
 	accountchan_svc.BroadcastBestEffort(ctx, userID, row.Version)
 	return nil
 }

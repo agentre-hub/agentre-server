@@ -24,11 +24,8 @@ import ComingSoon from "./pages/ComingSoon";
 import RequireAuth from "./components/RequireAuth";
 import { lazyPage, warmPages } from "./lib/lazyPage";
 
-// 会话那两页背后是整套转录渲染，切出入口 chunk（见 lazyPage）。导出是给
-// app-routes 的接线用例认预热这条线用的，路由本身只用它们当 element。
-export const SessionDetailPage = lazyPage(
-  () => import("./pages/SessionDetail"),
-);
+// 对话页背后是整套转录渲染，切出入口 chunk（见 lazyPage）。导出是给
+// app-routes 的接线用例认预热这条线用的，路由本身只用它当 element。
 export const ChatPage = lazyPage(() => import("./pages/Chat"));
 
 /**
@@ -55,9 +52,9 @@ export default function App() {
   // 改值、停手 900ms 后清掉。只 import 样式不调它，滚动条恒为透明（滚动仍可用）。
   useAutoHideScrollbars();
 
-  // 切出去的那两页趁空闲先取回来：不预热的话，第一次从别的页切到 /chat 要等
+  // 切出去的对话页趁空闲先取回来：不预热的话，第一次从别的页切到 /chat 要等
   // ~308 KB（gzip）下完才有第一帧，而那一帧空的是整个视口（见 warmPages）。
-  useEffect(() => warmPages([ChatPage, SessionDetailPage]), []);
+  useEffect(() => warmPages([ChatPage]), []);
 
   return (
     <BrowserRouter>
@@ -89,14 +86,6 @@ export default function App() {
           }
         />
         <Route
-          path="/devices/:deviceId/sessions/:conversationId"
-          element={
-            <RequireAuth>
-              <SessionDetailPage />
-            </RequireAuth>
-          }
-        />
-        <Route
           path="/overview"
           element={
             <RequireAuth>
@@ -105,7 +94,9 @@ export default function App() {
           }
         />
         <Route
-          path="/chat"
+          // 会话只经这一个地址寻址（规格 2026-09-17-chat-session-url）：可选的
+          // 会话号决定右栏（移动端是整屏）开着哪一条，同一个 Chat 实例接着用。
+          path="/chat/:conversationId?"
           element={
             <RequireAuth>
               <ChatPage />
@@ -122,7 +113,7 @@ export default function App() {
         />
         <Route
           // 选中哪一行写在地址里：移动端下钻靠它让手机的返回键有用，深链接也因此
-          // 白拿（与会话详情 /devices/:did/sessions/:conversationId 同一条做法）。
+          // 白拿（与会话地址 /chat/:conversationId 同一条做法）。
           // 两段是**可选段**而不是另开一条 Route —— 分成两条的话，在「没选中」与
           // 「选中了」之间导航会换掉 element，整个页面卸载重挂：useOrgData 重拉一遍，
           // 并且闪一下 loading。一条路由则只是 params 变了。

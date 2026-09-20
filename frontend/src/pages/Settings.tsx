@@ -14,7 +14,9 @@ import AppShell from "@/components/AppShell";
 import { ActivityStatsPanel } from "@/components/settings/ActivityStatsPanel";
 import PageTitle from "@/components/PageTitle";
 import { EmptyState } from "@/components/console";
+import { useAccountChannel } from "@/hooks/use-account-channel";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { AccountChannelSyncVersion } from "@/lib/accountChannel";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import {
   createBrowserEngineSettingsPorts,
@@ -57,6 +59,15 @@ export default function Settings() {
   const executionDevices =
     loadedDevices?.filter((device) => isExecutionDevice(device.kind)).length ??
     null;
+
+  // 供应商/后端是同步对象，其它设备写入会推账号通道的同步版本信号（Problem 9：
+  // 页面停留期间不跟着刷新的话，浏览器缓存的陈旧状态会在下一次保存时把它们的
+  // 改动撤回）。两个面板各自只在 refreshSignal 变化时重拉列表，且不打断正在
+  // 打开的编辑弹窗（共享包 D5 已经测过这一半）；这里只需要把信号接上去。
+  const [refreshSignal, setRefreshSignal] = React.useState(0);
+  useAccountChannel([AccountChannelSyncVersion], () =>
+    setRefreshSignal((value) => value + 1),
+  );
 
   const ports = React.useMemo(() => {
     // Hermes 结构化失败码 → 可读句子。键集合与 agentre-ui 的
@@ -157,6 +168,7 @@ export default function Settings() {
           ) : section === "providers" ? (
             <LlmProvidersPanel
               ports={ports}
+              refreshSignal={refreshSignal}
               onOpenAgentBackends={() => setSection("backends")}
               renderHeader={renderHeader}
             />
@@ -185,6 +197,7 @@ export default function Settings() {
           ) : (
             <AgentBackendsPanel
               ports={ports}
+              refreshSignal={refreshSignal}
               onOpenLlmProviders={() => setSection("providers")}
               renderHeader={renderHeader}
             />

@@ -35,7 +35,6 @@ import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
 import { RELAY_TAIL_FRAMES } from "@/components/session/useTranscriptScrollback";
-import SessionDetail from "@/pages/SessionDetail";
 import { writeReasoningEffortToOrigin } from "@/components/session/sessionMirror";
 import { resetLiveTurns, useLiveTurns } from "@/lib/liveSessions";
 
@@ -183,12 +182,12 @@ function renderPage() {
     };
   });
   return render(
-    <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+    <MemoryRouter initialEntries={["/chat/42"]}>
       <ThemeProvider>
         <Routes>
           <Route
-            path="/devices/:deviceId/sessions/:conversationId"
-            element={<SessionDetail />}
+            path="/chat/42"
+            element={<SessionDetailView deviceId={1} conversationId="42" />}
           />
         </Routes>
       </ThemeProvider>
@@ -371,6 +370,179 @@ describe("会话详情页", () => {
       await screen.findByText("你好", undefined, { timeout: 3_000 }),
     ).toBeTruthy();
     expect(screen.queryByText("你好你好")).toBeNull();
+  });
+
+  // Given agentred 对**块级**事件也发两份：带 seq 的持久帧，以及紧随其后（dev 环境
+  // 抓包实测相隔 1ms）的一份预览副本；
+  // When 这一轮就停在那条审批上 —— 再没有持久帧来清预览尾巴；
+  // Then 转录里仍然只有一张审批卡，不是两张。
+  //
+  // 预览尾巴原本靠「任何持久帧到达就清空」收口，而那条规则的前提（下一块的第一个
+  // token 不会早于上一块的持久帧）对块级预览帧不成立：它落在自己的持久帧**之后**。
+  it("同一条审批的预览副本落在持久帧之后：转录里仍然只有一张卡", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    const permission = {
+      kind: "tool_permission_request",
+      requestId: "f3ed49e3",
+      toolName: "Edit",
+      input: { file_path: "/a.ts", content: "x" },
+    };
+
+    renderPage();
+    await waitFor(() => expect(capturedOpts.onPreviewEvent).toBeTruthy());
+
+    act(() => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: permission,
+        seq: 4,
+      });
+      capturedOpts.onPreviewEvent?.({
+        conversationId: "42",
+        event: permission,
+      });
+    });
+
+    const transcript = await screen.findByTestId(
+      "session-detail-transcript",
+      undefined,
+      { timeout: 3_000 },
+    );
+    await waitFor(() =>
+      expect(
+        within(transcript).getAllByTestId("tool-permission-card"),
+      ).toHaveLength(1),
+    );
+  });
+
+  /**
+   * Given 模型在 wire 上只挂在**终态帧**上（`usage` 帧没有这个字段），而这条会话
+   *   走「跟随 Agent 绑定」、底栏那颗 pill 解不出具体模型 id（fallbackModel 是空串）；
+   * When 新的一轮正跑着、它自己那条助手消息还没有模型；
+   * Then meta 上写的是这条会话**上一次真的用过**的模型，而不是什么都不写。
+   *
+   * 共享包的行渲染器取 `m.model || liveTurn?.model || fallbackModel`，所以轮次跑着
+   * 的时候屏幕上是「↑4,423 ↓~33 · 6m 49s …」—— 有 token、有耗时、没有模型名，
+   * 要等这一轮落定才冒出来。
+   */
+  it("轮次跑着时 meta 退到这条会话上一次用过的模型，不是留空", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      // 上一轮：终态帧报了它用的模型。
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "第一轮" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done", model: "glm-5.2", durationMs: 1000 },
+      });
+      // 新的一轮：正文与 token 都有了，模型要等终态帧才来。
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "再来一次" },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "第二轮" },
+        seq: 3,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "usage",
+          totalInputTokens: 4423,
+          usage: { promptTokens: 4423, completionTokens: 33 },
+        },
+        seq: 4,
+      });
+    });
+
+    renderPage();
+
+    await screen.findByText("第二轮", undefined, { timeout: 3_000 });
+    await waitFor(() => {
+      const rows = document.querySelectorAll("[data-message-id]");
+      const last = rows[rows.length - 1];
+      expect(last?.textContent).toContain("glm-5.2");
+    });
+  });
+
+  /**
+   * Given 一轮正跑着，转录末尾是一个活动块（思考 + 工具各一步）；
+   * When 控制台没有「已落库 / 未落库」这条分界，liveBlocks 恒为 undefined、
+   *   正文此刻也不在流（liveTail 是空）；
+   * Then 活动块仍然自动展开 —— 运行态由宿主如实告知，不再从 live* 入参反推。
+   *
+   * 共享包原本用 `liveBlocks !== undefined || liveTail.length > 0` 代表「这一轮在跑」。
+   * 桌面端恰好恒真（store 的 LiveStream 永远带 liveBlocks 数组），控制台两个条件同时
+   * 为假，于是「运行中自动展开 + 超 8 步只留 6 行」在这一端一次都没生效过。
+   */
+  it("一轮跑着时活动块自动展开（运行态由宿主给，不从 liveBlocks 反推）", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, lifecycleState: SessionLifecycleRunning }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "写个 go.mod" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "thinking_delta", text: "先想一下" },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "tool_use_start",
+          id: "call_1",
+          name: "Write",
+          input: { file_path: "/go.mod", content: "module x" },
+        },
+        seq: 3,
+      });
+    });
+
+    renderPage();
+
+    const header = await screen.findByTestId("activity-header", undefined, {
+      timeout: 3_000,
+    });
+    await waitFor(() =>
+      expect(header.getAttribute("aria-expanded")).toBe("true"),
+    );
   });
 
   // agentred 每次重启都会把非终态会话标成 interrupted（daemon.New 的
@@ -804,7 +976,7 @@ describe("会话详情页", () => {
               sync_id: "backend-1",
               provider_key: "anthropic",
               model_key: "sonnet",
-              default_permission_mode: "default",
+              config: { defaultPermissionMode: "default" },
             },
           ],
         };
@@ -958,7 +1130,7 @@ describe("会话详情页", () => {
               provider_key: "anthropic",
               model_key: "sonnet",
               // 当前执行目标是 claudecode，管理员在它上面配了 bypass。
-              default_permission_mode: "bypassPermissions",
+              config: { defaultPermissionMode: "bypassPermissions" },
             },
           ],
         };
@@ -1060,7 +1232,7 @@ describe("会话详情页", () => {
               sync_id: "backend-1",
               provider_key: "anthropic",
               model_key: "sonnet",
-              default_permission_mode: "default",
+              config: { defaultPermissionMode: "default" },
             },
           ],
         };
@@ -2266,6 +2438,236 @@ describe("会话详情页:插话之后的排队队列", () => {
       screen.queryByText("1 message(s) were not sent when the turn ended"),
     ).toBeNull();
   });
+
+  /*
+    轮末的插话归谁处置 —— 这一族钉的是「控制台与执行端说的是同一件事」。
+
+    此前控制台在终态帧那一刻就把残留挪进丢弃横幅，**却从没告诉执行端**。而
+    agentred 的插话信箱只在 CLI 会话被逐出时才 Forget(claudecode 的
+    claudeActive.Close)，于是那段字仍然攥在它手里：下一轮一开，第一个
+    PostToolUse 钩子就把它捞出来凭空插进去 —— 用户眼里是一段自己明明看到
+    「没发出去」的字，几分钟后自己长了腿跑进另一轮。
+
+    桌面端没有这个病:chat_svc 在轮末 DrainPending(turn_run.go)，取到就合并成
+    一条 user msg 自动接续下一轮(persistAutoContinueTurn)。控制台走同一条:
+    终态帧之后问一次执行端，取到就自动开新一轮，取不到才是真的没人要了。
+  */
+  /** 执行端对 `runtime.drainPending` 的回答。 */
+  function drainReturning(steers: { queuedId: string; text: string }[]) {
+    return (m: AnyRpcMethod) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeDrainPending) return { steers };
+      if (m === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + m);
+    };
+  }
+
+  // Given 轮末还排着一条 / When 一轮正常收场 / Then 必定问一次执行端还攥着什么。
+  //
+  // 不问就是幽灵注入的全部成因,所以这一条单独钉:就算这一屏自己的队列是空的也要问
+  // —— 排进去的那一屏可能已经关掉了,而信箱是按会话的,不是按浏览器窗口的。
+  it("Given 一轮正常收场 When 本地队列是空的 Then 照样问一次执行端", async () => {
+    mountWith(drainReturning([]));
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeDrainPending)[0]?.[1]).toMatchObject({
+        conversationId: "42",
+      }),
+    );
+  });
+
+  // Given 轮末还排着一条 / When 执行端交回它 / Then 自动接续成新一轮,不摆丢弃横幅。
+  it("Given 轮末仍有残留 When 执行端交回 Then 自动接续成新一轮", async () => {
+    mountWith(
+      drainReturning([{ queuedId: "q-remote-1", text: "先别动数据库" }]),
+    );
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    // 新一轮由 runtime.run 开起来,正文就是那段被取回来的字。
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeRun)[0]?.[1]).toMatchObject({
+        conversationId: "42",
+        userText: "先别动数据库",
+      }),
+    );
+    // chip 清掉(它已经被执行端取走了),而丢弃横幅一次都不该出现。
+    await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+    expect(
+      screen.queryByText("1 message(s) were not sent when the turn ended"),
+    ).toBeNull();
+  });
+
+  // Given 轮末排着两条 / When 执行端交回两条 / Then 合成一条,空行分隔。
+  //
+  // 口径与桌面端 joinSteerTexts 同一份:两条分别开两轮会让第二条在第一条还没跑完时
+  // 撞上 acquireTurnGate。
+  it("Given 轮末排着两条 When 执行端交回 Then 合并成一条新一轮", async () => {
+    mountWith(
+      drainReturning([
+        { queuedId: "q-remote-1", text: "先别动数据库" },
+        { queuedId: "q-remote-2", text: "顺便把标题也改了" },
+      ]),
+    );
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeRun)[0]?.[1]).toMatchObject({
+        userText: "先别动数据库\n\n顺便把标题也改了",
+      }),
+    );
+  });
+
+  // Given 轮末还排着一条 / When 执行端说手上没有 / Then 这才是真的没人要了:
+  // 摆丢弃横幅,不凭空开一轮。
+  it("Given 轮末仍有残留 When 执行端说没有 Then 摆丢弃横幅且不开新一轮", async () => {
+    mountWith(drainReturning([]));
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+    expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(0);
+  });
+
+  // Given 这一轮是出错 / 被中断收场 / When 收尾 / Then 不问、也不接续。
+  //
+  // 与桌面端同一条纪律(turn_run.go 的 `stopErr == nil && !aborted`):出错的一轮
+  // 自动再跑一遍多半是再错一次;而用户自己按的停止,daemon 的 Abort 已经把信箱
+  // 清空了(claudecode Runtime.Abort),接续等于把刚叫停的事又捡起来。
+  it("Given 一轮出错收场 When 收尾 Then 不问执行端也不接续", async () => {
+    mountWith(
+      drainReturning([{ queuedId: "q-remote-1", text: "先别动数据库" }]),
+    );
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({ stopErrMsg: "boom" } as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+    expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(0);
+    expect(callsOf(rpcMethods.runtimeRun)).toHaveLength(0);
+  });
+
+  // Given 承载机是桌面端 / When 一轮收场 / Then 不问、照旧摆丢弃横幅。
+  //
+  // 这一问只对 agentred 成立,而且是两头的理由都成立:
+  //   - 桌面端**根本不注册** runtime.drainPending(共享包的 desktopAnsweredMethods
+  //     里没有它),问过去只会被拒;
+  //   - 更要紧的是它**不该被问** —— 桌面端托管的那条对话由它自己的 chat_svc 在轮末
+  //     DrainPending 并自动接续(turn_run.go),控制台再去取一次就是从它手里抢。
+  it("Given 承载机是桌面端 When 一轮收场 Then 不问执行端", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, kind: "desktop" }] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...runningSummary, peerFingerprint: "fp-x" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return drainReturning([{ queuedId: "q-remote-1", text: "先别动数据库" }])(
+        method,
+      );
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+    expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(0);
+  });
+
+  // Given 已经问过一次 / When 右栏切到另一条对话 / Then 不拿上一条的计数再问一次。
+  //
+  // 右栏换对话是**同实例换 props**(没有 key 强制重挂),而「又收场了一轮」是一个只增
+  // 不减的计数 —— 不认这一条的话,切过去的那一瞬就会对一条根本没跑过的对话问一次
+  // 信箱,取到东西还会凭空给它开一轮。
+  it("Given 问过一次 When 切到另一条对话 Then 不再问一次", async () => {
+    mountWith(drainReturning([]));
+
+    const { rerender } = renderPage();
+    await screen.findByText(/重构登录页/);
+    await waitFor(() => expect(composerDisabled()).toBe(false));
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(1),
+    );
+
+    rerender(
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="43" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await act(async () => {});
+
+    expect(callsOf(rpcMethods.runtimeDrainPending)).toHaveLength(1);
+  });
+
+  // Given 问执行端这一问本身失败了 / When 收尾 / Then 退回丢弃横幅,不把字吞掉。
+  it("Given 问执行端失败 When 收尾 Then 退回丢弃横幅", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeDrainPending)
+        throw new RelayError(-32603, "boom", { code: -32603, message: "boom" });
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    expect(
+      await screen.findByText("1 message(s) were not sent when the turn ended"),
+    ).toBeTruthy();
+  });
 });
 
 // 缺口二：sendMessage 的 catch 把**任何**失败都当成「这条会话钉住的 agentred
@@ -2857,12 +3259,12 @@ describe("会话详情：历史来自 server 镜像", () => {
       };
     });
     return render(
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
             {/* 「新建一个会话」的落点。真页面在这一组里跑不起来（它自己要取
                 agents / projects），桩到这里就够了：本组要断的是**去了哪、带了
@@ -3023,7 +3425,7 @@ describe("会话详情：历史来自 server 镜像", () => {
    * 续轮不会改派，所以横幅给的是「另起一条」，而不是「查看设备」——后者不把人
    * 往前推，横幅刚说完「离线 · 最后在线 3 小时前」，点进去看到的还是那句话。
    *
-   * 路由页形态不在 `/chat` 里，所以它靠 URL 把这件事说给那一页听。
+   * 详情离 Chat 隔着好几层，所以它靠 URL 把这件事说给那一页听。
    */
   it("机器离线：出口是「新建一个会话」，落到 /chat 的挑 Agent 那一屏", async () => {
     mockedApi.mockImplementation(async (path: string) => {
@@ -4191,47 +4593,34 @@ describe("会话详情：头部", () => {
   });
 
   /**
-   * 移动端那一半：草稿页在这里是**下钻**，种子只能随导航 state 走（与 title /
-   * userText / turnStartedAt 同一条来路）。递不过去的话，窄屏上那段空窗照旧。
-   *
-   * state 是历史记录里的东西——十分钟后刷新它还在手上、也可能被人改过，所以逐格
-   * 验形状再用，与那几格同一种处置。
+   * 整屏那一半（移动端 `/chat/:conversationId`）：种子由 Chat 在派发那一刻记在页面里
+   * 再递下来。递不过去的话，窄屏上那段空窗照旧。
    */
-  it("移动端下钻：Agent 种子随导航 state 过来，落地那一屏第一帧就是真名", async () => {
+  it("整屏形态：宿主递来的 Agent 种子让落地那一屏第一帧就是真名", async () => {
     stubHeader();
     fakeClient.request.mockImplementation(async (method: AnyRpcMethod) => {
       // 中继答不出这条对话（机器上没有它），账号镜像那一行也没有：名字只可能来自
-      // 导航 state 带过来的那一份。
+      // 宿主递下来的那一份。
       if (method === rpcMethods.sessionList) return { sessions: [] };
       if (method === rpcMethods.sessionPendingWaiters)
         return { toolPermissions: [], askUserQuestions: [] };
       throw new Error("unexpected: " + String(method));
     });
     render(
-      <MemoryRouter
-        initialEntries={[
-          {
-            pathname: "/devices/1/sessions/42",
-            state: {
-              title: "你好，看看",
-              userText: "你好，看看",
-              agent: {
-                sync_id: "ag-1",
-                name: "后端 Agent",
-                avatar_color: "agent-3",
-                avatar_icon: "bot",
-              },
-            },
-          },
-        ]}
-      >
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
-          <Routes>
-            <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
-            />
-          </Routes>
+          <SessionDetailView
+            deviceId={1}
+            conversationId="42"
+            initialTitle="你好，看看"
+            initialUserText="你好，看看"
+            initialAgent={{
+              sync_id: "ag-1",
+              name: "后端 Agent",
+              avatar_color: "agent-3",
+              avatar_icon: "bot",
+            }}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -4779,6 +5168,112 @@ describe("会话详情：输入框", () => {
         ?.classList.contains("stroke-status-waiting"),
     ).toBe(true);
     expect(meter.textContent).toContain("82%");
+  });
+
+  /**
+   * Given dev 环境的持久帧里 `context_window_updated` / `usage.contextWindow`
+   *   一条都没有（agentred 确实探到了窗口，却 emit 成 wire 上并不存在的
+   *   `session_status` kind，共享包认不出）；
+   * When 这条会话已经跑完过一轮、终态帧报了它用的模型；
+   * Then 计量器照样摆出来 —— 窗口按那个模型从引擎目录里查。
+   *
+   * 桌面端不受影响是因为它的窗口有四级兜底（chat_svc 的
+   * resolveContextWindowWithRuntime），根本不看事件流；控制台此前只有事件流一条
+   * 来路，于是这枚计量器**一次都没渲染过**。
+   *
+   * 钉的模型（sonnet，100 万）与用过的模型（glm-5.2，20 万）刻意不同：断言落在
+   * 20 万上，才证得出「用过的那个」排在「钉着的那个」前面。
+   */
+  it("事件流给不出窗口时：按这条会话用过的模型查引擎目录", async () => {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/engine/backends") return { backends: [] };
+      if (path === "/v1/engine/providers")
+        return {
+          providers: [
+            {
+              provider_key: "zhipu",
+              name: "智谱",
+              type: "anthropic",
+              default_model_key: "glm",
+              enabled: true,
+              models: [
+                {
+                  model_key: "glm",
+                  model_id: "glm-5.2",
+                  name: "GLM 5.2",
+                  enabled: true,
+                  context_window: 200000,
+                },
+                {
+                  model_key: "sonnet",
+                  model_id: "claude-sonnet-4",
+                  name: "Sonnet 4",
+                  enabled: true,
+                  context_window: 1000000,
+                },
+              ],
+            },
+          ],
+        };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [{ ...summary, providerKey: "zhipu", modelKey: "sonnet" }],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    // 刻意不发 context_window_updated，也不在 usage 上带 contextWindow：
+    // dev 环境真实的持久帧里就是这两样都没有。
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "开场白" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "usage", totalInputTokens: 41200 },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done", model: "glm-5.2" },
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+
+    renderComposer();
+
+    await screen.findByText("开场白");
+    const meter = await screen.findByTestId(
+      "composer-context-meter",
+      undefined,
+      { timeout: 3_000 },
+    );
+    expect(meter.getAttribute("aria-label")).toBe(
+      "Context usage 41.2k / 200k, 21% used",
+    );
   });
 
   it("窗口还没探到时整块不摆：不拿一个编出来的分母画进度条", async () => {
@@ -5844,12 +6339,12 @@ describe("会话详情：输入框那一带的三种形态", () => {
       throw new Error("unexpected: " + path);
     });
     return render(
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
           </Routes>
         </ThemeProvider>
@@ -6548,12 +7043,12 @@ describe("会话详情页:连接彻底断掉之后的出路", () => {
       throw new Error("unexpected: " + path);
     });
     render(
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
           </Routes>
         </ThemeProvider>
@@ -6617,12 +7112,12 @@ describe("会话详情：重连期间的发送", () => {
     // 每次都新造一个元素：把**同一个**元素引用交回给 rerender，React 会走
     // 「引用没变」的快路直接跳过，这棵树根本不会重渲染。
     const tree = () => (
-      <MemoryRouter initialEntries={["/devices/1/sessions/42"]}>
+      <MemoryRouter initialEntries={["/chat/42"]}>
         <ThemeProvider>
           <Routes>
             <Route
-              path="/devices/:deviceId/sessions/:conversationId"
-              element={<SessionDetail />}
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
             />
           </Routes>
         </ThemeProvider>
@@ -7306,7 +7801,7 @@ describe("会话详情页 · 会话级思考力度", () => {
               sync_id: "backend-1",
               provider_key: "anthropic",
               model_key: "sonnet",
-              default_permission_mode: "default",
+              config: { defaultPermissionMode: "default" },
               reasoning_effort: opts.backendEffort ?? "",
             },
           ],

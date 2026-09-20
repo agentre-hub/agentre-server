@@ -19,6 +19,8 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 
+	"github.com/agentre-hub/agentre/pkg/syncwire"
+
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/middleware/bearertest"
@@ -47,6 +49,15 @@ func (s *stubEngineSvc) UpdateProvider(context.Context, engine_svc.ProviderWrite
 	return nil, nil
 }
 func (s *stubEngineSvc) DeleteProvider(context.Context, int64, string) error { return nil }
+func (s *stubEngineSvc) CreateProviderModel(context.Context, engine_svc.ModelWriteInput) (*engine_svc.ProviderView, error) {
+	return &engine_svc.ProviderView{Models: []engine_svc.Model{}}, nil
+}
+func (s *stubEngineSvc) UpdateProviderModel(context.Context, engine_svc.ModelWriteInput) (*engine_svc.ProviderView, error) {
+	return &engine_svc.ProviderView{Models: []engine_svc.Model{}}, nil
+}
+func (s *stubEngineSvc) DeleteProviderModel(context.Context, int64, string, string) (*engine_svc.ProviderView, error) {
+	return &engine_svc.ProviderView{Models: []engine_svc.Model{}}, nil
+}
 func (s *stubEngineSvc) ListBackends(context.Context, int64) ([]engine_svc.BackendView, error) {
 	return []engine_svc.BackendView{}, nil
 }
@@ -59,6 +70,7 @@ func (s *stubEngineSvc) CreateBackend(_ context.Context, in engine_svc.BackendWr
 	if in.EnvJSON != nil {
 		view.EnvJSON = *in.EnvJSON
 	}
+	view.Config = in.Config
 	return &view, nil
 }
 func (s *stubEngineSvc) UpdateBackend(context.Context, engine_svc.BackendWriteInput) (*engine_svc.BackendView, error) {
@@ -72,7 +84,17 @@ func (s *stubEngineSvc) Snapshot(_ context.Context, _ int64, fingerprint string)
 	if fingerprint != "fp-1" {
 		return nil, assert.AnError
 	}
-	return &engine_svc.SnapshotView{Providers: []engine_svc.ProviderSnapshot{{ProviderKey: "anthropic-main", APIKey: "sk-secret", Models: []engine_svc.Model{}}}, CLIOverlays: []engine_svc.CLIOverlaySnapshot{{BackendSyncID: "backend-1", CLIPath: "/usr/local/bin/claude"}}}, nil
+	return &engine_svc.SnapshotView{
+		Providers:   []engine_svc.ProviderSnapshot{{ProviderKey: "anthropic-main", APIKey: "sk-secret", Models: []engine_svc.Model{}}},
+		CLIOverlays: []engine_svc.CLIOverlaySnapshot{{BackendSyncID: "backend-1", CLIPath: "/usr/local/bin/claude"}},
+		Backends: []engine_svc.BackendSnapshot{{
+			BackendSyncID: "b-acp",
+			Config: syncwire.AgentBackendConfig{
+				ACPCommand: "/opt/acp/agent",
+				ACPArgs:    []string{"serve", "--stdio"},
+			},
+		}},
+	}, nil
 }
 
 var _ engine_svc.EngineSvc = (*stubEngineSvc)(nil)
@@ -163,6 +185,10 @@ func TestDeviceSnapshot_ContainsCredentialAndOnlyCallersOverlay(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
 	assert.Contains(t, string(envelope.Data), "sk-secret")
 	assert.Contains(t, string(envelope.Data), "/usr/local/bin/claude")
+	// 后端 config 快照走同一个带鉴权的设备 JWT；按 sync_id 寻址、整份嵌套 config。
+	assert.Contains(t, string(envelope.Data), `"backend_sync_id":"b-acp"`)
+	assert.Contains(t, string(envelope.Data), `"acpCommand":"/opt/acp/agent"`)
+	assert.Contains(t, string(envelope.Data), `"acpArgs":["serve","--stdio"]`)
 }
 
 // 已撤销的设备不该再拉得到引擎快照——快照里带着明文 API key。这条判定曾在
@@ -212,4 +238,46 @@ func TestBrowserBackendCreate_CarriesTheEnvTableBothWays(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
 	assert.JSONEq(t, `{"HTTPS_PROXY":"http://127.0.0.1:7890"}`, envelope.Data.EnvJSON)
+}
+
+// config 对象往返：请求体里的 config 原文落进 BackendWriteInput.Config，响应以对象给出；
+// 九个平铺字段不再出现在浏览器视图里。
+func TestBrowserBackendCreate_CarriesTheConfigObjectBothWays(t *testing.T) {
+	stub := &stubEngineSvc{}
+	server := newEngineServer(t, stub)
+	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
+	require.NoError(t, err)
+
+	resp := postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken,
+		`{"name":"CC","type":"claudecode","device_fingerprint":"sha256:aaaa","config":{"defaultPermissionMode":"acceptEdits","futureKey":1}}`)
+
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.JSONEq(t, `{"defaultPermissionMode":"acceptEdits","futureKey":1}`, string(stub.backendIn.Config))
+	var envelope struct {
+		Data map[string]json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	assert.JSONEq(t, `{"defaultPermissionMode":"acceptEdits","futureKey":1}`, string(envelope.Data["config"]))
+	for _, flat := range []string{"model_routes", "sandbox", "approval", "default_permission_mode", "default_model",
+		"openclaw_gateway_url", "openclaw_agent_id", "openclaw_default_model", "openclaw_session_mode"} {
+		assert.NotContains(t, envelope.Data, flat)
+	}
+}
+
+// 缺省 config 到服务层是空（不改）；显式 null 与非对象则原样交给服务层判拒，
+// 不在绑定时被悄悄当成「缺省」。
+func TestBrowserBackendCreate_DistinguishesAbsentConfigFromNull(t *testing.T) {
+	stub := &stubEngineSvc{}
+	server := newEngineServer(t, stub)
+	sid, sess, err := auth_svc.Default().StartSession(context.Background(), 7)
+	require.NoError(t, err)
+
+	postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken, `{"name":"CC","type":"claudecode","device_fingerprint":"sha256:aaaa"}`)
+	assert.Empty(t, stub.backendIn.Config)
+
+	postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken, `{"name":"CC","type":"claudecode","device_fingerprint":"sha256:aaaa","config":null}`)
+	assert.Equal(t, "null", string(stub.backendIn.Config))
+
+	postEngine(t, server.URL+"/v1/engine/backends", sid, sess.CSRFToken, `{"name":"CC","type":"claudecode","device_fingerprint":"sha256:aaaa","config":"x"}`)
+	assert.Equal(t, `"x"`, string(stub.backendIn.Config))
 }

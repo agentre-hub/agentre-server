@@ -1,7 +1,7 @@
 /**
  * 移动端主导航（任务 2，正式节点 A6Z3k）：底部 TabBar 取代原抽屉。
  *   - 移动：不渲染桌面固定侧栏、无汉堡按钮、无抽屉/dialog；底部是
- *     MobileTabBar（h-[74px]，A6Z3k），只含真实可达目的地
+ *     MobileTabBar（内容 52px + 安全区，A6Z3k），只含真实可达目的地
  *     （Overview/Chat/Devices/Org），不伪造「我」入口，也不含已下线的审计。
  *   - 移动：账号、语言与主题控制仍可达（账号进 TopBar，AppControls 在 TopBar）。
  *   - 桌面：保持固定侧栏，不渲染底部 TabBar。
@@ -86,9 +86,11 @@ describe("移动端底部导航（A6Z3k，取代原抽屉）", () => {
     mockMobileViewport();
     renderShell();
 
-    // 唯一一个导航就是底部 TabBar（A6Z3k h-[74px]）。
+    // 唯一一个导航就是底部 TabBar（A6Z3k 内容 52px + 安全区）。
     const nav = screen.getByRole("navigation");
-    expect(nav.className).toContain("h-[74px]");
+    expect(nav.className).toContain(
+      "h-[calc(74px_+_env(safe-area-inset-bottom,0px))]",
+    );
     // 原抽屉相关控件全部消失。
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Close menu" })).toBeNull();
@@ -157,10 +159,12 @@ describe("桌面端导航（非移动）", () => {
     }
     expect(screen.queryByRole("link", { name: "Audit" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
-    // 桌面不该出现底部 TabBar（h-[74px] 导航）。
+    // 桌面不该出现底部 TabBar（带安全区高度的导航）。
     const navs = screen.getAllByRole("navigation");
     for (const n of navs) {
-      expect(n.className).not.toContain("h-[74px]");
+      expect(n.className).not.toContain(
+        "h-[calc(74px_+_env(safe-area-inset-bottom,0px))]",
+      );
     }
   });
 });

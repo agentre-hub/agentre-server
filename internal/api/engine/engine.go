@@ -1,7 +1,12 @@
 // Package engine 定义账号级引擎设置的浏览器与设备快照 REST 契约。
 package engine
 
-import "github.com/cago-frame/cago/server/mux"
+import (
+	"encoding/json"
+
+	"github.com/agentre-hub/agentre/pkg/syncwire"
+	"github.com/cago-frame/cago/server/mux"
+)
 
 type Model struct {
 	ModelKey      string `json:"model_key"`
@@ -49,6 +54,43 @@ type DeleteProviderRequest struct {
 	mux.Meta    `path:"/v1/engine/providers/:provider_key" method:"DELETE"`
 	ProviderKey string `uri:"provider_key" binding:"required,max=255"`
 }
+
+// modelFields 是单模型写入（新增/编辑）共用的可选字段；model_key 不在这里——新增时
+// 它是请求体里的必填键（CreateProviderModelRequest.ModelKey），编辑/删除时它是 URL
+// 里定位目标模型的稳定键（:model_key，不可经请求体改名）。
+type modelFields struct {
+	ModelID       *string `json:"model_id" binding:"omitempty,max=255"`
+	Name          *string `json:"name" binding:"omitempty,max=255"`
+	Enabled       *bool   `json:"enabled"`
+	ContextWindow *int64  `json:"context_window,omitempty"`
+	MaxOutput     *int64  `json:"max_output,omitempty"`
+}
+
+// CreateProviderModelRequest 往一个供应商的 models 数组末尾加一个模型（规格「模型
+// 开关」：单模型写入只影响这一个模型，其它模型——含页面打开后其它设备新增/改动
+// 的——保持服务端当前值）。响应复用 Provider：控制台据此整体刷新缓存的那一份。
+type CreateProviderModelRequest struct {
+	mux.Meta    `path:"/v1/engine/providers/:provider_key/models" method:"POST"`
+	ProviderKey string `uri:"provider_key" binding:"required,max=255"`
+	ModelKey    string `json:"model_key" binding:"required,max=255"`
+	modelFields
+}
+
+// UpdateProviderModelRequest 编辑或启停 :model_key 那一个模型；同 provider 下的其它
+// 模型不受影响。
+type UpdateProviderModelRequest struct {
+	mux.Meta    `path:"/v1/engine/providers/:provider_key/models/:model_key" method:"PATCH"`
+	ProviderKey string `uri:"provider_key" binding:"required,max=255"`
+	ModelKey    string `uri:"model_key" binding:"required,max=255"`
+	modelFields
+}
+
+// DeleteProviderModelRequest 只删 :model_key 那一个模型条目。
+type DeleteProviderModelRequest struct {
+	mux.Meta    `path:"/v1/engine/providers/:provider_key/models/:model_key" method:"DELETE"`
+	ProviderKey string `uri:"provider_key" binding:"required,max=255"`
+	ModelKey    string `uri:"model_key" binding:"required,max=255"`
+}
 type CLIByDevice struct {
 	Fingerprint string `json:"fingerprint"`
 	Status      string `json:"status"`
@@ -59,22 +101,17 @@ type Backend struct {
 	Type        string `json:"type"`
 	ProviderKey string `json:"provider_key"`
 	ModelKey    string `json:"model_key"`
-	ModelRoutes string `json:"model_routes"`
-	Sandbox     string `json:"sandbox"`
-	Approval    string `json:"approval"`
 	// EnvJSON 是这条后端的透传环境变量表（JSON 文本）。它**刻意**下发浏览器：控制台
 	// 与桌面端用同一个编辑器，读得到才编辑得动。api_key 与 cli_path 没有跟着松，
 	// 见 guard_test.go。
-	EnvJSON               string        `json:"env_json"`
-	ReasoningEffort       string        `json:"reasoning_effort"`
-	DefaultPermissionMode string        `json:"default_permission_mode"`
-	DefaultModel          string        `json:"default_model"`
-	OpenClawGatewayURL    string        `json:"openclaw_gateway_url"`
-	OpenClawAgentID       string        `json:"openclaw_agent_id"`
-	OpenClawDefaultModel  string        `json:"openclaw_default_model"`
-	OpenClawSessionMode   string        `json:"openclaw_session_mode"`
-	RefCount              int           `json:"ref_count"`
-	CLIByDevice           []CLIByDevice `json:"cli_by_device"`
+	EnvJSON         string `json:"env_json"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	// Config 是后端的单类型独占设置对象，键表归 syncwire.AgentBackendConfig
+	// （modelRoutes、sandbox、defaultPermissionMode 等 camelCase 键）。
+	// 旧平铺格式的行读作 {}。
+	Config      json.RawMessage `json:"config"`
+	RefCount    int             `json:"ref_count"`
+	CLIByDevice []CLIByDevice   `json:"cli_by_device"`
 	// DeviceFingerprint 是这个后端的运行设备指纹（决策 5：必填）。它是 sync_objects 既有列
 	// agentred_fingerprint 的镜像，不是 agent_backend 载荷里的一个键。
 	DeviceFingerprint string `json:"device_fingerprint"`
@@ -84,20 +121,14 @@ type backendFields struct {
 	Type        *string `json:"type" binding:"omitempty,max=64"`
 	ProviderKey *string `json:"provider_key" binding:"omitempty,max=255"`
 	ModelKey    *string `json:"model_key" binding:"omitempty,max=255"`
-	ModelRoutes *string `json:"model_routes" binding:"omitempty,max=65535"`
-	Sandbox     *string `json:"sandbox" binding:"omitempty,max=255"`
-	Approval    *string `json:"approval" binding:"omitempty,max=255"`
+	// Config 缺省即不改；带上就整体替换存着的 config。它必须是 JSON 对象，
+	// 其它取值（含 null）由服务层拒绝、不落库（engine_svc.checkBackendConfig）。
+	Config json.RawMessage `json:"config"`
 	// EnvJSON 缺省即不改：整表覆写只在浏览器显式送来这个字段时发生，
-	// 只换设备之类的 PATCH 不会顺手抹掉用户存着的表（engine_svc.applyBackend）。
-	EnvJSON               *string `json:"env_json" binding:"omitempty,max=65535"`
-	ReasoningEffort       *string `json:"reasoning_effort" binding:"omitempty,max=255"`
-	DefaultPermissionMode *string `json:"default_permission_mode" binding:"omitempty,max=255"`
-	DefaultModel          *string `json:"default_model" binding:"omitempty,max=255"`
-	OpenClawGatewayURL    *string `json:"openclaw_gateway_url" binding:"omitempty,max=2000"`
-	OpenClawAgentID       *string `json:"openclaw_agent_id" binding:"omitempty,max=255"`
-	OpenClawDefaultModel  *string `json:"openclaw_default_model" binding:"omitempty,max=255"`
-	OpenClawSessionMode   *string `json:"openclaw_session_mode" binding:"omitempty,max=255"`
-	CLIPath               *string `json:"cli_path"`
+	// 只换设备之类的 PATCH 不会顺手抹掉用户存着的表。
+	EnvJSON         *string `json:"env_json" binding:"omitempty,max=65535"`
+	ReasoningEffort *string `json:"reasoning_effort" binding:"omitempty,max=255"`
+	CLIPath         *string `json:"cli_path"`
 	// DeviceFingerprint 必填（决策 5）；required 校验落在服务层，好让 CLIPath / builtin 各自的
 	// 专属错误码优先命中，就地留空只在这里过 max 长度。
 	DeviceFingerprint *string `json:"device_fingerprint" binding:"omitempty,max=128"`
@@ -149,10 +180,20 @@ type SnapshotCLIOverlay struct {
 	BackendSyncID string `json:"backend_sync_id"`
 	CLIPath       string `json:"cli_path"`
 }
+
+// SnapshotBackend 是设备 JWT 快照里的一条后端 config：按 sync_id 寻址，正文是共享
+// 契约的整份 syncwire.AgentBackendConfig（不在这一层再抄一份键表）。ACP 启动身份
+// （acpCommand / acpArgs）只经这条带鉴权的通路下行，且只给后端分配到的机器。
+type SnapshotBackend struct {
+	BackendSyncID string                      `json:"backend_sync_id"`
+	Config        syncwire.AgentBackendConfig `json:"config"`
+}
+
 type SnapshotRequest struct {
 	mux.Meta `path:"/v1/engine/snapshot" method:"GET"`
 }
 type SnapshotResponse struct {
 	Providers   []SnapshotProvider   `json:"providers"`
 	CLIOverlays []SnapshotCLIOverlay `json:"cli_overlays"`
+	Backends    []SnapshotBackend    `json:"backends"`
 }

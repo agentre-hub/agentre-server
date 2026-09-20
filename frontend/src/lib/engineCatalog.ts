@@ -36,7 +36,11 @@ export interface EngineBackend {
   sync_id: string;
   provider_key: string;
   model_key: string;
-  default_permission_mode: string;
+  /**
+   * 单类型独占设置对象（键表归 syncwire.AgentBackendConfig）。九个平铺字段已删
+   * （S2）：默认权限模式等改从这里取，旧平铺格式的行服务端读作 {}。
+   */
+  config?: { defaultPermissionMode?: string } | null;
   /**
    * 这个后端配的思考力度（六档，空 = 没配）。会话没自己钉一档时，composer 那颗
    * 力度控件用它兜底显示「→ 跟随后端配置 · <档位>」。

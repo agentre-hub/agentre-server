@@ -466,7 +466,7 @@ desktop/mobile split, the five-item boundary and the "no drawer, no fake blue do
 **Main.** `min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-6`; each page owns
 its own `mx-auto w-full max-w-[1200px]` column inside it. Pages that fill the viewport
 themselves pass **`flush`**: `main` then drops its padding and its scrollbar
-(`overflow-hidden`) and the page bands the space itself. Chat and `SessionDetail` do this —
+(`overflow-hidden`) and the page bands the space itself. Chat and the full-screen session detail do this —
 that, not a negative margin, is how they sit flush under the TopBar.
 
 ### Overview (board `r5xRl` / `XwJfx` dark)
@@ -607,9 +607,10 @@ padding to cancel and no negative margin).
     title-only and server-side; two of the three things the old string promised are not
     searchable any more.
 - **Right — the detail pane**, `flex min-w-0 flex-1 flex-col`, embedding the real
-  `SessionDetailView` (`form="embedded"`) — the same implementation as the
-  `/devices/:id/sessions/:id` route, so status, transcript, approval and composer behaviour
-  are shared, never a static placeholder. With nothing selected (or no sessions) it shows
+  `SessionDetailView` (`form="embedded"`) — the same implementation the mobile full-screen
+  detail uses, so status, transcript, approval and composer behaviour are shared, never a
+  static placeholder. Which conversation is open is the address, `/chat/:conversationId`
+  (plus `?device=` for one not saved to the account). With nothing selected (or no sessions) it shows
   the `kpP7A` empty state. Starting a new conversation takes over this same pane — first
   `NewConversationPane` (pick an agent), then `DraftSession` (a conversation with nothing
   said yet). **Desktop needs no dialog**: this pane was already idle, and covering the screen
@@ -811,7 +812,7 @@ two sections must not pay a request for a page they do not show.
 | The heatmap skeleton is the heatmap | Before data arrives the same grid is already painted in `heat-0` | An 845px block that appears at fetch time shoves the whole page down once per visit |
 | Never fake a backend | Only actions with a real endpoint exist: revoke on devices, allow/deny/reply in the session detail, save/delete on the list — **no rename, no delete, no fake success, no disabled-looking future controls**. No audit route, nav item, or dead "go to audit" link | A button that claims success it cannot deliver is worse than no button |
 | Revoke lives in the row menu | Revoke is a shared-package `DropdownMenu` item → confirm `Dialog` → real `POST /v1/oauth/token/revoke`, with failure keeping the dialog and success refreshing the list; no persistent explainer card | A dangerous action must be discoverable without dominating the page |
-| Desktop chat embeds the real detail | The right pane renders `SessionDetailView` (`form="embedded"`), the same implementation the `/devices/:id/sessions/:id` route uses; unselected shows the `kpP7A` empty state | A static placeholder would drift from the real page; one implementation keeps relay/approval/composer behaviour shared |
+| Desktop chat embeds the real detail | The right pane renders `SessionDetailView` (`form="embedded"`), the same implementation the mobile full-screen detail at `/chat/:conversationId` uses; unselected shows the `kpP7A` empty state | A static placeholder would drift from the real page; one implementation keeps relay/approval/composer behaviour shared |
 | Search is honest | Chat's list search really filters rows, server-side and by title only, and its copy says exactly that | A search affordance that promises more than it matches is a fake control either way |
 | Unread is a real column, not a relabel | `last_read_at` on the mirror row; opening a conversation writes it, and so does every turn that lands while it is open; the chip filters on `last_message_at > last_read_at` | "Unread" over a waiting-for-input predicate would be a relabel; a real read state makes the name true, and it matches what the desktop app already means by "unread" |
 | The composer is pinned, not appended | `SessionDetailView` bands header / transcript / composer; only the middle scrolls, and `AppShell` stops the page scrolling at all | Measured: 2145px page against a 900px viewport put the input 1245px below the fold, and the transcript kept growing under it |
@@ -872,6 +873,35 @@ one spec asserts no horizontal overflow on `/login`, `/overview`, `/device` and 
 under the mobile project, that is the assertion that catches a card sitting edge-to-edge
 or a flex row that refuses to shrink. A desktop-only pass tells you nothing about mobile,
 and a jsdom unit test tells you nothing at all here: it computes no layout.
+
+### PWA and the offline shell
+
+The console is installable. The whole surface is:
+
+| File | What it is |
+| --- | --- |
+| `public/manifest.webmanifest` | `name`/`short_name` `Agentre`, `start_url`/`scope` `/`, `standalone`, brand-navy `theme_color`/`background_color`, `any` + `maskable` 192/512 icons |
+| `public/icons/*.png` | `any` icons keep the plate's transparent margin; `maskable`/apple-touch are full-bleed and opaque. Rasterization commands live in `public/icons/README.md` |
+| `public/sw.js` | Classic (non-module) service worker — see below |
+| `public/offline.html` | Self-contained fallback page; no dependency on the bundle |
+| `src/lib/service-worker.ts` | Registration seam; `main.tsx` calls it with `import.meta.env.PROD` |
+
+Three decisions are deliberate. **The manifest is static**: nothing generates it at
+runtime, so it ships in the embedded `dist` like any other asset and the Go handler must
+send it as `application/manifest+json` (the extension is not in Go's MIME table).
+**There is no offline data**: `sw.js` precaches only `/offline.html`, navigates
+network-first so a rolling deploy still reaches users instead of pinning a cached shell,
+caches only the content-hashed `/assets/**` files, and never touches API/JSON or the
+`/v1/` relay. **Zoom is never disabled**: `user-scalable=no` and `maximum-scale` are
+absent from the viewport. iOS's focus auto-zoom is a separate thing and is avoided by
+keeping every focusable control at 16px on small screens; that floor belongs to the shared
+package (`agentre-ui` primitive `Input`/`Textarea`/`SearchInput` and the composer editor),
+because a host cannot reach into a shared component's DOM contract — this host inherits it
+when its pinned revision moves up.
+
+iOS install behaviour — the "Add to Home Screen" surface and the safe-area treatment on a
+notched device — still needs a real device. No jsdom test can stand in for it: there is
+no layout engine, no safe-area inset and no service-worker runtime there.
 
 ## The mono font
 

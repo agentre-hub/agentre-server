@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { reduceFrames } from "@agentre-hub/agentre-ui";
+import { reduceFrames, reduceSessionState } from "@agentre-hub/agentre-ui";
 import type {
   EventFrame,
   DurableNotification,
@@ -297,5 +297,71 @@ describe("回归：事件流里已经有 error 的失败轮次", () => {
     expect(msgs[1].errorText).toBe(stopErr);
     // meta 也得落在这条上，而不是被第二条空消息接走。
     expect(msgs[1].durationMs).toBe(83);
+  });
+});
+
+/**
+ * 上下文窗口的正源在 agentred，而它只走**预览帧**：agentred 做宿主时 fanout 把每
+ * 条 runtime 事件都当预览帧扇出（`Preview: true`），预览帧不带 seq、不入库、不参与
+ * 补齐。于是 `context_window_updated` 一刷新就没了，底栏那条进度条永远没有分母。
+ *
+ * 终态帧是这条路上唯一带号的载体，它本来就有 `contextWindow` 这一格（wire 的
+ * `RunResultDoneFrame.ContextWindow` → `wireview.doneView`），中继也一路解出来了 ——
+ * 此前只是没人读。翻成共享包认得的那条 `context_window_updated` 事件由宿主来做，
+ * 与上面把 `stopErrMsg` 翻成 `error` 是同一道工序、同一个理由。
+ *
+ * 为什么翻成独立一条而不是挂在 `done` 上：共享包的 `reduceSessionState` 只认
+ * `context_window_updated` 与 `usage.contextWindow` 两格，`done` 上那一格它根本不看
+ * （加一格就是改共享包，两端都得跟着动）。而这条事件在转录里是 silent 的，多出来
+ * 的一帧一个像素都不画。
+ */
+describe("终态帧带来的上下文窗口", () => {
+  it("给定带 contextWindow 的终态帧，当转成事件，则多出一条 context_window_updated", () => {
+    const frames = turnDoneFrames(CID, {
+      conversationId: CID,
+      contextWindow: 400000,
+    } as never);
+
+    expect(frames.map((f) => (f.event as { kind: string }).kind)).toEqual([
+      "context_window_updated",
+      "done",
+    ]);
+    expect(frames[0].event).toMatchObject({
+      kind: "context_window_updated",
+      tokens: 400000,
+    });
+  });
+
+  it("给定不报窗口的终态帧，当转成事件，则不编出一条 tokens 为 0 的帧", () => {
+    const frames = turnDoneFrames(CID, { conversationId: CID } as never);
+
+    expect(frames.map((f) => (f.event as { kind: string }).kind)).toEqual([
+      "done",
+    ]);
+  });
+
+  it("给定出错收场又带窗口的终态帧，当转成事件，则窗口排在 error 之前", () => {
+    const frames = turnDoneFrames(CID, {
+      conversationId: CID,
+      contextWindow: 200000,
+      stopErrMsg: "boom",
+    } as never);
+
+    // error → done 的先后是有讲究的（见 turnDoneFrames 的说明），窗口那一条只能
+    // 排在它们**之前**，不能插进中间。
+    expect(frames.map((f) => (f.event as { kind: string }).kind)).toEqual([
+      "context_window_updated",
+      "error",
+      "done",
+    ]);
+  });
+
+  it("给定带窗口的终态帧，当归约会话状态，则窗口进得了那一格", () => {
+    const frames = turnDoneFrames(CID, {
+      conversationId: CID,
+      contextWindow: 400000,
+    } as never);
+
+    expect(reduceSessionState(frames).contextWindow).toBe(400000);
   });
 });

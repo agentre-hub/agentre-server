@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/cago-frame/cago/database/db"
+	"gorm.io/gorm/clause"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/repository/dbutil"
@@ -16,6 +17,10 @@ type SyncObjectRepo interface {
 	// Find 按（账号, 同步标识）取一行，查不到返回 (nil, nil)。墓碑也会被取到——
 	// R6 靠它挡住复活。
 	Find(ctx context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error)
+	// FindForUpdate 与 Find 同口径（墓碑也取回），但对这一行加排他锁（SELECT … FOR UPDATE），
+	// 锁持到事务提交。**只能在事务里调用**：服务端直写的「读 → 合并 → 写」据此与设备上行
+	// 串行，读到的就是写入时库里的最新值。
+	FindForUpdate(ctx context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error)
 	// FindLocationByNaturalKey 按（账号, 项目同步标识, agentred 指纹）取存活的那条
 	// 路径记录，查不到返回 (nil, nil)。
 	FindLocationByNaturalKey(ctx context.Context, userID int64, projectSyncID, fingerprint string) (*sync_entity.SyncObject, error)
@@ -75,6 +80,10 @@ type objectRepo struct{}
 
 func (r *objectRepo) Find(ctx context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error) {
 	return dbutil.FindOne[sync_entity.SyncObject](db.Ctx(ctx).Where("user_id=? AND sync_id=?", userID, syncID))
+}
+
+func (r *objectRepo) FindForUpdate(ctx context.Context, userID int64, syncID string) (*sync_entity.SyncObject, error) {
+	return dbutil.FindOne[sync_entity.SyncObject](db.Ctx(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id=? AND sync_id=?", userID, syncID))
 }
 
 // FindLocationByNaturalKey 只看存活的那一行：墓碑不占（账号, 项目, 指纹），
