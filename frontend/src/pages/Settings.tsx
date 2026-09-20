@@ -69,18 +69,47 @@ export default function Settings() {
     setRefreshSignal((value) => value + 1),
   );
 
-  const ports = React.useMemo(
-    () =>
-      createBrowserEngineSettingsPorts({
-        noOnlineAgentredReason: t("settings.errors.noOnlineAgentred"),
-        builtinUnsupportedReason: t("settings.errors.builtinUnsupported"),
-        unsupportedBackendReason: t("settings.errors.unsupportedBackend"),
-        deviceRequiredReason: t("settings.errors.deviceRequired"),
-        deviceOfflineReason: t("settings.errors.deviceOffline"),
-        deviceUnknownReason: t("settings.errors.deviceUnknown"),
-      }),
-    [t],
-  );
+  const ports = React.useMemo(() => {
+    // Hermes 结构化失败码 → 可读句子。键集合与 agentre-ui 的
+    // agentBackends.hermes.errors.* 同源（同一份 wire 结果码），但这里必须自成
+    // 一份：那份翻译是共享包内部模块，不在 index.ts 的导出面上，而中继失败要
+    // 显示的文本必须在抛错那一刻就是成句的话（enginePorts.ts 的
+    // credentialErrorReason 文档写明了原因）。未知或空 code——中继/传输层失败，
+    // 或 OpenClaw token 写入这类完全没有 code 字段的失败——落到 unknown 兜底。
+    const credentialErrorMessages: Record<string, string> = {
+      HERMES_LOGIN_REQUIRED: t(
+        "settings.errors.credential.HERMES_LOGIN_REQUIRED",
+      ),
+      HERMES_LOGIN_EXPIRED: t(
+        "settings.errors.credential.HERMES_LOGIN_EXPIRED",
+      ),
+      HERMES_INVALID_CREDENTIALS: t(
+        "settings.errors.credential.HERMES_INVALID_CREDENTIALS",
+      ),
+      HERMES_RATE_LIMITED: t("settings.errors.credential.HERMES_RATE_LIMITED"),
+      HERMES_PROVIDER_UNSUPPORTED: t(
+        "settings.errors.credential.HERMES_PROVIDER_UNSUPPORTED",
+      ),
+      HERMES_PROVIDER_UNAVAILABLE: t(
+        "settings.errors.credential.HERMES_PROVIDER_UNAVAILABLE",
+      ),
+      HERMES_PROVIDER_NOT_FOUND: t(
+        "settings.errors.credential.HERMES_PROVIDER_NOT_FOUND",
+      ),
+      HERMES_UNREACHABLE: t("settings.errors.credential.HERMES_UNREACHABLE"),
+    };
+    return createBrowserEngineSettingsPorts({
+      noOnlineAgentredReason: t("settings.errors.noOnlineAgentred"),
+      builtinUnsupportedReason: t("settings.errors.builtinUnsupported"),
+      unsupportedBackendReason: t("settings.errors.unsupportedBackend"),
+      deviceRequiredReason: t("settings.errors.deviceRequired"),
+      deviceOfflineReason: t("settings.errors.deviceOffline"),
+      deviceUnknownReason: t("settings.errors.deviceUnknown"),
+      credentialErrorReason: (code) =>
+        credentialErrorMessages[code] ??
+        t("settings.errors.credential.unknown"),
+    });
+  }, [t]);
 
   const renderHeader = (actions: React.ReactNode) => (
     <div className="flex min-w-0 flex-wrap items-center gap-3">

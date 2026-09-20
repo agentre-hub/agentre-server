@@ -23,7 +23,18 @@
     "unsupportedBackend": "This backend type is not available in the browser console.",
     "deviceRequired": "Pick the device this backend runs on before saving.",
     "deviceOffline": "That device is offline right now, so nothing could be probed on it.",
-    "deviceUnknown": "That device is no longer in this account. Pick another one."
+    "deviceUnknown": "That device is no longer in this account. Pick another one.",
+    "credential": {
+      "HERMES_LOGIN_REQUIRED": "This Hermes server requires signing in; enter a username and password.",
+      "HERMES_LOGIN_EXPIRED": "Your Hermes session expired; please sign in again.",
+      "HERMES_INVALID_CREDENTIALS": "Incorrect username or password.",
+      "HERMES_RATE_LIMITED": "Too many sign-in attempts; please try again later.",
+      "HERMES_PROVIDER_UNSUPPORTED": "This provider requires browser authorization, which is not supported yet.",
+      "HERMES_PROVIDER_UNAVAILABLE": "The identity provider is temporarily unavailable; try again later.",
+      "HERMES_PROVIDER_NOT_FOUND": "The server does not know this auth provider.",
+      "HERMES_UNREACHABLE": "Cannot reach the Hermes server; check the URL and network.",
+      "unknown": "That action failed on the bound device. Please try again."
+    }
   },
   "privacy": {
     "activity": {

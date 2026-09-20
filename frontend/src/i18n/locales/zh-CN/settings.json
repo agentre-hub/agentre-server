@@ -23,7 +23,18 @@
     "unsupportedBackend": "浏览器控制台不支持此后端类型。",
     "deviceRequired": "保存前先选定这个后端在哪台设备上运行。",
     "deviceOffline": "那台设备当前离线，什么都没探到。",
-    "deviceUnknown": "那台设备已不在账号内，请改选一台。"
+    "deviceUnknown": "那台设备已不在账号内，请改选一台。",
+    "credential": {
+      "HERMES_LOGIN_REQUIRED": "这个 Hermes 服务需要登录，请输入用户名与密码。",
+      "HERMES_LOGIN_EXPIRED": "你的 Hermes 登录已过期，请重新登录。",
+      "HERMES_INVALID_CREDENTIALS": "用户名或密码不对。",
+      "HERMES_RATE_LIMITED": "登录尝试次数过多，请稍后再试。",
+      "HERMES_PROVIDER_UNSUPPORTED": "这个提供方需要浏览器授权，暂不支持。",
+      "HERMES_PROVIDER_UNAVAILABLE": "身份提供方暂时不可用，请稍后再试。",
+      "HERMES_PROVIDER_NOT_FOUND": "服务端不认识这个认证提供方。",
+      "HERMES_UNREACHABLE": "连不上这个 Hermes 服务，请检查地址与网络。",
+      "unknown": "这个操作在绑定设备上失败了，请重试。"
+    }
   },
   "privacy": {
     "activity": {
