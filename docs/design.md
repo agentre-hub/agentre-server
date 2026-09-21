@@ -798,9 +798,9 @@ detail pane); mobile replaces this with one column at a time (index → detail �
   scrolls instead of the document. The agent detail's scroll region is also `relative`: the
   execution-target section ends in an `sr-only` announcer, which is `position: absolute`, and
   without a positioned ancestor inside the region it is placed against the root, stretches the
-  document, and a swipe past the region's end scrolls the page. A write-failure banner (same copy as the index footer)
-  renders once, in whichever pane is visible — under the detail header on mobile, at the index
-  footer otherwise.
+  document, and a swipe past the region's end scrolls the page. A write-failure banner (same
+  copy as the index footer) renders once, in whichever pane is visible — under the detail header
+  on mobile, at the index footer otherwise.
 - **Mobile toolbar (`+`).** The desktop toolbar "+" button opens a `CreateAgentDialog` directly.
   On mobile, it opens a two-item menu (New agent / New top-level department), with the latter
   opening the same parentless `CreateDepartmentDialog` as the desktop empty-detail
