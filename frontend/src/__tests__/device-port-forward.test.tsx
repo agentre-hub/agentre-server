@@ -1,14 +1,19 @@
 /**
- * 设备卡展开区的「端口转发」小节（规格 2026-09-09 决策 4 / 11 / 12）。
+ * 设备卡展开区的「端口转发」小节（规格 2026-09-21-port-forward-subdomain
+ * 「控制台界面」）。
  *
- * 桩打在**中继客户端那一层**（`@/lib/relayClient` 的 RelayClient），不是在组件上
- * 塞一个已经贴好结果的假 port：这样从「点一下」到「发出哪个 wire 方法、带什么参数」
- * 整条生产通路都在用例里跑 —— 页面 → `DevicePortForward` → `@/lib/portForward`
- * → `relayClientPool` → 通道。绕过其中任何一段，这一节最容易出的那类错（方法选错、
- * 参数形状不对、地址拼错）就没有任何东西会红。
+ * 声明族（list / create / setEnabled / delete）的桩打在**中继客户端那一层**
+ * （`@/lib/relayClient` 的 RelayClient），不是在组件上塞一个已经贴好结果的假地址：
+ * 这样从「点一下」到「发出哪个 wire 方法、带什么参数」整条生产通路都在用例里跑 ——
+ * 页面 → `DevicePortForward` → `@/lib/portForward` → `relayClientPool` → 通道。
+ * 分配转发地址这一段打的是本站自己（`POST /v1/port-forwards/links`），桩打在
+ * `@/lib/api`——与账号 / 设备列表那些用例同一层。绕过其中任何一段，这一节最容易
+ * 出的那类错（方法选错、参数形状不对、地址拼错）就没有任何东西会红。
  *
- * 行的渲染归共享包 `PortForwardSection`（它自己有用例），这里断言的是**宿主这一半**：
- * 请求发对了、地址是 `/fw/<device_id>/<port>/`、离线不出新增入口、停用行不出「打开」。
+ * 行与新增表单的渲染归共享包 `PortForwardSection`（它自己有用例），这里断言的是
+ * **宿主这一半**：声明请求发对了、分配地址的请求发对了、「打开」「复制地址」第一次
+ * 用到时才分配、之后复用同一个串、部署没配 `base_domain` 时报那句话、离线不出新增
+ * 入口、停用行不出「打开」。
  */
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -23,7 +28,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { relayClientPool } from "@/lib/relayClientPool";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 import Devices from "@/pages/Devices";
@@ -65,7 +70,7 @@ vi.mock("@/lib/relayClient", async (importOriginal) => {
 const mockedApi = vi.mocked(api);
 const mockedEnsureRelayTicket = vi.mocked(ensureRelayTicket);
 
-/** 那台在线 agentred 的数字 id —— 地址里用的就是它（决策 4）。 */
+/** 那台在线 agentred 的数字 id —— 分配地址的请求体里用的就是它。 */
 const ONLINE_ID = 12;
 const OFFLINE_ID = 13;
 
@@ -114,6 +119,8 @@ interface WireMapping {
   port: number;
   name: string;
   enabled: boolean;
+  target: string;
+  insecure: boolean;
   createtime: bigint;
   updatetime: bigint;
 }
@@ -124,6 +131,8 @@ function wireMapping(over: Partial<WireMapping> = {}): WireMapping {
     port: 3000,
     name: "Vite dev server",
     enabled: true,
+    target: "http://127.0.0.1:3000",
+    insecure: false,
     createtime: 0n,
     updatetime: 0n,
     ...over,
@@ -134,6 +143,12 @@ function wireMapping(over: Partial<WireMapping> = {}): WireMapping {
 let listed: WireMapping[] = [];
 let created: WireMapping = wireMapping();
 let toggled: WireMapping = wireMapping({ enabled: false });
+
+/** 这一轮 `/v1/port-forwards/links` 要答的东西（或抛的失败）。 */
+let linkResult: { prefix: string; url: string } | Error = {
+  prefix: "abcd1234efgh",
+  url: "https://abcd1234efgh.fw.agentre.docker.local:8443/",
+};
 
 beforeEach(async () => {
   await i18n.changeLanguage("en");
@@ -154,14 +169,22 @@ beforeEach(async () => {
   listed = [wireMapping()];
   created = wireMapping();
   toggled = wireMapping({ enabled: false });
+  linkResult = {
+    prefix: "abcd1234efgh",
+    url: "https://abcd1234efgh.fw.agentre.docker.local:8443/",
+  };
 
-  mockedApi.mockImplementation(async (path: string) => {
+  mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
     if (path === "/v1/devices") return devicesResponse();
     if (path === `/v1/workspace/device-detail?device_id=${ONLINE_ID}`) {
       return detailResponse(ONLINE_ID);
     }
     if (path === `/v1/workspace/device-detail?device_id=${OFFLINE_ID}`) {
       return detailResponse(OFFLINE_ID);
+    }
+    if (path === "/v1/port-forwards/links" && init?.method === "POST") {
+      if (linkResult instanceof Error) throw linkResult;
+      return linkResult;
     }
     throw new Error("unexpected call: " + path);
   });
@@ -218,6 +241,13 @@ function callFor(method: unknown): unknown {
   return call?.[1];
 }
 
+/** 打给 `/v1/port-forwards/links` 的每一次调用的请求体。 */
+function linkCalls(): unknown[] {
+  return mockedApi.mock.calls
+    .filter(([path]) => path === "/v1/port-forwards/links")
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+}
+
 describe("设备卡的端口转发小节", () => {
   it("Given 这台设备上一条映射都没有, When 展开设备卡, Then 空态说这件事并给出新增入口", async () => {
     listed = [];
@@ -231,15 +261,20 @@ describe("设备卡的端口转发小节", () => {
     ).toBeTruthy();
   });
 
-  it("Given 新增表单填好, When 提交, Then 按端口与名称发出 portForwardCreate 并把新行列出来", async () => {
+  it("Given 新增表单填好三种写法之一, When 提交, Then 按目标 + 名称 + insecure 发出 portForwardCreate 并把新行列出来", async () => {
     listed = [];
-    created = wireMapping({ id: 9n, port: 5173, name: "Storybook" });
+    created = wireMapping({
+      id: 9n,
+      port: 5173,
+      name: "Storybook",
+      target: "http://127.0.0.1:5173",
+    });
     const card = await expandDevice("study-nuc");
 
     fireEvent.click(
       await within(card).findByRole("button", { name: "Add mapping" }),
     );
-    fireEvent.change(within(card).getByLabelText("Port"), {
+    fireEvent.change(within(card).getByLabelText("Target"), {
       target: { value: "5173" },
     });
     fireEvent.change(within(card).getByLabelText("Name"), {
@@ -249,8 +284,9 @@ describe("设备卡的端口转发小节", () => {
 
     await waitFor(() => {
       expect(callFor(rpcMethods.portForwardCreate)).toEqual({
-        port: 5173,
+        target: "5173",
         name: "Storybook",
+        insecure: false,
       });
     });
     const row = await waitFor(() => {
@@ -260,6 +296,33 @@ describe("设备卡的端口转发小节", () => {
     });
     expect(row.textContent).toContain("5173");
     expect(row.textContent).toContain("Storybook");
+  });
+
+  it("Given 目标写成显式 https, When 勾上忽略证书错误并提交, Then insecure 为真", async () => {
+    listed = [];
+    created = wireMapping({
+      id: 10n,
+      target: "https://192.168.1.5:8443",
+      insecure: true,
+    });
+    const card = await expandDevice("study-nuc");
+
+    fireEvent.click(
+      await within(card).findByRole("button", { name: "Add mapping" }),
+    );
+    fireEvent.change(within(card).getByLabelText("Target"), {
+      target: { value: "https://192.168.1.5:8443" },
+    });
+    fireEvent.click(within(card).getByLabelText(/ignore certificate errors/i));
+    fireEvent.click(within(card).getByRole("button", { name: "Add" }));
+
+    await waitFor(() => {
+      expect(callFor(rpcMethods.portForwardCreate)).toEqual({
+        target: "https://192.168.1.5:8443",
+        name: "",
+        insecure: true,
+      });
+    });
   });
 
   it("Given 一条启用中的映射, When 关掉它的开关, Then 按 id 发出 portForwardSetEnabled(false) 并把行改成停用", async () => {
@@ -304,26 +367,7 @@ describe("设备卡的端口转发小节", () => {
     });
   });
 
-  it("Given 一条映射, When 点复制, Then 拿到的是这台设备这个端口的访问地址", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    installClipboard(writeText);
-    const card = await expandDevice("study-nuc");
-    const row = (await waitFor(() => {
-      const [first] = rowsIn(card);
-      expect(first).toBeTruthy();
-      return first;
-    })) as HTMLElement;
-
-    fireEvent.click(within(row).getByRole("button", { name: "Copy address" }));
-
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(
-        `${window.location.origin}/fw/${ONLINE_ID}/3000/`,
-      );
-    });
-  });
-
-  it("Given 一条启用中的映射, When 点「打开」, Then 在新标签页打开 /fw/<device_id>/<port>/", async () => {
+  it("Given 一条启用中的映射, When 点「打开」, Then 分配前缀并在新标签页打开返回的子域地址", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const card = await expandDevice("study-nuc");
     const row = (await waitFor(() => {
@@ -336,11 +380,71 @@ describe("设备卡的端口转发小节", () => {
       within(row).getByRole("button", { name: "Open in a new tab" }),
     );
 
-    expect(open).toHaveBeenCalledWith(
-      `${window.location.origin}/fw/${ONLINE_ID}/3000/`,
-      "_blank",
-      "noopener,noreferrer",
+    await waitFor(() => {
+      expect(open).toHaveBeenCalledWith(
+        "https://abcd1234efgh.fw.agentre.docker.local:8443/",
+        "_blank",
+        "noopener,noreferrer",
+      );
+    });
+    expect(linkCalls()).toEqual([{ device_id: ONLINE_ID, mapping_id: 7 }]);
+  });
+
+  it("Given 已经打开过一次（地址已分配）, When 点复制, Then 复制的是同一个串，且没有再打一次分配请求", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    installClipboard(writeText);
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const card = await expandDevice("study-nuc");
+    const row = (await waitFor(() => {
+      const [first] = rowsIn(card);
+      expect(first).toBeTruthy();
+      return first;
+    })) as HTMLElement;
+
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Open in a new tab" }),
     );
+    await waitFor(() => expect(linkCalls()).toHaveLength(1));
+
+    fireEvent.click(
+      await within(row).findByRole("button", { name: "Copy address" }),
+    );
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(
+        "https://abcd1234efgh.fw.agentre.docker.local:8443/",
+      );
+    });
+    // 显示与复制是同一个串，而且第二次用（复制）没有再分配一次前缀。
+    expect(linkCalls()).toHaveLength(1);
+  });
+
+  it("Given 部署没配 base_domain, When 点「打开」, Then 报『这个部署此刻提供不了端口转发』而不是当成设备离线", async () => {
+    linkResult = new ApiError(
+      31200,
+      "this deployment does not offer port forwarding right now",
+      503,
+    );
+    const card = await expandDevice("study-nuc");
+    const row = (await waitFor(() => {
+      const [first] = rowsIn(card);
+      expect(first).toBeTruthy();
+      return first;
+    })) as HTMLElement;
+
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Open in a new tab" }),
+    );
+
+    expect(
+      await within(card).findByText(
+        "this deployment does not offer port forwarding right now",
+      ),
+    ).toBeTruthy();
+    // 这不是「设备够不着」：新增入口还在，行上「打开」也还在——不是离线态。
+    expect(
+      within(card).queryByRole("button", { name: "Add mapping" }),
+    ).toBeTruthy();
   });
 
   it("Given 设备离线, When 展开设备卡, Then 说明离线且不出新增入口（也不去问那台机器）", async () => {
@@ -357,7 +461,7 @@ describe("设备卡的端口转发小节", () => {
     ).toBe(false);
   });
 
-  it("Given 一条已停用的映射, When 它被列出来, Then 整行保留但不出「打开」", async () => {
+  it("Given 一条已停用的映射, When 它被列出来, Then 整行保留但不出「打开」, 目标是环回端口只显示端口", async () => {
     listed = [wireMapping({ enabled: false })];
     const card = await expandDevice("study-nuc");
     const row = (await waitFor(() => {
@@ -371,5 +475,23 @@ describe("设备卡的端口转发小节", () => {
     expect(
       within(row).queryByRole("button", { name: "Open in a new tab" }),
     ).toBeNull();
+  });
+
+  it("Given 一条映射目标是非环回主机, When 它被列出来, Then 行上显示规范化后的完整目标", async () => {
+    listed = [
+      wireMapping({
+        id: 11n,
+        target: "https://192.168.1.5:8443",
+        name: "Internal site",
+      }),
+    ];
+    const card = await expandDevice("study-nuc");
+    const row = (await waitFor(() => {
+      const [first] = rowsIn(card);
+      expect(first).toBeTruthy();
+      return first;
+    })) as HTMLElement;
+
+    expect(row.textContent).toContain("https://192.168.1.5:8443");
   });
 });
