@@ -66,7 +66,11 @@ export default function SessionModelControl({
         triggerLabel={<ProviderPillTrigger state={pillState} />}
         aria-label={t("session.composerControls.modelTarget")}
         data-testid="composer-model-target"
-        className="h-[26px] w-auto cursor-pointer gap-1.5 rounded-md border-border bg-card px-2.5 text-2xs font-medium text-foreground hover:bg-accent"
+        // `w-auto` 已经在，但触发器与它的内层节点一样没给自己 `min-w-0` ——
+        // 里面的 `truncate`（provider-pill-trigger.tsx）虽然写好了，可 flex item
+        // 默认的 `min-width:auto` 顶住不让它比整段文案更窄，省略号从没生效过。
+        // 窄屏（如「跟随 Agent 绑定 · CLI 自身登录态」）就是靠这一格才收得下去。
+        className="h-[26px] w-auto min-w-0 cursor-pointer gap-1.5 rounded-md border-border bg-card px-2.5 text-2xs font-medium text-foreground hover:bg-accent"
       />
       {note ? (
         <span

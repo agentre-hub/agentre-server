@@ -240,22 +240,43 @@ export default function SessionComposer({
             ) : undefined
           }
           // 设置项跟在提示后，计量器贴着发送键 —— 与桌面端同一顺序。
+          //
+          // 这一整格此前是 `shrink-0`：在窄屏（390/360）下，权限控件满宽 + 模型
+          // chip 满宽文案（如「跟随 Agent 绑定 · CLI 自身登录态」，231px）从不给
+          // composer-bar 的挤压算法让路，把发送键顶出输入框可视区（规格
+          // 2026-09-21 决策 7 / 问题 2）。改成 `min-w-0` 让这一整格能收缩，
+          // 挤压落到内部——权限控件自己用 `shrink-0` 钉住不参与，模型 chip
+          // （`SessionModelControl` 已带 `min-w-0`）先收缩并截断。
           leadingControls={
-            <div className="flex shrink-0 items-center gap-1">
+            <div
+              data-testid="composer-leading-controls"
+              className="flex min-w-0 items-center gap-1"
+            >
               {permissionModeMeta !== undefined && onPermissionModeChange ? (
                 permissionModeMeta === null ? (
-                  <span className="text-2xs text-muted-foreground">
+                  <span
+                    data-testid="composer-permission-slot"
+                    className="shrink-0 text-2xs text-muted-foreground"
+                  >
                     {t("session.composerControls.permissionUnavailable")}
                   </span>
                 ) : permissionModeMeta.allowedModes.length === 0 ? null : (
-                  <PermissionModePill
-                    mode={permissionMode || permissionModeMeta.defaultMode}
-                    modes={permissionModeMeta.order}
-                    onSelect={onPermissionModeChange}
-                    errorMessage={permissionError}
-                    runtimeKey={permissionRuntimeKey}
-                    hasActiveSession={permissionHasActiveSession}
-                  />
+                  // 共享包的 PermissionModePill 按钮自己没有 shrink-0（不像旁边的
+                  // 思考力度控件），得由宿主这层钉住：一旦外层能收缩，权限控件
+                  // 若不设防就会被挤压算法一起吃掉，与「权限控件永不收缩」相悖。
+                  <span
+                    data-testid="composer-permission-slot"
+                    className="shrink-0"
+                  >
+                    <PermissionModePill
+                      mode={permissionMode || permissionModeMeta.defaultMode}
+                      modes={permissionModeMeta.order}
+                      onSelect={onPermissionModeChange}
+                      errorMessage={permissionError}
+                      runtimeKey={permissionRuntimeKey}
+                      hasActiveSession={permissionHasActiveSession}
+                    />
+                  </span>
                 )
               ) : null}
               {modelControl}
