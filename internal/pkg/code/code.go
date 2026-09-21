@@ -178,3 +178,11 @@ const (
 	// 到底对应哪个账号。
 	CredentialInvalid = 31100
 )
+
+// 端口转发子域链接 31200~31299（规格 2026-09-21-port-forward-subdomain
+// 「地址与路由」）
+const (
+	// PortForwardLinksUnavailable 这个部署没有配置 port_forward.base_domain：
+	// 没有转发域就无法分配前缀，与某一台设备或映射无关。
+	PortForwardLinksUnavailable = 31200
+)

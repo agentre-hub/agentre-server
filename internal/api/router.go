@@ -52,6 +52,11 @@ type RouterDeps struct {
 	// 取 portforward_svc.Default()——它未装配时是 nil，意思是「这个部署没有端口
 	// 转发」，路由层据此答「此刻没有这条能力」，而不是去拨一个不存在的中继。
 	PortForward portforward_ctr.Forwarder
+	// PortForwardLinks 是端口转发子域前缀的分配器（spec「地址与路由」的「分配
+	// 前缀」）。留给测试注入自己那份；为空时取 portforward_svc.DefaultLinks()——
+	// 与 PortForward 上面那份约定同形，只是这一份不会是 nil（没配 base_domain 的
+	// 部署仍然装配它，只是 Link 恒回「此刻提供不了端口转发」）。
+	PortForwardLinks portforward_ctr.LinkAllocator
 	// Redis 是鉴权中间件要用的那台：中继票据「只连一次」的认领记号从它派生。
 	// 留给测试注入自己那台；为空时取全局默认单例（与上面两项同一约定）。
 	Redis *goredis.Client
@@ -167,6 +172,16 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	sessionImportCtr := sessionimport_ctr.New()
 	statsCtr := stats_ctr.New()
 	releaseCtr := release_ctr.New()
+	// 端口转发子域链接（spec 2026-09-21-port-forward-subdomain「地址与路由」）：
+	// 归属判定复用 device_svc.Default()（与下面 /fw/ 那条同一个 DeviceLookup 口径），
+	// 分配器留给测试注入；为空时取本进程那份（bootstrap.RegisterDefaults 总会装配
+	// 它——没配 base_domain 的部署也装配，只是 Link 恒回「此刻提供不了端口转发」，
+	// 所以这里不需要 PortForward 那种「未装配即 nil」的额外判空）。
+	portForwardLinks := r.PortForwardLinks
+	if portForwardLinks == nil {
+		portForwardLinks = portforward_svc.DefaultLinks()
+	}
+	portForwardLinksCtr := portforward_ctr.NewLinks(device_svc.Default(), portForwardLinks)
 
 	// 公开
 	g.Group("/").Bind(
@@ -229,6 +244,10 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// 控制台的 latest 来源（决策 12）：只读、账号无关的全局事实，但眼下只有
 		// web 控制台会问它，与统计三条同组即可——不必新开一个鉴权面。
 		releaseCtr.Latest,
+		// 端口转发子域链接：对自己名下一台设备的一条映射 id 分配（或复用）一个转发
+		// 前缀（spec「分配前缀」）。写方法，本组已经强制 CSRF——与撤销设备、改名
+		// 同一形状。
+		portForwardLinksCtr.Create,
 	)
 
 	// 通行密钥：注册与管理一律要求浏览器会话 + CSRF。设备 JWT 那条路径上没有

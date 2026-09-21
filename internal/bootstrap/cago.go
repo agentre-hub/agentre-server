@@ -25,6 +25,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/portforward_link_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
@@ -54,6 +55,9 @@ type ServerConfig struct {
 	AccountGate     AccountGateConfig `yaml:"account_gate"`
 	WebAuthn        WebAuthnConfig    `yaml:"webauthn"`
 	Release         ReleaseConfig     `yaml:"release"`
+	// PortForward 是端口转发子域链接的配置（spec 2026-09-21-port-forward-subdomain
+	// 「地址与路由」）。
+	PortForward PortForwardConfig `yaml:"port_forward"`
 	// TrustedProxies 是「这些地址转发过来的 X-Forwarded-For 才算数」的名单，取 IP
 	// 或 CIDR。**缺省空 = 谁都不信**，来源 IP 一律取实际连上来的那一端
 	// （RemoteAddr）。
@@ -79,6 +83,16 @@ type ReleaseConfig struct {
 	// CacheTTL 是缓存值在 Redis 里的存活时间。拉取持续失败时，过期让端点从「上一次
 	// 的旧值」自然退回「不知道」。
 	CacheTTL time.Duration `yaml:"cache_ttl"`
+}
+
+// PortForwardConfig 决定这个部署要不要提供端口转发子域（spec「地址与路由」的
+// 「配置」一节）。
+type PortForwardConfig struct {
+	// BaseDomain 是转发域：生产是 fw.agentrehub.com，dev 是
+	// fw.agentre.docker.local。**空串 = 这个部署不提供端口转发**——不是留空回落到
+	// 某个缺省值，转发子域没有一个放之四海都对的默认值，只有部署拓扑知道。控制台
+	// 打开映射时据此报「这个部署此刻提供不了端口转发」。
+	BaseDomain string `yaml:"base_domain"`
 }
 
 // WebAuthnConfig 是通行密钥的 Relying Party 配置。
@@ -309,6 +323,15 @@ func RegisterDefaults(cfg *ServerConfig) {
 		RefreshTTL:      cfg.Token.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}))
+
+	// 端口转发子域链接（spec 2026-09-21-port-forward-subdomain「地址与路由」）：
+	// **总是**装配，即便 BaseDomain 是空串——没配的部署仍然需要这份实例存在，
+	// 只是 Link 恒回「此刻提供不了端口转发」，这样 router.go 就不必再对它做一次
+	// PortForward 那种「未装配即 nil」的额外判空。
+	portforward_svc.SetDefaultLinks(portforward_svc.NewLinks(
+		portforward_svc.LinkConfig{BaseDomain: cfg.PortForward.BaseDomain, PublicURL: cfg.PublicURL},
+		portforward_link_repo.Link(),
+	))
 
 	// 控制台的 latest 来源（决策 12）：Enabled=false 时 Pull 与 Latest 都恒回
 	// 「不关心/不知道」，装配与否不影响这一点——这里始终装配，只是配置决定它会不会

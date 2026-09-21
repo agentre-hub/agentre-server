@@ -177,7 +177,7 @@ middleware groups are the authorization model:
 | --- | --- | --- |
 | Public | — (some endpoints add per-IP rate limits) | healthz, GitHub OAuth authorize/callback, passkey login |
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
-| Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*` |
+| Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*`, `/v1/port-forwards/links` |
 | Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
 | Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot`, `/v1/credentials/introspect` (+ per-account rate limit) |
 | Relay client | `RelayClientJWT(credentials, tickets)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (opaque, recorded in Redis by `credstore`, one connection per ticket) |
@@ -267,6 +267,23 @@ session ticket valid for 14 days, and the cookie's `HttpOnly` protects nothing h
 What still crosses the boundary is deliberate and bounded: the rest of the request
 (method, path, body, remaining headers), the device's own response, and the fact that a
 forwarded page runs on the console's origin — the CSRF exemption above.
+
+### Port-forward subdomain links
+
+`/fw/*` (above) is being superseded by per-mapping subdomains under
+`server.port_forward.base_domain` (spec `2026-09-21-port-forward-subdomain`); this section
+covers only the piece that exists so far — allocation. `POST /v1/port-forwards/links`
+(browser session + CSRF) takes a `(device_id, mapping_id)` owned by the caller's account —
+ownership goes through the same `device_svc.OwnedDevice` used by `/fw/*`, so a foreign,
+revoked or missing device answers the identical 404 — and returns a stable 12-character
+lowercase base32 prefix plus the full forward URL, `<scheme>://<prefix>.<base_domain>:<port>/`
+with scheme and port following `server.public_url`. Repeat calls for the same
+`(device_id, mapping_id)` return the same prefix (`portforward_svc.Links`, backed by the
+`port_forward_links` table's `uk_pfl_device_mapping` unique key); the row is not deleted when
+the mapping disappears on the device side. An unset `base_domain` makes every call answer
+`code.PortForwardLinksUnavailable` (503) without touching the database. Nothing dispatches on
+the resulting Host yet — that is a later task; `portforward_link_repo.FindByPrefix` exists for
+it to build on.
 
 Endpoints are declared as structs with `mux.Meta`, which carries path and method:
 
