@@ -452,6 +452,13 @@ header at all. Chat's mobile form does this: 52px cannot hold title + page actio
 「对.」. Chat instead keeps identity and global controls on the first row and gives search
 its own.
 
+**Mobile session detail and draft: `immersive`** — when `immersive={true}` the shell hides
+both TopBar and mobile bottom tab bar, and `main` handles safe-area insets at top and bottom.
+The conversation detail page (`/chat/:conversationId`) and new-conversation draft render this
+way on mobile, so a session occupies the full viewport with a single fixed 68px header band
+(see [The detail's three bands](#the-details-three-bands)). Desktop and embedded forms ignore
+`immersive`. Loading / not-found / error states keep the back link through the header band.
+
 **Mobile bottom tab (board `A6Z3k`).** Below `md` the SideNav is removed entirely — no
 hamburger, no drawer. The five high-frequency destinations (Overview, Chat, Issues, Devices,
 Org) render in a `MobileTabBar` held at the bottom with `shrink-0` (the root does not
@@ -514,6 +521,10 @@ that, not a negative margin, is how they sit flush under the TopBar.
     `heatmap-grid.test.ts` guards it in both directions. Budget against the card, not the
     viewport: 19 weeks overflow the card by 10px and clip today's column, and e2e's Pixel 7
     (412px) is wide enough to hide it.
+  - **Mobile readout line below the grid, driven by tap** — A fixed line under the heatmap
+    grid shows "date (weekday) · N conversations", hint text "tap a cell to see the day"
+    before any tap, and "· No conversations" when a day has zero counts. The tapped cell gets
+    a `ring-primary` outline; future cells are not tappable. Desktop keeps the hover tooltip.
 - **`scope`** has two values and both carry real data. `full` = activity reporting is on.
   `saved` = it is off, and the numbers cover only conversations saved to the account; a
   single `bg-primary-soft` notice at the top of the page says so once (not per card) and
@@ -580,7 +591,10 @@ column and no persistent "撤销这台设备" explainer card**.
   controls (`devices.test.tsx`, `device-expand.test.tsx`).
 - **Mobile (`HUELX`).** The mobile row starts with the icon box (`size-9 rounded-md
   bg-muted`), then name / kind chip / `StatusMark` / mono meta, expand and row menu — a
-  different information order and density, not a squeezed desktop row. Revoke still goes
+  different information order and density, not a squeezed desktop row. Status dot and name
+  stay on one line (no `flex-wrap`); the name truncates to one line when collapsed, and wraps
+  fully when expanded. The expanded card shows "N projects · M conversations running" with
+  the same copy and the same only-when-data-complete rule as desktop. Revoke still goes
   through the row menu + confirm dialog.
 - TopBar: nothing of its own. The total is the SideNav's Devices meta, and "is a machine
   online" is what every row on this page already answers.
@@ -625,12 +639,18 @@ padding to cancel and no negative margin).
   conversations on your devices" is gone — the machine axis answers that question **on this
   page**, and its online group headers carry a 「在这台机器上找」 affordance — and the
   Fresh dot went with the rest of them (see [TopBar](#the-console-shell)).
-- **Mobile** keeps the list → detail flow, never the two-pane layout. It owns its top band
-  (`ownHeader`): row 1 is title + account + `AppControls`; row 2 is the same real search at
-  `h-9`. Below that the index scrolls, with
-  a `PenLine` FAB (`fixed bottom-24 right-4 size-14 rounded-full bg-primary`) that raises the
-  agent-picker bottom sheet when sessions exist. Picking an agent replaces the whole screen
-  with `DraftSession`; there is no second column to put it in.
+- **Mobile** keeps the list → detail flow, never the two-pane layout. The index page owns its
+  top band (`ownHeader`): row 1 is title + account + `AppControls`; row 2 is the same real
+  search at `h-9`. Below that the index scrolls with a `PenLine` FAB (`fixed bottom-24 right-4
+  size-14 rounded-full bg-primary`) that raises the agent-picker bottom sheet when sessions
+  exist. Picking an agent replaces the whole screen with `DraftSession`.
+  
+  Viewing a saved conversation opens `/chat/:conversationId` as a full-screen detail page
+  (`AppShell immersive`, no TopBar or bottom tab bar, safe-area insets in `main`). The new-chat
+  draft also renders immersive when accessed on mobile. Both render a single fixed 68px
+  session header (back · 2-line title · Agent · project · machine + online · time · ⋯); the
+  meta line truncates on mobile instead of hiding parts. Loading / not-found / error states
+  keep a back link through the header.
 
 ### The detail's three bands
 
@@ -658,7 +678,13 @@ bottom 888).
   `SessionSummary` carried no project field; the wire added `projectSyncId` and the account
   mirror row carries the server's own `project_sync_id`, so the segment is shown when the
   name resolves and omitted when it doesn't — never guessed.
-- **Transcript** (`min-h-0 flex-1 overflow-y-auto`), `max-w-measure` centred.
+- **Transcript** (`min-h-0 flex-1 overflow-y-auto`), `max-w-measure` centred. On mobile,
+  opening a file from transcript content renders a full-screen preview layer (fixed `inset-0`)
+  with a back link and file header (name, directory, machine meta), the preview panel, and an
+  `aria-modal` dialog role. Opening a file pushes one same-URL history entry with a marker in
+  `location.state`. The back button and system `popstate` both close only the layer and keep
+  the conversation tabs; closing the last tab pops that entry. A stale marker with no tabs
+  counts as closed. Desktop keeps the 420px right column and adds no history entries.
 - **Composer** (`shrink-0 border-t bg-card`) — see below. Approvals are **not** repeated
   here: the transcript already renders the card, and `interactiveRequestIds` dedupes the two
   sources.
@@ -697,6 +723,13 @@ The footer's **context meter** reads `context_window_updated` / `usage` off the 
 (`reduceSessionState`) — data that was already arriving and had nowhere to land. Window `<= 0`
 means "not detected yet", so the meter is hidden rather than drawn against an invented
 denominator; `>= 90%` turns `bg-status-error`.
+
+**Mobile footer row.** On mobile (360/390px), the footer's `flex` container holds send,
+permission controls and model chip on a single line without overflow. Send and permission
+controls carry `shrink-0` and do not participate in width shrinkage. The model chip carries
+`min-w-0` to allow shrinking and truncation via `truncate`. The reasoning/effort control
+uses `@max-[620px]` to hide its label below a narrow width, keeping only the icon and staying
+clickable. Context meter (when present) is a small icon-only marker that stays in-box.
 
 The composer is loaded with a plain dynamic `import()`, **not** `React.lazy` + `Suspense`:
 TipTap costs 252 kB gzip that four other pages never touch, but Suspense's reveal path
@@ -753,6 +786,21 @@ desktop app group and draw a conversation the same way.
 - **Search.** The search above the list (see Chat above) is server-side and matches titles
   only.
 
+### Org
+
+`/org` displays agents and departments. Desktop shows two columns side by side (index list and
+detail pane); mobile replaces this with one column at a time. Both forms use the same
+`SessionDetailView` composition pattern.
+
+- **Mobile layout.** The detail column carries `min-h-0` on mobile, so its own `overflow-y-auto`
+  scrolls instead of the document. A write-failure banner (same copy as the index footer)
+  renders once, in whichever pane is visible — under the detail header on mobile, at the index
+  footer otherwise.
+- **Mobile toolbar (`+`).** The desktop toolbar "+" button opens a `CreateAgentDialog` directly.
+  On mobile, it opens a two-item menu (New agent / New top-level department), with the latter
+  opening the same parentless `CreateDepartmentDialog` as the desktop's right-click affordance.
+  Desktop "+" stays a single direct action.
+
 ### Settings
 
 `/settings` is the last desktop SideNav destination and is also linked from `UserMenu`;
@@ -797,6 +845,15 @@ two sections must not pay a request for a page they do not show.
 - **Saved conversations** is an explanation block, not a switch: only conversations the
   user explicitly saved live in the account, and unsaving happens per conversation on the
   Chat page. The count renders only when the response carries it.
+
+### Account
+
+`/account` displays session information and account settings. The page holds passkey and login
+session cards that render account session details.
+
+- **Mobile narrow-screen layout.** Email label and value render in two columns with the value
+  wrapping; login time, last activity and IP each render on separate lines without truncation.
+  Passkey created and last-used timestamp lines wrap across lines rather than truncating.
 
 ### Decisions
 
