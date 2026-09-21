@@ -202,16 +202,40 @@ export function DevicePortForward({
     [addresses, deviceId],
   );
 
-  async function handleOpen(mapping: PortForwardMappingView) {
+  /**
+   * 「打开」先同步开一个空白标签页，分配到地址之后才把它导航过去。
+   *
+   * 分配地址是一次网络往返，`await` 之后再调 `window.open` 已经跳出了这次点击的
+   * 用户手势——Chrome / Safari 的弹窗拦截器会把这次 `window.open` 当成非用户发起
+   * 而拦下来（第一次点某条映射时最容易撞上，那时地址还没缓存）。开在点击的同一个
+   * 事件循环里就没有这个问题；空白页拿到手之后，`opener` 手动置空——等价于
+   * `noopener`（被转发的那个应用与控制台不同源，不给它反向把手），但保留句柄好在
+   * 地址到手后设置它的 `location`。
+   */
+  function handleOpen(mapping: PortForwardMappingView) {
     setActionError("");
-    try {
-      const url = await ensureAddress(mapping);
-      if (!alive.current) return;
-      window.open(url, "_blank", "noopener,noreferrer");
-    } catch (err) {
-      if (!alive.current) return;
-      handleLinkFailure(err);
-    }
+    const pending = window.open("", "_blank");
+    if (pending) pending.opener = null;
+    void (async () => {
+      try {
+        const url = await ensureAddress(mapping);
+        if (!alive.current) {
+          pending?.close();
+          return;
+        }
+        if (pending) {
+          pending.location.href = url;
+        } else {
+          // 拿到手的那次调用被拦了（没能提前开出空白页）：退回直接开一次——多数
+          // 浏览器仍然认它跑在同一次用户手势派生的宏任务里，拦不住也没有更好的兜底。
+          window.open(url, "_blank", "noopener,noreferrer");
+        }
+      } catch (err) {
+        pending?.close();
+        if (!alive.current) return;
+        handleLinkFailure(err);
+      }
+    })();
   }
 
   /**

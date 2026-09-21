@@ -494,4 +494,91 @@ describe("设备卡的端口转发小节", () => {
 
     expect(row.textContent).toContain("https://192.168.1.5:8443");
   });
+
+  it("Given 点「打开」, Then 在分配请求还没回来之前就已经同步开好一个空白标签页（不被弹窗拦截器当成非用户发起）", async () => {
+    let resolveLink: (link: { prefix: string; url: string }) => void;
+    const linkPromise = new Promise<{ prefix: string; url: string }>(
+      (resolve) => {
+        resolveLink = resolve;
+      },
+    );
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/devices") return devicesResponse();
+      if (path === `/v1/workspace/device-detail?device_id=${ONLINE_ID}`) {
+        return detailResponse(ONLINE_ID);
+      }
+      if (path === "/v1/port-forwards/links" && init?.method === "POST") {
+        return linkPromise;
+      }
+      throw new Error("unexpected call: " + path);
+    });
+    const handle = {
+      location: { href: "" },
+      opener: {} as unknown,
+      close: vi.fn(),
+    };
+    const open = vi
+      .spyOn(window, "open")
+      .mockReturnValue(handle as unknown as Window);
+    const card = await expandDevice("study-nuc");
+    const row = (await waitFor(() => {
+      const [first] = rowsIn(card);
+      expect(first).toBeTruthy();
+      return first;
+    })) as HTMLElement;
+
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Open in a new tab" }),
+    );
+
+    // 同步断言：这一行跑在分配请求 resolve 之前——`window.open` 必须已经在点击
+    // 那一次事件循环里调用过了，标签页还是空白的。
+    expect(open).toHaveBeenCalledWith("", "_blank");
+    expect(handle.opener).toBeNull();
+    expect(handle.location.href).toBe("");
+
+    resolveLink!({
+      prefix: "abcd1234efgh",
+      url: "https://abcd1234efgh.fw.agentre.docker.local:8443/",
+    });
+
+    await waitFor(() => {
+      expect(handle.location.href).toBe(
+        "https://abcd1234efgh.fw.agentre.docker.local:8443/",
+      );
+    });
+  });
+
+  it("Given 分配前缀失败, When 点「打开」, Then 关掉那个空白标签页并按原有失败口径处理", async () => {
+    linkResult = new ApiError(
+      31200,
+      "this deployment does not offer port forwarding right now",
+      503,
+    );
+    const handle = {
+      location: { href: "" },
+      opener: {} as unknown,
+      close: vi.fn(),
+    };
+    vi.spyOn(window, "open").mockReturnValue(handle as unknown as Window);
+    const card = await expandDevice("study-nuc");
+    const row = (await waitFor(() => {
+      const [first] = rowsIn(card);
+      expect(first).toBeTruthy();
+      return first;
+    })) as HTMLElement;
+
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Open in a new tab" }),
+    );
+
+    await waitFor(() => {
+      expect(handle.close).toHaveBeenCalled();
+    });
+    expect(
+      await within(card).findByText(
+        "this deployment does not offer port forwarding right now",
+      ),
+    ).toBeTruthy();
+  });
 });
