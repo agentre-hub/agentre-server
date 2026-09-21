@@ -240,7 +240,18 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
 
       {props.alert}
 
-      <div className="@container min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5">
+      {/*
+        relative：给这个滚动容器本身当定位祖先。执行目标区末尾的 sr-only 播报
+        （role=status，OrgExecTargetSection.tsx）是 position:absolute，没有定位
+        祖先时会以初始包含块（html 根）算 static position，把它摆到滚动内容深处
+        对应的文档坐标上，从而把 document 撑高、滚到底后手势会继续滚文档。这里
+        补一层定位祖先，让它（以及任何将来出现在这个滚动区里的绝对定位后代）的
+        包含块落回这个容器内部，不再外溢到 document。
+      */}
+      <div
+        data-testid="org-detail-scroll"
+        className="@container relative min-h-0 min-w-0 flex-1 overflow-y-auto px-5 py-5"
+      >
         <div
           className="grid min-w-0 grid-cols-1 items-start gap-6 @xl:grid-cols-2 @3xl:grid-cols-3"
           data-slot="org-detail-columns"

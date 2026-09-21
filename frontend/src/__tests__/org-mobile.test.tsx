@@ -166,6 +166,22 @@ describe("组织面移动形态：详情列可滚、失败跟随当前屏、工�
     expect(screen.getByTestId("org-detail-col").className).toContain("min-h-0");
   });
 
+  it("执行目标区的 sr-only 播报不撑高文档：详情滚动容器是它的定位祖先", async () => {
+    // jsdom 量不了布局（滚到底继续滑文档会不会被推走），只能锚住成因：
+    // sr-only 播报是 position:absolute，没有定位祖先时会以初始包含块（html 根）
+    // 定位，把 static position 算到滚动内容深处，从而撑高 document。给详情
+    // 自己的滚动容器加 relative，播报的包含块就落回这个容器内部。
+    mockMobileViewport();
+    renderOrgAt("/org/agent/agent-alice");
+
+    await screen.findByTestId("org-detail-header");
+    const scroll = screen.getByTestId("org-detail-scroll");
+    expect(scroll.className).toContain("relative");
+
+    const announcer = screen.getByTestId("exec-target-announcer");
+    expect(scroll.contains(announcer)).toBe(true);
+  });
+
   it("删除失败：同索引页文案的提示出现在详情头下方且不重复；返回索引后只在索引底部出现一条", async () => {
     mockMobileViewport();
     mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
