@@ -234,12 +234,11 @@ export default function Org() {
   // （移动端正看详情时，见下面传给两个详情组件的 alert 槽）。落点由「当前这一屏
   // 是哪个」决定，不是两处都画——两列在移动端本就一次只挂一个（showIndex /
   // showDetail），所以只要各自的宿主只在自己那一档渲染这条文案，就天然不会重复。
-  const alertMessage =
-    !initialFailed && (error ?? mutationError)
-      ? error
-        ? t("org.errors.generic")
-        : mutationError
-      : null;
+  const alertMessage = initialFailed
+    ? null
+    : error
+      ? t("org.errors.generic")
+      : mutationError || null;
   // 只在移动端且真的在看详情（不是骨架/失败态）时才递下去——两个详情组件把它摆在
   // 自己的头部下方（OrgDetailHeader 之后、正文之前）；桌面端不传，桌面的这条错误
   // 只在索引底部那一处出现，形态不变。

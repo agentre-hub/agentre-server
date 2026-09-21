@@ -139,10 +139,15 @@ export default function SessionFilePreviewColumn({
   );
 
   if (layer) {
-    const slash = activePath.lastIndexOf("/");
-    const name = activePath.slice(slash + 1);
+    // 两种分隔符都认，与共享包 file-meta 的 basename / dirname 同一套：Windows
+    // 会话的 relPath 用反斜杠分隔，只认 "/" 的话标题成了整条路径、副行退成工作根。
+    const sep = Math.max(
+      activePath.lastIndexOf("/"),
+      activePath.lastIndexOf("\\"),
+    );
+    const name = activePath.slice(sep + 1);
     // 工作根下的文件没有目录段：它就在工作根里，副行说工作根。
-    const dir = slash > 0 ? activePath.slice(0, slash) : cwd;
+    const dir = sep > 0 ? activePath.slice(0, sep) : cwd;
     return (
       <section
         role="dialog"

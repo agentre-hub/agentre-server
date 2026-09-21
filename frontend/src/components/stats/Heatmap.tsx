@@ -233,10 +233,19 @@ export function Heatmap({
   /**
    * 移动端点按的那一格。触屏没有 hover，手指按下去反而会挡住浮层（设计决策
    * 8），所以换成图下方固定的一行，点一格更新一次，不需要再点别处关闭。
-   * 同样从网格里现读，理由与 `hoveredCell` 一致。
+   *
+   * 记的是**那一天**而不是列/行坐标：与悬停不同，点过的读数会一直留着，而列数
+   * 随宽度变（转屏）、截止日会往后走，同一坐标上换成了别的日子，读数就会无声地
+   * 报另一天。按日子回网格里找；那天已经不在网格里就回到提示。
    */
-  const [tap, setTap] = useState<HoverCell | null>(null);
-  const tappedCell = tap ? grid.weeks[tap.column]?.[tap.row] : undefined;
+  const [tapDay, setTapDay] = useState<string | null>(null);
+  const tappedCell = useMemo(
+    () =>
+      tapDay === null
+        ? undefined
+        : grid.weeks.flat().find((cell) => cell.day === tapDay),
+    [grid, tapDay],
+  );
   const readoutText = useMemo(() => {
     if (!tappedCell?.day) return t("overview.stats.heatmap.readout.hint");
     const detail =
@@ -320,15 +329,12 @@ export function Heatmap({
                   data-day={cell.day}
                   data-level={String(cell.level)}
                   onMouseEnter={() => setHover({ column: index, row })}
-                  onClick={
-                    isMobile ? () => setTap({ column: index, row }) : undefined
-                  }
+                  onClick={isMobile ? () => setTapDay(cell.day) : undefined}
                   className={cn(
                     CELL_CLASS,
                     LEVEL_CLASS[cell.level],
                     isMobile &&
-                      tap?.column === index &&
-                      tap.row === row &&
+                      tappedCell?.day === cell.day &&
                       "ring-2 ring-primary",
                   )}
                 />

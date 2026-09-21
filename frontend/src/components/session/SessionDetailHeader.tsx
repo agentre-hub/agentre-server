@@ -130,6 +130,47 @@ export function SessionBackLink({
 }
 
 /**
+ * meta 行里「机器与在线」那一段。会话详情与新对话草稿共用（草稿选中的那一档必然
+ * 可用，即在线）。`truncate` = 移动端一层头部：窄屏只截断机器名、不收起整段，
+ * 在线二字钉住；否则整段按内容宽度摆，由容器查询那几档决定收不收。
+ */
+export function SessionMachineMeta({
+  name,
+  online,
+  truncate,
+}: {
+  name: string;
+  online: boolean;
+  truncate: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1",
+        truncate ? "min-w-0 overflow-hidden" : "shrink-0",
+      )}
+    >
+      <Monitor
+        aria-hidden="true"
+        className={cn("size-3", truncate && "shrink-0")}
+      />
+      {truncate ? <span className="truncate">{name}</span> : name}
+      <span
+        className={cn(
+          truncate && "shrink-0",
+          online ? "text-status-running-text" : "text-muted-foreground",
+        )}
+      >
+        {online
+          ? t("session.breadcrumb.online")
+          : t("session.breadcrumb.offline")}
+      </span>
+    </span>
+  );
+}
+
+/**
  * 整屏形态里还没有头部可画的那几态（认机器中 / 找不到 / 读不到 / 机器名单取不到）的壳。
  *
  * 移动端这几态同样走沉浸形态（决策 3）：顶栏与底部 tab 都不在，于是返回得自己摆，
@@ -263,34 +304,11 @@ export default function SessionDetailHeader({
         // 桌面最先收：机器名在返回行与设备页里都还在，这一行不是它唯一的出处。
         hideAt: oneRow ? undefined : "@max-[560px]/header:hidden",
         node: (
-          <span
-            className={cn(
-              "inline-flex items-center gap-1",
-              oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
-            )}
-          >
-            <Monitor
-              aria-hidden="true"
-              className={cn("size-3", oneRow && "shrink-0")}
-            />
-            {oneRow ? (
-              <span className="truncate">{machineName}</span>
-            ) : (
-              machineName
-            )}
-            <span
-              className={cn(
-                oneRow && "shrink-0",
-                machineOnline === false
-                  ? "text-muted-foreground"
-                  : "text-status-running-text",
-              )}
-            >
-              {machineOnline === false
-                ? t("session.breadcrumb.offline")
-                : t("session.breadcrumb.online")}
-            </span>
-          </span>
+          <SessionMachineMeta
+            name={machineName}
+            online={machineOnline !== false}
+            truncate={oneRow}
+          />
         ),
       }
     : null;

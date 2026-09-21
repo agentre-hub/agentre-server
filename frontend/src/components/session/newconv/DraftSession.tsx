@@ -24,6 +24,7 @@ import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import Transcript from "@/components/session/Transcript";
@@ -423,15 +424,7 @@ export function DraftSession({
   if (oneRow && chosen) {
     metaParts.push({
       key: "machine",
-      node: (
-        <span className="inline-flex min-w-0 items-center gap-1 overflow-hidden">
-          <Monitor aria-hidden="true" className="size-3 shrink-0" />
-          <span className="truncate">{chosen.device_name}</span>
-          <span className="shrink-0 text-status-running-text">
-            {t("session.breadcrumb.online")}
-          </span>
-        </span>
-      ),
+      node: <SessionMachineMeta name={chosen.device_name} online truncate />,
     });
   }
 

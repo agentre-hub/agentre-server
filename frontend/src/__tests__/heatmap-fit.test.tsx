@@ -232,6 +232,40 @@ describe("热力图的点按读数（移动端）", () => {
     );
   });
 
+  it("网格换列数（转屏改宽）后：读数与描边仍跟着点的那一天，而不是同一坐标上的另一天", () => {
+    mockMobileViewport();
+    const { rerender } = render(
+      <Heatmap to="2026-08-28" weeks={5} days={days} />,
+    );
+    fireEvent.click(cellOf("2026-08-28"));
+
+    rerender(<Heatmap to="2026-08-28" weeks={6} days={days} />);
+
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 28, 2026 (Fri) · 12 conversations",
+    );
+    expect(cellOf("2026-08-28").className).toContain("ring-primary");
+    expect(
+      document.querySelectorAll(
+        '[data-testid="heat-cell"][class*="ring-primary"]',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("点过的那天滚出网格（换了截止日）：读数回到提示，不报别的日子", () => {
+    mockMobileViewport();
+    const { rerender } = render(
+      <Heatmap to="2026-08-28" weeks={5} days={days} />,
+    );
+    fireEvent.click(cellOf("2026-08-24"));
+
+    rerender(<Heatmap to="2026-10-30" weeks={5} days={days} />);
+
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Tap a cell to see that day",
+    );
+  });
+
   it("被点的格子有选中描边，其余格子没有", () => {
     mockMobileViewport();
     render(<Heatmap to="2026-08-28" weeks={5} days={days} />);

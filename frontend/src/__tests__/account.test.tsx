@@ -744,25 +744,18 @@ describe("Account page: mobile layout on 390px screen", () => {
     expect(emailElement.textContent).toBe("lin.wei@example.com");
   });
 
-  it("displays email label and value in two columns on mobile", async () => {
+  // 此前这一条只断言值所在的 div 带 flex 或 grid——桌面那一档同样满足，什么也没锚住。
+  // 换成移动端真正改了的那一处：GitHub 登录名与邮箱一样不截断，且各自与标签同一行。
+  it("displays the GitHub login completely next to its label on mobile", async () => {
     markWebauthnSupported();
     mockDefaultApi();
     renderAccount();
 
     const page = await screen.findByTestId("account-page");
-    const emailLabel = within(page).getByText("Email");
-    const emailValue = within(page).getByText("lin.wei@example.com");
-
-    // Both should be in the DOM and accessible
-    expect(emailLabel).toBeTruthy();
-    expect(emailValue).toBeTruthy();
-
-    // The email value should be in a layout container (flex or grid) that allows wrapping
-    const emailRow = emailValue.closest("div");
-    expect(
-      emailRow?.className.includes("flex") ||
-        emailRow?.className.includes("grid"),
-    ).toBe(true);
+    const login = within(page).getByText("linwei");
+    expect(login.tagName).toBe("DD");
+    expect(login.className).not.toContain("truncate");
+    expect(login.previousElementSibling?.textContent).toBe("GitHub");
   });
 
   it("displays session login time, last activity, and IP on separate lines on mobile", async () => {

@@ -71,16 +71,18 @@ function passkeyMetaLine(t: Translate, k: PasskeyRow): string {
   ].join(" · ");
 }
 
+/** 登录时间与最近活跃两段。桌面拼成一行接在 IP 后，移动端各占一行。 */
+function sessionTimes(t: Translate, s: SessionRow): string[] {
+  return [
+    t("account.signins.signedInAt", { date: formatDate(s.created_at) }),
+    t("account.signins.lastActiveAt", {
+      date: formatDate(s.last_active_at),
+    }),
+  ];
+}
+
 function sessionTimesLine(t: Translate, s: SessionRow): string {
-  return (
-    " · " +
-    [
-      t("account.signins.signedInAt", { date: formatDate(s.created_at) }),
-      t("account.signins.lastActiveAt", {
-        date: formatDate(s.last_active_at),
-      }),
-    ].join(" · ")
-  );
+  return " · " + sessionTimes(t, s).join(" · ");
 }
 
 /**
@@ -377,45 +379,49 @@ export default function Account() {
                 <div className="truncate text-prose font-semibold text-foreground">
                   {me.display_name}
                 </div>
-                {isMobile ? (
-                  <div className="flex flex-col gap-2">
-                    <div className="grid grid-cols-[auto_1fr] gap-1.5 items-start">
-                      <dt className="text-2xs text-muted-foreground shrink-0">
-                        {t("account.profile.email")}
-                      </dt>
-                      <dd className="text-xs text-muted-foreground break-words">
-                        {me.email}
-                      </dd>
-                    </div>
-                    <div className="grid grid-cols-[auto_1fr] gap-1.5 items-start">
-                      <dt className="text-2xs text-muted-foreground shrink-0">
-                        {t("account.profile.github")}
-                      </dt>
-                      <dd className="font-mono text-xs text-muted-foreground break-words">
-                        {me.github_login}
-                      </dd>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
-                    <div className="flex min-w-0 items-baseline gap-1.5">
+                {/* 移动端：标签一列、值一列，值整段折行显示全；桌面照旧一行里截断。 */}
+                <div
+                  className={
+                    isMobile
+                      ? "flex flex-col gap-2"
+                      : "flex flex-wrap items-baseline gap-x-4 gap-y-0.5"
+                  }
+                >
+                  {[
+                    {
+                      label: t("account.profile.email"),
+                      value: me.email,
+                      mono: false,
+                    },
+                    {
+                      label: t("account.profile.github"),
+                      value: me.github_login,
+                      mono: true,
+                    },
+                  ].map((row) => (
+                    <div
+                      key={row.label}
+                      className={
+                        isMobile
+                          ? "grid grid-cols-[auto_1fr] items-start gap-1.5"
+                          : "flex min-w-0 items-baseline gap-1.5"
+                      }
+                    >
                       <dt className="text-2xs text-muted-foreground">
-                        {t("account.profile.email")}
+                        {row.label}
                       </dt>
-                      <dd className="truncate text-xs text-muted-foreground">
-                        {me.email}
+                      <dd
+                        className={cn(
+                          "text-xs text-muted-foreground",
+                          row.mono && "font-mono",
+                          isMobile ? "break-words" : "truncate",
+                        )}
+                      >
+                        {row.value}
                       </dd>
                     </div>
-                    <div className="flex min-w-0 items-baseline gap-1.5">
-                      <dt className="text-2xs text-muted-foreground">
-                        {t("account.profile.github")}
-                      </dt>
-                      <dd className="truncate font-mono text-xs text-muted-foreground">
-                        {me.github_login}
-                      </dd>
-                    </div>
-                  </div>
-                )}
+                  ))}
+                </div>
               </dl>
             </div>
           </SectionCard>
@@ -602,16 +608,9 @@ export default function Account() {
                             {isMobile ? (
                               <div className="mt-0.5 text-2xs text-muted-foreground">
                                 <div className="font-mono">{s.ip}</div>
-                                <div>
-                                  {t("account.signins.signedInAt", {
-                                    date: formatDate(s.created_at),
-                                  })}
-                                </div>
-                                <div>
-                                  {t("account.signins.lastActiveAt", {
-                                    date: formatDate(s.last_active_at),
-                                  })}
-                                </div>
+                                {sessionTimes(t, s).map((line) => (
+                                  <div key={line}>{line}</div>
+                                ))}
                               </div>
                             ) : (
                               <div className="mt-0.5 truncate text-2xs text-muted-foreground">
