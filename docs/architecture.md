@@ -215,7 +215,8 @@ all — it never sees the console cookie — see the trust boundary described ne
 CSRF token possession is not the only judge of a cookie-authenticated write: `middleware.CSRF`
 and the session branch of `SessionOrDeviceAuth` both also require `Sec-Fetch-Site` to be
 `same-origin` or `none`; when a caller omits that header they fall back to `Origin`, which must
-equal one of `allowedOrigins` — `router.go` passes `cfg.WebAuthn.Origins` for both, the same list
+equal one of `allowedOrigins` — `router.go` passes `cfg.ConsoleOrigins()` for both: the console's
+own origin (derived from `public_url`) plus the configured `webauthn.origins`, the same list
 WebAuthn's Relying Party check uses (there is no separate "allowed origins" config). Either
 header missing, or neither matching, answers the same 403 as a missing CSRF token; a Bearer
 caller carries neither header and is unaffected, same as the CSRF token check.

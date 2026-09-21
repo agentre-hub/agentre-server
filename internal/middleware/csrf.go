@@ -55,9 +55,9 @@ func originOK(c *gin.Context, allowedOrigins []string) bool {
 
 // CSRF 校验凭 cookie 鉴权的写请求：CSRF token 匹配、且 Sec-Fetch-Site/Origin 落在
 // allowedOrigins 圈定的来源里，两条判据都要满足。allowedOrigins 是控制台自己的
-// origin（默认从 PublicURL 推出）加已配置的 origins，即 router.go 传入的
-// cfg.WebAuthn.Origins——本仓没有另一份「允许的 origin」名单，WebAuthn 的 Relying
-// Party 校验与这里问的是同一件事：这个请求真的来自控制台自己吗。
+// origin（PublicURL 推出）加已配置的 origins（webauthn.origins），即 router.go 传入的
+// cfg.ConsoleOrigins()——WebAuthn 的 Relying Party 校验与这里问的是同一件事：这个
+// 请求真的来自控制台自己吗。
 func CSRF(allowedOrigins []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !csrfOK(c, ginctx.CSRFToken(c)) || !originOK(c, allowedOrigins) {

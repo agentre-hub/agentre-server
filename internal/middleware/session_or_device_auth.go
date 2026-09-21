@@ -15,7 +15,7 @@ import (
 //
 // 两条分支的判定都不在本文件：Bearer 分支与 DeviceJWT 共用 devicePrincipal，cookie 分支
 // 与 SessionAuth 共用 sessionPrincipal。这里只编排先后与本组的终止形态。allowedOrigins
-// 原样转给 originOK，与 CSRF() 是同一份名单（router.go 传的都是 cfg.WebAuthn.Origins）。
+// 原样转给 originOK，与 CSRF() 是同一份名单（router.go 传的都是 cfg.ConsoleOrigins()）。
 func SessionOrDeviceAuth(tokens BearerResolver, allowedOrigins []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 出示了 Bearer 就只走 Bearer：令牌不认时不回落到 cookie，否则一枚已失效的凭据

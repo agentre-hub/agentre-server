@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 	"github.com/agentre-hub/agentre/pkg/wire/portforwardhost"
@@ -45,6 +46,9 @@ const (
 	mappingUnreachable     = int64(4002)
 	mappingNameResolution  = int64(4003)
 	mappingTLSVerification = int64(4004)
+	// mappingNamedTarget 回「连接被拒」，并按 rpcerror 的约定在 Details 里带回这条
+	// 声明的目标——生产上的设备就是这么回的（agentre 仓 daemon/portforward）。
+	mappingNamedTarget = int64(4005)
 )
 
 // ── 内存帧管道：一条真的 protorpc 连接，底下换成 channel ──────────────────
@@ -84,6 +88,16 @@ func proxyFor(t *testing.T, mappingID int64) http.Handler {
 				return nil, &rpcerror.Error{
 					Code: rpcerror.CodePortForwardTLSVerification, Message: "x509: certificate signed by unknown authority",
 				}
+			case mappingNamedTarget:
+				details, err := proto.Marshal(&agentrewire.PortForwardMapping{
+					Id: mappingNamedTarget, Target: "http://127.0.0.1:5173",
+				})
+				if err != nil {
+					return nil, err
+				}
+				return nil, &rpcerror.Error{
+					Code: rpcerror.CodePortForwardNoListener, Message: "connection refused", Details: details,
+				}
 			case mappingUnreachable:
 				// 不是这几个领域码里的任何一个：共享包把它归成「够不着设备」。
 				return nil, errors.New("something else entirely")
@@ -119,7 +133,9 @@ func assertFailurePage(t *testing.T, rec *httptest.ResponseRecorder) string {
 	assert.Contains(t, body, ">刷新<", "缺「刷新」这个出口")
 	assert.Contains(t, body, `href="/devices"`, "缺「回到设备」这个出口")
 	// 不引外部资源：这一页的宿主是被转发的那个应用，拉不到控制台的静态资源也要能看。
-	for _, forbidden := range []string{"http://", "https://", "<img", "<script"} {
+	// 判的是「引用」的形状而不是任何一个 http:// 字样——正文会点名映射的目标（规格
+	// 「失败的呈现」），那是一段文字，不是一次加载。
+	for _, forbidden := range []string{`src=`, `href="http`, "<link", "url(", "<img", "<script"} {
 		assert.NotContains(t, body, forbidden, "失败页不得引入外部资源")
 	}
 	return body
@@ -237,6 +253,57 @@ func TestRenderFailure_TheSixPagesSayDifferentThings(t *testing.T) {
 	}
 }
 
+// 「目标连不上」三张页把话说到具体的目标上（规格「失败的呈现」）：连接被拒说
+// 「<目标> 上没有服务在监听」，名字解析失败说「设备解析不了 <主机>」，证书校验失败说
+// 「<目标> 的证书没有通过校验」并提示勾选「忽略证书错误」。目标是设备在回绝里说出的
+// 那一条（Failure.Target）；它来自用户自己的声明，写进 HTML 之前要转义。
+func TestRenderFailure_GivenTheDeviceNamedTheTarget_ThenThePageNamesIt(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		kind     portforwardhost.FailureKind
+		target   string
+		contains []string
+	}{
+		{
+			name: "连接被拒", kind: portforwardhost.FailureNoListener, target: "http://127.0.0.1:3000",
+			contains: []string{"http://127.0.0.1:3000 上没有服务在监听"},
+		},
+		{
+			name: "名字解析失败", kind: portforwardhost.FailureNameResolution, target: "https://nas.lan:8443",
+			contains: []string{"设备解析不了 nas.lan"},
+		},
+		{
+			name: "证书校验失败", kind: portforwardhost.FailureTLSVerification, target: "https://nas.lan:8443",
+			contains: []string{"https://nas.lan:8443 的证书没有通过校验", "忽略证书错误"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+
+			portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+				portforwardhost.Failure{Kind: c.kind, MappingID: 3000, Status: http.StatusBadGateway, Target: c.target})
+
+			body := assertFailurePage(t, rec)
+			for _, want := range c.contains {
+				assert.Contains(t, body, want)
+			}
+		})
+	}
+
+	t.Run("目标里的标记被转义", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+
+		portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+			portforwardhost.Failure{
+				Kind: portforwardhost.FailureNoListener, MappingID: 3000, Status: http.StatusBadGateway,
+				Target: `http://a<script>x:80`,
+			})
+
+		body := assertFailurePage(t, rec)
+		assert.Contains(t, body, "http://a&lt;script&gt;x:80 上没有服务在监听")
+	})
+}
+
 // ── 种类真的从共享代理走过来 ────────────────────────────────────────────
 
 // 上面那张表钉的是「种类 → 答复」，这一批钉的是「设备回的领域码 → 种类」这一段真的
@@ -254,6 +321,8 @@ func TestProxy_GivenTheDeviceRejectsOpen_ThenTheConsolePageForThatKind(t *testin
 		{"目标解析不出主机名", mappingNameResolution, http.StatusBadGateway, "目标连不上"},
 		{"目标证书没通过校验", mappingTLSVerification, http.StatusBadGateway, "目标连不上"},
 		{"够不着设备", mappingUnreachable, http.StatusBadGateway, "设备离线"},
+		// 设备在回绝里说出了目标：页面点名它，这一段真的从设备一路走到了页面上。
+		{"目标拒绝连接且点名目标", mappingNamedTarget, http.StatusBadGateway, "http://127.0.0.1:5173 上没有服务在监听"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			proxy := proxyFor(t, c.mappingID)

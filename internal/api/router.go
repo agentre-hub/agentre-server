@@ -137,6 +137,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	root.IRouter.(*gin.Engine).Use(portForwardHost.Dispatch)
 
 	g := root.Group("/")
+	// 写请求来源校验的名单（spec 2026-09-21「控制台加固」）：控制台自己的 origin 加已
+	// 配置的 origins，CSRF 与 SessionOrDeviceAuth 的 cookie 分支共用这一份。
+	consoleOrigins := r.Cfg.ConsoleOrigins()
 
 	healthzCtr := healthz_ctr.NewHealthz()
 	authCtr := auth_ctr.NewAuth(r.Cfg.InsecureCookies)
@@ -221,7 +224,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	)
 
 	// 浏览器 session
-	g.Group("/", middleware.SessionAuth(), middleware.CSRF(r.Cfg.WebAuthn.Origins)).Bind(
+	g.Group("/", middleware.SessionAuth(), middleware.CSRF(consoleOrigins)).Bind(
 		authCtr.Logout,
 		// 登录会话治理：只认浏览器会话——「哪一条是当前」这个判据来自 cookie，
 		// 设备 JWT 那条路径上根本不存在。
@@ -266,7 +269,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 
 	// 通行密钥：注册与管理一律要求浏览器会话 + CSRF。设备 JWT 那条路径上没有
 	// 「当前是哪个浏览器」这个事实，而 challenge 正是按它归集的。
-	passkeyGroup := g.Group("/", middleware.SessionAuth(), middleware.CSRF(r.Cfg.WebAuthn.Origins))
+	passkeyGroup := g.Group("/", middleware.SessionAuth(), middleware.CSRF(consoleOrigins))
 	// begin 单独再套两道限流：按 IP 挡匿名刷，按账号挡「换个出口接着刷」。
 	// 两个中间件都排在 SessionAuth 之后——按账号那道要用它放进上下文的 user_id。
 	passkeyGroup.Group("/",
@@ -287,7 +290,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	g.Group("/").Bind(passkeyCtr.FinishLogin)
 
 	// session 或设备 access token 都可以
-	g.Group("/", middleware.SessionOrDeviceAuth(bearer, r.Cfg.WebAuthn.Origins)).Bind(
+	g.Group("/", middleware.SessionOrDeviceAuth(bearer, consoleOrigins)).Bind(
 		authCtr.Me,
 		deviceCtr.Revoke,
 		deviceCtr.List,

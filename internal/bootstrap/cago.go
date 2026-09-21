@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -239,6 +240,24 @@ func insecureCookies(publicURL string) bool {
 		return false
 	}
 	return parsed.Scheme == "http"
+}
+
+// ConsoleOrigins 是写请求来源校验（middleware.CSRF 缺 Sec-Fetch-Site 时退回的 Origin
+// 判据）认的那份名单：控制台自己的 origin（PublicURL 的 scheme://host）加上已配置的
+// origins（webauthn.origins，开发态与 e2e 的前端端口），去重、自己的在前（规格
+// 2026-09-21-port-forward-subdomain「控制台加固」）。是并集而不是二选一：配了
+// origins 不能把控制台自己挤出名单。
+func (c *ServerConfig) ConsoleOrigins() []string {
+	var origins []string
+	if public, err := url.Parse(c.PublicURL); err == nil && public.Scheme != "" && public.Host != "" {
+		origins = append(origins, public.Scheme+"://"+public.Host)
+	}
+	for _, origin := range c.WebAuthn.Origins {
+		if !slices.Contains(origins, origin) {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
 }
 
 // applyWebAuthnDefaults 把没配的 WebAuthn 项按 PublicURL 补齐。
