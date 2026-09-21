@@ -207,6 +207,31 @@ describe("热力图的点按读数（移动端）", () => {
     );
   });
 
+  it("中文界面：读数说「N 个对话」（规格原文），而不是统计卡的量词「N 条」", async () => {
+    await i18n.changeLanguage("zh-CN");
+    mockMobileViewport();
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    fireEvent.click(cellOf("2026-08-28"));
+    const text = screen.getByTestId("heatmap-readout").textContent ?? "";
+    expect(text).toContain("（周五）");
+    expect(text.endsWith(" · 12 个对话")).toBe(true);
+  });
+
+  it("英文单数：1 天 1 个对话读作「1 conversation」", () => {
+    mockMobileViewport();
+    render(
+      <Heatmap
+        to="2026-08-28"
+        weeks={5}
+        days={[{ day: "2026-08-28", count: 1 }]}
+      />,
+    );
+    fireEvent.click(cellOf("2026-08-28"));
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 28, 2026 (Fri) · 1 conversation",
+    );
+  });
+
   it("被点的格子有选中描边，其余格子没有", () => {
     mockMobileViewport();
     render(<Heatmap to="2026-08-28" weeks={5} days={days} />);

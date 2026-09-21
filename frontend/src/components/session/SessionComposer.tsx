@@ -246,11 +246,14 @@ export default function SessionComposer({
           // composer-bar 的挤压算法让路，把发送键顶出输入框可视区（规格
           // 2026-09-21 决策 7 / 问题 2）。改成 `min-w-0` 让这一整格能收缩，
           // 挤压落到内部——权限控件自己用 `shrink-0` 钉住不参与，模型 chip
-          // （`SessionModelControl` 已带 `min-w-0`）先收缩并截断。
+          // （`SessionModelControl` 已带 `min-w-0`）先收缩并截断。`shrink-[999]` 管
+          // 顺序：flex 按「shrink × 基准宽」分摊缺口，外层与右侧计量器（共享包里的
+          // `min-w-0` 让位者）都是 1 时计量器会跟着按比例被裁；系数拉开后缺口先落在
+          // 这一格，计量器只在 chip 收无可收时才让位。
           leadingControls={
             <div
               data-testid="composer-leading-controls"
-              className="flex min-w-0 items-center gap-1"
+              className="flex min-w-0 shrink-[999] items-center gap-1"
             >
               {permissionModeMeta !== undefined && onPermissionModeChange ? (
                 permissionModeMeta === null ? (

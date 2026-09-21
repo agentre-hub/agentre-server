@@ -569,7 +569,7 @@ function DeviceRow({
               <span
                 className={cn(
                   "text-sm font-medium text-foreground",
-                  !isExpanded && "truncate",
+                  isExpanded ? "min-w-0 break-words" : "truncate",
                 )}
               >
                 {name}

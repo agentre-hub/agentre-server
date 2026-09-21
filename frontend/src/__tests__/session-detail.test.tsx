@@ -4828,6 +4828,11 @@ describe("会话详情：输入框底栏窄屏不溢出（类名断言）", () =
     const permissionSlot = screen.getByTestId("composer-permission-slot");
     expect(permissionSlot.className).toMatch(/(^|\s)shrink-0(\s|$)/);
 
+    // 收缩顺序（决策 7）：模型 chip **先**收缩，上下文用量是放不下之后才让位的那一格。
+    // flex 按「shrink × 基准宽」分摊缺口，两边都是 shrink 1 时计量器会跟着 chip 按比例
+    // 一起被裁；外层要带远大于 1 的收缩系数，缺口才几乎全落在 chip 上。
+    expect(leading.className).toMatch(/(^|\s)shrink-\[999\](\s|$)/);
+
     // 发送键的 shrink-0 来自共享包 SubmitControl，这里锁一下没被本轮改动松开。
     const send = screen.getByTestId("session-detail-send");
     expect(send.className).toMatch(/(^|\s)shrink-0(\s|$)/);

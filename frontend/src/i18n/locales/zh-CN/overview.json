@@ -55,6 +55,8 @@
       "readout": {
         "hint": "点一格看当天",
         "date": "{{date}}（{{weekday}}）",
+        "count_one": "{{count}} 个对话",
+        "count_other": "{{count}} 个对话",
         "empty": "没有对话"
       },
       "greyNote": "这一片灰是「那天没有活动」，不是坏了。",

@@ -241,7 +241,7 @@ export function Heatmap({
     if (!tappedCell?.day) return t("overview.stats.heatmap.readout.hint");
     const detail =
       tappedCell.count > 0
-        ? t("overview.stats.unit.conversations", { count: tappedCell.count })
+        ? t("overview.stats.heatmap.readout.count", { count: tappedCell.count })
         : t("overview.stats.heatmap.readout.empty");
     return `${t("overview.stats.heatmap.readout.date", {
       date: dayLabel(tappedCell.day),

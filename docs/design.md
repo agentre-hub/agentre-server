@@ -593,7 +593,7 @@ column and no persistent "撤销这台设备" explainer card**.
   bg-muted`), then name / kind chip / `StatusMark` / mono meta, expand and row menu — a
   different information order and density, not a squeezed desktop row. Status dot and name
   stay on one line (no `flex-wrap`); the name truncates to one line when collapsed, and wraps
-  fully when expanded. The expanded card shows "N projects · M conversations running" with
+  fully when expanded (`min-w-0 break-words`, so names without spaces wrap too). The expanded card shows "N projects · M conversations running" with
   the same copy and the same only-when-data-complete rule as desktop. Revoke still goes
   through the row menu + confirm dialog.
 - TopBar: nothing of its own. The total is the SideNav's Devices meta, and "is a machine
@@ -727,9 +727,12 @@ denominator; `>= 90%` turns `bg-status-error`.
 **Mobile footer row.** On mobile (360/390px), the footer's `flex` container holds send,
 permission controls and model chip on a single line without overflow. Send and permission
 controls carry `shrink-0` and do not participate in width shrinkage. The model chip carries
-`min-w-0` to allow shrinking and truncation via `truncate`. The reasoning/effort control
-uses `@max-[620px]` to hide its label below a narrow width, keeping only the icon and staying
-clickable. Context meter (when present) is a small icon-only marker that stays in-box.
+`min-w-0` to allow shrinking and truncation via `truncate`; the leading-controls wrapper also
+carries `shrink-[999]`, so the width deficit lands on the chip first instead of being shared
+proportionally with the context meter. The reasoning/effort control uses `@max-[620px]` to
+hide its label below a narrow width, keeping only the icon and staying clickable. The context
+meter (when present) is the shared package's `min-w-0` yielder: it gives way only after the
+chip has nothing left to give, and stays inside the box.
 
 The composer is loaded with a plain dynamic `import()`, **not** `React.lazy` + `Suspense`:
 TipTap costs 252 kB gzip that four other pages never touch, but Suspense's reveal path
@@ -789,8 +792,7 @@ desktop app group and draw a conversation the same way.
 ### Org
 
 `/org` displays agents and departments. Desktop shows two columns side by side (index list and
-detail pane); mobile replaces this with one column at a time. Both forms use the same
-`SessionDetailView` composition pattern.
+detail pane); mobile replaces this with one column at a time (index → detail → back).
 
 - **Mobile layout.** The detail column carries `min-h-0` on mobile, so its own `overflow-y-auto`
   scrolls instead of the document. A write-failure banner (same copy as the index footer)
@@ -798,7 +800,8 @@ detail pane); mobile replaces this with one column at a time. Both forms use the
   footer otherwise.
 - **Mobile toolbar (`+`).** The desktop toolbar "+" button opens a `CreateAgentDialog` directly.
   On mobile, it opens a two-item menu (New agent / New top-level department), with the latter
-  opening the same parentless `CreateDepartmentDialog` as the desktop's right-click affordance.
+  opening the same parentless `CreateDepartmentDialog` as the desktop empty-detail
+  "New department" button.
   Desktop "+" stays a single direct action.
 
 ### Settings

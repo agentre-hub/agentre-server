@@ -483,6 +483,10 @@ describe("device row expand", () => {
 
       // 展开后应该移除 truncate 以允许换行
       expect(nameSpan.className).not.toContain("truncate");
+      // 没有空格的长名字（主机名、指纹式名字）也得折行：flex item 默认 min-width:auto
+      // 会顶在整段名字的宽度上，得 min-w-0 + break-words 才能在字符间断开。
+      expect(nameSpan.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+      expect(nameSpan.className).toMatch(/(^|\s)break-words(\s|$)/);
     });
   });
 });

@@ -55,6 +55,8 @@
       "readout": {
         "hint": "Tap a cell to see that day",
         "date": "{{date}} ({{weekday}})",
+        "count_one": "{{count}} conversation",
+        "count_other": "{{count}} conversations",
         "empty": "No conversations"
       },
       "greyNote": "This grey means there was no activity on that day — nothing is broken.",
