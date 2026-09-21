@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { cn } from "@agentre-hub/agentre-ui";
 
+import { useIsMobile } from "@/components/use-is-mobile";
 import { buildHeatGrid, type HeatDay, type HeatLevel } from "@/lib/heatmap";
 
 /** 一年 = 53 列，13px 格 + 3px 缝隙 = 845px 网格。列数的上限，不是默认值。 */
@@ -209,6 +210,18 @@ export function Heatmap({
     return (day: string) => fmt.format(new Date(`${day}T00:00:00Z`));
   }, [i18n.resolvedLanguage]);
 
+  // `dateStyle` 与 `weekday` 不能同时给 Intl（会抛 TypeError），所以星期单独
+  // 一套格式化器，两份拼进 `readout.date` 这个 key 里——括号全半角由 locale 定，
+  // 不在这里手写。只给移动端的点按读数用，桌面悬停（`dayLabel`）不变。
+  const weekdayLabel = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(i18n.resolvedLanguage ?? "en", {
+      weekday: "short",
+      timeZone: "UTC",
+    });
+    return (day: string) => fmt.format(new Date(`${day}T00:00:00Z`));
+  }, [i18n.resolvedLanguage]);
+
+  const isMobile = useIsMobile();
   const [hover, setHover] = useState<HoverCell | null>(null);
   /**
    * 鼠标停的那一格，从网格里现读。列数一变（改宽了）旧坐标可能已经不在网格里，
@@ -216,6 +229,25 @@ export function Heatmap({
    * 同样不报：给未来报一句「0 条」比不报更糟。
    */
   const hoveredCell = hover ? grid.weeks[hover.column]?.[hover.row] : undefined;
+
+  /**
+   * 移动端点按的那一格。触屏没有 hover，手指按下去反而会挡住浮层（设计决策
+   * 8），所以换成图下方固定的一行，点一格更新一次，不需要再点别处关闭。
+   * 同样从网格里现读，理由与 `hoveredCell` 一致。
+   */
+  const [tap, setTap] = useState<HoverCell | null>(null);
+  const tappedCell = tap ? grid.weeks[tap.column]?.[tap.row] : undefined;
+  const readoutText = useMemo(() => {
+    if (!tappedCell?.day) return t("overview.stats.heatmap.readout.hint");
+    const detail =
+      tappedCell.count > 0
+        ? t("overview.stats.unit.conversations", { count: tappedCell.count })
+        : t("overview.stats.heatmap.readout.empty");
+    return `${t("overview.stats.heatmap.readout.date", {
+      date: dayLabel(tappedCell.day),
+      weekday: weekdayLabel(tappedCell.day),
+    })} · ${detail}`;
+  }, [tappedCell, dayLabel, weekdayLabel, t]);
 
   const weekdayRows: Record<number, string> = {
     1: t("overview.stats.heatmap.weekday.mon"),
@@ -288,13 +320,23 @@ export function Heatmap({
                   data-day={cell.day}
                   data-level={String(cell.level)}
                   onMouseEnter={() => setHover({ column: index, row })}
-                  className={cn(CELL_CLASS, LEVEL_CLASS[cell.level])}
+                  onClick={
+                    isMobile ? () => setTap({ column: index, row }) : undefined
+                  }
+                  className={cn(
+                    CELL_CLASS,
+                    LEVEL_CLASS[cell.level],
+                    isMobile &&
+                      tap?.column === index &&
+                      tap.row === row &&
+                      "ring-2 ring-primary",
+                  )}
                 />
               ),
             )}
           </div>
         ))}
-        {hover && hoveredCell?.day ? (
+        {!isMobile && hover && hoveredCell?.day ? (
           <HeatTooltip
             hover={hover}
             weeks={weeks}
@@ -302,6 +344,14 @@ export function Heatmap({
           />
         ) : null}
       </div>
+      {isMobile ? (
+        <p
+          data-testid="heatmap-readout"
+          className="text-2xs text-muted-foreground"
+        >
+          {readoutText}
+        </p>
+      ) : null}
     </div>
   );
 }

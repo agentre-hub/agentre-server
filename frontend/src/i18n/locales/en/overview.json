@@ -52,6 +52,11 @@
       "more": "More",
       "weeksShown": "Last {{weeks}} weeks",
       "mobileHint": "A longer history is on the desktop app.",
+      "readout": {
+        "hint": "Tap a cell to see that day",
+        "date": "{{date}} ({{weekday}})",
+        "empty": "No conversations"
+      },
       "greyNote": "This grey means there was no activity on that day — nothing is broken.",
       "busiest": "Busiest day",
       "avg": "Average per active day",
