@@ -111,6 +111,8 @@ func postJSON(t *testing.T, url, cookie, csrf, body string) *http.Response {
 	if csrf != "" {
 		req.Header.Set("X-CSRF-Token", csrf)
 	}
+	// 真实浏览器给同源请求带这个头，加固层（middleware.originOK）据此放行。
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

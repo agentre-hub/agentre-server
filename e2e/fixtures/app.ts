@@ -194,7 +194,12 @@ export function expectSuccessfulEnvelope<T>(
 export async function revokeOtherSessions(page: Page) {
   const handoff = readHandoff();
   const response = await page.request.post("/v1/auth/sessions/revoke-others", {
-    headers: { "X-CSRF-Token": handoff.csrfToken },
+    // page.request 是绕过渲染器的裸 HTTP 客户端，不会像真实同源 fetch 那样自带
+    // Sec-Fetch-Site：这里补上加固层（middleware.originOK）认的那个值。
+    headers: {
+      "X-CSRF-Token": handoff.csrfToken,
+      "Sec-Fetch-Site": "same-origin",
+    },
   });
   expectSuccessfulEnvelope(response, await response.json());
 }
@@ -322,7 +327,12 @@ export async function revokeDeviceFromBrowserSession(
 ) {
   const handoff = readHandoff();
   const response = await page.request.post("/v1/oauth/token/revoke", {
-    headers: { "X-CSRF-Token": handoff.csrfToken },
+    // page.request 是绕过渲染器的裸 HTTP 客户端，不会像真实同源 fetch 那样自带
+    // Sec-Fetch-Site：这里补上加固层（middleware.originOK）认的那个值。
+    headers: {
+      "X-CSRF-Token": handoff.csrfToken,
+      "Sec-Fetch-Site": "same-origin",
+    },
     data: { device_id: deviceID },
   });
   expectSuccessfulEnvelope(response, await response.json());

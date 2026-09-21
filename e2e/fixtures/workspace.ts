@@ -22,7 +22,12 @@ interface WorkspaceJourney {
 
 async function post<T>(page: Page, path: string, data: unknown): Promise<T> {
   const response = await page.request.post(path, {
-    headers: { "X-CSRF-Token": readHandoff().csrfToken },
+    // page.request 是绕过渲染器的裸 HTTP 客户端，不会像真实同源 fetch 那样自带
+    // Sec-Fetch-Site：这里补上加固层（middleware.originOK）认的那个值。
+    headers: {
+      "X-CSRF-Token": readHandoff().csrfToken,
+      "Sec-Fetch-Site": "same-origin",
+    },
     data,
   });
   return expectSuccessfulEnvelope<T>(response, await response.json());
