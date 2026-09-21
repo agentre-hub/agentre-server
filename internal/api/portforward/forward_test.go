@@ -2,6 +2,7 @@ package portforward_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 	"github.com/agentre-hub/agentre-server/internal/web"
 )
@@ -659,6 +661,65 @@ func TestForwardChain_OfflineDeviceAnswersOfflineWithoutDialing(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 	calls, _ := h.forwarder.snapshot()
 	assert.Empty(t, calls)
+}
+
+// blockingGate 是一道把 blocked 这个账号拦下的账号闸门（改库封禁之后的样子）。
+type blockingGate struct{ blocked int64 }
+
+func (g blockingGate) Check(_ context.Context, uid int64) error {
+	if uid == g.blocked {
+		return errors.New("account banned")
+	}
+	return nil
+}
+
+// 账号闸门与控制台的每一条鉴权路径同一道：控制台会话还在不等于账号还能用。封禁之后
+// 手上那张转发票不能再把请求带到设备上——否则封禁只挡得住控制台，挡不住转发域。
+func TestForwardChain_BlockedAccountNoLongerReachesTheApp(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+	user_svc.SetGate(blockingGate{blocked: userID})
+	t.Cleanup(func() { user_svc.SetGate(nil) })
+
+	sub := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/x.js"), token))
+
+	assert.Equal(t, http.StatusUnauthorized, sub.Code)
+	assert.Empty(t, h.app.requests())
+	calls, _ := h.forwarder.snapshot()
+	assert.Empty(t, calls, "被封的账号不该再借出一条通往设备的连接")
+}
+
+// 转发 Host 上的路径整条属于被转发的应用：控制台路由树上「差一个结尾斜杠」的那些
+// 路径不能被 gin 的 RedirectTrailingSlash 抢先 301 走——那一跳发生在 Host 分发之前，
+// 应用自己的 /v1/auth/me/ 就永远到不了，而 301 还会被浏览器永久缓存。
+func TestHostDispatch_TrailingSlashVariantsOfConsoleRoutesStillReachTheApp(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+
+	for _, path := range []string{"/v1/auth/me/", "/fw", "/v1/devices/"} {
+		rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, path), token))
+		require.Equal(t, http.StatusOK, rec.Code, "GET %s: %s", path, rec.Header().Get("Location"))
+		assert.Equal(t, "hello from the device", rec.Body.String(), path)
+	}
+}
+
+// 失败页的「回到设备」是控制台的设备页。页面开在转发域上，一个相对的 /devices 会被
+// 浏览器解析成被转发应用自己的 /devices——出口指错了站点。
+func TestForwardChain_FailurePageLeadsBackToTheConsoleDevicesPage(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	h.presence.online = false
+
+	rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"),
+		h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))))
+
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.Contains(t, rec.Body.String(), `href="http://console.test:8443/devices"`)
 }
 
 // —— 剥离：只删自家票与 Authorization ——

@@ -133,8 +133,19 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// gin 在注册路由时把当下的全局中间件拼进那条路由的处理链，Use 之后注册的每一条
 	// 控制台路由、以及 SPA 兜底（NoRoute，Use 会重建它的处理链）都先经过它；转发
 	// Host 上的请求在这里整条处理完并 Abort，轮不到 SessionAuth、CSRF 或 SPA。
+	//
+	// 结尾斜杠的 301 同理必须关掉：gin 在匹配路由时（早于任何中间件）就对「差一个结尾
+	// 斜杠就能命中」的路径答 301，转发 Host 上应用自己的 /v1/auth/me/ 因此永远到不了
+	// Host 分发，而 301 还会被浏览器永久缓存。控制台一侧没有依赖它的地方：未命中的
+	// /v1/* 本来就答 404（internal/web），/fw 由下面显式的那条接住。
+	//
+	// cago 在回调之前注册的 /health 与 metric 组件的 /metrics 不在这条链上：那两条
+	// 路由的处理链在本回调之前就定下了，转发 Host 上照样由它们作答（被转发应用自己的
+	// 这两个路径因此到不了，与 /__agentre/ 同一类已知代价）。
 	portForwardHost := r.portForwardHost()
-	root.IRouter.(*gin.Engine).Use(portForwardHost.Dispatch)
+	engine := root.IRouter.(*gin.Engine)
+	engine.RedirectTrailingSlash = false
+	engine.Use(portForwardHost.Dispatch)
 
 	g := root.Group("/")
 	// 写请求来源校验的名单（spec 2026-09-21「控制台加固」）：控制台自己的 origin 加已
@@ -431,10 +442,12 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 正常」的缺陷源头），/fw/ 曾经是一整段 API 表面，不该悄悄变成一张 SPA 页。显式
 	// 404 让它和其余未绑定的后端路径同一种答法。
 	//
-	// 转发本身改到 <前缀>.<base_domain> 这条子域上（S4 的转发子域调度器，另建路由）；
-	// 借转发入口与渲染失败的逻辑仍在 portforward_ctr.New / portforward_ctr.RenderFailure
-	// 里，供那个调度器调用，这里不再是它们唯一的接线点。
-	g.Any("/fw/*rest", func(c *gin.Context) { c.AbortWithStatus(http.StatusNotFound) })
+	// 转发本身改到 <前缀>.<base_domain> 这条子域上，由本函数开头装上的
+	// portForwardHost.Dispatch 按 Host 整条接走。/fw 与 /fw/*rest 两条都挂：gin 的路由树
+	// 里 /fw/*rest 不收裸的 /fw，而结尾斜杠的 301 已经关掉了。
+	legacyPortForward := func(c *gin.Context) { c.AbortWithStatus(http.StatusNotFound) }
+	g.Any("/fw", legacyPortForward)
+	g.Any("/fw/*rest", legacyPortForward)
 
 	// 转发登录第 2、3 步：控制台上签发一次性授权码。裸 gin 而不是 mux.Bind——它答的是
 	// 浏览器顶层导航的 302，不是 JSON；没登录时要跳登录页而不是 401，所以鉴权在控制器

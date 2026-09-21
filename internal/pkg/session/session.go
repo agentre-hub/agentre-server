@@ -41,7 +41,7 @@ const CookieName = "server_session"
 // Path=/、且不带 Domain——SetCookie 发的正是这三样，ClearCookie 据此按名字反推
 // Secure（cookie.go）。满足这三条之后，浏览器保证这枚 cookie 只能是本站在 https
 // 下自己种的，同站的另一个子域、或任何 http 页面都种不进来，这是同站转发应用
-// （/fw/）唯一拿不走控制台会话的一层。
+// （<前缀>.<base_domain>）唯一拿不走控制台会话的一层。
 const HostCookieName = "__Host-" + CookieName
 
 // ipMaxLen 是 IP 的存储宽度，与 device_tokens.ip 的 varchar(45) 同规格：

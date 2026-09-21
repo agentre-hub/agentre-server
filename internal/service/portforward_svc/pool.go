@@ -76,13 +76,13 @@ type Config struct {
 	// CallTimeout 见 defaultCallTimeout。
 	CallTimeout time.Duration
 	// RenderFailure 是代理**自有失败**的渲染钩子（portforwardhost.WithFailureRenderer）：
-	// 端口没声明、映射停用、端口上没有服务、够不着设备……交给宿主的是「是哪一件事」，
+	// 映射不存在、映射停用、目标连不上、够不着设备……交给宿主的是「是哪一件事」，
 	// 由宿主决定说什么。nil 就用共享包那份默认纯文本。
 	//
-	// 它由装配处交进来（internal/bootstrap 传 portforward_ctr.RenderFailure）：出什么页
-	// 是表现层的事，本包不认识 HTML，也不得反向 import 控制器。
+	// 它由装配处交进来（internal/bootstrap 传 portforward_ctr.NewFailureRenderer 造的
+	// 那一个）：出什么页是表现层的事，本包不认识 HTML，也不得反向 import 控制器。
 	//
-	// 代理按端口缓存、跨请求共用，所以这个函数不得带任何一次请求的状态。
+	// 代理按映射 id 缓存、跨请求共用，所以这个函数不得带任何一次请求的状态。
 	RenderFailure portforwardhost.FailureRenderer
 }
 

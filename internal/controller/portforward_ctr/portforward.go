@@ -2,25 +2,17 @@
 // 什么」这两件事收在一起（规格 2026-09-09-console-port-forward-host、
 // 2026-09-21-port-forward-subdomain）。
 //
-// # 这一轮为什么只剩这些
+// # 分工
 //
-// 上一轮它还兼着 /fw/<device_id>/<port>/… 这条裸字节路由的入口：解析地址、把
-// device_id 翻成中继寻址用的指纹、剥掉前缀、把 ResponseWriter 原样交给共享包的转发
-// 代理。规格 2026-09-21-port-forward-subdomain 决策 13 把 /fw/ 整条路径**直接删除**
-// （不留兼容期、不做重定向），地址改成子域前缀，找出「这个前缀对应哪台设备的哪条
-// 映射」因此变成先查前缀表（S2 的 link repo）——那一段属于 S4 的转发子域调度器，
-// 不再是本包能就地解析出来的。
-//
-// 本包因此**不再挂路由、不再导出一个 gin.HandlerFunc**：留下的是「按（账号, 设备
-// 指纹, 映射 id）借一次转发入口」与「借不到 / 映射本身不可用时怎么答」这两件更小的
-// 事——它们不因为 /fw/ 没了而失效，S4 的调度器解出 (userID, fingerprint, mappingID)
-// 之后要调的正是这里的 acquire / answer。camelCase 的三个方法眼下没有生产调用方，
-// 因此改由本包自己的用例直接调（见 acquire_test.go），而不是像上一轮那样只能透过
-// 装了路由的 gin engine 间接测到。
+// host.go 是转发子域的两端：按 Host 分发（Dispatch，<前缀>.<base_domain> 上的请求
+// 整条归它）与控制台上签发授权码的 Authorize。本文件是它们共用的两件更小的事——
+// 「按（账号, 设备指纹, 映射 id）借一次转发入口」（deviceOwnerAndOnline / acquire）与
+// 「借不到 / 映射本身不可用时怎么答」（answer）。/fw/<device_id>/<port>/… 那条旧路由
+// 已按规格 2026-09-21-port-forward-subdomain 决策 13 删除。
 //
 // ResponseWriter 的处理原则不变：调用方拿到 Acquire 借出的 http.Handler 之后要
 // **原样**交出去，不包任何一层——失败的措辞由本包的渲染钩子（failpage.go 的
-// RenderFailure）负责，它装在代理的构造处（internal/bootstrap），只在代理自己的
+// NewFailureRenderer）负责，它装在代理的构造处（internal/bootstrap），只在代理自己的
 // 失败上被调用，被转发应用自己的响应因此一个字节都不经过我们
 // （规格 2026-09-09-console-forward-failure-pages 决策 3）。
 package portforward_ctr
@@ -130,9 +122,8 @@ func New(devices DeviceLookup, presence Presence, forwarder Forwarder) *PortForw
 // 「查不到 / 不是你的 / 已撤销」不可区分（failureNotFound）与「设备离线」
 // （failureOffline）两类维持 Forward() 原来的口径。
 //
-// 上一轮它是 Forward() 内联的前半段；/fw/ 删掉之后这里没有生产调用方了（S4 的转发
-// 子域调度器解出 (userID, deviceID) 之后要调的正是这一步，接着才是 acquire），本轮
-// 因此只留它可编译、可被本包的用例直接调到（acquire_test.go），不把它接回任何路由。
+// 调用方是 host.go 的 forward：它从前缀表解出 (userID, deviceID) 之后先走这一步，
+// 接着才是 acquire。
 func (p *PortForward) deviceOwnerAndOnline(
 	ctx context.Context, userID, deviceID int64,
 ) (*device_entity.Device, failureKind, bool) {
@@ -206,10 +197,11 @@ func acquireFailure(
 }
 
 // answer 按失败类别把答复写进 c.Writer：要么一整张页，要么一句 no-store 的纯文本。
-func (p *PortForward) answer(c *gin.Context, kind failureKind) {
+// devicesURL 是页上「回到设备」的去处（ConsoleDevicesURL）。
+func answer(c *gin.Context, kind failureKind, devicesURL string) {
 	answer := failureAnswers[kind]
 	if answer.page != nil {
-		writeFailurePage(c.Writer, answer.status, *answer.page)
+		writeFailurePage(c.Writer, answer.status, *answer.page, devicesURL)
 		c.Abort()
 		return
 	}

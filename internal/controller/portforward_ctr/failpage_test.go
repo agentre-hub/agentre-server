@@ -38,6 +38,12 @@ import (
 // 整条路径删掉，本包不再挂路由（见 portforward.go 的包注释）：这里因此改成直接把
 // portforwardhost.Proxy 当 http.Handler 调，不再经过任何 gin 路由树——钩子本身与路由
 // 无关，这样测反而更直接。
+
+// consoleURL 是这批用例里控制台的地址；renderFailure 是生产装配同一个构造出来的钩子。
+const consoleURL = "https://console.test"
+
+var renderFailure = portforward_ctr.NewFailureRenderer(consoleURL)
+
 const (
 	// 这几个映射 id 是**设备那一侧**回哪个领域码的开关，见 proxyFor。
 	mappingNoListener      = int64(3000)
@@ -116,7 +122,7 @@ func proxyFor(t *testing.T, mappingID int64) http.Handler {
 		_ = device.Close()
 	})
 	return portforwardhost.NewProxy(client, mappingID, func(string) {},
-		portforwardhost.WithFailureRenderer(portforward_ctr.RenderFailure))
+		portforwardhost.WithFailureRenderer(renderFailure))
 }
 
 // assertFailurePage 断言这是一张完整的失败页，且两个出口都在：刷新与回到设备。
@@ -131,11 +137,13 @@ func assertFailurePage(t *testing.T, rec *httptest.ResponseRecorder) string {
 	assert.True(t, strings.HasSuffix(strings.TrimSpace(body), "</html>"),
 		"页面后面不该再跟着别的正文\n%s", body)
 	assert.Contains(t, body, ">刷新<", "缺「刷新」这个出口")
-	assert.Contains(t, body, `href="/devices"`, "缺「回到设备」这个出口")
+	// 「回到设备」是控制台设备页的绝对地址：页面开在转发域上，相对的 /devices 会落到
+	// 被转发应用自己那里。
+	assert.Contains(t, body, `href="`+consoleURL+`/devices"`, "缺「回到设备」这个出口")
 	// 不引外部资源：这一页的宿主是被转发的那个应用，拉不到控制台的静态资源也要能看。
-	// 判的是「引用」的形状而不是任何一个 http:// 字样——正文会点名映射的目标（规格
-	// 「失败的呈现」），那是一段文字，不是一次加载。
-	for _, forbidden := range []string{`src=`, `href="http`, "<link", "url(", "<img", "<script"} {
+	// 判的是「加载」的形状——正文会点名映射的目标（规格「失败的呈现」），「回到设备」
+	// 是一次导航，它们都不是加载。
+	for _, forbidden := range []string{`src=`, "<link", "url(", "<img", "<script"} {
 		assert.NotContains(t, body, forbidden, "失败页不得引入外部资源")
 	}
 	return body
@@ -210,7 +218,7 @@ func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) 
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 
-			portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+			renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
 				portforwardhost.Failure{Kind: c.kind, MappingID: 3000, Status: c.status})
 
 			require.Equal(t, c.status, rec.Code, "状态码照用共享包定的那一个")
@@ -243,7 +251,7 @@ func TestRenderFailure_TheSixPagesSayDifferentThings(t *testing.T) {
 		portforwardhost.FailureDeviceUnreachable,
 	} {
 		rec := httptest.NewRecorder()
-		portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+		renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
 			portforwardhost.Failure{Kind: kind, MappingID: 3000, Status: http.StatusBadGateway})
 		body := rec.Body.String()
 		if other, ok := seen[body]; ok {
@@ -280,7 +288,7 @@ func TestRenderFailure_GivenTheDeviceNamedTheTarget_ThenThePageNamesIt(t *testin
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 
-			portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+			renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
 				portforwardhost.Failure{Kind: c.kind, MappingID: 3000, Status: http.StatusBadGateway, Target: c.target})
 
 			body := assertFailurePage(t, rec)
@@ -293,7 +301,7 @@ func TestRenderFailure_GivenTheDeviceNamedTheTarget_ThenThePageNamesIt(t *testin
 	t.Run("目标里的标记被转义", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 
-		portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+		renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
 			portforwardhost.Failure{
 				Kind: portforwardhost.FailureNoListener, MappingID: 3000, Status: http.StatusBadGateway,
 				Target: `http://a<script>x:80`,

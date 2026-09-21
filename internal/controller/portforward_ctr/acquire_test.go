@@ -16,14 +16,9 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 )
 
-// 这个文件直接调 PortForward 的未导出方法（deviceOwnerAndOnline / acquire /
-// acquireFailure / answer），不经过任何 gin 路由或 HTTP 客户端。
-//
-// 上一轮它们只有一个调用方：/fw/*forward 上的 Forward()。规格
-// 2026-09-21-port-forward-subdomain 决策 13 把那条路由整条删掉之后，S4 的转发子域
-// 调度器才是它们的下一个调用方，但那个调度器本轮还不存在——任务边界因此要求「删
-// /fw/ 不许连带删掉这几段逻辑，暂时没有生产调用方就直接测它们」，这个文件就是那份
-// 直接测试（portforward.go 的包注释）。
+// 这个文件直接调本包的未导出部分（deviceOwnerAndOnline / acquire / acquireFailure /
+// answer），不经过任何 gin 路由或 HTTP 客户端；它们在真实路由树上的组合由
+// internal/api/portforward 的用例覆盖。
 
 const (
 	acqUserID      = int64(7)
@@ -174,27 +169,26 @@ func TestAcquireFailure_GivenSomethingElse_ThenFailureUpstream(t *testing.T) {
 
 func TestAnswer_GivenFailureOffline_ThenAFullPage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	p := New(stubDevices{}, stubPresence{}, nil)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 
-	p.answer(c, failureOffline)
+	answer(c, failureOffline, ConsoleDevicesURL("https://console.test"))
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 	assert.Contains(t, rec.Header().Get("Content-Type"), "text/html")
 	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
 	assert.Contains(t, rec.Body.String(), "设备离线")
+	assert.Contains(t, rec.Body.String(), `href="https://console.test/devices"`)
 }
 
 func TestAnswer_GivenFailureNotFound_ThenPlainNotStoreText(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	p := New(stubDevices{}, stubPresence{}, nil)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
 
-	p.answer(c, failureNotFound)
+	answer(c, failureNotFound, ConsoleDevicesURL("https://console.test"))
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")

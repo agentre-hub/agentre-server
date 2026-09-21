@@ -385,7 +385,7 @@ func RegisterDefaults(cfg *ServerConfig) {
 	// 因此不像中继那样要一个进程内唯一的 InstanceID。
 	accountchan_svc.SetDefault(accountchan_svc.New(redis.Default()))
 
-	registerSessionMirror(relayConfig.InstanceID)
+	registerSessionMirror(relayConfig.InstanceID, cfg.PublicURL)
 }
 
 // registerSessionMirror 把账号会话镜像的三根线接上（规格
@@ -396,7 +396,7 @@ func RegisterDefaults(cfg *ServerConfig) {
 // （与浏览器中继票据同一份，类型各自定死）、Redis 取 redis.Default()。InstanceID 与
 // relay_svc 共用同一个「一进程一份」的值——它是租约里的持有者标识，两个副本共用一个
 // 值会让彼此的续期都成功，同一台机器因此被跟两遍。
-func registerSessionMirror(instanceID string) {
+func registerSessionMirror(instanceID, publicURL string) {
 	supervisor := mirror_svc.NewSupervisor(
 		mirror_svc.Config{InstanceID: instanceID}, relay_svc.Default(), credstore.New(redis.Default()), redis.Default())
 	mirror_svc.SetDefault(supervisor)
@@ -424,7 +424,7 @@ func registerSessionMirror(instanceID string) {
 	// 决策 3）：共享代理判出「是哪一件事」，控制台用自己的话把它说出来。这里是唯一
 	// 同时认识「池」与「控制台文案」的地方——池不得反向 import 控制器。
 	portforward_svc.SetDefault(portforward_svc.New(portforward_svc.Config{
-		RenderFailure: portforward_ctr.RenderFailure,
+		RenderFailure: portforward_ctr.NewFailureRenderer(publicURL),
 	}, supervisor))
 }
 

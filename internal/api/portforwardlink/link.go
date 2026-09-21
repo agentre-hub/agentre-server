@@ -1,9 +1,9 @@
 // Package portforwardlink 定义控制台分配端口转发子域前缀这一个端点的请求 / 响应
 // 形状（规格 2026-09-21-port-forward-subdomain「地址与路由」的「分配前缀」）。
 //
-// 它与 internal/api/portforward 是两个包：那个包裸字节转发 /fw/…，按其文档明确
-// **没有**、也不会有请求 / 响应结构体；这里恰恰相反——/v1/port-forwards/links 是一个
-// 普通的 JSON 端点，走 mux.Meta declare 的这套。
+// 转发本身（<前缀>.<base_domain> 上的裸字节代理）没有、也不会有请求 / 响应结构体；
+// 这里恰恰相反——/v1/port-forwards/links 是一个普通的 JSON 端点，走 mux.Meta declare
+// 的这套。
 package portforwardlink
 
 import "github.com/cago-frame/cago/server/mux"

@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/portforward_link_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/redirectpath"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
@@ -77,16 +78,21 @@ type Host struct {
 	links    PrefixResolver
 	sessions ForwardSessions
 	cfg      HostConfig
+	// devicesURL 是失败页「回到设备」的去处：控制台设备页的绝对地址。
+	devicesURL string
 }
 
 // NewHost 装配。links / sessions 为 nil 时 BaseDomain 也必须为空（部署不提供转发）；
 // 否则 Dispatch 与 Authorize 答「此刻提供不了端口转发」。
 func NewHost(fwd *PortForward, links PrefixResolver, sessions ForwardSessions, cfg HostConfig) *Host {
 	cfg.BaseDomain = strings.ToLower(strings.TrimSuffix(cfg.BaseDomain, "."))
-	return &Host{fwd: fwd, links: links, sessions: sessions, cfg: cfg}
+	return &Host{fwd: fwd, links: links, sessions: sessions, cfg: cfg, devicesURL: ConsoleDevicesURL(cfg.PublicURL)}
 }
 
 func (h *Host) forwardCookieName() string { return session.ForwardCookieName(!h.cfg.InsecureCookies) }
+
+// answer 把本层自己的失败写出去，失败页的「回到设备」指向控制台。
+func (h *Host) answer(c *gin.Context, kind failureKind) { answer(c, kind, h.devicesURL) }
 
 // ── Host 分发 ───────────────────────────────────────────────────────────
 
@@ -99,12 +105,12 @@ func (h *Host) Dispatch(c *gin.Context) {
 	}
 	defer c.Abort()
 	if h.links == nil || h.sessions == nil {
-		h.fwd.answer(c, failureUnavailable)
+		h.answer(c, failureUnavailable)
 		return
 	}
 	// 形状不对与「不是你的」答同一个 404（spec「按 Host 分发」）。
 	if !validPrefix(label) {
-		h.fwd.answer(c, failureNotFound)
+		h.answer(c, failureNotFound)
 		return
 	}
 	path := c.Request.URL.Path
@@ -112,7 +118,7 @@ func (h *Host) Dispatch(c *gin.Context) {
 	case path == callbackPath && c.Request.Method == http.MethodGet:
 		h.callback(c, label)
 	case strings.HasPrefix(path, reservedPrefix):
-		h.fwd.answer(c, failureNotFound)
+		h.answer(c, failureNotFound)
 	default:
 		h.forward(c, label)
 	}
@@ -150,33 +156,35 @@ func validPrefix(label string) bool {
 }
 
 // forward 是每次请求的判定（spec，有顺序）：转发会话有效 → 依附的控制台会话还活着
-// → 前缀属于这个账号 → 设备归属仍然成立 → 设备在线 → 借连接、按映射 id 打开。
+// → 账号闸门放行 → 前缀属于这个账号 → 设备归属仍然成立 → 设备在线 → 借连接、按映射 id 打开。
 func (h *Host) forward(c *gin.Context, prefix string) {
 	ctx := c.Request.Context()
 	token, _ := c.Cookie(h.forwardCookieName())
 	fs, err := h.sessions.Resolve(ctx, token, prefix)
 	if err != nil {
 		logger.Ctx(ctx).Warn("port forward session lookup failed", zap.Error(err))
-		h.fwd.answer(c, failureUnavailable)
+		h.answer(c, failureUnavailable)
 		return
 	}
-	if fs == nil {
+	// 账号闸门与控制台每一条鉴权路径同一道（会话在不等于账号还能用）：被拦下就等于
+	// 没登录，导航回到 authorize，而那里对被拦的账号只会送去登录页。
+	if fs == nil || accountBlocked(ctx, fs.UserID) {
 		h.unauthenticated(c, prefix)
 		return
 	}
 	link, kind, ok := h.ownedLink(ctx, fs.UserID, prefix)
 	if !ok {
-		h.fwd.answer(c, kind)
+		h.answer(c, kind)
 		return
 	}
 	device, kind, ok := h.fwd.deviceOwnerAndOnline(ctx, fs.UserID, link.DeviceID)
 	if !ok {
-		h.fwd.answer(c, kind)
+		h.answer(c, kind)
 		return
 	}
 	handler, release, err := h.fwd.acquire(ctx, fs.UserID, device.Fingerprint, link.MappingID)
 	if err != nil {
-		h.fwd.answer(c, acquireFailure(ctx, fs.UserID, device.Fingerprint, link.MappingID, err))
+		h.answer(c, acquireFailure(ctx, fs.UserID, device.Fingerprint, link.MappingID, err))
 		return
 	}
 	defer release()
@@ -232,7 +240,7 @@ func (h *Host) callback(c *gin.Context, prefix string) {
 	// host-only（不带 Domain）、Path=/、HttpOnly、SameSite=Lax；https 下再加 Secure
 	// 与 __Host- 前缀——与控制台会话 cookie 同一个写法（session.SetCookie）。
 	session.SetCookie(c, h.forwardCookieName(), token, h.cfg.InsecureCookies)
-	redirect(c, safeReturn(c.Query("return")))
+	redirect(c, redirectpath.Local(c.Query("return")))
 }
 
 // ── 控制台上的 authorize ────────────────────────────────────────────────
@@ -251,25 +259,25 @@ func (h *Host) Authorize(c *gin.Context) {
 		return
 	}
 	if h.links == nil || h.sessions == nil || h.cfg.BaseDomain == "" {
-		h.fwd.answer(c, failureUnavailable)
+		h.answer(c, failureUnavailable)
 		return
 	}
 	prefix := c.Query("prefix")
 	if !validPrefix(prefix) {
-		h.fwd.answer(c, failureNotFound)
+		h.answer(c, failureNotFound)
 		return
 	}
 	if _, kind, ok := h.ownedLink(ctx, sess.UserID, prefix); !ok {
-		h.fwd.answer(c, kind)
+		h.answer(c, kind)
 		return
 	}
 	code, err := h.sessions.IssueCode(ctx, sess.UserID, prefix, sid)
 	if err != nil {
 		logger.Ctx(ctx).Warn("port forward code issue failed", zap.Error(err))
-		h.fwd.answer(c, failureUnavailable)
+		h.answer(c, failureUnavailable)
 		return
 	}
-	q := url.Values{"code": {code}, "return": {safeReturn(c.Query("return"))}}
+	q := url.Values{"code": {code}, "return": {redirectpath.Local(c.Query("return"))}}
 	redirect(c, strings.TrimSuffix(h.links.ForwardURL(prefix), "/")+callbackPath+"?"+q.Encode())
 }
 
@@ -286,19 +294,6 @@ func accountBlocked(ctx context.Context, userID int64) bool {
 func redirect(c *gin.Context, location string) {
 	c.Header("Cache-Control", "no-store")
 	c.Redirect(http.StatusFound, location)
-}
-
-// safeReturn 只接受以单个 / 开头的相对路径，其余一律换成 /（spec「转发登录」第 5 步）。
-// 判据与 auth_ctr 的 safeNext 相同：浏览器把 \ 当成 /、解析前先删掉控制字符，所以
-// /\evil.com 与 "/<TAB>/evil.com" 都是 //evil.com。
-func safeReturn(in string) string {
-	if !strings.HasPrefix(in, "/") || strings.HasPrefix(in, "//") {
-		return "/"
-	}
-	if strings.ContainsFunc(in, func(r rune) bool { return r == '\\' || r < 0x20 || r == 0x7f }) {
-		return "/"
-	}
-	return in
 }
 
 // stripForwardCredentials 转交之前删掉本系统的转发票（两个名字都删：部署从 http 换到

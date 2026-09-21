@@ -14,6 +14,7 @@ import (
 	api "github.com/agentre-hub/agentre-server/internal/api/auth"
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
+	"github.com/agentre-hub/agentre-server/internal/pkg/redirectpath"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/oauth_svc"
@@ -26,33 +27,10 @@ type Auth struct {
 
 func NewAuth(insecureCookies bool) *Auth { return &Auth{insecureCookies: insecureCookies} }
 
-// safeNext 仅允许本站的相对路径；其它一律收敛成 "/"。
-//
-// 判据不是「以 / 开头、且不以 // 开头」那么简单，因为浏览器解析 URL 的规则比这条宽：
-//
-//   - **反斜杠等于斜杠。** 按 WHATWG URL 规范，特殊 scheme（http/https）下 \ 与 /
-//     等价，所以 /\evil.com 在浏览器里就是 //evil.com —— 一个跳出本站的
-//     protocol-relative URL，而上面那条判据放它过去。
-//   - **控制字符会先被删掉。** 浏览器在解析前剥掉 URL 里的 tab / CR / LF，于是
-//     "/<TAB>/evil.com" 也变成 //evil.com。
-//
-// 所以这里反过来做：必须以 / 开头，第二个字符不能是 / 或 \，并且整串不含反斜杠与
-// 控制字符。本站真实的路径不需要这两类字符（要带就得是百分号编码），因此这条收紧
-// 不会挡掉任何正常的落点。
-func safeNext(in string) string {
-	if !strings.HasPrefix(in, "/") || strings.HasPrefix(in, "//") {
-		return "/"
-	}
-	if strings.ContainsFunc(in, func(r rune) bool { return r == '\\' || r < 0x20 || r == 0x7f }) {
-		return "/"
-	}
-	return in
-}
-
-// nextWithUserCode 是登录后的落点：先按 safeNext 收敛，再把设备流的 user_code 带回去
+// nextWithUserCode 是登录后的落点：先按 redirectpath.Local 收敛，再把设备流的 user_code 带回去
 // （用户是从「输码」那一页被送去登录的，回来要接着那一步）。
 func nextWithUserCode(next, userCode string) string {
-	target := safeNext(next)
+	target := redirectpath.Local(next)
 	if userCode == "" {
 		return target
 	}
@@ -68,7 +46,7 @@ func nextWithUserCode(next, userCode string) string {
 
 func (a *Auth) GithubAuthorize(c *gin.Context, req *api.GithubAuthorizeRequest) error {
 	state, err := auth_svc.Default().CreateOAuthState(c.Request.Context(), auth_svc.OAuthStatePayload{
-		Next: safeNext(req.Next), UserCode: req.UserCode, IP: c.ClientIP(),
+		Next: redirectpath.Local(req.Next), UserCode: req.UserCode, IP: c.ClientIP(),
 	})
 	if err != nil {
 		return i18n.NewInternalError(c.Request.Context(), code.OAuthExchangeFailed)

@@ -54,7 +54,7 @@ func TestRouter_LegacyPortForwardPathAnswersOrdinary404(t *testing.T) {
 	require.NoError(t, (&RouterDeps{Cfg: &bootstrap.ServerConfig{}}).Router(context.Background(), testMux.Router))
 	engine := testMux.IRouter.(*gin.Engine)
 
-	for _, path := range []string{"/fw/", "/fw/12/3000", "/fw/12/3000/assets/x.js"} {
+	for _, path := range []string{"/fw", "/fw/", "/fw/12/3000", "/fw/12/3000/assets/x.js"} {
 		recorder := httptest.NewRecorder()
 		engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		require.Equalf(t, http.StatusNotFound, recorder.Code, "GET %s must answer a plain 404", path)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/agentre-hub/agentre/pkg/wire/portforwardhost"
 )
@@ -133,7 +134,9 @@ var failureTexts = map[portforwardhost.FailureKind]string{
 // 的人以为改全了。
 const incompleteText = "这次转发没有完成。刷新这一页重试。"
 
-// RenderFailure 是交给共享代理的渲染钩子（portforwardhost.WithFailureRenderer）。
+// NewFailureRenderer 造交给共享代理的渲染钩子（portforwardhost.WithFailureRenderer）。
+// publicURL 是控制台的地址：失败页开在转发域上，「回到设备」必须是控制台设备页的
+// 绝对地址（见 ConsoleDevicesURL）。
 //
 // 它**只**在代理自己的失败上被调用：被转发应用自己的响应（含它自己答的 4xx/5xx）
 // 一个字节都不经过这里，这是共享包对宿主的承诺（上游规格
@@ -142,26 +145,29 @@ const incompleteText = "这次转发没有完成。刷新这一页重试。"
 //
 // 状态码照用共享包为该种类选定的那一个：本轮不改任何一种失败的状态码。
 //
-// 它是包级函数、不带任何请求态：代理按映射 id 缓存、跨请求共用，装在构造处的钩子必须
-// 对每一次请求都成立。
+// 钩子不带任何请求态：代理按映射 id 缓存、跨请求共用，装在构造处的钩子必须对每一次
+// 请求都成立。
 //
 // f.MappingID 不进正文；f.Target 是设备在回绝里说出的目标（服务端自己不存目标），
 // 有它时「目标连不上」三张页点名它，没有时退回不点名的那句。
-func RenderFailure(w http.ResponseWriter, _ *http.Request, f portforwardhost.Failure) {
-	if page, ok := failurePages[f.Kind]; ok {
-		if page.namedDetail != nil && f.Target != "" {
-			page.detail = namedDetail(page, f.Target)
+func NewFailureRenderer(publicURL string) portforwardhost.FailureRenderer {
+	devicesURL := ConsoleDevicesURL(publicURL)
+	return func(w http.ResponseWriter, _ *http.Request, f portforwardhost.Failure) {
+		if page, ok := failurePages[f.Kind]; ok {
+			if page.namedDetail != nil && f.Target != "" {
+				page.detail = namedDetail(page, f.Target)
+			}
+			writeFailurePage(w, f.Status, page, devicesURL)
+			return
 		}
-		writeFailurePage(w, f.Status, page)
-		return
+		text, ok := failureTexts[f.Kind]
+		if !ok {
+			// 还不认识的那一种**不能沉默地套上面某一张页**：那等于替一件我们还不认识
+			// 的事编一个下一步。
+			text = incompleteText
+		}
+		writeFailureText(w, f.Status, text)
 	}
-	text, ok := failureTexts[f.Kind]
-	if !ok {
-		// 还不认识的那一种**不能沉默地套上面某一张页**：那等于替一件我们还不认识的
-		// 事编一个下一步。
-		text = incompleteText
-	}
-	writeFailureText(w, f.Status, text)
 }
 
 // namedDetail 把目标与它的主机转义后交给这一页的 namedDetail。主机取不出来（目标不是
@@ -174,8 +180,15 @@ func namedDetail(page failurePage, target string) string {
 	return page.namedDetail(html.EscapeString(target), html.EscapeString(host))
 }
 
-// devicesPath 是「回到设备」那个出口。控制台的设备页（规格「失败的呈现」）。
+// devicesPath 是控制台设备页的路径（规格「失败的呈现」的「回到设备」）。
 const devicesPath = "/devices"
+
+// ConsoleDevicesURL 是「回到设备」那个出口的地址：控制台的设备页，按 publicURL 拼成
+// 绝对地址。失败页开在 <前缀>.<base_domain> 上，一个相对的 /devices 会被浏览器解析成
+// 被转发应用自己的 /devices。publicURL 没配时退回相对路径——那样的部署也不会有转发域。
+func ConsoleDevicesURL(publicURL string) string {
+	return strings.TrimRight(publicURL, "/") + devicesPath
+}
 
 // failurePageTemplate 的四个空位依次是 <title>、<h1>、正文、「回到设备」的去处。
 //
@@ -230,9 +243,9 @@ const (
 )
 
 // writeFailurePage 把一张页写出去。
-func writeFailurePage(w http.ResponseWriter, status int, page failurePage) {
+func writeFailurePage(w http.ResponseWriter, status int, page failurePage, devicesURL string) {
 	writeFailureBody(w, status, failurePageContentType, fmt.Sprintf(failurePageTemplate,
-		page.heading, page.heading, page.detail, devicesPath))
+		page.heading, page.heading, page.detail, html.EscapeString(devicesURL)))
 }
 
 // writeFailureText 把一句话写出去，形状与共享包的默认答复一致（末尾带换行）。

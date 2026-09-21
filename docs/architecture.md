@@ -265,10 +265,12 @@ it registers anything, so the dispatcher heads the chain of every console route 
 `NoRoute` fallback (`Use` rebuilds it). A request whose Host (port ignored, case-insensitive) is
 `base_domain` or ends in `.<base_domain>` is handled there and aborted: console handlers,
 `SessionAuth`, CSRF and the SPA never run. A label that is not a well-formed prefix answers the
-same 404 as "not your device". Two things still run before it, because gin decides them before
-any middleware: cago's own `GET /health` and `GET /metrics` (registered before `Router`), and
-gin's trailing-slash redirect when a forwarded path differs from a console route only by a
-trailing `/`.
+same 404 as "not your device". `Router` also turns off gin's `RedirectTrailingSlash`, which
+gin applies before any middleware and would otherwise 301 a forwarded path that differs from a
+console route only by a trailing `/` (the console registers both `/fw` and `/fw/*rest` so the
+legacy path still answers 404). cago's own `GET /health` and `GET /metrics` are registered
+before `Router`, so they still answer on the forward host; a forwarded app's own paths with
+those names are unreachable, like `/__agentre/`.
 
 **Forward login.** The console cookie is host-only and never reaches the forward host, so the
 forward host has its own ticket. A request without a valid one gets, for a top-level
@@ -287,7 +289,8 @@ forward host belongs to the server.
 
 **Every forwarded request**, in order: forward session valid for **this** prefix → the console
 session it was issued from still exists (`session.Store.Exists`, which does not slide its TTL)
-→ the prefix's link belongs to that account → `OwnedDevice` → the device is online →
+→ the account gate (`user_svc.Gate`) admits the account; a blocked account is treated as
+signed out → the prefix's link belongs to that account → `OwnedDevice` → the device is online →
 `Forwarder.Acquire` by mapping id. Console logout, session expiry or device revocation
 therefore bite on the next request. Before the request is handed to the shared proxy
 (`agentre/pkg/wire/portforwardhost`, which copies `Cookie` and `Authorization` through) the
