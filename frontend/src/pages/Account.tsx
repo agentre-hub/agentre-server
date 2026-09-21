@@ -17,6 +17,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useMe } from "@/hooks/use-me";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { api, ApiError } from "@/lib/api";
 import { PASSKEY_CODES } from "@/lib/errorCodes";
 import {
@@ -209,6 +210,7 @@ function CardListSkeleton({ rows }: { rows: number }) {
 export default function Account() {
   const { t } = useTranslation();
   const { me } = useMe();
+  const isMobile = useIsMobile();
 
   const [passkeys, setPasskeys] = useState<PasskeyRow[] | null>(null);
   const [passkeysError, setPasskeysError] = useState<unknown>(null);
@@ -375,24 +377,45 @@ export default function Account() {
                 <div className="truncate text-prose font-semibold text-foreground">
                   {me.display_name}
                 </div>
-                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
-                  <div className="flex min-w-0 items-baseline gap-1.5">
-                    <dt className="text-2xs text-muted-foreground">
-                      {t("account.profile.email")}
-                    </dt>
-                    <dd className="truncate text-xs text-muted-foreground">
-                      {me.email}
-                    </dd>
+                {isMobile ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="grid grid-cols-[auto_1fr] gap-1.5 items-start">
+                      <dt className="text-2xs text-muted-foreground shrink-0">
+                        {t("account.profile.email")}
+                      </dt>
+                      <dd className="text-xs text-muted-foreground break-words">
+                        {me.email}
+                      </dd>
+                    </div>
+                    <div className="grid grid-cols-[auto_1fr] gap-1.5 items-start">
+                      <dt className="text-2xs text-muted-foreground shrink-0">
+                        {t("account.profile.github")}
+                      </dt>
+                      <dd className="font-mono text-xs text-muted-foreground break-words">
+                        {me.github_login}
+                      </dd>
+                    </div>
                   </div>
-                  <div className="flex min-w-0 items-baseline gap-1.5">
-                    <dt className="text-2xs text-muted-foreground">
-                      {t("account.profile.github")}
-                    </dt>
-                    <dd className="truncate font-mono text-xs text-muted-foreground">
-                      {me.github_login}
-                    </dd>
+                ) : (
+                  <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
+                    <div className="flex min-w-0 items-baseline gap-1.5">
+                      <dt className="text-2xs text-muted-foreground">
+                        {t("account.profile.email")}
+                      </dt>
+                      <dd className="truncate text-xs text-muted-foreground">
+                        {me.email}
+                      </dd>
+                    </div>
+                    <div className="flex min-w-0 items-baseline gap-1.5">
+                      <dt className="text-2xs text-muted-foreground">
+                        {t("account.profile.github")}
+                      </dt>
+                      <dd className="truncate font-mono text-xs text-muted-foreground">
+                        {me.github_login}
+                      </dd>
+                    </div>
                   </div>
-                </div>
+                )}
               </dl>
             </div>
           </SectionCard>
@@ -466,7 +489,12 @@ export default function Account() {
                         <div className="truncate text-aux font-semibold text-foreground">
                           {k.name}
                         </div>
-                        <div className="truncate text-2xs text-muted-foreground">
+                        <div
+                          className={cn(
+                            "text-2xs text-muted-foreground",
+                            !isMobile && "truncate",
+                          )}
+                        >
                           {passkeyMetaLine(t, k)}
                         </div>
                       </div>
@@ -571,10 +599,26 @@ export default function Account() {
                                 />
                               )}
                             </div>
-                            <div className="mt-0.5 truncate text-2xs text-muted-foreground">
-                              <span className="font-mono">{s.ip}</span>
-                              {sessionTimesLine(t, s)}
-                            </div>
+                            {isMobile ? (
+                              <div className="mt-0.5 text-2xs text-muted-foreground">
+                                <div className="font-mono">{s.ip}</div>
+                                <div>
+                                  {t("account.signins.signedInAt", {
+                                    date: formatDate(s.created_at),
+                                  })}
+                                </div>
+                                <div>
+                                  {t("account.signins.lastActiveAt", {
+                                    date: formatDate(s.last_active_at),
+                                  })}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="mt-0.5 truncate text-2xs text-muted-foreground">
+                                <span className="font-mono">{s.ip}</span>
+                                {sessionTimesLine(t, s)}
+                              </div>
+                            )}
                           </div>
                         </button>
                       </li>
