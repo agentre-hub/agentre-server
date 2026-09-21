@@ -1,7 +1,18 @@
 import { act, renderHook } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
+import {
+  MemoryRouter,
+  useLocation,
+  useNavigate,
+  type InitialEntry,
+} from "react-router-dom";
 import { describe, expect, it } from "vitest";
 
-import { useFilePreviewTabs } from "@/components/session/useFilePreviewTabs";
+import {
+  FILE_PREVIEW_LAYER_STATE_KEY,
+  useFilePreviewLayer,
+  useFilePreviewTabs,
+} from "@/components/session/useFilePreviewTabs";
 
 /**
  * 预览标签的状态住在宿主（规格 2026-09-08 决策 7）：共享面板只收 `tabs` 与
@@ -219,5 +230,152 @@ describe("控制台的预览标签（续）", () => {
 
     expect(result.current.tabs).toEqual([]);
     expect(result.current.activePath).toBeNull();
+  });
+});
+
+/**
+ * 移动端的整屏预览层（规格 2026-09-21-server-mobile-gaps 决策 2、4）：层开着占
+ * 一条 history（同 URL、state 标记），返回按钮与系统返回都只是退掉这一条；层是
+ * 开是关只看「当前这条有没有标记 + 有没有当前标签」，标签本身不归它管。
+ */
+describe("移动端预览层与 history", () => {
+  const CONV = "/chat/c-1";
+
+  function setup(opts: {
+    enabled?: boolean;
+    activePath?: string | null;
+    entries?: InitialEntry[];
+  }) {
+    const entries = opts.entries ?? ["/chat", CONV];
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        MemoryRouter,
+        { initialEntries: entries, initialIndex: entries.length - 1 },
+        children,
+      );
+    return renderHook(
+      ({ activePath }: { activePath: string | null }) => ({
+        layer: useFilePreviewLayer({
+          enabled: opts.enabled ?? true,
+          activePath,
+        }),
+        location: useLocation(),
+        navigate: useNavigate(),
+      }),
+      { wrapper, initialProps: { activePath: opts.activePath ?? null } },
+    );
+  }
+
+  const marked = (state: unknown) =>
+    Boolean(
+      state &&
+      (state as Record<string, unknown>)[FILE_PREVIEW_LAYER_STATE_KEY] === true,
+    );
+
+  it("打开：同一地址压一条带标记的 history，层随当前标签出现", () => {
+    const { result, rerender } = setup({});
+    const before = result.current.location;
+
+    act(() => result.current.layer.show());
+    rerender({ activePath: "docs/a.md" });
+
+    expect(result.current.location.pathname).toBe(CONV);
+    expect(result.current.location.key).not.toBe(before.key);
+    expect(marked(result.current.location.state)).toBe(true);
+    expect(result.current.layer.shown).toBe(true);
+  });
+
+  it("系统返回（popstate）：层关掉，回到打开前那一条", () => {
+    const { result, rerender } = setup({});
+    const before = result.current.location;
+    act(() => result.current.layer.show());
+    rerender({ activePath: "docs/a.md" });
+
+    act(() => {
+      void result.current.navigate(-1);
+    });
+
+    expect(result.current.layer.shown).toBe(false);
+    expect(result.current.location.key).toBe(before.key);
+  });
+
+  it("返回按钮退掉自己压的那一条；连点两下也只退一条，不离开会话", () => {
+    const { result, rerender } = setup({});
+    const before = result.current.location;
+    act(() => result.current.layer.show());
+    rerender({ activePath: "docs/a.md" });
+
+    act(() => {
+      result.current.layer.hide();
+      result.current.layer.hide();
+    });
+
+    expect(result.current.layer.shown).toBe(false);
+    expect(result.current.location.key).toBe(before.key);
+    expect(result.current.location.pathname).toBe(CONV);
+  });
+
+  it("层已关时再点文件：重新压一条，而不是叠两条", () => {
+    const { result, rerender } = setup({});
+    const before = result.current.location;
+    act(() => result.current.layer.show());
+    rerender({ activePath: "docs/a.md" });
+    act(() => result.current.layer.hide());
+
+    act(() => result.current.layer.show());
+    expect(result.current.layer.shown).toBe(true);
+    act(() => result.current.layer.show());
+    act(() => result.current.layer.hide());
+
+    expect(result.current.location.key).toBe(before.key);
+  });
+
+  it("关掉最后一个标签（当前标签变空）：层关掉，并退掉它压的那一条", () => {
+    const { result, rerender } = setup({});
+    const before = result.current.location;
+    act(() => result.current.layer.show());
+    rerender({ activePath: "docs/a.md" });
+
+    rerender({ activePath: null });
+
+    expect(result.current.layer.shown).toBe(false);
+    expect(result.current.location.key).toBe(before.key);
+    expect(marked(result.current.location.state)).toBe(false);
+  });
+
+  it("重载后遗留的标记、没有标签：视为关，不退 history；再打开不另压一条", () => {
+    const { result, rerender } = setup({
+      entries: [
+        CONV,
+        { pathname: CONV, state: { [FILE_PREVIEW_LAYER_STATE_KEY]: true } },
+      ],
+    });
+    const stale = result.current.location;
+
+    expect(result.current.layer.shown).toBe(false);
+    expect(result.current.location.key).toBe(stale.key);
+
+    act(() => result.current.layer.show());
+    rerender({ activePath: "docs/a.md" });
+    expect(result.current.location.key).toBe(stale.key);
+    expect(result.current.layer.shown).toBe(true);
+
+    act(() => result.current.layer.hide());
+    expect(result.current.layer.shown).toBe(false);
+    expect(result.current.location.pathname).toBe(CONV);
+    expect(marked(result.current.location.state)).toBe(false);
+  });
+
+  it("桌面（未启用）：不碰 history，也从不算作开着", () => {
+    const { result, rerender } = setup({ enabled: false });
+    const before = result.current.location;
+
+    act(() => result.current.layer.show());
+    rerender({ activePath: "docs/a.md" });
+    act(() => result.current.layer.hide());
+    rerender({ activePath: null });
+
+    expect(result.current.layer.shown).toBe(false);
+    expect(result.current.location.key).toBe(before.key);
   });
 });

@@ -44,7 +44,10 @@ import SessionDetailHeader, {
 import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
-import { useFilePreviewTabs } from "@/components/session/useFilePreviewTabs";
+import {
+  useFilePreviewLayer,
+  useFilePreviewTabs,
+} from "@/components/session/useFilePreviewTabs";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import { turnDoneFrames } from "@/components/session/turnDone";
@@ -437,6 +440,11 @@ export default function SessionDetailView({
    * 那一刻**的事实，由 ref 后面这个函数当场回答。答 false 时包不会开面板。
    */
   const preview = useFilePreviewTabs();
+  // 移动端预览是整屏一层、占一条 history（决策 2、4）；桌面照旧是 420 右栏。
+  const previewLayer = useFilePreviewLayer({
+    enabled: isMobile,
+    activePath: preview.activePath,
+  });
   const previewCwdRef = useRef("");
   const previewFileRef = useRef<
     (path: string, anchor?: PreviewAnchor) => boolean
@@ -454,6 +462,7 @@ export default function SessionDetailView({
       // 定位目标（链接里写的 `:311-330`）跟着一起进标签：这一层不解释它，面板
       // 拿到之后才去滚编辑器。
       preview.open(path, anchor);
+      previewLayer.show();
       return true;
     };
   });
@@ -1908,6 +1917,11 @@ export default function SessionDetailView({
           onClose={preview.close}
           onCloseOthers={preview.closeOthers}
           onCloseAll={preview.closeAll}
+          layer={
+            isMobile
+              ? { shown: previewLayer.shown, onBack: previewLayer.hide }
+              : undefined
+          }
         />
       </div>
     </div>

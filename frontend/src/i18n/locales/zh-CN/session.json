@@ -90,6 +90,10 @@
     "offline": "离线",
     "back": "返回"
   },
+  "filePreviewLayer": {
+    "back": "返回会话",
+    "location": "{{dir}} · {{machine}}"
+  },
   "list": {
     "running": "运行中",
     "idle": "空闲",

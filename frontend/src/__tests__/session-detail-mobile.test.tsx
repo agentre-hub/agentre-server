@@ -8,9 +8,23 @@
  * 把「内容会存在服务器上」说清楚（决策 2）——一个顶栏书签图标表达不了这件事，
  * 它调的那两个写端点（POST /v1/follows、POST /v1/follows/unfollow）也已经不在了。
  */
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { MemoryRouter } from "react-router-dom";
+import {
+  MemoryRouter,
+  useLocation,
+  useNavigate,
+  type InitialEntry,
+  type Location,
+  type NavigateFunction,
+} from "react-router-dom";
 import {
   afterAll,
   afterEach,
@@ -22,11 +36,15 @@ import {
 } from "vitest";
 
 import { api } from "@/lib/api";
-import { useRelayChannel } from "@/hooks/use-relay";
+import {
+  useRelayChannel,
+  type UseRelayChannelOptions,
+} from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
 import ResolvedSessionDetail from "@/components/session/ResolvedSessionDetail";
+import { FILE_PREVIEW_LAYER_STATE_KEY } from "@/components/session/useFilePreviewTabs";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -482,5 +500,316 @@ describe("桌面端会话详情(非移动)", () => {
     expect(await within(topbar).findByText("重构登录页")).toBeTruthy();
     const row = screen.getByRole("navigation", { name: "Back" });
     expect(await within(row).findByText("书房小主机")).toBeTruthy();
+  });
+});
+
+/**
+ * 会话里打开文件（规格 2026-09-21-server-mobile-gaps「会话中的文件预览（移动端）」、
+ * 决策 2 与 4、问题 3）：此前预览是 420 定宽列，390 屏上转录与输入框被挤成 0 宽。
+ * 移动端改为整屏一层，占一条 history；返回按钮与系统返回都只关这一层。
+ */
+describe("移动端会话里的文件预览：整屏一层", () => {
+  let capturedOpts: UseRelayChannelOptions = {};
+  const probe: { location?: Location; navigate?: NavigateFunction } = {};
+
+  function LocationProbe() {
+    probe.location = useLocation();
+    probe.navigate = useNavigate();
+    return null;
+  }
+
+  function stubPreview(opts: { read?: () => Promise<unknown> } = {}) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions") return { items: [] };
+      if (
+        typeof path === "string" &&
+        path.startsWith("/v1/agent-sessions/transcript")
+      )
+        return { frames: [], cursor: 0, has_more: false };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.workspaceFsReadFile)
+        return opts.read
+          ? opts.read()
+          : {
+              content: new TextEncoder().encode("文件正文\n"),
+              contentType: "",
+            };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: CID,
+        event: {
+          kind: "text_delta",
+          text: "改完了，见 [说明](/home/agent/proj/docs/a.md)。",
+        },
+        seq: 1,
+      } as never);
+      return {} as never;
+    });
+  }
+
+  function renderWithLink(entries: InitialEntry[] = [`/chat/${CID}`]) {
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    return render(
+      <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+        <ThemeProvider>
+          <LocationProbe />
+          <SessionDetailView deviceId={1} conversationId={CID} form="page" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function composerEditable(): HTMLElement & {
+    editor?: { commands: { setContent: (v: string) => void } };
+  } {
+    const el = document.querySelector<HTMLElement>(
+      '[data-testid="session-detail-composer"] .ProseMirror',
+    );
+    if (!el) throw new Error("输入框没渲染出来");
+    return el;
+  }
+
+  /** markdown 的视图档位分段里，此刻按下的那一格。 */
+  function pressedSegment(layer: HTMLElement): string | null {
+    const group = within(layer).getByRole("group", {
+      name: "View mode",
+    });
+    return (
+      within(group)
+        .getAllByRole("button")
+        .find((b) => b.getAttribute("aria-pressed") === "true")?.textContent ??
+      null
+    );
+  }
+
+  const marked = () =>
+    Boolean(
+      (probe.location?.state as Record<string, unknown> | null)?.[
+        FILE_PREVIEW_LAYER_STATE_KEY
+      ],
+    );
+
+  async function openLink() {
+    const link = await screen.findByText("说明", undefined, { timeout: 3_000 });
+    fireEvent.click(link);
+    return screen.findByTestId("session-file-preview-layer", undefined, {
+      timeout: 3_000,
+    });
+  }
+
+  beforeEach(() => {
+    capturedOpts = {};
+    probe.location = undefined;
+    probe.navigate = undefined;
+  });
+
+  afterEach(() => {
+    fakeClient.catchUp.mockImplementation(async () => ({}) as never);
+  });
+
+  it("打开：整屏层盖住会话（头部与输入框），有返回、文件名标题、目录与机器副行和现有面板", async () => {
+    mockMobileViewport();
+    stubPreview();
+    renderWithLink();
+    const before = await waitFor(() => {
+      expect(probe.location).toBeTruthy();
+      return probe.location!;
+    });
+
+    const layer = await openLink();
+
+    // 同一地址多了一条带标记的 history。
+    expect(probe.location!.pathname).toBe(`/chat/${CID}`);
+    expect(probe.location!.key).not.toBe(before.key);
+    expect(marked()).toBe(true);
+    // 整屏一层，不是 420 定宽列。
+    expect(layer.className).toMatch(/fixed/);
+    expect(layer.className).toMatch(/inset-0/);
+    expect(layer.className).not.toContain("w-[420px]");
+    expect(screen.queryByTestId("session-file-preview")).toBeNull();
+    expect(
+      within(layer).getByRole("button", { name: "Back to conversation" }),
+    ).toBeTruthy();
+    expect(within(layer).getByRole("heading", { name: "a.md" })).toBeTruthy();
+    expect(
+      within(layer).getByTestId("session-file-preview-layer-subline")
+        .textContent,
+    ).toBe("docs · 书房小主机");
+    expect(within(layer).getByTestId("file-preview-panel")).toBeTruthy();
+    expect(await within(layer).findByText("文件正文")).toBeTruthy();
+    // 会话头与输入框都在层下面，不在层里。
+    expect(layer.contains(screen.getByTestId("session-detail-identity"))).toBe(
+      false,
+    );
+    expect(layer.contains(screen.getByTestId("session-detail-composer"))).toBe(
+      false,
+    );
+  });
+
+  it("返回按钮：只关这一层，转录与输入框原样还在，再点链接回到这一层", async () => {
+    mockMobileViewport();
+    stubPreview();
+    renderWithLink();
+    await screen.findByText("说明", undefined, { timeout: 3_000 });
+    await waitFor(() => composerEditable());
+    composerEditable().editor?.commands.setContent("<p>还没发的一句</p>");
+    const transcript = screen.getByTestId("session-detail-transcript");
+    const composerNode = composerEditable();
+    const entry = probe.location!.key;
+
+    const layer = await openLink();
+    fireEvent.click(
+      within(layer).getByRole("button", { name: "Back to conversation" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-file-preview-layer")).toBeNull(),
+    );
+    expect(probe.location!.key).toBe(entry);
+    expect(probe.location!.pathname).toBe(`/chat/${CID}`);
+    // 同一个节点：没被卸下重挂，滚动位置与未发送的文字都跟着它。
+    expect(screen.getByTestId("session-detail-transcript")).toBe(transcript);
+    expect(composerEditable()).toBe(composerNode);
+    expect(composerEditable().textContent).toBe("还没发的一句");
+
+    const again = await openLink();
+    expect(within(again).getByRole("heading", { name: "a.md" })).toBeTruthy();
+  });
+
+  it("系统返回（popstate）：同样只关这一层，标签留着", async () => {
+    mockMobileViewport();
+    stubPreview();
+    renderWithLink();
+    await screen.findByText("说明", undefined, { timeout: 3_000 });
+    const entry = probe.location!.key;
+    const layer = await openLink();
+    // 切一格视图档位：档位存在标签上，关层之后它若还在，就证明标签没被清。
+    const group = await within(layer).findByRole("group", {
+      name: "View mode",
+    });
+    const other = within(group)
+      .getAllByRole("button")
+      .find((b) => b.getAttribute("aria-pressed") !== "true")!;
+    fireEvent.click(other);
+    const chosen = other.textContent;
+    expect(pressedSegment(layer)).toBe(chosen);
+
+    act(() => {
+      void probe.navigate!(-1);
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-file-preview-layer")).toBeNull(),
+    );
+    expect(probe.location!.key).toBe(entry);
+    expect(screen.getByTestId("session-detail-identity")).toBeTruthy();
+
+    const again = await openLink();
+    expect(pressedSegment(again)).toBe(chosen);
+  });
+
+  it("关掉最后一个标签：层关掉，并退掉它压的那一条", async () => {
+    mockMobileViewport();
+    stubPreview();
+    renderWithLink();
+    await screen.findByText("说明", undefined, { timeout: 3_000 });
+    const entry = probe.location!.key;
+    const layer = await openLink();
+
+    fireEvent.click(
+      within(layer).getByRole("button", { name: "Close preview" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-file-preview-layer")).toBeNull(),
+    );
+    expect(probe.location!.key).toBe(entry);
+    expect(marked()).toBe(false);
+  });
+
+  it("重载后遗留的标记、没有标签：视为关着；打开再返回回到会话", async () => {
+    mockMobileViewport();
+    stubPreview();
+    renderWithLink([
+      `/chat/${CID}`,
+      {
+        pathname: `/chat/${CID}`,
+        state: { [FILE_PREVIEW_LAYER_STATE_KEY]: true },
+      },
+    ]);
+
+    await screen.findByText("说明", undefined, { timeout: 3_000 });
+    expect(screen.queryByTestId("session-file-preview-layer")).toBeNull();
+    expect(screen.queryByTestId("session-file-preview")).toBeNull();
+
+    const layer = await openLink();
+    fireEvent.click(
+      within(layer).getByRole("button", { name: "Back to conversation" }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-file-preview-layer")).toBeNull(),
+    );
+    expect(probe.location!.pathname).toBe(`/chat/${CID}`);
+    expect(marked()).toBe(false);
+  });
+
+  it("读不到文件：失败展示在层里，返回照常可用", async () => {
+    mockMobileViewport();
+    stubPreview({ read: () => Promise.reject(new Error("磁盘读不到")) });
+    renderWithLink();
+    await screen.findByText("说明", undefined, { timeout: 3_000 });
+    const entry = probe.location!.key;
+
+    const layer = await openLink();
+    expect(
+      await within(layer).findByRole("button", { name: "Retry" }),
+    ).toBeTruthy();
+
+    fireEvent.click(
+      within(layer).getByRole("button", { name: "Back to conversation" }),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("session-file-preview-layer")).toBeNull(),
+    );
+    expect(probe.location!.key).toBe(entry);
+  });
+
+  it("桌面：仍是 420 定宽右栏，不压 history", async () => {
+    stubPreview();
+    renderWithLink();
+    await screen.findByText("说明", undefined, { timeout: 3_000 });
+    const entry = probe.location!.key;
+
+    fireEvent.click(screen.getByText("说明"));
+
+    const column = await screen.findByTestId("session-file-preview");
+    expect(column.className).toContain("w-[420px]");
+    expect(screen.queryByTestId("session-file-preview-layer")).toBeNull();
+    expect(probe.location!.key).toBe(entry);
+    expect(marked()).toBe(false);
   });
 });

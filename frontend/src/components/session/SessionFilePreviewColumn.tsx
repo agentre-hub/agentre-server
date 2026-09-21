@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { ArrowLeft } from "lucide-react";
 
 import {
   FilePreviewPanel,
@@ -19,6 +21,10 @@ import type { RelayClient } from "@/lib/relayClient";
  * 面板、标签条与四类视图都在共享包里；这一层只做三件宿主的事：把中继裹成取数
  * 端口、把「这是哪条会话的哪个工作根」交给面板当身份、把「正文来自哪台机器」
  * 交上去。设计源是 `agentre.pen` 的 `B1`：定宽 420，不可拖。
+ *
+ * 移动端（传了 `layer`）改为整屏一层盖住整个会话（规格 2026-09-21-server-mobile-gaps
+ * 决策 2）：顶部返回 + 文件名 + 目录与机器副行，下面是同一块共享面板。层开不开由
+ * 宿主答（见 useFilePreviewLayer），关着时组件仍挂着，Monaco 不必重装。
  */
 export default function SessionFilePreviewColumn({
   sid,
@@ -38,6 +44,7 @@ export default function SessionFilePreviewColumn({
   onClose,
   onCloseOthers,
   onCloseAll,
+  layer,
 }: {
   /** 这条会话的身份。与 cwd 一起构成取数目标的 sourceKey。 */
   sid: string;
@@ -69,7 +76,10 @@ export default function SessionFilePreviewColumn({
   onClose: (path: string) => void;
   onCloseOthers: (path: string) => void;
   onCloseAll: () => void;
+  /** 移动端整屏层：给了就不画 420 列，只在 `shown` 时画整屏一层。 */
+  layer?: { shown: boolean; onBack: () => void };
 }) {
+  const { t } = useTranslation();
   const ports = useMemo(
     () => createFilePreviewPorts({ client, cwd }),
     [client, cwd],
@@ -103,6 +113,78 @@ export default function SessionFilePreviewColumn({
   const sourceKey = `${sid}\n${cwd}`;
 
   if (!activePath) return null;
+  if (layer && !layer.shown) return null;
+
+  const panel = (
+    <FilePreviewPanel
+      tabs={tabs}
+      activePath={activePath}
+      segment={segment}
+      sourceMode="directory"
+      revealTarget={revealTarget}
+      ports={ports}
+      sourceKey={sourceKey}
+      refreshToken={refreshToken}
+      monaco={monaco}
+      deviceName={deviceName}
+      deviceOnline={deviceOnline}
+      onSegmentChange={onSegmentChange}
+      onActivate={onActivate}
+      onPromote={onPromote}
+      onPin={onTogglePin}
+      onClose={onClose}
+      onCloseOthers={onCloseOthers}
+      onCloseAll={onCloseAll}
+    />
+  );
+
+  if (layer) {
+    const slash = activePath.lastIndexOf("/");
+    const name = activePath.slice(slash + 1);
+    // 工作根下的文件没有目录段：它就在工作根里，副行说工作根。
+    const dir = slash > 0 ? activePath.slice(0, slash) : cwd;
+    return (
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={name}
+        data-testid="session-file-preview-layer"
+        // 盖住会话的头部与输入框；会话本身不卸载，转录滚动位置与未发送的文字都留着。
+        className="fixed inset-0 z-50 flex flex-col bg-background pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]"
+      >
+        <header className="flex shrink-0 items-center gap-1 border-b border-border bg-card py-1.5 pl-1 pr-4">
+          <button
+            type="button"
+            aria-label={t("session.filePreviewLayer.back")}
+            onClick={layer.onBack}
+            className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ArrowLeft className="size-5" aria-hidden="true" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h2
+              className="truncate font-mono text-sm font-semibold text-foreground"
+              title={activePath}
+            >
+              {name}
+            </h2>
+            <p
+              data-testid="session-file-preview-layer-subline"
+              className="truncate text-xs text-muted-foreground"
+            >
+              {deviceName
+                ? t("session.filePreviewLayer.location", {
+                    dir,
+                    machine: deviceName,
+                  })
+                : dir}
+            </p>
+          </div>
+        </header>
+        {panel}
+      </section>
+    );
+  }
 
   return (
     <aside
@@ -110,26 +192,7 @@ export default function SessionFilePreviewColumn({
       // 420 定宽、不可拖（上游规格决策 8：详情列 896 = 转录 476 + 预览 420）。
       className="flex w-[420px] shrink-0 flex-col overflow-hidden border-l border-border bg-background"
     >
-      <FilePreviewPanel
-        tabs={tabs}
-        activePath={activePath}
-        segment={segment}
-        sourceMode="directory"
-        revealTarget={revealTarget}
-        ports={ports}
-        sourceKey={sourceKey}
-        refreshToken={refreshToken}
-        monaco={monaco}
-        deviceName={deviceName}
-        deviceOnline={deviceOnline}
-        onSegmentChange={onSegmentChange}
-        onActivate={onActivate}
-        onPromote={onPromote}
-        onPin={onTogglePin}
-        onClose={onClose}
-        onCloseOthers={onCloseOthers}
-        onCloseAll={onCloseAll}
-      />
+      {panel}
     </aside>
   );
 }
