@@ -3,13 +3,13 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/server/mux"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/agentre-hub/agentre-server/internal/api/portforward"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/controller/accountchan_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/agent_session_ctr"
@@ -173,10 +173,11 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	statsCtr := stats_ctr.New()
 	releaseCtr := release_ctr.New()
 	// 端口转发子域链接（spec 2026-09-21-port-forward-subdomain「地址与路由」）：
-	// 归属判定复用 device_svc.Default()（与下面 /fw/ 那条同一个 DeviceLookup 口径），
-	// 分配器留给测试注入；为空时取本进程那份（bootstrap.RegisterDefaults 总会装配
-	// 它——没配 base_domain 的部署也装配，只是 Link 恒回「此刻提供不了端口转发」，
-	// 所以这里不需要 PortForward 那种「未装配即 nil」的额外判空）。
+	// 归属判定复用 device_svc.Default()（与 portforward_ctr.New 那一份同一个
+	// DeviceLookup 口径），分配器留给测试注入；为空时取本进程那份
+	// （bootstrap.RegisterDefaults 总会装配它——没配 base_domain 的部署也装配，只是
+	// Link 恒回「此刻提供不了端口转发」，所以这里不需要 PortForward 那种「未装配即
+	// nil」的额外判空）。
 	portForwardLinks := r.PortForwardLinks
 	if portForwardLinks == nil {
 		portForwardLinks = portforward_svc.DefaultLinks()
@@ -403,33 +404,21 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 推 sync_version / mirror_changed / device_presence。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)
 
-	// 设备端口转发（规格 2026-09-09-console-port-forward-host）：
-	// /fw/<device_id>/<port>/<被转发应用自己的路径>。
+	// /fw/…（规格 2026-09-09-console-port-forward-host 的旧地址：
+	// /fw/<device_id>/<port>/<被转发应用自己的路径>）**直接删除，不留兼容期、不做
+	// 重定向**（规格 2026-09-21-port-forward-subdomain 决策 13）：首发按全新发布处理，
+	// 旧地址里带着设备号和端口，没有存量地址要兼容。
 	//
-	// **只挂 SessionAuth，不挂 CSRF**（决策 5）。本仓其余每一处 SessionAuth 后面都紧
-	// 跟着 CSRF，这是第一处不跟的，理由是被转发的应用自己的写请求不可能带控制台的
-	// CSRF token——挂上就等于禁掉转发下的一切 POST。这条选择把被转发应用放进了控制台
-	// 的同源里，射程（GET 全可达、CSRF 结构性失效、relay ticket 把射程扩到整个账号）
-	// 写在规格的「安全」一节，那里是它唯一的记录处。
+	// 控制台主机上因此不再挂任何 /fw/ 路由。这里仍然显式注册一条通配、直接答 404 的
+	// 处理器，而不是干脆什么都不挂：什么都不挂的话 /fw/… 会落到 internal/web 的 SPA
+	// 兜底上，非 /v1/* 的未命中路径一律 200 + index.html（决策 10 那条「白屏而状态码
+	// 正常」的缺陷源头），/fw/ 曾经是一整段 API 表面，不该悄悄变成一张 SPA 页。显式
+	// 404 让它和其余未绑定的后端路径同一种答法。
 	//
-	// 裸 gin 而不是 mux.Bind：mux.Meta 是 struct tag，装不下通配尾段；而这条路径是裸
-	// 字节转发，本来就没有任何请求 / 响应结构体可声明（Hard invariant）。
-	//
-	// 通配收的是 /fw/ 之下的**全部**形状，形状对不对由控制器判。少收一点（比如
-	// /fw/:device/:port/*rest）的话，/fw/12 会落到 SPA 兜底上拿到 200 + index.html，
-	// 在浏览器里是一张白屏而状态码正常（决策 10）；而 gin 的路由树不允许同一段上既有
-	// :param 又有 *catchAll，想两条都挂是挂不上的。
-	var forwarder portforward_ctr.Forwarder
-	switch {
-	case r.PortForward != nil:
-		forwarder = r.PortForward
-	case portforward_svc.Default() != nil:
-		// 未装配时 Default() 是 nil。**不能**无条件赋给接口：那样得到的是一个非 nil
-		// 的接口装着一个 nil 指针，控制器里那句「没装配」的判据就永远不成立了。
-		forwarder = portforward_svc.Default()
-	}
-	portForwardCtr := portforward_ctr.New(device_svc.Default(), relaySvc, forwarder)
-	g.Group("/", middleware.SessionAuth()).Any(portforward.RoutePattern, portForwardCtr.Forward)
+	// 转发本身改到 <前缀>.<base_domain> 这条子域上（S4 的转发子域调度器，另建路由）；
+	// 借转发入口与渲染失败的逻辑仍在 portforward_ctr.New / portforward_ctr.RenderFailure
+	// 里，供那个调度器调用，这里不再是它们唯一的接线点。
+	g.Any("/fw/*rest", func(c *gin.Context) { c.AbortWithStatus(http.StatusNotFound) })
 
 	return nil
 }

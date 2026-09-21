@@ -27,4 +27,8 @@ var Protocol = protocolversion.Protocol()
 // 能解析出一个版本，空串会被当作版本不匹配拒掉（spec「协议：版本窗口与自报版本」一节，
 // 决策 3）。从下一轮只加字段、不改方法集的改动开始，这里可以让 floor 落后于 Protocol
 // 而不必打断全网；在那之前，两者必须逐字相等，wireversion_test.go 盯着。
-const MinSupported = "0.2.0"
+//
+// 0.3.0：规格 2026-09-21-port-forward-subdomain 把 open 改成按映射 id 定位（决策
+// 10），这条改动不向后兼容——旧的按端口 open 在新设备上已经读不到目标，所以这里必须
+// 跟着 pkg/wire 的那次 pin 一起抬（AGENTS.md「协议版本…」那条 context）。
+const MinSupported = "0.3.0"
