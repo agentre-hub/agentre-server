@@ -300,3 +300,19 @@ func TestListSessions_ReturnsThisAccountsLoginsOnly(t *testing.T) {
 	assert.Positive(t, list[0].CreatedAt)
 	assert.Positive(t, list[0].LastActiveAt)
 }
+
+// 缺省（没有任何人调过 SetSecureCookies）发的是 http 部署下的名字：这是几乎
+// 全部既有测试隐含依赖的状态，也是本地 http 调试的真实状态。
+func TestCookieName_DefaultsToLegacyName(t *testing.T) {
+	s := newSvc()
+	assert.Equal(t, session.CookieName, s.CookieName())
+}
+
+// https 部署下（bootstrap.RegisterDefaults 按 !cfg.InsecureCookies 调一次
+// SetSecureCookies）cookie 名字换成 __Host- 前缀；旧名字不再是 CookieName() 的
+// 答案，读 cookie 的一侧因此再也读不到它——这就是「已有登录被登出一次」的来处。
+func TestCookieName_SecureCookiesUsesHostPrefixedName(t *testing.T) {
+	s := newSvc()
+	s.SetSecureCookies(true)
+	assert.Equal(t, session.HostCookieName, s.CookieName())
+}

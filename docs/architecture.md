@@ -211,6 +211,27 @@ carries no cookie and is exempt, a session caller is not. `/fw/` is the one deli
 exception — a forwarded app's own writes cannot carry the console's token — which is why
 the same-origin exposure it opens is part of the trust boundary described next.
 
+CSRF token possession is not the only judge of a cookie-authenticated write: `middleware.CSRF`
+and the session branch of `SessionOrDeviceAuth` both also require `Sec-Fetch-Site` to be
+`same-origin` or `none`; when a caller omits that header they fall back to `Origin`, which must
+equal one of `allowedOrigins` — `router.go` passes `cfg.WebAuthn.Origins` for both, the same list
+WebAuthn's Relying Party check uses (there is no separate "allowed origins" config). Either
+header missing, or neither matching, answers the same 403 as a missing CSRF token; a Bearer
+caller carries neither header and is unaffected, same as the CSRF token check.
+
+The session cookie's own name depends on the deployment: `auth_svc.AuthSvc.CookieName()` is the
+one place that decides, and every reader (`middleware.sessionPrincipal`, `auth_ctr`,
+`passkey_ctr`, `device_ctr`) and every writer/clearer (`session.SetCookie`/`session.ClearCookie`)
+goes through it — nothing else hardcodes the name. `bootstrap.RegisterDefaults` calls
+`AuthSvc.SetSecureCookies(!cfg.InsecureCookies)` once at startup (the same `InsecureCookies` fact
+that drives `Secure`), so under https it is `session.HostCookieName` (`__Host-server_session` —
+`__Host-` requires `Secure`, `Path=/`, no `Domain`, exactly what `SetCookie` already sends), and
+under http (dev) it stays `session.CookieName` (`server_session`). The old name is never read
+once the new one is in effect, so shipping this once logs out every existing session — an
+accepted, one-time cost. `session.ClearCookie` derives `Secure` from the name's `__Host-` prefix
+rather than taking it as a parameter, because browsers reject a `__Host-` `Set-Cookie` without
+`Secure` — logout must still actually clear the cookie under both deployments.
+
 ### Who the client IP is
 
 Per-IP rate limits (`middleware.byIP`) and the login IP shown in `/account` both read

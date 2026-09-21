@@ -283,7 +283,12 @@ func RegisterDefaults(cfg *ServerConfig) {
 	}))
 
 	store := session.New(redis.Default(), int(cfg.Session.TTL/time.Second))
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), store))
+	authSvc := auth_svc.New(redis.Default(), store)
+	// https 下会话 cookie 换成 __Host- 前缀（session.HostCookieName），是
+	// InsecureCookies 的反面——同一个「浏览器用什么协议访问到我」的事实决定要不要
+	// 带 Secure，也决定发哪个名字。
+	authSvc.SetSecureCookies(!cfg.InsecureCookies)
+	auth_svc.SetDefault(authSvc)
 
 	// 账号闸门：session / device JWT / relay 三条鉴权路径与中继心跳共用的那一处判定。
 	// 没有它，四条路径会退回「凭据有效就放行」，改库封禁只挡得住新的登录。

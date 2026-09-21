@@ -48,6 +48,25 @@ func newAuthTestServer(t *testing.T) *httptest.Server {
 	return server
 }
 
+// newAuthTestServerSecure 是 newAuthTestServer 的「部署在 https 之后」版本：
+// auth_svc 的 CookieName() 换成 session.HostCookieName（bootstrap.RegisterDefaults
+// 按 !cfg.InsecureCookies 调 SetSecureCookies 的同一条线，这里手动接上）。
+func newAuthTestServerSecure(t *testing.T) *httptest.Server {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	testutils.Redis(t)
+	auth := auth_svc.New(redis.Default(), session.New(redis.Default(), 86400))
+	auth.SetSecureCookies(true)
+	auth_svc.SetDefault(auth)
+
+	testMux := muxtest.NewTestMux()
+	require.NoError(t, (&api.RouterDeps{Cfg: &bootstrap.ServerConfig{}}).
+		Router(context.Background(), testMux.Router))
+	server := httptest.NewServer(testMux.IRouter.(*gin.Engine))
+	t.Cleanup(server.Close)
+	return server
+}
+
 // startSession 模拟一次浏览器登录，返回该 session 的 cookie 与配套 CSRF token。
 func startSession(t *testing.T, userID int64) (string, string) {
 	t.Helper()
@@ -62,6 +81,9 @@ func postJSON(t *testing.T, url, sid, csrf string) *http.Response {
 	require.NoError(t, err)
 	req.AddCookie(&http.Cookie{Name: testCookieName, Value: sid})
 	req.Header.Set("X-CSRF-Token", csrf)
+	// 这些用例在模拟控制台自己发的请求：真实浏览器给同源请求带这个头，加固层
+	// （middleware.originOK）据此放行。专门测跨站拒绝的用例自己覆盖这个头。
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -239,6 +261,26 @@ func TestRevokeOtherSessions_EndsTheOthersAndKeepsTheCurrentOne(t *testing.T) {
 
 	dead, _, _ := listSessions(t, server, other)
 	assert.Equal(t, http.StatusUnauthorized, dead.StatusCode, "被登出的浏览器不该再认得出身份")
+}
+
+// 加固：即便出示了合法的 CSRF token，跨站发起的写请求也要被拦下——Sec-Fetch-Site
+// 是与 CSRF token 分开的第二道判据，两个都要满足（router.go 的
+// SessionAuth()+CSRF() 组）。
+func TestRevokeOtherSessions_RejectsCrossSiteOrigin(t *testing.T) {
+	server := newAuthTestServer(t)
+	const uid = 7106
+	sid, csrf := startSessionWithClient(t, uid, session.Client{UserAgent: "chrome", IP: "203.0.113.9"})
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/auth/sessions/revoke-others", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.AddCookie(&http.Cookie{Name: testCookieName, Value: sid})
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 // 向 Me 返回的数据里编入 github_login：从 user_identities.provider_login 读出来。
@@ -448,4 +490,51 @@ func TestGithubCallback_RateLimitByIP(t *testing.T) {
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
 	assert.NotEmpty(t, resp.Header.Get("Retry-After"), "应该带 Retry-After 头")
+}
+
+// https 部署下旧名字（session.CookieName，即 "server_session"）的 cookie 不再被
+// 读取——上线后已有的登录会被登出一次，这是已知代价；session.HostCookieName
+// （__Host-server_session）才认得出。
+func TestUnderHTTPS_SessionCookie_OldNameNotReadNewNameWorks(t *testing.T) {
+	server := newAuthTestServerSecure(t)
+	sid, _ := startSession(t, 8101)
+
+	oldNameReq, err := http.NewRequest(http.MethodGet, server.URL+"/v1/auth/sessions", nil)
+	require.NoError(t, err)
+	oldNameReq.AddCookie(&http.Cookie{Name: session.CookieName, Value: sid})
+	oldNameResp, err := http.DefaultClient.Do(oldNameReq)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = oldNameResp.Body.Close() })
+	assert.Equal(t, http.StatusUnauthorized, oldNameResp.StatusCode,
+		"https 下旧名字的 cookie 不该再被认出")
+
+	newNameReq, err := http.NewRequest(http.MethodGet, server.URL+"/v1/auth/sessions", nil)
+	require.NoError(t, err)
+	newNameReq.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: sid})
+	newNameResp, err := http.DefaultClient.Do(newNameReq)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = newNameResp.Body.Close() })
+	assert.Equal(t, http.StatusOK, newNameResp.StatusCode, "新名字应该认得出同一次登录")
+}
+
+// 登出必须真的清掉 __Host- 前缀的 cookie：浏览器只认带 Secure 的 Set-Cookie
+// 删除指令，session.ClearCookie 按名字反推 Secure（pkg/session/cookie.go）。
+func TestUnderHTTPS_Logout_ClearsHostPrefixedCookieWithSecure(t *testing.T) {
+	server := newAuthTestServerSecure(t)
+	sid, csrf := startSession(t, 8102)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/auth/logout", strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.AddCookie(&http.Cookie{Name: session.HostCookieName, Value: sid})
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	setCookie := resp.Header.Get("Set-Cookie")
+	assert.Contains(t, setCookie, session.HostCookieName+"=")
+	assert.Contains(t, setCookie, "Secure")
 }

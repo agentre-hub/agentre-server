@@ -108,7 +108,7 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnSessionBranch(t *testing.T) 
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.AddCookie(cookie)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.SessionOrDeviceAuth(bearertest.Resolver{})).ServeHTTP(w, req)
+	gatedRoute(middleware.SessionOrDeviceAuth(bearertest.Resolver{}, nil)).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
@@ -123,7 +123,7 @@ func TestSessionOrDeviceAuth_BannedAccountRejectedOnBearerBranch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/me", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	w := httptest.NewRecorder()
-	gatedRoute(middleware.SessionOrDeviceAuth(bearertest.Resolver{})).ServeHTTP(w, req)
+	gatedRoute(middleware.SessionOrDeviceAuth(bearertest.Resolver{}, nil)).ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), bannedCode())
