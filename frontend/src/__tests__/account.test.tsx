@@ -705,3 +705,97 @@ describe("Account page: registering a passkey performs the WebAuthn ceremony cor
     expect(names[0]).toContain("My New Key");
   });
 });
+
+describe("Account page: mobile layout on 390px screen", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function mockMobileViewport() {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  beforeEach(() => {
+    mockMobileViewport();
+    mockedApi.mockReset();
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    vi.restoreAllMocks();
+  });
+
+  it("displays email completely on mobile without truncation", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    const page = await screen.findByTestId("account-page");
+    const emailElement = within(page).getByText("lin.wei@example.com");
+    // Email should be fully visible, not truncated on mobile
+    expect(emailElement.className).not.toContain("truncate");
+    expect(emailElement.textContent).toBe("lin.wei@example.com");
+  });
+
+  // 此前这一条只断言值所在的 div 带 flex 或 grid——桌面那一档同样满足，什么也没锚住。
+  // 换成移动端真正改了的那一处：GitHub 登录名与邮箱一样不截断，且各自与标签同一行。
+  it("displays the GitHub login completely next to its label on mobile", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    const page = await screen.findByTestId("account-page");
+    const login = within(page).getByText("linwei");
+    expect(login.tagName).toBe("DD");
+    expect(login.className).not.toContain("truncate");
+    expect(login.previousElementSibling?.textContent).toBe("GitHub");
+  });
+
+  it("displays session login time, last activity, and IP on separate lines on mobile", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    // Expand first session row to see the times
+    const desktopButton = (await screen.findByText(UA_DESKTOP)).closest(
+      "button",
+    ) as HTMLElement;
+    fireEvent.click(desktopButton);
+
+    // IP should be visible and not truncated
+    const ipElement = within(desktopButton).getByText("203.0.113.24");
+    expect(ipElement).toBeTruthy();
+
+    // All time components should be in the DOM (not truncated away)
+    expect(within(desktopButton).getByText(/Signed in/)).toBeTruthy();
+    expect(within(desktopButton).getByText(/Last active/)).toBeTruthy();
+
+    // The times and IP container should not have truncate class on mobile
+    const timesContainer = ipElement.parentElement;
+    expect(timesContainer?.className).not.toContain("truncate");
+  });
+
+  it("displays passkey created and last-used times with wrapping on mobile", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    await screen.findByTestId("account-page");
+    // The passkey metadata line should not be truncated on mobile
+    const passkeyLines = screen.getAllByText(/Added|Last used|Never used/i);
+    expect(passkeyLines.length).toBeGreaterThan(0);
+
+    // Find a passkey meta line
+    const metaLine = passkeyLines[0];
+    expect(metaLine.className).not.toContain("truncate");
+    // Full content should be visible
+    expect(metaLine.textContent).toBeTruthy();
+  });
+});

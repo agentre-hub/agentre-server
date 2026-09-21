@@ -912,6 +912,46 @@ describe("overview: 移动端", () => {
     expect(grid.className).not.toContain("overflow-x-scroll");
   });
 
+  /**
+   * 手指会挡住浮层：窄屏下热力图的读数换成图下方固定的一行，点一格更新一次
+   * （设计决策 8）。宽屏悬停那条既有覆盖没变，这里只补移动端这条新路径。
+   */
+  it("窄屏点一格热力格子：固定行报出日期、星期与条数；0 条时说没有对话", async () => {
+    setViewport(true);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Tap a cell to see that day",
+    );
+
+    // 默认响应里 2026-08-28（周五）有 11 条，2026-08-26（周三）不在 days 列表里，
+    // 落在 to 之前，算 0 条。
+    const busyCell = document.querySelector('[data-day="2026-08-28"]');
+    expect(busyCell).not.toBeNull();
+    fireEvent.click(busyCell as HTMLElement);
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 28, 2026 (Fri) · 11 conversations",
+    );
+
+    const idleCell = document.querySelector('[data-day="2026-08-26"]');
+    expect(idleCell).not.toBeNull();
+    fireEvent.click(idleCell as HTMLElement);
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 26, 2026 (Wed) · No conversations",
+    );
+  });
+
+  it("宽屏不画那一行固定读数：悬停行为照旧", async () => {
+    setViewport(false);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.queryByTestId("heatmap-readout")).toBeNull();
+  });
+
   it("桌面/移动重排：统计 2 列→4 列，分布行纵向→横向，右列满宽→300px", async () => {
     serve();
     renderOverview();

@@ -230,6 +230,28 @@ export default function Org() {
   const initialLoading = loading && !chart;
   const initialFailed = error !== null && !chart;
 
+  // 同一条错误，两个落点：索引底部（桌面、以及移动端回到索引后）与详情头下方
+  // （移动端正看详情时，见下面传给两个详情组件的 alert 槽）。落点由「当前这一屏
+  // 是哪个」决定，不是两处都画——两列在移动端本就一次只挂一个（showIndex /
+  // showDetail），所以只要各自的宿主只在自己那一档渲染这条文案，就天然不会重复。
+  const alertMessage = initialFailed
+    ? null
+    : error
+      ? t("org.errors.generic")
+      : mutationError || null;
+  // 只在移动端且真的在看详情（不是骨架/失败态）时才递下去——两个详情组件把它摆在
+  // 自己的头部下方（OrgDetailHeader 之后、正文之前）；桌面端不传，桌面的这条错误
+  // 只在索引底部那一处出现，形态不变。
+  const detailAlert =
+    isMobile && alertMessage ? (
+      <p
+        role="alert"
+        className="border-b border-border p-2.5 text-2xs text-destructive"
+      >
+        {alertMessage}
+      </p>
+    ) : undefined;
+
   return (
     /* 两栏要顶到主区的四条边，所以壳整块交出来（flush，与 Chat / Issues 同）。
        此前是壳照常留 padding、这里再用 `-mx-4 -my-5` 去抵消：横向凑巧对得上，
@@ -290,6 +312,7 @@ export default function Org() {
                 maps={models.maps}
                 selection={numericSelection}
                 onSelect={handleSelect}
+                isMobile={isMobile}
                 onCreateDepartment={(parentDepartmentId) =>
                   openCreateDepartment(
                     parentDepartmentId
@@ -304,12 +327,12 @@ export default function Org() {
                 }
               />
             )}
-            {!initialFailed && (error ?? mutationError) && (
+            {alertMessage && (
               <p
                 role="alert"
                 className="border-t border-border p-2.5 text-2xs text-destructive"
               >
-                {error ? t("org.errors.generic") : mutationError}
+                {alertMessage}
               </p>
             )}
           </div>
@@ -318,7 +341,15 @@ export default function Org() {
         {showDetail && (
           <div
             data-testid="org-detail-col"
-            className="flex min-w-0 flex-1 flex-col"
+            className={cn(
+              "flex min-w-0 flex-1 flex-col",
+              // 移动端一次只摆一页，父容器是 flex-col：不给 min-h-0，这一列的默认
+              // min-height:auto 会顶开父容器（内容多高它就多高），文档本身跟着滚，
+              // 详情自己的 overflow-y-auto 反而不起作用。桌面端是 flex-row，交叉轴
+              // 由 h-full 的父容器 stretch 决定，这一条本来就不生效，加不加都一样，
+              // 但只在移动端加，行为判据与索引列那一档（min-h-0 flex-1）对齐。
+              isMobile && "min-h-0",
+            )}
           >
             {initialFailed ? (
               <div
@@ -390,6 +421,7 @@ export default function Org() {
                 onReload={() => void reload()}
                 onBack={isMobile ? () => setSelection(null) : undefined}
                 onClose={() => setSelection(null)}
+                alert={detailAlert}
               />
             ) : selectedDepartment && selectedDepartmentModel ? (
               <OrgDepartmentDetail
@@ -399,6 +431,7 @@ export default function Org() {
                 agents={models.agents}
                 departments={models.departments}
                 maps={models.maps}
+                alert={detailAlert}
                 onUpdate={(fields) =>
                   runFieldUpdate(async () => {
                     await writes.updateDepartment(

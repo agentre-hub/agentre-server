@@ -25,7 +25,9 @@
       "addAgent": "新建 Agent"
     },
     "newDepartment": "新建部门",
-    "newAgent": "新建 Agent"
+    "newAgent": "新建 Agent",
+    "newTopLevelDepartment": "新建顶层部门",
+    "addMenuAria": "新建 Agent 或部门"
   },
   "detail": {
     "columns": {

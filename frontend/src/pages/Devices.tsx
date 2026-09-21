@@ -558,7 +558,7 @@ function DeviceRow({
             />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden="true"
                 className={cn(
@@ -566,7 +566,12 @@ function DeviceRow({
                   statusDotClass(d),
                 )}
               />
-              <span className="truncate text-sm font-medium text-foreground">
+              <span
+                className={cn(
+                  "text-sm font-medium text-foreground",
+                  isExpanded ? "min-w-0 break-words" : "truncate",
+                )}
+              >
                 {name}
               </span>
               <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
@@ -634,6 +639,9 @@ function DeviceRow({
               locale={locale}
               onRetry={onRetryDetail}
             />
+            {subRow && (
+              <span className="text-xs text-muted-foreground">{subRow}</span>
+            )}
           </div>
         )}
       </Card>

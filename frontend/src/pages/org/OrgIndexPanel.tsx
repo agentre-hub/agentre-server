@@ -59,6 +59,10 @@ export interface OrgIndexPanelProps {
   maps: OrgIdMaps;
   selection: OrgSelection;
   onSelect: (selection: OrgSelection) => void;
+  /** 移动端工具条「+」改成两项菜单（新建 Agent / 新建顶层部门）：桌面空详情区
+   * 那两个按钮在移动端没有落点，菜单不增加工具栏宽度（决策 5）。桌面端不变，
+   * 仍是点一下直接新建 Agent。 */
+  isMobile: boolean;
   /** 不带 id = 顶层部门；带 id = 挂在那个部门下的子部门。 */
   onCreateDepartment: (parentDepartmentId?: number) => void;
   /** 不带 id = 由对话框自己挑部门；带 id = 直接落在那个部门里。 */
@@ -219,16 +223,46 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
               },
             ]}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("org.index.newAgent")}
-            title={t("org.index.newAgent")}
-            onClick={() => props.onCreateAgent()}
-          >
-            <Plus className="size-4" aria-hidden="true" />
-          </Button>
+          {props.isMobile ? (
+            // 桌面那两个空详情区按钮（新建部门 / 新建 Agent）移动端没有落点——
+            // 详情区此刻要么不存在（没选中，索引升整页）要么被选中行占满。工具条
+            // 「+」因此在移动端多担一层：不再直接建 Agent，而是先弹两项菜单。
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("org.index.addMenuAria")}
+                  title={t("org.index.addMenuAria")}
+                  data-testid="org-index-add-trigger"
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => props.onCreateAgent()}>
+                  <Plus className="size-3" aria-hidden="true" />
+                  {t("org.index.newAgent")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => props.onCreateDepartment()}>
+                  <FolderPlus className="size-3" aria-hidden="true" />
+                  {t("org.index.newTopLevelDepartment")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("org.index.newAgent")}
+              title={t("org.index.newAgent")}
+              onClick={() => props.onCreateAgent()}
+            >
+              <Plus className="size-4" aria-hidden="true" />
+            </Button>
+          )}
         </div>
         {filterChips.length > 0 && (
           <div
