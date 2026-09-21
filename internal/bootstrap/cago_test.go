@@ -172,6 +172,18 @@ func TestRegisterDefaults_InstallsPortForwardPool(t *testing.T) {
 	assert.NotNil(t, portforward_svc.Default(), "RegisterDefaults 必须装配端口转发连接池")
 }
 
+// 转发登录同一个失败模式：没人装配时 DefaultForwardAuth() 是 nil，路由层据此把
+// 每一个转发请求都答成「此刻提供不了」——生产上配了 base_domain 也用不了。
+func TestRegisterDefaults_InstallsPortForwardAuth(t *testing.T) {
+	testutils.Redis(t)
+	portforward_svc.SetDefaultForwardAuth(nil)
+	t.Cleanup(func() { portforward_svc.SetDefaultForwardAuth(nil) })
+
+	RegisterDefaults(&ServerConfig{})
+
+	assert.NotNil(t, portforward_svc.DefaultForwardAuth(), "RegisterDefaults 必须装配转发登录")
+}
+
 // RP ID 与允许的 origin 缺省由 public_url 推导：绝大多数部署前后端同域同端口，
 // 让它们多写一遍纯属找错。
 func TestLoadServerConfig_WebAuthnDefaultsDeriveFromPublicURL(t *testing.T) {

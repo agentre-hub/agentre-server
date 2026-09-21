@@ -122,13 +122,19 @@ func (l *Links) Link(ctx context.Context, userID, deviceID, mappingID int64) (*L
 	}
 }
 
-func (l *Links) toLink(row *portforward_link_entity.PortForwardLink) *Link {
-	return &Link{Prefix: row.Prefix, URL: l.forwardURL(row.Prefix)}
+// FindByPrefix 按前缀反查那一行（S4 的 Host 分发），查不到返回 (nil, nil)。前缀归不
+// 归当前账号由调用方拿行上的 UserID 判。
+func (l *Links) FindByPrefix(ctx context.Context, prefix string) (*portforward_link_entity.PortForwardLink, error) {
+	return l.repo.FindByPrefix(ctx, prefix)
 }
 
-// forwardURL 拼出 "<前缀>.<BaseDomain>" 的完整地址：scheme 与端口跟着 PublicURL
+func (l *Links) toLink(row *portforward_link_entity.PortForwardLink) *Link {
+	return &Link{Prefix: row.Prefix, URL: l.ForwardURL(row.Prefix)}
+}
+
+// ForwardURL 拼出 "<前缀>.<BaseDomain>" 的完整地址：scheme 与端口跟着 PublicURL
 // 走（spec「配置」），端口留空则回落到 scheme 的缺省端口（url.URL 的通常语义）。
-func (l *Links) forwardURL(prefix string) string {
+func (l *Links) ForwardURL(prefix string) string {
 	scheme := "http"
 	var port string
 	if pub, err := url.Parse(l.cfg.PublicURL); err == nil && pub.Scheme != "" {

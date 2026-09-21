@@ -137,3 +137,25 @@ func TestLink_GivenNoBaseDomain_ReturnsUnavailableWithoutTouchingTheRepo(t *test
 	assert.Equal(t, code.PortForwardLinksUnavailable, he.Code)
 	assert.Equal(t, http.StatusServiceUnavailable, he.Status)
 }
+
+// Host 分发按前缀反查那一行（S4）：查到交回，查不到交回 nil，不当成错误。
+func TestFindByPrefix_ReturnsTheRowOrNil(t *testing.T) {
+	l, repo := newLinksForTest(t, LinkConfig{BaseDomain: "fw.agentrehub.com", PublicURL: "https://app.agentrehub.com"})
+	row := &portforward_link_entity.PortForwardLink{Prefix: "abcdefghijkl", UserID: 7, DeviceID: 12, MappingID: 3}
+	repo.EXPECT().FindByPrefix(gomock.Any(), "abcdefghijkl").Return(row, nil)
+	repo.EXPECT().FindByPrefix(gomock.Any(), "mnopqrstuvwx").Return(nil, nil)
+
+	got, err := l.FindByPrefix(context.Background(), "abcdefghijkl")
+	require.NoError(t, err)
+	assert.Equal(t, row, got)
+
+	got, err = l.FindByPrefix(context.Background(), "mnopqrstuvwx")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+// 授权回跳要拼的是同一个地址：ForwardURL 与分配结果里的 URL 是同一个串。
+func TestForwardURL_IsTheSameAddressTheLinkCarries(t *testing.T) {
+	l, _ := newLinksForTest(t, LinkConfig{BaseDomain: "fw.agentre.docker.local", PublicURL: "http://docker.local:8443"})
+	assert.Equal(t, "http://abcdefghijkl.fw.agentre.docker.local:8443/", l.ForwardURL("abcdefghijkl"))
+}

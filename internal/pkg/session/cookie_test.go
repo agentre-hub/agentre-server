@@ -40,3 +40,10 @@ func TestClearCookie_LegacyName_OmitsSecure(t *testing.T) {
 	assert.Contains(t, set, CookieName+"=")
 	assert.NotContains(t, set, "Secure")
 }
+
+// 转发票的名字跟控制台会话 cookie 同一条规矩（规格「转发登录」第 4 步）：https 下
+// 带 __Host- 前缀，http（dev）下不带。
+func TestForwardCookieName_FollowsTheHTTPSDecision(t *testing.T) {
+	assert.Equal(t, "__Host-agentre_fw", ForwardCookieName(true))
+	assert.Equal(t, "agentre_fw", ForwardCookieName(false))
+}

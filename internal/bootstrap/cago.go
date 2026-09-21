@@ -332,6 +332,10 @@ func RegisterDefaults(cfg *ServerConfig) {
 		portforward_svc.LinkConfig{BaseDomain: cfg.PortForward.BaseDomain, PublicURL: cfg.PublicURL},
 		portforward_link_repo.Link(),
 	))
+	// 转发登录（spec「转发登录」）：授权码与转发会话都在 Redis；转发会话依附控制台
+	// 会话，存活判据就是上面那份会话存储。寿命上限取控制台会话的 TTL——每次使用都还要
+	// 过「控制台会话还在」这一关，这个值只是兜底。
+	portforward_svc.SetDefaultForwardAuth(portforward_svc.NewForwardAuth(redis.Default(), store, cfg.Session.TTL))
 
 	// 控制台的 latest 来源（决策 12）：Enabled=false 时 Pull 与 Latest 都恒回
 	// 「不关心/不知道」，装配与否不影响这一点——这里始终装配，只是配置决定它会不会

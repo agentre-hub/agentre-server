@@ -37,3 +37,18 @@ func ClearCookie(c *gin.Context, name string) {
 	secure := strings.HasPrefix(name, "__Host-")
 	c.SetCookie(name, "", -1, "/", "", secure, true)
 }
+
+// forwardCookieBase 是端口转发票的基础名（规格 2026-09-21-port-forward-subdomain
+// 「转发登录」第 4 步）。它写在 <前缀>.<base_domain> 上、host-only，与控制台会话
+// cookie 永远不在同一个 host 上相遇。
+const forwardCookieBase = "agentre_fw"
+
+// ForwardCookieName 是转发票这次部署该用的名字：https 下带 __Host- 前缀（浏览器保证
+// 同站的兄弟子域种不进来），http（dev）下不带——与 auth_svc.CookieName() 同一个判据
+// （PublicURL 的 scheme），SetCookie / ClearCookie 据此给出匹配的 Secure。
+func ForwardCookieName(secure bool) string {
+	if secure {
+		return "__Host-" + forwardCookieBase
+	}
+	return forwardCookieBase
+}

@@ -57,6 +57,12 @@ type RouterDeps struct {
 	// 与 PortForward 上面那份约定同形，只是这一份不会是 nil（没配 base_domain 的
 	// 部署仍然装配它，只是 Link 恒回「此刻提供不了端口转发」）。
 	PortForwardLinks portforward_ctr.LinkAllocator
+	// PortForwardPrefixes 按前缀反查链接、拼转发地址（转发子域的 Host 分发与
+	// authorize 用）。留给测试注入；为空时取 portforward_svc.DefaultLinks()。
+	PortForwardPrefixes portforward_ctr.PrefixResolver
+	// PortForwardAuth 是转发登录（一次性授权码与转发会话，spec「转发登录」）。留给
+	// 测试注入；为空时取 portforward_svc.DefaultForwardAuth()。
+	PortForwardAuth portforward_ctr.ForwardSessions
 	// Redis 是鉴权中间件要用的那台：中继票据「只连一次」的认领记号从它派生。
 	// 留给测试注入自己那台；为空时取全局默认单例（与上面两项同一约定）。
 	Redis *goredis.Client
@@ -123,6 +129,13 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if err := trustProxies(root, r.Cfg.TrustedProxies); err != nil {
 		return err
 	}
+	// 转发子域的 Host 分发必须是整棵树上**第一个**装上的东西（spec「按 Host 分发」）：
+	// gin 在注册路由时把当下的全局中间件拼进那条路由的处理链，Use 之后注册的每一条
+	// 控制台路由、以及 SPA 兜底（NoRoute，Use 会重建它的处理链）都先经过它；转发
+	// Host 上的请求在这里整条处理完并 Abort，轮不到 SessionAuth、CSRF 或 SPA。
+	portForwardHost := r.portForwardHost()
+	root.IRouter.(*gin.Engine).Use(portForwardHost.Dispatch)
+
 	g := root.Group("/")
 
 	healthzCtr := healthz_ctr.NewHealthz()
@@ -420,5 +433,51 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 里，供那个调度器调用，这里不再是它们唯一的接线点。
 	g.Any("/fw/*rest", func(c *gin.Context) { c.AbortWithStatus(http.StatusNotFound) })
 
+	// 转发登录第 2、3 步：控制台上签发一次性授权码。裸 gin 而不是 mux.Bind——它答的是
+	// 浏览器顶层导航的 302，不是 JSON；没登录时要跳登录页而不是 401，所以鉴权在控制器
+	// 里自己判（与 SessionAuth 同一套判据）。GET，不过 CSRF。
+	g.GET(portforward_ctr.AuthorizePath, portForwardHost.Authorize)
+
 	return nil
+}
+
+// portForwardHost 装配转发子域的控制器：注入的优先，其余取本进程默认那份。
+//
+// 三处 Default() 在未装配时是 nil 指针，**不能**无条件赋给接口：那样得到的是一个
+// 非 nil 的接口装着 nil 指针，控制器里「没装配」的判据就永远不成立了。
+func (r *RouterDeps) portForwardHost() *portforward_ctr.Host {
+	var forwarder portforward_ctr.Forwarder
+	switch {
+	case r.PortForward != nil:
+		forwarder = r.PortForward
+	case portforward_svc.Default() != nil:
+		forwarder = portforward_svc.Default()
+	}
+	var prefixes portforward_ctr.PrefixResolver
+	switch {
+	case r.PortForwardPrefixes != nil:
+		prefixes = r.PortForwardPrefixes
+	case portforward_svc.DefaultLinks() != nil:
+		prefixes = portforward_svc.DefaultLinks()
+	}
+	var sessions portforward_ctr.ForwardSessions
+	switch {
+	case r.PortForwardAuth != nil:
+		sessions = r.PortForwardAuth
+	case portforward_svc.DefaultForwardAuth() != nil:
+		sessions = portforward_svc.DefaultForwardAuth()
+	}
+	relaySvc := r.Relay
+	if relaySvc == nil {
+		relaySvc = relay_svc.Default()
+	}
+	return portforward_ctr.NewHost(
+		portforward_ctr.New(device_svc.Default(), relaySvc, forwarder),
+		prefixes, sessions,
+		portforward_ctr.HostConfig{
+			BaseDomain:      r.Cfg.PortForward.BaseDomain,
+			PublicURL:       r.Cfg.PublicURL,
+			InsecureCookies: r.Cfg.InsecureCookies,
+		},
+	)
 }
