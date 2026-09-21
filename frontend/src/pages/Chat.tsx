@@ -1083,7 +1083,12 @@ export default function Chat() {
   }
 
   return (
-    <AppShell flush ownHeader>
+    <AppShell
+      flush
+      ownHeader
+      // 新对话草稿与会话详情同一种沉浸形态（决策 3）：底部 tab 也让出来，只剩草稿自己那层头部。
+      immersive={isMobile && compose?.step === "draft"}
+    >
       {isMobile &&
       (compose?.step === "draft" || compose?.step === "project") ? (
         /* 窄屏没有第二栏可用：这两步各占一整屏，返回回到底部弹层那一步。 */

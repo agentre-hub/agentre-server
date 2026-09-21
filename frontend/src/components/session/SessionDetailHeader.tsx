@@ -19,7 +19,9 @@ import {
   type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
 
+import AppShell from "@/components/AppShell";
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
+import { useIsMobile } from "@/components/use-is-mobile";
 import type { RelayClient } from "@/lib/relayClient";
 import {
   formatRelativeTime,
@@ -34,6 +36,12 @@ export interface SessionDetailHeaderProps {
    * 就在旁边，没有可返回的地方。
    */
   isPage: boolean;
+  /**
+   * 移动端整屏（沉浸形态，规格 2026-09-21-server-mobile-gaps 决策 3）：壳的顶栏与底部
+   * tab 都不画，头部合成**一层**——返回 · 两行标题 · 副行「Agent · 项目 · 机器与在线
+   * · 时间」· 右端控件。只在 `isPage` 时有意义；桌面的整屏形态仍是返回行 + 身份行。
+   */
+  immersive?: boolean;
   /** 返回行回到哪：宿主的会话列表地址（带着进来时的范围）。不给就回 `/chat`。 */
   backTo?: string;
   sid: string;
@@ -98,8 +106,63 @@ export interface SessionDetailHeaderProps {
  * 「这一轮停不停得下来」整片归它：`aborting` 与 `abortTurn` 除了这颗按钮没有第二
  * 个读者。
  */
+/** 回到对话列表的那一格。整屏形态的返回行、沉浸形态的头部、以及还没有头部可画的那几态共用。 */
+export function SessionBackLink({
+  to,
+  className,
+}: {
+  to?: string;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Link
+      to={to ?? "/chat"}
+      aria-label={t("session.breadcrumb.back")}
+      className={cn(
+        "flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+        className,
+      )}
+    >
+      <ArrowLeft className="size-5" aria-hidden="true" />
+    </Link>
+  );
+}
+
+/**
+ * 整屏形态里还没有头部可画的那几态（认机器中 / 找不到 / 读不到 / 机器名单取不到）的壳。
+ *
+ * 移动端这几态同样走沉浸形态（决策 3）：顶栏与底部 tab 都不在，于是返回得自己摆，
+ * 否则装成 PWA 的用户会困在一屏「找不到」上。返回那一格与落地后头部里的同高同位，
+ * 认出来之后换成真头部时它不跳。桌面照旧是带顶栏的壳。
+ */
+export function SessionPageStateShell({
+  backTo,
+  children,
+}: {
+  backTo?: string;
+  children: ReactNode;
+}) {
+  const isMobile = useIsMobile();
+  if (!isMobile) return <AppShell>{children}</AppShell>;
+  return (
+    <AppShell flush immersive>
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex h-[68px] shrink-0 items-center border-b border-border bg-card px-5">
+          <SessionBackLink to={backTo} className="-ml-2" />
+        </div>
+        {/* 与非 flush 壳的主区同一副内边距与滚动：这几态原本就排在那里面。 */}
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 py-5">
+          {children}
+        </div>
+      </div>
+    </AppShell>
+  );
+}
+
 export default function SessionDetailHeader({
   isPage,
+  immersive = false,
   backTo,
   sid,
   identity,
@@ -186,13 +249,61 @@ export default function SessionDetailHeader({
   /** mono meta 行的各段。只有拿得出来的才进来（分隔符由顶带夹在两段之间）。 */
   /** `hideAt` = 窄档先收哪一段（决策 4）。收起的那一段在别处还说得出。 */
   const metaParts: SessionHeaderMetaPart[] = [];
+  /*
+    沉浸形态的副行：窄屏上**截断而不收起**。容器查询那几档 `hidden` 会把项目与机器
+    从可访问树里整段拿掉，而这一层就是它们在这一屏唯一的出处（返回行没了）。每一段
+    的内容都 min-w-0 + 自己截断：此前内层是 shrink-0，外层那一格收窄时内容顶出去，
+    压到下一段上（Agent 名与「19分钟前」互相盖住）。顺序照规格：Agent → 项目 →
+    机器与在线，时间殿后、最先被截。
+  */
+  const oneRow = isPage && immersive;
+  const machinePart: SessionHeaderMetaPart | null = machineName
+    ? {
+        key: "machine",
+        // 桌面最先收：机器名在返回行与设备页里都还在，这一行不是它唯一的出处。
+        hideAt: oneRow ? undefined : "@max-[560px]/header:hidden",
+        node: (
+          <span
+            className={cn(
+              "inline-flex items-center gap-1",
+              oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
+            )}
+          >
+            <Monitor
+              aria-hidden="true"
+              className={cn("size-3", oneRow && "shrink-0")}
+            />
+            {oneRow ? (
+              <span className="truncate">{machineName}</span>
+            ) : (
+              machineName
+            )}
+            <span
+              className={cn(
+                oneRow && "shrink-0",
+                machineOnline === false
+                  ? "text-muted-foreground"
+                  : "text-status-running-text",
+              )}
+            >
+              {machineOnline === false
+                ? t("session.breadcrumb.offline")
+                : t("session.breadcrumb.online")}
+            </span>
+          </span>
+        ),
+      }
+    : null;
   if (identity?.lifecycleState || agent || running || decisionPending) {
     metaParts.push({
       key: "agent",
       node: (
         <span
           data-testid="session-detail-status"
-          className="inline-flex shrink-0 items-center gap-1"
+          className={cn(
+            "inline-flex items-center gap-1",
+            oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
+          )}
         >
           {(identity?.lifecycleState || running || decisionPending) && (
             <StatusDot status={toAgentStatus(statusNow)} size="xs" />
@@ -200,8 +311,15 @@ export default function SessionDetailHeader({
           {/* 状态不只靠颜色：四个态都有可见文字（session.list.*）。Agent 名**问过之后**
               仍认不出来时（老会话没有 agentSyncId、或它已不在账号里）退回状态文字，
               不填占位名；还没问出来（agentPending）则闭嘴等，见那个 prop 的说明。 */}
-          {agent?.name ??
-            (agentPending ? "" : sessionStatusLabel(statusNow, t))}
+          {oneRow ? (
+            <span className="truncate">
+              {agent?.name ??
+                (agentPending ? "" : sessionStatusLabel(statusNow, t))}
+            </span>
+          ) : (
+            (agent?.name ??
+            (agentPending ? "" : sessionStatusLabel(statusNow, t)))
+          )}
         </span>
       ),
     });
@@ -211,9 +329,14 @@ export default function SessionDetailHeader({
       key: "project",
       // 机器之后收（决策 4）：项目在左栏索引的行上还说得出（RowSecondaryLine 的
       // project 那一段），断点与桌面端 chat-panel-header 的 topline 取同一个。
-      hideAt: "@max-[420px]/header:hidden",
+      hideAt: oneRow ? undefined : "@max-[420px]/header:hidden",
       node: (
-        <span className="inline-flex min-w-0 items-center gap-1">
+        <span
+          className={cn(
+            "inline-flex min-w-0 items-center gap-1",
+            oneRow && "overflow-hidden",
+          )}
+        >
           {/* 项目在索引里只有**一枚**字形（组头 24px、行首 14px、时间轴第二行
               那一半都是它）。头部是第四处，画一枚通用文件夹就会让同一个项目在
               左栏与这里长成两个样子。尺寸取行里那一档，与旁边的 mono 小字齐。 */}
@@ -228,43 +351,21 @@ export default function SessionDetailHeader({
       ),
     });
   }
+  if (oneRow && machinePart) metaParts.push(machinePart);
   if (identity?.lastMessageAt) {
     metaParts.push({
       key: "updated",
       node: (
         <time
           dateTime={new Date(identity.lastMessageAt).toISOString()}
-          className="shrink-0"
+          className={oneRow ? "min-w-0 truncate" : "shrink-0"}
         >
           {formatRelativeTime(identity.lastMessageAt, i18n.language)}
         </time>
       ),
     });
   }
-  if (machineName) {
-    metaParts.push({
-      key: "machine",
-      // 最先收：机器名在返回行与设备页里都还在，这一行不是它唯一的出处。
-      hideAt: "@max-[560px]/header:hidden",
-      node: (
-        <span className="inline-flex shrink-0 items-center gap-1">
-          <Monitor aria-hidden="true" className="size-3" />
-          {machineName}
-          <span
-            className={
-              machineOnline === false
-                ? "text-muted-foreground"
-                : "text-status-running-text"
-            }
-          >
-            {machineOnline === false
-              ? t("session.breadcrumb.offline")
-              : t("session.breadcrumb.online")}
-          </span>
-        </span>
-      ),
-    });
-  }
+  if (!oneRow && machinePart) metaParts.push(machinePart);
 
   return (
     <div
@@ -274,24 +375,20 @@ export default function SessionDetailHeader({
       // 两种形态的外层不同高：整屏形态要在身份行之上再摆一行返回行，所以是
       // 「返回行 + 身份行」两段加一圈内边距；嵌入形态没有返回行，外层就**是**那条
       // 68px 顶带 —— 此前它照样带着那圈 `py-2.5`，把 68 撑成 89，什么都没多装。
+      //
+      // 沉浸形态只有那一条 68px 的带（返回收进它的 leading 槽），与嵌入形态同高。
       className={cn(
         "relative flex shrink-0 flex-col border-b border-border bg-card px-5",
-        isPage ? "gap-2 py-2.5" : "h-[68px]",
+        isPage && !oneRow ? "gap-2 py-2.5" : "h-[68px]",
       )}
     >
-      {isPage && (
+      {isPage && !oneRow && (
         /* 整屏形态的返回行（屏 22）：返回列表 + 机器名与在线状态。 */
         <nav
           aria-label={t("session.breadcrumb.back")}
           className="flex flex-wrap items-center gap-2 text-sm"
         >
-          <Link
-            to={backTo ?? "/chat"}
-            aria-label={t("session.breadcrumb.back")}
-            className="flex size-10 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <ArrowLeft className="size-5" aria-hidden="true" />
-          </Link>
+          <SessionBackLink to={backTo} />
           <span className="truncate font-semibold text-foreground">
             {machineName ?? ""}
           </span>
@@ -333,9 +430,13 @@ export default function SessionDetailHeader({
       <SessionHeaderBand
         testId="session-detail-identity"
         metaTestId="session-detail-meta"
+        leading={
+          oneRow ? <SessionBackLink to={backTo} className="-ml-2" /> : undefined
+        }
         avatar={avatar}
-        // 页面形态的标题由 AppShell TopBar 呈现，不在这里重复。
-        title={isPage ? undefined : displayTitle}
+        // 桌面的页面形态标题由 AppShell TopBar 呈现，不在这里重复；沉浸形态没有顶栏，
+        // 标题就在这一层（最多两行）。
+        title={isPage && !oneRow ? undefined : displayTitle}
         meta={metaParts}
         actions={
           <>

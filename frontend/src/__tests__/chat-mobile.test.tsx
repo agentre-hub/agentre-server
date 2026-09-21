@@ -589,3 +589,81 @@ describe("移动端对话页：会话地址", () => {
     expect(detail.getAttribute("data-back-to")).toBe("/chat");
   });
 });
+
+/**
+ * 移动端新对话草稿（规格 2026-09-21-server-mobile-gaps 决策 3）：与会话详情同一种
+ * 沉浸形态——底部 tab 不画，只剩草稿自己的一层头部；还没有标题时叫「新对话」，副行
+ * 说得出 Agent 与将在哪台机器上跑。
+ */
+describe("移动端新对话草稿：一层头部", () => {
+  const plan = {
+    agent_sync_id: "ag-1",
+    tiers: [
+      {
+        rank: 1,
+        backend_sync_id: "b-a",
+        device_id: 1,
+        device_name: "书房小主机",
+        backend_type: "claudecode",
+        kind: "agentred",
+        availability: "available",
+        current: true,
+      },
+    ],
+    chosen: {
+      device_fingerprint: "fp-1",
+      device_id: 1,
+      device_name: "书房小主机",
+      backend_sync_id: "b-a",
+      backend_type: "claudecode",
+      kind: "agentred",
+    },
+    projects: [],
+  };
+
+  async function openMobileDraft() {
+    stubApi([waitingMirrored]);
+    const listing = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      if (String(path).startsWith("/v1/workspace/dispatch-target?"))
+        return plan;
+      return listing(path, ...rest);
+    });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    fireEvent.click(await screen.findByTestId("agent-pick-ag-1"));
+    return screen.findByTestId("draft-header");
+  }
+
+  it("底部 tab 与页面顶栏都不画", async () => {
+    await openMobileDraft();
+
+    expect(screen.queryByTestId("app-topbar")).toBeNull();
+    expect(
+      screen.queryByRole("navigation", { name: "Agentre Server" }),
+    ).toBeNull();
+  });
+
+  it("还没有标题时叫「新对话」，副行是 Agent · 机器", async () => {
+    const band = await openMobileDraft();
+
+    expect(
+      within(band).getByRole("heading", { name: "New chat" }),
+    ).toBeTruthy();
+    expect(within(band).getByRole("button", { name: "Back" })).toBeTruthy();
+    const meta = within(band).getByTestId("draft-header-meta");
+    expect(
+      within(meta).getByTestId("draft-header-meta-agent").textContent,
+    ).toContain("后端 Agent");
+    const machine = await within(meta).findByTestId(
+      "draft-header-meta-machine",
+    );
+    expect(machine.textContent).toContain("书房小主机");
+    for (const part of meta.querySelectorAll("[data-part]")) {
+      expect(part.className).not.toMatch(/hidden/);
+    }
+  });
+});

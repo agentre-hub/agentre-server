@@ -37,7 +37,10 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import AppShell from "@/components/AppShell";
-import SessionDetailHeader from "@/components/session/SessionDetailHeader";
+import { useIsMobile } from "@/components/use-is-mobile";
+import SessionDetailHeader, {
+  SessionPageStateShell,
+} from "@/components/session/SessionDetailHeader";
 import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
@@ -275,6 +278,9 @@ export default function SessionDetailView({
   const originProp = peerFingerprint?.trim() || undefined;
   const { t } = useTranslation();
   const isPage = form === "page";
+  // 移动端的整屏形态走沉浸：壳的顶栏与底部 tab 都不画，头部合成一层（决策 3）。
+  const isMobile = useIsMobile();
+  const immersive = isPage && isMobile;
 
   /** 这条会话所属 Agent 的名字与调色板色，按 summary.agentSyncId 解。 */
   const [agents, setAgents] = useState<WorkspaceAgent[]>([]);
@@ -1423,7 +1429,11 @@ export default function SessionDetailView({
       </Alert>
     );
     // 页面形态连壳一起报错；嵌入形态直接就地报错（外层容器给尺寸）。
-    return isPage ? <AppShell>{alert}</AppShell> : alert;
+    return isPage ? (
+      <SessionPageStateShell backTo={backTo}>{alert}</SessionPageStateShell>
+    ) : (
+      alert
+    );
   }
 
   /**
@@ -1743,6 +1753,7 @@ export default function SessionDetailView({
   const header = (
     <SessionDetailHeader
       isPage={isPage}
+      immersive={immersive}
       backTo={backTo}
       sid={sid}
       identity={identity}
@@ -1905,7 +1916,7 @@ export default function SessionDetailView({
   // 路由页形态：壳交出整块主区（flush），三带自己铺满它。
   if (isPage) {
     return (
-      <AppShell title={displayTitle} flush>
+      <AppShell title={displayTitle} flush immersive={immersive}>
         {bands}
       </AppShell>
     );
