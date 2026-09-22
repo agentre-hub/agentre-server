@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,14 @@ func rateLimitClientIP(runID string) string {
 
 func redisKeys(runID string) []string {
 	return []string{"session:" + sessionSID(runID), "rl:authz:" + rateLimitClientIP(runID)}
+}
+
+func cleanupRedisKeys(runID string, userID int64, userFound bool) []string {
+	keys := redisKeys(runID)
+	if userFound {
+		keys = append(keys, "user_sessions:"+strconv.FormatInt(userID, 10))
+	}
+	return keys
 }
 
 // flowFingerprint is the non-secret run handle that the browser must send to
@@ -330,7 +339,8 @@ func runCleanup(args []string) error {
 		}
 		out.Deleted[t.name] = res.RowsAffected
 	}
-	if err := rc.Del(context.Background(), redisKeys(runID)...).Err(); err != nil {
+	keys := cleanupRedisKeys(runID, out.UserID, out.Found)
+	if err := rc.Del(context.Background(), keys...).Err(); err != nil {
 		return fmt.Errorf("delete run redis keys: %w", err)
 	}
 
@@ -363,8 +373,11 @@ func runCleanup(args []string) error {
 		}
 		out.Residue[t.name] = n
 	}
-	keys := redisKeys(runID)
-	for i, name := range []string{"session", "rate_limit"} {
+	keyNames := []string{"session", "rate_limit"}
+	if out.Found {
+		keyNames = append(keyNames, "session_index")
+	}
+	for i, name := range keyNames {
 		exists, err := rc.Exists(context.Background(), keys[i]).Result()
 		if err != nil {
 			return fmt.Errorf("recount %s: %w", name, err)

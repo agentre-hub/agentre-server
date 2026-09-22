@@ -143,13 +143,17 @@ func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 	} {
 		_ = findSQLStep(t, counts, name)
 	}
-	got := redisKeys("run-7")
-	other := redisKeys("run-8")
-	if len(got) != 2 || got[0] != "session:webe2e-run-7" || !strings.HasPrefix(got[1], "rl:authz:198.18.") {
-		t.Fatalf("redis keys = %q, want isolated session and reserved authorize limiter keys", got)
+	got := cleanupRedisKeys("run-7", 42, true)
+	other := cleanupRedisKeys("run-8", 43, true)
+	if len(got) != 3 || got[0] != "session:webe2e-run-7" || !strings.HasPrefix(got[1], "rl:authz:198.18.") || got[2] != "user_sessions:42" {
+		t.Fatalf("redis keys = %q, want isolated session, reserved authorize limiter, and account session index keys", got)
 	}
 	if got[1] == other[1] {
 		t.Fatalf("different runs share authorize limiter key %q", got[1])
+	}
+	withoutUser := cleanupRedisKeys("run-7", 0, false)
+	if len(withoutUser) != 2 {
+		t.Fatalf("missing-user redis keys = %q, want only keys derivable from the run id", withoutUser)
 	}
 
 	residue := map[string]int64{"users": 0, "device_flow_codes": 1, "session": 0, "rate_limit": 0}
