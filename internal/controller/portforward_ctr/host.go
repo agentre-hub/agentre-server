@@ -3,6 +3,7 @@ package portforward_ctr
 import (
 	"context"
 	"errors"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -215,15 +216,49 @@ func (h *Host) ownedLink(
 	return link, 0, true
 }
 
-// unauthenticated 是转发登录第 1 步：顶层导航（GET + Sec-Fetch-Mode: navigate）302
-// 回控制台 authorize，其余（子资源、fetch、WebSocket 升级）答 401 纯文本、不跳转。
+// unauthenticated 是转发登录第 1 步：顶层导航 302 回控制台 authorize，其余（子资源、
+// fetch、WebSocket 升级）答 401 纯文本、不跳转。
+//
+// 顶层导航的判据（spec「转发登录」步骤 1、决策 14）：请求带了任意一个 Sec-Fetch-*
+// 头时，只认 GET + Sec-Fetch-Mode: navigate（这时 Accept 不看）；请求一个 Sec-Fetch-*
+// 头都不带时——浏览器对 http 非 localhost 的源就是这样，2026-09-22 dev 运行期验证
+// 过——退回到 GET + Accept 含 text/html。这个兜底可以被脚本伪造，但伪造出的 302 只
+// 指向控制台 authorize、且跨源，脚本读不到结果（spec「安全」残余风险 5）。
 func (h *Host) unauthenticated(c *gin.Context, prefix string) {
-	if c.Request.Method != http.MethodGet || c.GetHeader("Sec-Fetch-Mode") != "navigate" {
+	if !isTopLevelNavigation(c.Request) {
 		writeFailureText(c.Writer, http.StatusUnauthorized, unauthenticatedBody)
 		return
 	}
 	q := url.Values{"prefix": {prefix}, "return": {c.Request.URL.RequestURI()}}
 	redirect(c, strings.TrimRight(h.cfg.PublicURL, "/")+AuthorizePath+"?"+q.Encode())
+}
+
+// secFetchHeaders 是 Fetch Metadata 那一组；只要请求带了其中任意一个，就认为浏览器
+// 支持这组头，不再退回 Accept 兜底。
+var secFetchHeaders = [...]string{"Sec-Fetch-Mode", "Sec-Fetch-Site", "Sec-Fetch-Dest", "Sec-Fetch-User"}
+
+func isTopLevelNavigation(r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	for _, name := range secFetchHeaders {
+		if len(r.Header.Values(name)) > 0 {
+			return r.Header.Get("Sec-Fetch-Mode") == "navigate"
+		}
+	}
+	return acceptsHTML(r.Header.Get("Accept"))
+}
+
+// acceptsHTML 判 Accept 头是不是含 text/html：按 media-type 逐段比较，大小写不敏感，
+// 不是子串匹配（"*/*" 不算）。
+func acceptsHTML(accept string) bool {
+	for _, part := range strings.Split(accept, ",") {
+		mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(part))
+		if err == nil && strings.EqualFold(mediaType, "text/html") {
+			return true
+		}
+	}
+	return false
 }
 
 // callback 是转发登录第 4 步：拿授权码换转发票，写 cookie，302 到 return。

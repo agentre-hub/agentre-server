@@ -413,6 +413,69 @@ func TestForwardLogin_NonNavigationAnswers401PlainText(t *testing.T) {
 	assert.Empty(t, h.app.requests())
 }
 
+// —— 未登录，一个 Sec-Fetch-* 头都不带：按 Accept 兜底判导航（决策 14）——
+
+func TestForwardLogin_NoSecFetchHeadersAtAll_GetWithHTMLAcceptRedirects(t *testing.T) {
+	h := newHarness(t, true)
+	for _, accept := range []string{
+		"text/html",
+		"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"TEXT/HTML", // media-type 匹配大小写不敏感
+	} {
+		req := fwReq(http.MethodGet, prefixA, "/app/page")
+		req.Header.Set("Accept", accept)
+
+		rec := h.do(req)
+
+		require.Equal(t, http.StatusFound, rec.Code, accept)
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		require.NoError(t, err)
+		assert.Equal(t, "/v1/port-forwards/authorize", loc.Path, accept)
+	}
+}
+
+func TestForwardLogin_NoSecFetchHeadersAtAll_AnythingElseAnswers401(t *testing.T) {
+	h := newHarness(t, true)
+	htmlAndFriends := "text/html,application/xhtml+xml"
+	for _, req := range []*http.Request{
+		func() *http.Request { // */* 不算 text/html
+			r := fwReq(http.MethodGet, prefixA, "/app/page")
+			r.Header.Set("Accept", "*/*")
+			return r
+		}(),
+		fwReq(http.MethodGet, prefixA, "/app/page"), // 缺 Accept
+		func() *http.Request {
+			r := fwReq(http.MethodGet, prefixA, "/app/page")
+			r.Header.Set("Accept", "application/json")
+			return r
+		}(),
+		func() *http.Request { // 非 GET 即便 Accept 含 text/html 也不算
+			r := fwReq(http.MethodPost, prefixA, "/app/page")
+			r.Header.Set("Accept", htmlAndFriends)
+			return r
+		}(),
+	} {
+		rec := h.do(req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, req.Method+" "+req.Header.Get("Accept"))
+		assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+		assert.Empty(t, rec.Header().Get("Location"))
+	}
+	assert.Empty(t, h.app.requests())
+}
+
+func TestForwardLogin_SecFetchModePresent_AcceptIsIgnored(t *testing.T) {
+	h := newHarness(t, true)
+	req := fwReq(http.MethodGet, prefixA, "/app/page")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+	rec := h.do(req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+	assert.Empty(t, rec.Header().Get("Location"))
+}
+
 // —— authorize（控制台 Host）——
 
 func TestAuthorize_WithoutConsoleSessionRedirectsToLoginWithThisURLAsNext(t *testing.T) {
