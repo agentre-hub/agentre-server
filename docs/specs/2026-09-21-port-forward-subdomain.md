@@ -2,7 +2,7 @@
 
 > Status: Approved
 > Owner: 服务端 / 控制台前端 / 设备端（agentre 仓）
-> Last updated: 2026-09-21
+> Last updated: 2026-09-22
 
 **Objective:** 用户在控制台打开一条端口映射，得到一个与控制台跨源、形如 `https://<随机前缀>.fw.agentrehub.com/` 的地址；映射的目标既可以是设备环回上的端口，也可以是设备所在网络里的 `http(s)://host:port`。
 
@@ -50,6 +50,8 @@
 | 11 | 设备只改写 `Host`、同源 `Location`、`Set-Cookie` 的 `Domain`，**不改写响应体** | 前三处不改，远端站点就用不了：虚拟主机认错站、登录后跳到浏览器够不着的地址、cookie 被浏览器拒收。改写放在设备这一侧，因为只有设备知道目标是什么，两个宿主都能受益。Rejected: 改写 HTML 里的绝对链接 —— 子域已经让根路径就是应用的根，再改写只会引入一类新的解析缺陷 |
 | 12 | 桌面端仍是**每条映射一个 `127.0.0.1:<随机端口>`**，只跟着改成按 id 打开、支持远端目标 | 用户决定。它本来就跨源，根路径也正常。Rejected: 改成 `<前缀>.localhost` —— 要重写桌面端的监听，而今天没有需要它的问题 |
 | 13 | `/fw/` 路径**直接删除**，不留兼容期、不做重定向 | 首发按全新发布处理，不留历史包袱。Rejected: `/fw/…` 302 到子域 —— 旧地址里带着设备号和端口，服务端要先建前缀才能跳转，只为一种没有存量的旧形状留一条代码 |
+| 14 | 请求**完全不带** `Sec-Fetch-*` 时，`GET` 且 `Accept` 含 `text/html` 也算顶层导航；带了 `Sec-Fetch-Mode` 就只认它 | 2026-09-22 dev 运行期验证：浏览器只对可信源（https、`localhost`）发 Fetch Metadata，http 的 dev 转发域上每次导航都不带这组头，原判据把所有导航答成 401，转发登录起不来。用户决定加兜底判据。文档导航各浏览器都带 `Accept: text/html,…`，`fetch()`/XHR/子资源的默认值不含它。Rejected: 用 `Upgrade-Insecure-Requests` 做兜底 —— 不是所有浏览器都发，比 `Accept` 多不出任何信息；Rejected: 声明 http 部署不支持转发 —— dev 就是 http，转发在 dev 上验不了 |
+| 15 | 「无效目标」在所有宿主里是**同一句话**，由共享包 `@agentre-hub/agentre-ui` 持有：表单即时校验与设备 -32076 回绝都说它 | 2026-09-22 运行期验证看到控制台里表单与设备各说一句。用户决定统一成共享包那句。Rejected: 以设备那句为准 —— 文案归共享包是跨宿主所有权的约定 |
 
 ## 映射与目标（设备端 · agentre 仓）
 
@@ -59,7 +61,7 @@
 - `host:port` → `http://host:port`
 - `http(s)://host[:port]`：端口省略时按协议取 80 或 443
 
-以下写法**拒绝创建**，报明确的无效目标错误：路径、查询串、用户信息、`http`/`https` 以外的协议、端口越界、主机为空。同一台设备上目标（规范化后的协议、主机、端口）唯一，重复时报与今天「端口已被占用」同一类的错误。映射**不可编辑**目标：要换目标就删掉重建，重建后是一条新映射，前缀也跟着换新。
+以下写法**拒绝创建**，报明确的无效目标错误（所有宿主同一句：「请输入端口、host:port 或 http(s)://主机[:端口]。」，不论是表单即时校验挡下还是设备回绝）：路径、查询串、用户信息、`http`/`https` 以外的协议、端口越界、主机为空。同一台设备上目标（规范化后的协议、主机、端口）唯一，重复时报与今天「端口已被占用」同一类的错误。映射**不可编辑**目标：要换目标就删掉重建，重建后是一条新映射，前缀也跟着换新。
 
 **迁移。** 设备本地库追加一条补丁迁移，给已有映射补上目标字段，值等于 `http://127.0.0.1:<原端口>`、不忽略证书。已有映射的行为不变。
 
@@ -95,8 +97,9 @@
 ## 转发登录
 
 1. **前提：** 浏览器带着一个没有有效转发 cookie 的请求访问 `<前缀>.<base_domain>/<任意路径>`。
-   - 如果是**顶层导航**（`GET` 且 `Sec-Fetch-Mode: navigate`），就 302 到控制台 `/v1/port-forwards/authorize?prefix=<前缀>&return=<原路径与查询串>`。
+   - 如果是**顶层导航**，就 302 到控制台 `/v1/port-forwards/authorize?prefix=<前缀>&return=<原路径与查询串>`。
    - 如果不是（子资源、fetch、WebSocket 升级），就答 401 纯文本，不跳转。
+   - 顶层导航的判据：请求带了 `Sec-Fetch-Mode` 时，只有 `GET` 且它等于 `navigate` 才算；请求**一个 `Sec-Fetch-*` 头都不带**时（浏览器对 http 非 localhost 的源就是这样），`GET` 且 `Accept` 含 `text/html` 才算。
 2. 控制台上没登录时，authorize 把用户送去登录页 `/login?next=<这条 authorize 地址>`。登录后原路回来。
 3. 控制台确认这个前缀属于当前账号，签发一枚**一次性授权码**（Redis，60 秒，只能用一次，绑定前缀和控制台会话），然后 302 到 `<前缀>.<base_domain>/__agentre/callback?code=…&return=…`。前缀不属于当前账号时答 404，不签发。
 4. 转发域用授权码换出一个转发会话，写下 cookie，再 302 到 `return`。
@@ -146,7 +149,8 @@
 1. 转发域和控制台**同站**（都在 `agentrehub.com` 下）。浏览器按站点处理的东西（`SameSite` 判定、某些按站点分区的缓存与存储）不把它们分开。要消除，只能换独立注册域。
 2. 一个转发应用可以给 `agentrehub.com` 设带 `Domain=` 的 cookie，影响同站其他**没有用 `__Host-` 前缀**的 cookie。`agentre-hub` 仓的 cookie 属于这一类风险，但不在本轮范围内，只做标注。
 3. 声明即授权：一条映射能把设备当成进入它所在内网的跳板。这与设备所属账号已有的终端能力等价，前提是声明方只能是设备所属账号。部署形态变化时（例如对团队开放控制台）必须重新评估。
-4. dev 是 http：`__Host-` 前缀和 `Secure` 都不生效，dev 上的加固只有 origin 隔离和 `Sec-Fetch-Site` 两层。
+4. dev 是 http：`__Host-` 前缀和 `Secure` 都不生效；浏览器也不对 http 源发 `Sec-Fetch-*`，所以 dev 上写操作的来源校验走的是 `Origin` 兜底，加固只剩 origin 隔离与 `Origin` 校验两层。
+5. 顶层导航的兜底判据（决策 14）可以被脚本伪造：http 源上的脚本显式带 `Accept: text/html` 去请求，拿到的是 302 而不是 401。那个 302 只指向控制台的 authorize，且是跨源的，脚本读不到结果，不构成新的暴露面。
 
 ## Out of scope
 
@@ -167,7 +171,7 @@
 | 设备：上游改写 | `Host` 改写与默认端口省略；同源 `Location` 变相对、异源不动；`Set-Cookie` 去掉 `Domain` | 同上 |
 | 共享代理 `pkg/wire/portforwardhost` | 按 id 打开；新失败类别映射到对应的 `FailureKind` | `proxy_test.go`、`failure_test.go` |
 | 服务端：路由树（`internal/api/portforward`） | 转发 Host 上 `/v1/auth/me`、SPA 路径都不走控制台；控制台 Host 上 `/fw/…` 答 404；未知 / 跨账号前缀答同一个 404；只剥自家 cookie，应用 cookie 透传 | 现有 `forward_test.go`（跑真实路由树 + 真实 SessionAuth） |
-| 服务端：转发登录 | 导航跳 authorize、非导航答 401；授权码只能用一次、60 秒过期、跨账号前缀不签发；`return` 规范化；控制台登出后转发会话失效 | 无，新写 |
+| 服务端：转发登录 | 导航跳 authorize、非导航答 401；不带 `Sec-Fetch-*` 时 `GET` + `Accept: text/html` 跳、`*/*` 答 401，带了 `Sec-Fetch-Mode: cors` 时即便 `Accept` 含 `text/html` 也答 401；授权码只能用一次、60 秒过期、跨账号前缀不签发；`return` 规范化；控制台登出后转发会话失效 | 无，新写 |
 | 服务端：加固 | `__Host-` 名在 https 下签发与读取；CSRF 在 `Sec-Fetch-Site: same-site` / `cross-site` 下 403，缺头时按 `Origin` 判；Bearer 不受影响 | 现有 middleware 单测 |
 | 服务端：前缀表 repo | 分配幂等、按前缀查询的 SQL | sqlmock |
 | 前端：共享包 `PortForwardSection` | 目标输入三种写法、https 勾选框出现条件、行显示 | 现有 Vitest |
