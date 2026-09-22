@@ -278,8 +278,9 @@ navigation, a 302 to `<public_url>/v1/port-forwards/authorize?prefix=…&return=
 anything else a plain 401. What counts as a top-level navigation: if the request carries any
 `Sec-Fetch-*` header, only `GET` + `Sec-Fetch-Mode: navigate` counts (`Accept` is ignored); if
 it carries none at all — real for http origins that are not `localhost`, verified against dev
-on 2026-09-22 — it falls back to `GET` + `Accept` containing the `text/html` media type
-(`*/*`, a missing `Accept`, `application/json` and non-`GET` all answer 401). That fallback can
+on 2026-09-22 — it falls back to a non-upgrade `GET` whose `Accept` (all lines) accepts the `text/html` media
+type with `q` > 0 (`*/*`, `text/html;q=0`, a missing `Accept`, `application/json`, an
+`Upgrade` request and non-`GET` all answer 401). That fallback can
 be forged by a script that sets `Accept` explicitly, but the resulting 302 only points at the
 console's `authorize` and is cross-origin, so the script cannot read the result (spec 安全,
 residual risk 5). `authorize` sends a browser without a console session to `/login?next=<itself>`; for a

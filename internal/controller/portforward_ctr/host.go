@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -222,7 +223,7 @@ func (h *Host) ownedLink(
 // 顶层导航的判据（spec「转发登录」步骤 1、决策 14）：请求带了任意一个 Sec-Fetch-*
 // 头时，只认 GET + Sec-Fetch-Mode: navigate（这时 Accept 不看）；请求一个 Sec-Fetch-*
 // 头都不带时——浏览器对 http 非 localhost 的源就是这样，2026-09-22 dev 运行期验证
-// 过——退回到 GET + Accept 含 text/html。这个兜底可以被脚本伪造，但伪造出的 302 只
+// 过——退回到非升级的 GET + Accept 以 q>0 接受 text/html。这个兜底可以被脚本伪造，但伪造出的 302 只
 // 指向控制台 authorize、且跨源，脚本读不到结果（spec「安全」残余风险 5）。
 func (h *Host) unauthenticated(c *gin.Context, prefix string) {
 	if !isTopLevelNavigation(c.Request) {
@@ -238,7 +239,8 @@ func (h *Host) unauthenticated(c *gin.Context, prefix string) {
 var secFetchHeaders = [...]string{"Sec-Fetch-Mode", "Sec-Fetch-Site", "Sec-Fetch-Dest", "Sec-Fetch-User"}
 
 func isTopLevelNavigation(r *http.Request) bool {
-	if r.Method != http.MethodGet {
+	// 升级请求（WebSocket 等）永远不是顶层导航，Accept 写了什么都不算。
+	if r.Method != http.MethodGet || r.Header.Get("Upgrade") != "" {
 		return false
 	}
 	for _, name := range secFetchHeaders {
@@ -246,15 +248,24 @@ func isTopLevelNavigation(r *http.Request) bool {
 			return r.Header.Get("Sec-Fetch-Mode") == "navigate"
 		}
 	}
-	return acceptsHTML(r.Header.Get("Accept"))
+	// 同名头分多行发等同逗号拼接（RFC 9110 §5.3），只看第一行会漏。
+	return acceptsHTML(strings.Join(r.Header.Values("Accept"), ","))
 }
 
-// acceptsHTML 判 Accept 头是不是含 text/html：按 media-type 逐段比较，大小写不敏感，
-// 不是子串匹配（"*/*" 不算）。
+// acceptsHTML 判 Accept 头是不是接受 text/html：按 media-type 逐段比较，大小写不敏感，
+// 不是子串匹配（"*/*" 不算）；q=0 是「不可接受」（RFC 9110 §12.4.2），q 写不成数也
+// 不算，宁可答 401 也不把它当导航。
 func acceptsHTML(accept string) bool {
 	for _, part := range strings.Split(accept, ",") {
-		mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(part))
-		if err == nil && strings.EqualFold(mediaType, "text/html") {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
+		if err != nil || mediaType != "text/html" {
+			continue
+		}
+		q, ok := params["q"]
+		if !ok {
+			return true
+		}
+		if weight, err := strconv.ParseFloat(q, 64); err == nil && weight > 0 {
 			return true
 		}
 	}

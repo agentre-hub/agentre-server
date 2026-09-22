@@ -463,6 +463,61 @@ func TestForwardLogin_NoSecFetchHeadersAtAll_AnythingElseAnswers401(t *testing.T
 	assert.Empty(t, h.app.requests())
 }
 
+func TestForwardLogin_NoSecFetchHeadersAtAll_AcceptEdgeCases(t *testing.T) {
+	type tc struct {
+		name string
+		req  func() *http.Request
+		want int
+	}
+	get := func(accept ...string) func() *http.Request {
+		return func() *http.Request {
+			r := fwReq(http.MethodGet, prefixA, "/app/page")
+			for _, a := range accept {
+				r.Header.Add("Accept", a)
+			}
+			return r
+		}
+	}
+	for _, c := range []tc{
+		// q=0 按 RFC 9110 §12.4.2 是「不可接受」，不是「要 HTML」。
+		{"text/html;q=0", get("text/html;q=0,application/json"), http.StatusUnauthorized},
+		{"text/html; q=0.000", get("application/json, text/html; q=0.000"), http.StatusUnauthorized},
+		{"text/html;q=0.1", get("application/json,text/html;q=0.1"), http.StatusFound},
+		{"Q=0 大写参数名", get("text/html;Q=0"), http.StatusUnauthorized},
+		// 同名头分两行发，语义等同逗号拼接（RFC 9110 §5.3）。
+		{"Accept 分两行", get("application/json", "text/html"), http.StatusFound},
+		{"只有 xhtml", get("application/xhtml+xml"), http.StatusUnauthorized},
+		{"HEAD", func() *http.Request {
+			r := fwReq(http.MethodHead, prefixA, "/app/page")
+			r.Header.Set("Accept", "text/html")
+			return r
+		}, http.StatusUnauthorized},
+		// WebSocket 升级永远不是顶层导航，哪怕 Accept 写了 text/html。
+		{"WebSocket 升级", func() *http.Request {
+			r := get("text/html")()
+			r.Header.Set("Connection", "Upgrade")
+			r.Header.Set("Upgrade", "websocket")
+			return r
+		}, http.StatusUnauthorized},
+		// 带了 Sec-Fetch-* 就不退回 Accept：空值的 Mode、只带 Dest 都算「带了」。
+		{"空值 Sec-Fetch-Mode", func() *http.Request {
+			r := get("text/html")()
+			r.Header["Sec-Fetch-Mode"] = []string{""}
+			return r
+		}, http.StatusUnauthorized},
+		{"只带 Sec-Fetch-Dest", func() *http.Request {
+			r := get("text/html")()
+			r.Header.Set("Sec-Fetch-Dest", "document")
+			return r
+		}, http.StatusUnauthorized},
+	} {
+		h := newHarness(t, true)
+		rec := h.do(c.req())
+		assert.Equal(t, c.want, rec.Code, c.name)
+		assert.Empty(t, h.app.requests(), c.name)
+	}
+}
+
 func TestForwardLogin_SecFetchModePresent_AcceptIsIgnored(t *testing.T) {
 	h := newHarness(t, true)
 	req := fwReq(http.MethodGet, prefixA, "/app/page")
