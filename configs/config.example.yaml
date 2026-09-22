@@ -96,3 +96,9 @@ server:
     base_url: ""
     # 过期让端点从旧值自然退回「不知道」，而不是无限期回答一个早已过时的版本号。
     cache_ttl: 1h
+  # 端口转发子域：留空表示这个部署不提供转发，控制台打开映射时报「这个部署此刻
+  # 提供不了端口转发」。转发地址的 scheme 与端口跟 public_url 一致，只有 host 换成
+  # "<前缀>.<base_domain>"。生产填专属子域层级（如 fw.agentrehub.com），不要与
+  # public_url 同一层级——独立层级才能让通配证书只覆盖转发这一层。
+  port_forward:
+    base_domain: ""

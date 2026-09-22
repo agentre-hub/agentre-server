@@ -137,6 +137,9 @@ func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 		// 通行密钥的行没有指向 users 的外键：账号删掉它也留着，清理里不列一条就
 		// 永久留在专库里（本轮已实证留下两行属于已删账号的凭证）。
 		"webauthn_credentials",
+		// port_forward_links 同样没有指向 users 的外键（迁移 202609210101 只用裸
+		// bigint），账号删掉它也留着——2026-09-22 已实证一轮 run 留下 5 行残留。
+		"port_forward_links",
 	} {
 		_ = findSQLStep(t, counts, name)
 	}

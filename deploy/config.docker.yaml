@@ -81,3 +81,7 @@ server:
   webauthn:
     rp_name: "Agentre"
     max_per_account: 10
+  # 留空表示这个部署不提供端口转发子域；单机 Compose 没有配套的通配 DNS/证书，
+  # 缺省就是关掉这项能力，见 configs/config.example.yaml 的说明。
+  port_forward:
+    base_domain: ""

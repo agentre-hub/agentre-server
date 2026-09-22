@@ -177,11 +177,12 @@ middleware groups are the authorization model:
 | --- | --- | --- |
 | Public | — (some endpoints add per-IP rate limits) | healthz, GitHub OAuth authorize/callback, passkey login |
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
-| Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*` |
+| Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*`, `/v1/port-forwards/links` |
 | Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
 | Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot`, `/v1/credentials/introspect` (+ per-account rate limit) |
 | Relay client | `RelayClientJWT(credentials, tickets)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (opaque, recorded in Redis by `credstore`, one connection per ticket) |
-| Port forward | `SessionAuth()` only — **no** `CSRF()` | `/fw/*` |
+| Port-forward authorize | own session check in `portforward_ctr.Host.Authorize` (redirects to `/login` instead of 401; GET, so no CSRF) | `GET /v1/port-forwards/authorize` |
+| Forward host | `portforward_ctr.Host.Dispatch`, installed with `engine.Use` **before** every other route — forward session, not the console session | every request whose Host is under `server.port_forward.base_domain` |
 
 Device access tokens are opaque random strings. The server stores only their sha256 digest
 (`device_tokens.access_token_hash`), and every Bearer in the three groups that accept one goes
@@ -206,10 +207,32 @@ for is bad". When the credential store itself cannot be read (Redis down), the a
 invalid-token verdict. Introspecting a relay ticket does not consume its one-time connect
 claim.
 
-Cookie-authenticated writes clear CSRF in every group except `/fw/`: a Bearer caller
-carries no cookie and is exempt, a session caller is not. `/fw/` is the one deliberate
-exception — a forwarded app's own writes cannot carry the console's token — which is why
-the same-origin exposure it opens is part of the trust boundary described next.
+Cookie-authenticated writes clear CSRF in every console group: a Bearer caller carries no
+cookie and is exempt, a session caller is not. The forward host is not a console group at
+all — it never sees the console cookie — see the trust boundary described next. The old
+`/fw/*` path is gone; the console answers it with a plain 404.
+
+CSRF token possession is not the only judge of a cookie-authenticated write: `middleware.CSRF`
+and the session branch of `SessionOrDeviceAuth` both also require `Sec-Fetch-Site` to be
+`same-origin` or `none`; when a caller omits that header they fall back to `Origin`, which must
+equal one of `allowedOrigins` — `router.go` passes `cfg.ConsoleOrigins()` for both: the console's
+own origin (derived from `public_url`) plus the configured `webauthn.origins`, the same list
+WebAuthn's Relying Party check uses (there is no separate "allowed origins" config). Either
+header missing, or neither matching, answers the same 403 as a missing CSRF token; a Bearer
+caller carries neither header and is unaffected, same as the CSRF token check.
+
+The session cookie's own name depends on the deployment: `auth_svc.AuthSvc.CookieName()` is the
+one place that decides, and every reader (`middleware.sessionPrincipal`, `auth_ctr`,
+`passkey_ctr`, `device_ctr`) and every writer/clearer (`session.SetCookie`/`session.ClearCookie`)
+goes through it — nothing else hardcodes the name. `bootstrap.RegisterDefaults` calls
+`AuthSvc.SetSecureCookies(!cfg.InsecureCookies)` once at startup (the same `InsecureCookies` fact
+that drives `Secure`), so under https it is `session.HostCookieName` (`__Host-server_session` —
+`__Host-` requires `Secure`, `Path=/`, no `Domain`, exactly what `SetCookie` already sends), and
+under http (dev) it stays `session.CookieName` (`server_session`). The old name is never read
+once the new one is in effect, so shipping this once logs out every existing session — an
+accepted, one-time cost. `session.ClearCookie` derives `Secure` from the name's `__Host-` prefix
+rather than taking it as a parameter, because browsers reject a `__Host-` `Set-Cookie` without
+`Secure` — logout must still actually clear the cookie under both deployments.
 
 ### Who the client IP is
 
@@ -227,25 +250,65 @@ one address.
 
 ### The port-forward trust boundary
 
-`/fw/<device>/<port>/...` proxies a browser request into a service listening on the
-loopback interface of one of the account's own devices, so it joins two parties that do
-**not** share a credential domain: the console session authenticates the browser to the
-server, and nothing past the server is entitled to see it.
+A port-forward mapping is served at `<prefix>.<base_domain>` (spec
+`2026-09-21-port-forward-subdomain`): a stable 12-character lowercase base32 prefix per
+`(device_id, mapping_id)`, allocated by `POST /v1/port-forwards/links` (browser session +
+CSRF; ownership through `device_svc.OwnedDevice`, so a foreign, revoked or missing device
+answers the identical 404). `portforward_svc.Links` returns the same prefix on repeat calls
+(`port_forward_links`, unique key `uk_pfl_device_mapping`) and keeps the row when the mapping
+disappears on the device. The forward URL's scheme and port follow `server.public_url`. An
+unset `base_domain` turns the feature off: allocation answers `code.PortForwardLinksUnavailable`
+(503) and nothing dispatches on Host.
 
-The console session cookie is `Path=/` (`internal/pkg/session/cookie.go`), so the browser
-attaches it to every `/fw/` request, and the shared proxy
-(`agentre/pkg/wire/portforwardhost`) copies request headers through cell by cell — its
-hop-by-hop list does not include `Cookie` or `Authorization`. **The console's credentials
-therefore terminate at `portforward_ctr.Forward`**: it clones the request and deletes both
-headers before handing it to the proxy, because the server is the only party on this path
-that knows those values are console credentials. Without that step the forwarded app — and
-its access log, and anything the developer running it has installed — holds a plaintext
-session ticket valid for 14 days, and the cookie's `HttpOnly` protects nothing here.
-`internal/controller/portforward_ctr/credentials_test.go` pins it.
+**Host dispatch.** `Router` installs `portforward_ctr.Host.Dispatch` with `engine.Use` before
+it registers anything, so the dispatcher heads the chain of every console route and of the SPA
+`NoRoute` fallback (`Use` rebuilds it). A request whose Host (port ignored, case-insensitive) is
+`base_domain` or ends in `.<base_domain>` is handled there and aborted: console handlers,
+`SessionAuth`, CSRF and the SPA never run. A label that is not a well-formed prefix answers the
+same 404 as "not your device". `Router` also turns off gin's `RedirectTrailingSlash`, which
+gin applies before any middleware and would otherwise 301 a forwarded path that differs from a
+console route only by a trailing `/` (the console registers both `/fw` and `/fw/*rest` so the
+legacy path still answers 404). cago's own `GET /health` and `GET /metrics` are registered
+before `Router`, so they still answer on the forward host; a forwarded app's own paths with
+those names are unreachable, like `/__agentre/`.
 
-What still crosses the boundary is deliberate and bounded: the rest of the request
-(method, path, body, remaining headers), the device's own response, and the fact that a
-forwarded page runs on the console's origin — the CSRF exemption above.
+**Forward login.** The console cookie is host-only and never reaches the forward host, so the
+forward host has its own ticket. A request without a valid one gets, for a top-level
+navigation, a 302 to `<public_url>/v1/port-forwards/authorize?prefix=…&return=<path+query>`;
+anything else a plain 401. What counts as a top-level navigation: if the request carries any
+`Sec-Fetch-*` header, only `GET` + `Sec-Fetch-Mode: navigate` counts (`Accept` is ignored); if
+it carries none at all — real for http origins that are not `localhost`, verified against dev
+on 2026-09-22 — it falls back to a non-upgrade `GET` whose `Accept` (all lines) accepts the `text/html` media
+type with `q` > 0 (`*/*`, `text/html;q=0`, a missing `Accept`, `application/json`, an
+`Upgrade` request and non-`GET` all answer 401). That fallback can
+be forged by a script that sets `Accept` explicitly, but the resulting 302 only points at the
+console's `authorize` and is cross-origin, so the script cannot read the result (spec 安全,
+residual risk 5). `authorize` sends a browser without a console session to `/login?next=<itself>`; for a
+prefix the account owns it stores a one-shot code in Redis (`pf_code:*`, 60 s, `GETDEL`, bound
+to prefix + console session id) and 302s to `<prefix>.<base_domain>/__agentre/callback`; for a
+foreign or unknown prefix it answers 404 and issues nothing. The callback redeems the code
+(invalid, used, expired or issued for another prefix → 400 plain text, no cookie), stores a
+forward session (`pf_session:*`) and sets `__Host-agentre_fw` (https: host-only, `Path=/`,
+`Secure`, `HttpOnly`, `SameSite=Lax`; http/dev: `agentre_fw` without `Secure`, the same
+`InsecureCookies` decision as the console cookie), then 302s to `return` — only a relative
+path with a single leading `/` survives, anything else becomes `/`. `/__agentre/` on the
+forward host belongs to the server.
+
+**Every forwarded request**, in order: forward session valid for **this** prefix → the console
+session it was issued from still exists (`session.Store.Exists`, which does not slide its TTL)
+→ the account gate (`user_svc.Gate`) admits the account; a blocked account is treated as
+signed out → the prefix's link belongs to that account → `OwnedDevice` → the device is online →
+`Forwarder.Acquire` by mapping id. Console logout, session expiry or device revocation
+therefore bite on the next request. Before the request is handed to the shared proxy
+(`agentre/pkg/wire/portforwardhost`, which copies `Cookie` and `Authorization` through) the
+server deletes `Authorization` and removes only its own forward cookie from the `Cookie`
+header; the app's own cookies, path and query pass through unchanged. The forward origin is a
+different origin from the console, so it cannot read console responses or obtain a CSRF token,
+and its same-site writes to the console are stopped by the `Sec-Fetch-Site` / `Origin` check
+above. The residual same-site risks are recorded in the spec's 安全 section.
+
+The route-tree tests in `internal/api/portforward/forward_test.go` drive all of this through the
+real router, session store and SPA fallback.
 
 Endpoints are declared as structs with `mux.Meta`, which carries path and method:
 
@@ -287,7 +350,7 @@ cron.Cron()
 RunMigrations
 task.Task
 task.MirrorResident
-task.PortForwardResident → before mux, so shutdown stops accepting /fw/ before closing the pool
+task.PortForwardResident → before mux, so shutdown stops accepting forward requests before closing the pool
 web.MountSPA
 mux.HTTP(router)      → collects middleware registered above; must stay after those components
 task.RelayDrain       → registered after mux deliberately, so reverse-order shutdown drains relay before mux

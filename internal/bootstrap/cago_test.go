@@ -172,6 +172,18 @@ func TestRegisterDefaults_InstallsPortForwardPool(t *testing.T) {
 	assert.NotNil(t, portforward_svc.Default(), "RegisterDefaults 必须装配端口转发连接池")
 }
 
+// 转发登录同一个失败模式：没人装配时 DefaultForwardAuth() 是 nil，路由层据此把
+// 每一个转发请求都答成「此刻提供不了」——生产上配了 base_domain 也用不了。
+func TestRegisterDefaults_InstallsPortForwardAuth(t *testing.T) {
+	testutils.Redis(t)
+	portforward_svc.SetDefaultForwardAuth(nil)
+	t.Cleanup(func() { portforward_svc.SetDefaultForwardAuth(nil) })
+
+	RegisterDefaults(&ServerConfig{})
+
+	assert.NotNil(t, portforward_svc.DefaultForwardAuth(), "RegisterDefaults 必须装配转发登录")
+}
+
 // RP ID 与允许的 origin 缺省由 public_url 推导：绝大多数部署前后端同域同端口，
 // 让它们多写一遍纯属找错。
 func TestLoadServerConfig_WebAuthnDefaultsDeriveFromPublicURL(t *testing.T) {
@@ -379,4 +391,21 @@ func TestLoadServerConfig_DeviceFlowTTL(t *testing.T) {
 	t.Run("都不写落到 10 分钟", func(t *testing.T) {
 		assert.Equal(t, 10*time.Minute, load(t, "    poll_interval: 5s\n").DeviceFlow.FlowTTL)
 	})
+}
+
+// 写请求的来源校验（规格 2026-09-21-port-forward-subdomain「控制台加固」）缺
+// Sec-Fetch-Site 时退回校验 Origin：「必须等于控制台自己的 origin 或已配置的
+// origins」。两者是并集——配了 webauthn.origins（开发态的 5174、e2e 端口）不能把
+// public_url 自己那个 origin 挤出去，否则控制台自己发的写请求在不带 Fetch Metadata
+// 的浏览器上会被 403。
+func TestServerConfig_ConsoleOriginsAreThePublicOriginPlusConfiguredOnes(t *testing.T) {
+	cfg := &ServerConfig{
+		PublicURL: "https://app.agentre.dev/",
+		WebAuthn:  WebAuthnConfig{Origins: []string{"http://localhost:5174", "https://app.agentre.dev"}},
+	}
+	assert.Equal(t, []string{"https://app.agentre.dev", "http://localhost:5174"}, cfg.ConsoleOrigins())
+
+	assert.Equal(t, []string{"http://localhost:5174"},
+		(&ServerConfig{WebAuthn: WebAuthnConfig{Origins: []string{"http://localhost:5174"}}}).ConsoleOrigins(),
+		"public_url 没配时只剩配置里那几条")
 }

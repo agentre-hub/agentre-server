@@ -46,7 +46,16 @@ type AuthSvc interface {
 	ResolveCredential(ctx context.Context, token string) (*device_svc.Principal, error)
 	// WatchRelayCredential 取一条**已经建好**的中继连接的撤销判定，见实现处说明。
 	WatchRelayCredential(ctx context.Context, handle string) RelayCredentialWatch
+	// CookieName 是这次部署该用的会话 cookie 名字：https 下是 session.HostCookieName
+	// （__Host- 前缀），http（dev）下是 session.CookieName。读 cookie 的每一处
+	// （middleware、auth_ctr、passkey_ctr、device_ctr）都只认它这一个答案——旧名字
+	// 不会被另外读一遍，这正是「上线后已有登录被登出一次」的来处。
 	CookieName() string
+	// SetSecureCookies 配置 CookieName() 的答案：只在 bootstrap.RegisterDefaults 里、
+	// New 之后调一次，取 !cfg.InsecureCookies（PublicURL 的 scheme 推出的同一个事实，
+	// 见 bootstrap/cago.go 的 insecureCookies）。不调它就是缺省值 false——http 部署
+	// 的状态，也是绝大多数测试隐含依赖的状态。
+	SetSecureCookies(secure bool)
 }
 
 // RelayTicket 是换给浏览器的中继票据：凭据本身、它代表的网页对端身份与有效期。
@@ -68,6 +77,8 @@ type authSvc struct {
 	redis       *goredis.Client
 	credentials *credstore.Store
 	store       *session.Store
+	// secureCookies 见 SetSecureCookies；零值 false 是 http 部署 / 未装配测试的缺省状态。
+	secureCookies bool
 }
 
 // New 接收这个 service 要用的 Redis 客户端，不去够 redis.Default()。
@@ -264,4 +275,11 @@ func (s *authSvc) WatchRelayCredential(ctx context.Context, handle string) Relay
 	}
 }
 
-func (s *authSvc) CookieName() string { return session.CookieName }
+func (s *authSvc) CookieName() string {
+	if s.secureCookies {
+		return session.HostCookieName
+	}
+	return session.CookieName
+}
+
+func (s *authSvc) SetSecureCookies(secure bool) { s.secureCookies = secure }

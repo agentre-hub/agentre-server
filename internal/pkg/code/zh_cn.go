@@ -73,6 +73,8 @@ var zhCN = map[int]string{
 
 	CredentialInvalid: "该令牌无效",
 
+	PortForwardLinksUnavailable: "这个部署此刻提供不了端口转发",
+
 	EngineProviderNotFound:      "供应商不存在",
 	EngineBackendNotFound:       "Agent 后端不存在",
 	EngineBuiltinForbidden:      "浏览器不能创建内置后端",

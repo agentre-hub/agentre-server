@@ -66,6 +66,8 @@ var en = map[int]string{
 
 	CredentialInvalid: "invalid token",
 
+	PortForwardLinksUnavailable: "this deployment does not offer port forwarding right now",
+
 	EngineProviderNotFound:      "provider not found",
 	EngineBackendNotFound:       "agent backend not found",
 	EngineBuiltinForbidden:      "builtin backends cannot be created from the browser",

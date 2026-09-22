@@ -2,8 +2,11 @@ package portforward_ctr
 
 import (
 	"fmt"
+	"html"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/agentre-hub/agentre/pkg/wire/portforwardhost"
 )
@@ -11,19 +14,21 @@ import (
 // 这个文件是本仓**唯一**的服务端渲染 HTML，也是唯一一处用户可见文案不走 t()。
 //
 // # i18n 豁免（规格 2026-09-09-console-port-forward-host 决策 8，射程由
-// 2026-09-09-console-forward-failure-pages 决策 8 扩到四张页）
+// 2026-09-09-console-forward-failure-pages 决策 8、2026-09-21-port-forward-subdomain
+// 「失败的呈现」扩到六张页）
 //
-// AGENTS.md 第 3 条要求用户文案一律来自 t()。这四张页显式豁免，理由写在这里：
+// AGENTS.md 第 3 条要求用户文案一律来自 t()。这六张页显式豁免，理由写在这里：
 //
-//   - 用户此刻在**一个转发地址上**（/fw/12/3000/...），不在 SPA 路由里，四周没有控制台
-//     的外壳。302 到 /fw-error?... 会改掉地址栏，也会改掉「刷新」的语义——刷新之后重试
-//     的必须是原来那条转发地址，而不是错误页自己。
+//   - 用户此刻在**转发地址自己的 origin 上**（曾经是 /fw/<设备>/<端口>/...，
+//     2026-09-21-port-forward-subdomain 决策 13 之后是 <前缀>.<base_domain>），不在 SPA
+//     路由里，四周没有控制台的外壳。跳到控制台的错误页会改掉地址栏，也会改掉「刷新」的
+//     语义——刷新之后重试的必须是原来那条转发地址，而不是错误页自己。
 //   - 本仓服务端渲染 HTML 无先例、无 i18n 通路：cago/pkg/i18n 只服务 JSON 错误信封，
 //     取不到浏览器语言之外还要一整套模板本地化。
 //   - 共享包 portforwardhost 的默认文案本来就是硬编码中文、没有 i18n 出口，本文件出的
 //     正是取代它的那一份，只出中文与它同一条。
 //
-// 因此**文案限定中文**。这条豁免的射程就是这个文件里的四张页与三句纯文本；别把它当成
+// 因此**文案限定中文**。这条豁免的射程就是这个文件里的六张页与三句纯文本；别把它当成
 // 「服务端可以写死文案」的先例。
 //
 // # 页面里没有的东西
@@ -32,57 +37,85 @@ import (
 //     控制台的静态资源在那里不一定拉得到，拉不到就只剩一张没样式的裸页。
 //   - 没有同源风险提示。那是规格「安全」一节唯一的记录处，界面上不常驻它（上游决策 13）。
 //   - 没有「正在读取…」这类解释性状态横幅。状态由两个出口本身表达。
-//   - 没有任何用户可控数据被回显：文案是常量，端口是数字，「刷新」用的是空 href（浏览器
-//     把它解析成当前地址），所以这一页**不需要转义**，也不会把请求路径反射回页面里。
+//   - 没有请求里的任何东西被回显：「刷新」用的是空 href（浏览器把它解析成当前地址），
+//     请求路径不会反射回页面里。唯一的变量是「目标连不上」三张页点名的那个目标——它
+//     是设备在回绝里说出的、账号自己声明过的值（portforwardhost.Failure.Target），
+//     写进正文之前一律 html 转义（见 namedDetail）。
 
 // failurePage 是一张失败页说的那两句话。
 type failurePage struct {
 	// heading 同时用作 <title>：浏览器标签页上先看到的就是它。
 	heading string
-	// detail 说清下一步该做什么，%d 是设备本机那个端口。
+	// detail 说清下一步该做什么。不点名目标：设备没在回绝里说出目标时用它。
 	detail string
+	// namedDetail 非空表示这一页能把话说到具体的目标上（规格 2026-09-21-port-forward-
+	// subdomain「失败的呈现」：「<目标> 上没有服务在监听」「设备解析不了 <主机>」
+	// 「<目标> 的证书没有通过校验」）。两个参数都已经 html 转义过。
+	namedDetail func(target, host string) string
 }
 
-// 四张页。**区别必须说得出来**（上游规格「失败与恢复」）：一张要去重新建映射、一张要去
-// 把映射启用、一张要去把服务起起来、一张要等机器回来。每一张都对应共享包已经判好的
-// 一种失败，本层不再自己猜（规格 2026-09-09-console-forward-failure-pages 决策 3/4）。
+// 六张页。**区别必须说得出来**（上游规格「失败与恢复」）：一张要去重新建映射、一张要去
+// 把映射启用、三张「目标连不上」各自说清原因、一张要等机器回来。每一张都对应共享包
+// 已经判好的一种失败，本层不再自己猜（规格 2026-09-09-console-forward-failure-pages
+// 决策 3/4，三张「目标连不上」见 2026-09-21-port-forward-subdomain「失败的呈现」）。
 var (
-	// notDeclaredPage 是 portforwardhost.FailureNotDeclared：设备上没有这个端口的映射。
+	// notDeclaredPage 是 portforwardhost.FailureNotDeclared：设备上没有这条映射。
 	// 措辞指向**控制台**——用户刚刚就是在这里建的映射，而他未必装了桌面端。
 	notDeclaredPage = failurePage{
-		heading: "这个端口没有转发映射",
-		detail: "这台设备上没有 127.0.0.1:%d 的端口转发映射。" +
-			"到控制台的设备页里建一条，再打开这个地址。",
+		heading: "这条映射不存在",
+		detail:  "这台设备上已经没有这条端口转发映射了。到控制台的设备页里重新建一条。",
 	}
 	// disabledPage 是 portforwardhost.FailureDisabled：映射在，但被停用了。
 	disabledPage = failurePage{
 		heading: "这条端口转发已停用",
-		detail: "127.0.0.1:%d 的转发映射还在，但它已经被停用了。" +
-			"到控制台的设备页里把它重新启用，再刷新这一页。",
+		detail:  "这条转发映射还在，但它已经被停用了。到控制台的设备页里把它重新启用，再刷新这一页。",
 	}
-	// noListenerPage 是 portforwardhost.FailureNoListener：设备连着、映射启用，但那个
-	// 端口上没有服务在监听。
-	noListenerPage = failurePage{
-		heading: "端口上没有服务",
-		detail: "设备连着，但它的 127.0.0.1:%d 上没有服务在监听。" +
-			"到那台机器上把服务起起来，再刷新这一页。",
+	// unreachableRefusedPage 是 portforwardhost.FailureNoListener：设备连着、映射启用，
+	// 但目标拒绝了这次连接——目标上没有服务在监听。
+	unreachableRefusedPage = failurePage{
+		heading: "目标连不上",
+		detail:  "这条映射的目标上没有服务在监听。到那台机器上把服务起起来，再刷新这一页。",
+		namedDetail: func(target, _ string) string {
+			return target + " 上没有服务在监听。到那台机器上把服务起起来，再刷新这一页。"
+		},
+	}
+	// unreachableNameResolutionPage 是 portforwardhost.FailureNameResolution：设备解析
+	// 不了这条映射的目标主机名。
+	unreachableNameResolutionPage = failurePage{
+		heading: "目标连不上",
+		detail:  "设备解析不了这条映射的目标主机名。检查主机名有没有写错、那台设备的网络能不能解析它，再刷新这一页。",
+		namedDetail: func(_, host string) string {
+			return "设备解析不了 " + host + "。检查主机名有没有写错、那台设备的网络能不能解析它，再刷新这一页。"
+		},
+	}
+	// unreachableTLSVerificationPage 是 portforwardhost.FailureTLSVerification：https
+	// 目标的证书没有通过校验。
+	unreachableTLSVerificationPage = failurePage{
+		heading: "目标连不上",
+		detail: "这条映射的目标证书没有通过校验。若那是内网的自签证书，" +
+			"到控制台的设备页里为这条映射勾选「忽略证书错误」，再刷新这一页。",
+		namedDetail: func(target, _ string) string {
+			return target + " 的证书没有通过校验。若那是内网的自签证书，" +
+				"到控制台的设备页里为这条映射勾选「忽略证书错误」，再刷新这一页。"
+		},
 	}
 	// offlinePage 是「够不着那台设备」。两条来路：共享包判出的
 	// portforwardhost.FailureDeviceUnreachable，以及本层在 open 之前那次在线判定不过
 	// （后者不经过共享代理，见 portforward.go 的 failureOffline）。
 	offlinePage = failurePage{
 		heading: "设备离线",
-		detail: "这台设备此刻没有连着 Agentre，转发到它 127.0.0.1:%d 的请求送不过去。" +
-			"等它重新上线之后刷新这一页。",
+		detail:  "这台设备此刻没有连着 Agentre，转发到它的请求送不过去。等它重新上线之后刷新这一页。",
 	}
 )
 
-// failurePages 是「哪几种失败值得一整张页」。四种都是用户**照着页面能做成一件事**的：
-// 去建映射、去启用、去起服务、去等机器（规格决策 5）。
+// failurePages 是「哪几种失败值得一整张页」。六种都是用户**照着页面能做成一件事**的：
+// 去建映射、去启用、去起服务/查主机名/勾选忽略证书错误、去等机器（规格决策 5）。
 var failurePages = map[portforwardhost.FailureKind]failurePage{
 	portforwardhost.FailureNotDeclared:       notDeclaredPage,
 	portforwardhost.FailureDisabled:          disabledPage,
-	portforwardhost.FailureNoListener:        noListenerPage,
+	portforwardhost.FailureNoListener:        unreachableRefusedPage,
+	portforwardhost.FailureNameResolution:    unreachableNameResolutionPage,
+	portforwardhost.FailureTLSVerification:   unreachableTLSVerificationPage,
 	portforwardhost.FailureDeviceUnreachable: offlinePage,
 }
 
@@ -90,7 +123,7 @@ var failurePages = map[portforwardhost.FailureKind]failurePage{
 // 一句话更多的东西——两个出口里「刷新」是它们唯一说得通的动作，而那正是浏览器自己
 // 就有的按钮。措辞仍是控制台自己的，不用共享包那份桌面端口径的默认值。
 var failureTexts = map[portforwardhost.FailureKind]string{
-	portforwardhost.FailureUpstreamGone:       "设备上这个端口的服务把这次请求断开了。刷新这一页重试。",
+	portforwardhost.FailureUpstreamGone:       "这条映射的目标把这次请求断开了。刷新这一页重试。",
 	portforwardhost.FailureForwardIncomplete:  incompleteText,
 	portforwardhost.FailureUpgradeUnavailable: "这条转发交不出底层连接，升级到 WebSocket 没能做成。",
 }
@@ -101,7 +134,9 @@ var failureTexts = map[portforwardhost.FailureKind]string{
 // 的人以为改全了。
 const incompleteText = "这次转发没有完成。刷新这一页重试。"
 
-// RenderFailure 是交给共享代理的渲染钩子（portforwardhost.WithFailureRenderer）。
+// NewFailureRenderer 造交给共享代理的渲染钩子（portforwardhost.WithFailureRenderer）。
+// publicURL 是控制台的地址：失败页开在转发域上，「回到设备」必须是控制台设备页的
+// 绝对地址（见 ConsoleDevicesURL）。
 //
 // 它**只**在代理自己的失败上被调用：被转发应用自己的响应（含它自己答的 4xx/5xx）
 // 一个字节都不经过这里，这是共享包对宿主的承诺（上游规格
@@ -110,24 +145,50 @@ const incompleteText = "这次转发没有完成。刷新这一页重试。"
 //
 // 状态码照用共享包为该种类选定的那一个：本轮不改任何一种失败的状态码。
 //
-// 它是包级函数、不带任何请求态：代理按端口缓存、跨请求共用，装在构造处的钩子必须对
-// 每一次请求都成立。
-func RenderFailure(w http.ResponseWriter, _ *http.Request, f portforwardhost.Failure) {
-	if page, ok := failurePages[f.Kind]; ok {
-		writeFailurePage(w, f.Status, page, f.Port)
-		return
+// 钩子不带任何请求态：代理按映射 id 缓存、跨请求共用，装在构造处的钩子必须对每一次
+// 请求都成立。
+//
+// f.MappingID 不进正文；f.Target 是设备在回绝里说出的目标（服务端自己不存目标），
+// 有它时「目标连不上」三张页点名它，没有时退回不点名的那句。
+func NewFailureRenderer(publicURL string) portforwardhost.FailureRenderer {
+	devicesURL := ConsoleDevicesURL(publicURL)
+	return func(w http.ResponseWriter, _ *http.Request, f portforwardhost.Failure) {
+		if page, ok := failurePages[f.Kind]; ok {
+			if page.namedDetail != nil && f.Target != "" {
+				page.detail = namedDetail(page, f.Target)
+			}
+			writeFailurePage(w, f.Status, page, devicesURL)
+			return
+		}
+		text, ok := failureTexts[f.Kind]
+		if !ok {
+			// 还不认识的那一种**不能沉默地套上面某一张页**：那等于替一件我们还不认识
+			// 的事编一个下一步。
+			text = incompleteText
+		}
+		writeFailureText(w, f.Status, text)
 	}
-	text, ok := failureTexts[f.Kind]
-	if !ok {
-		// 还不认识的那一种**不能沉默地套上面某一张页**：那等于替一件我们还不认识的
-		// 事编一个下一步。
-		text = incompleteText
-	}
-	writeFailureText(w, f.Status, text)
 }
 
-// devicesPath 是「回到设备」那个出口。控制台的设备页（规格「失败的呈现」）。
+// namedDetail 把目标与它的主机转义后交给这一页的 namedDetail。主机取不出来（目标不是
+// 一条 URL）时就用整条目标——宁可说得宽一点，也不编一个主机名。
+func namedDetail(page failurePage, target string) string {
+	host := target
+	if parsed, err := url.Parse(target); err == nil && parsed.Hostname() != "" {
+		host = parsed.Hostname()
+	}
+	return page.namedDetail(html.EscapeString(target), html.EscapeString(host))
+}
+
+// devicesPath 是控制台设备页的路径（规格「失败的呈现」的「回到设备」）。
 const devicesPath = "/devices"
+
+// ConsoleDevicesURL 是「回到设备」那个出口的地址：控制台的设备页，按 publicURL 拼成
+// 绝对地址。失败页开在 <前缀>.<base_domain> 上，一个相对的 /devices 会被浏览器解析成
+// 被转发应用自己的 /devices。publicURL 没配时退回相对路径——那样的部署也不会有转发域。
+func ConsoleDevicesURL(publicURL string) string {
+	return strings.TrimRight(publicURL, "/") + devicesPath
+}
 
 // failurePageTemplate 的四个空位依次是 <title>、<h1>、正文、「回到设备」的去处。
 //
@@ -174,7 +235,7 @@ p{color:#a2a9b3}
 `
 
 const (
-	// failurePageContentType 是那四张页的类型。
+	// failurePageContentType 是那六张页的类型。
 	failurePageContentType = "text/html; charset=utf-8"
 	// failureTextContentType 是那三句纯文本的类型，也是本层自有失败答复的类型
 	// （portforward.go 的 answer）。
@@ -182,9 +243,9 @@ const (
 )
 
 // writeFailurePage 把一张页写出去。
-func writeFailurePage(w http.ResponseWriter, status int, page failurePage, port uint32) {
+func writeFailurePage(w http.ResponseWriter, status int, page failurePage, devicesURL string) {
 	writeFailureBody(w, status, failurePageContentType, fmt.Sprintf(failurePageTemplate,
-		page.heading, page.heading, fmt.Sprintf(page.detail, port), devicesPath))
+		page.heading, page.heading, page.detail, html.EscapeString(devicesURL)))
 }
 
 // writeFailureText 把一句话写出去，形状与共享包的默认答复一致（末尾带换行）。

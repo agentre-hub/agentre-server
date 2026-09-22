@@ -25,6 +25,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/repository/device_flow_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_token_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/portforward_link_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_identity_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/user_repo"
@@ -77,6 +78,7 @@ func main() {
 	device_repo.RegisterDevice(device_repo.NewDevice())
 	device_token_repo.RegisterDeviceToken(device_token_repo.NewDeviceToken())
 	device_flow_repo.RegisterDeviceFlow(device_flow_repo.NewDeviceFlow())
+	portforward_link_repo.RegisterLink(portforward_link_repo.NewLink())
 	sync_repo.RegisterSyncObject(sync_repo.NewSyncObject())
 	sync_repo.RegisterSyncState(sync_repo.NewSyncState())
 	sync_repo.RegisterSyncAvatar(sync_repo.NewSyncAvatar())

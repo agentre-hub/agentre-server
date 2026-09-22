@@ -3,13 +3,13 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"github.com/cago-frame/cago/database/redis"
 	"github.com/cago-frame/cago/server/mux"
 	"github.com/gin-gonic/gin"
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/agentre-hub/agentre-server/internal/api/portforward"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/controller/accountchan_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/agent_session_ctr"
@@ -52,6 +52,17 @@ type RouterDeps struct {
 	// 取 portforward_svc.Default()——它未装配时是 nil，意思是「这个部署没有端口
 	// 转发」，路由层据此答「此刻没有这条能力」，而不是去拨一个不存在的中继。
 	PortForward portforward_ctr.Forwarder
+	// PortForwardLinks 是端口转发子域前缀的分配器（spec「地址与路由」的「分配
+	// 前缀」）。留给测试注入自己那份；为空时取 portforward_svc.DefaultLinks()——
+	// 与 PortForward 上面那份约定同形，只是这一份不会是 nil（没配 base_domain 的
+	// 部署仍然装配它，只是 Link 恒回「此刻提供不了端口转发」）。
+	PortForwardLinks portforward_ctr.LinkAllocator
+	// PortForwardPrefixes 按前缀反查链接、拼转发地址（转发子域的 Host 分发与
+	// authorize 用）。留给测试注入；为空时取 portforward_svc.DefaultLinks()。
+	PortForwardPrefixes portforward_ctr.PrefixResolver
+	// PortForwardAuth 是转发登录（一次性授权码与转发会话，spec「转发登录」）。留给
+	// 测试注入；为空时取 portforward_svc.DefaultForwardAuth()。
+	PortForwardAuth portforward_ctr.ForwardSessions
 	// Redis 是鉴权中间件要用的那台：中继票据「只连一次」的认领记号从它派生。
 	// 留给测试注入自己那台；为空时取全局默认单例（与上面两项同一约定）。
 	Redis *goredis.Client
@@ -118,7 +129,28 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	if err := trustProxies(root, r.Cfg.TrustedProxies); err != nil {
 		return err
 	}
+	// 转发子域的 Host 分发必须是整棵树上**第一个**装上的东西（spec「按 Host 分发」）：
+	// gin 在注册路由时把当下的全局中间件拼进那条路由的处理链，Use 之后注册的每一条
+	// 控制台路由、以及 SPA 兜底（NoRoute，Use 会重建它的处理链）都先经过它；转发
+	// Host 上的请求在这里整条处理完并 Abort，轮不到 SessionAuth、CSRF 或 SPA。
+	//
+	// 结尾斜杠的 301 同理必须关掉：gin 在匹配路由时（早于任何中间件）就对「差一个结尾
+	// 斜杠就能命中」的路径答 301，转发 Host 上应用自己的 /v1/auth/me/ 因此永远到不了
+	// Host 分发，而 301 还会被浏览器永久缓存。控制台一侧没有依赖它的地方：未命中的
+	// /v1/* 本来就答 404（internal/web），/fw 由下面显式的那条接住。
+	//
+	// cago 在回调之前注册的 /health 与 metric 组件的 /metrics 不在这条链上：那两条
+	// 路由的处理链在本回调之前就定下了，转发 Host 上照样由它们作答（被转发应用自己的
+	// 这两个路径因此到不了，与 /__agentre/ 同一类已知代价）。
+	portForwardHost := r.portForwardHost()
+	engine := root.IRouter.(*gin.Engine)
+	engine.RedirectTrailingSlash = false
+	engine.Use(portForwardHost.Dispatch)
+
 	g := root.Group("/")
+	// 写请求来源校验的名单（spec 2026-09-21「控制台加固」）：控制台自己的 origin 加已
+	// 配置的 origins，CSRF 与 SessionOrDeviceAuth 的 cookie 分支共用这一份。
+	consoleOrigins := r.Cfg.ConsoleOrigins()
 
 	healthzCtr := healthz_ctr.NewHealthz()
 	authCtr := auth_ctr.NewAuth(r.Cfg.InsecureCookies)
@@ -167,6 +199,17 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	sessionImportCtr := sessionimport_ctr.New()
 	statsCtr := stats_ctr.New()
 	releaseCtr := release_ctr.New()
+	// 端口转发子域链接（spec 2026-09-21-port-forward-subdomain「地址与路由」）：
+	// 归属判定复用 device_svc.Default()（与 portforward_ctr.New 那一份同一个
+	// DeviceLookup 口径），分配器留给测试注入；为空时取本进程那份
+	// （bootstrap.RegisterDefaults 总会装配它——没配 base_domain 的部署也装配，只是
+	// Link 恒回「此刻提供不了端口转发」，所以这里不需要 PortForward 那种「未装配即
+	// nil」的额外判空）。
+	portForwardLinks := r.PortForwardLinks
+	if portForwardLinks == nil {
+		portForwardLinks = portforward_svc.DefaultLinks()
+	}
+	portForwardLinksCtr := portforward_ctr.NewLinks(device_svc.Default(), portForwardLinks)
 
 	// 公开
 	g.Group("/").Bind(
@@ -192,7 +235,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	)
 
 	// 浏览器 session
-	g.Group("/", middleware.SessionAuth(), middleware.CSRF()).Bind(
+	g.Group("/", middleware.SessionAuth(), middleware.CSRF(consoleOrigins)).Bind(
 		authCtr.Logout,
 		// 登录会话治理：只认浏览器会话——「哪一条是当前」这个判据来自 cookie，
 		// 设备 JWT 那条路径上根本不存在。
@@ -229,11 +272,15 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		// 控制台的 latest 来源（决策 12）：只读、账号无关的全局事实，但眼下只有
 		// web 控制台会问它，与统计三条同组即可——不必新开一个鉴权面。
 		releaseCtr.Latest,
+		// 端口转发子域链接：对自己名下一台设备的一条映射 id 分配（或复用）一个转发
+		// 前缀（spec「分配前缀」）。写方法，本组已经强制 CSRF——与撤销设备、改名
+		// 同一形状。
+		portForwardLinksCtr.Create,
 	)
 
 	// 通行密钥：注册与管理一律要求浏览器会话 + CSRF。设备 JWT 那条路径上没有
 	// 「当前是哪个浏览器」这个事实，而 challenge 正是按它归集的。
-	passkeyGroup := g.Group("/", middleware.SessionAuth(), middleware.CSRF())
+	passkeyGroup := g.Group("/", middleware.SessionAuth(), middleware.CSRF(consoleOrigins))
 	// begin 单独再套两道限流：按 IP 挡匿名刷，按账号挡「换个出口接着刷」。
 	// 两个中间件都排在 SessionAuth 之后——按账号那道要用它放进上下文的 user_id。
 	passkeyGroup.Group("/",
@@ -254,7 +301,7 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	g.Group("/").Bind(passkeyCtr.FinishLogin)
 
 	// session 或设备 access token 都可以
-	g.Group("/", middleware.SessionOrDeviceAuth(bearer)).Bind(
+	g.Group("/", middleware.SessionOrDeviceAuth(bearer, consoleOrigins)).Bind(
 		authCtr.Me,
 		deviceCtr.Revoke,
 		deviceCtr.List,
@@ -384,33 +431,69 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 推 sync_version / mirror_changed / device_presence。
 	tokenBridged.GET("/v1/relay/client", relayCtr.Client)
 
-	// 设备端口转发（规格 2026-09-09-console-port-forward-host）：
-	// /fw/<device_id>/<port>/<被转发应用自己的路径>。
+	// /fw/…（规格 2026-09-09-console-port-forward-host 的旧地址：
+	// /fw/<device_id>/<port>/<被转发应用自己的路径>）**直接删除，不留兼容期、不做
+	// 重定向**（规格 2026-09-21-port-forward-subdomain 决策 13）：首发按全新发布处理，
+	// 旧地址里带着设备号和端口，没有存量地址要兼容。
 	//
-	// **只挂 SessionAuth，不挂 CSRF**（决策 5）。本仓其余每一处 SessionAuth 后面都紧
-	// 跟着 CSRF，这是第一处不跟的，理由是被转发的应用自己的写请求不可能带控制台的
-	// CSRF token——挂上就等于禁掉转发下的一切 POST。这条选择把被转发应用放进了控制台
-	// 的同源里，射程（GET 全可达、CSRF 结构性失效、relay ticket 把射程扩到整个账号）
-	// 写在规格的「安全」一节，那里是它唯一的记录处。
+	// 控制台主机上因此不再挂任何 /fw/ 路由。这里仍然显式注册一条通配、直接答 404 的
+	// 处理器，而不是干脆什么都不挂：什么都不挂的话 /fw/… 会落到 internal/web 的 SPA
+	// 兜底上，非 /v1/* 的未命中路径一律 200 + index.html（决策 10 那条「白屏而状态码
+	// 正常」的缺陷源头），/fw/ 曾经是一整段 API 表面，不该悄悄变成一张 SPA 页。显式
+	// 404 让它和其余未绑定的后端路径同一种答法。
 	//
-	// 裸 gin 而不是 mux.Bind：mux.Meta 是 struct tag，装不下通配尾段；而这条路径是裸
-	// 字节转发，本来就没有任何请求 / 响应结构体可声明（Hard invariant）。
-	//
-	// 通配收的是 /fw/ 之下的**全部**形状，形状对不对由控制器判。少收一点（比如
-	// /fw/:device/:port/*rest）的话，/fw/12 会落到 SPA 兜底上拿到 200 + index.html，
-	// 在浏览器里是一张白屏而状态码正常（决策 10）；而 gin 的路由树不允许同一段上既有
-	// :param 又有 *catchAll，想两条都挂是挂不上的。
+	// 转发本身改到 <前缀>.<base_domain> 这条子域上，由本函数开头装上的
+	// portForwardHost.Dispatch 按 Host 整条接走。/fw 与 /fw/*rest 两条都挂：gin 的路由树
+	// 里 /fw/*rest 不收裸的 /fw，而结尾斜杠的 301 已经关掉了。
+	legacyPortForward := func(c *gin.Context) { c.AbortWithStatus(http.StatusNotFound) }
+	g.Any("/fw", legacyPortForward)
+	g.Any("/fw/*rest", legacyPortForward)
+
+	// 转发登录第 2、3 步：控制台上签发一次性授权码。裸 gin 而不是 mux.Bind——它答的是
+	// 浏览器顶层导航的 302，不是 JSON；没登录时要跳登录页而不是 401，所以鉴权在控制器
+	// 里自己判（与 SessionAuth 同一套判据）。GET，不过 CSRF。
+	g.GET(portforward_ctr.AuthorizePath, portForwardHost.Authorize)
+
+	return nil
+}
+
+// portForwardHost 装配转发子域的控制器：注入的优先，其余取本进程默认那份。
+//
+// 三处 Default() 在未装配时是 nil 指针，**不能**无条件赋给接口：那样得到的是一个
+// 非 nil 的接口装着 nil 指针，控制器里「没装配」的判据就永远不成立了。
+func (r *RouterDeps) portForwardHost() *portforward_ctr.Host {
 	var forwarder portforward_ctr.Forwarder
 	switch {
 	case r.PortForward != nil:
 		forwarder = r.PortForward
 	case portforward_svc.Default() != nil:
-		// 未装配时 Default() 是 nil。**不能**无条件赋给接口：那样得到的是一个非 nil
-		// 的接口装着一个 nil 指针，控制器里那句「没装配」的判据就永远不成立了。
 		forwarder = portforward_svc.Default()
 	}
-	portForwardCtr := portforward_ctr.New(device_svc.Default(), relaySvc, forwarder)
-	g.Group("/", middleware.SessionAuth()).Any(portforward.RoutePattern, portForwardCtr.Forward)
-
-	return nil
+	var prefixes portforward_ctr.PrefixResolver
+	switch {
+	case r.PortForwardPrefixes != nil:
+		prefixes = r.PortForwardPrefixes
+	case portforward_svc.DefaultLinks() != nil:
+		prefixes = portforward_svc.DefaultLinks()
+	}
+	var sessions portforward_ctr.ForwardSessions
+	switch {
+	case r.PortForwardAuth != nil:
+		sessions = r.PortForwardAuth
+	case portforward_svc.DefaultForwardAuth() != nil:
+		sessions = portforward_svc.DefaultForwardAuth()
+	}
+	relaySvc := r.Relay
+	if relaySvc == nil {
+		relaySvc = relay_svc.Default()
+	}
+	return portforward_ctr.NewHost(
+		portforward_ctr.New(device_svc.Default(), relaySvc, forwarder),
+		prefixes, sessions,
+		portforward_ctr.HostConfig{
+			BaseDomain:      r.Cfg.PortForward.BaseDomain,
+			PublicURL:       r.Cfg.PublicURL,
+			InsecureCookies: r.Cfg.InsecureCookies,
+		},
+	)
 }

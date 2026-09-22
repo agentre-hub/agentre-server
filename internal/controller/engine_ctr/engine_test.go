@@ -123,6 +123,8 @@ func postEngine(t *testing.T, url, sessionID, csrf, body string) *http.Response 
 	require.NoError(t, err)
 	req.AddCookie(&http.Cookie{Name: "server_session", Value: sessionID})
 	req.Header.Set("X-CSRF-Token", csrf)
+	// 真实浏览器给同源请求带这个头，加固层（middleware.originOK）据此放行。
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

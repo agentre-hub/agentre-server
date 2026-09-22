@@ -153,6 +153,9 @@ func do(t *testing.T, server *httptest.Server, r request) *http.Response {
 	if r.csrf != "" {
 		req.Header.Set("X-CSRF-Token", r.csrf)
 	}
+	// 这些用例在模拟控制台自己发的请求：真实浏览器给同源请求带这个头，加固层
+	// （middleware.originOK）据此放行。专门测跨站拒绝的用例自己覆盖这个头。
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	if r.ip != "" {
 		req.Header.Set("X-Forwarded-For", r.ip)
 	}

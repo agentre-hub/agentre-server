@@ -192,6 +192,9 @@ func doRequest(t *testing.T, method, url, cookie, bearer, body string, csrf ...s
 	if len(csrf) > 0 && csrf[0] != "" {
 		req.Header.Set("X-CSRF-Token", csrf[0])
 	}
+	// 这些用例在模拟控制台自己发的请求：真实浏览器给同源请求带这个头，加固层
+	// （middleware.originOK）据此放行。专门测跨站拒绝的用例自己覆盖这个头。
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -264,6 +267,28 @@ func TestRevoke_ForBrowserSession_RejectsMissingCSRFToken(t *testing.T) {
 
 	resp := doRequest(t, http.MethodPost, server.URL+"/v1/oauth/token/revoke",
 		cookie.Value, "", `{"device_id":1}`)
+	require.Equal(t, http.StatusForbidden, resp.StatusCode)
+	require.Empty(t, stub.revoked)
+}
+
+// 加固：CSRF token 之外的第二道判据。出示了合法 token，但请求是跨站发起的
+// （Sec-Fetch-Site: cross-site）——这正是 CSRF token 单独防不住的那类请求：
+// 一个恶意站点即便通过某种方式拿到了 token，浏览器上报的发起方仍然是它自己。
+func TestRevoke_ForBrowserSession_RejectsCrossSiteOrigin(t *testing.T) {
+	stub := &stubDeviceSvc{userDevices: deviceListBody()}
+	server := newDeviceTestServer(t, stub)
+	cookie, csrf := newSessionCookie(t, 7)
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/oauth/token/revoke",
+		strings.NewReader(`{"device_id":1}`))
+	require.NoError(t, err)
+	req.AddCookie(&http.Cookie{Name: testCookieName, Value: cookie.Value})
+	req.Header.Set("X-CSRF-Token", csrf)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	require.Equal(t, http.StatusForbidden, resp.StatusCode)
 	require.Empty(t, stub.revoked)
 }

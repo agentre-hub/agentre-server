@@ -1,37 +1,46 @@
 /**
- * 设备卡展开区的「端口转发」小节（规格 2026-09-09 决策 4 / 11 / 12）。
+ * 设备卡展开区的「端口转发」小节（规格 2026-09-21-port-forward-subdomain「控制台
+ * 界面」）。
  *
- * 这一层只做宿主专属的三件事：经中继调声明族、把访问地址拼出来、拉一个新标签页 /
- * 摸剪贴板。**行的渲染规则全在共享包 `PortForwardSection` 里**（哪个控件在什么条件
- * 下出现、空态、离线句、更多操作菜单），两个宿主共用同一份 —— 这里一行都不重画。
+ * 这一层只做宿主专属的几件事：经中继调声明族、按需向本站分配转发子域地址、拉一个
+ * 新标签页 / 摸剪贴板。**行与新增表单的渲染规则全在共享包 `PortForwardSection`
+ * 里**（哪个控件在什么条件下出现、空态、离线句、更多操作菜单、目标写法校验、
+ * https 才出的「忽略证书错误」勾选框），两个宿主共用同一份 —— 这里一行都不重画
+ * （规格「控制台界面」最后一条）。
  *
- * 与桌面端那一半（`agentre` 仓的 `device-port-forward.tsx`）的两处结构性差别：
+ * 与桌面端那一半（`agentre` 仓的 `device-port-forward.tsx`）的结构性差别：
  *
- *  1. **地址无需先「打开」就存在**。桌面端那条 `127.0.0.1:<端口>` 要等
- *     `PortForwardOpen` 绑上本机监听、端口由内核给；控制台这条 `/fw/<设备>/<端口>/`
- *     是路由算出来的，所以这里没有桌面端那份 `addresses` state。
- *  2. **「打开」是新标签页**，不是拉系统浏览器：用户已经在浏览器里，被转发的应用与
- *     控制台同源（同源风险由规格的「安全」一节记录，界面上不出现）。
+ *  1. **地址要向服务端要，不是拼出来的**。此前 `/fw/<设备>/<端口>/` 是路由算出来的
+ *     常量，随时可用；按 Host 分发的转发域取代了那条路由之后，地址由
+ *     `POST /v1/port-forwards/links` 分配（S2），对同一条映射幂等——第一次用到
+ *     「打开」或「复制地址」时才去要，要到之后缓存在 `addresses` 里，往后两个动作
+ *     显示 / 复制的都是同一个串（规格「控制台界面」第一条）。这一点与桌面端等
+ *     `PortForwardOpen` 绑本机监听的 `addresses` 缓存同构，但网络对端不同：那边打
+ *     的是那台设备，这里打的是服务端自己。
+ *  2. **「打开」是新标签页**，不是拉系统浏览器：用户已经在浏览器里。
+ *  3. **部署没配 `base_domain` 时分配会 503**（`code.PortForwardLinksUnavailable`）
+ *     ——这与「设备够不着」是两类不同的失败：前者是本站配置问题，与哪台设备无关，
+ *     不该被并进 `unreachable`（那会让离线句显示成「设备离线」，文不对题）。
  */
 import {
-  Button,
-  Input,
-  Label,
   PortForwardSection,
   Skeleton,
   copyTextWithToast,
+  useUiTranslation,
+  type PortForwardCreateInput,
   type PortForwardMappingView,
 } from "@agentre-hub/agentre-ui";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
+  allocatePortForwardLink,
   byPort,
   classifyPortForwardError,
+  classifyPortForwardLinkError,
   createPortForward,
   deletePortForward,
   listPortForwards,
-  portForwardAddress,
   setPortForwardEnabled,
   type PortForwardDeclaration,
 } from "@/lib/portForward";
@@ -42,7 +51,7 @@ export function DevicePortForward({
   offline,
   offlineDetail,
 }: {
-  /** 设备的数字 id：访问地址里用的就是它（决策 4）。 */
+  /** 设备的数字 id：分配转发地址时带的就是它。 */
   deviceId: number;
   /** 中继寻址用的指纹。 */
   fingerprint: string;
@@ -52,7 +61,10 @@ export function DevicePortForward({
   offlineDetail?: string;
 }) {
   const { t } = useTranslation();
-  const fieldId = useId();
+  // 「无效目标」这一句由共享包 `@agentre-hub/agentre-ui` 持有（规格「映射与目标」
+  // 声明 + 决策 15）：表单即时校验与设备 -32076 回绝说的是同一句话，本站不再自己
+  // 存一份译文（此前 `device.portForward.add.invalidTarget` 的重复已删）。
+  const { t: tUi } = useUiTranslation();
   const alive = useRef(true);
 
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
@@ -60,11 +72,12 @@ export function DevicePortForward({
   const [mappings, setMappings] = useState<PortForwardDeclaration[]>([]);
   const [unreachable, setUnreachable] = useState(false);
   const [actionError, setActionError] = useState("");
-
-  const [adding, setAdding] = useState(false);
-  const [port, setPort] = useState("");
-  const [name, setName] = useState("");
-  const [addError, setAddError] = useState("");
+  /**
+   * 分配到的转发地址，按映射 id 缓存。**不**随列举一起重取——列举刷新时，用户刚
+   * 复制的那条地址不该跟着消失；而 `/v1/port-forwards/links` 对同一条映射本来就
+   * 幂等，缓存只是省一趟往返，不是权威来源。
+   */
+  const [addresses, setAddresses] = useState<Record<string, string>>({});
 
   useEffect(() => {
     alive.current = true;
@@ -121,7 +134,7 @@ export function DevicePortForward({
   /** 一次动作真的到了那台设备：此前记下的「够不着」就此作废。 */
   const markReached = useCallback(() => setUnreachable(false), []);
 
-  /** 三种「不是这一次动作本身的错」在这里统一收口。 */
+  /** 三种「不是这一次动作本身的错」在这里统一收口——都是打那台设备的动作用这条。 */
   const handleFailure = useCallback(
     (err: unknown) => {
       const failure = classifyPortForwardError(err);
@@ -143,9 +156,115 @@ export function DevicePortForward({
     [load, t],
   );
 
+  /**
+   * 分配转发地址这条路失败落在哪一类——打的是服务端自己，不是那台设备，所以与
+   * `handleFailure` 分开收口，不碰 `unreachable`（那个只描述「设备够不着」）。
+   */
+  const handleLinkFailure = useCallback(
+    (err: unknown) => {
+      const failure = classifyPortForwardLinkError(err);
+      // 前缀不是这个账号的 / 已撤销 / 不存在：手上这一行大概率被并发操作抢先删了，
+      // 重取列表，而不是把一句机器原话摆到用户面前。
+      if (failure.kind === "notFound") {
+        void load();
+        return;
+      }
+      // `unavailable`（503）与其余未知失败都直接显示服务端给的文案——那句文案本来
+      // 就是给人看的（与账号页 `loadErrorText` 同一条口径），不必在这里另编一份。
+      setActionError(failure.message);
+    },
+    [load],
+  );
+
   const replaceRow = useCallback((row: PortForwardDeclaration) => {
     setMappings((prev) => byPort(prev.map((m) => (m.id === row.id ? row : m))));
   }, []);
+
+  const dropAddress = useCallback((id: string) => {
+    setAddresses((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  /**
+   * 分配（或复用缓存的）这条映射的转发地址。「打开」「复制地址」共用这一条——第一次
+   * 用到任意一个都会走到这里分配一次，之后两个动作显示 / 复制的都是同一个串
+   * （规格「控制台界面」第一条）。
+   */
+  const ensureAddress = useCallback(
+    async (mapping: PortForwardMappingView): Promise<string> => {
+      const cached = addresses[mapping.id];
+      if (cached) return cached;
+      const link = await allocatePortForwardLink(deviceId, mapping.id);
+      if (alive.current) {
+        setAddresses((prev) => ({ ...prev, [mapping.id]: link.url }));
+      }
+      return link.url;
+    },
+    [addresses, deviceId],
+  );
+
+  /**
+   * 「打开」先同步开一个空白标签页，分配到地址之后才把它导航过去。
+   *
+   * 分配地址是一次网络往返，`await` 之后再调 `window.open` 已经跳出了这次点击的
+   * 用户手势——Chrome / Safari 的弹窗拦截器会把这次 `window.open` 当成非用户发起
+   * 而拦下来（第一次点某条映射时最容易撞上，那时地址还没缓存）。开在点击的同一个
+   * 事件循环里就没有这个问题；空白页拿到手之后，`opener` 手动置空——等价于
+   * `noopener`（被转发的那个应用与控制台不同源，不给它反向把手），但保留句柄好在
+   * 地址到手后设置它的 `location`。
+   */
+  function handleOpen(mapping: PortForwardMappingView) {
+    setActionError("");
+    const pending = window.open("", "_blank");
+    if (pending) pending.opener = null;
+    void (async () => {
+      try {
+        const url = await ensureAddress(mapping);
+        if (!alive.current) {
+          pending?.close();
+          return;
+        }
+        if (pending) {
+          pending.location.href = url;
+        } else {
+          // 拿到手的那次调用被拦了（没能提前开出空白页）：退回直接开一次——多数
+          // 浏览器仍然认它跑在同一次用户手势派生的宏任务里，拦不住也没有更好的兜底。
+          window.open(url, "_blank", "noopener,noreferrer");
+        }
+      } catch (err) {
+        pending?.close();
+        if (!alive.current) return;
+        handleLinkFailure(err);
+      }
+    })();
+  }
+
+  /**
+   * 复制地址。
+   *
+   * 走共享包的 `copyTextWithToast` 而不是自己摸 `navigator.clipboard`：本站常在
+   * `http://<局域网 IP>:port` 这类**非安全上下文**下部署，那里 Clipboard API 整个
+   * 对象都不存在，只剩它的 `execCommand` 兜底。回执只能是 toast —— 这一行上没有
+   * 留内联「已复制」的地方。
+   */
+  async function handleCopy(mapping: PortForwardMappingView) {
+    setActionError("");
+    try {
+      const url = await ensureAddress(mapping);
+      if (!alive.current) return;
+      void copyTextWithToast(url, {
+        successTitle: t("device.portForward.copyDone"),
+        errorTitle: t("device.portForward.copyFailed"),
+      });
+    } catch (err) {
+      if (!alive.current) return;
+      handleLinkFailure(err);
+    }
+  }
 
   async function handleToggle(
     mapping: PortForwardMappingView,
@@ -170,6 +289,7 @@ export function DevicePortForward({
       if (!alive.current) return;
       markReached();
       setMappings((prev) => prev.filter((m) => m.id !== mapping.id));
+      dropAddress(mapping.id);
     } catch (err) {
       if (!alive.current) return;
       handleFailure(err);
@@ -177,79 +297,44 @@ export function DevicePortForward({
   }
 
   /**
-   * 新标签页打开。
-   *
-   * `noopener,noreferrer` 是 `<a target="_blank">` 上那两个 rel 的等价物：被转发的
-   * 那个应用与控制台同源，不给它 `window.opener` 这条反向把手。
+   * 新增表单本身(哪个字段、https 才出的勾选框、目标写法的即时校验)全在共享包里,
+   * 这里只管把提交的载荷送到设备、把设备回来的业务码翻成一句人话。resolve 让
+   * 表单关掉、reject 把 `error.message` 显示在表单里——够不着设备是一种例外:
+   * 静默转离线态,不当错误显示(表单已经在共享包里因为 `offline` 变真而自己关掉)。
    */
-  function handleOpen(mapping: PortForwardMappingView) {
-    if (!mapping.address) return;
-    window.open(mapping.address, "_blank", "noopener,noreferrer");
-  }
-
-  /**
-   * 复制地址。
-   *
-   * 走共享包的 `copyTextWithToast` 而不是自己摸 `navigator.clipboard`：本站常在
-   * `http://<局域网 IP>:port` 这类**非安全上下文**下部署，那里 Clipboard API 整个
-   * 对象都不存在，只剩它的 `execCommand` 兜底。回执只能是 toast —— 这一行上没有
-   * 留内联「已复制」的地方。
-   */
-  function handleCopy(mapping: PortForwardMappingView) {
-    if (!mapping.address) return;
-    void copyTextWithToast(mapping.address, {
-      successTitle: t("device.portForward.copyDone"),
-      errorTitle: t("device.portForward.copyFailed"),
-    });
-  }
-
-  function openAddForm() {
-    setAdding(true);
-    setAddError("");
-  }
-
-  function closeAddForm() {
-    setAdding(false);
-    setPort("");
-    setName("");
-    setAddError("");
-  }
-
-  async function handleCreate(event: React.FormEvent) {
-    event.preventDefault();
-    const parsed = Number(port.trim());
-    if (port.trim() === "" || !Number.isInteger(parsed)) {
-      setAddError(t("device.portForward.add.invalidPort"));
-      return;
-    }
-    setAddError("");
+  async function handleCreate(input: PortForwardCreateInput) {
     try {
-      const row = await createPortForward(fingerprint, parsed, name.trim());
+      const row = await createPortForward(
+        fingerprint,
+        input.target,
+        input.name,
+        input.insecure,
+      );
       if (!alive.current) return;
       markReached();
       setMappings((prev) => byPort([...prev, row]));
-      closeAddForm();
     } catch (err) {
       if (!alive.current) return;
       const failure = classifyPortForwardError(err);
-      // 两个码都指向端口那一格，但出路不同：一个换端口，一个把号填对。
-      if (failure.kind === "portTaken") {
-        setAddError(t("device.portForward.add.portTaken"));
-        return;
-      }
-      if (failure.kind === "invalidPort") {
-        setAddError(t("device.portForward.add.invalidPort"));
-        return;
-      }
       if (failure.kind === "disconnected") {
         setUnreachable(true);
-        closeAddForm();
         return;
       }
-      setAddError(
-        t("device.portForward.add.failed", {
-          message: failure.message,
-        }),
+      // 判定权威恒在设备侧(规格「映射与目标」决策 8):两个码都指着目标那一格,
+      // 但出路不同——一个换个目标,一个把写法改对。
+      if (failure.kind === "targetTaken") {
+        throw new Error(t("device.portForward.add.targetTaken"), {
+          cause: err,
+        });
+      }
+      if (failure.kind === "invalidTarget") {
+        throw new Error(tUi("portForward.add.invalidTarget"), {
+          cause: err,
+        });
+      }
+      throw new Error(
+        t("device.portForward.add.failed", { message: failure.message }),
+        { cause: err },
       );
     }
   }
@@ -261,8 +346,11 @@ export function DevicePortForward({
    */
   const displayPhase = offline ? "ready" : phase;
   const views: PortForwardMappingView[] = mappings.map((m) => ({
-    ...m,
-    address: portForwardAddress(deviceId, m.port),
+    id: m.id,
+    name: m.name,
+    enabled: m.enabled,
+    target: m.target,
+    address: addresses[m.id],
   }));
 
   return (
@@ -304,7 +392,7 @@ export function DevicePortForward({
           onCopyAddress={handleCopy}
           // 离线时收起来的只有**新增入口**：它领向一张填完必然提交失败的表单。
           // 已经列出来的那些行整行保留、只是打不开（上游规格「三种非常态」）。
-          onCreate={isOffline ? undefined : openAddForm}
+          onCreate={isOffline ? undefined : handleCreate}
           onToggleEnabled={handleToggle}
           onRemove={handleRemove}
         />
@@ -312,62 +400,6 @@ export function DevicePortForward({
 
       {actionError ? (
         <p className="text-xs text-destructive">{actionError}</p>
-      ) : null}
-
-      {adding && displayPhase === "ready" && !isOffline ? (
-        <form
-          data-testid={`device-port-forward-add-${deviceId}`}
-          className="flex flex-col gap-1.5"
-          onSubmit={handleCreate}
-        >
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="flex w-24 flex-col gap-1">
-              <Label
-                htmlFor={`${fieldId}-port`}
-                className="text-2xs text-muted-foreground"
-              >
-                {t("device.portForward.add.port")}
-              </Label>
-              <Input
-                id={`${fieldId}-port`}
-                type="number"
-                inputMode="numeric"
-                className="h-7 text-xs"
-                aria-invalid={addError !== ""}
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-              />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <Label
-                htmlFor={`${fieldId}-name`}
-                className="text-2xs text-muted-foreground"
-              >
-                {t("device.portForward.add.name")}
-              </Label>
-              <Input
-                id={`${fieldId}-name`}
-                className="h-7 text-xs"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
-            <Button type="submit" size="xs">
-              {t("device.portForward.add.submit")}
-            </Button>
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              onClick={closeAddForm}
-            >
-              {t("device.portForward.add.cancel")}
-            </Button>
-          </div>
-          {addError ? (
-            <p className="text-2xs text-destructive">{addError}</p>
-          ) : null}
-        </form>
       ) : null}
     </div>
   );

@@ -3,33 +3,29 @@ package portforward_ctr_test
 import (
 	"context"
 	"errors"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 	"github.com/agentre-hub/agentre/pkg/wire/portforwardhost"
 	"github.com/agentre-hub/agentre/pkg/wire/protorpc"
 	"github.com/agentre-hub/agentre/pkg/wire/rpcerror"
 
-	"github.com/agentre-hub/agentre-server/internal/api/portforward"
 	"github.com/agentre-hub/agentre-server/internal/controller/portforward_ctr"
-	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
-	"github.com/agentre-hub/agentre-server/internal/pkg/ginctx"
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 )
 
-// 这一批用例盯的是**失败的措辞**：共享代理判出「是哪一件事」（七种），控制台按种类
-// 决定说什么——四种各一张完整的页，三种一句话（规格
-// 2026-09-09-console-forward-failure-pages 决策 5/6）。
+// 这一批用例盯的是**失败的措辞**：共享代理判出「是哪一件事」（九种），控制台按种类
+// 决定说什么——六种各一张完整的页，三种一句话（规格
+// 2026-09-09-console-forward-failure-pages 决策 5/6，三张「目标连不上」见
+// 2026-09-21-port-forward-subdomain「失败的呈现」）。
 //
 // 判据是**种类**，不是状态码：上一轮那层按纯状态码嗅探的改写 writer 分不开「谁答的」，
 // 把被转发应用自己的 502 也改写掉了（Problem 1，有运行期截图）。所以这里的失败是让
@@ -37,75 +33,29 @@ import (
 // 设备，钩子按生产上那样装在 NewProxy 上。给一个已经贴好类别的假失败就等于把判据本身
 // 绕过去了。
 //
-// 整条真实路由树（真 SessionAuth、真 SPA 兜底）那一层的用例住在
-// internal/api/portforward/，本包只装到「gin 把请求交给 Forward」这一层为止。
+// 上一轮这个包还兼着 /fw/ 那条路由的控制器（Forward），整条真实路由树的用例因此住在
+// internal/api/portforward/。规格 2026-09-21-port-forward-subdomain 决策 13 把 /fw/
+// 整条路径删掉，本包不再挂路由（见 portforward.go 的包注释）：这里因此改成直接把
+// portforwardhost.Proxy 当 http.Handler 调，不再经过任何 gin 路由树——钩子本身与路由
+// 无关，这样测反而更直接。
+
+// consoleURL 是这批用例里控制台的地址；renderFailure 是生产装配同一个构造出来的钩子。
+const consoleURL = "https://console.test"
+
+var renderFailure = portforward_ctr.NewFailureRenderer(consoleURL)
 
 const (
-	pageUserID      = int64(7)
-	pageDeviceID    = int64(12)
-	pageFingerprint = "sha256:fp-agentred-01"
-	// 这四个端口是**设备那一侧**回哪个领域码的开关，见 proxyFor。
-	portNoListener  = uint32(3000)
-	portNotDeclared = uint32(4000)
-	portDisabled    = uint32(4001)
-	portUnreachable = uint32(4002)
+	// 这几个映射 id 是**设备那一侧**回哪个领域码的开关，见 proxyFor。
+	mappingNoListener      = int64(3000)
+	mappingNotDeclared     = int64(4000)
+	mappingDisabled        = int64(4001)
+	mappingUnreachable     = int64(4002)
+	mappingNameResolution  = int64(4003)
+	mappingTLSVerification = int64(4004)
+	// mappingNamedTarget 回「连接被拒」，并按 rpcerror 的约定在 Details 里带回这条
+	// 声明的目标——生产上的设备就是这么回的（agentre 仓 daemon/portforward）。
+	mappingNamedTarget = int64(4005)
 )
-
-// ── 替身 ────────────────────────────────────────────────────────────────
-
-type stubDevices struct{ device *device_entity.Device }
-
-func (s stubDevices) OwnedDevice(_ context.Context, _, _ int64) (*device_entity.Device, error) {
-	return s.device, nil
-}
-
-// stubPresence 逐次交出在线判定：第 n 次读取 answers[n]，用完之后一直取最后一个。
-// 它同时是「这条路上一共读了几次在线状态」的计数器——本轮把那个数从 2 压回 1
-// （规格决策 4）。
-type stubPresence struct {
-	mu      sync.Mutex
-	answers []bool
-	err     error
-	calls   int
-}
-
-func (s *stubPresence) IsDaemonOnline(_ context.Context, _ int64, _ string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	n := s.calls
-	s.calls++
-	if s.err != nil {
-		return false, s.err
-	}
-	if n >= len(s.answers) {
-		return s.answers[len(s.answers)-1], nil
-	}
-	return s.answers[n], nil
-}
-
-func (s *stubPresence) asked() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
-}
-
-type stubForwarder struct {
-	handler  http.Handler
-	acquired int
-	released int
-}
-
-func (s *stubForwarder) Acquire(
-	_ context.Context, _ int64, _ string, _ uint32,
-) (http.Handler, func(), error) {
-	s.acquired++
-	return s.handler, func() { s.released++ }, nil
-}
-
-// handlerFunc 让「被转发应用」用一个函数就能站上去。
-type handlerFunc func(http.ResponseWriter, *http.Request)
-
-func (f handlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request) { f(w, r) }
 
 // ── 内存帧管道：一条真的 protorpc 连接，底下换成 channel ──────────────────
 //
@@ -113,10 +63,10 @@ func (f handlerFunc) ServeHTTP(w http.ResponseWriter, r *http.Request) { f(w, r)
 // 领域码回绝 open，于是两端都是内存里的一条 protorpc.Conn。那对管道与
 // portforward_svc 的用例共用（internal/testutils.NewFramePipe），不在这里再抄一份。
 
-// proxyFor 造一个真的代理，转到 conn 对面那台设备的 port 上，并按**生产上那样**把
-// 控制台的渲染钩子装在构造处（生产上这一步在 portforward_svc.Pool 里，钩子由
+// proxyFor 造一个真的代理，转到 conn 对面那台设备的 mappingID 上，并按**生产上那样**
+// 把控制台的渲染钩子装在构造处（生产上这一步在 portforward_svc.Pool 里，钩子由
 // internal/bootstrap 交进去）。
-func proxyFor(t *testing.T, port uint32) http.Handler {
+func proxyFor(t *testing.T, mappingID int64) http.Handler {
 	t.Helper()
 	clientTransport, deviceTransport := testutils.NewFramePipe()
 	client := protorpc.NewConn(clientTransport, protorpc.NewRegistry(),
@@ -127,21 +77,39 @@ func proxyFor(t *testing.T, port uint32) http.Handler {
 		func() *agentrewire.PortForwardOpenRequest { return &agentrewire.PortForwardOpenRequest{} },
 		func(_ context.Context, request *agentrewire.PortForwardOpenRequest,
 		) (*agentrewire.PortForwardOpenResponse, error) {
-			switch request.GetPort() {
-			case portNotDeclared:
+			switch request.GetMappingId() {
+			case mappingNotDeclared:
 				return nil, &rpcerror.Error{
 					Code: rpcerror.CodePortForwardNotDeclared, Message: "no such declaration",
 				}
-			case portDisabled:
+			case mappingDisabled:
 				return nil, &rpcerror.Error{
 					Code: rpcerror.CodePortForwardDisabled, Message: "declaration disabled",
 				}
-			case portUnreachable:
-				// 不是这三个领域码里的任何一个：共享包把它归成「够不着设备」。
+			case mappingNameResolution:
+				return nil, &rpcerror.Error{
+					Code: rpcerror.CodePortForwardNameResolution, Message: "no such host",
+				}
+			case mappingTLSVerification:
+				return nil, &rpcerror.Error{
+					Code: rpcerror.CodePortForwardTLSVerification, Message: "x509: certificate signed by unknown authority",
+				}
+			case mappingNamedTarget:
+				details, err := proto.Marshal(&agentrewire.PortForwardMapping{
+					Id: mappingNamedTarget, Target: "http://127.0.0.1:5173",
+				})
+				if err != nil {
+					return nil, err
+				}
+				return nil, &rpcerror.Error{
+					Code: rpcerror.CodePortForwardNoListener, Message: "connection refused", Details: details,
+				}
+			case mappingUnreachable:
+				// 不是这几个领域码里的任何一个：共享包把它归成「够不着设备」。
 				return nil, errors.New("something else entirely")
 			default:
 				return nil, &rpcerror.Error{
-					Code: rpcerror.CodePortForwardNoListener, Message: "nothing listening",
+					Code: rpcerror.CodePortForwardNoListener, Message: "connection refused",
 				}
 			}
 		})
@@ -153,42 +121,8 @@ func proxyFor(t *testing.T, port uint32) http.Handler {
 		_ = client.Close()
 		_ = device.Close()
 	})
-	return portforwardhost.NewProxy(client, port, func(string) {},
-		portforwardhost.WithFailureRenderer(portforward_ctr.RenderFailure))
-}
-
-// ── 装配 ────────────────────────────────────────────────────────────────
-
-type harness struct {
-	engine    *gin.Engine
-	presence  *stubPresence
-	forwarder *stubForwarder
-}
-
-// newHarness 把控制器挂在它生产上那条路由形状上。登录态由 middleware.SessionAuth
-// 判掉（那一层的用例在 internal/api/portforward），这里只补它落下的那把键。
-func newHarness(t *testing.T, app http.Handler, online ...bool) *harness {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	h := &harness{
-		presence:  &stubPresence{answers: online},
-		forwarder: &stubForwarder{handler: app},
-	}
-	device := &device_entity.Device{ID: pageDeviceID, UserID: pageUserID, Fingerprint: pageFingerprint}
-	ctr := portforward_ctr.New(stubDevices{device: device}, h.presence, h.forwarder)
-	engine := gin.New()
-	engine.Any(portforward.RoutePattern, func(c *gin.Context) {
-		ginctx.SetUserID(c, pageUserID)
-	}, ctr.Forward)
-	h.engine = engine
-	return h
-}
-
-func (h *harness) get(t *testing.T, path string) *httptest.ResponseRecorder {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	h.engine.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-	return rec
+	return portforwardhost.NewProxy(client, mappingID, func(string) {},
+		portforwardhost.WithFailureRenderer(renderFailure))
 }
 
 // assertFailurePage 断言这是一张完整的失败页，且两个出口都在：刷新与回到设备。
@@ -203,17 +137,21 @@ func assertFailurePage(t *testing.T, rec *httptest.ResponseRecorder) string {
 	assert.True(t, strings.HasSuffix(strings.TrimSpace(body), "</html>"),
 		"页面后面不该再跟着别的正文\n%s", body)
 	assert.Contains(t, body, ">刷新<", "缺「刷新」这个出口")
-	assert.Contains(t, body, `href="/devices"`, "缺「回到设备」这个出口")
+	// 「回到设备」是控制台设备页的绝对地址：页面开在转发域上，相对的 /devices 会落到
+	// 被转发应用自己那里。
+	assert.Contains(t, body, `href="`+consoleURL+`/devices"`, "缺「回到设备」这个出口")
 	// 不引外部资源：这一页的宿主是被转发的那个应用，拉不到控制台的静态资源也要能看。
-	for _, forbidden := range []string{"http://", "https://", "<img", "<script"} {
+	// 判的是「加载」的形状——正文会点名映射的目标（规格「失败的呈现」），「回到设备」
+	// 是一次导航，它们都不是加载。
+	for _, forbidden := range []string{`src=`, "<link", "url(", "<img", "<script"} {
 		assert.NotContains(t, body, forbidden, "失败页不得引入外部资源")
 	}
 	return body
 }
 
-// ── 四种出页，三种出一句话 ──────────────────────────────────────────────
+// ── 六种出页，三种出一句话 ──────────────────────────────────────────────
 
-// 这一条钉的是**种类到答复**那张表本身：七种一个不落，外加共享包将来长出的第八种。
+// 这一条钉的是**种类到答复**那张表本身：九种一个不落，外加共享包将来长出的第十种。
 // 状态码原样照用共享包为该种类定的那一个（本轮不改任何一种失败的状态码）。
 func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) {
 	for _, c := range []struct {
@@ -224,9 +162,9 @@ func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) 
 		contains []string
 	}{
 		{
-			name: "端口没有映射", kind: portforwardhost.FailureNotDeclared,
+			name: "映射不存在", kind: portforwardhost.FailureNotDeclared,
 			status: http.StatusNotFound, page: true,
-			contains: []string{"没有转发映射", "127.0.0.1:3000", "控制台的设备页"},
+			contains: []string{"这条映射不存在", "控制台的设备页"},
 		},
 		{
 			name: "映射已停用", kind: portforwardhost.FailureDisabled,
@@ -235,9 +173,19 @@ func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) 
 			contains: []string{"已停用", "控制台的设备页", "启用"},
 		},
 		{
-			name: "端口上没有服务", kind: portforwardhost.FailureNoListener,
+			name: "目标拒绝连接", kind: portforwardhost.FailureNoListener,
 			status: http.StatusBadGateway, page: true,
-			contains: []string{"没有服务在监听", "把服务起起来"},
+			contains: []string{"目标连不上", "没有服务在监听", "把服务起起来"},
+		},
+		{
+			name: "目标解析不出主机名", kind: portforwardhost.FailureNameResolution,
+			status: http.StatusBadGateway, page: true,
+			contains: []string{"目标连不上", "解析不了", "主机名"},
+		},
+		{
+			name: "目标证书没通过校验", kind: portforwardhost.FailureTLSVerification,
+			status: http.StatusBadGateway, page: true,
+			contains: []string{"目标连不上", "证书没有通过校验", "忽略证书错误"},
 		},
 		{
 			name: "够不着设备", kind: portforwardhost.FailureDeviceUnreachable,
@@ -260,9 +208,9 @@ func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) 
 			contains: []string{"WebSocket"},
 		},
 		{
-			// 共享包将来长出第八种：不能沉默地套上四张页里的某一张，那等于替一件我们
+			// 共享包将来长出第十种：不能沉默地套上面某一张页，那等于替一件我们
 			// 还不认识的事编一个下一步。
-			name: "还不认识的第八种", kind: portforwardhost.FailureKind(99),
+			name: "还不认识的第十种", kind: portforwardhost.FailureKind(99),
 			status: http.StatusBadGateway, page: false,
 			contains: []string{"没有完成"},
 		},
@@ -270,8 +218,8 @@ func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) 
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 
-			portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
-				portforwardhost.Failure{Kind: c.kind, Port: 3000, Status: c.status})
+			renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+				portforwardhost.Failure{Kind: c.kind, MappingID: 3000, Status: c.status})
 
 			require.Equal(t, c.status, rec.Code, "状态码照用共享包定的那一个")
 			assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
@@ -289,18 +237,22 @@ func TestRenderFailure_GivenEachKind_ThenTheAnswerItsUserCanActOn(t *testing.T) 
 	}
 }
 
-// 四张页说的是四件不同的事：区别必须在页面上说得出来，不然用户不知道该做哪一件。
-func TestRenderFailure_TheFourPagesSayFourDifferentThings(t *testing.T) {
+// 六张页说的是六件不同的事：区别必须在页面上说得出来，不然用户不知道该做哪一件。
+// 三张「目标连不上」共用同一个标题（规格「失败的呈现」：同一类，三种原因），但正文
+// 必须彼此不同——这条钉的正是「共用标题不等于说的是同一件事」。
+func TestRenderFailure_TheSixPagesSayDifferentThings(t *testing.T) {
 	seen := map[string]portforwardhost.FailureKind{}
 	for _, kind := range []portforwardhost.FailureKind{
 		portforwardhost.FailureNotDeclared,
 		portforwardhost.FailureDisabled,
 		portforwardhost.FailureNoListener,
+		portforwardhost.FailureNameResolution,
+		portforwardhost.FailureTLSVerification,
 		portforwardhost.FailureDeviceUnreachable,
 	} {
 		rec := httptest.NewRecorder()
-		portforward_ctr.RenderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
-			portforwardhost.Failure{Kind: kind, Port: 3000, Status: http.StatusBadGateway})
+		renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+			portforwardhost.Failure{Kind: kind, MappingID: 3000, Status: http.StatusBadGateway})
 		body := rec.Body.String()
 		if other, ok := seen[body]; ok {
 			t.Fatalf("第 %d 种与第 %d 种答成了同一张页", kind, other)
@@ -309,157 +261,86 @@ func TestRenderFailure_TheFourPagesSayFourDifferentThings(t *testing.T) {
 	}
 }
 
+// 「目标连不上」三张页把话说到具体的目标上（规格「失败的呈现」）：连接被拒说
+// 「<目标> 上没有服务在监听」，名字解析失败说「设备解析不了 <主机>」，证书校验失败说
+// 「<目标> 的证书没有通过校验」并提示勾选「忽略证书错误」。目标是设备在回绝里说出的
+// 那一条（Failure.Target）；它来自用户自己的声明，写进 HTML 之前要转义。
+func TestRenderFailure_GivenTheDeviceNamedTheTarget_ThenThePageNamesIt(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		kind     portforwardhost.FailureKind
+		target   string
+		contains []string
+	}{
+		{
+			name: "连接被拒", kind: portforwardhost.FailureNoListener, target: "http://127.0.0.1:3000",
+			contains: []string{"http://127.0.0.1:3000 上没有服务在监听"},
+		},
+		{
+			name: "名字解析失败", kind: portforwardhost.FailureNameResolution, target: "https://nas.lan:8443",
+			contains: []string{"设备解析不了 nas.lan"},
+		},
+		{
+			name: "证书校验失败", kind: portforwardhost.FailureTLSVerification, target: "https://nas.lan:8443",
+			contains: []string{"https://nas.lan:8443 的证书没有通过校验", "忽略证书错误"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+
+			renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+				portforwardhost.Failure{Kind: c.kind, MappingID: 3000, Status: http.StatusBadGateway, Target: c.target})
+
+			body := assertFailurePage(t, rec)
+			for _, want := range c.contains {
+				assert.Contains(t, body, want)
+			}
+		})
+	}
+
+	t.Run("目标里的标记被转义", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+
+		renderFailure(rec, httptest.NewRequest(http.MethodGet, "/", nil),
+			portforwardhost.Failure{
+				Kind: portforwardhost.FailureNoListener, MappingID: 3000, Status: http.StatusBadGateway,
+				Target: `http://a<script>x:80`,
+			})
+
+		body := assertFailurePage(t, rec)
+		assert.Contains(t, body, "http://a&lt;script&gt;x:80 上没有服务在监听")
+	})
+}
+
 // ── 种类真的从共享代理走过来 ────────────────────────────────────────────
 
 // 上面那张表钉的是「种类 → 答复」，这一批钉的是「设备回的领域码 → 种类」这一段真的
 // 接得上：一条真的连接、一个真的按码回绝 open 的设备、生产上那样装的钩子。
-func TestForward_GivenTheDeviceRejectsOpen_ThenTheConsolePageForThatKind(t *testing.T) {
+func TestProxy_GivenTheDeviceRejectsOpen_ThenTheConsolePageForThatKind(t *testing.T) {
 	for _, c := range []struct {
-		name    string
-		path    string
-		port    uint32
-		status  int
-		heading string
+		name      string
+		mappingID int64
+		status    int
+		heading   string
 	}{
-		{"端口没有映射", "/fw/12/4000/", portNotDeclared, http.StatusNotFound, "没有转发映射"},
-		{"映射已停用", "/fw/12/4001/", portDisabled, http.StatusForbidden, "已停用"},
-		{"端口上没有服务", "/fw/12/3000/", portNoListener, http.StatusBadGateway, "没有服务在监听"},
-		{"够不着设备", "/fw/12/4002/", portUnreachable, http.StatusBadGateway, "设备离线"},
+		{"映射不存在", mappingNotDeclared, http.StatusNotFound, "这条映射不存在"},
+		{"映射已停用", mappingDisabled, http.StatusForbidden, "已停用"},
+		{"目标拒绝连接", mappingNoListener, http.StatusBadGateway, "目标连不上"},
+		{"目标解析不出主机名", mappingNameResolution, http.StatusBadGateway, "目标连不上"},
+		{"目标证书没通过校验", mappingTLSVerification, http.StatusBadGateway, "目标连不上"},
+		{"够不着设备", mappingUnreachable, http.StatusBadGateway, "设备离线"},
+		// 设备在回绝里说出了目标：页面点名它，这一段真的从设备一路走到了页面上。
+		{"目标拒绝连接且点名目标", mappingNamedTarget, http.StatusBadGateway, "http://127.0.0.1:5173 上没有服务在监听"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			h := newHarness(t, proxyFor(t, c.port), true)
+			proxy := proxyFor(t, c.mappingID)
 
-			rec := h.get(t, c.path)
+			rec := httptest.NewRecorder()
+			proxy.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 			require.Equal(t, c.status, rec.Code)
 			body := assertFailurePage(t, rec)
 			assert.Contains(t, body, c.heading)
-			// 规格决策 4：种类自己就分开了「够不着」与「没有服务」，不必再读一次在线
-			// 状态去猜。open 之前那一次是唯一的一次。
-			assert.Equal(t, 1, h.presence.asked(),
-				"为了分类别多读一次在线状态，本轮已经删掉了")
-			assert.Equal(t, 1, h.forwarder.released, "归还没调到，这条连接的引用就永远不归零")
 		})
 	}
-}
-
-// open 之前的在线判定不过：这一类**不经过**共享代理（连都没拨），由控制器自己答，
-// 规格决策 7 要它维持原样——仍是「设备离线」那一张。
-func TestForward_GivenOfflineBeforeOpen_ThenTheOfflinePageWithoutDialing(t *testing.T) {
-	h := newHarness(t, proxyFor(t, portNoListener), false)
-
-	rec := h.get(t, "/fw/12/3000/")
-
-	require.Equal(t, http.StatusBadGateway, rec.Code)
-	body := assertFailurePage(t, rec)
-	assert.Contains(t, body, "设备离线")
-	assert.Contains(t, body, "等它重新上线")
-	assert.Equal(t, 0, h.forwarder.acquired, "在线判定不过就不该往中继上发任何东西")
-	assert.Equal(t, 1, h.presence.asked())
-}
-
-// 在线判定自己读不出来：与「读不出来就当它不在线」同一条口径，也不拨号。
-func TestForward_GivenPresenceUnreadable_ThenTheOfflinePageWithoutDialing(t *testing.T) {
-	h := newHarness(t, proxyFor(t, portNoListener), true)
-	h.presence.err = errors.New("redis is down")
-
-	rec := h.get(t, "/fw/12/3000/")
-
-	require.Equal(t, http.StatusBadGateway, rec.Code)
-	assert.Contains(t, rec.Body.String(), "设备离线")
-	assert.Equal(t, 0, h.forwarder.acquired)
-}
-
-// ── 被转发应用自己的答复：一个字节都不许动 ──────────────────────────────
-
-// 这一条是 Problem 1 的回归守卫。旧的改写层按纯状态码嗅探，把应用自己答的 502 也换成
-// 了「端口上没有服务」那张页——服务在跑，页面却叫用户去起它（运行期证据
-// 07-upstream-502-rewritten.png）。控制台此刻在 c.Writer 外面**不包任何一层**，钩子
-// 只挂在共享代理自己的失败上，所以这里不可能再误伤。
-func TestForward_TheForwardedAppsOwnAnswersPassThroughByteForByte(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		status int
-		body   string
-	}{
-		{"应用自己的 502", http.StatusBadGateway, "upstream says 502"},
-		{"应用自己的 404", http.StatusNotFound, "no such page in my app"},
-		{"应用自己的 403", http.StatusForbidden, "my app says no"},
-		{"应用自己的 500", http.StatusInternalServerError, "my app blew up"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			app := handlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-				w.Header().Set("X-App", "yes")
-				w.WriteHeader(c.status)
-				_, _ = io.WriteString(w, c.body)
-			})
-			h := newHarness(t, app, true)
-
-			rec := h.get(t, "/fw/12/3000/")
-
-			require.Equal(t, c.status, rec.Code)
-			assert.Equal(t, c.body, rec.Body.String(), "应用自己的正文被控制台换掉了")
-			assert.Equal(t, "yes", rec.Header().Get("X-App"))
-			assert.Equal(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"))
-			assert.Equal(t, 1, h.presence.asked(), "应用自己的答复不该引出任何额外的判定")
-		})
-	}
-}
-
-func TestForward_SuccessfulResponsesPassThroughUntouched(t *testing.T) {
-	app := handlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("X-App", "yes")
-		_, _ = io.WriteString(w, "<h1>hello from the device</h1>")
-	})
-	h := newHarness(t, app, true)
-
-	rec := h.get(t, "/fw/12/3000/")
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "<h1>hello from the device</h1>", rec.Body.String())
-	assert.Equal(t, "yes", rec.Header().Get("X-App"))
-	assert.Equal(t, 1, h.presence.asked(), "成功的那条不该多读一次在线状态")
-	assert.Equal(t, 1, h.forwarder.released, "归还没调到，这条连接的引用就永远不归零")
-}
-
-// 分块写出去的字节一块都不能少，Flush 也不能被吞掉。
-func TestForward_ChunkedWritesAndFlushesAreNotSwallowed(t *testing.T) {
-	app := handlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "first\n")
-		w.(http.Flusher).Flush()
-		_, _ = io.WriteString(w, "second\n")
-		w.(http.Flusher).Flush()
-	})
-	h := newHarness(t, app, true)
-
-	rec := h.get(t, "/fw/12/3000/")
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, "first\nsecond\n", rec.Body.String())
-}
-
-// 被转发应用拿到的 writer 必须能被 http.NewResponseController 认出来：共享包的
-// serveUpgraded 走的就是它（101 升级），Flush 也走它。包一层就断链的话，升级会当场
-// 答 500 而不是把连接交出去。
-func TestForward_TheProxyGetsAResponseControllableWriter(t *testing.T) {
-	var flushable, hijackable bool
-	var flushErr error
-	app := handlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, flushable = w.(http.Flusher)
-		_, hijackable = w.(http.Hijacker)
-		flushErr = http.NewResponseController(w).Flush()
-	})
-	h := newHarness(t, app, true)
-
-	rec := h.get(t, "/fw/12/3000/")
-
-	assert.True(t, flushable, "拿不到 Flusher，流式当场失效")
-	assert.True(t, hijackable, "拿不到 Hijacker，101 升级当场失效")
-	require.NoError(t, flushErr, "共享包走的是 ResponseController，它找不到 Flusher 就流不起来")
-	// 「有一个 Flush 方法」与「Flush 真的一路走到底」是两件事：上一轮那层改写 writer
-	// 在换页之后就把 Flush 吞掉了，而它的类型断言照样过。
-	assert.True(t, rec.Flushed, "Flush 没有走到底下那个 writer，流式当场失效")
 }

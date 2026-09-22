@@ -58,6 +58,18 @@ ingress:
   host: app.agentrehub.com
   # 置空则不生成 TLS 块
   tlsSecretName: agentrehub-com-tls
+  # HSTS 由本 chart 显式下发（configuration-snippet 的 more_set_headers 会替换控制器
+  # 默认的那一条，不会出现两条）。includeSubDomains 是端口转发子域加固的一环：同站
+  # 子域一律只走 https。置空则不下发、退回控制器自己的缺省。依赖控制器开着
+  # allow-snippet-annotations。
+  hsts: "max-age=31536000; includeSubDomains"
+  # 端口转发子域（spec 2026-09-21-port-forward-subdomain 决策 4）：通配 host 与它
+  # 自己的 TLS secret（通配证书走 DNS-01 签，通配 DNS 也要先配好——都是部署前提）。
+  # 与 etcd 里的 server.port_forward.base_domain 成对：host 是 "*." + base_domain。
+  # 置空则不挂转发域。例：forwardHost: "*.fw.agentrehub.com"，
+  # forwardTlsSecretName: fw-agentrehub-com-tls
+  forwardHost: ""
+  forwardTlsSecretName: ""
 
 resources:
   limits:

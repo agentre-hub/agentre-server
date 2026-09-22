@@ -25,7 +25,7 @@ func TestSessionOrDeviceAuth(t *testing.T) {
 
 	makeHandler := func() *gin.Engine {
 		r := gin.New()
-		r.GET("/me", middleware.SessionOrDeviceAuth(bearertest.Resolver{}), func(c *gin.Context) {
+		r.GET("/me", middleware.SessionOrDeviceAuth(bearertest.Resolver{}, nil), func(c *gin.Context) {
 			uid, _ := c.Get("user_id")
 			did, _ := c.Get("device_id")
 			c.JSON(http.StatusOK, gin.H{"uid": uid, "did": did})
