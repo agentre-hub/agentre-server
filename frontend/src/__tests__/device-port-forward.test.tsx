@@ -15,7 +15,10 @@
  * 用到时才分配、之后复用同一个串、部署没配 `base_domain` 时报那句话、离线不出新增
  * 入口、停用行不出「打开」。
  */
-import { rpcMethods } from "@agentre-hub/agentre-wire";
+import {
+  ErrCodePortForwardInvalidTarget,
+  rpcMethods,
+} from "@agentre-hub/agentre-wire";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import {
   fireEvent,
@@ -29,6 +32,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import i18n from "@/i18n";
 import { ApiError, api } from "@/lib/api";
+import { RelayError } from "@/lib/relayClient";
 import { relayClientPool } from "@/lib/relayClientPool";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 import Devices from "@/pages/Devices";
@@ -323,6 +327,40 @@ describe("设备卡的端口转发小节", () => {
         insecure: true,
       });
     });
+  });
+
+  it("Given 设备用 -32076 回绝新增（主机语法有问题，表单挡不住）, When 提交, Then 报共享包 @agentre-hub/agentre-ui 持有的那句「无效目标」，与表单即时校验同一句话（规格「映射与目标」声明 + 决策 15）", async () => {
+    listed = [];
+    relay.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionCounts) {
+        return { total: 0n, waiting: 0n, running: 0n };
+      }
+      if (method === rpcMethods.portForwardList) return { mappings: listed };
+      if (method === rpcMethods.portForwardCreate) {
+        throw new RelayError(
+          ErrCodePortForwardInvalidTarget,
+          "portforward: invalid target host",
+        );
+      }
+      throw new Error("unexpected relay method");
+    });
+    const card = await expandDevice("study-nuc");
+
+    fireEvent.click(
+      await within(card).findByRole("button", { name: "Add mapping" }),
+    );
+    // 主机语法有问题（含 `$`），三种写法的即时校验挡不住（判不全不是 bug），
+    // 由设备的 -32076 兜底。
+    fireEvent.change(within(card).getByLabelText("Target"), {
+      target: { value: "bad$host:1234" },
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "Add" }));
+
+    expect(
+      await within(card).findByText(
+        "Enter a port, host:port, or http(s)://host[:port].",
+      ),
+    ).toBeTruthy();
   });
 
   it("Given 一条启用中的映射, When 关掉它的开关, Then 按 id 发出 portForwardSetEnabled(false) 并把行改成停用", async () => {

@@ -178,7 +178,6 @@
     "copyDone": "地址已复制",
     "copyFailed": "复制地址失败",
     "add": {
-      "invalidTarget": "目标写法不对：填端口号，或 host:port，或 http(s)://host[:port]。",
       "targetTaken": "这台设备上这个目标已经有映射了。",
       "failed": "新增映射失败。{{message}}"
     }

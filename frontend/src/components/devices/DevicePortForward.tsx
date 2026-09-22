@@ -26,6 +26,7 @@ import {
   PortForwardSection,
   Skeleton,
   copyTextWithToast,
+  useUiTranslation,
   type PortForwardCreateInput,
   type PortForwardMappingView,
 } from "@agentre-hub/agentre-ui";
@@ -60,6 +61,10 @@ export function DevicePortForward({
   offlineDetail?: string;
 }) {
   const { t } = useTranslation();
+  // 「无效目标」这一句由共享包 `@agentre-hub/agentre-ui` 持有（规格「映射与目标」
+  // 声明 + 决策 15）：表单即时校验与设备 -32076 回绝说的是同一句话，本站不再自己
+  // 存一份译文（此前 `device.portForward.add.invalidTarget` 的重复已删）。
+  const { t: tUi } = useUiTranslation();
   const alive = useRef(true);
 
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
@@ -323,7 +328,7 @@ export function DevicePortForward({
         });
       }
       if (failure.kind === "invalidTarget") {
-        throw new Error(t("device.portForward.add.invalidTarget"), {
+        throw new Error(tUi("portForward.add.invalidTarget"), {
           cause: err,
         });
       }
