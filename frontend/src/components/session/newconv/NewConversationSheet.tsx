@@ -37,11 +37,13 @@ export function NewConversationSheet({
   // 刻意不走 DialogShell：它的 sheet 形态只在窄屏成立（`sm:` 断点之上变回浮卡），
   // 而这一层在任何宽度下都是贴底 sheet——「从底部升起挑一个 Agent」是它的形态本身，
   // 不是窄屏的适配。换过去会把宽屏上的它变成一个居中浮卡。
+  // DialogContent 默认是 grid，这里改成 flex 列：清单那一格的 flex-1/min-h-0 才成立，
+  // 被 max-h 限住高度后自己滚动，而不是随 Agent 数量把整层撑出屏幕。
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="new-conversation-sheet"
-        className="bottom-0 left-0 top-auto max-h-[82dvh] w-full max-w-none translate-x-0 translate-y-0 rounded-b-none rounded-t-2xl"
+        className="bottom-0 left-0 top-auto flex max-h-[82dvh] flex-col w-full max-w-none translate-x-0 translate-y-0 rounded-b-none rounded-t-2xl"
       >
         {/* 抓手：贴底的层要有一个「可以往下拖」的暗示，即便这一版还不支持拖。 */}
         <div aria-hidden="true" className="flex justify-center pb-1 pt-2">

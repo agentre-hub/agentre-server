@@ -1011,7 +1011,8 @@ export default function Chat() {
         projects={newConvProjects}
         initialProjectSyncId={compose.projectSyncId}
         onStarted={(session) => onDraftStarted(session, compose.agent)}
-        onBack={isMobile ? () => setCompose({ step: "pick" }) : undefined}
+        // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
+        onBack={isMobile ? () => setCompose(null) : undefined}
         headerRight={pageChrome}
       />
     ) : null;
