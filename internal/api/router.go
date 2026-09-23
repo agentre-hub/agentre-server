@@ -15,6 +15,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/controller/agent_session_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/auth_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/credentials_ctr"
+	"github.com/agentre-hub/agentre-server/internal/controller/ctl_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/device_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/engine_ctr"
 	"github.com/agentre-hub/agentre-server/internal/controller/healthz_ctr"
@@ -32,6 +33,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/credstore"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/ctl_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
@@ -69,6 +71,8 @@ type RouterDeps struct {
 	// Bearer 是鉴权中间件解析设备 access token 的那一个解析方。留给测试注入自己那份；
 	// 为空时取 device_svc.Default()（按摘要查 MySQL），与上面几项同一约定。
 	Bearer middleware.BearerResolver
+	// Ctl 是 agrctl 资源接口的执行者。留给测试注入；为空时每次请求取 ctl_svc.Default()。
+	Ctl ctl_svc.CtlSvc
 
 	// drainer 由 Router 在装配时填上：进程收到停止信号时,用它把这个副本手里的
 	// 长连接逐条礼貌关掉(见 DrainRelays)。
@@ -419,6 +423,14 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	// 核验一枚别人出示的凭据（S5）：调用方必须先出示自己的设备 access token
 	// （DeviceJWT 那组已经做到），再按调用方账号限流——挂在 DeviceJWT 之后，
 	// 这样限流键才能取到它放进上下文的账号。
+	// agrctl 资源管理（规格 2026-09-22 agrctl-resource-management「server 执行者」）：
+	// 控制台派发到 agentred 的会话里，agent 调 agrctl，agentred 在会话里审批后转过来。
+	// **只认设备 access token**——浏览器会话进不来，所以不需要 CSRF；提供方与后端的写入
+	// 因此能以设备身份执行，而浏览器那一组（SessionAuth + CSRF）原样不动。正文是
+	// protojson、错误是 {"error": …}，与桌面端的 /ctl/v1/resources 同形，不走 mux 信封。
+	ctlCtr := ctl_ctr.New(r.Ctl)
+	deviceJWT.POST(ctl_ctr.ResourcesPath, ctlCtr.Resources)
+	deviceJWT.POST(ctl_ctr.SendPath, ctlCtr.Send)
 	deviceJWT.Group("/",
 		middleware.CredentialsIntrospectPerAccountLimit(r.Cfg.RateLimit.CredentialsIntrospectPerAccountPerMin),
 	).Bind(credentialsCtr.Introspect)
