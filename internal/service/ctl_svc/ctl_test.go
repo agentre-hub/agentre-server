@@ -429,3 +429,30 @@ func TestWrite_GivenReadOnlyField_ThenBadRequest(t *testing.T) {
 	}), false)
 	assert.Equal(t, http.StatusBadRequest, statusOf(t, err))
 }
+
+// 两台机器同名时，按指纹指定设备必须落到那一台：解析一次就用那次的指纹，不能再拿
+// 规范化后的名字去解析第二遍（那一遍会撞上歧义）。
+func TestWrite_GivenTwoDevicesWithSameName_WhenBackendTargetsFingerprint_ThenThatDeviceIsUsed(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	device_repo.RegisterDevice(devices)
+	objects.EXPECT().ListByKinds(gomock.Any(), userID, readKinds).Return(fixtureRows(), nil).AnyTimes()
+	devices.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
+		{ID: agentredID, UserID: userID, Kind: device_entity.KindAgentred, Fingerprint: "fp-red", Name: "box", Status: consts.ACTIVE},
+		{ID: 5, UserID: userID, Kind: device_entity.KindAgentred, Fingerprint: "fp-twin", Name: "box", Status: consts.ACTIVE},
+	}, nil).AnyTimes()
+	engine := mock_ctl_svc.NewMockEngineWriter(ctrl)
+	fp := "fp-twin"
+	engine.EXPECT().UpdateBackend(gomock.Any(), engine_svc.BackendWriteInput{
+		UserID: userID, SyncID: "be-1", DeviceFingerprint: &fp,
+	}).Return(&engine_svc.BackendView{}, nil)
+
+	_, err := New(mock_ctl_svc.NewMockOrgWriter(ctrl), engine).Handle(context.Background(), fromAgentred, write(&agentrewire.CtlWriteRequest{
+		Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 40,
+		Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{Device: "fp-twin"}}},
+		Fields:   []string{"device"},
+	}), false)
+	require.NoError(t, err)
+}

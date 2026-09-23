@@ -113,6 +113,8 @@ type kindWrite struct {
 	cur    *agentrewire.CtlResource
 	next   *agentrewire.CtlResource
 	fields map[string]bool
+	// deviceFP 是后端 device 字段解析出的指纹（只解析一次，见 resolveBackendDevice）。
+	deviceFP string
 }
 
 // resolveBackendDevice 把后端文档里的 device 解析成账号里的一台设备，并写成它的名字，
@@ -126,7 +128,8 @@ func (w *kindWrite) resolveBackendDevice(written bool) error {
 	if err != nil {
 		return err
 	}
-	b.Device = w.st.deviceName(fp)
+	// 文档里写成名字给变更清单看；落库用这次解析出的指纹——名字可能不唯一，不能再解析一遍。
+	w.deviceFP, b.Device = fp, w.st.deviceName(fp)
 	return nil
 }
 

@@ -537,13 +537,8 @@ func (w *kindWrite) backend(ctx context.Context) (int64, error) {
 		in.ProviderKey, in.ModelKey = &providerSync, &modelKey
 	}
 	// 运行设备在 engine_svc 的每次写入里都是必填：没改就沿用它现在绑定的那台。
-	var fp string
-	if w.cur == nil || w.fields["device"] {
-		var err error
-		if fp, err = w.st.resolveDevice(next.GetDevice()); err != nil {
-			return 0, err
-		}
-	} else {
+	fp := w.deviceFP
+	if w.cur != nil && !w.fields["device"] {
 		fp = w.st.byID[cur.GetId()].AgentredFingerprint
 	}
 	in.DeviceFingerprint = &fp
