@@ -102,6 +102,7 @@ describe("previewFile 端口的能力探测", () => {
     const ports = createServerTranscriptPorts({
       submitToolPermission: async () => undefined,
       submitAnswer: async () => undefined,
+      submitToolApproval: async () => undefined,
       previewFile,
     });
 
@@ -118,6 +119,7 @@ describe("previewFile 端口的能力探测", () => {
     const ports = createServerTranscriptPorts({
       submitToolPermission: async () => undefined,
       submitAnswer: async () => undefined,
+      submitToolApproval: async () => undefined,
       previewFile,
     });
 
@@ -130,11 +132,13 @@ describe("previewFile 端口的能力探测", () => {
     const withPreview = createServerTranscriptPorts({
       submitToolPermission: async () => undefined,
       submitAnswer: async () => undefined,
+      submitToolApproval: async () => undefined,
       previewFile: () => true,
     });
     const without = createServerTranscriptPorts({
       submitToolPermission: async () => undefined,
       submitAnswer: async () => undefined,
+      submitToolApproval: async () => undefined,
     });
 
     expect(typeof withPreview.previewFile).toBe("function");

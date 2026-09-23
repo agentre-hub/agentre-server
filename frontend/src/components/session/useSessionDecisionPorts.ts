@@ -286,6 +286,25 @@ export function useSessionDecisionPorts({
     return res;
   }
 
+  /**
+   * 转录里内置写工具的审批卡（`tool_approval`：org、ctl…）的作答。中继上是一条对
+   * 所有 toolKey 通用的方法（spec 2026-09-22 决策 13），会话按 conversation_id、
+   * 卡按 request_id 指代；卡不再挂起时那台机器回的是明确的错误，原样冒泡给卡片。
+   *
+   * 不刷 waiters：这类卡不在待决清单里（那份清单只有工具授权与提问），卡的
+   * 终态由那台机器回写到转录上。
+   */
+  async function submitToolApprovalPort(input: {
+    requestId: string;
+    allow: boolean;
+  }) {
+    return clientRef.current!.request(rpcMethods.toolApprovalAnswer, {
+      conversationId: sid,
+      requestId: input.requestId,
+      allow: input.allow,
+    });
+  }
+
   const transcriptPorts = useMemo(
     () =>
       // 两个提交只在**事件回调**里读 clientRef / originRef（用户点了审批卡的
@@ -295,6 +314,7 @@ export function useSessionDecisionPorts({
       createServerTranscriptPorts({
         submitToolPermission: (input) => submitToolPermissionPort(input),
         submitAnswer: (input) => submitAnswerPort(input),
+        submitToolApproval: (input) => submitToolApprovalPort(input),
         // 与上面两个提交同一条路子：只在**事件回调**里读 ref，端口对象因此仍然
         // 只随会话变。宿主此刻能不能预览（有没有 cwd / 中继连着）由 ref 后面那
         // 个函数当场回答，不必让端口对象跟着抖。
