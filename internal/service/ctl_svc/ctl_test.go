@@ -33,7 +33,8 @@ const (
 
 // fixture 是一个账号的同步组：两个部门（dept-2 挂在 dept-1 下）、一个 Agent（在 dept-1，
 // 执行目标 be-1）、两个后端（都绑在 agentred 上）、一个提供方（一个模型、是默认）、
-// 一个项目（成员 agent-1，agentred 上有路径）。
+// 一个项目（成员 agent-1，agentred 上有路径），以及账号里那一个系统 Agent（不属于部门、
+// 没有上级）。
 func fixtureRows() []*sync_entity.SyncObject {
 	return []*sync_entity.SyncObject{
 		{ID: 10, Kind: sync_entity.KindDepartment, SyncID: "dept-1", Payload: `{"name":"研发部"}`},
@@ -48,6 +49,7 @@ func fixtureRows() []*sync_entity.SyncObject {
 		{ID: 60, Kind: sync_entity.KindProject, SyncID: "proj-1", Payload: `{"name":"agentre"}`},
 		{ID: 61, Kind: sync_entity.KindProjectAgent, SyncID: "pa-1", Payload: `{"project_sync_id":"proj-1","agent_sync_id":"agent-1"}`},
 		{ID: 62, Kind: sync_entity.KindProjectLocation, SyncID: "loc-1", ScopeSyncID: "proj-1", AgentredFingerprint: "fp-red", Payload: `{"path":"/srv/agentre"}`},
+		{ID: 19, Kind: sync_entity.KindAgent, SyncID: "agent-sys", Payload: `{"name":"CEO","system_badge":"ceo"}`},
 	}
 }
 
@@ -60,12 +62,18 @@ type harness struct {
 
 func setup(t *testing.T) *harness {
 	t.Helper()
+	return setupWith(t, fixtureRows())
+}
+
+// setupWith 同 setup，只是同步组换成 rows（删除的连带效果要一份专门的组织形状）。
+func setupWith(t *testing.T, rows []*sync_entity.SyncObject) *harness {
+	t.Helper()
 	ctrl := gomock.NewController(t)
 	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
 	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
 	sync_repo.RegisterSyncObject(objects)
 	device_repo.RegisterDevice(devices)
-	objects.EXPECT().ListByKinds(gomock.Any(), userID, readKinds).Return(fixtureRows(), nil).AnyTimes()
+	objects.EXPECT().ListByKinds(gomock.Any(), userID, readKinds).Return(rows, nil).AnyTimes()
 	devices.EXPECT().ListByUser(gomock.Any(), userID).Return([]*device_entity.Device{
 		{ID: agentredID, UserID: userID, Kind: device_entity.KindAgentred, Fingerprint: "fp-red", Name: "red-box", Status: consts.ACTIVE},
 		{ID: desktopID, UserID: userID, Kind: device_entity.KindDesktop, Fingerprint: "fp-mac", Name: "mac", Status: consts.ACTIVE},
@@ -375,7 +383,10 @@ func TestWrite_GivenDepartmentDeleteWithoutCascade_ThenChildrenMoveUpBeforeTombs
 			UserID: userID, Kind: sync_entity.KindDepartment, SyncID: "dept-2", Fields: map[string]any{"parent_sync_id": ""},
 		}).Return(&workspace_svc.OrgWriteResult{}, nil),
 		h.org.EXPECT().UpdateOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
-			UserID: userID, Kind: sync_entity.KindAgent, SyncID: "agent-1", Fields: map[string]any{"department_sync_id": ""},
+			// 顶层部门没有父部门可上移：它的 Agent 挂到系统 Agent 下（桌面端 department_svc 同口径），
+			// 而不是成为既无部门也无上级的孤儿。
+			UserID: userID, Kind: sync_entity.KindAgent, SyncID: "agent-1",
+			Fields: map[string]any{"department_sync_id": "", "parent_agent_sync_id": "agent-sys"},
 		}).Return(&workspace_svc.OrgWriteResult{}, nil),
 		h.org.EXPECT().DeleteOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
 			UserID: userID, Kind: sync_entity.KindDepartment, SyncID: "dept-1",
@@ -455,4 +466,158 @@ func TestWrite_GivenTwoDevicesWithSameName_WhenBackendTargetsFingerprint_ThenTha
 		Fields:   []string{"device"},
 	}), false)
 	require.NoError(t, err)
+}
+
+func TestWrite_GivenSubDepartmentDelete_ThenAgentsMoveToParentDepartment(t *testing.T) {
+	rows := fixtureRows()
+	rows = append(rows, &sync_entity.SyncObject{ID: 22, Kind: sync_entity.KindAgent, SyncID: "agent-2", Payload: `{"name":"Bo","department_sync_id":"dept-2"}`})
+	h := setupWith(t, rows)
+	gomock.InOrder(
+		h.org.EXPECT().UpdateOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+			UserID: userID, Kind: sync_entity.KindAgent, SyncID: "agent-2", Fields: map[string]any{"department_sync_id": "dept-1"},
+		}).Return(&workspace_svc.OrgWriteResult{}, nil),
+		h.org.EXPECT().DeleteOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+			UserID: userID, Kind: sync_entity.KindDepartment, SyncID: "dept-2",
+		}).Return(&workspace_svc.OrgWriteResult{}, nil),
+	)
+	_, err := h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+		Op: agentrewire.CtlOp_CTL_OP_DELETE, Kind: agentrewire.CtlKind_CTL_KIND_DEPARTMENT, Id: 11,
+	}), false)
+	require.NoError(t, err)
+}
+
+// ---- 部门环路 ----
+
+func moveDepartment(id, parent int64) *agentrewire.CtlRequest {
+	return write(&agentrewire.CtlWriteRequest{
+		Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_DEPARTMENT, Id: id,
+		Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Department{Department: &agentrewire.CtlDepartment{ParentId: parent}}},
+		Fields:   []string{"parentId"},
+	})
+}
+
+func TestWrite_GivenDepartmentMovedUnderItsOwnDescendant_ThenBadRequestAndNoWrite(t *testing.T) {
+	rows := fixtureRows()
+	rows = append(rows, &sync_entity.SyncObject{ID: 12, Kind: sync_entity.KindDepartment, SyncID: "dept-3", Payload: `{"name":"基础","parent_sync_id":"dept-2"}`})
+	h := setupWith(t, rows) // 写端口没有任何期望：被调用即失败
+
+	for name, parent := range map[string]int64{"self": 10, "child": 11, "grandchild": 12} {
+		_, err := h.do(t, fromAgentred, moveDepartment(10, parent), false)
+		require.Error(t, err, name)
+		assert.Equal(t, http.StatusBadRequest, statusOf(t, err), name)
+		assert.Contains(t, err.Error(), "研发部", name)
+	}
+}
+
+func TestWrite_GivenDepartmentMovedUnderUnrelatedDepartment_ThenParentIsWritten(t *testing.T) {
+	rows := fixtureRows()
+	rows = append(rows, &sync_entity.SyncObject{ID: 13, Kind: sync_entity.KindDepartment, SyncID: "dept-4", Payload: `{"name":"销售"}`})
+	h := setupWith(t, rows)
+	h.org.EXPECT().UpdateOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+		UserID: userID, Kind: sync_entity.KindDepartment, SyncID: "dept-2", Fields: map[string]any{"parent_sync_id": "dept-4"},
+	}).Return(&workspace_svc.OrgWriteResult{}, nil)
+
+	_, err := h.do(t, fromAgentred, moveDepartment(11, 13), false)
+	require.NoError(t, err)
+}
+
+// ---- Agent 删除的连带效果 ----
+
+// leadAndReports 在 fixture 上加两处引用 agent-1 的地方：它是 dept-1 的负责人，agent-3
+// 是它的下级。
+func leadAndReports() []*sync_entity.SyncObject {
+	rows := fixtureRows()
+	rows[0].Payload = `{"name":"研发部","lead_agent_sync_id":"agent-1"}`
+	return append(rows, &sync_entity.SyncObject{ID: 23, Kind: sync_entity.KindAgent, SyncID: "agent-3", Payload: `{"name":"Kai","parent_agent_sync_id":"agent-1"}`})
+}
+
+func TestWrite_GivenAgentDelete_ThenLeadIsClearedAndReportsMoveUpBeforeTombstone(t *testing.T) {
+	h := setupWith(t, leadAndReports())
+	gomock.InOrder(
+		h.org.EXPECT().UpdateOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+			UserID: userID, Kind: sync_entity.KindDepartment, SyncID: "dept-1", Fields: map[string]any{"lead_agent_sync_id": ""},
+		}).Return(&workspace_svc.OrgWriteResult{}, nil),
+		// 下级接替它的位置：它在哪个部门、上级是谁，下级就挂到哪里（桌面端 agent_svc.Delete 同口径）。
+		h.org.EXPECT().UpdateOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+			UserID: userID, Kind: sync_entity.KindAgent, SyncID: "agent-3",
+			Fields: map[string]any{"department_sync_id": "dept-1", "parent_agent_sync_id": ""},
+		}).Return(&workspace_svc.OrgWriteResult{}, nil),
+		h.org.EXPECT().DeleteOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+			UserID: userID, Kind: sync_entity.KindAgent, SyncID: "agent-1",
+		}).Return(&workspace_svc.OrgWriteResult{}, nil),
+	)
+	_, err := h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+		Op: agentrewire.CtlOp_CTL_OP_DELETE, Kind: agentrewire.CtlKind_CTL_KIND_AGENT, Id: 20,
+	}), false)
+	require.NoError(t, err)
+}
+
+func TestWrite_GivenSystemAgentDelete_ThenServiceRefusalPassesThroughAndNothingElseIsTouched(t *testing.T) {
+	rows := leadAndReports()
+	rows[0].Payload = `{"name":"研发部","lead_agent_sync_id":"agent-sys"}`
+	rows = append(rows, &sync_entity.SyncObject{ID: 24, Kind: sync_entity.KindAgent, SyncID: "agent-4", Payload: `{"name":"Lu","parent_agent_sync_id":"agent-sys"}`})
+	h := setupWith(t, rows)
+	refusal := errors.New("the system agent cannot be deleted or moved")
+	h.org.EXPECT().DeleteOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+		UserID: userID, Kind: sync_entity.KindAgent, SyncID: "agent-sys",
+	}).Return(nil, refusal) // 没有 UpdateOrgObject 期望：连带改写一条都不能先落
+
+	_, err := h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+		Op: agentrewire.CtlOp_CTL_OP_DELETE, Kind: agentrewire.CtlKind_CTL_KIND_AGENT, Id: 19,
+	}), false)
+	assert.ErrorIs(t, err, refusal)
+}
+
+// ---- 项目删除 ----
+
+func withSubProject() []*sync_entity.SyncObject {
+	return append(fixtureRows(), &sync_entity.SyncObject{ID: 63, Kind: sync_entity.KindProject, SyncID: "proj-2", Payload: `{"name":"web","parent_sync_id":"proj-1"}`})
+}
+
+func deleteProject(id int64) *agentrewire.CtlRequest {
+	return write(&agentrewire.CtlWriteRequest{Op: agentrewire.CtlOp_CTL_OP_DELETE, Kind: agentrewire.CtlKind_CTL_KIND_PROJECT, Id: id})
+}
+
+func TestWrite_GivenProjectWithSubProjects_ThenDeleteIsRefusedInPreviewAndWrite(t *testing.T) {
+	h := setupWith(t, withSubProject()) // 写端口没有任何期望：不能静默删掉整棵子树
+	for _, preview := range []bool{true, false} {
+		_, err := h.do(t, fromAgentred, deleteProject(60), preview)
+		require.Error(t, err)
+		assert.Equal(t, http.StatusConflict, statusOf(t, err))
+		assert.Equal(t, `project "agentre" has sub-projects; delete or move them first`, err.Error())
+	}
+}
+
+func TestWrite_GivenLeafProject_ThenDeleteGoesThrough(t *testing.T) {
+	h := setupWith(t, withSubProject())
+	h.org.EXPECT().DeleteOrgObject(gomock.Any(), workspace_svc.OrgWriteInput{
+		UserID: userID, Kind: sync_entity.KindProject, SyncID: "proj-2",
+	}).Return(&workspace_svc.OrgWriteResult{}, nil)
+	_, err := h.do(t, fromAgentred, deleteProject(63), false)
+	require.NoError(t, err)
+}
+
+// ---- CLI 路径覆盖不在本 spec 内 ----
+
+func TestWrite_GivenBackendCLIPath_ThenReadOnlyBadRequestAndNoWrite(t *testing.T) {
+	h := setup(t) // 写端口没有任何期望
+	for _, op := range []agentrewire.CtlOp{agentrewire.CtlOp_CTL_OP_UPDATE, agentrewire.CtlOp_CTL_OP_CREATE} {
+		_, err := h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+			Op: op, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 40,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				Name: "x", Type: "claudecode", CliPath: "/opt/claude",
+			}}},
+			Fields: []string{"name", "type", "cliPath"}[boolToInt(op == agentrewire.CtlOp_CTL_OP_UPDATE)*2:],
+		}), false)
+		require.Error(t, err, op.String())
+		assert.Equal(t, http.StatusBadRequest, statusOf(t, err), op.String())
+		assert.Contains(t, err.Error(), "cliPath", op.String())
+	}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

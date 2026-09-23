@@ -23,7 +23,8 @@ const (
 	writeAlways = writeOnCreate | writeOnUpdate
 )
 
-// writableFields 是每类资源可写的字段及其时机；不在表里的是只读字段。
+// writableFields 是每类资源可写的字段及其时机；不在表里的是只读字段。后端的 cliPath
+// 只读：CLI 路径覆盖不在本 spec 内（Out of scope），继续在桌面端或控制台界面里改。
 var writableFields = map[agentrewire.CtlKind]map[string]int{
 	agentrewire.CtlKind_CTL_KIND_AGENT: {
 		"name": writeAlways, "description": writeAlways, "departmentId": writeAlways, "backendIds": writeAlways,
@@ -46,7 +47,7 @@ var writableFields = map[agentrewire.CtlKind]map[string]int{
 		"maxOutput": writeAlways, "enabled": writeAlways, "isDefault": writeAlways,
 	},
 	agentrewire.CtlKind_CTL_KIND_BACKEND: {
-		"type": writeOnCreate, "name": writeAlways, "device": writeAlways, "cliPath": writeAlways,
+		"type": writeOnCreate, "name": writeAlways, "device": writeAlways,
 		"providerId": writeAlways, "modelId": writeAlways, "reasoningEffort": writeAlways, "env": writeAlways,
 		"configJson": writeAlways, "token": writeAlways,
 	},

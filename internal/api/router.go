@@ -420,9 +420,6 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 		syncCtr.GetAvatar,
 		engineCtr.Snapshot,
 	)
-	// 核验一枚别人出示的凭据（S5）：调用方必须先出示自己的设备 access token
-	// （DeviceJWT 那组已经做到），再按调用方账号限流——挂在 DeviceJWT 之后，
-	// 这样限流键才能取到它放进上下文的账号。
 	// agrctl 资源管理（规格 2026-09-22 agrctl-resource-management「server 执行者」）：
 	// 控制台派发到 agentred 的会话里，agent 调 agrctl，agentred 在会话里审批后转过来。
 	// **只认设备 access token**——浏览器会话进不来，所以不需要 CSRF；提供方与后端的写入
@@ -431,6 +428,9 @@ func (r *RouterDeps) Router(ctx context.Context, root *mux.Router) error {
 	ctlCtr := ctl_ctr.New(r.Ctl)
 	deviceJWT.POST(ctl_ctr.ResourcesPath, ctlCtr.Resources)
 	deviceJWT.POST(ctl_ctr.SendPath, ctlCtr.Send)
+	// 核验一枚别人出示的凭据（S5）：调用方必须先出示自己的设备 access token
+	// （DeviceJWT 那组已经做到），再按调用方账号限流——挂在 DeviceJWT 之后，
+	// 这样限流键才能取到它放进上下文的账号。
 	deviceJWT.Group("/",
 		middleware.CredentialsIntrospectPerAccountLimit(r.Cfg.RateLimit.CredentialsIntrospectPerAccountPerMin),
 	).Bind(credentialsCtr.Introspect)

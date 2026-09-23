@@ -63,8 +63,7 @@ func (w *kindWrite) rowIDOf(ctx context.Context, syncID string) (int64, error) {
 
 func (w *kindWrite) agent(ctx context.Context) (int64, error) {
 	if w.op() == agentrewire.CtlOp_CTL_OP_DELETE {
-		_, err := w.org(ctx, "delete", sync_entity.KindAgent, w.st.byID[w.cur.GetAgent().GetId()].SyncID, nil)
-		return w.cur.GetAgent().GetId(), err
+		return w.cur.GetAgent().GetId(), w.deleteAgent(ctx)
 	}
 	cur, next := w.cur.GetAgent(), w.next.GetAgent()
 	m := map[string]any{}
@@ -132,6 +131,34 @@ func (w *kindWrite) agent(ctx context.Context) (int64, error) {
 	return id, nil
 }
 
+// deleteAgent 与桌面端 agent_svc.Delete 同口径：先把它从部门负责人位置上摘掉、把它的
+// 直接下级挂到它原来的位置（它的部门与上级），再落墓碑。系统 Agent 删不掉，连带改写
+// 一条都不先落，直接交给服务层拒绝、原样透出。
+func (w *kindWrite) deleteAgent(ctx context.Context) error {
+	row := w.st.byID[w.cur.GetAgent().GetId()]
+	if w.cur.GetAgent().GetSystemBadge() == "" {
+		self := w.st.agentPayload(row)
+		for _, d := range w.st.byKind[sync_entity.KindDepartment] {
+			if w.st.departmentPayload(d).LeadAgentSyncID == row.SyncID {
+				if _, err := w.org(ctx, "update", sync_entity.KindDepartment, d.SyncID, map[string]any{"lead_agent_sync_id": ""}); err != nil {
+					return err
+				}
+			}
+		}
+		for _, a := range w.st.byKind[sync_entity.KindAgent] {
+			if w.st.agentPayload(a).ParentAgentSyncID == row.SyncID {
+				if _, err := w.org(ctx, "update", sync_entity.KindAgent, a.SyncID, map[string]any{
+					"department_sync_id": self.DepartmentSyncID, "parent_agent_sync_id": self.ParentAgentSyncID,
+				}); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	_, err := w.org(ctx, "delete", sync_entity.KindAgent, row.SyncID, nil)
+	return err
+}
+
 // setExecTargets 把 Agent 的执行目标链改成 backends 这个次序：删掉不再要的档、补上
 // 新的档，再按顺序排一次。已有的档（连同它的技能授权）原样留着。
 func (w *kindWrite) setExecTargets(ctx context.Context, agentSync string, backends []string) error {
@@ -189,8 +216,8 @@ func (w *kindWrite) department(ctx context.Context) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if w.cur != nil && sid == w.st.byID[cur.GetId()].SyncID {
-			return 0, badRequest("a department cannot be its own parent")
+		if w.cur != nil && w.st.departmentWithin(sid, w.st.byID[cur.GetId()].SyncID) {
+			return 0, badRequest("department %q cannot be moved under itself or one of its sub-departments", cur.GetName())
 		}
 		m["parent_sync_id"] = sid
 	}
@@ -234,6 +261,22 @@ func (w *kindWrite) deleteDepartment(ctx context.Context) error {
 		}
 	} else {
 		parent := w.st.departmentPayload(row).ParentSyncID
+		// 顶层部门没有父部门可上移：它的 Agent 挂到系统 Agent 下（桌面端 department_svc
+		// 同口径），否则它们会成为既无部门也无上级的孤儿。
+		moved := map[string]any{"department_sync_id": parent}
+		if parent == "" {
+			var agents bool
+			for _, a := range w.st.byKind[sync_entity.KindAgent] {
+				agents = agents || w.st.agentPayload(a).DepartmentSyncID == row.SyncID
+			}
+			if agents {
+				sys := w.st.systemAgent()
+				if sys == nil {
+					return &Error{Status: http.StatusConflict, Msg: "this account has no system agent to move the department's agents under"}
+				}
+				moved["parent_agent_sync_id"] = sys.SyncID
+			}
+		}
 		for _, d := range w.st.byKind[sync_entity.KindDepartment] {
 			if w.st.departmentPayload(d).ParentSyncID == row.SyncID {
 				if _, err := w.org(ctx, "update", sync_entity.KindDepartment, d.SyncID, map[string]any{"parent_sync_id": parent}); err != nil {
@@ -243,7 +286,7 @@ func (w *kindWrite) deleteDepartment(ctx context.Context) error {
 		}
 		for _, a := range w.st.byKind[sync_entity.KindAgent] {
 			if w.st.agentPayload(a).DepartmentSyncID == row.SyncID {
-				if _, err := w.org(ctx, "update", sync_entity.KindAgent, a.SyncID, map[string]any{"department_sync_id": parent}); err != nil {
+				if _, err := w.org(ctx, "update", sync_entity.KindAgent, a.SyncID, moved); err != nil {
 					return err
 				}
 			}
@@ -499,9 +542,6 @@ func (w *kindWrite) backend(ctx context.Context) (int64, error) {
 	}
 	if w.changed("reasoningEffort", cur.GetReasoningEffort() != next.GetReasoningEffort()) {
 		in.ReasoningEffort = ptr(next.GetReasoningEffort())
-	}
-	if w.changed("cliPath", cur.GetCliPath() != next.GetCliPath()) {
-		in.CLIPath = ptr(next.GetCliPath())
 	}
 	if w.changed("configJson", cur.GetConfigJson() != next.GetConfigJson()) {
 		in.Config = json.RawMessage(next.GetConfigJson())

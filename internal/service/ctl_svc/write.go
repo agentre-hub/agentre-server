@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 	"github.com/cago-frame/cago/pkg/logger"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
 // write 先对照当前数据算出变更清单，再（非预览时）经现有服务落库。审批不在这里：
@@ -47,6 +49,12 @@ func (s *ctlSvc) write(
 		change.Name = st.label(w.cur)
 	}
 	if op == agentrewire.CtlOp_CTL_OP_DELETE {
+		// 桌面端拒删带子项目的项目（project_svc.Delete）；workspace_svc 的删除会把子树
+		// 一起落墓碑，所以这条拒绝在这里判，预览时就挡住，审批卡不会出现。
+		if kind == agentrewire.CtlKind_CTL_KIND_PROJECT && st.hasSubProjects(st.byID[req.GetId()].SyncID) {
+			return nil, &Error{Status: http.StatusConflict, Msg: fmt.Sprintf(
+				"project %q has sub-projects; delete or move them first", change.GetName())}
+		}
 		if kind == agentrewire.CtlKind_CTL_KIND_DEPARTMENT && req.GetCascade() {
 			depts, agents := st.cascadeImpact(st.byID[req.GetId()].SyncID)
 			change.Note = fmt.Sprintf("also deletes %s and %s", plural(len(depts), "sub-department"), plural(len(agents), "agent"))
@@ -217,4 +225,37 @@ func (st *state) cascadeImpact(deptSyncID string) (depts, agents []*sync_entity.
 		}
 	}
 	return depts, agents
+}
+
+// departmentWithin 判 start 是不是 root 自己或它的某个后代：沿 start 的父链往上爬，
+// 碰到 root 即是（桌面端 department_svc.hasCycle 同口径）。数据里已有环时不会转不出来。
+func (st *state) departmentWithin(start, root string) bool {
+	seen := map[string]bool{}
+	for cur := start; cur != "" && !seen[cur]; {
+		if cur == root {
+			return true
+		}
+		seen[cur] = true
+		row, ok := st.bySync[cur]
+		if !ok || row.Kind != sync_entity.KindDepartment {
+			return false
+		}
+		cur = st.departmentPayload(row).ParentSyncID
+	}
+	return false
+}
+
+// systemAgent 是账号里那一个系统 Agent（载荷 system_badge 非空，同 workspace_svc 的判据）。
+func (st *state) systemAgent() *sync_entity.SyncObject {
+	for _, a := range st.byKind[sync_entity.KindAgent] {
+		if strings.TrimSpace(st.agentPayload(a).SystemBadge) != "" {
+			return a
+		}
+	}
+	return nil
+}
+
+// hasSubProjects 判一个项目下还有没有存活的子项目（state 里只有存活行）。
+func (st *state) hasSubProjects(projectSyncID string) bool {
+	return len(workspace_svc.ProjectChildren(st.byKind[sync_entity.KindProject])[projectSyncID]) > 0
 }
