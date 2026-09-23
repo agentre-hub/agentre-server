@@ -40,6 +40,26 @@ func TestNotificationViewKeepsToolInputAsJSONObject(t *testing.T) {
 	require.JSONEq(t, `{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","seq":8,"event":{"kind":"tool_use_start","id":"tool-1","name":"Read","input":{"path":"README.md"}}}`, string(params))
 }
 
+// Given 一条 tool_approval_requested 事件（ctl 变更清单卡的请求帧，ToolInput 是
+// 一段合法 JSON 字节）；When 投射成视图；Then toolInput 落地为 JSON 对象，不是
+// BytesKind 默认投射出的 base64 字符串 —— agentre-ui 的 frames.ts 用 record(ev,
+// "toolInput") 直接当对象取字段，喂给它一个 base64 字符串等于卡片拿到空对象。
+func TestNotificationViewKeepsToolApprovalInputAsJSONObject(t *testing.T) {
+	method, params, err := Notification(&agentrewire.RpcNotification{Payload: &agentrewire.RpcNotification_RuntimeEvent{RuntimeEvent: &agentrewire.RuntimeEventNotification{
+		ConversationId: conversationID, Seq: 9, Event: &agentrewire.RuntimeEventNotification_ToolApprovalRequested{
+			ToolApprovalRequested: &agentrewire.ToolApprovalRequested{
+				ToolKey: "ctl", RequestId: "req-1", ToolName: "ctl.update",
+				ToolInput: []byte(`{"changes":[{"op":"update","field":"name","before":"a","after":"b"}]}`),
+			},
+		},
+	}}})
+	require.NoError(t, err)
+	require.Equal(t, "runtime.event", method)
+	require.JSONEq(t,
+		`{"conversationId":"3f2d1b7a-5c44-7a10-9e3b-6a1f0c2d4e88","seq":9,"event":{"kind":"tool_approval_requested","toolKey":"ctl","requestId":"req-1","toolName":"ctl.update","toolInput":{"changes":[{"op":"update","field":"name","before":"a","after":"b"}]}}}`,
+		string(params))
+}
+
 func TestNotificationViewOmitsOptionalZeroValuesFromTerminalFrames(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -268,11 +288,12 @@ func TestNotificationViewWrapsNonJSONBytesInsteadOfDroppingTheKey(t *testing.T) 
 // 明确判断 —— 它到底装的是 JSON（补进这里、并在 RuntimeEvent 里加 putRawJSON），
 // 还是真的二进制（那它就不该进这条通道，见下面那半个守卫）。
 var rawJSONByteFields = map[string]bool{
-	"agentre.wire.ToolCall.input":              true,
-	"agentre.wire.ToolCall.canonical":          true,
-	"agentre.wire.ToolResult.meta":             true,
-	"agentre.wire.ToolPermissionRequest.input": true,
-	"agentre.wire.UnrecognizedBlock.data":      true,
+	"agentre.wire.ToolCall.input":                   true,
+	"agentre.wire.ToolCall.canonical":               true,
+	"agentre.wire.ToolResult.meta":                  true,
+	"agentre.wire.ToolPermissionRequest.input":      true,
+	"agentre.wire.ToolApprovalRequested.tool_input": true,
+	"agentre.wire.UnrecognizedBlock.data":           true,
 }
 
 // acceptedBinaryFields 是**明知是真二进制、仍然放它进镜像帧**的那几个字段。

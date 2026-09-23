@@ -42,6 +42,8 @@ import {
   EventSubagentStarted,
   EventTextDelta,
   EventThinkingDelta,
+  EventToolApprovalRequested,
+  EventToolApprovalResolved,
   EventToolPermissionRequest,
   EventToolPermissionResolved,
   EventToolResult,
@@ -277,6 +279,32 @@ const SAMPLES: Record<
     mediaType: "image/png",
     source: { inline: PNG_BYTES },
   },
+  // ctl 变更清单卡的请求帧（spec 2026-09-22 决策 6/13）：toolInput 是一段 JSON
+  // 字节，装的是完整命令加每项变更的操作/类型/名字/字段前后值。
+  toolApprovalRequested: {
+    case: "toolApprovalRequested",
+    toolKey: "ctl",
+    requestId: "ctl-1",
+    toolName: "ctl_update_provider",
+    toolInput: utf8({
+      command: "agrctl update provider openrouter --name or",
+      changes: [
+        {
+          op: "update",
+          kind: "provider",
+          id: 4,
+          name: "openrouter",
+          fields: [{ field: "name", before: "openrouter", after: "or" }],
+        },
+      ],
+    }),
+  },
+  toolApprovalResolved: {
+    case: "toolApprovalResolved",
+    requestId: "ctl-1",
+    status: "approved",
+    result: "已更新 provider openrouter",
+  },
 };
 
 /** `EventKind` 词表的运行期形态。手写字面量的话守卫就成了复制品。 */
@@ -309,6 +337,8 @@ const VOCABULARY: ReadonlySet<string> = new Set<EventKind>([
   EventContextWindowUpdated,
   EventUnrecognizedBlock,
   EventImage,
+  EventToolApprovalRequested,
+  EventToolApprovalResolved,
 ]);
 
 describe("relay 事件词表", () => {
@@ -418,6 +448,44 @@ describe("relay 事件词表", () => {
         },
       },
     ]);
+  });
+
+  // Given 中继转发了一张 ctl 审批卡的请求帧（agrctl 一次写操作触发的服务端审批，
+  // spec 2026-09-22 决策 6/13），随后那台机器又发来终态；When 两帧一路穿过真实
+  // Protobuf 解码、relayClient 的视图适配、归约器；Then 控制台转录上得到**一张**
+  // tool_approval 块，toolInput 是解析后的变更清单对象（不是 bytes 的默认投射
+  // base64）——这正是本轮把 desktop 侧新事件接进 server 时要修的缺口：wireview
+  // 一侧的镜像投影漏了 toolInput 这个 case 会把它落成 base64，而这里钉的是
+  // server 前端自己的实时中继路径（relayClient 通用的 Uint8Array→JSON 还原，
+  // 见 decodeRawJSON），两条路径分别验证。
+  it("ctl 审批卡请求帧穿真实协议，合成带解析后变更清单的卡；终态帧回填 status/result", async () => {
+    const frames = await relayEvents([
+      SAMPLES.toolApprovalRequested,
+      SAMPLES.toolApprovalResolved,
+    ]);
+    const [message] = reduceFrames(frames, 7);
+
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("tool_approval");
+    expect(message.blocks[0].toolApproval).toEqual({
+      toolKey: "ctl",
+      requestId: "ctl-1",
+      toolName: "ctl_update_provider",
+      toolInput: {
+        command: "agrctl update provider openrouter --name or",
+        changes: [
+          {
+            op: "update",
+            kind: "provider",
+            id: 4,
+            name: "openrouter",
+            fields: [{ field: "name", before: "openrouter", after: "or" }],
+          },
+        ],
+      },
+      status: "approved",
+      result: "已更新 provider openrouter",
+    });
   });
 
   // Given 后端不单发 context_window_updated、只把窗口挂在 usage 帧上；When 帧

@@ -118,6 +118,8 @@ func RuntimeEvent(frame *agentrewire.RuntimeEventNotification) (map[string]any, 
 		putRawJSON(event, "meta", value.ToolResult.GetMeta())
 	case *agentrewire.RuntimeEventNotification_ToolPermissionRequest:
 		putRawJSON(event, "input", value.ToolPermissionRequest.GetInput())
+	case *agentrewire.RuntimeEventNotification_ToolApprovalRequested:
+		putRawJSON(event, "toolInput", value.ToolApprovalRequested.GetToolInput())
 	case *agentrewire.RuntimeEventNotification_UnrecognizedBlock:
 		// data 是块的原始 JSON 字节:不还原的话它会走 bytes 的默认投射变成
 		// base64,而这条事件存在的全部意义就是把原件原样交出去。
