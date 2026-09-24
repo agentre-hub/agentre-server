@@ -247,6 +247,7 @@ func TestDeleteBackend_ThenReadsTheRowLockedInsideTheWriteTransaction(t *testing
 			return &sync_entity.SyncObject{ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1",
 				Payload: `{"name":"CC","type":"claudecode","future_key":1}`}, nil
 		})
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentExecTarget}).Return(nil, nil)
 	expectTracedWrite(trace, objects, states, 5, nil)
 
 	require.NoError(t, New().DeleteBackend(ctx, 7, "backend-1"))

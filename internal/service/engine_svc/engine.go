@@ -338,7 +338,11 @@ func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*B
 }
 
 func (s *engineSvc) DeleteBackend(ctx context.Context, userID int64, id string) error {
-	_, err := writeLockedBackend(ctx, userID, id, func(_ context.Context, row *sync_entity.SyncObject) error {
+	_, err := writeLockedBackend(ctx, userID, id, func(ctx context.Context, row *sync_entity.SyncObject) error {
+		// 引用它的执行目标先落，与主行同一个事务：删到一半失败时两边一起回滚。
+		if err := workspace_svc.TombstoneExecTargetsOfBackend(ctx, userID, row.SyncID); err != nil {
+			return err
+		}
 		row.DeletedAt = s.now()
 		return nil
 	})

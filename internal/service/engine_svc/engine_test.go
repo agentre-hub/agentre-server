@@ -191,6 +191,7 @@ func TestDeleteBackend_GivenSaveFails_ThenRollsBackWithoutBroadcast(t *testing.T
 	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
 		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1", Payload: `{}`,
 	}, nil)
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentExecTarget}).Return(nil, nil)
 	expectTracedWrite(trace, objects, states, 5, assert.AnError)
 
 	err := New().DeleteBackend(ctx, 7, "backend-1")
@@ -202,6 +203,57 @@ func TestDeleteBackend_GivenSaveFails_ThenRollsBackWithoutBroadcast(t *testing.T
 		"Save inTx=true [BEGIN]",
 	}, trace.recorded())
 	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxRollback}, trace.txLog.Events())
+}
+
+// 删后端：引用它的执行目标在同一个事务里一并落墓碑（与桌面端 backendAdapter 删后端时的
+// 级联同一份清单）。Agent 本身与它的项目成员关系不动——后端只是 Agent 执行链上的一档。
+//
+// 少了它，浏览器或 agrctl 删掉的后端会在每一台机器上留下指向不存在后端的执行目标，
+// 派发链读到的是一档永远选不中的「未知后端」。
+func TestDeleteBackend_GivenExecTargetsReferencingIt_ThenTheyAreTombstonedInTheSameTransaction(t *testing.T) {
+	ctx, trace, _, objects, states := setupEngineTxTest(t)
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "backend-1").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindAgentBackend, SyncID: "backend-1", Payload: `{}`,
+	}, nil)
+	objects.EXPECT().ListByKinds(gomock.Any(), int64(7), []string{sync_entity.KindAgentExecTarget}).
+		Return([]*sync_entity.SyncObject{
+			{ID: 11, Kind: sync_entity.KindAgentExecTarget, SyncID: "et-1",
+				Payload: `{"agent_sync_id":"agent-1","backend_sync_id":"backend-1","sort_order":0}`},
+			{ID: 12, Kind: sync_entity.KindAgentExecTarget, SyncID: "et-2",
+				Payload: `{"agent_sync_id":"agent-2","backend_sync_id":"backend-1","sort_order":1}`},
+			{ID: 13, Kind: sync_entity.KindAgentExecTarget, SyncID: "et-3",
+				Payload: `{"agent_sync_id":"agent-1","backend_sync_id":"backend-2","sort_order":1}`},
+			{ID: 14, Kind: sync_entity.KindAgentExecTarget, SyncID: "et-bad", Payload: `not json`},
+		}, nil)
+	var version int64 = 600
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).DoAndReturn(
+		func(context.Context, int64, int64) (int64, error) { version++; return version, nil }).AnyTimes()
+	tombstoned := map[int64]int64{}
+	var tombstonedInTx []bool
+	objects.EXPECT().Tombstone(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, id, version, _ int64) (int64, error) {
+			tombstoned[id] = version
+			tombstonedInTx = append(tombstonedInTx, hubtest.InTransaction(ctx))
+			return 1, nil
+		}).AnyTimes()
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, o *sync_entity.SyncObject) error { saved = o; return nil })
+
+	require.NoError(t, New().DeleteBackend(ctx, 7, "backend-1"))
+	require.NotNil(t, saved)
+
+	assert.Positive(t, saved.DeletedAt, "后端主行落墓碑")
+	ids := make([]int64, 0, len(tombstoned))
+	for id, v := range tombstoned {
+		ids = append(ids, id)
+		assert.Less(t, v, saved.Version, "级联行的版本都早于主行 #%d", id)
+	}
+	assert.ElementsMatch(t, []int64{11, 12}, ids, "只有引用这个后端的执行目标跟着走")
+	assert.NotContains(t, tombstonedInTx, false, "级联的每一行都落在那个事务里")
+	assert.Equal(t, []string{hubtest.TxBegin, hubtest.TxCommit}, trace.txLog.Events())
+	assert.Equal(t, []string{"LockAccountSeq inTx=true [BEGIN]", "Broadcast inTx=false [BEGIN COMMIT]"},
+		trace.recorded(), "提交之后只推一次信号")
 }
 
 func TestCreateProvider_GivenNoAPIKey_ThenRejectsTheIncompleteProvider(t *testing.T) {

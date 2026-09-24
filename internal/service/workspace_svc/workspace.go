@@ -1359,6 +1359,9 @@ func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*
 		if err := cascadeProjectDelete(ctx, in, row); err != nil {
 			return err
 		}
+		if err := cascadeAgentDelete(ctx, in, row); err != nil {
+			return err
+		}
 		row.DeletedAt = time.Now().UnixMilli()
 		return nil
 	})
@@ -1369,6 +1372,72 @@ func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*
 		zap.Int64("userId", in.UserID), zap.String("kind", in.Kind),
 		zap.String("syncId", row.SyncID), zap.Int64("version", row.Version))
 	return &OrgWriteResult{SyncID: row.SyncID, Version: row.Version}, nil
+}
+
+// cascadeAgentDelete 删 Agent 时把它的执行目标与项目成员关系一并落墓碑，与主行同在
+// 一个事务里、排在主行之前（版本号的讲究见 tombstoneCascade）。
+//
+// 与桌面端 agentAdapter 删 Agent 时的级联是同一份清单；浏览器与 agrctl 的删除都走这里，
+// 走不到那条路径。少了它，每一台机器上都会留下指向已删 Agent 的执行目标与成员关系。
+// 载荷读不懂的行一律不动：宁可漏删一条，不能多删一条（同 ExecTargetBackendSyncID）。
+func cascadeAgentDelete(ctx context.Context, in OrgWriteInput, root *sync_entity.SyncObject) error {
+	if in.Kind != sync_entity.KindAgent {
+		return nil
+	}
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, in.UserID, []string{
+		sync_entity.KindAgentExecTarget, sync_entity.KindProjectAgent})
+	if err != nil {
+		return err
+	}
+	cascaded, err := tombstoneCascade(ctx, in.UserID, rows, func(row *sync_entity.SyncObject) bool {
+		return referencedAgentSyncID(row) == root.SyncID
+	})
+	if err != nil {
+		return err
+	}
+	if cascaded > 0 {
+		logger.Ctx(ctx).Info("workspace_svc.cascadeAgentDelete: exec targets and memberships tombstoned",
+			zap.Int64("userId", in.UserID), zap.String("syncId", root.SyncID),
+			zap.Int("cascadedCount", cascaded))
+	}
+	return nil
+}
+
+// referencedAgentSyncID 取执行目标 / 项目成员关系载荷里引用的 Agent 同步标识，读不懂
+// 时返回空串（空串不会等于任何一个 Agent 的同步标识）。
+func referencedAgentSyncID(row *sync_entity.SyncObject) string {
+	var p struct {
+		AgentSyncID string `json:"agent_sync_id"`
+	}
+	if json.Unmarshal([]byte(row.Payload), &p) != nil {
+		return ""
+	}
+	return p.AgentSyncID
+}
+
+// TombstoneExecTargetsOfBackend 把引用 backendSyncID 的执行目标全部落墓碑，给删后端
+// 用（engine_svc.DeleteBackend）。调用方必须已在后端主行的写入事务里、主行落墓碑之前
+// 调它（版本号的讲究见 tombstoneCascade）。
+//
+// 与桌面端 backendAdapter 删后端时的级联同一份清单：只动执行目标，Agent 本身与它的
+// 项目成员关系都留着——后端只是 Agent 执行链上的一档。
+func TombstoneExecTargetsOfBackend(ctx context.Context, userID int64, backendSyncID string) error {
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{sync_entity.KindAgentExecTarget})
+	if err != nil {
+		return err
+	}
+	cascaded, err := tombstoneCascade(ctx, userID, rows, func(row *sync_entity.SyncObject) bool {
+		return sync_entity.ExecTargetBackendSyncID(row.Payload) == backendSyncID
+	})
+	if err != nil {
+		return err
+	}
+	if cascaded > 0 {
+		logger.Ctx(ctx).Info("workspace_svc.TombstoneExecTargetsOfBackend: exec targets tombstoned",
+			zap.Int64("userId", userID), zap.String("backendSyncId", backendSyncID),
+			zap.Int("cascadedCount", cascaded))
+	}
+	return nil
 }
 
 // writeLockedOrgRow 是改与删共用的那一段：读、改、写同在一个事务里，读带行锁
