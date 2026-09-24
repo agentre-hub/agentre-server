@@ -408,7 +408,12 @@ func (st *state) overlayPath(backendSyncID, fingerprint string) string {
 	return ""
 }
 
-// backendDoc：OpenClaw token 住在绑定机器的钥匙串里，server 不知道它，token_set 恒为假。
+// backendTypeOpenClaw 是 OpenClaw 后端的 type 字面量（同步契约里的 AgentBackendPayload.Type），
+// 与桌面端 agent_backend_entity.TypeOpenClaw 同值。
+const backendTypeOpenClaw = "openclaw"
+
+// backendDoc：OpenClaw token 住在绑定机器的钥匙串里，server 够不到，只能报 UNKNOWN；
+// 没有 token 概念的后端类型报 UNSPECIFIED（同桌面端 openClawTokenState 的口径）。
 func (st *state) backendDoc(r *sync_entity.SyncObject) *agentrewire.CtlBackend {
 	var doc map[string]json.RawMessage
 	_ = json.Unmarshal([]byte(r.Payload), &doc)
@@ -417,10 +422,13 @@ func (st *state) backendDoc(r *sync_entity.SyncObject) *agentrewire.CtlBackend {
 		_ = json.Unmarshal(doc[key], &v)
 		return v
 	}
+	backendType := str("type")
 	out := &agentrewire.CtlBackend{
-		Id: r.ID, Name: str("name"), Type: str("type"), ProviderId: st.idOf(str("provider_key")),
+		Id: r.ID, Name: str("name"), Type: backendType, ProviderId: st.idOf(str("provider_key")),
 		Device: st.deviceName(r.AgentredFingerprint), CliPath: st.overlayPath(r.SyncID, r.AgentredFingerprint),
 		ReasoningEffort: str("reasoning_effort"), ConfigJson: compactObject(doc["config"]),
+		SyncId: r.SyncID, DeviceFingerprint: r.AgentredFingerprint,
+		TokenState: backendTokenState(backendType),
 	}
 	if m := st.modelByKey(str("provider_key"), str("model_key")); m != nil {
 		out.ModelId = m.id
@@ -430,6 +438,16 @@ func (st *state) backendDoc(r *sync_entity.SyncObject) *agentrewire.CtlBackend {
 		out.Env = env
 	}
 	return out
+}
+
+// backendTokenState 报后端 token 的状态。OpenClaw token 存在绑定设备的钥匙串里，server
+// 端只有同步过来的文档，够不到那台设备，因此恒报 UNKNOWN；其它类型没有 token 概念，报
+// UNSPECIFIED。
+func backendTokenState(backendType string) agentrewire.CtlTokenState {
+	if backendType != backendTypeOpenClaw {
+		return agentrewire.CtlTokenState_CTL_TOKEN_STATE_UNSPECIFIED
+	}
+	return agentrewire.CtlTokenState_CTL_TOKEN_STATE_UNKNOWN
 }
 
 // compactObject 把后端 config 原文收成紧凑 JSON；不是对象（含缺席）读作 {}。

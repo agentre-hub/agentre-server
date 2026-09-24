@@ -177,7 +177,25 @@ func TestGet_GivenProjectAndBackend_ThenCallerLocalValuesAreResolved(t *testing.
 	assert.Equal(t, "/usr/bin/claude", b.GetCliPath())
 	assert.Equal(t, map[string]string{"A": "1"}, b.GetEnv())
 	assert.JSONEq(t, `{"sandbox":"workspace"}`, b.GetConfigJson())
-	assert.False(t, b.GetTokenSet())
+	assert.Equal(t, "be-1", b.GetSyncId(), "同步标识原样给出，设备本地凭据按它存取")
+	assert.Equal(t, "fp-red", b.GetDeviceFingerprint(), "绑定设备的指纹")
+	assert.Equal(t, agentrewire.CtlTokenState_CTL_TOKEN_STATE_UNSPECIFIED, b.GetTokenState(), "claudecode 没有 token")
+}
+
+func TestGet_GivenOpenClawBackend_ThenTokenStateIsUnknown(t *testing.T) {
+	rows := fixtureRows()
+	rows = append(rows, &sync_entity.SyncObject{
+		ID: 43, Kind: sync_entity.KindAgentBackend, SyncID: "be-3", AgentredFingerprint: "fp-red",
+		Payload: `{"name":"claw-red","type":"openclaw"}`,
+	})
+	h := setupWith(t, rows)
+	resp, err := h.do(t, fromAgentred, get(agentrewire.CtlKind_CTL_KIND_BACKEND, 43), false)
+	require.NoError(t, err)
+	b := resp.GetGet().GetResource().GetBackend()
+	assert.Equal(t, agentrewire.CtlTokenState_CTL_TOKEN_STATE_UNKNOWN, b.GetTokenState(),
+		"server 不持有设备本地的 OpenClaw token，只能报未知")
+	assert.Equal(t, "be-3", b.GetSyncId())
+	assert.Equal(t, "fp-red", b.GetDeviceFingerprint())
 }
 
 func TestGet_GivenUnknownIDOrWrongKind_ThenNotFound(t *testing.T) {
