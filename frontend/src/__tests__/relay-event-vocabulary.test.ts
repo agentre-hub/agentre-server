@@ -49,6 +49,7 @@ import {
   EventToolResult,
   EventToolUseStart,
   EventUnrecognizedBlock,
+  EventUnsupportedRequestNotice,
   EventUsage,
   EventUserMessage,
   type EventKind,
@@ -279,6 +280,12 @@ const SAMPLES: Record<
     mediaType: "image/png",
     source: { inline: PNG_BYTES },
   },
+  // 后端的反向请求 Agentre 无卡承接、已在传输层立即回绝：只带一个只读用途分类，
+  // 从不带协议方法名或原始参数（spec 2026-09-17 "Unsupported Hermes requests"）。
+  unsupportedRequestNotice: {
+    case: "unsupportedRequestNotice",
+    purpose: "sudo_password",
+  },
   // ctl 变更清单卡的请求帧（spec 2026-09-22 决策 6/13）：toolInput 是一段 JSON
   // 字节，装的是完整命令加每项变更的操作/类型/名字/字段前后值。
   toolApprovalRequested: {
@@ -337,6 +344,7 @@ const VOCABULARY: ReadonlySet<string> = new Set<EventKind>([
   EventContextWindowUpdated,
   EventUnrecognizedBlock,
   EventImage,
+  EventUnsupportedRequestNotice,
   EventToolApprovalRequested,
   EventToolApprovalResolved,
 ]);
@@ -486,6 +494,23 @@ describe("relay 事件词表", () => {
       status: "approved",
       result: "已更新 provider openrouter",
     });
+  });
+
+  // Given 后端发来一次 Agentre 无卡承接的反向请求，已被立即回绝；When 这条提示帧
+  // 穿过真实协议走到归约器；Then 控制台转录上是一块认得出的结构化提示（noticeKind
+  // 加只读的用途分类），而不是 default 分支铺出来的一坨 JSON notice。
+  it("无卡承接的反向请求提示画成结构化 notice，只带用途分类", async () => {
+    const frames = await relayEvents([SAMPLES.unsupportedRequestNotice]);
+    const [message] = reduceFrames(frames, 7);
+
+    expect(message.blocks).toEqual([
+      {
+        type: "notice",
+        level: "info",
+        noticeKind: "hermes_unsupported_request",
+        noticePurpose: "sudo_password",
+      },
+    ]);
   });
 
   // Given 后端不单发 context_window_updated、只把窗口挂在 usage 帧上；When 帧
