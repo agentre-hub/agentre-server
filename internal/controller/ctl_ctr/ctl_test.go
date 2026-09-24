@@ -88,6 +88,21 @@ func TestResources_GivenDeviceBearer_ThenCallerComesFromTokenAndBodyIsProtojson(
 	assert.Equal(t, "Eva", got.GetGet().GetResource().GetAgent().GetName())
 }
 
+// preview 只要出现就是预览（fail closed）：?preview=true 这类写法不能落成一次没经审批的
+// 真写入；不带 preview 才是写入。
+func TestResources_GivenAnyPreviewParam_ThenPreviewOnly(t *testing.T) {
+	for _, q := range []string{"?preview=1", "?preview=true", "?preview", "?preview=yes"} {
+		fake := &fakeCtl{resp: &agentrewire.CtlResponse{}}
+		rec := post(newEngine(t, fake), "/v1/ctl/resources"+q, agentredToken(), `{"list":{"kind":"CTL_KIND_AGENT"}}`)
+		require.Equal(t, http.StatusOK, rec.Code, q)
+		assert.True(t, fake.preview, q)
+	}
+	fake := &fakeCtl{resp: &agentrewire.CtlResponse{}}
+	rec := post(newEngine(t, fake), "/v1/ctl/resources", agentredToken(), `{"list":{"kind":"CTL_KIND_AGENT"}}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.False(t, fake.preview)
+}
+
 func TestResources_GivenNoDeviceBearer_ThenExecutorIsNeverReached(t *testing.T) {
 	fake := &fakeCtl{}
 	engine := newEngine(t, fake)

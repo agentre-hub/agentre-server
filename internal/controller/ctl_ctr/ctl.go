@@ -58,7 +58,9 @@ func (c *Ctl) Resources(g *gin.Context) {
 		return
 	}
 	caller := ctl_svc.Caller{UserID: ginctx.UserID(g), DeviceID: ginctx.DeviceID(g)}
-	resp, err := c.service().Handle(g.Request.Context(), caller, &req, g.Query("preview") == "1")
+	// preview 只要出现就是预览（fail closed）：写法不对不能落成一次没经审批的真写入。
+	_, preview := g.GetQuery("preview")
+	resp, err := c.service().Handle(g.Request.Context(), caller, &req, preview)
 	if err != nil {
 		writeServiceErr(g, err)
 		return
@@ -89,7 +91,7 @@ func writeServiceErr(g *gin.Context, err error) {
 		writeErr(g, he.Status, he.Msg)
 		return
 	}
-	logger.Ctx(g.Request.Context()).Error("ctl_ctr.Resources: request failed",
+	logger.Ctx(g.Request.Context()).Error("ctl_ctr.writeServiceErr: request failed",
 		zap.Int64("userId", ginctx.UserID(g)), zap.Int64("deviceId", ginctx.DeviceID(g)), zap.Error(err))
 	writeErr(g, http.StatusInternalServerError, "internal error")
 }

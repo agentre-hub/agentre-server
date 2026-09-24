@@ -70,6 +70,9 @@ func (s *ctlSvc) write(
 			p.MemberAgentIds = mergeMembers(p.GetMemberAgentIds(), req.GetAddMemberAgentIds(), req.GetRemoveMemberAgentIds())
 			fields = append(fields, "memberAgentIds")
 		}
+		if err := checkAgentPlacement(op, w.cur, w.next, fields); err != nil {
+			return nil, err
+		}
 		if err := w.resolveBackendDevice(slices.Contains(fields, "device")); err != nil {
 			return nil, err
 		}
@@ -111,6 +114,21 @@ func checkSupported(st *state, kind agentrewire.CtlKind, fields []string) error 
 		st.caller.Kind != device_entity.KindAgentred {
 		return unsupported("a desktop device's local project path cannot be set through the server; " +
 			"set it in the Agentre desktop on that machine")
+	}
+	return nil
+}
+
+// checkAgentPlacement 与桌面端 agent_svc 的归属规则同口径：Agent 要么在一个部门里，要么
+// 是某个 Agent 的下级。ctl 文档只写得了部门，所以 create 必须给部门，update 不能把部门
+// 清成空（下级 Agent 本来就没有部门，不改它就不受影响）。预览时就判，审批卡不会出现。
+func checkAgentPlacement(op agentrewire.CtlOp, cur, next *agentrewire.CtlResource, fields []string) error {
+	a := next.GetAgent()
+	if a == nil || a.GetDepartmentId() != 0 {
+		return nil
+	}
+	if op == agentrewire.CtlOp_CTL_OP_CREATE ||
+		(slices.Contains(fields, "departmentId") && cur.GetAgent().GetDepartmentId() != 0) {
+		return badRequest("an agent needs a department")
 	}
 	return nil
 }

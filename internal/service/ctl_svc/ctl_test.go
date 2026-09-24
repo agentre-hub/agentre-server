@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
 	"testing"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
@@ -423,6 +424,55 @@ func TestWrite_GivenCascadePreview_ThenNoteCountsTheSubtree(t *testing.T) {
 	}), true)
 	require.NoError(t, err)
 	assert.Equal(t, "also deletes 1 sub-department and 1 agent", resp.GetWrite().GetChanges()[0].GetNote())
+}
+
+// 级联附注的句式是 agentred 还原审批卡数量的约定（agentre 的 transcript/blocks
+// .ParseCtlCascadeNote 用的就是下面这个正则）：0、1、多个都得对得上。
+func TestWrite_GivenCascadePreview_ThenNoteMatchesAgentredParserForAnyCount(t *testing.T) {
+	agentredParser := regexp.MustCompile(`^also deletes (\d+) sub-departments? and (\d+) agents?$`)
+	rows := append(fixtureRows(),
+		&sync_entity.SyncObject{ID: 12, Kind: sync_entity.KindDepartment, SyncID: "dept-3", Payload: `{"name":"运维","parent_sync_id":"dept-1"}`},
+		&sync_entity.SyncObject{ID: 21, Kind: sync_entity.KindAgent, SyncID: "agent-2", Payload: `{"name":"Kai","department_sync_id":"dept-2"}`},
+	)
+	h := setupWith(t, rows)
+	for id, want := range map[int64]string{
+		10: "also deletes 2 sub-departments and 2 agents",
+		11: "also deletes 0 sub-departments and 1 agent",
+		12: "also deletes 0 sub-departments and 0 agents",
+	} {
+		resp, err := h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_DELETE, Kind: agentrewire.CtlKind_CTL_KIND_DEPARTMENT, Id: id, Cascade: true,
+		}), true)
+		require.NoError(t, err)
+		note := resp.GetWrite().GetChanges()[0].GetNote()
+		assert.Equal(t, want, note)
+		assert.Regexp(t, agentredParser, note)
+	}
+}
+
+// 与桌面端 agent_svc 同口径：Agent 必须挂在一个部门上（或是某个 Agent 的下级）。create 不给
+// 部门、update 把部门清成空，都在预览时就拒绝，审批卡不会出现，也不会写出一个在组织里
+// 没有位置的 Agent。
+func TestWrite_GivenAgentWithoutDepartment_ThenBadRequestInPreviewAndNoWrite(t *testing.T) {
+	h := setup(t) // 写端口没有任何期望
+	for _, preview := range []bool{true, false} {
+		_, err := h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_CREATE, Kind: agentrewire.CtlKind_CTL_KIND_AGENT,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Agent{Agent: &agentrewire.CtlAgent{Name: "Kai"}}},
+			Fields:   []string{"name"},
+		}), preview)
+		require.Error(t, err)
+		assert.Equal(t, http.StatusBadRequest, statusOf(t, err))
+		assert.Contains(t, err.Error(), "department")
+
+		_, err = h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_AGENT, Id: 20,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Agent{Agent: &agentrewire.CtlAgent{}}},
+			Fields:   []string{"departmentId"},
+		}), preview)
+		require.Error(t, err)
+		assert.Equal(t, http.StatusBadRequest, statusOf(t, err))
+	}
 }
 
 // ---- server 路径上不支持的操作 ----
