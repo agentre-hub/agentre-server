@@ -57,6 +57,8 @@ func (s *ctlSvc) write(
 		}
 		if kind == agentrewire.CtlKind_CTL_KIND_DEPARTMENT && req.GetCascade() {
 			depts, agents := st.cascadeImpact(st.byID[req.GetId()].SyncID)
+			// 句式是约定：agentred 用它还原审批卡上的级联数量（agentre 的
+			// transcript/blocks.ParseCtlCascadeNote），与桌面端执行者写的是同一句。
 			change.Note = fmt.Sprintf("also deletes %s and %s", plural(len(depts), "sub-department"), plural(len(agents), "agent"))
 		}
 	} else {
