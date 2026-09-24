@@ -94,7 +94,14 @@ func (s *ctlSvc) write(
 	log := logger.Ctx(ctx).With(zap.Int64("userId", caller.UserID), zap.Int64("deviceId", caller.DeviceID),
 		zap.String("op", opName(op)), zap.String("kind", kindNames[kind]), zap.Int64("id", req.GetId()),
 		zap.Strings("fields", fields))
-	id, err := w.execute(ctx)
+	// 一次写入可能落好几行（删 Agent 连带摘负责人与上移下级、执行目标链、项目成员与路径、
+	// 模型连默认模型……）：全部在一个事务里，任一步失败整体回滚，提交后只广播一次。
+	var id int64
+	err = s.writeBatch(ctx, st.userID, func(ctx context.Context) error {
+		written, execErr := w.execute(ctx)
+		id = written
+		return execErr
+	})
 	if err != nil {
 		log.Warn("ctl_svc.write: write failed", zap.Error(err))
 		return nil, err

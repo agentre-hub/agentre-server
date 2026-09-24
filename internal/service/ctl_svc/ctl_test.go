@@ -82,8 +82,12 @@ func setupWith(t *testing.T, rows []*sync_entity.SyncObject) *harness {
 	h := &harness{objects: objects, org: mock_ctl_svc.NewMockOrgWriter(ctrl), engine: mock_ctl_svc.NewMockEngineWriter(ctrl)}
 	h.svc = New(h.org, h.engine).(*ctlSvc)
 	h.svc.newKey = func() string { return "mk-new" }
+	h.svc.writeBatch = runInline
 	return h
 }
+
+// runInline 顶替写入批：这里的写端口是 mock，事务与广播由 write_tx_test.go 经真实写路径断言。
+func runInline(ctx context.Context, _ int64, fn func(context.Context) error) error { return fn(ctx) }
 
 var fromAgentred = Caller{UserID: userID, DeviceID: agentredID}
 
@@ -528,7 +532,9 @@ func TestWrite_GivenTwoDevicesWithSameName_WhenBackendTargetsFingerprint_ThenTha
 		UserID: userID, SyncID: "be-1", DeviceFingerprint: &fp,
 	}).Return(&engine_svc.BackendView{}, nil)
 
-	_, err := New(mock_ctl_svc.NewMockOrgWriter(ctrl), engine).Handle(context.Background(), fromAgentred, write(&agentrewire.CtlWriteRequest{
+	svc := New(mock_ctl_svc.NewMockOrgWriter(ctrl), engine).(*ctlSvc)
+	svc.writeBatch = runInline
+	_, err := svc.Handle(context.Background(), fromAgentred, write(&agentrewire.CtlWriteRequest{
 		Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 40,
 		Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{Device: "fp-twin"}}},
 		Fields:   []string{"device"},

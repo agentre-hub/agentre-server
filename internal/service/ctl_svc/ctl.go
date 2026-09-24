@@ -38,12 +38,15 @@ type ctlSvc struct {
 	org    OrgWriter
 	engine EngineWriter
 	newKey func() string
+	// writeBatch 把一次写入涉及的全部行并成一个事务、提交后广播一次
+	// （workspace_svc.WithOrgWriteBatch）。
+	writeBatch func(ctx context.Context, userID int64, fn func(context.Context) error) error
 }
 
 // New 构造执行者。org / engine 为 nil 时每次调用现取 workspace_svc / engine_svc 的
 // 默认单例（engine_svc 的默认值由 main 在 cago 启动前装配，构造期钉死会拿到旧的那份）。
 func New(org OrgWriter, engine EngineWriter) CtlSvc {
-	return &ctlSvc{org: org, engine: engine, newKey: newModelKey}
+	return &ctlSvc{org: org, engine: engine, newKey: newModelKey, writeBatch: workspace_svc.WithOrgWriteBatch}
 }
 
 var defaultSvc CtlSvc = New(nil, nil)

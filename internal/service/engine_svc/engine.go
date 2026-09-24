@@ -14,7 +14,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
-	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
@@ -399,7 +398,7 @@ func writeLockedRow(
 	}); err != nil {
 		return nil, err
 	}
-	accountchan_svc.BroadcastBestEffort(ctx, userID, locked.Version)
+	workspace_svc.BroadcastOrgWrite(ctx, userID, locked.Version)
 	return locked, nil
 }
 
@@ -459,7 +458,7 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 	}); err != nil {
 		return err
 	}
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, saved.Version)
+	workspace_svc.BroadcastOrgWrite(ctx, in.UserID, saved.Version)
 	return nil
 }
 
