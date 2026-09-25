@@ -9,6 +9,7 @@ import (
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 	"github.com/cago-frame/cago/pkg/consts"
+	"github.com/cago-frame/cago/pkg/utils/httputils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
@@ -694,4 +696,100 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// 实测：agentred 会话里 `agrctl create backend --type openclaw`（没给 --config）经 server
+// 建出了网关地址为空的行，桌面端永远收不下它。网关地址与桌面端同一规则，在预览（审批卡
+// 出现之前）就拒绝，写端口一次都不碰；拒绝带着说明原因的专属码。
+func TestWrite_GivenOpenClawBackendWithInvalidGateway_ThenRejectedInPreviewAndNoWrite(t *testing.T) {
+	rows := append(fixtureRows(), &sync_entity.SyncObject{
+		ID: 43, Kind: sync_entity.KindAgentBackend, SyncID: "be-3", AgentredFingerprint: "fp-red",
+		Payload: `{"name":"claw-red","type":"openclaw","config":{"openclawGatewayUrl":"ws://127.0.0.1:18789","openclawSessionMode":"per-agentre-session"}}`,
+	})
+	h := setupWith(t, rows) // 写端口没有任何期望
+	cases := []struct {
+		name string
+		req  *agentrewire.CtlWriteRequest
+		code int
+	}{
+		{"create without config", &agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_CREATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				Name: "claw-self", Type: "openclaw",
+			}}},
+			Fields: []string{"name", "type"},
+		}, code.EngineOpenClawGatewayURLRequired},
+		{"create with plaintext remote gateway", &agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_CREATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				Name: "claw-self", Type: "openclaw", ConfigJson: `{"openclawGatewayUrl":"ws://gateway.example.com:18789"}`,
+			}}},
+			Fields: []string{"name", "type", "configJson"},
+		}, code.EngineOpenClawGatewayURLPlaintextRemote},
+		{"update patching in a credentialed gateway", &agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 43,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				ConfigJson: `{"openclawGatewayUrl":"wss://gateway.example.com/?token=secret"}`,
+			}}},
+			Fields: []string{"configJson"},
+		}, code.EngineOpenClawGatewayURLCredentials},
+		{"create bound to a provider", &agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_CREATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				Name: "claw-self", Type: "openclaw", ProviderId: 50,
+				ConfigJson: `{"openclawGatewayUrl":"ws://127.0.0.1:18789"}`,
+			}}},
+			Fields: []string{"name", "type", "providerId", "configJson"},
+		}, code.EngineOpenClawProviderModelNotAllowed},
+		{"update adding env", &agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 43,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				Env: map[string]string{"TOKEN": "secret"},
+			}}},
+			Fields: []string{"env"},
+		}, code.EngineOpenClawEnvNotAllowed},
+		{"update setting reasoning effort", &agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 43,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				ReasoningEffort: "high",
+			}}},
+			Fields: []string{"reasoningEffort"},
+		}, code.EngineOpenClawReasoningEffortNotAllowed},
+		{"update patching in a sandbox", &agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_UPDATE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 43,
+			Resource: &agentrewire.CtlResource{Doc: &agentrewire.CtlResource_Backend{Backend: &agentrewire.CtlBackend{
+				ConfigJson: `{"sandbox":"workspace-write"}`,
+			}}},
+			Fields: []string{"configJson"},
+		}, code.EngineOpenClawCLISettingsNotAllowed},
+	}
+	for _, tc := range cases {
+		for _, preview := range []bool{true, false} {
+			_, err := h.do(t, fromAgentred, write(tc.req), preview)
+			require.Error(t, err, tc.name)
+			var he *httputils.Error
+			require.True(t, errors.As(err, &he), "%s: want *httputils.Error, got %v", tc.name, err)
+			assert.Equal(t, http.StatusBadRequest, he.Status, tc.name)
+			assert.Equal(t, tc.code, he.Code, tc.name)
+			assert.NotEmpty(t, he.Msg, tc.name)
+			assert.NotContains(t, he.Msg, "secret", tc.name)
+		}
+	}
+}
+
+// 已经落在 server 上、桌面端收不下的坏行（网关为空、还绑着供应商）仍然删得掉：删除不做
+// config 校验，否则用户没有任何办法清掉它。
+func TestWrite_GivenInvalidOpenClawBackendRow_ThenDeleteStillGoesThrough(t *testing.T) {
+	rows := append(fixtureRows(), &sync_entity.SyncObject{
+		ID: 43, Kind: sync_entity.KindAgentBackend, SyncID: "be-3", AgentredFingerprint: "fp-red",
+		Payload: `{"name":"claw-self","type":"openclaw","provider_key":"prov-1","env_json":"","config":{}}`,
+	})
+	h := setupWith(t, rows)
+	h.engine.EXPECT().DeleteBackend(gomock.Any(), userID, "be-3").Return(nil)
+	for _, preview := range []bool{true, false} {
+		_, err := h.do(t, fromAgentred, write(&agentrewire.CtlWriteRequest{
+			Op: agentrewire.CtlOp_CTL_OP_DELETE, Kind: agentrewire.CtlKind_CTL_KIND_BACKEND, Id: 43,
+		}), preview)
+		require.NoError(t, err)
+	}
 }

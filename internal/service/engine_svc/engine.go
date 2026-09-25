@@ -281,6 +281,9 @@ func (s *engineSvc) CreateBackend(ctx context.Context, in BackendWriteInput) (*B
 	}
 	doc := newBackendDoc()
 	doc.apply(in)
+	if err := doc.normalizeConfig(ctx); err != nil {
+		return nil, err
+	}
 	if err := validateBackendWrite(ctx, doc, in); err != nil {
 		return nil, err
 	}
@@ -317,6 +320,9 @@ func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*B
 			return i18n.NewError(ctx, code.InvalidParameter)
 		}
 		stored.apply(in)
+		if err := stored.normalizeConfig(ctx); err != nil {
+			return err
+		}
 		if err := validateBackendWrite(ctx, stored, in); err != nil {
 			return err
 		}

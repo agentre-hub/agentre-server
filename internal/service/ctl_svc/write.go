@@ -2,6 +2,7 @@ package ctl_svc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/service/engine_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
@@ -74,6 +76,11 @@ func (s *ctlSvc) write(
 			return nil, err
 		}
 		if err := w.resolveBackendDevice(slices.Contains(fields, "device")); err != nil {
+			return nil, err
+		}
+		// 后端 config 与 engine_svc 落库前同一道校验（桌面端收同步行的规则）：预览时就判，
+		// 审批卡不会为一条桌面端永远落不了地的后端出现。
+		if err := w.checkBackendConfig(ctx); err != nil {
 			return nil, err
 		}
 		if change.Fields, err = st.fieldChanges(kind, w.cur, w.next, fields); err != nil {
@@ -166,6 +173,38 @@ func (w *kindWrite) resolveBackendDevice(written bool) error {
 	// 文档里写成名字给变更清单看；落库用这次解析出的指纹——名字可能不唯一，不能再解析一遍。
 	w.deviceFP, b.Device = fp, w.st.deviceName(fp)
 	return nil
+}
+
+// checkBackendConfig 把预览里合并好的后端文档交给 engine_svc.NormalizeBackendConfig。
+// 文档按 id 引用提供方/模型，这里换回载荷里的同步标识再判。
+func (w *kindWrite) checkBackendConfig(ctx context.Context) error {
+	b := w.next.GetBackend()
+	if b == nil {
+		return nil
+	}
+	fields := engine_svc.BackendFields{
+		Type: b.GetType(), ReasoningEffort: b.GetReasoningEffort(), Config: json.RawMessage(b.GetConfigJson()),
+	}
+	var err error
+	if fields.ProviderKey, err = w.syncOf(agentrewire.CtlKind_CTL_KIND_PROVIDER, b.GetProviderId()); err != nil {
+		return err
+	}
+	if id := b.GetModelId(); id != 0 {
+		ref := w.st.modelByID(id)
+		if ref == nil {
+			return notFound(agentrewire.CtlKind_CTL_KIND_MODEL, id)
+		}
+		fields.ModelKey = ref.key
+	}
+	if env := b.GetEnv(); len(env) > 0 {
+		raw, err := json.Marshal(env)
+		if err != nil {
+			return err
+		}
+		fields.EnvJSON = string(raw)
+	}
+	_, err = engine_svc.NormalizeBackendConfig(ctx, fields)
+	return err
 }
 
 func (w *kindWrite) execute(ctx context.Context) (int64, error) {
