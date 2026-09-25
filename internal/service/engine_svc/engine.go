@@ -14,7 +14,6 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/sync_repo"
-	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
 
@@ -282,6 +281,9 @@ func (s *engineSvc) CreateBackend(ctx context.Context, in BackendWriteInput) (*B
 	}
 	doc := newBackendDoc()
 	doc.apply(in)
+	if err := doc.normalizeConfig(ctx); err != nil {
+		return nil, err
+	}
 	if err := validateBackendWrite(ctx, doc, in); err != nil {
 		return nil, err
 	}
@@ -318,6 +320,9 @@ func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*B
 			return i18n.NewError(ctx, code.InvalidParameter)
 		}
 		stored.apply(in)
+		if err := stored.normalizeConfig(ctx); err != nil {
+			return err
+		}
 		if err := validateBackendWrite(ctx, stored, in); err != nil {
 			return err
 		}
@@ -338,7 +343,11 @@ func (s *engineSvc) UpdateBackend(ctx context.Context, in BackendWriteInput) (*B
 }
 
 func (s *engineSvc) DeleteBackend(ctx context.Context, userID int64, id string) error {
-	_, err := writeLockedBackend(ctx, userID, id, func(_ context.Context, row *sync_entity.SyncObject) error {
+	_, err := writeLockedBackend(ctx, userID, id, func(ctx context.Context, row *sync_entity.SyncObject) error {
+		// 引用它的执行目标先落，与主行同一个事务：删到一半失败时两边一起回滚。
+		if err := workspace_svc.TombstoneExecTargetsOfBackend(ctx, userID, row.SyncID); err != nil {
+			return err
+		}
 		row.DeletedAt = s.now()
 		return nil
 	})
@@ -395,7 +404,7 @@ func writeLockedRow(
 	}); err != nil {
 		return nil, err
 	}
-	accountchan_svc.BroadcastBestEffort(ctx, userID, locked.Version)
+	workspace_svc.BroadcastOrgWrite(ctx, userID, locked.Version)
 	return locked, nil
 }
 
@@ -455,7 +464,7 @@ func (s *engineSvc) saveCLIOverlay(ctx context.Context, in BackendWriteInput, ba
 	}); err != nil {
 		return err
 	}
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, saved.Version)
+	workspace_svc.BroadcastOrgWrite(ctx, in.UserID, saved.Version)
 	return nil
 }
 

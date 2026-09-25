@@ -19,13 +19,23 @@ import type {
  * 那个前提不成立了：canonical 现在真的会产出来，授权卡与提问卡会带着**能点的
  * 按钮**渲染出来。再留着抛错的桩，就是给用户一个点下去必炸的按钮。
  *
- * 所以能做的两个接到真的 RPC 上，做不到的三个如实保留抛错 —— 见下。
+ * 所以能做的三个接到真的 RPC 上，做不到的两个如实保留抛错 —— 见下。
  */
 
-/** 宿主要提供的两个提交动作。sessionId / peerFingerprint 由调用方自己闭包进去。 */
+/** 包没有单独导出审批卡作答的入参类型，从端口签名上取。 */
+type AnswerToolApprovalInput = Parameters<
+  TranscriptPorts["answerToolApproval"]
+>[0];
+
+/** 宿主要提供的三个提交动作。sessionId / peerFingerprint 由调用方自己闭包进去。 */
 export interface ServerTranscriptPortDeps {
   submitToolPermission(input: AnswerToolPermissionInput): Promise<unknown>;
   submitAnswer(input: AnswerUserQuestionInput): Promise<unknown>;
+  /**
+   * 答内置写工具的审批卡（`tool_approval`：org、ctl…）。中继上是一条对所有
+   * toolKey 通用的方法 `toolApproval.answer`（spec 2026-09-22 决策 13）。
+   */
+  submitToolApproval(input: AnswerToolApprovalInput): Promise<unknown>;
   /**
    * 请宿主接手预览这个文件。**给不给这个动作本身就是能力探测**：不给就不装这个
    * 端口，包里的文件链接因此整个不出入口，而不是出一个点了没反应的入口。
@@ -37,14 +47,13 @@ export interface ServerTranscriptPortDeps {
 }
 
 /**
- * 这三个动作**中继上没有对应方法**。
+ * 这两个动作**中继上没有对应方法**。
  *
- * wire 的方法表（`constants.gen.ts`）里与决策相关的只有 `runtime.submitAnswer`
- * 与 `runtime.submitToolPermission` 两条；OpenClaw 的工具/exec 审批与计划动作
- * 都是桌面端经 Wails 直连本机 runtime 做的，没有走中继的形态。
+ * OpenClaw 的 exec 审批与计划动作都是桌面端经 Wails 直连本机 runtime 做的，没有
+ * 走中继的形态。
  *
  * 抛错而不是 no-op：一个点了什么都不发生的按钮只有用户能发现，而抛错当场暴露。
- * 目前这三条也确实到不了 —— 归约器不产带 actions 的计划块，exec 审批卡在没有
+ * 目前这两条也确实到不了 —— 归约器不产带 actions 的计划块，exec 审批卡在没有
  * `allowedDecisions` 时是只读的。哪天它们能点了，这里就是那次改动的入口。
  */
 function notWiredYet(action: string): never {
@@ -65,9 +74,11 @@ export function createServerTranscriptPorts(
     async answerUserQuestion(input) {
       await deps.submitAnswer(input);
     },
+    async answerToolApproval(input) {
+      await deps.submitToolApproval(input);
+    },
 
-    // OpenClaw 网关的工具审批 / exec 审批、以及计划动作：中继没有对应方法。
-    answerToolApproval: () => notWiredYet("answerToolApproval"),
+    // exec 审批与计划动作：中继没有对应方法。
     resolveExecApproval: () => notWiredYet("resolveExecApproval"),
     resolvePlanAction: () => notWiredYet("resolvePlanAction"),
 

@@ -42,11 +42,14 @@ import {
   EventSubagentStarted,
   EventTextDelta,
   EventThinkingDelta,
+  EventToolApprovalRequested,
+  EventToolApprovalResolved,
   EventToolPermissionRequest,
   EventToolPermissionResolved,
   EventToolResult,
   EventToolUseStart,
   EventUnrecognizedBlock,
+  EventUnsupportedRequestNotice,
   EventUsage,
   EventUserMessage,
   type EventKind,
@@ -277,6 +280,38 @@ const SAMPLES: Record<
     mediaType: "image/png",
     source: { inline: PNG_BYTES },
   },
+  // 后端的反向请求 Agentre 无卡承接、已在传输层立即回绝：只带一个只读用途分类，
+  // 从不带协议方法名或原始参数（spec 2026-09-17 "Unsupported Hermes requests"）。
+  unsupportedRequestNotice: {
+    case: "unsupportedRequestNotice",
+    purpose: "sudo_password",
+  },
+  // ctl 变更清单卡的请求帧（spec 2026-09-22 决策 6/13）：toolInput 是一段 JSON
+  // 字节，装的是完整命令加每项变更的操作/类型/名字/字段前后值。
+  toolApprovalRequested: {
+    case: "toolApprovalRequested",
+    toolKey: "ctl",
+    requestId: "ctl-1",
+    toolName: "ctl_update_provider",
+    toolInput: utf8({
+      command: "agrctl update provider openrouter --name or",
+      changes: [
+        {
+          op: "update",
+          kind: "provider",
+          id: 4,
+          name: "openrouter",
+          fields: [{ field: "name", before: "openrouter", after: "or" }],
+        },
+      ],
+    }),
+  },
+  toolApprovalResolved: {
+    case: "toolApprovalResolved",
+    requestId: "ctl-1",
+    status: "approved",
+    result: "已更新 provider openrouter",
+  },
 };
 
 /** `EventKind` 词表的运行期形态。手写字面量的话守卫就成了复制品。 */
@@ -309,6 +344,9 @@ const VOCABULARY: ReadonlySet<string> = new Set<EventKind>([
   EventContextWindowUpdated,
   EventUnrecognizedBlock,
   EventImage,
+  EventUnsupportedRequestNotice,
+  EventToolApprovalRequested,
+  EventToolApprovalResolved,
 ]);
 
 describe("relay 事件词表", () => {
@@ -416,6 +454,61 @@ describe("relay 事件词表", () => {
           mediaType: "image/png",
           dataUrl: `data:image/png;base64,${PNG_B64}`,
         },
+      },
+    ]);
+  });
+
+  // Given 中继转发了一张 ctl 审批卡的请求帧（agrctl 一次写操作触发的服务端审批，
+  // spec 2026-09-22 决策 6/13），随后那台机器又发来终态；When 两帧一路穿过真实
+  // Protobuf 解码、relayClient 的视图适配、归约器；Then 控制台转录上得到**一张**
+  // tool_approval 块，toolInput 是解析后的变更清单对象（不是 bytes 的默认投射
+  // base64）——这正是本轮把 desktop 侧新事件接进 server 时要修的缺口：wireview
+  // 一侧的镜像投影漏了 toolInput 这个 case 会把它落成 base64，而这里钉的是
+  // server 前端自己的实时中继路径（relayClient 通用的 Uint8Array→JSON 还原，
+  // 见 decodeRawJSON），两条路径分别验证。
+  it("ctl 审批卡请求帧穿真实协议，合成带解析后变更清单的卡；终态帧回填 status/result", async () => {
+    const frames = await relayEvents([
+      SAMPLES.toolApprovalRequested,
+      SAMPLES.toolApprovalResolved,
+    ]);
+    const [message] = reduceFrames(frames, 7);
+
+    expect(message.blocks).toHaveLength(1);
+    expect(message.blocks[0].type).toBe("tool_approval");
+    expect(message.blocks[0].toolApproval).toEqual({
+      toolKey: "ctl",
+      requestId: "ctl-1",
+      toolName: "ctl_update_provider",
+      toolInput: {
+        command: "agrctl update provider openrouter --name or",
+        changes: [
+          {
+            op: "update",
+            kind: "provider",
+            id: 4,
+            name: "openrouter",
+            fields: [{ field: "name", before: "openrouter", after: "or" }],
+          },
+        ],
+      },
+      status: "approved",
+      result: "已更新 provider openrouter",
+    });
+  });
+
+  // Given 后端发来一次 Agentre 无卡承接的反向请求，已被立即回绝；When 这条提示帧
+  // 穿过真实协议走到归约器；Then 控制台转录上是一块认得出的结构化提示（noticeKind
+  // 加只读的用途分类），而不是 default 分支铺出来的一坨 JSON notice。
+  it("无卡承接的反向请求提示画成结构化 notice，只带用途分类", async () => {
+    const frames = await relayEvents([SAMPLES.unsupportedRequestNotice]);
+    const [message] = reduceFrames(frames, 7);
+
+    expect(message.blocks).toEqual([
+      {
+        type: "notice",
+        level: "info",
+        noticeKind: "hermes_unsupported_request",
+        noticePurpose: "sudo_password",
       },
     ]);
   });

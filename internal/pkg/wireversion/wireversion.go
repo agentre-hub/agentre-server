@@ -31,4 +31,7 @@ var Protocol = protocolversion.Protocol()
 // 0.3.0：规格 2026-09-21-port-forward-subdomain 把 open 改成按映射 id 定位（决策
 // 10），这条改动不向后兼容——旧的按端口 open 在新设备上已经读不到目标，所以这里必须
 // 跟着 pkg/wire 的那次 pin 一起抬（AGENTS.md「协议版本…」那条 context）。
-const MinSupported = "0.3.0"
+//
+// 0.4.0：规格 2026-09-22-agrctl-resource-management 新增 relay 方法 toolApproval.answer
+// （控制台答工具审批，决策 13），方法集变了，floor 随 pkg/wire 的 pin 一起抬。
+const MinSupported = "0.4.0"

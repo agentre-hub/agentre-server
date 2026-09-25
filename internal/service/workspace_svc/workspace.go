@@ -17,10 +17,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agentre-hub/agentre/pkg/syncwire"
@@ -795,7 +797,7 @@ func (s *workspaceSvc) SetExecTargetOrder(ctx context.Context, in SetExecTargetO
 		zap.Int("orderedCount", len(ordered)), zap.Int("writtenCount", written))
 	// 拖拽重排也是「服务端直写（web 组织面）」的一次写入：没有它，浏览器排完序，
 	// 另一台桌面端仍要等 30 秒轮询（规格「谁发信号」）。
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, lastVersion)
+	BroadcastOrgWrite(ctx, in.UserID, lastVersion)
 	return nil
 }
 
@@ -1309,7 +1311,7 @@ func (s *workspaceSvc) CreateOrgObject(ctx context.Context, in OrgWriteInput) (*
 	logger.Ctx(ctx).Info("workspace_svc.CreateOrgObject: org object created from web",
 		zap.Int64("userId", in.UserID), zap.String("kind", in.Kind),
 		zap.String("syncId", obj.SyncID), zap.Int64("version", obj.Version))
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, obj.Version)
+	BroadcastOrgWrite(ctx, in.UserID, obj.Version)
 	return &OrgWriteResult{SyncID: obj.SyncID, Version: obj.Version}, nil
 }
 
@@ -1359,6 +1361,9 @@ func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*
 		if err := cascadeProjectDelete(ctx, in, row); err != nil {
 			return err
 		}
+		if err := cascadeAgentDelete(ctx, in, row); err != nil {
+			return err
+		}
 		row.DeletedAt = time.Now().UnixMilli()
 		return nil
 	})
@@ -1369,6 +1374,72 @@ func (s *workspaceSvc) DeleteOrgObject(ctx context.Context, in OrgWriteInput) (*
 		zap.Int64("userId", in.UserID), zap.String("kind", in.Kind),
 		zap.String("syncId", row.SyncID), zap.Int64("version", row.Version))
 	return &OrgWriteResult{SyncID: row.SyncID, Version: row.Version}, nil
+}
+
+// cascadeAgentDelete 删 Agent 时把它的执行目标与项目成员关系一并落墓碑，与主行同在
+// 一个事务里、排在主行之前（版本号的讲究见 tombstoneCascade）。
+//
+// 与桌面端 agentAdapter 删 Agent 时的级联是同一份清单；浏览器与 agrctl 的删除都走这里，
+// 走不到那条路径。少了它，每一台机器上都会留下指向已删 Agent 的执行目标与成员关系。
+// 载荷读不懂的行一律不动：宁可漏删一条，不能多删一条（同 ExecTargetBackendSyncID）。
+func cascadeAgentDelete(ctx context.Context, in OrgWriteInput, root *sync_entity.SyncObject) error {
+	if in.Kind != sync_entity.KindAgent {
+		return nil
+	}
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, in.UserID, []string{
+		sync_entity.KindAgentExecTarget, sync_entity.KindProjectAgent})
+	if err != nil {
+		return err
+	}
+	cascaded, err := tombstoneCascade(ctx, in.UserID, rows, func(row *sync_entity.SyncObject) bool {
+		return referencedAgentSyncID(row) == root.SyncID
+	})
+	if err != nil {
+		return err
+	}
+	if cascaded > 0 {
+		logger.Ctx(ctx).Info("workspace_svc.cascadeAgentDelete: exec targets and memberships tombstoned",
+			zap.Int64("userId", in.UserID), zap.String("syncId", root.SyncID),
+			zap.Int("cascadedCount", cascaded))
+	}
+	return nil
+}
+
+// referencedAgentSyncID 取执行目标 / 项目成员关系载荷里引用的 Agent 同步标识，读不懂
+// 时返回空串（空串不会等于任何一个 Agent 的同步标识）。
+func referencedAgentSyncID(row *sync_entity.SyncObject) string {
+	var p struct {
+		AgentSyncID string `json:"agent_sync_id"`
+	}
+	if json.Unmarshal([]byte(row.Payload), &p) != nil {
+		return ""
+	}
+	return p.AgentSyncID
+}
+
+// TombstoneExecTargetsOfBackend 把引用 backendSyncID 的执行目标全部落墓碑，给删后端
+// 用（engine_svc.DeleteBackend）。调用方必须已在后端主行的写入事务里、主行落墓碑之前
+// 调它（版本号的讲究见 tombstoneCascade）。
+//
+// 与桌面端 backendAdapter 删后端时的级联同一份清单：只动执行目标，Agent 本身与它的
+// 项目成员关系都留着——后端只是 Agent 执行链上的一档。
+func TombstoneExecTargetsOfBackend(ctx context.Context, userID int64, backendSyncID string) error {
+	rows, err := sync_repo.SyncObject().ListByKinds(ctx, userID, []string{sync_entity.KindAgentExecTarget})
+	if err != nil {
+		return err
+	}
+	cascaded, err := tombstoneCascade(ctx, userID, rows, func(row *sync_entity.SyncObject) bool {
+		return sync_entity.ExecTargetBackendSyncID(row.Payload) == backendSyncID
+	})
+	if err != nil {
+		return err
+	}
+	if cascaded > 0 {
+		logger.Ctx(ctx).Info("workspace_svc.TombstoneExecTargetsOfBackend: exec targets tombstoned",
+			zap.Int64("userId", userID), zap.String("backendSyncId", backendSyncID),
+			zap.Int("cascadedCount", cascaded))
+	}
+	return nil
 }
 
 // writeLockedOrgRow 是改与删共用的那一段：读、改、写同在一个事务里，读带行锁
@@ -1399,7 +1470,7 @@ func writeLockedOrgRow(
 	}); err != nil {
 		return nil, err
 	}
-	accountchan_svc.BroadcastBestEffort(ctx, in.UserID, row.Version)
+	BroadcastOrgWrite(ctx, in.UserID, row.Version)
 	return row, nil
 }
 
@@ -1475,7 +1546,21 @@ func lockOrgRowForWrite(
 // 一个域：看板（issue_svc）走的是完全同一条通道，同一个账号级序列，同一个下行游标。
 // 它与 WriteOrgRow / SaveOrgRow / ServerOriginFingerprint 一起构成这条通道对外的那
 // 几格，住在一处，规矩才和它管的东西挨着（依赖方向不变：issue_svc → workspace_svc）。
+//
+// 在 WithOrgWriteBatch 里调用时不另开事务：fn 直接跑在那一批的事务里（账号序列那一行
+// 已经锁着），嵌套事务的行为因此无从谈起。
 func WithOrgWriteTx(ctx context.Context, userID int64, fn func(context.Context) error) error {
+	if b := orgWriteBatchOf(ctx); b != nil {
+		if b.userID != userID {
+			return fmt.Errorf("workspace_svc: account %d written inside a write batch of account %d", userID, b.userID)
+		}
+		return fn(ctx)
+	}
+	return withAccountSeqTx(ctx, userID, fn)
+}
+
+// withAccountSeqTx 开一个写入事务并先锁住账号序列那一行（理由见 WithOrgWriteTx）。
+func withAccountSeqTx(ctx context.Context, userID int64, fn func(context.Context) error) error {
 	return db.Ctx(ctx).Transaction(func(tx *gorm.DB) error {
 		txCtx := db.WithContextDB(ctx, tx)
 		// 锁住账号序列那一行，**在 fn 拿到任何 sync_objects 行锁之前**（见下面
@@ -1485,6 +1570,59 @@ func WithOrgWriteTx(ctx context.Context, userID int64, fn func(context.Context) 
 		}
 		return fn(txCtx)
 	})
+}
+
+// orgWriteBatch 是一批并成一个事务的写入：记下批内推进到的最高版本，提交后广播一次。
+type orgWriteBatch struct {
+	userID  int64
+	mu      sync.Mutex
+	version int64
+}
+
+type orgWriteBatchKey struct{}
+
+func orgWriteBatchOf(ctx context.Context) *orgWriteBatch {
+	b, _ := ctx.Value(orgWriteBatchKey{}).(*orgWriteBatch)
+	return b
+}
+
+// WithOrgWriteBatch 把 fn 里的若干次完整写入（每一次本身就是一次 web 写：
+// CreateOrgObject、DeleteOrgObject、SetExecTargetOrder、engine_svc 的写……）并成
+// **一个**事务，提交之后只广播**一次**、带批内推进到的最高版本。
+//
+// 给 agrctl 用：一次 ctl 写入常常要落好几行（删 Agent 先摘负责人、上移下级；改执行目标
+// 链要删档、补档、重排；项目连成员带路径），逐次各自提交时中途失败会留下一个谁也没要
+// 过的中间态，而它照常同步到每一台机器上；逐次各自广播则让每台桌面端为同一次操作白拉
+// N 次。批内的写路径与 web 走的是同一套代码：它们的 WithOrgWriteTx 并进这一个事务，
+// 它们的 BroadcastOrgWrite 只记下版本号。
+//
+// fn 返回错误即整体回滚、不广播，因此批内任一步的错误都必须原样上抛。已经在一批里时
+// 直接并进外面那一批（广播归外面那一次）。
+func WithOrgWriteBatch(ctx context.Context, userID int64, fn func(context.Context) error) error {
+	if orgWriteBatchOf(ctx) != nil {
+		return WithOrgWriteTx(ctx, userID, fn)
+	}
+	b := &orgWriteBatch{userID: userID}
+	if err := withAccountSeqTx(ctx, userID, func(txCtx context.Context) error {
+		return fn(context.WithValue(txCtx, orgWriteBatchKey{}, b))
+	}); err != nil {
+		return err
+	}
+	// 广播留在提交之后（理由见 WithOrgWriteTx）；批内一行都没写时版本号是 0，不广播。
+	accountchan_svc.BroadcastBestEffort(ctx, userID, b.version)
+	return nil
+}
+
+// BroadcastOrgWrite 是服务端直写提交之后的那一次广播。在 WithOrgWriteBatch 里时
+// 只记下版本号，由那一批提交之后统一广播一次。
+func BroadcastOrgWrite(ctx context.Context, userID, version int64) {
+	if b := orgWriteBatchOf(ctx); b != nil {
+		b.mu.Lock()
+		b.version = max(b.version, version)
+		b.mu.Unlock()
+		return
+	}
+	accountchan_svc.BroadcastBestEffort(ctx, userID, version)
 }
 
 // SaveOrgRow 落这一行并广播：新版本号 + 服务端来源。它不读行：要在原载荷上合并的
@@ -1497,7 +1635,7 @@ func SaveOrgRow(ctx context.Context, userID int64, row *sync_entity.SyncObject) 
 		return err
 	}
 	// 广播留在提交之后（理由见 WithOrgWriteTx）。
-	accountchan_svc.BroadcastBestEffort(ctx, userID, row.Version)
+	BroadcastOrgWrite(ctx, userID, row.Version)
 	return nil
 }
 

@@ -191,21 +191,11 @@ func cascadeProjectDelete(
 	}
 	subtree := ProjectSubtree(rows, root.SyncID)
 
-	now := time.Now().UnixMilli()
-	cascaded := 0
-	for _, row := range rows {
-		if row.ID == root.ID || !belongsToSubtree(row, subtree) {
-			continue
-		}
-		version, err := sync_repo.SyncState().NextVersion(ctx, in.UserID, 1)
-		if err != nil {
-			return err
-		}
-		n, err := sync_repo.SyncObject().Tombstone(ctx, row.ID, version, now)
-		if err != nil {
-			return err
-		}
-		cascaded += int(n)
+	cascaded, err := tombstoneCascade(ctx, in.UserID, rows, func(row *sync_entity.SyncObject) bool {
+		return row.ID != root.ID && belongsToSubtree(row, subtree)
+	})
+	if err != nil {
+		return err
 	}
 	if cascaded > 0 {
 		// 载荷正文一律不进日志（里面有项目路径与简介），只报数。
@@ -214,6 +204,34 @@ func cascadeProjectDelete(
 			zap.Int("cascadedCount", cascaded))
 	}
 	return nil
+}
+
+// tombstoneCascade 把 rows 里 match 选中的每一行落墓碑，返回实际落下的行数。
+//
+// 它是级联删除共用的那一段，调用方必须已经在主行的写入事务里（WithOrgWriteTx）：
+// 版本号逐行取，且都早于主行随后取的那一个，
+// 主行因此拿到这次操作推进到的最高版本，提交之后一次广播就够。
+func tombstoneCascade(
+	ctx context.Context, userID int64, rows []*sync_entity.SyncObject,
+	match func(row *sync_entity.SyncObject) bool,
+) (int, error) {
+	now := time.Now().UnixMilli()
+	cascaded := 0
+	for _, row := range rows {
+		if !match(row) {
+			continue
+		}
+		version, err := sync_repo.SyncState().NextVersion(ctx, userID, 1)
+		if err != nil {
+			return cascaded, err
+		}
+		n, err := sync_repo.SyncObject().Tombstone(ctx, row.ID, version, now)
+		if err != nil {
+			return cascaded, err
+		}
+		cascaded += int(n)
+	}
+	return cascaded, nil
 }
 
 // ProjectChildren 把项目行整理成 父项目标识 → 直接子项目标识 的邻接表。父子关系是

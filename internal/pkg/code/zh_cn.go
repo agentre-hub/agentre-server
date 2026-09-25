@@ -79,4 +79,17 @@ var zhCN = map[int]string{
 	EngineBackendNotFound:       "Agent 后端不存在",
 	EngineBuiltinForbidden:      "浏览器不能创建内置后端",
 	EngineBackendDeviceNotFound: "所选设备已不在账号内",
+
+	EngineOpenClawGatewayURLRequired:        "请填写 OpenClaw 网关地址",
+	EngineOpenClawGatewayURLInvalid:         "OpenClaw 网关地址不是有效的 URL",
+	EngineOpenClawGatewayURLScheme:          "OpenClaw 网关地址必须以 ws:// 或 wss:// 开头",
+	EngineOpenClawGatewayURLHost:            "OpenClaw 网关地址缺少主机名",
+	EngineOpenClawGatewayURLCredentials:     "OpenClaw 网关地址不能包含账号密码、查询参数或片段；令牌请单独设置",
+	EngineOpenClawGatewayURLPlaintextRemote: "非本机的 OpenClaw 网关必须使用 wss://，ws:// 只允许本机回环地址",
+	EngineOpenClawSessionModeInvalid:        "OpenClaw 会话模式只支持 per-agentre-session",
+	EngineOpenClawProviderModelNotAllowed:   "OpenClaw 后端不绑定供应商或模型，模型请在 OpenClaw 里配置",
+	EngineOpenClawEnvNotAllowed:             "OpenClaw 后端不支持自定义环境变量",
+	EngineOpenClawReasoningEffortNotAllowed: "OpenClaw 后端不支持设置推理强度",
+	EngineOpenClawCLISettingsNotAllowed:     "OpenClaw 后端不使用沙箱、审批、权限模式、默认模型或模型路由设置",
+	EngineOpenClawForeignConfigNotAllowed:   "OpenClaw 后端不能带 Hermes 或 ACP 的配置",
 }
