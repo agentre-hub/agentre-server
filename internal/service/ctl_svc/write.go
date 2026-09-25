@@ -3,6 +3,7 @@ package ctl_svc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -10,10 +11,12 @@ import (
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/cago-frame/cago/pkg/utils/httputils"
 	"go.uber.org/zap"
 
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
+	"github.com/agentre-hub/agentre-server/internal/pkg/code"
 	"github.com/agentre-hub/agentre-server/internal/service/engine_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/workspace_svc"
 )
@@ -204,6 +207,16 @@ func (w *kindWrite) checkBackendConfig(ctx context.Context) error {
 		fields.EnvJSON = string(raw)
 	}
 	_, err = engine_svc.NormalizeBackendConfig(ctx, fields)
+	return explainGatewayURLErr(err)
+}
+
+// explainGatewayURLErr 给网关地址的拒绝补上 agrctl 该改的 --config 字段名（与桌面端
+// ctl_svc 的 explainBackendErr 同一口径）；控制台走 engine_svc，原文不带 agrctl 的参数。
+func explainGatewayURLErr(err error) error {
+	var he *httputils.Error
+	if errors.As(err, &he) && he.Code >= code.EngineOpenClawGatewayURLRequired && he.Code <= code.EngineOpenClawGatewayURLPlaintextRemote {
+		he.Msg += " (--config openclawGatewayUrl)"
+	}
 	return err
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/agentre-hub/agentre/pkg/wire/agentrewire"
@@ -773,6 +774,9 @@ func TestWrite_GivenOpenClawBackendWithInvalidGateway_ThenRejectedInPreviewAndNo
 			assert.Equal(t, tc.code, he.Code, tc.name)
 			assert.NotEmpty(t, he.Msg, tc.name)
 			assert.NotContains(t, he.Msg, "secret", tc.name)
+			// 与桌面端 ctl 同一口径：网关地址被拒时点名 agrctl 该改的 --config 字段。
+			gatewayURLReject := tc.code >= code.EngineOpenClawGatewayURLRequired && tc.code <= code.EngineOpenClawGatewayURLPlaintextRemote
+			assert.Equal(t, gatewayURLReject, strings.Contains(he.Msg, "(--config openclawGatewayUrl)"), "%s: %s", tc.name, he.Msg)
 		}
 	}
 }
