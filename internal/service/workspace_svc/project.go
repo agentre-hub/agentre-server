@@ -209,7 +209,7 @@ func cascadeProjectDelete(
 // tombstoneCascade 把 rows 里 match 选中的每一行落墓碑，返回实际落下的行数。
 //
 // 它是级联删除共用的那一段，调用方必须已经在主行的写入事务里（WithOrgWriteTx）：
-// 版本号逐行取（同 sync_svc.tombstoneExecTargetsOf），且都早于主行随后取的那一个，
+// 版本号逐行取，且都早于主行随后取的那一个，
 // 主行因此拿到这次操作推进到的最高版本，提交之后一次广播就够。
 func tombstoneCascade(
 	ctx context.Context, userID int64, rows []*sync_entity.SyncObject,
