@@ -229,7 +229,7 @@ string on screen is still English. See [design.md](design.md#i18n).
 ```bash
 make test                                        # backend + frontend, the default gate
 go test -run TestExchangeToken ./internal/service/device_svc/...
-cd frontend && pnpm test -- src/i18n             # narrow vitest
+cd frontend && pnpm test src/i18n                # narrow vitest
 cd frontend && pnpm exec vitest                  # watch mode
 make e2e                                         # see e2e/README.md
 ```
