@@ -72,4 +72,17 @@ var en = map[int]string{
 	EngineBackendNotFound:       "agent backend not found",
 	EngineBuiltinForbidden:      "builtin backends cannot be created from the browser",
 	EngineBackendDeviceNotFound: "the selected device is not an active device on this account",
+
+	EngineOpenClawGatewayURLRequired:        "the OpenClaw gateway URL is required",
+	EngineOpenClawGatewayURLInvalid:         "the OpenClaw gateway URL is not a valid URL",
+	EngineOpenClawGatewayURLScheme:          "the OpenClaw gateway URL must start with ws:// or wss://",
+	EngineOpenClawGatewayURLHost:            "the OpenClaw gateway URL must include a host",
+	EngineOpenClawGatewayURLCredentials:     "the OpenClaw gateway URL cannot contain credentials, a query or a fragment; set the token separately",
+	EngineOpenClawGatewayURLPlaintextRemote: "a non-local OpenClaw gateway must use wss://; ws:// is only allowed for loopback addresses",
+	EngineOpenClawSessionModeInvalid:        "the only supported OpenClaw session mode is per-agentre-session",
+	EngineOpenClawProviderModelNotAllowed:   "an OpenClaw backend is not bound to a provider or model; configure the model in OpenClaw",
+	EngineOpenClawEnvNotAllowed:             "an OpenClaw backend does not take custom environment variables",
+	EngineOpenClawReasoningEffortNotAllowed: "an OpenClaw backend does not take a reasoning effort",
+	EngineOpenClawCLISettingsNotAllowed:     "an OpenClaw backend does not use sandbox, approval, permission mode, default model or model route settings",
+	EngineOpenClawForeignConfigNotAllowed:   "an OpenClaw backend cannot carry Hermes or ACP settings",
 }

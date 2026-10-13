@@ -298,8 +298,8 @@ export default function SessionDetailHeader({
           <span
             className={
               machineOnline === false
-                ? "text-destructive"
-                : "text-status-waiting"
+                ? "text-destructive-text"
+                : "text-status-waiting-text"
             }
           >
             {machineOnline === false

@@ -377,7 +377,7 @@ export function DevicePortForward({
       ) : null}
 
       {displayPhase === "error" ? (
-        <p className="text-xs text-destructive">
+        <p className="text-xs text-destructive-text">
           {t("device.portForward.loadFailed", { message: loadError })}
         </p>
       ) : null}
@@ -399,7 +399,7 @@ export function DevicePortForward({
       ) : null}
 
       {actionError ? (
-        <p className="text-xs text-destructive">{actionError}</p>
+        <p className="text-xs text-destructive-text">{actionError}</p>
       ) : null}
     </div>
   );

@@ -1033,7 +1033,7 @@ export default function SessionIndex({
             aria-label={t("project.create.title")}
             title={t("project.create.title")}
             onClick={onNewProject}
-            className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:focus-outline"
           >
             <FolderPlus className="size-4" aria-hidden="true" />
           </button>

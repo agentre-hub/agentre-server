@@ -114,7 +114,7 @@ export function ConnectionEscape({ variant }: { variant: "bar" | "icon" }) {
         className={cn(
           "flex size-8 shrink-0 items-center justify-center self-center rounded-md",
           "bg-status-waiting-bg text-status-waiting-text",
-          "hover:brightness-95 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+          "outline-none hover:brightness-95 focus-visible:focus-outline",
         )}
       >
         <Unplug className="size-4" aria-hidden="true" />
@@ -138,7 +138,7 @@ export function ConnectionEscape({ variant }: { variant: "bar" | "icon" }) {
       className={cn(
         "flex w-full flex-col gap-0.5 rounded-md px-2 py-1.5 text-left",
         "bg-status-waiting-bg text-status-waiting-text",
-        "hover:brightness-95 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+        "outline-none hover:brightness-95 focus-visible:focus-outline",
       )}
     >
       <span className="flex w-full items-center gap-1.5">

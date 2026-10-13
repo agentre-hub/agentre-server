@@ -98,6 +98,23 @@ func (d backendDoc) view(syncID string) BackendView {
 	}
 }
 
+// normalizeConfig 按桌面端的规则校验并规范化存着的 config（NormalizeBackendConfig）。
+// 规范化没有改动时不碰 config 键，旧平铺格式的行因此不会凭空多出一个 config。
+func (d backendDoc) normalizeConfig(ctx context.Context) error {
+	current := d.config()
+	out, err := NormalizeBackendConfig(ctx, BackendFields{
+		Type: d.str("type"), ProviderKey: d.str("provider_key"), ModelKey: d.str("model_key"),
+		EnvJSON: d.str("env_json"), ReasoningEffort: d.str("reasoning_effort"), Config: current,
+	})
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(out, current) {
+		d["config"] = out
+	}
+	return nil
+}
+
 // checkBackendConfig 拒绝不是 JSON 对象的 config（含 null）。缺席（空）表示不改，放行。
 // 它在任何读写之前判，拒绝时不开事务、不落库。
 func checkBackendConfig(ctx context.Context, config json.RawMessage) error {

@@ -62,6 +62,34 @@ utility simply generates no rule, so the element renders with no colour at all.
 Only `eslint-rules/` is exempt from the literal-colour rule, because it is where the banned
 colour names are listed. No `.ts`/`.tsx` file may hard-code a colour.
 
+### A token has a role
+
+Using a token is not enough; it has to be the token for that job. The same module and guard
+test enforce four role rules, kept verbatim identical to the desktop repository's module so
+that one class string is never legal in one host and banned in the other:
+
+- **Text on a soft background takes the `-text` role.** A status, destructive or brand
+  colour has a saturated fill (dots, solid backgrounds, a stand-alone icon) and a `-text`
+  value for words. `bg-status-waiting-bg text-status-waiting` is rejected; write
+  `text-status-waiting-text`. The rule only sees a soft background and its fill in one class
+  string — coloured *words* written straight onto a card or a parent's soft background
+  (`<p className="text-xs text-destructive-text">`) are the author's job to get right.
+- **Keyboard focus is never hand-assembled.** Any `ring-ring` in `.ts`/`.tsx` is rejected;
+  see [Accessibility](#accessibility) for the two shared looks.
+- **Identity colours are not text.** `text-agent-N` is rejected; the 16 identity colours
+  were tuned for a swatch with a white glyph (`bg-agent-N text-agent-foreground`).
+- **Hover is `accent`, not a resting surface.** `hover:bg-muted` and `hover:bg-secondary`
+  are rejected: each shares its value with another surface, so the feedback lands at 1.00.
+  Use `hover:bg-accent`, or `hover:bg-accent/60 hover:on-accent` for a lighter touch —
+  `on-accent` re-points muted text so it stays readable on the translucent fill.
+
+Edges come in four tiers, picked by how much identification the edge carries: `border`
+(dividers, card edges), `input` (a control that names itself — the outline button),
+`field-border` (a field, which may be empty: shared `Input` / `Textarea` / `SelectTrigger` /
+`SearchInput`, and the hand-written `CodeInput` boxes) and `control-border` (the outline *is*
+the control — an unchecked checkbox). The values and their reasoning live with the tokens in
+the shared package.
+
 ### The canvas's names are not the code's names
 
 The boards say `brand`, `surface`, `text`, `ok`, `warn`, `idle`. The code keeps shadcn's
@@ -1198,10 +1226,15 @@ forgotten one placeholder at a time. Degrade, do not delete: `SessionConnectionI
 travelling bar becomes a static full-width line at 40% opacity, because the connection is
 still live and the indicator still has something to say.
 
-A hand-written focusable control brings its own ring —
-`outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50`, as `UserMenu`,
-`AddDeviceGuide`, `Account` and `OrgIndexPanel` write it. Shadcn primitives from
-`@agentre-hub/agentre-ui` already carry theirs; do not restyle those.
+**Keyboard focus has two shared looks, defined once in the shared package's `tokens.css`.**
+A hand-written button-like control writes `outline-none focus-visible:focus-outline` — a
+solid 2px ring with a 2px gap, as `UserMenu`, `ConnectionStatus` and `OrgIndexPanel` do. An
+element flush against a clipping container draws the same ring inward with
+`focus-visible:focus-outline-inset`, as the expandable session rows in `Account` do; the
+outward ring would be cut off there. A shell that wraps a text field takes
+`focus-within:focus-halo`. Shadcn primitives from `@agentre-hub/agentre-ui` already carry
+theirs; do not restyle those. Hand-assembling a ring out of `ring-ring/NN` is rejected by
+lint — the translucent versions composite to roughly 2:1.
 
 ## Adding a page
 

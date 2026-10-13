@@ -3,7 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError, api } from "@/lib/api";
-import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { Input, ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Device from "@/pages/Device";
 
@@ -55,6 +55,23 @@ describe("设备码输入：六个真实码格", () => {
     bs.forEach((b, i) => {
       expect(b.getAttribute("aria-label")).toContain(String(i + 1));
     });
+  });
+
+  it("空码格静止时的边与共享 Input 是同一档", () => {
+    // 码格是空着等人填的字段：边就是它静止时唯一的轮廓。它此前用分隔线那档
+    // （亮色对卡片 1.27），比同一套界面里的输入框淡得多。不断言类名叫什么，
+    // 把共享的 Input 渲染在旁边比两者的边色类。
+    const restingEdge = (el: Element) =>
+      Array.from(el.classList).filter((c) =>
+        /^border-[a-z]+(?:-[a-z]+)*$/.test(c),
+      );
+    renderEntry();
+    const codeBoxes = boxes();
+    render(<Input aria-label="reference field" />);
+    const reference = restingEdge(screen.getByLabelText("reference field"));
+
+    expect(reference).toHaveLength(1);
+    codeBoxes.forEach((box) => expect(restingEdge(box)).toEqual(reference));
   });
 
   it("逐格输入会大写并自动前进到下一格", () => {

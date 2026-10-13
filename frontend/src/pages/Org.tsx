@@ -307,7 +307,7 @@ export default function Org() {
             {!initialFailed && (error ?? mutationError) && (
               <p
                 role="alert"
-                className="border-t border-border p-2.5 text-2xs text-destructive"
+                className="border-t border-border p-2.5 text-2xs text-destructive-text"
               >
                 {error ? t("org.errors.generic") : mutationError}
               </p>

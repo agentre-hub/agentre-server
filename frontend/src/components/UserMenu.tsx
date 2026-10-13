@@ -95,7 +95,7 @@ export function UserMenu({
           aria-label={t("appShell.userMenu.trigger")}
           className={cn(
             "flex cursor-pointer items-center gap-2 rounded-md outline-none",
-            "focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            "focus-visible:focus-outline",
             "hover:bg-accent data-[state=open]:bg-accent",
             compact ? "px-1 py-1" : "h-[42px] w-full px-1.5",
           )}

@@ -391,7 +391,7 @@ export default function Overview() {
               aria-hidden="true"
               className="size-[15px] shrink-0 text-status-waiting"
             />
-            <span className="min-w-0 text-xs text-status-waiting">
+            <span className="min-w-0 text-xs text-status-waiting-text">
               {t("overview.stats.newAccount.text")}
             </span>
             <span className="flex-1" />

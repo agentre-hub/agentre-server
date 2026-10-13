@@ -108,6 +108,9 @@ jobs:
           AUTO_SCALING: ${{ env.ENV=='prod' && 'true' || 'false' }}
           AUTO_SCALING_MIN_REPLICAS: ${{ env.ENV=='prod' && '2' || '1' }}
           ETCD_PASSWORD: ${{ secrets.ETCD_CONFIG_PASSWORD }}
+          # 端口转发子域只在 prod 挂，与 etcd 的 server.port_forward.base_domain 成对
+          FORWARD_HOST: ${{ env.ENV=='prod' && '*.fw.agentrehub.com' || '' }}
+          FORWARD_TLS_SECRET: ${{ env.ENV=='prod' && 'fw-agentrehub-com-tls' || '' }}
         run: |
           helm upgrade --install "$RELEASE" ./deploy/helm \
             --namespace "$NAMESPACE" \
@@ -117,6 +120,8 @@ jobs:
             --set-string etcdConfig.password="$ETCD_PASSWORD" \
             --set-string ingress.host="$HOST" \
             --set-string ingress.tlsSecretName="$TLS_SECRET" \
+            --set-string ingress.forwardHost="$FORWARD_HOST" \
+            --set-string ingress.forwardTlsSecretName="$FORWARD_TLS_SECRET" \
             --set-string resources.requests.cpu="$RESOURCE_CPU" \
             --set-string resources.requests.memory="$RESOURCE_MEMORY" \
             --set autoscaling.enabled="$AUTO_SCALING" \

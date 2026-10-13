@@ -411,6 +411,40 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
   });
 
+  it("底部弹层是 flex 列：Agent 清单那一格被限高、能滚，不被 grid 行撑出屏外", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    // DialogContent 默认是 grid：子项的 flex-1/min-h-0 不生效，清单那一格随内容长高，
+    // 整层溢出 82dvh 落到屏幕下面，Agent 一多就够不着。
+    expect(sheet.classList.contains("grid")).toBe(false);
+    expect(sheet.classList.contains("flex")).toBe(true);
+    expect(sheet.classList.contains("flex-col")).toBe(true);
+  });
+
+  it("从弹层挑 Agent 进草稿，草稿的返回回到列表，不再把挑 Agent 的弹层升起来", async () => {
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
+    expect(await screen.findByTestId("draft-session")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+    expect(screen.queryByTestId("new-conversation-sheet")).toBeNull();
+    expect(screen.getByText("等你批")).toBeTruthy();
+  });
+
   it("真空账号开始搜索后挂共享搜索空态，并可清除搜索回到主空态", async () => {
     stubApi([], []);
     renderChat();

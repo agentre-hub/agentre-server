@@ -478,7 +478,7 @@ function SkillsEditor({
                 "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-2xs",
                 skill.enabled
                   ? "bg-secondary"
-                  : "bg-destructive-soft text-destructive line-through",
+                  : "bg-destructive-soft text-destructive-text line-through",
               )}
             >
               <span>{skill.id}</span>

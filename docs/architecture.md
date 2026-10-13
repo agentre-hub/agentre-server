@@ -179,7 +179,7 @@ middleware groups are the authorization model:
 | Device flow | `AttachOAuthErrorFields()` (+ `AuthorizePerIPLimit`) | `authorize`, `token`, `refresh` |
 | Browser session | `SessionAuth()` + `CSRF()` | logout and session management, passkey registration/management, device pending/approve/deny and relay ticket, `/v1/engine/*` browser CRUD, `/v1/stats/*`, `/v1/port-forwards/links` |
 | Either credential | `SessionOrDeviceAuth(bearer)` — enforces CSRF on the session branch for unsafe methods | `/v1/auth/me`, `/v1/devices`, `/v1/oauth/token/revoke`, workspace/organization/project APIs, agent-session and import APIs |
-| Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot`, `/v1/credentials/introspect` (+ per-account rate limit) |
+| Device access token | `DeviceJWT(bearer)` | `/v1/relay/daemon`, `/v1/sync/*`, `/v1/engine/snapshot`, `/v1/ctl/resources` and `/v1/ctl/send` (agrctl executor; protojson bodies, `{"error": …}` errors, no mux envelope), `/v1/credentials/introspect` (+ per-account rate limit) |
 | Relay client | `RelayClientJWT(credentials, tickets)` | `/v1/relay/client`; accepts native device access tokens and browser session-derived short-lived relay tickets (opaque, recorded in Redis by `credstore`, one connection per ticket) |
 | Port-forward authorize | own session check in `portforward_ctr.Host.Authorize` (redirects to `/login` instead of 401; GET, so no CSRF) | `GET /v1/port-forwards/authorize` |
 | Forward host | `portforward_ctr.Host.Dispatch`, installed with `engine.Use` **before** every other route — forward session, not the console session | every request whose Host is under `server.port_forward.base_domain` |

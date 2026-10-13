@@ -604,7 +604,7 @@ export function DraftSession({
                 startError ? (
                   <p
                     role="alert"
-                    className="border-t border-border px-3.5 py-1.5 text-xs text-destructive"
+                    className="border-t border-border px-3.5 py-1.5 text-xs text-destructive-text"
                   >
                     {startError instanceof DispatchRunError
                       ? t("chat.remoteStartFailed", {

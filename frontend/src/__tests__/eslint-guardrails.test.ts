@@ -127,6 +127,93 @@ describe("design token guardrail", () => {
   });
 });
 
+/**
+ * 「token 用对了角色没有」的四条：软底上的同族文字、手拼焦点环、身份色当文字、
+ * 拿静止表面色做悬停。规则源与 agentre 仓的同名模块逐字一致——两端共用同一份
+ * tokens.css，同一个类名在一端合规、在另一端被拦就是约定分叉。
+ */
+describe("token role guardrail", () => {
+  it.each([
+    [
+      "running fill as text on its own soft background",
+      `export const a = <span className="bg-status-running-bg text-status-running" />;`,
+    ],
+    [
+      "destructive fill as text on a translucent destructive background",
+      `export const a = <span className="text-destructive bg-destructive/10" />;`,
+    ],
+    [
+      "brand fill as text on the brand soft background",
+      `export const a = <span className="bg-primary-soft text-primary" />;`,
+    ],
+    [
+      "hand-rolled translucent focus ring",
+      `export const a = <button className="focus-visible:ring-2 focus-visible:ring-ring/50" />;`,
+    ],
+    [
+      "hand-rolled solid focus ring",
+      `export const a = <button className="focus-visible:ring-2 focus-visible:ring-ring" />;`,
+    ],
+    [
+      "identity colour as text",
+      `export const a = <span className="text-agent-3" />;`,
+    ],
+    [
+      "resting surface as hover feedback",
+      `export const a = <li className="hover:bg-muted" />;`,
+    ],
+    [
+      "translucent resting surface as group hover feedback",
+      `export const a = <li className="group-hover:bg-secondary/60" />;`,
+    ],
+    [
+      "inside a template literal",
+      'export const c = `flex ${"x"} hover:bg-secondary`;',
+    ],
+  ])("rejects %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).toContain("no-restricted-syntax");
+  });
+
+  it.each([
+    [
+      "the text role on its soft background",
+      `export const a = <span className="bg-status-running-bg text-status-running-text" />;`,
+    ],
+    [
+      "a fill used alone, as an icon or dot",
+      `export const a = <svg className="size-4 text-destructive" />;`,
+    ],
+    [
+      "the foreground on a solid fill",
+      `export const a = <span className="bg-primary text-primary-foreground" />;`,
+    ],
+    [
+      "the shared button focus",
+      `export const a = <button className="outline-none focus-visible:focus-outline" />;`,
+    ],
+    [
+      "the shared field focus on a wrapping shell",
+      `export const a = <div className="border border-field-border focus-within:focus-halo" />;`,
+    ],
+    [
+      "the glyph colour on an identity swatch",
+      `export const a = <span className="bg-agent-3 text-agent-foreground" />;`,
+    ],
+    [
+      "the feedback colour as hover",
+      `export const a = <li className="hover:bg-accent/60 hover:on-accent" />;`,
+    ],
+    [
+      "a resting surface used as a resting surface",
+      `export const a = <div className="bg-muted" />;`,
+    ],
+  ])("accepts %s", async (_name, code) => {
+    const messages = await lintAs("src/fixture.tsx", code);
+    expect(ruleIds(messages)).not.toContain("no-restricted-syntax");
+  });
+});
+
 describe("native control guardrail", () => {
   // 本仓的基础组件全部来自共享包，但包里一度没有 Select / Checkbox / 搜索框，
   // 于是组织面就地退回了系统控件（系统控件走浏览器自己的配色，与 tokens.css 无关，

@@ -189,7 +189,7 @@ export default function Device() {
             {codeError && (
               <p
                 id={errorId}
-                className="flex items-start gap-2 text-aux text-destructive"
+                className="flex items-start gap-2 text-aux text-destructive-text"
               >
                 <CircleAlert
                   className="mt-0.5 size-3.5 shrink-0"
