@@ -104,6 +104,94 @@ const TOKENED_FONT_SIZES = "10|11|12|13|14|15";
  */
 const ARBITRARY_FONT_SIZE = `(?:^|[\\s"'\`])${VARIANT}text-\\[(?:${TOKENED_FONT_SIZES})px`;
 
+/*
+ * 以下四组管的是「token 用对了角色没有」：软底上的同族文字、焦点环、身份色当文字、
+ * 拿静止表面色做悬停。正则源与 agentre 仓的同名模块逐字一致——两端共用同一份
+ * tokens.css 与同一套工具类，规则分叉了就等于约定分叉了。
+ */
+
+/**
+ * 软底 → 落在它上面的同族「填充色文字」。
+ *
+ * 状态色、危险色、品牌色各有两个值：饱和的那个画圆点和实底，`-text` 的那个写字。
+ * 把饱和色压在自己的淡色底上当文字是对比度掉得最狠的写法（亮色 3.5–4.4），
+ * 而且软底和文字色写在同一个类名串里，不用猜它是文字还是图标就能判。
+ *
+ * `status-error` 与 `destructive` 同值、共用 `destructive-soft` 这一个软底，所以归一族。
+ */
+const SOFT_FAMILIES = [
+  ["bg-status-running(?:-bg|\\/[0-9]+)", "text-status-running"],
+  ["bg-status-waiting(?:-bg|\\/[0-9]+)", "text-status-waiting"],
+  [
+    "bg-(?:destructive-soft|destructive\\/[0-9]+|status-error\\/[0-9]+)",
+    "text-(?:destructive|status-error)",
+  ],
+  ["bg-primary(?:-soft|\\/[0-9]+)", "text-primary"],
+];
+
+/** 类名的起点：串首、空白，或变体前缀的冒号。 */
+const CLASS_START = "(?:^|[\\s:])";
+/** 填充色类名到此为止：后面不能再接 `-text` / `-foreground` 这类角色后缀，`/50` 可以。 */
+const FILL_END = "(?![\\w-])";
+
+/**
+ * 例：`bg-status-running-bg text-status-running`、`bg-destructive/10 text-destructive`
+ *
+ * 每一族是一对前瞻：同一个串里既有该族的软底、又有该族的填充色文字。
+ * 用前瞻而不是「A.*B|B.*A」，是因为两者在类名串里的先后没有约定。
+ */
+const FILL_TEXT_ON_OWN_SOFT_BG = `^(?:${SOFT_FAMILIES.map(
+  ([soft, fill]) =>
+    `(?=[\\s\\S]*${CLASS_START}${soft})(?=[\\s\\S]*${CLASS_START}${fill}${FILL_END})`,
+).join("|")})`;
+
+/**
+ * 例：`focus-visible:ring-ring/50`、`data-[state=open]:ring-ring/30`、`ring-2 ring-ring`
+ *
+ * `ring-ring` 这个组合只该出现在 tokens.css 里那两个焦点工具类的定义中。
+ * 前面的边界同时认变体前缀的冒号；后面不许再接字母或连字符，`/50` 可以。
+ */
+const HAND_ROLLED_FOCUS_RING = `${CLASS_START}ring-ring${FILL_END}`;
+
+/**
+ * 例：`text-agent-1`、`hover:text-agent-12`
+ *
+ * 身份色是为「色块 + 白字」调的，当文字读不出来。`text-agent-foreground`
+ * （色块上的字形）不在此列——后面必须是数字。
+ */
+const AGENT_COLOR_AS_TEXT = `${CLASS_START}text-agent-[0-9]+${FILL_END}`;
+
+/**
+ * 例：`hover:bg-muted`、`hover:bg-secondary/60`、`group-hover:bg-muted`
+ *
+ * 只认 muted 与 secondary 两个：它们各自与别的表面同值（暗色 muted ≡ card、
+ * secondary ≡ popover，亮色 secondary ≡ sidebar）。`hover:bg-card` 不在此列——
+ * 标签条在 secondary 带上向 card 提亮是有意的，与激活标签同一个方向。
+ */
+const RESTING_SURFACE_AS_HOVER = `${CLASS_START}(?:group-)?hover(?:\\/[a-z-]+)?:bg-(?:muted|secondary)${FILL_END}`;
+
+const TEXT_ROLE_HINT =
+  "饱和填充色压在自己的软底上当文字读不出来（亮色 3.5–4.4）。软底上的同族文字改用 -text 角色：" +
+  "text-status-running-text / text-status-waiting-text / text-destructive-text / text-primary-text。" +
+  " 填充色留给圆点、实底和单独的图标。见 docs/design.md#colour-tokens";
+
+const FOCUS_HINT =
+  "键盘焦点只有两种画法，都定义在共享包 @agentre-hub/agentre-ui 的 styles/tokens.css：" +
+  "按钮类用 focus-visible:focus-outline（2px 实色环 + 2px 间隙；贴着裁剪容器时用 focus-visible:focus-outline-inset），" +
+  "输入类用 focus-visible:focus-halo（实色边 + 光晕；包裹层用 focus-within:focus-halo）。" +
+  " 半透明的 ring-ring/40、/50 合成后只有约 1.8–2.1:1。见 docs/design.md#accessibility";
+
+const AGENT_COLOR_HINT =
+  "身份色（--agent-1…16）是为「色块 + 白字」调的：暗色下当文字对 card 只有 3.5，" +
+  "亮色落在 secondary 上也多数低于 4.5。文字用中性色（text-foreground / text-secondary-foreground）；" +
+  "身份色只用在色块与图标上。强调色用品牌色 text-primary-text。";
+
+const HOVER_HINT =
+  "--muted 与 --secondary 是静止表面色，各自还与别的表面同值（暗色 muted ≡ card、" +
+  "secondary ≡ popover，亮色 secondary ≡ sidebar），拿来当悬停反馈落在同值的面上就是 1.00。" +
+  " 悬停一律用反馈色：hover:bg-accent；要轻一点用 hover:bg-accent/60 hover:on-accent；" +
+  "窗口外壳带上用 hover:bg-rail-accent。";
+
 const LADDER_HINT =
   "字号必须走阶梯：10→text-3xs、11→text-2xs、12→text-xs、13→text-aux、14→text-sm、15→text-prose。" +
   " 档位定义在共享包 @agentre-hub/agentre-ui 的 styles/tokens.css，两端与包共用同一份。" +
@@ -139,13 +227,49 @@ const restrictedSyntax = [
     selector: `TemplateElement[value.raw=/${ARBITRARY_FONT_SIZE}/]`,
     message: `禁止绕开字号阶梯的字面像素类（模板字符串里也不行）。${LADDER_HINT}`,
   },
+  {
+    selector: `Literal[value=/${FILL_TEXT_ON_OWN_SOFT_BG}/]`,
+    message: `禁止在软底上用同族的填充色当文字（如 bg-status-running-bg text-status-running）。${TEXT_ROLE_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${FILL_TEXT_ON_OWN_SOFT_BG}/]`,
+    message: `禁止在软底上用同族的填充色当文字（模板字符串里也不行）。${TEXT_ROLE_HINT}`,
+  },
+  {
+    selector: `Literal[value=/${HAND_ROLLED_FOCUS_RING}/]`,
+    message: `禁止手拼焦点环（如 focus-visible:ring-[3px] focus-visible:ring-ring/50）。${FOCUS_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${HAND_ROLLED_FOCUS_RING}/]`,
+    message: `禁止手拼焦点环（模板字符串里也不行）。${FOCUS_HINT}`,
+  },
+  {
+    selector: `Literal[value=/${AGENT_COLOR_AS_TEXT}/]`,
+    message: `禁止把身份色当文字色写（如 text-agent-1）。${AGENT_COLOR_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${AGENT_COLOR_AS_TEXT}/]`,
+    message: `禁止把身份色当文字色写（模板字符串里也不行）。${AGENT_COLOR_HINT}`,
+  },
+  {
+    selector: `Literal[value=/${RESTING_SURFACE_AS_HOVER}/]`,
+    message: `禁止用静止表面色做悬停反馈（如 hover:bg-muted、hover:bg-secondary/60）。${HOVER_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${RESTING_SURFACE_AS_HOVER}/]`,
+    message: `禁止用静止表面色做悬停反馈（模板字符串里也不行）。${HOVER_HINT}`,
+  },
 ];
 
 export {
+  AGENT_COLOR_AS_TEXT,
   ARBITRARY_FONT_SIZE,
+  FILL_TEXT_ON_OWN_SOFT_BG,
+  HAND_ROLLED_FOCUS_RING,
   LITERAL_COLOR_CLASS,
   PALETTE,
   RAW_COLOR_VALUE,
+  RESTING_SURFACE_AS_HOVER,
   TOKENED_FONT_SIZES,
   restrictedSyntax,
 };

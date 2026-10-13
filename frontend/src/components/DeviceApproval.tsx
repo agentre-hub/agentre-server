@@ -169,7 +169,7 @@ export default function DeviceApproval({
             变化的 live region，否则每秒都会被念一遍（无障碍与响应式）。 */}
         <p
           aria-hidden="true"
-          className="text-aux font-medium text-status-waiting"
+          className="text-aux font-medium text-status-waiting-text"
         >
           {minutes > 0
             ? t("device.approve.expiry", { minutes, seconds })

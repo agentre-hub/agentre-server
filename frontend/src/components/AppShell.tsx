@@ -274,7 +274,7 @@ export default function AppShell({
         "border border-border bg-card text-muted-foreground shadow-overlay",
         "opacity-0 transition-opacity hover:text-foreground",
         "group-hover/nav:opacity-100 focus-visible:opacity-100",
-        "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+        "outline-none focus-visible:focus-outline",
       )}
     >
       {navCollapsed ? (

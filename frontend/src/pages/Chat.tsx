@@ -1146,7 +1146,7 @@ export default function Chat() {
                     </Button>
                     <Link
                       to="/devices"
-                      className="text-sm font-medium text-primary hover:underline"
+                      className="text-sm font-medium text-primary-text hover:underline"
                     >
                       {t("chat.findMore")}
                     </Link>

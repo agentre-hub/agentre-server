@@ -421,7 +421,7 @@ export default function Account() {
           >
             {!supported && (
               // 不支持就说清楚为什么，不让用户去撞一次可预知的失败（决策 17）。
-              <p className="border-b border-border bg-status-waiting-bg px-4 py-2.5 text-xs text-status-waiting">
+              <p className="border-b border-border bg-status-waiting-bg px-4 py-2.5 text-xs text-status-waiting-text">
                 {unavailableBannerText(t, passkeySupportState)}
               </p>
             )}
@@ -542,7 +542,7 @@ export default function Account() {
                             setExpandedIndex(isExpanded ? null : i)
                           }
                           className={cn(
-                            "flex w-full cursor-pointer gap-3 px-4 py-3 text-left outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                            "flex w-full cursor-pointer gap-3 px-4 py-3 text-left outline-none hover:bg-accent focus-visible:focus-outline-inset",
                             // 折叠态与通行密钥行同一套 items-center：16px 图标相对
                             // 两行块垂直居中。展开后 UA 折成多行，改钉在顶部。
                             isExpanded ? "items-start" : "items-center",

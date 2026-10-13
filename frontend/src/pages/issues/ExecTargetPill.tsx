@@ -147,7 +147,7 @@ export function BoardExecTargetPill({
                     {backendMeta(backend)}
                   </span>
                   {reasonKey ? (
-                    <span className="truncate text-2xs text-status-waiting">
+                    <span className="truncate text-2xs text-status-waiting-text">
                       {t(reasonKey)}
                     </span>
                   ) : null}

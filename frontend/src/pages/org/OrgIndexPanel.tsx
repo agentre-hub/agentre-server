@@ -386,7 +386,7 @@ function GroupActions(props: {
   const { t } = useTranslation();
   const { department } = props;
   const actionClass =
-    "inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none";
+    "inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:focus-outline motion-reduce:transition-none";
   return (
     <>
       <button
@@ -458,7 +458,7 @@ function FilterEntry(props: {
           className={cn(
             // h-8 与搜索框、＋ 同高：三样现在同排（mockup 的 .field / .sq 也都是 30px），
             // 差一档就看得出来这一行没对齐。
-            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-2xs outline-none transition-colors hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-2xs outline-none transition-colors hover:bg-accent focus-visible:focus-outline",
             active
               ? "border-primary bg-primary-soft text-primary-text"
               : "border-border text-muted-foreground",

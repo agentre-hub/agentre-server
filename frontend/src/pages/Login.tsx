@@ -301,11 +301,11 @@ export default function Login() {
               className="border-destructive bg-destructive-soft"
             >
               <AlertTriangle className="h-4 w-4" />
-              <AlertTitle className="font-semibold text-destructive">
+              <AlertTitle className="font-semibold text-destructive-text">
                 {t("login.failureTitle")}
               </AlertTitle>
               {errorText && (
-                <AlertDescription className="text-sm text-destructive">
+                <AlertDescription className="text-sm text-destructive-text">
                   {errorText}
                 </AlertDescription>
               )}

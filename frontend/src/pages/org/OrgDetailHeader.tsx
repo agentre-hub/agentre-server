@@ -173,10 +173,10 @@ function SaveStatus({
             className="size-3 shrink-0 text-destructive"
             aria-hidden="true"
           />
-          <span className="shrink-0 font-semibold text-destructive">
+          <span className="shrink-0 font-semibold text-destructive-text">
             {t("org.detail.header.saveFailed")}
           </span>
-          <span className="min-w-0 truncate text-destructive">
+          <span className="min-w-0 truncate text-destructive-text">
             {state.message}
           </span>
           <Button

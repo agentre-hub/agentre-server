@@ -362,7 +362,7 @@ function DeviceExpandDetail({
                   "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs",
                   p.configured
                     ? "bg-muted text-muted-foreground"
-                    : "bg-status-waiting-bg text-status-waiting",
+                    : "bg-status-waiting-bg text-status-waiting-text",
                 )}
               >
                 {p.name}
@@ -389,7 +389,7 @@ function DeviceExpandDetail({
                     {t("device.manage.sessionCount", { count: counts.total })}
                   </span>
                   {counts.waiting > 0 && (
-                    <span className="text-status-waiting">
+                    <span className="text-status-waiting-text">
                       {t("device.manage.sessionWaiting", {
                         count: counts.waiting,
                       })}
@@ -410,7 +410,7 @@ function DeviceExpandDetail({
               </Link>
             </>
           ) : (
-            <p className="text-xs text-destructive">
+            <p className="text-xs text-destructive-text">
               {t(
                 isDesktop
                   ? "device.manage.desktopAppNotRunningDetail"
