@@ -4739,6 +4739,112 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
 });
 
 /**
+ * 输入框底栏在窄屏不溢出（2026-09-21 移动端第一轮 决策 7 / 问题 2）。
+ *
+ * jsdom 量不出真实布局，这里只锚成因：宿主的 `leadingControls` 外层此前整块
+ * `shrink-0`——模型 chip 文案一长（如「跟随 Agent 绑定 · CLI 自身登录态」，实测
+ * 231px），整排在 390 宽下把发送键顶出输入框（实测发送键 x=378–410，输入框右沿
+ * 370）。断言换成类名：外层允许收缩（带 `min-w-0`，不再 `shrink-0`）、发送键与
+ * 权限控件各自钉住 `shrink-0` 不参与收缩、模型 chip 触发器带 `min-w-0` 才能真正
+ * 启用它已有的 `truncate`（`picker-trigger.tsx` / `provider-pill-trigger.tsx`
+ * 早就写了 truncate，没有 `min-w-0` 时 flex item 默认的 `min-width:auto` 顶住了
+ * 省略号，它从没生效过）。
+ */
+describe("会话详情：输入框底栏窄屏不溢出（类名断言）", () => {
+  function stubOverflowScenario() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            {
+              sync_id: "ag-1",
+              name: "后端 Agent",
+              exec_targets: [{ backend_sync_id: "backend-1", current: true }],
+            },
+          ],
+        };
+      // 确知没绑供应商（空串）：底栏那颗模型 chip 因此摆出最长的那句
+      // 「跟随 Agent 绑定 · CLI 自身登录态」——真实场景里压垮输入框的那一档。
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            {
+              sync_id: "backend-1",
+              provider_key: "",
+              model_key: "",
+              config: {},
+              reasoning_effort: "",
+            },
+          ],
+        };
+      if (path === "/v1/engine/providers") return { providers: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeCapabilities)
+        return {
+          capabilities: [{ name: "reasoning_effort", enabled: true }],
+          permissionMode: {
+            allowedModes: [
+              "default",
+              "acceptEdits",
+              "plan",
+              "bypassPermissions",
+            ],
+            defaultMode: "default",
+            switchableDuringTurn: true,
+            order: ["default", "acceptEdits", "plan", "bypassPermissions"],
+          },
+        };
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  it("发送键与权限控件 shrink-0，leadingControls 外层允许收缩，模型 chip 触发器带 min-w-0", async () => {
+    stubOverflowScenario();
+    renderPage();
+    await awaitComposer();
+
+    const modelChip = await screen.findByTestId("composer-model-target");
+    await waitFor(() =>
+      expect(modelChip.textContent).toContain("CLI login state"),
+    );
+    // 成因一：触发器此前只有 `w-auto`，没有 `min-w-0`——flex item 的默认
+    // `min-width:auto` 顶住了内部已经写好的 truncate，省略号从没生效过。
+    expect(modelChip.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+
+    // 成因二：leadingControls 外层此前整块 `shrink-0`，导致它的天然宽度（权限控件
+    // 满宽 + 模型 chip 满宽文案）从不给composer-bar 的挤压算法让路。
+    const leading = screen.getByTestId("composer-leading-controls");
+    expect(leading.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+    expect(leading.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+
+    // 权限控件自己（共享包 PermissionModePill 的按钮）没有 shrink-0，得由宿主的
+    // 包装钉住，否则外层一旦能收缩，挤压会连它一起吃掉。
+    const permissionSlot = screen.getByTestId("composer-permission-slot");
+    expect(permissionSlot.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+
+    // 收缩顺序（决策 7）：模型 chip **先**收缩，上下文用量是放不下之后才让位的那一格。
+    // flex 按「shrink × 基准宽」分摊缺口，两边都是 shrink 1 时计量器会跟着 chip 按比例
+    // 一起被裁；外层要带远大于 1 的收缩系数，缺口才几乎全落在 chip 上。
+    expect(leading.className).toMatch(/(^|\s)shrink-\[999\](\s|$)/);
+
+    // 发送键的 shrink-0 来自共享包 SubmitControl，这里锁一下没被本轮改动松开。
+    const send = screen.getByTestId("session-detail-send");
+    expect(send.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+
+    // 思考力度控件在共享包里已经是 shrink-0 + 容器查询窄档退成仅图标
+    // （与 PermissionModePill 同一档 620px），这里同样锁一下没被松开。
+    const effort = screen.getByTestId("composer-reasoning-effort");
+    expect(effort.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+  });
+});
+
+/**
  * 详情头部（2026-08-20 对话页 UI/UX 改版）。
  *
  * 此前头部只有三样：标题、一枚状态胶囊、「机器 · 在线」。打开一条对话看不出它

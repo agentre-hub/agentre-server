@@ -193,3 +193,40 @@ describe("预览栏里的失败态", () => {
     expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
   });
 });
+
+/**
+ * 移动端整屏层的头部：文件名与目录副行。Windows 会话的 relPath 用 "\\" 分隔
+ * （共享包 file-meta 的 basename / dirname 两种分隔符都认），只认 "/" 的话标题
+ * 会是整条路径、副行退成工作根。
+ */
+describe("移动端整屏层的头部", () => {
+  it("Windows 会话的 relPath：标题只是文件名，副行是它所在的目录", () => {
+    renderColumn({
+      cwd: "C:\\work",
+      tabs: [
+        { path: "assets\\img\\logo.png", isPreview: true, isPinned: false },
+      ],
+      activePath: "assets\\img\\logo.png",
+      layer: { shown: true, onBack: vi.fn() },
+    });
+
+    const layer = screen.getByTestId("session-file-preview-layer");
+    expect(layer.getAttribute("aria-label")).toBe("logo.png");
+    expect(screen.getByRole("heading", { name: "logo.png" })).toBeTruthy();
+    expect(
+      screen.getByTestId("session-file-preview-layer-subline").textContent,
+    ).toBe("assets\\img · dev-box");
+  });
+
+  it("工作根下的文件没有目录段：副行说工作根", () => {
+    renderColumn({
+      tabs: [{ path: "logo.png", isPreview: true, isPinned: false }],
+      activePath: "logo.png",
+      layer: { shown: true, onBack: vi.fn() },
+    });
+
+    expect(
+      screen.getByTestId("session-file-preview-layer-subline").textContent,
+    ).toBe("/srv/work · dev-box");
+  });
+});

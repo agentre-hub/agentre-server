@@ -684,3 +684,52 @@ describe("侧栏上的断线出路", () => {
     expect(screen.queryByRole("button", { name: /Reconnect/ })).toBeNull();
   });
 });
+
+/**
+ * 沉浸形态（规格 2026-09-21-server-mobile-gaps 决策 3）：移动端会话详情与新对话草稿
+ * 只保留会话自己的一层头部，壳的顶栏与底部 tab 都不画；返回列表后两者恢复。
+ */
+describe("沉浸形态（immersive）", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function mockMobileViewport() {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  it("移动端：顶栏与底部 tab 都不画，页面内容照常在", () => {
+    mockMobileViewport();
+    renderShell(<AppShell immersive>page content</AppShell>);
+
+    expect(screen.getByText("page content")).toBeTruthy();
+    expect(screen.queryByTestId("app-topbar")).toBeNull();
+    expect(screen.queryByRole("navigation")).toBeNull();
+    // 壳的两条都不在了，安全区只能由主区自己让：刘海与底部横条下不压内容。
+    const main = screen.getByRole("main");
+    expect(main.className).toContain("pt-[env(safe-area-inset-top,0px)]");
+    expect(main.className).toContain("pb-[env(safe-area-inset-bottom,0px)]");
+  });
+
+  it("移动端不传时底部 tab 照旧在（返回列表后恢复）", () => {
+    mockMobileViewport();
+    renderShell(<AppShell flush>page content</AppShell>);
+
+    expect(screen.getByTestId("app-topbar")).toBeTruthy();
+    expect(
+      within(screen.getByRole("navigation")).getAllByRole("link"),
+    ).toHaveLength(5);
+    expect(screen.getByRole("main").className).not.toContain("safe-area");
+  });
+});

@@ -71,6 +71,7 @@ export default function AppShell({
   right,
   flush,
   ownHeader,
+  immersive,
   children,
 }: {
   title?: string;
@@ -86,6 +87,12 @@ export default function AppShell({
    * 叠着。
    */
   ownHeader?: boolean;
+  /**
+   * 沉浸形态（移动端会话详情与新对话草稿）：顶栏与移动底部 tab 都不画，整屏只剩页面
+   * 自己那一层头部（返回列表就回到带壳的页，两者恢复）。壳的两条都不在了，刘海与
+   * 底部横条的安全区于是由主区自己让。桌面侧栏不受影响。
+   */
+  immersive?: boolean;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -358,7 +365,7 @@ export default function AppShell({
       )}
 
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {!ownHeader && (
+        {!ownHeader && !immersive && (
           <header
             data-testid="app-topbar"
             /* 高度按内容 52px 算，多出来的 env(safe-area-inset-top) 只是把整条往下
@@ -385,13 +392,15 @@ export default function AppShell({
             flush
               ? "overflow-hidden"
               : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
+            immersive &&
+              "pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]",
           )}
         >
           {children}
         </main>
         {/* 移动主导航：A6Z3k 底部 TabBar，只含真实目的地。固定在视口底部，
             不与页面操作争夺顶栏位置。 */}
-        {isMobile && (
+        {isMobile && !immersive && (
           /* 外层已经不滚了，sticky 没有意义：shrink-0 就够把它按在视口底上。 */
           <div className="shrink-0">
             <MobileTabBar ariaLabel={t("common.appName")} items={mobileTabs} />

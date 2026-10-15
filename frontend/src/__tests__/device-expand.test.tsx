@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 
@@ -370,5 +370,123 @@ describe("device row expand", () => {
     await within(card).findByText("agentre-server");
 
     expect(card.textContent ?? "").not.toContain("/Users/wyz");
+  });
+
+  describe("mobile device row", () => {
+    const originalMatchMedia = window.matchMedia;
+
+    beforeEach(() => {
+      // 移动视口 mocK
+      window.matchMedia = ((query: string) => ({
+        matches: query.includes("max-width: 767px"),
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      })) as typeof window.matchMedia;
+    });
+
+    afterEach(() => {
+      window.matchMedia = originalMatchMedia;
+    });
+
+    it("does not wrap the status dot onto its own line (no flex-wrap on name row)", async () => {
+      mockedApi.mockImplementation(async (path) => {
+        if (path === "/v1/devices") return listResponse;
+        if (path === "/v1/workspace/device-detail?device_id=1") {
+          return {
+            device_id: 1,
+            kind: "agentred",
+            runnable_agents: [],
+            projects: [
+              { sync_id: "proj-1", name: "agentre-server", configured: true },
+            ],
+          };
+        }
+        throw new Error("unexpected call: " + path);
+      });
+
+      renderDevices();
+      await screen.findByText("study-nuc");
+      const card = screen
+        .getByText("study-nuc")
+        .closest('[data-slot="card"]') as HTMLElement;
+
+      // 名字那一行应该没有 flex-wrap，这样状态点与名字始终在同一行
+      const nameRow = within(card).getByText("study-nuc").closest("div");
+      expect(nameRow?.className).not.toContain("flex-wrap");
+    });
+
+    it("shows subRow with project and running conversation counts when expanded", async () => {
+      mockedApi.mockImplementation(async (path) => {
+        if (path === "/v1/devices") return listResponse;
+        if (path === "/v1/workspace/device-detail?device_id=1") {
+          return {
+            device_id: 1,
+            kind: "agentred",
+            runnable_agents: [],
+            projects: [
+              { sync_id: "proj-1", name: "agentre-server", configured: true },
+            ],
+          };
+        }
+        throw new Error("unexpected call: " + path);
+      });
+
+      renderDevices();
+      await screen.findByText("study-nuc");
+      const card = screen
+        .getByText("study-nuc")
+        .closest('[data-slot="card"]') as HTMLElement;
+
+      fireEvent.click(
+        within(card).getByRole("button", { name: /show details/i }),
+      );
+
+      // 展开后应该显示「1 projects · 2 conversations running」这样的副行
+      expect(
+        await within(card).findByText(/1 projects · 2 conversations running/),
+      ).toBeTruthy();
+    });
+
+    it("truncates name when collapsed, shows full wrapping name when expanded", async () => {
+      mockedApi.mockImplementation(async (path) => {
+        if (path === "/v1/devices") return listResponse;
+        if (path === "/v1/workspace/device-detail?device_id=1") {
+          return {
+            device_id: 1,
+            kind: "agentred",
+            runnable_agents: [],
+            projects: [],
+          };
+        }
+        throw new Error("unexpected call: " + path);
+      });
+
+      renderDevices();
+      await screen.findByText("study-nuc");
+      const card = screen
+        .getByText("study-nuc")
+        .closest('[data-slot="card"]') as HTMLElement;
+      const nameSpan = within(card).getByText("study-nuc");
+
+      // 收起时应该有 truncate
+      expect(nameSpan.className).toContain("truncate");
+
+      fireEvent.click(
+        within(card).getByRole("button", { name: /show details/i }),
+      );
+      await within(card).findByText("Agents that can run here");
+
+      // 展开后应该移除 truncate 以允许换行
+      expect(nameSpan.className).not.toContain("truncate");
+      // 没有空格的长名字（主机名、指纹式名字）也得折行：flex item 默认 min-width:auto
+      // 会顶在整段名字的宽度上，得 min-w-0 + break-words 才能在字符间断开。
+      expect(nameSpan.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+      expect(nameSpan.className).toMatch(/(^|\s)break-words(\s|$)/);
+    });
   });
 });

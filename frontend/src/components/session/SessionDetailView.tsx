@@ -37,11 +37,17 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import AppShell from "@/components/AppShell";
-import SessionDetailHeader from "@/components/session/SessionDetailHeader";
+import { useIsMobile } from "@/components/use-is-mobile";
+import SessionDetailHeader, {
+  SessionPageStateShell,
+} from "@/components/session/SessionDetailHeader";
 import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
-import { useFilePreviewTabs } from "@/components/session/useFilePreviewTabs";
+import {
+  useFilePreviewLayer,
+  useFilePreviewTabs,
+} from "@/components/session/useFilePreviewTabs";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import { turnDoneFrames } from "@/components/session/turnDone";
@@ -275,6 +281,9 @@ export default function SessionDetailView({
   const originProp = peerFingerprint?.trim() || undefined;
   const { t } = useTranslation();
   const isPage = form === "page";
+  // 移动端的整屏形态走沉浸：壳的顶栏与底部 tab 都不画，头部合成一层（决策 3）。
+  const isMobile = useIsMobile();
+  const immersive = isPage && isMobile;
 
   /** 这条会话所属 Agent 的名字与调色板色，按 summary.agentSyncId 解。 */
   const [agents, setAgents] = useState<WorkspaceAgent[]>([]);
@@ -431,6 +440,11 @@ export default function SessionDetailView({
    * 那一刻**的事实，由 ref 后面这个函数当场回答。答 false 时包不会开面板。
    */
   const preview = useFilePreviewTabs();
+  // 移动端预览是整屏一层、占一条 history（决策 2、4）；桌面照旧是 420 右栏。
+  const previewLayer = useFilePreviewLayer({
+    enabled: isMobile,
+    activePath: preview.activePath,
+  });
   const previewCwdRef = useRef("");
   const previewFileRef = useRef<
     (path: string, anchor?: PreviewAnchor) => boolean
@@ -448,6 +462,7 @@ export default function SessionDetailView({
       // 定位目标（链接里写的 `:311-330`）跟着一起进标签：这一层不解释它，面板
       // 拿到之后才去滚编辑器。
       preview.open(path, anchor);
+      previewLayer.show();
       return true;
     };
   });
@@ -1423,7 +1438,11 @@ export default function SessionDetailView({
       </Alert>
     );
     // 页面形态连壳一起报错；嵌入形态直接就地报错（外层容器给尺寸）。
-    return isPage ? <AppShell>{alert}</AppShell> : alert;
+    return isPage ? (
+      <SessionPageStateShell backTo={backTo}>{alert}</SessionPageStateShell>
+    ) : (
+      alert
+    );
   }
 
   /**
@@ -1743,6 +1762,7 @@ export default function SessionDetailView({
   const header = (
     <SessionDetailHeader
       isPage={isPage}
+      immersive={immersive}
       backTo={backTo}
       sid={sid}
       identity={identity}
@@ -1897,6 +1917,11 @@ export default function SessionDetailView({
           onClose={preview.close}
           onCloseOthers={preview.closeOthers}
           onCloseAll={preview.closeAll}
+          layer={
+            isMobile
+              ? { shown: previewLayer.shown, onBack: previewLayer.hide }
+              : undefined
+          }
         />
       </div>
     </div>
@@ -1905,7 +1930,7 @@ export default function SessionDetailView({
   // 路由页形态：壳交出整块主区（flush），三带自己铺满它。
   if (isPage) {
     return (
-      <AppShell title={displayTitle} flush>
+      <AppShell title={displayTitle} flush immersive={immersive}>
         {bands}
       </AppShell>
     );

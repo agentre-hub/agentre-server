@@ -24,12 +24,14 @@ import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import Transcript from "@/components/session/Transcript";
 import { pendingUserMessage } from "@/components/session/transcriptFrame";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { ApiError } from "@/lib/api";
@@ -104,6 +106,12 @@ export function DraftSession({
   headerRight?: ReactNode;
 }) {
   const { t } = useTranslation();
+  /**
+   * 移动端整屏：与会话详情的沉浸形态同一层头部（规格 2026-09-21-server-mobile-gaps
+   * 决策 3）。壳的顶栏与底部 tab 都不在，副行因此要说全 Agent · 项目 · 机器，且窄屏
+   * 只截断不收起；标题只写「新对话」，Agent 名已经在副行上。
+   */
+  const oneRow = useIsMobile();
   const composerModule = useSessionComposerModule();
   /**
    * 输入框整条草稿的句柄（那句话 + 贴的图）。
@@ -373,9 +381,10 @@ export function DraftSession({
   );
 
   /*
-    meta 行：与详情那条同序（Agent → 项目），说得出哪几维就摆哪几维。机器不进这一行
-    ——它在下面那枚可点的 chip 上，而那枚 chip 是**选择器**，不是一段陈述（桌面端
-    空会话态同此：机器在 NewSessionExecTargetLine 上，不在头部）。
+    meta 行：与详情那条同序（Agent → 项目），说得出哪几维就摆哪几维。桌面上机器不进
+    这一行——它在下面那枚可点的 chip 上，而那枚 chip 是**选择器**，不是一段陈述（桌面
+    端空会话态同此：机器在 NewSessionExecTargetLine 上，不在头部）。移动端这一层就是
+    整屏唯一的头部，副行与详情同样说到机器（选中的那一档必然可用，即在线）。
   */
   const metaParts: SessionHeaderMetaPart[] = [
     {
@@ -383,7 +392,10 @@ export function DraftSession({
       node: (
         <span
           data-testid="draft-header-status"
-          className="inline-flex shrink-0 items-center gap-1"
+          className={cn(
+            "inline-flex items-center gap-1",
+            oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
+          )}
         >
           {/* 交出去那一刻就转绿：转录里三点已经在转了，两处说的是同一件事。 */}
           <StatusDot
@@ -392,7 +404,7 @@ export function DraftSession({
             })}
             size="xs"
           />
-          {agent.name}
+          {oneRow ? <span className="truncate">{agent.name}</span> : agent.name}
         </span>
       ),
     },
@@ -401,8 +413,18 @@ export function DraftSession({
     metaParts.push({
       key: "project",
       // 与详情那条同一个断点：项目在别处（下面那枚 chip、左栏的行上）还说得出。
-      hideAt: "@max-[420px]/header:hidden",
-      node: <span className="truncate">{projectName}</span>,
+      hideAt: oneRow ? undefined : "@max-[420px]/header:hidden",
+      node: (
+        <span className={cn("truncate", oneRow && "min-w-0")}>
+          {projectName}
+        </span>
+      ),
+    });
+  }
+  if (oneRow && chosen) {
+    metaParts.push({
+      key: "machine",
+      node: <SessionMachineMeta name={chosen.device_name} online truncate />,
     });
   }
 
@@ -458,7 +480,9 @@ export function DraftSession({
           // 那个名字 —— 摆一个空标题不是更诚实,只是更少信息。
           starting?.text.trim()
             ? deriveTitle(starting.text)
-            : t("chat.newSessionTitle", { name: agent.name })
+            : oneRow
+              ? t("chat.draftTitle")
+              : t("chat.newSessionTitle", { name: agent.name })
         }
         meta={metaParts}
         actions={headerRight}
