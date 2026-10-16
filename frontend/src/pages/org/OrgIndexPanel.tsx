@@ -175,7 +175,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
       {/* 工具条只有一行：搜索框 + **一个**筛选入口 + ＋（决策 12「筛选不常驻占位」，
           mockup `.idx-search` 也是这三样）。命中之后才多出下面那排可清除的 chip。 */}
       <div
-        className="flex shrink-0 flex-col gap-2 border-b border-sidebar-border p-2.5"
+        className="flex shrink-0 flex-col gap-2 p-2.5"
         data-testid="org-index-toolbar"
       >
         <div className="flex items-center gap-1.5">
@@ -243,7 +243,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                   label: condition.label,
                 })}
                 onClick={condition.clear}
-                className="inline-flex items-center gap-1 rounded-full border border-primary bg-primary-soft px-2 py-0.5 font-mono text-2xs text-primary-text"
+                className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2 py-0.5 font-mono text-2xs text-primary-text"
               >
                 <span>{condition.label}</span>
                 <X className="size-3" aria-hidden="true" />
@@ -458,10 +458,10 @@ function FilterEntry(props: {
           className={cn(
             // h-8 与搜索框、＋ 同高：三样现在同排（mockup 的 .field / .sq 也都是 30px），
             // 差一档就看得出来这一行没对齐。
-            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-2xs outline-none transition-colors hover:bg-accent focus-visible:focus-outline",
+            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-2xs outline-none transition-colors focus-visible:focus-outline",
             active
-              ? "border-primary bg-primary-soft text-primary-text"
-              : "border-border text-muted-foreground",
+              ? "bg-primary-soft text-primary-text"
+              : "bg-button-fill text-muted-foreground hover:bg-button-fill-hover",
           )}
         >
           <SlidersHorizontal className="size-3.5" aria-hidden="true" />
