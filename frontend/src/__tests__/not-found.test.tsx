@@ -23,6 +23,16 @@ describe("NotFound (404)", () => {
     ).toBeTruthy();
   });
 
+  // 那串数字是装饰（aria-hidden），但它仍是一屏里最大的字：用边框色画对比度太低、
+  // 几乎看不见。它是文字，就用文字角色里最弱的那一档。
+  it("draws the decorative 404 in the muted text colour, not a border colour", () => {
+    renderAt("/this-route-does-not-exist");
+    const code = screen.getByText("404");
+    expect(code.getAttribute("aria-hidden")).toBe("true");
+    expect(code.className).toMatch(/\btext-muted-foreground\b/);
+    expect(code.className).not.toMatch(/\btext-border/);
+  });
+
   it("has exactly one h1", () => {
     renderAt("/this-route-does-not-exist");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);

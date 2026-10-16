@@ -6,7 +6,7 @@ import {
   iconNode,
 } from "@agentre-hub/agentre-ui";
 import { ArrowLeft, Bot, ChevronRight, FolderTree } from "lucide-react";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 /**
@@ -34,6 +34,7 @@ export function ProjectAgentPane({
   onPick,
   onBack,
   onNewProject,
+  headerActions,
   stacked = false,
   projectsSettled = true,
   agentsSettled = true,
@@ -46,6 +47,11 @@ export function ProjectAgentPane({
    * 建一个顶层项目。宿主给才有——不给就只留那句话，而不是摆一颗点了没反应的按钮。
    */
   onNewProject?: () => void;
+  /**
+   * 页头右端那一组控件。移动端这一屏盖住了索引的页头、也没有侧栏，语言/主题由宿主
+   * 摆到这里；桌面不给（它们在侧栏底部）。
+   */
+  headerActions?: ReactNode;
   /**
    * 那两份清单**已经问回来了**吗。默认 true（不传 = 手上这份就是全部）。
    *
@@ -114,6 +120,7 @@ export function ProjectAgentPane({
         <h2 className="text-sm font-semibold text-foreground">
           {t("chat.fromProject")}
         </h2>
+        {headerActions ? <div className="ml-auto">{headerActions}</div> : null}
       </header>
 
       <div className={cn("flex min-h-0 flex-1", stacked && "flex-col")}>
