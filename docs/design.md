@@ -100,7 +100,13 @@ by a line. Three surfaces make the ladder (all from the shared package, no local
   of a page that declares one, and the auth screens' page background.
 - **`sheet`** — the work page that floats on the chrome (`content-sheet` on desktop,
   `bg-sheet` full-bleed on mobile), and the auth card.
-- **`raised`** — the selected item on the chrome (the active `ConsoleNavItem`).
+- **`raised`** — the selected item on the chrome: the active `ConsoleNavItem`, and the
+  selected row of an index column — Chat's session row, Org's index row and department
+  header. Those rows come from the shared package; they are `raised` only because the
+  shell puts the index column on the chrome (on the sheet, light `raised` is the same
+  `#ffffff` and the selection disappears). Do not give them the blue
+  `sidebar-selected-bg` instead: an org row's `text-destructive-text` tail falls to 3.85:1
+  on it in dark, against 5.32:1 on `raised`.
 
 Inside a sheet, a block (a metric tile, an empty state, a settings group, a code block, a
 field) is a **relative fill**: `bg-field-fill` (hover `bg-field-fill-hover`) for fields and
@@ -145,7 +151,7 @@ palette fix lands once and both products get it. Holding a board, read across:
 | `code-bg` | `--code-surface` | `bg-code-surface` |
 | `chrome` (the frame) | `--chrome` | `bg-chrome` |
 | `sheet` (the work page, auth card) | `--sheet` | `bg-sheet`, or `content-sheet` for the desktop page |
-| `raised` (selected item on chrome) | `--raised` | `bg-raised` |
+| `raised` (selected item on chrome: nav item, session / org index row) | `--raised` | `bg-raised` |
 | (relative fills) | `--color-field-fill`, `--color-button-fill` | `bg-field-fill`, `bg-button-fill` |
 | `text` | `--foreground` | `text-foreground` |
 | `text-muted` | `--muted-foreground` | `text-muted-foreground` |
