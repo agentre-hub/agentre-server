@@ -18,7 +18,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
   const year = new Date().getFullYear();
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="flex min-h-screen flex-col bg-chrome">
       <header className="flex items-center px-8 py-5">
         <div className="flex items-center gap-[9px]">
           {/* 跟侧边栏 Brand 带同一份共享 mark，不套底板：登录页是没登录的人第一眼

@@ -270,7 +270,7 @@ export default function Login() {
 
   return (
     <AuthLayout>
-      <div className="w-full max-w-[424px] space-y-6 rounded-lg border border-border bg-card p-6 sm:p-9">
+      <div className="w-full max-w-[424px] space-y-6 rounded-2xl bg-sheet p-6 shadow-overlay sm:p-9">
         <PageTitle>{t("login.title")}</PageTitle>
 
         {userCode && !showError && !isPasskeyCancelled && (
@@ -325,16 +325,9 @@ export default function Login() {
 
             {passkeys === "available" && (
               <>
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-border" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-card px-2 text-muted-foreground">
-                      {t("login.or")}
-                    </span>
-                  </div>
-                </div>
+                <p className="text-center text-xs uppercase text-muted-foreground">
+                  {t("login.or")}
+                </p>
 
                 <Button
                   variant="outline"

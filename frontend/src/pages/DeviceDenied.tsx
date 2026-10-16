@@ -16,7 +16,7 @@ export default function DeviceDenied() {
   const { t } = useTranslation();
   return (
     <AuthLayout>
-      <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-lg border bg-card p-6 text-center sm:p-10">
+      <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-2xl bg-sheet p-6 text-center shadow-overlay sm:p-10">
         {/* 底板取 code-surface 而不是 muted：muted 的深色值与 card 相同，
             那一圈在深色下会整个消失。 */}
         <div className="flex size-[60px] items-center justify-center rounded-full bg-code-surface">
