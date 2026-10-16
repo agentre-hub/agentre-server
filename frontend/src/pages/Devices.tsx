@@ -238,7 +238,7 @@ function DeviceListSkeleton({ rows = 3 }: { rows?: number }) {
         {Array.from({ length: rows }, (_, i) => (
           <div
             key={i}
-            className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3.5"
+            className="flex items-center gap-3 rounded-lg bg-muted px-4 py-3.5"
           >
             <Skeleton className="size-9 shrink-0 rounded-md" />
             <span className="flex min-w-0 flex-1 flex-col gap-2">
@@ -318,7 +318,7 @@ function DeviceExpandDetail({
   const isDesktop = detail.kind === KIND_DESKTOP;
 
   return (
-    <div className="flex flex-col gap-3 border-t border-border pt-3">
+    <div className="flex flex-col gap-3 pt-3">
       {isAgentred && (
         <div className="flex flex-col gap-1.5">
           <span className="font-mono text-3xs font-medium text-muted-foreground">
@@ -377,7 +377,7 @@ function DeviceExpandDetail({
         )}
       </div>
       {(isAgentred || isDesktop) && (
-        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+        <div className="flex flex-col gap-1.5 pt-3">
           <span className="font-mono text-3xs font-medium text-muted-foreground">
             {t("device.manage.sessions")}
           </span>
@@ -425,7 +425,7 @@ function DeviceExpandDetail({
       )}
       {/*
         端口转发（规格 2026-09-09 决策 11）：外框归本仓，与「对话」那一节同形
-        （同一条 border-t 分隔线）；标题与行的渲染归共享包。两类设备都答得出
+        （同一段留白间距）；标题与行的渲染归共享包。两类设备都答得出
         portForward.*（wire 的 host contract 同时列进 desktop 与 agentred），
         所以入口与「对话」同一条判定。
       */}
@@ -545,7 +545,7 @@ function DeviceRow({
   if (isMobile) {
     return (
       <Card
-        className="gap-0 rounded-lg border-border bg-card py-3 shadow-none"
+        className="gap-0 rounded-lg bg-muted py-3 shadow-none"
         data-testid={`device-row-${d.id}`}
       >
         <div className="flex items-center gap-3 px-4">
@@ -642,7 +642,7 @@ function DeviceRow({
 
   return (
     <Card
-      className="gap-0 rounded-lg border-border bg-card py-4 shadow-none"
+      className="gap-0 rounded-lg bg-muted py-4 shadow-none"
       data-testid={`device-row-${d.id}`}
     >
       {/* 标题行（Q6qgs4 R1）：状态点 + 设备图标 + 名 + 类型 chip + 状态标记 */}

@@ -356,7 +356,7 @@ export function DevicePortForward({
   return (
     <div
       data-testid={`device-port-forward-${deviceId}`}
-      className="flex flex-col gap-1.5 border-t border-border pt-3"
+      className="flex flex-col gap-1.5 pt-3"
     >
       {/*
         取列表期间是**骨架**，不是一句「正在读取端口映射」：这一屏其余各处

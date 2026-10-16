@@ -185,7 +185,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
   return (
     <Card
       data-testid="add-device-guide"
-      className="gap-0 overflow-hidden rounded-lg border-border bg-card py-0 shadow-none"
+      className="gap-0 overflow-hidden rounded-lg bg-muted py-0 shadow-none"
     >
       <GuideStepRail
         steps={steps}
@@ -231,7 +231,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                   testId="add-device-command-login"
                   copyTestId="add-device-copy-login"
                 />
-                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-4">
                   <AgentredInstallDocsLink
                     method={method}
                     testId="add-device-manual-download"
@@ -248,7 +248,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                   <span className="text-aux font-medium text-foreground">
                     {t("device.add.install.downloadLabel")}
                   </span>
-                  <div className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2.5">
+                  <div className="flex flex-wrap items-center gap-3 rounded-md bg-field-fill px-3 py-2.5">
                     <Download
                       aria-hidden="true"
                       className="size-4 shrink-0 text-muted-foreground"
@@ -275,7 +275,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                   testId="add-device-server-address"
                   copyTestId="add-device-copy-server"
                 />
-                <div className="flex justify-end border-t border-border pt-4">
+                <div className="flex justify-end pt-4">
                   <Button onClick={() => finishStep(1)}>
                     {t("device.add.login.next")}
                     <ArrowRight />
@@ -318,7 +318,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                 </p>
               )}
             </div>
-            <div className="flex justify-end border-t border-border pt-4">
+            <div className="flex justify-end pt-4">
               <Button type="submit">
                 {t("device.entry.submit")}
                 <ArrowRight />
@@ -352,7 +352,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
                 serviceCopyTestId="add-device-copy-service"
               />
             )}
-            <div className="flex justify-end border-t border-border pt-4">
+            <div className="flex justify-end pt-4">
               <Button onClick={() => finishStep(3)}>
                 {t("device.add.service.finish")}
                 <Check />

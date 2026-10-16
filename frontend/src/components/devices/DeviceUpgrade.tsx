@@ -356,8 +356,8 @@ export function DeviceUpgradePanel({
     <div
       data-testid={`device-upgrade-${device.id}`}
       className={cn(
-        "flex flex-col gap-3 rounded-md border p-3",
-        blocked ? "border-destructive/30 bg-destructive-soft" : "border-border",
+        "flex flex-col gap-3 rounded-md p-3",
+        blocked ? "bg-destructive-soft" : "bg-field-fill",
       )}
     >
       <UpgradeHeadline state={state} />
