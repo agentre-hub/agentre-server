@@ -113,8 +113,10 @@ func isMaskedAPIKey(candidate, stored string) bool {
 	return strings.TrimSpace(candidate) == maskedAPIKeyBullets+tail
 }
 
+// validProviderDoc 只要名称和类型。base_url 留空 = 走该类型的默认地址：共享表单这么
+// 承诺，桌面端用的时候按类型补默认；服务端只存只转发，不比两端更严。
 func validProviderDoc(d providerDoc) bool {
-	return strings.TrimSpace(d.str("name")) != "" && strings.TrimSpace(d.str("type")) != "" && strings.TrimSpace(d.str("base_url")) != ""
+	return strings.TrimSpace(d.str("name")) != "" && strings.TrimSpace(d.str("type")) != ""
 }
 
 func (d providerDoc) encode() (string, error) {
