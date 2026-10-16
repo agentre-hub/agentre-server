@@ -193,6 +193,19 @@ describe("设备码输入：代码不存在或已使用（30205）", () => {
     boxes().forEach((b) => expect(b.getAttribute("aria-invalid")).toBe("true"));
   });
 
+  it("错误态的红底在悬停与聚焦时仍在：不被字段的悬停 / 聚焦底色换掉", async () => {
+    // 报错之后人要回到码格里改：聚焦（或只是鼠标划过）的那一格若换回字段的
+    // 悬停 / 内容页底色，红底恰好在最该看见的那一格上消失。
+    await submitInvalidCode();
+    boxes().forEach((b) => {
+      expect(b.classList.contains("bg-destructive-soft")).toBe(true);
+      const stateFills = Array.from(b.classList).filter((c) =>
+        /^(?:[\w-]+:)+bg-/.test(c),
+      );
+      expect(stateFills).toEqual([]);
+    });
+  });
+
   it("错误文案经 aria-describedby 关联到码格组", async () => {
     const error = await submitInvalidCode();
     const ids = (

@@ -189,7 +189,10 @@ describe("devices page is borderless", () => {
     mockConsole([device]);
     const { container } = renderDevices();
     await screen.findByText("build-box-02");
-    for (const card of container.querySelectorAll('[data-slot="card"]')) {
+    const cards = container.querySelectorAll('[data-slot="card"]');
+    // 没有任何 card 时下面的循环一条都不断言；行确实是 card 这一半也要站住。
+    expect(cards.length).toBeGreaterThan(0);
+    for (const card of cards) {
       expect((card as HTMLElement).dataset.testid).toMatch(/^device-row-/);
     }
   });

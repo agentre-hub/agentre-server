@@ -285,8 +285,8 @@ values are computed from the package's own declaration rather than copied into a
 a deliberate change to `--radius` upstream flows through instead of going red.
 
 `rounded-full` resolves to Tailwind's built-in. `rounded-xl` comes from the package's
-`--radius-xl`, which happens to equal Tailwind's built-in 12px. `@/components/ui/card.tsx` (`rounded-xl` plus `shadow-sm`) is still *not* the
-auth card. See [Components](#components).
+`--radius-xl`, which happens to equal Tailwind's built-in 12px. `@/components/ui/card.tsx` (`rounded-xl`, no border, no shadow) is still *not*
+the auth card. See [Components](#components).
 
 ## Cursors
 
@@ -651,7 +651,7 @@ negative margin, is how they sit flush against the sheet's edges.
 column and no persistent "撤销这台设备" explainer card**.
 
 - **Device rows**, `flex min-w-0 flex-1 flex-col gap-2.5`. Each `Card` forced to
-  `gap-0 rounded-lg bg-field-fill py-4 shadow-none` — the shared fill, no edge. The desktop
+  `gap-0 rounded-lg bg-field-fill py-4` — the shared fill, no edge. The desktop
   title row (`px-5`): status dot + device icon (`deviceKind.ts`'s `DEVICE_KIND_ICONS`,
   decorative and `aria-hidden`) + name at `text-[15px] font-semibold` + mono kind chip
   (`rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-[10px]` — one fill above the row,
@@ -1310,7 +1310,8 @@ solid 2px ring with a 2px gap, as `UserMenu`, `ConnectionStatus` and `OrgIndexPa
 element flush against a clipping container draws the same ring inward with
 `focus-visible:focus-outline-inset`, as the expandable session rows in `Account` do; the
 outward ring would be cut off there. A shell that wraps a text field takes
-`focus-within:focus-halo`. Shadcn primitives from `@agentre-hub/agentre-ui` already carry
+`focus-within:focus-outline` and turns its fill back to `bg-sheet` while focused — fields
+have no edge for a halo to sit on. Shadcn primitives from `@agentre-hub/agentre-ui` already carry
 theirs; do not restyle those. Hand-assembling a ring out of `ring-ring/NN` is rejected by
 lint — the translucent versions composite to roughly 2:1.
 

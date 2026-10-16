@@ -545,7 +545,7 @@ function DeviceRow({
   if (isMobile) {
     return (
       <Card
-        className="gap-0 rounded-lg bg-field-fill py-3 shadow-none"
+        className="gap-0 rounded-lg bg-field-fill py-3"
         data-testid={`device-row-${d.id}`}
       >
         <div className="flex items-center gap-3 px-4">
@@ -642,7 +642,7 @@ function DeviceRow({
 
   return (
     <Card
-      className="gap-0 rounded-lg bg-field-fill py-4 shadow-none"
+      className="gap-0 rounded-lg bg-field-fill py-4"
       data-testid={`device-row-${d.id}`}
     >
       {/* 标题行（Q6qgs4 R1）：状态点 + 设备图标 + 名 + 类型 chip + 状态标记 */}

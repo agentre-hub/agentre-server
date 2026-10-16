@@ -216,9 +216,9 @@ const TEXT_ROLE_HINT =
   " 填充色留给圆点、实底和单独的图标。见 docs/design.md#colour-tokens";
 
 const FOCUS_HINT =
-  "键盘焦点只有两种画法，都定义在共享包 @agentre-hub/agentre-ui 的 styles/tokens.css：" +
-  "按钮类用 focus-visible:focus-outline（2px 实色环 + 2px 间隙；贴着裁剪容器时用 focus-visible:focus-outline-inset），" +
-  "输入类用 focus-visible:focus-halo（实色边 + 光晕；包裹层用 focus-within:focus-halo）。" +
+  "键盘焦点用共享包 @agentre-hub/agentre-ui 的 styles/tokens.css 里定义的工具类：" +
+  "按钮与字段都用 focus-visible:focus-outline（2px 实色环 + 2px 间隙；贴着裁剪容器时用 focus-visible:focus-outline-inset；" +
+  "字段的包裹层用 focus-within:focus-outline，并把底色换回 bg-sheet）。focus-halo 仍是工具类，但无边的字段不再用它。" +
   " 半透明的 ring-ring/40、/50 合成后只有约 1.8–2.1:1。见 docs/design.md#accessibility";
 
 const STRUCTURAL_LINE_HINT =

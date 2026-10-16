@@ -185,7 +185,7 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
   return (
     <Card
       data-testid="add-device-guide"
-      className="gap-0 overflow-hidden rounded-lg bg-field-fill py-0 shadow-none"
+      className="gap-0 overflow-hidden rounded-lg bg-field-fill py-0"
     >
       <GuideStepRail
         steps={steps}
