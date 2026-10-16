@@ -185,11 +185,11 @@ export default function Issues() {
     <AppShell title={t("issues.title")} flush>
       <div
         data-testid="issues-page"
-        className="flex h-full min-h-0 min-w-0 flex-col bg-background"
+        className="flex h-full min-h-0 min-w-0 flex-col"
       >
         {/* 860px 是规格里那个最小宽度：窄到那里时项目选择器整条换到第二行占满
             宽度，三件东西挤一行会先把它压没。 */}
-        <header className="flex min-h-[60px] shrink-0 flex-wrap items-center gap-3 border-b border-border bg-background px-5 py-3 min-[861px]:h-[60px] min-[861px]:flex-nowrap min-[861px]:py-0">
+        <header className="flex min-h-[60px] shrink-0 flex-wrap items-center gap-3 px-5 py-3 min-[861px]:h-[60px] min-[861px]:flex-nowrap min-[861px]:py-0">
           <p className="truncate text-2xs text-muted-foreground">
             {t("issues.summary.counts", {
               total: totalTasks,
@@ -220,7 +220,7 @@ export default function Issues() {
           </Button>
         </header>
 
-        <div className="flex min-h-12 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-sidebar px-5 py-2">
+        <div className="flex min-h-12 shrink-0 items-center gap-2 overflow-x-auto px-5 py-2">
           <BoardFilterBar
             query={query}
             labels={board.labels}
