@@ -111,6 +111,27 @@ const CELL_CLASS = "size-[13px] shrink-0 rounded-[2px]";
 const COLUMN_PITCH = CELL_PX + CELL_GAP_PX;
 
 /**
+ * 月份标签要占的宽：「Sep」「12月」都是三个字，text-2xs (11px) 下每个字不超过
+ * 1em，再留一个格缝的余量 = 36px。按列步距折算成列数（向上取整 = 3 列）。
+ */
+const MONTH_LABEL_PX = 3 * 11 + CELL_GAP_PX;
+const MONTH_LABEL_MIN_COLUMNS = Math.ceil(MONTH_LABEL_PX / COLUMN_PITCH);
+
+/**
+ * 去掉放不下的月份标签：离下一只不到 `MONTH_LABEL_MIN_COLUMNS` 列的那只不画。
+ *
+ * 只有最左边那只会撞上——网格的第一列往往落在某个月的尾巴上，下一个月一两列
+ * 之后就开始了，两只标签叠成一团（2026-10 量到「10月」压着「11月」）。丢前面那只：
+ * 它是个残月，只占一两列，后面那个才是完整的月。
+ */
+function visibleMonths<T extends { column: number }>(months: T[]): T[] {
+  return months.filter((m, i) => {
+    const next = months[i + 1];
+    return !next || next.column - m.column >= MONTH_LABEL_MIN_COLUMNS;
+  });
+}
+
+/**
  * 鼠标停在哪一格。
  *
  * 只存坐标，**不存那天的日期与条数**：日期和条数从网格里现读。第一版把它们一起
@@ -238,7 +259,7 @@ export function Heatmap({
         className="relative h-[15px] shrink-0"
         style={{ marginLeft: COLUMN_PITCH + 12 }}
       >
-        {grid.months.map((m) => (
+        {visibleMonths(grid.months).map((m) => (
           <span
             key={`${m.year}-${m.month}`}
             className="absolute top-0 text-2xs whitespace-nowrap text-muted-foreground"
