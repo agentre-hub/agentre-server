@@ -170,6 +170,46 @@ const AGENT_COLOR_AS_TEXT = `${CLASS_START}text-agent-[0-9]+${FILL_END}`;
  */
 const RESTING_SURFACE_AS_HOVER = `${CLASS_START}(?:group-)?hover(?:\\/[a-z-]+)?:bg-(?:muted|secondary)${FILL_END}`;
 
+/**
+ * 结构线这一组只认**颜色**，不认宽度：状态色条（`border-l-2 border-l-status-running`）、
+ * 拖放落点（`border-2 border-dashed border-ring`）、复选框（`border border-control-border`）
+ * 用的宽度类与分隔线一模一样，区别只在颜色上。而分隔线色除了画线没有别的用途——
+ * 宽度写在 cn() 的另一个字面量里时它照样是一条线，所以单独出现也拦。
+ *
+ * 单边写法也算：`border-b-border`、`border-l-sidebar-border`。
+ *
+ * 这三条（DIVIDER_COLOR_EDGE / DIVIDE_UTILITY / FIELD_EDGE）的正则源与 agentre 仓的
+ * 同名模块逐字一致——规则由桌面端拥有、不随共享包发布，两端共用同一套 token，
+ * 规则分叉了就等于外观分叉了。
+ */
+const EDGE_SIDE = "(?:[tblrxyse]-)?";
+
+/**
+ * 例：`border-b border-border`、`border border-border/60`、`border-l border-sidebar-border`
+ *
+ * 分隔线色是 `border` 与 `border-*-border` 一族；`control-border`（复选框 / 单选 / 开关
+ * 的边，控件本体）放行，`field-border` 归字段那一条报。`border-border-strong`
+ * 后面还接着 `-strong`，是另一个 token（手写单选点的控件边），不在此列。
+ */
+const DIVIDER_COLOR_EDGE = `${CLASS_START}border-${EDGE_SIDE}(?:border|(?!control-|field-)[a-z]+-border)${FILL_END}`;
+
+/**
+ * 例：`divide-y divide-border`、`divide-x`、`[&>li]:divide-y`
+ *
+ * divide-* 只做一件事：在相邻子元素之间画线。前面的边界排除了
+ * `task-pill-divide` 这类名字里恰好带 divide 的标识。
+ */
+const DIVIDE_UTILITY = `${CLASS_START}divide-[a-z0-9]`;
+
+/**
+ * 例：`border border-input`、`border-field-border`、`dark:border-input`
+ *
+ * 字段（输入框、文本域、下拉、搜索框）与 outline 按钮无边，靠相对前景色的填充：
+ * `bg-field-fill` / `bg-button-fill`。后面不许再接字母或连字符：`--input-bg` 是
+ * 另一个 token，`border-input-bg` 这种写法不归这条管。
+ */
+const FIELD_EDGE = `${CLASS_START}border-${EDGE_SIDE}(?:input|field-border)${FILL_END}`;
+
 const TEXT_ROLE_HINT =
   "饱和填充色压在自己的软底上当文字读不出来（亮色 3.5–4.4）。软底上的同族文字改用 -text 角色：" +
   "text-status-running-text / text-status-waiting-text / text-destructive-text / text-primary-text。" +
@@ -180,6 +220,20 @@ const FOCUS_HINT =
   "按钮类用 focus-visible:focus-outline（2px 实色环 + 2px 间隙；贴着裁剪容器时用 focus-visible:focus-outline-inset），" +
   "输入类用 focus-visible:focus-halo（实色边 + 光晕；包裹层用 focus-within:focus-halo）。" +
   " 半透明的 ring-ring/40、/50 合成后只有约 1.8–2.1:1。见 docs/design.md#accessibility";
+
+const STRUCTURAL_LINE_HINT =
+  "无边框改版之后，同一底色的两块区域之间不画线：外框与内容页靠表面色阶" +
+  "（bg-chrome / bg-sheet / bg-raised，工作区用 content-sheet），面板头尾、列表行之间靠留白，" +
+  "卡片、代码块、设置分组靠填充（bg-button-fill、bg-field-fill 一族）。" +
+  " 允许出现的线只有焦点环、复选框 / 单选 / 开关的边（border-control-border）、状态色条与拖放落点。" +
+  " 确属保留项而类名表认不出时，就地写 // eslint-disable-next-line no-restricted-syntax -- <理由>。" +
+  " 见 docs/design.md#structural-lines 与 docs/specs/2026-10-15-borderless-ui.md。";
+
+const FIELD_EDGE_HINT =
+  "字段（输入框、文本域、下拉、搜索框）与 outline 按钮都没有边：字段静止态 bg-field-fill、" +
+  "悬停 hover:bg-field-fill-hover，聚焦时只显示 focus-visible:focus-outline（包裹层用 focus-within:focus-outline）；" +
+  "按钮 bg-button-fill + hover:bg-button-fill-hover。不要给 bg-*-fill 加 /透明度后缀。" +
+  " 见 docs/design.md#structural-lines。";
 
 const AGENT_COLOR_HINT =
   "身份色（--agent-1…16）是为「色块 + 白字」调的：暗色下当文字对 card 只有 3.5，" +
@@ -259,11 +313,38 @@ const restrictedSyntax = [
     selector: `TemplateElement[value.raw=/${RESTING_SURFACE_AS_HOVER}/]`,
     message: `禁止用静止表面色做悬停反馈（模板字符串里也不行）。${HOVER_HINT}`,
   },
+  {
+    selector: `Literal[value=/${DIVIDER_COLOR_EDGE}/]`,
+    message: `禁止用分隔线色画结构线（如 border-b border-border、border border-border）。${STRUCTURAL_LINE_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${DIVIDER_COLOR_EDGE}/]`,
+    message: `禁止用分隔线色画结构线（模板字符串里也不行）。${STRUCTURAL_LINE_HINT}`,
+  },
+  {
+    selector: `Literal[value=/${DIVIDE_UTILITY}/]`,
+    message: `禁止用 divide-* 在列表行之间画线。${STRUCTURAL_LINE_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${DIVIDE_UTILITY}/]`,
+    message: `禁止用 divide-* 在列表行之间画线（模板字符串里也不行）。${STRUCTURAL_LINE_HINT}`,
+  },
+  {
+    selector: `Literal[value=/${FIELD_EDGE}/]`,
+    message: `禁止给字段或 outline 按钮画边（如 border-input、border-field-border）。${FIELD_EDGE_HINT}`,
+  },
+  {
+    selector: `TemplateElement[value.raw=/${FIELD_EDGE}/]`,
+    message: `禁止给字段或 outline 按钮画边（模板字符串里也不行）。${FIELD_EDGE_HINT}`,
+  },
 ];
 
 export {
   AGENT_COLOR_AS_TEXT,
   ARBITRARY_FONT_SIZE,
+  DIVIDE_UTILITY,
+  DIVIDER_COLOR_EDGE,
+  FIELD_EDGE,
   FILL_TEXT_ON_OWN_SOFT_BG,
   HAND_ROLLED_FOCUS_RING,
   LITERAL_COLOR_CLASS,
