@@ -118,7 +118,7 @@ export default function DeviceApproval({
   const kindLabel = deviceKindLabel(info.device_kind, t);
 
   return (
-    <div className="flex w-full max-w-[576px] flex-col gap-6 rounded-lg border border-border bg-card p-6 sm:p-10">
+    <div className="flex w-full max-w-[576px] flex-col gap-6 rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10">
       <div className="flex flex-col gap-2.5">
         <div className="flex items-center gap-[7px] text-primary-text">
           <ShieldCheck className="size-3.5" aria-hidden="true" />
@@ -137,8 +137,8 @@ export default function DeviceApproval({
         </div>
       </div>
 
-      <div className="flex items-center gap-3.5 rounded-md border border-border bg-code-surface p-4">
-        <span className="flex size-[42px] shrink-0 items-center justify-center rounded-sm border border-border bg-card">
+      <div className="flex items-center gap-3.5 rounded-md bg-code-surface p-4">
+        <span className="flex size-[42px] shrink-0 items-center justify-center rounded-sm bg-sheet">
           <Laptop className="size-5 text-primary-text" aria-hidden="true" />
         </span>
         <div className="flex min-w-0 flex-col gap-1">
@@ -207,7 +207,7 @@ export default function DeviceApproval({
           variant="outline"
           onClick={onDeny}
           disabled={submitting}
-          className="h-auto w-full border-border bg-card px-[18px] py-[13px] sm:w-[150px]"
+          className="h-auto w-full px-[18px] py-[13px] sm:w-[150px]"
         >
           {t("device.approve.deny")}
         </Button>

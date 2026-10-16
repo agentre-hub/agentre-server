@@ -68,8 +68,8 @@ export function OrgIconPicker(props: {
           aria-label={props.noneLabel}
           onClick={() => props.onPick("")}
           className={cn(
-            "flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent",
-            value === "" && "border-primary bg-primary-soft text-primary-text",
+            "flex size-7 items-center justify-center rounded-md bg-button-fill text-muted-foreground transition-colors hover:bg-button-fill-hover focus-visible:focus-outline",
+            value === "" && "bg-primary-soft text-primary-text",
           )}
         >
           <Ban className="size-3.5" aria-hidden="true" />
@@ -81,7 +81,7 @@ export function OrgIconPicker(props: {
             role="radio"
             aria-checked="true"
             aria-label={props.customLabel(value)}
-            className="flex h-7 items-center rounded-md border border-primary bg-primary-soft px-2 font-mono text-2xs text-primary-text"
+            className="flex h-7 items-center rounded-md bg-primary-soft px-2 font-mono text-2xs text-primary-text"
           >
             {value}
           </span>
@@ -95,9 +95,8 @@ export function OrgIconPicker(props: {
             aria-label={entry.label}
             onClick={() => props.onPick(entry.key)}
             className={cn(
-              "flex size-7 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent",
-              value === entry.key &&
-                "border-primary bg-primary-soft text-primary-text",
+              "flex size-7 items-center justify-center rounded-md bg-button-fill text-muted-foreground transition-colors hover:bg-button-fill-hover focus-visible:focus-outline",
+              value === entry.key && "bg-primary-soft text-primary-text",
             )}
           >
             <RenderIcon Icon={entry.icon} className="size-3.5" />

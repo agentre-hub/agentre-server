@@ -31,6 +31,7 @@ import { RelayError } from "@/lib/relayClient";
 import "@/i18n";
 import PendingSendBubble from "@/components/session/PendingSendBubble";
 import SendFailureBubble from "@/components/session/SendFailureBubble";
+import { edgeClasses } from "./helpers/edge-classes";
 import {
   useSessionSend,
   useTurnActivity,
@@ -311,6 +312,8 @@ describe("排队与失败那两条气泡里的附件", () => {
     expect(within(row).getByAltText("shot.png").getAttribute("src")).toBe(
       shot.dataUrl,
     );
+    // 「还没出去」靠时钟与那行标题说，气泡与缩略图都不再描边（无边框改版）。
+    expect(edgeClasses(row)).toEqual([]);
   });
 
   it("Given 一条带图的没发出去, When 渲染气泡, Then 图摆在字旁边", () => {
@@ -331,6 +334,8 @@ describe("排队与失败那两条气泡里的附件", () => {
     expect(within(row).getByAltText("shot.png").getAttribute("src")).toBe(
       shot.dataUrl,
     );
+    // 红底说「没发出去」，气泡与缩略图都不再描边（无边框改版）。
+    expect(edgeClasses(row)).toEqual([]);
   });
 
   it("Given 「这一轮在跑」那一档, When 渲染气泡, Then 主动作是干净的重发,文案说的是那一轮", () => {

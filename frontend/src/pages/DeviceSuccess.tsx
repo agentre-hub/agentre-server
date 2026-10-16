@@ -41,7 +41,7 @@ export default function DeviceSuccess() {
 
   return (
     <AuthLayout>
-      <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-lg border bg-card p-6 text-center sm:p-10">
+      <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-2xl bg-sheet p-6 text-center shadow-overlay sm:p-10">
         <div className="flex size-[60px] items-center justify-center rounded-full bg-status-running-bg">
           <Check className="size-6 text-status-running" aria-hidden="true" />
         </div>
@@ -53,7 +53,7 @@ export default function DeviceSuccess() {
         </div>
         {info && (
           <div className="flex w-full items-center gap-3 rounded-md bg-code-surface p-4 text-left">
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-sm bg-card">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-sm bg-sheet">
               <Laptop
                 className="size-5 text-muted-foreground"
                 aria-hidden="true"

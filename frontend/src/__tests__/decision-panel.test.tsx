@@ -24,6 +24,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import "@/i18n";
 import DecisionPanel from "@/components/session/DecisionPanel";
+import { edgeClasses } from "./helpers/edge-classes";
 import { waiterBlocks } from "@/lib/waiterBlocks";
 
 const PORTS = {
@@ -171,9 +172,10 @@ describe("DecisionPanel：与转录里那张是同一张卡", () => {
     // 正要消失的东西上，用户什么都看不到。
     renderPanel({ handledRequestId: "tp-1" });
 
-    expect(
-      screen.getByText("This request has already been handled."),
-    ).toBeTruthy();
+    const note = screen.getByText("This request has already been handled.");
+    // 一块填充，不再是描边卡（无边框改版）。
+    expect(edgeClasses(note)).toEqual([]);
+    expect(note.className).not.toMatch(/bg-card/);
     // 没有卡，但面板照样出——这正是「不能挂在卡上」的那一格。
     expect(screen.queryByTestId("tool-permission-card")).toBeNull();
   });

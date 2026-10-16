@@ -66,7 +66,7 @@ export default function SessionModelControl({
         triggerLabel={<ProviderPillTrigger state={pillState} />}
         aria-label={t("session.composerControls.modelTarget")}
         data-testid="composer-model-target"
-        className="h-[26px] w-auto cursor-pointer gap-1.5 rounded-md border-border bg-card px-2.5 text-2xs font-medium text-foreground hover:bg-accent"
+        className="h-[26px] w-auto cursor-pointer gap-1.5 rounded-md bg-field-fill px-2.5 text-2xs font-medium text-foreground hover:bg-field-fill-hover"
       />
       {note ? (
         <span

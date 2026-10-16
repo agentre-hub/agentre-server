@@ -23,6 +23,7 @@ import {
   MessagesSquare,
 } from "lucide-react";
 
+import { edgeClasses } from "./helpers/edge-classes";
 import {
   ConsoleNavItem,
   EmptyState,
@@ -141,11 +142,12 @@ describe("Metric（IhldU 统计卡）", () => {
     expect(container.querySelector('[data-testid="metric-sub"]')).toBeNull();
   });
 
-  it("默认用 card 面与语义 token", () => {
+  it("是一块填充：不画边，底色相对脚下的面取（落在内容页或填充卡上都看得见）", () => {
     const { container } = render(<Metric label="A" value="1" />);
     const tile = container.firstElementChild as HTMLElement;
-    expect(tile.className).toContain("bg-card");
-    expect(tile.className).toContain("border-border");
+    expect(tile.className).toContain("bg-field-fill");
+    expect(tile.className).not.toContain("bg-card");
+    expect(edgeClasses(tile)).toEqual([]);
   });
 });
 
@@ -224,19 +226,22 @@ describe("ConsoleNavItem（ZC7pI）", () => {
     assertNoNarration(container, "ConsoleNavItem");
   });
 
-  it("当前路由命中 active：primary-soft 面 + aria-current=page", () => {
+  it("当前路由命中 active：外框上的抬起面 + aria-current=page", () => {
     renderNav({ route: "/overview" });
     const link = screen.getByRole("link", { name: "Overview" });
     expect(link.getAttribute("aria-current")).toBe("page");
-    expect(link.className).toContain("bg-primary-soft");
+    expect(link.className).toContain("bg-raised");
+    expect(link.className).not.toContain("bg-primary-soft");
     expect(link.className).toContain("text-primary-text");
   });
 
-  it("未命中路由用 muted 面", () => {
+  it("未命中路由用 muted 文字，悬停用外框那一档提亮", () => {
     renderNav({ route: "/chat", to: "/overview" });
     const link = screen.getByRole("link", { name: "Overview" });
     expect(link.getAttribute("aria-current")).toBeNull();
     expect(link.className).toContain("text-muted-foreground");
+    expect(link.className).toContain("hover:bg-rail-accent");
+    expect(edgeClasses(link)).toEqual([]);
   });
 
   it("badge 只在 >0 时渲染；meta 按需出现", () => {
@@ -325,6 +330,18 @@ describe("MobileTabBar（A6Z3k）", () => {
     );
   });
 
+  it("落在外框上：外框色、上沿不画线——与内容页之间只靠色阶分开", () => {
+    render(
+      <MemoryRouter initialEntries={["/overview"]}>
+        <MobileTabBar items={items} ariaLabel="Primary" />
+      </MemoryRouter>,
+    );
+    const nav = screen.getByRole("navigation", { name: "Primary" });
+    expect(nav.className).toContain("bg-chrome");
+    expect(nav.className).not.toContain("bg-card");
+    expect(edgeClasses(nav)).toEqual([]);
+  });
+
   it("当前 tab 高亮（primary-text + 600），其余用 subtle", () => {
     render(
       <MemoryRouter initialEntries={["/overview"]}>
@@ -387,7 +404,7 @@ describe("MobileTabBar（A6Z3k）", () => {
  * InlineEmpty 把它们收成一种：虚线卡片、顶端对齐、图标 + 标题 + 正文 + 一条回程。
  */
 describe("InlineEmpty（索引栏内空态）", () => {
-  it("虚线卡片 + 顶端对齐：不把一句话吊在整栏正中", () => {
+  it("填充块 + 顶端对齐：不画虚线框，也不把一句话吊在整栏正中", () => {
     const { container } = render(
       <InlineEmpty
         icon={ListFilter}
@@ -398,8 +415,10 @@ describe("InlineEmpty（索引栏内空态）", () => {
       />,
     );
     const box = screen.getByTestId("inline-empty");
-    expect(box.className).toContain("border-dashed");
+    expect(box.className).toContain("bg-field-fill");
     expect(box.className).toContain("rounded-lg");
+    expect(edgeClasses(box)).toEqual([]);
+    expect(box.className).not.toContain("border-dashed");
     // 顶端对齐：不能是 h-full + justify-center（那会在长栏里留一大块空白）。
     expect(box.className).not.toContain("h-full");
     expect(box.className).not.toContain("justify-center");

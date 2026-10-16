@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import {
   Button,
   ChatMessage,
-  cn,
   type ChatImageAttachment,
 } from "@agentre-hub/agentre-ui";
 
@@ -65,12 +64,9 @@ export default function PendingSendBubble({
         </Button>
       }
     >
-      {/* 虚线 + 弱底：一眼看得出「还没出去」，但只占正文这一列。 */}
-      <div
-        className={cn(
-          "rounded-lg border border-dashed border-border-strong bg-secondary/60 px-3 py-2",
-        )}
-      >
+      {/* 一块填充 + 时钟与那行标题：一眼看得出「还没出去」，但只占正文这一列。
+          不再描虚线边（规格 2026-10-15「无边框改版」）。 */}
+      <div className="rounded-lg bg-field-fill px-3 py-2">
         <p className="mb-1 flex items-center gap-1.5 text-2xs font-medium text-muted-foreground">
           <Clock3 aria-hidden="true" className="size-3 shrink-0" />
           {t("session.sendPending.title")}

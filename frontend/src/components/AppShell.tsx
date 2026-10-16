@@ -65,12 +65,22 @@ interface NavItem {
  * title / right 可选（向后兼容）：不传时 TopBar 左侧空、右侧仍渲染 AppControls。
  * 导航项尾部数据（设备在线/全部 Meta、账号区）都是锦上添花：
  * 取不到就隐藏对应元素，绝不阻塞整体渲染。
+ *
+ * 外框 + 内容页（规格 2026-10-15「无边框改版」）：侧栏、顶栏、移动底部 TabBar 都
+ * 落在外框色（chrome）上，彼此之间、与工作区之间一条线都不画，只靠色阶分开；工作区
+ * 是一张内容页（sheet）——桌面宽度下圆角、右与下和外框留 8px 缝（共享包的
+ * content-sheet），手机上铺满宽度、不留缝不圆角。页面的根节点因此不再自己涂底色。
+ *
+ * 页面布局由这里声明，而不是由页面各自摆：不传 `index` 是「整页内容页」，传了是
+ * 「索引列 + 内容页」（对话、组织）——索引列由外壳摆在外框上、内容页左侧，children
+ * 是右边那张页（见 `index` 的注释）。
  */
 export default function AppShell({
   title,
   right,
   flush,
   ownHeader,
+  index,
   children,
 }: {
   title?: string;
@@ -86,6 +96,19 @@ export default function AppShell({
    * 叠着。
    */
   ownHeader?: boolean;
+  /**
+   * 页面布局声明：索引列 + 内容页。
+   *
+   * 不传 = 整页内容页：children 落在一张内容页上（总览、设备、设置、账户……）。
+   * 传了 = 索引列 + 内容页（对话的会话列表、组织的索引列）：外壳把 `index` 摆在
+   * **外框上**、内容页左侧（有顶栏时在顶栏之下，与内容页同一行），children 是右边
+   * 那张内容页里的详情。索引列不必也不该自己涂底色——它脚下就是外框；宽度由
+   * 传进来的那一列自己定（固定宽或 ResizableSidebar）。
+   *
+   * 只在桌面宽度生效。窄屏没有并排的空间：外壳只摆 children（一张铺满的内容页），
+   * 这一屏摆索引还是详情由页面自己决定，`index` 不渲染。
+   */
+  index?: ReactNode;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -256,7 +279,9 @@ export default function AppShell({
     上唯一一个会改变自身位置的控件，偏偏又是那个「要能马上找回来」的。
 
     钉在边框上之后，两态同一个 y（相对侧栏定位，不随内边距变），稳态下侧栏一个像素
-    都不给它：平时透明，鼠标进这条栏或键盘聚焦到它时才显形。顶栏那个位置不能用——
+    都不给它：平时透明，鼠标进这条栏或键盘聚焦到它时才显形。显形时是一颗填充的小
+    胶囊（button-fill，相对脚下的面取色），不画边、不投影：它跨在外框与内容页的
+    交界上，一圈描边会在两种底色上各断一截。顶栏那个位置不能用——
     `ownHeader` 的页面自己画顶栏（移动端对话索引），把开关放上去等于让「侧栏能不能
     回来」取决于当前在哪一页。
 
@@ -271,7 +296,7 @@ export default function AppShell({
       onClick={toggleNav}
       className={cn(
         "absolute top-5 -right-3 z-10 flex size-6 items-center justify-center rounded-full",
-        "border border-border bg-card text-muted-foreground shadow-overlay",
+        "bg-button-fill text-muted-foreground hover:bg-button-fill-hover",
         "opacity-0 transition-opacity hover:text-foreground",
         "group-hover/nav:opacity-100 focus-visible:opacity-100",
         "outline-none focus-visible:focus-outline",
@@ -327,6 +352,14 @@ export default function AppShell({
   }));
 
   /*
+    没有顶栏的页（ownHeader）在桌面上把语言 / 主题交给侧栏底部：它们属于外框，
+    不能落进内容页的角上。手机上没有侧栏，页面自己的那条页头接住它们。
+  */
+  const navControls = ownHeader ? (
+    <AppControls orientation={navCollapsed ? "vertical" : "horizontal"} />
+  ) : null;
+
+  /*
     整页不滚：滚动落在 main 里。根若是 min-h-screen，页面高于视口时整份文档往下
     滚——「把输入框钉在底上」就无从谈起（侧栏、顶栏、会话列表会一起被卷走）。所以
     根是 h-dvh + overflow-hidden，非 flush 的页由 main 自己 overflow-y-auto。
@@ -336,20 +369,21 @@ export default function AppShell({
     被浏览器自己的底栏盖住。100dvh 跟着当前可视高度变，TabBar 始终在可视区内。
   */
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-background md:flex-row">
+    <div className="flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row">
       {!isMobile && (
         <nav
           aria-label={t("common.appName")}
           className={cn(
-            "group/nav relative flex shrink-0 flex-col gap-3 border-r border-border bg-sidebar transition-[width]",
+            "group/nav relative flex shrink-0 flex-col gap-3 bg-chrome transition-[width]",
             navCollapsed ? "w-[56px] p-2" : "w-[224px] p-3",
           )}
         >
           {brand}
           {navToggle}
           {navItems}
+          {/* 账号区与导航之间不画线：这段留白就是分隔。 */}
           <div className="flex-1" />
-          <div className="border-t border-border" />
+          {navControls}
           {/* 断线时的出路挨着账号块：那颗痣就在这里，说的是同一件事的两面
               （见 ConnectionStatus 的 ConnectionEscape）。稳态下它整个不渲染。 */}
           <ConnectionEscape variant={navCollapsed ? "icon" : "bar"} />
@@ -364,7 +398,7 @@ export default function AppShell({
             /* 高度按内容 52px 算，多出来的 env(safe-area-inset-top) 只是把整条往下
                推开（box-sizing: border-box，pt 与 +inset 的高度同步）。无刘海设备
                env() 为 0，这条与改动前逐像素相同。 */
-            className="flex h-[calc(52px_+_env(safe-area-inset-top,0px))] shrink-0 items-center gap-3 border-b border-border bg-card px-4 pt-[env(safe-area-inset-top,0px)]"
+            className="flex h-[calc(52px_+_env(safe-area-inset-top,0px))] shrink-0 items-center gap-3 bg-chrome px-4 pt-[env(safe-area-inset-top,0px)]"
           >
             {title ? (
               <span className="truncate text-prose font-bold text-foreground">
@@ -379,16 +413,49 @@ export default function AppShell({
             <AppControls />
           </header>
         )}
-        <main
+        {/*
+          索引列与内容页同在这一行。没有顶栏的页上沿也得离开外框，这 8px 由这一行的
+          pt-2 给，索引列与内容页一起让：对话页左列 68px 顶行与右栏 68px 顶带因此仍在
+          同一条水平线上，只把内容页往下推会让两条带错开 8px。也不去覆写
+          content-sheet 自己的 margin，那要赌两条工具类的先后。
+        */}
+        <div
           className={cn(
-            "min-h-0 min-w-0 flex-1",
-            flush
-              ? "overflow-hidden"
-              : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
+            "flex min-h-0 min-w-0 flex-1",
+            !isMobile && ownHeader && "pt-2",
           )}
         >
-          {children}
-        </main>
+          {!isMobile && index ? (
+            <div data-testid="app-index" className="flex min-h-0 shrink-0">
+              {index}
+            </div>
+          ) : null}
+          {/*
+            内容页。缝与圆角只在桌面宽度：content-sheet 自带右、下 8px 缝和 12px
+            圆角（上沿贴顶栏或上面那 8px 缝、左沿贴侧栏或索引列）。手机上铺满：只取
+            内容页的底色。
+
+            content-sheet 带 overflow-hidden 裁圆角，所以滚动放在里面的 main。
+          */}
+          <div
+            data-testid="app-sheet"
+            className={cn(
+              "flex min-h-0 min-w-0 flex-1 flex-col",
+              isMobile ? "bg-sheet" : "content-sheet",
+            )}
+          >
+            <main
+              className={cn(
+                "min-h-0 min-w-0 flex-1",
+                flush
+                  ? "overflow-hidden"
+                  : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
+              )}
+            >
+              {children}
+            </main>
+          </div>
+        </div>
         {/* 移动主导航：A6Z3k 底部 TabBar，只含真实目的地。固定在视口底部，
             不与页面操作争夺顶栏位置。 */}
         {isMobile && (

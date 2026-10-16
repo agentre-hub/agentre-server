@@ -17,6 +17,7 @@ import {
   type ObservedCreationOptions,
 } from "@/test/webauthn";
 import Account from "@/pages/Account";
+import { edgeClasses } from "./helpers/edge-classes";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -703,5 +704,50 @@ describe("Account page: registering a passkey performs the WebAuthn ceremony cor
       .getAllByRole("listitem")
       .map((li) => li.textContent ?? "");
     expect(names[0]).toContain("My New Key");
+  });
+});
+
+describe("Account page: no structural lines — sections are separated by space, rows by line spacing", () => {
+  it("draws no card edge, header divider or row divider when loaded and supported", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+    const page = await screen.findByTestId("account-page");
+    await screen.findByText("工作 MacBook");
+    await screen.findByText("203.0.113.24");
+    expect(edgeClasses(page)).toEqual([]);
+  });
+
+  it("draws no edge on the unsupported banner", async () => {
+    mockDefaultApi();
+    renderAccount();
+    const page = await screen.findByTestId("account-page");
+    await screen.findByText("203.0.113.24");
+    expect(edgeClasses(page)).toEqual([]);
+  });
+
+  it("draws no edge on the only-current-session note", async () => {
+    markWebauthnSupported();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return ME;
+      if (path === "/v1/passkeys") return PASSKEYS;
+      if (path === "/v1/auth/sessions") return ONLY_CURRENT;
+      throw new Error(`unexpected call: ${path}`);
+    });
+    renderAccount();
+    const page = await screen.findByTestId("account-page");
+    await screen.findByText(/only/i);
+    expect(edgeClasses(page)).toEqual([]);
+  });
+
+  it("draws no edge on the loading skeletons", async () => {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return ME;
+      return new Promise(() => {});
+    });
+    renderAccount();
+    const page = await screen.findByTestId("account-page");
+    await screen.findAllByTestId("card-loading");
+    expect(edgeClasses(page)).toEqual([]);
   });
 });

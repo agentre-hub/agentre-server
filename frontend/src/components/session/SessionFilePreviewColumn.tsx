@@ -108,7 +108,10 @@ export default function SessionFilePreviewColumn({
     <aside
       data-testid="session-file-preview"
       // 420 定宽、不可拖（上游规格决策 8：详情列 896 = 转录 476 + 预览 420）。
-      className="flex w-[420px] shrink-0 flex-col overflow-hidden border-l border-border bg-background"
+      //
+      // 与转录同在一张内容页上：靠一块填充分开，不画左边线（规格 2026-10-15
+      // 「无边框改版」）。
+      className="flex w-[420px] shrink-0 flex-col overflow-hidden bg-field-fill"
     >
       <FilePreviewPanel
         tabs={tabs}

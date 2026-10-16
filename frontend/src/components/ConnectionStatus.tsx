@@ -51,25 +51,18 @@ export const connectionCopy: Record<
  * 对读屏隐藏：一个念得到却点不着的彩色圆点比没有更糟，状态由账号块里那条
  * sr-only 播报说（见 UserMenu）。
  *
- * `surface` 是它所在的那个面，决定白环的颜色。少了这一环，8px 的痣贴在头像边上会
- * 糊成一团；环色取错则更糟——它会变成一颗与设计无关的黑点。侧栏是 `bg-sidebar`，
- * 移动 TopBar 是 `bg-card`，两者在浅色下不同值（#f4f4f5 / #ffffff）。
+ * 环色是它所在的那个面。少了这一环，8px 的痣贴在头像边上会糊成一团；环色取错则
+ * 更糟——它会变成一颗与设计无关的黑点。账号块的两个落点（桌面侧栏、移动顶栏）
+ * 都在外框上，所以环取外框色。
  */
-export function ConnectionPip({
-  state,
-  surface,
-}: {
-  state: AccountChannelState;
-  surface: "sidebar" | "card";
-}) {
+export function ConnectionPip({ state }: { state: AccountChannelState }) {
   return (
     <span
       data-testid="connection-pip"
       data-connection-state={state}
       aria-hidden="true"
       className={cn(
-        "absolute -right-px -bottom-px size-2 rounded-full ring-2",
-        surface === "card" ? "ring-card" : "ring-sidebar",
+        "absolute -right-px -bottom-px size-2 rounded-full ring-2 ring-chrome",
         statusConfig[connectionCopy[state].tone].dotClassName,
         // 「在动」用脉冲表达，降级形态是一个静止的点：记号还在，动效没了。
         state === "connecting" && "animate-pulse motion-reduce:animate-none",

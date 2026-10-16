@@ -15,7 +15,7 @@ export default function DeviceExpired() {
   const { t } = useTranslation();
   return (
     <AuthLayout>
-      <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-lg border bg-card p-6 text-center sm:p-10">
+      <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-2xl bg-sheet p-6 text-center shadow-overlay sm:p-10">
         <div className="flex size-[60px] items-center justify-center rounded-full bg-status-waiting-bg">
           <TimerOff className="size-6 text-status-waiting" aria-hidden="true" />
         </div>

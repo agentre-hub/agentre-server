@@ -100,7 +100,7 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
   return (
     <div
       data-slot="org-detail-department"
-      className="flex h-full min-w-0 flex-col bg-card"
+      className="flex h-full min-w-0 flex-col"
     >
       <OrgDetailHeader
         avatar={

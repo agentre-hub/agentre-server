@@ -958,29 +958,20 @@ export default function Chat() {
   const mobileTrueEmpty =
     empty && sessionIndex.debouncedSearch === "" && filter === "all";
   /*
-    页面级的那簇控件：连接态 + 语言/主题。
+    没选中对话、也不在草稿时右栏自己那条顶带：与左列顶行同高（68px）。
 
     转录上方此前叠着两条带 —— 壳的 52px 顶栏（一个与侧栏高亮重复的「对话」标题，
-    外加这簇控件）和 89px 的详情头部，合计 141px 只承载一行标题和一行 meta。桌面档
-    因此也走壳的 `ownHeader`：顶栏下线，这簇控件跟着落到右栏顶带的右端 —— 选中
-    对话时那条带**就是**详情头部本身，没选中时才由下面那条 `chat-chrome` 承接。
-    两种情形同高（68px），控件的位置不跳。
-  */
-  const pageChrome = !isMobile ? (
-    <div className="flex shrink-0 items-center gap-2">
-      <AppControls />
-    </div>
-  ) : null;
+    外加语言/主题）和 89px 的详情头部。桌面档因此走壳的 `ownHeader`：顶栏下线，
+    选中对话时详情头部**就是**这一栏的顶带，草稿那条带同样是；其余几档由这一条
+    占住同样的 68px，下面的内容因此不随选中与否上下跳。
 
-  /** 没选中对话时右栏自己那条顶带：只承载 pageChrome，与左列顶行同高。 */
-  const chromeBand = pageChrome ? (
-    <div
-      data-testid="chat-chrome"
-      className="flex h-[68px] shrink-0 items-center justify-end border-b border-border bg-card px-5"
-    >
-      {pageChrome}
-    </div>
-  ) : null;
+    语言 / 主题不在这里：它们属于外框，壳在 ownHeader 页的侧栏底部摆了那一对
+    （规格 2026-10-15「对话页没有顶栏」），内容页的角上不再放第二份。这一条也不画
+    底线、不自涂底色——它与下面同在一张内容页上。
+  */
+  const chromeBand = (
+    <div data-testid="chat-chrome" className="h-[68px] shrink-0" />
+  );
 
   const composePick = (
     <NewConversationPane
@@ -1013,7 +1004,6 @@ export default function Chat() {
         onStarted={(session) => onDraftStarted(session, compose.agent)}
         // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
         onBack={isMobile ? () => setCompose(null) : undefined}
-        headerRight={pageChrome}
       />
     ) : null;
 
@@ -1063,6 +1053,49 @@ export default function Chat() {
   const searchFieldSm = renderSearchField("sm");
   const searchFieldMd = renderSearchField("md");
 
+  /*
+    桌面的会话列表列。它是索引列：交给壳的 `index` 槽，摆在外框上、内容页左侧
+    （规格 2026-10-15「页面布局由外壳声明」）。列自己不涂底色——ResizableSidebar
+    默认就落在外框色上；顶行与列表之间也不画线，靠留白分开。窄屏没有并排的空间，
+    壳不摆它，这一屏的索引由下面移动那一支自己排。
+
+    320px 是起点不是结论：只列着几条短标题的人希望这一列让位给转录，按项目分组、
+    标题写满一行的人在 320px 里读到的全是省略号。谁对取决于这一刻在做什么，所以
+    交给拖（共享包的 ResizableSidebar，量程 220–640，记在这台机器上），而不是再挑
+    一个所有人都不满意的定值。
+  */
+  const desktopIndex = isMobile ? undefined : (
+    <ResizableSidebar
+      persistenceKey="chat"
+      ariaLabel={t("chat.listAria")}
+      testId="chat-list-col"
+    >
+      {/* 左列顶行与右栏那条顶带同高（68px）。 */}
+      <div
+        data-testid="chat-list-head"
+        className="flex h-[68px] shrink-0 items-center gap-1.5 px-2.5"
+      >
+        {searchFieldSm}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="size-[30px]"
+          aria-label={t("chat.startNew")}
+          title={t("chat.startNew")}
+          onClick={openCompose}
+        >
+          <Plus className="size-4" aria-hidden="true" />
+        </Button>
+      </div>
+      <div
+        aria-busy={!settled || undefined}
+        className="min-h-0 flex-1 overflow-auto p-2.5"
+      >
+        {!settled ? <SessionRowSkeleton rows={6} /> : index}
+      </div>
+    </ResizableSidebar>
+  );
+
   // 移动端单列：地址上开着一条会话时整屏就是它的详情，索引留在后退的那一格里。
   if (isMobile && openConversationId) {
     return (
@@ -1084,7 +1117,7 @@ export default function Chat() {
   }
 
   return (
-    <AppShell flush ownHeader>
+    <AppShell flush ownHeader index={desktopIndex}>
       {isMobile &&
       (compose?.step === "draft" || compose?.step === "project") ? (
         /* 窄屏没有第二栏可用：这两步各占一整屏，返回回到底部弹层那一步。 */
@@ -1108,8 +1141,11 @@ export default function Chat() {
             data-testid="chat-mobile-header"
             /* 这一条顶栏由页面自己排（壳走 ownHeader，够不着它），所以安全区也得
                自己让：viewport-fit=cover 之后内容会伸到状态栏底下，无刘海设备
-               env() 为 0、与改动前逐像素相同。 */
-            className="shrink-0 border-b border-border bg-card pt-[env(safe-area-inset-top,0px)]"
+               env() 为 0、与改动前逐像素相同。
+
+               与壳在手机上的顶栏同一层：落在外框色上，和下面那张铺满的内容页靠
+               色阶分开，不画底线（规格 2026-10-15 决策 3）。 */
+            className="shrink-0 bg-chrome pt-[env(safe-area-inset-top,0px)]"
           >
             <div className="flex h-[52px] items-center gap-2 px-3">
               <span className="shrink-0 text-prose font-bold text-foreground">
@@ -1173,54 +1209,18 @@ export default function Chat() {
           </div>
         </div>
       ) : (
-        /* 桌面（屏 49b）：320px 左会话列表列 + 右侧详情区。壳已经把整块主区交出来
+        /* 桌面（屏 49b）：右侧详情区。左边那列会话列表是索引列，由壳摆在外框上
+           （见上面的 desktopIndex）；这里只剩内容页里的详情。壳已经把整块主区交出来
            （flush），因此不再需要负 margin 去抵消它的 padding。 */
         <div data-testid="chat-layout" className="flex h-full min-h-0 flex-row">
-          {/*
-            320px 是起点不是结论：只列着几条短标题的人希望这一列让位给转录，
-            按项目分组、标题写满一行的人在 320px 里读到的全是省略号。谁对取决于
-            这一刻在做什么，所以交给拖（共享包的 ResizableSidebar，量程 220–640，
-            记在这台机器上），而不是再挑一个所有人都不满意的定值。
-          */}
-          <ResizableSidebar
-            persistenceKey="chat"
-            ariaLabel={t("chat.listAria")}
-            testId="chat-list-col"
-            className="bg-card"
-          >
-            {/* 左列顶行与右栏那条顶带同高：两列的顶边因此是同一条横线。省下的
-                16px 换不来一条断开的顶边。 */}
-            <div
-              data-testid="chat-list-head"
-              className="flex h-[68px] shrink-0 items-center gap-1.5 border-b border-border px-2.5"
-            >
-              {searchFieldSm}
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="size-[30px]"
-                aria-label={t("chat.startNew")}
-                title={t("chat.startNew")}
-                onClick={openCompose}
-              >
-                <Plus className="size-4" aria-hidden="true" />
-              </Button>
-            </div>
-            <div
-              aria-busy={!settled || undefined}
-              className="min-h-0 flex-1 overflow-auto p-2.5"
-            >
-              {!settled ? <SessionRowSkeleton rows={6} /> : index}
-            </div>
-          </ResizableSidebar>
           <div
             data-testid="chat-detail"
             className="flex min-w-0 flex-1 flex-col"
           >
-            {/* 选中对话时详情头部**就是**这一栏的顶带，那簇控件递进它的右端；
-                草稿那条顶带同样是（它与详情共用同一副外壳，见 DraftSession）。
-                其余几档没有那样一条带，才由 chromeBand 顶上。三者同高，控件
-                因此不会随着选中与否、发没发出第一句上下跳。 */}
+            {/* 选中对话时详情头部**就是**这一栏的顶带；草稿那条顶带同样是（它与
+                详情共用同一副外壳，见 DraftSession）。其余几档没有那样一条带，才由
+                chromeBand 顶上。三者同高，内容因此不会随着选中与否、发没发出第一句
+                上下跳。 */}
             {!openConversationId && compose?.step !== "draft" && chromeBand}
             {/* 右栏这一格不是列表，摆骨架行会像是在等**某一条对话**的内容，而此刻
                 还没有任何目标被选中。留空：左列的骨架已经说了「在取」。 */}
@@ -1249,7 +1249,6 @@ export default function Chat() {
                   initialModelNote={openSeed?.modelNote}
                   initialEffortNote={openSeed?.effortNote}
                   initialTurnStartedAt={openSeed?.turnStartedAt}
-                  headerRight={pageChrome}
                   onMarkedRead={markRead}
                 />
               </div>

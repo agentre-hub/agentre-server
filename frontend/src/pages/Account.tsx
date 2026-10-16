@@ -138,7 +138,7 @@ function isUserCancelled(e: unknown): boolean {
   return e instanceof DOMException && e.name === "NotAllowedError";
 }
 
-/** 卡片外壳：rounded-lg + border-border + bg-card。 */
+/** 分节：无边、无节头分隔线；节与节之间的距离由页面的 gap 给出。 */
 function SectionCard({
   title,
   subtitle,
@@ -151,8 +151,8 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3">
+    <section className="flex min-w-0 flex-col">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-aux font-bold text-foreground">{title}</h2>
           {subtitle && (
@@ -183,10 +183,7 @@ function CardListSkeleton({ rows }: { rows: number }) {
         className="flex flex-col"
       >
         {Array.from({ length: rows }, (_, i) => (
-          <li
-            key={i}
-            className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
-          >
+          <li key={i} className="flex items-center gap-3 px-4 py-3">
             <Skeleton className="size-8 shrink-0 rounded-md" />
             <span className="flex min-w-0 flex-1 flex-col gap-1.5">
               <Skeleton
@@ -363,7 +360,7 @@ export default function Account() {
       {me ? (
         <div
           data-testid="account-page"
-          className="mx-auto flex w-full max-w-[840px] flex-col gap-4"
+          className="mx-auto flex w-full max-w-[840px] flex-col gap-8"
         >
           {/* 账号卡：github_login 第一次有地方显示。 */}
           <SectionCard title={t("account.profile.title")}>
@@ -421,7 +418,7 @@ export default function Account() {
           >
             {!supported && (
               // 不支持就说清楚为什么，不让用户去撞一次可预知的失败（决策 17）。
-              <p className="border-b border-border bg-status-waiting-bg px-4 py-2.5 text-xs text-status-waiting-text">
+              <p className="bg-status-waiting-bg px-4 py-2.5 text-xs text-status-waiting-text">
                 {unavailableBannerText(t, passkeySupportState)}
               </p>
             )}
@@ -451,15 +448,12 @@ export default function Account() {
                 }
               />
             ) : (
-              <ul>
-                {passkeys.map((k, i) => {
+              <ul className="flex flex-col gap-1">
+                {passkeys.map((k) => {
                   return (
                     <li
                       key={k.id}
-                      className={cn(
-                        "flex items-center gap-3 px-4 py-3",
-                        i > 0 && "border-t border-border",
-                      )}
+                      className="flex items-center gap-3 px-4 py-3"
                     >
                       <KeyRound className="size-4 shrink-0 text-decorative-foreground" />
                       <div className="min-w-0 flex-1">
@@ -524,14 +518,11 @@ export default function Account() {
               <CardListSkeleton rows={2} />
             ) : (
               <>
-                <ul>
+                <ul className="flex flex-col gap-1">
                   {sessions.map((s, i) => {
                     const isExpanded = expandedIndex === i;
                     return (
-                      <li
-                        key={i}
-                        className={cn(i > 0 && "border-t border-border")}
-                      >
+                      <li key={i}>
                         {/* 整行可点展开：UA 原样、等宽，默认截断（决策 7）。不解析
                             成「Chrome on macOS」——猜错会让人撤销掉正在用的那一个；
                             展开态只属于这一行自己，不影响其它行。 */}
@@ -582,7 +573,7 @@ export default function Account() {
                   })}
                 </ul>
                 {otherCount === 0 && (
-                  <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+                  <p className="px-4 py-2.5 text-xs text-muted-foreground">
                     {t("account.signins.onlyCurrent")}
                   </p>
                 )}

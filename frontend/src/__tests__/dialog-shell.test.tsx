@@ -204,7 +204,8 @@ describe("弹窗外壳", () => {
     );
     const header = document.querySelector('[data-slot="dialog-shell-header"]')!;
     expect(header.className).toContain("destructive");
-    expect(content().className).toContain("destructive");
+    // 内容壳不再画危险边，危险形态由 data-danger 标记。
+    expect(content().hasAttribute("data-danger")).toBe(true);
     // 标题只有一句话，后果在正文里。
     expect(screen.getByText("删除项目？")).toBeTruthy();
     expect(screen.getByText("这个项目的子项目也会被删除。")).toBeTruthy();

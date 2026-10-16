@@ -93,9 +93,13 @@ export function useHeatmapWeeks(): {
   return { ref, weeks };
 }
 
-/** 五档色阶的类名。索引就是档位，heat-0 = 那天没有活动（可见的浅灰，不是透明）。 */
+/**
+ * 五档色阶的类名。索引就是档位。heat-0 = 那天没有活动：取共享包相对前景的
+ * 按钮填充（前景 8%），随脚下卡片明暗；固定色 --heat-0 假定背后是白卡片，
+ * 落在填充卡片上深色主题会消失。
+ */
 const LEVEL_CLASS: Record<HeatLevel, string> = {
-  0: "bg-heat-0",
+  0: "bg-button-fill",
   1: "bg-heat-1",
   2: "bg-heat-2",
   3: "bg-heat-3",
@@ -147,7 +151,7 @@ function HeatTooltip({
       data-testid="heat-tooltip"
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute z-10 -translate-y-full rounded-md border border-border bg-popover px-2 py-1 text-2xs whitespace-nowrap text-popover-foreground shadow-md",
+        "pointer-events-none absolute z-10 -translate-y-full rounded-md bg-popover px-2 py-1 text-2xs whitespace-nowrap text-popover-foreground shadow-md",
         !nearStart && !nearEnd && "-translate-x-1/2",
       )}
       style={
