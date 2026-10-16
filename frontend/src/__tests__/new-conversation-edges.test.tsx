@@ -22,6 +22,20 @@ import type {
 } from "@/components/session/newconv/types";
 import { edgeClasses } from "./helpers/edge-classes";
 
+/**
+ * 元素自身及后代里自涂的旧表面（bg-background / bg-card）。这些面板都是对话页
+ * 详情那一格，脚下就是壳给的内容页（bg-sheet）：再涂一层 background / card，浅色
+ * 下是 #fafafa 上叠 #ffffff 的一道色带，深色下整格换成另一种灰，与选中会话时的
+ * 详情（不自涂）不是同一张纸。
+ */
+function selfPaintedSurfaces(root: Element): string[] {
+  return [root, ...Array.from(root.querySelectorAll("*"))].flatMap((el) =>
+    Array.from(el.classList).filter((c) =>
+      /^(?:[\w-]+:)*bg-(?:background|card)$/.test(c),
+    ),
+  );
+}
+
 vi.mock("@/lib/dispatch", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/dispatch")>();
   return {
@@ -226,5 +240,51 @@ describe("新建对话：草稿会话无结构线", () => {
     expect(edgeClasses(box)).toEqual([]);
     expect(edgeClasses(document.body)).toEqual([]);
     expect(box.className).toContain("bg-destructive-soft");
+  });
+});
+
+describe("新建对话：各面板直接落在内容页上，不自涂底色", () => {
+  it("挑 Agent 的面板：根、页头与「从项目里挑」那一行都不涂 background / card", () => {
+    wrap(
+      <NewConversationPane
+        agents={[runnable, blocked]}
+        recentIds={[]}
+        onPick={vi.fn()}
+        onFromProject={vi.fn()}
+      />,
+    );
+    expect(
+      selfPaintedSurfaces(screen.getByTestId("new-conversation-pane")),
+    ).toEqual([]);
+  });
+
+  it("从项目里挑：根、页头、项目列与选中项目那条带都不涂 background / card", () => {
+    wrap(
+      <ProjectAgentPane
+        projects={projects}
+        agents={[runnable, blocked]}
+        onPick={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    );
+    expect(
+      selfPaintedSurfaces(screen.getByTestId("project-agent-pane")),
+    ).toEqual([]);
+  });
+
+  it("草稿：根、顶带与输入区都不涂 background / card——与落地后的详情同一张纸", async () => {
+    mockFetchPlan.mockResolvedValue(planOk);
+    wrap(
+      <DraftSession
+        agent={runnable}
+        agents={[runnable]}
+        projects={projects}
+        onStarted={vi.fn()}
+      />,
+    );
+    await screen.findByTestId("draft-exec-target-chip");
+    expect(selfPaintedSurfaces(screen.getByTestId("draft-session"))).toEqual(
+      [],
+    );
   });
 });

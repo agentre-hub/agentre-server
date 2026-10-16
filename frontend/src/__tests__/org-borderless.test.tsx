@@ -117,6 +117,22 @@ describe("组织页无边框：索引列在外框，详情是内容页", () => {
     expect(indexCol.className).not.toMatch(/(^|\s)bg-/);
   });
 
+  it.each([
+    ["/org/agent/agent-alice", "org-detail-agent"],
+    ["/org/department/dept-eng", "org-detail-department"],
+  ])(
+    "桌面：%s 的详情直接落在内容页上，不自涂 card 底色",
+    async (path, slot) => {
+      renderOrgAt(path);
+      await screen.findByTestId("org-detail-header");
+      const detail = screen
+        .getByTestId("app-sheet")
+        .querySelector(`[data-slot="${slot}"]`) as HTMLElement;
+      expect(detail).not.toBeNull();
+      expect(detail.className).not.toMatch(/(^|\s)bg-(card|background)(\s|$)/);
+    },
+  );
+
   it("桌面：索引列、详情头、执行目标分组、选择器都没有边线", async () => {
     renderOrgAt("/org/agent/agent-alice");
     await screen.findByTestId("org-detail-header");

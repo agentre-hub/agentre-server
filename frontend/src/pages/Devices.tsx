@@ -238,7 +238,7 @@ function DeviceListSkeleton({ rows = 3 }: { rows?: number }) {
         {Array.from({ length: rows }, (_, i) => (
           <div
             key={i}
-            className="flex items-center gap-3 rounded-lg bg-muted px-4 py-3.5"
+            className="flex items-center gap-3 rounded-lg bg-field-fill px-4 py-3.5"
           >
             <Skeleton className="size-9 shrink-0 rounded-md" />
             <span className="flex min-w-0 flex-1 flex-col gap-2">
@@ -333,7 +333,7 @@ function DeviceExpandDetail({
               {(detail.runnable_agents ?? []).map((a) => (
                 <span
                   key={a.sync_id}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-button-fill px-1.5 py-0.5 text-xs text-muted-foreground"
                 >
                   {a.name}
                   <span className="font-mono text-[9px] text-muted-foreground">
@@ -361,7 +361,7 @@ function DeviceExpandDetail({
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs",
                   p.configured
-                    ? "bg-muted text-muted-foreground"
+                    ? "bg-button-fill text-muted-foreground"
                     : "bg-status-waiting-bg text-status-waiting-text",
                 )}
               >
@@ -545,12 +545,12 @@ function DeviceRow({
   if (isMobile) {
     return (
       <Card
-        className="gap-0 rounded-lg bg-muted py-3 shadow-none"
+        className="gap-0 rounded-lg bg-field-fill py-3 shadow-none"
         data-testid={`device-row-${d.id}`}
       >
         <div className="flex items-center gap-3 px-4">
           {/* 图标方框：移动端的信息顺序以图标开头（HUELX） */}
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-button-fill">
             <DeviceIcon
               Icon={DEVICE_KIND_ICONS[d.kind] ?? Cpu}
               testId={`device-icon-${d.id}`}
@@ -569,7 +569,7 @@ function DeviceRow({
               <span className="truncate text-sm font-medium text-foreground">
                 {name}
               </span>
-              <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
+              <span className="rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
                 {deviceKindLabel(d.kind, t)}
               </span>
             </div>
@@ -642,7 +642,7 @@ function DeviceRow({
 
   return (
     <Card
-      className="gap-0 rounded-lg bg-muted py-4 shadow-none"
+      className="gap-0 rounded-lg bg-field-fill py-4 shadow-none"
       data-testid={`device-row-${d.id}`}
     >
       {/* 标题行（Q6qgs4 R1）：状态点 + 设备图标 + 名 + 类型 chip + 状态标记 */}
@@ -659,7 +659,7 @@ function DeviceRow({
         <span className="min-w-0 flex-1 truncate text-prose font-semibold">
           {name}
         </span>
-        <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
+        <span className="rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
           {deviceKindLabel(d.kind, t)}
         </span>
         <StatusMark

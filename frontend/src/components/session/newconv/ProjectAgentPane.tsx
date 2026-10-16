@@ -98,9 +98,11 @@ export function ProjectAgentPane({
   return (
     <div
       data-testid="project-agent-pane"
-      className="flex h-full min-h-0 flex-col bg-background"
+      // 不自涂底色：页头、项目列、成员列同在壳给的那张内容页上，靠留白与行的填充分开
+      // （规格 2026-10-15「无边框改版」）。
+      className="flex h-full min-h-0 flex-col"
     >
-      <header className="flex shrink-0 items-center gap-2 bg-card px-3 py-3.5">
+      <header className="flex shrink-0 items-center gap-2 px-3 py-3.5">
         <button
           type="button"
           aria-label={t("chat.back")}
@@ -119,12 +121,11 @@ export function ProjectAgentPane({
           data-testid="project-tree"
           aria-label={t("chat.projects")}
           aria-busy={projectsPending || undefined}
-          className={cn(
-            "bg-card",
+          className={
             stacked
               ? "flex shrink-0 gap-1.5 overflow-x-auto px-3 py-2"
-              : "flex w-[252px] shrink-0 flex-col gap-0.5 overflow-auto p-2",
-          )}
+              : "flex w-[252px] shrink-0 flex-col gap-0.5 overflow-auto p-2"
+          }
         >
           {projectsPending ? (
             <ProjectTreeSkeleton stacked={stacked} />
@@ -175,7 +176,7 @@ export function ProjectAgentPane({
 
         <div className="flex min-w-0 flex-1 flex-col">
           {selectedProject && (
-            <div className="flex shrink-0 items-center gap-2.5 bg-card px-5 py-2.5">
+            <div className="flex shrink-0 items-center gap-2.5 px-5 py-2.5">
               <ProjectGlyph
                 project={{
                   name: selectedProject.name,

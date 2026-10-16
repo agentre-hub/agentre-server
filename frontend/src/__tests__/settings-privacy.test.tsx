@@ -128,7 +128,10 @@ describe("设置 · 隐私", () => {
       clone.querySelectorAll('[role="switch"]').forEach((el) => el.remove());
       const drawn = edgeClasses(clone);
       expect(drawn).toEqual([]);
-      expect(card.className).toMatch(/\bbg-raised\b/);
+      // 填充块：相对前景色的字段填充，与共享包的分组同一个 token。不是 bg-raised
+      // ——抬起色在浅色下与内容页同为 #ffffff，落在内容页上等于没有底。
+      expect(card.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+      expect(card.className).not.toMatch(/(^|\s)bg-raised(\s|$)/);
     }
   });
 
@@ -226,6 +229,12 @@ describe("设置 · 隐私", () => {
         .getByTestId("privacy-activity-skeleton")
         .getAttribute("aria-hidden"),
     ).toBe("true");
+    // 骨架卡与落地后的卡同一种表面，数据到了不换底。
+    for (const card of Array.from(
+      screen.getByTestId("privacy-activity-skeleton").children,
+    )) {
+      expect(card.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+    }
 
     release({ ...settingsResponse(), code: 0 });
     await screen.findByTestId("privacy-activity-panel");

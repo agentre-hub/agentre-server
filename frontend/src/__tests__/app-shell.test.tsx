@@ -821,7 +821,9 @@ describe("外框 + 内容页", () => {
       expect(sheet().contains(index)).toBe(false);
       expect(index.className).not.toMatch(/(^|\s)bg-/);
       expect(edgeClasses(index)).toEqual([]);
-      expect(index.nextElementSibling).toBe(sheet().parentElement);
+      // 索引列与内容页同在一行：外壳给的上沿缝（如有）两边一起让。
+      expect(index.parentElement).toBe(sheet().parentElement);
+      expect(index.nextElementSibling).toBe(sheet());
       // 详情在内容页里。
       expect(within(sheet()).getByText("detail pane")).toBeTruthy();
       // 有顶栏的页：索引列在顶栏之下，与内容页同一行。
@@ -842,17 +844,21 @@ describe("外框 + 内容页", () => {
   });
 
   describe("没有顶栏的页（ownHeader）", () => {
-    it("桌面：内容页上沿也与外框留缝，索引列不被一起下推", () => {
+    it("桌面：内容页上沿也与外框留缝，索引列随同一行一起下移，两列的顶带仍对齐", () => {
       renderShell(
         <AppShell flush ownHeader index={<div>index column</div>}>
           detail pane
         </AppShell>,
       );
       expect(screen.queryByTestId("app-topbar")).toBeNull();
-      expect(sheet().parentElement!.className).toMatch(/(^|\s)pt-2(\s|$)/);
-      expect(screen.getByTestId("app-index").className).not.toMatch(
-        /(^|\s)(pt|mt)-/,
-      );
+      // 缝给在索引列与内容页共用的那一行上：对话页左列 68px 顶行与右栏 68px 顶带
+      // 因此仍在同一条水平线上，而不是错开 8px（规格「对话页头 68px 等几何不变」）。
+      const row = sheet().parentElement!;
+      expect(row.className).toMatch(/(^|\s)pt-2(\s|$)/);
+      const index = screen.getByTestId("app-index");
+      expect(index.parentElement).toBe(row);
+      expect(index.className).not.toMatch(/(^|\s)(pt|mt)-/);
+      expect(sheet().className).not.toMatch(/(^|\s)(pt|mt)-/);
     });
 
     it("桌面：语言 / 主题按钮落在侧边导航底部（外框上），不进内容页的角", () => {

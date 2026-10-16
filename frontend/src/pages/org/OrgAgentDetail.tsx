@@ -176,10 +176,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
       ];
 
   return (
-    <div
-      data-slot="org-detail-agent"
-      className="flex h-full min-w-0 flex-col bg-card"
-    >
+    <div data-slot="org-detail-agent" className="flex h-full min-w-0 flex-col">
       <OrgDetailHeader
         avatar={
           /*

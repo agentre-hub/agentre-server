@@ -173,7 +173,7 @@ export default function Settings() {
             // LLM 供应商页与机器无关，不受此限。
             <>
               {renderHeader(null)}
-              <div className="rounded-lg bg-raised">
+              <div className="rounded-lg bg-field-fill">
                 <EmptyState
                   icon={Laptop}
                   testId="settings-backends-no-device"

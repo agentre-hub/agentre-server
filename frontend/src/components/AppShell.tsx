@@ -413,7 +413,18 @@ export default function AppShell({
             <AppControls />
           </header>
         )}
-        <div className="flex min-h-0 min-w-0 flex-1">
+        {/*
+          索引列与内容页同在这一行。没有顶栏的页上沿也得离开外框，这 8px 由这一行的
+          pt-2 给，索引列与内容页一起让：对话页左列 68px 顶行与右栏 68px 顶带因此仍在
+          同一条水平线上，只把内容页往下推会让两条带错开 8px。也不去覆写
+          content-sheet 自己的 margin，那要赌两条工具类的先后。
+        */}
+        <div
+          className={cn(
+            "flex min-h-0 min-w-0 flex-1",
+            !isMobile && ownHeader && "pt-2",
+          )}
+        >
           {!isMobile && index ? (
             <div data-testid="app-index" className="flex min-h-0 shrink-0">
               {index}
@@ -421,36 +432,28 @@ export default function AppShell({
           ) : null}
           {/*
             内容页。缝与圆角只在桌面宽度：content-sheet 自带右、下 8px 缝和 12px
-            圆角（上沿贴顶栏、左沿贴侧栏或索引列）；没有顶栏的页上沿也得离开外框，
-            这 8px 由外面这一层的 pt-2 给——不去覆写 content-sheet 自己的 margin，
-            那要赌两条工具类的先后。手机上铺满：只取内容页的底色。
+            圆角（上沿贴顶栏或上面那 8px 缝、左沿贴侧栏或索引列）。手机上铺满：只取
+            内容页的底色。
 
             content-sheet 带 overflow-hidden 裁圆角，所以滚动放在里面的 main。
           */}
           <div
+            data-testid="app-sheet"
             className={cn(
               "flex min-h-0 min-w-0 flex-1 flex-col",
-              !isMobile && ownHeader && "pt-2",
+              isMobile ? "bg-sheet" : "content-sheet",
             )}
           >
-            <div
-              data-testid="app-sheet"
+            <main
               className={cn(
-                "flex min-h-0 min-w-0 flex-1 flex-col",
-                isMobile ? "bg-sheet" : "content-sheet",
+                "min-h-0 min-w-0 flex-1",
+                flush
+                  ? "overflow-hidden"
+                  : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
               )}
             >
-              <main
-                className={cn(
-                  "min-h-0 min-w-0 flex-1",
-                  flush
-                    ? "overflow-hidden"
-                    : "overflow-y-auto px-4 py-5 md:px-8 md:py-6",
-                )}
-              >
-                {children}
-              </main>
-            </div>
+              {children}
+            </main>
           </div>
         </div>
         {/* 移动主导航：A6Z3k 底部 TabBar，只含真实目的地。固定在视口底部，

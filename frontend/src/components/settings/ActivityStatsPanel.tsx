@@ -58,7 +58,7 @@ function ActivityStatsSkeleton() {
       {[0, 1].map((card) => (
         <div
           key={card}
-          className="flex min-w-0 flex-col gap-3.5 rounded-lg bg-raised p-4 sm:p-5"
+          className="flex min-w-0 flex-col gap-3.5 rounded-lg bg-field-fill p-4 sm:p-5"
         >
           <div className="flex min-w-0 items-center gap-3">
             <Skeleton className="h-4 w-28" />
@@ -167,7 +167,7 @@ export function ActivityStatsPanel() {
     <>
       <section
         data-testid="privacy-activity-panel"
-        className="flex min-w-0 flex-col gap-3.5 rounded-lg bg-raised p-4 sm:p-5"
+        className="flex min-w-0 flex-col gap-3.5 rounded-lg bg-field-fill p-4 sm:p-5"
       >
         <div className="flex min-w-0 items-center gap-3">
           <h2 className="min-w-0 text-aux font-bold text-foreground">
@@ -235,7 +235,7 @@ export function ActivityStatsPanel() {
 
       <section
         data-testid="privacy-saved-conversations"
-        className="flex min-w-0 flex-col gap-2 rounded-lg bg-raised p-4 sm:p-5"
+        className="flex min-w-0 flex-col gap-2 rounded-lg bg-field-fill p-4 sm:p-5"
       >
         <div className="flex min-w-0 items-center gap-2">
           <MessagesSquare

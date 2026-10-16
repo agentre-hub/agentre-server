@@ -131,6 +131,60 @@ describe("devices page is borderless", () => {
     expect(edgeClasses(screen.getByTestId("device-list-skeleton"))).toEqual([]);
   });
 
+  /*
+    A row is a card on the sheet, so it takes the shared relative fill — the token the
+    desktop's cards use — and every chip or icon box on it sits one fill above it.
+    A chip painted the row's own surface has no edge and no step: it disappears.
+  */
+  it("desktop row is the shared fill; its kind, agent and project chips sit one fill above it", async () => {
+    mockConsole([device]);
+    renderDevices();
+    await screen.findByText("build-box-02");
+    fireEvent.click(screen.getByTestId("device-expand-1"));
+    await screen.findByText("Frontend Agent");
+
+    const row = screen.getByTestId("device-row-1");
+    expect(row.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+    expect(row.className).not.toMatch(/(^|\s)bg-muted(\s|$)/);
+    for (const chip of [
+      within(row).getByText("Compute node"),
+      within(row).getByText("Frontend Agent"),
+      within(row).getByText("proj"),
+    ]) {
+      expect(chip.className).toMatch(/(^|\s)bg-button-fill(\s|$)/);
+    }
+  });
+
+  it("mobile row is the shared fill; its icon box and kind chip sit one fill above it", async () => {
+    mockConsole([device]);
+    await withMobile(true, async () => {
+      renderDevices();
+      await screen.findByText("build-box-02");
+      const row = screen.getByTestId("device-row-1");
+      expect(row.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+      const iconBox = screen.getByTestId("device-icon-1").parentElement!;
+      expect(iconBox.className).toMatch(/(^|\s)bg-button-fill(\s|$)/);
+      expect(within(row).getByText("Compute node").className).toMatch(
+        /(^|\s)bg-button-fill(\s|$)/,
+      );
+      expect(row.querySelectorAll(".bg-muted")).toHaveLength(0);
+    });
+  });
+
+  it("loading skeleton rows are the same fill as the rows they stand in for", () => {
+    mockedApi.mockImplementation(() => new Promise(() => {}));
+    renderDevices();
+    const rows = Array.from(
+      screen
+        .getByTestId("device-list-skeleton")
+        .querySelectorAll(".rounded-lg"),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+    }
+  });
+
   it("the page is not wrapped in a card; only rows are cards", async () => {
     mockConsole([device]);
     const { container } = renderDevices();
@@ -165,6 +219,13 @@ describe("add-device guide is borderless", () => {
     expect(edgeClasses(guide)).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: /^Step 3/ }));
     expect(edgeClasses(guide)).toEqual([]);
+  });
+
+  it("the guide card is the shared fill, like every other card on the page", () => {
+    renderGuide();
+    const guide = screen.getByTestId("add-device-guide");
+    expect(guide.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+    expect(guide.className).not.toMatch(/(^|\s)bg-muted(\s|$)/);
   });
 
   it("the command and its label are one fill component", () => {

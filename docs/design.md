@@ -533,8 +533,10 @@ header at all. Chat does this: on mobile, 52px cannot hold title + page actions 
 + language/theme (stacking them blew the bar out to ~100px with the title clipped to 「对.」),
 so the page keeps identity and global controls on its first row and gives search its own.
 On desktop the shell moves `AppControls` (language / theme) to the bottom of the SideNav —
-vertical when collapsed — so they sit on the chrome, never in a corner of the sheet; the
-sheet then gets a `pt-2` so its top edge still clears the chrome.
+vertical when collapsed — so they sit on the chrome, never in a corner of the sheet. The
+row that holds the `index` column and the sheet then gets a `pt-2`: the sheet's top edge
+still clears the chrome, and because the index column moves down with it, Chat's 68px list
+head and 68px detail band stay on one horizontal line instead of sitting 8px apart.
 
 **Page layout is declared to the shell.** A page is either a *whole sheet* (the default) or
 an *index column plus a sheet*. The second is declared with **`index`**, a `ReactNode`
@@ -649,10 +651,11 @@ negative margin, is how they sit flush against the sheet's edges.
 column and no persistent "撤销这台设备" explainer card**.
 
 - **Device rows**, `flex min-w-0 flex-1 flex-col gap-2.5`. Each `Card` forced to
-  `gap-0 rounded-lg bg-muted py-4 shadow-none` — a fill, no edge. The desktop title row (`px-5`):
-  status dot + device icon (`deviceKind.ts`'s `DEVICE_KIND_ICONS`, decorative and
-  `aria-hidden`) + name at `text-[15px] font-semibold` + mono kind chip (`rounded-md bg-muted
-  px-1.5 py-0.5 font-mono text-[10px]`) + shared `StatusMark` (online / offline / revoked) +
+  `gap-0 rounded-lg bg-field-fill py-4 shadow-none` — the shared fill, no edge. The desktop
+  title row (`px-5`): status dot + device icon (`deviceKind.ts`'s `DEVICE_KIND_ICONS`,
+  decorative and `aria-hidden`) + name at `text-[15px] font-semibold` + mono kind chip
+  (`rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-[10px]` — one fill above the row,
+  so it does not vanish into it) + shared `StatusMark` (online / offline / revoked) +
   an expand chevron (absent on `web` rows — a browser holds no projects or agents) + a
   shared-package `DropdownMenu`. The sub-row (`px-5 pt-1.5`) holds the `font-mono text-xs` meta
   (`platform · version · last active`) and the `cardSummary` line
@@ -662,7 +665,7 @@ column and no persistent "撤销这台设备" explainer card**.
 - **Expand (agentred).** Expanding an online `agentred` card mounts a relay session query
   and shows three labelled sections (`font-mono text-[10px]` labels, `gap-1.5` chips):
   **Agents that can run here** (with mono rank), **Projects** (configured →
-  `bg-muted text-muted-foreground`, unconfigured → `bg-status-waiting-bg
+  `bg-button-fill text-muted-foreground`, unconfigured → `bg-status-waiting-bg
   text-status-waiting` — path **content** is never shown, only whether it is configured,
   per the privacy boundary), and **Conversations** (relay counts plus a "View this
   machine's conversations" drill-down; an offline machine shows a destructive "Offline —
@@ -680,7 +683,7 @@ column and no persistent "撤销这台设备" explainer card**.
   device path — elements with no real backend are not rendered, not even as disabled
   controls (`devices.test.tsx`, `device-expand.test.tsx`).
 - **Mobile (`HUELX`).** The mobile row starts with the icon box (`size-9 rounded-md
-  bg-muted`), then name / kind chip / `StatusMark` / mono meta, expand and row menu — a
+  bg-button-fill`), then name / kind chip / `StatusMark` / mono meta, expand and row menu — a
   different information order and density, not a squeezed desktop row. Revoke still goes
   through the row menu + confirm dialog.
 - TopBar: nothing of its own. The total is the SideNav's Devices meta, and "is a machine
@@ -713,9 +716,11 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   `NewConversationPane` (pick an agent), then `DraftSession` (a conversation with nothing
   said yet). **Desktop needs no dialog**: this pane was already idle, and covering the screen
   to ask one question costs more than filling the space that was already there.
-  `DraftSession`'s top band **is** the detail's band (the same `SessionHeaderBand`), so the
-  page-level controls sit at its right end and `chat-chrome` is not drawn above it — sending
-  the first message swaps content inside one 68px band instead of collapsing two into one.
+  `DraftSession`'s top band **is** the detail's band (the same `SessionHeaderBand`), so
+  `chat-chrome` is not drawn above it — sending the first message swaps content inside one
+  68px band instead of collapsing two into one. None of these panes (`NewConversationPane`,
+  `ProjectAgentPane`, `DraftSession`) paints a background or a `bg-card` band of its own:
+  they are the detail, and the detail is the sheet.
   Its title reads `New chat · <agent>` until the message is handed off, then becomes
   `deriveTitle(message)` — the same value dispatch puts on the wire and the landed detail
   shows, so the title does not change again when the real detail takes over.
