@@ -71,7 +71,7 @@ export function NewConversationSheet({
           type="button"
           data-testid="sheet-from-project"
           onClick={onFromProject}
-          className="flex shrink-0 items-center gap-2.5 border-t border-border px-5 py-3.5 text-left"
+          className="flex shrink-0 items-center gap-2.5 px-5 py-3.5 text-left"
         >
           <span className="flex size-8 items-center justify-center rounded-md bg-secondary text-muted-foreground">
             <FolderTree aria-hidden="true" className="size-4" />

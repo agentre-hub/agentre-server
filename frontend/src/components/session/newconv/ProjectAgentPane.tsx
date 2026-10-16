@@ -100,7 +100,7 @@ export function ProjectAgentPane({
       data-testid="project-agent-pane"
       className="flex h-full min-h-0 flex-col bg-background"
     >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-3.5">
+      <header className="flex shrink-0 items-center gap-2 bg-card px-3 py-3.5">
         <button
           type="button"
           aria-label={t("chat.back")}
@@ -122,8 +122,8 @@ export function ProjectAgentPane({
           className={cn(
             "bg-card",
             stacked
-              ? "flex shrink-0 gap-1.5 overflow-x-auto border-b border-border px-3 py-2"
-              : "flex w-[252px] shrink-0 flex-col gap-0.5 overflow-auto border-r border-border p-2",
+              ? "flex shrink-0 gap-1.5 overflow-x-auto px-3 py-2"
+              : "flex w-[252px] shrink-0 flex-col gap-0.5 overflow-auto p-2",
           )}
         >
           {projectsPending ? (
@@ -143,12 +143,12 @@ export function ProjectAgentPane({
                 style={stacked ? undefined : { paddingLeft: 8 + depth * 14 }}
                 className={cn(
                   "flex items-center gap-2 rounded-md text-left transition-colors",
-                  stacked
-                    ? "shrink-0 border border-border px-2.5 py-1.5"
-                    : "py-1.5 pr-2",
+                  stacked ? "shrink-0 px-2.5 py-1.5" : "py-1.5 pr-2",
                   selected === project.sync_id
                     ? "bg-sidebar-selected-bg"
-                    : "hover:bg-accent",
+                    : stacked
+                      ? "bg-field-fill hover:bg-field-fill-hover"
+                      : "hover:bg-accent",
                 )}
               >
                 <ProjectGlyph
@@ -175,7 +175,7 @@ export function ProjectAgentPane({
 
         <div className="flex min-w-0 flex-1 flex-col">
           {selectedProject && (
-            <div className="flex shrink-0 items-center gap-2.5 border-b border-border bg-card px-5 py-2.5">
+            <div className="flex shrink-0 items-center gap-2.5 bg-card px-5 py-2.5">
               <ProjectGlyph
                 project={{
                   name: selectedProject.name,
@@ -268,7 +268,7 @@ function ProjectTreeSkeleton({ stacked }: { stacked: boolean }) {
           className={cn(
             "flex items-center gap-2",
             stacked
-              ? "shrink-0 rounded-md border border-border px-2.5 py-1.5"
+              ? "shrink-0 rounded-md bg-field-fill px-2.5 py-1.5"
               : "py-1.5 pr-2",
           )}
         >
@@ -317,9 +317,9 @@ function MemberGroup({
               aria-disabled={!agent.has_available_target}
               onClick={() => onPick(agent)}
               className={cn(
-                "flex w-full items-center gap-2.5 rounded-lg border border-border px-3 py-2.5 text-left transition-colors",
+                "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors",
                 agent.has_available_target
-                  ? "bg-card hover:border-ring hover:bg-accent"
+                  ? "bg-field-fill hover:bg-field-fill-hover"
                   : "cursor-not-allowed bg-secondary",
               )}
             >

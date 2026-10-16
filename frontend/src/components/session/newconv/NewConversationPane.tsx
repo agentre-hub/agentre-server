@@ -36,7 +36,7 @@ export function NewConversationPane({
       data-testid="new-conversation-pane"
       className="flex h-full min-h-0 flex-col bg-background"
     >
-      <header className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-card px-5 py-3.5">
+      <header className="flex shrink-0 flex-col gap-1.5 bg-card px-5 py-3.5">
         <div className="flex items-center gap-2.5">
           <h2 className="text-sm font-semibold text-foreground">
             {t("chat.startNew")}
@@ -72,7 +72,7 @@ export function NewConversationPane({
         type="button"
         data-testid="new-conversation-from-project"
         onClick={onFromProject}
-        className="flex shrink-0 items-center gap-2.5 border-t border-border bg-card px-5 py-3 text-left transition-colors hover:bg-accent"
+        className="flex shrink-0 items-center gap-2.5 bg-card px-5 py-3 text-left transition-colors hover:bg-accent"
       >
         <span className="flex size-7 items-center justify-center rounded-md bg-secondary text-muted-foreground">
           <FolderTree aria-hidden="true" className="size-3.5" />
