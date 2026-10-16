@@ -663,6 +663,98 @@ describe("移动端新建对话：语言/主题", () => {
   });
 });
 
+/*
+  这两屏铺满整个手机屏，壳走 ownHeader 不画顶栏、也就不替它们让安全区：
+  viewport-fit=cover 之后页头会钻到刘海/状态栏底下。与索引页头同一个让法
+  （pt-[env(safe-area-inset-top,0px)]），只在手机整屏形态；桌面右栏不让——
+  它上面是外框，不贴屏幕顶。断言沿祖先链找：让在页头本身还是它那一格整屏
+  容器上都算，只要页头确实被推到安全区下面。
+*/
+describe("移动端新建对话：顶部安全区", () => {
+  const SAFE_TOP = "pt-[env(safe-area-inset-top,0px)]";
+
+  function insetHolder(el: HTMLElement): HTMLElement | null {
+    for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+      if (typeof n.className === "string" && n.className.includes(SAFE_TOP)) {
+        return n;
+      }
+    }
+    return null;
+  }
+
+  async function openDraft() {
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
+    await screen.findByTestId("draft-session");
+    return screen.getByTestId("draft-header");
+  }
+
+  async function openProjectPane() {
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(
+      within(sheet).getByRole("button", {
+        name: "Pick an agent from a project",
+      }),
+    );
+    const pane = await screen.findByTestId("project-agent-pane");
+    return pane.querySelector("header") as HTMLElement;
+  }
+
+  it("草稿那一屏的页头让出顶部安全区", async () => {
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(insetHolder(await openDraft())).not.toBeNull();
+  });
+
+  it("「从项目里挑」那一屏的页头让出顶部安全区", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    const head = await openProjectPane();
+    expect(head).not.toBeNull();
+    expect(insetHolder(head)).not.toBeNull();
+  });
+
+  it("桌面右栏里的这两屏不让：它们不贴屏幕顶", async () => {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "New conversation" })[0],
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Pick an agent from a project",
+      }),
+    );
+    const pane = await screen.findByTestId("project-agent-pane");
+    expect(insetHolder(pane.querySelector("header") as HTMLElement)).toBeNull();
+
+    fireEvent.click(within(pane).getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: /后端 Agent/ }));
+    await screen.findByTestId("draft-session");
+    expect(insetHolder(screen.getByTestId("draft-header"))).toBeNull();
+  });
+});
+
 /**
  * 移动端的会话地址（规格 2026-09-17-chat-session-url「Mobile」）：会话号在地址上时
  * 整屏是那条会话的详情，返回回到进来时那份范围的列表。
