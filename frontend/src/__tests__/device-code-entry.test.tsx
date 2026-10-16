@@ -6,6 +6,7 @@ import { ApiError, api } from "@/lib/api";
 import { Input, ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import Device from "@/pages/Device";
+import { edgeClasses } from "./helpers/edge-classes";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -57,21 +58,24 @@ describe("设备码输入：六个真实码格", () => {
     });
   });
 
-  it("空码格静止时的边与共享 Input 是同一档", () => {
-    // 码格是空着等人填的字段：边就是它静止时唯一的轮廓。它此前用分隔线那档
-    // （亮色对卡片 1.27），比同一套界面里的输入框淡得多。不断言类名叫什么，
-    // 把共享的 Input 渲染在旁边比两者的边色类。
-    const restingEdge = (el: Element) =>
-      Array.from(el.classList).filter((c) =>
-        /^border-[a-z]+(?:-[a-z]+)*$/.test(c),
-      );
+  it("空码格静止时无边，填充与共享 Input 是同一档", () => {
+    // 码格是空着等人填的字段，按字段规则：静止时没有边，轮廓由填充给出；聚焦
+    // 时才出焦点环。不断言类名叫什么，把共享的 Input 渲染在旁边比两者的静止
+    // 填充类，并要求码格自己没有任何结构边。
+    const restingFill = (el: Element) =>
+      Array.from(el.classList).filter((c) => /^bg-[a-z]+(?:-[a-z]+)*$/.test(c));
     renderEntry();
     const codeBoxes = boxes();
     render(<Input aria-label="reference field" />);
-    const reference = restingEdge(screen.getByLabelText("reference field"));
+    const reference = screen.getByLabelText("reference field");
+    const referenceFill = restingFill(reference);
 
-    expect(reference).toHaveLength(1);
-    codeBoxes.forEach((box) => expect(restingEdge(box)).toEqual(reference));
+    expect(edgeClasses(reference)).toEqual([]);
+    expect(referenceFill.length).toBeGreaterThan(0);
+    codeBoxes.forEach((box) => {
+      expect(edgeClasses(box)).toEqual([]);
+      expect(restingFill(box)).toEqual(referenceFill);
+    });
   });
 
   it("逐格输入会大写并自动前进到下一格", () => {
