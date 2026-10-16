@@ -264,6 +264,69 @@ func TestCreateProvider_GivenNoAPIKey_ThenRejectsTheIncompleteProvider(t *testin
 	require.Error(t, err)
 }
 
+// Base URL 留空 = 走该类型的默认地址：共享表单写着「留空走默认」，桌面端的实体校验
+// 也只要名称和类型、用的时候再按类型补默认。服务端只存、只转发，不该比两端更严。
+func TestCreateProvider_GivenEmptyBaseURL_ThenPersistsItForTheDeviceToDefault(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	ctx, _ := hubtest.TxDatabase(t)
+	got, err := New().CreateProvider(ctx, ProviderWriteInput{
+		UserID: 7, Name: stringPtr("Anthropic"), Type: stringPtr("anthropic"),
+		BaseURL: stringPtr(""), APIKey: stringPtr("sk-secret"),
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, got.BaseURL)
+	assert.Empty(t, payloadString(t, saved.Payload, "base_url"))
+}
+
+func TestUpdateProvider_GivenBaseURLCleared_ThenSavesTheEmptyDefault(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	objects := mock_sync_repo.NewMockSyncObjectRepo(ctrl)
+	states := mock_sync_repo.NewMockSyncStateRepo(ctrl)
+	sync_repo.RegisterSyncObject(objects)
+	sync_repo.RegisterSyncState(states)
+	allowSeqLock(states)
+
+	objects.EXPECT().FindForUpdate(gomock.Any(), int64(7), "anthropic-main").Return(&sync_entity.SyncObject{
+		ID: 1, UserID: 7, Kind: sync_entity.KindLLMProvider, SyncID: "anthropic-main",
+		Payload: `{"name":"Anthropic","type":"anthropic","base_url":"https://proxy.example.com","api_key":"sk-old"}`,
+	}, nil)
+	states.EXPECT().NextVersion(gomock.Any(), int64(7), int64(1)).Return(int64(3), nil)
+	var saved *sync_entity.SyncObject
+	objects.EXPECT().Save(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, row *sync_entity.SyncObject) error {
+		saved = row
+		return nil
+	})
+
+	ctx, _ := hubtest.TxDatabase(t)
+	_, err := New().UpdateProvider(ctx, ProviderWriteInput{
+		UserID: 7, ProviderKey: "anthropic-main", BaseURL: stringPtr(""),
+	})
+
+	require.NoError(t, err)
+	assert.Empty(t, payloadString(t, saved.Payload, "base_url"))
+}
+
+// 留空的只有 Base URL：没有类型就不知道该走哪家的默认，仍然拒绝。
+func TestCreateProvider_GivenNoType_ThenRejectsTheIncompleteProvider(t *testing.T) {
+	_, err := New().CreateProvider(context.Background(), ProviderWriteInput{
+		UserID: 7, Name: stringPtr("Anthropic"), BaseURL: stringPtr(""), APIKey: stringPtr("sk-secret"),
+	})
+	require.Error(t, err)
+}
+
 // 账号级对象不依赖任何登记设备：用户可在 browser 先配置，后续设备再拉快照。
 func TestCreateProvider_GivenNoRegisteredDevice_ThenPersistsTheAccountObject(t *testing.T) {
 	ctrl := gomock.NewController(t)
