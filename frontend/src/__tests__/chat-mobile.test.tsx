@@ -612,6 +612,57 @@ describe("移动端对话页：顶部", () => {
   });
 });
 
+/*
+  手机上新建对话的两屏（草稿、从项目挑 Agent）各占一整屏，盖住了索引那条页头；
+  壳走 ownHeader 不画顶栏，手机上又没有侧栏——语言/主题此前在这两屏上一颗都没有。
+  它们落在各自页头的右端，与索引页头同一组（AppControls），整屏只有一份。
+*/
+describe("移动端新建对话：语言/主题", () => {
+  function expectAppControlsIn(head: HTMLElement) {
+    expect(
+      within(head).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+    expect(within(head).getByRole("button", { name: /Theme/i })).toBeTruthy();
+    // 索引那条页头此刻不在：屏上只有这一份，不是两份叠着。
+    expect(screen.getAllByRole("button", { name: /Language/i })).toHaveLength(
+      1,
+    );
+  }
+
+  it("草稿那一屏的页头带着语言/主题", async () => {
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
+    await screen.findByTestId("draft-session");
+
+    expectAppControlsIn(screen.getByTestId("draft-header"));
+  });
+
+  it("「从项目里挑」那一屏的页头带着语言/主题", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(
+      within(sheet).getByRole("button", {
+        name: "Pick an agent from a project",
+      }),
+    );
+    const pane = await screen.findByTestId("project-agent-pane");
+
+    const head = pane.querySelector("header");
+    expect(head).not.toBeNull();
+    expectAppControlsIn(head as HTMLElement);
+  });
+});
+
 /**
  * 移动端的会话地址（规格 2026-09-17-chat-session-url「Mobile」）：会话号在地址上时
  * 整屏是那条会话的详情，返回回到进来时那份范围的列表。

@@ -21,7 +21,7 @@ import {
   type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import SessionModelControl from "@/components/session/SessionModelControl";
@@ -80,6 +80,7 @@ export function DraftSession({
   initialProjectSyncId,
   onStarted,
   onBack,
+  headerActions,
 }: {
   agent: NewConvAgent;
   /** 账号里全部 Agent，供输入框的 @ 菜单用（第一句同样能提及别人）。 */
@@ -94,6 +95,11 @@ export function DraftSession({
   onStarted: (result: DispatchedSession) => void;
   /** 移动端的返回；桌面右栏里不给（左栏一直都在，没有「返回」这一说）。 */
   onBack?: () => void;
+  /**
+   * 顶带右端那一组控件。移动端这一屏盖住了索引的页头、也没有侧栏，语言/主题由宿主
+   * 摆到这里；桌面不给（它们在侧栏底部）。
+   */
+  headerActions?: ReactNode;
 }) {
   const { t } = useTranslation();
   const composerModule = useSessionComposerModule();
@@ -452,6 +458,7 @@ export function DraftSession({
             : t("chat.newSessionTitle", { name: agent.name })
         }
         meta={metaParts}
+        actions={headerActions}
       />
 
       {starting ? (
