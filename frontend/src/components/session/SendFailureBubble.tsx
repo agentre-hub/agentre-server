@@ -163,8 +163,9 @@ export default function SendFailureBubble({
         </div>
       }
     >
-      {/* 红底只占正文这一列，不把头像一起圈进去。 */}
-      <div className="rounded-lg border border-destructive/45 bg-destructive-soft px-3 py-2">
+      {/* 红底只占正文这一列，不把头像一起圈进去；红底自己就够说「没发出去」，
+          不再围一圈红边（规格 2026-10-15「无边框改版」）。 */}
+      <div className="rounded-lg bg-destructive-soft px-3 py-2">
         <p className="mb-1 flex items-center gap-1.5 text-2xs font-semibold text-destructive-text">
           <Icon aria-hidden="true" className="size-3 shrink-0" />
           {title}

@@ -19,7 +19,7 @@ import {
   within,
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
-import { useEffect, type ReactNode } from "react";
+import { useEffect } from "react";
 import {
   MemoryRouter,
   Route,
@@ -36,6 +36,7 @@ import * as accountChannel from "@/lib/accountChannel";
 import { formatRelativeTime } from "@/lib/sessionView";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
+import { edgeClasses } from "./helpers/edge-classes";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -65,7 +66,6 @@ vi.mock("@/components/session/SessionDetailView", () => ({
     conversationId: string;
     peerFingerprint?: string;
     form?: "page" | "embedded";
-    headerRight?: ReactNode;
     initialRow?: { conversation_id: string; title?: string };
     onMarkedRead?: (conversationId: string, lastReadAt: number) => void;
   }) => {
@@ -80,9 +80,6 @@ vi.mock("@/components/session/SessionDetailView", () => ({
         data-form={props.form ?? "page"}
       >
         embedded-detail
-        {/* 顶带合并之后，页面级的那簇控件由 Chat 递进详情头部的右端（真实位置由
-          session-detail.test.tsx 守）；这里只认它确实被递了进来。 */}
-        <div data-testid="embedded-header-right">{props.headerRight}</div>
         {/* 真实详情把它标在哪个身份上、以及 /v1/agent-sessions/read 回的那个时刻
           原样递上来（时刻晚于 mirrored() 的 last_message_at，因此这一行从此不再
           算未读）。 */}
@@ -414,14 +411,13 @@ describe("对话页 = 统一会话索引", () => {
   /*
     转录上方此前叠着两条带：壳的 52px 顶栏（只放一个与侧栏高亮重复的「Chat」
     标题 + 连接态 + 语言/主题）和 89px 的详情头部，合计 141px 只承载了一行标题
-    与一行 meta。两条并成一条 68px：这一页自己画顶带，页面级那簇控件（连接态 +
-    语言/主题）跟着落到右栏顶带的右端——没选中对话时是右栏自己那条，选中之后
-    就是详情头部本身，位置不跳。
+    与一行 meta。两条并成一条 68px：这一页自己画顶带，左列顶行同为 68px。
 
-    左列顶行同时抬到 68px：两列顶边因此是**同一条**横线，省下的 16px 换不来一条
-    断开的顶边。
+    无边框改版（规格 2026-10-15「对话页没有顶栏」）：语言 / 主题属于外框，不能
+    落进内容页的角上——壳在侧栏底部摆了那一对，这一页不再自己摆第二份。两条
+    顶行也不再各画一条底线，靠留白与色阶分开。
   */
-  it("桌面顶带只剩一条：左右两列顶边齐平，页面级控件在右栏顶带里", async () => {
+  it("桌面顶带：两列顶行同为 68px、不画线；语言/主题只在外框的侧栏上", async () => {
     stubApi({ mirror: [mirrored()], devices: [agentred] });
     renderChat();
 
@@ -430,28 +426,58 @@ describe("对话页 = 统一会话索引", () => {
 
     const listHead = screen.getByTestId("chat-list-head");
     expect(listHead.className).toMatch(/h-\[68px\]/);
+    expect(edgeClasses(listHead)).toEqual([]);
     const chrome = screen.getByTestId("chat-chrome");
     expect(chrome.className).toMatch(/h-\[68px\]/);
-    // 语言 / 主题在这一端仍够得着——壳不画顶栏之后它们没有别的落点。
+    expect(edgeClasses(chrome)).toEqual([]);
+    expect(chrome.className).not.toMatch(/bg-card/);
+
+    // 整页只有一对语言 / 主题，落在外框（侧栏）上，内容页里一个都没有。
+    const languages = screen.getAllByRole("button", { name: /Language/i });
+    expect(languages).toHaveLength(1);
+    expect(languages[0].closest("nav")).not.toBeNull();
+    const sheet = screen.getByTestId("app-sheet");
     expect(
-      within(chrome).getByRole("button", { name: /Language/i }),
-    ).toBeTruthy();
-    expect(within(chrome).getByRole("button", { name: /Theme/i })).toBeTruthy();
-    // 「桌面端已连接」不在这条带上了：实时性收成账号块那一个出口，机器在线数由
-    // 侧栏设备项的 2/3 与设备页说。
+      within(sheet).queryByRole("button", { name: /Language/i }),
+    ).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: /Theme/i })).toBeNull();
+    // 「桌面端已连接」也不在这条带上：实时性收成账号块那一个出口。
     expect(within(chrome).queryByText("Desktop connected")).toBeNull();
   });
 
-  it("选中一条对话：那簇控件进详情头部的右端，右栏不再多叠一条带", async () => {
+  /*
+    页面布局由外壳声明（规格 2026-10-15「页面布局由外壳声明」）：会话列表列是
+    索引列，交给壳摆在外框上；详情才是内容页。列自己不再涂 bg-card。
+  */
+  it("会话列表列落在外框的索引槽里，详情在内容页里", async () => {
+    stubApi({ mirror: [mirrored()], devices: [agentred] });
+    renderChat();
+
+    await screen.findByRole("link", { name: /重构登录页/ });
+    const listCol = screen.getByTestId("chat-list-col");
+    expect(screen.getByTestId("app-index").contains(listCol)).toBe(true);
+    expect(listCol.className).toContain("bg-chrome");
+    expect(listCol.className).not.toMatch(/bg-card/);
+    expect(edgeClasses(listCol)).toEqual([]);
+
+    const sheet = screen.getByTestId("app-sheet");
+    expect(sheet.contains(listCol)).toBe(false);
+    expect(sheet.contains(screen.getByTestId("chat-detail"))).toBe(true);
+  });
+
+  it("选中一条对话：详情头部里没有语言/主题，右栏也不再多叠一条带", async () => {
     stubApi({ mirror: [mirrored()], devices: [agentred] });
     renderChat();
 
     fireEvent.click(await screen.findByRole("link", { name: /重构登录页/ }));
-    const slot = await screen.findByTestId("embedded-header-right");
+    await screen.findByTestId("embedded-session-detail");
+    const sheet = screen.getByTestId("app-sheet");
     expect(
-      within(slot).getByRole("button", { name: /Language/i }),
-    ).toBeTruthy();
-    expect(within(slot).queryByText("Desktop connected")).toBeNull();
+      within(sheet).queryByRole("button", { name: /Language/i }),
+    ).toBeNull();
+    expect(
+      screen.getAllByRole("button", { name: /Language/i })[0].closest("nav"),
+    ).not.toBeNull();
     // 详情头部自己就是顶带，右栏不该再单画一条——那正是要消掉的那 52px。
     expect(screen.queryByTestId("chat-chrome")).toBeNull();
   });
@@ -854,6 +880,8 @@ describe("对话页:机器轴", () => {
     // 说出来：那一条为什么没进账号。
     const alert = await screen.findByTestId("index-save-error");
     expect(alert.textContent).toContain("临时跑一下 benchmark");
+    // 失败条靠红底说话，不再围一圈红边（无边框改版）。
+    expect(edgeClasses(alert)).toEqual([]);
     // 行回到「还没保存」那一档 —— 账号里确实没有它，界面不装作有。
     expect(screen.getByTestId("row-save-77")).toBeTruthy();
 
@@ -3011,6 +3039,8 @@ describe("对话页：索引取数失败", () => {
     renderChat();
 
     const banner = await screen.findByTestId("index-load-error");
+    // 失败条靠红底说话，不再围一圈红边（无边框改版）。
+    expect(edgeClasses(banner)).toEqual([]);
     const before = indexRequests.length;
     await act(async () => {
       within(banner).getByRole("button").click();

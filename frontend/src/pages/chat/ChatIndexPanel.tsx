@@ -168,7 +168,7 @@ export function ChatIndexPanel({
     <div
       role="alert"
       data-testid="index-load-error"
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-destructive/35 bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
     >
       <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
       <span className="min-w-0 flex-1">{indexErrorMessage}</span>
@@ -202,7 +202,7 @@ export function ChatIndexPanel({
     <div
       role="alert"
       data-testid="index-save-error"
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-destructive/35 bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-destructive-soft px-3 py-2.5 text-[12.5px] text-destructive-text"
     >
       <TriangleAlert aria-hidden="true" className="size-4 shrink-0" />
       <span className="min-w-0 flex-1">

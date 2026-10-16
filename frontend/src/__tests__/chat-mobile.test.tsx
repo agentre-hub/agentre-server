@@ -22,6 +22,7 @@ import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
+import { edgeClasses } from "./helpers/edge-classes";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -589,6 +590,25 @@ describe("移动端对话页：顶部", () => {
     expect(head.querySelectorAll("button").length).toBeGreaterThan(1);
     // 这一条顶栏不走壳，安全区得自己让：少了它，刘海机上内容会伸到状态栏底下。
     expect(head.className).toContain("pt-[env(safe-area-inset-top,0px)]");
+  });
+
+  /*
+    无边框改版（规格 2026-10-15 决策 3）：手机上顶栏落在外框色上，与下面那张铺满的
+    内容页靠色阶分开，不画底线。语言 / 主题仍在这一带里——手机上没有侧栏接住它们。
+  */
+  it("顶栏在外框色上、不画线，语言/主题仍够得着", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    await screen.findByText("等你批");
+    const head = screen.getByTestId("chat-mobile-header");
+    expect(edgeClasses(head)).toEqual([]);
+    expect(head.className).toContain("bg-chrome");
+    expect(head.className).not.toMatch(/bg-card/);
+    expect(
+      within(head).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+    expect(within(head).getByRole("button", { name: /Theme/i })).toBeTruthy();
   });
 });
 

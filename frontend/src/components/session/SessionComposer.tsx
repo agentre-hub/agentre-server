@@ -275,7 +275,7 @@ export default function SessionComposer({
         <p
           role="status"
           data-testid="composer-local-command-unsupported"
-          className="border-t border-border px-3.5 py-1.5 text-xs text-muted-foreground"
+          className="px-3.5 py-1.5 text-xs text-muted-foreground"
         >
           {t("composer.localCommandUnsupported")}
         </p>

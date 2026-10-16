@@ -103,7 +103,7 @@ export default function DecisionPanel({
           {handledRequestId && (
             <p
               role="status"
-              className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-muted-foreground"
+              className="rounded-lg bg-field-fill px-3 py-2 text-sm text-muted-foreground"
             >
               {t("session.decision.alreadyHandled")}
             </p>

@@ -1288,7 +1288,7 @@ function LoadMore({
       data-testid="index-load-more"
       disabled={loading}
       onClick={onLoadMore}
-      className="rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-60"
+      className="rounded-md bg-button-fill px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-button-fill-hover disabled:cursor-default disabled:opacity-60"
     >
       {t(
         loading
@@ -1313,7 +1313,7 @@ function LoadMore({
       <div
         role="alert"
         data-testid="index-load-more-failed"
-        className="mt-1.5 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive-soft px-2.5 py-2 text-xs text-destructive-text"
+        className="mt-1.5 flex items-center gap-2 rounded-lg bg-destructive-soft px-2.5 py-2 text-xs text-destructive-text"
       >
         <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1">
