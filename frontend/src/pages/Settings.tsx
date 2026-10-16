@@ -5,6 +5,8 @@ import {
   Alert,
   AlertDescription,
   Button,
+  SegmentedControl,
+  SegmentedControlItem,
 } from "@agentre-hub/agentre-ui";
 import { Cloud, Laptop } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -128,25 +130,18 @@ export default function Settings() {
   return (
     <AppShell title={t("nav.settings")}>
       <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-4">
-        <div
-          role="tablist"
+        <SegmentedControl
           aria-label={t("settings.title")}
-          className="flex flex-wrap gap-2"
+          value={section}
+          onValueChange={(next) => setSection(sectionFromParam(next))}
+          className="flex-wrap self-start"
         >
           {SECTIONS.map((key) => (
-            <Button
-              key={key}
-              type="button"
-              role="tab"
-              aria-selected={section === key}
-              variant={section === key ? "default" : "outline"}
-              size="sm"
-              onClick={() => setSection(key)}
-            >
+            <SegmentedControlItem key={key} value={key}>
               {t(`settings.tabs.${key}`)}
-            </Button>
+            </SegmentedControlItem>
           ))}
-        </div>
+        </SegmentedControl>
 
         {syncedDevices === 0 && section !== "privacy" ? (
           <Alert>
@@ -178,7 +173,7 @@ export default function Settings() {
             // LLM 供应商页与机器无关，不受此限。
             <>
               {renderHeader(null)}
-              <div className="rounded-lg border border-border bg-card">
+              <div className="rounded-lg bg-raised">
                 <EmptyState
                   icon={Laptop}
                   testId="settings-backends-no-device"

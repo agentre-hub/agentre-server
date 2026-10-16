@@ -8,6 +8,7 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { edgeClasses } from "./helpers/edge-classes";
 import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
 import { api } from "@/lib/api";
@@ -116,6 +117,21 @@ beforeEach(async () => {
 });
 
 describe("设置 · 隐私", () => {
+  it("活动统计的卡片是填充块：不画边与分隔线", async () => {
+    serve();
+    renderSettings("/settings?tab=privacy");
+    const panel = await screen.findByTestId("privacy-activity-panel");
+    const saved = screen.getByTestId("privacy-saved-conversations");
+    for (const card of [panel, saved]) {
+      // 共享包 Switch 自带 `border-transparent`（几何用，不可见），不是结构线。
+      const clone = card.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('[role="switch"]').forEach((el) => el.remove());
+      const drawn = edgeClasses(clone);
+      expect(drawn).toEqual([]);
+      expect(card.className).toMatch(/\bbg-raised\b/);
+    }
+  });
+
   it("是第三个页签，且只有打开它才去读统计设置", async () => {
     serve();
     renderSettings();

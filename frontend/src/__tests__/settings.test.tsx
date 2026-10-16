@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { edgeClasses } from "./helpers/edge-classes";
 import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
 import * as accountChannel from "@/lib/accountChannel";
@@ -80,6 +81,22 @@ beforeEach(async () => {
 });
 
 describe("Settings", () => {
+  it("renders the section row as a borderless segmented control that arrow keys operate", async () => {
+    renderSettings();
+    const providers = await screen.findByRole("tab", { name: "LLM providers" });
+    const list = providers.closest('[role="tablist"]') as HTMLElement;
+    expect(list.getAttribute("data-slot")).toBe("segmented-control");
+    expect(edgeClasses(list)).toEqual([]);
+
+    providers.focus();
+    fireEvent.keyDown(providers, { key: "ArrowRight" });
+    const backends = screen.getByRole("tab", { name: "Agent backends" });
+    await waitFor(() =>
+      expect(backends.getAttribute("aria-selected")).toBe("true"),
+    );
+    expect(document.activeElement).toBe(backends);
+  });
+
   it("contains only the LLM provider and Agent backend sections backed by shared panels", async () => {
     renderSettings();
 
