@@ -1046,7 +1046,11 @@ describe("对话页:机器轴", () => {
     );
 
     await waitFor(() => expect(screen.queryByText("重构登录页")).toBeNull());
-    expect(screen.getByText("临时跑一下 benchmark")).toBeTruthy();
+    // 「重构登录页」消失只说明搜索请求已经下推、列表被清过一遍；命中项是那次请求
+    // 回来之后才重新落进去的。同步 getBy 会正好落在清空与落回之间（CI 上偶发，
+    // 报的是「找不到临时跑一下 benchmark」，而失败时 DOM 里其实已经有它）。
+    // 等命中项出现，判据不变：被筛掉的那条不回来，该回来的那条在。
+    expect(await screen.findByText("临时跑一下 benchmark")).toBeTruthy();
   });
 
   it("机器搜索命中 daemon 新标题时，仍从不带搜索的账号镜像识别已保存", async () => {
