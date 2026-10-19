@@ -22,6 +22,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import DeleteSessionDialog from "@/components/session/DeleteSessionDialog";
 import SessionIndex from "@/components/session/SessionIndex";
+import { edgeClasses } from "./helpers/edge-classes";
 import { formatRelativeTime, matchesSessionFilter } from "@/lib/sessionView";
 import i18n from "@/i18n";
 import type { MirrorIndexRow } from "@/pages/chat/chatRows";
@@ -2316,6 +2317,8 @@ describe("会话索引：空态与失败的出路", () => {
     // 的状态点，不再兼职表达「这次操作失败了」。
     expect(bar.className).toContain("destructive");
     expect(bar.className).not.toContain("status-error");
+    // 失败条与里面那枚重试都不描边：红底与按钮填充就够分开（无边框改版）。
+    expect(edgeClasses(bar)).toEqual([]);
     within(bar).getByTestId("index-load-more").click();
     expect(onLoadMore).toHaveBeenCalledOnce();
   });

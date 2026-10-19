@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { CircleAlert, Lock } from "lucide-react";
 
 import {
-  cn,
   QueuedMessagesBar,
   type ChatComposerHandle,
   type ChatComposerSubmit,
@@ -170,29 +169,28 @@ export default function SessionComposerBand({
   if (status === "loggedOut") return null;
 
   return (
-    /* 边界跟随贴底（规格 2026-08-23 决策 6）：贴底时读作一整片，未贴底时一条
-         分隔线加一段向上渐隐，把末行压掉一半说「下面还有」。常驻边框只办得到
-         「锚住输入框」，办不到「说出内容被截断了」。 */
+    /* 边界跟随贴底（规格 2026-08-23 决策 6）：贴底时读作一整片，未贴底时一段
+         向上渐隐把末行压掉一半，说「下面还有」。
+
+         不画分隔线、不自涂底色（规格 2026-10-15「无边框改版」）：输入带与转录同在
+         一张内容页上，「内容被截断了」由渐隐独自说；渐隐因此从内容页的底色淡出。 */
     <div
       data-testid="session-composer-band"
       data-scrolled={atBottom ? "false" : "true"}
-      className={cn(
-        "relative shrink-0 bg-card px-5 pt-2 pb-3",
-        !atBottom && "border-t border-border",
-      )}
+      className="relative shrink-0 px-5 pt-2 pb-3"
     >
       {atBottom ? null : (
         <div
           data-testid="session-composer-band-fade"
           aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 -top-3.5 h-3.5 bg-gradient-to-t from-background to-transparent"
+          className="pointer-events-none absolute inset-x-0 -top-3.5 h-3.5 bg-gradient-to-t from-sheet to-transparent"
         />
       )}
       <div className="mx-auto w-full max-w-measure">
         {composeReadonly ? (
           <p
             data-testid="session-compose-readonly"
-            className="flex items-center gap-2 rounded-lg border border-dashed border-border-strong bg-secondary px-3 py-2.5 text-xs text-muted-foreground"
+            className="flex items-center gap-2 rounded-lg bg-field-fill px-3 py-2.5 text-xs text-muted-foreground"
           >
             {status === "deviceRevoked" ? (
               <Lock aria-hidden="true" className="size-3.5 shrink-0" />
@@ -250,7 +248,7 @@ export default function SessionComposerBand({
         ) : (
           <div
             aria-hidden="true"
-            className="h-[86px] rounded-lg border border-border bg-secondary"
+            className="h-[86px] rounded-lg bg-field-fill"
           />
         )}
       </div>

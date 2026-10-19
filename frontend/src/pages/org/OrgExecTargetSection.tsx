@@ -340,7 +340,7 @@ export function OrgExecTargetSection(props: OrgExecTargetSectionProps) {
           {t("org.detail.execTargets.empty")}
         </p>
       ) : (
-        <div className="flex min-w-0 flex-col overflow-hidden rounded-md border border-border">
+        <div className="flex min-w-0 flex-col gap-1 overflow-hidden rounded-md">
           {total === 1 ? (
             // 单档没有次序可言：不进 DndContext，也就不画拖拽柄。
             <OrgExecTargetRow
@@ -720,7 +720,7 @@ function SkillPackRow({
         aria-label={t("org.detail.execTargets.skills.stateFor", {
           name: pack.name,
         })}
-        className="flex shrink-0 overflow-hidden rounded-md border border-border"
+        className="flex shrink-0 overflow-hidden rounded-md bg-field-fill"
       >
         {TRI_STATES.map((option) => (
           <button

@@ -59,6 +59,10 @@ export interface OrgIndexPanelProps {
   maps: OrgIdMaps;
   selection: OrgSelection;
   onSelect: (selection: OrgSelection) => void;
+  /** 移动端工具条「+」改成两项菜单（新建 Agent / 新建顶层部门）：桌面空详情区
+   * 那两个按钮在移动端没有落点，菜单不增加工具栏宽度（决策 5）。桌面端不变，
+   * 仍是点一下直接新建 Agent。 */
+  isMobile: boolean;
   /** 不带 id = 顶层部门；带 id = 挂在那个部门下的子部门。 */
   onCreateDepartment: (parentDepartmentId?: number) => void;
   /** 不带 id = 由对话框自己挑部门；带 id = 直接落在那个部门里。 */
@@ -175,7 +179,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
       {/* 工具条只有一行：搜索框 + **一个**筛选入口 + ＋（决策 12「筛选不常驻占位」，
           mockup `.idx-search` 也是这三样）。命中之后才多出下面那排可清除的 chip。 */}
       <div
-        className="flex shrink-0 flex-col gap-2 border-b border-sidebar-border p-2.5"
+        className="flex shrink-0 flex-col gap-2 p-2.5"
         data-testid="org-index-toolbar"
       >
         <div className="flex items-center gap-1.5">
@@ -219,16 +223,46 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
               },
             ]}
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={t("org.index.newAgent")}
-            title={t("org.index.newAgent")}
-            onClick={() => props.onCreateAgent()}
-          >
-            <Plus className="size-4" aria-hidden="true" />
-          </Button>
+          {props.isMobile ? (
+            // 桌面那两个空详情区按钮（新建部门 / 新建 Agent）移动端没有落点——
+            // 详情区此刻要么不存在（没选中，索引升整页）要么被选中行占满。工具条
+            // 「+」因此在移动端多担一层：不再直接建 Agent，而是先弹两项菜单。
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={t("org.index.addMenuAria")}
+                  title={t("org.index.addMenuAria")}
+                  data-testid="org-index-add-trigger"
+                >
+                  <Plus className="size-4" aria-hidden="true" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => props.onCreateAgent()}>
+                  <Plus className="size-3" aria-hidden="true" />
+                  {t("org.index.newAgent")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => props.onCreateDepartment()}>
+                  <FolderPlus className="size-3" aria-hidden="true" />
+                  {t("org.index.newTopLevelDepartment")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("org.index.newAgent")}
+              title={t("org.index.newAgent")}
+              onClick={() => props.onCreateAgent()}
+            >
+              <Plus className="size-4" aria-hidden="true" />
+            </Button>
+          )}
         </div>
         {filterChips.length > 0 && (
           <div
@@ -243,7 +277,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                   label: condition.label,
                 })}
                 onClick={condition.clear}
-                className="inline-flex items-center gap-1 rounded-full border border-primary bg-primary-soft px-2 py-0.5 font-mono text-2xs text-primary-text"
+                className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2 py-0.5 font-mono text-2xs text-primary-text"
               >
                 <span>{condition.label}</span>
                 <X className="size-3" aria-hidden="true" />
@@ -458,10 +492,10 @@ function FilterEntry(props: {
           className={cn(
             // h-8 与搜索框、＋ 同高：三样现在同排（mockup 的 .field / .sq 也都是 30px），
             // 差一档就看得出来这一行没对齐。
-            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-2xs outline-none transition-colors hover:bg-accent focus-visible:focus-outline",
+            "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-2xs outline-none transition-colors focus-visible:focus-outline",
             active
-              ? "border-primary bg-primary-soft text-primary-text"
-              : "border-border text-muted-foreground",
+              ? "bg-primary-soft text-primary-text"
+              : "bg-button-fill text-muted-foreground hover:bg-button-fill-hover",
           )}
         >
           <SlidersHorizontal className="size-3.5" aria-hidden="true" />

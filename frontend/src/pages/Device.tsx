@@ -164,7 +164,7 @@ export default function Device() {
 
   return (
     <AuthLayout>
-      <div className="w-full max-w-[496px] rounded-lg border border-border bg-card p-6 sm:p-10">
+      <div className="w-full max-w-[496px] rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10">
         <form onSubmit={onSubmitCode} className="flex flex-col gap-[26px]">
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center gap-[7px] text-primary-text">

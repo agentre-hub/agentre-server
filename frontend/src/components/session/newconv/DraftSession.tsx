@@ -21,15 +21,17 @@ import {
   type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import Transcript from "@/components/session/Transcript";
 import { pendingUserMessage } from "@/components/session/transcriptFrame";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
 import { ApiError } from "@/lib/api";
@@ -80,7 +82,7 @@ export function DraftSession({
   initialProjectSyncId,
   onStarted,
   onBack,
-  headerRight,
+  headerActions,
 }: {
   agent: NewConvAgent;
   /** 账号里全部 Agent，供输入框的 @ 菜单用（第一句同样能提及别人）。 */
@@ -96,14 +98,18 @@ export function DraftSession({
   /** 移动端的返回；桌面右栏里不给（左栏一直都在，没有「返回」这一说）。 */
   onBack?: () => void;
   /**
-   * 宿主页面级的那簇控件（Chat 桌面档的连接态 + 语言/主题）。
-   *
-   * 与会话详情的 `headerRight` 同一件事：草稿这条带就是右栏的顶带，宿主不再另画
-   * 一条 chat-chrome，那簇控件因此落在这一行的最右端。
+   * 顶带右端那一组控件。移动端这一屏盖住了索引的页头、也没有侧栏，语言/主题由宿主
+   * 摆到这里；桌面不给（它们在侧栏底部）。
    */
-  headerRight?: ReactNode;
+  headerActions?: ReactNode;
 }) {
   const { t } = useTranslation();
+  /**
+   * 移动端整屏：与会话详情的沉浸形态同一层头部（规格 2026-09-21-server-mobile-gaps
+   * 决策 3）。壳的顶栏与底部 tab 都不在，副行因此要说全 Agent · 项目 · 机器，且窄屏
+   * 只截断不收起；标题只写「新对话」，Agent 名已经在副行上。
+   */
+  const oneRow = useIsMobile();
   const composerModule = useSessionComposerModule();
   /**
    * 输入框整条草稿的句柄（那句话 + 贴的图）。
@@ -373,9 +379,10 @@ export function DraftSession({
   );
 
   /*
-    meta 行：与详情那条同序（Agent → 项目），说得出哪几维就摆哪几维。机器不进这一行
-    ——它在下面那枚可点的 chip 上，而那枚 chip 是**选择器**，不是一段陈述（桌面端
-    空会话态同此：机器在 NewSessionExecTargetLine 上，不在头部）。
+    meta 行：与详情那条同序（Agent → 项目），说得出哪几维就摆哪几维。桌面上机器不进
+    这一行——它在下面那枚可点的 chip 上，而那枚 chip 是**选择器**，不是一段陈述（桌面
+    端空会话态同此：机器在 NewSessionExecTargetLine 上，不在头部）。移动端这一层就是
+    整屏唯一的头部，副行与详情同样说到机器（选中的那一档必然可用，即在线）。
   */
   const metaParts: SessionHeaderMetaPart[] = [
     {
@@ -383,7 +390,10 @@ export function DraftSession({
       node: (
         <span
           data-testid="draft-header-status"
-          className="inline-flex shrink-0 items-center gap-1"
+          className={cn(
+            "inline-flex items-center gap-1",
+            oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
+          )}
         >
           {/* 交出去那一刻就转绿：转录里三点已经在转了，两处说的是同一件事。 */}
           <StatusDot
@@ -392,7 +402,7 @@ export function DraftSession({
             })}
             size="xs"
           />
-          {agent.name}
+          {oneRow ? <span className="truncate">{agent.name}</span> : agent.name}
         </span>
       ),
     },
@@ -401,30 +411,39 @@ export function DraftSession({
     metaParts.push({
       key: "project",
       // 与详情那条同一个断点：项目在别处（下面那枚 chip、左栏的行上）还说得出。
-      hideAt: "@max-[420px]/header:hidden",
-      node: <span className="truncate">{projectName}</span>,
+      hideAt: oneRow ? undefined : "@max-[420px]/header:hidden",
+      node: (
+        <span className={cn("truncate", oneRow && "min-w-0")}>
+          {projectName}
+        </span>
+      ),
+    });
+  }
+  if (oneRow && chosen) {
+    metaParts.push({
+      key: "machine",
+      node: <SessionMachineMeta name={chosen.device_name} online truncate />,
     });
   }
 
   return (
     <div
       data-testid="draft-session"
-      className="flex h-full min-h-0 flex-col bg-background"
+      // 不自涂底色：与落地后的会话详情同一张纸——壳给的内容页（规格 2026-10-15）。
+      className="flex h-full min-h-0 flex-col"
     >
       {/*
         顶带与会话详情**是同一副**（共享包的 SessionHeaderBand）：固定 68px、同一档
         头像、两行标题的高度、一行 mono meta。桌面端 chat-panel-header 的「四态同一
         副外壳」就是这一条 —— 这里此前是另一副（py-3 + 24px 头像），右栏顶上还另叠
         着一条 chat-chrome，第一句一发出去两条塌成一条，顶部 116px → 68px、头像
-        24→32，转录整体上跳。
-
-        右端收的是宿主那簇页面级控件：草稿这条带**就是**右栏的顶带，与详情落地后
-        那条同一个位置，控件因此不跳。
+        24→32，转录整体上跳。草稿这条带**就是**右栏的顶带，与详情落地后那条同一个
+        位置。
       */}
       <SessionHeaderBand
         testId="draft-header"
         metaTestId="draft-header-meta"
-        className="border-b border-border bg-card px-5"
+        className="px-5"
         leading={
           onBack && (
             <button
@@ -458,10 +477,12 @@ export function DraftSession({
           // 那个名字 —— 摆一个空标题不是更诚实,只是更少信息。
           starting?.text.trim()
             ? deriveTitle(starting.text)
-            : t("chat.newSessionTitle", { name: agent.name })
+            : oneRow
+              ? t("chat.draftTitle")
+              : t("chat.newSessionTitle", { name: agent.name })
         }
         meta={metaParts}
-        actions={headerRight}
+        actions={headerActions}
       />
 
       {starting ? (
@@ -539,7 +560,7 @@ export function DraftSession({
         </div>
       )}
 
-      <div className="shrink-0 border-t border-border bg-card px-5 py-3">
+      <div className="shrink-0 px-5 py-3">
         <div className="mx-auto flex w-full max-w-measure flex-col gap-2.5">
           {/* 与会话详情**同一个**输入框组件：第一句和第二句该是同一件事 ——
               @ 提及、/ 命令、快捷键提示、发送键的启停规则，一份实现。
@@ -604,7 +625,7 @@ export function DraftSession({
                 startError ? (
                   <p
                     role="alert"
-                    className="border-t border-border px-3.5 py-1.5 text-xs text-destructive-text"
+                    className="px-3.5 py-1.5 text-xs text-destructive-text"
                   >
                     {startError instanceof DispatchRunError
                       ? t("chat.remoteStartFailed", {
@@ -758,7 +779,7 @@ function ExecTargetLine({
                   <button
                     type="button"
                     data-testid="draft-exec-target-auto"
-                    className="mt-1 w-full border-t border-border px-2 py-1.5 text-left text-2xs text-primary-text hover:bg-accent"
+                    className="mt-1 w-full px-2 py-1.5 text-left text-2xs text-primary-text hover:bg-accent"
                     onClick={() => {
                       onAuto();
                       setOpen(false);
@@ -889,7 +910,7 @@ function ProjectChip({
           ))}
         </ul>
         {plan.projects.length === 0 && (
-          <p className="border-t border-border px-2 pb-1 pt-1.5 text-[10.5px] leading-[1.55] text-muted-foreground">
+          <p className="px-2 pb-1 pt-1.5 text-[10.5px] leading-[1.55] text-muted-foreground">
             {t("chat.noProjectsOnMachine")}
           </p>
         )}
@@ -916,7 +937,7 @@ function PickedTargetUnavailable({
   return (
     <div
       data-testid="draft-picked-target-unavailable"
-      className="flex max-w-measure flex-col gap-1.5 rounded-md border border-status-waiting bg-status-waiting-bg px-3 py-2.5 text-left"
+      className="flex max-w-measure flex-col gap-1.5 rounded-md bg-status-waiting-bg px-3 py-2.5 text-left"
     >
       <p className="text-xs font-semibold text-status-waiting-text">
         {t("chat.pickedTargetUnavailable", {
@@ -948,7 +969,7 @@ function AllTargetsUnavailable({
   return (
     <div
       data-testid="draft-all-unavailable"
-      className="flex max-w-measure flex-col gap-1.5 rounded-md border border-destructive bg-destructive-soft px-3 py-2.5 text-left"
+      className="flex max-w-measure flex-col gap-1.5 rounded-md bg-destructive-soft px-3 py-2.5 text-left"
     >
       <p className="text-xs font-semibold text-foreground">
         {t("chat.allUnavailableTitle", { agent: agentName })}

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import { cn } from "@agentre-hub/agentre-ui";
 
+import { useIsMobile } from "@/components/use-is-mobile";
 import { buildHeatGrid, type HeatDay, type HeatLevel } from "@/lib/heatmap";
 
 /** 一年 = 53 列，13px 格 + 3px 缝隙 = 845px 网格。列数的上限，不是默认值。 */
@@ -93,9 +94,13 @@ export function useHeatmapWeeks(): {
   return { ref, weeks };
 }
 
-/** 五档色阶的类名。索引就是档位，heat-0 = 那天没有活动（可见的浅灰，不是透明）。 */
+/**
+ * 五档色阶的类名。索引就是档位。heat-0 = 那天没有活动：取共享包相对前景的
+ * 按钮填充（前景 8%），随脚下卡片明暗；固定色 --heat-0 假定背后是白卡片，
+ * 落在填充卡片上深色主题会消失。
+ */
 const LEVEL_CLASS: Record<HeatLevel, string> = {
-  0: "bg-heat-0",
+  0: "bg-button-fill",
   1: "bg-heat-1",
   2: "bg-heat-2",
   3: "bg-heat-3",
@@ -105,6 +110,27 @@ const LEVEL_CLASS: Record<HeatLevel, string> = {
 const CELL_CLASS = "size-[13px] shrink-0 rounded-[2px]";
 /** 一列的步距：13px 格 + 3px 缝隙。月份标签按它定位。 */
 const COLUMN_PITCH = CELL_PX + CELL_GAP_PX;
+
+/**
+ * 月份标签要占的宽：「Sep」「12月」都是三个字，text-2xs (11px) 下每个字不超过
+ * 1em，再留一个格缝的余量 = 36px。按列步距折算成列数（向上取整 = 3 列）。
+ */
+const MONTH_LABEL_PX = 3 * 11 + CELL_GAP_PX;
+const MONTH_LABEL_MIN_COLUMNS = Math.ceil(MONTH_LABEL_PX / COLUMN_PITCH);
+
+/**
+ * 去掉放不下的月份标签：离下一只不到 `MONTH_LABEL_MIN_COLUMNS` 列的那只不画。
+ *
+ * 只有最左边那只会撞上——网格的第一列往往落在某个月的尾巴上，下一个月一两列
+ * 之后就开始了，两只标签叠成一团（2026-10 量到「10月」压着「11月」）。丢前面那只：
+ * 它是个残月，只占一两列，后面那个才是完整的月。
+ */
+function visibleMonths<T extends { column: number }>(months: T[]): T[] {
+  return months.filter((m, i) => {
+    const next = months[i + 1];
+    return !next || next.column - m.column >= MONTH_LABEL_MIN_COLUMNS;
+  });
+}
 
 /**
  * 鼠标停在哪一格。
@@ -147,7 +173,7 @@ function HeatTooltip({
       data-testid="heat-tooltip"
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute z-10 -translate-y-full rounded-md border border-border bg-popover px-2 py-1 text-2xs whitespace-nowrap text-popover-foreground shadow-md",
+        "pointer-events-none absolute z-10 -translate-y-full rounded-md bg-popover px-2 py-1 text-2xs whitespace-nowrap text-popover-foreground shadow-md",
         !nearStart && !nearEnd && "-translate-x-1/2",
       )}
       style={
@@ -209,6 +235,18 @@ export function Heatmap({
     return (day: string) => fmt.format(new Date(`${day}T00:00:00Z`));
   }, [i18n.resolvedLanguage]);
 
+  // `dateStyle` 与 `weekday` 不能同时给 Intl（会抛 TypeError），所以星期单独
+  // 一套格式化器，两份拼进 `readout.date` 这个 key 里——括号全半角由 locale 定，
+  // 不在这里手写。只给移动端的点按读数用，桌面悬停（`dayLabel`）不变。
+  const weekdayLabel = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(i18n.resolvedLanguage ?? "en", {
+      weekday: "short",
+      timeZone: "UTC",
+    });
+    return (day: string) => fmt.format(new Date(`${day}T00:00:00Z`));
+  }, [i18n.resolvedLanguage]);
+
+  const isMobile = useIsMobile();
   const [hover, setHover] = useState<HoverCell | null>(null);
   /**
    * 鼠标停的那一格，从网格里现读。列数一变（改宽了）旧坐标可能已经不在网格里，
@@ -216,6 +254,34 @@ export function Heatmap({
    * 同样不报：给未来报一句「0 条」比不报更糟。
    */
   const hoveredCell = hover ? grid.weeks[hover.column]?.[hover.row] : undefined;
+
+  /**
+   * 移动端点按的那一格。触屏没有 hover，手指按下去反而会挡住浮层（设计决策
+   * 8），所以换成图下方固定的一行，点一格更新一次，不需要再点别处关闭。
+   *
+   * 记的是**那一天**而不是列/行坐标：与悬停不同，点过的读数会一直留着，而列数
+   * 随宽度变（转屏）、截止日会往后走，同一坐标上换成了别的日子，读数就会无声地
+   * 报另一天。按日子回网格里找；那天已经不在网格里就回到提示。
+   */
+  const [tapDay, setTapDay] = useState<string | null>(null);
+  const tappedCell = useMemo(
+    () =>
+      tapDay === null
+        ? undefined
+        : grid.weeks.flat().find((cell) => cell.day === tapDay),
+    [grid, tapDay],
+  );
+  const readoutText = useMemo(() => {
+    if (!tappedCell?.day) return t("overview.stats.heatmap.readout.hint");
+    const detail =
+      tappedCell.count > 0
+        ? t("overview.stats.heatmap.readout.count", { count: tappedCell.count })
+        : t("overview.stats.heatmap.readout.empty");
+    return `${t("overview.stats.heatmap.readout.date", {
+      date: dayLabel(tappedCell.day),
+      weekday: weekdayLabel(tappedCell.day),
+    })} · ${detail}`;
+  }, [tappedCell, dayLabel, weekdayLabel, t]);
 
   const weekdayRows: Record<number, string> = {
     1: t("overview.stats.heatmap.weekday.mon"),
@@ -234,7 +300,7 @@ export function Heatmap({
         className="relative h-[15px] shrink-0"
         style={{ marginLeft: COLUMN_PITCH + 12 }}
       >
-        {grid.months.map((m) => (
+        {visibleMonths(grid.months).map((m) => (
           <span
             key={`${m.year}-${m.month}`}
             className="absolute top-0 text-2xs whitespace-nowrap text-muted-foreground"
@@ -288,13 +354,20 @@ export function Heatmap({
                   data-day={cell.day}
                   data-level={String(cell.level)}
                   onMouseEnter={() => setHover({ column: index, row })}
-                  className={cn(CELL_CLASS, LEVEL_CLASS[cell.level])}
+                  onClick={isMobile ? () => setTapDay(cell.day) : undefined}
+                  className={cn(
+                    CELL_CLASS,
+                    LEVEL_CLASS[cell.level],
+                    isMobile &&
+                      tappedCell?.day === cell.day &&
+                      "ring-2 ring-primary",
+                  )}
                 />
               ),
             )}
           </div>
         ))}
-        {hover && hoveredCell?.day ? (
+        {!isMobile && hover && hoveredCell?.day ? (
           <HeatTooltip
             hover={hover}
             weeks={weeks}
@@ -302,6 +375,14 @@ export function Heatmap({
           />
         ) : null}
       </div>
+      {isMobile ? (
+        <p
+          data-testid="heatmap-readout"
+          className="text-2xs text-muted-foreground"
+        >
+          {readoutText}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -170,6 +170,30 @@ describe("token role guardrail", () => {
       "inside a template literal",
       'export const c = `flex ${"x"} hover:bg-secondary`;',
     ],
+    [
+      "a divider-coloured edge",
+      `export const a = <div className="border-b border-border" />;`,
+    ],
+    [
+      "a single-sided divider-coloured edge",
+      `export const a = <div className="border-l-sidebar-border" />;`,
+    ],
+    [
+      "a divide utility between rows",
+      `export const a = <ul className="divide-y divide-border" />;`,
+    ],
+    [
+      "a field edge",
+      `export const a = <div className="border border-field-border" />;`,
+    ],
+    [
+      "an input-coloured edge",
+      `export const a = <div className="dark:border-input" />;`,
+    ],
+    [
+      "a structural edge inside a template literal",
+      'export const c = `flex ${"x"} border-t border-border`;',
+    ],
   ])("rejects %s", async (_name, code) => {
     const messages = await lintAs("src/fixture.tsx", code);
     expect(ruleIds(messages)).toContain("no-restricted-syntax");
@@ -193,8 +217,16 @@ describe("token role guardrail", () => {
       `export const a = <button className="outline-none focus-visible:focus-outline" />;`,
     ],
     [
-      "the shared field focus on a wrapping shell",
-      `export const a = <div className="border border-field-border focus-within:focus-halo" />;`,
+      "a borderless fill field with the shared focus",
+      `export const a = <div className="bg-field-fill hover:bg-field-fill-hover focus-within:focus-outline" />;`,
+    ],
+    [
+      "a checkbox edge",
+      `export const a = <span className="border border-control-border" />;`,
+    ],
+    [
+      "a status colour bar",
+      `export const a = <li className="border-l-2 border-l-status-running" />;`,
     ],
     [
       "the glyph colour on an identity swatch",

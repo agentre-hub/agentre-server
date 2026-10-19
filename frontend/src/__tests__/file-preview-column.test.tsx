@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
+import { edgeClasses } from "./helpers/edge-classes";
 import { RelayError } from "@/lib/relayClient";
 
 import "@/i18n";
@@ -59,6 +60,19 @@ describe("控制台的预览栏", () => {
     expect(
       screen.getByTestId("file-preview-device").getAttribute("data-online"),
     ).toBe("true");
+  });
+
+  /*
+    无边框改版（规格 2026-10-15）：预览栏与转录同在内容页上，靠一块填充分开，
+    不再用一条左边线。
+  */
+  it("预览栏不画分隔线，靠填充与转录分开", async () => {
+    renderColumn();
+
+    await screen.findByText("正文");
+    const column = screen.getByTestId("session-file-preview");
+    expect(edgeClasses(column)).toEqual([]);
+    expect(column.className).toContain("bg-field-fill");
   });
 
   it("没有当前标签时整栏不渲染 —— 转录回到全宽由父级据此判定", () => {
@@ -191,5 +205,42 @@ describe("预览栏里的失败态", () => {
 
     expect(await screen.findByText("path refused")).toBeTruthy();
     expect(screen.getByRole("button", { name: "重试" })).toBeTruthy();
+  });
+});
+
+/**
+ * 移动端整屏层的头部：文件名与目录副行。Windows 会话的 relPath 用 "\\" 分隔
+ * （共享包 file-meta 的 basename / dirname 两种分隔符都认），只认 "/" 的话标题
+ * 会是整条路径、副行退成工作根。
+ */
+describe("移动端整屏层的头部", () => {
+  it("Windows 会话的 relPath：标题只是文件名，副行是它所在的目录", () => {
+    renderColumn({
+      cwd: "C:\\work",
+      tabs: [
+        { path: "assets\\img\\logo.png", isPreview: true, isPinned: false },
+      ],
+      activePath: "assets\\img\\logo.png",
+      layer: { shown: true, onBack: vi.fn() },
+    });
+
+    const layer = screen.getByTestId("session-file-preview-layer");
+    expect(layer.getAttribute("aria-label")).toBe("logo.png");
+    expect(screen.getByRole("heading", { name: "logo.png" })).toBeTruthy();
+    expect(
+      screen.getByTestId("session-file-preview-layer-subline").textContent,
+    ).toBe("assets\\img · dev-box");
+  });
+
+  it("工作根下的文件没有目录段：副行说工作根", () => {
+    renderColumn({
+      tabs: [{ path: "logo.png", isPreview: true, isPinned: false }],
+      activePath: "logo.png",
+      layer: { shown: true, onBack: vi.fn() },
+    });
+
+    expect(
+      screen.getByTestId("session-file-preview-layer-subline").textContent,
+    ).toBe("/srv/work · dev-box");
   });
 });

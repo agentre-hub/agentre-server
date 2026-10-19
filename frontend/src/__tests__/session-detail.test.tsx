@@ -19,7 +19,7 @@ import {
   SessionLifecycleRunning,
   type AnyRpcMethod,
 } from "@agentre-hub/agentre-wire";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +34,7 @@ import { toast } from "sonner";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
+import { edgeClasses } from "./helpers/edge-classes";
 import { RELAY_TAIL_FRAMES } from "@/components/session/useTranscriptScrollback";
 import { writeReasoningEffortToOrigin } from "@/components/session/sessionMirror";
 import { resetLiveTurns, useLiveTurns } from "@/lib/liveSessions";
@@ -3551,6 +3552,8 @@ describe("会话详情：历史来自 server 镜像", () => {
     expect(screen.queryByTestId("session-detail-send")).toBeNull();
     const readonly = screen.getByTestId("session-compose-readonly");
     expect(readonly.textContent).toContain("书房小主机");
+    // 只读条是一块填充，不再是虚线框（无边框改版）。
+    expect(edgeClasses(readonly)).toEqual([]);
 
     // 「消息不排队」（决策 13）没有丢，它搬进了横幅——一件事只说一遍。
     const banner = screen.getByRole("alert");
@@ -4739,6 +4742,112 @@ describe("会话详情：头部 / 转录 / Composer 三带", () => {
 });
 
 /**
+ * 输入框底栏在窄屏不溢出（2026-09-21 移动端第一轮 决策 7 / 问题 2）。
+ *
+ * jsdom 量不出真实布局，这里只锚成因：宿主的 `leadingControls` 外层此前整块
+ * `shrink-0`——模型 chip 文案一长（如「跟随 Agent 绑定 · CLI 自身登录态」，实测
+ * 231px），整排在 390 宽下把发送键顶出输入框（实测发送键 x=378–410，输入框右沿
+ * 370）。断言换成类名：外层允许收缩（带 `min-w-0`，不再 `shrink-0`）、发送键与
+ * 权限控件各自钉住 `shrink-0` 不参与收缩、模型 chip 触发器带 `min-w-0` 才能真正
+ * 启用它已有的 `truncate`（`picker-trigger.tsx` / `provider-pill-trigger.tsx`
+ * 早就写了 truncate，没有 `min-w-0` 时 flex item 默认的 `min-width:auto` 顶住了
+ * 省略号，它从没生效过）。
+ */
+describe("会话详情：输入框底栏窄屏不溢出（类名断言）", () => {
+  function stubOverflowScenario() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents")
+        return {
+          agents: [
+            {
+              sync_id: "ag-1",
+              name: "后端 Agent",
+              exec_targets: [{ backend_sync_id: "backend-1", current: true }],
+            },
+          ],
+        };
+      // 确知没绑供应商（空串）：底栏那颗模型 chip 因此摆出最长的那句
+      // 「跟随 Agent 绑定 · CLI 自身登录态」——真实场景里压垮输入框的那一档。
+      if (path === "/v1/engine/backends")
+        return {
+          backends: [
+            {
+              sync_id: "backend-1",
+              provider_key: "",
+              model_key: "",
+              config: {},
+              reasoning_effort: "",
+            },
+          ],
+        };
+      if (path === "/v1/engine/providers") return { providers: [] };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeCapabilities)
+        return {
+          capabilities: [{ name: "reasoning_effort", enabled: true }],
+          permissionMode: {
+            allowedModes: [
+              "default",
+              "acceptEdits",
+              "plan",
+              "bypassPermissions",
+            ],
+            defaultMode: "default",
+            switchableDuringTurn: true,
+            order: ["default", "acceptEdits", "plan", "bypassPermissions"],
+          },
+        };
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  it("发送键与权限控件 shrink-0，leadingControls 外层允许收缩，模型 chip 触发器带 min-w-0", async () => {
+    stubOverflowScenario();
+    renderPage();
+    await awaitComposer();
+
+    const modelChip = await screen.findByTestId("composer-model-target");
+    await waitFor(() =>
+      expect(modelChip.textContent).toContain("CLI login state"),
+    );
+    // 成因一：触发器此前只有 `w-auto`，没有 `min-w-0`——flex item 的默认
+    // `min-width:auto` 顶住了内部已经写好的 truncate，省略号从没生效过。
+    expect(modelChip.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+
+    // 成因二：leadingControls 外层此前整块 `shrink-0`，导致它的天然宽度（权限控件
+    // 满宽 + 模型 chip 满宽文案）从不给composer-bar 的挤压算法让路。
+    const leading = screen.getByTestId("composer-leading-controls");
+    expect(leading.className).toMatch(/(^|\s)min-w-0(\s|$)/);
+    expect(leading.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
+
+    // 权限控件自己（共享包 PermissionModePill 的按钮）没有 shrink-0，得由宿主的
+    // 包装钉住，否则外层一旦能收缩，挤压会连它一起吃掉。
+    const permissionSlot = screen.getByTestId("composer-permission-slot");
+    expect(permissionSlot.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+
+    // 收缩顺序（决策 7）：模型 chip **先**收缩，上下文用量是放不下之后才让位的那一格。
+    // flex 按「shrink × 基准宽」分摊缺口，两边都是 shrink 1 时计量器会跟着 chip 按比例
+    // 一起被裁；外层要带远大于 1 的收缩系数，缺口才几乎全落在 chip 上。
+    expect(leading.className).toMatch(/(^|\s)shrink-\[999\](\s|$)/);
+
+    // 发送键的 shrink-0 来自共享包 SubmitControl，这里锁一下没被本轮改动松开。
+    const send = screen.getByTestId("session-detail-send");
+    expect(send.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+
+    // 思考力度控件在共享包里已经是 shrink-0 + 容器查询窄档退成仅图标
+    // （与 PermissionModePill 同一档 620px），这里同样锁一下没被松开。
+    const effort = screen.getByTestId("composer-reasoning-effort");
+    expect(effort.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+  });
+});
+
+/**
  * 详情头部（2026-08-20 对话页 UI/UX 改版）。
  *
  * 此前头部只有三样：标题、一枚状态胶囊、「机器 · 在线」。打开一条对话看不出它
@@ -4807,16 +4916,11 @@ describe("会话详情：头部", () => {
     });
   }
 
-  function renderEmbeddedDetail(headerRight?: ReactNode) {
+  function renderEmbeddedDetail() {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView
-            deviceId={1}
-            conversationId="42"
-            form="embedded"
-            headerRight={headerRight}
-          />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -4841,18 +4945,19 @@ describe("会话详情：头部", () => {
   });
 
   /*
-    顶带合并之后，页面级那簇控件（连接态 + 语言/主题）没有别的落点：Chat 把它们
-    递进来，摆在这一行的最右端——与「停止」同一带。
+    无边框改版（规格 2026-10-15）：详情落在内容页上，头部与转录同一张页、之间
+    不画线；头部和整副详情都不再自己涂底色——底色是壳给的那张内容页。
   */
-  it("headerRight 递进来的那簇控件落在头部右端", async () => {
+  it("头部不画线、不自涂底色，整副详情也不自涂底色", async () => {
     stubHeader();
-    renderEmbeddedDetail(<button type="button">page-chrome</button>);
+    renderEmbeddedDetail();
 
     await screen.findByText("跑着呢");
     const head = screen.getByTestId("session-detail-header");
-    expect(
-      within(head).getByRole("button", { name: "page-chrome" }),
-    ).toBeTruthy();
+    expect(edgeClasses(head)).toEqual([]);
+    expect(head.className).not.toMatch(/(^|\s)bg-/);
+    const view = screen.getByTestId("session-detail-view");
+    expect(view.className).not.toMatch(/(^|\s)bg-/);
   });
 
   /*
@@ -5391,6 +5496,10 @@ describe("会话详情：头部", () => {
     await waitFor(() =>
       expect(screen.getByTestId("composer-model-target")).toBeTruthy(),
     );
+    // 模型 pill 是一枚字段：落在字段填充上，不再拿 card 底 + 边色冒充（无边框改版）。
+    const pill = screen.getByTestId("composer-model-target");
+    expect(pill.className).toContain("bg-field-fill");
+    expect(pill.className).not.toMatch(/bg-card|border-border/);
   });
 
   /**
@@ -6041,9 +6150,11 @@ describe("会话详情：输入框", () => {
     // 共享包在缺 onCommandSubmit 时会把 `!` 开头的内容 clearContent 掉、既不发也不
     // 说 —— 用户打的字凭空消失。这一端接不上本地执行（wire 上没有 PTY 方法），
     // 所以必须如实说出来，并且把文本还回去。
-    expect(
-      await screen.findByTestId("composer-local-command-unsupported"),
-    ).toBeTruthy();
+    const note = await screen.findByTestId(
+      "composer-local-command-unsupported",
+    );
+    // 说明与输入框之间靠留白分开，不画线（无边框改版）。
+    expect(edgeClasses(note)).toEqual([]);
     await waitFor(() => expect(composerText()).toBe("!!! 这条很重要"));
     expect(
       fakeClient.request.mock.calls.some((c) => c[0] === rpcMethods.runtimeRun),
@@ -8032,14 +8143,15 @@ describe("会话详情：与桌面端对齐的外壳", () => {
     );
   });
 
-  it("Given 转录贴底, When 渲染, Then 输入带没有分隔线", async () => {
+  it("Given 转录贴底, When 渲染, Then 输入带没有分隔线，也不自涂底色", async () => {
     stubAligned();
     renderAligned();
 
     await screen.findByText("很长的一段转录");
     const band = screen.getByTestId("session-composer-band");
     expect(band.getAttribute("data-scrolled")).toBe("false");
-    expect(band.className).not.toMatch(/border-t/);
+    expect(edgeClasses(band)).toEqual([]);
+    expect(band.className).not.toMatch(/(^|\s)bg-/);
   });
 
   it("Given 转录贴底, When 渲染, Then 末条消息与输入框之间的留白不再由三段各付一遍", async () => {
@@ -8057,7 +8169,11 @@ describe("会话详情：与桌面端对齐的外壳", () => {
     expect(band.className).toMatch(/(^|\s)pt-2(\s|$)/);
   });
 
-  it("Given 用户上滚离开底部, When 渲染, Then 输入带出现分隔线与一段不接收指针事件的向上渐隐", async () => {
+  /*
+    无边框改版（规格 2026-10-15）：离开底部时「下面还有」只由那段渐隐说，不再加
+    一条分隔线；渐隐从内容页的底色淡出，输入带落在同一张页上。
+  */
+  it("Given 用户上滚离开底部, When 渲染, Then 输入带不出分隔线，只有一段从内容页色淡出、不接收指针事件的渐隐", async () => {
     stubAligned();
     renderAligned();
 
@@ -8079,8 +8195,9 @@ describe("会话详情：与桌面端对齐的外壳", () => {
 
     const band = screen.getByTestId("session-composer-band");
     expect(band.getAttribute("data-scrolled")).toBe("true");
-    expect(band.className).toMatch(/(^|\s)border-t(\s|$)/);
+    expect(edgeClasses(band)).toEqual([]);
     const fade = screen.getByTestId("session-composer-band-fade");
+    expect(fade.className).toMatch(/(^|\s)from-sheet(\s|$)/);
     expect(fade.className).toMatch(/(^|\s)pointer-events-none(\s|$)/);
     expect(fade.getAttribute("aria-hidden")).toBe("true");
   });

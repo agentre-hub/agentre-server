@@ -11,8 +11,9 @@ import { cn } from "@agentre-hub/agentre-ui";
  * 它多半是用户自己刚按下的一个筛选造成的，是暂态，占的又是一条窄栏——同样的
  * 分量摆进去就成了一块喧宾夺主的大图形。
  *
- * 形取自组织面本来就有的「还没有任何部门」那张虚线卡片（这一形态在窄栏里已经
- * 验证过）：顶端对齐、虚线描边、图标 + 标题 + 正文 + 一条回程。**不**垂直居中
+ * 形取自组织面本来就有的「还没有任何部门」那张卡片（这一形态在窄栏里已经
+ * 验证过）：顶端对齐、一块填充（不画虚线框，无边框改版）、图标 + 标题 + 正文 +
+ * 一条回程。填充相对脚下的面取，落在外框上的索引栏里一样分得开。**不**垂直居中
  * ——索引栏可以很长，把一句话吊在正中会让上面那排 chips 与这句话之间断开，读者
  * 得先找一遍才知道系统在跟自己说话。
  *
@@ -44,7 +45,7 @@ export function InlineEmpty({
       data-testid={testId}
       data-slot={slot}
       className={cn(
-        "m-2.5 flex flex-col items-center gap-2 rounded-lg border border-dashed border-border p-6 text-center",
+        "m-2.5 flex flex-col items-center gap-2 rounded-lg bg-field-fill p-6 text-center",
         className,
       )}
     >

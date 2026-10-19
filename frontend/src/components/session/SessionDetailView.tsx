@@ -7,14 +7,7 @@ import {
   SessionLifecycleRunning,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -37,11 +30,17 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import AppShell from "@/components/AppShell";
-import SessionDetailHeader from "@/components/session/SessionDetailHeader";
+import { useIsMobile } from "@/components/use-is-mobile";
+import SessionDetailHeader, {
+  SessionPageStateShell,
+} from "@/components/session/SessionDetailHeader";
 import SessionComposerBand from "@/components/session/SessionComposerBand";
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
-import { useFilePreviewTabs } from "@/components/session/useFilePreviewTabs";
+import {
+  useFilePreviewLayer,
+  useFilePreviewTabs,
+} from "@/components/session/useFilePreviewTabs";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import { turnDoneFrames } from "@/components/session/turnDone";
@@ -221,14 +220,6 @@ export interface SessionDetailViewProps {
     avatar_icon?: string;
   };
   /**
-   * 宿主页面级的那簇控件，摆在详情头部的最右端（嵌入形态才有）。
-   *
-   * 桌面 Chat 把转录上方那两条带并成一条之后，壳不再画 52px 顶栏，连接态与
-   * 语言/主题就落在这里 —— 详情头部本身**就是**那一页的顶带。路由页形态不传：
-   * 壳的顶栏还在，那簇控件仍归它。
-   */
-  headerRight?: ReactNode;
-  /**
    * 标记已读成功后通知拥有索引的宿主：**标在哪个身份上**，以及服务端记下的时刻。
    *
    * 递这两样而不是只喊一声：服务端专门把时刻回了出来（MarkSessionReadResponse
@@ -267,7 +258,6 @@ export default function SessionDetailView({
   initialUserText,
   initialAgent,
   initialRow,
-  headerRight,
   onMarkedRead,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
@@ -275,6 +265,9 @@ export default function SessionDetailView({
   const originProp = peerFingerprint?.trim() || undefined;
   const { t } = useTranslation();
   const isPage = form === "page";
+  // 移动端的整屏形态走沉浸：壳的顶栏与底部 tab 都不画，头部合成一层（决策 3）。
+  const isMobile = useIsMobile();
+  const immersive = isPage && isMobile;
 
   /** 这条会话所属 Agent 的名字与调色板色，按 summary.agentSyncId 解。 */
   const [agents, setAgents] = useState<WorkspaceAgent[]>([]);
@@ -431,6 +424,11 @@ export default function SessionDetailView({
    * 那一刻**的事实，由 ref 后面这个函数当场回答。答 false 时包不会开面板。
    */
   const preview = useFilePreviewTabs();
+  // 移动端预览是整屏一层、占一条 history（决策 2、4）；桌面照旧是 420 右栏。
+  const previewLayer = useFilePreviewLayer({
+    enabled: isMobile,
+    activePath: preview.activePath,
+  });
   const previewCwdRef = useRef("");
   const previewFileRef = useRef<
     (path: string, anchor?: PreviewAnchor) => boolean
@@ -448,6 +446,7 @@ export default function SessionDetailView({
       // 定位目标（链接里写的 `:311-330`）跟着一起进标签：这一层不解释它，面板
       // 拿到之后才去滚编辑器。
       preview.open(path, anchor);
+      previewLayer.show();
       return true;
     };
   });
@@ -1423,7 +1422,11 @@ export default function SessionDetailView({
       </Alert>
     );
     // 页面形态连壳一起报错；嵌入形态直接就地报错（外层容器给尺寸）。
-    return isPage ? <AppShell>{alert}</AppShell> : alert;
+    return isPage ? (
+      <SessionPageStateShell backTo={backTo}>{alert}</SessionPageStateShell>
+    ) : (
+      alert
+    );
   }
 
   /**
@@ -1743,6 +1746,7 @@ export default function SessionDetailView({
   const header = (
     <SessionDetailHeader
       isPage={isPage}
+      immersive={immersive}
       backTo={backTo}
       sid={sid}
       identity={identity}
@@ -1765,7 +1769,6 @@ export default function SessionDetailView({
       // **落定**时各取一份，轮次进行中它说的是上一次落定时的事。
       running={running}
       decisionPending={decisionPending}
-      headerRight={headerRight}
       clientRef={clientRef}
       originRef={originRef}
     />
@@ -1851,9 +1854,10 @@ export default function SessionDetailView({
   );
 
   const bands = (
+    /* 不自涂底色：三带落在壳给的那张内容页上（规格 2026-10-15）。 */
     <div
       data-testid="session-detail-view"
-      className="flex h-full min-h-0 flex-col bg-background"
+      className="flex h-full min-h-0 flex-col"
     >
       {header}
       {/*
@@ -1897,6 +1901,11 @@ export default function SessionDetailView({
           onClose={preview.close}
           onCloseOthers={preview.closeOthers}
           onCloseAll={preview.closeAll}
+          layer={
+            isMobile
+              ? { shown: previewLayer.shown, onBack: previewLayer.hide }
+              : undefined
+          }
         />
       </div>
     </div>
@@ -1905,7 +1914,7 @@ export default function SessionDetailView({
   // 路由页形态：壳交出整块主区（flush），三带自己铺满它。
   if (isPage) {
     return (
-      <AppShell title={displayTitle} flush>
+      <AppShell title={displayTitle} flush immersive={immersive}>
         {bands}
       </AppShell>
     );

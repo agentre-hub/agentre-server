@@ -1,4 +1,5 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import {
   previewKind,
@@ -193,4 +194,92 @@ export function useFilePreviewTabs(): FilePreviewTabsState {
       reset,
     ],
   );
+}
+
+/**
+ * 移动端整屏预览层在 history 里的那枚标记（规格 2026-09-21-server-mobile-gaps
+ * 决策 2、4）：层开着时，当前这条 history 与会话同一地址、state 里多这一格。
+ */
+export const FILE_PREVIEW_LAYER_STATE_KEY = "agentreFilePreviewLayer";
+
+function hasLayerMarker(state: unknown): boolean {
+  return (
+    typeof state === "object" &&
+    state !== null &&
+    (state as Record<string, unknown>)[FILE_PREVIEW_LAYER_STATE_KEY] === true
+  );
+}
+
+export interface FilePreviewLayerState {
+  /** 层此刻开着：当前这条 history 带标记，且有当前标签。 */
+  shown: boolean;
+  /** 点开文件时调：层没开就压一条带标记的 history（同地址）。 */
+  show: () => void;
+  /** 层里的返回：退掉那一条，与系统返回同一条路。 */
+  hide: () => void;
+}
+
+/**
+ * 移动端的预览层开关。**不**另存一格开/关状态：开着 = 当前这条 history 带标记
+ * 且有当前标签，于是返回按钮、系统返回（popstate）、前进都落在同一个事实上，
+ * 标签本身一个不动（再点任意文件就回到这一层）。
+ *
+ *   - 重载后遗留的标记没有标签可显示，按关着算；此时再打开不另压一条 —— 当前这条
+ *     已经带标记，退掉它就回到它下面那条不带标记的会话。
+ *   - 关掉最后一个标签（当前标签变空）时层跟着关，并退掉它压的那一条，否则系统
+ *     返回会先落在一条什么也不显示的标记上。
+ *   - 桌面（enabled=false）从不碰 history。
+ */
+export function useFilePreviewLayer({
+  enabled,
+  activePath,
+}: {
+  enabled: boolean;
+  activePath: string | null;
+}): FilePreviewLayerState {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const marked = enabled && hasLayerMarker(location.state);
+  const shown = marked && activePath !== null;
+
+  // 退一条已经发出、还没落地（浏览器里 popstate 是异步的）：这期间再按返回不能
+  // 再退一条，否则连点两下就离开了会话。落到新的一条上即解除。
+  const popPendingRef = useRef(false);
+  useEffect(() => {
+    popPendingRef.current = false;
+  }, [location.key]);
+
+  const hide = useCallback(() => {
+    if (!marked || popPendingRef.current) return;
+    popPendingRef.current = true;
+    void navigate(-1);
+  }, [marked, navigate]);
+
+  const show = useCallback(() => {
+    if (!enabled || marked) return;
+    void navigate(
+      {
+        pathname: location.pathname,
+        search: location.search,
+        hash: location.hash,
+      },
+      {
+        state: {
+          ...(typeof location.state === "object" ? location.state : null),
+          [FILE_PREVIEW_LAYER_STATE_KEY]: true,
+        },
+      },
+    );
+  }, [enabled, marked, navigate, location]);
+
+  // 当前标签从有变无（关掉最后一个 / 全部关闭）且层开着：退掉那一条。只认这一次
+  // 跳变 —— 重载后遗留的标记从来没有过标签，不会走到这里。
+  const lastActiveRef = useRef(activePath);
+  useEffect(() => {
+    const had = lastActiveRef.current !== null;
+    lastActiveRef.current = activePath;
+    if (had && activePath === null) hide();
+  }, [activePath, hide]);
+
+  return { shown, show, hide };
 }

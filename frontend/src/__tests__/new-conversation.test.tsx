@@ -2366,12 +2366,20 @@ describe("草稿与详情共用同一条顶带", () => {
     expect(draftBand.className).toMatch(/h-\[68px\]/);
     expect(draftBand.className).toContain("@container/header");
     expect(avatarIn(draftBand).className).toContain("size-8");
-    // 草稿那条带**就是**右栏的顶带：页面级那簇控件落进它的右端，chat-chrome
-    // 因此不再另画一条 —— 那正是发出第一句时会凭空消失的 68px。
+    // 草稿那条带**就是**右栏的顶带，chat-chrome 因此不再另画一条 —— 那正是发出
+    // 第一句时会凭空消失的 68px。
     expect(screen.queryByTestId("chat-chrome")).toBeNull();
+    // 语言 / 主题属于外框（规格 2026-10-15「对话页没有顶栏」）：桌面上整页只有
+    // 侧栏底部那一对，草稿这条带里一个都没有。
     expect(
-      within(draftBand).getByRole("button", { name: /Language/i }),
-    ).toBeTruthy();
+      within(draftBand).queryByRole("button", { name: /Language/i }),
+    ).toBeNull();
+    expect(
+      within(draftBand).queryByRole("button", { name: /Theme/i }),
+    ).toBeNull();
+    const languages = screen.getAllByRole("button", { name: /Language/i });
+    expect(languages).toHaveLength(1);
+    expect(languages[0].closest("nav")).not.toBeNull();
 
     await typeInDraft("跑一下失败的测试");
     await waitFor(() =>

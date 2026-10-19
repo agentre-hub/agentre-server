@@ -8,8 +8,8 @@ import { cn } from "@agentre-hub/agentre-ui";
  * 控制台导航项（Pencil 正式组件 ZC7pI NavItem）。
  *
  * 尺寸契约：h-[34px] rounded-md px-2.5、17px 图标、13px 文案。
- * 状态：active = primary-soft 面 + primary-text；idle = muted +
- * hover accent。尾部数据按需出现、全部诚实：badge 只在 >0 时渲染，
+ * 状态：它坐在外框上，active = 抬起面（raised）+ primary-text；idle = muted +
+ * 外框那一档的悬停提亮（rail-accent——外框比任何内容面都暗，悬停是提亮不是压暗）。尾部数据按需出现、全部诚实：badge 只在 >0 时渲染，
  * meta 由调用方在拿到真实数据后才传。不渲染就不会谎报。
  *
  * `collapsed` 是 56px 图标栏那一档（外壳的侧栏可以收起）。收窄改的是**排布**，
@@ -80,7 +80,7 @@ function navItemClass(collapsed: boolean) {
       "relative flex h-[34px] w-full shrink-0 items-center gap-2.5 rounded-md transition-colors",
       collapsed ? "justify-center px-0" : "px-2.5",
       isActive
-        ? "bg-primary-soft text-primary-text"
-        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+        ? "bg-raised text-primary-text"
+        : "text-muted-foreground hover:bg-rail-accent hover:text-foreground",
     );
 }

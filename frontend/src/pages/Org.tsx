@@ -230,6 +230,82 @@ export default function Org() {
   const initialLoading = loading && !chart;
   const initialFailed = error !== null && !chart;
 
+  // 同一条错误，两个落点：索引底部（桌面、以及移动端回到索引后）与详情头下方
+  // （移动端正看详情时，见下面传给两个详情组件的 alert 槽）。落点由「当前这一屏
+  // 是哪个」决定，不是两处都画——两列在移动端本就一次只挂一个（showIndex /
+  // showDetail），所以只要各自的宿主只在自己那一档渲染这条文案，就天然不会重复。
+  const alertMessage = initialFailed
+    ? null
+    : error
+      ? t("org.errors.generic")
+      : mutationError || null;
+  // 只在移动端且真的在看详情（不是骨架/失败态）时才递下去——两个详情组件把它摆在
+  // 自己的头部下方（OrgDetailHeader 之后、正文之前）；桌面端不传，桌面的这条错误
+  // 只在索引底部那一处出现，形态不变。
+  const detailAlert =
+    isMobile && alertMessage ? (
+      <p role="alert" className="p-2.5 text-2xs text-destructive-text">
+        {alertMessage}
+      </p>
+    ) : undefined;
+
+  // 索引列 320px（mockup `.index`）直接落在外框（bg-chrome）上，不画自己的底色
+  // 与右边线：行与组头的选中面是 bg-raised，就是照外框这个底调的。桌面经外壳的
+  // `index` 槽摆到内容页左侧；移动端外壳不渲染它，它自己当整页（宽度交出去）。
+  const indexColumn = showIndex ? (
+    <div
+      data-testid="org-index-col"
+      className={cn(
+        "flex min-w-0 flex-col",
+        isMobile ? "min-h-0 flex-1" : "w-[320px] shrink-0",
+      )}
+    >
+      {initialFailed ? (
+        <div
+          data-testid="org-index-failed"
+          className="flex flex-col items-start gap-2.5 p-4"
+        >
+          <p className="text-sm text-muted-foreground">
+            {t("org.errors.loadFailed")}
+          </p>
+          <Button size="sm" variant="outline" onClick={() => void reload()}>
+            {t("common.retry")}
+          </Button>
+        </div>
+      ) : initialLoading ? (
+        <OrgIndexSkeleton />
+      ) : (
+        <OrgIndexPanel
+          departments={models.departments}
+          agents={models.agents}
+          backends={backends}
+          agentBySync={models.agentBySync}
+          maps={models.maps}
+          selection={numericSelection}
+          onSelect={handleSelect}
+          isMobile={isMobile}
+          onCreateDepartment={(parentDepartmentId) =>
+            openCreateDepartment(
+              parentDepartmentId
+                ? models.maps.deptSyncOf(parentDepartmentId)
+                : "",
+            )
+          }
+          onCreateAgent={(departmentId) =>
+            openCreateAgent(
+              departmentId ? models.maps.deptSyncOf(departmentId) : "",
+            )
+          }
+        />
+      )}
+      {alertMessage && (
+        <p role="alert" className="p-2.5 text-2xs text-destructive-text">
+          {alertMessage}
+        </p>
+      )}
+    </div>
+  ) : null;
+
   return (
     /* 两栏要顶到主区的四条边，所以壳整块交出来（flush，与 Chat / Issues 同）。
        此前是壳照常留 padding、这里再用 `-mx-4 -my-5` 去抵消：横向凑巧对得上，
@@ -237,88 +313,29 @@ export default function Org() {
        上移一个 padding，底边就停在内容区底部往上两个 padding 处，页面底部空出
        一条与 padding 同色的白带（1440×900 实测 48px）。两列自己都在滚
        （OrgIndexPanel / 两个详情），交出 overflow 是安全的。 */
-    <AppShell title={t("org.pageTitle")} flush>
+    <AppShell
+      title={t("org.pageTitle")}
+      flush
+      index={isMobile ? undefined : indexColumn}
+    >
       <div
         data-testid="org-layout"
         className={cn(
-          "flex h-full min-h-0 min-w-0",
-          // 窄屏没有并排的空间（mockup `11-mobile.png`）：320px 索引 + 详情挤在
-          // 390px 里，详情只剩几十像素。移动端一次只摆一页：索引升整页，点一行
-          // 下钻到详情，返回回索引。
-          isMobile ? "flex-col" : "flex-row",
+          // 桌面：索引列由外壳摆在外框上（`index` 槽），这里只剩详情这一页。
+          // 窄屏没有并排的空间（mockup `11-mobile.png`）：外壳不渲染 `index`，
+          // 一次只摆一页——索引升整页，点一行下钻到详情，返回回索引。
+          "flex h-full min-h-0 min-w-0 flex-col",
         )}
       >
-        {/* 索引列 320px（mockup `.index`），底色与右边框走 sidebar 那一套 token——
-            它与 AppShell 的 224px SideNav 是同一族「侧面」，而不是一张 card：行与组头
-            的 hover/选中面（包里读的是 --sidebar-active-bg / --sidebar-selected-bg）
-            正是照 --sidebar 这个底调出来的，落在 card 上对比度就不对了。
-            移动端它是整页，宽度与右边框都交出去。 */}
-        {showIndex && (
-          <div
-            data-testid="org-index-col"
-            className={cn(
-              "flex min-w-0 flex-col bg-sidebar",
-              isMobile
-                ? "min-h-0 flex-1"
-                : "w-[320px] shrink-0 border-r border-sidebar-border",
-            )}
-          >
-            {initialFailed ? (
-              <div
-                data-testid="org-index-failed"
-                className="flex flex-col items-start gap-2.5 p-4"
-              >
-                <p className="text-sm text-muted-foreground">
-                  {t("org.errors.loadFailed")}
-                </p>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => void reload()}
-                >
-                  {t("common.retry")}
-                </Button>
-              </div>
-            ) : initialLoading ? (
-              <OrgIndexSkeleton />
-            ) : (
-              <OrgIndexPanel
-                departments={models.departments}
-                agents={models.agents}
-                backends={backends}
-                agentBySync={models.agentBySync}
-                maps={models.maps}
-                selection={numericSelection}
-                onSelect={handleSelect}
-                onCreateDepartment={(parentDepartmentId) =>
-                  openCreateDepartment(
-                    parentDepartmentId
-                      ? models.maps.deptSyncOf(parentDepartmentId)
-                      : "",
-                  )
-                }
-                onCreateAgent={(departmentId) =>
-                  openCreateAgent(
-                    departmentId ? models.maps.deptSyncOf(departmentId) : "",
-                  )
-                }
-              />
-            )}
-            {!initialFailed && (error ?? mutationError) && (
-              <p
-                role="alert"
-                className="border-t border-border p-2.5 text-2xs text-destructive-text"
-              >
-                {error ? t("org.errors.generic") : mutationError}
-              </p>
-            )}
-          </div>
-        )}
+        {isMobile && indexColumn}
 
         {showDetail && (
           <div
             data-testid="org-detail-col"
-            className="flex min-w-0 flex-1 flex-col"
+            // 父容器是 flex-col（桌面索引列已交给外壳的 `index` 槽，这里只剩详情；
+            // 移动端一次只摆一页）：不给 min-h-0，这一列的默认 min-height:auto 会
+            // 顶开父容器（内容多高它就多高），详情自己的 overflow-y-auto 反而不起作用。
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {initialFailed ? (
               <div
@@ -390,6 +407,7 @@ export default function Org() {
                 onReload={() => void reload()}
                 onBack={isMobile ? () => setSelection(null) : undefined}
                 onClose={() => setSelection(null)}
+                alert={detailAlert}
               />
             ) : selectedDepartment && selectedDepartmentModel ? (
               <OrgDepartmentDetail
@@ -399,6 +417,7 @@ export default function Org() {
                 agents={models.agents}
                 departments={models.departments}
                 maps={models.maps}
+                alert={detailAlert}
                 onUpdate={(fields) =>
                   runFieldUpdate(async () => {
                     await writes.updateDepartment(

@@ -10,7 +10,7 @@
  *    断线时的出路自己占一块，在侧栏上（AppShell 的 ConnectionEscape）；
  *  - 颜色不是唯一表达：降级时有可见文字，痣本身对读屏隐藏，另有 sr-only 播报；
  *  - 不会自愈的那一态给得出出路，且出路只在那一态出现；
- *  - 紧凑形态（移动 TopBar）没有第二行，痣的白环跟着所在的面走。
+ *  - 紧凑形态（移动 TopBar）没有第二行；两种形态都落在外框上，痣的环取外框色。
  */
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -189,24 +189,33 @@ describe("账号块上的实时连接状态", () => {
     ).toBeNull();
   });
 
-  it("紧凑形态（移动 TopBar）只有痣，白环跟着 card 那个面", () => {
+  it("紧凑形态（移动 TopBar）只有痣，环色取外框色——顶栏已落在外框上", () => {
     renderMenu(true);
     drive("disconnected");
 
     // 紧凑形态本来就没有第二行（只有名字，且 <sm 时藏起来），所以痣是唯一的记号，
     // 文字与出路都在菜单里。
     expect(screen.queryByText(/every 30s/)).toBeNull();
-    expect(pip().className).toContain("ring-card");
-    expect(pip().className).not.toContain("ring-sidebar");
+    expect(pip().className).toContain("ring-chrome");
+    expect(pip().className).not.toContain("ring-card");
   });
 
-  it("侧栏形态的白环跟着 sidebar 那个面：环色错了痣就成了一颗黑点", () => {
+  it("侧栏形态的环同样取外框色：环色错了痣就成了一颗黑点", () => {
     renderMenu();
     drive("connected");
 
-    expect(pip().className).toContain("ring-sidebar");
+    expect(pip().className).toContain("ring-chrome");
+    expect(pip().className).not.toContain("ring-sidebar");
     // 环宽也得留住：tailwind-merge 把 ring-2 和 ring-<color> 归在不同组，
     // 合并之后两个都在——少了宽度那颗痣就没有环，贴在头像边上糊成一团。
     expect(pip().className).toContain("ring-2");
+  });
+
+  it("账号块落在外框上：悬停用外框那一档提亮，不画边", () => {
+    renderMenu();
+    const trigger = screen.getByRole("button", { name: "Account menu" });
+    expect(trigger.className).toContain("hover:bg-rail-accent");
+    expect(trigger.className).not.toContain("hover:bg-accent");
+    expect(trigger.className).toContain("focus-visible:focus-outline");
   });
 });

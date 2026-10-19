@@ -8,6 +8,7 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { edgeClasses } from "./helpers/edge-classes";
 import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
 import { api } from "@/lib/api";
@@ -116,6 +117,24 @@ beforeEach(async () => {
 });
 
 describe("设置 · 隐私", () => {
+  it("活动统计的卡片是填充块：不画边与分隔线", async () => {
+    serve();
+    renderSettings("/settings?tab=privacy");
+    const panel = await screen.findByTestId("privacy-activity-panel");
+    const saved = screen.getByTestId("privacy-saved-conversations");
+    for (const card of [panel, saved]) {
+      // 共享包 Switch 自带 `border-transparent`（几何用，不可见），不是结构线。
+      const clone = card.cloneNode(true) as HTMLElement;
+      clone.querySelectorAll('[role="switch"]').forEach((el) => el.remove());
+      const drawn = edgeClasses(clone);
+      expect(drawn).toEqual([]);
+      // 填充块：相对前景色的字段填充，与共享包的分组同一个 token。不是 bg-raised
+      // ——抬起色在浅色下与内容页同为 #ffffff，落在内容页上等于没有底。
+      expect(card.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+      expect(card.className).not.toMatch(/(^|\s)bg-raised(\s|$)/);
+    }
+  });
+
   it("是第三个页签，且只有打开它才去读统计设置", async () => {
     serve();
     renderSettings();
@@ -210,6 +229,12 @@ describe("设置 · 隐私", () => {
         .getByTestId("privacy-activity-skeleton")
         .getAttribute("aria-hidden"),
     ).toBe("true");
+    // 骨架卡与落地后的卡同一种表面，数据到了不换底。
+    for (const card of Array.from(
+      screen.getByTestId("privacy-activity-skeleton").children,
+    )) {
+      expect(card.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+    }
 
     release({ ...settingsResponse(), code: 0 });
     await screen.findByTestId("privacy-activity-panel");

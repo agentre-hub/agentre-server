@@ -238,7 +238,7 @@ function DeviceListSkeleton({ rows = 3 }: { rows?: number }) {
         {Array.from({ length: rows }, (_, i) => (
           <div
             key={i}
-            className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3.5"
+            className="flex items-center gap-3 rounded-lg bg-field-fill px-4 py-3.5"
           >
             <Skeleton className="size-9 shrink-0 rounded-md" />
             <span className="flex min-w-0 flex-1 flex-col gap-2">
@@ -318,7 +318,7 @@ function DeviceExpandDetail({
   const isDesktop = detail.kind === KIND_DESKTOP;
 
   return (
-    <div className="flex flex-col gap-3 border-t border-border pt-3">
+    <div className="flex flex-col gap-3 pt-3">
       {isAgentred && (
         <div className="flex flex-col gap-1.5">
           <span className="font-mono text-3xs font-medium text-muted-foreground">
@@ -333,7 +333,7 @@ function DeviceExpandDetail({
               {(detail.runnable_agents ?? []).map((a) => (
                 <span
                   key={a.sync_id}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-button-fill px-1.5 py-0.5 text-xs text-muted-foreground"
                 >
                   {a.name}
                   <span className="font-mono text-[9px] text-muted-foreground">
@@ -361,7 +361,7 @@ function DeviceExpandDetail({
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs",
                   p.configured
-                    ? "bg-muted text-muted-foreground"
+                    ? "bg-button-fill text-muted-foreground"
                     : "bg-status-waiting-bg text-status-waiting-text",
                 )}
               >
@@ -377,7 +377,7 @@ function DeviceExpandDetail({
         )}
       </div>
       {(isAgentred || isDesktop) && (
-        <div className="flex flex-col gap-1.5 border-t border-border pt-3">
+        <div className="flex flex-col gap-1.5 pt-3">
           <span className="font-mono text-3xs font-medium text-muted-foreground">
             {t("device.manage.sessions")}
           </span>
@@ -425,7 +425,7 @@ function DeviceExpandDetail({
       )}
       {/*
         端口转发（规格 2026-09-09 决策 11）：外框归本仓，与「对话」那一节同形
-        （同一条 border-t 分隔线）；标题与行的渲染归共享包。两类设备都答得出
+        （同一段留白间距）；标题与行的渲染归共享包。两类设备都答得出
         portForward.*（wire 的 host contract 同时列进 desktop 与 agentred），
         所以入口与「对话」同一条判定。
       */}
@@ -545,12 +545,12 @@ function DeviceRow({
   if (isMobile) {
     return (
       <Card
-        className="gap-0 rounded-lg border-border bg-card py-3 shadow-none"
+        className="gap-0 rounded-lg bg-field-fill py-3"
         data-testid={`device-row-${d.id}`}
       >
         <div className="flex items-center gap-3 px-4">
           {/* 图标方框：移动端的信息顺序以图标开头（HUELX） */}
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-button-fill">
             <DeviceIcon
               Icon={DEVICE_KIND_ICONS[d.kind] ?? Cpu}
               testId={`device-icon-${d.id}`}
@@ -558,7 +558,7 @@ function DeviceRow({
             />
           </span>
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <div className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden="true"
                 className={cn(
@@ -566,10 +566,15 @@ function DeviceRow({
                   statusDotClass(d),
                 )}
               />
-              <span className="truncate text-sm font-medium text-foreground">
+              <span
+                className={cn(
+                  "text-sm font-medium text-foreground",
+                  isExpanded ? "min-w-0 break-words" : "truncate",
+                )}
+              >
                 {name}
               </span>
-              <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
+              <span className="rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
                 {deviceKindLabel(d.kind, t)}
               </span>
             </div>
@@ -634,6 +639,9 @@ function DeviceRow({
               locale={locale}
               onRetry={onRetryDetail}
             />
+            {subRow && (
+              <span className="text-xs text-muted-foreground">{subRow}</span>
+            )}
           </div>
         )}
       </Card>
@@ -642,7 +650,7 @@ function DeviceRow({
 
   return (
     <Card
-      className="gap-0 rounded-lg border-border bg-card py-4 shadow-none"
+      className="gap-0 rounded-lg bg-field-fill py-4"
       data-testid={`device-row-${d.id}`}
     >
       {/* 标题行（Q6qgs4 R1）：状态点 + 设备图标 + 名 + 类型 chip + 状态标记 */}
@@ -659,7 +667,7 @@ function DeviceRow({
         <span className="min-w-0 flex-1 truncate text-prose font-semibold">
           {name}
         </span>
-        <span className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
+        <span className="rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
           {deviceKindLabel(d.kind, t)}
         </span>
         <StatusMark

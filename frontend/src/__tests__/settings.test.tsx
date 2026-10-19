@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { edgeClasses } from "./helpers/edge-classes";
 import Settings from "@/pages/Settings";
 import i18n from "@/i18n";
 import * as accountChannel from "@/lib/accountChannel";
@@ -80,6 +81,22 @@ beforeEach(async () => {
 });
 
 describe("Settings", () => {
+  it("renders the section row as a borderless segmented control that arrow keys operate", async () => {
+    renderSettings();
+    const providers = await screen.findByRole("tab", { name: "LLM providers" });
+    const list = providers.closest('[role="tablist"]') as HTMLElement;
+    expect(list.getAttribute("data-slot")).toBe("segmented-control");
+    expect(edgeClasses(list)).toEqual([]);
+
+    providers.focus();
+    fireEvent.keyDown(providers, { key: "ArrowRight" });
+    const backends = screen.getByRole("tab", { name: "Agent backends" });
+    await waitFor(() =>
+      expect(backends.getAttribute("aria-selected")).toBe("true"),
+    );
+    expect(document.activeElement).toBe(backends);
+  });
+
   it("contains only the LLM provider and Agent backend sections backed by shared panels", async () => {
     renderSettings();
 
@@ -264,6 +281,13 @@ describe("Settings", () => {
     ).toBe("/devices");
     expect(screen.queryByText("Add First Backend")).toBeNull();
     expect(screen.queryByTestId("agent-backend-create")).toBeNull();
+    // 这一组是填充块（与共享包分组同一个相对填充），不是 bg-raised——抬起色在浅色
+    // 下与内容页同为 #ffffff，落在内容页上等于没有底。
+    const group = screen.getByTestId("settings-backends-no-device")
+      .parentElement as HTMLElement;
+    expect(group.className).toMatch(/(^|\s)bg-field-fill(\s|$)/);
+    expect(group.className).not.toMatch(/(^|\s)bg-raised(\s|$)/);
+    expect(edgeClasses(group)).toEqual([]);
   });
 
   it("keeps the create entry once the account has a machine that can run a backend", async () => {

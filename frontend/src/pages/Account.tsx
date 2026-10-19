@@ -17,6 +17,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useMe } from "@/hooks/use-me";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { api, ApiError } from "@/lib/api";
 import { PASSKEY_CODES } from "@/lib/errorCodes";
 import {
@@ -70,16 +71,18 @@ function passkeyMetaLine(t: Translate, k: PasskeyRow): string {
   ].join(" · ");
 }
 
+/** 登录时间与最近活跃两段。桌面拼成一行接在 IP 后，移动端各占一行。 */
+function sessionTimes(t: Translate, s: SessionRow): string[] {
+  return [
+    t("account.signins.signedInAt", { date: formatDate(s.created_at) }),
+    t("account.signins.lastActiveAt", {
+      date: formatDate(s.last_active_at),
+    }),
+  ];
+}
+
 function sessionTimesLine(t: Translate, s: SessionRow): string {
-  return (
-    " · " +
-    [
-      t("account.signins.signedInAt", { date: formatDate(s.created_at) }),
-      t("account.signins.lastActiveAt", {
-        date: formatDate(s.last_active_at),
-      }),
-    ].join(" · ")
-  );
+  return " · " + sessionTimes(t, s).join(" · ");
 }
 
 /**
@@ -138,7 +141,7 @@ function isUserCancelled(e: unknown): boolean {
   return e instanceof DOMException && e.name === "NotAllowedError";
 }
 
-/** 卡片外壳：rounded-lg + border-border + bg-card。 */
+/** 分节：无边、无节头分隔线；节与节之间的距离由页面的 gap 给出。 */
 function SectionCard({
   title,
   subtitle,
@@ -151,8 +154,8 @@ function SectionCard({
   children: React.ReactNode;
 }) {
   return (
-    <section className="flex min-w-0 flex-col overflow-hidden rounded-lg border border-border bg-card">
-      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3">
+    <section className="flex min-w-0 flex-col">
+      <header className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="text-aux font-bold text-foreground">{title}</h2>
           {subtitle && (
@@ -183,10 +186,7 @@ function CardListSkeleton({ rows }: { rows: number }) {
         className="flex flex-col"
       >
         {Array.from({ length: rows }, (_, i) => (
-          <li
-            key={i}
-            className="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
-          >
+          <li key={i} className="flex items-center gap-3 px-4 py-3">
             <Skeleton className="size-8 shrink-0 rounded-md" />
             <span className="flex min-w-0 flex-1 flex-col gap-1.5">
               <Skeleton
@@ -209,6 +209,7 @@ function CardListSkeleton({ rows }: { rows: number }) {
 export default function Account() {
   const { t } = useTranslation();
   const { me } = useMe();
+  const isMobile = useIsMobile();
 
   const [passkeys, setPasskeys] = useState<PasskeyRow[] | null>(null);
   const [passkeysError, setPasskeysError] = useState<unknown>(null);
@@ -363,7 +364,7 @@ export default function Account() {
       {me ? (
         <div
           data-testid="account-page"
-          className="mx-auto flex w-full max-w-[840px] flex-col gap-4"
+          className="mx-auto flex w-full max-w-[840px] flex-col gap-8"
         >
           {/* 账号卡：github_login 第一次有地方显示。 */}
           <SectionCard title={t("account.profile.title")}>
@@ -375,23 +376,48 @@ export default function Account() {
                 <div className="truncate text-prose font-semibold text-foreground">
                   {me.display_name}
                 </div>
-                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
-                  <div className="flex min-w-0 items-baseline gap-1.5">
-                    <dt className="text-2xs text-muted-foreground">
-                      {t("account.profile.email")}
-                    </dt>
-                    <dd className="truncate text-xs text-muted-foreground">
-                      {me.email}
-                    </dd>
-                  </div>
-                  <div className="flex min-w-0 items-baseline gap-1.5">
-                    <dt className="text-2xs text-muted-foreground">
-                      {t("account.profile.github")}
-                    </dt>
-                    <dd className="truncate font-mono text-xs text-muted-foreground">
-                      {me.github_login}
-                    </dd>
-                  </div>
+                {/* 移动端：标签一列、值一列，值整段折行显示全；桌面照旧一行里截断。 */}
+                <div
+                  className={
+                    isMobile
+                      ? "flex flex-col gap-2"
+                      : "flex flex-wrap items-baseline gap-x-4 gap-y-0.5"
+                  }
+                >
+                  {[
+                    {
+                      label: t("account.profile.email"),
+                      value: me.email,
+                      mono: false,
+                    },
+                    {
+                      label: t("account.profile.github"),
+                      value: me.github_login,
+                      mono: true,
+                    },
+                  ].map((row) => (
+                    <div
+                      key={row.label}
+                      className={
+                        isMobile
+                          ? "grid grid-cols-[auto_1fr] items-start gap-1.5"
+                          : "flex min-w-0 items-baseline gap-1.5"
+                      }
+                    >
+                      <dt className="text-2xs text-muted-foreground">
+                        {row.label}
+                      </dt>
+                      <dd
+                        className={cn(
+                          "text-xs text-muted-foreground",
+                          row.mono && "font-mono",
+                          isMobile ? "break-words" : "truncate",
+                        )}
+                      >
+                        {row.value}
+                      </dd>
+                    </div>
+                  ))}
                 </div>
               </dl>
             </div>
@@ -421,7 +447,7 @@ export default function Account() {
           >
             {!supported && (
               // 不支持就说清楚为什么，不让用户去撞一次可预知的失败（决策 17）。
-              <p className="border-b border-border bg-status-waiting-bg px-4 py-2.5 text-xs text-status-waiting-text">
+              <p className="bg-status-waiting-bg px-4 py-2.5 text-xs text-status-waiting-text">
                 {unavailableBannerText(t, passkeySupportState)}
               </p>
             )}
@@ -451,22 +477,24 @@ export default function Account() {
                 }
               />
             ) : (
-              <ul>
-                {passkeys.map((k, i) => {
+              <ul className="flex flex-col gap-1">
+                {passkeys.map((k) => {
                   return (
                     <li
                       key={k.id}
-                      className={cn(
-                        "flex items-center gap-3 px-4 py-3",
-                        i > 0 && "border-t border-border",
-                      )}
+                      className="flex items-center gap-3 px-4 py-3"
                     >
                       <KeyRound className="size-4 shrink-0 text-decorative-foreground" />
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-aux font-semibold text-foreground">
                           {k.name}
                         </div>
-                        <div className="truncate text-2xs text-muted-foreground">
+                        <div
+                          className={cn(
+                            "text-2xs text-muted-foreground",
+                            !isMobile && "truncate",
+                          )}
+                        >
                           {passkeyMetaLine(t, k)}
                         </div>
                       </div>
@@ -524,14 +552,11 @@ export default function Account() {
               <CardListSkeleton rows={2} />
             ) : (
               <>
-                <ul>
+                <ul className="flex flex-col gap-1">
                   {sessions.map((s, i) => {
                     const isExpanded = expandedIndex === i;
                     return (
-                      <li
-                        key={i}
-                        className={cn(i > 0 && "border-t border-border")}
-                      >
+                      <li key={i}>
                         {/* 整行可点展开：UA 原样、等宽，默认截断（决策 7）。不解析
                             成「Chrome on macOS」——猜错会让人撤销掉正在用的那一个；
                             展开态只属于这一行自己，不影响其它行。 */}
@@ -571,10 +596,19 @@ export default function Account() {
                                 />
                               )}
                             </div>
-                            <div className="mt-0.5 truncate text-2xs text-muted-foreground">
-                              <span className="font-mono">{s.ip}</span>
-                              {sessionTimesLine(t, s)}
-                            </div>
+                            {isMobile ? (
+                              <div className="mt-0.5 text-2xs text-muted-foreground">
+                                <div className="font-mono">{s.ip}</div>
+                                {sessionTimes(t, s).map((line) => (
+                                  <div key={line}>{line}</div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="mt-0.5 truncate text-2xs text-muted-foreground">
+                                <span className="font-mono">{s.ip}</span>
+                                {sessionTimesLine(t, s)}
+                              </div>
+                            )}
                           </div>
                         </button>
                       </li>
@@ -582,7 +616,7 @@ export default function Account() {
                   })}
                 </ul>
                 {otherCount === 0 && (
-                  <p className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
+                  <p className="px-4 py-2.5 text-xs text-muted-foreground">
                     {t("account.signins.onlyCurrent")}
                   </p>
                 )}

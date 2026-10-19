@@ -16,6 +16,7 @@ import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
+import { edgeClasses } from "./helpers/edge-classes";
 import Overview from "@/pages/Overview";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -326,18 +327,18 @@ describe("overview: 顶栏", () => {
 
     await screen.findByText("Conversations");
     expect(asked).toEqual(["30d"]);
-    const d30 = screen.getByRole("button", { name: "Last 30 days" });
-    expect(d30.getAttribute("aria-pressed")).toBe("true");
+    const d30 = screen.getByRole("tab", { name: "Last 30 days" });
+    expect(d30.getAttribute("aria-selected")).toBe("true");
 
-    fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Last 7 days" }));
     await waitFor(() => expect(asked).toContain("7d"));
     expect(
       screen
-        .getByRole("button", { name: "Last 7 days" })
-        .getAttribute("aria-pressed"),
+        .getByRole("tab", { name: "Last 7 days" })
+        .getAttribute("aria-selected"),
     ).toBe("true");
 
-    fireEvent.click(screen.getByRole("button", { name: "All time" }));
+    fireEvent.click(screen.getByRole("tab", { name: "All time" }));
     await waitFor(() => expect(asked).toContain("all"));
   });
 });
@@ -757,16 +758,16 @@ describe("overview: 非稳态", () => {
     const tile = await screen.findByTestId("tile-conversations");
     expect(within(tile).getByText("Last 30 days")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Last 7 days" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Last 7 days" }));
     await waitFor(() => expect(calls).toBe(2));
 
-    // 分段控件当场跟手（aria-pressed 已经在 7 天上），但格子里那个数还是 30 天的。
+    // 分段控件当场跟手（aria-selected 已经在 7 天上），但格子里那个数还是 30 天的。
     // 标签跟着 range 走的话，这段窗口里界面在给一组贴错标签的数字——可读且错误，
     // 比闪一下骨架坏得多。
     expect(
       screen
-        .getByRole("button", { name: "Last 7 days" })
-        .getAttribute("aria-pressed"),
+        .getByRole("tab", { name: "Last 7 days" })
+        .getAttribute("aria-selected"),
     ).toBe("true");
     expect(
       within(screen.getByTestId("tile-conversations")).getByText(
@@ -887,7 +888,7 @@ describe("overview: 移动端", () => {
     renderOverview();
 
     await screen.findByTestId("heatmap-grid");
-    const rangeGroup = screen.getByRole("group", { name: "Stats range" });
+    const rangeGroup = screen.getByRole("tablist", { name: "Stats range" });
     expect(screen.getByRole("banner").contains(rangeGroup)).toBe(false);
     expect(screen.getByRole("main").contains(rangeGroup)).toBe(true);
   });
@@ -898,7 +899,7 @@ describe("overview: 移动端", () => {
     renderOverview();
 
     await screen.findByTestId("heatmap-grid");
-    const rangeGroup = screen.getByRole("group", { name: "Stats range" });
+    const rangeGroup = screen.getByRole("tablist", { name: "Stats range" });
     expect(screen.getByRole("banner").contains(rangeGroup)).toBe(true);
   });
 
@@ -910,6 +911,46 @@ describe("overview: 移动端", () => {
     const grid = await screen.findByTestId("heatmap-grid");
     expect(grid.className).not.toContain("overflow-x-auto");
     expect(grid.className).not.toContain("overflow-x-scroll");
+  });
+
+  /**
+   * 手指会挡住浮层：窄屏下热力图的读数换成图下方固定的一行，点一格更新一次
+   * （设计决策 8）。宽屏悬停那条既有覆盖没变，这里只补移动端这条新路径。
+   */
+  it("窄屏点一格热力格子：固定行报出日期、星期与条数；0 条时说没有对话", async () => {
+    setViewport(true);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Tap a cell to see that day",
+    );
+
+    // 默认响应里 2026-08-28（周五）有 11 条，2026-08-26（周三）不在 days 列表里，
+    // 落在 to 之前，算 0 条。
+    const busyCell = document.querySelector('[data-day="2026-08-28"]');
+    expect(busyCell).not.toBeNull();
+    fireEvent.click(busyCell as HTMLElement);
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 28, 2026 (Fri) · 11 conversations",
+    );
+
+    const idleCell = document.querySelector('[data-day="2026-08-26"]');
+    expect(idleCell).not.toBeNull();
+    fireEvent.click(idleCell as HTMLElement);
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 26, 2026 (Wed) · No conversations",
+    );
+  });
+
+  it("宽屏不画那一行固定读数：悬停行为照旧", async () => {
+    setViewport(false);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.queryByTestId("heatmap-readout")).toBeNull();
   });
 
   it("桌面/移动重排：统计 2 列→4 列，分布行纵向→横向，右列满宽→300px", async () => {
@@ -976,5 +1017,72 @@ describe("overview: 跟着通道走", () => {
     await waitFor(() =>
       expect(screen.queryByText("Home NUC is offline")).toBeNull(),
     );
+  });
+});
+
+// ── 无边框改版：总览不再用结构线划区 ─────────────────────────────────────
+describe("overview: 无边框", () => {
+  it("摘要四格、卡片、范围分段控件、侧栏要点都没有结构线", async () => {
+    serve();
+    renderOverview();
+
+    const tiles = await screen.findByTestId("overview-tiles");
+    await screen.findByTestId("tile-conversations");
+    // 指标块本体（共享的 console Metric）的边由外壳那一任务去掉，这里只管
+    // 总览自己画的那层：网格容器，以及落地后其余自画的块。
+    expect(tiles.className).not.toMatch(/(^|\s)border/);
+    expect(edgeClasses(screen.getByTestId("heatmap-card"))).toEqual([]);
+    expect(
+      edgeClasses(screen.getByRole("tablist", { name: "Stats range" })),
+    ).toEqual([]);
+    const rest = screen.getByRole("main").cloneNode(true) as Element;
+    rest.querySelectorAll('[data-testid^="tile-"]').forEach((n) => n.remove());
+    expect(edgeClasses(rest)).toEqual([]);
+  });
+
+  it("加载骨架和取数失败的卡同样没有结构线", async () => {
+    serve({ "/v1/stats/overview": () => new Promise(() => {}) });
+    const first = renderOverview();
+    const tiles = await screen.findByTestId("overview-tiles");
+    expect(edgeClasses(tiles)).toEqual([]);
+    first.unmount();
+
+    serve({
+      "/v1/stats/overview": () => {
+        throw new Error("boom");
+      },
+    });
+    renderOverview();
+    const err = await screen.findByTestId("stats-error");
+    expect(edgeClasses(err.parentElement as Element)).toEqual([]);
+  });
+
+  it("全新账号的等待中提示条是填充，不画边", async () => {
+    serve({
+      "/v1/stats/overview": freshAccountResponse(),
+      "/v1/devices": { devices: [] },
+      "/v1/workspace/agents": { agents: [] },
+      "/v1/workspace/projects": { projects: [] },
+    });
+    renderOverview();
+    const guide = await screen.findByTestId("stats-new-account");
+    expect(edgeClasses(guide)).toEqual([]);
+    expect(guide.className).toContain("bg-status-waiting-bg");
+  });
+
+  it("热力图「没有活动」的格子取相对前景的填充，不再是固定色 heat-0", async () => {
+    serve();
+    renderOverview();
+    const grid = await screen.findByTestId("heatmap-grid");
+    const empty = within(grid)
+      .getAllByTestId("heat-cell")
+      .find((c) => c.getAttribute("data-level") === "0");
+    expect(empty).toBeDefined();
+    expect(empty!.classList.contains("bg-button-fill")).toBe(true);
+    expect(empty!.classList.contains("bg-heat-0")).toBe(false);
+    const legend0 = within(screen.getByTestId("heat-legend"))
+      .getAllByTestId("heat-legend-swatch")
+      .find((c) => c.getAttribute("data-level") === "0");
+    expect(legend0!.classList.contains("bg-button-fill")).toBe(true);
   });
 });

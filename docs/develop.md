@@ -68,6 +68,7 @@ Every rule below fails a build.
 | Test-only bearer resolver never links into `bin/server` | `internal/middleware/bearertest/isolation_test.go` |
 | No literal colours in ts/tsx | `no-restricted-syntax` (`frontend/eslint.config.js`) |
 | A colour token is used in its role: no fill colour as text on its own soft background, no hand-assembled `ring-ring` focus ring, no `text-agent-N`, no `hover:bg-muted` / `hover:bg-secondary` | `no-restricted-syntax` (`frontend/eslint-rules/design-tokens.js`) |
+| No structural lines: no divider-coloured edge (`border-border`, `border-*-border`), no `divide-*`, no field or outline-button edge (`border-input`, `border-field-border`); checkbox / radio / switch edges (`border-control-border`), focus rings, status bars and drop targets are not matched. A genuine exception is a line-level `// eslint-disable-next-line no-restricted-syntax -- <reason>` | `no-restricted-syntax` (`frontend/eslint-rules/design-tokens.js`) |
 | No literal UI copy | `i18next/no-literal-string` |
 | No direct `crypto.randomUUID` | `no-restricted-syntax` (`frontend/eslint-rules/secure-context.js`) |
 | Locale files have identical keys | `frontend/src/i18n/__tests__/locale-parity.test.ts` |

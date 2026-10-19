@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   HEATMAP_DESKTOP_WEEKS,
@@ -13,6 +13,20 @@ import i18n from "@/i18n";
 beforeEach(async () => {
   await i18n.changeLanguage("en");
 });
+
+/** 与 session-detail-mobile.test.tsx 同一个桩：把 matchMedia 改答成移动视口。 */
+function mockMobileViewport() {
+  window.matchMedia = ((query: string) => ({
+    matches: query.includes("max-width: 767px"),
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+}
 
 /**
  * 列数跟着**容器量到的宽度**走。
@@ -141,5 +155,189 @@ describe("热力图的悬停读数", () => {
   it("不再挂原生 title：两层气泡会一起冒出来", () => {
     render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
     expect(cellOf("2026-08-28").hasAttribute("title")).toBe(false);
+  });
+});
+
+/**
+ * 移动端点按读数：手指会挡住浮层，固定行不遮挡格子（设计决策 8）。
+ *
+ * 只在 isMobile 时生效——desktop 悬停行为不变，验证方式是这一整块桩前后
+ * 桌面视口那些既有用例（上面的「热力图的悬停读数」）不受影响。
+ */
+describe("热力图的点按读数（移动端）", () => {
+  const realMatchMedia = window.matchMedia;
+  const days = [
+    { day: "2026-08-28", count: 12 },
+    { day: "2026-08-24", count: 0 },
+  ];
+
+  function cellOf(day: string): HTMLElement {
+    const cell = document.querySelector(`[data-day="${day}"]`);
+    expect(cell).not.toBeNull();
+    return cell as HTMLElement;
+  }
+
+  afterEach(() => {
+    window.matchMedia = realMatchMedia;
+  });
+
+  it("未点任何格子时，固定行提示「点一格看当天」", () => {
+    mockMobileViewport();
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Tap a cell to see that day",
+    );
+  });
+
+  it("点一格（2026-08-28 是周五，12 个对话）：读数换成日期 + 星期 + 条数", () => {
+    mockMobileViewport();
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    fireEvent.click(cellOf("2026-08-28"));
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 28, 2026 (Fri) · 12 conversations",
+    );
+  });
+
+  it("那天是 0 条：读数说「没有对话」而不是「0 conversations」", () => {
+    mockMobileViewport();
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    fireEvent.click(cellOf("2026-08-24"));
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 24, 2026 (Mon) · No conversations",
+    );
+  });
+
+  it("中文界面：读数说「N 个对话」（规格原文），而不是统计卡的量词「N 条」", async () => {
+    await i18n.changeLanguage("zh-CN");
+    mockMobileViewport();
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    fireEvent.click(cellOf("2026-08-28"));
+    const text = screen.getByTestId("heatmap-readout").textContent ?? "";
+    expect(text).toContain("（周五）");
+    expect(text.endsWith(" · 12 个对话")).toBe(true);
+  });
+
+  it("英文单数：1 天 1 个对话读作「1 conversation」", () => {
+    mockMobileViewport();
+    render(
+      <Heatmap
+        to="2026-08-28"
+        weeks={5}
+        days={[{ day: "2026-08-28", count: 1 }]}
+      />,
+    );
+    fireEvent.click(cellOf("2026-08-28"));
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 28, 2026 (Fri) · 1 conversation",
+    );
+  });
+
+  it("网格换列数（转屏改宽）后：读数与描边仍跟着点的那一天，而不是同一坐标上的另一天", () => {
+    mockMobileViewport();
+    const { rerender } = render(
+      <Heatmap to="2026-08-28" weeks={5} days={days} />,
+    );
+    fireEvent.click(cellOf("2026-08-28"));
+
+    rerender(<Heatmap to="2026-08-28" weeks={6} days={days} />);
+
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Aug 28, 2026 (Fri) · 12 conversations",
+    );
+    expect(cellOf("2026-08-28").className).toContain("ring-primary");
+    expect(
+      document.querySelectorAll(
+        '[data-testid="heat-cell"][class*="ring-primary"]',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("点过的那天滚出网格（换了截止日）：读数回到提示，不报别的日子", () => {
+    mockMobileViewport();
+    const { rerender } = render(
+      <Heatmap to="2026-08-28" weeks={5} days={days} />,
+    );
+    fireEvent.click(cellOf("2026-08-24"));
+
+    rerender(<Heatmap to="2026-10-30" weeks={5} days={days} />);
+
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Tap a cell to see that day",
+    );
+  });
+
+  it("被点的格子有选中描边，其余格子没有", () => {
+    mockMobileViewport();
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    const target = cellOf("2026-08-28");
+    const other = cellOf("2026-08-24");
+    fireEvent.click(target);
+    expect(target.className).toContain("ring-primary");
+    expect(other.className).not.toContain("ring-primary");
+  });
+
+  it("今天之后的格子不可点：没有 onClick，点了也不改读数", () => {
+    mockMobileViewport();
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    // 2026-08-28 是周五，同一列的周六（2026-08-29）是 to 之后的空格。
+    const blanks = screen
+      .getAllByTestId("heat-cell")
+      .filter((c) => !c.hasAttribute("data-day"));
+    expect(blanks.length).toBeGreaterThan(0);
+    fireEvent.click(blanks[0]);
+    expect(screen.getByTestId("heatmap-readout").textContent).toBe(
+      "Tap a cell to see that day",
+    );
+  });
+
+  it("桌面视口：不画固定读数行，点格子也不加选中描边", () => {
+    render(<Heatmap to="2026-08-28" weeks={5} days={days} />);
+    expect(screen.queryByTestId("heatmap-readout")).toBeNull();
+    const cell = cellOf("2026-08-28");
+    fireEvent.click(cell);
+    expect(cell.className).not.toContain("ring-primary");
+  });
+});
+
+/**
+ * 月份标签互不相压。
+ *
+ * 最左边那一列往往落在某个月的尾巴上，下一个月一两列之后就开始了；两只标签挨着
+ * 绝对定位，「Oct」和「Nov」（中文下「10月」「11月」）叠成一团。标签要三个
+ * text-2xs 字宽才放得下，按列步距折算就是三列——挨得更近的那只（前面那个残月）不画。
+ */
+describe("热力图的月份标签", () => {
+  /** 月份那一行里画出来的标签，按 left 排好。 */
+  function monthLabels(): { text: string; left: number }[] {
+    const row = screen.getByTestId("heatmap-grid").firstElementChild;
+    expect(row).not.toBeNull();
+    return Array.from((row as HTMLElement).children).map((el) => ({
+      text: el.textContent ?? "",
+      left: Number.parseFloat((el as HTMLElement).style.left),
+    }));
+  }
+
+  // 一列步距 16px（13px 格 + 3px 缝），标签至少要三列宽。
+  const MIN_GAP_PX = 3 * 16;
+
+  it("首列是残月、下个月一列之后就开始：残月那只标签不画，不和下一只叠在一起", () => {
+    // 2026-10-17 往回 51 周，第一列是 2025-10-26，第二列 2025-11-02 已经是 11 月。
+    render(<Heatmap to="2026-10-17" weeks={51} />);
+    const labels = monthLabels();
+    for (let i = 1; i < labels.length; i++) {
+      expect(labels[i].left - labels[i - 1].left).toBeGreaterThanOrEqual(
+        MIN_GAP_PX,
+      );
+    }
+    // 最左边是第 1 列的 11 月，第 0 列那个 10 月的残月不画（末尾那只 Oct 是 2026 年的）。
+    expect(labels[0]).toEqual({ text: "Nov", left: 16 });
+  });
+
+  it("首月与下个月正好隔三列：两只都放得下，都画", () => {
+    // 往回 53 周，第一列 2025-10-12，11 月从第 3 列（2025-11-02）开始。
+    render(<Heatmap to="2026-10-17" weeks={53} />);
+    const labels = monthLabels();
+    expect(labels[0]).toEqual({ text: "Oct", left: 0 });
+    expect(labels[1]).toEqual({ text: "Nov", left: MIN_GAP_PX });
   });
 });
