@@ -559,7 +559,9 @@ both TopBar and mobile bottom tab bar, and `main` handles safe-area insets at to
 The conversation detail page (`/chat/:conversationId`) and new-conversation draft render this
 way on mobile, so a session occupies the full viewport with a single fixed 68px header band
 (see [The detail's three bands](#the-details-three-bands)). Desktop and embedded forms ignore
-`immersive`. Loading / not-found / error states keep the back link through the header band.
+`immersive`. Loading / not-found / error states keep the back link through the header band. A page rendered
+`immersive` must not add its own top inset as well — the new-conversation draft therefore
+leaves it to the shell, while the "pick from a project" screen (not immersive) still adds it.
 
 **Mobile bottom tab (board `A6Z3k`).** Below `md` the SideNav is removed entirely — no
 hamburger, no drawer. The five high-frequency destinations (Overview, Chat, Issues, Devices,
@@ -903,11 +905,13 @@ desktop app group and draw a conversation the same way.
 
 ### Org
 
-`/org` displays agents and departments. Desktop shows two columns side by side (index list and
-detail pane); mobile replaces this with one column at a time (index → detail → back).
+`/org` displays agents and departments. Desktop shows two columns side by side: the index list
+is the shell's `index` column on the chrome, the detail pane sits in the sheet. Mobile replaces
+this with one column at a time (index → detail → back).
 
-- **Mobile layout.** The detail column carries `min-h-0` on mobile, so its own `overflow-y-auto`
-  scrolls instead of the document. The agent detail's scroll region is also `relative`: the
+- **Mobile layout.** The detail column carries `min-h-0` (at every width — its parent is a
+  `flex-col` on desktop too, now that the index lives in the shell), so its own
+  `overflow-y-auto` scrolls instead of the document. The agent detail's scroll region is also `relative`: the
   execution-target section ends in an `sr-only` announcer, which is `position: absolute`, and
   without a positioned ancestor inside the region it is placed against the root, stretches the
   document, and a swipe past the region's end scrolls the page. A write-failure banner (same

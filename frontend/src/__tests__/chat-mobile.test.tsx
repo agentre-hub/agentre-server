@@ -712,6 +712,21 @@ describe("移动端新建对话：顶部安全区", () => {
     expect(insetHolder(await openDraft())).not.toBeNull();
   });
 
+  it("草稿那一屏只让一次：壳的 immersive 已经让过，整屏容器不再叠一层", async () => {
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    const head = await openDraft();
+    const holders: HTMLElement[] = [];
+    for (let n: HTMLElement | null = head; n; n = n.parentElement) {
+      if (typeof n.className === "string" && n.className.includes(SAFE_TOP)) {
+        holders.push(n);
+      }
+    }
+    expect(holders).toHaveLength(1);
+  });
+
   it("「从项目里挑」那一屏的页头让出顶部安全区", async () => {
     stubApi([waitingMirrored]);
     renderChat();

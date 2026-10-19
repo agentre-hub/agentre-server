@@ -117,6 +117,15 @@ describe("组织页无边框：索引列在外框，详情是内容页", () => {
     expect(indexCol.className).not.toMatch(/(^|\s)bg-/);
   });
 
+  it("桌面：详情列的父容器也是 flex-col，详情列同样带 min-h-0，详情自己的滚动容器才生效", async () => {
+    renderOrgAt("/org/agent/agent-alice");
+    await screen.findByTestId("org-detail-header");
+
+    const detailCol = screen.getByTestId("org-detail-col");
+    expect(detailCol.parentElement!.className).toContain("flex-col");
+    expect(detailCol.className).toMatch(/(^|\s)min-h-0(\s|$)/);
+  });
+
   it.each([
     ["/org/agent/agent-alice", "org-detail-agent"],
     ["/org/department/dept-eng", "org-detail-department"],
