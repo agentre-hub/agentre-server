@@ -90,6 +90,10 @@
     "offline": "Offline",
     "back": "Back"
   },
+  "filePreviewLayer": {
+    "back": "Back to conversation",
+    "location": "{{dir}} · {{machine}}"
+  },
   "list": {
     "running": "Running",
     "idle": "Idle",

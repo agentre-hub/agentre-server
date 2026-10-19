@@ -230,6 +230,25 @@ export default function Org() {
   const initialLoading = loading && !chart;
   const initialFailed = error !== null && !chart;
 
+  // 同一条错误，两个落点：索引底部（桌面、以及移动端回到索引后）与详情头下方
+  // （移动端正看详情时，见下面传给两个详情组件的 alert 槽）。落点由「当前这一屏
+  // 是哪个」决定，不是两处都画——两列在移动端本就一次只挂一个（showIndex /
+  // showDetail），所以只要各自的宿主只在自己那一档渲染这条文案，就天然不会重复。
+  const alertMessage = initialFailed
+    ? null
+    : error
+      ? t("org.errors.generic")
+      : mutationError || null;
+  // 只在移动端且真的在看详情（不是骨架/失败态）时才递下去——两个详情组件把它摆在
+  // 自己的头部下方（OrgDetailHeader 之后、正文之前）；桌面端不传，桌面的这条错误
+  // 只在索引底部那一处出现，形态不变。
+  const detailAlert =
+    isMobile && alertMessage ? (
+      <p role="alert" className="p-2.5 text-2xs text-destructive-text">
+        {alertMessage}
+      </p>
+    ) : undefined;
+
   // 索引列 320px（mockup `.index`）直接落在外框（bg-chrome）上，不画自己的底色
   // 与右边线：行与组头的选中面是 bg-raised，就是照外框这个底调的。桌面经外壳的
   // `index` 槽摆到内容页左侧；移动端外壳不渲染它，它自己当整页（宽度交出去）。
@@ -264,6 +283,7 @@ export default function Org() {
           maps={models.maps}
           selection={numericSelection}
           onSelect={handleSelect}
+          isMobile={isMobile}
           onCreateDepartment={(parentDepartmentId) =>
             openCreateDepartment(
               parentDepartmentId
@@ -278,9 +298,9 @@ export default function Org() {
           }
         />
       )}
-      {!initialFailed && (error ?? mutationError) && (
+      {alertMessage && (
         <p role="alert" className="p-2.5 text-2xs text-destructive-text">
-          {error ? t("org.errors.generic") : mutationError}
+          {alertMessage}
         </p>
       )}
     </div>
@@ -312,7 +332,10 @@ export default function Org() {
         {showDetail && (
           <div
             data-testid="org-detail-col"
-            className="flex min-w-0 flex-1 flex-col"
+            // 父容器是 flex-col（桌面索引列已交给外壳的 `index` 槽，这里只剩详情；
+            // 移动端一次只摆一页）：不给 min-h-0，这一列的默认 min-height:auto 会
+            // 顶开父容器（内容多高它就多高），详情自己的 overflow-y-auto 反而不起作用。
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
           >
             {initialFailed ? (
               <div
@@ -384,6 +407,7 @@ export default function Org() {
                 onReload={() => void reload()}
                 onBack={isMobile ? () => setSelection(null) : undefined}
                 onClose={() => setSelection(null)}
+                alert={detailAlert}
               />
             ) : selectedDepartment && selectedDepartmentModel ? (
               <OrgDepartmentDetail
@@ -393,6 +417,7 @@ export default function Org() {
                 agents={models.agents}
                 departments={models.departments}
                 maps={models.maps}
+                alert={detailAlert}
                 onUpdate={(fields) =>
                   runFieldUpdate(async () => {
                     await writes.updateDepartment(

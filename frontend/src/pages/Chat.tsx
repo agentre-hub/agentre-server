@@ -14,6 +14,7 @@ import AppControls from "@/components/AppControls";
 import { EmptyState } from "@/components/console";
 import {
   Button,
+  cn,
   DialogShell,
   DialogShellBody,
   DialogShellFooter,
@@ -1126,18 +1127,28 @@ export default function Chat() {
   }
 
   return (
-    <AppShell flush ownHeader index={desktopIndex}>
+    <AppShell
+      flush
+      ownHeader
+      index={desktopIndex}
+      // 新对话草稿与会话详情同一种沉浸形态（决策 3）：底部 tab 也让出来，只剩草稿自己那层头部。
+      immersive={isMobile && compose?.step === "draft"}
+    >
       {isMobile &&
       (compose?.step === "draft" || compose?.step === "project") ? (
         /* 窄屏没有第二栏可用：这两步各占一整屏，返回回到底部弹层那一步。
 
            整屏也就贴着屏幕顶：壳走 ownHeader 不画顶栏、替不了它们让安全区，与索引
            页头同一个让法由这一格让（两屏的页头都在它顶上，桌面右栏不经过这里）。
-           box-sizing: border-box，里面的 h-full 按扣掉 inset 后的高度算；无刘海设备
-           env() 为 0、与改动前逐像素相同。 */
+           草稿那一屏除外：它走壳的 immersive，安全区已由壳的主区让过，这里再让就
+           让两次。box-sizing: border-box，里面的 h-full 按扣掉 inset 后的高度算；
+           无刘海设备 env() 为 0、与改动前逐像素相同。 */
         <div
           data-testid="chat-mobile-compose"
-          className="h-full min-h-0 pt-[env(safe-area-inset-top,0px)]"
+          className={cn(
+            "h-full min-h-0",
+            compose.step === "project" && "pt-[env(safe-area-inset-top,0px)]",
+          )}
         >
           {compose.step === "draft" ? composeDraft : composeProject}
         </div>

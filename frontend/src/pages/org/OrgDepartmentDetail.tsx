@@ -44,6 +44,9 @@ export interface OrgDepartmentDetailProps {
   /** 移动端下钻回索引；桌面端不传（索引一直并排摆着，返回没有可去之处）。 */
   onBack?: () => void;
   onClose: () => void;
+  /** 移动端看这一屏时的失败提示（删除失败），落在头部下方；桌面端不传——
+   * 那条错误只在索引底部出现，形态不变（宿主内部约定，见 Org.tsx）。 */
+  alert?: React.ReactNode;
 }
 
 export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
@@ -124,6 +127,8 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
         onBack={props.onBack}
         onClose={props.onClose}
       />
+
+      {props.alert}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div className="flex max-w-md min-w-0 flex-col gap-4">

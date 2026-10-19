@@ -25,7 +25,9 @@
       "addAgent": "New agent"
     },
     "newDepartment": "New department",
-    "newAgent": "New agent"
+    "newAgent": "New agent",
+    "newTopLevelDepartment": "New top-level department",
+    "addMenuAria": "Add agent or department"
   },
   "detail": {
     "columns": {

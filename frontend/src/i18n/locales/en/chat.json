@@ -28,6 +28,7 @@
   "inheritedMembers": "Inherited from parent project",
   "inheritedTag": "Inherited",
   "newSessionTitle": "New chat · {{name}}",
+  "draftTitle": "New chat",
   "startWithAgent": "Start a conversation with {{agent}}",
   "startWithAgentInProject": "Start a project conversation with {{agent}} in {{project}}",
   "pickTargetTitle": "Where it runs",

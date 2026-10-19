@@ -3,11 +3,11 @@ import { MessageCircleOff, RotateCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import AppShell from "@/components/AppShell";
 import { EmptyState } from "@/components/console";
 import SessionDetailView, {
   type SessionDetailViewProps,
 } from "@/components/session/SessionDetailView";
+import { SessionPageStateShell } from "@/components/session/SessionDetailHeader";
 import {
   readMirrorRow,
   type MirrorSessionItem,
@@ -103,7 +103,13 @@ export default function ResolvedSessionDetail({
   );
 
   const wrap = (node: ReactNode) =>
-    detailProps.form === "embedded" ? node : <AppShell>{node}</AppShell>;
+    detailProps.form === "embedded" ? (
+      node
+    ) : (
+      <SessionPageStateShell backTo={detailProps.backTo}>
+        {node}
+      </SessionPageStateShell>
+    );
 
   // 种子是宿主手里真实的一行，先于形状校验：会话号的形状只对「从地址来的」起作用。
   if (seed) {
