@@ -87,7 +87,7 @@ describe("App shell wiring", () => {
     });
 
     renderAt("/overview");
-    await screen.findByRole("group", { name: "Stats range" });
+    await screen.findByRole("tablist", { name: "Stats range" });
 
     await waitFor(() => expect(chat).toHaveBeenCalledTimes(1));
   });
@@ -113,7 +113,7 @@ describe("App shell wiring", () => {
       // 认的是总览独有的范围分段控件：这一页此前靠 Agent 卡那个 h1 指认，而那张卡
       // 已经换成以统计为主的版式，页面标题只剩顶栏那一处（与设备/对话/组织一致）。
       expect(
-        await screen.findByRole("group", { name: "Stats range" }),
+        await screen.findByRole("tablist", { name: "Stats range" }),
       ).toBeTruthy();
       expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
     });

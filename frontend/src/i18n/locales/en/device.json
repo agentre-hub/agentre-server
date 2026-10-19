@@ -178,12 +178,7 @@
     "copyDone": "Address copied",
     "copyFailed": "Could not copy the address",
     "add": {
-      "port": "Port",
-      "name": "Name",
-      "submit": "Add",
-      "cancel": "Cancel",
-      "invalidPort": "Enter a port number between 1 and 65535.",
-      "portTaken": "This port already has a mapping on this device.",
+      "targetTaken": "This target already has a mapping on this device.",
       "failed": "Could not add the mapping. {{message}}"
     }
   }

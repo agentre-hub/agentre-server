@@ -1,16 +1,18 @@
 package portforward_test
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/configs/memory"
 	"github.com/cago-frame/cago/database/redis"
@@ -24,68 +26,58 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/api"
 	"github.com/agentre-hub/agentre-server/internal/bootstrap"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/portforward_link_entity"
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo/mock_device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/portforward_link_repo/mock_portforward_link_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
-	"github.com/agentre-hub/agentre-server/internal/service/mirror_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/portforward_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/relay_svc"
+	"github.com/agentre-hub/agentre-server/internal/service/user_svc"
 	"github.com/agentre-hub/agentre-server/internal/testutils"
 	"github.com/agentre-hub/agentre-server/internal/web"
 )
 
 // 这一批用例走的是**真实的**那条路：cago 建的 gin engine（Recover + logger 全局链）、
-// 真实的 internal/api/router.go 路由树、真实的 middleware.SessionAuth、真实的
-// device_svc.OwnedDevice（只把 device_repo 换成 mockgen 的 mock）、以及真实的
-// internal/web SPA 兜底。
+// 真实的 internal/api/router.go 路由树、真实的会话存储（miniredis 背后）、真实的
+// device_svc.OwnedDevice 与 portforward_svc 的 Links / ForwardAuth（只把两个 repo
+// 换成 mockgen 的 mock），以及真实的 internal/web SPA 兜底——转发 Host 上的请求到底
+// 有没有落进控制台路由或 SPA 外壳，只有它们都在场时才看得见。
 //
-// 兜底必须是真的：形状不对的 /fw/… 会拿到 200 + index.html 这个缺陷（规格决策 10）
-// 只有在它在场时才看得见——换成一个自己写的 NoRoute，测的就是另一件事了。
-//
-// 只有两处是替身：连接池（Forwarder，它那一侧由 portforward_svc 自己的用例覆盖）与
-// 在线判定（Presence，它要一台真设备和一条中继）。
+// 只有两处是替身：连接池（Forwarder）与在线判定（Presence）。
 
 const (
-	fwUserID      = int64(7)
-	fwDeviceID    = int64(12)
-	fwFingerprint = "sha256:fp-agentred-01"
-	fwPort        = uint32(3000)
-	fwCookieName  = "server_session"
+	baseDomain  = "fw.test"
+	prefixA     = "abcdefghijkl"
+	prefixB     = "mnopqrstuvwx"
+	userID      = int64(7)
+	otherUserID = int64(8)
+	deviceID    = int64(12)
+	mappingID   = int64(3)
+	fingerprint = "sha256:fp-agentred-01"
 )
 
-// acquireCall 记一次借用：控制器把地址里的设备翻成指纹之后到底问了谁的哪个端口。
 type acquireCall struct {
 	userID      int64
 	fingerprint string
-	port        uint32
+	mappingID   int64
 }
 
-// stubForwarder 站在 portforward_svc.Pool 的位置上。它交出的是一个普通的
-// http.Handler——正是 Acquire 的契约（动态类型是共享包的 *portforwardhost.Proxy，
-// 而这一层只认接口）。
 type stubForwarder struct {
 	mu       sync.Mutex
 	calls    []acquireCall
 	released int
-
-	// errs 逐次交出：第一次 Acquire 取 errs[0]，第二次取 errs[1]，用完为止。
-	// 「刚拿到的连接就断了、重试一次即可」那条路要靠它表达。
-	errs    []error
-	handler http.Handler
+	handler  http.Handler
 }
 
 func (s *stubForwarder) Acquire(
-	_ context.Context, userID int64, fingerprint string, port uint32,
+	_ context.Context, userID int64, fingerprint string, mappingID int64,
 ) (http.Handler, func(), error) {
 	s.mu.Lock()
-	n := len(s.calls)
-	s.calls = append(s.calls, acquireCall{userID: userID, fingerprint: fingerprint, port: port})
+	s.calls = append(s.calls, acquireCall{userID, fingerprint, mappingID})
 	s.mu.Unlock()
-	if n < len(s.errs) && s.errs[n] != nil {
-		return nil, nil, s.errs[n]
-	}
 	return s.handler, func() {
 		s.mu.Lock()
 		s.released++
@@ -99,114 +91,104 @@ func (s *stubForwarder) snapshot() ([]acquireCall, int) {
 	return append([]acquireCall(nil), s.calls...), s.released
 }
 
-// stubPresence 只答「这台机器此刻在不在线」。内嵌 RelaySvc 是为了满足 RouterDeps
-// 那个字段的完整接口——其余方法这条路径上一个都不会被调到，真被调到就是 nil 解引用，
-// 那正是该红的。
 type stubPresence struct {
 	relay_svc.RelaySvc
-	mu      sync.Mutex
-	online  bool
-	err     error
-	asked   []string
-	askedID []int64
+	online bool
 }
 
-func (s *stubPresence) IsDaemonOnline(_ context.Context, accountID int64, fingerprint string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.asked = append(s.asked, fingerprint)
-	s.askedID = append(s.askedID, accountID)
-	return s.online, s.err
+func (s *stubPresence) IsDaemonOnline(context.Context, int64, string) (bool, error) {
+	return s.online, nil
 }
 
-func (s *stubPresence) asks() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.asked...)
+// seen 是被转发应用收到的那一个请求。
+type seen struct {
+	requestURI    string
+	cookie        []string
+	authorization string
 }
 
-// recordingHandler 是被转发的那个应用。它记下自己收到的请求行，于是「前缀剥掉没有」
-// 是它说了算，而不是靠读实现。
-type recordingHandler struct {
-	mu          sync.Mutex
-	requestURIs []string
-	flusher     bool
-	hijacker    bool
-	body        string
-	onServe     func(w http.ResponseWriter, r *http.Request)
+type recordingApp struct {
+	mu   sync.Mutex
+	reqs []seen
 }
 
-func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.mu.Lock()
-	h.requestURIs = append(h.requestURIs, r.URL.RequestURI())
-	_, h.flusher = w.(http.Flusher)
-	_, h.hijacker = w.(http.Hijacker)
-	h.mu.Unlock()
-	if h.onServe != nil {
-		h.onServe(w, r)
-		return
-	}
+func (a *recordingApp) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	a.reqs = append(a.reqs, seen{
+		requestURI: r.URL.RequestURI(), cookie: r.Header.Values("Cookie"),
+		authorization: r.Header.Get("Authorization"),
+	})
+	a.mu.Unlock()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = io.WriteString(w, h.body)
+	_, _ = io.WriteString(w, "hello from the device")
 }
 
-func (h *recordingHandler) uris() []string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]string(nil), h.requestURIs...)
+func (a *recordingApp) requests() []seen {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]seen(nil), a.reqs...)
 }
 
 type harness struct {
 	engine    *gin.Engine
+	mini      *miniredis.Miniredis
+	auth      *portforward_svc.ForwardAuth
 	devices   *mock_device_repo.MockDeviceRepo
+	links     *mock_portforward_link_repo.MockPortForwardLinkRepo
 	forwarder *stubForwarder
 	presence  *stubPresence
-	app       *recordingHandler
+	app       *recordingApp
+	https     bool
 }
 
-// newHarness 装起整条真实链路。pool 传 nil 表示「这个部署没有装配端口转发池」。
-func newHarness(t *testing.T, withPool bool) *harness {
+func newHarness(t *testing.T, https bool) *harness {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	testutils.Redis(t)
-	auth_svc.SetDefault(auth_svc.New(redis.Default(),
-		session.New(redis.Default(), 86400)))
-	// OwnedDevice 只走 device_repo，签名器与配置都用不上（与 http_golden_test 同）。
+	mini := testutils.Redis(t)
+	store := session.New(redis.Default(), 86400)
+	authSvc := auth_svc.New(redis.Default(), store)
+	authSvc.SetSecureCookies(https)
+	auth_svc.SetDefault(authSvc)
 	device_svc.SetDefault(device_svc.New(device_svc.Config{}))
 
 	ctrl := gomock.NewController(t)
 	t.Cleanup(ctrl.Finish)
 	devices := mock_device_repo.NewMockDeviceRepo(ctrl)
 	device_repo.RegisterDevice(devices)
+	linkRepo := mock_portforward_link_repo.NewMockPortForwardLinkRepo(ctrl)
 
-	app := &recordingHandler{body: "hello from the device"}
+	publicURL := "http://console.test:8443"
+	if https {
+		publicURL = "https://console.test"
+	}
+	app := &recordingApp{}
 	h := &harness{
-		devices:   devices,
-		forwarder: &stubForwarder{handler: app},
-		presence:  &stubPresence{online: true},
-		app:       app,
+		mini: mini, devices: devices, links: linkRepo,
+		forwarder: &stubForwarder{handler: app}, presence: &stubPresence{online: true}, app: app,
+		https: https,
+		auth:  portforward_svc.NewForwardAuth(redis.Default(), store, time.Hour),
 	}
-
 	deps := &api.RouterDeps{
-		Cfg:   &bootstrap.ServerConfig{RateLimit: bootstrap.RLConfig{AuthorizePerIPPerMin: 100}},
-		Relay: h.presence,
-		Redis: redis.Default(),
-	}
-	if withPool {
-		deps.PortForward = h.forwarder
+		Cfg: &bootstrap.ServerConfig{
+			PublicURL:       publicURL,
+			InsecureCookies: !https,
+			PortForward:     bootstrap.PortForwardConfig{BaseDomain: baseDomain},
+			RateLimit:       bootstrap.RLConfig{AuthorizePerIPPerMin: 100},
+		},
+		Relay:       h.presence,
+		Redis:       redis.Default(),
+		PortForward: h.forwarder,
+		PortForwardPrefixes: portforward_svc.NewLinks(
+			portforward_svc.LinkConfig{BaseDomain: baseDomain, PublicURL: publicURL}, linkRepo),
+		PortForwardAuth: h.auth,
 	}
 	h.engine = newEngine(t, deps)
 	return h
 }
 
-// newEngine 让 cago 自己去建那个 engine，而不是 muxtest 的 gin.Default()。
-//
-// 理由只有一条：web.MountSPA 把 SPA 兜底登记进 cago 的 mux 全局中间件表，那张表没有
-// 读口，唯一能把真实兜底装到 engine 上的办法就是让 mux 自己走一遍它的启动路径。顺带
-// 拿到的是生产上真正跑着的那条中间件链（Recover + cago 的 logger，都不包 writer）。
-//
-// 监听地址给 127.0.0.1:0：这条路径会真的起一个监听，用例本身不经过它（请求直接喂给
-// engine），ctx 取消时随之关掉。
+// newEngine 让 cago 自己去建那个 engine（见 git show f0eccb1b^ 的同名函数）：
+// web.MountSPA 把 SPA 兜底登记进 cago 的 mux 全局中间件表，唯一能把真实兜底装到
+// engine 上的办法就是让 mux 自己走一遍它的启动路径。
 var mountSPAOnce sync.Once
 
 func newEngine(t *testing.T, deps *api.RouterDeps) *gin.Engine {
@@ -215,13 +197,9 @@ func newEngine(t *testing.T, deps *api.RouterDeps) *gin.Engine {
 		map[string]interface{}{"http": map[string]interface{}{"address": []string{"127.0.0.1:0"}}},
 	)))
 	require.NoError(t, err)
-	// 只登记一次。MountSPA 往 cago 的 mux 全局中间件表里 append，那张表在每次建
-	// engine 时被整个跑一遍——每登记一次，后面每一个 engine 就多压一遍整份 dist
-	// 的预压缩，用例数一多就成了平方级。登记的是同一个 NoRoute 处理器，一次就够。
 	mountSPAOnce.Do(func() {
 		require.NoError(t, web.MountSPA(context.Background(), cfg))
 	})
-
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	var engine *gin.Engine
@@ -233,383 +211,693 @@ func newEngine(t *testing.T, deps *api.RouterDeps) *gin.Engine {
 	return engine
 }
 
-// device 造一台账号 fwUserID 名下、还没被撤销的设备。
-func device() *device_entity.Device {
-	return &device_entity.Device{
-		ID: fwDeviceID, UserID: fwUserID, Kind: device_entity.KindAgentred,
-		Fingerprint: fwFingerprint, Status: consts.ACTIVE,
-	}
-}
-
-// signedIn 造一条真实的浏览器会话并把 cookie 挂到请求上。
-func signedIn(t *testing.T, req *http.Request) *http.Request {
-	t.Helper()
-	sid, _, err := auth_svc.Default().StartSession(context.Background(), fwUserID)
-	require.NoError(t, err)
-	req.AddCookie(&http.Cookie{Name: fwCookieName, Value: sid})
-	return req
-}
-
-func (h *harness) do(t *testing.T, req *http.Request) *httptest.ResponseRecorder {
-	t.Helper()
+func (h *harness) do(req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	h.engine.ServeHTTP(rec, req)
 	return rec
 }
 
-// —— goal 1：登录用户打到设备并流式回来 ——
+func (h *harness) forwardCookieName() string { return session.ForwardCookieName(h.https) }
 
-func TestForward_GivenSignedInOwnerThenReachesThatDevicesPort(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-
-	rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/index.html", nil)))
-
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, "hello from the device", rec.Body.String())
-	calls, released := h.forwarder.snapshot()
-	// 地址里的 device_id 必须被翻成中继寻址用的指纹（决策 4 的那一步代价）。
-	assert.Equal(t, []acquireCall{{userID: fwUserID, fingerprint: fwFingerprint, port: fwPort}}, calls)
-	// 归还没调到的话这条连接的引用永远不归零，也就永远不会被回收。
-	assert.Equal(t, 1, released)
-}
-
-// 流式：被转发应用刷出去的字节必须在它这次请求还没结束时就到客户端手里。这一条只有
-// 走真 socket 才成立，所以这里把同一个 engine 挂到一个真实的 http.Server 上。
-func TestForward_StreamsBeforeTheUpstreamResponseEnds(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-
-	release := make(chan struct{})
-	h.app.onServe = func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "first chunk\n")
-		w.(http.Flusher).Flush()
-		<-release
-		_, _ = io.WriteString(w, "second chunk\n")
+func (h *harness) consoleCookieName() string {
+	if h.https {
+		return session.HostCookieName
 	}
-
-	srv := httptest.NewServer(h.engine)
-	t.Cleanup(srv.Close)
-	req, err := http.NewRequest(http.MethodGet, srv.URL+"/fw/12/3000/stream", nil)
-	require.NoError(t, err)
-	signedIn(t, req)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = resp.Body.Close() })
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-
-	reader := bufio.NewReader(resp.Body)
-	line, err := reader.ReadString('\n')
-	require.NoError(t, err, "第一块必须在上游还没写完时就读得到")
-	assert.Equal(t, "first chunk\n", line)
-
-	close(release)
-	rest, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	assert.Equal(t, "second chunk\n", string(rest))
+	return session.CookieName
 }
 
-// 101 升级与流式都要求这一层**不包**任何缓冲 ResponseWriter：共享包的 Proxy 要
-// Hijacker（serveUpgraded）和 Flusher。这条用例把它钉在被转发应用拿到的那个 writer 上。
-func TestForward_HandsTheProxyAHijackableFlushableWriter(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-
-	h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil)))
-
-	assert.True(t, h.app.flusher, "被转发应用必须拿得到 Flusher，否则流式当场失效")
-	assert.True(t, h.app.hijacker, "被转发应用必须拿得到 Hijacker，否则 101 升级当场失效")
+// linkRows 让前缀表认得 prefixA（属于 userID）；prefixB 查不到。
+func (h *harness) linkRows() {
+	h.links.EXPECT().FindByPrefix(gomock.Any(), prefixA).Return(&portforward_link_entity.PortForwardLink{
+		Prefix: prefixA, UserID: userID, DeviceID: deviceID, MappingID: mappingID,
+	}, nil).AnyTimes()
+	h.links.EXPECT().FindByPrefix(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 }
 
-// —— goal 2：三道拒绝，且设备那三种互相不可区分 ——
+func (h *harness) ownedDevice() {
+	h.devices.EXPECT().Find(gomock.Any(), deviceID).Return(&device_entity.Device{
+		ID: deviceID, UserID: userID, Kind: device_entity.KindAgentred,
+		Fingerprint: fingerprint, Status: consts.ACTIVE,
+	}, nil).AnyTimes()
+}
 
-func TestForward_GivenNoSessionThenRejectedWithoutTouchingTheDevice(t *testing.T) {
+// consoleLogin 造一条真实的控制台会话。
+func (h *harness) consoleLogin(t *testing.T, uid int64) string {
+	t.Helper()
+	sid, _, err := auth_svc.Default().StartSession(context.Background(), uid)
+	require.NoError(t, err)
+	return sid
+}
+
+// forwardLogin 直接向转发登录服务要一张 prefix 的票（绕过 HTTP 那两跳；那两跳自己
+// 有用例）。
+func (h *harness) forwardLogin(t *testing.T, uid int64, prefix, consoleSID string) string {
+	t.Helper()
+	code, err := h.auth.IssueCode(context.Background(), uid, prefix, consoleSID)
+	require.NoError(t, err)
+	token, err := h.auth.Redeem(context.Background(), code, prefix)
+	require.NoError(t, err)
+	return token
+}
+
+func fwReq(method, prefix, target string) *http.Request {
+	req := httptest.NewRequest(method, target, nil)
+	req.Host = prefix + "." + baseDomain
+	return req
+}
+
+func navigate(req *http.Request) *http.Request {
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	return req
+}
+
+func (h *harness) withForwardCookie(req *http.Request, token string) *http.Request {
+	req.AddCookie(&http.Cookie{Name: h.forwardCookieName(), Value: token})
+	return req
+}
+
+func consoleReq(method, target string) *http.Request {
+	req := httptest.NewRequest(method, target, nil)
+	req.Host = "console.test"
+	return req
+}
+
+func isSPAShell(rec *httptest.ResponseRecorder) bool {
+	return rec.Code == http.StatusOK && strings.Contains(rec.Header().Get("Content-Type"), "text/html")
+}
+
+// —— Host 分发：转发 Host 上的请求整条交给转发处理器 ——
+
+func TestHostDispatch_SignedInForwardRequestsToConsolePathsReachTheApp(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+
+	for _, c := range []struct{ method, path string }{
+		{http.MethodGet, "/v1/auth/me"},
+		{http.MethodGet, "/some-frontend-route"},
+		{http.MethodGet, "/"},
+		{http.MethodPost, "/v1/auth/logout"},
+		{http.MethodGet, "/fw/12/3000"},
+	} {
+		rec := h.do(h.withForwardCookie(fwReq(c.method, prefixA, c.path), token))
+		require.Equal(t, http.StatusOK, rec.Code, "%s %s: %s", c.method, c.path, rec.Body.String())
+		assert.Equal(t, "hello from the device", rec.Body.String(), "%s %s", c.method, c.path)
+	}
+	var uris []string
+	for _, r := range h.app.requests() {
+		uris = append(uris, r.requestURI)
+	}
+	assert.Equal(t, []string{"/v1/auth/me", "/some-frontend-route", "/", "/v1/auth/logout", "/fw/12/3000"}, uris)
+	calls, released := h.forwarder.snapshot()
+	require.Len(t, calls, 5)
+	assert.Equal(t, acquireCall{userID, fingerprint, mappingID}, calls[0], "按映射 id 借出")
+	assert.Equal(t, 5, released)
+}
+
+func TestHostDispatch_UnauthenticatedForwardRequestsNeverReachConsoleOrSPA(t *testing.T) {
+	h := newHarness(t, false)
+	// 控制台的 /v1/auth/me 在这个 Host 上也不能被一张控制台会话 cookie 打开。
+	sid := h.consoleLogin(t, userID)
+
+	me := fwReq(http.MethodGet, prefixA, "/v1/auth/me")
+	me.AddCookie(&http.Cookie{Name: h.consoleCookieName(), Value: sid})
+	rec := h.do(me)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain", "不是控制台的 JSON 信封")
+	assert.NotContains(t, rec.Body.String(), "userId")
+
+	spa := h.do(navigate(fwReq(http.MethodGet, prefixA, "/some-frontend-route")))
+	assert.False(t, isSPAShell(spa), "转发 Host 上的导航落到了 SPA 外壳")
+	assert.Equal(t, http.StatusFound, spa.Code)
+
+	assert.Empty(t, h.app.requests())
+}
+
+func TestHostDispatch_HostMatchIsCaseInsensitiveAndIgnoresPort(t *testing.T) {
+	h := newHarness(t, false)
+	req := navigate(fwReq(http.MethodGet, prefixA, "/"))
+	req.Host = strings.ToUpper(prefixA+"."+baseDomain) + ":8443"
+
+	rec := h.do(req)
+
+	require.Equal(t, http.StatusFound, rec.Code)
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, prefixA, loc.Query().Get("prefix"))
+}
+
+func TestHostDispatch_BadShapesUnderTheForwardDomainAnswerTheNotYoursFourOhFour(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	notYours := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixB, "/"),
+		h.forwardLogin(t, userID, prefixB, h.consoleLogin(t, userID))))
+	require.Equal(t, http.StatusNotFound, notYours.Code)
+
+	for _, host := range []string{
+		baseDomain, "a.b." + baseDomain, "short." + baseDomain, "abcdefghijk1." + baseDomain,
+	} {
+		req := navigate(httptest.NewRequest(http.MethodGet, "/", nil))
+		req.Host = host
+		rec := h.do(req)
+		assert.Equal(t, http.StatusNotFound, rec.Code, host)
+		assert.Equal(t, notYours.Body.String(), rec.Body.String(), host)
+		assert.False(t, isSPAShell(rec), host)
+	}
+	assert.Empty(t, h.app.requests())
+}
+
+func TestHostDispatch_ConsoleHostStillServesConsoleAndSPA(t *testing.T) {
+	h := newHarness(t, false)
+
+	assert.True(t, isSPAShell(h.do(consoleReq(http.MethodGet, "/some-frontend-route"))))
+	assert.Equal(t, http.StatusNotFound, h.do(consoleReq(http.MethodGet, "/fw/12/3000")).Code)
+	me := h.do(consoleReq(http.MethodGet, "/v1/auth/me"))
+	assert.Equal(t, http.StatusUnauthorized, me.Code)
+	assert.Contains(t, me.Header().Get("Content-Type"), "application/json")
+}
+
+// —— 未登录：导航 302 到控制台 authorize，其余 401 ——
+
+func TestForwardLogin_NavigationRedirectsToConsoleAuthorize(t *testing.T) {
 	h := newHarness(t, true)
 
-	rec := h.do(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil))
+	rec := h.do(navigate(fwReq(http.MethodGet, prefixA, "/app/page?x=1&y=2")))
+
+	require.Equal(t, http.StatusFound, rec.Code)
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "https", loc.Scheme)
+	assert.Equal(t, "console.test", loc.Host)
+	assert.Equal(t, "/v1/port-forwards/authorize", loc.Path)
+	assert.Equal(t, prefixA, loc.Query().Get("prefix"))
+	assert.Equal(t, "/app/page?x=1&y=2", loc.Query().Get("return"))
+}
+
+func TestForwardLogin_NonNavigationAnswers401PlainText(t *testing.T) {
+	h := newHarness(t, true)
+	for _, req := range []*http.Request{
+		fwReq(http.MethodGet, prefixA, "/assets/app.js"),
+		fwReq(http.MethodPost, prefixA, "/api/save"),
+		func() *http.Request { // POST 即便带着 navigate 也不是顶层导航
+			return navigate(fwReq(http.MethodPost, prefixA, "/form"))
+		}(),
+	} {
+		rec := h.do(req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, req.URL.Path)
+		assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain", req.URL.Path)
+		assert.Empty(t, rec.Header().Get("Location"), req.URL.Path)
+	}
+	assert.Empty(t, h.app.requests())
+}
+
+// —— 未登录，一个 Sec-Fetch-* 头都不带：按 Accept 兜底判导航（决策 14）——
+
+func TestForwardLogin_NoSecFetchHeadersAtAll_GetWithHTMLAcceptRedirects(t *testing.T) {
+	h := newHarness(t, true)
+	for _, accept := range []string{
+		"text/html",
+		"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+		"TEXT/HTML", // media-type 匹配大小写不敏感
+	} {
+		req := fwReq(http.MethodGet, prefixA, "/app/page")
+		req.Header.Set("Accept", accept)
+
+		rec := h.do(req)
+
+		require.Equal(t, http.StatusFound, rec.Code, accept)
+		loc, err := url.Parse(rec.Header().Get("Location"))
+		require.NoError(t, err)
+		assert.Equal(t, "/v1/port-forwards/authorize", loc.Path, accept)
+	}
+}
+
+func TestForwardLogin_NoSecFetchHeadersAtAll_AnythingElseAnswers401(t *testing.T) {
+	h := newHarness(t, true)
+	htmlAndFriends := "text/html,application/xhtml+xml"
+	for _, req := range []*http.Request{
+		func() *http.Request { // */* 不算 text/html
+			r := fwReq(http.MethodGet, prefixA, "/app/page")
+			r.Header.Set("Accept", "*/*")
+			return r
+		}(),
+		fwReq(http.MethodGet, prefixA, "/app/page"), // 缺 Accept
+		func() *http.Request {
+			r := fwReq(http.MethodGet, prefixA, "/app/page")
+			r.Header.Set("Accept", "application/json")
+			return r
+		}(),
+		func() *http.Request { // 非 GET 即便 Accept 含 text/html 也不算
+			r := fwReq(http.MethodPost, prefixA, "/app/page")
+			r.Header.Set("Accept", htmlAndFriends)
+			return r
+		}(),
+	} {
+		rec := h.do(req)
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, req.Method+" "+req.Header.Get("Accept"))
+		assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+		assert.Empty(t, rec.Header().Get("Location"))
+	}
+	assert.Empty(t, h.app.requests())
+}
+
+func TestForwardLogin_NoSecFetchHeadersAtAll_AcceptEdgeCases(t *testing.T) {
+	type tc struct {
+		name string
+		req  func() *http.Request
+		want int
+	}
+	get := func(accept ...string) func() *http.Request {
+		return func() *http.Request {
+			r := fwReq(http.MethodGet, prefixA, "/app/page")
+			for _, a := range accept {
+				r.Header.Add("Accept", a)
+			}
+			return r
+		}
+	}
+	for _, c := range []tc{
+		// q=0 按 RFC 9110 §12.4.2 是「不可接受」，不是「要 HTML」。
+		{"text/html;q=0", get("text/html;q=0,application/json"), http.StatusUnauthorized},
+		{"text/html; q=0.000", get("application/json, text/html; q=0.000"), http.StatusUnauthorized},
+		{"text/html;q=0.1", get("application/json,text/html;q=0.1"), http.StatusFound},
+		{"Q=0 大写参数名", get("text/html;Q=0"), http.StatusUnauthorized},
+		// 同名头分两行发，语义等同逗号拼接（RFC 9110 §5.3）。
+		{"Accept 分两行", get("application/json", "text/html"), http.StatusFound},
+		{"只有 xhtml", get("application/xhtml+xml"), http.StatusUnauthorized},
+		{"HEAD", func() *http.Request {
+			r := fwReq(http.MethodHead, prefixA, "/app/page")
+			r.Header.Set("Accept", "text/html")
+			return r
+		}, http.StatusUnauthorized},
+		// WebSocket 升级永远不是顶层导航，哪怕 Accept 写了 text/html。
+		{"WebSocket 升级", func() *http.Request {
+			r := get("text/html")()
+			r.Header.Set("Connection", "Upgrade")
+			r.Header.Set("Upgrade", "websocket")
+			return r
+		}, http.StatusUnauthorized},
+		// 带了 Sec-Fetch-* 就不退回 Accept：空值的 Mode、只带 Dest 都算「带了」。
+		{"空值 Sec-Fetch-Mode", func() *http.Request {
+			r := get("text/html")()
+			r.Header["Sec-Fetch-Mode"] = []string{""}
+			return r
+		}, http.StatusUnauthorized},
+		{"只带 Sec-Fetch-Dest", func() *http.Request {
+			r := get("text/html")()
+			r.Header.Set("Sec-Fetch-Dest", "document")
+			return r
+		}, http.StatusUnauthorized},
+	} {
+		h := newHarness(t, true)
+		rec := h.do(c.req())
+		assert.Equal(t, c.want, rec.Code, c.name)
+		assert.Empty(t, h.app.requests(), c.name)
+	}
+}
+
+func TestForwardLogin_SecFetchModePresent_AcceptIsIgnored(t *testing.T) {
+	h := newHarness(t, true)
+	req := fwReq(http.MethodGet, prefixA, "/app/page")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+
+	rec := h.do(req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-	calls, _ := h.forwarder.snapshot()
-	assert.Empty(t, calls, "没有登录态就不该向中继上发任何东西")
-	assert.Empty(t, h.presence.asks(), "也不该去问这台机器在不在线")
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
+	assert.Empty(t, rec.Header().Get("Location"))
 }
 
-// 「查不到」「不是你的」「已经撤销」三种必须答得一模一样：只要能分开，这条地址就是
-// 一台跨账号的设备存在性探测器。
-func TestForward_UnknownForeignAndRevokedDevicesAreIndistinguishable(t *testing.T) {
-	foreign := device()
-	foreign.UserID = fwUserID + 1
-	revoked := device()
-	revoked.Status = consts.DELETE
+// —— authorize（控制台 Host）——
 
-	answers := map[string]*httptest.ResponseRecorder{}
-	for _, c := range []struct {
-		name   string
-		device *device_entity.Device
-	}{
-		{"查不到", nil},
-		{"不是你的", foreign},
-		{"已经撤销", revoked},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			h := newHarness(t, true)
-			h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(c.device, nil)
-
-			rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil)))
-
-			answers[c.name] = rec
-			calls, _ := h.forwarder.snapshot()
-			assert.Empty(t, calls, "拒绝掉的请求不该向中继上发任何东西")
-			assert.Empty(t, h.presence.asks(), "也不该去问这台机器在不在线")
-		})
-	}
-
-	require.Len(t, answers, 3)
-	first := answers["查不到"]
-	for name, got := range answers {
-		assert.Equal(t, first.Code, got.Code, "%s 的状态码与「查不到」不同，可区分即是探测器", name)
-		assert.Equal(t, first.Body.String(), got.Body.String(), "%s 的响应体与「查不到」不同", name)
-		assert.Equal(t, first.Header().Get("Content-Type"), got.Header().Get("Content-Type"),
-			"%s 的 Content-Type 与「查不到」不同", name)
-	}
-}
-
-// —— goal 3：设备离线 ——
-
-func TestForward_GivenOfflineDeviceThenAnswersOfflineWithoutDialing(t *testing.T) {
+func TestAuthorize_WithoutConsoleSessionRedirectsToLoginWithThisURLAsNext(t *testing.T) {
 	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
+	target := "/v1/port-forwards/authorize?prefix=" + prefixA + "&return=%2Fapp%3Fx%3D1"
+
+	rec := h.do(consoleReq(http.MethodGet, target))
+
+	require.Equal(t, http.StatusFound, rec.Code)
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "/login", loc.Path)
+	assert.Equal(t, target, loc.Query().Get("next"), "登录后要原路回到这条 authorize")
+}
+
+func TestAuthorize_OwnPrefixIssuesACodeAndRedirectsToTheForwardCallback(t *testing.T) {
+	h := newHarness(t, true)
+	h.linkRows()
+	req := consoleReq(http.MethodGet, "/v1/port-forwards/authorize?prefix="+prefixA+"&return=%2Fapp%3Fx%3D1")
+	req.AddCookie(&http.Cookie{Name: h.consoleCookieName(), Value: h.consoleLogin(t, userID)})
+
+	rec := h.do(req)
+
+	require.Equal(t, http.StatusFound, rec.Code, rec.Body.String())
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	require.NoError(t, err)
+	assert.Equal(t, "https", loc.Scheme)
+	assert.Equal(t, prefixA+"."+baseDomain, loc.Host)
+	assert.Equal(t, "/__agentre/callback", loc.Path)
+	assert.NotEmpty(t, loc.Query().Get("code"))
+	assert.Equal(t, "/app?x=1", loc.Query().Get("return"))
+	// 码 60 秒过期。
+	keys := h.mini.Keys()
+	require.Len(t, filter(keys, "pf_code:"), 1)
+	assert.Equal(t, 60*time.Second, h.mini.TTL(filter(keys, "pf_code:")[0]))
+}
+
+func TestAuthorize_ForeignOrUnknownPrefixAnswers404WithoutACode(t *testing.T) {
+	h := newHarness(t, true)
+	h.linkRows()
+	answers := map[string]*httptest.ResponseRecorder{}
+	for name, c := range map[string]struct {
+		uid    int64
+		prefix string
+	}{
+		"不是你的": {otherUserID, prefixA},
+		"查不到":  {userID, prefixB},
+		"形状不对": {userID, "../x"},
+	} {
+		req := consoleReq(http.MethodGet, "/v1/port-forwards/authorize?prefix="+url.QueryEscape(c.prefix)+"&return=%2F")
+		req.AddCookie(&http.Cookie{Name: h.consoleCookieName(), Value: h.consoleLogin(t, c.uid)})
+		answers[name] = h.do(req)
+	}
+	for name, rec := range answers {
+		assert.Equal(t, http.StatusNotFound, rec.Code, name)
+		assert.Empty(t, rec.Header().Get("Location"), name)
+		assert.Equal(t, answers["查不到"].Body.String(), rec.Body.String(), name)
+	}
+	assert.Empty(t, filter(h.mini.Keys(), "pf_code:"), "不签发")
+}
+
+// —— callback（转发 Host）——
+
+func (h *harness) callback(t *testing.T, prefix, code, ret string) *httptest.ResponseRecorder {
+	t.Helper()
+	q := url.Values{"code": {code}, "return": {ret}}
+	return h.do(navigate(fwReq(http.MethodGet, prefix, "/__agentre/callback?"+q.Encode())))
+}
+
+func (h *harness) issue(t *testing.T, prefix string) string {
+	t.Helper()
+	code, err := h.auth.IssueCode(context.Background(), userID, prefix, h.consoleLogin(t, userID))
+	require.NoError(t, err)
+	return code
+}
+
+func TestCallback_HTTPSSetsHostPrefixedSecureCookie(t *testing.T) {
+	h := newHarness(t, true)
+
+	rec := h.callback(t, prefixA, h.issue(t, prefixA), "/app?x=1")
+
+	require.Equal(t, http.StatusFound, rec.Code, rec.Body.String())
+	assert.Equal(t, "/app?x=1", rec.Header().Get("Location"))
+	set := rec.Header().Get("Set-Cookie")
+	assert.True(t, strings.HasPrefix(set, "__Host-agentre_fw="), set)
+	for _, attr := range []string{"Path=/", "Secure", "HttpOnly", "SameSite=Lax"} {
+		assert.Contains(t, set, attr)
+	}
+	assert.NotContains(t, strings.ToLower(set), "domain=", "host-only")
+}
+
+func TestCallback_HTTPSetsPlainCookieWithoutSecure(t *testing.T) {
+	h := newHarness(t, false)
+
+	rec := h.callback(t, prefixA, h.issue(t, prefixA), "/")
+
+	require.Equal(t, http.StatusFound, rec.Code, rec.Body.String())
+	set := rec.Header().Get("Set-Cookie")
+	assert.True(t, strings.HasPrefix(set, "agentre_fw="), set)
+	assert.NotContains(t, set, "Secure")
+	assert.Contains(t, set, "HttpOnly")
+	assert.Contains(t, set, "SameSite=Lax")
+	assert.NotContains(t, strings.ToLower(set), "domain=")
+}
+
+func TestCallback_InvalidUsedExpiredOrMismatchedCodeAnswers400(t *testing.T) {
+	h := newHarness(t, true)
+	used := h.issue(t, prefixA)
+	require.Equal(t, http.StatusFound, h.callback(t, prefixA, used, "/").Code)
+	mismatched := h.issue(t, prefixB)
+	expired := h.issue(t, prefixA)
+	h.mini.FastForward(61 * time.Second)
+
+	for name, code := range map[string]string{
+		"没有": "never-issued", "空": "", "已用过": used, "签给别的前缀": mismatched, "过期": expired,
+	} {
+		rec := h.callback(t, prefixA, code, "/")
+		assert.Equal(t, http.StatusBadRequest, rec.Code, name)
+		assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain", name)
+		assert.Equal(t, "这个登录链接已失效，请回控制台重新打开", strings.TrimSpace(rec.Body.String()), name)
+		assert.Empty(t, rec.Header().Get("Set-Cookie"), name)
+	}
+}
+
+func TestCallback_ReturnIsSanitizedToARelativePath(t *testing.T) {
+	h := newHarness(t, false)
+	for in, want := range map[string]string{
+		"/app?x=1":            "/app?x=1",
+		"":                    "/",
+		"app":                 "/",
+		"//evil.com/x":        "/",
+		"https://evil.com/":   "/",
+		"/\\evil.com":         "/",
+		"\\\\evil.com":        "/",
+		"javascript:alert(1)": "/",
+		"/\t/evil.com":        "/",
+	} {
+		rec := h.callback(t, prefixA, h.issue(t, prefixA), in)
+		require.Equal(t, http.StatusFound, rec.Code, in)
+		assert.Equal(t, want, rec.Header().Get("Location"), "return=%q", in)
+	}
+}
+
+// 一次完整的浏览器往返：导航 → authorize → callback → 再导航就到应用。
+func TestForwardLogin_FullRoundTripLandsOnTheApp(t *testing.T) {
+	h := newHarness(t, true)
+	h.linkRows()
+	h.ownedDevice()
+	sid := h.consoleLogin(t, userID)
+
+	first := h.do(navigate(fwReq(http.MethodGet, prefixA, "/app?x=1")))
+	require.Equal(t, http.StatusFound, first.Code)
+	authURL, _ := url.Parse(first.Header().Get("Location"))
+	authReq := consoleReq(http.MethodGet, authURL.RequestURI())
+	authReq.AddCookie(&http.Cookie{Name: h.consoleCookieName(), Value: sid})
+	second := h.do(authReq)
+	require.Equal(t, http.StatusFound, second.Code, second.Body.String())
+	cbURL, _ := url.Parse(second.Header().Get("Location"))
+	third := h.do(navigate(fwReq(http.MethodGet, prefixA, cbURL.RequestURI())))
+	require.Equal(t, http.StatusFound, third.Code, third.Body.String())
+	require.Equal(t, "/app?x=1", third.Header().Get("Location"))
+	cookie := third.Result().Cookies()[0]
+
+	final := fwReq(http.MethodGet, prefixA, "/app?x=1")
+	final.AddCookie(cookie)
+	rec := h.do(final)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "/app?x=1", h.app.requests()[0].requestURI)
+}
+
+// —— 每次请求的判定 ——
+
+func TestForwardChain_SessionForPrefixAIsRejectedOnPrefixB(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+
+	rec := h.do(navigate(h.withForwardCookie(fwReq(http.MethodGet, prefixB, "/"), token)))
+
+	require.Equal(t, http.StatusFound, rec.Code, "A 的票在 B 上等于没登录")
+	assert.Contains(t, rec.Header().Get("Location"), "prefix="+prefixB)
+	assert.Empty(t, h.app.requests())
+}
+
+func TestForwardChain_ConsoleLogoutReentersTheLoginFlow(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	sid := h.consoleLogin(t, userID)
+	token := h.forwardLogin(t, userID, prefixA, sid)
+	require.Equal(t, http.StatusOK, h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"), token)).Code)
+
+	require.NoError(t, auth_svc.Default().EndSession(context.Background(), sid))
+
+	nav := h.do(navigate(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"), token)))
+	assert.Equal(t, http.StatusFound, nav.Code)
+	assert.Contains(t, nav.Header().Get("Location"), "/v1/port-forwards/authorize")
+	sub := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/x.js"), token))
+	assert.Equal(t, http.StatusUnauthorized, sub.Code)
+	assert.Len(t, h.app.requests(), 1)
+}
+
+func TestForwardChain_LinkOfAnotherAccountIsTheSameFourOhFourAsUnknownPrefix(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	// 一张签给别的账号、却指着 prefixA 的票：前缀属于 userID，不属于 otherUserID。
+	foreign := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"),
+		h.forwardLogin(t, otherUserID, prefixA, h.consoleLogin(t, otherUserID))))
+	unknown := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixB, "/"),
+		h.forwardLogin(t, userID, prefixB, h.consoleLogin(t, userID))))
+
+	assert.Equal(t, http.StatusNotFound, foreign.Code)
+	assert.Equal(t, unknown.Code, foreign.Code)
+	assert.Equal(t, unknown.Body.String(), foreign.Body.String())
+	calls, _ := h.forwarder.snapshot()
+	assert.Empty(t, calls)
+}
+
+func TestForwardChain_RevokedDeviceIsTheSameFourOhFour(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.devices.EXPECT().Find(gomock.Any(), deviceID).Return(&device_entity.Device{
+		ID: deviceID, UserID: userID, Fingerprint: fingerprint, Status: consts.DELETE,
+	}, nil)
+	unknown := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixB, "/"),
+		h.forwardLogin(t, userID, prefixB, h.consoleLogin(t, userID))))
+
+	rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"),
+		h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, unknown.Body.String(), rec.Body.String())
+}
+
+func TestForwardChain_OfflineDeviceAnswersOfflineWithoutDialing(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
 	h.presence.online = false
 
-	rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil)))
+	rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"),
+		h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))))
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
-	assert.Equal(t, []string{fwFingerprint}, h.presence.asks())
 	calls, _ := h.forwarder.snapshot()
-	assert.Empty(t, calls, "在线判定不过就不再往中继上发任何东西")
+	assert.Empty(t, calls)
 }
 
-// 在线判定与拨号之间机器走掉了：拨号面原样上交 ErrMachineOffline，答的是同一张。
-func TestForward_GivenDialSaysOfflineThenAnswersTheSameAsTheOnlineCheck(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-	h.forwarder.errs = []error{mirror_svc.ErrMachineOffline}
+// blockingGate 是一道把 blocked 这个账号拦下的账号闸门（改库封禁之后的样子）。
+type blockingGate struct{ blocked int64 }
 
-	rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil)))
-
-	assert.Equal(t, http.StatusBadGateway, rec.Code)
+func (g blockingGate) Check(_ context.Context, uid int64) error {
+	if uid == g.blocked {
+		return errors.New("account banned")
+	}
+	return nil
 }
 
-// 刚拿到的连接在借出前就断了：重试一次即可（ErrConnectionGone 的语义）。
-func TestForward_RetriesOnceWhenTheConnectionWasGone(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-	h.forwarder.errs = []error{portforward_svc.ErrConnectionGone}
-
-	rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil)))
-
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	calls, _ := h.forwarder.snapshot()
-	assert.Len(t, calls, 2, "断掉的那条应该重试一次")
-}
-
-// 这个部署没有装配连接池：说「这里没有这条能力」，而不是去拨一个不存在的中继。
-func TestForward_GivenNoPoolAssembledThenAnswersUnavailable(t *testing.T) {
+// 账号闸门与控制台的每一条鉴权路径同一道：控制台会话还在不等于账号还能用。封禁之后
+// 手上那张转发票不能再把请求带到设备上——否则封禁只挡得住控制台，挡不住转发域。
+func TestForwardChain_BlockedAccountNoLongerReachesTheApp(t *testing.T) {
 	h := newHarness(t, false)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil).AnyTimes()
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+	user_svc.SetGate(blockingGate{blocked: userID})
+	t.Cleanup(func() { user_svc.SetGate(nil) })
 
-	rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil)))
+	sub := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/x.js"), token))
 
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.Equal(t, http.StatusUnauthorized, sub.Code)
+	assert.Empty(t, h.app.requests())
+	calls, _ := h.forwarder.snapshot()
+	assert.Empty(t, calls, "被封的账号不该再借出一条通往设备的连接")
 }
 
-// 池已经收工（进程正在退出）：同样是「此刻这里没有这条能力」。
-func TestForward_GivenStoppedPoolThenAnswersUnavailable(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-	h.forwarder.errs = []error{portforward_svc.ErrStopped}
+// 转发 Host 上的路径整条属于被转发的应用：控制台路由树上「差一个结尾斜杠」的那些
+// 路径不能被 gin 的 RedirectTrailingSlash 抢先 301 走——那一跳发生在 Host 分发之前，
+// 应用自己的 /v1/auth/me/ 就永远到不了，而 301 还会被浏览器永久缓存。
+func TestHostDispatch_TrailingSlashVariantsOfConsoleRoutesStillReachTheApp(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
 
-	rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/", nil)))
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-}
-
-// —— goal 4：前缀只剥一次 ——
-
-func TestForward_StripsExactlyThePortPrefix(t *testing.T) {
-	cases := []struct {
-		name string
-		path string
-		want string
-	}{
-		{"根路径不带尾斜杠变成 /", "/fw/12/3000", "/"},
-		{"根路径带尾斜杠", "/fw/12/3000/", "/"},
-		{"子路径只剥一层", "/fw/12/3000/assets/x.js", "/assets/x.js"},
-		{"查询串原样带过去", "/fw/12/3000/api?a=1&b=2", "/api?a=1&b=2"},
-		{"与前缀同名的子路径不受影响", "/fw/12/3000/fw/12/3000/x", "/fw/12/3000/x"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			h := newHarness(t, true)
-			h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-
-			rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, c.path, nil)))
-
-			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-			assert.Equal(t, []string{c.want}, h.app.uris())
-		})
+	for _, path := range []string{"/v1/auth/me/", "/fw", "/v1/devices/"} {
+		rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, path), token))
+		require.Equal(t, http.StatusOK, rec.Code, "GET %s: %s", path, rec.Header().Get("Location"))
+		assert.Equal(t, "hello from the device", rec.Body.String(), path)
 	}
 }
 
-// —— goal 5：形状不对的不回落 SPA 外壳 ——
+// 失败页的「回到设备」是控制台的设备页。页面开在转发域上，一个相对的 /devices 会被
+// 浏览器解析成被转发应用自己的 /devices——出口指错了站点。
+func TestForwardChain_FailurePageLeadsBackToTheConsoleDevicesPage(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	h.presence.online = false
 
-// 这条用例挂着真实的 web.MountSPA 兜底。没有 /fw 路由时它必然给出 200 + text/html：
-// 浏览器里是一张白屏而状态码正常，没有任何东西会红（规格决策 10）。
-func TestForward_MalformedAddressesNeverFallBackToTheSPAShell(t *testing.T) {
-	for _, path := range []string{
-		"/fw", "/fw/", "/fw/12", "/fw/12/", "/fw/12/http", "/fw/abc/3000", "/fw/12/3000x",
-	} {
-		t.Run(path, func(t *testing.T) {
-			h := newHarness(t, true)
-			h.devices.EXPECT().Find(gomock.Any(), gomock.Any()).Return(device(), nil).AnyTimes()
+	rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"),
+		h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))))
 
-			rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, path, nil)))
-
-			t.Logf("GET %s → %d %s", path, rec.Code, rec.Header().Get("Content-Type"))
-			isSPAShell := rec.Code == http.StatusOK &&
-				strings.Contains(rec.Header().Get("Content-Type"), "text/html")
-			assert.False(t, isSPAShell,
-				"%s 落到了 SPA 外壳上：%d %s", path, rec.Code, rec.Header().Get("Content-Type"))
-			calls, _ := h.forwarder.snapshot()
-			assert.Empty(t, calls, "形状都不对，不该向中继上发任何东西")
-		})
-	}
+	require.Equal(t, http.StatusBadGateway, rec.Code)
+	assert.Contains(t, rec.Body.String(), `href="http://console.test:8443/devices"`)
 }
 
-// 这一条钉的是「本仓的 SPA 兜底此刻确实会吞掉 /fw/…」——上面那条用例的前提。它挂的
-// 是同一个真实兜底，只是路径不在 /fw 之下，于是照旧回外壳。前提哪天变了（比如兜底
-// 改成对未知前缀 404），这里会红，上面那条就该重新想一遍还测不测得到东西。
-func TestForward_SPAShellStillSwallowsUnknownPathsOutsideFW(t *testing.T) {
+// —— 剥离：只删自家票与 Authorization ——
+
+func TestForwardChain_StripsOnlyOurCookieAndAuthorization(t *testing.T) {
 	h := newHarness(t, true)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+	req := fwReq(http.MethodGet, prefixA, "/api/items?a=1&b=2")
+	req.Header.Add("Cookie", "app_sid=s1; __Host-agentre_fw="+token+"; theme=dark")
+	req.Header.Add("Cookie", "agentre_fw=stale; other=1")
+	req.Header.Set("Authorization", "Bearer app-token")
 
-	rec := h.do(t, httptest.NewRequest(http.MethodGet, "/some-frontend-route", nil))
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Header().Get("Content-Type"), "text/html")
-}
-
-// 写方法必须过得去：/fw/ 不挂 CSRF（决策 5），被转发应用自己的 POST 不可能带控制台
-// 的 CSRF token，挂上就等于禁掉转发下的一切写请求。
-func TestForward_WriteMethodsPassWithoutAConsoleCSRFToken(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-	var gotMethod, gotBody string
-	h.app.onServe = func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		raw, _ := io.ReadAll(r.Body)
-		gotBody = string(raw)
-		w.WriteHeader(http.StatusCreated)
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/fw/12/3000/api/save", strings.NewReader(`{"a":1}`))
-	rec := h.do(t, signedIn(t, req))
-
-	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
-	assert.Equal(t, http.MethodPost, gotMethod)
-	assert.Equal(t, `{"a":1}`, gotBody, "请求体必须原样交给被转发应用")
-}
-
-// 剩余路径原样交给被转发应用，包括点段：那一段是**它的**路径，不是我们的。这里替它
-// 规范化会改掉它看到的东西，而这条服务端上没有任何东西按它去读文件。
-func TestForward_PassesDotSegmentsInTheRemainderThrough(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-
-	rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000/../../etc", nil)))
+	rec := h.do(req)
 
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.Equal(t, []string{"/../../etc"}, h.app.uris())
-}
-
-// gin 默认开着 RedirectTrailingSlash，而本轮**不动**那个全局开关（它管着本仓全部既有
-// 路由）。所以这里把它对 /fw 之下的实际影响钉住，免得下一个人凭直觉猜：
-//
-//   - /fw/12/3000 直接进处理器，**不吃**尾斜杠重定向——通配尾段自己就匹配上了，
-//     它是「/fw/ 之后还有东西」的形状。地址栏里那条不带尾斜杠的地址因此是一跳到位的。
-//   - /fw 本身会先吃一个 301 到 /fw/，因为整条路由是 /fw/*forward，/fw 只差那个斜杠。
-//     那一跳之后落到 404，与其余形状不对的一样，不会落到 SPA 外壳上。
-func TestForward_TrailingSlashBehaviourIsPinned(t *testing.T) {
-	h := newHarness(t, true)
-	h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-
-	direct := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw/12/3000", nil)))
-	bare := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, "/fw", nil)))
-
-	assert.Equal(t, http.StatusOK, direct.Code, "不该先吃一个尾斜杠重定向")
-	assert.Equal(t, http.StatusMovedPermanently, bare.Code)
-	assert.Equal(t, "/fw/", bare.Header().Get("Location"))
-}
-
-// —— 本层自己那三句纯文本答复的缓存语义 ——
-
-// 这三句是**控制台自己**产生的失败（不经过共享代理），今天走 c.Data 直出。它们必须
-// 与出页的那条同一套缓存语义：no-store。
-//
-// 缺了它，404 那一条按 RFC 9111 是可被浏览器**启发式缓存**的——响应带 Date、没有
-// 任何 Cache-Control / Expires，浏览器就能自己挑一段新鲜期。于是设备重新配对回来、
-// 映射重新建好之后，同一条转发地址在那个标签页里刷新仍可能是旧的 404，而服务端这一
-// 侧完全看不出问题。
-func TestForward_ConsoleOwnedPlainAnswersAreNotCacheable(t *testing.T) {
-	for _, c := range []struct {
-		name   string
-		setup  func(h *harness)
-		path   string
-		status int
-	}{
-		{
-			name:   "地址形状不对",
-			setup:  func(*harness) {},
-			path:   "/fw/abc/3000/",
-			status: http.StatusNotFound,
-		},
-		{
-			name: "没有这台你能用的设备",
-			setup: func(h *harness) {
-				h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(nil, nil)
-			},
-			path:   "/fw/12/3000/",
-			status: http.StatusNotFound,
-		},
-		{
-			name: "这一跳没搭起来",
-			setup: func(h *harness) {
-				h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-				h.forwarder.errs = []error{errors.New("protocol version mismatch")}
-			},
-			path:   "/fw/12/3000/",
-			status: http.StatusBadGateway,
-		},
-		{
-			name: "这个部署给不了转发",
-			setup: func(h *harness) {
-				h.devices.EXPECT().Find(gomock.Any(), fwDeviceID).Return(device(), nil)
-				h.forwarder.errs = []error{portforward_svc.ErrStopped}
-			},
-			path:   "/fw/12/3000/",
-			status: http.StatusServiceUnavailable,
-		},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			h := newHarness(t, true)
-			c.setup(h)
-
-			rec := h.do(t, signedIn(t, httptest.NewRequest(http.MethodGet, c.path, nil)))
-
-			require.Equal(t, c.status, rec.Code)
-			assert.Contains(t, rec.Header().Get("Content-Type"), "text/plain")
-			assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"),
-				"这一句会被浏览器缓存下来，设备修好之后刷新还是它")
-		})
+	got := h.app.requests()[0]
+	assert.Equal(t, "/api/items?a=1&b=2", got.requestURI)
+	joined := strings.Join(got.cookie, "; ")
+	assert.NotContains(t, joined, token)
+	assert.NotContains(t, joined, "agentre_fw")
+	for _, keep := range []string{"app_sid=s1", "theme=dark", "other=1"} {
+		assert.Contains(t, joined, keep)
 	}
+	assert.Empty(t, got.authorization)
+}
+
+func TestForwardChain_OnlyOurCookieInHeaderDropsTheHeader(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+
+	rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/"), token))
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, h.app.requests()[0].cookie)
+}
+
+// —— 保留路径 ——
+
+func TestReservedPath_OtherAgentrePathsAreNotForwarded(t *testing.T) {
+	h := newHarness(t, false)
+	h.linkRows()
+	h.ownedDevice()
+	token := h.forwardLogin(t, userID, prefixA, h.consoleLogin(t, userID))
+
+	rec := h.do(h.withForwardCookie(fwReq(http.MethodGet, prefixA, "/__agentre/other"), token))
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Empty(t, h.app.requests())
+}
+
+func filter(keys []string, prefix string) []string {
+	var out []string
+	for _, k := range keys {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, k)
+		}
+	}
+	return out
 }

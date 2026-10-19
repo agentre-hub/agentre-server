@@ -137,16 +137,23 @@ func TestResiduePlanCoversPersistedStateAndRunScopedRedisKeys(t *testing.T) {
 		// 通行密钥的行没有指向 users 的外键：账号删掉它也留着，清理里不列一条就
 		// 永久留在专库里（本轮已实证留下两行属于已删账号的凭证）。
 		"webauthn_credentials",
+		// port_forward_links 同样没有指向 users 的外键（迁移 202609210101 只用裸
+		// bigint），账号删掉它也留着——2026-09-22 已实证一轮 run 留下 5 行残留。
+		"port_forward_links",
 	} {
 		_ = findSQLStep(t, counts, name)
 	}
-	got := redisKeys("run-7")
-	other := redisKeys("run-8")
-	if len(got) != 2 || got[0] != "session:webe2e-run-7" || !strings.HasPrefix(got[1], "rl:authz:198.18.") {
-		t.Fatalf("redis keys = %q, want isolated session and reserved authorize limiter keys", got)
+	got := cleanupRedisKeys("run-7", 42, true)
+	other := cleanupRedisKeys("run-8", 43, true)
+	if len(got) != 3 || got[0] != "session:webe2e-run-7" || !strings.HasPrefix(got[1], "rl:authz:198.18.") || got[2] != "user_sessions:42" {
+		t.Fatalf("redis keys = %q, want isolated session, reserved authorize limiter, and account session index keys", got)
 	}
 	if got[1] == other[1] {
 		t.Fatalf("different runs share authorize limiter key %q", got[1])
+	}
+	withoutUser := cleanupRedisKeys("run-7", 0, false)
+	if len(withoutUser) != 2 {
+		t.Fatalf("missing-user redis keys = %q, want only keys derivable from the run id", withoutUser)
 	}
 
 	residue := map[string]int64{"users": 0, "device_flow_codes": 1, "session": 0, "rate_limit": 0}

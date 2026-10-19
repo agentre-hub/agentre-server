@@ -76,13 +76,13 @@ type Config struct {
 	// CallTimeout 见 defaultCallTimeout。
 	CallTimeout time.Duration
 	// RenderFailure 是代理**自有失败**的渲染钩子（portforwardhost.WithFailureRenderer）：
-	// 端口没声明、映射停用、端口上没有服务、够不着设备……交给宿主的是「是哪一件事」，
+	// 映射不存在、映射停用、目标连不上、够不着设备……交给宿主的是「是哪一件事」，
 	// 由宿主决定说什么。nil 就用共享包那份默认纯文本。
 	//
-	// 它由装配处交进来（internal/bootstrap 传 portforward_ctr.RenderFailure）：出什么页
-	// 是表现层的事，本包不认识 HTML，也不得反向 import 控制器。
+	// 它由装配处交进来（internal/bootstrap 传 portforward_ctr.NewFailureRenderer 造的
+	// 那一个）：出什么页是表现层的事，本包不认识 HTML，也不得反向 import 控制器。
 	//
-	// 代理按端口缓存、跨请求共用，所以这个函数不得带任何一次请求的状态。
+	// 代理按映射 id 缓存、跨请求共用，所以这个函数不得带任何一次请求的状态。
 	RenderFailure portforwardhost.FailureRenderer
 }
 
@@ -148,7 +148,7 @@ type pooledConn struct {
 	watch chan struct{}
 
 	refs    int
-	proxies map[uint32]*proxySlot
+	proxies map[int64]*proxySlot
 	idle    *time.Timer
 	dead    bool
 }
@@ -163,16 +163,20 @@ func New(cfg Config, dialer MachineDialer) *Pool {
 	return &Pool{cfg: cfg.withDefaults(), dialer: dialer, conns: map[machineKey]*pooledConn{}}
 }
 
-// Acquire 借一条通往（账号, 设备）的连接上、这个端口的转发入口。
+// Acquire 借一条通往（账号, 设备）的连接上、这条映射的转发入口。
 //
-// 同一台设备上的并发请求共用一条已握手的连接，同一个端口上的并发请求共用同一个
+// **按映射 id 定位，不再按端口**（规格 2026-09-21-port-forward-subdomain 决策
+// 10）：目标变成了 (协议, 主机, 端口)，端口不再是一条映射的唯一身份，id 本来就是
+// 启停和删除用的主键。
+//
+// 同一台设备上的并发请求共用一条已握手的连接，同一条映射上的并发请求共用同一个
 // Proxy（它本就按 streamId 多路复用）。归还函数幂等，**必须**在请求收尾时调到，
 // 否则这条连接的引用永远不归零、也就永远不会被回收。
 //
 // 拨号失败原样上交（mirror_svc.ErrMachineOffline 因此透得到调用方手里，控制台据此
 // 答「设备离线」那一张失败页）。
 func (p *Pool) Acquire(
-	ctx context.Context, userID int64, fingerprint string, port uint32,
+	ctx context.Context, userID int64, fingerprint string, mappingID int64,
 ) (http.Handler, func(), error) {
 	entry, mine, err := p.take(machineKey{userID: userID, fingerprint: fingerprint})
 	if err != nil {
@@ -193,7 +197,7 @@ func (p *Pool) Acquire(
 		p.releaseRef(entry)
 		return nil, nil, entry.dialErr
 	}
-	handler := p.proxyFor(entry, port)
+	handler := p.proxyFor(entry, mappingID)
 	if handler == nil {
 		p.releaseRef(entry)
 		return nil, nil, ErrConnectionGone
@@ -220,7 +224,7 @@ func (p *Pool) take(key machineKey) (*pooledConn, bool, error) {
 		ready:   make(chan struct{}),
 		watch:   make(chan struct{}),
 		refs:    1,
-		proxies: map[uint32]*proxySlot{},
+		proxies: map[int64]*proxySlot{},
 	}
 	// 先占位再干慢活：并发的取用因此都落到这一位身上等 ready，只拨一次。
 	p.conns[key] = entry
@@ -271,24 +275,24 @@ func (p *Pool) dial(ctx context.Context, entry *pooledConn) {
 	}
 }
 
-// proxyFor 交出这条连接上这个端口的转发入口，没有就现开一个。连接已经没了时交出 nil。
-func (p *Pool) proxyFor(entry *pooledConn, port uint32) http.Handler {
+// proxyFor 交出这条连接上这条映射的转发入口，没有就现开一个。连接已经没了时交出 nil。
+func (p *Pool) proxyFor(entry *pooledConn, mappingID int64) http.Handler {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if entry.dead {
 		return nil
 	}
-	if slot, ok := entry.proxies[port]; ok {
+	if slot, ok := entry.proxies[mappingID]; ok {
 		return slot.proxy
 	}
 	slot := &proxySlot{}
 	// NewProxy 构造时就订上通知，撤销回调因此可能早于它返回——但回调是在自己的
 	// goroutine 里跑的（共享包的 Proxy.revoked），而这里正握着 Pool.mu，所以它必然
 	// 排在下面那次赋值之后。slot.proxy 的写与读都在这把锁下，没有竞态。
-	slot.proxy = portforwardhost.NewProxy(entry.conn, port, func(reason string) {
-		p.revokePort(entry, port, slot, reason)
+	slot.proxy = portforwardhost.NewProxy(entry.conn, mappingID, func(reason string) {
+		p.revokeMapping(entry, mappingID, slot, reason)
 	}, p.proxyOptions()...)
-	entry.proxies[port] = slot
+	entry.proxies[mappingID] = slot
 	return slot.proxy
 }
 
@@ -338,16 +342,16 @@ func (p *Pool) reapIfIdle(entry *pooledConn) {
 	p.finishTeardown(context.Background(), entry, "idle", slots)
 }
 
-// revokePort 是「设备说这个端口不再允许转发」的出口：**只**关掉这个端口的 Proxy 并
-// 从端口表里摘掉，连接本身与同一条连接上别的端口一点都不动（规格「连接与生命周期」）。
-// 在飞的流由 Proxy.Close 以 host_gone 收场，下一次请求重新开一个。
+// revokeMapping 是「设备说这条映射不再允许转发」的出口：**只**关掉这条映射的 Proxy
+// 并从映射表里摘掉，连接本身与同一条连接上别的映射一点都不动（规格「连接与生命
+// 周期」）。在飞的流由 Proxy.Close 以 host_gone 收场，下一次请求重新开一个。
 //
 // 桌面端那一侧的等价物是关掉本机监听；控制台没有监听可关，摘掉这个 Proxy 就是全部。
-func (p *Pool) revokePort(entry *pooledConn, port uint32, slot *proxySlot, reason string) {
+func (p *Pool) revokeMapping(entry *pooledConn, mappingID int64, slot *proxySlot, reason string) {
 	p.mu.Lock()
-	current, ok := entry.proxies[port]
+	current, ok := entry.proxies[mappingID]
 	if ok && current == slot {
-		delete(entry.proxies, port)
+		delete(entry.proxies, mappingID)
 	} else {
 		slot = nil
 	}
@@ -357,7 +361,7 @@ func (p *Pool) revokePort(entry *pooledConn, port uint32, slot *proxySlot, reaso
 	}
 	logger.Ctx(context.Background()).Info("port forward mapping revoked by device",
 		zap.Int64("userId", entry.key.userID), zap.String("machineFingerprint", entry.key.fingerprint),
-		zap.Uint32("port", port), zap.String("reason", reason))
+		zap.Int64("mappingId", mappingID), zap.String("reason", reason))
 	slot.proxy.Close()
 }
 
@@ -385,7 +389,7 @@ func (p *Pool) detachLocked(entry *pooledConn) []*proxySlot {
 	for _, slot := range entry.proxies {
 		slots = append(slots, slot)
 	}
-	entry.proxies = map[uint32]*proxySlot{}
+	entry.proxies = map[int64]*proxySlot{}
 	return slots
 }
 

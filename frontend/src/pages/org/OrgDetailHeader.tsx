@@ -173,10 +173,10 @@ function SaveStatus({
             className="size-3 shrink-0 text-destructive"
             aria-hidden="true"
           />
-          <span className="shrink-0 font-semibold text-destructive">
+          <span className="shrink-0 font-semibold text-destructive-text">
             {t("org.detail.header.saveFailed")}
           </span>
-          <span className="min-w-0 truncate text-destructive">
+          <span className="min-w-0 truncate text-destructive-text">
             {state.message}
           </span>
           <Button
@@ -260,7 +260,7 @@ export function OrgDetailHeader(props: OrgDetailHeaderProps) {
   return (
     <header
       data-testid="org-detail-header"
-      className="flex shrink-0 items-center gap-2.5 border-b border-border bg-card px-5 py-3"
+      className="flex shrink-0 items-center gap-2.5 px-5 py-3"
     >
       {/* 返回只在移动端出现（宿主给不给 onBack 决定）：桌面端索引一直在左边并排
           摆着，返回没有可去之处，画一个只会多一颗按钮。 */}

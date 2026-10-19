@@ -141,9 +141,10 @@ func TestMigrationList_IDsAreUniqueAndStrictlyAscending(t *testing.T) {
 	}
 }
 
-// devices.display_name（账号级备注名）是这一轮新增的列，必须是清单里的**最后**一条。
-func TestMigrationList_EndsWithTheDeviceDisplayNameColumn(t *testing.T) {
+// port_forward_links（端口转发子域前缀表）是这一轮新增的表，必须是清单里的**最后**
+// 一条。
+func TestMigrationList_EndsWithThePortForwardLinksTable(t *testing.T) {
 	list := migrationList()
 	require.NotEmpty(t, list)
-	assert.Equal(t, "202609120101", list[len(list)-1].ID)
+	assert.Equal(t, "202609210101", list[len(list)-1].ID)
 }

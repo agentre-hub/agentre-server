@@ -159,6 +159,25 @@ const (
 	// ——查不到，或已撤销/未激活。与「没填设备」的 InvalidParameter 分开：编辑期间
 	// 设备被撤销时，浏览器要能把它和「请选一台设备」区分开分别提示。
 	EngineBackendDeviceNotFound = 30904
+	// EngineOpenClawGatewayURL* 是 OpenClaw 后端网关地址的各条拒绝原因，与桌面端
+	// agent_backend_entity.NormalizeOpenClawGatewayURL 的哨兵错误一一对应：桌面端按
+	// 同一规则收同步行，这里放过的地址在桌面端永远落不了地。分开编码，浏览器与 agrctl
+	// 才说得清错在哪。
+	EngineOpenClawGatewayURLRequired        = 30905
+	EngineOpenClawGatewayURLInvalid         = 30906
+	EngineOpenClawGatewayURLScheme          = 30907
+	EngineOpenClawGatewayURLHost            = 30908
+	EngineOpenClawGatewayURLCredentials     = 30909
+	EngineOpenClawGatewayURLPlaintextRemote = 30910
+	// EngineOpenClawSessionModeInvalid 会话模式只有 per-agentre-session 一种（空由服务端补上）。
+	EngineOpenClawSessionModeInvalid = 30911
+	// 以下是 OpenClaw 后端带了别的后端类型的字段（桌面端 openClawKind.ValidateExtra 与
+	// AgentBackend.Check 的 hasHermesConfig / hasACPConfig 拒收），按字段组分开编码。
+	EngineOpenClawProviderModelNotAllowed   = 30912
+	EngineOpenClawEnvNotAllowed             = 30913
+	EngineOpenClawReasoningEffortNotAllowed = 30914
+	EngineOpenClawCLISettingsNotAllowed     = 30915
+	EngineOpenClawForeignConfigNotAllowed   = 30916
 )
 
 // 导入本地会话 31000~31099
@@ -177,4 +196,12 @@ const (
 	// 四种情形刻意不区分：分开就等于告诉持有者这串东西曾经有效过，或告诉调用方它
 	// 到底对应哪个账号。
 	CredentialInvalid = 31100
+)
+
+// 端口转发子域链接 31200~31299（规格 2026-09-21-port-forward-subdomain
+// 「地址与路由」）
+const (
+	// PortForwardLinksUnavailable 这个部署没有配置 port_forward.base_domain：
+	// 没有转发域就无法分配前缀，与某一台设备或映射无关。
+	PortForwardLinksUnavailable = 31200
 )

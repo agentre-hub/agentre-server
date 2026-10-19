@@ -295,18 +295,47 @@ describe("自托管字体", () => {
   });
 });
 
-describe("源码只用已声明的 token", () => {
-  /**
-   * 语义 token 词表：出现在这些工具类后面的名字必须是声明过的 token。
-   * 词表现在来自**包 + 本站**两处的并集——包是主体，本站只剩 radius / font。
-   */
-  const VOCAB = new Set(
-    [...Object.keys(packageRoot), ...Object.keys(root)]
-      .filter((n) => isColor(packageRoot[n] ?? root[n]))
-      .map((n) => n.slice(2))
-      .concat("scrim"),
-  );
+/**
+ * 语义 token 词表：出现在 bg-/text-/border- 等工具类后面的名字必须是声明过的 token。
+ * 来自**包 + 本站**两处的并集——包是主体，本站只剩 radius / font。
+ *
+ * 填充（--color-field-fill / --color-button-fill 及其 -hover）不是 #rrggbb，
+ * 而是包在 @theme 里用 color-mix 合成的 --color-*，所以单看 :root 的十六进制色值
+ * 认不出它们。它们同样来自包，按「@theme 里值为 color-mix 的 --color-*」收进词表；
+ * 本站自己的 @theme 不在此列，所以本地新造的色值 token 仍然进不来。
+ */
+const VOCAB = new Set(
+  [...Object.keys(packageRoot), ...Object.keys(root)]
+    .filter((n) => isColor(packageRoot[n] ?? root[n]))
+    .map((n) => n.slice(2))
+    .concat(
+      Object.entries(packageTheme)
+        .filter(
+          ([name, value]) =>
+            name.startsWith("--color-") && value.startsWith("color-mix("),
+        )
+        .map(([name]) => name.slice("--color-".length)),
+    )
+    .concat("scrim"),
+);
 
+describe("填充是包里的词表，本地色值不是", () => {
+  it.each([
+    "field-fill",
+    "field-fill-hover",
+    "button-fill",
+    "button-fill-hover",
+  ])("%s 被认作包的词表", (name) => {
+    expect(VOCAB.has(name)).toBe(true);
+  });
+
+  it("没声明过的填充变体仍然不在词表里", () => {
+    expect(VOCAB.has("field-fill-strong")).toBe(false);
+    expect(VOCAB.has("button-fill-active")).toBe(false);
+  });
+});
+
+describe("源码只用已声明的 token", () => {
   /**
    * 语义 token 的词根：`primary-soft` 的词根是 `primary`。
    *

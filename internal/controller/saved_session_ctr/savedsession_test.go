@@ -111,6 +111,8 @@ func doRequest(t *testing.T, method, url, cookie, bearer, body string, csrf ...s
 	if len(csrf) > 0 && csrf[0] != "" {
 		req.Header.Set("X-CSRF-Token", csrf[0])
 	}
+	// 真实浏览器给同源请求带这个头，加固层（middleware.originOK）据此放行。
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)

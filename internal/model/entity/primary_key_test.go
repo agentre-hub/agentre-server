@@ -13,6 +13,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_flow_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/device_token_entity"
+	"github.com/agentre-hub/agentre-server/internal/model/entity/portforward_link_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/sync_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_entity"
 	"github.com/agentre-hub/agentre-server/internal/model/entity/user_identity_entity"
@@ -32,6 +33,7 @@ func allEntities() []any {
 		&device_entity.Device{},
 		&device_flow_entity.DeviceFlowCode{},
 		&device_token_entity.DeviceToken{},
+		&portforward_link_entity.PortForwardLink{},
 		&sync_entity.DeviceLocalPath{},
 		&sync_entity.DeviceSyncState{},
 		&sync_entity.SyncAvatar{},

@@ -7,8 +7,8 @@ import i18n from "@/i18n";
 
 // 真的 ThemeProvider，不是替身：AppControls 的图标和 aria-label 都由
 // context 里的 theme 决定，替换掉它这几条断言就测不到接线了。
-function renderControls() {
-  return render(<AppControls />, { wrapper: ThemeProvider });
+function renderControls(props: Parameters<typeof AppControls>[0] = {}) {
+  return render(<AppControls {...props} />, { wrapper: ThemeProvider });
 }
 
 describe("AppControls", () => {
@@ -32,4 +32,21 @@ describe("AppControls", () => {
       );
     },
   );
+
+  // 放到 56px 的收起侧栏底部时，两颗 34px 并排要 72px，放不下：竖着排。
+  it("竖排形态把两颗按钮上下叠起来，横排仍是默认", async () => {
+    await i18n.changeLanguage("en");
+    const { unmount } = renderControls();
+    expect(
+      screen.getByRole("button", { name: /Language/i }).parentElement
+        ?.className,
+    ).not.toContain("flex-col");
+    unmount();
+
+    renderControls({ orientation: "vertical" });
+    expect(
+      screen.getByRole("button", { name: /Language/i }).parentElement
+        ?.className,
+    ).toContain("flex-col");
+  });
 });

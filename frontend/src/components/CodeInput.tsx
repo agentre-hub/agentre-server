@@ -158,11 +158,14 @@ export default function CodeInput({
               // 上限锁在画板的 54px：够宽时就是画板的 54×66 并整排居中，
               // 窄屏自动缩小。min-w-0 是必须的，否则 flex 项不肯缩到内容以下，
               // 整排会顶出横向滚动条。
-              "h-14 min-w-0 max-w-[54px] flex-1 rounded-md border border-border bg-card text-center font-mono text-[22px] font-semibold text-foreground outline-none",
+              "h-14 min-w-0 max-w-[54px] flex-1 rounded-md text-center font-mono text-[22px] font-semibold text-foreground outline-none",
               "sm:h-[66px] sm:text-[26px]",
-              "focus:border-primary focus:ring-1 focus:ring-primary",
-              invalid &&
-                "border-destructive bg-destructive-soft text-destructive focus:border-destructive focus:ring-destructive",
+              "focus-visible:focus-outline",
+              // 错误态的红底悬停、聚焦都不换：人回到码格里改的正是那一格，字段的
+              // 悬停 / 聚焦底色若照常生效，红底恰好在那一格上消失。
+              invalid
+                ? "bg-destructive-soft text-destructive-text ring-2 ring-destructive"
+                : "bg-field-fill hover:bg-field-fill-hover focus-visible:bg-sheet",
             )}
           />
         </Fragment>

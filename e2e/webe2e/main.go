@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,14 @@ func rateLimitClientIP(runID string) string {
 
 func redisKeys(runID string) []string {
 	return []string{"session:" + sessionSID(runID), "rl:authz:" + rateLimitClientIP(runID)}
+}
+
+func cleanupRedisKeys(runID string, userID int64, userFound bool) []string {
+	keys := redisKeys(runID)
+	if userFound {
+		keys = append(keys, "user_sessions:"+strconv.FormatInt(userID, 10))
+	}
+	return keys
 }
 
 // flowFingerprint is the non-secret run handle that the browser must send to
@@ -70,6 +79,9 @@ func fixtureTables() []fixtureTable {
 		// 202608180002 刻意不建），删账号不会带走它。不在这里删一次，凭证行就永久
 		// 留在专库里，账号却已经不存在了。
 		{"webauthn_credentials", `DELETE FROM webauthn_credentials WHERE user_id = ?`, `SELECT count(*) FROM webauthn_credentials WHERE user_id = ?`},
+		// port_forward_links（迁移 202609210101）也没有指向 users 的外键，同一个理由：
+		// 不在这里删一次，前缀行就永久留在专库里（本轮已实证一轮 run 留下 5 行残留）。
+		{"port_forward_links", `DELETE FROM port_forward_links WHERE user_id = ?`, `SELECT count(*) FROM port_forward_links WHERE user_id = ?`},
 		{"devices", `DELETE FROM devices WHERE user_id = ?`, `SELECT count(*) FROM devices WHERE user_id = ?`},
 		{"user_identities", `DELETE FROM user_identities WHERE user_id = ?`, `SELECT count(*) FROM user_identities WHERE user_id = ?`},
 		{"users", `DELETE FROM users WHERE id = ?`, `SELECT count(*) FROM users WHERE id = ?`},
@@ -327,7 +339,8 @@ func runCleanup(args []string) error {
 		}
 		out.Deleted[t.name] = res.RowsAffected
 	}
-	if err := rc.Del(context.Background(), redisKeys(runID)...).Err(); err != nil {
+	keys := cleanupRedisKeys(runID, out.UserID, out.Found)
+	if err := rc.Del(context.Background(), keys...).Err(); err != nil {
 		return fmt.Errorf("delete run redis keys: %w", err)
 	}
 
@@ -360,8 +373,11 @@ func runCleanup(args []string) error {
 		}
 		out.Residue[t.name] = n
 	}
-	keys := redisKeys(runID)
-	for i, name := range []string{"session", "rate_limit"} {
+	keyNames := []string{"session", "rate_limit"}
+	if out.Found {
+		keyNames = append(keyNames, "session_index")
+	}
+	for i, name := range keyNames {
 		exists, err := rc.Exists(context.Background(), keys[i]).Result()
 		if err != nil {
 			return fmt.Errorf("recount %s: %w", name, err)

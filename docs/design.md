@@ -15,9 +15,11 @@ spec as branch-verifiable evidence.
 
 ## Colour tokens
 
-There is exactly one place colours are defined: `frontend/src/styles/globals.css`.
-`:root` holds the light values, `.dark` overrides them, and the `@theme inline` block in
-the same file maps each to a semantic utility name.
+There is exactly one place colours are defined: the shared package's `styles/tokens.css`
+(`@agentre-hub/agentre-ui`, pinned in `frontend/package.json`). `:root` holds the light
+values, `.dark` overrides them, and its `@theme inline` block maps each to a semantic
+utility name. `frontend/src/styles/globals.css` declares no colour and no alias; a second
+alias of the same name would silently shadow the package's.
 
 ```
 --background / --foreground     page surface + text
@@ -31,7 +33,11 @@ the same file maps each to a semantic utility name.
 --destructive / --destructive-foreground / --destructive-soft
 --status-running / -bg, --status-waiting / -bg / -foreground, --status-idle, --status-error
 --code-surface / --code-foreground / --code-muted-foreground
---sidebar                       the console SideNav surface (chrome on the board)
+--chrome / --sheet / --raised   the surface ladder: the frame, the work page, the selected item
+--sheet-shadow                  the work page's lift (light theme only)  → content-sheet
+--rail-accent                   hover on the chrome band
+--field-fill / --button-fill    relative fills (+ -hover), 5/7% and 8/12% of --foreground
+--fill-muted-foreground         muted text on those fills
 --heat-0 … --heat-4             the overview heatmap's five-level scale
 --overlay-shadow                elevation for dialogs   → shadow-overlay
 --overlay-scrim                 the dim behind a dialog → bg-scrim
@@ -42,7 +48,7 @@ The two `--overlay-*` names are deliberate. Tailwind v4 derives utilities from t
 `--shadow-overlay` would make the mapping `--shadow-overlay: var(--shadow-overlay)`,
 which references itself.
 
-**Write `bg-background`, `text-muted-foreground`, `border-border`, `bg-scrim`.
+**Write `bg-background`, `text-muted-foreground`, `bg-sheet`, `bg-scrim`.
 Never write `bg-slate-900`, `text-white`, `#0f172a` or `rgba(...)` in a `.ts`/`.tsx` file.**
 
 This is enforced — `no-restricted-syntax` in `frontend/eslint.config.js`, with the patterns
@@ -54,13 +60,82 @@ The reason is not tidiness. A literal colour does not change between themes, so 
 correct in whichever mode you built it in and wrong in the other — and nobody notices until
 a user in the other mode complains.
 
-Need a colour that has no token? **Add the token** — to both `:root` and `.dark` — add its
-`--color-*` alias to `@theme inline`, then use it. Miss the alias and nothing errors: the
-utility simply generates no rule, so the element renders with no colour at all.
-`frontend/src/__tests__/design-token-contract.test.ts` guards both halves.
+Need a colour that has no token? **Add the token to the shared package** — to both
+`:root` and `.dark`, with its `--color-*` alias in `@theme inline` — and bump the pin, then
+use it. This site declares no colour of its own. Use a name that has no alias and nothing
+errors: the utility simply generates no rule, so the element renders with no colour at all.
+`frontend/src/__tests__/design-token-contract.test.ts` guards that this site does not
+re-declare a token the package already has, and that the source only uses declared tokens.
 
 Only `eslint-rules/` is exempt from the literal-colour rule, because it is where the banned
 colour names are listed. No `.ts`/`.tsx` file may hard-code a colour.
+
+### A token has a role
+
+Using a token is not enough; it has to be the token for that job. The same module and guard
+test enforce four role rules, kept verbatim identical to the desktop repository's module so
+that one class string is never legal in one host and banned in the other:
+
+- **Text on a soft background takes the `-text` role.** A status, destructive or brand
+  colour has a saturated fill (dots, solid backgrounds, a stand-alone icon) and a `-text`
+  value for words. `bg-status-waiting-bg text-status-waiting` is rejected; write
+  `text-status-waiting-text`. The rule only sees a soft background and its fill in one class
+  string — coloured *words* written straight onto a card or a parent's soft background
+  (`<p className="text-xs text-destructive-text">`) are the author's job to get right.
+- **Keyboard focus is never hand-assembled.** Any `ring-ring` in `.ts`/`.tsx` is rejected;
+  see [Accessibility](#accessibility) for the two shared looks.
+- **Identity colours are not text.** `text-agent-N` is rejected; the 16 identity colours
+  were tuned for a swatch with a white glyph (`bg-agent-N text-agent-foreground`).
+- **Hover is `accent`, not a resting surface.** `hover:bg-muted` and `hover:bg-secondary`
+  are rejected: each shares its value with another surface, so the feedback lands at 1.00.
+  Use `hover:bg-accent`, or `hover:bg-accent/60 hover:on-accent` for a lighter touch —
+  `on-accent` re-points muted text so it stays readable on the translucent fill.
+
+### Structural lines
+
+The console is borderless: areas are told apart by the surface ladder and by fills, never
+by a line. Three surfaces make the ladder (all from the shared package, no local values):
+
+- **`chrome`** — the frame: SideNav, TopBar, the mobile bottom tab bar, the index column
+  of a page that declares one, and the auth screens' page background.
+- **`sheet`** — the work page that floats on the chrome (`content-sheet` on desktop,
+  `bg-sheet` full-bleed on mobile), and the auth card.
+- **`raised`** — the selected item on the chrome: the active `ConsoleNavItem`, and the
+  selected row of an index column — Chat's session row, Org's index row and department
+  header. Those rows come from the shared package; they are `raised` only because the
+  shell puts the index column on the chrome (on the sheet, light `raised` is the same
+  `#ffffff` and the selection disappears). Do not give them the blue
+  `sidebar-selected-bg` instead: an org row's `text-destructive-text` tail falls to 3.85:1
+  on it in dark, against 5.32:1 on `raised`.
+
+Inside a sheet, a block (a metric tile, an empty state, a settings group, a code block, a
+field) is a **relative fill**: `bg-field-fill` (hover `bg-field-fill-hover`) for fields and
+passive blocks, `bg-button-fill` (hover `bg-button-fill-hover`) for buttons. They are
+`--foreground` mixed over whatever is underneath, so they read on the sheet, on the chrome
+and on another fill, in both themes. Do not give them an opacity suffix: the fill
+utilities also re-point muted text at `--fill-muted-foreground`, and a suffix loses that.
+Rows are separated by spacing, not by `divide-*`.
+
+Three rules in `frontend/eslint-rules/design-tokens.js` enforce this (the regexes are
+copied verbatim from the desktop repository's module, which owns them; they are not
+shipped by the shared package):
+
+- **Divider-coloured edge** — `border-border`, `border-b-border`, `border-l-sidebar-border`
+  and any `border-*-border` except `control-border` and `field-border`. Only the *colour* is
+  matched, not the width, so a bare `border-t` is not reported; the colour is what makes
+  it a divider.
+- **`divide-*`** — the utility exists only to draw a line between siblings.
+- **Field edge** — `border-input` and `border-field-border`. Fields and outline buttons
+  take a fill instead.
+
+What stays legitimate, because the lines carry meaning: the focus ring
+(`focus-visible:focus-outline`, `focus-outline-inset`), the unchecked edge of a checkbox,
+radio or switch (`border-control-border`), a status colour bar (`border-l-2
+border-l-status-running`) and a drag-and-drop target (`border-dashed border-ring`) — none
+of these is a divider colour, so the rules do not see them. A genuine keeper the class
+table cannot recognise gets `// eslint-disable-next-line no-restricted-syntax -- <reason>`
+on the line; the reason is mandatory. Tests and `eslint-rules/` are exempt, as for the other
+rules. The guard test is `frontend/src/__tests__/eslint-guardrails.test.ts`.
 
 ### The canvas's names are not the code's names
 
@@ -68,13 +143,16 @@ The boards say `brand`, `surface`, `text`, `ok`, `warn`, `idle`. The code keeps 
 names for the surfaces and the desktop app's `status-*` names for the states, so that a
 palette fix lands once and both products get it. Holding a board, read across:
 
-| On the board | Token in `globals.css` | What you type |
+| On the board | Token (shared `tokens.css`) | What you type |
 | --- | --- | --- |
 | `bg` | `--background` | `bg-background` |
 | `surface` | `--card` | `bg-card`, `text-card-foreground` |
 | `surface-raised` | `--popover` | `bg-popover`, `text-popover-foreground` |
-| `chrome`, `code-bg` | `--code-surface` | `bg-code-surface` |
-| `chrome` (side-nav) | `--sidebar` | `bg-sidebar` |
+| `code-bg` | `--code-surface` | `bg-code-surface` |
+| `chrome` (the frame) | `--chrome` | `bg-chrome` |
+| `sheet` (the work page, auth card) | `--sheet` | `bg-sheet`, or `content-sheet` for the desktop page |
+| `raised` (selected item on chrome: nav item, session / org index row) | `--raised` | `bg-raised` |
+| (relative fills) | `--color-field-fill`, `--color-button-fill` | `bg-field-fill`, `bg-button-fill` |
 | `text` | `--foreground` | `text-foreground` |
 | `text-muted` | `--muted-foreground` | `text-muted-foreground` |
 | `text-subtle` | `--subtle-foreground` | `text-subtle-foreground` |
@@ -96,18 +174,17 @@ palette fix lands once and both products get it. Holding a board, read across:
 
 Two groups do not line up, and both are intentional:
 
-- The board draws the SideNav in the same `chrome` family the code splits in two:
-  `--code-surface` keeps the command/hook output surfaces, and `--sidebar` (added with the
-  console) is the console's nav surface — light #f4f4f5 (the light of `--secondary`) and
-  dark #111316 (the dark of `--code-surface`). A dedicated token lets the two diverge
-  without touching either. `warn-fg` gained one too: `--status-waiting-foreground`, the
-  dark-brown text on the amber badge, shared by the SideNav chat badge and the unread chip.
-- `--heat-0`…`--heat-4` are the one colour family this site declares itself, in its own
-  `:root` / `.dark` plus five `--color-heat-*` aliases in `@theme inline`. They belong here
-  rather than in the shared package because only the server console draws an activity
-  heatmap; adding a pair of light/dark values the desktop never renders just creates two
-  numbers that drift apart. `heat-0` is a visible grey, not transparent — it means
-  "nothing started that day", which is a fact, not a gap.
+- `chrome` is no longer split: the console's nav, bars and index columns are `--chrome`
+  from the shared package, and `--code-surface` keeps only the command/hook output
+  surfaces. `--sidebar` still exists in the package for the desktop's own sidebar family,
+  but no console surface is drawn on it. `warn-fg` has its own token,
+  `--status-waiting-foreground`, the dark-brown text on the amber badge, shared by the
+  SideNav chat badge and the unread chip.
+- `--heat-0`…`--heat-4` are also shared-package tokens (the desktop's activity popover is
+  the second consumer). The heatmap does not use `--heat-0` for an empty day: `Heatmap.tsx`
+  paints a "nothing started" cell with `bg-button-fill`, which follows the surface under it
+  (the fixed grey assumed a white card and vanished on a dark fill); levels 1–4 use
+  `bg-heat-1…4`.
 - The canvas also carries `proj-1`…`proj-5`. Nothing in this repo uses them — they belong
   to console surfaces outside this flow — so they are absent from `globals.css`. Adding a
   token nobody uses just creates a pair of values that silently drift apart between `:root`
@@ -214,8 +291,8 @@ values are computed from the package's own declaration rather than copied into a
 a deliberate change to `--radius` upstream flows through instead of going red.
 
 `rounded-full` resolves to Tailwind's built-in. `rounded-xl` comes from the package's
-`--radius-xl`, which happens to equal Tailwind's built-in 12px. `@/components/ui/card.tsx` (`rounded-xl` plus `shadow-sm`) is still *not* the
-auth card. See [Components](#components).
+`--radius-xl`, which happens to equal Tailwind's built-in 12px. `@/components/ui/card.tsx` (`rounded-xl`, no border, no shadow) is still *not*
+the auth card. See [Components](#components).
 
 ## Cursors
 
@@ -270,7 +347,8 @@ deleted *and* on one written too wide, rather than just asserting the string is 
 also states the served credential policy: API keys are account-hosted and synced only to
 the user's own devices. The signed-in console uses its own frame, `AppShell` (see
 [The console](#the-console)). It is a vertical
-three-part layout — top bar, main, footer — on `flex min-h-screen flex-col bg-background`.
+three-part layout — top bar, main, footer — on `flex min-h-screen flex-col bg-chrome`: the page background is the frame colour, the
+same family as the console's chrome.
 
 **Top bar.** Brand mark (a 28px `rounded-sm bg-primary` square holding a terminal glyph)
 plus the product name at `text-[15px] font-semibold`, a flexible spacer, then `AppControls`
@@ -291,8 +369,10 @@ links to `/terms`, `/privacy` and `/status`. Those three are public routes in `A
 deliberately outside `RequireAuth` — the footer is also on the login screen, and a footer
 link that bounces you to login is worse than no link.
 
-**Cards.** A card is a plain element with `rounded-lg border border-border bg-card`; the
-width is per screen, and comes from the board:
+**Cards.** A card is a plain element drawn as a sheet that stands on the chrome:
+`rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10` (Login is `sm:p-9`). No border — the
+sheet/chrome step in colour and the `shadow-overlay` elevation lift it, the same rule as a
+dialog. The width is per screen, and comes from the board:
 
 | Screen | File | Width class | Rendered |
 | --- | --- | --- | --- |
@@ -302,9 +382,9 @@ width is per screen, and comes from the board:
 | Success / denied / expired | `pages/Device{Success,Denied,Expired}.tsx` | `w-full max-w-[28rem]` | 448px |
 | 404, coming soon | `pages/NotFound.tsx`, `pages/ComingSoon.tsx` | — | no card |
 
-`border` on its own is enough — `globals.css` sets `border-color: var(--border)` on `*` in
-its base layer, because Tailwind v4's default border colour is `currentColor` and would
-otherwise draw the border in the text colour.
+Login's "or" separator is the word alone; no rule is drawn on either side of it. The
+device-code boxes follow the field rule: a resting `bg-field-fill` with no edge, and the
+focus ring on focus.
 
 ### How it degrades on mobile
 
@@ -324,9 +404,11 @@ use, and it adds to the mobile shape rather than replacing it.
 
 ## The console
 
-`@/components/AppShell` is the frame for signed-in console pages. It is a two-part frame
-on desktop (a 224px SideNav plus a TopBar/main column) and a single column with a bottom
-TabBar on mobile — there is no hamburger or drawer. The auth screens keep `AuthLayout`
+`@/components/AppShell` is the frame for signed-in console pages. It is a **chrome frame
+holding a sheet**: on desktop a 224px SideNav plus a TopBar/work-area column, on mobile a
+single column with a bottom TabBar — there is no hamburger or drawer. SideNav, TopBar and
+TabBar all sit on `bg-chrome` with no line between them or between them and the work area;
+the work area is one `sheet` page. See [The shell](#the-shell). The auth screens keep `AuthLayout`
 (above); the two shells never nest.
 
 ### Formal UI vs design commentary
@@ -362,11 +444,12 @@ described in [architecture.md](architecture.md#shared-frontend-packages).
 
 | Component | Board node | Shape (what it fixes, so no one re-measures) | Used by |
 | --- | --- | --- | --- |
-| `ConsoleNavItem` | `ZC7pI` nav item | `h-[34px] rounded-md px-2.5`, 17px icon, 13px label; active = `bg-primary-soft text-primary-text`, idle = `text-muted-foreground hover:bg-accent`; trailing `badge` (> 0 only) / `meta` / `dot` are honest — the caller passes them only with real data | `AppShell` desktop SideNav (all six items) |
-| `MobileTabBar` | `A6Z3k` bottom tab | `h-[74px] bg-card` + top border, 21px icon, 10px label, active = `text-primary-text font-semibold`, idle = `text-subtle-foreground font-medium`; items carry only real destinations | `AppShell` mobile bottom nav |
+| `ConsoleNavItem` | `ZC7pI` nav item | `h-[34px] rounded-md px-2.5`, 17px icon, 13px label; active = `bg-raised text-primary-text`, idle = `text-muted-foreground hover:bg-rail-accent hover:text-foreground`; trailing `badge` (> 0 only) / `meta` / `dot` are honest — the caller passes them only with real data | `AppShell` desktop SideNav (all six items) |
+| `MobileTabBar` | `A6Z3k` bottom tab | `h-[74px] bg-chrome`, no top border (the sheet above it ends where the chrome starts), 21px icon, 10px label, active = `text-primary-text font-semibold`, idle = `text-subtle-foreground font-medium`; items carry only real destinations | `AppShell` mobile bottom nav |
 | `StatusMark` | `zF5jv` status pill | `rounded-full px-2.5 py-[5px]`, 6px dot + `text-xs font-semibold` text in the same token; `tone` maps to `running`/`waiting`/`idle`/`error` semantic tokens only; the label is always visible text — colour is never the only signal | `Devices` row status |
-| `Metric` | `IhldU` stat card | `rounded-md border px-3.5 py-3`, label `text-[11.5px]` + 13px icon, value `text-[23px] leading-none font-bold` + `text-xs` unit, sub `text-[10.5px]`; `tone="danger"` swaps the whole card to destructive tokens; a data-less block renders `value="—"`, never a made-up number | `Overview` four stat tiles |
+| `Metric` | `IhldU` stat card | `rounded-md bg-field-fill px-3.5 py-3` (a fill, no edge), label `text-[11.5px]` + 13px icon, value `text-[23px] leading-none font-bold` + `text-xs` unit, sub `text-[10.5px]`; a data-less block renders `value="—"`, never a made-up number | `Overview` four stat tiles |
 | `EmptyState` | the formal empty boards | 62px icon circle (`bg-primary-soft text-primary-text`, or warn), `text-lg font-bold` title, `text-[12.5px] leading-[22px]` body, optional action; only the shared hierarchy — page-specific content is assembled by the page from real data | `Overview` (the three distributions + the stats-unavailable state), `Devices` (no devices), `Chat` (desktop unselected + mobile empty) |
+| `InlineEmpty` | an index column's empty state | `m-2.5 rounded-lg bg-field-fill p-6 text-center`, top-aligned (not vertically centred), 24px icon + `text-sm font-semibold` title + `text-2xs` body + optional action; a fill, no dashed frame; the action is omitted when the host gives no callback | `OrgIndexPanel` |
 
 `frontend/src/__tests__/console-primitives.test.tsx` pins the sizes, states and the
 "commentary must not become a component/locale key" boundary; `design-token-contract.test.ts`
@@ -375,25 +458,27 @@ symmetric so commentary never enters the product copy either.
 
 ### The shell
 
-`AppShell`'s root is `flex h-screen flex-col overflow-hidden bg-background md:flex-row` —
-column on mobile, two parts on desktop. **The page itself never scrolls**: scrolling lives
-inside `main`. That is what makes a pinned composer possible at all — with a root that grows
+`AppShell`'s root is `flex h-dvh flex-col overflow-hidden bg-chrome md:flex-row` —
+column on mobile, two parts on desktop. The root is the **chrome**; nothing inside it
+draws a line, and the work area is a separate `sheet` page floating on it (see **Main**).
+**The page itself never scrolls**: scrolling lives inside `main`. That is what makes a pinned composer possible at all — with a root that grows
 past the viewport, the SideNav, the TopBar and the session list scroll away with the
 transcript.
 
-**SideNav (desktop only).** `flex w-[224px] shrink-0 flex-col gap-3 border-r border-border
-bg-sidebar p-3`, drawn on `--sidebar` — the board's `chrome` surface, made its own token
-with this console (light #f4f4f5 / dark #111316, see [Colour tokens](#colour-tokens)).
-Top to bottom:
+**SideNav (desktop only).** `group/nav relative flex shrink-0 flex-col gap-3 bg-chrome`,
+`w-[224px] p-3` (or `w-[56px] p-2` collapsed). It is the same `--chrome` as the root and
+the TopBar, so it has no right border: it ends where the sheet begins. Selected item is
+`bg-raised`, hover is `bg-rail-accent`. Top to bottom:
 
-- **Brand.** A 40px row (`h-10`) holding a 28px `rounded-md bg-primary` mark with a
-  `SquareTerminal` glyph (`size-4 text-primary-foreground`), then the product name at
-  `text-[15px] font-semibold` — the same `authLayout.brand` string the login screen uses —
-  over a 10px `text-subtle-foreground` line: `appShell.productSub`, "Console" (「控制台」).
+- **Brand.** A 40px row (`h-10`) holding the shared package's bare `agentreLogoUrl` mark
+  (`size-8`, no backing tile — it carries its own brand blue), then the product name at
+  `text-prose font-semibold` — the same `authLayout.brand` string the login screen uses —
+  over a `text-3xs text-muted-foreground` line: `appShell.productSub`, "Console" (「控制台」).
   Collapsed it keeps the same 40px row and centres the mark; the words are what give way,
   not the shape.
-- **The collapse handle.** A 24px `rounded-full border border-border bg-card shadow-overlay`
-  button pinned to the sidebar's right edge (`absolute top-5 -right-3 z-10`), holding a
+- **The collapse handle.** A 24px `rounded-full bg-button-fill` button (hover
+  `bg-button-fill-hover`; no border, no shadow, `focus-visible:focus-outline`) pinned to the
+  sidebar's right edge (`absolute top-5 -right-3 z-10`), holding a
   `ChevronLeft` / `ChevronRight`. It is transparent until the pointer enters the nav
   (`group-hover/nav`) or it takes focus (`focus-visible`), so a settled sidebar spends no
   space on it. It is a child of `nav`, **not of the brand row**: it used to live there, and
@@ -417,7 +502,8 @@ Top to bottom:
     text-subtle-foreground`) — rows of `/v1/devices` (the same set as the Overview
     **Devices online** tile; the list no longer includes web) — rendered only when that
     list resolves.
-- A `border-t border-border` divider, then **Account**: `h-[42px] rounded-md px-1.5` with a
+- A flexible spacer (the gap, not a divider line), then — only on `ownHeader` pages —
+  `AppControls`, then `ConnectionEscape`, then **Account**: `h-[42px] rounded-md px-1.5` with a
   28px `rounded-full bg-primary-soft` avatar holding the first character of `display_name`
   at `text-sm font-semibold text-primary-text`, the name at `text-xs font-semibold`, and
   `appShell.accountMeta` at `text-[10px] text-subtle-foreground`. The row renders only once
@@ -436,8 +522,10 @@ Top to bottom:
   `connecting` draw no block at all, and `connecting` heals itself — pressing anything there
   only interrupts its own backoff.
 
-**TopBar.** `h-[52px] shrink-0 items-center gap-3 border-b border-border bg-card px-4`.
-Left to right: a title slot at `text-[15px] font-bold` (the page's `nav.*` label), a
+**TopBar.** `h-[calc(52px+env(safe-area-inset-top))] shrink-0 items-center gap-3
+bg-chrome px-4` — the chrome colour, no bottom border and not `bg-card`: it is the same
+surface as the SideNav, so the SideNav and TopBar read as one L-shaped frame around the
+sheet. (The connection pip's ring is `ring-chrome` for the same reason.) Left to right: a title slot at `text-[15px] font-bold` (the page's `nav.*` label), a
 flexible spacer, the page's `right` slot, then — on mobile only — the account chip, then
 `AppControls`. Both `title` and `right` are optional. `right` holds page controls — Overview's range
 segment is the one user. A bare count does not go there: a number with no label next to it
@@ -447,10 +535,24 @@ account block; no TopBar indicator repeats "some machine is online", which the S
 Devices meta, the Devices page and Overview's online tile already answer.
 
 A page can also take the whole band over with **`ownHeader`** — the shell then draws no
-header at all. Chat's mobile form does this: 52px cannot hold title + page actions + account
-+ language/theme, and stacking them blew the bar out to ~100px with the title clipped to
-「对.」. Chat instead keeps identity and global controls on the first row and gives search
-its own.
+header at all. Chat does this: on mobile, 52px cannot hold title + page actions + account
++ language/theme (stacking them blew the bar out to ~100px with the title clipped to 「对.」),
+so the page keeps identity and global controls on its first row and gives search its own.
+On desktop the shell moves `AppControls` (language / theme) to the bottom of the SideNav —
+vertical when collapsed — so they sit on the chrome, never in a corner of the sheet. The
+row that holds the `index` column and the sheet then gets a `pt-2`: the sheet's top edge
+still clears the chrome, and because the index column moves down with it, Chat's 68px list
+head and 68px detail band stay on one horizontal line instead of sitting 8px apart.
+
+**Page layout is declared to the shell.** A page is either a *whole sheet* (the default) or
+an *index column plus a sheet*. The second is declared with **`index`**, a `ReactNode`
+(`Chat` passes its session `ResizableSidebar`, `Org` its fixed index column). On desktop
+the shell places `index` (`data-testid="app-index"`) on the chrome, to the left of the
+sheet and, when there is a TopBar, below it; `children` is the detail, inside the sheet.
+The index column paints no background of its own — what is under it is the chrome. On
+mobile there is no room for side-by-side, so `index` is not rendered: the shell shows only
+`children` as a full sheet, and the page decides whether this screen is the index or the
+detail. Pages therefore never paint their own root background.
 
 **Mobile session detail and draft: `immersive`** — when `immersive={true}` the shell hides
 both TopBar and mobile bottom tab bar, and `main` handles safe-area insets at top and bottom.
@@ -461,7 +563,7 @@ way on mobile, so a session occupies the full viewport with a single fixed 68px 
 
 **Mobile bottom tab (board `A6Z3k`).** Below `md` the SideNav is removed entirely — no
 hamburger, no drawer. The five high-frequency destinations (Overview, Chat, Issues, Devices,
-Org) render in a `MobileTabBar` held at the bottom with `shrink-0` (the root does not
+Org) render in a `MobileTabBar` on `bg-chrome` with no top border, held at the bottom with `shrink-0` (the root does not
 scroll, so `sticky` would buy nothing). The list derives from the SideNav's real routes minus
 Settings, which deliberately stays out of the bar and is reachable from the account menu,
 like `/account` — so no fake "Me"/placeholder entry exists and no low-frequency destination
@@ -470,11 +572,18 @@ stays in the TopBar — account, language and theme remain reachable without com
 the bottom bar. `app-shell.test.tsx` and `mobile-nav-drawer.test.tsx` pin the
 desktop/mobile split, the five-item boundary and the "no drawer, no fake blue dot" rule.
 
-**Main.** `min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-5 md:px-8 md:py-6`; each page owns
-its own `mx-auto w-full max-w-[1200px]` column inside it. Pages that fill the viewport
-themselves pass **`flush`**: `main` then drops its padding and its scrollbar
-(`overflow-hidden`) and the page bands the space itself. Chat and the full-screen session detail do this —
-that, not a negative margin, is how they sit flush under the TopBar.
+**Main (the sheet).** The work area is `data-testid="app-sheet"`, holding `main`. On desktop
+it is the shared `content-sheet` utility: `--sheet` background, 12px radius, `overflow:
+hidden` to clip the radius, a right and bottom margin of 8px (the top butts the TopBar and
+the left butts the SideNav or `index`), and the light-theme `--sheet-shadow`. On mobile it
+is `bg-sheet` full-bleed — no gap, no radius, so the 375px width is not spent on a margin;
+the chrome/sheet colour step still separates it from the bars. Because the sheet clips
+overflow, scrolling lives in the `main` inside it. `main` is `min-h-0 min-w-0 flex-1
+overflow-y-auto px-4 py-5 md:px-8 md:py-6`; each page owns its own `mx-auto w-full
+max-w-[1200px]` column inside it. Pages that fill the sheet themselves pass **`flush`**:
+`main` then drops its padding and its scrollbar (`overflow-hidden`) and the page bands the
+space itself. Chat, Issues, Org and the full-screen session detail do this — that, not a
+negative margin, is how they sit flush against the sheet's edges.
 
 ### Overview (board `r5xRl` / `XwJfx` dark)
 
@@ -559,10 +668,11 @@ that, not a negative margin, is how they sit flush under the TopBar.
 column and no persistent "撤销这台设备" explainer card**.
 
 - **Device rows**, `flex min-w-0 flex-1 flex-col gap-2.5`. Each `Card` forced to
-  `rounded-lg border-border bg-card py-4 shadow-none`. The desktop title row (`px-5`):
-  status dot + device icon (`deviceKind.ts`'s `DEVICE_KIND_ICONS`, decorative and
-  `aria-hidden`) + name at `text-[15px] font-semibold` + mono kind chip (`rounded-md bg-muted
-  px-1.5 py-0.5 font-mono text-[10px]`) + shared `StatusMark` (online / offline / revoked) +
+  `gap-0 rounded-lg bg-field-fill py-4` — the shared fill, no edge. The desktop
+  title row (`px-5`): status dot + device icon (`deviceKind.ts`'s `DEVICE_KIND_ICONS`,
+  decorative and `aria-hidden`) + name at `text-[15px] font-semibold` + mono kind chip
+  (`rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-[10px]` — one fill above the row,
+  so it does not vanish into it) + shared `StatusMark` (online / offline / revoked) +
   an expand chevron (absent on `web` rows — a browser holds no projects or agents) + a
   shared-package `DropdownMenu`. The sub-row (`px-5 pt-1.5`) holds the `font-mono text-xs` meta
   (`platform · version · last active`) and the `cardSummary` line
@@ -572,7 +682,7 @@ column and no persistent "撤销这台设备" explainer card**.
 - **Expand (agentred).** Expanding an online `agentred` card mounts a relay session query
   and shows three labelled sections (`font-mono text-[10px]` labels, `gap-1.5` chips):
   **Agents that can run here** (with mono rank), **Projects** (configured →
-  `bg-muted text-muted-foreground`, unconfigured → `bg-status-waiting-bg
+  `bg-button-fill text-muted-foreground`, unconfigured → `bg-status-waiting-bg
   text-status-waiting` — path **content** is never shown, only whether it is configured,
   per the privacy boundary), and **Conversations** (relay counts plus a "View this
   machine's conversations" drill-down; an offline machine shows a destructive "Offline —
@@ -590,7 +700,7 @@ column and no persistent "撤销这台设备" explainer card**.
   device path — elements with no real backend are not rendered, not even as disabled
   controls (`devices.test.tsx`, `device-expand.test.tsx`).
 - **Mobile (`HUELX`).** The mobile row starts with the icon box (`size-9 rounded-md
-  bg-muted`), then name / kind chip / `StatusMark` / mono meta, expand and row menu — a
+  bg-button-fill`), then name / kind chip / `StatusMark` / mono meta, expand and row menu — a
   different information order and density, not a squeezed desktop row. Status dot and name
   stay on one line (no `flex-wrap`); the name truncates to one line when collapsed, and wraps
   fully when expanded (`min-w-0 break-words`, so names without spaces wrap too). The expanded card shows "N projects · M conversations running" with
@@ -601,26 +711,23 @@ column and no persistent "撤销这台设备" explainer card**.
 
 ### Chat (desktop `X9Mjl` / `uqEha` / `kpP7A`, mobile `IC5sH` / `C87ty` / `j571mC` / `eh9zO`)
 
-The desktop form fills the shell's main area (`AppShell` gets `flush`, so there is no
-padding to cancel and no negative margin).
+The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` and an
+`index`, so there is no padding to cancel, no negative margin, and no shell TopBar — see
+[The shell](#the-shell)).
 
-- **Left — the 320px session-list column**, `w-[320px] shrink-0 flex-col border-r
-  border-border bg-card`. Its header is a 52px band (`h-[52px] shrink-0 border-b`) so it
-  lines up with the detail header across the divider: a **real search input** plus a 30px
-  "new conversation" button (`chat.startNew`) that hands the **right pane** over to the agent
-  picker. The list scrolls below it, and it never grows a row for a conversation that has not
-  been started — a draft is not a session.
-- **The search box** is a `border border-border bg-background` label + `type="search"`
-  input, labelled `chat.searchSessions` ("Search conversations"). Two things about it are
-  deliberate:
-  - **`bg-background`, not `bg-muted`.** In dark, `--muted` and `--card` are the same value
-    (#1d2025) and this column *is* `bg-card` — a `bg-muted` field is invisible against its
-    own container. Measured: field and column both `rgb(29,32,37)`. With `bg-background` it
-    reads `rgb(23,25,28)` on `rgb(29,32,37)`, plus a border.
-  - **The copy says "conversations", not "agents, devices, and records".** Search is
-    title-only and server-side; two of the three things the old string promised are not
-    searchable any more.
-- **Right — the detail pane**, `flex min-w-0 flex-1 flex-col`, embedding the real
+- **Left — the session-list column**, the shared `ResizableSidebar` handed to the shell as
+  `index`. It paints no background of its own: it sits on the chrome, to the left of the
+  sheet. 320px is its starting width, draggable between 220 and 640 and remembered per
+  machine. Its header is a 68px band (`h-[68px] shrink-0`, the same height as the detail
+  header) with no line under it — whitespace separates it from the list: a **real search
+  input** plus a 30px "new conversation" button (`chat.startNew`) that hands the **right
+  pane** over to the agent picker. The list scrolls below it, and it never grows a row for a
+  conversation that has not been started — a draft is not a session.
+- **The search box** is the shared `SearchInput`, labelled `chat.searchSessions` ("Search
+  conversations"), a fill with no edge like every field. The copy says "conversations", not
+  "agents, devices, and records": search is title-only and server-side; two of the three
+  things the old string promised are not searchable any more.
+- **Right — the detail pane**, in the sheet, `flex min-w-0 flex-1 flex-col`, embedding the real
   `SessionDetailView` (`form="embedded"`) — the same implementation the mobile full-screen
   detail uses, so status, transcript, approval and composer behaviour are shared, never a
   static placeholder. Which conversation is open is the address, `/chat/:conversationId`
@@ -629,9 +736,11 @@ padding to cancel and no negative margin).
   `NewConversationPane` (pick an agent), then `DraftSession` (a conversation with nothing
   said yet). **Desktop needs no dialog**: this pane was already idle, and covering the screen
   to ask one question costs more than filling the space that was already there.
-  `DraftSession`'s top band **is** the detail's band (the same `SessionHeaderBand`), so the
-  page-level controls sit at its right end and `chat-chrome` is not drawn above it — sending
-  the first message swaps content inside one 68px band instead of collapsing two into one.
+  `DraftSession`'s top band **is** the detail's band (the same `SessionHeaderBand`), so
+  `chat-chrome` is not drawn above it — sending the first message swaps content inside one
+  68px band instead of collapsing two into one. None of these panes (`NewConversationPane`,
+  `ProjectAgentPane`, `DraftSession`) paints a background or a `bg-card` band of its own:
+  they are the detail, and the detail is the sheet.
   Its title reads `New chat · <agent>` until the message is handed off, then becomes
   `deriveTitle(message)` — the same value dispatch puts on the wire and the landed detail
   shows, so the title does not change again when the real detail takes over.
@@ -685,14 +794,17 @@ bottom 888).
   `location.state`. The back button and system `popstate` both close only the layer and keep
   the conversation tabs; closing the last tab pops that entry. A stale marker with no tabs
   counts as closed. Desktop keeps the 420px right column and adds no history entries.
-- **Composer** (`shrink-0 border-t bg-card`) — see below. Approvals are **not** repeated
+- **Composer** (`SessionComposerBand`, `shrink-0 px-5 pt-2 pb-3`) — no top border and no
+  background of its own: it shares the sheet with the transcript, and a short fade from
+  `sheet` above it says "there is more below" when the transcript is not scrolled to the
+  end. See below. Approvals are **not** repeated
   here: the transcript already renders the card, and `interactiveRequestIds` dedupes the two
   sources.
 
 ### The composer
 
 The shared package's `AIChatInput` (TipTap) — the same component the desktop app uses — in a
-`rounded-lg border` shell with a single-line footer: shortcut hint, spring, context meter,
+`rounded-lg` shell with a single-line footer: shortcut hint, spring, context meter,
 send.
 
 `SessionComposer` has **two** hosts: `SessionDetailView` and `DraftSession`. The first
@@ -880,7 +992,7 @@ session cards that render account session details.
 | Unread is a real column, not a relabel | `last_read_at` on the mirror row; opening a conversation writes it, and so does every turn that lands while it is open; the chip filters on `last_message_at > last_read_at` | "Unread" over a waiting-for-input predicate would be a relabel; a real read state makes the name true, and it matches what the desktop app already means by "unread" |
 | The composer is pinned, not appended | `SessionDetailView` bands header / transcript / composer; only the middle scrolls, and `AppShell` stops the page scrolling at all | Measured: 2145px page against a 900px viewport put the input 1245px below the fold, and the transcript kept growing under it |
 | The placeholder states capabilities, not a backend | `AIChatInput` derives it from what this render wired up; the host passes no `placeholder` | A `backendType` table promises `@ / !` to hosts that wired neither — the desktop app had a call site hand-writing a replacement string for exactly that reason |
-| Sidebar is its own token | `--sidebar` (light #f4f4f5 = `--secondary`'s light, dark #111316 = `--code-surface`'s dark) | The board draws the nav in `chrome`; splitting it lets the nav and the code surfaces diverge independently |
+| The frame is one surface, not three | Nav, TopBar and bottom tab bar are all `bg-chrome`; the work area is `sheet` | Borderless redesign (spec 2026-10-15): a nav `--sidebar` plus a `bg-card` bar left two surfaces that had to be told apart with lines |
 | Shell data is best-effort | Badge, Meta and Account render only when their source resolves | The shell must not block the page on a number it cannot get |
 
 ## Theming
@@ -1055,7 +1167,7 @@ concatenation does not.
 ```tsx
 import { cn } from '@agentre-hub/agentre-ui';
 
-<div className={cn('rounded-md border border-border p-4', className)} />
+<div className={cn('rounded-md bg-field-fill p-4', className)} />
 ```
 
 Prefer a variant on the existing component over a one-off wrapper. `Button` already has
@@ -1064,10 +1176,10 @@ Prefer a variant on the existing component over a one-off wrapper. `Button` alre
 
 Two shapes that look interchangeable and are not:
 
-- **`Card` is not the auth card.** `@/components/ui/card.tsx` is `rounded-xl` with
-  `shadow-sm` — Tailwind's 12px, not the boards' 14px, and it carries elevation the auth
-  screens do not have. It is what the device list uses. An auth card is written out:
-  `rounded-lg border border-border bg-card`.
+- **`Card` is not the auth card.** `@/components/ui/card.tsx` is `rounded-xl bg-card py-6`
+  with no border and no shadow. It is what the device list and the add-device guide use.
+  An auth card is written out: `rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10`, standing
+  on the `AuthLayout`'s chrome (see [The auth shell](#the-auth-shell)).
 - **`Alert` has content slots; text is not one of them.** `Alert` is a two-column grid
   whose first column exists for an icon and is **zero-wide when there is none**; only
   `AlertTitle` and `AlertDescription` carry `col-start-2`. Text placed directly in
@@ -1261,10 +1373,16 @@ forgotten one placeholder at a time. Degrade, do not delete: `SessionConnectionI
 travelling bar becomes a static full-width line at 40% opacity, because the connection is
 still live and the indicator still has something to say.
 
-A hand-written focusable control brings its own ring —
-`outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50`, as `UserMenu`,
-`AddDeviceGuide`, `Account` and `OrgIndexPanel` write it. Shadcn primitives from
-`@agentre-hub/agentre-ui` already carry theirs; do not restyle those.
+**Keyboard focus has two shared looks, defined once in the shared package's `tokens.css`.**
+A hand-written button-like control writes `outline-none focus-visible:focus-outline` — a
+solid 2px ring with a 2px gap, as `UserMenu`, `ConnectionStatus` and `OrgIndexPanel` do. An
+element flush against a clipping container draws the same ring inward with
+`focus-visible:focus-outline-inset`, as the expandable session rows in `Account` do; the
+outward ring would be cut off there. A shell that wraps a text field takes
+`focus-within:focus-outline` and turns its fill back to `bg-sheet` while focused — fields
+have no edge for a halo to sit on. Shadcn primitives from `@agentre-hub/agentre-ui` already carry
+theirs; do not restyle those. Hand-assembling a ring out of `ring-ring/NN` is rejected by
+lint — the translucent versions composite to roughly 2:1.
 
 ## Adding a page
 
@@ -1287,7 +1405,7 @@ A hand-written focusable control brings its own ring —
      const { t } = useTranslation();
      return (
        <AuthLayout>
-         <div className="w-full max-w-[496px] rounded-lg border border-border bg-card p-6 sm:p-10">
+         <div className="w-full max-w-[496px] rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10">
            <h1 className="text-2xl font-semibold text-foreground">
              {t('thing.title')}
            </h1>

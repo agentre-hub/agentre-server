@@ -12,7 +12,7 @@ export default function NotFound() {
     <AuthLayout>
       <div className="flex flex-col items-center gap-4 text-center">
         <p
-          className="text-7xl font-semibold text-border-strong"
+          className="text-7xl font-semibold text-muted-foreground"
           aria-hidden="true"
         >
           {t("notFound.code")}

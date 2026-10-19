@@ -298,3 +298,46 @@ describe("热力图的点按读数（移动端）", () => {
     expect(cell.className).not.toContain("ring-primary");
   });
 });
+
+/**
+ * 月份标签互不相压。
+ *
+ * 最左边那一列往往落在某个月的尾巴上，下一个月一两列之后就开始了；两只标签挨着
+ * 绝对定位，「Oct」和「Nov」（中文下「10月」「11月」）叠成一团。标签要三个
+ * text-2xs 字宽才放得下，按列步距折算就是三列——挨得更近的那只（前面那个残月）不画。
+ */
+describe("热力图的月份标签", () => {
+  /** 月份那一行里画出来的标签，按 left 排好。 */
+  function monthLabels(): { text: string; left: number }[] {
+    const row = screen.getByTestId("heatmap-grid").firstElementChild;
+    expect(row).not.toBeNull();
+    return Array.from((row as HTMLElement).children).map((el) => ({
+      text: el.textContent ?? "",
+      left: Number.parseFloat((el as HTMLElement).style.left),
+    }));
+  }
+
+  // 一列步距 16px（13px 格 + 3px 缝），标签至少要三列宽。
+  const MIN_GAP_PX = 3 * 16;
+
+  it("首列是残月、下个月一列之后就开始：残月那只标签不画，不和下一只叠在一起", () => {
+    // 2026-10-17 往回 51 周，第一列是 2025-10-26，第二列 2025-11-02 已经是 11 月。
+    render(<Heatmap to="2026-10-17" weeks={51} />);
+    const labels = monthLabels();
+    for (let i = 1; i < labels.length; i++) {
+      expect(labels[i].left - labels[i - 1].left).toBeGreaterThanOrEqual(
+        MIN_GAP_PX,
+      );
+    }
+    // 最左边是第 1 列的 11 月，第 0 列那个 10 月的残月不画（末尾那只 Oct 是 2026 年的）。
+    expect(labels[0]).toEqual({ text: "Nov", left: 16 });
+  });
+
+  it("首月与下个月正好隔三列：两只都放得下，都画", () => {
+    // 往回 53 周，第一列 2025-10-12，11 月从第 3 列（2025-11-02）开始。
+    render(<Heatmap to="2026-10-17" weeks={53} />);
+    const labels = monthLabels();
+    expect(labels[0]).toEqual({ text: "Oct", left: 0 });
+    expect(labels[1]).toEqual({ text: "Nov", left: MIN_GAP_PX });
+  });
+});

@@ -88,13 +88,6 @@ export interface SessionDetailHeaderProps {
    * 走、事件一到就重拉。派生在 SessionDetailView 的 `decisionPending`。
    */
   decisionPending: boolean;
-  /**
-   * 宿主页面级的那簇控件（Chat 桌面档的连接态 + 语言/主题）。
-   *
-   * 嵌入形态下这个头部**就是**那一页的顶带：壳不再画 52px 顶栏，那簇控件没有别的
-   * 落点，于是摆在这一行的最右端。路由页形态不传（壳的顶栏还在）。
-   */
-  headerRight?: ReactNode;
   clientRef: RefObject<RelayClient | null>;
   originRef: RefObject<string | undefined>;
 }
@@ -189,7 +182,7 @@ export function SessionPageStateShell({
   return (
     <AppShell flush immersive>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-[68px] shrink-0 items-center border-b border-border bg-card px-5">
+        <div className="flex h-[68px] shrink-0 items-center px-5">
           <SessionBackLink to={backTo} className="-ml-2" />
         </div>
         {/* 与非 flush 壳的主区同一副内边距与滚动：这几态原本就排在那里面。 */}
@@ -217,7 +210,6 @@ export default function SessionDetailHeader({
   status,
   running,
   decisionPending,
-  headerRight,
   clientRef,
   originRef,
 }: SessionDetailHeaderProps) {
@@ -395,8 +387,11 @@ export default function SessionDetailHeader({
       // 68px 顶带 —— 此前它照样带着那圈 `py-2.5`，把 68 撑成 89，什么都没多装。
       //
       // 沉浸形态只有那一条 68px 的带（返回收进它的 leading 槽），与嵌入形态同高。
+      //
+      // 不画底线、不自涂底色：头部与转录同在一张内容页上，靠留白分开（规格
+      // 2026-10-15「无边框改版」）。
       className={cn(
-        "relative flex shrink-0 flex-col border-b border-border bg-card px-5",
+        "relative flex shrink-0 flex-col px-5",
         isPage && !oneRow ? "gap-2 py-2.5" : "h-[68px]",
       )}
     >
@@ -413,8 +408,8 @@ export default function SessionDetailHeader({
           <span
             className={
               machineOnline === false
-                ? "text-destructive"
-                : "text-status-waiting"
+                ? "text-destructive-text"
+                : "text-status-waiting-text"
             }
           >
             {machineOnline === false
@@ -500,17 +495,6 @@ export default function SessionDetailHeader({
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            {/* 宿主的那簇页面级控件（嵌入形态才有）：与「停止」隔一条竖线，免得两组
-                不同层级的东西看起来是一排同类按钮。 */}
-            {headerRight && (
-              <>
-                <span
-                  aria-hidden="true"
-                  className="h-5 w-px shrink-0 bg-border"
-                />
-                {headerRight}
-              </>
-            )}
           </>
         }
       />

@@ -155,9 +155,9 @@ export default function SessionFilePreviewColumn({
         aria-label={name}
         data-testid="session-file-preview-layer"
         // 盖住会话的头部与输入框；会话本身不卸载，转录滚动位置与未发送的文字都留着。
-        className="fixed inset-0 z-50 flex flex-col bg-background pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]"
+        className="fixed inset-0 z-50 flex flex-col bg-sheet pb-[env(safe-area-inset-bottom,0px)] pt-[env(safe-area-inset-top,0px)]"
       >
-        <header className="flex shrink-0 items-center gap-1 border-b border-border bg-card py-1.5 pl-1 pr-4">
+        <header className="flex shrink-0 items-center gap-1 py-1.5 pl-1 pr-4">
           <button
             type="button"
             aria-label={t("session.filePreviewLayer.back")}
@@ -195,7 +195,10 @@ export default function SessionFilePreviewColumn({
     <aside
       data-testid="session-file-preview"
       // 420 定宽、不可拖（上游规格决策 8：详情列 896 = 转录 476 + 预览 420）。
-      className="flex w-[420px] shrink-0 flex-col overflow-hidden border-l border-border bg-background"
+      //
+      // 与转录同在一张内容页上：靠一块填充分开，不画左边线（规格 2026-10-15
+      // 「无边框改版」）。
+      className="flex w-[420px] shrink-0 flex-col overflow-hidden bg-field-fill"
     >
       {panel}
     </aside>

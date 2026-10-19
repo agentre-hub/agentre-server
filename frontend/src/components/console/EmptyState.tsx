@@ -36,7 +36,7 @@ export function EmptyState({
         className={cn(
           "flex size-[62px] shrink-0 items-center justify-center rounded-full",
           tone === "warn"
-            ? "bg-status-waiting-bg text-status-waiting"
+            ? "bg-status-waiting-bg text-status-waiting-text"
             : "bg-primary-soft text-primary-text",
         )}
       >

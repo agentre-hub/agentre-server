@@ -8,7 +8,8 @@ import { cn } from "@agentre-hub/agentre-ui";
  * 移动端底部导航（Pencil 正式组件 A6Z3k TabBar）。
  *
  * 只承载真实可达的目的地：items 由外壳传入（不伪造「我」等占位入口）。
- * 形状：74px（内容 52px + pt-2 / pb-[14px]）bg-card + 顶边框、图标 21px + 文案 10px；
+ * 形状：74px（内容 52px + pt-2 / pb-[14px]），落在外框色上、上沿不画线（与内容页
+ * 之间只靠色阶分开）；图标 21px + 文案 10px；
  * active = primary-text + 600，idle = subtle + 500。
  *
  * 安全区：容器总高与下内边距都加上 env(safe-area-inset-bottom)，内部那份
@@ -41,7 +42,7 @@ export function MobileTabBar({
   return (
     <nav
       aria-label={ariaLabel}
-      className="flex h-[calc(74px_+_env(safe-area-inset-bottom,0px))] items-stretch border-t border-border bg-card pb-[calc(14px_+_env(safe-area-inset-bottom,0px))] pt-2"
+      className="flex h-[calc(74px_+_env(safe-area-inset-bottom,0px))] items-stretch bg-chrome pb-[calc(14px_+_env(safe-area-inset-bottom,0px))] pt-2"
     >
       {items.map((item) => (
         <NavLink

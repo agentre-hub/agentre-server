@@ -25,12 +25,24 @@ import (
 	"go.uber.org/zap"
 )
 
-// CookieName 是浏览器 session cookie 的名字。
+// CookieName 是 http（dev）部署下浏览器 session cookie 的名字。
 //
 // 它不是配置项：这枚 cookie 只由本服务写、也只由本服务读（写在 auth_ctr /
 // passkey_ctr，读在 middleware 与各控制器），名字唯一的作用是和自己对上。改它的
 // 效果只有一个——所有在线用户当场掉线。
+//
+// https 部署下用的是 HostCookieName；两者之间怎么选是 auth_svc.AuthSvc.CookieName()
+// 唯一的职责，本包不做这个判断——它不知道这次部署是不是 https。
 const CookieName = "server_session"
+
+// HostCookieName 是 https 部署下浏览器 session cookie 的名字。
+//
+// `__Host-` 前缀是浏览器自己校验的契约：种下它的 Set-Cookie 必须同时带 Secure、
+// Path=/、且不带 Domain——SetCookie 发的正是这三样，ClearCookie 据此按名字反推
+// Secure（cookie.go）。满足这三条之后，浏览器保证这枚 cookie 只能是本站在 https
+// 下自己种的，同站的另一个子域、或任何 http 页面都种不进来，这是同站转发应用
+// （<前缀>.<base_domain>）唯一拿不走控制台会话的一层。
+const HostCookieName = "__Host-" + CookieName
 
 // ipMaxLen 是 IP 的存储宽度，与 device_tokens.ip 的 varchar(45) 同规格：
 // 客户端能塞进代理头的东西长度不由我们决定，落存储的宽度必须是个定数。

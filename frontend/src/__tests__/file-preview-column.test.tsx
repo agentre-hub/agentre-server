@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import i18n from "@/i18n";
 
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
+import { edgeClasses } from "./helpers/edge-classes";
 import { RelayError } from "@/lib/relayClient";
 
 import "@/i18n";
@@ -59,6 +60,19 @@ describe("控制台的预览栏", () => {
     expect(
       screen.getByTestId("file-preview-device").getAttribute("data-online"),
     ).toBe("true");
+  });
+
+  /*
+    无边框改版（规格 2026-10-15）：预览栏与转录同在内容页上，靠一块填充分开，
+    不再用一条左边线。
+  */
+  it("预览栏不画分隔线，靠填充与转录分开", async () => {
+    renderColumn();
+
+    await screen.findByText("正文");
+    const column = screen.getByTestId("session-file-preview");
+    expect(edgeClasses(column)).toEqual([]);
+    expect(column.className).toContain("bg-field-fill");
   });
 
   it("没有当前标签时整栏不渲染 —— 转录回到全宽由父级据此判定", () => {

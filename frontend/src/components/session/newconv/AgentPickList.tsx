@@ -177,7 +177,7 @@ export function AgentPickSkeleton({ columns }: { columns: 1 | 2 }) {
         <div
           key={i}
           style={{ opacity }}
-          className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2.5"
+          className="flex items-center gap-2.5 rounded-lg bg-field-fill px-3 py-2.5"
         >
           <span className="size-7 shrink-0 animate-pulse rounded-full bg-secondary motion-reduce:animate-none" />
           <span className="min-w-0 flex-1">
@@ -211,9 +211,9 @@ function AgentRow({
       aria-disabled={!runnable}
       onClick={() => onPick(agent)}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg border border-border px-3 py-2.5 text-left transition-colors",
+        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition-colors",
         runnable
-          ? "bg-card hover:border-ring hover:bg-accent"
+          ? "bg-field-fill hover:bg-field-fill-hover"
           : "cursor-not-allowed bg-secondary",
       )}
     >

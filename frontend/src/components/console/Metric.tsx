@@ -6,6 +6,9 @@ import type { LucideIcon } from "lucide-react";
  * 尺寸契约：label 11.5px + 13px 图标、value 23px bold、unit 12px、
  * sub 10.5px；圆角 md、padding 14/12（无数据源区块用 value="—" 的诚实空态，
  * 不编数字）。
+ *
+ * 是一块填充，不画边：`bg-field-fill` 相对脚下的面压暗一档，落在内容页或另一块
+ * 填充卡上都分得开（弱化文字由填充工具类自己换成 fill-muted-foreground）。
  */
 export function Metric({
   label,
@@ -25,7 +28,7 @@ export function Metric({
   return (
     <div
       data-testid={testId}
-      className="flex min-w-0 flex-col gap-1.5 rounded-md border border-border bg-card px-3.5 py-3"
+      className="flex min-w-0 flex-col gap-1.5 rounded-md bg-field-fill px-3.5 py-3"
     >
       <div className="flex items-center gap-1.5 text-muted-foreground">
         {Icon ? (

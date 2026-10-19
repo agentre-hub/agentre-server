@@ -152,7 +152,7 @@ func TestPool_ConcurrentAcquire_SharesOneConnection(t *testing.T) {
 
 	require.Equal(t, 1, dialer.count(), "同一台设备上的并发取用只该拨一次")
 	for i := 1; i < callers; i++ {
-		require.Equal(t, handlers[0], handlers[i], "同一个端口上的并发取用共用同一个 Proxy")
+		require.Equal(t, handlers[0], handlers[i], "同一条映射上的并发取用共用同一个 Proxy")
 	}
 	for _, release := range releases {
 		release()
@@ -247,9 +247,9 @@ func TestPool_ConnectionDied_NextAcquireRedials(t *testing.T) {
 	}, time.Second, 5*time.Millisecond, "连接断了之后下一次请求该重新拨")
 }
 
-// ── 目标四：onRevoked 只关掉该端口的 Proxy ────────────────────────────────
+// ── 目标四：onRevoked 只关掉该映射的 Proxy ────────────────────────────────
 
-func TestPool_Revoked_ClosesOnlyThatPortsProxy(t *testing.T) {
+func TestPool_Revoked_ClosesOnlyThatMappingsProxy(t *testing.T) {
 	dialer := &stubDialer{}
 	pool := newTestPool(t, dialer, time.Minute)
 
@@ -265,12 +265,12 @@ func TestPool_Revoked_ClosesOnlyThatPortsProxy(t *testing.T) {
 	require.NoError(t, dial.device.Notify(&agentrewire.RpcNotification{
 		Payload: &agentrewire.RpcNotification_PortForwardRevoked{
 			PortForwardRevoked: &agentrewire.PortForwardRevokedNotification{
-				Port: 3000, Reason: "mapping_removed",
+				MappingId: 3000, Reason: "mapping_removed",
 			},
 		},
 	}))
 
-	// 被撤销的那个端口换了一个 Proxy……
+	// 被撤销的那条映射换了一个 Proxy……
 	var fresh http.Handler
 	require.Eventually(t, func() bool {
 		handler, release, acquireErr := pool.Acquire(context.Background(), testUserID, testFP, 3000)
@@ -280,16 +280,16 @@ func TestPool_Revoked_ClosesOnlyThatPortsProxy(t *testing.T) {
 		release()
 		fresh = handler
 		return handler != revoked
-	}, time.Second, 5*time.Millisecond, "撤销之后这个端口该换一个新的 Proxy")
+	}, time.Second, 5*time.Millisecond, "撤销之后这条映射该换一个新的 Proxy")
 	require.NotNil(t, fresh)
 
-	// ……而连接本身与别的端口一点都没动。
-	require.Equal(t, 1, dialer.count(), "撤销一个端口不该重拨连接")
-	require.False(t, dial.isClosed(), "撤销一个端口不该关掉连接")
+	// ……而连接本身与别的映射一点都没动。
+	require.Equal(t, 1, dialer.count(), "撤销一条映射不该重拨连接")
+	require.False(t, dial.isClosed(), "撤销一条映射不该关掉连接")
 	sameKept, releaseSameKept, err := pool.Acquire(context.Background(), testUserID, testFP, 4000)
 	require.NoError(t, err)
 	defer releaseSameKept()
-	require.Equal(t, kept, sameKept, "同一条连接上别的端口的 Proxy 原样留着")
+	require.Equal(t, kept, sameKept, "同一条连接上别的映射的 Proxy 原样留着")
 
 	// 被撤销的那个 Proxy 确实**关了**，不只是从表里摘掉：关掉的 Proxy 一个字节都不再
 	// 往设备上发，而还活着的那个会真的发出一次 open。
@@ -443,7 +443,7 @@ func TestPool_ConfiguredFailureRenderer_IsHandedToEveryProxy(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
 	require.Len(t, seen, 1, "代理自己的失败必须走宿主的钩子")
-	assert.Equal(t, uint32(3000), seen[0].Port, "钩子要说得出是哪个端口")
+	assert.Equal(t, int64(3000), seen[0].MappingID, "钩子要说得出是哪条映射")
 	assert.NotEqual(t, portforwardhost.FailureKind(0), seen[0].Kind, "交出来的必须是一种失败")
 	assert.Equal(t, http.StatusTeapot, rec.Code, "状态码由宿主定")
 	assert.Equal(t, "宿主自己的那张页", rec.Body.String())

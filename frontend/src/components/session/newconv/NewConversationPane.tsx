@@ -34,9 +34,10 @@ export function NewConversationPane({
   return (
     <div
       data-testid="new-conversation-pane"
-      className="flex h-full min-h-0 flex-col bg-background"
+      // 不自涂底色：这一格就是对话页的详情，脚下是壳给的内容页（规格 2026-10-15）。
+      className="flex h-full min-h-0 flex-col"
     >
-      <header className="flex shrink-0 flex-col gap-1.5 border-b border-border bg-card px-5 py-3.5">
+      <header className="flex shrink-0 flex-col gap-1.5 px-5 py-3.5">
         <div className="flex items-center gap-2.5">
           <h2 className="text-sm font-semibold text-foreground">
             {t("chat.startNew")}
@@ -72,7 +73,7 @@ export function NewConversationPane({
         type="button"
         data-testid="new-conversation-from-project"
         onClick={onFromProject}
-        className="flex shrink-0 items-center gap-2.5 border-t border-border bg-card px-5 py-3 text-left transition-colors hover:bg-accent"
+        className="flex shrink-0 items-center gap-2.5 px-5 py-3 text-left transition-colors hover:bg-accent"
       >
         <span className="flex size-7 items-center justify-center rounded-md bg-secondary text-muted-foreground">
           <FolderTree aria-hidden="true" className="size-3.5" />

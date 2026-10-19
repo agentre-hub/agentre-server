@@ -144,8 +144,13 @@ describe("组织面移动形态：索引升整页，详情下钻", () => {
     renderOrgAt("/org/agent/agent-alice");
 
     await screen.findByTestId("org-detail-header");
-    expect(screen.getByTestId("org-index-col")).toBeTruthy();
-    expect(screen.getByTestId("org-layout").className).toContain("flex-row");
+    // 并排由外壳摆：索引在外框的 index 槽，详情在内容页里。
+    expect(
+      within(screen.getByTestId("app-index")).getByTestId("org-index-col"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("app-sheet")).getByTestId("org-detail-col"),
+    ).toBeTruthy();
     expect(
       within(screen.getByTestId("org-detail-header")).queryByRole("button", {
         name: "Back",

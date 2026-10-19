@@ -270,7 +270,7 @@ export default function Login() {
 
   return (
     <AuthLayout>
-      <div className="w-full max-w-[424px] space-y-6 rounded-lg border border-border bg-card p-6 sm:p-9">
+      <div className="w-full max-w-[424px] space-y-6 rounded-2xl bg-sheet p-6 shadow-overlay sm:p-9">
         <PageTitle>{t("login.title")}</PageTitle>
 
         {userCode && !showError && !isPasskeyCancelled && (
@@ -286,7 +286,7 @@ export default function Login() {
         )}
 
         {isPasskeyCancelled && (
-          <Alert className="border-border bg-secondary">
+          <Alert className="bg-secondary">
             <Info className="h-4 w-4" />
             <AlertDescription className="text-sm text-secondary-foreground">
               {t("login.errors.passkey_cancelled")}
@@ -301,11 +301,11 @@ export default function Login() {
               className="border-destructive bg-destructive-soft"
             >
               <AlertTriangle className="h-4 w-4" />
-              <AlertTitle className="font-semibold text-destructive">
+              <AlertTitle className="font-semibold text-destructive-text">
                 {t("login.failureTitle")}
               </AlertTitle>
               {errorText && (
-                <AlertDescription className="text-sm text-destructive">
+                <AlertDescription className="text-sm text-destructive-text">
                   {errorText}
                 </AlertDescription>
               )}
@@ -325,16 +325,9 @@ export default function Login() {
 
             {passkeys === "available" && (
               <>
-                <div className="relative">
-                  <div className="absolute inset-0 flex items-center">
-                    <div className="w-full border-t border-border" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-card px-2 text-muted-foreground">
-                      {t("login.or")}
-                    </span>
-                  </div>
-                </div>
+                <p className="text-center text-xs uppercase text-muted-foreground">
+                  {t("login.or")}
+                </p>
 
                 <Button
                   variant="outline"

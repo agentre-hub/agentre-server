@@ -19,7 +19,7 @@ import {
   SessionLifecycleRunning,
   type AnyRpcMethod,
 } from "@agentre-hub/agentre-wire";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,6 +34,7 @@ import { toast } from "sonner";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import SessionDetailView from "@/components/session/SessionDetailView";
+import { edgeClasses } from "./helpers/edge-classes";
 import { RELAY_TAIL_FRAMES } from "@/components/session/useTranscriptScrollback";
 import { writeReasoningEffortToOrigin } from "@/components/session/sessionMirror";
 import { resetLiveTurns, useLiveTurns } from "@/lib/liveSessions";
@@ -3551,6 +3552,8 @@ describe("会话详情：历史来自 server 镜像", () => {
     expect(screen.queryByTestId("session-detail-send")).toBeNull();
     const readonly = screen.getByTestId("session-compose-readonly");
     expect(readonly.textContent).toContain("书房小主机");
+    // 只读条是一块填充，不再是虚线框（无边框改版）。
+    expect(edgeClasses(readonly)).toEqual([]);
 
     // 「消息不排队」（决策 13）没有丢，它搬进了横幅——一件事只说一遍。
     const banner = screen.getByRole("alert");
@@ -4913,16 +4916,11 @@ describe("会话详情：头部", () => {
     });
   }
 
-  function renderEmbeddedDetail(headerRight?: ReactNode) {
+  function renderEmbeddedDetail() {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <SessionDetailView
-            deviceId={1}
-            conversationId="42"
-            form="embedded"
-            headerRight={headerRight}
-          />
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -4947,18 +4945,19 @@ describe("会话详情：头部", () => {
   });
 
   /*
-    顶带合并之后，页面级那簇控件（连接态 + 语言/主题）没有别的落点：Chat 把它们
-    递进来，摆在这一行的最右端——与「停止」同一带。
+    无边框改版（规格 2026-10-15）：详情落在内容页上，头部与转录同一张页、之间
+    不画线；头部和整副详情都不再自己涂底色——底色是壳给的那张内容页。
   */
-  it("headerRight 递进来的那簇控件落在头部右端", async () => {
+  it("头部不画线、不自涂底色，整副详情也不自涂底色", async () => {
     stubHeader();
-    renderEmbeddedDetail(<button type="button">page-chrome</button>);
+    renderEmbeddedDetail();
 
     await screen.findByText("跑着呢");
     const head = screen.getByTestId("session-detail-header");
-    expect(
-      within(head).getByRole("button", { name: "page-chrome" }),
-    ).toBeTruthy();
+    expect(edgeClasses(head)).toEqual([]);
+    expect(head.className).not.toMatch(/(^|\s)bg-/);
+    const view = screen.getByTestId("session-detail-view");
+    expect(view.className).not.toMatch(/(^|\s)bg-/);
   });
 
   /*
@@ -5497,6 +5496,10 @@ describe("会话详情：头部", () => {
     await waitFor(() =>
       expect(screen.getByTestId("composer-model-target")).toBeTruthy(),
     );
+    // 模型 pill 是一枚字段：落在字段填充上，不再拿 card 底 + 边色冒充（无边框改版）。
+    const pill = screen.getByTestId("composer-model-target");
+    expect(pill.className).toContain("bg-field-fill");
+    expect(pill.className).not.toMatch(/bg-card|border-border/);
   });
 
   /**
@@ -6147,9 +6150,11 @@ describe("会话详情：输入框", () => {
     // 共享包在缺 onCommandSubmit 时会把 `!` 开头的内容 clearContent 掉、既不发也不
     // 说 —— 用户打的字凭空消失。这一端接不上本地执行（wire 上没有 PTY 方法），
     // 所以必须如实说出来，并且把文本还回去。
-    expect(
-      await screen.findByTestId("composer-local-command-unsupported"),
-    ).toBeTruthy();
+    const note = await screen.findByTestId(
+      "composer-local-command-unsupported",
+    );
+    // 说明与输入框之间靠留白分开，不画线（无边框改版）。
+    expect(edgeClasses(note)).toEqual([]);
     await waitFor(() => expect(composerText()).toBe("!!! 这条很重要"));
     expect(
       fakeClient.request.mock.calls.some((c) => c[0] === rpcMethods.runtimeRun),
@@ -8138,14 +8143,15 @@ describe("会话详情：与桌面端对齐的外壳", () => {
     );
   });
 
-  it("Given 转录贴底, When 渲染, Then 输入带没有分隔线", async () => {
+  it("Given 转录贴底, When 渲染, Then 输入带没有分隔线，也不自涂底色", async () => {
     stubAligned();
     renderAligned();
 
     await screen.findByText("很长的一段转录");
     const band = screen.getByTestId("session-composer-band");
     expect(band.getAttribute("data-scrolled")).toBe("false");
-    expect(band.className).not.toMatch(/border-t/);
+    expect(edgeClasses(band)).toEqual([]);
+    expect(band.className).not.toMatch(/(^|\s)bg-/);
   });
 
   it("Given 转录贴底, When 渲染, Then 末条消息与输入框之间的留白不再由三段各付一遍", async () => {
@@ -8163,7 +8169,11 @@ describe("会话详情：与桌面端对齐的外壳", () => {
     expect(band.className).toMatch(/(^|\s)pt-2(\s|$)/);
   });
 
-  it("Given 用户上滚离开底部, When 渲染, Then 输入带出现分隔线与一段不接收指针事件的向上渐隐", async () => {
+  /*
+    无边框改版（规格 2026-10-15）：离开底部时「下面还有」只由那段渐隐说，不再加
+    一条分隔线；渐隐从内容页的底色淡出，输入带落在同一张页上。
+  */
+  it("Given 用户上滚离开底部, When 渲染, Then 输入带不出分隔线，只有一段从内容页色淡出、不接收指针事件的渐隐", async () => {
     stubAligned();
     renderAligned();
 
@@ -8185,8 +8195,9 @@ describe("会话详情：与桌面端对齐的外壳", () => {
 
     const band = screen.getByTestId("session-composer-band");
     expect(band.getAttribute("data-scrolled")).toBe("true");
-    expect(band.className).toMatch(/(^|\s)border-t(\s|$)/);
+    expect(edgeClasses(band)).toEqual([]);
     const fade = screen.getByTestId("session-composer-band-fade");
+    expect(fade.className).toMatch(/(^|\s)from-sheet(\s|$)/);
     expect(fade.className).toMatch(/(^|\s)pointer-events-none(\s|$)/);
     expect(fade.getAttribute("aria-hidden")).toBe("true");
   });

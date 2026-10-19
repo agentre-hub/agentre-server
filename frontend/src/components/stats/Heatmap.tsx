@@ -94,9 +94,13 @@ export function useHeatmapWeeks(): {
   return { ref, weeks };
 }
 
-/** 五档色阶的类名。索引就是档位，heat-0 = 那天没有活动（可见的浅灰，不是透明）。 */
+/**
+ * 五档色阶的类名。索引就是档位。heat-0 = 那天没有活动：取共享包相对前景的
+ * 按钮填充（前景 8%），随脚下卡片明暗；固定色 --heat-0 假定背后是白卡片，
+ * 落在填充卡片上深色主题会消失。
+ */
 const LEVEL_CLASS: Record<HeatLevel, string> = {
-  0: "bg-heat-0",
+  0: "bg-button-fill",
   1: "bg-heat-1",
   2: "bg-heat-2",
   3: "bg-heat-3",
@@ -106,6 +110,27 @@ const LEVEL_CLASS: Record<HeatLevel, string> = {
 const CELL_CLASS = "size-[13px] shrink-0 rounded-[2px]";
 /** 一列的步距：13px 格 + 3px 缝隙。月份标签按它定位。 */
 const COLUMN_PITCH = CELL_PX + CELL_GAP_PX;
+
+/**
+ * 月份标签要占的宽：「Sep」「12月」都是三个字，text-2xs (11px) 下每个字不超过
+ * 1em，再留一个格缝的余量 = 36px。按列步距折算成列数（向上取整 = 3 列）。
+ */
+const MONTH_LABEL_PX = 3 * 11 + CELL_GAP_PX;
+const MONTH_LABEL_MIN_COLUMNS = Math.ceil(MONTH_LABEL_PX / COLUMN_PITCH);
+
+/**
+ * 去掉放不下的月份标签：离下一只不到 `MONTH_LABEL_MIN_COLUMNS` 列的那只不画。
+ *
+ * 只有最左边那只会撞上——网格的第一列往往落在某个月的尾巴上，下一个月一两列
+ * 之后就开始了，两只标签叠成一团（2026-10 量到「10月」压着「11月」）。丢前面那只：
+ * 它是个残月，只占一两列，后面那个才是完整的月。
+ */
+function visibleMonths<T extends { column: number }>(months: T[]): T[] {
+  return months.filter((m, i) => {
+    const next = months[i + 1];
+    return !next || next.column - m.column >= MONTH_LABEL_MIN_COLUMNS;
+  });
+}
 
 /**
  * 鼠标停在哪一格。
@@ -148,7 +173,7 @@ function HeatTooltip({
       data-testid="heat-tooltip"
       aria-hidden="true"
       className={cn(
-        "pointer-events-none absolute z-10 -translate-y-full rounded-md border border-border bg-popover px-2 py-1 text-2xs whitespace-nowrap text-popover-foreground shadow-md",
+        "pointer-events-none absolute z-10 -translate-y-full rounded-md bg-popover px-2 py-1 text-2xs whitespace-nowrap text-popover-foreground shadow-md",
         !nearStart && !nearEnd && "-translate-x-1/2",
       )}
       style={
@@ -275,7 +300,7 @@ export function Heatmap({
         className="relative h-[15px] shrink-0"
         style={{ marginLeft: COLUMN_PITCH + 12 }}
       >
-        {grid.months.map((m) => (
+        {visibleMonths(grid.months).map((m) => (
           <span
             key={`${m.year}-${m.month}`}
             className="absolute top-0 text-2xs whitespace-nowrap text-muted-foreground"

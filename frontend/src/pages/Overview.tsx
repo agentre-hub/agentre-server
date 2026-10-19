@@ -14,6 +14,8 @@ import {
 import { CardLoadError, EmptyState, Metric } from "@/components/console";
 import {
   Button,
+  SegmentedControl,
+  SegmentedControlItem,
   Skeleton,
   cn,
   orgBackendTypeLabel,
@@ -86,28 +88,17 @@ function RangeSwitch({
 }) {
   const { t } = useTranslation();
   return (
-    <div
-      role="group"
+    <SegmentedControl
       aria-label={t("overview.stats.range.label")}
-      className="flex items-center gap-0.5 rounded-md border border-border bg-card p-0.5"
+      value={value}
+      onValueChange={(next) => onChange(next as StatsRange)}
     >
       {STATS_RANGES.map((range) => (
-        <button
-          key={range}
-          type="button"
-          aria-pressed={value === range}
-          onClick={() => onChange(range)}
-          className={cn(
-            "rounded-sm px-2.5 py-1 text-xs font-medium transition-colors",
-            value === range
-              ? "bg-primary-soft text-primary-text"
-              : "text-muted-foreground hover:bg-accent",
-          )}
-        >
+        <SegmentedControlItem key={range} value={range}>
           {t(`overview.stats.range.${range}`)}
-        </button>
+        </SegmentedControlItem>
       ))}
-    </div>
+    </SegmentedControl>
   );
 }
 
@@ -135,7 +126,7 @@ function StatsCard({
       data-testid={testId}
       aria-busy={busy || undefined}
       className={cn(
-        "flex min-w-0 flex-col rounded-lg border border-border bg-card",
+        "flex min-w-0 flex-col rounded-lg bg-field-fill",
         className,
       )}
     >
@@ -197,7 +188,7 @@ function TileSkeletons() {
           key={i}
           data-testid="tile-skeleton"
           aria-hidden="true"
-          className="flex min-w-0 flex-col gap-2.5 rounded-md border border-border bg-card px-3.5 py-3"
+          className="flex min-w-0 flex-col gap-2.5 rounded-md bg-field-fill px-3.5 py-3"
         >
           <Skeleton className="h-[11px] w-16" />
           <Skeleton className="h-6 w-12" />
@@ -385,13 +376,13 @@ export default function Overview() {
         {freshAccount ? (
           <div
             data-testid="stats-new-account"
-            className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg border border-status-waiting/40 bg-status-waiting-bg px-3.5 py-2.5"
+            className="flex min-w-0 flex-wrap items-center gap-3 rounded-lg bg-status-waiting-bg px-3.5 py-2.5"
           >
             <Monitor
               aria-hidden="true"
               className="size-[15px] shrink-0 text-status-waiting"
             />
-            <span className="min-w-0 text-xs text-status-waiting">
+            <span className="min-w-0 text-xs text-status-waiting-text">
               {t("overview.stats.newAccount.text")}
             </span>
             <span className="flex-1" />
@@ -414,7 +405,7 @@ export default function Overview() {
             />
             {/* 统计取不到就说取不到，绝不退回一张全是 0 的摘要——那是一句用户
                 无法证伪的假话。同时说清什么**不**受影响，并给一条走得通的路。 */}
-            <div className="rounded-lg border border-border bg-card">
+            <div className="rounded-lg bg-field-fill">
               <EmptyState
                 testId="stats-error"
                 icon={BarChart3}
@@ -593,7 +584,7 @@ export default function Overview() {
                     </p>
                   ) : null}
                 </div>
-                <div className="flex shrink-0 flex-col gap-4 lg:w-[240px] lg:border-l lg:border-border lg:pl-5">
+                <div className="flex shrink-0 flex-col gap-4 lg:w-[240px] lg:pl-5">
                   {stats?.heatmap.busiest_day &&
                   stats.heatmap.busiest_day.count > 0 ? (
                     <Highlight
@@ -891,7 +882,6 @@ function BackendsBody({
       </ul>
       {models.length > 0 ? (
         <>
-          <span className="h-px w-full bg-border" />
           <span className="text-2xs text-muted-foreground">
             {t("overview.stats.backends.models")}
           </span>

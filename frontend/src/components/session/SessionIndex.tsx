@@ -1033,7 +1033,7 @@ export default function SessionIndex({
             aria-label={t("project.create.title")}
             title={t("project.create.title")}
             onClick={onNewProject}
-            className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="ml-auto flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-accent hover:text-foreground focus-visible:focus-outline"
           >
             <FolderPlus className="size-4" aria-hidden="true" />
           </button>
@@ -1288,7 +1288,7 @@ function LoadMore({
       data-testid="index-load-more"
       disabled={loading}
       onClick={onLoadMore}
-      className="rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:cursor-default disabled:opacity-60"
+      className="rounded-md bg-button-fill px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-button-fill-hover disabled:cursor-default disabled:opacity-60"
     >
       {t(
         loading
@@ -1313,7 +1313,7 @@ function LoadMore({
       <div
         role="alert"
         data-testid="index-load-more-failed"
-        className="mt-1.5 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive-soft px-2.5 py-2 text-xs text-destructive-text"
+        className="mt-1.5 flex items-center gap-2 rounded-lg bg-destructive-soft px-2.5 py-2 text-xs text-destructive-text"
       >
         <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1">

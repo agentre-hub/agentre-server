@@ -536,4 +536,7 @@ const READ_ONLY_PORTS: TranscriptPorts = createServerTranscriptPorts({
   submitAnswer: () => {
     throw new Error("Transcript rendered read-only: no submit action wired");
   },
+  submitToolApproval: () => {
+    throw new Error("Transcript rendered read-only: no submit action wired");
+  },
 });

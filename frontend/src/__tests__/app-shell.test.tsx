@@ -21,6 +21,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import AppShell from "@/components/AppShell";
+import { edgeClasses } from "./helpers/edge-classes";
 import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import i18n from "@/i18n";
@@ -731,5 +732,238 @@ describe("沉浸形态（immersive）", () => {
       within(screen.getByRole("navigation")).getAllByRole("link"),
     ).toHaveLength(5);
     expect(screen.getByRole("main").className).not.toContain("safe-area");
+  });
+});
+
+/**
+ * 外框 + 内容页（规格 2026-10-15「无边框改版」外壳一节）。
+ *
+ * 侧边导航、顶栏、移动端底部 Tab 都落在外框色（chrome）上，彼此之间、与工作区
+ * 之间不画线；工作区是一张内容页（sheet），桌面宽度下圆角、与外框留缝，手机上铺满。
+ * 区块之间只靠色阶分开，所以每一块都断言「没画线」，而不只是「换了底色」。
+ */
+describe("外框 + 内容页", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  function mockMobileViewport() {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+  }
+
+  function serveAll() {
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/auth/me") return me;
+      if (path === "/v1/devices") return { devices };
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 2, unread: 1 };
+      throw new Error("unexpected: " + path);
+    });
+  }
+
+  /** 工作区那张内容页：main 的外层。 */
+  function sheet(): HTMLElement {
+    return screen.getByTestId("app-sheet");
+  }
+
+  beforeEach(() => {
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    localStorage.removeItem("agentre.console.navCollapsed");
+  });
+
+  it("桌面：侧边导航与顶栏在外框色上，整条都不画线", async () => {
+    serveAll();
+    const { container } = renderShell(
+      <AppShell title="Page Title">body</AppShell>,
+    );
+    await screen.findByText("Dev User");
+
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toContain("bg-chrome");
+    expect(root.className).not.toContain("bg-background");
+
+    const nav = screen.getByRole("navigation");
+    expect(nav.className).toContain("bg-chrome");
+    expect(nav.className).not.toContain("bg-sidebar");
+    // 账号区上方那条分隔线也去掉了：用留白分开。
+    expect(edgeClasses(nav)).toEqual([]);
+
+    const topbar = screen.getByTestId("app-topbar");
+    expect(topbar.className).toContain("bg-chrome");
+    expect(topbar.className).not.toContain("bg-card");
+    expect(edgeClasses(topbar)).toEqual([]);
+  });
+
+  it("当前导航项用抬起色，不是品牌浅底", () => {
+    renderShell();
+    const chat = screen.getByRole("link", { name: /^Chat/ });
+    expect(chat.getAttribute("aria-current")).toBe("page");
+    expect(chat.className).toContain("bg-raised");
+  });
+
+  it("折叠把手是一颗填充的小胶囊：不画边，键盘焦点环照旧", () => {
+    renderShell();
+    const toggle = screen.getByRole("button", { name: "Collapse sidebar" });
+    expect(toggle.className).toContain("bg-button-fill");
+    expect(toggle.className).toContain("hover:bg-button-fill-hover");
+    expect(toggle.className).toContain("rounded-full");
+    expect(toggle.className).not.toContain("bg-card");
+    expect(edgeClasses(toggle)).toEqual([]);
+    expect(toggle.className).toContain("focus-visible:focus-outline");
+  });
+
+  it("桌面：工作区是一张内容页（圆角、与外框留缝），主区在页里滚", () => {
+    renderShell(<AppShell title="Page Title">body</AppShell>);
+
+    expect(sheet().className).toContain("content-sheet");
+    const main = screen.getByRole("main");
+    expect(sheet().contains(main)).toBe(true);
+    expect(main.className).toContain("overflow-y-auto");
+    // 有顶栏时页的上沿贴着顶栏（顶栏本身就是外框），不再额外下推。
+    expect(sheet().parentElement!.className).not.toMatch(/(^|\s)pt-2(\s|$)/);
+    expect(screen.getByTestId("app-topbar").contains(sheet())).toBe(false);
+    expect(screen.getByRole("navigation").contains(sheet())).toBe(false);
+  });
+
+  it("手机：内容页铺满宽度，不留缝、不圆角；顶栏与底部 Tab 在外框上", () => {
+    mockMobileViewport();
+    renderShell();
+
+    expect(sheet().className).toContain("bg-sheet");
+    expect(sheet().className).not.toContain("content-sheet");
+    expect(sheet().className).not.toMatch(/rounded/);
+    expect(sheet().parentElement!.className).not.toMatch(/(^|\s)p[tx]?-\d/);
+
+    expect(screen.getByTestId("app-topbar").className).toContain("bg-chrome");
+    expect(screen.getByRole("navigation").className).toContain("bg-chrome");
+    // 「页面本身不滚、只有 main 滚」照旧。
+    expect(screen.getByRole("main").className).toContain("overflow-y-auto");
+  });
+
+  describe("页面布局声明：index 槽", () => {
+    it("不声明 = 整页内容页：外框上除了导航与顶栏没有别的列", () => {
+      renderShell(<AppShell title="Page Title">body</AppShell>);
+      expect(screen.queryByTestId("app-index")).toBeNull();
+      expect(within(sheet()).getByText("body")).toBeTruthy();
+    });
+
+    it("声明 index = 索引列 + 内容页：索引列落在外框上、紧挨内容页左侧，详情在页里", () => {
+      renderShell(
+        <AppShell title="Org" flush index={<div>index column</div>}>
+          detail pane
+        </AppShell>,
+      );
+
+      const index = screen.getByTestId("app-index");
+      expect(within(index).getByText("index column")).toBeTruthy();
+      // 索引列不在内容页里，也不自己涂底：它直接坐在外框色上。
+      expect(sheet().contains(index)).toBe(false);
+      expect(index.className).not.toMatch(/(^|\s)bg-/);
+      expect(edgeClasses(index)).toEqual([]);
+      // 索引列与内容页同在一行：外壳给的上沿缝（如有）两边一起让。
+      expect(index.parentElement).toBe(sheet().parentElement);
+      expect(index.nextElementSibling).toBe(sheet());
+      // 详情在内容页里。
+      expect(within(sheet()).getByText("detail pane")).toBeTruthy();
+      // 有顶栏的页：索引列在顶栏之下，与内容页同一行。
+      expect(screen.getByTestId("app-topbar").contains(index)).toBe(false);
+    });
+
+    it("手机：没有并排的空间，外壳只摆 children，索引列交给页面自己决定这一屏摆什么", () => {
+      mockMobileViewport();
+      renderShell(
+        <AppShell flush index={<div>index column</div>}>
+          detail pane
+        </AppShell>,
+      );
+      expect(screen.queryByTestId("app-index")).toBeNull();
+      expect(screen.queryByText("index column")).toBeNull();
+      expect(within(sheet()).getByText("detail pane")).toBeTruthy();
+    });
+  });
+
+  describe("没有顶栏的页（ownHeader）", () => {
+    it("桌面：内容页上沿也与外框留缝，索引列随同一行一起下移，两列的顶带仍对齐", () => {
+      renderShell(
+        <AppShell flush ownHeader index={<div>index column</div>}>
+          detail pane
+        </AppShell>,
+      );
+      expect(screen.queryByTestId("app-topbar")).toBeNull();
+      // 缝给在索引列与内容页共用的那一行上：对话页左列 68px 顶行与右栏 68px 顶带
+      // 因此仍在同一条水平线上，而不是错开 8px（规格「对话页头 68px 等几何不变」）。
+      const row = sheet().parentElement!;
+      expect(row.className).toMatch(/(^|\s)pt-2(\s|$)/);
+      const index = screen.getByTestId("app-index");
+      expect(index.parentElement).toBe(row);
+      expect(index.className).not.toMatch(/(^|\s)(pt|mt)-/);
+      expect(sheet().className).not.toMatch(/(^|\s)(pt|mt)-/);
+    });
+
+    it("桌面：语言 / 主题按钮落在侧边导航底部（外框上），不进内容页的角", () => {
+      renderShell(
+        <AppShell flush ownHeader index={<div>index column</div>}>
+          detail pane
+        </AppShell>,
+      );
+      const nav = screen.getByRole("navigation");
+      const language = within(nav).getByRole("button", { name: /Language/i });
+      expect(within(nav).getByRole("button", { name: /Theme/i })).toBeTruthy();
+      expect(sheet().contains(language)).toBe(false);
+      // 整个外壳只有这一组，不会和顶栏那组重复出现。
+      expect(screen.getAllByRole("button", { name: /Language/i })).toHaveLength(
+        1,
+      );
+    });
+
+    it("收起成 56px 时两颗按钮竖着排，仍在侧栏里", () => {
+      renderShell(
+        <AppShell flush ownHeader>
+          detail pane
+        </AppShell>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+
+      const nav = screen.getByRole("navigation");
+      expect(nav.className).toContain("w-[56px]");
+      const language = within(nav).getByRole("button", { name: /Language/i });
+      expect(language.parentElement!.className).toContain("flex-col");
+    });
+
+    it("有顶栏的页照旧把语言 / 主题放在顶栏，侧栏里不再摆一组", () => {
+      renderShell(<AppShell title="Page Title">body</AppShell>);
+      const topbar = screen.getByTestId("app-topbar");
+      expect(
+        within(topbar).getByRole("button", { name: /Language/i }),
+      ).toBeTruthy();
+      expect(
+        within(screen.getByRole("navigation")).queryByRole("button", {
+          name: /Language/i,
+        }),
+      ).toBeNull();
+    });
+
+    it("手机：没有侧栏，外壳不替页面摆这组按钮，页头由页面自己排", () => {
+      mockMobileViewport();
+      renderShell(
+        <AppShell flush ownHeader>
+          detail pane
+        </AppShell>,
+      );
+      expect(screen.queryByTestId("app-topbar")).toBeNull();
+      expect(screen.queryByRole("button", { name: /Language/i })).toBeNull();
+      // 手机不留缝：没有顶栏也不下推。
+      expect(sheet().parentElement!.className).not.toMatch(/(^|\s)pt-2/);
+    });
   });
 });

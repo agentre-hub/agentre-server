@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/agentre-hub/agentre-server/internal/pkg/session"
 	"github.com/agentre-hub/agentre-server/internal/repository/agent_session_repo"
 	"github.com/agentre-hub/agentre-server/internal/repository/device_repo"
+	"github.com/agentre-hub/agentre-server/internal/repository/portforward_link_repo"
 	"github.com/agentre-hub/agentre-server/internal/service/accountchan_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/auth_svc"
 	"github.com/agentre-hub/agentre-server/internal/service/device_svc"
@@ -54,6 +56,9 @@ type ServerConfig struct {
 	AccountGate     AccountGateConfig `yaml:"account_gate"`
 	WebAuthn        WebAuthnConfig    `yaml:"webauthn"`
 	Release         ReleaseConfig     `yaml:"release"`
+	// PortForward 是端口转发子域链接的配置（spec 2026-09-21-port-forward-subdomain
+	// 「地址与路由」）。
+	PortForward PortForwardConfig `yaml:"port_forward"`
 	// TrustedProxies 是「这些地址转发过来的 X-Forwarded-For 才算数」的名单，取 IP
 	// 或 CIDR。**缺省空 = 谁都不信**，来源 IP 一律取实际连上来的那一端
 	// （RemoteAddr）。
@@ -79,6 +84,16 @@ type ReleaseConfig struct {
 	// CacheTTL 是缓存值在 Redis 里的存活时间。拉取持续失败时，过期让端点从「上一次
 	// 的旧值」自然退回「不知道」。
 	CacheTTL time.Duration `yaml:"cache_ttl"`
+}
+
+// PortForwardConfig 决定这个部署要不要提供端口转发子域（spec「地址与路由」的
+// 「配置」一节）。
+type PortForwardConfig struct {
+	// BaseDomain 是转发域：生产是 fw.agentrehub.com，dev 是
+	// fw.agentre.docker.local。**空串 = 这个部署不提供端口转发**——不是留空回落到
+	// 某个缺省值，转发子域没有一个放之四海都对的默认值，只有部署拓扑知道。控制台
+	// 打开映射时据此报「这个部署此刻提供不了端口转发」。
+	BaseDomain string `yaml:"base_domain"`
 }
 
 // WebAuthnConfig 是通行密钥的 Relying Party 配置。
@@ -227,6 +242,24 @@ func insecureCookies(publicURL string) bool {
 	return parsed.Scheme == "http"
 }
 
+// ConsoleOrigins 是写请求来源校验（middleware.CSRF 缺 Sec-Fetch-Site 时退回的 Origin
+// 判据）认的那份名单：控制台自己的 origin（PublicURL 的 scheme://host）加上已配置的
+// origins（webauthn.origins，开发态与 e2e 的前端端口），去重、自己的在前（规格
+// 2026-09-21-port-forward-subdomain「控制台加固」）。是并集而不是二选一：配了
+// origins 不能把控制台自己挤出名单。
+func (c *ServerConfig) ConsoleOrigins() []string {
+	var origins []string
+	if public, err := url.Parse(c.PublicURL); err == nil && public.Scheme != "" && public.Host != "" {
+		origins = append(origins, public.Scheme+"://"+public.Host)
+	}
+	for _, origin := range c.WebAuthn.Origins {
+		if !slices.Contains(origins, origin) {
+			origins = append(origins, origin)
+		}
+	}
+	return origins
+}
+
 // applyWebAuthnDefaults 把没配的 WebAuthn 项按 PublicURL 补齐。
 //
 // 推导失败（PublicURL 空或不是个 URL）时留空：passkey_svc 会在构造时判出 RP 配置
@@ -283,7 +316,12 @@ func RegisterDefaults(cfg *ServerConfig) {
 	}))
 
 	store := session.New(redis.Default(), int(cfg.Session.TTL/time.Second))
-	auth_svc.SetDefault(auth_svc.New(redis.Default(), store))
+	authSvc := auth_svc.New(redis.Default(), store)
+	// https 下会话 cookie 换成 __Host- 前缀（session.HostCookieName），是
+	// InsecureCookies 的反面——同一个「浏览器用什么协议访问到我」的事实决定要不要
+	// 带 Secure，也决定发哪个名字。
+	authSvc.SetSecureCookies(!cfg.InsecureCookies)
+	auth_svc.SetDefault(authSvc)
 
 	// 账号闸门：session / device JWT / relay 三条鉴权路径与中继心跳共用的那一处判定。
 	// 没有它，四条路径会退回「凭据有效就放行」，改库封禁只挡得住新的登录。
@@ -304,6 +342,19 @@ func RegisterDefaults(cfg *ServerConfig) {
 		RefreshTTL:      cfg.Token.RefreshTTL,
 		VerificationURI: fmt.Sprintf("%s/device", strings.TrimRight(cfg.PublicURL, "/")),
 	}))
+
+	// 端口转发子域链接（spec 2026-09-21-port-forward-subdomain「地址与路由」）：
+	// **总是**装配，即便 BaseDomain 是空串——没配的部署仍然需要这份实例存在，
+	// 只是 Link 恒回「此刻提供不了端口转发」，这样 router.go 就不必再对它做一次
+	// PortForward 那种「未装配即 nil」的额外判空。
+	portforward_svc.SetDefaultLinks(portforward_svc.NewLinks(
+		portforward_svc.LinkConfig{BaseDomain: cfg.PortForward.BaseDomain, PublicURL: cfg.PublicURL},
+		portforward_link_repo.Link(),
+	))
+	// 转发登录（spec「转发登录」）：授权码与转发会话都在 Redis；转发会话依附控制台
+	// 会话，存活判据就是上面那份会话存储。寿命上限取控制台会话的 TTL——每次使用都还要
+	// 过「控制台会话还在」这一关，这个值只是兜底。
+	portforward_svc.SetDefaultForwardAuth(portforward_svc.NewForwardAuth(redis.Default(), store, cfg.Session.TTL))
 
 	// 控制台的 latest 来源（决策 12）：Enabled=false 时 Pull 与 Latest 都恒回
 	// 「不关心/不知道」，装配与否不影响这一点——这里始终装配，只是配置决定它会不会
@@ -334,7 +385,7 @@ func RegisterDefaults(cfg *ServerConfig) {
 	// 因此不像中继那样要一个进程内唯一的 InstanceID。
 	accountchan_svc.SetDefault(accountchan_svc.New(redis.Default()))
 
-	registerSessionMirror(relayConfig.InstanceID)
+	registerSessionMirror(relayConfig.InstanceID, cfg.PublicURL)
 }
 
 // registerSessionMirror 把账号会话镜像的三根线接上（规格
@@ -345,7 +396,7 @@ func RegisterDefaults(cfg *ServerConfig) {
 // （与浏览器中继票据同一份，类型各自定死）、Redis 取 redis.Default()。InstanceID 与
 // relay_svc 共用同一个「一进程一份」的值——它是租约里的持有者标识，两个副本共用一个
 // 值会让彼此的续期都成功，同一台机器因此被跟两遍。
-func registerSessionMirror(instanceID string) {
+func registerSessionMirror(instanceID, publicURL string) {
 	supervisor := mirror_svc.NewSupervisor(
 		mirror_svc.Config{InstanceID: instanceID}, relay_svc.Default(), credstore.New(redis.Default()), redis.Default())
 	mirror_svc.SetDefault(supervisor)
@@ -373,7 +424,7 @@ func registerSessionMirror(instanceID string) {
 	// 决策 3）：共享代理判出「是哪一件事」，控制台用自己的话把它说出来。这里是唯一
 	// 同时认识「池」与「控制台文案」的地方——池不得反向 import 控制器。
 	portforward_svc.SetDefault(portforward_svc.New(portforward_svc.Config{
-		RenderFailure: portforward_ctr.RenderFailure,
+		RenderFailure: portforward_ctr.NewFailureRenderer(publicURL),
 	}, supervisor))
 }
 

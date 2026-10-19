@@ -1,8 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import Transcript from "@/components/session/Transcript";
-import { reduceFrames, type TranscriptFrame } from "@agentre-hub/agentre-ui";
+import {
+  reduceFrames,
+  type TranscriptFrame,
+  type TranscriptMessage,
+} from "@agentre-hub/agentre-ui";
 import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
 
 import "@/i18n";
@@ -47,7 +51,11 @@ describe("转录里的交互卡接到中继上", () => {
           input: { command: "ls -la" },
         },
       ],
-      { submitToolPermission, submitAnswer: vi.fn() },
+      {
+        submitToolPermission,
+        submitAnswer: vi.fn(),
+        submitToolApproval: vi.fn(),
+      },
     );
 
     fireEvent.click(screen.getByText("Allow Once"));
@@ -70,7 +78,11 @@ describe("转录里的交互卡接到中继上", () => {
           input: { command: "rm -rf /tmp/x" },
         },
       ],
-      { submitToolPermission, submitAnswer: vi.fn() },
+      {
+        submitToolPermission,
+        submitAnswer: vi.fn(),
+        submitToolApproval: vi.fn(),
+      },
     );
 
     fireEvent.click(screen.getByText("Reject"));
@@ -94,7 +106,11 @@ describe("转录里的交互卡接到中继上", () => {
         },
         { kind: "tool_permission_resolved", requestId: "r9", allowed: true },
       ],
-      { submitToolPermission: vi.fn(), submitAnswer: vi.fn() },
+      {
+        submitToolPermission: vi.fn(),
+        submitAnswer: vi.fn(),
+        submitToolApproval: vi.fn(),
+      },
     );
 
     expect(screen.queryByText("Allow Once")).toBeNull();
@@ -116,7 +132,11 @@ describe("转录里的交互卡接到中继上", () => {
           ],
         },
       ],
-      { submitToolPermission: vi.fn(), submitAnswer },
+      {
+        submitToolPermission: vi.fn(),
+        submitAnswer,
+        submitToolApproval: vi.fn(),
+      },
     );
 
     fireEvent.click(screen.getByText("要"));
@@ -137,6 +157,7 @@ describe("转录里的交互卡接到中继上", () => {
     const ports = createServerTranscriptPorts({
       submitToolPermission,
       submitAnswer: vi.fn(),
+      submitToolApproval: vi.fn(),
     });
 
     await expect(
@@ -149,21 +170,120 @@ describe("转录里的交互卡接到中继上", () => {
   });
 
   /**
-   * 中继上没有对应方法的那三个，如实抛错而不是 no-op。一个点了什么都不发生的
-   * 按钮只有用户能发现；抛错当场暴露。
+   * 内置写工具的审批卡（`tool_approval`：org、ctl…）经通用的 relay 方法
+   * `toolApproval.answer` 作答（spec 2026-09-22 决策 13），所有 toolKey 共用一条。
    */
+  function approvalMessage(
+    toolKey: string,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+  ): TranscriptMessage {
+    return {
+      id: 1,
+      sessionId: 1,
+      role: "assistant",
+      blocks: [
+        {
+          type: "tool_approval",
+          toolApproval: {
+            toolKey,
+            requestId: `${toolKey}-1`,
+            toolName,
+            toolInput,
+            status: "pending",
+          },
+        },
+      ],
+      model: "",
+      promptTokens: 0,
+      completionTokens: 0,
+      cachedTokens: 0,
+      cacheCreationTokens: 0,
+      reasoningTokens: 0,
+      totalInputTokens: 0,
+      durationMs: 0,
+      errorText: "",
+      seq: 1,
+      createtime: 0,
+    };
+  }
+
   it.each([
-    "answerToolApproval",
-    "resolveExecApproval",
-    "resolvePlanAction",
-  ] as const)("%s 中继没有对应方法，如实抛错", (name) => {
+    ["org", "org_create_department", { name: "研发部" }],
+    [
+      "ctl",
+      "ctl_update_provider",
+      {
+        command: "agrctl update provider openrouter --name or",
+        changes: [
+          {
+            op: "update",
+            kind: "provider",
+            id: 4,
+            name: "openrouter",
+            fields: [{ field: "name", before: "openrouter", after: "or" }],
+          },
+        ],
+      },
+    ],
+  ] as const)(
+    "给定待批的 %s 审批卡，当点「批准」，则以该 requestId 提交 allow=true",
+    async (toolKey, toolName, toolInput) => {
+      const submitToolApproval = vi.fn().mockResolvedValue(undefined);
+      render(
+        <Transcript
+          messages={[approvalMessage(toolKey, toolName, { ...toolInput })]}
+          sessionId={1}
+          ports={createServerTranscriptPorts({
+            submitToolPermission: vi.fn(),
+            submitAnswer: vi.fn(),
+            submitToolApproval,
+          })}
+        />,
+      );
+
+      fireEvent.click(screen.getByText("Approve"));
+
+      await waitFor(() => expect(submitToolApproval).toHaveBeenCalledTimes(1));
+      expect(submitToolApproval.mock.calls[0][0]).toMatchObject({
+        requestId: `${toolKey}-1`,
+        allow: true,
+      });
+    },
+  );
+
+  it("给定审批卡作答失败，当调用端口，则错误冒泡给卡片", async () => {
     const ports = createServerTranscriptPorts({
       submitToolPermission: vi.fn(),
       submitAnswer: vi.fn(),
+      submitToolApproval: vi.fn().mockRejectedValue(new Error("expired")),
     });
 
-    expect(() =>
-      (ports[name] as (input: unknown) => unknown)({ sessionId: 1 }),
-    ).toThrow(/no relay method/);
+    await expect(
+      ports.answerToolApproval({
+        sessionId: 1,
+        requestId: "ctl-1",
+        allow: false,
+      }),
+    ).rejects.toThrow("expired");
   });
+
+  /**
+   * 中继上没有对应方法的那两个，如实抛错而不是 no-op。一个点了什么都不发生的
+   * 按钮只有用户能发现；抛错当场暴露。
+   */
+  it.each(["resolveExecApproval", "resolvePlanAction"] as const)(
+    "%s 中继没有对应方法，如实抛错",
+    (name) => {
+      const ports = createServerTranscriptPorts({
+        submitToolPermission: vi.fn(),
+        submitAnswer: vi.fn(),
+        submitToolApproval: vi.fn(),
+      });
+
+      expect(() =>
+        (ports[name] as (input: unknown) => unknown)({ sessionId: 1 }),
+      ).toThrow(/no relay method/);
+    },
+  );
 });

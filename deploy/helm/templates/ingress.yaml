@@ -1,13 +1,17 @@
 {{- if .Values.ingress.enabled -}}
 {{- $fullName := include "agentre-server.fullname" . -}}
 {{- $svcPort := .Values.service.port -}}
+{{- $annotations := deepCopy (default dict .Values.ingress.annotations) -}}
+{{- with .Values.ingress.hsts }}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/configuration-snippet" (printf "more_set_headers \"Strict-Transport-Security: %s\";" .) -}}
+{{- end }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ $fullName }}
   labels:
     {{- include "agentre-server.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -15,11 +19,19 @@ spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . }}
   {{- end }}
-  {{- with .Values.ingress.tlsSecretName }}
+  {{- if or .Values.ingress.tlsSecretName (and .Values.ingress.forwardHost .Values.ingress.forwardTlsSecretName) }}
   tls:
+    {{- with .Values.ingress.tlsSecretName }}
     - hosts:
         - {{ $.Values.ingress.host | quote }}
       secretName: {{ . }}
+    {{- end }}
+    {{- if and .Values.ingress.forwardHost .Values.ingress.forwardTlsSecretName }}
+    # 转发域用它自己的通配证书，控制台那张不覆盖它
+    - hosts:
+        - {{ .Values.ingress.forwardHost | quote }}
+      secretName: {{ .Values.ingress.forwardTlsSecretName }}
+    {{- end }}
   {{- end }}
   rules:
     - host: {{ .Values.ingress.host | quote }}
@@ -33,4 +45,17 @@ spec:
                 name: {{ $fullName }}
                 port:
                   number: {{ $svcPort }}
+    {{- with .Values.ingress.forwardHost }}
+    # 端口转发子域：同一个服务，按 Host 分发在进程里做（internal/api/router.go）
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullName }}
+                port:
+                  number: {{ $svcPort }}
+    {{- end }}
 {{- end }}

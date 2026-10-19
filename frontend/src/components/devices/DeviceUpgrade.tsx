@@ -88,7 +88,7 @@ export function DeviceVersionBadge({
   return (
     <span
       data-testid={`device-version-badge-${deviceID}`}
-      className="rounded-md bg-status-waiting-bg px-1.5 py-0.5 text-3xs font-medium text-status-waiting"
+      className="rounded-md bg-status-waiting-bg px-1.5 py-0.5 text-3xs font-medium text-status-waiting-text"
     >
       {t("device.upgrade.badge", { version: state.latest })}
     </span>
@@ -220,7 +220,7 @@ function UpgradeStatus({
     return (
       <span
         data-testid={`device-upgrade-refusal-${deviceID}`}
-        className="text-xs text-status-waiting"
+        className="text-xs text-status-waiting-text"
       >
         {t("device.upgrade.confirm.title", { count: phase.activeTurns })}
       </span>
@@ -356,8 +356,8 @@ export function DeviceUpgradePanel({
     <div
       data-testid={`device-upgrade-${device.id}`}
       className={cn(
-        "flex flex-col gap-3 rounded-md border p-3",
-        blocked ? "border-destructive/30 bg-destructive-soft" : "border-border",
+        "flex flex-col gap-3 rounded-md p-3",
+        blocked ? "bg-destructive-soft" : "bg-field-fill",
       )}
     >
       <UpgradeHeadline state={state} />

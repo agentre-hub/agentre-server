@@ -22,6 +22,7 @@ import { useRelayChannel, type UseRelayChannelResult } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
+import { edgeClasses } from "./helpers/edge-classes";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -411,6 +412,40 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
   });
 
+  it("底部弹层是 flex 列：Agent 清单那一格被限高、能滚，不被 grid 行撑出屏外", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    // DialogContent 默认是 grid：子项的 flex-1/min-h-0 不生效，清单那一格随内容长高，
+    // 整层溢出 82dvh 落到屏幕下面，Agent 一多就够不着。
+    expect(sheet.classList.contains("grid")).toBe(false);
+    expect(sheet.classList.contains("flex")).toBe(true);
+    expect(sheet.classList.contains("flex-col")).toBe(true);
+  });
+
+  it("从弹层挑 Agent 进草稿，草稿的返回回到列表，不再把挑 Agent 的弹层升起来", async () => {
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
+    expect(await screen.findByTestId("draft-session")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-session")).toBeNull(),
+    );
+    expect(screen.queryByTestId("new-conversation-sheet")).toBeNull();
+    expect(screen.getByText("等你批")).toBeTruthy();
+  });
+
   it("真空账号开始搜索后挂共享搜索空态，并可清除搜索回到主空态", async () => {
     stubApi([], []);
     renderChat();
@@ -555,6 +590,168 @@ describe("移动端对话页：顶部", () => {
     expect(head.querySelectorAll("button").length).toBeGreaterThan(1);
     // 这一条顶栏不走壳，安全区得自己让：少了它，刘海机上内容会伸到状态栏底下。
     expect(head.className).toContain("pt-[env(safe-area-inset-top,0px)]");
+  });
+
+  /*
+    无边框改版（规格 2026-10-15 决策 3）：手机上顶栏落在外框色上，与下面那张铺满的
+    内容页靠色阶分开，不画底线。语言 / 主题仍在这一带里——手机上没有侧栏接住它们。
+  */
+  it("顶栏在外框色上、不画线，语言/主题仍够得着", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    await screen.findByText("等你批");
+    const head = screen.getByTestId("chat-mobile-header");
+    expect(edgeClasses(head)).toEqual([]);
+    expect(head.className).toContain("bg-chrome");
+    expect(head.className).not.toMatch(/bg-card/);
+    expect(
+      within(head).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+    expect(within(head).getByRole("button", { name: /Theme/i })).toBeTruthy();
+  });
+});
+
+/*
+  手机上新建对话的两屏（草稿、从项目挑 Agent）各占一整屏，盖住了索引那条页头；
+  壳走 ownHeader 不画顶栏，手机上又没有侧栏——语言/主题此前在这两屏上一颗都没有。
+  它们落在各自页头的右端，与索引页头同一组（AppControls），整屏只有一份。
+*/
+describe("移动端新建对话：语言/主题", () => {
+  function expectAppControlsIn(head: HTMLElement) {
+    expect(
+      within(head).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+    expect(within(head).getByRole("button", { name: /Theme/i })).toBeTruthy();
+    // 索引那条页头此刻不在：屏上只有这一份，不是两份叠着。
+    expect(screen.getAllByRole("button", { name: /Language/i })).toHaveLength(
+      1,
+    );
+  }
+
+  it("草稿那一屏的页头带着语言/主题", async () => {
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
+    await screen.findByTestId("draft-session");
+
+    expectAppControlsIn(screen.getByTestId("draft-header"));
+  });
+
+  it("「从项目里挑」那一屏的页头带着语言/主题", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(
+      within(sheet).getByRole("button", {
+        name: "Pick an agent from a project",
+      }),
+    );
+    const pane = await screen.findByTestId("project-agent-pane");
+
+    const head = pane.querySelector("header");
+    expect(head).not.toBeNull();
+    expectAppControlsIn(head as HTMLElement);
+  });
+});
+
+/*
+  这两屏铺满整个手机屏，壳走 ownHeader 不画顶栏、也就不替它们让安全区：
+  viewport-fit=cover 之后页头会钻到刘海/状态栏底下。与索引页头同一个让法
+  （pt-[env(safe-area-inset-top,0px)]），只在手机整屏形态；桌面右栏不让——
+  它上面是外框，不贴屏幕顶。断言沿祖先链找：让在页头本身还是它那一格整屏
+  容器上都算，只要页头确实被推到安全区下面。
+*/
+describe("移动端新建对话：顶部安全区", () => {
+  const SAFE_TOP = "pt-[env(safe-area-inset-top,0px)]";
+
+  function insetHolder(el: HTMLElement): HTMLElement | null {
+    for (let n: HTMLElement | null = el; n; n = n.parentElement) {
+      if (typeof n.className === "string" && n.className.includes(SAFE_TOP)) {
+        return n;
+      }
+    }
+    return null;
+  }
+
+  async function openDraft() {
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
+    await screen.findByTestId("draft-session");
+    return screen.getByTestId("draft-header");
+  }
+
+  async function openProjectPane() {
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "New conversation" }));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(
+      within(sheet).getByRole("button", {
+        name: "Pick an agent from a project",
+      }),
+    );
+    const pane = await screen.findByTestId("project-agent-pane");
+    return pane.querySelector("header") as HTMLElement;
+  }
+
+  it("草稿那一屏的页头让出顶部安全区", async () => {
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(insetHolder(await openDraft())).not.toBeNull();
+  });
+
+  it("「从项目里挑」那一屏的页头让出顶部安全区", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    const head = await openProjectPane();
+    expect(head).not.toBeNull();
+    expect(insetHolder(head)).not.toBeNull();
+  });
+
+  it("桌面右栏里的这两屏不让：它们不贴屏幕顶", async () => {
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    stubApi([waitingMirrored]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "New conversation" })[0],
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Pick an agent from a project",
+      }),
+    );
+    const pane = await screen.findByTestId("project-agent-pane");
+    expect(insetHolder(pane.querySelector("header") as HTMLElement)).toBeNull();
+
+    fireEvent.click(within(pane).getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: /后端 Agent/ }));
+    await screen.findByTestId("draft-session");
+    expect(insetHolder(screen.getByTestId("draft-header"))).toBeNull();
   });
 });
 

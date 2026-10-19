@@ -91,8 +91,8 @@ calls go directly to the formal server; there are no route mocks.
 
 Cleanup is run-scoped and follows foreign-key order. It deletes only the current
 run's device tokens, device flows, synchronization data, saved sessions, passkeys, devices,
-identity, user, Redis session, and the authorize rate-limit key created with the
-run's reserved fixture IP. It never issues `DROP
+identity, user, Redis session, account session index, and the authorize rate-limit key
+created with the run's reserved fixture IP. It never issues `DROP
 DATABASE`, `TRUNCATE`, `FLUSHDB`, or `FLUSHALL`, and concurrent runs do not delete
 each other's data.
 
@@ -188,6 +188,10 @@ persistent database.
   config; the runner must inspect the exact local values before touching data.
 - `refusing non-E2E database`: use a dedicated database whose name contains an
   `e2e` marker. The runner will not create one for you.
+- Do not invoke the `webe2e` fixture binary directly against a shared dev or
+  production database. The dedicated-database check belongs to this runner, not
+  the fixture binary; deployed-environment verification requires separate,
+  explicit authorization and a target-specific cleanup plan.
 - `E2E port ... is already in use`: stop the other process or choose another
   loopback address consistently in `http.address` and `server.public_url`.
 - startup/health failure: inspect the reported `e2e/runtime/<run-id>/server.log`;

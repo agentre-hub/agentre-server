@@ -75,10 +75,7 @@ export function UserMenu({
       <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary-soft text-sm font-semibold text-primary-text">
         {me.display_name.charAt(0)}
       </div>
-      <ConnectionPip
-        state={connection}
-        surface={compact ? "card" : "sidebar"}
-      />
+      <ConnectionPip state={connection} />
     </div>
   );
 
@@ -95,8 +92,9 @@ export function UserMenu({
           aria-label={t("appShell.userMenu.trigger")}
           className={cn(
             "flex cursor-pointer items-center gap-2 rounded-md outline-none",
-            "focus-visible:ring-[3px] focus-visible:ring-ring/50",
-            "hover:bg-accent data-[state=open]:bg-accent",
+            "focus-visible:focus-outline",
+            // 两个落点都在外框上：外框比内容面暗，悬停是提亮（rail-accent）。
+            "hover:bg-rail-accent data-[state=open]:bg-rail-accent",
             compact ? "px-1 py-1" : "h-[42px] w-full px-1.5",
           )}
         >

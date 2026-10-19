@@ -7,14 +7,7 @@ import {
   SessionLifecycleRunning,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -227,14 +220,6 @@ export interface SessionDetailViewProps {
     avatar_icon?: string;
   };
   /**
-   * 宿主页面级的那簇控件，摆在详情头部的最右端（嵌入形态才有）。
-   *
-   * 桌面 Chat 把转录上方那两条带并成一条之后，壳不再画 52px 顶栏，连接态与
-   * 语言/主题就落在这里 —— 详情头部本身**就是**那一页的顶带。路由页形态不传：
-   * 壳的顶栏还在，那簇控件仍归它。
-   */
-  headerRight?: ReactNode;
-  /**
    * 标记已读成功后通知拥有索引的宿主：**标在哪个身份上**，以及服务端记下的时刻。
    *
    * 递这两样而不是只喊一声：服务端专门把时刻回了出来（MarkSessionReadResponse
@@ -273,7 +258,6 @@ export default function SessionDetailView({
   initialUserText,
   initialAgent,
   initialRow,
-  headerRight,
   onMarkedRead,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
@@ -1785,7 +1769,6 @@ export default function SessionDetailView({
       // **落定**时各取一份，轮次进行中它说的是上一次落定时的事。
       running={running}
       decisionPending={decisionPending}
-      headerRight={headerRight}
       clientRef={clientRef}
       originRef={originRef}
     />
@@ -1871,9 +1854,10 @@ export default function SessionDetailView({
   );
 
   const bands = (
+    /* 不自涂底色：三带落在壳给的那张内容页上（规格 2026-10-15）。 */
     <div
       data-testid="session-detail-view"
-      className="flex h-full min-h-0 flex-col bg-background"
+      className="flex h-full min-h-0 flex-col"
     >
       {header}
       {/*

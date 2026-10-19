@@ -34,7 +34,7 @@ import (
 func bearerMiddlewares(tokens middleware.BearerResolver) map[string]gin.HandlerFunc {
 	return map[string]gin.HandlerFunc{
 		"DeviceJWT":           middleware.DeviceJWT(tokens),
-		"SessionOrDeviceAuth": middleware.SessionOrDeviceAuth(tokens),
+		"SessionOrDeviceAuth": middleware.SessionOrDeviceAuth(tokens, nil),
 		"RelayClientJWT": middleware.RelayClientJWT(auth_svc.NewCredentialResolver(tokens, auth_svc.Default()),
 			credstore.New(redis.Default())),
 	}

@@ -25,7 +25,7 @@ export default function SendAttachments({
           href={image.dataUrl}
           target="_blank"
           rel="noreferrer"
-          className="block overflow-hidden rounded-md border border-border bg-muted"
+          className="block overflow-hidden rounded-md bg-field-fill"
         >
           <img
             src={image.dataUrl}
