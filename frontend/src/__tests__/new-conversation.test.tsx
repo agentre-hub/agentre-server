@@ -2323,28 +2323,29 @@ describe("交接那一拍：刚发出去的第一句不掉下去", () => {
 /**
  * 顶带：**四态同一副外壳**（桌面端 chat-panel-header 的规格 2026-08-23 决策 2/3）。
  *
- * 「还没发第一句」与「这条对话已经开着」在桌面端是同一条 68px 带，只是标题与 meta
- * 各段换了内容。控制台此前是两副头：草稿那副 `py-3` + 24px 头像，右栏顶上还另叠
- * 着一条 68px 的 chat-chrome；第一句一发出去，chrome 整条消失、头换成详情那副
- * 68px 的 —— 顶部 116px 塌到 68px，头像 24→32，转录整体上跳。
+ * 「还没发第一句」与「这条对话已经开着」在桌面端是同一条带，只是标题与 meta 各段
+ * 换了内容。控制台此前是两副头：草稿那副 `py-3` + 24px 头像，右栏顶上还另叠着一条
+ * chat-chrome；第一句一发出去，chrome 整条消失、头换成详情那副 —— 顶部整体塌一截，
+ * 转录整体上跳。
  *
- * 现在两处共用共享包的 `SessionHeaderBand`，这一组用例盯的就是「同一副」。
+ * 现在两处共用共享包的 `SessionHeaderBand`（56px、自带顶带底色、一行标题、没有
+ * 32px 身份方块，2026-10-20），这一组用例盯的就是「同一副」。
  */
 describe("草稿与详情共用同一条顶带", () => {
   /**
-   * 一条带里的头像那一格 —— 带的第一个孩子（这两屏都不带 leading）。
-   *
-   * 取位置而不是取 `role="img"`：身份认不出来时那一格摆的是一枚占位方块（详情
-   * 落地的头一瞬正是这样，账号 Agent 名单还没回来），而这条用例要说的恰恰是
-   * 「那一格无论如何都占住」。
+   * 顶带里没有 32px 身份方块：这两屏都不带 leading，带的第一格就是标题 + meta
+   * 那一列，直接孩子里也没有 role=img。
    */
-  function avatarIn(band: HTMLElement): HTMLElement {
-    const el = band.firstElementChild as HTMLElement | null;
-    if (!el) throw new Error("头像那一格空着");
-    return el;
+  function expectNoIdentityBlock(band: HTMLElement) {
+    const meta = band.querySelector('[data-testid$="-meta"]');
+    expect(meta).toBeTruthy();
+    expect(band.firstElementChild?.contains(meta)).toBe(true);
+    for (const child of band.children) {
+      expect(child.getAttribute("role")).not.toBe("img");
+    }
   }
 
-  it("草稿的顶带与发出去之后那条同形：68px、同一档头像，桌面右栏只此一条带", async () => {
+  it("草稿的顶带与发出去之后那条同形：56px、顶带底色、身份是 meta 里的 14px 头像，桌面右栏只此一条带", async () => {
     stubReads();
     mockFetchPlan.mockResolvedValue(availablePlan);
     mockEnsureRelayTicket.mockResolvedValue(relayTicket);
@@ -2363,11 +2364,17 @@ describe("草稿与详情共用同一条顶带", () => {
     await openDraft();
 
     const draftBand = screen.getByTestId("draft-header");
-    expect(draftBand.className).toMatch(/h-\[68px\]/);
+    expect(draftBand.className).toMatch(/(^|\s)h-14(\s|$)/);
+    expect(draftBand.className).toContain("bg-sheet-header");
     expect(draftBand.className).toContain("@container/header");
-    expect(avatarIn(draftBand).className).toContain("size-8");
+    expectNoIdentityBlock(draftBand);
+    expect(
+      within(screen.getByTestId("draft-header-meta-agent")).getByRole("img", {
+        name: "Backend Agent",
+      }).className,
+    ).toContain("size-3.5");
     // 草稿那条带**就是**右栏的顶带，chat-chrome 因此不再另画一条 —— 那正是发出
-    // 第一句时会凭空消失的 68px。
+    // 第一句时会凭空消失的那一条。
     expect(screen.queryByTestId("chat-chrome")).toBeNull();
     // 语言 / 主题属于外框（规格 2026-10-15「对话页没有顶栏」）：桌面上整页只有
     // 侧栏底部那一对，草稿这条带里一个都没有。
@@ -2391,9 +2398,10 @@ describe("草稿与详情共用同一条顶带", () => {
 
     await screen.findByTestId("session-detail-view");
     const liveBand = screen.getByTestId("session-detail-identity");
-    expect(liveBand.className).toMatch(/h-\[68px\]/);
+    expect(liveBand.className).toMatch(/(^|\s)h-14(\s|$)/);
+    expect(liveBand.className).toContain("bg-sheet-header");
     expect(liveBand.className).toContain("@container/header");
-    expect(avatarIn(liveBand).className).toContain("size-8");
+    expectNoIdentityBlock(liveBand);
   });
 
   it("标题槽先写「新对话 · Agent」；第一句一交出去就换成那句话本身", async () => {
@@ -2409,10 +2417,12 @@ describe("草稿与详情共用同一条顶带", () => {
     expect(
       within(band()).getByRole("heading", { name: "New chat · Backend Agent" }),
     ).toBeTruthy();
-    // meta 行的第一段与详情那条同形同序：状态点 + Agent 名。
+    // meta 行的第一段与详情那条同形同序：小头像 + Agent 名；还没交出去是空闲，
+    // 头像角上不挂状态点。
     expect(screen.getByTestId("draft-header-meta").textContent).toContain(
       "Backend Agent",
     );
+    expect(screen.queryByTestId("draft-header-status-badge")).toBeNull();
 
     await typeInDraft("跑一下失败的测试");
     await waitFor(() =>
@@ -2429,5 +2439,10 @@ describe("草稿与详情共用同一条顶带", () => {
         within(band()).getByRole("heading", { name: "跑一下失败的测试" }),
       ).toBeTruthy(),
     );
+    // 交出去那一刻就转绿：状态点挂到小头像右下角。
+    const badge = within(
+      screen.getByTestId("draft-header-meta-agent"),
+    ).getByTestId("draft-header-status-badge");
+    expect(badge.getAttribute("aria-label")).toBe("running status");
   });
 });

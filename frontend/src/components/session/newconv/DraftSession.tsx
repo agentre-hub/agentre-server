@@ -13,8 +13,8 @@ import {
   Alert,
   AlertDescription,
   Button,
+  SessionHeaderAgentMark,
   SessionHeaderBand,
-  StatusDot,
   cn,
   iconNode,
   normalizePermissionMode,
@@ -391,16 +391,20 @@ export function DraftSession({
         <span
           data-testid="draft-header-status"
           className={cn(
-            "inline-flex items-center gap-1",
+            "inline-flex items-center gap-1.5",
             oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
           )}
         >
-          {/* 交出去那一刻就转绿：转录里三点已经在转了，两处说的是同一件事。 */}
-          <StatusDot
+          {/* 小头像 + 角上的状态点，与详情那条同形。交出去那一刻就转绿：转录里三点
+              已经在转了，两处说的是同一件事；还没交出去是空闲，角上不挂点。 */}
+          <SessionHeaderAgentMark
+            name={agent.name}
+            color={agent.avatar_color}
+            icon={iconNode(agent.avatar_icon)}
             status={toAgentStatus({
               lifecycleState: starting ? "running" : "idle",
             })}
-            size="xs"
+            badgeTestId="draft-header-status-badge"
           />
           {oneRow ? <span className="truncate">{agent.name}</span> : agent.name}
         </span>
@@ -433,12 +437,11 @@ export function DraftSession({
       className="flex h-full min-h-0 flex-col"
     >
       {/*
-        顶带与会话详情**是同一副**（共享包的 SessionHeaderBand）：固定 68px、同一档
-        头像、两行标题的高度、一行 mono meta。桌面端 chat-panel-header 的「四态同一
-        副外壳」就是这一条 —— 这里此前是另一副（py-3 + 24px 头像），右栏顶上还另叠
-        着一条 chat-chrome，第一句一发出去两条塌成一条，顶部 116px → 68px、头像
-        24→32，转录整体上跳。草稿这条带**就是**右栏的顶带，与详情落地后那条同一个
-        位置。
+        顶带与会话详情**是同一副**（共享包的 SessionHeaderBand）：固定 56px、顶带
+        底色、一行标题、一行 mono meta（Agent 那一段打头一枚小头像）。桌面端
+        chat-panel-header 的「四态同一副外壳」就是这一条 —— 这里此前是另一副（py-3 +
+        24px 头像），右栏顶上还另叠着一条 chat-chrome，第一句一发出去两条塌成一条，
+        转录整体上跳。草稿这条带**就是**右栏的顶带，与详情落地后那条同一个位置。
       */}
       <SessionHeaderBand
         testId="draft-header"
@@ -455,15 +458,6 @@ export function DraftSession({
               <ArrowLeft aria-hidden="true" className="size-4" />
             </button>
           )
-        }
-        avatar={
-          <AgentAvatar
-            name={agent.name}
-            initials={agent.name.charAt(0)}
-            color={agent.avatar_color}
-            icon={iconNode(agent.avatar_icon)}
-            size="md"
-          />
         }
         /*
           标题：还没交出去时是「新对话 · <Agent>」（与桌面端 newSessionTitle 同一句），

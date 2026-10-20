@@ -223,7 +223,9 @@ export default function SessionScrollBody({
       data-testid="session-detail-scroll"
       // 「下面还会变」由这一条说，读屏据此不必把半截内容当成全部（决策 17）。
       aria-busy={awaitingTranscript || undefined}
-      className="min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-2"
+      // transcript-fade-top：上沿 18px 渐隐，滚到顶带下面的正文不被一刀切成半行
+      // （与桌面端 chat-panel 的转录区同一条，2026-10-20）。
+      className="transcript-fade-top min-h-0 flex-1 overflow-y-auto px-5 pt-4 pb-2"
     >
       <div
         ref={contentRef}

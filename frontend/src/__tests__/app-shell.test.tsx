@@ -900,7 +900,7 @@ describe("外框 + 内容页", () => {
         </AppShell>,
       );
       expect(screen.queryByTestId("app-topbar")).toBeNull();
-      // 缝给在索引列与内容页共用的那一行上：对话页左列 68px 顶行与右栏 68px 顶带
+      // 缝给在索引列与内容页共用的那一行上：对话页左列顶行与右栏顶带（同为 56px）
       // 因此仍在同一条水平线上，而不是错开 8px（规格「对话页头 68px 等几何不变」）。
       const row = sheet().parentElement!;
       expect(row.className).toMatch(/(^|\s)pt-2(\s|$)/);

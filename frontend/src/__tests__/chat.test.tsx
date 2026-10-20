@@ -411,13 +411,14 @@ describe("对话页 = 统一会话索引", () => {
   /*
     转录上方此前叠着两条带：壳的 52px 顶栏（只放一个与侧栏高亮重复的「Chat」
     标题 + 连接态 + 语言/主题）和 89px 的详情头部，合计 141px 只承载了一行标题
-    与一行 meta。两条并成一条 68px：这一页自己画顶带，左列顶行同为 68px。
+    与一行 meta。两条并成一条：这一页自己画顶带，左列顶行与它同高（56px，与共享包
+    SessionHeaderBand 同一档，2026-10-20）。
 
     无边框改版（规格 2026-10-15「对话页没有顶栏」）：语言 / 主题属于外框，不能
     落进内容页的角上——壳在侧栏底部摆了那一对，这一页不再自己摆第二份。两条
     顶行也不再各画一条底线，靠留白与色阶分开。
   */
-  it("桌面顶带：两列顶行同为 68px、不画线；语言/主题只在外框的侧栏上", async () => {
+  it("桌面顶带：两列顶行同为 56px、不画线；语言/主题只在外框的侧栏上", async () => {
     stubApi({ mirror: [mirrored()], devices: [agentred] });
     renderChat();
 
@@ -425,10 +426,10 @@ describe("对话页 = 统一会话索引", () => {
     expect(screen.queryByTestId("app-topbar")).toBeNull();
 
     const listHead = screen.getByTestId("chat-list-head");
-    expect(listHead.className).toMatch(/h-\[68px\]/);
+    expect(listHead.className).toMatch(/(^|\s)h-14(\s|$)/);
     expect(edgeClasses(listHead)).toEqual([]);
     const chrome = screen.getByTestId("chat-chrome");
-    expect(chrome.className).toMatch(/h-\[68px\]/);
+    expect(chrome.className).toMatch(/(^|\s)h-14(\s|$)/);
     expect(edgeClasses(chrome)).toEqual([]);
     expect(chrome.className).not.toMatch(/bg-card/);
 

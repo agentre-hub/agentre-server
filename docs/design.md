@@ -151,6 +151,7 @@ palette fix lands once and both products get it. Holding a board, read across:
 | `code-bg` | `--code-surface` | `bg-code-surface` |
 | `chrome` (the frame) | `--chrome` | `bg-chrome` |
 | `sheet` (the work page, auth card) | `--sheet` | `bg-sheet`, or `content-sheet` for the desktop page |
+| (the session header band) | `--sheet-header` | `bg-sheet-header` |
 | `raised` (selected item on chrome: nav item, session / org index row) | `--raised` | `bg-raised` |
 | (relative fills) | `--color-field-fill`, `--color-button-fill` | `bg-field-fill`, `bg-button-fill` |
 | `text` | `--foreground` | `text-foreground` |
@@ -541,8 +542,8 @@ so the page keeps identity and global controls on its first row and gives search
 On desktop the shell moves `AppControls` (language / theme) to the bottom of the SideNav —
 vertical when collapsed — so they sit on the chrome, never in a corner of the sheet. The
 row that holds the `index` column and the sheet then gets a `pt-2`: the sheet's top edge
-still clears the chrome, and because the index column moves down with it, Chat's 68px list
-head and 68px detail band stay on one horizontal line instead of sitting 8px apart.
+still clears the chrome, and because the index column moves down with it, Chat's 56px list
+head and 56px detail band stay on one horizontal line instead of sitting 8px apart.
 
 **Page layout is declared to the shell.** A page is either a *whole sheet* (the default) or
 an *index column plus a sheet*. The second is declared with **`index`**, a `ReactNode`
@@ -557,7 +558,7 @@ detail. Pages therefore never paint their own root background.
 **Mobile session detail and draft: `immersive`** — when `immersive={true}` the shell hides
 both TopBar and mobile bottom tab bar, and `main` handles safe-area insets at top and bottom.
 The conversation detail page (`/chat/:conversationId`) and new-conversation draft render this
-way on mobile, so a session occupies the full viewport with a single fixed 68px header band
+way on mobile, so a session occupies the full viewport with a single fixed 56px header band
 (see [The detail's three bands](#the-details-three-bands)). Desktop and embedded forms ignore
 `immersive`. Loading / not-found / error states keep the back link through the header band. A page rendered
 `immersive` must not add its own top inset as well — the new-conversation draft therefore
@@ -720,7 +721,7 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
 - **Left — the session-list column**, the shared `ResizableSidebar` handed to the shell as
   `index`. It paints no background of its own: it sits on the chrome, to the left of the
   sheet. 320px is its starting width, draggable between 220 and 640 and remembered per
-  machine. Its header is a 68px band (`h-[68px] shrink-0`, the same height as the detail
+  machine. Its header is a 56px band (`h-14 shrink-0`, the same height as the detail
   header) with no line under it — whitespace separates it from the list: a **real search
   input** plus a 30px "new conversation" button (`chat.startNew`) that hands the **right
   pane** over to the agent picker. The list scrolls below it, and it never grows a row for a
@@ -740,7 +741,7 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   to ask one question costs more than filling the space that was already there.
   `DraftSession`'s top band **is** the detail's band (the same `SessionHeaderBand`), so
   `chat-chrome` is not drawn above it — sending the first message swaps content inside one
-  68px band instead of collapsing two into one. None of these panes (`NewConversationPane`,
+  56px band instead of collapsing two into one. None of these panes (`NewConversationPane`,
   `ProjectAgentPane`, `DraftSession`) paints a background or a `bg-card` band of its own:
   they are the detail, and the detail is the sheet.
   Its title reads `New chat · <agent>` until the message is handed off, then becomes
@@ -758,8 +759,8 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   
   Viewing a saved conversation opens `/chat/:conversationId` as a full-screen detail page
   (`AppShell immersive`, no TopBar or bottom tab bar, safe-area insets in `main`). The new-chat
-  draft also renders immersive when accessed on mobile. Both render a single fixed 68px
-  session header (back · 2-line title · Agent · project · machine + online · time · ⋯); the
+  draft also renders immersive when accessed on mobile. Both render a single fixed 56px
+  session header (back · 1-line title · Agent · project · machine + online · time · ⋯); the
   meta line truncates on mobile instead of hiding parts. Loading / not-found / error states
   keep a back link through the header.
 
@@ -774,22 +775,28 @@ underneath it). Banded, the document is exactly viewport height, the middle band
 internally and the composer stays put (with a 3230px transcript: composer fixed at top 830 /
 bottom 888).
 
-- **Header** — the shared package's `SessionHeaderBand`, the same 68px shell the desktop
+- **Header** — the shared package's `SessionHeaderBand`, the same 56px shell the desktop
   app's `chat-panel-header` uses for all four of its states (open session / nothing said yet
-  / loading / failed to load). Height is fixed at two title lines and the whole block is
-  centred in it, so title length, whether the identity resolves, and whether the first
-  message has been sent never move the transcript underneath. The band holds an avatar slot,
-  the title, a mono meta line, and a right-hand group; hosts compute what goes in each.
-  Here the meta line is `●Agent · project · relative time · machine online/offline`, with
-  separators **between** parts that actually exist — a legacy session with neither status nor
-  activity time must not leave a stray leading `·`. The avatar slot is occupied even when the
-  agent can't be resolved (a `size-8 bg-muted` square), otherwise the title jumps a slot
-  sideways on the first frame. A **Stop** button appears only while the turn is actually
+  / loading / failed to load). Height is fixed (`h-14`), the title is one line (full text in
+  its `title`) and the whole block is centred in it, so title length and whether the first
+  message has been sent never move the transcript underneath. The header area paints its own
+  layer, `bg-sheet-header`, across its full width (including the page form's back row), so it
+  reads apart from the transcript without a line. There is no 32px identity block — that
+  anatomy (avatar + bold line + mono line) is every message's, and made the header read as
+  the first message. The band holds the title, a mono meta line, and a right-hand group;
+  hosts compute what goes in each. Here the meta line is
+  `Agent · project · relative time · machine online/offline`, with separators **between**
+  parts that actually exist — a legacy session with neither status nor activity time must
+  not leave a stray leading `·`. The agent part starts with a 14px `AgentAvatar` (`xs`)
+  carrying the status dot as a corner badge, none when idle (the shared package's
+  `SessionHeaderAgentMark`, used by the detail, the draft and the desktop header); when the agent can't be resolved the part keeps a plain
+  status dot and falls back to the visible status text. A **Stop** button appears only while the turn is actually
   running, and sends the real `runtime.abort`. Project used to be absent here because
   `SessionSummary` carried no project field; the wire added `projectSyncId` and the account
   mirror row carries the server's own `project_sync_id`, so the segment is shown when the
   name resolves and omitted when it doesn't — never guessed.
-- **Transcript** (`min-h-0 flex-1 overflow-y-auto`), `max-w-measure` centred. On mobile,
+- **Transcript** (`min-h-0 flex-1 overflow-y-auto`), `max-w-measure` centred. Its top 18px
+  fades in (`transcript-fade-top`), so text scrolling under the header is not cut in half. On mobile,
   opening a file from transcript content renders a full-screen preview layer (fixed `inset-0`)
   with a back link and file header (name, directory, machine meta), the preview panel, and an
   `aria-modal` dialog role. Opening a file pushes one same-URL history entry with a marker in

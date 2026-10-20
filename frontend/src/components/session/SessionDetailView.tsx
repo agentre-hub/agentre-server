@@ -1698,42 +1698,27 @@ export default function SessionDetailView({
     : true;
 
   /**
-   * 头部与转录共用同一枚头像，走共享包的 AgentAvatar（与桌面端 chat.tsx 同一枚
-   * 记号）。解不出 Agent 时不摆（不画一个没有身份的方块）。转录那一档尺寸套包的
-   * MESSAGE_AVATAR_CLASS 与行排版对齐。
+   * 转录每条消息头上的那枚头像，走共享包的 AgentAvatar（与桌面端 chat.tsx 同一枚
+   * 记号）。解不出 Agent 时不摆（不画一个没有身份的方块），转录本来就按有没有头像
+   * 排版。尺寸套包的 MESSAGE_AVATAR_CLASS 与行排版对齐。头部那一枚是 meta 行里的
+   * 14px 小头像，由 SessionDetailHeader 按同一个 `agent` 自己画。
    *
    * 此前这里是就地手搓的一枚方块，缺的正是包里那条兜底：**没设过颜色**的 Agent
    * （同步载荷里根本没有 avatar_color，桌面端不逼用户选色）拿不到 backgroundColor，
    * 方块透明、白字落在深色底上 —— 看着就是一枚黑方块，而同一个 Agent 在左栏索引
    * 里是蓝的（那边一直走 AgentAvatar，缺色退回 agent-1）。
    */
-  const agentAvatar = (size: "md" | "row") =>
-    agent ? (
-      <AgentAvatar
-        name={agent.name}
-        // 首字母原样取（不大写）：中文名没有大小写，拉丁名这里也与桌面端一致。
-        initials={agent.name.charAt(0)}
-        color={agent.avatar_color}
-        icon={iconNode(agent.avatar_icon)}
-        size="md"
-        className={size === "row" ? MESSAGE_AVATAR_CLASS : undefined}
-      />
-    ) : size === "md" ? (
-      /* 认不出 Agent（账号名单还没回来、或这条老会话上根本没有 agentSyncId）时
-         头部那一格**照样占住**——与桌面端 chat-panel-header 同一条。整格不渲染的
-         话标题会横向跳一格（32px + 12px 间距），同一条对话打开的头一瞬和之后长得
-         不是一个样。转录里的那一档没有这个问题：那里本来就按有没有头像排版。 */
-      <div
-        aria-hidden="true"
-        data-testid="session-detail-avatar"
-        className="size-8 shrink-0 rounded-lg bg-muted"
-      />
-    ) : null;
-
-  // 在 JSX 之外先算好：i18next/no-literal-string 会把 JSX 里的 agentAvatar("md")
-  // 当成一段裸文案报出来。
-  const headerAvatar = agentAvatar("md");
-  const rowAvatar = agentAvatar("row");
+  const rowAvatar = agent ? (
+    <AgentAvatar
+      name={agent.name}
+      // 首字母原样取（不大写）：中文名没有大小写，拉丁名这里也与桌面端一致。
+      initials={agent.name.charAt(0)}
+      color={agent.avatar_color}
+      icon={iconNode(agent.avatar_icon)}
+      size="md"
+      className={MESSAGE_AVATAR_CLASS}
+    />
+  ) : null;
 
   /*
     三带：头部 / 转录 / Composer。
@@ -1759,7 +1744,6 @@ export default function SessionDetailView({
           icon: project.icon,
         }
       }
-      avatar={headerAvatar}
       displayTitle={displayTitle}
       machineName={device?.name}
       machineOnline={machineOnline}

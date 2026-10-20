@@ -10,7 +10,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  iconNode,
   ProjectGlyph,
+  SessionHeaderAgentMark,
   SessionHeaderBand,
   StatusDot,
   Button,
@@ -38,7 +40,7 @@ export interface SessionDetailHeaderProps {
   isPage: boolean;
   /**
    * 移动端整屏（沉浸形态，规格 2026-09-21-server-mobile-gaps 决策 3）：壳的顶栏与底部
-   * tab 都不画，头部合成**一层**——返回 · 两行标题 · 副行「Agent · 项目 · 机器与在线
+   * tab 都不画，头部合成**一层**——返回 · 一行标题 · 副行「Agent · 项目 · 机器与在线
    * · 时间」· 右端控件。只在 `isPage` 时有意义；桌面的整屏形态仍是返回行 + 身份行。
    */
   immersive?: boolean;
@@ -50,8 +52,11 @@ export interface SessionDetailHeaderProps {
    * 派生规则在 SessionDetailView 的 `identity` 那里。
    */
   identity: SessionSummary | null;
-  /** 解出来的 Agent。解不出（老会话、或它已不在账号里）时为 null。 */
-  agent: { name: string } | null;
+  /**
+   * 解出来的 Agent（名字 + 调色板色 + 图标键），meta 行 Agent 那一段的小头像就画它。
+   * 解不出（老会话、或它已不在账号里）时为 null。
+   */
+  agent: SessionHeaderAgent | null;
   /**
    * 名字还在路上（`agent` 为 null，但两条来路里还有没答话的那一条）。派生规则在
    * SessionDetailView 的 `agentPending`。
@@ -67,8 +72,6 @@ export interface SessionDetailHeaderProps {
    * 为 null —— 两种情形这一维都不摆，派生规则在 SessionDetailView 的 `project`。
    */
   project: ProjectGlyphInfo | null;
-  /** 头部那一档头像。在 JSX 之外算好，见 SessionDetailView 的 headerAvatar。 */
-  avatar: ReactNode;
   displayTitle: string;
   machineName: string | undefined;
   machineOnline: boolean | null | undefined;
@@ -92,9 +95,17 @@ export interface SessionDetailHeaderProps {
   originRef: RefObject<string | undefined>;
 }
 
+/** meta 行小头像要的那三样：与账号 Agent 清单（/v1/workspace/agents）同名同形。 */
+export interface SessionHeaderAgent {
+  name: string;
+  avatar_color?: string;
+  /** 图标词表的 key；解成图标那一步走共享包的 `iconNode`。 */
+  avatar_icon?: string;
+}
+
 /**
- * 详情头部：返回行（整屏形态）+ 身份行（头像 / 标题 / mono meta 行）+ 连接指示
- * + 停止。
+ * 详情头部：返回行（整屏形态）+ 身份行（标题 / mono meta 行，Agent 那一段带小头像）
+ * + 连接指示 + 停止。
  *
  * 「这一轮停不停得下来」整片归它：`aborting` 与 `abortTurn` 除了这颗按钮没有第二
  * 个读者。
@@ -182,7 +193,7 @@ export function SessionPageStateShell({
   return (
     <AppShell flush immersive>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-[68px] shrink-0 items-center px-5">
+        <div className="flex h-14 shrink-0 items-center bg-sheet-header px-5">
           <SessionBackLink to={backTo} className="-ml-2" />
         </div>
         {/* 与非 flush 壳的主区同一副内边距与滚动：这几态原本就排在那里面。 */}
@@ -203,7 +214,6 @@ export default function SessionDetailHeader({
   agent,
   agentPending,
   project,
-  avatar,
   displayTitle,
   machineName,
   machineOnline,
@@ -304,19 +314,34 @@ export default function SessionDetailHeader({
         ),
       }
     : null;
-  if (identity?.lifecycleState || agent || running || decisionPending) {
+  /** 这一维说得出来才有状态（老会话可能既没有生命周期、也不在跑）。 */
+  const statusKnown = Boolean(
+    identity?.lifecycleState || running || decisionPending,
+  );
+  const agentStatus = statusKnown ? toAgentStatus(statusNow) : null;
+  if (statusKnown || agent) {
     metaParts.push({
       key: "agent",
       node: (
         <span
           data-testid="session-detail-status"
           className={cn(
-            "inline-flex items-center gap-1",
+            "inline-flex items-center gap-1.5",
             oneRow ? "min-w-0 overflow-hidden" : "shrink-0",
           )}
         >
-          {(identity?.lifecycleState || running || decisionPending) && (
-            <StatusDot status={toAgentStatus(statusNow)} size="xs" />
+          {/* 认得出 Agent：共享包的小头像 + 角上的状态点（与桌面端同一份，空闲不挂点）；
+              认不出：只剩那枚状态点。 */}
+          {agent ? (
+            <SessionHeaderAgentMark
+              name={agent.name}
+              color={agent.avatar_color}
+              icon={iconNode(agent.avatar_icon)}
+              status={agentStatus}
+              badgeTestId="session-detail-status-badge"
+            />
+          ) : (
+            agentStatus && <StatusDot status={agentStatus} size="xs" />
           )}
           {/* 状态不只靠颜色：四个态都有可见文字（session.list.*）。Agent 名**问过之后**
               仍认不出来时（老会话没有 agentSyncId、或它已不在账号里）退回状态文字，
@@ -384,15 +409,16 @@ export default function SessionDetailHeader({
       //
       // 两种形态的外层不同高：整屏形态要在身份行之上再摆一行返回行，所以是
       // 「返回行 + 身份行」两段加一圈内边距；嵌入形态没有返回行，外层就**是**那条
-      // 68px 顶带 —— 此前它照样带着那圈 `py-2.5`，把 68 撑成 89，什么都没多装。
+      // 56px 顶带 —— 不带那圈 `py-2.5`，否则把顶带撑高，什么都没多装。
       //
-      // 沉浸形态只有那一条 68px 的带（返回收进它的 leading 槽），与嵌入形态同高。
+      // 沉浸形态只有那一条 56px 的带（返回收进它的 leading 槽），与嵌入形态同高。
       //
-      // 不画底线、不自涂底色：头部与转录同在一张内容页上，靠留白分开（规格
-      // 2026-10-15「无边框改版」）。
+      // 不画底线（规格 2026-10-15「无边框改版」），但顶带自成一层（2026-10-20）：
+      // 整个头部区域铺 `bg-sheet-header`，含左右内边距与整屏形态的返回行，靠色阶
+      // 与转录分开，不是一条内缩的色带。
       className={cn(
-        "relative flex shrink-0 flex-col px-5",
-        isPage && !oneRow ? "gap-2 py-2.5" : "h-[68px]",
+        "relative flex shrink-0 flex-col bg-sheet-header px-5",
+        isPage && !oneRow ? "gap-2 py-2.5" : "h-14",
       )}
     >
       {isPage && !oneRow && (
@@ -425,8 +451,8 @@ export default function SessionDetailHeader({
       )}
 
       {/*
-        详情头部，与桌面端 chat-panel 的 toolbar 同形：头像 + 两行（标题 / mono
-        meta 行）+ 停止。
+        详情头部，与桌面端 chat-panel 的 toolbar 同形：两行（标题 / mono meta 行，
+        Agent 那一段打头一枚小头像）+ 停止。
 
         此前只有三样：标题、一枚状态胶囊、「机器 · 在线」——打开一条对话看不出是哪个
         Agent 在跑、上一次动是什么时候，也没有办法把跑飞的一轮停下来。
@@ -437,18 +463,17 @@ export default function SessionDetailHeader({
         名字才摆，解不出就整段省略。
       */}
       {/* 身份行整块是共享包的 `SessionHeaderBand` —— 与桌面端 chat-panel-header
-          同一副外壳（规格 2026-08-23 决策 2/3）：高度写死为两行标题的高度、整块
-          垂直居中，标题长短不再改变它；`@container/header` 让 meta 行按**这一带的
-          实际宽度**分档降级，而不是靠 flex-wrap 折行把头部撑高（决策 4）。 */}
+          同一副外壳（规格 2026-08-23 决策 2/3）：56px 写死、标题一行、整块垂直居中，
+          标题长短不再改变它；`@container/header` 让 meta 行按**这一带的实际宽度**
+          分档降级，而不是靠 flex-wrap 折行把头部撑高（决策 4）。 */}
       <SessionHeaderBand
         testId="session-detail-identity"
         metaTestId="session-detail-meta"
         leading={
           oneRow ? <SessionBackLink to={backTo} className="-ml-2" /> : undefined
         }
-        avatar={avatar}
         // 桌面的页面形态标题由 AppShell TopBar 呈现，不在这里重复；沉浸形态没有顶栏，
-        // 标题就在这一层（最多两行）。
+        // 标题就在这一层（一行，全文在 title 上）。
         title={isPage && !oneRow ? undefined : displayTitle}
         meta={metaParts}
         actions={

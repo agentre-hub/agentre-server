@@ -4928,45 +4928,46 @@ describe("会话详情：头部", () => {
 
   /*
     嵌入形态（桌面 Chat 右栏）里这个头部**就是**那一页的顶带：外面没有壳的顶栏
-    托着它了。此前它是 `py-2.5` 外层套一个恒高 68px 的身份行，那圈外层内边距是
-    给面包屑那一行留的，而面包屑只在路由页形态渲染 —— 嵌进 Chat 里时它把 68px
-    撑成 89px，什么都没多装。桌面端同形的 chat-panel-header 一直是平的 68px。
+    托着它了。那圈 `py-2.5` 外层内边距是给面包屑那一行留的，而面包屑只在路由页
+    形态渲染 —— 嵌进 Chat 里时它把顶带撑高，什么都没多装。与桌面端 chat-panel-header
+    同为平的 56px（共享包 SessionHeaderBand，2026-10-20）。
   */
-  it("嵌入形态的头部是平的 68px：没有面包屑就没有那圈外层内边距", async () => {
+  it("嵌入形态的头部是平的 56px：没有面包屑就没有那圈外层内边距", async () => {
     stubHeader();
     renderEmbeddedDetail();
 
     await screen.findByText("跑着呢");
     const head = screen.getByTestId("session-detail-header");
-    expect(head.className).toMatch(/h-\[68px\]/);
+    expect(head.className).toMatch(/(^|\s)h-14(\s|$)/);
+    expect(head.className).not.toMatch(/h-\[68px\]/);
     expect(head.className).not.toMatch(/py-/);
     // 面包屑是路由页形态独有的，嵌入形态本来就不该有。
     expect(within(head).queryByRole("navigation")).toBeNull();
   });
 
   /*
-    无边框改版（规格 2026-10-15）：详情落在内容页上，头部与转录同一张页、之间
-    不画线；头部和整副详情都不再自己涂底色——底色是壳给的那张内容页。
+    无边框改版（规格 2026-10-15）：头部与转录之间不画线。顶带自成一层（2026-10-20）：
+    整个头部区域铺 `bg-sheet-header`（含左右内边距，不是一条内缩的色带），靠色阶而
+    不是线和转录分开；整副详情仍不自涂底色——底色是壳给的那张内容页。
   */
-  it("头部不画线、不自涂底色，整副详情也不自涂底色", async () => {
+  it("头部不画线、整块铺顶带底色，整副详情不自涂底色", async () => {
     stubHeader();
     renderEmbeddedDetail();
 
     await screen.findByText("跑着呢");
     const head = screen.getByTestId("session-detail-header");
     expect(edgeClasses(head)).toEqual([]);
-    expect(head.className).not.toMatch(/(^|\s)bg-/);
+    expect(head.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
     const view = screen.getByTestId("session-detail-view");
     expect(view.className).not.toMatch(/(^|\s)bg-/);
   });
 
   /*
-    身份认不出来时那一格**照样占住**（桌面端 chat-panel-header 的同一条）：
-    `/v1/workspace/agents` 还没回来、或者这条老会话上根本没有 agentSyncId 时，
-    此前这一格整个不渲染，标题于是横向跳一格（32px 头像 + 12px 间距）——同一条
-    对话打开的头一瞬和之后长得不一样。
+    顶带不再有 32px 身份方块（2026-10-20）：那副「方块 + 粗体一行 + 灰字一行」和转录
+    里每条消息一模一样，读起来就是第一条消息。认不出 Agent 时也就没有占位方块要摆，
+    meta 那一格照旧退回状态文字。
   */
-  it("认不出 Agent 时头像那一格仍占住，标题不横向跳一格", async () => {
+  it("认不出 Agent 时顶带里没有占位方块，meta 退回状态文字", async () => {
     // 账号里一个 Agent 都答不出来 → 头部解不出身份。
     stubHeader([]);
     renderEmbeddedDetail();
@@ -4974,22 +4975,79 @@ describe("会话详情：头部", () => {
     await screen.findByText("跑着呢");
     const band = screen.getByTestId("session-detail-identity");
     expect(within(band).queryByRole("img")).toBeNull();
-    const slot = band.querySelector('[data-testid="session-detail-avatar"]');
-    expect(slot).toBeTruthy();
-    expect((slot as HTMLElement).className).toContain("size-8");
+    expect(
+      band.querySelector('[data-testid="session-detail-avatar"]'),
+    ).toBeNull();
+    // 嵌入形态不带 leading：顶带第一格就是标题 + meta 那一列，前面没有任何身份格。
+    expect(
+      band.firstElementChild?.contains(
+        screen.getByTestId("session-detail-meta"),
+      ),
+    ).toBe(true);
+    expect(screen.getByTestId("session-detail-status").textContent).toContain(
+      "Running",
+    );
   });
 
-  it("头部说得出是哪个 Agent 在跑，头像上的是那个 Agent 的调色板色", async () => {
+  it("头部说得出是哪个 Agent 在跑：meta 行 Agent 那一段里一枚 14px、带调色板色的头像", async () => {
     stubHeader();
     renderEmbeddedDetail();
 
     await screen.findByText("跑着呢");
     const head = screen.getByTestId("session-detail-header");
     expect(head.textContent).toContain("后端 Agent");
-    // 头像是可读的 role=img，不是一个只有颜色的方块（头部与转录各一枚，取头部这枚）。
-    const avatar = within(head).getByRole("img", { name: "后端 Agent" });
+    const band = screen.getByTestId("session-detail-identity");
+    // 顶带的直接孩子里不再有身份方块。
+    for (const child of band.children) {
+      expect(child.getAttribute("role")).not.toBe("img");
+    }
+    // 头像是可读的 role=img，住在 meta 行 Agent 那一段里，14px 一档。
+    const agentPart = screen.getByTestId("session-detail-meta-agent");
+    const avatar = within(agentPart).getByRole("img", { name: "后端 Agent" });
+    expect(avatar.className).toContain("size-3.5");
     // token 要落成 CSS 变量再进 backgroundColor —— 直接塞 token 等于没上色。
     expect(avatar.style.backgroundColor).toBe("var(--agent-3)");
+  });
+
+  it("在跑时状态点挂在小头像右下角；空闲时不挂", async () => {
+    stubHeader();
+    const { unmount } = renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const badge = within(
+      screen.getByTestId("session-detail-meta-agent"),
+    ).getByTestId("session-detail-status-badge");
+    expect(badge.getAttribute("aria-label")).toBe("running status");
+    expect(badge.className).toContain("absolute");
+    expect(badge.className).toContain("ring-sheet-header");
+    unmount();
+
+    stubHeader();
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, lifecycleState: "idle" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const agentPart = await screen.findByTestId("session-detail-meta-agent");
+    await within(agentPart).findByRole("img", { name: "后端 Agent" });
+    expect(
+      within(agentPart).queryByTestId("session-detail-status-badge"),
+    ).toBeNull();
+  });
+
+  it("转录那一带上沿渐隐，滚上去的正文不被顶带一刀切开", async () => {
+    stubHeader();
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    expect(screen.getByTestId("session-detail-scroll").className).toContain(
+      "transcript-fade-top",
+    );
   });
 
   /**
@@ -8121,14 +8179,17 @@ describe("会话详情：与桌面端对齐的外壳", () => {
     );
   }
 
-  it("Given 标题长短不定, When 渲染, Then 身份行的高度是写死的两行高，不再随标题伸缩", async () => {
+  it("Given 标题长短不定, When 渲染, Then 身份行的高度写死为 56px、标题只占一行，不再随标题伸缩", async () => {
     stubAligned();
     renderAligned();
 
     await screen.findByText("很长的一段转录");
     const identity = screen.getByTestId("session-detail-identity");
-    expect(identity.className).toMatch(/(^|\s)h-\[68px\](\s|$)/);
+    expect(identity.className).toMatch(/(^|\s)h-14(\s|$)/);
     expect(identity.className).not.toMatch(/min-h-/);
+    expect(within(identity).getByRole("heading").className).toContain(
+      "line-clamp-1",
+    );
   });
 
   it("Given 面板变窄, When 渲染, Then meta 行不折行，机器那一段先被收起", async () => {

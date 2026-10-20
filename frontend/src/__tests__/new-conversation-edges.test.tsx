@@ -1,6 +1,6 @@
 /**
  * 无边框改版：新建对话的各个面板与选择列表不画结构线，选中 / 可点的行落在填充上。
- * 几何（68px 头带等）由 new-conversation.test.tsx 继续断言。
+ * 几何（56px 头带等）由 new-conversation.test.tsx 继续断言。
  */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";

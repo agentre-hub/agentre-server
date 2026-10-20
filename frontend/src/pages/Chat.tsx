@@ -959,19 +959,20 @@ export default function Chat() {
   const mobileTrueEmpty =
     empty && sessionIndex.debouncedSearch === "" && filter === "all";
   /*
-    没选中对话、也不在草稿时右栏自己那条顶带：与左列顶行同高（68px）。
+    没选中对话、也不在草稿时右栏自己那条顶带：与左列顶行同高（56px，与共享包
+    SessionHeaderBand 同一档）。
 
     转录上方此前叠着两条带 —— 壳的 52px 顶栏（一个与侧栏高亮重复的「对话」标题，
     外加语言/主题）和 89px 的详情头部。桌面档因此走壳的 `ownHeader`：顶栏下线，
     选中对话时详情头部**就是**这一栏的顶带，草稿那条带同样是；其余几档由这一条
-    占住同样的 68px，下面的内容因此不随选中与否上下跳。
+    占住同样的 56px，下面的内容因此不随选中与否上下跳。
 
     语言 / 主题不在这里：它们属于外框，壳在 ownHeader 页的侧栏底部摆了那一对
     （规格 2026-10-15「对话页没有顶栏」），内容页的角上不再放第二份。这一条也不画
     底线、不自涂底色——它与下面同在一张内容页上。
   */
   const chromeBand = (
-    <div data-testid="chat-chrome" className="h-[68px] shrink-0" />
+    <div data-testid="chat-chrome" className="h-14 shrink-0" />
   );
 
   /*
@@ -1080,10 +1081,10 @@ export default function Chat() {
       ariaLabel={t("chat.listAria")}
       testId="chat-list-col"
     >
-      {/* 左列顶行与右栏那条顶带同高（68px）。 */}
+      {/* 左列顶行与右栏那条顶带同高（56px）。 */}
       <div
         data-testid="chat-list-head"
-        className="flex h-[68px] shrink-0 items-center gap-1.5 px-2.5"
+        className="flex h-14 shrink-0 items-center gap-1.5 px-2.5"
       >
         {searchFieldSm}
         <Button

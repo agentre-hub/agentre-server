@@ -271,7 +271,7 @@ describe("移动端会话详情：一层头部", () => {
     expect(screen.queryByRole("navigation", { name: "Back" })).toBeNull();
   });
 
-  it("一行里：返回 · 标题（最多两行）· 副行 Agent · 项目 · 机器与在线 · ⋯", async () => {
+  it("一行里：返回 · 标题（一行）· 副行 Agent · 项目 · 机器与在线 · ⋯", async () => {
     mockMobileViewport();
     stubWithIdentity();
     renderPage();
@@ -281,7 +281,11 @@ describe("移动端会话详情：一层头部", () => {
     const title = await within(band).findByRole("heading", {
       name: "重构登录页",
     });
-    expect(title.className).toContain("line-clamp-2");
+    expect(title.className).toContain("line-clamp-1");
+    // 56px 一层，整块铺顶带底色（含左右内边距）。
+    const head = screen.getByTestId("session-detail-header");
+    expect(head.className).toMatch(/(^|\s)h-14(\s|$)/);
+    expect(head.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
     expect(
       within(band).getByRole("button", { name: "More actions" }),
     ).toBeTruthy();
@@ -363,6 +367,11 @@ describe("移动端会话详情：一层头部", () => {
     expect(
       screen.getByRole("link", { name: "Back" }).getAttribute("href"),
     ).toBe("/chat?axis=agent");
+    // 返回那一格与落地后的头部同高同色：认出来之后换成真头部时它不跳。
+    const row = screen.getByRole("link", { name: "Back" })
+      .parentElement as HTMLElement;
+    expect(row.className).toMatch(/(^|\s)h-14(\s|$)/);
+    expect(row.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
   });
 });
 
@@ -500,6 +509,10 @@ describe("桌面端会话详情(非移动)", () => {
     expect(await within(topbar).findByText("重构登录页")).toBeTruthy();
     const row = screen.getByRole("navigation", { name: "Back" });
     expect(await within(row).findByText("书房小主机")).toBeTruthy();
+    // 返回行与身份行同在顶带那一层底色里：不是一条内缩的色带。
+    const head = screen.getByTestId("session-detail-header");
+    expect(head.contains(row)).toBe(true);
+    expect(head.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
   });
 });
 
