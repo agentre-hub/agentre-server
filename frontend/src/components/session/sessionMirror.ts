@@ -49,6 +49,9 @@ export interface MirrorSessionItem {
    */
   provider_key?: string;
   model_key?: string;
+  /** CLI 自带模型选择（空 = 跟随 Agent 绑定；"cli-default" | "fixed"）及其模型 id。 */
+  cli_model_mode?: string;
+  cli_model?: string;
 }
 
 /**
@@ -135,6 +138,8 @@ export function mirrorRowToSummary(row: MirrorSessionItem): SessionSummary {
     latestSeq: 0,
     providerKey: row.provider_key,
     modelKey: row.model_key,
+    cliModelMode: row.cli_model_mode,
+    cliModel: row.cli_model,
   };
 }
 

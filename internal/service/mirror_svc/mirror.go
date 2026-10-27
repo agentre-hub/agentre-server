@@ -887,8 +887,11 @@ func (m *Mirror) saveSummary(ctx context.Context, ts *trackedSession) error {
 		// 会话级 ModelTarget 原样镜像。空是有含义的值（跟随 Agent 绑定），不补默认。
 		ProviderKey: s.ProviderKey,
 		ModelKey:    s.ModelKey,
-		Createtime:  now,
-		Updatetime:  now,
+		// CLI 自带模型选择同样原样镜像；对端重置成空时空串照样写下去。
+		CLIModelMode: s.GetCliModelMode(),
+		CLIModel:     s.GetCliModel(),
+		Createtime:   now,
+		Updatetime:   now,
 	}); err != nil {
 		return fmt.Errorf("upsert mirror summary: %w", err)
 	}

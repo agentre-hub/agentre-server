@@ -246,7 +246,7 @@ func (r *summaryRepo) UpsertSummary(ctx context.Context, s *agent_session_entity
 			"peer_fingerprint",
 			"title", "agent_sync_id", "provider_session_id", "cwd", "project_sync_id",
 			"backend_type", "lifecycle_state", "waiting_for_input", "latest_seq",
-			"last_message_at", "provider_key", "model_key", "updatetime",
+			"last_message_at", "provider_key", "model_key", "cli_model_mode", "cli_model", "updatetime",
 		}),
 	}).Create(s).Error
 }

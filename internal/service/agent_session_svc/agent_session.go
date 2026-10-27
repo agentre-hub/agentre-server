@@ -47,6 +47,9 @@ type SavedSessionSummaryView struct {
 	// 这正是「已保存」承诺的一部分。两者都是不透明稳定 key，不是路径（R19 不受影响）。
 	ProviderKey string
 	ModelKey    string
+	// CLIModelMode / CLIModel 是 CLI 自带模型选择（空 = 跟随 Agent 绑定），镜像自发起端。
+	CLIModelMode string
+	CLIModel     string
 }
 
 // TranscriptQuery 是一次按游标翻转录的入参。UserID 来自调用方鉴权上下文，不由

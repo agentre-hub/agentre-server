@@ -141,10 +141,12 @@ func TestMigrationList_IDsAreUniqueAndStrictlyAscending(t *testing.T) {
 	}
 }
 
-// port_forward_links（端口转发子域前缀表）是这一轮新增的表，必须是清单里的**最后**
-// 一条。
-func TestMigrationList_EndsWithThePortForwardLinksTable(t *testing.T) {
+// agent_sessions 的 CLI 模型选择两列是这一轮新增的补丁迁移，必须是清单里的**最后**
+// 两条（每列一条 ALTER，schema 守卫才逐列看得见）。
+func TestMigrationList_EndsWithTheCLIModelColumns(t *testing.T) {
 	list := migrationList()
 	require.NotEmpty(t, list)
-	assert.Equal(t, "202609210101", list[len(list)-1].ID)
+	require.GreaterOrEqual(t, len(list), 3)
+	assert.Equal(t, "202610270101", list[len(list)-2].ID)
+	assert.Equal(t, "202610270102", list[len(list)-1].ID)
 }

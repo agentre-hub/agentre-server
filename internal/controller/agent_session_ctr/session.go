@@ -34,6 +34,8 @@ func savedSessionItems(views []agent_session_svc.SavedSessionSummaryView) []api.
 			LastReadAt:        it.LastReadAt,
 			ProviderKey:       it.ProviderKey,
 			ModelKey:          it.ModelKey,
+			CLIModelMode:      it.CLIModelMode,
+			CLIModel:          it.CLIModel,
 		})
 	}
 	return items

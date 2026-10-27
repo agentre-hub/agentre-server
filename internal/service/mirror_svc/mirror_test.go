@@ -1096,6 +1096,34 @@ func TestSync_StoresSessionModelTarget(t *testing.T) {
 	assert.Equal(t, "sonnet-4-6", got.ModelKey)
 }
 
+// Given 对端报出 CLI 自带模型选择；When 镜像同步；Then 两格原样落库，并且对端把它
+// 重置成空（改回跟随 Agent 绑定）时，空串也照样写下去，不被当成「没报」。
+func TestSync_StoresSessionCLIModelSelection(t *testing.T) {
+	r := newRig(t)
+	s := runningSession(conv42, "写个爬虫")
+	s.CliModelMode = "fixed"
+	s.CliModel = "claude-opus-4-7"
+	r.relay.sessions = []*agentrewire.SessionSummary{s}
+
+	require.NoError(t, r.mirror.Sync(context.Background(),
+		[]SavedSession{{ConversationID: conv42}}))
+
+	require.NotEmpty(t, r.upserts)
+	got := r.upserts[len(r.upserts)-1]
+	assert.Equal(t, "fixed", got.CLIModelMode)
+	assert.Equal(t, "claude-opus-4-7", got.CLIModel)
+
+	// 重置：对端回报空，镜像随之清空。
+	r.upserts = nil
+	r.relay.sessions = []*agentrewire.SessionSummary{runningSession(conv42, "写个爬虫")}
+	require.NoError(t, r.mirror.Sync(context.Background(),
+		[]SavedSession{{ConversationID: conv42}}))
+	require.NotEmpty(t, r.upserts)
+	got = r.upserts[len(r.upserts)-1]
+	assert.Empty(t, got.CLIModelMode)
+	assert.Empty(t, got.CLIModel)
+}
+
 // 对端没报这两格（跟随 Agent 绑定，或者这台机器太老不认识它们）→ 如实留空。
 // 服务端不替它挑一个默认：那会把「跟随绑定」写成一个具体模型，而用户没有任何
 // 办法发现这一格是编出来的。
