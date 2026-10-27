@@ -192,6 +192,7 @@ export default function Settings() {
           ) : (
             <AgentBackendsPanel
               ports={ports}
+              listCLIModels={ports.listCLIModels}
               refreshSignal={refreshSignal}
               onOpenLlmProviders={() => setSection("providers")}
               renderHeader={renderHeader}
