@@ -120,6 +120,29 @@ describe("listCLIModelsOn", () => {
     expect(relay.request).toHaveBeenCalledTimes(2);
   });
 
+  // 规格「模型列表与解析的获取」：后端配置变化（CLI 路径、环境变量、绑定）使缓存失效。
+  it.each([
+    ["the CLI path", { ...backend }, "/other/codex"],
+    ["the environment", { ...backend, env_json: '{"A":"2"}' }, ""],
+    ["the binding", { ...backend, provider_key: "prov-1" }, ""],
+  ])(
+    "Given a cached catalog, When %s changes, Then the next list asks the CLI again",
+    async (_what, changed, cliPath) => {
+      await listCLIModelsOn("fp-1", backend, { refresh: false }, "");
+      relay.request.mockResolvedValue({ ...wireResponse, models: [] });
+
+      const next = await listCLIModelsOn(
+        "fp-1",
+        changed,
+        { refresh: false },
+        cliPath,
+      );
+
+      expect(relay.request).toHaveBeenCalledTimes(2);
+      expect(next.models).toEqual([]);
+    },
+  );
+
   it("passes relay errors through unchanged and does not cache them", async () => {
     relay.request.mockRejectedValueOnce(new Error("cli exploded"));
     await expect(

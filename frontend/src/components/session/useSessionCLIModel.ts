@@ -234,6 +234,8 @@ export function useSessionCLIModel({
           env_json: backend.env_json ?? "",
           reasoning_effort: backend.reasoning_effort ?? "",
           config: backend.config ?? null,
+          provider_key: backend.provider_key,
+          model_key: backend.model_key,
         },
         { refresh },
         overlay?.cli_path ?? "",

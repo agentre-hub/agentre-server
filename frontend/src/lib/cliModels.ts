@@ -11,6 +11,9 @@ export interface CLIModelsBackend {
   env_json: string;
   reasoning_effort: string;
   config: { defaultPermissionMode?: string } | null;
+  /** 供应商绑定：只参与缓存失效（规格「绑定」变化使缓存失效），不随查询过线。 */
+  provider_key?: string;
+  model_key?: string;
 }
 
 type CLIModelsResponse = {
@@ -26,7 +29,9 @@ type CLIModelsResponse = {
 };
 
 // 仅内存，键 `fingerprint|sync_id`；不落盘。refresh 绕过并覆盖，失败不写入。
-const cache = new Map<string, CliModelCatalog>();
+// 每格同时记下问它时的配置（查询入参 + 绑定）：配置变了就当没命中，与桌面端
+// agent_backend_svc.ListCLIModels 按配置指纹失效同一条。
+const cache = new Map<string, { config: string; catalog: CliModelCatalog }>();
 
 /** 清空目录缓存（测试与账号切换用）。 */
 export function resetCLIModelsCache(): void {
@@ -44,20 +49,29 @@ export async function listCLIModelsOn(
   cliPath: string,
 ): Promise<CliModelCatalog> {
   const key = `${fingerprint}|${backend.sync_id}`;
+  const request = {
+    backendType: backend.type,
+    cliPath,
+    envJson: backend.env_json,
+    defaultPermissionMode: backend.config?.defaultPermissionMode ?? "",
+    reasoningEffort: backend.reasoning_effort,
+  };
+  const config = JSON.stringify([
+    request,
+    backend.provider_key ?? "",
+    backend.model_key ?? "",
+  ]);
   if (!refresh) {
     const hit = cache.get(key);
-    if (hit) return hit;
+    if (hit && hit.config === config) return hit.catalog;
   }
   const response = (await withRelayClient(
     machineTarget(fingerprint),
     async (client) =>
-      (await client.request(rpcMethods.cliModelsList, {
-        backendType: backend.type,
-        cliPath,
-        envJson: backend.env_json,
-        defaultPermissionMode: backend.config?.defaultPermissionMode ?? "",
-        reasoningEffort: backend.reasoning_effort,
-      })) as CLIModelsResponse,
+      (await client.request(
+        rpcMethods.cliModelsList,
+        request,
+      )) as CLIModelsResponse,
   )) as CLIModelsResponse;
   const catalog: CliModelCatalog = {
     models: (response.models ?? []).map((model) => ({
@@ -70,6 +84,6 @@ export async function listCLIModelsOn(
     effectiveValue: response.effectiveValue,
     effectiveModelId: response.effectiveModelId,
   };
-  cache.set(key, catalog);
+  cache.set(key, { config, catalog });
   return catalog;
 }
