@@ -1,10 +1,14 @@
 import {
+  AgentBackendLogo,
+  LlmModelLogo,
   ModelTargetPicker,
   ProviderPillResolution,
   ProviderPillTrigger,
   resolveProviderPillState,
+  type CliModelPickerState,
   type ModelTarget,
   type PickerProvider,
+  type ProviderPillState,
 } from "@agentre-hub/agentre-ui";
 import { useTranslation } from "react-i18next";
 
@@ -18,6 +22,11 @@ const FOLLOW_AGENT: ModelTarget = { providerKey: "", modelKey: "" };
  * 四态的推导住在共享包（`resolveProviderPillState`）：它是 `ProviderPillTrigger`
  * 那两格的入参算法，本站与桌面端此前各算一份，已经漂成两套失效判定与两种模型脸。
  * 这里只负责把宿主手上的东西喂进去：目录来自账号侧 REST，绑定值来自 Agent 后端行。
+ *
+ * CLI 自带模型段（规格 2026-10-26）由 `useSessionCLIModel` 算好递进来：段本身、
+ * 段出现时 pill 的脸、「跟随 Agent 绑定」那一项的解析。接法与桌面端
+ * `provider-pill.tsx` 逐项相同——那一项的首图标是解析模型的品牌标识，解析不出时
+ * 退到后端标识。
  */
 export default function SessionModelControl({
   backendType,
@@ -27,6 +36,10 @@ export default function SessionModelControl({
   target,
   onChange,
   note,
+  cliModels,
+  cliPillState,
+  cliBound,
+  deviceLabel,
 }: {
   backendType: string;
   catalog: PickerProvider[];
@@ -37,6 +50,14 @@ export default function SessionModelControl({
   onChange: (next: ModelTarget) => void;
   /** 旁边那一行如实说明（另一台没跟上 / 写失败）。 */
   note?: string | null;
+  /** CLI 自带模型段；不出现（后端绑了供应商 / 不是 CLI 类型）时不传。 */
+  cliModels?: CliModelPickerState;
+  /** CLI 段出现且会话没钉供应商目标时 pill 的脸；不传就按供应商目标推导。 */
+  cliPillState?: ProviderPillState;
+  /** 「跟随 Agent 绑定」那一项的 CLI 解析：`<CLI 名> · <模型>` 与模型 ID。 */
+  cliBound?: { resolutionLabel: string; modelId: string };
+  /** 承载机的人读名：CLI 段的列表来自那台机器，弹层顶部说明在哪执行。 */
+  deviceLabel?: string;
 }) {
   const { t } = useTranslation();
   const bound = { boundProviderKey, boundModelKey, catalog };
@@ -44,13 +65,32 @@ export default function SessionModelControl({
     ...bound,
     target: FOLLOW_AGENT,
   });
-  const pillState = resolveProviderPillState({ ...bound, target });
+  const pillState =
+    cliPillState ?? resolveProviderPillState({ ...bound, target });
 
   return (
     <div className="flex min-w-0 items-center gap-1">
       <ModelTargetPicker
         scenario="chat"
         backendType={backendType}
+        cliModels={cliModels}
+        deviceLabel={cliModels ? deviceLabel : undefined}
+        specialIcon={
+          cliModels ? (
+            cliBound?.modelId ? (
+              <LlmModelLogo
+                providerType=""
+                model={cliBound.modelId}
+                className="size-3.5"
+              />
+            ) : (
+              <AgentBackendLogo
+                backendType={backendType}
+                className="size-3.5"
+              />
+            )
+          ) : undefined
+        }
         selected={target}
         onChange={onChange}
         catalog={catalog}
@@ -61,6 +101,7 @@ export default function SessionModelControl({
             boundProviderLabel={boundState.providerLabel}
             boundModelLabel={boundState.modelLabel}
             boundCliLogin={boundState.cliLogin}
+            fallbackLabel={cliModels ? cliBound?.resolutionLabel : undefined}
           />
         }
         triggerLabel={<ProviderPillTrigger state={pillState} />}

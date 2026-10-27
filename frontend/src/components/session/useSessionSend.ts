@@ -167,6 +167,12 @@ export interface SessionSendParams {
   turn: TurnActivity;
   /** 这条对话钉的模型（用户这一次选的优先，否则落库那一份）。 */
   effectiveTarget: ModelTarget;
+  /**
+   * 这条对话此刻的 CLI 自带模型选择（mode 空 = 跟随 Agent 绑定）。每一轮都随
+   * runtime.run 过线：agentred 按每一轮的请求取模型，不带就退回后端绑定值；桌面端
+   * 承载已有会话时不认这两格，带上无害。
+   */
+  cliModel?: { mode: string; value: string };
   effectivePermissionMode: string;
   /** 「钉住的 agentred 不可用」是会话级状态，归详情视图；这里只在发送时翻它。 */
   setPinnedAgentredUnavailable: Dispatch<SetStateAction<boolean>>;
@@ -238,6 +244,7 @@ export function useSessionSend({
   originRef,
   turn,
   effectiveTarget,
+  cliModel,
   effectivePermissionMode,
   setPinnedAgentredUnavailable,
   steerQueue,
@@ -300,6 +307,10 @@ export function useSessionSend({
       ...(userBlocks ? { userBlocks } : {}),
       permissionMode: effectivePermissionMode,
       ...(llmProviderKey ? { llmProviderKey, llmModelKey } : {}),
+      // 空 mode 就是 proto3 的缺省值，省略与写空串在线上同义；省略只是不改既有请求形。
+      ...(cliModel?.mode
+        ? { cliModelMode: cliModel.mode, cliModel: cliModel.value }
+        : {}),
       sourceDevice: relayTicket?.peerFingerprint,
       sourceDeviceName: browserDisplayName(),
       backend: { type: summary?.backendType },

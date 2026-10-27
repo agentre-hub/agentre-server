@@ -65,6 +65,7 @@ import {
 } from "@/components/session/sessionModel";
 import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
+import { disconnected } from "@/lib/relayClient";
 import {
   decodePermissionModeMeta,
   decodeReasoningEffortSupport,
@@ -82,9 +83,14 @@ import {
   mirrorRowToSummary,
   fetchMirrorRow,
   type MirrorSessionItem,
+  writeCLIModelToOrigin,
   writeModelTargetToOrigin,
   writeReasoningEffortToOrigin,
 } from "@/components/session/sessionMirror";
+import {
+  useSessionCLIModel,
+  type SessionCLIModelValue,
+} from "@/components/session/useSessionCLIModel";
 import { useLiveTurnTiming } from "@/components/session/useLiveTurnTiming";
 import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
 import {
@@ -1374,6 +1380,43 @@ export default function SessionDetailView({
     steerQueue.clearDropped();
   }, [steerQueue]);
 
+  /** 这条会话上一次真的用过的模型（见 sessionModel）。一轮都没跑完时是空串。 */
+  const lastUsedModel = lastUsedModelId(messages);
+
+  /**
+   * 模型 pill 的 CLI 自带模型段（规格 2026-10-26）。列表问的是**承载这条会话的
+   * 机器**；写入走 persistCLIModel 的两处写；与供应商目标互斥——这边选成了就把本地
+   * 的供应商目标清回跟随（承载机那边已经一并清了）。
+   *
+   * 落库那一份逐格「实况优先、空了退到镜像」（与 projectSyncId 同一取法）：共享 wire
+   * 包的 `sessionListFromProtobuf` 此刻不把 cli_model_mode / cli_model 解进中继摘要，
+   * 只有账号镜像那一行带着它们。
+   */
+  const persistedCLIModel =
+    summary?.cliModelMode !== undefined ? summary : mirrorSummary;
+  const cli = useSessionCLIModel({
+    backend: engineBackend,
+    backendType: identity?.backendType ?? "",
+    carrierFp: device?.fingerprint,
+    carrierOnline: machineOnline !== false,
+    persisted: {
+      mode: persistedCLIModel?.cliModelMode,
+      value: persistedCLIModel?.cliModel,
+    },
+    conversationId: sid,
+    providerPinned: effectiveTarget.providerKey !== "",
+    actualModelId: lastUsedModel,
+    turnActive: turn.turnActive,
+    persist: (next) => persistCLIModel(next),
+    carrier: device,
+    clientRef,
+    originRef,
+    onChosen: () => {
+      if (effectiveTarget.providerKey !== "")
+        setModelTarget({ providerKey: "", modelKey: "" });
+    },
+  });
+
   /**
    * 发送那一族（选路、`/compact` 的分叉、重连排队、没发出去的字）整片归
    * useSessionSend。它排在这里而不是上面：run 的参数要 `effectiveTarget` 与
@@ -1390,6 +1433,7 @@ export default function SessionDetailView({
     originRef,
     turn,
     effectiveTarget,
+    cliModel: effectiveTarget.providerKey ? undefined : cli.choice,
     effectivePermissionMode,
     setPinnedAgentredUnavailable,
     steerQueue,
@@ -1504,10 +1548,53 @@ export default function SessionDetailView({
         // 至少写成了一台，这次选择就生效了 —— 与「只成一台仍算成功」同一判据。本站
         // 选择器不分执行位置（空串）。
         recordRecentTarget("chat", "", next);
+        // 两套选择互斥：承载机在 setModelTarget 里已经清掉了 CLI 那一格，本地跟上。
+        cli.clear();
         setModelTargetNote(
           partial ? t("session.composerControls.modelPartiallySynced") : null,
         );
       },
+    });
+  }
+
+  /**
+   * 选模型 pill 上的一项。「跟随 Agent 绑定」在 CLI 段已有选择时是**回到跟随**那一次
+   * CLI 写入（与桌面端 use-provider-pill 同一条）；其余照旧是供应商目标。
+   */
+  function changeModel(next: ModelTarget) {
+    if (!next.providerKey && !effectiveTarget.providerKey && cli.choice.mode) {
+      void cli.choose(undefined);
+      return;
+    }
+    changeModelTarget(next);
+  }
+
+  /**
+   * 写这条会话的 CLI 自带模型选择：承载机 + 发起端两处写（见 writeSessionSetting）。
+   * 两处都没写成时抛出原因，由 useSessionCLIModel 显示在弹层底部、选择不变；选择
+   * 本来就是写成之后才落，所以这里没有要回滚的东西。
+   */
+  function persistCLIModel(next: SessionCLIModelValue): Promise<void> {
+    if (!clientRef.current) return Promise.reject(disconnected());
+    const params = { conversationId: sid, mode: next.mode, value: next.value };
+    setModelTargetNote(null);
+    return new Promise((resolve, reject) => {
+      writeSessionSetting({
+        writeCarrier: (c, peer) =>
+          c.request(rpcMethods.setSessionCLIModel, {
+            ...params,
+            ...(peer ? { peerFingerprint: peer } : {}),
+          }),
+        writeOrigin: (origin) => writeCLIModelToOrigin(origin, params),
+        rollback: () => {},
+        onFailure: (reason) => reject(new Error(reason)),
+        onSuccess: (partial) => {
+          setModelTargetNote(
+            partial ? t("session.composerControls.modelPartiallySynced") : null,
+          );
+          resolve();
+        },
+      });
     });
   }
 
@@ -1576,8 +1663,6 @@ export default function SessionDetailView({
     catalog: pickerCatalog,
     target: effectiveTarget,
   });
-  /** 这条会话上一次真的用过的模型（见 sessionModel）。一轮都没跑完时是空串。 */
-  const lastUsedModel = lastUsedModelId(messages);
   const pinnedModel = modelPill.mode === "invalid" ? "" : modelPill.modelId;
   const fallbackModel = pinnedModel || lastUsedModel;
   /**
@@ -1623,8 +1708,15 @@ export default function SessionDetailView({
       boundProviderKey={engineBackend?.provider_key}
       boundModelKey={engineBackend?.model_key}
       target={effectiveTarget}
-      onChange={changeModelTarget}
+      onChange={changeModel}
       note={modelTargetNote}
+      cliModels={cli.cliModels}
+      cliPillState={effectiveTarget.providerKey ? undefined : cli.pillState}
+      cliBound={{
+        resolutionLabel: cli.boundResolutionLabel,
+        modelId: cli.boundModelId,
+      }}
+      deviceLabel={device?.name}
     />
   ) : null;
 
