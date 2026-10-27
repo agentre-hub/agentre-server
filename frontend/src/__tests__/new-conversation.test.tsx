@@ -2393,6 +2393,24 @@ describe("草稿页的 CLI 自带模型", () => {
     expect(input.cliModel?.mode ?? "").toBe("");
   });
 
+  // 「跟随 Agent 绑定」那一项在 CLI 段出现时走的是供应商目标的 onChange（两格皆空），
+  // 它同样是「回到跟随」——不能只清供应商目标而把上一次挑的 CLI 模型留着带过线。
+  it("Given 挑了 CLI 模型后又选回跟随 Agent 绑定, When 发出第一句, Then 不交出 CLI 选择", async () => {
+    const pill = await openPill();
+    fireEvent.click(pill);
+    fireEvent.click(await screen.findByRole("option", { name: /CLI Opus/ }));
+    await waitFor(() => expect(pill.textContent).toContain("CLI Opus"));
+    fireEvent.click(pill);
+    fireEvent.click(
+      await screen.findByRole("option", { name: /Follow agent binding/ }),
+    );
+    await waitFor(() => expect(pill.textContent).not.toContain("CLI Opus"));
+
+    const input = await send();
+    expect(input.cliModel?.mode ?? "").toBe("");
+    expect(input.modelTarget?.providerKey ?? "").toBe("");
+  });
+
   it("Given Agent 绑着供应商, When 发出第一句, Then 不交出 CLI 选择", async () => {
     stubReads({
       "/v1/engine/backends": {

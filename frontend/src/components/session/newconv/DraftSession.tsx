@@ -311,9 +311,11 @@ export function DraftSession({
     onChosen: () => setModelTarget(null),
   });
 
+  // 这条 onChange 只来自两处：挑了供应商目标（与 CLI 选择互斥），或者「跟随 Agent
+  // 绑定」那一项（两格皆空 = 回到跟随）。两者都意味着 CLI 段不再有选择。
   function changeModelTarget(next: ModelTarget) {
     setModelTarget(next);
-    if (next.providerKey !== "") cli.clear();
+    cli.clear();
   }
 
   const projectName = useMemo(

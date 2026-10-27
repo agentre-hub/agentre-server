@@ -10,7 +10,7 @@ import type {
 } from "@agentre-hub/agentre-ui";
 
 import { api } from "@/lib/api";
-import { listCLIModelsOn } from "@/lib/cliModels";
+import { cliOverlayPath, listCLIModelsOn } from "@/lib/cliModels";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
@@ -1249,16 +1249,11 @@ export function createBrowserEngineSettingsPorts(
         (await fetchBackends()).find((item) => item.sync_id === key);
       if (!backend) throw new Error(messages.deviceUnknownReason);
       const device = await executionDevice(backend.device_fingerprint ?? "");
-      const overlay = (await fetchCLIOverlays()).find(
-        (item) =>
-          item.backend_sync_id === backend.sync_id &&
-          item.fingerprint === device.fingerprint,
-      );
       return listCLIModelsOn(
         device.fingerprint,
         backend,
         { refresh },
-        overlay?.cli_path ?? "",
+        await cliOverlayPath(device.fingerprint, backend.sync_id),
       );
     },
 

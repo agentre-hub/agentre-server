@@ -302,6 +302,25 @@ func TestSessionIndex_RowsCarryProjectAttributionWithoutCwd(t *testing.T) {
 	assert.Equal(t, "proj-1", page.Items[0].ProjectSyncID)
 }
 
+// Given 镜像行带着 CLI 自带模型选择；When 读索引；Then 两格原样进 View——网页详情页
+// 重开一条对话时，落库的那次选择只能从这里读回来。
+func TestSessionIndex_RowsCarryCLIModelSelection(t *testing.T) {
+	ctx, mSummary, _, mObj, svc := setupMirrorReadTest(t)
+
+	mObj.EXPECT().ListByKinds(ctx, int64(7), projectAffinityKinds).Return(nil, nil).AnyTimes()
+	mSummary.EXPECT().CountSummaries(ctx, gomock.Any()).Return(int64(1), nil)
+	mSummary.EXPECT().ListSummariesPage(ctx, gomock.Any()).Return([]*agent_session_entity.SessionSummary{
+		{PeerFingerprint: "fp-a", MachineFingerprint: "fp-a", Title: "t",
+			CLIModelMode: "fixed", CLIModel: "claude-opus-4-7"},
+	}, nil)
+
+	page, err := svc.SessionIndex(ctx, SessionIndexQuery{UserID: 7, Axis: AxisTime, Scope: "time"})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, "fixed", page.Items[0].CLIModelMode)
+	assert.Equal(t, "claude-opus-4-7", page.Items[0].CLIModel)
+}
+
 // 一次索引读取只查一遍项目位置表。轴骨架把一次请求摊成「每组各取几条」，而每组的
 // 每一行都要判项目归属——这份名单在一次请求里不会变，逐组各查一遍等于把同一份数据
 // 查上几十遍（账号里有几十台机器 / 几十个项目时就是几十次），也与 projectLocations

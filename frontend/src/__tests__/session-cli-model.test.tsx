@@ -90,6 +90,8 @@ interface Scenario {
   running?: boolean;
   setSessionCLIModel?: () => unknown;
   runtimeSetCLIModel?: () => unknown;
+  /** 账号侧读不出这条后端在承载机上的 CLI 路径覆盖。 */
+  overlaysFail?: boolean;
 }
 
 function wire(s: Scenario = {}) {
@@ -149,7 +151,8 @@ function wire(s: Scenario = {}) {
           },
         ],
       };
-    if (path === "/v1/engine/cli-overlays")
+    if (path === "/v1/engine/cli-overlays") {
+      if (s.overlaysFail) throw new Error("overlays unavailable");
       return {
         overlays: [
           {
@@ -159,6 +162,7 @@ function wire(s: Scenario = {}) {
           },
         ],
       };
+    }
     if (path === "/v1/engine/providers")
       return {
         providers: [
@@ -345,6 +349,19 @@ describe("会话模型 pill · CLI 自带模型的脸", () => {
 
     await awaitFace("CLI Opus");
     expect(screen.getByTestId("provider-pill-dynamic-icon")).toBeTruthy();
+  });
+
+  // 路径覆盖读不出来时不能当作「没配」：那样问到的是承载机 PATH 上随便哪一个 CLI，
+  // 列出来的未必是这条后端真正会跑的那一个（桌面端 ListCLIModels 同样把这一步的错误
+  // 原样交回）。
+  it("Given 读不出承载机上的 CLI 路径覆盖 When 打开弹层 Then 不按空路径去问目录，弹层如实写读取失败", async () => {
+    wire({ overlaysFail: true });
+    renderPage();
+
+    await waitFor(() => expect(pill()).toBeTruthy());
+    fireEvent.click(pill());
+    expect(await screen.findByText(/overlays unavailable/)).toBeTruthy();
+    expect(mockListCLIModels).not.toHaveBeenCalled();
   });
 
   it("Given 后端绑了 Agentre 供应商 When 打开弹层 Then 没有 CLI 段、也不去问 CLI 目录", async () => {
@@ -539,6 +556,26 @@ describe("会话模型 pill · 与供应商目标互斥、随下一轮过线", (
     });
     expect(run.cliModelMode ?? "").toBe("");
     expect(run.cliModel ?? "").toBe("");
+  });
+
+  it("Given 会话固定了 CLI 模型 When 选回跟随 Agent 绑定 Then 写的是清空的 CLI 选择、不碰供应商目标，下一轮不再带它", async () => {
+    wire({ carrierKind: "desktop", cliModelMode: "fixed", cliModel: "opus" });
+    renderPage();
+    await awaitFace("CLI Opus");
+
+    await pickOption(/Follow agent binding/);
+
+    await awaitFace("Follow agent binding · CLI Sonnet");
+    expect(calls(rpcMethods.setSessionCLIModel)[0]?.[1]).toMatchObject({
+      conversationId: "42",
+      mode: "",
+      value: "",
+    });
+    expect(calls(rpcMethods.setModelTarget)).toHaveLength(0);
+    await sendInComposer("回到跟随");
+    await waitFor(() => expect(calls(rpcMethods.runtimeRun)).toHaveLength(1));
+    const run = calls(rpcMethods.runtimeRun)[0]?.[1] as Record<string, unknown>;
+    expect(run.cliModelMode ?? "").toBe("");
   });
 
   it("Given 选了一个 CLI 模型 When 发下一条 Then runtime.run 带着这次的选择", async () => {

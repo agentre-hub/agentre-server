@@ -163,6 +163,7 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 				Title:       "调试登录页",
 				AgentSyncID: "agent-1", ProjectSyncID: "proj-1", BackendType: "claude_code",
 				LifecycleState: "waiting_for_input", WaitingForInput: true, LastMessageAt: 12345,
+				CLIModelMode: "fixed", CLIModel: "claude-opus-4-7",
 			}},
 		}},
 	}}
@@ -190,6 +191,8 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 				LifecycleState    string `json:"lifecycle_state"`
 				WaitingForInput   bool   `json:"waiting_for_input"`
 				LastMessageAt     int64  `json:"last_message_at"`
+				CLIModelMode      string `json:"cli_model_mode"`
+				CLIModel          string `json:"cli_model"`
 			} `json:"items"`
 		} `json:"groups"`
 	}
@@ -213,6 +216,9 @@ func TestSavedSessions_GroupSkeletonCarriesTotalsAndIdentity(t *testing.T) {
 	assert.Equal(t, "waiting_for_input", item.LifecycleState)
 	assert.True(t, item.WaitingForInput)
 	assert.EqualValues(t, 12345, item.LastMessageAt)
+	// 网页详情页落库的 CLI 自带模型选择只从这一行读得到（键名是前后端契约）。
+	assert.Equal(t, "fixed", item.CLIModelMode)
+	assert.Equal(t, "claude-opus-4-7", item.CLIModel)
 	assert.EqualValues(t, 7, stub.indexInput.UserID)
 	assert.Equal(t, agent_session_svc.AxisAgent, stub.indexInput.Axis)
 }

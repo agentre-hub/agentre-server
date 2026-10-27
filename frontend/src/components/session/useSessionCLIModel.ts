@@ -24,8 +24,7 @@ import {
 import { useTranslation } from "react-i18next";
 
 import type { SessionCarrier } from "@/components/session/useSteerAutoContinue";
-import { api } from "@/lib/api";
-import { listCLIModelsOn } from "@/lib/cliModels";
+import { cliOverlayPath, listCLIModelsOn } from "@/lib/cliModels";
 import type { EngineBackend } from "@/lib/engineCatalog";
 import { RelayError, type RelayClient } from "@/lib/relayClient";
 
@@ -214,18 +213,8 @@ export function useSessionCLIModel({
       if (!backend) return { models: [] };
       if (!carrierOnline)
         throw new Error(t("session.composerControls.cliModelsCarrierOffline"));
-      // 可执行文件路径是 per-device 覆盖：取承载机那一份，取不到就让 CLI 按 PATH 找。
-      const overlays = await api<{
-        overlays?: {
-          backend_sync_id: string;
-          fingerprint: string;
-          cli_path: string;
-        }[];
-      }>("/v1/engine/cli-overlays").catch(() => ({ overlays: [] }));
-      const overlay = (overlays.overlays ?? []).find(
-        (o) =>
-          o.backend_sync_id === backend.sync_id && o.fingerprint === carrierFp,
-      );
+      // 可执行文件路径是 per-device 覆盖：取承载机那一份（没配 = 空，按 PATH 找）。
+      const cliPath = await cliOverlayPath(carrierFp, backend.sync_id);
       return listCLIModelsOn(
         carrierFp,
         {
@@ -238,7 +227,7 @@ export function useSessionCLIModel({
           model_key: backend.model_key,
         },
         { refresh },
-        overlay?.cli_path ?? "",
+        cliPath,
       );
     },
     [backend, backendType, carrierFp, carrierOnline, t],

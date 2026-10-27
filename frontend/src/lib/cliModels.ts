@@ -1,6 +1,7 @@
 import type { CliModelCatalog } from "@agentre-hub/agentre-ui";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 
+import { api } from "@/lib/api";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
 
@@ -33,9 +34,31 @@ type CLIModelsResponse = {
 // agent_backend_svc.ListCLIModels 按配置指纹失效同一条。
 const cache = new Map<string, { config: string; catalog: CliModelCatalog }>();
 
-/** 清空目录缓存（测试与账号切换用）。 */
+/** 清空目录缓存（测试用）。 */
 export function resetCLIModelsCache(): void {
   cache.clear();
+}
+
+/**
+ * 这条后端在 `fingerprint` 那台设备上配过的 CLI 可执行文件路径（per-device 覆盖）；
+ * 没配就是空串，由 CLI 按 PATH 找。读不出来时**原样抛出**：把「读失败」当成「没配」
+ * 会让目录问到 PATH 上随便哪一个 CLI，与桌面端 agent_backend_svc.ListCLIModels 同一条。
+ */
+export async function cliOverlayPath(
+  fingerprint: string,
+  backendSyncId: string,
+): Promise<string> {
+  const response = await api<{
+    overlays?: {
+      backend_sync_id: string;
+      fingerprint: string;
+      cli_path: string;
+    }[];
+  }>("/v1/engine/cli-overlays");
+  const overlay = (response.overlays ?? []).find(
+    (o) => o.backend_sync_id === backendSyncId && o.fingerprint === fingerprint,
+  );
+  return overlay?.cli_path ?? "";
 }
 
 /**
