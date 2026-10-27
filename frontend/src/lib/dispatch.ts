@@ -197,6 +197,14 @@ export interface DispatchInput {
    */
   modelTarget?: { providerKey: string; modelKey: string };
   /**
+   * 这条对话选定的 CLI 自带模型（规格 2026-10-26），与 `cli_model_mode` / `cli_model`
+   * 两列逐字同义。`mode` 空 = 跟随 Agent 绑定：既不带过线也不去钉（硬不变量 2）。
+   *
+   * 与供应商目标互斥：执行端拒收两者并存的 run，所以给了供应商目标就只带供应商
+   * 目标 —— 这条互斥归派发这一处边界，不留给每个调用方各自记得。
+   */
+  cliModel?: { mode: string; value: string };
+  /**
    * 这条对话选定的思考力度（六档，空 = 跟随后端配置）。空时既不带过线也不去钉:
    * 带一个空值等于浏览器在主张「这条会话显式选了默认档」，执行端据此会把后端配置
    * 整个丢掉（规格 2026-09-01 硬不变量 6）。
@@ -239,6 +247,10 @@ export async function dispatchNewConversation(
       ? input.modelTarget
       : null;
   const pinEffort = input.reasoningEffort?.trim() || "";
+  const pinCLIModel =
+    !pinTarget && input.cliModel && input.cliModel.mode !== ""
+      ? input.cliModel
+      : null;
   // 交出去与送过线的是同一个值，不是各算一次：`RunParams.title` 在生成的类型上是
   // 可选的，取回来会是 `string | undefined`。
   const title = deriveTitle(input.message);
@@ -280,6 +292,10 @@ export async function dispatchNewConversation(
           llmProviderKey: pinTarget.providerKey,
           llmModelKey: pinTarget.modelKey,
         }
+      : {}),
+    // CLI 自带模型与供应商目标互斥（见 DispatchInput.cliModel），空 mode 不主张。
+    ...(pinCLIModel
+      ? { cliModelMode: pinCLIModel.mode, cliModel: pinCLIModel.value }
       : {}),
     // 力度是**单列**过线的（RunParams.reasoningEffort），不是塞在 backend 负载里:
     // 浏览器发的是空壳 backend，塞进去那条路上恒为空。
@@ -414,7 +430,9 @@ export async function dispatchNewConversation(
       peerFingerprint: input.sourceClient.peerFingerprint,
       modelPinned: pinTarget
         ? await pinModelTarget(client, ack.conversationId, pinTarget)
-        : true,
+        : pinCLIModel
+          ? await pinCLIModelChoice(client, ack.conversationId, pinCLIModel)
+          : true,
       reasoningEffortPinned,
       savedToAccount,
     };
@@ -450,6 +468,29 @@ async function pinModelTarget(
       conversationId,
       providerKey: target.providerKey,
       modelKey: target.modelKey,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把这条对话选的 CLI 自带模型钉在它自己身上。理由与 pinModelTarget 逐字同构:
+ * run 上的 cliModelMode / cliModel 只管首轮，会话行那两列只有
+ * `setSessionCLIModel` 一条写路；写不上不抛错，交回 false 让界面说
+ * （第一轮仍按所选模型跑了，后续轮次回到跟随 Agent 绑定）。
+ */
+async function pinCLIModelChoice(
+  client: RelayClient,
+  conversationId: string,
+  choice: { mode: string; value: string },
+): Promise<boolean> {
+  try {
+    await client.request(rpcMethods.setSessionCLIModel, {
+      conversationId,
+      mode: choice.mode,
+      value: choice.value,
     });
     return true;
   } catch {
