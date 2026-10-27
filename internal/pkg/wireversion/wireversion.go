@@ -34,4 +34,7 @@ var Protocol = protocolversion.Protocol()
 //
 // 0.4.0：规格 2026-09-22-agrctl-resource-management 新增 relay 方法 toolApproval.answer
 // （控制台答工具审批，决策 13），方法集变了，floor 随 pkg/wire 的 pin 一起抬。
-const MinSupported = "0.4.0"
+//
+// 0.6.0：规格 2026-10-26-cli-native-model-switch 新增 CLI 自带模型的列表 / 生效查询 /
+// 切换调用，方法集变了，floor 随 pkg/wire 的 pin 一起抬。
+const MinSupported = "0.6.0"
