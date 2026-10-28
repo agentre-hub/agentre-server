@@ -542,6 +542,93 @@ describe("会话模型 pill · 切换写到哪", () => {
     expect(calls(rpcMethods.runtimeSetCLIModel)).toHaveLength(0);
   });
 
+  // 规格硬不变量 3：脸写的是 CLI 实际在用 / 下一轮实际会用的那个。web 手里那份「上一轮
+  // 报的模型」是历史，不是 CLI 此刻的模型：固定了别的模型之后刷新页面，它不得顶掉选择。
+  it("Given 空闲时换成固定 sonnet、上一轮报的还是 opus When 刷新页面 Then 脸写 sonnet", async () => {
+    wire({ carrierKind: "desktop", cliModelMode: "fixed", cliModel: "sonnet" });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮" },
+        seq: 1,
+      });
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 2,
+        model: "claude-opus-4-7",
+      } as never);
+    });
+    renderPage();
+
+    await screen.findByText("上一轮");
+    await awaitFace("CLI Sonnet");
+    expect(pill().textContent).not.toContain("CLI Opus");
+  });
+
+  it("Given 刷新时一轮已在跑、本页没选过 When 打开 Then 脸写落库的固定模型，不是挂起态", async () => {
+    wire({
+      carrierKind: "agentred",
+      running: true,
+      cliModelMode: "fixed",
+      cliModel: "opus",
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮" },
+        seq: 1,
+      });
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 2,
+        model: "claude-sonnet-4-6",
+      } as never);
+    });
+    renderPage();
+    await screen.findByText("上一轮");
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-stop")).toBeTruthy(),
+    );
+
+    await awaitFace("CLI Opus");
+    expect(pill().textContent).not.toContain("→");
+  });
+
+  // 挂起脸的「当前」那一半 = 正在跑的这一轮开跑时生效的那个选择，不是更早一轮报的模型。
+  it("Given 空闲时从 sonnet 换成 opus 并开了下一轮 When 这一轮里再选 sonnet Then 脸写「CLI Opus → CLI Sonnet」", async () => {
+    wire({
+      carrierKind: "agentred",
+      cliModelMode: "fixed",
+      cliModel: "sonnet",
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮" },
+        seq: 1,
+      });
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 2,
+        model: "claude-sonnet-4-6",
+      } as never);
+    });
+    renderPage();
+    await screen.findByText("上一轮");
+    await awaitFace("CLI Sonnet");
+
+    await pickOption(/CLI Opus/);
+    await awaitFace("CLI Opus");
+    await sendInComposer("用 opus 跑这一轮");
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-stop")).toBeTruthy(),
+    );
+
+    await pickOption(/^CLI Sonnet/);
+
+    await awaitFace("CLI Opus → CLI Sonnet");
+  });
+
   it("Given 选择没变 When 再点同一项 Then 什么都不写", async () => {
     wire({ carrierKind: "agentred", cliModelMode: "fixed", cliModel: "opus" });
     renderPage();
