@@ -1388,12 +1388,10 @@ export default function SessionDetailView({
    * 机器**；写入走 persistCLIModel 的两处写；与供应商目标互斥——这边选成了就把本地
    * 的供应商目标清回跟随（承载机那边已经一并清了）。
    *
-   * 落库那一份逐格「实况优先、空了退到镜像」（与 projectSyncId 同一取法）：共享 wire
-   * 包的 `sessionListFromProtobuf` 此刻不把 cli_model_mode / cli_model 解进中继摘要，
-   * 只有账号镜像那一行带着它们。
+   * 落库那一份整条以承载机实况为准，承载机不在线时才退到账号镜像：实况里空着就是
+   * 「跟随 Agent 绑定」，不能再逐格退到可能还没跟上的镜像。
    */
-  const persistedCLIModel =
-    summary?.cliModelMode !== undefined ? summary : mirrorSummary;
+  const persistedCLIModel = summary ?? mirrorSummary;
   const cli = useSessionCLIModel({
     backend: engineBackend,
     backendType: identity?.backendType ?? "",

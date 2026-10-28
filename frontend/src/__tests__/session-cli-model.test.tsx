@@ -92,6 +92,8 @@ interface Scenario {
   runtimeSetCLIModel?: () => unknown;
   /** 账号侧读不出这条后端在承载机上的 CLI 路径覆盖。 */
   overlaysFail?: boolean;
+  /** 账号镜像那一行与承载机实况不一致时（镜像还没跟上）单独给镜像的 CLI 选择。 */
+  mirror?: { cliModelMode?: string; cliModel?: string };
 }
 
 function wire(s: Scenario = {}) {
@@ -106,7 +108,7 @@ function wire(s: Scenario = {}) {
   };
   mockedApi.mockImplementation(async (path) => {
     if (path === "/v1/devices") return { devices: [deviceRow] };
-    // 账号镜像那一行：落库的 CLI 选择从这里读得到（中继摘要的解码此刻不带这两格）。
+    // 账号镜像那一行：承载机不在线时落库的 CLI 选择从这里读。
     if (path === "/v1/agent-sessions?conversation_id=42")
       return {
         items: [
@@ -116,8 +118,8 @@ function wire(s: Scenario = {}) {
             device_fingerprint: "fp-1",
             agent_sync_id: "ag-1",
             backend_type: "claudecode",
-            cli_model_mode: s.cliModelMode ?? "",
-            cli_model: s.cliModel ?? "",
+            cli_model_mode: (s.mirror ?? s).cliModelMode ?? "",
+            cli_model: (s.mirror ?? s).cliModel ?? "",
           },
         ],
       };
@@ -320,6 +322,21 @@ describe("会话模型 pill · CLI 自带模型的脸", () => {
       { refresh: false },
       "/opt/claude",
     );
+  });
+
+  it("Given 承载机实况固定了 opus、账号镜像还没跟上 When 打开 Then 脸按实况写 opus", async () => {
+    wire({ cliModelMode: "fixed", cliModel: "opus", mirror: {} });
+    renderPage();
+
+    await awaitFace("CLI Opus");
+    expect(pill().textContent).not.toContain("Follow agent binding");
+  });
+
+  it("Given 承载机实况已回到跟随、账号镜像还停在固定 opus When 打开 Then 脸写跟随 Agent 绑定", async () => {
+    wire({ mirror: { cliModelMode: "fixed", cliModel: "opus" } });
+    renderPage();
+
+    await awaitFace("Follow agent binding · CLI Sonnet");
   });
 
   it("Given 会话固定了 CLI 模型 When 打开 Then 脸就写那个模型、不写跟随", async () => {
