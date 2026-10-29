@@ -810,6 +810,7 @@ export class RelayClient {
     frame: ProtobufRpcFrame,
     target?: SessionState,
     createtime?: number,
+    pulled = false,
   ): void {
     const decoded = decodeNotification(frame);
     if (!decoded) {
@@ -819,7 +820,12 @@ export class RelayClient {
     // 实时帧没有可带的时刻:它刚从中继上过来,唯一的误差是一跳网络,所以此刻就是它
     // 的时刻。补齐那一路由调用方把原点报的值传进来(见 applyDurableNotification)。
     const at = createtime ?? Date.now();
-    this.applyDedup(st, decoded.seq, () => decoded.deliver(this.opts, at));
+    this.applyDedup(
+      st,
+      decoded.seq,
+      () => decoded.deliver(this.opts, at),
+      pulled,
+    );
   }
 
   /**
@@ -836,6 +842,12 @@ export class RelayClient {
    *     attach 之后的第一条实时帧 seq 远高于本地游标(浏览器刚打开,游标是 0),
    *     用户看到的转录会从半截开始;
    *   - seq <= 游标      → 重复投递,丢弃。
+   * 拉取页(`pulled`)例外:页里本就可以有空洞 —— 帧账本给原地改写过的位置取新的末尾号,
+   * 被取代的旧号不再出现(agentre transcript_repo.NumberFrames)。拉取页里 seq > 游标
+   * 即消费;按实时闸门处理的话,空洞之后的每一条都被判成跳号、补洞又原样拉回同一页,
+   * 转录永远停在空洞前(Go 侧 remote/reconnect.go 的 dispatchPulled 同一条规则)。
+   * 单条实时帧证明不了「缺的号已不存在」—— 缺的可能正是还在路上的帧 —— 所以实时帧
+   * 仍守连续闸。
    * 不带号的帧无游标可言,一律投递 —— 与 Go 侧 `head.Seq == 0` 那条同一个理由:
    * 闸门只对编了号的帧成立,拿 0 去比游标会把它当成重复静默丢掉。
    */
@@ -843,13 +855,14 @@ export class RelayClient {
     st: SessionState,
     seq: number | undefined,
     deliver: () => void,
+    pulled = false,
   ): void {
     if (seq === undefined || seq === 0) {
       deliver();
       return;
     }
     if (seq <= st.cursor) return;
-    if (seq > st.cursor + 1) {
+    if (!pulled && seq > st.cursor + 1) {
       void this.catchUp(st.conversationId, st.origin).catch(() => {
         // 补洞失败保持关注,下一条实时帧 / 下次重连再试。
       });
@@ -867,7 +880,7 @@ export class RelayClient {
     const frame = durableToFrame(n);
     // 时刻取那一条报的那个,**不**退回当下:这一页可能是一段离线期间的成批补齐,
     // 拿此刻去盖会让整段转录显示成同一分钟。报不出来时是 0,读作「不知道」。
-    if (frame) this.dispatchNotification(frame, st, n.createtime ?? 0);
+    if (frame) this.dispatchNotification(frame, st, n.createtime ?? 0, true);
   }
 
   private failPending(err: RelayError): void {

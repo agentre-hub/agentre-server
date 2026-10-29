@@ -37,4 +37,8 @@ var Protocol = protocolversion.Protocol()
 //
 // 0.6.0：规格 2026-10-26-cli-native-model-switch 新增 CLI 自带模型的列表 / 生效查询 /
 // 切换调用，方法集变了，floor 随 pkg/wire 的 pin 一起抬。
-const MinSupported = "0.6.0"
+//
+// 0.7.0：规格 2026-10-27-agrctl-send-subagent-card 新增 RUNTIME_INJECT_SUBAGENT_EVENTS
+// （往父会话转录注入 agrctl send 的子代理卡事件），方法集变了，floor 随 pkg/wire 的 pin
+// 一起抬。
+const MinSupported = "0.7.0"

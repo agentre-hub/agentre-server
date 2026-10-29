@@ -520,6 +520,69 @@ describe("RelayClient Protobuf RPC boundary", () => {
     ]);
   });
 
+  // Given 补齐页里有空洞:帧账本给原地改写过的位置(如 agrctl 子代理卡每次更新)取新的
+  // 末尾号,被取代的旧号不再出现在拉取页里(agentre transcript_repo.NumberFrames);
+  // When 页面补齐;Then 空洞之后的帧照样交付。按实时闸门处理拉取页,空洞之后的每一条
+  // 都被判成跳号、补洞又原样拉回同一页,转录永远停在空洞前(与 Go 侧
+  // remote/reconnect.go 的 dispatchPulled 同一条规则)。
+  it("补齐页里有被取代的号留下的空洞:空洞之后的帧照样交付", async () => {
+    const events: unknown[] = [];
+    const { client, socket } = setup({
+      onEvent: (event) => events.push(event),
+    });
+    await authenticate(client, socket);
+
+    const caughtUp = client.catchUp(CID, "fp-origin");
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(1));
+    const attach = ProtobufRpcCodec.decode(socket.sent[0]);
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        attach.id,
+        rpcMethods.sessionAttach,
+        {
+          conversationId: CID,
+          backendType: "claudecode",
+          lifecycleState: "idle",
+          latestSeq: 4n,
+        },
+      ),
+    );
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    const pull = ProtobufRpcCodec.decode(socket.sent[1]);
+    const textAt = (seq: bigint, text: string) => ({
+      seq,
+      payload: {
+        payload: {
+          case: "runtimeEvent" as const,
+          value: {
+            conversationId: CID,
+            event: { case: "textDelta" as const, value: { text } },
+          },
+        },
+      },
+    });
+    socket.receive(
+      ProtobufRpcCodec.encodeTypedMethodResponse(
+        pull.id,
+        rpcMethods.sessionPull,
+        {
+          notifications: [textAt(1n, "a"), textAt(2n, "b"), textAt(4n, "d")],
+          cursor: 4n,
+          hasMore: false,
+          oldestSeq: 1n,
+        },
+      ),
+    );
+
+    await expect(caughtUp).resolves.toBeUndefined();
+    expect(events).toMatchObject([
+      { seq: 1, event: { text: "a" } },
+      { seq: 2, event: { text: "b" } },
+      { seq: 4, event: { text: "d" } },
+    ]);
+    expect(client.getCursor(CID, "fp-origin")).toBe(4);
+  });
+
   // Given agentred 每次重启都把非终态会话标成 interrupted(daemon.New 的「marked N
   // non-terminal sessions interrupted after restart」),而 daemon 的 Attach 对
   // interrupted 一律回 ErrNoActiveTurn —— 它同一处注释也写明:**历史仍可 Pull**;
