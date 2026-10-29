@@ -130,9 +130,15 @@ export interface UseSessionCLIModelOptions {
   providerPinned?: boolean;
   /**
    * 这条会话上一轮真的跑过的模型 ID（终态帧报的）。这是历史、不是 CLI 此刻的模型：
-   * 只在两种跟随态下当显示值用，固定模型的脸写所选那一个。
+   * 只在模型不由选择定死的那两态（跟随 CLI 默认、跟随一个没绑值的 Agent）下当显示值
+   * 用；固定模型与绑了值的跟随 Agent 绑定，脸写选择解析出来的那一个。
    */
   actualModelId?: string;
+  /**
+   * 报出 `actualModelId` 的那一轮之后模型选择又换过（转录里在它之后落了切换 notice）：
+   * 那份报告是旧选择的历史，脸上不认它。挂起脸的「当前」那一半不受影响。
+   */
+  actualModelSuperseded?: boolean;
   /** 这一屏认的「此刻在跑一轮」。在跑时的选择挂起到下一轮。 */
   turnActive?: boolean;
   /**
@@ -212,6 +218,7 @@ export function useSessionCLIModel({
   conversationId = "",
   providerPinned = false,
   actualModelId = "",
+  actualModelSuperseded = false,
   turnActive = false,
   persist,
   carrier,
@@ -425,9 +432,11 @@ export function useSessionCLIModel({
     共享 resolveCLIPillState 把交进去的「实际模型」排在选择前面；web 没有桌面端那份
     逐会话的 CLI 实况，所以这里只交「这一轮实际会跑的那个」：
       - 挂起：正在跑的那一轮用的选择解析出来的模型；
-      - 固定模型：不交，脸写所选那一个（上一轮报的是历史，刷新之后也不得顶掉它）；
-      - 两种跟随态：上一轮终态帧报的（换了选择、新一轮还没收场时不作数），否则跟随
-        CLI 默认时 CLI 生效配置里的那个——规格写明这一态的显示值就是它。
+      - 固定模型、绑了值的跟随 Agent 绑定：不交，脸写选择解析出来的那一个——下一轮
+        就以它启动 / 热切过去（上一轮报的是历史，刷新之后也不得顶掉它）；
+      - 跟随 CLI 默认、跟随一个没绑值的 Agent：上一轮终态帧报的（换了选择、新一轮还
+        没收场时不作数，页内看 hideActual、刷新后看转录里的切换 notice），否则 CLI
+        生效配置里的那个——规格写明这一态的显示值就是它。
   */
   const runningModelId = !local.pending
     ? ""
@@ -437,10 +446,12 @@ export function useSessionCLIModel({
           launchChoice(local.runningChoice, backendDefault),
         ).modelId
       : actualModelId;
-  const reported =
-    local.hideActual || choice.mode === "fixed" ? "" : actualModelId;
   const followsCLIDefault =
     choice.mode === "cli-default" || (choice.mode === "" && !backendDefault);
+  const reported =
+    local.hideActual || actualModelSuperseded || !followsCLIDefault
+      ? ""
+      : actualModelId;
   const cliDefaultModel =
     followsCLIDefault && !providerPinned
       ? (directory.catalog.effectiveModelId ?? "")

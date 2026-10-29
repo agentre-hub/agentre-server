@@ -368,6 +368,69 @@ describe("会话模型 pill · CLI 自带模型的脸", () => {
     expect(screen.getByTestId("provider-pill-dynamic-icon")).toBeTruthy();
   });
 
+  // 规格「模型选择的三态与解析」：跟随 Agent 绑定时本轮模型 = 后端设置的默认模型。
+  // 后端绑了值，下一轮就以它启动 / 热切过去；上一轮报的是那时的选择跑出来的历史。
+  it("Given 跟随 Agent 绑定（后端绑 sonnet）、上一轮报的还是 opus When 打开 Then 脸写「跟随 Agent 绑定 · CLI Sonnet」", async () => {
+    wire({ defaultModel: "sonnet" });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮" },
+        seq: 1,
+      });
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 2,
+        model: "claude-opus-4-7",
+      } as never);
+    });
+    renderPage();
+
+    await screen.findByText("上一轮");
+    await awaitFace("Follow agent binding · CLI Sonnet");
+    expect(pill().textContent).not.toContain("CLI Opus");
+  });
+
+  // 硬不变量 3：上一轮跑完之后转录里又落了一条切换 notice，上一轮报的模型就是切换
+  // 之前那个选择的——刷新之后不得拿它当跟随 CLI 默认此刻的模型（页内由 hideActual
+  // 管，刷新后只剩转录这一条证据）。
+  it("Given 跟随 CLI 默认、上一轮报 opus 之后转录里有一条切到跟随 CLI 默认的 notice When 打开 Then 脸写 CLI 生效配置里的模型", async () => {
+    wire({ cliModelMode: "cli-default" });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮" },
+        seq: 1,
+      });
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 2,
+        model: "claude-opus-4-7",
+      } as never);
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "unrecognized_block",
+          blockType: "notice",
+          data: {
+            level: "info",
+            text: JSON.stringify({
+              kind: "cli_model",
+              cliModelMode: "cli-default",
+            }),
+          },
+        },
+        seq: 3,
+      });
+    });
+    renderPage();
+
+    await screen.findByText("上一轮");
+    await awaitFace("CLI Sonnet");
+    expect(pill().textContent).not.toContain("CLI Opus");
+    expect(screen.getByTestId("provider-pill-dynamic-icon")).toBeTruthy();
+  });
+
   // 路径覆盖读不出来时不能当作「没配」：那样问到的是承载机 PATH 上随便哪一个 CLI，
   // 列出来的未必是这条后端真正会跑的那一个（桌面端 ListCLIModels 同样把这一步的错误
   // 原样交回）。

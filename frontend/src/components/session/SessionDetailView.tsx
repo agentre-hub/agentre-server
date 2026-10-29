@@ -61,6 +61,7 @@ import {
 import { nextPreviewTail } from "@/components/session/previewTail";
 import {
   lastUsedModelId,
+  modelChoiceChangedSinceLastUse,
   resolveContextWindow,
 } from "@/components/session/sessionModel";
 import { conversationTarget, machineTarget } from "@/lib/relayTarget";
@@ -1404,6 +1405,7 @@ export default function SessionDetailView({
     conversationId: sid,
     providerPinned: effectiveTarget.providerKey !== "",
     actualModelId: lastUsedModel,
+    actualModelSuperseded: modelChoiceChangedSinceLastUse(messages),
     turnActive: turn.turnActive,
     persist: (next) => persistCLIModel(next),
     carrier: device,
