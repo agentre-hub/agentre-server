@@ -692,6 +692,64 @@ describe("会话模型 pill · 切换写到哪", () => {
     await awaitFace("CLI Opus → CLI Sonnet");
   });
 
+  // 「当前」那一半与挂起之前脸上写的是同一个：跟随 CLI 默认时脸认上一轮报的模型，
+  // 挂起那一刻不得换成 CLI 生效配置里的另一个（这一轮没换过选择，上一轮报的仍作数）。
+  it("Given 跟随 CLI 默认、上一轮报 opus（生效配置写 sonnet）且一轮在跑 When 选固定 sonnet Then 脸写「CLI Opus → CLI Sonnet」", async () => {
+    wire({ carrierKind: "agentred", cliModelMode: "cli-default" });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "text_delta", text: "上一轮" },
+        seq: 1,
+      });
+      capturedOpts.onRunResultDone?.({
+        conversationId: "42",
+        seq: 2,
+        model: "claude-opus-4-7",
+      } as never);
+    });
+    renderPage();
+    await screen.findByText("上一轮");
+    await awaitFace("CLI Opus");
+    await sendInComposer("还是按 CLI 默认跑");
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-stop")).toBeTruthy(),
+    );
+
+    await pickOption(/^CLI Sonnet/);
+
+    await awaitFace("CLI Opus → CLI Sonnet");
+  });
+
+  // 选的时候还空闲、落库应答回来之前一轮开跑了：这一轮带着旧选择出发，
+  // 新选择只能从下一轮起生效——脸得写挂起，不能说这一轮已经在用新的。
+  it("Given 空闲时选 opus、落库应答之前一轮开跑了 When 应答回来 Then 脸写「CLI Sonnet → CLI Opus」", async () => {
+    let resolveWrite: (v: unknown) => void = () => {};
+    wire({
+      carrierKind: "desktop",
+      cliModelMode: "fixed",
+      cliModel: "sonnet",
+      setSessionCLIModel: () =>
+        new Promise((resolve) => {
+          resolveWrite = resolve;
+        }),
+    });
+    renderPage();
+    await awaitFace("CLI Sonnet");
+
+    await pickOption(/CLI Opus/);
+    await waitFor(() =>
+      expect(calls(rpcMethods.setSessionCLIModel)).toHaveLength(1),
+    );
+    await sendInComposer("选择还没落下就开跑");
+    await waitFor(() =>
+      expect(screen.getByTestId("session-detail-stop")).toBeTruthy(),
+    );
+    await act(async () => resolveWrite({}));
+
+    await awaitFace("CLI Sonnet → CLI Opus");
+  });
+
   it("Given 选择没变 When 再点同一项 Then 什么都不写", async () => {
     wire({ carrierKind: "agentred", cliModelMode: "fixed", cliModel: "opus" });
     renderPage();

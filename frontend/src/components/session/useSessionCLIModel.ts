@@ -136,7 +136,8 @@ export interface UseSessionCLIModelOptions {
   actualModelId?: string;
   /**
    * 报出 `actualModelId` 的那一轮之后模型选择又换过（转录里在它之后落了切换 notice）：
-   * 那份报告是旧选择的历史，脸上不认它。挂起脸的「当前」那一半不受影响。
+   * 那份报告是旧选择的历史，脸上不认它。挂起脸的「当前」那一半是第一次挂起那一刻的
+   * 脸，之后落进转录的那条 notice 不再改它。
    */
   actualModelSuperseded?: boolean;
   /** 这一屏认的「此刻在跑一轮」。在跑时的选择挂起到下一轮。 */
@@ -180,10 +181,10 @@ interface LocalState {
   /** 一轮进行中选的：这一轮仍用旧模型，下一轮开始才换上。 */
   pending: boolean;
   /**
-   * 挂起时正在跑（或刚跑完）的那一轮用的选择：本轮第一次挂起之前生效的那一个。
-   * 挂起脸的「当前」那一半写它，不写更早一轮报的模型。
+   * 挂起时正在跑（或刚跑完）的那一轮的模型：本轮第一次挂起那一刻脸上写的那个。
+   * 挂起脸的「当前」那一半写它——与挂起之前的脸同一个推导，挂起那一下不跳字。
    */
-  runningChoice: SessionCLIModelValue | null;
+  runningModelId: string;
   /**
    * 选择已经换了而上一轮报的模型还是旧的：此时拿它当「实际模型」会把旧模型写回脸上。
    * 等换上新选择的那一轮收场（终态帧带来新的实际模型）才重新认它。
@@ -197,7 +198,7 @@ function freshState(key: string): LocalState {
     key,
     choice: null,
     pending: false,
-    runningChoice: null,
+    runningModelId: "",
     hideActual: false,
     switchError: null,
   };
@@ -292,6 +293,42 @@ export function useSessionCLIModel({
   };
   const choice = local.choice ?? persistedChoice;
 
+  /*
+    共享 resolveCLIPillState 把交进去的「实际模型」排在选择前面；web 没有桌面端那份
+    逐会话的 CLI 实况，所以不挂起时只交「这一轮实际会跑的那个」：
+      - 固定模型、绑了值的跟随 Agent 绑定：不交，脸写选择解析出来的那一个——下一轮
+        就以它启动 / 热切过去（上一轮报的是历史，刷新之后也不得顶掉它）；
+      - 跟随 CLI 默认、跟随一个没绑值的 Agent：上一轮终态帧报的（换了选择、新一轮还
+        没收场时不作数，页内看 hideActual、刷新后看转录里的切换 notice），否则 CLI
+        生效配置里的那个——规格写明这一态的显示值就是它。
+    挂起时交的是 local.runningModelId：第一次挂起那一刻 faceModelId 的快照。
+  */
+  const followsCLIDefault =
+    choice.mode === "cli-default" || (choice.mode === "" && !backendDefault);
+  const reported =
+    local.hideActual || actualModelSuperseded || !followsCLIDefault
+      ? ""
+      : actualModelId;
+  const cliDefaultModel =
+    followsCLIDefault && !providerPinned
+      ? (directory.catalog.effectiveModelId ?? "")
+      : "";
+  // 不挂起时脸上写的那个模型。钉着供应商目标时在跑的不是 CLI 段的选择，认上一轮报的。
+  const faceModelId = providerPinned
+    ? actualModelId
+    : reported ||
+      cliModelResolution(
+        directory.catalog,
+        launchChoice(choice, backendDefault),
+      ).modelId;
+
+  // 落库应答回来时以那一刻的轮次状态为准：选的时候还空闲、应答之前一轮开跑了，
+  // 这一轮带的是旧选择，新选择得挂起到下一轮。
+  const turnActiveRef = useRef(turnActive);
+  useEffect(() => {
+    turnActiveRef.current = turnActive;
+  }, [turnActive]);
+
   // 连续几次选择只认最后一次：先发的晚回来不得盖住后发的。换了会话也算作废——
   // 上一条那次写入的结果不该落到这一条的本地状态上。
   const generation = useRef(0);
@@ -371,22 +408,20 @@ export function useSessionCLIModel({
         return false;
       }
       if (current !== generation.current) return false;
+      const active = turnActiveRef.current;
       setLocal((prev) => {
         const base = prev.key === key ? prev : freshState(key);
         return {
           ...base,
           choice: next,
-          pending: turnActive,
-          // 同一轮里连选几次：在跑的那一轮还是第一次挂起之前那个选择。那一轮跑的是
-          // 供应商目标时它不在 CLI 目录里，记 null、当前那一半照旧认上一轮报的。
-          runningChoice: !turnActive
-            ? null
+          pending: active,
+          // 同一轮里连选几次：在跑的那一轮还是第一次挂起时脸上写的那个。
+          runningModelId: !active
+            ? ""
             : base.pending
-              ? base.runningChoice
-              : providerPinned
-                ? null
-                : choice,
-          hideActual: !turnActive,
+              ? base.runningModelId
+              : faceModelId,
+          hideActual: !active,
         };
       });
       onChosen?.();
@@ -395,6 +430,7 @@ export function useSessionCLIModel({
     [
       key,
       choice,
+      faceModelId,
       providerPinned,
       persist,
       clientRef,
@@ -428,40 +464,14 @@ export function useSessionCLIModel({
       clear,
     };
 
-  /*
-    共享 resolveCLIPillState 把交进去的「实际模型」排在选择前面；web 没有桌面端那份
-    逐会话的 CLI 实况，所以这里只交「这一轮实际会跑的那个」：
-      - 挂起：正在跑的那一轮用的选择解析出来的模型；
-      - 固定模型、绑了值的跟随 Agent 绑定：不交，脸写选择解析出来的那一个——下一轮
-        就以它启动 / 热切过去（上一轮报的是历史，刷新之后也不得顶掉它）；
-      - 跟随 CLI 默认、跟随一个没绑值的 Agent：上一轮终态帧报的（换了选择、新一轮还
-        没收场时不作数，页内看 hideActual、刷新后看转录里的切换 notice），否则 CLI
-        生效配置里的那个——规格写明这一态的显示值就是它。
-  */
-  const runningModelId = !local.pending
-    ? ""
-    : local.runningChoice
-      ? cliModelResolution(
-          directory.catalog,
-          launchChoice(local.runningChoice, backendDefault),
-        ).modelId
-      : actualModelId;
-  const followsCLIDefault =
-    choice.mode === "cli-default" || (choice.mode === "" && !backendDefault);
-  const reported =
-    local.hideActual || actualModelSuperseded || !followsCLIDefault
-      ? ""
-      : actualModelId;
-  const cliDefaultModel =
-    followsCLIDefault && !providerPinned
-      ? (directory.catalog.effectiveModelId ?? "")
-      : "";
   const pillState = resolveCLIPillState({
     catalog: directory.catalog,
     choice: pickerChoice,
     backendType,
     boundValue: backendDefault,
-    actualModelId: local.pending ? runningModelId : reported || cliDefaultModel,
+    actualModelId: local.pending
+      ? local.runningModelId
+      : reported || cliDefaultModel,
     pending: local.pending,
     loading: directory.loading,
   });
@@ -475,7 +485,7 @@ export function useSessionCLIModel({
     ...(pillState.pending
       ? {
           pending: {
-            currentModelId: runningModelId,
+            currentModelId: local.runningModelId,
             currentLabel: pillState.modelLabel,
             nextLabel: pillState.pending.label,
             nextMode: pillState.pending.mode,
