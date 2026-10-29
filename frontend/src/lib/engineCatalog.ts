@@ -34,13 +34,22 @@ export interface EngineProvider {
 /** GET /v1/engine/backends 的一行：Agent 后端绑定的供应商 / 模型 / 默认档位。 */
 export interface EngineBackend {
   sync_id: string;
+  /** 后端类型（claudecode / codex / piagent / …）。CLI 自带模型段按它判定出不出现。 */
+  type?: string;
+  /** 后端的环境变量 JSON；向承载机查询 CLI 模型目录时原样带过去。 */
+  env_json?: string;
+  /** 后端绑定的执行设备指纹。 */
+  device_fingerprint?: string;
   provider_key: string;
   model_key: string;
   /**
    * 单类型独占设置对象（键表归 syncwire.AgentBackendConfig）。九个平铺字段已删
    * （S2）：默认权限模式等改从这里取，旧平铺格式的行服务端读作 {}。
+   *
+   * `defaultModel` 是 CLI 登录态下后端绑定的 CLI 模型（空 = 跟随 CLI 默认）——
+   * 会话「跟随 Agent 绑定」时这一轮跑的就是它。
    */
-  config?: { defaultPermissionMode?: string } | null;
+  config?: { defaultPermissionMode?: string; defaultModel?: string } | null;
   /**
    * 这个后端配的思考力度（六档，空 = 没配）。会话没自己钉一档时，composer 那颗
    * 力度控件用它兜底显示「→ 跟随后端配置 · <档位>」。

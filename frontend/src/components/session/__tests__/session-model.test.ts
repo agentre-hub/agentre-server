@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   lastUsedModelId,
+  modelChoiceChangedSinceLastUse,
   resolveContextWindow,
 } from "@/components/session/sessionModel";
 
@@ -61,6 +62,62 @@ const catalog = [
     ],
   },
 ];
+
+function withNotice(
+  m: TranscriptMessage,
+  noticeKind: string,
+): TranscriptMessage {
+  return { ...m, blocks: [...m.blocks, { type: "notice", noticeKind }] };
+}
+
+describe("modelChoiceChangedSinceLastUse", () => {
+  it("报出模型的那一轮之后空闲切换（notice 是之后的一条）：换过", () => {
+    expect(
+      modelChoiceChangedSinceLastUse([
+        message("user", ""),
+        message("assistant", "claude-opus-4-7"),
+        withNotice(message("assistant", ""), "cli_model"),
+      ]),
+    ).toBe(true);
+  });
+
+  // 轮中挂起的切换：notice 折进了这一轮自己的助手消息。
+  it("notice 在报出模型的那条消息里：换过", () => {
+    expect(
+      modelChoiceChangedSinceLastUse([
+        message("user", ""),
+        withNotice(message("assistant", "claude-opus-4-7"), "switch"),
+      ]),
+    ).toBe(true);
+  });
+
+  it("切换之后又跑完了一轮：那一轮报的就是新选择的，没换过", () => {
+    expect(
+      modelChoiceChangedSinceLastUse([
+        withNotice(message("assistant", "claude-opus-4-7"), "cli_model"),
+        message("user", ""),
+        message("assistant", "claude-sonnet-4-6"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("只换过推理强度：不算换模型", () => {
+    expect(
+      modelChoiceChangedSinceLastUse([
+        message("assistant", "claude-opus-4-7"),
+        withNotice(message("assistant", ""), "reasoning_effort"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("一条报出模型的消息都没有：没有可作废的报告", () => {
+    expect(
+      modelChoiceChangedSinceLastUse([
+        withNotice(message("assistant", ""), "cli_model"),
+      ]),
+    ).toBe(false);
+  });
+});
 
 describe("lastUsedModelId", () => {
   it("从后往前取第一条报得出模型的助手消息", () => {

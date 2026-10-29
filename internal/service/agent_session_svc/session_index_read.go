@@ -673,6 +673,8 @@ func (s *sessionReadSvc) viewsOf(
 			LastReadAt:         r.LastReadAt,
 			ProviderKey:        r.ProviderKey,
 			ModelKey:           r.ModelKey,
+			CLIModelMode:       r.CLIModelMode,
+			CLIModel:           r.CLIModel,
 		}
 		// Cwd 只在这里参与一次比较，判完立刻出局——它本身永不进入 View（R19）。
 		view.ProjectSyncID = affinity.projectOf(r.ProjectSyncID, r.MachineFingerprint, r.Cwd)

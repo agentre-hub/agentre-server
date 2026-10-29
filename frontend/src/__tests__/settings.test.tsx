@@ -8,6 +8,29 @@ import i18n from "@/i18n";
 import * as accountChannel from "@/lib/accountChannel";
 import { api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { rpcMethods } from "@agentre-hub/agentre-wire";
+
+const relay = vi.hoisted(() => ({ request: vi.fn() }));
+
+vi.mock("@/lib/relayTicket", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/relayTicket")>();
+  return {
+    ...actual,
+    ensureRelayTicket: vi.fn(async () => ({
+      accessToken: "ticket",
+      expiresAt: Date.now() + 120_000,
+      peerFingerprint: "browser-fp",
+      clientName: "Browser",
+    })),
+  };
+});
+vi.mock("@/lib/relayClient", () => ({
+  RelayClient: class {
+    connect = vi.fn(async () => undefined);
+    request = relay.request;
+    close = vi.fn();
+  },
+}));
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -378,5 +401,63 @@ describe("Settings: 跟着账号通道走", () => {
 
     deliver(accountChannel.AccountChannelSyncVersion);
     await waitFor(() => expect(pathsCalled()).toContain("/v1/engine/backends"));
+  });
+
+  it("passes the CLI models port so a codex backend's editor lists relayed models", async () => {
+    relay.request.mockResolvedValue({
+      models: [
+        {
+          value: "gpt-6-luna",
+          displayName: "GPT-6 Luna",
+          modelId: "gpt-6-luna",
+          group: "",
+          legacy: false,
+        },
+      ],
+      effectiveValue: "gpt-6-luna",
+      effectiveModelId: "gpt-6-luna",
+    });
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/engine/backends") {
+        return {
+          backends: [
+            {
+              sync_id: "backend-codex",
+              name: "My codex",
+              type: "codex",
+              device_fingerprint: "agentred-b",
+              provider_key: "",
+              model_key: "",
+              env_json: "{}",
+              reasoning_effort: "",
+              config: {},
+              ref_count: 0,
+              cli_by_device: [],
+            },
+          ],
+        };
+      }
+      return base(path, init);
+    });
+    renderSettings();
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Agent backends" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Edit My codex" }),
+    );
+
+    await waitFor(() =>
+      expect(relay.request).toHaveBeenCalledWith(
+        rpcMethods.cliModelsList,
+        expect.objectContaining({ backendType: "codex" }),
+      ),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Model binding" }),
+    );
+    expect(
+      (await screen.findAllByRole("option", { name: /GPT-6 Luna/ })).length,
+    ).toBeGreaterThan(0);
   });
 });

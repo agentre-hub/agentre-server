@@ -110,7 +110,7 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 			"ConversationID", "PeerFingerprint", "DeviceFingerprint", "Title",
 			"AgentSyncID", "ProjectSyncID",
 			"BackendType", "LifecycleState", "WaitingForInput", "LastMessageAt",
-			"LastReadAt", "ProviderKey", "ModelKey",
+			"LastReadAt", "ProviderKey", "ModelKey", "CLIModelMode", "CLIModel",
 		},
 		// 标记已读的响应只有落定的那个时刻。
 		"MarkSessionReadResponse": {"LastReadAt"},
@@ -170,9 +170,15 @@ func TestWorkspaceResponses_NeverCarryPathsOrSecrets_Guard(t *testing.T) {
 	//     「路径与 R19」，2026-08-21 决策 5 把它从「只有 agentred」扩成「任何机器上
 	//     这个项目的路径」）：**仍然只有项目设置这一处**带得动它。cwd 与 cli_path /
 	//     env_json 一条都没松——它们各自的类型上仍然没有那个字段。
+	//   - SavedSessionItem.CLIModelMode / CLIModel 是会话选的 **CLI 自带模型**（模式 +
+	//     模型 id，如 "fixed" / "claude-opus-4-7"），与 ProviderKey / ModelKey 同类：
+	//     不透明的选择标识，不是本机可执行文件路径（cli_path）也不是环境变量。名字里的
+	//     "cli" 指「CLI 后端的模型」，不是「机器上的 CLI」。
 	exempt := map[string]bool{
-		"OrgAgentItem.PromptJSON": true,
-		"ProjectMachineItem.Path": true,
+		"OrgAgentItem.PromptJSON":       true,
+		"ProjectMachineItem.Path":       true,
+		"SavedSessionItem.CLIModelMode": true,
+		"SavedSessionItem.CLIModel":     true,
 	}
 
 	seen := map[string]bool{}

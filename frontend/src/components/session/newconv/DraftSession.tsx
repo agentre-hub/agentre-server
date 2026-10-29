@@ -29,6 +29,7 @@ import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
 import Transcript from "@/components/session/Transcript";
 import { pendingUserMessage } from "@/components/session/transcriptFrame";
+import { useSessionCLIModel } from "@/components/session/useSessionCLIModel";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useIsMobile } from "@/components/use-is-mobile";
@@ -294,6 +295,29 @@ export function DraftSession({
   /** 两格皆空 = 跟随 Agent 绑定。 */
   const effectiveTarget = modelTarget ?? EMPTY_MODEL_TARGET;
 
+  /**
+   * 模型 pill 的 CLI 自带模型段（规格 2026-10-26）。草稿没有会话行，所以不传 persist：
+   * 选择只存本地，随第一句过线、由派发在 ack 之后补钉。本地状态按「机器 + 后端」归属，
+   * 换了执行目标就重来 —— 上一台机器的目录里挑的值在这一台上没有意义。
+   * 与供应商目标互斥：这边选成了就清掉供应商目标，反之亦然（见 changeModelTarget）。
+   */
+  const cli = useSessionCLIModel({
+    backend: engineBackend,
+    backendType: chosen?.backend_type ?? "",
+    carrierFp: chosen?.device_fingerprint,
+    persisted: {},
+    conversationId: probeKey,
+    providerPinned: effectiveTarget.providerKey !== "",
+    onChosen: () => setModelTarget(null),
+  });
+
+  // 这条 onChange 只来自两处：挑了供应商目标（与 CLI 选择互斥），或者「跟随 Agent
+  // 绑定」那一项（两格皆空 = 回到跟随）。两者都意味着 CLI 段不再有选择。
+  function changeModelTarget(next: ModelTarget) {
+    setModelTarget(next);
+    cli.clear();
+  }
+
   const projectName = useMemo(
     () => projects.find((p) => p.sync_id === projectSyncId)?.name ?? null,
     [projects, projectSyncId],
@@ -327,6 +351,12 @@ export function DraftSession({
               ? effectivePermissionMode
               : undefined,
           modelTarget: effectiveTarget,
+          // 不 enabled（后端绑了供应商 / 不是 CLI 后端）或已经选了供应商目标时不带：
+          // 执行端拒收两者并存的 run。
+          cliModel:
+            cli.enabled && effectiveTarget.providerKey === ""
+              ? cli.choice
+              : undefined,
           // 空 = 跟随后端配置，那本来就是不主张：既不带过线也不去钉。闸门与档位
           // 那一行同一条：**执行端报了这项能力**才带。挑完一档又把执行目标换成
           // openclaw 时，选过的值还留在 state 里，而 openclaw 的会话上不允许有
@@ -352,6 +382,8 @@ export function DraftSession({
     },
     [
       agent.sync_id,
+      cli.choice,
+      cli.enabled,
       client,
       effectivePermissionMode,
       effectiveTarget,
@@ -599,7 +631,16 @@ export function DraftSession({
                     boundProviderKey={engineBackend?.provider_key}
                     boundModelKey={engineBackend?.model_key}
                     target={effectiveTarget}
-                    onChange={setModelTarget}
+                    onChange={changeModelTarget}
+                    cliModels={cli.cliModels}
+                    cliPillState={
+                      effectiveTarget.providerKey ? undefined : cli.pillState
+                    }
+                    cliBound={{
+                      resolutionLabel: cli.boundResolutionLabel,
+                      modelId: cli.boundModelId,
+                    }}
+                    deviceLabel={chosen.device_name}
                   />
                 ) : undefined
               }

@@ -30,6 +30,7 @@ func TestUpsertSummary_SingleStatementOverwritesAllButCreatetime(t *testing.T) {
 			"claude_code", "running",
 			true, int64(42), int64(1700), // backend_type..waiting_for_input, latest_seq, last_message_at
 			"prov-anthropic", "sonnet-4-6", // 这条对话自己钉的 ModelTarget，逐字镜像发起端
+			"fixed", "claude-opus-4-7", // CLI 自带模型选择，同样逐字镜像
 			int64(0),                 // last_read_at：发起端不知道这个账号读到哪了
 			int64(1000), int64(2000), // createtime, updatetime
 		).
@@ -44,6 +45,7 @@ func TestUpsertSummary_SingleStatementOverwritesAllButCreatetime(t *testing.T) {
 		BackendType: "claude_code", LifecycleState: "running",
 		WaitingForInput: true, LatestSeq: 42, LastMessageAt: 1700,
 		ProviderKey: "prov-anthropic", ModelKey: "sonnet-4-6",
+		CLIModelMode: "fixed", CLIModel: "claude-opus-4-7",
 		Createtime: 1000, Updatetime: 2000,
 	}
 	require.NoError(t, r.UpsertSummary(ctx, s))
@@ -70,6 +72,7 @@ func TestUpsertSummary_NeverResetsLastReadAt(t *testing.T) {
 			"`waiting_for_input`=VALUES(`waiting_for_input`),"+
 			"`latest_seq`=VALUES(`latest_seq`),`last_message_at`=VALUES(`last_message_at`),"+
 			"`provider_key`=VALUES(`provider_key`),`model_key`=VALUES(`model_key`),"+
+			"`cli_model_mode`=VALUES(`cli_model_mode`),`cli_model`=VALUES(`cli_model`),"+
 			"`updatetime`=VALUES(`updatetime`)",
 	) + "$").
 		WillReturnResult(sqlmock.NewResult(1, 1))

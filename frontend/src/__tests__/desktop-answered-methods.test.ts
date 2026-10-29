@@ -86,6 +86,12 @@ const AGENTRED_ONLY_CALLERS: readonly {
     via: "agentredCarrier",
     why: "轮末取回没被消费的插话，只对 agentred 托管的对话成立：桌面端托管的那条由它自己的 chat_svc 在轮末 DrainPending 并自动接续（turn_run.go），控制台去取就是从它手里抢；桌面端也因此不注册 runtimeDrainPending。",
   },
+  {
+    file: "src/components/session/useSessionCLIModel.ts",
+    callee: "hotSwitchOnAgentred",
+    via: "agentredHotSwitchTarget",
+    why: "会话 CLI 模型的空闲热切只对 agentred 承载的对话另走一跳：agentred 的 setSessionCLIModel 只落库，热切是 runtimeSetCLIModel；桌面端承载时它自己的 setSessionCLIModel 空闲即热切，桌面端也不注册 runtimeSetCLIModel。",
+  },
 ];
 
 /** 取一条通道的三个入口。目标就是它们的第一个实参。 */

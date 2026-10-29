@@ -1,6 +1,7 @@
 import { rpcMethods, type AnyRpcMethod } from "@agentre-hub/agentre-wire";
 import type {
   BackendView,
+  ListCliModels,
   BackendType,
   EngineID,
   EngineSettingsPorts,
@@ -9,6 +10,7 @@ import type {
 } from "@agentre-hub/agentre-ui";
 
 import { api } from "@/lib/api";
+import { cliOverlayPath, listCLIModelsOn } from "@/lib/cliModels";
 import { fetchDevices, type DeviceItem } from "@/lib/devices";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
@@ -437,7 +439,7 @@ function numberValue(value: unknown): number | undefined {
 /** Browser REST + browser→relay adapter for the shared engine panels. */
 export function createBrowserEngineSettingsPorts(
   messages: BrowserEngineSettingsMessages,
-): EngineSettingsPorts {
+): EngineSettingsPorts & { listCLIModels: ListCliModels } {
   const providerIDs = new IdentityMap();
   const modelIDs = new IdentityMap();
   const backendIDs = new IdentityMap();
@@ -852,7 +854,7 @@ export function createBrowserEngineSettingsPorts(
     });
   }
 
-  const ports: EngineSettingsPorts = {
+  const ports: EngineSettingsPorts & { listCLIModels: ListCliModels } = {
     // 整张 env 表现在随 Backend DTO 下发，控制台因此用的是共享包里桌面端那套编辑器：
     // 读进 entries、改完整体保存。这颗开关同时把一键补 IS_SANDBOX 切回「改本地
     // entries」那条路——与桌面端同一套交互，点完就能在展开的表里看见结果。
@@ -1236,6 +1238,23 @@ export function createBrowserEngineSettingsPorts(
         { type: backendType },
       );
       return { path: stringValue(result.path), found: result.found === true };
+    },
+
+    // 编辑器的 CLI 模型段：经中继问该后端所在设备。设备缺失/离线先于任何缓存
+    // 被拒（沿用 executionDevice 的既有文案），共享 hook 据此显示错误态并允许手输。
+    async listCLIModels({ backendId, refresh }) {
+      const key = backendIDs.key(backendId);
+      const backend =
+        backendDTOs.get(key) ??
+        (await fetchBackends()).find((item) => item.sync_id === key);
+      if (!backend) throw new Error(messages.deviceUnknownReason);
+      const device = await executionDevice(backend.device_fingerprint ?? "");
+      return listCLIModelsOn(
+        device.fingerprint,
+        backend,
+        { refresh },
+        await cliOverlayPath(device.fingerprint, backend.sync_id),
+      );
     },
 
     cliPath: {

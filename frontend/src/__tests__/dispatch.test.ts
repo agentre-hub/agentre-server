@@ -1000,6 +1000,172 @@ describe("dispatchNewConversation：草稿页定下的档位与模型", () => {
     expect(out.reasoningEffortPinned).toBe(false);
   });
 
+  /**
+   * 草稿页的 CLI 自带模型（规格 2026-10-26）：与供应商目标同形 —— 随第一句过线让首轮
+   * 就按它启动 CLI，ack 之后再用 setSessionCLIModel 补钉；空 = 跟随 Agent 绑定，什么都不带。
+   */
+  it("选了 CLI 自带模型：随第一句过线，ack 之后补钉一次", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      cliModel: { mode: "fixed", value: "opus" },
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.cliModelMode).toBe("fixed");
+    expect(p.cliModel).toBe("opus");
+    const pins = client.request.mock.calls.filter(
+      ([m]) => m === rpcMethods.setSessionCLIModel,
+    );
+    expect(pins).toHaveLength(1);
+    expect(pins[0][1]).toEqual({
+      conversationId: out.conversationId,
+      mode: "fixed",
+      value: "opus",
+    });
+    expect(out.modelPinned).toBe(true);
+  });
+
+  it("跟随 CLI 默认：mode 过线、值为空，同样补钉", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      cliModel: { mode: "cli-default", value: "" },
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.cliModelMode).toBe("cli-default");
+    expect(p.cliModel).toBe("");
+    expect(
+      client.request.mock.calls.filter(
+        ([m]) => m === rpcMethods.setSessionCLIModel,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("Pi 的三次 runtime.run 都带着 CLI 选择", async () => {
+    const client = fakeClient();
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        const p = params as {
+          conversationId: string;
+          providerSessionId?: string;
+        };
+        return method === rpcMethods.runtimeRun
+          ? { conversationId: p.conversationId, providerSessionId: "pi-1" }
+          : { conversationId: p.conversationId };
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: agentredPiPlan,
+      message: "hi",
+      sourceClient,
+      cliModel: { mode: "fixed", value: "pi-model" },
+    });
+
+    const runs = client.request.mock.calls.filter(
+      ([m]) => m === rpcMethods.runtimeRun,
+    );
+    expect(runs).toHaveLength(3);
+    for (const [, params] of runs) {
+      const r = params as Record<string, unknown>;
+      expect(r.cliModelMode).toBe("fixed");
+      expect(r.cliModel).toBe("pi-model");
+    }
+  });
+
+  it("没选（mode 为空）时不带 CLI 字段过线，也不去钉", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      cliModel: { mode: "", value: "" },
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect("cliModelMode" in p).toBe(false);
+    expect("cliModel" in p).toBe(false);
+    expect(
+      client.request.mock.calls.some(
+        ([m]) => m === rpcMethods.setSessionCLIModel,
+      ),
+    ).toBe(false);
+    expect(out.modelPinned).toBe(true);
+  });
+
+  it("同时给了供应商目标：只带供应商目标，CLI 选择不过线也不钉", async () => {
+    const client = fakeClient();
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      modelTarget: { providerKey: "pk-1", modelKey: "mk-1" },
+      cliModel: { mode: "fixed", value: "opus" },
+    });
+
+    const p = client.request.mock.calls[0][1] as Record<string, unknown>;
+    expect(p.llmProviderKey).toBe("pk-1");
+    expect("cliModelMode" in p).toBe(false);
+    expect("cliModel" in p).toBe(false);
+    expect(
+      client.request.mock.calls.some(
+        ([m]) => m === rpcMethods.setSessionCLIModel,
+      ),
+    ).toBe(false);
+  });
+
+  it("CLI 选择钉不住不算派发失败，如实回报没钉住", async () => {
+    const client = fakeClient();
+    client.request.mockImplementation(
+      async (method: unknown, params?: unknown) => {
+        if (method === rpcMethods.setSessionCLIModel)
+          throw new Error("unknown method");
+        return {
+          conversationId:
+            (params as { conversationId?: string })?.conversationId ?? "",
+        };
+      },
+    );
+    MockRelayClient.mockImplementation(function () {
+      return client;
+    } as never);
+
+    const out = await dispatchNewConversation({
+      plan: availablePlan,
+      message: "hi",
+      sourceClient,
+      cliModel: { mode: "fixed", value: "opus" },
+    });
+
+    expect(out.conversationId).toMatch(CONVERSATION_ID);
+    expect(out.modelPinned).toBe(false);
+  });
+
   // 派发已经成功，那台机器上真真切切多了一条按所选模型跑起来的会话。把钉不住
   // 报成派发失败，用户一重试就凭空再开一条 —— 与 R16 保存失败同一条规矩。
   it("钉不住不算派发失败，如实回报没钉住", async () => {

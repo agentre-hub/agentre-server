@@ -49,6 +49,9 @@ export interface MirrorSessionItem {
    */
   provider_key?: string;
   model_key?: string;
+  /** CLI 自带模型选择（空 = 跟随 Agent 绑定；"cli-default" | "fixed"）及其模型 id。 */
+  cli_model_mode?: string;
+  cli_model?: string;
 }
 
 /**
@@ -135,6 +138,8 @@ export function mirrorRowToSummary(row: MirrorSessionItem): SessionSummary {
     latestSeq: 0,
     providerKey: row.provider_key,
     modelKey: row.model_key,
+    cliModelMode: row.cli_model_mode,
+    cliModel: row.cli_model,
   };
 }
 
@@ -180,7 +185,23 @@ export async function writeReasoningEffortToOrigin(
 }
 
 /**
- * writeToOriginMachine 是上面两跳共用的那一段：向池子借一条到发起端**机器**的通道
+ * 把这条会话的 CLI 自带模型选择也写到**发起端**那一台（规格 2026-10-26）。
+ *
+ * 与上面两跳同构：`mode` 空串是「跟随 Agent 绑定」，同样是要写下去的值。够不着时
+ * **抛出**，由调用方折进「只写成一台」。
+ */
+export async function writeCLIModelToOrigin(
+  origin: string,
+  params: { conversationId: string; mode: string; value: string },
+): Promise<void> {
+  await writeToOriginMachine(origin, rpcMethods.setSessionCLIModel, {
+    ...params,
+    peerFingerprint: origin,
+  });
+}
+
+/**
+ * writeToOriginMachine 是上面三跳共用的那一段：向池子借一条到发起端**机器**的通道
  * 写一次，写完还回去。走 `machine:` 而不是 `conversation:`：目标就是「那一台」，而
  * 服务端按对话解析出的是**承载**机器，正是这里要绕开的那一台。
  */

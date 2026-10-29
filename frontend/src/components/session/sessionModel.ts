@@ -46,6 +46,37 @@ export function lastUsedModelId(
   return "";
 }
 
+/** 换模型选择的那两种持久 notice（换供应商目标 / 换 CLI 自带模型）。 */
+const MODEL_SWITCH_NOTICE_KINDS = new Set(["switch", "cli_model"]);
+
+/**
+ * `lastUsedModelId` 报出模型的那一轮之后，会话的模型选择又换过没有。
+ *
+ * 切换 notice 落在报出模型的那条助手消息里或更后面 = 选择是在那一轮开跑之后才换的
+ * （轮中挂起或轮后空闲切换），那一轮报的是旧选择跑出来的历史，不是下一轮会跑的。
+ * 页内这一点由 pill 自己记着；刷新之后能证明它的只剩转录里的这条 notice。
+ * 一条报出模型的消息都没有时是 false（没有可作废的报告）。
+ */
+export function modelChoiceChangedSinceLastUse(
+  messages: readonly TranscriptMessage[],
+): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (
+      message.blocks?.some(
+        (b) =>
+          b.type === "notice" &&
+          MODEL_SWITCH_NOTICE_KINDS.has(b.noticeKind ?? ""),
+      )
+    )
+      return messages
+        .slice(0, i + 1)
+        .some((m) => m.role === "assistant" && !!m.model);
+    if (message.role === "assistant" && message.model) return false;
+  }
+  return false;
+}
+
 /**
  * 目录里那个模型 ID 的上下文窗口；查不到（模型不在目录里、或目录没报窗口）是 0。
  *

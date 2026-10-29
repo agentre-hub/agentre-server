@@ -101,9 +101,14 @@ type SessionSummary struct {
 	// 值不一致时以发起端为准，而这张表的身份键本来就是 (账号, 发起端指纹, 会话 id)。
 	ProviderKey string `gorm:"column:provider_key;default:''"`
 	ModelKey    string `gorm:"column:model_key;default:''"`
-	LastReadAt  int64  `gorm:"column:last_read_at;default:0"`
-	Createtime  int64  `gorm:"column:createtime;default:0"`
-	Updatetime  int64  `gorm:"column:updatetime;default:0"`
+	// CLIModelMode / CLIModel 是这条对话的 CLI 自带模型选择，逐字镜像发起端：mode 空 =
+	// 跟随 Agent 绑定、"cli-default" = CLI 自己的默认、"fixed" = 钉死 CLIModel；
+	// CLIModel 仅 fixed 时非空。空有含义（跟随绑定），与 ProviderKey 同理不补默认。
+	CLIModelMode string `gorm:"column:cli_model_mode;default:''"`
+	CLIModel     string `gorm:"column:cli_model;default:''"`
+	LastReadAt   int64  `gorm:"column:last_read_at;default:0"`
+	Createtime   int64  `gorm:"column:createtime;default:0"`
+	Updatetime   int64  `gorm:"column:updatetime;default:0"`
 }
 
 func (*SessionSummary) TableName() string { return "agent_sessions" }

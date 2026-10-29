@@ -83,6 +83,10 @@ type SavedSessionItem struct {
 	// 机器离线时详情页据此仍显示得出模型。两者都是不透明稳定 key，不是路径。
 	ProviderKey string `json:"provider_key,omitempty"`
 	ModelKey    string `json:"model_key,omitempty"`
+	// CLIModelMode / CLIModel 是这条对话的 CLI 自带模型选择：mode 空 = 跟随 Agent 绑定、
+	// "cli-default" = CLI 自己的默认、"fixed" = 钉死 CLIModel。不透明模型 id，不是路径。
+	CLIModelMode string `json:"cli_model_mode,omitempty"`
+	CLIModel     string `json:"cli_model,omitempty"`
 }
 
 // SavedSessionGroup 是一个组：身份、它在**当前搜索与筛选下**的真数，以及先给的那

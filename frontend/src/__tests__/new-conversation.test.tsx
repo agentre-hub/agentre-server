@@ -23,6 +23,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "@/lib/api";
+import { listCLIModelsOn } from "@/lib/cliModels";
 import {
   DispatchRunError,
   dispatchNewConversation,
@@ -58,6 +59,10 @@ vi.mock("@/lib/dispatch", async (importOriginal) => {
 vi.mock("@/lib/relayTicket", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/relayTicket")>();
   return { ...actual, ensureRelayTicket: vi.fn() };
+});
+vi.mock("@/lib/cliModels", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/cliModels")>();
+  return { ...actual, listCLIModelsOn: vi.fn() };
 });
 vi.mock("@/hooks/use-relay", () => ({ useRelayChannel: vi.fn() }));
 // 账号级实时通道自己要取一张票据（它就是靠票据接入的）。这个文件断言的是**挑
@@ -2226,6 +2231,200 @@ describe("草稿页的权限档位与模型控件", () => {
     expect(
       screen.queryByRole("button", { name: /Permission mode/ }),
     ).toBeNull();
+  });
+});
+
+/**
+ * 草稿页模型 pill 的 CLI 自带模型段（规格 2026-10-26）：同一颗 pill、选择随第一句
+ * 过线（不追加 notice），与供应商目标互斥，没选就什么都不带。
+ */
+describe("草稿页的 CLI 自带模型", () => {
+  const cliCatalog = {
+    models: [
+      { value: "sonnet", label: "CLI Sonnet", modelId: "claude-sonnet-4-6" },
+      { value: "opus", label: "CLI Opus", modelId: "claude-opus-4-7" },
+    ],
+    effectiveValue: "sonnet",
+    effectiveModelId: "claude-sonnet-4-6",
+  };
+  const providers = {
+    providers: [
+      {
+        provider_key: "pk-1",
+        name: "Anthropic",
+        type: "anthropic",
+        default_model_key: "mk-1",
+        enabled: true,
+        models: [
+          {
+            model_key: "mk-1",
+            model_id: "claude-sonnet-4-6",
+            name: "Sonnet",
+            enabled: true,
+          },
+        ],
+      },
+    ],
+  };
+  const cliBackend = {
+    sync_id: "b-a",
+    type: "claudecode",
+    provider_key: "",
+    model_key: "",
+    env_json: "",
+    reasoning_effort: "",
+    config: { defaultPermissionMode: "" },
+  };
+
+  function stubCLIMachine() {
+    const request = vi.fn(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [
+            {
+              conversationId: "99",
+              title: "跑一下失败的测试",
+              agentSyncId: "agent-1",
+              backendType: "claudecode",
+              lifecycleState: "idle",
+              latestSeq: 0,
+              peerFingerprint: "fp-a",
+            },
+          ],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      return {};
+    });
+    mockUseRelay.mockReturnValue({
+      client: {
+        request,
+        attach: vi.fn(async () => ({})),
+        catchUp: vi.fn(async () => {}),
+        setCursor: vi.fn(),
+        getCursor: vi.fn(() => 0),
+        close: vi.fn(),
+      } as never,
+      relayState: "connected",
+      relayTicket,
+      relayTicketError: null,
+      handshakeRejection: null,
+      reconnect: vi.fn(),
+    });
+  }
+
+  beforeEach(() => {
+    stubReads({
+      "/v1/engine/backends": { backends: [cliBackend] },
+      "/v1/engine/providers": providers,
+      "/v1/engine/cli-overlays": { overlays: [] },
+    });
+    vi.mocked(listCLIModelsOn).mockReset();
+    vi.mocked(listCLIModelsOn).mockResolvedValue(cliCatalog);
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    stubCLIMachine();
+    mockDispatch.mockResolvedValue({
+      conversationId: "99",
+      deviceId: 20,
+      deviceFingerprint: "fp-a",
+      peerFingerprint: "fp-web",
+      title: "跑一下失败的测试",
+      userText: "跑一下失败的测试",
+      modelPinned: true,
+      reasoningEffortPinned: true,
+      savedToAccount: true,
+    });
+  });
+
+  async function openPill() {
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+    const pill = await screen.findByRole("button", {
+      name: /Provider and model/,
+    });
+    await waitFor(() => expect(pill.textContent).toContain("CLI Sonnet"), {
+      timeout: 3_000,
+    });
+    return pill;
+  }
+
+  async function send() {
+    await typeInDraft("跑一下失败的测试");
+    const btn = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(btn.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(btn);
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalledTimes(1));
+    return mockDispatch.mock.calls[0][0];
+  }
+
+  it("Given 挑了一项 CLI 模型, When 发出第一句, Then 选择随派发交出去", async () => {
+    const pill = await openPill();
+    fireEvent.click(pill);
+    fireEvent.click(await screen.findByRole("option", { name: /CLI Opus/ }));
+    await waitFor(() => expect(pill.textContent).toContain("CLI Opus"));
+
+    const input = await send();
+    expect(input.cliModel).toEqual({ mode: "fixed", value: "opus" });
+    expect(input.modelTarget?.providerKey ?? "").toBe("");
+  });
+
+  it("Given 没动过 pill, When 发出第一句, Then 不交出 CLI 选择", async () => {
+    await openPill();
+    const input = await send();
+    expect(input.cliModel?.mode ?? "").toBe("");
+  });
+
+  it("Given 先挑了 CLI 模型再挑供应商目标, When 发出第一句, Then 只交出供应商目标", async () => {
+    const pill = await openPill();
+    fireEvent.click(pill);
+    fireEvent.click(await screen.findByRole("option", { name: /CLI Opus/ }));
+    await waitFor(() => expect(pill.textContent).toContain("CLI Opus"));
+    fireEvent.click(pill);
+    fireEvent.click(await screen.findByRole("option", { name: /^Sonnet/ }));
+    await waitFor(() => expect(pill.textContent).not.toContain("CLI Opus"));
+
+    const input = await send();
+    expect(input.modelTarget).toEqual({
+      providerKey: "pk-1",
+      modelKey: "mk-1",
+    });
+    expect(input.cliModel?.mode ?? "").toBe("");
+  });
+
+  // 「跟随 Agent 绑定」那一项在 CLI 段出现时走的是供应商目标的 onChange（两格皆空），
+  // 它同样是「回到跟随」——不能只清供应商目标而把上一次挑的 CLI 模型留着带过线。
+  it("Given 挑了 CLI 模型后又选回跟随 Agent 绑定, When 发出第一句, Then 不交出 CLI 选择", async () => {
+    const pill = await openPill();
+    fireEvent.click(pill);
+    fireEvent.click(await screen.findByRole("option", { name: /CLI Opus/ }));
+    await waitFor(() => expect(pill.textContent).toContain("CLI Opus"));
+    fireEvent.click(pill);
+    fireEvent.click(
+      await screen.findByRole("option", { name: /Follow agent binding/ }),
+    );
+    await waitFor(() => expect(pill.textContent).not.toContain("CLI Opus"));
+
+    const input = await send();
+    expect(input.cliModel?.mode ?? "").toBe("");
+    expect(input.modelTarget?.providerKey ?? "").toBe("");
+  });
+
+  it("Given Agent 绑着供应商, When 发出第一句, Then 不交出 CLI 选择", async () => {
+    stubReads({
+      "/v1/engine/backends": {
+        backends: [{ ...cliBackend, provider_key: "pk-1", model_key: "mk-1" }],
+      },
+      "/v1/engine/providers": providers,
+      "/v1/engine/cli-overlays": { overlays: [] },
+    });
+    renderChat();
+    await openDraft();
+    await awaitDraftComposer();
+    await screen.findByRole("button", { name: /Provider and model/ });
+    const input = await send();
+    expect(input.cliModel?.mode ?? "").toBe("");
   });
 });
 

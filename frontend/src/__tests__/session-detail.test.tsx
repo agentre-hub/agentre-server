@@ -4767,8 +4767,9 @@ describe("会话详情：输入框底栏窄屏不溢出（类名断言）", () =
             },
           ],
         };
-      // 确知没绑供应商（空串）：底栏那颗模型 chip 因此摆出最长的那句
-      // 「跟随 Agent 绑定 · CLI 自身登录态」——真实场景里压垮输入框的那一档。
+      // 确知没绑供应商（空串）：底栏那颗模型 chip 因此摆出「跟随 Agent 绑定」那一档
+      // （claudecode 走 CLI 自带模型段，脸上接着写 CLI 解析出的模型）——真实场景里
+      // 压垮输入框的那一档。
       if (path === "/v1/engine/backends")
         return {
           backends: [
@@ -4814,7 +4815,7 @@ describe("会话详情：输入框底栏窄屏不溢出（类名断言）", () =
 
     const modelChip = await screen.findByTestId("composer-model-target");
     await waitFor(() =>
-      expect(modelChip.textContent).toContain("CLI login state"),
+      expect(modelChip.textContent).toContain("Follow agent binding"),
     );
     // 成因一：触发器此前只有 `w-auto`，没有 `min-w-0`——flex item 的默认
     // `min-width:auto` 顶住了内部已经写好的 truncate，省略号从没生效过。
