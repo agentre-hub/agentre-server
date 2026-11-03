@@ -125,7 +125,10 @@ describe("组织面移动形态：索引升整页，详情下钻", () => {
     renderOrgAt("/org/agent/agent-alice");
 
     const header = await screen.findByTestId("org-detail-header");
-    expect(within(header).getByText("Alice")).toBeTruthy();
+    // 名字现在是身份区里的可编辑输入框（共享 IdentityFields），不再是纯文本。
+    expect(
+      within(header).getByRole("textbox", { name: "Name" }),
+    ).toHaveProperty("value", "Alice");
   });
 
   it("详情头部带返回，按下去回索引", async () => {
