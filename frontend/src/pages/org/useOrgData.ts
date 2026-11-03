@@ -32,19 +32,23 @@ export function useOrgData(): UseOrgDataResult {
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
 
+  const reloadSequence = React.useRef(0);
   const reload = React.useCallback(async () => {
+    const sequence = ++reloadSequence.current;
     try {
       const [chartRes, backendsRes] = await Promise.all([
         api<OrgChartResponse>("/v1/workspace/org"),
         api<{ backends: OrgBackendItem[] }>("/v1/workspace/org/backends"),
       ]);
+      // 字段写后刷新与通道刷新可能重叠；旧快照不能把刚保存的身份回滚。
+      if (sequence !== reloadSequence.current) return;
       setChart(chartRes);
       setBackends(backendsRes.backends ?? []);
       setError(null);
     } catch (err) {
-      setError(errorText(err));
+      if (sequence === reloadSequence.current) setError(errorText(err));
     } finally {
-      setLoading(false);
+      if (sequence === reloadSequence.current) setLoading(false);
     }
   }, []);
 

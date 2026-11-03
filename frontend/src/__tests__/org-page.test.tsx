@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -253,6 +254,77 @@ describe("组织索引：与桌面端同形（共享组件搭成）", () => {
 });
 
 /**
+ * 预设头像（共享包 bf46e288，规格 2026-11-02「预置头像」）：`avatar_icon` / 部门
+ * `icon` 里存的是 `preset:<组>-<名字>`。宿主只负责把持久化的 key 原样递下去 ——
+ * 认 key、找素材、整格画图都在共享包里，所以这里钉的是「同一份数据两端画成同一张
+ * 图」：索引行的 Agent 与归属那一格的部门记号都要换成预设图，而不是首字母。
+ */
+describe("预设头像：存 preset key 就画预设图", () => {
+  const presetChart: OrgChartResponse = {
+    departments: [
+      {
+        sync_id: "dept-dev",
+        name: "Dev Team",
+        icon: "preset:team-dev",
+        sort_order: 0,
+      },
+    ],
+    agents: [
+      {
+        sync_id: "agent-arch",
+        name: "Architect",
+        department_sync_id: "dept-dev",
+        avatar_icon: "preset:agent-architect",
+        sort_order: 0,
+        exec_targets: [],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && (!init || init.method === undefined))
+        return presetChart;
+      if (path === "/v1/workspace/org/backends") return { backends };
+      if (init?.method === "POST") return { sync_id: "new", version: 1 };
+      throw new Error(`unexpected request: ${path}`);
+    });
+  });
+
+  it("Given 部门存了预设，Then 详情头部的记号按钮画 team-dev，不画另一枚首字方块", async () => {
+    renderOrg();
+    const node = await screen.findByText("Dev Team");
+    const row = node.closest('[data-slot="org-group-header"]') as HTMLElement;
+    fireEvent.click(within(row).getByTestId(/^org-group-select-/));
+    const header = screen.getByTestId("org-detail-header");
+    const trigger = within(header).getByRole("button", { name: "Change icon" });
+    expect(trigger.querySelector("img")?.getAttribute("src")).toContain(
+      "team-dev",
+    );
+    expect(within(header).getAllByRole("img")).toHaveLength(1);
+  });
+
+  it("索引行画 agent-architect，归属那一格的部门记号画 team-dev", async () => {
+    renderOrg();
+    const row = (await screen.findByText("Architect")).closest(
+      '[data-slot="org-index-row"]',
+    ) as HTMLElement;
+    expect(row.querySelector("img")?.getAttribute("src")).toContain(
+      "agent-architect",
+    );
+
+    fireEvent.click(within(row).getByTestId(/^org-row-select-/));
+
+    const placement = await screen.findByRole("combobox", {
+      name: "Placement",
+    });
+    expect(placement.querySelector("img")?.getAttribute("src")).toContain(
+      "team-dev",
+    );
+  });
+});
+
+/**
  * 筛空了的那一块（会话索引同一条：`session-index.test.tsx`「空态与失败的出路」）。
  *
  * 此前它是整栏垂直居中的两行：「未找到 Agent」+ 一行 mono 小字「命中条件：foo ·
@@ -438,6 +510,393 @@ describe("索引收敛：行尾徽标、收放、一行工具条、组头动作"
   });
 });
 
+describe.each([
+  {
+    kind: "agent",
+    label: "Alice",
+    syncId: "agent-alice",
+    trigger: "Change avatar",
+    iconKey: "avatar_icon",
+    colorKey: "avatar_color",
+    preset: "Architect",
+    presetKey: "preset:agent-architect",
+  },
+  {
+    kind: "department",
+    label: "Engineering",
+    syncId: "dept-eng",
+    trigger: "Change icon",
+    iconKey: "icon",
+    colorKey: "accent_color",
+    preset: "Engineering",
+    presetKey: "preset:team-dev",
+  },
+])(
+  "$kind 详情的共享身份区",
+  ({ kind, label, syncId, trigger, iconKey, colorKey, preset, presetKey }) => {
+    async function openDetail() {
+      renderOrg();
+      const node = await screen.findByText(label);
+      const row = node.closest(
+        kind === "agent"
+          ? '[data-slot="org-index-row"]'
+          : '[data-slot="org-group-header"]',
+      ) as HTMLElement;
+      fireEvent.click(
+        within(row).getByTestId(
+          kind === "agent" ? /^org-row-select-/ : /^org-group-select-/,
+        ),
+      );
+      return screen.getByTestId("org-detail-header");
+    }
+
+    function updates() {
+      return mockedApi.mock.calls
+        .filter(
+          ([path]) =>
+            path ===
+            `/v1/workspace/org/${kind === "agent" ? "agents" : "departments"}/update`,
+        )
+        .map(([, init]) => JSON.parse(init!.body as string));
+    }
+
+    it("Given 已选详情，Then 头部只有一份可编辑身份，正文没有另铺的名称、描述、色板或图标", async () => {
+      const header = await openDetail();
+      const col = screen.getByTestId("org-detail-col");
+      expect(
+        within(header).getAllByRole("textbox", { name: "Name" }),
+      ).toHaveLength(1);
+      expect(
+        within(header).getAllByRole("textbox", { name: "Description" }),
+      ).toHaveLength(1);
+      expect(
+        within(col).getAllByRole("textbox", { name: "Name" }),
+      ).toHaveLength(1);
+      expect(
+        within(col).getAllByRole("textbox", { name: "Description" }),
+      ).toHaveLength(1);
+      expect(
+        within(header).getAllByRole("button", { name: trigger }),
+      ).toHaveLength(1);
+      expect(within(col).queryByRole("radiogroup")).toBeNull();
+      expect(within(col).queryByRole("group", { name: "Color" })).toBeNull();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      expect(screen.queryByRole("tab", { name: "Image" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
+    });
+
+    it("保存状态与失败重试保留在名称和描述之间，不占身份区右侧的动作位", async () => {
+      let fail = true;
+      mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+        if (path === "/v1/workspace/org" && !init?.method) return chart;
+        if (path === "/v1/workspace/org/backends") return { backends };
+        if (path.endsWith("/update")) {
+          if (fail) throw new ApiError(1001, "name already taken", 400);
+          return { sync_id: syncId, version: 2 };
+        }
+        throw new Error(`unexpected request: ${path}`);
+      });
+      const header = await openDetail();
+      const name = within(header).getByRole("textbox", { name: "Name" });
+      const description = within(header).getByRole("textbox", {
+        name: "Description",
+      });
+      const expectInMeta = (status: HTMLElement) => {
+        expect(
+          name.compareDocumentPosition(status) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(
+          status.compareDocumentPosition(description) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      };
+      fireEvent.change(name, { target: { value: "Changed name" } });
+      fireEvent.blur(name);
+      const status = await screen.findByTestId("org-detail-save-status");
+      await waitFor(() => expect(status.textContent).toContain("Save failed"));
+      expectInMeta(status);
+      expect(within(status).getByText("name already taken")).toBeTruthy();
+      fail = false;
+      fireEvent.click(within(status).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(status.textContent).toContain("Saved · just now"),
+      );
+      expectInMeta(status);
+      expect(updates()).toEqual([
+        { sync_id: syncId, name: "Changed name" },
+        { sync_id: syncId, name: "Changed name" },
+      ]);
+    });
+
+    it.each(["Name", "Description"])(
+      "Given %s 未改则失焦不发请求，When 改动后失焦，Then 只提交这个键",
+      async (field) => {
+        await openDetail();
+        const input = screen.getByRole("textbox", { name: field });
+        fireEvent.blur(input);
+        expect(updates()).toEqual([]);
+        fireEvent.change(input, { target: { value: "Changed value" } });
+        expect(updates()).toEqual([]);
+        fireEvent.blur(input);
+        await waitFor(() =>
+          expect(updates()).toEqual([
+            { sync_id: syncId, [field.toLowerCase()]: "Changed value" },
+          ]),
+        );
+      },
+    );
+
+    it("空白名称失焦恢复已有名称，不写入空身份", async () => {
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "   " } });
+      fireEvent.blur(name);
+      expect(name).toHaveProperty("value", label);
+      expect(updates()).toEqual([]);
+    });
+
+    it("未编辑的身份跟随刷新，不在失焦时写回旧名称", async () => {
+      const header = await openDetail();
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === "/v1/workspace/org") {
+          const rename = <T extends { sync_id: string }>(row: T) =>
+            row.sync_id === syncId ? { ...row, name: "Renamed" } : row;
+          return {
+            agents: chart.agents.map(rename),
+            departments: chart.departments.map(rename),
+          };
+        }
+        return previous(path, init);
+      });
+      await act(async () =>
+        mockedStartChannel.mock.calls[0][0].onRefresh(null),
+      );
+      const name = within(header).getByLabelText("Name");
+      fireEvent.blur(name);
+      expect(updates()).toEqual([]);
+      expect(name).toHaveProperty("value", "Renamed");
+    });
+
+    it("刷新后的记号使用服务端值，失败的选择不伪装成已保存", async () => {
+      const header = await openDetail();
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === "/v1/workspace/org") {
+          const change = <T extends { sync_id: string }>(row: T) =>
+            row.sync_id === syncId
+              ? { ...row, [iconKey]: presetKey, [colorKey]: agentColorOrder[4] }
+              : row;
+          return {
+            agents: chart.agents.map(change),
+            departments: chart.departments.map(change),
+          };
+        }
+        if (path.endsWith("/update")) throw new Error("write rejected");
+        return previous(path, init);
+      });
+      await act(async () =>
+        mockedStartChannel.mock.calls[0][0].onRefresh(null),
+      );
+      const mark = within(header).getByRole("img", { name: label });
+      expect(mark.querySelector("img")).not.toBeNull();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(screen.getByRole("tab", { name: "Presets" }));
+      fireEvent.click(screen.getByRole("button", { name: "Clear preset" }));
+      await waitFor(() =>
+        expect(within(header).getByText("write rejected")).toBeTruthy(),
+      );
+      expect(mark.querySelector("img")).not.toBeNull();
+    });
+
+    it("写入后的刷新不能被在途的旧快照覆盖", async () => {
+      const header = await openDetail();
+      const previous = mockedApi.getMockImplementation()!;
+      let release!: () => void;
+      let stale = true;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === "/v1/workspace/org") {
+          if (stale) {
+            stale = false;
+            return new Promise((resolve) => {
+              release = () => resolve(chart);
+            });
+          }
+          const rename = <T extends { sync_id: string }>(row: T) =>
+            row.sync_id === syncId ? { ...row, name: "New name" } : row;
+          return {
+            agents: chart.agents.map(rename),
+            departments: chart.departments.map(rename),
+          };
+        }
+        return previous(path, init);
+      });
+      act(() => mockedStartChannel.mock.calls[0][0].onRefresh(null));
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "New name" } });
+      fireEvent.blur(name);
+      await within(header).findByText("Saved · just now");
+      await act(async () => release());
+      expect(name).toHaveProperty("value", "New name");
+    });
+
+    function deferFirstUpdate() {
+      let reject!: (error: Error) => void;
+      const previous = mockedApi.getMockImplementation()!;
+      let first = true;
+      mockedApi.mockImplementation((path, init) => {
+        if (first && path.endsWith("/update")) {
+          first = false;
+          return new Promise((_, fail) => {
+            reject = fail;
+          });
+        }
+        return previous(path, init);
+      });
+      return () => reject(new Error("duplicate name"));
+    }
+
+    it("有在途名称时重复失焦不重写，改回原名仍然提交", async () => {
+      const fail = deferFirstUpdate();
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "Duplicate" } });
+      fireEvent.blur(name);
+      fireEvent.blur(name);
+      fireEvent.change(name, { target: { value: label } });
+      fireEvent.blur(name);
+      await waitFor(() => expect(updates()).toHaveLength(1));
+      await act(async () => fail());
+      expect(updates()).toEqual([
+        { sync_id: syncId, name: "Duplicate" },
+        { sync_id: syncId, name: label },
+      ]);
+    });
+
+    it("关闭重开同一详情，新名称仍然排在旧写入之后", async () => {
+      const fail = deferFirstUpdate();
+      let header = await openDetail();
+      fireEvent.change(within(header).getByLabelText("Name"), {
+        target: { value: "First" },
+      });
+      fireEvent.blur(within(header).getByLabelText("Name"));
+      fireEvent.click(within(header).getByRole("button", { name: "Close" }));
+      const row = screen
+        .getByText(label)
+        .closest(
+          kind === "agent"
+            ? '[data-slot="org-index-row"]'
+            : '[data-slot="org-group-header"]',
+        ) as HTMLElement;
+      fireEvent.click(
+        within(row).getByTestId(
+          kind === "agent" ? /^org-row-select-/ : /^org-group-select-/,
+        ),
+      );
+      header = screen.getByTestId("org-detail-header");
+      fireEvent.change(within(header).getByLabelText("Name"), {
+        target: { value: "Second" },
+      });
+      fireEvent.blur(within(header).getByLabelText("Name"));
+      await waitFor(() => expect(updates()).toHaveLength(1));
+      await act(async () => fail());
+      expect(updates()).toEqual([
+        { sync_id: syncId, name: "First" },
+        { sync_id: syncId, name: "Second" },
+      ]);
+      expect(screen.getByRole("alert").textContent).toContain("duplicate name");
+      fireEvent.change(within(header).getByLabelText("Name"), {
+        target: { value: "Corrected" },
+      });
+      fireEvent.blur(within(header).getByLabelText("Name"));
+      await within(header).findByText("Saved · just now");
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("名称提交期间选颜色不抢写，颜色成功也不会吞掉名称错误与重试", async () => {
+      const fail = deferFirstUpdate();
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "Duplicate" } });
+      fireEvent.blur(name);
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Color" })).getByRole(
+          "button",
+          { name: agentColorOrder[4] },
+        ),
+      );
+      await act(async () => {});
+      const rename = { sync_id: syncId, name: "Duplicate" };
+      expect(updates()).toEqual([rename]);
+      await act(async () => fail());
+      expect(updates()).toEqual([
+        rename,
+        { sync_id: syncId, [colorKey]: agentColorOrder[4] },
+      ]);
+      expect(within(header).getByText("duplicate name")).toBeTruthy();
+      fireEvent.click(
+        within(header).getByRole("button", { name: "Retry", hidden: true }),
+      );
+      await waitFor(() => expect(updates()).toHaveLength(3));
+      expect(updates()[2]).toEqual(rename);
+    });
+
+    it("关闭详情后字段写入失败，错误仍在页面上", async () => {
+      const fail = deferFirstUpdate();
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "Duplicate" } });
+      fireEvent.blur(name);
+      fireEvent.click(within(header).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(updates()).toHaveLength(1));
+      await act(async () => fail());
+      expect(screen.getByRole("alert").textContent).toContain("duplicate name");
+    });
+
+    it("When 选择预设，Then 立即只提交记号键", async () => {
+      const header = await openDetail();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(screen.getByRole("tab", { name: "Presets" }));
+      fireEvent.click(screen.getByRole("radio", { name: preset }));
+      await waitFor(() =>
+        expect(updates()).toEqual([{ sync_id: syncId, [iconKey]: presetKey }]),
+      );
+    });
+
+    it("When 选择颜色，Then 立即只提交颜色键", async () => {
+      const header = await openDetail();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      const palette = screen.getByRole("group", { name: "Color" });
+      expect(within(palette).getAllByRole("button")).toHaveLength(
+        agentColorOrder.length,
+      );
+      fireEvent.click(
+        within(palette).getByRole("button", { name: agentColorOrder[2] }),
+      );
+      await waitFor(() =>
+        expect(updates()).toEqual([
+          { sync_id: syncId, [colorKey]: agentColorOrder[2] },
+        ]),
+      );
+    });
+
+    it.each([
+      ["Presets", "Clear preset"],
+      ["Icons", "Clear icon"],
+    ])("When 在 %s 档取消记号，Then 只提交空字符串", async (mode, clear) => {
+      const header = await openDetail();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(screen.getByRole("tab", { name: mode }));
+      fireEvent.click(screen.getByRole("button", { name: clear }));
+      await waitFor(() =>
+        expect(updates()).toEqual([{ sync_id: syncId, [iconKey]: "" }]),
+      );
+    });
+  },
+);
+
 describe("部门详情：图标与强调色是挑出来的，不是打出来的", () => {
   /** 选中「Engineering」这个部门，返回详情列。 */
   async function openEngineering() {
@@ -493,16 +952,20 @@ describe("部门详情：图标与强调色是挑出来的，不是打出来的"
     );
   });
 
-  it("图标不再是自由文本框，而是一组可挑的图标", async () => {
+  it("Given 没有部门图标，Then 头部的可点击记号显示部门首字和强调色", async () => {
     const col = await openEngineering();
-    expect(within(col).queryByLabelText("Icon key")).toBeNull();
-    expect(within(col).getByRole("radiogroup", { name: "Icon" })).toBeTruthy();
+    const header = within(col).getByTestId("org-detail-header");
+    const trigger = within(header).getByRole("button", { name: "Change icon" });
+    const mark = within(trigger).getByRole("img", { name: "Engineering" });
+    expect(mark.textContent).toBe("E");
+    expect(mark.style.backgroundColor).toBe("var(--agent-1)");
   });
 
   it("挑一个图标只提交 icon 这一个键", async () => {
     const col = await openEngineering();
-    const group = within(col).getByRole("radiogroup", { name: "Icon" });
-    fireEvent.click(within(group).getByRole("radio", { name: "Launch" }));
+    fireEvent.click(within(col).getByRole("button", { name: "Change icon" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Icons" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
 
     await waitFor(() =>
       expect(mockedApi).toHaveBeenCalledWith(
@@ -515,25 +978,31 @@ describe("部门详情：图标与强调色是挑出来的，不是打出来的"
     );
   });
 
-  it("强调色不再是自由文本框，而是与 Agent 同一套色板", async () => {
-    const col = await openEngineering();
-    expect(within(col).queryByLabelText("Accent color key")).toBeNull();
-    const group = within(col).getByRole("radiogroup", {
-      name: "Accent color",
+  it("Given 部门强调色已设置，Then 头部首字记号使用该颜色", async () => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && !init?.method)
+        return {
+          ...chart,
+          departments: chart.departments.map((d) => ({
+            ...d,
+            accent_color: "agent-5",
+          })),
+        };
+      if (path === "/v1/workspace/org/backends") return { backends };
+      throw new Error(`unexpected request: ${path}`);
     });
-    // 与 Agent 头像色板同一套（桌面端 org-detail-department.tsx 用的就是
-    // safeAgentColor + agentColorClassNames），所以格数与共享包的 agentColorOrder 一致。
-    expect(within(group).getAllByRole("radio").length).toBe(
-      agentColorOrder.length,
-    );
+    await openEngineering();
+    const header = screen.getByTestId("org-detail-header");
+    const mark = within(
+      within(header).getByRole("button", { name: "Change icon" }),
+    ).getByRole("img", { name: "Engineering" });
+    expect(mark.style.backgroundColor).toBe("var(--agent-5)");
   });
 
   it("挑一个强调色只提交 accent_color 这一个键", async () => {
     const col = await openEngineering();
-    const group = within(col).getByRole("radiogroup", {
-      name: "Accent color",
-    });
-    fireEvent.click(within(group).getAllByRole("radio")[2]);
+    fireEvent.click(within(col).getByRole("button", { name: "Change icon" }));
+    fireEvent.click(screen.getByRole("button", { name: agentColorOrder[2] }));
 
     await waitFor(() =>
       expect(mockedApi).toHaveBeenCalledWith(
@@ -549,6 +1018,191 @@ describe("部门详情：图标与强调色是挑出来的，不是打出来的"
     );
   });
 });
+
+describe.each([
+  {
+    kind: "agent",
+    trigger: "Change avatar",
+    preset: "Architect",
+    presetKey: "preset:agent-architect",
+    iconKey: "avatar_icon",
+    colorKey: "avatar_color",
+    resource: "agents",
+  },
+  {
+    kind: "department",
+    trigger: "Change icon",
+    preset: "Engineering",
+    presetKey: "preset:team-dev",
+    iconKey: "icon",
+    colorKey: "accent_color",
+    resource: "departments",
+  },
+])(
+  "$kind 新建对话框的共享身份区",
+  ({ kind, trigger, preset, presetKey, iconKey, colorKey, resource }) => {
+    async function openCreate() {
+      renderOrg();
+      const label = await screen.findByText("Engineering");
+      if (kind === "agent") {
+        const header = label.closest(
+          '[data-slot="org-group-header"]',
+        ) as HTMLElement;
+        fireEvent.click(within(header).getByTestId(/^org-group-add-agent-/));
+      } else {
+        fireEvent.click(
+          within(screen.getByTestId("org-detail-col")).getByRole("button", {
+            name: "New department",
+          }),
+        );
+      }
+      return screen.getByRole("dialog");
+    }
+
+    function creates() {
+      return mockedApi.mock.calls.filter(
+        ([path, init]) =>
+          path === `/v1/workspace/org/${resource}` && init?.method === "POST",
+      );
+    }
+
+    it("Given 空草稿，When 打开，Then 有名称、描述、默认记号且空名称不能创建", async () => {
+      const dialog = await openCreate();
+      expect(
+        within(dialog).getByRole("textbox", { name: "Name" }),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("textbox", { name: "Description" }),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("button", { name: trigger }),
+      ).toBeTruthy();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "   " },
+      });
+      expect(
+        (
+          within(dialog).getByRole("button", {
+            name: "Create",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+      expect(creates()).toHaveLength(0);
+    });
+
+    it("输入法确认名称候选不提前提交，普通回车提交最终草稿", async () => {
+      const dialog = await openCreate();
+      const name = within(dialog).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "yan" } });
+      fireEvent.keyDown(name, { key: "Enter", isComposing: true });
+      expect(creates()).toHaveLength(0);
+      fireEvent.change(name, { target: { value: "研发" } });
+      fireEvent.keyDown(name, { key: "Enter" });
+      await waitFor(() => expect(creates()).toHaveLength(1));
+      expect(JSON.parse(creates()[0][1]!.body as string).name).toBe("研发");
+    });
+
+    it("取消后重开不带上次草稿；关窗后的创建失败在页面可见", async () => {
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === `/v1/workspace/org/${resource}` && init?.method === "POST")
+          throw new Error("write rejected");
+        return previous(path, init);
+      });
+      let dialog = await openCreate();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "Discard me" },
+      });
+      fireEvent.change(within(dialog).getByLabelText("Description"), {
+        target: { value: "discarded description" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      fireEvent.click(
+        within(screen.getByTestId("org-detail-col")).getByRole("button", {
+          name: kind === "agent" ? "New agent" : "New department",
+        }),
+      );
+      dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByLabelText("Name")).toHaveProperty("value", "");
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "Fresh" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        i18n.t("org.errors.generic"),
+      );
+      expect(JSON.parse(creates()[0][1]!.body as string)).toEqual({
+        name: "Fresh",
+      });
+    });
+
+    it("When 只填名称并创建，Then 请求保持旧形状且写入未完成时已关窗", async () => {
+      let resolveWrite!: (value: unknown) => void;
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation((path, init) => {
+        if (
+          path === `/v1/workspace/org/${resource}` &&
+          init?.method === "POST"
+        ) {
+          return new Promise((resolve) => {
+            resolveWrite = resolve;
+          });
+        }
+        return previous(path, init);
+      });
+      const dialog = await openCreate();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "  New identity  " },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(creates()).toHaveLength(1));
+      expect(JSON.parse(creates()[0][1]!.body as string)).toEqual({
+        name: "New identity",
+        ...(kind === "agent" ? { department_sync_id: "dept-eng" } : {}),
+      });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      resolveWrite({ sync_id: "new-sync-id", version: 1 });
+      await waitFor(() =>
+        expect(
+          mockedApi.mock.calls.filter(([path]) => path === "/v1/workspace/org")
+            .length,
+        ).toBeGreaterThan(1),
+      );
+    });
+
+    it("When 设置描述、预设与颜色，Then 草稿不写入且创建时一起提交", async () => {
+      const dialog = await openCreate();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "New identity" },
+      });
+      fireEvent.change(within(dialog).getByLabelText("Description"), {
+        target: { value: "  A description  " },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: trigger }));
+      expect(screen.queryByRole("tab", { name: "Image" })).toBeNull();
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Color" })).getByRole(
+          "button",
+          { name: agentColorOrder[2] },
+        ),
+      );
+      fireEvent.click(screen.getByRole("tab", { name: "Presets" }));
+      fireEvent.click(screen.getByRole("radio", { name: preset }));
+      fireEvent.blur(within(dialog).getByLabelText("Description"));
+      expect(creates()).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(creates()).toHaveLength(1));
+      expect(JSON.parse(creates()[0][1]!.body as string)).toEqual({
+        name: "New identity",
+        description: "A description",
+        [iconKey]: presetKey,
+        [colorKey]: agentColorOrder[2],
+        ...(kind === "agent" ? { department_sync_id: "dept-eng" } : {}),
+      });
+    });
+  },
+);
 
 describe("浏览器仅凭自身建改删部门 / Agent / 执行目标", () => {
   it("新建部门：只经浏览器发一个 POST，不需要桌面端在线", async () => {
@@ -845,8 +1499,12 @@ describe("详情头部：谁在编辑、改动落没落库（mockup 的 mhead）
     await selectAlice();
 
     const header = await screen.findByTestId("org-detail-header");
-    expect(within(header).getByText("Alice")).toBeTruthy();
-    expect(within(header).getByTestId("org-detail-avatar")).toBeTruthy();
+    expect(
+      within(header).getByRole("textbox", { name: "Name" }),
+    ).toHaveProperty("value", "Alice");
+    expect(
+      within(header).getByRole("button", { name: "Change avatar" }),
+    ).toBeTruthy();
     expect(within(header).getByText("Department lead")).toBeTruthy();
     expect(within(header).getByText("Engineering")).toBeTruthy();
   });
@@ -865,7 +1523,7 @@ describe("详情头部：谁在编辑、改动落没落库（mockup 的 mhead）
     fireEvent.click(within(row).getByTestId(/^org-row-select-/));
 
     const header = await screen.findByTestId("org-detail-header");
-    const avatar = within(header).getByTestId("org-detail-avatar");
+    const avatar = within(header).getByRole("img", { name: "CEO Agent" });
     expect(avatar.style.backgroundColor).toBe("var(--agent-1)");
     expect(avatar.style.backgroundColor).toBe(rowGlyph.style.backgroundColor);
   });
@@ -1066,7 +1724,9 @@ describe("头像：不伪造上传，改成图标选择器", () => {
     await selectAlice();
     await screen.findByLabelText("Name", { selector: "input" });
 
-    fireEvent.click(screen.getByRole("radio", { name: "Terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change avatar" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Icons" }));
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
 
     await waitFor(() =>
       expect(mockedApi).toHaveBeenCalledWith(

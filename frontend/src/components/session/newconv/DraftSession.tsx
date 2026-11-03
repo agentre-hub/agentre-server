@@ -16,7 +16,6 @@ import {
   SessionHeaderAgentMark,
   SessionHeaderBand,
   cn,
-  iconNode,
   normalizePermissionMode,
   type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
@@ -432,7 +431,7 @@ export function DraftSession({
           <SessionHeaderAgentMark
             name={agent.name}
             color={agent.avatar_color}
-            icon={iconNode(agent.avatar_icon)}
+            iconKey={agent.avatar_icon}
             status={toAgentStatus({
               lifecycleState: starting ? "running" : "idle",
             })}
@@ -728,7 +727,7 @@ function DraftPending({
             <AgentAvatar
               name={agent.name}
               color={agent.avatar_color}
-              icon={iconNode(agent.avatar_icon)}
+              iconKey={agent.avatar_icon}
               className={MESSAGE_AVATAR_CLASS}
             />
           }

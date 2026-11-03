@@ -580,6 +580,9 @@ export default function Chat() {
         syncId: a.sync_id,
         name: a.name,
         color: a.avatar_color,
+        // 索引的行首 / 第二行 / Agent 组头都画完整身份（规格 2026-11-02 决策 4）：
+        // `avatar_icon` 原样递进共享包，预设与图标都在那里解。
+        avatarIcon: a.avatar_icon,
       })),
     [agents],
   );

@@ -10,7 +10,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  iconNode,
   ProjectGlyph,
   SessionHeaderAgentMark,
   SessionHeaderBand,
@@ -99,7 +98,7 @@ export interface SessionDetailHeaderProps {
 export interface SessionHeaderAgent {
   name: string;
   avatar_color?: string;
-  /** 图标词表的 key；解成图标那一步走共享包的 `iconNode`。 */
+  /** 图标或预设的持久化 key（`avatar_icon` 原样）；解 key 那一步在共享包里。 */
   avatar_icon?: string;
 }
 
@@ -336,7 +335,7 @@ export default function SessionDetailHeader({
             <SessionHeaderAgentMark
               name={agent.name}
               color={agent.avatar_color}
-              icon={iconNode(agent.avatar_icon)}
+              iconKey={agent.avatar_icon}
               status={agentStatus}
               badgeTestId="session-detail-status-badge"
             />

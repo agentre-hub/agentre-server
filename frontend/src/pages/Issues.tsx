@@ -154,6 +154,8 @@ export default function Issues() {
         id: ids.idOf(agent.sync_id),
         name: agent.name,
         color: agent.avatar_color,
+        // 任务里的 Agent 记号也认预设：`avatar_icon` 原样递下去，解 key 在共享包里。
+        avatarIcon: agent.avatar_icon,
       })),
     [agents, ids],
   );

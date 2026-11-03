@@ -9,9 +9,10 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
+import { useOrgIdentityText } from "./useOrgIdentityText";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
-  Input,
+  IdentityFields,
   isValidOrgDepartmentDrop,
   Select,
   SelectContent,
@@ -22,12 +23,9 @@ import {
   type OrgDepartmentModel,
 } from "@agentre-hub/agentre-ui";
 
-import { OrgColorPicker, OrgIconPicker } from "./orgPickers";
-
 import type { OrgIdMaps } from "./adapter";
 import {
   OrgDetailChip,
-  OrgDetailGlyph,
   OrgDetailHeader,
   useOrgSaveState,
 } from "./OrgDetailHeader";
@@ -53,19 +51,19 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
   const { t } = useTranslation();
   const { department, departmentModel } = props;
 
-  const [name, setName] = React.useState(department.name);
-  const [description, setDescription] = React.useState(
-    department.description ?? "",
-  );
-  const [icon, setIcon] = React.useState(department.icon ?? "");
-  const [accentColor, setAccentColor] = React.useState(
-    department.accent_color ?? "",
-  );
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
   const saveState = useOrgSaveState();
+  const identityText = useOrgIdentityText(
+    department,
+    saveState,
+    props.onUpdate,
+  );
   const save = (fields: DepartmentFields) =>
-    saveState.run(() => props.onUpdate(fields));
+    saveState.run(
+      () => props.onUpdate(fields),
+      Object.keys(fields).sort().join(","),
+    );
 
   // 与 Agent 详情同一条：危险动作收进 `⋮`，不常驻版面（部门可删，所以这里
   // 总有一项）。
@@ -106,22 +104,29 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
       className="flex h-full min-w-0 flex-col"
     >
       <OrgDetailHeader
-        avatar={
-          <OrgDetailGlyph
-            label={department.name}
-            color={department.accent_color}
-          >
-            {department.name.trim().charAt(0).toUpperCase()}
-          </OrgDetailGlyph>
-        }
-        title={department.name}
-        badges={
-          <OrgDetailChip>
-            {t("org.detail.header.memberCount", {
-              n: departmentModel.memberCount ?? 0,
-            })}
-          </OrgDetailChip>
-        }
+        identity={(saveStatus) => (
+          <IdentityFields
+            kind="department"
+            testIdPrefix="org-department-identity"
+            {...identityText}
+            mark={{
+              iconKey: department.icon ?? "",
+              color: department.accent_color ?? "",
+              onPickIcon: (key) => save({ icon: key }),
+              onPickColor: (color) => save({ accent_color: color }),
+            }}
+            meta={
+              <div className="flex flex-wrap items-center gap-1.5">
+                <OrgDetailChip>
+                  {t("org.detail.header.memberCount", {
+                    n: departmentModel.memberCount ?? 0,
+                  })}
+                </OrgDetailChip>
+                {saveStatus}
+              </div>
+            }
+          />
+        )}
         save={saveState}
         menuItems={menuItems}
         onBack={props.onBack}
@@ -132,62 +137,6 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div className="flex max-w-md min-w-0 flex-col gap-4">
-          <div className="space-y-1.5">
-            <label
-              className="block text-2xs text-muted-foreground"
-              htmlFor="org-dept-name"
-            >
-              {t("org.detail.fields.name")}
-            </label>
-            <Input
-              id="org-dept-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={() => {
-                if (name !== department.name) save({ name });
-              }}
-              aria-label={t("org.detail.fields.name")}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label
-              className="block text-2xs text-muted-foreground"
-              htmlFor="org-dept-description"
-            >
-              {t("org.detail.fields.description")}
-            </label>
-            <Input
-              id="org-dept-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              onBlur={() => {
-                if (description !== (department.description ?? "")) {
-                  save({ description });
-                }
-              }}
-              aria-label={t("org.detail.fields.description")}
-            />
-          </div>
-          <OrgIconPicker
-            value={icon}
-            onPick={(key) => {
-              setIcon(key);
-              save({ icon: key });
-            }}
-            label={t("org.detail.fields.avatarIconPick")}
-            noneLabel={t("org.detail.fields.avatarIconNone")}
-            customLabel={(key) =>
-              t("org.detail.fields.avatarIconCustom", { key })
-            }
-          />
-          <OrgColorPicker
-            value={accentColor}
-            onPick={(color) => {
-              setAccentColor(color);
-              save({ accent_color: color });
-            }}
-            label={t("org.detail.fields.accentColor")}
-          />
           <div className="space-y-1.5">
             {/* 字段名不用 <label htmlFor>：Radix 的触发器是一颗 <button>，
                 点在字段名上会转发一次点击，弹层开了又立刻关。 */}

@@ -5074,6 +5074,58 @@ describe("会话详情：头部", () => {
   });
 
   /**
+   * 预设头像（共享包 bf46e288，规格 2026-11-02「预置头像」）：`avatar_icon` 里存的是
+   * `preset:<组>-<名字>`，四档身份的优先级在共享包的 `AgentAvatar` 里。本站此前把 key
+   * 先过一遍 `iconNode` 再当节点递下去，而节点会盖过 `iconKey` —— 预设因此永远画不出来。
+   */
+  it("Agent 选过预设时头部与转录画的都是那张预设图", async () => {
+    stubHeader([
+      {
+        sync_id: "ag-1",
+        name: "后端 Agent",
+        avatar_color: "agent-3",
+        avatar_icon: "preset:agent-tester",
+      },
+    ]);
+    const { container } = renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const head = screen.getByTestId("session-detail-header");
+    expect(
+      within(head)
+        .getByRole("img", { name: "后端 Agent" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+    // 转录里那一枚同源：同一个身份在三处长成一个样子。
+    expect(
+      container
+        .querySelector(
+          '[data-testid="session-detail-transcript"] [role="img"] img',
+        )
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+  });
+
+  it("认不出的预设 key 退回首字母，不是一枚空方块", async () => {
+    stubHeader([
+      {
+        sync_id: "ag-1",
+        name: "后端 Agent",
+        avatar_color: "agent-3",
+        avatar_icon: "preset:nope",
+      },
+    ]);
+    renderEmbeddedDetail();
+
+    await screen.findByText("跑着呢");
+    const head = screen.getByTestId("session-detail-header");
+    const avatar = within(head).getByRole("img", { name: "后端 Agent" });
+    expect(avatar.textContent).toBe("后");
+    expect(avatar.querySelector("img, svg")).toBeNull();
+  });
+
+  /**
    * 没设过颜色的 Agent（同步载荷里根本没有 avatar_color）是常态，不是异常：
    * 桌面端不逼用户选色。此前这一档退化成「不给 backgroundColor」，方块透明，
    * 白色首字母落在深色底上 —— 看起来就是一枚黑方块，而同一个 Agent 在左栏

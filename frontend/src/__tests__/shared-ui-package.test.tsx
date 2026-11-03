@@ -480,14 +480,8 @@ describe("2026-08-26 收进共享包的四件，本站不留副本", () => {
     expect(controls).not.toContain("THEME_ICON");
   });
 
-  it("图标词表由选择器从包里取，本站不再自建清单与文案", () => {
-    const pickers = read("src/pages/org/orgPickers.tsx");
-
-    expect(pickers).toMatch(
-      /import\s*\{[^}]*\biconList\b[^}]*\}\s*from\s*"@agentre-hub\/agentre-ui"/s,
-    );
-    expect(pickers).not.toContain("ORG_ICONS");
-    expect(pickers).not.toContain("ORG_ICON_BY_KEY");
+  it("组织详情身份区由共享包提供，本站不再保留图标与色板选择器", () => {
+    expect(exists("src/pages/org/orgPickers.tsx")).toBe(false);
 
     // 文案跟着清单走：留一棵 org.detail.icons 子树在这边，就又是两份会漂的表。
     for (const lang of ["en", "zh-CN"]) {
