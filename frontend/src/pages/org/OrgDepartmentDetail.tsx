@@ -103,7 +103,7 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
       className="flex h-full min-w-0 flex-col"
     >
       <OrgDetailHeader
-        identity={
+        identity={(saveStatus) => (
           <IdentityFields
             kind="department"
             testIdPrefix="org-department-identity"
@@ -132,14 +132,17 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
               },
             }}
             meta={
-              <OrgDetailChip>
-                {t("org.detail.header.memberCount", {
-                  n: departmentModel.memberCount ?? 0,
-                })}
-              </OrgDetailChip>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <OrgDetailChip>
+                  {t("org.detail.header.memberCount", {
+                    n: departmentModel.memberCount ?? 0,
+                  })}
+                </OrgDetailChip>
+                {saveStatus}
+              </div>
             }
           />
-        }
+        )}
         save={saveState}
         menuItems={menuItems}
         onBack={props.onBack}

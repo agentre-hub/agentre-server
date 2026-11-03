@@ -171,7 +171,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
   return (
     <div data-slot="org-detail-agent" className="flex h-full min-w-0 flex-col">
       <OrgDetailHeader
-        identity={
+        identity={(saveStatus) => (
           <IdentityFields
             kind="agent"
             testIdPrefix="org-agent-identity"
@@ -215,10 +215,11 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
                     })}
                   </OrgDetailChip>
                 )}
+                {saveStatus}
               </div>
             }
           />
-        }
+        )}
         save={save}
         menuItems={menuItems}
         onBack={props.onBack}

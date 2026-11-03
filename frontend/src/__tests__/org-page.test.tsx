@@ -584,6 +584,51 @@ describe.each([
       expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
     });
 
+    it("保存状态与失败重试保留在名称和描述之间，不占身份区右侧的动作位", async () => {
+      let fail = true;
+      mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+        if (path === "/v1/workspace/org" && !init?.method) return chart;
+        if (path === "/v1/workspace/org/backends") return { backends };
+        if (path.endsWith("/update")) {
+          if (fail) throw new ApiError(1001, "name already taken", 400);
+          return { sync_id: syncId, version: 2 };
+        }
+        throw new Error(`unexpected request: ${path}`);
+      });
+      const header = await openDetail();
+      const name = within(header).getByRole("textbox", { name: "Name" });
+      const description = within(header).getByRole("textbox", {
+        name: "Description",
+      });
+      const expectInMeta = (status: HTMLElement) => {
+        expect(name.parentElement?.contains(status)).toBe(true);
+        expect(
+          name.compareDocumentPosition(status) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(
+          status.compareDocumentPosition(description) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      };
+      fireEvent.change(name, { target: { value: "Changed name" } });
+      fireEvent.blur(name);
+      const status = await screen.findByTestId("org-detail-save-status");
+      await waitFor(() => expect(status.textContent).toContain("Save failed"));
+      expectInMeta(status);
+      expect(within(status).getByText("name already taken")).toBeTruthy();
+      fail = false;
+      fireEvent.click(within(status).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(status.textContent).toContain("Saved · just now"),
+      );
+      expectInMeta(status);
+      expect(updates()).toEqual([
+        { sync_id: syncId, name: "Changed name" },
+        { sync_id: syncId, name: "Changed name" },
+      ]);
+    });
+
     it.each(["Name", "Description"])(
       "Given %s 未改则失焦不发请求，When 改动后失焦，Then 只提交这个键",
       async (field) => {

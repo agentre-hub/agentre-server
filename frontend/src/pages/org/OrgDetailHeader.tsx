@@ -210,7 +210,7 @@ export function OrgDetailChip({ children }: { children: React.ReactNode }) {
 }
 
 export interface OrgDetailHeaderProps {
-  identity: React.ReactNode;
+  identity: (saveStatus: React.ReactNode) => React.ReactNode;
   save: OrgSaveController;
   /** 空数组即整个 `⋮` 不画（系统 Agent 就是这一档：它删不得）。 */
   menuItems: RowMenuItem[];
@@ -238,8 +238,11 @@ export function OrgDetailHeader(props: OrgDetailHeaderProps) {
           <ChevronLeft className="size-4" aria-hidden="true" />
         </Button>
       )}
-      <div className="min-w-0 flex-1">{props.identity}</div>
-      <SaveStatus state={props.save.state} onRetry={props.save.retry} />
+      <div className="min-w-0 flex-1">
+        {props.identity(
+          <SaveStatus state={props.save.state} onRetry={props.save.retry} />,
+        )}
+      </div>
       {props.menuItems.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

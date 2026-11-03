@@ -42,7 +42,7 @@ function renderHeader(
   const onDelete = over.onDelete ?? vi.fn();
   render(
     <OrgDetailHeader
-      identity={<span data-testid="identity">研发部</span>}
+      identity={() => <span data-testid="identity">研发部</span>}
       save={{ state: { kind: "idle" }, run: vi.fn(), retry: vi.fn() }}
       menuItems={[
         { key: "open", label: "打开", onSelect: onOpen },
