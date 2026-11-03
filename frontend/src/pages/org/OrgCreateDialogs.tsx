@@ -66,8 +66,10 @@ function IdentityDialogForm(props: {
           onKeyDown={(e) => {
             if (
               e.key === "Enter" &&
+              !e.nativeEvent.isComposing &&
+              e.keyCode !== 229 &&
               e.target instanceof HTMLInputElement &&
-              e.target.dataset.testid === `org-create-${props.kind}-name`
+              e.currentTarget.contains(e.target)
             )
               submit();
           }}

@@ -16,6 +16,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 
 import AppShell from "@/components/AppShell";
+import { errorText } from "@/lib/errorText";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { EmptyState } from "@/components/console";
 import {
@@ -139,31 +140,46 @@ export default function Org() {
     setCreateAgentOpen(true);
   }, []);
   const [mutationError, setMutationError] = React.useState<string | null>(null);
+  const mutationErrorRevision = React.useRef(0);
 
   // 每一次写操作共用同一条失败路径：写失败不吞掉——吞掉的话用户点了删除/保存,
   // 什么都没发生,连个错误都看不到,以为是自己没点中。成功时顺带清掉上一条旧错误。
   const runMutation = React.useCallback(
     async (fn: () => Promise<unknown>) => {
+      const revision = mutationErrorRevision.current;
       try {
         await fn();
-        setMutationError(null);
+        if (revision === mutationErrorRevision.current) setMutationError(null);
       } catch {
+        mutationErrorRevision.current += 1;
         setMutationError(t("org.errors.generic"));
       }
     },
     [t],
   );
 
-  // 详情表单的字段编辑是 onBlur 静默提交，反馈归详情头部自己（见 OrgDetailHeader）：
-  // 那条保存态就在被编辑的字段旁边，而索引列底部那行小字离得太远——改完一个字段的人
-  // 不会往那儿看。所以这一条路径只负责把成功时的旧错误清掉，失败原样抛回去。
-  const runFieldUpdate = React.useCallback(
-    async (fn: () => Promise<unknown>) => {
+  // 队列归页面而不是详情：关闭再打开同一行，也不能让新提交抢在旧提交前落库。
+  const fieldQueue = React.useRef(Promise.resolve());
+  const currentSelection = React.useRef(selection);
+  React.useLayoutEffect(() => {
+    currentSelection.current = selection;
+  }, [selection]);
+  const runFieldUpdate = (fn: () => Promise<void>) => {
+    const revision = mutationErrorRevision.current;
+    const write = fieldQueue.current.then(async () => {
       await fn();
-      setMutationError(null);
-    },
-    [],
-  );
+      // 新操作成功可清掉已知错误；先前排队的成功不能吞掉后来才出现的错误。
+      if (revision === mutationErrorRevision.current) setMutationError(null);
+    });
+    fieldQueue.current = write.catch((error) => {
+      // 原来的详情已卸载时，其局部保存态不再可见，由页面报告失败。
+      if (currentSelection.current !== selection) {
+        mutationErrorRevision.current += 1;
+        setMutationError(errorText(error, t("org.errors.generic")));
+      }
+    });
+    return write;
+  };
 
   const models = React.useMemo(
     () => buildOrgModels(chart ?? { departments: [], agents: [] }),
@@ -357,10 +373,8 @@ export default function Org() {
               <OrgDetailSkeleton />
             ) : selectedAgent && selectedAgentModel ? (
               <OrgAgentDetail
-                // key 强制在切到另一个 Agent 时整个重挂载：详情表单的字段状态
-                // （name/description/…）只在挂载时从 props 取初值，同一个组件实例
-                // 切换 selection 不会自动重新读一遍——不加这个 key，从 Alice 切到
-                // Bob 会看见 Alice 还没保存掉的字段残留在 Bob 的表单里。
+                // key 隔离每个 Agent 的草稿、在途值与保存态，切到 Bob 时不携带
+                // Alice 尚未提交的输入或失败重试。
                 key={selectedAgent.sync_id}
                 agent={selectedAgent}
                 agentModel={selectedAgentModel}

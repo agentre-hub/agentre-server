@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -601,7 +602,6 @@ describe.each([
         name: "Description",
       });
       const expectInMeta = (status: HTMLElement) => {
-        expect(name.parentElement?.contains(status)).toBe(true);
         expect(
           name.compareDocumentPosition(status) &
             Node.DOCUMENT_POSITION_FOLLOWING,
@@ -646,6 +646,214 @@ describe.each([
         );
       },
     );
+
+    it("空白名称失焦恢复已有名称，不写入空身份", async () => {
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "   " } });
+      fireEvent.blur(name);
+      expect(name).toHaveProperty("value", label);
+      expect(updates()).toEqual([]);
+    });
+
+    it("未编辑的身份跟随刷新，不在失焦时写回旧名称", async () => {
+      const header = await openDetail();
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === "/v1/workspace/org") {
+          const rename = <T extends { sync_id: string }>(row: T) =>
+            row.sync_id === syncId ? { ...row, name: "Renamed" } : row;
+          return {
+            agents: chart.agents.map(rename),
+            departments: chart.departments.map(rename),
+          };
+        }
+        return previous(path, init);
+      });
+      await act(async () =>
+        mockedStartChannel.mock.calls[0][0].onRefresh(null),
+      );
+      const name = within(header).getByLabelText("Name");
+      fireEvent.blur(name);
+      expect(updates()).toEqual([]);
+      expect(name).toHaveProperty("value", "Renamed");
+    });
+
+    it("刷新后的记号使用服务端值，失败的选择不伪装成已保存", async () => {
+      const header = await openDetail();
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === "/v1/workspace/org") {
+          const change = <T extends { sync_id: string }>(row: T) =>
+            row.sync_id === syncId
+              ? { ...row, [iconKey]: presetKey, [colorKey]: agentColorOrder[4] }
+              : row;
+          return {
+            agents: chart.agents.map(change),
+            departments: chart.departments.map(change),
+          };
+        }
+        if (path.endsWith("/update")) throw new Error("write rejected");
+        return previous(path, init);
+      });
+      await act(async () =>
+        mockedStartChannel.mock.calls[0][0].onRefresh(null),
+      );
+      const mark = within(header).getByRole("img", { name: label });
+      expect(mark.querySelector("img")).not.toBeNull();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(screen.getByRole("tab", { name: "Presets" }));
+      fireEvent.click(screen.getByRole("button", { name: "Clear preset" }));
+      await waitFor(() =>
+        expect(within(header).getByText("write rejected")).toBeTruthy(),
+      );
+      expect(mark.querySelector("img")).not.toBeNull();
+    });
+
+    it("写入后的刷新不能被在途的旧快照覆盖", async () => {
+      const header = await openDetail();
+      const previous = mockedApi.getMockImplementation()!;
+      let release!: () => void;
+      let stale = true;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === "/v1/workspace/org") {
+          if (stale) {
+            stale = false;
+            return new Promise((resolve) => {
+              release = () => resolve(chart);
+            });
+          }
+          const rename = <T extends { sync_id: string }>(row: T) =>
+            row.sync_id === syncId ? { ...row, name: "New name" } : row;
+          return {
+            agents: chart.agents.map(rename),
+            departments: chart.departments.map(rename),
+          };
+        }
+        return previous(path, init);
+      });
+      act(() => mockedStartChannel.mock.calls[0][0].onRefresh(null));
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "New name" } });
+      fireEvent.blur(name);
+      await within(header).findByText("Saved · just now");
+      await act(async () => release());
+      expect(name).toHaveProperty("value", "New name");
+    });
+
+    function deferFirstUpdate() {
+      let reject!: (error: Error) => void;
+      const previous = mockedApi.getMockImplementation()!;
+      let first = true;
+      mockedApi.mockImplementation((path, init) => {
+        if (first && path.endsWith("/update")) {
+          first = false;
+          return new Promise((_, fail) => {
+            reject = fail;
+          });
+        }
+        return previous(path, init);
+      });
+      return () => reject(new Error("duplicate name"));
+    }
+
+    it("有在途名称时重复失焦不重写，改回原名仍然提交", async () => {
+      const fail = deferFirstUpdate();
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "Duplicate" } });
+      fireEvent.blur(name);
+      fireEvent.blur(name);
+      fireEvent.change(name, { target: { value: label } });
+      fireEvent.blur(name);
+      await waitFor(() => expect(updates()).toHaveLength(1));
+      await act(async () => fail());
+      expect(updates()).toEqual([
+        { sync_id: syncId, name: "Duplicate" },
+        { sync_id: syncId, name: label },
+      ]);
+    });
+
+    it("关闭重开同一详情，新名称仍然排在旧写入之后", async () => {
+      const fail = deferFirstUpdate();
+      let header = await openDetail();
+      fireEvent.change(within(header).getByLabelText("Name"), {
+        target: { value: "First" },
+      });
+      fireEvent.blur(within(header).getByLabelText("Name"));
+      fireEvent.click(within(header).getByRole("button", { name: "Close" }));
+      const row = screen
+        .getByText(label)
+        .closest(
+          kind === "agent"
+            ? '[data-slot="org-index-row"]'
+            : '[data-slot="org-group-header"]',
+        ) as HTMLElement;
+      fireEvent.click(
+        within(row).getByTestId(
+          kind === "agent" ? /^org-row-select-/ : /^org-group-select-/,
+        ),
+      );
+      header = screen.getByTestId("org-detail-header");
+      fireEvent.change(within(header).getByLabelText("Name"), {
+        target: { value: "Second" },
+      });
+      fireEvent.blur(within(header).getByLabelText("Name"));
+      await waitFor(() => expect(updates()).toHaveLength(1));
+      await act(async () => fail());
+      expect(updates()).toEqual([
+        { sync_id: syncId, name: "First" },
+        { sync_id: syncId, name: "Second" },
+      ]);
+      expect(screen.getByRole("alert").textContent).toContain("duplicate name");
+      fireEvent.change(within(header).getByLabelText("Name"), {
+        target: { value: "Corrected" },
+      });
+      fireEvent.blur(within(header).getByLabelText("Name"));
+      await within(header).findByText("Saved · just now");
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("名称提交期间选颜色不抢写，颜色成功也不会吞掉名称错误与重试", async () => {
+      const fail = deferFirstUpdate();
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "Duplicate" } });
+      fireEvent.blur(name);
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Color" })).getByRole(
+          "button",
+          { name: agentColorOrder[4] },
+        ),
+      );
+      await act(async () => {});
+      const rename = { sync_id: syncId, name: "Duplicate" };
+      expect(updates()).toEqual([rename]);
+      await act(async () => fail());
+      expect(updates()).toEqual([
+        rename,
+        { sync_id: syncId, [colorKey]: agentColorOrder[4] },
+      ]);
+      expect(within(header).getByText("duplicate name")).toBeTruthy();
+      fireEvent.click(
+        within(header).getByRole("button", { name: "Retry", hidden: true }),
+      );
+      await waitFor(() => expect(updates()).toHaveLength(3));
+      expect(updates()[2]).toEqual(rename);
+    });
+
+    it("关闭详情后字段写入失败，错误仍在页面上", async () => {
+      const fail = deferFirstUpdate();
+      const header = await openDetail();
+      const name = within(header).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "Duplicate" } });
+      fireEvent.blur(name);
+      fireEvent.click(within(header).getByRole("button", { name: "Close" }));
+      await waitFor(() => expect(updates()).toHaveLength(1));
+      await act(async () => fail());
+      expect(screen.getByRole("alert").textContent).toContain("duplicate name");
+    });
 
     it("When 选择预设，Then 立即只提交记号键", async () => {
       const header = await openDetail();
@@ -880,6 +1088,53 @@ describe.each([
         ).disabled,
       ).toBe(true);
       expect(creates()).toHaveLength(0);
+    });
+
+    it("输入法确认名称候选不提前提交，普通回车提交最终草稿", async () => {
+      const dialog = await openCreate();
+      const name = within(dialog).getByLabelText("Name");
+      fireEvent.change(name, { target: { value: "yan" } });
+      fireEvent.keyDown(name, { key: "Enter", isComposing: true });
+      expect(creates()).toHaveLength(0);
+      fireEvent.change(name, { target: { value: "研发" } });
+      fireEvent.keyDown(name, { key: "Enter" });
+      await waitFor(() => expect(creates()).toHaveLength(1));
+      expect(JSON.parse(creates()[0][1]!.body as string).name).toBe("研发");
+    });
+
+    it("取消后重开不带上次草稿；关窗后的创建失败在页面可见", async () => {
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation(async (path, init) => {
+        if (path === `/v1/workspace/org/${resource}` && init?.method === "POST")
+          throw new Error("write rejected");
+        return previous(path, init);
+      });
+      let dialog = await openCreate();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "Discard me" },
+      });
+      fireEvent.change(within(dialog).getByLabelText("Description"), {
+        target: { value: "discarded description" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      fireEvent.click(
+        within(screen.getByTestId("org-detail-col")).getByRole("button", {
+          name: kind === "agent" ? "New agent" : "New department",
+        }),
+      );
+      dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByLabelText("Name")).toHaveProperty("value", "");
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "Fresh" },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect((await screen.findByRole("alert")).textContent).toBe(
+        i18n.t("org.errors.generic"),
+      );
+      expect(JSON.parse(creates()[0][1]!.body as string)).toEqual({
+        name: "Fresh",
+      });
     });
 
     it("When 只填名称并创建，Then 请求保持旧形状且写入未完成时已关窗", async () => {

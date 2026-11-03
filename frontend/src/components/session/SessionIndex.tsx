@@ -715,29 +715,10 @@ export default function SessionIndex({
     [importPorts],
   );
 
-  /**
-   * Agent 标识 → `avatar_icon` 原样。共享包的分组投影只带出名字与颜色，行与组头
-   * 拿到的 `AgentInfo` 里没有图标那一列，而那三件呈现件要的却是 `avatarIcon`
-   * （规格 2026-11-02 决策 4）。名单外的 Agent 补不上——那正是它该退回首字母的样子。
-   */
-  const avatarIconOf = useMemo(() => {
-    const byId = new Map(
-      agents.map((agent) => [agent.syncId, agent.avatarIcon] as const),
-    );
-    return (syncId: string) => byId.get(syncId);
-  }, [agents]);
-
-  /** 行首 / 第二行要的那一档 Agent 身份：包的三列 + 我们补的图标 key。 */
-  const agentMark = useCallback(
-    (agent: AgentInfo | undefined) =>
-      agent
-        ? {
-            name: agent.name,
-            color: agent.color,
-            avatarIcon: avatarIconOf(agent.syncId),
-          }
-        : agent,
-    [avatarIconOf],
+  // 行首、第二行与组头都取同一份完整身份，不再逐行重组名字、颜色与记号。
+  const agentById = useMemo(
+    () => new Map(agents.map((agent) => [agent.syncId, agent])),
+    [agents],
   );
 
   const groups = useMemo(() => {
@@ -843,6 +824,7 @@ export default function SessionIndex({
     (row: MirrorIndexGroupRow): SessionRowModel => {
       const reason = attentionReasonOf(row);
       const pill = attentionPillText(reason);
+      const agent = agentById.get(row.agentSyncId);
       return {
         id: row.key,
         status: reasonToDisplayStatus(reason, toAgentStatus(row)),
@@ -855,16 +837,12 @@ export default function SessionIndex({
             ? undefined
             : sessionPath({ ...row, deviceId: row.deviceId }),
         leading: (
-          <RowLeadingSlot
-            axis={axis}
-            agent={agentMark(row.agent)}
-            project={row.project}
-          />
+          <RowLeadingSlot axis={axis} agent={agent} project={row.project} />
         ),
         secondaryLabel: (
           <RowSecondaryLine
             axis={axis}
-            agent={agentMark(row.agent)}
+            agent={agent}
             project={row.project}
             machine={row.machine}
             freeLabel={uiT("sessionIndex.free.name")}
@@ -889,7 +867,7 @@ export default function SessionIndex({
       };
     },
     [
-      agentMark,
+      agentById,
       axis,
       i18n.language,
       onSave,
@@ -1189,7 +1167,7 @@ export default function SessionIndex({
                           onImport={setImportPrefill}
                           agentAvatarIcon={
                             group.kind === "agent"
-                              ? avatarIconOf(group.key)
+                              ? agentById.get(group.key)?.avatarIcon
                               : undefined
                           }
                         />

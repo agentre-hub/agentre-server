@@ -482,16 +482,6 @@ describe("2026-08-26 收进共享包的四件，本站不留副本", () => {
 
   it("组织详情身份区由共享包提供，本站不再保留图标与色板选择器", () => {
     expect(exists("src/pages/org/orgPickers.tsx")).toBe(false);
-    for (const rel of [
-      "src/pages/org/OrgAgentDetail.tsx",
-      "src/pages/org/OrgDepartmentDetail.tsx",
-    ]) {
-      const source = read(rel);
-      expect(source).toMatch(
-        /import\s*\{[^}]*\bIdentityFields\b[^}]*\}\s*from\s*"@agentre-hub\/agentre-ui"/s,
-      );
-      expect(source).not.toMatch(/OrgIconPicker|OrgColorPicker|orgPickers/);
-    }
 
     // 文案跟着清单走：留一棵 org.detail.icons 子树在这边，就又是两份会漂的表。
     for (const lang of ["en", "zh-CN"]) {

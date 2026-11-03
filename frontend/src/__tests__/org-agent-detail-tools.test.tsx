@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -106,10 +106,12 @@ describe("OrgAgentDetail.toggleTool 保留未知与未改动的工具项", () =>
     });
     fireEvent.click(revokeOrg);
 
-    expect(sentToolsJson()).toEqual([
-      { key: "org", enabled: false },
-      { key: "desktop-secret", enabled: true, note: "desktop-only" },
-    ]);
+    await waitFor(() =>
+      expect(sentToolsJson()).toEqual([
+        { key: "org", enabled: false },
+        { key: "desktop-secret", enabled: true, note: "desktop-only" },
+      ]),
+    );
   });
 
   it("切一个存量里缺席的已知开关时，追加而不是补全其余已知 key", async () => {
@@ -120,10 +122,12 @@ describe("OrgAgentDetail.toggleTool 保留未知与未改动的工具项", () =>
     });
     fireEvent.click(grantSubagent);
 
-    expect(sentToolsJson()).toEqual([
-      { key: "org", enabled: true },
-      { key: "desktop-secret", enabled: true, note: "desktop-only" },
-      { key: "subagent", enabled: true },
-    ]);
+    await waitFor(() =>
+      expect(sentToolsJson()).toEqual([
+        { key: "org", enabled: true },
+        { key: "desktop-secret", enabled: true, note: "desktop-only" },
+        { key: "subagent", enabled: true },
+      ]),
+    );
   });
 });

@@ -9,6 +9,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
+import { useOrgIdentityText } from "./useOrgIdentityText";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
   IdentityFields,
@@ -50,19 +51,19 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
   const { t } = useTranslation();
   const { department, departmentModel } = props;
 
-  const [name, setName] = React.useState(department.name);
-  const [description, setDescription] = React.useState(
-    department.description ?? "",
-  );
-  const [icon, setIcon] = React.useState(department.icon ?? "");
-  const [accentColor, setAccentColor] = React.useState(
-    department.accent_color ?? "",
-  );
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
   const saveState = useOrgSaveState();
+  const identityText = useOrgIdentityText(
+    department,
+    saveState,
+    props.onUpdate,
+  );
   const save = (fields: DepartmentFields) =>
-    saveState.run(() => props.onUpdate(fields));
+    saveState.run(
+      () => props.onUpdate(fields),
+      Object.keys(fields).sort().join(","),
+    );
 
   // 与 Agent 详情同一条：危险动作收进 `⋮`，不常驻版面（部门可删，所以这里
   // 总有一项）。
@@ -107,29 +108,12 @@ export function OrgDepartmentDetail(props: OrgDepartmentDetailProps) {
           <IdentityFields
             kind="department"
             testIdPrefix="org-department-identity"
-            name={name}
-            description={description}
-            onNameChange={setName}
-            onNameBlur={() => {
-              if (name !== department.name) save({ name });
-            }}
-            onDescriptionChange={setDescription}
-            onDescriptionBlur={() => {
-              if (description !== (department.description ?? "")) {
-                save({ description });
-              }
-            }}
+            {...identityText}
             mark={{
-              iconKey: icon,
-              color: accentColor,
-              onPickIcon: (key) => {
-                setIcon(key);
-                save({ icon: key });
-              },
-              onPickColor: (color) => {
-                setAccentColor(color);
-                save({ accent_color: color });
-              },
+              iconKey: department.icon ?? "",
+              color: department.accent_color ?? "",
+              onPickIcon: (key) => save({ icon: key }),
+              onPickColor: (color) => save({ accent_color: color }),
             }}
             meta={
               <div className="flex flex-wrap items-center gap-1.5">

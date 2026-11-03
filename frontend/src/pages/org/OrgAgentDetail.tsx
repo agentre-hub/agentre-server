@@ -12,6 +12,7 @@ import * as React from "react";
 import { useTranslation } from "react-i18next";
 
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
+import { useOrgIdentityText } from "./useOrgIdentityText";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
   IdentityFields,
@@ -78,8 +79,6 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
   const { agent, agentModel } = props;
   const isSystem = isOrgSystemAgent(agentModel);
 
-  const [name, setName] = React.useState(agent.name);
-  const [description, setDescription] = React.useState(agent.description ?? "");
   const [prompt, setPrompt] = React.useState(() =>
     parsePromptJSON(agent.prompt_json),
   );
@@ -91,8 +90,12 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
   const avatarIcon = agent.avatar_icon ?? "";
 
   const save = useOrgSaveState();
+  const identityText = useOrgIdentityText(agent, save, props.onUpdate);
   const saveIfChanged = (fields: AgentFields) =>
-    save.run(() => props.onUpdate(fields));
+    save.run(
+      () => props.onUpdate(fields),
+      Object.keys(fields).sort().join(","),
+    );
 
   const placement: OrgPlacement =
     agentModel.parentAgentId && agentModel.parentAgentId > 0
@@ -175,18 +178,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
           <IdentityFields
             kind="agent"
             testIdPrefix="org-agent-identity"
-            name={name}
-            description={description}
-            onNameChange={setName}
-            onNameBlur={() => {
-              if (name !== agent.name) saveIfChanged({ name });
-            }}
-            onDescriptionChange={setDescription}
-            onDescriptionBlur={() => {
-              if (description !== (agent.description ?? "")) {
-                saveIfChanged({ description });
-              }
-            }}
+            {...identityText}
             mark={{
               iconKey: avatarIcon,
               color: agent.avatar_color ?? "",

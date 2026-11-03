@@ -62,17 +62,18 @@ export type OrgSaveState =
 export interface OrgSaveController {
   state: OrgSaveState;
   /** 派发一次保存，并把结果反映到头部。失败的那一次会被记下来供重试。 */
-  run: (action: () => Promise<unknown>) => void;
+  run: (action: () => Promise<unknown>, field: string) => void;
   retry: () => void;
 }
 
 export function useOrgSaveState(): OrgSaveController {
   const { t } = useTranslation();
   const [state, setState] = React.useState<OrgSaveState>({ kind: "idle" });
-  const failedRef = React.useRef<(() => Promise<unknown>) | null>(null);
-  // seq 让状态只由**最新一次派发**决定：先发出去的那次慢慢失败回来，不能把后来
-  // 已经成功的那次涂回失败态（连改两个字段时这是常态，不是边角情况）。
-  const seqRef = React.useRef(0);
+  // 页面串行提交字段；这里按字段保留失败，不能因为颜色成功就丢掉名称的重试。
+  const pendingRef = React.useRef(0);
+  const failedRef = React.useRef(
+    new Map<string, { action: () => Promise<unknown>; message: string }>(),
+  );
   // 兜底文案随语言变，但 run 必须保持稳定身份（retry 存的是动作本身）：走 ref，
   // 并在 layout effect 里同步——渲染期写 ref 是 react-hooks/refs 明令禁止的。
   const fallbackRef = React.useRef("");
@@ -80,32 +81,37 @@ export function useOrgSaveState(): OrgSaveController {
     fallbackRef.current = t("org.errors.generic");
   });
 
-  const run = React.useCallback((action: () => Promise<unknown>) => {
-    const seq = ++seqRef.current;
-    setState({ kind: "saving" });
-    void action().then(
-      () => {
-        if (seq !== seqRef.current) return;
-        failedRef.current = null;
-        setState({ kind: "saved", at: Date.now() });
-      },
-      (e: unknown) => {
-        if (seq !== seqRef.current) return;
-        failedRef.current = action;
-        // 服务端给了原因就报服务端的原因（ApiError.message 即响应里的 msg）：
-        // 「出错了，请重试」对一个校验失败的字段毫无帮助。
-        setState({
-          kind: "error",
-          message:
-            e instanceof Error && e.message ? e.message : fallbackRef.current,
-        });
-      },
-    );
-  }, []);
+  const run = React.useCallback(
+    (action: () => Promise<unknown>, key: string) => {
+      pendingRef.current += 1;
+      setState({ kind: "saving" });
+      void (async () => {
+        try {
+          await action();
+          failedRef.current.delete(key);
+        } catch (e) {
+          failedRef.current.set(key, {
+            action,
+            message:
+              e instanceof Error && e.message ? e.message : fallbackRef.current,
+          });
+        }
+        pendingRef.current -= 1;
+        if (pendingRef.current > 0) return;
+        const failure = failedRef.current.values().next().value;
+        setState(
+          failure
+            ? { kind: "error", message: failure.message }
+            : { kind: "saved", at: Date.now() },
+        );
+      })();
+    },
+    [],
+  );
 
   const retry = React.useCallback(() => {
-    const action = failedRef.current;
-    if (action) run(action);
+    const failure = failedRef.current.entries().next().value;
+    if (failure) run(failure[1].action, failure[0]);
   }, [run]);
 
   return { state, run, retry };
