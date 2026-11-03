@@ -469,11 +469,14 @@ export default function Org() {
       <CreateDepartmentDialog
         open={createDeptOpen}
         onOpenChange={setCreateDeptOpen}
-        onCreate={(name) => {
+        onCreate={({ name, description, icon, color }) => {
           setCreateDeptOpen(false);
           void runMutation(async () => {
             const res = await writes.createDepartment({
               name,
+              ...(description ? { description } : {}),
+              ...(icon ? { icon } : {}),
+              ...(color ? { accent_color: color } : {}),
               // 组头的 ⋮ 进来时是子部门；空态进来时不带这个键（不是空串——空串是
               // 「显式挂到根上」这个值，与「这次请求没提到」不同，见 types.ts）。
               ...(createDeptParentSync
@@ -490,11 +493,14 @@ export default function Org() {
         onOpenChange={setCreateAgentOpen}
         departments={chart?.departments ?? []}
         defaultDepartmentSyncId={createAgentDeptSync}
-        onCreate={(name, departmentSyncId) => {
+        onCreate={({ name, description, icon, color }, departmentSyncId) => {
           setCreateAgentOpen(false);
           void runMutation(async () => {
             const res = await writes.createAgent({
               name,
+              ...(description ? { description } : {}),
+              ...(icon ? { avatar_icon: icon } : {}),
+              ...(color ? { avatar_color: color } : {}),
               department_sync_id: departmentSyncId || undefined,
             });
             await reload();

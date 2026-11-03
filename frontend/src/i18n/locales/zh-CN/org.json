@@ -35,7 +35,6 @@
       "behavior": "行为"
     },
     "fields": {
-      "name": "名称",
       "parentDepartment": "上级部门",
       "leadAgent": "负责人",
       "none": "无（顶层）"

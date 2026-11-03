@@ -35,7 +35,6 @@
       "behavior": "Behavior"
     },
     "fields": {
-      "name": "Name",
       "parentDepartment": "Parent department",
       "leadAgent": "Lead",
       "none": "None (top level)"

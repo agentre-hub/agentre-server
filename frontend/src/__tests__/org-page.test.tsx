@@ -766,6 +766,144 @@ describe("部门详情：图标与强调色是挑出来的，不是打出来的"
   });
 });
 
+describe.each([
+  {
+    kind: "agent",
+    trigger: "Change avatar",
+    preset: "Architect",
+    presetKey: "preset:agent-architect",
+    iconKey: "avatar_icon",
+    colorKey: "avatar_color",
+    resource: "agents",
+  },
+  {
+    kind: "department",
+    trigger: "Change icon",
+    preset: "Engineering",
+    presetKey: "preset:team-dev",
+    iconKey: "icon",
+    colorKey: "accent_color",
+    resource: "departments",
+  },
+])(
+  "$kind 新建对话框的共享身份区",
+  ({ kind, trigger, preset, presetKey, iconKey, colorKey, resource }) => {
+    async function openCreate() {
+      renderOrg();
+      const label = await screen.findByText("Engineering");
+      if (kind === "agent") {
+        const header = label.closest(
+          '[data-slot="org-group-header"]',
+        ) as HTMLElement;
+        fireEvent.click(within(header).getByTestId(/^org-group-add-agent-/));
+      } else {
+        fireEvent.click(
+          within(screen.getByTestId("org-detail-col")).getByRole("button", {
+            name: "New department",
+          }),
+        );
+      }
+      return screen.getByRole("dialog");
+    }
+
+    function creates() {
+      return mockedApi.mock.calls.filter(
+        ([path, init]) =>
+          path === `/v1/workspace/org/${resource}` && init?.method === "POST",
+      );
+    }
+
+    it("Given 空草稿，When 打开，Then 有名称、描述、默认记号且空名称不能创建", async () => {
+      const dialog = await openCreate();
+      expect(
+        within(dialog).getByRole("textbox", { name: "Name" }),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("textbox", { name: "Description" }),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("button", { name: trigger }),
+      ).toBeTruthy();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "   " },
+      });
+      expect(
+        (
+          within(dialog).getByRole("button", {
+            name: "Create",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+      expect(creates()).toHaveLength(0);
+    });
+
+    it("When 只填名称并创建，Then 请求保持旧形状且写入未完成时已关窗", async () => {
+      let resolveWrite!: (value: unknown) => void;
+      const previous = mockedApi.getMockImplementation()!;
+      mockedApi.mockImplementation((path, init) => {
+        if (
+          path === `/v1/workspace/org/${resource}` &&
+          init?.method === "POST"
+        ) {
+          return new Promise((resolve) => {
+            resolveWrite = resolve;
+          });
+        }
+        return previous(path, init);
+      });
+      const dialog = await openCreate();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "  New identity  " },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(creates()).toHaveLength(1));
+      expect(JSON.parse(creates()[0][1]!.body as string)).toEqual({
+        name: "New identity",
+        ...(kind === "agent" ? { department_sync_id: "dept-eng" } : {}),
+      });
+      expect(screen.queryByRole("dialog")).toBeNull();
+      resolveWrite({ sync_id: "new-sync-id", version: 1 });
+      await waitFor(() =>
+        expect(
+          mockedApi.mock.calls.filter(([path]) => path === "/v1/workspace/org")
+            .length,
+        ).toBeGreaterThan(1),
+      );
+    });
+
+    it("When 设置描述、预设与颜色，Then 草稿不写入且创建时一起提交", async () => {
+      const dialog = await openCreate();
+      fireEvent.change(within(dialog).getByLabelText("Name"), {
+        target: { value: "New identity" },
+      });
+      fireEvent.change(within(dialog).getByLabelText("Description"), {
+        target: { value: "  A description  " },
+      });
+      fireEvent.click(within(dialog).getByRole("button", { name: trigger }));
+      expect(screen.queryByRole("tab", { name: "Image" })).toBeNull();
+      fireEvent.click(
+        within(screen.getByRole("group", { name: "Color" })).getByRole(
+          "button",
+          { name: agentColorOrder[2] },
+        ),
+      );
+      fireEvent.click(screen.getByRole("tab", { name: "Presets" }));
+      fireEvent.click(screen.getByRole("radio", { name: preset }));
+      fireEvent.blur(within(dialog).getByLabelText("Description"));
+      expect(creates()).toHaveLength(0);
+      fireEvent.click(within(dialog).getByRole("button", { name: "Create" }));
+      await waitFor(() => expect(creates()).toHaveLength(1));
+      expect(JSON.parse(creates()[0][1]!.body as string)).toEqual({
+        name: "New identity",
+        description: "A description",
+        [iconKey]: presetKey,
+        [colorKey]: agentColorOrder[2],
+        ...(kind === "agent" ? { department_sync_id: "dept-eng" } : {}),
+      });
+    });
+  },
+);
+
 describe("浏览器仅凭自身建改删部门 / Agent / 执行目标", () => {
   it("新建部门：只经浏览器发一个 POST，不需要桌面端在线", async () => {
     renderOrg();
