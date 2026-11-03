@@ -23,7 +23,7 @@
 1. **身份信息重复，而且铺开太占地方。** Agent 详情头部已经有一枚记号，下面的「身份」栏又有名称、描述，外加铺开的色板（`OrgColorPicker`）和图标网格（`OrgIconPicker`）（`frontend/src/pages/org/OrgAgentDetail.tsx:191`、`:275-305`）。部门详情也一样（`OrgDepartmentDetail.tsx:110-115`、`:146-183`）。
 2. **部门详情头部不画部门图标。** 它只画名称首字（`OrgDepartmentDetail.tsx:110-115`，经 `OrgDetailGlyph`），和部门图标字段对不上。
 3. **新建对话框只能填名称。** 新建部门只有名称，新建 Agent 只有名称和部门（`OrgCreateDialogs.tsx:29-67`、`pages/Org.tsx:475-499`）。描述、记号、颜色都要建完后再进详情改。
-4. **六处 Agent 记号在本站用 `iconNode(avatar_icon)` 解 key**（`SessionDetailHeader.tsx:339`、`SessionDetailView.tsx:1809`、`DraftSession.tsx:435`、`:731`、`ProjectAgentPane.tsx:337`、`AgentPickList.tsx:223`）。项目设置的成员和候选行也一样（`useProjectManagement.ts:136`、`:145`、`:185`）。`iconNode` 认不出预设 key，会返回空，所以这些位置显示不了预设。
+4. **本站有几处 Agent 记号显示不了预设。** 六处用 `iconNode(avatar_icon)` 解 key（`SessionDetailHeader.tsx:339`、`SessionDetailView.tsx:1809`、`DraftSession.tsx:435`、`:731`、`ProjectAgentPane.tsx:337`、`AgentPickList.tsx:223`）。项目设置的成员和候选行也一样（`useProjectManagement.ts:136`、`:145`、`:185`）。`iconNode` 认不出预设 key，会返回空。会话索引和看板只递 Agent 的名字和颜色，根本不带图标字段。
 
 ## Design decisions
 
@@ -32,7 +32,7 @@
 | 1 | Agent、部门的详情和新建对话框，统一改用共享包的 `IdentityFields` + `IdentityMarkPicker`（不传 `upload`，所以没有「图片」档） | 桌面仓规格决策 2、3、5：web 没有承载头像图片的接口。Rejected: 本站另写一份 |
 | 2 | Agent 详情原有的附属信息（系统 / 负责人徽标、所属部门、汇报对象、保存状态）原样放进身份区的 `meta` 插槽 | 桌面仓规格「身份区·布局」 |
 | 3 | 部门详情头部改由身份区里的记号（`DepartmentMark`）显示：预设 ▸ 图标 ▸ 首字加主题色 | 桌面仓规格决策 6：两端统一 |
-| 4 | 本站解 key 的位置改用 `AgentAvatar` 的 `iconKey`；项目成员行按新的共享契约传 key 字符串 | 共享包 `AgentAvatar` 的优先级是 图片 ▸ 预设 ▸ 图标 ▸ 首字母；`ProjectMemberView.avatarIcon` 现在是 key 字符串 |
+| 4 | 本站解 key 的位置改用 `AgentAvatar` / `SessionHeaderAgentMark` 的 `iconKey`；项目成员和候选行改传新的 `avatarIconKey`；会话索引和看板把 Agent 的 `avatar_icon` 一并递给共享组件 | 共享包 `AgentAvatar` 的优先级是 图片 ▸ 预设 ▸ 图标 ▸ 首字母；`ProjectMemberView` / `ProjectCandidateView` 在 `bf46e288` 新增 `avatarIconKey`（`avatarIcon` 仍是节点，会盖过 key）；`RowLeadingSlot` / `RowSecondaryLine` / `AgentGroupHeader` 的 `agent` 接受 `avatarIcon`，`BoardAgentOption` 接受 `avatarIcon`，但本站目前只递名字和颜色（`pages/Chat.tsx:578-583`、`SessionIndex.tsx:397-400`、`pages/Issues.tsx:151-157`） |
 | 5 | 删除 `frontend/src/pages/org/orgPickers.tsx`（`OrgIconPicker`、`OrgColorPicker`、`RenderIcon`）及只有它们用的 i18n key | 跨宿主「一个概念一份实现」：弹层由共享包负责 |
 | 6 | 新建对话框沿用「点创建先关窗、再异步写入」的现有流程；描述、记号、颜色只有用户真的设置了才放进请求 | 桌面仓规格决策 16 |
 
@@ -51,8 +51,8 @@
 ## 显示
 
 控制台所有身份记号都认预设：
-- 组织索引行和组头、归属选择、会话索引：随钉版自动生效；
-- 会话详情头部和转录、新对话草稿、挑选 Agent 列表、「从项目里挑」、项目设置的成员和候选行：按决策 4 改；
+- 组织索引行和组头、归属选择、项目设置与新建项目：随钉版自动生效；
+- 会话索引的行和 Agent 组头、看板与任务的 Agent 选择、会话详情头部和转录、新对话草稿、挑选 Agent 列表、「从项目里挑」、项目设置的成员和候选行：按决策 4 改；
 - 部门详情头部：按决策 3 改。
 
 旧版本（钉版之前）的控制台认不出预设 key，按旧代码兜底显示，不会出现空白或破图。
@@ -71,7 +71,7 @@
 | 钉版：两个 npm 包和 Go `pkg/wire` 指向同一个提交，锁文件只钉一个 `agentre-wire` | 现有 `internal/pkg/wireversion/wireversion_test.go` |
 | Agent / 部门详情：只有一个身份区，没有单独的名称、色板、图标网格；失焦时只提交改动的键；挑预设立即提交 `{avatar_icon:"preset:…"}` 或 `{icon:"preset:…"}`；部门头部显示预设、首字或主题色 | `frontend/src/__tests__/org-page.test.tsx` |
 | 新建 Agent / 部门：有描述、记号、颜色；没设置的字段不进请求；先关窗再写入 | `org-page.test.tsx`（新建流程） |
-| 会话详情头部和转录、草稿、挑选列表、「从项目里挑」、项目成员行：预设 key 画成预设图片，认不出的 key 退回首字母 | `session-detail.test.tsx`、`new-conversation.test.tsx`、`chat.test.tsx` |
+| 会话索引行与 Agent 组头、看板 Agent 选择、会话详情头部和转录、草稿、挑选列表、「从项目里挑」、项目成员行：预设 key 画成预设图片，认不出的 key 退回首字母 | `session-index.test.tsx`、`issues-page.test.tsx`、`session-detail.test.tsx`、`new-conversation.test.tsx`、`chat.test.tsx` |
 | 守卫：本站不再有 `orgPickers.tsx`，图标词表和弹层来自共享包 | `shared-ui-package.test.tsx` |
 
 运行验证：本地起 agentre-server（`make dev`），用浏览器挑预设、取消预设、新建 Agent 和部门，对照数据库写入，亮色、暗色各截一次图。跨端认 key 用同一个工作区的数据检查：桌面端挑的预设在控制台显示正确。
