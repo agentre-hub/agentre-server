@@ -36,15 +36,9 @@
     },
     "fields": {
       "name": "Name",
-      "description": "Description",
-      "avatarColor": "Avatar color",
-      "accentColor": "Accent color",
       "parentDepartment": "Parent department",
       "leadAgent": "Lead",
-      "none": "None (top level)",
-      "avatarIconPick": "Icon",
-      "avatarIconNone": "No icon",
-      "avatarIconCustom": "Custom icon: {{key}}"
+      "none": "None (top level)"
     },
     "systemPrompt": "System prompt",
     "systemPromptPlaceholder": "One instruction per line",

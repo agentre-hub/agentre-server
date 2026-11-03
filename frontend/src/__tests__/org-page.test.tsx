@@ -290,6 +290,19 @@ describe("预设头像：存 preset key 就画预设图", () => {
     });
   });
 
+  it("Given 部门存了预设，Then 详情头部的记号按钮画 team-dev，不画另一枚首字方块", async () => {
+    renderOrg();
+    const node = await screen.findByText("Dev Team");
+    const row = node.closest('[data-slot="org-group-header"]') as HTMLElement;
+    fireEvent.click(within(row).getByTestId(/^org-group-select-/));
+    const header = screen.getByTestId("org-detail-header");
+    const trigger = within(header).getByRole("button", { name: "Change icon" });
+    expect(trigger.querySelector("img")?.getAttribute("src")).toContain(
+      "team-dev",
+    );
+    expect(within(header).getAllByRole("img")).toHaveLength(1);
+  });
+
   it("索引行画 agent-architect，归属那一格的部门记号画 team-dev", async () => {
     renderOrg();
     const row = (await screen.findByText("Architect")).closest(
@@ -496,6 +509,141 @@ describe("索引收敛：行尾徽标、收放、一行工具条、组头动作"
   });
 });
 
+describe.each([
+  {
+    kind: "agent",
+    label: "Alice",
+    syncId: "agent-alice",
+    trigger: "Change avatar",
+    iconKey: "avatar_icon",
+    colorKey: "avatar_color",
+    preset: "Architect",
+    presetKey: "preset:agent-architect",
+  },
+  {
+    kind: "department",
+    label: "Engineering",
+    syncId: "dept-eng",
+    trigger: "Change icon",
+    iconKey: "icon",
+    colorKey: "accent_color",
+    preset: "Engineering",
+    presetKey: "preset:team-dev",
+  },
+])(
+  "$kind 详情的共享身份区",
+  ({ kind, label, syncId, trigger, iconKey, colorKey, preset, presetKey }) => {
+    async function openDetail() {
+      renderOrg();
+      const node = await screen.findByText(label);
+      const row = node.closest(
+        kind === "agent"
+          ? '[data-slot="org-index-row"]'
+          : '[data-slot="org-group-header"]',
+      ) as HTMLElement;
+      fireEvent.click(
+        within(row).getByTestId(
+          kind === "agent" ? /^org-row-select-/ : /^org-group-select-/,
+        ),
+      );
+      return screen.getByTestId("org-detail-header");
+    }
+
+    function updates() {
+      return mockedApi.mock.calls
+        .filter(
+          ([path]) =>
+            path ===
+            `/v1/workspace/org/${kind === "agent" ? "agents" : "departments"}/update`,
+        )
+        .map(([, init]) => JSON.parse(init!.body as string));
+    }
+
+    it("Given 已选详情，Then 头部只有一份可编辑身份，正文没有另铺的名称、描述、色板或图标", async () => {
+      const header = await openDetail();
+      const col = screen.getByTestId("org-detail-col");
+      expect(
+        within(header).getAllByRole("textbox", { name: "Name" }),
+      ).toHaveLength(1);
+      expect(
+        within(header).getAllByRole("textbox", { name: "Description" }),
+      ).toHaveLength(1);
+      expect(
+        within(col).getAllByRole("textbox", { name: "Name" }),
+      ).toHaveLength(1);
+      expect(
+        within(col).getAllByRole("textbox", { name: "Description" }),
+      ).toHaveLength(1);
+      expect(
+        within(header).getAllByRole("button", { name: trigger }),
+      ).toHaveLength(1);
+      expect(within(col).queryByRole("radiogroup")).toBeNull();
+      expect(within(col).queryByRole("group", { name: "Color" })).toBeNull();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      expect(screen.queryByRole("tab", { name: "Image" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
+    });
+
+    it.each(["Name", "Description"])(
+      "Given %s 未改则失焦不发请求，When 改动后失焦，Then 只提交这个键",
+      async (field) => {
+        await openDetail();
+        const input = screen.getByRole("textbox", { name: field });
+        fireEvent.blur(input);
+        expect(updates()).toEqual([]);
+        fireEvent.change(input, { target: { value: "Changed value" } });
+        expect(updates()).toEqual([]);
+        fireEvent.blur(input);
+        await waitFor(() =>
+          expect(updates()).toEqual([
+            { sync_id: syncId, [field.toLowerCase()]: "Changed value" },
+          ]),
+        );
+      },
+    );
+
+    it("When 选择预设，Then 立即只提交记号键", async () => {
+      const header = await openDetail();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(screen.getByRole("tab", { name: "Presets" }));
+      fireEvent.click(screen.getByRole("radio", { name: preset }));
+      await waitFor(() =>
+        expect(updates()).toEqual([{ sync_id: syncId, [iconKey]: presetKey }]),
+      );
+    });
+
+    it("When 选择颜色，Then 立即只提交颜色键", async () => {
+      const header = await openDetail();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      const palette = screen.getByRole("group", { name: "Color" });
+      expect(within(palette).getAllByRole("button")).toHaveLength(
+        agentColorOrder.length,
+      );
+      fireEvent.click(
+        within(palette).getByRole("button", { name: agentColorOrder[2] }),
+      );
+      await waitFor(() =>
+        expect(updates()).toEqual([
+          { sync_id: syncId, [colorKey]: agentColorOrder[2] },
+        ]),
+      );
+    });
+
+    it.each([
+      ["Presets", "Clear preset"],
+      ["Icons", "Clear icon"],
+    ])("When 在 %s 档取消记号，Then 只提交空字符串", async (mode, clear) => {
+      const header = await openDetail();
+      fireEvent.click(within(header).getByRole("button", { name: trigger }));
+      fireEvent.click(screen.getByRole("tab", { name: mode }));
+      fireEvent.click(screen.getByRole("button", { name: clear }));
+      await waitFor(() =>
+        expect(updates()).toEqual([{ sync_id: syncId, [iconKey]: "" }]),
+      );
+    });
+  },
+);
+
 describe("部门详情：图标与强调色是挑出来的，不是打出来的", () => {
   /** 选中「Engineering」这个部门，返回详情列。 */
   async function openEngineering() {
@@ -551,16 +699,20 @@ describe("部门详情：图标与强调色是挑出来的，不是打出来的"
     );
   });
 
-  it("图标不再是自由文本框，而是一组可挑的图标", async () => {
+  it("Given 没有部门图标，Then 头部的可点击记号显示部门首字和强调色", async () => {
     const col = await openEngineering();
-    expect(within(col).queryByLabelText("Icon key")).toBeNull();
-    expect(within(col).getByRole("radiogroup", { name: "Icon" })).toBeTruthy();
+    const header = within(col).getByTestId("org-detail-header");
+    const trigger = within(header).getByRole("button", { name: "Change icon" });
+    const mark = within(trigger).getByRole("img", { name: "Engineering" });
+    expect(mark.textContent).toBe("E");
+    expect(mark.style.backgroundColor).toBe("var(--agent-1)");
   });
 
   it("挑一个图标只提交 icon 这一个键", async () => {
     const col = await openEngineering();
-    const group = within(col).getByRole("radiogroup", { name: "Icon" });
-    fireEvent.click(within(group).getByRole("radio", { name: "Launch" }));
+    fireEvent.click(within(col).getByRole("button", { name: "Change icon" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Icons" }));
+    fireEvent.click(screen.getByRole("button", { name: "Launch" }));
 
     await waitFor(() =>
       expect(mockedApi).toHaveBeenCalledWith(
@@ -573,25 +725,31 @@ describe("部门详情：图标与强调色是挑出来的，不是打出来的"
     );
   });
 
-  it("强调色不再是自由文本框，而是与 Agent 同一套色板", async () => {
-    const col = await openEngineering();
-    expect(within(col).queryByLabelText("Accent color key")).toBeNull();
-    const group = within(col).getByRole("radiogroup", {
-      name: "Accent color",
+  it("Given 部门强调色已设置，Then 头部首字记号使用该颜色", async () => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && !init?.method)
+        return {
+          ...chart,
+          departments: chart.departments.map((d) => ({
+            ...d,
+            accent_color: "agent-5",
+          })),
+        };
+      if (path === "/v1/workspace/org/backends") return { backends };
+      throw new Error(`unexpected request: ${path}`);
     });
-    // 与 Agent 头像色板同一套（桌面端 org-detail-department.tsx 用的就是
-    // safeAgentColor + agentColorClassNames），所以格数与共享包的 agentColorOrder 一致。
-    expect(within(group).getAllByRole("radio").length).toBe(
-      agentColorOrder.length,
-    );
+    await openEngineering();
+    const header = screen.getByTestId("org-detail-header");
+    const mark = within(
+      within(header).getByRole("button", { name: "Change icon" }),
+    ).getByRole("img", { name: "Engineering" });
+    expect(mark.style.backgroundColor).toBe("var(--agent-5)");
   });
 
   it("挑一个强调色只提交 accent_color 这一个键", async () => {
     const col = await openEngineering();
-    const group = within(col).getByRole("radiogroup", {
-      name: "Accent color",
-    });
-    fireEvent.click(within(group).getAllByRole("radio")[2]);
+    fireEvent.click(within(col).getByRole("button", { name: "Change icon" }));
+    fireEvent.click(screen.getByRole("button", { name: agentColorOrder[2] }));
 
     await waitFor(() =>
       expect(mockedApi).toHaveBeenCalledWith(
@@ -903,8 +1061,12 @@ describe("详情头部：谁在编辑、改动落没落库（mockup 的 mhead）
     await selectAlice();
 
     const header = await screen.findByTestId("org-detail-header");
-    expect(within(header).getByText("Alice")).toBeTruthy();
-    expect(within(header).getByTestId("org-detail-avatar")).toBeTruthy();
+    expect(
+      within(header).getByRole("textbox", { name: "Name" }),
+    ).toHaveProperty("value", "Alice");
+    expect(
+      within(header).getByRole("button", { name: "Change avatar" }),
+    ).toBeTruthy();
     expect(within(header).getByText("Department lead")).toBeTruthy();
     expect(within(header).getByText("Engineering")).toBeTruthy();
   });
@@ -923,7 +1085,7 @@ describe("详情头部：谁在编辑、改动落没落库（mockup 的 mhead）
     fireEvent.click(within(row).getByTestId(/^org-row-select-/));
 
     const header = await screen.findByTestId("org-detail-header");
-    const avatar = within(header).getByTestId("org-detail-avatar");
+    const avatar = within(header).getByRole("img", { name: "CEO Agent" });
     expect(avatar.style.backgroundColor).toBe("var(--agent-1)");
     expect(avatar.style.backgroundColor).toBe(rowGlyph.style.backgroundColor);
   });
@@ -1124,7 +1286,9 @@ describe("头像：不伪造上传，改成图标选择器", () => {
     await selectAlice();
     await screen.findByLabelText("Name", { selector: "input" });
 
-    fireEvent.click(screen.getByRole("radio", { name: "Terminal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change avatar" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Icons" }));
+    fireEvent.click(screen.getByRole("button", { name: "Terminal" }));
 
     await waitFor(() =>
       expect(mockedApi).toHaveBeenCalledWith(

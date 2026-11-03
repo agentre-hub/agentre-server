@@ -36,15 +36,9 @@
     },
     "fields": {
       "name": "名称",
-      "description": "简介",
-      "avatarColor": "头像配色",
-      "accentColor": "强调色",
       "parentDepartment": "上级部门",
       "leadAgent": "负责人",
-      "none": "无（顶层）",
-      "avatarIconPick": "图标",
-      "avatarIconNone": "不用图标",
-      "avatarIconCustom": "自定义图标：{{key}}"
+      "none": "无（顶层）"
     },
     "systemPrompt": "系统提示词",
     "systemPromptPlaceholder": "每行一条指令",

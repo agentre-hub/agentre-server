@@ -1,8 +1,7 @@
 /**
  * 详情主区，选中一行 Agent 时出现，三栏：身份 / 行为 / 执行（规格「详情」）。
- * 归属下拉、工具清单、执行目标行都来自共享包；三栏骨架、名称/简介/头像、
- * 系统提示词编辑器是宿主自己搭的（与桌面端各自维护一份同形的壳，规格
- * 「外壳保持分叉」只到索引 + 行 + 转录，详情三栏骨架本就是宿主各自的装配）。
+ * 身份区、归属下拉、工具清单、执行目标行来自共享包；宿主负责三栏骨架、
+ * 保存语义与系统提示词编辑器。
  *
  * 每一次字段编辑只提交这一个字段（AgentFields 全是指针语义：不传 = 不改，
  * 服务端只覆盖明确涉及的键）——不把整份表单状态囫囵提交回去，避免把用户没碰过的
@@ -15,14 +14,13 @@ import { useTranslation } from "react-i18next";
 import OrgDeleteConfirm from "./OrgDeleteConfirm";
 import type { RowMenuItem } from "./OrgDetailHeader";
 import {
-  AgentAvatar,
+  IdentityFields,
   Button,
   DialogShell,
   DialogShellBody,
   DialogShellFooter,
   DialogShellHeader,
   DialogShellSubmit,
-  Input,
   isOrgSystemAgent,
   OrgPlacementField,
   Textarea,
@@ -30,12 +28,9 @@ import {
   resolveOrgReportTo,
   type OrgAgentModel,
   type OrgDepartmentModel,
-  hasIcon,
-  iconForKey,
   type OrgPlacement,
 } from "@agentre-hub/agentre-ui";
 
-import { OrgColorPicker, OrgIconPicker, RenderIcon } from "./orgPickers";
 import {
   parsePromptJSON,
   parseToolsJSON,
@@ -147,12 +142,7 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
     saveIfChanged({ prompt_json: stringifyPromptJSON(text) });
   };
 
-  // ---- 头部：头像 + 名字 + **算得出来的**角色徽标 ----
-  // 词表外的 key（桌面端设过而这版不认得）按「没有图标」处理，回落成首字母 ——
-  // 包的 iconForKey 会给一枚拼图兜底，那在这里会把「不认得」画成一个像模像样的图标。
-  const avatarIconComponent = hasIcon(avatarIcon)
-    ? iconForKey(avatarIcon)
-    : undefined;
+  // 头部身份区的附属信息只画真实算得出来的角色与归属。
   const leadsDepartments = props.departments.some(
     (d) => d.leadAgentId === agentModel.id,
   );
@@ -181,53 +171,53 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
   return (
     <div data-slot="org-detail-agent" className="flex h-full min-w-0 flex-col">
       <OrgDetailHeader
-        avatar={
-          /*
-            身份方块走共享包的 AgentAvatar —— 与左边索引行、对话页那两处同一枚记号
-            （包里 agent-avatar.tsx 的开头就写着这条：三份实现的兜底各不相同，同一个
-            Agent 会长成三个样子）。没设过颜色的 Agent 因此和索引行一样退回调色板
-            首色，而不是此前那枚中性灰方块。
-          */
-          <AgentAvatar
-            testId="org-detail-avatar"
-            name={agent.name}
-            color={agent.avatar_color}
-            initials={agent.name.trim().charAt(0).toUpperCase()}
-            icon={
-              avatarIconComponent ? (
-                <RenderIcon
-                  Icon={avatarIconComponent}
-                  className="size-[18px]"
-                />
-              ) : undefined
+        identity={
+          <IdentityFields
+            kind="agent"
+            testIdPrefix="org-agent-identity"
+            name={name}
+            description={description}
+            onNameChange={setName}
+            onNameBlur={() => {
+              if (name !== agent.name) saveIfChanged({ name });
+            }}
+            onDescriptionChange={setDescription}
+            onDescriptionBlur={() => {
+              if (description !== (agent.description ?? "")) {
+                saveIfChanged({ description });
+              }
+            }}
+            mark={{
+              iconKey: avatarIcon,
+              color: agent.avatar_color ?? "",
+              onPickIcon: (key) => saveIfChanged({ avatar_icon: key }),
+              onPickColor: (color) => saveIfChanged({ avatar_color: color }),
+            }}
+            meta={
+              <div className="flex flex-wrap items-center gap-1.5">
+                {isSystem && (
+                  <OrgDetailBadge>
+                    {t("org.detail.header.systemBadge")}
+                  </OrgDetailBadge>
+                )}
+                {leadsDepartments && (
+                  <OrgDetailBadge>
+                    {t("org.detail.header.leadBadge")}
+                  </OrgDetailBadge>
+                )}
+                {ownDepartment && (
+                  <OrgDetailChip>{ownDepartment.name}</OrgDetailChip>
+                )}
+                {parentAgent && (
+                  <OrgDetailChip>
+                    {t("org.detail.header.reportsToParent", {
+                      name: parentAgent.name,
+                    })}
+                  </OrgDetailChip>
+                )}
+              </div>
             }
-            className="size-9"
           />
-        }
-        title={agent.name}
-        badges={
-          <>
-            {isSystem && (
-              <OrgDetailBadge>
-                {t("org.detail.header.systemBadge")}
-              </OrgDetailBadge>
-            )}
-            {leadsDepartments && (
-              <OrgDetailBadge>
-                {t("org.detail.header.leadBadge")}
-              </OrgDetailBadge>
-            )}
-            {ownDepartment && (
-              <OrgDetailChip>{ownDepartment.name}</OrgDetailChip>
-            )}
-            {parentAgent && (
-              <OrgDetailChip>
-                {t("org.detail.header.reportsToParent", {
-                  name: parentAgent.name,
-                })}
-              </OrgDetailChip>
-            )}
-          </>
         }
         save={save}
         menuItems={menuItems}
@@ -261,56 +251,6 @@ export function OrgAgentDetail(props: OrgAgentDetailProps) {
             <h3 className="font-mono text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("org.detail.columns.identity")}
             </h3>
-            <div className="space-y-1.5">
-              <label
-                className="block text-2xs text-muted-foreground"
-                htmlFor="org-agent-name"
-              >
-                {t("org.detail.fields.name")}
-              </label>
-              <Input
-                id="org-agent-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onBlur={() => {
-                  if (name !== agent.name) saveIfChanged({ name });
-                }}
-                aria-label={t("org.detail.fields.name")}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label
-                className="block text-2xs text-muted-foreground"
-                htmlFor="org-agent-description"
-              >
-                {t("org.detail.fields.description")}
-              </label>
-              <Input
-                id="org-agent-description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                onBlur={() => {
-                  if (description !== (agent.description ?? "")) {
-                    saveIfChanged({ description });
-                  }
-                }}
-                aria-label={t("org.detail.fields.description")}
-              />
-            </div>
-            <OrgColorPicker
-              value={agent.avatar_color ?? ""}
-              onPick={(color) => saveIfChanged({ avatar_color: color })}
-              label={t("org.detail.fields.avatarColor")}
-            />
-            <OrgIconPicker
-              value={avatarIcon}
-              onPick={(key) => saveIfChanged({ avatar_icon: key })}
-              label={t("org.detail.fields.avatarIconPick")}
-              noneLabel={t("org.detail.fields.avatarIconNone")}
-              customLabel={(key) =>
-                t("org.detail.fields.avatarIconCustom", { key })
-              }
-            />
             <OrgPlacementField
               agent={agentModel}
               agents={props.agents}

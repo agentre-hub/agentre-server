@@ -1,6 +1,6 @@
 /**
  * 详情主区的头部（mockup `01-index-detail` / `06-detail-states` / `07-detail-department`
- * 的 `mhead`）：头像 + 名字 + 角色徽标 + 保存态 + `⋮` 溢出菜单 + 关闭。
+ * 的 `mhead`）：共享身份区 + 保存态 + `⋮` 溢出菜单 + 关闭。
  * Agent 详情与部门详情共用这一份——两处的头部在图上是同一个形状，各写一遍必然分叉。
  *
  * **头部那条保存态不是装饰。** 这两份表单都是 onBlur 静默提交（改完一个字段就发一个
@@ -29,8 +29,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  cn,
-  tokenToCssColor,
 } from "@agentre-hub/agentre-ui";
 import { formatRelativeTime } from "@/lib/sessionView";
 
@@ -193,38 +191,6 @@ function SaveStatus({
   );
 }
 
-/**
- * 头像 / 组头字形：底色走 `tokenToCssColor`（token → css 变量）而不是把调色板
- * 序号拼成一个工具类名——与共享包内那枚字形同一条理由：拼出来的类名要 Tailwind
- * 扫得到才生成得出规则，扫不到就静默变成透明。token 非法或缺席时给中性面，
- * 不编一个颜色出来。
- */
-export function OrgDetailGlyph({
-  label,
-  color,
-  children,
-}: {
-  label: string;
-  color?: string;
-  children?: React.ReactNode;
-}) {
-  const css = tokenToCssColor(color);
-  return (
-    <span
-      data-testid="org-detail-avatar"
-      role="img"
-      aria-label={label}
-      className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-lg text-sm font-semibold text-agent-foreground",
-        !css && "bg-secondary text-secondary-foreground",
-      )}
-      style={css ? { backgroundColor: css } : undefined}
-    >
-      {children}
-    </span>
-  );
-}
-
 /** 角色徽标（部门长 / 系统 Agent）：只画算得出来的那一维。 */
 export function OrgDetailBadge({ children }: { children: React.ReactNode }) {
   return (
@@ -244,9 +210,7 @@ export function OrgDetailChip({ children }: { children: React.ReactNode }) {
 }
 
 export interface OrgDetailHeaderProps {
-  avatar: React.ReactNode;
-  title: string;
-  badges?: React.ReactNode;
+  identity: React.ReactNode;
   save: OrgSaveController;
   /** 空数组即整个 `⋮` 不画（系统 Agent 就是这一档：它删不得）。 */
   menuItems: RowMenuItem[];
@@ -260,7 +224,7 @@ export function OrgDetailHeader(props: OrgDetailHeaderProps) {
   return (
     <header
       data-testid="org-detail-header"
-      className="flex shrink-0 items-center gap-2.5 px-5 py-3"
+      className="flex shrink-0 items-start gap-2.5 px-5 py-3"
     >
       {/* 返回只在移动端出现（宿主给不给 onBack 决定）：桌面端索引一直在左边并排
           摆着，返回没有可去之处，画一个只会多一颗按钮。 */}
@@ -274,12 +238,7 @@ export function OrgDetailHeader(props: OrgDetailHeaderProps) {
           <ChevronLeft className="size-4" aria-hidden="true" />
         </Button>
       )}
-      {props.avatar}
-      <span className="min-w-0 max-w-[40%] truncate text-base font-semibold">
-        {props.title}
-      </span>
-      {props.badges}
-      <span className="min-w-2 flex-1" />
+      <div className="min-w-0 flex-1">{props.identity}</div>
       <SaveStatus state={props.save.state} onRetry={props.save.retry} />
       {props.menuItems.length > 0 && (
         <DropdownMenu>

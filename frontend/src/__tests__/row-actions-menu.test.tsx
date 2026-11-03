@@ -42,8 +42,7 @@ function renderHeader(
   const onDelete = over.onDelete ?? vi.fn();
   render(
     <OrgDetailHeader
-      avatar={<span data-testid="avatar" />}
-      title="研发部"
+      identity={<span data-testid="identity">研发部</span>}
       save={{ state: { kind: "idle" }, run: vi.fn(), retry: vi.fn() }}
       menuItems={[
         { key: "open", label: "打开", onSelect: onOpen },
