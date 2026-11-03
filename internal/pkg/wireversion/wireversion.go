@@ -41,4 +41,8 @@ var Protocol = protocolversion.Protocol()
 // 0.7.0：规格 2026-10-27-agrctl-send-subagent-card 新增 RUNTIME_INJECT_SUBAGENT_EVENTS
 // （往父会话转录注入 agrctl send 的子代理卡事件），方法集变了，floor 随 pkg/wire 的 pin
 // 一起抬。
-const MinSupported = "0.7.0"
+//
+// 0.8.0：规格 2026-11-03-session-process-ports 新增 RUNTIME_LIST_SESSION_PROCESSES /
+// RUNTIME_KILL_SESSION_PROCESS（会话留下的进程与监听端口），方法集变了，floor 随 pkg/wire
+// 的 pin 一起抬。
+const MinSupported = "0.8.0"
