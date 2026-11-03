@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import {
-  iconNode,
-  type ProjectHeaderActionsProps,
-} from "@agentre-hub/agentre-ui";
+import type { ProjectHeaderActionsProps } from "@agentre-hub/agentre-ui";
 
 import { membersOfProject } from "@/components/session/newconv/projectMembers";
 import type {
@@ -133,7 +130,7 @@ export function useProjectManagement({
           id: m.syncId,
           name: nameOf(m.agentSyncId),
           color: agent?.avatar_color,
-          avatarIcon: iconNode(agent?.avatar_icon),
+          avatarIconKey: agent?.avatar_icon,
         };
       }),
       candidates: agents
@@ -142,7 +139,7 @@ export function useProjectManagement({
           id: a.sync_id,
           name: a.name,
           color: a.avatar_color,
-          avatarIcon: iconNode(a.avatar_icon),
+          avatarIconKey: a.avatar_icon,
         })),
     };
   }, [projects, settingsFor, agents]);
@@ -182,7 +179,7 @@ export function useProjectManagement({
         id: a.sync_id,
         name: a.name,
         color: a.avatar_color,
-        avatarIcon: iconNode(a.avatar_icon),
+        avatarIconKey: a.avatar_icon,
         inherited: isInherited,
       });
       const members = [

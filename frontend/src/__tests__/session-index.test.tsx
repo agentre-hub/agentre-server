@@ -808,6 +808,82 @@ describe("统一会话索引：颜色 token 与项目字形", () => {
 });
 
 /**
+ * Agent 记号认预设 key（共享包 bf46e288，规格 2026-11-02「预置头像」）。
+ *
+ * `avatar_icon` 里存的是 `preset:<组>-<名字>`；四档身份的优先级（预设 ▸ 图标 ▸
+ * 首字母）在共享包的 `AgentAvatar` 里。索引此前只把名字和颜色递下去，于是同一个
+ * Agent 在组织面画得出预设、在会话行与组头退回首字母。这里守的是宿主的接线：
+ * 行首、第二行、Agent 组头都带着 `avatar_icon` 一起进包。
+ */
+describe("统一会话索引：Agent 记号认预设 key", () => {
+  /** 账号里的 Agent 名单。`avatarIcon` 就是 `avatar_icon` 原样（预设 key / 图标 key）。 */
+  function presetAgents(avatarIcon: string) {
+    return [
+      { syncId: "ag-fe", name: "Frontend Agent", color: "agent-5", avatarIcon },
+    ];
+  }
+
+  it("行首那一枚：预设 key 画成预设图，不是首字母", () => {
+    renderIndex({
+      axis: "project",
+      agents: presetAgents("preset:agent-tester"),
+    });
+
+    const mark = leadingGlyph();
+    expect(mark.querySelector("img")?.getAttribute("src")).toContain(
+      "agent-tester",
+    );
+    // 预设顶掉首字母，而不是叠在它上面。
+    expect(mark.textContent).toBe("");
+  });
+
+  it("行首那一枚：图标 key 照旧画图标", () => {
+    renderIndex({ axis: "project", agents: presetAgents("bot") });
+
+    expect(
+      leadingGlyph().querySelector("svg")?.getAttribute("class"),
+    ).toContain("lucide-bot");
+  });
+
+  it("行首那一枚：认不出的预设 key 退回首字母", () => {
+    renderIndex({ axis: "project", agents: presetAgents("preset:nope") });
+
+    const mark = leadingGlyph();
+    expect(mark.textContent).toBe("F");
+    expect(mark.querySelector("img, svg")).toBeNull();
+  });
+
+  it("第二行（时间轴那一维）同样画预设图", () => {
+    renderIndex({
+      axis: "time",
+      agents: presetAgents("preset:agent-tester"),
+    });
+
+    const agentPart = within(screen.getByTestId("row-secondary-a")).getByText(
+      "Frontend Agent",
+    );
+    const slot = agentPart.previousElementSibling as HTMLElement;
+    expect(slot.dataset.kind).toBe("agent-avatar");
+    expect(slot.querySelector("img")?.getAttribute("src")).toContain(
+      "agent-tester",
+    );
+  });
+
+  it("Agent 组头上也是那一张预设图", () => {
+    renderIndex({
+      axis: "agent",
+      agents: presetAgents("preset:agent-tester"),
+    });
+
+    const avatar = screen.getByTestId("agent-group-avatar");
+    expect(avatar.querySelector("img")?.getAttribute("src")).toContain(
+      "agent-tester",
+    );
+    expect(avatar.textContent).toBe("");
+  });
+});
+
+/**
  * 筛选跨轴一致（规格「索引的组成」筛选与搜索）：全部 / 运行中 / 等你处理。
  * 「等你处理」数的仍是 waitingForInput（决策 3 只改名字，不引入已读状态）。
  * 筛选生效时**只收窄行**，同时把一条都不剩的组头一起隐藏（决策 10 的同一条规则）。

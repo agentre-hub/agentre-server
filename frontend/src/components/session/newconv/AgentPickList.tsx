@@ -3,7 +3,6 @@ import {
   Button,
   cn,
   groupAgentsForPicking,
-  iconNode,
 } from "@agentre-hub/agentre-ui";
 import { Bot, ChevronRight, SearchX } from "lucide-react";
 import { useMemo } from "react";
@@ -220,7 +219,7 @@ function AgentRow({
       <AgentAvatar
         name={agent.name}
         color={agent.avatar_color}
-        icon={iconNode(agent.avatar_icon)}
+        iconKey={agent.avatar_icon}
         size="sm"
       />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">

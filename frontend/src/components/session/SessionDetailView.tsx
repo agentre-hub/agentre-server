@@ -16,7 +16,6 @@ import {
   Alert,
   AlertDescription,
   createTranscriptProjector,
-  iconNode,
   indicatorHostMessageId,
   normalizePermissionMode,
   opensAssistantMessage,
@@ -112,7 +111,7 @@ interface WorkspaceAgent {
   sync_id: string;
   name: string;
   avatar_color?: string;
-  /** 图标词表的 key；解成图标那一步走共享包的 `iconNode`，两端同一份词表。 */
+  /** 图标或预设的持久化 key（`avatar_icon` 原样）；解 key 那一步在共享包里。 */
   avatar_icon?: string;
   exec_targets?: {
     backend_sync_id?: string;
@@ -1806,7 +1805,7 @@ export default function SessionDetailView({
       // 首字母原样取（不大写）：中文名没有大小写，拉丁名这里也与桌面端一致。
       initials={agent.name.charAt(0)}
       color={agent.avatar_color}
-      icon={iconNode(agent.avatar_icon)}
+      iconKey={agent.avatar_icon}
       size="md"
       className={MESSAGE_AVATAR_CLASS}
     />

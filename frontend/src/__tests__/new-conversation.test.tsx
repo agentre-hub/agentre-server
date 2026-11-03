@@ -110,6 +110,27 @@ const agents = [
   },
 ];
 
+/**
+ * 预设头像那一组用的 Agent 名单（共享包 bf46e288，规格 2026-11-02「预置头像」）：
+ * 认得出的预设、图标词表里的 key、认不出的预设 key 各一个。
+ */
+const presetAgents = [
+  { ...agents[0], avatar_icon: "preset:agent-tester" },
+  {
+    ...agents[1],
+    avatar_icon: "terminal",
+    has_available_target: true,
+    project_sync_ids: ["proj-1"],
+  },
+  {
+    ...agents[1],
+    sync_id: "agent-3",
+    name: "Ghost Agent",
+    avatar_icon: "preset:nope",
+    project_sync_ids: ["proj-1"],
+  },
+];
+
 const projects = [
   {
     sync_id: "proj-root",
@@ -204,6 +225,8 @@ const mirroredSession = {
 function stubReads(
   over: Record<string, unknown> = {},
   sessions: unknown[] = [],
+  /** 这一条用例要的 Agent 名单。默认就是上面那份（上一个参数已占着会话行）。 */
+  agentRows: unknown[] = agents,
 ) {
   mockedApi.mockImplementation(async (path: string) => {
     if (path.startsWith("/v1/agent-sessions?"))
@@ -228,7 +251,7 @@ function stubReads(
           },
         ],
       };
-    if (path.startsWith("/v1/workspace/agents")) return { agents };
+    if (path.startsWith("/v1/workspace/agents")) return { agents: agentRows };
     if (path.startsWith("/v1/workspace/projects")) return { projects };
     for (const [prefix, value] of Object.entries(over)) {
       if (path.startsWith(prefix)) return value;
@@ -459,6 +482,37 @@ describe("挑一个 Agent", () => {
         .querySelector("svg")
         ?.getAttribute("class"),
     ).toContain("lucide-bot");
+  });
+
+  it("挑选 Agent 的清单认预设 key：预设图 / 图标 / 认不出退回首字母", async () => {
+    stubReads({}, [], presetAgents);
+    renderChat();
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Start your first conversation",
+      }),
+    );
+
+    const presetRow = await screen.findByTestId("agent-pick-agent-1");
+    expect(
+      within(presetRow)
+        .getByRole("img", { name: "Backend Agent" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+    expect(
+      within(screen.getByTestId("agent-pick-agent-2"))
+        .getByRole("img", { name: "Docs Agent" })
+        .querySelector("svg")
+        ?.getAttribute("class"),
+    ).toContain("lucide-terminal");
+    const fallback = within(screen.getByTestId("agent-pick-agent-3")).getByRole(
+      "img",
+      { name: "Ghost Agent" },
+    );
+    expect(fallback.textContent).toBe("GA");
+    expect(fallback.querySelector("img, svg")).toBeNull();
   });
 
   it("只取一次光杆 Agent 清单，不为此把这台浏览器注册成设备", async () => {
@@ -1399,6 +1453,37 @@ describe("从项目里挑：空的时候用同一种形", () => {
     expect(avatar.querySelector("svg")?.getAttribute("class")).toContain(
       "lucide-bot",
     );
+  });
+
+  it("「从项目里挑」认预设 key：预设图 / 图标 / 认不出退回首字母", () => {
+    render(
+      <ThemeProvider>
+        <ProjectAgentPane
+          projects={[{ sync_id: "proj-1", name: "server" }]}
+          agents={presetAgents}
+          onPick={vi.fn()}
+          onBack={vi.fn()}
+        />
+      </ThemeProvider>,
+    );
+
+    expect(
+      within(screen.getByTestId("project-agent-agent-1"))
+        .getByRole("img", { name: "Backend Agent" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+    expect(
+      within(screen.getByTestId("project-agent-agent-2"))
+        .getByRole("img", { name: "Docs Agent" })
+        .querySelector("svg")
+        ?.getAttribute("class"),
+    ).toContain("lucide-terminal");
+    const fallback = within(
+      screen.getByTestId("project-agent-agent-3"),
+    ).getByRole("img", { name: "Ghost Agent" });
+    expect(fallback.textContent).toBe("GA");
+    expect(fallback.querySelector("img, svg")).toBeNull();
   });
 
   it("项目里一个 Agent 都没有：同一种形，并说清 Agent 从哪来", () => {
@@ -2643,5 +2728,40 @@ describe("草稿与详情共用同一条顶带", () => {
       screen.getByTestId("draft-header-meta-agent"),
     ).getByTestId("draft-header-status-badge");
     expect(badge.getAttribute("aria-label")).toBe("running status");
+  });
+
+  /**
+   * 草稿这一屏的 Agent 记号也认预设（共享包 bf46e288，规格 2026-11-02「预置头像」）。
+   * 顶带与派发中那一段转录是两处独立的渲染，任何一处只递名字与颜色，它就会在
+   * 同一个 Agent 上退回一个首字。
+   */
+  it("草稿的顶带与派发中的转录都画 Agent 的预设图", async () => {
+    stubReads({}, [], presetAgents);
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    // 派发一直在飞：量的是「已经交出去、还没落地」的那一段转录。
+    mockDispatch.mockImplementation(() => new Promise(() => {}));
+    renderChat();
+    await openDraft();
+
+    expect(
+      within(screen.getByTestId("draft-header-meta-agent"))
+        .getByRole("img", { name: "Backend Agent" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+
+    await typeInDraft("跑一下失败的测试");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("session-detail-send").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("session-detail-send"));
+
+    const pending = await screen.findByTestId("draft-pending");
+    expect(
+      pending.querySelector('[role="img"] img')?.getAttribute("src"),
+    ).toContain("agent-tester");
   });
 });

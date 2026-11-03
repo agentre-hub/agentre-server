@@ -130,12 +130,12 @@ function lastWrite(path: string): Record<string, unknown> {
   return JSON.parse(String((call[1] as RequestInit).body));
 }
 
-function mockBoardApi() {
+function mockBoardApi(agentRows: unknown[] = agents) {
   mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
     if (init?.method === "POST") return { sync_id: "new-sync-id", version: 1 };
     if (path.startsWith("/v1/workspace/issues")) return board;
     if (path === "/v1/workspace/projects") return { projects };
-    if (path === "/v1/workspace/agents") return { agents };
+    if (path === "/v1/workspace/agents") return { agents: agentRows };
     if (path === "/v1/workspace/org/backends") return { backends };
     if (path === "/v1/engine/providers") return { providers: [] };
     if (path === "/v1/engine/backends") return { backends: [] };
@@ -398,6 +398,66 @@ describe("the task form writes what the browser is allowed to write", () => {
         agent_backend_sync_id: "",
       });
     });
+  });
+});
+
+/**
+ * 看板上的 Agent 记号（共享包 bf46e288，规格 2026-11-02「预置头像」）。
+ *
+ * 任务里的 Agent 选择是共享包 `TaskExecPills` 画的，`BoardAgentOption.avatarIcon`
+ * 就是 `avatar_icon` 原样。本站此前只递名字和颜色，于是同一个 Agent 在组织面画得出
+ * 预设、在任务的 Agent 选择里退回首字母。
+ */
+describe("任务里的 Agent 选择认预设 key", () => {
+  const pickerAgents = [
+    { ...agents[0], avatar_icon: "preset:agent-tester" },
+    {
+      ...agents[0],
+      sync_id: "agent-bob",
+      name: "Bob",
+      avatar_icon: "bot",
+    },
+    {
+      ...agents[0],
+      sync_id: "agent-carol",
+      name: "Carol",
+      avatar_icon: "preset:nope",
+    },
+  ];
+
+  /** Agent 菜单里的那一行（id 是宿主现编的数字，只能按名字找）。 */
+  function agentOption(name: string): HTMLElement {
+    const option = screen
+      .getAllByTestId(/^task-agent-/)
+      .find((el) => el.textContent?.includes(name));
+    if (!option) throw new Error(`Agent 菜单里没有「${name}」`);
+    return option;
+  }
+
+  it("预设 key 画成预设图、图标 key 画图标、认不出的 key 退回首字母", async () => {
+    mockBoardApi(pickerAgents);
+    await renderBoard();
+
+    fireEvent.click(screen.getByRole("button", { name: "New task" }));
+    open(await screen.findByTestId("task-pill-agent"));
+
+    expect(
+      within(agentOption("Alice"))
+        .getByRole("img", { name: "Alice" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+    expect(
+      within(agentOption("Bob"))
+        .getByRole("img", { name: "Bob" })
+        .querySelector("svg")
+        ?.getAttribute("class"),
+    ).toContain("lucide-bot");
+    const fallback = within(agentOption("Carol")).getByRole("img", {
+      name: "Carol",
+    });
+    expect(fallback.textContent).toBe("C");
+    expect(fallback.querySelector("img, svg")).toBeNull();
   });
 });
 

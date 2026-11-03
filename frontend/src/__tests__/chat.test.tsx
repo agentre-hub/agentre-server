@@ -2792,8 +2792,11 @@ describe("对话页：项目设置弹窗", () => {
   });
 
   /** 项目树按当前成员现算，写成功之后重取到的就是新的那一份。 */
-  function stubProjectApi() {
-    let members: { sync_id: string; agent_sync_id: string }[] = [];
+  function stubProjectApi(
+    initialMembers: { sync_id: string; agent_sync_id: string }[] = [],
+    agentRows: unknown[] = agents,
+  ) {
+    let members = initialMembers;
     mockedApi.mockImplementation(async (path: string) => {
       if (path.startsWith("/v1/agent-sessions?")) {
         const items = [mirrored({ project_sync_id: "p-1" })];
@@ -2803,7 +2806,7 @@ describe("对话页：项目设置弹窗", () => {
         };
       }
       if (path === "/v1/devices") return { devices: [agentred] };
-      if (path === "/v1/workspace/agents") return { agents };
+      if (path === "/v1/workspace/agents") return { agents: agentRows };
       if (path.startsWith("/v1/workspace/projects/machines"))
         return { machines: [] };
       if (path === "/v1/workspace/projects")
@@ -2849,6 +2852,96 @@ describe("对话页：项目设置弹窗", () => {
         .querySelector("svg")
         ?.getAttribute("class"),
     ).toContain("lucide-bot");
+  });
+
+  /**
+   * 预设头像（共享包 bf46e288，规格 2026-11-02「预置头像」）：`avatar_icon` 里存的是
+   * `preset:<组>-<名字>`。本站此前把 key 先过一遍 `iconNode` 再当节点递下去，而节点
+   * 会盖过 `avatarIconKey` —— 成员行与候选行因此永远画不出预设。
+   */
+  const presetAgents = [
+    {
+      ...agents[0],
+      avatar_icon: "preset:agent-tester",
+      project_sync_ids: ["p-1"],
+    },
+    {
+      sync_id: "ag-2",
+      name: "Docs Agent",
+      avatar_color: "agent-7",
+      avatar_icon: "bot",
+      has_available_target: true,
+      exec_targets: [],
+    },
+    {
+      sync_id: "ag-3",
+      name: "Ghost Agent",
+      avatar_color: "agent-9",
+      avatar_icon: "preset:nope",
+      project_sync_ids: ["p-1"],
+      has_available_target: true,
+      exec_targets: [],
+    },
+  ];
+
+  it("成员行与候选行都认预设 key：预设图 / 图标 / 认不出退回首字母", async () => {
+    stubProjectApi([{ sync_id: "pa-1", agent_sync_id: "ag-1" }], presetAgents);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    await screen.findByText("agentre-server");
+    fireEvent.pointerDown(screen.getByTestId("project-menu-p-1"), {
+      button: 0,
+      ctrlKey: false,
+    });
+    fireEvent.click(screen.getByTestId("project-menu-item-settings"));
+
+    const memberRow = await screen.findByTestId("project-member-row-pa-1");
+    expect(
+      within(memberRow)
+        .getByRole("img", { name: "后端 Agent" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+
+    fireEvent.click(await screen.findByTestId("project-member-add-open"));
+    expect(
+      within(await screen.findByTestId("project-member-add-ag-2"))
+        .getByRole("img", { name: "Docs Agent" })
+        .querySelector("svg")
+        ?.getAttribute("class"),
+    ).toContain("lucide-bot");
+    const fallback = within(
+      await screen.findByTestId("project-member-add-ag-3"),
+    ).getByRole("img", { name: "Ghost Agent" });
+    expect(fallback.textContent).toBe("G");
+    expect(fallback.querySelector("img, svg")).toBeNull();
+  });
+
+  /** 项目组头那颗 ＋ 里的成员记号与设置弹窗同一条：同一个 Agent 在同一页两处不能两个样。 */
+  it("项目组头的 ＋ 里，成员记号也认预设 key", async () => {
+    stubProjectApi(
+      [
+        { sync_id: "pa-1", agent_sync_id: "ag-1" },
+        { sync_id: "pa-2", agent_sync_id: "ag-3" },
+      ],
+      presetAgents,
+    );
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    fireEvent.click(await screen.findByTestId("project-add-p-1"));
+    expect(
+      within(await screen.findByTestId("project-member-option-ag-1"))
+        .getByRole("img", { name: "后端 Agent" })
+        .querySelector("img")
+        ?.getAttribute("src"),
+    ).toContain("agent-tester");
+    const fallback = within(
+      screen.getByTestId("project-member-option-ag-3"),
+    ).getByRole("img", { name: "Ghost Agent" });
+    expect(fallback.textContent).toBe("G");
+    expect(fallback.querySelector("img, svg")).toBeNull();
   });
 
   it("加一个成员之后，弹窗里的清单当场就变——它读的是重取回来的项目", async () => {

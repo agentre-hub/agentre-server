@@ -187,6 +187,7 @@ function GroupHeader({
   projectHandlers,
   onAgentNewSession,
   onImport,
+  agentAvatarIcon,
 }: {
   group: MirrorIndexGroup;
   /** 这台机器的额外说明（最后在线）。 */
@@ -226,6 +227,11 @@ function GroupHeader({
    * 而没有这条通路的宿主永远不会有这个入口。
    */
   onImport?: (prefill: ImportDialogPrefill) => void;
+  /**
+   * 这一组 Agent 的 `avatar_icon` 原样（预设 key / 图标 key）。Agent 轴上组键就是
+   * agentSyncId，而 `IndexGroup` 只带出名字与颜色——图标那一列由宿主在这里补。
+   */
+  agentAvatarIcon?: string;
 }) {
   const { t, i18n } = useTranslation();
   useEffect(() => {
@@ -397,6 +403,7 @@ function GroupHeader({
         agent={{
           name: group.kind === "unnamedAgent" ? "" : group.label,
           color: group.color,
+          avatarIcon: agentAvatarIcon,
         }}
         label={group.label}
       />
@@ -462,12 +469,19 @@ export interface SessionPathTarget {
   saved?: boolean;
 }
 
+/**
+ * 账号里的 Agent（`/v1/workspace/agents` 的投影）。共享包的 `AgentInfo` 只有身份
+ * 三列，而会话行首 / 第二行 / Agent 组头要画完整身份（预设 ▸ 图标 ▸ 首字母，
+ * 规格 2026-11-02 决策 4）——`avatar_icon` 因此由宿主在这一层补上。
+ */
+export type SessionIndexAgent = AgentInfo & { avatarIcon?: string };
+
 export interface SessionIndexProps {
   axis: IndexAxis;
   onAxisChange: (axis: IndexAxis) => void;
   rows: MirrorIndexRow[];
   projects: ProjectNode[];
-  agents: AgentInfo[];
+  agents: SessionIndexAgent[];
   machines: MachineInfo[];
   /**
    * 机器轴上每台**在线**机器此刻的连接档位（设备标识 → 档位）。索引只拿它判断
@@ -701,6 +715,31 @@ export default function SessionIndex({
     [importPorts],
   );
 
+  /**
+   * Agent 标识 → `avatar_icon` 原样。共享包的分组投影只带出名字与颜色，行与组头
+   * 拿到的 `AgentInfo` 里没有图标那一列，而那三件呈现件要的却是 `avatarIcon`
+   * （规格 2026-11-02 决策 4）。名单外的 Agent 补不上——那正是它该退回首字母的样子。
+   */
+  const avatarIconOf = useMemo(() => {
+    const byId = new Map(
+      agents.map((agent) => [agent.syncId, agent.avatarIcon] as const),
+    );
+    return (syncId: string) => byId.get(syncId);
+  }, [agents]);
+
+  /** 行首 / 第二行要的那一档 Agent 身份：包的三列 + 我们补的图标 key。 */
+  const agentMark = useCallback(
+    (agent: AgentInfo | undefined) =>
+      agent
+        ? {
+            name: agent.name,
+            color: agent.color,
+            avatarIcon: avatarIconOf(agent.syncId),
+          }
+        : agent,
+    [avatarIconOf],
+  );
+
   const groups = useMemo(() => {
     const built = buildAxisGroups(axis, {
       // 筛选已经在服务端做过了（决策 9），这里不再筛一遍：筛两次的话服务端给的
@@ -816,12 +855,16 @@ export default function SessionIndex({
             ? undefined
             : sessionPath({ ...row, deviceId: row.deviceId }),
         leading: (
-          <RowLeadingSlot axis={axis} agent={row.agent} project={row.project} />
+          <RowLeadingSlot
+            axis={axis}
+            agent={agentMark(row.agent)}
+            project={row.project}
+          />
         ),
         secondaryLabel: (
           <RowSecondaryLine
             axis={axis}
-            agent={row.agent}
+            agent={agentMark(row.agent)}
             project={row.project}
             machine={row.machine}
             freeLabel={uiT("sessionIndex.free.name")}
@@ -845,7 +888,16 @@ export default function SessionIndex({
           ) : undefined,
       };
     },
-    [axis, i18n.language, onSave, rowStatusLabel, sessionPath, t, uiT],
+    [
+      agentMark,
+      axis,
+      i18n.language,
+      onSave,
+      rowStatusLabel,
+      sessionPath,
+      t,
+      uiT,
+    ],
   );
 
   const renderOverflowRow = useCallback(
@@ -1135,6 +1187,11 @@ export default function SessionIndex({
                           projectHandlers={projectHandlers}
                           onAgentNewSession={onAgentNewSession}
                           onImport={setImportPrefill}
+                          agentAvatarIcon={
+                            group.kind === "agent"
+                              ? avatarIconOf(group.key)
+                              : undefined
+                          }
                         />
                       )
                 }
