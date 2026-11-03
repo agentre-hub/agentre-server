@@ -253,6 +253,64 @@ describe("组织索引：与桌面端同形（共享组件搭成）", () => {
 });
 
 /**
+ * 预设头像（共享包 bf46e288，规格 2026-11-02「预置头像」）：`avatar_icon` / 部门
+ * `icon` 里存的是 `preset:<组>-<名字>`。宿主只负责把持久化的 key 原样递下去 ——
+ * 认 key、找素材、整格画图都在共享包里，所以这里钉的是「同一份数据两端画成同一张
+ * 图」：索引行的 Agent 与归属那一格的部门记号都要换成预设图，而不是首字母。
+ */
+describe("预设头像：存 preset key 就画预设图", () => {
+  const presetChart: OrgChartResponse = {
+    departments: [
+      {
+        sync_id: "dept-dev",
+        name: "Dev Team",
+        icon: "preset:team-dev",
+        sort_order: 0,
+      },
+    ],
+    agents: [
+      {
+        sync_id: "agent-arch",
+        name: "Architect",
+        department_sync_id: "dept-dev",
+        avatar_icon: "preset:agent-architect",
+        sort_order: 0,
+        exec_targets: [],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && (!init || init.method === undefined))
+        return presetChart;
+      if (path === "/v1/workspace/org/backends") return { backends };
+      if (init?.method === "POST") return { sync_id: "new", version: 1 };
+      throw new Error(`unexpected request: ${path}`);
+    });
+  });
+
+  it("索引行画 agent-architect，归属那一格的部门记号画 team-dev", async () => {
+    renderOrg();
+    const row = (await screen.findByText("Architect")).closest(
+      '[data-slot="org-index-row"]',
+    ) as HTMLElement;
+    expect(row.querySelector("img")?.getAttribute("src")).toContain(
+      "agent-architect",
+    );
+
+    fireEvent.click(within(row).getByTestId(/^org-row-select-/));
+
+    const placement = await screen.findByRole("combobox", {
+      name: "Placement",
+    });
+    expect(placement.querySelector("img")?.getAttribute("src")).toContain(
+      "team-dev",
+    );
+  });
+});
+
+/**
  * 筛空了的那一块（会话索引同一条：`session-index.test.tsx`「空态与失败的出路」）。
  *
  * 此前它是整栏垂直居中的两行：「未找到 Agent」+ 一行 mono 小字「命中条件：foo ·
