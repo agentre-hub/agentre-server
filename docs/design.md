@@ -753,8 +753,8 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   Fresh dot went with the rest of them (see [TopBar](#the-console-shell)).
 - **Mobile** keeps the list → detail flow, never the two-pane layout. The index page owns its
   top band (`ownHeader`): row 1 is title + account + `AppControls`; row 2 is the same real
-  search at `h-9`. Below that the index scrolls with a `PenLine` FAB (`fixed bottom-24 right-4
-  size-14 rounded-full bg-primary`) that raises the agent-picker bottom sheet when sessions
+  search at `h-9`. Below that the index scrolls with a `PenLine` FAB (`fixed right-4
+  size-14 rounded-full bg-primary`, `bottom` = `MOBILE_TAB_BAR_CLEARANCE` from `lib/mobileLayout.ts`, i.e. 74px + 16px + safe-area, the same expression the toast host's `mobileOffset` uses) that raises the agent-picker bottom sheet when sessions
   exist. Picking an agent replaces the whole screen with `DraftSession`.
   
   Viewing a saved conversation opens `/chat/:conversationId` as a full-screen detail page

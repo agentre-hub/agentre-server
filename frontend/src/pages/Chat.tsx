@@ -81,6 +81,7 @@ import {
   sessionAddress,
 } from "@/lib/sessionAddress";
 import { type SessionFilter } from "@/lib/sessionView";
+import { MOBILE_TAB_BAR_CLEARANCE } from "@/lib/mobileLayout";
 
 /**
  * 「对话」页 = 这一端**唯一**的会话索引（规格 2026-08-17 决策 1），行来自账号镜像
@@ -1232,7 +1233,8 @@ export default function Chat() {
               <button
                 type="button"
                 aria-label={t("chat.startNew")}
-                className="fixed bottom-24 right-4 z-30 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-overlay"
+                className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-overlay"
+                style={{ bottom: MOBILE_TAB_BAR_CLEARANCE }}
                 onClick={openCompose}
               >
                 <PenLine className="size-5" aria-hidden="true" />

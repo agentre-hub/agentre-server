@@ -23,6 +23,7 @@ import NotFound from "./pages/NotFound";
 import ComingSoon from "./pages/ComingSoon";
 import RequireAuth from "./components/RequireAuth";
 import { lazyPage, warmPages } from "./lib/lazyPage";
+import { MOBILE_TAB_BAR_CLEARANCE } from "./lib/mobileLayout";
 
 // 对话页背后是整套转录渲染，切出入口 chunk（见 lazyPage）。导出是给
 // app-routes 的接线用例认预热这条线用的，路由本身只用它当 element。
@@ -153,14 +154,14 @@ export default function App() {
       {/*
         `mobileOffset` 让开移动端底栏：sonner 在窄视口下把 bottom-* 拍成贴底全宽，
         而 MobileTabBar 是 74px 的正常流元素、就贴在同一条边上（Chat 页那颗 FAB
-        在 bottom-24 也在这一带）。默认 16px 会把导航整条盖掉 —— 而出错时用户
-        最需要的正是换个地方看看。74 + 16 = 90。
+        也用同一个让开量，见 lib/mobileLayout.ts）。默认 16px 会把导航整条盖掉 ——
+        而出错时用户最需要的正是换个地方看看。74 + 16 = 90。
       */}
       <Toaster
         position="bottom-right"
         richColors
         theme={effectiveTheme}
-        mobileOffset={{ bottom: "90px" }}
+        mobileOffset={{ bottom: MOBILE_TAB_BAR_CLEARANCE }}
       />
     </BrowserRouter>
   );

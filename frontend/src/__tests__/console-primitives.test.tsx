@@ -14,6 +14,18 @@
 import { statusConfig } from "@agentre-hub/agentre-ui";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+
+import { MOBILE_TAB_BAR_HEIGHT } from "@/lib/mobileLayout";
+
+/**
+ * jsdom 的 CSS 解析器会改写 `calc(... env(...))`（不是真浏览器行为），所以直接比
+ * 字符串会误红。把常量同样喂给一个探针元素再读回，比较的是「同一个常量」。
+ */
+function jsdomStyleOf(prop: "height" | "bottom", value: string): string {
+  const probe = document.createElement("div");
+  probe.style[prop] = value;
+  return probe.style[prop];
+}
 import { describe, expect, it } from "vitest";
 import {
   Gauge,
@@ -322,8 +334,8 @@ describe("MobileTabBar（A6Z3k）", () => {
     expect(screen.getByRole("link", { name: "Overview" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Chat" })).toBeTruthy();
     // 高度是「内容 52px + 上下内边距 + 安全区」：无刘海设备 env() 为 0。
-    expect(nav.className).toContain(
-      "h-[calc(74px_+_env(safe-area-inset-bottom,0px))]",
+    expect(nav.style.height).toBe(
+      jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
     );
     expect(nav.className).toContain(
       "pb-[calc(14px_+_env(safe-area-inset-bottom,0px))]",
