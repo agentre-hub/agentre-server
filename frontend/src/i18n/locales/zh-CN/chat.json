@@ -1,5 +1,6 @@
 {
-  "findMore": "去设备页找更多对话",
+  "findOnMachine": "按机器看设备上的对话",
+  "addDevice": "添加设备",
   "noSessions": "还没有对话",
   "pickSession": "挑一条对话",
   "startNew": "新对话",

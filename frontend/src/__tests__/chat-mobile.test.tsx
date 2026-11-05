@@ -902,3 +902,41 @@ describe("移动端新对话草稿：一层头部", () => {
     }
   });
 });
+
+describe("移动端对话页:空态 W8 页内切机器轴", () => {
+  it("账号空且有在线机器:页内按钮切到机器轴,不再去设备页", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    const empty = await screen.findByTestId("chat-empty-state");
+    expect(
+      within(empty).queryByRole("link", { name: "Add a device" }),
+    ).toBeNull();
+    fireEvent.click(
+      within(empty).getByRole("button", {
+        name: "Browse conversations by machine",
+      }),
+    );
+    expect(screen.getByTestId("chat-location").textContent).toBe(
+      "/chat?axis=machine",
+    );
+  });
+
+  it("账号空且没有在线机器:出口是「添加设备」，指向 /devices", async () => {
+    stubApi([], []);
+    renderChat();
+
+    const empty = await screen.findByTestId("chat-empty-state");
+    expect(
+      within(empty).queryByRole("button", {
+        name: "Browse conversations by machine",
+      }),
+    ).toBeNull();
+    expect(
+      within(empty)
+        .getByRole("link", { name: "Add a device" })
+        .getAttribute("href"),
+    ).toBe("/devices");
+  });
+});

@@ -1,5 +1,6 @@
 {
-  "findMore": "Go to the devices page to find more conversations",
+  "findOnMachine": "Browse conversations by machine",
+  "addDevice": "Add a device",
   "noSessions": "No conversations yet.",
   "pickSession": "Pick a conversation",
   "startNew": "New conversation",

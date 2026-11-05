@@ -602,6 +602,18 @@ export default function Chat() {
   );
 
   /**
+   * 空态的次要出口看账号下有没有在线机器。读外壳已取的 `devices`，不用
+   * `reach.onlineMachines`——那一份只在机器轴上有值，别的轴上恒为空。
+   */
+  const hasOnlineMachine = useMemo(
+    () =>
+      devices.some(
+        (d) => (d.kind === "agentred" || d.kind === "desktop") && d.online,
+      ),
+    [devices],
+  );
+
+  /**
    * 一条会话的地址：继承此刻的索引范围，未保存的行带上它所在的机器。
    *
    * 只随查询串变：索引的行渲染与 openRow 都把它列在依赖里（见 ChatIndexPanel）。
@@ -1213,12 +1225,21 @@ export default function Chat() {
                     <Button size="lg" onClick={openCompose}>
                       {t("chat.startFirst")}
                     </Button>
-                    <Link
-                      to="/devices"
-                      className="text-sm font-medium text-primary-text hover:underline"
-                    >
-                      {t("chat.findMore")}
-                    </Link>
+                    {hasOnlineMachine ? (
+                      <Button
+                        variant="ghost"
+                        onClick={() => setAxis("machine")}
+                      >
+                        {t("chat.findOnMachine")}
+                      </Button>
+                    ) : (
+                      <Link
+                        to="/devices"
+                        className="text-sm font-medium text-primary-text hover:underline"
+                      >
+                        {t("chat.addDevice")}
+                      </Link>
+                    )}
                   </>
                 }
               />
@@ -1306,12 +1327,22 @@ export default function Chat() {
                       <Button size="lg" onClick={openCompose}>
                         {t(accountEmpty ? "chat.startFirst" : "chat.startNew")}
                       </Button>
-                      <Link
-                        to="/devices"
-                        className="text-[11.5px] text-muted-foreground hover:underline"
-                      >
-                        {t("chat.findMore")}
-                      </Link>
+                      {hasOnlineMachine ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setAxis("machine")}
+                        >
+                          {t("chat.findOnMachine")}
+                        </Button>
+                      ) : (
+                        <Link
+                          to="/devices"
+                          className="text-[11.5px] text-muted-foreground hover:underline"
+                        >
+                          {t("chat.addDevice")}
+                        </Link>
+                      )}
                     </>
                   }
                 />

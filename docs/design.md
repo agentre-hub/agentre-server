@@ -735,7 +735,10 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   detail uses, so status, transcript, approval and composer behaviour are shared, never a
   static placeholder. Which conversation is open is the address, `/chat/:conversationId`
   (plus `?device=` for one not saved to the account). With nothing selected (or no sessions) it shows
-  the `kpP7A` empty state. Starting a new conversation takes over this same pane — first
+  the `kpP7A` empty state. Its secondary exit stays on this page: with an online machine on the
+  account it is 「按机器看设备上的对话」 (`setAxis("machine")`, on desktop and mobile alike); with none
+  it is 「添加设备」 linking to `/devices`. Both read the device list the shell already fetched — the
+  empty state adds no request. Starting a new conversation takes over this same pane — first
   `NewConversationPane` (pick an agent), then `DraftSession` (a conversation with nothing
   said yet). **Desktop needs no dialog**: this pane was already idle, and covering the screen
   to ask one question costs more than filling the space that was already there.

@@ -377,6 +377,19 @@ async function waitForSlot(name: string): Promise<HTMLElement> {
 }
 
 describe("对话页 = 统一会话索引", () => {
+  it("空态有在线机器:页内按钮直接切到机器轴,不绕去设备页", async () => {
+    stubApi({ devices: [agentred] });
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    expect(await waitForSlot("session-index-empty")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Add a device" })).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Browse conversations by machine" }),
+    );
+    expect(currentLocation()).toBe("/chat?axis=machine");
+  });
+
   it("空态:桌面 320px 左列 + 居中详情空态,TopBar 只注入连接态,主动作开新对话", async () => {
     stubApi();
     renderChat();
@@ -397,8 +410,12 @@ describe("对话页 = 统一会话索引", () => {
     const startBtn = screen.getByRole("button", {
       name: "Start your first conversation",
     });
-    const devLink = screen.getByRole("link", { name: /devices page/ });
+    // 账号里没有在线机器：空态的次要出口是「添加设备」，不是去设备页找对话。
+    const devLink = screen.getByRole("link", { name: "Add a device" });
     expect(devLink.getAttribute("href")).toBe("/devices");
+    expect(
+      screen.queryByRole("button", { name: "Browse conversations by machine" }),
+    ).toBeNull();
     // 账号里一条都没有：侧栏「对话」那枚徽标只在 >0 时渲染，所以链接里没有数。
     expect(screen.getByRole("link", { name: /Chat/ }).textContent).toBe("Chat");
     expect(screen.queryByText("Desktop connected")).toBeNull();
