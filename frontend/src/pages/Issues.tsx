@@ -14,7 +14,6 @@
 import * as React from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 
 import {
   BoardFilterBar,
@@ -29,7 +28,6 @@ import {
   IssueBoard,
   LabelManagerPanel,
   ProjectScopePicker,
-  copyTextWithToast,
   initialTaskFormValue,
   type BoardAgentOption,
   type BoardCardProject,
@@ -46,6 +44,7 @@ import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
+import { FailureNotice } from "@/components/console";
 import { describeFailure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
@@ -74,31 +73,7 @@ function BoardFailure({
   return (
     <Alert variant="destructive" className="shrink-0 rounded-none px-5 py-2">
       <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3 text-2xs">
-        <span className="min-w-0">{failure.message}</span>
-        <span className="flex-1" />
-        <span className="flex shrink-0 flex-wrap items-center gap-1.5">
-          {failure.exit === "retry" && (
-            <Button size="xs" variant="outline" onClick={onRetry}>
-              {t("common.retry")}
-            </Button>
-          )}
-          {failure.exit === "devices" && (
-            <Button asChild size="xs" variant="outline">
-              <Link to="/devices">{t("common.failure.goDevices")}</Link>
-            </Button>
-          )}
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={() =>
-              void copyTextWithToast(failure.diagnostic, {
-                successTitle: t("common.failure.copied"),
-              })
-            }
-          >
-            {t("common.failure.copyDiagnostics")}
-          </Button>
-        </span>
+        <FailureNotice failure={failure} onRetry={onRetry} />
       </AlertDescription>
     </Alert>
   );

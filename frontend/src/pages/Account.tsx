@@ -457,7 +457,7 @@ export default function Account() {
               // 会永远停在「加载中…」，而这条文案永远渲染不到。
               <CardLoadError
                 error={passkeysError}
-                fallback={t("account.passkeys.loadError")}
+                what={t("account.passkeys.loadFailedWhat")}
                 className="m-4 w-auto"
                 onRetry={() => {
                   setPasskeysError(null);
@@ -542,7 +542,7 @@ export default function Account() {
             {sessionsError ? (
               <CardLoadError
                 error={sessionsError}
-                fallback={t("account.signins.loadError")}
+                what={t("account.signins.loadFailedWhat")}
                 className="m-4 w-auto"
                 onRetry={() => {
                   setSessionsError(null);

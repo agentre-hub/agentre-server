@@ -302,8 +302,8 @@ describe("Login", () => {
     });
 
     // err 是 URL 里来的，谁都能给受害者递一条 /login?err=<任意一句话>。
-    // 「未知码原样透出」的本意是透出一个**码**，不是让攻击者在我们自己的
-    // 域名、自己的失败卡里写一句话——那是一条免费的钓鱼提示。
+    // 未收录的值一律只给通用文案：不能让攻击者在我们自己的域名、自己的失败卡里
+    // 写一句话——那是一条免费的钓鱼提示。
     it("refuses to echo an err value that is prose rather than a code", () => {
       renderLogin(
         "?err=" +

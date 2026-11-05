@@ -239,8 +239,29 @@ describe("设备码输入：代码不存在或已使用（30205）", () => {
     submit();
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Your session has expired");
+    expect(alert.textContent).toContain(
+      "That did not go through — your session has expired. Sign in again.",
+    );
     expect(alert.textContent).not.toContain("会话已失效");
+  });
+});
+
+describe("设备码输入：失败经分类说事实（规格 W5）", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
+  it("断网时说网络断了，不贴浏览器原话", async () => {
+    mockedApi.mockRejectedValue(new TypeError("Failed to fetch"));
+    renderEntry();
+    fireEvent.paste(boxes()[0], {
+      clipboardData: { getData: () => "A4F7Q2" },
+    });
+    submit();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("the network seems to be down");
+    expect(alert.textContent).not.toContain("Failed to fetch");
   });
 });
 

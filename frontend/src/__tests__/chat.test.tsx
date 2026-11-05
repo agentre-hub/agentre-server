@@ -3127,6 +3127,16 @@ describe("对话页：索引取数失败", () => {
     expect(screen.getByRole("group", { name: "Filter sessions" })).toBeTruthy();
   });
 
+  // 规格 W5：失败的是对话列表，不该说成「无法加载你的设备列表」（张冠李戴的兜底）。
+  it("失败条说的是对话列表，不是设备列表", async () => {
+    stubFailingIndex();
+    renderChat();
+
+    const banner = await screen.findByTestId("index-load-error");
+    expect(banner.textContent).toContain("Could not load your conversations.");
+    expect(banner.textContent).not.toContain("devices");
+  });
+
   it("新筛选请求失败时不把上一范围的行摆在错误横幅下面", async () => {
     stubApi({
       mirror: [mirrored()],

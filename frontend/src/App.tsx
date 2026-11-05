@@ -153,9 +153,9 @@ export default function App() {
       </Routes>
       {/*
         `mobileOffset` 让开移动端底栏：sonner 在窄视口下把 bottom-* 拍成贴底全宽，
-        而 MobileTabBar 是 74px 的正常流元素、就贴在同一条边上（Chat 页那颗 FAB
-        也用同一个让开量，见 lib/mobileLayout.ts）。默认 16px 会把导航整条盖掉 ——
-        而出错时用户最需要的正是换个地方看看。74 + 16 = 90。
+        而 MobileTabBar 是 74px + 安全区的正常流元素、就贴在同一条边上（Chat 页那颗
+        FAB 也用同一个让开量，见 lib/mobileLayout.ts）。默认 16px 会把导航整条盖掉 ——
+        而出错时用户最需要的正是换个地方看看。让开量 = 74 + 16 + 安全区。
       */}
       <Toaster
         position="bottom-right"

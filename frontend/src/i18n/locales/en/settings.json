@@ -43,7 +43,7 @@
       "statusOn": "On",
       "statusOnAt": "On · last reported {{time}}",
       "statusOff": "Off · stats cover only conversations saved to your account",
-      "loadError": "Could not load your stats settings. Please try again.",
+      "loadFailedWhat": "Could not load your stats settings",
       "saveError": "Could not save that. Please try again.",
       "deviceReportedToday": "Reported through today",
       "deviceReportedThrough": "Reported through {{day}}",

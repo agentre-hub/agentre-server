@@ -84,16 +84,27 @@ export default function DeviceSuccess() {
   return (
     <AuthLayout>
       <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-2xl bg-sheet p-6 text-center shadow-overlay sm:p-10">
+        {/* agentred 的引导次序：步骤条 → 标题 + 一句正文 → 命令卡（规格 W1）。 */}
+        {finishService && (
+          <div className="w-full overflow-hidden rounded-lg bg-field-fill text-left">
+            <GuideStepRail
+              steps={steps}
+              current={3}
+              done={DONE_STEPS}
+              onSelect={() => {}}
+            />
+          </div>
+        )}
         <div className="flex size-[60px] items-center justify-center rounded-full bg-status-running-bg">
           <Check className="size-6 text-status-running" aria-hidden="true" />
         </div>
         <div className="space-y-2">
           <PageTitle>{t("device.success.title")}</PageTitle>
-          {!finishService && (
-            <p className="text-sm text-muted-foreground">
-              {t("device.success.body")}
-            </p>
-          )}
+          <p className="text-sm text-muted-foreground">
+            {finishService
+              ? t("device.success.serviceBody")
+              : t("device.success.body")}
+          </p>
         </div>
         {info && (
           <div className="flex w-full items-center gap-3 rounded-md bg-code-surface p-4 text-left">
@@ -115,17 +126,6 @@ export default function DeviceSuccess() {
         )}
         {finishService ? (
           <div className="flex w-full flex-col gap-4 text-left">
-            <div className="overflow-hidden rounded-lg bg-field-fill">
-              <GuideStepRail
-                steps={steps}
-                current={3}
-                done={DONE_STEPS}
-                onSelect={() => {}}
-              />
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {t("device.success.serviceBody")}
-            </p>
             <AgentredServiceSection
               method={method}
               serviceTestId="device-success-command-service"

@@ -396,7 +396,7 @@ export default function Overview() {
           <>
             <CardLoadError
               error={statsError}
-              fallback={t("overview.stats.error.alert")}
+              what={t("overview.stats.error.loadFailedWhat")}
               // 按下去要有反应：第二次也失败的话界面一个像素都不会变，
               // 用户无从判断自己是不是点空了，只会连点。
               retryDisabled={fetching}

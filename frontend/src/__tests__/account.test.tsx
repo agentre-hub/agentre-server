@@ -227,7 +227,9 @@ describe("Account page: a card that fails to load says so and offers a way back"
     });
     const view = renderAccount();
     expect(
-      await screen.findByText("Your session has expired. Sign in again."),
+      await screen.findByText(
+        "Could not load your passkeys — your session has expired. Sign in again.",
+      ),
     ).toBeTruthy();
     expect(screen.queryByText(/会话已失效/)).toBeNull();
     view.unmount();

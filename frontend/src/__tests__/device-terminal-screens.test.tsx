@@ -64,6 +64,23 @@ describe("DeviceSuccess · agentred 收尾（第 3 步）", () => {
     ).toBeTruthy();
   });
 
+  // 规格 W1：「步骤条（01✓ 02✓ 03）+ 标题 + 一句正文 + 命令卡」——按这个次序，
+  // 正文紧跟标题、只有一句。
+  it("步骤条在标题之前，标题下面紧跟一句正文，再往下才是命令卡", () => {
+    renderAtState(<DeviceSuccess />, "/device/success", info);
+    const rail = screen.getByRole("list");
+    const heading = screen.getByRole("heading", { level: 1 });
+    const body = screen.getByText(
+      "One last step: register the background service on that machine so it stays online.",
+    );
+    const command = screen.getByText("agentred service install --start");
+    const follows = (a: Element, b: Element) =>
+      !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(rail, heading)).toBe(true);
+    expect(heading.nextElementSibling).toBe(body);
+    expect(follows(body, command)).toBe(true);
+  });
+
   it("用主机名做标题行、agentred 的 Server 图标", () => {
     const { container } = renderAtState(
       <DeviceSuccess />,

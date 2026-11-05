@@ -25,7 +25,7 @@
     "allow": "Allow access",
     "deny": "Deny",
     "fineprint": "You can revoke this device's access at any time under Console → Devices.",
-    "actionError": "That did not go through. Please try again."
+    "actionFailedWhat": "That did not go through"
   },
   "kind": {
     "desktop": "Desktop",
@@ -36,7 +36,7 @@
     "title": "Device authorized",
     "body": "You can close this page now and continue on the device.",
     "manageDevices": "Go to the console to manage devices",
-    "serviceBody": "The device is approved. One last step: register the background service on that machine so it stays online.",
+    "serviceBody": "One last step: register the background service on that machine so it stays online.",
     "finish": "Done, go to devices"
   },
   "deniedScreen": {
@@ -97,6 +97,7 @@
   },
   "manage": {
     "loadError": "Could not load your devices. Please try again.",
+    "loadFailedWhat": "Could not load your devices",
     "statusOnline": "Online",
     "statusOffline": "Offline",
     "statusRevoked": "Revoked",
@@ -113,7 +114,7 @@
     "notConfigured": "Not configured",
     "noProjectsReported": "No projects reported from this device yet.",
     "noRunnableAgents": "No agents can run on this device yet.",
-    "detailLoadError": "Could not load this device's details.",
+    "detailLoadFailedWhat": "Could not load this device's details",
     "sessions": "Conversations",
     "sessionCount": "{{count}} conversations",
     "sessionWaiting": "{{count}} waiting for you",

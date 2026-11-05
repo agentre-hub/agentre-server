@@ -13,9 +13,8 @@ import zhCN from "@/i18n/locales/zh-CN";
  *
  * Login.tsx 的注释写着「auth_ctr 只会重定向出这类值」——同源又是一句话，
  * 两边各存一份字面量。后端加一条 `/login?err=<新码>` 时前端不会报任何错：
- * 新码成形状但不在 KNOWN_ERRORS 里，于是走「原样透出」那条分支，用户在
- * 失败卡里读到的是 `oauth_email_unverified` 这样一串标识符，中英文都一样，
- * 而所有测试都是绿的。
+ * 新码不在 KNOWN_ERRORS 里，于是落到「登录未完成」那句通用兜底，用户读不到
+ * 这个码自己的说法（比如邮箱未验证该怎么办），而所有测试都是绿的。
  *
  * 手法与 error-code-contract / user-code-contract 相同：直接读那份权威源文件，
  * 把值抠出来和前端逐条比对。
@@ -60,7 +59,7 @@ describe("登录失败码契约（前端 ↔ auth_ctr）", () => {
     expect(
       [...KNOWN_ERRORS].sort(),
       "internal/controller/auth_ctr/auth.go 的 /login?err= 值集合变了：" +
-        "多出来的码前端会当成未收录码原样透出一串标识符给用户；" +
+        "多出来的码前端会当成未收录码，只给用户一句通用兜底；" +
         "少掉的码是一条永远走不到的死分支，连同它的两条 locale 文案",
     ).toEqual(backendErrValues());
   });
@@ -75,8 +74,8 @@ describe("登录失败码契约（前端 ↔ auth_ctr）", () => {
 /**
  * 通行密钥失败码是**前端自己**造的：这条路上没有后端重定向，err 由 Login.tsx
  * 在 catch 里按信封业务码换出来。所以 KNOWN_ERRORS 那道守卫（对回 auth_ctr）
- * 覆盖不到它们，而漏一条文案的后果一模一样——ERR_CODE_SHAPE 认得出形状，
- * 兜底分支就把 `passkey_failed` 这串标识符原样印进失败卡给用户看。
+ * 覆盖不到它们，而漏一条文案的后果一模一样——它落到通用兜底，用户读不到这条路
+ * 自己的说法。
  */
 describe("通行密钥失败码契约（Login.tsx ↔ locale）", () => {
   it.each(PASSKEY_ERRORS)("%s 在两个 locale 里都有文案", (name) => {
@@ -95,7 +94,7 @@ describe("通行密钥失败码契约（Login.tsx ↔ locale）", () => {
     expect(
       [...new Set(used)].sort(),
       "Login.tsx 里新加了一个 passkey_ 失败码却没登记进 PASSKEY_ERRORS：" +
-        "它成形状、过得了 ERR_CODE_SHAPE，于是被原样印给用户当文案",
+        "它会落到通用兜底，用户读不到它自己的文案",
     ).toEqual([...PASSKEY_ERRORS].sort());
   });
 });

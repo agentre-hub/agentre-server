@@ -219,9 +219,8 @@ export function allocatePortForwardLink(
  * wire 错误码（对端是设备），这一个认的是 HTTP 状态码（对端是本站自己）。
  *
  * `unavailable`：部署没配 `base_domain`（503，`code.PortForwardLinksUnavailable`）—
- * 服务端的应答文案已经是「这个部署此刻提供不了端口转发」这句人话（与账号页
- * `loadErrorText` 同一条口径：`ApiError.message` 本身就是可展示的服务端文案，这里
- * 不再拷贝一份），调用方原样显示即可。
+ * 调用方说成前端自己的一句固定文案（`device.portForward.linkUnavailable`），服务端的
+ * 应答文案恒为中文，只进诊断。
  *
  * `notFound`：设备不是这个账号的、映射已撤销或不存在（404，与今天「设备不是你的」
  * 同一个口径）。手上这一行大概率是被并发操作抢先删掉的——调用方据此重取列表，

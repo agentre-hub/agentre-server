@@ -15,6 +15,8 @@ import { statusConfig } from "@agentre-hub/agentre-ui";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
+import i18n from "@/i18n";
+import { ApiError } from "@/lib/api";
 import { MOBILE_TAB_BAR_HEIGHT } from "@/lib/mobileLayout";
 
 /**
@@ -26,7 +28,7 @@ function jsdomStyleOf(prop: "height" | "bottom", value: string): string {
   probe.style[prop] = value;
   return probe.style[prop];
 }
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Gauge,
   Laptop,
@@ -37,6 +39,7 @@ import {
 
 import { edgeClasses } from "./helpers/edge-classes";
 import {
+  CardLoadError,
   ConsoleNavItem,
   EmptyState,
   InlineEmpty,
@@ -447,5 +450,50 @@ describe("InlineEmpty（索引栏内空态）", () => {
     expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     expect(screen.getByText("Empty")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+/**
+ * 卡片读失败（规格 W5「各 loadError 调用方」）：一句分类后的事实句 + 分类给的出口 +
+ * 「复制诊断信息」；原文与服务端恒为中文的 msg 都不上屏。
+ */
+describe("CardLoadError", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
+  function renderCard(error: unknown, onRetry = vi.fn()) {
+    render(
+      <MemoryRouter>
+        <CardLoadError
+          error={error}
+          what="Could not load your passkeys"
+          onRetry={onRetry}
+        />
+      </MemoryRouter>,
+    );
+    return onRetry;
+  }
+
+  it("断网：事实句 + 重试 + 复制诊断信息，原文不上屏", () => {
+    const onRetry = renderCard(new TypeError("Failed to fetch"));
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(
+      "Could not load your passkeys — the network seems to be down.",
+    );
+    expect(alert.textContent).not.toContain("Failed to fetch");
+    within(alert).getByRole("button", { name: "Retry" }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(
+      within(alert).getByRole("button", { name: "Copy diagnostics" }),
+    ).toBeTruthy();
+  });
+
+  it("登录失效：说清原因，不给一颗按了也没用的重试", () => {
+    renderCard(new ApiError(30004, "会话已失效", 401));
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("your session has expired");
+    expect(alert.textContent).not.toContain("会话已失效");
+    expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

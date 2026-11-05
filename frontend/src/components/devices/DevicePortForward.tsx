@@ -23,7 +23,6 @@
  *     不该被并进 `unreachable`（那会让离线句显示成「设备离线」，文不对题）。
  */
 import {
-  Button,
   PortForwardSection,
   Skeleton,
   copyTextWithToast,
@@ -34,6 +33,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { FailureNotice } from "@/components/console";
 import { describeFailure, type Failure } from "@/lib/describeFailure";
 import {
   allocatePortForwardLink,
@@ -48,43 +48,23 @@ import {
 } from "@/lib/portForward";
 
 /**
- * 一次失败摆出来的样子：分类给的一句话，加上「复制诊断信息」；`onRetry` 给了才出
- * 「重试」（读取失败重读一次有意义，动作失败重来要用户自己点那一行）。原文只走剪贴板，
- * 不上屏（规格 2026-11-05-ux-polish W5）。本组件就在设备页里，不再放「去设备页」。
+ * 端口映射这一块的失败提示：分类给的一句话 + 出口 + 「复制诊断信息」（规格 W5）。
+ * 「重试」只给读取失败（重读一次有意义；动作失败重来要用户自己点那一行）；本组件就在
+ * 设备页里，不再放「去设备页」。
  */
-function FailureNotice({
+function PortForwardFailure({
   failure,
   onRetry,
 }: {
   failure: Failure;
   onRetry?: () => void;
 }) {
-  const { t } = useTranslation();
   return (
     <div
       role="alert"
       className="flex flex-wrap items-center gap-2 text-xs text-destructive-text"
     >
-      <span className="min-w-0">{failure.message}</span>
-      <span className="flex-1" />
-      <span className="flex shrink-0 flex-wrap items-center gap-1.5">
-        {onRetry && failure.exit === "retry" && (
-          <Button size="xs" variant="outline" onClick={onRetry}>
-            {t("common.retry")}
-          </Button>
-        )}
-        <Button
-          size="xs"
-          variant="ghost"
-          onClick={() =>
-            void copyTextWithToast(failure.diagnostic, {
-              successTitle: t("common.failure.copied"),
-            })
-          }
-        >
-          {t("common.failure.copyDiagnostics")}
-        </Button>
-      </span>
+      <FailureNotice failure={failure} onRetry={onRetry} devicesExit={false} />
     </div>
   );
 }
@@ -219,8 +199,8 @@ export function DevicePortForward({
         void load();
         return;
       }
-      // `unavailable`（503）与其余未知失败都直接显示服务端给的文案——那句文案本来
-      // 本站自己的 503 是配置问题，说成一句固定的话；其余走统一分类。原文都只进诊断。
+      // `unavailable`（503）是本站自己的配置问题，说成一句固定的话；其余走统一分类。
+      // 原文都只进诊断。
       if (failure.kind === "unavailable") {
         setActionFailure({
           category: "unknown",
@@ -444,7 +424,7 @@ export function DevicePortForward({
       ) : null}
 
       {displayPhase === "error" && loadFailure ? (
-        <FailureNotice failure={loadFailure} onRetry={() => void load()} />
+        <PortForwardFailure failure={loadFailure} onRetry={() => void load()} />
       ) : null}
 
       {displayPhase === "ready" ? (
@@ -463,7 +443,7 @@ export function DevicePortForward({
         />
       ) : null}
 
-      {actionFailure ? <FailureNotice failure={actionFailure} /> : null}
+      {actionFailure ? <PortForwardFailure failure={actionFailure} /> : null}
     </div>
   );
 }

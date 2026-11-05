@@ -152,9 +152,9 @@ export function ChatIndexPanel({
         )
       : reach.machineStates;
 
-  /** 索引取数失败给用户看的那一句：服务端带了文案就用它，没有才落到兜底键。 */
+  /** 索引取数失败给用户看的那一句：经分类说原因，原文不上屏（规格 W5）。 */
   const indexErrorMessage = sessionIndex.loadError
-    ? loadErrorText(sessionIndex.loadError, t, "device.manage.loadError")
+    ? loadErrorText(sessionIndex.loadError, t, "sessionIndex.loadFailedWhat")
     : null;
 
   /**

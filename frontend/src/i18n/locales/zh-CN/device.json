@@ -25,7 +25,7 @@
     "allow": "允许授权",
     "deny": "拒绝",
     "fineprint": "你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。",
-    "actionError": "操作没有完成，请重试。"
+    "actionFailedWhat": "操作没有完成"
   },
   "kind": {
     "desktop": "桌面端",
@@ -36,7 +36,7 @@
     "title": "设备已授权",
     "body": "可以关闭这个页面，回到设备上继续。",
     "manageDevices": "前往控制台管理设备",
-    "serviceBody": "设备已批准。最后一步：在这台机器上注册后台服务，它才会一直在线。",
+    "serviceBody": "最后一步：在那台机器上注册后台服务，它才会一直在线。",
     "finish": "完成，去设备页"
   },
   "deniedScreen": {
@@ -97,6 +97,7 @@
   },
   "manage": {
     "loadError": "无法加载你的设备列表，请重试。",
+    "loadFailedWhat": "无法加载你的设备列表",
     "statusOnline": "在线",
     "statusOffline": "离线",
     "statusRevoked": "已撤销",
@@ -113,7 +114,7 @@
     "notConfigured": "未配置",
     "noProjectsReported": "这台设备还没有上报任何项目。",
     "noRunnableAgents": "这台设备上还没有能跑的 Agent。",
-    "detailLoadError": "无法加载这台设备的详情。",
+    "detailLoadFailedWhat": "无法加载这台设备的详情",
     "sessions": "对话",
     "sessionCount": "{{count}} 条对话",
     "sessionWaiting": "{{count}} 条等你处理",

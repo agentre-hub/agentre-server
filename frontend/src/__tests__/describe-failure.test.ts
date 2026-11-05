@@ -17,6 +17,7 @@ import i18n from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { describeFailure } from "@/lib/describeFailure";
 import { DispatchConnectionError, DispatchRunError } from "@/lib/dispatch";
+import { loadErrorText } from "@/lib/loadError";
 import { EXPECTED_REJECTION } from "@/lib/protocolMismatch";
 import { RelayError } from "@/lib/relayClient";
 
@@ -216,5 +217,30 @@ describe("describeFailure · 两种语言", () => {
     });
     expect(f.message).toContain("那台机器");
     expect(f.message).not.toContain("{{");
+  });
+});
+
+/**
+ * 规格 W5：「接入：…、`Device`、各 loadError 调用方」——读失败那几处同样经分类说
+ * 事实句，不再是一句不分青红皂白的兜底话。
+ */
+describe("loadErrorText · 经 describeFailure 分类", () => {
+  it("断网说断网，句首是调用方那半句", () => {
+    expect(
+      loadErrorText(
+        new TypeError("Failed to fetch"),
+        en,
+        "device.manage.loadFailedWhat",
+      ),
+    ).toBe("Could not load your devices — the network seems to be down.");
+  });
+
+  it("认不出的失败只说那半句，不带原文与中文 msg", () => {
+    const text = loadErrorText(
+      new ApiError(30001, "参数不对", 500),
+      en,
+      "device.manage.loadFailedWhat",
+    );
+    expect(text).toBe("Could not load your devices.");
   });
 });

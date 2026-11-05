@@ -12,8 +12,6 @@ import {
   type TranscriptMessage,
   Alert,
   AlertDescription,
-  Button,
-  copyTextWithToast,
   SessionHeaderAgentMark,
   SessionHeaderBand,
   cn,
@@ -23,8 +21,8 @@ import {
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { Link } from "react-router-dom";
 
+import { FailureNotice } from "@/components/console";
 import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
@@ -41,7 +39,7 @@ import {
   decodeReasoningEffortSupport,
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
-import { describeFailure, type Failure } from "@/lib/describeFailure";
+import { describeFailure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import {
   deriveTitle,
@@ -695,59 +693,6 @@ export function DraftSession({
         </div>
       </div>
     </div>
-  );
-}
-
-/**
- * 一次失败摆出来的样子：分类给的那句话，加上它给的出口，再加一颗「复制诊断信息」。
- *
- * 原文只走剪贴板，不上屏（规格 2026-11-05-ux-polish W5）。复制走共享包的
- * `copyTextWithToast`：本站常在 http 上，那里 Clipboard API 整个不存在，包里那层有
- * `execCommand` 兜底；回执是 toast，这一行不为「已复制」换字。
- */
-function FailureNotice({
-  failure,
-  onRetry,
-  retryDisabled,
-}: {
-  failure: Failure;
-  onRetry: () => void;
-  retryDisabled?: boolean;
-}) {
-  const { t } = useTranslation();
-  return (
-    <>
-      <span className="min-w-0">{failure.message}</span>
-      <span className="flex-1" />
-      <span className="flex shrink-0 flex-wrap items-center gap-1.5">
-        {failure.exit === "retry" && (
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={retryDisabled}
-            onClick={onRetry}
-          >
-            {t("common.retry")}
-          </Button>
-        )}
-        {failure.exit === "devices" && (
-          <Button asChild size="xs" variant="outline">
-            <Link to="/devices">{t("common.failure.goDevices")}</Link>
-          </Button>
-        )}
-        <Button
-          size="xs"
-          variant="ghost"
-          onClick={() =>
-            void copyTextWithToast(failure.diagnostic, {
-              successTitle: t("common.failure.copied"),
-            })
-          }
-        >
-          {t("common.failure.copyDiagnostics")}
-        </Button>
-      </span>
-    </>
   );
 }
 
