@@ -35,7 +35,9 @@
   "success": {
     "title": "Device authorized",
     "body": "You can close this page now and continue on the device.",
-    "manageDevices": "Go to the console to manage devices"
+    "manageDevices": "Go to the console to manage devices",
+    "serviceBody": "The device is approved. One last step: register the background service on that machine so it stays online.",
+    "finish": "Done, go to devices"
   },
   "deniedScreen": {
     "title": "Authorization denied",

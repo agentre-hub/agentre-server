@@ -35,7 +35,9 @@
   "success": {
     "title": "设备已授权",
     "body": "可以关闭这个页面，回到设备上继续。",
-    "manageDevices": "前往控制台管理设备"
+    "manageDevices": "前往控制台管理设备",
+    "serviceBody": "设备已批准。最后一步：在这台机器上注册后台服务，它才会一直在线。",
+    "finish": "完成，去设备页"
   },
   "deniedScreen": {
     "title": "已拒绝授权",

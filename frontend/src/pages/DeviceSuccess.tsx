@@ -1,25 +1,42 @@
 import { Link, useLocation } from "react-router-dom";
-import { Check, Laptop } from "lucide-react";
+import { Check, Cpu } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { buttonVariants } from "@agentre-hub/agentre-ui";
+import {
+  AgentredInstallDocsLink,
+  AgentredServiceSection,
+  GuideStepRail,
+  buttonVariants,
+  type AgentredInstallMethod,
+  type GuideStep,
+} from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
-import { deviceKindLabel } from "@/lib/deviceKind";
+import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
 
 /**
  * 授权批准那一步（`/device` 拿到的 pending 记录）已经知道的设备信息，
  * 靠 router state 带到这一屏——不落 URL、不落 storage，刷新或直接访问
  * 这条路由时天然拿不到，此时整块面板不渲染（决策 13）。
+ *
+ * `method` 只在从「添加设备」引导来时才有；CLI 直接打开的授权没有这个信息。
  */
 export interface DeviceSuccessInfo {
   kind: string;
   platform: string;
   version: string;
+  /** 设备自报的主机名；缺省或空串时标题回退为类型名。 */
+  name?: string;
+  method?: AgentredInstallMethod;
 }
 
+const STEP_KEYS = ["login", "code", "service"] as const;
+/** 走到这一屏，前两步（登录、批准）必然已经完成。 */
+const DONE_STEPS = [1, 2];
+
 function readDeviceInfo(state: unknown): DeviceSuccessInfo | null {
-  const info = state as Partial<DeviceSuccessInfo> | null | undefined;
+  const info = state as
+    (Partial<DeviceSuccessInfo> & { from?: unknown }) | null | undefined;
   if (
     !info ||
     typeof info.kind !== "string" ||
@@ -31,13 +48,38 @@ function readDeviceInfo(state: unknown): DeviceSuccessInfo | null {
   ) {
     return null;
   }
-  return { kind: info.kind, platform: info.platform, version: info.version };
+  return {
+    kind: info.kind,
+    platform: info.platform,
+    version: info.version,
+    name: typeof info.name === "string" ? info.name : undefined,
+    method:
+      info.from === "add-guide" &&
+      (info.method === "native" || info.method === "docker")
+        ? info.method
+        : undefined,
+  };
 }
 
 export default function DeviceSuccess() {
   const { t } = useTranslation();
   const { state } = useLocation();
   const info = readDeviceInfo(state);
+  // 只有拿到了设备信息、且确是 agentred，才有「第 3 步」可给。
+  const finishService = info?.kind === "agentred";
+
+  const steps: readonly GuideStep[] = STEP_KEYS.map((key) => ({
+    key,
+    title: t(`device.add.steps.${key}.title`),
+    hint: t(`device.add.steps.${key}.hint`),
+    doneLabel: t(`device.add.steps.${key}.done`),
+  }));
+
+  const KindIcon = DEVICE_KIND_ICONS[info?.kind ?? ""] ?? Cpu;
+  const kindLabel = info ? deviceKindLabel(info.kind, t) : "";
+  const title = info?.name || kindLabel;
+  // 引导里选过方式就用它；CLI 直开没有方式信息，默认 native + 说明链接。
+  const method: AgentredInstallMethod = info?.method ?? "native";
 
   return (
     <AuthLayout>
@@ -47,21 +89,23 @@ export default function DeviceSuccess() {
         </div>
         <div className="space-y-2">
           <PageTitle>{t("device.success.title")}</PageTitle>
-          <p className="text-sm text-muted-foreground">
-            {t("device.success.body")}
-          </p>
+          {!finishService && (
+            <p className="text-sm text-muted-foreground">
+              {t("device.success.body")}
+            </p>
+          )}
         </div>
         {info && (
           <div className="flex w-full items-center gap-3 rounded-md bg-code-surface p-4 text-left">
             <div className="flex size-9 shrink-0 items-center justify-center rounded-sm bg-sheet">
-              <Laptop
+              <KindIcon
                 className="size-5 text-muted-foreground"
                 aria-hidden="true"
               />
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-foreground">
-                {deviceKindLabel(info.kind, t)}
+              <p className="truncate text-sm font-semibold text-foreground">
+                {title}
               </p>
               <p className="truncate font-mono text-xs text-muted-foreground">
                 {`${info.platform} · ${info.version}`}
@@ -69,15 +113,48 @@ export default function DeviceSuccess() {
             </div>
           </div>
         )}
-        <Link
-          to="/devices"
-          className={buttonVariants({
-            variant: "outline",
-            className: "w-full",
-          })}
-        >
-          {t("device.success.manageDevices")}
-        </Link>
+        {finishService ? (
+          <div className="flex w-full flex-col gap-4 text-left">
+            <div className="overflow-hidden rounded-lg bg-field-fill">
+              <GuideStepRail
+                steps={steps}
+                current={3}
+                done={DONE_STEPS}
+                onSelect={() => {}}
+              />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {t("device.success.serviceBody")}
+            </p>
+            <AgentredServiceSection
+              method={method}
+              serviceTestId="device-success-command-service"
+              serviceCopyTestId="device-success-copy-service"
+            />
+            {!info?.method && (
+              <AgentredInstallDocsLink
+                method={method}
+                testId="device-success-docs-link"
+              />
+            )}
+            <Link
+              to="/devices"
+              className={buttonVariants({ className: "w-full" })}
+            >
+              {t("device.success.finish")}
+            </Link>
+          </div>
+        ) : (
+          <Link
+            to="/devices"
+            className={buttonVariants({
+              variant: "outline",
+              className: "w-full",
+            })}
+          >
+            {t("device.success.manageDevices")}
+          </Link>
+        )}
       </div>
     </AuthLayout>
   );

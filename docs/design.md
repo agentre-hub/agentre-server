@@ -1105,7 +1105,7 @@ emitted. In this flow that is exactly:
 | `user_code` in the six boxes | `components/CodeInput.tsx` |
 | the large confirmation code | `components/DeviceApproval.tsx` |
 | the `user_code` echoed back on the login screen | `pages/Login.tsx` |
-| `platform · version` | `components/DeviceApproval.tsx`, `pages/DeviceSuccess.tsx` |
+| `platform · version` | `components/DeviceApproval.tsx`, `pages/DeviceSuccess.tsx` (the title above it is the device's hostname, not mono) |
 
 Everything else — titles, body, buttons, footer — is the UI font. Two reasons for the
 boundary, and both are about the font file rather than taste:

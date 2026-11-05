@@ -62,9 +62,13 @@ function Probe({ name }: { name: string }) {
   return <div data-testid={`at-${name}`}>{JSON.stringify(state ?? null)}</div>;
 }
 
-function renderDevice() {
+function renderDevice(state?: unknown) {
   return render(
-    <MemoryRouter initialEntries={["/device?user_code=A4F-7Q2"]}>
+    <MemoryRouter
+      initialEntries={[
+        { pathname: "/device", search: "?user_code=A4F-7Q2", state },
+      ]}
+    >
       <Routes>
         <Route path="/device" element={<Device />} />
         <Route path="/device/success" element={<Probe name="success" />} />
@@ -354,6 +358,22 @@ describe("授权确认：允许", () => {
       kind: "desktop",
       platform: "macOS 15.2",
       version: "v0.4.1",
+      name: "nuc-01",
+    });
+  });
+
+  it("从添加设备引导来的，把 from / method 一并透传给成功页", async () => {
+    mockFlow(pending(), async () => ({}));
+    renderDevice({ from: "add-guide", method: "docker" });
+
+    await waitForApproval();
+    approve();
+
+    const at = await screen.findByTestId("at-success");
+    expect(JSON.parse(at.textContent ?? "null")).toMatchObject({
+      from: "add-guide",
+      method: "docker",
+      name: "nuc-01",
     });
   });
 

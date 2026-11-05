@@ -28,7 +28,68 @@ function renderAppAt(path: string) {
   return render(<App />, { wrapper: ThemeProvider });
 }
 
+describe("DeviceSuccess · agentred 收尾（第 3 步）", () => {
+  const info = {
+    kind: "agentred",
+    platform: "linux",
+    version: "v0.9.0",
+    name: "nuc-01",
+  };
+
+  it("从引导来：步骤条 + 所选方式的命令 + 完成去设备页，不再说可以关闭页面", () => {
+    renderAtState(<DeviceSuccess />, "/device/success", {
+      ...info,
+      from: "add-guide",
+      method: "docker",
+    });
+    expect(screen.getByText("docker compose up -d")).toBeTruthy();
+    expect(screen.queryByText("agentred service install --start")).toBeNull();
+    expect(screen.getByText("nuc-01")).toBeTruthy();
+    expect(screen.getByRole("list")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: "Done, go to devices" })
+        .getAttribute("href"),
+    ).toBe("/devices");
+    expect(screen.queryByText(/close this page/i)).toBeNull();
+    expect(screen.queryByRole("link", { name: /manage devices/i })).toBeNull();
+  });
+
+  it("CLI 直开（无 method）：native 命令 + 安装说明链接", () => {
+    renderAtState(<DeviceSuccess />, "/device/success", info);
+    expect(screen.getByText("agentred service install --start")).toBeTruthy();
+    expect(screen.getByTestId("device-success-docs-link")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Done, go to devices" }),
+    ).toBeTruthy();
+  });
+
+  it("用主机名做标题行、agentred 的 Server 图标", () => {
+    const { container } = renderAtState(
+      <DeviceSuccess />,
+      "/device/success",
+      info,
+    );
+    expect(screen.getByText("nuc-01")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-server")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-laptop")).toBeNull();
+  });
+});
+
 describe("DeviceSuccess", () => {
+  it("desktop 维持现状：无服务命令，仍是前往控制台管理设备，图标是 Laptop", () => {
+    const { container } = renderAtState(<DeviceSuccess />, "/device/success", {
+      kind: "desktop",
+      platform: "macOS",
+      version: "15.2",
+      name: "mbp",
+    });
+    expect(screen.queryByText("agentred service install --start")).toBeNull();
+    expect(screen.getByRole("link", { name: /manage devices/i })).toBeTruthy();
+    expect(screen.getByText("mbp")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-laptop")).toBeTruthy();
+  });
+
   it("renders the device info panel when kind/platform/version were carried from the approval step", () => {
     renderAtState(<DeviceSuccess />, "/device/success", {
       kind: "desktop",

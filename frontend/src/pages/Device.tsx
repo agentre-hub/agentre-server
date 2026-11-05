@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { CircleAlert, ShieldCheck } from "lucide-react";
 import { Button, Alert, AlertDescription } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
@@ -29,6 +29,10 @@ function isExpired(e: unknown): boolean {
 export default function Device() {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const { state: routeState } = useLocation();
+  const guideState = routeState as { from?: unknown; method?: unknown } | null;
+  const fromGuide = guideState?.from === "add-guide";
+  const guideMethod = guideState?.method === "docker" ? "docker" : "native";
   const params = new URLSearchParams(window.location.search);
   const initial = params.get("user_code") ?? "";
   const [code, setCode] = useState(initial);
@@ -111,6 +115,9 @@ export default function Device() {
           kind: info.device_kind,
           platform: info.platform,
           version: info.version,
+          name: info.name,
+          // 从添加设备引导来的，把所选安装方式带给成功页出第 3 步命令。
+          ...(fromGuide ? { from: "add-guide", method: guideMethod } : {}),
         },
       });
     } catch (e) {

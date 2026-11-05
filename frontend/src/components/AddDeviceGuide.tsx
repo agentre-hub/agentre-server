@@ -147,7 +147,11 @@ export function AddDeviceGuide({ onClose }: { onClose?: () => void }) {
       setIncomplete(true);
       return;
     }
-    nav(`/device?user_code=${encodeURIComponent(norm)}`);
+    // 带上所选方式：批准后的成功页要按它出第 3 步的命令（引导的 state 离开
+    // 本页就丢了，只能靠路由 state 带过去）。
+    nav(`/device?user_code=${encodeURIComponent(norm)}`, {
+      state: { from: "add-guide", method },
+    });
   }
 
   const server = consoleOrigin();
