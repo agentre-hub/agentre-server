@@ -9,6 +9,7 @@ import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
 import PageTitle from "@/components/PageTitle";
 import { api, ApiError } from "@/lib/api";
 import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
+import { knownApiErrorText } from "@/lib/loadError";
 import { parseUserCode, toChars } from "@/lib/userCode";
 
 /**
@@ -51,11 +52,12 @@ export default function Device() {
   }, [initial]);
 
   /**
-   * 只有 ApiError 才带得出服务端说法；其余（离线、代理返回非 JSON）同样是
-   * 失败，必须说出来——静默吞掉会让用户对着一个没反应的按钮点第二次。
+   * 认得的业务码说 i18n 文案；其余（离线、代理返回非 JSON、不认得的码）同样是
+   * 失败，必须说出来——静默吞掉会让用户对着一个没反应的按钮点第二次。服务端的
+   * `ApiError.message` 恒为中文，不显示。
    */
   function failureText(e: unknown): string {
-    return e instanceof ApiError ? e.message : t("device.approve.actionError");
+    return knownApiErrorText(e, t) ?? t("device.approve.actionError");
   }
 
   async function loadPending(uc: string) {

@@ -397,7 +397,9 @@ describe("授权确认：允许", () => {
     await waitForApproval();
     approve();
 
-    expect((await screen.findByRole("alert")).textContent).toContain("boom");
+    const alertText = (await screen.findByRole("alert")).textContent;
+    expect(alertText).toContain("That did not go through");
+    expect(alertText).not.toContain("boom");
     expect(screen.queryByTestId("at-expired")).toBeNull();
     expect(screen.queryByTestId("at-success")).toBeNull();
   });

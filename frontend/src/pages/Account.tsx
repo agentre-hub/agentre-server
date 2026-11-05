@@ -20,6 +20,7 @@ import { useMe } from "@/hooks/use-me";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { api, ApiError } from "@/lib/api";
 import { PASSKEY_CODES } from "@/lib/errorCodes";
+import { knownApiErrorText } from "@/lib/loadError";
 import {
   decodeCreationOptions,
   encodeCreationResponse,
@@ -294,7 +295,7 @@ export default function Account() {
       setExpandedIndex(null);
     } catch (e) {
       setSignOutError(
-        e instanceof ApiError ? e.message : t("account.signins.signOutError"),
+        knownApiErrorText(e, t) ?? t("account.signins.signOutError"),
       );
       return;
     } finally {

@@ -2,7 +2,7 @@ import { useTranslation } from "react-i18next";
 
 import { Alert, AlertDescription, Button } from "@agentre-hub/agentre-ui";
 
-import { ApiError } from "@/lib/api";
+import { knownApiErrorText } from "@/lib/loadError";
 
 /**
  * 卡片读取失败：说出原因，并给一条回程。
@@ -11,7 +11,7 @@ import { ApiError } from "@/lib/api";
  * 三处消费（`/account` 的两张卡、设备详情、总览统计）此前各写一遍同一条
  * destructive Alert + 文案 + 弹簧 + 重试按钮，收成一份。
  *
- * 文案取 `ApiError.message`（服务端带了业务文案就用它），否则落到调用方给的兜底句。
+ * 认得的业务码说前端 i18n 文案，否则落到调用方给的兜底句；`ApiError.message` 恒为中文，不显示。
  */
 export function CardLoadError({
   error,
@@ -34,7 +34,7 @@ export function CardLoadError({
     <Alert variant="destructive" className={className}>
       <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
         <span className="min-w-0">
-          {error instanceof ApiError ? error.message : fallback}
+          {knownApiErrorText(error, t) ?? fallback}
         </span>
         <span className="flex-1" />
         <Button

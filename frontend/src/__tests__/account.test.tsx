@@ -8,7 +8,7 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import i18n from "@/i18n";
 import {
@@ -207,6 +207,33 @@ describe("Account page: a card that fails to load says so and offers a way back"
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("YubiKey 5C")).toBeTruthy();
     expect(calls).toBe(2);
+  });
+
+  it("an ApiError with a Chinese msg never reaches the English card: known code gets i18n copy, unknown gets the fallback", async () => {
+    let passkeyError: ApiError = new ApiError(30004, "会话已失效，请重新登录", 401);
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/auth/me") return ME;
+      if (path === "/v1/auth/sessions") return SESSIONS;
+      if (
+        path === "/v1/passkeys" &&
+        (!init || (init.method ?? "GET") === "GET")
+      )
+        throw passkeyError;
+      throw new Error(`unexpected call: ${path}`);
+    });
+    const view = renderAccount();
+    expect(
+      await screen.findByText("Your session has expired. Sign in again."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/会话已失效/)).toBeNull();
+    view.unmount();
+
+    passkeyError = new ApiError(30003, "服务器开小差了", 500);
+    renderAccount();
+    expect(
+      await screen.findByText("Could not load your passkeys."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/开小差/)).toBeNull();
   });
 
   it("shows the session load error with a retry", async () => {
