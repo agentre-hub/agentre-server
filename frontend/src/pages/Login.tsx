@@ -5,6 +5,7 @@ import {
   Key,
   Info,
   Loader2,
+  ShieldCheck,
 } from "lucide-react";
 import { useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -22,6 +23,7 @@ import PageTitle from "@/components/PageTitle";
 import { api, ApiError } from "@/lib/api";
 import { ACCOUNT_CODES, PASSKEY_LOGIN_CODES } from "@/lib/errorCodes";
 import { passkeySupport } from "@/lib/passkeySupport";
+import { parseUserCode } from "@/lib/userCode";
 import {
   decodeRequestOptions,
   encodeAssertionResponse,
@@ -29,18 +31,7 @@ import {
 } from "@/lib/webauthn";
 
 /**
- * 后端 err query 参数认得出的形状：小写字母开头的 snake_case 短标识，
- * 与下面 KNOWN_ERRORS 里那些同源（auth_ctr 只会重定向出这类值）。
- *
- * err 是从 URL 来的，谁都能给受害者递一条链接。未知码原样透出的本意是透出
- * 一个**码**——不加这道形状检查，`/login?err=<任意一句话>` 就能在我们自己的
- * 域名、自己的失败卡里印一句话，等于一条免费的钓鱼提示（React 会转义 HTML，
- * 所以这不是 XSS，是文案伪造）。不成形状的值只当「失败了」，不回显内容。
- */
-const ERR_CODE_SHAPE = /^[a-z][a-z0-9_]{0,63}$/;
-
-/**
- * 后端 err query 参数 → i18n key 后缀。未收录但成形状的码原样透出。
+ * 后端 err query 参数 → i18n key 后缀。未收录的码（含任何不成形状的值）一律显示通用文案，不回显 URL 里的内容。
  *
  * 导出是为了让 __tests__/login-error-contract.test.ts 拿它去和 auth_ctr 的
  * 重定向逐条比对——这份清单与后端各存一份，没有守卫就会悄悄分叉。
@@ -111,11 +102,37 @@ function passkeyLoginErr(e: unknown): string {
   return "passkey_failed";
 }
 
+/**
+ * 从登录后的落点 next 里认出设备码。
+ *
+ * 设备授权链接 `/device?user_code=XXX` 在未登录时被 RequireAuth 整个编码进 next，
+ * user_code 不在顶层。判据与后端 redirectpath.Local 同口径：只认本站相对路径——
+ * 以 / 开头、第二个字符不是 / 或 \\、整串无反斜杠与控制字符；否则外站 next 也能
+ * 在我们的登录页上印出一条「设备授权」的上下文。pathname 必须正好是 /device，
+ * 码要过 parseUserCode（不合法就当没有）。
+ */
+export function userCodeFromNext(next: string): string | null {
+  if (!next.startsWith("/") || next.startsWith("//")) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\\\u0000-\u001f\u007f]/.test(next)) return null;
+  let url: URL;
+  try {
+    url = new URL(next, "http://local.invalid");
+  } catch {
+    return null;
+  }
+  if (url.origin !== "http://local.invalid" || url.pathname !== "/device") {
+    return null;
+  }
+  return parseUserCode(url.searchParams.get("user_code") ?? "");
+}
+
 export default function Login() {
   const { t } = useTranslation();
   const params = new URLSearchParams(window.location.search);
   const next = params.get("next") ?? "";
-  const userCode = params.get("user_code") ?? "";
+  // 顶层 user_code 与 next 里的等价；两者并存时以顶层为准（它是显式给的）。
+  const userCode = params.get("user_code") || userCodeFromNext(next) || "";
   const err = params.get("err");
 
   /** 通行密钥仪式在途。整条链路只有这一处写操作，防的是连点。 */
@@ -210,9 +227,7 @@ export default function Login() {
     ? null
     : translated
       ? t(`login.errors.${err}`)
-      : ERR_CODE_SHAPE.test(err)
-        ? err
-        : null;
+      : t("login.errors.generic");
 
   // 通行密钥被取消不算错误，只是平和的重试提示
   const showError = !!err && !isPasskeyCancelled;
@@ -271,9 +286,16 @@ export default function Login() {
   return (
     <AuthLayout>
       <div className="w-full max-w-[424px] space-y-6 rounded-2xl bg-sheet p-6 shadow-overlay sm:p-9">
+        {userCode && (
+          // 眉题贴着标题（-mb-3 抵掉卡片 space-y-6 的一半间距）。
+          <div className="-mb-3 flex items-center gap-1.5 text-xs font-medium text-primary-text">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            {t("device.eyebrow")}
+          </div>
+        )}
         <PageTitle>{t("login.title")}</PageTitle>
 
-        {userCode && !showError && !isPasskeyCancelled && (
+        {userCode && (
           <div className="flex items-start gap-3 rounded-md bg-primary-soft p-3.5 text-primary-text">
             <Laptop className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <div className="flex flex-col gap-1">
@@ -294,57 +316,49 @@ export default function Login() {
           </Alert>
         )}
 
-        {showError ? (
-          <>
-            <Alert
-              variant="destructive"
-              className="border-destructive bg-destructive-soft"
-            >
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle className="font-semibold text-destructive-text">
-                {t("login.failureTitle")}
-              </AlertTitle>
-              {errorText && (
-                <AlertDescription className="text-sm text-destructive-text">
-                  {errorText}
-                </AlertDescription>
-              )}
-            </Alert>
-            {consent}
-            <Button className="w-full" disabled={!consented} onClick={onLogin}>
-              {t("login.retryLogin")}
-            </Button>
-          </>
-        ) : (
-          <>
-            {consent}
-            <Button className="w-full" disabled={!consented} onClick={onLogin}>
-              <Github className="mr-2 h-4 w-4" />
-              {t("login.github")}
-            </Button>
-
-            {passkeys === "available" && (
-              <>
-                <p className="text-center text-xs uppercase text-muted-foreground">
-                  {t("login.or")}
-                </p>
-
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  disabled={passkeyPending || !consented}
-                  aria-busy={passkeyPending || undefined}
-                  onClick={onPasskeyLogin}
-                >
-                  {passkeyPending ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
-                  ) : (
-                    <Key className="mr-2 h-4 w-4" />
-                  )}
-                  {t("login.passkey")}
-                </Button>
-              </>
+        {showError && (
+          <Alert
+            variant="destructive"
+            className="border-destructive bg-destructive-soft"
+          >
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle className="font-semibold text-destructive-text">
+              {t("login.failureTitle")}
+            </AlertTitle>
+            {errorText && (
+              <AlertDescription className="text-sm text-destructive-text">
+                {errorText}
+              </AlertDescription>
             )}
+          </Alert>
+        )}
+
+        {consent}
+        <Button className="w-full" disabled={!consented} onClick={onLogin}>
+          <Github className="mr-2 h-4 w-4" />
+          {t("login.github")}
+        </Button>
+
+        {passkeys === "available" && (
+          <>
+            <p className="text-center text-xs uppercase text-muted-foreground">
+              {t("login.or")}
+            </p>
+
+            <Button
+              variant="outline"
+              className="w-full"
+              disabled={passkeyPending || !consented}
+              aria-busy={passkeyPending || undefined}
+              onClick={onPasskeyLogin}
+            >
+              {passkeyPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none" />
+              ) : (
+                <Key className="mr-2 h-4 w-4" />
+              )}
+              {t("login.passkey")}
+            </Button>
           </>
         )}
       </div>
