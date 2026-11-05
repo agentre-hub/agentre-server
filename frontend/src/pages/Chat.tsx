@@ -34,7 +34,7 @@ import type {
   NewConvProject,
 } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { fetchDevices, runsSessions, type DeviceItem } from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";
 import ResolvedSessionDetail, {
@@ -606,10 +606,7 @@ export default function Chat() {
    * `reach.onlineMachines`——那一份只在机器轴上有值，别的轴上恒为空。
    */
   const hasOnlineMachine = useMemo(
-    () =>
-      devices.some(
-        (d) => (d.kind === "agentred" || d.kind === "desktop") && d.online,
-      ),
+    () => devices.some((d) => runsSessions(d) && d.online),
     [devices],
   );
 

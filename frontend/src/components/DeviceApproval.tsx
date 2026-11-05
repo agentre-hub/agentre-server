@@ -5,7 +5,7 @@ import { Cpu, ShieldCheck, Timer } from "lucide-react";
 import { Alert, AlertDescription, Button } from "@agentre-hub/agentre-ui";
 import PageTitle from "@/components/PageTitle";
 import { useMe } from "@/hooks/use-me";
-import { api } from "@/lib/api";
+import { signOut } from "@/lib/signOut";
 import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
 
 /** `/v1/oauth/device/pending` 的返回。 */
@@ -54,7 +54,7 @@ function AccountAvatar() {
  * 显示名或邮箱缺哪个就只写另一个，不编造。
  *
  * 换账号 = 登出后回登录页并带上原设备码，登录完自动回到这一屏。
- * 与 UserMenu 的登出同一手法：无论端点成败都落地登录页。
+ * 与 UserMenu 的登出是同一个 signOut，只多带一个 next。
  */
 function AccountLine({ code }: { code: string }) {
   const { t } = useTranslation();
@@ -63,16 +63,8 @@ function AccountLine({ code }: { code: string }) {
   const account = [me.display_name, me.email].filter(Boolean).join(" · ");
   if (!account) return null;
 
-  const switchAccount = () => {
-    const next = encodeURIComponent(
-      `/device?user_code=${encodeURIComponent(code)}`,
-    );
-    void api("/v1/auth/logout", { method: "POST" })
-      .catch(() => {})
-      .finally(() => {
-        window.location.assign(`/login?next=${next}`);
-      });
-  };
+  const switchAccount = () =>
+    signOut(`/device?user_code=${encodeURIComponent(code)}`);
 
   return (
     <div className="flex flex-wrap items-center gap-x-2 text-sm text-foreground">

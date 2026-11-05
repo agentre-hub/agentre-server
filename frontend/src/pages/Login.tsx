@@ -103,18 +103,26 @@ function passkeyLoginErr(e: unknown): string {
 }
 
 /**
+ * next 是否本站相对路径。判据与后端 redirectpath.Local 同口径：以 / 开头、第二个
+ * 字符不是 / 或 \\、整串无反斜杠与控制字符。next 来自 URL，谁都能填，凡是前端
+ * 自己据它跳转或据它印上下文的地方都先过这道闸。
+ */
+function isLocalPath(next: string): boolean {
+  if (!next.startsWith("/") || next.startsWith("//")) return false;
+  // eslint-disable-next-line no-control-regex
+  return !/[\\\u0000-\u001f\u007f]/.test(next);
+}
+
+/**
  * 从登录后的落点 next 里认出设备码。
  *
  * 设备授权链接 `/device?user_code=XXX` 在未登录时被 RequireAuth 整个编码进 next，
- * user_code 不在顶层。判据与后端 redirectpath.Local 同口径：只认本站相对路径——
- * 以 / 开头、第二个字符不是 / 或 \\、整串无反斜杠与控制字符；否则外站 next 也能
- * 在我们的登录页上印出一条「设备授权」的上下文。pathname 必须正好是 /device，
- * 码要过 parseUserCode（不合法就当没有）。
+ * user_code 不在顶层。只认本站相对路径（isLocalPath）；否则外站 next 也能在我们的
+ * 登录页上印出一条「设备授权」的上下文。pathname 必须正好是 /device，码要过
+ * parseUserCode（不合法就当没有）。
  */
 export function userCodeFromNext(next: string): string | null {
-  if (!next.startsWith("/") || next.startsWith("//")) return null;
-  // eslint-disable-next-line no-control-regex
-  if (/[\\\u0000-\u001f\u007f]/.test(next)) return null;
+  if (!isLocalPath(next)) return null;
   let url: URL;
   try {
     url = new URL(next, "http://local.invalid");
@@ -131,8 +139,12 @@ export default function Login() {
   const { t } = useTranslation();
   const params = new URLSearchParams(window.location.search);
   const next = params.get("next") ?? "";
-  // 顶层 user_code 与 next 里的等价；两者并存时以顶层为准（它是显式给的）。
-  const userCode = params.get("user_code") || userCodeFromNext(next) || "";
+  // 顶层 user_code 与 next 里的等价，过同一道 parseUserCode；两者并存时以顶层为准
+  // （它是显式给的）。不过闸的值当没有：它会印在「设备授权」眉题下面。
+  const userCode =
+    parseUserCode(params.get("user_code") ?? "") ||
+    userCodeFromNext(next) ||
+    "";
   const err = params.get("err");
 
   /** 通行密钥仪式在途。整条链路只有这一处写操作，防的是连点。 */
@@ -206,8 +218,9 @@ export default function Login() {
         }),
       });
 
-      // 登录成功，后端已经设置 session cookie
-      window.location.assign(next || "/");
+      // 登录成功，后端已经设置 session cookie。落点只认本站路径（GitHub 那条路由
+      // 后端的 redirectpath.Local 把关，这条路是前端自己跳，闸要自己守）。
+      window.location.assign(isLocalPath(next) ? next : "/");
     } catch (err) {
       // 服务端判失败、网络错误、认证器异常都落这里。信封里的业务码是数字、
       // 进不了 URL，先翻成这条路自己的 err 码再带回登录页。

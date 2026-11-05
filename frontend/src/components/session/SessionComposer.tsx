@@ -42,6 +42,7 @@ import {
   type ChatImageAttachment,
 } from "@agentre-hub/agentre-ui";
 import {
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -53,6 +54,15 @@ import { useTranslation } from "react-i18next";
 import { useDeviceMentions } from "@/hooks/use-device-mentions";
 import { useSessionSkillCommands } from "@/hooks/use-session-skill-commands";
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
+
+/**
+ * 「把输入框里此刻的内容交出去」，与按发送键是同一件事（走同一个 form 提交）。
+ * 宿主在别处摆的「重试」用它：重交的是用户眼前这一句（含改过的字、只贴了图），
+ * 而不是宿主手上留的旧副本。
+ */
+export interface ComposerSubmitHandle {
+  submit: () => void;
+}
 
 /** @ 菜单里可提及的 Agent。项目那一维不给，理由见文件头。 */
 export interface ComposerAgent {
@@ -83,6 +93,7 @@ export default function SessionComposer({
   modelControl,
   reasoningEffortControl,
   composerHandleRef,
+  submitHandleRef,
 }: {
   backendType?: string;
   /**
@@ -163,11 +174,23 @@ export default function SessionComposer({
    * 只有这一只够得着图（`restoreDraft(text, images)`）。
    */
   composerHandleRef?: RefObject<ChatComposerHandle | null>;
+  /** 想在输入框之外触发一次「按发送」时给（见 ComposerSubmitHandle）。 */
+  submitHandleRef?: RefObject<ComposerSubmitHandle | null>;
 }) {
   const { t } = useTranslation();
   // 发送按钮走输入框自己的 submit：只有它知道富文本里的提及要序列化成什么。
   const ownRef = useRef<AIChatInputHandle>(null);
   const inputRef = ownRef;
+  // 发送键是 form 的 submit 按钮，包的 form 提交同时认「只有图」与富文本两条路；
+  // 编辑器句柄的 submit 只认文本，所以这里提交的是 form 本身。
+  const rootRef = useRef<HTMLDivElement>(null);
+  useImperativeHandle(
+    submitHandleRef,
+    () => ({
+      submit: () => rootRef.current?.querySelector("form")?.requestSubmit(),
+    }),
+    [],
+  );
   /** 刚刚有一行以 `!` 开头被挡下来了（见 onCommandSubmit）。 */
   const [localCommandRejected, setLocalCommandRejected] = useState(false);
 
@@ -194,7 +217,7 @@ export default function SessionComposer({
     ) : null;
 
   return (
-    <div data-testid="session-detail-composer-form">
+    <div ref={rootRef} data-testid="session-detail-composer-form">
       <div data-testid="session-detail-composer">
         <ChatComposer
           ref={composerHandleRef}

@@ -67,7 +67,7 @@ export interface UseBoardResult {
    * 再说给人听；这里不拼文案，也不把 `err.message` 当成可展示的东西。
    */
   error: { cause: unknown } | null;
-  /** 重新读一次看板（出错提示上的「重试」）。 */
+  /** 重新读一次看板（出错提示上的「重试」）；在途期间 `searching` 为真。 */
   retry: () => void;
   /** 落库走 lib/issues 的 moveIssue：wire 那层是 issue,这一层对外一律 task。 */
   moveTask: (id: number, stage: BoardStage, afterId: number) => Promise<void>;
@@ -239,7 +239,7 @@ export function useBoard(
     taskOf,
     searching: refreshing || loadedKey !== queryKey,
     error,
-    retry: () => void runFetch(),
+    retry: () => void reload(),
     moveTask,
     saveTask,
     deleteTask,

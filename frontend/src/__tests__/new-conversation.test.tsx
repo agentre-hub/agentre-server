@@ -1156,6 +1156,40 @@ describe("一条还没发第一句的对话", () => {
     );
   });
 
+  /**
+   * 失败后那句话已经还回输入框、改得动；用户改过再按「重试」，交出去的必须是输入框
+   * 里此刻的那一句——按旧的那句重发，等于把他刚改的字清掉、发一条他已经不想发的话。
+   */
+  it("派发失败后改过输入框再按重试：交出去的是改过的那一句", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(
+      new DispatchRunError(new RelayError(-32603, "boom")),
+    );
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("检查一下");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+    const alert = await screen.findByRole("alert");
+    await waitFor(() =>
+      expect(draftEditable().textContent).toContain("检查一下"),
+    );
+
+    await typeInDraft("检查一下登录页");
+    mockDispatch.mockClear();
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(mockDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "检查一下登录页" }),
+      ),
+    );
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+  });
+
   it("派发时那台机器的 agentred 太旧：出口是去设备页，不给重试", async () => {
     stubReads();
     mockFetchPlan.mockResolvedValue(availablePlan);

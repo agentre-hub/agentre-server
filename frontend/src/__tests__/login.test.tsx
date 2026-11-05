@@ -248,6 +248,17 @@ describe("Login", () => {
         "B4F-7Q2",
       );
     });
+
+    // 顶层 user_code 与 next 里的是同一份上下文，过同一道闸：谁都能递一条
+    // `/login?user_code=<一句话>` 的链接，不过闸的话这句话会印在「设备授权」眉题下。
+    it("ignores a top-level user_code that is not a device code", () => {
+      renderLogin(
+        "?user_code=" + encodeURIComponent("Call 555-0100 to verify"),
+      );
+      expect(document.querySelector(".bg-primary-soft")).toBeNull();
+      expect(screen.queryByText("Device authorization")).toBeNull();
+      expect(screen.queryByText(/555-0100/)).toBeNull();
+    });
   });
 
   describe("error handling", () => {
@@ -687,6 +698,70 @@ describe("Login", () => {
       expect(screen.getByRole("button", { name: /GitHub/i })).toBeTruthy();
       expect(screen.getByRole("button", { name: /passkey/i })).toBeTruthy();
     });
+
+    /**
+     * 通行密钥登录成功后的落点由前端自己跳，next 又是 URL 里谁都能填的值——
+     * 与 GitHub 那条路上后端 redirectpath.Local 同一道闸：只认本站相对路径，
+     * 别的一律落 "/"。不然 `/login?next=https://evil.example` 就是一条开放跳转。
+     */
+    it.each([
+      ["local path", "/device?user_code=A4F-7Q2", "/device?user_code=A4F-7Q2"],
+      ["absolute URL", "https://evil.example/phish", "/"],
+      ["protocol-relative", "//evil.example/phish", "/"],
+      ["backslash", "/\\evil.example/phish", "/"],
+    ])(
+      "after a passkey sign-in, lands on a %s next only if it is local",
+      async (_n, next, landing) => {
+        markWebauthnSupported();
+        const b = (s: string) => b64urlToBufferForTest(s);
+        const credential = {
+          id: "BwcHBwcH",
+          type: "public-key",
+          rawId: b("BwcHBwcH"),
+          response: {
+            clientDataJSON: b("eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0"),
+            authenticatorData: b("oaKj"),
+            signature: b("-_8"),
+            userHandle: b("CQkJCQ"),
+          },
+          getClientExtensionResults: () => ({}),
+        };
+        vi.stubGlobal(
+          "fetch",
+          vi.fn((url: string) =>
+            Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  code: 0,
+                  msg: "success",
+                  data:
+                    url === "/v1/passkeys/login/begin"
+                      ? { publicKey: { challenge: "AQID" } }
+                      : {},
+                }),
+              ),
+            ),
+          ),
+        );
+        vi.stubGlobal(
+          "navigator",
+          Object.create(navigator, {
+            credentials: {
+              value: { get: vi.fn(fakeCredentialsGet(credential)) },
+            },
+          }),
+        );
+
+        renderLogin("?next=" + encodeURIComponent(next));
+        tickConsent();
+        fireEvent.click(passkeyButton());
+
+        await vi.waitFor(() =>
+          expect(window.location.assign).toHaveBeenCalledWith(landing),
+        );
+        expect(window.location.assign).toHaveBeenCalledTimes(1);
+      },
+    );
 
     // 规格「通行密钥 · 失败」：「每一种给各自的错误码与文案，不压成一句
     // 「登录失败」」。后端的裁决是信封里那个**数字**业务码；前端要分支就必须

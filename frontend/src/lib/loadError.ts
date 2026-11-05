@@ -8,23 +8,26 @@
  *
  * `whatKey` 是调用方那一页自己的半句文案键：同一套分类，各页说各页的事。
  */
-import { ApiError } from "@/lib/api";
-import { describeFailure, type FailureContext } from "@/lib/describeFailure";
-import { FAILURE_CODES } from "@/lib/errorCodes";
+import {
+  apiPermissionFailure,
+  describeFailure,
+  type FailureContext,
+} from "@/lib/describeFailure";
 
 /** 认得的 ApiError 码 → 当前语言的一句话；认不得返回 null，由调用方落兜底句。 */
 export function knownApiErrorText(
   e: unknown,
   t: (key: string) => string,
 ): string | null {
-  if (!(e instanceof ApiError)) return null;
-  if (e.status === 401 || e.code === FAILURE_CODES.Unauthorized) {
-    return t("common.apiError.signedOut");
+  // 判据与 describeFailure 共用一份；这里只是没有「什么失败了」那半句，说整句。
+  switch (apiPermissionFailure(e)) {
+    case "signedOut":
+      return t("common.apiError.signedOut");
+    case "denied":
+      return t("common.apiError.denied");
+    default:
+      return null;
   }
-  if (e.status === 403 || e.code === FAILURE_CODES.Forbidden) {
-    return t("common.apiError.denied");
-  }
-  return null;
 }
 
 export function loadErrorText(

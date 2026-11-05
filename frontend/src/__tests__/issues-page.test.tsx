@@ -242,6 +242,34 @@ describe("看板取不回来时", () => {
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   });
 
+  // 重试在途时按钮要停住：第二次也失败的话提示一个字都不变，用户分不清自己是不是
+  // 点空了，只会连点（与总览统计那条重试同一条规矩）。
+  it("重试在途时重试按钮停住，不让连点", async () => {
+    mockBoardApi();
+    const ok = mockedApi.getMockImplementation()!;
+    let calls = 0;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (String(path).startsWith("/v1/workspace/issues?")) {
+        calls += 1;
+        if (calls === 1) throw new Error("boom");
+        return new Promise(() => {});
+      }
+      return ok(path, init);
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/issues"]}>
+        <Issues />
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+
+    const alert = await screen.findByRole("alert");
+    const retry = within(alert).getByRole("button", { name: "Retry" });
+    fireEvent.click(retry);
+    await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(true));
+  });
+
   it("复制诊断信息复制的是原文", async () => {
     mockBoardApi();
     const ok = mockedApi.getMockImplementation()!;

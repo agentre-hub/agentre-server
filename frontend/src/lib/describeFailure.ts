@@ -148,11 +148,27 @@ function classify(err: unknown): Verdict {
   return UNKNOWN;
 }
 
-function classifyApi(err: ApiError): Verdict {
+/**
+ * ApiError 里「登录失效 / 无权限」这两类的判据，只此一份：分类在这里用，没有
+ * 「什么失败了」那半句的写失败（`knownApiErrorText`）也用它，两边不会认出不同的码。
+ */
+export function apiPermissionFailure(
+  err: unknown,
+): "signedOut" | "denied" | null {
+  if (!(err instanceof ApiError)) return null;
   if (err.status === 401 || err.code === FAILURE_CODES.Unauthorized) {
-    return SIGNED_OUT;
+    return "signedOut";
   }
-  if (err.status === 403 || err.code === FAILURE_CODES.Forbidden) return DENIED;
+  if (err.status === 403 || err.code === FAILURE_CODES.Forbidden) {
+    return "denied";
+  }
+  return null;
+}
+
+function classifyApi(err: ApiError): Verdict {
+  const permission = apiPermissionFailure(err);
+  if (permission === "signedOut") return SIGNED_OUT;
+  if (permission === "denied") return DENIED;
   if (
     err.code === FAILURE_CODES.RelayDaemonOffline ||
     err.code === FAILURE_CODES.RelayDaemonNotFound

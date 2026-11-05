@@ -61,9 +61,12 @@ import { useBoardDrag } from "./issues/useBoardDrag";
 function BoardFailure({
   cause,
   onRetry,
+  retrying,
 }: {
   cause: unknown;
   onRetry: () => void;
+  /** 重读在途：按钮停住，第二次也失败时用户才分得清自己没点空。 */
+  retrying: boolean;
 }) {
   const { t } = useTranslation();
   const failure = describeFailure(cause, {
@@ -73,7 +76,11 @@ function BoardFailure({
   return (
     <Alert variant="destructive" className="shrink-0 rounded-none px-5 py-2">
       <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3 text-2xs">
-        <FailureNotice failure={failure} onRetry={onRetry} />
+        <FailureNotice
+          failure={failure}
+          onRetry={onRetry}
+          retryDisabled={retrying}
+        />
       </AlertDescription>
     </Alert>
   );
@@ -267,7 +274,11 @@ export default function Issues() {
         </div>
 
         {board.error ? (
-          <BoardFailure cause={board.error.cause} onRetry={board.retry} />
+          <BoardFailure
+            cause={board.error.cause}
+            onRetry={board.retry}
+            retrying={board.searching}
+          />
         ) : null}
 
         <IssueBoard

@@ -14,7 +14,7 @@ import {
 
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
-import type { DeviceItem } from "@/lib/devices";
+import { runsSessions, type DeviceItem } from "@/lib/devices";
 import type { IndexAxis, MachineInfo } from "@/lib/sessionAxes";
 import type { SessionFilter } from "@/lib/sessionView";
 
@@ -330,7 +330,7 @@ export function useMachineReachability({
   const machines = useMemo<MachineInfo[]>(
     () =>
       devices
-        .filter((d) => d.kind === "agentred" || d.kind === "desktop")
+        .filter(runsSessions)
         .filter((d) => machineScope === null || d.id === machineScope)
         .map((d) => ({ deviceId: d.id, name: d.name, online: d.online })),
     [devices, machineScope],
@@ -346,7 +346,7 @@ export function useMachineReachability({
       axis === "machine"
         ? devices.filter(
             (d) =>
-              (d.kind === "agentred" || d.kind === "desktop") &&
+              runsSessions(d) &&
               d.online &&
               // 范围之外的机器连问都不问：多开的每条中继通道都是真往那台机器上
               // 发的 session.list，而它的答案这一屏根本不会列。

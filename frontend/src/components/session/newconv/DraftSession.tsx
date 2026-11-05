@@ -23,6 +23,7 @@ import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
 import { FailureNotice } from "@/components/console";
+import type { ComposerSubmitHandle } from "@/components/session/SessionComposer";
 import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
@@ -117,6 +118,8 @@ export function DraftSession({
    * `ChatComposer` 自己的 state 里 —— 用它还原,派发失败之后字回来了、图没回来。
    */
   const composerRef = useRef<ChatComposerHandle>(null);
+  /** 「重试」= 把输入框里此刻那一句再按一次发送（见 ComposerSubmitHandle）。 */
+  const submitRef = useRef<ComposerSubmitHandle>(null);
   const [projectSyncId, setProjectSyncId] = useState<string | null>(
     initialProjectSyncId ?? null,
   );
@@ -137,13 +140,11 @@ export function DraftSession({
     images?: ChatImageAttachment[];
   } | null>(null);
   /**
-   * 上一次没交出去的那一条：错误本身，连同那句话、那几张图与当时派去的机器。
-   * 「重试」按的就是它——把同一条再交一次，不是让用户去输入框里再按一次回车。
+   * 上一次没交出去的那一条：错误本身与当时派去的机器。那句话与图已经还回输入框，
+   * 「重试」交的是输入框里此刻的内容（用户可能改过），不另留一份旧副本。
    */
   const [startFailure, setStartFailure] = useState<{
     error: unknown;
-    text: string;
-    images?: ChatImageAttachment[];
     machine: string;
   } | null>(null);
 
@@ -335,9 +336,6 @@ export function DraftSession({
       // 只贴图不打字同样算「说了一句」:提交键在有图时就是启用的,只认文本的话按
       // 下去一声不吭什么都没发生。会话详情那条路早就是这么判的。
       if (!readyPlan?.chosen || (!message.trim() && !images?.length)) return;
-      // 交出去那一刻输入框该是空的：提交键那条路 ChatComposer 自己清过，「重试」
-      // 那条路要在这里清——失败时那句话已经还回了输入框。
-      composerRef.current?.clearDraft();
       setStarting({ text: message, images });
       setStartFailure(null);
       try {
@@ -379,12 +377,7 @@ export function DraftSession({
         recordRecentTarget("chat", "", effectiveTarget);
         onStarted(out);
       } catch (e: unknown) {
-        setStartFailure({
-          error: e,
-          text: message,
-          images,
-          machine: readyPlan.chosen.device_name,
-        });
+        setStartFailure({ error: e, machine: readyPlan.chosen.device_name });
         // 提交那一刻输入框已经被清空，而占位是唯一显示这句话的地方——占位一撤，
         // 用户写的整段话就没了。把它还回输入框：字留在屏幕上、改得动、重发只差
         // 一次回车。SendFailureBubble 立的就是这条规矩。
@@ -610,6 +603,7 @@ export function DraftSession({
               cwd={chosen?.cwd}
               agents={mentionAgents}
               composerHandleRef={composerRef}
+              submitHandleRef={submitRef}
               // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧
               // 摆着（它们是同一台机器的答案），但这一句要发到哪儿还没定。
               disabled={!readyPlan?.chosen || starting !== null}
@@ -681,9 +675,7 @@ export function DraftSession({
                       })}
                       // 计划重算期间这一条还交不出去（start 会原地返回），按钮先停着。
                       retryDisabled={!readyPlan?.chosen}
-                      onRetry={() =>
-                        void start(startFailure.text, startFailure.images)
-                      }
+                      onRetry={() => submitRef.current?.submit()}
                     />
                   </div>
                 ) : undefined
