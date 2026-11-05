@@ -6,5 +6,20 @@
   "retry": "Retry",
   "language": {
     "label": "Language"
+  },
+  "failure": {
+    "network": "{{what}} — the network seems to be down.",
+    "unreachable": "{{what}} — the connection to {{machine}} didn't go through.",
+    "refused": "{{what}} — {{machine}} turned the request down.",
+    "machineOutdated": "{{what}} — the agentred on {{machine}} is out of date.",
+    "pageOutdated": "{{what}} — this page is older than the agentred on {{machine}}. Reload the page.",
+    "versionMismatch": "{{what}} — this page and the agentred on {{machine}} run different versions.",
+    "signedOut": "{{what}} — your session has expired. Sign in again.",
+    "denied": "{{what}} — you don't have permission to do this.",
+    "unknown": "{{what}}.",
+    "thatMachine": "that machine",
+    "goDevices": "Go to devices",
+    "copyDiagnostics": "Copy diagnostics",
+    "copied": "Diagnostics copied"
   }
 }

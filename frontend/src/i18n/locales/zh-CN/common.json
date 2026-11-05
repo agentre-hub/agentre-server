@@ -6,5 +6,20 @@
   "retry": "重试",
   "language": {
     "label": "语言"
+  },
+  "failure": {
+    "network": "{{what}}，网络好像断了。",
+    "unreachable": "{{what}}，到 {{machine}} 的连接没走通。",
+    "refused": "{{what}}，{{machine}} 拒绝了这次请求。",
+    "machineOutdated": "{{what}}，{{machine}} 上的 agentred 版本太旧了。",
+    "pageOutdated": "{{what}}，这个页面比 {{machine}} 上的 agentred 旧，刷新一下页面。",
+    "versionMismatch": "{{what}}，这个页面与 {{machine}} 上的 agentred 版本对不上。",
+    "signedOut": "{{what}}，登录状态已失效，请重新登录。",
+    "denied": "{{what}}，你没有权限这样做。",
+    "unknown": "{{what}}。",
+    "thatMachine": "那台机器",
+    "goDevices": "去设备页",
+    "copyDiagnostics": "复制诊断信息",
+    "copied": "诊断信息已复制"
   }
 }

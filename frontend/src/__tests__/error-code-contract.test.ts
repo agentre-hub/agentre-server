@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   ACCOUNT_CODES,
   DEVICE_FLOW_CODES,
+  FAILURE_CODES,
   PASSKEY_CODES,
   PASSKEY_LOGIN_CODES,
 } from "@/lib/errorCodes";
@@ -112,6 +113,22 @@ describe("账号错误码契约", () => {
     "%s 与 code.go 的显式编号一致",
     (name, value) => {
       expect(goCodes.get(name), driftHint(name, ACCOUNT_BASE)).toBe(value);
+    },
+  );
+});
+
+/**
+ * describeFailure 按码分类的那几个：通用段位的未登录 / 无权限，中继段位的设备
+ * 不在线。它们散在两个段位里，所以只逐条对回 code.go，不断言段位形状。
+ */
+describe("失败分类错误码契约", () => {
+  it.each(Object.entries(FAILURE_CODES))(
+    "%s 与 code.go 的显式编号一致",
+    (name, value) => {
+      expect(
+        goCodes.get(name),
+        driftHint(name, Math.floor(value / 100) * 100),
+      ).toBe(value);
     },
   );
 });

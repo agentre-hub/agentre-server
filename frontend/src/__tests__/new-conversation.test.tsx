@@ -20,9 +20,17 @@ import {
 } from "@testing-library/react";
 import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import { listCLIModelsOn } from "@/lib/cliModels";
 import {
   DispatchRunError,
@@ -33,6 +41,7 @@ import {
 import { readRecentAgents } from "@/lib/recentAgents";
 import { ensureRelayTicket } from "@/lib/relayTicket";
 import { RelayError } from "@/lib/relayClient";
+import { installClipboard, restoreClipboardEnv } from "@/test/clipboard";
 import { useRelayChannel } from "@/hooks/use-relay";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
@@ -375,6 +384,11 @@ beforeEach(async () => {
     handshakeRejection: null,
     reconnect: vi.fn(),
   });
+});
+
+// 复制诊断信息那几条换过剪贴板，别带进后面的用例。
+afterEach(() => {
+  restoreClipboardEnv();
 });
 
 /**
@@ -993,6 +1007,47 @@ describe("一条还没发第一句的对话", () => {
     expect(screen.queryByTestId("draft-plan-failed")).toBeNull();
   });
 
+  it("计划因断网取不到：说的是计划这件事（不是设备列表），原文只进诊断", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    installClipboard(writeText);
+    stubReads();
+    mockFetchPlan.mockRejectedValue(new TypeError("Failed to fetch"));
+    renderChat();
+    await openDraft();
+
+    const failed = await screen.findByTestId("draft-plan-failed");
+    expect(failed.textContent).toContain(
+      "Could not check for an execution target — the network seems to be down.",
+    );
+    expect(failed.textContent).not.toContain("Failed to fetch");
+    expect(failed.textContent).not.toContain("Could not load your devices");
+    within(failed).getByRole("button", { name: "Retry" });
+
+    fireEvent.click(
+      within(failed).getByRole("button", { name: "Copy diagnostics" }),
+    );
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to fetch"),
+      ),
+    );
+  });
+
+  it("计划被拒（无权限）：不贴服务端的中文 msg，也不给没用的重试", async () => {
+    stubReads();
+    mockFetchPlan.mockRejectedValue(new ApiError(30005, "无权访问", 403));
+    renderChat();
+    await openDraft();
+
+    const failed = await screen.findByTestId("draft-plan-failed");
+    expect(failed.textContent).toContain(
+      "you don't have permission to do this",
+    );
+    expect(failed.textContent).not.toContain("无权访问");
+    expect(within(failed).queryByRole("button", { name: "Retry" })).toBeNull();
+    within(failed).getByRole("button", { name: "Copy diagnostics" });
+  });
+
   it("派发失败时用户那句话还回输入框，不随占位一起消失", async () => {
     stubReads();
     mockFetchPlan.mockResolvedValue(availablePlan);
@@ -1059,17 +1114,54 @@ describe("一条还没发第一句的对话", () => {
     await within(composerRoot()).findByAltText("shot.png");
   });
 
-  it("Given coding 已连接但远端 CLI 启动失败, When 发第一句, Then 展示远端错误而不是误报连不上", async () => {
+  it("Given coding 已连接但远端 CLI 启动失败, When 发第一句, Then 说清是那台机器没启动起来，原文只进诊断，并给重试", async () => {
+    const raw = 'exec: "claude": executable file not found in $PATH';
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    installClipboard(writeText);
     stubReads();
     mockFetchPlan.mockResolvedValue(availablePlan);
     mockEnsureRelayTicket.mockResolvedValue(relayTicket);
     mockDispatch.mockRejectedValue(
-      new DispatchRunError(
-        new RelayError(
-          -32603,
-          'exec: "claude": executable file not found in $PATH',
-        ),
+      new DispatchRunError(new RelayError(-32603, raw)),
+    );
+    renderChat();
+    await openDraft();
+
+    await typeInDraft("检查一下");
+    const send = screen.getByTestId("session-detail-send");
+    await waitFor(() => expect(send.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(send);
+
+    // 不贴 agentred 回的英文原话，也不误报连不上：那台机器连上了，只是没启动起来。
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Study Mini couldn't start the agent.");
+    expect(alert.textContent).not.toContain(raw);
+    expect(alert.textContent).not.toContain("Could not reach Study Mini");
+
+    // 原文只进「复制诊断信息」。
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Copy diagnostics" }),
+    );
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining(raw)),
+    );
+
+    // 未知类的出口是重试：同一句话再交一次。
+    mockDispatch.mockClear();
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(mockDispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "检查一下" }),
       ),
+    );
+  });
+
+  it("派发时那台机器的 agentred 太旧：出口是去设备页，不给重试", async () => {
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+    mockDispatch.mockRejectedValue(
+      new DispatchRunError(new RelayError(-32601, "method not found")),
     );
     renderChat();
     await openDraft();
@@ -1080,11 +1172,14 @@ describe("一条还没发第一句的对话", () => {
     fireEvent.click(send);
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("Study Mini is connected");
-    expect(alert.textContent).toContain(
-      'exec: "claude": executable file not found in $PATH',
-    );
-    expect(alert.textContent).not.toContain("Could not reach Study Mini");
+    expect(alert.textContent).toContain("out of date");
+    expect(alert.textContent).not.toContain("method not found");
+    expect(
+      within(alert)
+        .getByRole("link", { name: "Go to devices" })
+        .getAttribute("href"),
+    ).toBe("/devices");
+    expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
 

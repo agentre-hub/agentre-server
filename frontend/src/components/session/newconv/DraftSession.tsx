@@ -13,6 +13,7 @@ import {
   Alert,
   AlertDescription,
   Button,
+  copyTextWithToast,
   SessionHeaderAgentMark,
   SessionHeaderBand,
   cn,
@@ -22,6 +23,7 @@ import {
 import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
@@ -34,15 +36,14 @@ import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
-import { ApiError } from "@/lib/api";
 import {
   decodePermissionModeMeta,
   decodeReasoningEffortSupport,
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
+import { describeFailure, type Failure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import {
-  DispatchRunError,
   deriveTitle,
   dispatchNewConversation,
   fetchDispatchPlan,
@@ -137,7 +138,16 @@ export function DraftSession({
     text: string;
     images?: ChatImageAttachment[];
   } | null>(null);
-  const [startError, setStartError] = useState<unknown>(null);
+  /**
+   * 上一次没交出去的那一条：错误本身，连同那句话、那几张图与当时派去的机器。
+   * 「重试」按的就是它——把同一条再交一次，不是让用户去输入框里再按一次回车。
+   */
+  const [startFailure, setStartFailure] = useState<{
+    error: unknown;
+    text: string;
+    images?: ChatImageAttachment[];
+    machine: string;
+  } | null>(null);
 
   /**
    * 这份计划是**给哪一组入参算的**。三个入参任意一个变了都要重算：换项目会让某些
@@ -327,8 +337,11 @@ export function DraftSession({
       // 只贴图不打字同样算「说了一句」:提交键在有图时就是启用的,只认文本的话按
       // 下去一声不吭什么都没发生。会话详情那条路早就是这么判的。
       if (!readyPlan?.chosen || (!message.trim() && !images?.length)) return;
+      // 交出去那一刻输入框该是空的：提交键那条路 ChatComposer 自己清过，「重试」
+      // 那条路要在这里清——失败时那句话已经还回了输入框。
+      composerRef.current?.clearDraft();
       setStarting({ text: message, images });
-      setStartError(null);
+      setStartFailure(null);
       try {
         const ticket = await ensureRelayTicket();
         const out = await dispatchNewConversation({
@@ -368,7 +381,12 @@ export function DraftSession({
         recordRecentTarget("chat", "", effectiveTarget);
         onStarted(out);
       } catch (e: unknown) {
-        setStartError(e);
+        setStartFailure({
+          error: e,
+          text: message,
+          images,
+          machine: readyPlan.chosen.device_name,
+        });
         // 提交那一刻输入框已经被清空，而占位是唯一显示这句话的地方——占位一撤，
         // 用户写的整段话就没了。把它还回输入框：字留在屏幕上、改得动、重发只差
         // 一次回车。SendFailureBubble 立的就是这条规矩。
@@ -537,19 +555,13 @@ export function DraftSession({
             // 唯一的出路是去换个项目再换回来。
             <Alert variant="destructive" data-testid="draft-plan-failed">
               <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-                <span className="min-w-0">
-                  {planError instanceof ApiError
-                    ? planError.message
-                    : t("device.manage.loadError")}
-                </span>
-                <span className="flex-1" />
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setPlanAttempt((k) => k + 1)}
-                >
-                  {t("common.retry")}
-                </Button>
+                <FailureNotice
+                  failure={describeFailure(planError, {
+                    t,
+                    what: t("chat.planFailedWhat"),
+                  })}
+                  onRetry={() => setPlanAttempt((k) => k + 1)}
+                />
               </AlertDescription>
             </Alert>
           ) : !plan ? (
@@ -656,20 +668,26 @@ export function DraftSession({
               }
               onSubmit={(text, images) => void start(text, images)}
               feedback={
-                startError ? (
-                  <p
+                startFailure ? (
+                  <div
                     role="alert"
-                    className="px-3.5 py-1.5 text-xs text-destructive-text"
+                    className="flex flex-wrap items-center gap-2 px-3.5 py-1.5 text-xs text-destructive-text"
                   >
-                    {startError instanceof DispatchRunError
-                      ? t("chat.remoteStartFailed", {
-                          machine: chosen?.device_name ?? "",
-                          error: startError.message,
-                        })
-                      : t("chat.connectFailed", {
-                          machine: chosen?.device_name ?? "",
-                        })}
-                  </p>
+                    <FailureNotice
+                      failure={describeFailure(startFailure.error, {
+                        t,
+                        what: t("chat.startFailedWhat", {
+                          machine: startFailure.machine,
+                        }),
+                        machine: startFailure.machine,
+                      })}
+                      // 计划重算期间这一条还交不出去（start 会原地返回），按钮先停着。
+                      retryDisabled={!readyPlan?.chosen}
+                      onRetry={() =>
+                        void start(startFailure.text, startFailure.images)
+                      }
+                    />
+                  </div>
                 ) : undefined
               }
             />
@@ -677,6 +695,59 @@ export function DraftSession({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 一次失败摆出来的样子：分类给的那句话，加上它给的出口，再加一颗「复制诊断信息」。
+ *
+ * 原文只走剪贴板，不上屏（规格 2026-11-05-ux-polish W5）。复制走共享包的
+ * `copyTextWithToast`：本站常在 http 上，那里 Clipboard API 整个不存在，包里那层有
+ * `execCommand` 兜底；回执是 toast，这一行不为「已复制」换字。
+ */
+function FailureNotice({
+  failure,
+  onRetry,
+  retryDisabled,
+}: {
+  failure: Failure;
+  onRetry: () => void;
+  retryDisabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <span className="min-w-0">{failure.message}</span>
+      <span className="flex-1" />
+      <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+        {failure.exit === "retry" && (
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={retryDisabled}
+            onClick={onRetry}
+          >
+            {t("common.retry")}
+          </Button>
+        )}
+        {failure.exit === "devices" && (
+          <Button asChild size="xs" variant="outline">
+            <Link to="/devices">{t("common.failure.goDevices")}</Link>
+          </Button>
+        )}
+        <Button
+          size="xs"
+          variant="ghost"
+          onClick={() =>
+            void copyTextWithToast(failure.diagnostic, {
+              successTitle: t("common.failure.copied"),
+            })
+          }
+        >
+          {t("common.failure.copyDiagnostics")}
+        </Button>
+      </span>
+    </>
   );
 }
 

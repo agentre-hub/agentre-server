@@ -67,3 +67,21 @@ export const ACCOUNT_CODES = {
   /** 账号已被封禁。 */
   UserBanned: 30101,
 } as const;
+
+/**
+ * `describeFailure` 按码分类的那几个（规格 2026-11-05-ux-polish W5）。
+ *
+ * 散在两个段位里：通用段位（30000 起）的未登录 / 无权限，中继段位（30400 起）的
+ * 「那台设备不在线 / 不在册」。分类只认这几个数字，其余业务码一律归 unknown，由
+ * 调用方的事实句兜住——不把服务端那句恒为中文的 msg 摆到界面上。
+ */
+export const FAILURE_CODES = {
+  /** 会话缺失或已失效。 */
+  Unauthorized: 30004,
+  /** 已登录，但这件事不归这个账号做。 */
+  Forbidden: 30005,
+  /** 中继找不到那台设备（不在册）。 */
+  RelayDaemonNotFound: 30400,
+  /** 那台设备此刻不在线。 */
+  RelayDaemonOffline: 30401,
+} as const;
