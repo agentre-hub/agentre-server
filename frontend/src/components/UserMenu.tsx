@@ -95,7 +95,9 @@ export function UserMenu({
             "focus-visible:focus-outline",
             // 两个落点都在外框上：外框比内容面暗，悬停是提亮（rail-accent）。
             "hover:bg-rail-accent data-[state=open]:bg-rail-accent",
-            compact ? "px-1 py-1" : "h-[42px] w-full px-1.5",
+            compact
+              ? "relative px-1 py-1 before:absolute before:-inset-1 before:content-['']"
+              : "h-[42px] w-full px-1.5",
           )}
         >
           {avatar}
