@@ -44,6 +44,7 @@ type DevicePendingResponse struct {
 	DeviceKind string `json:"device_kind"`
 	Platform   string `json:"platform"`
 	Version    string `json:"version"`
+	Name       string `json:"name"`
 	ExpiresIn  int    `json:"expires_in"`
 }
 

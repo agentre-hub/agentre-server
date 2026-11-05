@@ -83,7 +83,7 @@ func (d *Device) Pending(c *gin.Context, req *api.DevicePendingRequest) (*api.De
 	}
 	return &api.DevicePendingResponse{
 		DeviceKind: info.DeviceKind, Platform: info.Platform, Version: info.Version,
-		ExpiresIn: info.ExpiresIn,
+		Name: info.Name, ExpiresIn: info.ExpiresIn,
 	}, nil
 }
 

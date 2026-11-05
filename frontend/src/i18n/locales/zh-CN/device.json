@@ -20,6 +20,8 @@
     "expirySeconds": "此授权请求将在 {{seconds}} 秒后过期",
     "expiryAnnounce": "此授权请求将在约 {{minutes}} 分钟后过期",
     "expiryAnnounceSoon": "此授权请求将在 1 分钟内过期",
+    "connecting": "将接入 {{account}}",
+    "switchAccount": "换个账号",
     "allow": "允许授权",
     "deny": "拒绝",
     "fineprint": "你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。",

@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Laptop, ShieldCheck, Timer } from "lucide-react";
+import { Cpu, ShieldCheck, Timer } from "lucide-react";
 
 import { Alert, AlertDescription, Button } from "@agentre-hub/agentre-ui";
 import PageTitle from "@/components/PageTitle";
 import { useMe } from "@/hooks/use-me";
-import { deviceKindLabel } from "@/lib/deviceKind";
+import { api } from "@/lib/api";
+import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
 
 /** `/v1/oauth/device/pending` 的返回。 */
 export interface PendingInfo {
   device_kind: string;
   platform: string;
   version: string;
+  /** 设备自报的主机名，可为空串。 */
+  name?: string;
   expires_in: number;
 }
 
@@ -43,6 +46,46 @@ function AccountAvatar() {
     >
       {initial}
     </span>
+  );
+}
+
+/**
+ * 「将接入 {显示名} · {邮箱}」+「换个账号」。取不到 me 就整行不渲染；
+ * 显示名或邮箱缺哪个就只写另一个，不编造。
+ *
+ * 换账号 = 登出后回登录页并带上原设备码，登录完自动回到这一屏。
+ * 与 UserMenu 的登出同一手法：无论端点成败都落地登录页。
+ */
+function AccountLine({ code }: { code: string }) {
+  const { t } = useTranslation();
+  const { me } = useMe();
+  if (!me) return null;
+  const account = [me.display_name, me.email].filter(Boolean).join(" · ");
+  if (!account) return null;
+
+  const switchAccount = () => {
+    const next = encodeURIComponent(
+      `/device?user_code=${encodeURIComponent(code)}`,
+    );
+    void api("/v1/auth/logout", { method: "POST" })
+      .catch(() => {})
+      .finally(() => {
+        window.location.assign(`/login?next=${next}`);
+      });
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 text-sm text-foreground">
+      <span>{t("device.approve.connecting", { account })}</span>
+      <Button
+        type="button"
+        variant="link"
+        onClick={switchAccount}
+        className="h-auto p-0 text-sm"
+      >
+        {t("device.approve.switchAccount")}
+      </Button>
+    </div>
   );
 }
 
@@ -116,6 +159,9 @@ export default function DeviceApproval({
   const seconds = left % 60;
 
   const kindLabel = deviceKindLabel(info.device_kind, t);
+  const KindIcon = DEVICE_KIND_ICONS[info.device_kind] ?? Cpu;
+  // 主机名为空时标题回退为类型名，此时不再重复画 chip。
+  const title = info.name || kindLabel;
 
   return (
     <div className="flex w-full max-w-[576px] flex-col gap-6 rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10">
@@ -127,6 +173,7 @@ export default function DeviceApproval({
           </span>
         </div>
         <PageTitle>{t("device.approve.title")}</PageTitle>
+        <AccountLine code={code} />
         <div className="flex items-start gap-2">
           <AccountAvatar />
           {/* 说明不分档：服务端没有任何一处按设备做过权限判断，四种 kind
@@ -138,13 +185,29 @@ export default function DeviceApproval({
       </div>
 
       <div className="flex items-center gap-3.5 rounded-md bg-code-surface p-4">
-        <span className="flex size-[42px] shrink-0 items-center justify-center rounded-sm bg-sheet">
-          <Laptop className="size-5 text-primary-text" aria-hidden="true" />
+        <span
+          data-testid="device-icon"
+          className="flex size-[42px] shrink-0 items-center justify-center rounded-sm bg-sheet"
+        >
+          <KindIcon className="size-5 text-primary-text" aria-hidden="true" />
         </span>
         <div className="flex min-w-0 flex-col gap-1">
-          <p className="text-prose font-semibold text-foreground">
-            {kindLabel}
-          </p>
+          <div className="flex min-w-0 items-center gap-2">
+            <p
+              data-testid="device-title"
+              className="truncate text-prose font-semibold text-foreground"
+            >
+              {title}
+            </p>
+            {info.name && (
+              <span
+                data-testid="device-kind-chip"
+                className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-2xs font-semibold text-primary-text"
+              >
+                {kindLabel}
+              </span>
+            )}
+          </div>
           <p className="truncate font-mono text-xs text-muted-foreground">
             {`${info.platform} · ${info.version}`}
           </p>

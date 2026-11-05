@@ -20,6 +20,8 @@
     "expirySeconds": "This authorization request expires in {{seconds}}s",
     "expiryAnnounce": "This authorization request expires in about {{minutes}} minutes",
     "expiryAnnounceSoon": "This authorization request expires in less than a minute",
+    "connecting": "Connecting to {{account}}",
+    "switchAccount": "Switch account",
     "allow": "Allow access",
     "deny": "Deny",
     "fineprint": "You can revoke this device's access at any time under Console → Devices.",
