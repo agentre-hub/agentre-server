@@ -41,7 +41,9 @@
   },
   "deniedScreen": {
     "title": "已拒绝授权",
-    "close": "关闭页面"
+    "body": "这台设备不会接入你的账号。如果是误点，回到设备上重新发起授权。",
+    "retry": "输入新的代码",
+    "console": "前往控制台"
   },
   "expiredScreen": {
     "title": "授权请求已过期",

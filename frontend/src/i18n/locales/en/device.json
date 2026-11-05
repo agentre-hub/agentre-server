@@ -41,7 +41,9 @@
   },
   "deniedScreen": {
     "title": "Authorization denied",
-    "close": "Close page"
+    "body": "This device will not be connected to your account. If you clicked by mistake, go back to the device and start authorization again.",
+    "retry": "Enter a new code",
+    "console": "Go to the console"
   },
   "expiredScreen": {
     "title": "Authorization request expired",

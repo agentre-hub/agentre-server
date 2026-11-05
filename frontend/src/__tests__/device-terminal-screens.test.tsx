@@ -139,11 +139,37 @@ describe("DeviceDenied", () => {
     ).toBeTruthy();
   });
 
-  it("has exactly one h1 and a neutral (non-destructive) close button", () => {
+  it("has exactly one h1 and no close-window button", () => {
     renderAtState(<DeviceDenied />, "/device/denied");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    const button = screen.getByRole("button", { name: /close page/i });
-    expect(button.getAttribute("data-variant")).not.toBe("destructive");
+    expect(screen.queryByRole("button", { name: /close page/i })).toBeNull();
+  });
+
+  it("explains the outcome in one body sentence", () => {
+    renderAtState(<DeviceDenied />, "/device/denied");
+    expect(
+      screen.getByText(
+        "This device will not be connected to your account. If you clicked by mistake, go back to the device and start authorization again.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("gives a primary link back to /device to enter a new code", () => {
+    renderAtState(<DeviceDenied />, "/device/denied");
+    expect(
+      screen
+        .getByRole("link", { name: "Enter a new code" })
+        .getAttribute("href"),
+    ).toBe("/device");
+  });
+
+  it("gives a text link to the console", () => {
+    renderAtState(<DeviceDenied />, "/device/denied");
+    expect(
+      screen
+        .getByRole("link", { name: "Go to the console" })
+        .getAttribute("href"),
+    ).toBe("/overview");
   });
 
   // spec「失败路径」：「这一屏是中性收尾，不使用 destructive 色。」
@@ -161,11 +187,10 @@ describe("DeviceDenied", () => {
     expect(painted).toEqual([]);
   });
 
-  it("closes the page on click", () => {
+  it("never calls window.close", () => {
     const closeSpy = vi.spyOn(window, "close").mockImplementation(() => {});
     renderAtState(<DeviceDenied />, "/device/denied");
-    screen.getByRole("button", { name: /close page/i }).click();
-    expect(closeSpy).toHaveBeenCalled();
+    expect(closeSpy).not.toHaveBeenCalled();
     closeSpy.mockRestore();
   });
 });
