@@ -56,7 +56,6 @@ type ownedCall struct{ userID, deviceID int64 }
 type renameCall struct {
 	userID, deviceID int64
 	displayName      string
-	pending          *device_svc.PendingInfo
 }
 
 func (s *stubDeviceSvc) Authorize(_ context.Context, in device_svc.AuthorizeInput) (*device_svc.AuthorizeOutput, error) {
