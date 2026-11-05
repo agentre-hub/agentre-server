@@ -38,17 +38,17 @@ import {
   setLocalPathOnMachine,
 } from "@/lib/projectLocalPath";
 import { fetchDevices } from "@/lib/devices";
-import { errorMessage } from "@/lib/projectErrors";
+import { projectFailureText } from "@/lib/projectErrors";
 import type { DisposableProjectFsPort } from "@/lib/projectFsPort";
 
 /**
- * REST 那一路的失败：**分类交 `unknown`，把服务端那句业务文案原样带上**。
+ * REST 那一路的失败：**分类交 `unknown`，message 由前端 i18n 给**。
  *
- * 服务端的业务码自带 i18n 文案（「该 Agent 已经是这个项目的成员」），它比任何前端
- * 编的兜底都具体。包的规则正好是「`unknown` 那一档显示宿主给的 message」，两边对上。
+ * 服务端的 `ApiError.message` 恒为中文，不进界面：认得的业务码说 i18n 文案，其余落到
+ * 通用兜底句。包的规则是「`unknown` 那一档显示宿主给的 message」，两边对上。
  */
 function restFailure(err: unknown): ProjectWriteFailure {
-  return { kind: "unknown", message: errorMessage(err, "") };
+  return { kind: "unknown", message: projectFailureText(err) };
 }
 
 async function rest(run: () => Promise<unknown>): Promise<ProjectWriteOutcome> {

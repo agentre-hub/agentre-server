@@ -11,6 +11,9 @@
     "signedOut": "登录已过期，请重新登录。",
     "denied": "你没有权限做这件事。"
   },
+  "projectError": {
+    "fallback": "操作没有完成，请重试。"
+  },
   "failure": {
     "network": "{{what}}，网络好像断了。",
     "unreachable": "{{what}}，到 {{machine}} 的连接没走通。",

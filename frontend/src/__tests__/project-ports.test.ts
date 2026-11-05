@@ -31,6 +31,7 @@ vi.mock("@/lib/relayTicket", () => ({
   })),
 }));
 
+import i18n from "@/i18n";
 import { ApiError } from "@/lib/api";
 import { RelayError } from "@/lib/relayClient";
 
@@ -243,7 +244,7 @@ describe("本站的项目 ports", () => {
     });
   });
 
-  it("改字段失败：服务端自带文案的业务码原样透出，分类交 unknown", async () => {
+  it("改字段失败：未知业务码不透出服务端中文 msg，落到前端兜底句，分类交 unknown", async () => {
     restMocks.updateProject.mockRejectedValue(
       new ApiError(1001, "同级下已经有一个叫 Atlas 的项目", 400),
     );
@@ -252,9 +253,20 @@ describe("本站的项目 ports", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.failure.kind).toBe("unknown");
-    expect(outcome.failure.message).toContain(
-      "同级下已经有一个叫 Atlas 的项目",
+    expect(outcome.failure.message).toBe(
+      i18n.t("common.projectError.fallback"),
     );
+    expect(outcome.failure.message).not.toContain("Atlas");
+  });
+
+  it("改字段失败：已知码（未登录 30004）说 i18n 文案而不是服务端 msg", async () => {
+    restMocks.updateProject.mockRejectedValue(
+      new ApiError(30004, "会话已失效", 401),
+    );
+    const ports = createProjectSettingsPorts(createProjectFsPort());
+    const outcome = await ports.updateFields("p1", { name: "Atlas" });
+    if (outcome.ok) throw new Error("expected failure");
+    expect(outcome.failure.message).toBe(i18n.t("common.apiError.signedOut"));
   });
 
   it("机器清单：agentred 与桌面端各自的可写性由这里说出来", async () => {
@@ -527,13 +539,15 @@ describe("本站的项目 ports", () => {
     });
   });
 
-  it("删除：失败时业务文案原样透出", async () => {
+  it("删除：失败时不透出服务端 msg，落到兜底句", async () => {
     restMocks.deleteProject.mockRejectedValue(
       new ApiError(1002, "还有活跃会话", 409),
     );
     const outcome = await createProjectDeletePorts().deleteProject("p1");
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
-    expect(outcome.failure.message).toContain("还有活跃会话");
+    expect(outcome.failure.message).toBe(
+      i18n.t("common.projectError.fallback"),
+    );
   });
 });

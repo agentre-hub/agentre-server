@@ -11,6 +11,9 @@
     "signedOut": "Your session has expired. Sign in again.",
     "denied": "You don't have permission to do this."
   },
+  "projectError": {
+    "fallback": "That did not go through. Please try again."
+  },
   "failure": {
     "network": "{{what}} — the network seems to be down.",
     "unreachable": "{{what}} — the connection to {{machine}} didn't go through.",
