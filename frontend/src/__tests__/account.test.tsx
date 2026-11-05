@@ -210,7 +210,11 @@ describe("Account page: a card that fails to load says so and offers a way back"
   });
 
   it("an ApiError with a Chinese msg never reaches the English card: known code gets i18n copy, unknown gets the fallback", async () => {
-    let passkeyError: ApiError = new ApiError(30004, "会话已失效，请重新登录", 401);
+    let passkeyError: ApiError = new ApiError(
+      30004,
+      "会话已失效，请重新登录",
+      401,
+    );
     mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
       if (path === "/v1/auth/me") return ME;
       if (path === "/v1/auth/sessions") return SESSIONS;
