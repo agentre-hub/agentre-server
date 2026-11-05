@@ -16,6 +16,7 @@
  * 入口、停用行不出「打开」。
  */
 import {
+  ErrCodeInternal,
   ErrCodePortForwardInvalidTarget,
   rpcMethods,
 } from "@agentre-hub/agentre-wire";
@@ -476,7 +477,7 @@ describe("设备卡的端口转发小节", () => {
 
     expect(
       await within(card).findByText(
-        "this deployment does not offer port forwarding right now",
+        "This deployment can't offer port forwarding right now.",
       ),
     ).toBeTruthy();
     // 这不是「设备够不着」：新增入口还在，行上「打开」也还在——不是离线态。
@@ -615,8 +616,97 @@ describe("设备卡的端口转发小节", () => {
     });
     expect(
       await within(card).findByText(
-        "this deployment does not offer port forwarding right now",
+        "This deployment can't offer port forwarding right now.",
       ),
     ).toBeTruthy();
+    expect(card.textContent?.includes("does not offer port forwarding")).toBe(
+      false,
+    );
+  });
+});
+
+const GO_TEXT = "portforward: dial tcp 127.0.0.1:3000: connect: boom-go-text";
+
+describe("端口转发的失败不摆 Go 原话", () => {
+  function failRelay(on: unknown) {
+    const ok = relay.request.getMockImplementation()!;
+    relay.request.mockImplementation(
+      async (method: unknown, ...rest: unknown[]) => {
+        if (method === on) throw new RelayError(ErrCodeInternal, GO_TEXT);
+        return ok(method, ...rest);
+      },
+    );
+  }
+
+  it("Given 列举端口映射失败, Then 说读取失败的那一句 + 重试，重试重新列举；原文只进复制诊断信息", async () => {
+    failRelay(rpcMethods.portForwardList);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    installClipboard(writeText);
+    const card = await expandDevice("study-nuc");
+
+    const alert = await within(card).findByRole("alert");
+    expect(alert.textContent).toContain(
+      "Couldn't read this device's port mappings.",
+    );
+    expect(card.textContent).not.toContain("boom-go-text");
+
+    const before = relay.request.mock.calls.filter(
+      ([m]) => m === rpcMethods.portForwardList,
+    ).length;
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      const after = relay.request.mock.calls.filter(
+        ([m]) => m === rpcMethods.portForwardList,
+      ).length;
+      expect(after).toBe(before + 1);
+    });
+
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Copy diagnostics" }),
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(String(writeText.mock.calls[0][0])).toContain("boom-go-text");
+  });
+
+  it("Given 切换开关失败, Then 说这次操作没成，不含原文，诊断可复制", async () => {
+    failRelay(rpcMethods.portForwardSetEnabled);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    installClipboard(writeText);
+    const card = await expandDevice("study-nuc");
+    const row = (await waitFor(() => {
+      const [first] = rowsIn(card);
+      expect(first).toBeTruthy();
+      return first;
+    })) as HTMLElement;
+
+    fireEvent.click(within(row).getByRole("switch"));
+
+    const alert = await within(card).findByRole("alert");
+    expect(alert.textContent).toContain("That didn't go through.");
+    expect(card.textContent).not.toContain("boom-go-text");
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Copy diagnostics" }),
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(String(writeText.mock.calls[0][0])).toContain("boom-go-text");
+  });
+
+  it("Given 新增映射失败(未知), Then 表单里是分类的一句话，不含原文", async () => {
+    listed = [];
+    failRelay(rpcMethods.portForwardCreate);
+    const card = await expandDevice("study-nuc");
+
+    fireEvent.click(
+      await within(card).findByRole("button", { name: "Add mapping" }),
+    );
+    fireEvent.change(within(card).getByLabelText("Target"), {
+      target: { value: "3000" },
+    });
+    fireEvent.click(within(card).getByRole("button", { name: "Add" }));
+
+    expect(
+      await within(card).findByText("Adding the mapping didn't work."),
+    ).toBeTruthy();
+    expect(card.textContent).not.toContain("boom-go-text");
   });
 });

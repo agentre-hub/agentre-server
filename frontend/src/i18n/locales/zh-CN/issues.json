@@ -12,5 +12,6 @@
     "modelAria": "选择模型",
     "pickerTitle": "在哪台机器上跑",
     "followAgent": "跟随 Agent 绑定"
-  }
+  },
+  "loadFailedWhat": "看板没取回来"
 }

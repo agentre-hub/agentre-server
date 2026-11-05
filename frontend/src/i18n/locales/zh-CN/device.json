@@ -178,14 +178,16 @@
     }
   },
   "portForward": {
-    "loadFailed": "读不到这台设备的端口映射。{{message}}",
-    "actionFailed": "这次操作没成。{{message}}",
     "open": "在新标签页打开",
     "copyDone": "地址已复制",
     "copyFailed": "复制地址失败",
     "add": {
       "targetTaken": "这台设备上这个目标已经有映射了。",
-      "failed": "新增映射失败。{{message}}"
-    }
+      "failedWhat": "新增映射没成"
+    },
+    "loadFailedWhat": "读不到这台设备的端口映射",
+    "actionFailedWhat": "这次操作没成",
+    "openFailedWhat": "没能打开转发地址",
+    "linkUnavailable": "这个部署此刻提供不了端口转发。"
   }
 }

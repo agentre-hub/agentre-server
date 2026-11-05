@@ -14,9 +14,12 @@
 import * as React from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 import {
   BoardFilterBar,
+  Alert,
+  AlertDescription,
   Button,
   Dialog,
   DialogContent,
@@ -26,6 +29,7 @@ import {
   IssueBoard,
   LabelManagerPanel,
   ProjectScopePicker,
+  copyTextWithToast,
   initialTaskFormValue,
   type BoardAgentOption,
   type BoardCardProject,
@@ -42,6 +46,7 @@ import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
+import { describeFailure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
 import type { OrgBackendItem } from "@/pages/org/types";
@@ -49,6 +54,55 @@ import type { OrgBackendItem } from "@/pages/org/types";
 import { TaskFormDialog } from "./issues/TaskFormDialog";
 import { useBoard } from "./issues/useBoard";
 import { useBoardDrag } from "./issues/useBoardDrag";
+
+/**
+ * 看板读失败的提示：分类给的一句话 + 出口 + 「复制诊断信息」。原文只走剪贴板，不上屏
+ * （规格 2026-11-05-ux-polish W5）。
+ */
+function BoardFailure({
+  cause,
+  onRetry,
+}: {
+  cause: unknown;
+  onRetry: () => void;
+}) {
+  const { t } = useTranslation();
+  const failure = describeFailure(cause, {
+    t,
+    what: t("issues.loadFailedWhat"),
+  });
+  return (
+    <Alert variant="destructive" className="shrink-0 rounded-none px-5 py-2">
+      <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3 text-2xs">
+        <span className="min-w-0">{failure.message}</span>
+        <span className="flex-1" />
+        <span className="flex shrink-0 flex-wrap items-center gap-1.5">
+          {failure.exit === "retry" && (
+            <Button size="xs" variant="outline" onClick={onRetry}>
+              {t("common.retry")}
+            </Button>
+          )}
+          {failure.exit === "devices" && (
+            <Button asChild size="xs" variant="outline">
+              <Link to="/devices">{t("common.failure.goDevices")}</Link>
+            </Button>
+          )}
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() =>
+              void copyTextWithToast(failure.diagnostic, {
+                successTitle: t("common.failure.copied"),
+              })
+            }
+          >
+            {t("common.failure.copyDiagnostics")}
+          </Button>
+        </span>
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 const STAGES: BoardStage[] = ["todo", "doing", "review", "done"];
 
@@ -238,12 +292,7 @@ export default function Issues() {
         </div>
 
         {board.error ? (
-          <p
-            role="alert"
-            className="shrink-0 bg-destructive-soft px-5 py-2 text-2xs text-destructive-text"
-          >
-            {board.error}
-          </p>
+          <BoardFailure cause={board.error.cause} onRetry={board.retry} />
         ) : null}
 
         <IssueBoard

@@ -178,14 +178,16 @@
     }
   },
   "portForward": {
-    "loadFailed": "Could not load port mappings. {{message}}",
-    "actionFailed": "That did not work. {{message}}",
     "open": "Open in a new tab",
     "copyDone": "Address copied",
     "copyFailed": "Could not copy the address",
     "add": {
       "targetTaken": "This target already has a mapping on this device.",
-      "failed": "Could not add the mapping. {{message}}"
-    }
+      "failedWhat": "Adding the mapping didn't work"
+    },
+    "loadFailedWhat": "Couldn't read this device's port mappings",
+    "actionFailedWhat": "That didn't go through",
+    "openFailedWhat": "Couldn't open the forwarded address",
+    "linkUnavailable": "This deployment can't offer port forwarding right now."
   }
 }

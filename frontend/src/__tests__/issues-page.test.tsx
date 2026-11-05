@@ -14,7 +14,7 @@ import {
   within,
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
@@ -22,6 +22,7 @@ import App from "@/App";
 import i18n from "@/i18n";
 import { api } from "@/lib/api";
 import Issues from "@/pages/Issues";
+import { installClipboard, restoreClipboardEnv } from "@/test/clipboard";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -170,6 +171,10 @@ function open(trigger: HTMLElement) {
   fireEvent.click(trigger);
 }
 
+afterEach(() => {
+  restoreClipboardEnv();
+});
+
 beforeEach(async () => {
   mockedApi.mockReset();
   await i18n.changeLanguage("en");
@@ -204,6 +209,63 @@ describe("/issues renders the shared board family", () => {
     render(<App />, { wrapper: ThemeProvider });
 
     expect(await screen.findByTestId("issue-board")).toBeTruthy();
+  });
+});
+
+describe("看板取不回来时", () => {
+  it("说得出事实的一句话，带重试；原文不上屏，只进复制诊断信息", async () => {
+    mockBoardApi();
+    const ok = mockedApi.getMockImplementation()!;
+    let failBoard = true;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (failBoard && String(path).startsWith("/v1/workspace/issues?")) {
+        throw new Error("rpc error: code = Internal desc = boom-go-text");
+      }
+      return ok(path, init);
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/issues"]}>
+        <Issues />
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("The board didn't load.");
+    expect(alert.textContent).not.toContain("boom-go-text");
+
+    // 重试重新打看板读端点，成功后提示消失、看板出现。
+    failBoard = false;
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await screen.findByTestId("issue-board");
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  });
+
+  it("复制诊断信息复制的是原文", async () => {
+    mockBoardApi();
+    const ok = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (String(path).startsWith("/v1/workspace/issues?")) {
+        throw new Error("rpc error: code = Internal desc = boom-go-text");
+      }
+      return ok(path, init);
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    installClipboard(writeText);
+
+    render(
+      <MemoryRouter initialEntries={["/issues"]}>
+        <Issues />
+      </MemoryRouter>,
+      { wrapper: ThemeProvider },
+    );
+    const alert = await screen.findByRole("alert");
+    fireEvent.click(
+      within(alert).getByRole("button", { name: "Copy diagnostics" }),
+    );
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(String(writeText.mock.calls[0][0])).toContain("boom-go-text");
   });
 });
 
