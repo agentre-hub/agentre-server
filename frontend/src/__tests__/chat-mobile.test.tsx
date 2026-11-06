@@ -704,24 +704,21 @@ describe("移动端新对话草稿：一层头部", () => {
     ).toBeNull();
   });
 
-  it("还没有标题时叫「新对话」，副行是 Agent · 机器", async () => {
+  it("还没有标题时页头是收件人：返回 · 名字，副行是 在线 · 新对话", async () => {
     const band = await openMobileDraft();
 
-    expect(
-      within(band).getByRole("heading", { name: "New chat" }),
-    ).toBeTruthy();
     expect(within(band).getByRole("button", { name: "Back" })).toBeTruthy();
-    const meta = within(band).getByTestId("draft-header-meta");
-    expect(
-      within(meta).getByTestId("draft-header-meta-agent").textContent,
-    ).toContain("后端 Agent");
-    const machine = await within(meta).findByTestId(
-      "draft-header-meta-machine",
+    expect(within(band).getByTestId("draft-recipient").textContent).toContain(
+      "后端 Agent",
     );
-    expect(machine.textContent).toContain("书房小主机");
-    for (const part of meta.querySelectorAll("[data-part]")) {
-      expect(part.className).not.toMatch(/hidden/);
-    }
+    await waitFor(() =>
+      expect(
+        within(band).getByTestId("draft-header-meta").textContent,
+      ).toContain("Online"),
+    );
+    expect(within(band).getByTestId("draft-header-meta").textContent).toContain(
+      "New chat",
+    );
   });
 });
 
