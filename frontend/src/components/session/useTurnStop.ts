@@ -2,6 +2,18 @@ import { rpcMethods } from "@agentre-hub/agentre-wire";
 import { useCallback, useState, type RefObject } from "react";
 
 import type { RelayClient } from "@/lib/relayClient";
+import type { SessionViewStatus } from "@/lib/sessionView";
+
+/**
+ * 停止请求此刻发不发得出去 —— 头部与输入框两颗停止键共用这一条判据。
+ *
+ * 只有连上了才发得出去：其余各档里真实客户端会当场以「连接未就绪」拒掉，按下去
+ * 等于空按。头部那颗据此禁用；共享输入框没有「停止键禁用」这一档，据此不摆停止键
+ * （提交位还给发送）。
+ */
+export function stopReachable(status: SessionViewStatus): boolean {
+  return status === "connected";
+}
 
 export interface UseTurnStopOptions {
   clientRef: RefObject<RelayClient | null>;
@@ -17,6 +29,13 @@ export interface TurnStop {
   stop: () => Promise<void>;
   /** 已经点了停止、这一轮还没结束。头部与输入框两颗停止键共用这一格。 */
   stopping: boolean;
+  /**
+   * 这一轮的终态到了：放下停止中。宿主在终态通知里调用。
+   *
+   * 不能只靠 `running` 的翻转：补齐把一页通知在同一个同步循环里应用，「这一轮结束」
+   * 与「下一轮开始」并进同一次渲染时 running 一次都不落回 false，停止中会挂到新一轮上。
+   */
+  turnEnded: () => void;
 }
 
 /**
@@ -38,7 +57,8 @@ export function useTurnStop({
   const [stoppingSid, setStoppingSid] = useState<string | null>(null);
 
   // 回合结束（running 落回 false）就放下停止中：下一轮开起来时不能还挂着上一轮的。
-  // 在渲染期按上一次的 running 调整，而不是在 effect 里补一帧。
+  // 在渲染期按上一次的 running 调整，而不是在 effect 里补一帧。终态通知另由
+  // turnEnded 直接放下（见那里）；这一条兜的是换会话的复位与 attach 快照那几条路。
   const [prevRunning, setPrevRunning] = useState(running);
   if (running !== prevRunning) {
     setPrevRunning(running);
@@ -61,5 +81,7 @@ export function useTurnStop({
     }
   }, [clientRef, originRef, sid]);
 
-  return { stop, stopping: running && stoppingSid === sid };
+  const turnEnded = useCallback(() => setStoppingSid(null), []);
+
+  return { stop, stopping: running && stoppingSid === sid, turnEnded };
 }

@@ -21,6 +21,7 @@ import {
 
 import AppShell from "@/components/AppShell";
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
+import { stopReachable } from "@/components/session/useTurnStop";
 import { useIsMobile } from "@/components/use-is-mobile";
 import {
   formatRelativeTime,
@@ -473,7 +474,7 @@ export default function SessionDetailHeader({
                 variant="outline"
                 size="sm"
                 data-testid="session-detail-stop"
-                disabled={stopping || status !== "connected"}
+                disabled={stopping || !stopReachable(status)}
                 onClick={onStop}
               >
                 <Square aria-hidden="true" className="size-3.5" />

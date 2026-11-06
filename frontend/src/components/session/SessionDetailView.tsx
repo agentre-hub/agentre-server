@@ -94,7 +94,7 @@ import {
 } from "@/components/session/useSessionCLIModel";
 import { useLiveTurnTiming } from "@/components/session/useLiveTurnTiming";
 import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
-import { useTurnStop } from "@/components/session/useTurnStop";
+import { stopReachable, useTurnStop } from "@/components/session/useTurnStop";
 import {
   useSessionSend,
   useTurnActivity,
@@ -681,6 +681,9 @@ export default function SessionDetailView({
       // 而不是凭一个缺字段把它当成别人的。
       if (frame.conversationId && frame.conversationId !== sid) return;
       turn.markTurnActive(false);
+      // 停止中跟着这一轮的终态放下，不等 running 翻转（补齐里终态与下一轮开始可能
+      // 并进同一次渲染，见 useTurnStop 的 turnEnded）。
+      turnStop.turnEnded();
       // 收表:终态帧自带的那几个数是 agentred 就着自己扇出的事件流量的,比浏览器
       // 这边隔着一条中继数出来的准,接下来画的是它们。
       liveTurn.endTurn();
@@ -1935,7 +1938,8 @@ export default function SessionDetailView({
         void send.sendMessage({ text, images });
       }}
       running={running}
-      onStop={onStop}
+      // 连不上时停止请求发不出去：头部那颗禁用，这一颗（共享输入框没有禁用档）不摆。
+      onStop={stopReachable(status) ? onStop : undefined}
       stopping={turnStop.stopping}
       permissionMode={effectivePermissionMode}
       permissionModeMeta={permissionModeMeta}

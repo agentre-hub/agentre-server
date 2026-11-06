@@ -9422,6 +9422,34 @@ describe("会话详情页:停止进入输入框提交位", () => {
     expect(composerStop()).toBeNull();
   });
 
+  // 补齐（relayClient.pullUntilCaughtUp）把一页通知在同一个同步循环里逐条应用，
+  // React 把它们并成一次渲染。停止请求已经应答、终态帧还没到时断线，断线期间被停下
+  // 的那一轮结束、紧接着又开了一轮（别的端发了一句）：重连补齐的这一页里「这一轮
+  // 结束」与「下一轮开始」挨在一起，`running` 一次都没落回 false。停止中只看
+  // running 的翻转就会一直挂到新一轮上 —— 两颗停止键都禁着，新的那一轮停不下来。
+  it("Given 停止已应答 When 同一批里这一轮结束、下一轮又开始 Then 新一轮的停止键不挂着停止中", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    fireEvent.click(composerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    await act(async () => {});
+    expect(headerStop()?.disabled).toBe(true);
+
+    act(() => {
+      capturedOpts.onRunResultDone?.({ conversationId: "42" } as never);
+      capturedOpts.onTurnStarted?.({ conversationId: "42" } as never);
+    });
+
+    await waitFor(() => expect(headerStop()?.disabled).toBe(false));
+    const stop = composerStop() as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+    expect(stop.getAttribute("aria-label")).toBe("Stop");
+  });
+
   it("Given 点了头部的停止 Then 输入框的停止键也进入停止中", async () => {
     wireRunningSession();
     renderPage();
@@ -9498,6 +9526,69 @@ describe("会话详情页:停止进入输入框提交位", () => {
 
     expect(headerStop()).toBeTruthy();
     expect(composerStop()).toBeTruthy();
+  });
+
+  // 两颗停止键按同一条规矩判「按不按得动」：中继没连上时停止请求根本发不出去
+  // （真实客户端当场以「连接未就绪」拒掉）。头部那颗一直是禁用；输入框那颗此前照样
+  // 可按、Esc 照样触发，按下去闪一下「停止中」就回来，这一轮照跑 —— 一次静默的空按。
+  // 共享输入框没有「停止键禁用」这一档，所以连不上时它不摆停止键（提交位还给发送，
+  // 重连期间发送本来就会排队）。
+  it("Given 一轮在跑 When 中继掉到重连中 Then 输入框不摆停止键、Esc 不发停止，头部那颗禁用；连回来复原", async () => {
+    wireRunningSession();
+    let relayState: RelayState = "connected";
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState,
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    // 每次新造元素：同一个元素引用交回 rerender 会被 React 直接跳过。
+    const tree = () => (
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    const view = render(tree());
+    const moveRelayTo = async (next: RelayState) => {
+      relayState = next;
+      await act(async () => {
+        view.rerender(tree());
+      });
+    };
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    await moveRelayTo("reconnecting");
+
+    expect(headerStop()?.disabled).toBe(true);
+    expect(composerStop()).toBeNull();
+    const editable = composerEditable();
+    editable.focus();
+    pressEscape(editable);
+    await act(async () => {});
+    expect(abortCalls()).toHaveLength(0);
+
+    await moveRelayTo("connected");
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+    expect(headerStop()?.disabled).toBe(false);
   });
 });
 
