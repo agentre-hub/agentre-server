@@ -1874,6 +1874,7 @@ export default function SessionDetailView({
   const scrollBody = (
     <SessionScrollBody
       cwd={summary?.cwd}
+      backendType={summary?.backendType}
       scrollRef={scrollRef}
       contentRef={scrollback.contentRef}
       onScroll={scrollback.onScroll}

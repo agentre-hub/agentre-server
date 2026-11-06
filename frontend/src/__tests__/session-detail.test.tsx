@@ -9486,3 +9486,89 @@ describe("会话详情页:上游正在重试", () => {
     await waitFor(() => expect(retryCard()).toBeNull());
   });
 });
+
+/*
+ * 失败卡的登录命令（2026-11-06 console-shared-ui-adoption A3）。
+ * 共享失败卡认出「登录过期」后，只有拿到会话的 backendType 才给得出对应 CLI 的
+ * 登录命令卡；控制台没有重新生成 RPC，所以不传 onRetryTurn / onRerun。
+ */
+describe("会话详情：登录过期失败卡", () => {
+  function mountFailed(backendType: string) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, backendType }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "你好" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "error",
+          message: "Failed to authenticate. API Error: 403",
+        },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done" },
+        seq: 3,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("claudecode：登录过期的失败轮次给出 claude /login 命令卡", async () => {
+    mountFailed("claudecode");
+    expect(await screen.findByText("claude /login")).toBeTruthy();
+  });
+
+  it("codex：给出 codex login 命令卡", async () => {
+    mountFailed("codex");
+    expect(await screen.findByText("codex login")).toBeTruthy();
+  });
+
+  it("没有已知登录命令的后端：只有失败事实，不出命令卡", async () => {
+    mountFailed("hermes");
+    await screen.findByText("你好");
+    await waitFor(() =>
+      expect(screen.getByText(/登录已过期|login has expired/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText("claude /login")).toBeNull();
+    expect(screen.queryByText("codex login")).toBeNull();
+  });
+});
