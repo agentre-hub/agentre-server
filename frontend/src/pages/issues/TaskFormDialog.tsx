@@ -50,6 +50,8 @@ export interface TaskFormDialogProps {
   engineBackends: EngineBackend[];
   catalog: PickerProvider[];
   ids: SyncIdRegistry;
+  /** 手机：任务是整屏页而不是居中弹窗（规格「看板 · 任务详情」）。 */
+  page?: boolean;
   onClose: () => void;
   onSave: (value: TaskFormValue) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
@@ -81,6 +83,7 @@ function TaskForm({
   engineBackends,
   catalog,
   ids,
+  page = false,
   onClose,
   onSave,
   onDelete,
@@ -144,42 +147,57 @@ function TaskForm({
     [boundBackend, catalog, selectedBackend, target],
   );
 
+  const shell = (
+    <TaskFormShell
+      page={page}
+      initial={value}
+      projects={projects}
+      labels={labels}
+      agentOptions={agentOptions}
+      execTargetPort={execTargetPort}
+      modelTargetPort={modelTargetPort}
+      onClose={onClose}
+      onDelete={value.id ? () => void onDelete(value.id as number) : undefined}
+      // 没有 Agent 时机器与模型两颗 pill 是禁用态、端口根本没被调用，此刻的
+      // exec 只可能是换 Agent 之前留下的：跟着存下去等于记了一件从没成立过
+      // 的事（读回来时那张卡说「没人负责，但它跑在那台机器上」）。
+      onSave={(next) =>
+        onSave(
+          next.assigneeAgentId
+            ? {
+                ...next,
+                agentBackendId: ids.idOf(exec.agentBackendSyncId) || null,
+                llmProviderKey: exec.llmProviderKey,
+                llmModelKey: exec.llmModelKey,
+              }
+            : {
+                ...next,
+                agentBackendId: null,
+                llmProviderKey: "",
+                llmModelKey: "",
+              },
+        )
+      }
+      className={page ? undefined : "max-h-[75vh]"}
+    />
+  );
+
+  // 整屏页：dvh 高的固定层，键盘升起时可视高度收缩，贴底的 pill 行随之停在键盘上方。
+  // 关闭语义与弹窗一致（onClose，不另问未保存）。
+  if (page) {
+    return (
+      <div
+        data-testid="issues-task-page"
+        className="fixed inset-x-0 top-0 z-50 h-dvh bg-sheet pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]"
+      >
+        {shell}
+      </div>
+    );
+  }
   return (
     <Dialog open onOpenChange={(open) => (open ? undefined : onClose())}>
       <DialogContent className="max-w-[640px] p-0" showCloseButton={false}>
-        <TaskFormShell
-          initial={value}
-          projects={projects}
-          labels={labels}
-          agentOptions={agentOptions}
-          execTargetPort={execTargetPort}
-          modelTargetPort={modelTargetPort}
-          onClose={onClose}
-          onDelete={
-            value.id ? () => void onDelete(value.id as number) : undefined
-          }
-          // 没有 Agent 时机器与模型两颗 pill 是禁用态、端口根本没被调用，此刻的
-          // exec 只可能是换 Agent 之前留下的：跟着存下去等于记了一件从没成立过
-          // 的事（读回来时那张卡说「没人负责，但它跑在那台机器上」）。
-          onSave={(next) =>
-            onSave(
-              next.assigneeAgentId
-                ? {
-                    ...next,
-                    agentBackendId: ids.idOf(exec.agentBackendSyncId) || null,
-                    llmProviderKey: exec.llmProviderKey,
-                    llmModelKey: exec.llmModelKey,
-                  }
-                : {
-                    ...next,
-                    agentBackendId: null,
-                    llmProviderKey: "",
-                    llmModelKey: "",
-                  },
-            )
-          }
-          className="max-h-[75vh]"
-        />
+        {shell}
       </DialogContent>
     </Dialog>
   );
