@@ -39,7 +39,7 @@
       "action": "Go to devices"
     },
     "error": {
-      "alert": "Could not load your stats. Please try again.",
+      "loadFailedWhat": "Could not load your stats",
       "retry": "Retry",
       "title": "Stats are unavailable right now",
       "body": "Device status and your conversations are not affected.",

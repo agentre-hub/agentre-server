@@ -34,7 +34,7 @@ import type {
   NewConvProject,
 } from "@/components/session/newconv/types";
 import { useAliveEffect } from "@/hooks/use-alive-effect";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import { fetchDevices, runsSessions, type DeviceItem } from "@/lib/devices";
 import type { DispatchedSession } from "@/lib/dispatch";
 import { readRecentAgents } from "@/lib/recentAgents";
 import ResolvedSessionDetail, {
@@ -81,6 +81,7 @@ import {
   sessionAddress,
 } from "@/lib/sessionAddress";
 import { type SessionFilter } from "@/lib/sessionView";
+import { MOBILE_TAB_BAR_CLEARANCE } from "@/lib/mobileLayout";
 
 /**
  * 「对话」页 = 这一端**唯一**的会话索引（规格 2026-08-17 决策 1），行来自账号镜像
@@ -598,6 +599,15 @@ export default function Chat() {
       setSearchParams(params, { replace: true });
     },
     [axis, searchParams, setSearchParams, forgetResolved],
+  );
+
+  /**
+   * 空态的次要出口看账号下有没有在线机器。读外壳已取的 `devices`，不用
+   * `reach.onlineMachines`——那一份只在机器轴上有值，别的轴上恒为空。
+   */
+  const hasOnlineMachine = useMemo(
+    () => devices.some((d) => runsSessions(d) && d.online),
+    [devices],
   );
 
   /**
@@ -1212,12 +1222,21 @@ export default function Chat() {
                     <Button size="lg" onClick={openCompose}>
                       {t("chat.startFirst")}
                     </Button>
-                    <Link
-                      to="/devices"
-                      className="text-sm font-medium text-primary-text hover:underline"
-                    >
-                      {t("chat.findMore")}
-                    </Link>
+                    {hasOnlineMachine ? (
+                      <Button
+                        variant="ghost"
+                        onClick={() => setAxis("machine")}
+                      >
+                        {t("chat.findOnMachine")}
+                      </Button>
+                    ) : (
+                      <Link
+                        to="/devices"
+                        className="text-sm font-medium text-primary-text hover:underline"
+                      >
+                        {t("chat.addDevice")}
+                      </Link>
+                    )}
                   </>
                 }
               />
@@ -1232,7 +1251,8 @@ export default function Chat() {
               <button
                 type="button"
                 aria-label={t("chat.startNew")}
-                className="fixed bottom-24 right-4 z-30 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-overlay"
+                className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-overlay"
+                style={{ bottom: MOBILE_TAB_BAR_CLEARANCE }}
                 onClick={openCompose}
               >
                 <PenLine className="size-5" aria-hidden="true" />
@@ -1304,12 +1324,22 @@ export default function Chat() {
                       <Button size="lg" onClick={openCompose}>
                         {t(accountEmpty ? "chat.startFirst" : "chat.startNew")}
                       </Button>
-                      <Link
-                        to="/devices"
-                        className="text-[11.5px] text-muted-foreground hover:underline"
-                      >
-                        {t("chat.findMore")}
-                      </Link>
+                      {hasOnlineMachine ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setAxis("machine")}
+                        >
+                          {t("chat.findOnMachine")}
+                        </Button>
+                      ) : (
+                        <Link
+                          to="/devices"
+                          className="text-[11.5px] text-muted-foreground hover:underline"
+                        >
+                          {t("chat.addDevice")}
+                        </Link>
+                      )}
                     </>
                   }
                 />

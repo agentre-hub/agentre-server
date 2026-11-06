@@ -7,6 +7,7 @@ import {
   AlertDescription,
   Button,
   cn,
+  countPendingBelow,
   countTurnsAfterMessage,
   TranscriptJumpControl,
   TranscriptSkeleton,
@@ -79,6 +80,8 @@ export interface SessionScrollBodyProps {
   localFingerprint: string | undefined;
   /** 这条会话此刻在那台机器上的工作目录（中继上的实况摘要给的）。 */
   cwd?: string;
+  /** 会话的后端类型；失败卡凭它给出对应 CLI 的登录命令。 */
+  backendType?: string;
   agentName: string | undefined;
   /** 转录行那一档头像。在 JSX 之外算好，见 SessionDetailView 的 rowAvatar。 */
   agentAvatar: ReactNode;
@@ -126,6 +129,7 @@ export default function SessionScrollBody({
   messages,
   localFingerprint,
   cwd,
+  backendType,
   agentName,
   agentAvatar,
   agentPending,
@@ -151,6 +155,18 @@ export default function SessionScrollBody({
    */
   const turnsBelow = useMemo(
     () => (atBottom ? 0 : countTurnsAfterMessage(messages, bottomVisibleId)),
+    [atBottom, bottomVisibleId, messages],
+  );
+
+  /**
+   * 视口下沿之后还压着几项没回答的审批 / 提问 —— 药丸据此写「N 项待处理」。
+   *
+   * 计数归共享包（`countPendingBelow`，桌面端同一份）。「已决」读的是转录块本身：
+   * 那台机器回的 `*_resolved` / `*_answered` 帧由投影器回填到同一张卡上，答掉之后
+   * 这里自然减下去。与 turnsBelow 同一条：贴底时药丸不渲染，不必白算。
+   */
+  const pendingBelow = useMemo(
+    () => (atBottom ? 0 : countPendingBelow(messages, bottomVisibleId)),
     [atBottom, bottomVisibleId, messages],
   );
 
@@ -306,6 +322,7 @@ export default function SessionScrollBody({
               // 实况 cwd：转录里的文件路径靠它判「在不在 cwd 内」，判得出来才出
               // 预览入口（给不出时链接维持死文本）。
               cwd={cwd}
+              backendType={backendType}
               // 共享包的转录消息仍带一格旧身份 sessionId:number，本宿主一律填同一个
               // 常量（见 transcriptFrame）。对话的真身份是上面那条 sid。
               sessionId={TranscriptSessionId}
@@ -406,6 +423,7 @@ export default function SessionScrollBody({
           <TranscriptJumpControl
             onJump={jumpToBottom}
             turnsBelow={turnsBelow}
+            pendingBelow={pendingBelow}
           />
         )}
       </div>

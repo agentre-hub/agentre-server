@@ -36,7 +36,14 @@ const mockedApi = vi.mocked(api);
 /** 提交后跳到哪里：用真的 router 位置作答，不去 mock useNavigate。 */
 function LocationProbe() {
   const loc = useLocation();
-  return <span data-testid="location">{`${loc.pathname}${loc.search}`}</span>;
+  return (
+    <>
+      <span data-testid="location">{`${loc.pathname}${loc.search}`}</span>
+      <span data-testid="location-state">
+        {JSON.stringify(loc.state ?? null)}
+      </span>
+    </>
+  );
 }
 
 /**
@@ -362,6 +369,19 @@ describe("add-device guide · steps and commands", () => {
     expect(screen.getByTestId("location").textContent).toBe(
       "/device?user_code=A4F-7Q2",
     );
+  });
+
+  it("提交时带上 router state {from:'add-guide', method}，method 是第 1 步所选方式", () => {
+    renderGuide();
+    fireEvent.click(screen.getByRole("button", { name: "Docker container" }));
+    openCodeStep();
+
+    typeCode("a4f7q2");
+    submitCode();
+
+    expect(
+      JSON.parse(screen.getByTestId("location-state").textContent ?? "null"),
+    ).toEqual({ from: "add-guide", method: "docker" });
   });
 
   it("不足六位：就地报错、不跳转，已填的字符一个都不丢", () => {

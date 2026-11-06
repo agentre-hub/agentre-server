@@ -77,6 +77,16 @@ describe("UserMenu", () => {
     expect(screen.getAllByRole("menuitem")).toHaveLength(3);
   });
 
+  // W7b：紧凑触发器视觉仍是 px-1 py-1 + 28px 头像（36px），伪元素每边外扩 4px 到 44×44。
+  it("紧凑头像触发器的命中区是 44×44：视觉 padding 不变，伪元素每边外扩 4px", () => {
+    renderMenu(true);
+    const trigger = screen.getByRole("button", { name: "Account menu" });
+    expect(trigger.className).toContain("px-1 py-1");
+    expect(trigger.className).toContain("relative");
+    expect(trigger.className).toContain("before:absolute");
+    expect(trigger.className).toContain("before:-inset-1");
+  });
+
   it("Escape 关闭已打开的菜单", () => {
     renderMenu();
     const trigger = screen.getByRole("button", { name: "Account menu" });

@@ -307,7 +307,7 @@ function DeviceExpandDetail({
       // 没提过，用户只会去刷新整页。
       <CardLoadError
         error={state.error}
-        fallback={t("device.manage.detailLoadError")}
+        what={t("device.manage.detailLoadFailedWhat")}
         onRetry={onRetry}
       />
     );
@@ -922,10 +922,10 @@ export default function Devices() {
   // 它取代的正是原来那句孤立的「还没有任何设备。」。
   const guideOpen = listKnown && (noDevices || guideRequested);
 
-  /** 列表取数失败给用户看的那一句：服务端带了文案就用它，没有才落到兜底键。 */
+  /** 列表取数失败给用户看的那一句：经分类说原因，原文不上屏（规格 W5）。 */
   const listErrorMessage =
     loadError !== null
-      ? loadErrorText(loadError, t, "device.manage.loadError")
+      ? loadErrorText(loadError, t, "device.manage.loadFailedWhat")
       : null;
 
   return (

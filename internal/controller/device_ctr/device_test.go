@@ -46,6 +46,8 @@ type stubDeviceSvc struct {
 	dbErr error
 	// renameCalls 记下每次改名的入参——端点必须把账号、设备、名字原样转发下去。
 	renameCalls []renameCall
+	// pending 非空时 Pending 返回它，否则保持 unimplemented。
+	pending *device_svc.PendingInfo
 }
 
 type ownedCall struct{ userID, deviceID int64 }
@@ -64,6 +66,9 @@ func (s *stubDeviceSvc) Authorize(_ context.Context, in device_svc.AuthorizeInpu
 	}, nil
 }
 func (s *stubDeviceSvc) Pending(context.Context, string) (*device_svc.PendingInfo, error) {
+	if s.pending != nil {
+		return s.pending, nil
+	}
 	return nil, errors.New("unimplemented")
 }
 func (s *stubDeviceSvc) Approve(context.Context, string, int64) (string, error) {
@@ -209,6 +214,28 @@ func deviceListBody() []device_svc.DeviceView {
 		{ID: 1, Name: "nuc-01", Kind: device_entity.KindAgentred, Platform: "linux", Version: "0.4.0", Status: 1},
 		{ID: 2, Name: "laptop", Kind: device_entity.KindDesktop, Platform: "darwin", Version: "0.3.0", Status: 1},
 	}
+}
+
+// pending 响应必须带上设备自报的主机名，确认屏据此写明「哪台机器」。
+func TestPending_ReturnsName(t *testing.T) {
+	stub := &stubDeviceSvc{pending: &device_svc.PendingInfo{
+		DeviceKind: "agentred", Platform: "linux", Version: "0.4.0", ExpiresIn: 300, Name: "nuc-01",
+	}}
+	server := newDeviceTestServer(t, stub)
+
+	cookie, _ := newSessionCookie(t, 7)
+
+	resp := doRequest(t, http.MethodGet, server.URL+"/v1/oauth/device/pending?user_code=A4F-7Q2", cookie.Value, "", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var body struct {
+		Data struct {
+			Name       string `json:"name"`
+			DeviceKind string `json:"device_kind"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	require.Equal(t, "nuc-01", body.Data.Name)
+	require.Equal(t, "agentred", body.Data.DeviceKind)
 }
 
 // 浏览器 session 登录的 web 端必须能列出账号下的设备。

@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { CircleAlert, ShieldCheck } from "lucide-react";
 import { Button, Alert, AlertDescription } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
@@ -9,6 +9,7 @@ import DeviceApproval, { type PendingInfo } from "@/components/DeviceApproval";
 import PageTitle from "@/components/PageTitle";
 import { api, ApiError } from "@/lib/api";
 import { DEVICE_FLOW_CODES } from "@/lib/errorCodes";
+import { describeFailure } from "@/lib/describeFailure";
 import { parseUserCode, toChars } from "@/lib/userCode";
 
 /**
@@ -29,6 +30,10 @@ function isExpired(e: unknown): boolean {
 export default function Device() {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const { state: routeState } = useLocation();
+  const guideState = routeState as { from?: unknown; method?: unknown } | null;
+  const fromGuide = guideState?.from === "add-guide";
+  const guideMethod = guideState?.method === "docker" ? "docker" : "native";
   const params = new URLSearchParams(window.location.search);
   const initial = params.get("user_code") ?? "";
   const [code, setCode] = useState(initial);
@@ -47,11 +52,13 @@ export default function Device() {
   }, [initial]);
 
   /**
-   * 只有 ApiError 才带得出服务端说法；其余（离线、代理返回非 JSON）同样是
-   * 失败，必须说出来——静默吞掉会让用户对着一个没反应的按钮点第二次。
+   * 失败经 `describeFailure` 分类说原因（规格 W5）：离线说断网、登录失效说登录失效，
+   * 认不出的只说「操作没有完成」。必须说出来——静默吞掉会让用户对着一个没反应的
+   * 按钮点第二次。原文与恒为中文的 `ApiError.message` 都不上屏。
    */
   function failureText(e: unknown): string {
-    return e instanceof ApiError ? e.message : t("device.approve.actionError");
+    return describeFailure(e, { t, what: t("device.approve.actionFailedWhat") })
+      .message;
   }
 
   async function loadPending(uc: string) {
@@ -111,6 +118,9 @@ export default function Device() {
           kind: info.device_kind,
           platform: info.platform,
           version: info.version,
+          name: info.name,
+          // 从添加设备引导来的，把所选安装方式带给成功页出第 3 步命令。
+          ...(fromGuide ? { from: "add-guide", method: guideMethod } : {}),
         },
       });
     } catch (e) {

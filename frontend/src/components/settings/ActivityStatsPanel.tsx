@@ -130,7 +130,7 @@ export function ActivityStatsPanel() {
     const message = loadErrorText(
       loadError,
       t,
-      "settings.privacy.activity.loadError",
+      "settings.privacy.activity.loadFailedWhat",
     );
     return (
       // 一行摆开：文案 + 弹簧 + 重试（与总览统计那条同形）。读不到之后唯一的出路

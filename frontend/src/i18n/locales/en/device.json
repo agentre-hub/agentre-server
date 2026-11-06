@@ -20,10 +20,12 @@
     "expirySeconds": "This authorization request expires in {{seconds}}s",
     "expiryAnnounce": "This authorization request expires in about {{minutes}} minutes",
     "expiryAnnounceSoon": "This authorization request expires in less than a minute",
+    "connecting": "Connecting to {{account}}",
+    "switchAccount": "Switch account",
     "allow": "Allow access",
     "deny": "Deny",
     "fineprint": "You can revoke this device's access at any time under Console → Devices.",
-    "actionError": "That did not go through. Please try again."
+    "actionFailedWhat": "That did not go through"
   },
   "kind": {
     "desktop": "Desktop",
@@ -33,11 +35,15 @@
   "success": {
     "title": "Device authorized",
     "body": "You can close this page now and continue on the device.",
-    "manageDevices": "Go to the console to manage devices"
+    "manageDevices": "Go to the console to manage devices",
+    "serviceBody": "One last step: register the background service on that machine so it stays online.",
+    "finish": "Done, go to devices"
   },
   "deniedScreen": {
     "title": "Authorization denied",
-    "close": "Close page"
+    "body": "This device will not be connected to your account. If you clicked by mistake, go back to the device and start authorization again.",
+    "retry": "Enter a new code",
+    "console": "Go to the console"
   },
   "expiredScreen": {
     "title": "Authorization request expired",
@@ -91,6 +97,7 @@
   },
   "manage": {
     "loadError": "Could not load your devices. Please try again.",
+    "loadFailedWhat": "Could not load your devices",
     "statusOnline": "Online",
     "statusOffline": "Offline",
     "statusRevoked": "Revoked",
@@ -107,7 +114,7 @@
     "notConfigured": "Not configured",
     "noProjectsReported": "No projects reported from this device yet.",
     "noRunnableAgents": "No agents can run on this device yet.",
-    "detailLoadError": "Could not load this device's details.",
+    "detailLoadFailedWhat": "Could not load this device's details",
     "sessions": "Conversations",
     "sessionCount": "{{count}} conversations",
     "sessionWaiting": "{{count}} waiting for you",
@@ -172,14 +179,16 @@
     }
   },
   "portForward": {
-    "loadFailed": "Could not load port mappings. {{message}}",
-    "actionFailed": "That did not work. {{message}}",
     "open": "Open in a new tab",
     "copyDone": "Address copied",
     "copyFailed": "Could not copy the address",
     "add": {
       "targetTaken": "This target already has a mapping on this device.",
-      "failed": "Could not add the mapping. {{message}}"
-    }
+      "failedWhat": "Adding the mapping didn't work"
+    },
+    "loadFailedWhat": "Couldn't read this device's port mappings",
+    "actionFailedWhat": "That didn't go through",
+    "openFailedWhat": "Couldn't open the forwarded address",
+    "linkUnavailable": "This deployment can't offer port forwarding right now."
   }
 }

@@ -1471,7 +1471,7 @@ describe("会话详情页", () => {
     // 仍然钉住的是这条用例真正要证的事:实时事件到达后页面**主动重拉了一次**
     // pendingWaiters（fake runtime 阻塞在审批上,run 不会结束,onRunResultDone
     // 那条刷新路径到不了）。
-    expect(await screen.findByText("Allow Once")).toBeTruthy();
+    expect(await screen.findByText("Allow")).toBeTruthy();
     expect(waitersCall).toBeGreaterThanOrEqual(2);
   });
 
@@ -1497,7 +1497,7 @@ describe("会话详情页", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
@@ -1538,7 +1538,7 @@ describe("会话详情页", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     // 不报错、不静默:就地说明已被处理。
     expect(
@@ -1583,7 +1583,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     await waitFor(() => {
       expect(
@@ -1623,7 +1623,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     await waitFor(() => expect(errored).toHaveBeenCalled());
     expect(errored.mock.calls[0][0]).toBe(
@@ -1673,7 +1673,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     expect(
       await screen.findByText("This request has already been handled."),
     ).toBeTruthy();
@@ -1689,7 +1689,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // tp-2 是**经事件流**来的，所以转录里就有它的可交互审批卡，panelWaiters 把它
     // 从面板里滤掉了（同一条待决不重复显示两处）。tp-1 只在 waiters 里出现过、
     // 事件流里没有，所以上面那一步仍然走的是面板 —— 这正是面板不能删的理由。
-    expect(await screen.findByText("Allow Once")).toBeTruthy();
+    expect(await screen.findByText("Allow")).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByText("This request has already been handled.")).toBe(
         null,
@@ -2007,7 +2007,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       } as never);
     });
 
-    expect(screen.queryByText(/Agent call failed: boom/)).toBeNull();
+    expect(screen.queryByText("This turn did not finish.")).toBeNull();
     const said = (text: string) =>
       (screen.getByTestId("session-detail-transcript").textContent ?? "").split(
         text,
@@ -4268,7 +4268,10 @@ describe("会话详情：历史来自 server 镜像", () => {
     expect(said("我先看一下")).toBe(1);
     // 收场只有一份：一张错误卡，一轮 meta。重放不得把 error 落成第二条助手消息
     // （落上去就会多一张卡），也不得把本轮耗时再盖到另一条消息上（8.3s 会出现两遍）。
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
     expect(said("8.3s")).toBe(1);
   });
 
@@ -4382,7 +4385,10 @@ describe("会话详情：历史来自 server 镜像", () => {
       (transcript.textContent ?? "").split(text).length - 1;
     expect(said("看看目录")).toBe(1);
     expect(said("我先看一下")).toBe(1);
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
     // 本轮 meta 也只画一遍：8.3s 正是那一轮终态帧带来的耗时。
     expect(said("8.3s")).toBe(1);
   });
@@ -4537,7 +4543,10 @@ describe("会话详情：历史来自 server 镜像", () => {
     expect(said("我先看一下")).toBe(1);
     expect(said("再问一句")).toBe(1);
     // 终态只收场一次：一张错误卡。多出来那张就是实时那批合成帧被镜像让位规则漏掉。
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
   });
 
   /*
@@ -4654,7 +4663,10 @@ describe("会话详情：历史来自 server 镜像", () => {
       (transcript.textContent ?? "").split(text).length - 1;
     expect(said("看看目录")).toBe(1);
     expect(said("我先看一下")).toBe(1);
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
     expect(said("8.3s")).toBe(1);
   });
 });
@@ -6241,14 +6253,14 @@ describe("会话详情：输入框", () => {
     expect(screen.queryByTestId("composer-context-meter")).toBeNull();
   });
 
-  it("底栏说得出按什么键发出去（与桌面端逐字一致）", async () => {
+  it("输入框由共享包出，且不再叠默认的「↵ Send」提示行", async () => {
     stubComposer();
     renderComposer();
 
     await screen.findByText("开场白");
-    // 这句现在由共享包出（两端同一份文案），所以按可见文字断言而不是找宿主
-    // 自己的 testid —— 包不该知道某个宿主的测试怎么写。
-    expect(screen.getByText("↵ Send · ⇧↵ New line")).toBeTruthy();
+    // 共享包已撤掉默认的发送键提示；输入框本身用宿主的稳定 testid 定位。
+    expect(screen.getByTestId("session-detail-composer")).toBeTruthy();
+    expect(screen.queryByText("↵ Send · ⇧↵ New line")).toBeNull();
   });
 
   it("以 ! 开头的一行不会被静默吞掉：如实说这一端执行不了，文本还留在框里", async () => {
@@ -8502,6 +8514,89 @@ describe("会话详情：回到底部", () => {
       "Back to bottom",
     );
   });
+
+  /**
+   * 「N 项待处理」（spec 2026-11-06 A4）。视口下沿之后压着没回答的审批时，药丸要
+   * 说出来 —— 否则用户往回翻着看，那台机器上的工具一直阻塞着却没人知道。
+   *
+   * 计数归共享包（`countPendingBelow`，桌面端同一份）。答掉之后的「已决」不是本地
+   * 乐观改的：点下去只发 RPC，那台机器回一帧 `tool_permission_resolved`，投影器把
+   * 同一张卡回填成已决 —— 这条用例走的就是这条生产路径。
+   */
+  it("Given 往回翻、下沿之后压着一张没回答的审批, When 药丸浮出, Then 写出 1 项待处理；答掉（回执帧到达）之后那一段收走", async () => {
+    stubJump();
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      const frames = [
+        { kind: "user_message", text: "第一问" },
+        { kind: "text_delta", text: "第一答" },
+        { kind: "user_message", text: "第二问" },
+        {
+          kind: "tool_permission_request",
+          requestId: "tp-below",
+          toolName: "Bash",
+          input: { command: "ls" },
+        },
+      ];
+      frames.forEach((event, i) => {
+        capturedOpts.onEvent?.({ conversationId: "42", event, seq: i + 1 });
+      });
+    });
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    // 贴底：待决就在眼前，不摆药丸。
+    expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
+
+    const scroll = scrollerWithHeights();
+    // 下沿落在第 2 行之后 —— 第一轮的助手回复；审批卡在第 4 行。
+    expect(layoutRows(scroll, 2)).toBe(4);
+    act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+
+    expect(screen.getByTestId("transcript-jump-pending").textContent).toBe(
+      "1 pending",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
+        ),
+      ).toBe(true),
+    );
+    act(() => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "tool_permission_resolved",
+          requestId: "tp-below",
+          allowed: true,
+        },
+        seq: 5,
+      });
+    });
+
+    // 药丸还在（用户仍在往回翻），只是「待处理」那一段没了。
+    expect(screen.getByTestId("transcript-jump-control")).toBeTruthy();
+    expect(screen.queryByTestId("transcript-jump-pending")).toBeNull();
+  });
 });
 /**
  * 发出去之后回到底部（2026-09-02）。
@@ -9200,6 +9295,303 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
   });
 });
 
+// ── 停止进入输入框提交位（规格 2026-11-06 A2）──────────────────────────────
+//
+// 一轮在跑时，输入框的提交位就是停止键（草稿为空只有它；有草稿时与发送并排），
+// 焦点在空输入框里按 Esc 也停。头部那颗「停止」与它共用一份停止中状态：点下去之后
+// 两颗都禁用，一直到这一轮真的结束 —— 停止请求返回不等于这一轮已经停了。
+describe("会话详情页:停止进入输入框提交位", () => {
+  /**
+   * 一条正在跑的会话。`capabilities` 是执行端对 runtime.capabilities 的应答（给
+   * Error 就是这一问失败）；`abort` 决定停止请求怎么回。
+   */
+  function wireRunningSession(
+    opts: {
+      capabilities?: unknown;
+      abort?: () => Promise<unknown>;
+    } = {},
+  ) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, lifecycleState: "running" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeCapabilities) {
+        const answer = opts.capabilities ?? {
+          capabilities: [{ name: "abort", enabled: true }],
+          permissionMode: { allowedModes: [] },
+        };
+        if (answer instanceof Error) throw answer;
+        return answer;
+      }
+      if (method === rpcMethods.runtimeAbort)
+        return opts.abort ? opts.abort() : {};
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  const composer = () => screen.getByTestId("session-detail-composer");
+  /** 输入框提交位上的停止键（按可读名找：它没有也不需要测试标识）。 */
+  const composerStop = () =>
+    within(composer()).queryByRole("button", { name: /^(Stop|Stopping…)$/ });
+  const headerStop = () =>
+    screen.queryByTestId("session-detail-stop") as HTMLButtonElement | null;
+  const abortCalls = () =>
+    fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeAbort,
+    );
+  const capabilitiesAsked = () =>
+    waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeCapabilities,
+        ),
+      ).toBe(true),
+    );
+
+  /**
+   * 真实的 Esc 按键（带 keyCode 27）。只带 key 的合成事件 keyCode 是 0，
+   * ProseMirror 自己的按键处理认不出它 —— 那样坏掉的 Esc 也会测成绿的。
+   */
+  function pressEscape(target: Element) {
+    return fireEvent.keyDown(target, {
+      key: "Escape",
+      code: "Escape",
+      keyCode: 27,
+      which: 27,
+    });
+  }
+
+  it("Given 一轮在跑且草稿为空 Then 提交位是停止键，点下去发 runtime.abort", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+    // 草稿为空时提交位只有停止键：没有可发的东西，就不摆一颗灰着的发送键。
+    expect(within(composer()).queryByTestId("session-detail-send")).toBeNull();
+
+    fireEvent.click(composerStop()!);
+
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    expect(abortCalls()[0][1]).toMatchObject({ conversationId: "42" });
+  });
+
+  it("Given 一轮在跑且有草稿 Then 停止与发送并排", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await typeInComposer("再补一句");
+
+    await waitFor(() =>
+      expect(
+        within(composer()).getByTestId("session-detail-send"),
+      ).toBeTruthy(),
+    );
+    expect(composerStop()).toBeTruthy();
+  });
+
+  it("Given 点了停止 Then 头部与输入框两颗停止键都禁用，直到这一轮结束", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    fireEvent.click(composerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    // 停止请求已经回来了，但这一轮的终态帧还没到：仍在停。
+    await act(async () => {});
+
+    expect(headerStop()?.disabled).toBe(true);
+    const stopping = composerStop() as HTMLButtonElement;
+    expect(stopping.disabled).toBe(true);
+    expect(stopping.getAttribute("aria-label")).toBe("Stopping…");
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    // 回合结束：两颗都收起（没有什么可停了），停止中也随之落下。
+    await waitFor(() => expect(headerStop()).toBeNull());
+    expect(composerStop()).toBeNull();
+  });
+
+  // 补齐（relayClient.pullUntilCaughtUp）把一页通知在同一个同步循环里逐条应用，
+  // React 把它们并成一次渲染。停止请求已经应答、终态帧还没到时断线，断线期间被停下
+  // 的那一轮结束、紧接着又开了一轮（别的端发了一句）：重连补齐的这一页里「这一轮
+  // 结束」与「下一轮开始」挨在一起，`running` 一次都没落回 false。停止中只看
+  // running 的翻转就会一直挂到新一轮上 —— 两颗停止键都禁着，新的那一轮停不下来。
+  it("Given 停止已应答 When 同一批里这一轮结束、下一轮又开始 Then 新一轮的停止键不挂着停止中", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    fireEvent.click(composerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    await act(async () => {});
+    expect(headerStop()?.disabled).toBe(true);
+
+    act(() => {
+      capturedOpts.onRunResultDone?.({ conversationId: "42" } as never);
+      capturedOpts.onTurnStarted?.({ conversationId: "42" } as never);
+    });
+
+    await waitFor(() => expect(headerStop()?.disabled).toBe(false));
+    const stop = composerStop() as HTMLButtonElement;
+    expect(stop.disabled).toBe(false);
+    expect(stop.getAttribute("aria-label")).toBe("Stop");
+  });
+
+  it("Given 点了头部的停止 Then 输入框的停止键也进入停止中", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(headerStop()).toBeTruthy());
+
+    fireEvent.click(headerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    await act(async () => {});
+
+    expect(headerStop()?.disabled).toBe(true);
+    expect((composerStop() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("Given 停止请求失败 Then 两颗停止键都放开，可以再按", async () => {
+    wireRunningSession({
+      abort: async () => {
+        throw new Error("abort failed");
+      },
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    fireEvent.click(composerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+
+    await waitFor(() =>
+      expect((composerStop() as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(headerStop()?.disabled).toBe(false);
+  });
+
+  it("Given 焦点在空输入框 When 按下 Esc Then 停下这一轮", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    const editable = composerEditable();
+    editable.focus();
+    pressEscape(editable);
+
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+  });
+
+  it("Given 执行端明确报告不支持 abort Then 头部与输入框都不摆停止键", async () => {
+    wireRunningSession({
+      capabilities: {
+        capabilities: [{ name: "abort", enabled: false }],
+        permissionMode: { allowedModes: [] },
+      },
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await capabilitiesAsked();
+    await act(async () => {});
+
+    expect(headerStop()).toBeNull();
+    expect(composerStop()).toBeNull();
+  });
+
+  it("Given 能力问不到 Then 维持今天的样子：两处都摆停止键", async () => {
+    wireRunningSession({ capabilities: new Error("machine says no") });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await capabilitiesAsked();
+    await act(async () => {});
+
+    expect(headerStop()).toBeTruthy();
+    expect(composerStop()).toBeTruthy();
+  });
+
+  // 两颗停止键按同一条规矩判「按不按得动」：中继没连上时停止请求根本发不出去
+  // （真实客户端当场以「连接未就绪」拒掉）。头部那颗一直是禁用；输入框那颗此前照样
+  // 可按、Esc 照样触发，按下去闪一下「停止中」就回来，这一轮照跑 —— 一次静默的空按。
+  // 共享输入框没有「停止键禁用」这一档，所以连不上时它不摆停止键（提交位还给发送，
+  // 重连期间发送本来就会排队）。
+  it("Given 一轮在跑 When 中继掉到重连中 Then 输入框不摆停止键、Esc 不发停止，头部那颗禁用；连回来复原", async () => {
+    wireRunningSession();
+    let relayState: RelayState = "connected";
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState,
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    // 每次新造元素：同一个元素引用交回 rerender 会被 React 直接跳过。
+    const tree = () => (
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="42" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>
+    );
+    const view = render(tree());
+    const moveRelayTo = async (next: RelayState) => {
+      relayState = next;
+      await act(async () => {
+        view.rerender(tree());
+      });
+    };
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    await moveRelayTo("reconnecting");
+
+    expect(headerStop()?.disabled).toBe(true);
+    expect(composerStop()).toBeNull();
+    const editable = composerEditable();
+    editable.focus();
+    pressEscape(editable);
+    await act(async () => {});
+    expect(abortCalls()).toHaveLength(0);
+
+    await moveRelayTo("connected");
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+    expect(headerStop()?.disabled).toBe(false);
+  });
+});
+
 /**
  * 上游重试：整条路从中继事件走到那张卡。
  *
@@ -9237,7 +9629,7 @@ describe("会话详情页:上游正在重试", () => {
     });
   }
 
-  const retryCard = () => screen.queryByRole("status", { name: "Retrying" });
+  const retryCard = () => screen.queryByTestId("transcript-retry");
 
   function pushEvent(event: Record<string, unknown>, seq: number) {
     act(() =>
@@ -9257,12 +9649,100 @@ describe("会话详情页:上游正在重试", () => {
     );
 
     await waitFor(() => expect(retryCard()).toBeTruthy());
-    expect(screen.getByText("Retrying 2/3")).toBeTruthy();
+    expect(
+      screen.getByText("Upstream connection lost, retrying 2/3"),
+    ).toBeTruthy();
 
     // 模型开口 = 这一次重试成功了。卡不撤，用户会对着「正在重试」读下面正常长
     // 出来的回答。
     pushEvent({ kind: "text_delta", text: "连上了，继续" }, 4);
 
     await waitFor(() => expect(retryCard()).toBeNull());
+  });
+});
+
+/*
+ * 失败卡的登录命令（2026-11-06 console-shared-ui-adoption A3）。
+ * 共享失败卡认出「登录过期」后，只有拿到会话的 backendType 才给得出对应 CLI 的
+ * 登录命令卡；控制台没有重新生成 RPC，所以不传 onRetryTurn / onRerun。
+ */
+describe("会话详情：登录过期失败卡", () => {
+  function mountFailed(backendType: string) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/workspace/agents") return { agents: [] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, backendType }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "user_message", text: "你好" },
+        seq: 1,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "error",
+          message: "Failed to authenticate. API Error: 403",
+        },
+        seq: 2,
+      });
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: { kind: "done" },
+        seq: 3,
+      });
+    });
+    mockUseRelay.mockImplementation((_fp, opts) => {
+      capturedOpts = opts ?? {};
+      return {
+        client: fakeClient as never,
+        relayState: "connected",
+        relayTicket: {
+          peerFingerprint: "fp-web",
+          clientName: "Browser",
+          accessToken: "t",
+          expiresAt: Date.now() + 120_000,
+        },
+        relayTicketError: null,
+        handshakeRejection: null,
+        reconnect: vi.fn(),
+      };
+    });
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("claudecode：登录过期的失败轮次给出 claude /login 命令卡", async () => {
+    mountFailed("claudecode");
+    expect(await screen.findByText("claude /login")).toBeTruthy();
+  });
+
+  it("codex：给出 codex login 命令卡", async () => {
+    mountFailed("codex");
+    expect(await screen.findByText("codex login")).toBeTruthy();
+  });
+
+  it("没有已知登录命令的后端：只有失败事实，不出命令卡", async () => {
+    mountFailed("hermes");
+    await screen.findByText("你好");
+    await waitFor(() =>
+      expect(screen.getByText(/登录已过期|login has expired/i)).toBeTruthy(),
+    );
+    expect(screen.queryByText("claude /login")).toBeNull();
+    expect(screen.queryByText("codex login")).toBeNull();
   });
 });

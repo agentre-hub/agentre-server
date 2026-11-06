@@ -488,7 +488,7 @@ describe("add-device entry and guide expansion", () => {
     renderDevices();
 
     expect(
-      await screen.findByText("Could not load your devices. Please try again."),
+      await screen.findByText("Could not load your devices."),
     ).toBeTruthy();
     expect(screen.queryByTestId("add-device-guide")).toBeNull();
     expect(screen.queryByRole("button", { name: "Add device" })).toBeNull();

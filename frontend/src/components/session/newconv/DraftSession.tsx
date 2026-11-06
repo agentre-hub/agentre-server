@@ -12,7 +12,6 @@ import {
   type TranscriptMessage,
   Alert,
   AlertDescription,
-  Button,
   SessionHeaderAgentMark,
   SessionHeaderBand,
   cn,
@@ -23,6 +22,8 @@ import { ArrowLeft, ChevronDown, FolderTree, Monitor } from "lucide-react";
 import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
+import { FailureNotice } from "@/components/console";
+import type { ComposerSubmitHandle } from "@/components/session/SessionComposer";
 import { SessionMachineMeta } from "@/components/session/SessionDetailHeader";
 import SessionModelControl from "@/components/session/SessionModelControl";
 import SessionReasoningEffortControl from "@/components/session/SessionReasoningEffortControl";
@@ -34,15 +35,14 @@ import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useRelayChannel } from "@/hooks/use-relay";
 import { machineTarget } from "@/lib/relayTarget";
-import { ApiError } from "@/lib/api";
 import {
   decodePermissionModeMeta,
   decodeReasoningEffortSupport,
   type PermissionModeMeta,
 } from "@/lib/backendCapabilities";
+import { describeFailure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import {
-  DispatchRunError,
   deriveTitle,
   dispatchNewConversation,
   fetchDispatchPlan,
@@ -118,6 +118,8 @@ export function DraftSession({
    * `ChatComposer` 自己的 state 里 —— 用它还原,派发失败之后字回来了、图没回来。
    */
   const composerRef = useRef<ChatComposerHandle>(null);
+  /** 「重试」= 把输入框里此刻那一句再按一次发送（见 ComposerSubmitHandle）。 */
+  const submitRef = useRef<ComposerSubmitHandle>(null);
   const [projectSyncId, setProjectSyncId] = useState<string | null>(
     initialProjectSyncId ?? null,
   );
@@ -137,7 +139,14 @@ export function DraftSession({
     text: string;
     images?: ChatImageAttachment[];
   } | null>(null);
-  const [startError, setStartError] = useState<unknown>(null);
+  /**
+   * 上一次没交出去的那一条：错误本身与当时派去的机器。那句话与图已经还回输入框，
+   * 「重试」交的是输入框里此刻的内容（用户可能改过），不另留一份旧副本。
+   */
+  const [startFailure, setStartFailure] = useState<{
+    error: unknown;
+    machine: string;
+  } | null>(null);
 
   /**
    * 这份计划是**给哪一组入参算的**。三个入参任意一个变了都要重算：换项目会让某些
@@ -328,7 +337,7 @@ export function DraftSession({
       // 下去一声不吭什么都没发生。会话详情那条路早就是这么判的。
       if (!readyPlan?.chosen || (!message.trim() && !images?.length)) return;
       setStarting({ text: message, images });
-      setStartError(null);
+      setStartFailure(null);
       try {
         const ticket = await ensureRelayTicket();
         const out = await dispatchNewConversation({
@@ -368,7 +377,7 @@ export function DraftSession({
         recordRecentTarget("chat", "", effectiveTarget);
         onStarted(out);
       } catch (e: unknown) {
-        setStartError(e);
+        setStartFailure({ error: e, machine: readyPlan.chosen.device_name });
         // 提交那一刻输入框已经被清空，而占位是唯一显示这句话的地方——占位一撤，
         // 用户写的整段话就没了。把它还回输入框：字留在屏幕上、改得动、重发只差
         // 一次回车。SendFailureBubble 立的就是这条规矩。
@@ -537,19 +546,13 @@ export function DraftSession({
             // 唯一的出路是去换个项目再换回来。
             <Alert variant="destructive" data-testid="draft-plan-failed">
               <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-                <span className="min-w-0">
-                  {planError instanceof ApiError
-                    ? planError.message
-                    : t("device.manage.loadError")}
-                </span>
-                <span className="flex-1" />
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setPlanAttempt((k) => k + 1)}
-                >
-                  {t("common.retry")}
-                </Button>
+                <FailureNotice
+                  failure={describeFailure(planError, {
+                    t,
+                    what: t("chat.planFailedWhat"),
+                  })}
+                  onRetry={() => setPlanAttempt((k) => k + 1)}
+                />
               </AlertDescription>
             </Alert>
           ) : !plan ? (
@@ -600,6 +603,7 @@ export function DraftSession({
               cwd={chosen?.cwd}
               agents={mentionAgents}
               composerHandleRef={composerRef}
+              submitHandleRef={submitRef}
               // 停用认的是**这一组入参**算出来的那一份：重算期间上面那些控件照旧
               // 摆着（它们是同一台机器的答案），但这一句要发到哪儿还没定。
               disabled={!readyPlan?.chosen || starting !== null}
@@ -656,20 +660,24 @@ export function DraftSession({
               }
               onSubmit={(text, images) => void start(text, images)}
               feedback={
-                startError ? (
-                  <p
+                startFailure ? (
+                  <div
                     role="alert"
-                    className="px-3.5 py-1.5 text-xs text-destructive-text"
+                    className="flex flex-wrap items-center gap-2 px-3.5 py-1.5 text-xs text-destructive-text"
                   >
-                    {startError instanceof DispatchRunError
-                      ? t("chat.remoteStartFailed", {
-                          machine: chosen?.device_name ?? "",
-                          error: startError.message,
-                        })
-                      : t("chat.connectFailed", {
-                          machine: chosen?.device_name ?? "",
-                        })}
-                  </p>
+                    <FailureNotice
+                      failure={describeFailure(startFailure.error, {
+                        t,
+                        what: t("chat.startFailedWhat", {
+                          machine: startFailure.machine,
+                        }),
+                        machine: startFailure.machine,
+                      })}
+                      // 计划重算期间这一条还交不出去（start 会原地返回），按钮先停着。
+                      retryDisabled={!readyPlan?.chosen}
+                      onRetry={() => submitRef.current?.submit()}
+                    />
+                  </div>
                 ) : undefined
               }
             />

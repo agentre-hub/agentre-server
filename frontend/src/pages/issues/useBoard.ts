@@ -29,7 +29,6 @@ import {
   type BoardCardProjectResolver,
   type SyncIdRegistry,
 } from "@/lib/boardWire";
-import { errorText } from "@/lib/errorText";
 import {
   createIssue,
   createIssueLabel,
@@ -63,7 +62,13 @@ export interface UseBoardResult {
   taskOf: (id: number) => TaskFormValue | null;
   /** 取数在途；旧结果留在原地，只有输入框右端那枚转圈在动。 */
   searching: boolean;
-  error: string | null;
+  /**
+   * 看板读失败时的**原始**错误（含类名与码），由页面交给 `describeFailure` 分类后
+   * 再说给人听；这里不拼文案，也不把 `err.message` 当成可展示的东西。
+   */
+  error: { cause: unknown } | null;
+  /** 重新读一次看板（出错提示上的「重试」）；在途期间 `searching` 为真。 */
+  retry: () => void;
   /** 落库走 lib/issues 的 moveIssue：wire 那层是 issue,这一层对外一律 task。 */
   moveTask: (id: number, stage: BoardStage, afterId: number) => Promise<void>;
   saveTask: (value: TaskFormValue) => Promise<void>;
@@ -77,7 +82,7 @@ export function useBoard(
   projectOf: BoardCardProjectResolver,
 ): UseBoardResult {
   const [response, setResponse] = React.useState(EMPTY_RESPONSE);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<{ cause: unknown } | null>(null);
 
   // 只有最新一次请求可以写状态：连打几个字会让多次取数重叠，先发的那次晚返回时
   // 不能把新结果盖回旧的。
@@ -112,7 +117,7 @@ export function useBoard(
       })
       .catch((cause: unknown) => {
         if (request !== requestRef.current) return;
-        setError(errorText(cause, String(cause)));
+        setError({ cause });
         // 失败也要放行那枚转圈，否则它会一直转到下一次输入为止。
         setLoadedKey(key);
       });
@@ -234,6 +239,7 @@ export function useBoard(
     taskOf,
     searching: refreshing || loadedKey !== queryKey,
     error,
+    retry: () => void reload(),
     moveTask,
     saveTask,
     deleteTask,

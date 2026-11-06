@@ -43,5 +43,7 @@ type PendingInfo struct {
 	DeviceKind string
 	Platform   string
 	Version    string
-	ExpiresIn  int
+	// Name 是设备自报的主机名，可为空串；空时由前端回退，服务端不编造。
+	Name      string
+	ExpiresIn int
 }

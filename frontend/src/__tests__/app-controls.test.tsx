@@ -33,6 +33,31 @@ describe("AppControls", () => {
     },
   );
 
+  // W7b：视觉仍是 34px，命中区靠透明伪元素外扩到 44×44（每边 5px），
+  // 不改共享包 ThemeToggle，只在宿主侧的 className 里加。
+  it.each([/Language/i, /Theme/i])(
+    "%s 的命中区是 44×44：34px 视觉尺寸不变，伪元素每边外扩 5px",
+    async (name) => {
+      await i18n.changeLanguage("en");
+      renderControls();
+      const className = screen.getByRole("button", { name }).className;
+      expect(className).toContain("size-[34px]");
+      expect(className).toContain("relative");
+      expect(className).toContain("before:absolute");
+      expect(className).toContain("before:-inset-[5px]");
+    },
+  );
+
+  // 两颗按钮各自外扩 5px，间距至少 10px 才不会让两块命中区重叠。
+  it("横排两颗按钮之间的间距是 10px，命中区不互相重叠", async () => {
+    await i18n.changeLanguage("en");
+    renderControls();
+    expect(
+      screen.getByRole("button", { name: /Language/i }).parentElement
+        ?.className,
+    ).toContain("gap-[10px]");
+  });
+
   // 放到 56px 的收起侧栏底部时，两颗 34px 并排要 72px，放不下：竖着排。
   it("竖排形态把两颗按钮上下叠起来，横排仍是默认", async () => {
     await i18n.changeLanguage("en");

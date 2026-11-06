@@ -216,15 +216,52 @@ describe("设备码输入：代码不存在或已使用（30205）", () => {
   });
 
   it("其余失败（非 30205）仍以 Alert 呈现，不当成代码错误", async () => {
-    mockedApi.mockRejectedValue(new ApiError(30001, "boom", 500));
+    mockedApi.mockRejectedValue(new ApiError(30001, "参数不对", 500));
     renderEntry();
     fireEvent.paste(boxes()[0], {
       clipboardData: { getData: () => "A4F7Q2" },
     });
     submit();
 
-    expect((await screen.findByRole("alert")).textContent).toContain("boom");
+    // 英文界面不显示服务端恒为中文的 msg：未知码落到页面自己的兜底句。
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("That did not go through");
+    expect(alert.textContent).not.toContain("参数不对");
     expect(screen.queryByText(/already been used/i)).toBeNull();
+  });
+
+  it("已知业务码（未登录 30004）在英文界面显示 i18n 文案而不是中文 msg", async () => {
+    mockedApi.mockRejectedValue(new ApiError(30004, "会话已失效", 401));
+    renderEntry();
+    fireEvent.paste(boxes()[0], {
+      clipboardData: { getData: () => "A4F7Q2" },
+    });
+    submit();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "That did not go through — your session has expired. Sign in again.",
+    );
+    expect(alert.textContent).not.toContain("会话已失效");
+  });
+});
+
+describe("设备码输入：失败经分类说事实（规格 W5）", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
+  it("断网时说网络断了，不贴浏览器原话", async () => {
+    mockedApi.mockRejectedValue(new TypeError("Failed to fetch"));
+    renderEntry();
+    fireEvent.paste(boxes()[0], {
+      clipboardData: { getData: () => "A4F7Q2" },
+    });
+    submit();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("the network seems to be down");
+    expect(alert.textContent).not.toContain("Failed to fetch");
   });
 });
 

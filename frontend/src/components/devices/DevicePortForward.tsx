@@ -33,6 +33,8 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { FailureNotice } from "@/components/console";
+import { describeFailure, type Failure } from "@/lib/describeFailure";
 import {
   allocatePortForwardLink,
   byPort,
@@ -44,6 +46,28 @@ import {
   setPortForwardEnabled,
   type PortForwardDeclaration,
 } from "@/lib/portForward";
+
+/**
+ * 端口映射这一块的失败提示：分类给的一句话 + 出口 + 「复制诊断信息」（规格 W5）。
+ * 「重试」只给读取失败（重读一次有意义；动作失败重来要用户自己点那一行）；本组件就在
+ * 设备页里，不再放「去设备页」。
+ */
+function PortForwardFailure({
+  failure,
+  onRetry,
+}: {
+  failure: Failure;
+  onRetry?: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex flex-wrap items-center gap-2 text-xs text-destructive-text"
+    >
+      <FailureNotice failure={failure} onRetry={onRetry} devicesExit={false} />
+    </div>
+  );
+}
 
 export function DevicePortForward({
   deviceId,
@@ -68,10 +92,10 @@ export function DevicePortForward({
   const alive = useRef(true);
 
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
-  const [loadError, setLoadError] = useState("");
+  const [loadFailure, setLoadFailure] = useState<Failure | null>(null);
   const [mappings, setMappings] = useState<PortForwardDeclaration[]>([]);
   const [unreachable, setUnreachable] = useState(false);
-  const [actionError, setActionError] = useState("");
+  const [actionFailure, setActionFailure] = useState<Failure | null>(null);
   /**
    * 分配到的转发地址，按映射 id 缓存。**不**随列举一起重取——列举刷新时，用户刚
    * 复制的那条地址不该跟着消失；而 `/v1/port-forwards/links` 对同一条映射本来就
@@ -115,10 +139,15 @@ export function DevicePortForward({
           setPhase("ready");
           return;
         }
-        setLoadError(failure.message);
+        setLoadFailure(
+          describeFailure(err, {
+            t,
+            what: t("device.portForward.loadFailedWhat"),
+          }),
+        );
         setPhase("error");
       });
-  }, [fingerprint, offline]);
+  }, [fingerprint, offline, t]);
 
   /**
    * 重取**不**退回加载态：`phase` 的初值就是 loading，此后只会走到 ready / error。
@@ -147,9 +176,10 @@ export function DevicePortForward({
         void load();
         return;
       }
-      setActionError(
-        t("device.portForward.actionFailed", {
-          message: failure.message,
+      setActionFailure(
+        describeFailure(err, {
+          t,
+          what: t("device.portForward.actionFailedWhat"),
         }),
       );
     },
@@ -169,11 +199,25 @@ export function DevicePortForward({
         void load();
         return;
       }
-      // `unavailable`（503）与其余未知失败都直接显示服务端给的文案——那句文案本来
-      // 就是给人看的（与账号页 `loadErrorText` 同一条口径），不必在这里另编一份。
-      setActionError(failure.message);
+      // `unavailable`（503）是本站自己的配置问题，说成一句固定的话；其余走统一分类。
+      // 原文都只进诊断。
+      if (failure.kind === "unavailable") {
+        setActionFailure({
+          category: "unknown",
+          exit: "none",
+          message: t("device.portForward.linkUnavailable"),
+          diagnostic: failure.message,
+        });
+        return;
+      }
+      setActionFailure(
+        describeFailure(err, {
+          t,
+          what: t("device.portForward.openFailedWhat"),
+        }),
+      );
     },
-    [load],
+    [load, t],
   );
 
   const replaceRow = useCallback((row: PortForwardDeclaration) => {
@@ -218,7 +262,7 @@ export function DevicePortForward({
    * 地址到手后设置它的 `location`。
    */
   function handleOpen(mapping: PortForwardMappingView) {
-    setActionError("");
+    setActionFailure(null);
     const pending = window.open("", "_blank");
     if (pending) pending.opener = null;
     void (async () => {
@@ -252,7 +296,7 @@ export function DevicePortForward({
    * 留内联「已复制」的地方。
    */
   async function handleCopy(mapping: PortForwardMappingView) {
-    setActionError("");
+    setActionFailure(null);
     try {
       const url = await ensureAddress(mapping);
       if (!alive.current) return;
@@ -270,7 +314,7 @@ export function DevicePortForward({
     mapping: PortForwardMappingView,
     enabled: boolean,
   ) {
-    setActionError("");
+    setActionFailure(null);
     try {
       const row = await setPortForwardEnabled(fingerprint, mapping.id, enabled);
       if (!alive.current) return;
@@ -283,7 +327,7 @@ export function DevicePortForward({
   }
 
   async function handleRemove(mapping: PortForwardMappingView) {
-    setActionError("");
+    setActionFailure(null);
     try {
       await deletePortForward(fingerprint, mapping.id);
       if (!alive.current) return;
@@ -333,7 +377,10 @@ export function DevicePortForward({
         });
       }
       throw new Error(
-        t("device.portForward.add.failed", { message: failure.message }),
+        describeFailure(err, {
+          t,
+          what: t("device.portForward.add.failedWhat"),
+        }).message,
         { cause: err },
       );
     }
@@ -376,10 +423,8 @@ export function DevicePortForward({
         </div>
       ) : null}
 
-      {displayPhase === "error" ? (
-        <p className="text-xs text-destructive-text">
-          {t("device.portForward.loadFailed", { message: loadError })}
-        </p>
+      {displayPhase === "error" && loadFailure ? (
+        <PortForwardFailure failure={loadFailure} onRetry={() => void load()} />
       ) : null}
 
       {displayPhase === "ready" ? (
@@ -398,9 +443,7 @@ export function DevicePortForward({
         />
       ) : null}
 
-      {actionError ? (
-        <p className="text-xs text-destructive-text">{actionError}</p>
-      ) : null}
+      {actionFailure ? <PortForwardFailure failure={actionFailure} /> : null}
     </div>
   );
 }

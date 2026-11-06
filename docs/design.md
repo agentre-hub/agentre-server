@@ -735,7 +735,10 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   detail uses, so status, transcript, approval and composer behaviour are shared, never a
   static placeholder. Which conversation is open is the address, `/chat/:conversationId`
   (plus `?device=` for one not saved to the account). With nothing selected (or no sessions) it shows
-  the `kpP7A` empty state. Starting a new conversation takes over this same pane — first
+  the `kpP7A` empty state. Its secondary exit stays on this page: with an online machine on the
+  account it is 「按机器看设备上的对话」 (`setAxis("machine")`, on desktop and mobile alike); with none
+  it is 「添加设备」 linking to `/devices`. Both read the device list the shell already fetched — the
+  empty state adds no request. Starting a new conversation takes over this same pane — first
   `NewConversationPane` (pick an agent), then `DraftSession` (a conversation with nothing
   said yet). **Desktop needs no dialog**: this pane was already idle, and covering the screen
   to ask one question costs more than filling the space that was already there.
@@ -753,8 +756,8 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   Fresh dot went with the rest of them (see [TopBar](#the-console-shell)).
 - **Mobile** keeps the list → detail flow, never the two-pane layout. The index page owns its
   top band (`ownHeader`): row 1 is title + account + `AppControls`; row 2 is the same real
-  search at `h-9`. Below that the index scrolls with a `PenLine` FAB (`fixed bottom-24 right-4
-  size-14 rounded-full bg-primary`) that raises the agent-picker bottom sheet when sessions
+  search at `h-9`. Below that the index scrolls with a `PenLine` FAB (`fixed right-4
+  size-14 rounded-full bg-primary`, `bottom` = `MOBILE_TAB_BAR_CLEARANCE` from `lib/mobileLayout.ts`, i.e. 74px + 16px + safe-area, the same expression the toast host's `mobileOffset` uses) that raises the agent-picker bottom sheet when sessions
   exist. Picking an agent replaces the whole screen with `DraftSession`.
   
   Viewing a saved conversation opens `/chat/:conversationId` as a full-screen detail page
@@ -1105,7 +1108,7 @@ emitted. In this flow that is exactly:
 | `user_code` in the six boxes | `components/CodeInput.tsx` |
 | the large confirmation code | `components/DeviceApproval.tsx` |
 | the `user_code` echoed back on the login screen | `pages/Login.tsx` |
-| `platform · version` | `components/DeviceApproval.tsx`, `pages/DeviceSuccess.tsx` |
+| `platform · version` | `components/DeviceApproval.tsx`, `pages/DeviceSuccess.tsx` (the title above it is the device's hostname, not mono) |
 
 Everything else — titles, body, buttons, footer — is the UI font. Two reasons for the
 boundary, and both are about the font file rather than taste:

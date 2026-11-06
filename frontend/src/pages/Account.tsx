@@ -20,6 +20,7 @@ import { useMe } from "@/hooks/use-me";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { api, ApiError } from "@/lib/api";
 import { PASSKEY_CODES } from "@/lib/errorCodes";
+import { knownApiErrorText } from "@/lib/loadError";
 import {
   decodeCreationOptions,
   encodeCreationResponse,
@@ -294,7 +295,7 @@ export default function Account() {
       setExpandedIndex(null);
     } catch (e) {
       setSignOutError(
-        e instanceof ApiError ? e.message : t("account.signins.signOutError"),
+        knownApiErrorText(e, t) ?? t("account.signins.signOutError"),
       );
       return;
     } finally {
@@ -456,7 +457,7 @@ export default function Account() {
               // 会永远停在「加载中…」，而这条文案永远渲染不到。
               <CardLoadError
                 error={passkeysError}
-                fallback={t("account.passkeys.loadError")}
+                what={t("account.passkeys.loadFailedWhat")}
                 className="m-4 w-auto"
                 onRetry={() => {
                   setPasskeysError(null);
@@ -541,7 +542,7 @@ export default function Account() {
             {sessionsError ? (
               <CardLoadError
                 error={sessionsError}
-                fallback={t("account.signins.loadError")}
+                what={t("account.signins.loadFailedWhat")}
                 className="m-4 w-auto"
                 onRetry={() => {
                   setSessionsError(null);

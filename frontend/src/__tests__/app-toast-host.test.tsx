@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { afterEach, expect, it } from "vitest";
 
 import App from "@/App";
+import { MOBILE_TAB_BAR_CLEARANCE } from "@/lib/mobileLayout";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
 afterEach(() => {
@@ -38,5 +39,5 @@ it("移动端:toast 让开底栏那 74px,不盖住导航", async () => {
   // sonner 把 mobileOffset 落成 --mobile-offset-bottom 这个自定义属性。
   expect(
     (host as HTMLElement).style.getPropertyValue("--mobile-offset-bottom"),
-  ).toBe("90px");
+  ).toBe(MOBILE_TAB_BAR_CLEARANCE);
 });

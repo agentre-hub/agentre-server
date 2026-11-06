@@ -1,4 +1,5 @@
 {
+  "loadFailedWhat": "无法加载对话列表",
   "loadMore": {
     "label": "加载更多",
     "loading": "加载中…",

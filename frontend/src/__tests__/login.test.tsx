@@ -99,7 +99,9 @@ describe("Login", () => {
     // max-w-sm 是 384，而一个常量 p-9 会把 36 的桌面留白照搬到手机上。
     it("is 424 wide and pads 24 on mobile, 36 from sm: up", () => {
       renderLogin();
-      const card = screen.getByRole("heading", { level: 1 }).parentElement;
+      // 标题与「设备授权」眉题同在一组里，卡片是那一组的父级。
+      const card = screen.getByRole("heading", { level: 1 }).parentElement
+        ?.parentElement;
       expect(card?.className).toContain("max-w-[424px]");
       expect(card?.className).toContain("p-6");
       expect(card?.className).toContain("sm:p-9");
@@ -208,6 +210,59 @@ describe("Login", () => {
     });
   });
 
+  describe("device code inside next", () => {
+    const NEXT = (p: string) => "?next=" + encodeURIComponent(p);
+
+    it("shows eyebrow and context strip for /device?user_code in next", () => {
+      renderLogin(NEXT("/device?user_code=A4F-7Q2"));
+      expect(screen.getByText("Device authorization")).toBeTruthy();
+      expect(document.querySelector(".bg-primary-soft")?.textContent).toContain(
+        "A4F-7Q2",
+      );
+    });
+
+    it("normalizes the code through parseUserCode", () => {
+      renderLogin(NEXT("/device?user_code=a4f7q2"));
+      expect(document.querySelector(".bg-primary-soft")?.textContent).toContain(
+        "A4F-7Q2",
+      );
+    });
+
+    it.each([
+      ["protocol-relative", "//evil.com/device?user_code=A4F-7Q2"],
+      ["absolute", "https://evil.com/device?user_code=A4F-7Q2"],
+      ["backslash", "/\\evil.com/device?user_code=A4F-7Q2"],
+      ["other path", "/devices?user_code=A4F-7Q2"],
+      ["malformed code", "/device?user_code=ZZZ"],
+      ["no code", "/device"],
+    ])("ignores %s next", (_n, next) => {
+      renderLogin(NEXT(next));
+      expect(document.querySelector(".bg-primary-soft")).toBeNull();
+      expect(screen.queryByText("Device authorization")).toBeNull();
+    });
+
+    it("top-level user_code still works and wins over next", () => {
+      renderLogin(
+        "?user_code=B4F-7Q2&next=" +
+          encodeURIComponent("/device?user_code=A4F-7Q2"),
+      );
+      expect(document.querySelector(".bg-primary-soft")?.textContent).toContain(
+        "B4F-7Q2",
+      );
+    });
+
+    // 顶层 user_code 与 next 里的是同一份上下文，过同一道闸：谁都能递一条
+    // `/login?user_code=<一句话>` 的链接，不过闸的话这句话会印在「设备授权」眉题下。
+    it("ignores a top-level user_code that is not a device code", () => {
+      renderLogin(
+        "?user_code=" + encodeURIComponent("Call 555-0100 to verify"),
+      );
+      expect(document.querySelector(".bg-primary-soft")).toBeNull();
+      expect(screen.queryByText("Device authorization")).toBeNull();
+      expect(screen.queryByText(/555-0100/)).toBeNull();
+    });
+  });
+
   describe("error handling", () => {
     it("does not show error when err param is absent", () => {
       renderLogin();
@@ -222,17 +277,23 @@ describe("Login", () => {
       );
     });
 
-    it("shows retry button when err is present", () => {
-      renderLogin("?err=access_denied");
+    // spec W4：失败只多一个错误框，两条登录路径原样保留
+    it("keeps both login paths when error is shown", () => {
+      markWebauthnSupported();
+      renderLogin("?err=passkey_challenge_invalid");
+      expect(githubButton().textContent).toContain("Sign in with GitHub");
+      expect(githubButton().querySelector("svg")).toBeTruthy();
+      expect(passkeyButton()).toBeTruthy();
       expect(
-        screen.getByRole("button", { name: /Sign in again/i }),
-      ).toBeTruthy();
+        screen.queryByRole("button", { name: /Sign in again/i }),
+      ).toBeNull();
     });
 
-    it("hides GitHub login button when error is shown", () => {
-      renderLogin("?err=access_denied");
-      // 失败态里只留「重新登录」一个动作，两个登录按钮会让人不知道该点哪个
-      expect(screen.queryByRole("button", { name: /GitHub/i })).toBeNull();
+    it("keeps the device context strip when error is shown", () => {
+      renderLogin("?user_code=A4F-7Q2&err=access_denied");
+      expect(document.querySelector(".bg-primary-soft")?.textContent).toContain(
+        "A4F-7Q2",
+      );
     });
 
     // 六条已知 err 走 locale 文案，而不是把后端的原始码抛给用户
@@ -245,15 +306,17 @@ describe("Login", () => {
       expect(alert.textContent).not.toContain("github_email_missing");
     });
 
-    it("shows err code verbatim for unknown error codes", () => {
+    it("shows generic copy, not the raw code, for unknown error codes", () => {
       renderLogin("?err=unknown_error_code");
       const alert = screen.getByRole("alert");
-      expect(alert.textContent).toContain("unknown_error_code");
+      expect(alert.textContent).toContain("Sign in unsuccessful");
+      expect(alert.textContent).toContain("This sign-in did not complete");
+      expect(alert.textContent).not.toContain("unknown_error_code");
     });
 
     // err 是 URL 里来的，谁都能给受害者递一条 /login?err=<任意一句话>。
-    // 「未知码原样透出」的本意是透出一个**码**，不是让攻击者在我们自己的
-    // 域名、自己的失败卡里写一句话——那是一条免费的钓鱼提示。
+    // 未收录的值一律只给通用文案：不能让攻击者在我们自己的域名、自己的失败卡里
+    // 写一句话——那是一条免费的钓鱼提示。
     it("refuses to echo an err value that is prose rather than a code", () => {
       renderLogin(
         "?err=" +
@@ -264,9 +327,7 @@ describe("Login", () => {
       const alert = screen.getByRole("alert");
       // 失败本身照说：标题和重试按钮都在
       expect(alert.textContent).toContain("Sign in unsuccessful");
-      expect(
-        screen.getByRole("button", { name: /Sign in again/i }),
-      ).toBeTruthy();
+      expect(githubButton()).toBeTruthy();
       // 但那句话一个字都不许上屏
       expect(alert.textContent).not.toContain("+1-555-0100");
       expect(alert.textContent).not.toContain("Your account is locked");
@@ -296,9 +357,12 @@ describe("Login", () => {
       expect(screen.getByText(/登录后继续授权设备/)).toBeTruthy();
     });
 
-    it("shows Chinese retry button on error", () => {
-      renderLogin("?err=access_denied");
-      expect(screen.getByRole("button", { name: /重新登录/ })).toBeTruthy();
+    it("shows Chinese GitHub button and generic copy on unknown error", () => {
+      renderLogin("?err=whatever_new");
+      expect(
+        screen.getByRole("button", { name: /使用 GitHub 登录/ }),
+      ).toBeTruthy();
+      expect(screen.getByText(/这次登录没有完成，请再试一次/)).toBeTruthy();
     });
 
     it("shows Chinese error message for known err codes", () => {
@@ -309,16 +373,11 @@ describe("Login", () => {
 
   describe("interaction", () => {
     // 重试也是一次登录，走同一道闸。勾选不落盘，上一次登录时勾过的不替这一次作数。
-    it("gates the retry button on the same consent box", () => {
+    it("gates the retry (GitHub) button on the same consent box", () => {
       renderLogin("?err=access_denied");
-      const retryBtn = () =>
-        screen.getByRole("button", {
-          name: /Sign in again/i,
-        }) as HTMLButtonElement;
-
-      expect(retryBtn().disabled).toBe(true);
+      expect(githubButton().disabled).toBe(true);
       tickConsent();
-      expect(retryBtn().disabled).toBe(false);
+      expect(githubButton().disabled).toBe(false);
     });
   });
 
@@ -404,8 +463,8 @@ describe("Login", () => {
       expect(screen.queryByText(/HTTPS/i)).toBeNull();
     });
 
-    it("hides passkey button when error is shown", () => {
-      // 错误态里隐藏通行密钥按钮，同 GitHub 按钮一样
+    it("keeps the passkey button when error is shown", () => {
+      // spec W4：失败不拿走任何一条登录路径
       Object.defineProperty(window, "PublicKeyCredential", {
         value: vi.fn(),
         writable: true,
@@ -413,7 +472,7 @@ describe("Login", () => {
       });
 
       renderLogin("?err=access_denied");
-      expect(screen.queryByRole("button", { name: /passkey/i })).toBeNull();
+      expect(passkeyButton()).toBeTruthy();
     });
 
     it("calls begin and finish endpoints in order without sending identifier", async () => {
@@ -641,6 +700,70 @@ describe("Login", () => {
       expect(screen.getByRole("button", { name: /GitHub/i })).toBeTruthy();
       expect(screen.getByRole("button", { name: /passkey/i })).toBeTruthy();
     });
+
+    /**
+     * 通行密钥登录成功后的落点由前端自己跳，next 又是 URL 里谁都能填的值——
+     * 与 GitHub 那条路上后端 redirectpath.Local 同一道闸：只认本站相对路径，
+     * 别的一律落 "/"。不然 `/login?next=https://evil.example` 就是一条开放跳转。
+     */
+    it.each([
+      ["local path", "/device?user_code=A4F-7Q2", "/device?user_code=A4F-7Q2"],
+      ["absolute URL", "https://evil.example/phish", "/"],
+      ["protocol-relative", "//evil.example/phish", "/"],
+      ["backslash", "/\\evil.example/phish", "/"],
+    ])(
+      "after a passkey sign-in, lands on a %s next only if it is local",
+      async (_n, next, landing) => {
+        markWebauthnSupported();
+        const b = (s: string) => b64urlToBufferForTest(s);
+        const credential = {
+          id: "BwcHBwcH",
+          type: "public-key",
+          rawId: b("BwcHBwcH"),
+          response: {
+            clientDataJSON: b("eyJ0eXBlIjoid2ViYXV0aG4uZ2V0In0"),
+            authenticatorData: b("oaKj"),
+            signature: b("-_8"),
+            userHandle: b("CQkJCQ"),
+          },
+          getClientExtensionResults: () => ({}),
+        };
+        vi.stubGlobal(
+          "fetch",
+          vi.fn((url: string) =>
+            Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  code: 0,
+                  msg: "success",
+                  data:
+                    url === "/v1/passkeys/login/begin"
+                      ? { publicKey: { challenge: "AQID" } }
+                      : {},
+                }),
+              ),
+            ),
+          ),
+        );
+        vi.stubGlobal(
+          "navigator",
+          Object.create(navigator, {
+            credentials: {
+              value: { get: vi.fn(fakeCredentialsGet(credential)) },
+            },
+          }),
+        );
+
+        renderLogin("?next=" + encodeURIComponent(next));
+        tickConsent();
+        fireEvent.click(passkeyButton());
+
+        await vi.waitFor(() =>
+          expect(window.location.assign).toHaveBeenCalledWith(landing),
+        );
+        expect(window.location.assign).toHaveBeenCalledTimes(1);
+      },
+    );
 
     // 规格「通行密钥 · 失败」：「每一种给各自的错误码与文案，不压成一句
     // 「登录失败」」。后端的裁决是信封里那个**数字**业务码；前端要分支就必须

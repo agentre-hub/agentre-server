@@ -513,6 +513,7 @@ func (s *deviceSvc) Pending(ctx context.Context, userCode string) (*PendingInfo,
 		DeviceKind: flow.DeviceKind,
 		Platform:   flow.Platform,
 		Version:    flow.Version,
+		Name:       flow.ClientName,
 		ExpiresIn:  int((flow.ExpiresAt - nowMs) / 1000),
 	}, nil
 }

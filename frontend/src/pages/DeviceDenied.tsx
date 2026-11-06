@@ -1,7 +1,8 @@
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { CircleSlash } from "lucide-react";
 
-import { Button } from "@agentre-hub/agentre-ui";
+import { buttonVariants } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
 
@@ -25,15 +26,21 @@ export default function DeviceDenied() {
             aria-hidden="true"
           />
         </div>
-        <PageTitle>{t("device.deniedScreen.title")}</PageTitle>
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full"
-          onClick={() => window.close()}
+        <div className="space-y-2">
+          <PageTitle>{t("device.deniedScreen.title")}</PageTitle>
+          <p className="text-sm text-muted-foreground">
+            {t("device.deniedScreen.body")}
+          </p>
+        </div>
+        <Link to="/device" className={buttonVariants({ className: "w-full" })}>
+          {t("device.deniedScreen.retry")}
+        </Link>
+        <Link
+          to="/overview"
+          className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
         >
-          {t("device.deniedScreen.close")}
-        </Button>
+          {t("device.deniedScreen.console")}
+        </Link>
       </div>
     </AuthLayout>
   );

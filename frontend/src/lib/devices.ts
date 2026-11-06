@@ -48,6 +48,14 @@ export interface DeviceItem {
 }
 
 /**
+ * 这台设备能不能跑会话（agentred / desktop）。对话页的机器轴、空态出口都按它认
+ * 「机器」，判据只此一份，加一种能跑会话的 kind 时只改这里。
+ */
+export function runsSessions(d: { kind: string }): boolean {
+  return d.kind === "agentred" || d.kind === "desktop";
+}
+
+/**
  * 取账号下的设备清单。
  *
  * 这是前端唯一直接打 `/v1/devices` 的地方。此前有 11 处各自 `api<{devices: X}>`，

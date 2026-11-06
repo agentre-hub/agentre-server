@@ -1,4 +1,5 @@
 {
+  "loadFailedWhat": "Could not load your conversations",
   "loadMore": {
     "label": "Load more",
     "loading": "Loading…",

@@ -12,7 +12,9 @@
       "reportsToLabel": "Reports to: {{name}}",
       "reportsToAria": "Filter by reports-to",
       "clear": "Clear {{label}}",
-      "clearAll": "Clear filters"
+      "clearAll": "Clear filters",
+      "needsSetup": "Needs setup",
+      "needsSetupAria": "Filter by setup status"
     },
     "noMatch": {
       "title": "No agents match",

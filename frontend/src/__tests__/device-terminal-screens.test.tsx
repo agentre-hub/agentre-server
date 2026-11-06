@@ -28,7 +28,85 @@ function renderAppAt(path: string) {
   return render(<App />, { wrapper: ThemeProvider });
 }
 
+describe("DeviceSuccess · agentred 收尾（第 3 步）", () => {
+  const info = {
+    kind: "agentred",
+    platform: "linux",
+    version: "v0.9.0",
+    name: "nuc-01",
+  };
+
+  it("从引导来：步骤条 + 所选方式的命令 + 完成去设备页，不再说可以关闭页面", () => {
+    renderAtState(<DeviceSuccess />, "/device/success", {
+      ...info,
+      from: "add-guide",
+      method: "docker",
+    });
+    expect(screen.getByText("docker compose up -d")).toBeTruthy();
+    expect(screen.queryByText("agentred service install --start")).toBeNull();
+    expect(screen.getByText("nuc-01")).toBeTruthy();
+    expect(screen.getByRole("list")).toBeTruthy();
+    expect(
+      screen
+        .getByRole("link", { name: "Done, go to devices" })
+        .getAttribute("href"),
+    ).toBe("/devices");
+    expect(screen.queryByText(/close this page/i)).toBeNull();
+    expect(screen.queryByRole("link", { name: /manage devices/i })).toBeNull();
+  });
+
+  it("CLI 直开（无 method）：native 命令 + 安装说明链接", () => {
+    renderAtState(<DeviceSuccess />, "/device/success", info);
+    expect(screen.getByText("agentred service install --start")).toBeTruthy();
+    expect(screen.getByTestId("device-success-docs-link")).toBeTruthy();
+    expect(
+      screen.getByRole("link", { name: "Done, go to devices" }),
+    ).toBeTruthy();
+  });
+
+  // 规格 W1：「步骤条（01✓ 02✓ 03）+ 标题 + 一句正文 + 命令卡」——按这个次序，
+  // 正文紧跟标题、只有一句。
+  it("步骤条在标题之前，标题下面紧跟一句正文，再往下才是命令卡", () => {
+    renderAtState(<DeviceSuccess />, "/device/success", info);
+    const rail = screen.getByRole("list");
+    const heading = screen.getByRole("heading", { level: 1 });
+    const body = screen.getByText(
+      "One last step: register the background service on that machine so it stays online.",
+    );
+    const command = screen.getByText("agentred service install --start");
+    const follows = (a: Element, b: Element) =>
+      !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(rail, heading)).toBe(true);
+    expect(heading.nextElementSibling).toBe(body);
+    expect(follows(body, command)).toBe(true);
+  });
+
+  it("用主机名做标题行、agentred 的 Server 图标", () => {
+    const { container } = renderAtState(
+      <DeviceSuccess />,
+      "/device/success",
+      info,
+    );
+    expect(screen.getByText("nuc-01")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-server")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-laptop")).toBeNull();
+  });
+});
+
 describe("DeviceSuccess", () => {
+  it("desktop 维持现状：无服务命令，仍是前往控制台管理设备，图标是 Laptop", () => {
+    const { container } = renderAtState(<DeviceSuccess />, "/device/success", {
+      kind: "desktop",
+      platform: "macOS",
+      version: "15.2",
+      name: "mbp",
+    });
+    expect(screen.queryByText("agentred service install --start")).toBeNull();
+    expect(screen.getByRole("link", { name: /manage devices/i })).toBeTruthy();
+    expect(screen.getByText("mbp")).toBeTruthy();
+    expect(container.querySelector("svg.lucide-laptop")).toBeTruthy();
+  });
+
   it("renders the device info panel when kind/platform/version were carried from the approval step", () => {
     renderAtState(<DeviceSuccess />, "/device/success", {
       kind: "desktop",
@@ -78,11 +156,37 @@ describe("DeviceDenied", () => {
     ).toBeTruthy();
   });
 
-  it("has exactly one h1 and a neutral (non-destructive) close button", () => {
+  it("has exactly one h1 and no close-window button", () => {
     renderAtState(<DeviceDenied />, "/device/denied");
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    const button = screen.getByRole("button", { name: /close page/i });
-    expect(button.getAttribute("data-variant")).not.toBe("destructive");
+    expect(screen.queryByRole("button", { name: /close page/i })).toBeNull();
+  });
+
+  it("explains the outcome in one body sentence", () => {
+    renderAtState(<DeviceDenied />, "/device/denied");
+    expect(
+      screen.getByText(
+        "This device will not be connected to your account. If you clicked by mistake, go back to the device and start authorization again.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("gives a primary link back to /device to enter a new code", () => {
+    renderAtState(<DeviceDenied />, "/device/denied");
+    expect(
+      screen
+        .getByRole("link", { name: "Enter a new code" })
+        .getAttribute("href"),
+    ).toBe("/device");
+  });
+
+  it("gives a text link to the console", () => {
+    renderAtState(<DeviceDenied />, "/device/denied");
+    expect(
+      screen
+        .getByRole("link", { name: "Go to the console" })
+        .getAttribute("href"),
+    ).toBe("/overview");
   });
 
   // spec「失败路径」：「这一屏是中性收尾，不使用 destructive 色。」
@@ -100,11 +204,10 @@ describe("DeviceDenied", () => {
     expect(painted).toEqual([]);
   });
 
-  it("closes the page on click", () => {
+  it("never calls window.close", () => {
     const closeSpy = vi.spyOn(window, "close").mockImplementation(() => {});
     renderAtState(<DeviceDenied />, "/device/denied");
-    screen.getByRole("button", { name: /close page/i }).click();
-    expect(closeSpy).toHaveBeenCalled();
+    expect(closeSpy).not.toHaveBeenCalled();
     closeSpy.mockRestore();
   });
 });

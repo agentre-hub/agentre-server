@@ -23,6 +23,17 @@ import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 import Chat from "@/pages/Chat";
 import { edgeClasses } from "./helpers/edge-classes";
+import { MOBILE_TAB_BAR_CLEARANCE } from "@/lib/mobileLayout";
+
+/**
+ * jsdom 的 CSS 解析器会改写 `calc(... env(...))`（不是真浏览器行为），所以直接比
+ * 字符串会误红。把常量同样喂给一个探针元素再读回，比较的是「同一个常量」。
+ */
+function jsdomStyleOf(prop: "height" | "bottom", value: string): string {
+  const probe = document.createElement("div");
+  probe.style[prop] = value;
+  return probe.style[prop];
+}
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -410,6 +421,18 @@ describe("移动端对话页:决策 5/16 + 空态屏 32", () => {
     const fab = screen.getByRole("button", { name: "New conversation" });
     fireEvent.click(fab);
     expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
+  });
+
+  it("FAB 的底部让开量与底栏共用 MOBILE_TAB_BAR_CLEARANCE（74px+16px+安全区）", async () => {
+    stubApi([waitingMirrored]);
+    renderChat();
+
+    expect(await screen.findByText("等你批")).toBeTruthy();
+    const fab = screen.getByRole("button", { name: "New conversation" });
+    expect(fab.style.bottom).toBe(
+      jsdomStyleOf("bottom", MOBILE_TAB_BAR_CLEARANCE),
+    );
+    expect(fab.className).not.toContain("bottom-24");
   });
 
   it("底部弹层是 flex 列：Agent 清单那一格被限高、能滚，不被 grid 行撑出屏外", async () => {
@@ -877,5 +900,43 @@ describe("移动端新对话草稿：一层头部", () => {
     for (const part of meta.querySelectorAll("[data-part]")) {
       expect(part.className).not.toMatch(/hidden/);
     }
+  });
+});
+
+describe("移动端对话页:空态 W8 页内切机器轴", () => {
+  it("账号空且有在线机器:页内按钮切到机器轴,不再去设备页", async () => {
+    stubApi([], [agentred]);
+    mockUseRelay.mockReturnValue(connectedRelay());
+    renderChat();
+
+    const empty = await screen.findByTestId("chat-empty-state");
+    expect(
+      within(empty).queryByRole("link", { name: "Add a device" }),
+    ).toBeNull();
+    fireEvent.click(
+      within(empty).getByRole("button", {
+        name: "Browse conversations by machine",
+      }),
+    );
+    expect(screen.getByTestId("chat-location").textContent).toBe(
+      "/chat?axis=machine",
+    );
+  });
+
+  it("账号空且没有在线机器:出口是「添加设备」，指向 /devices", async () => {
+    stubApi([], []);
+    renderChat();
+
+    const empty = await screen.findByTestId("chat-empty-state");
+    expect(
+      within(empty).queryByRole("button", {
+        name: "Browse conversations by machine",
+      }),
+    ).toBeNull();
+    expect(
+      within(empty)
+        .getByRole("link", { name: "Add a device" })
+        .getAttribute("href"),
+    ).toBe("/devices");
   });
 });

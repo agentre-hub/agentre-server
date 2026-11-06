@@ -17,6 +17,8 @@ import { useTranslation } from "react-i18next";
 
 import {
   BoardFilterBar,
+  Alert,
+  AlertDescription,
   Button,
   Dialog,
   DialogContent,
@@ -42,6 +44,8 @@ import { useAliveEffect } from "@/hooks/use-alive-effect";
 import { fetchAgents } from "@/lib/agents";
 import { api } from "@/lib/api";
 import { createSyncIdRegistry, scopeShowsGlyphs } from "@/lib/boardWire";
+import { FailureNotice } from "@/components/console";
+import { describeFailure } from "@/lib/describeFailure";
 import { useEngineCatalog } from "@/lib/engineCatalog";
 import { fetchProjects, type ProjectNode } from "@/lib/projects";
 import type { OrgBackendItem } from "@/pages/org/types";
@@ -49,6 +53,38 @@ import type { OrgBackendItem } from "@/pages/org/types";
 import { TaskFormDialog } from "./issues/TaskFormDialog";
 import { useBoard } from "./issues/useBoard";
 import { useBoardDrag } from "./issues/useBoardDrag";
+
+/**
+ * 看板读失败的提示：分类给的一句话 + 出口 + 「复制诊断信息」。原文只走剪贴板，不上屏
+ * （规格 2026-11-05-ux-polish W5）。
+ */
+function BoardFailure({
+  cause,
+  onRetry,
+  retrying,
+}: {
+  cause: unknown;
+  onRetry: () => void;
+  /** 重读在途：按钮停住，第二次也失败时用户才分得清自己没点空。 */
+  retrying: boolean;
+}) {
+  const { t } = useTranslation();
+  const failure = describeFailure(cause, {
+    t,
+    what: t("issues.loadFailedWhat"),
+  });
+  return (
+    <Alert variant="destructive" className="shrink-0 rounded-none px-5 py-2">
+      <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3 text-2xs">
+        <FailureNotice
+          failure={failure}
+          onRetry={onRetry}
+          retryDisabled={retrying}
+        />
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 const STAGES: BoardStage[] = ["todo", "doing", "review", "done"];
 
@@ -238,12 +274,11 @@ export default function Issues() {
         </div>
 
         {board.error ? (
-          <p
-            role="alert"
-            className="shrink-0 bg-destructive-soft px-5 py-2 text-2xs text-destructive-text"
-          >
-            {board.error}
-          </p>
+          <BoardFailure
+            cause={board.error.cause}
+            onRetry={board.retry}
+            retrying={board.searching}
+          />
         ) : null}
 
         <IssueBoard

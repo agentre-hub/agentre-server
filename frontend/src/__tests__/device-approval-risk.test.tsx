@@ -27,6 +27,7 @@ type Pending = {
   device_kind: string;
   platform: string;
   version: string;
+  name: string;
   expires_in: number;
 };
 
@@ -35,6 +36,7 @@ function pending(over: Partial<Pending> = {}): Pending {
     device_kind: "desktop",
     platform: "macOS 15.2",
     version: "v0.4.1",
+    name: "nuc-01",
     // 8 分 12 秒，与画板 10 上的过期条一致
     expires_in: 492,
     ...over,
@@ -60,9 +62,13 @@ function Probe({ name }: { name: string }) {
   return <div data-testid={`at-${name}`}>{JSON.stringify(state ?? null)}</div>;
 }
 
-function renderDevice() {
+function renderDevice(state?: unknown) {
   return render(
-    <MemoryRouter initialEntries={["/device?user_code=A4F-7Q2"]}>
+    <MemoryRouter
+      initialEntries={[
+        { pathname: "/device", search: "?user_code=A4F-7Q2", state },
+      ]}
+    >
       <Routes>
         <Route path="/device" element={<Device />} />
         <Route path="/device/success" element={<Probe name="success" />} />
@@ -103,6 +109,105 @@ describe("授权确认：整页区域而不是对话框", () => {
     expect(screen.getByText("macOS 15.2 · v0.4.1")).toBeTruthy();
     // 大号确认码照画板 10，带连字符
     expect(screen.getByText("A4F-7Q2")).toBeTruthy();
+  });
+});
+
+describe("授权确认：哪台机器接入哪个账号", () => {
+  it("设备块以主机名为标题，类型降为 chip", async () => {
+    mockFlow(pending({ name: "nuc-01", device_kind: "agentred" }));
+    renderDevice();
+
+    await waitForApproval();
+    expect(screen.getByText("nuc-01")).toBeTruthy();
+    expect(screen.getByText("Compute node")).toBeTruthy();
+  });
+
+  it("主机名为空时标题回退为类型名，不编造主机名", async () => {
+    mockFlow(pending({ name: "", device_kind: "agentred" }));
+    renderDevice();
+
+    await waitForApproval();
+    // 标题与 chip 各有一处类型名；没有任何别的标题文本
+    expect(screen.getAllByText("Compute node")).toHaveLength(1);
+    expect(screen.getByTestId("device-title").textContent).toBe("Compute node");
+    expect(screen.queryByTestId("device-kind-chip")).toBeNull();
+  });
+
+  it.each([
+    ["agentred", "lucide-server"],
+    ["desktop", "lucide-laptop"],
+    ["mobile", "lucide-smartphone"],
+  ])("kind 是 %s 时图标走 DEVICE_KIND_ICONS（%s）", async (kind, cls) => {
+    mockFlow(pending({ device_kind: kind }));
+    renderDevice();
+
+    await waitForApproval();
+    expect(
+      screen.getByTestId("device-icon").querySelector("svg." + cls),
+    ).toBeTruthy();
+  });
+
+  it("写明将接入的账号：显示名 · 邮箱", async () => {
+    mockFlow(pending());
+    renderDevice();
+
+    await waitForApproval();
+    expect(
+      await screen.findByText("Connecting to Cod Frm · codfrm@example.com"),
+    ).toBeTruthy();
+  });
+
+  describe("换个账号", () => {
+    const realLocation = window.location;
+    beforeEach(() => {
+      Object.defineProperty(window, "location", {
+        value: { ...realLocation, assign: vi.fn() },
+        writable: true,
+        configurable: true,
+      });
+    });
+    afterEach(() => {
+      Object.defineProperty(window, "location", {
+        value: realLocation,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it("先登出，再回到带原 user_code 的登录页", async () => {
+      mockFlow(pending());
+      renderDevice();
+
+      await waitForApproval();
+      fireEvent.click(
+        await screen.findByRole("button", { name: /switch account/i }),
+      );
+
+      await vi.waitFor(() =>
+        expect(window.location.assign).toHaveBeenCalledWith(
+          "/login?next=" + encodeURIComponent("/device?user_code=A4F-7Q2"),
+        ),
+      );
+      expect(mockedApi).toHaveBeenCalledWith(
+        "/v1/auth/logout",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    it("登出请求失败也照样回登录页", async () => {
+      mockedApi.mockImplementation(async (path: string) => {
+        if (path.startsWith("/v1/auth/me")) return ME;
+        if (path.startsWith("/v1/oauth/device/pending")) return pending();
+        throw new ApiError(30001, "boom", 500);
+      });
+      renderDevice();
+
+      await waitForApproval();
+      fireEvent.click(
+        await screen.findByRole("button", { name: /switch account/i }),
+      );
+      await vi.waitFor(() => expect(window.location.assign).toHaveBeenCalled());
+    });
   });
 });
 
@@ -253,6 +358,22 @@ describe("授权确认：允许", () => {
       kind: "desktop",
       platform: "macOS 15.2",
       version: "v0.4.1",
+      name: "nuc-01",
+    });
+  });
+
+  it("从添加设备引导来的，把 from / method 一并透传给成功页", async () => {
+    mockFlow(pending(), async () => ({}));
+    renderDevice({ from: "add-guide", method: "docker" });
+
+    await waitForApproval();
+    approve();
+
+    const at = await screen.findByTestId("at-success");
+    expect(JSON.parse(at.textContent ?? "null")).toMatchObject({
+      from: "add-guide",
+      method: "docker",
+      name: "nuc-01",
     });
   });
 
@@ -276,7 +397,9 @@ describe("授权确认：允许", () => {
     await waitForApproval();
     approve();
 
-    expect((await screen.findByRole("alert")).textContent).toContain("boom");
+    const alertText = (await screen.findByRole("alert")).textContent;
+    expect(alertText).toContain("That did not go through");
+    expect(alertText).not.toContain("boom");
     expect(screen.queryByTestId("at-expired")).toBeNull();
     expect(screen.queryByTestId("at-success")).toBeNull();
   });

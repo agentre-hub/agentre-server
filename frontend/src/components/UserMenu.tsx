@@ -24,7 +24,7 @@ import {
   useAccountChannelState,
 } from "@/hooks/use-account-channel";
 import type { Me } from "@/hooks/use-me";
-import { api } from "@/lib/api";
+import { signOut } from "@/lib/signOut";
 
 /**
  * 账号块 = 下拉菜单触发器（规格「用户菜单与 /account」菜单段）：桌面侧栏左下
@@ -60,15 +60,7 @@ export function UserMenu({
   const connectionLabel = t(copy.labelKey);
   const connectionTone = statusConfig[copy.tone];
 
-  const handleLogout = () => {
-    // 无论端点调用成败都落地登录页：会话大概率已经失效，留在受保护页面上
-    // 假装还登录着才是真正的假象。catch 吞掉失败，避免留下未处理的 rejection。
-    void api("/v1/auth/logout", { method: "POST" })
-      .catch(() => {})
-      .finally(() => {
-        window.location.assign("/login");
-      });
-  };
+  const handleLogout = () => signOut();
 
   const avatar = (
     <div className="relative shrink-0">
@@ -95,7 +87,9 @@ export function UserMenu({
             "focus-visible:focus-outline",
             // 两个落点都在外框上：外框比内容面暗，悬停是提亮（rail-accent）。
             "hover:bg-rail-accent data-[state=open]:bg-rail-accent",
-            compact ? "px-1 py-1" : "h-[42px] w-full px-1.5",
+            compact
+              ? "relative px-1 py-1 before:absolute before:-inset-1 before:content-['']"
+              : "h-[42px] w-full px-1.5",
           )}
         >
           {avatar}

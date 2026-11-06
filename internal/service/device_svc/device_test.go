@@ -1093,6 +1093,28 @@ func TestDeviceFlow_UserCodeNeverReachesTheLog(t *testing.T) {
 	}
 }
 
+func TestPending(t *testing.T) {
+	convey.Convey("Pending", t, func() {
+		for name, want := range map[string]string{"带主机名": "nuc-01", "主机名为空": ""} {
+			want := want
+			convey.Convey(name+" → name 原样返回，不编造", func() {
+				ctx, _, _, mF, svc, _ := setupDeviceTest(t)
+				mF.EXPECT().FindPendingByUserCode(gomock.Any(), "A4F-7Q2").Return(
+					&device_flow_entity.DeviceFlowCode{
+						UserCode: "A4F-7Q2", DeviceKind: "agentred", ClientName: want,
+						Platform: "linux", Version: "0.4.0",
+						ExpiresAt: time.Now().Add(time.Hour).UnixMilli(),
+					}, nil,
+				)
+				info, err := svc.Pending(ctx, "A4F-7Q2")
+				assert.NoError(t, err)
+				assert.Equal(t, want, info.Name)
+				assert.Equal(t, "agentred", info.DeviceKind)
+			})
+		}
+	})
+}
+
 func TestApprove(t *testing.T) {
 	convey.Convey("Approve", t, func() {
 		convey.Convey("不存在 → user_code_invalid", func() {

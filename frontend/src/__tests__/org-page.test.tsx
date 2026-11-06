@@ -217,6 +217,43 @@ describe("组织索引：与桌面端同形（共享组件搭成）", () => {
     expect(screen.getByText("Filter by reports-to")).toBeTruthy();
   });
 
+  // A5：不能对话的 Agent 行带待配置点，可读名带原因；筛选里的「待配置」只留这些。
+  it("没有可用执行目标的 Agent 行有待配置点且可读名带原因，可聊的没有", async () => {
+    renderOrg();
+    const ceoRow = (await screen.findByText("CEO Agent")).closest(
+      '[data-slot="org-index-row"]',
+    ) as HTMLElement;
+    const aliceRow = screen
+      .getByText("Alice")
+      .closest('[data-slot="org-index-row"]') as HTMLElement;
+
+    expect(ceoRow.querySelector("[data-gap-dot]")).toBeTruthy();
+    expect(
+      within(ceoRow).getByRole("button", {
+        name: "CEO Agent, No available execution target",
+      }),
+    ).toBeTruthy();
+    expect(aliceRow.querySelector("[data-gap-dot]")).toBeNull();
+    expect(
+      within(aliceRow).queryByRole("button", { name: /^Alice, / }),
+    ).toBeNull();
+  });
+
+  it("筛选「待配置」只显示缺口 Agent，chip 能清掉", async () => {
+    renderOrg();
+    await screen.findByText("Alice");
+    fireEvent.keyDown(screen.getByTestId("org-filter-entry"), {
+      key: "Enter",
+    });
+    fireEvent.click(await screen.findByTestId("org-filter-setup-option-1"));
+
+    expect(screen.queryByText("Alice")).toBeNull();
+    expect(screen.getByText("CEO Agent")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear Needs setup" }));
+    expect(await screen.findByText("Alice")).toBeTruthy();
+  });
+
   it("行是共享包的 OrgAgentRow（data-slot 能证明不是宿主自己重造的一份）", async () => {
     renderOrg();
     const aliceText = await screen.findByText("Alice");

@@ -22,6 +22,14 @@ import AppShell from "@/components/AppShell";
 import { api } from "@/lib/api";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
+import { MOBILE_TAB_BAR_HEIGHT } from "@/lib/mobileLayout";
+
+/** jsdom 会改写 `calc(... env(...))`，把常量同样喂给探针元素再读回来比较。 */
+function jsdomStyleOf(prop: "height", value: string): string {
+  const probe = document.createElement("div");
+  probe.style[prop] = value;
+  return probe.style[prop];
+}
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -88,8 +96,8 @@ describe("移动端底部导航（A6Z3k，取代原抽屉）", () => {
 
     // 唯一一个导航就是底部 TabBar（A6Z3k 内容 52px + 安全区）。
     const nav = screen.getByRole("navigation");
-    expect(nav.className).toContain(
-      "h-[calc(74px_+_env(safe-area-inset-bottom,0px))]",
+    expect(nav.style.height).toBe(
+      jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
     );
     // 原抽屉相关控件全部消失。
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
@@ -162,8 +170,8 @@ describe("桌面端导航（非移动）", () => {
     // 桌面不该出现底部 TabBar（带安全区高度的导航）。
     const navs = screen.getAllByRole("navigation");
     for (const n of navs) {
-      expect(n.className).not.toContain(
-        "h-[calc(74px_+_env(safe-area-inset-bottom,0px))]",
+      expect(n.style.height).not.toBe(
+        jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
       );
     }
   });

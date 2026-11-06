@@ -43,7 +43,7 @@
       "statusOn": "已开启",
       "statusOnAt": "已开启 · 最近一次上报{{time}}",
       "statusOff": "未开启 · 统计只覆盖已保存到账号的对话",
-      "loadError": "无法加载统计设置，请重试。",
+      "loadFailedWhat": "无法加载统计设置",
       "saveError": "没能保存，请重试。",
       "deviceReportedToday": "已上报到今天",
       "deviceReportedThrough": "已上报到 {{day}}",

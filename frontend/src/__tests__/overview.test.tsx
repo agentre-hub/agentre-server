@@ -672,9 +672,7 @@ describe("overview: 非稳态", () => {
     });
     renderOverview();
 
-    expect(
-      await screen.findByText("Could not load your stats. Please try again."),
-    ).toBeTruthy();
+    expect(await screen.findByText("Could not load your stats.")).toBeTruthy();
     const state = screen.getByTestId("stats-error");
     expect(
       within(state).getByText("Stats are unavailable right now"),

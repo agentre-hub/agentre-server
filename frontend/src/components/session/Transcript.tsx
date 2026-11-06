@@ -73,6 +73,7 @@ export default function Transcript({
   pendingAssistant = false,
   reconnecting = false,
   cwd,
+  backendType,
   getScrollElement,
 }: {
   messages: TranscriptMessage[];
@@ -169,6 +170,8 @@ export default function Transcript({
    * 会话没有 cwd 就不出入口，而不是出一个点了没反应的入口。
    */
   cwd?: string;
+  /** 会话的后端类型：登录过期的失败卡凭它给出登录命令。控制台没有重新生成 RPC，故不传 onRetryTurn / onRerun。 */
+  backendType?: string;
   getScrollElement?: () => HTMLElement | null;
 }) {
   const { t } = useTranslation();
@@ -191,8 +194,17 @@ export default function Transcript({
       ),
       sessionId,
       cwd,
+      backendType,
     }),
-    [sessionId, cwd, fallbackName, agentName, agentAvatar, agentPending],
+    [
+      sessionId,
+      cwd,
+      backendType,
+      fallbackName,
+      agentName,
+      agentAvatar,
+      agentPending,
+    ],
   );
 
   const displayMessages = useMemo(() => {

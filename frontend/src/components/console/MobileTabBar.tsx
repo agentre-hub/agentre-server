@@ -3,6 +3,7 @@ import type { LucideIcon } from "lucide-react";
 
 import { NavBadge } from "@/components/console/NavBadge";
 import { cn } from "@agentre-hub/agentre-ui";
+import { MOBILE_TAB_BAR_HEIGHT } from "@/lib/mobileLayout";
 
 /**
  * 移动端底部导航（Pencil 正式组件 A6Z3k TabBar）。
@@ -42,7 +43,8 @@ export function MobileTabBar({
   return (
     <nav
       aria-label={ariaLabel}
-      className="flex h-[calc(74px_+_env(safe-area-inset-bottom,0px))] items-stretch bg-chrome pb-[calc(14px_+_env(safe-area-inset-bottom,0px))] pt-2"
+      className="flex items-stretch bg-chrome pb-[calc(14px_+_env(safe-area-inset-bottom,0px))] pt-2"
+      style={{ height: MOBILE_TAB_BAR_HEIGHT }}
     >
       {items.map((item) => (
         <NavLink

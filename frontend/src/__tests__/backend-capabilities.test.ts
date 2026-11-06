@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  decodeAbortSupport,
   decodePermissionModeMeta,
   decodeReasoningEffortSupport,
 } from "@/lib/backendCapabilities";
@@ -113,5 +114,56 @@ describe("decodeReasoningEffortSupport", () => {
     ["字符串", "nope"],
   ])("解不动的应答（%s）按不支持处置", (_label, raw) => {
     expect(decodeReasoningEffortSupport(raw)).toBe(false);
+  });
+});
+
+/**
+ * 停止键要不要摆（规格 2026-11-06 A2 决策）：同一串 `capabilities`，但处置是**三态**
+ * —— 与力度那一格不同，力度解不动按「不支持」，停止键解不动要维持今天的样子（显示）。
+ * 只有执行端**明确**报出一份能力集、里面却没有可用的 abort 时才收起停止键：
+ * 把「问不到」也当成「不支持」，一台答不上来的机器上正在跑的一轮就没有地方停了。
+ */
+describe("decodeAbortSupport", () => {
+  it("报了 abort 且为真：支持", () => {
+    expect(
+      decodeAbortSupport({
+        capabilities: [
+          { name: "set_permission_mode", enabled: true },
+          { name: "abort", enabled: true },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("报了 abort 但为假：明确不支持", () => {
+    expect(
+      decodeAbortSupport({
+        capabilities: [
+          { name: "abort", enabled: false },
+          { name: "steer", enabled: true },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  // Go 侧的 Set 只放这个 runtime 声明的那几项（桌面端按 `caps.Has(CapAbort)` 判），
+  // 一份报出来了却没有 abort 的能力集就是「这个后端停不了」这句肯定的话。
+  it("报了一份能力集但里面没有 abort：明确不支持", () => {
+    expect(
+      decodeAbortSupport({
+        capabilities: [{ name: "reasoning_effort", enabled: true }],
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["整条没报（对端太老）", { capabilities: [] }],
+    ["capabilities 不是数组", { capabilities: 1 }],
+    ["空对象", {}],
+    ["null", null],
+    ["undefined", undefined],
+    ["字符串", "nope"],
+  ])("解不动的应答（%s）是「不知道」，返回 null", (_label, raw) => {
+    expect(decodeAbortSupport(raw)).toBeNull();
   });
 });

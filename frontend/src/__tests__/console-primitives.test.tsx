@@ -14,7 +14,21 @@
 import { statusConfig } from "@agentre-hub/agentre-ui";
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+
+import i18n from "@/i18n";
+import { ApiError } from "@/lib/api";
+import { MOBILE_TAB_BAR_HEIGHT } from "@/lib/mobileLayout";
+
+/**
+ * jsdom 的 CSS 解析器会改写 `calc(... env(...))`（不是真浏览器行为），所以直接比
+ * 字符串会误红。把常量同样喂给一个探针元素再读回，比较的是「同一个常量」。
+ */
+function jsdomStyleOf(prop: "height" | "bottom", value: string): string {
+  const probe = document.createElement("div");
+  probe.style[prop] = value;
+  return probe.style[prop];
+}
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Gauge,
   Laptop,
@@ -25,6 +39,7 @@ import {
 
 import { edgeClasses } from "./helpers/edge-classes";
 import {
+  CardLoadError,
   ConsoleNavItem,
   EmptyState,
   InlineEmpty,
@@ -322,8 +337,8 @@ describe("MobileTabBar（A6Z3k）", () => {
     expect(screen.getByRole("link", { name: "Overview" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "Chat" })).toBeTruthy();
     // 高度是「内容 52px + 上下内边距 + 安全区」：无刘海设备 env() 为 0。
-    expect(nav.className).toContain(
-      "h-[calc(74px_+_env(safe-area-inset-bottom,0px))]",
+    expect(nav.style.height).toBe(
+      jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
     );
     expect(nav.className).toContain(
       "pb-[calc(14px_+_env(safe-area-inset-bottom,0px))]",
@@ -435,5 +450,50 @@ describe("InlineEmpty（索引栏内空态）", () => {
     expect(container.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     expect(screen.getByText("Empty")).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+/**
+ * 卡片读失败（规格 W5「各 loadError 调用方」）：一句分类后的事实句 + 分类给的出口 +
+ * 「复制诊断信息」；原文与服务端恒为中文的 msg 都不上屏。
+ */
+describe("CardLoadError", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+  });
+
+  function renderCard(error: unknown, onRetry = vi.fn()) {
+    render(
+      <MemoryRouter>
+        <CardLoadError
+          error={error}
+          what="Could not load your passkeys"
+          onRetry={onRetry}
+        />
+      </MemoryRouter>,
+    );
+    return onRetry;
+  }
+
+  it("断网：事实句 + 重试 + 复制诊断信息，原文不上屏", () => {
+    const onRetry = renderCard(new TypeError("Failed to fetch"));
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(
+      "Could not load your passkeys — the network seems to be down.",
+    );
+    expect(alert.textContent).not.toContain("Failed to fetch");
+    within(alert).getByRole("button", { name: "Retry" }).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(
+      within(alert).getByRole("button", { name: "Copy diagnostics" }),
+    ).toBeTruthy();
+  });
+
+  it("登录失效：说清原因，不给一颗按了也没用的重试", () => {
+    renderCard(new ApiError(30004, "会话已失效", 401));
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("your session has expired");
+    expect(alert.textContent).not.toContain("会话已失效");
+    expect(within(alert).queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });

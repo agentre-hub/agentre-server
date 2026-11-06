@@ -11,6 +11,7 @@
 export { ConsoleNavItem } from "./ConsoleNavItem";
 export { CardLoadError } from "./CardLoadError";
 export { EmptyState } from "./EmptyState";
+export { FailureNotice } from "./FailureNotice";
 export { InlineEmpty } from "./InlineEmpty";
 export { Metric } from "./Metric";
 export { MobileTabBar, type MobileTab } from "./MobileTabBar";

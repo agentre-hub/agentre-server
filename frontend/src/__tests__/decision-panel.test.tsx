@@ -134,13 +134,18 @@ describe("DecisionPanel：与转录里那张是同一张卡", () => {
     // 包的卡片自带这个 testid（dist/transcript/canonical-tool/tool-permission/card.js）。
     expect(screen.getByTestId("tool-permission-card")).toBeTruthy();
     // 包的三个动作，不是本站曾经的 Allow / Always allow / Deny。
-    expect(screen.getByRole("button", { name: /Allow Once/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /Always Allow This Session/i }),
     ).toBeTruthy();
     expect(screen.getByRole("button", { name: /Reject/i })).toBeTruthy();
     // 工具名与摘要进了卡头；Bash 的摘要是 command 本身，不是一坨 JSON。
-    expect(screen.getByText("ls -la")).toBeTruthy();
+    // 审批卡默认展开，命令在卡头摘要与展开的正文里各出现一次；卡头那一处（正文之外）
+    // 必须在，否则「摘要是 command 本身」只靠正文就被测成绿的。
+    const body = screen.getByTestId("tool-permission-body");
+    expect(
+      screen.getAllByText("ls -la").filter((el) => !body.contains(el)),
+    ).toHaveLength(1);
   });
 
   it("Given 用户点了「仅本次允许」, When 提交, Then 走宿主注入的端口", async () => {
@@ -151,7 +156,7 @@ describe("DecisionPanel：与转录里那张是同一张卡", () => {
       ],
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /Allow Once/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     await waitFor(() => {
       expect(PORTS.answerToolPermission).toHaveBeenCalledWith(

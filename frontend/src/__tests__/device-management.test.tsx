@@ -165,7 +165,7 @@ describe("device management page", () => {
     renderDevices();
 
     expect(
-      await screen.findByText("Could not load your devices. Please try again."),
+      await screen.findByText("Could not load your devices."),
     ).toBeTruthy();
     expect(screen.queryByTestId("add-device-guide")).toBeNull();
   });

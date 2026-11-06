@@ -570,7 +570,7 @@ describe("Transcript 的时间戳", () => {
  * 这一层负责的只有两件事：**挂在哪一行**、**此刻还信不信这一轮在跑**。
  */
 describe("Transcript 的重试提示", () => {
-  const retryCard = () => screen.queryByRole("status", { name: "Retrying" });
+  const retryCard = () => screen.queryByTestId("transcript-retry");
 
   function renderWithRetry(frames: TranscriptFrame[], streaming: boolean) {
     return render(
@@ -598,8 +598,12 @@ describe("Transcript 的重试提示", () => {
     );
 
     expect(retryCard()).toBeTruthy();
-    expect(screen.getByText("Retrying 1/3")).toBeTruthy();
-    expect(screen.getByText("Connection error")).toBeTruthy();
+    expect(
+      screen.getByText("Upstream connection lost, retrying 1/3"),
+    ).toBeTruthy();
+    // 机器原话只进 title，不上屏。
+    expect(retryCard()?.getAttribute("title")).toContain("Connection error");
+    expect(screen.queryByText("Connection error")).toBeNull();
   });
 
   // 与 `compacting` 恒为 false 同一条规矩：宿主已经不信这一轮在跑了，还摆一张

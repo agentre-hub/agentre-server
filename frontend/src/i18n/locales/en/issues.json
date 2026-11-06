@@ -12,5 +12,6 @@
     "modelAria": "Pick the model",
     "pickerTitle": "Where it runs",
     "followAgent": "Follow the agent's binding"
-  }
+  },
+  "loadFailedWhat": "The board didn't load"
 }

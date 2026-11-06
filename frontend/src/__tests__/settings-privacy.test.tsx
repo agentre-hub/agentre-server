@@ -267,9 +267,7 @@ describe("设置 · 隐私", () => {
     renderSettings("/settings?tab=privacy");
 
     expect(
-      await screen.findByText(
-        "Could not load your stats settings. Please try again.",
-      ),
+      await screen.findByText("Could not load your stats settings."),
     ).toBeTruthy();
     expect(screen.queryByRole("switch")).toBeNull();
   });
