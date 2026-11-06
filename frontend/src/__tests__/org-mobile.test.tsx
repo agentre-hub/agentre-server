@@ -125,9 +125,12 @@ describe("组织面移动形态：索引升整页，详情下钻", () => {
     renderOrgAt("/org/agent/agent-alice");
 
     const header = await screen.findByTestId("org-detail-header");
-    // 名字现在是身份区里的可编辑输入框（共享 IdentityFields），不再是纯文本。
+    // 手机页头只有名字作标题；可编辑的名字输入框在正文「身份」区（共享 IdentityFields）。
+    expect(within(header).getByRole("heading", { name: "Alice" })).toBeTruthy();
     expect(
-      within(header).getByRole("textbox", { name: "Name" }),
+      within(screen.getByTestId("org-detail-scroll")).getByRole("textbox", {
+        name: "Name",
+      }),
     ).toHaveProperty("value", "Alice");
   });
 
@@ -314,5 +317,202 @@ describe("组织面移动形态：详情列可滚、失败跟随当前屏、工�
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("New agent")).toBeTruthy();
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+/**
+ * 手机形态（规格「Agent 与组织」）：两行索引行、组头摘要、chips 筛选、
+ * 详情页头「‹ · 名字 · ⋯」与 身份 → 系统提示词 → 在哪儿跑 → 工具。
+ */
+describe("组织面手机形态：索引两行、摘要、chips", () => {
+  const richChart: OrgChartResponse = {
+    departments: [{ sync_id: "dept-eng", name: "Engineering", sort_order: 0 }],
+    agents: [
+      {
+        sync_id: "agent-alice",
+        name: "Alice",
+        department_sync_id: "dept-eng",
+        sort_order: 0,
+        exec_targets: [
+          {
+            sync_id: "t1",
+            rank: 1,
+            backend_sync_id: "b1",
+            backend_name: "Claude Code",
+            device_id: 7,
+            device_name: "mac-mini",
+            device_unspecified: false,
+            availability: "available",
+            current: true,
+          },
+        ],
+      },
+      {
+        sync_id: "agent-bob",
+        name: "Bob",
+        department_sync_id: "dept-eng",
+        sort_order: 1,
+        exec_targets: [
+          {
+            sync_id: "t2",
+            rank: 1,
+            backend_sync_id: "b2",
+            backend_name: "Codex",
+            device_id: 8,
+            device_name: "linux-box",
+            device_unspecified: false,
+            availability: "offline",
+            current: false,
+          },
+        ],
+      },
+    ],
+  };
+
+  beforeEach(() => {
+    mockedApi.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/v1/workspace/org" && (!init || init.method === undefined))
+        return richChart;
+      if (path === "/v1/workspace/org/backends")
+        return {
+          backends: [
+            { sync_id: "b1", name: "Claude Code" },
+            { sync_id: "b2", name: "Codex" },
+          ],
+        };
+      if (path === "/v1/devices")
+        return {
+          devices: [
+            {
+              id: 7,
+              name: "mac-mini",
+              display_name: "Studio",
+              kind: "agentred",
+            },
+          ],
+        };
+      if (init?.method === "POST") return { sync_id: "new", version: 1 };
+      throw new Error(`unexpected request: ${path}`);
+    });
+  });
+
+  it("行是两行档：第二行写备注名 · 后端，待配置的第二行写原因", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/^org-row-second-/)[0].textContent).toBe(
+        "Studio · Claude Code",
+      ),
+    );
+    const rows = screen.getAllByTestId(/^org-row-second-/);
+    expect(rows).toHaveLength(2);
+    // Bob 不能对话：原因可见地写在第二行，沿用 orgNeedsSetupReasons。
+    expect(rows[1].textContent).toContain("linux-box");
+  });
+
+  it("组头是摘要档：「N 人 ›」，点它选中这个部门", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+
+    const header = screen.getByTestId(/^org-group-select-/);
+    expect(header.textContent).toContain("2 people ›");
+    expect(screen.queryByLabelText("New agent")).toBeNull();
+    fireEvent.click(header);
+    expect(await screen.findByTestId("org-detail-col")).toBeTruthy();
+  });
+
+  it("筛选是 chips（≥44px）：点「Needs setup」只剩待配置的人，再点恢复", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+
+    const chips = screen.getByTestId("org-index-filter-chips");
+    const needs = within(chips).getByRole("button", { name: "Needs setup" });
+    expect(needs.className).toContain("min-h-11");
+    expect(needs.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(needs);
+
+    expect(screen.queryByText("Alice")).toBeNull();
+    expect(screen.getByText("Bob")).toBeTruthy();
+    expect(needs.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(needs);
+    expect(await screen.findByText("Alice")).toBeTruthy();
+  });
+
+  it("后端 chip 单选过滤", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+
+    const chips = screen.getByTestId("org-index-filter-chips");
+    fireEvent.click(within(chips).getByRole("button", { name: "Codex" }));
+    expect(screen.queryByText("Alice")).toBeNull();
+    expect(screen.getByText("Bob")).toBeTruthy();
+  });
+
+  it("桌面不变：单行行、没有 chips、组头带动作", async () => {
+    renderOrgAt("/org");
+    await screen.findByText("Alice");
+
+    expect(screen.queryAllByTestId(/^org-row-second-/)).toHaveLength(0);
+    expect(screen.queryByTestId("org-index-filter-chips")).toBeNull();
+    expect(screen.getByTestId("org-filter-entry")).toBeTruthy();
+    expect(screen.getByTestId(/^org-group-add-agent-/)).toBeTruthy();
+  });
+});
+
+describe("Agent 详情手机页头与分区顺序", () => {
+  it("页头是「‹ · 名字 · ⋯」：没有 ✕，保存状态在副行", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org/agent/agent-alice");
+    const header = await screen.findByTestId("org-detail-header");
+
+    expect(within(header).getByRole("button", { name: "Back" })).toBeTruthy();
+    expect(
+      within(header).getByRole("button", { name: "More actions" }),
+    ).toBeTruthy();
+    expect(within(header).queryByRole("button", { name: "Close" })).toBeNull();
+
+    const name = within(screen.getByTestId("org-detail-scroll")).getByRole(
+      "textbox",
+      { name: "Name" },
+    );
+    fireEvent.change(name, { target: { value: "Alicia" } });
+    fireEvent.blur(name);
+    const status = await within(header).findByTestId("org-detail-save-status");
+    const subtitle = within(header).getByTestId("org-detail-subtitle");
+    expect(subtitle.contains(status)).toBe(true);
+  });
+
+  it("手机上顺序是 身份 → 系统提示词 → 在哪儿跑 → 工具", async () => {
+    mockMobileViewport();
+    renderOrgAt("/org/agent/agent-alice");
+    await screen.findByTestId("org-detail-header");
+
+    const scroll = screen.getByTestId("org-detail-scroll");
+    const order = [
+      scroll.querySelector('[data-slot="org-detail-col-identity"]'),
+      screen.getByLabelText("System prompt", { selector: "textarea" }),
+      scroll.querySelector('[data-slot="org-detail-col-execution"]'),
+      scroll.querySelector('[data-slot="agent-section-tools"]'),
+    ];
+    order.forEach((el) => expect(el).toBeTruthy());
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(
+        Boolean(
+          order[i]!.compareDocumentPosition(order[i + 1]!) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("桌面详情头仍带 ✕", async () => {
+    renderOrgAt("/org/agent/agent-alice");
+    const header = await screen.findByTestId("org-detail-header");
+    expect(within(header).getByRole("button", { name: "Close" })).toBeTruthy();
   });
 });

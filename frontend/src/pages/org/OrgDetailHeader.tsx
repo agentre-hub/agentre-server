@@ -223,10 +223,75 @@ export interface OrgDetailHeaderProps {
   /** 移动端下钻回索引。桌面端不传——索引一直并排摆着，返回没有可去之处。 */
   onBack?: () => void;
   onClose: () => void;
+  /**
+   * 给了就是手机页头「‹ · 名字 · ⋯」：名字是只读标题，保存状态进它下面的副行，
+   * 没有 ✕（返回键已经是出口），身份编辑挪进正文的「身份」区（`identity` 不再用）。
+   * 桌面端不传，形态不变。
+   */
+  compactTitle?: string;
+}
+
+function OverflowMenu({ items }: { items: RowMenuItem[] }) {
+  const { t } = useTranslation();
+  if (items.length === 0) return null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={t("org.detail.header.more")}
+          data-testid="org-detail-menu-trigger"
+        >
+          <MoreVertical className="size-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[160px]">
+        {items.map((item) => (
+          <DropdownMenuItem
+            key={item.key}
+            variant={item.danger ? "destructive" : "default"}
+            onSelect={item.onSelect}
+          >
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 export function OrgDetailHeader(props: OrgDetailHeaderProps) {
   const { t } = useTranslation();
+  if (props.compactTitle !== undefined) {
+    return (
+      <header
+        data-testid="org-detail-header"
+        className="flex min-h-14 shrink-0 items-center gap-1 px-2 py-1.5"
+      >
+        {props.onBack && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-11 shrink-0"
+            aria-label={t("org.detail.actions.back")}
+            onClick={props.onBack}
+          >
+            <ChevronLeft className="size-5" aria-hidden="true" />
+          </Button>
+        )}
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold">
+            {props.compactTitle}
+          </h2>
+          <div data-testid="org-detail-subtitle" className="min-h-4">
+            <SaveStatus state={props.save.state} onRetry={props.save.retry} />
+          </div>
+        </div>
+        <OverflowMenu items={props.menuItems} />
+      </header>
+    );
+  }
   return (
     <header
       data-testid="org-detail-header"
@@ -249,31 +314,7 @@ export function OrgDetailHeader(props: OrgDetailHeaderProps) {
           <SaveStatus state={props.save.state} onRetry={props.save.retry} />,
         )}
       </div>
-      {props.menuItems.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={t("org.detail.header.more")}
-              data-testid="org-detail-menu-trigger"
-            >
-              <MoreVertical className="size-4" aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-[160px]">
-            {props.menuItems.map((item) => (
-              <DropdownMenuItem
-                key={item.key}
-                variant={item.danger ? "destructive" : "default"}
-                onSelect={item.onSelect}
-              >
-                {item.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+      <OverflowMenu items={props.menuItems} />
       <Button
         variant="ghost"
         size="icon-sm"

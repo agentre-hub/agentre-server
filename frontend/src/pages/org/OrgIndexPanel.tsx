@@ -48,9 +48,11 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import { InlineEmpty } from "@/components/console";
+import { deviceDisplayName } from "@/lib/devices";
 
 import { filterRowsByBackend, type OrgIdMaps } from "./adapter";
 import { orgNeedsSetupReasons } from "./needsSetup";
+import { useDeviceNames } from "./useDeviceNames";
 import type { OrgAgentItem, OrgBackendItem } from "./types";
 
 export interface OrgIndexPanelProps {
@@ -94,6 +96,22 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
   }, []);
 
   const [needsSetup, setNeedsSetup] = React.useState(false);
+  const deviceNames = useDeviceNames(props.isMobile);
+  // 两行档第二行的机器名：排第一的执行目标所在设备，备注名优先，取不到回落自报名。
+  const machineOf = (agentId: number): string | undefined => {
+    const target = agentBySync.get(maps.agentSyncOf(agentId))
+      ?.exec_targets?.[0];
+    if (!target) return undefined;
+    return (
+      (target.device_id ? deviceNames.get(target.device_id) : undefined) ??
+      (target.device_name
+        ? deviceDisplayName({ name: target.device_name })
+        : undefined)
+    );
+  };
+  const rowDensity = props.isMobile
+    ? ({ density: "stacked" } as const)
+    : undefined;
   // 不能对话的 Agent → 简短原因（行上的待配置点 + 可读名，以及「待配置」筛选的名单）。
   const needsSetupReasons = React.useMemo(
     () => orgNeedsSetupReasons([...agentBySync.values()], maps, t),
@@ -195,6 +213,47 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
     setNeedsSetup(false);
   };
 
+  const allFilterSections: FilterSection[] = [
+    {
+      key: "backend",
+      heading: t("org.index.filters.backendAria"),
+      icon: <Server className="size-3.5" aria-hidden="true" />,
+      value: backendSyncId,
+      onValueChange: setBackendSyncId,
+      options: backends.map((b) => ({
+        value: b.sync_id,
+        label: b.name ?? b.sync_id,
+      })),
+    },
+    {
+      key: "reportsTo",
+      heading: t("org.index.filters.reportsToAria"),
+      icon: <CornerDownRight className="size-3.5" aria-hidden="true" />,
+      value: reportsToId > 0 ? String(reportsToId) : "",
+      onValueChange: (v) => setReportsToId(Number(v)),
+      options: reportsToOptions.map((a) => ({
+        value: String(a.id),
+        label: a.name,
+      })),
+    },
+    {
+      key: "setup",
+      heading: t("org.index.filters.needsSetupAria"),
+      icon: <CircleAlert className="size-3.5" aria-hidden="true" />,
+      value: needsSetup ? "1" : "",
+      onValueChange: (v) => setNeedsSetup(v === "1"),
+      options: [{ value: "1", label: t("org.index.filters.needsSetup") }],
+    },
+  ];
+  // 手机上后端与待配置是搜索框下面的 chips（≥44px 命中区），筛选入口只留
+  // 「汇报给」这一维——它的选项是人名，多到放不成一排。
+  const filterSections = props.isMobile
+    ? allFilterSections.filter((section) => section.key === "reportsTo")
+    : allFilterSections;
+  const entryChips = props.isMobile
+    ? filterChips.filter((c) => c.key === "reportsTo")
+    : filterChips;
+
   const visibleCount =
     topRows.length + matchedGroups.reduce((sum, g) => sum + g.rows.length, 0);
   const noMatch = visibleCount === 0 && conditions.length > 0;
@@ -217,46 +276,11 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
             className="min-w-0 flex-1"
           />
           <FilterEntry
-            activeCount={filterChips.length}
+            activeCount={entryChips.length}
             allLabel={t("org.index.filters.all")}
             label={t("org.index.filters.entry")}
             ariaLabel={t("org.index.filters.entryAria")}
-            sections={[
-              {
-                key: "backend",
-                heading: t("org.index.filters.backendAria"),
-                icon: <Server className="size-3.5" aria-hidden="true" />,
-                value: backendSyncId,
-                onValueChange: setBackendSyncId,
-                options: backends.map((b) => ({
-                  value: b.sync_id,
-                  label: b.name ?? b.sync_id,
-                })),
-              },
-              {
-                key: "reportsTo",
-                heading: t("org.index.filters.reportsToAria"),
-                icon: (
-                  <CornerDownRight className="size-3.5" aria-hidden="true" />
-                ),
-                value: reportsToId > 0 ? String(reportsToId) : "",
-                onValueChange: (v) => setReportsToId(Number(v)),
-                options: reportsToOptions.map((a) => ({
-                  value: String(a.id),
-                  label: a.name,
-                })),
-              },
-              {
-                key: "setup",
-                heading: t("org.index.filters.needsSetupAria"),
-                icon: <CircleAlert className="size-3.5" aria-hidden="true" />,
-                value: needsSetup ? "1" : "",
-                onValueChange: (v) => setNeedsSetup(v === "1"),
-                options: [
-                  { value: "1", label: t("org.index.filters.needsSetup") },
-                ],
-              },
-            ]}
+            sections={filterSections}
           />
           {props.isMobile ? (
             // 桌面那两个空详情区按钮（新建部门 / 新建 Agent）移动端没有落点——
@@ -299,12 +323,47 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
             </Button>
           )}
         </div>
-        {filterChips.length > 0 && (
+        {props.isMobile && (
+          <div
+            className="-mx-2.5 flex gap-2 overflow-x-auto px-2.5"
+            data-testid="org-index-filter-chips"
+          >
+            <FilterChip
+              pressed={!needsSetup && !backendSyncId}
+              onClick={() => {
+                setNeedsSetup(false);
+                setBackendSyncId("");
+              }}
+            >
+              {t("org.index.filters.all")}
+            </FilterChip>
+            <FilterChip
+              pressed={needsSetup}
+              onClick={() => setNeedsSetup((v) => !v)}
+            >
+              {t("org.index.filters.needsSetup")}
+            </FilterChip>
+            {backends.map((b) => (
+              <FilterChip
+                key={b.sync_id}
+                pressed={backendSyncId === b.sync_id}
+                onClick={() =>
+                  setBackendSyncId((cur) =>
+                    cur === b.sync_id ? "" : b.sync_id,
+                  )
+                }
+              >
+                {b.name ?? b.sync_id}
+              </FilterChip>
+            ))}
+          </div>
+        )}
+        {entryChips.length > 0 && (
           <div
             className="flex flex-wrap items-center gap-1.5"
             data-testid="org-index-chips"
           >
-            {filterChips.map((condition) => (
+            {entryChips.map((condition) => (
               <button
                 key={condition.key}
                 type="button"
@@ -362,6 +421,8 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                 }
                 onSelect={props.onSelect}
                 gap={needsSetupReasons.get(row.agent.id)}
+                {...rowDensity}
+                machine={props.isMobile ? machineOf(row.agent.id) : undefined}
               />
             ))}
             {groups.map((group) => (
@@ -375,12 +436,15 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                   onSelect={props.onSelect}
                   expanded={!collapsed.has(group.department.id)}
                   onToggleExpanded={() => toggleCollapsed(group.department.id)}
+                  summary={props.isMobile}
                   actions={
-                    <GroupActions
-                      department={group.department}
-                      onCreateAgent={props.onCreateAgent}
-                      onCreateDepartment={props.onCreateDepartment}
-                    />
+                    props.isMobile ? undefined : (
+                      <GroupActions
+                        department={group.department}
+                        onCreateAgent={props.onCreateAgent}
+                        onCreateDepartment={props.onCreateDepartment}
+                      />
+                    )
                   }
                 />
                 {group.rows.map((row) => (
@@ -396,6 +460,10 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                     }
                     onSelect={props.onSelect}
                     gap={needsSetupReasons.get(row.agent.id)}
+                    {...rowDensity}
+                    machine={
+                      props.isMobile ? machineOf(row.agent.id) : undefined
+                    }
                   />
                 ))}
               </React.Fragment>
@@ -491,6 +559,28 @@ function GroupActions(props: {
         </DropdownMenuContent>
       </DropdownMenu>
     </>
+  );
+}
+
+function FilterChip(props: {
+  pressed: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={props.pressed}
+      onClick={props.onClick}
+      className={cn(
+        "inline-flex min-h-11 shrink-0 cursor-pointer items-center rounded-full px-3.5 text-xs outline-none transition-colors focus-visible:focus-outline motion-reduce:transition-none",
+        props.pressed
+          ? "bg-primary-soft text-primary-text"
+          : "bg-button-fill text-muted-foreground",
+      )}
+    >
+      {props.children}
+    </button>
   );
 }
 
