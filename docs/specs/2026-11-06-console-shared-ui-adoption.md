@@ -7,7 +7,7 @@
 **Objective:** 把 `@agentre-hub/agentre-ui`（及同版本的 `@agentre-hub/agentre-wire`）的钉从 agentre `4a759e83` 抬到 `70e53804`（agentre PR #86 合并提交），让控制台拿到 2026-11-05 UI/UX 打磨里共享包的改动，并在控制台宿主接上需要宿主提供数据/回调的新能力，使控制台与桌面端的对话体验一致。桌面端规格见 agentre `docs/specs/2026-11-05-ux-polish.md`（C1–C8、S1–S6），本文件只写控制台侧的需求与决策。叠在 `ux/2026-11-05-ux-polish` 分支（PR #36）上一起发布。
 
 **Hard invariants:**
-- 不改 `pkg/wire` / `pkg/syncwire` 的 Go 钉（`4a759e83..70e53804` 之间二者只有注释/测试级改动），不改协议版本，不加迁移。
+- `pkg/wire` / `pkg/syncwire` 的 Go 钉跟着前端钉一起抬到同一提交 `6bde33a8`（`internal/pkg/wireversion` 守卫要求 Go `pkg/wire` 与 TS `agentre-wire` 同一 commit；`4a759e83..6bde33a8` 之间二者只有 README/注释改动），不改协议版本，不加迁移。
 - 控制台只改宿主与测试；共享包的改动按跨仓顺序先在 agentre 落地合并（本轮 agentre 只做 A4 需要的计数规则抽取）。
 - 不加解释性状态 banner；界面不贴机器原话；文案走 i18n，zh-CN 与 en 同步。
 - 每条行为改动先写失败测试（TDD）；抬钉导致的既有断言失败，只改断言到新的共享包行为，不回退共享包行为。
