@@ -950,7 +950,7 @@ describe("一条还没发第一句的对话", () => {
     await openDraft();
     await awaitDraftComposer();
 
-    expect(screen.getByText("↵ Send · ⇧↵ New line")).toBeTruthy();
+    expect(screen.getByTestId("session-detail-composer")).toBeTruthy();
     expect(screen.queryByTestId("draft-composer")).toBeNull();
   });
 

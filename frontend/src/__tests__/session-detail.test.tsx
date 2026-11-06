@@ -1471,7 +1471,7 @@ describe("会话详情页", () => {
     // 仍然钉住的是这条用例真正要证的事:实时事件到达后页面**主动重拉了一次**
     // pendingWaiters（fake runtime 阻塞在审批上,run 不会结束,onRunResultDone
     // 那条刷新路径到不了）。
-    expect(await screen.findByText("Allow Once")).toBeTruthy();
+    expect(await screen.findByText("Allow")).toBeTruthy();
     expect(waitersCall).toBeGreaterThanOrEqual(2);
   });
 
@@ -1497,7 +1497,7 @@ describe("会话详情页", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     await waitFor(() => {
       const call = fakeClient.request.mock.calls.find(
@@ -1538,7 +1538,7 @@ describe("会话详情页", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     // 不报错、不静默:就地说明已被处理。
     expect(
@@ -1583,7 +1583,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     await waitFor(() => {
       expect(
@@ -1623,7 +1623,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
 
     await waitFor(() => expect(errored).toHaveBeenCalled());
     expect(errored.mock.calls[0][0]).toBe(
@@ -1673,7 +1673,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // 面板里那张卡现在**就是**转录里那张（共享包的 ToolPermissionCard），
     // testid 由包给。钉 testid 而不是标题：标题是包的文案，改了不该让本站红。
     expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Allow Once" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     expect(
       await screen.findByText("This request has already been handled."),
     ).toBeTruthy();
@@ -1689,7 +1689,7 @@ describe("会话详情页:提交决策的失败路径", () => {
     // tp-2 是**经事件流**来的，所以转录里就有它的可交互审批卡，panelWaiters 把它
     // 从面板里滤掉了（同一条待决不重复显示两处）。tp-1 只在 waiters 里出现过、
     // 事件流里没有，所以上面那一步仍然走的是面板 —— 这正是面板不能删的理由。
-    expect(await screen.findByText("Allow Once")).toBeTruthy();
+    expect(await screen.findByText("Allow")).toBeTruthy();
     await waitFor(() => {
       expect(screen.queryByText("This request has already been handled.")).toBe(
         null,
@@ -2007,7 +2007,7 @@ describe("SessionDetailView 可复用视图(任务 5 重构边界)", () => {
       } as never);
     });
 
-    expect(screen.queryByText(/Agent call failed: boom/)).toBeNull();
+    expect(screen.queryByText("This turn did not finish.")).toBeNull();
     const said = (text: string) =>
       (screen.getByTestId("session-detail-transcript").textContent ?? "").split(
         text,
@@ -4268,7 +4268,10 @@ describe("会话详情：历史来自 server 镜像", () => {
     expect(said("我先看一下")).toBe(1);
     // 收场只有一份：一张错误卡，一轮 meta。重放不得把 error 落成第二条助手消息
     // （落上去就会多一张卡），也不得把本轮耗时再盖到另一条消息上（8.3s 会出现两遍）。
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
     expect(said("8.3s")).toBe(1);
   });
 
@@ -4382,7 +4385,10 @@ describe("会话详情：历史来自 server 镜像", () => {
       (transcript.textContent ?? "").split(text).length - 1;
     expect(said("看看目录")).toBe(1);
     expect(said("我先看一下")).toBe(1);
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
     // 本轮 meta 也只画一遍：8.3s 正是那一轮终态帧带来的耗时。
     expect(said("8.3s")).toBe(1);
   });
@@ -4537,7 +4543,10 @@ describe("会话详情：历史来自 server 镜像", () => {
     expect(said("我先看一下")).toBe(1);
     expect(said("再问一句")).toBe(1);
     // 终态只收场一次：一张错误卡。多出来那张就是实时那批合成帧被镜像让位规则漏掉。
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
   });
 
   /*
@@ -4654,7 +4663,10 @@ describe("会话详情：历史来自 server 镜像", () => {
       (transcript.textContent ?? "").split(text).length - 1;
     expect(said("看看目录")).toBe(1);
     expect(said("我先看一下")).toBe(1);
-    expect(said("Agent call failed: boom")).toBe(1);
+    // 失败卡标题是共享包的一句事实；机器原话折在「Details」里，展开后才在转录里。
+    expect(said("This turn did not finish.")).toBe(1);
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(said("boom")).toBe(1);
     expect(said("8.3s")).toBe(1);
   });
 });
@@ -6241,14 +6253,14 @@ describe("会话详情：输入框", () => {
     expect(screen.queryByTestId("composer-context-meter")).toBeNull();
   });
 
-  it("底栏说得出按什么键发出去（与桌面端逐字一致）", async () => {
+  it("输入框由共享包出，且不再叠默认的「↵ Send」提示行", async () => {
     stubComposer();
     renderComposer();
 
     await screen.findByText("开场白");
-    // 这句现在由共享包出（两端同一份文案），所以按可见文字断言而不是找宿主
-    // 自己的 testid —— 包不该知道某个宿主的测试怎么写。
-    expect(screen.getByText("↵ Send · ⇧↵ New line")).toBeTruthy();
+    // 共享包已撤掉默认的发送键提示；输入框本身用宿主的稳定 testid 定位。
+    expect(screen.getByTestId("session-detail-composer")).toBeTruthy();
+    expect(screen.queryByText("↵ Send · ⇧↵ New line")).toBeNull();
   });
 
   it("以 ! 开头的一行不会被静默吞掉：如实说这一端执行不了，文本还留在框里", async () => {
@@ -9237,7 +9249,7 @@ describe("会话详情页:上游正在重试", () => {
     });
   }
 
-  const retryCard = () => screen.queryByRole("status", { name: "Retrying" });
+  const retryCard = () => screen.queryByTestId("transcript-retry");
 
   function pushEvent(event: Record<string, unknown>, seq: number) {
     act(() =>
@@ -9257,7 +9269,9 @@ describe("会话详情页:上游正在重试", () => {
     );
 
     await waitFor(() => expect(retryCard()).toBeTruthy());
-    expect(screen.getByText("Retrying 2/3")).toBeTruthy();
+    expect(
+      screen.getByText("Upstream connection lost, retrying 2/3"),
+    ).toBeTruthy();
 
     // 模型开口 = 这一次重试成功了。卡不撤，用户会对着「正在重试」读下面正常长
     // 出来的回答。

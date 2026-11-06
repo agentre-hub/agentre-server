@@ -58,7 +58,7 @@ describe("转录里的交互卡接到中继上", () => {
       },
     );
 
-    fireEvent.click(screen.getByText("Allow Once"));
+    fireEvent.click(screen.getByText("Allow", { exact: true }));
 
     expect(submitToolPermission).toHaveBeenCalledTimes(1);
     expect(submitToolPermission.mock.calls[0][0]).toMatchObject({
@@ -113,7 +113,7 @@ describe("转录里的交互卡接到中继上", () => {
       },
     );
 
-    expect(screen.queryByText("Allow Once")).toBeNull();
+    expect(screen.queryByText("Allow", { exact: true })).toBeNull();
     expect(screen.queryByText("Reject")).toBeNull();
   });
 
