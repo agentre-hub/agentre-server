@@ -7,7 +7,14 @@ import {
   SessionLifecycleRunning,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -402,6 +409,15 @@ export default function SessionDetailView({
    * 草稿」时把那段字放回输入框（草稿页的「快捷开头」用的是同一只句柄）。
    */
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
+  /**
+   * 此刻挂着的是哪一条会话。输入框按 (did, sid) 重挂，而这一页本身是同实例换 props：
+   * 在途的应答回来时句柄指着的可能已经是**另一条**会话的输入框，往里回填之前先对一下。
+   */
+  const targetKey = `${did}:${sid}:${originProp ?? ""}`;
+  const targetKeyRef = useRef(targetKey);
+  useLayoutEffect(() => {
+    targetKeyRef.current = targetKey;
+  }, [targetKey]);
   /**
    * 已经为哪一条对话记过「读到这里」了。键就是 `conversation_id`（决策 1）。
    * 同一条重渲染不再记一次；换一条才再记。
@@ -1480,6 +1496,7 @@ export default function SessionDetailView({
       const c = clientRef.current;
       const item = steerQueue.items.find((q) => q.id === queuedId);
       if (!c || !item) return;
+      const issuedFor = targetKeyRef.current;
       steerQueue.markWithdrawing(queuedId, true);
       try {
         const result = (await c.request(rpcMethods.runtimeCancelSteer, {
@@ -1490,7 +1507,10 @@ export default function SessionDetailView({
         const removed = result?.removed ?? [];
         steerQueue.drop(removed);
         if (removed.includes(queuedId)) {
-          composerHandleRef.current?.appendDraft(item.text);
+          // 应答回来前换了会话：这条字属于上一条，不落进眼下这只输入框。
+          if (targetKeyRef.current === issuedFor) {
+            composerHandleRef.current?.appendDraft(item.text);
+          }
         } else {
           steerQueue.markWithdrawing(queuedId, false);
         }

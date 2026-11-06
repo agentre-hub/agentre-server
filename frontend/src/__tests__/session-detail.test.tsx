@@ -2597,6 +2597,46 @@ describe("会话详情页:插话之后的排队队列", () => {
     expect(screen.getByText("先别动数据库")).toBeTruthy();
   });
 
+  // Given 在 42 上点了撤回、应答还在路上 / When 右栏换到 43（同实例换 props，输入框
+  // 按会话重挂）之后应答才回来 / Then 42 的字不落进 43 的输入框。
+  it("Given 撤回在途 When 应答回来前切到另一条对话 Then 原文不落进新对话的输入框", async () => {
+    let resolveCancel: (v: { removed: string[] }) => void = () => {};
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeCancelSteer)
+        return new Promise((r) => (resolveCancel = r));
+      throw new Error("unexpected: " + m);
+    });
+
+    const { rerender } = renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move back to input" }),
+    );
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeCancelSteer)).toHaveLength(1),
+    );
+
+    rerender(
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="43" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await awaitComposer();
+    await act(async () => resolveCancel({ removed: ["q-remote-1"] }));
+
+    expect(composerText()).toBe("");
+  });
+
   // Given 对端还没升级（应答里没有句柄）/ When 排队 / Then chip 照画但撤不掉。
   //
   // 用户写的字在任何链路组合下都看得见；拿本地号去撤是撤不到任何东西的，所以那颗
