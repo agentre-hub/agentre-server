@@ -2894,3 +2894,156 @@ describe("草稿与详情共用同一条顶带", () => {
     ).toContain("agent-tester");
   });
 });
+
+/**
+ * 手机形态的新对话（规格 2026-11-05「新对话」、决策 4）：✎ 弹「选 Agent」，
+ * 选定后新对话页与对话页同构——收件人页头、空态、同一个触屏输入框。
+ */
+describe("手机上的新对话", () => {
+  const originalMatchMedia = window.matchMedia;
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    stubReads();
+    mockFetchPlan.mockResolvedValue(availablePlan);
+    mockEnsureRelayTicket.mockResolvedValue(relayTicket);
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+  });
+
+  async function openPhoneSheet() {
+    renderChat();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    return screen.findByTestId("new-conversation-sheet");
+  }
+
+  async function openPhoneDraft() {
+    const sheet = await openPhoneSheet();
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    return screen.findByTestId("draft-session");
+  }
+
+  it("✎ 弹出的是共享包 DialogShell 的底部弹层，三段与「从项目里挑」都在，开不了的不可点且写明原因", async () => {
+    const sheet = await openPhoneSheet();
+    expect(sheet.closest('[data-slot="dialog-shell-content"]')).not.toBeNull();
+    expect(within(sheet).getByTestId("agent-group-available")).toBeTruthy();
+    const blocked = within(sheet).getByTestId("agent-pick-agent-2");
+    expect(blocked.hasAttribute("disabled")).toBe(true);
+    expect(
+      within(sheet).getByTestId("agent-pick-agent-2-target").textContent,
+    ).toContain("Office Mac mini");
+    expect(within(sheet).getByTestId("agent-group-unavailable")).toBeTruthy();
+    expect(within(sheet).getByTestId("sheet-from-project")).toBeTruthy();
+  });
+
+  it("选定后页头是收件人：返回 · 头像 · 名字 ⌄ / 在线 · 新对话", async () => {
+    await openPhoneDraft();
+    const header = screen.getByTestId("draft-header");
+    expect(within(header).getByRole("button", { name: "Back" })).toBeTruthy();
+    const recipient = within(header).getByTestId("draft-recipient");
+    expect(recipient.textContent).toContain("Backend Agent");
+    await waitFor(() =>
+      expect(screen.getByTestId("draft-header-meta").textContent).toContain(
+        "Online",
+      ),
+    );
+    expect(screen.getByTestId("draft-header-meta").textContent).toContain(
+      "New chat",
+    );
+  });
+
+  it("空态：头像 + 一句话 + 项目 / 运行在 / 模型三行事实 + 接着最近的对话", async () => {
+    await openPhoneDraft();
+    const empty = await screen.findByTestId("draft-phone-empty");
+    expect(within(empty).getByTestId("draft-empty-avatar")).toBeTruthy();
+    expect(empty.textContent).toContain(
+      "Start a conversation with Backend Agent",
+    );
+    const facts = await screen.findByTestId("draft-facts");
+    expect(
+      within(facts).getByTestId("draft-fact-project").textContent,
+    ).toContain("No project");
+    await waitFor(() =>
+      expect(
+        within(facts).getByTestId("draft-fact-target").textContent,
+      ).toContain("Study Mini"),
+    );
+    expect(within(facts).getByTestId("draft-fact-model")).toBeTruthy();
+    expect(screen.getByTestId("draft-continue-recent")).toBeTruthy();
+  });
+
+  it("点「项目」那一行开项目选择，选定后事实行跟着换", async () => {
+    await openPhoneDraft();
+    await screen.findByTestId("draft-facts");
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("draft-fact-project").hasAttribute("disabled"),
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByTestId("draft-fact-project"));
+    fireEvent.click(await screen.findByTestId("draft-project-proj-1"));
+    await waitFor(() =>
+      expect(screen.getByTestId("draft-fact-project").textContent).toContain(
+        "frontend",
+      ),
+    );
+  });
+
+  it("有字时空态收成只剩三行事实；清空后回来", async () => {
+    await openPhoneDraft();
+    await screen.findByTestId("draft-phone-empty");
+    await typeInDraft("手机上的看板");
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-phone-empty")).toBeNull(),
+    );
+    expect(screen.queryByTestId("draft-empty-avatar")).toBeNull();
+    expect(screen.queryByTestId("draft-continue-recent")).toBeNull();
+    expect(screen.getByTestId("draft-facts")).toBeTruthy();
+    await typeInDraft("");
+    expect(await screen.findByTestId("draft-phone-empty")).toBeTruthy();
+  });
+
+  it("输入框是触屏档：回车换行（enterkeyhint=enter）", async () => {
+    await openPhoneDraft();
+    await awaitDraftComposer();
+    expect(draftEditable().getAttribute("enterkeyhint")).toBe("enter");
+  });
+
+  it("接着最近的对话：回到列表并按这个 Agent 收窄", async () => {
+    await openPhoneDraft();
+    fireEvent.click(await screen.findByTestId("draft-continue-recent"));
+    await waitFor(() => expect(currentSearch()).toContain("agent=agent-1"));
+    expect(currentSearch()).toContain("axis=agent");
+    expect(screen.queryByTestId("draft-session")).toBeNull();
+  });
+
+  it("点收件人名字可以换一个 Agent（再弹「选 Agent」）", async () => {
+    stubReads(
+      {},
+      [],
+      [...agents, { ...agents[0], sync_id: "agent-4", name: "Third Agent" }],
+    );
+    await openPhoneDraft();
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-4"));
+    await waitFor(() =>
+      expect(screen.getByTestId("draft-recipient").textContent).toContain(
+        "Third Agent",
+      ),
+    );
+  });
+});
