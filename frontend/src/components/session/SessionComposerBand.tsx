@@ -72,6 +72,8 @@ export interface SessionComposerBandProps {
   /** 轮末没被取走、等用户处置的那几条。 */
   droppedQueue: QueuedItem[];
   onCancelQueued: (id: string) => void;
+  /** 把这一条撤回到输入框：对端确认移除之后原文接在草稿后面。 */
+  onWithdrawQueued: (id: string) => void;
   onClearQueued: () => void;
   onRestoreDropped: () => void;
   onDiscardDropped: () => void;
@@ -112,6 +114,7 @@ export default function SessionComposerBand({
   queued,
   droppedQueue,
   onCancelQueued,
+  onWithdrawQueued,
   onClearQueued,
   onRestoreDropped,
   onDiscardDropped,
@@ -249,6 +252,7 @@ export default function SessionComposerBand({
               <QueuedMessagesBar
                 queued={queued}
                 onCancel={onCancelQueued}
+                onWithdraw={onWithdrawQueued}
                 onClearAll={onClearQueued}
                 dropped={droppedQueue}
                 onRestoreDropped={onRestoreDropped}

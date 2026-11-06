@@ -6,6 +6,7 @@ import {
   emptySteerQueue,
   enqueueSteer,
   markSteerNotCancellable,
+  markSteerWithdrawing,
   type ConsumedSteerRef,
   type QueuedItem,
   type SteerQueueState,
@@ -40,6 +41,8 @@ export interface SteerQueue {
   drop: (ids: string[]) => void;
   /** 撤回被对端拒了：这条留在原位、转成撤不掉，并挂上对端那句话。 */
   refuseCancel: (id: string, note?: string) => void;
+  /** 「撤回到输入框」在途：挂上 / 摘掉这一条的撤回中标记。 */
+  markWithdrawing: (id: string, withdrawing: boolean) => void;
   /** 一轮结束：还剩的挪进 dropped 等用户处置，不静默清掉。 */
   endTurn: () => void;
   /** 用户把被丢弃的那几条领回去了（或选择丢弃）。 */
@@ -111,6 +114,13 @@ export function useSteerQueue(): SteerQueue {
     [update],
   );
 
+  const markWithdrawing = useCallback(
+    (id: string, withdrawing: boolean) => {
+      update((queue) => markSteerWithdrawing(queue, id, withdrawing));
+    },
+    [update],
+  );
+
   /*
     轮末残留不静默清掉：用户刚敲完的那段字凭空消失、且无从补救，比多一条横幅糟得多
     （规格决策 4）。已经有一份暂存着时不覆盖——那一份还等着用户处置。
@@ -143,6 +153,7 @@ export function useSteerQueue(): SteerQueue {
     consume,
     drop,
     refuseCancel,
+    markWithdrawing,
     endTurn,
     clearDropped,
     reset,
