@@ -8,7 +8,9 @@
   "sections": {
     "providers": "LLM providers",
     "backends": "Agent backends",
-    "privacy": "Privacy"
+    "privacy": "Privacy",
+    "appearance": "Appearance",
+    "language": "Language"
   },
   "syncStatus": "Account configuration · synced to {{count}} devices",
   "offlineNotice": "Configuration stays in your account and will sync after you register a device.",
@@ -81,5 +83,10 @@
       "count": "{{count}} conversations",
       "body": "Only conversations you explicitly saved are stored in your account. This is not a switch — unsave them one at a time on the Conversations page."
     }
+  },
+  "theme": {
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
   }
 }

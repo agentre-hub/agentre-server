@@ -11,7 +11,11 @@ import type {
 
 import { api } from "@/lib/api";
 import { cliOverlayPath, listCLIModelsOn } from "@/lib/cliModels";
-import { fetchDevices, type DeviceItem } from "@/lib/devices";
+import {
+  deviceDisplayName,
+  fetchDevices,
+  type DeviceItem,
+} from "@/lib/devices";
 import { withRelayClient } from "@/lib/relayClientPool";
 import { machineTarget } from "@/lib/relayTarget";
 
@@ -571,9 +575,13 @@ export function createBrowserEngineSettingsPorts(
     const devices = await fetchDevices();
     deviceNames.clear();
     for (const device of devices) {
-      // 没名字的设备退回指纹：名字为空会被读成「这台机器已撤销」，而它明明还在。
+      // 显示名（备注名优先）；都没有的设备退回指纹：名字为空会被读成
+      // 「这台机器已撤销」，而它明明还在。
       if (device.fingerprint)
-        deviceNames.set(device.fingerprint, device.name || device.fingerprint);
+        deviceNames.set(
+          device.fingerprint,
+          deviceDisplayName(device) || device.fingerprint,
+        );
     }
     return devices;
   }

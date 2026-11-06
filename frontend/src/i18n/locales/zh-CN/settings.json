@@ -8,7 +8,9 @@
   "sections": {
     "providers": "LLM 供应商",
     "backends": "Agent 后端",
-    "privacy": "隐私"
+    "privacy": "隐私",
+    "appearance": "外观",
+    "language": "语言"
   },
   "syncStatus": "账号配置 · 已同步 {{count}} 台设备",
   "offlineNotice": "配置会先保存在账号中，登记设备后自动同步。",
@@ -81,5 +83,10 @@
       "count": "{{count}} 条",
       "body": "只有你显式保存过的对话会存到账号里。这一项不是开关，取消保存在「对话」页逐条操作。"
     }
+  },
+  "theme": {
+    "system": "跟随系统",
+    "light": "浅色",
+    "dark": "深色"
   }
 }
