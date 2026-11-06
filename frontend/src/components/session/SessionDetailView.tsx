@@ -7,7 +7,14 @@ import {
   SessionLifecycleRunning,
   type SessionSummary,
 } from "@agentre-hub/agentre-wire";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -402,6 +409,15 @@ export default function SessionDetailView({
    * 草稿」时把那段字放回输入框（草稿页的「快捷开头」用的是同一只句柄）。
    */
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
+  /**
+   * 此刻挂着的是哪一条会话。输入框按 (did, sid) 重挂，而这一页本身是同实例换 props：
+   * 在途的应答回来时句柄指着的可能已经是**另一条**会话的输入框，往里回填之前先对一下。
+   */
+  const targetKey = `${did}:${sid}:${originProp ?? ""}`;
+  const targetKeyRef = useRef(targetKey);
+  useLayoutEffect(() => {
+    targetKeyRef.current = targetKey;
+  }, [targetKey]);
   /**
    * 已经为哪一条对话记过「读到这里」了。键就是 `conversation_id`（决策 1）。
    * 同一条重渲染不再记一次；换一条才再记。
@@ -1469,14 +1485,52 @@ export default function SessionDetailView({
   );
 
   /**
-   * 轮末没被取走的那几条，用户选择领回去：把文本放回输入框草稿。
+   * 把一条排着的插话撤回到输入框（规格 agentre 2026-11-06-queued-withdraw-to-composer）。
    *
-   * 与桌面端那一颗同名键落点不同（那边放回队列），因为这一轮已经结束了——放回队列
-   * 的话没有任何人会来取（规格决策 5）。多条按排队顺序拼接，中间空行分隔。
+   * 只有对端确认移除了**这一条**才把原文接进输入框：它若在等应答时被取走，转录里
+   * 已经有了，再回填就成了两份。被拒时与删除被拒同一个处置——留在原位、挂上对端那
+   * 句话；它多半是刚被取走，紧接着的 steer_consumed 会把它清掉。
+   */
+  const withdrawQueued = useCallback(
+    async (queuedId: string) => {
+      const c = clientRef.current;
+      const item = steerQueue.items.find((q) => q.id === queuedId);
+      if (!c || !item) return;
+      const issuedFor = targetKeyRef.current;
+      steerQueue.markWithdrawing(queuedId, true);
+      try {
+        const result = (await c.request(rpcMethods.runtimeCancelSteer, {
+          conversationId: sid,
+          ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
+          queuedId,
+        })) as { removed?: string[] } | undefined;
+        const removed = result?.removed ?? [];
+        steerQueue.drop(removed);
+        if (removed.includes(queuedId)) {
+          // 应答回来前换了会话：这条字属于上一条，不落进眼下这只输入框。
+          if (targetKeyRef.current === issuedFor) {
+            composerHandleRef.current?.appendDraft(item.text);
+          }
+        } else {
+          steerQueue.markWithdrawing(queuedId, false);
+        }
+      } catch (err) {
+        steerQueue.markWithdrawing(queuedId, false);
+        steerQueue.refuseCancel(queuedId, classifySendFailure(err).detail);
+      }
+    },
+    [sid, steerQueue],
+  );
+
+  /**
+   * 轮末没被取走的那几条，用户选择领回去：把文本接到输入框现有草稿后面。
+   *
+   * 这一轮已经结束了——放回队列的话没有任何人会来取（规格决策 5）。多条按排队顺序
+   * 拼接，中间空行分隔；接在后面而不是整体替换，用户正在写的那一半不会被吞掉。
    */
   const restoreDropped = useCallback(() => {
     const text = steerQueue.dropped.map((q) => q.text).join("\n\n");
-    if (text) composerHandleRef.current?.restoreDraft(text, []);
+    if (text) composerHandleRef.current?.appendDraft(text);
     steerQueue.clearDropped();
   }, [steerQueue]);
 
@@ -2026,6 +2080,7 @@ export default function SessionDetailView({
       queued={steerQueue.items}
       droppedQueue={steerQueue.dropped}
       onCancelQueued={(id) => void cancelQueued(id)}
+      onWithdrawQueued={(id) => void withdrawQueued(id)}
       onClearQueued={() => void cancelQueued("")}
       onRestoreDropped={restoreDropped}
       onDiscardDropped={steerQueue.clearDropped}

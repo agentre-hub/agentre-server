@@ -2480,7 +2480,7 @@ describe("会话详情页:插话之后的排队队列", () => {
     expect(await screen.findByText("先别动数据库")).toBeTruthy();
     expect(screen.getByText("Queued · 1")).toBeTruthy();
     expect(
-      await screen.findByRole("button", { name: "Cancel this queued message" }),
+      await screen.findByRole("button", { name: "Delete this queued message" }),
     ).toBeTruthy();
   });
 
@@ -2517,7 +2517,7 @@ describe("会话详情页:插话之后的排队队列", () => {
     await screen.findByText(/重构登录页/);
     await send("先别动数据库");
     const cancel = await screen.findByRole("button", {
-      name: "Cancel this queued message",
+      name: "Delete this queued message",
     });
 
     fireEvent.click(cancel);
@@ -2529,6 +2529,112 @@ describe("会话详情页:插话之后的排队队列", () => {
       });
     });
     await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+  });
+
+  /** 输入框里逐段的文字（TipTap 一段一个 <p>，空行是一个空段）。 */
+  function composerParagraphs(): string[] {
+    return Array.from(composerEditable().querySelectorAll("p")).map(
+      (p) => p.textContent ?? "",
+    );
+  }
+
+  // Given 排着一条、输入框里写了一半 / When 点「撤回到输入框」且对端确认移除了它 /
+  // Then 原文空一行接在草稿后面（不覆盖），chip 消失。只有对端说撤掉了才回填：
+  // 它若刚好被取走，转录里已经有了，再回填就成了两份。
+  it("Given 排着一条且输入框有草稿 When 撤回到输入框且对端确认移除 Then 原文空行接在草稿后、chip 消失", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeCancelSteer)
+        return { removed: ["q-remote-1"] };
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    await typeInComposer("还没写完");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move back to input" }),
+    );
+
+    await waitFor(() =>
+      expect(composerParagraphs()).toEqual(["还没写完", "", "先别动数据库"]),
+    );
+    expect(callsOf(rpcMethods.runtimeCancelSteer)[0]?.[1]).toMatchObject({
+      conversationId: "42",
+      queuedId: "q-remote-1",
+    });
+    await waitFor(() => expect(screen.queryByText("Queued · 1")).toBeNull());
+  });
+
+  // Given 排着一条 / When 撤回到输入框但对端拒了（多半刚被取走）/ Then 输入框不变，
+  // chip 按这一端撤回被拒的老规矩转成撤不掉、挂上对端那句话。
+  it("Given 排着一条 When 撤回到输入框被对端拒绝 Then 输入框不变、chip 挂上对端原话", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeCancelSteer)
+        throw new Error("steer already consumed");
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move back to input" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Move back to input" }),
+      ).toBeNull(),
+    );
+    expect(composerText()).toBe("");
+    expect(screen.getByText("先别动数据库")).toBeTruthy();
+  });
+
+  // Given 在 42 上点了撤回、应答还在路上 / When 右栏换到 43（同实例换 props，输入框
+  // 按会话重挂）之后应答才回来 / Then 42 的字不落进 43 的输入框。
+  it("Given 撤回在途 When 应答回来前切到另一条对话 Then 原文不落进新对话的输入框", async () => {
+    let resolveCancel: (v: { removed: string[] }) => void = () => {};
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeCancelSteer)
+        return new Promise((r) => (resolveCancel = r));
+      throw new Error("unexpected: " + m);
+    });
+
+    const { rerender } = renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Move back to input" }),
+    );
+    await waitFor(() =>
+      expect(callsOf(rpcMethods.runtimeCancelSteer)).toHaveLength(1),
+    );
+
+    rerender(
+      <MemoryRouter initialEntries={["/chat/42"]}>
+        <ThemeProvider>
+          <Routes>
+            <Route
+              path="/chat/42"
+              element={<SessionDetailView deviceId={1} conversationId="43" />}
+            />
+          </Routes>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    await awaitComposer();
+    await act(async () => resolveCancel({ removed: ["q-remote-1"] }));
+
+    expect(composerText()).toBe("");
   });
 
   // Given 对端还没升级（应答里没有句柄）/ When 排队 / Then chip 照画但撤不掉。
@@ -2547,7 +2653,7 @@ describe("会话详情页:插话之后的排队队列", () => {
 
     expect(await screen.findByText("先别动数据库")).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Cancel this queued message" }),
+      screen.queryByRole("button", { name: "Delete this queued message" }),
     ).toBeNull();
     expect(screen.getByText("This backend cannot cancel")).toBeTruthy();
   });
@@ -2578,6 +2684,32 @@ describe("会话详情页:插话之后的排队队列", () => {
     expect(
       screen.queryByText("1 message(s) were not sent when the turn ended"),
     ).toBeNull();
+  });
+
+  // Given 轮末有残留、输入框里又写了一半 / When 恢复为草稿 / Then 接在后面，不吞掉
+  // 正在写的字（此前整体替换，写了一半的会丢）。
+  it("Given 轮末有残留且输入框有草稿 When 恢复为草稿 Then 接在草稿后面不覆盖", async () => {
+    mountWith((m) => {
+      if (m === rpcMethods.runtimeSteer)
+        return { queuedId: "q-remote-1", cancellable: true };
+      if (m === rpcMethods.runtimeDrainPending) return { steers: [] };
+      throw new Error("unexpected: " + m);
+    });
+
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await send("先别动数据库");
+    expect(await screen.findByText("Queued · 1")).toBeTruthy();
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+    await screen.findByText("1 message(s) were not sent when the turn ended");
+    await typeInComposer("还没写完");
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore as draft" }));
+
+    await waitFor(() =>
+      expect(composerParagraphs()).toEqual(["还没写完", "", "先别动数据库"]),
+    );
   });
 
   /*
