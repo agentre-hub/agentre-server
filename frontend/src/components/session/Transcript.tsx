@@ -21,6 +21,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useIsMobile } from "@/components/use-is-mobile";
 
 import type { LiveTurnTiming } from "@/components/session/liveTurnTiming";
 import { createServerTranscriptPorts } from "@/lib/transcriptPorts";
@@ -175,6 +176,7 @@ export default function Transcript({
   getScrollElement?: () => HTMLElement | null;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
 
   const fallbackName = t("session.transcript.assistant");
   const renderCtx = useMemo<TranscriptRenderContextValue>(
@@ -195,8 +197,13 @@ export default function Transcript({
       sessionId,
       cwd,
       backendType,
+      // 手机：统计行一行紧凑档、用户消息排到右侧（桌面不传 = 与以前一致）。
+      ...(isMobile
+        ? ({ metaDensity: "compact", userMessageAlign: "end" } as const)
+        : null),
     }),
     [
+      isMobile,
       sessionId,
       cwd,
       backendType,

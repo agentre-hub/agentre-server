@@ -123,22 +123,31 @@ afterAll(() => {
   window.matchMedia = originalMatchMedia;
 });
 
+let pageOpts: UseRelayChannelOptions = {};
+
 function renderPage(
-  props: { backTo?: string; relayState?: "connected" | "connecting" } = {},
+  props: {
+    backTo?: string;
+    relayState?: "connected" | "connecting" | "reconnecting";
+  } = {},
 ) {
-  mockUseRelay.mockImplementation(() => ({
-    client: fakeClient as never,
-    relayState: props.relayState ?? "connected",
-    relayTicket: {
-      peerFingerprint: "fp-web",
-      clientName: "Browser",
-      accessToken: "t",
-      expiresAt: Date.now() + 120_000,
-    },
-    relayTicketError: null,
-    handshakeRejection: null,
-    reconnect: vi.fn(),
-  }));
+  pageOpts = {};
+  mockUseRelay.mockImplementation((_fp, opts) => {
+    pageOpts = opts ?? {};
+    return {
+      client: fakeClient as never,
+      relayState: props.relayState ?? "connected",
+      relayTicket: {
+        peerFingerprint: "fp-web",
+        clientName: "Browser",
+        accessToken: "t",
+        expiresAt: Date.now() + 120_000,
+      },
+      relayTicketError: null,
+      handshakeRejection: null,
+      reconnect: vi.fn(),
+    };
+  });
   return render(
     <MemoryRouter initialEntries={[`/chat/${CID}`]}>
       <ThemeProvider>
@@ -226,7 +235,9 @@ describe("移动端会话详情：一层头部", () => {
   ];
   const projects = [{ sync_id: "p-1", name: "登录重构", color: "agent-5" }];
 
-  function stubWithIdentity(opts: { online?: boolean } = {}) {
+  function stubWithIdentity(
+    opts: { online?: boolean; summary?: Record<string, unknown> } = {},
+  ) {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices")
         return { devices: [{ ...deviceRow, online: opts.online ?? true }] };
@@ -248,6 +259,7 @@ describe("移动端会话详情：一层头部", () => {
               ...summary,
               projectSyncId: "p-1",
               lastMessageAt: Date.now() - 60_000,
+              ...opts.summary,
             },
           ],
         };
@@ -271,7 +283,7 @@ describe("移动端会话详情：一层头部", () => {
     expect(screen.queryByRole("navigation", { name: "Back" })).toBeNull();
   });
 
-  it("一行里：返回 · 标题（一行）· 副行 Agent · 项目 · 机器与在线 · ⋯", async () => {
+  it("一行里：返回 · 标题（一行）· ⋯；副标题「● 状态 · Agent · 机器」", async () => {
     mockMobileViewport();
     stubWithIdentity();
     renderPage();
@@ -282,7 +294,6 @@ describe("移动端会话详情：一层头部", () => {
       name: "重构登录页",
     });
     expect(title.className).toContain("line-clamp-1");
-    // 56px 一层，整块铺顶带底色（含左右内边距）。
     const head = screen.getByTestId("session-detail-header");
     expect(head.className).toMatch(/(^|\s)h-14(\s|$)/);
     expect(head.className).toMatch(/(^|\s)bg-sheet-header(\s|$)/);
@@ -290,67 +301,145 @@ describe("移动端会话详情：一层头部", () => {
       within(band).getByRole("button", { name: "More actions" }),
     ).toBeTruthy();
 
-    await within(band).findByTestId("session-detail-meta-project");
     const meta = within(band).getByTestId("session-detail-meta");
     expect(
       [...meta.querySelectorAll("[data-testid^='session-detail-meta-']")].map(
         (el) => el.getAttribute("data-testid"),
       ),
     ).toEqual([
+      "session-detail-meta-status",
       "session-detail-meta-agent",
-      "session-detail-meta-project",
       "session-detail-meta-machine",
-      "session-detail-meta-updated",
     ]);
+    expect(
+      within(meta).getByTestId("session-detail-meta-status").textContent,
+    ).toContain("Idle");
     expect(
       (await within(meta).findByTestId("session-detail-meta-agent"))
         .textContent,
     ).toContain("后端 Agent");
     expect(
-      within(meta).getByTestId("session-detail-meta-project").textContent,
-    ).toContain("登录重构");
-    const machine = within(meta).getByTestId("session-detail-meta-machine");
-    expect(machine.textContent).toContain("书房小主机");
-    expect(machine.textContent).toContain("Online");
-    // 窄屏截断而不收起：三段都要留在 DOM 里、读屏读得到（`hidden` 会把它们从
-    // 可访问树里拿掉）。
+      within(meta).getByTestId("session-detail-meta-machine").textContent,
+    ).toContain("书房小主机");
+    // 窄屏截断而不收起：三段都留在 DOM 里、读屏读得到。
     for (const part of meta.querySelectorAll("[data-part]")) {
       expect(part.className).not.toMatch(/hidden/);
     }
-    // 不互相覆盖：每一段的内容都能收缩（min-w-0）并在自己那一格里截断，不再是
-    // shrink-0 的内层顶出所在那一段、压到下一段上（「19分钟前」压住 Agent 名）。
-    for (const part of meta.querySelectorAll("[data-part]")) {
-      const content = part.lastElementChild as HTMLElement;
-      expect(content.className).toContain("min-w-0");
-      expect(content.className).toMatch(/overflow-hidden|truncate/);
-      expect(content.className).not.toMatch(/(^|\s)shrink-0(\s|$)/);
-    }
   });
 
-  it("机器离线时副行如实说离线", async () => {
+  it("页头不放停止：这一轮在跑也没有；状态字写「Running」", async () => {
+    mockMobileViewport();
+    stubWithIdentity({ summary: { lifecycleState: "running" } });
+    renderPage();
+
+    const band = await screen.findByTestId("session-detail-identity");
+    await waitFor(() =>
+      expect(
+        within(band).getByTestId("session-detail-meta-status").textContent,
+      ).toContain("Running"),
+    );
+    expect(screen.queryByTestId("session-detail-stop")).toBeNull();
+    expect(within(band).queryByRole("button", { name: /stop/i })).toBeNull();
+  });
+
+  it("出错的一轮写「Error」", async () => {
+    mockMobileViewport();
+    stubWithIdentity({ summary: { lifecycleState: "failed" } });
+    renderPage();
+
+    const band = await screen.findByTestId("session-detail-identity");
+    await waitFor(() =>
+      expect(
+        within(band).getByTestId("session-detail-meta-status").textContent,
+      ).toContain("Error"),
+    );
+  });
+
+  it("通道正在（重）连时状态字写「Connecting」，进度条还在、文字只说一次", async () => {
+    mockMobileViewport();
+    stubWithIdentity();
+    renderPage({ relayState: "reconnecting" });
+
+    const band = await screen.findByTestId("session-detail-identity");
+    await waitFor(() =>
+      expect(
+        within(band).getByTestId("session-detail-meta-status").textContent,
+      ).toContain("Connecting"),
+    );
+    expect(await screen.findByTestId("connection-progress")).toBeTruthy();
+    expect(within(band).getAllByText("Connecting")).toHaveLength(1);
+  });
+
+  it("机器离线时状态字写「Offline · 时间」", async () => {
     mockMobileViewport();
     stubWithIdentity({ online: false });
     renderPage();
 
-    const machine = await screen.findByTestId("session-detail-meta-machine");
-    expect(machine.textContent).toContain("Offline");
+    const status = await screen.findByTestId("session-detail-meta-status");
+    await waitFor(() => expect(status.textContent).toMatch(/Offline · /));
   });
 
-  it("状态不丢：正在连的指示与更多操作里的每一项都还在这一层", async () => {
+  it("⋯ 开「对话信息」弹层：项目 / 运行在 / 模型 / 最后活动，动作复制对话号", async () => {
     mockMobileViewport();
-    stubWithIdentity();
-    renderPage({ relayState: "connecting" });
+    stubWithIdentity({ summary: { providerKey: "p", modelKey: "glm-5.2" } });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    renderPage();
 
     const band = await screen.findByTestId("session-detail-identity");
-    expect(within(band).getByRole("status").textContent).toContain(
-      "Connecting",
+    await within(band).findByTestId("session-detail-meta-agent");
+    fireEvent.click(within(band).getByRole("button", { name: "More actions" }));
+
+    const sheet = await screen.findByRole("dialog", {
+      name: "Conversation info",
+    });
+    for (const label of ["Project", "Runs on", "Model", "Last active"]) {
+      expect(within(sheet).getByText(label)).toBeTruthy();
+    }
+    expect(within(sheet).getByText("登录重构")).toBeTruthy();
+    expect(within(sheet).getByText("书房小主机")).toBeTruthy();
+
+    fireEvent.click(
+      within(sheet).getByRole("button", { name: "Copy conversation ID" }),
     );
-    fireEvent.keyDown(
-      within(band).getByRole("button", { name: "More actions" }),
-      { key: "Enter" },
-    );
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(CID));
+  });
+
+  it("转录：用户消息右对齐、统计行用紧凑档（手机）", async () => {
+    mockMobileViewport();
+    stubWithIdentity();
+    renderPage();
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    act(() => {
+      pageOpts.onEvent?.({
+        conversationId: CID,
+        event: { kind: "user_message", text: "你好" },
+        seq: 1,
+      } as never);
+      pageOpts.onEvent?.({
+        conversationId: CID,
+        event: { kind: "text_delta", text: "收到" },
+        seq: 2,
+      } as never);
+      pageOpts.onEvent?.({
+        conversationId: CID,
+        event: {
+          kind: "done",
+          model: "glm-5.2",
+          durationMs: 1000,
+          usage: { promptTokens: 1200, completionTokens: 33 },
+        },
+        seq: 3,
+      } as never);
+    });
+    await screen.findByText("收到");
+    expect(document.querySelector("[data-align='end']")).toBeTruthy();
     expect(
-      await screen.findByRole("menuitem", { name: "Copy conversation ID" }),
+      document.querySelector("[data-meta-density='compact']"),
     ).toBeTruthy();
   });
 

@@ -38,9 +38,12 @@ const SHAPE: Record<string, { chip: string; bar: string; copyKey: string }> = {
 export default function SessionConnectionIndicator({
   status,
   className,
+  barOnly = false,
 }: {
   status: SessionViewStatus;
   className?: string;
+  /** 只画头部底边那条进度条：状态字已由宿主在别处说出（手机页头的副标题）。 */
+  barOnly?: boolean;
 }) {
   const { t } = useTranslation();
   // B / C 档是横幅的事，正常态什么都不用说。
@@ -50,22 +53,24 @@ export default function SessionConnectionIndicator({
 
   return (
     <>
-      <span
-        role="status"
-        aria-live="polite"
-        data-session-status={status}
-        className={cn(
-          "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-2xs leading-none",
-          shape.chip,
-          className,
-        )}
-      >
-        <LoaderCircle
-          aria-hidden
-          className="size-3 animate-spin motion-reduce:animate-none"
-        />
-        {t(shape.copyKey)}
-      </span>
+      {!barOnly && (
+        <span
+          role="status"
+          aria-live="polite"
+          data-session-status={status}
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-2xs leading-none",
+            shape.chip,
+            className,
+          )}
+        >
+          <LoaderCircle
+            aria-hidden
+            className="size-3 animate-spin motion-reduce:animate-none"
+          />
+          {t(shape.copyKey)}
+        </span>
+      )}
       {/* 进度条对读屏隐藏：芯片上的文字已经把同一件事说完了，一条量不出进度的
           装饰条再念一遍只是噪音。`motion-reduce` 下它停成一条静止的浅色线——
           记号还在，动效没了。 */}

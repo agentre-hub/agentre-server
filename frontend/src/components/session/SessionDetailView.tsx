@@ -2000,6 +2000,7 @@ export default function SessionDetailView({
       decisionPending={decisionPending}
       onStop={onStop}
       stopping={turnStop.stopping}
+      model={fallbackModel}
     />
   );
 
