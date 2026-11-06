@@ -7,6 +7,7 @@ import {
   AlertDescription,
   Button,
   cn,
+  countPendingBelow,
   countTurnsAfterMessage,
   TranscriptJumpControl,
   TranscriptSkeleton,
@@ -154,6 +155,18 @@ export default function SessionScrollBody({
    */
   const turnsBelow = useMemo(
     () => (atBottom ? 0 : countTurnsAfterMessage(messages, bottomVisibleId)),
+    [atBottom, bottomVisibleId, messages],
+  );
+
+  /**
+   * 视口下沿之后还压着几项没回答的审批 / 提问 —— 药丸据此写「N 项待处理」。
+   *
+   * 计数归共享包（`countPendingBelow`，桌面端同一份）。「已决」读的是转录块本身：
+   * 那台机器回的 `*_resolved` / `*_answered` 帧由投影器回填到同一张卡上，答掉之后
+   * 这里自然减下去。与 turnsBelow 同一条：贴底时药丸不渲染，不必白算。
+   */
+  const pendingBelow = useMemo(
+    () => (atBottom ? 0 : countPendingBelow(messages, bottomVisibleId)),
     [atBottom, bottomVisibleId, messages],
   );
 
@@ -410,6 +423,7 @@ export default function SessionScrollBody({
           <TranscriptJumpControl
             onJump={jumpToBottom}
             turnsBelow={turnsBelow}
+            pendingBelow={pendingBelow}
           />
         )}
       </div>

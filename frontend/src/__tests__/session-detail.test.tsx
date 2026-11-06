@@ -8514,6 +8514,89 @@ describe("会话详情：回到底部", () => {
       "Back to bottom",
     );
   });
+
+  /**
+   * 「N 项待处理」（spec 2026-11-06 A4）。视口下沿之后压着没回答的审批时，药丸要
+   * 说出来 —— 否则用户往回翻着看，那台机器上的工具一直阻塞着却没人知道。
+   *
+   * 计数归共享包（`countPendingBelow`，桌面端同一份）。答掉之后的「已决」不是本地
+   * 乐观改的：点下去只发 RPC，那台机器回一帧 `tool_permission_resolved`，投影器把
+   * 同一张卡回填成已决 —— 这条用例走的就是这条生产路径。
+   */
+  it("Given 往回翻、下沿之后压着一张没回答的审批, When 药丸浮出, Then 写出 1 项待处理；答掉（回执帧到达）之后那一段收走", async () => {
+    stubJump();
+    fakeClient.request.mockImplementation(async (method) => {
+      if (method === rpcMethods.sessionList) return { sessions: [summary] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
+      throw new Error("unexpected: " + method);
+    });
+    fakeClient.catchUp.mockImplementation(async () => {
+      const frames = [
+        { kind: "user_message", text: "第一问" },
+        { kind: "text_delta", text: "第一答" },
+        { kind: "user_message", text: "第二问" },
+        {
+          kind: "tool_permission_request",
+          requestId: "tp-below",
+          toolName: "Bash",
+          input: { command: "ls" },
+        },
+      ];
+      frames.forEach((event, i) => {
+        capturedOpts.onEvent?.({ conversationId: "42", event, seq: i + 1 });
+      });
+    });
+    render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId="42" form="embedded" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    // 贴底：待决就在眼前，不摆药丸。
+    expect(screen.queryByTestId("transcript-jump-control")).toBeNull();
+
+    const scroll = scrollerWithHeights();
+    // 下沿落在第 2 行之后 —— 第一轮的助手回复；审批卡在第 4 行。
+    expect(layoutRows(scroll, 2)).toBe(4);
+    act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+
+    expect(screen.getByTestId("transcript-jump-pending").textContent).toBe(
+      "1 pending",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
+        ),
+      ).toBe(true),
+    );
+    act(() => {
+      capturedOpts.onEvent?.({
+        conversationId: "42",
+        event: {
+          kind: "tool_permission_resolved",
+          requestId: "tp-below",
+          allowed: true,
+        },
+        seq: 5,
+      });
+    });
+
+    // 药丸还在（用户仍在往回翻），只是「待处理」那一段没了。
+    expect(screen.getByTestId("transcript-jump-control")).toBeTruthy();
+    expect(screen.queryByTestId("transcript-jump-pending")).toBeNull();
+  });
 });
 /**
  * 发出去之后回到底部（2026-09-02）。
