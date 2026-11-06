@@ -413,6 +413,23 @@ export default function SessionDetailView({
    */
   const mirrorSeqRef = useRef(0);
   /**
+   * 这条会话是在**哪一个**中继客户端上 attach + 补齐过的。
+   *
+   * 「接上了」属于一条通道，不属于这一屏：daemon 只给 attach 过这条会话的那条连接
+   * 扇出实时帧（订阅按连接记）。而通道目标在 ready 之后还会换 —— 草稿页刚交接过来
+   * 时账号里还没有这一行，按机器寻址；那一行落地后改按对话寻址，`useRelayChannel`
+   * 还掉机器那条、借来一条新的。只认 `ready` 的话新通道上从没 attach 过，这一屏从此
+   * 收不到实时帧，直到刷新。所以客户端一换，就在新客户端上再接一次（见 attach effect）。
+   */
+  const attachedClientRef = useRef<
+    import("@/lib/relayClient").RelayClient | null
+  >(null);
+  /**
+   * 转录的提交后快照：换通道重接时要知道这一屏已经画到了哪个 seq（只在那一刻读，
+   * 不进任何依赖）。
+   */
+  const eventsRef = useRef<SessionEventFrame[]>([]);
+  /**
    * 转录的滚动、钉底、前插补偿与「更早的」续读整片归 useTranscriptScrollback；
    * 本组件只读它交出来的那几样，不碰 pinRef / 前插补偿那些内部账。
    */
@@ -744,6 +761,10 @@ export default function SessionDetailView({
     clientRef.current = client;
   }, [client]);
 
+  useEffect(() => {
+    eventsRef.current = events;
+  }, [events]);
+
   // Agent 清单（头部要「是哪个 Agent 在跑」）。锦上添花：取不到就退回状态文字，
   // 不阻塞详情渲染，也不伪造名字。
   useAliveEffect((alive) => {
@@ -921,12 +942,65 @@ export default function SessionDetailView({
     markRead(sid);
   }, [sid, markRead]);
 
+  /**
+   * ready 之后通道换了客户端（典型是草稿交接：机器寻址 → 账号那一行落地后按对话寻址）：
+   * 在新客户端上把这条会话再接一次，并把换道那段空窗里的帧补回来。
+   *
+   * 只做「接上 + 补洞」两件事，不碰 ready 与装载那一遍定下的东西：转录不清、骨架不闪，
+   * 清单快照、`markTurnActive`、计时都不重来 —— 那些此后由实时帧维护，而空窗里漏掉的
+   * 帧经补齐回放时 ready 已经为真，正好按实时帧处理（轮次边界、审批卡的待决刷新）。
+   *
+   * 游标对齐到**这一屏已经画到的 seq**，而不是旧客户端的游标：旧客户端还回池子之后
+   * 在空闲宽限里照样消费这条会话的帧、游标照样往前走，可那几帧这一屏一条都没收到。
+   * 新客户端若是池子里现成的那一个，它的游标同样可能跑在前面。所以起点只认屏幕上的
+   * 事实：低了只是重复（`appendFrames` 按 seq 挡掉），高了就是洞。
+   */
+  const reattachOnNewClient = useCallback(
+    async (
+      c: import("@/lib/relayClient").RelayClient,
+      alive: () => boolean,
+    ) => {
+      const origin = originRef.current;
+      let shown = 0;
+      for (const f of eventsRef.current) {
+        if (f.seq !== undefined && f.seq > shown) shown = f.seq;
+      }
+      if (c.getCursor(sid, origin) !== shown) c.setCursor(sid, shown, origin);
+      try {
+        let latestSeq = 0;
+        try {
+          latestSeq = (await c.attach(sid, origin)).latestSeq;
+        } catch {
+          // 与装载那一遍同一条纪律：接不回不等于读不到，补齐照走。
+        }
+        // 高水位复位，规则同装载那一遍（会话被删掉重排之后高水位比游标低）。
+        if (latestSeq > 0 && latestSeq < c.getCursor(sid, origin)) {
+          c.setCursor(sid, latestSeq, origin);
+        }
+        await c.catchUp(sid, origin);
+        if (alive()) attachedClientRef.current = c;
+      } catch {
+        // 新通道上补不齐：实时帧接不回来了，要出声。没记成已接，下一次连接状态变化
+        // 时 effect 会再试一遍。
+        if (alive()) setCatchUpFailed(true);
+      }
+    },
+    [sid],
+  );
+
   // 已连接 → 取会话摘要 → attach（显式接管）→ 按 seq 游标补齐转录（R6）。
   useAliveEffect(
     (alive) => {
       // 镜像历史先落地：它不走客户端的游标去重，补齐若抢在前面，同一段转录会被两条
       // 路各交付一遍。
-      if (!client || relayState !== "connected" || ready || !history.settled) {
+      if (!client || relayState !== "connected" || !history.settled) {
+        return;
+      }
+      if (ready) {
+        // 已经在这个客户端上接过了：重连时的补齐由 RelayClient.reconnect 对 watched
+        // 会话负责（同一个客户端对象），这里不再重复跑。
+        if (attachedClientRef.current === client) return;
+        void reattachOnNewClient(client, alive);
         return;
       }
       (async () => {
@@ -1026,6 +1100,7 @@ export default function SessionDetailView({
             // 计时同理排在补齐之后:草稿页刚派发过来的那一条要在这里开表,落在前面
             // 会被回放的终态帧收掉。
             noteAttachedTurn(running);
+            attachedClientRef.current = client;
             setReady(true);
             // 待决策刷新交给下面的「connected && ready」effect，避免重复拉取。
           }
@@ -1036,7 +1111,7 @@ export default function SessionDetailView({
           if (alive()) setCatchUpFailed(true);
         }
       })();
-      // ready 之后不再重复跑（重连时的补齐由 RelayClient.reconnect 对 watched 会话负责）；
+      // ready 之后同一个客户端上不再重复跑，换了客户端才重接（见上面那一支）；
       // ready / did / sid 也必须是依赖：切换会话时上面的渲染期重置把 ready 置 false，
       // 这里要重新 attach 到新会话；只按 [client, relayState] 的话重置后不会重跑。
       // device?.fingerprint 是「打开即已读」在认不出发起端时的兜底身份。
@@ -1053,6 +1128,7 @@ export default function SessionDetailView({
       initialRow,
       markTurnActive,
       noteAttachedTurn,
+      reattachOnNewClient,
     ],
   );
 
