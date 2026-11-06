@@ -68,6 +68,8 @@
       "inProgress": "进行中",
       "today": "今天",
       "earlier": "更早"
-    }
+    },
+    "scopeSheetTitle": "范围",
+    "noDepartment": "未分部门"
   }
 }

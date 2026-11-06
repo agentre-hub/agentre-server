@@ -1,5 +1,6 @@
 import { type SessionSummary } from "@agentre-hub/agentre-wire";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ScopeTab } from "@agentre-hub/agentre-ui";
 import {
   Link,
   useLocation,
@@ -77,6 +78,15 @@ import {
   PhoneChatIndex,
   type PhoneSubtitle,
 } from "@/pages/chat/PhoneChatIndex";
+import { PhoneScopeSheet } from "@/pages/chat/PhoneScopeSheet";
+import {
+  buildScopeAgentGroups,
+  buildScopeMachines,
+  buildScopeProjects,
+  phoneScopeOf,
+  scopeValueOf,
+  tallyRows,
+} from "@/pages/chat/phoneScopeLists";
 import {
   countPhoneRows,
   dataFilterOf,
@@ -264,7 +274,9 @@ export default function Chat() {
   const [filter, setFilter] = useState<PhoneFilter>("all");
   const dataFilter = dataFilterOf(filter);
   const [devices, setDevices] = useState<DeviceItem[]>([]);
-  const [agents, setAgents] = useState<NewConvAgent[]>([]);
+  const [agents, setAgents] = useState<
+    (NewConvAgent & { department_name?: string })[]
+  >([]);
   /**
    * Agent 清单**问过了**没有。空数组是它的初值，而挑 Agent 那一屏把空清单读作
    * 「账号里一个 Agent 都没有，去桌面端建一个」——`/chat?compose=1` 直接落在那一
@@ -499,7 +511,10 @@ export default function Chat() {
 
   /** 机器与 Agent 名单只喂组头与行上的另外两维，不随**范围**重取。 */
   useAliveEffect((alive) => {
-    Promise.all([fetchDevices(), fetchAgents()])
+    Promise.all([
+      fetchDevices(),
+      fetchAgents<NewConvAgent & { department_name?: string }>(),
+    ])
       .then(([d, a]) => {
         if (!alive()) return;
         setDevices(d);
@@ -1182,10 +1197,58 @@ export default function Chat() {
     [phoneScope, setPhoneScope],
   );
   /*
-    点标题「范围名 ⌄」升起范围弹层（项目 / Agent / 机器）。弹层是另一件任务，接上之前
-    这一下什么也不做；接的时候只改这一处。
+    范围弹层（规格 2026-11-05「首页」）：点标题「范围名 ⌄」升起，落在当前范围所在的那
+    一档（全部时从「项目」起）；空态「按机器看」落在「机器」。选中即换整页范围并关掉。
   */
-  const openScopeSheet = useCallback(() => {}, []);
+  const [scopeSheet, setScopeSheet] = useState<{
+    open: boolean;
+    tab: ScopeTab;
+  }>({ open: false, tab: "project" });
+  const openScopeSheet = useCallback(
+    (tab?: ScopeTab) =>
+      setScopeSheet({
+        open: true,
+        tab: tab ?? (phoneScope.kind === "all" ? "project" : phoneScope.kind),
+      }),
+    [phoneScope.kind],
+  );
+  const closeScopeSheet = useCallback(
+    (open: boolean) => setScopeSheet((prev) => ({ ...prev, open })),
+    [],
+  );
+  const selectScope = useCallback(
+    (value: Parameters<typeof phoneScopeOf>[0]) => {
+      setPhoneScope(phoneScopeOf(value));
+      setScopeSheet((prev) => ({ ...prev, open: false }));
+    },
+    [setPhoneScope],
+  );
+  /*
+    每项的数：控制台没有逐项计数的端点，数的是已载入的行。换了范围之后手上只剩那一
+    范围的行，别的项会数成 0——所以只在「全部」且筛选为全部时刷新，其余时候沿用最后
+    数出来的那一份（与上面胶囊的 held 同一个做法）。
+  */
+  const liveTally = useMemo(() => tallyRows(phoneBaseRows), [phoneBaseRows]);
+  const tallyFresh =
+    phoneScope.kind === "all" && dataFilter === "all" && phoneSettled;
+  const [heldTally, setHeldTally] = useState<typeof liveTally | null>(null);
+  if (isMobile && tallyFresh && heldTally !== liveTally) {
+    setHeldTally(liveTally);
+  }
+  const scopeTally = tallyFresh ? liveTally : (heldTally ?? liveTally);
+  const scopeProjects = useMemo(
+    () => buildScopeProjects(projects, scopeTally),
+    [projects, scopeTally],
+  );
+  const scopeAgentGroups = useMemo(
+    () =>
+      buildScopeAgentGroups(agents, scopeTally, t("chat.phone.noDepartment")),
+    [agents, scopeTally, t],
+  );
+  const scopeMachines = useMemo(
+    () => buildScopeMachines(devices, scopeTally),
+    [devices, scopeTally],
+  );
 
   const index = (
     <ChatIndexPanel
@@ -1309,7 +1372,10 @@ export default function Chat() {
           : scopedDevice
             ? deviceDisplayName(scopedDevice)
             : t("chat.noMachine")
-        : t("chat.phone.scopeAll");
+        : phoneScope.kind === "project"
+          ? (projects.find((p) => p.syncId === phoneScope.projectSyncId)
+              ?.name ?? t("chat.phone.scopeAll"))
+          : t("chat.phone.scopeAll");
   const presence = (online: boolean): PhoneSubtitle => ({
     text: t(online ? "chat.phone.online" : "chat.phone.offline"),
     dot: online ? "running" : "idle",
@@ -1374,44 +1440,56 @@ export default function Chat() {
           {compose.step === "draft" ? composeDraft : composeProject}
         </div>
       ) : isMobile ? (
-        <PhoneChatIndex
-          scopeKey={phoneScopeKey(phoneScope)}
-          scopeTitle={phoneTitle}
-          subtitle={phoneSubtitle}
-          onOpenScope={openScopeSheet}
-          onCompose={openCompose}
-          searchQuery={sessionIndex.searchQuery}
-          onSearchChange={sessionIndex.setSearchQuery}
-          searchCount={phoneSearchCount}
-          settled={phoneSettled}
-          rows={phoneRows}
-          filter={filter}
-          onFilterChange={setFilter}
-          counts={phoneCounts}
-          accountTotal={sessionIndex.accountTotal ?? undefined}
-          agents={agentInfos}
-          projects={projects}
-          hideAgent={phoneScope.kind === "agent"}
-          sessionPath={sessionPath}
-          stopTurnOf={stopTurnOf}
-          filterAgentOf={filterAgentOf}
-          filterMachineOf={filterMachineOf}
-          onDelete={sessionIndex.askDelete}
-          onSave={sessionIndex.onSave}
-          hasOnlineMachine={hasOnlineMachine}
-          onFindOnMachine={() =>
-            setPhoneScope({ kind: "machine", deviceId: null })
-          }
-          hasMore={sessionIndex.hasMore}
-          loadingMore={sessionIndex.loadingMore}
-          loadMoreFailed={sessionIndex.loadMoreFailed}
-          onLoadMore={sessionIndex.loadMore}
-          banners={
-            sessionIndex.loadError || sessionIndex.saveFailure ? (
-              <IndexBanners sessionIndex={sessionIndex} />
-            ) : undefined
-          }
-        />
+        <>
+          <PhoneChatIndex
+            scopeKey={phoneScopeKey(phoneScope)}
+            scopeTitle={phoneTitle}
+            subtitle={phoneSubtitle}
+            onOpenScope={() => openScopeSheet()}
+            onCompose={openCompose}
+            searchQuery={sessionIndex.searchQuery}
+            onSearchChange={sessionIndex.setSearchQuery}
+            searchCount={phoneSearchCount}
+            settled={phoneSettled}
+            rows={phoneRows}
+            filter={filter}
+            onFilterChange={setFilter}
+            counts={phoneCounts}
+            accountTotal={sessionIndex.accountTotal ?? undefined}
+            agents={agentInfos}
+            projects={projects}
+            hideAgent={phoneScope.kind === "agent"}
+            sessionPath={sessionPath}
+            stopTurnOf={stopTurnOf}
+            filterAgentOf={filterAgentOf}
+            filterMachineOf={filterMachineOf}
+            onDelete={sessionIndex.askDelete}
+            onSave={sessionIndex.onSave}
+            hasOnlineMachine={hasOnlineMachine}
+            onFindOnMachine={() => openScopeSheet("machine")}
+            hasMore={sessionIndex.hasMore}
+            loadingMore={sessionIndex.loadingMore}
+            loadMoreFailed={sessionIndex.loadMoreFailed}
+            onLoadMore={sessionIndex.loadMore}
+            banners={
+              sessionIndex.loadError || sessionIndex.saveFailure ? (
+                <IndexBanners sessionIndex={sessionIndex} />
+              ) : undefined
+            }
+          />
+          <PhoneScopeSheet
+            open={scopeSheet.open}
+            onOpenChange={closeScopeSheet}
+            tab={scopeSheet.tab}
+            onTabChange={(tab) => setScopeSheet((prev) => ({ ...prev, tab }))}
+            allCount={sessionIndex.accountTotal ?? scopeTally.agent.size}
+            selected={scopeValueOf(phoneScope)}
+            projects={scopeProjects}
+            agentGroups={scopeAgentGroups}
+            machines={scopeMachines}
+            onSelect={selectScope}
+          />
+        </>
       ) : (
         /* 桌面（屏 49b）：右侧详情区。左边那列会话列表是索引列，由壳摆在外框上
            （见上面的 desktopIndex）；这里只剩内容页里的详情。壳已经把整块主区交出来

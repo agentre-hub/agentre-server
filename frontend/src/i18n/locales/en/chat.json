@@ -68,6 +68,8 @@
       "inProgress": "In progress",
       "today": "Today",
       "earlier": "Earlier"
-    }
+    },
+    "scopeSheetTitle": "Scope",
+    "noDepartment": "No department"
   }
 }

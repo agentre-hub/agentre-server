@@ -8,6 +8,7 @@ import type { IndexAxis } from "@/lib/sessionAxes";
  * 「查看这台机器的对话」重定向过来照样落得准）：
  *
  *   - 全部：不收（取数走时间轴，平铺、能往下翻）；
+ *   - 一个项目：`?axis=project&project=<同步标识>`；
  *   - 一个 Agent：`?axis=agent&agent=<同步标识>`；
  *   - 机器：`?axis=machine`，`&machine=<设备标识>` 时只看那一台（不带就是每台在线
  *     机器，空态「按机器看设备上的对话」落在这一档）。
@@ -16,6 +17,7 @@ import type { IndexAxis } from "@/lib/sessionAxes";
  */
 export type PhoneScope =
   | { kind: "all" }
+  | { kind: "project"; projectSyncId: string }
   | { kind: "agent"; agentSyncId: string }
   | { kind: "machine"; deviceId: number | null };
 
@@ -30,6 +32,10 @@ export function readPhoneScope(params: URLSearchParams): PhoneScope {
   if (axis === "machine") {
     return { kind: "machine", deviceId: readDeviceId(params.get("machine")) };
   }
+  const project = params.get("project")?.trim();
+  if (axis === "project" && project) {
+    return { kind: "project", projectSyncId: project };
+  }
   const agent = params.get("agent")?.trim();
   if (axis === "agent" && agent) return { kind: "agent", agentSyncId: agent };
   return { kind: "all" };
@@ -43,8 +49,12 @@ export function withPhoneScope(
   const next = new URLSearchParams(params);
   next.delete("axis");
   next.delete("agent");
+  next.delete("project");
   next.delete("machine");
-  if (scope.kind === "agent") {
+  if (scope.kind === "project") {
+    next.set("axis", "project");
+    next.set("project", scope.projectSyncId);
+  } else if (scope.kind === "agent") {
     next.set("axis", "agent");
     next.set("agent", scope.agentSyncId);
   } else if (scope.kind === "machine") {
@@ -57,6 +67,8 @@ export function withPhoneScope(
 /** 这一范围向索引数据层要哪一轴。 */
 export function phoneDataAxis(scope: PhoneScope): IndexAxis {
   switch (scope.kind) {
+    case "project":
+      return "project";
     case "agent":
       return "agent";
     case "machine":
@@ -66,14 +78,17 @@ export function phoneDataAxis(scope: PhoneScope): IndexAxis {
   }
 }
 
-/** 端点上的那一组（只有 Agent 范围要收）。 */
+/** 端点上的那一组（项目与 Agent 范围要收）。 */
 export function phoneServerScope(scope: PhoneScope): string | undefined {
+  if (scope.kind === "project") return `project:${scope.projectSyncId}`;
   return scope.kind === "agent" ? `agent:${scope.agentSyncId}` : undefined;
 }
 
 /** 范围的身份：返回恢复按它记滚动位置。 */
 export function phoneScopeKey(scope: PhoneScope): string {
   switch (scope.kind) {
+    case "project":
+      return `project:${scope.projectSyncId}`;
     case "agent":
       return `agent:${scope.agentSyncId}`;
     case "machine":
