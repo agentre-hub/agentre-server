@@ -102,6 +102,28 @@ function RangeSwitch({
   );
 }
 
+/**
+ * 手机上「对话」「设备在线」两格是去对应页面的入口；桌面与另两格原样不动。
+ * Metric 在 components/console 里不能改，所以链接包在外面。
+ */
+function TileLink({
+  to,
+  children,
+}: {
+  to: string | null;
+  children: React.ReactNode;
+}) {
+  if (to === null) return <>{children}</>;
+  return (
+    <Link
+      to={to}
+      className="block min-w-0 rounded-md focus-visible:focus-outline"
+    >
+      {children}
+    </Link>
+  );
+}
+
 // ── 卡壳 ────────────────────────────────────────────────────────────────
 function StatsCard({
   title,
@@ -435,20 +457,22 @@ export default function Overview() {
                 <TileSkeletons />
               ) : (
                 <>
-                  <Metric
-                    testId="tile-conversations"
-                    label={t("overview.stats.tiles.conversations")}
-                    value={String(summary.conversations)}
-                    unit={rangeLabel}
-                    sub={
-                      freshAccount
-                        ? t("overview.stats.tiles.conversationsNone")
-                        : t("overview.stats.tiles.conversationsTotal", {
-                            count: summary.conversations_total,
-                          })
-                    }
-                    icon={MessagesSquare}
-                  />
+                  <TileLink to={isMobile ? "/chat" : null}>
+                    <Metric
+                      testId="tile-conversations"
+                      label={t("overview.stats.tiles.conversations")}
+                      value={String(summary.conversations)}
+                      unit={rangeLabel}
+                      sub={
+                        freshAccount
+                          ? t("overview.stats.tiles.conversationsNone")
+                          : t("overview.stats.tiles.conversationsTotal", {
+                              count: summary.conversations_total,
+                            })
+                      }
+                      icon={MessagesSquare}
+                    />
+                  </TileLink>
                   <Metric
                     testId="tile-streak"
                     label={t("overview.stats.tiles.streak")}
@@ -496,22 +520,24 @@ export default function Overview() {
                     }
                     icon={CalendarDays}
                   />
-                  <Metric
-                    testId="tile-online"
-                    label={t("overview.stats.tiles.online")}
-                    value={String(summary.devices_online)}
-                    unit={`/ ${summary.devices_total}`}
-                    sub={
-                      firstOffline
-                        ? t("overview.stats.tiles.onlineOffline", {
-                            device: firstOffline.name,
-                          })
-                        : summary.devices_total === 0
-                          ? t("overview.stats.tiles.onlineNone")
-                          : null
-                    }
-                    icon={Monitor}
-                  />
+                  <TileLink to={isMobile ? "/devices" : null}>
+                    <Metric
+                      testId="tile-online"
+                      label={t("overview.stats.tiles.online")}
+                      value={String(summary.devices_online)}
+                      unit={`/ ${summary.devices_total}`}
+                      sub={
+                        firstOffline
+                          ? t("overview.stats.tiles.onlineOffline", {
+                              device: firstOffline.name,
+                            })
+                          : summary.devices_total === 0
+                            ? t("overview.stats.tiles.onlineNone")
+                            : null
+                      }
+                      icon={Monitor}
+                    />
+                  </TileLink>
                 </>
               )}
             </div>

@@ -942,6 +942,30 @@ describe("overview: 移动端", () => {
     );
   });
 
+  it("窄屏「对话」「设备在线」两格可点：分别去对话列表与设备页；另两格不是链接", async () => {
+    setViewport(true);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    const conv = screen.getByTestId("tile-conversations").closest("a");
+    const online = screen.getByTestId("tile-online").closest("a");
+    expect(conv?.getAttribute("href")).toBe("/chat");
+    expect(online?.getAttribute("href")).toBe("/devices");
+    expect(screen.getByTestId("tile-streak").closest("a")).toBeNull();
+    expect(screen.getByTestId("tile-active-days").closest("a")).toBeNull();
+  });
+
+  it("宽屏四格都不是链接：桌面不变", async () => {
+    setViewport(false);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    expect(screen.getByTestId("tile-conversations").closest("a")).toBeNull();
+    expect(screen.getByTestId("tile-online").closest("a")).toBeNull();
+  });
+
   it("宽屏不画那一行固定读数：悬停行为照旧", async () => {
     setViewport(false);
     serve();
