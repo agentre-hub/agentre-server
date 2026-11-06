@@ -97,6 +97,11 @@ export interface SessionScrollBodyProps {
 
   decisions: SessionDecisionPorts;
   send: SessionSend;
+  /**
+   * 待决的工具权限请求此刻停靠在输入框的位置（手机，见 SessionComposerBand 的
+   * pickDockedPermission）：转录不再画那张卡。缺省 false = 照旧内联。
+   */
+  dockDecisions?: boolean;
 }
 
 /**
@@ -140,6 +145,7 @@ export default function SessionScrollBody({
   pendingAssistant,
   decisions,
   send,
+  dockDecisions = false,
 }: SessionScrollBodyProps) {
   const { t } = useTranslation();
   const nav = useNavigate();
@@ -339,6 +345,7 @@ export default function SessionScrollBody({
               // 通道断了就先说通道：此刻「还在不在生成」根本观察不到，继续转三个点
               // 是在替远端撒谎。这个顺序由共享包保证，本站只把两个事实交上去。
               reconnecting={relayState === "reconnecting"}
+              dockDecisions={dockDecisions}
               // 行虚拟化的滚动容器。取不到时转录整列渲染（见 Transcript 里那段
               // 「量不出视口高度就不开窗」的注释）。
               getScrollElement={getScrollElement}

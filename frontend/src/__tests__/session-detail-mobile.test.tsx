@@ -464,6 +464,288 @@ describe("移动端会话详情：一层头部", () => {
   });
 });
 
+/**
+ * 底部停靠区（规格 2026-11-05「对话页 · 底部停靠区」，决策 7 / 8 / 9）：同一位置按
+ * 状态换内容 —— 输入框（触屏档）/ 审批停靠 / 离线只读带。只在手机宽度。
+ */
+describe("移动端会话详情：底部停靠区", () => {
+  function stubDock(opts: { online?: boolean; lifecycleState?: string } = {}) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...deviceRow, online: opts.online ?? true }] };
+      if (path === "/v1/agent-sessions") return { items: [] };
+      if (
+        typeof path === "string" &&
+        path.startsWith("/v1/agent-sessions/transcript")
+      )
+        return { frames: [], cursor: 0, has_more: false };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return {
+          sessions: [
+            { ...summary, lifecycleState: opts.lifecycleState ?? "idle" },
+          ],
+        };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
+      if (method === rpcMethods.runtimeAbort) return {};
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  function emit(events: Record<string, unknown>[]) {
+    act(() => {
+      events.forEach((event, i) =>
+        pageOpts.onEvent?.({
+          conversationId: CID,
+          event,
+          seq: i + 1,
+        } as never),
+      );
+    });
+  }
+
+  const permission = {
+    kind: "tool_permission_request",
+    requestId: "tp-1",
+    toolName: "Bash",
+    input: { command: "pnpm add left-pad" },
+  };
+
+  it("空闲：停靠区是触屏档输入框，软键盘回车键标成换行", async () => {
+    mockMobileViewport();
+    stubDock();
+    renderPage();
+
+    const band = await screen.findByTestId("session-composer-band");
+    const editor = await waitFor(() => {
+      const el = band.querySelector<HTMLElement>(".ProseMirror");
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    // 触屏档的外壳带 data-shape（空时胶囊）；桌面档不带。
+    expect(band.querySelector("[data-shape='pill']")).toBeTruthy();
+    // 触屏上回车只换行（决策 9）：键面写「换行」，不写一个按下去做不到的「发送」。
+    expect(editor.getAttribute("enterkeyhint")).toBe("enter");
+  });
+
+  it("等你审批：审批停靠在输入框的位置，转录里不再画那张卡，也没有键帽", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    renderPage();
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const band = screen.getByTestId("session-composer-band");
+    const dock = await within(band).findByTestId("tool-permission-dock");
+    expect(within(dock).getByRole("button", { name: "Allow" })).toBeTruthy();
+    // 输入框让位：同一位置只有一样东西。
+    expect(band.querySelector(".ProseMirror")).toBeNull();
+    expect(screen.queryByTestId("session-detail-composer")).toBeNull();
+    // 转录里不再内联这张审批卡（决策 7），键帽也不画（触屏）。
+    expect(
+      within(screen.getByTestId("session-detail-scroll")).queryByTestId(
+        "tool-permission-card",
+      ),
+    ).toBeNull();
+    expect(document.querySelectorAll("kbd")).toHaveLength(0);
+
+    fireEvent.click(within(dock).getByRole("button", { name: "Allow" }));
+    await waitFor(() => {
+      const call = fakeClient.request.mock.calls.find(
+        (c) => c[0] === rpcMethods.runtimeSubmitToolPermission,
+      );
+      expect(call?.[1]).toMatchObject({
+        conversationId: CID,
+        requestId: "tp-1",
+        allow: true,
+        alwaysAllowSession: false,
+      });
+    });
+  });
+
+  it("等你审批：停靠区底部「■ 停止」停这一轮，点下去转为停止中", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    renderPage();
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([{ kind: "user_message", text: "装个依赖" }, permission]);
+
+    const dock = await screen.findByTestId("tool-permission-dock");
+    const stop = within(dock).getByRole("button", { name: "Stop" });
+    fireEvent.click(stop);
+    await waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeAbort,
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(
+        (
+          within(screen.getByTestId("tool-permission-dock")).getByRole(
+            "button",
+            { name: "Stop" },
+          ) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true),
+    );
+  });
+
+  it("Agent 的提问不停靠：留在转录里作答，输入框照旧", async () => {
+    mockMobileViewport();
+    stubDock({ lifecycleState: "running" });
+    renderPage();
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([
+      { kind: "user_message", text: "选个库" },
+      {
+        kind: "ask_user_question",
+        requestId: "aq-1",
+        questions: [
+          {
+            id: "q1",
+            question: "Which database?",
+            header: "Storage",
+            multiSelect: false,
+            options: [{ label: "Postgres" }, { label: "Redis" }],
+          },
+        ],
+      },
+    ]);
+
+    expect(await screen.findByText("Which database?")).toBeTruthy();
+    expect(screen.queryByTestId("tool-permission-dock")).toBeNull();
+    const band = screen.getByTestId("session-composer-band");
+    await waitFor(() =>
+      expect(band.querySelector(".ProseMirror")).toBeTruthy(),
+    );
+  });
+
+  it("机器离线：只读带写「{机器} 回来后可以继续发消息 · 查看设备」，转录顶部没有离线横幅", async () => {
+    mockMobileViewport();
+    stubDock({ online: false });
+    renderPage();
+
+    const readonly = await screen.findByTestId("session-compose-readonly");
+    expect(readonly.textContent).toContain("书房小主机 is back");
+    const link = within(readonly).getByRole("link", { name: "View device" });
+    expect(link.getAttribute("href")).toBe("/devices/1");
+    expect(
+      document.querySelector("[data-session-status='machineOffline']"),
+    ).toBeNull();
+  });
+
+  it("机器离线时不停靠：没答的审批留在转录里看得见，停靠区是只读带", async () => {
+    mockMobileViewport();
+    stubDock({ online: false });
+    const frames = [{ kind: "user_message", text: "装个依赖" }, permission].map(
+      (event, i) => ({
+        seq: i + 1,
+        method: "runtime.event",
+        params: { conversationId: CID, event },
+      }),
+    );
+    const base = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, ...rest) => {
+      if (
+        typeof path === "string" &&
+        path.startsWith("/v1/agent-sessions/transcript")
+      )
+        return { frames, cursor: 2, has_more: false };
+      return base(path, ...rest);
+    });
+    renderPage();
+
+    expect(await screen.findByTestId("tool-permission-card")).toBeTruthy();
+    expect(screen.queryByTestId("tool-permission-dock")).toBeNull();
+    expect(screen.getByTestId("session-compose-readonly")).toBeTruthy();
+  });
+
+  it("往回翻、下面压着没答的提问：药丸写「1 项待处理」，浮在停靠区上方", async () => {
+    mockMobileViewport();
+    stubDock();
+    renderPage();
+    await screen.findByTestId("session-detail-identity");
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    emit([
+      { kind: "user_message", text: "第一问" },
+      { kind: "text_delta", text: "第一答" },
+      { kind: "user_message", text: "选个库" },
+      {
+        kind: "ask_user_question",
+        requestId: "aq-1",
+        questions: [
+          {
+            id: "q1",
+            question: "Which database?",
+            header: "Storage",
+            multiSelect: false,
+            options: [{ label: "Postgres" }, { label: "Redis" }],
+          },
+        ],
+      },
+    ]);
+    await screen.findByText("Which database?");
+
+    // jsdom 没有布局：钉上滚动几何，让视口下沿落在第一轮回复之后。
+    const scroll = screen.getByTestId("session-detail-scroll");
+    Object.defineProperty(scroll, "clientHeight", { get: () => 480 });
+    Object.defineProperty(scroll, "scrollHeight", { get: () => 4_000 });
+    scroll.getBoundingClientRect = () => ({ bottom: 200 }) as DOMRect;
+    scroll
+      .querySelectorAll<HTMLElement>("[data-message-id]")
+      .forEach((row, i) => {
+        row.getBoundingClientRect = () => ({ top: i * 100 }) as DOMRect;
+      });
+    // 先在底部落定一次，随后那一下才读得出是「往回滚」。
+    act(() => {
+      scroll.scrollTop = 3_520;
+      fireEvent.scroll(scroll);
+    });
+    act(() => {
+      fireEvent.wheel(scroll, { deltaY: -600 });
+      scroll.scrollTop = 1_000;
+      fireEvent.scroll(scroll);
+    });
+
+    expect(screen.getByTestId("transcript-jump-pending").textContent).toBe(
+      "1 pending",
+    );
+    // 药丸在滚动带里（sticky 贴底），停靠区在它下面：不压住输入框。
+    expect(scroll.contains(screen.getByTestId("transcript-jump-control"))).toBe(
+      true,
+    );
+    expect(
+      screen
+        .getByTestId("session-composer-band")
+        .contains(screen.getByTestId("transcript-jump-control")),
+    ).toBe(false);
+  });
+
+  it("停靠区是 dvh 高整页里那一列的最后一个孩子：转录那一带伸缩，停靠区垫底", async () => {
+    mockMobileViewport();
+    stubDock();
+    renderPage();
+
+    const band = await screen.findByTestId("session-composer-band");
+    const column = band.parentElement as HTMLElement;
+    expect(column.lastElementChild).toBe(band);
+    expect(column.className).toMatch(/(^|\s)flex-col(\s|$)/);
+    expect(screen.getByTestId("session-detail-scroll").className).toMatch(
+      /(^|\s)flex-1(\s|$)/,
+    );
+    expect(band.className).toMatch(/(^|\s)shrink-0(\s|$)/);
+  });
+});
+
 /** 认机器的那一段（ResolvedSessionDetail）：加载中 / 找不到 / 读不到 同样一层。 */
 describe("移动端按地址打开：加载 / 未找到 / 出错", () => {
   function renderResolved() {

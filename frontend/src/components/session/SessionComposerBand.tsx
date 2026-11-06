@@ -1,16 +1,25 @@
 import { type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
-import { CircleAlert, Lock } from "lucide-react";
+import { Link } from "react-router-dom";
+import { CircleAlert, Lock, Square } from "lucide-react";
 
 import {
+  Button,
+  isPendingToolPermission,
   QueuedMessagesBar,
+  ToolPermissionDock,
+  TranscriptPortsProvider,
   type ChatComposerHandle,
   type ChatComposerSubmit,
   type QueuedItem,
+  type TranscriptBlock,
   type TranscriptMessage,
+  type TranscriptPorts,
 } from "@agentre-hub/agentre-ui";
 
 import { computeContextUsage } from "@/lib/sessionView";
+import { useIsMobile } from "@/components/use-is-mobile";
+import { TranscriptSessionId } from "@/components/session/transcriptFrame";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 
 import type { PermissionModeMeta } from "@/lib/backendCapabilities";
@@ -32,6 +41,54 @@ import type { SessionViewStatus } from "@/lib/sessionView";
   代价是打开一条对话时输入框比其余部分晚一步出现，所以未到位时摆一个**等高**的
   占位条：不占位的话那一带会先塌下去再弹回来。
 */
+/**
+ * 输入框那一带换成**只读条**的三档（规格 2026-08-21 决策 4 / 5）。
+ *
+ * 判据是「等下去也不会变」：机器不在、App 没开、设备被撤销。摆一个永远灰着的
+ * 输入框是在暗示「也许待会儿能用」，而这三档里前两档要等的是那台机器、第三档
+ * 根本不会回来。
+ *
+ * `lost` 与 `pinnedAgentredUnavailable` **不**在其中：前者按一下「重新连接」就
+ * 可能恢复，后者是这条会话暂时写不进去，输入框停用着就够了。
+ *
+ * 原因只在横幅里说一遍——此前这里还有一段 `composeUnavailable` 长文案，与横幅
+ * 讲同一件事却换了套措辞，读者会当成两个问题（决策 5）。手机上离线那一档不挂横幅
+ * （规格 2026-11-05 决策 8），说的地方就只剩这条只读带和页头的状态字。
+ *
+ * 详情视图也读它：只读条占着这一位时审批不停靠（见 pickDockedPermission）。
+ */
+export function isComposeReadonly(status: SessionViewStatus): boolean {
+  return (
+    status === "machineOffline" ||
+    status === "desktopAppNotRunning" ||
+    status === "deviceRevoked"
+  );
+}
+
+/** 停靠到输入框位置的那一条待决工具权限请求，以及它所在的助手消息。 */
+export interface DockedPermission {
+  toolBlock: TranscriptBlock;
+  messageId: number;
+}
+
+/**
+ * 手机上要停靠的那条审批（规格 2026-11-05「底部停靠区 · 等你审批」）：转录里最早
+ * 一条还没决定的工具权限请求。提问与计划审批不算（`isPendingToolPermission`），
+ * 它们留在转录里作答。没有就是 null，停靠区回到输入框。
+ */
+export function pickDockedPermission(
+  messages: readonly TranscriptMessage[],
+): DockedPermission | null {
+  for (const message of messages) {
+    for (const block of message.blocks) {
+      if (isPendingToolPermission(block)) {
+        return { toolBlock: block, messageId: message.id };
+      }
+    }
+  }
+  return null;
+}
+
 export interface SessionComposerBandProps {
   did: number;
   sid: string;
@@ -79,10 +136,18 @@ export interface SessionComposerBandProps {
   onDiscardDropped: () => void;
   /** 把整条草稿放回输入框的句柄（「恢复为草稿」用它）。 */
   composerHandleRef?: RefObject<ChatComposerHandle | null>;
+  /**
+   * 手机上停靠在输入框位置的审批（见 pickDockedPermission）。给了就画停靠审批、
+   * 不画输入框；转录那一侧同时收到 dockDecisions，不再画同一张卡。桌面不给。
+   */
+  dockedPermission?: DockedPermission | null;
+  /** 停靠审批提交时走的端口，与转录里那张卡同一组。 */
+  decisionPorts?: TranscriptPorts;
 }
 
 /**
- * 钉住的那一带：输入框，或者三档「等下去也不会变」时的只读条。
+ * 钉住的那一带：输入框，或者三档「等下去也不会变」时的只读条；手机上还可能是
+ * 停靠在这一位的审批。
  *
  * 「要不要换成只读条、只读条上写哪一句、上下文用量是多少」都归它 —— 除了这一带
  * 没有第二个读者。
@@ -119,27 +184,15 @@ export default function SessionComposerBand({
   onRestoreDropped,
   onDiscardDropped,
   composerHandleRef,
+  dockedPermission,
+  decisionPorts,
 }: SessionComposerBandProps) {
   const { t } = useTranslation();
   const composerModule = useSessionComposerModule();
+  // 手机：输入框走触屏档，只读条带「查看设备」的出口（规格 2026-11-05 决策 8 / 9）。
+  const isMobile = useIsMobile();
 
-  /**
-   * 输入框那一带换成**只读条**的三档（规格 2026-08-21 决策 4 / 5）。
-   *
-   * 判据是「等下去也不会变」：机器不在、App 没开、设备被撤销。摆一个永远灰着的
-   * 输入框是在暗示「也许待会儿能用」，而这三档里前两档要等的是那台机器、第三档
-   * 根本不会回来。
-   *
-   * `lost` 与 `pinnedAgentredUnavailable` **不**在其中：前者按一下「重新连接」就
-   * 可能恢复，后者是这条会话暂时写不进去，输入框停用着就够了。
-   *
-   * 原因只在横幅里说一遍——此前这里还有一段 `composeUnavailable` 长文案，与横幅
-   * 讲同一件事却换了套措辞，读者会当成两个问题（决策 5）。
-   */
-  const composeReadonly =
-    status === "machineOffline" ||
-    status === "desktopAppNotRunning" ||
-    status === "deviceRevoked";
+  const composeReadonly = isComposeReadonly(status);
 
   /** 只读条上那一句短的：说「等谁」，不复述横幅里的后果。 */
   const readonlyNote =
@@ -169,8 +222,11 @@ export default function SessionComposerBand({
   const contextUsage = computeContextUsage(messages, contextWindow);
 
   /**
-   * 钉住的一带只有 Composer。审批**不**在这里再来一条：对话流里已经有审批卡了
+   * 桌面上钉住的一带只有 Composer。审批**不**在这里再来一条：对话流里已经有审批卡了
    * （interactiveRequestIds 已经把两处去重），底下再摆一条是同一件事说两遍。
+   *
+   * 手机上反过来（规格 2026-11-05 决策 7）：审批停靠在输入框的位置、转录里不再画，
+   * 仍然只说一遍——换的是说在哪儿。
    */
   /*
     这一带**始终在**（账号登出那一屏除外——它只剩重新登录）。此前它在
@@ -209,7 +265,40 @@ export default function SessionComposerBand({
               <CircleAlert aria-hidden="true" className="size-3.5 shrink-0" />
             )}
             {readonlyNote}
+            {/* 手机上停在这一带的出口：去看那台机器（撤销那一档它不会回来，不摆）。 */}
+            {isMobile && status !== "deviceRevoked" ? (
+              <Link
+                to={`/devices/${did}`}
+                className="-my-2.5 ml-auto inline-flex min-h-11 shrink-0 items-center font-medium text-primary-text hover:underline"
+              >
+                {t("session.banner.viewDevice")}
+              </Link>
+            ) : null}
           </p>
+        ) : dockedPermission && decisionPorts ? (
+          <TranscriptPortsProvider ports={decisionPorts}>
+            <ToolPermissionDock
+              toolBlock={dockedPermission.toolBlock}
+              messageId={dockedPermission.messageId}
+              sessionId={TranscriptSessionId}
+              cwd={cwd}
+              // 「■ 停止」与输入框提交位那颗同一份停止中状态（useTurnStop）。
+              stop={
+                running && onStop ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="min-h-11 self-start text-muted-foreground"
+                    disabled={stopping}
+                    onClick={onStop}
+                  >
+                    <Square aria-hidden="true" className="size-3.5" />
+                    {t("session.abort")}
+                  </Button>
+                ) : null
+              }
+            />
+          </TranscriptPortsProvider>
         ) : composerModule ? (
           <composerModule.default
             // 草稿属于**这一条**会话：换一条就该是空的。右栏是同实例换 props
@@ -243,6 +332,7 @@ export default function SessionComposerBand({
             onPermissionModeChange={onPermissionModeChange}
             modelControl={modelControl}
             reasoningEffortControl={reasoningEffortControl}
+            touch={isMobile}
             /*
               排进这一轮的那几条摆在输入框**上方**、卡片里（与桌面端同位同样式）。
               此前这里是一句解释文案「已排进当前这一轮……」：连发三条也还是那一句，

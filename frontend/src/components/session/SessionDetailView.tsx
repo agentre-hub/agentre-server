@@ -40,7 +40,10 @@ import { useIsMobile } from "@/components/use-is-mobile";
 import SessionDetailHeader, {
   SessionPageStateShell,
 } from "@/components/session/SessionDetailHeader";
-import SessionComposerBand from "@/components/session/SessionComposerBand";
+import SessionComposerBand, {
+  isComposeReadonly,
+  pickDockedPermission,
+} from "@/components/session/SessionComposerBand";
 import SessionFilePreviewColumn from "@/components/session/SessionFilePreviewColumn";
 import SessionScrollBody from "@/components/session/SessionScrollBody";
 import {
@@ -2004,6 +2007,16 @@ export default function SessionDetailView({
     />
   );
 
+  /**
+   * 手机上停靠到输入框位置的那条审批（规格 2026-11-05 决策 7）。转录与停靠区读的是
+   * 同一个结果：一处画了，另一处就不画。只读条占着那一位时（机器离线等）不停靠，
+   * 待决照旧留在转录里看得见。
+   */
+  const dockedPermission =
+    isMobile && !isComposeReadonly(status)
+      ? pickDockedPermission(messages)
+      : null;
+
   /** 滚的只有这一带。转录、状态横幅与审批卡都在里面，头部与 Composer 都不在。 */
   const scrollBody = (
     <SessionScrollBody
@@ -2041,6 +2054,7 @@ export default function SessionDetailView({
       pendingAssistant={pendingAssistant}
       decisions={decisions}
       send={send}
+      dockDecisions={dockedPermission !== null}
     />
   );
 
@@ -2086,6 +2100,8 @@ export default function SessionDetailView({
       onRestoreDropped={restoreDropped}
       onDiscardDropped={steerQueue.clearDropped}
       composerHandleRef={composerHandleRef}
+      dockedPermission={dockedPermission}
+      decisionPorts={decisions.transcriptPorts}
     />
   );
 
