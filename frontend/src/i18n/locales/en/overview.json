@@ -6,6 +6,7 @@
   "offline": "Offline",
   "unpaired": "Not paired",
   "stats": {
+    "pageTitle": "Activity stats",
     "range": {
       "label": "Stats range",
       "7d": "Last 7 days",

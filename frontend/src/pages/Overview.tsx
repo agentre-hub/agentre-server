@@ -5,13 +5,19 @@ import {
   BarChart3,
   Bot,
   CalendarDays,
+  ChevronRight,
   Flame,
   FolderTree,
   MessagesSquare,
   Monitor,
 } from "lucide-react";
 
-import { CardLoadError, EmptyState, Metric } from "@/components/console";
+import {
+  CardLoadError,
+  EmptyState,
+  Metric,
+  MobileNavButton,
+} from "@/components/console";
 import {
   Button,
   SegmentedControl,
@@ -117,9 +123,14 @@ function TileLink({
   return (
     <Link
       to={to}
-      className="block min-w-0 rounded-md focus-visible:focus-outline"
+      className="relative block min-w-0 rounded-md focus-visible:focus-outline"
     >
       {children}
+      <ChevronRight
+        data-tile-chevron
+        aria-hidden="true"
+        className="absolute top-3 right-3 size-4 text-muted-foreground"
+      />
     </Link>
   );
 }
@@ -355,6 +366,7 @@ export default function Overview() {
 
   return (
     <AppShell
+      ownHeader={isMobile}
       title={t("nav.overview")}
       /*
         窄屏顶栏不摆页面自己的控件：390 宽的手机上「标题 + 三档范围 + 头像 +
@@ -368,9 +380,19 @@ export default function Overview() {
     >
       <div className="mx-auto w-full max-w-[1200px] space-y-4">
         {isMobile ? (
-          <div className="flex min-w-0 items-center justify-end">
-            <RangeSwitch value={range} onChange={setRange} />
-          </div>
+          /* 手机页头自己画（ownHeader）：☰ · 标题，范围分段是标题的副行。 */
+          <header
+            data-testid="overview-mobile-header"
+            className="-mt-1 flex min-w-0 items-center gap-2 pt-[env(safe-area-inset-top,0px)]"
+          >
+            <MobileNavButton />
+            <div className="flex min-w-0 flex-col gap-1.5 py-1">
+              <h1 className="truncate text-prose font-bold text-foreground">
+                {t("overview.stats.pageTitle")}
+              </h1>
+              <RangeSwitch value={range} onChange={setRange} />
+            </div>
+          </header>
         ) : null}
         {/* 范围收窄时页顶一条说明覆盖全页，不逐卡重复。 */}
         {stats?.scope === "saved" ? (

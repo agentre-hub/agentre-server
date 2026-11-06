@@ -195,7 +195,7 @@ function serve(overrides: Record<string, unknown> = {}) {
 
 function renderOverview() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/overview"]}>
       <Overview />
     </MemoryRouter>,
     { wrapper: ThemeProvider },
@@ -873,22 +873,49 @@ describe("overview: 移动端", () => {
     ).toBeTruthy();
   });
 
-  /**
-   * 顶栏在 390 宽的手机上放不下「标题 + 三档范围 + 头像 + 两颗图标按钮」：
-   * 2026-08-31 量到范围控件（154–304）压在头像（258–286）和语言按钮（302–336）
-   * 上，标题被截成「O...」。窄屏的顶栏只留标题与账号那一组，页面自己的控件下沉到
-   * 内容第一行（与 Chat 的 ownHeader 同一条思路：移动端是另一棵树，不是压扁的
-   * 桌面端）。
-   */
-  it("窄屏顶栏不摆页面自己的控件：范围分段下沉到内容里", async () => {
+  it("窄屏页头自己画：☰ · 标题，范围分段作为标题的副行，不在内容区里", async () => {
     setViewport(true);
     serve();
     renderOverview();
 
     await screen.findByTestId("heatmap-grid");
-    const rangeGroup = screen.getByRole("tablist", { name: "Stats range" });
-    expect(screen.getByRole("banner").contains(rangeGroup)).toBe(false);
-    expect(screen.getByRole("main").contains(rangeGroup)).toBe(true);
+    const header = screen.getByTestId("overview-mobile-header");
+    expect(screen.getAllByRole("banner").length).toBe(1);
+    expect(screen.getByRole("banner")).toBe(header);
+    expect(
+      header.querySelector('button[aria-label="Open menu"]'),
+    ).not.toBeNull();
+    const title = within(header).getByRole("heading", {
+      name: "Activity stats",
+    });
+    const rangeGroup = within(header).getByRole("tablist", {
+      name: "Stats range",
+    });
+    // 副行在标题之后。
+    expect(
+      title.compareDocumentPosition(rangeGroup) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("窄屏两格可点的摘要带「›」提示，另两格没有", async () => {
+    setViewport(true);
+    serve();
+    renderOverview();
+
+    await screen.findByTestId("heatmap-grid");
+    const chevron = (id: string) =>
+      screen.getByTestId(id).closest("a")?.querySelector("[data-tile-chevron]");
+    expect(chevron("tile-conversations")).not.toBeNull();
+    expect(chevron("tile-online")).not.toBeNull();
+    expect(
+      screen.getByTestId("tile-streak").querySelector("[data-tile-chevron]"),
+    ).toBeNull();
+    expect(
+      screen
+        .getByTestId("tile-active-days")
+        .querySelector("[data-tile-chevron]"),
+    ).toBeNull();
   });
 
   it("宽屏照旧摆在顶栏里", async () => {
