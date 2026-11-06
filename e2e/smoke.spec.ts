@@ -284,6 +284,83 @@ test("移动浏览器布局无水平溢出", async ({ context, page }) => {
   await assertCorePagesDoNotOverflow(context, page);
 });
 
+test("@mobile 登录后手机落在对话列表而不是总览", async ({ context, page }) => {
+  await authenticate(context);
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page.getByTestId("chat-phone-list")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /打开菜单|Open menu/i }),
+  ).toBeVisible();
+});
+
+test("@mobile 手机上从对话列表打开新对话弹层并回到列表", async ({
+  context,
+  page,
+}) => {
+  // 本冒烟没有 agentred / relay：账号里不会有一条真实对话，新对话也没有可用的执行
+  // 目标，所以「打开对话页、发送」在这里造不出来（发送与转录由单元测试覆盖）。
+  // 能真实走通的是这条入口：列表 → 新对话 → 回到列表，停在 /chat 不跳页。
+  await authenticate(context);
+  await page.goto("/chat");
+  await expect(page.getByTestId("chat-phone-list")).toBeVisible();
+
+  await page
+    .getByRole("button", { name: /^(新对话|New conversation)$/ })
+    .first()
+    .click();
+  const sheet = page.getByTestId("new-conversation-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByText(/还没有 Agent|No agents yet/)).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(page).toHaveURL(/\/chat$/);
+  await expect(page.getByTestId("chat-phone-list")).toBeVisible();
+});
+
+test("@mobile 手机上经抽屉进设备页，再进设备详情并返回", async ({
+  context,
+  page,
+}) => {
+  await authenticate(context);
+  // 设备行由真实的设备授权流程建立（与设备生命周期用例同一条路径），收尾撤销。
+  const authorization = await authorizeDevice(page);
+  await page.goto(authorization.verification_uri_complete);
+  await page.getByRole("button", { name: /允许授权|Allow access/i }).click();
+  await expect(
+    page.getByRole("heading", { name: /设备已授权|Device authorized/i }),
+  ).toBeVisible();
+  const exchanged = await exchangeDeviceCode(page, authorization.device_code);
+  const deviceID = exchanged.token!.device_id;
+
+  try {
+    await page.goto("/chat");
+    await expect(page.getByTestId("chat-phone-list")).toBeVisible();
+
+    await page.getByRole("button", { name: /打开菜单|Open menu/i }).click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer).toBeVisible();
+    await drawer.getByRole("link", { name: /设备|Devices/ }).click();
+
+    await expect(page).toHaveURL(/\/devices$/);
+    await expect(drawer).toBeHidden();
+    await expect(page.getByTestId("devices-mobile-header")).toBeVisible();
+
+    await page
+      .getByText(/webe2e-f/)
+      .first()
+      .click();
+    await expect(page).toHaveURL(new RegExp(`/devices/${deviceID}$`));
+    await expect(page.getByTestId("device-detail-mobile")).toBeVisible();
+
+    await page.getByRole("button", { name: /^(返回|Back)$/ }).click();
+    await expect(page).toHaveURL(/\/devices$/);
+  } finally {
+    await revokeDeviceFromBrowserSession(page, deviceID);
+  }
+});
+
 test("登录后经用户菜单打开 /account，看见当前登录会话并能登出", async ({
   context,
   page,
@@ -298,7 +375,7 @@ test("登录后经用户菜单打开 /account，看见当前登录会话并能�
 
   await openAccountFromUserMenu(page);
   await expect(page.getByTestId("account-page")).toBeVisible();
-  await expect(page.getByText(/当前会话|This session/)).toBeVisible();
+  await expect(page.getByText(/^(这台|This device)$/)).toBeVisible();
   // 这一刻名下只有当前这一个会话：确认「当前会话」标在了对的那一行，且清单里
   // 没有第二行。
   await expect(
