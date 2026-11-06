@@ -299,14 +299,20 @@ export default function Login() {
   return (
     <AuthLayout>
       <div className="w-full max-w-[424px] space-y-6 rounded-2xl bg-sheet p-6 shadow-overlay sm:p-9">
-        {userCode && (
-          // 眉题贴着标题（-mb-3 抵掉卡片 space-y-6 的一半间距）。
-          <div className="-mb-3 flex items-center gap-1.5 text-xs font-medium text-primary-text">
-            <ShieldCheck className="h-3.5 w-3.5" />
-            {t("device.eyebrow")}
-          </div>
-        )}
-        <PageTitle>{t("login.title")}</PageTitle>
+        {/* 眉题与标题同一组，组内间距与设备授权页一致（gap-2.5）。不用负外边距去抵
+            卡片的 space-y：Tailwind v4 的 space-y 落在前一个元素的下外边距上，负值会
+            直接把标题拉上来压住眉题。 */}
+        <div className="flex flex-col gap-2.5">
+          {userCode && (
+            <div className="flex items-center gap-[7px] text-primary-text">
+              <ShieldCheck className="size-3.5" aria-hidden="true" />
+              <span className="text-xs font-semibold">
+                {t("device.eyebrow")}
+              </span>
+            </div>
+          )}
+          <PageTitle>{t("login.title")}</PageTitle>
+        </div>
 
         {userCode && (
           <div className="flex items-start gap-3 rounded-md bg-primary-soft p-3.5 text-primary-text">

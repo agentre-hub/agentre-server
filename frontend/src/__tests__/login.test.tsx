@@ -99,7 +99,9 @@ describe("Login", () => {
     // max-w-sm 是 384，而一个常量 p-9 会把 36 的桌面留白照搬到手机上。
     it("is 424 wide and pads 24 on mobile, 36 from sm: up", () => {
       renderLogin();
-      const card = screen.getByRole("heading", { level: 1 }).parentElement;
+      // 标题与「设备授权」眉题同在一组里，卡片是那一组的父级。
+      const card = screen.getByRole("heading", { level: 1 }).parentElement
+        ?.parentElement;
       expect(card?.className).toContain("max-w-[424px]");
       expect(card?.className).toContain("p-6");
       expect(card?.className).toContain("sm:p-9");

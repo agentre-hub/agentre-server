@@ -40,7 +40,9 @@ beforeEach(async () => {
 describe("Login without structural lines", () => {
   it("stands the card up as a sheet with a large radius and a shadow, on a chrome page", () => {
     const { container } = renderLogin();
-    const card = screen.getByRole("heading", { level: 1 }).parentElement!;
+    // 标题与「设备授权」眉题同在一组里，卡片是那一组的父级。
+    const card = screen.getByRole("heading", { level: 1 }).parentElement!
+      .parentElement!;
     expect(card.className).toMatch(/\bbg-sheet\b/);
     expect(card.className).toMatch(/\brounded-2xl\b/);
     expect(card.className).toMatch(/\bshadow-overlay\b/);
