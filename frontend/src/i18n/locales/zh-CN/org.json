@@ -12,7 +12,9 @@
       "reportsToLabel": "汇报给：{{name}}",
       "reportsToAria": "按汇报对象筛选",
       "clear": "清除{{label}}",
-      "clearAll": "清除筛选"
+      "clearAll": "清除筛选",
+      "needsSetup": "待配置",
+      "needsSetupAria": "按配置状态筛选"
     },
     "noMatch": {
       "title": "没有匹配的 Agent",

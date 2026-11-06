@@ -14,6 +14,7 @@
 import * as React from "react";
 import {
   Check,
+  CircleAlert,
   ChevronDown,
   CornerDownRight,
   FolderPlus,
@@ -49,6 +50,7 @@ import {
 import { InlineEmpty } from "@/components/console";
 
 import { filterRowsByBackend, type OrgIdMaps } from "./adapter";
+import { orgNeedsSetupReasons } from "./needsSetup";
 import type { OrgAgentItem, OrgBackendItem } from "./types";
 
 export interface OrgIndexPanelProps {
@@ -91,9 +93,24 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
     });
   }, []);
 
+  const [needsSetup, setNeedsSetup] = React.useState(false);
+  // 不能对话的 Agent → 简短原因（行上的待配置点 + 可读名，以及「待配置」筛选的名单）。
+  const needsSetupReasons = React.useMemo(
+    () => orgNeedsSetupReasons([...agentBySync.values()], maps, t),
+    [agentBySync, maps, t],
+  );
+  const needsSetupAgentIds = React.useMemo(
+    () => [...needsSetupReasons.keys()],
+    [needsSetupReasons],
+  );
   const filters = React.useMemo(
-    () => ({ search, backendId: 0, reportsToId }),
-    [search, reportsToId],
+    () => ({
+      search,
+      backendId: 0,
+      reportsToId,
+      needsSetupAgentIds: needsSetup ? needsSetupAgentIds : undefined,
+    }),
+    [search, reportsToId, needsSetup, needsSetupAgentIds],
   );
   const model = React.useMemo(
     () => buildOrgIndex({ agents, departments, filters }),
@@ -160,6 +177,13 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
           clear: () => setReportsToId(0),
         }
       : null,
+    needsSetup
+      ? {
+          key: "needsSetup",
+          label: t("org.index.filters.needsSetup"),
+          clear: () => setNeedsSetup(false),
+        }
+      : null,
   ].filter((c): c is { key: string; label: string; clear: () => void } =>
     Boolean(c),
   );
@@ -168,6 +192,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
     setSearch("");
     setBackendSyncId("");
     setReportsToId(0);
+    setNeedsSetup(false);
   };
 
   const visibleCount =
@@ -220,6 +245,16 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                   value: String(a.id),
                   label: a.name,
                 })),
+              },
+              {
+                key: "setup",
+                heading: t("org.index.filters.needsSetupAria"),
+                icon: <CircleAlert className="size-3.5" aria-hidden="true" />,
+                value: needsSetup ? "1" : "",
+                onValueChange: (v) => setNeedsSetup(v === "1"),
+                options: [
+                  { value: "1", label: t("org.index.filters.needsSetup") },
+                ],
               },
             ]}
           />
@@ -326,6 +361,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                   props.selection.id === row.agent.id
                 }
                 onSelect={props.onSelect}
+                gap={needsSetupReasons.get(row.agent.id)}
               />
             ))}
             {groups.map((group) => (
@@ -359,6 +395,7 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
                       props.selection.id === row.agent.id
                     }
                     onSelect={props.onSelect}
+                    gap={needsSetupReasons.get(row.agent.id)}
                   />
                 ))}
               </React.Fragment>
