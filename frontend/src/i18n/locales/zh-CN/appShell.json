@@ -24,5 +24,11 @@
       "unread_one": "{{count}} 条未读",
       "unread_other": "{{count}} 条未读"
     }
+  },
+  "drawer": {
+    "title": "导航菜单",
+    "open": "打开菜单",
+    "back": "返回",
+    "more": "更多"
   }
 }

@@ -17,3 +17,11 @@ export { Metric } from "./Metric";
 export { MobileTabBar, type MobileTab } from "./MobileTabBar";
 export { NavBadge } from "./NavBadge";
 export { StatusMark, type StatusTone } from "./StatusMark";
+export {
+  DrawerAccount,
+  DrawerSectionLabel,
+  MobileDrawer,
+  MobileDrawerProvider,
+  MobileNavButton,
+  isTopLevelPath,
+} from "./MobileNav";

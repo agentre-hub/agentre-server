@@ -1,12 +1,10 @@
-/**
- * 移动端主导航（任务 2，正式节点 A6Z3k）：底部 TabBar 取代原抽屉。
- *   - 移动：不渲染桌面固定侧栏、无汉堡按钮、无抽屉/dialog；底部是
- *     MobileTabBar（内容 52px + 安全区，A6Z3k），只含真实可达目的地
- *     （Overview/Chat/Devices/Org），不伪造「我」入口，也不含已下线的审计。
- *   - 移动：账号、语言与主题控制仍可达（账号进 TopBar，AppControls 在 TopBar）。
- *   - 桌面：保持固定侧栏，不渲染底部 TabBar。
- */
-import { render, screen, within } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import {
   afterAll,
@@ -77,11 +75,19 @@ afterAll(() => {
   window.matchMedia = originalMatchMedia;
 });
 
-function renderShell(initial = "/chat") {
+/**
+ * 移动端主导航（规格 2026-11-05 手机 PWA「外壳与导航」，取代 2026-09 的底部 TabBar）：
+ *   - 手机：没有底部 TabBar、没有固定侧栏；顶层页页头左侧是 ☰，点开左抽屉。
+ *   - 抽屉自上而下：账号区 → 主导航（对话带「需要你」角标、设备带在线/总数）→
+ *     更多（活跃统计、设置）→ 底部主题与语言。
+ *   - 非顶层页页头左侧是返回，不显示 ☰。
+ *   - 桌面：保持固定侧栏，不出现 ☰。
+ */
+function renderShell(initial = "/chat", title?: string) {
   return render(
     <MemoryRouter initialEntries={[initial]}>
       <ThemeProvider>
-        <AppShell>
+        <AppShell title={title}>
           <div>page content</div>
         </AppShell>
       </ThemeProvider>
@@ -89,90 +95,179 @@ function renderShell(initial = "/chat") {
   );
 }
 
-describe("移动端底部导航（A6Z3k，取代原抽屉）", () => {
-  it("移动:无固定侧栏、无汉堡按钮、无抽屉；底部是 MobileTabBar", async () => {
-    mockMobileViewport();
-    renderShell();
+function mockData() {
+  mockedApi.mockImplementation(async (path: string) => {
+    if (path === "/v1/auth/me") return me;
+    if (path === "/v1/devices")
+      return {
+        devices: [
+          { id: 1, kind: "agentred", online: true },
+          { id: 2, kind: "agentred", online: true },
+          { id: 3, kind: "agentred", online: false },
+        ],
+      };
+    if (path === "/v1/agent-sessions/attention-count")
+      return { needs_attention: 2, unread: 1 };
+    throw new Error("unexpected: " + path);
+  });
+}
 
-    // 唯一一个导航就是底部 TabBar（A6Z3k 内容 52px + 安全区）。
-    const nav = screen.getByRole("navigation");
-    expect(nav.style.height).toBe(
-      jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
-    );
-    // 原抽屉相关控件全部消失。
-    expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Close menu" })).toBeNull();
+async function openDrawer() {
+  fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
+  return await screen.findByRole("dialog");
+}
+
+describe("移动端左抽屉导航", () => {
+  it("手机：没有底部 TabBar、没有固定侧栏；页头有 ☰，抽屉默认关着", () => {
+    mockMobileViewport();
+    renderShell("/chat", "Chat");
+
+    for (const nav of screen.queryAllByRole("navigation")) {
+      expect(nav.style.height).not.toBe(
+        jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
+      );
+    }
+    expect(screen.queryByRole("link", { name: "Devices" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
-    // 页面主体照常渲染。
+    expect(screen.getByRole("button", { name: "Open menu" })).toBeTruthy();
     expect(screen.getByText("page content")).toBeTruthy();
   });
 
-  it("移动:底部 TabBar 只含真实目的地（Overview/Chat/Board/Devices/Org），不伪造「我」，也不含已下线的审计", async () => {
+  it("手机：☰ 打开抽屉，主导航、更多、账号区各项可达", async () => {
     mockMobileViewport();
+    mockData();
     renderShell();
+    const drawer = await openDrawer();
 
-    for (const label of ["Overview", "Chat", "Board", "Devices", "Org"]) {
-      expect(screen.getByRole("link", { name: label })).toBeTruthy();
+    for (const label of [
+      "Chat",
+      "Board",
+      "Agents & org",
+      "Devices",
+      "Activity stats",
+      "Settings",
+    ]) {
+      expect(
+        within(drawer).getByRole("link", { name: new RegExp(label) }),
+      ).toBeTruthy();
     }
-    // A6Z3k 的「我」tab 没有真实页面，不得作为目的地出现。
-    expect(screen.queryByRole("link", { name: "Me" })).toBeNull();
-    expect(screen.queryByText("Me")).toBeNull();
-    expect(screen.queryByRole("link", { name: "Audit" })).toBeNull();
+    const account = await within(drawer).findByRole("link", {
+      name: /Dev User/,
+    });
+    expect(account.getAttribute("href")).toBe("/account");
+    expect(within(drawer).getByText("dev@agentre.dev")).toBeTruthy();
   });
 
-  it("移动:TabBar 项数与主导航一致（5 项：总览/对话/看板/设备/组织）", async () => {
+  it("手机：抽屉底部有主题与语言；页头不再有", async () => {
     mockMobileViewport();
     renderShell();
-
-    const nav = screen.getByRole("navigation");
-    expect(within(nav).getAllByRole("link")).toHaveLength(5);
+    expect(screen.queryByRole("button", { name: /Language/i })).toBeNull();
+    const drawer = await openDrawer();
+    expect(
+      within(drawer).getByRole("button", { name: /Language/i }),
+    ).toBeTruthy();
+    expect(within(drawer).getByRole("button", { name: /Theme/i })).toBeTruthy();
   });
 
-  it("移动:当前 tab 高亮（primary-text）", async () => {
+  it("手机：对话项带「需要你」角标，设备项带 在线/总数", async () => {
     mockMobileViewport();
-    renderShell("/chat");
+    mockData();
+    renderShell();
+    const drawer = await openDrawer();
 
-    const chat = screen.getByRole("link", { name: "Chat" });
-    expect(chat.className).toContain("text-primary-text");
-    const devices = screen.getByRole("link", { name: "Devices" });
-    expect(devices.className).toContain("text-muted-foreground");
+    const chat = await within(drawer).findByRole("link", { name: /Chat/ });
+    expect(await within(chat).findByText("3")).toBeTruthy();
+    expect(
+      within(chat).getByTitle("2 conversations need you · 1 unread"),
+    ).toBeTruthy();
+    const devices = within(drawer).getByRole("link", { name: /Devices/ });
+    expect(await within(devices).findByText("2/3")).toBeTruthy();
   });
 
-  it("移动:账号、语言与主题仍可达（账号进 TopBar，AppControls 在 TopBar）", async () => {
+  it("手机：没有待处理时不画角标", async () => {
     mockMobileViewport();
     mockedApi.mockImplementation(async (path: string) => {
-      if (path === "/v1/auth/me") return me;
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 0, unread: 0 };
       throw new Error("unexpected: " + path);
     });
     renderShell();
+    const drawer = await openDrawer();
+    await waitFor(() =>
+      expect(mockedApi).toHaveBeenCalledWith(
+        "/v1/agent-sessions/attention-count",
+      ),
+    );
+    const chat = within(drawer).getByRole("link", { name: /Chat/ });
+    expect(chat.querySelector("[title]")).toBeNull();
+  });
 
-    // 账号（TopBar 内的头像 + 名字）可达。
-    expect(await screen.findByText("Dev User")).toBeTruthy();
-    expect(screen.getByText("D")).toBeTruthy();
-    // 语言 / 主题控制可达。
-    expect(screen.getByRole("button", { name: /Language/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Theme/i })).toBeTruthy();
+  it("手机：当前页在抽屉里高亮", async () => {
+    mockMobileViewport();
+    renderShell("/devices");
+    const drawer = await openDrawer();
+    expect(
+      within(drawer)
+        .getByRole("link", { name: /Devices/ })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      within(drawer)
+        .getByRole("link", { name: /Chat/ })
+        .getAttribute("aria-current"),
+    ).toBeNull();
+  });
+
+  it("手机：点任一项后抽屉关闭", async () => {
+    mockMobileViewport();
+    renderShell();
+    const drawer = await openDrawer();
+    fireEvent.click(within(drawer).getByRole("link", { name: /Settings/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("手机：Escape 可关；宽 84% 最宽 320px，220ms ease-out，减弱动态下不做动画", async () => {
+    mockMobileViewport();
+    renderShell();
+    const drawer = await openDrawer();
+    const cls = drawer.className;
+    expect(cls).toContain("w-[84%]");
+    expect(cls).toContain("max-w-[320px]");
+    expect(cls).toContain("duration-[220ms]");
+    expect(cls).toContain("ease-out");
+    expect(cls).toContain("motion-safe:data-[state=open]:animate-in");
+    expect(cls).toContain("motion-safe:data-[state=open]:slide-in-from-left");
+    fireEvent.keyDown(drawer, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("手机：非顶层页页头是返回而不是 ☰", () => {
+    mockMobileViewport();
+    renderShell("/org/agent/abc", "Agent");
+    expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Back" })).toBeTruthy();
+  });
+
+  it("手机：顶层页页头显示标题", () => {
+    mockMobileViewport();
+    renderShell("/devices", "Devices");
+    expect(
+      within(screen.getByTestId("app-topbar")).getByText("Devices"),
+    ).toBeTruthy();
   });
 });
 
 describe("桌面端导航（非移动）", () => {
-  it("保持固定侧栏，无底部 TabBar", async () => {
+  it("保持固定侧栏，无 ☰、无返回", () => {
     renderShell();
 
     const nav = screen.getByRole("navigation");
-    // 桌面侧栏 224px，不是 74px 的 TabBar。
     expect(nav.className).toContain("w-[224px]");
     for (const label of ["Overview", "Chat", "Board", "Devices", "Org"]) {
       expect(screen.getByRole("link", { name: label })).toBeTruthy();
     }
     expect(screen.queryByRole("link", { name: "Audit" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Open menu" })).toBeNull();
-    // 桌面不该出现底部 TabBar（带安全区高度的导航）。
-    const navs = screen.getAllByRole("navigation");
-    for (const n of navs) {
-      expect(n.style.height).not.toBe(
-        jsdomStyleOf("height", MOBILE_TAB_BAR_HEIGHT),
-      );
-    }
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
   });
 });

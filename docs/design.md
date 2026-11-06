@@ -96,7 +96,7 @@ that one class string is never legal in one host and banned in the other:
 The console is borderless: areas are told apart by the surface ladder and by fills, never
 by a line. Three surfaces make the ladder (all from the shared package, no local values):
 
-- **`chrome`** — the frame: SideNav, TopBar, the mobile bottom tab bar, the index column
+- **`chrome`** — the frame: SideNav, TopBar, the mobile left drawer, the index column
   of a page that declares one, and the auth screens' page background.
 - **`sheet`** — the work page that floats on the chrome (`content-sheet` on desktop,
   `bg-sheet` full-bleed on mobile), and the auth card.
@@ -407,8 +407,8 @@ use, and it adds to the mobile shape rather than replacing it.
 
 `@/components/AppShell` is the frame for signed-in console pages. It is a **chrome frame
 holding a sheet**: on desktop a 224px SideNav plus a TopBar/work-area column, on mobile a
-single column with a bottom TabBar — there is no hamburger or drawer. SideNav, TopBar and
-TabBar all sit on `bg-chrome` with no line between them or between them and the work area;
+single column whose TopBar opens a left drawer (☰) — there is no bottom tab bar. SideNav, TopBar and
+drawer all sit on `bg-chrome` with no line between them or between them and the work area;
 the work area is one `sheet` page. See [The shell](#the-shell). The auth screens keep `AuthLayout`
 (above); the two shells never nest.
 
@@ -446,7 +446,7 @@ described in [architecture.md](architecture.md#shared-frontend-packages).
 | Component | Board node | Shape (what it fixes, so no one re-measures) | Used by |
 | --- | --- | --- | --- |
 | `ConsoleNavItem` | `ZC7pI` nav item | `h-[34px] rounded-md px-2.5`, 17px icon, 13px label; active = `bg-raised text-primary-text`, idle = `text-muted-foreground hover:bg-rail-accent hover:text-foreground`; trailing `badge` (> 0 only) / `meta` / `dot` are honest — the caller passes them only with real data | `AppShell` desktop SideNav (all six items) |
-| `MobileTabBar` | `A6Z3k` bottom tab | `h-[74px] bg-chrome`, no top border (the sheet above it ends where the chrome starts), 21px icon, 10px label, active = `text-primary-text font-semibold`, idle = `text-subtle-foreground font-medium`; items carry only real destinations | `AppShell` mobile bottom nav |
+| `MobileDrawer` / `MobileNavButton` | spec 2026-11-05 "外壳与导航" | Left drawer on the shared `Dialog`: `w-[84%] max-w-[320px]`, `bg-chrome`, 220ms `ease-out` slide-in under `motion-safe:` only. `MobileNavButton` is the TopBar's left control — ☰ on a top-level path, back (‹) elsewhere, both 44px; pages that draw their own header reuse it. Drawer rows are `ConsoleNavItem touch` (44px) | `AppShell` mobile nav |
 | `StatusMark` | `zF5jv` status pill | `rounded-full px-2.5 py-[5px]`, 6px dot + `text-xs font-semibold` text in the same token; `tone` maps to `running`/`waiting`/`idle`/`error` semantic tokens only; the label is always visible text — colour is never the only signal | `Devices` row status |
 | `Metric` | `IhldU` stat card | `rounded-md bg-field-fill px-3.5 py-3` (a fill, no edge), label `text-[11.5px]` + 13px icon, value `text-[23px] leading-none font-bold` + `text-xs` unit, sub `text-[10.5px]`; a data-less block renders `value="—"`, never a made-up number | `Overview` four stat tiles |
 | `EmptyState` | the formal empty boards | 62px icon circle (`bg-primary-soft text-primary-text`, or warn), `text-lg font-bold` title, `text-[12.5px] leading-[22px]` body, optional action; only the shared hierarchy — page-specific content is assembled by the page from real data | `Overview` (the three distributions + the stats-unavailable state), `Devices` (no devices), `Chat` (desktop unselected + mobile empty) |
@@ -556,7 +556,7 @@ mobile there is no room for side-by-side, so `index` is not rendered: the shell 
 detail. Pages therefore never paint their own root background.
 
 **Mobile session detail and draft: `immersive`** — when `immersive={true}` the shell hides
-both TopBar and mobile bottom tab bar, and `main` handles safe-area insets at top and bottom.
+the TopBar, and `main` handles safe-area insets at top and bottom.
 The conversation detail page (`/chat/:conversationId`) and new-conversation draft render this
 way on mobile, so a session occupies the full viewport with a single fixed 56px header band
 (see [The detail's three bands](#the-details-three-bands)). Desktop and embedded forms ignore
@@ -564,16 +564,18 @@ way on mobile, so a session occupies the full viewport with a single fixed 56px 
 `immersive` must not add its own top inset as well — the new-conversation draft therefore
 leaves it to the shell, while the "pick from a project" screen (not immersive) still adds it.
 
-**Mobile bottom tab (board `A6Z3k`).** Below `md` the SideNav is removed entirely — no
-hamburger, no drawer. The five high-frequency destinations (Overview, Chat, Issues, Devices,
-Org) render in a `MobileTabBar` on `bg-chrome` with no top border, held at the bottom with `shrink-0` (the root does not
-scroll, so `sticky` would buy nothing). The list derives from the SideNav's real routes minus
-Settings, which deliberately stays out of the bar and is reachable from the account menu,
-like `/account` — so no fake "Me"/placeholder entry exists and no low-frequency destination
-crowds the bar. The account chip moves into the TopBar, and `AppControls` (language/theme)
-stays in the TopBar — account, language and theme remain reachable without competing with
-the bottom bar. `app-shell.test.tsx` and `mobile-nav-drawer.test.tsx` pin the
-desktop/mobile split, the five-item boundary and the "no drawer, no fake blue dot" rule.
+**Mobile left drawer (spec 2026-11-05 "外壳与导航").** Below `md` the SideNav is removed and there
+is no bottom tab bar. A top-level page (`/chat`, `/issues`, `/org`, `/devices`, `/overview`,
+`/settings`, `/account`) has a TopBar of `MobileNavButton` (☰) · title · page actions; any deeper
+path (a conversation, an Agent detail) shows a back control instead of ☰, so every level has a
+visible way back. ☰ opens the drawer, top to bottom: the account block (avatar, name, email →
+`/account`); the main destinations Chat (the same "needs you" badge as the SideNav, hidden at 0),
+Board, Agents & org, Devices (online/total); "More": Activity stats, Settings; and at the bottom
+`AppControls` (theme and language, which therefore leave the TopBar). The current page is
+highlighted; picking any link closes the drawer. The badge and device counts reuse the data
+`AppShell` already fetches for the desktop SideNav. On a phone `/` redirects to `/chat`; on
+desktop it stays `/overview`. `MobileTabBar` is no longer rendered by the shell.
+`app-shell.test.tsx`, `app-routes.test.tsx` and `mobile-nav-drawer.test.tsx` pin the split.
 
 **Main (the sheet).** The work area is `data-testid="app-sheet"`, holding `main`. On desktop
 it is the shared `content-sheet` utility: `--sheet` background, 12px radius, `overflow:
@@ -761,7 +763,7 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   exist. Picking an agent replaces the whole screen with `DraftSession`.
   
   Viewing a saved conversation opens `/chat/:conversationId` as a full-screen detail page
-  (`AppShell immersive`, no TopBar or bottom tab bar, safe-area insets in `main`). The new-chat
+  (`AppShell immersive`, no TopBar, safe-area insets in `main`). The new-chat
   draft also renders immersive when accessed on mobile. Both render a single fixed 56px
   session header (back · 1-line title · Agent · project · machine + online · time · ⋯); the
   meta line truncates on mobile instead of hiding parts. Loading / not-found / error states
@@ -936,7 +938,7 @@ this with one column at a time (index → detail → back).
 ### Settings
 
 `/settings` is the last desktop SideNav destination and is also linked from `UserMenu`;
-it is intentionally absent from the mobile TabBar. The page has three
+it is reachable from the mobile drawer's "More" section. The page has three
 sections: **LLM providers**, **Agent backends** and **Privacy**. The first two render the
 shared `@agentre-hub/agentre-ui` engine panels; this host supplies only the account shell,
 section navigation, sync notice and `EngineSettingsPorts` adapter. The section is also
@@ -994,7 +996,7 @@ session cards that render account session details.
 | Formal UI vs design commentary | Only elements that serve a real task with real data and real actions enter the product; notes/callouts/rule lines/explainer cards are deleted from the contract | The boards mix product and review commentary; only the four-part test above separates them |
 | Shared console primitives | The repeated shapes (nav item, nav badge, bottom tab, status pill, metric, empty state, inline empty) are one implementation in `components/console/`; pages compose, never re-measure | A single contract stops per-page drift and lets pages be built in parallel |
 | One index on both forms | Desktop and mobile render the same `SessionIndex` — same axes, same groups, same shared row; mobile only adds a localized status label at the row end | The shared dot's accessible name is an English status code, so a phone row needs one visible localized status; on the 320px desktop column the dot carries it and a second badge only narrows the row |
-| Mobile navigation is a bottom tab of real destinations, not a mirror of desktop | Below `md` the SideNav is replaced by the `A6Z3k` TabBar with Overview / Chat / Issues / Devices / Org; Settings stays in the account menu | The board gives mobile its own navigation; a drawer's fake entries would imply destinations that do not exist, and the desktop IA can grow without crowding the bar |
+| Mobile navigation is a left drawer of real destinations, not a mirror of desktop | Below `md` the SideNav is replaced by a ☰ drawer: Chat / Board / Agents & org / Devices, then Activity stats / Settings under "More", theme and language at the bottom (spec 2026-11-05) | Five bottom tabs took permanent screen height and had no "needs you" entry point; the drawer keeps every destination one tap away on a chat-first phone shell |
 | Honest empty states | `—` in tiles and data-less cards, and the shared `EmptyState` in data-less sections; a missing source renders the real layout, never a fabricated number | A made-up number reads as a product promise that has to be un-made later |
 | The overview is stats-first | `GET /v1/stats/overview` backs all four tiles, the heatmap and the three distributions; the action strip moved to the SideNav badge and the three data-less cards are gone | Two of four tiles rendered `—` and half the page said "no data"; the endpoint made the honest layout possible, and a page whose job is to say "here is what happened" should not be mostly absence |
 | A failed stats fetch is not a summary of zeros | The whole stats area is replaced by an alert with a real Retry plus a warn `EmptyState` naming what is unaffected | Zeros are a claim the user cannot falsify; "could not load" is one they can act on |
@@ -1006,7 +1008,7 @@ session cards that render account session details.
 | Unread is a real column, not a relabel | `last_read_at` on the mirror row; opening a conversation writes it, and so does every turn that lands while it is open; the chip filters on `last_message_at > last_read_at` | "Unread" over a waiting-for-input predicate would be a relabel; a real read state makes the name true, and it matches what the desktop app already means by "unread" |
 | The composer is pinned, not appended | `SessionDetailView` bands header / transcript / composer; only the middle scrolls, and `AppShell` stops the page scrolling at all | Measured: 2145px page against a 900px viewport put the input 1245px below the fold, and the transcript kept growing under it |
 | The placeholder states capabilities, not a backend | `AIChatInput` derives it from what this render wired up; the host passes no `placeholder` | A `backendType` table promises `@ / !` to hosts that wired neither — the desktop app had a call site hand-writing a replacement string for exactly that reason |
-| The frame is one surface, not three | Nav, TopBar and bottom tab bar are all `bg-chrome`; the work area is `sheet` | Borderless redesign (spec 2026-10-15): a nav `--sidebar` plus a `bg-card` bar left two surfaces that had to be told apart with lines |
+| The frame is one surface, not three | Nav, TopBar and the mobile drawer are all `bg-chrome`; the work area is `sheet` | Borderless redesign (spec 2026-10-15): a nav `--sidebar` plus a `bg-card` bar left two surfaces that had to be told apart with lines |
 | Shell data is best-effort | Badge, Meta and Account render only when their source resolves | The shell must not block the page on a number it cannot get |
 
 ## Theming
@@ -1045,7 +1047,7 @@ Both form factors are supported, so build mobile-first and add `sm:`/`md:` upwar
   without the shell. Do not add a `min-h-screen` inside main: main is already the viewport
   minus the bars, so such a child only gives every page a scrollbar worth the TopBar.
 - **The console's mobile form is a different tree, not a squeezed desktop.** Below `md` the
-  SideNav is replaced by the bottom `MobileTabBar` of real destinations; device and chat
+  SideNav is replaced by the ☰ left drawer of real destinations; device and chat
   rows regroup (devices by their own mobile row shape, chat by status); Overview's stat
   grid goes 2-up and its two-column row stacks.
   Each page reorders without horizontal overflow (`overview.test.tsx`).

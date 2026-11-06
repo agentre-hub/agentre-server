@@ -21,6 +21,7 @@ import Org from "./pages/Org";
 import Settings from "./pages/Settings";
 import NotFound from "./pages/NotFound";
 import ComingSoon from "./pages/ComingSoon";
+import { useIsMobile } from "./components/use-is-mobile";
 import RequireAuth from "./components/RequireAuth";
 import { lazyPage, warmPages } from "./lib/lazyPage";
 import { MOBILE_TAB_BAR_CLEARANCE } from "./lib/mobileLayout";
@@ -46,6 +47,15 @@ function DeviceSessionsRedirect() {
   return <Navigate to={`/chat?${params.toString()}`} replace />;
 }
 
+/**
+ * 入口落点：手机是对话列表（规格 2026-11-05：手机 App 以对话为中心），桌面是总览。
+ * PWA 的 start_url 仍是 `/`，由这里按视口分流。
+ */
+function HomeRedirect() {
+  const isMobile = useIsMobile();
+  return <Navigate to={isMobile ? "/chat" : "/overview"} replace />;
+}
+
 export default function App() {
   const { effectiveTheme } = useTheme();
 
@@ -60,7 +70,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/overview" replace />} />
+        <Route path="/" element={<HomeRedirect />} />
         <Route path="/login" element={<Login />} />
         <Route
           path="/device"

@@ -28,6 +28,7 @@ export function ConsoleNavItem({
   badgeLabel,
   meta,
   collapsed = false,
+  touch = false,
 }: {
   to: string;
   label: string;
@@ -40,6 +41,8 @@ export function ConsoleNavItem({
   meta?: string | null;
   /** 56px 图标栏形态：只留图标，其余信息各自换个位置。 */
   collapsed?: boolean;
+  /** 手机抽屉里的一档：行高 44px（触屏命中区），其余不变。 */
+  touch?: boolean;
 }) {
   return (
     <NavLink
@@ -47,7 +50,7 @@ export function ConsoleNavItem({
       // 收起后鼠标停上去才说得出这是哪一项；展开时文案就在旁边，再挂一个
       // title 只会在光标下重复一遍。
       title={collapsed ? [label, meta].filter(Boolean).join(" ") : undefined}
-      className={navItemClass(collapsed)}
+      className={navItemClass(collapsed, touch)}
     >
       <Icon className="size-[17px] shrink-0" aria-hidden="true" />
       <span
@@ -74,10 +77,11 @@ export function ConsoleNavItem({
   );
 }
 
-function navItemClass(collapsed: boolean) {
+function navItemClass(collapsed: boolean, touch: boolean) {
   return ({ isActive }: { isActive: boolean }) =>
     cn(
-      "relative flex h-[34px] w-full shrink-0 items-center gap-2.5 rounded-md transition-colors",
+      "relative flex w-full shrink-0 items-center gap-2.5 rounded-md transition-colors",
+      touch ? "h-11" : "h-[34px]",
       collapsed ? "justify-center px-0" : "px-2.5",
       isActive
         ? "bg-raised text-primary-text"
