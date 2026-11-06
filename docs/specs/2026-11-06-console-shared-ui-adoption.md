@@ -4,7 +4,7 @@
 > Owner: agentre-server 维护者
 > Last updated: 2026-11-06
 
-**Objective:** 把 `@agentre-hub/agentre-ui`（及同版本的 `@agentre-hub/agentre-wire`）的钉从 agentre `4a759e83` 抬到 `70e53804`（agentre PR #86 合并提交），让控制台拿到 2026-11-05 UI/UX 打磨里共享包的改动，并在控制台宿主接上需要宿主提供数据/回调的新能力，使控制台与桌面端的对话体验一致。桌面端规格见 agentre `docs/specs/2026-11-05-ux-polish.md`（C1–C8、S1–S6），本文件只写控制台侧的需求与决策。叠在 `ux/2026-11-05-ux-polish` 分支（PR #36）上一起发布。
+**Objective:** 把 `@agentre-hub/agentre-ui`（及同版本的 `@agentre-hub/agentre-wire`）的钉从 agentre `4a759e83` 抬到 `6bde33a8`（agentre PR #86 合并提交 `70e53804` 之上、把 `countPendingBelow` 搬进共享包的那个 main 提交），让控制台拿到 2026-11-05 UI/UX 打磨里共享包的改动，并在控制台宿主接上需要宿主提供数据/回调的新能力，使控制台与桌面端的对话体验一致。桌面端规格见 agentre `docs/specs/2026-11-05-ux-polish.md`（C1–C8、S1–S6），本文件只写控制台侧的需求与决策。叠在 `ux/2026-11-05-ux-polish` 分支（PR #36）上一起发布。
 
 **Hard invariants:**
 - `pkg/wire` / `pkg/syncwire` 的 Go 钉跟着前端钉一起抬到同一提交 `6bde33a8`（`internal/pkg/wireversion` 守卫要求 Go `pkg/wire` 与 TS `agentre-wire` 同一 commit；`4a759e83..6bde33a8` 之间二者只有 README/注释改动），不改协议版本，不加迁移。
