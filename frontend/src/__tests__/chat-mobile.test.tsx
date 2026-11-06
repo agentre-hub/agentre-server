@@ -1146,4 +1146,18 @@ describe("手机首页：范围弹层", () => {
       within(again).getByTestId("scope-item-project-p-1").textContent,
     ).toContain("2");
   });
+
+  it("名单里的 Agent 没带执行目标也不崩：弹层照常列出，没有机器副标题", async () => {
+    stubApi(rows, [agentred], {
+      agents: [
+        { sync_id: "ag-9", name: "裸 Agent", has_available_target: true },
+      ],
+    });
+    const sheet = await open();
+
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Agent" }));
+    expect(
+      within(sheet).getByTestId("scope-item-agent-ag-9").textContent,
+    ).toContain("裸 Agent");
+  });
 });

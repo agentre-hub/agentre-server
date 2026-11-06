@@ -110,7 +110,8 @@ export interface ScopeAgentSource {
   avatar_icon?: string;
   department_name?: string;
   has_available_target: boolean;
-  exec_targets: { device_name?: string; current?: boolean }[];
+  /** 名单端点可能不带（缺席即没有）。 */
+  exec_targets?: { device_name?: string; current?: boolean }[];
 }
 
 /** Agent 按部门分组（首次出现的次序）；没有部门的排在最后，组名由宿主给。 */
@@ -122,8 +123,8 @@ export function buildScopeAgentGroups(
   const groups = new Map<string, ScopeAgentItem[]>();
   for (const agent of agents) {
     const dept = agent.department_name?.trim() ?? "";
-    const target =
-      agent.exec_targets.find((t) => t.current) ?? agent.exec_targets[0];
+    const targets = agent.exec_targets ?? [];
+    const target = targets.find((t) => t.current) ?? targets[0];
     const own = tally.agent.get(agent.sync_id);
     groups.set(dept, [
       ...(groups.get(dept) ?? []),
