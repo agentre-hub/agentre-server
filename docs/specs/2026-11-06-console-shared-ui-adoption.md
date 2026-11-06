@@ -15,7 +15,7 @@
 ## Requirements
 
 **A1 抬钉**
-- `frontend/package.json` 的 `@agentre-hub/agentre-ui` 与 `@agentre-hub/agentre-wire` 两根钉先改到 `70e53804`（A4 落地时再抬到 agentre 抽取计数规则的合并提交），`pnpm install` 更新 lockfile。
+- `frontend/package.json` 的 `@agentre-hub/agentre-ui` 与 `@agentre-hub/agentre-wire` 两根钉直接改到 agentre main `6bde33a8`（#86 合并提交 `70e53804` 之上、把 `countPendingBelow` 搬进共享包的那个提交），`pnpm install` 更新 lockfile。
 - 因共享包行为变化而失败的控制台单测 / e2e 断言更新到新行为（失败卡事实句 + 折叠详情、审批卡默认展开与按钮文案、重试指示行、去掉常驻快捷键提示等），不改共享包。
 - 验收：`make test`、`make lint`、`make e2e` 全绿；W5b（剪贴板写入被拒时「复制诊断信息」不贴浏览器原话）在真实控制台成立。
 
@@ -30,7 +30,7 @@
 
 **A4 回到底部药丸「N 项待处理」（对应桌面 C4）**
 - 控制台给 `TranscriptJumpControl` 传 `pendingBelow`：视口下方未决的审批/提问块数。
-- 决策：计数规则只能有一份实现。先在 agentre 把桌面宿主的 `countPendingBelow` 原样搬进 `@agentre-hub/agentre-ui`（桌面改用它，行为不变），合并后控制台把钉抬到该合并提交再接入；控制台不另写一份。
+- 决策：计数规则只能有一份实现。已在 agentre main `6bde33a8` 把桌面宿主的 `countPendingBelow` 原样搬进 `@agentre-hub/agentre-ui`（导出 `countPendingBelow(messages, bottomVisibleId)` 与 `pendingDecisionId`，桌面改用它）；控制台直接调用它，不另写一份。
 
 **A5 组织架构缺口标记（对应桌面 S2）**
 - 控制台组织架构索引里不能对话的 Agent 行，给共享 `OrgAgentRow` 传 gap（6px 待配置点 + 可读名带原因）；索引筛选提供「待配置」（共享 `OrgIndexFilters` 的可选字段）。
