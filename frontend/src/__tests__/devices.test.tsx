@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as accountChannel from "@/lib/accountChannel";
@@ -323,7 +323,7 @@ describe("device page design alignment", () => {
     expect(within(nuc).getByText("Rank 2")).toBeTruthy();
   });
 
-  it("移动端行式信息顺序：图标方框 + 名 + 类型 + 状态 + Meta，且无接单开关/负载条", async () => {
+  it("移动端行式信息顺序：图标方框 + 名 + 类型 + 状态写成字，且无接单开关/负载条", async () => {
     mockedApi.mockImplementation(async (path) => {
       if (path === "/v1/devices") return listResponse;
       throw new Error("unexpected call: " + path);
@@ -345,15 +345,13 @@ describe("device page design alignment", () => {
       renderDevices();
       await screen.findByText("nuc-01");
 
-      const row = screen
-        .getByText("nuc-01")
-        .closest('[data-slot="card"]') as HTMLElement;
-      // 信息顺序：设备图标方框 + 名 + 类型 chip + 状态 + Meta
+      const row = screen.getByTestId("device-row-1");
+      // 信息顺序：设备图标方框 + 名 + 类型 chip +「在线 · 版本」（规格 2026-11-05：
+      // 平台挪进详情页头，行上只写状态）
       expect(within(row).getByTestId("device-icon-1")).toBeTruthy();
       expect(within(row).getByText(/Compute node/)).toBeTruthy();
       expect(within(row).getByText(/Online/)).toBeTruthy();
-      expect(within(row).getByText(/linux/)).toBeTruthy();
-      expect(within(row).getByText(/0\.4\.0/)).toBeTruthy();
+      expect(row.textContent).toContain("0.4.0");
 
       // 无真实能力的控件不渲染：接单开关、并发负载条
       expect(screen.queryByRole("switch")).toBeNull();
@@ -961,7 +959,7 @@ describe("一键升级走完整条路", () => {
 });
 
 describe("窄屏也要成立", () => {
-  it("移动端卡片同样出弱徽标与展开区的升级出口", async () => {
+  it("移动端行上写「可以升级」，详情页顶部是升级出口", async () => {
     mockConsole({
       devices: () => [AGENTRED_UPGRADABLE],
       latest: { known: true, version: "0.6.0" },
@@ -979,21 +977,29 @@ describe("窄屏也要成立", () => {
     })) as typeof window.matchMedia;
 
     try {
-      renderDevices();
+      render(
+        <MemoryRouter initialEntries={["/devices"]}>
+          <Routes>
+            <Route path="/devices/:deviceId?" element={<Devices />} />
+          </Routes>
+        </MemoryRouter>,
+        { wrapper: ThemeProvider },
+      );
       await screen.findByText("build-box-02");
-      const row = screen
-        .getByText("build-box-02")
-        .closest('[data-slot="card"]') as HTMLElement;
-      expect(
-        within(row).getByTestId("device-version-badge-1").textContent,
-      ).toContain("Upgradable to 0.6.0");
+      const row = screen.getByTestId("device-row-1");
+      expect(await within(row).findByText(/Upgrade available/)).toBeTruthy();
 
-      await expandRow(1);
+      // 手机上不原地展开：点一行进详情页，升级出口在页顶。
+      await act(async () => {
+        fireEvent.click(row);
+      });
+      const page = await screen.findByTestId("device-detail-mobile");
       expect(
-        within(row).getByTestId("device-upgrade-action-1").textContent,
+        (await within(page).findByTestId("device-upgrade-action-1"))
+          .textContent,
       ).toContain("Upgrade agentred");
       expect(
-        within(row).getByTestId("device-upgrade-command-1").textContent,
+        within(page).getByTestId("device-upgrade-command-1").textContent,
       ).toContain("agentred update");
     } finally {
       window.matchMedia = originalMatchMedia;

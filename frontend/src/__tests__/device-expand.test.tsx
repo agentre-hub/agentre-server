@@ -393,100 +393,43 @@ describe("device row expand", () => {
       window.matchMedia = originalMatchMedia;
     });
 
-    it("does not wrap the status dot onto its own line (no flex-wrap on name row)", async () => {
+    /*
+      手机上一行不再原地展开（规格 2026-11-05 决策 15）：点进独立详情页，项目数、
+      在跑的对话、Agent 都在那一页上（devices-mobile.test.tsx）。行本身只剩一行名字。
+    */
+    it("has no in-place expand control; the row is a link into the detail page", async () => {
       mockedApi.mockImplementation(async (path) => {
         if (path === "/v1/devices") return listResponse;
-        if (path === "/v1/workspace/device-detail?device_id=1") {
-          return {
-            device_id: 1,
-            kind: "agentred",
-            runnable_agents: [],
-            projects: [
-              { sync_id: "proj-1", name: "agentre-server", configured: true },
-            ],
-          };
-        }
         throw new Error("unexpected call: " + path);
       });
 
       renderDevices();
       await screen.findByText("study-nuc");
-      const card = screen
-        .getByText("study-nuc")
-        .closest('[data-slot="card"]') as HTMLElement;
+      const row = screen.getByTestId("device-row-1");
 
-      // 名字那一行应该没有 flex-wrap，这样状态点与名字始终在同一行
-      const nameRow = within(card).getByText("study-nuc").closest("div");
-      expect(nameRow?.className).not.toContain("flex-wrap");
-    });
-
-    it("shows subRow with project and running conversation counts when expanded", async () => {
-      mockedApi.mockImplementation(async (path) => {
-        if (path === "/v1/devices") return listResponse;
-        if (path === "/v1/workspace/device-detail?device_id=1") {
-          return {
-            device_id: 1,
-            kind: "agentred",
-            runnable_agents: [],
-            projects: [
-              { sync_id: "proj-1", name: "agentre-server", configured: true },
-            ],
-          };
-        }
-        throw new Error("unexpected call: " + path);
-      });
-
-      renderDevices();
-      await screen.findByText("study-nuc");
-      const card = screen
-        .getByText("study-nuc")
-        .closest('[data-slot="card"]') as HTMLElement;
-
-      fireEvent.click(
-        within(card).getByRole("button", { name: /show details/i }),
-      );
-
-      // 展开后应该显示「1 projects · 2 conversations running」这样的副行
+      expect(row.getAttribute("href")).toBe("/devices/1");
       expect(
-        await within(card).findByText(/1 projects · 2 conversations running/),
-      ).toBeTruthy();
+        within(row).queryByRole("button", { name: /show details/i }),
+      ).toBeNull();
+      expect(screen.queryByTestId("device-expand-1")).toBeNull();
+      // 行上不取详情：那是详情页的事。
+      expect(
+        mockedApi.mock.calls.some(([path]) =>
+          String(path).startsWith("/v1/workspace/device-detail"),
+        ),
+      ).toBe(false);
     });
 
-    it("truncates name when collapsed, shows full wrapping name when expanded", async () => {
+    it("keeps the name on one truncated line (no flex-wrap)", async () => {
       mockedApi.mockImplementation(async (path) => {
         if (path === "/v1/devices") return listResponse;
-        if (path === "/v1/workspace/device-detail?device_id=1") {
-          return {
-            device_id: 1,
-            kind: "agentred",
-            runnable_agents: [],
-            projects: [],
-          };
-        }
         throw new Error("unexpected call: " + path);
       });
 
       renderDevices();
-      await screen.findByText("study-nuc");
-      const card = screen
-        .getByText("study-nuc")
-        .closest('[data-slot="card"]') as HTMLElement;
-      const nameSpan = within(card).getByText("study-nuc");
-
-      // 收起时应该有 truncate
-      expect(nameSpan.className).toContain("truncate");
-
-      fireEvent.click(
-        within(card).getByRole("button", { name: /show details/i }),
-      );
-      await within(card).findByText("Agents that can run here");
-
-      // 展开后应该移除 truncate 以允许换行
-      expect(nameSpan.className).not.toContain("truncate");
-      // 没有空格的长名字（主机名、指纹式名字）也得折行：flex item 默认 min-width:auto
-      // 会顶在整段名字的宽度上，得 min-w-0 + break-words 才能在字符间断开。
-      expect(nameSpan.className).toMatch(/(^|\s)min-w-0(\s|$)/);
-      expect(nameSpan.className).toMatch(/(^|\s)break-words(\s|$)/);
+      const name = await screen.findByText("study-nuc");
+      expect(name.className).toContain("truncate");
+      expect(name.parentElement?.className).not.toContain("flex-wrap");
     });
   });
 });

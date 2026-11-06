@@ -93,7 +93,9 @@
       "desktopTitle": "无需注册服务",
       "desktopDesc": "桌面端自带 agentred，应用开着它就在线。",
       "finish": "完成"
-    }
+    },
+    "close": "关闭",
+    "share": "发到电脑上"
   },
   "manage": {
     "loadError": "无法加载你的设备列表，请重试。",
@@ -131,7 +133,11 @@
     "renameLabel": "设备名称",
     "renameSave": "保存",
     "renameCancel": "取消",
-    "renameError": "重命名失败，请重试。"
+    "renameError": "重命名失败，请重试。",
+    "mobile": {
+      "onlineSummary": "{{online}} / {{total}} 台在线",
+      "upgradable": "可以升级"
+    }
   },
   "upgrade": {
     "badge": "可升级 {{version}}",

@@ -2,10 +2,18 @@ import {
   rpcMethods,
   sessionCountsFromProtobuf,
 } from "@agentre-hub/agentre-wire";
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { Link, Navigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, ChevronUp, Cpu, MoreVertical, Plus } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Cpu,
+  MessageSquare,
+  MoreVertical,
+  Plus,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
   Alert,
@@ -25,7 +33,11 @@ import {
   cn,
 } from "@agentre-hub/agentre-ui";
 import { Card } from "@/components/ui/card";
-import { CardLoadError, StatusMark } from "@/components/console";
+import {
+  CardLoadError,
+  MobileNavButton,
+  StatusMark,
+} from "@/components/console";
 import type { StatusTone } from "@/components/console";
 import { AddDeviceGuide } from "@/components/AddDeviceGuide";
 import { DevicePortForward } from "@/components/devices/DevicePortForward";
@@ -49,6 +61,7 @@ import {
   deviceDisplayName,
   fetchDevices,
   renameDevice,
+  runsSessions,
   type DeviceItem,
 } from "@/lib/devices";
 import { loadErrorText } from "@/lib/loadError";
@@ -459,14 +472,13 @@ function DeviceIcon({
 }
 
 /**
- * 一台设备的行。桌面（Q6qgs4/Ukz7i）：状态点 + 设备图标 + 名 + 类型 chip +
- * 状态标记 + 副行（Meta · 项目/对话总结）+ 可展开详情 + 行级菜单；移动（HUELX）：
- * 图标方框 + 名/类型 + Meta 的行式信息顺序。接单开关、并发负载条等无真实能力的
- * 控件不渲染（也不以禁用开关冒充）。撤销进入行级更多菜单，常驻危险说明卡已删除。
+ * 桌面宽度下一台设备的行（Q6qgs4/Ukz7i）：状态点 + 设备图标 + 名 + 类型 chip +
+ * 状态标记 + 副行（Meta · 项目/对话总结）+ 可展开详情 + 行级菜单。手机另是一棵树：
+ * 列表行见 MobileDeviceRow，详情见 MobileDeviceDetail。接单开关、并发负载条等无真实
+ * 能力的控件不渲染（也不以禁用开关冒充）。撤销进入行级更多菜单，常驻危险说明卡已删除。
  */
 function DeviceRow({
   d,
-  isMobile,
   isExpanded,
   onToggle,
   onRename,
@@ -479,7 +491,6 @@ function DeviceRow({
   locale,
 }: {
   d: DeviceItem;
-  isMobile: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   onRename: () => void;
@@ -541,112 +552,6 @@ function DeviceRow({
   const metaTitle = d.online ? undefined : lastActiveTitle(d.last_seen_at);
 
   const revocable = isRevocable(d);
-
-  if (isMobile) {
-    return (
-      <Card
-        className="gap-0 rounded-lg bg-field-fill py-3"
-        data-testid={`device-row-${d.id}`}
-      >
-        <div className="flex items-center gap-3 px-4">
-          {/* 图标方框：移动端的信息顺序以图标开头（HUELX） */}
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-button-fill">
-            <DeviceIcon
-              Icon={DEVICE_KIND_ICONS[d.kind] ?? Cpu}
-              testId={`device-icon-${d.id}`}
-              className="size-[18px] text-muted-foreground"
-            />
-          </span>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div className="flex min-w-0 items-center gap-2">
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "size-1.5 shrink-0 rounded-full",
-                  statusDotClass(d),
-                )}
-              />
-              <span
-                className={cn(
-                  "text-sm font-medium text-foreground",
-                  isExpanded ? "min-w-0 break-words" : "truncate",
-                )}
-              >
-                {name}
-              </span>
-              <span className="rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-3xs font-medium text-muted-foreground">
-                {deviceKindLabel(d.kind, t)}
-              </span>
-            </div>
-            <span
-              data-testid="device-meta"
-              title={metaTitle}
-              className="truncate font-mono text-xs text-muted-foreground"
-            >
-              {meta}
-            </span>
-            {/* 版本徽标跟着版本走，接在 Meta 之后、窄屏折到下一行（决策 17）。 */}
-            {isAgentred && (
-              <span className="flex flex-wrap items-center gap-2">
-                <DeviceVersionBadge state={versionState} deviceID={d.id} />
-              </span>
-            )}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <StatusMark
-              tone={statusTone(d)}
-              label={statusLabel(d, t)}
-              testId={`device-status-${d.id}`}
-            />
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              data-testid={`device-expand-${d.id}`}
-              aria-expanded={isExpanded}
-              aria-label={
-                isExpanded
-                  ? t("device.manage.collapse")
-                  : t("device.manage.expand")
-              }
-              onClick={onToggle}
-            >
-              {isExpanded ? <ChevronUp /> : <ChevronDown />}
-            </Button>
-            {revocable && (
-              <DeviceRowMenu
-                id={d.id}
-                name={name}
-                onRename={onRename}
-                onRevoke={onRevoke}
-              />
-            )}
-          </div>
-        </div>
-        {isExpanded && (
-          <div className="flex flex-col gap-3 px-4 pt-3">
-            {isAgentred && (
-              <DeviceUpgradePanel
-                device={d}
-                state={versionState}
-                onDevices={onDevices}
-              />
-            )}
-            <DeviceExpandDetail
-              state={detailState}
-              device={d}
-              counts={counts}
-              t={t}
-              locale={locale}
-              onRetry={onRetryDetail}
-            />
-            {subRow && (
-              <span className="text-xs text-muted-foreground">{subRow}</span>
-            )}
-          </div>
-        )}
-      </Card>
-    );
-  }
 
   return (
     <Card
@@ -735,10 +640,397 @@ function DeviceRow({
   );
 }
 
+/** 手机行与详情页头上，几段状态文字之间的分隔。排版符号，不是文案。 */
+const SEP = " · ";
+
+/** 在线分组的判据：还有凭据、此刻连着。撤销了的与离线的同归「离线」。 */
+function isOnline(d: DeviceItem): boolean {
+  return d.status === ACTIVE && d.online;
+}
+
+/**
+ * 手机列表的一行（规格 2026-11-05「设备 · 列表」）：图标方框 + 名字，下一行把状态
+ * 写成字——「在线 · 版本 · 可以升级」/「Agentre 没有运行 · 几小时前」。整行是进入
+ * 详情页的链接，不再原地展开；改名、解除授权在详情页头的菜单里。
+ */
+function MobileDeviceRow({
+  d,
+  latest,
+  t,
+  locale,
+}: {
+  d: DeviceItem;
+  latest: string;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+  locale: string;
+}) {
+  const isAgentred = d.kind === KIND_AGENTRED;
+  const versionState = deviceVersionState(d, latest);
+  const versionText = isAgentred
+    ? deviceVersionText(versionState, t)
+    : d.version;
+  // 在线不说时间、离线不说版本：前者是自相矛盾的旧时刻（见 DeviceRow），后者此刻
+  // 没人关心——要紧的是它什么时候还在。
+  const tail = (
+    d.online ? [versionText] : [formatLastActive(d.last_seen_at, locale)]
+  )
+    .filter(Boolean)
+    .map((part) => SEP + part)
+    .join("");
+  const upgrade =
+    isAgentred && versionState.kind === "upgradable"
+      ? SEP + t("device.manage.mobile.upgradable")
+      : isAgentred && versionState.kind === "protocol-mismatch"
+        ? SEP + t("device.upgrade.blockedBadge")
+        : "";
+
+  return (
+    <Link
+      to={`/devices/${d.id}`}
+      data-testid={`device-row-${d.id}`}
+      className="flex min-h-11 items-center gap-3 rounded-lg bg-field-fill px-4 py-3 outline-none focus-visible:focus-outline"
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-button-fill">
+        <DeviceIcon
+          Icon={DEVICE_KIND_ICONS[d.kind] ?? Cpu}
+          testId={`device-icon-${d.id}`}
+          className="size-[18px] text-muted-foreground"
+        />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span
+          className={cn(
+            "truncate text-sm font-medium",
+            isOnline(d) ? "text-foreground" : "text-muted-foreground",
+          )}
+        >
+          {deviceDisplayName(d)}
+        </span>
+        <span
+          data-testid="device-meta"
+          title={d.online ? undefined : lastActiveTitle(d.last_seen_at)}
+          className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          <span className="shrink-0 rounded-md bg-button-fill px-1.5 py-0.5 font-mono text-3xs font-medium">
+            {deviceKindLabel(d.kind, t)}
+          </span>
+          <span className="min-w-0 truncate">
+            <span className={cn(isOnline(d) && "text-status-running-text")}>
+              {statusLabel(d, t)}
+            </span>
+            {tail}
+            {upgrade && (
+              <span
+                className={
+                  versionState.kind === "protocol-mismatch"
+                    ? "text-destructive-text"
+                    : "text-status-waiting-text"
+                }
+              >
+                {upgrade}
+              </span>
+            )}
+          </span>
+        </span>
+      </span>
+      <ChevronRight
+        aria-hidden="true"
+        className="size-4 shrink-0 text-muted-foreground"
+      />
+    </Link>
+  );
+}
+
+/** 手机上带组标题的一节：组标题就是这一节的可访问名称。 */
+function MobileSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="flex flex-col gap-1.5">
+      <h2 id={id} className="px-1 text-xs font-medium text-muted-foreground">
+        {label}
+      </h2>
+      <div className="flex flex-col gap-0.5 overflow-hidden rounded-lg">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/** 详情页一节里的一行：图标方框可选，主文字 + 副文字。 */
+const DETAIL_ROW =
+  "flex min-h-11 items-center gap-3 bg-field-fill px-4 py-3 text-sm";
+
+/**
+ * 手机设备详情页（规格 2026-11-05「设备 · 详情」，决策 15）：点列表一行逐层进入，
+ * 取代原地展开。页头返回 + 名字 + 状态行 + 行菜单；可以升级（或版本不合）时顶部一行
+ * 升级动作；下面分组列出这台机器上的对话、能跑的 Agent、项目；端口转发取不到时是
+ * 失败行（`DevicePortForward` 里那条 describeFailure + 复制诊断信息）。
+ *
+ * 详情自己取、自己持有：整个组件按设备号挂载（key），换一台就是一份新状态。
+ */
+function MobileDeviceDetail({
+  d,
+  latest,
+  onDevices,
+  onRename,
+  onRevoke,
+  t,
+  locale,
+}: {
+  d: DeviceItem;
+  latest: string;
+  onDevices: (devices: DeviceItem[]) => void;
+  onRename: () => void;
+  onRevoke: () => void;
+  t: (key: string, opts?: Record<string, unknown>) => string;
+  locale: string;
+}) {
+  const runs = runsSessions(d);
+  const isAgentred = d.kind === KIND_AGENTRED;
+  const isDesktop = d.kind === KIND_DESKTOP;
+  const [state, setState] = useState<{
+    loading: boolean;
+    error: unknown;
+    data: DeviceDetail | null;
+  }>({ loading: runs, error: null, data: null });
+  // 「重试」改的是它：effect 只在回调里写状态，不在 effect 体里同步 setState。
+  const [round, setRound] = useState(0);
+
+  useAliveEffect(
+    (alive) => {
+      if (!runs) return;
+      api<DeviceDetail>(`/v1/workspace/device-detail?device_id=${d.id}`)
+        .then((data) => {
+          if (alive()) setState({ loading: false, error: null, data });
+        })
+        .catch((e: unknown) => {
+          if (alive())
+            setState({
+              loading: false,
+              error: e ?? new Error("device detail load failed"),
+              data: null,
+            });
+        });
+    },
+    [d.id, runs, round],
+  );
+
+  const counts = useSessionCounts(
+    runs && d.online ? d.fingerprint : null,
+    runs && d.online,
+  );
+
+  const versionState = deviceVersionState(d, latest);
+  const versionText = isAgentred
+    ? deviceVersionText(versionState, t)
+    : d.version;
+  const subtitle = [
+    statusLabel(d, t),
+    versionText,
+    d.platform,
+    d.online ? "" : formatLastActive(d.last_seen_at, locale),
+  ]
+    .filter(Boolean)
+    .join(SEP);
+  const showUpgrade =
+    isAgentred &&
+    (versionState.kind === "upgradable" ||
+      versionState.kind === "protocol-mismatch");
+  const lastSeen =
+    d.last_seen_at > 0 ? formatRelativeTime(d.last_seen_at, locale) : "";
+  const detail = state.data;
+
+  return (
+    <div data-testid="device-detail-mobile" className="flex flex-col gap-5">
+      <header
+        data-testid="device-detail-header"
+        className="-mt-1 flex min-w-0 items-center gap-2 pt-[env(safe-area-inset-top,0px)]"
+      >
+        <MobileNavButton />
+        <div className="flex min-w-0 flex-1 flex-col py-1">
+          <h1 className="truncate text-prose font-bold text-foreground">
+            {deviceDisplayName(d)}
+          </h1>
+          <span
+            title={d.online ? undefined : lastActiveTitle(d.last_seen_at)}
+            className="truncate text-xs text-muted-foreground"
+          >
+            {subtitle}
+          </span>
+        </div>
+        {isRevocable(d) && (
+          <DeviceRowMenu
+            id={d.id}
+            name={deviceDisplayName(d)}
+            onRename={onRename}
+            onRevoke={onRevoke}
+          />
+        )}
+      </header>
+
+      {showUpgrade && (
+        <DeviceUpgradePanel
+          device={d}
+          state={versionState}
+          onDevices={onDevices}
+        />
+      )}
+
+      {runs && (
+        <MobileSection label={t("device.manage.sessions")}>
+          {d.online ? (
+            <Link
+              to={`/devices/${d.id}/sessions`}
+              data-testid={`device-sessions-link-${d.id}`}
+              className={cn(
+                DETAIL_ROW,
+                "outline-none focus-visible:focus-outline-inset",
+              )}
+            >
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-button-fill">
+                <MessageSquare
+                  aria-hidden="true"
+                  className="size-4 text-muted-foreground"
+                />
+              </span>
+              <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2">
+                {counts ? (
+                  <>
+                    <span>
+                      {t("device.manage.sessionCount", {
+                        count: counts.total,
+                      })}
+                    </span>
+                    {counts.waiting > 0 && (
+                      <span className="text-status-waiting-text">
+                        {t("device.manage.sessionWaiting", {
+                          count: counts.waiting,
+                        })}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span>
+                    {t(
+                      isDesktop
+                        ? "device.manage.viewDesktopSessions"
+                        : "device.manage.viewSessions",
+                    )}
+                  </span>
+                )}
+              </span>
+              <ChevronRight
+                aria-hidden="true"
+                className="size-4 shrink-0 text-muted-foreground"
+              />
+            </Link>
+          ) : (
+            <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
+              {t(
+                isDesktop
+                  ? "device.manage.desktopAppNotRunningDetail"
+                  : "device.manage.offlineNotEnterable",
+              )}
+              {lastSeen ? ` ${lastSeen}` : ""}
+            </p>
+          )}
+        </MobileSection>
+      )}
+
+      {runs && state.loading && <DeviceDetailSkeleton />}
+      {runs && !state.loading && state.error !== null && (
+        <CardLoadError
+          error={state.error}
+          what={t("device.manage.detailLoadFailedWhat")}
+          onRetry={() => {
+            setState({ loading: true, error: null, data: null });
+            setRound((n) => n + 1);
+          }}
+        />
+      )}
+      {detail && isAgentred && (
+        <MobileSection label={t("device.manage.runnableAgents")}>
+          {(detail.runnable_agents ?? []).length === 0 ? (
+            <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
+              {t("device.manage.noRunnableAgents")}
+            </p>
+          ) : (
+            (detail.runnable_agents ?? []).map((a) => (
+              <div key={a.sync_id} className={DETAIL_ROW}>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-foreground">{a.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t("device.manage.rankLabel", { rank: a.rank })}
+                  </span>
+                </span>
+              </div>
+            ))
+          )}
+        </MobileSection>
+      )}
+      {detail && (
+        <MobileSection label={t("device.manage.projects")}>
+          {detail.projects.length === 0 ? (
+            <p className={cn(DETAIL_ROW, "text-xs text-muted-foreground")}>
+              {t("device.manage.noProjectsReported")}
+            </p>
+          ) : (
+            detail.projects.map((p) => (
+              <div key={p.sync_id} className={DETAIL_ROW}>
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span
+                    className={cn(
+                      "truncate",
+                      p.configured
+                        ? "text-foreground"
+                        : "text-muted-foreground",
+                    )}
+                  >
+                    {p.name}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-xs",
+                      p.configured
+                        ? "text-muted-foreground"
+                        : "text-status-waiting-text",
+                    )}
+                  >
+                    {p.configured
+                      ? t("device.manage.configured")
+                      : t("device.manage.notConfigured")}
+                  </span>
+                </span>
+              </div>
+            ))
+          )}
+        </MobileSection>
+      )}
+
+      {runs && (
+        <DevicePortForward
+          deviceId={d.id}
+          fingerprint={d.fingerprint}
+          offline={!d.online}
+          offlineDetail={lastSeen || undefined}
+        />
+      )}
+    </div>
+  );
+}
+
 export default function Devices() {
   const { t, i18n } = useTranslation();
   const locale = i18n.language;
   const isMobile = useIsMobile();
+  // 手机上点一行进入的那台（规格 2026-11-05 决策 15）；桌面宽度下不用它。
+  const { deviceId } = useParams<{ deviceId?: string }>();
   // 最新发布版本来自服务端自己的只读端点（决策 12）：一页问一次，各行共用同一个
   // 答案 —— 每行各问一次等于把「不知道」这件事问上 N 遍。
   const latest = useLatestRelease();
@@ -928,75 +1220,9 @@ export default function Devices() {
       ? loadErrorText(loadError, t, "device.manage.loadFailedWhat")
       : null;
 
-  return (
-    <AppShell title={t("nav.devices")}>
-      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5">
-        {/* 设备行列表（桌面与移动共用；不再有右列常驻撤销说明卡） */}
-        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-          {loadError !== null && (
-            <Alert variant="destructive">
-              <AlertDescription>{listErrorMessage}</AlertDescription>
-            </Alert>
-          )}
-
-          {/* 动作行：整页唯一的添加入口。引导展开时它不渲染——同一件事不给两个按钮。 */}
-          {listKnown && !guideOpen && (
-            <div className="flex justify-end">
-              <Button
-                className="w-full md:w-auto"
-                data-testid="add-device-open"
-                onClick={() => setGuideRequested(true)}
-              >
-                <Plus />
-                {t("device.add.open")}
-              </Button>
-            </div>
-          )}
-
-          {/* 引导展开在列表上方；空态时它就是这一页的全部内容，所以不给收起。 */}
-          {guideOpen && (
-            <AddDeviceGuide
-              onClose={noDevices ? undefined : () => setGuideRequested(false)}
-            />
-          )}
-
-          {loading ? (
-            <DeviceListSkeleton />
-          ) : (
-            devices.map((d) => (
-              <DeviceRow
-                key={d.id}
-                d={d}
-                isMobile={isMobile}
-                isExpanded={expanded.has(d.id)}
-                onToggle={() => toggleExpand(d)}
-                onRename={() => {
-                  setRenameError(null);
-                  setRenameValue(d.display_name);
-                  setRenaming(d);
-                }}
-                onRevoke={() => {
-                  setRevokeError(null);
-                  setRevoking(d);
-                }}
-                detailState={
-                  details[d.id] ?? {
-                    loading: true,
-                    error: null,
-                    data: null,
-                  }
-                }
-                onRetryDetail={() => loadDetail(d)}
-                latest={latest}
-                onDevices={applyList}
-                t={t}
-                locale={locale}
-              />
-            ))
-          )}
-        </div>
-      </div>
-
+  // 改名与解除授权两个确认框：桌面从行菜单进，手机从详情页头的菜单进。
+  const dialogs = (
+    <>
       {/*
         改名：账号级备注名。输入框空着就是「用设备自报的那个名字」，自报名因此退到
         占位符上——这样「没设过」和「设成了和主机名一样」始终分得开。
@@ -1104,6 +1330,226 @@ export default function Devices() {
           </DialogShellSubmit>
         </DialogShellFooter>
       </DialogShell>
+    </>
+  );
+
+  const openRename = (d: DeviceItem) => {
+    setRenameError(null);
+    setRenameValue(d.display_name);
+    setRenaming(d);
+  };
+  const openRevoke = (d: DeviceItem) => {
+    setRevokeError(null);
+    setRevoking(d);
+  };
+
+  if (isMobile) {
+    return renderMobile();
+  }
+  // 桌面宽度没有独立详情页（仍是原地展开）：带设备号的地址回落到列表。
+  if (deviceId !== undefined) {
+    return <Navigate to="/devices" replace />;
+  }
+
+  return (
+    <AppShell title={t("nav.devices")}>
+      <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-5">
+        {/* 设备行列表（桌面宽度；不再有右列常驻撤销说明卡） */}
+        <div className="flex min-w-0 flex-1 flex-col gap-2.5">
+          {loadError !== null && (
+            <Alert variant="destructive">
+              <AlertDescription>{listErrorMessage}</AlertDescription>
+            </Alert>
+          )}
+
+          {/* 动作行：整页唯一的添加入口。引导展开时它不渲染——同一件事不给两个按钮。 */}
+          {listKnown && !guideOpen && (
+            <div className="flex justify-end">
+              <Button
+                className="w-full md:w-auto"
+                data-testid="add-device-open"
+                onClick={() => setGuideRequested(true)}
+              >
+                <Plus />
+                {t("device.add.open")}
+              </Button>
+            </div>
+          )}
+
+          {/* 引导展开在列表上方；空态时它就是这一页的全部内容，所以不给收起。 */}
+          {guideOpen && (
+            <AddDeviceGuide
+              onClose={noDevices ? undefined : () => setGuideRequested(false)}
+            />
+          )}
+
+          {loading ? (
+            <DeviceListSkeleton />
+          ) : (
+            devices.map((d) => (
+              <DeviceRow
+                key={d.id}
+                d={d}
+                isExpanded={expanded.has(d.id)}
+                onToggle={() => toggleExpand(d)}
+                onRename={() => openRename(d)}
+                onRevoke={() => openRevoke(d)}
+                detailState={
+                  details[d.id] ?? {
+                    loading: true,
+                    error: null,
+                    data: null,
+                  }
+                }
+                onRetryDetail={() => loadDetail(d)}
+                latest={latest}
+                onDevices={applyList}
+                t={t}
+                locale={locale}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      {dialogs}
     </AppShell>
   );
+
+  /**
+   * 手机形态（规格 2026-11-05「设备」）：在线 / 离线分组的列表 → 独立详情页；
+   * 「添加设备」是盖住列表的整屏三步。三者都是这一个 Devices 实例（/devices/:deviceId?），
+   * 来回切换不重拉列表。
+   */
+  function renderMobile() {
+    if (deviceId !== undefined) {
+      const selected = devices.find((d) => String(d.id) === deviceId);
+      // 列表已经知道了却没有这一台（撤销后被清掉、地址抄错）：回列表。
+      if (listKnown && !selected) {
+        return <Navigate to="/devices" replace />;
+      }
+      return (
+        <AppShell ownHeader title={t("nav.devices")}>
+          {selected ? (
+            <MobileDeviceDetail
+              key={selected.id}
+              d={selected}
+              latest={latest}
+              onDevices={applyList}
+              onRename={() => openRename(selected)}
+              onRevoke={() => openRevoke(selected)}
+              t={t}
+              locale={locale}
+            />
+          ) : (
+            <div className="flex flex-col gap-4">
+              <header className="-mt-1 flex items-center pt-[env(safe-area-inset-top,0px)]">
+                <MobileNavButton />
+              </header>
+              {listErrorMessage !== null ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{listErrorMessage}</AlertDescription>
+                </Alert>
+              ) : (
+                <DeviceDetailSkeleton />
+              )}
+            </div>
+          )}
+          {dialogs}
+        </AppShell>
+      );
+    }
+
+    // 有设备时点 ＋ 打开的整屏三步：盖住列表，✕ 回来。
+    if (guideOpen && !noDevices) {
+      return (
+        <AppShell immersive title={t("device.add.open")}>
+          <AddDeviceGuide compact onClose={() => setGuideRequested(false)} />
+        </AppShell>
+      );
+    }
+
+    const online = devices.filter(isOnline);
+    const offline = devices.filter((d) => !isOnline(d));
+    return (
+      <AppShell ownHeader title={t("nav.devices")}>
+        <div className="flex min-h-full flex-col gap-4">
+          <header
+            data-testid="devices-mobile-header"
+            className="-mt-1 flex min-w-0 items-center gap-2 pt-[env(safe-area-inset-top,0px)]"
+          >
+            <MobileNavButton />
+            <div className="flex min-w-0 flex-1 flex-col py-1">
+              <h1 className="truncate text-prose font-bold text-foreground">
+                {t("nav.devices")}
+              </h1>
+              {listKnown && devices.length > 0 && (
+                <span className="truncate text-xs text-muted-foreground">
+                  {t("device.manage.mobile.onlineSummary", {
+                    online: online.length,
+                    total: devices.length,
+                  })}
+                </span>
+              )}
+            </div>
+            {listKnown && !noDevices && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11 text-primary-text"
+                data-testid="add-device-open"
+                aria-label={t("device.add.open")}
+                onClick={() => setGuideRequested(true)}
+              >
+                <Plus className="size-5" aria-hidden="true" />
+              </Button>
+            )}
+          </header>
+
+          {listErrorMessage !== null && (
+            <Alert variant="destructive">
+              <AlertDescription>{listErrorMessage}</AlertDescription>
+            </Alert>
+          )}
+
+          {/* 一台都没有：三步就是这一页，不给 ✕（没有别处可回）。 */}
+          {noDevices ? (
+            <AddDeviceGuide compact />
+          ) : loading ? (
+            <DeviceListSkeleton />
+          ) : (
+            <>
+              {online.length > 0 && (
+                <MobileSection label={t("device.manage.statusOnline")}>
+                  {online.map((d) => (
+                    <MobileDeviceRow
+                      key={d.id}
+                      d={d}
+                      latest={latest}
+                      t={t}
+                      locale={locale}
+                    />
+                  ))}
+                </MobileSection>
+              )}
+              {offline.length > 0 && (
+                <MobileSection label={t("device.manage.statusOffline")}>
+                  {offline.map((d) => (
+                    <MobileDeviceRow
+                      key={d.id}
+                      d={d}
+                      latest={latest}
+                      t={t}
+                      locale={locale}
+                    />
+                  ))}
+                </MobileSection>
+              )}
+            </>
+          )}
+        </div>
+        {dialogs}
+      </AppShell>
+    );
+  }
 }

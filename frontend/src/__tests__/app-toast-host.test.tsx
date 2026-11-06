@@ -21,14 +21,10 @@ it("Given a shared UI action emits feedback, When App is mounted, Then the user 
 });
 
 /**
- * toast 不能压住移动端底栏。
- *
- * sonner 在窄视口下会把 `bottom-*` 拍成贴底全宽，而 `MobileTabBar` 是 74px 的
- * 正常流元素、就贴在同一条边上。Chat 页那颗 FAB 也在 `bottom-24 right-4`。
- * 这一条此前只是隐患；把决策失败、保存失败这些回执改成 toast 之后，它变成了
- * 「一出错就把导航盖住」——而出错时用户最需要的正是换个地方看看。
+ * 手机上没有底栏了（规格 2026-11-05：底部 tab 换成左抽屉），toast 不必再让开那
+ * 74px —— 仍旧让开的话，它会悬在屏幕中段、离底边一大截。贴底只留呼吸空间与安全区。
  */
-it("移动端:toast 让开底栏那 74px,不盖住导航", async () => {
+it("移动端:toast 只让开安全区,不再为已不存在的底栏让位", async () => {
   window.history.replaceState({}, "", "/terms");
   render(<App />, { wrapper: ThemeProvider });
   toast.success("saved");
@@ -37,7 +33,10 @@ it("移动端:toast 让开底栏那 74px,不盖住导航", async () => {
   const host = document.querySelector("[data-sonner-toaster]");
   expect(host).toBeTruthy();
   // sonner 把 mobileOffset 落成 --mobile-offset-bottom 这个自定义属性。
-  expect(
-    (host as HTMLElement).style.getPropertyValue("--mobile-offset-bottom"),
-  ).toBe(MOBILE_TAB_BAR_CLEARANCE);
+  const offset = (host as HTMLElement).style.getPropertyValue(
+    "--mobile-offset-bottom",
+  );
+  expect(offset).not.toBe(MOBILE_TAB_BAR_CLEARANCE);
+  expect(offset).not.toContain("74px");
+  expect(offset).toContain("safe-area-inset-bottom");
 });
