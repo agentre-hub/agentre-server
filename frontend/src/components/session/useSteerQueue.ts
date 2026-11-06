@@ -206,12 +206,15 @@ type UpdateEmitter = {
  */
 export function usePutBackUndelivered({
   enabled,
+  composerMounted,
   dropped,
   clearDropped,
   composerHandleRef,
   rootRef,
 }: {
   enabled: boolean;
+  /** 输入框此刻在树上。不在（只读带、审批停靠）时 dropped 原样留着，等它回来再放回。 */
+  composerMounted: boolean;
   dropped: QueuedItem[];
   clearDropped: () => void;
   composerHandleRef?: RefObject<ChatComposerHandle | null>;
@@ -219,7 +222,7 @@ export function usePutBackUndelivered({
 }): { count: number; onClear: () => void } | null {
   const putBack = useRef<QueuedItem[] | null>(null);
   useEffect(() => {
-    if (!enabled || dropped.length === 0) return;
+    if (!enabled || !composerMounted || dropped.length === 0) return;
     const handle = composerHandleRef?.current;
     if (!handle || putBack.current === dropped) return;
     putBack.current = dropped;
@@ -238,9 +241,16 @@ export function usePutBackUndelivered({
     return () => {
       editor.off("update", onUpdate);
     };
-  }, [enabled, dropped, clearDropped, composerHandleRef, rootRef]);
+  }, [
+    enabled,
+    composerMounted,
+    dropped,
+    clearDropped,
+    composerHandleRef,
+    rootRef,
+  ]);
 
-  if (!enabled || dropped.length === 0) return null;
+  if (!enabled || !composerMounted || dropped.length === 0) return null;
   return {
     count: dropped.length,
     onClear: () => {

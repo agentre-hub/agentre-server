@@ -193,15 +193,21 @@ export default function SessionComposerBand({
   // 手机：输入框走触屏档，只读条带「查看设备」的出口（规格 2026-11-05 决策 8 / 9）。
   const isMobile = useIsMobile();
   const bandRef = useRef<HTMLDivElement>(null);
+
+  const composeReadonly = isComposeReadonly(status);
+  // 输入框此刻真在树上（只读带 / 审批停靠 / 模块未载入都不算）：放回要等它。
+  const composerMounted =
+    !composeReadonly &&
+    !(dockedPermission && decisionPorts) &&
+    !!composerModule;
   const undeliveredNotice = usePutBackUndelivered({
     enabled: isMobile,
+    composerMounted,
     dropped: droppedQueue,
     clearDropped: onDiscardDropped,
     composerHandleRef,
     rootRef: bandRef,
   });
-
-  const composeReadonly = isComposeReadonly(status);
 
   /** 只读条上那一句短的：说「等谁」，不复述横幅里的后果。 */
   const readonlyNote =

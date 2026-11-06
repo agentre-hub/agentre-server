@@ -767,6 +767,7 @@ describe("移动端会话详情：轮末插话放回", () => {
       if (method === rpcMethods.runtimeSteer)
         return { queuedId: "q-1", cancellable: true };
       if (method === rpcMethods.runtimeDrainPending) return { steers: [] };
+      if (method === rpcMethods.runtimeSubmitToolPermission) return {};
       throw new Error("unexpected: " + method);
     });
   }
@@ -785,7 +786,11 @@ describe("移动端会话详情：轮末插话放回", () => {
     );
   }
 
-  async function steerAndEndTurn(text: string, draftBeforeEnd?: string) {
+  async function steerAndEndTurn(
+    text: string,
+    draftBeforeEnd?: string,
+    beforeEnd?: () => Promise<void>,
+  ) {
     await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
     act(() => editorEl().editor?.commands.setContent(`<p>${text}</p>`));
     fireEvent.click(await screen.findByTestId("session-detail-send"));
@@ -795,6 +800,7 @@ describe("移动端会话详情：轮末插话放回", () => {
         editorEl().editor?.commands.setContent(`<p>${draftBeforeEnd}</p>`),
       );
     }
+    await beforeEnd?.();
     act(() => pageOpts.onRunResultDone?.({} as never));
   }
 
@@ -841,6 +847,97 @@ describe("移动端会话详情：轮末插话放回", () => {
       name: "Move back to input",
     });
     expect(withdraw.className).toContain("size-11");
+  });
+
+  it("输入框被审批停靠占着时轮末没送到：不丢，也不说「已放回」，输入框回来后才放回并出说明", async () => {
+    mockMobileViewport();
+    stubSteer();
+    renderPage();
+    await steerAndEndTurn("先别动数据库", undefined, async () => {
+      await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+      act(() =>
+        pageOpts.onEvent?.({
+          conversationId: CID,
+          seq: 1,
+          event: {
+            kind: "tool_permission_request",
+            requestId: "tp-1",
+            toolName: "Bash",
+            input: { command: "ls" },
+          },
+        } as never),
+      );
+      await screen.findByTestId("tool-permission-dock");
+    });
+
+    // 执行端的信箱问完了、没送到的那几条已经落进 dropped，输入框还被停靠占着。
+    await waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeDrainPending,
+        ),
+      ).toBe(true),
+    );
+    await act(async () => {});
+    // 停靠占着输入框：没有输入框可放，说明不能谎称「已放回」。
+    expect(screen.queryByText(NOTICE)).toBeNull();
+    act(() =>
+      pageOpts.onEvent?.({
+        conversationId: CID,
+        seq: 2,
+        event: {
+          kind: "tool_permission_resolved",
+          requestId: "tp-1",
+          allowed: true,
+        },
+      } as never),
+    );
+
+    expect(await screen.findByText(NOTICE)).toBeTruthy();
+    await waitFor(() => expect(paragraphs()).toEqual(["先别动数据库"]));
+  });
+
+  it("输入框被停靠占着时换了会话：那几条不会放进另一条会话的输入框", async () => {
+    mockMobileViewport();
+    stubSteer();
+    const view = renderPage();
+    await steerAndEndTurn("先别动数据库", undefined, async () => {
+      await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+      act(() =>
+        pageOpts.onEvent?.({
+          conversationId: CID,
+          seq: 1,
+          event: {
+            kind: "tool_permission_request",
+            requestId: "tp-1",
+            toolName: "Bash",
+            input: { command: "ls" },
+          },
+        } as never),
+      );
+      await screen.findByTestId("tool-permission-dock");
+    });
+    await waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeDrainPending,
+        ),
+      ).toBe(true),
+    );
+    await act(async () => {});
+
+    const other = "22222222-2222-7222-8222-222222222222";
+    view.rerender(
+      <MemoryRouter initialEntries={[`/chat/${other}`]}>
+        <ThemeProvider>
+          <SessionDetailView deviceId={1} conversationId={other} form="page" />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
+    expect(screen.queryByText(NOTICE)).toBeNull();
+    expect(paragraphs().join("")).toBe("");
   });
 
   it("改动输入框后说明消失，不再有「清掉」", async () => {
