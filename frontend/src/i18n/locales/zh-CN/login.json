@@ -20,5 +20,7 @@
     "passkey_origin_not_allowed": "当前站点不在通行密钥的允许列表里，请联系管理员检查服务端配置。",
     "passkey_credential_unknown": "这把通行密钥不属于任何可用账号，可能已经被删掉了。请改用 GitHub 登录。",
     "passkey_counter_rollback": "这把通行密钥的安全计数异常，已拒绝本次登录。请改用 GitHub 登录并删掉它。"
-  }
+  },
+  "consentHint": "先勾选同意",
+  "deviceContinue": "登录后继续授权这台设备"
 }

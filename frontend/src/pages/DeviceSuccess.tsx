@@ -12,6 +12,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
 
 /**
@@ -63,6 +64,7 @@ function readDeviceInfo(state: unknown): DeviceSuccessInfo | null {
 
 export default function DeviceSuccess() {
   const { t } = useTranslation();
+  const mobile = useIsMobile();
   const { state } = useLocation();
   const info = readDeviceInfo(state);
   // 只有拿到了设备信息、且确是 agentred，才有「第 3 步」可给。
@@ -80,6 +82,58 @@ export default function DeviceSuccess() {
   const title = info?.name || kindLabel;
   // 引导里选过方式就用它；CLI 直开没有方式信息，默认 native + 说明链接。
   const method: AgentredInstallMethod = info?.method ?? "native";
+
+  // 手机：一屏。紧凑步骤条 → 标题 → 一句正文 → 一张命令卡，「完成」钉底；
+  // 不再列设备卡、查看状态与重启两张卡。
+  if (mobile) {
+    return (
+      <AuthLayout
+        pinned={
+          <Link
+            to="/devices"
+            className={buttonVariants({
+              variant: finishService ? "default" : "outline",
+              className: "h-11 w-full",
+            })}
+          >
+            {finishService
+              ? t("device.success.finish")
+              : t("device.success.manageDevices")}
+          </Link>
+        }
+      >
+        <div className="flex flex-col gap-5 pt-2">
+          {finishService && (
+            <div className="w-full overflow-hidden rounded-lg bg-field-fill">
+              <GuideStepRail
+                steps={steps}
+                current={3}
+                done={DONE_STEPS}
+                onSelect={() => {}}
+                compact
+              />
+            </div>
+          )}
+          <div className="space-y-2">
+            <PageTitle>{t("device.success.title")}</PageTitle>
+            <p className="text-sm text-muted-foreground">
+              {finishService
+                ? t("device.success.serviceBody")
+                : t("device.success.body")}
+            </p>
+          </div>
+          {finishService && (
+            <AgentredServiceSection
+              method={method}
+              compact
+              serviceTestId="device-success-command-service"
+              serviceCopyTestId="device-success-copy-service"
+            />
+          )}
+        </div>
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout>

@@ -25,7 +25,8 @@
     "allow": "Allow access",
     "deny": "Deny",
     "fineprint": "You can revoke this device's access at any time under Console → Devices.",
-    "actionFailedWhat": "That did not go through"
+    "actionFailedWhat": "That did not go through",
+    "mobileTitle": "Authorize device"
   },
   "kind": {
     "desktop": "Desktop",
@@ -196,5 +197,6 @@
     "actionFailedWhat": "That didn't go through",
     "openFailedWhat": "Couldn't open the forwarded address",
     "linkUnavailable": "This deployment can't offer port forwarding right now."
-  }
+  },
+  "eyebrowWithCode": "Device authorization · {{code}}"
 }

@@ -5,6 +5,7 @@ import { CircleSlash } from "lucide-react";
 import { buttonVariants } from "@agentre-hub/agentre-ui";
 import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
+import { useIsMobile } from "@/components/use-is-mobile";
 
 /**
  * 终态页：用户主动拒绝了这次设备授权（决策 9）。
@@ -15,6 +16,48 @@ import PageTitle from "@/components/PageTitle";
  */
 export default function DeviceDenied() {
   const { t } = useTranslation();
+  const mobile = useIsMobile();
+  // 手机：图标 + 标题 + 一句说明居中，两个去处钉底。
+  if (mobile) {
+    return (
+      <AuthLayout
+        pinned={
+          <>
+            <Link
+              to="/device"
+              className={buttonVariants({ className: "h-11 w-full" })}
+            >
+              {t("device.deniedScreen.retry")}
+            </Link>
+            <Link
+              to="/overview"
+              className={buttonVariants({
+                variant: "outline",
+                className: "h-11 w-full",
+              })}
+            >
+              {t("device.deniedScreen.console")}
+            </Link>
+          </>
+        }
+      >
+        <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
+          <div className="flex size-[60px] items-center justify-center rounded-full bg-code-surface">
+            <CircleSlash
+              className="size-6 text-muted-foreground"
+              aria-hidden="true"
+            />
+          </div>
+          <div className="space-y-2">
+            <PageTitle>{t("device.deniedScreen.title")}</PageTitle>
+            <p className="text-sm text-muted-foreground">
+              {t("device.deniedScreen.body")}
+            </p>
+          </div>
+        </div>
+      </AuthLayout>
+    );
+  }
   return (
     <AuthLayout>
       <div className="flex w-full max-w-[28rem] flex-col items-center gap-6 rounded-2xl bg-sheet p-6 text-center shadow-overlay sm:p-10">

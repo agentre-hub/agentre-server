@@ -25,7 +25,8 @@
     "allow": "允许授权",
     "deny": "拒绝",
     "fineprint": "你可以随时在 控制台 → 设备 中撤销这台设备的访问权限。",
-    "actionFailedWhat": "操作没有完成"
+    "actionFailedWhat": "操作没有完成",
+    "mobileTitle": "授权设备"
   },
   "kind": {
     "desktop": "桌面端",
@@ -196,5 +197,6 @@
     "actionFailedWhat": "这次操作没成",
     "openFailedWhat": "没能打开转发地址",
     "linkUnavailable": "这个部署此刻提供不了端口转发。"
-  }
+  },
+  "eyebrowWithCode": "设备授权 · {{code}}"
 }

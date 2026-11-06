@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Cpu, ShieldCheck, Timer } from "lucide-react";
+import { Cpu, ShieldCheck, Timer, X } from "lucide-react";
 
 import { Alert, AlertDescription, Button } from "@agentre-hub/agentre-ui";
+import AuthLayout from "@/components/AuthLayout";
 import PageTitle from "@/components/PageTitle";
+import { useIsMobile } from "@/components/use-is-mobile";
 import { useMe } from "@/hooks/use-me";
 import { signOut } from "@/lib/signOut";
 import { DEVICE_KIND_ICONS, deviceKindLabel } from "@/lib/deviceKind";
@@ -145,6 +148,7 @@ export default function DeviceApproval({
   onExpire,
 }: DeviceApprovalProps) {
   const { t } = useTranslation();
+  const mobile = useIsMobile();
   const left = useCountdown(info.expires_in, onExpire);
 
   const minutes = Math.floor(left / 60);
@@ -154,6 +158,143 @@ export default function DeviceApproval({
   const KindIcon = DEVICE_KIND_ICONS[info.device_kind] ?? Cpu;
   // 主机名为空时标题回退为类型名，此时不再重复画 chip。
   const title = info.name || kindLabel;
+
+  const deviceCard = (
+    <div className="flex items-center gap-3.5 rounded-md bg-code-surface p-4">
+      <span
+        data-testid="device-icon"
+        className="flex size-[42px] shrink-0 items-center justify-center rounded-sm bg-sheet"
+      >
+        <KindIcon className="size-5 text-primary-text" aria-hidden="true" />
+      </span>
+      <div className="flex min-w-0 flex-col gap-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <p
+            data-testid="device-title"
+            className="truncate text-prose font-semibold text-foreground"
+          >
+            {title}
+          </p>
+          {info.name && (
+            <span
+              data-testid="device-kind-chip"
+              className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-2xs font-semibold text-primary-text"
+            >
+              {kindLabel}
+            </span>
+          )}
+        </div>
+        <p className="truncate font-mono text-xs text-muted-foreground">
+          {`${info.platform} · ${info.version}`}
+        </p>
+      </div>
+    </div>
+  );
+
+  const verifyCard = (
+    <div className="flex flex-col items-center gap-2.5 rounded-md bg-primary-soft px-4 py-5 text-center">
+      <p className="text-aux font-medium text-primary-text">
+        {t("device.approve.verify")}
+      </p>
+      <p className="font-mono text-[28px] font-semibold tracking-[7px] text-primary-text sm:text-[34px]">
+        {code}
+      </p>
+    </div>
+  );
+
+  const expiryStrip = (
+    <div className="flex items-center gap-[9px] rounded-md bg-status-waiting-bg px-3.5 py-[11px]">
+      <Timer
+        className="size-[15px] shrink-0 text-status-waiting"
+        aria-hidden="true"
+      />
+      {/* 可见的一行逐秒刷新，所以对读屏隐藏；播报交给下面那条只按分钟
+          变化的 live region，否则每秒都会被念一遍（无障碍与响应式）。 */}
+      <p
+        aria-hidden="true"
+        className="text-aux font-medium text-status-waiting-text"
+      >
+        {minutes > 0
+          ? t("device.approve.expiry", { minutes, seconds })
+          : t("device.approve.expirySeconds", { seconds })}
+      </p>
+      <span className="sr-only" aria-live="polite">
+        {minutes > 0
+          ? t("device.approve.expiryAnnounce", { minutes })
+          : t("device.approve.expiryAnnounceSoon")}
+      </span>
+    </div>
+  );
+
+  const errorAlert = error && (
+    <Alert
+      variant="destructive"
+      className="border-destructive bg-destructive-soft"
+    >
+      <AlertDescription>{error}</AlertDescription>
+    </Alert>
+  );
+
+  // 手机：页头「✕ · 授权设备」，内容依次 账号行、风险句、设备卡、核对码，
+  // 「允许」「拒绝」钉在拇指区。✕ 只是离开这一屏，不替用户做任何决定。
+  if (mobile) {
+    return (
+      <AuthLayout
+        header={
+          <header
+            data-testid="auth-mobile-header"
+            className="flex items-center gap-1 px-2 pt-[env(safe-area-inset-top,0px)]"
+          >
+            <Link
+              to="/"
+              aria-label={t("device.add.close")}
+              className="flex size-11 items-center justify-center rounded-full text-foreground"
+            >
+              <X className="size-5" aria-hidden="true" />
+            </Link>
+            <span className="text-prose font-semibold text-foreground">
+              {t("device.approve.mobileTitle")}
+            </span>
+          </header>
+        }
+        pinned={
+          <>
+            <Button
+              type="button"
+              onClick={onApprove}
+              disabled={submitting}
+              className="h-11 w-full"
+            >
+              {t("device.approve.allow")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onDeny}
+              disabled={submitting}
+              className="h-11 w-full"
+            >
+              {t("device.approve.deny")}
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-4 pb-4">
+          <AccountLine code={code} />
+          <div className="flex items-start gap-2">
+            <AccountAvatar />
+            <p className="text-sm leading-[1.5] text-muted-foreground">
+              {t("device.approve.risk")}
+            </p>
+          </div>
+          {deviceCard}
+          {verifyCard}
+          {expiryStrip}
+          {errorAlert}
+        </div>
+      </AuthLayout>
+    );
+  }
 
   return (
     <div className="flex w-full max-w-[576px] flex-col gap-6 rounded-2xl bg-sheet p-6 shadow-overlay sm:p-10">
@@ -176,75 +317,13 @@ export default function DeviceApproval({
         </div>
       </div>
 
-      <div className="flex items-center gap-3.5 rounded-md bg-code-surface p-4">
-        <span
-          data-testid="device-icon"
-          className="flex size-[42px] shrink-0 items-center justify-center rounded-sm bg-sheet"
-        >
-          <KindIcon className="size-5 text-primary-text" aria-hidden="true" />
-        </span>
-        <div className="flex min-w-0 flex-col gap-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <p
-              data-testid="device-title"
-              className="truncate text-prose font-semibold text-foreground"
-            >
-              {title}
-            </p>
-            {info.name && (
-              <span
-                data-testid="device-kind-chip"
-                className="shrink-0 rounded-full bg-primary-soft px-2 py-0.5 text-2xs font-semibold text-primary-text"
-              >
-                {kindLabel}
-              </span>
-            )}
-          </div>
-          <p className="truncate font-mono text-xs text-muted-foreground">
-            {`${info.platform} · ${info.version}`}
-          </p>
-        </div>
-      </div>
+      {deviceCard}
 
-      <div className="flex flex-col items-center gap-2.5 rounded-md bg-primary-soft px-4 py-5 text-center">
-        <p className="text-aux font-medium text-primary-text">
-          {t("device.approve.verify")}
-        </p>
-        <p className="font-mono text-[28px] font-semibold tracking-[7px] text-primary-text sm:text-[34px]">
-          {code}
-        </p>
-      </div>
+      {verifyCard}
 
-      <div className="flex items-center gap-[9px] rounded-md bg-status-waiting-bg px-3.5 py-[11px]">
-        <Timer
-          className="size-[15px] shrink-0 text-status-waiting"
-          aria-hidden="true"
-        />
-        {/* 可见的一行逐秒刷新，所以对读屏隐藏；播报交给下面那条只按分钟
-            变化的 live region，否则每秒都会被念一遍（无障碍与响应式）。 */}
-        <p
-          aria-hidden="true"
-          className="text-aux font-medium text-status-waiting-text"
-        >
-          {minutes > 0
-            ? t("device.approve.expiry", { minutes, seconds })
-            : t("device.approve.expirySeconds", { seconds })}
-        </p>
-        <span className="sr-only" aria-live="polite">
-          {minutes > 0
-            ? t("device.approve.expiryAnnounce", { minutes })
-            : t("device.approve.expiryAnnounceSoon")}
-        </span>
-      </div>
+      {expiryStrip}
 
-      {error && (
-        <Alert
-          variant="destructive"
-          className="border-destructive bg-destructive-soft"
-        >
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
+      {errorAlert}
 
       {/* DOM 顺序把主操作放在前面（读屏与 Tab 先到「允许授权」），
           桌面端再用 row-reverse 摆回画板 10 的「拒绝在左、允许在右」。 */}
