@@ -50,5 +50,24 @@
   "clearAgentSearch": "Clear search",
   "noProjectsYetTitle": "No projects yet",
   "noAgentsInProjectBody": "Add an agent to this project in the desktop app and it shows up here.",
-  "listAria": "Conversation list"
+  "listAria": "Conversation list",
+  "phone": {
+    "scopeAll": "All",
+    "scopeMachines": "All machines",
+    "scopeAria": "Switch scope, current: {{name}}",
+    "machinesOnline": "{{online}} / {{total}} machines online",
+    "online": "Online",
+    "offline": "Offline",
+    "offlineSince": "No network · content from {{time}}",
+    "search": "Search conversation titles",
+    "searchScope": "Searching titles in “{{scope}}” · {{count}}",
+    "searchNote": "Only titles are matched. To find by agent, project or machine, switch the scope at the top.",
+    "filterRunning": "In progress",
+    "section": {
+      "needsYou": "Needs you",
+      "inProgress": "In progress",
+      "today": "Today",
+      "earlier": "Earlier"
+    }
+  }
 }

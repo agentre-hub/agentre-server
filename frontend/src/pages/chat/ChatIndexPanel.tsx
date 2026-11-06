@@ -124,34 +124,16 @@ export interface ChatIndexPanelProps {
   sessionPath: SessionIndexProps["sessionPath"];
 }
 
-export function ChatIndexPanel({
+/**
+ * 索引上方那两条可重试的横幅：这一次取数失败、上一次保存没写成。桌面列与手机首页
+ * 同一份——说的都是「这份列表此刻不完整，原因在这里，出路在这里」。
+ */
+export function IndexBanners({
   sessionIndex,
-  reach,
-  axis,
-  onAxisChange,
-  filter,
-  onFilterChange,
-  view,
-  selectedKey,
-  onSelect,
-  projects,
-  agents,
-  groupTotals,
-  loadGroupPage,
-  projectManagement,
-  onAgentNewSession,
-  machineRangePending,
-  rowStatusLabel,
-  sessionPath,
-}: ChatIndexPanelProps) {
+}: {
+  sessionIndex: SessionIndexData;
+}) {
   const { t } = useTranslation();
-  const machineStates: SessionIndexProps["machineStates"] =
-    machineRangePending && axis === "machine"
-      ? Object.fromEntries(
-          reach.onlineMachines.map((machine) => [machine.id, "connecting"]),
-        )
-      : reach.machineStates;
-
   /** 索引取数失败给用户看的那一句：经分类说原因，原文不上屏（规格 W5）。 */
   const indexErrorMessage = sessionIndex.loadError
     ? loadErrorText(sessionIndex.loadError, t, "sessionIndex.loadFailedWhat")
@@ -218,9 +200,43 @@ export function ChatIndexPanel({
   ) : null;
 
   return (
-    <div className="space-y-3">
+    <>
       {indexError}
       {saveError}
+    </>
+  );
+}
+
+export function ChatIndexPanel({
+  sessionIndex,
+  reach,
+  axis,
+  onAxisChange,
+  filter,
+  onFilterChange,
+  view,
+  selectedKey,
+  onSelect,
+  projects,
+  agents,
+  groupTotals,
+  loadGroupPage,
+  projectManagement,
+  onAgentNewSession,
+  machineRangePending,
+  rowStatusLabel,
+  sessionPath,
+}: ChatIndexPanelProps) {
+  const machineStates: SessionIndexProps["machineStates"] =
+    machineRangePending && axis === "machine"
+      ? Object.fromEntries(
+          reach.onlineMachines.map((machine) => [machine.id, "connecting"]),
+        )
+      : reach.machineStates;
+
+  return (
+    <div className="space-y-3">
+      <IndexBanners sessionIndex={sessionIndex} />
       <SessionIndex
         axis={axis}
         onAxisChange={onAxisChange}

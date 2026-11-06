@@ -123,7 +123,7 @@ function LastActive({ ms, locale }: { ms: number; locale: string }) {
  * 藏在一枚书签里说不清楚。放在共享行的 `rowActions` 槽里——`<button>` 不能嵌在
  * `<a>` 里，它必须是链接的兄弟节点。
  */
-function SaveButton({
+export function SaveButton({
   testId,
   onSave,
 }: {
@@ -1292,7 +1292,7 @@ export default function SessionIndex({
  * 触发，但键盘与读屏用户也得够得着同一个动作，而且取失败之后必须有一个能重按的东西。
  * 失败时按钮换成「重试」并把失败说出来——静默停住会被读成「到底了」。
  */
-function LoadMore({
+export function LoadMore({
   loading,
   failed,
   onLoadMore,

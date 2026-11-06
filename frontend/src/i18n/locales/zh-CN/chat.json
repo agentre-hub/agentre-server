@@ -50,5 +50,24 @@
   "clearAgentSearch": "清除搜索",
   "noProjectsYetTitle": "还没有项目",
   "noAgentsInProjectBody": "在桌面端把 Agent 加进这个项目，它就会出现在这里。",
-  "listAria": "对话列表"
+  "listAria": "对话列表",
+  "phone": {
+    "scopeAll": "全部",
+    "scopeMachines": "所有机器",
+    "scopeAria": "切换范围，当前：{{name}}",
+    "machinesOnline": "{{online}} / {{total}} 台机器在线",
+    "online": "在线",
+    "offline": "离线",
+    "offlineSince": "没有网络 · {{time}} 的内容",
+    "search": "搜索对话标题",
+    "searchScope": "在「{{scope}}」里搜索标题 · {{count}} 条",
+    "searchNote": "只匹配对话标题。想按 Agent、项目或机器找，用顶部的范围切换。",
+    "filterRunning": "进行中",
+    "section": {
+      "needsYou": "需要你",
+      "inProgress": "进行中",
+      "today": "今天",
+      "earlier": "更早"
+    }
+  }
 }
