@@ -94,3 +94,31 @@ export function decodeReasoningEffortSupport(raw: unknown): boolean {
     return item.name === REASONING_EFFORT_CAPABILITY && item.enabled === true;
   });
 }
+
+/** 与 Go 侧 `capability.CapAbort` 同一个词。 */
+const ABORT_CAPABILITY = "abort";
+
+/**
+ * 「这个后端停不停得下一轮」——同一串 `capabilities`，处置却是**三态**（规格
+ * 2026-11-06 A2 决策）：
+ *
+ *   - `true`  —— 报了 abort 且为真；
+ *   - `false` —— 执行端报出了一份能力集，里面的 abort 为假或压根没有。Go 侧的 Set
+ *     只放这个 runtime 声明的那几项，桌面端也按 `caps.Has(CapAbort)` 判，所以这是一句
+ *     肯定的「停不了」，停止键整颗不摆；
+ *   - `null`  —— 解不动（对端太老、空能力集、形状不对）。停止键照旧摆着：把「问不到」
+ *     当成「不支持」，一台答不上来的机器上正在跑的一轮就没地方停了。
+ *
+ * 空能力集算「不知道」而不是「不支持」：与力度那一格对同一形状的认定一致（对端太老，
+ * 整条没报），而每个真实 runtime 都会报 abort。
+ */
+export function decodeAbortSupport(raw: unknown): boolean | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const list = (raw as { capabilities?: unknown }).capabilities;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  return list.some((entry) => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const item = entry as { name?: unknown; enabled?: unknown };
+    return item.name === ABORT_CAPABILITY && item.enabled === true;
+  });
+}

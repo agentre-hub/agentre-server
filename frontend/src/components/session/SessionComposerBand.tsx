@@ -54,6 +54,11 @@ export interface SessionComposerBandProps {
   contextWindow: number;
   sending: boolean;
   onSubmit: (text: string, images?: ChatComposerSubmit["images"]) => void;
+  /** 这一轮在跑：提交位让给停止键（见 SessionComposer 的同名三格）。 */
+  running: boolean;
+  /** 不给 = 这个后端明确停不了，提交位不摆停止键。 */
+  onStop?: () => void;
+  stopping: boolean;
   permissionMode: string;
   permissionModeMeta: PermissionModeMeta | null | undefined;
   permissionError: string | null;
@@ -95,6 +100,9 @@ export default function SessionComposerBand({
   contextWindow,
   sending,
   onSubmit,
+  running,
+  onStop,
+  stopping,
   permissionMode,
   permissionModeMeta,
   permissionError,
@@ -219,6 +227,9 @@ export default function SessionComposerBand({
             // 可用，用户还能接着敲下一句。
             sending={sending}
             onSubmit={(text, images) => onSubmit(text, images)}
+            running={running}
+            onStop={onStop}
+            stopping={stopping}
             contextUsage={contextUsage}
             permissionMode={permissionMode}
             permissionModeMeta={permissionModeMeta}

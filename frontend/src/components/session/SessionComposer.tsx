@@ -81,6 +81,9 @@ export default function SessionComposer({
   disabledReason,
   sending,
   onSubmit,
+  running,
+  onStop,
+  stopping,
   contextUsage,
   feedback,
   queueSlot,
@@ -116,6 +119,15 @@ export default function SessionComposer({
    */
   sending?: boolean;
   onSubmit: (text: string, images?: ChatImageAttachment[]) => void;
+  /**
+   * 这一轮在跑。与 `onStop` 同时给出时包把提交位让给停止键（草稿为空只有它，有草稿
+   * 时与发送并排），焦点在空输入框里按 Esc 也停。草稿页没有在跑的一轮，不给。
+   */
+  running?: boolean;
+  /** 把这一轮停下来；不给 = 不摆停止键（后端明确停不了）。 */
+  onStop?: () => void;
+  /** 已经点了停止、这一轮还没结束：停止键转 spinner 并禁用（宿主 useTurnStop 持有）。 */
+  stopping?: boolean;
   /**
    * 上下文用量。给不出（runtime 还没探到窗口）时整块不摆 —— 不拿一个编出来的
    * 分母画进度条。
@@ -225,6 +237,9 @@ export default function SessionComposer({
           topSlot={queueSlot}
           disabled={disabled}
           sending={sending}
+          running={running}
+          onStop={onStop}
+          stopping={stopping}
           backendType={backendType}
           supportsImageInput
           sendButtonTestId="session-detail-send"

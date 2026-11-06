@@ -1,6 +1,5 @@
-import { rpcMethods } from "@agentre-hub/agentre-wire";
 import type { SessionSummary } from "@agentre-hub/agentre-wire";
-import { useState, type ReactNode, type RefObject } from "react";
+import { type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Monitor, MoreHorizontal, Square } from "lucide-react";
@@ -23,7 +22,6 @@ import {
 import AppShell from "@/components/AppShell";
 import SessionConnectionIndicator from "@/components/session/SessionConnectionIndicator";
 import { useIsMobile } from "@/components/use-is-mobile";
-import type { RelayClient } from "@/lib/relayClient";
 import {
   formatRelativeTime,
   sessionStatusLabel,
@@ -90,8 +88,14 @@ export interface SessionDetailHeaderProps {
    * 走、事件一到就重拉。派生在 SessionDetailView 的 `decisionPending`。
    */
   decisionPending: boolean;
-  clientRef: RefObject<RelayClient | null>;
-  originRef: RefObject<string | undefined>;
+  /**
+   * 把这一轮停下来。状态由宿主 hook `useTurnStop` 持有，与输入框提交位那颗停止键
+   * 共用；不给 = 这个后端明确报告停不了（`decodeAbortSupport` 为 false），停止键
+   * 不摆。
+   */
+  onStop?: () => void;
+  /** 已经点了停止、这一轮还没结束：停止键禁用（与输入框那颗同一格）。 */
+  stopping: boolean;
 }
 
 /** meta 行小头像要的那三样：与账号 Agent 清单（/v1/workspace/agents）同名同形。 */
@@ -219,29 +223,10 @@ export default function SessionDetailHeader({
   status,
   running,
   decisionPending,
-  clientRef,
-  originRef,
+  onStop,
+  stopping,
 }: SessionDetailHeaderProps) {
   const { t, i18n } = useTranslation();
-  /** 正在发停止请求（按下去到应答之间不重复发）。 */
-  const [aborting, setAborting] = useState(false);
-
-  /** 把这一轮停下来（wire 的 runtime.abort）。与 run / steer 同样要带回 origin。 */
-  async function abortTurn() {
-    const c = clientRef.current;
-    if (!c) return;
-    setAborting(true);
-    try {
-      await c.request(rpcMethods.runtimeAbort, {
-        conversationId: sid,
-        ...(originRef.current ? { peerFingerprint: originRef.current } : {}),
-      });
-    } catch {
-      // 停不下来不另开一条错误面：这一轮的实时流会照常继续，状态自己说话。
-    } finally {
-      setAborting(false);
-    }
-  }
 
   /**
    * 把会话号交给剪贴板。
@@ -481,14 +466,15 @@ export default function SessionDetailHeader({
                 `connected` 与 B / C 档下这一枚不渲染，头部因此不会常驻一块噪音。 */}
             <SessionConnectionIndicator status={status} />
             {/* 停止：wire 上一直有 runtime.abort，这一端真发得出去。只在这一轮真的
-                在跑的时候摆——闲着的时候没有什么可停。 */}
-            {running && (
+                在跑的时候摆——闲着的时候没有什么可停；后端明确停不了时宿主不给
+                onStop，也不摆。点下去之后禁用到这一轮结束（不是请求返回）。 */}
+            {running && onStop && (
               <Button
                 variant="outline"
                 size="sm"
                 data-testid="session-detail-stop"
-                disabled={aborting || status !== "connected"}
-                onClick={() => void abortTurn()}
+                disabled={stopping || status !== "connected"}
+                onClick={onStop}
               >
                 <Square aria-hidden="true" className="size-3.5" />
                 {t("session.abort")}

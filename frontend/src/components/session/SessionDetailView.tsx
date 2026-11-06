@@ -67,6 +67,7 @@ import { conversationTarget, machineTarget } from "@/lib/relayTarget";
 import { api, ApiError } from "@/lib/api";
 import { disconnected } from "@/lib/relayClient";
 import {
+  decodeAbortSupport,
   decodePermissionModeMeta,
   decodeReasoningEffortSupport,
   type PermissionModeMeta,
@@ -93,6 +94,7 @@ import {
 } from "@/components/session/useSessionCLIModel";
 import { useLiveTurnTiming } from "@/components/session/useLiveTurnTiming";
 import { useSessionDecisionPorts } from "@/components/session/useSessionDecisionPorts";
+import { useTurnStop } from "@/components/session/useTurnStop";
 import {
   useSessionSend,
   useTurnActivity,
@@ -315,6 +317,12 @@ export default function SessionDetailView({
    * 为假时整颗控件不渲染 —— 不置灰、也不解释一个用户改不了的事实。
    */
   const [supportsReasoningEffort, setSupportsReasoningEffort] = useState(false);
+  /**
+   * 这个后端停不停得下一轮（同一份能力应答，规格 2026-11-06 A2 决策）。三态：
+   * 只有 `false`（执行端明确报告停不了）才收起两处停止键；`null` = 还没问到 / 问不到，
+   * 维持一直以来的样子——照旧摆着。
+   */
+  const [abortSupport, setAbortSupport] = useState<boolean | null>(null);
   /** 用户这一次选的力度；null = 还没选过，按落库那一份显示。 */
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(null);
   /** 只写成一台 / 派发时没钉住的说明——摆在控件旁边，不是错误。 */
@@ -518,6 +526,8 @@ export default function SessionDetailView({
     setReasoningEffortNote(null);
     setReasoningEffortError(null);
     setSupportsReasoningEffort(false);
+    // 能力位要等新摘要落地才重问：此刻手上的是上一条会话那个后端的答案。
+    setAbortSupport(null);
     setReady(false);
     scrollback.reset();
     setCatchUpFailed(false);
@@ -770,12 +780,15 @@ export default function SessionDetailView({
           setPermissionModeMeta(decodePermissionModeMeta(raw));
           // 力度那一格在同一份应答的 capabilities 上（见 reasoningEffortSupport）。
           setSupportsReasoningEffort(decodeReasoningEffortSupport(raw));
+          setAbortSupport(decodeAbortSupport(raw));
         })
         .catch(() => {
           // 报错与解不动是同一件事：这台机器此刻答不出档位。
           if (!alive()) return;
           setPermissionModeMeta(null);
           setSupportsReasoningEffort(false);
+          // 问不到不等于停不了：停止键照旧摆着。
+          setAbortSupport(null);
         });
     },
     [client, relayState, summary?.backendType],
@@ -1217,6 +1230,14 @@ export default function SessionDetailView({
    */
   const handedOverTurn = initialTurnStartedAt != null && !attachSettled;
   const running = turn.turnActive || handedOverTurn;
+
+  /**
+   * 「停止」：头部那颗与输入框提交位那颗共用一份停止中状态，从按下去挂到这一轮结束。
+   * 执行端明确报告停不了时两处都不摆（不给 onStop）。
+   */
+  const turnStop = useTurnStop({ clientRef, originRef, sid, running });
+  const onStop =
+    abortSupport === false ? undefined : () => void turnStop.stop();
 
   /**
    * 要不要为这一轮摆一枚空的助手占位（三点挂在它上面）。
@@ -1844,8 +1865,8 @@ export default function SessionDetailView({
       // **落定**时各取一份，轮次进行中它说的是上一次落定时的事。
       running={running}
       decisionPending={decisionPending}
-      clientRef={clientRef}
-      originRef={originRef}
+      onStop={onStop}
+      stopping={turnStop.stopping}
     />
   );
 
@@ -1912,6 +1933,9 @@ export default function SessionDetailView({
         scrollback.pinToBottom();
         void send.sendMessage({ text, images });
       }}
+      running={running}
+      onStop={onStop}
+      stopping={turnStop.stopping}
       permissionMode={effectivePermissionMode}
       permissionModeMeta={permissionModeMeta}
       permissionError={permissionError}

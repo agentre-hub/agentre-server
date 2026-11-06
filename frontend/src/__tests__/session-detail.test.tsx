@@ -9212,6 +9212,212 @@ describe("会话详情页:头部状态跟着实时轮次走", () => {
   });
 });
 
+// ── 停止进入输入框提交位（规格 2026-11-06 A2）──────────────────────────────
+//
+// 一轮在跑时，输入框的提交位就是停止键（草稿为空只有它；有草稿时与发送并排），
+// 焦点在空输入框里按 Esc 也停。头部那颗「停止」与它共用一份停止中状态：点下去之后
+// 两颗都禁用，一直到这一轮真的结束 —— 停止请求返回不等于这一轮已经停了。
+describe("会话详情页:停止进入输入框提交位", () => {
+  /**
+   * 一条正在跑的会话。`capabilities` 是执行端对 runtime.capabilities 的应答（给
+   * Error 就是这一问失败）；`abort` 决定停止请求怎么回。
+   */
+  function wireRunningSession(
+    opts: {
+      capabilities?: unknown;
+      abort?: () => Promise<unknown>;
+    } = {},
+  ) {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions/read") return { last_read_at: 1 };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, lifecycleState: "running" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeCapabilities) {
+        const answer = opts.capabilities ?? {
+          capabilities: [{ name: "abort", enabled: true }],
+          permissionMode: { allowedModes: [] },
+        };
+        if (answer instanceof Error) throw answer;
+        return answer;
+      }
+      if (method === rpcMethods.runtimeAbort)
+        return opts.abort ? opts.abort() : {};
+      if (method === rpcMethods.runtimeRun) return {};
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  const composer = () => screen.getByTestId("session-detail-composer");
+  /** 输入框提交位上的停止键（按可读名找：它没有也不需要测试标识）。 */
+  const composerStop = () =>
+    within(composer()).queryByRole("button", { name: /^(Stop|Stopping…)$/ });
+  const headerStop = () =>
+    screen.queryByTestId("session-detail-stop") as HTMLButtonElement | null;
+  const abortCalls = () =>
+    fakeClient.request.mock.calls.filter(
+      (c) => c[0] === rpcMethods.runtimeAbort,
+    );
+  const capabilitiesAsked = () =>
+    waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeCapabilities,
+        ),
+      ).toBe(true),
+    );
+
+  /**
+   * 真实的 Esc 按键（带 keyCode 27）。只带 key 的合成事件 keyCode 是 0，
+   * ProseMirror 自己的按键处理认不出它 —— 那样坏掉的 Esc 也会测成绿的。
+   */
+  function pressEscape(target: Element) {
+    return fireEvent.keyDown(target, {
+      key: "Escape",
+      code: "Escape",
+      keyCode: 27,
+      which: 27,
+    });
+  }
+
+  it("Given 一轮在跑且草稿为空 Then 提交位是停止键，点下去发 runtime.abort", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+    // 草稿为空时提交位只有停止键：没有可发的东西，就不摆一颗灰着的发送键。
+    expect(within(composer()).queryByTestId("session-detail-send")).toBeNull();
+
+    fireEvent.click(composerStop()!);
+
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    expect(abortCalls()[0][1]).toMatchObject({ conversationId: "42" });
+  });
+
+  it("Given 一轮在跑且有草稿 Then 停止与发送并排", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await typeInComposer("再补一句");
+
+    await waitFor(() =>
+      expect(
+        within(composer()).getByTestId("session-detail-send"),
+      ).toBeTruthy(),
+    );
+    expect(composerStop()).toBeTruthy();
+  });
+
+  it("Given 点了停止 Then 头部与输入框两颗停止键都禁用，直到这一轮结束", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    fireEvent.click(composerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    // 停止请求已经回来了，但这一轮的终态帧还没到：仍在停。
+    await act(async () => {});
+
+    expect(headerStop()?.disabled).toBe(true);
+    const stopping = composerStop() as HTMLButtonElement;
+    expect(stopping.disabled).toBe(true);
+    expect(stopping.getAttribute("aria-label")).toBe("Stopping…");
+
+    act(() => capturedOpts.onRunResultDone?.({} as never));
+
+    // 回合结束：两颗都收起（没有什么可停了），停止中也随之落下。
+    await waitFor(() => expect(headerStop()).toBeNull());
+    expect(composerStop()).toBeNull();
+  });
+
+  it("Given 点了头部的停止 Then 输入框的停止键也进入停止中", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(headerStop()).toBeTruthy());
+
+    fireEvent.click(headerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+    await act(async () => {});
+
+    expect(headerStop()?.disabled).toBe(true);
+    expect((composerStop() as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("Given 停止请求失败 Then 两颗停止键都放开，可以再按", async () => {
+    wireRunningSession({
+      abort: async () => {
+        throw new Error("abort failed");
+      },
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    fireEvent.click(composerStop()!);
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+
+    await waitFor(() =>
+      expect((composerStop() as HTMLButtonElement).disabled).toBe(false),
+    );
+    expect(headerStop()?.disabled).toBe(false);
+  });
+
+  it("Given 焦点在空输入框 When 按下 Esc Then 停下这一轮", async () => {
+    wireRunningSession();
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await waitFor(() => expect(composerStop()).toBeTruthy());
+
+    const editable = composerEditable();
+    editable.focus();
+    pressEscape(editable);
+
+    await waitFor(() => expect(abortCalls()).toHaveLength(1));
+  });
+
+  it("Given 执行端明确报告不支持 abort Then 头部与输入框都不摆停止键", async () => {
+    wireRunningSession({
+      capabilities: {
+        capabilities: [{ name: "abort", enabled: false }],
+        permissionMode: { allowedModes: [] },
+      },
+    });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await capabilitiesAsked();
+    await act(async () => {});
+
+    expect(headerStop()).toBeNull();
+    expect(composerStop()).toBeNull();
+  });
+
+  it("Given 能力问不到 Then 维持今天的样子：两处都摆停止键", async () => {
+    wireRunningSession({ capabilities: new Error("machine says no") });
+    renderPage();
+    await screen.findByText(/重构登录页/);
+    await awaitComposer();
+    await capabilitiesAsked();
+    await act(async () => {});
+
+    expect(headerStop()).toBeTruthy();
+    expect(composerStop()).toBeTruthy();
+  });
+});
+
 /**
  * 上游重试：整条路从中继事件走到那张卡。
  *
