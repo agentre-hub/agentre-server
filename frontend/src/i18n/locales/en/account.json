@@ -41,7 +41,7 @@
   "signins": {
     "title": "Signed-in browsers",
     "subtitle": "Browsers currently signed in to this account.",
-    "current": "This session",
+    "current": "This device",
     "signedInAt": "Signed in {{date}}",
     "lastActiveAt": "Last active {{date}}",
     "loadFailedWhat": "Could not load your sessions",
@@ -51,5 +51,6 @@
     "signOutOthersConfirm": "Sign out everywhere else",
     "signOutError": "Could not sign out the other sessions. Try again.",
     "onlyCurrent": "This is your only session."
-  }
+  },
+  "signOut": "Sign out"
 }
