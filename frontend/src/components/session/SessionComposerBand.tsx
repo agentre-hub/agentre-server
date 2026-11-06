@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject } from "react";
+import { type ReactNode, type RefObject, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { CircleAlert, Lock, Square } from "lucide-react";
@@ -19,6 +19,7 @@ import {
 
 import { computeContextUsage } from "@/lib/sessionView";
 import { useIsMobile } from "@/components/use-is-mobile";
+import { usePutBackUndelivered } from "@/components/session/useSteerQueue";
 import { TranscriptSessionId } from "@/components/session/transcriptFrame";
 import { useSessionComposerModule } from "@/components/session/useSessionComposerModule";
 
@@ -191,6 +192,14 @@ export default function SessionComposerBand({
   const composerModule = useSessionComposerModule();
   // 手机：输入框走触屏档，只读条带「查看设备」的出口（规格 2026-11-05 决策 8 / 9）。
   const isMobile = useIsMobile();
+  const bandRef = useRef<HTMLDivElement>(null);
+  const undeliveredNotice = usePutBackUndelivered({
+    enabled: isMobile,
+    dropped: droppedQueue,
+    clearDropped: onDiscardDropped,
+    composerHandleRef,
+    rootRef: bandRef,
+  });
 
   const composeReadonly = isComposeReadonly(status);
 
@@ -242,6 +251,7 @@ export default function SessionComposerBand({
          不画分隔线、不自涂底色（规格 2026-10-15「无边框改版」）：输入带与转录同在
          一张内容页上，「内容被截断了」由渐隐独自说；渐隐因此从内容页的底色淡出。 */
     <div
+      ref={bandRef}
       data-testid="session-composer-band"
       data-scrolled={atBottom ? "false" : "true"}
       className="relative shrink-0 px-5 pt-2 pb-3"
@@ -344,9 +354,12 @@ export default function SessionComposerBand({
                 onCancel={onCancelQueued}
                 onWithdraw={onWithdrawQueued}
                 onClearAll={onClearQueued}
-                dropped={droppedQueue}
+                // 手机：未送达的自动放回输入框，只留一行说明；桌面照旧是横幅。
+                dropped={isMobile ? undefined : droppedQueue}
                 onRestoreDropped={onRestoreDropped}
                 onDiscardDropped={onDiscardDropped}
+                inputMode={isMobile ? "touch" : undefined}
+                undeliveredNotice={undeliveredNotice}
               />
             }
           />

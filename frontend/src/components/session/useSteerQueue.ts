@@ -11,7 +11,14 @@ import {
   type QueuedItem,
   type SteerQueueState,
 } from "@agentre-hub/agentre-ui";
-import { useCallback, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import type { ChatComposerHandle } from "@agentre-hub/agentre-ui";
 
 /**
  * 这一轮里排着的那几条插话（规格 2026-09-08-console-steer-queue）。
@@ -177,4 +184,68 @@ export function consumedSteerRefs(event: unknown): ConsumedSteerRef[] {
       text: typeof s.text === "string" ? s.text : undefined,
     };
   });
+}
+
+type UpdateEmitter = {
+  getJSON: () => unknown;
+  on: (event: "update", fn: () => void) => unknown;
+  off: (event: "update", fn: () => void) => unknown;
+};
+
+/**
+ * 手机上轮末没送到的插话：不挂「恢复为草稿 / 丢弃」条，而是按「恢复为草稿」同一条规矩
+ * （appendDraft：空行分隔、接在后面不覆盖）自动放回输入框，由一行说明告知（规格
+ * 2026-11-05 对话页「排队与放回」）。
+ *
+ * - 每一批 `dropped`（按数组身份）只放回一次；换会话时队列整份重置，dropped 随之清空，
+ *   不会把上一条的字放进新会话的输入框。
+ * - 放回后盯着编辑器：文档一旦与刚放回时的快照不同（用户动了输入框），说明就收起，
+ *   从此没有「清掉」。清掉与收起都是把 dropped 清空，说明由 `dropped` 是否为空推出。
+ *
+ * 返回 `onClear`：只撤掉这次放回的那一段（编辑器自那次追加后没变才撤得动）。
+ */
+export function usePutBackUndelivered({
+  enabled,
+  dropped,
+  clearDropped,
+  composerHandleRef,
+  rootRef,
+}: {
+  enabled: boolean;
+  dropped: QueuedItem[];
+  clearDropped: () => void;
+  composerHandleRef?: RefObject<ChatComposerHandle | null>;
+  rootRef: RefObject<HTMLElement | null>;
+}): { count: number; onClear: () => void } | null {
+  const putBack = useRef<QueuedItem[] | null>(null);
+  useEffect(() => {
+    if (!enabled || dropped.length === 0) return;
+    const handle = composerHandleRef?.current;
+    if (!handle || putBack.current === dropped) return;
+    putBack.current = dropped;
+    const editor = (
+      rootRef.current?.querySelector<HTMLElement & { editor?: UpdateEmitter }>(
+        "[contenteditable]",
+      ) ?? null
+    )?.editor;
+    handle.appendDraft(dropped.map((q) => q.text).join("\n\n"));
+    if (!editor) return;
+    const snapshot = JSON.stringify(editor.getJSON());
+    const onUpdate = () => {
+      if (JSON.stringify(editor.getJSON()) !== snapshot) clearDropped();
+    };
+    editor.on("update", onUpdate);
+    return () => {
+      editor.off("update", onUpdate);
+    };
+  }, [enabled, dropped, clearDropped, composerHandleRef, rootRef]);
+
+  if (!enabled || dropped.length === 0) return null;
+  return {
+    count: dropped.length,
+    onClear: () => {
+      composerHandleRef?.current?.removeLastAppend();
+      clearDropped();
+    },
+  };
 }

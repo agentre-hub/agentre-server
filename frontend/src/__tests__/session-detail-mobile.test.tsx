@@ -747,6 +747,117 @@ describe("移动端会话详情：底部停靠区", () => {
 });
 
 /** 认机器的那一段（ResolvedSessionDetail）：加载中 / 找不到 / 读不到 同样一层。 */
+describe("移动端会话详情：轮末插话放回", () => {
+  function stubSteer() {
+    mockedApi.mockImplementation(async (path) => {
+      if (path === "/v1/devices") return { devices: [deviceRow] };
+      if (path === "/v1/agent-sessions") return { items: [] };
+      if (
+        typeof path === "string" &&
+        path.startsWith("/v1/agent-sessions/transcript")
+      )
+        return { frames: [], cursor: 0, has_more: false };
+      throw new Error("unexpected: " + path);
+    });
+    fakeClient.request.mockImplementation(async (method: unknown) => {
+      if (method === rpcMethods.sessionList)
+        return { sessions: [{ ...summary, lifecycleState: "running" }] };
+      if (method === rpcMethods.sessionPendingWaiters)
+        return { toolPermissions: [], askUserQuestions: [] };
+      if (method === rpcMethods.runtimeSteer)
+        return { queuedId: "q-1", cancellable: true };
+      if (method === rpcMethods.runtimeDrainPending) return { steers: [] };
+      throw new Error("unexpected: " + method);
+    });
+  }
+
+  function editorEl(): HTMLElement & {
+    editor?: { commands: { setContent: (h: string) => void } };
+  } {
+    return screen
+      .getByTestId("session-composer-band")
+      .querySelector(".ProseMirror") as never;
+  }
+
+  function paragraphs(): string[] {
+    return Array.from(editorEl().querySelectorAll("p")).map(
+      (p) => p.textContent ?? "",
+    );
+  }
+
+  async function steerAndEndTurn(text: string, draftBeforeEnd?: string) {
+    await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
+    act(() => editorEl().editor?.commands.setContent(`<p>${text}</p>`));
+    fireEvent.click(await screen.findByTestId("session-detail-send"));
+    await screen.findByText(text);
+    if (draftBeforeEnd) {
+      act(() =>
+        editorEl().editor?.commands.setContent(`<p>${draftBeforeEnd}</p>`),
+      );
+    }
+    act(() => pageOpts.onRunResultDone?.({} as never));
+  }
+
+  const NOTICE = "1 steer(s) not delivered, put back in the input";
+
+  it("轮末没送到：自动接进输入框，一行说明，不再有「恢复为草稿」横幅", async () => {
+    mockMobileViewport();
+    stubSteer();
+    renderPage();
+    await steerAndEndTurn("先别动数据库");
+
+    expect(await screen.findByText(NOTICE)).toBeTruthy();
+    await waitFor(() => expect(paragraphs()).toEqual(["先别动数据库"]));
+    expect(
+      screen.queryByRole("button", { name: "Restore as draft" }),
+    ).toBeNull();
+  });
+
+  it("输入框已有草稿：空行分隔接在后面；「清掉」只移除这一段并收起说明", async () => {
+    mockMobileViewport();
+    stubSteer();
+    renderPage();
+    await steerAndEndTurn("先别动数据库", "还没写完");
+    await screen.findByText(NOTICE);
+    await waitFor(() =>
+      expect(paragraphs()).toEqual(["还没写完", "", "先别动数据库"]),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    await waitFor(() => expect(screen.queryByText(NOTICE)).toBeNull());
+    expect(paragraphs()).toEqual(["还没写完"]);
+  });
+
+  it("排队的插话 chip 用触屏档：撤回键 44px 命中区", async () => {
+    mockMobileViewport();
+    stubSteer();
+    renderPage();
+    await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
+    act(() => editorEl().editor?.commands.setContent("<p>先别动数据库</p>"));
+    fireEvent.click(await screen.findByTestId("session-detail-send"));
+
+    const withdraw = await screen.findByRole("button", {
+      name: "Move back to input",
+    });
+    expect(withdraw.className).toContain("size-11");
+  });
+
+  it("改动输入框后说明消失，不再有「清掉」", async () => {
+    mockMobileViewport();
+    stubSteer();
+    renderPage();
+    await steerAndEndTurn("先别动数据库");
+    await screen.findByText(NOTICE);
+
+    act(() => editorEl().editor?.commands.setContent("<p>先别动数据库啊</p>"));
+
+    await waitFor(() => expect(screen.queryByText(NOTICE)).toBeNull());
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(paragraphs()).toEqual(["先别动数据库啊"]);
+  });
+});
+
 describe("移动端按地址打开：加载 / 未找到 / 出错", () => {
   function renderResolved() {
     mockUseRelay.mockImplementation(() => ({
