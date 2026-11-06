@@ -1,8 +1,8 @@
 import { cn } from "@agentre-hub/agentre-ui";
 
 /**
- * 导航项上「有多少条需要你」的角标。桌面侧栏（ConsoleNavItem）与移动底栏
- * （MobileTabBar）共用这一个 —— 两处画同一个数，形状不该有两份。
+ * 导航项上「有多少条需要你」的角标。桌面侧栏（ConsoleNavItem）与手机抽屉
+ * 共用这一个 —— 两处画同一个数，形状不该有两份。
  *
  * 三条规矩，全部关于**诚实**：
  *

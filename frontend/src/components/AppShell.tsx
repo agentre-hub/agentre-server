@@ -39,6 +39,7 @@ import {
 import { agentreLogoUrl, cn } from "@agentre-hub/agentre-ui";
 
 /** 手机抽屉里的两组目的地（规格 2026-11-05「外壳与导航」），顺序即显示顺序。 */
+const CHAT_PATH = "/chat";
 const DRAWER_MAIN = ["/chat", "/issues", "/org", "/devices"];
 const DRAWER_MORE = ["/overview", "/settings"];
 
@@ -368,6 +369,15 @@ export default function AppShell({
     Agent 与组织、设备）→ 更多（活跃统计、设置）→ 底部主题与语言。角标与设备在线/
     总数用的就是桌面侧栏那两份数据（attention / deviceMeta），不另取一遍。
   */
+  // 抽屉的「对话」角标只数「需要你」，未读不并进去（规格「外壳与导航」）；侧栏的
+  // 角标是两者之和，两处各自说清自己数的是什么。
+  const needsYou = attention?.needsAttention ?? null;
+  const needsYouLabel =
+    attention && attention.needsAttention > 0
+      ? t("appShell.nav.chatBadge.needsAttention", {
+          count: attention.needsAttention,
+        })
+      : null;
   const drawerItem = (to: string) => {
     const item = NAV_ITEMS.find((i) => i.to === to)!;
     return (
@@ -377,8 +387,8 @@ export default function AppShell({
         label={t(item.drawerLabelKey ?? item.labelKey)}
         Icon={item.Icon}
         meta={item.meta ? `${item.meta.online}/${item.meta.total}` : null}
-        badge={item.badge}
-        badgeLabel={item.badgeLabel}
+        badge={to === CHAT_PATH ? needsYou : item.badge}
+        badgeLabel={to === CHAT_PATH ? needsYouLabel : item.badgeLabel}
         touch
       />
     );

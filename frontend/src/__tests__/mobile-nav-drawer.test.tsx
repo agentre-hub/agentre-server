@@ -176,12 +176,31 @@ describe("移动端左抽屉导航", () => {
     const drawer = await openDrawer();
 
     const chat = await within(drawer).findByRole("link", { name: /Chat/ });
-    expect(await within(chat).findByText("3")).toBeTruthy();
-    expect(
-      within(chat).getByTitle("2 conversations need you · 1 unread"),
-    ).toBeTruthy();
+    // 抽屉的角标只数「需要你」（2），未读（1）不并进去。
+    expect(await within(chat).findByText("2")).toBeTruthy();
+    expect(within(chat).queryByText("3")).toBeNull();
+    expect(within(chat).getByTitle("2 conversations need you")).toBeTruthy();
     const devices = within(drawer).getByRole("link", { name: /Devices/ });
     expect(await within(devices).findByText("2/3")).toBeTruthy();
+  });
+
+  it("手机：只有未读、没有需要你时不画角标", async () => {
+    mockMobileViewport();
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/agent-sessions/attention-count")
+        return { needs_attention: 0, unread: 4 };
+      throw new Error("unexpected: " + path);
+    });
+    renderShell();
+    const drawer = await openDrawer();
+    await waitFor(() =>
+      expect(mockedApi).toHaveBeenCalledWith(
+        "/v1/agent-sessions/attention-count",
+      ),
+    );
+    const chat = within(drawer).getByRole("link", { name: /Chat/ });
+    expect(chat.querySelector("[title]")).toBeNull();
+    expect(within(chat).queryByText("4")).toBeNull();
   });
 
   it("手机：没有待处理时不画角标", async () => {

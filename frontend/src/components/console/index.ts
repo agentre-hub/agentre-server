@@ -3,7 +3,7 @@
  * 消费的最小原语集。页面只能组合这些组件，不得复制其尺寸/状态颜色/字阶/
  * 交互语义，也不得修改本目录。
  *
- * 对应画板节点：ConsoleNavItem=ZC7pI、MobileTabBar=A6Z3k、
+ * 对应画板节点：ConsoleNavItem=ZC7pI、
  * StatusMark=zF5jv、Metric=IhldU 统计卡、
  * EmptyState=正式空态画板。InlineEmpty 是索引栏里的窄栏变体（见其自身注释）。
  * 行级菜单已归共享包的 DropdownMenu（规格 2026-08-22 E 段）。
@@ -14,7 +14,6 @@ export { EmptyState } from "./EmptyState";
 export { FailureNotice } from "./FailureNotice";
 export { InlineEmpty } from "./InlineEmpty";
 export { Metric } from "./Metric";
-export { MobileTabBar, type MobileTab } from "./MobileTabBar";
 export { NavBadge } from "./NavBadge";
 export { StatusMark, type StatusTone } from "./StatusMark";
 export {

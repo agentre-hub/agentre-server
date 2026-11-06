@@ -261,8 +261,8 @@ describe("账号菜单（任务 7）", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  // 窄屏与侧栏同源：同一个数、同一句说明。手机上它落在抽屉的「对话」项里。
-  it("手机抽屉的对话项带着与侧栏同一个角标", async () => {
+  // 手机上它落在抽屉的「对话」项里：只数「需要你」，未读不并进去（规格 外壳与导航）。
+  it("手机抽屉的对话项只带「需要你」条数角标", async () => {
     mockMobileViewport();
     mockedApi.mockImplementation(async (path: string) => {
       if (path === "/v1/auth/me") return me;
@@ -275,10 +275,8 @@ describe("账号菜单（任务 7）", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open menu" }));
 
     const chat = await screen.findByRole("link", { name: /Chat/ });
-    expect(await within(chat).findByText("3")).toBeTruthy();
-    expect(
-      within(chat).getByTitle("2 conversations need you · 1 unread"),
-    ).toBeTruthy();
+    expect(await within(chat).findByText("2")).toBeTruthy();
+    expect(within(chat).getByTitle("2 conversations need you")).toBeTruthy();
   });
 
   it("手机抽屉：主导航 4 项 + 更多 2 项（统计、设置），不含已下线的审计", async () => {
