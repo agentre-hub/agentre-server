@@ -21,7 +21,14 @@ export type PhoneScope =
   | { kind: "agent"; agentSyncId: string }
   | { kind: "machine"; deviceId: number | null };
 
-function readDeviceId(raw: string | null): number | null {
+/**
+ * `?machine=<设备标识>`：把机器轴收到这一台上。桌面与手机读同一个参数，同一份解析。
+ *
+ * `/devices/:deviceId/sessions`（「查看这台机器的对话」）重定向过来时带着它——
+ * 那句话说的是**一台**机器，不带范围的话落地看到的是账号下每一台。没带、或者
+ * 带了个不是设备标识的东西，就是不收范围：机器轴本身仍是每台在线机器各一组。
+ */
+export function readMachineScope(raw: string | null): number | null {
   if (!raw) return null;
   const id = Number(raw);
   return Number.isInteger(id) && id > 0 ? id : null;
@@ -30,7 +37,10 @@ function readDeviceId(raw: string | null): number | null {
 export function readPhoneScope(params: URLSearchParams): PhoneScope {
   const axis = params.get("axis");
   if (axis === "machine") {
-    return { kind: "machine", deviceId: readDeviceId(params.get("machine")) };
+    return {
+      kind: "machine",
+      deviceId: readMachineScope(params.get("machine")),
+    };
   }
   const project = params.get("project")?.trim();
   if (axis === "project" && project) {

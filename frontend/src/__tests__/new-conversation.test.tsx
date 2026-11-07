@@ -2936,6 +2936,82 @@ describe("手机上的新对话", () => {
     return screen.findByTestId("draft-session");
   }
 
+  // 手机草稿页的三行事实替掉了桌面那一带，但计划的三种「走不下去」仍要有出路：
+  // 取不到计划给重试，挑定的那台跑不了给「交回自动挑」，一档都不可用逐档给原因。
+  it("计划取不到：手机上也有「重试」，点了重取，失败说明随之消失", async () => {
+    let calls = 0;
+    mockFetchPlan.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("plan unavailable");
+      return availablePlan;
+    });
+    await openPhoneDraft();
+
+    const failed = await screen.findByTestId("draft-plan-failed");
+    fireEvent.click(within(failed).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(calls).toBe(2));
+    await waitFor(() =>
+      expect(screen.queryByTestId("draft-plan-failed")).toBeNull(),
+    );
+    expect(
+      within(screen.getByTestId("draft-fact-target")).getByText("Study Mini"),
+    ).toBeTruthy();
+  });
+
+  it("挑定的那台跑不了：手机上给「交回自动挑」，点了回到自动挑的那台", async () => {
+    mockFetchPlan.mockImplementation(async (input) =>
+      input.targetBackendSyncId === "b-b"
+        ? { ...availablePlan, chosen: null }
+        : availablePlan,
+    );
+    await openPhoneDraft();
+
+    fireEvent.click(await screen.findByTestId("draft-fact-target"));
+    fireEvent.click(await screen.findByTestId("draft-tier-3"));
+    expect(
+      await screen.findByTestId("draft-picked-target-unavailable"),
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId("draft-use-auto-target"));
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("draft-picked-target-unavailable"),
+      ).toBeNull(),
+    );
+    expect(
+      await within(screen.getByTestId("draft-fact-target")).findByText(
+        "Study Mini",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("一档都不可用：手机上也逐档给原因", async () => {
+    mockFetchPlan.mockResolvedValue(allUnavailablePlan);
+    await openPhoneDraft();
+
+    const block = await screen.findByTestId("draft-all-unavailable");
+    expect(block.textContent).toContain("Not paired");
+    expect(block.textContent).toContain("Offline");
+  });
+
+  it("点收件人换 Agent：回到「选 Agent」弹层，列表的范围留在地址上", async () => {
+    renderChat("/chat?axis=agent&agent=agent-1");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "New conversation" }),
+    );
+    const sheet = await screen.findByTestId("new-conversation-sheet");
+    fireEvent.click(within(sheet).getByTestId("agent-pick-agent-1"));
+    await screen.findByTestId("draft-session");
+
+    fireEvent.click(screen.getByTestId("draft-recipient"));
+    expect(await screen.findByTestId("new-conversation-sheet")).toBeTruthy();
+    await waitFor(() =>
+      expect(new URLSearchParams(currentSearch()).get("axis")).toBe("agent"),
+    );
+    expect(new URLSearchParams(currentSearch()).get("agent")).toBe("agent-1");
+    expect(new URLSearchParams(currentSearch()).get("compose")).toBeNull();
+  });
+
   it("手机草稿页头只有返回与收件人，不摆语言/主题按钮（它们只在抽屉底部）", async () => {
     await openPhoneDraft();
     const header = screen.getByTestId("draft-header");

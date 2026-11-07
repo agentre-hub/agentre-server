@@ -84,6 +84,7 @@ export function PhoneDraftBody({
   sentence,
   hasDraft,
   facts,
+  notice,
   onContinueRecent,
   busy,
 }: {
@@ -92,6 +93,8 @@ export function PhoneDraftBody({
   hasDraft: boolean;
   /** 三行事实（项目 / 运行在 / 模型），由宿主按计划状态摆好。 */
   facts: ReactNode;
+  /** 计划走不下去时的说明与出路（重试 / 交回自动挑 / 逐档原因），摆在事实下面。 */
+  notice?: ReactNode;
   onContinueRecent: () => void;
   busy?: boolean;
 }) {
@@ -129,6 +132,7 @@ export function PhoneDraftBody({
       >
         {facts}
       </div>
+      {notice}
       {!hasDraft && (
         <button
           type="button"

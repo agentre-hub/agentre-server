@@ -842,7 +842,7 @@ describe("移动端会话详情：轮末插话放回", () => {
     act(() => pageOpts.onRunResultDone?.({} as never));
   }
 
-  const NOTICE = "1 steer(s) not delivered, put back in the input";
+  const NOTICE = "1 steer not delivered, put back in the input";
 
   it("轮末没送到：自动接进输入框，一行说明，不再有「恢复为草稿」横幅", async () => {
     mockMobileViewport();

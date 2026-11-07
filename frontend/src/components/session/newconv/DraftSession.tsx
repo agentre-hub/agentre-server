@@ -94,7 +94,7 @@ export function DraftSession({
   initialProjectSyncId,
   onStarted,
   onBack,
-  headerActions,
+  onChangeRecipient,
 }: {
   agent: NewConvAgent;
   /** 账号里全部 Agent，供输入框的 @ 菜单用（第一句同样能提及别人）。 */
@@ -110,10 +110,10 @@ export function DraftSession({
   /** 移动端的返回；桌面右栏里不给（左栏一直都在，没有「返回」这一说）。 */
   onBack?: () => void;
   /**
-   * 顶带右端那一组控件。移动端这一屏盖住了索引的页头、也没有侧栏，语言/主题由宿主
-   * 摆到这里；桌面不给（它们在侧栏底部）。
+   * 手机页头点收件人：回到「选 Agent」。由宿主就地切回挑选态——走 `?compose=1`
+   * 的话那条 effect 会用只剩 compose 的地址替掉当前地址，列表的范围随之丢掉。
    */
-  headerActions?: ReactNode;
+  onChangeRecipient?: () => void;
 }) {
   const { t } = useTranslation();
   /**
@@ -520,7 +520,7 @@ export function DraftSession({
         type="button"
         data-testid="draft-recipient"
         aria-label={t("chat.changeAgentAria", { name: agent.name })}
-        onClick={() => void nav("/chat?compose=1")}
+        onClick={onChangeRecipient}
         className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 text-left"
       >
         <AgentAvatar
@@ -557,9 +557,40 @@ export function DraftSession({
           </span>
         </span>
       </button>
-      {headerActions}
     </div>
   );
+
+  /**
+   * 计划走不下去的三种情形，桌面那一带与手机三行事实下面摆的是同一份：取不到计划给
+   * 重试（这条 effect 只在 agent/项目/执行档变化时重跑，没有这颗按钮的话用户唯一的
+   * 出路是去换个项目再换回来）；问到了但没挑出机器时，挑定的那台跑不了给「交回自动
+   * 挑」，一档都不可用逐档给原因。
+   */
+  const planFailed = planError ? (
+    <Alert variant="destructive" data-testid="draft-plan-failed">
+      <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
+        <FailureNotice
+          failure={describeFailure(planError, {
+            t,
+            what: t("chat.planFailedWhat"),
+          })}
+          onRetry={() => setPlanAttempt((k) => k + 1)}
+        />
+      </AlertDescription>
+    </Alert>
+  ) : null;
+  const targetUnavailable =
+    plan && !chosen ? (
+      targetBackendSyncId ? (
+        <PickedTargetUnavailable
+          plan={plan}
+          targetBackendSyncId={targetBackendSyncId}
+          onAuto={() => setTargetBackendSyncId(null)}
+        />
+      ) : (
+        <AllTargetsUnavailable agentName={agent.name} tiers={plan.tiers} />
+      )
+    ) : null;
 
   /** 手机的三行事实：每一行都可点，选择语义与桌面那两枚 chip 同一份。 */
   const modelPill = resolveProviderPillState({
@@ -698,7 +729,6 @@ export function DraftSession({
               : t("chat.newSessionTitle", { name: agent.name })
           }
           meta={metaParts}
-          actions={headerActions}
         />
       )}
 
@@ -715,6 +745,7 @@ export function DraftSession({
           }
           hasDraft={hasDraft}
           facts={phoneFacts}
+          notice={planFailed ?? targetUnavailable}
           busy={!settled}
           onContinueRecent={() => {
             // 先收掉草稿再改地址：Chat 的草稿态不随地址变，留着它会盖住列表。
@@ -746,50 +777,31 @@ export function DraftSession({
               : t("chat.startWithAgent", { agent: agent.name })}
           </p>
 
-          {planError ? (
-            // 这条 effect 只在 agent/项目/执行档变化时重跑：没有这颗按钮的话，用户
-            // 唯一的出路是去换个项目再换回来。
-            <Alert variant="destructive" data-testid="draft-plan-failed">
-              <AlertDescription className="flex min-w-0 flex-wrap items-center gap-3">
-                <FailureNotice
-                  failure={describeFailure(planError, {
-                    t,
-                    what: t("chat.planFailedWhat"),
-                  })}
-                  onRetry={() => setPlanAttempt((k) => k + 1)}
+          {planFailed ??
+            (!plan ? (
+              <p className="text-xs text-muted-foreground">
+                {t("common.loading")}
+              </p>
+            ) : chosen ? (
+              <>
+                <ExecTargetLine
+                  plan={plan}
+                  overridden={!!targetBackendSyncId}
+                  onPick={(tier) =>
+                    setTargetBackendSyncId(tier.backend_sync_id ?? null)
+                  }
+                  onAuto={() => setTargetBackendSyncId(null)}
                 />
-              </AlertDescription>
-            </Alert>
-          ) : !plan ? (
-            <p className="text-xs text-muted-foreground">
-              {t("common.loading")}
-            </p>
-          ) : chosen ? (
-            <>
-              <ExecTargetLine
-                plan={plan}
-                overridden={!!targetBackendSyncId}
-                onPick={(tier) =>
-                  setTargetBackendSyncId(tier.backend_sync_id ?? null)
-                }
-                onAuto={() => setTargetBackendSyncId(null)}
-              />
-              <ProjectChip
-                plan={plan}
-                projectSyncId={projectSyncId}
-                projectName={projectName}
-                onPick={setProjectSyncId}
-              />
-            </>
-          ) : targetBackendSyncId ? (
-            <PickedTargetUnavailable
-              plan={plan}
-              targetBackendSyncId={targetBackendSyncId}
-              onAuto={() => setTargetBackendSyncId(null)}
-            />
-          ) : (
-            <AllTargetsUnavailable agentName={agent.name} tiers={plan.tiers} />
-          )}
+                <ProjectChip
+                  plan={plan}
+                  projectSyncId={projectSyncId}
+                  projectName={projectName}
+                  onPick={setProjectSyncId}
+                />
+              </>
+            ) : (
+              targetUnavailable
+            ))}
         </div>
       )}
 

@@ -1195,6 +1195,44 @@ describe("手机首页：范围弹层", () => {
     ).not.toMatch(/\d/);
   });
 
+  it("搜索中数到的只是命中行：带着搜索换了范围，清单沿用的仍是「全部」时的数", async () => {
+    stub();
+    renderChat();
+    await screen.findByText("等你批");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Search conversation titles" }),
+    );
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search conversation titles" }),
+      { target: { value: "跑着呢" } },
+    );
+    await waitFor(() => expect(screen.queryByText("等你批")).toBeNull());
+    // 长按命中行「只看这个 Agent」：范围换了，搜索还在。
+    fireEvent.contextMenu((await screen.findByText("跑着呢")).closest("a")!);
+    fireEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", {
+        name: "Only this agent",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toBe(
+        "/chat?axis=agent&agent=ag-1",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /^Switch scope, current:/ }),
+    );
+    const sheet = await screen.findByRole("dialog");
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Project" }));
+
+    // p-2 里那一条（等你批）没被搜到，它的数仍是「全部」时数到的 1，不是 0。
+    expect(
+      within(sheet).getByTestId("scope-item-project-p-2").textContent,
+    ).toContain("1");
+  });
+
   it("名单里的 Agent 没带执行目标也不崩：弹层照常列出，没有机器副标题", async () => {
     stubApi(rows, [agentred], {
       agents: [

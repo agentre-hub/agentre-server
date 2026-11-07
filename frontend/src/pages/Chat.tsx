@@ -97,6 +97,7 @@ import {
   phoneDataAxis,
   phoneScopeKey,
   phoneServerScope,
+  readMachineScope,
   readPhoneScope,
   withPhoneScope,
   type PhoneScope,
@@ -155,19 +156,6 @@ interface DraftSeed {
   modelNote?: string;
   effortNote?: string;
   turnStartedAt: number;
-}
-
-/**
- * `?machine=<设备标识>`：把机器轴收到这一台上。
- *
- * `/devices/:deviceId/sessions`（「查看这台机器的对话」）重定向过来时带着它——
- * 那句话说的是**一台**机器，不带范围的话落地看到的是账号下每一台。没带、或者
- * 带了个不是设备标识的东西，就是不收范围：机器轴本身仍是每台在线机器各一组。
- */
-function readMachineScope(raw: string | null): number | null {
-  if (!raw) return null;
-  const id = Number(raw);
-  return Number.isInteger(id) && id > 0 ? id : null;
 }
 
 /**
@@ -1068,6 +1056,7 @@ export default function Chat() {
         onStarted={(session) => onDraftStarted(session, compose.agent)}
         // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
         onBack={isMobile ? () => setCompose(null) : undefined}
+        onChangeRecipient={beginCompose}
       />
     ) : null;
 
@@ -1215,13 +1204,16 @@ export default function Chat() {
   );
   /*
     每项的数：控制台没有逐项计数的端点，数的是已载入的行。换了范围之后手上只剩那一
-    范围的行，别的项会数成 0——所以只在「全部」且筛选为全部时刷新，其余时候沿用最后
-    数出来的那一份（与上面胶囊的 held 同一个做法）；一份都还没数过（直接打开某个
-    范围）时是 null，清单不摆数。
+    范围的行，别的项会数成 0——所以只在「全部」、筛选为全部且没在搜索时刷新（搜索中
+    手上只剩命中行），其余时候沿用最后数出来的那一份（与上面胶囊的 held 同一个做法）；
+    一份都还没数过（直接打开某个范围）时是 null，清单不摆数。
   */
   const liveTally = useMemo(() => tallyRows(phoneBaseRows), [phoneBaseRows]);
   const tallyFresh =
-    phoneScope.kind === "all" && dataFilter === "all" && phoneSettled;
+    phoneScope.kind === "all" &&
+    dataFilter === "all" &&
+    sessionIndex.debouncedSearch === "" &&
+    phoneSettled;
   const [heldTally, setHeldTally] = useState<typeof liveTally | null>(null);
   if (isMobile && tallyFresh && heldTally !== liveTally) {
     setHeldTally(liveTally);
