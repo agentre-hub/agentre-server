@@ -1,7 +1,7 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useCallback, useContext, type ReactNode } from "react";
 import { ChevronLeft, Menu } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, type To } from "react-router-dom";
 
 import {
   Dialog,
@@ -31,7 +31,7 @@ const TOP_LEVEL_PATHS = new Set([
   "/account",
 ]);
 
-export function isTopLevelPath(pathname: string): boolean {
+function isTopLevelPath(pathname: string): boolean {
   const normalized =
     pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
   return TOP_LEVEL_PATHS.has(normalized);
@@ -43,6 +43,24 @@ function parentOf(pathname: string): string {
   return first ? `/${first}` : "/";
 }
 
+/**
+ * 手机页头的「返回」（含逐层页的上一层）：有本站内可退的历史就退一格 —— 与浏览器 /
+ * 系统的返回键是同一条路，历史不会越点越长；没有（直接打开深链、PWA 冷启动）时原地
+ * 换成 `fallback`，不把人带出本站。
+ */
+export function useMobileBack(): (fallback: To) => void {
+  const navigate = useNavigate();
+  return useCallback(
+    (fallback: To) => {
+      // react-router 在浏览器历史的 state.idx 记着自己的位置；0 表示这一页就是入口。
+      const idx = (window.history.state as { idx?: number } | null)?.idx;
+      if (typeof idx === "number" && idx > 0) navigate(-1);
+      else navigate(fallback, { replace: true });
+    },
+    [navigate],
+  );
+}
+
 const BUTTON_CLASS =
   "relative -ml-2 flex size-11 shrink-0 items-center justify-center rounded-md text-foreground outline-none hover:bg-rail-accent focus-visible:focus-outline";
 
@@ -50,7 +68,7 @@ const BUTTON_CLASS =
 export function MobileNavButton() {
   const { t } = useTranslation();
   const { pathname } = useLocation();
-  const navigate = useNavigate();
+  const back = useMobileBack();
   const drawer = useContext(MobileDrawerContext);
 
   if (isTopLevelPath(pathname) && drawer) {
@@ -69,13 +87,7 @@ export function MobileNavButton() {
     <button
       type="button"
       aria-label={t("appShell.drawer.back")}
-      onClick={() => {
-        // react-router 在内存历史与浏览器历史里都在 state.idx 记着自己的位置；
-        // 0 表示这一页就是入口，navigate(-1) 会把人带出本站。
-        const idx = (window.history.state as { idx?: number } | null)?.idx;
-        if (typeof idx === "number" && idx > 0) navigate(-1);
-        else navigate(parentOf(pathname), { replace: true });
-      }}
+      onClick={() => back(parentOf(pathname))}
       className={BUTTON_CLASS}
     >
       <ChevronLeft className="size-6" aria-hidden="true" />

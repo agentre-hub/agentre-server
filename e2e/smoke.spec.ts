@@ -347,10 +347,8 @@ test("@mobile 手机上经抽屉进设备页，再进设备详情并返回", asy
     await expect(drawer).toBeHidden();
     await expect(page.getByTestId("devices-mobile-header")).toBeVisible();
 
-    await page
-      .getByText(/webe2e-f/)
-      .first()
-      .click();
+    // 按刚授权的那一行点，不按名字前缀挑：账号里另有同前缀的设备时不会点错。
+    await page.getByTestId(`device-row-${deviceID}`).click();
     await expect(page).toHaveURL(new RegExp(`/devices/${deviceID}$`));
     await expect(page.getByTestId("device-detail-mobile")).toBeVisible();
 

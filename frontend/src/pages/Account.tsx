@@ -28,6 +28,7 @@ import {
 } from "@/lib/webauthn";
 import { passkeySupport, type PasskeySupport } from "@/lib/passkeySupport";
 import { parseUserAgent } from "@/lib/userAgent";
+import { formatRelativeTime } from "@/lib/sessionView";
 import { signOut } from "@/lib/signOut";
 
 /** 通行密钥清单里的一条（`GET /v1/passkeys`）。 */
@@ -96,24 +97,8 @@ function sessionLabel(s: SessionRow): string {
 
 /** 同一行里 IP 与相对时间之间的连接符：代码拼的，不是译文的一部分。 */
 const META_SEP = " · ";
-const HOUR_MS = 60 * 60 * 1000;
-const DAY_MS = 24 * HOUR_MS;
-
-/**
- * 相对时间短语（「3 小时前」「3 hours ago」）。单位取能达到的最大一档，四舍五入；
- * 不到一分钟落在「现在」。措辞交给 Intl 按当前语言出，不在代码里写死译文。
- */
-function relativeTime(ms: number, now: number, locale: string): string {
-  if (!ms) return "—";
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  const diff = ms - now;
-  const abs = Math.abs(diff);
-  if (abs >= DAY_MS) return rtf.format(Math.round(diff / DAY_MS), "day");
-  if (abs >= HOUR_MS) return rtf.format(Math.round(diff / HOUR_MS), "hour");
-  if (abs >= 60 * 1000)
-    return rtf.format(Math.round(diff / (60 * 1000)), "minute");
-  return rtf.format(0, "second");
-}
+/** 没有活动时间时那一格：占位符，不是译文。 */
+const NO_TIME = "—";
 
 /**
  * 用不了通行密钥时那句话。**说的必须是真正的原因**：源不是安全上下文（本站有时
@@ -643,11 +628,13 @@ export default function Account() {
                                   <span className="font-mono">{s.ip}</span>
                                   {META_SEP}
                                   <span>
-                                    {relativeTime(
-                                      s.last_active_at,
-                                      sessionsAsOf,
-                                      locale,
-                                    )}
+                                    {s.last_active_at
+                                      ? formatRelativeTime(
+                                          s.last_active_at,
+                                          locale,
+                                          sessionsAsOf,
+                                        )
+                                      : NO_TIME}
                                   </span>
                                 </div>
                               )}

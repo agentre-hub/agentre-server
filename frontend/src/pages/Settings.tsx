@@ -19,7 +19,11 @@ import { Link, useSearchParams } from "react-router-dom";
 import AppShell from "@/components/AppShell";
 import { ActivityStatsPanel } from "@/components/settings/ActivityStatsPanel";
 import PageTitle from "@/components/PageTitle";
-import { EmptyState, MobileNavButton } from "@/components/console";
+import {
+  EmptyState,
+  MobileNavButton,
+  useMobileBack,
+} from "@/components/console";
 import { useIsMobile } from "@/components/use-is-mobile";
 import { useAccountChannel } from "@/hooks/use-account-channel";
 import { LANGUAGE_LABELS, SUPPORTED_LANGUAGES } from "@/i18n";
@@ -159,6 +163,7 @@ export default function Settings() {
   // 总览的「统计设置 →」与「开启完整活跃统计 →」都指到 ?tab=privacy —— 一条深链
   // 落到默认页签上，等于把用户扔在离目标两步远的地方，而他刚刚已经点过一次了。
   const [searchParams, setSearchParams] = useSearchParams();
+  const back = useMobileBack();
   const [section, setSection] = React.useState<Section>(() =>
     sectionFromParam(searchParams.get("tab")),
   );
@@ -255,6 +260,12 @@ export default function Settings() {
     const phoneSection = phoneSectionFromParams(searchParams);
     const rawId = searchParams.get("id");
     const go = (next: Record<string, string>) => setSearchParams(next);
+    // 回到上一层（页头 ‹、编辑页的 ✕ / 保存、选中项没了）走历史后退：压一条父级进去
+    // 的话，系统返回键会把人又带回刚离开的那一层。
+    const up = (parent: Record<string, string>) => {
+      const search = new URLSearchParams(parent).toString();
+      back({ search: search ? `?${search}` : "" });
+    };
     const sectionTitle = phoneSection
       ? t(`settings.sections.${phoneSection}`)
       : t("settings.title");
@@ -310,11 +321,9 @@ export default function Settings() {
           layer={id !== null && Number.isFinite(id) ? "detail" : "list"}
           selectedId={id !== null && Number.isFinite(id) ? id : null}
           onSelect={(next) =>
-            go(
-              next === null
-                ? { section: "providers" }
-                : { section: "providers", id: String(next) },
-            )
+            next === null
+              ? up({ section: "providers" })
+              : go({ section: "providers", id: String(next) })
           }
           onOpenAgentBackends={() => go({ section: "backends" })}
           renderHeader={phoneActions}
@@ -353,11 +362,9 @@ export default function Settings() {
           layer={target === null ? "list" : "editor"}
           selectedId={target}
           onSelect={(next) =>
-            go(
-              next === null
-                ? { section: "backends" }
-                : { section: "backends", id: String(next) },
-            )
+            next === null
+              ? up({ section: "backends" })
+              : go({ section: "backends", id: String(next) })
           }
           onOpenLlmProviders={() => go({ section: "providers" })}
           renderHeader={phoneActions}
@@ -380,7 +387,7 @@ export default function Settings() {
                   type="button"
                   aria-label={t("appShell.drawer.back")}
                   onClick={() =>
-                    go(
+                    up(
                       rawId !== null && phoneSection !== null
                         ? { section: phoneSection }
                         : {},

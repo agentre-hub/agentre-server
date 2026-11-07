@@ -1226,7 +1226,8 @@ export default function Chat() {
   /*
     每项的数：控制台没有逐项计数的端点，数的是已载入的行。换了范围之后手上只剩那一
     范围的行，别的项会数成 0——所以只在「全部」且筛选为全部时刷新，其余时候沿用最后
-    数出来的那一份（与上面胶囊的 held 同一个做法）。
+    数出来的那一份（与上面胶囊的 held 同一个做法）；一份都还没数过（直接打开某个
+    范围）时是 null，清单不摆数。
   */
   const liveTally = useMemo(() => tallyRows(phoneBaseRows), [phoneBaseRows]);
   const tallyFresh =
@@ -1235,7 +1236,7 @@ export default function Chat() {
   if (isMobile && tallyFresh && heldTally !== liveTally) {
     setHeldTally(liveTally);
   }
-  const scopeTally = tallyFresh ? liveTally : (heldTally ?? liveTally);
+  const scopeTally = tallyFresh ? liveTally : heldTally;
   const scopeProjects = useMemo(
     () => buildScopeProjects(projects, scopeTally),
     [projects, scopeTally],
@@ -1508,7 +1509,7 @@ export default function Chat() {
             onOpenChange={closeScopeSheet}
             tab={scopeSheet.tab}
             onTabChange={(tab) => setScopeSheet((prev) => ({ ...prev, tab }))}
-            allCount={sessionIndex.accountTotal ?? scopeTally.agent.size}
+            allCount={sessionIndex.accountTotal ?? undefined}
             selected={scopeValueOf(phoneScope)}
             projects={scopeProjects}
             agentGroups={scopeAgentGroups}

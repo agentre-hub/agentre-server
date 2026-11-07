@@ -1,4 +1,11 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -258,6 +265,52 @@ describe("手机设备详情页", () => {
     const projects = within(page).getByRole("region", { name: "Projects" });
     expect(within(projects).getByText("agentre-server")).toBeTruthy();
     expect(within(projects).getByText("Not configured")).toBeTruthy();
+  });
+
+  it("在详情页点升级、版本随后翻新：「升级完成」那一行留在页上，不随版本变成最新一起消失", async () => {
+    let version = "0.5.2";
+    mockedApi.mockImplementation(async (path: string) => {
+      if (path === "/v1/devices")
+        return { devices: [{ ...workstation, version }] };
+      if (path === "/v1/release/latest")
+        return { known: true, version: "0.6.0" };
+      if (path.startsWith("/v1/workspace/device-detail")) return detail;
+      if (path === "/v1/devices/upgrade")
+        return { accepted: true, target_version: "0.6.0" };
+      throw new Error("unexpected call: " + path);
+    });
+    // 升级受理后每 5 秒回读一次版本：接住那只定时器，由用例决定何时回读；别的
+    // 定时器照常走。
+    const polls: Array<() => void> = [];
+    const realSetInterval = window.setInterval.bind(window);
+    const setIntervalSpy = vi.spyOn(window, "setInterval").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      if (ms !== 5_000) return realSetInterval(fn, ms);
+      polls.push(fn);
+      return 1;
+    }) as typeof window.setInterval);
+    try {
+      renderAt("/devices/1");
+      const page = await screen.findByTestId("device-detail-mobile");
+      fireEvent.click(
+        await within(page).findByTestId("device-upgrade-action-1"),
+      );
+      await waitFor(() => expect(polls).toHaveLength(1));
+
+      version = "0.6.0";
+      await act(async () => {
+        polls[0]();
+      });
+
+      expect(await within(page).findByText("Upgrade complete")).toBeTruthy();
+      expect(
+        within(page).getByTestId("device-upgrade-versions-1").textContent,
+      ).toBe("0.5.2 → 0.6.0");
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
   });
 
   it("已是最新时没有升级那一行", async () => {

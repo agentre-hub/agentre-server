@@ -98,6 +98,7 @@ export default function SessionComposer({
   composerHandleRef,
   submitHandleRef,
   touch = false,
+  onAppendEdited,
 }: {
   backendType?: string;
   /**
@@ -195,6 +196,8 @@ export default function SessionComposer({
    * 不给 = 桌面档，与以前一致。
    */
   touch?: boolean;
+  /** 最近一次 `appendDraft` 放进去的字被改动过（见包的 `onAppendEdited`）。 */
+  onAppendEdited?: () => void;
 }) {
   const { t } = useTranslation();
   // 发送按钮走输入框自己的 submit：只有它知道富文本里的提及要序列化成什么。
@@ -251,6 +254,7 @@ export default function SessionComposer({
           supportsImageInput
           sendButtonTestId="session-detail-send"
           inputMode={touch ? "touch" : undefined}
+          onAppendEdited={onAppendEdited}
           enterKeyHint={touch ? "enter" : undefined}
           slashCommands={slashCommands}
           mentionSources={mentionSources}

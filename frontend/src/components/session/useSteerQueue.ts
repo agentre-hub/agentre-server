@@ -186,23 +186,20 @@ export function consumedSteerRefs(event: unknown): ConsumedSteerRef[] {
   });
 }
 
-type UpdateEmitter = {
-  getJSON: () => unknown;
-  on: (event: "update", fn: () => void) => unknown;
-  off: (event: "update", fn: () => void) => unknown;
-};
-
 /**
  * 手机上轮末没送到的插话：不挂「恢复为草稿 / 丢弃」条，而是按「恢复为草稿」同一条规矩
  * （appendDraft：空行分隔、接在后面不覆盖）自动放回输入框，由一行说明告知（规格
  * 2026-11-05 对话页「排队与放回」）。
  *
- * - 每一批 `dropped`（按数组身份）只放回一次；换会话时队列整份重置，dropped 随之清空，
+ * - 每一批 `dropped`（按数组身份）放回一次；换会话时队列整份重置，dropped 随之清空，
  *   不会把上一条的字放进新会话的输入框。
- * - 放回后盯着编辑器：文档一旦与刚放回时的快照不同（用户动了输入框），说明就收起，
+ * - 输入框不在树上（只读带、审批停靠）时 dropped 原样留着，等它回来再放；放回之后
+ *   输入框被摘下又装回（那段字随旧的输入框一起没了）时重新放一次 —— 说明还写着
+ *   「已放回」，输入框里就得真有。
+ * - 放回之后用户动了输入框（包里的 `onAppendEdited`，交给输入框接上），说明就收起，
  *   从此没有「清掉」。清掉与收起都是把 dropped 清空，说明由 `dropped` 是否为空推出。
  *
- * 返回 `onClear`：只撤掉这次放回的那一段（编辑器自那次追加后没变才撤得动）。
+ * `notice.onClear` 只撤掉这次放回的那一段（输入框自那次追加后没变才撤得动）。
  */
 export function usePutBackUndelivered({
   enabled,
@@ -210,7 +207,6 @@ export function usePutBackUndelivered({
   dropped,
   clearDropped,
   composerHandleRef,
-  rootRef,
 }: {
   enabled: boolean;
   /** 输入框此刻在树上。不在（只读带、审批停靠）时 dropped 原样留着，等它回来再放回。 */
@@ -218,44 +214,36 @@ export function usePutBackUndelivered({
   dropped: QueuedItem[];
   clearDropped: () => void;
   composerHandleRef?: RefObject<ChatComposerHandle | null>;
-  rootRef: RefObject<HTMLElement | null>;
-}): { count: number; onClear: () => void } | null {
+}): {
+  notice: { count: number; onClear: () => void } | null;
+  /** 接到输入框的 `onAppendEdited` 上；桌面（未启用）不接。 */
+  onAppendEdited: (() => void) | undefined;
+} {
   const putBack = useRef<QueuedItem[] | null>(null);
   useEffect(() => {
-    if (!enabled || !composerMounted || dropped.length === 0) return;
+    if (!enabled || !composerMounted) {
+      // 输入框不在：下次装回来的是一只空的，那一批要重新放。
+      putBack.current = null;
+      return;
+    }
+    if (dropped.length === 0) return;
     const handle = composerHandleRef?.current;
     if (!handle || putBack.current === dropped) return;
     putBack.current = dropped;
-    const editor = (
-      rootRef.current?.querySelector<HTMLElement & { editor?: UpdateEmitter }>(
-        "[contenteditable]",
-      ) ?? null
-    )?.editor;
     handle.appendDraft(dropped.map((q) => q.text).join("\n\n"));
-    if (!editor) return;
-    const snapshot = JSON.stringify(editor.getJSON());
-    const onUpdate = () => {
-      if (JSON.stringify(editor.getJSON()) !== snapshot) clearDropped();
-    };
-    editor.on("update", onUpdate);
-    return () => {
-      editor.off("update", onUpdate);
-    };
-  }, [
-    enabled,
-    composerMounted,
-    dropped,
-    clearDropped,
-    composerHandleRef,
-    rootRef,
-  ]);
+  }, [enabled, composerMounted, dropped, composerHandleRef]);
 
-  if (!enabled || !composerMounted || dropped.length === 0) return null;
+  const shown = enabled && composerMounted && dropped.length > 0;
   return {
-    count: dropped.length,
-    onClear: () => {
-      composerHandleRef?.current?.removeLastAppend();
-      clearDropped();
-    },
+    notice: shown
+      ? {
+          count: dropped.length,
+          onClear: () => {
+            composerHandleRef?.current?.removeLastAppend();
+            clearDropped();
+          },
+        }
+      : null,
+    onAppendEdited: enabled ? clearDropped : undefined,
   };
 }

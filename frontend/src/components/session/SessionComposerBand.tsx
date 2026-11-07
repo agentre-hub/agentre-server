@@ -1,4 +1,4 @@
-import { type ReactNode, type RefObject, useRef } from "react";
+import { type ReactNode, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { CircleAlert, Lock, Square } from "lucide-react";
@@ -192,7 +192,6 @@ export default function SessionComposerBand({
   const composerModule = useSessionComposerModule();
   // 手机：输入框走触屏档，只读条带「查看设备」的出口（规格 2026-11-05 决策 8 / 9）。
   const isMobile = useIsMobile();
-  const bandRef = useRef<HTMLDivElement>(null);
 
   const composeReadonly = isComposeReadonly(status);
   // 输入框此刻真在树上（只读带 / 审批停靠 / 模块未载入都不算）：放回要等它。
@@ -200,13 +199,12 @@ export default function SessionComposerBand({
     !composeReadonly &&
     !(dockedPermission && decisionPorts) &&
     !!composerModule;
-  const undeliveredNotice = usePutBackUndelivered({
+  const putBack = usePutBackUndelivered({
     enabled: isMobile,
     composerMounted,
     dropped: droppedQueue,
     clearDropped: onDiscardDropped,
     composerHandleRef,
-    rootRef: bandRef,
   });
 
   /** 只读条上那一句短的：说「等谁」，不复述横幅里的后果。 */
@@ -257,7 +255,6 @@ export default function SessionComposerBand({
          不画分隔线、不自涂底色（规格 2026-10-15「无边框改版」）：输入带与转录同在
          一张内容页上，「内容被截断了」由渐隐独自说；渐隐因此从内容页的底色淡出。 */
     <div
-      ref={bandRef}
       data-testid="session-composer-band"
       data-scrolled={atBottom ? "false" : "true"}
       className="relative shrink-0 px-5 pt-2 pb-3"
@@ -349,6 +346,7 @@ export default function SessionComposerBand({
             modelControl={modelControl}
             reasoningEffortControl={reasoningEffortControl}
             touch={isMobile}
+            onAppendEdited={putBack.onAppendEdited}
             /*
               排进这一轮的那几条摆在输入框**上方**、卡片里（与桌面端同位同样式）。
               此前这里是一句解释文案「已排进当前这一轮……」：连发三条也还是那一句，
@@ -365,7 +363,7 @@ export default function SessionComposerBand({
                 onRestoreDropped={onRestoreDropped}
                 onDiscardDropped={onDiscardDropped}
                 inputMode={isMobile ? "touch" : undefined}
-                undeliveredNotice={undeliveredNotice}
+                undeliveredNotice={putBack.notice}
               />
             }
           />

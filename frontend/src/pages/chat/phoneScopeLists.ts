@@ -22,6 +22,9 @@ import type { PhoneScope } from "@/pages/chat/phoneScope";
  * 控制台不存业务数据、也没有「每个项目 / Agent / 机器有几条」的端点：每项的数来自
  * **已载入的行**（一次时间轴取数的结果），「有事等你」是这些行里有没有等你输入的。
  * 数的口径因此是「已载入的」——与首页胶囊上的数同源，不另开请求。
+ *
+ * 各 build 函数收 `null` 表示「数不出来」（还没在「全部」范围下载入过）：每项不摆数，
+ * 而不是把手上那一范围之外的项都写成 0。
  */
 export interface ScopeTally {
   /** 键 = 同步标识 / 设备标识（字符串）。 */
@@ -63,7 +66,7 @@ export function tallyRows(rows: readonly MirrorIndexRow[]): ScopeTally {
 /** 项目树：父项的数含子项（选父项看到的就是整棵子树的对话）。 */
 export function buildScopeProjects(
   projects: readonly ProjectNode[],
-  tally: ScopeTally,
+  tally: ScopeTally | null,
 ): ScopeListProjectNode[] {
   const byParent = new Map<string, ProjectNode[]>();
   const known = new Set(projects.map((p) => p.syncId));
@@ -79,7 +82,7 @@ export function buildScopeProjects(
     node: ProjectNode,
     seen: ReadonlySet<string>,
   ): ScopeListProjectNode => {
-    const own = tally.project.get(node.syncId);
+    const own = tally?.project.get(node.syncId);
     const children = seen.has(node.syncId)
       ? []
       : (byParent.get(node.syncId) ?? [])
@@ -90,9 +93,10 @@ export function buildScopeProjects(
       name: node.name,
       color: node.color || undefined,
       icon: node.icon || undefined,
-      count:
-        (own?.count ?? 0) +
-        children.reduce((sum, child) => sum + child.count, 0),
+      count: tally
+        ? (own?.count ?? 0) +
+          children.reduce((sum, child) => sum + (child.count ?? 0), 0)
+        : undefined,
       needsYou: !!own?.needsYou || children.some((child) => child.needsYou),
       children: children.length > 0 ? children : undefined,
     };
@@ -117,7 +121,7 @@ export interface ScopeAgentSource {
 /** Agent 按部门分组（首次出现的次序）；没有部门的排在最后，组名由宿主给。 */
 export function buildScopeAgentGroups(
   agents: readonly ScopeAgentSource[],
-  tally: ScopeTally,
+  tally: ScopeTally | null,
   noDepartment: string,
 ): ScopeAgentGroup[] {
   const groups = new Map<string, ScopeAgentItem[]>();
@@ -125,7 +129,7 @@ export function buildScopeAgentGroups(
     const dept = agent.department_name?.trim() ?? "";
     const targets = agent.exec_targets ?? [];
     const target = targets.find((t) => t.current) ?? targets[0];
-    const own = tally.agent.get(agent.sync_id);
+    const own = tally?.agent.get(agent.sync_id);
     groups.set(dept, [
       ...(groups.get(dept) ?? []),
       {
@@ -135,7 +139,7 @@ export function buildScopeAgentGroups(
         icon: agent.avatar_icon,
         online: agent.has_available_target,
         machineName: target?.device_name,
-        count: own?.count ?? 0,
+        count: tally ? (own?.count ?? 0) : undefined,
         needsYou: own?.needsYou,
       },
     ]);
@@ -150,15 +154,15 @@ export function buildScopeAgentGroups(
 
 export function buildScopeMachines(
   devices: readonly DeviceItem[],
-  tally: ScopeTally,
+  tally: ScopeTally | null,
 ): ScopeMachineItem[] {
   return devices.filter(runsSessions).map((device) => {
-    const own = tally.machine.get(String(device.id));
+    const own = tally?.machine.get(String(device.id));
     return {
       id: String(device.id),
       name: deviceDisplayName(device),
       online: device.online,
-      count: own?.count ?? 0,
+      count: tally ? (own?.count ?? 0) : undefined,
       needsYou: own?.needsYou,
     };
   });

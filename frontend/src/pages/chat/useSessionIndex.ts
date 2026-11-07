@@ -397,8 +397,9 @@ export function useSessionIndex({
         );
         return { ...page, groups };
       });
+      // 账号总数：只有不带搜索、筛选与 scope 的那一页本身就是它，其余另问一次。
       const accountTotalPromise =
-        !debouncedSearch && filter === "all"
+        !debouncedSearch && filter === "all" && !scope
           ? pagePromise
           : api<IndexResponse>("/v1/agent-sessions?axis=time&per_group=1");
       Promise.all([

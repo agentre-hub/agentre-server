@@ -547,8 +547,6 @@ describe("shared UI package mobile-shell exports", () => {
       "phaseSections",
       "ToolPermissionDock",
       "ShortcutHintsProvider",
-      "fitMetaLine",
-      "BoardCardMenu",
     ]) {
       expect(ui[name], name).toBeDefined();
     }

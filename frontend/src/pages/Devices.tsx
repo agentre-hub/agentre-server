@@ -838,10 +838,6 @@ function MobileDeviceDetail({
   ]
     .filter(Boolean)
     .join(SEP);
-  const showUpgrade =
-    isAgentred &&
-    (versionState.kind === "upgradable" ||
-      versionState.kind === "protocol-mismatch");
   const lastSeen =
     d.last_seen_at > 0 ? formatRelativeTime(d.last_seen_at, locale) : "";
   const detail = state.data;
@@ -874,7 +870,8 @@ function MobileDeviceDetail({
         )}
       </header>
 
-      {showUpgrade && (
+      {/* 有没有这一行、留多久由面板自己定（它握着这次升级的进度）。 */}
+      {isAgentred && (
         <DeviceUpgradePanel
           device={d}
           state={versionState}

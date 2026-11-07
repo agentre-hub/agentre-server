@@ -1181,6 +1181,25 @@ describe("手机首页：范围弹层", () => {
     ).toContain("2");
   });
 
+  it("直接打开一个范围：「全部对话」仍是账号总数，别的项数不出来就不摆数（不写成 0）", async () => {
+    stub();
+    renderChat("/chat?axis=project&project=p-2");
+    await screen.findByText("等你批");
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Switch scope, current:/ }),
+    );
+    const sheet = await screen.findByRole("dialog");
+
+    expect(within(sheet).getByTestId("scope-all").textContent).toContain("3");
+    expect(
+      within(sheet).getByTestId("scope-item-project-p-1").textContent,
+    ).not.toMatch(/\d/);
+    fireEvent.click(within(sheet).getByRole("tab", { name: "Agent" }));
+    expect(
+      within(sheet).getByTestId("scope-item-agent-ag-2").textContent,
+    ).not.toMatch(/\d/);
+  });
+
   it("名单里的 Agent 没带执行目标也不崩：弹层照常列出，没有机器副标题", async () => {
     stubApi(rows, [agentred], {
       agents: [

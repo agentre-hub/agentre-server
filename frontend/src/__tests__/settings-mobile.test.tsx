@@ -5,7 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, useLocation, useNavigationType } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Settings from "@/pages/Settings";
@@ -101,6 +101,10 @@ function Where() {
   return <span data-testid="where">{search}</span>;
 }
 
+function NavType() {
+  return <span data-testid="nav-type">{useNavigationType()}</span>;
+}
+
 function renderSettings(url = "/settings") {
   return render(
     <MemoryRouter initialEntries={[url]}>
@@ -167,6 +171,36 @@ describe("Settings on a phone", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByTestId("where").textContent).toBe("");
     expect(screen.getByRole("link", { name: "Language" })).toBeTruthy();
+  });
+
+  it("going back up a level steps back through history instead of pushing the parent again", async () => {
+    // 浏览器里 react-router 在 history.state.idx 记着位置：这里模拟「从列表点进来的」。
+    window.history.replaceState({ idx: 1 }, "");
+    try {
+      render(
+        <MemoryRouter
+          initialEntries={["/settings", "/settings?section=providers"]}
+          initialIndex={1}
+        >
+          <ThemeProvider>
+            <Settings />
+            <Where />
+            <NavType />
+          </ThemeProvider>
+        </MemoryRouter>,
+      );
+      fireEvent.click((await screen.findAllByText("Anthropic")).at(-1)!);
+      expect(await screen.findByText("claude-sonnet-4")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Back" }));
+
+      expect(screen.getByTestId("where").textContent).toBe(
+        "?section=providers",
+      );
+      expect(screen.getByTestId("nav-type").textContent).toBe("POP");
+    } finally {
+      window.history.replaceState(null, "");
+    }
   });
 
   it("edits a backend on its own page rather than in a dialog", async () => {

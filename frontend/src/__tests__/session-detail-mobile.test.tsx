@@ -934,6 +934,50 @@ describe("移动端会话详情：轮末插话放回", () => {
     await waitFor(() => expect(paragraphs()).toEqual(["先别动数据库"]));
   });
 
+  it("已放回之后审批停靠把输入框占走、又还回来：那段字重新放回，改动后说明照样收起", async () => {
+    mockMobileViewport();
+    stubSteer();
+    renderPage();
+    await steerAndEndTurn("先别动数据库");
+    await screen.findByText(NOTICE);
+    await waitFor(() => expect(paragraphs()).toEqual(["先别动数据库"]));
+
+    // 审批停靠占住输入框那一位：输入框整个卸下，放回去的那段字跟着没了。
+    await waitFor(() => expect(pageOpts.onEvent).toBeTruthy());
+    act(() =>
+      pageOpts.onEvent?.({
+        conversationId: CID,
+        seq: 1,
+        event: {
+          kind: "tool_permission_request",
+          requestId: "tp-1",
+          toolName: "Bash",
+          input: { command: "ls" },
+        },
+      } as never),
+    );
+    await screen.findByTestId("tool-permission-dock");
+    act(() =>
+      pageOpts.onEvent?.({
+        conversationId: CID,
+        seq: 2,
+        event: {
+          kind: "tool_permission_resolved",
+          requestId: "tp-1",
+          allowed: true,
+        },
+      } as never),
+    );
+
+    // 说明还挂着「已放回」，输入框里就必须真有那段字。
+    await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
+    expect(await screen.findByText(NOTICE)).toBeTruthy();
+    await waitFor(() => expect(paragraphs()).toEqual(["先别动数据库"]));
+
+    act(() => editorEl().editor?.commands.setContent("<p>先别动数据库啊</p>"));
+    await waitFor(() => expect(screen.queryByText(NOTICE)).toBeNull());
+  });
+
   it("输入框被停靠占着时换了会话：那几条不会放进另一条会话的输入框", async () => {
     mockMobileViewport();
     stubSteer();

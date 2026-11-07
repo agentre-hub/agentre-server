@@ -22,5 +22,5 @@ export {
   MobileDrawer,
   MobileDrawerProvider,
   MobileNavButton,
-  isTopLevelPath,
+  useMobileBack,
 } from "./MobileNav";

@@ -350,6 +350,8 @@ export function DeviceUpgradePanel({
    * 手机详情页顶上的「一行动作」（规格 2026-11-05「设备 · 详情」）：可以一键升级时
    * 只摆「有新版本 · 升级」一行，进行中的状态在它下面；人在手机上，到那台机器上去
    * 执行的命令卡不摆。一键够不着（协议不匹配）时命令是唯一出口，仍是整张面板。
+   * 没有可升级的也没在升级时整块不画；点过升级之后留到这次有结论为止 —— 版本翻新的
+   * 那一刻状态就成了「已是最新」，「升级完成」那一行不能跟着消失。
    * 省略即桌面展开区那一张，不变。
    */
   compact?: boolean;
@@ -357,6 +359,14 @@ export function DeviceUpgradePanel({
   const { t } = useTranslation();
   const upgrade = useDeviceUpgrade(device.id, device.version, onDevices);
   const { phase } = upgrade;
+  if (
+    compact &&
+    phase.kind === "idle" &&
+    state.kind !== "upgradable" &&
+    state.kind !== "protocol-mismatch"
+  ) {
+    return null;
+  }
   const blocked = state.kind === "protocol-mismatch";
   const oneRow = compact && !blocked;
   const action = actionLabel(state, phase, t);
