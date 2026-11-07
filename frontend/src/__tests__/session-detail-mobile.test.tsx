@@ -805,6 +805,7 @@ describe("移动端会话详情：轮末插话放回", () => {
         return { queuedId: "q-1", cancellable: true };
       if (method === rpcMethods.runtimeDrainPending) return { steers: [] };
       if (method === rpcMethods.runtimeSubmitToolPermission) return {};
+      if (method === rpcMethods.runtimeAbort) return {};
       throw new Error("unexpected: " + method);
     });
   }
@@ -1033,6 +1034,67 @@ describe("移动端会话详情：轮末插话放回", () => {
     await waitFor(() => expect(screen.queryByText(NOTICE)).toBeNull());
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
     expect(paragraphs()).toEqual(["先别动数据库啊"]);
+  });
+
+  // dev 实机（390px，63ed07c6）复现的那一串：插话排着时点停止。agentred 报「取走了」
+  // 只走**预览帧**（fanout 一律 Preview: true；持久那一份是转录里的一行 user_message，
+  // 不是 steer_consumed），随后是这一轮的终态。那句话已经作为一行用户消息进了转录，
+  // 就不能再放回输入框——同一句话两边都出现，用户会把它再发一遍。
+  it("插话被取走后点停止：已进转录的那句不再放回输入框，也没有「已放回」说明", async () => {
+    mockMobileViewport();
+    stubSteer();
+    renderPage();
+    const text = "补充：数完之后说一句完成";
+    await waitFor(() => expect(editorEl()?.editor).toBeTruthy());
+    act(() => editorEl().editor?.commands.setContent(`<p>${text}</p>`));
+    fireEvent.click(await screen.findByTestId("session-detail-send"));
+    await screen.findByText("Queued · 1");
+
+    fireEvent.click(
+      within(screen.getByTestId("session-composer-band")).getByRole("button", {
+        name: "Stop",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        fakeClient.request.mock.calls.some(
+          (c) => c[0] === rpcMethods.runtimeAbort,
+        ),
+      ).toBe(true),
+    );
+
+    // daemon 的 Abort 先把信箱清走（报成「取走了」，只有预览帧），转录里落一行用户
+    // 消息，然后才是被叫停的这一轮的终态。
+    act(() => {
+      pageOpts.onPreviewEvent?.(
+        {
+          conversationId: CID,
+          event: {
+            kind: "steer_consumed",
+            steers: [{ queuedId: "q-1", text }],
+          },
+        } as never,
+        0,
+      );
+      pageOpts.onEvent?.(
+        {
+          conversationId: CID,
+          event: { kind: "user_message", text },
+          seq: 1,
+        } as never,
+        0,
+      );
+    });
+    act(() =>
+      pageOpts.onRunResultDone?.({
+        conversationId: CID,
+        stopErrMsg: "interrupted",
+      } as never),
+    );
+
+    await waitFor(() => expect(screen.queryByText(/^Queued · /)).toBeNull());
+    expect(screen.queryByText(NOTICE)).toBeNull();
+    expect(paragraphs().join("")).toBe("");
   });
 });
 
