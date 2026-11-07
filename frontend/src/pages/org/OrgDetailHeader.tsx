@@ -231,7 +231,14 @@ export interface OrgDetailHeaderProps {
   compactTitle?: string;
 }
 
-function OverflowMenu({ items }: { items: RowMenuItem[] }) {
+function OverflowMenu({
+  items,
+  touch = false,
+}: {
+  items: RowMenuItem[];
+  /** 手机页头：命中区 44px。 */
+  touch?: boolean;
+}) {
   const { t } = useTranslation();
   if (items.length === 0) return null;
   return (
@@ -240,6 +247,7 @@ function OverflowMenu({ items }: { items: RowMenuItem[] }) {
         <Button
           variant="ghost"
           size="icon-sm"
+          className={touch ? "size-11" : undefined}
           aria-label={t("org.detail.header.more")}
           data-testid="org-detail-menu-trigger"
         >
@@ -267,7 +275,8 @@ export function OrgDetailHeader(props: OrgDetailHeaderProps) {
     return (
       <header
         data-testid="org-detail-header"
-        className="flex min-h-14 shrink-0 items-center gap-1 px-2 py-1.5"
+        // 这一页的页头由它自己担（壳走 ownHeader），顶部安全区也由它让。
+        className="flex min-h-14 shrink-0 items-center gap-1 px-2 py-1.5 pt-[calc(0.375rem_+_env(safe-area-inset-top,0px))]"
       >
         {props.onBack && (
           <Button
@@ -288,7 +297,7 @@ export function OrgDetailHeader(props: OrgDetailHeaderProps) {
             <SaveStatus state={props.save.state} onRetry={props.save.retry} />
           </div>
         </div>
-        <OverflowMenu items={props.menuItems} />
+        <OverflowMenu items={props.menuItems} touch />
       </header>
     );
   }

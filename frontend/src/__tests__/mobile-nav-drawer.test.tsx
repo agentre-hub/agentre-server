@@ -20,7 +20,9 @@ import AppShell from "@/components/AppShell";
 import { api } from "@/lib/api";
 import i18n from "@/i18n";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
-import { MOBILE_TAB_BAR_HEIGHT } from "@/lib/mobileLayout";
+
+/** 已经移除的底部 TabBar 的高度（74px + 安全区）：任何导航都不该再长这个高。 */
+const MOBILE_TAB_BAR_HEIGHT = "calc(74px + env(safe-area-inset-bottom, 0px))";
 
 /** jsdom 会改写 `calc(... env(...))`，把常量同样喂给探针元素再读回来比较。 */
 function jsdomStyleOf(prop: "height", value: string): string {

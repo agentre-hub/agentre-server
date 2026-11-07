@@ -22,5 +22,6 @@
     "passkey_counter_rollback": "这把通行密钥的安全计数异常，已拒绝本次登录。请改用 GitHub 登录并删掉它。"
   },
   "consentHint": "先勾选同意",
-  "deviceContinue": "登录后继续授权这台设备"
+  "deviceContinue": "登录后继续授权这台设备",
+  "tagline": "在手机上看对话、批准操作、管理设备。"
 }

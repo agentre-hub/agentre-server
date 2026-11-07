@@ -232,7 +232,15 @@ describe("手机设备详情页", () => {
     // 行菜单（改名 / 解除授权）在页头。
     expect(within(header).getByTestId("device-menu-1-trigger")).toBeTruthy();
 
-    expect(await within(page).findByTestId("device-upgrade-1")).toBeTruthy();
+    // 「可以升级时顶部一行动作」：一行（标题 + 动作），不是展开区那张带说明与命令卡的面板。
+    const upgrade = await within(page).findByTestId("device-upgrade-1");
+    expect(within(upgrade).getByTestId("device-upgrade-action-1")).toBeTruthy();
+    expect(
+      within(upgrade).queryByTestId("device-upgrade-command-1"),
+    ).toBeNull();
+    expect(
+      within(upgrade).queryByText(/restarts agentred|重启 agentred/),
+    ).toBeNull();
 
     const sessions = within(page).getByRole("region", {
       name: "Conversations",
@@ -353,9 +361,12 @@ describe("手机添加设备：整屏三步", () => {
     expect(kind.getAttribute("aria-pressed")).toBe("true");
     expect(kind.className).toContain("rounded-full");
     expect(within(guide).getByRole("button", { name: "macOS" })).toBeTruthy();
-    expect(
-      within(guide).getByTestId("add-device-command-install"),
-    ).toBeTruthy();
+    // 每屏一张命令卡：装与登录并在同一张里（装在上、登录在下），一次复制。
+    expect(within(guide).getAllByRole("group")).toHaveLength(1);
+    const command =
+      within(guide).getByTestId("add-device-command-install").textContent ?? "";
+    expect(command.split("\n")).toHaveLength(2);
+    expect(command.split("\n")[1]).toContain("agentred login");
 
     const footer = within(guide).getByTestId("add-device-footer");
     expect(footer.className).toMatch(/(^|\s)sticky(\s|$)/);

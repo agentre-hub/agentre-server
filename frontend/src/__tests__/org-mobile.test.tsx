@@ -252,12 +252,17 @@ describe("组织面移动形态：详情列可滚、失败跟随当前屏、工�
     expect(
       within(toolbar).queryByRole("button", { name: "New agent" }),
     ).toBeNull();
-    fireEvent.pointerDown(
-      within(toolbar).getByRole("button", {
+    // 顶层页的页头是「☰ · 标题 · 页面动作（＋，≥44px）」：＋ 在页头，不在工具条。
+    expect(
+      within(toolbar).queryByRole("button", {
         name: "Add agent or department",
       }),
-      { button: 0, ctrlKey: false },
-    );
+    ).toBeNull();
+    const add = within(screen.getByTestId("app-topbar")).getByRole("button", {
+      name: "Add agent or department",
+    });
+    expect(add.className).toContain("size-11");
+    fireEvent.pointerDown(add, { button: 0, ctrlKey: false });
     fireEvent.click(await screen.findByRole("menuitem", { name: "New agent" }));
 
     const dialog = await screen.findByRole("dialog");
@@ -269,9 +274,8 @@ describe("组织面移动形态：详情列可滚、失败跟随当前屏、工�
     renderOrgAt("/org");
     await screen.findByText("Alice");
 
-    const toolbar = screen.getByTestId("org-index-toolbar");
     fireEvent.pointerDown(
-      within(toolbar).getByRole("button", {
+      within(screen.getByTestId("app-topbar")).getByRole("button", {
         name: "Add agent or department",
       }),
       { button: 0, ctrlKey: false },
@@ -475,6 +479,13 @@ describe("Agent 详情手机页头与分区顺序", () => {
       within(header).getByRole("button", { name: "More actions" }),
     ).toBeTruthy();
     expect(within(header).queryByRole("button", { name: "Close" })).toBeNull();
+    // 这一页的页头就是它：壳的「☰/‹ · 组织」顶栏不再叠在上面，整页只有一颗返回。
+    expect(screen.queryByTestId("app-topbar")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Back" })).toHaveLength(1);
+    // 页头动作的命中区 ≥44px。
+    expect(
+      within(header).getByRole("button", { name: "More actions" }).className,
+    ).toContain("size-11");
 
     const name = within(screen.getByTestId("org-detail-scroll")).getByRole(
       "textbox",

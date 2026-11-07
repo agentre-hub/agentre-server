@@ -998,9 +998,8 @@ describe("窄屏也要成立", () => {
         (await within(page).findByTestId("device-upgrade-action-1"))
           .textContent,
       ).toContain("Upgrade agentred");
-      expect(
-        within(page).getByTestId("device-upgrade-command-1").textContent,
-      ).toContain("agentred update");
+      // 手机上是「一行动作」：到那台机器上去执行的命令卡不在这一行里。
+      expect(within(page).queryByTestId("device-upgrade-command-1")).toBeNull();
     } finally {
       window.matchMedia = originalMatchMedia;
     }

@@ -165,20 +165,21 @@ describe("Account page: three cards render real data", () => {
     expect(screen.getByText("Signed-in browsers")).toBeTruthy();
     expect(screen.getByText("203.0.113.24")).toBeTruthy();
     expect(screen.getByText("198.51.100.7")).toBeTruthy();
-    expect(screen.getByText("This device")).toBeTruthy();
+    expect(screen.getByText("This session")).toBeTruthy();
 
     expect(mockedApi).toHaveBeenCalledWith("/v1/passkeys");
     expect(mockedApi).toHaveBeenCalledWith("/v1/auth/sessions");
   });
 
-  it("names each session device · browser and keeps the raw UA out of the collapsed row", async () => {
+  it("does not parse the UA into a friendly label — the verbatim string is always in the DOM", async () => {
     markWebauthnSupported();
     mockDefaultApi();
     renderAccount();
-    expect(await screen.findByText("Mac · Chrome")).toBeTruthy();
-    expect(screen.getByText("iPhone · Safari")).toBeTruthy();
-    expect(screen.queryByText(UA_DESKTOP)).toBeNull();
-    expect(screen.queryByText(UA_MOBILE)).toBeNull();
+    // 完整原文必须找得到（截断只是 CSS），不是「Chrome on macOS」这类合成文案。
+    expect(await screen.findByText(UA_DESKTOP)).toBeTruthy();
+    expect(screen.getByText(UA_MOBILE)).toBeTruthy();
+    expect(screen.queryByText(/Chrome on /i)).toBeNull();
+    expect(screen.queryByText(/on macOS/i)).toBeNull();
   });
 });
 
@@ -404,7 +405,7 @@ describe("Account page: passkey deletion and sign-out-elsewhere are confirmed tw
       );
     });
     await waitFor(() => {
-      expect(screen.queryByText("iPhone · Safari")).toBeNull();
+      expect(screen.queryByText(UA_MOBILE)).toBeNull();
     });
     expect(await screen.findByText("This is your only session.")).toBeTruthy();
   });
@@ -426,59 +427,63 @@ describe("Account page: passkey deletion and sign-out-elsewhere are confirmed tw
   });
 });
 
-describe("Account page: a session row expands on click to the raw UA, per row", () => {
-  it("shows the parsed label collapsed, then expands only the clicked row to the verbatim UA", async () => {
+describe("Account page: a session row expands and collapses on click, per row", () => {
+  it("expands the clicked row to the full UA and leaves the other row collapsed, then collapses again on a second click", async () => {
     markWebauthnSupported();
     mockDefaultApi();
     renderAccount();
 
-    const desktopButton = (await screen.findByText("Mac · Chrome")).closest(
+    const desktopButton = (await screen.findByText(UA_DESKTOP)).closest(
       "button",
     ) as HTMLElement;
     const mobileButton = screen
-      .getByText("iPhone · Safari")
+      .getByText(UA_MOBILE)
       .closest("button") as HTMLElement;
 
     expect(desktopButton.getAttribute("aria-expanded")).toBe("false");
     expect(mobileButton.getAttribute("aria-expanded")).toBe("false");
-    expect(within(desktopButton).queryByText(UA_DESKTOP)).toBeNull();
+    const desktopSpanBefore = within(desktopButton).getByText(UA_DESKTOP);
+    expect(desktopSpanBefore.className).toContain("truncate");
 
     fireEvent.click(desktopButton);
 
     expect(desktopButton.getAttribute("aria-expanded")).toBe("true");
     // 另一行不受影响：展开态只属于被点的那一行。
     expect(mobileButton.getAttribute("aria-expanded")).toBe("false");
-    expect(within(desktopButton).getByText(UA_DESKTOP).className).toContain(
-      "break-all",
-    );
+    const desktopSpanAfter = within(desktopButton).getByText(UA_DESKTOP);
+    expect(desktopSpanAfter.className).toContain("break-all");
+    expect(desktopSpanAfter.className).not.toContain("truncate");
 
     fireEvent.click(desktopButton);
     expect(desktopButton.getAttribute("aria-expanded")).toBe("false");
-    expect(within(desktopButton).queryByText(UA_DESKTOP)).toBeNull();
+    expect(within(desktopButton).getByText(UA_DESKTOP).className).toContain(
+      "truncate",
+    );
   });
 
-  it("centers the icon on the two-line block when collapsed, and pins it to the top when expanded", async () => {
+  it("centers the icon on the two-line block when collapsed, and pins it to the top when the UA wraps", async () => {
     markWebauthnSupported();
     mockDefaultApi();
     renderAccount();
 
-    const desktopButton = (await screen.findByText("Mac · Chrome")).closest(
+    const desktopButton = (await screen.findByText(UA_DESKTOP)).closest(
       "button",
     ) as HTMLElement;
-    const label = within(desktopButton).getByText("Mac · Chrome");
+    const ua = within(desktopButton).getByText(UA_DESKTOP);
     const iconClass = () =>
       desktopButton.querySelector("svg")?.getAttribute("class") ?? "";
 
-    // 折叠态与通行密钥行同一套：图标相对两行块垂直居中，设备名是标题级尺寸，
-    // 元信息才是 11px。
+    // 折叠态与通行密钥行同一套：图标相对两行块垂直居中，UA 是标题级尺寸，
+    // 元信息才是 11px。两行都走 text-xs 的话看起来像同一句描述印了两遍，
+    // items-start 又把 16px 图标钉在被 StatusMark 撑高的第一行顶部。
     expect(desktopButton.className).toContain("items-center");
     expect(desktopButton.className).not.toContain("items-start");
     expect(iconClass()).not.toContain("mt-0.5");
-    expect(label.className).toContain("text-aux");
+    expect(ua.className).toContain("text-aux");
 
     fireEvent.click(desktopButton);
 
-    // 展开后原始 UA 折成多行，图标改钉在顶部，避免悬在折行块的垂直中线。
+    // 展开后 UA 折成多行，图标改钉在顶部，避免悬在折行块的垂直中线。
     expect(desktopButton.className).toContain("items-start");
     expect(iconClass()).toContain("mt-0.5");
   });
@@ -878,8 +883,56 @@ describe("Account page: no structural lines — sections are separated by space,
   });
 });
 
-describe("Account page: sessions read as device · browser with relative times", () => {
+// 决策 13 只落在手机宽度（规格 Hard invariants：桌面不变）：桌面那一侧仍是原样的
+// UA 与完整时间，由上面那几组守。
+describe("Account page (phone): sessions read as device · browser with relative times", () => {
   const HOUR = 60 * 60 * 1000;
+  const originalMatchMedia = window.matchMedia;
+
+  beforeEach(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("max-width: 767px"),
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    mockedApi.mockReset();
+  });
+
+  afterEach(() => {
+    window.matchMedia = originalMatchMedia;
+    vi.restoreAllMocks();
+  });
+
+  it("names each session device · browser, marks the current one 「这台」, and keeps the raw UA out of the collapsed row", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    expect(await screen.findByText("Mac · Chrome")).toBeTruthy();
+    expect(screen.getByText("iPhone · Safari")).toBeTruthy();
+    expect(screen.getByText("This device")).toBeTruthy();
+    expect(screen.queryByText(UA_DESKTOP)).toBeNull();
+    expect(screen.queryByText(UA_MOBILE)).toBeNull();
+  });
+
+  it("expands only the clicked row to the verbatim UA", async () => {
+    markWebauthnSupported();
+    mockDefaultApi();
+    renderAccount();
+
+    const row = (await screen.findByText("Mac · Chrome")).closest(
+      "button",
+    ) as HTMLElement;
+    fireEvent.click(row);
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    expect(within(row).getByText(UA_DESKTOP).className).toContain("break-all");
+    expect(screen.queryByText(UA_MOBILE)).toBeNull();
+  });
 
   it("falls back to the truncated raw UA when the parser cannot name the session", async () => {
     markWebauthnSupported();

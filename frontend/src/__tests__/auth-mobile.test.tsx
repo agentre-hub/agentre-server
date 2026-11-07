@@ -83,11 +83,10 @@ afterEach(() => {
   });
 });
 
-describe.each([
-  ["desktop", false],
-  ["phone", true],
-])("登录 · 未勾同意（%s）", (_name, mobile) => {
-  beforeEach(() => setMobile(mobile));
+// 决策 14 只改手机：桌面宽度的交互不变（Hard invariants），按钮仍在勾选前禁用，
+// 那一侧由 login.test.tsx 守。
+describe("登录 · 未勾同意（手机）", () => {
+  beforeEach(() => setMobile(true));
 
   it("按钮始终可点；未勾选点 GitHub 不发起登录，勾选框高亮并提示先勾选同意", () => {
     const assign = renderLogin();
@@ -136,6 +135,15 @@ describe("登录 · 手机整屏", () => {
     expect(document.querySelector(".shadow-overlay")).toBeNull();
   });
 
+  it("品牌下面是标题与一句标语", () => {
+    renderLogin();
+    expect(
+      screen.getByText(
+        "Follow conversations, approve actions and manage devices from your phone.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("带设备码：眉题「设备授权 · 码」+ 一句正文，没有码卡", () => {
     renderLogin("?user_code=A4F-7Q2");
     expect(screen.getByText("Device authorization · A4F-7Q2")).toBeTruthy();
@@ -144,6 +152,12 @@ describe("登录 · 手机整屏", () => {
     ).toBeTruthy();
     expect(
       screen.queryByText("Continue to device authorization after signing in"),
+    ).toBeNull();
+    // 带码时那一句正文就是这一屏的说明，标语让位。
+    expect(
+      screen.queryByText(
+        "Follow conversations, approve actions and manage devices from your phone.",
+      ),
     ).toBeNull();
   });
 });
@@ -154,6 +168,17 @@ describe("登录 · 桌面不变", () => {
     renderLogin();
     expect(screen.getByRole("contentinfo")).toBeTruthy();
     expect(screen.queryByTestId("auth-pinned")).toBeNull();
+  });
+
+  it("没勾同意前两颗登录按钮仍是禁用的（决策 14 只落在手机）", () => {
+    renderLogin();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: /Sign in with GitHub/i,
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 });
 

@@ -375,7 +375,7 @@ test("登录后经用户菜单打开 /account，看见当前登录会话并能�
 
   await openAccountFromUserMenu(page);
   await expect(page.getByTestId("account-page")).toBeVisible();
-  await expect(page.getByText(/^(这台|This device)$/)).toBeVisible();
+  await expect(page.getByText(/当前会话|This session/)).toBeVisible();
   // 这一刻名下只有当前这一个会话：确认「当前会话」标在了对的那一行，且清单里
   // 没有第二行。
   await expect(

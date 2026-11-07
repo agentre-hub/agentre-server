@@ -73,6 +73,7 @@ vi.mock("@/components/session/SessionDetailView", () => ({
     conversationId: string;
     form?: string;
     backTo?: string;
+    onDelete?: () => void;
   }) => (
     <div
       data-testid="mobile-session-detail"
@@ -80,7 +81,13 @@ vi.mock("@/components/session/SessionDetailView", () => ({
       data-session-id={props.conversationId}
       data-form={props.form ?? "page"}
       data-back-to={props.backTo ?? ""}
-    />
+    >
+      {props.onDelete ? (
+        <button type="button" onClick={props.onDelete}>
+          stub delete
+        </button>
+      ) : null}
+    </div>
   ),
 }));
 
@@ -635,6 +642,36 @@ describe("移动端对话页：会话地址", () => {
     expect(detail.getAttribute("data-back-to")).toBe("/chat?axis=agent");
     // 单列：索引此刻不在屏上。
     expect(screen.queryByTestId("chat-mobile-header")).toBeNull();
+  });
+
+  it("对话页 ⋯ 里的删除走与列表同一个确认层，删掉后回到列表", async () => {
+    stubApi([waitingMirrored]);
+    const listApi = mockedApi.getMockImplementation()!;
+    mockedApi.mockImplementation(async (path, init) => {
+      if (path === "/v1/saved-sessions/delete") return {};
+      return listApi(path, init);
+    });
+    renderChat("/chat?axis=agent");
+
+    fireEvent.click(await screen.findByRole("link", { name: /等你批/ }));
+    const detail = await screen.findByTestId("mobile-session-detail");
+    fireEvent.click(
+      within(detail).getByRole("button", { name: "stub delete" }),
+    );
+
+    fireEvent.click(await screen.findByTestId("delete-session-confirm"));
+
+    await waitFor(() =>
+      expect(mockedApi).toHaveBeenCalledWith(
+        "/v1/saved-sessions/delete",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-location").textContent).toMatch(
+        /^\/chat(\?|$)/,
+      ),
+    );
   });
 
   it("未保存的会话从外部链接直接打开：返回键回到 /chat，不带 device", async () => {

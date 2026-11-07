@@ -879,6 +879,7 @@ function MobileDeviceDetail({
           device={d}
           state={versionState}
           onDevices={onDevices}
+          compact
         />
       )}
 

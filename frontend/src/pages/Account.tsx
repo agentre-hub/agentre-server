@@ -591,8 +591,11 @@ export default function Account() {
                     const isExpanded = expandedIndex === i;
                     return (
                       <li key={i}>
-                        {/* 整行可点展开。折叠态只给「设备 · 浏览器」与相对的最后活跃时间；
-                            原始 UA 与完整时间收进展开的详情里（决策 13）。 */}
+                        {/* 整行可点展开，展开态只属于这一行自己。
+                            桌面：UA 原样、等宽，默认截断（决策 7）。
+                            手机：折叠态只给「设备 · 浏览器」与相对的最后活跃时间，原始
+                            UA 与完整时间收进展开的详情里（规格 2026-11-05 决策 13，只落在
+                            手机宽度——桌面不变）。 */}
                         <button
                           type="button"
                           aria-expanded={isExpanded}
@@ -612,51 +615,67 @@ export default function Account() {
                               isExpanded && "mt-0.5",
                             )}
                           />
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="min-w-0 flex-1 truncate text-aux text-foreground">
-                                {sessionLabel(s)}
-                              </span>
-                              {s.current && (
-                                <StatusMark
-                                  tone="running"
-                                  label={t("account.signins.current")}
-                                />
-                              )}
-                            </div>
-                            {isExpanded ? (
-                              <div className="mt-1 text-2xs text-muted-foreground">
-                                <div className="break-all font-mono">
-                                  {s.user_agent}
-                                </div>
-                                {isMobile ? (
-                                  <div>
-                                    <div className="font-mono">{s.ip}</div>
-                                    {sessionTimes(t, s).map((line) => (
-                                      <div key={line}>{line}</div>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <div className="font-mono">
-                                    {s.ip}
-                                    {sessionTimesLine(t, s)}
-                                  </div>
+                          {isMobile ? (
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="min-w-0 flex-1 truncate text-aux text-foreground">
+                                  {sessionLabel(s)}
+                                </span>
+                                {s.current && (
+                                  <StatusMark
+                                    tone="running"
+                                    label={t("account.signins.currentPhone")}
+                                  />
                                 )}
                               </div>
-                            ) : (
+                              {isExpanded ? (
+                                <div className="mt-1 text-2xs text-muted-foreground">
+                                  <div className="break-all font-mono">
+                                    {s.user_agent}
+                                  </div>
+                                  <div className="font-mono">{s.ip}</div>
+                                  {sessionTimes(t, s).map((line) => (
+                                    <div key={line}>{line}</div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="mt-0.5 truncate text-2xs text-muted-foreground">
+                                  <span className="font-mono">{s.ip}</span>
+                                  {META_SEP}
+                                  <span>
+                                    {relativeTime(
+                                      s.last_active_at,
+                                      sessionsAsOf,
+                                      locale,
+                                    )}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={cn(
+                                    "min-w-0 flex-1 font-mono text-aux text-foreground",
+                                    isExpanded ? "break-all" : "truncate",
+                                  )}
+                                >
+                                  {s.user_agent}
+                                </span>
+                                {s.current && (
+                                  <StatusMark
+                                    tone="running"
+                                    label={t("account.signins.current")}
+                                  />
+                                )}
+                              </div>
                               <div className="mt-0.5 truncate text-2xs text-muted-foreground">
                                 <span className="font-mono">{s.ip}</span>
-                                {META_SEP}
-                                <span>
-                                  {relativeTime(
-                                    s.last_active_at,
-                                    sessionsAsOf,
-                                    locale,
-                                  )}
-                                </span>
+                                {sessionTimesLine(t, s)}
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </button>
                       </li>
                     );

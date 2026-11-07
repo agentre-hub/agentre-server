@@ -41,7 +41,8 @@
   "signins": {
     "title": "Signed-in browsers",
     "subtitle": "Browsers currently signed in to this account.",
-    "current": "This device",
+    "current": "This session",
+    "currentPhone": "This device",
     "signedInAt": "Signed in {{date}}",
     "lastActiveAt": "Last active {{date}}",
     "loadFailedWhat": "Could not load your sessions",

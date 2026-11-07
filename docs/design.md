@@ -756,18 +756,21 @@ The desktop form fills the shell's work area (`AppShell` gets `flush ownHeader` 
   conversations on your devices" is gone — the machine axis answers that question **on this
   page**, and its online group headers carry a 「在这台机器上找」 affordance — and the
   Fresh dot went with the rest of them (see [TopBar](#the-console-shell)).
-- **Mobile** keeps the list → detail flow, never the two-pane layout. The index page owns its
-  top band (`ownHeader`): row 1 is title + account + `AppControls`; row 2 is the same real
-  search at `h-9`. Below that the index scrolls with a `PenLine` FAB (`fixed right-4
-  size-14 rounded-full bg-primary`, `bottom` = `MOBILE_TAB_BAR_CLEARANCE` from `lib/mobileLayout.ts`, i.e. 74px + 16px + safe-area, the same expression the toast host's `mobileOffset` uses) that raises the agent-picker bottom sheet when sessions
-  exist. Picking an agent replaces the whole screen with `DraftSession`.
-  
+- **Mobile** keeps the list → detail flow, never the two-pane layout (spec 2026-11-05
+  "首页（对话列表）"). The index page owns its top band (`ownHeader`): ☰ · scope name ⌄ with a
+  one-line status subtitle · ⌕ · ✎ (new chat — there is no FAB). Under it the filter chips
+  (All / Needs you / Running / Unread, counts only when > 0) and the list grouped by
+  `phaseSections` (Needs you → Running → Today → Earlier) in `SessionRow variant="phone"` rows;
+  the scope title raises the `ScopeList` sheet (project / Agent / machine). Picking an agent in
+  the ✎ sheet replaces the whole screen with `DraftSession`, laid out like the detail page.
+
   Viewing a saved conversation opens `/chat/:conversationId` as a full-screen detail page
   (`AppShell immersive`, no TopBar, safe-area insets in `main`). The new-chat
-  draft also renders immersive when accessed on mobile. Both render a single fixed 56px
-  session header (back · 1-line title · Agent · project · machine + online · time · ⋯); the
-  meta line truncates on mobile instead of hiding parts. Loading / not-found / error states
-  keep a back link through the header.
+  draft also renders immersive when accessed on mobile. The phone session header is one row
+  — back · 1-line title · ⋯ — with a subtitle 「● status · Agent · machine」; there is no stop
+  button in it (stop, approvals and the offline read-only strip live in the bottom dock), and
+  ⋯ opens the 「对话信息」 `DialogShell` (project, runs on, model, last active; copy id,
+  delete). Loading / not-found / error states keep a back link through the header.
 
 ### The detail's three bands
 

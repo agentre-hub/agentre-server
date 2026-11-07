@@ -1331,21 +1331,47 @@ export default function Chat() {
 
   // 移动端单列：地址上开着一条会话时整屏就是它的详情，索引留在后退的那一格里。
   if (isMobile && openConversationId) {
+    /*
+      页头 ⋯ 里的「删除」（规格 2026-11-05：长按菜单的每一项在别处都有看得见的入口，
+      删除的那一处是对话页 ⋯）。与列表行同一个确认层、同一个删除；只给账号里存着的
+      那一行（未保存的会话没有可删的账号副本，列表行上同样不摆）。删掉之后
+      onSessionDeleted 收起详情、回到列表。
+    */
+    const deletableRow =
+      selectedRow && selectedRow.saved !== false ? selectedRow : undefined;
     return (
-      <ResolvedSessionDetail
-        conversationId={openConversationId}
-        deviceParam={deviceParam}
-        seed={detailSeed}
-        form="page"
-        backTo={chatIndexAddress(location.search)}
-        initialTitle={detailTitle}
-        initialUserText={openSeed?.userText}
-        initialAgent={openSeed?.agent}
-        initialModelNote={openSeed?.modelNote}
-        initialEffortNote={openSeed?.effortNote}
-        initialTurnStartedAt={openSeed?.turnStartedAt}
-        onMarkedRead={markRead}
-      />
+      <>
+        <ResolvedSessionDetail
+          conversationId={openConversationId}
+          deviceParam={deviceParam}
+          seed={detailSeed}
+          form="page"
+          backTo={chatIndexAddress(location.search)}
+          initialTitle={detailTitle}
+          initialUserText={openSeed?.userText}
+          initialAgent={openSeed?.agent}
+          initialModelNote={openSeed?.modelNote}
+          initialEffortNote={openSeed?.effortNote}
+          initialTurnStartedAt={openSeed?.turnStartedAt}
+          onMarkedRead={markRead}
+          onDelete={
+            deletableRow
+              ? () => sessionIndex.askDelete(deletableRow)
+              : undefined
+          }
+        />
+        <DeleteSessionDialog
+          open={sessionIndex.pendingDelete !== null}
+          onOpenChange={(open) => {
+            if (!open) sessionIndex.cancelDelete();
+          }}
+          machineName={deleteTargetMachine?.name}
+          machineOnline={deleteTargetMachine?.online}
+          machineKind={deleteTargetMachine?.kind}
+          pending={sessionIndex.deleting}
+          onConfirm={() => void sessionIndex.confirmDelete()}
+        />
+      </>
     );
   }
 

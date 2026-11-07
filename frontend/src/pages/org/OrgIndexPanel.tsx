@@ -282,35 +282,8 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
             ariaLabel={t("org.index.filters.entryAria")}
             sections={filterSections}
           />
-          {props.isMobile ? (
-            // 桌面那两个空详情区按钮（新建部门 / 新建 Agent）移动端没有落点——
-            // 详情区此刻要么不存在（没选中，索引升整页）要么被选中行占满。工具条
-            // 「+」因此在移动端多担一层：不再直接建 Agent，而是先弹两项菜单。
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={t("org.index.addMenuAria")}
-                  title={t("org.index.addMenuAria")}
-                  data-testid="org-index-add-trigger"
-                >
-                  <Plus className="size-4" aria-hidden="true" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => props.onCreateAgent()}>
-                  <Plus className="size-3" aria-hidden="true" />
-                  {t("org.index.newAgent")}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => props.onCreateDepartment()}>
-                  <FolderPlus className="size-3" aria-hidden="true" />
-                  {t("org.index.newTopLevelDepartment")}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : (
+          {/* 手机上的 ＋ 在页头（OrgAddMenu，见 Org.tsx），工具条只留搜索与筛选。 */}
+          {props.isMobile ? null : (
             <Button
               type="button"
               variant="ghost"
@@ -517,6 +490,46 @@ export function OrgIndexPanel(props: OrgIndexPanelProps) {
  *
  * 渲染在组头「选中」那个按钮**之外**：`<button>` 不能嵌 `<button>`。
  */
+/**
+ * 手机顶层页页头的 ＋（规格 2026-11-05「外壳与导航」：「☰ · 标题 · 页面动作（＋ / ⋯，
+ * ≥44px）」）。桌面那两个空详情区按钮（新建部门 / 新建 Agent）移动端没有落点——
+ * 详情区此刻要么不存在（没选中，索引升整页）要么被选中行占满。这颗 ＋ 因此在移动端
+ * 多担一层：不直接建 Agent，而是先弹两项菜单。
+ */
+export function OrgAddMenu(props: {
+  onCreateAgent: () => void;
+  onCreateDepartment: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="-mr-2 size-11"
+          aria-label={t("org.index.addMenuAria")}
+          title={t("org.index.addMenuAria")}
+          data-testid="org-index-add-trigger"
+        >
+          <Plus className="size-5" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => props.onCreateAgent()}>
+          <Plus className="size-3" aria-hidden="true" />
+          {t("org.index.newAgent")}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => props.onCreateDepartment()}>
+          <FolderPlus className="size-3" aria-hidden="true" />
+          {t("org.index.newTopLevelDepartment")}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function GroupActions(props: {
   department: OrgDepartmentModel;
   onCreateAgent: (departmentId?: number) => void;

@@ -162,8 +162,9 @@ export default function Login() {
    */
   const [consented, setConsented] = useState(false);
   /**
-   * 没勾同意就点了登录。按钮始终可点（决策 14）：禁用的按钮读不出原因，
-   * 手机上更是指尖点了没反应。点下去不发起登录，只把勾选框点亮并在旁边说原因。
+   * 没勾同意就点了登录。手机上按钮始终可点（决策 14）：禁用的按钮读不出原因，
+   * 指尖点了没反应。点下去不发起登录，只把勾选框点亮并在旁边说原因。桌面宽度的
+   * 交互不变（规格 Hard invariants）：那里按钮仍在勾选前禁用。
    */
   const [consentMissed, setConsentMissed] = useState(false);
   const consentHintId = useId();
@@ -334,7 +335,11 @@ export default function Login() {
   );
 
   const githubButton = (
-    <Button className={cn("w-full", mobile && "h-11")} onClick={onLogin}>
+    <Button
+      className={cn("w-full", mobile && "h-11")}
+      disabled={!mobile && !consented}
+      onClick={onLogin}
+    >
       <Github className="mr-2 h-4 w-4" />
       {t("login.github")}
     </Button>
@@ -343,7 +348,7 @@ export default function Login() {
     <Button
       variant="outline"
       className={cn("w-full", mobile && "h-11")}
-      disabled={passkeyPending}
+      disabled={passkeyPending || (!mobile && !consented)}
       aria-busy={passkeyPending || undefined}
       onClick={onPasskeyLogin}
     >
@@ -410,11 +415,10 @@ export default function Login() {
               </div>
             )}
             <PageTitle>{t("login.title")}</PageTitle>
-            {userCode && (
-              <p className="text-sm text-muted-foreground">
-                {t("login.deviceContinue")}
-              </p>
-            )}
+            {/* 品牌与一句标语在上；带码时那一句正文就是这一屏的说明，标语让位。 */}
+            <p className="text-sm text-muted-foreground">
+              {userCode ? t("login.deviceContinue") : t("login.tagline")}
+            </p>
           </div>
           {alerts}
         </div>

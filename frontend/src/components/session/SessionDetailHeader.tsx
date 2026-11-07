@@ -19,6 +19,7 @@ import {
   StatusDot,
   Button,
   cn,
+  useUiTranslation,
   type ProjectGlyphInfo,
   type SessionHeaderMetaPart,
 } from "@agentre-hub/agentre-ui";
@@ -106,6 +107,8 @@ export interface SessionDetailHeaderProps {
    * （`fallbackModel`）；解不出为空串。
    */
   model?: string;
+  /** 手机「对话信息」弹层里的删除（见 SessionDetailView 的同名 prop）。桌面不读。 */
+  onDelete?: () => void;
 }
 
 /** meta 行小头像要的那三样：与账号 Agent 清单（/v1/workspace/agents）同名同形。 */
@@ -299,8 +302,10 @@ function PhoneSessionHeader({
   decisionPending,
   stopping,
   model,
+  onDelete,
 }: SessionDetailHeaderProps) {
   const { t, i18n } = useTranslation();
+  const { t: uiT } = useUiTranslation();
   const [infoOpen, setInfoOpen] = useState(false);
 
   const statusKnown = Boolean(
@@ -351,6 +356,8 @@ function PhoneSessionHeader({
     });
   }
 
+  // 与列表行长按菜单里的「删除」同一句（共享包的行菜单词）。
+  const deleteLabel = uiT("sessionRow.menu.delete");
   const empty = t("session.phoneHeader.info.empty");
   const rows: { key: string; label: string; value: string }[] = [
     {
@@ -425,7 +432,7 @@ function PhoneSessionHeader({
             ))}
           </dl>
         </DialogShellBody>
-        <DialogShellFooter>
+        <DialogShellFooter stack>
           <Button
             variant="outline"
             className="h-11 w-full"
@@ -436,6 +443,19 @@ function PhoneSessionHeader({
           >
             {t("session.menu.copySessionId")}
           </Button>
+          {onDelete ? (
+            // 与列表行长按菜单里的「删除」同一句、同一个确认层（宿主给的 onDelete）。
+            <Button
+              variant="outline"
+              className="h-11 w-full text-destructive"
+              onClick={() => {
+                setInfoOpen(false);
+                onDelete();
+              }}
+            >
+              {deleteLabel}
+            </Button>
+          ) : null}
         </DialogShellFooter>
       </DialogShell>
     </div>

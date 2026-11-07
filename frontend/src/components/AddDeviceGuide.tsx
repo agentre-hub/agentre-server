@@ -382,20 +382,17 @@ export function AddDeviceGuide({
               {kindChoice}
               {isAgentred ? (
                 <>
+                  {/* 每屏一张命令卡（规格「添加设备」）：登录并进安装那一张，装在上、
+                      登录在下，一次复制、一次「发到电脑上」。 */}
                   <AgentredInstallSection
                     compact
                     method={method}
                     onMethodChange={setMethod}
                     os={os}
                     onOsChange={setOS}
+                    thenCommand={agentredLoginCommand(method, server)}
                     installTestId="add-device-command-install"
                     installCopyTestId="add-device-copy-install"
-                  />
-                  <CommandCard
-                    label={t("device.add.login.commandLabel")}
-                    command={agentredLoginCommand(method, server)}
-                    testId="add-device-command-login"
-                    copyTestId="add-device-copy-login"
                   />
                 </>
               ) : (

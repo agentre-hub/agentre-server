@@ -1,4 +1,5 @@
 import * as React from "react";
+import { createPortal } from "react-dom";
 import {
   AgentBackendsPanel,
   LlmProvidersPanel,
@@ -148,6 +149,12 @@ function LanguagePage() {
 export default function Settings() {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
+  /**
+   * 手机逐层页页头右侧那一格（「‹ · 标题 · 动作」）。面板经 renderHeader 交出的页面
+   * 动作传送到这里，而不是摆在正文顶上。
+   */
+  const [phoneActionSlot, setPhoneActionSlot] =
+    React.useState<HTMLDivElement | null>(null);
 
   // 总览的「统计设置 →」与「开启完整活跃统计 →」都指到 ?tab=privacy —— 一条深链
   // 落到默认页签上，等于把用户扔在离目标两步远的地方，而他刚刚已经点过一次了。
@@ -213,18 +220,22 @@ export default function Settings() {
       ),
       HERMES_UNREACHABLE: t("settings.errors.credential.HERMES_UNREACHABLE"),
     };
-    return createBrowserEngineSettingsPorts({
-      noOnlineAgentredReason: t("settings.errors.noOnlineAgentred"),
-      builtinUnsupportedReason: t("settings.errors.builtinUnsupported"),
-      unsupportedBackendReason: t("settings.errors.unsupportedBackend"),
-      deviceRequiredReason: t("settings.errors.deviceRequired"),
-      deviceOfflineReason: t("settings.errors.deviceOffline"),
-      deviceUnknownReason: t("settings.errors.deviceUnknown"),
-      credentialErrorReason: (code) =>
-        credentialErrorMessages[code] ??
-        t("settings.errors.credential.unknown"),
-    });
-  }, [t]);
+    return createBrowserEngineSettingsPorts(
+      {
+        noOnlineAgentredReason: t("settings.errors.noOnlineAgentred"),
+        builtinUnsupportedReason: t("settings.errors.builtinUnsupported"),
+        unsupportedBackendReason: t("settings.errors.unsupportedBackend"),
+        deviceRequiredReason: t("settings.errors.deviceRequired"),
+        deviceOfflineReason: t("settings.errors.deviceOffline"),
+        deviceUnknownReason: t("settings.errors.deviceUnknown"),
+        credentialErrorReason: (code) =>
+          credentialErrorMessages[code] ??
+          t("settings.errors.credential.unknown"),
+      },
+      // 手机设置页的设备一律写备注名（规格 2026-11-05「编辑后端」）；桌面不变。
+      { remarkNames: isMobile },
+    );
+  }, [t, isMobile]);
 
   const renderHeader = (actions: React.ReactNode) => (
     <div className="flex min-w-0 flex-wrap items-center gap-3">
@@ -252,11 +263,9 @@ export default function Settings() {
     const showOfflineNotice =
       syncedDevices === 0 && phoneSection === "providers";
     const phoneActions = (actions: React.ReactNode) =>
-      actions ? (
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {actions}
-        </div>
-      ) : null;
+      actions && phoneActionSlot
+        ? createPortal(actions, phoneActionSlot)
+        : null;
 
     let body: React.ReactNode;
     if (phoneSection === null) {
@@ -382,9 +391,13 @@ export default function Settings() {
                   <ChevronLeft className="size-5" aria-hidden="true" />
                 </button>
               )}
-              <h1 className="min-w-0 truncate text-prose font-bold text-foreground">
+              <h1 className="min-w-0 flex-1 truncate text-prose font-bold text-foreground">
                 {sectionTitle}
               </h1>
+              <div
+                ref={setPhoneActionSlot}
+                className="flex shrink-0 items-center gap-2"
+              />
             </header>
           )}
           <div className="flex min-w-0 flex-col gap-3 px-4 pb-4 pt-2">

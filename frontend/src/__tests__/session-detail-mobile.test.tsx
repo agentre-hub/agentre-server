@@ -129,6 +129,7 @@ function renderPage(
   props: {
     backTo?: string;
     relayState?: "connected" | "connecting" | "reconnecting";
+    onDelete?: () => void;
   } = {},
 ) {
   pageOpts = {};
@@ -156,6 +157,7 @@ function renderPage(
           conversationId={CID}
           form="page"
           backTo={props.backTo}
+          onDelete={props.onDelete}
         />
       </ThemeProvider>
     </MemoryRouter>,
@@ -406,6 +408,37 @@ describe("移动端会话详情：一层头部", () => {
       within(sheet).getByRole("button", { name: "Copy conversation ID" }),
     );
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(CID));
+  });
+
+  it("⋯ 弹层带「删除」（长按菜单里的删除在对话页 ⋯ 也有看得见的入口）；不给就不摆", async () => {
+    mockMobileViewport();
+    stubWithIdentity();
+    const onDelete = vi.fn();
+    const view = renderPage({ onDelete });
+
+    const band = await screen.findByTestId("session-detail-identity");
+    fireEvent.click(within(band).getByRole("button", { name: "More actions" }));
+    const sheet = await screen.findByRole("dialog", {
+      name: "Conversation info",
+    });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Delete" }));
+    expect(onDelete).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Conversation info" }),
+      ).toBeNull(),
+    );
+
+    view.unmount();
+    renderPage();
+    const band2 = await screen.findByTestId("session-detail-identity");
+    fireEvent.click(
+      within(band2).getByRole("button", { name: "More actions" }),
+    );
+    const sheet2 = await screen.findByRole("dialog", {
+      name: "Conversation info",
+    });
+    expect(within(sheet2).queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
   it("转录：用户消息右对齐、统计行用紧凑档（手机）", async () => {
@@ -669,7 +702,7 @@ describe("移动端会话详情：底部停靠区", () => {
     expect(screen.getByTestId("session-compose-readonly")).toBeTruthy();
   });
 
-  it("往回翻、下面压着没答的提问：药丸写「1 项待处理」，浮在停靠区上方", async () => {
+  it("往回翻、下面压着没答的提问：药丸只写「↓ 1 项待处理」，浮在停靠区上方", async () => {
     mockMobileViewport();
     stubDock();
     renderPage();
@@ -717,6 +750,10 @@ describe("移动端会话详情：底部停靠区", () => {
     });
 
     expect(screen.getByTestId("transcript-jump-pending").textContent).toBe(
+      "1 pending",
+    );
+    // 规格「↓ N 项待处理」：有待处理时药丸只说这一句，不再并写「回到底部」/轮数。
+    expect(screen.getByTestId("transcript-jump-control").textContent).toBe(
       "1 pending",
     );
     // 药丸在滚动带里（sticky 贴底），停靠区在它下面：不压住输入框。

@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -144,6 +150,11 @@ describe("Settings on a phone", () => {
     renderSettings();
     fireEvent.click(await screen.findByRole("link", { name: "LLM providers" }));
     expect(screen.getByTestId("where").textContent).toBe("?section=providers");
+    // 逐层进入的页面是「‹ · 标题 · 动作」：页面动作在页头里，不在正文顶上。
+    const header = screen.getByTestId("settings-header");
+    expect(
+      await within(header).findByRole("button", { name: /New Provider/ }),
+    ).toBeTruthy();
 
     fireEvent.click((await screen.findAllByText("Anthropic")).at(-1)!);
     await waitFor(() =>
@@ -166,8 +177,13 @@ describe("Settings on a phone", () => {
     await waitFor(() =>
       expect(screen.getByTestId("where").textContent).toContain("id="),
     );
-    expect(await screen.findByRole("form")).toBeTruthy();
+    const form = await screen.findByRole("form");
     expect(screen.queryByRole("dialog")).toBeNull();
+    // 规格「编辑后端」：设备显示备注名。
+    expect(
+      (await within(form).findAllByText(/Build box/)).length,
+    ).toBeGreaterThan(0);
+    expect(within(form).queryByText(/Builder/)).toBeNull();
   });
 
   it("switches language from the language page", async () => {
@@ -194,17 +210,31 @@ describe("Settings on desktop", () => {
 });
 
 describe("engine ports device names", () => {
-  it("labels a backend's device with its nickname, falling back to the reported name", async () => {
-    const ports = createBrowserEngineSettingsPorts({
-      noOnlineAgentredReason: "",
-      builtinUnsupportedReason: "",
-      unsupportedBackendReason: "",
-      deviceRequiredReason: "",
-      deviceOfflineReason: "",
-      deviceUnknownReason: "",
-      credentialErrorReason: () => "",
+  const messages = {
+    noOnlineAgentredReason: "",
+    builtinUnsupportedReason: "",
+    unsupportedBackendReason: "",
+    deviceRequiredReason: "",
+    deviceOfflineReason: "",
+    deviceUnknownReason: "",
+    credentialErrorReason: () => "",
+  };
+
+  it("by default (desktop) keeps the reported device name, as before", async () => {
+    const ports = createBrowserEngineSettingsPorts(messages);
+    const [listed] = await ports.listBackends();
+    expect(listed.deviceName).toBe("Builder");
+    const [device] = await ports.listAccountDevices!();
+    expect(device.name).toBe("Builder");
+  });
+
+  it("with remark names (phone) labels a backend's device and the picker with its nickname", async () => {
+    const ports = createBrowserEngineSettingsPorts(messages, {
+      remarkNames: true,
     });
     const [listed] = await ports.listBackends();
     expect(listed.deviceName).toBe("Build box");
+    const [device] = await ports.listAccountDevices!();
+    expect(device.name).toBe("Build box");
   });
 });

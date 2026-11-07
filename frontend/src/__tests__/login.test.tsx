@@ -128,13 +128,12 @@ describe("Login", () => {
     });
 
     // 勾选是**前置**的，不是事后追认：没勾之前两个登录入口都按不动。
-    // 决策 14：按钮始终可点，闸改在点击处——没勾不发起，见 auth-mobile.test.tsx。
-    it("keeps both sign-in buttons enabled, whether or not the box is ticked", () => {
+    it("keeps both sign-in buttons disabled until the box is ticked", () => {
       markWebauthnSupported();
       renderLogin();
 
-      expect(githubButton().disabled).toBe(false);
-      expect(passkeyButton().disabled).toBe(false);
+      expect(githubButton().disabled).toBe(true);
+      expect(passkeyButton().disabled).toBe(true);
 
       tickConsent();
 
@@ -175,6 +174,7 @@ describe("Login", () => {
       );
 
       expect(screen.getByRole("checkbox", { checked: false })).toBeTruthy();
+      expect(githubButton().disabled).toBe(true);
     });
   });
 
@@ -375,12 +375,9 @@ describe("Login", () => {
     // 重试也是一次登录，走同一道闸。勾选不落盘，上一次登录时勾过的不替这一次作数。
     it("gates the retry (GitHub) button on the same consent box", () => {
       renderLogin("?err=access_denied");
-      const assign = window.location.assign as ReturnType<typeof vi.fn>;
-      fireEvent.click(githubButton());
-      expect(assign).not.toHaveBeenCalled();
+      expect(githubButton().disabled).toBe(true);
       tickConsent();
-      fireEvent.click(githubButton());
-      expect(assign).toHaveBeenCalledTimes(1);
+      expect(githubButton().disabled).toBe(false);
     });
   });
 

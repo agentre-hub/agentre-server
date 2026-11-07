@@ -41,7 +41,8 @@
   "signins": {
     "title": "登录会话",
     "subtitle": "这个账号当前登录着的浏览器。",
-    "current": "这台",
+    "current": "当前会话",
+    "currentPhone": "这台",
     "signedInAt": "登录于 {{date}}",
     "lastActiveAt": "最后活动 {{date}}",
     "loadFailedWhat": "无法加载登录会话",

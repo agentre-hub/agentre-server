@@ -248,6 +248,12 @@ export interface SessionDetailViewProps {
    * 不必再凑一个。
    */
   onMarkedRead?: (conversationId: string, lastReadAt: number) => void;
+  /**
+   * 手机整屏：页头 ⋯「对话信息」弹层里的「删除」（规格 2026-11-05：长按菜单的每一项
+   * 在别处都有看得见的入口，删除的那一处是对话页 ⋯）。确认层与删除本身归宿主（与
+   * 列表行同一个）；不给就不摆。桌面页头不读它。
+   */
+  onDelete?: () => void;
 }
 
 /**
@@ -277,6 +283,7 @@ export default function SessionDetailView({
   initialAgent,
   initialRow,
   onMarkedRead,
+  onDelete,
 }: SessionDetailViewProps) {
   const did = Number(deviceId);
   const sid = conversationId;
@@ -2004,6 +2011,7 @@ export default function SessionDetailView({
       onStop={onStop}
       stopping={turnStop.stopping}
       model={fallbackModel}
+      onDelete={onDelete}
     />
   );
 

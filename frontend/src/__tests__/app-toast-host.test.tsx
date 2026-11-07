@@ -3,7 +3,6 @@ import { toast } from "sonner";
 import { afterEach, expect, it } from "vitest";
 
 import App from "@/App";
-import { MOBILE_TAB_BAR_CLEARANCE } from "@/lib/mobileLayout";
 import { ThemeProvider } from "@agentre-hub/agentre-ui";
 
 afterEach(() => {
@@ -36,7 +35,6 @@ it("移动端:toast 只让开安全区,不再为已不存在的底栏让位", as
   const offset = (host as HTMLElement).style.getPropertyValue(
     "--mobile-offset-bottom",
   );
-  expect(offset).not.toBe(MOBILE_TAB_BAR_CLEARANCE);
   expect(offset).not.toContain("74px");
   expect(offset).toContain("safe-area-inset-bottom");
 });

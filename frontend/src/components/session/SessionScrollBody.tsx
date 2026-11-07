@@ -16,6 +16,7 @@ import {
 } from "@agentre-hub/agentre-ui";
 
 import DecisionPanel from "@/components/session/DecisionPanel";
+import { useIsMobile } from "@/components/use-is-mobile";
 import PendingSendBubble from "@/components/session/PendingSendBubble";
 import SendFailureBubble from "@/components/session/SendFailureBubble";
 import SessionStatusBanner from "@/components/session/SessionStatusBanner";
@@ -149,6 +150,7 @@ export default function SessionScrollBody({
 }: SessionScrollBodyProps) {
   const { t } = useTranslation();
   const nav = useNavigate();
+  const isMobile = useIsMobile();
 
   /**
    * 视口下沿之后还开了几轮 —— 药丸靠它说出「你落后多少」，而不是只说「下面还有」。
@@ -431,6 +433,9 @@ export default function SessionScrollBody({
             onJump={jumpToBottom}
             turnsBelow={turnsBelow}
             pendingBelow={pendingBelow}
+            // 手机：下面有未决审批 / 提问时只写「↓ N 项待处理」（规格 2026-11-05
+            // 「待处理药丸」）；没有时仍是普通的回到底部。桌面不传，不变。
+            pendingOnly={isMobile}
           />
         )}
       </div>
