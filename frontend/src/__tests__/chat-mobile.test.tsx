@@ -470,18 +470,13 @@ describe("移动端对话页：顶部", () => {
   它们落在各自页头的右端，与索引页头同一组（AppControls），整屏只有一份。
 */
 describe("移动端新建对话：语言/主题", () => {
-  function expectAppControlsIn(head: HTMLElement) {
+  function expectNoAppControlsIn(head: HTMLElement) {
     expect(
-      within(head).getByRole("button", { name: /Language/i }),
-    ).toBeTruthy();
-    expect(within(head).getByRole("button", { name: /Theme/i })).toBeTruthy();
-    // 索引那条页头此刻不在：屏上只有这一份，不是两份叠着。
-    expect(screen.getAllByRole("button", { name: /Language/i })).toHaveLength(
-      1,
-    );
+      within(head).queryAllByRole("button", { name: /Language|Theme/i }),
+    ).toHaveLength(0);
   }
 
-  it("草稿那一屏的页头带着语言/主题", async () => {
+  it("草稿那一屏的页头不带语言/主题（只在抽屉底部）", async () => {
     stubApi([waitingMirrored]);
     mockUseRelay.mockReturnValue(connectedRelay());
     renderChat();
@@ -492,10 +487,10 @@ describe("移动端新建对话：语言/主题", () => {
     fireEvent.click(within(sheet).getByRole("button", { name: /后端 Agent/ }));
     await screen.findByTestId("draft-session");
 
-    expectAppControlsIn(screen.getByTestId("draft-header"));
+    expectNoAppControlsIn(screen.getByTestId("draft-header"));
   });
 
-  it("「从项目里挑」那一屏的页头带着语言/主题", async () => {
+  it("「从项目里挑」那一屏的页头不带语言/主题（只在抽屉底部）", async () => {
     stubApi([waitingMirrored]);
     renderChat();
 
@@ -511,7 +506,7 @@ describe("移动端新建对话：语言/主题", () => {
 
     const head = pane.querySelector("header");
     expect(head).not.toBeNull();
-    expectAppControlsIn(head as HTMLElement);
+    expectNoAppControlsIn(head as HTMLElement);
   });
 });
 

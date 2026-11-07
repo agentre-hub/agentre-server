@@ -2936,6 +2936,35 @@ describe("手机上的新对话", () => {
     return screen.findByTestId("draft-session");
   }
 
+  it("手机草稿页头只有返回与收件人，不摆语言/主题按钮（它们只在抽屉底部）", async () => {
+    await openPhoneDraft();
+    const header = screen.getByTestId("draft-header");
+    expect(
+      within(header).queryAllByRole("button", { name: /Language|Theme/i }),
+    ).toHaveLength(0);
+    expect(within(header).queryByTestId("draft-recipient")).not.toBeNull();
+    expect(
+      within(header)
+        .getAllByRole("button")
+        .map(
+          (b) => b.getAttribute("data-testid") ?? b.getAttribute("aria-label"),
+        ),
+    ).toEqual(["Back", "draft-recipient"]);
+  });
+
+  it("手机「从项目里挑」页头只有返回与标题，不摆语言/主题按钮", async () => {
+    const sheet = await openPhoneSheet();
+    fireEvent.click(within(sheet).getByTestId("sheet-from-project"));
+    const pane = await screen.findByTestId("project-agent-pane");
+    const header = pane.querySelector("header");
+    expect(header).not.toBeNull();
+    expect(
+      within(header as HTMLElement).queryAllByRole("button", {
+        name: /Language|Theme/i,
+      }),
+    ).toHaveLength(0);
+  });
+
   it("✎ 弹出的是共享包 DialogShell 的底部弹层，三段与「从项目里挑」都在，开不了的不可点且写明原因", async () => {
     const sheet = await openPhoneSheet();
     expect(sheet.closest('[data-slot="dialog-shell-content"]')).not.toBeNull();

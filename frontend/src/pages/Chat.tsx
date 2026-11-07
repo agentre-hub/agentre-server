@@ -11,7 +11,6 @@ import {
 import { useTranslation } from "react-i18next";
 import { MessageCirclePlus, Plus } from "lucide-react";
 
-import AppControls from "@/components/AppControls";
 import { EmptyState } from "@/components/console";
 import {
   Button,
@@ -1038,13 +1037,6 @@ export default function Chat() {
     <div data-testid="chat-chrome" className="h-14 shrink-0" />
   );
 
-  /*
-    手机上草稿与「从项目里挑」各占一整屏，盖住了索引那条页头（语言/主题原本在那里），
-    手机上又没有侧栏接住它们——由这两屏自己的页头右端接住，与索引页头同一组控件。
-    桌面不摆：它们属于外框，在侧栏底部。
-  */
-  const mobileComposeControls = isMobile ? <AppControls /> : undefined;
-
   const composePick = (
     <NewConversationPane
       agents={agents}
@@ -1062,7 +1054,6 @@ export default function Chat() {
       onPick={(agent) => setCompose({ step: "draft", agent })}
       onBack={() => setCompose({ step: "pick" })}
       onNewProject={projectManagement.openCreate}
-      headerActions={mobileComposeControls}
       projectsSettled={projectsSettled}
       agentsSettled={agentsSettled}
     />
@@ -1077,7 +1068,6 @@ export default function Chat() {
         onStarted={(session) => onDraftStarted(session, compose.agent)}
         // 返回回到列表：挑 Agent 是一层弹层、不是一屏，退回到它等于把人又拦在弹层里。
         onBack={isMobile ? () => setCompose(null) : undefined}
-        headerActions={mobileComposeControls}
       />
     ) : null;
 
