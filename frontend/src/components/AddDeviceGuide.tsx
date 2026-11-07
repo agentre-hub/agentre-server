@@ -307,17 +307,30 @@ export function AddDeviceGuide({
     const shareable = step === 1 || (step === 3 && isAgentred);
     const footerAction =
       step === 1 ? (
-        <Button className="h-11 w-full" onClick={() => finishStep(1)}>
+        // key 必须各不相同：三个按钮占同一位置，无 key 时 React 复用同一个 DOM 节点。
+        // 第 1 步的 click 在提交后才完成默认动作，复用的节点就是 type="submit" 的
+        // 第 2 步按钮，于是空码被提交、第 2 步一进来就报错。
+        <Button
+          key="next"
+          className="h-11 w-full"
+          onClick={() => finishStep(1)}
+        >
           {t("device.add.login.next")}
           <ArrowRight />
         </Button>
       ) : step === 2 ? (
-        <Button type="submit" form={codeFormId} className="h-11 w-full">
+        <Button
+          key="submit"
+          type="submit"
+          form={codeFormId}
+          className="h-11 w-full"
+        >
           {t("device.entry.submit")}
           <ArrowRight />
         </Button>
       ) : (
         <Button
+          key="done"
           className="h-11 w-full"
           onClick={() => {
             finishStep(3);

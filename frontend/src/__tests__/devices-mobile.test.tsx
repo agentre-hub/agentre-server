@@ -485,4 +485,52 @@ describe("手机添加设备：整屏三步", () => {
     expect(within(guide).queryByRole("button", { name: "Close" })).toBeNull();
     expect(screen.getByRole("button", { name: "Open menu" })).toBeTruthy();
   });
+
+  it("进入第 2 步不先报「请填满 6 位代码」：没输入也没提交就不出错误态", async () => {
+    const guide = await openGuide();
+    fireEvent.click(
+      within(guide).getByRole("button", { name: /I have the device code/ }),
+    );
+    expect(
+      within(guide)
+        .getByRole("button", { name: /^Step 2/ })
+        .getAttribute("aria-current"),
+    ).toBe("step");
+    expect(within(guide).queryByText("Enter all six characters.")).toBeNull();
+    expect(
+      within(guide)
+        .getAllByRole("textbox")
+        .some((box) => box.getAttribute("aria-invalid")),
+    ).toBe(false);
+  });
+
+  it("第 1 步的「下一步」与第 2 步的提交键是两个 DOM 节点：点完第 1 步不会复用同一个按钮", async () => {
+    // 同一位置的三个 footer 按钮若共用一个节点，点「下一步」的那次 click 会在
+    // 节点被 React 复用后落到它身上，表现为提交空码。两步的按钮必须是不同节点。
+    const guide = await openGuide();
+    const footer = within(guide).getByTestId("add-device-footer");
+    const next = within(footer).getByRole("button", {
+      name: /I have the device code/,
+    });
+    fireEvent.click(next);
+    const submit = within(footer).getByRole("button", { name: "Continue" });
+    expect(submit).not.toBe(next);
+    expect(within(guide).queryByText("Enter all six characters.")).toBeNull();
+  });
+
+  it("第 2 步输入中不出错误态；只有提交不足六位才出现「请填满 6 位代码」", async () => {
+    const guide = await openGuide();
+    fireEvent.click(
+      within(guide).getByRole("button", { name: /I have the device code/ }),
+    );
+    fireEvent.change(within(guide).getAllByRole("textbox")[0], {
+      target: { value: "A" },
+    });
+    expect(within(guide).queryByText("Enter all six characters.")).toBeNull();
+
+    fireEvent.click(within(guide).getByRole("button", { name: "Continue" }));
+    expect(
+      await within(guide).findByText("Enter all six characters."),
+    ).toBeTruthy();
+  });
 });
